@@ -35,6 +35,14 @@ if (!defined('EG_ORG_ROLES')) define('EG_ORG_ROLES', [
     // ── 部門或人員擇一類（「部門內任一主管，或固定某關鍵人員，都未設定則自動判斷」）──
     'vendor_audit_plan_approver' => ['label'=>'供應商稽核計劃核准', 'type'=>'dept_or_user',
         'desc'=>'年度稽核計劃送出後的核准人。綁部門＝該部門(含子部門)內任一主管皆可核准(核准人職級不可低於送出者)；綁人員＝固定該人核准；兩者都未設定＝自動依「供應商稽核計劃」目前綁定的 AS 文件(2-PH-01-06)所屬部門，套用同一套「部門內任一主管」規則。'],
+    // ── 產品開發評估表(2-TD-02-01) APQP小組簽認部門，2026-08-12 新增 ──
+    // 綁定的部門「任一主管」皆可簽（未指定特定人），部門內找不到有職級的主管時自動退回該部門職稱sort_order最高者。
+    'td_dev_eval_tech_dept'     => ['label'=>'產品開發評估表-技術課', 'type'=>'dept', 'desc'=>'產品開發評估表 APQP 小組簽認「技術課」欄；部門內任一主管皆可簽，無主管時退回職稱最高者。'],
+    'td_dev_eval_sales_dept'    => ['label'=>'產品開發評估表-業務課', 'type'=>'dept', 'desc'=>'產品開發評估表 APQP 小組簽認「業務課」欄；規則同上。'],
+    'td_dev_eval_mgmt_dept'     => ['label'=>'產品開發評估表-管理課', 'type'=>'dept', 'desc'=>'產品開發評估表 APQP 小組簽認「管理課」欄；規則同上。'],
+    'td_dev_eval_prod_dept'     => ['label'=>'產品開發評估表-生產課', 'type'=>'dept', 'desc'=>'產品開發評估表 APQP 小組簽認「生產課」欄，以及下方「可行自製/委外/再評估/中止」決行欄；規則同上。'],
+    'td_dev_eval_qa_dept'       => ['label'=>'產品開發評估表-品保課', 'type'=>'dept', 'desc'=>'產品開發評估表 APQP 小組簽認「品保課」欄；規則同上。'],
+    'td_dev_eval_material_dept' => ['label'=>'產品開發評估表-資材課', 'type'=>'dept', 'desc'=>'產品開發評估表 APQP 小組簽認「資材課」欄；規則同上。'],
 ]);
 
 if (!function_exists('eg_org_ensure_schema')) {

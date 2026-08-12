@@ -1,0 +1,282 @@
+<?php
+/**
+ * 產品開發評估表（AS 2-TD-02-01）API
+ * 資料/權限/簽核人解析說明見 src/common/td_dev_eval_lib.php
+ */
+header('Content-Type: application/json; charset=utf-8');
+
+$document_root = $_SERVER['DOCUMENT_ROOT'];
+session_start();
+include_once $document_root . '/EGsystem/src/common/_config.php';
+include_once $document_root . '/EGsystem/src/common/DBConnection.php';
+include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
+include_once $document_root . '/EGsystem/src/common/org_role_lib.php';
+include_once $document_root . '/EGsystem/src/common/people_lib.php';
+include_once $document_root . '/EGsystem/src/common/delegate_lib.php';
+include_once $document_root . '/EGsystem/src/common/confirm_password_lib.php';
+include_once $document_root . '/EGsystem/src/common/td_dev_eval_lib.php';
+
+if (!isset($_SESSION['userName'])) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'message' => '未登入']); exit;
+}
+
+$db = (new DBConnection())->getPDO();
+eg_org_ensure_schema($db);
+td_dev_eval_ensure_schema($db);
+$me    = td_dev_eval_current_user($db);
+$perms = td_dev_eval_perms($db, $me);
+$uid   = $me ? (int)$me['id'] : 0;
+$uname = $me ? (string)$me['user_cname'] : '';
+
+function jout($arr) { echo json_encode($arr, JSON_UNESCAPED_UNICODE); exit; }
+function needView(array $perms) { if (!$perms['canView']) jout(['success'=>false,'message'=>'無檢閱權限']); }
+function needEdit(array $perms) { if (!$perms['canEdit']) jout(['success'=>false,'message'=>'無登錄權限']); }
+function needAdmin(array $perms) { if (!$perms['canAdmin']) jout(['success'=>false,'message'=>'無管理權限']); }
+
+const RESULT_LABELS = ['yes'=>'是', 'no'=>'否', 'na'=>'N/A'];
+
+/** 組出單一簽核欄位的顯示資料（含目前可簽核人員池與本人是否可簽） */
+function buildSlotView(PDO $db, string $slotKey, array $row, int $docId, int $curUid): array {
+    [$label,,$isSingle] = TD_DEV_EVAL_SLOTS[$slotKey];
+    $pool = td_dev_eval_slot_pool($db, $slotKey, $docId);
+    $canSign = !$row['signed_by'] && in_array($curUid, array_column($pool, 'id'), true);
+    return [
+        'slot_key' => $slotKey, 'label' => $label,
+        'note' => $row['note'], 'signed_by' => $row['signed_by'] ? (int)$row['signed_by'] : null,
+        'signed_by_name' => $row['signed_by_name'], 'signed_at' => $row['signed_at'],
+        'is_deputy' => !empty($row['is_deputy']), 'is_backfill' => !empty($row['is_backfill']),
+        'backfill_by_name' => $row['backfill_by_name'],
+        'pool' => $pool, 'can_sign' => $canSign,
+    ];
+}
+
+$action = $_GET['action'] ?? $_POST['action'] ?? '';
+
+switch ($action) {
+
+case 'perms':
+    jout(['success'=>true,'perms'=>$perms,'user_name'=>$uname]);
+
+case 'get_template':
+    needView($perms);
+    jout(['success'=>true,'template'=>TD_DEV_EVAL_TEMPLATE,'slots'=>TD_DEV_EVAL_SLOTS,'decisions'=>TD_DEV_EVAL_DECISIONS]);
+
+case 'list':
+    needView($perms);
+    $kw = trim((string)($_GET['kw'] ?? ''));
+    $sql = "SELECT h.id, h.doc_no, h.customer_name, h.part_d_id, COALESCE(ds.D_Setting_Id, h.part_no_text,'') AS part_no,
+                   h.product_name, h.fill_date, h.decision, h.created_by_name, h.created_at,
+                   (SELECT COUNT(*) FROM td_dev_eval_signoff s WHERE s.doc_id=h.id AND s.signed_by IS NOT NULL) AS signed_count
+            FROM td_dev_eval h
+            LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
+            WHERE h.is_deleted=0";
+    $args = [];
+    if ($kw !== '') {
+        $sql .= " AND (h.doc_no LIKE ? OR h.product_name LIKE ? OR h.customer_name LIKE ? OR ds.D_Setting_Id LIKE ?)";
+        $like = '%'.$kw.'%'; $args = [$like,$like,$like,$like];
+    }
+    $sql .= " ORDER BY h.created_at DESC";
+    $st = $db->prepare($sql); $st->execute($args);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['decision_label'] = TD_DEV_EVAL_DECISIONS[$r['decision']] ?? '';
+        $r['is_complete'] = ((int)$r['signed_count'] >= count(TD_DEV_EVAL_SLOTS));
+    }
+    unset($r);
+    jout(['success'=>true,'rows'=>$rows]);
+
+case 'get':
+    needView($perms);
+    $id = (int)($_GET['id'] ?? 0);
+    $st = $db->prepare("SELECT h.*, COALESCE(ds.D_Setting_Id, h.part_no_text,'') AS part_no
+                         FROM td_dev_eval h LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
+                         WHERE h.id=? AND h.is_deleted=0");
+    $st->execute([$id]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) jout(['success'=>false,'message'=>'找不到該筆']);
+
+    $st = $db->prepare("SELECT item_no, result FROM td_dev_eval_answer WHERE doc_id=?");
+    $st->execute([$id]);
+    $answers = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $a) $answers[(int)$a['item_no']] = $a['result'];
+
+    $st = $db->prepare("SELECT * FROM td_dev_eval_signoff WHERE doc_id=?");
+    $st->execute([$id]);
+    $signRows = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $s) $signRows[$s['slot_key']] = $s;
+    $slots = [];
+    foreach (array_keys(TD_DEV_EVAL_SLOTS) as $slotKey) {
+        $row = $signRows[$slotKey] ?? ['note'=>null,'signed_by'=>null,'signed_by_name'=>null,'signed_at'=>null,'is_deputy'=>0,'is_backfill'=>0,'backfill_by_name'=>null];
+        $slots[$slotKey] = buildSlotView($db, $slotKey, $row, $id, $uid);
+    }
+    jout(['success'=>true,'doc'=>$doc,'answers'=>$answers,'slots'=>$slots]);
+
+case 'save':
+    needEdit($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    $customerName = trim((string)($_POST['customer_name'] ?? ''));
+    $partDId = (int)($_POST['part_d_id'] ?? 0);
+    $partNoText = trim((string)($_POST['part_no_text'] ?? ''));
+    $productName = trim((string)($_POST['product_name'] ?? ''));
+    $estQty = trim((string)($_POST['est_qty'] ?? ''));
+    $fillDate = trim((string)($_POST['fill_date'] ?? ''));
+    $sampleTime = trim((string)($_POST['sample_time'] ?? ''));
+    $answersRaw = json_decode((string)($_POST['answers'] ?? '{}'), true);
+    if (!is_array($answersRaw)) $answersRaw = [];
+
+    $db->beginTransaction();
+    try {
+        if ($id) {
+            $st = $db->prepare("SELECT 1 FROM td_dev_eval WHERE id=? AND is_deleted=0");
+            $st->execute([$id]);
+            if (!$st->fetchColumn()) throw new Exception('找不到該筆或已刪除');
+            $st = $db->prepare("UPDATE td_dev_eval SET customer_name=?, part_d_id=?, part_no_text=?, product_name=?,
+                                 est_qty=?, fill_date=?, sample_time=?, updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=?");
+            $st->execute([$customerName ?: null, $partDId ?: null, $partNoText ?: null, $productName ?: null,
+                          $estQty !== '' ? (int)$estQty : null, $fillDate ?: null, $sampleTime ?: null, $uid, $uname, $id]);
+        } else {
+            $docNo = td_dev_eval_next_doc_no($db);
+            $st = $db->prepare("INSERT INTO td_dev_eval (doc_no, customer_name, part_d_id, part_no_text, product_name,
+                                 est_qty, fill_date, sample_time, created_by, created_by_name)
+                                 VALUES (?,?,?,?,?,?,?,?,?,?)");
+            $st->execute([$docNo, $customerName ?: null, $partDId ?: null, $partNoText ?: null, $productName ?: null,
+                          $estQty !== '' ? (int)$estQty : null, $fillDate ?: null, $sampleTime ?: null, $uid, $uname]);
+            $id = (int)$db->lastInsertId();
+        }
+
+        foreach (TD_DEV_EVAL_TEMPLATE as $itemNo => $tpl) {
+            $result = $answersRaw[$itemNo] ?? $answersRaw[(string)$itemNo] ?? null;
+            if (!in_array($result, ['yes','no','na'], true)) $result = null;
+            $st = $db->prepare("INSERT INTO td_dev_eval_answer (doc_id, item_no, result) VALUES (?,?,?)
+                                 ON DUPLICATE KEY UPDATE result=VALUES(result)");
+            $st->execute([$id, $itemNo, $result]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
+    jout(['success'=>true,'id'=>$id]);
+
+case 'save_decision':
+    needEdit($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    $decision = trim((string)($_POST['decision'] ?? ''));
+    if (!isset(TD_DEV_EVAL_DECISIONS[$decision]) && $decision !== '') jout(['success'=>false,'message'=>'不合法的決行選項']);
+    $db->prepare("UPDATE td_dev_eval SET decision=?, updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=? AND is_deleted=0")
+       ->execute([$decision ?: null, $uid, $uname, $id]);
+    jout(['success'=>true]);
+
+case 'delete_header':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    $db->prepare("UPDATE td_dev_eval SET is_deleted=1 WHERE id=?")->execute([$id]);
+    jout(['success'=>true]);
+
+// ── 本人即時簽核：需在該欄目前可簽核人員池內 ─────────────────────
+case 'sign':
+    needEdit($perms);
+    $docId = (int)($_POST['doc_id'] ?? 0);
+    $slotKey = (string)($_POST['slot_key'] ?? '');
+    $note = trim((string)($_POST['note'] ?? ''));
+    if (!isset(TD_DEV_EVAL_SLOTS[$slotKey])) jout(['success'=>false,'message'=>'不合法的簽核欄位']);
+    $pool = td_dev_eval_slot_pool($db, $slotKey, $docId);
+    $mine = null;
+    foreach ($pool as $p) if ((int)$p['id'] === $uid) { $mine = $p; break; }
+    if (!$mine) jout(['success'=>false,'message'=>'您不在此欄目前的可簽核人員名單內']);
+    $st = $db->prepare("SELECT signed_by FROM td_dev_eval_signoff WHERE doc_id=? AND slot_key=?");
+    $st->execute([$docId, $slotKey]);
+    if ($st->fetchColumn()) jout(['success'=>false,'message'=>'此欄已經有人簽核，請重新整理後確認']); // 點開即刷新鐵則
+    $st = $db->prepare("INSERT INTO td_dev_eval_signoff (doc_id, slot_key, note, signed_by, signed_by_name, signed_at, is_deputy)
+                         VALUES (?,?,?,?,?,NOW(),?)
+                         ON DUPLICATE KEY UPDATE note=VALUES(note), signed_by=VALUES(signed_by),
+                             signed_by_name=VALUES(signed_by_name), signed_at=NOW(), is_deputy=VALUES(is_deputy)");
+    $st->execute([$docId, $slotKey, $note ?: null, $uid, $uname, !empty($mine['is_deputy']) ? 1 : 0]);
+    jout(['success'=>true]);
+
+case 'unsign':
+    needAdmin($perms);
+    $docId = (int)($_POST['doc_id'] ?? 0);
+    $slotKey = (string)($_POST['slot_key'] ?? '');
+    $db->prepare("DELETE FROM td_dev_eval_signoff WHERE doc_id=? AND slot_key=?")->execute([$docId, $slotKey]);
+    jout(['success'=>true]);
+
+// ── 補資料用：具操作確認密碼資格者，輸入一次密碼，逐格指定原簽核人一次補齊 ──────
+case 'backfill_sign_all':
+    needEdit($perms);
+    $docId = (int)($_POST['doc_id'] ?? 0);
+    $password = (string)($_POST['password'] ?? '');
+    $assignments = json_decode((string)($_POST['assignments'] ?? '[]'), true);
+    if (!is_array($assignments) || !$assignments) jout(['success'=>false,'message'=>'沒有要補登的欄位']);
+    $chk = eg_confirm_password_verify($db, $uid, $password);
+    if (!$chk['ok']) jout(['success'=>false,'message'=>$chk['msg']]);
+
+    $db->beginTransaction();
+    try {
+        foreach ($assignments as $a) {
+            $slotKey = (string)($a['slot_key'] ?? '');
+            $signerUid = (int)($a['signer_user_id'] ?? 0);
+            $note = trim((string)($a['note'] ?? ''));
+            $signedAt = trim((string)($a['signed_at'] ?? ''));
+            if (!isset(TD_DEV_EVAL_SLOTS[$slotKey]) || !$signerUid) continue;
+            $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+            $st->execute([$signerUid]);
+            $signerName = $st->fetchColumn();
+            if (!$signerName) continue;
+            $st = $db->prepare("INSERT INTO td_dev_eval_signoff
+                (doc_id, slot_key, note, signed_by, signed_by_name, signed_at, is_backfill, backfill_by_name)
+                VALUES (?,?,?,?,?,?,1,?)
+                ON DUPLICATE KEY UPDATE note=VALUES(note), signed_by=VALUES(signed_by), signed_by_name=VALUES(signed_by_name),
+                    signed_at=VALUES(signed_at), is_backfill=1, backfill_by_name=VALUES(backfill_by_name)");
+            $st->execute([$docId, $slotKey, $note ?: null, $signerUid, $signerName, $signedAt ?: date('Y-m-d H:i:s'), $uname]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'補登失敗：'.$e->getMessage()]); }
+    jout(['success'=>true]);
+
+// ── AS 文件編號綁定（本頁自身模板）────────────────────────────────
+case 'asdoc_list':
+    needView($perms);
+    jout(['success'=>true,'docs'=>eg_asdoc_list($db)]);
+
+case 'asdoc_get':
+    needView($perms);
+    jout(['success'=>true,'as_doc'=>eg_asdoc_get($db,'td_dev_eval')]);
+
+case 'as_doc_save':
+    needAdmin($perms);
+    $docId = (int)($_POST['doc_id'] ?? 0);
+    eg_asdoc_save($db, 'td_dev_eval', $docId, $uname);
+    jout(['success'=>true,'as_doc'=>eg_asdoc_get($db,'td_dev_eval')]);
+
+case 'print_get':
+    needView($perms);
+    $id = (int)($_GET['id'] ?? 0);
+    $st = $db->prepare("SELECT h.*, COALESCE(ds.D_Setting_Id, h.part_no_text,'') AS part_no
+                         FROM td_dev_eval h LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
+                         WHERE h.id=? AND h.is_deleted=0");
+    $st->execute([$id]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) jout(['success'=>false,'message'=>'找不到該筆']);
+
+    $st = $db->prepare("SELECT item_no, result FROM td_dev_eval_answer WHERE doc_id=?");
+    $st->execute([$id]);
+    $answers = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $a) $answers[(int)$a['item_no']] = $a['result'];
+
+    $st = $db->prepare("SELECT * FROM td_dev_eval_signoff WHERE doc_id=?");
+    $st->execute([$id]);
+    $signRows = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $s) $signRows[$s['slot_key']] = $s;
+
+    $asDoc = eg_asdoc_get($db, 'td_dev_eval');
+    $bizDate = $doc['fill_date'] ?: substr((string)$doc['created_at'], 0, 10);
+    jout([
+        'success'=>true, 'doc'=>$doc, 'answers'=>$answers, 'signoffs'=>$signRows,
+        'company_name'=>eg_company_full_name($db),
+        'as_doc_no'=>eg_asdoc_no_asof($db, 'td_dev_eval', $bizDate),
+        'as_doc_name'=>$asDoc['doc_name'] ?? '產品開發評估表',
+    ]);
+
+default:
+    jout(['success'=>false,'message'=>'未知動作']);
+}
