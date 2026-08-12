@@ -70,7 +70,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .pf-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
         .pf-modal { background:#fff; border-radius:8px; max-width:600px; margin:36px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
             max-height:90vh; display:flex; flex-direction:column; }
-        .pf-modal.xwide { max-width:96vw; }
+        .pf-modal.xwide { max-width:96vw; margin:12px auto; max-height:96vh; }
         .pf-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
             display:flex; justify-content:space-between; }
         .pf-modal .m-head .m-close { cursor:pointer; color:#b5762a; }
@@ -89,6 +89,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .pf-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
         .pf-sec-title { font-size:14px; font-weight:bold; color:#8A5A2B; border-left:4px solid #F0A24B; padding-left:8px; margin:16px 0 6px; }
+        .pf-sec-title.pf-collapsible { cursor:pointer; user-select:none; }
+        .pf-sec-title.pf-collapsible:hover { color:#d98a33; }
+        .pf-sec-title.pf-collapsible .fa { width:14px; }
         /* 固定評級對照表(固定顯示參考，非填寫內容) */
         table.pf-rating { border-collapse:collapse; font-size:11px; width:100%; margin-bottom:4px; }
         table.pf-rating th, table.pf-rating td { border:1px solid #EADFC8; padding:3px 6px; text-align:center; }
@@ -171,7 +174,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <div style="margin-top:6px;font-size:12px;color:#8a6d45;">表單編號：<b id="fDocNo">存檔後自動產生</b>
             ｜ 建立：<span id="fCreatedInfo">—</span></div>
 
-        <div class="pf-sec-title">評級對照表（固定參考，不隨本表個別修改）</div>
+        <div class="pf-sec-title pf-collapsible" onclick="toggleRatingRef()">
+            <i class="fa fa-chevron-right" id="ratingToggleIcon"></i> 評級對照表（固定參考，不隨本表個別修改，點擊展開/收合）
+        </div>
+        <div id="ratingRefBox" style="display:none;">
         <div class="pf-rating-wrap">
             <table class="pf-rating"><thead><tr><th colspan="2">嚴重度 Severity (S)</th></tr></thead><tbody>
                 <tr><td class="lv">1</td><td>無影響</td></tr>
@@ -194,6 +200,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
                 <tr><td class="lv">7-8</td><td>低度可能偵測</td></tr>
                 <tr><td class="lv">9-10</td><td>幾乎不可能偵測</td></tr>
             </tbody></table>
+        </div>
         </div>
         <div class="pf-rpn-note">風險優先指數 RPN = S × O × D（系統自動計算，不可手填）：<b>&lt;50</b> 低風險｜<b>50-100</b> 中風險｜<b>101-200</b> 高風險｜<b>&gt;200</b> 極高風險，需優先改善。</div>
 
@@ -262,7 +269,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
-            <li>上方「評級對照表」為固定顯示的評分基準參考，不隨每份分析表個別修改；若需要調整用詞請直接告知管理員修改頁面內容。</li>
+            <li>「評級對照表」為固定的評分基準參考，不隨每份分析表個別修改；預設收合以節省畫面空間，點擊標題列可展開/收合；若需要調整用詞請直接告知管理員修改頁面內容。</li>
             <li>產品件號可點擊開啟圖面查閱（比照報價單頁做法）。</li>
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
             <li>本表單自身的修訂履歷（版次、修訂內容、核准/查證/制定）由 AS 文件管理維護，不在本頁另外記錄。</li>
@@ -393,6 +400,12 @@ function renderItems(items){
     if (!items || !items.length) pfAddRow();
 }
 function renumberRows(){ $('#itemBody tr').each(function(i){ $(this).find('td.seq').text(i+1); }); }
+window.toggleRatingRef = function(){
+    var box = document.getElementById('ratingRefBox');
+    var show = box.style.display === 'none';
+    box.style.display = show ? 'block' : 'none';
+    document.getElementById('ratingToggleIcon').className = 'fa fa-chevron-' + (show ? 'down' : 'right');
+};
 window.pfAddRow = function(){
     $('#itemBody').append(itemRowHtml({}, $('#itemBody tr').length));
     renumberRows();
