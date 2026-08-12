@@ -29,6 +29,12 @@
  */
 
 require_once __DIR__ . '/people_lib.php';   // 人員列表鐵則（只列未離職、長假標記、職稱排序）
+require_once __DIR__ . '/org_role_lib.php'; // 組織角色綁定（最高核准人員、部門主管）
+require_once __DIR__ . '/delegate_lib.php'; // 核准鏈「自動抓上一階主管」方法
+require_once __DIR__ . '/approval_lib.php'; // 跨模組共用簽核紀錄（approval_record）
+
+/** 核准鏈可用方法（比照 ai-rules/19 第五節；唯一參考實作 review_form_lib.php 的 RVF_APPROVER_METHODS） */
+const TOOL_CALIB_APPROVER_METHODS = ['dept_or_user', 'auto_supervisor', 'top_approver'];
 
 /* ============================================================
  * Schema（CREATE TABLE IF NOT EXISTS + qc_tool 加欄 + roles seed）
@@ -146,6 +152,18 @@ function tool_calib_ensure_schema(PDO $db): void {
          ADD COLUMN vendor_id VARCHAR(11) NULL COMMENT '外校廠商 maker_list.maker_id_no'",
         "ALTER TABLE qc_tool_calib_batch ADD COLUMN operator_user_id INT NULL COMMENT '內校人員 user.id',
          ADD COLUMN vendor_id VARCHAR(11) NULL COMMENT '外校廠商 maker_list.maker_id_no'",
+    ] as $sql) {
+        try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
+    }
+
+    // 內校覆驗者簽章＋主管核准（使用者 2026-08-12 明確要求）：覆驗人與校驗人員一樣，登錄時挑選（僅內校適用）；
+    // 是否需要主管核准由管理員開關(tool_calib_approval_cfg)決定，核准狀態存在「登錄事件」這一層(batch，單筆登錄也會建一筆
+    // tool_count=1 的批次，見 create_batch)，不落在 qc_tool_calibration 逐列——一次登錄涵蓋的量具共用同一次覆驗/核准。
+    // approval_status 是 approval_record（module='tool_calib_batch'）目前狀態的快取，供列表不必逐列 join 判斷。
+    foreach ([
+        "ALTER TABLE qc_tool_calib_batch ADD COLUMN reviewer_user_id INT NULL COMMENT '內校覆驗者 user.id(登錄時挑選，比照校驗人員資格池)'",
+        "ALTER TABLE qc_tool_calib_batch ADD COLUMN reviewer_name VARCHAR(50) NULL COMMENT '內校覆驗者姓名'",
+        "ALTER TABLE qc_tool_calib_batch ADD COLUMN approval_status VARCHAR(10) NOT NULL DEFAULT 'none' COMMENT 'none=免核准/pending/approved/rejected'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }
@@ -359,6 +377,170 @@ function tool_calib_qualified_staff(PDO $db): array {
 }
 
 /* ============================================================
+ * 內校覆驗者／主管核准（使用者 2026-08-12 明確要求）：
+ *   覆驗者＝登錄時挑選，池同校驗人員資格(qc_tool_calib_staff)，且不可與校驗人員(operator)同一人
+ *   主管核准＝管理員可開關；需要時核准人一律走「核准鏈」(ai-rules/19 第五節手法，比照 review_form_lib)
+ *   圖章樣式＝「逐列簽章」「製表/核准」各自可綁定一個 stamp_template（不設定則 EGStamp 用預設樣式）
+ * 設定值一律存 system_settings（本模組沒有「模板」概念，全站只有一份設定，不比照 review_form 存在資料表列上）
+ * ============================================================ */
+const TOOL_CALIB_APPROVAL_KEYS = ['tool_calib_need_approval', 'tool_calib_approver_dept_id',
+    'tool_calib_approver_user_id', 'tool_calib_approver_chain',
+    'tool_calib_list_stamp_tpl_id', 'tool_calib_footer_stamp_tpl_id'];
+
+function tool_calib_approval_cfg(PDO $db): array {
+    $out = ['need_approval'=>0, 'approver_dept_id'=>null, 'approver_user_id'=>null,
+            'approver_chain'=>['top_approver'], 'list_stamp_tpl_id'=>null, 'footer_stamp_tpl_id'=>null];
+    try {
+        $in = implode(',', array_fill(0, count(TOOL_CALIB_APPROVAL_KEYS), '?'));
+        $st = $db->prepare("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ($in)");
+        $st->execute(TOOL_CALIB_APPROVAL_KEYS);
+        $rows = $st->fetchAll(PDO::FETCH_KEY_PAIR);
+    } catch (Throwable $e) { return $out; }
+    if (isset($rows['tool_calib_need_approval'])) $out['need_approval'] = (int)$rows['tool_calib_need_approval'] === 1 ? 1 : 0;
+    if (!empty($rows['tool_calib_approver_dept_id'])) $out['approver_dept_id'] = (int)$rows['tool_calib_approver_dept_id'];
+    if (!empty($rows['tool_calib_approver_user_id'])) $out['approver_user_id'] = (int)$rows['tool_calib_approver_user_id'];
+    if (!empty($rows['tool_calib_approver_chain'])) {
+        $c = json_decode((string)$rows['tool_calib_approver_chain'], true);
+        if (is_array($c) && $c) $out['approver_chain'] = array_values(array_intersect($c, TOOL_CALIB_APPROVER_METHODS)) ?: ['top_approver'];
+    }
+    if (!empty($rows['tool_calib_list_stamp_tpl_id']))   $out['list_stamp_tpl_id']   = (int)$rows['tool_calib_list_stamp_tpl_id'];
+    if (!empty($rows['tool_calib_footer_stamp_tpl_id'])) $out['footer_stamp_tpl_id'] = (int)$rows['tool_calib_footer_stamp_tpl_id'];
+    return $out;
+}
+
+function tool_calib_approval_cfg_save(PDO $db, array $d): void {
+    $chain = array_values(array_intersect($d['approver_chain'] ?? ['top_approver'], TOOL_CALIB_APPROVER_METHODS)) ?: ['top_approver'];
+    $pairs = [
+        'tool_calib_need_approval'       => !empty($d['need_approval']) ? '1' : '0',
+        'tool_calib_approver_dept_id'    => !empty($d['approver_dept_id']) ? (string)(int)$d['approver_dept_id'] : '',
+        'tool_calib_approver_user_id'    => !empty($d['approver_user_id']) ? (string)(int)$d['approver_user_id'] : '',
+        'tool_calib_approver_chain'      => json_encode($chain),
+        'tool_calib_list_stamp_tpl_id'   => !empty($d['list_stamp_tpl_id']) ? (string)(int)$d['list_stamp_tpl_id'] : '',
+        'tool_calib_footer_stamp_tpl_id' => !empty($d['footer_stamp_tpl_id']) ? (string)(int)$d['footer_stamp_tpl_id'] : '',
+    ];
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?)
+                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
+    foreach ($pairs as $k => $v) $st->execute([$k, $v]);
+}
+
+/** 部門(含子部門)內具主管職級者；$maxLevel 有給值時只留職級不高於它的(數字越小職級越高)。回傳 [['id','user_cname'],...] */
+function tool_calib_dept_managers(PDO $db, ?int $deptId, ?int $maxLevel = null): array {
+    if (!$deptId) return [];
+    $pool = eg_org_dept_managers($db, eg_dept_subtree_ids($db, $deptId));
+    $out = [];
+    foreach ($pool as $p) {
+        if ($maxLevel !== null && ($p['level'] === null || (int)$p['level'] > $maxLevel)) continue;
+        $out[] = ['id'=>(int)$p['id'], 'user_cname'=>$p['user_cname']];
+    }
+    return $out;
+}
+
+function tool_calib_approver_pool_dept_or_user(PDO $db, int $submitterUid): array {
+    $cfg = tool_calib_approval_cfg($db);
+    if ($cfg['approver_user_id']) {
+        try {
+            $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+            $st->execute([$cfg['approver_user_id']]);
+            $u = $st->fetch(PDO::FETCH_ASSOC);
+            return $u ? [$u] : [];
+        } catch (Throwable $e) { return []; }
+    }
+    if (!$cfg['approver_dept_id']) return [];
+    $identity = eg_user_main_identity($db, $submitterUid);
+    return tool_calib_dept_managers($db, $cfg['approver_dept_id'], $identity['level'] ?? null);
+}
+
+function tool_calib_approver_pool_auto_supervisor(PDO $db, int $submitterUid): array {
+    $sup = eg_resolve_supervisor($db, $submitterUid);
+    if (!$sup || (int)$sup === $submitterUid) return [];
+    try {
+        $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+        $st->execute([$sup]);
+        $u = $st->fetch(PDO::FETCH_ASSOC);
+        return $u ? [$u] : [];
+    } catch (Throwable $e) { return []; }
+}
+
+function tool_calib_approver_pool_top_approver(PDO $db): array {
+    $u = eg_org_user($db, 'top_approver');
+    return $u ? [['id'=>(int)$u['id'], 'user_cname'=>$u['user_cname']]] : [];
+}
+
+/** 核准人員池：依設定的核准鏈依序嘗試，取第一個有結果的方法；強制 SoD（送出者本人一律剔除）。 */
+function tool_calib_approver_pool(PDO $db, int $submitterUid): array {
+    $cfg = tool_calib_approval_cfg($db);
+    foreach ($cfg['approver_chain'] as $method) {
+        $pool = match ($method) {
+            'dept_or_user'    => tool_calib_approver_pool_dept_or_user($db, $submitterUid),
+            'auto_supervisor' => tool_calib_approver_pool_auto_supervisor($db, $submitterUid),
+            'top_approver'    => tool_calib_approver_pool_top_approver($db),
+            default => [],
+        };
+        $pool = array_values(array_filter($pool, fn($p) => (int)$p['id'] !== $submitterUid));
+        if ($pool) return $pool;
+    }
+    return [];
+}
+
+/** 圖章模板（stamp_template）；id=0 或查無資料回 null，呼叫端沒拿到就用 EGStamp 預設樣式。 */
+function tool_calib_stamp_tpl_get(PDO $db, int $tplId): ?array {
+    if (!$tplId) return null;
+    try {
+        $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$tplId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ? ['id'=>(int)$r['id'], 'tpl_name'=>$r['tpl_name'], 'schema'=>json_decode((string)$r['schema_json'], true)] : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 圖章模板下拉選單用清單（供設定頁挑選）。 */
+function tool_calib_stamp_tpl_options(PDO $db): array {
+    try {
+        return $db->query("SELECT p.id, p.tpl_name, t.type_name
+                           FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
+                           WHERE p.is_active=1 ORDER BY p.tpl_name")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/** 通知（比照 review_form 的 rvf_notify：live_event + live_event_target + Web Push）。 */
+function tool_calib_notify(PDO $db, int $refId, array $toUids, string $title, string $content, int $fromUid, string $refType, string $mode = 'sign'): int {
+    $toUids = array_values(array_unique(array_map('intval', $toUids)));
+    if (!$toUids) return 0;
+    try {
+        $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
+                      VALUES (CURDATE(), NULL, ?, ?, 0, ?, '量測儀器校驗', 1, ?, ?)")
+           ->execute([$title, $content, $fromUid, $refType, $refId]);
+        $eid = (int)$db->lastInsertId();
+        $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, ?)");
+        foreach ($toUids as $tuid) $ins->execute([$eid, $tuid, $mode]);
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            eg_push_send_to_users($db, eg_push_event_recipients($db, $eid), ['title'=>$title, 'body'=>mb_substr($content, 0, 480)]);
+        } catch (Throwable $e) {}
+        return $eid;
+    } catch (Throwable $e) { return 0; }
+}
+
+/** 一批 batch_id 對應的「核准」關卡最新 approval_record（module='tool_calib_batch'）；回傳 [batch_id => record|null] */
+function tool_calib_batch_approvals(PDO $db, array $batchIds): array {
+    $batchIds = array_values(array_unique(array_filter(array_map('intval', $batchIds))));
+    $out = [];
+    foreach ($batchIds as $id) $out[$id] = null;
+    if (!$batchIds) return $out;
+    $in = implode(',', array_fill(0, count($batchIds), '?'));
+    try {
+        $st = $db->prepare("SELECT * FROM approval_record WHERE module='tool_calib_batch' AND level='approval'
+                            AND entity_id IN ($in) ORDER BY id DESC");
+        $st->execute($batchIds);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $eid = (int)$r['entity_id'];
+            if ($out[$eid] === null) $out[$eid] = $r;   // 每個 batch 只留最新一筆
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/* ============================================================
  * 年度校驗紀錄 / 年度校驗計畫表
  * ============================================================ */
 /** 日期位移月份（可負；月底 clamp） */
@@ -379,16 +561,31 @@ function tool_calib_year_records(PDO $db, int $year): array {
     $st = $db->prepare("SELECT c.calib_id, c.Tool_id, t.Tool_No, l.QC_Tool AS category_name,
                                c.due_date, c.calib_date, c.result, c.method, c.operator, c.cert_no,
                                c.next_due, c.note, c.batch_id, c.created_by_name,
+                               b.reviewer_name, b.approval_status,
                                (SELECT COUNT(*) FROM qc_tool_calib_attach a
                                  JOIN qc_tool_calib_attach_map mp ON mp.attach_id=a.attach_id
-                                WHERE a.status='active' AND a.batch_id=c.batch_id AND mp.Tool_id=c.Tool_id) AS attach_count
+                                WHERE a.status='active' AND a.batch_id=c.batch_id AND mp.Tool_id=c.Tool_id) AS attach_count,
+                               (SELECT JSON_ARRAYAGG(JSON_OBJECT('doc_type', COALESCE(a.doc_type,'附件'), 'name', a.original_name))
+                                  FROM qc_tool_calib_attach a JOIN qc_tool_calib_attach_map mp ON mp.attach_id=a.attach_id
+                                 WHERE a.status='active' AND a.batch_id=c.batch_id AND mp.Tool_id=c.Tool_id) AS attach_json
                         FROM qc_tool_calibration c
                         JOIN qc_tool t ON t.Tool_id=c.Tool_id
                         LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id
+                        LEFT JOIN qc_tool_calib_batch b ON b.batch_id=c.batch_id
                         WHERE YEAR(c.calib_date)=? AND COALESCE(l.calib_required,1)=1
                         ORDER BY c.calib_date, t.Tool_No");
     $st->execute([$year]);
-    return $st->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $approvals = tool_calib_batch_approvals($db, array_column($rows, 'batch_id'));
+    foreach ($rows as &$r) {
+        $r['attach_list'] = $r['attach_json'] ? (json_decode((string)$r['attach_json'], true) ?: []) : [];
+        unset($r['attach_json']);
+        $ap = $approvals[(int)($r['batch_id'] ?? 0)] ?? null;
+        $r['approver_name'] = ($ap && $ap['status'] === 'approved') ? $ap['approver_name'] : null;
+        $r['approved_at']   = ($ap && $ap['status'] === 'approved') ? $ap['decided_at'] : null;
+    }
+    unset($r);
+    return $rows;
 }
 
 /**

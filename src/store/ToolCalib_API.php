@@ -10,6 +10,10 @@ header('Content-Type: application/json; charset=utf-8');
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/tool_calib_lib.php';
+include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
+
+/** 本模組可綁定 AS 文件編號的三個列印文件（ai-rules/16 第一之三節，一律走 asdoc_lib.php，白名單防呼叫端亂帶模組代碼） */
+const TOOL_CALIB_ASDOC_MODULES = ['tool_calib_record' => '校驗紀錄', 'tool_calib_plan' => '校驗計畫表', 'tool_calib_dossier' => '檢驗設備履歷表'];
 
 function jout($a){ echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code=400){ http_response_code($code); echo json_encode(['ok'=>false,'error'=>$msg], JSON_UNESCAPED_UNICODE); exit; }
@@ -101,15 +105,56 @@ case 'meta': {
     tool_calib_purge_temp_attach($db);          // 順路清除過期暫存附件
     $cfg = tool_calib_attach_cfg($db);
     $metaStaff = tool_calib_qualified_staff($db);
-    jout(['perms'=>$perms, 'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db),
+    $asDocs = [];
+    foreach (array_keys(TOOL_CALIB_ASDOC_MODULES) as $m) $asDocs[$m] = eg_asdoc_get($db, $m);
+    $out = ['perms'=>$perms, 'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db),
           'cur_ym'=>date('Y-m'), 'today'=>date('Y-m-d'), 'cur_year'=>(int)date('Y'),
           'is_super'=>$isSuper,
           'staff'=>$metaStaff,
           'staff_multi_dept'=>eg_people_multi_dept($metaStaff),
           'qc_dept_set'=>count(tool_calib_qc_dept_ids($db)) > 0,
+          'company_name'=>eg_company_full_name($db),
+          'as_docs'=>$asDocs,
           'attach'=>['types'=>$cfg['types'], 'ext'=>$cfg['ext'], 'maxmb'=>$cfg['maxmb'],
                      'dir'=>$perms['canAdmin'] ? $cfg['dir'] : '',
-                     'ext_raw'=>$cfg['ext_raw'], 'types_raw'=>$cfg['types_raw']]]);
+                     'ext_raw'=>$cfg['ext_raw'], 'types_raw'=>$cfg['types_raw']]];
+    if ($perms['canAdmin']) {
+        $out['approval'] = tool_calib_approval_cfg($db);
+        $out['departments'] = $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    }
+    jout($out);
+}
+
+/* ---------- AS 文件編號綁定（ai-rules/16 第一之三節；三個列印文件各自可綁） ---------- */
+case 'asdoc_list': jout(['docs'=>eg_asdoc_list($db)]);
+case 'save_asdoc': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    $module = (string)($_POST['module'] ?? '');
+    if (!isset(TOOL_CALIB_ASDOC_MODULES[$module])) jerr('不明的文件類型');
+    $docId = (int)($_POST['doc_id'] ?? 0);
+    eg_asdoc_save($db, $module, $docId, $uname);
+    jout(['doc'=>eg_asdoc_get($db, $module)]);
+}
+
+/* ---------- 圖章樣式選單（供「逐列簽章」「製表/核准」設定挑選） ---------- */
+case 'stamp_tpl_options': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    jout(['templates'=>tool_calib_stamp_tpl_options($db)]);
+}
+
+/* ---------- 核准設定（管理員）：是否需要主管核准內校紀錄／核准鏈／圖章樣式綁定 ---------- */
+case 'save_approval_settings': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    $chain = json_decode((string)($_POST['approver_chain'] ?? '["top_approver"]'), true);
+    tool_calib_approval_cfg_save($db, [
+        'need_approval'=>!empty($_POST['need_approval']),
+        'approver_dept_id'=>(int)($_POST['approver_dept_id'] ?? 0) ?: null,
+        'approver_user_id'=>(int)($_POST['approver_user_id'] ?? 0) ?: null,
+        'approver_chain'=>is_array($chain) ? $chain : ['top_approver'],
+        'list_stamp_tpl_id'=>(int)($_POST['list_stamp_tpl_id'] ?? 0) ?: null,
+        'footer_stamp_tpl_id'=>(int)($_POST['footer_stamp_tpl_id'] ?? 0) ?: null,
+    ]);
+    jout(['approval'=>tool_calib_approval_cfg($db)]);
 }
 
 /* ---------- 校驗人員資格：候選（品管部門人員）與儲存 ---------- */
@@ -212,7 +257,38 @@ case 'year_records': {
 case 'year_plan': {
     $y = (int)($_GET['year'] ?? date('Y'));
     if ($y < 2000 || $y > 2999) $y = (int)date('Y');
-    jout(['year'=>$y, 'list'=>tool_calib_year_plan($db, $y)]);
+    $rec = eg_approval_latest($db, 'tool_calib_plan', $y, 'approval');
+    jout(['year'=>$y, 'list'=>tool_calib_year_plan($db, $y), 'approval'=>$rec ?: null]);
+}
+
+/* ---------- 年度校驗計畫表：送出核准／核准退回（使用者 2026-08-12 明確要求，核准人走核准鏈 ai-rules/19） ---------- */
+case 'plan_submit': {
+    if (!$perms['canEdit']) jerr('無校驗登錄權限', 403);
+    $y = (int)($_POST['year'] ?? 0);
+    if ($y < 2000 || $y > 2999) jerr('年度不正確');
+    $pool = tool_calib_approver_pool($db, $uid);
+    if (!$pool) jerr('核准人員解析不到合格人選，請聯絡管理員先設定核准鏈');
+    $aid = eg_approval_submit($db, 'tool_calib_plan', $y, 'approval', $uid, $uname);
+    tool_calib_notify($db, $y, array_column($pool, 'id'), $y . ' 年度校驗計畫表待您核准',
+        $uname . ' 送出了 ' . $y . ' 年度校驗計畫表，請核准。', $uid, 'TOOL_CALIB_PLAN', 'sign');
+    jout(['approval'=>eg_approval_latest($db, 'tool_calib_plan', $y, 'approval')]);
+}
+case 'plan_decide': {
+    $y = (int)($_POST['year'] ?? 0);
+    $decision = ($_POST['decision'] ?? '') === 'rejected' ? 'rejected' : 'approved';
+    $note = trim((string)($_POST['note'] ?? '')) ?: null;
+    if ($decision === 'rejected' && !$note) jerr('請填寫退回原因');
+    $rec = eg_approval_latest($db, 'tool_calib_plan', $y, 'approval');
+    if (!$rec || $rec['status'] !== 'pending') jerr('目前沒有待您核准的年度計畫表');
+    $pool = tool_calib_approver_pool($db, (int)$rec['submitted_by']);
+    if (!$perms['canAdmin'] && !in_array($uid, array_column($pool, 'id'), true)) jerr('您不是本年度計畫表的核准人', 403);
+    $r = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, $decision, $note);
+    if (!$r['success']) jerr($r['message']);
+    tool_calib_notify($db, $y, [(int)$rec['submitted_by']],
+        $decision === 'rejected' ? $y . ' 年度校驗計畫表被退回' : $y . ' 年度校驗計畫表已核准',
+        $uname . ($decision === 'rejected' ? (' 退回了 ' . $y . ' 年度校驗計畫表。退回原因：' . $note) : (' 已核准 ' . $y . ' 年度校驗計畫表。')),
+        $uid, 'TOOL_CALIB_PLAN', 'read');
+    jout(['approval'=>$r['record']]);
 }
 
 /* ---------- 校驗附件設定（管理員；路徑只存設定值，DB 附件列只存檔名） ---------- */
@@ -505,12 +581,31 @@ case 'create_batch': {
     $attach   = json_decode((string)($_POST['attach'] ?? '[]'), true);
     if (!is_array($attach)) $attach = [];
 
+    // 內校覆驗者（使用者 2026-08-12 明確要求）：必須是具校驗人員資格者，且不可與校驗人員(operator)同一人
+    $reviewerUid = 0; $reviewerName = null;
+    if ($method === '內校') {
+        $reviewerUid = (int)($_POST['reviewer_user_id'] ?? 0);
+        if (!$reviewerUid) jerr('內校請選擇覆驗者');
+        if ($opUid && $reviewerUid === (int)$opUid) jerr('覆驗者不可與校驗人員為同一人');
+        $st = $db->prepare("SELECT u.user_cname FROM qc_tool_calib_staff s JOIN `user` u ON u.id=s.user_id
+                            WHERE s.user_id=? AND u.state NOT IN (" . EG_PEOPLE_EXCLUDE_STATES . ")");
+        $st->execute([$reviewerUid]);
+        $rn = $st->fetchColumn();
+        if (!$rn) jerr('覆驗者不具校驗人員資格或已離職，請重新選擇');
+        $reviewerName = (string)$rn;
+    }
+    $approvalCfg = tool_calib_approval_cfg($db);
+    $needApproval = $method === '內校' && !empty($approvalCfg['need_approval']);
+
     try {
         $db->beginTransaction();
-        $db->prepare("INSERT INTO qc_tool_calib_batch (calib_date, method, operator, operator_user_id, vendor_id, cert_no, note, tool_count, created_by, created_by_name)
-                      VALUES (?,?,?,?,?,?,?,0,?,?)")
-           ->execute([$calibDate, $method, $operator, $opUid, $vendorId, $certNo, $note, $uid, $uname]);
+        $db->prepare("INSERT INTO qc_tool_calib_batch (calib_date, method, operator, operator_user_id, vendor_id, cert_no, note, tool_count,
+                      reviewer_user_id, reviewer_name, approval_status, created_by, created_by_name)
+                      VALUES (?,?,?,?,?,?,?,0,?,?,?,?,?)")
+           ->execute([$calibDate, $method, $operator, $opUid, $vendorId, $certNo, $note,
+                      $reviewerUid ?: null, $reviewerName, $needApproval ? 'pending' : 'none', $uid, $uname]);
         $batchId = (int)$db->lastInsertId();
+        if ($needApproval) eg_approval_submit($db, 'tool_calib_batch', $batchId, 'approval', $uid, $uname);
 
         $insRec = $db->prepare("INSERT INTO qc_tool_calibration
             (Tool_id, due_date, calib_date, result, method, operator, operator_user_id, vendor_id, cert_no, next_due, note, batch_id, created_by, created_by_name)
@@ -561,7 +656,60 @@ case 'create_batch': {
         }
         $db->commit();
     } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('批次登錄失敗：'.$e->getMessage(), 500); }
-    jout(['batch_id'=>$batchId, 'done'=>$done, 'skipped'=>$skipped]);
+
+    if ($needApproval) {
+        $pool = tool_calib_approver_pool($db, $uid);
+        if ($pool) {
+            tool_calib_notify($db, $batchId, array_column($pool, 'id'), '有一筆內校紀錄待您核准',
+                $uname . ' 登錄的一筆內校校驗紀錄（憑證編號：' . ($certNo ?: '無') . '）待您核准。', $uid, 'TOOL_CALIB_APPROVAL', 'sign');
+        }
+    }
+    jout(['batch_id'=>$batchId, 'done'=>$done, 'skipped'=>$skipped, 'approval_status'=>$needApproval ? 'pending' : 'none']);
+}
+
+/* ---------- 內校核准／退回（管理員或核准鏈解析出的合格核准人） ---------- */
+case 'batch_decide': {
+    $bid = (int)($_POST['batch_id'] ?? 0);
+    $decision = ($_POST['decision'] ?? '') === 'rejected' ? 'rejected' : 'approved';
+    $note = trim((string)($_POST['note'] ?? '')) ?: null;
+    if ($decision === 'rejected' && !$note) jerr('請填寫退回原因');
+    $b = $db->prepare("SELECT * FROM qc_tool_calib_batch WHERE batch_id=?");
+    $b->execute([$bid]);
+    $batch = $b->fetch(PDO::FETCH_ASSOC);
+    if (!$batch) jerr('找不到此批次');
+    $rec = eg_approval_latest($db, 'tool_calib_batch', $bid, 'approval');
+    if (!$rec || $rec['status'] !== 'pending') jerr('目前沒有待您核准的紀錄');
+    $pool = tool_calib_approver_pool($db, (int)$batch['created_by']);
+    if (!$perms['canAdmin'] && !in_array($uid, array_column($pool, 'id'), true)) jerr('您不是本筆紀錄的核准人', 403);
+    $r = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, $decision, $note);
+    if (!$r['success']) jerr($r['message']);
+    $newStatus = $decision === 'rejected' ? 'rejected' : 'approved';
+    $db->prepare("UPDATE qc_tool_calib_batch SET approval_status=? WHERE batch_id=?")->execute([$newStatus, $bid]);
+    tool_calib_notify($db, $bid, [(int)$batch['created_by']],
+        $decision === 'rejected' ? '一筆內校紀錄被退回' : '一筆內校紀錄已核准',
+        $uname . ($decision === 'rejected' ? (' 退回了您登錄的內校紀錄。退回原因：' . $note) : ' 已核准您登錄的內校紀錄。'),
+        $uid, 'TOOL_CALIB_APPROVAL', 'read');
+    jout(['status'=>$newStatus]);
+}
+
+/* ---------- 待我核准的內校紀錄清單 ---------- */
+case 'pending_approvals': {
+    $rows = $db->query("SELECT b.batch_id, b.calib_date, b.operator, b.reviewer_name, b.cert_no, b.tool_count,
+                               b.created_by, b.created_by_name,
+                               GROUP_CONCAT(t.Tool_No ORDER BY t.Tool_No SEPARATOR '、') AS tool_nos
+                        FROM qc_tool_calib_batch b
+                        JOIN qc_tool_calibration c ON c.batch_id=b.batch_id
+                        JOIN qc_tool t ON t.Tool_id=c.Tool_id
+                        WHERE b.approval_status='pending'
+                        GROUP BY b.batch_id
+                        ORDER BY b.calib_date DESC, b.batch_id DESC")->fetchAll(PDO::FETCH_ASSOC);
+    if (!$perms['canAdmin']) {
+        $rows = array_values(array_filter($rows, function ($r) use ($db, $uid) {
+            $pool = tool_calib_approver_pool($db, (int)$r['created_by']);
+            return in_array($uid, array_column($pool, 'id'), true);
+        }));
+    }
+    jout(['list'=>$rows]);
 }
 
 /* ---------- 批次校驗紀錄列表／明細 ---------- */
@@ -579,6 +727,7 @@ case 'batch_detail': {
     $st->execute([$bid]);
     $b = $st->fetch(PDO::FETCH_ASSOC);
     if (!$b) jerr('找不到批次');
+    $b['approval'] = eg_approval_latest($db, 'tool_calib_batch', $bid, 'approval');
     $st = $db->prepare("SELECT c.calib_id, c.Tool_id, c.due_date, c.calib_date, c.result, t.Tool_No, l.QC_Tool AS category_name
                         FROM qc_tool_calibration c
                         JOIN qc_tool t ON t.Tool_id=c.Tool_id
@@ -678,18 +827,38 @@ case 'history': {
     $tid = (int)($_GET['tool_id'] ?? 0);
     $t = tc_get_tool($db, $tid);
     if (!$t) jerr('找不到量具');
-    $st = $db->prepare("SELECT calib_id, due_date, calib_date, result, method, operator, operator_user_id, vendor_id,
-                               cert_no, next_due, note, batch_id, created_by_name, created_at
-                        FROM qc_tool_calibration WHERE Tool_id=? ORDER BY calib_date DESC, calib_id DESC");
+    $spec = null;
+    if (!empty($t['purchase_spec_id'])) {
+        try {
+            $sst = $db->prepare("SELECT ps.spec_code, ps.spec_text, ps.brand, pi.item_name
+                                 FROM purchase_spec ps JOIN purchase_item pi ON pi.item_id=ps.item_id
+                                 WHERE ps.spec_id=?");
+            $sst->execute([$t['purchase_spec_id']]);
+            $spec = $sst->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (Throwable $e) {}
+    }
+    $st = $db->prepare("SELECT c.calib_id, c.due_date, c.calib_date, c.result, c.method, c.operator, c.operator_user_id, c.vendor_id,
+                               c.cert_no, c.next_due, c.note, c.batch_id, c.created_by_name, c.created_at,
+                               b.reviewer_name, b.approval_status
+                        FROM qc_tool_calibration c LEFT JOIN qc_tool_calib_batch b ON b.batch_id=c.batch_id
+                        WHERE c.Tool_id=? ORDER BY c.calib_date DESC, c.calib_id DESC");
     $st->execute([$tid]);
     $list = $st->fetchAll(PDO::FETCH_ASSOC);
     // 該量具的附件（一份報告可對應多支量具）→ 依批次掛到對應紀錄
     $byBatch = [];
     foreach (tool_calib_attach_list($db, 0, $tid) as $a) { $byBatch[(int)$a['batch_id']][] = $a; }
+    $approvals = tool_calib_batch_approvals($db, array_column($list, 'batch_id'));
     foreach ($list as &$r) {
         $r['attaches'] = $byBatch[(int)($r['batch_id'] ?? 0)] ?? [];
+        $ap = $approvals[(int)($r['batch_id'] ?? 0)] ?? null;
+        $r['approver_name'] = ($ap && $ap['status'] === 'approved') ? $ap['approver_name'] : null;
+        $r['approved_at']   = ($ap && $ap['status'] === 'approved') ? $ap['decided_at'] : null;
     }
-    jout(['tool'=>['Tool_No'=>$t['Tool_No'],'category_name'=>$t['category_name']],
+    unset($r);
+    jout(['tool'=>['Tool_No'=>$t['Tool_No'], 'category_name'=>$t['category_name'],
+                   'calib_cycle_months'=>$t['calib_cycle_months'], 'calib_method'=>$t['calib_method'],
+                   'calib_managed'=>(int)$t['calib_managed'], 'calibration_due'=>$t['calibration_due'],
+                   'spec'=>$spec],
           'list'=>$list, 'can_delete'=>$perms['canAdmin']]);
 }
 
