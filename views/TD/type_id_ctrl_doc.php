@@ -329,7 +329,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
-            <li>「版別／文件編號」欄：連結自外來文件清單的列無法手動改文字——顯示內容一律即時查詢外來文件清單目前狀態（不落地快照，來源異動這裡會跟著變），若來源附件被刪除會顯示「來源已消失」；手動新增的列可直接輸入文字，也可按「選外來文件」改連結既有附件。</li>
+            <li>「版別／文件編號」欄：連結自外來文件清單的列無法手動改文字——顯示內容一律即時查詢外來文件清單目前狀態（不落地快照，來源異動這裡會跟著變），若來源附件被刪除會顯示「來源已消失」；手動新增的列可直接輸入文字，也可按「選外來文件」改連結既有附件。欄位旁 <i class="fa fa-eye"></i> 圖示可直接點開附件內容以利確認（本機瀏覽器可預覽的檔案如PDF/圖片會直接開啟預覽）；沒有真正版次、退回顯示檔名充當辨識用途時，畫面仍會顯示檔名，但<b>列印不會印出檔名</b>（檔名不是真正的文件編號）。</li>
             <li>項目列可拖曳排序（列前 <i class="fa fa-ellipsis-v"></i> 圖示），放開後項次自動重新編號。</li>
             <li>建立日期＝清單上最早的文件日期；簽章日期＝清單上最新的文件日期（皆排除已排除的項目）；兩者隨清單內容即時算出，不需手動填。</li>
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號、製表人簽章使用全站通用圓形姓名章（若本人有上傳掃描實體章會優先用掃描章，否則自動產生標準回墨章，不需另外設定模板）。</li>
@@ -537,12 +537,13 @@ function itemRowHtml(it, idx){
     var needProc = !!it.need_process_hint;
     var typeOpts = TYPE_OPTS.map(function(t){ return '<option value="'+t[0]+'"'+(it.item_type===t[0]?' selected':'')+'>'+t[1]+'</option>'; }).join('');
     var linkBadge = linked ? '<span class="ic-link-badge"><i class="fa fa-link"></i> 外來文件</span>' : (it.ref_broken ? '<span class="ic-broken-badge">來源已消失</span>' : '');
-    var docNoCell = '<input type="text" class="f-docno" value="'+esc(it.doc_no_text||'')+'"'+(linked?' disabled':'')+' placeholder="版別／文件編號">';
+    var docNoCell = '<div class="ic-part-box"><input type="text" class="f-docno" value="'+esc(it.doc_no_text||'')+'"'+(linked?' disabled':'')+' placeholder="版別／文件編號">'
+        + (linked && it.file_url ? ' <a href="'+esc(it.file_url)+'" target="_blank" class="ic-row-btn" title="點開附件確認內容"><i class="fa fa-eye"></i></a>' : '')
+        + '</div>';
     var procCell = '<div class="ic-part-box"><input type="text" class="f-proc'+(needProc?' f-proc-hint':'')+'" data-need-process="'+(needProc?'1':'0')+'" value="'+esc(it.process_tag||'')+'" placeholder="共用(空白)"'+(needProc?' title="此類別文件建議標示所屬製程（僅提示，不強制）"':'')+'>'
         + '<button type="button" class="ic-row-btn" onclick="pickProcessForRow(this)" title="從此料號的訂單/報價製程挑選"><i class="fa fa-list"></i></button></div>';
     var opCell = linked
         ? '<label class="ic-chk"><input type="checkbox" class="f-included"'+(excluded?'':' checked')+' onchange="toggleExcluded(this)"> 納入</label>'
-          + (it.file_url ? ' <a href="'+esc(it.file_url)+'" target="_blank" title="檢視檔案"><i class="fa fa-external-link"></i></a>' : '')
         : '<button type="button" class="ic-row-btn" onclick="pickExtDoc(this)"'+ (($('#fPartDId').val()|0) ? '' : ' disabled title="請先選擇料號"') +'>選外來文件</button>'
           + ' <button type="button" class="ic-row-btn del" onclick="$(this).closest(\'tr\').remove(); renumberRows();">刪除</button>';
     return '<tr draggable="true" class="'+(excluded?'ic-excluded':'')+'" data-ref-source="'+esc(it.ref_source||'')+'" data-ref-attach-id="'+esc(it.ref_attach_id||'')+'" data-ref-ds-pk="'+esc(it.ref_ds_pk||'')+'" data-id="'+esc(it.id||0)+'">'
@@ -699,7 +700,7 @@ function printDoc(id){
             + '<tr><td>建立日期</td><td colspan="3">'+(res.doc_date_earliest?fmtDate(res.doc_date_earliest):'')+'</td></tr></table>'
             + '<table class="p-tb"><thead><tr><th style="width:26px;">項次</th><th>型態項目名稱</th><th style="width:85px;">型態生效日期</th><th style="width:65px;">型態類別</th><th style="width:90px;">所屬製程</th><th>版別／文件編號</th></tr></thead><tbody>';
         activeItems.forEach(function(it, i){
-            body += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.item_name)+'</td><td>'+fmtDate(it.effective_date)+'</td><td>'+(typeLabel[it.item_type]||'')+'</td><td>'+esc(it.process_tag||'共用')+'</td><td class="tl">'+esc(it.doc_no_text||'')+'</td></tr>';
+            body += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.item_name)+'</td><td>'+fmtDate(it.effective_date)+'</td><td>'+(typeLabel[it.item_type]||'')+'</td><td>'+esc(it.process_tag||'共用')+'</td><td class="tl">'+esc(it.print_doc_no||'')+'</td></tr>';
         });
         body += '</tbody></table>';
         var makerName = d.confirmed_by_name || '';
