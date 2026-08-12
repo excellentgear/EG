@@ -41,7 +41,7 @@ session_start();
         <div class="animate form login_form">
             <section class="login_content">
             
-                <form action="src/store/Login.php" method="post">
+                <form action="src/store/Login.php" method="post" autocomplete="off">
                     <h1>請登入帳號</h1>
                     <h5>
                         <?php
@@ -55,10 +55,10 @@ session_start();
                         ?>
                     </h5>
                     <div>
-                        <input type="text" id="userName" name="userName" class="form-control" placeholder="Username" required="" />
+                        <input type="text" id="userName" name="userName" class="form-control" placeholder="Username" required="" autocomplete="off" />
                     </div>
                     <div>
-                        <input type="password" id="password" name="password" class="form-control" placeholder="Password" required="" />
+                        <input type="password" id="password" name="password" class="form-control" placeholder="Password" required="" autocomplete="new-password" />
                     </div>
                     <div>
                         <button type="submit" name="login" class="btn btn-default submit">登入</button>
