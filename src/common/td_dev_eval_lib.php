@@ -46,15 +46,20 @@ if (!defined('TD_DEV_EVAL_TEMPLATE')) define('TD_DEV_EVAL_TEMPLATE', [
     32 => ['其他', '其他', '業務課'],
 ]);
 
-/** APQP 小組簽認 + 決行欄位：slot_key => [顯示名稱, org_role_lib 角色key(null=走top_approver特例), 是否為單一決行人(非部門池)] */
+/**
+ * APQP 小組簽認 + 決行欄位：slot_key => [顯示名稱, org_role_lib 角色key(null=走top_approver特例), 是否為單一決行人(非部門池)]
+ * 部門角色一律重用 org_role_setting.php 既有的全站共用部門綁定（技術/業務/管理/生產/品保部門本來就設定過對應的
+ * 資料庫部門ID，不建獨立一份重複設定；2026-08-12 使用者明確要求），僅「資材課」原本沒有對應的部門綁定，
+ * 新增 org_role_lib 的 material_dept 補上。
+ */
 if (!defined('TD_DEV_EVAL_SLOTS')) define('TD_DEV_EVAL_SLOTS', [
-    'tech'          => ['技術課', 'td_dev_eval_tech_dept', false],
-    'sales'         => ['業務課', 'td_dev_eval_sales_dept', false],
-    'mgmt'          => ['管理課', 'td_dev_eval_mgmt_dept', false],
-    'prod'          => ['生產課', 'td_dev_eval_prod_dept', false],
-    'qa'            => ['品保課', 'td_dev_eval_qa_dept', false],
-    'material'      => ['資材課', 'td_dev_eval_material_dept', false],
-    'prod_decision' => ['生產課決行', 'td_dev_eval_prod_dept', false],
+    'tech'          => ['技術課', 'rd_dept', false],
+    'sales'         => ['業務課', 'sales_dept', false],
+    'mgmt'          => ['管理課', 'hr_dept', false],
+    'prod'          => ['生產課', 'prod_dept', false],
+    'qa'            => ['品保課', 'qc_dept', false],
+    'material'      => ['資材課', 'material_dept', false],
+    'prod_decision' => ['生產課決行', 'prod_dept', false],
     'gm'            => ['總經理決行', 'top_approver', true],
 ]);
 if (!defined('TD_DEV_EVAL_DECISIONS')) define('TD_DEV_EVAL_DECISIONS', ['make'=>'可行自製', 'outsource'=>'可行委外', 'reeval'=>'再評估', 'stop'=>'中止']);

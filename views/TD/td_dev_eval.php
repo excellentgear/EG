@@ -4,7 +4,8 @@
  * 固定模板 32 項確認項目（人/機/料/法/發展/產品安全/仿冒零件的防制/其他）+ APQP 小組簽認
  * （技術/業務/管理/生產/品保/資材課，各部門任一主管皆可簽）+ 生產課可行性決行 + 總經理決行。
  * 資料/權限/簽核人解析見 src/common/td_dev_eval_lib.php；資料操作走 src/store/TdDevEval_API.php。
- * 部門簽核人綁定：views/admin/org_role_setting.php（角色 td_dev_eval_*_dept）；
+ * 部門簽核人綁定：views/admin/org_role_setting.php，重用全站既有部門角色（技術=rd_dept／業務=sales_dept／
+ * 管理=hr_dept／生產=prod_dept／品保=qc_dept，本來就設定過），僅資材課無對應部門，新增 material_dept 角色。
  * 總經理欄沿用全站 top_approver + delegate_lib 代理解析（ai-rules/18）。
  */
 session_start();
@@ -259,7 +260,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
         <b>評估表管理員</b>：登錄＋刪除、AS 文件編號綁定、取消他人簽核。<br>
         <b>管理者</b>：系統管理者固定擁有全部權限。<br>
         <hr style="border-color:#EADFC8;">
-        APQP 小組簽認各部門欄位由「該部門任一主管」簽核，指派入口在<a href="../admin/org_role_setting.php" target="_blank">組織角色綁定設定</a>（角色代碼 td_dev_eval_技術/業務/管理/生產/品保/資材課）；總經理欄沿用全站「最高核准人員」設定。<br>
+        APQP 小組簽認各部門欄位由「該部門任一主管」簽核，重用<a href="../admin/org_role_setting.php" target="_blank">組織角色綁定設定</a>頁全站既有的部門綁定（技術／業務／管理／生產／品保部門本來就設定過，資材部門為本表新增）；總經理欄沿用全站「最高核准人員」設定。<br>
         角色指派請洽管理者於「使用者權限設定」（<a href="../user/user_permissions.php" target="_blank">開啟</a>）→「產品開發評估表」區塊。未被指派角色者無法進入本頁。
     </div>
 </div></div>
@@ -287,7 +288,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
         </ul>
         <h4>設定入口</h4>
-        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。<b>部門簽核人</b>：<a href="../admin/org_role_setting.php" target="_blank">組織角色綁定設定</a>頁綁定各部門；<b>總經理</b>沿用該頁「最高核准人員」設定。<b>角色指派</b>：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「產品開發評估表」區塊。</p>
+        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。<b>部門簽核人</b>：<a href="../admin/org_role_setting.php" target="_blank">組織角色綁定設定</a>頁「一、部門綁定」，重用全站既有的技術／業務／管理／生產／品保部門綁定，資材部門若尚未設定請在該頁一併綁定。<b>總經理</b>沿用該頁「最高核准人員」設定。<b>角色指派</b>：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「產品開發評估表」區塊。</p>
         <h4>權限角色</h4>
         <p>評估表檢閱／登錄／管理員（管理者固定擁有全部權限）。</p>
     </div>
