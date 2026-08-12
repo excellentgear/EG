@@ -758,6 +758,9 @@ $_quotDepts = array_keys($_deptSet);
                                         'extdoc-role-section'    => '外來文件清單',
                                         'otrk-role-section'      => '訂單追蹤',
                                         'rvf-role-section'       => '審核表單',
+                                        'tidc-role-section'      => '型態識別文件管制表',
+                                        'tdev-role-section'      => '產品開發評估表',
+                                        'pfmea-role-section'     => 'PFMEA',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -1253,7 +1256,7 @@ $_quotDepts = array_keys($_deptSet);
                         $_tidcRoles, $_userTidcRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('tdev', 'td_dev_eval', '產品開發評估表', 'fa-flask', '#c0762c',
-                        '為每位使用者指派「產品開發評估表」頁（技術部 &gt; 產品開發評估表，AS 2-TD-02-01）的操作角色。角色功能：<strong>評估表檢閱</strong>＝檢視清單、開啟查看、列印；<strong>評估表登錄</strong>＝檢閱＋新增/編輯、逐項填寫、依部門身分簽核；<strong>評估表管理員</strong>＝登錄＋刪除、AS 文件編號綁定、取消他人簽核。<strong>APQP 小組簽認各部門欄位由該部門任一主管簽核</strong>，部門綁定在「組織角色綁定設定」頁（角色代碼 td_dev_eval_*_dept），與本頁的檢閱/登錄/管理角色是兩件事——這裡只決定誰能進本頁操作，能不能簽某部門的欄位另外看是否為該部門主管。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
+                        '為每位使用者指派「產品開發評估表」頁（技術部 &gt; 產品開發評估表，AS 2-TD-02-01）的操作角色。角色功能：<strong>評估表檢閱</strong>＝檢視清單、開啟查看、列印；<strong>評估表登錄</strong>＝檢閱＋新增/編輯、逐項填寫、依部門身分簽核；<strong>評估表管理員</strong>＝登錄＋刪除、AS 文件編號綁定、取消他人簽核。<strong>APQP 小組簽認各部門欄位由該部門任一主管簽核</strong>，部門綁定在「組織角色綁定設定」頁（重用技術/業務/管理/生產/品保部門既有綁定，另有資材部門角色），與本頁的檢閱/登錄/管理角色是兩件事——這裡只決定誰能進本頁操作，能不能簽某部門的欄位另外看是否為該部門主管。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         $_tdevRoles, $_userTdevRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('pfmea', 'pfmea', 'PFMEA潛在失效模式及效應分析', 'fa-exclamation-triangle', '#8A5A2B',
