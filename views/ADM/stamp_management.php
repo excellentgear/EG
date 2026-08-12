@@ -68,6 +68,7 @@ try {
 <div class="panel-warm">
   <h4><i class="fa fa-certificate"></i> 圖章管理
     <span id="roleBadge">
+      <button class="btn btn-info btn-xs" id="btnBatchAdd" style="display:none;" title="多選部門全選成員，可跨模板一次建立多種章"><i class="fa fa-object-group"></i> 批次建立</button>
       <button class="btn btn-default btn-xs" id="btnSettings" style="display:none;" data-toggle="modal" data-target="#settingsModal"><i class="fa fa-cog"></i> 設定</button>
       　目前角色：<strong id="myRole">…</strong>　<i class="fa fa-question-circle" data-toggle="modal" data-target="#permModal" title="權限說明"></i></span>
   </h4>
@@ -216,6 +217,40 @@ try {
     <div class="form-group"><label style="font-size:12.5px;">備註</label>
       <input type="text" id="editNote" class="form-control input-sm"></div>
     <div style="text-align:right;"><button class="btn btn-primary btn-sm" id="btnEditSave"><i class="fa fa-check"></i> 儲存</button></div>
+  </div>
+</div></div></div>
+
+<!-- 批次建立登記 Modal（僅超級管理員 員工ID=1）-->
+<div class="modal fade" id="batchModal" tabindex="-1"><div class="modal-dialog" style="width:760px;"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title"><i class="fa fa-object-group"></i> 批次建立登記</h4></div>
+  <div class="modal-body">
+    <p class="text-muted" style="font-size:12px;">先多選部門與圖章模板（可複選多種），按「產生名單」列出候選清單，可再手動取消勾選不需要的人。
+      <strong>個人章</strong>（種類綁定對象為個人、或未限制）同一人只會出現一次；<strong>部門所屬人員章</strong>（種類同時綁定個人＋課室）同一人若身兼多部門主/兼任職位，主職位部門、兼任職位部門各自一筆。</p>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;">
+      <div style="flex:1;min-width:200px;">
+        <strong style="color:#7a4e17;font-size:13px;">部門（可複選）</strong>
+        <div id="batchDeptWrap" style="max-height:160px;overflow-y:auto;border:1px solid #e8d9b8;border-radius:4px;padding:6px 8px;margin-top:4px;"></div>
+      </div>
+      <div style="flex:1;min-width:220px;">
+        <strong style="color:#7a4e17;font-size:13px;">圖章模板（可複選）</strong>
+        <div id="batchTplWrap" style="max-height:160px;overflow-y:auto;border:1px solid #e8d9b8;border-radius:4px;padding:6px 8px;margin-top:4px;"></div>
+      </div>
+    </div>
+    <div style="margin-bottom:8px;">
+      核發日期 <input type="date" id="batchDate" class="form-control input-sm" style="width:150px;display:inline-block;" max="9999-12-31">
+      <button class="btn btn-default btn-sm" id="btnBatchGen" style="margin-left:8px;"><i class="fa fa-list"></i> 產生名單</button>
+    </div>
+    <div style="max-height:320px;overflow-y:auto;border:1px solid #e8d9b8;">
+      <table class="list"><thead><tr>
+        <th style="width:36px;"><input type="checkbox" id="batchChkAll" checked title="全選/全不選"></th>
+        <th>圖章模板／種類</th><th style="width:150px;">部門</th><th style="width:120px;">持有人</th>
+      </tr></thead><tbody id="batchPreviewBody"><tr><td colspan="4" class="text-muted">請先選部門與模板後按「產生名單」。</td></tr></tbody></table>
+    </div>
+    <div style="text-align:right;margin-top:10px;">
+      <span id="batchResult" style="color:#7a4e17;font-size:12.5px;margin-right:10px;"></span>
+      <button class="btn btn-primary btn-sm" id="btnBatchSave"><i class="fa fa-check"></i> 確認批次建立</button>
+    </div>
   </div>
 </div></div></div>
 
@@ -457,6 +492,7 @@ function loadMeta(){
     }
     if(isAdmin){ $('#stabBase').show(); $('#baseDir').val(m.base||''); baseState(m.base,m.base_ok); }
     if(canManage){ $('#btnSettings').show(); $('#btnTplNew').show(); }
+    if(m.canBatch){ $('#btnBatchAdd').show(); }
     loadTpls(()=>loadList(1));   // 清冊印模預覽要用模板資料(TPLS)渲染，等模板載完再載清冊，避免競速下第一次顯示退回舊版簡易章
   });
 }
@@ -925,6 +961,80 @@ $('#tplBody').on('click','.tplrow-toggle',function(){
 $('#tplBody').on('click','.tplrow-del',function(){
   if(!confirm('確定刪除此模板？（編號流水紀錄將一併刪除，不可復原）')) return;
   $.post(API+'?action=tpl_delete',{id:$(this).data('id')},r=>{ if(!r.ok){alert(r.error||'失敗');return;} loadTpls(); },'json');
+});
+
+// ── 批次建立登記（僅超級管理員 員工ID=1）──
+let batchMembers=[];
+$('#btnBatchAdd').on('click',function(){
+  $('#batchDeptWrap').html(DEPTS.map(d=>`<label style="display:block;font-weight:normal;margin:2px 0;"><input type="checkbox" class="batch-dept" value="${d.id}"> ${esc(d.name)}</label>`).join('')||'<span class="text-muted">（無部門資料）</span>');
+  $('#batchTplWrap').html((TPLS||[]).filter(t=>+t.is_active===1).map(t=>`<label style="display:block;font-weight:normal;margin:2px 0;"><input type="checkbox" class="batch-tpl" value="${t.id}"> ${t.type_name?esc(t.type_name)+'｜':''}${esc(t.tpl_name)}</label>`).join('')||'<span class="text-muted">（尚無啟用模板）</span>');
+  $('#batchDate').val(today());
+  $('#batchPreviewBody').html('<tr><td colspan="4" class="text-muted">請先選部門與模板後按「產生名單」。</td></tr>');
+  $('#batchResult').text(''); $('#batchChkAll').prop('checked',true);
+  $('#batchModal').modal('show');
+});
+// 依印章種類 bind_targets 判斷此模板屬於批次的哪種模式：個人(不綁部門，同人只列一次)／部門所屬人員(dept_id+user_id組合，主/兼任部門各一筆)；純部門或純職稱綁定不涉及挑人，批次不適用
+function batchTplKind(tpl){
+  const t=TYPES.find(x=>String(x.id)===String(tpl.type_id));
+  const bt=t&&t.bind_targets?t.bind_targets.split(',').filter(Boolean):[];
+  if(!bt.length) return 'user';
+  const hasU=bt.includes('user'), hasD=bt.includes('dept');
+  if(hasU&&hasD) return 'user_dept';
+  if(hasU) return 'user';
+  return null;
+}
+function batchRowHtml(tpl,kind,uid,uname,deptId,deptLabel){
+  return `<tr><td><input type="checkbox" class="batch-row-chk" checked
+      data-tpl="${tpl.id}" data-type="${tpl.type_id||''}" data-kind="${kind}" data-uid="${uid}" data-dept="${deptId||''}"></td>
+    <td>${tpl.type_name?esc(tpl.type_name)+'｜':''}${esc(tpl.tpl_name)}</td>
+    <td>${deptLabel?esc(deptLabel):'<span class="text-muted">—</span>'}</td>
+    <td>${esc(uname)}</td></tr>`;
+}
+$('#btnBatchGen').on('click',function(){
+  const deptIds=$('.batch-dept:checked').map((i,el)=>el.value).get();
+  const tplIds=$('.batch-tpl:checked').map((i,el)=>el.value).get();
+  if(!deptIds.length){alert('請至少選一個部門');return;}
+  if(!tplIds.length){alert('請至少選一種圖章模板');return;}
+  $.getJSON(API,{action:'batch_members',dept_ids:deptIds.join(',')},r=>{
+    if(!r.ok){alert(r.error||'載入名單失敗');return;}
+    batchMembers=r.rows||[];
+    const tpls=tplIds.map(id=>(TPLS||[]).find(t=>String(t.id)===String(id))).filter(Boolean);
+    const rowsHtml=[];
+    tpls.forEach(tpl=>{
+      const kind=batchTplKind(tpl);
+      if(!kind){ rowsHtml.push(`<tr><td colspan="4" class="text-muted">「${esc(tpl.tpl_name)}」種類非個人／部門所屬人員綁定，不適用批次建立，已略過。</td></tr>`); return; }
+      if(kind==='user'){
+        const seen=new Set();
+        batchMembers.forEach(m=>{
+          if(seen.has(m.user_id)) return; seen.add(m.user_id);
+          rowsHtml.push(batchRowHtml(tpl,kind,m.user_id,m.user_cname,null,''));
+        });
+      }else{
+        batchMembers.forEach(m=>{
+          rowsHtml.push(batchRowHtml(tpl,kind,m.user_id,m.user_cname,m.department_id,m.dept_name+(+m.is_main?'':'（兼）')));
+        });
+      }
+    });
+    $('#batchPreviewBody').html(rowsHtml.join('')||'<tr><td colspan="4" class="text-muted">選定部門內查無在職成員。</td></tr>');
+    $('#batchResult').text(''); $('#batchChkAll').prop('checked',true);
+  });
+});
+$('#batchChkAll').on('change',function(){ $('.batch-row-chk').prop('checked',this.checked); });
+$('#btnBatchSave').on('click',function(){
+  const items=$('.batch-row-chk:checked').map((i,el)=>{
+    const $e=$(el);
+    return {template_id:$e.data('tpl'),type_id:$e.data('type'),kind:$e.data('kind'),user_id:$e.data('uid'),dept_id:$e.data('dept')||''};
+  }).get();
+  if(!items.length){alert('請至少勾選一筆');return;}
+  const issue=$('#batchDate').val();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(issue)){alert('請選擇核發日期');return;}
+  $(this).prop('disabled',true);
+  $.post(API+'?action=batch_add',{issue_date:issue,items:JSON.stringify(items)},r=>{
+    $('#btnBatchSave').prop('disabled',false);
+    if(!r.ok){alert(r.error||'批次建立失敗');return;}
+    $('#batchResult').html(`已建立 ${r.created} 筆，略過(已存在使用中／模板已停用) ${r.skipped} 筆。`);
+    loadList(1);
+  },'json').fail(()=>{ $('#btnBatchSave').prop('disabled',false); alert('批次建立失敗'); });
 });
 
 loadMeta();

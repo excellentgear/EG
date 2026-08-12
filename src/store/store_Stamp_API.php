@@ -78,7 +78,7 @@ switch ($action) {
 
 // ── 下拉/權限 meta（無檢閱權者只回權限旗標，不外洩人員/種類清單）──
 case 'meta': {
-    if (!$canView) jout(['ok'=>true, 'canView'=>false, 'canManage'=>false, 'isAdmin'=>false, 'me'=>$cname]);
+    if (!$canView) jout(['ok'=>true, 'canView'=>false, 'canManage'=>false, 'isAdmin'=>false, 'canBatch'=>false, 'me'=>$cname]);
     $users = [];
     if ($canManage) {
         // dept_id = 該員主要部門（is_main 優先，供前端「部門→篩選人員」cascading 選單使用；同部門+人員綁定用）
@@ -105,7 +105,7 @@ case 'meta': {
                         WHERE p.is_active=1 ORDER BY t.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
     $base = '';
     if ($canManage) $base = eg_stamp_base($db);
-    jout(['ok'=>true, 'canView'=>true, 'canManage'=>$canManage, 'isAdmin'=>$isAdmin, 'me'=>$cname,
+    jout(['ok'=>true, 'canView'=>true, 'canManage'=>$canManage, 'isAdmin'=>$isAdmin, 'canBatch'=>($isAdmin && $uid === 1), 'me'=>$cname,
           'users'=>$users, 'types'=>$types, 'depts'=>$depts, 'positions'=>$positions, 'dept_positions'=>$deptPositions, 'templates'=>$tpls,
           'base'=>$base, 'base_ok'=>$canManage ? is_dir($base) : null]);
 }
@@ -591,6 +591,63 @@ case 'next_serial': {
     $db->commit();
     $serial = stamp_resolve_prefix_tokens($tpl['serial_prefix']) . str_pad((string)$next, (int)$tpl['serial_digits'], '0', STR_PAD_LEFT);
     jout(['ok'=>true, 'serial'=>$serial, 'no'=>$next, 'period'=>$period]);
+}
+
+// ══════════ 批次建立登記（僅超級管理員 員工ID=1）══════════
+// 多選部門→抓部門成員（含主職位＋兼任職位部門，各自一列）；可同時多選模板一次建立多種章。
+function needBatch(bool $isAdmin, int $uid) { if (!($isAdmin && $uid === 1)) jerr('僅超級管理員（員工ID=1）可使用批次建立功能', 403); }
+
+// ── 選定部門的成員清單（一人可能因主/兼任職位出現多列，各自不同 department_id）──
+case 'batch_members': {
+    needManage($canManage); needBatch($isAdmin, $uid);
+    $ids = array_values(array_filter(array_map('intval', explode(',', (string)($_GET['dept_ids'] ?? '')))));
+    if (!$ids) jout(['ok'=>true, 'rows'=>[]]);
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $st = $db->prepare("SELECT m.user_id, u.user_cname, m.department_id, d.name AS dept_name, m.is_main
+                        FROM user_department_position_map m
+                        JOIN user u ON u.id = m.user_id
+                        JOIN department d ON d.id = m.department_id
+                        WHERE m.department_id IN ($in) AND (u.state IS NULL OR u.state <> 0)
+                        ORDER BY d.sort_order, m.is_main DESC, CONVERT(u.user_cname USING utf8mb4) COLLATE utf8mb4_unicode_ci");
+    $st->execute($ids);
+    jout(['ok'=>true, 'rows'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+// ── 批次寫入 ──
+// items：JSON 陣列 [{template_id,type_id,kind,user_id,dept_id}]；kind='user'＝個人章(不綁部門)｜'user_dept'＝部門所屬人員章(dept_id必填)
+// 同一持有對象＋種類已有使用中登記＝略過（不視為錯誤，回傳略過筆數），沿用單筆新增同一套防重複規則。
+case 'batch_add': {
+    needManage($canManage); needBatch($isAdmin, $uid);
+    $issue = trim((string)($_POST['issue_date'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $issue)) jerr('核發日期格式錯誤');
+    $items = json_decode((string)($_POST['items'] ?? '[]'), true);
+    if (!is_array($items) || !$items) jerr('請至少勾選一筆');
+    if (count($items) > 500) jerr('單次批次上限 500 筆，請分批建立');
+    $created = 0; $skipped = 0;
+    $db->beginTransaction();
+    foreach ($items as $it) {
+        $kind   = (string)($it['kind'] ?? '');
+        $tuid   = (int)($it['user_id'] ?? 0) ?: null;
+        $deptId = $kind === 'user_dept' ? ((int)($it['dept_id'] ?? 0) ?: null) : null;
+        $tplId  = (int)($it['template_id'] ?? 0) ?: null;
+        $typeId = (int)($it['type_id'] ?? 0) ?: null;
+        if (!in_array($kind, ['user', 'user_dept'], true) || $tuid === null || ($kind === 'user_dept' && $deptId === null)) { $skipped++; continue; }
+        if ($tplId !== null) {
+            $st = $db->prepare("SELECT type_id FROM stamp_template WHERE id=? AND is_active=1");
+            $st->execute([$tplId]);
+            $tplRow = $st->fetch(PDO::FETCH_ASSOC);
+            if ($tplRow === false) { $skipped++; continue; }
+            $typeId = $tplRow['type_id'] !== null ? (int)$tplRow['type_id'] : null;
+        }
+        $st = $db->prepare("SELECT 1 FROM stamp_register WHERE user_id <=> ? AND dept_id <=> ? AND position_id IS NULL AND status='active' AND type_id <=> ? LIMIT 1 FOR UPDATE");
+        $st->execute([$tuid, $deptId, $typeId]);
+        if ($st->fetchColumn()) { $skipped++; continue; }
+        $st = $db->prepare("INSERT INTO stamp_register (user_id, dept_id, position_id, type_id, template_id, issue_date, status, note, created_by) VALUES (?,?,NULL,?,?,?,'active','批次建立',?)");
+        $st->execute([$tuid, $deptId, $typeId, $tplId, $issue, $cname]);
+        $created++;
+    }
+    $db->commit();
+    jout(['ok'=>true, 'created'=>$created, 'skipped'=>$skipped]);
 }
 
 default: jerr('未知的 action');
