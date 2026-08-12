@@ -99,18 +99,22 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         table.pf-rating td.lv { font-weight:bold; color:#8A5A2B; white-space:nowrap; }
         .pf-rating-wrap { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
         .pf-rpn-note { font-size:11px; color:#8a6d45; margin-top:4px; }
-        /* 可增列分析表(超寬，橫向捲動) */
-        table.pf-item { border-collapse:collapse; font-size:11px; min-width:2400px; }
-        table.pf-item th, table.pf-item td { border:1px solid #EADFC8; padding:3px 4px; vertical-align:top; }
-        table.pf-item thead th { background:#F7E0BD; color:#5b3a1e; white-space:nowrap; }
-        table.pf-item thead tr.grp th { background:#EFD9A8; }
-        table.pf-item input[type=text], table.pf-item input[type=date], table.pf-item input[type=number], table.pf-item textarea {
-            width:100%; box-sizing:border-box; border:1px solid #D8BE93; border-radius:3px; padding:3px 4px; font-size:11px; }
-        table.pf-item textarea { min-height:32px; resize:vertical; }
-        table.pf-item input.rating { width:44px; text-align:center; }
-        table.pf-item input.rpn-out { width:50px; text-align:center; background:#F7F2E6; font-weight:bold; color:#8A5A2B; }
-        table.pf-item td.seq { width:28px; text-align:center; color:#8a6d45; }
-        table.pf-item .rpn-hi { color:#DD5138; font-weight:bold; }
+        /* 可增列分析表：改卡片式逐項顯示，畫面上不需要橫向捲動(列印仍走原橫式表格，見printDoc()) */
+        .pf-card { border:1.5px solid #E8D5B5; border-radius:8px; background:#FDF8EF; padding:10px 12px; margin-bottom:12px; }
+        .pf-card-hd { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;
+            padding-bottom:6px; border-bottom:1px dashed #E8D5B5; }
+        .pf-card-hd b { color:#8A5A2B; font-size:13px; }
+        .pf-card-grp-title { font-size:11px; font-weight:bold; color:#b5762a; margin:8px 0 4px; }
+        .pf-card-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:6px 10px; }
+        .pf-card-grid .f-sm { grid-column:span 1; }
+        .pf-card-grid label { display:block; font-size:11px; color:#8a6d45; margin-bottom:2px; }
+        .pf-card-grid input[type=text], .pf-card-grid input[type=date], .pf-card-grid input[type=number], .pf-card-grid textarea {
+            width:100%; box-sizing:border-box; border:1px solid #D8BE93; border-radius:3px; padding:4px 6px; font-size:12px; background:#fff; }
+        .pf-card-grid textarea { min-height:38px; resize:vertical; }
+        .pf-card-grid input.rating { text-align:center; }
+        .pf-card-grid input.rpn-out { text-align:center; background:#F7F2E6; font-weight:bold; color:#8A5A2B; }
+        .pf-card-grid .rpn-hi { color:#DD5138 !important; border-color:#DD5138 !important; }
+        .pf-rating-quad { display:grid; grid-template-columns:repeat(4,1fr); gap:6px 10px; }
         @media print { .pf-toolbar, .nav_menu, .left_col, footer { display:none !important; } .right_col { margin:0 !important; padding:0 !important; } }
     </style>
 </head>
@@ -204,27 +208,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         </div>
         <div class="pf-rpn-note">風險優先指數 RPN = S × O × D（系統自動計算，不可手填）：<b>&lt;50</b> 低風險｜<b>50-100</b> 中風險｜<b>101-200</b> 高風險｜<b>&gt;200</b> 極高風險，需優先改善。</div>
 
-        <div class="pf-sec-title">失效模式分析（可拖曳橫向捲動查看全部欄位）</div>
-        <div class="pf-table-wrap">
-        <table class="pf-item">
-            <thead>
-                <tr class="grp"><th rowspan="2">項次</th><th colspan="6">初步分析</th><th colspan="6">評級</th><th colspan="3">改善措施</th><th colspan="6">改善後結果</th><th rowspan="2">操作</th></tr>
-                <tr>
-                    <th style="min-width:110px;">製程說明</th><th style="min-width:110px;">功能</th><th style="min-width:110px;">要求</th>
-                    <th style="min-width:130px;">潛在失效模式</th><th style="min-width:130px;">潛在失效效應</th><th style="min-width:110px;">分類</th>
-                    <th style="width:44px;">S</th><th style="min-width:130px;">潛在失效原因</th><th style="width:44px;">O</th>
-                    <th style="min-width:130px;">現行製程管制</th><th style="width:44px;">D</th><th style="width:56px;">RPN</th>
-                    <th style="min-width:130px;">建議改善措施</th><th style="min-width:80px;">責任者</th><th style="width:100px;">目標完成日</th>
-                    <th style="min-width:130px;">已採取措施</th><th style="width:100px;">生效日</th>
-                    <th style="width:44px;">S</th><th style="width:44px;">O</th><th style="width:44px;">D</th><th style="width:56px;">RPN</th>
-                    <th style="min-width:110px;">預防管制</th><th style="min-width:110px;">偵測管制</th>
-                </tr>
-            </thead>
-            <tbody id="itemBody" data-eg-row-add="pfAddRow" data-eg-row-del="pfDelRow"></tbody>
-        </table>
-        </div>
+        <div class="pf-sec-title">失效模式分析（逐項卡片，畫面上不需要橫向捲動；<b>列印仍是您提供的橫式表格格式</b>）</div>
+        <div id="itemBody"></div>
         <div style="margin-top:6px;">
-            <button type="button" class="pf-row-btn" onclick="pfAddRow()"><i class="fa fa-plus"></i> 新增一列</button>
+            <button type="button" class="pf-row-btn" onclick="pfAddRow()"><i class="fa fa-plus"></i> 新增一項失效模式分析</button>
         </div>
     </div>
     <div class="m-foot">
@@ -264,8 +251,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <h4>操作步驟</h4>
         <ul>
             <li>按「新增」→ 選擇「產品件號(料號)」（打部分字元搜尋，查無此料號時可直接手動輸入）、填「工作團隊」。</li>
-            <li>逐列填分析內容，S/O/D 每格填 1-10，<b>RPN 由系統自動計算，不可手動輸入</b>；末列填寫後按 ↓ 或「新增一列」可再加一列。</li>
-            <li>分析表欄位很多，用滑鼠或觸控在表格上左右拖曳即可看到全部欄位（製程說明→評級→改善措施→改善後結果）。</li>
+            <li>每個潛在失效模式是一張卡片，欄位由上到下分「初步分析／評級／改善措施／改善後結果」四區，不需要橫向捲動；S/O/D 每格填 1-10，<b>RPN 由系統自動計算，不可手動輸入</b>。按「新增一項失效模式分析」可再加一張卡片。</li>
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
@@ -351,55 +337,60 @@ $('#btnCsv').on('click', function(){
 });
 
 /* ---------- 新增/編輯 ---------- */
-function itemRowHtml(it, idx){
+function itemCardHtml(it, idx){
     it = it || {};
-    function inp(field, type, extraCls){
+    function fld(field, label, type){
         var v = it[field] != null ? it[field] : '';
-        if (type === 'rating') {
-            return '<input type="number" min="1" max="10" class="rating sod-in" data-f="'+field+'" value="'+esc(v)+'"'+(CAN_EDIT?'':' disabled')+'>';
-        }
-        if (type === 'date') return '<input type="date" data-f="'+field+'" value="'+esc(v)+'"'+(CAN_EDIT?'':' disabled')+'>';
-        return '<textarea data-f="'+field+'" '+(CAN_EDIT?'':'disabled')+'>'+esc(v)+'</textarea>';
+        var dis = CAN_EDIT ? '' : ' disabled';
+        var ctrl;
+        if (type === 'rating') ctrl = '<input type="number" min="1" max="10" class="rating sod-in" data-f="'+field+'" value="'+esc(v)+'"'+dis+'>';
+        else if (type === 'date') ctrl = '<input type="date" data-f="'+field+'" value="'+esc(v)+'"'+dis+'>';
+        else ctrl = '<textarea data-f="'+field+'"'+dis+'>'+esc(v)+'</textarea>';
+        return '<div><label>'+label+'</label>'+ctrl+'</div>';
     }
     var rpn = it.rpn != null ? it.rpn : '';
     var newRpn = it.new_rpn != null ? it.new_rpn : '';
     var rpnCls = (it.rpn != null && it.rpn > 200) ? ' rpn-hi' : '';
     var newRpnCls = (it.new_rpn != null && it.new_rpn > 200) ? ' rpn-hi' : '';
-    return '<tr data-id="'+esc(it.id||0)+'">'
-        + '<td class="seq">'+(idx+1)+'</td>'
-        + '<td>'+inp('process_desc','text')+'</td>'
-        + '<td>'+inp('function_desc','text')+'</td>'
-        + '<td>'+inp('requirement','text')+'</td>'
-        + '<td>'+inp('failure_mode','text')+'</td>'
-        + '<td>'+inp('failure_effect','text')+'</td>'
-        + '<td>'+inp('classification','text')+'</td>'
-        + '<td>'+inp('severity','rating')+'</td>'
-        + '<td>'+inp('failure_cause','text')+'</td>'
-        + '<td>'+inp('occurrence','rating')+'</td>'
-        + '<td>'+inp('current_controls','text')+'</td>'
-        + '<td>'+inp('detection','rating')+'</td>'
-        + '<td><input type="text" class="rpn-out'+rpnCls+'" data-rpn value="'+rpn+'" readonly></td>'
-        + '<td>'+inp('recommended_actions','text')+'</td>'
-        + '<td>'+inp('responsibility','text')+'</td>'
-        + '<td>'+inp('target_date','date')+'</td>'
-        + '<td>'+inp('action_taken','text')+'</td>'
-        + '<td>'+inp('action_date','date')+'</td>'
-        + '<td>'+inp('new_severity','rating')+'</td>'
-        + '<td>'+inp('new_occurrence','rating')+'</td>'
-        + '<td>'+inp('new_detection','rating')+'</td>'
-        + '<td><input type="text" class="rpn-out'+newRpnCls+'" data-new-rpn value="'+newRpn+'" readonly></td>'
-        + '<td>'+inp('prevention_controls','text')+'</td>'
-        + '<td>'+inp('detection_controls','text')+'</td>'
-        + '<td class="op"><button type="button" class="pf-row-btn del" onclick="$(this).closest(\'tr\').remove(); renumberRows();">刪除</button></td>'
-        + '</tr>';
+    return '<div class="pf-card" data-id="'+esc(it.id||0)+'">'
+        + '<div class="pf-card-hd"><b>項次 <span class="seq">'+(idx+1)+'</span></b>'
+        + '<button type="button" class="pf-row-btn del" onclick="removeCard(this)"><i class="fa fa-trash"></i> 刪除此項</button></div>'
+        + '<div class="pf-card-grp-title">初步分析</div>'
+        + '<div class="pf-card-grid">'
+        + fld('process_desc','製程說明') + fld('function_desc','功能') + fld('requirement','要求')
+        + fld('failure_mode','潛在失效模式') + fld('failure_effect','潛在失效效應') + fld('classification','分類')
+        + '</div>'
+        + '<div class="pf-card-grp-title">評級（RPN 系統自動計算）</div>'
+        + '<div class="pf-rating-quad">'
+        + fld('severity','嚴重度 S','rating') + fld('failure_cause','潛在失效原因')
+        + fld('occurrence','發生度 O','rating') + fld('current_controls','現行製程管制')
+        + fld('detection','偵測度 D','rating')
+        + '<div><label>RPN</label><input type="text" class="rpn-out'+rpnCls+'" data-rpn value="'+rpn+'" readonly></div>'
+        + '</div>'
+        + '<div class="pf-card-grp-title">改善措施</div>'
+        + '<div class="pf-card-grid">'
+        + fld('recommended_actions','建議改善措施') + fld('responsibility','責任者') + fld('target_date','目標完成日','date')
+        + '</div>'
+        + '<div class="pf-card-grp-title">改善後結果</div>'
+        + '<div class="pf-card-grid">'
+        + fld('action_taken','已採取措施') + fld('action_date','生效日','date')
+        + '</div>'
+        + '<div class="pf-rating-quad">'
+        + fld('new_severity','改善後S','rating') + fld('new_occurrence','改善後O','rating') + fld('new_detection','改善後D','rating')
+        + '<div><label>改善後RPN</label><input type="text" class="rpn-out'+newRpnCls+'" data-new-rpn value="'+newRpn+'" readonly></div>'
+        + '</div>'
+        + '<div class="pf-card-grid">'
+        + fld('prevention_controls','預防管制') + fld('detection_controls','偵測管制')
+        + '</div>'
+        + '</div>';
 }
 function renderItems(items){
     var html = '';
-    (items||[]).forEach(function(it, idx){ html += itemRowHtml(it, idx); });
+    (items||[]).forEach(function(it, idx){ html += itemCardHtml(it, idx); });
     $('#itemBody').html(html);
     if (!items || !items.length) pfAddRow();
 }
-function renumberRows(){ $('#itemBody tr').each(function(i){ $(this).find('td.seq').text(i+1); }); }
+function renumberRows(){ $('#itemBody .pf-card').each(function(i){ $(this).find('.seq').text(i+1); }); }
 window.toggleRatingRef = function(){
     var box = document.getElementById('ratingRefBox');
     var show = box.style.display === 'none';
@@ -407,38 +398,43 @@ window.toggleRatingRef = function(){
     document.getElementById('ratingToggleIcon').className = 'fa fa-chevron-' + (show ? 'down' : 'right');
 };
 window.pfAddRow = function(){
-    $('#itemBody').append(itemRowHtml({}, $('#itemBody tr').length));
+    $('#itemBody').append(itemCardHtml({}, $('#itemBody .pf-card').length));
     renumberRows();
     return true;
 };
 window.pfDelRow = function(){
-    var rows = $('#itemBody tr');
-    if (rows.length <= 1) return false;
-    rows.last().remove();
+    var cards = $('#itemBody .pf-card');
+    if (cards.length <= 1) return false;
+    cards.last().remove();
     renumberRows();
     return true;
 };
+window.removeCard = function(btn){
+    if ($('#itemBody .pf-card').length <= 1){ alert('至少要保留一項'); return; }
+    $(btn).closest('.pf-card').remove();
+    renumberRows();
+};
 /* RPN 即時重算(僅顯示用，實際以送出後後端重算為準) */
 $(document).on('input', '#itemBody .sod-in', function(){
-    var $tr = $(this).closest('tr');
-    var s = parseInt($tr.find('[data-f="severity"]').val(), 10);
-    var o = parseInt($tr.find('[data-f="occurrence"]').val(), 10);
-    var d = parseInt($tr.find('[data-f="detection"]').val(), 10);
+    var $card = $(this).closest('.pf-card');
+    var s = parseInt($card.find('[data-f="severity"]').val(), 10);
+    var o = parseInt($card.find('[data-f="occurrence"]').val(), 10);
+    var d = parseInt($card.find('[data-f="detection"]').val(), 10);
     var rpn = (s && o && d) ? s*o*d : '';
-    $tr.find('[data-rpn]').val(rpn).toggleClass('rpn-hi', rpn !== '' && rpn > 200);
-    var ns = parseInt($tr.find('[data-f="new_severity"]').val(), 10);
-    var no = parseInt($tr.find('[data-f="new_occurrence"]').val(), 10);
-    var nd = parseInt($tr.find('[data-f="new_detection"]').val(), 10);
+    $card.find('[data-rpn]').val(rpn).toggleClass('rpn-hi', rpn !== '' && rpn > 200);
+    var ns = parseInt($card.find('[data-f="new_severity"]').val(), 10);
+    var no = parseInt($card.find('[data-f="new_occurrence"]').val(), 10);
+    var nd = parseInt($card.find('[data-f="new_detection"]').val(), 10);
     var newRpn = (ns && no && nd) ? ns*no*nd : '';
-    $tr.find('[data-new-rpn]').val(newRpn).toggleClass('rpn-hi', newRpn !== '' && newRpn > 200);
+    $card.find('[data-new-rpn]').val(newRpn).toggleClass('rpn-hi', newRpn !== '' && newRpn > 200);
 });
 
 function collectItems(){
     var out = [];
-    $('#itemBody tr').each(function(){
-        var $tr = $(this);
-        var row = {id: parseInt($tr.attr('data-id'),10) || 0};
-        FIELDS.forEach(function(f){ row[f] = $tr.find('[data-f="'+f+'"]').val(); });
+    $('#itemBody .pf-card').each(function(){
+        var $card = $(this);
+        var row = {id: parseInt($card.attr('data-id'),10) || 0};
+        FIELDS.forEach(function(f){ row[f] = $card.find('[data-f="'+f+'"]').val(); });
         out.push(row);
     });
     return out;
