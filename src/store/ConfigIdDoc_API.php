@@ -320,6 +320,13 @@ case 'save_own_drawing_categories':
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
     jout(['success'=>true]);
 
+// 把「廠內圖面標籤設定」目前的顯示名稱／需要顯示製程，套用回已同步進本模組的既有項目列
+// （2026-08-12 使用者要求：沒有批次刪除重轉，改名要能直接更新舊資料）
+case 'refresh_item_names_by_category':
+    needAdmin($perms);
+    $r = type_id_ctrl_refresh_synced_item_names($db);
+    jout(['success'=>true,'updated_count'=>$r['updated_count'],'affected_docs'=>$r['affected_docs']]);
+
 // ── AS 文件編號綁定（本頁自身模板）────────────────────────────────
 case 'asdoc_list':
     needView($perms);
