@@ -27,8 +27,44 @@ if (!function_exists('rf_has_feature')) {
     }
 }
 
+if (!function_exists('rf_load_full_inherit_delegate_features')) {
+    /**
+     * 代理系統「完整承接權限」（2026-08-06 新增）：留職停薪/育嬰留停等假別若在 leave_type.full_inherit_permission
+     * 勾選了此項，代理人在核准生效期間，於被代理人「該職務身分」範圍內現場借用其 position_roles 功能碼——
+     * 不只是簽核，連頁面/設定操作權限都一併承接。與一般假別（只走 eg_resolve_signer() 找 signer_id 簽核、
+     * 不動 RBAC）明確區隔，見 ai-rules/11 第 12 節。
+     *
+     * 現場查詢、不靠排程：假期自然到期、或人事用 eg_leave_early_end() 提前結束（會縮短 end_datetime）、
+     * 或整單被銷假（status 離開 approved），都會讓下一次查詢立刻不再命中，權限即時收回。
+     *
+     * scope_position_id 為 NULL（全域代理，通常是該員工只有一個職務身分時）則回退承接其目前掛的所有職務身分。
+     */
+    function rf_load_full_inherit_delegate_features($pdo, $user_id) {
+        $features = [];
+        try {
+            $st = $pdo->prepare("
+                SELECT DISTINCT rf.feature_code
+                FROM leave_request_agent ra
+                JOIN leave_request lr ON lr.id = ra.leave_request_id
+                JOIN leave_type lt ON lt.id = lr.leave_type_id
+                LEFT JOIN user_department_position_map m
+                       ON m.user_id = lr.employee_id AND ra.scope_position_id IS NULL
+                JOIN position_roles pr ON pr.position_id = COALESCE(ra.scope_position_id, m.position_id)
+                JOIN role_features rf ON rf.role_id = pr.role_id
+                WHERE ra.agent_user_id = ?
+                  AND lt.full_inherit_permission = 1
+                  AND lr.status = 'approved'
+                  AND NOW() BETWEEN lr.start_datetime AND lr.end_datetime");
+            $st->execute([$user_id]);
+            $features = $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        } catch (Exception $e) {}
+        return $features;
+    }
+}
+
 if (!function_exists('rf_load_user_features_all')) {
     // 取得使用者的全部功能碼：個人指派(user_roles) ∪ 職稱指派(position_roles，經 user_department_position_map)
+    // ∪ 完整承接代理（rf_load_full_inherit_delegate_features，2026-08-06 新增，見上）
     // 職稱指派＝該職稱所有在職人員自動擁有該角色功能（AS9100文件管理起用；其他模組未指派職稱時結果與舊函式相同）
     function rf_load_user_features_all($pdo, $user_id) {
         if (!eg_user_is_active($pdo, $user_id)) return [];   // 非在職 → 連職稱指派的功能碼也不給
@@ -44,6 +80,7 @@ if (!function_exists('rf_load_user_features_all')) {
             $posFeatures = $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
             $features = array_values(array_unique(array_merge($features, $posFeatures)));
         } catch (Exception $e) {}
+        $features = array_values(array_unique(array_merge($features, rf_load_full_inherit_delegate_features($pdo, $user_id))));
         return $features;
     }
 }
@@ -97,7 +134,8 @@ if (!function_exists('rf_load_user_features_override')) {
 }
 
 if (!function_exists('rf_has_module_role_all')) {
-    // 二元權限判斷（含職稱指派版）：個人被指派該 module 角色、或其任一職稱被指派該 module 角色、或系統管理員
+    // 二元權限判斷（含職稱指派版）：個人被指派該 module 角色、或其任一職稱被指派該 module 角色、
+    // 或透過「完整承接權限」代理借到該 module 角色（見 rf_load_full_inherit_delegate_features）、或系統管理員
     function rf_has_module_role_all($pdo, $user_id, $module) {
         if (!eg_user_is_active($pdo, $user_id)) return false;   // 非在職 → 無使用資格
         if (rf_has_module_role($pdo, $user_id, $module)) return true;
@@ -108,6 +146,23 @@ if (!function_exists('rf_has_module_role_all')) {
                 JOIN position_roles pr ON pr.position_id = m.position_id
                 JOIN roles r ON r.role_id = pr.role_id
                 WHERE m.user_id = ? AND r.module = ?
+                LIMIT 1");
+            $st->execute([$user_id, $module]);
+            if ((bool)$st->fetchColumn()) return true;
+        } catch (Exception $e) {}
+        try {
+            $st = $pdo->prepare("
+                SELECT 1
+                FROM leave_request_agent ra
+                JOIN leave_request lr ON lr.id = ra.leave_request_id
+                JOIN leave_type lt ON lt.id = lr.leave_type_id
+                LEFT JOIN user_department_position_map m
+                       ON m.user_id = lr.employee_id AND ra.scope_position_id IS NULL
+                JOIN position_roles pr ON pr.position_id = COALESCE(ra.scope_position_id, m.position_id)
+                JOIN roles r ON r.role_id = pr.role_id
+                WHERE ra.agent_user_id = ? AND r.module = ?
+                  AND lt.full_inherit_permission = 1 AND lr.status = 'approved'
+                  AND NOW() BETWEEN lr.start_datetime AND lr.end_datetime
                 LIMIT 1");
             $st->execute([$user_id, $module]);
             return (bool)$st->fetchColumn();
