@@ -107,6 +107,7 @@ case 'meta': {
     $metaStaff = tool_calib_qualified_staff($db);
     $asDocs = [];
     foreach (array_keys(TOOL_CALIB_ASDOC_MODULES) as $m) $asDocs[$m] = eg_asdoc_get($db, $m);
+    $approvalCfg = tool_calib_approval_cfg($db);
     $out = ['perms'=>$perms, 'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db),
           'cur_ym'=>date('Y-m'), 'today'=>date('Y-m-d'), 'cur_year'=>(int)date('Y'),
           'is_super'=>$isSuper,
@@ -115,11 +116,14 @@ case 'meta': {
           'qc_dept_set'=>count(tool_calib_qc_dept_ids($db)) > 0,
           'company_name'=>eg_company_full_name($db),
           'as_docs'=>$asDocs,
+          // 圖章樣式(schema)一律回傳給所有看得到頁面的人（列印是全體使用者都會用到的動作，不限管理員）
+          'list_stamp'=>tool_calib_stamp_tpl_get($db, (int)($approvalCfg['list_stamp_tpl_id'] ?? 0)),
+          'footer_stamp'=>tool_calib_stamp_tpl_get($db, (int)($approvalCfg['footer_stamp_tpl_id'] ?? 0)),
           'attach'=>['types'=>$cfg['types'], 'ext'=>$cfg['ext'], 'maxmb'=>$cfg['maxmb'],
                      'dir'=>$perms['canAdmin'] ? $cfg['dir'] : '',
                      'ext_raw'=>$cfg['ext_raw'], 'types_raw'=>$cfg['types_raw']]];
     if ($perms['canAdmin']) {
-        $out['approval'] = tool_calib_approval_cfg($db);
+        $out['approval'] = $approvalCfg;
         $out['departments'] = $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     }
     jout($out);

@@ -107,6 +107,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         table.bt-tbl th, table.bt-tbl td { border:1px solid #EADFC8; padding:3px 6px; text-align:center; white-space:nowrap; }
         table.bt-tbl thead th { position:sticky; top:0; background:#F7E0BD; color:#5b3a1e; z-index:2; }
         table.bt-tbl tbody tr.sel { background:#FFF3DF; }
+        .chain-row { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+        .chain-row select { height:28px; font-size:13px; border:1px solid #D8BE93; border-radius:4px; }
         table.bt-tbl td select { font-size:12px; border:1px solid #D8BE93; border-radius:3px; }
         .bt-quick button { height:24px; font-size:12px; padding:0 8px; border:1px solid #D8BE93; border-radius:3px;
             background:#fff; color:#5b3a1e; cursor:pointer; margin-right:4px; }
@@ -281,7 +283,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             </select></div>
             <div><label>校驗人員／單位 *</label><div id="recOpBox" class="op-box"></div></div>
             <div id="recReviewerBox" style="display:none;"><label>覆驗者（內校）*</label>
-                <select id="recReviewer" data-eg-filter="輸入人員姓名篩選…"></select></div>
+                <select id="recReviewer"></select></div>
             <div><label>憑證／報告編號</label><input type="text" id="recCert" maxlength="50"></div>
             <div><label>備註</label><input type="text" id="recNote" maxlength="200"></div>
         </div>
@@ -351,7 +353,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 </select></div>
                 <div><label>校驗人員／單位（外校廠商）*</label><div id="btOpBox" class="op-box"></div></div>
                 <div id="btReviewerBox" style="display:none;"><label>覆驗者（內校）*</label>
-                    <select id="btReviewer" data-eg-filter="輸入人員姓名篩選…"></select></div>
+                    <select id="btReviewer"></select></div>
                 <div><label>憑證／報告編號</label><input type="text" id="btCert" maxlength="50"></div>
                 <div><label>判定結果（套用到全部）</label><select id="btResult">
                     <option value="pass">合格</option><option value="pass_adjust">校正後合格</option><option value="fail">不合格</option>
@@ -461,6 +463,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div class="tab active" data-pane="cfgCat">類別設定</div>
         <div class="tab" data-pane="cfgStaff">校驗人員資格</div>
         <div class="tab" data-pane="cfgAtt">附件設定</div>
+        <div class="tab" data-pane="cfgApproval">核准與圖章</div>
+        <div class="tab" data-pane="cfgAsdoc">AS文件編號綁定</div>
         <div class="tab" data-pane="cfgSpec">量具料號對應</div>
 <?php if ($perms['isAdmin'] && (int)($tcUser['id'] ?? 0) === 1): ?>
         <div class="tab" data-pane="cfgClean" style="color:#DD5138;">清除測試資料</div>
@@ -540,6 +544,41 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <button class="b-cancel" onclick="closeMask('cfgMask')">取消</button>
         <button class="b-ok" onclick="submitAttSet()">儲存</button>
     </div>
+    </div>
+
+    <!-- 核准與圖章（管理員）：內校主管核准開關/核准鏈、逐列簽章/製表核准圖章樣式、三份列印文件的 AS 文件編號綁定 -->
+    <div class="cfg-pane" id="cfgApproval" style="display:none;">
+<div class="m-body">
+        <div class="bt-sec"><div class="h" style="font-weight:bold;color:#8A5A2B;margin-bottom:6px;">內校主管核准</div>
+            <label style="font-weight:normal;"><input type="checkbox" id="apNeed"> 內校紀錄需要主管核准（覆驗者一律要選，不受此開關影響；此開關只決定要不要再送一關主管核准）</label>
+            <div style="font-size:12px;color:#8a6d45;margin:6px 0;">核准人員優先序：由上而下依序嘗試，取第一個有結果的方法；解析到送出登錄者本人會自動跳下一順位（迴避球員兼裁判）。</div>
+            <div id="apChainBox"></div>
+            <div class="grid2">
+                <div><label>「部門或人員」方法 — 綁部門</label><select id="apDept"><option value="">（未設定）</option></select></div>
+                <div><label>「部門或人員」方法 — 綁人員（優先於部門）</label><select id="apUser"><option value="">（未設定）</option></select></div>
+            </div>
+        </div>
+        <div class="bt-sec" style="margin-top:14px;"><div class="h" style="font-weight:bold;color:#8A5A2B;margin-bottom:6px;">圖章樣式</div>
+            <div class="grid2">
+                <div><label>逐列簽章樣式（校驗人員／覆驗者／核准人）</label><select id="apListStamp"><option value="0">（預設樣式）</option></select></div>
+                <div><label>製表／核准簽章樣式（年度校驗計畫表頁尾）</label><select id="apFooterStamp"><option value="0">（預設樣式）</option></select></div>
+            </div>
+            <div style="font-size:12px;color:#8a6d45;">圖章樣式請至「圖章管理 → 線上圖章設計」建立/挑選；有上傳掃描實體章的人一律優先用掃描章，這裡只影響沒掃描章時自動產生的印章樣式。</div>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('cfgMask')">取消</button>
+        <button class="b-ok" onclick="submitApproval()">儲存</button>
+    </div>
+    </div>
+
+    <!-- AS 文件編號綁定（管理員）：三份列印文件各自可綁一份 AS 文件 -->
+    <div class="cfg-pane" id="cfgAsdoc" style="display:none;">
+<div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;">列印表頭／頁尾的 AS 文件編號一律綁定這裡，不寫死；未綁定者列印時該欄留白。</div>
+        <div id="asdocRows"></div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('cfgMask')">關閉</button></div>
     </div>
 
     <!-- 量具料號對應（管理員）：規格掛到採購料號 purchase_item→purchase_spec，不另建量具規格主檔 -->
@@ -709,8 +748,9 @@ function loadMeta(cb){
         STAFF = m.staff || []; STAFF_MULTI_DEPT = !!m.staff_multi_dept; QC_DEPT_SET = !!m.qc_dept_set;
         window.__ownCompany = m.company_name || '';
         setCats(m.categories);
-        if (m.perms.canEdit)  { $('#btnBatch').show(); loadPendingCount(); }
+        if (m.perms.canEdit)  { $('#btnBatch').show(); }
         if (m.perms.canAdmin) { $('#btnAdd').show(); $('#btnCycleSet').show(); $('#btnCfg').show(); }
+        loadPendingCount();   // 核准人未必有登錄/管理權限，但要能看到待核准清單
         if (cb) cb();
     });
 }
@@ -858,6 +898,7 @@ function renderTable(){
         html += canAdmin ? '<span class="tc-op" onclick="openSet('+r.Tool_id+')"><i class="fa fa-gear"></i>設定</span>' : '';
         html += '<span class="tc-op" onclick="openHis('+r.Tool_id+')"><i class="fa fa-history"></i>歷史</span>';
         html += '<span class="tc-op" onclick="openUse('+r.Tool_id+')"><i class="fa fa-search"></i>使用紀錄</span>';
+        html += '<span class="tc-op" onclick="printDossier('+r.Tool_id+')"><i class="fa fa-id-card-o"></i>履歷表</span>';
         html += '</td></tr>';
     });
     $('#tcBody').html(html || '<tr><td colspan="10" style="padding:16px;color:#8a6d45;">無符合條件的儀器</td></tr>');
@@ -1279,6 +1320,63 @@ function openUse(tid){
         h += '</tbody></table>';
         $('#useBody').html(h);
         openMask('useMask');
+    });
+}
+
+/* ---------- 檢驗設備履歷表（沿用「歷史」既有資料出列印版，使用者 2026-08-12 明確要求） ---------- */
+function printDossier(tid){
+    $.getJSON(API, {action:'history', tool_id:tid}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        var t = res.tool;
+        var specTxt = t.spec ? $.trim(($.trim(t.spec.brand||'')+' '+$.trim(t.spec.spec_text||''))) : '（未對應料號規格）';
+        var h = '<table class="hist" style="margin-bottom:14px;"><tbody>'
+          + '<tr><th style="width:110px;">量具編號</th><td><b>'+esc(t.Tool_No)+'</b></td><th style="width:110px;">類別</th><td>'+esc(t.category_name||'')+'</td></tr>'
+          + '<tr><th>規格</th><td>'+esc(specTxt)+'</td><th>校驗週期</th><td>'+(t.calib_cycle_months==null?'（未設）':t.calib_cycle_months+' 月')+'</td></tr>'
+          + '<tr><th>校驗方式</th><td>'+esc(t.calib_method||'—')+'</td><th>目前下次應校驗月</th><td>'+(fmtMonth(t.calibration_due)||'（未設定）')+'</td></tr>'
+          + '<tr><th>列入校驗率統計</th><td colspan="3">'+(t.calib_managed===1?'是':'否')+'</td></tr>'
+          + '</tbody></table>';
+        h += '<div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;">校驗歷史（共 '+res.list.length+' 筆）</div>';
+        if (!res.list.length) {
+            h += '<div style="color:#8a6d45;padding:8px 0;">尚無校驗紀錄</div>';
+        } else {
+            h += '<table class="hist"><thead><tr><th>校驗完成日</th><th>應校驗到期月</th><th>結果</th><th>方式</th>'
+               + '<th>校驗人員／單位</th><th>覆驗者</th><th>核准</th><th>憑證編號</th><th>下次到期</th><th>附件</th></tr></thead><tbody>';
+            res.list.forEach(function(a){
+                h += '<tr><td>'+dispDate(a.calib_date)+'</td><td>'+(fmtMonth(a.due_date)||'—')+'</td>'
+                   + '<td>'+(RESULT_LABEL[a.result]||a.result)+'</td><td>'+esc(a.method||'—')+'</td>'
+                   + '<td style="text-align:left;">'+signerCellHtml(a.operator, a.calib_date, a.method, true)+'</td>'
+                   + '<td style="text-align:left;">'+signerCellHtml(a.reviewer_name, a.calib_date, a.method, true)+'</td>'
+                   + '<td>'+(a.approval_status==='approved' ? signerCellHtml(a.approver_name, a.approved_at, '內校', true)
+                            : (a.approval_status==='pending' ? '（核准中）' : (a.approval_status==='rejected' ? '（已退回）' : '（免核准）')))+'</td>'
+                   + '<td>'+esc(a.cert_no||'—')+'</td><td>'+(fmtMonth(a.next_due)||'—')+'</td>'
+                   + '<td style="text-align:left;">'+attachCellHtml(a.attaches)+'</td></tr>';
+            });
+            h += '</tbody></table>';
+        }
+        var docNo = asdocNo(META && META.as_docs ? META.as_docs['tool_calib_dossier'] : null);
+        var title = '檢驗設備履歷表：'+t.Tool_No;
+        var w = window.open('', '_blank');
+        if (!w){ alert('瀏覽器阻擋了列印視窗，請允許彈出視窗'); return; }
+        w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'+title+'</title><style>'
+          + 'body{font-family:"Microsoft JhengHei",sans-serif;color:#3b2a17;margin:0;}'
+          + '.pg{margin:12mm 8mm 16mm;}'
+          + '.co{text-align:center;font-size:20px;font-weight:bold;letter-spacing:2px;}'
+          + 'h2{font-size:15px;margin:2px 0 10px;text-align:center;}'
+          + 'table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:4px;}'
+          + 'th,td{border:1px solid #999;padding:3px 5px;text-align:center;}'
+          + 'table.hist th{background:#F7E0BD;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+          + 'thead{display:table-header-group;} tbody tr{page-break-inside:avoid;}'
+          + 'svg{width:66px !important;height:66px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+          + '@page{size:A4 landscape;margin:10mm 8mm 16mm 8mm;'
+          + (docNo ? '@bottom-right{content:"'+docNo.replace(/["\\]/g,'')+'";font-size:9pt;color:#333;}' : '')
+          + '@bottom-left{content:"第" counter(page) "頁／共" counter(pages) "頁";font-size:9pt;color:#333;}}'
+          + '</style></head><body><div class="pg">'
+          + '<div class="co">'+esc((META&&META.company_name)||'')+'</div>'
+          + '<h2>'+title+'</h2>'
+          + h + '</div></body></html>');
+        w.document.close();
+        w.focus();
+        setTimeout(function(){ w.print(); }, 300);
     });
 }
 
@@ -1787,14 +1885,96 @@ function cfgSwitch(pane){
     $('#cfgMask .cfg-tabs .tab').each(function(){ $(this).toggleClass('active', $(this).attr('data-pane')===pane); });
     $('#cfgMask .cfg-pane').hide();
     $('#'+pane).show();
-    if (pane === 'cfgCat')   loadCatPane();
-    if (pane === 'cfgStaff') loadStaffPane();
-    if (pane === 'cfgAtt')   loadAttPane();
-    if (pane === 'cfgSpec')  loadSpecPane();
-    if (pane === 'cfgClean') loadCleanPane();
+    if (pane === 'cfgCat')      loadCatPane();
+    if (pane === 'cfgStaff')    loadStaffPane();
+    if (pane === 'cfgAtt')      loadAttPane();
+    if (pane === 'cfgApproval') loadApprovalPane();
+    if (pane === 'cfgAsdoc')    loadAsdocPane();
+    if (pane === 'cfgSpec')     loadSpecPane();
+    if (pane === 'cfgClean')    loadCleanPane();
 }
 $('#btnCfg').on('click', function(){ openCfg('cfgCat'); });
 $('#cfgMask').on('click', '.cfg-tabs .tab', function(){ cfgSwitch($(this).attr('data-pane')); });
+
+/* ================= 核准與圖章設定（管理員） ================= */
+function renderApChainBox(chain){
+    var methods = {dept_or_user:'部門或人員', auto_supervisor:'自動抓上一階主管', top_approver:'最高決策者'};
+    var h = '';
+    for (var i=0;i<3;i++){
+        h += '<div class="chain-row"><span style="width:44px;color:#8a6d45;">第'+(i+1)+'順位</span><select class="ap-chain-sel" data-idx="'+i+'"><option value="">不使用</option>';
+        Object.keys(methods).forEach(function(k){ h += '<option value="'+k+'">'+methods[k]+'</option>'; });
+        h += '</select></div>';
+    }
+    $('#apChainBox').html(h);
+    (chain||['top_approver']).forEach(function(m,i){ $('.ap-chain-sel[data-idx='+i+']').val(m); });
+}
+function loadApprovalStampOptions(cb){
+    $.getJSON(API, {action:'stamp_tpl_options'}, function(res){
+        if (!res.ok) return;
+        var h = '<option value="0">（預設樣式）</option>';
+        (res.templates||[]).forEach(function(t){ h += '<option value="'+t.id+'">'+(t.type_name?esc(t.type_name)+'｜':'')+esc(t.tpl_name)+'</option>'; });
+        $('#apListStamp,#apFooterStamp').html(h);
+        if (cb) cb();
+    });
+}
+function loadApprovalPane(){
+    var deptOpts = '<option value="">（未設定）</option>' + (META.departments||[]).map(function(d){ return '<option value="'+d.id+'">'+esc(d.name)+'</option>'; }).join('');
+    $('#apDept').html(deptOpts);
+    var userOpts = '<option value="">（未設定）</option>' + (STAFF||[]).map(function(p){ return '<option value="'+p.id+'">'+esc(p.user_cname)+'</option>'; }).join('');
+    $('#apUser').html(userOpts);
+    loadApprovalStampOptions(function(){
+        var ap = META.approval || {};
+        $('#apNeed').prop('checked', ap.need_approval==1);
+        $('#apDept').val(ap.approver_dept_id||'');
+        $('#apUser').val(ap.approver_user_id||'');
+        renderApChainBox(ap.approver_chain);
+        $('#apListStamp').val(ap.list_stamp_tpl_id||0);
+        $('#apFooterStamp').val(ap.footer_stamp_tpl_id||0);
+    });
+}
+function submitApproval(){
+    var chain = [];
+    $('.ap-chain-sel').each(function(){ var v=$(this).val(); if (v) chain.push(v); });
+    $.post(API, {action:'save_approval_settings', need_approval:$('#apNeed').is(':checked')?1:0,
+        approver_dept_id:$('#apDept').val(), approver_user_id:$('#apUser').val(),
+        approver_chain:JSON.stringify(chain.length?chain:['top_approver']),
+        list_stamp_tpl_id:$('#apListStamp').val(), footer_stamp_tpl_id:$('#apFooterStamp').val()}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        META.approval = res.approval;
+        alert('已儲存核准與圖章設定。');
+        closeMask('cfgMask');
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+
+/* ================= AS 文件編號綁定設定（管理員） ================= */
+var ASDOC_MODULE_LABEL = {tool_calib_record:'校驗紀錄（年度校驗紀錄／登錄憑證）', tool_calib_plan:'校驗計畫表（年度校驗計畫表）', tool_calib_dossier:'檢驗設備履歷表'};
+function loadAsdocPane(){
+    var h = '';
+    Object.keys(ASDOC_MODULE_LABEL).forEach(function(m){
+        var doc = (META.as_docs||{})[m];
+        h += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #F0E4CC;">'
+           + '<div style="width:220px;">'+esc(ASDOC_MODULE_LABEL[m])+'</div>'
+           + '<span id="asdocLabel_'+m+'" style="color:#5b3a1e;flex:1;">'+(doc ? esc(doc.doc_no+' '+doc.doc_name) : '未綁定')+'</span>'
+           + '<button type="button" onclick="openAsdocPicker(\''+m+'\')" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">選擇…</button>'
+           + '</div>';
+    });
+    $('#asdocRows').html(h);
+}
+function openAsdocPicker(module){
+    $.getJSON(API, {action:'asdoc_list'}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        var cur = (META.as_docs||{})[module];
+        EGAsDoc.open({ docs: res.docs||[], current: cur ? cur.id : 0, title: ASDOC_MODULE_LABEL[module]+' AS 文件綁定',
+            onSave: function(id, doc){
+                $.post(API, {action:'save_asdoc', module:module, doc_id:id}, function(r){
+                    if (!r.ok){ alert(r.error||'儲存失敗'); return; }
+                    META.as_docs[module] = r.doc;
+                    $('#asdocLabel_'+module).text(r.doc ? (r.doc.doc_no+' '+r.doc.doc_name) : '未綁定');
+                }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+            }
+        });
+    });
+}
 
 function loadStaffPane(){
     $.getJSON(API, {action:'staff_candidates'}, function(res){
@@ -2156,7 +2336,7 @@ function planDecide(y, decision){
 /** 附件欄：類別＋檔名清單（使用者 2026-08-12 明確要求，取代只顯示份數） */
 function attachCellHtml(list){
     if (!list || !list.length) return '—';
-    return list.map(function(a){ return esc(a.doc_type||'附件')+'：'+esc(a.name||''); }).join('<br>');
+    return list.map(function(a){ return esc(a.doc_type||'附件')+'：'+esc(a.name||a.original_name||''); }).join('<br>');
 }
 /** 校驗人員／覆驗者：列印版一律用圖章(ai-rules/18)，畫面預覽維持文字；只有內校才蓋人員章(外校對象是廠商) */
 function signerCellHtml(name, calibDate, method, forPrint){

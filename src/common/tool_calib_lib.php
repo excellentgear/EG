@@ -218,6 +218,15 @@ function tool_calib_perms(PDO $db, ?array $u): array {
     $canAdmin = $isAdmin || tool_calib_has_role($db, $uid, ['tool_calib_admin']);
     $canEdit  = $canAdmin || tool_calib_has_role($db, $uid, ['tool_calib_edit']);
     $canView  = $canEdit  || tool_calib_has_role($db, $uid, ['tool_calib_view']);
+    // 內校主管核准的核准人多半不屬於品管部門、沒有本模組任何角色，但收到待核准通知後要能打開本頁處理，
+    // 否則通知形同虛設（比照 ai-rules/19：核准人只看得到自己被通知的那筆，這裡只放行「檢閱」，決行時
+    // batch_decide/plan_decide 仍會用送出者本人的職級重新解析一次合格池，不因此多出可核准的權限）。
+    if (!$canView) {
+        $cfg = tool_calib_approval_cfg($db);
+        if ($cfg['approver_user_id'] && (int)$cfg['approver_user_id'] === $uid) $canView = true;
+        elseif ($cfg['approver_dept_id'] && in_array($uid, array_column(tool_calib_dept_managers($db, $cfg['approver_dept_id']), 'id'), true)) $canView = true;
+        else { $top = eg_org_user($db, 'top_approver'); if ($top && (int)$top['id'] === $uid) $canView = true; }
+    }
     return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canEdit'=>$canEdit,'canView'=>$canView];
 }
 
