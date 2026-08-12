@@ -233,9 +233,21 @@ switch ($action) {
                 $catMap[(int)$c['id']] = $c['category_name'];
             }
         } catch (Exception $e) {}
+        // 自動連動標示（使用者明確要求，2026-08-12）：同一實體檔名(filename)在 status='active' 底下出現超過
+        // 一筆＝這份附件被自動同步掛到多張訂單（OP轉訂單批次共用／同訂單編號跨料號自動連動），前端要標示出來，
+        // 且刪除時（delete_file）會連動整批一起刪，不能讓使用者誤以為只刪了自己看到的這一份。
+        $sharedSet = [];
+        $activeFilenames = array_values(array_unique(array_column(array_filter($rows, fn($r) => $r['status'] === 'active'), 'filename')));
+        if ($activeFilenames) {
+            $ph = implode(',', array_fill(0, count($activeFilenames), '?'));
+            $sq = $pdo->prepare("SELECT filename FROM order_attachments WHERE status='active' AND filename IN ($ph) GROUP BY filename HAVING COUNT(*) > 1");
+            $sq->execute($activeFilenames);
+            $sharedSet = array_flip($sq->fetchAll(PDO::FETCH_COLUMN));
+        }
         foreach ($rows as &$r) {
             $ids = array_values(array_filter(array_map('intval', explode(',', (string)$r['category_ids']))));
             $r['category_name'] = implode('、', array_map(fn($i) => $catMap[$i] ?? ('#'.$i), $ids));
+            $r['is_shared'] = isset($sharedSet[$r['filename']]);
         }
         unset($r);
         // 刪除按鈕顯示用：只有上傳者本人／管理員／被指派 ot_attach_delete 角色功能才看得到刪除鈕（後端 delete_file 同規則再擋一次）
@@ -273,16 +285,16 @@ switch ($action) {
         // 「只要有訂單編輯權限就能刪任何人的附件」。
         $allowed = ((int)$row['uploaded_by'] === $uid) || _oaIsAdmin($pdo, $uid) || _oaHasAttachDelete($pdo, $uid);
         if (!$allowed) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無刪除權限：僅上傳者本人與管理員可刪除此附件']); break; }
-        $pdo->prepare("DELETE FROM order_attachments WHERE id=?")->execute([$attId]);
-        // 共用附件（OP轉訂單批次／同訂單編號跨料號）會有多筆列參照同一個實體檔名(filename)；
-        // 刪掉這一筆之後還有其他列在參照，代表別的訂單/料號仍在用這份檔案，不可砍實體檔（否則對方會404）。
-        $stillUsed = $pdo->prepare("SELECT COUNT(*) FROM order_attachments WHERE filename=?");
-        $stillUsed->execute([$row['filename']]);
-        if ((int)$stillUsed->fetchColumn() === 0) {
-            $fp = $dir . $row['filename'];
-            if (is_file($fp)) @unlink($fp);
-        }
-        echo json_encode(['success' => true, 'message' => '已刪除']);
+        // 共用附件（OP轉訂單批次／同訂單編號跨料號自動連動）同一實體檔名(filename)會有多筆 order_attachments
+        // 列分掛在不同訂單底下，視為同一份文件；刪除其中一份＝整份都不要了，一併連動刪除所有連結列＋實體檔
+        // （使用者明確要求連動刪除，2026-08-12；不再是「刪一份、其他份留著變孤兒引用」）。
+        $del = $pdo->prepare("DELETE FROM order_attachments WHERE filename=?");
+        $del->execute([$row['filename']]);
+        $linkedRemoved = $del->rowCount() - 1;
+        $fp = $dir . $row['filename'];
+        if (is_file($fp)) @unlink($fp);
+        $msg = $linkedRemoved > 0 ? ('已刪除（含自動連動的 ' . $linkedRemoved . ' 筆）') : '已刪除';
+        echo json_encode(['success' => true, 'message' => $msg, 'linked_removed' => max(0, $linkedRemoved)]);
         break;
     }
 

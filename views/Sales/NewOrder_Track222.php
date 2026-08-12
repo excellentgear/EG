@@ -7147,6 +7147,7 @@ foreach($dCounts as $c) {
                 '<a href="' + ORDER_ATTACH_API + '?action=download&id=' + f.id + '" target="_blank" style="color:#337ab7;">' + escapeHtml(f.original_name || f.filename) + '</a>' +
                 '<span style="color:#aaa;">' + (f.file_size || '') + '</span>' +
                 partTag +
+                (f.is_shared ? '<span style="font-size:10px;color:#8a5a2b;background:#FDEBD0;border:1px solid #E8B76C;border-radius:3px;padding:0 4px;" title="這份附件已自動連動到相同訂單編號的其他料號訂單；刪除會一併移除所有連結"><i class="fa fa-link"></i> 自動連動</span>' : '') +
                 '<span class="oa-tag-badge">' + (tagged
                     ? '<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">' + escapeHtml(f.category_name) + '</span>'
                     : '<span style="font-size:10px;color:#c0392b;font-weight:600;"><i class="fa fa-exclamation-circle"></i> 尚未設定標籤</span>') + '</span>' +
@@ -7226,11 +7227,16 @@ foreach($dCounts as $c) {
             }, 'json');
         });
         $(document).on('click', '.oa-file-del', function() {
-            if (!confirm('確定要刪除這份附件？')) return;
             var $row = $(this).closest('.oa-file-row');
+            var isShared = $row.find('[title*="自動連動"]').length > 0;
+            var confirmMsg = isShared
+                ? '這份附件已自動連動到相同訂單編號的其他料號訂單，刪除會一併移除所有連結，確定要刪除？'
+                : '確定要刪除這份附件？';
+            if (!confirm(confirmMsg)) return;
             var attId = $row.data('id');
             $.post(ORDER_ATTACH_API, { action: 'delete_file', attachment_id: attId }, function(res) {
                 if (!res.success) { showToast(res.message || '刪除失敗', 'info'); return; }
+                if (res.linked_removed > 0) showToast(res.message, 'info');
                 oaRefreshScopeOf($row);
             }, 'json');
         });
