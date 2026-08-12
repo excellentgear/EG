@@ -200,6 +200,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <div style="margin-top:6px;font-size:12px;color:#8a6d45;">文件編號：<b id="fDocNo">存檔後自動產生</b>
             ｜ 建立：<span id="fCreatedInfo">—</span></div>
         <div class="ic-hdr-info">
+            <span>製程：<b id="fProcessSummary">—</b></span>
             <span>建立日期(最早外來文件日期)：<b id="fEarliestDate">—</b></span>
             <span>簽章日期(最新日期)：<b id="fLatestDate">—</b></span>
             <span>確認狀態：<span id="fReviewBadge" class="ic-status st-pending">待確認</span></span>
@@ -332,6 +333,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li>「版別／文件編號」欄：連結自外來文件清單的列無法手動改文字——顯示內容一律即時查詢外來文件清單目前狀態（不落地快照，來源異動這裡會跟著變），若來源附件被刪除會顯示「來源已消失」；手動新增的列可直接輸入文字，也可按「選外來文件」改連結既有附件。欄位旁 <i class="fa fa-eye"></i> 圖示可直接點開附件內容以利確認（本機瀏覽器可預覽的檔案如PDF/圖片會直接開啟預覽）；沒有真正版次、退回顯示檔名充當辨識用途時，畫面仍會顯示檔名，但<b>列印不會印出檔名</b>（檔名不是真正的文件編號）。</li>
             <li>項目列可拖曳排序（列前 <i class="fa fa-ellipsis-v"></i> 圖示），放開後項次自動重新編號。</li>
             <li>建立日期＝清單上最早的文件日期；簽章日期＝清單上最新的文件日期（皆排除已排除的項目）；兩者隨清單內容即時算出，不需手動填。</li>
+            <li>編輯跳窗與列印版都會顯示「製程」——彙總清單上所有項目列的「所屬製程」（排除已排除的項目、共用文件不計入），若同一料號的文件是從多張報價單匯入、涵蓋不同製程，這裡會把所有製程都合併顯示；此欄唯讀，不能手動填寫，跟著項目列內容即時算出。</li>
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號、製表人簽章使用全站通用圓形姓名章（若本人有上傳掃描實體章會優先用掃描章，否則自動產生標準回墨章，不需另外設定模板）。</li>
         </ul>
         <h4>設定入口</h4>
@@ -463,6 +465,7 @@ function resetEditForm(){
     CUR_ID = 0; ITEMS = [];
     $('#fPartNo').val(''); $('#fPartDId').val('0'); $('#fCustomerName').val(''); $('#fCustomerId').val('');
     $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
+    $('#fProcessSummary').text('—');
     $('#fEarliestDate').text('—'); $('#fLatestDate').text('—');
     $('#fReviewBadge').attr('class','ic-status st-pending').text('待確認'); $('#fConfirmedInfo').text('');
     $('#itemBody').empty();
@@ -478,6 +481,7 @@ function openEdit(id){
         $('#fCustomerName').val(res.doc.customer_name||''); $('#fCustomerId').val(res.doc.customer_id||'');
         $('#fDocNo').text(res.doc.doc_no);
         $('#fCreatedInfo').text((res.doc.created_by_name||'')+' '+fmtDate((res.doc.created_at||'').substring(0,10)));
+        $('#fProcessSummary').text(res.process_summary ? res.process_summary : '共用(未標示特定製程)');
         $('#fEarliestDate').text(res.doc_date_earliest ? fmtDate(res.doc_date_earliest) : '—');
         $('#fLatestDate').text(res.sign_date_latest ? fmtDate(res.sign_date_latest) : '—');
         $('#fReviewBadge').attr('class','ic-status '+(STATUS_CLS[res.doc.review_status]||'st-pending')).text(res.doc.review_status_label||'待確認');
@@ -697,7 +701,9 @@ function printDoc(id){
         var body = '<div class="p-comp">'+esc(res.company_name)+'</div>'
             + '<div class="p-title">'+esc(res.as_doc_name)+'</div>'
             + '<table class="p-hd"><tr><td>客戶</td><td>'+esc(d.customer_name||'')+'</td><td>產品編號</td><td>'+esc(d.part_no||'')+'</td></tr>'
-            + '<tr><td>建立日期</td><td colspan="3">'+(res.doc_date_earliest?fmtDate(res.doc_date_earliest):'')+'</td></tr></table>'
+            + '<tr><td>建立日期</td><td colspan="3">'+(res.doc_date_earliest?fmtDate(res.doc_date_earliest):'')+'</td></tr>'
+            + (res.process_summary ? '<tr><td>製程</td><td colspan="3">'+esc(res.process_summary)+'</td></tr>' : '')
+            + '</table>'
             + '<table class="p-tb"><thead><tr><th style="width:26px;">項次</th><th>型態項目名稱</th><th style="width:85px;">型態生效日期</th><th style="width:65px;">型態類別</th><th style="width:90px;">所屬製程</th><th>版別／文件編號</th></tr></thead><tbody>';
         activeItems.forEach(function(it, i){
             body += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.item_name)+'</td><td>'+fmtDate(it.effective_date)+'</td><td>'+(typeLabel[it.item_type]||'')+'</td><td>'+esc(it.process_tag||'共用')+'</td><td class="tl">'+esc(it.print_doc_no||'')+'</td></tr>';
