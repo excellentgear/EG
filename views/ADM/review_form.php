@@ -452,10 +452,14 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
         + (asCss ? '<div class="rf-as-doc">'+asCss+'</div>' : '')
         + '<div class="rf-page-num">第 1 頁／共 1 頁</div>'
         + '<scr'+'ipt>window.onload=function(){'
+        // 量 scrollHeight 前先讓一拍：印章 SVG 內含 textLength/lengthAdjust 需要字型計量才能定案排版，
+        // onload 觸發當下量到的高度有時還沒完全穩定，量太早會讓縮放比例算少、印到最後footer被紙張邊界切掉。
+        + 'setTimeout(function(){'
         + 'var pageH=('+(landscape ? (paper==='A3'?'297':'210') : (paper==='A3'?'420':'297'))+'-28)*96/25.4;'
         + 'var h=document.body.scrollHeight;'
         + 'if(h>pageH){ document.body.style.zoom = Math.max(0.5, pageH/h); }'
-        + 'setTimeout(function(){window.print();},250);};</scr'+'ipt></body></html>');
+        + 'setTimeout(function(){window.print();},250);'
+        + '},120);};</scr'+'ipt></body></html>');
     w.document.close();
 }
 function rfCss(){
@@ -465,9 +469,12 @@ function rfCss(){
          + 'table.rf-p-items{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:6px;}'
          + 'table.rf-p-items th,table.rf-p-items td{border:1px solid #333;padding:4px 5px;text-align:center;}'
          + 'table.rf-p-items td.t-left{text-align:left;}'
-         + 'table.rf-p-foot{width:100%;margin-top:16px;font-size:13px;}'
-         + 'table.rf-p-foot td{padding:10px 6px;width:33.33%;text-align:center;}'
-         + 'table.rf-p-foot .stamp-wrap svg,table.rf-p-foot svg.car-stamp{width:80px !important;height:80px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
+         + 'table.rf-p-foot{width:100%;margin-top:16px;margin-bottom:12mm;font-size:13px;}'
+         + 'table.rf-p-foot td{padding:6px;width:33.33%;text-align:center;vertical-align:top;}'
+         + 'table.rf-p-foot .foot-lbl{margin-bottom:4px;}'
+         + 'table.rf-p-foot .foot-na{color:#888;font-size:12px;}'
+         + 'table.rf-p-foot .stamp-wrap{margin:0;}'
+         + 'table.rf-p-foot .stamp-wrap svg,table.rf-p-foot svg.car-stamp{width:76px !important;height:76px !important;max-width:76px;max-height:76px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
 }
 function stampOrName(name, date, isDeputy, schema){
     return (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
@@ -498,9 +505,15 @@ function printForm(){
     });
     h += '</tbody></table>';
     h += '<table class="rf-p-foot"><tr>';
-    h += '<td>'+(CUR.review && CUR.review.status==='approved' ? ('審核：'+stampFooter(CUR.review.approver_name, dispDate(CUR.review.decided_at))) : '審核：')+'</td>';
-    h += '<td>'+(CUR.approval && CUR.approval.status==='approved' ? ('核准：'+stampFooter(CUR.approval.approver_name, dispDate(CUR.approval.decided_at))) : '核准：')+'</td>';
-    h += '<td>製表：'+stampFooter(CUR.created_by_name, dispDate(CUR.business_date))+'</td>';
+    h += '<td><div class="foot-lbl">審核</div>' + (
+        !t.need_review ? '<div class="foot-na">（本模板免審核）</div>'
+        : (CUR.review && CUR.review.status==='approved' ? stampFooter(CUR.review.approver_name, dispDate(CUR.review.decided_at)) : '')
+    ) + '</td>';
+    h += '<td><div class="foot-lbl">核准</div>' + (
+        !t.need_approval ? '<div class="foot-na">（本模板免核准）</div>'
+        : (CUR.approval && CUR.approval.status==='approved' ? stampFooter(CUR.approval.approver_name, dispDate(CUR.approval.decided_at)) : '')
+    ) + '</td>';
+    h += '<td><div class="foot-lbl">製表</div>' + stampFooter(CUR.created_by_name, dispDate(CUR.business_date)) + '</td>';
     h += '</tr></table>';
     egPrintWindow(t.name, h, rfCss(), CUR.as_doc_no, t.paper_size, t.orientation!=='portrait');
 }
