@@ -74,6 +74,26 @@ function computeDocDates(array $items): array {
     return ['earliest'=>$dates[0], 'latest'=>$dates[count($dates)-1]];
 }
 
+/**
+ * 製程摘要（2026-08-12 使用者要求恢復顯示，比照架構改版前表頭的「製程」欄）：架構改版後製程改記在
+ * 每一列項目上（可能來自多張報價單匯入、各自不同製程），這裡改成唯讀彙總——取所有未排除項目的
+ * 「所屬製程」，去重後合併顯示；共用文件(process_tag留空)不計入。process_tag 本身可能已是
+ * GROUP_CONCAT 出的「滾齒+研磨」組合，先拆開再去重，避免同一製程因來源不同重複列出。
+ */
+function computeProcessSummary(array $items): string {
+    $procs = [];
+    foreach ($items as $it) {
+        if (!empty($it['is_excluded'])) continue;
+        $tag = trim((string)($it['process_tag'] ?? ''));
+        if ($tag === '') continue;
+        foreach (explode('+', $tag) as $piece) {
+            $piece = trim($piece);
+            if ($piece !== '' && !in_array($piece, $procs, true)) $procs[] = $piece;
+        }
+    }
+    return implode('+', $procs);
+}
+
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 switch ($action) {
@@ -123,7 +143,7 @@ case 'get':
     $st->execute([$id]);
     $items = array_map(function($it) use ($db) { return buildItemView($db, $it); }, $st->fetchAll(PDO::FETCH_ASSOC));
     $dates = computeDocDates($items);
-    jout(['success'=>true,'doc'=>$doc,'items'=>$items,'doc_date_earliest'=>$dates['earliest'],'sign_date_latest'=>$dates['latest']]);
+    jout(['success'=>true,'doc'=>$doc,'items'=>$items,'doc_date_earliest'=>$dates['earliest'],'sign_date_latest'=>$dates['latest'],'process_summary'=>computeProcessSummary($items)]);
 
 case 'delete_header':
     needAdmin($perms);
@@ -367,6 +387,7 @@ case 'print_get':
     jout([
         'success'=>true, 'doc'=>$doc, 'items'=>$items,
         'doc_date_earliest'=>$dates['earliest'], 'sign_date_latest'=>$dates['latest'],
+        'process_summary'=>computeProcessSummary($items),
         'company_name'=>type_id_ctrl_company_name($db),
         'as_doc_no'=>eg_asdoc_no_asof($db, 'type_id_ctrl', $bizDate),
         'as_doc_name'=>$asDoc['doc_name'] ?? '型態識別文件管制表',
