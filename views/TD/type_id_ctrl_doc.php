@@ -152,8 +152,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             </select>
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
             <span style="border-left:1px solid #D8BE93;height:20px;"></span>
-            <input type="text" id="syncPartNo" placeholder="輸入料號自動產生/同步" style="width:150px;<?= $perms['canEdit']?'':'display:none;' ?>" autocomplete="off">
-            <button class="btn-warm" id="btnSyncPart" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="依此料號的訂單/報價單製程，自動建立(或更新)各製程的型態識別文件管制表，並同步外來文件清單附件"><i class="fa fa-refresh"></i> 自動產生/同步</button>
+            <button class="btn-warm" id="btnScanMissing" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="掃描外來文件清單中有附件、但還沒建立型態識別文件管制表的料號"><i class="fa fa-search"></i> 掃描待建立料號</button>
+            <input type="text" id="syncPartNo" placeholder="或手動指定單一料號同步" style="width:150px;<?= $perms['canEdit']?'':'display:none;' ?>" autocomplete="off">
+            <button id="btnSyncPart" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="依此料號的訂單/報價單製程，自動建立(或更新)各製程的型態識別文件管制表，並同步外來文件清單附件"><i class="fa fa-refresh"></i> 同步</button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <span class="ic-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b></span>
@@ -247,6 +248,23 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     <div class="m-head"><span>此料號與客戶的訂單製程</span><span class="m-close" onclick="closeMask('procMask')">✕</span></div>
     <div class="m-body"><div id="procList"></div></div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('procMask')">取消</button></div>
+</div></div>
+
+<!-- 掃描待建立料號 -->
+<div class="ic-mask" id="missingMask"><div class="ic-modal xwide">
+    <div class="m-head"><span>掃描到的待建立料號</span><span class="m-close" onclick="closeMask('missingMask')">✕</span></div>
+    <div class="m-body">
+        <div id="missingEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
+        <div id="missingCnt" style="font-size:12px;color:#8a6d45;margin-bottom:6px;"></div>
+        <table class="ic-item-table" id="missingTable" style="display:none;">
+            <thead><tr><th style="width:16%;">料號</th><th style="width:16%;">客戶</th><th style="width:12%;">外來文件筆數</th></tr></thead>
+            <tbody id="missingBody"></tbody>
+        </table>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('missingMask')">取消</button>
+        <button class="b-ok" id="btnBuildAll" onclick="buildAllMissing()"><i class="fa fa-magic"></i> 一鍵建立全部</button>
+    </div>
 </div></div>
 
 <!-- AS 文件綁定 -->
@@ -374,6 +392,38 @@ $('#btnSyncPart').on('click', function(){
         loadList();
     }, 'json');
 });
+
+/* ---------- 掃描待建立料號 → 一鍵建立全部 ---------- */
+var missingRows = [];
+$('#btnScanMissing').on('click', function(){
+    $('#missingEmpty').show().text('掃描中…'); $('#missingTable').hide(); $('#missingCnt').text('');
+    openMask('missingMask');
+    $.getJSON(API, {action:'find_missing_parts'}, function(res){
+        if (!res.success){ $('#missingEmpty').text(res.message||'掃描失敗'); return; }
+        missingRows = res.rows || [];
+        if (!missingRows.length){ $('#missingEmpty').text('沒有找到待建立的料號——外來文件清單中的料號都已建立型態識別文件管制表。'); return; }
+        $('#missingEmpty').hide(); $('#missingTable').show();
+        $('#missingCnt').text('共找到 '+missingRows.length+' 個料號，外來文件清單中有附件但尚未建立型態識別文件管制表：');
+        var html = '';
+        missingRows.forEach(function(r){
+            html += '<tr><td class="t-left">'+esc(r.part_no)+'</td><td class="t-left">'+esc(r.customer_name||'')+'</td><td>'+esc(r.ext_count)+'</td></tr>';
+        });
+        $('#missingBody').html(html);
+    }, 'json');
+});
+function buildAllMissing(){
+    if (!missingRows.length) return;
+    if (!confirm('確定要一次建立全部 '+missingRows.length+' 個料號的型態識別文件管制表嗎？')) return;
+    $('#btnBuildAll').prop('disabled', true).text('建立中…');
+    var ids = missingRows.map(function(r){ return r.d_id; });
+    $.post(API, {action:'sync_all_missing', part_ids: JSON.stringify(ids)}, function(res){
+        $('#btnBuildAll').prop('disabled', false).html('<i class="fa fa-magic"></i> 一鍵建立全部');
+        if (!res.success){ alert(res.message||'建立失敗'); return; }
+        alert('已建立：'+res.part_count+' 個料號，共 '+res.doc_count+' 份型態識別文件管制表');
+        closeMask('missingMask');
+        loadList();
+    }, 'json');
+}
 
 /* ---------- 新增/編輯 ---------- */
 function resetEditForm(){

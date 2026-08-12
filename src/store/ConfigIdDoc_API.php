@@ -295,6 +295,25 @@ case 'sync_part':
     $newCount = count(array_diff($affected, $beforeIds));
     jout(['success'=>true,'affected'=>$affected,'created'=>$newCount,'updated'=>count($affected)-$newCount]);
 
+// ── 掃描「外來文件清單有附件、但還沒建立型態識別文件管制表」的料號 ─────────
+case 'find_missing_parts':
+    needView($perms);
+    jout(['success'=>true,'rows'=>type_id_ctrl_find_missing_parts($db)]);
+
+// ── 一鍵批次建立：把掃描出的每個料號都跑一次自動產生/同步 ─────────────
+case 'sync_all_missing':
+    needEdit($perms);
+    $ids = json_decode((string)($_POST['part_ids'] ?? '[]'), true);
+    if (!is_array($ids) || !$ids) jout(['success'=>false,'message'=>'沒有可建立的料號']);
+    $partCount = 0; $docCount = 0;
+    foreach ($ids as $dsPk) {
+        $dsPk = (int)$dsPk;
+        if (!$dsPk) continue;
+        $affected = type_id_ctrl_sync_part($db, $dsPk);
+        if ($affected) { $partCount++; $docCount += count($affected); }
+    }
+    jout(['success'=>true,'part_count'=>$partCount,'doc_count'=>$docCount]);
+
 // ── AS 文件編號綁定（本頁自身模板）────────────────────────────────
 case 'asdoc_list':
     needView($perms);

@@ -218,6 +218,59 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     return $rows;
 }
 
+/**
+ * 掃描「外來文件清單中有附件、但一筆型態識別文件管制表都還沒建立」的料號（2026-08-12 使用者要求，
+ * 不想每次都要自己手動打料號）。回傳 [d_id, part_no, customer_name, ext_count] 陣列，供批次一鍵建立用。
+ */
+function type_id_ctrl_find_missing_parts(PDO $db): array {
+    $existing = $db->query("SELECT DISTINCT part_d_id FROM type_id_ctrl_doc WHERE is_deleted=0 AND part_d_id IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
+    $existingSet = array_flip(array_map('intval', $existing));
+
+    $cats = $db->query("SELECT id FROM quotation_file_categories WHERE is_external_doc=1")->fetchAll(PDO::FETCH_COLUMN);
+    if (!$cats) return [];
+    $catCond = function (string $col, string $singleCol = '') use ($cats): string {
+        $parts = [];
+        foreach ($cats as $cid) $parts[] = "FIND_IN_SET($cid, REPLACE(COALESCE($col,''),' ',''))";
+        if ($singleCol !== '') $parts[] = "$singleCol IN (" . implode(',', $cats) . ")";
+        return '(' . implode(' OR ', $parts) . ')';
+    };
+
+    $counts = [];
+    $add = function (array $rows) use (&$counts) {
+        foreach ($rows as $r) {
+            $id = (int)($r['d_id'] ?? 0);
+            if (!$id) continue;
+            $counts[$id] = ($counts[$id] ?? 0) + (int)$r['c'];
+        }
+    };
+
+    $add($db->query("SELECT pa.d_id, COUNT(*) c FROM part_attachments pa
+                      WHERE pa.deleted_at IS NULL AND " . $catCond('pa.category_ids') . " GROUP BY pa.d_id")->fetchAll(PDO::FETCH_ASSOC));
+
+    $add($db->query("SELECT qi.d_setting_d_id AS d_id, COUNT(*) c
+                      FROM quotation_attachments a
+                      JOIN quotation_item qi ON qi.quote_id=(SELECT quote_id FROM quotation_list WHERE quote_no=a.quote_no)
+                      WHERE a.status='active' AND a.linked_parts IS NULL AND " . $catCond('a.category_ids', 'a.category_id') . "
+                      GROUP BY qi.d_setting_d_id")->fetchAll(PDO::FETCH_ASSOC));
+
+    $add($db->query("SELECT ds.d_id AS d_id, COUNT(*) c
+                      FROM quotation_attachments a
+                      JOIN d_setting ds ON JSON_CONTAINS(a.linked_parts, JSON_QUOTE(ds.D_Setting_Id))
+                      WHERE a.status='active' AND a.linked_parts IS NOT NULL AND " . $catCond('a.category_ids', 'a.category_id') . "
+                      GROUP BY ds.d_id")->fetchAll(PDO::FETCH_ASSOC));
+
+    $missingIds = array_values(array_filter(array_keys($counts), function ($id) use ($existingSet) { return !isset($existingSet[$id]); }));
+    if (!$missingIds) return [];
+
+    $in = implode(',', array_map('intval', $missingIds));
+    $rows = $db->query("SELECT ds.d_id, ds.D_Setting_Id AS part_no, COALESCE(cl.customer,'') AS customer_name
+                         FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id=ds.Customer_Id
+                         WHERE ds.d_id IN ($in) ORDER BY ds.D_Setting_Id")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) { $r['ext_count'] = $counts[(int)$r['d_id']] ?? 0; }
+    unset($r);
+    return $rows;
+}
+
 /** 依類別名稱猜測型態類別代碼（僅供自動同步預設值，使用者仍可手動修改） */
 function type_id_ctrl_guess_type(array $categoryNames): string {
     $joined = implode(' ', $categoryNames);
