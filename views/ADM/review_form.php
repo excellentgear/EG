@@ -191,6 +191,7 @@ function loadMeta(cb){
     $.getJSON(API, {action:'meta'}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         META = res;
+        window.__ownCompany = META.company_name || '';   // eg_stamp.js 預設回墨印章讀這個全域變數印公司名，比照 meeting_record.php
         if (META.perms.canCreate) $('#btnAdd').show();
         if (cb) cb();
     });
