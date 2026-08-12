@@ -216,6 +216,7 @@ $rbacManagedPageIds = [
     102, // 訂單毛利分析_TEST (Order_Profit_Analysis)
     100, // AS9100文件管理 (as_document_management)
     128, // AS流程說明手冊 (as_flow_guide)；唯讀頁，與 100 共用 module='as_doc' 角色（asdoc_view 即可檢視）
+    135, 136, // 審核表單模板管理 / 審核表單 (review_form_template / review_form)；共用 module='review_form' 角色
 ];
 $rbacManagedModuleCodes = ['bom_track', 'personal_task'];  // 模組本身直連 RBAC 頁面者
 
@@ -738,6 +739,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'acc-role-section'       => '會計',
                                         'extdoc-role-section'    => '外來文件清單',
                                         'otrk-role-section'      => '訂單追蹤',
+                                        'rvf-role-section'       => '審核表單',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
