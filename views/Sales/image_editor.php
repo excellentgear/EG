@@ -1065,6 +1065,13 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <span class="tb-sep"></span>
     <button class="tb-btn" onclick="openCanvasModal()" title="畫布尺寸與背景設定"><i class="fa fa-crop"></i> 畫布</button>
     <button class="tb-btn" onclick="fitArtboardToContent()" title="畫布自動調整為剛好包住所有內容">適合內容</button>
+    <select id="frame-size" title="頁面框架：先選好 A4/A3＋方向，再按「縮放至框架」；不選按鈕不會自動套用">
+        <option value="A4L" selected>A4 橫式</option>
+        <option value="A4P">A4 直式</option>
+        <option value="A3L">A3 橫式</option>
+        <option value="A3P">A3 直式</option>
+    </select>
+    <button class="tb-btn" onclick="applyFrameFitFromSelect()" title="把整張圖面等比例縮放＋置中到左側選擇的框架尺寸（點選才會縮放，不會自動觸發）；可 Ctrl+Z 復原。用來讓每張圖面蓋章大小一致，不受原始圖片解析度不同影響"><i class="fa fa-object-group"></i> 縮放至框架</button>
     <span class="tb-sep"></span>
     <button class="tb-btn" onclick="openSecondWindow()" title="再開一個批圖視窗（可移到另一個螢幕；兩窗之間互貼：選取後 Ctrl+C，到另一窗按 Ctrl+Shift+V）"><i class="fa fa-clone"></i> 開新視窗</button>
     <span class="tb-sep"></span>
@@ -1758,7 +1765,8 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <ul style="padding-left:18px;margin:4px 0 10px;">
                 <li>滾輪縮放；<b>按住滾輪中鍵拖移</b>或空白鍵＋拖曳平移；「縮放至選取」放大局部細修</li>
                 <li>「開新視窗」再開一個編輯器（可拖到另一個螢幕）；兩窗互貼＝選取後 <b>Ctrl+C</b>，到另一窗按 <b>Ctrl+Shift+V</b>（他窗貼上）</li>
-                <li>匯出/列印：整個畫布或只匯出選取；PNG/JPG、解析度倍率（列印建議2×）</li>
+                <li>匯出/列印：整個畫布或只匯出選取；PNG/JPG、解析度倍率（列印建議2×）；列印會自動依畫面長寬決定直/橫版並縮成一頁</li>
+                <li><b>縮放至框架</b>（頂列「畫布」旁）：先選 A4/A3＋橫式/直式（預設 A4 橫式），按「縮放至框架」把整張圖面等比例縮放＋置中成該標準尺寸（點選才套用，不會自動觸發，可 Ctrl+Z 復原）。因為每張圖面原始解析度不同，蓋章工具的「大小」是用畫布 px 輸入，同樣的數字在不同圖上印出來實際大小會不一樣——先套這個框架再蓋章，蓋出來的章大小才會一致</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
                 <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
@@ -2063,6 +2071,51 @@ function quickResize() {
     const p = resizePresets[resizeDefaultIdx] || resizePresets[0];
     if (!confirm('確定套用「' + p.name + '」（' + p.w + '×' + p.h + '）等比例縮放整張圖面？')) return;
     applyResizeTo(p.w, p.h);
+}
+
+/* ── 縮放至框架（A4/A3，直式/橫式）：把整張圖面等比例縮小/放大＋置中，套進一個固定像素尺寸的
+   標準紙張框架。不同圖面原始解析度差很多（掃描/拍照 dpi 不一），蓋章工具的「大小」是用畫布 px
+   輸入，同樣 110px 在兩張解析度不同的圖上印出來實際大小會不一樣；先套用同一個框架尺寸再蓋章，
+   往後同一框架下蓋章大小就會一致。固定 200dpi 換算 A4/A3 px（僅供編輯期參考解析度，跟列印畫質
+   無關——doPrintPDF 匯出時一律會依實際紙張需求重新算圖，見上方 exportRegionDataURL）。
+   點選按鈕才觸發，不會自動套用。 */
+const FRAME_DPI = 200;
+const FRAME_MM = { A4: [210, 297], A3: [297, 420] };
+function frameSizePx(code) {
+    const paper = code.slice(0, 2), land = code.slice(2) === 'L';
+    const [mmShort, mmLong] = FRAME_MM[paper];
+    let w = Math.round(mmShort / 25.4 * FRAME_DPI), h = Math.round(mmLong / 25.4 * FRAME_DPI);
+    if (land) { const t = w; w = h; h = t; }
+    return { w, h };
+}
+function applyFrameFit(frameW, frameH, label) {
+    frameW = Math.max(10, Math.round(frameW)); frameH = Math.max(10, Math.round(frameH));
+    const factor = Math.min(frameW / artW, frameH / artH);
+    const dx = (frameW - artW * factor) / 2, dy = (frameH - artH * factor) / 2;
+    canvas.discardActiveObject();
+    canvas.getObjects().forEach(o => {
+        if (o === artboard) return;
+        o.set({
+            left: (o.left || 0) * factor + dx,
+            top: (o.top || 0) * factor + dy,
+            scaleX: (o.scaleX || 1) * factor,
+            scaleY: (o.scaleY || 1) * factor
+        });
+        o.dirty = true;
+        o.setCoords();
+    });
+    setArtboardSize(frameW, frameH);
+    canvas.requestRenderAll();
+    zoomFit();
+    pushState();
+    toast('已縮放置中為' + (label ? '「' + label + '」' : '') + ' ' + frameW + '×' + frameH);
+}
+function applyFrameFitFromSelect() {
+    const code = document.getElementById('frame-size').value;
+    const labels = { A4L: 'A4 橫式', A4P: 'A4 直式', A3L: 'A3 橫式', A3P: 'A3 直式' };
+    const { w, h } = frameSizePx(code);
+    if (!confirm('確定把整張圖面等比例縮放＋置中到「' + labels[code] + '」（' + w + '×' + h + ' px）？\n（可 Ctrl+Z 復原）')) return;
+    applyFrameFit(w, h, labels[code]);
 }
 
 /* ── 視窗尺寸/縮放/平移 ── */
@@ -5360,6 +5413,11 @@ function exportRegionDataURL(x, y, w, h, format, mult, quality) {
     canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
     const prevShadow = artboard.shadow;
     artboard.shadow = null;
+    // 裁切區域的邊緣若因縮放倍率非整數而有次像素誤差，畫布本身透明底會露出來：
+    // PNG 會變成邊緣鋸齒，JPEG（不支援透明）瀏覽器預設補黑＝列印出現黑色框線。
+    // 匯出時暫時把畫布底色設白（跟 artboard 底色一致），邊緣露出的縫隙就補白而非透明/黑，解決列印偶發框線。
+    const prevBg = canvas.backgroundColor;
+    canvas.backgroundColor = '#ffffff';
     canvas.requestRenderAll();
     const url = canvas.toDataURL({
         format: format || 'png',
@@ -5368,6 +5426,7 @@ function exportRegionDataURL(x, y, w, h, format, mult, quality) {
         multiplier: mult || 1,
         enableRetinaScaling: false
     });
+    canvas.backgroundColor = prevBg;
     artboard.shadow = prevShadow;
     canvas.setViewportTransform(vpt);
     if (active) canvas.setActiveObject(active);
@@ -5721,17 +5780,20 @@ function doPrintPDF() {
     const margin = 18;                                  // 約 0.25 吋
     const scale = Math.min((pageW - margin * 2) / w, (pageH - margin * 2) / h);
     const dispW = w * scale, dispH = h * scale;         // PDF 點(1/72吋)＝紙上顯示尺寸
-    // 目標約 300 DPI：算出來源需要的倍率（上限 3 以免記憶體爆掉、下限 1）
-    let mult = (dispW / 72 * 300) / w;
-    mult = Math.max(1, Math.min(3, mult));
-    // 影像格式用 JPEG(高品質0.95)而非 PNG：pdfmake 嵌 PNG 會把像素重新 deflate 壓縮，高解析大圖
+    // 目標約 400 DPI：算出來源需要的倍率（上限 4 以免記憶體爆掉、下限 1）。
+    // 原本 300 DPI 對表格內小字（如簽到表細格）不夠銳利，使用者實測回報文字模糊，故調高目標值。
+    let mult = (dispW / 72 * 400) / w;
+    mult = Math.max(1, Math.min(4, mult));
+    // 影像格式用 JPEG 而非 PNG：pdfmake 嵌 PNG 會把像素重新 deflate 壓縮，高解析大圖
     // 會踩到內建 zlib 的緩衝溢位(RangeError: offset is out of bounds)整個列印失敗;JPEG 已是壓縮格式,
     // pdfmake 直接以 DCTDecode 嵌入不再 deflate,可完全避開該崩潰。底圖為白色 artboard,JPEG 無透明也不會變黑。
+    // 品質提高到 0.98（原 0.95）：文字/細線邊緣的 JPEG 量化模糊在 0.95 仍肉眼可見，0.98 明顯更銳利，
+    // 檔案增加量可接受（單頁 PDF）。
     let dataURL;
     try {
         dataURL = (range === 'selection' && sel)
-            ? exportSelectionDataURL(sel, 'jpeg', mult, 0.95)
-            : exportRegionDataURL(x, y, w, h, 'jpeg', mult, 0.95);
+            ? exportSelectionDataURL(sel, 'jpeg', mult, 0.98)
+            : exportRegionDataURL(x, y, w, h, 'jpeg', mult, 0.98);
     } catch (err) { toast('產生列印影像失敗，改用向量列印'); doPrintVector(); return; }
     const docDef = {
         pageSize: { width: pageW, height: pageH },
