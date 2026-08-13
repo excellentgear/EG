@@ -132,6 +132,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
         table.te-slot .te-item-mini td.q { text-align:left; }
         .te-admin-panel { border:1.5px dashed #DD5138; border-radius:8px; padding:10px; margin-top:14px; background:#FFF3EE; }
         .te-admin-panel h5 { margin:0 0 8px; color:#DD5138; font-size:13px; }
+        .te-back-top { position:fixed; right:22px; bottom:22px; width:38px; height:38px; border-radius:50%; background:#F0A24B;
+            color:#fff; text-align:center; line-height:38px; box-shadow:0 2px 8px rgba(0,0,0,.25); cursor:pointer; display:none; z-index:900; }
+        .te-back-top:hover { background:#d98a33; }
         @media print { .te-toolbar, .nav_menu, .left_col, footer { display:none !important; } .right_col { margin:0 !important; padding:0 !important; } }
     </style>
 </head>
@@ -155,10 +158,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
 <?php else: ?>
         <div class="te-toolbar">
             <label>搜尋</label>
-            <input type="text" id="kwInput" placeholder="表單編號／料號／產品名稱／客戶" style="width:200px;">
+            <input type="text" id="kwInput" placeholder="表單編號／料號／產品名稱／客戶名稱／客戶編號" style="width:220px;">
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
             <button id="btnSuggest" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-lightbulb-o"></i> 建議建立料號清單<?= $suggestPending>0 ? ' <span class="te-badge-deputy" style="background:#DD5138;">'.(int)$suggestPending.'</span>' : '' ?></button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
+            <button id="btnPrintAll" title="依目前搜尋結果，逐筆列印所有表單"><i class="fa fa-print"></i> 批次列印</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <span class="te-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
@@ -177,6 +181,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
     </div>
 </div>
 </div>
+<div class="te-back-top" id="btnBackTop" title="回到頂端"><i class="fa fa-arrow-up"></i></div>
 
 <!-- 新增/編輯 -->
 <div class="te-mask" id="editMask"><div class="te-modal xwide">
@@ -191,12 +196,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
                 <input type="text" id="fCustomerName" placeholder="選定產品件號後自動帶出，亦可手動輸入">
             </div>
             <div>
-                <label>產品件號(料號)</label>
+                <label>料號</label>
                 <input type="text" id="fPartNo" placeholder="輸入部分料號或圖號搜尋；查無時可直接手動輸入新產品件號" autocomplete="off">
                 <input type="hidden" id="fPartDId" value="0">
             </div>
             <div>
-                <label>產品名稱</label>
+                <label>產品名稱<i class="fa fa-cog" id="btnSetFixedName" title="設定此料號固定顯示名稱" style="margin-left:4px;color:#b5762a;cursor:pointer;<?= $perms['canAdmin']?'':'display:none;' ?>"></i></label>
                 <input type="text" id="fProductName">
             </div>
             <div>
@@ -233,6 +238,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
         <table class="te-slot"><tbody id="prodDecisionBody"></tbody></table>
 
         <div class="te-sec-title">總經理決行</div>
+        <div id="gmDecisionInfo" style="font-size:13px;color:#8A5A2B;margin-bottom:4px;"></div>
         <table class="te-slot"><tbody id="gmBody"></tbody></table>
 
         <div style="margin-top:10px;<?= $canBackfill?'':'display:none;' ?>">
@@ -244,7 +250,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
             <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">上方「確認項目及結果」32項與各部門簽認欄位不受一般流程限制，管理員可直接編輯後按下方按鈕，一次把尚未簽核的欄位全部自動簽核。</div>
             <label style="display:inline-block;margin:0 8px 0 0;">簽核業務日期</label>
             <input type="date" id="adminAutoSignDate" style="width:160px;display:inline-block;">
+            <label style="display:inline-block;font-weight:normal;margin-left:10px;">
+                <input type="checkbox" id="adminApplyDefaults"> 未填項次套用預設值
+            </label>
             <button type="button" class="te-row-btn" id="btnAdminAutoSignAll" style="margin-left:6px;"><i class="fa fa-magic"></i> 全部自動簽核</button>
+            <button type="button" class="te-row-btn" id="btnAdminDefaultsSetting" style="margin-left:6px;"><i class="fa fa-sliders"></i> 設定確認項目預設值</button>
         </div>
     </div>
     <div class="m-foot">
@@ -266,6 +276,23 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('backfillMask')">取消</button>
         <button class="b-ok" onclick="submitBackfill()">送出補登</button>
+    </div>
+</div></div>
+
+<!-- 確認項目及結果預設值設定（系統管理員，供全部自動簽核選擇是否套用） -->
+<div class="te-mask" id="defaultsMask" style="z-index:1200;"><div class="te-modal xwide">
+    <div class="m-head"><span>確認項目及結果 預設值設定</span><span class="m-close" onclick="closeMask('defaultsMask')">✕</span></div>
+    <div class="m-body">
+        <div class="tip">僅供「全部自動簽核」補歷史紙本資料時，勾選「未填項次套用預設值」才會使用；只補未填的項次，不會覆蓋已有的答案。未設定的項次留白＝不套用。</div>
+        <table class="te-chk">
+            <thead><tr><th style="width:60px;">區分</th><th style="width:36px;">項次</th><th>評估項目</th>
+                <th style="width:70px;">評估單位</th><th style="width:150px;">預設結果</th></tr></thead>
+            <tbody id="defaultsChkBody"></tbody>
+        </table>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('defaultsMask')">取消</button>
+        <button class="b-ok" onclick="saveDefaultsSetting()">儲存</button>
     </div>
 </div></div>
 
@@ -370,9 +397,11 @@ function loadTemplate(cb){
 }
 
 /* ---------- 清單 ---------- */
+var CUR_LIST_ROWS = [];
 function loadList(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
         if (!res.success){ $('#teBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        CUR_LIST_ROWS = res.rows || [];
         if (!res.rows.length){ $('#teBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
         var html = '';
         res.rows.forEach(function(r){
@@ -397,6 +426,24 @@ function loadList(){
 }
 var kwT=null;
 $('#kwInput').on('input', function(){ clearTimeout(kwT); kwT=setTimeout(loadList, 300); });
+
+/* ---------- 批次列印（依目前搜尋結果，逐筆各自開視窗列印；結果較多時自動分批排隊，ai-rules/16） ---------- */
+var PRINT_ALL_BATCH_THRESHOLD = 15;
+$('#btnPrintAll').on('click', function(){
+    var ids = CUR_LIST_ROWS.map(function(r){ return r.id; });
+    if (!ids.length){ alert('目前沒有搜尋結果可列印'); return; }
+    if (ids.length > PRINT_ALL_BATCH_THRESHOLD) {
+        if (!confirm('目前搜尋結果共 '+ids.length+' 筆，數量較多，一次列印可能造成瀏覽器負擔。\n是否改為自動分批列印（依序逐筆觸發，不需手動操作）？\n（若瀏覽器跳出「已封鎖快顯視窗」提示，請允許本頁彈出視窗）')) return;
+    }
+    var idx = 0;
+    function next(){
+        if (idx >= ids.length){ alert('已完成列印 '+ids.length+' 筆。'); return; }
+        var cur = ids[idx++];
+        printDoc(cur, next);
+    }
+    next();
+});
+
 $('#btnCsv').on('click', function(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
         if (!res.success) return;
@@ -432,8 +479,10 @@ function itemEditable(no){
     }
     return false;
 }
+var CUR_ANSWERS = {};
 function renderChecklist(answers){
     answers = answers || {};
+    CUR_ANSWERS = answers;
     var html = '', lastCat = null;
     Object.keys(TEMPLATE).forEach(function(no){
         var t = TEMPLATE[no], cat = t[0], text = t[1], unit = t[2];
@@ -463,14 +512,33 @@ function collectAnswers(){
     });
     return out;
 }
+/* 填項次當下即時解鎖對應部門的意見/簽核區，不必等重新整理（推導欄位鐵則：來源一改就重算）；
+   重繪簽核表格前先保留使用者正在打的意見草稿，避免因為改動其他項次而被清空 */
+$(document).on('change', '#chkBody input[type=radio]', function(){
+    var no = $(this).closest('tr').data('item-no');
+    CUR_ANSWERS[no] = $(this).val();
+    if (!CUR_ID) return;
+    var draftNotes = {};
+    $('textarea[data-slot-note]').each(function(){ draftNotes[$(this).data('slot-note')] = $(this).val(); });
+    renderSlots(CUR_SLOTS);
+    Object.keys(draftNotes).forEach(function(k){ $('textarea[data-slot-note="'+k+'"]').val(draftNotes[k]); });
+});
 
+/** 該部門負責的項次是否已全部填有結果（使用者明確要求：填完項次才能填意見跟簽核） */
+function slotItemsComplete(s){
+    if (!s.item_nos || !s.item_nos.length) return true;
+    return s.item_nos.every(function(no){ return !!CUR_ANSWERS[no]; });
+}
 function slotRowHtml(slotKey, s){
     var label = SLOTS[slotKey] ? SLOTS[slotKey][0] : slotKey;
-    var signCell;
+    var itemsDone = slotItemsComplete(s);
+    var signCell, noteCell;
     if (s.signed_by_name) {
         signCell = '<span class="te-sign-done">' + stampHtml(s.signed_by_name, fmtDate((s.signed_at||'').substring(0,10)), s.is_deputy) + '</span>'
             + (s.is_deputy ? '<span class="te-badge-deputy">代</span>' : '')
             + (s.is_backfill ? '<span class="te-badge-backfill" title="'+esc(s.backfill_by_name||'')+' 補登">補登</span>' : '');
+    } else if (s.can_sign && !itemsDone) {
+        signCell = '<span class="te-blocked-hint"><i class="fa fa-exclamation-triangle"></i> 請先在上方表格填完本部門負責的項次</span>';
     } else if (s.can_sign) {
         signCell = '<button type="button" class="te-row-btn" onclick="signSlot(\''+slotKey+'\')"><i class="fa fa-pencil-square-o"></i> 我要簽核</button>';
     } else if (s.blocked_reason) {
@@ -481,8 +549,11 @@ function slotRowHtml(slotKey, s){
     }
     var itemHint = (s.item_nos && s.item_nos.length)
         ? '<div class="te-blocked-hint">本部門負責項次：'+s.item_nos.join('、')+(s.can_sign?'（請至上方「確認項目及結果」表格內醒目標示列填寫）':'')+'</div>' : '';
+    noteCell = (s.can_sign && !itemsDone)
+        ? '<textarea class="note-in" placeholder="意見(非必填)" readonly></textarea>'
+        : '<textarea class="note-in" data-slot-note="'+slotKey+'" placeholder="意見(非必填)"'+(s.can_sign?'':' readonly')+'>'+esc(s.note||'')+'</textarea>';
     return '<tr data-slot="'+slotKey+'"><td class="dept">'+esc(label)+'</td>'
-        + '<td>'+itemHint+'<textarea class="note-in" data-slot-note="'+slotKey+'" placeholder="意見(非必填)"'+(s.can_sign?'':' readonly')+'>'+esc(s.note||'')+'</textarea></td>'
+        + '<td>'+itemHint+noteCell+'</td>'
         + '<td class="te-sign-cell">'+signCell+'</td></tr>';
 }
 function renderSlots(slots){
@@ -501,6 +572,8 @@ function renderDecisionGrp(cur, prodSlot){
         html += '<label><input type="radio" name="decision" value="'+k+'"'+(cur===k?' checked':'')+(editable?'':' disabled')+'> '+esc(DECISIONS[k])+'</label>';
     });
     $('#decisionGrp').html(html);
+    // 總經理決行時要看得到生產課決行了什麼，不用往上滑動翻找（使用者明確要求）
+    $('#gmDecisionInfo').html(cur ? ('生產課決行結果：<b>'+esc(DECISIONS[cur]||cur)+'</b>') : '<span style="color:#b0a390;">（生產課尚未決行）</span>');
 }
 $(document).on('change', 'input[name="decision"]', function(){
     if (!CUR_ID) return;
@@ -564,9 +637,28 @@ EGPartPicker.attach(document.getElementById('fPartNo'), {
     onSelect: function(row){
         $('#fPartDId').val(row.d_id);
         if (row.customer_name || row.customer_id) $('#fCustomerName').val(row.customer_name||row.customer_id);
+        $.getJSON(API, {action:'part_name_get', part_d_id:row.d_id}, function(res){
+            if (res.success && res.product_name) $('#fProductName').val(res.product_name);
+        });
     }
 });
 $('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); });
+
+/* ---------- 料號固定顯示名稱設定（評估表管理員/系統管理員可設，2026-08-12使用者明確要求） ---------- */
+$('#btnSetFixedName').on('click', function(){
+    var partDId = parseInt($('#fPartDId').val(), 10) || 0;
+    if (!partDId){ alert('請先選定一個已建立的料號，才能設定固定顯示名稱'); return; }
+    $.getJSON(API, {action:'part_name_get', part_d_id:partDId}, function(res){
+        var cur = (res.success && res.product_name) ? res.product_name : '';
+        var name = window.prompt('設定料號「'+$('#fPartNo').val()+'」的固定顯示名稱\n（之後選定此料號時，產品名稱欄會自動帶入此名稱，仍可手動修改；留空＝取消固定）', cur);
+        if (name === null) return; // 取消
+        $.post(API, {action:'part_name_save', part_d_id:partDId, product_name:name.trim()}, function(r){
+            if (!r.success){ alert(r.message||'儲存失敗'); return; }
+            if (name.trim()) $('#fProductName').val(name.trim());
+            alert('已儲存。');
+        }, 'json');
+    });
+});
 
 function saveHeader(){
     var payload = {
@@ -607,11 +699,15 @@ function submitDoc(){
 /* ---------- 簽核 ---------- */
 window.signSlot = function(slotKey){
     if (!CUR_ID){ alert('請先儲存後再簽核'); return; }
-    var note = $('textarea[data-slot-note="'+slotKey+'"]').val();
-    var answers = {};
     var itemNos = (CUR_SLOTS[slotKey] && CUR_SLOTS[slotKey].item_nos) || [];
     var all = collectAnswers();
+    var answers = {};
     itemNos.forEach(function(no){ if (all[no]) answers[no] = all[no]; });
+    if (itemNos.length && itemNos.some(function(no){ return !answers[no]; })){
+        alert('請先在上方「確認項目及結果」表格內填完本部門負責的項次，才能填意見與簽核。');
+        return;
+    }
+    var note = $('textarea[data-slot-note="'+slotKey+'"]').val();
     $.post(API, {action:'sign', doc_id:CUR_ID, slot_key:slotKey, note:note, answers:JSON.stringify(answers)}, function(res){
         if (!res.success){ alert(res.message||'簽核失敗'); openEdit(CUR_ID); return; } // 點開即刷新鐵則：失敗也要重新載入看最新狀態
         openEdit(CUR_ID); loadList();
@@ -623,12 +719,49 @@ $('#btnAdminAutoSignAll').on('click', function(){
     if (!CUR_ID){ alert('請先儲存後再使用'); return; }
     var bizDate = $('#adminAutoSignDate').val();
     if (!bizDate){ alert('請先選擇簽核業務日期'); return; }
-    if (!confirm('確定要把此筆尚未簽核的欄位，全部以「'+bizDate+'」自動簽核完成嗎？此功能僅供補歷史紙本資料使用。')) return;
-    $.post(API, {action:'admin_auto_sign_all', doc_id:CUR_ID, biz_date:bizDate}, function(res){
+    var applyDefaults = $('#adminApplyDefaults').prop('checked');
+    if (!confirm('確定要把此筆尚未簽核的欄位，全部以「'+bizDate+'」自動簽核完成嗎？'+(applyDefaults?'（未填項次會套用預設值）':'')+'此功能僅供補歷史紙本資料使用。')) return;
+    $.post(API, {action:'admin_auto_sign_all', doc_id:CUR_ID, biz_date:bizDate, apply_defaults:applyDefaults?1:0}, function(res){
         if (!res.success){ alert(res.message||'自動簽核失敗'); return; }
         openEdit(CUR_ID); loadList();
     }, 'json');
 });
+
+/* ---------- 系統管理員：確認項目及結果 預設值設定 ---------- */
+$('#btnAdminDefaultsSetting').on('click', function(){
+    $.getJSON(API, {action:'answer_defaults_get'}, function(res){
+        if (!res.success) return;
+        renderDefaultsChecklist(res.defaults || {});
+        openMask('defaultsMask');
+    });
+});
+function renderDefaultsChecklist(defaults){
+    var html = '', lastCat = null;
+    Object.keys(TEMPLATE).forEach(function(no){
+        var t = TEMPLATE[no], cat = t[0], text = t[1], unit = t[2];
+        var opts = [['','（無預設）']].concat(RESULT_OPTS);
+        var radios = opts.map(function(o){
+            return '<label><input type="radio" name="def_'+no+'" value="'+o[0]+'"'+(( defaults[no]||'')===o[0]?' checked':(!defaults[no]&&o[0]===''?' checked':''))+'> '+o[1]+'</label>';
+        }).join('');
+        html += '<tr>'
+            + (cat!==lastCat ? '<td class="cat" rowspan="'+catSpan(cat)+'">'+esc(cat)+'</td>' : '')
+            + '<td>'+no+'</td><td class="q">'+esc(text)+'</td><td class="unit">'+esc(unit)+'</td>'
+            + '<td><div class="te-radio-grp">'+radios+'</div></td></tr>';
+        lastCat = cat;
+    });
+    $('#defaultsChkBody').html(html);
+}
+function saveDefaultsSetting(){
+    var map = {};
+    Object.keys(TEMPLATE).forEach(function(no){
+        var v = $('input[name="def_'+no+'"]:checked').val();
+        if (v) map[no] = v;
+    });
+    $.post(API, {action:'answer_defaults_save', defaults:JSON.stringify(map)}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        closeMask('defaultsMask');
+    }, 'json');
+}
 
 /* ---------- 補登簽核 ---------- */
 var backfillPool = {};
@@ -676,10 +809,10 @@ function submitBackfill(){
     }, 'json');
 }
 
-/* ---------- 列印（ai-rules/16） ---------- */
-function printDoc(id){
+/* ---------- 列印（ai-rules/16：批次列印時逐筆各自開視窗、各自獨立算頁次，onDone供排隊呼叫用） ---------- */
+function printDoc(id, onDone){
     $.getJSON(API, {action:'print_get', id:id}, function(res){
-        if (!res.success){ alert(res.message||'載入失敗'); return; }
+        if (!res.success){ alert(res.message||'載入失敗'); if (onDone) onDone(); return; }
         var d = res.doc, answers = res.answers || {}, signoffs = res.signoffs || {};
         window.__ownCompany = res.company_name || '';
         var chkRows = '';
@@ -692,7 +825,7 @@ function printDoc(id){
         var slotCell = function(k){
             var s = signoffs[k];
             if (!s || !s.signed_by_name) return '<div style="min-height:50px;"></div>';
-            return '<div style="font-size:11px;color:#555;margin-bottom:2px;">'+esc(s.note||'')+'</div>'
+            return '<div style="font-size:11px;color:#555;margin-bottom:2px;">'+(s.note?esc(s.note):'（無意見）')+'</div>'
                 + stampHtml(s.signed_by_name, fmtDate((s.signed_at||'').substring(0,10)), s.is_deputy);
         };
         var apqpRows = '';
@@ -702,7 +835,7 @@ function printDoc(id){
         var body = '<div class="p-comp">'+esc(res.company_name)+'</div>'
             + '<div class="p-title">'+esc(res.as_doc_name)+'</div>'
             + '<table class="p-hd"><tr><td>客戶名稱</td><td>'+esc(d.customer_name||'')+'</td><td>預估需求量</td><td>'+esc(d.est_qty||'')+' PCS/月</td><td>填表日期</td><td>'+fmtDate(d.fill_date)+'</td></tr>'
-            + '<tr><td>產品名稱</td><td>'+esc(d.product_name||'')+'</td><td>產品件號</td><td>'+esc(d.part_no||'')+'</td><td>送樣時間</td><td>'+esc(d.sample_time||'')+'</td></tr></table>'
+            + '<tr><td>產品名稱</td><td>'+esc(d.product_name||'')+'</td><td>料號</td><td>'+esc(d.part_no||'')+'</td><td>送樣時間</td><td>'+esc(d.sample_time||'')+'</td></tr></table>'
             + '<table class="p-tb"><thead><tr><th style="width:60px;">區分</th><th style="width:30px;">項次</th><th>評估項目</th><th style="width:60px;">評估單位</th><th style="width:50px;">結果</th></tr></thead><tbody>'+chkRows+'</tbody></table>'
             + '<div class="p-sec">APQP 小組簽認</div>'
             + '<table class="p-tb"><tbody>'+apqpRows+'</tbody></table>'
@@ -735,6 +868,7 @@ function printDoc(id){
             +'document.head.appendChild(st);}'
             +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
         w.document.close();
+        if (onDone) setTimeout(onDone, 500);
     });
 }
 
@@ -773,6 +907,10 @@ $('#btnSuggest').on('click', function(){ window.location.href = 'td_dev_eval_sug
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('#btnRoleHelp').on('click', function(){ openMask('roleHelpMask'); });
 $('.te-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });
+
+/* ---------- 回到頂端（清單較長時看不到列表標題與工具列，右下角提供快捷鈕） ---------- */
+$(window).on('scroll', function(){ $('#btnBackTop').toggle($(window).scrollTop() > 400); });
+$('#btnBackTop').on('click', function(){ $('html,body').animate({scrollTop:0}, 200); });
 
 <?php if ($perms['canView']): ?>
 loadTemplate(function(){ loadList(); });

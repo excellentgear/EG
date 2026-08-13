@@ -86,11 +86,15 @@ case 'list':
                    (SELECT COUNT(*) FROM td_dev_eval_signoff s WHERE s.doc_id=h.id AND s.signed_by IS NOT NULL) AS signed_count
             FROM td_dev_eval h
             LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
+            LEFT JOIN customer_list clP ON clP.customer_id = ds.Customer_Id
+            LEFT JOIN customer_list clN ON clN.customer = h.customer_name
             WHERE h.is_deleted=0";
     $args = [];
     if ($kw !== '') {
-        $sql .= " AND (h.doc_no LIKE ? OR h.product_name LIKE ? OR h.customer_name LIKE ? OR ds.D_Setting_Id LIKE ?)";
-        $like = '%'.$kw.'%'; $args = [$like,$like,$like,$like];
+        // 搜尋欄位涵蓋客戶ID（透過料號綁定的客戶、或客戶名稱文字比對兩種來源，使用者明確要求可用客戶ID篩選）
+        $sql .= " AND (h.doc_no LIKE ? OR h.product_name LIKE ? OR h.customer_name LIKE ? OR ds.D_Setting_Id LIKE ?
+                       OR clP.customer_id LIKE ? OR clN.customer_id LIKE ?)";
+        $like = '%'.$kw.'%'; $args = [$like,$like,$like,$like,$like,$like];
     }
     $sql .= " ORDER BY h.created_at DESC";
     $st = $db->prepare($sql); $st->execute($args);
@@ -238,12 +242,25 @@ case 'sign':
     $st->execute([$docId, $slotKey]);
     if ($st->fetchColumn()) jout(['success'=>false,'message'=>'此欄已經有人簽核，請重新整理後確認']); // 點開即刷新鐵則
 
+    // 部門負責的項次要全部有結果才能簽核（使用者明確要求）：合併「本次一併送出的」與「DB既有的」結果一起檢查
+    if (in_array($slotKey, TD_DEV_EVAL_DEPT_SLOTS, true)) {
+        $itemNos = td_dev_eval_slot_item_nos($slotKey);
+        $st = $db->prepare("SELECT item_no, result FROM td_dev_eval_answer WHERE doc_id=?");
+        $st->execute([$docId]);
+        $existing = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $a) $existing[(int)$a['item_no']] = $a['result'];
+        foreach ($itemNos as $itemNo) {
+            $result = $answersRaw[$itemNo] ?? $answersRaw[(string)$itemNo] ?? $existing[$itemNo] ?? null;
+            if (!in_array($result, ['yes','no','na'], true)) jout(['success'=>false,'message'=>'請先填完本部門負責的所有項次，才能填意見與簽核']);
+        }
+    }
+
     $db->beginTransaction();
     try {
         if (in_array($slotKey, TD_DEV_EVAL_DEPT_SLOTS, true)) {
             foreach (td_dev_eval_slot_item_nos($slotKey) as $itemNo) {
                 $result = $answersRaw[$itemNo] ?? $answersRaw[(string)$itemNo] ?? null;
-                if (!in_array($result, ['yes','no','na'], true)) continue; // 未填的不覆蓋成空值，允許簽核時先簽、之後再補
+                if (!in_array($result, ['yes','no','na'], true)) continue; // 已在上方驗證過DB已有值，這裡只是不覆蓋成空值
                 $st = $db->prepare("INSERT INTO td_dev_eval_answer (doc_id, item_no, result) VALUES (?,?,?)
                                      ON DUPLICATE KEY UPDATE result=VALUES(result)");
                 $st->execute([$docId, $itemNo, $result]);
@@ -264,9 +281,36 @@ case 'admin_auto_sign_all':
     needSuperAdmin($perms);
     $docId = (int)($_POST['doc_id'] ?? 0);
     $bizDate = trim((string)($_POST['biz_date'] ?? ''));
+    $applyDefaults = !empty($_POST['apply_defaults']);
     if (!$docId || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $bizDate)) jout(['success'=>false,'message'=>'請指定業務日期']);
-    $r = td_dev_eval_admin_auto_sign_all($db, $docId, $bizDate, $uid, $uname);
+    $r = td_dev_eval_admin_auto_sign_all($db, $docId, $bizDate, $uid, $uname, $applyDefaults);
     if (!$r['ok']) jout(['success'=>false,'message'=>$r['msg']]);
+    jout(['success'=>true]);
+
+// ── 確認項目及結果預設值：超級管理員設定，供「全部自動簽核」可選套用 ──
+case 'answer_defaults_get':
+    needView($perms);
+    jout(['success'=>true, 'defaults'=>td_dev_eval_answer_defaults_get($db)]);
+
+case 'answer_defaults_save':
+    needSuperAdmin($perms);
+    $map = json_decode((string)($_POST['defaults'] ?? '{}'), true);
+    if (!is_array($map)) $map = [];
+    td_dev_eval_answer_defaults_save($db, $map, $uid, $uname);
+    jout(['success'=>true, 'defaults'=>td_dev_eval_answer_defaults_get($db)]);
+
+// ── 料號固定顯示名稱：選定料號自動帶入產品名稱欄，仍可手動改，僅評估表管理員/系統管理員可設定 ──
+case 'part_name_get':
+    needView($perms);
+    $partDId = (int)($_GET['part_d_id'] ?? 0);
+    jout(['success'=>true, 'product_name'=>td_dev_eval_part_name_get($db, $partDId)]);
+
+case 'part_name_save':
+    needAdmin($perms);
+    $partDId = (int)($_POST['part_d_id'] ?? 0);
+    $name = trim((string)($_POST['product_name'] ?? ''));
+    if (!$partDId) jout(['success'=>false,'message'=>'請先選定料號']);
+    td_dev_eval_part_name_save($db, $partDId, $name, $uid, $uname);
     jout(['success'=>true]);
 
 case 'unsign':

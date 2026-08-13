@@ -53,7 +53,16 @@ $perms = td_dev_eval_perms($db, $teUser);
         .sg-toolbar button:hover { background:#F7E0BD; }
         .sg-toolbar .btn-warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .sg-toolbar .btn-warm:hover { background:#d98a33; }
-        .sg-hint { color:#8a6d45; font-size:12px; margin-bottom:8px; }
+        .sg-hint { color:#8a6d45; font-size:12px; }
+        .sg-hint-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+        .sg-pager { display:flex; align-items:center; gap:6px; font-size:12px; color:#5b3a1e; }
+        .sg-pager select { height:26px; font-size:12px; border:1px solid #D8BE93; border-radius:4px; padding:0 4px; }
+        .sg-pager button { height:26px; font-size:12px; padding:0 8px; border:1px solid #D8BE93; border-radius:4px; background:#fff; color:#5b3a1e; cursor:pointer; }
+        .sg-pager button:hover:not(:disabled) { background:#F7E0BD; }
+        .sg-pager button:disabled { opacity:.4; cursor:not-allowed; }
+        .sg-back-top { position:fixed; right:22px; bottom:22px; width:38px; height:38px; border-radius:50%; background:#F0A24B;
+            color:#fff; text-align:center; line-height:38px; box-shadow:0 2px 8px rgba(0,0,0,.25); cursor:pointer; display:none; z-index:900; }
+        .sg-back-top:hover { background:#d98a33; }
         .sg-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; background:#fff; }
         table.sg-table { width:100%; border-collapse:collapse; font-size:12.5px; white-space:nowrap; }
         table.sg-table th, table.sg-table td { border:1px solid #EADFC8; padding:5px 7px; text-align:center; }
@@ -128,7 +137,10 @@ $perms = td_dev_eval_perms($db, $teUser);
             <button id="btnIgnoreList"><i class="fa fa-eye-slash"></i> 已忽略清單</button>
             <button class="btn-warm" id="btnBulkCreate" style="margin-left:auto;"><i class="fa fa-magic"></i> 批次建立已選項目（<span id="selCount">0</span>）</button>
         </div>
-        <div class="sg-hint" id="listHint">載入中…</div>
+        <div class="sg-hint-row">
+            <span class="sg-hint" id="listHint">載入中…</span>
+            <div class="sg-pager" id="sgPager"></div>
+        </div>
 
         <div class="sg-table-wrap">
             <table class="sg-table" id="sgTable">
@@ -144,6 +156,7 @@ $perms = td_dev_eval_perms($db, $teUser);
     </div>
 </div>
 </div>
+<div class="sg-back-top" id="btnBackTop" title="回到頂端"><i class="fa fa-arrow-up"></i></div>
 
 <!-- 客戶名單設定 -->
 <div class="sg-mask" id="custMask"><div class="sg-modal">
@@ -232,12 +245,19 @@ function srcBadges(r){
     if (r.has_report) out += '<span class="sg-src-badge sg-src-report">報工</span>';
     return out;
 }
+/* 客戶+料號的穩定識別鍵（跟後端排除已建立組合同一套邏輯），用來記住選取/日期狀態，
+   不能用陣列索引 idx——分頁切換、忽略移除都會讓 idx 改變，索引一旦被拿來當狀態鍵就會對錯行 */
+function rowKey(r){ return r.customer_id+'|'+r.part_key; }
+var SELECTED = {};   // key => true
+var FILLDATES = {};  // key => 目前選定的建立日期字串
 function rowHtml(r, idx){
+    var key = rowKey(r);
     var hasOrderDate = !!r.earliest_order_date;
-    var dateVal = hasOrderDate ? r.earliest_order_date : '';
+    var dateVal = FILLDATES[key] !== undefined ? FILLDATES[key] : (hasOrderDate ? r.earliest_order_date : '');
+    var disabled = !dateVal;
     var partCell = r.part_no_text ? EGPartPicker.viewerLink(r.part_no_text, VIEWER_URL) : '(無料號)';
     return '<tr data-idx="'+idx+'">'
-        + '<td><input type="checkbox" class="sg-chk" '+(hasOrderDate?'':'disabled')+'></td>'
+        + '<td><input type="checkbox" class="sg-chk" '+(disabled?'disabled':(SELECTED[key]?'checked':''))+'></td>'
         + '<td>'+esc(r.customer_name)+'</td>'
         + '<td class="t-left">'+partCell+'</td>'
         + '<td>'+srcBadges(r)+'</td>'
@@ -248,7 +268,7 @@ function rowHtml(r, idx){
             + (r.earliest_order_date_all_time ? '<br><span style="font-size:10px;color:#b5762a;" title="區間外查到更早的訂單，僅供參考">⚠更早訂單:'+fmtDate(r.earliest_order_date_all_time)+'</span>' : '')
             + '</td>'
         + '<td>'
-            + '<input type="date" class="sg-filldate'+(hasOrderDate?'':' no-date')+'" value="'+esc(dateVal)+'" '+(hasOrderDate?'readonly':'')+'>'
+            + '<input type="date" class="sg-filldate'+(hasOrderDate?'':(dateVal?'':' no-date'))+'" value="'+esc(dateVal)+'" '+(hasOrderDate?'readonly':'')+'>'
             + (!hasOrderDate ? (
                 '<button type="button" class="sg-quick-btn" onclick="applyQuick('+idx+',\'bom\')" '+(r.bom_created_at?'':'disabled')+'>套用BOM日期</button>'
                 + '<button type="button" class="sg-quick-btn" onclick="applyQuick('+idx+',\'report\')" '+(r.earliest_report_date?'':'disabled')+'>套用最早報工日期</button>'
@@ -265,25 +285,56 @@ window.applyQuick = function(idx, type){
     var v = type === 'bom' ? (r.bom_created_at||'').substring(0,10)
         : (type === 'order_all' ? r.earliest_order_date_all_time : r.earliest_report_date);
     if (!v) return;
-    var $tr = $('#sgBody tr[data-idx="'+idx+'"]');
-    $tr.find('.sg-filldate').val(v).removeClass('no-date').prop('readonly', false);
-    $tr.find('.sg-chk').prop('disabled', false);
-    updateSelCount();
+    FILLDATES[rowKey(r)] = v;
+    renderPage();
 };
 $(document).on('change', '.sg-filldate', function(){
-    var $tr = $(this).closest('tr');
-    var ok = !!$(this).val();
-    $tr.find('.sg-chk').prop('disabled', !ok);
-    if (!ok) $tr.find('.sg-chk').prop('checked', false);
+    var idx = $(this).closest('tr').data('idx'), r = ROWS[idx], key = rowKey(r);
+    var val = $(this).val();
+    if (val) FILLDATES[key] = val; else { delete FILLDATES[key]; delete SELECTED[key]; }
+    renderPage();
+});
+function updateSelCount(){ $('#selCount').text(Object.keys(SELECTED).filter(function(k){ return SELECTED[k]; }).length); }
+$(document).on('change', '.sg-chk', function(){
+    var idx = $(this).closest('tr').data('idx'), key = rowKey(ROWS[idx]);
+    SELECTED[key] = $(this).prop('checked');
     updateSelCount();
 });
-function updateSelCount(){ $('#selCount').text($('.sg-chk:checked').length); }
-$(document).on('change', '.sg-chk', updateSelCount);
 $('#chkAll').on('change', function(){
     var on = $(this).prop('checked');
-    $('.sg-chk:not(:disabled)').prop('checked', on);
-    updateSelCount();
+    $('#sgBody .sg-chk:not(:disabled)').each(function(){
+        var idx = $(this).closest('tr').data('idx');
+        SELECTED[rowKey(ROWS[idx])] = on;
+    });
+    renderPage();
 });
+
+/* ---------- 分頁（預設10筆/頁，翻頁在列表右上角，ai-rules/08） ---------- */
+var PAGE_SIZE = 10, CUR_PAGE = 1;
+function renderPager(){
+    var total = ROWS.length;
+    var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (CUR_PAGE > totalPages) CUR_PAGE = totalPages;
+    var sizeOpts = [5,10,20,50].map(function(n){ return '<option value="'+n+'"'+(n===PAGE_SIZE?' selected':'')+'>'+n+'</option>'; }).join('');
+    var html = '<label>每頁</label><select id="sgPageSize">'+sizeOpts+'</select>'
+        + '<button type="button" id="sgPrev" '+(CUR_PAGE<=1?'disabled':'')+'><i class="fa fa-angle-left"></i></button>'
+        + '<span>第 '+CUR_PAGE+' ／ '+totalPages+' 頁</span>'
+        + '<button type="button" id="sgNext" '+(CUR_PAGE>=totalPages?'disabled':'')+'><i class="fa fa-angle-right"></i></button>';
+    $('#sgPager').html(total ? html : '');
+    $('#sgPageSize').on('change', function(){ PAGE_SIZE = parseInt($(this).val(),10)||10; CUR_PAGE = 1; renderPage(); });
+    $('#sgPrev').on('click', function(){ if (CUR_PAGE>1){ CUR_PAGE--; renderPage(); } });
+    $('#sgNext').on('click', function(){ CUR_PAGE++; renderPage(); });
+}
+function renderPage(){
+    renderPager();
+    if (!ROWS.length){ $('#sgBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">此區間內查無候選料號</td></tr>'); updateSelCount(); return; }
+    var start = (CUR_PAGE-1)*PAGE_SIZE, end = start+PAGE_SIZE;
+    var html = '';
+    ROWS.slice(start, end).forEach(function(r, i){ html += rowHtml(r, start+i); });
+    $('#sgBody').html(html);
+    $('#chkAll').prop('checked', false);
+    updateSelCount();
+}
 
 function loadList(){
     $('#listHint').text('載入中…');
@@ -292,15 +343,13 @@ function loadList(){
         if (res.no_customer_configured){
             $('#listHint').text('尚未設定客戶名單，請先按「客戶名單設定」選擇要掃描的客戶。');
             $('#sgBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">尚未設定客戶名單</td></tr>');
+            $('#sgPager').html('');
             return;
         }
         ROWS = res.rows || [];
+        SELECTED = {}; FILLDATES = {}; CUR_PAGE = 1;
         $('#listHint').text('共 '+ROWS.length+' 筆候選料號（依客戶、料號排序）');
-        if (!ROWS.length){ $('#sgBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">此區間內查無候選料號</td></tr>'); return; }
-        var html = ''; ROWS.forEach(function(r, idx){ html += rowHtml(r, idx); });
-        $('#sgBody').html(html);
-        $('#chkAll').prop('checked', false);
-        updateSelCount();
+        renderPage();
     });
 }
 $('#btnQuery').on('click', loadList);
@@ -369,7 +418,12 @@ window.ignoreRow = function(idx){
     if (!confirm('確定忽略「'+r.customer_name+' / '+(r.part_no_text||'無料號')+'」？之後不會再出現在候選清單，可於「已忽略清單」取消。')) return;
     $.post(API, {action:'ignore', customer_key:r.customer_id, part_key:r.part_key, customer_name:r.customer_name, part_no_text:r.part_no_text}, function(res){
         if (!res.success){ alert(res.message||'操作失敗'); return; }
-        loadList();
+        // 忽略後只需從目前清單移除這一筆即可，不必整批重新查詢（原本每次都重跑全客戶區間掃描，反應很慢）
+        var key = rowKey(r);
+        ROWS.splice(idx, 1);
+        delete SELECTED[key]; delete FILLDATES[key];
+        $('#listHint').text('共 '+ROWS.length+' 筆候選料號（依客戶、料號排序）');
+        renderPage();
     }, 'json');
 };
 $('#btnIgnoreList').on('click', function(){
@@ -409,15 +463,13 @@ window.openHistory = function(idx){
     });
 };
 
-/* ---------- 批次建立 ---------- */
+/* ---------- 批次建立（選取狀態跨分頁保留，靠rowKey而非idx比對，見renderPage註解） ---------- */
 $('#btnBulkCreate').on('click', function(){
     var rows = [];
-    $('#sgBody tr').each(function(){
-        var $chk = $(this).find('.sg-chk');
-        if (!$chk.prop('checked')) return;
-        var idx = $(this).data('idx');
-        var r = ROWS[idx];
-        var fillDate = $(this).find('.sg-filldate').val();
+    ROWS.forEach(function(r){
+        var key = rowKey(r);
+        if (!SELECTED[key]) return;
+        var fillDate = FILLDATES[key];
         if (!fillDate) return;
         rows.push({customer_name:r.customer_name, part_d_id:r.part_d_id||0, part_no_text:r.part_no_text||'', product_name:r.product_name||'', fill_date:fillDate});
     });
@@ -436,6 +488,10 @@ $('#btnBulkCreate').on('click', function(){
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('.sg-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });
+
+/* ---------- 回到頂端（清單過長時列表看不到標題，右下角提供快捷鈕） ---------- */
+$(window).on('scroll', function(){ $('#btnBackTop').toggle($(window).scrollTop() > 400); });
+$('#btnBackTop').on('click', function(){ $('html,body').animate({scrollTop:0}, 200); });
 
 <?php if ($perms['canAdmin']): ?>
 loadList();

@@ -129,6 +129,24 @@ function td_dev_eval_ensure_schema(PDO $db): void {
         UNIQUE KEY uq_doc_slot (doc_id, slot_key)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='產品開發評估表-APQP小組簽認+決行'");
 
+    // 料號固定顯示名稱：選定料號時自動帶入產品名稱欄，仍可手動改；僅評估表管理員/系統管理員可設定（2026-08-12使用者明確要求）
+    $db->exec("CREATE TABLE IF NOT EXISTS td_dev_eval_part_name (
+        part_d_id INT NOT NULL PRIMARY KEY COMMENT '對應d_setting.d_id',
+        product_name VARCHAR(100) NOT NULL,
+        updated_by INT NULL,
+        updated_by_name VARCHAR(50) NULL,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='產品開發評估表-料號固定顯示名稱設定'");
+
+    // 32項確認結果的預設值：超級管理員「全部自動簽核」時可選是否套用，只補未填的項次，不覆蓋已有答案（2026-08-12使用者明確要求）
+    $db->exec("CREATE TABLE IF NOT EXISTS td_dev_eval_answer_default (
+        item_no TINYINT NOT NULL PRIMARY KEY COMMENT '對應TD_DEV_EVAL_TEMPLATE項次1-32',
+        result VARCHAR(4) NOT NULL COMMENT 'yes/no/na',
+        updated_by INT NULL,
+        updated_by_name VARCHAR(50) NULL,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='產品開發評估表-確認項目及結果預設值(補舊資料自動簽核用)'");
+
     foreach ([['td_dev_eval_view','評估表檢閱'],['td_dev_eval_edit','評估表登錄'],['td_dev_eval_admin','評估表管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='td_dev_eval' LIMIT 1");
         $st->execute([$r[0]]);
@@ -342,12 +360,48 @@ function td_dev_eval_submit(PDO $db, int $docId, int $uid, string $uname): array
     return ['ok'=>true];
 }
 
+/** 料號固定顯示名稱：選定料號時自動帶入產品名稱欄（仍可手動改），僅評估表管理員/系統管理員可設定 */
+function td_dev_eval_part_name_get(PDO $db, int $partDId): ?string {
+    if (!$partDId) return null;
+    $st = $db->prepare("SELECT product_name FROM td_dev_eval_part_name WHERE part_d_id=?");
+    $st->execute([$partDId]);
+    $v = $st->fetchColumn();
+    return $v !== false ? (string)$v : null;
+}
+function td_dev_eval_part_name_save(PDO $db, int $partDId, string $name, int $uid, string $uname): void {
+    if ($name === '') { $db->prepare("DELETE FROM td_dev_eval_part_name WHERE part_d_id=?")->execute([$partDId]); return; }
+    $db->prepare("INSERT INTO td_dev_eval_part_name (part_d_id, product_name, updated_by, updated_by_name)
+                  VALUES (?,?,?,?)
+                  ON DUPLICATE KEY UPDATE product_name=VALUES(product_name), updated_by=VALUES(updated_by), updated_by_name=VALUES(updated_by_name)")
+       ->execute([$partDId, $name, $uid, $uname]);
+}
+
+/** 確認項目及結果的預設值（item_no=>yes/no/na），超級管理員設定，供「全部自動簽核」可選套用 */
+function td_dev_eval_answer_defaults_get(PDO $db): array {
+    $out = [];
+    foreach ($db->query("SELECT item_no, result FROM td_dev_eval_answer_default")->fetchAll(PDO::FETCH_ASSOC) as $r)
+        $out[(int)$r['item_no']] = $r['result'];
+    return $out;
+}
+function td_dev_eval_answer_defaults_save(PDO $db, array $map, int $uid, string $uname): void {
+    $ins = $db->prepare("INSERT INTO td_dev_eval_answer_default (item_no, result, updated_by, updated_by_name)
+                          VALUES (?,?,?,?)
+                          ON DUPLICATE KEY UPDATE result=VALUES(result), updated_by=VALUES(updated_by), updated_by_name=VALUES(updated_by_name)");
+    $del = $db->prepare("DELETE FROM td_dev_eval_answer_default WHERE item_no=?");
+    foreach (array_keys(TD_DEV_EVAL_TEMPLATE) as $no) {
+        $result = $map[$no] ?? $map[(string)$no] ?? null;
+        if (in_array($result, ['yes','no','na'], true)) $ins->execute([$no, $result, $uid, $uname]);
+        else $del->execute([$no]);
+    }
+}
+
 /**
  * 超級管理員專用：全部欄位自動簽核（補舊資料用，指定業務日期，不受送出/簽核狀態與分階段卡關限制）。
  * 若尚未送出會一併補上送出紀錄；每欄簽核人取該欄目前解析池的第一位；時間比照 ai-rules/21——
- * 跟當天固定基準時刻隨機錯開5~30分鐘、不跨天。
+ * 跟當天固定基準時刻隨機錯開5~30分鐘、不跨天。$applyDefaults=true 時，尚未填的項次套用管理員設定的
+ * 預設值（只補未填，不覆蓋既有答案）。
  */
-function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, int $adminUid, string $adminName): array {
+function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, int $adminUid, string $adminName, bool $applyDefaults = false): array {
     $st = $db->prepare("SELECT * FROM td_dev_eval WHERE id=? AND is_deleted=0");
     $st->execute([$docId]);
     $doc = $st->fetch(PDO::FETCH_ASSOC);
@@ -360,6 +414,20 @@ function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, i
             $db->prepare("UPDATE td_dev_eval SET status='submitted', submit_date=?, submitted_at=CONCAT(?,' 08:30:00'),
                           submitted_by=?, submitted_by_name=? WHERE id=?")
                ->execute([$bizDate, $bizDate, $adminUid, $adminName, $docId]);
+        }
+        if ($applyDefaults) {
+            $defaults = td_dev_eval_answer_defaults_get($db);
+            if ($defaults) {
+                $st = $db->prepare("SELECT item_no FROM td_dev_eval_answer WHERE doc_id=? AND result IS NOT NULL");
+                $st->execute([$docId]);
+                $already = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+                $ins = $db->prepare("INSERT INTO td_dev_eval_answer (doc_id, item_no, result) VALUES (?,?,?)
+                                      ON DUPLICATE KEY UPDATE result=VALUES(result)");
+                foreach ($defaults as $no => $result) {
+                    if (in_array($no, $already, true)) continue;
+                    $ins->execute([$docId, $no, $result]);
+                }
+            }
         }
         $lastSignedAt = null;
         foreach (array_keys(TD_DEV_EVAL_SLOTS) as $slotKey) {
