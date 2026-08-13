@@ -396,7 +396,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li>點擊「評級對照表」標題列會開跳窗顯示完整說明，分「嚴重度(S)／發生率(O)／偵測度(D)／R.P.N值」四個分頁，內容為固定的評分基準參考（比照官方表單），不隨每份分析表個別修改。</li>
             <li>料號可點擊開啟圖面查閱（比照報價單頁做法）。</li>
             <li>列印比照官方紙本表單版面（表頭資訊＋評級對照表＋相關部門置於上方，分析表格逐列對齊官方欄位順序與分組），同時比照全站列印標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
-            <li>本表單自身的修訂履歷（版次、修訂內容、核准/查證/制定）由 AS 文件管理維護，不在本頁另外記錄。</li>
+            <li><b>修訂履歷</b>：列印版右上角顯示本筆分析表自己的「編號／日期／修訂內容／準備」記錄（比照官方表單，取消批准/檢查欄位）。第一次存檔自動記1筆「新增文件」，準備人為當時建立者；之後修改存檔時會詢問是否要記為新版本，選是才會新增一列「修改文件」（準備人為當次修改者），選否代表只是小幅調整、不記版次，避免每次存檔都一直跳號。（此為本筆填寫紀錄自己的履歷，跟 AS 文件本身的版次管理是兩件事，AS 文件範本本身的改版仍由 AS 文件管理維護。）</li>
         </ul>
         <h4>設定入口</h4>
         <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。角色指派：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「PFMEA潛在失效模式及效應分析」區塊。</p>
@@ -804,6 +804,10 @@ function registerNewRefValues(){
     });
 }
 function saveHeader(){
+    // 既有文件修改存檔時，問使用者是否要記為新版本（修訂履歷才新增一列，避免小幅調整就一直跳版次；
+    // 新建文件不用問，第一次存檔一律自動記1筆「新增文件」，見 Pfmea_API.php save 動作）
+    var newRevision = 0;
+    if (CUR_ID) newRevision = confirm('是否要將此次修改記錄為新版本？\n（是＝修訂履歷新增一列「修改文件」；否＝僅存檔不加版次記錄，適用小幅調整）') ? 1 : 0;
     var payload = {
         action: 'save', id: CUR_ID,
         part_d_id: $('#fPartDId').val() || 0,
@@ -813,6 +817,7 @@ function saveHeader(){
         spec_desc: $('#fSpecDesc').val(),
         related_depts: JSON.stringify($('#fDeptChecks .dept-ck:checked').map(function(){ return $(this).val(); }).get()),
         items: JSON.stringify(collectItems()),
+        new_revision: newRevision,
     };
     if (CAN_EDIT) registerNewRefValues();
     $.post(API, payload, function(res){
@@ -888,8 +893,14 @@ function printDoc(id){
         });
         var depts = (d.related_depts||'').split(',').filter(Boolean);
         var deptsHtml = DEPT_LIST.map(function(dp){ return '<label>'+(depts.indexOf(dp)>=0?'&#9632;':'&#9633;')+' '+esc(dp)+'</label>'; }).join('');
-        var body = '<div class="p-comp">'+esc(res.company_name)+'</div>'
-            + '<div class="p-title">'+esc(res.as_doc_name)+'</div>'
+        var revRows = '';
+        (res.revisions||[]).forEach(function(r){
+            revRows += '<tr><td>'+esc(r.rev_no)+'</td><td>'+fmtDate(r.rev_date)+'</td><td>'+esc(r.rev_content)+'</td><td>'+esc(r.prepared_by_name||'')+'</td></tr>';
+        });
+        var body = '<div class="p-topwrap">'
+            + '<div class="p-comp-wrap"><div class="p-comp">'+esc(res.company_name)+'</div><div class="p-title">'+esc(res.as_doc_name)+'</div></div>'
+            + '<table class="p-rev"><thead><tr><th>編號</th><th>日期</th><th>修訂內容</th><th>準備</th></tr></thead><tbody>'+revRows+'</tbody></table>'
+            + '</div>'
             + '<div class="p-hdwrap">'
             + '<table class="p-info">'
             + '<tr><td>料號</td><td>'+esc(d.part_no||'')+'</td></tr>'
@@ -927,8 +938,13 @@ function printDoc(id){
             + '<tr><th>控制預防</th><th>控制偵測</th><th>採行措施</th><th>生效日期</th><th>S</th><th>O</th><th>D</th><th>RPN</th></tr>'
             + '</thead><tbody>'+rows+'</tbody></table>';
         var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+            + '.p-topwrap{display:flex;gap:6px;align-items:flex-start;margin-bottom:2px;}'
+            + '.p-comp-wrap{flex:1 1 auto;}'
             + '.p-comp{font-size:20px;font-weight:bold;text-align:center;margin-bottom:1px;}'
             + '.p-title{font-size:15px;font-weight:bold;text-align:center;letter-spacing:3px;margin-bottom:6px;}'
+            + 'table.p-rev{flex:0 0 auto;border-collapse:collapse;font-size:7.5px;align-self:flex-start;}'
+            + 'table.p-rev th,table.p-rev td{border:1px solid #666;padding:1px 4px;text-align:center;white-space:nowrap;}'
+            + 'table.p-rev thead th{background:#f3ead6;}'
             + '.p-hdwrap{display:flex;gap:4px;align-items:stretch;margin-bottom:6px;}'
             + 'table.p-info{border-collapse:collapse;font-size:9px;flex:0 0 200px;}'
             + 'table.p-info td{border:1px solid #666;padding:2px 4px;overflow-wrap:anywhere;}'
