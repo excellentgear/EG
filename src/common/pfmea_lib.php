@@ -59,6 +59,18 @@ function pfmea_ensure_schema(PDO $db): void {
         KEY idx_doc (doc_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-失效模式分析列'");
 
+    // 2026-08-13 使用者要求表頭欄位比照官方紙本表單(F-11210-UE2-0001)：分類(零件/組合件，可從
+    // 料號的d_setting.Is_Assembly自動帶入)、規格描述、產品名稱、相關部門(勾選清單，逗號分隔存字串)；
+    // 「工作團隊」不是官方表單欄位，改用這些取代，欄位保留在DB但UI不再使用。
+    foreach ([
+        "ALTER TABLE pfmea_doc ADD COLUMN item_type VARCHAR(10) NOT NULL DEFAULT 'part' COMMENT '分類:part=零件/assembly=組合件，可從料號Is_Assembly自動帶入' AFTER part_no_text",
+        "ALTER TABLE pfmea_doc ADD COLUMN spec_desc VARCHAR(200) NULL COMMENT '規格描述' AFTER item_type",
+        "ALTER TABLE pfmea_doc ADD COLUMN product_name VARCHAR(200) NULL COMMENT '產品名稱' AFTER spec_desc",
+        "ALTER TABLE pfmea_doc ADD COLUMN related_depts VARCHAR(300) NULL COMMENT '相關部門(逗號分隔部門名稱)' AFTER product_name",
+    ] as $alter) {
+        try { $db->exec($alter); } catch (Throwable $e) {}
+    }
+
     foreach ([['pfmea_view','PFMEA檢閱'],['pfmea_edit','PFMEA登錄'],['pfmea_admin','PFMEA管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='pfmea' LIMIT 1");
         $st->execute([$r[0]]);
