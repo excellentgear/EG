@@ -135,7 +135,8 @@ $perms = td_dev_eval_perms($db, $teUser);
             <button class="btn-warm" id="btnQuery"><i class="fa fa-search"></i> 查詢</button>
             <button id="btnCustSetting"><i class="fa fa-users"></i> 客戶名單設定</button>
             <button id="btnIgnoreList"><i class="fa fa-eye-slash"></i> 已忽略清單</button>
-            <button class="btn-warm" id="btnBulkCreate" style="margin-left:auto;"><i class="fa fa-magic"></i> 批次建立已選項目（<span id="selCount">0</span>）</button>
+            <button id="btnClearSelected" style="margin-left:auto;"><i class="fa fa-times-circle"></i> 取消全選</button>
+            <button class="btn-warm" id="btnBulkCreate"><i class="fa fa-magic"></i> 批次建立已選項目（<span id="selCount">0</span>）</button>
         </div>
         <div class="sg-hint-row">
             <span class="sg-hint" id="listHint">載入中…</span>
@@ -197,8 +198,8 @@ $perms = td_dev_eval_perms($db, $teUser);
             <li>先按「客戶名單設定」，輸入客戶名稱或客戶編號篩選後點選要加入的客戶（可複選，已選客戶會列在上方，點 ✕ 可移除），存檔後只掃這份名單內的客戶。</li>
             <li>設定查詢區間（預設近一年），按「查詢」。</li>
             <li>清單依客戶、料號排序；點「相關記錄」可看該料號在區間內的訂單/出貨/BOM/報工/報價記錄明細。</li>
-            <li>「建立日期」欄：有解析到訂單日期者自動帶入（可手動改）；查無訂單日期者欄位會標紅，需先手動輸入，或用旁邊「套用BOM日期」「套用最早報工日期」按鈕快速套用參考日期，否則無法勾選建立。</li>
-            <li>勾選要建立的項目（可用表頭全選），按右上角「批次建立已選項目」，即一次建立多筆評估表草稿（僅建立表頭殼，32項確認結果與簽核仍需照正常流程逐一進行）。</li>
+            <li>「建立日期」欄：有解析到訂單日期者自動帶入（可手動改）；查無訂單日期者欄位會標紅，需先手動輸入，或用旁邊「套用BOM日期」「套用最早報工日期」按鈕快速套用參考日期，否則無法勾選建立。若「訂單日期」欄下方出現「⚠更早訂單」提醒（區間外查到更早的訂單），可直接點旁邊「套用」按鈕改用該日期。</li>
+            <li>勾選要建立的項目（可用表頭全選，跨頁切換時勾選狀態會保留；右上角「取消全選」可一次清除所有頁面已勾選的項目），按右上角「批次建立已選項目」，即一次建立多筆評估表草稿（僅建立表頭殼，32項確認結果與簽核仍需照正常流程逐一進行）。</li>
             <li>不需要建立的項目可按「忽略」，之後就不會再出現；「已忽略清單」可查看並取消忽略。</li>
         </ul>
         <h4>重要行為／常見疑問</h4>
@@ -249,13 +250,25 @@ function srcBadges(r){
    不能用陣列索引 idx——分頁切換、忽略移除都會讓 idx 改變，索引一旦被拿來當狀態鍵就會對錯行 */
 function rowKey(r){ return r.customer_id+'|'+r.part_key; }
 var SELECTED = {};   // key => true
-var FILLDATES = {};  // key => 目前選定的建立日期字串
+var FILLDATES = {};  // key => 使用者手動指定/套用的建立日期字串（只有主動改過才會有值，見effectiveFillDate）
+/** 這一列目前實際生效的建立日期：手動改過/套用過就用那個值，否則有訂單日期就用訂單日期，都沒有則空字串。
+ *  渲染畫面(rowHtml)與批次建立收集邏輯都要走同一支，之前兩邊各自判斷，訂單日期自動帶入但沒被手動碰過的
+ *  列在批次建立時會被誤判成「沒有日期」而漏勾（使用者實測抓到勾了兩筆卻沒反應）。 */
+function effectiveFillDate(r){
+    var key = rowKey(r);
+    return FILLDATES[key] !== undefined ? FILLDATES[key] : (r.earliest_order_date || '');
+}
 function rowHtml(r, idx){
     var key = rowKey(r);
     var hasOrderDate = !!r.earliest_order_date;
-    var dateVal = FILLDATES[key] !== undefined ? FILLDATES[key] : (hasOrderDate ? r.earliest_order_date : '');
+    var manuallySet = FILLDATES[key] !== undefined;
+    var dateVal = effectiveFillDate(r);
+    var readonly = hasOrderDate && !manuallySet;
     var disabled = !dateVal;
     var partCell = r.part_no_text ? EGPartPicker.viewerLink(r.part_no_text, VIEWER_URL) : '(無料號)';
+    // 「更早訂單」提醒不論訂單日期欄是否已自動帶入，都要能點選套用（原本只有無訂單日期時才有按鈕，使用者實測抓到）
+    var earlierBtn = r.earliest_order_date_all_time
+        ? ' <button type="button" class="sg-quick-btn" style="display:inline-block;" onclick="applyQuick('+idx+',\'order_all\')">套用</button>' : '';
     return '<tr data-idx="'+idx+'">'
         + '<td><input type="checkbox" class="sg-chk" '+(disabled?'disabled':(SELECTED[key]?'checked':''))+'></td>'
         + '<td>'+esc(r.customer_name)+'</td>'
@@ -265,14 +278,13 @@ function rowHtml(r, idx){
         + '<td>'+(r.bom_created_at?fmtDate(r.bom_created_at.substring(0,10)):'')+'</td>'
         + '<td>'+(r.earliest_report_date?fmtDate(r.earliest_report_date):'')+'</td>'
         + '<td>'+(hasOrderDate?fmtDate(r.earliest_order_date):'<span style="color:#DD5138;">無</span>')
-            + (r.earliest_order_date_all_time ? '<br><span style="font-size:10px;color:#b5762a;" title="區間外查到更早的訂單，僅供參考">⚠更早訂單:'+fmtDate(r.earliest_order_date_all_time)+'</span>' : '')
+            + (r.earliest_order_date_all_time ? '<br><span style="font-size:10px;color:#b5762a;" title="區間外查到更早的訂單，僅供參考">⚠更早訂單:'+fmtDate(r.earliest_order_date_all_time)+'</span>'+earlierBtn : '')
             + '</td>'
         + '<td>'
-            + '<input type="date" class="sg-filldate'+(hasOrderDate?'':(dateVal?'':' no-date'))+'" value="'+esc(dateVal)+'" '+(hasOrderDate?'readonly':'')+'>'
+            + '<input type="date" class="sg-filldate'+(dateVal?'':' no-date')+'" value="'+esc(dateVal)+'" '+(readonly?'readonly':'')+'>'
             + (!hasOrderDate ? (
                 '<button type="button" class="sg-quick-btn" onclick="applyQuick('+idx+',\'bom\')" '+(r.bom_created_at?'':'disabled')+'>套用BOM日期</button>'
                 + '<button type="button" class="sg-quick-btn" onclick="applyQuick('+idx+',\'report\')" '+(r.earliest_report_date?'':'disabled')+'>套用最早報工日期</button>'
-                + '<button type="button" class="sg-quick-btn" onclick="applyQuick('+idx+',\'order_all\')" '+(r.earliest_order_date_all_time?'':'disabled')+'>套用更早訂單日期</button>'
               ) : '')
         + '</td>'
         + '<td>'
@@ -299,6 +311,10 @@ $(document).on('change', '.sg-chk', function(){
     var idx = $(this).closest('tr').data('idx'), key = rowKey(ROWS[idx]);
     SELECTED[key] = $(this).prop('checked');
     updateSelCount();
+});
+$('#btnClearSelected').on('click', function(){
+    SELECTED = {};
+    renderPage();
 });
 $('#chkAll').on('change', function(){
     var on = $(this).prop('checked');
@@ -469,7 +485,7 @@ $('#btnBulkCreate').on('click', function(){
     ROWS.forEach(function(r){
         var key = rowKey(r);
         if (!SELECTED[key]) return;
-        var fillDate = FILLDATES[key];
+        var fillDate = effectiveFillDate(r); // 自動帶入(訂單日期)但沒被手動碰過的列也要算進去，不能只看FILLDATES
         if (!fillDate) return;
         rows.push({customer_name:r.customer_name, part_d_id:r.part_d_id||0, part_no_text:r.part_no_text||'', product_name:r.product_name||'', fill_date:fillDate});
     });

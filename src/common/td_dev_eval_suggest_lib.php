@@ -151,9 +151,31 @@ function td_dev_eval_suggest_candidates(PDO $db, string $dateFrom, string $dateT
         foreach ($agg as $k => $row) {
             if (!$row['part_d_id'] && isset($map[$row['part_no_text']])) {
                 $agg[$k]['part_d_id'] = $map[$row['part_no_text']];
+                $agg[$k]['part_key'] = 'D'.$map[$row['part_no_text']];
             }
         }
     }
+
+    // 合併同一客戶+料號的重複項：同一實體料號可能因為「有的來源記錄有帶 part_d_id(D key)、有的沒帶只能靠
+    // 文字比對(T key)」在上面的迴圈裡被當成兩筆分開累計，剛才才把 T key 那筆的 part_d_id 補齊，
+    // 這裡要把兩筆合併回同一筆，否則清單上同一料號會重複出現兩行（使用者實測抓到）
+    $merged = [];
+    foreach ($agg as $row) {
+        $mergeKey = $row['customer_id'].'|'.($row['part_d_id'] ? 'D'.$row['part_d_id'] : $row['part_key']);
+        if (!isset($merged[$mergeKey])) { $merged[$mergeKey] = $row; continue; }
+        foreach (['has_order','has_report','has_bom','has_ship'] as $flag) {
+            if ($row[$flag]) $merged[$mergeKey][$flag] = true;
+        }
+        if (!$merged[$mergeKey]['product_name'] && $row['product_name']) $merged[$mergeKey]['product_name'] = $row['product_name'];
+        if ($row['earliest_order_date'] && (!$merged[$mergeKey]['earliest_order_date'] || $row['earliest_order_date'] < $merged[$mergeKey]['earliest_order_date'])) {
+            $merged[$mergeKey]['earliest_order_date'] = $row['earliest_order_date'];
+        }
+        if ($row['part_d_id'] && !$merged[$mergeKey]['part_d_id']) {
+            $merged[$mergeKey]['part_d_id'] = $row['part_d_id'];
+            $merged[$mergeKey]['part_key'] = $row['part_key'];
+        }
+    }
+    $agg = $merged;
 
     // 排除已存在 td_dev_eval 紀錄的客戶+料號組合
     $exist = $db->query("SELECT DISTINCT customer_name, part_d_id, part_no_text FROM td_dev_eval WHERE is_deleted=0")->fetchAll(PDO::FETCH_ASSOC);
@@ -180,7 +202,13 @@ function td_dev_eval_suggest_candidates(PDO $db, string $dateFrom, string $dateT
     }
 
     // 補參考資訊（BOM編號/BOM建立日期/最早報工日期/最早訂單日期，不受區間限制）
+    require_once __DIR__ . '/td_dev_eval_lib.php';
     foreach ($out as &$row) {
+        // 料號固定顯示名稱優先於訂單規格文字（使用者明確要求設定過的固定名稱要能自動帶入批次建立的產品名稱）
+        if ($row['part_d_id']) {
+            $fixedName = td_dev_eval_part_name_get($db, (int)$row['part_d_id']);
+            if ($fixedName) $row['product_name'] = $fixedName;
+        }
         $ref = td_dev_eval_suggest_part_reference($db, $row['part_d_id'], $row['part_no_text'], $row['customer_name']);
         $row['bom_no'] = $ref['bom_no'];
         $row['bom_created_at'] = $ref['bom_created_at'];

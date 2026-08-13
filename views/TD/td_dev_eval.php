@@ -31,6 +31,7 @@ $perms = td_dev_eval_perms($db, $teUser);
 $suggestPending = $perms['canAdmin'] ? td_dev_eval_suggest_pending_count($db) : 0;
 $canBackfill = $teUser ? eg_confirm_password_allowed($db, (int)$teUser['id']) : false;
 $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表管理員' : ($perms['canEdit'] ? '評估表登錄' : ($perms['canView'] ? '評估表檢閱' : '無權限')));
+$companyName = eg_company_full_name($db);
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -403,6 +404,7 @@ var CAN_EDIT = <?= $perms['canEdit'] ? 'true' : 'false' ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 var IS_SUPER_ADMIN = <?= $perms['isAdmin'] ? 'true' : 'false' ?>;
 var CUR_USER_NAME = <?= json_encode($teUser ? $teUser['user_cname'] : '', JSON_UNESCAPED_UNICODE) ?>;
+window.__ownCompany = <?= json_encode($companyName, JSON_UNESCAPED_UNICODE) ?>; // eg_stamp.js 簽章圖章要靠這個顯示公司名稱，跳窗內即時簽核也要有，不是只有列印時才設
 var CUR_ID = 0, CUR_STATUS = 'draft', TEMPLATE = {}, SLOTS = {}, DECISIONS = {}, AS_DOCS = [], AS_DOC = null, CUR_SLOTS = {};
 var FULL_EDIT_MODE = false; // 系統管理員輸入操作確認密碼後才開啟，逐筆重新開啟編輯視窗時要重新輸入，不記憶
 var RESULT_OPTS = [['yes','是'],['no','否'],['na','N/A']];
@@ -581,9 +583,9 @@ function slotRowHtml(slotKey, s){
     }
     var itemHint = (s.item_nos && s.item_nos.length)
         ? '<div class="te-blocked-hint">本部門負責項次：'+s.item_nos.join('、')+(s.can_sign?'（請至上方「確認項目及結果」表格內醒目標示列填寫）':'')+'</div>' : '';
-    noteCell = (s.can_sign && !itemsDone)
+    noteCell = (s.can_sign && !itemsDone && !FULL_EDIT_MODE)
         ? '<textarea class="note-in" placeholder="意見(非必填)" readonly></textarea>'
-        : '<textarea class="note-in" data-slot-note="'+slotKey+'" placeholder="意見(非必填)"'+(s.can_sign?'':' readonly')+'>'+esc(s.note||'')+'</textarea>';
+        : '<textarea class="note-in" data-slot-note="'+slotKey+'" placeholder="意見(非必填)"'+((s.can_sign||FULL_EDIT_MODE)?'':' readonly')+'>'+esc(s.note||'')+'</textarea>';
     return '<tr data-slot="'+slotKey+'"><td class="dept">'+esc(label)+'</td>'
         + '<td>'+itemHint+noteCell+'</td>'
         + '<td class="te-sign-cell">'+signCell+'</td></tr>';
@@ -612,12 +614,17 @@ function renderDecisionRadios($grp, name, cur, editable){
     $grp.html(html);
 }
 function renderDecisionGrp(cur, prodSlot){
-    renderDecisionRadios($('#decisionGrp'), 'decision', cur, !!(prodSlot && prodSlot.can_sign));
-    renderDecisionRadios($('#gmDecisionGrp'), 'gm_decision', cur, !!(CUR_SLOTS['gm'] && CUR_SLOTS['gm'].can_sign));
+    renderDecisionRadios($('#decisionGrp'), 'decision', cur, FULL_EDIT_MODE || !!(prodSlot && prodSlot.can_sign));
+    renderDecisionRadios($('#gmDecisionGrp'), 'gm_decision', cur, FULL_EDIT_MODE || !!(CUR_SLOTS['gm'] && CUR_SLOTS['gm'].can_sign));
     // 總經理決行時要看得到生產課決行了什麼，不用往上滑動翻找（使用者明確要求）；上方選項預設沿用同一個值，可自行覆蓋
     $('#gmDecisionInfo').html(cur ? ('生產課決行結果：<b>'+esc(DECISIONS[cur]||cur)+'</b>') : '<span style="color:#b0a390;">（生產課尚未決行）</span>');
     $('#adminDecisionSelect').val(cur || '');
 }
+/* 全表填寫模式下改上方決行選項，要同步進管理員快速設定面板自己的下拉選單，「全部自動簽核」才真的會用這個值——
+   兩邊各自獨立會讓使用者在表格內選了卻沒作用（跟本次修正的其他bug同一種問題），乾脆同步掉 */
+$(document).on('change', 'input[name="decision"], input[name="gm_decision"]', function(){
+    if (FULL_EDIT_MODE) $('#adminDecisionSelect').val($(this).val());
+});
 
 /** 依目前狀態顯示：草稿=可編表頭+存檔+送出；已送出/已結案=鎖表頭、隱藏存檔與送出(管理員仍可存檔) */
 function applyStatusUI(){
@@ -848,8 +855,18 @@ function submitFullEditUnlock(){
         if (!res.success){ alert(res.message||'密碼錯誤'); return; }
         FULL_EDIT_MODE = true;
         closeMask('fullEditMask');
-        renderChecklist(CUR_ANSWERS);
-        alert('已開啟全表填寫模式，可自行填寫上方全部確認項目；填完後請用「補登簽核」或系統管理員快速設定的「全部自動簽核」正式完成簽核。');
+        // 開啟當下把管理員設定的確認項目預設值套用到「還沒填」的項次(不覆蓋已有答案)，畫面上先帶入、未存檔前不會真的變更
+        $.getJSON(API, {action:'answer_defaults_get'}, function(dres){
+            if (dres.success && dres.defaults) {
+                Object.keys(dres.defaults).forEach(function(no){
+                    if (!CUR_ANSWERS[no]) CUR_ANSWERS[no] = dres.defaults[no];
+                });
+            }
+            renderChecklist(CUR_ANSWERS);
+            renderSlots(CUR_SLOTS);
+            renderDecisionGrp($('#adminDecisionSelect').val() || '', CUR_SLOTS['prod_decision']);
+        });
+        alert('已開啟全表填寫模式：可自行填寫上方全部確認項目、決行選項與各部門意見（尚未填的確認項目已先帶入預設值，仍可修改，未存檔前不會真的變更）；填完後請用「補登簽核」或系統管理員快速設定的「全部自動簽核」正式完成簽核。');
     }, 'json');
 }
 
