@@ -170,6 +170,64 @@ if (!function_exists('rf_has_module_role_all')) {
     }
 }
 
+if (!function_exists('oready_resolve_can_transfer')) {
+    // OreadyReply_ForPm_BaseOfTime2 專用：後端重新驗證「移轉/取消移轉/快速同步移轉/直接標記已移轉」
+    // 這四個高風險寫入動作是否真的有權限，避免只靠前端按鈕隱藏就被繞過（鐵律8：前端擋+後端同規則再擋一次）。
+    // 判斷規則需與主檔案 OreadyReply_ForPm_BaseOfTime2.php 開頭的權限判斷邏輯（page/group CRUD組合
+    // + oready_transfer/oready_readonly 角色功能碼）保持一致，任一邊改了排除規則另一邊要同步改。
+    function oready_resolve_can_transfer($pdo, $user_id, $script_path) {
+        if ($user_id <= 0 || !eg_user_is_active($pdo, $user_id)) return false;
+        try {
+            $st = $pdo->prepare("
+                SELECT smp.page_id, smp.group_id
+                FROM system_module_pages smp
+                WHERE (:script LIKE CONCAT('%', smp.page_url) AND smp.page_url IS NOT NULL AND smp.page_url != '')
+                   OR (:script LIKE CONCAT('%', smp.page_url_readonly) AND smp.page_url_readonly IS NOT NULL AND smp.page_url_readonly != '')
+                LIMIT 1
+            ");
+            $st->execute([':script' => $script_path]);
+            $page = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$page) return false;
+
+            $group_module_code = null;
+            if (!empty($page['group_id'])) {
+                $st2 = $pdo->prepare("SELECT module_code FROM system_modules WHERE group_id = :gid LIMIT 1");
+                $st2->execute([':gid' => $page['group_id']]);
+                $group_module_code = $st2->fetchColumn();
+            }
+
+            $st3 = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=:uid AND scope='page' AND module_code=:pid");
+            $st3->execute([':uid' => $user_id, ':pid' => $page['page_id']]);
+            $perms = array_filter($st3->fetchAll(PDO::FETCH_COLUMN));
+            if (!$perms && !empty($group_module_code)) {
+                $st4 = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=:uid AND scope='group' AND module_code=:mc");
+                $st4->execute([':uid' => $user_id, ':mc' => $group_module_code]);
+                $perms = array_filter($st4->fetchAll(PDO::FETCH_COLUMN));
+            }
+
+            $chars = [];
+            foreach ($perms as $p) { $chars = array_merge($chars, str_split($p)); }
+            $chars = array_unique($chars);
+
+            $features = rf_load_user_features($pdo, $user_id);
+            // 注意：唯讀判斷刻意不用 rf_has_feature()（萬用碼 'all' 會被它視為符合任何功能碼，
+            // 若在這裡用 rf_has_feature 會把擁有 'all' 的管理員角色也誤判成唯讀鎖死）。
+            if (in_array('oready_readonly', $features, true)) return false; // 唯讀覆蓋，一律不可移轉
+            if (rf_has_feature($features, 'oready_transfer')) return true; // 功能碼明確授權（移轉/取消移轉，'all' 亦視為授權）
+
+            if (in_array('A', $chars, true)) return true; // 管理者
+            sort($chars);
+            $display = implode('+', $chars);
+            if ($display === 'D+R' || $display === 'R') return false; // 受限業務/純檢視：無移轉權限
+            $sales_codes = ['R+U', 'C+R+U', 'C+D+R+U'];
+            if (in_array($display, $sales_codes, true)) return false; // 業務類：無移轉權限（除非上面 featTransfer 已授權）
+            return !empty($chars); // 其餘有任何頁面權限組合（如生管 C+R）維持既有預設可移轉
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+}
+
 if (!function_exists('rf_has_module_role')) {
     // 二元權限判斷：使用者是否被指派了該 module 底下的任一角色，或本身是系統管理員(is_system=1)
     // 用於不需要細分功能碼、只要「有沒有這個功能的使用資格」的場景（例如 BOM追蹤）
