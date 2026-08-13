@@ -578,8 +578,9 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
         + 'var h=document.body.scrollHeight;'
         + 'var zr=1;'
         + 'if(h>pageH){ zr=Math.max(0.5, pageH/h); document.body.style.zoom=zr; }'
-        // 「不可縮放」圖章（模板勾了 noScale，見 rf-stamp-noshrink 標記）：body 整頁縮小是為了塞進一頁，
-        // 但圖章本身要維持設計時的實際尺寸不被跟著縮小——反向補償縮放比例抵銷掉 body 縮放的影響
+        // 所有圖章（見 rf-stamp-noshrink 標記，stampOrName() 一律套用，不分是否勾noScale）：
+        // body 整頁縮小是為了塞進一頁，但圖章代表實體印章、物理尺寸不該因為這次印了幾筆內容而跳動，
+        // 要維持設計時的實際尺寸不被跟著縮小——反向補償縮放比例抵銷掉 body 縮放的影響
         // （zoom 是會逐層相乘的 CSS 屬性，子元素設 1/zr 會讓最終視覺呈現剛好等於原始設計大小）。
         + 'if(zr<1){ document.querySelectorAll(".rf-stamp-noshrink").forEach(function(el){ el.style.zoom=(1/zr); }); }'
         // 頁碼只在超過一頁才顯示（ai-rules/16 第二節，比照 quotation_list_test.php 既有作法）：
@@ -616,13 +617,17 @@ function rfCss(){
 }
 /* schema 有設定時，印出來的大小由模板自己的「大小(px)」決定（SVG width/height屬性本身就是那個值，不用CSS蓋）；
    schema 沒設定(退回預設回墨印/掃描章)時才用 RF_STAMP_PX 固定覆蓋，兩者互斥、不會互相蓋過。
-   schema.noScale＝true 時額外包一層 rf-stamp-noshrink 標記，讓 egPrintWindow() 整頁縮小時對這個元素做反向補償，
-   使用者原話：「就算列印畫面有縮小，也不要縮小圖章」。 */
+   2026-08-13 修正（重要）：rf-stamp-noshrink 一律套用在所有圖章、不再只限 schema.noScale＝true 的模板。
+   起因：改成94.5px後使用者實測回報印出來仍只有1.4cm，追出來是這份表單內容剛好略超過一頁，
+   egPrintWindow() 的「整頁縮小塞進一張紙」邏輯把 body 一起縮小，沒被標記noShrink的章也被拖著等比縮小
+   （94.5px 乘上該次算出的縮放比≈0.56，正好對得上1.4cm的落差）。圖章代表實體印章，物理尺寸不該因為
+   「這次剛好印了幾筆」而每次跳動，所以不分是否勾了「不可縮放」，所有圖章一律做反向補償抵銷body縮放，
+   使用者原話：「就算列印畫面有縮小，也不要縮小圖章」——這句話原本理解成只適用noScale模板，這次修正為
+   全部圖章都適用（未來若使用者要「章可以跟著整頁一起縮小」的例外情境再另外討論）。 */
 function stampOrName(name, date, isDeputy, schema){
     var html = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
-    if (!schema) html = '<span class="rf-stamp-defsize">'+html+'</span>';
-    else if (schema.noScale) html = '<span class="rf-stamp-noshrink">'+html+'</span>';
-    return html;
+    var cls = 'rf-stamp-noshrink' + (!schema ? ' rf-stamp-defsize' : '');
+    return '<span class="'+cls+'">'+html+'</span>';
 }
 /* 兩種圖章樣式各自綁定：逐列簽章(list_stamp) 用在項目表每列負責人簽名；製表/審核/核准(footer_stamp) 用在頁尾三欄。
    模板沒設定時 schema 是 null，EGStamp.stamp 會自動退回預設樣式。 */
