@@ -242,9 +242,14 @@ case 'plan_submit': {
     $cur = training_plan_approval($db, $year);
     if (in_array($cur['status'], ['review_pending','approve_pending'], true)) jerr('本年度計畫已在簽核中，請勿重複送審');
     if (!$need) {
-        // 不需送審：直接視為完成（送審日＝簽章日期），列印時所有簽章欄一起顯示
+        // 不需送審：直接視為完成。簽章日期優先用「計劃表簽章日期」設定值（留空才退回計畫最後異動日/今天），
+        // 不是一律用點擊當下的系統時間——這樣才能補歷史紙本資料，且日期一旦寫入就固定，之後改設定不會跟著變動。
+        $signDate = trim((string)(training_settings($db)['training_plan_sign_date'] ?? ''));
+        if ($signDate === '') $signDate = training_plan_last_modified($db, $year) ?: date('Y-m-d');
+        $signAt = $signDate . ' ' . date('H:i:s');
         $id = eg_approval_submit($db, 'training_plan', $year, 'approve', $uid, $uname);
         eg_approval_decide($db, $id, $uid, $uname, 'approved', '模組設定為「不需送審」，送出即視同完成');
+        $db->prepare("UPDATE approval_record SET submitted_at=?, decided_at=? WHERE id=?")->execute([$signAt, $signAt, $id]);
         jout(['status'=>'approved', 'need_approval'=>0]);
     }
     if (!$sg['reviewer']) jerr('尚未設定「人事表單審核者」或人事部門主管，請先到「組織角色綁定設定」設定', 400);
