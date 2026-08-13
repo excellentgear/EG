@@ -114,7 +114,7 @@ case 'get':
     $st = $db->prepare("SELECT * FROM pfmea_item WHERE doc_id=? AND is_deleted=0 ORDER BY seq");
     $st->execute([$id]);
     $items = array_map('buildItemView', $st->fetchAll(PDO::FETCH_ASSOC));
-    jout(['success'=>true,'doc'=>$doc,'items'=>$items]);
+    jout(['success'=>true,'doc'=>$doc,'items'=>$items,'revisions'=>pfmea_revision_list($db, $id)]);
 
 case 'save':
     needEdit($perms);
@@ -129,9 +129,11 @@ case 'save':
     $relatedDepts = implode(',', array_values(array_intersect(PFMEA_DEPT_LIST, $relatedDeptsRaw)));
     $itemsRaw = json_decode((string)($_POST['items'] ?? '[]'), true);
     if (!is_array($itemsRaw)) $itemsRaw = [];
+    $newRevision = !empty($_POST['new_revision']); // 既有文件修改存檔時，使用者確認要記為新版本才會傳true
 
     $db->beginTransaction();
     try {
+        $isNew = !$id;
         if ($id) {
             $st = $db->prepare("SELECT 1 FROM pfmea_doc WHERE id=? AND is_deleted=0");
             $st->execute([$id]);
@@ -146,6 +148,10 @@ case 'save':
             $st->execute([$docNo, $partDId ?: null, $partNoText ?: null, $itemType, $specDesc ?: null, $productName ?: null, $relatedDepts ?: null, $uid, $uname]);
             $id = (int)$db->lastInsertId();
         }
+        // 修訂履歷：第一次存檔一律記「新增文件」；既有文件只有使用者確認要記為新版本才加「修改文件」
+        // 一列，避免每次小幅調整都讓版次一直往上跳（2026-08-13 使用者明確要求）
+        if ($isNew) { pfmea_revision_add($db, $id, '新增文件', $uname); }
+        elseif ($newRevision) { pfmea_revision_add($db, $id, '修改文件', $uname); }
 
         $st = $db->prepare("SELECT id FROM pfmea_item WHERE doc_id=? AND is_deleted=0");
         $st->execute([$id]);
@@ -328,6 +334,7 @@ case 'print_get':
     $bizDate = substr((string)$doc['created_at'], 0, 10);
     jout([
         'success'=>true, 'doc'=>$doc, 'items'=>$items,
+        'revisions'=>pfmea_revision_list($db, $id),
         'company_name'=>eg_company_full_name($db),
         'as_doc_no'=>eg_asdoc_no_asof($db, 'pfmea', $bizDate),
         'as_doc_name'=>$asDoc['doc_name'] ?? 'PFMEA潛在失效模式及效應分析',
