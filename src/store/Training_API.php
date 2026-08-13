@@ -134,6 +134,8 @@ case 'meta': {
           // 紀錄卡「登錄人員」欄固定顯示全站組織角色綁定的「人事表單審核者」（org_role_setting.php 的 hr_reviewer，
           // 不是 hr_signer 人事簽章人員，兩者是人事表單上不同欄位，不要混用）。
           'hr_reviewer_name'=>(function($db){ $u = eg_org_user($db,'hr_reviewer'); return $u ? (string)$u['user_cname'] : ''; })($db),
+          // 內訓但外部講師（trainer_id 空）時，考核表考官預設改用「人事／管理部門」主管，不是外部講師本人
+          'hr_dept_manager_name'=>(function($db){ $m = eg_org_dept_manager($db, eg_org_dept_ids($db,'hr_dept')); return $m ? (string)$m['user_cname'] : ''; })($db),
           'company_name'=>eg_company_full_name($db),
           'company_short_name'=>eg_company_short_name($db),
           'stamp_template'=>training_stamp_template($db),
@@ -518,6 +520,7 @@ case 'checkin_meta': {
     $st->execute([$sid]);
     $s = $st->fetch(PDO::FETCH_ASSOC);
     if (!$s) jerr('找不到場次');
+    if ($s['train_type'] === 'external') jerr('外訓不提供現場簽到');
     // 已完成的場次不再開放簽到（避免事後亂簽），需先退回已排定；跟前端清單「現場簽到」按鈕的顯示條件一致
     if ($s['status'] !== 'scheduled') jerr($s['status']==='done' ? '此場次已完成，不再開放簽到（如需補簽請先退回已排定）' : '此場次尚未確認開課，尚無可簽到名單');
     $dq = $db->prepare("SELECT day_no, day_date, start_time, end_time FROM training_session_day WHERE session_id=? ORDER BY day_no, day_date");
@@ -544,10 +547,12 @@ case 'sign_attendee': {
     $forUid = (int)($_POST['user_id'] ?? 0);
     $dayDate = (string)($_POST['day_date'] ?? '');
     $password = (string)($_POST['password'] ?? '');
-    $ss = $db->prepare("SELECT status FROM training_session WHERE session_id=?");
+    $ss = $db->prepare("SELECT status, train_type FROM training_session WHERE session_id=?");
     $ss->execute([$sid]);
-    $curStatus = $ss->fetchColumn();
-    if ($curStatus === false) jerr('找不到場次');
+    $sRow2 = $ss->fetch(PDO::FETCH_ASSOC);
+    if (!$sRow2) jerr('找不到場次');
+    if ($sRow2['train_type'] === 'external') jerr('外訓不提供現場簽到');
+    $curStatus = $sRow2['status'];
     // 跟 checkin_meta 同一條規則：已完成不再開放簽到，避免瀏覽器分頁開著現場簽到畫面沒關、場次在別處已被登錄完成後還能繼續簽
     if ($curStatus !== 'scheduled') jerr($curStatus==='done' ? '此場次已完成，不再開放簽到（如需補簽請先退回已排定）' : '此場次尚未確認開課，尚無可簽到名單');
     $st = $db->prepare("SELECT att_id FROM training_attendee WHERE session_id=? AND user_id=?");
@@ -633,13 +638,21 @@ case 'list': {
     $dayMap = [];
     foreach ($dq->fetchAll(PDO::FETCH_ASSOC) as $d) $dayMap[(int)$d['session_id']][] = $d;
     // 各場次附件數（讓清單看得出簽到表/教材有沒有上傳）
-    $attMap = [];
+    $attMap = []; $attCatMap = [];
     try {
         $aq = $db->prepare("SELECT a.session_id, COUNT(*) c FROM training_attachment a
                             JOIN training_session s ON s.session_id=a.session_id
                             WHERE s.year=? AND a.status='active' GROUP BY a.session_id");
         $aq->execute([$year]);
         foreach ($aq->fetchAll(PDO::FETCH_ASSOC) as $a) $attMap[(int)$a['session_id']] = (int)$a['c'];
+        // 各場次已有哪些附件類別（供前端判斷「評鑑方式是心得/參訓證明/證書卻沒繳交對應附件」要不要提示未繳交）；
+        // a.cat 本身可能是逗號分隔的多類別字串（上傳時可勾多個類別），這裡只是把同場次全部附件的 cat 字串接在一起，
+        // 前端用 indexOf 做「有沒有包含這個類別代碼」的寬鬆比對即可，不需要精確拆解。
+        $acq = $db->prepare("SELECT a.session_id, GROUP_CONCAT(a.cat SEPARATOR ',') cats FROM training_attachment a
+                             JOIN training_session s ON s.session_id=a.session_id
+                             WHERE s.year=? AND a.status='active' GROUP BY a.session_id");
+        $acq->execute([$year]);
+        foreach ($acq->fetchAll(PDO::FETCH_ASSOC) as $a) $attCatMap[(int)$a['session_id']] = (string)$a['cats'];
     } catch (Throwable $e) {}
     // 各場次評鑑統計（清單顯示合格狀態）
     $evMap = [];
@@ -670,6 +683,7 @@ case 'list': {
             ? implode('、', array_map(fn($d) => $deptMap[$d] ?? '', $r['dept_ids'])) : '全公司';
         $r['days'] = $dayMap[$sid] ?? [];
         $r['attach_count'] = $attMap[$sid] ?? 0;
+        $r['attach_cats'] = $attCatMap[$sid] ?? '';
         $r['eval'] = $evMap[$sid] ?? ['pass'=>0,'fail'=>0,'exempt'=>0,'none'=>0];
         $rows[] = $r;
         $m = (int)$r['plan_month'];

@@ -480,11 +480,16 @@ function training_shifts(PDO $db): array {
  * 附件（鐵律5／ai-rules/07）：DB 只存檔名，完整路徑一律在讀取當下用「目前設定值」現場組出。
  *   換 NAS 磁碟或搬資料夾時只要改設定值，舊附件立刻讀得到，不必動 DB。
  * ============================================================ */
-const TRAINING_ATT_CATS = ['sign'=>'簽到表', 'material'=>'教材/講義', 'exam'=>'試卷/測驗', 'photo'=>'上課照片', 'ojt'=>'考核表', 'other'=>'其他'];
+/* report/proof/cert 三個 key 刻意跟 TRAINING_EVAL_METHODS 同名對應（心得/參訓證明/證書），
+   方便「這個場次的評鑑方式需要繳交哪一類附件」直接用 eval_method 當 cat 查，不必另外維護對照表。 */
+const TRAINING_ATT_CATS = ['sign'=>'簽到表', 'material'=>'教材/講義', 'exam'=>'試卷/測驗', 'photo'=>'上課照片', 'ojt'=>'考核表',
+    'report'=>'心得', 'proof'=>'參訓證明', 'cert'=>'證書', 'other'=>'其他'];
 /* OJT/實作口試考核表 考核方式 */
 const TRAINING_OJT_ITEM_TYPES = ['practice'=>'實作演練', 'oral'=>'口試詢問'];
-/* 評鑑方式（確認開課時選定）；notice=宣導＝免評鑑，選了它參加人員一律記 exempt */
-const TRAINING_EVAL_METHODS = ['exam'=>'試券', 'report'=>'心得', 'practice'=>'實作', 'oral'=>'口試', 'notice'=>'宣導（免評鑑）'];
+/* 評鑑方式（確認開課時選定）；notice=宣導＝免評鑑，選了它參加人員一律記 exempt；
+   report/proof/cert 三種是「繳交制」（合格/不合格改顯示已繳交/未繳交，分數欄反灰），見 renderAtt() 的 evalUiMode() */
+const TRAINING_EVAL_METHODS = ['exam'=>'試券', 'report'=>'心得', 'practice'=>'實作', 'oral'=>'口試',
+    'proof'=>'參訓證明', 'cert'=>'證書', 'notice'=>'宣導（免評鑑）'];
 
 /** 附件目錄（寫檔／讀檔皆用這支；預設＝全站附件根資料夾＼教育訓練＼，見 attach_lib.php） */
 function training_attach_dir(PDO $db): string {

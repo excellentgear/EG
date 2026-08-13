@@ -539,10 +539,11 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <div class="errmsg" id="errExDone"></div></div>
             <div><label>上課地點</label>
                 <div style="display:flex;gap:5px;">
-                    <select id="exLocSel" style="flex:1;"><option value="">（未指定）</option></select>
+                    <input type="text" id="exLocSel" list="exLocList" style="flex:1;" placeholder="可從清單選，或直接打字（外訓一次性地點免建主檔）">
+                    <datalist id="exLocList"></datalist>
                     <button type="button" class="b-att" onclick="openLocMgr()" title="新增/管理上課地點"><i class="fa fa-cog"></i> 地點設定</button>
                 </div></div>
-            <div><label>上課天數 *</label><input type="number" id="exDays" step="1" min="1" max="60" value="1">
+            <div><label>上課天數</label><input type="number" id="exDays" step="1" readonly disabled title="依下方逐日明細的相異日期數自動計算，同一天新增上/下午兩列仍算1天">
                 <div class="errmsg" id="errExDays"></div></div>
             <div style="display:flex;align-items:flex-end;padding-bottom:6px;">
                 <span id="exHourHint" style="font-size:12px;color:#8a6d45;"></span></div>
@@ -552,7 +553,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <span id="exEvalHint" style="font-size:12px;color:#8a6d45;"></span></div>
         </div>
         <label style="display:block;font-size:13px;color:#5b3a1e;margin:9px 0 3px;">課程大綱（會印在簽到表上）</label>
-        <textarea id="exOutline" rows="3" maxlength="5000" placeholder="條列本次課程內容重點，例如：&#10;1. ISO 9001 條文說明&#10;2. 內部稽核實務演練"></textarea>
+        <textarea id="exOutline" rows="3" maxlength="5000"></textarea>
 
         <div class="batch-box">
             <b>套用班別</b>
@@ -566,7 +567,6 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <span>休息</span><input type="number" id="exBBreak" class="ro-auto" style="width:62px;" readonly tabindex="-1"
                 title="休息時間由系統依「上課時間 ∩ 休息時段」自動計算，不可手動修改"><span>分</span>
             <button type="button" class="b-att nw" onclick="dayApplyAll()"><i class="fa fa-clone"></i> 套用到全部日期</button>
-            <button type="button" class="b-att nw" style="background:#fff;color:#8A5A2B;" onclick="dayRebuild()"><i class="fa fa-refresh"></i> 依首日與天數重建日期</button>
             <span class="errmsg" id="errBatch" style="margin:0;"></span>
             <span id="brkHint" style="flex-basis:100%;color:#8a6d45;font-size:11.5px;"></span>
         </div>
@@ -581,6 +581,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 2px;font-size:12px;color:#5b3a1e;">
             <button type="button" class="b-att nw" onclick="dayAdd()"><i class="fa fa-plus"></i> 新增一天</button>
+            <button type="button" class="b-att nw" style="background:#fff;color:#8A5A2B;" onclick="dayAddSameDay()" title="同一天再加一個時段（例如上午/下午分開兩列），上課天數不會多算"><i class="fa fa-plus-square-o"></i> 同一天新增時段</button>
             <span id="exTotalHint" style="flex:0 0 auto;"></span>
             <span style="color:#8a6d45;flex:1 1 260px;">時間可直接輸入（09:00、0900、9 都可）；先用上方「套用到全部日期」設定，再個別修改不同的那幾天。
                 最末列按 <b>↓</b> 自動加一天、沒填東西的最末列按 <b>↑</b> 自動移除。
@@ -605,8 +606,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             </div>
             <div class="batch-box" id="evalBatchBox" style="margin:4px 0 6px;">
                 <b>批次設定評鑑</b>
-                <button type="button" class="b-att nw" onclick="attEvalAll('pass')">全設合格</button>
-                <button type="button" class="b-att nw" style="background:#fff;color:#8A5A2B;" onclick="attEvalAll('fail')">全設不合格</button>
+                <button type="button" class="b-att nw" id="evalAllPassBtn" onclick="attEvalAll('pass')">全設合格</button>
+                <button type="button" class="b-att nw" id="evalAllFailBtn" style="background:#fff;color:#8A5A2B;" onclick="attEvalAll('fail')">全設不合格</button>
                 <button type="button" class="b-att nw" style="background:#fff;color:#8A5A2B;" onclick="attEvalAll('')">清空評鑑</button>
                 <label style="margin:0;"><input type="checkbox" id="evalOnlyAttended" checked> 只套用到「實到」的人</label>
                 <span id="evalSummary" style="color:#8A5A2B;"></span>
@@ -674,8 +675,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <b style="color:#8A5A2B;">登錄完成</b>＝<u>課已經上完</u>、實到也勾好了（狀態→已完成，<b>此時才計入當月教育訓練達成率</b>）。
             當天上完課可直接按「登錄完成」，不必先按「確認開課」。
         </div>
-        <button class="b-cancel" onclick="printSignSheet(false)"><i class="fa fa-print"></i> 列印簽到表</button>
-        <button class="b-cancel" onclick="printSignSheet(true)" title="不帶目前名單，整張印成空白列供現場手寫簽到"><i class="fa fa-file-o"></i> 列印空白簽到表</button>
+        <button class="b-cancel" id="exPrintSignBtn" onclick="printSignSheet(false)"><i class="fa fa-print"></i> 列印簽到表</button>
+        <button class="b-cancel" id="exPrintBlankSignBtn" onclick="printSignSheet(true)" title="不帶目前名單，整張印成空白列供現場手寫簽到"><i class="fa fa-file-o"></i> 列印空白簽到表</button>
         <button class="b-cancel" id="exRevert" style="display:none;color:#DD5138;" onclick="revertPlanned()"><i class="fa fa-undo"></i> 退回計畫中</button>
         <button class="b-cancel" id="exRevertSch" style="display:none;color:#DD5138;" onclick="revertToScheduled()" title="只取消完成狀態，不動日期/名單/評鑑/成績，也重新開放現場簽到"><i class="fa fa-undo"></i> 退回已排定</button>
         <button class="b-cancel" id="exUnlockBtn" style="display:none;color:#DD5138;" onclick="unlockExMask()"><i class="fa fa-unlock"></i> 解鎖修改</button>
@@ -909,7 +910,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
     <div class="m-head"><span>訓練場次檢視</span><span class="m-close" onclick="closeMask('viewMask')">✕</span></div>
     <div class="m-body" id="viewBody"></div>
     <div class="m-foot">
-        <button class="b-cancel" onclick="printViewSignSheet()"><i class="fa fa-print"></i> 列印簽到表</button>
+        <button class="b-cancel" id="viewPrintSignBtn" onclick="printViewSignSheet()"><i class="fa fa-print"></i> 列印簽到表</button>
         <button class="b-cancel" id="viewOjtBtn" onclick="printViewOjtSheet()"><i class="fa fa-print"></i> 列印考核表</button>
         <button class="b-ok" onclick="closeMask('viewMask')">關閉</button>
     </div>
@@ -1136,6 +1137,7 @@ function loadMeta(cb){
         CARD_ASDOC = m.card_asdoc || null;
         COMPANY_SHORT = m.company_short_name || COMPANY;
         HR_REVIEWER_NAME = m.hr_reviewer_name || '';
+        HR_DEPT_MANAGER_NAME = m.hr_dept_manager_name || '';
         SETTINGS.stamp_template = m.stamp_template || null;
         SETTINGS.approval_stamp_template = m.approval_stamp_template || null;
         TR_FEATURES = m.features || [];
@@ -1221,9 +1223,13 @@ function renderTable(){
         html += '<tr class="tr-clickable'+(r.status==='planned'?' row-planned':'')+'" onclick="toggleDetail(event,'+r.session_id+')">';
         html += '<td>'+r.plan_month+'月</td>';
         html += '<td>'+esc(r.dept_name||'')+'</td>';
+        // 評鑑方式是繳交制（心得/參訓證明/證書）且已有人實到，卻連一份對應類別附件都還沒上傳＝提示未繳交
+        var needCat = ['report','proof','cert'].indexOf(r.eval_method)>=0;
+        var missingSubmit = needCat && (r.actual_headcount>0) && (String(r.attach_cats||'').indexOf(r.eval_method)<0);
         html += '<td class="t-left"><b>'+esc(r.course_name)+'</b>'
              +  (r.attach_count>0 ? ' <span title="已上傳 '+r.attach_count+' 個附件" style="color:#b5762a;font-size:11px;"><i class="fa fa-paperclip"></i>'+r.attach_count+'</span>' : '')
              +  (r.eval_method ? ' <span style="color:#8a6d45;font-size:11px;">['+esc(EVAL_METHODS[r.eval_method]||r.eval_method)+']</span>' : '')
+             +  (missingSubmit ? ' <span title="尚未上傳任何「'+esc(EVAL_METHODS[r.eval_method])+'」類別附件" style="color:#DD5138;font-size:11px;font-weight:bold;"><i class="fa fa-exclamation-triangle"></i>未繳交</span>' : '')
              +  '</td>';
         html += '<td>'+(ext?'<span style="color:#c0762c;">外訓</span>':'內訓')+'</td>';
         html += '<td>'+esc((ext?r.org_unit:r.trainer)||'—')+'</td>';
@@ -1240,9 +1246,9 @@ function renderTable(){
         html += '<td>'+dateRangeText(r)+'</td>';
         html += '<td style="white-space:nowrap;" onclick="event.stopPropagation();">';
         html += '<span class="tr-op" onclick="openView('+r.session_id+')" title="檢視完整內容（含名單與評鑑結果）"><i class="fa fa-search-plus"></i>檢視</span>';
-        if (r.status==='scheduled') {
+        if (r.status==='scheduled' && !ext) {
             // 免編輯權限：現場裝置給學員自己選人輸入密碼簽到，不需要 training_edit；
-            // 已完成的場次不再開放簽到（避免事後亂簽），除非先退回已排定
+            // 已完成的場次不再開放簽到（避免事後亂簽），除非先退回已排定；外訓不提供現場簽到（使用者明確要求）
             html += '<span class="tr-op" onclick="openCheckin('+r.session_id+')" title="現場裝置給學員自己選人輸入本人密碼簽到"><i class="fa fa-pencil-square-o"></i>現場簽到</span>';
         }
         if (PERMS.canEdit) {
@@ -1282,9 +1288,10 @@ function toggleDetail(ev, sid){
         $td.html(detailHtml(res));
     }).fail(function(){ $td.html('<span style="color:#DD5138;">載入失敗</span>'); });
 }
-function evalPill(v){
-    return v==='pass' ? '<span class="ev-pass">合格</span>'
-         : v==='fail' ? '<span class="ev-fail">不合格</span>'
+function evalPill(v, method){
+    var submit = evalUiMode(method)==='submit';
+    return v==='pass' ? '<span class="ev-pass">'+(submit?'已繳交':'合格')+'</span>'
+         : v==='fail' ? '<span class="ev-fail">'+(submit?'未繳交':'不合格')+'</span>'
          : v==='exempt' ? '<span class="ev-exempt">免評鑑</span>' : '<span class="ev-none">未評</span>';
 }
 function detailHtml(res){
@@ -1310,7 +1317,7 @@ function detailHtml(res){
         h+='<table><tr><th>部門</th><th>職稱</th><th>姓名</th><th>實到</th><th>評鑑結果</th><th>分數</th><th>備註</th></tr>';
         res.attendees.forEach(function(a){
             h+='<tr><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td>'
-             +'<td>'+(+a.attended?'✔':'—')+'</td><td>'+evalPill(a.eval_result)+'</td>'
+             +'<td>'+(+a.attended?'✔':'—')+'</td><td>'+evalPill(a.eval_result, s.eval_method)+'</td>'
              +'<td>'+(a.eval_score==null?'':numTrim(a.eval_score))+'</td><td>'+esc(a.eval_note||'')+'</td></tr>';
         });
         h+='</table>';
@@ -1514,6 +1521,8 @@ function openExBody(sid){
     $('#ojtOps').toggle(OJT_EDITABLE);
     $('#ojtAssessor').prop('disabled', !OJT_EDITABLE);
     if (!ext) loadOjt(r.session_id); else { OJT_ITEMS = []; }
+    // 外訓不提供簽到表（含空白簽到表）／現場簽到，使用者明確要求
+    $('#exPrintSignBtn, #exPrintBlankSignBtn').toggle(!ext);
     $('#exPlanInfo').html(
         '<div><b>'+esc(r.course_name)+'</b> '+statPill(r.status)+'</div>'
       + '<div>計畫：'+r.year+' 年 '+r.plan_month+' 月　對象部門：'+esc(r.dept_name||'全公司')
@@ -1612,11 +1621,21 @@ function calcDayHours(d){
     if (mins <= 0) return null;
     return numTrim(Math.round(mins/60*10)/10);
 }
+/* 每列「第X天」標籤：依日期分組算，同一天的多個時段（上/下午分開兩列）算同一個第X天，
+   不是單純用列數編號——這是「上課天數」鐵則的核心：天數看相異日期數，不是看列數。 */
+function dayNumberLabels(){
+    var map={}, n=0, labels=[];
+    DAYS.forEach(function(d){
+        if (d.date && !map[d.date]) map[d.date] = ++n;
+        labels.push(d.date ? (map[d.date]||'') : '');
+    });
+    return {labels:labels, distinctCount:n};
+}
 function renderDays(){
-    var h='';
+    var h='', dn = dayNumberLabels();
     DAYS.forEach(function(d,i){
         h+='<tr>'
-          +'<td>第'+(i+1)+'天</td>'
+          +'<td>'+(dn.labels[i]?'第'+dn.labels[i]+'天':'—')+'</td>'
           +'<td><input type="date" max="9999-12-31" value="'+esc(d.date)+'" onchange="dayEdit('+i+',\'date\',this.value)"></td>'
           +'<td><input type="text" class="time-in" maxlength="5" placeholder="09:00" value="'+esc(d.start)+'" oninput="dayEdit('+i+',\'start\',this.value,1)" onchange="dayEdit('+i+',\'start\',this.value)"></td>'
           +'<td><input type="text" class="time-in" maxlength="5" placeholder="17:00" value="'+esc(d.end)+'" oninput="dayEdit('+i+',\'end\',this.value,1)" onchange="dayEdit('+i+',\'end\',this.value)"></td>'
@@ -1628,7 +1647,7 @@ function renderDays(){
           +'</tr>';
     });
     $('#dayBody').html(h);
-    $('#exDays').val(DAYS.length);
+    $('#exDays').val(dn.distinctCount);   // 上課天數＝相異日期數（唯讀，自動算，見 dayNumberLabels()）
     if (DAYS[0] && DAYS[0].date) $('#exDone').val(DAYS[0].date);   // 首日欄與明細第一天一致
     dayValidate();
     applyExLock();   // 重繪後新產生的 input 要重新套用鎖定狀態
@@ -1659,27 +1678,16 @@ function dayAdd(){
     DAYS.push(d);
     renderDays();
 }
-function dayDelLast(){ if (DAYS.length<=1) return; DAYS.pop(); renderDays(); }
-/* 依「開課首日＋上課天數」重建連續日期（時間沿用批次設定或第一天） */
-function dayRebuild(){
-    var first = $('#exDone').val();
-    if (!validDateStr(first)){ setErr($('#exDone'),'errExDone','請先選擇正確的開課首日'); return; }
-    var n = parseInt($('#exDays').val(),10);
-    if (isNaN(n) || n<1){ setErr($('#exDays'),'errExDays','天數須為 1 以上的整數'); return; }
-    if (n>60){ setErr($('#exDays'),'errExDays','天數上限 60 天'); return; }
-    setErr($('#exDone'),'errExDone',''); setErr($('#exDays'),'errExDays','');
-    var bs=parseTime($('#exBStart').val()), be=parseTime($('#exBEnd').val());
-    var s = bs.ok?bs.val:(DAYS[0]?DAYS[0].start:''), e = be.ok?be.val:(DAYS[0]?DAYS[0].end:'');
-    var old = DAYS.slice();
-    DAYS = [];
-    for (var i=0;i<n;i++){
-        var d = {date:addDaysStr(first,i), start:s||(old[i]?old[i].start:''), end:e||(old[i]?old[i].end:''), brk:0, hours:''};
-        dayRecalc(d);
-        if (d.hours==='' && old[i]) d.hours = old[i].hours;
-        DAYS.push(d);
-    }
+/* 同一天新增第二個時段（例如上午/下午分開登錄）：日期沿用最後一列，不是加一天；
+   上課天數是看相異日期數（見 dayNumberLabels()），這裡加的列不會讓天數多算。 */
+function dayAddSameDay(){
+    var last = DAYS[DAYS.length-1] || {date:$('#exDone').val()||META.today, start:'', end:'', brk:0, hours:''};
+    var d = {date:last.date||'', start:'', end:'', brk:0, hours:''};
+    dayRecalc(d);
+    DAYS.push(d);
     renderDays();
 }
+function dayDelLast(){ if (DAYS.length<=1) return; DAYS.pop(); renderDays(); }
 /* 時間與休息套用到全部日期（不動日期） */
 function dayApplyAll(){
     var bs=parseTime($('#exBStart').val()), be=parseTime($('#exBEnd').val());
@@ -1697,7 +1705,7 @@ function dayApplyAll(){
 }
 /* 即時驗證每一天：日期存在/不重複、時間合法(擋 25:00)、同日結束不可早於開始、時數合理 */
 function dayValidate(){
-    var seen={}, bad=0, total=0, hasH=false, firstMsg='', firstIdx=-1;
+    var bad=0, total=0, hasH=false, firstMsg='', firstIdx=-1;
     DAYS.forEach(function(d,i){
         var msg='', $tr=$('#dayBody tr').eq(i);
         var $din=$tr.find('input').eq(0), $sin=$tr.find('input').eq(1), $ein=$tr.find('input').eq(2),
@@ -1705,8 +1713,8 @@ function dayValidate(){
         $din.removeClass('inv'); $sin.removeClass('inv'); $ein.removeClass('inv'); $bin.removeClass('inv'); $hin.removeClass('inv');
         if (!d.date){ msg='請填上課日期'; $din.addClass('inv'); }
         else if (!validDateStr(d.date)){ msg='日期不存在或格式錯誤'; $din.addClass('inv'); }
-        else if (seen[d.date]){ msg='日期與第'+seen[d.date]+'天重複'; $din.addClass('inv'); }
-        else seen[d.date]=i+1;
+        // 同一天可以有多列（上午/下午分開時段各自登錄），不視為錯誤，也不擋存檔——
+        // 「上課天數」看的是相異日期數（dayNumberLabels()），不是列數，這裡不需要也不應該擋重複日期。
         var ps=parseTime(d.start), pe=parseTime(d.end);
         if (!msg && !ps.ok){ msg='開始時間：'+ps.msg; $sin.addClass('inv'); }
         if (!msg && !pe.ok){ msg='結束時間：'+pe.msg; $ein.addClass('inv'); }
@@ -1733,8 +1741,9 @@ function dayValidate(){
     });
     // 首日欄與明細第一天連動顯示
     var pl = EXROW && EXROW.hours!=null ? parseFloat(EXROW.hours) : null;
+    var dCnt = dayNumberLabels().distinctCount;
     $('#exTotalHint').html('實際總時數：<b style="color:#8A5A2B;">'+(hasH?numTrim(Math.round(total*10)/10):'—')+'</b> 小時'
-        + (DAYS.length>1 ? '（'+DAYS.length+' 天合計）' : ''));
+        + (dCnt>1 ? '（'+dCnt+' 天合計）' : ''));
     $('#exHourHint').html(pl!=null && hasH && Math.abs(pl-total)>0.05
         ? '<span style="color:#DD5138;">與計畫總時數 '+numTrim(pl)+' 不同</span>' : (pl!=null?'計畫總時數 '+numTrim(pl):''));
     DAY_ERR = firstMsg;
@@ -1752,22 +1761,6 @@ $('#exDone').on('change', function(){
         renderDays();
     }
 });
-$('#exDays').on('change', function(){
-    var n=parseInt($(this).val(),10);
-    if (isNaN(n)||n<1) return setErr($(this),'errExDays','天數須為 1 以上的整數');
-    if (n>60) return setErr($(this),'errExDays','天數上限 60 天');
-    setErr($(this),'errExDays','');
-    if (n===DAYS.length) return;
-    if (n<DAYS.length) DAYS = DAYS.slice(0,n);
-    else while (DAYS.length<n) dayAddSilent();
-    renderDays();
-});
-function dayAddSilent(){
-    var last = DAYS[DAYS.length-1] || {date:$('#exDone').val(), start:'', end:'', brk:0, hours:''};
-    var d = {date:last.date?addDaysStr(last.date,1):'', start:last.start, end:last.end, brk:0, hours:''};
-    dayRecalc(d);
-    DAYS.push(d);
-}
 /* 批次時間欄即時檢查 */
 $('#exBStart,#exBEnd').on('input', function(){
     var p=parseTime($(this).val());
@@ -1831,19 +1824,31 @@ function attAddChecked(){
     renderAtt();
     $('#attDept').trigger('change');
 }
-/* ---------- 評鑑結果（合格/不合格，可批次設定；宣導課程一律免評鑑） ---------- */
+/* ---------- 評鑑結果（可批次設定）：三種 UI 模式 ----------
+   score  = 合格/不合格/免評鑑，分數可填（exam/practice/oral/未指定）
+   submit = 已繳交/未繳交/免評鑑，分數反灰不給填（report/proof/cert 心得／參訓證明／證書，繳交制不打分數）
+   exempt = 整組鎖住、一律免評鑑（notice 宣導課程） */
 var EVAL_LABEL = {pass:'合格', fail:'不合格', exempt:'免評鑑'};
+var EVAL_LABEL_SUBMIT = {pass:'已繳交', fail:'未繳交', exempt:'免評鑑'};
+function evalUiMode(method){
+    if (method==='notice') return 'exempt';
+    if (method==='report' || method==='proof' || method==='cert') return 'submit';
+    return 'score';
+}
 function isNoticeCourse(){ return $('#exEvalMethod').val()==='notice'; }
-/* 選了「宣導（免評鑑）」→ 評鑑欄整組鎖住並標成免評鑑，避免現場還去一個個點 */
+/* 選了評鑑方式 → 依模式調整批次按鈕文字/提示語/是否鎖住；submit 模式不需要考核表（跟 notice 一樣，是繳交制不是技能考核） */
 function applyEvalMethod(){
-    var m = $('#exEvalMethod').val(), notice = (m==='notice');
+    var m = $('#exEvalMethod').val(), mode = evalUiMode(m), notice = mode==='exempt';
+    var lbl = mode==='submit' ? EVAL_LABEL_SUBMIT : EVAL_LABEL;
+    $('#evalAllPassBtn').text('全設'+lbl.pass); $('#evalAllFailBtn').text('全設'+lbl.fail);
     $('#exEvalHint').html(m==='' ? '未指定評鑑方式（仍可自行填每個人的評鑑結果）'
-        : (notice ? '<b style="color:#8A5A2B;">宣導課程免評鑑</b>，參加人員一律記「免評鑑」'
-                  : '評鑑方式：<b>'+esc(EVAL_METHODS[m]||m)+'</b>；上完課於下方名單逐人填合格／不合格（可批次）'));
+        : notice ? '<b style="color:#8A5A2B;">宣導課程免評鑑</b>，參加人員一律記「免評鑑」'
+        : mode==='submit' ? '評鑑方式：<b>'+esc(EVAL_METHODS[m]||m)+'</b>；上完課於下方名單逐人填'+lbl.pass+'／'+lbl.fail+'（可批次），不需要打分數'
+                  : '評鑑方式：<b>'+esc(EVAL_METHODS[m]||m)+'</b>；上完課於下方名單逐人填合格／不合格（可批次）');
     $('#evalBatchBox').css('opacity', notice?0.5:1);
     $('#evalBatchBox button, #evalOnlyAttended').prop('disabled', notice);
-    // 宣導(免評鑑)課程不需要考核表：直接隱藏整個考核表區塊，避免建了考核項目卻用不到
-    if (notice) $('#ojtSec').hide();
+    // 宣導(免評鑑)／繳交制(心得/參訓證明/證書)課程不需要考核表：直接隱藏整個考核表區塊，避免建了考核項目卻用不到
+    if (mode!=='score') $('#ojtSec').hide();
     else if (EXROW && EXROW.train_type!=='external') $('#ojtSec').show();
     renderAtt();
 }
@@ -1882,14 +1887,15 @@ function unmarkSign(i){
     }, 'json').fail(function(x){ alert('取消失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 function renderAtt(){
-    var h='', notice=isNoticeCourse(), locked=exLocked();
+    var h='', mode=evalUiMode($('#exEvalMethod').val()), notice=(mode==='exempt'), scoreOff=(mode!=='score'), locked=exLocked();
+    var lbl = mode==='submit' ? EVAL_LABEL_SUBMIT : EVAL_LABEL;
     var ext = !!(EXROW && EXROW.train_type==='external');   // 證照欄僅外訓開放登錄，內訓固定「無」不給填
     ATT.forEach(function(a,i){
         var ev = notice ? 'exempt' : (a.eval_result||'');
         var sel = '<select onchange="ATT['+i+'].eval_result=this.value;attCount()"'+(notice?' disabled':'')+'>'
                 + '<option value=""'+(ev===''?' selected':'')+'>—</option>'
-                + '<option value="pass"'+(ev==='pass'?' selected':'')+'>合格</option>'
-                + '<option value="fail"'+(ev==='fail'?' selected':'')+'>不合格</option>'
+                + '<option value="pass"'+(ev==='pass'?' selected':'')+'>'+lbl.pass+'</option>'
+                + '<option value="fail"'+(ev==='fail'?' selected':'')+'>'+lbl.fail+'</option>'
                 + '<option value="exempt"'+(ev==='exempt'?' selected':'')+'>免評鑑</option></select>';
         var licCell = ext
             ? '<input type="checkbox" '+(+a.license?'checked':'')+' onchange="ATT['+i+'].license=this.checked?1:0;">'
@@ -1899,7 +1905,7 @@ function renderAtt(){
           +'<td><input type="checkbox" '+(a.attended?'checked':'')+' onchange="ATT['+i+'].attended=this.checked?1:0;attCount()"></td>'
           +'<td>'+sel+'</td>'
           +'<td><input type="number" step="any" min="0" max="100" style="width:52px;" value="'+esc(a.eval_score==null?'':a.eval_score)
-          +'" onchange="ATT['+i+'].eval_score=this.value;attCount()"'+(notice?' disabled':'')+'></td>'
+          +'" onchange="ATT['+i+'].eval_score=this.value;attCount()"'+(scoreOff?' disabled':'')+'></td>'
           +'<td><input type="text" maxlength="100" style="width:112px;" value="'+esc(a.eval_note||'')
           +'" onchange="ATT['+i+'].eval_note=this.value"></td>'
           +'<td style="text-align:center;">'+licCell+'</td>'
@@ -1913,11 +1919,12 @@ function renderAtt(){
 function attCount(){
     var a=ATT.filter(function(x){return x.attended;}).length;
     $('#attCount').text('（應到 '+ATT.length+'　實到 '+a+'）');
-    var notice=isNoticeCourse();
+    var mode=evalUiMode($('#exEvalMethod').val()), notice=(mode==='exempt');
+    var lbl = mode==='submit' ? EVAL_LABEL_SUBMIT : EVAL_LABEL;
     var p=ATT.filter(function(x){return notice||x.eval_result==='pass';}).length;
     var f=ATT.filter(function(x){return !notice&&x.eval_result==='fail';}).length;
     var n=ATT.filter(function(x){return !notice&&!x.eval_result;}).length;
-    $('#evalSummary').text(ATT.length ? '合格 '+p+'　不合格 '+f+(n?'　未評 '+n:'') : '');
+    $('#evalSummary').text(ATT.length ? lbl.pass+' '+p+'　'+lbl.fail+' '+f+(n?'　未評 '+n:'') : '');
 }
 function attDel(i){ ATT.splice(i,1); renderAtt(); if($('#attDept').val()) $('#attDept').trigger('change'); }
 
@@ -1925,6 +1932,7 @@ function attDel(i){ ATT.splice(i,1); renderAtt(); if($('#attDept').val()) $('#at
 var AS_DOCS = [], DOC_NO = {}, DOC_NAME = {}, COMPANY = '', SIGNERS = {}, PLAN_APPR = {status:'none'}, PLAN_LASTMOD = '';
 var CARD_ASDOC = null;   // 員工教育訓練紀錄卡綁定的 AS 文件（asdoc_lib.php 標準做法，{id,doc_no,doc_name,current_version,doc_level} 或 null）
 var COMPANY_SHORT = '', HR_REVIEWER_NAME = '';   // 紀錄卡「訓練單位(內訓)」用公司簡稱；「登錄人員」欄固定顯示全站綁定的人事表單審核者
+var HR_DEPT_MANAGER_NAME = '';   // 內訓但外部講師時，考核表考官預設＝人事／管理部門主管（見 ojtDefaultAssessor()）
 var cardAsDocPickId = 0;   // 模組設定跳窗內「暫選」的 as_document.id，按「儲存設定」才寫入，跟其他五個欄位手感一致
 var APPR_LABEL = {none:'尚未送審', review_pending:'審核中', reviewed:'審核通過，待核准',
                   approve_pending:'待核准', approved:'已核准', rejected:'已退回'};
@@ -2196,6 +2204,14 @@ function fmtSize(n){
     n = +n||0;
     return n<1024 ? n+' B' : (n<1048576 ? (Math.round(n/102.4)/10)+' KB' : (Math.round(n/104857.6)/10)+' MB');
 }
+/* 考官預設人選：內訓一般情況＝授課講師本人；但「內訓卻是外部講師」（trainer_id 空＝當初用打字填講師，
+   不是從公司內部人員挑的）時，外部講師不適合當內部技能考核的考官，改預設為「人事／管理部門」主管
+   （org_role_setting.php 的 hr_dept，使用者明確要求），簽章會用這個真實姓名走既有共用圖章機制自動比對到本人的章。 */
+function ojtDefaultAssessor(){
+    if (!EXROW) return '';
+    if (EXROW.train_type!=='external' && !EXROW.trainer_id) return HR_DEPT_MANAGER_NAME || EXROW.trainer || '';
+    return EXROW.trainer || '';
+}
 /* ---------- OJT／實作口試考核表：考核項目清單（僅內訓，講師本人或訓練管理員可編輯） ---------- */
 function loadOjt(sid){
     OJT_ITEMS = []; renderOjt();
@@ -2206,7 +2222,7 @@ function loadOjt(sid){
         OJT_ITEMS = (res.items||[]).map(function(it){ return {item_id:+it.item_id, item_type:it.item_type,
             score_mode:it.score_mode==='score'?'score':'pass_fail', content:it.content}; });
         OJT_SCORES_LOCKED = !!res.scores_submitted_at;
-        $('#ojtAssessor').val(res.assessor_name || (EXROW&&EXROW.trainer) || '');
+        $('#ojtAssessor').val(res.assessor_name || ojtDefaultAssessor() || '');
         renderOjt();
     });
 }
@@ -2458,7 +2474,7 @@ function printOjtSheetFromEx(){
             var scores = {};
             if (sres.ok) (sres.scores||[]).forEach(function(s){ scores[ojtScoreKey(s.item_id,s.user_id)] = {score:s.score, result:s.result}; });
             printOjtSheet({r:EXROW, days:DAYS, attendees:ATT, ojtItems:items,
-                assessor:$('#ojtAssessor').val()||ires.assessor_name||EXROW.trainer||'', ojtScores:scores});
+                assessor:$('#ojtAssessor').val()||ires.assessor_name||ojtDefaultAssessor()||'', ojtScores:scores});
         });
     });
 }
@@ -2740,20 +2756,15 @@ function saveAttachPath(cb){
 }
 
 /* ---------- 上課地點主檔 ---------- */
+/* #exLocSel 是 <input list> 組合欄（可打字亦可從清單選，外訓一次性地點不必逼著先建主檔）；
+   datalist 本來就允許輸入任何不在清單內的文字，不需要再像舊版 <select> 那樣特地補「（舊紀錄）」選項。 */
 var LOCS = [];
 function renderLocSel(){
-    var cur = $('#exLocSel').val();
-    var h = '<option value="">（未指定）</option>';
-    LOCS.forEach(function(l){ h += '<option value="'+esc(l.name)+'">'+esc(l.name)+'</option>'; });
-    $('#exLocSel').html(h);
-    if (cur) setLocSel(cur);
+    var h = '';
+    LOCS.forEach(function(l){ h += '<option value="'+esc(l.name)+'">'; });
+    $('#exLocList').html(h);
 }
-/* 舊紀錄的地點若不在主檔（或已停用）仍要選得到 */
-function setLocSel(name){
-    if (name && !$('#exLocSel').find('option').filter(function(){ return this.value===name; }).length)
-        $('#exLocSel').append('<option value="'+esc(name)+'">'+esc(name)+'（舊紀錄）</option>');
-    $('#exLocSel').val(name||'');
-}
+function setLocSel(name){ $('#exLocSel').val(name||''); }
 function openLocMgr(){ renderLocList(); setErr($('#locNew'),'errLocNew',''); $('#locNew').val(''); openMask('locMask');
     setTimeout(function(){ $('#locNew').focus(); }, 100); }
 function renderLocList(){
@@ -2837,9 +2848,10 @@ function copySession(sid){
    多天課程：一天仍是一個獨立表格（page-break-before 換頁），該表格自己的表頭永遠只描述那一天，跨頁時也還是同一天的資訊。 */
 function printSignSheet(blankOnly, src){
     var r = (src && src.r) || EXROW || {};
+    var ext=r.train_type==='external';
+    if (ext){ alert('外訓不提供簽到表'); return; }
     var docTitle = DOC_NAME.signsheet || '簽到表';   // 有綁定AS文件時表頭一律用其doc_name，不寫死（ai-rules/16 第一之二節）
     var course=r.course_name||'（課程名稱）';
-    var ext=r.train_type==='external';
     var lect=ext?('外訓／開課單位：'+(r.org_unit||'')):('講師：'+(r.trainer||''));
     var loc=(src ? r.location : $('#exLocSel').val())||'____________';
     var attendees = src ? (src.attendees||[]) : ATT;
@@ -3315,6 +3327,7 @@ function openView(sid){
         // 外訓或免評鑑(宣導)課程都不提供考核表，比照「實行資料」modal 的 applyEvalMethod() 同一套判斷；
         // 另外「檢視」是唯讀場次，要等考核成績正式送出鎖定後才顯示列印考核表——「實行資料」modal 那顆不受此限，開課前就能印空白表給講師手寫
         $('#viewOjtBtn').toggle(!ext && s.eval_method!=='notice' && !!(res.ojt_score_summary && res.ojt_score_summary.scores_submitted_at));
+        $('#viewPrintSignBtn').toggle(!ext);   // 外訓不提供簽到表
         $('#viewBody').html('<div class="ex-plan"><div><b>'+esc(s.course_name)+'</b> '+statPill(s.status)+'</div>'
             +'<div>計畫：'+s.year+' 年 '+s.plan_month+' 月　類型：'+(ext?'外訓':'內訓')
             +'　計畫時數：'+(s.hours==null?'—':numTrim(s.hours))+'　開課日：'+(dispDate(s.done_date)||'—')+'</div></div>'
@@ -3831,7 +3844,8 @@ $('#btnCsv').on('click', function(){
 
 $('#btnRoleHelp').on('click', function(){ openMask('helpMask'); });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
-$('.tr-mask').on('click', function(e){ if (e.target===this) this.style.display='none'; });
+// 新增/編輯訓練場次的表單填一半很容易誤點外面空白處，整份資料就不見了——#edMask 不吃「點遮罩關閉」，只能按 ✕ 或取消鈕關閉（使用者明確要求）
+$('.tr-mask').on('click', function(e){ if (e.target===this && this.id!=='edMask') this.style.display='none'; });
 /* 雙擊清空／聚焦全選／Enter 跳欄／表格 ↑↓ 與自動增刪列 → 一律由 eg_input_rules.js 處理，此處不再手刻 */
 
 if (canView) loadMeta(function(){ loadList(); });
