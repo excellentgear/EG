@@ -358,8 +358,9 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                                         $_evRt = $ev['ref_type'] ?? '';
                                         $_evIco = $_evRt === 'QA' ? 'fa-exclamation-triangle'
                                                 : ($_evRt === 'CAR' ? 'fa-wrench'
+                                                : ($_evRt === 'STOCK_REQ' ? 'fa-cubes'
                                                 : ((strpos($_evRt, 'QUOTATION_SUPP') === 0) ? 'fa-paperclip'
-                                                : ((strpos($_evRt, 'QUOTATION_APPROVAL') === 0) ? 'fa-file-text-o' : 'fa-bullhorn')));
+                                                : ((strpos($_evRt, 'QUOTATION_APPROVAL') === 0) ? 'fa-file-text-o' : 'fa-bullhorn'))));
                                         ?>
                                         <span class="notice-ico"><i class="fa <?= $_evIco ?>"></i></span>
                                         <span class="notice-body">
@@ -676,6 +677,11 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
 
         function nmBuildAction(res) {
             var mode = res.my_mode, st = res.my_status, h = '';
+            // 領料單通知(STOCK_REQ)：純資訊型，額外提供「開新分頁查看」，看不看都可直接按已閱繼續（已閱＝已收到通知）
+            if (res.event && res.event.ref_type === 'STOCK_REQ') {
+                var reqId = res.event.ref_id || 0;
+                h += '<a class="eg-btn eg-btn-ghost" target="_blank" href="../pages/stock.php?req=' + reqId + '" style="display:inline-block;margin-bottom:8px;"><i class="fa fa-external-link"></i> 開新分頁查看領料單</a>';
+            }
             h += '<div class="eg-nm-modebadge mode-' + mode + '">需求：' + modeName[mode] + '</div>';
             h += '<div class="eg-nm-mystatus">' + nmStatusLine(st) + '</div>';
 
