@@ -10,6 +10,8 @@ header('Content-Type: application/json; charset=utf-8');
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/training_lib.php';
+include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
+include_once $document_root . '/EGsystem/src/common/people_lib.php';
 
 function jout($a){ echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code=400){ http_response_code($code); echo json_encode(['ok'=>false,'error'=>$msg], JSON_UNESCAPED_UNICODE); exit; }
@@ -126,6 +128,9 @@ case 'meta': {
           'doc_name'=>['plan'=>training_as_doc_name($db,'plan'), 'result'=>training_as_doc_name($db,'result'),
                      'target'=>training_as_doc_name($db,'target'), 'request'=>training_as_doc_name($db,'request'),
                      'signsheet'=>training_as_doc_name($db,'signsheet')],
+          // 員工教育訓練紀錄卡：AS 文件編號綁定一律走全站統一的 asdoc_lib.php（ai-rules/16 第一之三節），
+          // 跟上面五個舊式（system_settings 存 id、純下拉）的教育訓練文件是不同做法，不要混用。
+          'card_asdoc'=>eg_asdoc_get($db, 'training_record_card'),
           'company_name'=>eg_company_full_name($db),
           'stamp_template'=>training_stamp_template($db),
           'approval_stamp_template'=>training_approval_stamp_template($db),
@@ -1429,6 +1434,55 @@ case 'user_history': {
     if ($target !== $uid && !$perms['canView']) jerr('無查詢權限', 403);
     $year = ($_GET['year'] ?? '') === '' ? null : (int)$_GET['year'];
     jout(['user_id'=>$target, 'records'=>training_user_history($db, $target, $year)]);
+}
+
+/* 批次版 user_history：批次列印「員工教育訓練紀錄卡」用，一次把多位員工的紀錄一起撈回，
+   避免批次列印時一個員工發一次 AJAX（鐵律8：最省 token/最有效率）。 */
+case 'user_history_batch': {
+    if (!$perms['canView']) jerr('無查詢權限', 403);
+    $ids = array_values(array_filter(array_map('intval', explode(',', (string)($_GET['user_ids'] ?? '')))));
+    if (!$ids) jout(['records_by_user'=>(object)[]]);
+    $out = [];
+    foreach ($ids as $id) $out[$id] = training_user_history($db, $id);
+    // 一律轉成 JSON object（不是 array）：$ids 若剛好是 0,1,2... 這種從 0 開始的連續整數，
+    // PHP json_encode 會誤判成 list 陣列而不是 {user_id: [...]} 物件，前端就讀不到對應資料。
+    jout(['records_by_user'=>(object)$out]);
+}
+
+/* 員工教育訓練紀錄卡（2-MM-01-08）清單：一人一列，供分頁清單/批次列印勾選用。
+   一律走 people_lib.php 的 eg_people_list()（人員列表鐵則，ai-rules/08 第五節），
+   不自己拼人員 SQL；訓練次數/時數為即時彙總（不落地存快照，訓練紀錄異動立即反映在卡片上）。 */
+case 'card_people': {
+    $deptId = (int)($_GET['dept_id'] ?? 0);
+    $kw = trim((string)($_GET['keyword'] ?? ''));
+    $opt = [];
+    if ($deptId > 0) $opt['dept_ids'] = [$deptId];
+    if ($kw !== '') $opt['keyword'] = $kw;
+    $people = eg_people_list($db, $opt);
+    if ($people) {
+        $ids = array_map(fn($p) => (int)$p['id'], $people);
+        $stat = $db->query("SELECT a.user_id, COUNT(*) cnt, SUM(COALESCE(s.actual_hours, s.hours, 0)) hrs
+                            FROM training_attendee a JOIN training_session s ON s.session_id=a.session_id
+                            WHERE a.attended=1 AND a.user_id IN (" . implode(',', $ids) . ")
+                            GROUP BY a.user_id")->fetchAll(PDO::FETCH_ASSOC);
+        $statMap = [];
+        foreach ($stat as $s) $statMap[(int)$s['user_id']] = $s;
+        foreach ($people as &$p) {
+            $s = $statMap[(int)$p['id']] ?? null;
+            $p['training_count'] = $s ? (int)$s['cnt'] : 0;
+            $p['training_hours'] = $s ? (float)$s['hrs'] : 0;
+        }
+        unset($p);
+    }
+    jout(['people'=>$people]);
+}
+
+/* 員工教育訓練紀錄卡的 AS 文件編號綁定（限訓練管理員），一律走 asdoc_lib.php，禁止自刻/純下拉（ai-rules/16 第一之三節）。 */
+case 'card_asdoc_save': {
+    if (!$perms['canAdmin']) jerr('無管理權限（設定限訓練管理員）', 403);
+    $docId = (int)($_POST['doc_id'] ?? 0);
+    eg_asdoc_save($db, 'training_record_card', $docId, $uname);
+    jout(['card_asdoc'=>eg_asdoc_get($db, 'training_record_card')]);
 }
 
 /* 複製場次（內容複製、不帶參加名單；狀態回計畫中） */

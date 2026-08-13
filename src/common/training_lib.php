@@ -915,7 +915,7 @@ function training_target_stats(PDO $db, int $year): array {
 function training_user_history(PDO $db, int $userId, ?int $year = null): array {
     try {
         $sql = "SELECT s.session_id, s.year, s.plan_month, s.course_name, s.train_type, s.trainer, s.org_unit,
-                       s.status, s.done_date, s.actual_hours, s.hours, s.location, s.eval_method,
+                       s.status, s.done_date, s.actual_hours, s.hours, s.location, s.eval_method, s.outline,
                        a.attended, a.signed, a.eval_result, a.eval_score, a.eval_note
                 FROM training_attendee a
                 JOIN training_session s ON s.session_id = a.session_id

@@ -198,6 +198,13 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         .mon-tabs .mt.on { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .mon-tabs .mt.has { background:#F7E0BD; }
         .mon-tabs .mt.on.has { background:#F0A24B; }
+        /* 員工教育訓練紀錄卡：分頁列（右上，共X筆／每頁筆數/上下頁），比照 ai-rules/08 資料列表規則 */
+        .tr-pager { display:flex; align-items:center; justify-content:flex-end; gap:8px; font-size:12px; color:#8a6d45; flex-wrap:wrap; }
+        .tr-pager select { height:26px; font-size:12px; border:1px solid #D8BE93; border-radius:4px; }
+        .tr-pager button { height:26px; padding:0 10px; font-size:12px; border:1px solid #D8BE93; border-radius:4px;
+            background:#fff; color:#5b3a1e; cursor:pointer; }
+        .tr-pager button:disabled { opacity:.4; cursor:default; }
+        .tr-pager button:not(:disabled):hover { background:#F7E0BD; }
         /* 清單展開明細 */
         tr.det-row > td { background:#FFFBF3 !important; text-align:left; padding:10px 14px !important; }
         .det-box { font-size:12.5px; color:#5b3a1e; line-height:1.7; }
@@ -309,6 +316,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <span class="tab" data-tab="apply">教育訓練需求申請
                 <span id="reqTabBadge" style="display:none;background:#DD5138;color:#fff;border-radius:9px;
                     padding:1px 6px;font-size:11px;margin-left:4px;" title="已核准但尚未轉為計畫"></span></span>
+            <span class="tab" data-tab="card">員工教育訓練紀錄卡（2-MM-01-08）</span>
         </div>
 
 <div id="paneList">
@@ -366,6 +374,32 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <span class="st-pill st-done">已核准</span> <span class="st-pill st-cancelled">已駁回</span>
             <span class="st-pill" style="background:#F0A24B;color:#fff;">已轉計畫</span>。
             草稿僅本人可編輯；送出後由申請單位主管核准（可於模組設定切換免簽核）；訓練管理員將已核准的申請轉為訓練計畫。
+        </div>
+</div>
+
+<div id="paneCard" style="display:none;">
+        <div class="tr-toolbar">
+            <label>部門</label>
+            <select id="cardDeptSel"><option value="">全部</option></select>
+            <input type="text" id="cardKwSel" placeholder="搜尋姓名" style="width:130px;">
+            <button id="btnCardBatchPrint"><i class="fa fa-print"></i> 批次列印所選</button>
+            <span id="cardSelCount" style="font-size:12px;color:#8a6d45;"></span>
+            <span style="font-size:12px;color:#8a6d45;margin-left:auto;">2-MM-01-08 員工教育訓練紀錄卡：依「已實際到課」的紀錄即時彙整，不落地存快照，訓練資料異動立即反映。</span>
+        </div>
+        <div class="tr-table-wrap">
+            <table class="tr-table" id="cardTable">
+                <thead><tr>
+                    <th style="width:30px;"><input type="checkbox" id="cardSelAll" title="全選本頁"></th>
+                    <th>部門</th><th>職稱</th><th>姓名</th><th>到職日</th><th>訓練次數</th><th>累計時數</th><th>操作</th>
+                </tr></thead>
+                <tbody id="cardBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+            </table>
+        </div>
+        <div class="tr-pager" id="cardPager" style="margin-top:6px;"></div>
+        <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
+            每列「列印」＝單獨印出該員工的教育訓練紀錄卡（可能不只一頁，跨頁時課程資訊表頭會自動重複）；
+            勾選多人後按「批次列印所選」＝依序自動開啟每位員工各自的列印視窗（各自獨立計算頁碼，<b>不會把不同員工的頁次連在一起算</b>），
+            瀏覽器會依序彈出每位員工的列印視窗，請允許彈出視窗；上一位列印視窗關閉後才會自動開下一位。
         </div>
 </div>
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
@@ -726,6 +760,13 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <div class="tr-hint" style="margin-top:6px;">綁定的是 AS 文件<b>本身（存 id）</b>，列印時才解出編號印在<b>頁尾右下角</b>；
                 文件改編號不必回來改設定。未對應＝該表不印文件編號（見 <b>ai-rules/16 列印文件標準</b>）。</div>
 
+            <label>員工教育訓練紀錄卡（2-MM-01-08）— AS 文件編號</label>
+            <div style="display:flex;gap:6px;">
+                <input id="cardAsDocView" class="form-control" readonly disabled style="height:30px;background:#eee;color:#888;cursor:not-allowed;">
+                <button type="button" id="btnCardAsDocPick"><i class="fa fa-link"></i> 綁定…</button>
+            </div>
+            <div class="tr-hint" style="margin-top:6px;">選好即時生效（不必按下面「儲存」）。這份文件用共用選擇器直接打編號篩選（ai-rules/16 第一之三節），跟上面五個舊式下拉是不同做法。</div>
+
             <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
             <label>簽到表／訓練紀錄等「參加人員本人簽名」自動產生的圖章樣式</label>
             <select id="setStampTpl"><option value="0">（預設印章樣式）</option></select>
@@ -933,7 +974,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         <b>④送審計劃表</b>：工具列「送審計劃表」把年度計畫送審核→核准（是否需要送審在模組設定切換）。<br>
         <b>⑤教育訓練需求申請單</b>（2-MM-01-05）：「需求申請」分頁可新增申請單（草稿）、儲存並送出（申請單位主管核准，或模組設定免簽核自動核准），
         訓練管理員將已核准的申請按「轉為計畫」帶入①的新增計畫視窗確認後存檔即完成轉換。<br>
-        <b>⑥現場簽到</b>：場次為「已排定」時，清單上會出現「現場簽到」按鈕，開啟後不需要編輯權限，共用一台裝置給學員自己選姓名、輸入<b>本人密碼</b>按 Enter 完成電子簽到（密碼只驗證是不是本人，不是密碼反查身分）。「已完成」的場次不再開放簽到，需先在「實行資料」按「退回已排定」（操作確認密碼）才能重新開放。
+        <b>⑥現場簽到</b>：場次為「已排定」時，清單上會出現「現場簽到」按鈕，開啟後不需要編輯權限，共用一台裝置給學員自己選姓名、輸入<b>本人密碼</b>按 Enter 完成電子簽到（密碼只驗證是不是本人，不是密碼反查身分）。「已完成」的場次不再開放簽到，需先在「實行資料」按「退回已排定」（操作確認密碼）才能重新開放。<br>
+        <b>⑦員工教育訓練紀錄卡</b>（2-MM-01-08，「員工教育訓練紀錄卡」分頁）：每位在職員工一列，可依部門/姓名篩選、有分頁；「累計時數/次數」與卡片內容都是<b>即時彙整已到課(實到)的紀錄</b>，不是存檔快照，訓練資料一有異動（補登、修改評鑑結果等）卡片內容立刻跟著變。點列上「列印」單獨列印該員工的卡片（可能不只一頁，跨頁會自動重複表頭）；勾選多人後按「批次列印所選」，會依序自動彈出每位員工各自的列印視窗——<b>每位員工的頁碼各自從第 1 頁重新算，不會把不同員工的頁次算在一起</b>，上一位的列印視窗關閉後才會接著開下一位，請允許瀏覽器彈出視窗。
         <h4>重要行為</h4>
         ・<b>訓練需求申請人</b>是獨立角色（在使用者權限設定的「教育訓練管理」角色指派裡指派），只能新增/送出/檢視申請單，
         看得到訓練場次列表（唯讀）但**不能**修改計畫或任何設定，避免誤把整頁編輯權限一起給出去。<br>
@@ -946,7 +988,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         ・「檢視」內的「列印簽到表」「列印考核表」跟「實行資料」modal 裡的同名按鈕輸出完全相同（共用同一份版面），差別只在「檢視」是唯讀場次可隨時重印，不需要先開編輯畫面；外訓或免評鑑（宣導）課程不提供列印考核表。<br>
         ・考核表「總體評核結果」與分數，會自動印出上方「參加人員」名單已填的評鑑結果／分數；未填則留白供現場手寫。
         <h4>設定入口</h4>
-        工具列「模組設定」：班別／休息時段／行事曆類別／附件路徑（一般）、排除部門（達標統計）、AS 文件編號與是否送審（文件編號與送審）、<b>簽到表/訓練紀錄的簽名圖章樣式</b>（參加人員本人簽名用，套用「圖章管理→線上圖章設計」哪個模板；未設定＝預設印章樣式）、<b>核准/審核/人事/考官等核准類圖章樣式</b>（跟本人簽名分開設定；未設定＝標準圓形圖章）。<br>
+        工具列「模組設定」：班別／休息時段／行事曆類別／附件路徑（一般）、排除部門（達標統計）、AS 文件編號與是否送審（文件編號與送審，含<b>員工教育訓練紀錄卡</b>的 AS 文件編號綁定——用打編號篩選的共用選擇器，選好即時生效）、<b>簽到表/訓練紀錄的簽名圖章樣式</b>（參加人員本人簽名用，套用「圖章管理→線上圖章設計」哪個模板；未設定＝預設印章樣式）、<b>核准/審核/人事/考官等核准類圖章樣式</b>（跟本人簽名分開設定；未設定＝標準圓形圖章）。<br>
         簽章人員（人事／審核／核准）一律取自全站
         <a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>，本頁不另外設定。
         <h4>權限角色</h4>
@@ -983,6 +1025,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <!-- 西元年日期顯示格式（YYYY.MM.DD）：畫面/列印顯示用，不影響 <input type=date> 與送後端的查詢值，唯一實作見 ai-rules/20 -->
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<!-- AS 文件編號綁定選擇器（打編號即時篩選＋清單），全站唯一實作，禁止各頁自刻下拉：ai-rules/16 第一之三節 -->
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -1081,6 +1125,7 @@ function loadMeta(cb){
         ATT_DIRS = {nas:m.attach_nas_dir||'', root:m.attach_root||''};
         GROUPS = m.dept_groups || []; UNITS = m.units || [];
         AS_DOCS = m.as_docs || []; DOC_NO = m.doc_no || {}; DOC_NAME = m.doc_name || {}; COMPANY = m.company_name || '';
+        CARD_ASDOC = m.card_asdoc || null;
         SETTINGS.stamp_template = m.stamp_template || null;
         SETTINGS.approval_stamp_template = m.approval_stamp_template || null;
         TR_FEATURES = m.features || [];
@@ -1863,6 +1908,7 @@ function attDel(i){ ATT.splice(i,1); renderAtt(); if($('#attDept').val()) $('#at
 
 /* ================= 年度訓練計劃表：送審與簽章（見 ai-rules/17） ================= */
 var AS_DOCS = [], DOC_NO = {}, DOC_NAME = {}, COMPANY = '', SIGNERS = {}, PLAN_APPR = {status:'none'}, PLAN_LASTMOD = '';
+var CARD_ASDOC = null;   // 員工教育訓練紀錄卡綁定的 AS 文件（asdoc_lib.php 標準做法，{id,doc_no,doc_name,current_version,doc_level} 或 null）
 var APPR_LABEL = {none:'尚未送審', review_pending:'審核中', reviewed:'審核通過，待核准',
                   approve_pending:'待核准', approved:'已核准', rejected:'已退回'};
 function loadPlanStatus(){
@@ -1923,10 +1969,11 @@ $('#mainTabs .tab').on('click', function(){
     var t = $(this).data('tab');
     $('#mainTabs .tab').removeClass('on'); $(this).addClass('on');
     $('#paneList').toggle(t==='list'); $('#paneTarget').toggle(t==='target'); $('#paneApply').toggle(t==='apply');
-    // 列印鈕依目前分頁切換，一次只出現一顆（需求申請單改列印個別單據，見清單操作欄）
+    $('#paneCard').toggle(t==='card');
+    // 列印鈕依目前分頁切換，一次只出現一顆（需求申請單改列印個別單據、紀錄卡改逐列/批次列印，見清單操作欄）
     $('#btnPrintPlan').toggle(t==='list');
     $('#btnPrintResult').toggle(t==='target');
-    loadList(); loadTargetStats(); loadRequests();
+    loadList(); loadTargetStats(); loadRequests(); loadCardList();
 });
 function loadTargetStats(){
     NProgress.start();
@@ -2568,6 +2615,7 @@ function openSetting(){
     $('#setDocTarget').html(dh).val(SETTINGS.training_as_doc_target||'');
     $('#setDocRequest').html(dh).val(SETTINGS.training_as_doc_request||'');
     $('#setDocSignsheet').html(dh).val(SETTINGS.training_as_doc_signsheet||'');
+    $('#cardAsDocView').val(CARD_ASDOC ? EGAsDoc.label(CARD_ASDOC) : '尚未綁定');
     loadStampTplOptions();
     var sbr = String(SETTINGS.training_signsheet_blank_rows||'0');
     if (sbr==='fill16'){ $('#setSignBlankMode').val('fill16'); $('#setSignBlankN').val(''); }
@@ -2881,6 +2929,7 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount){
         + bodyHtml + (!pageCount && asHtml ? '<div class="pt-foot">'+asHtml+'</div>' : '')
         + '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
     w.document.close();
+    return w;   // 批次列印（員工教育訓練紀錄卡）要靠這個判斷視窗何時關閉才能接著開下一份，其餘既有呼叫端沿用舊行為(忽略回傳值)不受影響
 }
 /* 簽章區：核准（最高核准人員）／審核（人事表單審核者）／人事（人事簽章人員）
    免送審＝三欄一起顯示、日期同送審日；需送審＝依實際簽核結果顯示 */
@@ -3032,6 +3081,173 @@ function printResultTable(){
 }
 $('#btnPrintPlan').on('click', printPlanTable);
 $('#btnPrintResult').on('click', printResultTable);
+
+/* ================= 員工教育訓練紀錄卡（2-MM-01-08） ================= */
+/* 清單一次撈全部（人數規模跟員工總數同級，非千筆等級清單），分頁只是前端切片渲染，
+   比照 employee_management.php 既有分頁模式；篩選（部門/關鍵字）交後端 card_people 做，換條件才重新整理清單。 */
+var CARD_ROWS = [], CARD_SEL = {};   // CARD_SEL: {user_id: true}，跨分頁/跨篩選持續保留已勾選的人
+var cardPg = {page:1, per:20};
+
+function loadCardList(){
+    if (!$('#paneCard').is(':visible')) return;
+    NProgress.start();
+    $.getJSON(API, {action:'card_people', dept_id:$('#cardDeptSel').val(), keyword:$('#cardKwSel').val()}, function(res){
+        NProgress.done();
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        CARD_ROWS = res.people||[];
+        cardPg.page = 1;
+        renderCardTable();
+    });
+}
+function crdPageSlice(arr, pg){
+    var total = arr.length, pages = Math.max(1, Math.ceil(total/pg.per));
+    if (pg.page>pages) pg.page = pages;
+    if (pg.page<1) pg.page = 1;
+    return {rows: arr.slice((pg.page-1)*pg.per, pg.page*pg.per), pages:pages, total:total};
+}
+function crdPagerHtml(pg, s){
+    var h = '共 '+s.total+' 筆　每頁 <select id="cardPer">';
+    [5,10,20,50].forEach(function(n){ h += '<option value="'+n+'"'+(pg.per===n?' selected':'')+'>'+n+'</option>'; });
+    h += '</select>';
+    if (s.pages>1){
+        h += ' <button type="button" id="cardPgPrev"'+(pg.page<=1?' disabled':'')+'>‹ 上一頁</button>'
+           + ' 第 '+pg.page+' / '+s.pages+' 頁 '
+           + '<button type="button" id="cardPgNext"'+(pg.page>=s.pages?' disabled':'')+'>下一頁 ›</button>';
+    }
+    return h;
+}
+function renderCardTable(){
+    var s = crdPageSlice(CARD_ROWS, cardPg);
+    var html = '';
+    if (!s.rows.length) html = '<tr><td colspan="8" style="padding:20px;color:#8a6d45;">（沒有符合的員工）</td></tr>';
+    s.rows.forEach(function(p){
+        var leave = p.on_leave ? '　<span style="color:#DD5138;font-size:11px;">('+esc(p.leave_label||'請假中')+')</span>' : '';
+        html += '<tr>'
+            + '<td style="text-align:center;"><input type="checkbox" class="card-sel" value="'+p.id+'"'+(CARD_SEL[p.id]?' checked':'')+'></td>'
+            + '<td>'+esc(p.dept_name||'')+'</td><td>'+esc(p.position_name||'')+'</td>'
+            + '<td>'+esc(p.user_cname)+leave+'</td>'
+            + '<td>'+dispDate(p.hire_date)+'</td>'
+            + '<td>'+(p.training_count||0)+'</td>'
+            + '<td>'+(p.training_hours?numTrim(p.training_hours):0)+'</td>'
+            + '<td><button type="button" class="btn-warm card-print-one" data-id="'+p.id+'"><i class="fa fa-print"></i> 列印</button></td>'
+            + '</tr>';
+    });
+    $('#cardBody').html(html);
+    $('#cardPager').html(crdPagerHtml(cardPg, s));
+    $('#cardSelAll').prop('checked', s.rows.length>0 && s.rows.every(function(p){ return CARD_SEL[p.id]; }));
+    renderCardSelCount();
+}
+function renderCardSelCount(){
+    var n = Object.keys(CARD_SEL).filter(function(k){ return CARD_SEL[k]; }).length;
+    $('#cardSelCount').text(n ? '已勾選 '+n+' 人' : '');
+}
+$('#cardDeptSel').on('change', function(){ loadCardList(); });
+var cardKwTimer = null;
+$('#cardKwSel').on('input', function(){   // 打字防抖，避免每敲一鍵就打一次 API、回應還可能不按順序回來蓋掉較新的篩選結果
+    clearTimeout(cardKwTimer);
+    cardKwTimer = setTimeout(loadCardList, 300);
+});
+$(document).on('change', '#cardPer', function(){ cardPg.per = parseInt(this.value,10)||20; cardPg.page = 1; renderCardTable(); });
+$(document).on('click', '#cardPgPrev', function(){ cardPg.page--; renderCardTable(); });
+$(document).on('click', '#cardPgNext', function(){ cardPg.page++; renderCardTable(); });
+$(document).on('change', '.card-sel', function(){ CARD_SEL[this.value] = this.checked; renderCardSelCount(); });
+$('#cardSelAll').on('change', function(){
+    var on = this.checked;
+    crdPageSlice(CARD_ROWS, cardPg).rows.forEach(function(p){ CARD_SEL[p.id] = on; });
+    renderCardTable();
+});
+
+/* 備考欄：合格/不合格/免評/未評；免評鑑課程一律顯示「免評鑑」 */
+function cardEvalText(r){
+    if (r.eval_method==='notice') return '免評鑑';
+    if (r.eval_result==='pass') return '合格'+(r.eval_score!=null && r.eval_score!=='' ? '（'+r.eval_score+'）' : '');
+    if (r.eval_result==='fail') return '不合格'+(r.eval_score!=null && r.eval_score!=='' ? '（'+r.eval_score+'）' : '');
+    if (r.eval_result==='exempt') return '免評';
+    return r.eval_method ? '未評' : '';
+}
+/* 卡片內容 HTML（表頭固定資訊放進 <thead>，人多頁多時瀏覽器分頁引擎會自動每頁重印表頭，不必自己判斷分頁） */
+function buildCardBody(emp, records){
+    var docTitle = (CARD_ASDOC && CARD_ASDOC.doc_name) || '員工教育訓練紀錄卡';
+    var rows = '';
+    if (!records.length) rows = '<tr><td colspan="7" style="height:24px;">（尚無訓練紀錄）</td></tr>';
+    records.slice().reverse().forEach(function(r){   // training_user_history 回傳新到舊，卡片比照紙本習慣改成舊到新
+        rows += '<tr><td>'+dispDate(r.done_date)+'</td><td class="l">'+esc(r.course_name||'')+'</td>'
+            + '<td class="l">'+esc(r.location||'')+'</td>'
+            + '<td>'+(r.actual_hours!=null?numTrim(r.actual_hours):(r.hours!=null?numTrim(r.hours):''))+'</td>'
+            + '<td class="l" style="font-size:11px;">'+esc(r.outline||'')+'</td>'
+            + '<td class="l">'+esc((r.train_type==='external'?r.org_unit:r.trainer)||'')+'</td>'
+            + '<td style="font-size:11px;">'+esc(cardEvalText(r))+'</td></tr>';
+    });
+    return '<table class="pt"><thead>'
+        + '<tr><th colspan="7" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
+        + '<div class="tt">'+esc(docTitle)+'</div></div></th></tr>'
+        + '<tr><td colspan="7" class="sf-i">部門：'+esc(emp.dept_name||'')+'　職稱：'+esc(emp.position_name||'')
+        + '　姓名：'+esc(emp.user_cname||'')+'　到職日：'+(dispDate(emp.hire_date)||'')+'</td></tr>'
+        + '<tr><th style="width:9%;">日期</th><th>課程名稱</th><th style="width:12%;">受訓地點</th>'
+        + '<th style="width:6%;">時數</th><th style="width:24%;">課程內容概要</th><th style="width:12%;">講師/單位</th><th style="width:9%;">備考</th></tr>'
+        + '</thead><tbody>'+rows+'</tbody></table>';
+}
+var CARD_PRINT_CSS = 'table.pt td.sf-i{border:1px solid #999;padding:5px 8px;text-align:left;font-size:12px;background:#fff;}';
+/* 單一員工列印：直接抓最新資料現印（符合「訓練紀錄異動要自動反映到紀錄卡」的要求，不是印一份舊快照） */
+function printOneCard(uid){
+    var emp = CARD_ROWS.find(function(x){ return String(x.id)===String(uid); }) || {};
+    NProgress.start();
+    $.getJSON(API, {action:'user_history', user_id:uid}, function(res){
+        NProgress.done();
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        var body = buildCardBody(emp, res.records||[]);
+        egPrintWindow((emp.user_cname||'')+' 員工教育訓練紀錄卡', body, CARD_PRINT_CSS,
+            CARD_ASDOC ? eg_asdoc_no_client(CARD_ASDOC) : '', false, true);
+    });
+}
+/* AS 文件編號組字串（僅四階附加版次），前端沒有 asdoc_lib.php 可用，比照其規則(eg_asdoc_no())自己組一次，邏輯需與後端一致 */
+function eg_asdoc_no_client(doc){
+    if (!doc || !doc.doc_no) return '';
+    var no = doc.doc_no;
+    if (doc.doc_level==='四階') no += (doc.current_version||'');
+    return no;
+}
+$(document).on('click', '.card-print-one', function(){ printOneCard($(this).data('id')); });
+
+/* 批次列印：先一次把所有勾選人員的紀錄撈回（少一次一次來回），
+   再依序開視窗列印——每人各自獨立一個列印視窗/工作，頁碼各自從第1頁算，不會跟別人的頁次連在一起；
+   上一位的列印視窗關閉後才自動開下一位，避免多個列印視窗/列印對話框同時彈出造成混亂。 */
+function batchPrintCards(ids){
+    NProgress.start();
+    $.getJSON(API, {action:'user_history_batch', user_ids:ids.join(',')}, function(res){
+        NProgress.done();
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        var dataMap = res.records_by_user||{};
+        var i = 0;
+        function next(){
+            if (i>=ids.length) return;
+            var uid = ids[i++];
+            var emp = CARD_ROWS.find(function(x){ return String(x.id)===String(uid); }) || {};
+            var body = buildCardBody(emp, dataMap[uid]||dataMap[String(uid)]||[]);
+            var w = egPrintWindow((emp.user_cname||'')+' 員工教育訓練紀錄卡', body, CARD_PRINT_CSS,
+                CARD_ASDOC ? eg_asdoc_no_client(CARD_ASDOC) : '', false, true);
+            if (!w){ alert('瀏覽器封鎖了列印視窗，請允許彈出視窗後重新按一次「批次列印所選」。'); return; }
+            var timer = setInterval(function(){ if (w.closed){ clearInterval(timer); next(); } }, 400);
+        }
+        next();
+    });
+}
+$('#btnCardBatchPrint').on('click', function(){
+    var ids = Object.keys(CARD_SEL).filter(function(k){ return CARD_SEL[k]; });
+    if (!ids.length){ alert('請先在清單勾選要列印的員工。'); return; }
+    batchPrintCards(ids);
+});
+/* AS 文件編號綁定（限訓練管理員，見模組設定）：一律用共用選擇器，選好即存檔即時生效 */
+$('#btnCardAsDocPick').on('click', function(){
+    EGAsDoc.open({docs:AS_DOCS, current:CARD_ASDOC?CARD_ASDOC.id:0, title:'員工教育訓練紀錄卡 — AS 文件編號綁定',
+        onSave:function(id, doc){
+            $.post(API, {action:'card_asdoc_save', doc_id:id}, function(res){
+                if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+                CARD_ASDOC = res.card_asdoc||null;
+                $('#cardAsDocView').val(CARD_ASDOC ? EGAsDoc.label(CARD_ASDOC) : '尚未綁定');
+            });
+        }});
+});
 
 function delSession(sid){
     var r = ROWS.find(function(x){ return String(x.session_id)===String(sid); }) || {};
