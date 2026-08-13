@@ -85,7 +85,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .pf-modal .m-foot button { height:30px; padding:0 16px; border-radius:4px; font-size:13px; border:1px solid #d98a33; cursor:pointer; }
         .pf-modal .m-foot .b-ok { background:#F0A24B; color:#fff; }
         .pf-modal .m-foot .b-cancel { background:#fff; color:#5b3a1e; border-color:#D8BE93; margin-right:6px; }
-        .pf-head-grid { display:grid; grid-template-columns:1fr 2fr; gap:0 14px; }
+        .pf-head-grid { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+        .pf-chk-row { display:flex; flex-wrap:wrap; gap:4px 16px; margin-top:4px; }
+        .pf-chk { display:flex; align-items:center; gap:4px; font-size:12px; color:#5b3a1e; margin:0; cursor:pointer; white-space:nowrap; }
+        .pf-suggest-table { width:100%; border-collapse:collapse; font-size:12px; }
+        .pf-suggest-table th, .pf-suggest-table td { border:1px solid #EADFC8; padding:5px 8px; text-align:left; }
+        .pf-suggest-table thead th { background:#F7E0BD; color:#5b3a1e; }
         .pf-row-btn { border:1px solid #D8BE93; background:#fff; color:#5b3a1e; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; }
         .pf-row-btn:hover { background:#F7E0BD; }
         .pf-row-btn.del { color:#DD5138; border-color:#f0c4bd; }
@@ -148,6 +153,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
             <label>搜尋</label>
             <input type="text" id="kwInput" placeholder="表單編號／料號" style="width:200px;">
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
+            <button id="btnSuggest" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="從已建立產品開發評估表(2-TD-02-01)、但還沒建立PFMEA的料號自動列出建議清單"><i class="fa fa-magic"></i> 建議建立清單</button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <span class="pf-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -157,7 +163,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <div class="pf-table-wrap">
             <table class="pf-table" id="pfTable">
                 <thead><tr>
-                    <th>表單編號</th><th>產品件號</th><th>工作團隊</th><th>項目數</th><th>最高RPN</th>
+                    <th>表單編號</th><th>料號</th><th>客戶</th><th>項目數</th><th>最高RPN</th>
                     <th>建立人</th><th>建立時間</th><th>操作</th>
                 </tr></thead>
                 <tbody id="pfBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
@@ -174,15 +180,33 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
     <div class="m-body">
         <div class="pf-head-grid">
             <div>
-                <label>產品件號(料號)</label>
+                <label>料號</label>
                 <input type="text" id="fPartNo" placeholder="輸入部分料號或圖號搜尋；查無時可直接手動輸入" autocomplete="off">
                 <input type="hidden" id="fPartDId" value="0">
             </div>
             <div>
-                <label>工作團隊 Team of Work</label>
-                <input type="text" id="fTeam" placeholder="參與分析的人員/單位，以頓號分隔">
+                <label>客戶名稱</label>
+                <input type="text" id="fCustomerName" readonly data-eg-skip="1">
             </div>
         </div>
+        <div class="pf-head-grid" style="margin-top:8px;">
+            <div>
+                <label>產品名稱</label>
+                <input type="text" id="fProductName" placeholder="產品名稱">
+            </div>
+            <div>
+                <label>規格描述</label>
+                <input type="text" id="fSpecDesc" placeholder="規格描述">
+            </div>
+        </div>
+        <label style="margin-top:8px;">分類</label>
+        <div class="pf-chk-row">
+            <label class="pf-chk"><input type="radio" name="fItemType" value="part" checked> 零件</label>
+            <label class="pf-chk"><input type="radio" name="fItemType" value="assembly"> 組合件</label>
+        </div>
+        <label style="margin-top:8px;">相關部門</label>
+        <div class="pf-chk-row" id="fDeptChecks"></div>
+
         <div style="margin-top:6px;font-size:12px;color:#8a6d45;">表單編號：<b id="fDocNo">存檔後自動產生</b>
             ｜ 建立：<span id="fCreatedInfo">—</span></div>
 
@@ -193,28 +217,33 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <div class="pf-rating-wrap">
             <table class="pf-rating"><thead><tr><th colspan="2">嚴重度 Severity (S)</th></tr></thead><tbody>
                 <tr><td class="lv">1</td><td>無影響</td></tr>
-                <tr><td class="lv">2-3</td><td>輕微影響，客戶幾乎不會注意到</td></tr>
-                <tr><td class="lv">4-6</td><td>中等影響，客戶會感到不滿意</td></tr>
-                <tr><td class="lv">7-8</td><td>嚴重影響，主要功能喪失但不涉及安全</td></tr>
-                <tr><td class="lv">9-10</td><td>非常嚴重，涉及安全或不符合法規</td></tr>
+                <tr><td class="lv">2</td><td>次要阻礙</td></tr>
+                <tr><td class="lv">3~6</td><td>中等阻礙</td></tr>
+                <tr><td class="lv">7</td><td>顯著阻礙</td></tr>
+                <tr><td class="lv">8</td><td>嚴重阻礙</td></tr>
+                <tr><td class="lv">9~10</td><td>符合安全和/或法規要求之失效</td></tr>
             </tbody></table>
-            <table class="pf-rating"><thead><tr><th colspan="2">發生度 Occurrence (O)</th></tr></thead><tbody>
-                <tr><td class="lv">1</td><td>極少發生</td></tr>
-                <tr><td class="lv">2-3</td><td>少發生</td></tr>
-                <tr><td class="lv">4-6</td><td>偶爾發生</td></tr>
-                <tr><td class="lv">7-8</td><td>經常發生</td></tr>
-                <tr><td class="lv">9-10</td><td>幾乎必然發生</td></tr>
+            <table class="pf-rating"><thead><tr><th colspan="2">發生率 Occurrence (O)</th></tr></thead><tbody>
+                <tr><td class="lv">1</td><td>很低</td></tr>
+                <tr><td class="lv">2~3</td><td>低</td></tr>
+                <tr><td class="lv">4~6</td><td>中等</td></tr>
+                <tr><td class="lv">7~9</td><td>高</td></tr>
+                <tr><td class="lv">10</td><td>很高</td></tr>
             </tbody></table>
             <table class="pf-rating"><thead><tr><th colspan="2">偵測度 Detection (D)</th></tr></thead><tbody>
-                <tr><td class="lv">1</td><td>幾乎確定可偵測</td></tr>
-                <tr><td class="lv">2-3</td><td>高度可能偵測</td></tr>
-                <tr><td class="lv">4-6</td><td>中度可能偵測</td></tr>
-                <tr><td class="lv">7-8</td><td>低度可能偵測</td></tr>
-                <tr><td class="lv">9-10</td><td>幾乎不可能偵測</td></tr>
+                <tr><td class="lv">1</td><td>幾乎確定</td></tr>
+                <tr><td class="lv">2</td><td>極高</td></tr>
+                <tr><td class="lv">3</td><td>高</td></tr>
+                <tr><td class="lv">4</td><td>高中等</td></tr>
+                <tr><td class="lv">5</td><td>中等</td></tr>
+                <tr><td class="lv">6</td><td>低</td></tr>
+                <tr><td class="lv">7</td><td>非常低</td></tr>
+                <tr><td class="lv">8~9</td><td>可能性極小</td></tr>
+                <tr><td class="lv">10</td><td>幾乎不可能</td></tr>
             </tbody></table>
         </div>
         </div>
-        <div class="pf-rpn-note">風險優先指數 RPN = S × O × D（系統自動計算，不可手填）：<b>&lt;50</b> 低風險｜<b>50-100</b> 中風險｜<b>101-200</b> 高風險｜<b>&gt;200</b> 極高風險，需優先改善。</div>
+        <div class="pf-rpn-note">風險優先指數 RPN = S × O × D（系統自動計算，不可手填）：<b>1~50</b> 低｜<b>51~100</b> 普通｜<b>101~200</b> 高｜<b>201~1000</b> 非常高，需優先改善。</div>
 
         <div class="pf-sec-title">失效模式分析（逐項卡片，預設收合成一行；<b>點擊卡片標題展開才會顯示完整輸入欄位</b>，列印仍是您提供的橫式表格格式）</div>
         <div id="itemBody"></div>
@@ -225,6 +254,25 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('editMask')">取消</button>
         <button class="b-ok" id="btnSave" onclick="saveHeader()">儲存</button>
+    </div>
+</div></div>
+
+<!-- 建議建立清單 -->
+<div class="pf-mask" id="suggestMask"><div class="pf-modal">
+    <div class="m-head"><span>建議建立清單</span><span class="m-close" onclick="closeMask('suggestMask')">✕</span></div>
+    <div class="m-body">
+        <div class="tip" style="background:#FFF7E8;border:1px dashed #F0A24B;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:12px;color:#5b3a1e;">
+            下方列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 分析表的料號。勾選要建立的項目（表頭全選框可一次勾全部），按「建立勾選項目」即批次建立表頭殼（料號／客戶／產品名稱／分類自動帶入，分析項目仍需逐份手動填寫）。
+        </div>
+        <div id="suggestEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
+        <table class="pf-suggest-table" id="suggestTable" style="display:none;">
+            <thead><tr><th style="width:26px;"><input type="checkbox" id="suggestCkAll" data-eg-skip="1"></th><th>客戶</th><th>料號</th><th>產品名稱</th></tr></thead>
+            <tbody id="suggestBody"></tbody>
+        </table>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('suggestMask')">取消</button>
+        <button class="b-ok" id="btnSuggestCreate" onclick="createSuggested()">建立勾選項目</button>
     </div>
 </div></div>
 
@@ -255,17 +303,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
     <div class="m-head"><span><i class="fa fa-question-circle"></i> PFMEA潛在失效模式及效應分析 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc">
         <h4>功能說明</h4>
-        <p>製程潛在失效模式及效應分析（PFMEA，AS 3-TD-01-02），每個料號一份分析表，逐列記錄一個潛在失效模式：從製程說明、功能、失效模式、失效效應、原因、現行管制，評出嚴重度(S)/發生度(O)/偵測度(D)，系統自動算出風險優先指數 RPN=S×O×D；針對高 RPN 項目填建議改善措施，改善後再評一次新的 S/O/D/RPN。</p>
+        <p>製程潛在失效模式及效應分析（PFMEA，AS 3-TD-01-02），每個料號一份分析表。表頭欄位（料號／客戶名稱／產品名稱／規格描述／分類／相關部門）與分析表格欄位皆比照官方紙本表單(F-11210-UE2-0001)。逐列記錄一個潛在失效模式：從項目、功能、要求、潛在失效模式、失效模式潛在後果、分類、失效潛在原因，評出嚴重度(S)/發生率(O)，填現行設計管制（控制預防／控制偵測）、評出偵測度(D)，系統自動算出風險優先指數 RPN=S×O×D；針對高 RPN 項目填建議措施、責任者、目標完成日，改善後填採行措施、生效日期，再評一次新的 S/O/D/RPN。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>按「新增」→ 選擇「產品件號(料號)」（打部分字元搜尋，查無此料號時可直接手動輸入）、填「工作團隊」。</li>
-            <li>每個潛在失效模式是一張卡片，欄位由上到下分「初步分析／評級／改善措施／改善後結果」四區，不需要橫向捲動；S/O/D 每格填 1-10，<b>RPN 由系統自動計算，不可手動輸入</b>。按「新增一項失效模式分析」可再加一張卡片。</li>
+            <li>按「新增」→ 選擇「料號」（打部分字元搜尋，查無此料號時可直接手動輸入；選定後客戶名稱與「分類」零件/組合件自動帶入，可手動修改）、填「產品名稱」「規格描述」、勾選「相關部門」。</li>
+            <li>每個潛在失效模式是一張卡片，欄位由上到下分「基本資料／風險評估與現行設計管制／建議措施／措施結果」四區，不需要橫向捲動；S/O/D 每格填 1-10，<b>RPN 由系統自動計算，不可手動輸入</b>。按「新增一項失效模式分析」可再加一張卡片。</li>
+            <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類自動帶入），分析項目仍需逐份手動填寫。</li>
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
-            <li>「評級對照表」為固定的評分基準參考，不隨每份分析表個別修改；預設收合以節省畫面空間，點擊標題列可展開/收合；若需要調整用詞請直接告知管理員修改頁面內容。</li>
-            <li>產品件號可點擊開啟圖面查閱（比照報價單頁做法）。</li>
-            <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
+            <li>「評級對照表」為固定的評分基準參考（比照官方表單），不隨每份分析表個別修改；預設收合以節省畫面空間，點擊標題列可展開/收合。</li>
+            <li>料號可點擊開啟圖面查閱（比照報價單頁做法）。</li>
+            <li>列印比照官方紙本表單版面（表頭資訊＋評級對照表＋相關部門置於上方，分析表格逐列對齊官方欄位順序與分組），同時比照全站列印標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
             <li>本表單自身的修訂履歷（版次、修訂內容、核准/查證/制定）由 AS 文件管理維護，不在本頁另外記錄。</li>
         </ul>
         <h4>設定入口</h4>
@@ -292,11 +341,13 @@ var PART_API = '../../src/store/PartPicker_API.php';
 var VIEWER_URL = '../pm/bom_viewer.php';
 var CAN_EDIT = <?= $perms['canEdit'] ? 'true' : 'false' ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
-var CUR_ID = 0, AS_DOCS = [], AS_DOC = null;
-var FIELDS = ['process_desc','function_desc','requirement','failure_mode','failure_effect','classification',
-    'severity','failure_cause','occurrence','current_controls','detection',
+var CUR_ID = 0, AS_DOCS = [], AS_DOC = null, SUGGEST_ROWS = [];
+/* 官方紙本表單(F-11210-UE2-0001)固定的相關部門勾選清單，跟Pfmea_API.php的PFMEA_DEPT_LIST同一份 */
+var DEPT_LIST = ['管理課','技術課','業務組','品保組','倉管組','採購組','生管組','生產課'];
+var FIELDS = ['process_desc','function_desc','requirement','failure_mode','failure_effect',
+    'severity','classification','failure_cause','occurrence','prevention_controls','detection_controls','detection',
     'recommended_actions','responsibility','target_date','action_taken','action_date',
-    'new_severity','new_occurrence','new_detection','prevention_controls','detection_controls'];
+    'new_severity','new_occurrence','new_detection'];
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function closeMask(id){ document.getElementById(id).style.display='none'; }
@@ -314,7 +365,7 @@ function loadList(){
             html += '<tr>'
                 + '<td>'+esc(r.doc_no)+'</td>'
                 + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):'')+'</td>'
-                + '<td class="t-left">'+esc(r.team_of_work||'')+'</td>'
+                + '<td class="t-left">'+esc(r.customer_name||'')+'</td>'
                 + '<td>'+esc(r.item_count)+'</td>'
                 + '<td'+rpnCls+'>'+(r.max_rpn!=null?r.max_rpn:'—')+'</td>'
                 + '<td>'+esc(r.created_by_name||'')+'</td>'
@@ -333,9 +384,9 @@ $('#kwInput').on('input', function(){ clearTimeout(kwT); kwT=setTimeout(loadList
 $('#btnCsv').on('click', function(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
         if (!res.success) return;
-        var lines = ['表單編號,產品件號,工作團隊,項目數,最高RPN,建立人,建立時間'];
+        var lines = ['表單編號,料號,客戶,項目數,最高RPN,建立人,建立時間'];
         res.rows.forEach(function(r){
-            lines.push([r.doc_no, r.part_no||'', r.team_of_work||'', r.item_count, r.max_rpn!=null?r.max_rpn:'', r.created_by_name||'', (r.created_at||'').substring(0,10)]
+            lines.push([r.doc_no, r.part_no||'', r.customer_name||'', r.item_count, r.max_rpn!=null?r.max_rpn:'', r.created_by_name||'', (r.created_at||'').substring(0,10)]
                 .map(function(v){ return '"'+String(v).replace(/"/g,'""')+'"'; }).join(','));
         });
         var blob = new Blob(["\uFEFF"+lines.join("\n")], {type:'text/csv;charset=utf-8;'});
@@ -379,32 +430,29 @@ function itemCardHtml(it, idx, expanded){
         + '<button type="button" class="pf-row-btn del" onclick="event.stopPropagation();removeCard(this)"><i class="fa fa-trash"></i> 刪除此項</button>'
         + '</div>'
         + '<div class="pf-card-body">'
-        + '<div class="pf-card-grp-title">初步分析</div>'
+        + '<div class="pf-card-grp-title">基本資料</div>'
         + '<div class="pf-card-grid">'
-        + fld('process_desc','製程說明') + fld('function_desc','功能') + fld('requirement','要求')
-        + fld('failure_mode','潛在失效模式') + fld('failure_effect','潛在失效效應') + fld('classification','分類')
+        + fld('process_desc','項目') + fld('function_desc','功能') + fld('requirement','要求')
+        + fld('failure_mode','潛在失效模式') + fld('failure_effect','失效模式潛在後果') + fld('classification','分類')
         + '</div>'
-        + '<div class="pf-card-grp-title">評級（RPN 系統自動計算）</div>'
+        + '<div class="pf-card-grp-title">風險評估與現行設計管制（RPN 系統自動計算）</div>'
         + '<div class="pf-rating-quad">'
-        + fld('severity','嚴重度 S','rating') + fld('failure_cause','潛在失效原因')
-        + fld('occurrence','發生度 O','rating') + fld('current_controls','現行製程管制')
-        + fld('detection','偵測度 D','rating')
+        + fld('severity','嚴重度 S','rating') + fld('failure_cause','失效潛在原因')
+        + fld('occurrence','發生率 O','rating') + fld('prevention_controls','控制預防')
+        + fld('detection_controls','控制偵測') + fld('detection','偵測度 D','rating')
         + '<div><label>RPN</label><input type="text" class="rpn-out'+rpnCls+'" data-rpn value="'+rpn+'" readonly></div>'
         + '</div>'
-        + '<div class="pf-card-grp-title">改善措施</div>'
+        + '<div class="pf-card-grp-title">建議措施</div>'
         + '<div class="pf-card-grid">'
-        + fld('recommended_actions','建議改善措施') + fld('responsibility','責任者') + fld('target_date','目標完成日','date')
+        + fld('recommended_actions','建議措施') + fld('responsibility','責任者') + fld('target_date','目標完成日','date')
         + '</div>'
-        + '<div class="pf-card-grp-title">改善後結果</div>'
+        + '<div class="pf-card-grp-title">措施結果</div>'
         + '<div class="pf-card-grid">'
-        + fld('action_taken','已採取措施') + fld('action_date','生效日','date')
+        + fld('action_taken','採行措施') + fld('action_date','生效日期','date')
         + '</div>'
         + '<div class="pf-rating-quad">'
-        + fld('new_severity','改善後S','rating') + fld('new_occurrence','改善後O','rating') + fld('new_detection','改善後D','rating')
+        + fld('new_severity','評價 S','rating') + fld('new_occurrence','評價 O','rating') + fld('new_detection','評價 D','rating')
         + '<div><label>改善後RPN</label><input type="text" class="rpn-out'+newRpnCls+'" data-new-rpn value="'+newRpn+'" readonly></div>'
-        + '</div>'
-        + '<div class="pf-card-grid">'
-        + fld('prevention_controls','預防管制') + fld('detection_controls','偵測管制')
         + '</div>'
         + '</div>'
         + '</div>';
@@ -479,9 +527,18 @@ function collectItems(){
     return out;
 }
 
+function deptChecksHtml(checked){
+    checked = checked || [];
+    return DEPT_LIST.map(function(d){
+        return '<label class="pf-chk"><input type="checkbox" class="dept-ck" value="'+esc(d)+'"'+(checked.indexOf(d)>=0?' checked':'')+'> '+esc(d)+'</label>';
+    }).join('');
+}
 function resetEditForm(){
     CUR_ID = 0;
-    $('#fPartNo').val(''); $('#fPartDId').val('0'); $('#fTeam').val('');
+    $('#fPartNo').val(''); $('#fPartDId').val('0'); $('#fCustomerName').val('');
+    $('#fProductName').val(''); $('#fSpecDesc').val('');
+    $('input[name=fItemType][value=part]').prop('checked', true);
+    $('#fDeptChecks').html(deptChecksHtml());
     $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
     renderItems([]);
 }
@@ -493,7 +550,10 @@ function openEdit(id){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
         CUR_ID = id;
         $('#fPartNo').val(res.doc.part_no||''); $('#fPartDId').val(res.doc.part_d_id||0);
-        $('#fTeam').val(res.doc.team_of_work||'');
+        $('#fCustomerName').val(res.doc.customer_name||'');
+        $('#fProductName').val(res.doc.product_name||''); $('#fSpecDesc').val(res.doc.spec_desc||'');
+        $('input[name=fItemType][value='+(res.doc.item_type==='assembly'?'assembly':'part')+']').prop('checked', true);
+        $('#fDeptChecks').html(deptChecksHtml((res.doc.related_depts||'').split(',').filter(Boolean)));
         $('#fDocNo').text(res.doc.doc_no);
         $('#fCreatedInfo').text((res.doc.created_by_name||'')+' '+fmtDate((res.doc.created_at||'').substring(0,10)));
         renderItems(res.items || []);
@@ -504,16 +564,23 @@ $('#btnAdd').on('click', function(){ openEdit(0); });
 
 EGPartPicker.attach(document.getElementById('fPartNo'), {
     apiUrl: PART_API,
-    onSelect: function(row){ $('#fPartDId').val(row.d_id); }
+    onSelect: function(row){
+        $('#fPartDId').val(row.d_id);
+        $('#fCustomerName').val(row.customer_name||'');
+        $('input[name=fItemType][value='+((row.is_assembly=='1'||row.is_assembly===1)?'assembly':'part')+']').prop('checked', true);
+    }
 });
-$('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); });
+$('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); $('#fCustomerName').val(''); });
 
 function saveHeader(){
     var payload = {
         action: 'save', id: CUR_ID,
         part_d_id: $('#fPartDId').val() || 0,
         part_no_text: (($('#fPartDId').val()|0) ? '' : $('#fPartNo').val()),
-        team_of_work: $('#fTeam').val(),
+        item_type: $('input[name=fItemType]:checked').val() || 'part',
+        product_name: $('#fProductName').val(),
+        spec_desc: $('#fSpecDesc').val(),
+        related_depts: JSON.stringify($('#fDeptChecks .dept-ck:checked').map(function(){ return $(this).val(); }).get()),
         items: JSON.stringify(collectItems()),
     };
     $.post(API, payload, function(res){
@@ -530,7 +597,46 @@ function delDoc(id){
     }, 'json');
 }
 
-/* ---------- 列印 ---------- */
+/* ---------- 建議建立清單（來源：已有產品開發評估表、還沒有PFMEA的料號） ---------- */
+$('#btnSuggest').on('click', function(){
+    $('#suggestEmpty').show().text('載入中…'); $('#suggestTable').hide();
+    openMask('suggestMask');
+    $.getJSON(API, {action:'suggest_list'}, function(res){
+        if (!res.success){ $('#suggestEmpty').text(res.message||'載入失敗'); return; }
+        SUGGEST_ROWS = res.rows || [];
+        if (!SUGGEST_ROWS.length){ $('#suggestEmpty').text('目前沒有候選料號——已建立產品開發評估表的料號都已有對應的PFMEA分析表。'); return; }
+        $('#suggestEmpty').hide(); $('#suggestTable').show();
+        var html = '';
+        SUGGEST_ROWS.forEach(function(r, i){
+            html += '<tr><td><input type="checkbox" class="suggest-ck" data-idx="'+i+'"></td>'
+                + '<td>'+esc(r.customer_name||'')+'</td>'
+                + '<td class="t-left">'+esc(r.part_no_text||'')+'</td>'
+                + '<td>'+esc(r.product_name||'')+'</td></tr>';
+        });
+        $('#suggestBody').html(html);
+        $('#suggestCkAll').prop('checked', false);
+    });
+});
+$('#suggestCkAll').on('change', function(){ $('#suggestBody .suggest-ck').prop('checked', this.checked); });
+function createSuggested(){
+    var idxs = $('#suggestBody .suggest-ck:checked').map(function(){ return parseInt($(this).data('idx'),10); }).get();
+    if (!idxs.length){ alert('請先勾選要建立的料號'); return; }
+    var rows = idxs.map(function(i){ return SUGGEST_ROWS[i]; });
+    if (!confirm('確定要建立勾選的 '+rows.length+' 筆PFMEA分析表表頭嗎？（僅建立表頭，分析項目仍需逐份手動填寫）')) return;
+    $.post(API, {action:'suggest_bulk_create', rows: JSON.stringify(rows)}, function(res){
+        if (!res.success){ alert(res.message||'建立失敗'); return; }
+        var msg = '已建立 '+res.created+' 筆。';
+        if (res.errors && res.errors.length) msg += '\n以下未建立：\n' + res.errors.join('\n');
+        alert(msg);
+        closeMask('suggestMask');
+        loadList();
+    }, 'json');
+}
+
+/* ---------- 列印（比照官方紙本表單 F-11210-UE2-0001 版面：左側基本資料＋右側S/O/D/RPN評級表＋
+   相關部門勾選，下方為橫式分析表格，欄位順序與分組皆與官方表單一致；表單自身版次履歷由AS文件
+   管理維護，本頁不印） ---------- */
+var ITEM_TYPE_LABEL = {part:'零件', assembly:'組合件'};
 function printDoc(id){
     $.getJSON(API, {action:'print_get', id:id}, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
@@ -538,24 +644,70 @@ function printDoc(id){
         var rows = '';
         (res.items||[]).forEach(function(it, i){
             rows += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.process_desc)+'</td><td class="tl">'+esc(it.function_desc)+'</td>'
+                + '<td class="tl">'+esc(it.requirement)+'</td>'
                 + '<td class="tl">'+esc(it.failure_mode)+'</td><td class="tl">'+esc(it.failure_effect)+'</td>'
-                + '<td>'+esc(it.severity)+'</td><td class="tl">'+esc(it.failure_cause)+'</td><td>'+esc(it.occurrence)+'</td>'
-                + '<td class="tl">'+esc(it.current_controls)+'</td><td>'+esc(it.detection)+'</td><td>'+esc(it.rpn)+'</td>'
-                + '<td class="tl">'+esc(it.recommended_actions)+'</td><td>'+esc(it.responsibility)+'</td>'
-                + '<td>'+esc(it.new_severity)+'/'+esc(it.new_occurrence)+'/'+esc(it.new_detection)+'</td><td>'+esc(it.new_rpn)+'</td></tr>';
+                + '<td>'+esc(it.severity)+'</td><td class="tl">'+esc(it.classification)+'</td>'
+                + '<td class="tl">'+esc(it.failure_cause)+'</td><td>'+esc(it.occurrence)+'</td>'
+                + '<td class="tl">'+esc(it.prevention_controls)+'</td><td class="tl">'+esc(it.detection_controls)+'</td>'
+                + '<td>'+esc(it.detection)+'</td><td>'+esc(it.rpn)+'</td>'
+                + '<td class="tl">'+esc(it.recommended_actions)+'</td><td>'+esc(it.responsibility)+'</td><td>'+fmtDate(it.target_date)+'</td>'
+                + '<td class="tl">'+esc(it.action_taken)+'</td><td>'+fmtDate(it.action_date)+'</td>'
+                + '<td>'+esc(it.new_severity)+'</td><td>'+esc(it.new_occurrence)+'</td><td>'+esc(it.new_detection)+'</td><td>'+esc(it.new_rpn)+'</td></tr>';
         });
+        var depts = (d.related_depts||'').split(',').filter(Boolean);
+        var deptsHtml = DEPT_LIST.map(function(dp){ return '<label>'+(depts.indexOf(dp)>=0?'&#9632;':'&#9633;')+' '+esc(dp)+'</label>'; }).join('');
         var body = '<div class="p-comp">'+esc(res.company_name)+'</div>'
             + '<div class="p-title">'+esc(res.as_doc_name)+'</div>'
-            + '<table class="p-hd"><tr><td>產品件號</td><td>'+esc(d.part_no||'')+'</td><td>工作團隊</td><td>'+esc(d.team_of_work||'')+'</td></tr></table>'
-            + '<table class="p-tb"><thead><tr><th>項次</th><th>製程說明</th><th>功能</th><th>失效模式</th><th>失效效應</th>'
-            + '<th>S</th><th>失效原因</th><th>O</th><th>現行管制</th><th>D</th><th>RPN</th>'
-            + '<th>建議改善</th><th>責任者</th><th>改善後S/O/D</th><th>改善後RPN</th></tr></thead><tbody>'+rows+'</tbody></table>';
+            + '<div class="p-hdwrap">'
+            + '<table class="p-info">'
+            + '<tr><td>料號</td><td>'+esc(d.part_no||'')+'</td></tr>'
+            + '<tr><td>分類</td><td>'+esc(ITEM_TYPE_LABEL[d.item_type]||'零件')+'</td></tr>'
+            + '<tr><td>規格描述</td><td>'+esc(d.spec_desc||'')+'</td></tr>'
+            + '<tr><td>產品名稱</td><td>'+esc(d.product_name||'')+'</td></tr>'
+            + '<tr><td>客戶名稱</td><td>'+esc(d.customer_name||'')+'</td></tr>'
+            + '</table>'
+            + '<table class="p-rate"><thead><tr><th colspan="2">嚴重度(S)</th></tr></thead><tbody>'
+            + '<tr><td>1</td><td>無影響</td></tr><tr><td>2</td><td>次要阻礙</td></tr><tr><td>3~6</td><td>中等阻礙</td></tr>'
+            + '<tr><td>7</td><td>顯著阻礙</td></tr><tr><td>8</td><td>嚴重阻礙</td></tr><tr><td>9~10</td><td>安全/法規失效</td></tr>'
+            + '</tbody></table>'
+            + '<table class="p-rate"><thead><tr><th colspan="2">發生率(O)</th></tr></thead><tbody>'
+            + '<tr><td>1</td><td>很低</td></tr><tr><td>2~3</td><td>低</td></tr><tr><td>4~6</td><td>中等</td></tr>'
+            + '<tr><td>7~9</td><td>高</td></tr><tr><td>10</td><td>很高</td></tr>'
+            + '</tbody></table>'
+            + '<table class="p-rate"><thead><tr><th colspan="2">偵測度(D)</th></tr></thead><tbody>'
+            + '<tr><td>1</td><td>幾乎確定</td></tr><tr><td>2</td><td>極高</td></tr><tr><td>3</td><td>高</td></tr>'
+            + '<tr><td>4</td><td>高中等</td></tr><tr><td>5</td><td>中等</td></tr><tr><td>6</td><td>低</td></tr>'
+            + '<tr><td>7</td><td>非常低</td></tr><tr><td>8~9</td><td>可能性極小</td></tr><tr><td>10</td><td>幾乎不可能</td></tr>'
+            + '</tbody></table>'
+            + '<table class="p-rate"><thead><tr><th colspan="2">風險優先指數(RPN)</th></tr></thead><tbody>'
+            + '<tr><td>1~50</td><td>低</td></tr><tr><td>51~100</td><td>普通</td></tr>'
+            + '<tr><td>101~200</td><td>高</td></tr><tr><td>201~1000</td><td>非常高</td></tr>'
+            + '</tbody></table>'
+            + '<div class="p-depts"><span class="dh">相關部門</span>'+deptsHtml+'</div>'
+            + '</div>'
+            + '<table class="p-tb"><thead>'
+            + '<tr><th rowspan="2">NO</th><th rowspan="2">項目</th><th rowspan="2">功能</th><th rowspan="2">要求</th>'
+            + '<th rowspan="2">潛在失效模式</th><th rowspan="2">失效模式潛在後果</th><th rowspan="2">嚴重度S</th>'
+            + '<th rowspan="2">分類</th><th rowspan="2">失效潛在原因</th><th rowspan="2">發生率O</th>'
+            + '<th colspan="2">現行設計管制</th><th rowspan="2">偵測度D</th><th rowspan="2">RPN</th>'
+            + '<th rowspan="2">建議措施</th><th rowspan="2">責任者</th><th rowspan="2">目標完成日</th>'
+            + '<th colspan="6">措施結果</th></tr>'
+            + '<tr><th>控制預防</th><th>控制偵測</th><th>採行措施</th><th>生效日期</th><th>S</th><th>O</th><th>D</th><th>RPN</th></tr>'
+            + '</thead><tbody>'+rows+'</tbody></table>';
         var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.p-comp{font-size:20px;font-weight:bold;text-align:center;margin-bottom:1px;}'
-            + '.p-title{font-size:15px;font-weight:bold;text-align:center;letter-spacing:3px;margin-bottom:8px;}'
-            + 'table.p-hd{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:6px;}'
-            + 'table.p-hd td{border:1px solid #666;padding:3px 5px;} table.p-hd td:nth-child(odd){background:#f3ead6;font-weight:bold;white-space:nowrap;}'
-            + 'table.p-tb{width:100%;border-collapse:collapse;font-size:9.5px;}'
+            + '.p-title{font-size:15px;font-weight:bold;text-align:center;letter-spacing:3px;margin-bottom:6px;}'
+            + '.p-hdwrap{display:flex;gap:4px;align-items:stretch;margin-bottom:6px;}'
+            + 'table.p-info{border-collapse:collapse;font-size:9px;flex:0 0 200px;}'
+            + 'table.p-info td{border:1px solid #666;padding:2px 4px;overflow-wrap:anywhere;}'
+            + 'table.p-info td:first-child{background:#f3ead6;font-weight:bold;white-space:nowrap;width:56px;}'
+            + 'table.p-rate{border-collapse:collapse;font-size:7.5px;flex:0 0 auto;}'
+            + 'table.p-rate th,table.p-rate td{border:1px solid #666;padding:1px 3px;text-align:center;white-space:nowrap;}'
+            + 'table.p-rate thead th{background:#f3ead6;}'
+            + '.p-depts{flex:1 1 auto;font-size:8.5px;border:1px solid #666;padding:2px 5px;display:grid;grid-template-columns:1fr 1fr;gap:0 6px;align-content:start;}'
+            + '.p-depts .dh{grid-column:1/-1;font-weight:bold;background:#f3ead6;padding:1px 3px;margin:-2px -5px 2px;}'
+            + '.p-depts label{white-space:nowrap;}'
+            + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:8px;}'
             + 'table.p-tb thead{display:table-header-group;}'
             + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 3px;text-align:center;overflow-wrap:anywhere;}'
             + 'table.p-tb thead th{background:#f3ead6;} table.p-tb td.tl{text-align:left;}'
