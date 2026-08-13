@@ -251,18 +251,24 @@ case 'ref_process_delete':
     pfmea_ref_process_delete($db, $id);
     jout(['success'=>true]);
 
+// 潛在失效模式：2026-08-13使用者要求改階層式，優先套用功能層級專屬清單，該層級還沒人填過才逐層
+// 退回項目層級、製程層級(舊148筆通用清單)——item_option_id/function_option_id為0時等同純製程層級查詢
 case 'ref_failure_mode_list':
     needView($perms);
     $pid = (int)($_GET['process_id'] ?? 0);
+    $itemOptId = (int)($_GET['item_option_id'] ?? 0);
+    $funcOptId = (int)($_GET['function_option_id'] ?? 0);
     if (!$pid) jout(['success'=>true,'rows'=>[]]);
-    jout(['success'=>true,'rows'=>pfmea_ref_failure_mode_list($db, $pid)]);
+    jout(['success'=>true,'rows'=>pfmea_ref_failure_mode_list($db, $pid, $itemOptId, $funcOptId)]);
 
 case 'ref_failure_mode_add':
     needEdit($perms);
     $pid = (int)($_POST['process_id'] ?? 0);
+    $itemOptId = (int)($_POST['item_option_id'] ?? 0);
+    $funcOptId = (int)($_POST['function_option_id'] ?? 0);
     $text = trim((string)($_POST['failure_mode'] ?? ''));
     if (!$pid || $text === '') jout(['success'=>false,'message'=>'缺少製程或失效模式文字']);
-    $id = pfmea_ref_failure_mode_add($db, $pid, $text, $uid, $uname);
+    $id = pfmea_ref_failure_mode_add($db, $pid, $text, $uid, $uname, $itemOptId, $funcOptId);
     jout(['success'=>true,'id'=>$id]);
 
 case 'ref_failure_mode_delete':
@@ -270,6 +276,75 @@ case 'ref_failure_mode_delete':
     $id = (int)($_POST['id'] ?? 0);
     if (!$id) jout(['success'=>false,'message'=>'缺少id']);
     pfmea_ref_failure_mode_delete($db, $id);
+    jout(['success'=>true]);
+
+// ── 料號-製程-項目-功能-要求 階層式連動（2026-08-13使用者要求）──────────────────
+case 'ref_item_options_list':
+    needView($perms);
+    $pid = (int)($_GET['process_id'] ?? 0);
+    if (!$pid) jout(['success'=>true,'rows'=>[]]);
+    jout(['success'=>true,'rows'=>pfmea_ref_item_options($db, $pid)]);
+
+case 'ref_item_option_add':
+    needEdit($perms);
+    $pid = (int)($_POST['process_id'] ?? 0);
+    $name = trim((string)($_POST['item_name'] ?? ''));
+    if (!$pid || $name === '') jout(['success'=>false,'message'=>'缺少製程或項目名稱']);
+    $id = pfmea_ref_item_option_get_or_add($db, $pid, $name, $uid, $uname);
+    jout(['success'=>true,'id'=>$id]);
+
+case 'ref_item_option_delete':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    pfmea_ref_item_option_delete($db, $id);
+    jout(['success'=>true]);
+
+case 'ref_function_options_list':
+    needView($perms);
+    $itemOptId = (int)($_GET['item_option_id'] ?? 0);
+    if (!$itemOptId) jout(['success'=>true,'rows'=>[]]);
+    jout(['success'=>true,'rows'=>pfmea_ref_function_options($db, $itemOptId)]);
+
+case 'ref_function_option_add':
+    needEdit($perms);
+    $itemOptId = (int)($_POST['item_option_id'] ?? 0);
+    $desc = trim((string)($_POST['function_desc'] ?? ''));
+    if (!$itemOptId || $desc === '') jout(['success'=>false,'message'=>'缺少項目或功能文字']);
+    $id = pfmea_ref_function_option_get_or_add($db, $itemOptId, $desc, $uid, $uname);
+    jout(['success'=>true,'id'=>$id]);
+
+case 'ref_function_option_delete':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    pfmea_ref_function_option_delete($db, $id);
+    jout(['success'=>true]);
+
+// 要求：依綁定的功能+料號查，優先給該料號的專屬要求，沒有才退回該功能通用要求
+case 'ref_requirement_options_list':
+    needView($perms);
+    $funcOptId = (int)($_GET['function_option_id'] ?? 0);
+    $partDId = (int)($_GET['part_d_id'] ?? 0);
+    $partText = trim((string)($_GET['part_no_text'] ?? ''));
+    if (!$funcOptId) jout(['success'=>true,'rows'=>[]]);
+    jout(['success'=>true,'rows'=>pfmea_ref_requirement_options($db, $funcOptId, $partDId, $partText)]);
+
+case 'ref_requirement_option_add':
+    needEdit($perms);
+    $funcOptId = (int)($_POST['function_option_id'] ?? 0);
+    $partDId = (int)($_POST['part_d_id'] ?? 0);
+    $partText = trim((string)($_POST['part_no_text'] ?? ''));
+    $text = trim((string)($_POST['requirement_text'] ?? ''));
+    if (!$funcOptId || $text === '') jout(['success'=>false,'message'=>'缺少功能或要求文字']);
+    $id = pfmea_ref_requirement_option_add($db, $funcOptId, $partDId, $partText, $text, $uid, $uname);
+    jout(['success'=>true,'id'=>$id]);
+
+case 'ref_requirement_option_delete':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    pfmea_ref_requirement_option_delete($db, $id);
     jout(['success'=>true]);
 
 case 'ref_control_options':
