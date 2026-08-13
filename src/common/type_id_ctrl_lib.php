@@ -357,6 +357,27 @@ function type_id_ctrl_process_candidates(PDO $db, int $dsPk): array {
 }
 
 /**
+ * 表頭「製程」摘要（2026-08-13 使用者要求修正：不可顯示「共用」字樣，必須是此料號所有相關
+ * 報價單/訂單檢附的製程全部合併寫在一起，例如報價單A粗滾+打毛邊、報價單B齒研+雷刻、報價單C全製，
+ * 表頭要顯示「粗滾、打毛邊、齒研、雷刻、全製」）。這跟項目列「所屬製程」是兩件事——項目列只在
+ * 同一報價單裡此料號有多筆項目時才會標示、其餘留空代表共用，是給人工審閱用的細節欄；表頭要看的是
+ * 「這個料號曾經出現過的所有製程」，直接沿用 type_id_ctrl_process_candidates() 同一套「此料號的
+ * 訂單/報價紀錄」候選來源，取全部製程字串去重合併，不受項目是否已排除、有無連結等狀態影響。
+ */
+function type_id_ctrl_process_header_summary(PDO $db, int $dsPk): string {
+    $procs = [];
+    foreach (type_id_ctrl_process_candidates($db, $dsPk) as $c) {
+        $p = trim((string)($c['process'] ?? ''));
+        if ($p === '') continue;
+        foreach (explode('+', $p) as $piece) {
+            $piece = trim($piece);
+            if ($piece !== '' && !in_array($piece, $procs, true)) $procs[] = $piece;
+        }
+    }
+    return implode('、', $procs);
+}
+
+/**
  * 廠內圖面標籤的「顯示名稱」／「需要顯示製程」設定變更後，套用回已經同步進本模組、目前仍連結
  * 該附件的既有項目列（2026-08-12 使用者要求：沒有批次刪除重轉功能，改名要能直接更新舊資料，
  * 不必整批刪除重轉）。只更新「型態項目名稱」與「需要顯示製程」提示旗標，不動使用者可能已手動
