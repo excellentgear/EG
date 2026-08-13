@@ -620,9 +620,11 @@ function _backfillBaseSnapshot(PDO $db, int $userId, string $eff): array {
     return eg_position_snapshot_at($db, $userId, $prevDate);
 }
 
-/** 從快照中移除指定部門/職稱那一筆，供補登兼任新增/移除/更動時重組快照用 */
+/** 從快照中移除指定部門/職稱的「兼任」那一筆，供補登兼任新增/移除/更動時重組快照用。
+ *  只比對兼任(is_main=0)、不動同部門職稱的主職——基準快照若因無歷史紀錄退回現況，而現況剛好與
+ *  要新增/移除的兼任部門職稱相同（如本人後來升職到那個部門），沒排除 is_main 會把主職也一併誤刪。 */
 function _snapWithoutItem(array $snap, int $depId, int $posId): array {
-    return array_values(array_filter($snap, fn($s) => !($s['department_id'] === $depId && $s['position_id'] === $posId)));
+    return array_values(array_filter($snap, fn($s) => !(!$s['is_main'] && $s['department_id'] === $depId && $s['position_id'] === $posId)));
 }
 
 /** 查某人在某日期之前的職務快照（補登表單開日期時的參考／核對用） */
