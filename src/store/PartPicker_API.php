@@ -7,7 +7,7 @@
  * 整批載入前端篩選，改用後端 LIKE 搜尋 + 前端 resource/js/eg_part_picker.js 呼叫。
  *
  * action=search：GET/POST q=關鍵字（比對 D_Setting_Id / Drawing_No），回傳最多 30 筆
- *   {d_id, part_no, drawing_no, customer_id, customer_name}
+ *   {d_id, part_no, drawing_no, customer_id, customer_name, is_assembly}
  */
 header('Content-Type: application/json; charset=utf-8');
 
@@ -34,7 +34,8 @@ case 'search':
     $like = '%' . $q . '%';
     $st = $db->prepare(
         "SELECT ds.d_id, ds.D_Setting_Id AS part_no, COALESCE(ds.Drawing_No,'') AS drawing_no,
-                COALESCE(ds.Customer_Id,'') AS customer_id, COALESCE(cl.customer,'') AS customer_name
+                COALESCE(ds.Customer_Id,'') AS customer_id, COALESCE(cl.customer,'') AS customer_name,
+                COALESCE(ds.Is_Assembly,0) AS is_assembly
          FROM d_setting ds
          LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
          WHERE ds.D_Setting_Id LIKE ? OR ds.Drawing_No LIKE ?
@@ -47,7 +48,8 @@ case 'get_one':
     if (!$dId) jout(['success' => false, 'message' => '缺少 d_id']);
     $st = $db->prepare(
         "SELECT ds.d_id, ds.D_Setting_Id AS part_no, COALESCE(ds.Drawing_No,'') AS drawing_no,
-                COALESCE(ds.Customer_Id,'') AS customer_id, COALESCE(cl.customer,'') AS customer_name
+                COALESCE(ds.Customer_Id,'') AS customer_id, COALESCE(cl.customer,'') AS customer_name,
+                COALESCE(ds.Is_Assembly,0) AS is_assembly
          FROM d_setting ds
          LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
          WHERE ds.d_id = ? LIMIT 1");
