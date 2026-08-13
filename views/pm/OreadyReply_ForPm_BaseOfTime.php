@@ -396,6 +396,28 @@ $oready_feat_batch         = rf_has_feature($_oready_features, 'oready_batch_spl
 $oready_feat_view_price    = rf_has_feature($_oready_features, 'oready_view_price');
 $oready_feat_process_settings = rf_has_feature($_oready_features, 'oready_process_settings');
 
+// 唯讀角色覆蓋：勾選後不論角色其他功能碼或舊版CRUD權限碼(user_module_permissions)為何，
+// 一律視為僅檢視、不可異動任何資料，用來堵住「舊版CRUD權限碼組合沒被下面各按鈕的排除清單涵蓋到」
+// 就會被誤判成可操作的漏洞（例：純 R 權限之前未被移轉按鈕的排除規則涵蓋）。
+// 注意：這裡刻意不用 rf_has_feature()（它把萬用碼 'all' 視為符合任何功能碼），
+// 否則擁有 'all' 的管理員角色會被誤判成唯讀鎖死；唯讀一定要角色明確勾選這一項才生效。
+$oready_feat_readonly = in_array('oready_readonly', $_oready_features, true);
+if ($oready_feat_readonly) {
+    $can_manual_close = false;
+    $can_create = false;
+    $can_update = false;
+    $can_delete = false;
+    $user_status = 0;
+    $oready_feat_mark_returned = false;
+    $oready_feat_transfer = false;
+    $oready_feat_batch = false;
+    $oready_feat_process_settings = false;
+    $_is_cru = true; // 強制走「業務類」分支，隱藏移轉/取消移轉等按鈕
+    $display_permission_code = 'R';
+    $permission_display_text = 'R 檢視（唯讀角色覆蓋）';
+    $permission_tooltip_text = '此帳號所屬角色勾選了「唯讀」，僅能查看不能新增/修改/刪除/移轉，覆蓋角色其他功能勾選與頁面權限設定';
+}
+
 // --- 修改後的 PHP 資料準備邏輯 ---
 // 1. 獲取基礎 BOM 資料 (移除 ol 的 JOIN，因為 OrderList 會單獨處理)
 $OreadyReply_list_base = $conn->getAll("SELECT 
@@ -6200,7 +6222,7 @@ echo "</script>\n";
                             }
                             // ── /加工單價顯示 ────────────────────────────────────────────
                         }
-                        var _canTransferRole = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
+                        var _canTransferRole = (!window.isCRU && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R') || window.featTransfer;
                         var _canCancelRole = (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+R+U' || window.displayPermissionCode === 'C+D+R+U');
                         var _hasEligibleSplitForCancel = !!(_splitBatches && _splitBatches.filter(function(b){
                             return b.processing_state !== 'E' && b.processing_state !== '1' && b.processing_state !== 'skip' && b.bom_ing_fid;
@@ -9559,7 +9581,7 @@ echo "</script>\n";
         var modalId='qbp-modal-'+String(processInfo.bom_sn||procNo);
         var ex=document.getElementById(modalId); if(ex)ex.remove();
 
-        var canTransferRole = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
+        var canTransferRole = (!window.isCRU && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R') || window.featTransfer;
         var canCancelRole = (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+R+U' || window.displayPermissionCode === 'C+D+R+U');
         var stMap = {N:'待發包',P:'待移轉',ing:'加工中',Q:'QC待驗',E:'已結',1:'已結',skip:'跳過'};
 
@@ -9639,7 +9661,7 @@ echo "</script>\n";
         // ── 本關已移轉（直接把這一關設為 E 生管已移轉，需輸入大寫 OK 二次確認）──
         const _curState = String(target.processing_state || '');
         const _snText   = (target.bom_sn !== undefined && target.bom_sn !== null && target.bom_sn !== '') ? ('第 ' + target.bom_sn + ' 關') : '本關';
-        const _canMarkE = ((!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer) && _curState !== 'E';
+        const _canMarkE = ((!window.isCRU && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R') || window.featTransfer) && _curState !== 'E';
         const _etrBtnHtml = _canMarkE
             ? `<button id="qtr-etr-${fid}" class="btn" style="margin-right:auto;background:#F0A24B;border:1px solid #d9861f;color:#fff;font-weight:bold;" title="不經發單流程，直接把這一關標記為生管已移轉(E)">本關已移轉</button>`
             : '';
@@ -11186,7 +11208,7 @@ echo "</script>\n";
             // Ensure process list in rightColProcesses is single column
             processListDiv.style.display = 'block';
             currentBOMProcesses.forEach(function(proc) {
-                var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
+                var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R') || window.featTransfer;
                 processListDiv.appendChild(_buildProcItemDiv(proc, rowData, showTransfer));
             });
 
@@ -11224,7 +11246,7 @@ echo "</script>\n";
                 const itemsPerLeftCol = Math.ceil(currentBOMProcesses.length / 2);
 
                 currentBOMProcesses.forEach(function(proc, index) {
-                    var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
+                    var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R') || window.featTransfer;
                     var procItemDiv = _buildProcItemDiv(proc, rowData, showTransfer);
                     if (index < itemsPerLeftCol) leftVirtualCol.appendChild(procItemDiv);
                     else rightVirtualCol.appendChild(procItemDiv);
@@ -11245,7 +11267,7 @@ echo "</script>\n";
                 console.log(`  套用右側製程列表 1 欄顯示 (內部) - BOM ${rowData.bom} 有 ${currentBOMProcesses.length} 個製程 (4-5).`);
                 processListDiv.style.display = 'block';
                 currentBOMProcesses.forEach(function(proc) {
-                    var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
+                    var showTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R') || window.featTransfer;
                     processListDiv.appendChild(_buildProcItemDiv(proc, rowData, showTransfer));
                 });
             }
@@ -12952,7 +12974,7 @@ echo "</script>\n";
 
         // 權限判斷：A 或 C+R 才能看到加工單價；業務類(isCRU)或D+R不可看到移轉按鈕
         var canSeePrice = (window.displayPermissionCode === 'A' || window.displayPermissionCode === 'C+D+R') || window.featSeePrice;
-        var canTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R') || window.featTransfer;
+        var canTransfer = (!window.isCRU && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R') || window.featTransfer;
         var canSkip = (window.canUpdate && window.displayPermissionCode !== 'D+R' && window.displayPermissionCode !== 'R+U' && window.displayPermissionCode !== 'R') || window.featMarkReturned;
 
         processListDiv.innerHTML = '<div style="color:#999;font-size:12px;padding:4px;">載入中...</div>';
@@ -15249,6 +15271,7 @@ echo "</script>\n";
         <?php if ($permission_code === 'A'): ?>
         // ══ 角色功能設定（僅權限=A者可見的按鈕會呼叫）══
         var OREADY_FEATURES = [
+            {code:'oready_readonly',          label:'唯讀（僅能查看，勾選後覆蓋下方所有其他功能，一律不可異動）'},
             {code:'oready_create',            label:'新增 BOM'},
             {code:'oready_update',             label:'修改（備註 / 更新表單 / 快速綁定料號 / 設定燈號 / 設定業務）'},
             {code:'oready_delete',             label:'刪除 BOM'},
@@ -15297,8 +15320,17 @@ echo "</script>\n";
                         (checked ? 'checked ' : '') + (isAll ? 'disabled' : '') + '> ' + f.label + '</label></div>';
                 });
                 $box.html(html);
+                oreadyToggleFeatureBoxByReadonly();
             }, 'json');
         }
+
+        // 唯讀勾選後，其餘功能勾選一律視覺上灰化（實際覆蓋邏輯在後端 PHP 強制執行，這裡僅避免管理員誤會）
+        function oreadyToggleFeatureBoxByReadonly() {
+            var $ro = $('#oready-feature-box .oready-feat[value="oready_readonly"]');
+            var isRo = $ro.is(':checked');
+            $('#oready-feature-box .oready-feat').not($ro).prop('disabled', isRo);
+        }
+        $(document).on('change', '#oready-feature-box .oready-feat[value="oready_readonly"]', oreadyToggleFeatureBoxByReadonly);
 
         $(document).on('change', '#oready-role-select', oreadyRenderFeatureBox);
         $(document).on('click', '#oready-role-refresh', oreadyLoadRoles);
