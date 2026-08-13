@@ -626,13 +626,13 @@ function hrf_instance_items_save(PDO $db, int $instanceId, array $items): void {
     }
 }
 
-/** 建立單一員工單一表單(01/10)或單一機型(09)的一筆表單。 */
+/** 建立單一員工單一機型(09)或單一表單(10)的一筆表單。01(job_desc) 改走 hrf_instance_create_job_desc()，以部門x職位為主不綁單一員工。 */
 function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int $whitelistId, string $bizDate, int $byUid, string $byName): array {
     hrf_ensure_schema($db);
-    if (!isset(HRF_FORM_TYPES[$formType])) return ['ok'=>false, 'msg'=>'不明的表單類型'];
+    if (!isset(HRF_FORM_TYPES[$formType]) || $formType === 'job_desc') return ['ok'=>false, 'msg'=>'不明的表單類型'];
     $snap = hrf_user_snapshot($db, $targetUid);
     if (!$snap) return ['ok'=>false, 'msg'=>'找不到此員工'];
-    if ($formType !== 'job_desc' && !hrf_dept_can_produce($db, $snap['dept_id'], $formType)) {
+    if (!hrf_dept_can_produce($db, $snap['dept_id'], $formType)) {
         return ['ok'=>false, 'msg'=>$snap['user_cname'] . ' 所屬部門未設定產生「' . HRF_FORM_TYPES[$formType] . '」'];
     }
     $tpl = hrf_match_template($db, $formType, $snap['dept_id'], $snap['position_id']);
@@ -678,6 +678,73 @@ function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int
         if ($items) hrf_instance_items_save($db, $iid, $items);
     }
     return ['ok'=>true, 'id'=>$iid];
+}
+
+/** 目前有實際在職人員掛著的「部門×職位」組合(含兼任)，每組附上人數；供01建立表單挑選、也是「還缺誰」建立建議的資料來源。 */
+function hrf_dept_position_pairs(PDO $db): array {
+    return $db->query("SELECT m.department_id AS dept_id, d.name AS dept_name, m.position_id, p.name AS position_name,
+                       COUNT(DISTINCT m.user_id) AS holder_count
+                       FROM user_department_position_map m
+                       JOIN user u ON u.id=m.user_id AND COALESCE(u.state,1) NOT IN (0,90)
+                       JOIN department d ON d.id=m.department_id
+                       JOIN position p ON p.id=m.position_id
+                       GROUP BY m.department_id, m.position_id
+                       ORDER BY d.sort_order, p.sort_order")->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 全站最高決策者目前的主要部門×職位（唯一不強制要求職務說明書的對象，使用者明確要求）。 */
+function hrf_top_approver_dept_position(PDO $db): ?array {
+    $top = eg_org_user($db, 'top_approver');
+    if (!$top) return null;
+    $main = eg_user_main_identity($db, (int)$top['id']);
+    if (!$main || !$main['department_id'] || !$main['position_id']) return null;
+    return ['dept_id' => (int)$main['department_id'], 'position_id' => (int)$main['position_id']];
+}
+
+/**
+ * 建立單一「部門×職位」的職務說明書（01 以部門×職位為主，不綁單一員工；使用者明確要求：有人的部門職位就要有說明書，
+ * 表單上不顯示工號/姓名/到職日/直屬主管，只顯示部門與職稱）。同一部門×職位已建立過就不重複建立。
+ */
+function hrf_instance_create_job_desc(PDO $db, int $deptId, int $positionId, string $bizDate, int $byUid, string $byName): array {
+    hrf_ensure_schema($db);
+    $d = $db->prepare("SELECT name FROM department WHERE id=?"); $d->execute([$deptId]); $deptName = $d->fetchColumn();
+    $p = $db->prepare("SELECT name FROM position WHERE id=?"); $p->execute([$positionId]); $posName = $p->fetchColumn();
+    if (!$deptName || !$posName) return ['ok'=>false, 'msg'=>'部門或職位不存在'];
+    $label = $deptName . '／' . $posName;
+
+    $dup = $db->prepare("SELECT id FROM hr_form_instance WHERE form_type='job_desc' AND dept_id=? AND position_id=? LIMIT 1");
+    $dup->execute([$deptId, $positionId]);
+    if ($existingId = $dup->fetchColumn()) {
+        return ['ok'=>false, 'duplicate'=>true, 'existing_id'=>(int)$existingId, 'msg'=>$label.'已建立過，不重複建立'];
+    }
+    $tpl = hrf_match_template($db, 'job_desc', $deptId, $positionId);
+    if (!$tpl) return ['ok'=>false, 'msg'=>$label.' 尚未建立適用的職位範本，請聯絡管理員'];
+
+    $db->prepare("INSERT INTO hr_form_instance
+        (form_type,user_id,dept_id,position_id,template_id,business_date,status,created_by,created_by_name,dept_name,position_name)
+        VALUES ('job_desc',NULL,?,?,?,?,'active',?,?,?,?)")
+       ->execute([$deptId, $positionId, $tpl['id'], $bizDate, $byUid, $byName, $deptName, $posName]);
+    $iid = (int)$db->lastInsertId();
+    $items = [];
+    foreach (($tpl['items'] ?? []) as $it) $items[] = ['item_no'=>$it['item_no'], 'data'=>$it['data']];
+    if ($items) hrf_instance_items_save($db, $iid, $items);
+    return ['ok'=>true, 'id'=>$iid];
+}
+
+/** 批次建立 01：$pairs=[['dept_id'=>,'position_id'=>],...]。 */
+function hrf_instance_create_batch_job_desc(PDO $db, array $pairs, string $bizDate, int $byUid, string $byName): array {
+    hrf_ensure_schema($db);
+    $created = []; $errors = []; $skipped = [];
+    foreach ($pairs as $pair) {
+        $deptId = (int)($pair['dept_id'] ?? 0);
+        $posId = (int)($pair['position_id'] ?? 0);
+        if (!$deptId || !$posId) continue;
+        $r = hrf_instance_create_job_desc($db, $deptId, $posId, $bizDate, $byUid, $byName);
+        if ($r['ok']) $created[] = $r['id'];
+        elseif (!empty($r['duplicate'])) $skipped[] = $r['msg'];
+        else $errors[] = $r['msg'];
+    }
+    return ['created'=>$created, 'errors'=>$errors, 'skipped'=>$skipped];
 }
 
 /**

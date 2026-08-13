@@ -128,6 +128,7 @@ $perms = hrf_perms($db, $hrfUser);
                 <button class="btn-warm btn-create"><i class="fa fa-plus"></i> 建立表單</button>
                 <button class="btn-print-all"><i class="fa fa-print"></i> 列印全部</button>
                 <?php if ($ft !== 'job_desc'): ?>
+                <button class="btn-missing"><i class="fa fa-exclamation-circle"></i> 缺件提示</button>
                 <select class="st-filter" style="width:120px;">
                     <option value="">狀態：全部</option>
                     <option value="draft">草稿</option>
@@ -161,10 +162,19 @@ $perms = hrf_perms($db, $hrfUser);
 <div class="hf-mask" id="createMask"><div class="hf-modal" style="max-width:640px;">
     <div class="m-head"><span id="createTitle">建立表單</span><span class="m-close" onclick="closeMask('createMask')">✕</span></div>
     <div class="m-body">
+        <div id="createDeptPosBlock" style="display:none;">
+            <label>選擇部門×職位（可複選；01職務說明書以部門×職位為主，不綁單一員工，有人在職的組合都需要一份，含兼任職位；灰底＝已建立過或全站最高決策者不需要）</label>
+            <div class="hf-people-pick">
+                <input type="text" class="flt" placeholder="輸入部門/職稱篩選…" oninput="hfFilterPeople(this)">
+                <div class="hf-people-list" id="createDeptPosList"></div>
+            </div>
+        </div>
+        <div id="createPeopleBlock">
         <label>選擇員工（可複選；選 1 人＝單人建立，選多人＝批次建立；點部門標題可整組全選/取消，兼任職務的人會同時列在各自部門底下）</label>
         <div class="hf-people-pick">
             <input type="text" class="flt" placeholder="輸入姓名/部門/職稱篩選…" oninput="hfFilterPeople(this)">
             <div class="hf-people-list" id="createPeopleList"></div>
+        </div>
         </div>
         <label>日期（可自行指定以利補登舊資料）</label>
         <input type="date" id="createBizDate" max="9999-12-31">
@@ -221,12 +231,12 @@ $perms = hrf_perms($db, $hrfUser);
     <div class="m-head"><span>使用說明 — 人資職務表單</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
         <h4>功能說明</h4>
-        三張固定表單：<b>職務說明書</b>（每位員工一份，內容依職位範本帶入，不需簽核，僅留記錄）、<b>專業技能鑑定考核表</b>（每位員工「每個機型」一份，總經理／課長各自評分，需確認＋核准）、<b>員工職能鑑定表</b>（每位員工一份，職能項目依職位範本帶入，需確認＋核准）。三張表單各自獨立綁定 AS 文件編號。
+三張固定表單：<b>職務說明書</b>（以部門×職位為主，不綁單一員工——有人在職的部門×職位組合都需要一份，含兼任職位，內容依職位範本帶入，不需簽核，僅留記錄）、<b>專業技能鑑定考核表</b>（每位員工「每個機型」一份，固定不重複建立，總經理／課長各自評分，需確認＋核准）、<b>員工職能鑑定表</b>（每位員工一份，部門/職稱不變只需沿用既有那份不重複建立，職能項目依職位範本帶入，需確認＋核准）。三張表單各自獨立綁定 AS 文件編號。
         <h4>操作步驟</h4>
-        <b>①建立表單</b>：勾選一位或多位員工＋指定日期即可建立（勾 1 人＝單人建立，勾多人＝批次建立；點部門標題可整組全選/取消）；系統會依該員工當下的部門×職位比對「職位範本」自動帶入內容，找不到範本會在建立結果顯示錯誤，需請管理員先到「範本管理」設定。專業技能鑑定考核表另需選機型（預設依職位範本的適用機型清單自動展開成多筆，也可手動指定機型套用到所有選取員工）。<br>
+        <b>①建立表單</b>：職務說明書勾選一組或多組「部門×職位」＋指定日期即可建立（灰底＝已建立過或全站最高決策者不需要）；技能鑑定表／職能鑑定表勾選一位或多位員工＋指定日期（勾 1 人＝單人建立，勾多人＝批次建立；點部門標題可整組全選/取消）；系統會依比對到的部門×職位「職位範本」自動帶入內容，找不到範本會在建立結果顯示錯誤，需請管理員先到「範本管理」設定。專業技能鑑定考核表另需選機型（預設依職位範本的適用機型清單自動展開成多筆，也可手動指定機型套用到所有選取員工）。<br>
         <b>②填寫／評分</b>：職務說明書內容欄可直接編輯存檔；技能鑑定表由課長／總經理各自在「確認」「核准」時填寫自己那欄分數；職能鑑定表的操作/異常排除評分由確認人（直屬主管）填寫。若員工本身職等已無中間層主管可考核（其直屬主管解析結果與總經理相同），課長考核欄位為 NA，不可填寫。<br>
         <b>③送出</b>：技能鑑定表／職能鑑定表草稿建立後需按「送出」才會通知確認人（該員工直屬主管）；確認通過後自動通知核准人（總經理）；任一關退回都需填寫原因，退回後表單回到草稿可修改重送。<br>
-        <b>④複製表單</b>：任何表單都可按「複製」，以複製者身分建立一份新草稿（機型/內容原樣帶入），需重新走送出流程。<br>
+        <b>④複製表單</b>：技能鑑定表／職能鑑定表可按「複製」，以複製者身分建立一份新草稿（機型/內容原樣帶入），需重新走送出流程；職務說明書以部門×職位為主不提供複製，內容直接在原表單編輯存檔即可。<br>
         <b>⑤列印</b>：可單筆列印，或「列印全部」依目前清單篩選結果逐筆各自開視窗列印（結果較多會先詢問是否自動分批排隊）；每份文件各自獨立分頁計算頁碼，只有內容超過一頁時才顯示「第X頁/共Y頁」，單頁文件不顯示頁碼。<br>
         <b>⑥超級管理員自動簽核</b>：僅 id=1 可用，勾選表單後可先逐筆調整分數（或用「一鍵套用固定分數」快速帶入再個別修改），輸入操作確認密碼＋指定簽核日期，一次補齊尚未完成的確認/核准關卡，用於補登舊紙本資料。
         <h4>重要行為</h4>
@@ -293,6 +303,7 @@ $('.hf-tabpane .pg-next').on('click', function(){ var ft=$(this).closest('.hf-ta
 $('.hf-tabpane .btn-create').on('click', function(){ openCreateModal($(this).closest('.hf-tabpane').data('type')); });
 $('.hf-tabpane .btn-print-all').on('click', function(){ printAll($(this).closest('.hf-tabpane').data('type')); });
 $('.hf-tabpane .btn-auto-sign').on('click', function(){ openAutoSignModal($(this).closest('.hf-tabpane').data('type')); });
+$('.hf-tabpane .btn-missing').on('click', function(){ openMissingModal($(this).closest('.hf-tabpane').data('type')); });
 
 function loadMeta(cb){
     $.getJSON(API, {action:'meta'}, function(res){
@@ -317,7 +328,7 @@ function loadAsDoc(ft){
 }
 function buildTableHeads(){
     var ck = META.perms.isSuperAdmin ? '<th style="width:26px;"><input type="checkbox" class="ck-all" onclick="toggleAllCk(this)"></th>' : '';
-    $('.thead-job_desc').html('<tr><th>部門</th><th>職位</th><th>姓名</th><th>日期</th><th style="width:150px;">操作</th></tr>');
+    $('.thead-job_desc').html('<tr><th>部門</th><th>職位</th><th>日期</th><th style="width:150px;">操作</th></tr>');
     $('.thead-skill_assess').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>機型</th><th>項目名稱</th><th>總經理考核</th><th>課長考核</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
     $('.thead-competency').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>職務</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
 }
@@ -345,7 +356,7 @@ function filteredRows(ft){
     return (LISTS[ft]||[]).filter(function(r){
         if (stf && r.status !== stf) return false;
         if (!kw) return true;
-        var hay = (r.dept_name+' '+r.position_name+' '+r.user_cname+' '+(r.machine_display_name||'')+' '+(r.item_name||'')).toLowerCase();
+        var hay = (r.dept_name+' '+r.position_name+' '+(r.user_cname||'')+' '+(r.machine_display_name||'')+' '+(r.item_name||'')).toLowerCase();
         return hay.indexOf(kw) >= 0;
     });
 }
@@ -368,11 +379,11 @@ function renderList(ft){
         var stBadge = '<span class="st-badge st-'+r.status+'">'+(STATUS_LABEL[r.status]||r.status)+'</span>';
         var opBtns = '<button class="hf-btn-sm" onclick="openViewModal(\''+ft+'\','+r.id+')">檢視</button> '
                    + '<button class="hf-btn-sm" onclick="printOne(\''+ft+'\','+r.id+')">列印</button> '
-                   + '<button class="hf-btn-sm" onclick="copyInstance(\''+ft+'\','+r.id+')">複製</button> '
+                   + (ft==='job_desc' ? '' : '<button class="hf-btn-sm" onclick="copyInstance(\''+ft+'\','+r.id+')">複製</button> ')
                    + (META.perms.canAdmin || r.created_by == META.uid ? '<button class="hf-btn-sm" onclick="deleteInstance(\''+ft+'\','+r.id+')">刪除</button>' : '');
         var ck = (META.perms.isSuperAdmin && ft!=='job_desc') ? '<td><input type="checkbox" class="auto-ck" value="'+r.id+'"></td>' : '';
         if (ft === 'job_desc') {
-            html += '<tr><td>'+esc(r.dept_name)+'</td><td>'+esc(r.position_name)+'</td><td>'+esc(r.user_cname)+'</td><td>'+dispDate(r.business_date)+'</td><td>'+opBtns+'</td></tr>';
+            html += '<tr><td>'+esc(r.dept_name)+'</td><td>'+esc(r.position_name)+'</td><td>'+dispDate(r.business_date)+'</td><td>'+opBtns+'</td></tr>';
         } else if (ft === 'skill_assess') {
             var gmAvg = scoreAvg(r.score_quality_gm,r.score_efficiency_gm,r.score_proficiency_gm);
             var mgrAvg = r.confirm_na ? null : scoreAvg(r.score_quality_mgr,r.score_efficiency_mgr,r.score_proficiency_mgr);
@@ -447,11 +458,52 @@ function hfFilterPeople(input){
 }
 
 var CREATE_TYPE = 'job_desc';
+/** 01職務說明書：依部門×職位分組的挑選器（灰底＝已建立過或全站最高決策者，不可勾選）。 */
+function hfDeptPosPickerHtml(){
+    var existing = {};
+    (LISTS.job_desc||[]).forEach(function(r){ existing[r.dept_id+'-'+r.position_id] = true; });
+    var top = META.top_approver_dept_position;
+    var topKey = top ? (top.dept_id+'-'+top.position_id) : null;
+    var groups = {};
+    (META.dept_position_pairs||[]).forEach(function(p){
+        if (!groups[p.dept_id]) groups[p.dept_id] = {name:p.dept_name, rows:[]};
+        groups[p.dept_id].rows.push(p);
+    });
+    var deptIds = Object.keys(groups).sort(function(a,b){ return groups[a].name.localeCompare(groups[b].name,'zh-Hant'); });
+    var html = '';
+    deptIds.forEach(function(did){
+        var g = groups[did];
+        html += '<div class="ppl-dept-hd" data-dept="'+did+'" onclick="hfDeptPosGroupToggle(this)"><i class="fa fa-folder-o"></i> '+esc(g.name)+'（'+g.rows.length+'個職位，點擊全選/取消）</div>';
+        g.rows.forEach(function(p){
+            var key = p.dept_id+'-'+p.position_id;
+            var isTop = key === topKey, isDone = !!existing[key];
+            var tag = isTop ? ' <span class="na-tag">(全站最高決策者，不需要)</span>' : (isDone ? ' <span class="na-tag">(已建立)</span>' : '');
+            html += '<label data-dept="'+did+'" data-hay="'+esc(g.name+' '+p.position_name).toLowerCase()+'"'+((isTop||isDone)?' style="opacity:.55;"':'')+'>'
+                  + '<input type="checkbox" class="dp-ck" value="'+key+'"'+((isTop||isDone)?' disabled':'')+'> '
+                  + esc(p.position_name) + '（' + p.holder_count + '人）' + tag + '</label>';
+        });
+    });
+    return html || '<span style="color:#8a6d45;">查無部門×職位資料</span>';
+}
+function hfDeptPosGroupToggle(hd){
+    var did = $(hd).data('dept');
+    var $boxes = $('#createDeptPosList .dp-ck:not(:disabled)').filter(function(){ return $(this).closest('label').data('dept') == did; });
+    var allChecked = $boxes.length && $boxes.filter(':checked').length === $boxes.length;
+    $boxes.prop('checked', !allChecked);
+}
 function openCreateModal(ft){
     CREATE_TYPE = ft;
     $('#createTitle').text('建立表單 — '+FORM_LABEL[ft]);
     $('#createBizDate').val(META.today);
     $('#createErrList').empty();
+    $('#createDeptPosBlock').toggle(ft === 'job_desc');
+    $('#createPeopleBlock').toggle(ft !== 'job_desc');
+    if (ft === 'job_desc') {
+        $('#createDeptPosList').html(hfDeptPosPickerHtml());
+        $('#createMachineBlock').hide();
+        openMask('createMask');
+        return;
+    }
     var eligDeptIds = null;
     if (ft !== 'job_desc') {
         var col = ft === 'skill_assess' ? 'produce_skill_assess' : 'produce_competency';
@@ -480,10 +532,27 @@ function hfToggleMachineSrc(){
     $('#createMachineList').toggle($('input[name=mSrc]:checked').val() === 'manual');
 }
 function hfSubmitCreate(){
+    var bizDate = $('#createBizDate').val() || META.today;
+    if (CREATE_TYPE === 'job_desc') {
+        var pairs = $('#createDeptPosList .dp-ck:checked').map(function(){
+            var kv = $(this).val().split('-');
+            return {dept_id:kv[0], position_id:kv[1]};
+        }).get();
+        if (!pairs.length){ $('#createErrList').text('請至少選擇一組部門×職位'); return; }
+        ajaxPost('batch_create', {form_type:'job_desc', dept_position_pairs:JSON.stringify(pairs), business_date:bizDate}, function(res){
+            if (!res.ok){ $('#createErrList').text(res.error||'建立失敗'); return; }
+            var msg = '成功建立 '+res.created+' 筆';
+            if (res.skipped && res.skipped.length) msg += '；' + res.skipped.length + ' 筆已存在略過：' + res.skipped.join('；');
+            if (res.errors && res.errors.length) msg += '；' + res.errors.length + ' 筆失敗：' + res.errors.join('；');
+            $('#createErrList').css('color', res.errors && res.errors.length ? '#DD5138' : '#3f9142').text(msg);
+            loadList('job_desc');
+            if (!res.errors || !res.errors.length) setTimeout(function(){ closeMask('createMask'); }, 900);
+        });
+        return;
+    }
     var uids = $('#createPeopleList .ppl-ck:checked').map(function(){ return $(this).val(); }).get();
     uids = uids.filter(function(v,i){ return uids.indexOf(v)===i; }); // 兼任會出現多次checkbox但value相同，去重
     if (!uids.length){ $('#createErrList').text('請至少選擇一位員工'); return; }
-    var bizDate = $('#createBizDate').val() || META.today;
     var wids = [];
     if (CREATE_TYPE === 'skill_assess' && $('input[name=mSrc]:checked').val() === 'manual') {
         wids = $('#createMachineListBody .mach-ck:checked').map(function(){ return $(this).val(); }).get();
@@ -498,6 +567,29 @@ function hfSubmitCreate(){
         loadList(CREATE_TYPE);
         if (!res.errors || !res.errors.length) setTimeout(function(){ closeMask('createMask'); }, 900);
     });
+}
+
+/** 缺件提示：找出符合部門資格、但目前完全沒有任何該類表單的員工（09/10 專用；01有各自的部門×職位灰底提示不需要這支）。 */
+function hfMissingReport(ft){
+    var col = ft === 'skill_assess' ? 'produce_skill_assess' : 'produce_competency';
+    var eligDeptIds = (META.dept_type_settings||[]).filter(function(d){ return !!d[col]; }).map(function(d){ return d.department_id; });
+    var people = (META.people||[]).filter(function(p){ return (p.dept_ids||[]).some(function(d){ return eligDeptIds.indexOf(d) >= 0; }); });
+    var have = {};
+    (LISTS[ft]||[]).forEach(function(r){
+        if (ft === 'competency') have[r.user_id+'-'+r.dept_id+'-'+r.position_id] = true;
+        else have[r.user_id] = true;
+    });
+    return people.filter(function(p){
+        return ft === 'competency' ? !have[p.id+'-'+p.dept_id+'-'+p.position_id] : !have[p.id];
+    });
+}
+function openMissingModal(ft){
+    var missing = hfMissingReport(ft);
+    if (!missing.length){ alert('未偵測到缺件，符合資格的員工目前都已建立過「'+FORM_LABEL[ft]+'」。'); return; }
+    var names = missing.map(function(p){ return esc(p.dept_name)+'／'+esc(p.position_name)+'／'+esc(p.user_cname); });
+    if (!confirm('偵測到 '+missing.length+' 位員工尚未建立「'+FORM_LABEL[ft]+'」：\n'+names.join('\n')+'\n\n是否開啟建立表單視窗並預先勾選這些人？')) return;
+    openCreateModal(ft);
+    setTimeout(function(){ missing.forEach(function(p){ hfPplSync($('.ppl-ck[value="'+p.id+'"]').prop('checked', true)[0]); }); }, 30);
 }
 </script>
 <script>
@@ -563,17 +655,22 @@ function openViewModal(ft, id){
     $.getJSON(API, {action:'get', id:id}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         CUR = res.instance;
-        $('#viewTitle').text(FORM_LABEL[ft]+' — '+CUR.user_cname);
+        $('#viewTitle').text(FORM_LABEL[ft]+' — '+(ft==='job_desc' ? (CUR.dept_name+'／'+CUR.position_name) : CUR.user_cname));
         $('#viewBody').html(renderViewBody(ft, CUR));
         openMask('viewMask');
     });
 }
 function headTableHtml(r){
     var h = '<table class="itm-tbl"><tbody>'
-          + '<tr><th style="width:90px;">部門</th><td>'+esc(r.dept_name||'')+'</td><th style="width:90px;">職位</th><td>'+esc(r.position_name||'')+'</td></tr>'
-          + '<tr><th>姓名</th><td>'+esc(r.user_cname||'')+'</td><th>員工編號</th><td>'+esc(r.user_no||'')+'</td></tr>'
-          + '<tr><th>到職日</th><td>'+dispDate(r.onboard_date)+'</td><th>主管</th><td>'+esc(r.supervisor_name||'')+'</td></tr>'
-          + '<tr><th>日期</th><td>'+dispDate(r.business_date)+'</td><th>狀態</th><td>'+(STATUS_LABEL[r.status]||r.status)+'</td></tr>';
+          + '<tr><th style="width:90px;">部門</th><td>'+esc(r.dept_name||'')+'</td><th style="width:90px;">職位</th><td>'+esc(r.position_name||'')+'</td></tr>';
+    if (r.form_type === 'job_desc') {
+        h += '<tr><th>日期</th><td>'+dispDate(r.business_date)+'</td><th>狀態</th><td>'+(STATUS_LABEL[r.status]||r.status)+'</td></tr>';
+        h += '</tbody></table>';
+        return h;
+    }
+    h += '<tr><th>姓名</th><td>'+esc(r.user_cname||'')+'</td><th>員工編號</th><td>'+esc(r.user_no||'')+'</td></tr>'
+       + '<tr><th>到職日</th><td>'+dispDate(r.onboard_date)+'</td><th>主管</th><td>'+esc(r.supervisor_name||'')+'</td></tr>'
+       + '<tr><th>日期</th><td>'+dispDate(r.business_date)+'</td><th>狀態</th><td>'+(STATUS_LABEL[r.status]||r.status)+'</td></tr>';
     if (r.form_type === 'skill_assess') h += '<tr><th>機型</th><td>'+esc(r.machine_display_name||'')+'</td><th>項目名稱</th><td>'+esc(r.item_name||'')+'</td></tr>';
     h += '</tbody></table>';
     return h;
@@ -605,7 +702,7 @@ function renderViewBody(ft, r){
     var h = statusNote(r) + headTableHtml(r);
     if (ft === 'job_desc') {
         h += jdItemsTableHtml(r.items);
-        h += '<div style="margin-top:10px;"><button class="b-ok" onclick="hfSaveItems(\'job_desc\')">存檔</button> <button class="hf-btn-sm" onclick="printOne(\'job_desc\','+r.id+')">列印</button> <button class="hf-btn-sm" onclick="copyInstance(\'job_desc\','+r.id+')">複製</button></div>';
+        h += '<div style="margin-top:10px;"><button class="b-ok" onclick="hfSaveItems(\'job_desc\')">存檔</button> <button class="hf-btn-sm" onclick="printOne(\'job_desc\','+r.id+')">列印</button></div>';
     } else if (ft === 'skill_assess') {
         var mgrNA = !!r.confirm_na;
         h += '<table class="itm-tbl hf-score-tbl"><thead><tr><th></th><th>品質</th><th>效率</th><th>熟練度</th><th>平均</th></tr></thead><tbody>'
@@ -784,9 +881,7 @@ function stampOrName(name, date, isDeputy, schema){
 
 function jdPrintHtml(r){
     var h = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">職務說明書</div></div>';
-    h += '<table class="hf-p-head"><tr><th>工號</th><td>'+esc(r.user_no||'')+'</td><th>姓名</th><td>'+esc(r.user_cname||'')+'</td></tr>'
-       + '<tr><th>職務名稱</th><td>'+esc(r.position_name||'')+'</td><th>到職日</th><td>'+dispDate(r.onboard_date)+'</td></tr>'
-       + '<tr><th>所屬部門</th><td>'+esc(r.dept_name||'')+'</td><th>直屬主管</th><td>'+esc(r.supervisor_name||'')+'</td></tr>'
+    h += '<table class="hf-p-head"><tr><th>所屬部門</th><td>'+esc(r.dept_name||'')+'</td><th>職務名稱</th><td>'+esc(r.position_name||'')+'</td></tr>'
        + '<tr><th>日期</th><td colspan="3">'+dispDate(r.business_date)+'</td></tr></table>';
     h += '<table class="hf-p-items"><thead><tr><th>工作摘要</th><th>工作相關程序書</th><th>產出表單名稱</th><th>DPI 項目（績效標準計算方式）</th></tr></thead><tbody>';
     (r.items||[]).forEach(function(it){
@@ -882,7 +977,8 @@ function printDoc(ft, id, onDone){
             var docNo = (dres.ok && dres.doc) ? dres.doc.doc_no : '';
             fetchTplForPrint(r, function(tpl){
                 var body = ft === 'job_desc' ? jdPrintHtml(r) : (ft === 'skill_assess' ? saPrintHtml(r, tpl) : cpPrintHtml(r, tpl));
-                openPrintWindow(FORM_LABEL[ft]+' - '+r.user_cname, body, docNo);
+                var titleWho = ft === 'job_desc' ? (r.dept_name+'-'+r.position_name) : r.user_cname;
+                openPrintWindow(FORM_LABEL[ft]+' - '+titleWho, body, docNo);
                 if (onDone) setTimeout(onDone, 500);
             });
         });

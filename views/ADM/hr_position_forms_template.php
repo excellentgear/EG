@@ -180,6 +180,16 @@ if (!$perms['canAdmin']) { header('Location: hr_position_forms.php'); exit; }
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('asdocMask')">關閉</button></div>
 </div></div>
 
+<!-- 多選 picker modal（AS文件/KPI項目共用，選定後把結果附加進目標文字欄） -->
+<div class="hf-mask" id="multiPickMask"><div class="hf-modal" style="max-width:600px;">
+    <div class="m-head"><span id="multiPickTitle">選擇</span><span class="m-close" onclick="closeMask('multiPickMask')">✕</span></div>
+    <div class="m-body">
+        <label>輸入關鍵字篩選</label><input type="text" id="multiPickFilter" oninput="multiPickFilterList(this.value)">
+        <div style="max-height:320px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;" id="multiPickList"></div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('multiPickMask')">取消</button><button class="b-ok" onclick="multiPickConfirm()">加入所選</button></div>
+</div></div>
+
 <!-- 角色設定 modal（管理員；定義本模組角色能看到/做什麼，指派給誰在「使用者權限設定」頁） -->
 <div class="hf-mask" id="roleSetMask"><div class="hf-modal" style="max-width:760px;">
     <div class="m-head"><span>角色設定</span><span class="m-close" onclick="closeMask('roleSetMask')">✕</span></div>
@@ -395,26 +405,121 @@ function fillTplForEdit(id){
         openMask('tplMask');
     });
 }
+function jdTplRowHtml(d){
+    d = d || {};
+    return '<tr><td><textarea class="c-a">'+esc(d.summary||'')+'</textarea></td>'
+         + '<td><textarea class="c-b">'+esc(d.process||'')+'</textarea><br>'
+           + '<button type="button" class="hf-btn-sm" onclick="openAsDocPicker([\'二階\'],$(this).siblings(\'textarea\')[0])">選程序書(AS二階)</button></td>'
+         + '<td><textarea class="c-c">'+esc(d.form_name||'')+'</textarea><br>'
+           + '<button type="button" class="hf-btn-sm" onclick="openAsDocPicker([\'三階\',\'四階\'],$(this).siblings(\'textarea\')[0])">選表單(AS三/四階)</button></td>'
+         + '<td><textarea class="c-d">'+esc(d.dpi||'')+'</textarea><br>'
+           + '<button type="button" class="hf-btn-sm" onclick="openKpiPicker($(this).siblings(\'textarea\')[0])">選KPI標準</button></td></tr>';
+}
 function jdTplTableHtml(items){
     var rows = items && items.length ? items : [{data:{}}];
-    var h = '<label>工作職責內容</label><table class="itm-tbl"><thead><tr><th>工作摘要</th><th>工作相關程序書</th><th>產出表單名稱</th><th>DPI 項目</th></tr></thead>'
+    var h = '<label>工作職責內容（「程序書」「表單」可從既有 AS 文件多選帶入編號+名稱，「產出表單名稱」欄仍可在選完後手動追加內容；「DPI 項目」可從 KPI 頁既有標準多選模糊搜尋帶入）</label>'
+          + '<table class="itm-tbl"><thead><tr><th>工作摘要</th><th>工作相關程序書</th><th>產出表單名稱</th><th>DPI 項目</th></tr></thead>'
           + '<tbody id="tplItemsBody" data-eg-row-add="hfTplJdAdd" data-eg-row-del="hfTplJdDel">';
-    rows.forEach(function(it){ var d=it.data||{}; h += '<tr><td><textarea class="c-a">'+esc(d.summary||'')+'</textarea></td><td><textarea class="c-b">'+esc(d.process||'')+'</textarea></td><td><textarea class="c-c">'+esc(d.form_name||'')+'</textarea></td><td><textarea class="c-d">'+esc(d.dpi||'')+'</textarea></td></tr>'; });
+    rows.forEach(function(it){ h += jdTplRowHtml(it.data); });
     h += '</tbody></table><button class="hf-btn-sm" type="button" onclick="hfTplJdAdd()">+新增列</button> <button class="hf-btn-sm" type="button" onclick="hfTplJdDel()">-刪除末列</button>';
     return h;
 }
-function hfTplJdAdd(){ $('#tplItemsBody').append('<tr><td><textarea class="c-a"></textarea></td><td><textarea class="c-b"></textarea></td><td><textarea class="c-c"></textarea></td><td><textarea class="c-d"></textarea></td></tr>'); }
+function hfTplJdAdd(){ $('#tplItemsBody').append(jdTplRowHtml({})); }
 function hfTplJdDel(){ var $r=$('#tplItemsBody tr'); if ($r.length>1) $r.last().remove(); }
+
+/* ============================================================ AS文件/KPI 多選 picker（共用modal，選定後附加進目標textarea） ============================================================ */
+var MULTI_PICK_TARGET = null, MULTI_PICK_ITEMS = [], MULTI_PICK_FORMAT = null;
+function multiPickRender(items){
+    $('#multiPickList').html(items.map(function(it, i){
+        return '<label style="display:block;font-size:12.5px;padding:2px 0;" data-hay="'+esc(it._hay).toLowerCase()+'"><input type="checkbox" class="mp-ck" data-idx="'+i+'"> '+esc(it._label)+'</label>';
+    }).join('') || '<span style="color:#8a6d45;">查無資料</span>');
+}
+function multiPickFilterList(kw){
+    kw = (kw||'').toLowerCase();
+    $('#multiPickList label').each(function(){ $(this).toggle(!kw || ($(this).data('hay')+'').indexOf(kw) >= 0); });
+}
+function multiPickConfirm(){
+    var picked = $('.mp-ck:checked').map(function(){ return MULTI_PICK_ITEMS[$(this).data('idx')]; }).get();
+    if (!picked.length){ closeMask('multiPickMask'); return; }
+    var lines = picked.map(MULTI_PICK_FORMAT).join('\n');
+    var cur = $(MULTI_PICK_TARGET).val();
+    $(MULTI_PICK_TARGET).val(cur ? (cur + '\n' + lines) : lines);
+    closeMask('multiPickMask');
+}
+/** 從 AS 文件管理現成 API 依「階」查詢（二階=程序書、三/四階=表單），選定後帶出「編號 名稱」不含版次。 */
+function openAsDocPicker(levels, targetTextarea){
+    MULTI_PICK_TARGET = targetTextarea;
+    MULTI_PICK_FORMAT = function(d){ return d.doc_no + ' ' + d.doc_name; };
+    $('#multiPickTitle').text('選擇 AS 文件（'+levels.join('/')+'）');
+    $('#multiPickFilter').val('');
+    $('#multiPickList').html('<span style="color:#8a6d45;">載入中…</span>');
+    openMask('multiPickMask');
+    var calls = levels.map(function(lv){
+        return $.getJSON('../../src/store/AS_Document_API.php', {action:'list_documents', level:lv});
+    });
+    $.when.apply($, calls).always(function(){
+        // AS_Document_API.php list_documents 回傳 {status:'success', data:[...]}；$.when 多筆呼叫時
+        // 每筆結果會是 [data, textStatus, jqXHR] 包一層陣列，單筆呼叫時 arguments 本身就是那組，要分開處理。
+        var results = calls.length > 1 ? Array.prototype.slice.call(arguments) : [arguments];
+        var docs = [];
+        results.forEach(function(r){
+            var res = r[0];
+            if (res && res.status === 'success' && res.data) docs = docs.concat(res.data);
+        });
+        MULTI_PICK_ITEMS = docs.map(function(d){ return {doc_no:d.doc_no, doc_name:d.doc_name, _label:d.doc_no+' '+d.doc_name, _hay:d.doc_no+' '+d.doc_name}; });
+        multiPickRender(MULTI_PICK_ITEMS);
+    });
+}
+var KPI_INDICATORS_CACHE = null;
+function openKpiPicker(targetTextarea){
+    MULTI_PICK_TARGET = targetTextarea;
+    MULTI_PICK_FORMAT = function(d){ return d.name + '（' + (d.stat_desc||'') + '）'; };
+    $('#multiPickTitle').text('選擇 KPI 標準與計算方式');
+    $('#multiPickFilter').val('');
+    if (KPI_INDICATORS_CACHE) { MULTI_PICK_ITEMS = KPI_INDICATORS_CACHE; multiPickRender(MULTI_PICK_ITEMS); openMask('multiPickMask'); return; }
+    $('#multiPickList').html('<span style="color:#8a6d45;">載入中…</span>');
+    openMask('multiPickMask');
+    $.getJSON(API, {action:'kpi_indicator_list'}, function(res){
+        var rows = res.ok ? (res.indicators||[]) : [];
+        KPI_INDICATORS_CACHE = rows.map(function(d){ return {name:d.name, stat_desc:d.stat_desc, _label:d.name+'（'+(d.stat_desc||'')+'）', _hay:d.name+' '+(d.stat_desc||'')}; });
+        MULTI_PICK_ITEMS = KPI_INDICATORS_CACHE;
+        multiPickRender(MULTI_PICK_ITEMS);
+    });
+}
 function cpTplTableHtml(items){
     var rows = items && items.length ? items : [{data:{}}];
-    var h = '<label>職能項目清單</label><table class="itm-tbl"><thead><tr><th style="width:40px;">編號</th><th>項目名稱</th></tr></thead>'
+    var h = '<label>職能項目清單（可手動增設項目，也可從已建立的「專業技能鑑定考核表範本」適用機型清單自動帶入）</label>'
+          + '<div style="margin-bottom:6px;"><select id="cpFromSaTpl" style="max-width:260px;"></select> <button type="button" class="hf-btn-sm" onclick="hfCpFillFromSaTpl()">從此技能鑑定表範本帶入項目</button></div>'
+          + '<table class="itm-tbl"><thead><tr><th style="width:40px;">編號</th><th>項目名稱</th></tr></thead>'
           + '<tbody id="tplItemsBody" data-eg-row-add="hfTplCpAdd" data-eg-row-del="hfTplCpDel">';
     rows.forEach(function(it,i){ var d=it.data||{}; h += '<tr><td style="text-align:center;">'+(i+1)+'</td><td><input type="text" class="c-name" value="'+esc(d.skill_name||'')+'"></td></tr>'; });
     h += '</tbody></table><button class="hf-btn-sm" type="button" onclick="hfTplCpAdd()">+新增列</button> <button class="hf-btn-sm" type="button" onclick="hfTplCpDel()">-刪除末列</button>';
+    $.getJSON(API, {action:'template_list', form_type:'skill_assess'}, function(res){
+        var tpls = res.ok ? (res.templates||[]) : [];
+        var opts = tpls.length ? tpls.map(function(t){ return '<option value="'+t.id+'">'+esc(t.name)+'</option>'; }).join('')
+                                : '<option value="">（尚未建立任何專業技能鑑定考核表範本，請先建立）</option>';
+        $('#cpFromSaTpl').html(opts);
+    });
     return h;
 }
 function hfTplCpAdd(){ var n=$('#tplItemsBody tr').length+1; $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><input type="text" class="c-name"></td></tr>'); }
 function hfTplCpDel(){ var $r=$('#tplItemsBody tr'); if ($r.length>1) $r.last().remove(); }
+/** 職能鑑定表範本的職能項目清單自動從技能鑑定表範本的適用機型清單帶入（使用者明確要求）；附加在既有列後面，不覆蓋已手動填的內容。 */
+function hfCpFillFromSaTpl(){
+    var saId = $('#cpFromSaTpl').val();
+    if (!saId){ alert('請先建立此職位的「專業技能鑑定考核表範本」（設定適用機型），才能自動帶入職能項目'); return; }
+    $.getJSON(API, {action:'template_get', id:saId}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        var machines = res.template.machines || [];
+        if (!machines.length){ alert('此技能鑑定表範本尚未設定適用機型'); return; }
+        // 若唯一一列是空白列（初始狀態），先清掉再帶入，避免留一列空白
+        if ($('#tplItemsBody tr').length === 1 && !$('#tplItemsBody .c-name').val()) $('#tplItemsBody').empty();
+        machines.forEach(function(m){
+            var n = $('#tplItemsBody tr').length + 1;
+            $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><input type="text" class="c-name" value="'+esc(m.item_name||m.display_name)+'"></td></tr>');
+        });
+    });
+}
 
 function tplSave(){
     var name = $('#tplName').val().trim();

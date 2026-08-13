@@ -41,6 +41,8 @@ case 'meta': {
         'departments'=>$depts, 'positions'=>$positions, 'people'=>$people, 'features'=>HRF_FEATURES,
         'form_types'=>HRF_FORM_TYPES, 'company_name'=>eg_company_full_name($db),
         'dept_type_settings'=>hrf_dept_type_setting_list($db),
+        'dept_position_pairs'=>hrf_dept_position_pairs($db),
+        'top_approver_dept_position'=>hrf_top_approver_dept_position($db),
         'csrf'=>hrf_csrf_token(),
     ]);
 }
@@ -84,7 +86,7 @@ case 'create': {
     hrf_need_csrf();
     if (!$perms['canCreate']) jerr('無建立權限', 403);
     $formType = (string)($_POST['form_type'] ?? '');
-    if (!isset(HRF_FORM_TYPES[$formType])) jerr('不明的表單類型');
+    if (!isset(HRF_FORM_TYPES[$formType]) || $formType === 'job_desc') jerr('職務說明書請用 batch_create（部門x職位），此動作僅供09/10使用');
     $targetUid = (int)($_POST['user_id'] ?? 0);
     if ($targetUid <= 0) jerr('請選擇員工');
     $whitelistId = (int)($_POST['whitelist_id'] ?? 0) ?: null;
@@ -99,11 +101,18 @@ case 'batch_create': {
     if (!$perms['canCreate']) jerr('無建立權限', 403);
     $formType = (string)($_POST['form_type'] ?? '');
     if (!isset(HRF_FORM_TYPES[$formType])) jerr('不明的表單類型');
+    $bizDate = (string)($_POST['business_date'] ?? date('Y-m-d'));
+    if ($formType === 'job_desc') {
+        // 01 以部門x職位為主：user_ids 改傳 dept_position_pairs = [{dept_id,position_id},...]
+        $pairs = json_decode((string)($_POST['dept_position_pairs'] ?? '[]'), true);
+        if (!is_array($pairs) || !$pairs) jerr('請至少選擇一組部門×職位');
+        $r = hrf_instance_create_batch_job_desc($db, $pairs, $bizDate, $uid, $uname);
+        jout(['created'=>count($r['created']), 'created_ids'=>$r['created'], 'errors'=>$r['errors'], 'skipped'=>$r['skipped']]);
+    }
     $targetUids = json_decode((string)($_POST['user_ids'] ?? '[]'), true);
     if (!is_array($targetUids) || !$targetUids) jerr('請至少選擇一位員工');
     $whitelistIds = json_decode((string)($_POST['whitelist_ids'] ?? '[]'), true);
     if (!is_array($whitelistIds)) $whitelistIds = [];
-    $bizDate = (string)($_POST['business_date'] ?? date('Y-m-d'));
     $r = hrf_instance_create_batch($db, $formType, $targetUids, $whitelistIds, $bizDate, $uid, $uname);
     jout(['created'=>count($r['created']), 'created_ids'=>$r['created'], 'errors'=>$r['errors'], 'skipped'=>$r['skipped']]);
 }
@@ -330,6 +339,15 @@ case 'confirmer_position_save': {
     if (!$perms['canAdmin']) jerr('僅管理員可設定', 403);
     hrf_confirmer_position_save($db, (int)($_POST['position_id'] ?? 0) ?: null, $uname);
     jout([]);
+}
+
+/* ============================================================ KPI 項目清單（供職務說明書 DPI 項目多選模糊搜尋，不走 KPI 模組本身的權限） ============================================================ */
+
+case 'kpi_indicator_list': {
+    try {
+        $rows = $db->query("SELECT indicator_id, item_no, name, stat_desc FROM kpi_as_indicator WHERE is_active=1 ORDER BY sort_order, item_no")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { $rows = []; }
+    jout(['indicators'=>$rows]);
 }
 
 default:
