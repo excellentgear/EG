@@ -3,6 +3,25 @@
 // 由 OreadyReply_ForPm_BaseOfTime2.php include，請勿直接開啟。
 // session_start() 已由主檔案執行。
 
+// ── 移轉相關動作的後端權限守門（鐵律8：前端按鈕擋不夠，後端要同規則再擋一次）──
+// 只針對「移轉/取消移轉/快速同步移轉/直接標記已移轉」這四個高風險寫入動作補後端授權檢查；
+// 其餘動作目前仍只靠前端按鈕可見性把關，屬既有缺口、不在本次異動範圍。
+$_oready_transfer_guard_actions = ['transfer_process', 'quick_sync_transfer', 'cancel_transfer', 'mark_process_transferred'];
+if (isset($_POST['action']) && in_array($_POST['action'], $_oready_transfer_guard_actions, true)) {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/role_features_helper.php';
+    if (!isset($db)) {
+        $_oready_guard_conn = new DBConnection();
+        $db = $_oready_guard_conn->getPDO();
+    }
+    $_oready_guard_uid = intval($_SESSION['id'] ?? 0);
+    if (!oready_resolve_can_transfer($db, $_oready_guard_uid, $_SERVER['PHP_SELF'])) {
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'message' => '無移轉權限，請聯絡管理員設定角色功能']);
+        exit;
+    }
+}
+
 // AJAX BOM UPDATE HANDLER
 if (isset($_POST['action']) && $_POST['action'] === 'update_bom_info') {
 
