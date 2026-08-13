@@ -15,11 +15,13 @@ include_once '../../src/common/_config.php';
 include_once '../../src/common/DBConnection.php';
 include_once '../../src/common/asdoc_lib.php';
 include_once '../../src/common/pfmea_lib.php';
+include_once '../../src/common/td_dev_eval_lib.php';
 
 $db = (new DBConnection())->getPDO();
 pfmea_ensure_schema($db);
 $pfUser = pfmea_current_user($db);
 $perms = pfmea_perms($db, $pfUser);
+$defaultProductName = td_dev_eval_default_product_name_get($db);
 $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管理員' : ($perms['canEdit'] ? 'PFMEA登錄' : ($perms['canView'] ? 'PFMEA檢閱' : '無權限')));
 ?>
 <!DOCTYPE html>
@@ -194,10 +196,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
 <div class="pf-mask" id="editMask"><div class="pf-modal">
     <div class="m-head"><span id="editTitle">PFMEA潛在失效模式及效應分析</span><span class="m-close" onclick="closeMask('editMask')">✕</span></div>
     <div class="m-body">
+        <div style="display:flex;gap:16px;align-items:flex-start;">
+        <div style="flex:1;min-width:0;">
         <div class="pf-head-grid">
             <div>
                 <label>料號</label>
-                <input type="text" id="fPartNo" placeholder="輸入部分料號或圖號搜尋；查無時可直接手動輸入" autocomplete="off">
+                <div class="pf-proc-box">
+                    <input type="text" id="fPartNo" placeholder="輸入部分料號或圖號搜尋；查無時可直接手動輸入" autocomplete="off">
+                    <button type="button" id="btnOpenDrawing" onclick="openPartDrawing()" style="display:none;height:30px;padding:0 8px;border-radius:4px;border:1px solid #D8BE93;background:#fff;color:#b5762a;cursor:pointer;" title="開新視窗看圖面填寫參考"><i class="fa fa-image"></i> 開圖</button>
+                </div>
                 <input type="hidden" id="fPartDId" value="0">
             </div>
             <div>
@@ -208,11 +215,21 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <div class="pf-head-grid" style="margin-top:8px;">
             <div>
                 <label>產品名稱</label>
-                <input type="text" id="fProductName" placeholder="產品名稱">
+                <input type="text" id="fProductName" placeholder="產品名稱（綁定料號時自動帶入建議值，可自行修改）">
             </div>
             <div>
                 <label>規格描述</label>
-                <input type="text" id="fSpecDesc" placeholder="規格描述">
+                <input type="text" id="fSpecDesc" placeholder="規格描述（綁定料號時自動偵測齒輪規格，可自行修改）">
+            </div>
+        </div>
+        <div class="pf-head-grid" style="margin-top:8px;">
+            <div>
+                <label>業務日期<span style="font-weight:normal;color:#8a6d45;">（目標完成日/生效日期預設帶此日期）</span></label>
+                <input type="date" id="fBizDate">
+            </div>
+            <div>
+                <label>快速套用參考日期</label>
+                <div class="pf-chk-row" id="fBizDateQuick" style="margin-top:6px;"></div>
             </div>
         </div>
         <label style="margin-top:8px;">分類</label>
@@ -220,8 +237,16 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
             <label class="pf-chk"><input type="radio" name="fItemType" value="part" checked> 零件</label>
             <label class="pf-chk"><input type="radio" name="fItemType" value="assembly"> 組合件</label>
         </div>
-        <label style="margin-top:8px;">相關部門</label>
+        <label style="margin-top:8px;">相關部門
+            <span id="btnDeptDefaultSave" class="pf-op" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;display:none;margin-left:8px;" onclick="saveDeptDefaults()">設為預設勾選值(管理員)</span>
+        </label>
         <div class="pf-chk-row" id="fDeptChecks"></div>
+        </div>
+        <div id="fOrderProcPanel" style="display:none;width:230px;flex:0 0 230px;background:#FFF7E8;border:1px solid #EADFC8;border-radius:6px;padding:8px 10px;font-size:12px;color:#5b3a1e;max-height:320px;overflow-y:auto;">
+            <b>此料號訂單/報價製程履歷</b>
+            <div id="fOrderProcList" style="margin-top:6px;"></div>
+        </div>
+        </div>
 
         <div style="margin-top:6px;font-size:12px;color:#8a6d45;">表單編號：<b id="fDocNo">存檔後自動產生</b>
             ｜ 建立：<span id="fCreatedInfo">—</span></div>
@@ -417,18 +442,20 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
     <div class="m-head"><span><i class="fa fa-question-circle"></i> PFMEA潛在失效模式及效應分析 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc">
         <h4>功能說明</h4>
-        <p>製程潛在失效模式及效應分析（PFMEA，AS 3-TD-01-02），每個料號一份分析表。表頭欄位（料號／客戶名稱／產品名稱／規格描述／分類／相關部門）與分析表格欄位皆比照官方紙本表單(F-11210-UE2-0001)。逐列記錄一個潛在失效模式：從項目、功能、要求、潛在失效模式、失效模式潛在後果、分類、失效潛在原因，評出嚴重度(S)/發生率(O)，填現行設計管制（控制預防／控制偵測）、評出偵測度(D)，系統自動算出風險優先指數 RPN=S×O×D；針對高 RPN 項目填建議措施、責任者、目標完成日，改善後填採行措施、生效日期，再評一次新的 S/O/D/RPN。</p>
+        <p>製程潛在失效模式及效應分析（PFMEA，AS 3-TD-01-02），每個料號一份分析表。表頭欄位（料號／客戶名稱／產品名稱／規格描述／業務日期／分類／相關部門）與分析表格欄位皆比照官方紙本表單(F-11210-UE2-0001)。逐列記錄一個潛在失效模式：從項目、功能、要求、潛在失效模式、失效模式潛在後果、分類、失效潛在原因，評出嚴重度(S)/發生率(O)，填現行設計管制（控制預防／控制偵測）、評出偵測度(D)，系統自動算出風險優先指數 RPN=S×O×D；針對高 RPN 項目填建議措施、目標完成日，改善後填生效日期，再評一次新的 S/O/D/RPN（改善後RPN=評價S×評價O×評價D）。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>按「新增」→ 選擇「料號」（打部分字元搜尋，查無此料號時可直接手動輸入；選定後客戶名稱與「分類」零件/組合件自動帶入，可手動修改）、填「產品名稱」「規格描述」、勾選「相關部門」。</li>
+            <li>按「新增」→ 選擇「料號」（打部分字元搜尋，查無此料號時可直接手動輸入；選定後客戶名稱與「分類」零件/組合件自動帶入，可手動修改；「規格描述」自動偵測齒輪規格、「產品名稱」自動帶入預設值，皆可手動改）。綁定料號後「料號」欄旁出現「開圖」按鈕（開新視窗看圖面），右側出現此料號的訂單/報價製程履歷面板可對照填寫。</li>
+            <li><b>業務日期</b>：手動新建的紀錄，綁定料號後下方會列出「套用BOM日期／套用最早報工日期／套用最早訂單日期」按鈕，點擊即帶入（比照建議建立清單同一套參考日期邏輯）；由「建議建立清單」批次轉入的紀錄，此欄自動沿用產品開發評估表的建立日期。新增失效模式分析列時，「目標完成日」「生效日期」預設帶入業務日期，可個別修改；編輯既有文件時若某列內容有異動，存檔前會詢問是否要一併把該列這兩個日期更新為業務日期。</li>
             <li>每個潛在失效模式是一張卡片，欄位由上到下分「基本資料／風險評估與現行設計管制／建議措施／措施結果」四區，不需要橫向捲動；S/O/D 每格填 1-10，<b>RPN 由系統自動計算，不可手動輸入</b>。按「新增一項失效模式分析」可再加一張卡片。</li>
             <li><b>製程代號</b>：卡片內輸入已建立的製程代號會自動帶出該製程的「潛在失效模式」下拉選項（也可直接手動輸入新值，儲存時會自動加進清單供下次選用）；輸入清單中沒有的新代號會詢問製程名稱並即時建立。「控制預防」「控制偵測」同樣是下拉可選/可手動輸入。按「整組列表」可叫出此製程所有樣板（組名＝製程名稱_項目名稱），點選後直接把該筆的基本資料/評級/控制/建議措施/評價欄位整批帶入，帶入後仍可個別修改。這些清單新增不限身分，僅管理員能刪除。</li>
-            <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類自動帶入），分析項目仍需逐份手動填寫。</li>
+            <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期自動帶入），分析項目仍需逐份手動填寫。</li>
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
             <li>「評級對照表」隨時可見一組精簡的嚴重度(S)／發生率(O)／偵測度(D)／風險優先指數(RPN)速查小表（比照官方表單版面）；點擊標題列另外開跳窗顯示完整官方說明文字，分四個分頁。兩者內容皆為固定參考，不隨每份分析表個別修改。</li>
             <li>料號可點擊開啟圖面查閱（比照報價單頁做法）。</li>
+            <li><b>相關部門預設值</b>：勾選好常用部門後，點旁邊「設為預設勾選值」（僅管理員可見）即可設定新建文件時自動帶勾的部門，仍可逐份調整。</li>
             <li>列印比照官方紙本表單版面（表頭資訊＋評級對照表＋相關部門置於上方，分析表格逐列對齊官方欄位順序與分組），同時比照全站列印標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
             <li><b>修訂履歷</b>：列印版右上角顯示本筆分析表自己的「編號／日期／修訂內容／準備」記錄（比照官方表單，取消批准/檢查欄位）。第一次存檔自動記1筆「新增文件」，準備人為當時建立者；之後修改存檔時會詢問是否要記為新版本，選是才會新增一列「修改文件」（準備人為當次修改者），選否代表只是小幅調整、不記版次，避免每次存檔都一直跳號。（此為本筆填寫紀錄自己的履歷，跟 AS 文件本身的版次管理是兩件事，AS 文件範本本身的改版仍由 AS 文件管理維護。）</li>
         </ul>
@@ -457,6 +484,8 @@ var VIEWER_URL = '../pm/bom_viewer.php';
 var CAN_EDIT = <?= $perms['canEdit'] ? 'true' : 'false' ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 var CUR_ID = 0, AS_DOCS = [], AS_DOC = null, SUGGEST_ROWS = [];
+var DEFAULT_PRODUCT_NAME = <?= json_encode($defaultProductName, JSON_UNESCAPED_UNICODE) ?>; // 產品名稱預設值(全部產品通用單一值，設定入口在td_dev_eval.php，PFMEA只讀取套用)
+var ITEM_ORIG = {}; // 編輯既有文件時，各列原始內容快照(id -> 排除target_date/action_date後的JSON)，存檔時比對是否異動供提示更新日期
 var RENDER_SEQ = 0;
 var PROCESS_LIST = []; // [{id,process_code,process_name}] 製程代號主檔，跳窗開啟時載入一次
 var CONTROL_OPTIONS = {prevention:[], detection:[]}; // 控制預防/控制偵測固定選項，跳窗開啟時載入一次
@@ -627,11 +656,23 @@ window.toggleCard = function(hdEl){
     $card.find('.toggle-ic').attr('class', 'fa fa-chevron-'+(willCollapse?'right':'down')+' toggle-ic');
 };
 window.pfAddRow = function(){
-    $('#itemBody').append(itemCardHtml({}, $('#itemBody .pf-card').length, true));
+    // 新增一列失效模式分析：目標完成日/生效日期預設帶入業務日期，減少逐列手填（2026-08-13使用者要求）
+    var bizDate = $('#fBizDate').val();
+    $('#itemBody').append(itemCardHtml(bizDate ? {target_date:bizDate, action_date:bizDate} : {}, $('#itemBody .pf-card').length, true));
     renumberRows();
     populateCardControlDatalists($('#itemBody .pf-card').last());
     return true;
 };
+// 業務日期填入/變更時，順便回填目前還空白的目標完成日/生效日期欄位（已填過的列不覆蓋）
+$(document).on('change', '#fBizDate', function(){
+    var v = $(this).val();
+    if (!v) return;
+    $('#itemBody .pf-card').each(function(){
+        var $card = $(this);
+        if (!$card.find('[data-f="target_date"]').val()) $card.find('[data-f="target_date"]').val(v);
+        if (!$card.find('[data-f="action_date"]').val()) $card.find('[data-f="action_date"]').val(v);
+    });
+});
 window.pfDelRow = function(){
     var cards = $('#itemBody .pf-card');
     if (cards.length <= 1) return false;
@@ -779,14 +820,72 @@ function deptChecksHtml(checked){
     }).join('');
 }
 function resetEditForm(){
-    CUR_ID = 0;
+    CUR_ID = 0; ITEM_ORIG = {};
     $('#fPartNo').val(''); $('#fPartDId').val('0'); $('#fCustomerName').val('');
-    $('#fProductName').val(''); $('#fSpecDesc').val('');
+    $('#fProductName').val(DEFAULT_PRODUCT_NAME || ''); $('#fSpecDesc').val('');
+    $('#fBizDate').val(''); $('#fBizDateQuick').html('');
+    $('#btnOpenDrawing').hide(); $('#fOrderProcPanel').hide();
     $('input[name=fItemType][value=part]').prop('checked', true);
     $('#fDeptChecks').html(deptChecksHtml());
+    $('#btnDeptDefaultSave').toggle(!!CAN_ADMIN);
+    $.getJSON(API, {action:'dept_defaults_get'}, function(res){
+        if (res.success && res.depts && res.depts.length && CUR_ID === 0) $('#fDeptChecks').html(deptChecksHtml(res.depts));
+    });
     $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
     renderItems([]);
 }
+/* 綁定料號後共用動作：開圖按鈕/訂單製程履歷側欄/齒輪規格自動偵測/建議建立日期快速套用按鈕
+   （2026-08-13使用者要求，皆綁定料號後才有意義，未綁定料號時全部隱藏/清空） */
+function onPartBound(partDId, partText, custName){
+    if (!partDId && !partText) {
+        $('#btnOpenDrawing').hide(); $('#fOrderProcPanel').hide(); $('#fBizDateQuick').html('');
+        return;
+    }
+    $('#btnOpenDrawing').show();
+    if (partDId) {
+        $('#fOrderProcPanel').show();
+        $.getJSON(API, {action:'order_process_list', part_d_id:partDId}, function(res){
+            if (!res.success) return;
+            var rows = res.rows || [];
+            $('#fOrderProcList').html(rows.length ? rows.map(function(r){
+                return '<div style="margin-bottom:4px;padding-bottom:4px;border-bottom:1px dashed #EADFC8;">'
+                    + esc(r.ref_kind||'')+' '+esc(r.ref_no||'')+'<br>'+esc(r.process||'')+'　'+fmtDate(r.ref_date||'')+'</div>';
+            }).join('') : '<span style="color:#8a6d45;">查無紀錄</span>');
+        });
+        $.getJSON(API, {action:'gear_spec_get', part_d_id:partDId}, function(res){
+            if (res.success && res.spec) $('#fSpecDesc').val(res.spec);
+        });
+    } else {
+        $('#fOrderProcPanel').hide();
+    }
+    if (!CUR_ID) loadBizDateQuick(partDId, partText, custName || '');
+}
+/* 手動建立的紀錄綁定料號後，比照 td_dev_eval_suggest.php 的建議建立日期機制，
+   提供「套用BOM日期／套用最早報工日期／套用最早訂單日期」快速按鈕，點擊即帶入業務日期欄 */
+function loadBizDateQuick(partDId, partText, custName){
+    $('#fBizDateQuick').html('載入中…');
+    $.getJSON(API, {action:'biz_date_suggest', part_d_id:partDId||0, part_no_text:partText||'', customer_name:custName||''}, function(res){
+        if (!res.success){ $('#fBizDateQuick').html(''); return; }
+        var r = res.ref || {};
+        var btns = '';
+        if (r.bom_created_at) btns += '<button type="button" class="pf-row-btn" onclick="$(\'#fBizDate\').val(\''+r.bom_created_at.substring(0,10)+'\')">套用BOM日期('+fmtDate(r.bom_created_at)+')</button>';
+        if (r.earliest_report_date) btns += '<button type="button" class="pf-row-btn" onclick="$(\'#fBizDate\').val(\''+r.earliest_report_date.substring(0,10)+'\')">套用最早報工日期('+fmtDate(r.earliest_report_date)+')</button>';
+        if (r.earliest_order_date_all_time) btns += '<button type="button" class="pf-row-btn" onclick="$(\'#fBizDate\').val(\''+r.earliest_order_date_all_time.substring(0,10)+'\')">套用最早訂單日期('+fmtDate(r.earliest_order_date_all_time)+')</button>';
+        $('#fBizDateQuick').html(btns || '<span style="color:#8a6d45;font-size:12px;">查無可參考日期，請手動輸入</span>');
+    });
+}
+function openPartDrawing(){
+    // part_viewer/bom_viewer 用「料號字串」(D_Setting_Id)查表，不是 d_setting.d_id 數字主鍵
+    var partNo = $('#fPartNo').val();
+    if (partNo) EGPartPicker.openViewer(partNo, VIEWER_URL);
+}
+window.saveDeptDefaults = function(){
+    var depts = $('#fDeptChecks .dept-ck:checked').map(function(){ return $(this).val(); }).get();
+    $.post(API, {action:'dept_defaults_save', depts:JSON.stringify(depts)}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        alert('已將目前勾選的相關部門設為新建文件的預設值。');
+    }, 'json');
+};
 function openEdit(id){
     resetEditForm();
     $('#editTitle').text(id ? '編輯PFMEA分析表' : '新增PFMEA分析表');
@@ -797,11 +896,19 @@ function openEdit(id){
         $('#fPartNo').val(res.doc.part_no||''); $('#fPartDId').val(res.doc.part_d_id||0);
         $('#fCustomerName').val(res.doc.customer_name||'');
         $('#fProductName').val(res.doc.product_name||''); $('#fSpecDesc').val(res.doc.spec_desc||'');
+        $('#fBizDate').val((res.doc.biz_date||'').substring(0,10));
         $('input[name=fItemType][value='+(res.doc.item_type==='assembly'?'assembly':'part')+']').prop('checked', true);
         $('#fDeptChecks').html(deptChecksHtml((res.doc.related_depts||'').split(',').filter(Boolean)));
         $('#fDocNo').text(res.doc.doc_no);
         $('#fCreatedInfo').text((res.doc.created_by_name||'')+' '+fmtDate((res.doc.created_at||'').substring(0,10)));
         renderItems(res.items || []);
+        ITEM_ORIG = {};
+        (res.items || []).forEach(function(it){
+            if (!it.id) return;
+            ITEM_ORIG[it.id] = JSON.stringify(FIELDS.filter(function(f){ return f!=='target_date' && f!=='action_date'; })
+                .map(function(f){ return it[f]==null ? '' : String(it[f]); }));
+        });
+        onPartBound(res.doc.part_d_id||0, res.doc.part_no_text||'', res.doc.customer_name||'');
         openMask('editMask');
     });
 }
@@ -812,10 +919,15 @@ EGPartPicker.attach(document.getElementById('fPartNo'), {
     onSelect: function(row){
         $('#fPartDId').val(row.d_id);
         $('#fCustomerName').val(row.customer_name||'');
+        onPartBound(row.d_id, row.part_no||row.d_id, row.customer_name||'');
         $('input[name=fItemType][value='+((row.is_assembly=='1'||row.is_assembly===1)?'assembly':'part')+']').prop('checked', true);
     }
 });
-$('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); $('#fCustomerName').val(''); });
+$('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); $('#fCustomerName').val(''); onPartBound(0, '', ''); });
+$('#fPartNo').on('blur', function(){
+    // 沒對到料號選擇器、純手動輸入文字料號時，離開欄位才觸發一次(避免逐字打字就狂call API)
+    if (!($('#fPartDId').val()|0) && $(this).val().trim()) onPartBound(0, $(this).val().trim(), '');
+});
 
 /* 存檔前，把卡片上手動輸入、不在目前下拉清單裡的失效模式/控制預防/控制偵測新值註冊進參考清單，
    下次同製程就能直接挑選（可填表人就能新增，僅管理員能刪除——見 pfmea_reference_lib.php） */
@@ -837,7 +949,30 @@ function registerNewRefValues(){
         });
     });
 }
+/* 編輯既有文件時，若某列的分析內容(不含目標完成日/生效日期本身)有異動，詢問是否要一併把該列的
+   目標完成日/生效日期更新為業務日期(2026-08-13使用者要求) */
+function maybeUpdateItemDates(){
+    if (!CUR_ID) return;
+    var bizDate = $('#fBizDate').val();
+    if (!bizDate) return;
+    var changed = [];
+    $('#itemBody .pf-card').each(function(){
+        var $card = $(this);
+        var id = parseInt($card.attr('data-id'),10) || 0;
+        if (!id || !ITEM_ORIG[id]) return;
+        var cur = JSON.stringify(FIELDS.filter(function(f){ return f!=='target_date' && f!=='action_date'; })
+            .map(function(f){ return $card.find('[data-f="'+f+'"]').val() || ''; }));
+        if (cur !== ITEM_ORIG[id]) changed.push($card);
+    });
+    if (!changed.length) return;
+    if (!confirm('偵測到 '+changed.length+' 項失效模式分析內容有異動，是否將這些項目的「目標完成日／生效日期」一併更新為業務日期('+bizDate+')？\n（否＝維持原日期不變）')) return;
+    changed.forEach(function($card){
+        $card.find('[data-f="target_date"]').val(bizDate);
+        $card.find('[data-f="action_date"]').val(bizDate);
+    });
+}
 function saveHeader(){
+    maybeUpdateItemDates();
     // 既有文件修改存檔時，問使用者是否要記為新版本（修訂履歷才新增一列，避免小幅調整就一直跳版次；
     // 新建文件不用問，第一次存檔一律自動記1筆「新增文件」，見 Pfmea_API.php save 動作）
     var newRevision = 0;
@@ -849,6 +984,7 @@ function saveHeader(){
         item_type: $('input[name=fItemType]:checked').val() || 'part',
         product_name: $('#fProductName').val(),
         spec_desc: $('#fSpecDesc').val(),
+        biz_date: $('#fBizDate').val(),
         related_depts: JSON.stringify($('#fDeptChecks .dept-ck:checked').map(function(){ return $(this).val(); }).get()),
         items: JSON.stringify(collectItems()),
         new_revision: newRevision,
