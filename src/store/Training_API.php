@@ -569,6 +569,41 @@ case 'sign_attendee': {
     jout(['att_id'=>$attId, 'day_date'=>$dayDate]);
 }
 
+/* 超級管理員（isAdmin，員工ID=1固定屬此）全部自動簽到：免逐一輸入本人密碼，一次把該上課日尚未簽到的人
+   全部標記已簽到，比照 td_dev_eval 的「全部自動簽核」，僅補歷史紙本簽到資料/測試用；已簽到的人不覆蓋原簽到時間/方式。 */
+case 'checkin_admin_signall': {
+    if (!$perms['isAdmin']) jerr('僅系統管理員可使用此功能', 403);
+    $sid = (int)($_POST['session_id'] ?? 0);
+    $dayDate = (string)($_POST['day_date'] ?? '');
+    $ss = $db->prepare("SELECT status, train_type FROM training_session WHERE session_id=?");
+    $ss->execute([$sid]);
+    $sRow3 = $ss->fetch(PDO::FETCH_ASSOC);
+    if (!$sRow3) jerr('找不到場次');
+    if ($sRow3['train_type'] === 'external') jerr('外訓不提供現場簽到');
+    if ($sRow3['status'] !== 'scheduled') jerr($sRow3['status']==='done' ? '此場次已完成，不再開放簽到（如需補簽請先退回已排定）' : '此場次尚未確認開課，尚無可簽到名單');
+    $dq = $db->prepare("SELECT 1 FROM training_session_day WHERE session_id=? AND day_date=?");
+    $dq->execute([$sid, $dayDate]);
+    if (!$dq->fetchColumn()) jerr('日期不是本場次的上課日');
+    $aq = $db->prepare("SELECT att_id, user_id FROM training_attendee WHERE session_id=?");
+    $aq->execute([$sid]);
+    $rows = $aq->fetchAll(PDO::FETCH_ASSOC);
+    try {
+        $db->beginTransaction();
+        $ins = $db->prepare("INSERT INTO training_attendee_day_sign (session_id, user_id, day_date, signed_at, sign_method)
+                              VALUES (?,?,?,NOW(),'admin_auto')
+                              ON DUPLICATE KEY UPDATE signed_at=signed_at");
+        $upd = $db->prepare("UPDATE training_attendee
+                              SET signed=1, signed_at=IFNULL(signed_at,NOW()), sign_method=IF(signed=1,sign_method,'admin_auto'), attended=1
+                              WHERE att_id=?");
+        foreach ($rows as $r) {
+            $ins->execute([$sid, (int)$r['user_id'], $dayDate]);
+            $upd->execute([(int)$r['att_id']]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('自動簽到失敗：'.$e->getMessage(), 500); }
+    jout(['signed'=>count($rows), 'day_date'=>$dayDate]);
+}
+
 /* 紙本簽到登記／取消：承辦人收到紙本簽到單後手動記錄，跟現場密碼簽到並列成為「簽到」的兩種來源之一
    （登錄完成前「至少一人簽到」的檢查兩種都算，見 save_execution）。這只是承辦人的行政記錄動作，不是解鎖已鎖定資料，不需要密碼。 */
 case 'mark_paper_sign': {
@@ -1147,7 +1182,7 @@ case 'people': {
     if ($atDate !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $atDate) && $atDate < date('Y-m-d')) {
         require_once $document_root . '/EGsystem/src/common/position_history_lib.php';
         $snaps = eg_position_snapshot_at_bulk($db, $atDate);
-        $us = $db->query("SELECT id, user_cname, state, leave_date FROM user
+        $us = $db->query("SELECT id, user_cname, state, leave_date, hire_date FROM user
                           WHERE user_cname IS NOT NULL AND user_cname<>''
                             AND COALESCE(is_shared_account,0) <> 1
                             AND COALESCE(user_status,0) NOT IN (9,90,9999)")->fetchAll(PDO::FETCH_ASSOC);
@@ -1156,6 +1191,8 @@ case 'people': {
             $uid2 = (int)$u['id'];
             // 已離職且離職日早於上課日＝當時已不在職，不列
             if ((int)($u['state'] ?? 1) === 0 && !empty($u['leave_date']) && $u['leave_date'] < $atDate) continue;
+            // 到職日晚於上課日＝當時尚未到職，不列
+            if (!empty($u['hire_date']) && $u['hire_date'] > $atDate) continue;
             $pos = '';
             $hit = false;
             foreach (($snaps[$uid2] ?? []) as $s) {
