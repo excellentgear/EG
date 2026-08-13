@@ -75,6 +75,20 @@ function pfmea_ensure_schema(PDO $db): void {
     // 不是官方表單欄位、不列印。
     try { $db->exec("ALTER TABLE pfmea_item ADD COLUMN process_code VARCHAR(20) NULL COMMENT '製程代號(僅畫面輔助，不列印)' AFTER seq"); } catch (Throwable $e) {}
 
+    // 2026-08-13 使用者要求：表頭修訂履歷比照官方表單右上角「新增文件/修改文件」記錄(編號/日期/
+    // 修訂內容/準備)，取消批准/檢查欄位；存檔時第一次一律記1筆「新增文件」，之後每次修改由使用者
+    // 自行決定是否要記為新版本(存檔時詢問，選否就不新增列，避免版次因小幅調整一直往上跳)。
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_revision (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        doc_id INT NOT NULL,
+        rev_no INT NOT NULL COMMENT '編號(1,2,3...)',
+        rev_date DATE NOT NULL COMMENT '日期',
+        rev_content VARCHAR(20) NOT NULL COMMENT '修訂內容:新增文件/修改文件',
+        prepared_by_name VARCHAR(50) NULL COMMENT '準備:新增文件時為製表人,修改文件時為修改人',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_doc (doc_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-修訂履歷(比照官方表單，僅新增文件/修改文件，無批准/檢查)'");
+
     // 2026-08-13 使用者要求：製程代號→潛在失效模式清單、控制預防/控制偵測固定選項、製程整組樣板
     // （來源 3-TD-01-02-潛在失效模式及效應分析.xlsm 的「資料庫」「項目異常」工作表），供編輯畫面
     // 製程代號欄位自動帶出下拉選單/整組樣板套用。可填表人(canEdit)可新增，僅管理員(canAdmin)可刪除。
@@ -193,6 +207,22 @@ function pfmea_next_doc_no(PDO $db): string {
     $last = $st->fetchColumn();
     $seq = $last ? ((int)substr((string)$last, 8, 3) + 1) : 1;
     return $today . str_pad((string)$seq, 3, '0', STR_PAD_LEFT);
+}
+
+/** 新增一筆修訂履歷（新增文件/修改文件），rev_no 自動接續 */
+function pfmea_revision_add(PDO $db, int $docId, string $content, string $preparedByName): int {
+    $st = $db->prepare("SELECT COALESCE(MAX(rev_no),0)+1 FROM pfmea_revision WHERE doc_id=?");
+    $st->execute([$docId]);
+    $revNo = (int)$st->fetchColumn();
+    $st = $db->prepare("INSERT INTO pfmea_revision (doc_id, rev_no, rev_date, rev_content, prepared_by_name) VALUES (?,?,CURDATE(),?,?)");
+    $st->execute([$docId, $revNo, $content, $preparedByName]);
+    return (int)$db->lastInsertId();
+}
+
+function pfmea_revision_list(PDO $db, int $docId): array {
+    $st = $db->prepare("SELECT rev_no, rev_date, rev_content, prepared_by_name FROM pfmea_revision WHERE doc_id=? ORDER BY rev_no");
+    $st->execute([$docId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
 /** 1-10 或空值範圍檢查；不合法回 null（讓 RPN 計算時該值視為未評分） */
