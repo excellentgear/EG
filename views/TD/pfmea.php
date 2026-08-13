@@ -1165,54 +1165,53 @@ function printDoc(id){
         (res.revisions||[]).forEach(function(r){
             revRows += '<tr><td>'+esc(r.rev_no)+'</td><td>'+fmtDate(r.rev_date)+'</td><td>'+esc(r.rev_content)+'</td><td>'+esc(r.prepared_by_name||'')+'</td></tr>';
         });
-        // 表頭資訊/S/O/D/RPN/相關部門合併成「同一張表格」（2026-08-13使用者比對Excel原始檔後要求：
-        // 不要用好幾個小表格拼接、要像Excel把欄寬設很窄再合併儲存格那樣，是真正同一張表）。
-        // 各區塊列數不同(資訊5列/S6列/O5列/D9列/RPN4列/部門8列)，統一以D的9列為基準格線，
-        // 用rowspan把其他區塊的列往下撐開對齊，比照Excel合併儲存格的做法。
-        function twoColBlocks(blocks){ // blocks:[[span,colA,colB],...] span合計需為9
-            var out = [];
+        // 表頭資訊/S/O/D/RPN/相關部門合併成「同一張表」的視覺效果（2026-08-13使用者比對Excel原始檔
+        // 後要求：像Excel把欄寬設很窄再合併儲存格那樣）。改用CSS Grid（固定列高的格線）取代HTML
+        // table+rowspan：table的列高會依內容自動撐高、不同欄位撐高幅度不一致就會彼此對不齊(實測
+        // 發現「原本置中的字跑掉」)；Grid的固定列高格線不會被內容撐大，才能真正對齊，比照Excel
+        // 固定列高、內容溢出不影響格線的行為。
+        function gridTwoCol(colStart, blocks, cls1, cls2){ // blocks:[[span,colA,colB],...] span合計需為9(格線列數)
+            var html = ''; var r = 2; // 第1列格線留給群組標題(嚴重度(S)等)
             blocks.forEach(function(b){
-                out.push('<td rowspan="'+b[0]+'">'+b[1]+'</td><td rowspan="'+b[0]+'">'+b[2]+'</td>');
-                for (var i=1;i<b[0];i++) out.push('');
+                html += '<div class="hdc'+(cls1?' '+cls1:'')+'" style="grid-column:'+colStart+';grid-row:'+r+'/span '+b[0]+';">'+b[1]+'</div>'
+                    + '<div class="hdc'+(cls2?' '+cls2:'')+'" style="grid-column:'+(colStart+1)+';grid-row:'+r+'/span '+b[0]+';">'+b[2]+'</div>';
+                r += b[0];
             });
-            return out;
+            return html;
         }
-        var infoRows = twoColBlocks([
-            [2,'料號',esc(d.part_no||'')], [2,'分類',classifyBox], [2,'規格描述',esc(d.spec_desc||'')],
-            [2,'產品名稱',esc(d.product_name||'')], [1,'客戶名稱',esc(d.customer_name||'')],
-        ]);
-        var sRows = twoColBlocks([
-            [2,'1','無影響'], [2,'2','次要阻礙'], [2,'3~6','中等阻礙'],
-            [1,'7','顯著阻礙'], [1,'8','嚴重阻礙'], [1,'9~10','安全/法規失效'],
-        ]);
-        var oRows = twoColBlocks([
-            [2,'1','很低'], [2,'2~3','低'], [2,'4~6','中等'], [2,'7~9','高'], [1,'10','很高'],
-        ]);
-        var dRows = twoColBlocks([
-            [1,'1','幾乎確定'], [1,'2','極高'], [1,'3','高'], [1,'4','高中等'], [1,'5','中等'],
-            [1,'6','低'], [1,'7','非常低'], [1,'8~9','可能性極小'], [1,'10','幾乎不可能'],
-        ]);
-        var rpnRows = twoColBlocks([
-            [3,'1~50','低'], [2,'51~100','普通'], [2,'101~200','高'], [2,'201~1000','非常高'],
-        ]);
-        var deptRowsArr = twoColBlocks(DEPT_LIST.map(function(dp,i){
-            return [i===0?2:1, esc(dp), depts.indexOf(dp)>=0?'v':''];
-        }));
-        var hdBodyRows = '';
-        for (var hr=0; hr<9; hr++){
-            hdBodyRows += '<tr>'+infoRows[hr]+sRows[hr]+oRows[hr]+dRows[hr]+rpnRows[hr]+deptRowsArr[hr]+'</tr>';
-        }
+        var hdGrid = ''
+            + '<div class="hdh" style="grid-column:1/span 2;grid-row:1;"></div>'
+            + '<div class="hdh" style="grid-column:3/span 2;grid-row:1;">嚴重度(S)</div>'
+            + '<div class="hdh" style="grid-column:5/span 2;grid-row:1;">發生率(O)</div>'
+            + '<div class="hdh" style="grid-column:7/span 2;grid-row:1;">偵測度(D)</div>'
+            + '<div class="hdh" style="grid-column:9/span 2;grid-row:1;">風險優先指數(RPN)</div>'
+            + '<div class="hdh" style="grid-column:11/span 2;grid-row:1;">相關部門</div>'
+            + gridTwoCol(1, [
+                [2,'料號',esc(d.part_no||'')], [2,'分類',classifyBox], [2,'規格描述',esc(d.spec_desc||'')],
+                [2,'產品名稱',esc(d.product_name||'')], [1,'客戶名稱',esc(d.customer_name||'')],
+              ], 'hdc-label', 'hdc-value')
+            + gridTwoCol(3, [
+                [2,'1','無影響'], [2,'2','次要阻礙'], [2,'3~6','中等阻礙'],
+                [1,'7','顯著阻礙'], [1,'8','嚴重阻礙'], [1,'9~10','安全/法規失效'],
+              ])
+            + gridTwoCol(5, [
+                [2,'1','很低'], [2,'2~3','低'], [2,'4~6','中等'], [2,'7~9','高'], [1,'10','很高'],
+              ])
+            + gridTwoCol(7, [
+                [1,'1','幾乎確定'], [1,'2','極高'], [1,'3','高'], [1,'4','高中等'], [1,'5','中等'],
+                [1,'6','低'], [1,'7','非常低'], [1,'8~9','可能性極小'], [1,'10','幾乎不可能'],
+              ])
+            + gridTwoCol(9, [
+                [3,'1~50','低'], [2,'51~100','普通'], [2,'101~200','高'], [2,'201~1000','非常高'],
+              ])
+            + gridTwoCol(11, DEPT_LIST.map(function(dp,i){
+                return [i===0?2:1, esc(dp), depts.indexOf(dp)>=0?'v':''];
+              }), 'hdc-deptname', 'hdc-deptck');
         var body = '<div class="p-topwrap">'
             + '<div class="p-comp-wrap"><div class="p-comp">'+esc(res.company_name)+'</div><div class="p-title">'+esc(res.as_doc_name)+'</div></div>'
             + '<table class="p-rev"><thead><tr><th>編號</th><th>日期</th><th>修訂內容</th><th>準備</th></tr></thead><tbody>'+revRows+'</tbody></table>'
             + '</div>'
-            + '<table class="p-hdtb">'
-            + '<colgroup><col style="width:8%"><col style="width:16%"><col style="width:4%"><col style="width:9%">'
-            + '<col style="width:4%"><col style="width:8%"><col style="width:4%"><col style="width:9%">'
-            + '<col style="width:6%"><col style="width:8%"><col style="width:20%"><col style="width:4%"></colgroup>'
-            + '<thead><tr><th colspan="2"></th><th colspan="2">嚴重度(S)</th><th colspan="2">發生率(O)</th>'
-            + '<th colspan="2">偵測度(D)</th><th colspan="2">風險優先指數(RPN)</th><th colspan="2">相關部門</th></tr></thead>'
-            + '<tbody>'+hdBodyRows+'</tbody></table>'
+            + '<div class="p-hdgrid">'+hdGrid+'</div>'
             + '<table class="p-tb"><thead>'
             + '<tr><th rowspan="2">NO</th><th rowspan="2">項目</th><th rowspan="2">功能</th><th rowspan="2">要求</th>'
             + '<th rowspan="2">潛在失效模式</th><th rowspan="2">失效模式潛在後果</th><th rowspan="2">嚴重度S</th>'
@@ -1230,19 +1229,19 @@ function printDoc(id){
             + 'table.p-rev{flex:0 0 auto;border-collapse:collapse;font-size:7.5px;align-self:flex-start;}'
             + 'table.p-rev th,table.p-rev td{border:1px solid #666;padding:1px 4px;text-align:center;white-space:nowrap;}'
             + 'table.p-rev thead th{background:#f3ead6;}'
-            // 表頭資訊+評級對照表+相關部門，比照Excel原始檔：真正同一張表格、用rowspan合併儲存格
-            // 對齊不同區塊的列數，不是好幾個小表格拼接（2026-08-13使用者比對Excel畫面後要求）
-            + 'table.p-hdtb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:8px;margin-bottom:6px;}'
-            // 每列固定最小高度當作共用格線基準，rowspan儲存格才會是「N倍基準高」精確對齊，不會因為
-            // 各欄文字長短不一，導致瀏覽器各自撐高、彼此對不齊(使用者實測發現「原本置中的字跑掉」，
-            // 根因是沒有共用列高基準；Excel能對齊是因為列高是固定的，這裡用同一招补上)
-            + 'table.p-hdtb tbody tr{height:9px;}'
-            + 'table.p-hdtb th,table.p-hdtb td{border:1px solid #666;padding:1px 3px;white-space:nowrap;overflow-wrap:normal;text-align:center;vertical-align:middle;}'
-            + 'table.p-hdtb thead th{background:#f3ead6;}'
-            + 'table.p-hdtb td:nth-child(1){background:#f3ead6;font-weight:bold;text-align:left;}'
-            + 'table.p-hdtb td:nth-child(2){text-align:left;white-space:normal;overflow-wrap:anywhere;}'
-            + 'table.p-hdtb td:nth-child(11){text-align:left;}'
-            + 'table.p-hdtb td:nth-child(12){font-weight:bold;}'
+            // 表頭資訊+評級對照表+相關部門，比照Excel原始檔版面：改用CSS Grid固定列高格線（不是HTML
+            // table+rowspan——table的列高會依內容自動撐高，不同欄位撐高幅度不一致就會彼此對不齊，
+            // 使用者實測發現「原本置中的字跑掉」正是這個根因；Grid的固定列高格線不會被內容撐大，
+            // 這裡才能真正做到像Excel那樣所有欄位共用同一套格線，2026-08-13使用者比對Excel畫面後要求）
+            + '.p-hdgrid{display:grid;grid-template-columns:8% 16% 4% 9% 4% 8% 4% 9% 6% 8% 20% 4%;'
+            + 'grid-auto-rows:10px;font-size:8px;margin-bottom:6px;border-top:1px solid #666;border-left:1px solid #666;}'
+            + '.p-hdgrid > div{border-right:1px solid #666;border-bottom:1px solid #666;padding:0 3px;'
+            + 'display:flex;align-items:center;justify-content:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}'
+            + '.p-hdgrid .hdh{background:#f3ead6;font-weight:bold;}'
+            + '.p-hdgrid .hdc-label{background:#f3ead6;font-weight:bold;justify-content:flex-start;}'
+            + '.p-hdgrid .hdc-value{justify-content:flex-start;white-space:normal;overflow-wrap:anywhere;line-height:1.15;}'
+            + '.p-hdgrid .hdc-deptname{justify-content:flex-start;}'
+            + '.p-hdgrid .hdc-deptck{font-weight:bold;}'
             + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:8px;}'
             + 'table.p-tb thead{display:table-header-group;}'
             + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 3px;text-align:center;overflow-wrap:anywhere;}'
