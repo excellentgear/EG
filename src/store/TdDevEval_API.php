@@ -181,7 +181,10 @@ case 'save':
             $id = (int)$db->lastInsertId();
         }
 
-        foreach (TD_DEV_EVAL_TEMPLATE as $itemNo => $tpl) {
+        // 確認項目及結果只能透過「送出後在自己部門的簽核關卡」(sign動作) 或系統管理員的全表填寫模式來填，
+        // 不論表單處於什麼狀態，一般使用者一律不可經由 save 動作寫入(即使是草稿階段)——各使用者只能點選/回覆
+        // 自己能簽核的範圍，跟評估表登錄/管理員這種頁面操作角色無關，此處後端同步前端 itemEditable() 的收斂
+        if ($perms['isAdmin']) foreach (TD_DEV_EVAL_TEMPLATE as $itemNo => $tpl) {
             $result = $answersRaw[$itemNo] ?? $answersRaw[(string)$itemNo] ?? null;
             if (!in_array($result, ['yes','no','na'], true)) $result = null;
             $st = $db->prepare("INSERT INTO td_dev_eval_answer (doc_id, item_no, result) VALUES (?,?,?)

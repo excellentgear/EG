@@ -225,6 +225,7 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
             ｜ 建立：<span id="fCreatedInfo">—</span></div>
 
         <div class="te-sec-title">確認項目及結果</div>
+        <div id="chkDraftTip" class="te-blocked-hint" style="display:none;margin-bottom:4px;"><i class="fa fa-hourglass-half"></i> 尚未送出，送出後才能由各部門在自己的簽核關卡填寫負責的項次。</div>
         <table class="te-chk">
             <thead><tr><th style="width:60px;">區分</th><th style="width:36px;">項次</th><th>評估項目</th>
                 <th style="width:70px;">評估單位</th><th style="width:120px;">評估結果</th></tr></thead>
@@ -357,7 +358,7 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
         <p>APQP 產品開發階段的評估表（2-TD-02-01），固定 32 項確認項目（人/機/料/法/發展/產品安全/仿冒零件的防制/其他），逐項是／否／N-A，由技術/業務/管理/生產/品保/資材課六個單位分別填寫自己負責的項目結果並簽認意見，最後由生產課決行（可行自製／可行委外／再評估／中止）並送總經理決行。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>按「新增」→ 填客戶名稱、產品件號（打部分字元搜尋，選定後自動帶出客戶名稱；查無此料號時可直接手動輸入新產品件號，不強制要求已存在的料號）、產品名稱、預估需求量、填表日期、送樣時間。此階段（草稿）仍可自由編輯表頭，32 項確認結果非必填。</li>
+            <li>按「新增」→ 填客戶名稱、產品件號（打部分字元搜尋，選定後自動帶出客戶名稱；查無此料號時可直接手動輸入新產品件號，不強制要求已存在的料號）、產品名稱、預估需求量、填表日期、送樣時間。此階段（草稿）僅能編輯表頭；32 項確認結果任何人都還不能點選填寫（含評估表管理員），要等送出後由各部門在自己的簽核關卡才能填自己負責的項次——確認項目及結果的填寫/簽核權限只看「本人是否在該部門目前的簽核池內」，跟評估表登錄／管理員這種頁面操作角色無關。</li>
             <li>填好後按「送出」：表頭與 32 項確認結果隨即鎖定（僅系統管理員可再整批修改），系統會通知六部門（技術/業務/管理/生產/品保/資材課）的合格簽核人開始填寫。</li>
             <li>APQP 小組簽認：輪到自己部門簽核時，「確認項目及結果」表格中屬於本部門的項次列會醒目標示且可編輯，填完後在「APQP 小組簽認」該部門列填意見（非必填）按「我要簽核」即完成並蓋章；六部門不限順序、任一位主管都可以簽，不限定特定一人。</li>
             <li>六部門<b>全部</b>簽認完成後，「生產課決行」才會開放：勾選「可行自製／可行委外／再評估／中止」並簽核（點選當下不會存檔，要按「我要簽核」才正式生效）；決行完成後「總經理決行」才會開放，總經理同樣要從這四個選項中選一個並簽核——<b>總經理的選擇才是最終決策</b>，可以直接沿用生產課的結果，也可以改選後覆蓋；總經理簽完系統自動將本表單標記為「已結案」。</li>
@@ -504,16 +505,19 @@ function itemOwnerSlot(no){
     });
     return found;
 }
-/** 系統管理員需先按「開啟全表填寫模式」輸入操作確認密碼，才能不受部門/簽核順序限制編輯任一項次
- *（原本 IS_SUPER_ADMIN 就直接放行沒有任何確認，被使用者要求改成要輸入二次密碼才開啟，比照補登簽核的作法） */
+/**
+ * 確認項目及結果的填寫權限，一律只看「本人是否在該項次所屬部門目前的簽核池內、且輪到這關」，
+ * 跟「評估表登錄/評估表管理員」這種模組角色完全無關——評估表管理員能刪表單、能綁AS文件，
+ * 不代表可以代填技術課負責的項次（使用者明確要求：各使用者只能點選自己能簽核與回覆的範圍）。
+ * 草稿階段本來就還沒送出、六部門都還沒輪到自己的關卡，所以草稿階段任何人都不能點選確認項目，
+ * 一律要送出後才由各部門在自己的簽核關卡填寫；原本草稿階段用CAN_EDIT整批放行是錯的，已移除。
+ * 系統管理員需先按「開啟全表填寫模式」輸入操作確認密碼，才能不受此限制編輯任一項次（比照補登簽核）。
+ */
 function itemEditable(no){
     if (FULL_EDIT_MODE) return true;
-    if (CUR_STATUS === 'draft') return CAN_EDIT;
-    if (CUR_STATUS === 'submitted') {
-        var k = itemOwnerSlot(no), s = k ? CUR_SLOTS[k] : null;
-        return !!(s && s.can_sign);
-    }
-    return false;
+    if (CUR_STATUS !== 'submitted') return false;
+    var k = itemOwnerSlot(no), s = k ? CUR_SLOTS[k] : null;
+    return !!(s && s.can_sign);
 }
 var CUR_ANSWERS = {};
 function renderChecklist(answers){
@@ -636,6 +640,7 @@ function applyStatusUI(){
     } else badge.hide();
     var locked = CUR_ID && CUR_STATUS !== 'draft' && !IS_SUPER_ADMIN;
     $('#hdrLockedTip').toggle(!!locked);
+    $('#chkDraftTip').toggle(CUR_STATUS === 'draft' && !FULL_EDIT_MODE);
     $('#fCustomerName,#fPartNo,#fProductName,#fEstQty,#fFillDate,#fSampleTime').prop('disabled', !!locked);
     $('#btnSave').toggle(!locked);
     $('#btnSubmitDoc').toggle(!!CUR_ID && CUR_STATUS === 'draft' && CAN_EDIT);
@@ -860,6 +865,7 @@ function submitFullEditUnlock(){
             renderChecklist(CUR_ANSWERS);
             renderSlots(CUR_SLOTS);
             renderDecisionGrp($('#adminDecisionSelect').val() || '', CUR_SLOTS['prod_decision']);
+            applyStatusUI();
         });
         alert('已開啟全表填寫模式：可自行填寫上方全部確認項目、決行選項與各部門意見（尚未填的確認項目已先帶入預設值，仍可修改，未存檔前不會真的變更）；填完後請用「補登簽核」或系統管理員快速設定的「全部自動簽核」正式完成簽核。');
     }, 'json');
