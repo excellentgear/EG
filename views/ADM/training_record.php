@@ -179,14 +179,21 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         table.att-tbl thead th { position:sticky; top:0; background:#F7E0BD; color:#5b3a1e; }
         table.att-tbl td.t-left { text-align:left; }
         .att-del { color:#DD5138; cursor:pointer; }
-        /* 考核成績矩陣：一個項目一個區塊（標題+批次工具列+橫向可捲動的人員一列），比照 batch-box 同色系 */
+        /* 考核成績矩陣：一個項目一個區塊（標題+批次工具列+人員格），比照 batch-box 同色系。
+           人員多時原本橫向一整列要捲動才看得到全部、狀態也看不出來，改成自動換行的格子＋依狀態上色（暖色系），
+           一眼就能看出誰還沒填、誰合格/不合格，不必逐格對照捲動（2026-08-13 使用者實測回報）。 */
         .ojt-score-item { border:1px solid #EADFC8; border-radius:6px; padding:8px 10px; margin-bottom:8px; background:#FDF8EF; }
         .ojt-score-item-head { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:6px; font-size:13px; color:#5b3a1e; }
-        .ojt-score-row-wrap { overflow-x:auto; }
-        table.ojt-score-tbl { border-collapse:collapse; }
-        table.ojt-score-tbl td { border:1px solid #EADFC8; padding:4px 6px; text-align:center; background:#fff; vertical-align:top; }
+        .ojt-score-sum { font-size:12px; color:#8a6d45; }
+        .ojt-score-grid { display:flex; flex-wrap:wrap; gap:6px; }
+        .ojt-score-cell-box { border:1px solid #EADFC8; border-radius:6px; padding:4px 6px; text-align:center; background:#fff; min-width:66px; }
+        .ojt-score-cell-box.st-pass { background:#EBD3A8; border-color:#D8BE93; }
+        .ojt-score-cell-box.st-fail { background:#DD5138; border-color:#BE3C25; }
+        .ojt-score-cell-box.st-fail .ojt-score-name { color:#fff; }
+        .ojt-score-cell-box.st-filled { background:#F7E0BD; border-color:#E4C293; }
+        .ojt-score-cell-box.st-absent { background:#F5F0E6; }
         .ojt-score-name { font-size:11.5px; color:#5b3a1e; white-space:nowrap; margin-bottom:3px; }
-        table.ojt-score-tbl input, table.ojt-score-tbl select { width:64px; border:1px solid #D8BE93; border-radius:4px; padding:2px 4px; font-size:12.5px; }
+        .ojt-score-cell-box input, .ojt-score-cell-box select { width:64px; border:1px solid #D8BE93; border-radius:4px; padding:2px 4px; font-size:12.5px; }
         /* 主分頁（訓練場次／達標狀況）與月份分頁 */
         .tr-tabs { display:flex; gap:4px; margin:6px 0 8px; flex-wrap:wrap; }
         .tr-tabs .tab { cursor:pointer; padding:5px 16px; font-size:13px; border:1.5px solid #E8D5B5; border-bottom:none;
@@ -305,6 +312,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <button id="btnPrintPlan"><i class="fa fa-print"></i> 列印訓練計劃表</button>
             <button id="btnPrintResult" style="display:none;"><i class="fa fa-print"></i> 列印訓練結果明細表</button>
             <button id="btnSubmitPlan" style="display:none;"><i class="fa fa-paper-plane"></i> 送審計劃表</button>
+            <button id="btnCancelPlan" style="display:none;color:#DD5138;"><i class="fa fa-undo"></i> 超級管理員：取消已送審計劃表</button>
             <span id="planStat" style="font-size:12px;color:#8a6d45;"></span>
             <span class="tr-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
@@ -799,7 +807,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <option value="0">不需送審（列印時直接顯示全部簽章，日期＝送審日）</option>
                 <option value="1">需要送審（審核 → 核准，依序通知）</option>
             </select>
-            <label>計劃表簽章日期（免送審時列印用；留空＝自動取該年度計畫的最後異動日）</label>
+            <label>計劃表簽章日期（尚未確認/送審計劃表前的列印預覽用；留空＝自動取該年度計畫的最後異動日。一旦按過「確認計劃表」或送審核准，一律固定用當時的日期，不再受此設定或計畫異動影響）</label>
             <div style="display:flex;gap:6px;align-items:center;">
                 <input type="date" id="setSignDate" max="9999-12-31" style="max-width:180px;">
                 <span id="setSignAuto" style="font-size:12px;color:#8a6d45;"></span>
@@ -1983,6 +1991,8 @@ function renderPlanStatus(){
         $('#btnSubmitPlan').toggle(!busy).text(need ? ' 送審計劃表' : ' 確認計劃表(免送審)')
             .prepend('<i class="fa fa-paper-plane"></i>');
     }
+    // 超級管理員專用：取消已送審/已確認的計畫表，方便補測資料（見 plan_cancel）；狀態＝none 沒什麼好取消的就不顯示
+    $('#btnCancelPlan').toggle(!!(PERMS && PERMS.isAdmin) && s!=='none');
 }
 $('#btnSubmitPlan').on('click', function(){
     var need = +(SETTINGS.training_need_approval||0);
@@ -1995,6 +2005,17 @@ $('#btnSubmitPlan').on('click', function(){
         loadPlanStatus();
         alert(res.status==='approved' ? '已確認完成（免送審）。' : '已送出審核，已通知審核人員。');
     }, 'json').fail(function(x){ alert('送審失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+});
+$('#btnCancelPlan').on('click', function(){
+    var year = $('#yearSel').val();
+    if (!confirm('取消 '+year+' 年度已送審/已確認的計畫表？會清掉這個年度的簽核紀錄，回到「尚未送審」可重新確認/送審（僅供補測資料用）。')) return;
+    askSuperPwd('取消已送審計畫表需要操作確認密碼：', function(pwd){
+        $.post(API, {action:'plan_cancel', year:year, password:pwd}, function(res){
+            if (!res.ok){ alert(res.error||'取消失敗'); return; }
+            loadPlanStatus();
+            alert('已取消，回到「尚未送審」狀態。');
+        }, 'json').fail(function(x){ alert('取消失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    });
 });
 /* 模組設定的三個分頁 */
 $(document).on('click', '.set-tab', function(){
@@ -2309,6 +2330,37 @@ function openOjtScoreModal(){
         });
     });
 }
+/* 依目前資料算某考核項目的格子狀態 class（st-pass/st-fail/st-filled/未填則無），供上色一眼看出誰還沒填 */
+function ojtScoreCellState(it, a){
+    if (!a.attended) return 'absent';
+    var d = OJT_SCORE_DATA[ojtScoreKey(it.item_id,a.user_id)] || {};
+    if (it.score_mode==='score') return (d.score!=null && d.score!=='') ? 'filled' : '';
+    if (d.result==='pass') return 'pass';
+    if (d.result==='fail') return 'fail';
+    return '';
+}
+/* 某考核項目的填寫統計文字（已填/應填、合格/不合格分開算），太多受訓人員時逐格看不出來，改用數字一眼確認 */
+function ojtScoreItemSummary(it, people){
+    var total=0, filled=0, pass=0, fail=0;
+    people.forEach(function(a){
+        if (!a.attended) return;
+        total++;
+        var st = ojtScoreCellState(it, a);
+        if (st) filled++;
+        if (st==='pass') pass++; else if (st==='fail') fail++;
+    });
+    var t = '已填 '+filled+'／'+total;
+    if (it.score_mode!=='score' && (pass||fail)) t += '（合格'+pass+'、不合格'+fail+'）';
+    return t;
+}
+function ojtScoreCellRefresh(itemId, userId){
+    var it = OJT_ITEMS.filter(function(x){ return +x.item_id===+itemId; })[0];
+    var a = ATT.filter(function(x){ return +x.user_id===+userId; })[0];
+    if (!it || !a) return;
+    var st = ojtScoreCellState(it, a);
+    $('#ojtCell'+itemId+'_'+userId).attr('class', 'ojt-score-cell-box'+(st?' st-'+st:''));
+    $('#ojtSum'+itemId).text(ojtScoreItemSummary(it, ATT.filter(function(x){ return x.user_id; })));
+}
 function renderOjtScore(){
     var locked = !!OJT_SCORE_SUBMITTED_AT;
     $('#ojtScoreInfo').html('<b>'+esc(EXROW.course_name||'')+'</b>'
@@ -2317,7 +2369,8 @@ function renderOjtScore(){
     var h = '';
     OJT_ITEMS.forEach(function(it){
         h += '<div class="ojt-score-item">'
-           + '<div class="ojt-score-item-head"><b>'+esc(it.content||'')+'</b>　<span style="color:#8a6d45;font-size:12px;">（'+esc(OJT_SCORE_MODE_LABEL[it.score_mode]||'')+'）</span>';
+           + '<div class="ojt-score-item-head"><b>'+esc(it.content||'')+'</b>　<span style="color:#8a6d45;font-size:12px;">（'+esc(OJT_SCORE_MODE_LABEL[it.score_mode]||'')+'）</span>'
+           + '<span class="ojt-score-sum" id="ojtSum'+it.item_id+'">'+esc(ojtScoreItemSummary(it, people))+'</span>';
         if (!locked) {
             if (it.score_mode==='score') {
                 h += ' <input type="number" step="any" min="0" max="100" style="width:60px;" id="ojtFillScore'+it.item_id+'" placeholder="分數">'
@@ -2328,20 +2381,21 @@ function renderOjtScore(){
             }
             h += '<button type="button" class="b-att nw" style="background:#fff;color:#DD5138;" onclick="ojtScoreClearItem('+it.item_id+')">清除此項</button>';
         }
-        h += '</div><div class="ojt-score-row-wrap"><table class="ojt-score-tbl"><tbody><tr>';
+        h += '</div><div class="ojt-score-grid">';
         people.forEach(function(a){
             var d = OJT_SCORE_DATA[ojtScoreKey(it.item_id,a.user_id)] || {};
+            var st = ojtScoreCellState(it, a);
             var cell;
-            if (!a.attended) cell = '<div class="ojt-score-cell" style="color:#c4b79c;">未到</div>';
+            if (!a.attended) cell = '<div style="color:#c4b79c;">未到</div>';
             else if (it.score_mode==='score') cell = '<input type="number" step="any" min="0" max="100" style="width:56px;" value="'+(d.score==null?'':d.score)+'"'
-                + (locked?' disabled':'')+' onchange="ojtScoreSet('+it.item_id+','+a.user_id+',\'score\',this.value)">';
-            else cell = '<select'+(locked?' disabled':'')+' onchange="ojtScoreSet('+it.item_id+','+a.user_id+',\'result\',this.value)">'
+                + (locked?' disabled':'')+' onchange="ojtScoreSet('+it.item_id+','+a.user_id+',\'score\',this.value);ojtScoreCellRefresh('+it.item_id+','+a.user_id+');">';
+            else cell = '<select'+(locked?' disabled':'')+' onchange="ojtScoreSet('+it.item_id+','+a.user_id+',\'result\',this.value);ojtScoreCellRefresh('+it.item_id+','+a.user_id+');">'
                 + '<option value=""'+(!d.result?' selected':'')+'>—</option>'
                 + '<option value="pass"'+(d.result==='pass'?' selected':'')+'>合格</option>'
                 + '<option value="fail"'+(d.result==='fail'?' selected':'')+'>不合格</option></select>';
-            h += '<td><div class="ojt-score-name">'+esc(a.user_name||'')+'</div>'+cell+'</td>';
+            h += '<div class="ojt-score-cell-box'+(st?' st-'+st:'')+'" id="ojtCell'+it.item_id+'_'+a.user_id+'"><div class="ojt-score-name">'+esc(a.user_name||'')+'</div>'+cell+'</div>';
         });
-        h += '</tr></tbody></table></div></div>';
+        h += '</div></div>';
     });
     $('#ojtScoreBody').html(h || '<div style="color:#8a6d45;">無參加人員可填分</div>');
     $('#ojtScoreSaveBtn,#ojtScoreSubmitBtn').toggle(!locked);
@@ -3046,14 +3100,15 @@ function egApprovalStampHtml(name, date, isDeputy){
     return '<span style="font-size:14px;">'+esc(name)+'</span>'
          + (date ? '<div style="font-size:10px;color:#555;">'+esc(date)+'</div>' : '');
 }
-/* 年度計畫表的圖章日期（免送審＝設定的簽章日期/計畫最後異動日/今天；需送審＝實際簽核日期），
-   訓練計畫表的「已完成✔」判定也要用同一個日期基準：圖章日期(含)之後才實施的不算數(見 printPlanTable)。 */
+/* 年度計畫表的圖章日期：已確認/已核准過＝固定用當時寫入資料庫的 decided_at/submitted_at（免送審按「確認計劃表」
+   當下也會寫入，之後不因「計劃表簽章日期」設定或計畫內容異動而跟著變動）；尚未確認過才用設定的簽章日期/計畫最後
+   異動日/今天當預覽用途。訓練計畫表的「已完成✔」判定也要用同一個日期基準：圖章日期(含)之後才實施的不算數(見 printPlanTable)。 */
 function planSignDate(){
-    var s = PLAN_APPR || {}, need = +(SETTINGS.training_need_approval||0);
+    var s = PLAN_APPR || {};
     var ap = s.approve || {}, rv = s.review || {};
     var d10 = function(x){ return String(x||'').substr(0,10); };
     var dt = d10(ap.decided_at || ap.submitted_at || rv.submitted_at);
-    if (!need || !dt) dt = d10(SETTINGS.training_plan_sign_date || PLAN_LASTMOD || META.today);
+    if (!dt) dt = d10(SETTINGS.training_plan_sign_date || PLAN_LASTMOD || META.today);
     return dt;
 }
 function signRowHtml(){
