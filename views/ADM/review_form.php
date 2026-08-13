@@ -591,32 +591,25 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
         + '},120);};</scr'+'ipt></body></html>');
     w.document.close();
 }
-// 圖章實際外徑 2.5 公分（使用者實測回報）：96px＝1英吋＝2.54公分，2.5*96/2.54≈94.5px（2026-08-13 換算修正，
-// 之前寫死 91px 沒有對照過實際外徑；此值只給「沒有指定圖章模板」時的預設回墨印/掃描章當印刷尺寸用）。
-var RF_STAMP_PX = (2.5 * 96 / 2.54).toFixed(1);
 function rfCss(){
-    // 2026-08-13 使用者再次回報偏擠，字級/欄位留白再加大一輪（13.5px→15.5px，padding 8px9px→10px11px）。
-    return 'table.rf-p-items{width:100%;border-collapse:collapse;font-size:15.5px;margin-top:2px;}'
-         + 'table.rf-p-items th,table.rf-p-items td{border:1px solid #333;padding:10px 11px;text-align:center;}'
+    // 2026-08-13 使用者要求整體改回收斂：表格一開始就設定在A4以內，文字縮小（15.5px→12px，padding 10px11px→6px7px）。
+    return 'table.rf-p-items{width:100%;border-collapse:collapse;font-size:12px;margin-top:2px;}'
+         + 'table.rf-p-items th,table.rf-p-items td{border:1px solid #333;padding:6px 7px;text-align:center;}'
          + 'table.rf-p-items td.t-left{text-align:left;}'
-         + '.rf-p-datebar{text-align:right;font-size:12.5px;color:#333;margin-bottom:3px;}'
-         // 只有「沒有指定圖章模板」時才強制覆蓋成推算出的實際外徑尺寸；有指定模板(rf-stamp-tpl)時一律尊重
-         // 該模板自己在「圖章管理→線上圖章設計」設定的「大小(px)」，不再用固定值蓋過去（2026-08-13 使用者回報
-         // 蓋出來感覺太小，追出來是這支固定 91px !important 蓋掉了模板自訂尺寸）。
-         + '.rf-stamp-defsize svg{width:'+RF_STAMP_PX+'px !important;height:'+RF_STAMP_PX+'px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+         + '.rf-p-datebar{text-align:right;font-size:12px;color:#333;margin-bottom:3px;}'
+         // 圖章尺寸直接比照 training_record.php 既有、使用者已驗證正確的寫法（不分有無指定圖章模板一律套用，
+         // 不加 !important；SVG 本身的 width/height 屬性是「表現屬性」，樣式表選到就會蓋過去不需要 !important）。
+         + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
          + 'table.rf-p-foot{width:100%;margin-top:16px;margin-bottom:12mm;font-size:13px;}'
          + 'table.rf-p-foot td{padding:6px;width:33.33%;text-align:center;vertical-align:top;}'
          + 'table.rf-p-foot .foot-lbl{margin-bottom:4px;}'
          + 'table.rf-p-foot .foot-na{color:#888;font-size:12px;}'
          + 'table.rf-p-foot .stamp-wrap{margin:0;}';
 }
-/* schema 有設定時，印出來的大小由模板自己的「大小(px)」決定（SVG width/height屬性本身就是那個值，不用CSS蓋）；
-   schema 沒設定(退回預設回墨印/掃描章)時才用 RF_STAMP_PX 固定覆蓋，兩者互斥、不會互相蓋過。
-   2026-08-13 第四次修正：egPrintWindow() 已拿掉整頁自動縮放，圖章不會再被任何縮放影響，
-   不需要 rf-stamp-slot 之類的「逃脫縮放」機制了，維持最單純的寫法即可。 */
+/* 2026-08-13：直接比照 training_record.php，不再對「有無指定圖章模板」做區分處理——單純呼叫 EGStamp.stamp()，
+   尺寸統一交給 rfCss() 的 .stamp-wrap svg 規則決定，維持最單純、已驗證過的寫法。 */
 function stampOrName(name, date, isDeputy, schema){
-    var html = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
-    return schema ? html : '<span class="rf-stamp-defsize">'+html+'</span>';
+    return (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
 }
 /* 兩種圖章樣式各自綁定：逐列簽章(list_stamp) 用在項目表每列負責人簽名；製表/審核/核准(footer_stamp) 用在頁尾三欄。
    模板沒設定時 schema 是 null，EGStamp.stamp 會自動退回預設樣式。 */
@@ -650,8 +643,11 @@ function printForm(){
                 var cellTxt = c.type==='seq' ? (k===0?String(i+1):'') : (c.type==='date' ? dispDate(sub.data[c.key]||'') : esc(sub.data[c.key]||''));
                 h += '<td>'+cellTxt+'</td>';
             });
-            var ownerTxt = (sub.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; })
-                .concat((sub.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; })).filter(Boolean).join('、');
+            // 負責單位/人分開兩組各自用頓號連接，兩組之間改用「 / 」分隔（2026-08-13 使用者明確要求，
+            // 例：「資材部 / 吳佳靜」而不是「資材部、吳佳靜」，跟欄名「負責單位/人」的斜線一致）。
+            var deptTxt = (sub.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; }).filter(Boolean).join('、');
+            var userTxt = (sub.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; }).filter(Boolean).join('、');
+            var ownerTxt = [deptTxt, userTxt].filter(Boolean).join(' / ');
             h += '<td>'+esc(ownerTxt)+'</td>';
             if (pHasSignCol) {
                 var signHtml = (sub.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');

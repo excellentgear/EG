@@ -1136,11 +1136,15 @@ function printDoc(id){
             // 表頭資訊+評級對照表+相關部門，比照Excel原始檔：真正同一張表格、用rowspan合併儲存格
             // 對齊不同區塊的列數，不是好幾個小表格拼接（2026-08-13使用者比對Excel畫面後要求）
             + 'table.p-hdtb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:8px;margin-bottom:6px;}'
-            + 'table.p-hdtb th,table.p-hdtb td{border:1px solid #666;padding:1px 3px;overflow-wrap:anywhere;text-align:center;vertical-align:middle;}'
+            // 每列固定最小高度當作共用格線基準，rowspan儲存格才會是「N倍基準高」精確對齊，不會因為
+            // 各欄文字長短不一，導致瀏覽器各自撐高、彼此對不齊(使用者實測發現「原本置中的字跑掉」，
+            // 根因是沒有共用列高基準；Excel能對齊是因為列高是固定的，這裡用同一招补上)
+            + 'table.p-hdtb tbody tr{height:9px;}'
+            + 'table.p-hdtb th,table.p-hdtb td{border:1px solid #666;padding:1px 3px;white-space:nowrap;overflow-wrap:normal;text-align:center;vertical-align:middle;}'
             + 'table.p-hdtb thead th{background:#f3ead6;}'
-            + 'table.p-hdtb td:nth-child(1){background:#f3ead6;font-weight:bold;white-space:nowrap;text-align:left;}'
-            + 'table.p-hdtb td:nth-child(2){text-align:left;}'
-            + 'table.p-hdtb td:nth-child(11){text-align:left;white-space:nowrap;}'
+            + 'table.p-hdtb td:nth-child(1){background:#f3ead6;font-weight:bold;text-align:left;}'
+            + 'table.p-hdtb td:nth-child(2){text-align:left;white-space:normal;overflow-wrap:anywhere;}'
+            + 'table.p-hdtb td:nth-child(11){text-align:left;}'
             + 'table.p-hdtb td:nth-child(12){font-weight:bold;}'
             + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:8px;}'
             + 'table.p-tb thead{display:table-header-group;}'
