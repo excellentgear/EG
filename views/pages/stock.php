@@ -419,8 +419,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             $wSQL = $where ? 'WHERE '.implode(' AND ',$where) : '';
-            // 客戶條件(dsp.Customer_Id)可能存在於 $wSQL，COUNT/篩選選項查詢也要一併 JOIN d_setting
-            $dsJoinCnt = $hasDsid ? "LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id" : "";
+            // 客戶條件(dsp.Customer_Id)與搜尋(clp.customer)可能存在於 $wSQL，COUNT/篩選選項查詢也要一併 JOIN
+            $dsJoinCnt = $hasDsid ? "LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id" : "";
 
             $cnt = $pdo->prepare("SELECT COUNT(*) FROM stock_items si $safetyJoin $groupJoin $dsJoinCnt $wSQL");
             $cnt->execute($p); $total=(int)$cnt->fetchColumn();
@@ -558,30 +558,50 @@ LBLSQL;
             }
             unset($r);
 
-            // ── 本頁快照更新（成本 & 售價）──
-            // 確認快照欄位存在（自動補加，首次載入時建立）
-            $siColsCheck = $pdo->query("SHOW COLUMNS FROM stock_items")->fetchAll(PDO::FETCH_COLUMN);
-            if (!in_array('bom_cost_snapshot', $siColsCheck)) {
-                try { $pdo->exec("ALTER TABLE stock_items ADD COLUMN bom_cost_snapshot DECIMAL(12,4) NULL COMMENT 'BOM單顆成本快照：外包來自bom_ing_transfer_log各製程平均單價加總；廠內來自pm_process_daily_report報工KPI' AFTER unit_cost"); $siColsCheck[] = 'bom_cost_snapshot'; } catch(Exception $e2){}
-            }
-            if (!in_array('order_price_snapshot', $siColsCheck)) {
-                try { $pdo->exec("ALTER TABLE stock_items ADD COLUMN order_price_snapshot DECIMAL(12,4) NULL COMMENT '訂單售價快照：優先modified_unit_price，無則unit_price，依order_ref或group.order_ref對應order_track' AFTER unit_price"); $siColsCheck[] = 'order_price_snapshot'; } catch(Exception $e2){}
-            }
-            // 確認 stock_item_groups.order_ref 欄位存在
-            if ($hasGroupCol) {
-                try {
-                    $sigChk = $pdo->query("SHOW COLUMNS FROM stock_item_groups LIKE 'order_ref'")->fetchColumn();
-                    if (!$sigChk) $pdo->exec("ALTER TABLE stock_item_groups ADD COLUMN order_ref VARCHAR(50) NULL COMMENT '組合件綁定訂單號：對應order_track.Order_oo' AFTER unit_price");
-                } catch(Exception $e2){}
-            }
+            // 成本/售價快照重算移到背景執行（action=recalc_stock_snapshots，前端渲染完列表後才觸發，
+            // 不擋列表顯示；本次回傳的 bom_cost_snapshot/order_price_snapshot 是上一次背景重算寫入的值）。
 
-            // 載入廠內加工商清單（用於區分外包/廠內成本）
+            // 取得篩選選項（只含當前篩選結果內有的值）
+            $filterLocs=[]; $filterCats=[]; $filterClients=[];
+            try {
+                $fSql="SELECT DISTINCT si.storage_location,si.location_id FROM stock_items si $safetyJoin $catJoin $locJoin $dsJoinCnt $wSQL ORDER BY si.storage_location";
+                $fSt=$pdo->prepare($fSql); foreach($p as $k=>$v) $fSt->bindValue($k,$v); $fSt->execute(); $filterLocs=$fSt->fetchAll(PDO::FETCH_ASSOC);
+            } catch(Exception $e2){}
+            try {
+                // 客戶篩選下拉：即時查料號綁定客戶，不用 si.client_id/client_name 舊快照
+                $fSql2 = $hasDsid
+                    ? "SELECT DISTINCT dsp.Customer_Id AS client_id, clp.customer AS client_name FROM stock_items si $safetyJoin $catJoin $locJoin $dsJoinCnt $wSQL AND dsp.Customer_Id IS NOT NULL ORDER BY clp.customer"
+                    : "SELECT DISTINCT si.client_id,si.client_name FROM stock_items si $safetyJoin $catJoin $locJoin $wSQL WHERE si.client_id IS NOT NULL ORDER BY si.client_name";
+                $fSt2=$pdo->prepare($fSql2); foreach($p as $k=>$v) $fSt2->bindValue($k,$v); $fSt2->execute(); $filterClients=$fSt2->fetchAll(PDO::FETCH_ASSOC);
+            } catch(Exception $e2){}
+
+            echo json_encode(['success'=>true,'data'=>$rows,'total'=>$total,'page'=>$page,'page_size'=>$ps,'total_pages'=>(int)ceil($total/$ps),'filter_locs'=>$filterLocs,'filter_clients'=>$filterClients]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ── 成本/售價快照背景重算（前端列表渲染完後才觸發，避免拖慢列表載入） ──
+    // 從 get_stock_list 的同步流程抽出，僅計算並寫入指定 stock_item_id 清單，不回傳新值
+    // （下次列表載入時 si.* 就會帶到最新寫入的快照，屬「上次瀏覽時已更新」的最終一致性）。
+    if ($_POST['action'] === 'recalc_stock_snapshots') {
+        try {
+            $ids = array_values(array_unique(array_filter(array_map('intval', json_decode($_POST['ids'] ?? '[]', true) ?: []))));
+            if (empty($ids)) { echo json_encode(['success'=>true,'updated'=>0]); exit; }
+            $ids = array_slice($ids, 0, 100); // 安全上限
+
+            $siColsCheck = $pdo->query("SHOW COLUMNS FROM stock_items")->fetchAll(PDO::FETCH_COLUMN);
+            if (!in_array('bom_cost_snapshot', $siColsCheck) || !in_array('order_price_snapshot', $siColsCheck)) { echo json_encode(['success'=>true,'updated'=>0]); exit; }
+            $hasGroupColR = in_array('group_id', $siColsCheck);
+
+            $ph = implode(',', array_fill(0, count($ids), '?'));
+            $rowsSt = $pdo->prepare("SELECT stock_item_id, bom_ref, order_ref, d_setting_id".($hasGroupColR?", group_id":", NULL AS group_id")." FROM stock_items WHERE stock_item_id IN ($ph) AND is_active=1");
+            $rowsSt->execute($ids); $rows = $rowsSt->fetchAll(PDO::FETCH_ASSOC);
+
             $inhouseMakers = [];
             try { $inhouseMakers = $pdo->query("SELECT maker_id FROM maker_list WHERE internal=1")->fetchAll(PDO::FETCH_COLUMN) ?: []; } catch(Exception $e2){}
 
-            // 預先查組合件群組的訂單售價（array_key_exists 避免 isset(null) 漏判）
             $groupOrderPriceMap = [];
-            if ($hasGroupCol) {
+            if ($hasGroupColR) {
                 try { $sigColsAll = $pdo->query("SHOW COLUMNS FROM stock_item_groups")->fetchAll(PDO::FETCH_COLUMN); $hasGrpOrderRef = in_array('order_ref', $sigColsAll); } catch(Exception $e2){ $hasGrpOrderRef = false; }
                 if (!empty($hasGrpOrderRef)) {
                     $pageGids = array_values(array_unique(array_filter(array_column($rows, 'group_id'))));
@@ -601,24 +621,24 @@ LBLSQL;
                 }
             }
 
-            // 預先載入 KPI 標準（廠內成本計算用）
             $kpsMap = [];
             try {
                 foreach ($pdo->query("SELECT CONCAT(process_no,'_',COALESCE(d_setting_id,0)) AS k, base_time_sec AS base_t, coefficient AS coeff, base_price AS base_p, multiplier FROM kpi_part_standard")->fetchAll(PDO::FETCH_ASSOC) as $kp) $kpsMap[$kp['k']] = $kp;
                 foreach ($pdo->query("SELECT CONCAT(g.process_no,'_0') AS k, d.base_time_sec AS base_t, def.default_coefficient AS coeff, d.base_price AS base_p, 1 AS multiplier FROM kpi_std_time_default d JOIN kpi_process_group g ON g.group_id=d.group_id LEFT JOIN kpi_difficulty_default def ON def.group_id=d.group_id")->fetchAll(PDO::FETCH_ASSOC) as $kd) { if (!isset($kpsMap[$kd['k']])) $kpsMap[$kd['k']] = $kd; }
             } catch(Exception $e2){}
 
-            $updCostStmt  = in_array('bom_cost_snapshot',   $siColsCheck) ? $pdo->prepare("UPDATE stock_items SET bom_cost_snapshot=? WHERE stock_item_id=?")   : null;
-            $updPriceStmt = in_array('order_price_snapshot', $siColsCheck) ? $pdo->prepare("UPDATE stock_items SET order_price_snapshot=? WHERE stock_item_id=?") : null;
+            $updCostStmt  = $pdo->prepare("UPDATE stock_items SET bom_cost_snapshot=? WHERE stock_item_id=?");
+            $updPriceStmt = $pdo->prepare("UPDATE stock_items SET order_price_snapshot=? WHERE stock_item_id=?");
+            $updated = 0;
 
-            foreach ($rows as &$r) {
+            foreach ($rows as $r) {
                 $sid    = $r['stock_item_id'];
                 $bomRef = $r['bom_ref'] ?? null;
                 $ordRef = $r['order_ref'] ?? null;
                 $dsid   = intval($r['d_setting_id'] ?? 0);
 
                 // ── 成本快照 ──
-                if ($updCostStmt && $bomRef) {
+                if ($bomRef) {
                     $costVal = null;
                     try {
                         $biS = $pdo->prepare("SELECT bi.bom_sn, bitl.price, bitl.paid_qty, bitl.modified_unit_price, bitl.maker_from FROM bom_ing_transfer_log bitl JOIN bom_ing bi ON bi.bom_ing_fid=bitl.bom_ing_fid WHERE bitl.bom=?");
@@ -654,14 +674,14 @@ LBLSQL;
                             $costVal = ($tQty > 0) ? ($tAmt / $tQty) : null;
                         }
                     } catch(Exception $e2){}
-                    if ($costVal !== null) { $updCostStmt->execute([$costVal, $sid]); $r['bom_cost_snapshot'] = $costVal; }
+                    if ($costVal !== null) { $updCostStmt->execute([$costVal, $sid]); $updated++; }
                 }
 
                 // ── 售價快照 ──
-                if ($updPriceStmt) {
+                {
                     $priceVal = null;
                     if (!empty($r['group_id']) && array_key_exists($r['group_id'], $groupOrderPriceMap)) {
-                        $priceVal = $groupOrderPriceMap[$r['group_id']]; // 可能為 null（已綁訂單但無售價）
+                        $priceVal = $groupOrderPriceMap[$r['group_id']];
                     } elseif ($ordRef) {
                         try {
                             $opS = $pdo->prepare("SELECT unit_price, modified_unit_price FROM order_track WHERE Order_id=?");
@@ -669,26 +689,10 @@ LBLSQL;
                             if ($opr) $priceVal = floatval($opr['modified_unit_price'] ?? 0) > 0 ? floatval($opr['modified_unit_price']) : (floatval($opr['unit_price'] ?? 0) > 0 ? floatval($opr['unit_price']) : null);
                         } catch(Exception $e2){}
                     }
-                    if ($priceVal !== null) { $updPriceStmt->execute([$priceVal, $sid]); $r['order_price_snapshot'] = $priceVal; }
+                    if ($priceVal !== null) { $updPriceStmt->execute([$priceVal, $sid]); $updated++; }
                 }
             }
-            unset($r);
-
-            // 取得篩選選項（只含當前篩選結果內有的值）
-            $filterLocs=[]; $filterCats=[]; $filterClients=[];
-            try {
-                $fSql="SELECT DISTINCT si.storage_location,si.location_id FROM stock_items si $safetyJoin $catJoin $locJoin $dsJoinCnt $wSQL ORDER BY si.storage_location";
-                $fSt=$pdo->prepare($fSql); foreach($p as $k=>$v) $fSt->bindValue($k,$v); $fSt->execute(); $filterLocs=$fSt->fetchAll(PDO::FETCH_ASSOC);
-            } catch(Exception $e2){}
-            try {
-                // 客戶篩選下拉：即時查料號綁定客戶，不用 si.client_id/client_name 舊快照
-                $fSql2 = $hasDsid
-                    ? "SELECT DISTINCT dsp.Customer_Id AS client_id, clp.customer AS client_name FROM stock_items si $safetyJoin $catJoin $locJoin $dsJoinCnt LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id $wSQL AND dsp.Customer_Id IS NOT NULL ORDER BY clp.customer"
-                    : "SELECT DISTINCT si.client_id,si.client_name FROM stock_items si $safetyJoin $catJoin $locJoin $wSQL WHERE si.client_id IS NOT NULL ORDER BY si.client_name";
-                $fSt2=$pdo->prepare($fSql2); foreach($p as $k=>$v) $fSt2->bindValue($k,$v); $fSt2->execute(); $filterClients=$fSt2->fetchAll(PDO::FETCH_ASSOC);
-            } catch(Exception $e2){}
-
-            echo json_encode(['success'=>true,'data'=>$rows,'total'=>$total,'page'=>$page,'page_size'=>$ps,'total_pages'=>(int)ceil($total/$ps),'filter_locs'=>$filterLocs,'filter_clients'=>$filterClients]);
+            echo json_encode(['success'=>true,'updated'=>$updated]);
         } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
@@ -5938,10 +5942,18 @@ function loadList(page){
         G.rows = r.data; // 儲存本頁資料快取
         renderTable(r.data, page, parseInt($('#f-ps').val())||30);
         renderPager(r.total, r.page, r.page_size, r.total_pages);
-        loadStats();
+        // 頂部統計卡是全庫存彙總、不受搜尋/篩選影響，不需每次列表載入都重算；
+        // 實際異動庫存的動作(入出庫/新增/刪除/合併…)各自呼叫點已個別附帶 loadStats()
         // 更新篩選下拉只顯示當前結果有的資料
         _updateFilterDropdowns(r);
+        // 成本/售價快照重算移到列表渲染完後才背景觸發，不擋列表顯示（畫面先出現，數字之後才悄悄更新）
+        _recalcSnapshotsBg(r.data);
     });
+}
+function _recalcSnapshotsBg(rows){
+    var ids=(rows||[]).map(function(r){ return r.stock_item_id; }).filter(Boolean);
+    if(!ids.length) return;
+    ajx({action:'recalc_stock_snapshots', ids: JSON.stringify(ids)}, function(){});
 }
 function _updateFilterDropdowns(r){
     // 注意：不動態縮減 f-loc / f-client 的選項，
