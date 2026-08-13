@@ -575,9 +575,14 @@ function renderDecisionGrp(cur, prodSlot){
     // 總經理決行時要看得到生產課決行了什麼，不用往上滑動翻找（使用者明確要求）
     $('#gmDecisionInfo').html(cur ? ('生產課決行結果：<b>'+esc(DECISIONS[cur]||cur)+'</b>') : '<span style="color:#b0a390;">（生產課尚未決行）</span>');
 }
+/* 一般使用者點選決行選項只是暫存在畫面上，要按「我要簽核」才會跟簽核一起正式送出存檔——
+   原本點下去就立刻存檔，被使用者實測抓到「只是想測試畫面、還沒按簽核，清單卻已經顯示決行結果」。
+   系統管理員快速設定面板仍維持點選即存（不受一般送出/簽核流程限制，需要能自由預先填好再一次自動簽核）。 */
 $(document).on('change', 'input[name="decision"]', function(){
-    if (!CUR_ID) return;
-    $.post(API, {action:'save_decision', id:CUR_ID, decision:$(this).val()}, function(res){
+    var val = $(this).val();
+    $('#gmDecisionInfo').html('生產課決行結果：<b>'+esc(DECISIONS[val]||val)+'</b>'+(IS_SUPER_ADMIN?'':'（尚未送出，需按「我要簽核」才正式生效）'));
+    if (!CUR_ID || !IS_SUPER_ADMIN) return;
+    $.post(API, {action:'save_decision', id:CUR_ID, decision:val}, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); openEdit(CUR_ID); } // 點開即刷新鐵則
     }, 'json');
 });
@@ -640,9 +645,21 @@ EGPartPicker.attach(document.getElementById('fPartNo'), {
         $.getJSON(API, {action:'part_name_get', part_d_id:row.d_id}, function(res){
             if (res.success && res.product_name) $('#fProductName').val(res.product_name);
         });
+        maybeEstimateQty();
     }
 });
 $('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); });
+
+/* ---------- 預估需求量自動試算（2026-08-13使用者明確要求，只是帶入預設值，欄位仍可手動改） ---------- */
+function maybeEstimateQty(){
+    var partDId = parseInt($('#fPartDId').val(), 10) || 0;
+    var fillDate = $('#fFillDate').val();
+    if (!partDId || !fillDate || $('#fEstQty').prop('disabled')) return;
+    $.getJSON(API, {action:'estimate_qty', part_d_id:partDId, fill_date:fillDate}, function(res){
+        if (res.success && res.est_qty) $('#fEstQty').val(res.est_qty);
+    });
+}
+$('#fFillDate').on('change', maybeEstimateQty);
 
 /* ---------- 料號固定顯示名稱設定（評估表管理員/系統管理員可設，2026-08-12使用者明確要求） ---------- */
 $('#btnSetFixedName').on('click', function(){
@@ -708,7 +725,13 @@ window.signSlot = function(slotKey){
         return;
     }
     var note = $('textarea[data-slot-note="'+slotKey+'"]').val();
-    $.post(API, {action:'sign', doc_id:CUR_ID, slot_key:slotKey, note:note, answers:JSON.stringify(answers)}, function(res){
+    var payload = {action:'sign', doc_id:CUR_ID, slot_key:slotKey, note:note, answers:JSON.stringify(answers)};
+    if (slotKey === 'prod_decision') {
+        var decision = $('input[name="decision"]:checked').val();
+        if (!decision){ alert('請先選擇決行結果（可行自製／可行委外／再評估／中止），再按我要簽核。'); return; }
+        payload.decision = decision;
+    }
+    $.post(API, payload, function(res){
         if (!res.success){ alert(res.message||'簽核失敗'); openEdit(CUR_ID); return; } // 點開即刷新鐵則：失敗也要重新載入看最新狀態
         openEdit(CUR_ID); loadList();
     }, 'json');
@@ -837,7 +860,7 @@ function printDoc(id, onDone){
             + '<table class="p-hd"><tr><td>客戶名稱</td><td>'+esc(d.customer_name||'')+'</td><td>預估需求量</td><td>'+esc(d.est_qty||'')+' PCS/月</td><td>填表日期</td><td>'+fmtDate(d.fill_date)+'</td></tr>'
             + '<tr><td>產品名稱</td><td>'+esc(d.product_name||'')+'</td><td>料號</td><td>'+esc(d.part_no||'')+'</td><td>送樣時間</td><td>'+esc(d.sample_time||'')+'</td></tr></table>'
             + '<table class="p-tb"><thead><tr><th style="width:60px;">區分</th><th style="width:30px;">項次</th><th>評估項目</th><th style="width:60px;">評估單位</th><th style="width:50px;">結果</th></tr></thead><tbody>'+chkRows+'</tbody></table>'
-            + '<div class="p-sec">APQP 小組簽認</div>'
+            + '<div class="p-sec p-sec-break">APQP 小組簽認</div>'
             + '<table class="p-tb"><tbody>'+apqpRows+'</tbody></table>'
             + '<div class="p-sec">生產課決行：'+esc(DECISIONS[d.decision]||'（未決行）')+'</div>'
             + '<table class="p-tb"><tr><td class="dept">生產課</td><td class="tl">'+slotCell('prod_decision')+'</td></tr></table>'
@@ -847,6 +870,7 @@ function printDoc(id, onDone){
             + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
             + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:10px;}'
             + '.p-sec{font-size:13px;font-weight:bold;color:#8A5A2B;border-left:4px solid #F0A24B;padding-left:6px;margin:8px 0 4px;break-after:avoid;}'
+            + '.p-sec-break{page-break-before:always;break-before:page;}'
             + 'table.p-hd{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:6px;}'
             + 'table.p-hd td{border:1px solid #666;padding:3px 5px;} table.p-hd td:nth-child(odd){background:#f3ead6;font-weight:bold;white-space:nowrap;}'
             + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:10.5px;margin-bottom:4px;}'
@@ -859,14 +883,11 @@ function printDoc(id, onDone){
             + (res.as_doc_no ? " @bottom-right{ content:'"+String(res.as_doc_no).replace(/['\\]/g,'')+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
             + '}';
         var w = window.open('', '_blank');
-        w.document.write('<html><head><meta charset="utf-8"><title>產品開發評估表</title><style>'+css+'</style></head><body>'+body
-            +'<scr'+'ipt>window.onload=function(){'
-            +'var onePageA4=(297-30)*96/25.4;'
-            +'if(document.body.scrollHeight>onePageA4*0.92){'
-            +'var st=document.createElement(\'style\');'
-            +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
-            +'document.head.appendChild(st);}'
-            +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+        // APQP 小組簽認固定另起第二頁（p-sec-break），本表列印一定至少2頁，頁碼直接固定顯示，不必再靠scrollHeight判斷是否只有一頁
+        w.document.write('<html><head><meta charset="utf-8"><title>產品開發評估表</title><style>'+css
+            +'@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }'
+            +'</style></head><body>'+body
+            +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
         w.document.close();
         if (onDone) setTimeout(onDone, 500);
     });

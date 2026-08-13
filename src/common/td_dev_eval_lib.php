@@ -225,6 +225,37 @@ function td_dev_eval_next_doc_no(PDO $db): string {
 }
 
 /**
+ * 預估需求量 (PCS/月) 自動試算（2026-08-13 使用者明確要求，僅供帶入預設值，欄位仍可手動改）。
+ * 以填表日期為錨點，試三種一年區間（往前一年、往後一年、前後各半年置中），每個區間分別算訂單數量
+ * 總和與BOM數量總和，兩者取較大者當該區間的分數；三個區間再取分數最高者，除以12取月平均，無條件進位。
+ * 查無任何資料（三個區間分數都是0）回 null，讓使用者自行手動填寫。
+ */
+function td_dev_eval_estimate_qty(PDO $db, int $partDId, string $fillDate): ?int {
+    if (!$partDId || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $fillDate)) return null;
+    try { $anchor = new DateTime($fillDate); } catch (Throwable $e) { return null; }
+    $windows = [
+        [(clone $anchor)->modify('-1 year'), clone $anchor],                          // 往前一年
+        [clone $anchor, (clone $anchor)->modify('+1 year')],                          // 往後一年
+        [(clone $anchor)->modify('-6 months'), (clone $anchor)->modify('+6 months')], // 填表日期置中，前後各半年
+    ];
+    $best = 0;
+    foreach ($windows as [$from, $to]) {
+        $fromS = $from->format('Y-m-d'); $toS = $to->format('Y-m-d');
+        $st = $db->prepare("SELECT COALESCE(SUM(Qty),0) FROM order_track WHERE d_id_ID=? AND Order_date BETWEEN ? AND ?");
+        $st->execute([$partDId, $fromS, $toS]);
+        $orderQty = (int)$st->fetchColumn();
+
+        $st = $db->prepare("SELECT COALESCE(SUM(sqty),0) FROM bom WHERE d_setting_id=? AND Created_At BETWEEN ? AND ?");
+        $st->execute([$partDId, $fromS.' 00:00:00', $toS.' 23:59:59']);
+        $bomQty = (int)$st->fetchColumn();
+
+        $best = max($best, $orderQty, $bomQty);
+    }
+    if ($best <= 0) return null;
+    return (int)ceil($best / 12);
+}
+
+/**
  * 某部門類角色key的可簽核人員池：部門內任一主管(有職級者)皆可簽；找不到有職級的主管時，
  * 退回該部門(含子部門)依職稱sort_order排序後職位最高的一人（2026-08-12使用者明確拍板的規則）。
  */

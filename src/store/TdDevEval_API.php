@@ -40,8 +40,8 @@ const RESULT_LABELS = ['yes'=>'是', 'no'=>'否', 'na'=>'N/A'];
 
 /**
  * 組出單一簽核欄位的顯示資料（含目前可簽核人員池、本人是否可簽、卡關原因）。
- * 卡關規則：doc.status 必須是 submitted；六部門欄不限順序；生產課決行需六部門全簽完+已選決行；
- * 總經理決行需生產課決行已簽。
+ * 卡關規則：doc.status 必須是 submitted；六部門欄不限順序；生產課決行需六部門全簽完（決行結果跟簽核
+ * 同一次一起送出存檔，不在畫面上點選當下就存，見前端 signSlot()）；總經理決行需生產課決行已簽。
  */
 function buildSlotView(PDO $db, string $slotKey, array $row, int $docId, int $curUid, array $doc): array {
     [$label,,$isSingle] = TD_DEV_EVAL_SLOTS[$slotKey];
@@ -51,7 +51,6 @@ function buildSlotView(PDO $db, string $slotKey, array $row, int $docId, int $cu
         $blockedReason = $doc['status'] === 'draft' ? '尚未送出' : '已結案';
     } elseif ($slotKey === 'prod_decision') {
         if (!td_dev_eval_dept_slots_done($db, $docId)) $blockedReason = '需六部門全部簽認完成';
-        elseif (empty($doc['decision'])) $blockedReason = '請先選擇決行結果';
     } elseif ($slotKey === 'gm') {
         if (!td_dev_eval_slot_signed($db, $docId, 'prod_decision')) $blockedReason = '需生產課決行完成';
     }
@@ -77,6 +76,13 @@ case 'perms':
 case 'get_template':
     needView($perms);
     jout(['success'=>true,'template'=>TD_DEV_EVAL_TEMPLATE,'slots'=>TD_DEV_EVAL_SLOTS,'decisions'=>TD_DEV_EVAL_DECISIONS]);
+
+// ── 預估需求量自動試算（僅供帶入預設值，欄位仍可手動改） ──
+case 'estimate_qty':
+    needView($perms);
+    $partDId = (int)($_GET['part_d_id'] ?? 0);
+    $fillDate = trim((string)($_GET['fill_date'] ?? ''));
+    jout(['success'=>true, 'est_qty'=>td_dev_eval_estimate_qty($db, $partDId, $fillDate)]);
 
 case 'list':
     needView($perms);
@@ -228,9 +234,12 @@ case 'sign':
     $doc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$doc) jout(['success'=>false,'message'=>'找不到該筆']);
     if ($doc['status'] !== 'submitted') jout(['success'=>false,'message'=>$doc['status']==='draft' ? '此表單尚未送出，無法簽核' : '此表單已結案']);
+    // 決行結果一般使用者不會在點選當下就存檔(避免只是想測試畫面卻真的存進DB)，改成跟「我要簽核」同一次一起送出存檔；
+    // 若管理員已經透過快速設定面板先存好(仍支援)，這裡沒收到就退回沿用DB既有值
+    $decision = trim((string)($_POST['decision'] ?? '')) ?: (string)($doc['decision'] ?? '');
     if ($slotKey === 'prod_decision') {
         if (!td_dev_eval_dept_slots_done($db, $docId)) jout(['success'=>false,'message'=>'需六部門全部簽認完成才能決行']);
-        if (empty($doc['decision'])) jout(['success'=>false,'message'=>'請先選擇決行結果']);
+        if (!isset(TD_DEV_EVAL_DECISIONS[$decision])) jout(['success'=>false,'message'=>'請先選擇決行結果']);
     }
     if ($slotKey === 'gm' && !td_dev_eval_slot_signed($db, $docId, 'prod_decision')) jout(['success'=>false,'message'=>'需生產課決行完成才能總經理決行']);
 
@@ -265,6 +274,10 @@ case 'sign':
                                      ON DUPLICATE KEY UPDATE result=VALUES(result)");
                 $st->execute([$docId, $itemNo, $result]);
             }
+        }
+        if ($slotKey === 'prod_decision') {
+            $db->prepare("UPDATE td_dev_eval SET decision=?, updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=?")
+               ->execute([$decision, $uid, $uname, $docId]);
         }
         $st = $db->prepare("INSERT INTO td_dev_eval_signoff (doc_id, slot_key, note, signed_by, signed_by_name, signed_at, is_deputy)
                              VALUES (?,?,?,?,?,NOW(),?)
