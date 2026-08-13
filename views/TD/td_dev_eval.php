@@ -185,7 +185,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
 
 <!-- 新增/編輯 -->
 <div class="te-mask" id="editMask"><div class="te-modal xwide">
-    <div class="m-head"><span id="editTitle">產品開發評估表</span> <span class="te-status" id="editStatusBadge" style="display:none;"></span><span class="m-close" onclick="closeMask('editMask')">✕</span></div>
+    <div class="m-head"><span id="editTitle">產品開發評估表</span> <span class="te-status" id="editStatusBadge" style="display:none;"></span>
+        <span id="editHdrInfo" style="margin-left:auto;margin-right:10px;font-weight:normal;font-size:13px;"></span>
+        <span class="m-close" onclick="closeMask('editMask')">✕</span></div>
     <div class="m-body">
         <div class="te-hdr-locked-tip" id="hdrLockedTip" style="display:none;">
             <i class="fa fa-lock"></i> 已送出：表頭與確認項目改由各部門於下方「APQP 小組簽認」自行填寫本部門負責的項次，僅系統管理員可整批修改。
@@ -242,13 +244,17 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
         <div class="te-decision-grp" id="gmDecisionGrp"></div>
         <table class="te-slot"><tbody id="gmBody"></tbody></table>
 
+        <div style="margin-top:10px;<?= $perms['isAdmin']?'':'display:none;' ?>">
+            <button type="button" class="te-row-btn" id="btnFullEditMode"><i class="fa fa-unlock-alt"></i> 開啟全表填寫模式（操作確認密碼）</button>
+            <span style="font-size:11px;color:#8a6d45;margin-left:6px;">僅系統管理員可用：輸入操作確認密碼後可自行填寫上方全部32項確認結果，不受部門/簽核順序限制；填完後仍需用下方「補登簽核」或「全部自動簽核」正式完成簽核。</span>
+        </div>
         <div style="margin-top:10px;<?= $canBackfill?'':'display:none;' ?>">
             <button type="button" class="te-row-btn" id="btnBackfillOpen"><i class="fa fa-user-secret"></i> 補登簽核（操作確認密碼）</button>
         </div>
 
         <div class="te-admin-panel" id="adminQuickPanel" style="<?= $perms['isAdmin']?'':'display:none;' ?>">
             <h5><i class="fa fa-user-secret"></i> 系統管理員快速設定（僅補歷史紙本資料用，會跳過送出/簽核流程）</h5>
-            <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">上方「確認項目及結果」32項與各部門簽認欄位不受一般流程限制，管理員可直接編輯後按下方按鈕，一次把尚未簽核的欄位全部自動簽核（決行結果請在下方選擇，不是上方表格內的選項——上方選項一樣要照正常流程走完六部門/生產課才會開放）。</div>
+            <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">確認項目結果請先按上方「開啟全表填寫模式」輸入密碼後編輯；決行結果請在下方選擇（不是上方表格內的選項——上方選項一樣要照正常流程走完六部門/生產課才會開放），選好後按下方按鈕一次把尚未簽核的欄位全部自動簽核。</div>
             <label style="display:inline-block;margin:0 8px 0 0;">決行結果</label>
             <select id="adminDecisionSelect" style="width:140px;display:inline-block;">
                 <option value="">（未選擇）</option>
@@ -269,6 +275,20 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
         <button class="b-cancel" onclick="closeMask('editMask')">取消</button>
         <button class="b-ok" id="btnSave" onclick="saveHeader()">儲存</button>
         <button class="b-ok" id="btnSubmitDoc" style="background:#DD5138;border-color:#c9432a;" onclick="submitDoc()"><i class="fa fa-paper-plane"></i> 送出</button>
+    </div>
+</div></div>
+
+<!-- 開啟全表填寫模式（僅系統管理員，操作確認密碼） -->
+<div class="te-mask" id="fullEditMask" style="z-index:1200;"><div class="te-modal">
+    <div class="m-head"><span>開啟全表填寫模式</span><span class="m-close" onclick="closeMask('fullEditMask')">✕</span></div>
+    <div class="m-body">
+        <div class="tip">僅系統管理員可用，補歷史紙本資料時使用。輸入操作確認密碼後，可自行填寫全部32項確認結果，不受部門/簽核順序限制；填完後仍需用「補登簽核」逐格指定原簽核人、或系統管理員快速設定的「全部自動簽核」，才能正式完成簽核。</div>
+        <label style="margin-top:10px;">操作確認密碼</label>
+        <input type="password" id="fullEditPassword" autocomplete="off">
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('fullEditMask')">取消</button>
+        <button class="b-ok" onclick="submitFullEditUnlock()">確認開啟</button>
     </div>
 </div></div>
 
@@ -344,10 +364,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
         <ul>
             <li>工具列「建議建立料號清單」按鈕（僅管理員可見，紅色數字為近一年候選筆數提醒）：依管理員設定的客戶名單，掃描區間內曾有訂單/報工/BOM/出貨記錄、但尚未建立評估表的料號，可一次批次建立多筆草稿，避免漏建。詳見該頁「使用說明」。</li>
         </ul>
-        <h4>補登簽核／系統管理員快速設定（歷史紙本資料建檔用）</h4>
+        <h4>開啟全表填寫模式／補登簽核／系統管理員快速設定（歷史紙本資料建檔用）</h4>
         <ul>
+            <li><b>開啟全表填寫模式</b>（僅系統管理員，非「評估表管理員」角色即可，需輸入操作確認密碼）：開啟後可自行填寫上方全部 32 項確認結果，不受部門/簽核順序限制；每次重新開啟此筆的編輯視窗都要重新輸入密碼，不會記住。填完後仍需用下方「補登簽核」或「全部自動簽核」才能正式完成簽核，本身不會直接完成簽核。</li>
             <li>具「操作確認密碼」資格者，可用「補登簽核」一次把已送出但尚未簽核的欄位補齊——<b>仍須逐格指定當初實際簽核的人</b>，系統會清楚記錄「此筆為補登，由誰執行補登」，跟本人即時線上簽核的紀錄分開標示，不會誤植成操作者本人簽的。</li>
-            <li>系統管理員另有「全部自動簽核」：指定一個業務日期，一次把尚未簽核的欄位全部自動簽核完成（簽核人取該欄目前解析池第一位），連同尚未送出的表單一併補上送出紀錄；此功能不受送出/簽核狀態限制，表頭與 32 項確認結果亦不受鎖定，僅供補歷史紙本資料使用。</li>
+            <li>系統管理員另有「全部自動簽核」：於快速設定面板選擇決行結果、指定一個業務日期，一次把尚未簽核的欄位全部自動簽核完成（簽核人取該欄目前解析池第一位），連同尚未送出的表單一併補上送出紀錄；此功能不受送出/簽核狀態限制，僅供補歷史紙本資料使用。</li>
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
@@ -383,6 +404,7 @@ var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 var IS_SUPER_ADMIN = <?= $perms['isAdmin'] ? 'true' : 'false' ?>;
 var CUR_USER_NAME = <?= json_encode($teUser ? $teUser['user_cname'] : '', JSON_UNESCAPED_UNICODE) ?>;
 var CUR_ID = 0, CUR_STATUS = 'draft', TEMPLATE = {}, SLOTS = {}, DECISIONS = {}, AS_DOCS = [], AS_DOC = null, CUR_SLOTS = {};
+var FULL_EDIT_MODE = false; // 系統管理員輸入操作確認密碼後才開啟，逐筆重新開啟編輯視窗時要重新輸入，不記憶
 var RESULT_OPTS = [['yes','是'],['no','否'],['na','N/A']];
 var STATUS_LABELS = {draft:'草稿', submitted:'簽核中', closed:'已結案'};
 
@@ -478,8 +500,10 @@ function itemOwnerSlot(no){
     });
     return found;
 }
+/** 系統管理員需先按「開啟全表填寫模式」輸入操作確認密碼，才能不受部門/簽核順序限制編輯任一項次
+ *（原本 IS_SUPER_ADMIN 就直接放行沒有任何確認，被使用者要求改成要輸入二次密碼才開啟，比照補登簽核的作法） */
 function itemEditable(no){
-    if (IS_SUPER_ADMIN) return true;
+    if (FULL_EDIT_MODE) return true;
     if (CUR_STATUS === 'draft') return CAN_EDIT;
     if (CUR_STATUS === 'submitted') {
         var k = itemOwnerSlot(no), s = k ? CUR_SLOTS[k] : null;
@@ -495,7 +519,7 @@ function renderChecklist(answers){
     Object.keys(TEMPLATE).forEach(function(no){
         var t = TEMPLATE[no], cat = t[0], text = t[1], unit = t[2];
         var editable = itemEditable(no);
-        var mine = CUR_STATUS === 'submitted' && !IS_SUPER_ADMIN && editable;
+        var mine = CUR_STATUS === 'submitted' && !FULL_EDIT_MODE && editable;
         var radios = RESULT_OPTS.map(function(o){
             return '<label><input type="radio" name="res_'+no+'" value="'+o[0]+'"'+(answers[no]===o[0]?' checked':'')+(editable?'':' disabled')+'> '+o[1]+'</label>';
         }).join('');
@@ -610,14 +634,25 @@ function applyStatusUI(){
     $('#btnAdminAutoSignAll').prop('disabled', !CUR_ID);
 }
 function resetEditForm(){
-    CUR_ID = 0; CUR_STATUS = 'draft'; CUR_SLOTS = {};
+    CUR_ID = 0; CUR_STATUS = 'draft'; CUR_SLOTS = {}; FULL_EDIT_MODE = false;
     $('#fCustomerName').val(''); $('#fPartNo').val(''); $('#fPartDId').val('0');
     $('#fProductName').val(''); $('#fEstQty').val(''); $('#fFillDate').val(''); $('#fSampleTime').val('');
     $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
+    updateEditHdrInfo();
     renderChecklist({});
     renderDecisionGrp('', null);
     applyStatusUI();
 }
+/** 跳窗標題右側顯示填表日期／料號，方便使用者一眼判斷目前開的是哪一筆（使用者明確要求） */
+function updateEditHdrInfo(){
+    var fillDate = $('#fFillDate').val(), partNo = $('#fPartNo').val();
+    var parts = [];
+    if (fillDate) parts.push('填表日期：'+fmtDate(fillDate));
+    if (partNo) parts.push('料號：'+esc(partNo));
+    $('#editHdrInfo').text(parts.join('　｜　'));
+}
+$('#fFillDate').on('change', updateEditHdrInfo);
+$('#fPartNo').on('input', updateEditHdrInfo);
 function openEdit(id){
     resetEditForm();
     $('#editTitle').text(id ? '編輯產品開發評估表' : '新增產品開發評估表');
@@ -636,6 +671,7 @@ function openEdit(id){
         $('#fFillDate').val(res.doc.fill_date||''); $('#fSampleTime').val(res.doc.sample_time||'');
         $('#fDocNo').text(res.doc.doc_no);
         $('#fCreatedInfo').text((res.doc.created_by_name||'')+' '+fmtDate((res.doc.created_at||'').substring(0,10)));
+        updateEditHdrInfo();
         renderChecklist(res.answers || {});
         renderSlots(CUR_SLOTS);
         renderDecisionGrp(res.doc.decision || '', CUR_SLOTS['prod_decision']);
@@ -654,6 +690,7 @@ EGPartPicker.attach(document.getElementById('fPartNo'), {
             if (res.success && res.product_name) $('#fProductName').val(res.product_name);
         });
         maybeEstimateQty();
+        updateEditHdrInfo();
     }
 });
 $('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); });
@@ -794,6 +831,25 @@ function saveDefaultsSetting(){
     $.post(API, {action:'answer_defaults_save', defaults:JSON.stringify(map)}, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }
         closeMask('defaultsMask');
+    }, 'json');
+}
+
+/* ---------- 開啟全表填寫模式（僅系統管理員，操作確認密碼） ---------- */
+$('#btnFullEditMode').on('click', function(){
+    if (!CUR_ID){ alert('請先儲存後再使用'); return; }
+    if (FULL_EDIT_MODE){ alert('已經是全表填寫模式了。'); return; }
+    $('#fullEditPassword').val('');
+    openMask('fullEditMask');
+});
+function submitFullEditUnlock(){
+    var password = $('#fullEditPassword').val();
+    if (!password){ alert('請輸入操作確認密碼'); return; }
+    $.post(API, {action:'admin_full_edit_check', password:password}, function(res){
+        if (!res.success){ alert(res.message||'密碼錯誤'); return; }
+        FULL_EDIT_MODE = true;
+        closeMask('fullEditMask');
+        renderChecklist(CUR_ANSWERS);
+        alert('已開啟全表填寫模式，可自行填寫上方全部確認項目；填完後請用「補登簽核」或系統管理員快速設定的「全部自動簽核」正式完成簽核。');
     }, 'json');
 }
 

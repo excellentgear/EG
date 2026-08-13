@@ -290,6 +290,15 @@ case 'admin_auto_sign_all':
     jout(['success'=>true]);
 
 // ── 確認項目及結果預設值：超級管理員設定，供「全部自動簽核」可選套用 ──
+// ── 開啟全表填寫模式：僅系統管理員(isAdmin)，輸入操作確認密碼後前端才放行不受部門/簽核順序限制編輯32項 ──
+// 只驗證密碼，不寫入任何資料；真正的資料寫入仍走 save/sign/backfill_sign_all/admin_auto_sign_all 既有動作與各自的規則。
+case 'admin_full_edit_check':
+    needSuperAdmin($perms);
+    $password = (string)($_POST['password'] ?? '');
+    $chk = eg_confirm_password_verify($db, $uid, $password);
+    if (!$chk['ok']) jout(['success'=>false,'message'=>$chk['msg']]);
+    jout(['success'=>true]);
+
 case 'answer_defaults_get':
     needView($perms);
     jout(['success'=>true, 'defaults'=>td_dev_eval_answer_defaults_get($db)]);
