@@ -2301,7 +2301,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($action === 'get_machine_assets') {
         $filterMtid = intval($_POST['machine_type_id'] ?? 0);
         try {
-            $sql = "SELECT ml.machine_id,ml.machine,ml.machine_type_id,ml.position,ml.state,
+            $sql = "SELECT ml.machine_id,ml.machine,ml.machine_type_id,ml.position,ml.state,ml.need_setup,
+                ml.machine_model,ml.asset_no,ml.field_no,ml.spec,ml.note,
                 pt.process_type AS machine_type,
                 kma.asset_id,kma.purchase_date,kma.purchase_amount,kma.residual_value,
                 kma.depreciation_years,kma.depreciation_method,kma.monthly_work_hours,kma.remark
@@ -2378,6 +2379,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 VALUES (?,?,?,?,?,?,?,?,?,?)
                 ON DUPLICATE KEY UPDATE purchase_date=VALUES(purchase_date),purchase_amount=VALUES(purchase_amount),residual_value=VALUES(residual_value),depreciation_years=VALUES(depreciation_years),depreciation_method=VALUES(depreciation_method),monthly_work_hours=VALUES(monthly_work_hours),remark=VALUES(remark),updated_by=VALUES(updated_by)")
                 ->execute([$mid,$pDate,$pAmt,$resV,$years,$meth,$mHrs,$rem,$userId,$userId]);
+            echo json_encode(['success'=>true]);
+        } catch(Exception $e){echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
+        exit;
+    }
+
+    // ── 新增/編輯機台本身 (與 process_schedule 頁共用 machine_list，兩邊即時同步) ──
+    if ($action === 'save_machine_info') {
+        if (!$is_admin){echo json_encode(['success'=>false,'message'=>'無權限']);exit;}
+        $mid = intval($_POST['machine_id'] ?? 0);
+        $name = trim($_POST['machine'] ?? '');
+        $typeId = intval($_POST['machine_type_id'] ?? 0);
+        $position = trim($_POST['position'] ?? '');
+        $needSetup = intval($_POST['need_setup'] ?? 0);
+        $model = trim($_POST['machine_model'] ?? '');
+        $assetNo = trim($_POST['asset_no'] ?? '');
+        $fieldNo = trim($_POST['field_no'] ?? '');
+        $spec = trim($_POST['spec'] ?? '');
+        $note = trim($_POST['note'] ?? '');
+        if (!$name){echo json_encode(['success'=>false,'message'=>'機台名稱不可為空']);exit;}
+        if (!$typeId){echo json_encode(['success'=>false,'message'=>'請選擇機台類型']);exit;}
+        try {
+            if ($mid) {
+                $pdo->prepare("UPDATE machine_list SET machine=?, machine_type_id=?, need_setup=?, position=?, machine_model=?, asset_no=?, field_no=?, spec=?, note=? WHERE machine_id=?")
+                    ->execute([$name,$typeId,$needSetup,$position,$model,$assetNo,$fieldNo,$spec,$note,$mid]);
+            } else {
+                $pdo->prepare("INSERT INTO machine_list (machine, machine_type_id, need_setup, position, machine_model, asset_no, field_no, spec, note) VALUES (?,?,?,?,?,?,?,?,?)")
+                    ->execute([$name,$typeId,$needSetup,$position,$model,$assetNo,$fieldNo,$spec,$note]);
+            }
+            echo json_encode(['success'=>true]);
+        } catch(Exception $e){echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
+        exit;
+    }
+
+    // ── 刪除機台 (軟刪除 state=1) ─────────────────────────────
+    if ($action === 'delete_machine_info') {
+        if (!$is_admin){echo json_encode(['success'=>false,'message'=>'無權限']);exit;}
+        $mid = intval($_POST['machine_id'] ?? 0);
+        if (!$mid){echo json_encode(['success'=>false,'message'=>'缺少機台']);exit;}
+        try {
+            $pdo->prepare("UPDATE machine_list SET state='1' WHERE machine_id=?")->execute([$mid]);
             echo json_encode(['success'=>true]);
         } catch(Exception $e){echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
         exit;
@@ -3176,6 +3217,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}.for
     <div class="setting-card">
       <h5><i class="fa fa-wrench" style="color:var(--accent);margin-right:6px;"></i>機台資產設定
         <small class="text-muted" style="font-size:12px;font-weight:400;">每小時成本以 24h/天 × 30天/月計算</small>
+        <button class="btn btn-xs btn-success" style="float:right;" onclick="openMachineInfoModal(null)"><i class="fa fa-plus"></i> 新增機台</button>
       </h5>
       <!-- 機台種類切換 -->
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;" id="asset-type-btns">
@@ -3186,12 +3228,12 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}.for
       </div>
       <div style="overflow-x:auto;"><table class="table table-bordered" style="font-size:12px;margin:0;">
         <thead><tr style="background:#f8f9fa;">
-          <th>機台種類</th><th>機台名稱</th><th>狀態</th>
+          <th>機台種類</th><th>機台名稱</th><th>機台編號</th><th>現場編號</th><th>機型</th><th>狀態</th>
           <th>購入日期</th><th>購入金額</th><th>殘值</th><th>年限</th><th>折舊方式</th>
           <th class="tooltip-th" title="每月折舊÷(24×30)">每小時成本</th>
-          <th>已折舊年數</th><th width="80"></th>
+          <th>已折舊年數</th><th width="100"></th>
         </tr></thead>
-        <tbody id="asset-tbody"><tr><td colspan="11" style="text-align:center;padding:20px;color:#aaa;"><i class="fa fa-spinner fa-spin"></i></td></tr></tbody>
+        <tbody id="asset-tbody"><tr><td colspan="14" style="text-align:center;padding:20px;color:#aaa;"><i class="fa fa-spinner fa-spin"></i></td></tr></tbody>
       </table></div>
     </div>
   </div>
@@ -3459,6 +3501,43 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}.for
       <div class="modal-footer">
         <button class="btn btn-default" data-dismiss="modal">取消</button>
         <button class="btn btn-success" onclick="saveAsset()" style="font-weight:600;"><i class="fa fa-save"></i> 儲存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 機台資料 Modal (機台管理：名稱/類型/機台編號/現場編號/機型/規格/備註) ══════ -->
+<div class="modal fade" id="machine-info-modal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header"><button class="close" data-dismiss="modal"><span>&times;</span></button><h4 class="modal-title"><i class="fa fa-cog"></i> <span id="mi-title">新增機台</span></h4></div>
+      <div class="modal-body">
+        <input type="hidden" id="mi-mid">
+        <div class="form-group"><label>機台名稱 <span class="text-danger">*</span></label><input type="text" class="form-control" id="mi-name"></div>
+        <div class="row">
+          <div class="col-sm-6"><div class="form-group"><label>機台編號 <span class="text-muted">(公司財產編號)</span></label><input type="text" class="form-control" id="mi-asset-no"></div></div>
+          <div class="col-sm-6"><div class="form-group"><label>現場自訂編號</label><input type="text" class="form-control" id="mi-field-no"></div></div>
+        </div>
+        <div class="row">
+          <div class="col-sm-6"><div class="form-group"><label>機型</label><input type="text" class="form-control" id="mi-model"></div></div>
+          <div class="col-sm-6"><div class="form-group"><label>機台類型 <span class="text-danger">*</span></label>
+            <select class="form-control" id="mi-type">
+              <option value="">-- 請選擇 --</option>
+              <?php foreach($machine_type_list as $mt): ?><option value="<?=safe($mt['machine_type_id'])?>"><?=safe($mt['machine_type'])?></option><?php endforeach; ?>
+            </select></div></div>
+        </div>
+        <div class="row">
+          <div class="col-sm-6"><div class="form-group"><label>位置 (廠別)</label><input type="text" class="form-control" id="mi-position" placeholder="例如: 1"></div></div>
+          <div class="col-sm-6"><div class="form-group"><label>是否需要架機</label>
+            <select class="form-control" id="mi-need-setup"><option value="1">需要 (1)</option><option value="0">不需要 (0)</option></select></div></div>
+        </div>
+        <div class="form-group"><label>規格</label><input type="text" class="form-control" id="mi-spec"></div>
+        <div class="form-group"><label>備註</label><textarea class="form-control" id="mi-note" rows="2"></textarea></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-danger" id="mi-delete-btn" style="float:left;" onclick="deleteMachineInfo()"><i class="fa fa-trash"></i> 刪除機台</button>
+        <button class="btn btn-default" data-dismiss="modal">取消</button>
+        <button class="btn btn-success" onclick="saveMachineInfo()" style="font-weight:600;"><i class="fa fa-save"></i> 儲存</button>
       </div>
     </div>
   </div>
@@ -4046,6 +4125,9 @@ function loadAssets(mtid, btn){
             h+='<tr>'
               +'<td style="font-size:11px;color:#888;">'+(m.machine_type||'—')+'</td>'
               +'<td><strong class="'+stateCls+'">'+m.machine+'</strong></td>'
+              +'<td style="font-size:11px;">'+(m.asset_no||'—')+'</td>'
+              +'<td style="font-size:11px;">'+(m.field_no||'—')+'</td>'
+              +'<td style="font-size:11px;">'+(m.machine_model||'—')+'</td>'
               +'<td><span class="'+stateCls+'">'+stateLabel+'</span></td>'
               +'<td>'+(m.purchase_date||'<span style="color:#aaa;">未設定</span>')+'</td>'
               +'<td>'+(m.purchase_amount?fmtN(parseFloat(m.purchase_amount).toFixed(0)):'<span style="color:#aaa;">—</span>')+'</td>'
@@ -4054,7 +4136,8 @@ function loadAssets(mtid, btn){
               +'<td style="font-size:11px;">'+(methLabels[m.depreciation_method]||m.depreciation_method||'—')+'</td>'
               +'<td>'+costStr+'</td>'
               +'<td>'+depStr+'</td>'
-              +'<td><button class="btn btn-xs btn-default" onclick=\'openAssetModal('+JSON.stringify(m)+')\' ><i class="fa fa-edit"></i></button></td>'
+              +'<td><button class="btn btn-xs btn-info" title="機台資料" onclick=\'openMachineInfoModal('+JSON.stringify(m)+')\'><i class="fa fa-cog"></i></button> '
+              +'<button class="btn btn-xs btn-default" title="資產折舊" onclick=\'openAssetModal('+JSON.stringify(m)+')\' ><i class="fa fa-edit"></i></button></td>'
               +'</tr>';
         });
         $('#asset-tbody').html(h||'<tr><td colspan="11" style="text-align:center;padding:20px;color:#aaa;">無機台資料</td></tr>');
@@ -4087,6 +4170,43 @@ function saveAsset(){
         depreciation_method:$('#am-meth').val(),monthly_work_hours:$('#am-mhrs').val(),remark:$('#am-rem').val()},
     function(res){
         res.success?(showToast('已儲存'),$('#asset-modal').modal('hide'),loadAssets()):showToast(res.message||'儲存失敗',false);
+    });
+}
+
+// ══ 機台資料管理 (新增/編輯/刪除機台本身，與 process_schedule 頁共用 machine_list) ══
+function openMachineInfoModal(m){
+    $('#mi-mid').val(m?m.machine_id:'');
+    $('#mi-title').text(m?'編輯機台':'新增機台');
+    $('#mi-name').val(m?m.machine:'');
+    $('#mi-asset-no').val(m?(m.asset_no||''):'');
+    $('#mi-field-no').val(m?(m.field_no||''):'');
+    $('#mi-model').val(m?(m.machine_model||''):'');
+    $('#mi-type').val(m?m.machine_type_id:'');
+    $('#mi-position').val(m?m.position:'');
+    $('#mi-need-setup').val(m?(m.need_setup||0):1);
+    $('#mi-spec').val(m?(m.spec||''):'');
+    $('#mi-note').val(m?(m.note||''):'');
+    $('#mi-delete-btn').toggle(!!m);
+    $('#machine-info-modal').modal('show');
+}
+function saveMachineInfo(){
+    var name=$('#mi-name').val().trim(), typeId=$('#mi-type').val();
+    if(!name){showToast('機台名稱不可為空',false);return;}
+    if(!typeId){showToast('請選擇機台類型',false);return;}
+    post({action:'save_machine_info',machine_id:$('#mi-mid').val(),machine:name,machine_type_id:typeId,
+        position:$('#mi-position').val(),need_setup:$('#mi-need-setup').val(),
+        machine_model:$('#mi-model').val(),asset_no:$('#mi-asset-no').val(),field_no:$('#mi-field-no').val(),
+        spec:$('#mi-spec').val(),note:$('#mi-note').val()},
+    function(res){
+        res.success?(showToast('已儲存'),$('#machine-info-modal').modal('hide'),loadAssets()):showToast(res.message||'儲存失敗',false);
+    });
+}
+function deleteMachineInfo(){
+    var mid=$('#mi-mid').val();
+    if(!mid) return;
+    if(!confirm('確定要刪除此機台？(軟刪除，可由管理員還原)')) return;
+    post({action:'delete_machine_info',machine_id:mid},function(res){
+        res.success?(showToast('已刪除'),$('#machine-info-modal').modal('hide'),loadAssets()):showToast(res.message||'刪除失敗',false);
     });
 }
 
