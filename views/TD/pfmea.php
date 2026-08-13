@@ -91,6 +91,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .pf-suggest-table { width:100%; border-collapse:collapse; font-size:12px; }
         .pf-suggest-table th, .pf-suggest-table td { border:1px solid #EADFC8; padding:5px 8px; text-align:left; }
         .pf-suggest-table thead th { background:#F7E0BD; color:#5b3a1e; }
+        .pf-proc-box { display:flex; gap:4px; }
+        .pf-proc-box input { flex:1 1 auto; }
+        .pf-proc-box button { flex:0 0 auto; white-space:nowrap; }
+        table.pf-tpl-table { width:100%; border-collapse:collapse; font-size:12px; }
+        table.pf-tpl-table th, table.pf-tpl-table td { border:1px solid #EADFC8; padding:5px 8px; text-align:left; }
+        table.pf-tpl-table thead th { background:#F7E0BD; color:#5b3a1e; }
         .pf-row-btn { border:1px solid #D8BE93; background:#fff; color:#5b3a1e; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; }
         .pf-row-btn:hover { background:#F7E0BD; }
         .pf-row-btn.del { color:#DD5138; border-color:#f0c4bd; }
@@ -245,6 +251,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         </div>
         <div class="pf-rpn-note">風險優先指數 RPN = S × O × D（系統自動計算，不可手填）：<b>1~50</b> 低｜<b>51~100</b> 普通｜<b>101~200</b> 高｜<b>201~1000</b> 非常高，需優先改善。</div>
 
+        <datalist id="dl_process"></datalist>
         <div class="pf-sec-title">失效模式分析（逐項卡片，預設收合成一行；<b>點擊卡片標題展開才會顯示完整輸入欄位</b>，列印仍是您提供的橫式表格格式）</div>
         <div id="itemBody"></div>
         <div style="margin-top:6px;">
@@ -274,6 +281,19 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <button class="b-cancel" onclick="closeMask('suggestMask')">取消</button>
         <button class="b-ok" id="btnSuggestCreate" onclick="createSuggested()">建立勾選項目</button>
     </div>
+</div></div>
+
+<!-- 整組列表（此製程代號的樣板套用） -->
+<div class="pf-mask" id="templateMask" style="z-index:1200;"><div class="pf-modal">
+    <div class="m-head"><span>此製程的整組樣板列表</span><span class="m-close" onclick="closeMask('templateMask')">✕</span></div>
+    <div class="m-body">
+        <div id="templateEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
+        <table class="pf-tpl-table" id="templateTable" style="display:none;">
+            <thead><tr><th>組名</th><th style="width:60px;">S</th><th style="width:60px;">O</th><th style="width:60px;">D</th><th style="width:70px;">RPN</th><th style="width:50px;"><?= $perms['canAdmin']?'刪除':'' ?></th></tr></thead>
+            <tbody id="templateBody"></tbody>
+        </table>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('templateMask')">關閉</button></div>
 </div></div>
 
 <!-- AS 文件綁定 -->
@@ -308,6 +328,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <ul>
             <li>按「新增」→ 選擇「料號」（打部分字元搜尋，查無此料號時可直接手動輸入；選定後客戶名稱與「分類」零件/組合件自動帶入，可手動修改）、填「產品名稱」「規格描述」、勾選「相關部門」。</li>
             <li>每個潛在失效模式是一張卡片，欄位由上到下分「基本資料／風險評估與現行設計管制／建議措施／措施結果」四區，不需要橫向捲動；S/O/D 每格填 1-10，<b>RPN 由系統自動計算，不可手動輸入</b>。按「新增一項失效模式分析」可再加一張卡片。</li>
+            <li><b>製程代號</b>：卡片內輸入已建立的製程代號會自動帶出該製程的「潛在失效模式」下拉選項（也可直接手動輸入新值，儲存時會自動加進清單供下次選用）；輸入清單中沒有的新代號會詢問製程名稱並即時建立。「控制預防」「控制偵測」同樣是下拉可選/可手動輸入。按「整組列表」可叫出此製程所有樣板（組名＝製程名稱_項目名稱），點選後直接把該筆的基本資料/評級/控制/建議措施/評價欄位整批帶入，帶入後仍可個別修改。這些清單新增不限身分，僅管理員能刪除。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類自動帶入），分析項目仍需逐份手動填寫。</li>
         </ul>
         <h4>其他行為／常見疑問</h4>
@@ -342,9 +363,14 @@ var VIEWER_URL = '../pm/bom_viewer.php';
 var CAN_EDIT = <?= $perms['canEdit'] ? 'true' : 'false' ?>;
 var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 var CUR_ID = 0, AS_DOCS = [], AS_DOC = null, SUGGEST_ROWS = [];
+var RENDER_SEQ = 0;
+var PROCESS_LIST = []; // [{id,process_code,process_name}] 製程代號主檔，跳窗開啟時載入一次
+var CONTROL_OPTIONS = {prevention:[], detection:[]}; // 控制預防/控制偵測固定選項，跳窗開啟時載入一次
+var PROCESS_ID_BY_CODE = {}; // process_code -> id 對照，製程代號連動查失效模式/整組樣板用
+var TEMPLATE_ROWS = [], TEMPLATE_TARGET = null; // 整組列表跳窗暫存
 /* 官方紙本表單(F-11210-UE2-0001)固定的相關部門勾選清單，跟Pfmea_API.php的PFMEA_DEPT_LIST同一份 */
 var DEPT_LIST = ['管理課','技術課','業務組','品保組','倉管組','採購組','生管組','生產課'];
-var FIELDS = ['process_desc','function_desc','requirement','failure_mode','failure_effect',
+var FIELDS = ['process_code','process_desc','function_desc','requirement','failure_mode','failure_effect',
     'severity','classification','failure_cause','occurrence','prevention_controls','detection_controls','detection',
     'recommended_actions','responsibility','target_date','action_taken','action_date',
     'new_severity','new_occurrence','new_detection'];
@@ -416,6 +442,10 @@ function itemCardHtml(it, idx, expanded){
         var ctrl;
         if (type === 'rating') ctrl = '<input type="number" min="1" max="10" class="rating sod-in" data-f="'+field+'" value="'+esc(v)+'"'+dis+'>';
         else if (type === 'date') ctrl = '<input type="date" data-f="'+field+'" value="'+esc(v)+'"'+dis+'>';
+        else if (type && type.indexOf('list:') === 0) {
+            var dlId = 'dl_'+field+'_'+(++RENDER_SEQ);
+            ctrl = '<input type="text" data-f="'+field+'" value="'+esc(v)+'" list="'+dlId+'"'+dis+'><datalist id="'+dlId+'" class="dl-'+type.substring(5)+'"></datalist>';
+        }
         else ctrl = '<textarea data-f="'+field+'"'+dis+'>'+esc(v)+'</textarea>';
         return '<div><label>'+label+'</label>'+ctrl+'</div>';
     }
@@ -423,6 +453,8 @@ function itemCardHtml(it, idx, expanded){
     var newRpn = it.new_rpn != null ? it.new_rpn : '';
     var rpnCls = (it.rpn != null && it.rpn > 200) ? ' rpn-hi' : '';
     var newRpnCls = (it.new_rpn != null && it.new_rpn > 200) ? ' rpn-hi' : '';
+    var procCode = it.process_code != null ? it.process_code : '';
+    var dis = CAN_EDIT ? '' : ' disabled';
     return '<div class="pf-card'+(expanded?'':' collapsed')+'" data-id="'+esc(it.id||0)+'">'
         + '<div class="pf-card-hd" onclick="toggleCard(this)">'
         + '<span><i class="fa fa-chevron-'+(expanded?'down':'right')+' toggle-ic"></i><b>項次 <span class="seq">'+(idx+1)+'</span></b>'
@@ -432,14 +464,18 @@ function itemCardHtml(it, idx, expanded){
         + '<div class="pf-card-body">'
         + '<div class="pf-card-grp-title">基本資料</div>'
         + '<div class="pf-card-grid">'
+        + '<div><label>製程代號</label><div class="pf-proc-box">'
+        + '<input type="text" class="f-proccode" data-f="process_code" value="'+esc(procCode)+'" list="dl_process" placeholder="輸入製程代號"'+dis+'>'
+        + '<button type="button" class="pf-row-btn" onclick="openTemplatePicker(this)" title="此製程的整組樣板列表"'+dis+'><i class="fa fa-list"></i> 整組列表</button>'
+        + '</div></div>'
         + fld('process_desc','項目') + fld('function_desc','功能') + fld('requirement','要求')
-        + fld('failure_mode','潛在失效模式') + fld('failure_effect','失效模式潛在後果') + fld('classification','分類')
+        + fld('failure_mode','潛在失效模式','list:failure_mode') + fld('failure_effect','失效模式潛在後果') + fld('classification','分類')
         + '</div>'
         + '<div class="pf-card-grp-title">風險評估與現行設計管制（RPN 系統自動計算）</div>'
         + '<div class="pf-rating-quad">'
         + fld('severity','嚴重度 S','rating') + fld('failure_cause','失效潛在原因')
-        + fld('occurrence','發生率 O','rating') + fld('prevention_controls','控制預防')
-        + fld('detection_controls','控制偵測') + fld('detection','偵測度 D','rating')
+        + fld('occurrence','發生率 O','rating') + fld('prevention_controls','控制預防','list:prevention')
+        + fld('detection_controls','控制偵測','list:detection') + fld('detection','偵測度 D','rating')
         + '<div><label>RPN</label><input type="text" class="rpn-out'+rpnCls+'" data-rpn value="'+rpn+'" readonly></div>'
         + '</div>'
         + '<div class="pf-card-grp-title">建議措施</div>'
@@ -462,10 +498,21 @@ function renderItems(items){
         var html = '';
         items.forEach(function(it, idx){ html += itemCardHtml(it, idx, false); });
         $('#itemBody').html(html);
+        refreshAllCardDatalists();
     } else {
         $('#itemBody').html('');
         pfAddRow();
     }
+}
+/* 每張卡片的控制預防/控制偵測下拉一律可直接填；有預帶製程代號的卡片(既有資料載入時)要順便帶出
+   該製程的潛在失效模式下拉，不必使用者手動再觸發一次 change 事件 */
+function refreshAllCardDatalists(){
+    $('#itemBody .pf-card').each(function(){
+        var $card = $(this);
+        populateCardControlDatalists($card);
+        var code = $card.find('.f-proccode').val().trim();
+        if (code && PROCESS_ID_BY_CODE[code]) loadFailureModesForCard($card, PROCESS_ID_BY_CODE[code].id);
+    });
 }
 function renumberRows(){ $('#itemBody .pf-card').each(function(i){ $(this).find('.seq').text(i+1); }); }
 window.toggleRatingRef = function(){
@@ -487,6 +534,7 @@ window.toggleCard = function(hdEl){
 window.pfAddRow = function(){
     $('#itemBody').append(itemCardHtml({}, $('#itemBody .pf-card').length, true));
     renumberRows();
+    populateCardControlDatalists($('#itemBody .pf-card').last());
     return true;
 };
 window.pfDelRow = function(){
@@ -526,6 +574,108 @@ function collectItems(){
     });
     return out;
 }
+
+/* ---------- 製程代號連動下拉／整組樣板套用（2026-08-13 使用者要求）----------
+ * 製程代號、控制預防、控制偵測都用 <input list=datalist> 實作：既能從清單挑選，也能直接手動輸入
+ * 新值（清單本身可填表人就能新增，僅管理員能刪除，設定入口見下方 loadRefLists 載入的清單資料）。
+ */
+function fillDatalist(dl, items, valueFn, labelFn){
+    dl.innerHTML = items.map(function(it){
+        var v = esc(valueFn(it));
+        var l = labelFn ? ' label="'+esc(labelFn(it))+'"' : '';
+        return '<option value="'+v+'"'+l+'>';
+    }).join('');
+}
+function loadProcessList(cb){
+    $.getJSON(API, {action:'ref_process_list'}, function(res){
+        if (!res.success) return;
+        PROCESS_LIST = res.rows || [];
+        PROCESS_ID_BY_CODE = {};
+        PROCESS_LIST.forEach(function(p){ PROCESS_ID_BY_CODE[p.process_code] = p; });
+        fillDatalist(document.getElementById('dl_process'), PROCESS_LIST, function(p){ return p.process_code; }, function(p){ return p.process_name; });
+        if (cb) cb();
+    });
+}
+function loadControlOptions(cb){
+    $.getJSON(API, {action:'ref_control_options'}, function(res){
+        if (!res.success) return;
+        CONTROL_OPTIONS = res.options || {prevention:[], detection:[]};
+        $('#itemBody .pf-card').each(function(){ populateCardControlDatalists($(this)); });
+        if (cb) cb();
+    });
+}
+function populateCardControlDatalists($card){
+    $card.find('datalist.dl-prevention').each(function(){ fillDatalist(this, CONTROL_OPTIONS.prevention, function(o){ return o.option_text; }); });
+    $card.find('datalist.dl-detection').each(function(){ fillDatalist(this, CONTROL_OPTIONS.detection, function(o){ return o.option_text; }); });
+}
+/* 製程代號欄位變更：解析出對應製程(代號已存在於PROCESS_ID_BY_CODE直接用；輸入的是新代號則問一次
+   製程名稱、呼叫ref_process_add即時註冊——可填表人就能新增，不必等管理員先設定好)，
+   並帶出該製程的潛在失效模式下拉選項供「潛在失效模式」欄位挑選/自行輸入 */
+function loadFailureModesForCard($card, pid){
+    var $dl = $card.find('datalist.dl-failure_mode');
+    $.getJSON(API, {action:'ref_failure_mode_list', process_id:pid}, function(res){
+        if (!res.success) return;
+        $dl.each(function(){ fillDatalist(this, res.rows, function(r){ return r.failure_mode; }); });
+    });
+}
+$(document).on('change', '#itemBody .f-proccode', function(){
+    var $input = $(this), $card = $input.closest('.pf-card');
+    var code = $input.val().trim();
+    if (!code){ $card.find('datalist.dl-failure_mode').each(function(){ this.innerHTML=''; }); return; }
+    if (PROCESS_ID_BY_CODE[code]){ loadFailureModesForCard($card, PROCESS_ID_BY_CODE[code].id); return; }
+    if (!CAN_EDIT) return;
+    var name = window.prompt('製程代號「'+code+'」尚未建立，請輸入製程名稱以新增：', '');
+    if (!name){ $input.val(''); return; }
+    $.post(API, {action:'ref_process_add', process_code:code, process_name:name}, function(res){
+        if (!res.success){ alert(res.message||'新增製程失敗'); $input.val(''); return; }
+        loadProcessList(function(){ loadFailureModesForCard($card, res.id); });
+    }, 'json');
+});
+
+window.openTemplatePicker = function(btn){
+    var $card = $(btn).closest('.pf-card');
+    var code = $card.find('.f-proccode').val().trim();
+    if (!code || !PROCESS_ID_BY_CODE[code]){ alert('請先輸入已建立的製程代號'); return; }
+    TEMPLATE_TARGET = $card;
+    $('#templateEmpty').show().text('載入中…'); $('#templateTable').hide();
+    openMask('templateMask');
+    $.getJSON(API, {action:'ref_item_templates', process_id:PROCESS_ID_BY_CODE[code].id}, function(res){
+        if (!res.success || !res.rows.length){ $('#templateEmpty').text('此製程尚無整組樣板資料'); return; }
+        TEMPLATE_ROWS = res.rows;
+        $('#templateEmpty').hide(); $('#templateTable').show();
+        var html = '';
+        TEMPLATE_ROWS.forEach(function(t, i){
+            var rpn = (t.severity&&t.occurrence&&t.detection) ? (t.severity*t.occurrence*t.detection) : '';
+            html += '<tr><td class="pf-op" onclick="applyTemplate('+i+')" style="cursor:pointer;color:#b5762a;text-decoration:underline;">'+esc(t.group_name)+'</td>'
+                + '<td>'+esc(t.severity)+'</td><td>'+esc(t.occurrence)+'</td><td>'+esc(t.detection)+'</td><td>'+rpn+'</td>'
+                + '<td>'+(CAN_ADMIN?'<i class="fa fa-trash pf-op" title="刪除此樣板" onclick="event.stopPropagation();deleteTemplate('+t.id+')"></i>':'')+'</td></tr>';
+        });
+        $('#templateBody').html(html);
+    });
+};
+window.applyTemplate = function(i){
+    var t = TEMPLATE_ROWS[i], $card = TEMPLATE_TARGET;
+    if (!t || !$card) return;
+    var map = {process_desc:t.item_name, failure_mode:t.failure_mode, function_desc:t.function_desc, failure_effect:t.failure_effect,
+        severity:t.severity, failure_cause:t.failure_cause, occurrence:t.occurrence, prevention_controls:t.prevention_controls,
+        detection_controls:t.detection_controls, detection:t.detection, recommended_actions:t.recommended_actions,
+        new_severity:t.new_severity, new_occurrence:t.new_occurrence, new_detection:t.new_detection};
+    Object.keys(map).forEach(function(f){
+        if (map[f] == null) return;
+        $card.find('[data-f="'+f+'"]').val(map[f]).trigger('input');
+    });
+    var it = {failure_mode: $card.find('[data-f="failure_mode"]').val(), rpn: $card.find('[data-rpn]').val() || null};
+    $card.find('.pf-card-summary').html(cardSummaryText(it));
+    closeMask('templateMask');
+};
+window.deleteTemplate = function(id){
+    if (!confirm('確定刪除此整組樣板？(僅管理員可操作，刪除後不影響已套用過的資料)')) return;
+    $.post(API, {action:'ref_item_template_delete', id:id}, function(res){
+        if (!res.success){ alert(res.message||'刪除失敗'); return; }
+        TEMPLATE_ROWS = TEMPLATE_ROWS.filter(function(t){ return t.id !== id; });
+        $('#templateBody tr').filter(function(){ return $(this).find('[onclick*="deleteTemplate('+id+')"]').length>0; }).remove();
+    }, 'json');
+};
 
 function deptChecksHtml(checked){
     checked = checked || [];
@@ -572,6 +722,26 @@ EGPartPicker.attach(document.getElementById('fPartNo'), {
 });
 $('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); $('#fCustomerName').val(''); });
 
+/* 存檔前，把卡片上手動輸入、不在目前下拉清單裡的失效模式/控制預防/控制偵測新值註冊進參考清單，
+   下次同製程就能直接挑選（可填表人就能新增，僅管理員能刪除——見 pfmea_reference_lib.php） */
+function registerNewRefValues(){
+    $('#itemBody .pf-card').each(function(){
+        var $card = $(this);
+        var code = $card.find('.f-proccode').val().trim();
+        var pid = code && PROCESS_ID_BY_CODE[code] ? PROCESS_ID_BY_CODE[code].id : 0;
+        if (pid) {
+            var fm = $card.find('[data-f="failure_mode"]').val().trim();
+            var known = $card.find('datalist.dl-failure_mode option').map(function(){ return this.value; }).get();
+            if (fm && known.indexOf(fm) < 0) $.post(API, {action:'ref_failure_mode_add', process_id:pid, failure_mode:fm});
+        }
+        ['prevention_controls','detection_controls'].forEach(function(f){
+            var type = f === 'prevention_controls' ? 'prevention' : 'detection';
+            var v = $card.find('[data-f="'+f+'"]').val().trim();
+            var known2 = (CONTROL_OPTIONS[type]||[]).map(function(o){ return o.option_text; });
+            if (v && known2.indexOf(v) < 0) $.post(API, {action:'ref_control_option_add', option_type:type, option_text:v});
+        });
+    });
+}
 function saveHeader(){
     var payload = {
         action: 'save', id: CUR_ID,
@@ -583,6 +753,7 @@ function saveHeader(){
         related_depts: JSON.stringify($('#fDeptChecks .dept-ck:checked').map(function(){ return $(this).val(); }).get()),
         items: JSON.stringify(collectItems()),
     };
+    if (CAN_EDIT) registerNewRefValues();
     $.post(API, payload, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }
         closeMask('editMask'); loadList();
@@ -764,6 +935,8 @@ $('.pf-mask').on('click', function(e){ if (e.target === this) this.style.display
 <?php if ($perms['canView']): ?>
 loadList();
 loadAsDocCurrent();
+loadProcessList();
+loadControlOptions();
 <?php endif; ?>
 </script>
 </body>
