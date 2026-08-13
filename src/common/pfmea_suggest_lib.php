@@ -1,0 +1,66 @@
+<?php
+/**
+ * PFMEA(3-TD-01-02) — 建議建立清單 共用庫（2026-08-13 使用者明確要求）。
+ * 跟產品開發評估表(td_dev_eval)的建議建立清單不同：來源不是掃描訂單/報工/BOM/出貨原始表，
+ * 而是直接抓「已經有建立 td_dev_eval 紀錄的料號」當候選（已經做過產品開發評估的料號，理論上
+ * 都該有對應的 PFMEA 分析），排除已存在 pfmea_doc 紀錄的部分即可，不需要客戶名單設定或日期區間。
+ */
+
+/** 候選清單：td_dev_eval 已有紀錄、pfmea_doc 還沒有紀錄的客戶+料號組合 */
+function pfmea_suggest_candidates(PDO $db): array {
+    $rows = $db->query("SELECT DISTINCT customer_name, part_d_id, part_no_text, product_name
+                         FROM td_dev_eval WHERE is_deleted=0
+                           AND (part_d_id IS NOT NULL OR (part_no_text IS NOT NULL AND part_no_text<>''))
+                         ORDER BY customer_name, part_no_text")->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return [];
+
+    $exist = $db->query("SELECT part_d_id, part_no_text FROM pfmea_doc WHERE is_deleted=0")->fetchAll(PDO::FETCH_ASSOC);
+    $existSet = [];
+    foreach ($exist as $e) {
+        if ($e['part_d_id']) $existSet['D'.$e['part_d_id']] = true;
+        if ($e['part_no_text']) $existSet['T'.$e['part_no_text']] = true;
+    }
+
+    $out = [];
+    $seen = [];
+    foreach ($rows as $r) {
+        $key = $r['part_d_id'] ? 'D'.$r['part_d_id'] : 'T'.$r['part_no_text'];
+        if (isset($existSet[$key]) || isset($seen[$key])) continue;
+        $seen[$key] = true;
+        $out[] = $r;
+    }
+    return $out;
+}
+
+/**
+ * 批次建立：$rows 每筆 [customer_name, part_d_id, part_no_text, product_name]，只建立表頭殼
+ * （比照 td_dev_eval_suggest_bulk_create 慣例，分析項目仍需逐一填寫，不代填）；
+ * 分類(零件/組合件)自動從料號 d_setting.Is_Assembly 帶入，查無料號時預設「零件」。
+ */
+function pfmea_suggest_bulk_create(PDO $db, array $rows, int $uid, string $uname): array {
+    $created = 0; $errors = [];
+    foreach ($rows as $row) {
+        $partDId = !empty($row['part_d_id']) ? (int)$row['part_d_id'] : null;
+        $partText = trim((string)($row['part_no_text'] ?? ''));
+        if (!$partDId && $partText === '') { $errors[] = '缺少料號，略過'; continue; }
+        try {
+            $itemType = 'part';
+            if ($partDId) {
+                $st = $db->prepare("SELECT Is_Assembly FROM d_setting WHERE d_id=?");
+                $st->execute([$partDId]);
+                if ((int)$st->fetchColumn() === 1) $itemType = 'assembly';
+            }
+            $docNo = pfmea_next_doc_no($db);
+            $st = $db->prepare("INSERT INTO pfmea_doc (doc_no, part_d_id, part_no_text, item_type, product_name, created_by, created_by_name)
+                                 VALUES (?,?,?,?,?,?,?)");
+            $st->execute([$docNo, $partDId, $partDId ? null : $partText, $itemType, $row['product_name'] ?? null, $uid, $uname]);
+            $created++;
+        } catch (Throwable $e) { $errors[] = ($partText ?: '(無料號)').'：'.$e->getMessage(); }
+    }
+    return ['created'=>$created, 'errors'=>$errors];
+}
+
+/** pfmea.php 頁首提醒用：候選筆數 */
+function pfmea_suggest_pending_count(PDO $db): int {
+    try { return count(pfmea_suggest_candidates($db)); } catch (Throwable $e) { return 0; }
+}
