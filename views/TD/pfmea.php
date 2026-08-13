@@ -1062,42 +1062,48 @@ function printDoc(id){
                 + '<td>'+esc(it.new_severity)+'</td><td>'+esc(it.new_occurrence)+'</td><td>'+esc(it.new_detection)+'</td><td>'+esc(it.new_rpn)+'</td></tr>';
         });
         var depts = (d.related_depts||'').split(',').filter(Boolean);
-        var deptsHtml = DEPT_LIST.map(function(dp){ return '<label>'+(depts.indexOf(dp)>=0?'&#9632;':'&#9633;')+' '+esc(dp)+'</label>'; }).join('');
+        var deptRows = DEPT_LIST.map(function(dp){ return '<tr><td class="tl">'+esc(dp)+'</td><td class="ck">'+(depts.indexOf(dp)>=0?'v':'')+'</td></tr>'; }).join('');
+        var isAsm = d.item_type === 'assembly';
+        var classifyBox = (isAsm?'□':'■')+'零件　'+(isAsm?'■':'□')+'組合件';
         var revRows = '';
         (res.revisions||[]).forEach(function(r){
             revRows += '<tr><td>'+esc(r.rev_no)+'</td><td>'+fmtDate(r.rev_date)+'</td><td>'+esc(r.rev_content)+'</td><td>'+esc(r.prepared_by_name||'')+'</td></tr>';
         });
+        // 表頭資訊區比照官方紙本表單(F-11210-UE2-0001)版面：料號/分類/規格描述/產品名稱/客戶名稱、
+        // S/O/D/RPN評級對照表、相關部門勾選清單，全部合併成同一張表格橫向並排、佔滿整頁寬度，
+        // 而不是分開幾個各自浮動的小方塊（2026-08-13使用者比對官方PDF後要求改成這樣）
         var body = '<div class="p-topwrap">'
             + '<div class="p-comp-wrap"><div class="p-comp">'+esc(res.company_name)+'</div><div class="p-title">'+esc(res.as_doc_name)+'</div></div>'
             + '<table class="p-rev"><thead><tr><th>編號</th><th>日期</th><th>修訂內容</th><th>準備</th></tr></thead><tbody>'+revRows+'</tbody></table>'
             + '</div>'
-            + '<div class="p-hdwrap">'
-            + '<table class="p-info">'
+            + '<table class="p-hd-outer"><colgroup><col style="width:22%"><col style="width:13%"><col style="width:11%">'
+            + '<col style="width:15%"><col style="width:13%"><col style="width:26%"></colgroup><tr>'
+            + '<td class="p-cell"><table class="p-info">'
             + '<tr><td>料號</td><td>'+esc(d.part_no||'')+'</td></tr>'
-            + '<tr><td>分類</td><td>'+esc(ITEM_TYPE_LABEL[d.item_type]||'零件')+'</td></tr>'
+            + '<tr><td>分類</td><td>'+classifyBox+'</td></tr>'
             + '<tr><td>規格描述</td><td>'+esc(d.spec_desc||'')+'</td></tr>'
             + '<tr><td>產品名稱</td><td>'+esc(d.product_name||'')+'</td></tr>'
             + '<tr><td>客戶名稱</td><td>'+esc(d.customer_name||'')+'</td></tr>'
-            + '</table>'
-            + '<table class="p-rate"><thead><tr><th colspan="2">嚴重度(S)</th></tr></thead><tbody>'
+            + '</table></td>'
+            + '<td class="p-cell"><table class="p-rate"><thead><tr><th colspan="2">嚴重度(S)</th></tr></thead><tbody>'
             + '<tr><td>1</td><td>無影響</td></tr><tr><td>2</td><td>次要阻礙</td></tr><tr><td>3~6</td><td>中等阻礙</td></tr>'
             + '<tr><td>7</td><td>顯著阻礙</td></tr><tr><td>8</td><td>嚴重阻礙</td></tr><tr><td>9~10</td><td>安全/法規失效</td></tr>'
-            + '</tbody></table>'
-            + '<table class="p-rate"><thead><tr><th colspan="2">發生率(O)</th></tr></thead><tbody>'
+            + '</tbody></table></td>'
+            + '<td class="p-cell"><table class="p-rate"><thead><tr><th colspan="2">發生率(O)</th></tr></thead><tbody>'
             + '<tr><td>1</td><td>很低</td></tr><tr><td>2~3</td><td>低</td></tr><tr><td>4~6</td><td>中等</td></tr>'
             + '<tr><td>7~9</td><td>高</td></tr><tr><td>10</td><td>很高</td></tr>'
-            + '</tbody></table>'
-            + '<table class="p-rate"><thead><tr><th colspan="2">偵測度(D)</th></tr></thead><tbody>'
+            + '</tbody></table></td>'
+            + '<td class="p-cell"><table class="p-rate"><thead><tr><th colspan="2">偵測度(D)</th></tr></thead><tbody>'
             + '<tr><td>1</td><td>幾乎確定</td></tr><tr><td>2</td><td>極高</td></tr><tr><td>3</td><td>高</td></tr>'
             + '<tr><td>4</td><td>高中等</td></tr><tr><td>5</td><td>中等</td></tr><tr><td>6</td><td>低</td></tr>'
             + '<tr><td>7</td><td>非常低</td></tr><tr><td>8~9</td><td>可能性極小</td></tr><tr><td>10</td><td>幾乎不可能</td></tr>'
-            + '</tbody></table>'
-            + '<table class="p-rate"><thead><tr><th colspan="2">風險優先指數(RPN)</th></tr></thead><tbody>'
+            + '</tbody></table></td>'
+            + '<td class="p-cell"><table class="p-rate"><thead><tr><th colspan="2">風險優先指數(RPN)</th></tr></thead><tbody>'
             + '<tr><td>1~50</td><td>低</td></tr><tr><td>51~100</td><td>普通</td></tr>'
             + '<tr><td>101~200</td><td>高</td></tr><tr><td>201~1000</td><td>非常高</td></tr>'
-            + '</tbody></table>'
-            + '<div class="p-depts"><span class="dh">相關部門</span>'+deptsHtml+'</div>'
-            + '</div>'
+            + '</tbody></table></td>'
+            + '<td class="p-cell"><table class="p-depts-tb"><thead><tr><th colspan="2">相關部門</th></tr></thead><tbody>'+deptRows+'</tbody></table></td>'
+            + '</tr></table>'
             + '<table class="p-tb"><thead>'
             + '<tr><th rowspan="2">NO</th><th rowspan="2">項目</th><th rowspan="2">功能</th><th rowspan="2">要求</th>'
             + '<th rowspan="2">潛在失效模式</th><th rowspan="2">失效模式潛在後果</th><th rowspan="2">嚴重度S</th>'
@@ -1115,16 +1121,18 @@ function printDoc(id){
             + 'table.p-rev{flex:0 0 auto;border-collapse:collapse;font-size:7.5px;align-self:flex-start;}'
             + 'table.p-rev th,table.p-rev td{border:1px solid #666;padding:1px 4px;text-align:center;white-space:nowrap;}'
             + 'table.p-rev thead th{background:#f3ead6;}'
-            + '.p-hdwrap{display:flex;gap:4px;align-items:stretch;margin-bottom:6px;}'
-            + 'table.p-info{border-collapse:collapse;font-size:9px;flex:0 0 200px;}'
-            + 'table.p-info td{border:1px solid #666;padding:2px 4px;overflow-wrap:anywhere;}'
-            + 'table.p-info td:first-child{background:#f3ead6;font-weight:bold;white-space:nowrap;width:56px;}'
-            + 'table.p-rate{border-collapse:collapse;font-size:7.5px;flex:0 0 auto;}'
-            + 'table.p-rate th,table.p-rate td{border:1px solid #666;padding:1px 3px;text-align:center;white-space:nowrap;}'
-            + 'table.p-rate thead th{background:#f3ead6;}'
-            + '.p-depts{flex:0 0 auto;font-size:8.5px;border:1px solid #666;padding:2px 5px;display:flex;flex-direction:column;gap:1px;}'
-            + '.p-depts .dh{font-weight:bold;background:#f3ead6;padding:1px 3px;margin:-2px -5px 2px;}'
-            + '.p-depts label{white-space:nowrap;display:block;}'
+            // 表頭資訊+評級對照表+相關部門，全部併成一張橫跨整頁寬度的表格(比照官方PDF版面，
+            // 2026-08-13使用者比對後要求)：外層 p-hd-outer 一列多欄，每欄一個 p-cell(自帶外框)，
+            // 裡面各自嵌一個沒有外框、只有自己內部格線的小表格。
+            + 'table.p-hd-outer{width:100%;table-layout:fixed;border-collapse:collapse;margin-bottom:6px;}'
+            + 'table.p-hd-outer > tr > td.p-cell{border:1px solid #666;padding:0;vertical-align:top;}'
+            + 'table.p-info,table.p-rate,table.p-depts-tb{width:100%;height:100%;border-collapse:collapse;font-size:8px;table-layout:fixed;}'
+            + 'table.p-info td,table.p-rate td,table.p-rate th,table.p-depts-tb td,table.p-depts-tb th{border:1px solid #999;padding:1px 3px;overflow-wrap:anywhere;}'
+            + 'table.p-info td:first-child{background:#f3ead6;font-weight:bold;white-space:nowrap;width:44px;}'
+            + 'table.p-rate td,table.p-rate th{text-align:center;}'
+            + 'table.p-rate thead th,table.p-depts-tb thead th,table.p-info tr:first-child td:first-child{background:#f3ead6;}'
+            + 'table.p-depts-tb td.tl{text-align:left;white-space:nowrap;}'
+            + 'table.p-depts-tb td.ck{text-align:center;font-weight:bold;width:16px;}'
             + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:8px;}'
             + 'table.p-tb thead{display:table-header-group;}'
             + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 3px;text-align:center;overflow-wrap:anywhere;}'
