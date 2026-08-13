@@ -167,11 +167,17 @@ case 'save':
                           $estQty !== '' ? (int)$estQty : null, $fillDate ?: null, $sampleTime ?: null, $uid, $uname, $id]);
         } else {
             $docNo = td_dev_eval_next_doc_no($db);
+            // 建立當下若前端沒帶預估需求量，後端自動試算補上（使用者明確要求「建立評估表時就要自動計算並填入」，
+            // 不只是前端互動觸發才算，伺服端在建立這個動作本身就做一次保底）
+            $estQtyToSave = $estQty !== '' ? (int)$estQty : null;
+            if ($estQtyToSave === null && $partDId && $fillDate) {
+                $estQtyToSave = td_dev_eval_estimate_qty($db, $partDId, $fillDate);
+            }
             $st = $db->prepare("INSERT INTO td_dev_eval (doc_no, customer_name, part_d_id, part_no_text, product_name,
                                  est_qty, fill_date, sample_time, created_by, created_by_name)
                                  VALUES (?,?,?,?,?,?,?,?,?,?)");
             $st->execute([$docNo, $customerName ?: null, $partDId ?: null, $partNoText ?: null, $productName ?: null,
-                          $estQty !== '' ? (int)$estQty : null, $fillDate ?: null, $sampleTime ?: null, $uid, $uname]);
+                          $estQtyToSave, $fillDate ?: null, $sampleTime ?: null, $uid, $uname]);
             $id = (int)$db->lastInsertId();
         }
 
@@ -310,18 +316,15 @@ case 'answer_defaults_save':
     td_dev_eval_answer_defaults_save($db, $map, $uid, $uname);
     jout(['success'=>true, 'defaults'=>td_dev_eval_answer_defaults_get($db)]);
 
-// ── 料號固定顯示名稱：選定料號自動帶入產品名稱欄，仍可手動改，僅評估表管理員/系統管理員可設定 ──
-case 'part_name_get':
+// ── 產品名稱預設值：全部產品通用的單一值(不是特定料號)，新建立表單時自動帶入，仍可手動改 ──
+case 'default_product_name_get':
     needView($perms);
-    $partDId = (int)($_GET['part_d_id'] ?? 0);
-    jout(['success'=>true, 'product_name'=>td_dev_eval_part_name_get($db, $partDId)]);
+    jout(['success'=>true, 'product_name'=>td_dev_eval_default_product_name_get($db)]);
 
-case 'part_name_save':
+case 'default_product_name_save':
     needAdmin($perms);
-    $partDId = (int)($_POST['part_d_id'] ?? 0);
     $name = trim((string)($_POST['product_name'] ?? ''));
-    if (!$partDId) jout(['success'=>false,'message'=>'請先選定料號']);
-    td_dev_eval_part_name_save($db, $partDId, $name, $uid, $uname);
+    td_dev_eval_default_product_name_save($db, $name, $uid, $uname);
     jout(['success'=>true]);
 
 case 'unsign':

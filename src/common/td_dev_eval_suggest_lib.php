@@ -203,12 +203,11 @@ function td_dev_eval_suggest_candidates(PDO $db, string $dateFrom, string $dateT
 
     // 補參考資訊（BOM編號/BOM建立日期/最早報工日期/最早訂單日期，不受區間限制）
     require_once __DIR__ . '/td_dev_eval_lib.php';
+    $defaultProductName = td_dev_eval_default_product_name_get($db);
     foreach ($out as &$row) {
-        // 料號固定顯示名稱優先於訂單規格文字（使用者明確要求設定過的固定名稱要能自動帶入批次建立的產品名稱）
-        if ($row['part_d_id']) {
-            $fixedName = td_dev_eval_part_name_get($db, (int)$row['part_d_id']);
-            if ($fixedName) $row['product_name'] = $fixedName;
-        }
+        // 訂單規格文字優先；查無規格文字時才用「產品名稱」全域預設值墊底（2026-08-13使用者更正：
+        // 預設值是全部產品通用的單一值，不是特定料號，不應該覆蓋掉實際訂單上的規格文字）
+        if (!$row['product_name'] && $defaultProductName) $row['product_name'] = $defaultProductName;
         $ref = td_dev_eval_suggest_part_reference($db, $row['part_d_id'], $row['part_no_text'], $row['customer_name']);
         $row['bom_no'] = $ref['bom_no'];
         $row['bom_created_at'] = $ref['bom_created_at'];
@@ -325,9 +324,11 @@ function td_dev_eval_suggest_bulk_create(PDO $db, array $rows, int $uid, string 
         if ($custName === '' || $fillDate === '') { $errors[] = ($partText ?: '(無料號)').'：缺客戶或填表日期'; continue; }
         try {
             $docNo = td_dev_eval_next_doc_no($db);
-            $db->prepare("INSERT INTO td_dev_eval (doc_no, customer_name, part_d_id, part_no_text, product_name, fill_date, status, created_by, created_by_name)
-                          VALUES (?,?,?,?,?,?, 'draft', ?, ?)")
-               ->execute([$docNo, $custName, $partDId, $partText ?: null, $row['product_name'] ?? null, $fillDate, $uid, $uname]);
+            // 建立當下就試算預估需求量（使用者明確要求：批次建立這種「建立評估表」的路徑一樣要自動算好填入）
+            $estQty = $partDId ? td_dev_eval_estimate_qty($db, $partDId, $fillDate) : null;
+            $db->prepare("INSERT INTO td_dev_eval (doc_no, customer_name, part_d_id, part_no_text, product_name, est_qty, fill_date, status, created_by, created_by_name)
+                          VALUES (?,?,?,?,?,?,?, 'draft', ?, ?)")
+               ->execute([$docNo, $custName, $partDId, $partText ?: null, $row['product_name'] ?? null, $estQty, $fillDate, $uid, $uname]);
             $created++;
         } catch (Throwable $e) { $errors[] = ($partText ?: '(無料號)').'：'.$e->getMessage(); }
     }

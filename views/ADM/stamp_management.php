@@ -274,7 +274,9 @@ try {
           <span>顏色 <input type="color" id="tplColor" value="#cf3a2b" style="width:44px;height:28px;vertical-align:middle;border:1px solid #d8c19a;">
             <button class="btn btn-default btn-xs tpl-color" data-c="#cf3a2b">紅</button>
             <button class="btn btn-default btn-xs tpl-color" data-c="#1a4f9c">藍</button></span>
-          <span>大小(px) <input type="number" id="tplSize" class="form-control input-sm" style="width:70px;display:inline-block;" value="100" min="24" max="600"></span>
+          <span>大小(px) <input type="number" id="tplSize" class="form-control input-sm" style="width:70px;display:inline-block;" value="100" min="24" max="600">
+            <span style="color:#8a6d45;font-size:11.5px;margin-left:4px;" title="兩個輸入框互相連動，改任一個另一個自動換算（96px＝1英吋＝2.54公分，比照全站列印高度換算同一套公式）">＝
+            <input type="number" id="tplSizeCm" class="form-control input-sm" style="width:56px;display:inline-block;" step="0.1" min="0.5" max="16"> 公分外徑</span></span>
           <span>高/寬比 <input type="number" id="tplRatio" class="form-control input-sm" style="width:64px;display:inline-block;" value="1" min="0.3" max="3" step="0.1"></span>
           <span>線寬 <input type="number" id="tplStroke" class="form-control input-sm" style="width:60px;display:inline-block;" value="2.6" min="0.5" max="8" step="0.1"></span>
           <span>字體 <select id="tplFont" class="form-control input-sm" style="width:80px;display:inline-block;">
@@ -834,6 +836,17 @@ function tplRowHtml(h,text,fs,mode,wrapn){
 $('#tplRows').on('change','.tpl-mode',function(){
   $(this).closest('tr').find('.tpl-wrapn').prop('disabled', $(this).val()!=='wrap').val('');
 });
+// 大小(px) ↔ 公分外徑雙向換算（2026-08-13 使用者明確要求）：96px＝1英吋＝2.54公分，是全站列印高度換算既有公式
+// （見 ai-rules/16、egPrintWindow 的 pageH 計算），這裡沿用同一套避免兩邊數字對不起來。
+// schema 仍然只存 px（既有模板相容），公分只是這個輸入框幫你算，不是新的資料格式。
+var PX_PER_CM = 96/2.54;
+function tplSizeCmSync(fromPx){
+  if (fromPx) { $('#tplSizeCm').val((((+$('#tplSize').val()||0))/PX_PER_CM).toFixed(2)); }
+  else { $('#tplSize').val(Math.round((+$('#tplSizeCm').val()||0)*PX_PER_CM)); }
+}
+// tplPreview() 本身已經掛在 #tplModal 的 input/change 事件委派上（見下方），這裡只需同步另一個換算框即可，不用重複呼叫。
+$('#tplSize').on('input', function(){ tplSizeCmSync(true); });
+$('#tplSizeCm').on('input', function(){ tplSizeCmSync(false); });
 function tplSchemaFromUI(){
   const rows=[];
   $('#tplRows tr').each(function(){
@@ -893,7 +906,7 @@ function openTplModal(t){
   const sc=t?JSON.parse(t.schema_json||'{}'):{shape:'circle',color:'#cf3a2b',size:100,ratio:1,stroke:2.6,font:'kai',
     rows:[{h:30,text:'{部門}'},{h:40,text:'{日期}'},{h:30,text:'{姓名}'}]};
   $('#tplShape').val(sc.shape||'circle'); $('#tplColor').val(sc.color||'#cf3a2b');
-  $('#tplSize').val(sc.size||100); $('#tplRatio').val(sc.ratio||1);
+  $('#tplSize').val(sc.size||100); tplSizeCmSync(true); $('#tplRatio').val(sc.ratio||1);
   $('#tplStroke').val(sc.stroke||2.6); $('#tplFont').val(sc.font||'kai');
   $('#tplFillRatio').val(Math.round((sc.fillRatio!=null?sc.fillRatio:0.9)*100)); $('#tplNoScale').prop('checked', !!sc.noScale);
   $('#tplRows').html((sc.rows&&sc.rows.length?sc.rows:[{h:100,text:''}]).map(r=>tplRowHtml(r.h,r.text,+r.fs||0,r.mode||'shrink',+r.wrapn||0)).join(''));

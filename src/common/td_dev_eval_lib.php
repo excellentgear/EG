@@ -129,14 +129,29 @@ function td_dev_eval_ensure_schema(PDO $db): void {
         UNIQUE KEY uq_doc_slot (doc_id, slot_key)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='產品開發評估表-APQP小組簽認+決行'");
 
-    // 料號固定顯示名稱：選定料號時自動帶入產品名稱欄，仍可手動改；僅評估表管理員/系統管理員可設定（2026-08-12使用者明確要求）
+    // 產品名稱預設值：2026-08-12版誤做成「綁定特定料號」，2026-08-13使用者更正為「全部產品通用的單一預設值」，
+    // 非特定料號；舊table保留既有資料但不再寫入，改用system_parameters存一個全域值。首次切換時若舊table已有
+    // 使用者設定過的值，直接帶過來當全域預設值，不必使用者重新輸入一次。
     $db->exec("CREATE TABLE IF NOT EXISTS td_dev_eval_part_name (
-        part_d_id INT NOT NULL PRIMARY KEY COMMENT '對應d_setting.d_id',
+        part_d_id INT NOT NULL PRIMARY KEY COMMENT '對應d_setting.d_id(舊版依料號綁定,已停用僅供資料遷移用)',
         product_name VARCHAR(100) NOT NULL,
         updated_by INT NULL,
         updated_by_name VARCHAR(50) NULL,
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    ) DEFAULT CHARSET=utf8mb4 COMMENT='產品開發評估表-料號固定顯示名稱設定'");
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='(已停用，見td_dev_eval_default_product_name_get)產品開發評估表-舊版料號固定顯示名稱設定'");
+    try {
+        $st = $db->prepare("SELECT 1 FROM system_parameters WHERE param_group='TD_DEV_EVAL' AND param_key='default_product_name' LIMIT 1");
+        $st->execute();
+        if (!$st->fetchColumn()) {
+            $old = $db->query("SELECT product_name FROM td_dev_eval_part_name ORDER BY updated_at DESC LIMIT 1")->fetchColumn();
+            if ($old) {
+                // param_value 欄位是 JSON 型別，存字串要先 json_encode，不能直接存純文字（MySQL會報3140 Invalid JSON text）
+                $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description)
+                              VALUES ('TD_DEV_EVAL','default_product_name',?,'產品開發評估表-產品名稱預設值(全部產品通用，非特定料號)')")
+                   ->execute([json_encode($old, JSON_UNESCAPED_UNICODE)]);
+            }
+        }
+    } catch (Throwable $e) {}
 
     // 32項確認結果的預設值：超級管理員「全部自動簽核」時可選是否套用，只補未填的項次，不覆蓋已有答案（2026-08-12使用者明確要求）
     $db->exec("CREATE TABLE IF NOT EXISTS td_dev_eval_answer_default (
@@ -391,20 +406,31 @@ function td_dev_eval_submit(PDO $db, int $docId, int $uid, string $uname): array
     return ['ok'=>true];
 }
 
-/** 料號固定顯示名稱：選定料號時自動帶入產品名稱欄（仍可手動改），僅評估表管理員/系統管理員可設定 */
-function td_dev_eval_part_name_get(PDO $db, int $partDId): ?string {
-    if (!$partDId) return null;
-    $st = $db->prepare("SELECT product_name FROM td_dev_eval_part_name WHERE part_d_id=?");
-    $st->execute([$partDId]);
+/**
+ * 產品名稱預設值：全部產品通用的單一值（不是特定料號），新建立表單時自動帶入，仍可手動改；
+ * 僅評估表管理員/系統管理員可設定（2026-08-13使用者明確要求，修正2026-08-12版誤做成綁定特定料號的設計）。
+ */
+function td_dev_eval_default_product_name_get(PDO $db): ?string {
+    // param_value 欄位是 JSON 型別，讀出來要 json_decode（不是直接存純文字，否則MySQL存入時就會報錯）
+    $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='TD_DEV_EVAL' AND param_key='default_product_name' LIMIT 1");
+    $st->execute();
     $v = $st->fetchColumn();
-    return $v !== false ? (string)$v : null;
+    if ($v === false) return null;
+    $decoded = json_decode((string)$v, true);
+    return ($decoded !== null && $decoded !== '') ? (string)$decoded : null;
 }
-function td_dev_eval_part_name_save(PDO $db, int $partDId, string $name, int $uid, string $uname): void {
-    if ($name === '') { $db->prepare("DELETE FROM td_dev_eval_part_name WHERE part_d_id=?")->execute([$partDId]); return; }
-    $db->prepare("INSERT INTO td_dev_eval_part_name (part_d_id, product_name, updated_by, updated_by_name)
-                  VALUES (?,?,?,?)
-                  ON DUPLICATE KEY UPDATE product_name=VALUES(product_name), updated_by=VALUES(updated_by), updated_by_name=VALUES(updated_by_name)")
-       ->execute([$partDId, $name, $uid, $uname]);
+function td_dev_eval_default_product_name_save(PDO $db, string $name, int $uid, string $uname): void {
+    $json = json_encode($name, JSON_UNESCAPED_UNICODE);
+    $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group='TD_DEV_EVAL' AND param_key='default_product_name' LIMIT 1");
+    $st->execute();
+    $id = $st->fetchColumn();
+    if ($id) {
+        $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([$json, $uid, $id]);
+    } else {
+        $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by)
+                      VALUES ('TD_DEV_EVAL','default_product_name',?,'產品開發評估表-產品名稱預設值(全部產品通用，非特定料號)',?)")
+           ->execute([$json, $uid]);
+    }
 }
 
 /** 確認項目及結果的預設值（item_no=>yes/no/na），超級管理員設定，供「全部自動簽核」可選套用 */

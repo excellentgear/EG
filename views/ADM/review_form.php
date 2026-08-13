@@ -576,7 +576,12 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
         + 'setTimeout(function(){'
         + 'var pageH=('+(landscape ? (paper==='A3'?'297':'210') : (paper==='A3'?'420':'297'))+'-28)*96/25.4;'
         + 'var h=document.body.scrollHeight;'
-        + 'if(h>pageH){ document.body.style.zoom = Math.max(0.5, pageH/h); }'
+        + 'var zr=1;'
+        + 'if(h>pageH){ zr=Math.max(0.5, pageH/h); document.body.style.zoom=zr; }'
+        // 「不可縮放」圖章（模板勾了 noScale，見 rf-stamp-noshrink 標記）：body 整頁縮小是為了塞進一頁，
+        // 但圖章本身要維持設計時的實際尺寸不被跟著縮小——反向補償縮放比例抵銷掉 body 縮放的影響
+        // （zoom 是會逐層相乘的 CSS 屬性，子元素設 1/zr 會讓最終視覺呈現剛好等於原始設計大小）。
+        + 'if(zr<1){ document.querySelectorAll(".rf-stamp-noshrink").forEach(function(el){ el.style.zoom=(1/zr); }); }'
         // 頁碼只在超過一頁才顯示（ai-rules/16 第二節，比照 quotation_list_test.php 既有作法）：
         // zoom 縮放後再量一次高度，若仍超過約 92% 一頁高度才動態插入 @page 頁碼樣式，單頁文件完全不印頁碼。
         + 'setTimeout(function(){'
@@ -590,22 +595,33 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
         + '},120);};</scr'+'ipt></body></html>');
     w.document.close();
 }
+// 圖章實際外徑 2.5 公分（使用者實測回報）：96px＝1英吋＝2.54公分，2.5*96/2.54≈94.5px（2026-08-13 換算修正，
+// 之前寫死 91px 沒有對照過實際外徑；此值只給「沒有指定圖章模板」時的預設回墨印/掃描章當印刷尺寸用）。
+var RF_STAMP_PX = (2.5 * 96 / 2.54).toFixed(1);
 function rfCss(){
-    // 圖章列印尺寸全站統一 91px（ai-rules/18 第6條，2026-08-05 制定，之前這裡誤用 76px，2026-08-13 使用者回報修正）。
     return 'table.rf-p-items{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:2px;}'
          + 'table.rf-p-items th,table.rf-p-items td{border:1px solid #333;padding:8px 9px;text-align:center;}'
          + 'table.rf-p-items td.t-left{text-align:left;}'
          + '.rf-p-datebar{text-align:right;font-size:12.5px;color:#333;margin-bottom:3px;}'
-         + 'table.rf-p-items .stamp-wrap svg,table.rf-p-items svg.car-stamp{width:91px !important;height:91px !important;max-width:91px;max-height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+         // 只有「沒有指定圖章模板」時才強制覆蓋成推算出的實際外徑尺寸；有指定模板(rf-stamp-tpl)時一律尊重
+         // 該模板自己在「圖章管理→線上圖章設計」設定的「大小(px)」，不再用固定值蓋過去（2026-08-13 使用者回報
+         // 蓋出來感覺太小，追出來是這支固定 91px !important 蓋掉了模板自訂尺寸）。
+         + '.rf-stamp-defsize svg{width:'+RF_STAMP_PX+'px !important;height:'+RF_STAMP_PX+'px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
          + 'table.rf-p-foot{width:100%;margin-top:16px;margin-bottom:12mm;font-size:13px;}'
          + 'table.rf-p-foot td{padding:6px;width:33.33%;text-align:center;vertical-align:top;}'
          + 'table.rf-p-foot .foot-lbl{margin-bottom:4px;}'
          + 'table.rf-p-foot .foot-na{color:#888;font-size:12px;}'
-         + 'table.rf-p-foot .stamp-wrap{margin:0;}'
-         + 'table.rf-p-foot .stamp-wrap svg,table.rf-p-foot svg.car-stamp{width:91px !important;height:91px !important;max-width:91px;max-height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
+         + 'table.rf-p-foot .stamp-wrap{margin:0;}';
 }
+/* schema 有設定時，印出來的大小由模板自己的「大小(px)」決定（SVG width/height屬性本身就是那個值，不用CSS蓋）；
+   schema 沒設定(退回預設回墨印/掃描章)時才用 RF_STAMP_PX 固定覆蓋，兩者互斥、不會互相蓋過。
+   schema.noScale＝true 時額外包一層 rf-stamp-noshrink 標記，讓 egPrintWindow() 整頁縮小時對這個元素做反向補償，
+   使用者原話：「就算列印畫面有縮小，也不要縮小圖章」。 */
 function stampOrName(name, date, isDeputy, schema){
-    return (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
+    var html = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
+    if (!schema) html = '<span class="rf-stamp-defsize">'+html+'</span>';
+    else if (schema.noScale) html = '<span class="rf-stamp-noshrink">'+html+'</span>';
+    return html;
 }
 /* 兩種圖章樣式各自綁定：逐列簽章(list_stamp) 用在項目表每列負責人簽名；製表/審核/核准(footer_stamp) 用在頁尾三欄。
    模板沒設定時 schema 是 null，EGStamp.stamp 會自動退回預設樣式。 */

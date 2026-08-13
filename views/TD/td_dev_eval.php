@@ -32,6 +32,7 @@ $suggestPending = $perms['canAdmin'] ? td_dev_eval_suggest_pending_count($db) : 
 $canBackfill = $teUser ? eg_confirm_password_allowed($db, (int)$teUser['id']) : false;
 $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表管理員' : ($perms['canEdit'] ? '評估表登錄' : ($perms['canView'] ? '評估表檢閱' : '無權限')));
 $companyName = eg_company_full_name($db);
+$defaultProductName = td_dev_eval_default_product_name_get($db);
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -204,7 +205,7 @@ $companyName = eg_company_full_name($db);
                 <input type="hidden" id="fPartDId" value="0">
             </div>
             <div>
-                <label>產品名稱<i class="fa fa-cog" id="btnSetFixedName" title="設定此料號固定顯示名稱" style="margin-left:4px;color:#b5762a;cursor:pointer;<?= $perms['canAdmin']?'':'display:none;' ?>"></i></label>
+                <label>產品名稱<i class="fa fa-cog" id="btnSetFixedName" title="設定產品名稱預設值(全部產品通用)" style="margin-left:4px;color:#b5762a;cursor:pointer;<?= $perms['canAdmin']?'':'display:none;' ?>"></i></label>
                 <input type="text" id="fProductName">
             </div>
             <div>
@@ -405,6 +406,7 @@ var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 var IS_SUPER_ADMIN = <?= $perms['isAdmin'] ? 'true' : 'false' ?>;
 var CUR_USER_NAME = <?= json_encode($teUser ? $teUser['user_cname'] : '', JSON_UNESCAPED_UNICODE) ?>;
 window.__ownCompany = <?= json_encode($companyName, JSON_UNESCAPED_UNICODE) ?>; // eg_stamp.js 簽章圖章要靠這個顯示公司名稱，跳窗內即時簽核也要有，不是只有列印時才設
+var DEFAULT_PRODUCT_NAME = <?= json_encode($defaultProductName, JSON_UNESCAPED_UNICODE) ?>; // 產品名稱預設值：全部產品通用單一值，不是特定料號（2026-08-13使用者更正）
 var CUR_ID = 0, CUR_STATUS = 'draft', TEMPLATE = {}, SLOTS = {}, DECISIONS = {}, AS_DOCS = [], AS_DOC = null, CUR_SLOTS = {};
 var FULL_EDIT_MODE = false; // 系統管理員輸入操作確認密碼後才開啟，逐筆重新開啟編輯視窗時要重新輸入，不記憶
 var RESULT_OPTS = [['yes','是'],['no','否'],['na','N/A']];
@@ -643,7 +645,7 @@ function applyStatusUI(){
 function resetEditForm(){
     CUR_ID = 0; CUR_STATUS = 'draft'; CUR_SLOTS = {}; FULL_EDIT_MODE = false;
     $('#fCustomerName').val(''); $('#fPartNo').val(''); $('#fPartDId').val('0');
-    $('#fProductName').val(''); $('#fEstQty').val(''); $('#fFillDate').val(''); $('#fSampleTime').val('');
+    $('#fProductName').val(DEFAULT_PRODUCT_NAME || ''); $('#fEstQty').val(''); $('#fFillDate').val(''); $('#fSampleTime').val('');
     $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
     updateEditHdrInfo();
     renderChecklist({});
@@ -693,9 +695,6 @@ EGPartPicker.attach(document.getElementById('fPartNo'), {
     onSelect: function(row){
         $('#fPartDId').val(row.d_id);
         if (row.customer_name || row.customer_id) $('#fCustomerName').val(row.customer_name||row.customer_id);
-        $.getJSON(API, {action:'part_name_get', part_d_id:row.d_id}, function(res){
-            if (res.success && res.product_name) $('#fProductName').val(res.product_name);
-        });
         maybeEstimateQty();
         updateEditHdrInfo();
     }
@@ -713,20 +712,16 @@ function maybeEstimateQty(){
 }
 $('#fFillDate').on('change', maybeEstimateQty);
 
-/* ---------- 料號固定顯示名稱設定（評估表管理員/系統管理員可設，2026-08-12使用者明確要求） ---------- */
+/* ---------- 產品名稱預設值設定（全部產品通用單一值，不是特定料號；評估表管理員/系統管理員可設，2026-08-13使用者更正） ---------- */
 $('#btnSetFixedName').on('click', function(){
-    var partDId = parseInt($('#fPartDId').val(), 10) || 0;
-    if (!partDId){ alert('請先選定一個已建立的料號，才能設定固定顯示名稱'); return; }
-    $.getJSON(API, {action:'part_name_get', part_d_id:partDId}, function(res){
-        var cur = (res.success && res.product_name) ? res.product_name : '';
-        var name = window.prompt('設定料號「'+$('#fPartNo').val()+'」的固定顯示名稱\n（之後選定此料號時，產品名稱欄會自動帶入此名稱，仍可手動修改；留空＝取消固定）', cur);
-        if (name === null) return; // 取消
-        $.post(API, {action:'part_name_save', part_d_id:partDId, product_name:name.trim()}, function(r){
-            if (!r.success){ alert(r.message||'儲存失敗'); return; }
-            if (name.trim()) $('#fProductName').val(name.trim());
-            alert('已儲存。');
-        }, 'json');
-    });
+    var name = window.prompt('設定「產品名稱」預設值\n（此為全部產品通用的單一預設值，不是針對特定料號；之後新建立表單時會自動帶入，仍可手動修改；留空＝取消預設值）', DEFAULT_PRODUCT_NAME || '');
+    if (name === null) return; // 取消
+    $.post(API, {action:'default_product_name_save', product_name:name.trim()}, function(r){
+        if (!r.success){ alert(r.message||'儲存失敗'); return; }
+        DEFAULT_PRODUCT_NAME = name.trim() || null;
+        if (!CUR_ID && DEFAULT_PRODUCT_NAME) $('#fProductName').val(DEFAULT_PRODUCT_NAME);
+        alert('已儲存。');
+    }, 'json');
 });
 
 function saveHeader(){
