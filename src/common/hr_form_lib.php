@@ -480,19 +480,28 @@ function hrf_dept_can_produce(PDO $db, ?int $deptId, string $formType): bool {
 
 /* ============================================================ 機型/量具白名單 ============================================================ */
 
-/** 供設定頁勾選用：machine_list + qc_tool 來源清單，各自標記是否已在白名單內。 */
 /**
+ * 供設定頁勾選用：machine_list + qc_tool 來源清單，各自標記是否已在白名單內。
  * 機台來源一律套用 views/pm/process_schedule_NOW.php「機台設定」頁面的同一張表(machine_list)、
- * 同一套欄位認定（使用者明確要求）：機型＝machine_model、機台編號＝asset_no；
- * **禁止使用 field_no(現場自訂編號)**。display_name 固定用 machine（機台名稱），不可由管理員自行改字。
+ * 同一套欄位認定：機型＝machine_model、機台編號＝asset_no（**禁止使用 field_no 現場編號**）。
+ * 使用者明確要求：**技能鑑定考核是針對機型訓練，不是針對實體機台**——同一機型有多台機台編號也只算
+ * 一個考核對象，所以這裡直接依 machine_model 去重分組（GROUP BY），不是每台機台各出現一列；
+ * 挑一台代表機台的 machine_id 當白名單的 source_id，畫面上額外標出這個機型底下實際有幾台/哪些機台編號
+ * 供管理員參考，但白名單本身、以及之後表單上顯示的都只有「機型」，不顯示機台名稱或機台種類。
+ * machine_model 目前尚未填值的機台會被排除，並回傳 unmodeled_count 供頁面提示管理員先去機台設定頁補值。
  */
 function hrf_whitelist_sources(PDO $db): array {
     $machines = [];
+    $unmodeledCount = 0;
     try {
-        $machines = $db->query("SELECT ml.machine_id AS source_id, ml.machine AS display_name,
-                                ml.machine_model AS machine_model, ml.asset_no AS asset_no, pt.process_type AS group_name
+        $machines = $db->query("SELECT MIN(ml.machine_id) AS source_id, ml.machine_model AS display_name,
+                                ml.machine_model AS machine_model, COUNT(*) AS unit_count,
+                                GROUP_CONCAT(DISTINCT ml.asset_no ORDER BY ml.asset_no SEPARATOR '、') AS asset_no,
+                                MIN(pt.process_type) AS group_name
                                 FROM machine_list ml LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id
-                                WHERE ml.state IS NULL OR ml.state=0 ORDER BY pt.process_type, ml.machine")->fetchAll(PDO::FETCH_ASSOC);
+                                WHERE (ml.state IS NULL OR ml.state=0) AND ml.machine_model IS NOT NULL AND ml.machine_model<>''
+                                GROUP BY ml.machine_model ORDER BY group_name, ml.machine_model")->fetchAll(PDO::FETCH_ASSOC);
+        $unmodeledCount = (int)$db->query("SELECT COUNT(*) FROM machine_list WHERE (state IS NULL OR state=0) AND (machine_model IS NULL OR machine_model='')")->fetchColumn();
     } catch (Throwable $e) {}
     $tools = [];
     try {
@@ -507,7 +516,7 @@ function hrf_whitelist_sources(PDO $db): array {
     } catch (Throwable $e) {}
     foreach ($machines as &$m) { $m['checked'] = isset($existing['machine:' . $m['source_id']]); }
     foreach ($tools as &$t) { $t['checked'] = isset($existing['tool:' . $t['source_id']]); }
-    return ['machines' => $machines, 'tools' => $tools];
+    return ['machines' => $machines, 'tools' => $tools, 'unmodeled_count' => $unmodeledCount];
 }
 
 function hrf_whitelist_list(PDO $db): array {
@@ -516,17 +525,25 @@ function hrf_whitelist_list(PDO $db): array {
 }
 
 /**
- * 整批覆寫白名單（設定頁一次送出全部勾選狀態，比逐筆增刪簡單可靠）。$entries=[['source_type','source_id'],...]。
- * 機台名稱/機型/機台編號一律當下重新查詢來源表取得權威值，不採信前端送來的文字
- * （使用者明確要求「取消設定項目名稱」，機台名稱不再開放管理員自行輸入）。
+ * 整批覆寫白名單（設定頁一次送出全部勾選狀態，比逐筆增刪簡單可靠）。$entries=[['source_type','source_id'],...]，
+ * machine 的 source_id 是「代表機台」的 machine_id（由 hrf_whitelist_sources() 依機型分組時挑出）。
+ * 機型/機台編號一律當下重新查詢來源表取得權威值，不採信前端送來的文字（使用者明確要求「取消設定項目
+ * 名稱」）；display_name 固定＝機型本身（不是機台名稱/機台種類——技能鑑定考核是針對機型訓練，同機型
+ * 多台機台編號只算同一個考核對象）。
  */
 function hrf_whitelist_save(PDO $db, array $entries, string $byName): void {
     hrf_ensure_schema($db);
     $db->beginTransaction();
     try {
-        $db->exec("UPDATE hr_equipment_whitelist SET is_active=0");
+        // 只下架「畫面上這次真的看得到、能勾選」的列：機台類要 machine_list 當下已有 machine_model 才下架，
+        // 沒填機型的機台維持原狀不動（避免機型欄位還沒補值時存檔，把既有選取的機台白名單整批誤刪）；
+        // 量具沒有機型去重的問題，維持原本整批下架再重新上架的邏輯。
+        $db->exec("UPDATE hr_equipment_whitelist w
+                   JOIN machine_list ml ON ml.machine_id=w.source_id AND w.source_type='machine'
+                   SET w.is_active=0 WHERE ml.machine_model IS NOT NULL AND ml.machine_model<>''");
+        $db->exec("UPDATE hr_equipment_whitelist SET is_active=0 WHERE source_type='tool'");
         $insMachine = $db->prepare("INSERT INTO hr_equipment_whitelist (source_type,source_id,display_name,machine_model,asset_no,created_by)
-                                    SELECT 'machine', machine_id, machine, machine_model, asset_no, ? FROM machine_list WHERE machine_id=?
+                                    SELECT 'machine', machine_id, machine_model, machine_model, asset_no, ? FROM machine_list WHERE machine_id=?
                                     ON DUPLICATE KEY UPDATE display_name=VALUES(display_name), machine_model=VALUES(machine_model), asset_no=VALUES(asset_no), is_active=1");
         $insTool = $db->prepare("INSERT INTO hr_equipment_whitelist (source_type,source_id,display_name,created_by)
                                  SELECT 'tool', Tool_id, Tool_No, ? FROM qc_tool WHERE Tool_id=?

@@ -241,7 +241,7 @@ $perms = hrf_perms($db, $hrfUser);
         <b>⑥超級管理員自動簽核</b>：僅 id=1 可用，勾選表單後可先逐筆調整分數（或用「一鍵套用固定分數」快速帶入再個別修改），輸入操作確認密碼＋指定簽核日期，一次補齊尚未完成的確認/核准關卡，用於補登舊紙本資料。
         <h4>重要行為</h4>
         ・部門是否產生技能鑑定表／職能鑑定表由管理員在「範本管理」設定，職務說明書全員適用。<br>
-        ・機型/量具選項為管理員從既有機台主檔與量測儀器校驗的量具主檔勾選建立的白名單，不是全部主檔都能選。<br>
+        ・機型選項為管理員從既有機台主檔（依機型去重，同機型多台機台編號只算一個考核對象）與量測儀器校驗的量具主檔勾選建立的白名單，不是全部主檔都能選。<br>
         ・確認人固定為該員工直屬主管、核准人固定為全站最高決策者（多數為總經理），無法個別調整。
         <h4>權限角色</h4>
         人資職務表單檢閱＝看清單（僅看跟自己有關的）；檢視全部＝可檢視自己職位以下員工的表單（同職級以上看不到）；建立＝新增/批次建立/複製/編輯/送出；列印；範本管理＝到「範本管理」頁設定範本/白名單/部門資格/AS文件綁定；管理者全權。
@@ -329,7 +329,7 @@ function loadAsDoc(ft){
 function buildTableHeads(){
     var ck = META.perms.isSuperAdmin ? '<th style="width:26px;"><input type="checkbox" class="ck-all" onclick="toggleAllCk(this)"></th>' : '';
     $('.thead-job_desc').html('<tr><th>部門</th><th>職位</th><th>日期</th><th style="width:150px;">操作</th></tr>');
-    $('.thead-skill_assess').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>機型</th><th>機台名稱</th><th>總經理考核</th><th>課長考核</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
+    $('.thead-skill_assess').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>機型</th><th>總經理考核</th><th>課長考核</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
     $('.thead-competency').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>職務</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
 }
 function toggleAllCk(box){
@@ -388,7 +388,7 @@ function renderList(ft){
             var gmAvg = scoreAvg(r.score_quality_gm,r.score_efficiency_gm,r.score_proficiency_gm);
             var mgrAvg = r.confirm_na ? null : scoreAvg(r.score_quality_mgr,r.score_efficiency_mgr,r.score_proficiency_mgr);
             var confirmCell = r.confirm_na ? '<span class="na-tag">NA</span>' : (r.confirm_user_name?esc(r.confirm_user_name):stBadge);
-            html += '<tr>'+ck+'<td>'+esc(r.dept_name)+'</td><td>'+esc(r.user_cname)+'</td><td>'+esc(r.machine_model||'')+'</td><td>'+esc(r.machine_display_name)+'</td>'
+            html += '<tr>'+ck+'<td>'+esc(r.dept_name)+'</td><td>'+esc(r.user_cname)+'</td><td>'+esc(r.machine_model||r.machine_display_name||'')+'</td>'
                   + '<td>'+(gmAvg===null?'-':gmAvg)+'</td><td>'+(r.confirm_na?'<span class="na-tag">NA</span>':(mgrAvg===null?'-':mgrAvg))+'</td>'
                   + '<td>'+confirmCell+'</td><td>'+(r.approve_user_name?esc(r.approve_user_name):(r.status==='signed'?stBadge:'-'))+'</td>'
                   + '<td>'+opBtns+'</td></tr>';
@@ -521,7 +521,7 @@ function openCreateModal(ft){
         $.getJSON(API, {action:'whitelist_list'}, function(res){
             if (!res.ok) { $('#createMachineListBody').html('<span style="color:#8a6d45;">（僅管理員可預覽白名單，手動指定請洽管理員）</span>'); return; }
             $('#createMachineListBody').html((res.whitelist||[]).map(function(w){
-                return '<label><input type="checkbox" class="mach-ck" value="'+w.id+'"> '+esc(w.display_name)+(w.machine_model?'（機型：'+esc(w.machine_model)+'）':'')+'</label>';
+                return '<label><input type="checkbox" class="mach-ck" value="'+w.id+'"> '+esc(w.display_name)+'</label>';
             }).join('') || '<span style="color:#8a6d45;">尚未建立白名單</span>');
         });
     }
@@ -671,7 +671,7 @@ function headTableHtml(r){
     h += '<tr><th>姓名</th><td>'+esc(r.user_cname||'')+'</td><th>員工編號</th><td>'+esc(r.user_no||'')+'</td></tr>'
        + '<tr><th>到職日</th><td>'+dispDate(r.onboard_date)+'</td><th>主管</th><td>'+esc(r.supervisor_name||'')+'</td></tr>'
        + '<tr><th>日期</th><td>'+dispDate(r.business_date)+'</td><th>狀態</th><td>'+(STATUS_LABEL[r.status]||r.status)+'</td></tr>';
-    if (r.form_type === 'skill_assess') h += '<tr><th>機型</th><td>'+esc(r.machine_model||'')+'</td><th>機台名稱</th><td>'+esc(r.machine_display_name||'')+'</td></tr>';
+    if (r.form_type === 'skill_assess') h += '<tr><th>機型</th><td colspan="3">'+esc(r.machine_model||r.machine_display_name||'')+'</td></tr>';
     h += '</tbody></table>';
     return h;
 }
@@ -803,7 +803,7 @@ function openAutoSignModal(ft){
             var mgrHtml = r.confirm_na ? '<span class="na-tag">NA</span>' : scoreOptHtml(mgrCls).replace('<select', '<select data-idx="'+idx+'"');
             return scoreOptHtml(gmCls).replace('<select', '<select data-idx="'+idx+'"') + ' / ' + mgrHtml;
         }
-        var html = '<tr data-idx="'+idx+'"><td>'+esc(r.user_cname)+'</td><td>'+esc(r.machine_display_name||'')+'</td>'
+        var html = '<tr data-idx="'+idx+'"><td>'+esc(r.user_cname)+'</td><td>'+esc(r.machine_model||r.machine_display_name||'')+'</td>'
              + '<td>'+pair('as-q-gm','as-q-mgr')+'</td><td>'+pair('as-e-gm','as-e-mgr')+'</td><td>'+pair('as-p-gm','as-p-mgr')+'</td></tr>';
         return html;
     }).join('');
@@ -895,7 +895,7 @@ function jdPrintHtml(r){
 function saPrintHtml(r, tpl){
     var h = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">專業技能鑑定考核表</div></div>';
     h += '<table class="hf-p-head"><tr><th>單位</th><td>'+esc(r.dept_name||'')+'</td><th>姓名</th><td>'+esc(r.user_cname||'')+'</td></tr>'
-       + '<tr><th>機型</th><td>'+esc(r.machine_model||'')+'</td><th>機台名稱</th><td>'+esc(r.machine_display_name||'')+'</td></tr>'
+       + '<tr><th>機型</th><td colspan="3">'+esc(r.machine_model||r.machine_display_name||'')+'</td></tr>'
        + '<tr><th>日期</th><td colspan="3">'+dispDate(r.business_date)+'</td></tr></table>';
     var mgrNA = !!r.confirm_na;
     h += '<table class="hf-p-items"><thead><tr><th style="width:25%;">分類項目</th><th>總經理考核</th><th>課長考核</th></tr></thead><tbody>'

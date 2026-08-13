@@ -116,7 +116,8 @@ if (!$perms['canAdmin']) { header('Location: hr_position_forms.php'); exit; }
 <?php endforeach; ?>
 
         <div class="hf-tabpane" id="pane-whitelist" data-type="whitelist">
-            <p style="font-size:12.5px;color:#8a6d45;">從既有機台主檔（machine_list，比照 process_schedule_NOW.php「機台設定」頁的欄位認定：機型=machine_model、機台編號=asset_no，不使用現場編號field_no）與量測儀器校驗量具主檔（qc_tool）勾選要開放給「專業技能鑑定考核表」選用的機型/量具；機台名稱固定取自主檔，不開放手動改字。</p>
+            <p style="font-size:12.5px;color:#8a6d45;">技能鑑定考核是針對「機型」訓練，不是針對實體機台——同一機型有多台機台編號也只算一個考核對象，所以下方生產機台清單已依機型去重（比照 process_schedule_NOW.php「機台設定」頁的欄位認定：機型=machine_model，不使用現場編號field_no），勾選的是機型不是機台名稱或機台種類。量測儀器校驗量具主檔（qc_tool）沒有獨立的機型欄位，維持逐支量具編號勾選。</p>
+            <p id="wlUnmodeledWarn" style="display:none;font-size:12.5px;color:#DD5138;"></p>
             <input type="text" class="flt" id="wlFilter" placeholder="輸入名稱篩選…" oninput="wlFilterList(this.value)">
             <div class="wl-col"><h4>生產機台（machine_list）</h4><div class="wl-list" id="wlMachines"></div></div>
             <div class="wl-col" style="margin-left:1%;"><h4>量測儀器校驗量具（qc_tool）</h4><div class="wl-list" id="wlTools"></div></div>
@@ -374,7 +375,7 @@ function openTplModal(ft, id){
             var html = '<label>適用機型（勾選；建立表單時系統會依這份清單自動展開每個機型各一筆）</label>'
                      + '<div style="margin-bottom:4px;"><button type="button" class="hf-btn-sm" onclick="tplMachineCkAll(true)">全選</button> <button type="button" class="hf-btn-sm" onclick="tplMachineCkAll(false)">取消全選</button></div>'
                      + '<div style="max-height:220px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;" id="tplMachineList">'
-                     + wl.map(function(w){ return '<label style="display:block;font-size:12.5px;"><input type="checkbox" class="tm-ck" value="'+w.id+'"> '+esc(w.display_name)+(w.machine_model?'（機型：'+esc(w.machine_model)+'）':'')+'</label>'; }).join('')
+                     + wl.map(function(w){ return '<label style="display:block;font-size:12.5px;"><input type="checkbox" class="tm-ck" value="'+w.id+'"> '+esc(w.display_name)+'</label>'; }).join('')
                      + '</div>';
             $('#tplContentBlock').html(html);
             if (id) fillTplForEdit(id);
@@ -569,6 +570,11 @@ function loadWhitelist(){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         renderWlGroup('#wlMachines', res.machines||[]);
         renderWlGroup('#wlTools', res.tools||[]);
+        if (res.unmodeled_count > 0) {
+            $('#wlUnmodeledWarn').show().text('⚠ 另有 '+res.unmodeled_count+' 台在職機台尚未填寫「機型」，不會出現在下方清單，請先到 process_schedule_NOW.php「機台設定」頁補值。');
+        } else {
+            $('#wlUnmodeledWarn').hide();
+        }
     });
 }
 function renderWlGroup(sel, rows){
@@ -579,9 +585,10 @@ function renderWlGroup(sel, rows){
         html += '<div class="wl-group">'+esc(g)+'</div>';
         groups[g].forEach(function(r){
             var type = sel === '#wlMachines' ? 'machine' : 'tool';
-            // 機台名稱一律取自 machine_list，不開放手動改字；機型/機台編號一併秀出來方便對照(不可用現場編號)
-            var meta = type === 'machine' ? ('　機型：'+esc(r.machine_model||'-')+'　機台編號：'+esc(r.asset_no||'-')) : '';
-            html += '<div class="wl-row" data-hay="'+esc(r.display_name+' '+(r.machine_model||'')+' '+(r.asset_no||'')).toLowerCase()+'"><label style="flex:1;"><input type="checkbox" class="wl-ck" data-type="'+type+'" data-id="'+r.source_id+'"'+(r.checked?' checked':'')+'> '+esc(r.display_name)+'<span style="color:#8a6d45;font-size:11px;">'+meta+'</span></label></div>';
+            // 技能鑑定考核是針對「機型」訓練，不是針對實體機台：勾選項＝一個機型(已去重)，
+            // 底下標的機台編號只是給管理員參考「這個機型實際有幾台」，不是要各自訓練一次
+            var meta = (type === 'machine' && r.unit_count > 1) ? ('　共'+r.unit_count+'台，機台編號：'+esc(r.asset_no||'-')) : '';
+            html += '<div class="wl-row" data-hay="'+esc(r.display_name+' '+(r.asset_no||'')).toLowerCase()+'"><label style="flex:1;"><input type="checkbox" class="wl-ck" data-type="'+type+'" data-id="'+r.source_id+'"'+(r.checked?' checked':'')+'> '+esc(r.display_name)+'<span style="color:#8a6d45;font-size:11px;">'+meta+'</span></label></div>';
         });
     });
     $(sel).html(html || '<span style="color:#8a6d45;font-size:12px;">（查無資料）</span>');
