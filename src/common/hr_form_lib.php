@@ -99,18 +99,20 @@ function hrf_ensure_schema(PDO $db): void {
             id INT AUTO_INCREMENT PRIMARY KEY,
             source_type VARCHAR(10) NOT NULL COMMENT 'machine=machine_list, tool=qc_tool',
             source_id INT NOT NULL,
-            display_name VARCHAR(100) NOT NULL,
-            item_name VARCHAR(100) NULL COMMENT '評鑑項目名稱(如:投影機)，空則用display_name',
+            display_name VARCHAR(100) NOT NULL COMMENT '機台名稱(machine_list.machine)，不可手動改字，一律取自來源表',
+            item_name VARCHAR(100) NULL COMMENT '(已停用，保留欄位供舊資料相容，機台名稱一律用display_name)',
+            machine_model VARCHAR(100) NULL COMMENT '機型(machine_list.machine_model)',
+            asset_no VARCHAR(50) NULL COMMENT '機台編號(machine_list.asset_no，禁用現場編號field_no)',
             sort_order INT NOT NULL DEFAULT 0,
             is_active TINYINT NOT NULL DEFAULT 1,
             created_by VARCHAR(50) NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE KEY uq_src(source_type, source_id)
-        ) DEFAULT CHARSET=utf8mb4 COMMENT='09技能鑑定 機型/量具白名單(管理員從既有主檔勾選)'");
+        ) DEFAULT CHARSET=utf8mb4 COMMENT='09技能鑑定 機型/量具白名單(管理員從既有主檔勾選，比照process_schedule_NOW.php機台設定頁欄位認定)'");
 
         $db->exec("CREATE TABLE IF NOT EXISTS hr_form_instance (
             id INT AUTO_INCREMENT PRIMARY KEY,
             form_type VARCHAR(20) NOT NULL,
-            user_id INT NOT NULL,
+            user_id INT NULL COMMENT '01職務說明書以部門x職位為主固定NULL；09/10仍綁單一員工',
             dept_id INT NULL, position_id INT NULL, template_id INT NULL,
             business_date DATE NOT NULL,
             status VARCHAR(20) NOT NULL DEFAULT 'draft',
@@ -119,7 +121,9 @@ function hrf_ensure_schema(PDO $db): void {
             user_no VARCHAR(30) NULL, user_cname VARCHAR(50) NULL,
             dept_name VARCHAR(50) NULL, position_name VARCHAR(50) NULL,
             supervisor_name VARCHAR(50) NULL, onboard_date DATE NULL,
-            whitelist_id INT NULL, machine_display_name VARCHAR(100) NULL, item_name VARCHAR(100) NULL,
+            whitelist_id INT NULL, machine_display_name VARCHAR(100) NULL COMMENT '機台名稱',
+            item_name VARCHAR(100) NULL COMMENT '(已停用，保留欄位供舊資料相容)',
+            machine_model VARCHAR(100) NULL COMMENT '機型',
             score_quality_gm TINYINT NULL, score_quality_mgr TINYINT NULL,
             score_efficiency_gm TINYINT NULL, score_efficiency_mgr TINYINT NULL,
             score_proficiency_gm TINYINT NULL, score_proficiency_mgr TINYINT NULL,
@@ -477,10 +481,16 @@ function hrf_dept_can_produce(PDO $db, ?int $deptId, string $formType): bool {
 /* ============================================================ 機型/量具白名單 ============================================================ */
 
 /** 供設定頁勾選用：machine_list + qc_tool 來源清單，各自標記是否已在白名單內。 */
+/**
+ * 機台來源一律套用 views/pm/process_schedule_NOW.php「機台設定」頁面的同一張表(machine_list)、
+ * 同一套欄位認定（使用者明確要求）：機型＝machine_model、機台編號＝asset_no；
+ * **禁止使用 field_no(現場自訂編號)**。display_name 固定用 machine（機台名稱），不可由管理員自行改字。
+ */
 function hrf_whitelist_sources(PDO $db): array {
     $machines = [];
     try {
-        $machines = $db->query("SELECT ml.machine_id AS source_id, ml.machine AS display_name, pt.process_type AS group_name
+        $machines = $db->query("SELECT ml.machine_id AS source_id, ml.machine AS display_name,
+                                ml.machine_model AS machine_model, ml.asset_no AS asset_no, pt.process_type AS group_name
                                 FROM machine_list ml LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id
                                 WHERE ml.state IS NULL OR ml.state=0 ORDER BY pt.process_type, ml.machine")->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) {}
@@ -492,11 +502,11 @@ function hrf_whitelist_sources(PDO $db): array {
     } catch (Throwable $e) {}
     $existing = [];
     try {
-        $st = $db->query("SELECT source_type, source_id, id, item_name FROM hr_equipment_whitelist");
+        $st = $db->query("SELECT source_type, source_id, id FROM hr_equipment_whitelist");
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $existing[$r['source_type'] . ':' . $r['source_id']] = $r;
     } catch (Throwable $e) {}
-    foreach ($machines as &$m) { $k = 'machine:' . $m['source_id']; $m['checked'] = isset($existing[$k]); $m['item_name'] = $existing[$k]['item_name'] ?? ''; }
-    foreach ($tools as &$t) { $k = 'tool:' . $t['source_id']; $t['checked'] = isset($existing[$k]); $t['item_name'] = $existing[$k]['item_name'] ?? ''; }
+    foreach ($machines as &$m) { $m['checked'] = isset($existing['machine:' . $m['source_id']]); }
+    foreach ($tools as &$t) { $t['checked'] = isset($existing['tool:' . $t['source_id']]); }
     return ['machines' => $machines, 'tools' => $tools];
 }
 
@@ -505,21 +515,28 @@ function hrf_whitelist_list(PDO $db): array {
     return $db->query("SELECT * FROM hr_equipment_whitelist WHERE is_active=1 ORDER BY sort_order,id")->fetchAll(PDO::FETCH_ASSOC);
 }
 
-/** 整批覆寫白名單（設定頁一次送出全部勾選狀態，比逐筆增刪簡單可靠）。$entries=[['source_type','source_id','display_name','item_name'],...] */
+/**
+ * 整批覆寫白名單（設定頁一次送出全部勾選狀態，比逐筆增刪簡單可靠）。$entries=[['source_type','source_id'],...]。
+ * 機台名稱/機型/機台編號一律當下重新查詢來源表取得權威值，不採信前端送來的文字
+ * （使用者明確要求「取消設定項目名稱」，機台名稱不再開放管理員自行輸入）。
+ */
 function hrf_whitelist_save(PDO $db, array $entries, string $byName): void {
     hrf_ensure_schema($db);
     $db->beginTransaction();
     try {
         $db->exec("UPDATE hr_equipment_whitelist SET is_active=0");
-        $ins = $db->prepare("INSERT INTO hr_equipment_whitelist (source_type,source_id,display_name,item_name,created_by) VALUES (?,?,?,?,?)
-                             ON DUPLICATE KEY UPDATE display_name=VALUES(display_name), item_name=VALUES(item_name), is_active=1");
-        $sort = 0;
+        $insMachine = $db->prepare("INSERT INTO hr_equipment_whitelist (source_type,source_id,display_name,machine_model,asset_no,created_by)
+                                    SELECT 'machine', machine_id, machine, machine_model, asset_no, ? FROM machine_list WHERE machine_id=?
+                                    ON DUPLICATE KEY UPDATE display_name=VALUES(display_name), machine_model=VALUES(machine_model), asset_no=VALUES(asset_no), is_active=1");
+        $insTool = $db->prepare("INSERT INTO hr_equipment_whitelist (source_type,source_id,display_name,created_by)
+                                 SELECT 'tool', Tool_id, Tool_No, ? FROM qc_tool WHERE Tool_id=?
+                                 ON DUPLICATE KEY UPDATE display_name=VALUES(display_name), is_active=1");
         foreach ($entries as $e) {
             $type = ($e['source_type'] ?? '') === 'tool' ? 'tool' : 'machine';
             $sid = (int)($e['source_id'] ?? 0);
             if ($sid <= 0) continue;
-            $ins->execute([$type, $sid, (string)($e['display_name'] ?? ''), (string)($e['item_name'] ?? '') ?: null, $byName]);
-            $sort++;
+            if ($type === 'tool') $insTool->execute([$byName, $sid]);
+            else $insMachine->execute([$byName, $sid]);
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); throw $e; }
@@ -663,13 +680,13 @@ function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int
     $needSign = in_array($formType, ['skill_assess', 'competency'], true);
     $db->prepare("INSERT INTO hr_form_instance
         (form_type,user_id,dept_id,position_id,template_id,business_date,status,created_by,created_by_name,
-         user_no,user_cname,dept_name,position_name,supervisor_name,onboard_date,whitelist_id,machine_display_name,item_name)
+         user_no,user_cname,dept_name,position_name,supervisor_name,onboard_date,whitelist_id,machine_display_name,machine_model)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
        ->execute([
             $formType, $targetUid, $snap['dept_id'], $snap['position_id'], $tpl['id'], $bizDate, $needSign ? 'draft' : 'active',
             $byUid, $byName,
             $snap['user_no'], $snap['user_cname'], $snap['dept_name'], $snap['position_name'], $snap['supervisor_name'], $snap['onboard_date'],
-            $whitelist['id'] ?? null, $whitelist['display_name'] ?? null, ($whitelist['item_name'] ?? null) ?: ($whitelist['display_name'] ?? null),
+            $whitelist['id'] ?? null, $whitelist['display_name'] ?? null, $whitelist['machine_model'] ?? null,
         ]);
     $iid = (int)$db->lastInsertId();
     if ($formType !== 'skill_assess') {
@@ -789,14 +806,14 @@ function hrf_instance_copy(PDO $db, int $instanceId, int $byUid, string $byName)
     $needSign = in_array($src['form_type'], ['skill_assess', 'competency'], true);
     $db->prepare("INSERT INTO hr_form_instance
         (form_type,user_id,dept_id,position_id,template_id,business_date,status,created_by,created_by_name,
-         user_no,user_cname,dept_name,position_name,supervisor_name,onboard_date,whitelist_id,machine_display_name,item_name,
+         user_no,user_cname,dept_name,position_name,supervisor_name,onboard_date,whitelist_id,machine_display_name,machine_model,
          score_quality_gm,score_quality_mgr,score_efficiency_gm,score_efficiency_mgr,score_proficiency_gm,score_proficiency_mgr)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
        ->execute([
             $src['form_type'], $src['user_id'], $src['dept_id'], $src['position_id'], $src['template_id'], date('Y-m-d'), $needSign ? 'draft' : 'active',
             $byUid, $byName,
             $src['user_no'], $src['user_cname'], $src['dept_name'], $src['position_name'], $src['supervisor_name'], $src['onboard_date'],
-            $src['whitelist_id'], $src['machine_display_name'], $src['item_name'],
+            $src['whitelist_id'], $src['machine_display_name'], $src['machine_model'],
             $src['score_quality_gm'], $src['score_quality_mgr'], $src['score_efficiency_gm'], $src['score_efficiency_mgr'],
             $src['score_proficiency_gm'], $src['score_proficiency_mgr'],
         ]);

@@ -329,7 +329,7 @@ function loadAsDoc(ft){
 function buildTableHeads(){
     var ck = META.perms.isSuperAdmin ? '<th style="width:26px;"><input type="checkbox" class="ck-all" onclick="toggleAllCk(this)"></th>' : '';
     $('.thead-job_desc').html('<tr><th>部門</th><th>職位</th><th>日期</th><th style="width:150px;">操作</th></tr>');
-    $('.thead-skill_assess').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>機型</th><th>項目名稱</th><th>總經理考核</th><th>課長考核</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
+    $('.thead-skill_assess').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>機型</th><th>機台名稱</th><th>總經理考核</th><th>課長考核</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
     $('.thead-competency').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>職務</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
 }
 function toggleAllCk(box){
@@ -356,7 +356,7 @@ function filteredRows(ft){
     return (LISTS[ft]||[]).filter(function(r){
         if (stf && r.status !== stf) return false;
         if (!kw) return true;
-        var hay = (r.dept_name+' '+r.position_name+' '+(r.user_cname||'')+' '+(r.machine_display_name||'')+' '+(r.item_name||'')).toLowerCase();
+        var hay = (r.dept_name+' '+r.position_name+' '+(r.user_cname||'')+' '+(r.machine_display_name||'')+' '+(r.machine_model||'')).toLowerCase();
         return hay.indexOf(kw) >= 0;
     });
 }
@@ -388,7 +388,7 @@ function renderList(ft){
             var gmAvg = scoreAvg(r.score_quality_gm,r.score_efficiency_gm,r.score_proficiency_gm);
             var mgrAvg = r.confirm_na ? null : scoreAvg(r.score_quality_mgr,r.score_efficiency_mgr,r.score_proficiency_mgr);
             var confirmCell = r.confirm_na ? '<span class="na-tag">NA</span>' : (r.confirm_user_name?esc(r.confirm_user_name):stBadge);
-            html += '<tr>'+ck+'<td>'+esc(r.dept_name)+'</td><td>'+esc(r.user_cname)+'</td><td>'+esc(r.machine_display_name)+'</td><td>'+esc(r.item_name)+'</td>'
+            html += '<tr>'+ck+'<td>'+esc(r.dept_name)+'</td><td>'+esc(r.user_cname)+'</td><td>'+esc(r.machine_model||'')+'</td><td>'+esc(r.machine_display_name)+'</td>'
                   + '<td>'+(gmAvg===null?'-':gmAvg)+'</td><td>'+(r.confirm_na?'<span class="na-tag">NA</span>':(mgrAvg===null?'-':mgrAvg))+'</td>'
                   + '<td>'+confirmCell+'</td><td>'+(r.approve_user_name?esc(r.approve_user_name):(r.status==='signed'?stBadge:'-'))+'</td>'
                   + '<td>'+opBtns+'</td></tr>';
@@ -521,7 +521,7 @@ function openCreateModal(ft){
         $.getJSON(API, {action:'whitelist_list'}, function(res){
             if (!res.ok) { $('#createMachineListBody').html('<span style="color:#8a6d45;">（僅管理員可預覽白名單，手動指定請洽管理員）</span>'); return; }
             $('#createMachineListBody').html((res.whitelist||[]).map(function(w){
-                return '<label><input type="checkbox" class="mach-ck" value="'+w.id+'"> '+esc(w.item_name||w.display_name)+'（'+esc(w.display_name)+'）</label>';
+                return '<label><input type="checkbox" class="mach-ck" value="'+w.id+'"> '+esc(w.display_name)+(w.machine_model?'（機型：'+esc(w.machine_model)+'）':'')+'</label>';
             }).join('') || '<span style="color:#8a6d45;">尚未建立白名單</span>');
         });
     }
@@ -671,7 +671,7 @@ function headTableHtml(r){
     h += '<tr><th>姓名</th><td>'+esc(r.user_cname||'')+'</td><th>員工編號</th><td>'+esc(r.user_no||'')+'</td></tr>'
        + '<tr><th>到職日</th><td>'+dispDate(r.onboard_date)+'</td><th>主管</th><td>'+esc(r.supervisor_name||'')+'</td></tr>'
        + '<tr><th>日期</th><td>'+dispDate(r.business_date)+'</td><th>狀態</th><td>'+(STATUS_LABEL[r.status]||r.status)+'</td></tr>';
-    if (r.form_type === 'skill_assess') h += '<tr><th>機型</th><td>'+esc(r.machine_display_name||'')+'</td><th>項目名稱</th><td>'+esc(r.item_name||'')+'</td></tr>';
+    if (r.form_type === 'skill_assess') h += '<tr><th>機型</th><td>'+esc(r.machine_model||'')+'</td><th>機台名稱</th><td>'+esc(r.machine_display_name||'')+'</td></tr>';
     h += '</tbody></table>';
     return h;
 }
@@ -895,7 +895,7 @@ function jdPrintHtml(r){
 function saPrintHtml(r, tpl){
     var h = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">專業技能鑑定考核表</div></div>';
     h += '<table class="hf-p-head"><tr><th>單位</th><td>'+esc(r.dept_name||'')+'</td><th>姓名</th><td>'+esc(r.user_cname||'')+'</td></tr>'
-       + '<tr><th>機型</th><td>'+esc(r.machine_display_name||'')+'</td><th>項目名稱</th><td>'+esc(r.item_name||'')+'</td></tr>'
+       + '<tr><th>機型</th><td>'+esc(r.machine_model||'')+'</td><th>機台名稱</th><td>'+esc(r.machine_display_name||'')+'</td></tr>'
        + '<tr><th>日期</th><td colspan="3">'+dispDate(r.business_date)+'</td></tr></table>';
     var mgrNA = !!r.confirm_na;
     h += '<table class="hf-p-items"><thead><tr><th style="width:25%;">分類項目</th><th>總經理考核</th><th>課長考核</th></tr></thead><tbody>'

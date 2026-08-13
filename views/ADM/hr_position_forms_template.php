@@ -116,7 +116,7 @@ if (!$perms['canAdmin']) { header('Location: hr_position_forms.php'); exit; }
 <?php endforeach; ?>
 
         <div class="hf-tabpane" id="pane-whitelist" data-type="whitelist">
-            <p style="font-size:12.5px;color:#8a6d45;">從既有機台主檔（machine_list）與量測儀器校驗量具主檔（qc_tool）勾選要開放給「專業技能鑑定考核表」選用的機型/量具，並可自訂「項目名稱」（列印時顯示，如：投影機）。</p>
+            <p style="font-size:12.5px;color:#8a6d45;">從既有機台主檔（machine_list，比照 process_schedule_NOW.php「機台設定」頁的欄位認定：機型=machine_model、機台編號=asset_no，不使用現場編號field_no）與量測儀器校驗量具主檔（qc_tool）勾選要開放給「專業技能鑑定考核表」選用的機型/量具；機台名稱固定取自主檔，不開放手動改字。</p>
             <input type="text" class="flt" id="wlFilter" placeholder="輸入名稱篩選…" oninput="wlFilterList(this.value)">
             <div class="wl-col"><h4>生產機台（machine_list）</h4><div class="wl-list" id="wlMachines"></div></div>
             <div class="wl-col" style="margin-left:1%;"><h4>量測儀器校驗量具（qc_tool）</h4><div class="wl-list" id="wlTools"></div></div>
@@ -229,7 +229,7 @@ if (!$perms['canAdmin']) { header('Location: hr_position_forms.php'); exit; }
         管理員在這裡設定「職位範本」：建立表單時系統會依員工的部門×職位比對範本，自動帶入內容（職務說明書的工作職責表、員工職能鑑定表的職能項目清單）或適用機型清單（專業技能鑑定考核表）。一個範本可以綁定多筆部門×職位。
         <h4>操作步驟</h4>
         <b>①新增/編輯範本</b>：填範本名稱、綁定適用的部門×職位（選一個部門後可一次勾選多個職位加入，部門選「不限部門」代表該職位不論哪個部門都適用）、編輯內容（職務說明書填4欄工作職責表；員工職能鑑定表填職能項目清單；專業技能鑑定考核表勾選適用機型，可用「全選/取消全選」快速操作，需先在「機型/量具白名單」建立好白名單）。<br>
-        <b>②機型/量具白名單</b>：從既有機台主檔與量測儀器校驗的量具主檔勾選，可自訂「項目名稱」（列印在表單上的名稱），儲存後才能在範本裡勾選。<br>
+        <b>②機型/量具白名單</b>：從既有機台主檔（machine_list，機型/機台編號比照process_schedule_NOW.php機台設定頁欄位認定，機台名稱固定取自主檔不可手動改字）與量測儀器校驗的量具主檔勾選，儲存後才能在範本裡勾選。<br>
         <b>③部門表單資格</b>：勾選哪些部門的人要產生技能鑑定表/職能鑑定表，職務說明書不受此限制、全員都會有。<br>
         <b>④AS文件編號綁定</b>：三張表單各自獨立綁定，在各自分頁右上角按鈕設定。<br>
         <b>⑤員工編號前綴</b>：全站唯一設定值，三張表單顯示「員工編號」時統一套用此前綴。
@@ -374,7 +374,7 @@ function openTplModal(ft, id){
             var html = '<label>適用機型（勾選；建立表單時系統會依這份清單自動展開每個機型各一筆）</label>'
                      + '<div style="margin-bottom:4px;"><button type="button" class="hf-btn-sm" onclick="tplMachineCkAll(true)">全選</button> <button type="button" class="hf-btn-sm" onclick="tplMachineCkAll(false)">取消全選</button></div>'
                      + '<div style="max-height:220px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;" id="tplMachineList">'
-                     + wl.map(function(w){ return '<label style="display:block;font-size:12.5px;"><input type="checkbox" class="tm-ck" value="'+w.id+'"> '+esc(w.item_name||w.display_name)+'（'+esc(w.display_name)+'）</label>'; }).join('')
+                     + wl.map(function(w){ return '<label style="display:block;font-size:12.5px;"><input type="checkbox" class="tm-ck" value="'+w.id+'"> '+esc(w.display_name)+(w.machine_model?'（機型：'+esc(w.machine_model)+'）':'')+'</label>'; }).join('')
                      + '</div>';
             $('#tplContentBlock').html(html);
             if (id) fillTplForEdit(id);
@@ -516,7 +516,7 @@ function hfCpFillFromSaTpl(){
         if ($('#tplItemsBody tr').length === 1 && !$('#tplItemsBody .c-name').val()) $('#tplItemsBody').empty();
         machines.forEach(function(m){
             var n = $('#tplItemsBody tr').length + 1;
-            $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><input type="text" class="c-name" value="'+esc(m.item_name||m.display_name)+'"></td></tr>');
+            $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><input type="text" class="c-name" value="'+esc(m.display_name)+'"></td></tr>');
         });
     });
 }
@@ -579,8 +579,9 @@ function renderWlGroup(sel, rows){
         html += '<div class="wl-group">'+esc(g)+'</div>';
         groups[g].forEach(function(r){
             var type = sel === '#wlMachines' ? 'machine' : 'tool';
-            html += '<div class="wl-row" data-hay="'+esc(r.display_name).toLowerCase()+'"><label style="flex:1;"><input type="checkbox" class="wl-ck" data-type="'+type+'" data-id="'+r.source_id+'" data-dname="'+esc(r.display_name)+'"'+(r.checked?' checked':'')+'> '+esc(r.display_name)+'</label>'
-                  + '<input type="text" class="wl-item-name" placeholder="項目名稱" value="'+esc(r.item_name||'')+'"></div>';
+            // 機台名稱一律取自 machine_list，不開放手動改字；機型/機台編號一併秀出來方便對照(不可用現場編號)
+            var meta = type === 'machine' ? ('　機型：'+esc(r.machine_model||'-')+'　機台編號：'+esc(r.asset_no||'-')) : '';
+            html += '<div class="wl-row" data-hay="'+esc(r.display_name+' '+(r.machine_model||'')+' '+(r.asset_no||'')).toLowerCase()+'"><label style="flex:1;"><input type="checkbox" class="wl-ck" data-type="'+type+'" data-id="'+r.source_id+'"'+(r.checked?' checked':'')+'> '+esc(r.display_name)+'<span style="color:#8a6d45;font-size:11px;">'+meta+'</span></label></div>';
         });
     });
     $(sel).html(html || '<span style="color:#8a6d45;font-size:12px;">（查無資料）</span>');
@@ -592,8 +593,7 @@ function wlFilterList(kw){
 function wlSave(){
     var entries = [];
     $('.wl-ck:checked').each(function(){
-        var $row = $(this).closest('.wl-row');
-        entries.push({source_type:$(this).data('type'), source_id:$(this).data('id'), display_name:$(this).data('dname'), item_name:$row.find('.wl-item-name').val()});
+        entries.push({source_type:$(this).data('type'), source_id:$(this).data('id')});
     });
     ajaxPost('whitelist_save', {entries:JSON.stringify(entries)}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
