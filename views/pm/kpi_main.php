@@ -1080,7 +1080,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if($mid){$where.=" AND pdr.machine_id=?";$p[]=$mid;}
             if($mtid){$where.=" AND ml.machine_type_id=?";$p[]=$mtid;}
             if($partno){$where.=" $EXISTS_CLAUSE";$p[]="%$partno%";}
-            $sql="SELECT ml.machine_id, ml.machine AS label, ml.machine_type_id, mt.machine_type,
+            $sql="SELECT ml.machine_id, ml.machine AS label, ml.machine_type_id, pt.process_type AS machine_type,
                 COUNT(DISTINCT pdr.report_id) AS report_count,
                 SUM(pdr.produced_qty) AS total_ok,
                 COALESCE(SUM(ng.ng_sum),0) AS total_ng,
@@ -1089,12 +1089,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 COUNT(DISTINCT pdr.report_date) AS work_days
                 FROM pm_process_daily_report pdr
                 JOIN machine_list ml ON ml.machine_id=pdr.machine_id
-                LEFT JOIN machine_type mt ON mt.machine_type_id=ml.machine_type_id
+                LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id
                 LEFT JOIN bom_ing bi ON bi.bom_ing_fid=pdr.bom_ing_fid
                 LEFT JOIN bom b ON b.bom=bi.bom
                 LEFT JOIN (SELECT n.report_id,SUM(n.ng_qty) AS ng_sum FROM pm_process_daily_ng n GROUP BY n.report_id) ng ON ng.report_id=pdr.report_id
                 WHERE $where
-                GROUP BY ml.machine_id,ml.machine,ml.machine_type_id,mt.machine_type
+                GROUP BY ml.machine_id,ml.machine,ml.machine_type_id,pt.process_type
                 ORDER BY ml.machine_type_id ASC,ml.machine ASC,ml.machine_id ASC LIMIT 200";
             $st=$pdo->prepare($sql);$st->execute($p);
             $rows=$st->fetchAll(PDO::FETCH_ASSOC);
@@ -1178,7 +1178,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 稼動率分母 = 報工當天，在此機台有報工的所有不重複人員的班別工時合計
             $sql = "SELECT pdr.report_id, pdr.report_date, pdr.process_no,
                 ml.machine_id, ml.machine, ml.machine_type_id,
-                mt.machine_type,
+                pt.process_type AS machine_type,
                 pdr.produced_qty,
                 (SELECT SUM(ng_qty) FROM pm_process_daily_ng WHERE report_id=pdr.report_id) AS ng_qty,
                 pdr.production_start_time, pdr.production_end_time,
@@ -1197,7 +1197,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 (SELECT kps2.std_id FROM kpi_process_group_map pgm3 LEFT JOIN kpi_part_standard kps2 ON kps2.group_id=pgm3.group_id AND kps2.d_setting_id=ds.d_id WHERE pgm3.process_no=pdr.process_no LIMIT 1) AS has_custom_std
                 FROM pm_process_daily_report pdr
                 JOIN machine_list ml ON ml.machine_id=pdr.machine_id
-                LEFT JOIN machine_type mt ON mt.machine_type_id=ml.machine_type_id
+                LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id
                 LEFT JOIN user u1 ON u1.id=pdr.production_user_id
                 LEFT JOIN (
                     SELECT udm.user_id, d.name AS dept_name, pos.name AS pos_name
@@ -2116,14 +2116,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sql="SELECT pdr.report_id, pdr.report_date, pdr.produced_qty, pdr.process_no,
                 pdr.production_user_id, u.user_cname,
                 ml.machine_id, ml.machine, ml.machine_type_id, ml.position AS area_id,
-                mt.machine_type,
+                pt.process_type AS machine_type,
                 sa.area_name,
                 b.d_id AS part_no, b.bom AS bom_no, ds.d_id AS d_setting_id, ds.Type AS part_type,
                 dsg.Module, dsg.Teeth, dsg.Face_Width,
                 pn.process_type_id
                 FROM pm_process_daily_report pdr
                 JOIN machine_list ml ON ml.machine_id=pdr.machine_id
-                LEFT JOIN machine_type mt ON mt.machine_type_id=ml.machine_type_id
+                LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id
                 LEFT JOIN stock_areas sa ON sa.area_id=ml.position AND sa.is_active=1
                 LEFT JOIN user u ON u.id=pdr.production_user_id
                 LEFT JOIN user_department_position_map udm2 ON udm2.user_id=pdr.production_user_id AND udm2.is_main=1
@@ -2302,15 +2302,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $filterMtid = intval($_POST['machine_type_id'] ?? 0);
         try {
             $sql = "SELECT ml.machine_id,ml.machine,ml.machine_type_id,ml.position,ml.state,
-                mt.machine_type,
+                pt.process_type AS machine_type,
                 kma.asset_id,kma.purchase_date,kma.purchase_amount,kma.residual_value,
                 kma.depreciation_years,kma.depreciation_method,kma.monthly_work_hours,kma.remark
                 FROM machine_list ml
-                LEFT JOIN machine_type mt ON mt.machine_type_id=ml.machine_type_id
+                LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id
                 LEFT JOIN kpi_machine_asset kma ON kma.machine_id=ml.machine_id";
             $params=[];
             if($filterMtid){$sql.=" WHERE ml.machine_type_id=?";$params[]=$filterMtid;}
-            $sql.=" ORDER BY mt.machine_type, ml.machine";
+            $sql.=" ORDER BY pt.process_type, ml.machine";
             $st=$pdo->prepare($sql);$st->execute($params);
             $rows=$st->fetchAll(PDO::FETCH_ASSOC);
 
@@ -2770,7 +2770,7 @@ try {
 } catch(Exception $e) {}
 
 $machine_type_list = [];
-try { $machine_type_list = $pdo->query("SELECT machine_type_id, machine_type FROM machine_type ORDER BY machine_type_id")->fetchAll(PDO::FETCH_ASSOC); } catch(Exception $e){}
+try { $machine_type_list = $pdo->query("SELECT process_type_id AS machine_type_id, process_type AS machine_type FROM process_type ORDER BY process_type_id")->fetchAll(PDO::FETCH_ASSOC); } catch(Exception $e){}
 
 // ══ 頁面載入時更新平均工時快取（kpi_avg_time_cache） ═════════
 // 只在 GET 請求（頁面載入）時執行，避免 AJAX POST 時重複觸發
@@ -2818,7 +2818,7 @@ try { $area_list = $pdo->query("SELECT area_id, area_name FROM stock_areas WHERE
 
 // 機台完整清單含狀態（用於機台資產頁）
 $machine_list_all = [];
-try { $machine_list_all = $pdo->query("SELECT ml.machine_id, ml.machine, ml.machine_type_id, ml.position, ml.state, mt.machine_type FROM machine_list ml LEFT JOIN machine_type mt ON mt.machine_type_id=ml.machine_type_id ORDER BY mt.machine_type, ml.machine")->fetchAll(PDO::FETCH_ASSOC); } catch(Exception $e){}
+try { $machine_list_all = $pdo->query("SELECT ml.machine_id, ml.machine, ml.machine_type_id, ml.position, ml.state, pt.process_type AS machine_type FROM machine_list ml LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id ORDER BY pt.process_type, ml.machine")->fetchAll(PDO::FETCH_ASSOC); } catch(Exception $e){}
 
 $dept_list = [];
 try { $dept_list = $pdo->query("SELECT id,name FROM department WHERE parent_id IS NOT NULL ORDER BY level,sort_order,name")->fetchAll(PDO::FETCH_ASSOC); } catch(Exception $e){}

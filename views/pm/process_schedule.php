@@ -1090,6 +1090,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $type_id = $_POST['machine_type_id'] ?? '';
             $need_setup = $_POST['need_setup'] ?? 0;
             $position = $_POST['position'] ?? '';
+            $machine_model = trim($_POST['machine_model'] ?? '');
+            $asset_no = trim($_POST['asset_no'] ?? '');
+            $field_no = trim($_POST['field_no'] ?? '');
+            $spec = trim($_POST['spec'] ?? '');
+            $note = trim($_POST['note'] ?? '');
 
             if (empty($name)) throw new Exception("機台名稱不可為空");
             if (empty($type_id)) throw new Exception("請選擇機台類型");
@@ -1097,14 +1102,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!empty($id)) {
                 // 修改
                 if (!$can_edit_machine) throw new Exception("無修改權限 (需 A 或 U)");
-                $stmt = $pdo->prepare("UPDATE machine_list SET machine=?, machine_type_id=?, need_setup=?, position=? WHERE machine_id=?");
-                $stmt->execute([$name, $type_id, $need_setup, $position, $id]);
+                $stmt = $pdo->prepare("UPDATE machine_list SET machine=?, machine_type_id=?, need_setup=?, position=?, machine_model=?, asset_no=?, field_no=?, spec=?, note=? WHERE machine_id=?");
+                $stmt->execute([$name, $type_id, $need_setup, $position, $machine_model, $asset_no, $field_no, $spec, $note, $id]);
                 echo json_encode(['success' => true, 'message' => '機台已更新']);
             } else {
                 // 新增
                 if (!$can_add_machine) throw new Exception("無新增權限 (需 A 或 C)");
-                $stmt = $pdo->prepare("INSERT INTO machine_list (machine, machine_type_id, need_setup, position) VALUES (?, ?, ?, ?)");
-                $stmt->execute([$name, $type_id, $need_setup, $position]);
+                $stmt = $pdo->prepare("INSERT INTO machine_list (machine, machine_type_id, need_setup, position, machine_model, asset_no, field_no, spec, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $stmt->execute([$name, $type_id, $need_setup, $position, $machine_model, $asset_no, $field_no, $spec, $note]);
                 echo json_encode(['success' => true, 'message' => '機台已新增']);
             }
         } catch (Exception $e) {
@@ -1191,7 +1196,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $term = $_POST['term'] ?? '';
     try {
         // Requirement 3: Get machine types for filter buttons
-        $machine_types = $pdo->query("SELECT machine_type_id, machine_type FROM machine_type ORDER BY machine_type_id")->fetchAll(PDO::FETCH_ASSOC);
+        $machine_types = $pdo->query("SELECT process_type_id AS machine_type_id, process_type AS machine_type FROM process_type ORDER BY process_type_id")->fetchAll(PDO::FETCH_ASSOC);
 
         // 1. 取得符合條件的項目列表 (包含正常工單與臨時加工)
         $items_to_process = [];
@@ -1438,7 +1443,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
             LEFT JOIN maker_list ml ON bi.maker_id_no = ml.maker_id_no
             WHERE (bi.bom LIKE ? OR b.d_id LIKE ? OR b.Client_Name LIKE ?)
-            AND pn.process_type_id IN (SELECT machine_type_id FROM machine_type)
+            AND pn.process_type_id IN (SELECT process_type_id FROM process_type)
             ORDER BY bi.Modified_At DESC LIMIT 100
         ";
         $stmt = $pdo->prepare($sql);
@@ -2063,113 +2068,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // =================================================================================
-// 後端邏輯：機台管理 (列表/新增/修改/刪除)
-// =================================================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    // 1. 獲取機台設定資料 (列表 + 類型)
-    if ($_POST['action'] === 'get_machine_settings') {
-        header('Content-Type: application/json');
-        try {
-            if (!$can_manage_machine) throw new Exception("無權限存取");
-
-            // 獲取機台列表 (排除已刪除 state=1)
-            $sql_machines = "
-                SELECT ml.*, mt.machine_type as type_name 
-                FROM machine_list ml
-                LEFT JOIN machine_type mt ON ml.machine_type_id = mt.machine_type_id
-                WHERE (ml.state IS NULL OR ml.state != '1' OR ml.state = '')
-                ORDER BY ml.machine_type_id, ml.machine
-            ";
-            $machines = $pdo->query($sql_machines)->fetchAll(PDO::FETCH_ASSOC);
-
-            // 獲取機台類型列表
-            $types = $pdo->query("SELECT * FROM machine_type ORDER BY machine_type_id")->fetchAll(PDO::FETCH_ASSOC);
-
-            // 獲取齒輪顯示設定
-            $stmt_gear = $pdo->prepare("SELECT param_value FROM system_parameters WHERE param_group = 'BOM_SETTING' AND param_key = 'gear_info_display_types'");
-            $stmt_gear->execute();
-            $row_gear = $stmt_gear->fetch(PDO::FETCH_ASSOC);
-            $gear_settings = $row_gear ? json_decode($row_gear['param_value'], true) : [];
-
-            echo json_encode(['success' => true, 'machines' => $machines, 'types' => $types, 'gear_settings' => $gear_settings]);
-        } catch (Exception $e) {
-            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-        }
-        exit;
-    }
-
-    // 4. 儲存齒輪顯示設定
-    if ($_POST['action'] === 'save_gear_display_settings') {
-        header('Content-Type: application/json');
-        try {
-            if (!$can_settings) throw new Exception("無權限執行此操作");
-
-            $settings = $_POST['settings'] ?? [];
-            $json = json_encode($settings);
-            $user = $_SESSION['userName'] ?? 'system';
-
-            $sql = "INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by, updated_at) 
-                    VALUES ('BOM_SETTING', 'gear_info_display_types', ?, '儀表板顯示齒輪規格的機台類型', ?, NOW()) 
-                    ON DUPLICATE KEY UPDATE param_value = VALUES(param_value), updated_by = VALUES(updated_by), updated_at = NOW()";
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute([$json, $user]);
-
-            echo json_encode(['success' => true, 'message' => '設定已儲存']);
-        } catch (Exception $e) {
-            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-        }
-        exit;
-    }
-
-    // 2. 儲存機台 (新增/修改)
-    if ($_POST['action'] === 'save_machine') {
-        header('Content-Type: application/json');
-        try {
-            $id = $_POST['machine_id'] ?? '';
-            $name = $_POST['machine'] ?? '';
-            $type_id = $_POST['machine_type_id'] ?? '';
-            $need_setup = $_POST['need_setup'] ?? 0;
-            $position = $_POST['position'] ?? '';
-
-            if (empty($name)) throw new Exception("機台名稱不可為空");
-            if (empty($type_id)) throw new Exception("請選擇機台類型");
-
-            if (!empty($id)) {
-                // 修改
-                if (!$can_edit_machine) throw new Exception("無修改權限 (需 A 或 U)");
-                $stmt = $pdo->prepare("UPDATE machine_list SET machine=?, machine_type_id=?, need_setup=?, position=? WHERE machine_id=?");
-                $stmt->execute([$name, $type_id, $need_setup, $position, $id]);
-                echo json_encode(['success' => true, 'message' => '機台已更新']);
-            } else {
-                // 新增
-                if (!$can_add_machine) throw new Exception("無新增權限 (需 A 或 C)");
-                $stmt = $pdo->prepare("INSERT INTO machine_list (machine, machine_type_id, need_setup, position) VALUES (?, ?, ?, ?)");
-                $stmt->execute([$name, $type_id, $need_setup, $position]);
-                echo json_encode(['success' => true, 'message' => '機台已新增']);
-            }
-        } catch (Exception $e) {
-            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-        }
-        exit;
-    }
-
-    // 3. 刪除機台 (軟刪除 state=1)
-    if ($_POST['action'] === 'delete_machine') {
-        header('Content-Type: application/json');
-        try {
-            if (!$can_delete_machine) throw new Exception("無刪除權限 (需 A 或 D)");
-            $id = $_POST['machine_id'];
-            $stmt = $pdo->prepare("UPDATE machine_list SET state='1' WHERE machine_id=?");
-            $stmt->execute([$id]);
-            echo json_encode(['success' => true, 'message' => '機台已刪除']);
-        } catch (Exception $e) {
-            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-        }
-        exit;
-    }
-}
-
-// =================================================================================
 // 後端邏輯：儲存齒輪規格 (從現場回報視窗呼叫)
 // =================================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save_part_gear_info') {
@@ -2702,7 +2600,8 @@ if (is_array($visible_tabs_ids) && !empty($visible_tabs_ids)) {
 $machines_by_type = [];
 $machine_names = [];
 $sql_all_machines = "
-    SELECT ml.machine_id, ml.machine, ml.position, ml.machine_type_id, ml.need_setup
+    SELECT ml.machine_id, ml.machine, ml.position, ml.machine_type_id, ml.need_setup,
+           ml.machine_model, ml.asset_no, ml.field_no
     FROM machine_list ml
     WHERE (ml.state IS NULL OR ml.state != '1') 
       AND ml.position IS NOT NULL AND ml.position != '' AND ml.position != '0'
@@ -4666,11 +4565,14 @@ function get_state_badge($state)
                                     <div class="row">
                                         <!-- 左側：機台列表 -->
                                         <div class="col-md-8 col-sm-8 col-xs-12">
-                                            <div style="max-height: 400px; overflow-y: auto;">
-                                                <table class="table table-bordered table-striped table-condensed" id="machineListTable" style="font-size: 12px;">
+                                            <div style="max-height: 400px; overflow-y: auto; overflow-x: auto;">
+                                                <table class="table table-bordered table-striped table-condensed" id="machineListTable" style="font-size: 12px; white-space: nowrap;">
                                                     <thead>
                                                         <tr>
                                                             <th>名稱</th>
+                                                            <th>機台編號</th>
+                                                            <th>現場編號</th>
+                                                            <th>機型</th>
                                                             <th>類型</th>
                                                             <th>位置(廠別)</th>
                                                             <th>需架機</th>
@@ -4700,6 +4602,18 @@ function get_state_badge($state)
                                                             <input type="text" class="form-control input-sm" name="machine" id="setting_machine_name" required>
                                                         </div>
                                                         <div class="form-group">
+                                                            <label>機台編號 <span class="text-muted">(公司財產編號)</span></label>
+                                                            <input type="text" class="form-control input-sm" name="asset_no" id="setting_asset_no">
+                                                        </div>
+                                                        <div class="form-group">
+                                                            <label>現場自訂編號</label>
+                                                            <input type="text" class="form-control input-sm" name="field_no" id="setting_field_no">
+                                                        </div>
+                                                        <div class="form-group">
+                                                            <label>機型</label>
+                                                            <input type="text" class="form-control input-sm" name="machine_model" id="setting_machine_model">
+                                                        </div>
+                                                        <div class="form-group">
                                                             <label>機台類型 <span class="text-danger">*</span></label>
                                                             <select class="form-control input-sm" name="machine_type_id" id="setting_machine_type" required></select>
                                                         </div>
@@ -4713,6 +4627,14 @@ function get_state_badge($state)
                                                                 <option value="1">需要 (1)</option>
                                                                 <option value="0">不需要 (0)</option>
                                                             </select>
+                                                        </div>
+                                                        <div class="form-group">
+                                                            <label>規格</label>
+                                                            <input type="text" class="form-control input-sm" name="spec" id="setting_spec">
+                                                        </div>
+                                                        <div class="form-group">
+                                                            <label>備註</label>
+                                                            <textarea class="form-control input-sm" name="note" id="setting_note" rows="2"></textarea>
                                                         </div>
 
                                                         <div class="text-right">
@@ -4930,6 +4852,13 @@ function get_state_badge($state)
 
                 // 將 PHP 機台資料傳遞給 JS
                 var allMachines = <?= json_encode($all_machines_raw) ?>;
+
+                // 機台選單顯示文字：機台編號 現場自訂編號 機型（三者皆未填才退回機台名稱＋位置）
+                function machineOptionLabel(m) {
+                    var parts = [m.asset_no, m.field_no, m.machine_model].filter(function(v) { return v && String(v).trim() !== ''; });
+                    if (parts.length === 0) return m.machine + ' (' + m.position + ')';
+                    return parts.join(' ');
+                }
                 var openAbnormalities = <?= json_encode($open_abnormalities) ?>;
                 var ngOptionsList = <?= json_encode($ng_list) ?>;
                 var allProcesses = <?= json_encode($all_processes) ?>;
@@ -5825,7 +5754,7 @@ function get_state_badge($state)
 
                             if (showOption) {
                                 var selected = (columnMachineId && m.machine_id == columnMachineId) ? 'selected' : '';
-                                $machineSelect.append(`<option value="${m.machine_id}" ${selected} data-need-setup="${m.need_setup}">${m.machine} (${m.position})</option>`);
+                                $machineSelect.append(`<option value="${m.machine_id}" ${selected} data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
                             }
                         });
 
@@ -6132,7 +6061,7 @@ function get_state_badge($state)
                         $machineSelect.empty().append('<option value="">請選擇機台</option>');
                         $('#hidden_machine_id').remove();
                         allMachines.forEach(function(m) {
-                            $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${m.machine} (${m.position})</option>`);
+                            $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
                         });
 
                         // 隱藏歷史紀錄 (無 BOM 無法查)
@@ -6171,19 +6100,19 @@ function get_state_badge($state)
                                 var typeId = selectedProc.process_type_id;
                                 allMachines.forEach(function(m) {
                                     if (m.machine_type_id == typeId) {
-                                        $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${m.machine} (${m.position})</option>`);
+                                        $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
                                     }
                                 });
                             } else {
                                 // 若無對應類別，顯示全部
                                 allMachines.forEach(function(m) {
-                                    $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${m.machine} (${m.position})</option>`);
+                                    $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
                                 });
                             }
                         } else {
                             // 未選擇製程時顯示全部
                             allMachines.forEach(function(m) {
-                                $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${m.machine} (${m.position})</option>`);
+                                $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
                             });
                         }
                         $machineSelect.trigger('change'); // 更新架機欄位顯示狀態
@@ -6705,7 +6634,7 @@ function get_state_badge($state)
                         if (item.process_type_id) {
                             allMachines.forEach(function(m) {
                                 if (m.machine_type_id == item.process_type_id) {
-                                    $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${m.machine} (${m.position})</option>`);
+                                    $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
                                 }
                             });
                         }
@@ -7300,7 +7229,7 @@ function get_state_badge($state)
                         var processTypeId = item.process_type_id;
                         allMachines.forEach(function(m) {
                             if (m.machine_type_id == processTypeId) {
-                                $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${m.machine} (${m.position})</option>`);
+                                $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
                             }
                         });
                         if (userPerms.canReport) {
@@ -7771,6 +7700,9 @@ function get_state_badge($state)
 
                                         var $tr = $('<tr>');
                                         $tr.append($('<td>').text(m.machine));
+                                        $tr.append($('<td>').text(m.asset_no || ''));
+                                        $tr.append($('<td>').text(m.field_no || ''));
+                                        $tr.append($('<td>').text(m.machine_model || ''));
                                         $tr.append($('<td>').text(m.type_name || ''));
                                         $tr.append($('<td>').text(m.position));
                                         $tr.append($('<td>').html(setupText));
@@ -7790,7 +7722,7 @@ function get_state_badge($state)
                                         $tbody.append($tr);
                                     });
                                 } else {
-                                    $tbody.html('<tr><td colspan="5" class="text-center text-muted">無機台資料</td></tr>');
+                                    $tbody.html('<tr><td colspan="8" class="text-center text-muted">無機台資料</td></tr>');
                                 }
 
                                 // 重置表單
@@ -7807,6 +7739,11 @@ function get_state_badge($state)
                         $('#setting_machine_type').val('');
                         $('#setting_position').val('');
                         $('#setting_need_setup').val('1');
+                        $('#setting_machine_model').val('');
+                        $('#setting_asset_no').val('');
+                        $('#setting_field_no').val('');
+                        $('#setting_spec').val('');
+                        $('#setting_note').val('');
                         $('#machineFormTitle').text('新增機台');
 
                         // 權限控制按鈕
@@ -7823,6 +7760,11 @@ function get_state_badge($state)
                         $('#setting_machine_type').val(m.machine_type_id);
                         $('#setting_position').val(m.position);
                         $('#setting_need_setup').val(m.need_setup);
+                        $('#setting_machine_model').val(m.machine_model || '');
+                        $('#setting_asset_no').val(m.asset_no || '');
+                        $('#setting_field_no').val(m.field_no || '');
+                        $('#setting_spec').val(m.spec || '');
+                        $('#setting_note').val(m.note || '');
                         $('#machineFormTitle').text('編輯機台');
 
                         $('#btnSaveMachine').prop('disabled', !userPerms.canEditMachine);
@@ -8544,7 +8486,7 @@ function get_state_badge($state)
                                 $machineSelect.empty().append('<option value="">請選擇機台</option>');
                                 $('#hidden_machine_id').remove();
                                 allMachines.forEach(function(m) {
-                                    $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${m.machine} (${m.position})</option>`);
+                                    $machineSelect.append(`<option value="${m.machine_id}" data-need-setup="${m.need_setup}">${machineOptionLabel(m)}</option>`);
                                 });
                                 if ($('#modal_machine_id option[value="' + r.machine_id + '"]').length > 0) {
                                     $machineSelect.val(r.machine_id);

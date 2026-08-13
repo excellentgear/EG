@@ -25,7 +25,7 @@ $capacity_hours_per_machine = $days_diff * 24; // 假設每天 24 小時工作�
 
 // --- 2. 獲取篩選選單資料 ---
 // 機台種類
-$machine_types = $pdo->query("SELECT machine_type_id, machine_type FROM machine_type ORDER BY machine_type_id")->fetchAll(PDO::FETCH_ASSOC);
+$machine_types = $pdo->query("SELECT process_type_id AS machine_type_id, process_type AS machine_type FROM process_type ORDER BY process_type_id")->fetchAll(PDO::FETCH_ASSOC);
 // 機台列表
 $machines = $pdo->query("SELECT machine_id, machine, machine_type_id FROM machine_list WHERE (state IS NULL OR state != '1') ORDER BY machine")->fetchAll(PDO::FETCH_ASSOC);
 // 人員列表 (有報工紀錄的人員)

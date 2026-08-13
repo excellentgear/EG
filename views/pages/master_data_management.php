@@ -1849,9 +1849,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } catch (Exception $ex) { $row['dedicated_part_map'] = []; }
             // 專用機台對應
             try {
-                $mq = $pdo->prepare("SELECT mm.machine_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(mt.machine_type,'') AS machine_type
+                $mq = $pdo->prepare("SELECT mm.machine_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(pt.process_type,'') AS machine_type
                                      FROM d_setting_machine_map mm LEFT JOIN machine_list ml ON ml.machine_id=mm.machine_id
-                                     LEFT JOIN machine_type mt ON mt.machine_type_id=ml.machine_type_id
+                                     LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id
                                      WHERE mm.d_id=? ORDER BY mm.sort_order, mm.map_id");
                 $mq->execute([$d_id]);
                 $row['machine_map'] = $mq->fetchAll(PDO::FETCH_ASSOC);
@@ -2978,9 +2978,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         try {
             $kw = trim($_POST['kw'] ?? '');
             if ($kw === '') { echo json_encode(['success'=>true,'data'=>[]]); exit; }
-            $stmt = $pdo->prepare("SELECT ml.machine_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(mt.machine_type,'') AS machine_type
+            $stmt = $pdo->prepare("SELECT ml.machine_id, COALESCE(ml.machine,'') AS machine_name, COALESCE(pt.process_type,'') AS machine_type
                                    FROM machine_list ml
-                                   LEFT JOIN machine_type mt ON mt.machine_type_id = ml.machine_type_id
+                                   LEFT JOIN process_type pt ON pt.process_type_id = ml.machine_type_id
                                    WHERE (ml.machine LIKE :kw OR CAST(ml.machine_id AS CHAR) LIKE :kw)
                                      AND (ml.state IS NULL OR ml.state != 1)
                                    ORDER BY ml.machine LIMIT 15");
@@ -18718,6 +18718,30 @@ function openPartAttachUploadFromView(input) {
     _openPartAttachUploadModal(_pav.dId, _pav.partNo, files);
     input.value = '';
 }
+
+/* 剪貼簿直接貼上當附件（2026-08-07 使用者需求）：在小畫家等外部程式複製圖片後，
+   附件檢視跳窗開著時直接 Ctrl+V 就能帶入上傳，不必先存檔再用「選擇檔案」找路徑，
+   也完全繞開批圖編輯器的 canvas 重繪流程——貼上的是剪貼簿原始點陣圖，不會被
+   fabric.js 的內插/縮放二次處理，畫質等同小畫家存檔直接上傳。走既有上傳流程
+   （沿用 window._pauFiles → submitPartAttachUpload），標籤/發行章日期等既有規則不變。 */
+document.addEventListener('paste', function (e) {
+    var modal = document.getElementById('partAttachViewModal');
+    if (!modal || !$(modal).is(':visible')) return;   // 只在附件檢視跳窗開著時攔截，避免影響全頁其他貼上動作
+    var items = (e.clipboardData || window.clipboardData || {}).items;
+    if (!items) return;
+    var imgItem = null;
+    for (var i = 0; i < items.length; i++) {
+        if ((items[i].type || '').indexOf('image/') === 0) { imgItem = items[i]; break; }
+    }
+    if (!imgItem) return;
+    var blob = imgItem.getAsFile();
+    if (!blob) return;
+    e.preventDefault();
+    var ext = (blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+    var file = new File([blob], '剪貼簿圖片_' + Date.now() + '.' + ext, { type: blob.type });
+    _openPartAttachUploadModal(_pav.dId, _pav.partNo, [file]);
+    showToast('已帶入剪貼簿圖片，請選擇附件標籤後存檔');
+});
 
 function openPartAttachListModal(dId, partNo) { openAttachAllView(dId, partNo); }  // 向後相容
 

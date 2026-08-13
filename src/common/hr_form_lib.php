@@ -480,9 +480,9 @@ function hrf_dept_can_produce(PDO $db, ?int $deptId, string $formType): bool {
 function hrf_whitelist_sources(PDO $db): array {
     $machines = [];
     try {
-        $machines = $db->query("SELECT ml.machine_id AS source_id, ml.machine AS display_name, mt.machine_type AS group_name
-                                FROM machine_list ml LEFT JOIN machine_type mt ON mt.machine_type_id=ml.machine_type_id
-                                WHERE ml.state IS NULL OR ml.state=0 ORDER BY mt.machine_type, ml.machine")->fetchAll(PDO::FETCH_ASSOC);
+        $machines = $db->query("SELECT ml.machine_id AS source_id, ml.machine AS display_name, pt.process_type AS group_name
+                                FROM machine_list ml LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id
+                                WHERE ml.state IS NULL OR ml.state=0 ORDER BY pt.process_type, ml.machine")->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) {}
     $tools = [];
     try {
