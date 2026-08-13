@@ -71,6 +71,67 @@ function pfmea_ensure_schema(PDO $db): void {
         try { $db->exec($alter); } catch (Throwable $e) {}
     }
 
+    // 2026-08-13 使用者要求：製程代號→潛在失效模式清單、控制預防/控制偵測固定選項、製程整組樣板
+    // （來源 3-TD-01-02-潛在失效模式及效應分析.xlsm 的「資料庫」「項目異常」工作表），供編輯畫面
+    // 製程代號欄位自動帶出下拉選單/整組樣板套用。可填表人(canEdit)可新增，僅管理員(canAdmin)可刪除。
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_process (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        process_code VARCHAR(20) NOT NULL COMMENT '製程代號',
+        process_name VARCHAR(100) NOT NULL COMMENT '製程名稱',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_code (process_code)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-製程代號主檔'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_process_failure_mode (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        process_id INT NOT NULL,
+        failure_mode VARCHAR(200) NOT NULL COMMENT '潛在失效模式',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_process (process_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-製程對應潛在失效模式清單'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_control_option (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        option_type VARCHAR(20) NOT NULL COMMENT 'prevention=控制預防/detection=控制偵測',
+        option_text VARCHAR(100) NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_opt (option_type, option_text)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-控制預防/控制偵測固定選項清單'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_item_template (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        process_id INT NOT NULL,
+        template_key VARCHAR(150) NOT NULL COMMENT '製程_潛在失效模式(組名)',
+        item_name VARCHAR(150) NULL,
+        failure_mode VARCHAR(200) NULL,
+        function_desc VARCHAR(200) NULL,
+        failure_effect VARCHAR(200) NULL,
+        severity TINYINT NULL,
+        failure_cause VARCHAR(200) NULL,
+        occurrence TINYINT NULL,
+        prevention_controls VARCHAR(100) NULL,
+        detection_controls VARCHAR(100) NULL,
+        detection TINYINT NULL,
+        recommended_actions VARCHAR(300) NULL,
+        new_severity TINYINT NULL,
+        new_occurrence TINYINT NULL,
+        new_detection TINYINT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_process (process_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-製程整組樣板(項目異常)'");
+
     foreach ([['pfmea_view','PFMEA檢閱'],['pfmea_edit','PFMEA登錄'],['pfmea_admin','PFMEA管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='pfmea' LIMIT 1");
         $st->execute([$r[0]]);
