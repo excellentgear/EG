@@ -72,6 +72,8 @@ if (!$perms['canAdmin']) { header('Location: hr_position_forms.php'); exit; }
         .wl-row input[type=text] { width:140px; height:22px; font-size:11.5px; border:1px solid #D8BE93; border-radius:3px; padding:0 5px; }
         .wl-list { max-height:420px; overflow-y:auto; }
         .flt { width:100%; border:1px solid #D8BE93; border-radius:4px; padding:5px 8px; font-size:12.5px; margin-bottom:6px; box-sizing:border-box; }
+        .role-item { padding:6px 10px; font-size:12.5px; color:#5b3a1e; cursor:pointer; border-bottom:1px solid #F0E7D5; }
+        .role-item:hover { background:#FBF0DD; } .role-item.on { background:#F7E0BD; font-weight:bold; } .role-item.sys { color:#b0a390; cursor:default; }
         @media print { .page-help-btn { display:none; } }
     </style>
 </head>
@@ -83,6 +85,7 @@ if (!$perms['canAdmin']) { header('Location: hr_position_forms.php'); exit; }
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;clear:both;">
             <h2 style="margin:6px 0;">人資職務表單設定 <small style="color:#8a6d45;">職位範本／機型量具白名單／部門表單資格／AS文件綁定</small></h2>
             <a href="hr_position_forms.php" style="margin-left:8px;">← 回操作頁</a>
+            <button id="btnRoleSetting" style="display:none;margin-left:8px;height:30px;font-size:13px;padding:0 12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;color:#5b3a1e;cursor:pointer;"><i class="fa fa-users"></i> 角色設定</button>
             <button class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
         <div class="clearfix"></div>
@@ -158,6 +161,37 @@ if (!$perms['canAdmin']) { header('Location: hr_position_forms.php'); exit; }
         <div style="max-height:320px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;" id="asdocList"></div>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('asdocMask')">關閉</button></div>
+</div></div>
+
+<!-- 角色設定 modal（管理員；定義本模組角色能看到/做什麼，指派給誰在「使用者權限設定」頁） -->
+<div class="hf-mask" id="roleSetMask"><div class="hf-modal" style="max-width:760px;">
+    <div class="m-head"><span>角色設定</span><span class="m-close" onclick="closeMask('roleSetMask')">✕</span></div>
+    <div class="m-body">
+        <p style="font-size:12px;color:#8a6d45;">左邊選或新增角色 → 右邊改名稱、勾這個角色能看到什麼／能做什麼。「誰擁有這個角色」在<a href="../user/user_permissions.php" target="_blank">人員權限設定頁</a>設定，這裡只定義角色內容。</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+            <div style="border:1px solid #E8D5B5;border-radius:6px;background:#fff;flex:0 0 190px;">
+                <div style="background:#F7E0BD;color:#5b3a1e;font-size:12px;font-weight:bold;padding:5px 10px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between;align-items:center;">角色
+                    <button type="button" id="btnRoleAdd" style="padding:1px 8px;height:22px;font-size:11px;border:1px solid #D8BE93;background:#fff;border-radius:4px;cursor:pointer;">＋ 新增</button></div>
+                <div id="roleList" style="max-height:280px;overflow-y:auto;"></div>
+            </div>
+            <div style="border:1px solid #E8D5B5;border-radius:6px;background:#fff;flex:1;min-width:260px;">
+                <div style="background:#F7E0BD;color:#5b3a1e;font-size:12px;font-weight:bold;padding:5px 10px;border-radius:6px 6px 0 0;">角色內容</div>
+                <div id="roleEdit" style="display:none;padding:10px;">
+                    <label>角色名稱</label>
+                    <div style="display:flex;gap:6px;">
+                        <input type="text" id="roleName" style="flex:1;">
+                        <button type="button" id="btnRoleRename" style="height:28px;font-size:12px;border:1px solid #D8BE93;background:#fff;border-radius:4px;cursor:pointer;">改名</button>
+                        <button type="button" id="btnRoleDel" style="height:28px;font-size:12px;border:1px solid #D8BE93;background:#fff;color:#DD5138;border-radius:4px;cursor:pointer;">刪除</button>
+                    </div>
+                    <div style="font-size:12px;font-weight:bold;color:#8A5A2B;margin:10px 0 4px;">功能（看得到/能做什麼）</div>
+                    <div id="featOp"></div>
+                    <button type="button" id="btnRoleFeatSave" style="margin-top:10px;height:28px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;"><i class="fa fa-save"></i> 儲存功能</button>
+                </div>
+                <div id="roleEditHint" style="padding:24px;text-align:center;color:#8a6d45;">請在左側選一個角色，或按「＋ 新增」</div>
+            </div>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('roleSetMask')">關閉</button></div>
 </div></div>
 
 <!-- 使用說明 modal（鐵律7） -->
@@ -435,7 +469,77 @@ function dsSave(deptId){
     });
 }
 
-loadMeta(function(){ loadTplList('job_desc'); });
+/* ============================================================ 角色設定（Roles_API） ============================================================ */
+var RAPI = '../../src/store/Roles_API.php';
+var ROLES = [], CURROLE = 0;
+$('#btnRoleSetting').on('click', function(){ openMask('roleSetMask'); loadRoles(); });
+function loadRoles(then){
+    $.getJSON(RAPI, {action:'get_roles', module:'hr_form'}, function(res){
+        ROLES = res.data || [];
+        var h = '';
+        ROLES.forEach(function(r){
+            var sys = String(r.is_system)==='1';
+            h += '<div class="role-item'+(sys?' sys':'')+'" data-id="'+r.role_id+'">'+esc(r.role_name)+(sys?'（系統．固定全權）':'')+'</div>';
+        });
+        $('#roleList').html(h || '<div style="padding:10px;color:#8a6d45;">尚無角色</div>');
+        if (CURROLE) $('.role-item[data-id="'+CURROLE+'"]').addClass('on');
+        if (typeof then==='function') then();
+    });
+}
+function selRole(id){
+    var r = ROLES.filter(function(x){ return String(x.role_id)===String(id); })[0];
+    if (!r) return;
+    if (String(r.is_system)==='1'){ alert('系統角色「'+r.role_name+'」固定擁有全部權限，不可修改'); return; }
+    CURROLE = id;
+    $('.role-item').removeClass('on'); $('.role-item[data-id="'+id+'"]').addClass('on');
+    $('#roleEditHint').hide(); $('#roleEdit').show();
+    $('#roleName').val(r.role_name);
+    var oh = '';
+    (META.features||[]).forEach(function(f){
+        oh += '<label class="role-feat" style="display:block;font-weight:normal;padding:2px 0;font-size:12.5px;"><input type="checkbox" class="featcb" value="'+esc(f.code)+'"> '+esc(f.label)+'</label>';
+    });
+    $('#featOp').html(oh);
+    $.getJSON(RAPI, {action:'get_role_features', role_id:id}, function(res){
+        var has = res.data || [];
+        $('.featcb').each(function(){ $(this).prop('checked', has.indexOf(this.value)>-1 || has.indexOf('all')>-1); });
+    });
+}
+$(document).on('click', '#roleList .role-item', function(){ selRole($(this).data('id')); });
+$('#btnRoleAdd').on('click', function(){
+    var n = prompt('新角色名稱：');
+    if (!n || !$.trim(n)) return;
+    $.post(RAPI, {action:'save_role', role_name:$.trim(n), module:'hr_form'}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        loadRoles(function(){ selRole(r.role_id); });
+    }, 'json');
+});
+$('#btnRoleRename').on('click', function(){
+    if (!CURROLE) return;
+    var n = $.trim($('#roleName').val()||'');
+    if (!n){ alert('請輸入角色名稱'); return; }
+    $.post(RAPI, {action:'save_role', role_id:CURROLE, role_name:n}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        loadRoles(); alert('已改名');
+    }, 'json');
+});
+$('#btnRoleDel').on('click', function(){
+    if (!CURROLE) return;
+    if (!confirm('確定刪除此角色？擁有此角色的人會失去對應權限。')) return;
+    $.post(RAPI, {action:'delete_role', role_id:CURROLE}, function(r){
+        if (!r.success){ alert(r.message); return; }
+        CURROLE = 0; $('#roleEdit').hide(); $('#roleEditHint').show();
+        loadRoles();
+    }, 'json');
+});
+$('#btnRoleFeatSave').on('click', function(){
+    if (!CURROLE) return;
+    var feats = $('.featcb:checked').map(function(){ return this.value; }).get();
+    $.post(RAPI, {action:'save_role_features', role_id:CURROLE, features:JSON.stringify(feats)}, function(r){
+        alert(r.success ? '已儲存。受影響的人重新整理頁面後生效。' : r.message);
+    }, 'json');
+});
+
+loadMeta(function(){ loadTplList('job_desc'); if (META.perms.canAdmin) $('#btnRoleSetting').show(); });
 </script>
 </body>
 </html>

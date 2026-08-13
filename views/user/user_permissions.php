@@ -217,6 +217,7 @@ $rbacManagedPageIds = [
     100, // AS9100文件管理 (as_document_management)
     128, // AS流程說明手冊 (as_flow_guide)；唯讀頁，與 100 共用 module='as_doc' 角色（asdoc_view 即可檢視）
     135, 136, // 審核表單模板管理 / 審核表單 (review_form_template / review_form)；共用 module='review_form' 角色
+    141, 142, // 人資職務表單 / 人資職務表單設定 (hr_position_forms / hr_position_forms_template)；共用 module='hr_form' 角色
 ];
 $rbacManagedModuleCodes = ['bom_track', 'personal_task'];  // 模組本身直連 RBAC 頁面者
 
@@ -360,6 +361,7 @@ $_rvfRoles      = [];  $_userRvfRoles    = [];
 $_tidcRoles     = [];  $_userTidcRoles   = [];
 $_tdevRoles     = [];  $_userTdevRoles   = [];
 $_pfmeaRoles    = [];  $_userPfmeaRoles  = [];
+$_hrfRoles      = [];  $_userHrfRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -400,6 +402,7 @@ try {
     $st->execute(['type_id_ctrl']); $_tidcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['td_dev_eval']); $_tdevRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['pfmea']); $_pfmeaRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['hr_form']); $_hrfRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -543,6 +546,10 @@ try {
     $st->execute(['pfmea']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userPfmeaRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['hr_form']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userHrfRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -1147,6 +1154,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('rvf', 'review_form', '審核表單', 'fa-clipboard', '#c0782d',
                         '為每位使用者指派審核表單引擎的操作角色（檢閱、檢視全部人員表單、建立/填寫/送出、列印、模板管理）。模板管理僅供設定 AS 文件綁定/審核核准流程；項次內容維護權限則另在「審核表單模板管理」頁依維護部門/維護人員指派，不透過此處角色。角色與功能定義請至 <strong>審核表單模板管理 → 使用說明</strong>。',
                         $_rvfRoles, $_userRvfRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('hrf', 'hr_form', '人資職務表單', 'fa-id-card', '#a0662e',
+                        '為每位使用者指派人資職務表單（職務說明書／專業技能鑑定考核表／員工職能鑑定表）的操作角色（檢閱、檢視全部人員表單、建立/批次建立/複製/編輯、列印、範本管理）。確認人（該員工直屬主管）／核准人（總經理）為固定角色，不透過此處角色指派，由系統依組織架構自動解析。角色與功能定義請至 <strong>人資職務表單設定 → 使用說明</strong>。',
+                        $_hrfRoles, $_userHrfRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('drawren', 'drawing_rename', '圖面自動改檔名工具', 'fa-file-image-o', '#2c81ba',
                         '為每位使用者指派圖面自動改檔名工具的操作角色（檢閱、執行改檔名、管理資料夾與前後綴設定）。角色與功能定義請至 <strong>圖面自動改檔名工具</strong> 頁面內查看「權限說明」。',

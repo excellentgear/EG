@@ -553,7 +553,7 @@ function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int
             $formType, $targetUid, $snap['dept_id'], $snap['position_id'], $tpl['id'], $bizDate, $needSign ? 'draft' : 'active',
             $byUid, $byName,
             $snap['user_no'], $snap['user_cname'], $snap['dept_name'], $snap['position_name'], $snap['supervisor_name'], $snap['onboard_date'],
-            $whitelist['id'] ?? null, $whitelist['display_name'] ?? null, $whitelist['item_name'] ?: ($whitelist['display_name'] ?? null),
+            $whitelist['id'] ?? null, $whitelist['display_name'] ?? null, ($whitelist['item_name'] ?? null) ?: ($whitelist['display_name'] ?? null),
         ]);
     $iid = (int)$db->lastInsertId();
     if ($formType !== 'skill_assess') {
