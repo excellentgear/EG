@@ -330,6 +330,19 @@ case 'default_product_name_save':
     td_dev_eval_default_product_name_save($db, $name, $uid, $uname);
     jout(['success'=>true]);
 
+// ── 部門簽核人指定覆蓋：部門組織圖主管實務上不回覆這張表單時(如技術課由總經理兼任但不回覆此表單)，
+// 評估表管理員可指定特定人員取代該部門的自動解析主管，只影響本模組，不動全站組織角色綁定 ──
+case 'slot_overrides_get':
+    needView($perms);
+    jout(['success'=>true, 'overrides'=>td_dev_eval_slot_overrides_get($db), 'people'=>eg_people_list($db)]);
+
+case 'slot_overrides_save':
+    needAdmin($perms);
+    $map = json_decode((string)($_POST['overrides'] ?? '{}'), true);
+    if (!is_array($map)) $map = [];
+    td_dev_eval_slot_overrides_save($db, $map, $uid, $uname);
+    jout(['success'=>true, 'overrides'=>td_dev_eval_slot_overrides_get($db)]);
+
 case 'unsign':
     needAdmin($perms);
     $docId = (int)($_POST['doc_id'] ?? 0);

@@ -164,6 +164,7 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
             <button id="btnSuggest" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-lightbulb-o"></i> 建議建立料號清單<?= $suggestPending>0 ? ' <span class="te-badge-deputy" style="background:#DD5138;">'.(int)$suggestPending.'</span>' : '' ?></button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
+            <button id="btnSlotOverride" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-user-circle-o"></i> 部門簽核人設定</button>
             <button id="btnPrintAll" title="依目前搜尋結果，逐筆列印所有表單"><i class="fa fa-print"></i> 批次列印</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <span class="te-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -337,16 +338,29 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('asDocMask')">關閉</button></div>
 </div></div>
 
+<!-- 部門簽核人設定（2026-08-13使用者明確要求：部門組織圖主管實務上不回覆此表單時，可指定專屬簽核人取代自動解析） -->
+<div class="te-mask" id="slotOverrideMask"><div class="te-modal">
+    <div class="m-head"><span>部門簽核人設定</span><span class="m-close" onclick="closeMask('slotOverrideMask')">✕</span></div>
+    <div class="m-body">
+        <div class="tip">預設由「組織角色綁定設定」該部門的主管自動解析（多位主管皆可簽）。若該部門的組織圖主管實務上不會回覆<b>這張表單</b>（例如技術課無專職課長、由總經理兼任，但總經理只回覆「技術課審核」不回覆本表單），可在此指定專屬簽核人取代自動解析——只影響本模組，不會動到全站的組織角色綁定，其他表單仍照組織圖正常運作。指定的人離職後會自動退回組織圖主管自動解析。</div>
+        <div id="slotOverrideList"></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('slotOverrideMask')">取消</button>
+        <button class="b-ok" onclick="saveSlotOverrides()">儲存</button>
+    </div>
+</div></div>
+
 <!-- 角色權限說明 -->
 <div class="te-mask" id="roleHelpMask"><div class="te-modal">
     <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('roleHelpMask')">✕</span></div>
     <div class="m-body" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
         <b>評估表檢閱</b>：檢視清單、開啟查看、列印。<br>
         <b>評估表登錄</b>：檢閱＋新增/編輯（草稿階段）、送出、依部門身分填寫負責項目並簽核。<br>
-        <b>評估表管理員</b>：登錄＋刪除、AS 文件編號綁定、取消他人簽核。<br>
+        <b>評估表管理員</b>：登錄＋刪除、AS 文件編號綁定、取消他人簽核、部門簽核人設定。<br>
         <b>管理者</b>：系統管理者固定擁有全部權限。<br>
         <hr style="border-color:#EADFC8;">
-        APQP 小組簽認各部門欄位由「該部門任一主管」簽核，重用<a href="../admin/org_role_setting.php" target="_blank">組織角色綁定設定</a>頁全站既有的部門綁定（技術／業務／管理／生產／品保部門本來就設定過，資材部門為本表新增）；總經理欄沿用全站「最高核准人員」設定。<br>
+        APQP 小組簽認各部門欄位預設由「該部門任一主管」簽核，重用<a href="../admin/org_role_setting.php" target="_blank">組織角色綁定設定</a>頁全站既有的部門綁定（技術／業務／管理／生產／品保部門本來就設定過，資材部門為本表新增）；若該部門組織圖主管實務上不回覆本表單（例如某課無專職主管、由總經理兼任但只回覆別的表單），評估表管理員可在工具列「部門簽核人設定」指定專屬簽核人取代，只影響本模組。總經理欄沿用全站「最高核准人員」設定。<br>
         角色指派請洽管理者於「使用者權限設定」（<a href="../user/user_permissions.php" target="_blank">開啟</a>）→「產品開發評估表」區塊。未被指派角色者無法進入本頁。
     </div>
 </div></div>
@@ -380,7 +394,7 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
         </ul>
         <h4>設定入口</h4>
-        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。<b>部門簽核人</b>：<a href="../admin/org_role_setting.php" target="_blank">組織角色綁定設定</a>頁「一、部門綁定」，重用全站既有的技術／業務／管理／生產／品保部門綁定，資材部門若尚未設定請在該頁一併綁定。<b>總經理</b>沿用該頁「最高核准人員」設定。<b>角色指派</b>：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「產品開發評估表」區塊。</p>
+        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。<b>部門簽核人</b>：<a href="../admin/org_role_setting.php" target="_blank">組織角色綁定設定</a>頁「一、部門綁定」，重用全站既有的技術／業務／管理／生產／品保部門綁定，資材部門若尚未設定請在該頁一併綁定；若該部門的組織圖主管實務上不回覆<b>本表單</b>（例如某課由總經理兼任但只回覆別的表單），改到工具列「部門簽核人設定」指定專屬簽核人取代，只影響本模組、不動全站組織角色綁定。<b>總經理</b>沿用「組織角色綁定設定」頁「最高核准人員」設定。<b>角色指派</b>：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「產品開發評估表」區塊。</p>
         <h4>權限角色</h4>
         <p>評估表檢閱／登錄／管理員（管理者固定擁有全部權限）。</p>
     </div>
@@ -1007,6 +1021,46 @@ function openAsDocPicker(){
             }, 'json');
         }
     });
+}
+
+/* ---------- 部門簽核人設定（評估表管理員可用，2026-08-13使用者明確要求） ---------- */
+var SLOT_OVERRIDE_PEOPLE = [];
+$('#btnSlotOverride').on('click', function(){
+    $.getJSON(API, {action:'slot_overrides_get'}, function(res){
+        if (!res.success) return;
+        SLOT_OVERRIDE_PEOPLE = res.people || [];
+        renderSlotOverrideList(res.overrides || {});
+        openMask('slotOverrideMask');
+    });
+});
+function renderSlotOverrideList(overrides){
+    var html = '';
+    ['tech','sales','mgmt','prod','qa','material'].forEach(function(k){
+        var label = SLOTS[k] ? SLOTS[k][0] : k;
+        var cur = overrides[k] || '';
+        var opts = '<option value="">（自動：部門主管）</option>';
+        SLOT_OVERRIDE_PEOPLE.forEach(function(p){
+            var plabel = p.user_cname + (p.position_name?'（'+p.position_name+'）':'') + (p.dept_name?'／'+p.dept_name:'');
+            opts += '<option value="'+p.id+'"'+(String(cur)===String(p.id)?' selected':'')+'>'+esc(plabel)+'</option>';
+        });
+        html += '<div style="border:1px solid #EADFC8;border-radius:6px;padding:8px;margin-bottom:8px;">'
+            + '<b>'+esc(label)+'</b>'
+            + '<select class="slot-override-sel" data-slot="'+k+'" data-eg-filter="輸入人員姓名篩選…" style="margin-top:4px;">'+opts+'</select>'
+            + '</div>';
+    });
+    $('#slotOverrideList').html(html);
+}
+function saveSlotOverrides(){
+    var map = {};
+    $('.slot-override-sel').each(function(){
+        var v = $(this).val();
+        if (v) map[$(this).data('slot')] = v;
+    });
+    $.post(API, {action:'slot_overrides_save', overrides:JSON.stringify(map)}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        closeMask('slotOverrideMask');
+        alert('已儲存，立即生效。');
+    }, 'json');
 }
 
 $('#btnSuggest').on('click', function(){ window.location.href = 'td_dev_eval_suggest.php'; });

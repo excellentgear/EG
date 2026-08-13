@@ -286,11 +286,54 @@ function td_dev_eval_resolve_pool(PDO $db, string $roleKey): array {
     return [];
 }
 
+/**
+ * 部門簽核人指定覆蓋（2026-08-13使用者明確要求）：某些部門的組織圖主管其實是總經理兼任（例如技術課沒有
+ * 專職課長），但總經理實務上不會回覆這張表單、只回覆「技術課審核」那類表單——組織角色綁定(org_role_lib)
+ * 的部門是全站共用、不能為了這張表單去改共用綁定（會影響其他真的要total總經理簽的表單）。此處提供本模組
+ * 自己的覆蓋：管理員可為特定部門欄位指定「這張表單實際負責回覆的人」，設定了就不用該部門主管自動解析。
+ * 存 system_parameters 一個 slot_key=>user_id 的JSON物件，只允許六個部門類欄位。
+ */
+function td_dev_eval_slot_overrides_get(PDO $db): array {
+    $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='TD_DEV_EVAL' AND param_key='slot_signer_override' LIMIT 1");
+    $st->execute();
+    $v = $st->fetchColumn();
+    if ($v === false) return [];
+    $decoded = json_decode((string)$v, true);
+    return is_array($decoded) ? $decoded : [];
+}
+function td_dev_eval_slot_overrides_save(PDO $db, array $map, int $uid, string $uname): void {
+    $clean = [];
+    foreach (TD_DEV_EVAL_DEPT_SLOTS as $slotKey) {
+        if (!empty($map[$slotKey])) $clean[$slotKey] = (int)$map[$slotKey];
+    }
+    $json = json_encode($clean, JSON_UNESCAPED_UNICODE);
+    $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group='TD_DEV_EVAL' AND param_key='slot_signer_override' LIMIT 1");
+    $st->execute();
+    $id = $st->fetchColumn();
+    if ($id) {
+        $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([$json, $uid, $id]);
+    } else {
+        $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by)
+                      VALUES ('TD_DEV_EVAL','slot_signer_override',?,'產品開發評估表-部門簽核人指定覆蓋(slot_key=>user_id，不設=沿用部門主管自動解析)',?)")
+           ->execute([$json, $uid]);
+    }
+}
+
 /** 某簽核欄位目前可簽核的人員池（gm 欄回單一人：top_approver 或其代理人） */
 function td_dev_eval_slot_pool(PDO $db, string $slotKey, int $docId = 0): array {
     if (!isset(TD_DEV_EVAL_SLOTS[$slotKey])) return [];
     [$label, $roleKey, $isSingle] = TD_DEV_EVAL_SLOTS[$slotKey];
-    if (!$isSingle) return td_dev_eval_resolve_pool($db, $roleKey);
+    if (!$isSingle) {
+        $overrides = td_dev_eval_slot_overrides_get($db);
+        if (!empty($overrides[$slotKey])) {
+            $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+            $st->execute([(int)$overrides[$slotKey]]);
+            $u = $st->fetch(PDO::FETCH_ASSOC);
+            if ($u) return [['id'=>(int)$u['id'], 'user_cname'=>$u['user_cname']]];
+            // 指定的人已離職或查無此人，退回部門主管自動解析，避免這一欄變成永遠沒人能簽
+        }
+        return td_dev_eval_resolve_pool($db, $roleKey);
+    }
     $u = eg_org_user($db, $roleKey);
     if (!$u) return [];
     $resolved = eg_resolve_signer($db, (int)$u['id'], ['flow_key'=>'td_dev_eval_'.$slotKey, 'doc_id'=>$docId, 'log'=>false]);
