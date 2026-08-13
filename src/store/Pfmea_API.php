@@ -12,6 +12,7 @@ include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
 include_once $document_root . '/EGsystem/src/common/org_role_lib.php';
 include_once $document_root . '/EGsystem/src/common/pfmea_lib.php';
+include_once $document_root . '/EGsystem/src/common/pfmea_suggest_lib.php';
 
 if (!isset($_SESSION['userName'])) {
     http_response_code(403);
@@ -45,13 +46,16 @@ function buildItemView(array $it): array {
         'process_desc' => $it['process_desc'], 'function_desc' => $it['function_desc'], 'requirement' => $it['requirement'],
         'failure_mode' => $it['failure_mode'], 'failure_effect' => $it['failure_effect'],
         'severity' => $s, 'classification' => $it['classification'], 'failure_cause' => $it['failure_cause'],
-        'occurrence' => $o, 'current_controls' => $it['current_controls'], 'detection' => $d, 'rpn' => $rpn,
+        'occurrence' => $o, 'detection' => $d, 'rpn' => $rpn,
         'recommended_actions' => $it['recommended_actions'], 'responsibility' => $it['responsibility'], 'target_date' => $it['target_date'],
         'action_taken' => $it['action_taken'], 'action_date' => $it['action_date'],
         'new_severity' => $ns, 'new_occurrence' => $no, 'new_detection' => $nd, 'new_rpn' => $newRpn,
         'prevention_controls' => $it['prevention_controls'], 'detection_controls' => $it['detection_controls'],
     ];
 }
+
+/** 官方紙本表單(F-11210-UE2-0001)固定的「相關部門」勾選清單，非逐份填寫可自訂的內容 */
+const PFMEA_DEPT_LIST = ['管理課','技術課','業務組','品保組','倉管組','採購組','生管組','生產課'];
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
@@ -64,12 +68,13 @@ case 'list':
     needView($perms);
     $kw = trim((string)($_GET['kw'] ?? ''));
     $sql = "SELECT h.id, h.doc_no, h.part_d_id, COALESCE(ds.D_Setting_Id, h.part_no_text,'') AS part_no,
-                   h.team_of_work, h.created_by_name, h.created_at,
+                   COALESCE(cl.customer,'') AS customer_name, h.created_by_name, h.created_at,
                    (SELECT COUNT(*) FROM pfmea_item i WHERE i.doc_id=h.id AND i.is_deleted=0) AS item_count,
                    (SELECT MAX(i.rpn) FROM pfmea_item i WHERE i.doc_id=h.id AND i.is_deleted=0
                      AND i.severity IS NOT NULL AND i.occurrence IS NOT NULL AND i.detection IS NOT NULL) AS max_rpn
             FROM pfmea_doc h
             LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
+            LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
             WHERE h.is_deleted=0";
     $args = [];
     if ($kw !== '') {
@@ -97,8 +102,10 @@ case 'list':
 case 'get':
     needView($perms);
     $id = (int)($_GET['id'] ?? 0);
-    $st = $db->prepare("SELECT h.*, COALESCE(ds.D_Setting_Id, h.part_no_text,'') AS part_no
+    $st = $db->prepare("SELECT h.*, COALESCE(ds.D_Setting_Id, h.part_no_text,'') AS part_no,
+                                COALESCE(cl.customer,'') AS customer_name
                          FROM pfmea_doc h LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
+                         LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
                          WHERE h.id=? AND h.is_deleted=0");
     $st->execute([$id]);
     $doc = $st->fetch(PDO::FETCH_ASSOC);
@@ -113,7 +120,12 @@ case 'save':
     $id = (int)($_POST['id'] ?? 0);
     $partDId = (int)($_POST['part_d_id'] ?? 0);
     $partNoText = trim((string)($_POST['part_no_text'] ?? ''));
-    $teamOfWork = trim((string)($_POST['team_of_work'] ?? ''));
+    $itemType = ((string)($_POST['item_type'] ?? 'part')) === 'assembly' ? 'assembly' : 'part';
+    $specDesc = trim((string)($_POST['spec_desc'] ?? ''));
+    $productName = trim((string)($_POST['product_name'] ?? ''));
+    $relatedDeptsRaw = json_decode((string)($_POST['related_depts'] ?? '[]'), true);
+    if (!is_array($relatedDeptsRaw)) $relatedDeptsRaw = [];
+    $relatedDepts = implode(',', array_values(array_intersect(PFMEA_DEPT_LIST, $relatedDeptsRaw)));
     $itemsRaw = json_decode((string)($_POST['items'] ?? '[]'), true);
     if (!is_array($itemsRaw)) $itemsRaw = [];
 
@@ -123,14 +135,14 @@ case 'save':
             $st = $db->prepare("SELECT 1 FROM pfmea_doc WHERE id=? AND is_deleted=0");
             $st->execute([$id]);
             if (!$st->fetchColumn()) throw new Exception('找不到該筆或已刪除');
-            $st = $db->prepare("UPDATE pfmea_doc SET part_d_id=?, part_no_text=?, team_of_work=?,
+            $st = $db->prepare("UPDATE pfmea_doc SET part_d_id=?, part_no_text=?, item_type=?, spec_desc=?, product_name=?, related_depts=?,
                                  updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=?");
-            $st->execute([$partDId ?: null, $partNoText ?: null, $teamOfWork ?: null, $uid, $uname, $id]);
+            $st->execute([$partDId ?: null, $partNoText ?: null, $itemType, $specDesc ?: null, $productName ?: null, $relatedDepts ?: null, $uid, $uname, $id]);
         } else {
             $docNo = pfmea_next_doc_no($db);
-            $st = $db->prepare("INSERT INTO pfmea_doc (doc_no, part_d_id, part_no_text, team_of_work, created_by, created_by_name)
-                                 VALUES (?,?,?,?,?,?)");
-            $st->execute([$docNo, $partDId ?: null, $partNoText ?: null, $teamOfWork ?: null, $uid, $uname]);
+            $st = $db->prepare("INSERT INTO pfmea_doc (doc_no, part_d_id, part_no_text, item_type, spec_desc, product_name, related_depts, created_by, created_by_name)
+                                 VALUES (?,?,?,?,?,?,?,?,?)");
+            $st->execute([$docNo, $partDId ?: null, $partNoText ?: null, $itemType, $specDesc ?: null, $productName ?: null, $relatedDepts ?: null, $uid, $uname]);
             $id = (int)$db->lastInsertId();
         }
 
@@ -151,7 +163,7 @@ case 'save':
                 $failureMode ?: null, trim((string)($it['failure_effect'] ?? '')) ?: null,
                 pfmea_clamp_rating($it['severity'] ?? null), trim((string)($it['classification'] ?? '')) ?: null,
                 trim((string)($it['failure_cause'] ?? '')) ?: null, pfmea_clamp_rating($it['occurrence'] ?? null),
-                trim((string)($it['current_controls'] ?? '')) ?: null, pfmea_clamp_rating($it['detection'] ?? null),
+                pfmea_clamp_rating($it['detection'] ?? null),
                 trim((string)($it['recommended_actions'] ?? '')) ?: null, trim((string)($it['responsibility'] ?? '')) ?: null,
                 trim((string)($it['target_date'] ?? '')) ?: null,
                 trim((string)($it['action_taken'] ?? '')) ?: null, trim((string)($it['action_date'] ?? '')) ?: null,
@@ -163,7 +175,7 @@ case 'save':
             if ($rowId && isset($existing[$rowId])) {
                 $st = $db->prepare("UPDATE pfmea_item SET seq=?, process_desc=?, function_desc=?, requirement=?,
                     failure_mode=?, failure_effect=?, severity=?, classification=?, failure_cause=?, occurrence=?,
-                    current_controls=?, detection=?, recommended_actions=?, responsibility=?, target_date=?,
+                    detection=?, recommended_actions=?, responsibility=?, target_date=?,
                     action_taken=?, action_date=?, new_severity=?, new_occurrence=?, new_detection=?,
                     prevention_controls=?, detection_controls=?, updated_at=NOW()
                     WHERE id=?");
@@ -172,10 +184,10 @@ case 'save':
             } else {
                 $st = $db->prepare("INSERT INTO pfmea_item
                     (doc_id, seq, process_desc, function_desc, requirement, failure_mode, failure_effect, severity,
-                     classification, failure_cause, occurrence, current_controls, detection, recommended_actions,
+                     classification, failure_cause, occurrence, detection, recommended_actions,
                      responsibility, target_date, action_taken, action_date, new_severity, new_occurrence, new_detection,
                      prevention_controls, detection_controls)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
                 $st->execute(array_merge([$id, $seq], $vals));
             }
         }
@@ -187,6 +199,18 @@ case 'save':
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
     jout(['success'=>true,'id'=>$id]);
+
+// ── 建議建立清單（來源：已有 td_dev_eval 紀錄、還沒有 PFMEA 紀錄的料號）──────────
+case 'suggest_list':
+    needEdit($perms);
+    jout(['success'=>true,'rows'=>pfmea_suggest_candidates($db)]);
+
+case 'suggest_bulk_create':
+    needEdit($perms);
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows) || !$rows) jout(['success'=>false,'message'=>'沒有可建立的料號']);
+    $r = pfmea_suggest_bulk_create($db, $rows, $uid, $uname);
+    jout(['success'=>true,'created'=>$r['created'],'errors'=>$r['errors']]);
 
 case 'delete_header':
     needAdmin($perms);
@@ -213,8 +237,10 @@ case 'as_doc_save':
 case 'print_get':
     needView($perms);
     $id = (int)($_GET['id'] ?? 0);
-    $st = $db->prepare("SELECT h.*, COALESCE(ds.D_Setting_Id, h.part_no_text,'') AS part_no
+    $st = $db->prepare("SELECT h.*, COALESCE(ds.D_Setting_Id, h.part_no_text,'') AS part_no,
+                                COALESCE(cl.customer,'') AS customer_name
                          FROM pfmea_doc h LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
+                         LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
                          WHERE h.id=? AND h.is_deleted=0");
     $st->execute([$id]);
     $doc = $st->fetch(PDO::FETCH_ASSOC);
