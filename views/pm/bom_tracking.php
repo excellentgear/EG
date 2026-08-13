@@ -280,6 +280,7 @@ if ($has_access) {
                 <option value="customer">客戶</option>
                 <option value="sales">業務</option>
                 <option value="due_range">交期區間</option>
+                <option value="note">備註</option>
               </select>
             </div>
             <div id="ruleValueArea"></div>
@@ -358,7 +359,7 @@ if ($has_access) {
         <h4>操作步驟</h4>
         <ul>
           <li>先在上方「群組」下拉新增或選擇一個追蹤群組。</li>
-          <li>點「管理此群組」→「追蹤規則」分頁，新增規則（料號／BOM編號／客戶／業務／交期區間）。</li>
+          <li>點「管理此群組」→「追蹤規則」分頁，新增規則（料號／BOM編號／客戶／業務／交期區間／備註）。</li>
           <li>規則設好後，清單即自動列出符合條件的BOM，可用篩選列的關鍵字/狀態再縮小範圍。</li>
           <li>「通知設定」分頁可開啟整個群組的通知，或在清單每列點「通知」單獨設定該筆BOM。</li>
           <li>「分享設定」分頁可把群組分享給其他部門或人員（對方需已有BOM追蹤權限才看得到）。</li>
@@ -378,6 +379,7 @@ if ($has_access) {
           <li>轉CSV／轉PDF一律匯出符合目前篩選條件的「全部」資料，不是只匯出當頁。</li>
           <li>「BOM編號／料號關鍵字」框會同時模糊比對BOM編號與料號，輸入後自動即時篩選；框內有字時雙擊可快速清空並解除篩選。</li>
           <li>點擊清單上的BOM編號會另開分頁跳到「生管進度追蹤」頁並自動篩選該BOM。</li>
+          <li>「備註」規則比對的是「生管進度追蹤」頁每筆製程列「BOM/製程備註」欄位手動輸入的內容，只支援模糊比對（含關鍵字即符合）。</li>
           <li>按「顯示製程」可在每筆BOM下方展開該筆的製程序列（製程1→製程2→…），深色=已完工、橘色=目前製程、淺色=尚未開始；再按一次可收合。</li>
         </ul>
 
@@ -767,7 +769,7 @@ $('#btnAddCondGroup').on('click', function () {
 });
 
 function ruleTypeLabel(t) {
-    return { part: '料號', bom: 'BOM編號', customer: '客戶', sales: '業務', due_range: '交期區間' }[t] || t;
+    return { part: '料號', bom: 'BOM編號', customer: '客戶', sales: '業務', due_range: '交期區間', note: '備註' }[t] || t;
 }
 function ruleValueText(r) {
     if (r.rule_type === 'due_range') {
@@ -867,6 +869,31 @@ function renderRuleValueArea() {
             else { params.due_relative_from_days = $('#dueRelFrom').val(); params.due_relative_to_days = $('#dueRelTo').val(); }
             apiPost('save_rule', params).done(function (res) {
                 if (!res.success) { alert(res.message || '新增失敗'); return; }
+                state.page = 1; loadRules(); loadMatchedList(true);
+            });
+        });
+        return;
+    }
+
+    if (type === 'note') {
+        // 備註只支援模糊比對：比對 bom_ing.single_bet_ps，即 OreadyReply_ForPm_BaseOfTime.php
+        // 「BOM/製程備註(游標在此欄時表單不更新)」欄位手動輸入按Enter即存的那個欄位，自由文字沒有固定清單可挑選。
+        $area.html(
+            '<div class="checkbox"><label><input type="checkbox" id="noteIsExclude"> 設為排除規則（從已納入的BOM中扣除符合此條件的）</label></div>' +
+            '<label>備註關鍵字（模糊比對，含此文字即符合，比對「BOM/製程備註」欄位）</label>' +
+            '<input type="text" id="noteKeyword" class="form-control" placeholder="輸入備註關鍵字…" style="width:100%;">' +
+            '<button class="btn btn-primary btn-sm" id="btnAddNoteRule" style="margin-top:6px;">加入規則</button>'
+        );
+        $('#btnAddNoteRule').on('click', function () {
+            var kw = $('#noteKeyword').val().trim();
+            if (!kw) { alert('請輸入備註關鍵字'); return; }
+            var params = {
+                group_id: state.groupId, rule_type: 'note', match_mode: 'pattern', rule_value: kw,
+                is_exclude: $('#noteIsExclude').is(':checked') ? 1 : 0, cond_group_id: $('#newRuleCondGroup').val()
+            };
+            apiPost('save_rule', params).done(function (res) {
+                if (!res.success) { alert(res.message || '新增失敗'); return; }
+                $('#noteKeyword').val('');
                 state.page = 1; loadRules(); loadMatchedList(true);
             });
         });

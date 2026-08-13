@@ -95,6 +95,10 @@ function bt_rule_condition(array $r) {
                 JOIN customer_sales cs2 ON cs2.customer_id = ot2.Client_name_ID AND cs2.role='primary' AND cs2.is_active=1
                 WHERE ot2.Order_id = bom.o_order_id AND cs2.user_id = ?
             ))", [(int)$r['rule_value'], (int)$r['rule_value']]];
+        case 'note':
+            // 只支援模糊比對；比對 bom_ing.single_bet_ps —— 即 OreadyReply_ForPm_BaseOfTime.php
+            // 「BOM/製程備註(游標在此欄時表單不更新)」欄位手動輸入按Enter即存的那個欄位(_update_single_bet_ps.php)
+            return ["EXISTS (SELECT 1 FROM bom_ing bi_note WHERE bi_note.bom = bom.bom AND bi_note.single_bet_ps LIKE ?)", [$r['rule_value']]];
         case 'due_range':
             if ($r['due_range_type'] === 'fixed' && $r['due_from'] && $r['due_to']) {
                 return ["bom.Delivery_date BETWEEN ? AND ?", [$r['due_from'], $r['due_to']]];
@@ -389,10 +393,10 @@ switch ($action) {
         $groupId = (int)($_POST['group_id'] ?? 0);
         if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
         $ruleType = $_POST['rule_type'] ?? '';
-        if (!in_array($ruleType, ['part', 'bom', 'customer', 'sales', 'due_range'], true)) {
+        if (!in_array($ruleType, ['part', 'bom', 'customer', 'sales', 'due_range', 'note'], true)) {
             $response = ['success' => false, 'message' => '不支援的規則類型']; break;
         }
-        $matchMode = ($_POST['match_mode'] ?? '') === 'pattern' ? 'pattern' : 'exact';
+        $matchMode = ($ruleType === 'note' || ($_POST['match_mode'] ?? '') === 'pattern') ? 'pattern' : 'exact';
         $isExclude = !empty($_POST['is_exclude']) ? 1 : 0;
         $condGroupIdRaw = (int)($_POST['cond_group_id'] ?? 0);
         $condGroupId = ($isExclude || $condGroupIdRaw <= 0) ? null : $condGroupIdRaw;
