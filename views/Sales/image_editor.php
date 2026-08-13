@@ -1065,13 +1065,6 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <span class="tb-sep"></span>
     <button class="tb-btn" onclick="openCanvasModal()" title="畫布尺寸與背景設定"><i class="fa fa-crop"></i> 畫布</button>
     <button class="tb-btn" onclick="fitArtboardToContent()" title="畫布自動調整為剛好包住所有內容">適合內容</button>
-    <select id="frame-size" title="頁面框架：先選好 A4/A3＋方向，再按「縮放至框架」；不選按鈕不會自動套用">
-        <option value="A4L" selected>A4 橫式</option>
-        <option value="A4P">A4 直式</option>
-        <option value="A3L">A3 橫式</option>
-        <option value="A3P">A3 直式</option>
-    </select>
-    <button class="tb-btn" onclick="applyFrameFitFromSelect()" title="把整張圖面等比例縮放＋置中到左側選擇的框架尺寸（點選才會縮放，不會自動觸發）；可 Ctrl+Z 復原。用來讓每張圖面蓋章大小一致，不受原始圖片解析度不同影響"><i class="fa fa-object-group"></i> 縮放至框架</button>
     <span class="tb-sep"></span>
     <button class="tb-btn" onclick="openSecondWindow()" title="再開一個批圖視窗（可移到另一個螢幕；兩窗之間互貼：選取後 Ctrl+C，到另一窗按 Ctrl+Shift+V）"><i class="fa fa-clone"></i> 開新視窗</button>
     <span class="tb-sep"></span>
@@ -1312,6 +1305,13 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <button class="tb-btn" onclick="quickResize()" title="一鍵套用預設常用尺寸，整張圖面等比例縮放"><i class="fa fa-bolt"></i> 快速縮放</button>
             <span id="st-sel">未選取</span>
             <span id="st-pos"></span>
+            <select id="frame-size" title="頁面框架：先選好 A4/A3＋方向，再按「縮放至框架」；不選按鈕不會自動套用" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;">
+                <option value="A4L" selected>A4 橫式</option>
+                <option value="A4P">A4 直式</option>
+                <option value="A3L">A3 橫式</option>
+                <option value="A3P">A3 直式</option>
+            </select>
+            <button class="tb-btn" onclick="applyFrameFitFromSelect()" title="把整張圖面等比例縮放＋置中到左側選擇的框架尺寸（點選才會縮放，不會自動觸發）；可 Ctrl+Z 復原。用來讓每張圖面蓋章大小一致，不受原始圖片解析度不同影響"><i class="fa fa-object-group"></i> 縮放至框架</button>
             <span style="margin-left:auto;">Ctrl+V 貼圖｜拖檔案進來開圖｜滾輪縮放｜空白鍵拖曳平移｜Delete 刪除｜Ctrl+Z 復原</span>
         </div>
     </div>
