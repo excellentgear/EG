@@ -578,11 +578,29 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
         + 'var h=document.body.scrollHeight;'
         + 'var zr=1;'
         + 'if(h>pageH){ zr=Math.max(0.5, pageH/h); document.body.style.zoom=zr; }'
-        // 所有圖章（見 rf-stamp-noshrink 標記，stampOrName() 一律套用，不分是否勾noScale）：
-        // body 整頁縮小是為了塞進一頁，但圖章代表實體印章、物理尺寸不該因為這次印了幾筆內容而跳動，
-        // 要維持設計時的實際尺寸不被跟著縮小——反向補償縮放比例抵銷掉 body 縮放的影響
-        // （zoom 是會逐層相乘的 CSS 屬性，子元素設 1/zr 會讓最終視覺呈現剛好等於原始設計大小）。
-        + 'if(zr<1){ document.querySelectorAll(".rf-stamp-noshrink").forEach(function(el){ el.style.zoom=(1/zr); }); }'
+        // 圖章逃脫整頁縮放（2026-08-13 第三次修正，取代先前反向補償 zoom 的做法——那個做法會讓圖章「補償變回原尺寸」
+        // 之後撐大所在儲存格，使實際內容高度回超過一頁，跟原本算 zr 時的高度對不起來，導致縮放比例沒抓對、
+        // 圖章仍被殘留縮小(使用者實測回報1.4cm、修過一次仍只有1.9cm，兩次都對得上這個殘留誤差)。
+        // 正確做法：CSS zoom（不同於 transform）不會給子孫元素建立新的 containing block，所以 position:fixed
+        // 元素只要不是 body 的子孫（例如是 <html> 的另一個子節點，跟 body 平行），就完全不受 body.style.zoom 影響。
+        // 版面上原本放圖章的地方(.rf-stamp-slot)先當「佔位用隱形版型」正常參與縮放與排版；zr 定案後，
+        // 把每個佔位格「量到的目前螢幕座標」抄給一個新建的 <html> 層級 fixed 圖層裡對應位置的克隆節點，
+        // 圖章本體用它自己原本的（未被壓縮的）真實尺寸顯示——如同「先把版面縮小定案好、拍成一張底圖，
+        // 才把圖章蓋上去」，使用者原話的做法。
+        + 'if(zr<1){'
+        + 'var layer=document.createElement("div");'
+        + 'layer.id="rfStampLayer"; layer.style.cssText="position:fixed;top:0;left:0;width:0;height:0;overflow:visible;";'
+        + 'document.documentElement.appendChild(layer);'   // <html> 的子節點、body 的手足，不受 body 的 zoom 影響
+        + 'document.querySelectorAll(".rf-stamp-slot").forEach(function(slot){'
+        + 'var r=slot.getBoundingClientRect();'
+        + 'slot.style.visibility="hidden";'                 // 原位置留隱形佔位，撐住表格版面不跳動
+        + 'var clone=document.createElement("div");'
+        + 'clone.className=slot.className;'                 // 帶上 rf-stamp-defsize，否則沒模板時的 CSS 覆蓋尺寸規則選不到克隆節點
+        + 'clone.style.cssText="position:fixed;left:"+r.left+"px;top:"+r.top+"px;";'
+        + 'clone.innerHTML=slot.innerHTML;'                 // 克隆節點在 fixed 圖層裡，圖章 SVG 用自己原本設計的真實尺寸渲染
+        + 'layer.appendChild(clone);'
+        + '});'
+        + '}'
         // 頁碼只在超過一頁才顯示（ai-rules/16 第二節，比照 quotation_list_test.php 既有作法）：
         // zoom 縮放後再量一次高度，若仍超過約 92% 一頁高度才動態插入 @page 頁碼樣式，單頁文件完全不印頁碼。
         + 'setTimeout(function(){'
@@ -617,16 +635,15 @@ function rfCss(){
 }
 /* schema 有設定時，印出來的大小由模板自己的「大小(px)」決定（SVG width/height屬性本身就是那個值，不用CSS蓋）；
    schema 沒設定(退回預設回墨印/掃描章)時才用 RF_STAMP_PX 固定覆蓋，兩者互斥、不會互相蓋過。
-   2026-08-13 修正（重要）：rf-stamp-noshrink 一律套用在所有圖章、不再只限 schema.noScale＝true 的模板。
-   起因：改成94.5px後使用者實測回報印出來仍只有1.4cm，追出來是這份表單內容剛好略超過一頁，
-   egPrintWindow() 的「整頁縮小塞進一張紙」邏輯把 body 一起縮小，沒被標記noShrink的章也被拖著等比縮小
-   （94.5px 乘上該次算出的縮放比≈0.56，正好對得上1.4cm的落差）。圖章代表實體印章，物理尺寸不該因為
-   「這次剛好印了幾筆」而每次跳動，所以不分是否勾了「不可縮放」，所有圖章一律做反向補償抵銷body縮放，
-   使用者原話：「就算列印畫面有縮小，也不要縮小圖章」——這句話原本理解成只適用noScale模板，這次修正為
-   全部圖章都適用（未來若使用者要「章可以跟著整頁一起縮小」的例外情境再另外討論）。 */
+   2026-08-13 第三次修正（重要，取代先前的反向補償zoom做法）：所有圖章一律包一層 rf-stamp-slot，
+   讓 egPrintWindow() 在整頁縮放定案後，把它從版面裡「挖出來」貼到不受 body 縮放影響的 fixed 圖層，
+   用圖章自己真實設計的尺寸顯示，不因為這次印了多少內容而跳動。反向補償(el.style.zoom=1/zr)的做法已知
+   有問題：補償後圖章「變回原尺寸」會撐大所在儲存格，讓實際內容高度回超過一頁、跟原本算縮放比例時的
+   高度對不上，導致縮放比例沒抓對、圖章仍被殘留縮小（使用者兩次實測1.4cm→1.9cm都對得上這個誤差模式）。
+   詳見 egPrintWindow() 內對應註解。使用者原話：「縮小後要像圖片那樣，然後才加圖章上去顯示」。 */
 function stampOrName(name, date, isDeputy, schema){
     var html = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
-    var cls = 'rf-stamp-noshrink' + (!schema ? ' rf-stamp-defsize' : '');
+    var cls = 'rf-stamp-slot' + (!schema ? ' rf-stamp-defsize' : '');
     return '<span class="'+cls+'">'+html+'</span>';
 }
 /* 兩種圖章樣式各自綁定：逐列簽章(list_stamp) 用在項目表每列負責人簽名；製表/審核/核准(footer_stamp) 用在頁尾三欄。
