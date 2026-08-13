@@ -339,10 +339,10 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
 </div></div>
 
 <!-- 部門簽核人設定（2026-08-13使用者明確要求：部門組織圖主管實務上不回覆此表單時，可指定專屬簽核人取代自動解析） -->
-<div class="te-mask" id="slotOverrideMask"><div class="te-modal">
+<div class="te-mask" id="slotOverrideMask"><div class="te-modal xwide">
     <div class="m-head"><span>部門簽核人設定</span><span class="m-close" onclick="closeMask('slotOverrideMask')">✕</span></div>
     <div class="m-body">
-        <div class="tip">預設由「組織角色綁定設定」該部門的主管自動解析（多位主管皆可簽）。若該部門的組織圖主管實務上不會回覆<b>這張表單</b>（例如技術課無專職課長、由總經理兼任，但總經理只回覆「技術課審核」不回覆本表單），可在此指定專屬簽核人取代自動解析——只影響本模組，不會動到全站的組織角色綁定，其他表單仍照組織圖正常運作。指定的人離職後會自動退回組織圖主管自動解析。</div>
+        <div class="tip">每個部門欄位三選一：<b>自動</b>＝預設由「組織角色綁定設定」該部門的主管自動解析（多位主管皆可簽）；<b>指定人員</b>＝勾選一至多位人員皆可簽（例：技術課兩位工程師都要能簽，不限一人）；<b>主管以外皆可簽</b>＝該部門除了目前解析出的主管之外，其他成員都可以簽（例：技術課無專職課長、由總經理兼任，但總經理只回覆「技術課審核」不回覆本表單，用這個選項讓其他工程師直接簽）。只影響本模組，不會動到全站的組織角色綁定，其他表單仍照組織圖正常運作；指定人員全部離職、或排除主管後部門內沒有其他人時，會自動退回自動解析。</div>
         <div id="slotOverrideList"></div>
     </div>
     <div class="m-foot">
@@ -1023,7 +1023,8 @@ function openAsDocPicker(){
     });
 }
 
-/* ---------- 部門簽核人設定（評估表管理員可用，2026-08-13使用者明確要求） ---------- */
+/* ---------- 部門簽核人設定（評估表管理員可用，2026-08-13使用者明確要求；同日二次修正支援複選人員/排除主管模式，
+   起因技術課兩位工程師都要能簽，不是只能挑一人） ---------- */
 var SLOT_OVERRIDE_PEOPLE = [];
 $('#btnSlotOverride').on('click', function(){
     $.getJSON(API, {action:'slot_overrides_get'}, function(res){
@@ -1037,24 +1038,48 @@ function renderSlotOverrideList(overrides){
     var html = '';
     ['tech','sales','mgmt','prod','qa','material'].forEach(function(k){
         var label = SLOTS[k] ? SLOTS[k][0] : k;
-        var cur = overrides[k] || '';
-        var opts = '<option value="">（自動：部門主管）</option>';
-        SLOT_OVERRIDE_PEOPLE.forEach(function(p){
+        var ov = overrides[k] || {mode:'auto'};
+        var mode = ov.mode || 'auto';
+        var selectedIds = (ov.user_ids || []).map(String);
+        var peopleHtml = SLOT_OVERRIDE_PEOPLE.map(function(p){
             var plabel = p.user_cname + (p.position_name?'（'+p.position_name+'）':'') + (p.dept_name?'／'+p.dept_name:'');
-            opts += '<option value="'+p.id+'"'+(String(cur)===String(p.id)?' selected':'')+'>'+esc(plabel)+'</option>';
-        });
-        html += '<div style="border:1px solid #EADFC8;border-radius:6px;padding:8px;margin-bottom:8px;">'
+            return '<label class="ov-people-row" data-kw="'+esc(plabel.toUpperCase())+'" style="display:block;font-weight:normal;margin:2px 0;cursor:pointer;">'
+                + '<input type="checkbox" class="ov-people-chk" value="'+p.id+'"'+(selectedIds.indexOf(String(p.id))>=0?' checked':'')+'> '+esc(plabel)+'</label>';
+        }).join('');
+        html += '<div class="ov-slot-block" data-slot="'+k+'" style="border:1px solid #EADFC8;border-radius:6px;padding:8px;margin-bottom:8px;">'
             + '<b>'+esc(label)+'</b>'
-            + '<select class="slot-override-sel" data-slot="'+k+'" data-eg-filter="輸入人員姓名篩選…" style="margin-top:4px;">'+opts+'</select>'
-            + '</div>';
+            + '<div style="margin-top:4px;font-size:12px;">'
+            + '<label style="font-weight:normal;margin-right:10px;cursor:pointer;"><input type="radio" name="ov_mode_'+k+'" class="ov-mode-radio" value="auto"'+(mode==='auto'?' checked':'')+'> 自動（部門主管）</label>'
+            + '<label style="font-weight:normal;margin-right:10px;cursor:pointer;"><input type="radio" name="ov_mode_'+k+'" class="ov-mode-radio" value="people"'+(mode==='people'?' checked':'')+'> 指定人員（可複選）</label>'
+            + '<label style="font-weight:normal;cursor:pointer;"><input type="radio" name="ov_mode_'+k+'" class="ov-mode-radio" value="exclude_manager"'+(mode==='exclude_manager'?' checked':'')+'> 主管以外皆可簽</label>'
+            + '</div>'
+            + '<div class="ov-people-box" style="margin-top:6px;'+(mode==='people'?'':'display:none;')+'">'
+            + '<input type="text" class="ov-people-filter" placeholder="輸入人員姓名篩選…" style="width:100%;margin-bottom:4px;height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;padding:0 6px;box-sizing:border-box;">'
+            + '<div class="ov-people-list" style="max-height:140px;overflow-y:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px;">'+peopleHtml+'</div>'
+            + '</div></div>';
     });
     $('#slotOverrideList').html(html);
 }
+$(document).on('change', '.ov-mode-radio', function(){
+    $(this).closest('.ov-slot-block').find('.ov-people-box').toggle($(this).val() === 'people');
+});
+$(document).on('input', '.ov-people-filter', function(){
+    var kw = $(this).val().trim().toUpperCase();
+    $(this).closest('.ov-people-box').find('.ov-people-row').each(function(){
+        $(this).toggle(!kw || $(this).data('kw').indexOf(kw) >= 0);
+    });
+});
 function saveSlotOverrides(){
     var map = {};
-    $('.slot-override-sel').each(function(){
-        var v = $(this).val();
-        if (v) map[$(this).data('slot')] = v;
+    $('.ov-slot-block').each(function(){
+        var slot = $(this).data('slot');
+        var mode = $(this).find('.ov-mode-radio:checked').val();
+        if (mode === 'people') {
+            var ids = $(this).find('.ov-people-chk:checked').map(function(){ return $(this).val(); }).get();
+            if (ids.length) map[slot] = {mode:'people', user_ids:ids};
+        } else if (mode === 'exclude_manager') {
+            map[slot] = {mode:'exclude_manager'};
+        }
     });
     $.post(API, {action:'slot_overrides_save', overrides:JSON.stringify(map)}, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }

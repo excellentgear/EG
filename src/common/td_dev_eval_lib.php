@@ -287,11 +287,14 @@ function td_dev_eval_resolve_pool(PDO $db, string $roleKey): array {
 }
 
 /**
- * 部門簽核人指定覆蓋（2026-08-13使用者明確要求）：某些部門的組織圖主管其實是總經理兼任（例如技術課沒有
- * 專職課長），但總經理實務上不會回覆這張表單、只回覆「技術課審核」那類表單——組織角色綁定(org_role_lib)
- * 的部門是全站共用、不能為了這張表單去改共用綁定（會影響其他真的要total總經理簽的表單）。此處提供本模組
- * 自己的覆蓋：管理員可為特定部門欄位指定「這張表單實際負責回覆的人」，設定了就不用該部門主管自動解析。
- * 存 system_parameters 一個 slot_key=>user_id 的JSON物件，只允許六個部門類欄位。
+ * 部門簽核人指定覆蓋（2026-08-13使用者明確要求，同日二次修正支援複選/排除主管模式）：某些部門的組織圖
+ * 主管其實是總經理兼任（例如技術課沒有專職課長），但總經理實務上不會回覆這張表單、只回覆「技術課審核」
+ * 那類表單——組織角色綁定(org_role_lib)的部門是全站共用、不能為了這張表單去改共用綁定（會影響其他真的
+ * 要總經理簽的表單）。此處提供本模組自己的覆蓋，每個部門欄位可選三種模式：
+ *   auto（預設，不存在覆蓋設定）＝沿用部門主管自動解析（org_role_lib既有邏輯，不變）
+ *   people＝指定一至多位人員皆可簽（例：技術課兩位工程師都要能簽，不是只能挑一人）
+ *   exclude_manager＝該部門「主管以外」的其他成員皆可簽（自動解析出目前的主管、從部門人員名單中排除掉）
+ * 存 system_parameters 一個 slot_key=>{mode, user_ids} 的JSON物件，只允許六個部門類欄位。
  */
 function td_dev_eval_slot_overrides_get(PDO $db): array {
     $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='TD_DEV_EVAL' AND param_key='slot_signer_override' LIMIT 1");
@@ -304,7 +307,15 @@ function td_dev_eval_slot_overrides_get(PDO $db): array {
 function td_dev_eval_slot_overrides_save(PDO $db, array $map, int $uid, string $uname): void {
     $clean = [];
     foreach (TD_DEV_EVAL_DEPT_SLOTS as $slotKey) {
-        if (!empty($map[$slotKey])) $clean[$slotKey] = (int)$map[$slotKey];
+        $ov = $map[$slotKey] ?? null;
+        if (!is_array($ov) || empty($ov['mode'])) continue;
+        $mode = (string)$ov['mode'];
+        if ($mode === 'people') {
+            $ids = array_values(array_unique(array_filter(array_map('intval', $ov['user_ids'] ?? []))));
+            if ($ids) $clean[$slotKey] = ['mode'=>'people', 'user_ids'=>$ids];
+        } elseif ($mode === 'exclude_manager') {
+            $clean[$slotKey] = ['mode'=>'exclude_manager'];
+        }
     }
     $json = json_encode($clean, JSON_UNESCAPED_UNICODE);
     $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group='TD_DEV_EVAL' AND param_key='slot_signer_override' LIMIT 1");
@@ -314,7 +325,7 @@ function td_dev_eval_slot_overrides_save(PDO $db, array $map, int $uid, string $
         $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([$json, $uid, $id]);
     } else {
         $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by)
-                      VALUES ('TD_DEV_EVAL','slot_signer_override',?,'產品開發評估表-部門簽核人指定覆蓋(slot_key=>user_id，不設=沿用部門主管自動解析)',?)")
+                      VALUES ('TD_DEV_EVAL','slot_signer_override',?,'產品開發評估表-部門簽核人指定覆蓋(slot_key=>{mode,user_ids}，不設=沿用部門主管自動解析)',?)")
            ->execute([$json, $uid]);
     }
 }
@@ -325,12 +336,26 @@ function td_dev_eval_slot_pool(PDO $db, string $slotKey, int $docId = 0): array 
     [$label, $roleKey, $isSingle] = TD_DEV_EVAL_SLOTS[$slotKey];
     if (!$isSingle) {
         $overrides = td_dev_eval_slot_overrides_get($db);
-        if (!empty($overrides[$slotKey])) {
-            $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
-            $st->execute([(int)$overrides[$slotKey]]);
-            $u = $st->fetch(PDO::FETCH_ASSOC);
-            if ($u) return [['id'=>(int)$u['id'], 'user_cname'=>$u['user_cname']]];
-            // 指定的人已離職或查無此人，退回部門主管自動解析，避免這一欄變成永遠沒人能簽
+        $ov = $overrides[$slotKey] ?? null;
+        if (is_array($ov) && !empty($ov['mode'])) {
+            if ($ov['mode'] === 'people' && !empty($ov['user_ids'])) {
+                $ids = array_map('intval', $ov['user_ids']);
+                $in = implode(',', array_fill(0, count($ids), '?'));
+                $st = $db->prepare("SELECT id, user_cname FROM user WHERE id IN ($in) AND COALESCE(state,1) NOT IN (0,90)");
+                $st->execute($ids);
+                $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+                if ($rows) return array_map(function($u){ return ['id'=>(int)$u['id'], 'user_cname'=>$u['user_cname']]; }, $rows);
+                // 指定的人全部離職或查無此人，退回部門主管自動解析，避免這一欄變成永遠沒人能簽
+            } elseif ($ov['mode'] === 'exclude_manager') {
+                $deptIds = eg_org_dept_ids($db, $roleKey);
+                if ($deptIds) {
+                    $managerIds = array_map(function($m){ return (int)$m['id']; }, eg_org_dept_managers($db, $deptIds));
+                    $people = eg_people_list($db, ['dept_ids'=>$deptIds]);
+                    $filtered = array_values(array_filter($people, function($p) use ($managerIds){ return !in_array((int)$p['id'], $managerIds, true); }));
+                    if ($filtered) return array_map(function($p){ return ['id'=>(int)$p['id'], 'user_cname'=>$p['user_cname']]; }, $filtered);
+                    // 排除主管後部門內沒有其他人了，退回部門主管自動解析，避免這一欄變成永遠沒人能簽
+                }
+            }
         }
         return td_dev_eval_resolve_pool($db, $roleKey);
     }
