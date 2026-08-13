@@ -525,7 +525,13 @@ function rvf_notify(PDO $db, int $refId, array $toUids, string $title, string $c
     } catch (Throwable $e) { return 0; }
 }
 
+/* 2026-08-13 修正：通知標題/內文原本沒有帶模板名稱，跟同檔案其他 rvf_notify() 呼叫點（送審/核准/退回通知）不一致，
+   使用者收到的通知只看得到「單一項目」這種項目本身的內容文字，看不出是哪張表單，完全不知道要去哪裡處理
+   （使用者原話：「這個通知看不出是甚麼東西」）。改成比照其他呼叫點一律帶上「模板名稱」。 */
 function rvf_notify_item_owners(PDO $db, int $instanceId, int $fromUid): void {
+    $inst = rvf_instance_get($db, $instanceId);
+    $tpl = $inst ? rvf_template_get($db, (int)$inst['template_id']) : null;
+    $tplName = $tpl['name'] ?? '審核表單';
     $items = rvf_instance_items_get($db, $instanceId);
     foreach ($items as $it) {
         foreach ($it['subitems'] as $sub) {
@@ -540,8 +546,8 @@ function rvf_notify_item_owners(PDO $db, int $instanceId, int $fromUid): void {
                 if (!array_intersect($mgrIds, $doneUids)) $need = array_merge($need, $mgrIds);
             }
             $need = array_values(array_unique($need));
-            if ($need) rvf_notify($db, $sub['id'], $need, '有一份審核表單項目待您簽名確認',
-                '「' . ($sub['content'] ?: '(未命名項目)') . '」需要您確認並簽名。', $fromUid, 'RVF_ITEM_CONFIRM', 'reply');
+            if ($need) rvf_notify($db, $sub['id'], $need, '「' . $tplName . '」表單項目待您簽名確認',
+                '「' . $tplName . '」的「' . ($sub['content'] ?: '(未命名項目)') . '」需要您確認並簽名。', $fromUid, 'RVF_ITEM_CONFIRM', 'reply');
         }
     }
 }

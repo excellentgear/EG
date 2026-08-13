@@ -599,8 +599,9 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
 // 之前寫死 91px 沒有對照過實際外徑；此值只給「沒有指定圖章模板」時的預設回墨印/掃描章當印刷尺寸用）。
 var RF_STAMP_PX = (2.5 * 96 / 2.54).toFixed(1);
 function rfCss(){
-    return 'table.rf-p-items{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:2px;}'
-         + 'table.rf-p-items th,table.rf-p-items td{border:1px solid #333;padding:8px 9px;text-align:center;}'
+    // 2026-08-13 使用者再次回報偏擠，字級/欄位留白再加大一輪（13.5px→15.5px，padding 8px9px→10px11px）。
+    return 'table.rf-p-items{width:100%;border-collapse:collapse;font-size:15.5px;margin-top:2px;}'
+         + 'table.rf-p-items th,table.rf-p-items td{border:1px solid #333;padding:10px 11px;text-align:center;}'
          + 'table.rf-p-items td.t-left{text-align:left;}'
          + '.rf-p-datebar{text-align:right;font-size:12.5px;color:#333;margin-bottom:3px;}'
          // 只有「沒有指定圖章模板」時才強制覆蓋成推算出的實際外徑尺寸；有指定模板(rf-stamp-tpl)時一律尊重
