@@ -48,8 +48,8 @@ function buildItemView(array $it): array {
         'failure_mode' => $it['failure_mode'], 'failure_effect' => $it['failure_effect'],
         'severity' => $s, 'classification' => $it['classification'], 'failure_cause' => $it['failure_cause'],
         'occurrence' => $o, 'detection' => $d, 'rpn' => $rpn,
-        'recommended_actions' => $it['recommended_actions'], 'responsibility' => $it['responsibility'], 'target_date' => $it['target_date'],
-        'action_taken' => $it['action_taken'], 'action_date' => $it['action_date'],
+        'recommended_actions' => $it['recommended_actions'], 'target_date' => $it['target_date'],
+        'action_date' => $it['action_date'],
         'new_severity' => $ns, 'new_occurrence' => $no, 'new_detection' => $nd, 'new_rpn' => $newRpn,
         'prevention_controls' => $it['prevention_controls'], 'detection_controls' => $it['detection_controls'],
     ];
@@ -172,9 +172,9 @@ case 'save':
                 pfmea_clamp_rating($it['severity'] ?? null), trim((string)($it['classification'] ?? '')) ?: null,
                 trim((string)($it['failure_cause'] ?? '')) ?: null, pfmea_clamp_rating($it['occurrence'] ?? null),
                 pfmea_clamp_rating($it['detection'] ?? null),
-                trim((string)($it['recommended_actions'] ?? '')) ?: null, trim((string)($it['responsibility'] ?? '')) ?: null,
+                trim((string)($it['recommended_actions'] ?? '')) ?: null,
                 trim((string)($it['target_date'] ?? '')) ?: null,
-                trim((string)($it['action_taken'] ?? '')) ?: null, trim((string)($it['action_date'] ?? '')) ?: null,
+                trim((string)($it['action_date'] ?? '')) ?: null,
                 pfmea_clamp_rating($it['new_severity'] ?? null), pfmea_clamp_rating($it['new_occurrence'] ?? null), pfmea_clamp_rating($it['new_detection'] ?? null),
                 trim((string)($it['prevention_controls'] ?? '')) ?: null, trim((string)($it['detection_controls'] ?? '')) ?: null,
             ];
@@ -183,8 +183,8 @@ case 'save':
             if ($rowId && isset($existing[$rowId])) {
                 $st = $db->prepare("UPDATE pfmea_item SET seq=?, process_code=?, process_desc=?, function_desc=?, requirement=?,
                     failure_mode=?, failure_effect=?, severity=?, classification=?, failure_cause=?, occurrence=?,
-                    detection=?, recommended_actions=?, responsibility=?, target_date=?,
-                    action_taken=?, action_date=?, new_severity=?, new_occurrence=?, new_detection=?,
+                    detection=?, recommended_actions=?, target_date=?,
+                    action_date=?, new_severity=?, new_occurrence=?, new_detection=?,
                     prevention_controls=?, detection_controls=?, updated_at=NOW()
                     WHERE id=?");
                 $st->execute(array_merge([$seq], $vals, [$rowId]));
@@ -193,9 +193,9 @@ case 'save':
                 $st = $db->prepare("INSERT INTO pfmea_item
                     (doc_id, seq, process_code, process_desc, function_desc, requirement, failure_mode, failure_effect, severity,
                      classification, failure_cause, occurrence, detection, recommended_actions,
-                     responsibility, target_date, action_taken, action_date, new_severity, new_occurrence, new_detection,
+                     target_date, action_date, new_severity, new_occurrence, new_detection,
                      prevention_controls, detection_controls)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
                 $st->execute(array_merge([$id, $seq], $vals));
             }
         }
