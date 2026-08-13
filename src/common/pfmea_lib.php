@@ -115,12 +115,57 @@ function pfmea_ensure_schema(PDO $db): void {
         id INT AUTO_INCREMENT PRIMARY KEY,
         process_id INT NOT NULL,
         failure_mode VARCHAR(200) NOT NULL COMMENT '潛在失效模式',
+        item_option_id INT NULL COMMENT '2026-08-13新增：可選精確到項目層級(NULL=製程層級通用，向下相容既有148筆)',
+        function_option_id INT NULL COMMENT '2026-08-13新增：可選精確到功能層級(NULL=項目/製程層級通用)',
         sort_order INT NOT NULL DEFAULT 0,
         is_active TINYINT(1) NOT NULL DEFAULT 1,
         created_by INT NULL, created_by_name VARCHAR(50) NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         KEY idx_process (process_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-製程對應潛在失效模式清單'");
+    // 既有表(先前已建立148筆)補上這兩個新欄位，CREATE TABLE IF NOT EXISTS 對既有表不會生效
+    foreach ([
+        "ALTER TABLE pfmea_process_failure_mode ADD COLUMN item_option_id INT NULL COMMENT '2026-08-13新增：可選精確到項目層級(NULL=製程層級通用，向下相容既有148筆)' AFTER failure_mode",
+        "ALTER TABLE pfmea_process_failure_mode ADD COLUMN function_option_id INT NULL COMMENT '2026-08-13新增：可選精確到功能層級(NULL=項目/製程層級通用)' AFTER item_option_id",
+    ] as $alter) { try { $db->exec($alter); } catch (Throwable $e) {} }
+
+    // 2026-08-13 使用者要求：料號-製程-項目-功能-要求 完整階層式連動（項目→功能逐層往下），
+    // 潛在失效模式改為優先套用功能層級清單、無則退回項目層級、再無則退回製程層級(上面那張表)。
+    // 要求(requirement)因為要依綁定的料號而不同，另立一張表，可選綁特定料號、留空=該功能通用預設值。
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_item_option (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        process_id INT NOT NULL,
+        item_name VARCHAR(150) NOT NULL COMMENT '項目',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_process (process_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-製程對應項目清單'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_function_option (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        item_option_id INT NOT NULL,
+        function_desc VARCHAR(200) NOT NULL COMMENT '功能',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_item (item_option_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-項目對應功能清單'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_requirement_option (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        function_option_id INT NOT NULL,
+        part_d_id INT NULL COMMENT '綁特定料號時填此;留空且part_no_text也空=此功能通用預設值',
+        part_no_text VARCHAR(100) NULL COMMENT '無d_setting主鍵的手動輸入料號才用這欄',
+        requirement_text VARCHAR(300) NOT NULL COMMENT '要求',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_func (function_option_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-功能+料號對應要求清單'");
 
     $db->exec("CREATE TABLE IF NOT EXISTS pfmea_control_option (
         id INT AUTO_INCREMENT PRIMARY KEY,
