@@ -207,6 +207,8 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             // 供應商稽核計劃待核准／結果：直接導到管理頁的「供應商稽核計劃」分頁，待核准且本人有權核准時自動跳出核准/退回跳窗
             if (e.ref_type === 'VENDOR_AUDIT_PLAN'){ location.href = '../pm/vendor_audit.php?plan_approve=' + (e.ref_id || 0); return; }
             if (e.ref_type === 'VENDOR_AUDIT_PLAN_RESULT'){ location.href = '../pm/vendor_audit.php?plan_year=' + (e.ref_id || 0); return; }
+            // 領料單通知：直接導到庫存頁並展開該筆
+            if (e.ref_type === 'STOCK_REQ'){ location.href = '../pages/stock.php?req=' + (e.ref_id || 0); return; }
             h += '<div class="d-title">' + esc(e.title) + '</div>';
             var meta = [];
             if (e.source) meta.push('來源：' + esc(e.source));
