@@ -1405,12 +1405,13 @@ case 'ojt_score_unlock': {
 case 'save_attendees': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $sid = (int)($_POST['session_id'] ?? 0);
-    $st = $db->prepare("SELECT eval_method, status FROM training_session WHERE session_id=?");
+    $st = $db->prepare("SELECT eval_method, status, train_type FROM training_session WHERE session_id=?");
     $st->execute([$sid]);
     $sRow = $st->fetch(PDO::FETCH_ASSOC);
     if (!$sRow) jerr('找不到場次');
     training_require_unlock($db, $uid, ($sRow['status'] ?? '') === 'done', (string)($_POST['unlock_password'] ?? ''), '此場次的實行資料');
     $isNotice = ($sRow['eval_method'] ?? '') === 'notice';    // 宣導＝免評鑑
+    $isExternal = ($sRow['train_type'] ?? '') === 'external'; // 外訓沒有簽到表/現場簽到，實到即視同簽到（不採信前端送來的signed，一律用attended重算，防止繞過前端直打API送舊值）
     $list = json_decode((string)($_POST['attendees'] ?? '[]'), true);
     if (!is_array($list)) $list = [];
     try {
@@ -1436,10 +1437,19 @@ case 'save_attendees': {
             $sc = ($p['eval_score'] ?? '') === '' || $p['eval_score'] === null ? null : (float)$p['eval_score'];
             if ($sc !== null && ($sc < 0 || $sc > 100)) jerr('評分需在 0~100 之間（'.trim((string)($p['user_name'] ?? '')).'）');
             $lic = (int)($p['license'] ?? 0) === 1 ? 1 : 0;   // 證照：內訓固定無(前端不會送1)，外訓由登錄人員勾選
+            if ($isExternal) {
+                $signed = $attended;
+                $signMethod = $attended ? 'ext_attend' : null;
+                $signedAt = $attended ? ($o['signed_at'] ?? date('Y-m-d H:i:s')) : null;
+            } else {
+                $signed = $o ? (int)$o['signed'] : 0;
+                $signMethod = $o ? $o['sign_method'] : null;
+                $signedAt = $o ? $o['signed_at'] : null;
+            }
             $ins->execute([$sid, $uidP, trim((string)($p['user_name'] ?? '')) ?: null,
                 trim((string)($p['dept_name'] ?? '')) ?: null,
                 trim((string)($p['position_name'] ?? '')) ?: null, $attended,
-                $o ? (int)$o['signed'] : 0, $o ? $o['signed_at'] : null, $o ? $o['sign_method'] : null,
+                $signed, $signedAt, $signMethod,
                 $ev === '' ? null : $ev, $sc, trim((string)($p['eval_note'] ?? '')) ?: null, $lic]);
             $total++; if ($attended) $att++;
         }
@@ -1531,9 +1541,16 @@ case 'copy_session': {
 case 'delete_session': {
     if (!$perms['canAdmin']) jerr('無刪除權限', 403);
     $sid = (int)($_POST['session_id'] ?? 0);
-    $st = $db->prepare("SELECT 1 FROM training_session WHERE session_id=?");
+    $st = $db->prepare("SELECT status FROM training_session WHERE session_id=?");
     $st->execute([$sid]);
-    if (!$st->fetchColumn()) jerr('找不到場次');
+    $delStatus = $st->fetchColumn();
+    if ($delStatus === false) jerr('找不到場次');
+    // 已完成的場次多一道防護：要輸入操作確認密碼才能刪，且錯3次鎖定此功能7天（使用者明確要求，
+    // 起因避免有心人士對已完成的正式訓練紀錄一直亂猜密碼硬刪）；計畫中/已排定不受影響，維持原本前端雙重Y確認即可。
+    if ($delStatus === 'done') {
+        $pwChk = eg_confirm_password_verify_scoped($db, $uid, (string)($_POST['confirm_password'] ?? ''), 'training_delete_session');
+        if (!$pwChk['ok']) jerr($pwChk['msg'], 403);
+    }
     // 附件實體檔先收集，DB 刪成功後才刪檔（避免交易失敗卻已刪檔）
     $attFiles = array_map(fn($a) => $a['file_name'], training_attachments($db, $sid));
     try {

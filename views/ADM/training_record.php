@@ -1465,8 +1465,10 @@ var EX_UNLOCKED = false, EX_UNLOCK_PWD = '';
 function exLocked(){ return !!(EXROW && EXROW.status==='done' && !EX_UNLOCKED); }
 function applyExLock(){
     var locked = exLocked();
+    // .ev-score-in（評鑑分數欄）排除在外：它的 disabled 狀態要看評鑑方式是不是繳交制(scoreOff)，
+    // 不能被這裡的整組解鎖/鎖定蓋掉——renderAtt() 最後會自己補上正確狀態（見該函式尾端）。
     $('#exMask .m-body input, #exMask .m-body select, #exMask .m-body textarea, #exMask .m-body button')
-        .not('#attachSec, #attachSec *').not('.ex-unlock-exempt')
+        .not('#attachSec, #attachSec *').not('.ex-unlock-exempt').not('.ev-score-in')
         .prop('disabled', locked);
     $('#exSave,#exFinish').toggle(!locked);
     $('#exUnlockBtn').toggle(locked && !!META.confirm_pw_allowed);
@@ -1569,6 +1571,8 @@ function openExBody(sid){
         if (res.ok) ATT = res.attendees.map(function(a){ return {att_id:+a.att_id, user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name,
             position_name:a.position_name||'', attended:+a.attended, signed:+a.signed, signed_at:a.signed_at||'', sign_method:a.sign_method||'',
             eval_result:a.eval_result||'', eval_score:(a.eval_score==null?'':numTrim(a.eval_score)), eval_note:a.eval_note||'', license:+a.license||0}; });
+        // 外訓沒有簽到概念，實到就直接視同簽到（含載入舊資料時一併修正，避免舊資料 attended=1 但 signed=0 卡住登錄完成）
+        if (res.ok && r.train_type==='external') ATT.forEach(function(a){ a.signed = a.attended; });
         if (res.ok) DAY_SIGNS = daySignMap(res.day_signs);
         // 講師不算參加人員（是上課的人，不是受訓的人）→ 名單內若有講師一律剔除
         var cut = [];
@@ -1900,21 +1904,29 @@ function renderAtt(){
         var licCell = ext
             ? '<input type="checkbox" '+(+a.license?'checked':'')+' onchange="ATT['+i+'].license=this.checked?1:0;">'
             : '無';
+        // 外訓沒有簽到表/現場簽到這件事，勾「實到」就直接視同簽到，不需要另外登記紙本簽到（使用者明確要求）
+        var attOnchange = 'ATT['+i+'].attended=this.checked?1:0;'
+            + (ext ? 'ATT['+i+'].signed=this.checked?1:0;ATT['+i+'].sign_method=this.checked?\'ext_attend\':\'\';' : '')
+            + 'attCount()';
+        var signCell = ext
+            ? (a.attended ? '<span style="color:#8A5A2B;">實到即完成</span>' : '<span style="color:#c4b79c;">—</span>')
+            : signCellHtml(a, i, locked);
         h+='<tr><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'—')+'</td>'
           +'<td class="t-left">'+esc(a.user_name||'')+'</td>'
-          +'<td><input type="checkbox" '+(a.attended?'checked':'')+' onchange="ATT['+i+'].attended=this.checked?1:0;attCount()"></td>'
+          +'<td><input type="checkbox" '+(a.attended?'checked':'')+' onchange="'+attOnchange+'"></td>'
           +'<td>'+sel+'</td>'
-          +'<td><input type="number" step="any" min="0" max="100" style="width:52px;" value="'+esc(a.eval_score==null?'':a.eval_score)
+          +'<td><input type="number" class="ev-score-in" step="any" min="0" max="100" style="width:52px;" value="'+esc(a.eval_score==null?'':a.eval_score)
           +'" onchange="ATT['+i+'].eval_score=this.value;attCount()"'+(scoreOff?' disabled':'')+'></td>'
           +'<td><input type="text" maxlength="100" style="width:112px;" value="'+esc(a.eval_note||'')
           +'" onchange="ATT['+i+'].eval_note=this.value"></td>'
           +'<td style="text-align:center;">'+licCell+'</td>'
-          +'<td>'+signCellHtml(a, i, locked)+'</td>'
+          +'<td>'+signCell+'</td>'
           +'<td>'+(locked?'':'<span class="att-del" onclick="attDel('+i+')"><i class="fa fa-times"></i></span>')+'</td></tr>';
     });
     $('#attBody').html(h||'<tr><td colspan="10" style="color:#8a6d45;padding:8px;">尚未加入人員</td></tr>');
     attCount();
     applyExLock();   // 重繪後新產生的 input 要重新套用鎖定狀態
+    $('#attBody .ev-score-in').prop('disabled', scoreOff || locked);   // applyExLock() 排除了這欄，這裡補上正確的反灰狀態
 }
 function attCount(){
     var a=ATT.filter(function(x){return x.attended;}).length;
@@ -2570,7 +2582,9 @@ function submitEx(markDone){
     if (!dayValidate()){ alert('上課日期有錯誤，請先修正：\n'+DAY_ERR); return; }
     if (!ATT.length && !confirm('尚未加入任何參加人員，仍要儲存？')) return;
     if (markDone && !ATT.some(function(a){ return a.signed; })){
-        alert('登錄完成前，至少需要一位參加人員完成簽到（線上或紙本皆可，請至「參加人員」名單的「簽名」欄登記）。');
+        var extNow = !!(EXROW && EXROW.train_type==='external');
+        alert(extNow ? '登錄完成前，至少需要一位參加人員勾選「實到」。'
+                     : '登錄完成前，至少需要一位參加人員完成簽到（線上或紙本皆可，請至「參加人員」名單的「簽名」欄登記）。');
         return;
     }
     if (markDone && !confirm('確定此場訓練已上完課？登錄完成後將計入當月教育訓練達成率，未簽到的人員會自動視為未到。')) return;
@@ -3299,19 +3313,29 @@ $('#btnCardAsDocPick').on('click', function(){
         }});
 });
 
+/* 狀態＝已完成的場次多一道防護：要輸入操作確認密碼才能刪（錯3次鎖定此功能7天，見後端 confirm_password_lib.php
+   的 eg_confirm_password_verify_scoped()），使用者明確要求避免有心人士對已完成的正式訓練紀錄亂猜密碼硬刪；
+   計畫中/已排定維持原本雙重輸入大寫 Y 確認即可，風險較低不需要密碼。 */
 function delSession(sid){
     var r = ROWS.find(function(x){ return String(x.session_id)===String(sid); }) || {};
     var name = r.course_name || '此場次';
-    var a1 = prompt('【刪除確認 1/2】將永久刪除訓練場次「'+name+'」，連同上課日期、參加人員名單與評鑑結果、'
-        + (r.attach_count>0 ? '以及 '+r.attach_count+' 個附件（實體檔一併刪除）' : '所有附件')
-        + '，且無法復原。\n\n確定要刪除請輸入大寫 Y：');
+    var attTxt = r.attach_count>0 ? '以及 '+r.attach_count+' 個附件（實體檔一併刪除）' : '所有附件';
+    function doDelete(pwd){
+        $.post(API, {action:'delete_session', session_id:sid, confirm_password:pwd||''}, function(res){
+            if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+            loadList(); alert('已刪除「'+name+'」（含附件）。');
+        }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    }
+    if (r.status==='done'){
+        if (!confirm('將永久刪除已完成的訓練場次「'+name+'」，連同上課日期、參加人員名單與評鑑結果、'+attTxt+'，且無法復原。\n\n確定要繼續嗎？')) return;
+        askSuperPwd('刪除已完成場次「'+name+'」需要操作確認密碼（本頁權限須為訓練管理員，且需具備操作確認密碼使用資格；連續錯誤 3 次將鎖定此功能 7 天）：', doDelete);
+        return;
+    }
+    var a1 = prompt('【刪除確認 1/2】將永久刪除訓練場次「'+name+'」，連同上課日期、參加人員名單與評鑑結果、'+attTxt+'，且無法復原。\n\n確定要刪除請輸入大寫 Y：');
     if (a1 !== 'Y'){ if (a1!==null) alert('未輸入大寫 Y，已取消刪除。'); return; }
     var a2 = prompt('【刪除確認 2/2】再確認一次：真的要刪除「'+name+'」嗎？\n\n請再輸入一次大寫 Y：');
     if (a2 !== 'Y'){ if (a2!==null) alert('未輸入大寫 Y，已取消刪除。'); return; }
-    $.post(API, {action:'delete_session', session_id:sid}, function(res){
-        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
-        loadList(); alert('已刪除「'+name+'」（含附件）。');
-    }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+    doDelete('');
 }
 
 /* ---------- 檢視（唯讀）＋列印簽到表／考核表 ---------- */

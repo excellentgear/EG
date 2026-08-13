@@ -151,14 +151,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['revokeConfirmPw']) &&
     }
 }
 
+// --- 超級管理員：手動提前解鎖（教育訓練刪除已完成場次等，用途錯3次密碼會鎖7天，見 confirm_password_lib.php） ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['unlockConfirmPw']) && $isSuperadmin) {
+    $targetUid = (int)($_POST['target_uid'] ?? 0);
+    $actionKey = (string)($_POST['action_key'] ?? '');
+    if ($targetUid > 0 && $actionKey !== '') {
+        eg_confirm_password_lockout_clear($conn_pdo, $targetUid, $actionKey);
+        $grantMsg = '已提前解鎖';
+        $grantMsgType = 'success';
+        try {
+            $conn_pdo->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
+                                VALUES ('views/user/user.php', '提前解鎖操作確認密碼鎖定', ?, NOW(), ?)")
+                     ->execute(['超級管理員解鎖 user_id=' . $targetUid . ' 用途=' . $actionKey, 'User']);
+        } catch (Exception $e) {}
+    }
+}
+
 // 超級管理員的授權名單管理需要候選人清單＋目前已授權者。
 // 候選人不限「管理員角色」——超級管理員應該可以直接打姓名篩選、指定任何在職人員，人數也不限制；
 // 名單一律走共用的 people_lib.php（ai-rules/08 第五節人員列表鐵則，禁止各頁自己拼人員 SQL）。
 $grantCandidates = [];
 $grantedList = [];
+$lockoutList = [];
 if ($isSuperadmin) {
     require_once '../../src/common/people_lib.php';
     $grantedList = eg_confirm_password_grant_list($conn_pdo);
+    $lockoutList = eg_confirm_password_lockout_list($conn_pdo);
     try {
         $grantCandidates = array_values(array_filter(
             eg_people_list($conn_pdo, ['multi_dept' => true]),
@@ -364,6 +382,42 @@ if ($isSuperadmin) {
                                         </button>
                                     </form>
                                     <p class="text-muted" style="margin-top:6px;">候選名單為全公司在職人員（可直接打姓名篩選），不限「管理員」角色；授權人數沒有上限。</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6 col-md-offset-3 col-sm-12 col-xs-12">
+                            <div class="x_panel">
+                                <div class="x_title">
+                                    <h2><i class="fa fa-lock" style="margin-right:7px;"></i>操作確認密碼鎖定名單</h2>
+                                    <div class="clearfix"></div>
+                                </div>
+                                <div class="x_content">
+                                    <p class="text-muted">某項功能的操作確認密碼連續錯誤達次數上限會自動鎖定該功能 7 天（例如教育訓練刪除已完成場次），到期會自動解除；此處可提前手動解鎖。</p>
+                                    <table class="table table-striped">
+                                        <thead><tr><th>人員</th><th>被鎖定的功能</th><th>已錯誤次數</th><th>鎖定至</th><th></th></tr></thead>
+                                        <tbody>
+                                        <?php if (!$lockoutList): ?>
+                                            <tr><td colspan="5" class="text-muted">目前沒有任何人被鎖定</td></tr>
+                                        <?php else: foreach ($lockoutList as $lk): ?>
+                                            <tr>
+                                                <td><?= htmlspecialchars($lk['user_cname']) ?></td>
+                                                <td><?= htmlspecialchars($lk['action_key']) ?></td>
+                                                <td><?= (int)$lk['fail_count'] ?></td>
+                                                <td class="text-danger"><?= htmlspecialchars(substr((string)$lk['locked_until'],0,16)) ?></td>
+                                                <td>
+                                                    <form method="POST" action="user.php" style="display:inline;" onsubmit="return confirm('確定要提前解鎖此人的這項功能嗎？');">
+                                                        <input type="hidden" name="target_uid" value="<?= (int)$lk['user_id'] ?>">
+                                                        <input type="hidden" name="action_key" value="<?= htmlspecialchars($lk['action_key']) ?>">
+                                                        <button type="submit" name="unlockConfirmPw" class="btn btn-xs btn-warning">提前解鎖</button>
+                                                    </form>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; endif; ?>
+                                        </tbody>
+                                    </table>
                                 </div>
                             </div>
                         </div>

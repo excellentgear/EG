@@ -30,6 +30,19 @@ if (!function_exists('eg_confirm_password_ensure_schema')) {
                 granted_at DATETIME NULL,
                 password_updated_at DATETIME NULL
             ) DEFAULT CHARSET=utf8mb4 COMMENT='操作確認密碼授權名單與雜湊(與登入密碼分開存放)'");
+            // 2026-08-13 使用者明確要求（起因：教育訓練刪除已完成場次要多一道密碼防護，並要能擋暴力猜密碼）：
+            // 按「用途」(action_key) 分開計數鎖定，不是整組操作確認密碼一起鎖——猜錯某一項功能的密碼
+            // 不該連帶讓這個人在其他也走操作確認密碼的功能一起被鎖住。同一支表供全站其他模組比照使用，
+            // 不要各自另外刻一份鎖定邏輯。
+            $db->exec("CREATE TABLE IF NOT EXISTS confirm_password_lockout (
+                user_id INT NOT NULL,
+                action_key VARCHAR(50) NOT NULL COMMENT '用途代碼，例如 training_delete_session',
+                fail_count INT NOT NULL DEFAULT 0,
+                locked_until DATETIME NULL COMMENT '鎖定到期時間，NULL=未鎖定；過了此時間視同未鎖定',
+                last_fail_at DATETIME NULL,
+                updated_at DATETIME NULL,
+                PRIMARY KEY (user_id, action_key)
+            ) DEFAULT CHARSET=utf8mb4 COMMENT='操作確認密碼錯誤次數與鎖定狀態(按用途分開計)'");
         } catch (Throwable $e) {}
     }
 }
@@ -128,5 +141,84 @@ if (!function_exists('eg_confirm_password_verify')) {
             }
             return ['ok'=>false, 'msg'=>'您尚未設定操作確認密碼，請先到「修改個人密碼」頁設定'];
         } catch (Throwable $e) { return ['ok'=>false, 'msg'=>'密碼驗證失敗']; }
+    }
+}
+
+if (!defined('EG_CONFIRM_PW_MAX_FAIL')) define('EG_CONFIRM_PW_MAX_FAIL', 3);       // 連續錯幾次才鎖定
+if (!defined('EG_CONFIRM_PW_LOCK_DAYS')) define('EG_CONFIRM_PW_LOCK_DAYS', 7);     // 鎖定天數（到期自動解除）
+
+if (!function_exists('eg_confirm_password_lockout_status')) {
+    /** 這個人這項用途目前是否被鎖定：['locked'=>bool, 'until'=>?string, 'fail_count'=>int]（鎖定時間已過會自動視為未鎖定，不必額外清列） */
+    function eg_confirm_password_lockout_status(PDO $db, int $uid, string $actionKey): array {
+        try {
+            eg_confirm_password_ensure_schema($db);
+            $st = $db->prepare("SELECT fail_count, locked_until FROM confirm_password_lockout WHERE user_id=? AND action_key=?");
+            $st->execute([$uid, $actionKey]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$r) return ['locked'=>false, 'until'=>null, 'fail_count'=>0];
+            $locked = $r['locked_until'] !== null && $r['locked_until'] > date('Y-m-d H:i:s');
+            return ['locked'=>$locked, 'until'=>$locked ? $r['locked_until'] : null, 'fail_count'=>(int)$r['fail_count']];
+        } catch (Throwable $e) { return ['locked'=>false, 'until'=>null, 'fail_count'=>0]; }
+    }
+}
+
+if (!function_exists('eg_confirm_password_verify_scoped')) {
+    /**
+     * 帶「錯N次鎖定」防暴力猜密碼的操作確認密碼驗證，按 $actionKey 分開計數與鎖定
+     * （見 ai-rules 教育訓練模組刪除已完成場次的用法）。
+     * 鎖定期間直接拒絕（不消耗嘗試次數、也不再呼叫 eg_confirm_password_verify()）；
+     * 驗證失敗才計入次數，達 EG_CONFIRM_PW_MAX_FAIL 次鎖定 EG_CONFIRM_PW_LOCK_DAYS 天；成功則歸零。
+     * 回傳在 eg_confirm_password_verify() 原本的 ['ok','msg'] 之外，失敗時多帶 'locked'=>bool 供前端判斷要不要顯示解鎖提示。
+     */
+    function eg_confirm_password_verify_scoped(PDO $db, int $uid, string $password, string $actionKey): array {
+        eg_confirm_password_ensure_schema($db);
+        $lock = eg_confirm_password_lockout_status($db, $uid, $actionKey);
+        if ($lock['locked']) {
+            return ['ok'=>false, 'locked'=>true,
+                     'msg'=>'密碼已連續錯誤達上限，此功能已鎖定至 '.substr((string)$lock['until'],0,16).'（可洽超級管理員協助提前解鎖）'];
+        }
+        $r = eg_confirm_password_verify($db, $uid, $password);
+        if ($r['ok']) {
+            $db->prepare("DELETE FROM confirm_password_lockout WHERE user_id=? AND action_key=?")->execute([$uid, $actionKey]);
+            return $r + ['locked'=>false];
+        }
+        // 「您沒有使用權限」「尚未設定密碼」這類非密碼錯誤，不算一次錯誤嘗試（本來就不該用猜的方式解決）
+        if ($r['msg'] === '密碼錯誤') {
+            $fail = $lock['fail_count'] + 1;
+            $lockedUntil = $fail >= EG_CONFIRM_PW_MAX_FAIL ? date('Y-m-d H:i:s', time() + EG_CONFIRM_PW_LOCK_DAYS*86400) : null;
+            $db->prepare("INSERT INTO confirm_password_lockout (user_id, action_key, fail_count, locked_until, last_fail_at, updated_at)
+                          VALUES (?,?,?,?,NOW(),NOW())
+                          ON DUPLICATE KEY UPDATE fail_count=VALUES(fail_count), locked_until=VALUES(locked_until),
+                              last_fail_at=NOW(), updated_at=NOW()")
+               ->execute([$uid, $actionKey, $fail, $lockedUntil]);
+            if ($lockedUntil) {
+                return ['ok'=>false, 'locked'=>true,
+                         'msg'=>'密碼已連續錯誤 '.$fail.' 次，此功能已鎖定至 '.substr($lockedUntil,0,16).'（可洽超級管理員協助提前解鎖）'];
+            }
+            return ['ok'=>false, 'locked'=>false, 'msg'=>'密碼錯誤（還可嘗試 '.(EG_CONFIRM_PW_MAX_FAIL-$fail).' 次，錯誤達 '.EG_CONFIRM_PW_MAX_FAIL.' 次將鎖定 '.EG_CONFIRM_PW_LOCK_DAYS.' 天）'];
+        }
+        return $r + ['locked'=>false];
+    }
+}
+
+if (!function_exists('eg_confirm_password_lockout_clear')) {
+    /** 超級管理員手動提前解鎖（僅限被鎖定當事人所屬的呼叫端自行判斷是否具超級管理員身分再呼叫本函式，本函式不重複驗證權限） */
+    function eg_confirm_password_lockout_clear(PDO $db, int $uid, string $actionKey): void {
+        eg_confirm_password_ensure_schema($db);
+        $db->prepare("DELETE FROM confirm_password_lockout WHERE user_id=? AND action_key=?")->execute([$uid, $actionKey]);
+    }
+}
+
+if (!function_exists('eg_confirm_password_lockout_list')) {
+    /** 目前仍鎖定中的名單（供管理畫面顯示＋解鎖用），已過期的不列入 */
+    function eg_confirm_password_lockout_list(PDO $db): array {
+        try {
+            eg_confirm_password_ensure_schema($db);
+            $st = $db->query("SELECT l.user_id, u.user_cname, l.action_key, l.fail_count, l.locked_until
+                              FROM confirm_password_lockout l JOIN user u ON u.id=l.user_id
+                              WHERE l.locked_until IS NOT NULL AND l.locked_until > NOW()
+                              ORDER BY l.locked_until DESC");
+            return $st->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { return []; }
     }
 }
