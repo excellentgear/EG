@@ -316,7 +316,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <span class="tab" data-tab="apply">教育訓練需求申請
                 <span id="reqTabBadge" style="display:none;background:#DD5138;color:#fff;border-radius:9px;
                     padding:1px 6px;font-size:11px;margin-left:4px;" title="已核准但尚未轉為計畫"></span></span>
-            <span class="tab" data-tab="card">員工教育訓練紀錄卡（2-MM-01-08）</span>
+            <span class="tab" data-tab="card">員工教育訓練紀錄卡</span>
         </div>
 
 <div id="paneList">
@@ -384,8 +384,9 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <input type="text" id="cardKwSel" placeholder="搜尋姓名" style="width:130px;">
             <button id="btnCardBatchPrint"><i class="fa fa-print"></i> 批次列印所選</button>
             <span id="cardSelCount" style="font-size:12px;color:#8a6d45;"></span>
-            <span style="font-size:12px;color:#8a6d45;margin-left:auto;">2-MM-01-08 員工教育訓練紀錄卡：依「已實際到課」的紀錄即時彙整，不落地存快照，訓練資料異動立即反映。</span>
+            <span style="font-size:12px;color:#8a6d45;margin-left:auto;">員工教育訓練紀錄卡：依「已實際到課」的紀錄即時彙整，不落地存快照，訓練資料異動立即反映。</span>
         </div>
+        <div class="tr-pager" id="cardPager" style="margin-bottom:4px;"></div>
         <div class="tr-table-wrap">
             <table class="tr-table" id="cardTable">
                 <thead><tr>
@@ -395,7 +396,6 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <tbody id="cardBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
-        <div class="tr-pager" id="cardPager" style="margin-top:6px;"></div>
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
             每列「列印」＝單獨印出該員工的教育訓練紀錄卡（可能不只一頁，跨頁時課程資訊表頭會自動重複）；
             勾選多人後按「批次列印所選」＝依序自動開啟每位員工各自的列印視窗（各自獨立計算頁碼，<b>不會把不同員工的頁次連在一起算</b>），
@@ -760,12 +760,12 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <div class="tr-hint" style="margin-top:6px;">綁定的是 AS 文件<b>本身（存 id）</b>，列印時才解出編號印在<b>頁尾右下角</b>；
                 文件改編號不必回來改設定。未對應＝該表不印文件編號（見 <b>ai-rules/16 列印文件標準</b>）。</div>
 
-            <label>員工教育訓練紀錄卡（2-MM-01-08）— AS 文件編號</label>
+            <label>員工教育訓練紀錄卡 — AS 文件編號</label>
             <div style="display:flex;gap:6px;">
-                <input id="cardAsDocView" class="form-control" readonly disabled style="height:30px;background:#eee;color:#888;cursor:not-allowed;">
-                <button type="button" id="btnCardAsDocPick"><i class="fa fa-link"></i> 綁定…</button>
+                <input id="cardAsDocView" type="text" readonly disabled style="flex:1;height:30px;background:#eee;color:#888;cursor:not-allowed;">
+                <button type="button" id="btnCardAsDocPick" style="flex:none;white-space:nowrap;"><i class="fa fa-link"></i> 綁定…</button>
             </div>
-            <div class="tr-hint" style="margin-top:6px;">選好即時生效（不必按下面「儲存」）。這份文件用共用選擇器直接打編號篩選（ai-rules/16 第一之三節），跟上面五個舊式下拉是不同做法。</div>
+            <div class="tr-hint" style="margin-top:6px;">跟上面一樣要按下面「儲存設定」才會存檔；差別只在挑選方式改用打編號即時篩選的共用選擇器（ai-rules/16 第一之三節），文件已有 163 份，純下拉不好找。</div>
 
             <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
             <label>簽到表／訓練紀錄等「參加人員本人簽名」自動產生的圖章樣式</label>
@@ -975,7 +975,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         <b>⑤教育訓練需求申請單</b>（2-MM-01-05）：「需求申請」分頁可新增申請單（草稿）、儲存並送出（申請單位主管核准，或模組設定免簽核自動核准），
         訓練管理員將已核准的申請按「轉為計畫」帶入①的新增計畫視窗確認後存檔即完成轉換。<br>
         <b>⑥現場簽到</b>：場次為「已排定」時，清單上會出現「現場簽到」按鈕，開啟後不需要編輯權限，共用一台裝置給學員自己選姓名、輸入<b>本人密碼</b>按 Enter 完成電子簽到（密碼只驗證是不是本人，不是密碼反查身分）。「已完成」的場次不再開放簽到，需先在「實行資料」按「退回已排定」（操作確認密碼）才能重新開放。<br>
-        <b>⑦員工教育訓練紀錄卡</b>（2-MM-01-08，「員工教育訓練紀錄卡」分頁）：每位在職員工一列，可依部門/姓名篩選、有分頁；「累計時數/次數」與卡片內容都是<b>即時彙整已到課(實到)的紀錄</b>，不是存檔快照，訓練資料一有異動（補登、修改評鑑結果等）卡片內容立刻跟著變。點列上「列印」單獨列印該員工的卡片（可能不只一頁，跨頁會自動重複表頭）；勾選多人後按「批次列印所選」，會依序自動彈出每位員工各自的列印視窗——<b>每位員工的頁碼各自從第 1 頁重新算，不會把不同員工的頁次算在一起</b>，上一位的列印視窗關閉後才會接著開下一位，請允許瀏覽器彈出視窗。
+        <b>⑦員工教育訓練紀錄卡</b>分頁：每位在職員工一列，可依部門/姓名篩選，分頁列在清單右上角（預設每頁 10 筆）；「累計時數/次數」與卡片內容都是<b>即時彙整已到課(實到)的紀錄</b>，不是存檔快照，訓練資料一有異動（補登、修改評鑑結果等）卡片內容立刻跟著變。點列上「列印」單獨列印該員工的卡片（可能不只一頁，跨頁會自動重複表頭）；勾選多人後按「批次列印所選」，會依序自動彈出每位員工各自的列印視窗——<b>每位員工的頁碼各自從第 1 頁重新算，不會把不同員工的頁次算在一起</b>，上一位的列印視窗關閉後才會接著開下一位，請允許瀏覽器彈出視窗。
         <h4>重要行為</h4>
         ・<b>訓練需求申請人</b>是獨立角色（在使用者權限設定的「教育訓練管理」角色指派裡指派），只能新增/送出/檢視申請單，
         看得到訓練場次列表（唯讀）但**不能**修改計畫或任何設定，避免誤把整頁編輯權限一起給出去。<br>
@@ -988,7 +988,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         ・「檢視」內的「列印簽到表」「列印考核表」跟「實行資料」modal 裡的同名按鈕輸出完全相同（共用同一份版面），差別只在「檢視」是唯讀場次可隨時重印，不需要先開編輯畫面；外訓或免評鑑（宣導）課程不提供列印考核表。<br>
         ・考核表「總體評核結果」與分數，會自動印出上方「參加人員」名單已填的評鑑結果／分數；未填則留白供現場手寫。
         <h4>設定入口</h4>
-        工具列「模組設定」：班別／休息時段／行事曆類別／附件路徑（一般）、排除部門（達標統計）、AS 文件編號與是否送審（文件編號與送審，含<b>員工教育訓練紀錄卡</b>的 AS 文件編號綁定——用打編號篩選的共用選擇器，選好即時生效）、<b>簽到表/訓練紀錄的簽名圖章樣式</b>（參加人員本人簽名用，套用「圖章管理→線上圖章設計」哪個模板；未設定＝預設印章樣式）、<b>核准/審核/人事/考官等核准類圖章樣式</b>（跟本人簽名分開設定；未設定＝標準圓形圖章）。<br>
+        工具列「模組設定」：班別／休息時段／行事曆類別／附件路徑（一般）、排除部門（達標統計）、AS 文件編號與是否送審（文件編號與送審，含<b>員工教育訓練紀錄卡</b>的 AS 文件編號綁定——用打編號篩選的共用選擇器挑選，要按「儲存設定」才存檔，跟其他文件編號欄位一致）、<b>簽到表/訓練紀錄的簽名圖章樣式</b>（參加人員本人簽名用，套用「圖章管理→線上圖章設計」哪個模板；未設定＝預設印章樣式）、<b>核准/審核/人事/考官等核准類圖章樣式</b>（跟本人簽名分開設定；未設定＝標準圓形圖章）。<br>
         簽章人員（人事／審核／核准）一律取自全站
         <a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>，本頁不另外設定。
         <h4>權限角色</h4>
@@ -1909,6 +1909,7 @@ function attDel(i){ ATT.splice(i,1); renderAtt(); if($('#attDept').val()) $('#at
 /* ================= 年度訓練計劃表：送審與簽章（見 ai-rules/17） ================= */
 var AS_DOCS = [], DOC_NO = {}, DOC_NAME = {}, COMPANY = '', SIGNERS = {}, PLAN_APPR = {status:'none'}, PLAN_LASTMOD = '';
 var CARD_ASDOC = null;   // 員工教育訓練紀錄卡綁定的 AS 文件（asdoc_lib.php 標準做法，{id,doc_no,doc_name,current_version,doc_level} 或 null）
+var cardAsDocPickId = 0;   // 模組設定跳窗內「暫選」的 as_document.id，按「儲存設定」才寫入，跟其他五個欄位手感一致
 var APPR_LABEL = {none:'尚未送審', review_pending:'審核中', reviewed:'審核通過，待核准',
                   approve_pending:'待核准', approved:'已核准', rejected:'已退回'};
 function loadPlanStatus(){
@@ -2615,6 +2616,7 @@ function openSetting(){
     $('#setDocTarget').html(dh).val(SETTINGS.training_as_doc_target||'');
     $('#setDocRequest').html(dh).val(SETTINGS.training_as_doc_request||'');
     $('#setDocSignsheet').html(dh).val(SETTINGS.training_as_doc_signsheet||'');
+    cardAsDocPickId = CARD_ASDOC ? CARD_ASDOC.id : 0;
     $('#cardAsDocView').val(CARD_ASDOC ? EGAsDoc.label(CARD_ASDOC) : '尚未綁定');
     loadStampTplOptions();
     var sbr = String(SETTINGS.training_signsheet_blank_rows||'0');
@@ -2674,9 +2676,11 @@ function saveSettings(){
         approval_stamp_tpl_id:$('#setApprovalStampTpl').val(),
         signsheet_blank_rows:(function(){ var m=$('#setSignBlankMode').val();
             return m==='fill16' ? 'fill16' : (m==='fixed' ? ($('#setSignBlankN').val()||'0') : '0'); })(),
+        card_as_doc_id:cardAsDocPickId,
         plan_sign_date:$('#setSignDate').val()}, function(res){
         if (!res.ok){ alert(res.error||'設定儲存失敗'); return; }
         SETTINGS = res.settings||{}; UNITS = res.units||UNITS; DOC_NO = res.doc_no||DOC_NO; DOC_NAME = res.doc_name||DOC_NAME;
+        CARD_ASDOC = res.card_asdoc||null;
         SETTINGS.stamp_template = res.stamp_template || null;
         SETTINGS.approval_stamp_template = res.approval_stamp_template || null;
         TGSTATS = null; if ($('#paneTarget').is(':visible')) loadTargetStats();
@@ -3086,7 +3090,7 @@ $('#btnPrintResult').on('click', printResultTable);
 /* 清單一次撈全部（人數規模跟員工總數同級，非千筆等級清單），分頁只是前端切片渲染，
    比照 employee_management.php 既有分頁模式；篩選（部門/關鍵字）交後端 card_people 做，換條件才重新整理清單。 */
 var CARD_ROWS = [], CARD_SEL = {};   // CARD_SEL: {user_id: true}，跨分頁/跨篩選持續保留已勾選的人
-var cardPg = {page:1, per:20};
+var cardPg = {page:1, per:10};
 
 function loadCardList(){
     if (!$('#paneCard').is(':visible')) return;
@@ -3237,15 +3241,13 @@ $('#btnCardBatchPrint').on('click', function(){
     if (!ids.length){ alert('請先在清單勾選要列印的員工。'); return; }
     batchPrintCards(ids);
 });
-/* AS 文件編號綁定（限訓練管理員，見模組設定）：一律用共用選擇器，選好即存檔即時生效 */
+/* AS 文件編號綁定（限訓練管理員，見模組設定）：跟其他五個欄位手感一致——選擇器點選只是暫存在畫面上，
+   要按 setMask 下方「儲存設定」（saveSettings()）才真的連同其他設定一起送出存檔。 */
 $('#btnCardAsDocPick').on('click', function(){
-    EGAsDoc.open({docs:AS_DOCS, current:CARD_ASDOC?CARD_ASDOC.id:0, title:'員工教育訓練紀錄卡 — AS 文件編號綁定',
+    EGAsDoc.open({docs:AS_DOCS, current:cardAsDocPickId, title:'員工教育訓練紀錄卡 — AS 文件編號綁定',
         onSave:function(id, doc){
-            $.post(API, {action:'card_asdoc_save', doc_id:id}, function(res){
-                if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-                CARD_ASDOC = res.card_asdoc||null;
-                $('#cardAsDocView').val(CARD_ASDOC ? EGAsDoc.label(CARD_ASDOC) : '尚未綁定');
-            });
+            cardAsDocPickId = id;
+            $('#cardAsDocView').val(doc ? EGAsDoc.label(doc) : '尚未綁定');
         }});
 });
 

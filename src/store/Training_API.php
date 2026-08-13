@@ -191,9 +191,14 @@ case 'save_settings': {
             if ($sb !== '' && $sb !== 'fill16' && (!ctype_digit($sb) || (int)$sb > 16)) jerr('簽到表空白列數請填 0~16 的整數，或選擇補滿頁');
             training_setting_save($db, 'training_signsheet_blank_rows', $sb, $uid, $uname);
         }
+        // 員工教育訓練紀錄卡的 AS 文件編號綁定：跟其他五個一樣，選擇器裡點選只是暫存，要按這顆「儲存設定」才真的寫入
+        // （一律走 asdoc_lib.php 的 eg_asdoc_save，跟上面五個的存放位置不同，但操作手感要一致）。
+        if (array_key_exists('card_as_doc_id', $_POST)) {
+            eg_asdoc_save($db, 'training_record_card', (int)$_POST['card_as_doc_id'], $uname);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('設定儲存失敗：'.$e->getMessage(), 500); }
-    jout(['settings'=>training_settings($db), 'units'=>training_units($db),
+    jout(['settings'=>training_settings($db), 'units'=>training_units($db), 'card_asdoc'=>eg_asdoc_get($db, 'training_record_card'),
           'doc_no'=>['plan'=>training_as_doc_no($db,'plan'), 'result'=>training_as_doc_no($db,'result'),
                      'target'=>training_as_doc_no($db,'target'), 'request'=>training_as_doc_no($db,'request'),
                      'signsheet'=>training_as_doc_no($db,'signsheet')],
@@ -1475,14 +1480,6 @@ case 'card_people': {
         unset($p);
     }
     jout(['people'=>$people]);
-}
-
-/* 員工教育訓練紀錄卡的 AS 文件編號綁定（限訓練管理員），一律走 asdoc_lib.php，禁止自刻/純下拉（ai-rules/16 第一之三節）。 */
-case 'card_asdoc_save': {
-    if (!$perms['canAdmin']) jerr('無管理權限（設定限訓練管理員）', 403);
-    $docId = (int)($_POST['doc_id'] ?? 0);
-    eg_asdoc_save($db, 'training_record_card', $docId, $uname);
-    jout(['card_asdoc'=>eg_asdoc_get($db, 'training_record_card')]);
 }
 
 /* 複製場次（內容複製、不帶參加名單；狀態回計畫中） */
