@@ -399,7 +399,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $hasGroupCol = in_array('group_id', $stockCols);
             $groupJoin = $hasGroupCol ? "LEFT JOIN stock_item_groups sig ON sig.group_id=si.group_id LEFT JOIN d_setting sig_ds ON sig_ds.d_id=sig.group_name" : "";
 
-            $searchFields = ['si.d_id','si.client_name','si.storage_location','si.bom_ref'];
+            // 客戶欄位一律即時查料號綁定客戶（不信任 stock_items.client_name/client_id 舊快照，料號改綁客戶後快照不會跟著更新）
+            $searchFields = ['si.d_id', ($hasDsid ? 'clp.customer' : 'si.client_name'), 'si.storage_location','si.bom_ref'];
             if ($hasGroupCol) $searchFields[] = 'sig_ds.D_Setting_Id';
             if ($hasPkg) $searchFields[] = 'si.package_box';
             if ($hasR1)  $searchFields[] = 'si.remark1';
@@ -409,7 +410,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
             if ($hasCategory && $catF!==''&&$catF!=='all') { $where[]='si.item_type=:cat'; $p[':cat']=(int)$catF; }
             if ($hasLocation && $locF!==''&&$locF!=='all') { $where[]='si.location_id=:loc'; $p[':loc']=(int)$locF; }
-            if ($clientF!=='') { $where[]='si.client_id=:cli'; $p[':cli']=$clientF; }
+            if ($clientF!=='') { $where[]=($hasDsid?'dsp.Customer_Id':'si.client_id').'=:cli'; $p[':cli']=$clientF; }
 
             $safetyJoin = '';
             if ($qtyF==='low') {
@@ -428,8 +429,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             $wSQL = $where ? 'WHERE '.implode(' AND ',$where) : '';
+            // 客戶條件(dsp.Customer_Id)可能存在於 $wSQL，COUNT/篩選選項查詢也要一併 JOIN d_setting
+            $dsJoinCnt = $hasDsid ? "LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id" : "";
 
-            $cnt = $pdo->prepare("SELECT COUNT(*) FROM stock_items si $safetyJoin $groupJoin $wSQL");
+            $cnt = $pdo->prepare("SELECT COUNT(*) FROM stock_items si $safetyJoin $groupJoin $dsJoinCnt $wSQL");
             $cnt->execute($p); $total=(int)$cnt->fetchColumn();
 
             // 動態 JOIN
@@ -465,6 +468,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $specSel = ($hasDsid && $anyShowSpec) ? "dsp.Spec_No AS spec_no," : "NULL AS spec_no,";
             // 同料號判定欄位：料號備註(Remark) / 版次(Revision)，配合 料號+客戶+備註+版次 全等才算同料號
             $partIdSel = $hasDsid ? "dsp.Remark AS part_remark, dsp.Revision AS part_revision," : "NULL AS part_remark, NULL AS part_revision,";
+            // 客戶：即時查料號目前綁定的客戶（覆蓋 si.* 帶出的舊快照 client_name/client_id），放在 si.* 之後讓同名欄位以此為準
+            $clpJoin = $hasDsid ? "LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id" : "";
+            $liveClientSel = $hasDsid ? "clp.customer AS client_name, dsp.Customer_Id AS client_id," : "";
             $labelsSubSql = <<<'LBLSQL'
 (SELECT GROUP_CONCAT(
      CONCAT(l.label_id,'|',l.label_name,'|',l.input_type,'|',COALESCE(m.input_value,''),'|',l.has_draw_lathe,'|',COALESCE(CAST(m.draw_dim AS CHAR),''),'|',COALESCE(CAST(m.lathe_dim AS CHAR),''),'|',COALESCE((SELECT GROUP_CONCAT(CONCAT(ds.sub_name,'§',COALESCE(slm.input_value,''),'§',COALESCE(CAST(slm.value_min AS CHAR),''),'§',COALESCE(CAST(slm.value_max AS CHAR),''),'§',COALESCE(ds.is_range,0),'§',COALESCE(ds.has_tolerance,0),'§',COALESCE(CAST(slm.tol_upper AS CHAR),''),'§',COALESCE(CAST(slm.tol_lower AS CHAR),''),'§',COALESCE(ds.is_dimension,0),'§',COALESCE(ds.is_qty_dim,0),'§',COALESCE(ds.prefix_char,''),'§',COALESCE(ds.suffix_char,''),'§',COALESCE(CAST(slm.qty AS CHAR),''),'§',COALESCE(ds.is_imperial_dim,0),'§',COALESCE(ds.is_enum,0),'§',COALESCE(ds.hide_name_in_display,0),'§',COALESCE(ds.is_countersink,0),'§',COALESCE(ds.has_draw_lathe_depth,0),'§',COALESCE(CAST(slm.draw_dim AS CHAR),''),'§',COALESCE(CAST(slm.lathe_dim AS CHAR),''),'§',COALESCE(ds.is_triple_dim,0),'§',COALESCE(ds.is_qty_triple_dim,0)) ORDER BY ds.sort_order SEPARATOR '~') FROM item_sub_label_map slm JOIN dict_label_sub ds ON ds.sub_id=slm.sub_id WHERE slm.parent_map_id=m.map_id AND ds.is_active=1),''),'|',COALESCE(l.is_range,0),'|',COALESCE(CAST(m.value_min AS CHAR),''),'|',COALESCE(CAST(m.value_max AS CHAR),''),'|',COALESCE(l.has_tolerance,0),'|',COALESCE(CAST(m.tol_upper AS CHAR),''),'|',COALESCE(CAST(m.tol_lower AS CHAR),''),'|',COALESCE(l.is_calc_diff,0),'|',COALESCE(l.calc_base_name,''),'|',COALESCE(l.calc_sub_name,''),'|',COALESCE(CAST(m.calc_value AS CHAR),''),'|',COALESCE(CAST(m.calc_value_min AS CHAR),''),'|',COALESCE(CAST(m.calc_value_max AS CHAR),''),'|',COALESCE(l.is_dimension,0),'|',COALESCE(l.is_qty_dim,0),'|',COALESCE(l.prefix_char,''),'|',COALESCE(l.suffix_char,''),'|',COALESCE(l.is_hidden_frontend,0),'|',COALESCE(CAST(m.qty AS CHAR),''),'|',COALESCE(l.lathe_optional,0),'|',COALESCE(l.has_draw_lathe_depth,0),'|',COALESCE(l.is_triple_dim,0))
@@ -474,6 +480,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 LBLSQL;
             $labelsSel = ($hasDsid && $anyShowLabel) ? "$labelsSubSql AS labels_str," : "NULL AS labels_str,";
 
+            // 齒輪規格（料號下方顯示用，如「M1 T20 W10 PA20」）：有齒輪資料就顯示，取代標籤那一行，不受品項種類的標籤開關影響
+            $gearSpecSel = $hasDsid ? "(SELECT CONCAT_WS(' ',
+                    NULLIF(COALESCE(g.module_display, IF(g.Module IS NOT NULL AND g.Module<>'', IF(LEFT(UPPER(g.Module),1)='M', g.Module, CONCAT('M',g.Module)), '')),''),
+                    IF(g.Teeth IS NOT NULL AND g.Teeth>0, CONCAT('T',g.Teeth), NULL),
+                    IF(g.Face_Width IS NOT NULL AND g.Face_Width>0, CONCAT('W',TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(g.Face_Width AS CHAR)))), NULL),
+                    IF(g.Pressure_Angle IS NOT NULL AND g.Pressure_Angle<>'', CONCAT('PA',TRIM(TRAILING '°' FROM g.Pressure_Angle)), NULL)
+                ) FROM d_setting_gear g WHERE g.d_setting_id=si.d_setting_id ORDER BY g.gear_id LIMIT 1) AS gear_spec_str," : "NULL AS gear_spec_str,";
+
             // 料號是否有圖資（bom 圖面 / part_attachments 附件），供列表決定是否顯示點擊跳窗連結
             static $hasBomTbl=null,$hasAttachTbl=null;
             if ($hasBomTbl===null){ try{ $hasBomTbl=(bool)$pdo->query("SHOW TABLES LIKE 'bom'")->fetchColumn(); }catch(Exception $e){ $hasBomTbl=false; } }
@@ -481,21 +495,23 @@ LBLSQL;
             $drawSel   = $hasBomTbl ? "(SELECT EXISTS(SELECT 1 FROM bom WHERE d_id=si.d_id)) AS has_drawing," : "0 AS has_drawing,";
             $attachSel = ($hasAttachTbl && $hasDsid) ? "(SELECT EXISTS(SELECT 1 FROM part_attachments WHERE d_id=si.d_setting_id AND deleted_at IS NULL)) AS has_attach," : "0 AS has_attach,";
 
+            $sortColSql = ($sortCol==='client_name' && $hasDsid) ? 'clp.customer' : "si.`$sortCol`";
             $sql = "
                 SELECT si.*,
                     $catSel $locSel $unitSel $groupSel
-                    $specSel $labelsSel $drawSel $attachSel $partIdSel
+                    $specSel $labelsSel $gearSpecSel $drawSel $attachSel $partIdSel
+                    $liveClientSel
                     ot.Order_oo AS order_no,
                     $calcPriceSel
                     ss2.safety_qty,
                     CASE WHEN si.qty=0 THEN 1 ELSE 0 END AS _zero_flag
                 FROM stock_items si
                 $safetyJoin
-                $catJoin $locJoin $unitJoin $groupJoin $dsJoin
+                $catJoin $locJoin $unitJoin $groupJoin $dsJoin $clpJoin
                 LEFT JOIN order_track ot ON ot.Order_id=si.order_ref
                 LEFT JOIN stock_safety_stock ss2 ON ss2.d_id=si.d_id
                 $wSQL
-                ORDER BY _zero_flag ASC, si.`$sortCol` $sortDir
+                ORDER BY _zero_flag ASC, $sortColSql $sortDir
                 LIMIT :lim OFFSET :off
             ";
             $st = $pdo->prepare($sql);
@@ -671,11 +687,14 @@ LBLSQL;
             // 取得篩選選項（只含當前篩選結果內有的值）
             $filterLocs=[]; $filterCats=[]; $filterClients=[];
             try {
-                $fSql="SELECT DISTINCT si.storage_location,si.location_id FROM stock_items si $safetyJoin $catJoin $locJoin $wSQL ORDER BY si.storage_location";
+                $fSql="SELECT DISTINCT si.storage_location,si.location_id FROM stock_items si $safetyJoin $catJoin $locJoin $dsJoinCnt $wSQL ORDER BY si.storage_location";
                 $fSt=$pdo->prepare($fSql); foreach($p as $k=>$v) $fSt->bindValue($k,$v); $fSt->execute(); $filterLocs=$fSt->fetchAll(PDO::FETCH_ASSOC);
             } catch(Exception $e2){}
             try {
-                $fSql2="SELECT DISTINCT si.client_id,si.client_name FROM stock_items si $safetyJoin $catJoin $locJoin $wSQL WHERE si.client_id IS NOT NULL ORDER BY si.client_name";
+                // 客戶篩選下拉：即時查料號綁定客戶，不用 si.client_id/client_name 舊快照
+                $fSql2 = $hasDsid
+                    ? "SELECT DISTINCT dsp.Customer_Id AS client_id, clp.customer AS client_name FROM stock_items si $safetyJoin $catJoin $locJoin $dsJoinCnt LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id $wSQL AND dsp.Customer_Id IS NOT NULL ORDER BY clp.customer"
+                    : "SELECT DISTINCT si.client_id,si.client_name FROM stock_items si $safetyJoin $catJoin $locJoin $wSQL WHERE si.client_id IS NOT NULL ORDER BY si.client_name";
                 $fSt2=$pdo->prepare($fSql2); foreach($p as $k=>$v) $fSt2->bindValue($k,$v); $fSt2->execute(); $filterClients=$fSt2->fetchAll(PDO::FETCH_ASSOC);
             } catch(Exception $e2){}
 
@@ -764,12 +783,16 @@ LBLSQL;
             $locS=$hasLoc?"l.location_code,":"NULL AS location_code,";
             $unitS=$hasUnit?"u.unit_name, u.unit_symbol,":"NULL AS unit_name, NULL AS unit_symbol,";
 
+            // 客戶：即時查料號目前綁定客戶，覆蓋 si.* 帶出的舊快照 client_name/client_id
             $st = $pdo->prepare("
                 SELECT si.*, $catS $locS $unitS
-                    ot.Order_oo AS order_no, ot.unit_price AS order_unit_price
+                    ot.Order_oo AS order_no, ot.unit_price AS order_unit_price,
+                    clp.customer AS client_name, dsp.Customer_Id AS client_id
                 FROM stock_items si
                 $catJ $locJ $unitJ
                 LEFT JOIN order_track ot ON ot.Order_id=si.order_ref
+                LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id
+                LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id
                 WHERE si.stock_item_id=?
             ");
             $st->execute([$id]); $row=$st->fetch(PDO::FETCH_ASSOC);
@@ -831,8 +854,9 @@ LBLSQL;
             if (!empty($row['d_setting_id'])) {
                 try { $dq=$pdo->prepare("SELECT Remark,Revision FROM d_setting WHERE d_id=?"); $dq->execute([$row['d_setting_id']]); $dr=$dq->fetch(PDO::FETCH_ASSOC); if($dr){ $rowRemark=$dr['Remark']??''; $rowRevision=$dr['Revision']??''; } } catch(Exception $e2){}
             }
-            $other=$pdo->prepare("SELECT $locSelectCols $locS2 $unitS2 FROM stock_items si2 LEFT JOIN d_setting ds2 ON ds2.d_id=si2.d_setting_id $locJ2 $unitJ2 WHERE si2.d_id=? AND si2.is_active=1 AND COALESCE(si2.client_name,'')=? AND COALESCE(ds2.Remark,'')=? AND COALESCE(ds2.Revision,'')=?{$grpWhereExtra} ORDER BY si2.qty DESC");
-            $other->execute([$row['d_id'], $row['client_name']??'', $rowRemark, $rowRevision]); $otherLocs=$other->fetchAll(PDO::FETCH_ASSOC);
+            // 客戶為料號綁定屬性，同料號必同客戶，不再比對 client_name
+            $other=$pdo->prepare("SELECT $locSelectCols $locS2 $unitS2 FROM stock_items si2 LEFT JOIN d_setting ds2 ON ds2.d_id=si2.d_setting_id $locJ2 $unitJ2 WHERE si2.d_id=? AND si2.is_active=1 AND COALESCE(ds2.Remark,'')=? AND COALESCE(ds2.Revision,'')=?{$grpWhereExtra} ORDER BY si2.qty DESC");
+            $other->execute([$row['d_id'], $rowRemark, $rowRevision]); $otherLocs=$other->fetchAll(PDO::FETCH_ASSOC);
 
             // 如果此品項屬於組合件，取得同組所有料號資訊
             $groupMembers = [];
@@ -850,7 +874,7 @@ LBLSQL;
 
                         $gmStmt = $pdo->prepare("
                             SELECT si3.stock_item_id, si3.d_id, si3.d_setting_id, si3.qty, si3.pcs_per_set, si3.unit_cost,
-                                   si3.bom_ref, si3.order_ref, si3.client_name,
+                                   si3.bom_ref, si3.order_ref, clp3.customer AS client_name,
                                    ot3.Order_oo AS order_no,
                                    " . ($hasUnit?"u3.unit_name, u3.unit_symbol,":"NULL AS unit_name, NULL AS unit_symbol,") . "
                                    sig.group_name AS group_name_id, sig_ds3.D_Setting_Id AS group_name, $grpPriceSel2
@@ -859,6 +883,8 @@ LBLSQL;
                             LEFT JOIN stock_item_groups sig ON sig.group_id=si3.group_id
                             LEFT JOIN d_setting sig_ds3 ON sig_ds3.d_id=sig.group_name
                             LEFT JOIN order_track ot3 ON ot3.Order_id=si3.order_ref
+                            LEFT JOIN d_setting dsp3 ON dsp3.d_id=si3.d_setting_id
+                            LEFT JOIN customer_list clp3 ON clp3.customer_id=dsp3.Customer_Id
                             WHERE si3.group_id=? AND si3.is_active=1
                             ORDER BY si3.stock_item_id ASC
                         ");
@@ -1170,8 +1196,7 @@ LBLSQL;
             $existParams=[$c['d_id'],$id,$srcRemark,$srcRevision];
             if ($locId) { $existSql.=" AND si.location_id=?"; $existParams[]=$locId; }
             elseif ($locStr) { $existSql.=" AND si.storage_location=?"; $existParams[]=$locStr; }
-            // 若有 client_id 也比對
-            if (!empty($c['client_id'])) { $existSql.=" AND si.client_id=?"; $existParams[]=$c['client_id']; }
+            // 客戶為料號綁定屬性，同料號必同客戶，不再比對 client_id
             $existSql.=" LIMIT 1";
             $ex=$pdo->prepare($existSql); $ex->execute($existParams); $existRow=$ex->fetch(PDO::FETCH_ASSOC);
 
@@ -1559,7 +1584,7 @@ LBLSQL;
         try {
             $lid=intval($_POST['location_id']??0);
             // 檢查是否有庫存品項目前存放在此儲位
-            $using=$pdo->prepare("SELECT si.d_id, si.qty, si.client_name FROM stock_items si WHERE si.location_id=? AND si.is_active=1 AND si.qty>0 LIMIT 20");
+            $using=$pdo->prepare("SELECT si.d_id, si.qty, clp.customer AS client_name FROM stock_items si LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id WHERE si.location_id=? AND si.is_active=1 AND si.qty>0 LIMIT 20");
             $using->execute([$lid]); $usingRows=$using->fetchAll(PDO::FETCH_ASSOC);
             if (count($usingRows)>0) {
                 $list=array_map(function($r){ return $r['d_id'].'('.round($r['qty'],2).($r['client_name']?' '.$r['client_name']:'').')'; },$usingRows);
@@ -1622,17 +1647,16 @@ LBLSQL;
             foreach ($itemRows as $item) {
                 $sid  = $item['stock_item_id'];
                 $did  = $item['d_id'];
-                $cid  = $item['client_id'];
                 $qty  = intval($item['qty']);
 
-                // 來源料號備註/版次（同料號判定：料號+客戶+備註+版次 全等）
+                // 來源料號備註/版次（同料號判定：料號+備註+版次 全等；客戶為料號綁定屬性，同料號必同客戶，不再比對）
                 $srcRmk=''; $srcRev='';
                 if (!empty($item['d_setting_id'])) {
                     try { $dq=$pdo->prepare("SELECT Remark,Revision FROM d_setting WHERE d_id=?"); $dq->execute([$item['d_setting_id']]); $dr=$dq->fetch(PDO::FETCH_ASSOC); if($dr){ $srcRmk=$dr['Remark']??''; $srcRev=$dr['Revision']??''; } } catch(Exception $e2){}
                 }
-                // 檢查目標儲位是否已有相同料號（料號+客戶+備註+版次 全等）
-                $dup = $pdo->prepare("SELECT si.stock_item_id, si.qty FROM stock_items si LEFT JOIN d_setting ds ON ds.d_id=si.d_setting_id WHERE si.location_id=? AND si.d_id=? AND si.client_id=? AND si.is_active=1 AND COALESCE(ds.Remark,'')=? AND COALESCE(ds.Revision,'')=?");
-                $dup->execute([$lidTo, $did, $cid, $srcRmk, $srcRev]);
+                // 檢查目標儲位是否已有相同料號（料號+備註+版次 全等）
+                $dup = $pdo->prepare("SELECT si.stock_item_id, si.qty FROM stock_items si LEFT JOIN d_setting ds ON ds.d_id=si.d_setting_id WHERE si.location_id=? AND si.d_id=? AND si.is_active=1 AND COALESCE(ds.Remark,'')=? AND COALESCE(ds.Revision,'')=?");
+                $dup->execute([$lidTo, $did, $srcRmk, $srcRev]);
                 $dupRow = $dup->fetch(PDO::FETCH_ASSOC);
 
                 if ($dupRow) {
@@ -1890,7 +1914,7 @@ LBLSQL;
     // ── 客戶下拉（僅庫存內有的） ──────────────────
     if ($_POST['action'] === 'get_clients_in_stock') {
         try {
-            $rows=$pdo->query("SELECT DISTINCT client_id,client_name FROM stock_items WHERE is_active=1 AND client_id IS NOT NULL AND client_name IS NOT NULL ORDER BY client_name")->fetchAll(PDO::FETCH_ASSOC);
+            $rows=$pdo->query("SELECT DISTINCT dsp.Customer_Id AS client_id, clp.customer AS client_name FROM stock_items si LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id WHERE si.is_active=1 AND dsp.Customer_Id IS NOT NULL AND clp.customer IS NOT NULL ORDER BY clp.customer")->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode(['success'=>true,'data'=>$rows]);
         } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -2040,7 +2064,7 @@ LBLSQL;
             $where=['cd.session_id=:sid'];
             $p=[':sid'=>$sid];
             if ($locF!=='') { $where[]='(si.storage_location LIKE :loc OR l.location_code LIKE :loc2)'; $p[':loc']="%$locF%"; $p[':loc2']="%$locF%"; }
-            if ($cliF!=='') { $where[]='si.client_name LIKE :cli'; $p[':cli']="%$cliF%"; }
+            if ($cliF!=='') { $where[]='clp.customer LIKE :cli'; $p[':cli']="%$cliF%"; }
             if ($didF!=='') { $where[]='cd.d_id LIKE :did'; $p[':did']="%$didF%"; }
             // 廠區篩選：需 join stock_areas 透過 location_id
             if ($areaF!=='') {
@@ -2058,20 +2082,23 @@ LBLSQL;
 
             $order='cd.d_id ASC';
             if ($sortBy==='location') $order='COALESCE(l.location_code,si.storage_location) ASC, cd.d_id ASC';
-            elseif ($sortBy==='client') $order='si.client_name ASC, cd.d_id ASC';
+            elseif ($sortBy==='client') $order='clp.customer ASC, cd.d_id ASC';
 
             $catJoin=$hasCat?"LEFT JOIN stock_item_categories c ON c.category_id=si.item_type":"";
             $unitJoin=$hasUnit?"LEFT JOIN stock_units u ON u.unit_id=si.unit_id":"";
             $catSel=$hasCat?"c.category_name,":"NULL AS category_name,";
             $unitSel=$hasUnit?"u.unit_name,u.decimal_places,":"NULL AS unit_name, 3 AS decimal_places,";
 
-            $sql="SELECT cd.*, si.storage_location, si.client_name, si.location_id, $catSel $unitSel
+            // 客戶：即時查料號綁定客戶，不用 si.client_name 舊快照
+            $sql="SELECT cd.*, si.storage_location, clp.customer AS client_name, si.location_id, $catSel $unitSel
                          l.location_code, sa.area_name AS loc_area_name
                   FROM stock_count_details cd
                   LEFT JOIN stock_items si ON si.stock_item_id=cd.stock_item_id
                   $catJoin $unitJoin
                   LEFT JOIN stock_locations l ON l.location_id=si.location_id
                   LEFT JOIN stock_areas sa ON sa.area_id = l.area
+                  LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id
+                  LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id
                   $wSQL ORDER BY $order";
             $st=$pdo->prepare($sql);
             $st->execute($p);
@@ -2205,7 +2232,7 @@ LBLSQL;
             $wSQL='WHERE '.implode(' AND ',$where);
             $catJoin=$hasCat?"LEFT JOIN stock_item_categories c ON c.category_id=si.item_type":"";
             $locCols=$hasCat?"c.category_name,":"NULL AS category_name,";
-            $sql="SELECT si.stock_item_id,si.d_id,si.qty,si.storage_location,$locCols si.client_name FROM stock_items si $catJoin $wSQL ORDER BY RAND() LIMIT :lim";
+            $sql="SELECT si.stock_item_id,si.d_id,si.qty,si.storage_location,$locCols clp.customer AS client_name FROM stock_items si $catJoin LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id $wSQL ORDER BY RAND() LIMIT :lim";
             $st=$pdo->prepare($sql);
             foreach($p as $k=>$v) $st->bindValue($k,$v);
             $st->bindValue(':lim',$count,PDO::PARAM_INT);
@@ -2259,7 +2286,7 @@ LBLSQL;
             } else {
                 $byCat=[['label'=>'全部','color'=>'#1ABB9C','cnt'=>(int)$pdo->query("SELECT COUNT(*) FROM stock_items WHERE is_active=1")->fetchColumn(),'tq'=>0,'tc'=>0]];
             }
-            $byCli=$pdo->query("SELECT COALESCE(MIN(client_name),'(未指定)') AS client_name,client_id,COUNT(*) AS cnt,ROUND(SUM(qty),2) AS tq FROM stock_items WHERE is_active=1 AND qty>0 GROUP BY client_id ORDER BY tq DESC LIMIT 10")->fetchAll(PDO::FETCH_ASSOC);
+            $byCli=$pdo->query("SELECT COALESCE(clp.customer,'(未指定)') AS client_name, dsp.Customer_Id AS client_id, COUNT(*) AS cnt, ROUND(SUM(si.qty),2) AS tq FROM stock_items si LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id WHERE si.is_active=1 AND si.qty>0 GROUP BY dsp.Customer_Id ORDER BY tq DESC LIMIT 10")->fetchAll(PDO::FETCH_ASSOC);
 
             // 趨勢
             $trend=[]; $trendB=[];
@@ -2292,7 +2319,7 @@ LBLSQL;
             $catJoin=$hasCat?"LEFT JOIN stock_item_categories c ON c.category_id=si.item_type":"";
             $catCol=$hasCat?"COALESCE(c.category_name,'未分類') AS category_name,":"NULL AS category_name,";
             $ageExpr="CASE WHEN si.stock_date>=DATE_SUB(CURDATE(),INTERVAL 30 DAY) THEN '30天內' WHEN si.stock_date>=DATE_SUB(CURDATE(),INTERVAL 90 DAY) THEN '31~90天' WHEN si.stock_date>=DATE_SUB(CURDATE(),INTERVAL 180 DAY) THEN '91~180天' WHEN si.stock_date IS NOT NULL THEN '180天以上' ELSE '未知' END";
-            $sql="SELECT si.d_id,$catCol si.client_name,si.storage_location,si.qty,si.stock_date,DATEDIFF(CURDATE(),si.stock_date) AS idle_days,$ageExpr AS age_group FROM stock_items si $catJoin WHERE si.is_active=1";
+            $sql="SELECT si.d_id,$catCol clp.customer AS client_name,si.storage_location,si.qty,si.stock_date,DATEDIFF(CURDATE(),si.stock_date) AS idle_days,$ageExpr AS age_group FROM stock_items si $catJoin LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id WHERE si.is_active=1";
             $p=[];
             if ($group!=='' && $group!=='全部') { $sql.=" AND $ageExpr=:g"; $p[':g']=$group; }
             $sql.=" ORDER BY (si.stock_date IS NULL), idle_days DESC, si.d_id";
@@ -3157,8 +3184,10 @@ LBLSQL;
             $catFilter=intval($_POST['cat_filter']??0);
             $where=['si.is_active=1']; $params=[];
             // kw 只比對料號和備註（客戶與種類由獨立篩選欄處理）
+            // 客戶為料號綁定屬性，一律即時查 d_setting/customer_list，不信任 si.client_name 舊快照
+            $cliJoinQ='LEFT JOIN d_setting dspq ON dspq.d_id=si.d_setting_id LEFT JOIN customer_list clp ON clp.customer_id=dspq.Customer_Id';
             if($kw!==''){ $lk='%'.$kw.'%'; $where[]="(si.d_id LIKE ? OR si.remark1 LIKE ? OR si.remark2 LIKE ?)"; $params=[$lk,$lk,$lk]; }
-            if($clientFilter!==''){ $where[]="si.client_name LIKE ?"; $params[]='%'.$clientFilter.'%'; }
+            if($clientFilter!==''){ $where[]="clp.customer LIKE ?"; $params[]='%'.$clientFilter.'%'; }
             if($catFilter>0){ $where[]="si.item_type=?"; $params[]=$catFilter; }
             $whereSql=implode(' AND ',$where);
             // 欄位探測（只查一次）
@@ -3170,7 +3199,7 @@ LBLSQL;
             $grpNull=$hasGroupIdQ?" AND (si.group_id IS NULL OR si.group_id=0)":"";
 
             // ① 非組合件：依 d_id+client_name+item_type 合併為一列，加總庫存，收集所有儲位
-            $st=$pdo->prepare("SELECT si.stock_item_id,si.d_id,si.client_name,$locSelQ AS storage_location,si.qty,si.remark1,si.unit_id,si.item_type,COALESCE(sic.category_name,'') AS category_name FROM stock_items si $catJoin $locJoinQ WHERE $whereSql$grpNull ORDER BY si.d_id ASC,si.stock_item_id ASC LIMIT 600");
+            $st=$pdo->prepare("SELECT si.stock_item_id,si.d_id,clp.customer AS client_name,$locSelQ AS storage_location,si.qty,si.remark1,si.unit_id,si.item_type,COALESCE(sic.category_name,'') AS category_name FROM stock_items si $catJoin $locJoinQ $cliJoinQ WHERE $whereSql$grpNull ORDER BY si.d_id ASC,si.stock_item_id ASC LIMIT 600");
             $st->execute($params); $rawNonGroup=$st->fetchAll(PDO::FETCH_ASSOC);
             $groupedMap=[];
             foreach($rawNonGroup as $r){
@@ -3196,14 +3225,14 @@ LBLSQL;
                 $pcsSel=$hasPcsCol?',si.pcs_per_set':'';
                 $gWhere=['si.is_active=1','si.group_id IS NOT NULL','si.group_id>0']; $gParams=[];
                 if($kw!==''){ $lk2='%'.$kw.'%'; $gWhere[]="(si.d_id LIKE ? OR si.remark1 LIKE ? OR si.remark2 LIKE ? OR gds.D_Setting_Id LIKE ?)"; $gParams=[$lk2,$lk2,$lk2,$lk2]; }
-                if($clientFilter!==''){ $gWhere[]="si.client_name LIKE ?"; $gParams[]='%'.$clientFilter.'%'; }
+                if($clientFilter!==''){ $gWhere[]="clp.customer LIKE ?"; $gParams[]='%'.$clientFilter.'%'; }
                 if($catFilter>0){ $gWhere[]="si.item_type=?"; $gParams[]=$catFilter; }
-                $gIdSt=$pdo->prepare("SELECT DISTINCT si.group_id FROM stock_items si LEFT JOIN stock_item_groups sig ON sig.group_id=si.group_id LEFT JOIN d_setting gds ON gds.d_id=sig.group_name WHERE ".implode(' AND ',$gWhere)." LIMIT 100");
+                $gIdSt=$pdo->prepare("SELECT DISTINCT si.group_id FROM stock_items si LEFT JOIN stock_item_groups sig ON sig.group_id=si.group_id LEFT JOIN d_setting gds ON gds.d_id=sig.group_name $cliJoinQ WHERE ".implode(' AND ',$gWhere)." LIMIT 100");
                 $gIdSt->execute($gParams); $gIds=array_map('intval',$gIdSt->fetchAll(PDO::FETCH_COLUMN));
                 $gGrouped=[];
                 if($gIds){
                     $gPh=implode(',',array_fill(0,count($gIds),'?'));
-                    $gSt=$pdo->prepare("SELECT si.stock_item_id,si.d_id,si.client_name,$locSelQ AS storage_location,si.qty$pcsSel,si.remark1,si.unit_id,si.item_type,si.group_id,COALESCE(sic.category_name,'') AS category_name,COALESCE(gds.D_Setting_Id,'') AS group_display_name FROM stock_items si $catJoin $locJoinQ LEFT JOIN stock_item_groups sig ON sig.group_id=si.group_id LEFT JOIN d_setting gds ON gds.d_id=sig.group_name WHERE si.is_active=1 AND si.group_id IN ($gPh) ORDER BY si.group_id ASC,si.stock_item_id ASC");
+                    $gSt=$pdo->prepare("SELECT si.stock_item_id,si.d_id,clp.customer AS client_name,$locSelQ AS storage_location,si.qty$pcsSel,si.remark1,si.unit_id,si.item_type,si.group_id,COALESCE(sic.category_name,'') AS category_name,COALESCE(gds.D_Setting_Id,'') AS group_display_name FROM stock_items si $catJoin $locJoinQ LEFT JOIN stock_item_groups sig ON sig.group_id=si.group_id LEFT JOIN d_setting gds ON gds.d_id=sig.group_name $cliJoinQ WHERE si.is_active=1 AND si.group_id IN ($gPh) ORDER BY si.group_id ASC,si.stock_item_id ASC");
                     $gSt->execute($gIds); $gRawRows=$gSt->fetchAll(PDO::FETCH_ASSOC);
                     foreach($gRawRows as $gr){
                         $gkey=intval($gr['group_id']);
@@ -3295,15 +3324,15 @@ LBLSQL;
             if(!$req) throw new Exception('找不到需求單');
             $items=$pdo->prepare("SELECT ri.*,si.item_type,si.group_id,COALESCE(sic.category_name,'') AS category_name FROM stock_requisition_items ri LEFT JOIN stock_items si ON si.stock_item_id=ri.stock_item_id LEFT JOIN stock_item_categories sic ON sic.category_id=si.item_type WHERE ri.req_id=? ORDER BY ri.sort_order,ri.req_item_id");
             $items->execute([$reqId]); $reqItems=$items->fetchAll(PDO::FETCH_ASSOC);
-            // 計算各品項當前總庫存（合計所有同料號同客戶的非組合件儲位，反映實際可領總量）
-            $sumQ=$pdo->prepare("SELECT COALESCE(SUM(qty),0) FROM stock_items WHERE d_id=? AND COALESCE(client_name,'')=? AND is_active=1 AND (group_id IS NULL OR group_id=0)");
+            // 計算各品項當前總庫存（合計所有同料號的非組合件儲位，反映實際可領總量；客戶為料號綁定屬性不再比對）
+            $sumQ=$pdo->prepare("SELECT COALESCE(SUM(qty),0) FROM stock_items WHERE d_id=? AND is_active=1 AND (group_id IS NULL OR group_id=0)");
             $grpMemQ=$pdo->prepare("SELECT qty,pcs_per_set FROM stock_items WHERE group_id=? AND is_active=1");
             // 查詢所有現有儲位（與 req_search_items 合併邏輯一致，讓修改畫面也能顯示多儲位）
             $siColsDet=$pdo->query("SHOW COLUMNS FROM stock_items")->fetchAll(PDO::FETCH_COLUMN);
             $hasLocIdDet=in_array('location_id',$siColsDet);
             $locSelDet=$hasLocIdDet?"COALESCE(sl.location_code,si.storage_location,'')":"COALESCE(si.storage_location,'')";
             $locJoinDet=$hasLocIdDet?"LEFT JOIN stock_locations sl ON sl.location_id=si.location_id":"";
-            $allLocQ=$pdo->prepare("SELECT $locSelDet AS loc FROM stock_items si $locJoinDet WHERE si.d_id=? AND COALESCE(si.client_name,'')=? AND si.is_active=1 AND (si.group_id IS NULL OR si.group_id=0)");
+            $allLocQ=$pdo->prepare("SELECT $locSelDet AS loc FROM stock_items si $locJoinDet WHERE si.d_id=? AND si.is_active=1 AND (si.group_id IS NULL OR si.group_id=0)");
             foreach($reqItems as &$ri){
                 if(!empty($ri['group_id'])){
                     // 組合件：floor(qty/pcs_per_set) 最小值 = 可領組數
@@ -3313,10 +3342,10 @@ LBLSQL;
                     $ri['current_qty']=$minSets===PHP_INT_MAX?0:(float)$minSets;
                     $ri['all_locations']='';
                 } else {
-                    // 非組合件：加總所有同料號同客戶的儲位庫存，並收集所有儲位
-                    $sumQ->execute([$ri['d_id']??'',trim($ri['client_name']??'')]);
+                    // 非組合件：加總所有同料號的儲位庫存，並收集所有儲位
+                    $sumQ->execute([$ri['d_id']??'']);
                     $ri['current_qty']=(float)$sumQ->fetchColumn();
-                    $allLocQ->execute([$ri['d_id']??'',trim($ri['client_name']??'')]);
+                    $allLocQ->execute([$ri['d_id']??'']);
                     $locs=array_filter(array_unique(array_column($allLocQ->fetchAll(PDO::FETCH_ASSOC),'loc')));
                     $ri['all_locations']=implode(', ',$locs);
                 }
@@ -3444,7 +3473,6 @@ LBLSQL;
             // 組合件：列出「含此組合件料號」的所有 group（同客戶／種類），每個 group（＝一個儲位）一列批次，
             //          供使用者逐儲位選擇出庫組數（每個 group 的可用組數＝其各子件 floor(qty/pcs_per_set) 的最小值）
             if(!empty($item['group_id'])){
-                $gClient=$item['client_name'];
                 $siColsG=$pdo->query("SHOW COLUMNS FROM stock_items")->fetchAll(PDO::FETCH_COLUMN);
                 $hasLocIdG=in_array('location_id',$siColsG);
                 $hasItemTypeG=in_array('item_type',$siColsG);
@@ -3455,8 +3483,9 @@ LBLSQL;
                 }
                 $locJoinG=$hasLocIdG?"LEFT JOIN stock_locations sgl ON sgl.location_id=si.location_id":"";
                 $locSelG=$hasLocIdG?"COALESCE(sgl.location_code,si.storage_location,'')":"COALESCE(si.storage_location,'')";
-                $whereG="si.d_id=? AND si.group_id IS NOT NULL AND si.group_id>0 AND si.is_active=1 AND COALESCE(si.client_name,'')=?";
-                $paramsG=[$item['d_id'],$gClient];
+                // 客戶為料號綁定屬性，同料號必同客戶，只需依 d_id 比對即可
+                $whereG="si.d_id=? AND si.group_id IS NOT NULL AND si.group_id>0 AND si.is_active=1";
+                $paramsG=[$item['d_id']];
                 if($hasItemTypeG){
                     if($itemTypeValG!==null){ $whereG.=" AND si.item_type=?"; $paramsG[]=$itemTypeValG; }
                     else { $whereG.=" AND (si.item_type IS NULL OR si.item_type=0)"; }
@@ -3506,19 +3535,9 @@ LBLSQL;
             $siBomSel=$hasSiBomRef?", si.bom_ref AS item_bom_ref":", NULL AS item_bom_ref";
             // 用相關子查詢取訂單號，避免 LEFT JOIN order_track 產生重複列（Order_id 若不唯一會複製 stock_item 列）
             $siOrdSel=$hasSiOrderRef?",(SELECT ot_si2.Order_oo FROM order_track ot_si2 WHERE ot_si2.Order_id=si.order_ref LIMIT 1) AS item_order_no":", NULL AS item_order_no";
-            if($hasClientName&&$clientName!==''){
-                // 有客戶名稱：只抓同客戶的儲位
-                $allSiQ=$pdo->prepare("SELECT si.stock_item_id,si.qty,{$locSelB} AS storage_location{$siBomSel}{$siOrdSel} FROM stock_items si {$locJoinB} WHERE si.d_id=? AND COALESCE(si.client_name,'')=? AND si.is_active=1{$extraFilterSi} ORDER BY si.stock_item_id");
-                $allSiQ->execute([$did,$clientName]);
-            } elseif($hasClientName){
-                // client_name 欄位存在但此品項無客戶名稱 → 只抓同樣無客戶名稱的儲位，避免混入他客戶料號
-                $allSiQ=$pdo->prepare("SELECT si.stock_item_id,si.qty,{$locSelB} AS storage_location{$siBomSel}{$siOrdSel} FROM stock_items si {$locJoinB} WHERE si.d_id=? AND (si.client_name IS NULL OR si.client_name='') AND si.is_active=1{$extraFilterSi} ORDER BY si.stock_item_id");
-                $allSiQ->execute([$did]);
-            } else {
-                // 沒有 client_name 欄位
-                $allSiQ=$pdo->prepare("SELECT si.stock_item_id,si.qty,{$locSelB} AS storage_location{$siBomSel}{$siOrdSel} FROM stock_items si {$locJoinB} WHERE si.d_id=? AND si.is_active=1{$extraFilterSi} ORDER BY si.stock_item_id");
-                $allSiQ->execute([$did]);
-            }
+            // 客戶為料號綁定屬性，同料號必同客戶，只需依 d_id 比對即可
+            $allSiQ=$pdo->prepare("SELECT si.stock_item_id,si.qty,{$locSelB} AS storage_location{$siBomSel}{$siOrdSel} FROM stock_items si {$locJoinB} WHERE si.d_id=? AND si.is_active=1{$extraFilterSi} ORDER BY si.stock_item_id");
+            $allSiQ->execute([$did]);
             $allSiRows=$allSiQ->fetchAll(PDO::FETCH_ASSOC);
             if(empty($allSiRows)){
                 // 兜底：查詢本筆正確儲位（含品項層級 BOM/訂單）
@@ -3728,7 +3747,8 @@ LBLSQL;
             $userSelR=$hasOutUsrR?"out_u.user_cname AS out_user_name,":"NULL AS out_user_name,";
             $cst=$pdo->prepare("SELECT COUNT(*) FROM stock_transactions st WHERE st.txn_date BETWEEN ? AND ? AND st.txn_type IN ('in','out')");
             $cst->execute([$dateFrom,$dateTo]); $total=intval($cst->fetchColumn());
-            $sql="SELECT st.txn_id,st.txn_type,st.txn_qty,st.txn_date,st.qty_before,st.qty_after,st.stock_item_id,st.d_id,st.remark,si.client_name,si.storage_location,sl.location_code,cr_u.user_cname AS creator_name,COALESCE(sic.category_name,'') AS category_name,$deptSelR $userSelR (SELECT SUM(si2.qty) FROM stock_items si2 WHERE si2.d_id=st.d_id AND si2.is_active=1) AS total_d_id_qty FROM stock_transactions st LEFT JOIN stock_items si ON si.stock_item_id=st.stock_item_id LEFT JOIN stock_item_categories sic ON sic.category_id=si.item_type LEFT JOIN stock_locations sl ON sl.location_id=si.location_id LEFT JOIN user cr_u ON cr_u.id=st.Created_By $deptJoinR $userJoinR WHERE st.txn_date BETWEEN ? AND ? AND st.txn_type IN ('in','out') ORDER BY st.txn_date DESC,st.txn_id DESC LIMIT $ps OFFSET $offset";
+            // 客戶：即時查料號綁定客戶，不用 si.client_name 舊快照
+            $sql="SELECT st.txn_id,st.txn_type,st.txn_qty,st.txn_date,st.qty_before,st.qty_after,st.stock_item_id,st.d_id,st.remark,clp.customer AS client_name,si.storage_location,sl.location_code,cr_u.user_cname AS creator_name,COALESCE(sic.category_name,'') AS category_name,$deptSelR $userSelR (SELECT SUM(si2.qty) FROM stock_items si2 WHERE si2.d_id=st.d_id AND si2.is_active=1) AS total_d_id_qty FROM stock_transactions st LEFT JOIN stock_items si ON si.stock_item_id=st.stock_item_id LEFT JOIN stock_item_categories sic ON sic.category_id=si.item_type LEFT JOIN stock_locations sl ON sl.location_id=si.location_id LEFT JOIN user cr_u ON cr_u.id=st.Created_By LEFT JOIN d_setting dsp ON dsp.d_id=si.d_setting_id LEFT JOIN customer_list clp ON clp.customer_id=dsp.Customer_Id $deptJoinR $userJoinR WHERE st.txn_date BETWEEN ? AND ? AND st.txn_type IN ('in','out') ORDER BY st.txn_date DESC,st.txn_id DESC LIMIT $ps OFFSET $offset";
             $st2=$pdo->prepare($sql); $st2->execute([$dateFrom,$dateTo]); $rows=$st2->fetchAll(PDO::FETCH_ASSOC);
             // 領庫出庫的紀錄：備註改顯示需求單詳情所填的料號備註(item_remark)；
             // 從交易備註解析單號，依「單號+料號」對應需求單品項；非領庫紀錄(無單號)保留原交易備註。
@@ -6232,7 +6252,8 @@ function renderTable(rows, page, ps){
             : '<strong>'+esc(r.d_id)+'</strong>';
         var specLine=(parseInt(r.show_spec)&&r.spec_no)?'<div style="font-size:11px;color:#666;margin-top:2px;">規格：'+esc(r.spec_no)+'</div>':'';
         var labelLine='';
-        if(parseInt(r.show_label)&&r.labels_str){ var _lh=buildLabelsHtml(r.labels_str); if(_lh) labelLine='<div style="margin-top:3px;">'+_lh+'</div>'; }
+        if(r.gear_spec_str){ labelLine='<div style="font-size:11px;color:#666;margin-top:2px;"><i class="fa fa-cog"></i> '+esc(r.gear_spec_str)+'</div>'; }
+        else if(parseInt(r.show_label)&&r.labels_str){ var _lh=buildLabelsHtml(r.labels_str); if(_lh) labelLine='<div style="margin-top:3px;">'+_lh+'</div>'; }
         // 客戶欄：依設定附加 廠商 / 保管者
         var clientExtra='';
         if(parseInt(r.show_vendor)&&r.vendor_name) clientExtra+='<div style="font-size:11px;color:#888;padding-left:8px;">廠商：'+esc(r.vendor_name)+'</div>';
