@@ -4,9 +4,13 @@
  * 每個料號一份分析表，逐列記錄一個潛在失效模式；風險優先指數 RPN = 嚴重度(S) × 發生度(O) × 偵測度(D)，
  * 一律由系統計算不給手填（鐵律：推導欄位改了來源就要重算）。嚴重度/發生度/偵測度/RPN 分級對照表
  * 為固定顯示的參考資訊（見頁面 PFMEA_RATING_TABLE 常數），不隨每張分析表個別修改。
- * 本表單自身的修訂履歷（版次/修訂內容/核准/查證/制定）走全站既有 AS 文件版本管理（as_document_version），
- * 不在此另建——一張 PFMEA 分析表對應「一份填寫紀錄」，表單模板本身的改版紀錄是 AS 文件管理的事。
+ * AS 文件範本本身的改版紀錄（as_document_version）跟這裡的 pfmea_revision 是兩件事：pfmea_revision
+ * 是「這一筆填寫紀錄自己」的新增/修改履歷（比照官方表單右上角小表，2026-08-13 新增），範本改版仍走
+ * 全站既有 AS 文件版本管理，不在此另建。
  */
+
+/** 官方紙本表單(F-11210-UE2-0001)固定的「相關部門」勾選清單，單一來源(Pfmea_API.php/pfmea_lib.php共用) */
+const PFMEA_DEPT_LIST_LIB = ['管理課','技術課','業務組','品保組','倉管組','採購組','生管組','生產課'];
 
 function pfmea_ensure_schema(PDO $db): void {
     $db->exec("CREATE TABLE IF NOT EXISTS pfmea_doc (
@@ -67,6 +71,10 @@ function pfmea_ensure_schema(PDO $db): void {
         "ALTER TABLE pfmea_doc ADD COLUMN spec_desc VARCHAR(200) NULL COMMENT '規格描述' AFTER item_type",
         "ALTER TABLE pfmea_doc ADD COLUMN product_name VARCHAR(200) NULL COMMENT '產品名稱' AFTER spec_desc",
         "ALTER TABLE pfmea_doc ADD COLUMN related_depts VARCHAR(300) NULL COMMENT '相關部門(逗號分隔部門名稱)' AFTER product_name",
+        // 2026-08-13 使用者要求：業務日期——由「建議建立清單」轉入者沿用td_dev_eval該筆的建立日期；
+        // 手動新增者綁定料號後比照td_dev_eval_suggest.php的建議日期機制(BOM/報工/訂單日期快速套用)。
+        // 項目列的目標完成日/生效日期新建時預設帶入這個日期。
+        "ALTER TABLE pfmea_doc ADD COLUMN biz_date DATE NULL COMMENT '業務日期(轉入沿用td_dev_eval建立日期/手動比照suggest建議日期機制)' AFTER related_depts",
     ] as $alter) {
         try { $db->exec($alter); } catch (Throwable $e) {}
     }
@@ -207,6 +215,30 @@ function pfmea_next_doc_no(PDO $db): string {
     $last = $st->fetchColumn();
     $seq = $last ? ((int)substr((string)$last, 8, 3) + 1) : 1;
     return $today . str_pad((string)$seq, 3, '0', STR_PAD_LEFT);
+}
+
+/** 「相關部門」預設勾選值（管理員設定，存 system_parameters，新建文件時自動帶入） */
+function pfmea_dept_defaults_get(PDO $db): array {
+    $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='PFMEA' AND param_key='default_depts' LIMIT 1");
+    $st->execute();
+    $v = $st->fetchColumn();
+    if (!$v) return [];
+    $arr = json_decode((string)$v, true);
+    return is_array($arr) ? $arr : [];
+}
+
+function pfmea_dept_defaults_save(PDO $db, array $depts, int $uid): void {
+    $depts = array_values(array_intersect(PFMEA_DEPT_LIST_LIB, $depts));
+    $json = json_encode($depts, JSON_UNESCAPED_UNICODE);
+    $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group='PFMEA' AND param_key='default_depts' LIMIT 1");
+    $st->execute();
+    $id = $st->fetchColumn();
+    if ($id) {
+        $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([$json, $uid, $id]);
+    } else {
+        $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by)
+                      VALUES ('PFMEA','default_depts',?,'PFMEA新增文件時「相關部門」預設勾選值(JSON部門名稱陣列)',?)")->execute([$json, $uid]);
+    }
 }
 
 /** 新增一筆修訂履歷（新增文件/修改文件），rev_no 自動接續 */
