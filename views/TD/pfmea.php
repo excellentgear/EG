@@ -121,7 +121,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         table.pf-rating th, table.pf-rating td { border:1px solid #EADFC8; padding:3px 6px; text-align:center; }
         table.pf-rating thead th { background:#F7E0BD; color:#5b3a1e; }
         table.pf-rating td.lv { font-weight:bold; color:#8A5A2B; white-space:nowrap; }
-        .pf-rating-wrap { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+        .pf-rating-wrap { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; margin-bottom:6px; }
         .pf-rpn-note { font-size:11px; color:#8a6d45; margin-top:4px; }
         /* 可增列分析表：改卡片式逐項顯示，畫面上不需要橫向捲動(列印仍走原橫式表格，見printDoc()) */
         .pf-card { border:1.5px solid #E8D5B5; border-radius:8px; background:#FDF8EF; padding:10px 12px; margin-bottom:12px; }
@@ -227,9 +227,43 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
             ｜ 建立：<span id="fCreatedInfo">—</span></div>
 
         <div class="pf-sec-title pf-collapsible" onclick="openRatingInfo()">
-            <i class="fa fa-question-circle"></i> 評級對照表（固定參考，不隨本表個別修改，點擊查看完整說明）
+            <i class="fa fa-question-circle"></i> 評級對照表（固定參考，不隨本表個別修改；點擊標題查看完整說明文字）
         </div>
-        <div class="pf-rpn-note">風險優先指數 RPN = S × O × D（系統自動計算，不可手填）：<b>1~50</b> 低｜<b>51~100</b> 普通｜<b>101~200</b> 高｜<b>201~1000</b> 非常高，需優先改善。</div>
+        <div class="pf-rating-wrap">
+            <table class="pf-rating"><thead><tr><th colspan="2">嚴重度(S)</th></tr></thead><tbody>
+                <tr><td class="lv">1</td><td>無影響</td></tr>
+                <tr><td class="lv">2</td><td>次要阻礙</td></tr>
+                <tr><td class="lv">3~6</td><td>中等阻礙</td></tr>
+                <tr><td class="lv">7</td><td>顯著阻礙</td></tr>
+                <tr><td class="lv">8</td><td>嚴重阻礙</td></tr>
+                <tr><td class="lv">9~10</td><td>符合安全和/或法規要求之失效</td></tr>
+            </tbody></table>
+            <table class="pf-rating"><thead><tr><th colspan="2">發生率(O)</th></tr></thead><tbody>
+                <tr><td class="lv">1</td><td>很低</td></tr>
+                <tr><td class="lv">2~3</td><td>低</td></tr>
+                <tr><td class="lv">4~6</td><td>中等</td></tr>
+                <tr><td class="lv">7~9</td><td>高</td></tr>
+                <tr><td class="lv">10</td><td>很高</td></tr>
+            </tbody></table>
+            <table class="pf-rating"><thead><tr><th colspan="2">偵測度(D)</th></tr></thead><tbody>
+                <tr><td class="lv">1</td><td>幾乎確定</td></tr>
+                <tr><td class="lv">2</td><td>極高</td></tr>
+                <tr><td class="lv">3</td><td>高</td></tr>
+                <tr><td class="lv">4</td><td>高中等</td></tr>
+                <tr><td class="lv">5</td><td>中等</td></tr>
+                <tr><td class="lv">6</td><td>低</td></tr>
+                <tr><td class="lv">7</td><td>非常低</td></tr>
+                <tr><td class="lv">8~9</td><td>可能性極小</td></tr>
+                <tr><td class="lv">10</td><td>幾乎不可能</td></tr>
+            </tbody></table>
+            <table class="pf-rating"><thead><tr><th colspan="2">風險優先指數(RPN)</th></tr></thead><tbody>
+                <tr><td class="lv">1~50</td><td>低</td></tr>
+                <tr><td class="lv">51~100</td><td>普通</td></tr>
+                <tr><td class="lv">101~200</td><td>高</td></tr>
+                <tr><td class="lv">201~1000</td><td>非常高</td></tr>
+            </tbody></table>
+        </div>
+        <div class="pf-rpn-note">風險優先指數 RPN = S × O × D（系統自動計算，不可手填），改善後RPN = 評價S × 評價O × 評價D，超過200需優先改善。</div>
 
         <datalist id="dl_process"></datalist>
         <div class="pf-sec-title">失效模式分析（逐項卡片，預設收合成一行；<b>點擊卡片標題展開才會顯示完整輸入欄位</b>，列印仍是您提供的橫式表格格式）</div>
@@ -393,7 +427,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
-            <li>點擊「評級對照表」標題列會開跳窗顯示完整說明，分「嚴重度(S)／發生率(O)／偵測度(D)／R.P.N值」四個分頁，內容為固定的評分基準參考（比照官方表單），不隨每份分析表個別修改。</li>
+            <li>「評級對照表」隨時可見一組精簡的嚴重度(S)／發生率(O)／偵測度(D)／風險優先指數(RPN)速查小表（比照官方表單版面）；點擊標題列另外開跳窗顯示完整官方說明文字，分四個分頁。兩者內容皆為固定參考，不隨每份分析表個別修改。</li>
             <li>料號可點擊開啟圖面查閱（比照報價單頁做法）。</li>
             <li>列印比照官方紙本表單版面（表頭資訊＋評級對照表＋相關部門置於上方，分析表格逐列對齊官方欄位順序與分組），同時比照全站列印標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
             <li><b>修訂履歷</b>：列印版右上角顯示本筆分析表自己的「編號／日期／修訂內容／準備」記錄（比照官方表單，取消批准/檢查欄位）。第一次存檔自動記1筆「新增文件」，準備人為當時建立者；之後修改存檔時會詢問是否要記為新版本，選是才會新增一列「修改文件」（準備人為當次修改者），選否代表只是小幅調整、不記版次，避免每次存檔都一直跳號。（此為本筆填寫紀錄自己的履歷，跟 AS 文件本身的版次管理是兩件事，AS 文件範本本身的改版仍由 AS 文件管理維護。）</li>
@@ -432,7 +466,7 @@ var TEMPLATE_ROWS = [], TEMPLATE_TARGET = null; // 整組列表跳窗暫存
 var DEPT_LIST = ['管理課','技術課','業務組','品保組','倉管組','採購組','生管組','生產課'];
 var FIELDS = ['process_code','process_desc','function_desc','requirement','failure_mode','failure_effect',
     'severity','classification','failure_cause','occurrence','prevention_controls','detection_controls','detection',
-    'recommended_actions','responsibility','target_date','action_taken','action_date',
+    'recommended_actions','target_date','action_date',
     'new_severity','new_occurrence','new_detection'];
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
@@ -540,11 +574,11 @@ function itemCardHtml(it, idx, expanded){
         + '</div>'
         + '<div class="pf-card-grp-title">建議措施</div>'
         + '<div class="pf-card-grid">'
-        + fld('recommended_actions','建議措施') + fld('responsibility','責任者') + fld('target_date','目標完成日','date')
+        + fld('recommended_actions','建議措施') + fld('target_date','目標完成日','date')
         + '</div>'
         + '<div class="pf-card-grp-title">措施結果</div>'
         + '<div class="pf-card-grid">'
-        + fld('action_taken','採行措施') + fld('action_date','生效日期','date')
+        + fld('action_date','生效日期','date')
         + '</div>'
         + '<div class="pf-rating-quad">'
         + fld('new_severity','評價 S','rating') + fld('new_occurrence','評價 O','rating') + fld('new_detection','評價 D','rating')
@@ -887,8 +921,8 @@ function printDoc(id){
                 + '<td class="tl">'+esc(it.failure_cause)+'</td><td>'+esc(it.occurrence)+'</td>'
                 + '<td class="tl">'+esc(it.prevention_controls)+'</td><td class="tl">'+esc(it.detection_controls)+'</td>'
                 + '<td>'+esc(it.detection)+'</td><td>'+esc(it.rpn)+'</td>'
-                + '<td class="tl">'+esc(it.recommended_actions)+'</td><td>'+esc(it.responsibility)+'</td><td>'+fmtDate(it.target_date)+'</td>'
-                + '<td class="tl">'+esc(it.action_taken)+'</td><td>'+fmtDate(it.action_date)+'</td>'
+                + '<td class="tl">'+esc(it.recommended_actions)+'</td><td>'+fmtDate(it.target_date)+'</td>'
+                + '<td>'+fmtDate(it.action_date)+'</td>'
                 + '<td>'+esc(it.new_severity)+'</td><td>'+esc(it.new_occurrence)+'</td><td>'+esc(it.new_detection)+'</td><td>'+esc(it.new_rpn)+'</td></tr>';
         });
         var depts = (d.related_depts||'').split(',').filter(Boolean);
@@ -933,9 +967,9 @@ function printDoc(id){
             + '<th rowspan="2">潛在失效模式</th><th rowspan="2">失效模式潛在後果</th><th rowspan="2">嚴重度S</th>'
             + '<th rowspan="2">分類</th><th rowspan="2">失效潛在原因</th><th rowspan="2">發生率O</th>'
             + '<th colspan="2">現行設計管制</th><th rowspan="2">偵測度D</th><th rowspan="2">RPN</th>'
-            + '<th rowspan="2">建議措施</th><th rowspan="2">責任者</th><th rowspan="2">目標完成日</th>'
-            + '<th colspan="6">措施結果</th></tr>'
-            + '<tr><th>控制預防</th><th>控制偵測</th><th>採行措施</th><th>生效日期</th><th>S</th><th>O</th><th>D</th><th>RPN</th></tr>'
+            + '<th rowspan="2">建議措施</th><th rowspan="2">目標完成日</th>'
+            + '<th colspan="5">措施結果</th></tr>'
+            + '<tr><th>控制預防</th><th>控制偵測</th><th>生效日期</th><th>S</th><th>O</th><th>D</th><th>RPN</th></tr>'
             + '</thead><tbody>'+rows+'</tbody></table>';
         var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.p-topwrap{display:flex;gap:6px;align-items:flex-start;margin-bottom:2px;}'
