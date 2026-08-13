@@ -97,6 +97,16 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         table.pf-tpl-table { width:100%; border-collapse:collapse; font-size:12px; }
         table.pf-tpl-table th, table.pf-tpl-table td { border:1px solid #EADFC8; padding:5px 8px; text-align:left; }
         table.pf-tpl-table thead th { background:#F7E0BD; color:#5b3a1e; }
+        .pf-rt-tabs { display:flex; gap:4px; border-bottom:2px solid #E8D5B5; margin-bottom:10px; }
+        .pf-rt-tab { padding:7px 16px; font-size:13px; color:#8a6d45; cursor:pointer; border-radius:6px 6px 0 0; }
+        .pf-rt-tab:hover { background:#FDF2E0; }
+        .pf-rt-tab.active { background:#F0A24B; color:#fff; font-weight:bold; }
+        table.pf-rt-table { width:100%; border-collapse:collapse; font-size:12px; }
+        table.pf-rt-table th, table.pf-rt-table td { border:1px solid #EADFC8; padding:6px 8px; text-align:left; vertical-align:top; }
+        table.pf-rt-table thead th { background:#F7E0BD; color:#5b3a1e; text-align:center; }
+        table.pf-rt-table td.lv { text-align:center; font-weight:bold; color:#8A5A2B; white-space:nowrap; }
+        .pf-rt-note { font-size:12px; color:#8a6d45; margin-top:8px; white-space:pre-line; background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:8px 10px; }
+        .pf-rt-pane { display:none; }
         .pf-row-btn { border:1px solid #D8BE93; background:#fff; color:#5b3a1e; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; }
         .pf-row-btn:hover { background:#F7E0BD; }
         .pf-row-btn.del { color:#DD5138; border-color:#f0c4bd; }
@@ -216,38 +226,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <div style="margin-top:6px;font-size:12px;color:#8a6d45;">表單編號：<b id="fDocNo">存檔後自動產生</b>
             ｜ 建立：<span id="fCreatedInfo">—</span></div>
 
-        <div class="pf-sec-title pf-collapsible" onclick="toggleRatingRef()">
-            <i class="fa fa-chevron-right" id="ratingToggleIcon"></i> 評級對照表（固定參考，不隨本表個別修改，點擊展開/收合）
-        </div>
-        <div id="ratingRefBox" style="display:none;">
-        <div class="pf-rating-wrap">
-            <table class="pf-rating"><thead><tr><th colspan="2">嚴重度 Severity (S)</th></tr></thead><tbody>
-                <tr><td class="lv">1</td><td>無影響</td></tr>
-                <tr><td class="lv">2</td><td>次要阻礙</td></tr>
-                <tr><td class="lv">3~6</td><td>中等阻礙</td></tr>
-                <tr><td class="lv">7</td><td>顯著阻礙</td></tr>
-                <tr><td class="lv">8</td><td>嚴重阻礙</td></tr>
-                <tr><td class="lv">9~10</td><td>符合安全和/或法規要求之失效</td></tr>
-            </tbody></table>
-            <table class="pf-rating"><thead><tr><th colspan="2">發生率 Occurrence (O)</th></tr></thead><tbody>
-                <tr><td class="lv">1</td><td>很低</td></tr>
-                <tr><td class="lv">2~3</td><td>低</td></tr>
-                <tr><td class="lv">4~6</td><td>中等</td></tr>
-                <tr><td class="lv">7~9</td><td>高</td></tr>
-                <tr><td class="lv">10</td><td>很高</td></tr>
-            </tbody></table>
-            <table class="pf-rating"><thead><tr><th colspan="2">偵測度 Detection (D)</th></tr></thead><tbody>
-                <tr><td class="lv">1</td><td>幾乎確定</td></tr>
-                <tr><td class="lv">2</td><td>極高</td></tr>
-                <tr><td class="lv">3</td><td>高</td></tr>
-                <tr><td class="lv">4</td><td>高中等</td></tr>
-                <tr><td class="lv">5</td><td>中等</td></tr>
-                <tr><td class="lv">6</td><td>低</td></tr>
-                <tr><td class="lv">7</td><td>非常低</td></tr>
-                <tr><td class="lv">8~9</td><td>可能性極小</td></tr>
-                <tr><td class="lv">10</td><td>幾乎不可能</td></tr>
-            </tbody></table>
-        </div>
+        <div class="pf-sec-title pf-collapsible" onclick="openRatingInfo()">
+            <i class="fa fa-question-circle"></i> 評級對照表（固定參考，不隨本表個別修改，點擊查看完整說明）
         </div>
         <div class="pf-rpn-note">風險優先指數 RPN = S × O × D（系統自動計算，不可手填）：<b>1~50</b> 低｜<b>51~100</b> 普通｜<b>101~200</b> 高｜<b>201~1000</b> 非常高，需優先改善。</div>
 
@@ -296,6 +276,86 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('templateMask')">關閉</button></div>
 </div></div>
 
+<!-- 評級對照表說明（嚴重度/發生率/偵測度/R.P.N值 四分頁，內容比照 3-TD-01-02-潛在失效模式及效應分析.xlsm） -->
+<div class="pf-mask" id="ratingInfoMask" style="z-index:1200;"><div class="pf-modal xwide">
+    <div class="m-head"><span>評級對照表說明</span><span class="m-close" onclick="closeMask('ratingInfoMask')">✕</span></div>
+    <div class="m-body">
+        <div class="pf-rt-tabs">
+            <div class="pf-rt-tab" data-tab="s" onclick="switchRatingTab('s')">嚴重度 (S)</div>
+            <div class="pf-rt-tab" data-tab="o" onclick="switchRatingTab('o')">發生率 (O)</div>
+            <div class="pf-rt-tab" data-tab="d" onclick="switchRatingTab('d')">偵測度 (D)</div>
+            <div class="pf-rt-tab" data-tab="rpn" onclick="switchRatingTab('rpn')">R.P.N值</div>
+        </div>
+        <div class="pf-rt-pane" data-tab="s">
+            <table class="pf-rt-table">
+                <thead><tr><th style="width:50px;">等級</th><th>標準：製程之影響嚴重程度（製程/組裝影響）</th><th>標準：產品之影響嚴重程度（客戶影響）</th></tr></thead>
+                <tbody>
+                    <tr><td class="lv">10</td><td><b>符合安全和/或法規要求之失效</b><br>可能危害操作者(機構或組裝)而無預警</td><td><b>符合安全和/或法規要求之失效</b><br>潛在的失效模式影響到產品安全操作，及/或與政府法規不符，而無預警</td></tr>
+                    <tr><td class="lv">9</td><td><b>符合安全和/或法規要求之失效</b><br>可能危害操作者(機構或組裝)而有預警</td><td><b>符合安全和/或法規要求之失效</b><br>潛在的失效模式影響到產品安全操作，及/或與政府法規不符，而有預警</td></tr>
+                    <tr><td class="lv">8</td><td><b>嚴重阻礙</b><br>產品可能必須100%廢棄，生產線停止或出貨中止</td><td><b>主要功能</b><br>失去主要功能產品無法正常運轉作動</td></tr>
+                    <tr><td class="lv">7</td><td><b>顯著阻礙</b><br>部分產品必須100%廢棄，變異來自於前製程，包括降低生產線流速或增加人力</td><td><b>失效或降低</b><br>降低主要功能(產品可運轉作動，但精度有所降低)</td></tr>
+                    <tr><td class="lv">6</td><td><b>中等阻礙</b><br>100%生產中產品，必須線外重工和合格</td><td><b>次要功能</b><br>失去次要功能(產品可運轉作動，但產品無法乘載正常載重量)</td></tr>
+                    <tr><td class="lv">5</td><td><b>中等阻礙</b><br>部分生產中產品，必須線外重工和合格</td><td><b>失效</b><br>降低次要功能(產品可運轉作動，但產品可乘載載重量降低)</td></tr>
+                    <tr><td class="lv">4</td><td><b>中等阻礙</b><br>100%生產中產品，必須於生產工站重工，於投入生產前</td><td><b>使用者煩惱</b><br>外觀或可聽見噪音產品運轉作動大多數顧客會有感覺到不舒適(&gt;75%)</td></tr>
+                    <tr><td class="lv">3</td><td><b>中等阻礙</b><br>部分生產中產品，必須於生產工站重工，於投入生產前</td><td><b>使用者煩惱</b><br>外觀或可聽見噪音，產品運轉作動多數顧客會有感覺到不舒適(50%)</td></tr>
+                    <tr><td class="lv">2</td><td><b>次要阻礙</b><br>在製程，操作，或對操作者有輕微不方便</td><td><b>使用者煩惱</b><br>外觀或可聽見噪音，產品運轉作動顧客會有感覺到不舒適(&lt;25%)</td></tr>
+                    <tr><td class="lv">1</td><td><b>無影響</b><br>無可辨別的影響</td><td><b>無影響</b><br>無可辨別的影響</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="pf-rt-pane" data-tab="o">
+            <table class="pf-rt-table">
+                <thead><tr><th style="width:50px;">等級</th><th>標準：發生原因-PFMEA</th><th style="width:120px;">可能失效</th></tr></thead>
+                <tbody>
+                    <tr><td class="lv">10</td><td>≧100/1,000或≧1/10</td><td>很高</td></tr>
+                    <tr><td class="lv">9</td><td>50/1,000或1/20</td><td>高</td></tr>
+                    <tr><td class="lv">8</td><td>20/1,000或1/50</td><td>高</td></tr>
+                    <tr><td class="lv">7</td><td>10/1,000或1/100</td><td>高</td></tr>
+                    <tr><td class="lv">6</td><td>2/1,000或1/500</td><td>中等</td></tr>
+                    <tr><td class="lv">5</td><td>0.5/1,000或1/2,000</td><td>中等</td></tr>
+                    <tr><td class="lv">4</td><td>0.1/1,000或1/10,000</td><td>中等</td></tr>
+                    <tr><td class="lv">3</td><td>0.01/1,000或1/100,000</td><td>低</td></tr>
+                    <tr><td class="lv">2</td><td>≦0.001/1,000或1/1,000,000</td><td>低</td></tr>
+                    <tr><td class="lv">1</td><td>透過預防管制阻止失效</td><td>很低</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="pf-rt-pane" data-tab="d">
+            <table class="pf-rt-table">
+                <thead><tr><th style="width:50px;">等級</th><th style="width:100px;">偵測可能性</th><th style="width:140px;">偵測機會</th><th>標準：偵測性經由製程管制</th></tr></thead>
+                <tbody>
+                    <tr><td class="lv">10</td><td>幾乎不可能</td><td>無偵測機會</td><td>無現行製程管制；無法偵測或分析</td></tr>
+                    <tr><td class="lv">9</td><td>可能性極小</td><td>任何階段不可偵測</td><td>失效模式和/或錯誤(原因)無法偵測(亦即：亂數稽核)</td></tr>
+                    <tr><td class="lv">8</td><td>可能性極小</td><td>後製程偵測問題</td><td>後製程失效模式偵測，經由操作員之視覺/觸覺/聽覺的手段</td></tr>
+                    <tr><td class="lv">7</td><td>非常低</td><td>問題偵查來源</td><td>製程工站失效模式偵測，經由操作員之視覺/觸覺/聽覺的手段，或後製程之計數值量測(Go/No-Go，扭力板手…等)</td></tr>
+                    <tr><td class="lv">6</td><td>低</td><td>後製程問題偵測</td><td>後製程失效模式偵測，經由操作員之計量值量測，或製程之計數值量測(Go/No-Go，扭力板手…等)</td></tr>
+                    <tr><td class="lv">5</td><td>中等</td><td>問題偵查來源</td><td>製程工站失效模式或錯誤(原因)偵測，經由操作員之計量值量測或製程工站自動控制，其將偵測異常零件和通知操作員(燈號，蜂鳴器…等)</td></tr>
+                    <tr><td class="lv">4</td><td>高中等</td><td>後製程問題偵測</td><td>後製程失效模式偵測，經由自動控制，其將偵測異常零件和自動鎖定於製程工站，防止流入製程</td></tr>
+                    <tr><td class="lv">3</td><td>高</td><td>問題偵查來源</td><td>製程工站失效模式偵測錯誤(原因)偵測，經由自動控制，其將偵測異常零件和自動鎖定於製程工站，防止流入製程</td></tr>
+                    <tr><td class="lv">2</td><td>極高</td><td>錯誤偵測和/貨問題預防</td><td>製程工站錯誤(原因)偵測，經由自動控制，其將偵測錯誤和防止零件被生產</td></tr>
+                    <tr><td class="lv">1</td><td>幾乎確定</td><td>不適用偵測；缺失預防</td><td>錯誤(原因)預防，經由治具設計，機械設計，零件設計。異常零件無法被生產，因為於產品/製程設計已設定防誤裝置</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="pf-rt-pane" data-tab="rpn">
+            <table class="pf-rt-table">
+                <thead><tr><th style="width:140px;">R.P.N值</th><th>說明</th></tr></thead>
+                <tbody>
+                    <tr><td class="lv">1≦RPN≦26</td><td>輕微的製造或商業風險，不需改善。</td></tr>
+                    <tr><td class="lv">27≦RPN≦63</td><td>低度風險，由專案負責人自行判斷是否採取措施。</td></tr>
+                    <tr><td class="lv">64≦RPN≦400</td><td>中度風險，須對設計做評價後，再作改善。</td></tr>
+                    <tr><td class="lv">400≦RPN</td><td>高度風險，須對設計作重新變更。</td></tr>
+                </tbody>
+            </table>
+            <div class="pf-rt-note">a. 400≦RPN時，須對設計作重新變更。
+b. 當O(發生頻率指數)或D(探測度)大於7時，建議改善措施必須能降到3以下。
+c. 當S(嚴重度指數)大於9時，O(發生頻率指數)和D(探測度)必須是2或是更低。
+d. 當其中任何一項是大於9時，必須進行設計變更或是適當的處置，使其降為3以下。</div>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('ratingInfoMask')">關閉</button></div>
+</div></div>
+
 <!-- AS 文件綁定 -->
 <div class="pf-mask" id="asDocMask"><div class="pf-modal">
     <div class="m-head"><span>AS 文件編號綁定</span><span class="m-close" onclick="closeMask('asDocMask')">✕</span></div>
@@ -333,7 +393,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
-            <li>「評級對照表」為固定的評分基準參考（比照官方表單），不隨每份分析表個別修改；預設收合以節省畫面空間，點擊標題列可展開/收合。</li>
+            <li>點擊「評級對照表」標題列會開跳窗顯示完整說明，分「嚴重度(S)／發生率(O)／偵測度(D)／R.P.N值」四個分頁，內容為固定的評分基準參考（比照官方表單），不隨每份分析表個別修改。</li>
             <li>料號可點擊開啟圖面查閱（比照報價單頁做法）。</li>
             <li>列印比照官方紙本表單版面（表頭資訊＋評級對照表＋相關部門置於上方，分析表格逐列對齊官方欄位順序與分組），同時比照全站列印標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
             <li>本表單自身的修訂履歷（版次、修訂內容、核准/查證/制定）由 AS 文件管理維護，不在本頁另外記錄。</li>
@@ -515,11 +575,12 @@ function refreshAllCardDatalists(){
     });
 }
 function renumberRows(){ $('#itemBody .pf-card').each(function(i){ $(this).find('.seq').text(i+1); }); }
-window.toggleRatingRef = function(){
-    var box = document.getElementById('ratingRefBox');
-    var show = box.style.display === 'none';
-    box.style.display = show ? 'block' : 'none';
-    document.getElementById('ratingToggleIcon').className = 'fa fa-chevron-' + (show ? 'down' : 'right');
+window.openRatingInfo = function(){ openMask('ratingInfoMask'); switchRatingTab('s'); };
+window.switchRatingTab = function(tab){
+    $('#ratingInfoMask .pf-rt-tab').removeClass('active');
+    $('#ratingInfoMask .pf-rt-tab[data-tab="'+tab+'"]').addClass('active');
+    $('#ratingInfoMask .pf-rt-pane').hide();
+    $('#ratingInfoMask .pf-rt-pane[data-tab="'+tab+'"]').show();
 };
 window.toggleCard = function(hdEl){
     var $card = $(hdEl).closest('.pf-card');
