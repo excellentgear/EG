@@ -571,46 +571,23 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
         + bodyHtml
         + (asCss ? '<div class="rf-as-doc">'+asCss+'</div>' : '')
         + '<scr'+'ipt>window.onload=function(){'
+        // 2026-08-13 第四次修正：拿掉「整頁自動縮小塞進一頁」的 document.body.style.zoom 邏輯。
+        // 這個縮放跟圖章的真實尺寸需求天生衝突——不管用反向補償 zoom 還是 fixed 圖層逃脫，圖章一旦
+        // 「變回原尺寸」就會撐大所在儲存格，讓實際內容高度跟原本算縮放比例時的高度對不上，
+        // 使用者兩輪實測都印出殘留縮小的圖章(1.4cm→1.9cm)。改成比照 training_record.php／print_pagination
+        // 鐵則既有作法：分頁 100% 交給瀏覽器列印引擎原生處理，內容略超過一頁時自然分成第2頁，
+        // 不再強行壓縮成一頁——圖章從此不會被任何縮放影響，永遠印出設計時的真實尺寸。
         // 量 scrollHeight 前先讓一拍：印章 SVG 內含 textLength/lengthAdjust 需要字型計量才能定案排版，
-        // onload 觸發當下量到的高度有時還沒完全穩定，量太早會讓縮放比例算少、印到最後footer被紙張邊界切掉。
+        // onload 觸發當下量到的高度有時還沒完全穩定。
         + 'setTimeout(function(){'
         + 'var pageH=('+(landscape ? (paper==='A3'?'297':'210') : (paper==='A3'?'420':'297'))+'-28)*96/25.4;'
-        + 'var h=document.body.scrollHeight;'
-        + 'var zr=1;'
-        + 'if(h>pageH){ zr=Math.max(0.5, pageH/h); document.body.style.zoom=zr; }'
-        // 圖章逃脫整頁縮放（2026-08-13 第三次修正，取代先前反向補償 zoom 的做法——那個做法會讓圖章「補償變回原尺寸」
-        // 之後撐大所在儲存格，使實際內容高度回超過一頁，跟原本算 zr 時的高度對不起來，導致縮放比例沒抓對、
-        // 圖章仍被殘留縮小(使用者實測回報1.4cm、修過一次仍只有1.9cm，兩次都對得上這個殘留誤差)。
-        // 正確做法：CSS zoom（不同於 transform）不會給子孫元素建立新的 containing block，所以 position:fixed
-        // 元素只要不是 body 的子孫（例如是 <html> 的另一個子節點，跟 body 平行），就完全不受 body.style.zoom 影響。
-        // 版面上原本放圖章的地方(.rf-stamp-slot)先當「佔位用隱形版型」正常參與縮放與排版；zr 定案後，
-        // 把每個佔位格「量到的目前螢幕座標」抄給一個新建的 <html> 層級 fixed 圖層裡對應位置的克隆節點，
-        // 圖章本體用它自己原本的（未被壓縮的）真實尺寸顯示——如同「先把版面縮小定案好、拍成一張底圖，
-        // 才把圖章蓋上去」，使用者原話的做法。
-        + 'if(zr<1){'
-        + 'var layer=document.createElement("div");'
-        + 'layer.id="rfStampLayer"; layer.style.cssText="position:fixed;top:0;left:0;width:0;height:0;overflow:visible;";'
-        + 'document.documentElement.appendChild(layer);'   // <html> 的子節點、body 的手足，不受 body 的 zoom 影響
-        + 'document.querySelectorAll(".rf-stamp-slot").forEach(function(slot){'
-        + 'var r=slot.getBoundingClientRect();'
-        + 'slot.style.visibility="hidden";'                 // 原位置留隱形佔位，撐住表格版面不跳動
-        + 'var clone=document.createElement("div");'
-        + 'clone.className=slot.className;'                 // 帶上 rf-stamp-defsize，否則沒模板時的 CSS 覆蓋尺寸規則選不到克隆節點
-        + 'clone.style.cssText="position:fixed;left:"+r.left+"px;top:"+r.top+"px;";'
-        + 'clone.innerHTML=slot.innerHTML;'                 // 克隆節點在 fixed 圖層裡，圖章 SVG 用自己原本設計的真實尺寸渲染
-        + 'layer.appendChild(clone);'
-        + '});'
-        + '}'
-        // 頁碼只在超過一頁才顯示（ai-rules/16 第二節，比照 quotation_list_test.php 既有作法）：
-        // zoom 縮放後再量一次高度，若仍超過約 92% 一頁高度才動態插入 @page 頁碼樣式，單頁文件完全不印頁碼。
-        + 'setTimeout(function(){'
+        // 頁碼只在超過一頁才顯示（ai-rules/16 第二節，比照 quotation_list_test.php／training_record.php 既有作法）：
         + 'if(document.body.scrollHeight>pageH*0.92){'
         + 'var st=document.createElement("style");'
         + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
         + 'document.head.appendChild(st);'
         + '}'
         + 'window.print();'
-        + '},60);'
         + '},120);};</scr'+'ipt></body></html>');
     w.document.close();
 }
@@ -635,16 +612,11 @@ function rfCss(){
 }
 /* schema 有設定時，印出來的大小由模板自己的「大小(px)」決定（SVG width/height屬性本身就是那個值，不用CSS蓋）；
    schema 沒設定(退回預設回墨印/掃描章)時才用 RF_STAMP_PX 固定覆蓋，兩者互斥、不會互相蓋過。
-   2026-08-13 第三次修正（重要，取代先前的反向補償zoom做法）：所有圖章一律包一層 rf-stamp-slot，
-   讓 egPrintWindow() 在整頁縮放定案後，把它從版面裡「挖出來」貼到不受 body 縮放影響的 fixed 圖層，
-   用圖章自己真實設計的尺寸顯示，不因為這次印了多少內容而跳動。反向補償(el.style.zoom=1/zr)的做法已知
-   有問題：補償後圖章「變回原尺寸」會撐大所在儲存格，讓實際內容高度回超過一頁、跟原本算縮放比例時的
-   高度對不上，導致縮放比例沒抓對、圖章仍被殘留縮小（使用者兩次實測1.4cm→1.9cm都對得上這個誤差模式）。
-   詳見 egPrintWindow() 內對應註解。使用者原話：「縮小後要像圖片那樣，然後才加圖章上去顯示」。 */
+   2026-08-13 第四次修正：egPrintWindow() 已拿掉整頁自動縮放，圖章不會再被任何縮放影響，
+   不需要 rf-stamp-slot 之類的「逃脫縮放」機制了，維持最單純的寫法即可。 */
 function stampOrName(name, date, isDeputy, schema){
     var html = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
-    var cls = 'rf-stamp-slot' + (!schema ? ' rf-stamp-defsize' : '');
-    return '<span class="'+cls+'">'+html+'</span>';
+    return schema ? html : '<span class="rf-stamp-defsize">'+html+'</span>';
 }
 /* 兩種圖章樣式各自綁定：逐列簽章(list_stamp) 用在項目表每列負責人簽名；製表/審核/核准(footer_stamp) 用在頁尾三欄。
    模板沒設定時 schema 是 null，EGStamp.stamp 會自動退回預設樣式。 */
