@@ -192,15 +192,70 @@ function hrf_need_csrf(): void {
 /* ============================================================ 固定角色池 ============================================================ */
 
 /** 確認人池＝該員工直屬主管；找不到或本人即主管(頂端)則回傳空陣列。 */
-function hrf_supervisor_pool(PDO $db, int $targetUid): array {
-    $supId = eg_resolve_supervisor($db, $targetUid);
-    if (!$supId || (int)$supId === $targetUid) return [];
+/** 「課長」對應職位設定（使用者明確要求：直接設定課長對應資料庫內哪個職位，系統自行往上比對部門）。 */
+function hrf_confirmer_position_get(PDO $db): ?int {
     try {
-        $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
-        $st->execute([$supId]);
-        $u = $st->fetch(PDO::FETCH_ASSOC);
-        return $u ? [$u] : [];
-    } catch (Throwable $e) { return []; }
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group=? AND param_key='confirmer_position_id' LIMIT 1");
+        $st->execute([HRF_PARAM_GROUP]);
+        $v = $st->fetchColumn();
+        if ($v === false) return null;
+        $id = (int)(json_decode((string)$v, true) ?? $v);
+        return $id > 0 ? $id : null;
+    } catch (Throwable $e) { return null; }
+}
+function hrf_confirmer_position_save(PDO $db, ?int $positionId, string $byName): void {
+    $json = json_encode($positionId ?: 0);
+    $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group=? AND param_key='confirmer_position_id' LIMIT 1");
+    $st->execute([HRF_PARAM_GROUP]);
+    $rid = $st->fetchColumn();
+    if ($rid) {
+        $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([$json, $byName, $rid]);
+    } else {
+        $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by) VALUES (?,?,?,?,?)")
+           ->execute([HRF_PARAM_GROUP, 'confirmer_position_id', $json, '人資職務表單「課長」對應職位id(0=未設定)', $byName]);
+    }
+}
+
+/**
+ * 確認人池＝該員工「課長」。優先法：從員工所在部門開始，往上逐層比對部門（department.parent_id 鏈，最多8層），
+ * 找該部門內掛著「課長對應職位」（hrf_confirmer_position_get）的人（排除員工本人）；找到就回傳。
+ * 沒設定課長對應職位，或整條路徑都找不到人，才退回全站共用的 eg_resolve_supervisor()（delegate_lib.php，
+ * 不修改該共用函式，只在本模組內優先改用部門x職位比對）。
+ */
+function hrf_supervisor_pool(PDO $db, int $targetUid): array {
+    $posId = hrf_confirmer_position_get($db);
+    if ($posId) {
+        $main = eg_user_main_identity($db, $targetUid);
+        $deptId = $main['department_id'] ?? null;
+        $hop = 0;
+        while ($deptId && $hop < 8) {
+            try {
+                $st = $db->prepare("SELECT u.id, u.user_cname FROM user_department_position_map m
+                                    JOIN user u ON u.id=m.user_id AND COALESCE(u.state,1) NOT IN (0,90)
+                                    WHERE m.department_id=? AND m.position_id=? AND u.id<>?
+                                    ORDER BY m.is_main DESC, u.id LIMIT 1");
+                $st->execute([$deptId, $posId, $targetUid]);
+                $u = $st->fetch(PDO::FETCH_ASSOC);
+                if ($u) return [$u];
+            } catch (Throwable $e) {}
+            $st2 = $db->prepare("SELECT parent_id FROM department WHERE id=?");
+            $st2->execute([$deptId]);
+            $deptId = $st2->fetchColumn() ?: null;
+            $hop++;
+        }
+    }
+    $supId = eg_resolve_supervisor($db, $targetUid);
+    if ($supId && (int)$supId !== $targetUid) {
+        try {
+            $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+            $st->execute([$supId]);
+            $u = $st->fetch(PDO::FETCH_ASSOC);
+            if ($u) return [$u];
+        } catch (Throwable $e) {}
+    }
+    // 兩種方法都找不到中間層人選（例如本人剛好是唯一的課長）：退回全站最高決策者，讓 NA 判定與送出流程都能正常運作。
+    $top = hrf_top_approver_pool($db);
+    return ($top && (int)$top[0]['id'] !== $targetUid) ? $top : [];
 }
 
 /** 核准人池＝全站最高決策者(org_role_lib top_approver，多數表單同一人=總經理)。 */
@@ -251,9 +306,9 @@ function hrf_user_snapshot(PDO $db, int $uid): ?array {
     if ($posId) {
         $s = $db->prepare("SELECT name FROM position WHERE id=?"); $s->execute([$posId]); $posName = $s->fetchColumn() ?: null;
     }
-    $supId = eg_resolve_supervisor($db, $uid, $deptId);
-    $supName = null;
-    if ($supId) { $s = $db->prepare("SELECT user_cname FROM user WHERE id=?"); $s->execute([$supId]); $supName = $s->fetchColumn() ?: null; }
+    $supPool = hrf_supervisor_pool($db, $uid);
+    $supId = $supPool ? (int)$supPool[0]['id'] : null;
+    $supName = $supPool ? $supPool[0]['user_cname'] : null;
     return [
         'user_id' => (int)$u['id'], 'user_cname' => $u['user_cname'], 'user_no' => hrf_user_no_display($db, $u['id']),
         'onboard_date' => $u['hire_date'], 'dept_id' => $deptId ? (int)$deptId : null, 'dept_name' => $deptName,
@@ -590,6 +645,20 @@ function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int
         $st->execute([$whitelistId]);
         $whitelist = $st->fetch(PDO::FETCH_ASSOC);
         if (!$whitelist) return ['ok'=>false, 'msg'=>'機型白名單項目不存在'];
+        // 固定「每職位/機台/員工需要一份」：同一員工同一機型已建立過就不重複建立（使用者明確要求）
+        $dup = $db->prepare("SELECT id FROM hr_form_instance WHERE form_type='skill_assess' AND user_id=? AND whitelist_id=? LIMIT 1");
+        $dup->execute([$targetUid, $whitelistId]);
+        if ($existingId = $dup->fetchColumn()) {
+            return ['ok'=>false, 'duplicate'=>true, 'existing_id'=>(int)$existingId, 'msg'=>$snap['user_cname'].'（'.$whitelist['display_name'].'）已建立過，不重複建立'];
+        }
+    }
+    if ($formType === 'competency') {
+        // 部門與職稱不變只需沿用既有那份（可檢視/列印/更新），不開放同員工同部門同職位有兩份（使用者明確要求）
+        $dup = $db->prepare("SELECT id FROM hr_form_instance WHERE form_type='competency' AND user_id=? AND dept_id<=>? AND position_id<=>? LIMIT 1");
+        $dup->execute([$targetUid, $snap['dept_id'], $snap['position_id']]);
+        if ($existingId = $dup->fetchColumn()) {
+            return ['ok'=>false, 'duplicate'=>true, 'existing_id'=>(int)$existingId, 'msg'=>$snap['user_cname'].'（'.($snap['dept_name']?:'').'/'.($snap['position_name']?:'').'）部門職稱未變更，已有既存表單可直接檢視/更新，不重複建立'];
+        }
     }
     $needSign = in_array($formType, ['skill_assess', 'competency'], true);
     $db->prepare("INSERT INTO hr_form_instance
@@ -618,14 +687,16 @@ function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int
  */
 function hrf_instance_create_batch(PDO $db, string $formType, array $targetUids, array $whitelistIds, string $bizDate, int $byUid, string $byName): array {
     hrf_ensure_schema($db);
-    $created = []; $errors = [];
+    $created = []; $errors = []; $skipped = [];
     foreach (array_unique(array_map('intval', $targetUids)) as $uid) {
         if ($uid <= 0) continue;
         $snap = hrf_user_snapshot($db, $uid);
         $label = $snap['user_cname'] ?? ('#' . $uid);
         if ($formType !== 'skill_assess') {
             $r = hrf_instance_create_one($db, $formType, $uid, null, $bizDate, $byUid, $byName);
-            if ($r['ok']) $created[] = $r['id']; else $errors[] = $label . '：' . $r['msg'];
+            if ($r['ok']) $created[] = $r['id'];
+            elseif (!empty($r['duplicate'])) $skipped[] = $label . '：' . $r['msg'];
+            else $errors[] = $label . '：' . $r['msg'];
             continue;
         }
         $wids = $whitelistIds;
@@ -636,10 +707,12 @@ function hrf_instance_create_batch(PDO $db, string $formType, array $targetUids,
         if (!$wids) { $errors[] = $label . '：沒有可用的機型清單（職位範本未設定適用機型，且未手動指定）'; continue; }
         foreach ($wids as $wid) {
             $r = hrf_instance_create_one($db, $formType, $uid, (int)$wid, $bizDate, $byUid, $byName);
-            if ($r['ok']) $created[] = $r['id']; else $errors[] = $label . '：' . $r['msg'];
+            if ($r['ok']) $created[] = $r['id'];
+            elseif (!empty($r['duplicate'])) $skipped[] = $label . '：' . $r['msg'];
+            else $errors[] = $label . '：' . $r['msg'];
         }
     }
-    return ['created'=>$created, 'errors'=>$errors];
+    return ['created'=>$created, 'errors'=>$errors, 'skipped'=>$skipped];
 }
 
 /** 複製表單：內容/機型/評分原樣複製，簽核狀態重置為草稿可重新編輯送出。 */

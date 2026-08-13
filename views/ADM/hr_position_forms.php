@@ -37,6 +37,7 @@ $perms = hrf_perms($db, $hrfUser);
         .hf-toolbar input[type=text], .hf-toolbar select, .hf-toolbar button { height:30px; font-size:13px; padding:0 12px; border:1px solid #D8BE93; border-radius:4px;
             background:#fff; color:#5b3a1e; }
         .hf-toolbar button { cursor:pointer; }
+        .hf-toolbar button:disabled { cursor:not-allowed; opacity:.5; }
         .hf-toolbar .btn-warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .hf-toolbar .btn-danger { background:#DD5138; color:#fff; border-color:#c23f28; }
         .hf-pager { display:flex; align-items:center; gap:4px; margin-left:auto; font-size:12.5px; color:#5b3a1e; }
@@ -262,7 +263,11 @@ function openMask(id){ $('#'+id).css('display','block'); }
 function closeMask(id){ $('#'+id).css('display','none'); }
 function ajaxPost(action, data, cb){
     data = data || {}; data.action = action; data.csrf = META.csrf;
-    $.post(API, data, function(res){ cb(res); }, 'json').fail(function(){ cb({ok:false, error:'連線失敗'}); });
+    $.post(API, data, function(res){ cb(res); }, 'json').fail(function(xhr){
+        var msg = (xhr.responseJSON && xhr.responseJSON.error) ? xhr.responseJSON.error
+                : (function(){ try { return JSON.parse(xhr.responseText).error; } catch(e){ return null; } })();
+        cb({ok:false, error: msg || ('連線失敗（HTTP '+xhr.status+'）')});
+    });
 }
 
 $(document).ready(function(){
@@ -296,6 +301,8 @@ function loadMeta(cb){
         window.__ownCompany = META.company_name || '';
         if (META.perms.canAdmin) $('.admin-only').show();
         if (META.perms.isSuperAdmin) $('.btn-auto-sign').show();
+        if (!META.perms.canCreate) $('.btn-create').prop('disabled', true).attr('title', '無建立權限，請洽管理員於「使用者權限設定」指派「人資職務表單」角色');
+        if (!META.perms.canPrint) $('.btn-print-all').prop('disabled', true).attr('title', '無列印權限');
         loadAsDoc('job_desc'); loadAsDoc('skill_assess'); loadAsDoc('competency');
         buildTableHeads();
         if (cb) cb();
@@ -485,6 +492,7 @@ function hfSubmitCreate(){
     ajaxPost('batch_create', {form_type:CREATE_TYPE, user_ids:JSON.stringify(uids), whitelist_ids:JSON.stringify(wids), business_date:bizDate}, function(res){
         if (!res.ok){ $('#createErrList').text(res.error||'建立失敗'); return; }
         var msg = '成功建立 '+res.created+' 筆';
+        if (res.skipped && res.skipped.length) msg += '；' + res.skipped.length + ' 筆已存在略過：' + res.skipped.join('；');
         if (res.errors && res.errors.length) msg += '；' + res.errors.length + ' 筆失敗：' + res.errors.join('；');
         $('#createErrList').css('color', res.errors && res.errors.length ? '#DD5138' : '#3f9142').text(msg);
         loadList(CREATE_TYPE);

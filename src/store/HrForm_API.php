@@ -105,7 +105,7 @@ case 'batch_create': {
     if (!is_array($whitelistIds)) $whitelistIds = [];
     $bizDate = (string)($_POST['business_date'] ?? date('Y-m-d'));
     $r = hrf_instance_create_batch($db, $formType, $targetUids, $whitelistIds, $bizDate, $uid, $uname);
-    jout(['created'=>count($r['created']), 'created_ids'=>$r['created'], 'errors'=>$r['errors']]);
+    jout(['created'=>count($r['created']), 'created_ids'=>$r['created'], 'errors'=>$r['errors'], 'skipped'=>$r['skipped']]);
 }
 
 case 'copy': {
@@ -318,6 +318,17 @@ case 'user_no_prefix_save': {
     hrf_need_csrf();
     if (!$perms['canAdmin']) jerr('僅管理員可設定', 403);
     hrf_user_no_prefix_save($db, trim((string)($_POST['prefix'] ?? '')), $uname);
+    jout([]);
+}
+
+/* ============================================================ 課長對應職位（確認人解析用，管理員） ============================================================ */
+
+case 'confirmer_position_get': jout(['position_id'=>hrf_confirmer_position_get($db)]);
+
+case 'confirmer_position_save': {
+    hrf_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可設定', 403);
+    hrf_confirmer_position_save($db, (int)($_POST['position_id'] ?? 0) ?: null, $uname);
     jout([]);
 }
 

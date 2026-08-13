@@ -138,6 +138,11 @@ if (!$perms['canAdmin']) { header('Location: hr_position_forms.php'); exit; }
             <label>員工編號前綴</label>
             <input type="text" id="userNoPrefix" style="max-width:200px;" placeholder="例如 EG-">
             <div style="margin-top:8px;"><button class="btn-warm" onclick="userNoPrefixSave()">儲存</button> <span id="userNoPrefixMsg" style="font-size:12.5px;color:#3f9142;"></span></div>
+
+            <p style="font-size:12.5px;color:#8a6d45;margin-top:20px;">技能鑑定表／職能鑑定表的「確認人」解析：優先找員工所在部門逐層往上比對，看哪個部門掛著這個職位的人（排除本人），例如生產1廠員工找不到就往上找生產部/生產課掛這個職位的人；整條路徑都找不到才退回系統既有的直屬主管邏輯。留空＝完全比照原本邏輯不啟用這套。</p>
+            <label>確認人（課長）對應職位</label>
+            <select id="confirmerPosition" style="max-width:200px;"></select>
+            <div style="margin-top:8px;"><button class="btn-warm" onclick="confirmerPositionSave()">儲存</button> <span id="confirmerPositionMsg" style="font-size:12.5px;color:#3f9142;"></span></div>
         </div>
     </div>
 </div>
@@ -241,7 +246,11 @@ function openMask(id){ $('#'+id).css('display','block'); }
 function closeMask(id){ $('#'+id).css('display','none'); }
 function ajaxPost(action, data, cb){
     data = data || {}; data.action = action; data.csrf = META.csrf;
-    $.post(API, data, function(res){ cb(res); }, 'json').fail(function(){ cb({ok:false, error:'連線失敗'}); });
+    $.post(API, data, function(res){ cb(res); }, 'json').fail(function(xhr){
+        var msg = (xhr.responseJSON && xhr.responseJSON.error) ? xhr.responseJSON.error
+                : (function(){ try { return JSON.parse(xhr.responseText).error; } catch(e){ return null; } })();
+        cb({ok:false, error: msg || ('連線失敗（HTTP '+xhr.status+'）')});
+    });
 }
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -257,7 +266,7 @@ $('#hfTabs a').on('click', function(e){
     if (['job_desc','skill_assess','competency'].indexOf(t) >= 0) loadTplList(t);
     if (t === 'whitelist') loadWhitelist();
     if (t === 'deptset') loadDeptSet();
-    if (t === 'misc') loadUserNoPrefix();
+    if (t === 'misc') { loadUserNoPrefix(); loadConfirmerPosition(); }
 });
 $('.btn-tpl-add').on('click', function(){ openTplModal($(this).closest('.hf-tabpane').data('type'), 0); });
 $('.btn-asdoc-bind').on('click', function(){ openAsdocModal($(this).closest('.hf-tabpane').data('type')); });
@@ -516,6 +525,21 @@ function userNoPrefixSave(){
     ajaxPost('user_no_prefix_save', {prefix:$('#userNoPrefix').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         $('#userNoPrefixMsg').text('已儲存（'+new Date().toLocaleTimeString()+'）');
+    });
+}
+
+/* ============================================================ 確認人（課長）對應職位 ============================================================ */
+function loadConfirmerPosition(){
+    var opts = '<option value="0">（未設定，沿用系統原邏輯）</option>' + (META.positions||[]).map(function(p){ return '<option value="'+p.id+'">'+esc(p.name)+'</option>'; }).join('');
+    $('#confirmerPosition').html(opts);
+    $.getJSON(API, {action:'confirmer_position_get'}, function(res){
+        if (res.ok) $('#confirmerPosition').val(res.position_id||0);
+    });
+}
+function confirmerPositionSave(){
+    ajaxPost('confirmer_position_save', {position_id:$('#confirmerPosition').val()}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        $('#confirmerPositionMsg').text('已儲存（'+new Date().toLocaleTimeString()+'）');
     });
 }
 

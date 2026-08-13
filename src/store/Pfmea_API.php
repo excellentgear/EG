@@ -14,6 +14,13 @@ include_once $document_root . '/EGsystem/src/common/org_role_lib.php';
 include_once $document_root . '/EGsystem/src/common/pfmea_lib.php';
 include_once $document_root . '/EGsystem/src/common/pfmea_suggest_lib.php';
 include_once $document_root . '/EGsystem/src/common/pfmea_reference_lib.php';
+include_once $document_root . '/EGsystem/src/common/gear_spec_lib.php';
+// type_id_ctrl_process_candidates()：此料號的訂單/報價製程紀錄，跟型態識別文件管制表共用同一套來源，
+// 不重寫一份（2026-08-13 使用者要求跳窗右側即時顯示此料號所有訂單製程）
+include_once $document_root . '/EGsystem/src/common/type_id_ctrl_lib.php';
+// td_dev_eval_part_name_get()：產品名稱沿用產品開發評估表同一張「料號固定顯示名稱」設定表，
+// 不另建一份（2026-08-13 使用者要求）
+include_once $document_root . '/EGsystem/src/common/td_dev_eval_lib.php';
 
 if (!isset($_SESSION['userName'])) {
     http_response_code(403);
@@ -56,7 +63,8 @@ function buildItemView(array $it): array {
 }
 
 /** 官方紙本表單(F-11210-UE2-0001)固定的「相關部門」勾選清單，非逐份填寫可自訂的內容 */
-const PFMEA_DEPT_LIST = ['管理課','技術課','業務組','品保組','倉管組','採購組','生管組','生產課'];
+// PFMEA_DEPT_LIST_LIB 定義於 pfmea_lib.php（單一來源，pfmea_dept_defaults_save 也要用）
+const PFMEA_DEPT_LIST = PFMEA_DEPT_LIST_LIB;
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
@@ -127,6 +135,7 @@ case 'save':
     $relatedDeptsRaw = json_decode((string)($_POST['related_depts'] ?? '[]'), true);
     if (!is_array($relatedDeptsRaw)) $relatedDeptsRaw = [];
     $relatedDepts = implode(',', array_values(array_intersect(PFMEA_DEPT_LIST, $relatedDeptsRaw)));
+    $bizDate = trim((string)($_POST['biz_date'] ?? ''));
     $itemsRaw = json_decode((string)($_POST['items'] ?? '[]'), true);
     if (!is_array($itemsRaw)) $itemsRaw = [];
     $newRevision = !empty($_POST['new_revision']); // 既有文件修改存檔時，使用者確認要記為新版本才會傳true
@@ -138,14 +147,14 @@ case 'save':
             $st = $db->prepare("SELECT 1 FROM pfmea_doc WHERE id=? AND is_deleted=0");
             $st->execute([$id]);
             if (!$st->fetchColumn()) throw new Exception('找不到該筆或已刪除');
-            $st = $db->prepare("UPDATE pfmea_doc SET part_d_id=?, part_no_text=?, item_type=?, spec_desc=?, product_name=?, related_depts=?,
+            $st = $db->prepare("UPDATE pfmea_doc SET part_d_id=?, part_no_text=?, item_type=?, spec_desc=?, product_name=?, related_depts=?, biz_date=?,
                                  updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=?");
-            $st->execute([$partDId ?: null, $partNoText ?: null, $itemType, $specDesc ?: null, $productName ?: null, $relatedDepts ?: null, $uid, $uname, $id]);
+            $st->execute([$partDId ?: null, $partNoText ?: null, $itemType, $specDesc ?: null, $productName ?: null, $relatedDepts ?: null, $bizDate ?: null, $uid, $uname, $id]);
         } else {
             $docNo = pfmea_next_doc_no($db);
-            $st = $db->prepare("INSERT INTO pfmea_doc (doc_no, part_d_id, part_no_text, item_type, spec_desc, product_name, related_depts, created_by, created_by_name)
-                                 VALUES (?,?,?,?,?,?,?,?,?)");
-            $st->execute([$docNo, $partDId ?: null, $partNoText ?: null, $itemType, $specDesc ?: null, $productName ?: null, $relatedDepts ?: null, $uid, $uname]);
+            $st = $db->prepare("INSERT INTO pfmea_doc (doc_no, part_d_id, part_no_text, item_type, spec_desc, product_name, related_depts, biz_date, created_by, created_by_name)
+                                 VALUES (?,?,?,?,?,?,?,?,?,?)");
+            $st->execute([$docNo, $partDId ?: null, $partNoText ?: null, $itemType, $specDesc ?: null, $productName ?: null, $relatedDepts ?: null, $bizDate ?: null, $uid, $uname]);
             $id = (int)$db->lastInsertId();
         }
         // 修訂履歷：第一次存檔一律記「新增文件」；既有文件只有使用者確認要記為新版本才加「修改文件」
@@ -293,6 +302,38 @@ case 'ref_item_template_delete':
     if (!$id) jout(['success'=>false,'message'=>'缺少id']);
     pfmea_ref_item_template_delete($db, $id);
     jout(['success'=>true]);
+
+// ── 各種自動帶入（2026-08-13 使用者要求）──────────────────────────────
+// 規格描述：沿用 NewOrder_Track.php 料號下方顯示的齒輪規格邏輯，查無資料回傳空字串(前端不覆蓋)
+case 'gear_spec_get':
+    needView($perms);
+    $partDId = (int)($_POST['part_d_id'] ?? $_GET['part_d_id'] ?? 0);
+    jout(['success'=>true,'spec'=>eg_gear_spec_for_part($db, $partDId) ?? '']);
+
+// 產品名稱：沿用產品開發評估表(td_dev_eval)同一個「產品名稱預設值」設定——這是全部產品通用的單一
+// 預設值(非特定料號)，2026-08-13使用者已在td_dev_eval.php更正過這個機制，PFMEA直接共用同一組設定
+case 'product_name_get':
+    needView($perms);
+    jout(['success'=>true,'product_name'=>td_dev_eval_default_product_name_get($db) ?? '']);
+
+// 相關部門預設勾選值（管理員設定，新增文件時自動帶入）
+case 'dept_defaults_get':
+    needView($perms);
+    jout(['success'=>true,'depts'=>pfmea_dept_defaults_get($db)]);
+
+case 'dept_defaults_save':
+    needAdmin($perms);
+    $depts = json_decode((string)($_POST['depts'] ?? '[]'), true);
+    if (!is_array($depts)) $depts = [];
+    pfmea_dept_defaults_save($db, $depts, $uid);
+    jout(['success'=>true]);
+
+// 此料號所有訂單/報價製程紀錄，跳窗右側即時顯示方便對照填寫（跟型態識別文件管制表共用同一套來源）
+case 'order_process_list':
+    needView($perms);
+    $partDId = (int)($_POST['part_d_id'] ?? $_GET['part_d_id'] ?? 0);
+    if (!$partDId) jout(['success'=>true,'rows'=>[]]);
+    jout(['success'=>true,'rows'=>type_id_ctrl_process_candidates($db, $partDId)]);
 
 case 'delete_header':
     needAdmin($perms);
