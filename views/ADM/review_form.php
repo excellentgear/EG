@@ -658,14 +658,17 @@ function printForm(){
         });
     });
     h += '</tbody></table>';
+    // 三顆章的日期一律印「建立日期」（CUR.business_date），不是簽核當下的實際系統時間（ai-rules/18 第4條既有
+    // 全站慣例：簽章日期＝該單據的業務日期；2026-08-13 使用者實測回報審核/核准章印出系統時間、跟製表章的
+    // 建立日期對不起來才發現這裡沒有跟上慣例，decided_at 仍照實記錄精確時間戳，只是不拿來當章面顯示值）。
     h += '<table class="rf-p-foot"><tr>';
     h += '<td><div class="foot-lbl">審核</div>' + (
         !t.need_review ? '<div class="foot-na">（本模板免審核）</div>'
-        : (CUR.review && CUR.review.status==='approved' ? stampFooter(CUR.review.approver_name, dispDate(CUR.review.decided_at)) : '')
+        : (CUR.review && CUR.review.status==='approved' ? stampFooter(CUR.review.approver_name, dispDate(CUR.business_date)) : '')
     ) + '</td>';
     h += '<td><div class="foot-lbl">核准</div>' + (
         !t.need_approval ? '<div class="foot-na">（本模板免核准）</div>'
-        : (CUR.approval && CUR.approval.status==='approved' ? stampFooter(CUR.approval.approver_name, dispDate(CUR.approval.decided_at)) : '')
+        : (CUR.approval && CUR.approval.status==='approved' ? stampFooter(CUR.approval.approver_name, dispDate(CUR.business_date)) : '')
     ) + '</td>';
     h += '<td><div class="foot-lbl">製表</div>' + stampFooter(CUR.created_by_name, dispDate(CUR.business_date)) + '</td>';
     h += '</tr></table>';

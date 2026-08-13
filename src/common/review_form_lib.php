@@ -554,10 +554,16 @@ function rvf_notify_item_owners(PDO $db, int $instanceId, int $fromUid): void {
 
 /* -------- 送出／審核／核准 -------- */
 
-/** 自動簽核（ai-rules/21 三條鐵則）：立即建立一筆已核准的 approval_record，簽核人歸屬走該關卡合格簽核池第一位，
- *  池空退回 top_approver；決行時間 = 送出時間 + 隨機5~30分鐘，跨天鎖回送出日23:59。不改 approval_lib.php 本身，
- *  只在這裡事後 UPDATE decided_at，避免影響其他模組的人工簽核時間。 */
-function rvf_auto_sign(PDO $db, int $instanceId, string $level, array $tpl, int $submitterUid, string $submitterName, string $submitDate): string {
+/** 自動簽核（ai-rules/21 三條鐵則，2026-08-13 使用者實測後修正時間邏輯）：立即建立一筆已核准的 approval_record，
+ *  簽核人歸屬走該關卡合格簽核池第一位，池空退回 top_approver；決行時間＝從「上一個關卡實際完成的時間」
+ *  （$afterDatetime，第一關卡是送出時間，第二關卡是上一關卡自己的 decided_at）往後隨機 5分鐘~3小時，
+ *  跨天鎖回送出日23:59——**基準點刻意用「上一關卡的時間」而不是固定用送出時間**，否則審核／核准各自獨立算隨機
+ *  偏移量時，核准的偏移量剛好比審核小，時間軸就會出現「核准早於審核」這種不合理的先後順序（使用者明確要求
+ *  「注意簽核順序的時間要正確」）。不改 approval_lib.php 本身，只在這裡事後 UPDATE decided_at，避免影響其他模組
+ *  的人工簽核時間。免簽核不代表沒人要知道，簽完仍發一則通知讓送出者知道系統自動處理過（使用者明確要求，
+ *  比照人工簽核決行後既有的 RVF_RESULT 通知模式，不新開通知類型）。
+ *  @return array{signer_name:string, decided_at:string} decided_at 給下一關卡當 $afterDatetime 串聯用 */
+function rvf_auto_sign(PDO $db, int $instanceId, string $level, array $tpl, int $submitterUid, string $submitterName, string $submitDate, string $afterDatetime): array {
     $pool = $level === 'review' ? rvf_review_pool($db, $tpl) : rvf_approver_pool($db, $tpl, $submitterUid);
     $signerId = $pool ? (int)$pool[0]['id'] : null;
     $signerName = $pool ? $pool[0]['user_cname'] : null;
@@ -569,15 +575,22 @@ function rvf_auto_sign(PDO $db, int $instanceId, string $level, array $tpl, int 
     if (!$signerName) { $signerId = $submitterUid; $signerName = $submitterName; }
     $aid = eg_approval_submit($db, 'review_form', $instanceId, $level, $submitterUid, $submitterName);
     eg_approval_decide($db, $aid, $signerId, $signerName, 'approved', '（系統自動簽核）');
-    $offsetMin = random_int(5, 30);
-    $db->prepare("UPDATE approval_record SET decided_at = LEAST(DATE_ADD(submitted_at, INTERVAL ? MINUTE), CONCAT(?, ' 23:59:59')) WHERE id=?")
-       ->execute([$offsetMin, $submitDate, $aid]);
-    return $signerName;
+    $offsetMin = random_int(5, 180);
+    $db->prepare("UPDATE approval_record SET decided_at = LEAST(DATE_ADD(?, INTERVAL ? MINUTE), CONCAT(?, ' 23:59:59')) WHERE id=?")
+       ->execute([$afterDatetime, $offsetMin, $submitDate, $aid]);
+    $decidedAt = (string)$db->query("SELECT decided_at FROM approval_record WHERE id=" . (int)$aid)->fetchColumn();
+    $levelLabel = $level === 'review' ? '審核' : '核准';
+    rvf_notify($db, $instanceId, [$submitterUid], '「' . $tpl['name'] . '」' . $levelLabel . '已由系統自動簽核',
+        '「' . $tpl['name'] . '」' . $levelLabel . '已自動簽核完成（送出日：' . $submitDate . '，簽核時間：' . $decidedAt . '），'
+        . '簽核人：' . $signerName . '（系統自動簽核，非本人親自處理）。', $submitterUid, 'RVF_RESULT', 'read');
+    return ['signer_name'=>$signerName, 'decided_at'=>$decidedAt];
 }
 
 /** 審核關卡結束(不論是不需要審核、自動簽核、或人工審核通過)後接著判斷要不要進入核准關卡；不需要就直接approved。
- *  submit() 與 rvf_review_decide() 都會走到這裡，抽成共用避免兩處各寫一份規則不一致。 */
-function rvf_advance_to_approval(PDO $db, int $instanceId, array $tpl, array $inst, string $submitDate): array {
+ *  submit() 與 rvf_review_decide() 都會走到這裡，抽成共用避免兩處各寫一份規則不一致。
+ *  $afterDatetime：核准若自動簽核，隨機偏移的基準時間點（審核自動簽核剛完成就傳它的 decided_at；
+ *  審核是人工完成或本來就不需要審核，就傳「現在」，確保核准的時間一定晚於審核完成的時間）。 */
+function rvf_advance_to_approval(PDO $db, int $instanceId, array $tpl, array $inst, string $submitDate, string $afterDatetime): array {
     if (empty($tpl['need_approval'])) {
         $db->prepare("UPDATE rf_instance SET status='approved',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
         return ['ok'=>true, 'status'=>'approved'];
@@ -585,7 +598,7 @@ function rvf_advance_to_approval(PDO $db, int $instanceId, array $tpl, array $in
     $submitterUid = (int)$inst['created_by'];
     $submitterName = (string)$inst['created_by_name'];
     if (!empty($tpl['auto_approval'])) {
-        rvf_auto_sign($db, $instanceId, 'approval', $tpl, $submitterUid, $submitterName, $submitDate);
+        rvf_auto_sign($db, $instanceId, 'approval', $tpl, $submitterUid, $submitterName, $submitDate, $afterDatetime);
         $db->prepare("UPDATE rf_instance SET status='approved',updated_at=NOW() WHERE id=?")->execute([$instanceId]);
         return ['ok'=>true, 'status'=>'approved'];
     }
@@ -611,14 +624,15 @@ function rvf_instance_submit(PDO $db, int $instanceId, int $uid, string $uname):
 
     // 送出日鐵則(ai-rules/21)：一般使用者不可自選，一律當下日期；業務日期跟精確時間戳分開存，送出後鎖定不可再改。
     $submitDate = date('Y-m-d');
-    $db->prepare("UPDATE rf_instance SET submit_date=?, submitted_at=NOW() WHERE id=?")->execute([$submitDate, $instanceId]);
+    $submittedAt = date('Y-m-d H:i:s');
+    $db->prepare("UPDATE rf_instance SET submit_date=?, submitted_at=? WHERE id=?")->execute([$submitDate, $submittedAt, $instanceId]);
     $inst['submit_date'] = $submitDate;
 
     $result = null;
     if (!empty($tpl['need_review'])) {
         if (!empty($tpl['auto_review'])) {
-            rvf_auto_sign($db, $instanceId, 'review', $tpl, $uid, $uname, $submitDate);
-            $result = rvf_advance_to_approval($db, $instanceId, $tpl, $inst, $submitDate);
+            $r = rvf_auto_sign($db, $instanceId, 'review', $tpl, $uid, $uname, $submitDate, $submittedAt);
+            $result = rvf_advance_to_approval($db, $instanceId, $tpl, $inst, $submitDate, $r['decided_at']);
         } else {
             $pool = rvf_review_pool($db, $tpl);
             if (!$pool) return ['ok'=>false, 'msg'=>'審核部門尚未設定可審核的主管，請聯絡管理員'];
@@ -630,7 +644,7 @@ function rvf_instance_submit(PDO $db, int $instanceId, int $uid, string $uname):
             $result = ['ok'=>true, 'status'=>'reviewing'];
         }
     } else {
-        $result = rvf_advance_to_approval($db, $instanceId, $tpl, $inst, $submitDate);
+        $result = rvf_advance_to_approval($db, $instanceId, $tpl, $inst, $submitDate, $submittedAt);
     }
 
     $schema = json_decode((string)$tpl['current_schema_json'], true) ?: [];
@@ -654,7 +668,9 @@ function rvf_review_decide(PDO $db, int $instanceId, int $uid, string $uname, st
             $uname . ' 退回了「' . $tpl['name'] . '」。退回原因：' . $note, $uid, 'RVF_RESULT', 'read');
         return ['ok'=>true, 'status'=>'rejected'];
     }
-    $result = rvf_advance_to_approval($db, $instanceId, $tpl, $inst, (string)($inst['submit_date'] ?: date('Y-m-d')));
+    // 人工審核剛完成，核准若自動簽核，隨機偏移的基準時間點就是「現在」（審核完成的當下），
+    // 確保核准時間一定晚於這次人工審核決行的時間。
+    $result = rvf_advance_to_approval($db, $instanceId, $tpl, $inst, (string)($inst['submit_date'] ?: date('Y-m-d')), date('Y-m-d H:i:s'));
     if ($result['ok'] && $result['status'] === 'approved') {
         rvf_notify($db, $instanceId, [(int)$inst['created_by']], '「' . $tpl['name'] . '」表單已完成審核',
             $uname . ' 已審核通過「' . $tpl['name'] . '」。', $uid, 'RVF_RESULT', 'read');
