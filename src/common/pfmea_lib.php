@@ -71,6 +71,10 @@ function pfmea_ensure_schema(PDO $db): void {
         try { $db->exec($alter); } catch (Throwable $e) {}
     }
 
+    // 2026-08-13 使用者要求：項目列補「製程代號」欄位，僅供畫面下拉輔助(帶出失效模式/整組樣板選項用)，
+    // 不是官方表單欄位、不列印。
+    try { $db->exec("ALTER TABLE pfmea_item ADD COLUMN process_code VARCHAR(20) NULL COMMENT '製程代號(僅畫面輔助，不列印)' AFTER seq"); } catch (Throwable $e) {}
+
     // 2026-08-13 使用者要求：製程代號→潛在失效模式清單、控制預防/控制偵測固定選項、製程整組樣板
     // （來源 3-TD-01-02-潛在失效模式及效應分析.xlsm 的「資料庫」「項目異常」工作表），供編輯畫面
     // 製程代號欄位自動帶出下拉選單/整組樣板套用。可填表人(canEdit)可新增，僅管理員(canAdmin)可刪除。
