@@ -237,8 +237,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
         <div class="te-decision-grp" id="decisionGrp"></div>
         <table class="te-slot"><tbody id="prodDecisionBody"></tbody></table>
 
-        <div class="te-sec-title">總經理決行</div>
+        <div class="te-sec-title">總經理決行（最終決策，可沿用或覆蓋生產課決行結果）</div>
         <div id="gmDecisionInfo" style="font-size:13px;color:#8A5A2B;margin-bottom:4px;"></div>
+        <div class="te-decision-grp" id="gmDecisionGrp"></div>
         <table class="te-slot"><tbody id="gmBody"></tbody></table>
 
         <div style="margin-top:10px;<?= $canBackfill?'':'display:none;' ?>">
@@ -247,7 +248,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
 
         <div class="te-admin-panel" id="adminQuickPanel" style="<?= $perms['isAdmin']?'':'display:none;' ?>">
             <h5><i class="fa fa-user-secret"></i> 系統管理員快速設定（僅補歷史紙本資料用，會跳過送出/簽核流程）</h5>
-            <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">上方「確認項目及結果」32項與各部門簽認欄位不受一般流程限制，管理員可直接編輯後按下方按鈕，一次把尚未簽核的欄位全部自動簽核。</div>
+            <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">上方「確認項目及結果」32項與各部門簽認欄位不受一般流程限制，管理員可直接編輯後按下方按鈕，一次把尚未簽核的欄位全部自動簽核（決行結果請在下方選擇，不是上方表格內的選項——上方選項一樣要照正常流程走完六部門/生產課才會開放）。</div>
+            <label style="display:inline-block;margin:0 8px 0 0;">決行結果</label>
+            <select id="adminDecisionSelect" style="width:140px;display:inline-block;">
+                <option value="">（未選擇）</option>
+                <?php foreach (TD_DEV_EVAL_DECISIONS as $dk => $dv): ?>
+                    <option value="<?= htmlspecialchars($dk) ?>"><?= htmlspecialchars($dv) ?></option>
+                <?php endforeach; ?>
+            </select>
             <label style="display:inline-block;margin:0 8px 0 0;">簽核業務日期</label>
             <input type="date" id="adminAutoSignDate" style="width:160px;display:inline-block;">
             <label style="display:inline-block;font-weight:normal;margin-left:10px;">
@@ -330,7 +338,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '評估表�
             <li>按「新增」→ 填客戶名稱、產品件號（打部分字元搜尋，選定後自動帶出客戶名稱；查無此料號時可直接手動輸入新產品件號，不強制要求已存在的料號）、產品名稱、預估需求量、填表日期、送樣時間。此階段（草稿）仍可自由編輯表頭，32 項確認結果非必填。</li>
             <li>填好後按「送出」：表頭與 32 項確認結果隨即鎖定（僅系統管理員可再整批修改），系統會通知六部門（技術/業務/管理/生產/品保/資材課）的合格簽核人開始填寫。</li>
             <li>APQP 小組簽認：輪到自己部門簽核時，「確認項目及結果」表格中屬於本部門的項次列會醒目標示且可編輯，填完後在「APQP 小組簽認」該部門列填意見（非必填）按「我要簽核」即完成並蓋章；六部門不限順序、任一位主管都可以簽，不限定特定一人。</li>
-            <li>六部門<b>全部</b>簽認完成後，「生產課決行」才會開放：勾選「可行自製／可行委外／再評估／中止」並簽核；決行完成後「總經理決行」才會開放，總經理簽完系統自動將本表單標記為「已結案」。</li>
+            <li>六部門<b>全部</b>簽認完成後，「生產課決行」才會開放：勾選「可行自製／可行委外／再評估／中止」並簽核（點選當下不會存檔，要按「我要簽核」才正式生效）；決行完成後「總經理決行」才會開放，總經理同樣要從這四個選項中選一個並簽核——<b>總經理的選擇才是最終決策</b>，可以直接沿用生產課的結果，也可以改選後覆蓋；總經理簽完系統自動將本表單標記為「已結案」。</li>
         </ul>
         <h4>建議建立料號清單（管理員）</h4>
         <ul>
@@ -565,27 +573,27 @@ function renderSlots(slots){
     $('#prodDecisionBody').html(prodDecHtml);
     $('#gmBody').html(gmHtml);
 }
-function renderDecisionGrp(cur, prodSlot){
-    var editable = IS_SUPER_ADMIN || (prodSlot && prodSlot.can_sign);
+/**
+ * 決行選項（生產課／總經理共用同一組四選項）：不論一般使用者或系統管理員，點選都只是畫面上暫存，
+ * 不會立即存檔——原本管理員點下去也會立刻存檔，被使用者實測抓到「沒送出，清單卻已經顯示決行結果」。
+ * 真正要存檔一律得經過「我要簽核」（一般流程）或「系統管理員快速設定」的全部自動簽核（補資料流程）。
+ * 生產課決行需六部門全簽完才開放；總經理決行需生產課決行完成才開放——這條規則對管理員自行手動操作
+ * 也一樣適用（使用者明確要求），管理員唯一的例外通道是「全部自動簽核」按鈕本身。
+ */
+function renderDecisionRadios($grp, name, cur, editable){
     var html = '';
     Object.keys(DECISIONS).forEach(function(k){
-        html += '<label><input type="radio" name="decision" value="'+k+'"'+(cur===k?' checked':'')+(editable?'':' disabled')+'> '+esc(DECISIONS[k])+'</label>';
+        html += '<label><input type="radio" name="'+name+'" value="'+k+'"'+(cur===k?' checked':'')+(editable?'':' disabled')+'> '+esc(DECISIONS[k])+'</label>';
     });
-    $('#decisionGrp').html(html);
-    // 總經理決行時要看得到生產課決行了什麼，不用往上滑動翻找（使用者明確要求）
-    $('#gmDecisionInfo').html(cur ? ('生產課決行結果：<b>'+esc(DECISIONS[cur]||cur)+'</b>') : '<span style="color:#b0a390;">（生產課尚未決行）</span>');
+    $grp.html(html);
 }
-/* 一般使用者點選決行選項只是暫存在畫面上，要按「我要簽核」才會跟簽核一起正式送出存檔——
-   原本點下去就立刻存檔，被使用者實測抓到「只是想測試畫面、還沒按簽核，清單卻已經顯示決行結果」。
-   系統管理員快速設定面板仍維持點選即存（不受一般送出/簽核流程限制，需要能自由預先填好再一次自動簽核）。 */
-$(document).on('change', 'input[name="decision"]', function(){
-    var val = $(this).val();
-    $('#gmDecisionInfo').html('生產課決行結果：<b>'+esc(DECISIONS[val]||val)+'</b>'+(IS_SUPER_ADMIN?'':'（尚未送出，需按「我要簽核」才正式生效）'));
-    if (!CUR_ID || !IS_SUPER_ADMIN) return;
-    $.post(API, {action:'save_decision', id:CUR_ID, decision:val}, function(res){
-        if (!res.success){ alert(res.message||'儲存失敗'); openEdit(CUR_ID); } // 點開即刷新鐵則
-    }, 'json');
-});
+function renderDecisionGrp(cur, prodSlot){
+    renderDecisionRadios($('#decisionGrp'), 'decision', cur, !!(prodSlot && prodSlot.can_sign));
+    renderDecisionRadios($('#gmDecisionGrp'), 'gm_decision', cur, !!(CUR_SLOTS['gm'] && CUR_SLOTS['gm'].can_sign));
+    // 總經理決行時要看得到生產課決行了什麼，不用往上滑動翻找（使用者明確要求）；上方選項預設沿用同一個值，可自行覆蓋
+    $('#gmDecisionInfo').html(cur ? ('生產課決行結果：<b>'+esc(DECISIONS[cur]||cur)+'</b>') : '<span style="color:#b0a390;">（生產課尚未決行）</span>');
+    $('#adminDecisionSelect').val(cur || '');
+}
 
 /** 依目前狀態顯示：草稿=可編表頭+存檔+送出；已送出/已結案=鎖表頭、隱藏存檔與送出(管理員仍可存檔) */
 function applyStatusUI(){
@@ -726,8 +734,9 @@ window.signSlot = function(slotKey){
     }
     var note = $('textarea[data-slot-note="'+slotKey+'"]').val();
     var payload = {action:'sign', doc_id:CUR_ID, slot_key:slotKey, note:note, answers:JSON.stringify(answers)};
-    if (slotKey === 'prod_decision') {
-        var decision = $('input[name="decision"]:checked').val();
+    if (slotKey === 'prod_decision' || slotKey === 'gm') {
+        var radioName = slotKey === 'gm' ? 'gm_decision' : 'decision';
+        var decision = $('input[name="'+radioName+'"]:checked').val();
         if (!decision){ alert('請先選擇決行結果（可行自製／可行委外／再評估／中止），再按我要簽核。'); return; }
         payload.decision = decision;
     }
@@ -742,9 +751,11 @@ $('#btnAdminAutoSignAll').on('click', function(){
     if (!CUR_ID){ alert('請先儲存後再使用'); return; }
     var bizDate = $('#adminAutoSignDate').val();
     if (!bizDate){ alert('請先選擇簽核業務日期'); return; }
+    var decision = $('#adminDecisionSelect').val();
+    if (!decision){ alert('請先在上方選擇決行結果，才能全部自動簽核。'); return; }
     var applyDefaults = $('#adminApplyDefaults').prop('checked');
-    if (!confirm('確定要把此筆尚未簽核的欄位，全部以「'+bizDate+'」自動簽核完成嗎？'+(applyDefaults?'（未填項次會套用預設值）':'')+'此功能僅供補歷史紙本資料使用。')) return;
-    $.post(API, {action:'admin_auto_sign_all', doc_id:CUR_ID, biz_date:bizDate, apply_defaults:applyDefaults?1:0}, function(res){
+    if (!confirm('確定要把此筆尚未簽核的欄位，全部以「'+bizDate+'」自動簽核完成嗎？決行結果將設為「'+esc(DECISIONS[decision]||decision)+'」。'+(applyDefaults?'（未填項次會套用預設值）':'')+'此功能僅供補歷史紙本資料使用。')) return;
+    $.post(API, {action:'admin_auto_sign_all', doc_id:CUR_ID, biz_date:bizDate, decision:decision, apply_defaults:applyDefaults?1:0}, function(res){
         if (!res.success){ alert(res.message||'自動簽核失敗'); return; }
         openEdit(CUR_ID); loadList();
     }, 'json');
@@ -862,7 +873,7 @@ function printDoc(id, onDone){
             + '<table class="p-tb"><thead><tr><th style="width:60px;">區分</th><th style="width:30px;">項次</th><th>評估項目</th><th style="width:60px;">評估單位</th><th style="width:50px;">結果</th></tr></thead><tbody>'+chkRows+'</tbody></table>'
             + '<div class="p-sec p-sec-break">APQP 小組簽認</div>'
             + '<table class="p-tb"><tbody>'+apqpRows+'</tbody></table>'
-            + '<div class="p-sec">生產課決行：'+esc(DECISIONS[d.decision]||'（未決行）')+'</div>'
+            + '<div class="p-sec">決行結果：'+esc(DECISIONS[d.decision]||'（未決行）')+'（以總經理決行為最終決策）</div>'
             + '<table class="p-tb"><tr><td class="dept">生產課</td><td class="tl">'+slotCell('prod_decision')+'</td></tr></table>'
             + '<div class="p-sec">總經理決行</div>'
             + '<table class="p-tb"><tr><td class="dept">總經理</td><td class="tl">'+slotCell('gm')+'</td></tr></table>';

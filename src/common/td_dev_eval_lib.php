@@ -430,14 +430,16 @@ function td_dev_eval_answer_defaults_save(PDO $db, array $map, int $uid, string 
  * 超級管理員專用：全部欄位自動簽核（補舊資料用，指定業務日期，不受送出/簽核狀態與分階段卡關限制）。
  * 若尚未送出會一併補上送出紀錄；每欄簽核人取該欄目前解析池的第一位；時間比照 ai-rules/21——
  * 跟當天固定基準時刻隨機錯開5~30分鐘、不跨天。$applyDefaults=true 時，尚未填的項次套用管理員設定的
- * 預設值（只補未填，不覆蓋既有答案）。
+ * 預設值（只補未填，不覆蓋既有答案）。$decision 由快速設定面板自己的下拉選單提供（不是表單內生產課決行
+ * 那組選項——那組一樣要照分階段卡關走，不因為是管理員就跳過），沒帶入時退回既有已存檔的值。
  */
-function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, int $adminUid, string $adminName, bool $applyDefaults = false): array {
+function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, int $adminUid, string $adminName, bool $applyDefaults = false, ?string $decision = null): array {
     $st = $db->prepare("SELECT * FROM td_dev_eval WHERE id=? AND is_deleted=0");
     $st->execute([$docId]);
     $doc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$doc) return ['ok'=>false, 'msg'=>'找不到該筆'];
-    if (empty($doc['decision'])) return ['ok'=>false, 'msg'=>'請先選擇「生產課決行」結果（可行自製/可行委外/再評估/中止）再自動簽核'];
+    $decision = $decision !== null && $decision !== '' ? $decision : (string)($doc['decision'] ?? '');
+    if (!isset(TD_DEV_EVAL_DECISIONS[$decision])) return ['ok'=>false, 'msg'=>'請先選擇決行結果（可行自製/可行委外/再評估/中止）再自動簽核'];
 
     $db->beginTransaction();
     try {
@@ -446,6 +448,7 @@ function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, i
                           submitted_by=?, submitted_by_name=? WHERE id=?")
                ->execute([$bizDate, $bizDate, $adminUid, $adminName, $docId]);
         }
+        $db->prepare("UPDATE td_dev_eval SET decision=? WHERE id=?")->execute([$decision, $docId]);
         if ($applyDefaults) {
             $defaults = td_dev_eval_answer_defaults_get($db);
             if ($defaults) {

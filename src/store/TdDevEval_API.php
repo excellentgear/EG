@@ -186,23 +186,6 @@ case 'save':
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
     jout(['success'=>true,'id'=>$id]);
 
-case 'save_decision':
-    needEdit($perms);
-    $id = (int)($_POST['id'] ?? 0);
-    $decision = trim((string)($_POST['decision'] ?? ''));
-    if (!isset(TD_DEV_EVAL_DECISIONS[$decision]) && $decision !== '') jout(['success'=>false,'message'=>'不合法的決行選項']);
-    if (!$perms['isAdmin']) {
-        $st = $db->prepare("SELECT status FROM td_dev_eval WHERE id=? AND is_deleted=0");
-        $st->execute([$id]);
-        $curStatus = $st->fetchColumn();
-        if ($curStatus === false) jout(['success'=>false,'message'=>'找不到該筆']);
-        if ($curStatus !== 'submitted' || !td_dev_eval_dept_slots_done($db, $id) || td_dev_eval_slot_signed($db, $id, 'prod_decision'))
-            jout(['success'=>false,'message'=>'需六部門全部簽認完成、且生產課尚未決行時才能選擇決行結果']);
-    }
-    $db->prepare("UPDATE td_dev_eval SET decision=?, updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=? AND is_deleted=0")
-       ->execute([$decision ?: null, $uid, $uname, $id]);
-    jout(['success'=>true]);
-
 case 'delete_header':
     needAdmin($perms);
     $id = (int)($_POST['id'] ?? 0);
@@ -241,7 +224,11 @@ case 'sign':
         if (!td_dev_eval_dept_slots_done($db, $docId)) jout(['success'=>false,'message'=>'需六部門全部簽認完成才能決行']);
         if (!isset(TD_DEV_EVAL_DECISIONS[$decision])) jout(['success'=>false,'message'=>'請先選擇決行結果']);
     }
-    if ($slotKey === 'gm' && !td_dev_eval_slot_signed($db, $docId, 'prod_decision')) jout(['success'=>false,'message'=>'需生產課決行完成才能總經理決行']);
+    if ($slotKey === 'gm') {
+        if (!td_dev_eval_slot_signed($db, $docId, 'prod_decision')) jout(['success'=>false,'message'=>'需生產課決行完成才能總經理決行']);
+        // 總經理決行為最終決策，可沿用或覆蓋生產課的結果，一樣要求明確選一個（使用者明確要求給跟生產課一樣的選項）
+        if (!isset(TD_DEV_EVAL_DECISIONS[$decision])) jout(['success'=>false,'message'=>'請先選擇決行結果']);
+    }
 
     $pool = td_dev_eval_slot_pool($db, $slotKey, $docId);
     $mine = null;
@@ -275,7 +262,8 @@ case 'sign':
                 $st->execute([$docId, $itemNo, $result]);
             }
         }
-        if ($slotKey === 'prod_decision') {
+        if ($slotKey === 'prod_decision' || $slotKey === 'gm') {
+            // 總經理決行是最終決策：即使跟生產課選的一樣也重寫一次，若不同則以總經理這次選的為準(覆蓋)
             $db->prepare("UPDATE td_dev_eval SET decision=?, updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=?")
                ->execute([$decision, $uid, $uname, $docId]);
         }
@@ -295,8 +283,9 @@ case 'admin_auto_sign_all':
     $docId = (int)($_POST['doc_id'] ?? 0);
     $bizDate = trim((string)($_POST['biz_date'] ?? ''));
     $applyDefaults = !empty($_POST['apply_defaults']);
+    $decision = trim((string)($_POST['decision'] ?? ''));
     if (!$docId || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $bizDate)) jout(['success'=>false,'message'=>'請指定業務日期']);
-    $r = td_dev_eval_admin_auto_sign_all($db, $docId, $bizDate, $uid, $uname, $applyDefaults);
+    $r = td_dev_eval_admin_auto_sign_all($db, $docId, $bizDate, $uid, $uname, $applyDefaults, $decision ?: null);
     if (!$r['ok']) jout(['success'=>false,'message'=>$r['msg']]);
     jout(['success'=>true]);
 
