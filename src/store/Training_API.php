@@ -197,9 +197,6 @@ case 'save_settings': {
             if ($sb !== '' && $sb !== 'fill16' && (!ctype_digit($sb) || (int)$sb > 16)) jerr('簽到表空白列數請填 0~16 的整數，或選擇補滿頁');
             training_setting_save($db, 'training_signsheet_blank_rows', $sb, $uid, $uname);
         }
-        if (array_key_exists('empno_prefix', $_POST)) {
-            training_setting_save($db, 'training_card_empno_prefix', trim((string)$_POST['empno_prefix']), $uid, $uname);
-        }
         // 員工教育訓練紀錄卡的 AS 文件編號綁定：跟其他五個一樣，選擇器裡點選只是暫存，要按這顆「儲存設定」才真的寫入
         // （一律走 asdoc_lib.php 的 eg_asdoc_save，跟上面五個的存放位置不同，但操作手感要一致）。
         if (array_key_exists('card_as_doc_id', $_POST)) {
@@ -1410,7 +1407,9 @@ case 'save_attendees': {
     $sRow = $st->fetch(PDO::FETCH_ASSOC);
     if (!$sRow) jerr('找不到場次');
     training_require_unlock($db, $uid, ($sRow['status'] ?? '') === 'done', (string)($_POST['unlock_password'] ?? ''), '此場次的實行資料');
-    $isNotice = ($sRow['eval_method'] ?? '') === 'notice';    // 宣導＝免評鑑
+    // 宣導(notice)／研習/結業/參訓證書(proof) 兩種評鑑方式皆免評鑑，參加人員一律記 exempt（使用者明確要求：
+    // 有證書/研習證明本身就是完成證明，不需要再逐人填合格/不合格）；沿用既有變數名 $isNotice 不重新命名，降低改動面。
+    $isNotice = in_array(($sRow['eval_method'] ?? ''), ['notice', 'proof'], true);
     $isExternal = ($sRow['train_type'] ?? '') === 'external'; // 外訓沒有簽到表/現場簽到，實到即視同簽到（不採信前端送來的signed，一律用attended重算，防止繞過前端直打API送舊值）
     $list = json_decode((string)($_POST['attendees'] ?? '[]'), true);
     if (!is_array($list)) $list = [];
@@ -1504,10 +1503,14 @@ case 'card_people': {
                             GROUP BY a.user_id")->fetchAll(PDO::FETCH_ASSOC);
         $statMap = [];
         foreach ($stat as $s) $statMap[(int)$s['user_id']] = $s;
+        // 員工編號＝全站唯一設定值（人資職務表單頁 hr_position_forms_template.php 的「員工編號前綴」+ user.id），
+        // 使用者明確要求跟那三張表單共用同一份設定，不要教育訓練另外自己存一份前綴。
+        require_once $document_root . '/EGsystem/src/common/hr_form_lib.php';
         foreach ($people as &$p) {
             $s = $statMap[(int)$p['id']] ?? null;
             $p['training_count'] = $s ? (int)$s['cnt'] : 0;
             $p['training_hours'] = $s ? (float)$s['hrs'] : 0;
+            $p['emp_no'] = hrf_user_no_display($db, $p['id']);
         }
         unset($p);
     }

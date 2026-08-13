@@ -655,13 +655,18 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <div style="font-weight:bold;color:#5b3a1e;margin:12px 0 4px;">附件 <small id="atCount" style="color:#8a6d45;font-weight:normal;"></small>
                 <small style="color:#8a6d45;font-weight:normal;">（簽到表掃描件、教材/講義、試卷、上課照片…）</small></div>
             <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
-                <span style="font-size:12px;color:#5b3a1e;">類別（可複選）</span>
-                <span id="atCatBox" style="display:flex;gap:2px 12px;flex-wrap:wrap;"></span>
                 <input type="file" id="atFile" multiple style="display:none;">
-                <button type="button" class="b-att nw" onclick="document.getElementById('atFile').click()"><i class="fa fa-upload"></i> 選擇檔案上傳</button>
+                <button type="button" class="b-att nw" onclick="document.getElementById('atFile').click()"><i class="fa fa-upload"></i> 選擇檔案（可一次多選）</button>
+                <span id="atSelInfo" style="font-size:12px;color:#8a6d45;"></span>
+            </div>
+            <div id="atPendingBox" style="display:none;margin-bottom:4px;padding:6px 8px;background:#FDF8EF;border:1px solid #EADFC8;border-radius:4px;">
+                <span style="font-size:12px;color:#5b3a1e;">為選好的檔案勾選類別（可複選）</span>
+                <span id="atCatBox" style="display:flex;gap:2px 12px;flex-wrap:wrap;margin-top:2px;"></span>
+                <button type="button" class="b-att nw" id="atUploadBtn" style="margin-top:4px;" onclick="atConfirmUpload()" disabled><i class="fa fa-check"></i> 確認上傳</button>
+                <button type="button" class="b-att nw" style="margin-top:4px;background:#fff;color:#8A5A2B;" onclick="atCancelPending()">取消</button>
                 <span id="atMsg" style="font-size:12px;color:#8a6d45;"></span>
             </div>
-            <div style="font-size:11px;color:#8a6d45;margin-bottom:4px;">同一份掃描 PDF 若同時是簽到表和試卷，兩個類別都勾即可（一個檔案可屬多個類別）。</div>
+            <div style="font-size:11px;color:#8a6d45;margin-bottom:4px;">先選檔案（可一次多選），選好後再勾類別確認上傳；同一份掃描 PDF 若同時是簽到表和試卷，兩個類別都勾即可（一個檔案可屬多個類別）。</div>
             <div class="att-list-wrap" style="max-height:150px;">
                 <table class="att-tbl"><thead><tr><th style="width:88px;">類別</th><th class="t-left">檔名</th>
                     <th style="width:70px;">大小</th><th style="width:80px;">上傳者</th><th style="width:120px;">上傳時間</th><th style="width:26px;"></th></tr></thead>
@@ -769,9 +774,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             </div>
             <div class="tr-hint" style="margin-top:6px;">跟上面一樣要按下面「儲存設定」才會存檔；差別只在挑選方式改用打編號即時篩選的共用選擇器（ai-rules/16 第一之三節），文件已有 163 份，純下拉不好找。</div>
 
-            <label>員工教育訓練紀錄卡「員工編號」前綴文字（選填）</label>
-            <input type="text" id="setCardEmpnoPrefix" placeholder="例如 EG-（留空＝不加前綴，直接印登入帳號）">
-            <div class="tr-hint" style="margin-top:6px;">紀錄卡上的員工編號＝前綴＋登入帳號（本系統登入帳號本來就是員工流水編號）。</div>
+            <div class="tr-hint" style="margin-top:6px;">紀錄卡上的「員工編號」前綴跟「人資職務表單」（<a href="hr_position_forms_template.php" target="_blank" style="color:#b5762a;">職務說明書等三張表單</a>）共用同一個全站設定，不在這裡另外設。</div>
 
             <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
             <label>簽到表／訓練紀錄等「參加人員本人簽名」自動產生的圖章樣式</label>
@@ -982,8 +985,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         訓練管理員將已核准的申請按「轉為計畫」帶入①的新增計畫視窗確認後存檔即完成轉換。<br>
         <b>⑥現場簽到</b>：場次為「已排定」時，清單上會出現「現場簽到」按鈕，開啟後不需要編輯權限，共用一台裝置給學員自己選姓名、輸入<b>本人密碼</b>按 Enter 完成電子簽到（密碼只驗證是不是本人，不是密碼反查身分）。「已完成」的場次不再開放簽到，需先在「實行資料」按「退回已排定」（操作確認密碼）才能重新開放。<br>
         <b>⑦員工教育訓練紀錄卡</b>分頁：每位在職員工一列，可依部門/姓名篩選，分頁列在清單右上角（預設每頁 10 筆）；「累計時數/次數」與卡片內容都是<b>即時彙整已到課(實到)的紀錄</b>，不是存檔快照，訓練資料一有異動（補登、修改評鑑結果等）卡片內容立刻跟著變。點列上「列印」單獨列印該員工的卡片（可能不只一頁，跨頁會自動重複表頭）；勾選多人後按「批次列印所選」，會依序自動彈出每位員工各自的列印視窗——<b>每位員工的頁碼各自從第 1 頁重新算，不會把不同員工的頁次算在一起</b>，上一位的列印視窗關閉後才會接著開下一位，請允許瀏覽器彈出視窗。
-        卡片欄位：訓練單位（內訓＝公司簡稱、外訓＝外訓單位）、評鑑方式（內訓印實際評鑑方式、外訓固定印「心得」）、證照（內訓固定「無」；外訓由「實行資料」名單表格勾選登錄，僅具訓練登錄權限者可填）、登錄人員（固定顯示<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>的「人事表單審核者」）。
-        卡頭另顯示員工編號（登入帳號＋可選前綴，模組設定可調前綴文字）、性別、最高學歷（來源＝「員工資料管理」頁維護的資料）。
+        卡片欄位：日期（多天訓練顯示「首日～末日　共N天」）、訓練單位（內訓＝公司簡稱、外訓＝外訓單位）、評鑑方式（印該場次實際選定的評鑑方式，跟已完成的實施計畫上顯示的一致，不會另外改印別的文字）、證照（內訓固定「無」；外訓由「實行資料」名單表格勾選登錄，僅具訓練登錄權限者可填）、登錄人員（固定顯示<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>的「人事表單審核者」）。
+        卡頭顯示姓名、員工編號（來源與前綴設定跟「人資職務表單」共用，不在教育訓練這裡另外設）、性別、最高學歷（來源＝「員工資料管理」頁維護的資料），不含部門/職稱。
         <h4>重要行為</h4>
         ・<b>訓練需求申請人</b>是獨立角色（在使用者權限設定的「教育訓練管理」角色指派裡指派），只能新增/送出/檢視申請單，
         看得到訓練場次列表（唯讀）但**不能**修改計畫或任何設定，避免誤把整頁編輯權限一起給出去。<br>
@@ -1203,7 +1206,7 @@ function dateRangeText(r){
 /* 清單「評鑑」欄：合格/不合格/未評 一眼看出 */
 function evalCell(r){
     var e = r.eval || {pass:0,fail:0,exempt:0,none:0};
-    if (r.eval_method==='notice') return '<span class="ev-exempt">免評鑑</span>';
+    if (evalUiMode(r.eval_method)==='exempt') return '<span class="ev-exempt">免評鑑</span>';
     if (!e.pass && !e.fail && !e.exempt && !e.none) return '—';
     var h = '';
     if (e.pass)   h += '<span class="ev-pass">合格 '+e.pass+'</span> ';
@@ -1223,8 +1226,8 @@ function renderTable(){
         html += '<tr class="tr-clickable'+(r.status==='planned'?' row-planned':'')+'" onclick="toggleDetail(event,'+r.session_id+')">';
         html += '<td>'+r.plan_month+'月</td>';
         html += '<td>'+esc(r.dept_name||'')+'</td>';
-        // 評鑑方式是繳交制（心得/參訓證明/證書）且已有人實到，卻連一份對應類別附件都還沒上傳＝提示未繳交
-        var needCat = ['report','proof','cert'].indexOf(r.eval_method)>=0;
+        // 評鑑方式需要繳交憑證（研習/結業/參訓證書、證照）且已有人實到，卻連一份對應類別附件都還沒上傳＝提示未繳交
+        var needCat = ['proof','cert'].indexOf(r.eval_method)>=0;
         var missingSubmit = needCat && (r.actual_headcount>0) && (String(r.attach_cats||'').indexOf(r.eval_method)<0);
         html += '<td class="t-left"><b>'+esc(r.course_name)+'</b>'
              +  (r.attach_count>0 ? ' <span title="已上傳 '+r.attach_count+' 個附件" style="color:#b5762a;font-size:11px;"><i class="fa fa-paperclip"></i>'+r.attach_count+'</span>' : '')
@@ -1830,13 +1833,14 @@ function attAddChecked(){
 }
 /* ---------- 評鑑結果（可批次設定）：三種 UI 模式 ----------
    score  = 合格/不合格/免評鑑，分數可填（exam/practice/oral/未指定）
-   submit = 已繳交/未繳交/免評鑑，分數反灰不給填（report/proof/cert 心得／參訓證明／證書，繳交制不打分數）
-   exempt = 整組鎖住、一律免評鑑（notice 宣導課程） */
+   submit = 已繳交/未繳交/免評鑑，分數反灰不給填（cert 證照，繳交制不打分數）
+   exempt = 整組鎖住、一律免評鑑（notice 宣導課程、proof 研習/結業/參訓證書——有證書本身就是完成證明，
+            不需要逐人再填合格/不合格，2026-08-13 使用者明確要求） */
 var EVAL_LABEL = {pass:'合格', fail:'不合格', exempt:'免評鑑'};
 var EVAL_LABEL_SUBMIT = {pass:'已繳交', fail:'未繳交', exempt:'免評鑑'};
 function evalUiMode(method){
-    if (method==='notice') return 'exempt';
-    if (method==='report' || method==='proof' || method==='cert') return 'submit';
+    if (method==='notice' || method==='proof') return 'exempt';
+    if (method==='cert') return 'submit';
     return 'score';
 }
 function isNoticeCourse(){ return $('#exEvalMethod').val()==='notice'; }
@@ -1846,7 +1850,7 @@ function applyEvalMethod(){
     var lbl = mode==='submit' ? EVAL_LABEL_SUBMIT : EVAL_LABEL;
     $('#evalAllPassBtn').text('全設'+lbl.pass); $('#evalAllFailBtn').text('全設'+lbl.fail);
     $('#exEvalHint').html(m==='' ? '未指定評鑑方式（仍可自行填每個人的評鑑結果）'
-        : notice ? '<b style="color:#8A5A2B;">宣導課程免評鑑</b>，參加人員一律記「免評鑑」'
+        : notice ? '評鑑方式：<b>'+esc(EVAL_METHODS[m]||m)+'</b>，<b style="color:#8A5A2B;">免評鑑</b>，參加人員一律記「免評鑑」'
         : mode==='submit' ? '評鑑方式：<b>'+esc(EVAL_METHODS[m]||m)+'</b>；上完課於下方名單逐人填'+lbl.pass+'／'+lbl.fail+'（可批次），不需要打分數'
                   : '評鑑方式：<b>'+esc(EVAL_METHODS[m]||m)+'</b>；上完課於下方名單逐人填合格／不合格（可批次）');
     $('#evalBatchBox').css('opacity', notice?0.5:1);
@@ -2254,7 +2258,7 @@ function renderOjt(){
     });
     $('#ojtBody').html(h || '<tr><td colspan="5" style="color:#8a6d45;padding:6px;">尚未建立考核項目</td></tr>');
     $('#ojtCount').text(OJT_ITEMS.length ? '（共 '+OJT_ITEMS.length+' 項）' : '');
-    $('#ojtScoreBtn').toggle(!!(OJT_ITEMS.length && !isNoticeCourse()));
+    $('#ojtScoreBtn').toggle(!!(OJT_ITEMS.length && evalUiMode($('#exEvalMethod').val())==='score'));
 }
 function ojtEdit(i, key, val){ if (!OJT_ITEMS[i]) return; OJT_ITEMS[i][key] = val; }
 function ojtAdd(){ if (!OJT_EDITABLE || exLocked()) return; OJT_ITEMS.push({item_id:0, item_type:'practice', score_mode:'pass_fail', content:''}); renderOjt(); }
@@ -2510,12 +2514,31 @@ function renderAttach(){
     $('#atBody').html(h||'<tr><td colspan="6" style="color:#8a6d45;padding:8px;">尚未上傳附件</td></tr>');
     $('#atCount').text(FILES.length ? '（'+FILES.length+' 個檔案）' : '');
 }
+/* 附件上傳改成「先選檔案（可一次多選）→ 再勾類別 → 確認上傳」（使用者明確要求，避免每次上傳都要先想好類別才能選檔案）；
+   後端 upload_attach 仍然要求類別不可空（鐵律8附件標籤鐵則：沒勾類別一律不准存檔），這裡只是把「勾類別」這一步
+   從「選檔案之前」搬到「選檔案之後、實際送出之前」，不是取消這條規則。 */
+var AT_PENDING_FILES = null;
 $('#atFile').on('change', function(){
-    var files = this.files, sid = $('#exMask').data('sid');
+    AT_PENDING_FILES = (this.files && this.files.length) ? this.files : null;
+    this.value = '';        // 同一個檔案可以再選一次（實際檔案內容已存在 AT_PENDING_FILES）
+    renderAtPending();
+});
+$(document).on('change', '#atCatBox .at-cat', renderAtPending);
+function renderAtPending(){
+    var has = !!AT_PENDING_FILES;
+    $('#atPendingBox').toggle(has);
+    $('#atSelInfo').text(has ? '已選 '+AT_PENDING_FILES.length+' 個檔案，請勾選類別後確認上傳' : '');
+    if (!has) return;
+    var cats = []; $('#atCatBox .at-cat:checked').each(function(){ cats.push(this.value); });
+    $('#atUploadBtn').prop('disabled', !cats.length);
+}
+function atCancelPending(){ AT_PENDING_FILES = null; renderAtPending(); }
+function atConfirmUpload(){
+    var files = AT_PENDING_FILES, sid = $('#exMask').data('sid');
     if (!files || !files.length) return;
     var cats = [];                                  // 類別可複選（同一份 PDF 可能同時是簽到表＋試卷）
     $('#atCatBox .at-cat:checked').each(function(){ cats.push(this.value); });
-    if (!cats.length){ alert('請至少勾選一個附件類別'); this.value=''; return; }
+    if (!cats.length){ alert('請至少勾選一個附件類別'); return; }
     var cat = cats.join(','), done = 0, fail = [];
     $('#atMsg').text('上傳中… 0/'+files.length);
     var upload = function(idx){
@@ -2523,6 +2546,7 @@ $('#atFile').on('change', function(){
             $('#atMsg').text(fail.length ? ('完成，'+fail.length+' 個失敗：'+fail.join('、')) : '上傳完成');
             setTimeout(function(){ $('#atMsg').text(''); }, 4000);
             loadAttach(sid);
+            AT_PENDING_FILES = null; renderAtPending();
             return;
         }
         var fd = new FormData();
@@ -2535,8 +2559,7 @@ $('#atFile').on('change', function(){
          .always(function(){ done++; $('#atMsg').text('上傳中… '+done+'/'+files.length); upload(idx+1); });
     };
     upload(0);
-    this.value = '';        // 同一個檔案可以再選一次
-});
+}
 function attachDel(aid){
     if (!confirm('刪除此附件？（實體檔一併刪除，無法復原）')) return;
     $.post(API, {action:'del_attach', att_id:aid}, function(res){
@@ -2581,16 +2604,22 @@ function submitEx(markDone){
     if (!DAYS.length){ alert('請至少設定一天上課日期'); return; }
     if (!dayValidate()){ alert('上課日期有錯誤，請先修正：\n'+DAY_ERR); return; }
     if (!ATT.length && !confirm('尚未加入任何參加人員，仍要儲存？')) return;
-    if (markDone && !ATT.some(function(a){ return a.signed; })){
+    // 外訓直接看 attended（不看 signed）：不依賴「新增人員/切換頁籤時 signed 有沒有同步跟上」，
+    // 避免像使用者實測回報的那樣，第一次點「登錄完成」時 signed 還沒同步過就被誤擋（見 renderAtt() 的證照/簽名欄同步邏輯）。
+    if (markDone) {
         var extNow = !!(EXROW && EXROW.train_type==='external');
-        alert(extNow ? '登錄完成前，至少需要一位參加人員勾選「實到」。'
-                     : '登錄完成前，至少需要一位參加人員完成簽到（線上或紙本皆可，請至「參加人員」名單的「簽名」欄登記）。');
-        return;
+        var hasSignal = extNow ? ATT.some(function(a){ return a.attended; }) : ATT.some(function(a){ return a.signed; });
+        if (!hasSignal) {
+            alert(extNow ? '登錄完成前，至少需要一位參加人員勾選「實到」。'
+                         : '登錄完成前，至少需要一位參加人員完成簽到（線上或紙本皆可，請至「參加人員」名單的「簽名」欄登記）。');
+            return;
+        }
     }
     if (markDone && !confirm('確定此場訓練已上完課？登錄完成後將計入當月教育訓練達成率，未簽到的人員會自動視為未到。')) return;
-    if (markDone && $('#exEvalMethod').val()!=='notice'){
+    if (markDone && evalUiMode($('#exEvalMethod').val())!=='exempt'){
         var noEval = ATT.filter(function(a){ return a.signed && !a.eval_result; }).length;
-        if (noEval && !confirm('還有 '+noEval+' 位已簽到人員沒有填評鑑結果（合格／不合格），仍要登錄完成？')) return;
+        var noEvalLbl = evalUiMode($('#exEvalMethod').val())==='submit' ? '已繳交／未繳交' : '合格／不合格';
+        if (noEval && !confirm('還有 '+noEval+' 位已簽到人員沒有填評鑑結果（'+noEvalLbl+'），仍要登錄完成？')) return;
     }
     $.post(API, {action:'save_attendees', session_id:sid, attendees:JSON.stringify(ATT), unlock_password:EX_UNLOCK_PWD}, function(r1){
         if (!r1.ok){ alert('名單儲存失敗：'+(r1.error||'')); return; }
@@ -2607,7 +2636,7 @@ function submitEx(markDone){
                                      : '（未寫入行事曆：請於「模組設定」綁定行事曆類別）';
             closeMask('exMask'); loadList(); alert('已儲存。'+evMsg);
             // 登錄完成、內訓、非免評鑑、已有考核項目、成績尚未送出 → 順手提示直接去填成績（當下不填也能事後從「實行紀錄」回來填）
-            if (markDone && EXROW && EXROW.train_type!=='external' && $('#exEvalMethod').val()!=='notice'
+            if (markDone && EXROW && EXROW.train_type!=='external' && evalUiMode($('#exEvalMethod').val())==='score'
                 && OJT_ITEMS.length && !OJT_SCORES_LOCKED && confirm('是否現在直接填寫考核成績？（不填也可以之後從「實行紀錄」的「填寫/送出考核成績」按鈕回來繼續）')) {
                 openOjtScoreModal();
             }
@@ -2664,7 +2693,6 @@ function openSetting(){
     $('#setDocSignsheet').html(dh).val(SETTINGS.training_as_doc_signsheet||'');
     cardAsDocPickId = CARD_ASDOC ? CARD_ASDOC.id : 0;
     $('#cardAsDocView').val(CARD_ASDOC ? EGAsDoc.label(CARD_ASDOC) : '尚未綁定');
-    $('#setCardEmpnoPrefix').val(SETTINGS.training_card_empno_prefix||'');
     loadStampTplOptions();
     var sbr = String(SETTINGS.training_signsheet_blank_rows||'0');
     if (sbr==='fill16'){ $('#setSignBlankMode').val('fill16'); $('#setSignBlankN').val(''); }
@@ -2723,7 +2751,7 @@ function saveSettings(){
         approval_stamp_tpl_id:$('#setApprovalStampTpl').val(),
         signsheet_blank_rows:(function(){ var m=$('#setSignBlankMode').val();
             return m==='fill16' ? 'fill16' : (m==='fixed' ? ($('#setSignBlankN').val()||'0') : '0'); })(),
-        card_as_doc_id:cardAsDocPickId, empno_prefix:$('#setCardEmpnoPrefix').val(),
+        card_as_doc_id:cardAsDocPickId,
         plan_sign_date:$('#setSignDate').val()}, function(res){
         if (!res.ok){ alert(res.error||'設定儲存失敗'); return; }
         SETTINGS = res.settings||{}; UNITS = res.units||UNITS; DOC_NO = res.doc_no||DOC_NO; DOC_NAME = res.doc_name||DOC_NAME;
@@ -3122,7 +3150,7 @@ function printResultTable(){
     rows.forEach(function(r,i){
         var ds=(r.days||[]).map(function(d){ return dispDate(d.day_date); }).filter(Boolean).sort();
         var e=r.eval||{}, ev=[];
-        if (r.eval_method==='notice') ev.push('免評鑑');
+        if (evalUiMode(r.eval_method)==='exempt') ev.push('免評鑑');
         else { if(e.pass) ev.push('合格 '+e.pass); if(e.fail) ev.push('不合格 '+e.fail);
                if(e.exempt) ev.push('免評 '+e.exempt); if(e.none) ev.push('未評 '+e.none); }
         body += '<tr><td>'+(i+1)+'</td><td>'+r.plan_month+'</td><td class="l">'+esc(r.course_name)+'</td>'
@@ -3219,12 +3247,13 @@ $('#cardSelAll').on('change', function(){
 
 /* 學歷代碼 → 顯示文字（比照 employee_management.php 的 EDU_LABEL，選項要跟那邊一致） */
 var EDU_LABEL = {jhs:'國中以下', shs:'高中/高職', college:'專科', univ:'大學', master:'碩士', phd:'博士'};
-/* 員工編號：模組設定的前綴 + 登入帳號（本系統帳號本來就是流水編號，見 CARD_ROWS 的 user_uname） */
-function cardEmpNo(emp){ return (SETTINGS.training_card_empno_prefix||'') + (emp.user_uname||''); }
-/* 評鑑方式欄：內訓印實際評鑑方式，外訓固定印「心得」（不論該場次實際設定的評鑑方式為何，使用者明確要求） */
-function cardEvalMethodText(r){
-    if (r.train_type==='external') return '心得';
-    return r.eval_method ? (EVAL_METHODS[r.eval_method]||r.eval_method) : '';
+/* 日期欄：多天訓練顯示「首日 ~ 末日(月.日)　共N天」，比照清單「開課日期」欄的 dateRangeText() 同一套格式，
+   來源是 training_user_history() 新增的 day_first/day_last/day_count（training_session_day 相異日期）。 */
+function cardDateText(r){
+    var cnt = +r.day_count || 0;
+    if (cnt <= 1) return dispDate(r.day_first || r.done_date) || '';
+    var first = dispDate(r.day_first), last = dispDate(r.day_last);
+    return first + ' ~ ' + last.substr(5) + '　共 ' + cnt + ' 天';
 }
 /* 卡片內容 HTML（表頭固定資訊放進 <thead>，人多頁多時瀏覽器分頁引擎會自動每頁重印表頭，不必自己判斷分頁） */
 function buildCardBody(emp, records){
@@ -3234,22 +3263,22 @@ function buildCardBody(emp, records){
     records.slice().reverse().forEach(function(r){   // training_user_history 回傳新到舊，卡片比照紙本習慣改成舊到新
         var unit = r.train_type==='external' ? (r.org_unit||'') : COMPANY_SHORT;   // 訓練單位：內訓=公司簡稱，外訓=外訓單位名稱
         var license = r.train_type==='external' ? (+r.license ? '有' : '無') : '無';   // 證照：內訓固定無，外訓依登錄資料
-        rows += '<tr><td>'+dispDate(r.done_date)+'</td><td class="l">'+esc(r.course_name||'')+'</td>'
+        // 評鑑方式一律印該場次實際選的評鑑方式，跟已完成的實施計畫上顯示的一致，不再對外訓另外寫死顯示文字
+        rows += '<tr><td>'+cardDateText(r)+'</td><td class="l">'+esc(r.course_name||'')+'</td>'
             + '<td class="l">'+esc(unit)+'</td>'
             + '<td>'+(r.actual_hours!=null?numTrim(r.actual_hours):(r.hours!=null?numTrim(r.hours):''))+'</td>'
-            + '<td>'+esc(cardEvalMethodText(r))+'</td>'
+            + '<td>'+esc(r.eval_method?(EVAL_METHODS[r.eval_method]||r.eval_method):'')+'</td>'
             + '<td>'+license+'</td>'
             + '<td style="font-size:11px;">'+esc(HR_REVIEWER_NAME||'')+'</td></tr>';
     });
     return '<table class="pt"><thead>'
         + '<tr><th colspan="7" style="border:none;padding:0;background:#fff;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
         + '<div class="tt">'+esc(docTitle)+'</div></div></th></tr>'
-        + '<tr><td colspan="7" class="sf-i">部門：'+esc(emp.dept_name||'')+'　職稱：'+esc(emp.position_name||'')
-        + '　姓名：'+esc(emp.user_cname||'')+'　員工編號：'+esc(cardEmpNo(emp))
+        + '<tr><td colspan="7" class="sf-i">姓名：'+esc(emp.user_cname||'')+'　員工編號：'+esc(emp.emp_no||'')
         + '　性別：'+esc(emp.gender==='M'?'男':(emp.gender==='F'?'女':''))
         + '　學歷：'+esc(EDU_LABEL[emp.highest_education]||'')
         + '　到職日：'+(dispDate(emp.hire_date)||'')+'</td></tr>'
-        + '<tr><th style="width:9%;">日期</th><th>課程名稱</th><th style="width:12%;">訓練單位</th>'
+        + '<tr><th style="width:12%;">日期</th><th>課程名稱</th><th style="width:12%;">訓練單位</th>'
         + '<th style="width:6%;">時數</th><th style="width:10%;">評鑑方式</th><th style="width:6%;">證照</th><th style="width:12%;">登錄人員</th></tr>'
         + '</thead><tbody>'+rows+'</tbody></table>';
 }
@@ -3350,7 +3379,7 @@ function openView(sid){
         var s=res.session, ext=s.train_type==='external';
         // 外訓或免評鑑(宣導)課程都不提供考核表，比照「實行資料」modal 的 applyEvalMethod() 同一套判斷；
         // 另外「檢視」是唯讀場次，要等考核成績正式送出鎖定後才顯示列印考核表——「實行資料」modal 那顆不受此限，開課前就能印空白表給講師手寫
-        $('#viewOjtBtn').toggle(!ext && s.eval_method!=='notice' && !!(res.ojt_score_summary && res.ojt_score_summary.scores_submitted_at));
+        $('#viewOjtBtn').toggle(!ext && evalUiMode(s.eval_method)==='score' && !!(res.ojt_score_summary && res.ojt_score_summary.scores_submitted_at));
         $('#viewPrintSignBtn').toggle(!ext);   // 外訓不提供簽到表
         $('#viewBody').html('<div class="ex-plan"><div><b>'+esc(s.course_name)+'</b> '+statPill(s.status)+'</div>'
             +'<div>計畫：'+s.year+' 年 '+s.plan_month+' 月　類型：'+(ext?'外訓':'內訓')

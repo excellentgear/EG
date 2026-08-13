@@ -383,8 +383,7 @@ const TRAINING_SETTING_KEYS = ['training_default_shift_id', 'training_cat_intern
 const TRAINING_SETTING_STR_KEYS = ['training_break_start', 'training_break_end',
     'training_exclude_depts',    // 不列入教育訓練達標統計的部門（csv dept_id）
     'training_plan_sign_date',   // 免送審時計劃表的簽章日期（YYYY-MM-DD；留空＝自動取該年度最後異動日）
-    'training_signsheet_blank_rows',  // 簽到表空白列：''/'0'=不加、數字N=固定加N列、'fill16'=補到滿頁16列（不刪減既有名單）
-    'training_card_empno_prefix'];    // 員工教育訓練紀錄卡「員工編號」欄的前綴文字（如 'EG-'），實際編號=前綴+user_uname
+    'training_signsheet_blank_rows'];  // 簽到表空白列：''/'0'=不加、數字N=固定加N列、'fill16'=補到滿頁16列（不刪減既有名單）
 const TRAINING_BREAK_DEFAULT = ['training_break_start'=>'12:00', 'training_break_end'=>'13:00'];
 
 function training_settings(PDO $db): array {
@@ -392,8 +391,7 @@ function training_settings(PDO $db): array {
             'training_as_doc_plan'=>null, 'training_as_doc_result'=>null, 'training_as_doc_target'=>null,
             'training_need_approval'=>null, 'training_exclude_depts'=>'', 'training_plan_sign_date'=>'',
             'training_as_doc_request'=>null, 'training_as_doc_signsheet'=>null, 'training_request_need_approval'=>1,
-            'training_signsheet_blank_rows'=>'0', 'training_stamp_tpl_id'=>null, 'training_approval_stamp_tpl_id'=>null,
-            'training_card_empno_prefix'=>''];
+            'training_signsheet_blank_rows'=>'0', 'training_stamp_tpl_id'=>null, 'training_approval_stamp_tpl_id'=>null];
     $out += TRAINING_BREAK_DEFAULT;      // 沒設定過才用預設；設定成空字串＝管理員刻意關閉，不可再被預設蓋回去
     try {
         $keys = array_merge(TRAINING_SETTING_KEYS, TRAINING_SETTING_STR_KEYS);
@@ -480,16 +478,19 @@ function training_shifts(PDO $db): array {
  * 附件（鐵律5／ai-rules/07）：DB 只存檔名，完整路徑一律在讀取當下用「目前設定值」現場組出。
  *   換 NAS 磁碟或搬資料夾時只要改設定值，舊附件立刻讀得到，不必動 DB。
  * ============================================================ */
-/* report/proof/cert 三個 key 刻意跟 TRAINING_EVAL_METHODS 同名對應（心得/參訓證明/證書），
-   方便「這個場次的評鑑方式需要繳交哪一類附件」直接用 eval_method 當 cat 查，不必另外維護對照表。 */
+/* proof/cert 兩個 key 刻意跟 TRAINING_EVAL_METHODS 同名對應（研習/結業/參訓證書、證照），
+   方便「這個場次的評鑑方式需要繳交哪一類附件」直接用 eval_method 當 cat 查，不必另外維護對照表。
+   2026-08-13 使用者明確要求取消「心得」這個類別（report），不再是選項。 */
 const TRAINING_ATT_CATS = ['sign'=>'簽到表', 'material'=>'教材/講義', 'exam'=>'試卷/測驗', 'photo'=>'上課照片', 'ojt'=>'考核表',
-    'report'=>'心得', 'proof'=>'參訓證明', 'cert'=>'證書', 'other'=>'其他'];
+    'proof'=>'研習/結業/參訓證書', 'cert'=>'證照', 'other'=>'其他'];
 /* OJT/實作口試考核表 考核方式 */
 const TRAINING_OJT_ITEM_TYPES = ['practice'=>'實作演練', 'oral'=>'口試詢問'];
-/* 評鑑方式（確認開課時選定）；notice=宣導＝免評鑑，選了它參加人員一律記 exempt；
-   report/proof/cert 三種是「繳交制」（合格/不合格改顯示已繳交/未繳交，分數欄反灰），見 renderAtt() 的 evalUiMode() */
-const TRAINING_EVAL_METHODS = ['exam'=>'試券', 'report'=>'心得', 'practice'=>'實作', 'oral'=>'口試',
-    'proof'=>'參訓證明', 'cert'=>'證書', 'notice'=>'宣導（免評鑑）'];
+/* 評鑑方式（確認開課時選定）；notice=宣導、proof=研習/結業/參訓證書 兩者皆免評鑑，參加人員一律記 exempt
+   （2026-08-13 使用者明確要求：有證書/研習證明本身就是完成證明，不需要再逐人填合格/不合格）；
+   cert=證照 是「繳交制」（合格/不合格改顯示已繳交/未繳交，分數欄反灰），見 renderAtt() 的 evalUiMode()；
+   已取消「心得」(report) 這個選項。 */
+const TRAINING_EVAL_METHODS = ['exam'=>'試券', 'practice'=>'實作', 'oral'=>'口試',
+    'proof'=>'研習/結業/參訓證書', 'cert'=>'證照', 'notice'=>'宣導（免評鑑）'];
 
 /** 附件目錄（寫檔／讀檔皆用這支；預設＝全站附件根資料夾＼教育訓練＼，見 attach_lib.php） */
 function training_attach_dir(PDO $db): string {
@@ -924,7 +925,10 @@ function training_user_history(PDO $db, int $userId, ?int $year = null): array {
     try {
         $sql = "SELECT s.session_id, s.year, s.plan_month, s.course_name, s.train_type, s.trainer, s.org_unit,
                        s.status, s.done_date, s.actual_hours, s.hours, s.location, s.eval_method, s.outline,
-                       a.attended, a.signed, a.eval_result, a.eval_score, a.eval_note, a.license
+                       a.attended, a.signed, a.eval_result, a.eval_score, a.eval_note, a.license,
+                       (SELECT MIN(day_date) FROM training_session_day WHERE session_id=s.session_id) day_first,
+                       (SELECT MAX(day_date) FROM training_session_day WHERE session_id=s.session_id) day_last,
+                       (SELECT COUNT(DISTINCT day_date) FROM training_session_day WHERE session_id=s.session_id) day_count
                 FROM training_attendee a
                 JOIN training_session s ON s.session_id = a.session_id
                 WHERE a.user_id = ? AND a.attended = 1" . ($year ? " AND s.year = ?" : "") . "
