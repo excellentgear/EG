@@ -1983,7 +1983,10 @@ function renderPlanStatus(){
         txt += '（' + (r && r.approver_name ? r.approver_name : '') + '：' + ((r && r.note) || '') + '）';
     } else if (s==='approved'){
         var a = PLAN_APPR.approve || {};
-        txt += '（' + (a.approver_name||'') + '　' + dispDate(a.decided_at) + '）';
+        // 免送審模式是送出人自己按「確認計劃表」直接視同完成，approver_name 其實是送出人不是真正的核准人，
+        // 不該顯示成「XX核准」誤導；用 submitted_by===approver_id 判斷是不是這種自動完成，只顯示日期。
+        var selfDone = a.submitted_by && a.approver_id && (+a.submitted_by === +a.approver_id);
+        txt += selfDone ? ('　' + dispDate(a.decided_at)) : ('（' + (a.approver_name||'') + '　' + dispDate(a.decided_at) + '）');
     }
     $('#planStat').html('<span style="color:'+(s==='rejected'?'#DD5138':(s==='approved'?'#7a5217':'#8a6d45'))+';">'+esc(txt)+'</span>');
     if (PERMS && PERMS.canEdit) {
