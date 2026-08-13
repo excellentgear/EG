@@ -591,7 +591,7 @@ function itemCardHtml(it, idx, expanded){
         + '<input type="text" class="f-proccode" data-f="process_code" value="'+esc(procCode)+'" list="dl_process" placeholder="輸入製程代號"'+dis+'>'
         + '<button type="button" class="pf-row-btn" onclick="openTemplatePicker(this)" title="此製程的整組樣板列表"'+dis+'><i class="fa fa-list"></i> 整組列表</button>'
         + '</div></div>'
-        + fld('process_desc','項目') + fld('function_desc','功能') + fld('requirement','要求')
+        + fld('process_desc','項目','list:item') + fld('function_desc','功能','list:function') + fld('requirement','要求','list:requirement')
         + fld('failure_mode','潛在失效模式','list:failure_mode') + fld('failure_effect','失效模式潛在後果') + fld('classification','分類')
         + '</div>'
         + '<div class="pf-card-grp-title">風險評估與現行設計管制（RPN 系統自動計算）</div>'
@@ -628,13 +628,23 @@ function renderItems(items){
     }
 }
 /* 每張卡片的控制預防/控制偵測下拉一律可直接填；有預帶製程代號的卡片(既有資料載入時)要順便帶出
-   該製程的潛在失效模式下拉，不必使用者手動再觸發一次 change 事件 */
+   該製程的項目/潛在失效模式下拉，並把既有的項目/功能文字回頭解析成id(補登記進參考清單、順便接上
+   功能→要求/潛在失效模式下一層下拉)，不必使用者手動再觸發一次 change/blur 事件 */
 function refreshAllCardDatalists(){
     $('#itemBody .pf-card').each(function(){
         var $card = $(this);
         populateCardControlDatalists($card);
         var code = $card.find('.f-proccode').val().trim();
-        if (code && PROCESS_ID_BY_CODE[code]) loadFailureModesForCard($card, PROCESS_ID_BY_CODE[code].id);
+        if (!code || !PROCESS_ID_BY_CODE[code]) return;
+        var pid = PROCESS_ID_BY_CODE[code].id;
+        loadItemOptionsForCard($card, pid);
+        if ($card.find('[data-f="process_desc"]').val().trim() && CAN_EDIT) {
+            resolveItemOption($card, function(itemOptId){
+                if (itemOptId && $card.find('[data-f="function_desc"]').val().trim()) resolveFunctionOption($card);
+            });
+        } else {
+            loadFailureModesForCard($card, pid, 0, 0);
+        }
     });
 }
 function renumberRows(){ $('#itemBody .pf-card').each(function(i){ $(this).find('.seq').text(i+1); }); }
@@ -746,25 +756,92 @@ function populateCardControlDatalists($card){
 }
 /* 製程代號欄位變更：解析出對應製程(代號已存在於PROCESS_ID_BY_CODE直接用；輸入的是新代號則問一次
    製程名稱、呼叫ref_process_add即時註冊——可填表人就能新增，不必等管理員先設定好)，
-   並帶出該製程的潛在失效模式下拉選項供「潛在失效模式」欄位挑選/自行輸入 */
-function loadFailureModesForCard($card, pid){
+   並帶出該製程的潛在失效模式下拉選項供「潛在失效模式」欄位挑選/自行輸入。
+   潛在失效模式改階層式查詢：帶item_option_id/function_option_id，後端優先套用功能層級專屬清單，
+   逐層退回項目層級、製程層級（2026-08-13使用者要求，見pfmea_reference_lib.php說明） */
+function loadFailureModesForCard($card, pid, itemOptId, funcOptId){
     var $dl = $card.find('datalist.dl-failure_mode');
-    $.getJSON(API, {action:'ref_failure_mode_list', process_id:pid}, function(res){
+    $.getJSON(API, {action:'ref_failure_mode_list', process_id:pid, item_option_id:itemOptId||0, function_option_id:funcOptId||0}, function(res){
         if (!res.success) return;
         $dl.each(function(){ fillDatalist(this, res.rows, function(r){ return r.failure_mode; }); });
     });
 }
+/* ---------- 料號-製程-項目-功能-要求 階層式連動（2026-08-13使用者要求）----------
+ * 項目/功能欄位失焦時即時解析成id(get_or_add，輸入新值就自動註冊，跟製程代號同一套慣例但不用
+ * 跳窗詢問——項目/功能是自我描述的文字，不像製程代號需要另外一個「名稱」)，解析出的id存在卡片的
+ * data-item-opt-id/data-func-opt-id，供下一層的下拉選項查詢使用。 */
+function loadItemOptionsForCard($card, pid){
+    var $dl = $card.find('datalist.dl-item');
+    if (!pid){ $dl.each(function(){ this.innerHTML=''; }); return; }
+    $.getJSON(API, {action:'ref_item_options_list', process_id:pid}, function(res){
+        if (res.success) $dl.each(function(){ fillDatalist(this, res.rows, function(r){ return r.item_name; }); });
+    });
+}
+function loadFunctionOptionsForCard($card, itemOptId){
+    var $dl = $card.find('datalist.dl-function');
+    if (!itemOptId){ $dl.each(function(){ this.innerHTML=''; }); return; }
+    $.getJSON(API, {action:'ref_function_options_list', item_option_id:itemOptId}, function(res){
+        if (res.success) $dl.each(function(){ fillDatalist(this, res.rows, function(r){ return r.function_desc; }); });
+    });
+}
+function loadRequirementOptionsForCard($card, funcOptId){
+    var $dl = $card.find('datalist.dl-requirement');
+    if (!funcOptId){ $dl.each(function(){ this.innerHTML=''; }); return; }
+    var partDId = $('#fPartDId').val() || 0;
+    var partText = (partDId|0) ? '' : $('#fPartNo').val();
+    $.getJSON(API, {action:'ref_requirement_options_list', function_option_id:funcOptId, part_d_id:partDId, part_no_text:partText}, function(res){
+        if (res.success) $dl.each(function(){ fillDatalist(this, res.rows, function(r){ return r.requirement_text; }); });
+    });
+}
+function refreshFailureModeForCard($card){
+    var code = $card.find('.f-proccode').val().trim();
+    var pid = code && PROCESS_ID_BY_CODE[code] ? PROCESS_ID_BY_CODE[code].id : 0;
+    if (!pid) return;
+    loadFailureModesForCard($card, pid, parseInt($card.attr('data-item-opt-id'),10)||0, parseInt($card.attr('data-func-opt-id'),10)||0);
+}
+function resolveItemOption($card, cb){
+    var code = $card.find('.f-proccode').val().trim();
+    var itemName = $card.find('[data-f="process_desc"]').val().trim();
+    if (!code || !PROCESS_ID_BY_CODE[code] || !itemName || !CAN_EDIT){ if (cb) cb(0); return; }
+    $.post(API, {action:'ref_item_option_add', process_id:PROCESS_ID_BY_CODE[code].id, item_name:itemName}, function(res){
+        var id = (res && res.success) ? res.id : 0;
+        $card.attr('data-item-opt-id', id);
+        loadFunctionOptionsForCard($card, id);
+        refreshFailureModeForCard($card);
+        if (cb) cb(id);
+    }, 'json');
+}
+function resolveFunctionOption($card, cb){
+    var itemOptId = parseInt($card.attr('data-item-opt-id'),10) || 0;
+    var funcDesc = $card.find('[data-f="function_desc"]').val().trim();
+    if (!itemOptId || !funcDesc || !CAN_EDIT){ if (cb) cb(0); return; }
+    $.post(API, {action:'ref_function_option_add', item_option_id:itemOptId, function_desc:funcDesc}, function(res){
+        var id = (res && res.success) ? res.id : 0;
+        $card.attr('data-func-opt-id', id);
+        refreshFailureModeForCard($card);
+        loadRequirementOptionsForCard($card, id);
+        if (cb) cb(id);
+    }, 'json');
+}
+$(document).on('blur', '#itemBody [data-f="process_desc"]', function(){ resolveItemOption($(this).closest('.pf-card')); });
+$(document).on('blur', '#itemBody [data-f="function_desc"]', function(){ resolveFunctionOption($(this).closest('.pf-card')); });
 $(document).on('change', '#itemBody .f-proccode', function(){
     var $input = $(this), $card = $input.closest('.pf-card');
     var code = $input.val().trim();
-    if (!code){ $card.find('datalist.dl-failure_mode').each(function(){ this.innerHTML=''; }); return; }
-    if (PROCESS_ID_BY_CODE[code]){ loadFailureModesForCard($card, PROCESS_ID_BY_CODE[code].id); return; }
+    $card.attr('data-item-opt-id', 0).attr('data-func-opt-id', 0);
+    $card.find('datalist.dl-function, datalist.dl-requirement').each(function(){ this.innerHTML=''; });
+    if (!code){ $card.find('datalist.dl-failure_mode, datalist.dl-item').each(function(){ this.innerHTML=''; }); return; }
+    if (PROCESS_ID_BY_CODE[code]){
+        loadFailureModesForCard($card, PROCESS_ID_BY_CODE[code].id, 0, 0);
+        loadItemOptionsForCard($card, PROCESS_ID_BY_CODE[code].id);
+        return;
+    }
     if (!CAN_EDIT) return;
     var name = window.prompt('製程代號「'+code+'」尚未建立，請輸入製程名稱以新增：', '');
     if (!name){ $input.val(''); return; }
     $.post(API, {action:'ref_process_add', process_code:code, process_name:name}, function(res){
         if (!res.success){ alert(res.message||'新增製程失敗'); $input.val(''); return; }
-        loadProcessList(function(){ loadFailureModesForCard($card, res.id); });
+        loadProcessList(function(){ loadFailureModesForCard($card, res.id, 0, 0); loadItemOptionsForCard($card, res.id); });
     }, 'json');
 });
 
@@ -803,6 +880,8 @@ window.applyTemplate = function(i){
     var it = {failure_mode: $card.find('[data-f="failure_mode"]').val(), rpn: $card.find('[data-rpn]').val() || null};
     $card.find('.pf-card-summary').html(cardSummaryText(it));
     closeMask('templateMask');
+    // 套用樣板後，項目/功能欄位是程式塞值不會觸發blur，這裡手動接上項目→功能連動關係
+    resolveItemOption($card, function(){ resolveFunctionOption($card); });
 };
 window.deleteTemplate = function(id){
     if (!confirm('確定刪除此整組樣板？(僅管理員可操作，刪除後不影響已套用過的資料)')) return;
@@ -859,6 +938,11 @@ function onPartBound(partDId, partText, custName){
         $('#fOrderProcPanel').hide();
     }
     if (!CUR_ID) loadBizDateQuick(partDId, partText, custName || '');
+    // 料號重新綁定時，已解析出功能層級的卡片要重新查一次要求清單(要求依綁定的料號而不同)
+    $('#itemBody .pf-card').each(function(){
+        var funcOptId = parseInt($(this).attr('data-func-opt-id'),10) || 0;
+        if (funcOptId) loadRequirementOptionsForCard($(this), funcOptId);
+    });
 }
 /* 手動建立的紀錄綁定料號後，比照 td_dev_eval_suggest.php 的建議建立日期機制，
    提供「套用BOM日期／套用最早報工日期／套用最早訂單日期」快速按鈕，點擊即帶入業務日期欄 */
@@ -929,17 +1013,29 @@ $('#fPartNo').on('blur', function(){
     if (!($('#fPartDId').val()|0) && $(this).val().trim()) onPartBound(0, $(this).val().trim(), '');
 });
 
-/* 存檔前，把卡片上手動輸入、不在目前下拉清單裡的失效模式/控制預防/控制偵測新值註冊進參考清單，
-   下次同製程就能直接挑選（可填表人就能新增，僅管理員能刪除——見 pfmea_reference_lib.php） */
+/* 存檔前，把卡片上手動輸入、不在目前下拉清單裡的失效模式/控制預防/控制偵測/要求新值註冊進參考清單，
+   下次同製程/同功能就能直接挑選（可填表人就能新增，僅管理員能刪除——見 pfmea_reference_lib.php）。
+   項目/功能欄位本身已在blur當下即時註冊(resolveItemOption/resolveFunctionOption)，這裡不必重複。 */
 function registerNewRefValues(){
     $('#itemBody .pf-card').each(function(){
         var $card = $(this);
         var code = $card.find('.f-proccode').val().trim();
         var pid = code && PROCESS_ID_BY_CODE[code] ? PROCESS_ID_BY_CODE[code].id : 0;
+        var itemOptId = parseInt($card.attr('data-item-opt-id'),10) || 0;
+        var funcOptId = parseInt($card.attr('data-func-opt-id'),10) || 0;
         if (pid) {
             var fm = $card.find('[data-f="failure_mode"]').val().trim();
             var known = $card.find('datalist.dl-failure_mode option').map(function(){ return this.value; }).get();
-            if (fm && known.indexOf(fm) < 0) $.post(API, {action:'ref_failure_mode_add', process_id:pid, failure_mode:fm});
+            if (fm && known.indexOf(fm) < 0) $.post(API, {action:'ref_failure_mode_add', process_id:pid, failure_mode:fm, item_option_id:itemOptId, function_option_id:funcOptId});
+        }
+        if (funcOptId) {
+            var req = $card.find('[data-f="requirement"]').val().trim();
+            var knownReq = $card.find('datalist.dl-requirement option').map(function(){ return this.value; }).get();
+            if (req && knownReq.indexOf(req) < 0) {
+                var partDId = $('#fPartDId').val() || 0;
+                var partText = (partDId|0) ? '' : $('#fPartNo').val();
+                $.post(API, {action:'ref_requirement_option_add', function_option_id:funcOptId, part_d_id:partDId, part_no_text:partText, requirement_text:req});
+            }
         }
         ['prevention_controls','detection_controls'].forEach(function(f){
             var type = f === 'prevention_controls' ? 'prevention' : 'detection';
