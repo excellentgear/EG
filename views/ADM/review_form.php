@@ -93,6 +93,9 @@ $perms = rvf_perms($db, $rvfUser);
         .subitem-ctrl .rf-mini-btn, .col-fill .rf-mini-btn { font-size:10.5px; color:#8a5a2b; border:1px solid #D8BE93; border-radius:9px; padding:1px 7px; cursor:pointer; background:#FBF0DD; white-space:nowrap; }
         .subitem-ctrl .rf-mini-btn:hover, .col-fill .rf-mini-btn:hover { background:#F7E0BD; }
         table.itm-tbl td.subitem-num { text-align:center; vertical-align:middle; }
+        table.itm-tbl td.subitem-heading { background:#FDF8EF; }
+        table.itm-tbl td.subitem-heading textarea { font-weight:bold; border-color:#D8BE93; }
+        table.itm-tbl td.subitem-heading-note { background:#F5F0E5; color:#b0a390; font-size:11px; text-align:left; font-style:italic; }
         .col-fill { margin-top:4px; display:flex; flex-direction:column; gap:3px; font-weight:normal; }
         .col-fill .col-fill-inp { width:100%; min-width:0; border:1px solid #D8BE93; border-radius:4px; padding:2px 4px; font-size:11px; box-sizing:border-box; background:#fff; color:#5b3a1e; }
         .sign-slot { border:1px dashed #E8D5B5; border-radius:4px; padding:3px 5px; margin-bottom:3px; font-size:11px; }
@@ -194,6 +197,13 @@ $(document).ready(function(){
 });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 var STATUS_LABEL = {draft:'草稿', submitted:'已送出', reviewing:'審核中', approving:'核准中', approved:'已完成', rejected:'已退回', void:'已作廢'};
+/* 存檔/送出等按鈕若連線中斷或伺服器回傳非 JSON（如 PHP 警告混進輸出），$.post 的 success callback 完全不會觸發，
+   畫面就會看起來「按了沒反應」，使用者無從得知到底存了沒（2026-08-13 使用者實際回報過一次）。
+   統一在這裡攔截，讓任何 ajax 失敗都至少會跳出提示，不會悄悄無聲失敗。 */
+$(document).ajaxError(function(e, jqxhr, settings){
+    if (String(settings.url||'').indexOf('ReviewForm_API.php')<0) return;
+    alert('連線或伺服器發生錯誤，請重新整理頁面確認資料是否已存檔，再重試一次。');
+});
 
 function loadMeta(cb){
     $.getJSON(API, {action:'meta'}, function(res){
@@ -465,18 +475,27 @@ function renderItems(){
     // 負責部門/負責人/簽名/刪除鈕都不再合併（2026-08-12 改版：每個小項各自獨立負責人與簽名），
     // 每個小項自己一整列都是完整欄位，只有「項次」編號與「刪除整個項次」鈕只在該項目第一個小項列顯示。
     var blockColspan = 2 + inlineFields.length + (hasSignCol?1:0) + (isDraftMine()?1:0);
+    // 有小項時，項次本身這一列(subitems[0]＝新增項次時原本就有的那一列)降級為純標題列：
+    // 只有「項目」文字可填，其餘自訂欄位/負責部門/負責人/簽名全部不需要——因為大項只是標題，
+    // 真正的內容與各自的負責人/簽名都在下面各個小項（2026-08-13 使用者明確要求）。
+    var headingSpan = inlineFields.length + 1 + (hasSignCol?1:0);
     ITEMS.forEach(function(it,i){
         if (!it.subitems || !it.subitems.length) it.subitems = [rvfBlankSubitem()];
         var subs = it.subitems, n = subs.length;
         subs.forEach(function(sub,k){
+            var isHeading = (k===0 && n>1);
             h += '<tr><td class="subitem-num">'+(k===0?(i+1):'')+'</td>';
-            h += '<td>'+subItemContentHtml(i,k,sub,n)+'</td>';
-            inlineFields.forEach(function(c){ h += '<td>'+fieldInputHtml(i,k,c)+'</td>'; });
-            h += '<td><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,k,sub.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,k,sub.owner_users,sub.owner_depts)+'</td>';
-            if (hasSignCol) h += '<td>'+signSlotsHtml(sub)+'</td>';
+            h += '<td'+(isHeading?' class="subitem-heading"':'')+'>'+subItemContentHtml(i,k,sub,n)+'</td>';
+            if (isHeading) {
+                h += '<td colspan="'+headingSpan+'" class="subitem-heading-note">'+(isDraftMine()?'（大項標題，欄位/負責人/簽名由下方各小項各自填寫）':'')+'</td>';
+            } else {
+                inlineFields.forEach(function(c){ h += '<td>'+fieldInputHtml(i,k,c)+'</td>'; });
+                h += '<td><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,k,sub.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,k,sub.owner_users,sub.owner_depts)+'</td>';
+                if (hasSignCol) h += '<td>'+signSlotsHtml(sub)+'</td>';
+            }
             if (isDraftMine()) h += '<td>'+(k===0?'<span class="rf-del" onclick="itemDel('+i+')" title="刪除整個項次(含全部小項)"><i class="fa fa-times"></i></span>':'')+'</td>';
             h += '</tr>';
-            if (blockFields.length) {
+            if (blockFields.length && !isHeading) {
                 h += '<tr><td></td><td colspan="'+blockColspan+'">' + blockFields.map(function(c){ return fieldInputHtml(i,k,c); }).join('') + '</td></tr>';
             }
         });
@@ -486,15 +505,22 @@ function renderItems(){
 
 function collectItems(){
     return ITEMS.map(function(it){
-        return {id:it.id, subitems: it.subitems.map(function(s){
-            return {id:s.id, content:s.content, data:s.data, owner_depts:s.owner_depts, owner_users:s.owner_users};
+        var n = it.subitems.length;
+        return {id:it.id, subitems: it.subitems.map(function(s,k){
+            var isHeading = (k===0 && n>1);
+            // 大項標題列存檔時強制清空自訂欄位/負責部門/負責人（2026-08-13 使用者明確要求：
+            // 有小項時大項只是標題，不需要這些值，避免殘留舊資料造成「簽不到卻要求簽名」的孤兒狀態）。
+            return {id:s.id, content:s.content,
+                     data: isHeading ? {} : s.data,
+                     owner_depts: isHeading ? [] : s.owner_depts,
+                     owner_users: isHeading ? [] : s.owner_users};
         })};
     });
 }
 function saveDraft(cb){
     $.post(API, {action:'instance_save_items', csrf:META.csrf, instance_id:CUR.id, business_date:$('#vBizDate').val(), items:JSON.stringify(collectItems())}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        if (cb) cb(); else { loadList(); openView(CUR.id); }
+        if (cb) cb(); else { loadList(); openView(CUR.id); alert('已儲存'); }
     }, 'json');
 }
 function submitForm(){
@@ -537,16 +563,13 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
             + 'html,body{margin:0;padding:0;}'
             + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.pt-head{text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
-            + '.rf-page-num{position:fixed;left:8mm;bottom:6mm;font-size:9pt;color:#333;}'
             + '.rf-as-doc{position:fixed;right:8mm;bottom:6mm;font-size:9pt;color:#333;}'
             + (extraCss||'');
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
-    var pageNumHtml = asCss ? '' : '';
     w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
         + bodyHtml
         + (asCss ? '<div class="rf-as-doc">'+asCss+'</div>' : '')
-        + '<div class="rf-page-num">第 1 頁／共 1 頁</div>'
         + '<scr'+'ipt>window.onload=function(){'
         // 量 scrollHeight 前先讓一拍：印章 SVG 內含 textLength/lengthAdjust 需要字型計量才能定案排版，
         // onload 觸發當下量到的高度有時還沒完全穩定，量太早會讓縮放比例算少、印到最後footer被紙張邊界切掉。
@@ -554,23 +577,32 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
         + 'var pageH=('+(landscape ? (paper==='A3'?'297':'210') : (paper==='A3'?'420':'297'))+'-28)*96/25.4;'
         + 'var h=document.body.scrollHeight;'
         + 'if(h>pageH){ document.body.style.zoom = Math.max(0.5, pageH/h); }'
-        + 'setTimeout(function(){window.print();},250);'
+        // 頁碼只在超過一頁才顯示（ai-rules/16 第二節，比照 quotation_list_test.php 既有作法）：
+        // zoom 縮放後再量一次高度，若仍超過約 92% 一頁高度才動態插入 @page 頁碼樣式，單頁文件完全不印頁碼。
+        + 'setTimeout(function(){'
+        + 'if(document.body.scrollHeight>pageH*0.92){'
+        + 'var st=document.createElement("style");'
+        + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
+        + 'document.head.appendChild(st);'
+        + '}'
+        + 'window.print();'
+        + '},60);'
         + '},120);};</scr'+'ipt></body></html>');
     w.document.close();
 }
 function rfCss(){
-    return 'table.rf-p-head{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;margin-bottom:6px;}'
-         + 'table.rf-p-head th{background:#fff;font-weight:bold;border:1px solid #333;padding:5px 6px;width:70px;text-align:center;}'
-         + 'table.rf-p-head td{border:1px solid #333;padding:5px 8px;text-align:left;}'
-         + 'table.rf-p-items{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:6px;}'
-         + 'table.rf-p-items th,table.rf-p-items td{border:1px solid #333;padding:4px 5px;text-align:center;}'
+    // 圖章列印尺寸全站統一 91px（ai-rules/18 第6條，2026-08-05 制定，之前這裡誤用 76px，2026-08-13 使用者回報修正）。
+    return 'table.rf-p-items{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:2px;}'
+         + 'table.rf-p-items th,table.rf-p-items td{border:1px solid #333;padding:8px 9px;text-align:center;}'
          + 'table.rf-p-items td.t-left{text-align:left;}'
+         + '.rf-p-datebar{text-align:right;font-size:12.5px;color:#333;margin-bottom:3px;}'
+         + 'table.rf-p-items .stamp-wrap svg,table.rf-p-items svg.car-stamp{width:91px !important;height:91px !important;max-width:91px;max-height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
          + 'table.rf-p-foot{width:100%;margin-top:16px;margin-bottom:12mm;font-size:13px;}'
          + 'table.rf-p-foot td{padding:6px;width:33.33%;text-align:center;vertical-align:top;}'
          + 'table.rf-p-foot .foot-lbl{margin-bottom:4px;}'
          + 'table.rf-p-foot .foot-na{color:#888;font-size:12px;}'
          + 'table.rf-p-foot .stamp-wrap{margin:0;}'
-         + 'table.rf-p-foot .stamp-wrap svg,table.rf-p-foot svg.car-stamp{width:76px !important;height:76px !important;max-width:76px;max-height:76px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
+         + 'table.rf-p-foot .stamp-wrap svg,table.rf-p-foot svg.car-stamp{width:91px !important;height:91px !important;max-width:91px;max-height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
 }
 function stampOrName(name, date, isDeputy, schema){
     return (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
@@ -582,17 +614,28 @@ function stampFooter(name, date, isDeputy){ return stampOrName(name, date, isDep
 function printForm(){
     var t = CUR.tpl, schema = CUR_SCHEMA;
     var h = '<div class="pt-head"><div class="co">'+esc(CUR.company_name||'')+'</div><div class="tt">'+esc(t.name)+'</div></div>';
-    h += '<table class="rf-p-head"><tr><th>建立日期</th><td>'+dispDate(CUR.business_date)+'</td><th>填表人</th><td>'+esc(CUR.created_by_name)+'</td></tr>'
-       + '<tr><th>狀態</th><td colspan="3">'+STATUS_LABEL[CUR.status]+'</td></tr></table>';
+    // 表頭不重複顯示狀態/填表人（2026-08-13 使用者明確要求：製表人姓名+日期下方本來就有「製表」圖章，不必再印一次；
+    // 狀態對已完成的表單沒有意義），建立日期改印在項目表格右上角。
+    h += '<div class="rf-p-datebar">建立日期：'+dispDate(CUR.business_date)+'</div>';
     var pHasSignCol = (schema.sign_mode||'password')!=='none';
+    var inlineFieldsP = (schema.fields||[]);
     h += '<table class="rf-p-items"><thead><tr><th>#</th><th>項目</th>';
-    (schema.fields||[]).forEach(function(c){ h += '<th>'+esc(c.label)+'</th>'; });
+    inlineFieldsP.forEach(function(c){ h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/人</th>'+(pHasSignCol?'<th>簽名</th>':'')+'</tr></thead><tbody>';
+    var headingSpanP = inlineFieldsP.length + 1 + (pHasSignCol?1:0);
     ITEMS.forEach(function(it,i){
         var subs = (it.subitems&&it.subitems.length) ? it.subitems : [rvfBlankSubitem()];
+        var n = subs.length;
         subs.forEach(function(sub,k){
+            var isHeading = (k===0 && n>1);
             h += '<tr><td>'+(k===0?(i+1):'')+'</td><td class="t-left">'+esc(sub.content).replace(/\n/g,'<br>')+'</td>';
-            (schema.fields||[]).forEach(function(c){
+            if (isHeading) {
+                // 有小項時大項這一列只是標題，其餘欄位整列合併成一個空白儲存格（2026-08-13 使用者明確要求；
+                // 項次已經在最前面單獨一格，這裡的合併不含項次欄，符合「除了項次外都合併」）。
+                h += '<td colspan="'+headingSpanP+'"></td></tr>';
+                return;
+            }
+            inlineFieldsP.forEach(function(c){
                 var cellTxt = c.type==='seq' ? (k===0?String(i+1):'') : (c.type==='date' ? dispDate(sub.data[c.key]||'') : esc(sub.data[c.key]||''));
                 h += '<td>'+cellTxt+'</td>';
             });

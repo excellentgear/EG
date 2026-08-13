@@ -3,7 +3,10 @@
  * 人員列表共用庫（2026-07-30 建立）——「人員列表鐵則」的唯一實作點
  *
  * 鐵則（使用者 2026-07-30 定調，全站所有會列出人員的地方一體適用）：
- *   1. 只列未離職者：`user.state` 0(離職) 與 90(特殊帳號，不列入員工) 一律不列。
+ *   1. 只列未離職者：`user.state` 0(離職)／90(特殊帳號)／99(最高權限帳號，如超級管理員 id=1) 一律不列
+ *      （2026-08-13 使用者明確要求擴大排除 99：這類帳號不是真人，不該出現在「選負責人/簽核對象」這種
+ *      人員挑選清單裡；真的要管理這些帳號本身，走各自專屬頁面 `employee_management.php`/`user_permissions.php`，
+ *      那兩頁本來就不經過 `eg_people_list()`，不受影響）。
  *   2. 留職停薪(2)／育嬰留停(3)／其他長期請假者仍要列出，但必須「標記假別＋請假期間」。
  *   3. 一律依職稱排序（position.sort_order），並顯示職稱。
  *   4. 若同一份列表會出現不同部門的人 → 必須連部門一起顯示（用 eg_people_multi_dept() 判斷）。
@@ -17,7 +20,7 @@
  */
 
 if (!defined('EG_PEOPLE_EXCLUDE_STATES')) {
-    define('EG_PEOPLE_EXCLUDE_STATES', '0,90');   // 離職、特殊帳號：任何人員列表都不列
+    define('EG_PEOPLE_EXCLUDE_STATES', '0,90,99');   // 離職、特殊帳號、最高權限帳號：任何人員列表都不列
 }
 if (!defined('EG_LONG_LEAVE_MIN_DAYS')) {
     define('EG_LONG_LEAVE_MIN_DAYS', 15);          // 連續請假 ≥ 15 天視為長期請假（標記假別+期間）
@@ -67,7 +70,8 @@ if (!function_exists('eg_people_list')) {
      *
      * @param array $opt  dept_ids  只列這些部門（含指定的部門本身；要含子部門請自行展開後傳入）
      *                    user_ids  只列這些人
-     *                    states    允許的 state（預設 [1,2,3,99]；EG_PEOPLE_EXCLUDE_STATES 永遠排除）
+     *                    states    允許的 state（預設 [1,2,3]；EG_PEOPLE_EXCLUDE_STATES 永遠排除，
+     *                    含 99 最高權限帳號——即使呼叫端明確傳 states 內含 99 也一樣會被濾掉）
      *                    keyword   姓名/帳號模糊搜尋
      * @return array 每列：id, user_cname, user_uname, state, state_label, hire_date, gender(M/F/null), highest_education(代碼/null),
      *               position_id, position_name, position_sort, dept_id, dept_name, dept_sort, dept_ids(含兼任的所有部門id),
@@ -76,7 +80,7 @@ if (!function_exists('eg_people_list')) {
      */
     function eg_people_list(PDO $db, array $opt = []): array {
         $exclude = array_map('intval', explode(',', EG_PEOPLE_EXCLUDE_STATES));
-        $states  = isset($opt['states']) && is_array($opt['states']) ? array_map('intval', $opt['states']) : [1,2,3,99];
+        $states  = isset($opt['states']) && is_array($opt['states']) ? array_map('intval', $opt['states']) : [1,2,3];
         $states  = array_values(array_diff($states, $exclude));
         if (!$states) return [];
 
