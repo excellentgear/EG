@@ -963,6 +963,10 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <select id="checkinDaySel" onchange="checkinDayChange()"></select>
             <span style="font-size:11px;color:#8a6d45;margin-left:6px;">多天課程一天要簽一次，逐日各自簽到</span>
         </div>
+        <div id="checkinAdminBox" style="margin-bottom:8px;display:none;">
+            <button class="b-cancel" style="color:#DD5138;" onclick="checkinAdminSignAll()"><i class="fa fa-magic"></i> 超級管理員：本日全部自動簽到</button>
+            <span style="font-size:11px;color:#8a6d45;margin-left:6px;">免逐一輸入密碼，一次把本日尚未簽到的人全部標記已簽到（僅系統管理員可見，補歷史紙本簽到/測試用）</span>
+        </div>
         <table class="att-tbl"><thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th style="width:180px;">簽到</th></tr></thead>
             <tbody id="checkinBody"></tbody></table>
         <div class="tr-hint" style="margin-top:8px;">共用一台裝置輪流簽：選自己的姓名那一列，輸入<b>本人密碼</b>按 Enter 即完成簽到（不是密碼反查身分，密碼只用來驗證是不是本人）。</div>
@@ -3435,7 +3439,16 @@ function openCheckin(sid){
     }).fail(function(x){ $('#checkinInfo').html('<span style="color:#DD5138;">'+esc(x.responseJSON&&x.responseJSON.error||'載入失敗')+'</span>'); });
 }
 function checkinDayChange(){ CHECKIN_DAY = $('#checkinDaySel').val(); renderCheckinBody(); }
+function checkinAdminSignAll(){
+    if (!CHECKIN || !CHECKIN_DAY){ alert('查無上課日期'); return; }
+    if (!confirm('確定要把 '+dispDate(CHECKIN_DAY)+' 尚未簽到的人全部自動簽到嗎？（僅補歷史紙本資料/測試用，一般上課請由本人輸入密碼簽到）')) return;
+    $.post(API, {action:'checkin_admin_signall', session_id:CHECKIN.session.session_id, day_date:CHECKIN_DAY}, function(res){
+        if (!res.ok){ alert(res.error||'自動簽到失敗'); return; }
+        openCheckin(CHECKIN.session.session_id);
+    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '自動簽到失敗'); });
+}
 function renderCheckinBody(){
+    $('#checkinAdminBox').toggle(!!(PERMS && PERMS.isAdmin));
     var sid = CHECKIN.session.session_id, h='';
     (CHECKIN.attendees||[]).forEach(function(a){
         var signed = CHECKIN_DAY_SIGNS[a.user_id+'_'+CHECKIN_DAY];
