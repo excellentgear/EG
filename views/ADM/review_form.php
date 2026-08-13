@@ -90,9 +90,11 @@ $perms = rvf_perms($db, $rvfUser);
         .dp-list div:hover { background:#FBF0DD; }
         .rf-del { color:#DD5138; cursor:pointer; }
         .subitem-ctrl { margin-top:3px; display:flex; gap:6px; }
-        .subitem-ctrl .rf-mini-btn { font-size:10.5px; color:#8a5a2b; border:1px solid #D8BE93; border-radius:9px; padding:1px 7px; cursor:pointer; background:#FBF0DD; white-space:nowrap; }
-        .subitem-ctrl .rf-mini-btn:hover { background:#F7E0BD; }
+        .subitem-ctrl .rf-mini-btn, .col-fill .rf-mini-btn { font-size:10.5px; color:#8a5a2b; border:1px solid #D8BE93; border-radius:9px; padding:1px 7px; cursor:pointer; background:#FBF0DD; white-space:nowrap; }
+        .subitem-ctrl .rf-mini-btn:hover, .col-fill .rf-mini-btn:hover { background:#F7E0BD; }
         table.itm-tbl td.subitem-num { text-align:center; vertical-align:middle; }
+        .col-fill { margin-top:4px; display:flex; flex-direction:column; gap:3px; font-weight:normal; }
+        .col-fill .col-fill-inp { width:100%; min-width:0; border:1px solid #D8BE93; border-radius:4px; padding:2px 4px; font-size:11px; box-sizing:border-box; background:#fff; color:#5b3a1e; }
         .sign-slot { border:1px dashed #E8D5B5; border-radius:4px; padding:3px 5px; margin-bottom:3px; font-size:11px; }
         .sign-yes { color:#3f9142; font-weight:bold; } .sign-no { color:#b0a390; }
         .decide-box { border:1.5px solid #E8D5B5; border-radius:8px; padding:10px; margin-top:10px; background:#FDF8EF; }
@@ -153,7 +155,7 @@ $perms = rvf_perms($db, $rvfUser);
         依「審核表單模板管理」建好的模板建立表單（首發：2-TD-04-01 仿冒零件防制審核表、2-TD-03-01 產品安全審核表），逐列填寫項目與模板定義的欄位，可指定負責單位/負責人並線上簽名，送出後依模板設定走審核/核准。
         <h4>操作步驟</h4>
         <b>①新增表單</b>：選擇模板、填建立日期，建立後進入草稿編輯畫面，「填表人」固定為建立者本人，表單名稱固定沿用模板名稱。<br>
-        <b>②填寫項次</b>：用「+新增列」「-刪除末列」增減項目，逐列填寫內容與模板定義的欄位；可設定該列的負責單位（可多選，該部門任一主管簽即算完成）與負責人（可多選，每人都要各自簽）；有設定「相關日期」欄位的模板可逐列填寫。每個項目可用「+小項」拆出多個小項（例如同一項目下有好幾點要分別敘述），各小項的「項目」內容與其他自訂欄位各自獨立填寫，但「負責單位/負責人」與「簽名」是整個項目共用（畫面自動整列合併儲存格），項次編號只在該項目第一列顯示。<br>
+        <b>②填寫項次</b>：用「+新增列」「-刪除末列」增減項目，逐列填寫內容與模板定義的欄位；可設定該列的負責單位（可多選，該部門任一主管簽即算完成）與負責人（可多選，每人都要各自簽）；有設定「相關日期」欄位的模板可逐列填寫。每個項目可用「+小項」拆出多個小項（例如同一項目下有好幾點要分別敘述），每個小項的「項目」內容、自訂欄位、負責部門/負責人、簽名確認全部各自獨立填寫（負責人不同、各自簽自己的），項次編號只在該項目第一列顯示；日期／下拉選單欄位可在表頭一次選好值按「整欄套用」，快速套用到目前所有項目與小項的同一欄，不用逐列手動填相同值。<br>
         <b>③送出</b>：草稿階段可存檔或送出；送出後內容鎖定不可再編輯，依模板設定進入審核（審核部門任一主管審過即完成）→ 核准（依模板設定的核准優先序解析）。<br>
         <b>④負責人簽名</b>：模板設為「現場密碼簽名」時，畫面上各負責人可自行輸入本人密碼簽名；設為「通知回簽」時，送出後系統會通知負責人前來簽名。<br>
         <b>⑤列印</b>：完成或進行中都可列印，依模板設定的紙張大小（A4/A3）自動縮放至一頁，頁碼顯示於左下角、綁定的 AS 文件編號顯示於右下角，簽章一律蓋章並帶日期。<br>
@@ -246,10 +248,12 @@ function openView(id){
         CUR.as_doc_no = res.as_doc_no; CUR.company_name = res.company_name;
         CUR.review = res.review; CUR.approval = res.approval; CUR.can_review = res.can_review; CUR.can_approve = res.can_approve;
         ITEMS = (res.items||[]).map(function(it){
-            return {id:it.id, subitems: (it.subitems&&it.subitems.length) ? it.subitems : [{content:it.content||'', data:it.data||{}}],
-                     owner_depts:(it.owner_depts?String(it.owner_depts).split(',').filter(Boolean):[]),
-                     owner_users:(it.owner_users?String(it.owner_users).split(',').filter(Boolean):[]),
-                     confirms: it.confirms||[], required_signers: it.required_signers||[], fully_signed: it.fully_signed};
+            return {id:it.id, subitems: (it.subitems||[]).map(function(s){
+                return {id:s.id, content:s.content||'', data:s.data||{},
+                         owner_depts:(s.owner_depts?String(s.owner_depts).split(',').filter(Boolean):[]),
+                         owner_users:(s.owner_users?String(s.owner_users).split(',').filter(Boolean):[]),
+                         confirms:s.confirms||[], required_signers:s.required_signers||[], fully_signed:s.fully_signed};
+            })};
         });
         $('#viewTitle').text('#'+CUR.id+' '+CUR.tpl.name+'（'+STATUS_LABEL[CUR.status]+'）');
         renderView();
@@ -267,7 +271,7 @@ function renderView(){
              (META.perms.isAdmin ? ' <a href="javascript:void(0)" onclick="editSubmitDate()" style="margin-left:6px;">（超級管理員：修改送出日）</a>' : '')+'</div>';
     }
     h += '<div class="itm-tbl-wrap"><table class="itm-tbl"><thead><tr><th style="width:26px;">#</th><th>項目</th>';
-    (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+esc(c.label)+'</th>'; });
+    (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+esc(c.label)+colFillHtml(c)+'</th>'; });
     h += '<th>負責單位/負責人</th>';
     if ((CUR_SCHEMA.sign_mode||'password')!=='none') h += '<th>簽名</th>';
     h += (isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody" data-eg-row-add="itemAdd" data-eg-row-del="itemDelLast"></tbody></table></div>';
@@ -307,13 +311,15 @@ function decide(kind, decision){
 }
 
 /* ---- 項次列 ---- */
-function itemAdd(){ ITEMS.push({id:0, subitems:[{content:'',data:{}}], owner_depts:[], owner_users:[], confirms:[], required_signers:[], fully_signed:false}); renderItems(); }
+function rvfBlankSubitem(){ return {id:0, content:'', data:{}, owner_depts:[], owner_users:[], confirms:[], required_signers:[], fully_signed:false}; }
+function itemAdd(){ ITEMS.push({id:0, subitems:[rvfBlankSubitem()]}); renderItems(); }
 function itemDelLast(){ if (ITEMS.length) ITEMS.pop(); renderItems(); }
 function itemDel(i){ ITEMS.splice(i,1); renderItems(); }
-/* 小項（2026-08-12 新增，使用者明確要求）：一個項目可拆多個小項，每個小項各自的「項目」內容與自訂欄位(下拉/日期/文字等)
-   各自獨立不合併；負責部門/負責人／簽名仍是整個項目共用，畫面上用 rowspan 橫跨該項目全部小項列，見 renderItems()。
-   全站每個模板都自動具備此功能，不另設模板層級開關；小項數量不限，至少保留 1 筆（刪到剩 1 筆就不能再刪）。 */
-function subItemAdd(i){ if (ITEMS[i]) { ITEMS[i].subitems.push({content:'', data:{}}); renderItems(); } }
+/* 小項（2026-08-12 新增，使用者明確要求）：一個項目可拆多個小項，每個小項各自的「項目」內容、自訂欄位(下拉/日期/文字等)、
+   負責部門/負責人、簽名確認全部各自獨立不合併（「項目」只是共用同一個項次編號的分組容器，見 renderItems()）。
+   全站每個模板都自動具備此功能，不另設模板層級開關；小項數量不限，至少保留 1 筆（刪到剩 1 筆就不能再刪，
+   要整組刪除請用該項次列的刪除鈕 itemDel）。 */
+function subItemAdd(i){ if (ITEMS[i]) { ITEMS[i].subitems.push(rvfBlankSubitem()); renderItems(); } }
 function subItemDel(i,k){ if (ITEMS[i] && ITEMS[i].subitems.length>1) { ITEMS[i].subitems.splice(k,1); renderItems(); } }
 function subItemContentEdit(i,k,val){ if (ITEMS[i] && ITEMS[i].subitems[k]) ITEMS[i].subitems[k].content = val; }
 function subItemFieldEdit(i,k,key,val){ if (ITEMS[i] && ITEMS[i].subitems[k]) ITEMS[i].subitems[k].data[key] = val; }
@@ -342,17 +348,39 @@ function fieldInputHtml(i, k, c){
     if (c.type==='textarea') return '<div class="'+cls+'">'+lbl+'<textarea '+dis+' placeholder="'+esc(c.placeholder)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)">'+esc(v)+'</textarea></div>';
     return '<div class="'+cls+'">'+lbl+'<input type="text" '+dis+' placeholder="'+esc(c.placeholder)+'" value="'+esc(v)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)"></div>';
 }
-function deptTagHtml(i, ids){
-    var tags = ids.map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?'<span class="tg">'+esc(d.name)+'<i class="fa fa-times" onclick="ownerDeptDel('+i+',\''+id+'\')"></i></span>':''; }).join('');
-    return '<div class="dp-pick itm-dp" data-i="'+i+'"><div class="dp-tags">'+tags+'</div>'+(isDraftMine()?'<input type="text" class="itm-dp-kw" placeholder="選部門…" data-eg-skip autocomplete="off"><div class="dp-list"></div>':'')+'</div>';
+/* 整欄套用（2026-08-12 新增，使用者明確要求）：日期／下拉選單欄位可在表頭選一次值，一鍵套用到目前所有項目、
+   所有小項的這一欄，取代逐列手動填相同值。只在草稿本人編輯時顯示；只支援 date/select 兩種類型。 */
+function colFillHtml(c){
+    if (!isDraftMine()) return '';
+    if (c.type==='date') {
+        return '<div class="col-fill"><input type="date" max="9999-12-31" class="col-fill-inp" id="colFill_'+c.key+'" data-eg-skip>'
+             + '<span class="rf-mini-btn" onclick="fillColumn(\''+c.key+'\')">整欄套用</span></div>';
+    }
+    if (c.type==='select') {
+        var opts = '<option value="">（選項）</option>' + (c.options||[]).map(function(o){ return '<option value="'+esc(o)+'">'+esc(o)+'</option>'; }).join('');
+        return '<div class="col-fill"><select class="col-fill-inp" id="colFill_'+c.key+'" data-eg-skip>'+opts+'</select>'
+             + '<span class="rf-mini-btn" onclick="fillColumn(\''+c.key+'\')">整欄套用</span></div>';
+    }
+    return '';
 }
-function userTagHtml(i, ids, deptIds){
-    var tags = ids.map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?'<span class="tg">'+esc(p.user_cname)+'<i class="fa fa-times" onclick="ownerUserDel('+i+',\''+id+'\')"></i></span>':''; }).join('');
+function fillColumn(key){
+    if (!isDraftMine()) return;
+    var val = $('#colFill_'+key).val();
+    if (!val) { alert('請先在表頭選擇要整欄套用的值'); return; }
+    ITEMS.forEach(function(it){ (it.subitems||[]).forEach(function(s){ s.data[key] = val; }); });
+    renderItems();
+}
+function deptTagHtml(i, k, ids){
+    var tags = ids.map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?'<span class="tg">'+esc(d.name)+'<i class="fa fa-times" onclick="ownerDeptDel('+i+','+k+',\''+id+'\')"></i></span>':''; }).join('');
+    return '<div class="dp-pick itm-dp" data-i="'+i+'" data-k="'+k+'"><div class="dp-tags">'+tags+'</div>'+(isDraftMine()?'<input type="text" class="itm-dp-kw" placeholder="選部門…" data-eg-skip autocomplete="off"><div class="dp-list"></div>':'')+'</div>';
+}
+function userTagHtml(i, k, ids, deptIds){
+    var tags = ids.map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?'<span class="tg">'+esc(p.user_cname)+'<i class="fa fa-times" onclick="ownerUserDel('+i+','+k+',\''+id+'\')"></i></span>':''; }).join('');
     var ph = (deptIds && deptIds.length) ? '只列該部門人員…' : '選人員…（未選部門，列全公司）';
-    return '<div class="dp-pick itm-up" data-i="'+i+'"><div class="dp-tags">'+tags+'</div>'+(isDraftMine()?'<input type="text" class="itm-up-kw" placeholder="'+ph+'" data-eg-skip autocomplete="off"><div class="dp-list"></div>':'')+'</div>';
+    return '<div class="dp-pick itm-up" data-i="'+i+'" data-k="'+k+'"><div class="dp-tags">'+tags+'</div>'+(isDraftMine()?'<input type="text" class="itm-up-kw" placeholder="'+ph+'" data-eg-skip autocomplete="off"><div class="dp-list"></div>':'')+'</div>';
 }
-function ownerDeptDel(i,id){ ITEMS[i].owner_depts = ITEMS[i].owner_depts.filter(function(x){return String(x)!==String(id);}); renderItems(); }
-function ownerUserDel(i,id){ ITEMS[i].owner_users = ITEMS[i].owner_users.filter(function(x){return String(x)!==String(id);}); renderItems(); }
+function ownerDeptDel(i,k,id){ var s=ITEMS[i].subitems[k]; s.owner_depts = s.owner_depts.filter(function(x){return String(x)!==String(id);}); renderItems(); }
+function ownerUserDel(i,k,id){ var s=ITEMS[i].subitems[k]; s.owner_users = s.owner_users.filter(function(x){return String(x)!==String(id);}); renderItems(); }
 /* .dp-list 用 position:fixed（見上方CSS註解），顯示前要用輸入框當下在畫面上的實際座標現算位置。 */
 function showDpList($input, $list){
     var r = $input[0].getBoundingClientRect();
@@ -362,64 +390,69 @@ $(document).on('scroll', '.itm-tbl-wrap', function(){ $('.dp-list').hide(); });
 $(window).on('resize', function(){ $('.dp-list').hide(); });
 $(document).on('click', function(e){ if (!$(e.target).closest('.dp-pick,.dp-list').length) $('.dp-list').hide(); });
 $(document).on('focus input', '.itm-dp-kw', function(){
-    var $p=$(this).closest('.itm-dp'), i=$p.data('i'), it=ITEMS[i]; if(!it) return;
+    var $p=$(this).closest('.itm-dp'), i=$p.data('i'), k=$p.data('k'), it=ITEMS[i]; if(!it) return;
+    var sub=it.subitems[k]; if(!sub) return;
     var kw=$.trim($(this).val()).toLowerCase(), h='';
     (META.departments||[]).forEach(function(d){
         if (kw && d.name.toLowerCase().indexOf(kw)<0) return;
-        var on=(it.owner_depts||[]).some(function(x){return String(x)===String(d.id);});
+        var on=(sub.owner_depts||[]).some(function(x){return String(x)===String(d.id);});
         h += '<div data-id="'+d.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(d.name)+'</div>';
     });
     var $list = $p.find('.dp-list').html(h||'<div style="color:#b0a390;">查無部門</div>');
     showDpList($(this), $list);
 });
 $(document).on('click', '.itm-dp .dp-list div[data-id]', function(){
-    var $p=$(this).closest('.itm-dp'), i=$p.data('i'), it=ITEMS[i]; if(!it) return;
-    var id=String($(this).data('id')), idx=it.owner_depts.findIndex(function(x){return String(x)===id;});
-    if (idx>=0) it.owner_depts.splice(idx,1); else it.owner_depts.push(id);
+    var $p=$(this).closest('.itm-dp'), i=$p.data('i'), k=$p.data('k'), it=ITEMS[i]; if(!it) return;
+    var sub=it.subitems[k]; if(!sub) return;
+    var id=String($(this).data('id')), idx=sub.owner_depts.findIndex(function(x){return String(x)===id;});
+    if (idx>=0) sub.owner_depts.splice(idx,1); else sub.owner_depts.push(id);
     renderItems();
 });
 $(document).on('focus input', '.itm-up-kw', function(){
-    var $p=$(this).closest('.itm-up'), i=$p.data('i'), it=ITEMS[i]; if(!it) return;
+    var $p=$(this).closest('.itm-up'), i=$p.data('i'), k=$p.data('k'), it=ITEMS[i]; if(!it) return;
+    var sub=it.subitems[k]; if(!sub) return;
     var kw=$.trim($(this).val()).toLowerCase(), h='';
     // 選了負責部門後，負責人只列該部門(可複選部門則為聯集)的人，避免在全公司名單裡大海撈針；
     // 未選部門時維持列出全公司（使用者要求：多個部門要逐一「選部門→選人」，不要一次把部門全選完才選人，
     // 這裡的過濾行為本身就是照著這個順序運作——先選的部門會立刻篩到位）。
     // 比對用 dept_ids（含兼任的所有部門，見 people_lib.php），不只比對主要部門 dept_id，
     // 否則兼任該部門的人在篩選時會消失，選不到（2026-08-12 使用者明確要求）。
-    var deptFilter = (it.owner_depts||[]).map(String);
+    var deptFilter = (sub.owner_depts||[]).map(String);
     (META.people||[]).forEach(function(p){
         var pDeptIds = (p.dept_ids||[p.dept_id]).map(String);
         if (deptFilter.length && !pDeptIds.some(function(d){ return deptFilter.indexOf(d)>=0; })) return;
         if (kw && p.user_cname.toLowerCase().indexOf(kw)<0) return;
-        var on=(it.owner_users||[]).some(function(x){return String(x)===String(p.id);});
+        var on=(sub.owner_users||[]).some(function(x){return String(x)===String(p.id);});
         h += '<div data-id="'+p.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(p.display)+'</div>';
     });
     var $list = $p.find('.dp-list').html(h||'<div style="color:#b0a390;">'+(deptFilter.length?'此部門查無人員':'查無人員')+'</div>');
     showDpList($(this), $list);
 });
 $(document).on('click', '.itm-up .dp-list div[data-id]', function(){
-    var $p=$(this).closest('.itm-up'), i=$p.data('i'), it=ITEMS[i]; if(!it) return;
-    var id=String($(this).data('id')), idx=it.owner_users.findIndex(function(x){return String(x)===id;});
-    if (idx>=0) it.owner_users.splice(idx,1); else it.owner_users.push(id);
+    var $p=$(this).closest('.itm-up'), i=$p.data('i'), k=$p.data('k'), it=ITEMS[i]; if(!it) return;
+    var sub=it.subitems[k]; if(!sub) return;
+    var id=String($(this).data('id')), idx=sub.owner_users.findIndex(function(x){return String(x)===id;});
+    if (idx>=0) sub.owner_users.splice(idx,1); else sub.owner_users.push(id);
     renderItems();
 });
-function signSlotsHtml(i, it){
-    if (!it.required_signers || !it.required_signers.length) return '<span style="color:#b0a390;font-size:11px;">未指派負責人</span>';
-    var doneUids = (it.confirms||[]).map(function(c){ return String(c.user_id); });
-    return it.required_signers.map(function(s){
+/* 簽名確認掛在小項本身（2026-08-12 改版，使用者明確要求：每個小項的負責人與簽名各自獨立），sub.id 是小項在資料庫的真實 id。 */
+function signSlotsHtml(sub){
+    if (!sub.required_signers || !sub.required_signers.length) return '<span style="color:#b0a390;font-size:11px;">未指派負責人</span>';
+    var doneUids = (sub.confirms||[]).map(function(c){ return String(c.user_id); });
+    return sub.required_signers.map(function(s){
         var done = doneUids.indexOf(String(s.id))>=0;
-        var c = (it.confirms||[]).find(function(x){ return String(x.user_id)===String(s.id); });
+        var c = (sub.confirms||[]).find(function(x){ return String(x.user_id)===String(s.id); });
         if (done) return '<div class="sign-slot sign-yes">✓ '+esc(s.user_cname)+'（'+dispDate(c.signed_at)+'）</div>';
         if (String(s.id)===String(META.uid) && CUR.status!=='draft') {
-            return '<div class="sign-slot"><b>'+esc(s.user_cname)+'</b><br><input type="text" inputmode="numeric" placeholder="本人密碼" class="sign-pw" data-item="'+it.id+'" data-uid="'+s.id+'" style="width:80px;" data-eg-skip>'
-                 + '<button onclick="doItemConfirm('+it.id+','+s.id+')" style="height:22px;font-size:11px;">簽名</button></div>';
+            return '<div class="sign-slot"><b>'+esc(s.user_cname)+'</b><br><input type="text" inputmode="numeric" placeholder="本人密碼" class="sign-pw" data-subitem="'+sub.id+'" data-uid="'+s.id+'" style="width:80px;" data-eg-skip>'
+                 + '<button onclick="doItemConfirm('+sub.id+','+s.id+')" style="height:22px;font-size:11px;">簽名</button></div>';
         }
         return '<div class="sign-slot sign-no">未簽：'+esc(s.user_cname)+'</div>';
     }).join('');
 }
-function doItemConfirm(itemId, uid){
-    var pw = $('.sign-pw[data-item="'+itemId+'"][data-uid="'+uid+'"]').val();
-    $.post(API, {action:'item_confirm', csrf:META.csrf, item_id:itemId, user_id:uid, password:pw}, function(res){
+function doItemConfirm(subitemId, uid){
+    var pw = $('.sign-pw[data-subitem="'+subitemId+'"][data-uid="'+uid+'"]').val();
+    $.post(API, {action:'item_confirm', csrf:META.csrf, subitem_id:subitemId, user_id:uid, password:pw}, function(res){
         if (!res.ok){ alert(res.error||'簽名失敗'); return; }
         openView(CUR.id);
     }, 'json');
@@ -429,21 +462,19 @@ function renderItems(){
     var inlineFields = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout!=='block'; });
     var blockFields = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout==='block'; });
     var hasSignCol = (CUR_SCHEMA.sign_mode||'password')!=='none';
-    var blockColspan = 1 + inlineFields.length;
+    // 負責部門/負責人/簽名/刪除鈕都不再合併（2026-08-12 改版：每個小項各自獨立負責人與簽名），
+    // 每個小項自己一整列都是完整欄位，只有「項次」編號與「刪除整個項次」鈕只在該項目第一個小項列顯示。
+    var blockColspan = 2 + inlineFields.length + (hasSignCol?1:0) + (isDraftMine()?1:0);
     ITEMS.forEach(function(it,i){
-        if (!it.subitems || !it.subitems.length) it.subitems = [{content:'', data:{}}];
+        if (!it.subitems || !it.subitems.length) it.subitems = [rvfBlankSubitem()];
         var subs = it.subitems, n = subs.length;
-        // 負責部門/負責人／簽名／刪除鈕整列合併：橫跨這個項目全部小項的所有實體列(含小項各自的整行欄位那一列)
-        var rowspanCount = blockFields.length ? n*2 : n;
         subs.forEach(function(sub,k){
             h += '<tr><td class="subitem-num">'+(k===0?(i+1):'')+'</td>';
             h += '<td>'+subItemContentHtml(i,k,sub,n)+'</td>';
             inlineFields.forEach(function(c){ h += '<td>'+fieldInputHtml(i,k,c)+'</td>'; });
-            if (k===0) {
-                h += '<td rowspan="'+rowspanCount+'"><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,it.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,it.owner_users,it.owner_depts)+'</td>';
-                if (hasSignCol) h += '<td rowspan="'+rowspanCount+'">'+signSlotsHtml(i,it)+'</td>';
-                if (isDraftMine()) h += '<td rowspan="'+rowspanCount+'"><span class="rf-del" onclick="itemDel('+i+')"><i class="fa fa-times"></i></span></td>';
-            }
+            h += '<td><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,k,sub.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,k,sub.owner_users,sub.owner_depts)+'</td>';
+            if (hasSignCol) h += '<td>'+signSlotsHtml(sub)+'</td>';
+            if (isDraftMine()) h += '<td>'+(k===0?'<span class="rf-del" onclick="itemDel('+i+')" title="刪除整個項次(含全部小項)"><i class="fa fa-times"></i></span>':'')+'</td>';
             h += '</tr>';
             if (blockFields.length) {
                 h += '<tr><td></td><td colspan="'+blockColspan+'">' + blockFields.map(function(c){ return fieldInputHtml(i,k,c); }).join('') + '</td></tr>';
@@ -454,7 +485,11 @@ function renderItems(){
 }
 
 function collectItems(){
-    return ITEMS.map(function(it){ return {id:it.id, subitems:it.subitems, owner_depts:it.owner_depts, owner_users:it.owner_users}; });
+    return ITEMS.map(function(it){
+        return {id:it.id, subitems: it.subitems.map(function(s){
+            return {id:s.id, content:s.content, data:s.data, owner_depts:s.owner_depts, owner_users:s.owner_users};
+        })};
+    });
 }
 function saveDraft(cb){
     $.post(API, {action:'instance_save_items', csrf:META.csrf, instance_id:CUR.id, business_date:$('#vBizDate').val(), items:JSON.stringify(collectItems())}, function(res){
@@ -554,21 +589,20 @@ function printForm(){
     (schema.fields||[]).forEach(function(c){ h += '<th>'+esc(c.label)+'</th>'; });
     h += '<th>負責單位/人</th>'+(pHasSignCol?'<th>簽名</th>':'')+'</tr></thead><tbody>';
     ITEMS.forEach(function(it,i){
-        var subs = (it.subitems&&it.subitems.length) ? it.subitems : [{content:it.content||'', data:it.data||{}}];
-        var n = subs.length;
-        var ownerTxt = (it.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; })
-            .concat((it.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; })).filter(Boolean).join('、');
-        var signHtml = (it.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
-        if (!signHtml && PREVIEW_MODE && (it.owner_depts.length || it.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
+        var subs = (it.subitems&&it.subitems.length) ? it.subitems : [rvfBlankSubitem()];
         subs.forEach(function(sub,k){
             h += '<tr><td>'+(k===0?(i+1):'')+'</td><td class="t-left">'+esc(sub.content).replace(/\n/g,'<br>')+'</td>';
             (schema.fields||[]).forEach(function(c){
                 var cellTxt = c.type==='seq' ? (k===0?String(i+1):'') : (c.type==='date' ? dispDate(sub.data[c.key]||'') : esc(sub.data[c.key]||''));
                 h += '<td>'+cellTxt+'</td>';
             });
-            if (k===0) {
-                h += '<td rowspan="'+n+'">'+esc(ownerTxt)+'</td>';
-                if (pHasSignCol) h += '<td rowspan="'+n+'">'+signHtml+'</td>';
+            var ownerTxt = (sub.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; })
+                .concat((sub.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; })).filter(Boolean).join('、');
+            h += '<td>'+esc(ownerTxt)+'</td>';
+            if (pHasSignCol) {
+                var signHtml = (sub.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
+                if (!signHtml && PREVIEW_MODE && (sub.owner_depts.length || sub.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
+                h += '<td>'+signHtml+'</td>';
             }
             h += '</tr>';
         });

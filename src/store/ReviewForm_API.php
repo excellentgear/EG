@@ -154,9 +154,13 @@ case 'instance_get': {
     $schema = rvf_template_schema_at_version($db, (int)$inst['template_id'], (int)$inst['template_version']) ?: (json_decode((string)$tpl['current_schema_json'], true) ?: []);
     $items = rvf_instance_items_get($db, $id);
     foreach ($items as &$it) {
-        $it['required_signers'] = rvf_item_required_signers($db, $it);
-        $it['fully_signed'] = rvf_item_is_fully_signed($db, $it);
+        foreach ($it['subitems'] as &$sub) {
+            $sub['required_signers'] = rvf_item_required_signers($db, $sub);
+            $sub['fully_signed'] = rvf_item_is_fully_signed($db, $sub);
+        }
+        unset($sub);
     }
+    unset($it);
     $review = eg_approval_latest($db, 'review_form', $id, 'review');
     $approval = eg_approval_latest($db, 'review_form', $id, 'approval');
     $reviewPool = !empty($tpl['need_review']) ? rvf_review_pool($db, $tpl) : [];
@@ -212,7 +216,8 @@ case 'instance_delete': {
     if (!$inst) jerr('找不到此表單', 404);
     if ((int)$inst['created_by'] !== $uid && !$perms['canAdmin']) jerr('只有填表人本人可以刪除', 403);
     if ($inst['status'] !== 'draft' && !$perms['canAdmin']) jerr('已送出的表單不可刪除，如需作廢請洽管理員');
-    $db->prepare("DELETE FROM rf_instance_item_confirm WHERE item_id IN (SELECT id FROM rf_instance_item WHERE instance_id=?)")->execute([$id]);
+    $db->prepare("DELETE FROM rf_instance_item_confirm WHERE subitem_id IN (SELECT s.id FROM rf_instance_subitem s JOIN rf_instance_item i ON i.id=s.item_id WHERE i.instance_id=?)")->execute([$id]);
+    $db->prepare("DELETE FROM rf_instance_subitem WHERE item_id IN (SELECT id FROM rf_instance_item WHERE instance_id=?)")->execute([$id]);
     $db->prepare("DELETE FROM rf_instance_item WHERE instance_id=?")->execute([$id]);
     $db->prepare("DELETE FROM approval_record WHERE module='review_form' AND entity_id=?")->execute([$id]);
     $db->prepare("DELETE FROM rf_instance WHERE id=?")->execute([$id]);
@@ -229,17 +234,20 @@ case 'instance_duplicate': {
     $newId = rvf_instance_create($db, (int)$src['template_id'], $uid, $uname, (string)$src['title'], date('Y-m-d'));
     $items = rvf_instance_items_get($db, $id);
     rvf_instance_items_save($db, $newId, array_map(function($it) {
-        return ['id'=>0, 'subitems'=>$it['subitems'], 'owner_depts'=>explode(',', (string)$it['owner_depts']), 'owner_users'=>explode(',', (string)$it['owner_users'])];
+        return ['id'=>0, 'subitems'=>array_map(function($s) {
+            return ['id'=>0, 'content'=>$s['content'], 'data'=>$s['data'],
+                    'owner_depts'=>explode(',', (string)$s['owner_depts']), 'owner_users'=>explode(',', (string)$s['owner_users'])];
+        }, $it['subitems'])];
     }, $items));
     jout(['id'=>$newId]);
 }
 
 case 'item_confirm': {
     rvf_need_csrf();
-    $itemId = (int)($_POST['item_id'] ?? 0);
+    $subitemId = (int)($_POST['subitem_id'] ?? 0);
     $forUid = (int)($_POST['user_id'] ?? 0);
     $password = (string)($_POST['password'] ?? '');
-    $r = rvf_item_confirm($db, $itemId, $forUid, $password);
+    $r = rvf_item_confirm($db, $subitemId, $forUid, $password);
     if (!$r['ok']) jerr($r['msg']);
     jout([]);
 }

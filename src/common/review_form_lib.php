@@ -9,7 +9,11 @@
  * 資料表（前綴 rf_，注意此前綴只用於 DB 表名；PHP 函式一律用 rvf_ 前綴——
  * role_features_helper.php 已經佔用 rf_ 前綴的函式命名空間，不可再撞名）：
  *   rf_template / rf_template_version / rf_template_maintainer_user /
- *   rf_instance / rf_instance_item / rf_instance_item_confirm
+ *   rf_instance / rf_instance_item / rf_instance_subitem / rf_instance_item_confirm
+ *
+ * 項目／小項兩層結構（2026-08-12 改版）：rf_instance_item 只是「項次分組容器」（項次編號＝這一組），
+ * 實際內容/自訂欄位/負責部門/負責人/簽名全部在 rf_instance_subitem（每個小項各自獨立），
+ * rf_instance_item_confirm.subitem_id 對應到小項不是項目。詳見 rvf_instance_items_get() 上方註解。
  *
  * 重用不新建：AS 文件綁定走 asdoc_lib.php（module code 動態組 'review_form_tpl_'.$id）；
  * 審核/核准走共用 approval_record（module='review_form', level='review'/'approval'，approval_lib.php）；
@@ -325,56 +329,99 @@ function rvf_instance_list(PDO $db, int $templateId = 0, ?int $onlyCreatedBy = n
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
+/* 項目／小項採兩層結構（2026-08-12 改版，使用者明確要求）：rf_instance_item 純粹是「項次分組容器」
+ * （id/instance_id/sort_order，項次編號＝這一組），實際內容/自訂欄位/負責部門/負責人/簽名全部掛在
+ * rf_instance_subitem（每個小項各自獨立，不合併），簽名紀錄 rf_instance_item_confirm.subitem_id 對應到小項。
+ * 一個項目至少保留 1 筆小項；小項數量不限。舊欄位（content/data_json/subitems_json/owner_depts/owner_users/
+ * date_values_json）留在 rf_instance_item 上不刪，但改版後不再寫入，只在完全沒有小項列時當退回值讀（理論上
+ * 遷移後不會發生，純保險）。 */
 function rvf_instance_items_get(PDO $db, int $instanceId): array {
     $st = $db->prepare("SELECT * FROM rf_instance_item WHERE instance_id=? ORDER BY sort_order,id");
     $st->execute([$instanceId]);
     $items = $st->fetchAll(PDO::FETCH_ASSOC);
     foreach ($items as &$it) {
-        $cst = $db->prepare("SELECT * FROM rf_instance_item_confirm WHERE item_id=? ORDER BY signed_at");
-        $cst->execute([$it['id']]);
-        $it['confirms'] = $cst->fetchAll(PDO::FETCH_ASSOC);
-        $it['data'] = json_decode((string)$it['data_json'], true) ?: new stdClass();
-        $it['date_values'] = json_decode((string)$it['date_values_json'], true) ?: new stdClass();
-        // 小項（2026-08-12 新增，使用者明確要求）：一個項目可拆多個小項，每個小項各自的「項目內容」與自訂欄位
-        // 各自獨立，負責部門/負責人與簽名仍掛在項目本身不拆分。subitems_json 是新格式；
-        // 舊資料沒有這欄（NULL）就用舊的 content/data_json 包成一個小項，畫面上完全等同以前的單列項目。
-        $sub = json_decode((string)($it['subitems_json'] ?? ''), true);
-        if (!is_array($sub) || !$sub) $sub = [['content' => (string)$it['content'], 'data' => $it['data'] ?: new stdClass()]];
-        $it['subitems'] = array_values(array_map(function($s) {
-            return ['content' => (string)($s['content'] ?? ''), 'data' => $s['data'] ?? new stdClass()];
-        }, $sub));
+        $sst = $db->prepare("SELECT * FROM rf_instance_subitem WHERE item_id=? ORDER BY sort_order,id");
+        $sst->execute([$it['id']]);
+        $subs = $sst->fetchAll(PDO::FETCH_ASSOC);
+        if (!$subs) {
+            $subs = [['id'=>0, 'item_id'=>$it['id'], 'sort_order'=>0,
+                      'content'=>(string)$it['content'], 'data_json'=>$it['data_json'],
+                      'owner_depts'=>$it['owner_depts'], 'owner_users'=>$it['owner_users']]];
+        }
+        foreach ($subs as &$s) {
+            $s['id'] = (int)$s['id'];
+            $s['data'] = json_decode((string)$s['data_json'], true) ?: new stdClass();
+            $s['confirms'] = $s['id'] ? (function() use ($db, $s) {
+                $cst = $db->prepare("SELECT * FROM rf_instance_item_confirm WHERE subitem_id=? ORDER BY signed_at");
+                $cst->execute([$s['id']]);
+                return $cst->fetchAll(PDO::FETCH_ASSOC);
+            })() : [];
+        }
+        unset($s);
+        $it['subitems'] = array_values($subs);
     }
     return $items;
 }
 
-/** 逐列存檔：以 item id 對應差異更新（有 id 且存在→UPDATE，否則→INSERT），送出的清單裡沒出現的既有列→DELETE(連同簽名)。
- *  不採用「delete+insert 全部重來」——那會讓每次存檔後 item_id 全部改變，簽名/通知會對不上（meeting_record 就踩過這個坑，
+/** 逐列存檔：項目與小項都以 id 對應差異更新（有 id 且存在→UPDATE，否則→INSERT），送出的清單裡沒出現的既有列→DELETE(連同簽名)。
+ *  不採用「delete+insert 全部重來」——那會讓每次存檔後 id 全部改變，簽名/通知會對不上（meeting_record 就踩過這個坑，
  *  在那邊靠額外的 id remap 補救；這裡直接用差異更新從根本避開，比較乾淨)。只允許 status='draft' 時呼叫。 */
 function rvf_instance_items_save(PDO $db, int $instanceId, array $items): void {
     $st = $db->prepare("SELECT id FROM rf_instance_item WHERE instance_id=?");
     $st->execute([$instanceId]);
-    $existingIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
-    $keepIds = [];
-    $ins = $db->prepare("INSERT INTO rf_instance_item (instance_id,sort_order,content,data_json,subitems_json,owner_depts,owner_users,date_values_json) VALUES (?,?,?,?,?,?,?,?)");
-    $upd = $db->prepare("UPDATE rf_instance_item SET sort_order=?,content=?,data_json=?,subitems_json=?,owner_depts=?,owner_users=?,date_values_json=? WHERE id=? AND instance_id=?");
+    $existingItemIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    $keepItemIds = [];
+    $insItem = $db->prepare("INSERT INTO rf_instance_item (instance_id,sort_order) VALUES (?,?)");
+    $updItem = $db->prepare("UPDATE rf_instance_item SET sort_order=? WHERE id=? AND instance_id=?");
     $sort = 0;
     foreach ($items as $it) {
-        // 小項：至少保留 1 筆，每筆各自 content/data；subitems_json 存完整清單，
-        // 舊版 content/data_json 欄位同步寫入「第一筆小項」的值，給還沒改寫的舊消費端（如通知文字）當退回值用。
-        $subitems = is_array($it['subitems'] ?? null) && $it['subitems'] ? array_values($it['subitems']) : [['content'=>(string)($it['content'] ?? ''), 'data'=>$it['data'] ?? new stdClass()]];
-        $subitems = array_map(function($s) { return ['content'=>(string)($s['content'] ?? ''), 'data'=>$s['data'] ?? new stdClass()]; }, $subitems);
-        $content    = $subitems[0]['content'];
-        $dataJson   = json_encode($subitems[0]['data'], JSON_UNESCAPED_UNICODE);
-        $subJson    = json_encode($subitems, JSON_UNESCAPED_UNICODE);
-        $ownDepts  = implode(',', array_values(array_filter(array_map('intval', $it['owner_depts'] ?? []))));
-        $ownUsers  = implode(',', array_values(array_filter(array_map('intval', $it['owner_users'] ?? []))));
-        $dateJson  = json_encode($it['date_values'] ?? new stdClass(), JSON_UNESCAPED_UNICODE);
-        $id = (int)($it['id'] ?? 0);
+        $itemId = (int)($it['id'] ?? 0);
+        if ($itemId && in_array($itemId, $existingItemIds, true)) {
+            $updItem->execute([$sort, $itemId, $instanceId]);
+        } else {
+            $insItem->execute([$instanceId, $sort]);
+            $itemId = (int)$db->lastInsertId();
+        }
+        $keepItemIds[] = $itemId;
+        rvf_subitems_save($db, $itemId, is_array($it['subitems'] ?? null) ? $it['subitems'] : []);
+        $sort++;
+    }
+    $toDeleteItems = array_values(array_diff($existingItemIds, $keepItemIds));
+    if ($toDeleteItems) {
+        $in = implode(',', array_fill(0, count($toDeleteItems), '?'));
+        $subSt = $db->prepare("SELECT id FROM rf_instance_subitem WHERE item_id IN ($in)");
+        $subSt->execute($toDeleteItems);
+        $subIds = array_map('intval', $subSt->fetchAll(PDO::FETCH_COLUMN));
+        if ($subIds) {
+            $in2 = implode(',', array_fill(0, count($subIds), '?'));
+            $db->prepare("DELETE FROM rf_instance_item_confirm WHERE subitem_id IN ($in2)")->execute($subIds);
+            $db->prepare("DELETE FROM rf_instance_subitem WHERE id IN ($in2)")->execute($subIds);
+        }
+        $db->prepare("DELETE FROM rf_instance_item WHERE id IN ($in)")->execute($toDeleteItems);
+    }
+}
+
+/** 差異更新一個項目底下的所有小項（邏輯比照上面對項目本身的差異更新，保留 id 才能讓簽名對得上）。 */
+function rvf_subitems_save(PDO $db, int $itemId, array $subitems): void {
+    $st = $db->prepare("SELECT id FROM rf_instance_subitem WHERE item_id=?");
+    $st->execute([$itemId]);
+    $existingIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    $keepIds = [];
+    $ins = $db->prepare("INSERT INTO rf_instance_subitem (item_id,sort_order,content,data_json,owner_depts,owner_users) VALUES (?,?,?,?,?,?)");
+    $upd = $db->prepare("UPDATE rf_instance_subitem SET sort_order=?,content=?,data_json=?,owner_depts=?,owner_users=? WHERE id=? AND item_id=?");
+    if (!$subitems) $subitems = [['content'=>'', 'data'=>new stdClass(), 'owner_depts'=>[], 'owner_users'=>[]]];
+    $sort = 0;
+    foreach ($subitems as $s) {
+        $content  = (string)($s['content'] ?? '');
+        $dataJson = json_encode($s['data'] ?? new stdClass(), JSON_UNESCAPED_UNICODE);
+        $ownDepts = implode(',', array_values(array_filter(array_map('intval', $s['owner_depts'] ?? []))));
+        $ownUsers = implode(',', array_values(array_filter(array_map('intval', $s['owner_users'] ?? []))));
+        $id = (int)($s['id'] ?? 0);
         if ($id && in_array($id, $existingIds, true)) {
-            $upd->execute([$sort, $content, $dataJson, $subJson, $ownDepts, $ownUsers, $dateJson, $id, $instanceId]);
+            $upd->execute([$sort, $content, $dataJson, $ownDepts, $ownUsers, $id, $itemId]);
             $keepIds[] = $id;
         } else {
-            $ins->execute([$instanceId, $sort, $content, $dataJson, $subJson, $ownDepts, $ownUsers, $dateJson]);
+            $ins->execute([$itemId, $sort, $content, $dataJson, $ownDepts, $ownUsers]);
             $keepIds[] = (int)$db->lastInsertId();
         }
         $sort++;
@@ -382,12 +429,13 @@ function rvf_instance_items_save(PDO $db, int $instanceId, array $items): void {
     $toDelete = array_values(array_diff($existingIds, $keepIds));
     if ($toDelete) {
         $in = implode(',', array_fill(0, count($toDelete), '?'));
-        $db->prepare("DELETE FROM rf_instance_item_confirm WHERE item_id IN ($in)")->execute($toDelete);
-        $db->prepare("DELETE FROM rf_instance_item WHERE id IN ($in)")->execute($toDelete);
+        $db->prepare("DELETE FROM rf_instance_item_confirm WHERE subitem_id IN ($in)")->execute($toDelete);
+        $db->prepare("DELETE FROM rf_instance_subitem WHERE id IN ($in)")->execute($toDelete);
     }
 }
 
-/* -------- 逐列負責人簽名 -------- */
+/* -------- 逐列負責人簽名（2026-08-12 改版：負責部門/負責人/簽名都改成掛在「小項」上，不是項目，
+   每個小項各自獨立負責人＋各自簽；以下函式參數名沿用 $item 但實際傳入的是一筆小項陣列，欄位名相同不用改） -------- */
 
 function rvf_item_required_signers(PDO $db, array $item): array {
     $ownerUsers = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_users'] ?? '')))));
@@ -408,7 +456,7 @@ function rvf_item_required_signers(PDO $db, array $item): array {
     return [];
 }
 
-/** 該列是否已完成簽名：指定人員模式每人都要簽(AND)；部門模式每個部門任一主管簽即算完成(OR，比照會議記錄)。 */
+/** 這個小項是否已完成簽名：指定人員模式每人都要簽(AND)；部門模式每個部門任一主管簽即算完成(OR，比照會議記錄)。 */
 function rvf_item_is_fully_signed(PDO $db, array $item): bool {
     $doneUids = array_map(fn($c) => (int)$c['user_id'], $item['confirms'] ?? []);
     $ownerUsers = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_users'] ?? '')))));
@@ -421,26 +469,26 @@ function rvf_item_is_fully_signed(PDO $db, array $item): bool {
     return true;
 }
 
-function rvf_item_confirm(PDO $db, int $itemId, int $forUid, string $password): array {
-    $st = $db->prepare("SELECT * FROM rf_instance_item WHERE id=?");
-    $st->execute([$itemId]);
-    $item = $st->fetch(PDO::FETCH_ASSOC);
-    if (!$item) return ['ok'=>false, 'msg'=>'找不到此項目'];
-    $inst = rvf_instance_get($db, (int)$item['instance_id']);
+function rvf_item_confirm(PDO $db, int $subitemId, int $forUid, string $password): array {
+    $st = $db->prepare("SELECT s.*, i.instance_id FROM rf_instance_subitem s JOIN rf_instance_item i ON i.id=s.item_id WHERE s.id=?");
+    $st->execute([$subitemId]);
+    $sub = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$sub) return ['ok'=>false, 'msg'=>'找不到此小項'];
+    $inst = rvf_instance_get($db, (int)$sub['instance_id']);
     if ($inst) {
         $schema = rvf_template_schema_at_version($db, (int)$inst['template_id'], (int)$inst['template_version']);
         if (($schema['sign_mode'] ?? 'password') === 'none') return ['ok'=>false, 'msg'=>'本模板不須簽名，前端不應顯示此動作'];
     }
-    $signers = rvf_item_required_signers($db, $item);
+    $signers = rvf_item_required_signers($db, $sub);
     $signer = null;
     foreach ($signers as $s) if ((int)$s['id'] === $forUid) { $signer = $s; break; }
     if (!$signer) return ['ok'=>false, 'msg'=>'您不是此項目的負責人'];
-    $already = $db->prepare("SELECT 1 FROM rf_instance_item_confirm WHERE item_id=? AND user_id=?");
-    $already->execute([$itemId, $forUid]);
+    $already = $db->prepare("SELECT 1 FROM rf_instance_item_confirm WHERE subitem_id=? AND user_id=?");
+    $already->execute([$subitemId, $forUid]);
     if ($already->fetchColumn()) return ['ok'=>false, 'msg'=>'您已經簽過此項目'];
     $v = rvf_verify_own_password($db, $forUid, $password);
     if (!$v['ok']) return $v;
-    $ownerDepts = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_depts'] ?? '')))));
+    $ownerDepts = array_values(array_filter(array_map('intval', explode(',', (string)($sub['owner_depts'] ?? '')))));
     $deptId = null; $deptName = null;
     if ($ownerDepts) {
         $st2 = $db->prepare("SELECT department_id FROM user_department_position_map WHERE user_id=? AND is_main=1 LIMIT 1");
@@ -452,8 +500,8 @@ function rvf_item_confirm(PDO $db, int $itemId, int $forUid, string $password): 
             $deptName = $st3->fetchColumn() ?: null;
         }
     }
-    $db->prepare("INSERT IGNORE INTO rf_instance_item_confirm (item_id,user_id,user_name,dept_id,dept_name,signed_at) VALUES (?,?,?,?,?,NOW())")
-       ->execute([$itemId, $forUid, $signer['user_cname'], $deptId, $deptName]);
+    $db->prepare("INSERT IGNORE INTO rf_instance_item_confirm (subitem_id,user_id,user_name,dept_id,dept_name,signed_at) VALUES (?,?,?,?,?,NOW())")
+       ->execute([$subitemId, $forUid, $signer['user_cname'], $deptId, $deptName]);
     return ['ok'=>true];
 }
 
@@ -480,20 +528,21 @@ function rvf_notify(PDO $db, int $refId, array $toUids, string $title, string $c
 function rvf_notify_item_owners(PDO $db, int $instanceId, int $fromUid): void {
     $items = rvf_instance_items_get($db, $instanceId);
     foreach ($items as $it) {
-        if (rvf_item_is_fully_signed($db, $it)) continue;
-        $doneUids = array_map(fn($c) => (int)$c['user_id'], $it['confirms']);
-        $need = [];
-        $ownerUsers = array_values(array_filter(array_map('intval', explode(',', (string)($it['owner_users'] ?? '')))));
-        foreach ($ownerUsers as $u) if (!in_array($u, $doneUids, true)) $need[] = $u;
-        $ownerDepts = array_values(array_filter(array_map('intval', explode(',', (string)($it['owner_depts'] ?? '')))));
-        foreach ($ownerDepts as $d) {
-            $mgrIds = array_column(rvf_dept_managers($db, $d), 'id');
-            if (!array_intersect($mgrIds, $doneUids)) $need = array_merge($need, $mgrIds);
+        foreach ($it['subitems'] as $sub) {
+            if (rvf_item_is_fully_signed($db, $sub)) continue;
+            $doneUids = array_map(fn($c) => (int)$c['user_id'], $sub['confirms']);
+            $need = [];
+            $ownerUsers = array_values(array_filter(array_map('intval', explode(',', (string)($sub['owner_users'] ?? '')))));
+            foreach ($ownerUsers as $u) if (!in_array($u, $doneUids, true)) $need[] = $u;
+            $ownerDepts = array_values(array_filter(array_map('intval', explode(',', (string)($sub['owner_depts'] ?? '')))));
+            foreach ($ownerDepts as $d) {
+                $mgrIds = array_column(rvf_dept_managers($db, $d), 'id');
+                if (!array_intersect($mgrIds, $doneUids)) $need = array_merge($need, $mgrIds);
+            }
+            $need = array_values(array_unique($need));
+            if ($need) rvf_notify($db, $sub['id'], $need, '有一份審核表單項目待您簽名確認',
+                '「' . ($sub['content'] ?: '(未命名項目)') . '」需要您確認並簽名。', $fromUid, 'RVF_ITEM_CONFIRM', 'reply');
         }
-        $need = array_values(array_unique($need));
-        $subLabel = implode('、', array_filter(array_map(fn($s) => (string)($s['content'] ?? ''), $it['subitems'] ?? [])));
-        if ($need) rvf_notify($db, $it['id'], $need, '有一份審核表單項目待您簽名確認',
-            '「' . ($subLabel ?: '(未命名項目)') . '」需要您確認並簽名。', $fromUid, 'RVF_ITEM_CONFIRM', 'reply');
     }
 }
 
