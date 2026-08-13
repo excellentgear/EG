@@ -18,9 +18,10 @@ include_once $document_root . '/EGsystem/src/common/gear_spec_lib.php';
 // type_id_ctrl_process_candidates()：此料號的訂單/報價製程紀錄，跟型態識別文件管制表共用同一套來源，
 // 不重寫一份（2026-08-13 使用者要求跳窗右側即時顯示此料號所有訂單製程）
 include_once $document_root . '/EGsystem/src/common/type_id_ctrl_lib.php';
-// td_dev_eval_part_name_get()：產品名稱沿用產品開發評估表同一張「料號固定顯示名稱」設定表，
-// 不另建一份（2026-08-13 使用者要求）
+// td_dev_eval_default_product_name_get()：產品名稱沿用產品開發評估表同一個全域預設值設定，不另建一份
 include_once $document_root . '/EGsystem/src/common/td_dev_eval_lib.php';
+// td_dev_eval_suggest_part_reference()：業務日期建議(BOM/報工/訂單最早日期)沿用建議建立清單同一支查詢，不重寫
+include_once $document_root . '/EGsystem/src/common/td_dev_eval_suggest_lib.php';
 
 if (!isset($_SESSION['userName'])) {
     http_response_code(403);
@@ -328,6 +329,15 @@ case 'dept_defaults_save':
     pfmea_dept_defaults_save($db, $depts, $uid);
     jout(['success'=>true]);
 
+// 業務日期建議：手動建立的紀錄綁定料號後，比照 td_dev_eval_suggest.php 既有的「建議建立日期」機制
+// (套用BOM日期／套用最早報工日期／套用最早訂單日期)，直接共用同一支查詢函式，不重寫一份
+case 'biz_date_suggest':
+    needView($perms);
+    $partDId = (int)($_POST['part_d_id'] ?? $_GET['part_d_id'] ?? 0);
+    $partText = trim((string)($_POST['part_no_text'] ?? $_GET['part_no_text'] ?? ''));
+    $custName = trim((string)($_POST['customer_name'] ?? $_GET['customer_name'] ?? ''));
+    jout(['success'=>true,'ref'=>td_dev_eval_suggest_part_reference($db, $partDId ?: null, $partText, $custName)]);
+
 // 此料號所有訂單/報價製程紀錄，跳窗右側即時顯示方便對照填寫（跟型態識別文件管制表共用同一套來源）
 case 'order_process_list':
     needView($perms);
@@ -372,7 +382,8 @@ case 'print_get':
     $st->execute([$id]);
     $items = array_map('buildItemView', $st->fetchAll(PDO::FETCH_ASSOC));
     $asDoc = eg_asdoc_get($db, 'pfmea');
-    $bizDate = substr((string)$doc['created_at'], 0, 10);
+    // 版次依業務日期回推(ai-rules/16第三之四節)：優先用biz_date，沒有才退回created_at(舊資料/尚未填業務日期)
+    $bizDate = substr((string)($doc['biz_date'] ?: $doc['created_at']), 0, 10);
     jout([
         'success'=>true, 'doc'=>$doc, 'items'=>$items,
         'revisions'=>pfmea_revision_list($db, $id),
