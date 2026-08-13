@@ -1107,13 +1107,14 @@ function loadMeta(cb){
         var $y = $('#yearSel').empty();
         m.years.forEach(function(y){ $y.append('<option value="'+y+'">'+y+'</option>'); });
         $y.val(m.cur_year);
-        var $d = $('#deptSel'), $td = $('#edTrainerDept'), $ad = $('#attDept'), $rd = $('#reqDept'), dh='';
+        var $d = $('#deptSel'), $td = $('#edTrainerDept'), $ad = $('#attDept'), $rd = $('#reqDept'), $cd = $('#cardDeptSel'), dh='';
         DEPTS = m.departments || [];
         DEPTS.forEach(function(d){
             $d.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
             $td.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
             $ad.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
             $rd.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
+            $cd.append('<option value="'+d.id+'">'+esc(d.name)+'</option>');
         });
         edDeptRender();
         var $em = $('#edMonth').empty();
@@ -2897,13 +2898,17 @@ function printSignSheet(blankOnly, src){
 /* pageCount=true：確定會分頁的報表（如簽到表人數多會跨頁）要用這個模式——
    放棄「margin:0 藏瀏覽器頁首頁尾」的乾淨版面，換取真的「第 X 頁／共 Y 頁」（ai-rules/16 四之二已預留此二選一）。
    此時課程資訊務必寫在該表格的 <thead> 裡（不是外面另一張表），瀏覽器分頁引擎才會自動把 thead 原樣重印在每一頁。 */
-function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount){
+/* showPageCounter（2026-08-13 使用者明確要求，比照 meeting_record.php 既有做法、ai-rules/16 第二節「多頁才顯示」）：
+   只有一頁的表單不印「第X頁/共Y頁」。頁數在列印當下才由瀏覽器排版決定，CSS 無法預先得知，
+   改用 onload 後量測 document.body.scrollHeight 是否超過單頁可用高度，超過（會分頁）才動態插入 @bottom-left 頁碼 CSS；
+   不傳（undefined）＝預設開啟此判斷；不需要頁碼判斷的情境可明確傳 false 整個關掉。 */
+function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, showPageCounter){
+    if (showPageCounter === undefined) showPageCounter = true;
     var asCss = String(docNo||'').replace(/['\\]/g,'');   // 塞進 CSS content 字串用
     var asHtml = esc(String(docNo||''));                   // 塞進 HTML 用
     var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';'
             + (pageCount
                 ? 'margin:12mm 8mm 16mm;'
-                  + " @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#333; }"
                   + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
                 : 'margin:0;')
             + '}'
@@ -2929,9 +2934,18 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount){
             + (extraCss||'');
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
-    w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
+    var onloadJs = (pageCount && showPageCounter)
+        ? ('var onePageA4=('+(landscape?'210':'297')+'-28)*96/25.4;'
+          +'if(document.body.scrollHeight>onePageA4*0.92){'
+          +'var st=document.createElement(\'style\');'
+          +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
+          +'document.head.appendChild(st);}')
+        : '';
+    // <!DOCTYPE html> 不可省略：少了它視窗會落入 Quirks Mode，<body> 在內容不滿版時會被撐滿整個視窗高度
+    // （document.body.scrollHeight 量出來永遠接近視窗高度而非實際內容高度），showPageCounter 的單頁判斷會失準。
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
         + bodyHtml + (!pageCount && asHtml ? '<div class="pt-foot">'+asHtml+'</div>' : '')
-        + '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+        + '<scr'+'ipt>window.onload=function(){'+onloadJs+'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
     w.document.close();
     return w;   // 批次列印（員工教育訓練紀錄卡）要靠這個判斷視窗何時關閉才能接著開下一份，其餘既有呼叫端沿用舊行為(忽略回傳值)不受影響
 }
@@ -3183,7 +3197,7 @@ function buildCardBody(emp, records){
             + '<td style="font-size:11px;">'+esc(cardEvalText(r))+'</td></tr>';
     });
     return '<table class="pt"><thead>'
-        + '<tr><th colspan="7" style="border:none;padding:0;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
+        + '<tr><th colspan="7" style="border:none;padding:0;background:#fff;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
         + '<div class="tt">'+esc(docTitle)+'</div></div></th></tr>'
         + '<tr><td colspan="7" class="sf-i">部門：'+esc(emp.dept_name||'')+'　職稱：'+esc(emp.position_name||'')
         + '　姓名：'+esc(emp.user_cname||'')+'　到職日：'+(dispDate(emp.hire_date)||'')+'</td></tr>'
