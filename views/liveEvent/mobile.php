@@ -279,7 +279,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             if (!line) line = '<span class="todo">尚未處理</span>';
             h += '<div class="mstatus">' + line + '</div>';
 
-            var done = s && ((mode==='read' && s.read_at) || (mode==='sign' && s.signed_at) || (mode==='reply' && s.replied_at));
+            var done = s && ((mode==='read' && s.read_at) || (mode==='sign' && s.signed_at) || (mode==='reply' && (s.replied_at || s.signed_at)));
 
             if (res.deadline_passed && (mode==='sign' || mode==='reply')){
                 h += '<div class="expired"><i class="fa fa-clock-o"></i> 已超過回覆 / 回簽期限</div>';
@@ -291,7 +291,10 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
                 if (!done) h += '<button class="m-btn m-btn-primary act" data-act="sign"><i class="fa fa-pencil-square-o"></i> 回簽</button>';
                 else h += '<div class="doneok"><i class="fa fa-check-circle"></i> 已回簽</div>';
             } else { // reply
-                if (done){
+                // 部分 ref_type（如 MEETING_ITEM_CONFIRM）後端已相容「僅回簽不留言」(action=sign)，
+                // 這類通知回覆內容改選填，並多給一顆「僅回簽」按鈕；其餘 ref_type 維持原本強制留言。
+                var allowSignOnly = res.event && res.event.ref_type === 'MEETING_ITEM_CONFIRM';
+                if (done && s.replied_at){
                     h += '<div class="doneok"><i class="fa fa-check-circle"></i> 已回覆</div>';
                     if (s.reply_content) h += '<div class="lbl">我的回覆：</div><div class="replyshow">' + esc(s.reply_content) + '</div>';
                     // 我的回覆附件：本人可刪（期限內；管理者不受限，由後端把關）
@@ -309,12 +312,15 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
                     h += '<input type="file" id="reply-files" class="m-file" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.bmp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z">';
                     h += '<button class="m-btn m-btn-primary act" data-act="reply"><i class="fa fa-paper-plane"></i> 更新回覆</button>';
                     h += '</div>';
+                } else if (done){
+                    h += '<div class="doneok"><i class="fa fa-check-circle"></i> 已回簽（未留言）</div>';
                 } else {
-                    h += '<label class="lbl">回覆內容 <span style="color:#e74c3c;">*</span></label>';
+                    h += '<label class="lbl">回覆內容' + (allowSignOnly ? ' <span style="color:var(--muted);font-weight:400;">（選填，僅回簽可不填）</span>' : ' <span style="color:#e74c3c;">*</span>') + '</label>';
                     h += '<textarea id="reply-text" class="m-ta" placeholder="請輸入回覆…"></textarea>';
                     h += '<label class="lbl">附件 <span style="color:var(--muted);font-weight:400;">可多檔，單檔≤50MB</span></label>';
                     h += '<input type="file" id="reply-files" class="m-file" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.bmp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z">';
                     h += '<button class="m-btn m-btn-primary act" data-act="reply"><i class="fa fa-paper-plane"></i> 送出回覆</button>';
+                    if (allowSignOnly) h += '<button class="m-btn act" data-act="sign"><i class="fa fa-pencil-square-o"></i> 僅回簽（不留言）</button>';
                 }
             }
             return h;

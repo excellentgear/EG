@@ -679,7 +679,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             h += '<div class="eg-nm-modebadge mode-' + mode + '">需求：' + modeName[mode] + '</div>';
             h += '<div class="eg-nm-mystatus">' + nmStatusLine(st) + '</div>';
 
-            var done = st && ((mode === 'read' && st.read_at) || (mode === 'sign' && st.signed_at) || (mode === 'reply' && st.replied_at));
+            var done = st && ((mode === 'read' && st.read_at) || (mode === 'sign' && st.signed_at) || (mode === 'reply' && (st.replied_at || st.signed_at)));
             if (res.deadline_passed && (mode === 'sign' || mode === 'reply')) {
                 h += '<div class="eg-nm-expired"><i class="fa fa-clock-o"></i> 已超過回覆/回簽期限</div>';
                 if (!(st && st.read_at)) h += '<button class="eg-btn eg-btn-primary nm-do" data-act="read">確認已閱</button>';
@@ -690,25 +690,35 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 if (!done) h += '<button class="eg-btn eg-btn-primary nm-do" data-act="sign"><i class="fa fa-pencil-square-o"></i> 回簽</button>';
                 else h += '<div class="eg-nm-doneok"><i class="fa fa-check-circle"></i> 已回簽</div>';
             } else { // reply
+                // 部分 ref_type（如 MEETING_ITEM_CONFIRM）後端已相容「僅回簽不留言」(action=sign)，
+                // 這類通知回覆內容改選填，並多給一顆「僅回簽」按鈕；其餘 ref_type 維持原本強制留言。
+                var allowSignOnly = res.event && res.event.ref_type === 'MEETING_ITEM_CONFIRM';
                 if (done) {
-                    h += '<div class="eg-nm-doneok"><i class="fa fa-check-circle"></i> 已回覆</div>';
-                    h += '<div class="eg-nm-replyshow"><b>我的回覆：</b><div>' + nmEsc(st.reply_content || '').replace(/\n/g, '<br>') + '</div></div>';
-                    if (st.files && st.files.length) {
-                        var rf = '';
-                        // 我的回覆附件：本人可刪（期限內；管理者不受限，權限由後端把關）
-                        st.files.forEach(function(f) {
-                            rf += '<span style="display:inline-flex;align-items:center;"><a class="eg-file-chip" target="_blank" href="' + nmFileUrl('r', f.id) + '"><i class="fa fa-paperclip"></i> ' + nmEsc(f.name) + '</a>'
-                                + (res.can_del_my ? '<button type="button" class="nm-rf-del" data-id="' + f.id + '" title="刪除此附件" style="background:none;border:none;color:#e74c3c;cursor:pointer;padding:2px 6px;"><i class="fa fa-trash-o"></i></button>' : '')
-                                + '</span>';
-                        });
-                        h += '<div class="eg-nm-rfiles">' + rf + '</div>';
+                    if (st.replied_at) {
+                        h += '<div class="eg-nm-doneok"><i class="fa fa-check-circle"></i> 已回覆</div>';
+                        h += '<div class="eg-nm-replyshow"><b>我的回覆：</b><div>' + nmEsc(st.reply_content || '').replace(/\n/g, '<br>') + '</div></div>';
+                        if (st.files && st.files.length) {
+                            var rf = '';
+                            // 我的回覆附件：本人可刪（期限內；管理者不受限，權限由後端把關）
+                            st.files.forEach(function(f) {
+                                rf += '<span style="display:inline-flex;align-items:center;"><a class="eg-file-chip" target="_blank" href="' + nmFileUrl('r', f.id) + '"><i class="fa fa-paperclip"></i> ' + nmEsc(f.name) + '</a>'
+                                    + (res.can_del_my ? '<button type="button" class="nm-rf-del" data-id="' + f.id + '" title="刪除此附件" style="background:none;border:none;color:#e74c3c;cursor:pointer;padding:2px 6px;"><i class="fa fa-trash-o"></i></button>' : '')
+                                    + '</span>';
+                            });
+                            h += '<div class="eg-nm-rfiles">' + rf + '</div>';
+                        }
+                    } else {
+                        h += '<div class="eg-nm-doneok"><i class="fa fa-check-circle"></i> 已回簽（未留言）</div>';
                     }
                 } else {
-                    h += '<label class="eg-nm-lbl">回覆內容 <span style="color:#e74c3c;">*</span></label>';
+                    h += '<label class="eg-nm-lbl">回覆內容' + (allowSignOnly ? ' <span class="hint">（選填，僅回簽可不填）</span>' : ' <span style="color:#e74c3c;">*</span>') + '</label>';
                     h += '<textarea id="nm-reply-text" class="eg-nm-textarea" placeholder="請輸入回覆…"></textarea>';
                     h += '<label class="eg-nm-lbl">附件 <span class="hint">可多檔，單檔≤50MB，最多10個</span></label>';
                     h += '<input type="file" id="nm-reply-files" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.bmp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z">';
-                    h += '<button class="eg-btn eg-btn-primary nm-do" data-act="reply" style="margin-top:10px;"><i class="fa fa-paper-plane"></i> 送出回覆</button>';
+                    h += '<div style="margin-top:10px;">';
+                    h += '<button class="eg-btn eg-btn-primary nm-do" data-act="reply"><i class="fa fa-paper-plane"></i> 送出回覆</button>';
+                    if (allowSignOnly) h += ' <button class="eg-btn nm-do" data-act="sign" style="margin-left:6px;"><i class="fa fa-pencil-square-o"></i> 僅回簽（不留言）</button>';
+                    h += '</div>';
                 }
             }
 
@@ -994,8 +1004,9 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
     .nm-o-name { font-weight: 600; color: #34495e; }
     .nm-o-tag { float: right; font-size: 11px; background: #eef2f5; color: #5a6b7b; border-radius: 10px; padding: 1px 8px; }
     .nm-o-reply { color: #666; margin-top: 3px; }
-    .eg-btn { border: none; border-radius: 8px; padding: 9px 18px; font-size: 13.5px; font-weight: 600; cursor: pointer; }
-    .eg-btn-primary { background: #1ABB9C; color: #fff; }
+    .eg-btn { border: 1px solid #d8bE93; border-radius: 8px; padding: 9px 18px; font-size: 13.5px; font-weight: 600; cursor: pointer; background: #FFF7E8; color: #8a6d45; }
+    .eg-btn:hover { background: #FBEBD0; }
+    .eg-btn-primary { border: none; background: #1ABB9C; color: #fff; }
     .eg-btn-primary:hover { background: #169a80; }
     .eg-btn-primary:disabled { opacity: .6; cursor: not-allowed; }
     @media (max-width: 860px) { .eg-nm-2col { grid-template-columns: 1fr; } .eg-nm-left { border-right: none; border-bottom: 1px solid #e6ecf1; } }
