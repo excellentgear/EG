@@ -13,6 +13,7 @@ function safe_html($v) { return htmlspecialchars($v ?? '', ENT_QUOTES, 'UTF-8');
 
 // 只引入一次 DBConnection
 include_once '../../src/common/DBConnection.php';
+require_once '../../src/common/stock_notify.php';
 $conn   = new DBConnection();
 $pdo    = $conn->getPDO();
 $userId = intval($_SESSION['id'] ?? 0);
@@ -75,28 +76,17 @@ try {
         Created_At TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_req_id (req_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-    $pdo->exec("CREATE TABLE IF NOT EXISTS stock_req_notifications (
-        notif_id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL, req_id INT NOT NULL, req_no VARCHAR(30) NOT NULL,
-        type VARCHAR(20) NOT NULL DEFAULT 'new', message VARCHAR(300) NULL,
-        is_read TINYINT NOT NULL DEFAULT 0,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_user_read (user_id, is_read)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 } catch(Exception $_e) {}
 // 既有安裝的欄位補丁
 foreach(['is_active TINYINT NOT NULL DEFAULT 1','deleted_by INT NULL','deleted_at DATETIME NULL','delete_reason VARCHAR(300) NULL'] as $_col){
     try { $pdo->exec("ALTER TABLE stock_requisitions ADD COLUMN $_col"); } catch(Exception $_e2){}
 }
 
-// ── 需求單通知輔助函式 ──────────────────────────────
+// ── 需求單通知對象 ──────────────────────────────────
+// 通知本體改走全站公告/通知系統(live_event，見 src/common/stock_notify.php)，
+// 不再用本頁自建的 stock_req_notifications 表＋輪詢彈窗(多分頁/多裝置容易重複彈出、且未走全站已讀機制)。
 function getNotifTargetUsers($pdo){
     try{ return $pdo->query("SELECT DISTINCT user_id FROM user_module_permissions WHERE module_code='stock' AND (permission='A' OR (permission LIKE '%C%' AND permission LIKE '%R%' AND permission LIKE '%U%' AND permission LIKE '%D%'))")->fetchAll(PDO::FETCH_COLUMN); }catch(Exception $e){ return []; }
-}
-function insertReqNotifications($pdo,$targets,$reqId,$reqNo,$type,$message){
-    if(empty($targets)) return;
-    try{ $st=$pdo->prepare("INSERT IGNORE INTO stock_req_notifications (user_id,req_id,req_no,type,message) VALUES (?,?,?,?,?)");
-        foreach($targets as $uid) $st->execute([$uid,$reqId,$reqNo,$type,$message]); }catch(Exception $e){}
 }
 
 // ─────────────────────────────────────────────────
@@ -3287,7 +3277,7 @@ LBLSQL;
             }
             $pdo->commit();
             $notifTargets=getNotifTargetUsers($pdo);
-            insertReqNotifications($pdo,$notifTargets,$reqId,$reqNo,'new','新領料單：'.$reqNo.($title?' — '.$title:''));
+            stock_req_notify($pdo,$reqId,$reqNo,'new','新領料單：'.$reqNo.($title?' — '.$title:'').($requesterName?'（申請人：'.$requesterName.'）':''),$notifTargets,$userId);
             echo json_encode(['success'=>true,'req_id'=>$reqId,'req_no'=>$reqNo]);
         } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -3402,7 +3392,7 @@ LBLSQL;
             }
             $pdo->commit();
             $notifTargets=getNotifTargetUsers($pdo);
-            insertReqNotifications($pdo,$notifTargets,$reqId,$req['req_no'],'modified','領料單已修改：'.$req['req_no'].($title?' — '.$title:''));
+            stock_req_notify($pdo,$reqId,$req['req_no'],'modified','領料單已修改：'.$req['req_no'].($title?' — '.$title:''),$notifTargets,$userId);
             echo json_encode(['success'=>true]);
         } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -3426,8 +3416,7 @@ LBLSQL;
             $pdo->commit();
             // 通知建立者（若非自己刪的）
             if($req['Created_By']&&intval($req['Created_By'])!==$userId){
-                try{ $pdo->prepare("INSERT INTO stock_req_notifications (user_id,req_id,req_no,type,message) VALUES (?,?,?,'deleted',?)")
-                    ->execute([$req['Created_By'],$reqId,$req['req_no'],'您的領料單 '.$req['req_no'].' 已被刪除，原因：'.$deleteReason]); }catch(Exception $e){}
+                stock_req_notify($pdo,$reqId,$req['req_no'],'deleted','您的領料單 '.$req['req_no'].' 已被刪除，原因：'.$deleteReason,[intval($req['Created_By'])],$userId);
             }
             echo json_encode(['success'=>true]);
         } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
@@ -3440,26 +3429,6 @@ LBLSQL;
             $st=$pdo->query("SELECT rq.req_id,rq.req_no,rq.title,rq.dept_name,rq.requester_name,rq.deleted_at,rq.delete_reason,ud.user_cname AS deleted_by_name,uc.user_cname AS creator_name FROM stock_requisitions rq LEFT JOIN user uc ON uc.id=rq.Created_By LEFT JOIN user ud ON ud.id=rq.deleted_by WHERE rq.is_active=0 ORDER BY rq.deleted_at DESC LIMIT 200");
             echo json_encode(['success'=>true,'rows'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
         } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
-        exit;
-    }
-
-    // ── 未讀通知 ──
-    if ($_POST['action'] === 'get_unread_notifications') {
-        try {
-            $st=$pdo->prepare("SELECT * FROM stock_req_notifications WHERE user_id=? AND is_read=0 ORDER BY created_at DESC LIMIT 30");
-            $st->execute([$userId]); echo json_encode(['success'=>true,'notifications'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
-        } catch(Exception $e){ echo json_encode(['success'=>true,'notifications'=>[]]); }
-        exit;
-    }
-
-    // ── 標記通知已讀 ──
-    if ($_POST['action'] === 'mark_notification_read') {
-        try {
-            $nid=intval($_POST['notif_id']??0);
-            if($nid) $pdo->prepare("UPDATE stock_req_notifications SET is_read=1 WHERE notif_id=? AND user_id=?")->execute([$nid,$userId]);
-            else $pdo->prepare("UPDATE stock_req_notifications SET is_read=1 WHERE user_id=?")->execute([$userId]);
-            echo json_encode(['success'=>true]);
-        } catch(Exception $e){ echo json_encode(['success'=>false]); }
         exit;
     }
 
@@ -4270,8 +4239,6 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 
 </div></div></div><!-- /right_col /main_container /container -->
 <div id="toast-wrap"></div>
-<!-- 即時通知面板 -->
-<div id="req-notif-panel" style="position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:6px;max-width:320px;pointer-events:none;"></div>
 
 <!-- ══ Modal: 新增需求單 ══ -->
 <div class="modal fade" id="createReqModal" tabindex="-1">
@@ -5503,9 +5470,8 @@ $(function(){
     loadStats(); loadList(1); loadMasterData();
     setInterval(function(){ ajx({action:'keepalive'},function(){}); }, 300000);
     ajx({action:'check_permission'},function(r){ if(r&&r.is_admin){ G._isAdminUser=true; } });
-    // 頁面載入即開始通知輪詢（不需切到領庫需求頁）
-    requestDesktopNotifPerm();
-    startNotifPolling();
+    // 領料單通知改走全站公告/通知系統（右上角鈴鐺），不再於本頁輪詢彈窗
+    checkStockReqParam();
 
     // 搜尋框：即時篩選（搭配防抖處理）、雙擊清除
     $('#f-search').on('input', debounce(function(){ loadList(1); }, 400));
@@ -7290,66 +7256,13 @@ function showReqPermBadge(){
     $('#req-perm-badge').css({background:bg,color:color,'border-color':bg}).text(text);
 }
 
-var _notifInterval = null;
-var _notifUnreadCount = 0;
-var _origTitle = document.title;
-function requestDesktopNotifPerm(){
-    // Notification API 只在 HTTPS 或 localhost 下可用；HTTP + IP 環境靜默降級為 title badge
-    if(!('Notification' in window)) return;
-    if(location.protocol==='https:'||location.hostname==='localhost'||location.hostname==='127.0.0.1'){
-        if(Notification.permission==='default') Notification.requestPermission();
-    }
-}
-function updateNotifTitleBadge(){
-    document.title = _notifUnreadCount>0 ? '('+_notifUnreadCount+') '+_origTitle : _origTitle;
-}
-function startNotifPolling(){
-    if(_notifInterval) return;
-    pollNotifications();
-    _notifInterval = setInterval(pollNotifications, 3000);
-}
-function pollNotifications(){
-    ajx({action:'get_unread_notifications'}, function(r){
-        if(!r.success||!r.notifications||!r.notifications.length) return;
-        r.notifications.forEach(function(n){ showReqNotification(n); });
-    });
-}
-function showDesktopNotification(n){
-    if(!('Notification' in window)||Notification.permission!=='granted') return;
-    var title={'new':'📋 新領料單','modified':'✏️ 領料單已修改','deleted':'🗑️ 領料單已刪除'}[n.type]||'📢 領料通知';
-    var ntf=new Notification(title, {body: n.message||'', icon: '/favicon.ico', tag: 'req-notif-'+n.notif_id, requireInteraction: false});
-    ntf.onclick=function(){
-        window.focus();
-        switchTab('req', document.querySelector('.tab-btn[onclick*="req"]'));
-        if(n.req_id) setTimeout(function(){ openReqDetail(parseInt(n.req_id)); }, 300);
-        ntf.close();
-    };
-    setTimeout(function(){ ntf.close(); }, 8000);
-}
-function showReqNotification(n){
-    var panel=$('#req-notif-panel');
-    var existing=$('#notif-'+n.notif_id);
-    if(existing.length) return; // 已顯示過
-    _notifUnreadCount++; updateNotifTitleBadge();
-    showDesktopNotification(n); // OS 桌面通知（HTTPS only，HTTP 靜默略過）
-    var icon={'new':'fa-plus-circle','modified':'fa-pencil','deleted':'fa-trash'}[n.type]||'fa-bell';
-    var color={'new':'#1ABB9C','modified':'#f39c12','deleted':'#e74c3c'}[n.type]||'#555';
-    var card=$('<div id="notif-'+n.notif_id+'" style="pointer-events:auto;background:#fff;border:1px solid #ddd;border-left:4px solid '+color+';border-radius:6px;padding:10px 14px;box-shadow:0 3px 12px rgba(0,0,0,.15);cursor:pointer;max-width:300px;font-size:13px;position:relative;">'
-        +'<div style="font-weight:700;color:'+color+';margin-bottom:4px;"><i class="fa '+icon+'"></i> 領料通知</div>'
-        +'<div style="color:#333;">'+esc(n.message||'')+'</div>'
-        +'<div style="font-size:10px;color:#aaa;margin-top:4px;">'+esc((n.created_at||'').substr(0,16))+'</div>'
-        +'<button onclick="dismissNotif('+n.notif_id+',\''+esc(n.req_id)+'\',event)" style="position:absolute;top:6px;right:8px;background:none;border:none;color:#aaa;font-size:14px;cursor:pointer;" title="關閉">&times;</button>'
-        +'</div>');
-    card.on('click',function(e){ if($(e.target).is('button')) return; dismissNotif(n.notif_id,n.req_id,e); switchTab('req',document.querySelector('.tab-btn[onclick*="req"]')); if(n.req_id) openReqDetail(parseInt(n.req_id)); });
-    panel.append(card);
-    // 5分鐘後自動消失
-    setTimeout(function(){ card.fadeOut(400,function(){ card.remove(); if(_notifUnreadCount>0){_notifUnreadCount--;updateNotifTitleBadge();} }); }, 300000);
-}
-function dismissNotif(notifId, reqId, e){
-    if(e) e.stopPropagation();
-    $('#notif-'+notifId).fadeOut(200, function(){ $(this).remove(); });
-    ajx({action:'mark_notification_read', notif_id:notifId}, function(){});
-    if(_notifUnreadCount>0){ _notifUnreadCount--; updateNotifTitleBadge(); }
+// 領料單通知從右上角鈴鐺點開「在庫存頁查看」時，帶 ?req=單號ID 開新分頁進來，
+// 進頁後自動切到領庫需求分頁並展開該筆詳情（通知本體改走 live_event，見 sideAndTopBarMenu.html ref_type=STOCK_REQ）
+function checkStockReqParam(){
+    var m = location.search.match(/[?&]req=(\d+)/);
+    if(!m) return;
+    switchTab('req', document.querySelector('.tab-btn[onclick*="req"]'));
+    setTimeout(function(){ openReqDetail(parseInt(m[1])); }, 300);
 }
 
 // ── 設定頁 ──────────────────────────────────────
