@@ -13,6 +13,7 @@ include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
 include_once $document_root . '/EGsystem/src/common/org_role_lib.php';
 include_once $document_root . '/EGsystem/src/common/pfmea_lib.php';
 include_once $document_root . '/EGsystem/src/common/pfmea_suggest_lib.php';
+include_once $document_root . '/EGsystem/src/common/pfmea_reference_lib.php';
 
 if (!isset($_SESSION['userName'])) {
     http_response_code(403);
@@ -42,7 +43,7 @@ function buildItemView(array $it): array {
     $nd = $it['new_detection'] !== null ? (int)$it['new_detection'] : null;
     $newRpn = ($ns !== null && $no !== null && $nd !== null) ? $ns * $no * $nd : null;
     return [
-        'id' => (int)$it['id'], 'seq' => (int)$it['seq'],
+        'id' => (int)$it['id'], 'seq' => (int)$it['seq'], 'process_code' => $it['process_code'] ?? null,
         'process_desc' => $it['process_desc'], 'function_desc' => $it['function_desc'], 'requirement' => $it['requirement'],
         'failure_mode' => $it['failure_mode'], 'failure_effect' => $it['failure_effect'],
         'severity' => $s, 'classification' => $it['classification'], 'failure_cause' => $it['failure_cause'],
@@ -159,6 +160,7 @@ case 'save':
             $seq++;
 
             $vals = [
+                trim((string)($it['process_code'] ?? '')) ?: null,
                 $processDesc ?: null, trim((string)($it['function_desc'] ?? '')) ?: null, trim((string)($it['requirement'] ?? '')) ?: null,
                 $failureMode ?: null, trim((string)($it['failure_effect'] ?? '')) ?: null,
                 pfmea_clamp_rating($it['severity'] ?? null), trim((string)($it['classification'] ?? '')) ?: null,
@@ -173,7 +175,7 @@ case 'save':
 
             $rowId = (int)($it['id'] ?? 0);
             if ($rowId && isset($existing[$rowId])) {
-                $st = $db->prepare("UPDATE pfmea_item SET seq=?, process_desc=?, function_desc=?, requirement=?,
+                $st = $db->prepare("UPDATE pfmea_item SET seq=?, process_code=?, process_desc=?, function_desc=?, requirement=?,
                     failure_mode=?, failure_effect=?, severity=?, classification=?, failure_cause=?, occurrence=?,
                     detection=?, recommended_actions=?, responsibility=?, target_date=?,
                     action_taken=?, action_date=?, new_severity=?, new_occurrence=?, new_detection=?,
@@ -183,11 +185,11 @@ case 'save':
                 unset($existing[$rowId]);
             } else {
                 $st = $db->prepare("INSERT INTO pfmea_item
-                    (doc_id, seq, process_desc, function_desc, requirement, failure_mode, failure_effect, severity,
+                    (doc_id, seq, process_code, process_desc, function_desc, requirement, failure_mode, failure_effect, severity,
                      classification, failure_cause, occurrence, detection, recommended_actions,
                      responsibility, target_date, action_taken, action_date, new_severity, new_occurrence, new_detection,
                      prevention_controls, detection_controls)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
                 $st->execute(array_merge([$id, $seq], $vals));
             }
         }
@@ -211,6 +213,80 @@ case 'suggest_bulk_create':
     if (!is_array($rows) || !$rows) jout(['success'=>false,'message'=>'沒有可建立的料號']);
     $r = pfmea_suggest_bulk_create($db, $rows, $uid, $uname);
     jout(['success'=>true,'created'=>$r['created'],'errors'=>$r['errors']]);
+
+// ── 參考資料庫（製程代號／潛在失效模式／控制預防控制偵測選項／製程整組樣板）───────
+// 可填表人(canEdit)可新增/自行輸入新值；僅管理員(canAdmin)可刪除。
+case 'ref_process_list':
+    needView($perms);
+    jout(['success'=>true,'rows'=>pfmea_ref_process_list($db)]);
+
+case 'ref_process_add':
+    needEdit($perms);
+    $code = trim((string)($_POST['process_code'] ?? ''));
+    $name = trim((string)($_POST['process_name'] ?? ''));
+    if ($code === '') jout(['success'=>false,'message'=>'缺少製程代號']);
+    $id = pfmea_ref_process_get_or_add($db, $code, $name, $uid, $uname);
+    jout(['success'=>true,'id'=>$id]);
+
+case 'ref_process_delete':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    pfmea_ref_process_delete($db, $id);
+    jout(['success'=>true]);
+
+case 'ref_failure_mode_list':
+    needView($perms);
+    $pid = (int)($_GET['process_id'] ?? 0);
+    if (!$pid) jout(['success'=>true,'rows'=>[]]);
+    jout(['success'=>true,'rows'=>pfmea_ref_failure_mode_list($db, $pid)]);
+
+case 'ref_failure_mode_add':
+    needEdit($perms);
+    $pid = (int)($_POST['process_id'] ?? 0);
+    $text = trim((string)($_POST['failure_mode'] ?? ''));
+    if (!$pid || $text === '') jout(['success'=>false,'message'=>'缺少製程或失效模式文字']);
+    $id = pfmea_ref_failure_mode_add($db, $pid, $text, $uid, $uname);
+    jout(['success'=>true,'id'=>$id]);
+
+case 'ref_failure_mode_delete':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    pfmea_ref_failure_mode_delete($db, $id);
+    jout(['success'=>true]);
+
+case 'ref_control_options':
+    needView($perms);
+    jout(['success'=>true,'options'=>pfmea_ref_control_options($db)]);
+
+case 'ref_control_option_add':
+    needEdit($perms);
+    $type = (string)($_POST['option_type'] ?? '');
+    $text = trim((string)($_POST['option_text'] ?? ''));
+    if ($text === '') jout(['success'=>false,'message'=>'缺少選項文字']);
+    $id = pfmea_ref_control_option_add($db, $type, $text, $uid, $uname);
+    jout(['success'=>true,'id'=>$id]);
+
+case 'ref_control_option_delete':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    pfmea_ref_control_option_delete($db, $id);
+    jout(['success'=>true]);
+
+case 'ref_item_templates':
+    needView($perms);
+    $pid = (int)($_GET['process_id'] ?? 0);
+    if (!$pid) jout(['success'=>true,'rows'=>[]]);
+    jout(['success'=>true,'rows'=>pfmea_ref_item_templates($db, $pid)]);
+
+case 'ref_item_template_delete':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    pfmea_ref_item_template_delete($db, $id);
+    jout(['success'=>true]);
 
 case 'delete_header':
     needAdmin($perms);
