@@ -293,6 +293,27 @@ case 'plan_decide': {
     jout(['status'=>'approved']);
 }
 
+/* 超級管理員取消已送審/已確認(免送審)的年度計畫表：把該年度 review/approve 兩層簽核紀錄整批刪除，
+   回到「尚未送審」可重新確認/送審的狀態，方便補測資料；比照供應商稽核計劃 plan_cancel 慣例，
+   僅限 isAdmin(員工ID=1固定屬此)，且需操作確認密碼。approval_record 本身設計是保留完整歷史不覆蓋，
+   這裡整批刪除是刻意的例外（測試/補救用途），不循一般簽核流程。 */
+case 'plan_cancel': {
+    if (!$perms['isAdmin']) jerr('僅系統管理員可使用此功能', 403);
+    $year = (int)($_POST['year'] ?? 0);
+    if ($year < 2000) jerr('請指定年度');
+    $chk = eg_confirm_password_verify($db, $uid, (string)($_POST['password'] ?? ''));
+    if (!$chk['ok']) jerr($chk['msg'] ?: '密碼驗證失敗', 403);
+    $cur = training_plan_approval($db, $year);
+    if ($cur['status'] === 'none') jerr('此年度計畫尚未送審/確認，無需取消');
+    try {
+        $db->beginTransaction();
+        $db->prepare("DELETE FROM approval_record WHERE module='training_plan' AND entity_id=?")->execute([$year]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('取消失敗：'.$e->getMessage(), 500); }
+    training_plan_close_notice($db, $year);
+    jout(['status'=>'none']);
+}
+
 /* ---------- 場次附件（簽到表掃描/教材/試卷）：DB 只存檔名，路徑即時組（鐵律5） ---------- */
 case 'list_attach': {
     training_purge_temp_attachments($db);
