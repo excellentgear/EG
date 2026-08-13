@@ -68,9 +68,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .pf-op { color:#b5762a; cursor:pointer; margin:0 4px; }
         .pf-op:hover { color:#8A5A2B; text-decoration:underline; }
         .pf-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
-        .pf-modal { background:#fff; border-radius:8px; max-width:680px; margin:36px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
-            max-height:90vh; display:flex; flex-direction:column; transition:max-width .15s ease; }
-        .pf-modal.xwide { max-width:96vw; margin:12px auto; max-height:96vh; }
+        .pf-modal { background:#fff; border-radius:8px; max-width:960px; width:calc(100% - 40px); margin:36px auto;
+            box-shadow:0 5px 25px rgba(0,0,0,.3); max-height:90vh; display:flex; flex-direction:column; }
+        /* 跳窗寬度一律用固定像素上限（比照全站其他跳窗，如型態識別文件管制表 .ic-modal.xwide），
+           不可用 vw 相對整個瀏覽器視窗寬度（會蓋過側邊選單、超出內頁實際可視寬度，已踩過一次坑）；
+           卡片展開/收合改由 pf-card-grid 的 auto-fit/minmax 自動換行因應，跳窗本身寬度不隨之變動。 */
+        .pf-modal.xwide { max-width:1080px; }
         .pf-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
             display:flex; justify-content:space-between; }
         .pf-modal .m-head .m-close { cursor:pointer; color:#b5762a; }
@@ -213,7 +216,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         </div>
         <div class="pf-rpn-note">風險優先指數 RPN = S × O × D（系統自動計算，不可手填）：<b>&lt;50</b> 低風險｜<b>50-100</b> 中風險｜<b>101-200</b> 高風險｜<b>&gt;200</b> 極高風險，需優先改善。</div>
 
-        <div class="pf-sec-title">失效模式分析（逐項卡片，預設收合成一行；<b>點擊卡片標題展開才會放大視窗輸入</b>，列印仍是您提供的橫式表格格式）</div>
+        <div class="pf-sec-title">失效模式分析（逐項卡片，預設收合成一行；<b>點擊卡片標題展開才會顯示完整輸入欄位</b>，列印仍是您提供的橫式表格格式）</div>
         <div id="itemBody"></div>
         <div style="margin-top:6px;">
             <button type="button" class="pf-row-btn" onclick="pfAddRow()"><i class="fa fa-plus"></i> 新增一項失效模式分析</button>
@@ -343,8 +346,10 @@ $('#btnCsv').on('click', function(){
 
 /* ---------- 新增/編輯 ---------- */
 /**
- * 卡片預設收合成一行摘要（項次＋失效模式＋RPN），跳窗維持較小尺寸；
- * 點擊卡片標題才展開該卡片的完整欄位，此時跳窗才放大（.xwide），避免欄位一次全部攤開遮蔽畫面。
+ * 卡片預設收合成一行摘要（項次＋失效模式＋RPN），避免欄位一次全部攤開遮蔽畫面；
+ * 點擊卡片標題才展開該卡片的完整欄位。跳窗本身寬度固定（見 .pf-modal，禁用 vw 相對視窗寬度，
+ * 已踩過跳窗超出內頁寬度的坑），展開/收合只影響卡片內容高度，不會讓跳窗跟著變寬——
+ * 卡片欄位格線 .pf-card-grid 用 auto-fit/minmax 在固定寬度內自動換行因應。
  * 新增的卡片（使用者當下要輸入）預設直接展開；既有資料載入時預設全部收合。
  */
 function cardSummaryText(it){
@@ -409,7 +414,6 @@ function renderItems(items){
         var html = '';
         items.forEach(function(it, idx){ html += itemCardHtml(it, idx, false); });
         $('#itemBody').html(html);
-        updateModalWidth();
     } else {
         $('#itemBody').html('');
         pfAddRow();
@@ -422,10 +426,6 @@ window.toggleRatingRef = function(){
     box.style.display = show ? 'block' : 'none';
     document.getElementById('ratingToggleIcon').className = 'fa fa-chevron-' + (show ? 'down' : 'right');
 };
-function updateModalWidth(){
-    var anyExpanded = $('#itemBody .pf-card').filter(function(){ return !$(this).hasClass('collapsed'); }).length > 0;
-    $('#editMask .pf-modal').toggleClass('xwide', anyExpanded);
-}
 window.toggleCard = function(hdEl){
     var $card = $(hdEl).closest('.pf-card');
     var willCollapse = !$card.hasClass('collapsed');
@@ -435,12 +435,10 @@ window.toggleCard = function(hdEl){
     }
     $card.toggleClass('collapsed', willCollapse);
     $card.find('.toggle-ic').attr('class', 'fa fa-chevron-'+(willCollapse?'right':'down')+' toggle-ic');
-    updateModalWidth();
 };
 window.pfAddRow = function(){
     $('#itemBody').append(itemCardHtml({}, $('#itemBody .pf-card').length, true));
     renumberRows();
-    updateModalWidth();
     return true;
 };
 window.pfDelRow = function(){
@@ -448,14 +446,12 @@ window.pfDelRow = function(){
     if (cards.length <= 1) return false;
     cards.last().remove();
     renumberRows();
-    updateModalWidth();
     return true;
 };
 window.removeCard = function(btn){
     if ($('#itemBody .pf-card').length <= 1){ alert('至少要保留一項'); return; }
     $(btn).closest('.pf-card').remove();
     renumberRows();
-    updateModalWidth();
 };
 /* RPN 即時重算(僅顯示用，實際以送出後後端重算為準) */
 $(document).on('input', '#itemBody .sod-in', function(){
