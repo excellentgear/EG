@@ -135,6 +135,7 @@ function training_ensure_schema(PDO $db): void {
         "ALTER TABLE training_attendee ADD COLUMN eval_score DECIMAL(5,1) NULL COMMENT '評分(選填 0~100)'",
         "ALTER TABLE training_attendee ADD COLUMN eval_note VARCHAR(100) NULL COMMENT '評鑑備註(不合格原因等)'",
         "ALTER TABLE training_attendee ADD KEY idx_user (user_id)",
+        "ALTER TABLE training_attendee ADD COLUMN license TINYINT(1) NOT NULL DEFAULT 0 COMMENT '證照 0=無 1=有；僅外訓由具訓練登錄權限者填寫，內訓固定無'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) {}
     }
@@ -382,7 +383,8 @@ const TRAINING_SETTING_KEYS = ['training_default_shift_id', 'training_cat_intern
 const TRAINING_SETTING_STR_KEYS = ['training_break_start', 'training_break_end',
     'training_exclude_depts',    // 不列入教育訓練達標統計的部門（csv dept_id）
     'training_plan_sign_date',   // 免送審時計劃表的簽章日期（YYYY-MM-DD；留空＝自動取該年度最後異動日）
-    'training_signsheet_blank_rows'];  // 簽到表空白列：''/'0'=不加、數字N=固定加N列、'fill16'=補到滿頁16列（不刪減既有名單）
+    'training_signsheet_blank_rows',  // 簽到表空白列：''/'0'=不加、數字N=固定加N列、'fill16'=補到滿頁16列（不刪減既有名單）
+    'training_card_empno_prefix'];    // 員工教育訓練紀錄卡「員工編號」欄的前綴文字（如 'EG-'），實際編號=前綴+user_uname
 const TRAINING_BREAK_DEFAULT = ['training_break_start'=>'12:00', 'training_break_end'=>'13:00'];
 
 function training_settings(PDO $db): array {
@@ -390,7 +392,8 @@ function training_settings(PDO $db): array {
             'training_as_doc_plan'=>null, 'training_as_doc_result'=>null, 'training_as_doc_target'=>null,
             'training_need_approval'=>null, 'training_exclude_depts'=>'', 'training_plan_sign_date'=>'',
             'training_as_doc_request'=>null, 'training_as_doc_signsheet'=>null, 'training_request_need_approval'=>1,
-            'training_signsheet_blank_rows'=>'0', 'training_stamp_tpl_id'=>null, 'training_approval_stamp_tpl_id'=>null];
+            'training_signsheet_blank_rows'=>'0', 'training_stamp_tpl_id'=>null, 'training_approval_stamp_tpl_id'=>null,
+            'training_card_empno_prefix'=>''];
     $out += TRAINING_BREAK_DEFAULT;      // 沒設定過才用預設；設定成空字串＝管理員刻意關閉，不可再被預設蓋回去
     try {
         $keys = array_merge(TRAINING_SETTING_KEYS, TRAINING_SETTING_STR_KEYS);
@@ -916,7 +919,7 @@ function training_user_history(PDO $db, int $userId, ?int $year = null): array {
     try {
         $sql = "SELECT s.session_id, s.year, s.plan_month, s.course_name, s.train_type, s.trainer, s.org_unit,
                        s.status, s.done_date, s.actual_hours, s.hours, s.location, s.eval_method, s.outline,
-                       a.attended, a.signed, a.eval_result, a.eval_score, a.eval_note
+                       a.attended, a.signed, a.eval_result, a.eval_score, a.eval_note, a.license
                 FROM training_attendee a
                 JOIN training_session s ON s.session_id = a.session_id
                 WHERE a.user_id = ? AND a.attended = 1" . ($year ? " AND s.year = ?" : "") . "

@@ -69,7 +69,7 @@ if (!function_exists('eg_people_list')) {
      *                    user_ids  只列這些人
      *                    states    允許的 state（預設 [1,2,3,99]；EG_PEOPLE_EXCLUDE_STATES 永遠排除）
      *                    keyword   姓名/帳號模糊搜尋
-     * @return array 每列：id, user_cname, user_uname, state, state_label, hire_date,
+     * @return array 每列：id, user_cname, user_uname, state, state_label, hire_date, gender(M/F/null), highest_education(代碼/null),
      *               position_id, position_name, position_sort, dept_id, dept_name, dept_sort, dept_ids(含兼任的所有部門id),
      *               on_leave(0/1), leave_label, leave_start, leave_end, leave_note, display
      *               排序：職稱 → 部門 → id
@@ -103,7 +103,7 @@ if (!function_exists('eg_people_list')) {
             $params[] = $like; $params[] = $like;
         }
 
-        $sql = "SELECT u.id, u.user_cname, u.user_uname, u.state, u.hire_date,
+        $sql = "SELECT u.id, u.user_cname, u.user_uname, u.state, u.hire_date, u.gender, u.highest_education,
                        m.department_id AS dept_id, d.name AS dept_name, COALESCE(d.sort_order, 999) AS dept_sort,
                        m.position_id, p.name AS position_name, COALESCE(p.sort_order, 999) AS position_sort
                 FROM `user` u

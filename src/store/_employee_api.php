@@ -107,8 +107,9 @@ function calculateProratedAnnualLeave($hireDate) {
 function getEmployees() {
     global $db;
     try {
-        $sql = "SELECT 
-                    u.id, u.user_uname, u.user_cname, u.user_status, u.state, u.gender, u.hire_date, u.leave_date,
+        $sql = "SELECT
+                    u.id, u.user_uname, u.user_cname, u.user_status, u.state, u.gender,
+                    u.highest_education, u.second_education, u.hire_date, u.leave_date,
                     -- 預定離職：還在可用狀態、但已填未來離職日（含今天，當天仍可使用系統）
                     CASE WHEN u.leave_date IS NOT NULL AND u.leave_date >= CURDATE()
                               AND (u.state IS NULL OR u.state NOT IN (" . EG_BLOCKED_USER_STATES . "))
@@ -210,7 +211,7 @@ function getEmployeeDetails() {
 
     try {
         // 獲取基本資料
-        $stmt = $db->prepare("SELECT user_uname, user_cname, phone, user_status, state, gender, hire_date, leave_date FROM user WHERE id = ?");
+        $stmt = $db->prepare("SELECT user_uname, user_cname, phone, user_status, state, gender, highest_education, second_education, hire_date, leave_date FROM user WHERE id = ?");
         $stmt->execute([$id]);
         $data = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -246,6 +247,8 @@ function addOrUpdateEmployee($mode) {
     $user_cname = $_POST['user_cname'] ?? '';
     $state = $_POST['state'] ?? 1;
     $gender = $_POST['gender'] ?? null;
+    $highest_education = !empty($_POST['highest_education']) ? $_POST['highest_education'] : null;
+    $second_education = !empty($_POST['second_education']) ? $_POST['second_education'] : null;
     $hire_date = !empty($_POST['hire_date']) ? $_POST['hire_date'] : null;
     $leave_date = !empty($_POST['leave_date']) ? $_POST['leave_date'] : null;
 
@@ -275,9 +278,9 @@ function addOrUpdateEmployee($mode) {
                 return;
             }
 
-            $sql = "INSERT INTO user (id, user_uname, user_cname, phone, user_password, state, gender, hire_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+            $sql = "INSERT INTO user (id, user_uname, user_cname, phone, user_password, state, gender, highest_education, second_education, hire_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
             $stmt = $db->prepare($sql);
-            $stmt->execute([$id, $user_uname, $user_cname, $_POST['phone'], $user_password, $state, $gender, $hire_date]);
+            $stmt->execute([$id, $user_uname, $user_cname, $_POST['phone'], $user_password, $state, $gender, $highest_education, $second_education, $hire_date]);
         } else { // update
             // 檢查 user_uname 是否與其他使用者重複
             $stmt_check = $db->prepare("SELECT id FROM user WHERE user_uname = ? AND id != ?");
@@ -320,13 +323,13 @@ function addOrUpdateEmployee($mode) {
                            ->execute([(string)$id, $user_cname, (int)($_SESSION['id'] ?? 0), ($_SESSION['user_cname'] ?? '')]);
                     } catch (Throwable $e) { error_log('[shared] locked pw audit failed: ' . $e->getMessage()); }
                 }
-                $sql = "UPDATE user SET user_uname = ?, user_cname = ?, phone = ?, user_password = ?, state = ?, gender = ?, hire_date = ?, leave_date = ? WHERE id = ?";
+                $sql = "UPDATE user SET user_uname = ?, user_cname = ?, phone = ?, user_password = ?, state = ?, gender = ?, highest_education = ?, second_education = ?, hire_date = ?, leave_date = ? WHERE id = ?";
                 $stmt = $db->prepare($sql);
-                $stmt->execute([$user_uname, $user_cname, $_POST['phone'], $user_password, $state, $gender, $hire_date, $final_leave_date, $id]);
+                $stmt->execute([$user_uname, $user_cname, $_POST['phone'], $user_password, $state, $gender, $highest_education, $second_education, $hire_date, $final_leave_date, $id]);
             } else {
-                $sql = "UPDATE user SET user_uname = ?, user_cname = ?, phone = ?, state = ?, gender = ?, hire_date = ?, leave_date = ? WHERE id = ?";
+                $sql = "UPDATE user SET user_uname = ?, user_cname = ?, phone = ?, state = ?, gender = ?, highest_education = ?, second_education = ?, hire_date = ?, leave_date = ? WHERE id = ?";
                 $stmt = $db->prepare($sql);
-                $stmt->execute([$user_uname, $user_cname, $_POST['phone'], $state, $gender, $hire_date, $final_leave_date, $id]);
+                $stmt->execute([$user_uname, $user_cname, $_POST['phone'], $state, $gender, $highest_education, $second_education, $hire_date, $final_leave_date, $id]);
             }
         }
 

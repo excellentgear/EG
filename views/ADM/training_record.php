@@ -614,6 +614,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
             <div class="att-list-wrap">
                 <table class="att-tbl"><thead><tr><th>部門</th><th>職稱</th><th>姓名</th><th style="width:42px;">實到</th>
                     <th style="width:96px;">評鑑結果</th><th style="width:58px;">分數</th><th style="width:120px;">備註</th>
+                    <th style="width:52px;">證照<br><span style="font-weight:normal;font-size:10px;color:#8a6d45;">(外訓)</span></th>
                     <th style="width:46px;">簽名</th><th style="width:26px;"></th></tr></thead>
                 <tbody id="attBody"></tbody></table>
             </div>
@@ -766,6 +767,10 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <button type="button" id="btnCardAsDocPick" style="flex:none;white-space:nowrap;"><i class="fa fa-link"></i> 綁定…</button>
             </div>
             <div class="tr-hint" style="margin-top:6px;">跟上面一樣要按下面「儲存設定」才會存檔；差別只在挑選方式改用打編號即時篩選的共用選擇器（ai-rules/16 第一之三節），文件已有 163 份，純下拉不好找。</div>
+
+            <label>員工教育訓練紀錄卡「員工編號」前綴文字（選填）</label>
+            <input type="text" id="setCardEmpnoPrefix" placeholder="例如 EG-（留空＝不加前綴，直接印登入帳號）">
+            <div class="tr-hint" style="margin-top:6px;">紀錄卡上的員工編號＝前綴＋登入帳號（本系統登入帳號本來就是員工流水編號）。</div>
 
             <div style="border-top:1px dashed #EADFC8;margin:14px 0 0;"></div>
             <label>簽到表／訓練紀錄等「參加人員本人簽名」自動產生的圖章樣式</label>
@@ -976,6 +981,8 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         訓練管理員將已核准的申請按「轉為計畫」帶入①的新增計畫視窗確認後存檔即完成轉換。<br>
         <b>⑥現場簽到</b>：場次為「已排定」時，清單上會出現「現場簽到」按鈕，開啟後不需要編輯權限，共用一台裝置給學員自己選姓名、輸入<b>本人密碼</b>按 Enter 完成電子簽到（密碼只驗證是不是本人，不是密碼反查身分）。「已完成」的場次不再開放簽到，需先在「實行資料」按「退回已排定」（操作確認密碼）才能重新開放。<br>
         <b>⑦員工教育訓練紀錄卡</b>分頁：每位在職員工一列，可依部門/姓名篩選，分頁列在清單右上角（預設每頁 10 筆）；「累計時數/次數」與卡片內容都是<b>即時彙整已到課(實到)的紀錄</b>，不是存檔快照，訓練資料一有異動（補登、修改評鑑結果等）卡片內容立刻跟著變。點列上「列印」單獨列印該員工的卡片（可能不只一頁，跨頁會自動重複表頭）；勾選多人後按「批次列印所選」，會依序自動彈出每位員工各自的列印視窗——<b>每位員工的頁碼各自從第 1 頁重新算，不會把不同員工的頁次算在一起</b>，上一位的列印視窗關閉後才會接著開下一位，請允許瀏覽器彈出視窗。
+        卡片欄位：訓練單位（內訓＝公司簡稱、外訓＝外訓單位）、評鑑方式（內訓印實際評鑑方式、外訓固定印「心得」）、證照（內訓固定「無」；外訓由「實行資料」名單表格勾選登錄，僅具訓練登錄權限者可填）、登錄人員（固定顯示<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>的「人事表單審核者」）。
+        卡頭另顯示員工編號（登入帳號＋可選前綴，模組設定可調前綴文字）、性別、最高學歷（來源＝「員工資料管理」頁維護的資料）。
         <h4>重要行為</h4>
         ・<b>訓練需求申請人</b>是獨立角色（在使用者權限設定的「教育訓練管理」角色指派裡指派），只能新增/送出/檢視申請單，
         看得到訓練場次列表（唯讀）但**不能**修改計畫或任何設定，避免誤把整頁編輯權限一起給出去。<br>
@@ -1127,6 +1134,8 @@ function loadMeta(cb){
         GROUPS = m.dept_groups || []; UNITS = m.units || [];
         AS_DOCS = m.as_docs || []; DOC_NO = m.doc_no || {}; DOC_NAME = m.doc_name || {}; COMPANY = m.company_name || '';
         CARD_ASDOC = m.card_asdoc || null;
+        COMPANY_SHORT = m.company_short_name || COMPANY;
+        HR_REVIEWER_NAME = m.hr_reviewer_name || '';
         SETTINGS.stamp_template = m.stamp_template || null;
         SETTINGS.approval_stamp_template = m.approval_stamp_template || null;
         TR_FEATURES = m.features || [];
@@ -1550,7 +1559,7 @@ function openExBody(sid){
     $.getJSON(API, {action:'get_attendees', session_id:r.session_id}, function(res){
         if (res.ok) ATT = res.attendees.map(function(a){ return {att_id:+a.att_id, user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name,
             position_name:a.position_name||'', attended:+a.attended, signed:+a.signed, signed_at:a.signed_at||'', sign_method:a.sign_method||'',
-            eval_result:a.eval_result||'', eval_score:(a.eval_score==null?'':numTrim(a.eval_score)), eval_note:a.eval_note||''}; });
+            eval_result:a.eval_result||'', eval_score:(a.eval_score==null?'':numTrim(a.eval_score)), eval_note:a.eval_note||'', license:+a.license||0}; });
         if (res.ok) DAY_SIGNS = daySignMap(res.day_signs);
         // 講師不算參加人員（是上課的人，不是受訓的人）→ 名單內若有講師一律剔除
         var cut = [];
@@ -1817,7 +1826,7 @@ function attAddChecked(){
         if(!ATT.some(function(a){return a.user_id===id;}))
             ATT.push({user_id:id, user_name:$(this).data('name'), dept_name:$(this).data('dept'),
                       position_name:$(this).data('pos')||'', attended:0, signed:0,
-                      eval_result:'', eval_score:'', eval_note:''});
+                      eval_result:'', eval_score:'', eval_note:'', license:0});
     });
     renderAtt();
     $('#attDept').trigger('change');
@@ -1874,6 +1883,7 @@ function unmarkSign(i){
 }
 function renderAtt(){
     var h='', notice=isNoticeCourse(), locked=exLocked();
+    var ext = !!(EXROW && EXROW.train_type==='external');   // 證照欄僅外訓開放登錄，內訓固定「無」不給填
     ATT.forEach(function(a,i){
         var ev = notice ? 'exempt' : (a.eval_result||'');
         var sel = '<select onchange="ATT['+i+'].eval_result=this.value;attCount()"'+(notice?' disabled':'')+'>'
@@ -1881,6 +1891,9 @@ function renderAtt(){
                 + '<option value="pass"'+(ev==='pass'?' selected':'')+'>合格</option>'
                 + '<option value="fail"'+(ev==='fail'?' selected':'')+'>不合格</option>'
                 + '<option value="exempt"'+(ev==='exempt'?' selected':'')+'>免評鑑</option></select>';
+        var licCell = ext
+            ? '<input type="checkbox" '+(+a.license?'checked':'')+' onchange="ATT['+i+'].license=this.checked?1:0;">'
+            : '無';
         h+='<tr><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'—')+'</td>'
           +'<td class="t-left">'+esc(a.user_name||'')+'</td>'
           +'<td><input type="checkbox" '+(a.attended?'checked':'')+' onchange="ATT['+i+'].attended=this.checked?1:0;attCount()"></td>'
@@ -1889,10 +1902,11 @@ function renderAtt(){
           +'" onchange="ATT['+i+'].eval_score=this.value;attCount()"'+(notice?' disabled':'')+'></td>'
           +'<td><input type="text" maxlength="100" style="width:112px;" value="'+esc(a.eval_note||'')
           +'" onchange="ATT['+i+'].eval_note=this.value"></td>'
+          +'<td style="text-align:center;">'+licCell+'</td>'
           +'<td>'+signCellHtml(a, i, locked)+'</td>'
           +'<td>'+(locked?'':'<span class="att-del" onclick="attDel('+i+')"><i class="fa fa-times"></i></span>')+'</td></tr>';
     });
-    $('#attBody').html(h||'<tr><td colspan="9" style="color:#8a6d45;padding:8px;">尚未加入人員</td></tr>');
+    $('#attBody').html(h||'<tr><td colspan="10" style="color:#8a6d45;padding:8px;">尚未加入人員</td></tr>');
     attCount();
     applyExLock();   // 重繪後新產生的 input 要重新套用鎖定狀態
 }
@@ -1910,6 +1924,7 @@ function attDel(i){ ATT.splice(i,1); renderAtt(); if($('#attDept').val()) $('#at
 /* ================= 年度訓練計劃表：送審與簽章（見 ai-rules/17） ================= */
 var AS_DOCS = [], DOC_NO = {}, DOC_NAME = {}, COMPANY = '', SIGNERS = {}, PLAN_APPR = {status:'none'}, PLAN_LASTMOD = '';
 var CARD_ASDOC = null;   // 員工教育訓練紀錄卡綁定的 AS 文件（asdoc_lib.php 標準做法，{id,doc_no,doc_name,current_version,doc_level} 或 null）
+var COMPANY_SHORT = '', HR_REVIEWER_NAME = '';   // 紀錄卡「訓練單位(內訓)」用公司簡稱；「登錄人員」欄固定顯示全站綁定的人事表單審核者
 var cardAsDocPickId = 0;   // 模組設定跳窗內「暫選」的 as_document.id，按「儲存設定」才寫入，跟其他五個欄位手感一致
 var APPR_LABEL = {none:'尚未送審', review_pending:'審核中', reviewed:'審核通過，待核准',
                   approve_pending:'待核准', approved:'已核准', rejected:'已退回'};
@@ -2247,7 +2262,7 @@ function openOjtScoreModal(){
         if (!ares.ok){ $('#ojtScoreInfo').html('<span style="color:#DD5138;">載入失敗</span>'); return; }
         ATT = ares.attendees.map(function(a){ return {att_id:+a.att_id, user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name,
             position_name:a.position_name||'', attended:+a.attended, signed:+a.signed, signed_at:a.signed_at||'', sign_method:a.sign_method||'',
-            eval_result:a.eval_result||'', eval_score:(a.eval_score==null?'':numTrim(a.eval_score)), eval_note:a.eval_note||''}; });
+            eval_result:a.eval_result||'', eval_score:(a.eval_score==null?'':numTrim(a.eval_score)), eval_note:a.eval_note||'', license:+a.license||0}; });
         $.getJSON(API, {action:'ojt_score_list', session_id:sid}, function(res){
             if (!res.ok){ $('#ojtScoreInfo').html('<span style="color:#DD5138;">載入失敗</span>'); return; }
             OJT_SCORE_DATA = {};
@@ -2619,6 +2634,7 @@ function openSetting(){
     $('#setDocSignsheet').html(dh).val(SETTINGS.training_as_doc_signsheet||'');
     cardAsDocPickId = CARD_ASDOC ? CARD_ASDOC.id : 0;
     $('#cardAsDocView').val(CARD_ASDOC ? EGAsDoc.label(CARD_ASDOC) : '尚未綁定');
+    $('#setCardEmpnoPrefix').val(SETTINGS.training_card_empno_prefix||'');
     loadStampTplOptions();
     var sbr = String(SETTINGS.training_signsheet_blank_rows||'0');
     if (sbr==='fill16'){ $('#setSignBlankMode').val('fill16'); $('#setSignBlankN').val(''); }
@@ -2677,7 +2693,7 @@ function saveSettings(){
         approval_stamp_tpl_id:$('#setApprovalStampTpl').val(),
         signsheet_blank_rows:(function(){ var m=$('#setSignBlankMode').val();
             return m==='fill16' ? 'fill16' : (m==='fixed' ? ($('#setSignBlankN').val()||'0') : '0'); })(),
-        card_as_doc_id:cardAsDocPickId,
+        card_as_doc_id:cardAsDocPickId, empno_prefix:$('#setCardEmpnoPrefix').val(),
         plan_sign_date:$('#setSignDate').val()}, function(res){
         if (!res.ok){ alert(res.error||'設定儲存失敗'); return; }
         SETTINGS = res.settings||{}; UNITS = res.units||UNITS; DOC_NO = res.doc_no||DOC_NO; DOC_NAME = res.doc_name||DOC_NAME;
@@ -3175,13 +3191,14 @@ $('#cardSelAll').on('change', function(){
     renderCardTable();
 });
 
-/* 備考欄：合格/不合格/免評/未評；免評鑑課程一律顯示「免評鑑」 */
-function cardEvalText(r){
-    if (r.eval_method==='notice') return '免評鑑';
-    if (r.eval_result==='pass') return '合格'+(r.eval_score!=null && r.eval_score!=='' ? '（'+r.eval_score+'）' : '');
-    if (r.eval_result==='fail') return '不合格'+(r.eval_score!=null && r.eval_score!=='' ? '（'+r.eval_score+'）' : '');
-    if (r.eval_result==='exempt') return '免評';
-    return r.eval_method ? '未評' : '';
+/* 學歷代碼 → 顯示文字（比照 employee_management.php 的 EDU_LABEL，選項要跟那邊一致） */
+var EDU_LABEL = {jhs:'國中以下', shs:'高中/高職', college:'專科', univ:'大學', master:'碩士', phd:'博士'};
+/* 員工編號：模組設定的前綴 + 登入帳號（本系統帳號本來就是流水編號，見 CARD_ROWS 的 user_uname） */
+function cardEmpNo(emp){ return (SETTINGS.training_card_empno_prefix||'') + (emp.user_uname||''); }
+/* 評鑑方式欄：內訓印實際評鑑方式，外訓固定印「心得」（不論該場次實際設定的評鑑方式為何，使用者明確要求） */
+function cardEvalMethodText(r){
+    if (r.train_type==='external') return '心得';
+    return r.eval_method ? (EVAL_METHODS[r.eval_method]||r.eval_method) : '';
 }
 /* 卡片內容 HTML（表頭固定資訊放進 <thead>，人多頁多時瀏覽器分頁引擎會自動每頁重印表頭，不必自己判斷分頁） */
 function buildCardBody(emp, records){
@@ -3189,20 +3206,25 @@ function buildCardBody(emp, records){
     var rows = '';
     if (!records.length) rows = '<tr><td colspan="7" style="height:24px;">（尚無訓練紀錄）</td></tr>';
     records.slice().reverse().forEach(function(r){   // training_user_history 回傳新到舊，卡片比照紙本習慣改成舊到新
+        var unit = r.train_type==='external' ? (r.org_unit||'') : COMPANY_SHORT;   // 訓練單位：內訓=公司簡稱，外訓=外訓單位名稱
+        var license = r.train_type==='external' ? (+r.license ? '有' : '無') : '無';   // 證照：內訓固定無，外訓依登錄資料
         rows += '<tr><td>'+dispDate(r.done_date)+'</td><td class="l">'+esc(r.course_name||'')+'</td>'
-            + '<td class="l">'+esc(r.location||'')+'</td>'
+            + '<td class="l">'+esc(unit)+'</td>'
             + '<td>'+(r.actual_hours!=null?numTrim(r.actual_hours):(r.hours!=null?numTrim(r.hours):''))+'</td>'
-            + '<td class="l" style="font-size:11px;">'+esc(r.outline||'')+'</td>'
-            + '<td class="l">'+esc((r.train_type==='external'?r.org_unit:r.trainer)||'')+'</td>'
-            + '<td style="font-size:11px;">'+esc(cardEvalText(r))+'</td></tr>';
+            + '<td>'+esc(cardEvalMethodText(r))+'</td>'
+            + '<td>'+license+'</td>'
+            + '<td style="font-size:11px;">'+esc(HR_REVIEWER_NAME||'')+'</td></tr>';
     });
     return '<table class="pt"><thead>'
         + '<tr><th colspan="7" style="border:none;padding:0;background:#fff;"><div class="pt-head"><div class="co">'+esc(COMPANY)+'</div>'
         + '<div class="tt">'+esc(docTitle)+'</div></div></th></tr>'
         + '<tr><td colspan="7" class="sf-i">部門：'+esc(emp.dept_name||'')+'　職稱：'+esc(emp.position_name||'')
-        + '　姓名：'+esc(emp.user_cname||'')+'　到職日：'+(dispDate(emp.hire_date)||'')+'</td></tr>'
-        + '<tr><th style="width:9%;">日期</th><th>課程名稱</th><th style="width:12%;">受訓地點</th>'
-        + '<th style="width:6%;">時數</th><th style="width:24%;">課程內容概要</th><th style="width:12%;">講師/單位</th><th style="width:9%;">備考</th></tr>'
+        + '　姓名：'+esc(emp.user_cname||'')+'　員工編號：'+esc(cardEmpNo(emp))
+        + '　性別：'+esc(emp.gender==='M'?'男':(emp.gender==='F'?'女':''))
+        + '　學歷：'+esc(EDU_LABEL[emp.highest_education]||'')
+        + '　到職日：'+(dispDate(emp.hire_date)||'')+'</td></tr>'
+        + '<tr><th style="width:9%;">日期</th><th>課程名稱</th><th style="width:12%;">訓練單位</th>'
+        + '<th style="width:6%;">時數</th><th style="width:10%;">評鑑方式</th><th style="width:6%;">證照</th><th style="width:12%;">登錄人員</th></tr>'
         + '</thead><tbody>'+rows+'</tbody></table>';
 }
 var CARD_PRINT_CSS = 'table.pt td.sf-i{border:1px solid #999;padding:5px 8px;text-align:left;font-size:12px;background:#fff;}';

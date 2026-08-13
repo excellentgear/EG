@@ -131,7 +131,11 @@ case 'meta': {
           // 員工教育訓練紀錄卡：AS 文件編號綁定一律走全站統一的 asdoc_lib.php（ai-rules/16 第一之三節），
           // 跟上面五個舊式（system_settings 存 id、純下拉）的教育訓練文件是不同做法，不要混用。
           'card_asdoc'=>eg_asdoc_get($db, 'training_record_card'),
+          // 紀錄卡「登錄人員」欄固定顯示全站組織角色綁定的「人事表單審核者」（org_role_setting.php 的 hr_reviewer，
+          // 不是 hr_signer 人事簽章人員，兩者是人事表單上不同欄位，不要混用）。
+          'hr_reviewer_name'=>(function($db){ $u = eg_org_user($db,'hr_reviewer'); return $u ? (string)$u['user_cname'] : ''; })($db),
           'company_name'=>eg_company_full_name($db),
+          'company_short_name'=>eg_company_short_name($db),
           'stamp_template'=>training_stamp_template($db),
           'approval_stamp_template'=>training_approval_stamp_template($db),
           'plan_signers'=>training_plan_signers($db),
@@ -190,6 +194,9 @@ case 'save_settings': {
             $sb = trim((string)$_POST['signsheet_blank_rows']);
             if ($sb !== '' && $sb !== 'fill16' && (!ctype_digit($sb) || (int)$sb > 16)) jerr('簽到表空白列數請填 0~16 的整數，或選擇補滿頁');
             training_setting_save($db, 'training_signsheet_blank_rows', $sb, $uid, $uname);
+        }
+        if (array_key_exists('empno_prefix', $_POST)) {
+            training_setting_save($db, 'training_card_empno_prefix', trim((string)$_POST['empno_prefix']), $uid, $uname);
         }
         // 員工教育訓練紀錄卡的 AS 文件編號綁定：跟其他五個一樣，選擇器裡點選只是暫存，要按這顆「儲存設定」才真的寫入
         // （一律走 asdoc_lib.php 的 eg_asdoc_save，跟上面五個的存放位置不同，但操作手感要一致）。
@@ -1173,7 +1180,7 @@ case 'get_attendees': {
     $sid = (int)($_GET['session_id'] ?? 0);
     // 人員列表鐵則(ai-rules/08 第五節)：依部門→職稱高低排序，非目前所屬部門/職稱(未匹配)排最後不報錯
     $st = $db->prepare("SELECT a.att_id, a.user_id, a.user_name, a.dept_name, a.position_name, a.attended, a.signed, a.signed_at, a.sign_method,
-                               a.eval_result, a.eval_score, a.eval_note
+                               a.eval_result, a.eval_score, a.eval_note, a.license
                         FROM training_attendee a
                         LEFT JOIN user_department_position_map m ON m.user_id=a.user_id AND m.is_main=1
                         LEFT JOIN department d ON d.id=m.department_id
@@ -1401,8 +1408,8 @@ case 'save_attendees': {
         foreach ($oq->fetchAll(PDO::FETCH_ASSOC) as $o) $old[(int)$o['user_id']] = $o;
         $db->prepare("DELETE FROM training_attendee WHERE session_id=?")->execute([$sid]);
         $ins = $db->prepare("INSERT INTO training_attendee (session_id,user_id,user_name,dept_name,position_name,attended,signed,signed_at,sign_method,
-                                                            eval_result,eval_score,eval_note)
-                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+                                                            eval_result,eval_score,eval_note,license)
+                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)");
         $total = 0; $att = 0;
         foreach ($list as $p) {
             $uidP = (int)($p['user_id'] ?? 0);
@@ -1414,11 +1421,12 @@ case 'save_attendees': {
             elseif (!in_array($ev, ['pass','fail','exempt'], true)) $ev = '';
             $sc = ($p['eval_score'] ?? '') === '' || $p['eval_score'] === null ? null : (float)$p['eval_score'];
             if ($sc !== null && ($sc < 0 || $sc > 100)) jerr('評分需在 0~100 之間（'.trim((string)($p['user_name'] ?? '')).'）');
+            $lic = (int)($p['license'] ?? 0) === 1 ? 1 : 0;   // 證照：內訓固定無(前端不會送1)，外訓由登錄人員勾選
             $ins->execute([$sid, $uidP, trim((string)($p['user_name'] ?? '')) ?: null,
                 trim((string)($p['dept_name'] ?? '')) ?: null,
                 trim((string)($p['position_name'] ?? '')) ?: null, $attended,
                 $o ? (int)$o['signed'] : 0, $o ? $o['signed_at'] : null, $o ? $o['sign_method'] : null,
-                $ev === '' ? null : $ev, $sc, trim((string)($p['eval_note'] ?? '')) ?: null]);
+                $ev === '' ? null : $ev, $sc, trim((string)($p['eval_note'] ?? '')) ?: null, $lic]);
             $total++; if ($attended) $att++;
         }
         // 同步人數（有名單即以名單為準）

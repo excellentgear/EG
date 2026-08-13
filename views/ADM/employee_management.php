@@ -255,6 +255,7 @@ if ($hrUserPerm === 'R') {
                                             <th>姓名</th>
                                             <th>主部門 / 職稱</th>
                                             <th>性別</th>
+                                            <th>最高學歷</th>
                                             <th>到職日</th>
                                             <th>特休天數</th>
                                             <th>兼任職務</th>
@@ -319,6 +320,32 @@ if ($hrUserPerm === 'R') {
                                 <div class="col-md-4 form-group">
                                     <label for="phone">連絡電話</label>
                                     <input type="text" class="form-control" id="phone" name="phone">
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6 form-group">
+                                    <label for="highest_education">最高學歷（選填）</label>
+                                    <select class="form-control" id="highest_education" name="highest_education">
+                                        <option value="">請選擇</option>
+                                        <option value="jhs">國中（含）以下</option>
+                                        <option value="shs">高中／高職</option>
+                                        <option value="college">專科</option>
+                                        <option value="univ">大學</option>
+                                        <option value="master">碩士</option>
+                                        <option value="phd">博士</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6 form-group">
+                                    <label for="second_education">次高學歷（選填）</label>
+                                    <select class="form-control" id="second_education" name="second_education">
+                                        <option value="">請選擇</option>
+                                        <option value="jhs">國中（含）以下</option>
+                                        <option value="shs">高中／高職</option>
+                                        <option value="college">專科</option>
+                                        <option value="univ">大學</option>
+                                        <option value="master">碩士</option>
+                                        <option value="phd">博士</option>
+                                    </select>
                                 </div>
                             </div>
                             <div class="row">
@@ -749,6 +776,8 @@ $(document).ready(function() {
                         case 'M': genderLabel = '男'; break;
                         case 'F': genderLabel = '女'; break;
                     }
+                    const EDU_LABEL = {jhs:'國中以下', shs:'高中/高職', college:'專科', univ:'大學', master:'碩士', phd:'博士'};
+                    const eduLabel = EDU_LABEL[emp.highest_education] || '';
 
                     // 修正特休計算：到職不滿6個月為0天
                     let displayAnnualLeave = emp.annual_leave_days;
@@ -776,6 +805,7 @@ $(document).ready(function() {
                         <td>
                             ${genderLabel}
                         </td>
+                        <td>${eduLabel}</td>
                         <td>${escapeHtml(emp.hire_date || '')}</td>
                         <td>${escapeHtml(displayAnnualLeave)} 天</td>
                         <td>
@@ -971,6 +1001,8 @@ $(document).ready(function() {
                     $('#phone').val(emp.phone);
                     $('#user_id_input').val(userId); // 將 ID 填入員工編號欄位
                     $('#gender').val(emp.gender);
+                    $('#highest_education').val(emp.highest_education || '');
+                    $('#second_education').val(emp.second_education || '');
                     $('#hire_date').val(emp.hire_date);
                     $('#leave_date').val(emp.leave_date);
 

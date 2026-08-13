@@ -219,4 +219,15 @@ function eg_company_full_name(PDO $db): string {
     return '超正齒輪科技有限公司';
 }
 
+/** 公司簡稱（沒有專門的簡稱欄位，同一來源 customer_list.is_own_company=1 的 customer 欄位——
+ *  這欄本來就是比 customer_full 短的一般顯示用名稱，見 eg_company_full_name() 的退回邏輯） */
+function eg_company_short_name(PDO $db): string {
+    try {
+        $r = $db->query("SELECT customer, customer_full FROM customer_list WHERE is_own_company=1 LIMIT 1")
+                ->fetch(PDO::FETCH_ASSOC);
+        if ($r) return trim((string)($r['customer'] ?: $r['customer_full'])) ?: '超正';
+    } catch (Throwable $e) {}
+    return '超正';
+}
+
 }
