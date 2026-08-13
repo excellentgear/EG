@@ -211,12 +211,34 @@ function hrf_top_approver_pool(PDO $db): array {
 
 /* ============================================================ 員工主要部門/職位/主管 snapshot ============================================================ */
 
-function hrf_user_snapshot(PDO $db, int $uid): ?array {
-    $st = $db->prepare("SELECT u.id, u.user_cname, u.user_no, u.onboard_date FROM user u WHERE u.id=?");
-    try { $st->execute([$uid]); } catch (Throwable $e) {
-        $st = $db->prepare("SELECT u.id, u.user_cname, NULL AS user_no, NULL AS onboard_date FROM user u WHERE u.id=?");
-        $st->execute([$uid]);
+/** 員工編號前綴（全站單一設定值，存 system_parameters；「員工編號」本系統慣例＝ user.id 本身，無獨立欄位）。 */
+const HRF_PARAM_GROUP = 'HR_FORM';
+function hrf_user_no_prefix_get(PDO $db): string {
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group=? AND param_key='user_no_prefix' LIMIT 1");
+        $st->execute([HRF_PARAM_GROUP]);
+        $v = $st->fetchColumn();
+        return $v !== false ? trim((string)(json_decode((string)$v, true) ?? $v), '"') : '';
+    } catch (Throwable $e) { return ''; }
+}
+function hrf_user_no_prefix_save(PDO $db, string $prefix, string $byName): void {
+    // param_value 欄位是 JSON 型別，字串一律要 json_encode 過（純數字裸值 MySQL JSON 才接受，字串不加引號會報 3140）
+    $json = json_encode($prefix, JSON_UNESCAPED_UNICODE);
+    $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group=? AND param_key='user_no_prefix' LIMIT 1");
+    $st->execute([HRF_PARAM_GROUP]);
+    $rid = $st->fetchColumn();
+    if ($rid) {
+        $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([$json, $byName, $rid]);
+    } else {
+        $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by) VALUES (?,?,?,?,?)")
+           ->execute([HRF_PARAM_GROUP, 'user_no_prefix', $json, '人資職務表單列印顯示的員工編號前綴', $byName]);
     }
+}
+function hrf_user_no_display(PDO $db, $rawId): string { return hrf_user_no_prefix_get($db) . $rawId; }
+
+function hrf_user_snapshot(PDO $db, int $uid): ?array {
+    $st = $db->prepare("SELECT u.id, u.user_cname, u.hire_date FROM user u WHERE u.id=?");
+    $st->execute([$uid]);
     $u = $st->fetch(PDO::FETCH_ASSOC);
     if (!$u) return null;
     $main = eg_user_main_identity($db, $uid);
@@ -233,10 +255,21 @@ function hrf_user_snapshot(PDO $db, int $uid): ?array {
     $supName = null;
     if ($supId) { $s = $db->prepare("SELECT user_cname FROM user WHERE id=?"); $s->execute([$supId]); $supName = $s->fetchColumn() ?: null; }
     return [
-        'user_id' => (int)$u['id'], 'user_cname' => $u['user_cname'], 'user_no' => $u['user_no'],
-        'onboard_date' => $u['onboard_date'], 'dept_id' => $deptId ? (int)$deptId : null, 'dept_name' => $deptName,
+        'user_id' => (int)$u['id'], 'user_cname' => $u['user_cname'], 'user_no' => hrf_user_no_display($db, $u['id']),
+        'onboard_date' => $u['hire_date'], 'dept_id' => $deptId ? (int)$deptId : null, 'dept_name' => $deptName,
         'position_id' => $posId ? (int)$posId : null, 'position_name' => $posName, 'supervisor_name' => $supName,
+        'supervisor_id' => $supId ? (int)$supId : null,
     ];
+}
+
+/** NA 判定（使用者確認之規則）：確認人(直屬主管)解析到跟核准人(全站最高決策者)是同一人時，
+ *  代表這位員工往上已經沒有「中階（課長考核）」這一層可以評，課長考核欄位視為 NA（不可填、印NA）。
+ *  不硬編「課長」職稱字串，任何職位遇到相同情況都適用。 */
+function hrf_confirm_is_na(PDO $db, int $targetUid): bool {
+    $supPool = hrf_supervisor_pool($db, $targetUid);
+    $apPool = hrf_top_approver_pool($db);
+    if (!$supPool || !$apPool) return false;
+    return (int)$supPool[0]['id'] === (int)$apPool[0]['id'];
 }
 
 /* ============================================================ 範本 ============================================================ */
@@ -465,26 +498,40 @@ function hrf_instance_get(PDO $db, int $id): ?array {
     $r = $st->fetch(PDO::FETCH_ASSOC);
     if (!$r) return null;
     if (in_array($r['form_type'], ['job_desc','competency'], true)) $r['items'] = hrf_instance_items_get($db, $id);
+    if ($r['form_type'] === 'skill_assess') $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id']);
     return $r;
 }
 
 function hrf_instance_list(PDO $db, array $opt = []): array {
     hrf_ensure_schema($db);
     $where = ['1=1']; $params = [];
-    if (!empty($opt['form_type'])) { $where[] = 'form_type=?'; $params[] = $opt['form_type']; }
+    if (!empty($opt['form_type'])) { $where[] = 'i.form_type=?'; $params[] = $opt['form_type']; }
     if (!empty($opt['dept_ids'])) {
         $ids = array_values(array_filter(array_map('intval', $opt['dept_ids'])));
-        if ($ids) { $where[] = 'dept_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')'; $params = array_merge($params, $ids); }
+        if ($ids) { $where[] = 'i.dept_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')'; $params = array_merge($params, $ids); }
     }
-    if (!empty($opt['user_id'])) { $where[] = 'user_id=?'; $params[] = (int)$opt['user_id']; }
+    if (!empty($opt['user_id'])) { $where[] = 'i.user_id=?'; $params[] = (int)$opt['user_id']; }
     if (!empty($opt['keyword'])) {
-        $where[] = '(user_cname LIKE ? OR user_no LIKE ? OR dept_name LIKE ? OR position_name LIKE ?)';
+        $where[] = '(i.user_cname LIKE ? OR i.user_no LIKE ? OR i.dept_name LIKE ? OR i.position_name LIKE ?)';
         $kw = '%' . $opt['keyword'] . '%'; array_push($params, $kw, $kw, $kw, $kw);
     }
-    $sql = "SELECT * FROM hr_form_instance WHERE " . implode(' AND ', $where) . " ORDER BY user_cname, whitelist_id, id DESC";
+    $sql = "SELECT i.*, pl.level AS target_level FROM hr_form_instance i
+            LEFT JOIN position_level pl ON pl.position_id = i.position_id
+            WHERE " . implode(' AND ', $where) . " ORDER BY i.user_cname, i.whitelist_id, i.id DESC";
     $st = $db->prepare($sql);
     $st->execute($params);
-    return $st->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['target_level'] = $r['target_level'] === null ? null : (int)$r['target_level'];
+        if ($r['form_type'] === 'skill_assess') $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id']);
+    }
+    return $rows;
+}
+
+/** 檢視者本人的職級（主職）。null＝未設定職級（視為最低階，全部人對其而言都是「職位以下」）。 */
+function hrf_viewer_level(PDO $db, int $uid): ?int {
+    $main = eg_user_main_identity($db, $uid);
+    return $main['level'] ?? null;
 }
 
 function hrf_instance_items_get(PDO $db, int $instanceId): array {
@@ -705,6 +752,10 @@ function hrf_confirm_decide(PDO $db, int $instanceId, int $uid, string $uname, s
     $pool = hrf_supervisor_pool($db, (int)$inst['user_id']);
     if (!in_array($uid, array_column($pool, 'id'), true)) return ['ok'=>false, 'msg'=>'您不是此表單的確認人'];
     if ($decision === 'approved') {
+        if ($scores && $inst['form_type'] === 'skill_assess' && !empty($inst['confirm_na'])) {
+            // NA：確認人跟核准人是同一人，課長考核這一欄不存在，強制清空、不採信前端送來的值
+            $scores = ['quality_mgr'=>null, 'efficiency_mgr'=>null, 'proficiency_mgr'=>null];
+        }
         if ($scores) hrf_instance_save_scores($db, $instanceId, $scores);
         if ($items) hrf_instance_items_save($db, $instanceId, $items);
     }
@@ -759,7 +810,11 @@ function hrf_approve_decide(PDO $db, int $instanceId, int $uid, string $uname, s
  * $signDate＝簽核業務日期(決行時間隨機錯開5~30分鐘、不跨天，比照 ai-rules/21 三鐵則/rvf_auto_sign 手法)。
  * 呼叫端須先過 eg_confirm_password_verify($db,1,$password) 才能呼叫本函式。
  */
-function hrf_auto_sign_bulk(PDO $db, array $instanceIds, string $signDate, int $byUid, string $byName): array {
+/**
+ * 超級管理員(id=1)補簽核。$scoresByInstance＝[instance_id => ['quality_gm'=>,'quality_mgr'=>,...]]（僅
+ * skill_assess 適用，未帶入該筆 id 就不動分數，維持原值）；簽核前先存分數，NA(課長考核)欄位強制清空。
+ */
+function hrf_auto_sign_bulk(PDO $db, array $instanceIds, string $signDate, int $byUid, string $byName, array $scoresByInstance = []): array {
     $done = []; $errors = [];
     foreach (array_unique(array_map('intval', $instanceIds)) as $iid) {
         $inst = hrf_instance_get($db, $iid);
@@ -767,6 +822,11 @@ function hrf_auto_sign_bulk(PDO $db, array $instanceIds, string $signDate, int $
         if (!in_array($inst['form_type'], ['skill_assess','competency'], true)) { $errors[] = $inst['user_cname'] . '：此表單類型不需要簽核'; continue; }
         if (in_array($inst['status'], ['signed'], true)) { continue; }
         try {
+            if ($inst['form_type'] === 'skill_assess' && isset($scoresByInstance[$iid])) {
+                $sc = $scoresByInstance[$iid];
+                if (!empty($inst['confirm_na'])) { $sc['quality_mgr'] = null; $sc['efficiency_mgr'] = null; $sc['proficiency_mgr'] = null; }
+                hrf_instance_save_scores($db, $iid, $sc);
+            }
             if ($inst['status'] === 'draft') {
                 $pool = hrf_supervisor_pool($db, (int)$inst['user_id']);
                 $supId = $pool ? (int)$pool[0]['id'] : null; $supName = $pool ? $pool[0]['user_cname'] : null;

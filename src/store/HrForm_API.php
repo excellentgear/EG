@@ -52,16 +52,23 @@ case 'list': {
     if (!isset(HRF_FORM_TYPES[$formType])) jerr('不明的表單類型');
     $opt = ['form_type'=>$formType];
     if (!empty($_GET['keyword'])) $opt['keyword'] = (string)$_GET['keyword'];
-    if (!$perms['canViewAll']) {
+$rows = hrf_instance_list($db, $opt);
+    if ($perms['isAdmin'] || $perms['canAdmin']) {
+        // 系統管理員／模組管理員固定全權，不受下方「職位以下」限制
+    } elseif ($perms['canViewAll']) {
+        // hrf_view_all：檢視自己職位以下的員工表單（同職級/未知職級一律看不到），另外一律看得到自己的和自己建立的
+        $viewerLevel = hrf_viewer_level($db, $uid);
+        $rows = array_values(array_filter($rows, function($r) use ($uid, $viewerLevel) {
+            if ((int)$r['user_id'] === $uid || (int)$r['created_by'] === $uid) return true;
+            if ($viewerLevel === null || $r['target_level'] === null) return false;
+            return (int)$r['target_level'] > $viewerLevel; // 數字越大職級越低
+        }));
+    } else {
         $mineDepts = array_column(eg_people_list($db, ['user_ids'=>[$uid]]), 'dept_ids');
         $deptIds = $mineDepts ? ($mineDepts[0] ?? []) : [];
-        $rows = hrf_instance_list($db, $opt);
         $rows = array_values(array_filter($rows, function($r) use ($uid, $deptIds) {
             return (int)$r['user_id'] === $uid || (int)$r['created_by'] === $uid || in_array((int)$r['dept_id'], $deptIds, true);
         }));
-    } else {
-        if (!empty($_GET['dept_id'])) $opt['dept_ids'] = [(int)$_GET['dept_id']];
-        $rows = hrf_instance_list($db, $opt);
     }
     jout(['instances'=>$rows]);
 }
@@ -190,7 +197,10 @@ case 'auto_sign_bulk': {
     $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
     if (!is_array($ids) || !$ids) jerr('請至少選擇一筆表單');
     $signDate = (string)($_POST['sign_date'] ?? date('Y-m-d'));
-    $r = hrf_auto_sign_bulk($db, $ids, $signDate, $uid, $uname);
+    $scoresByInstance = json_decode((string)($_POST['scores_by_instance'] ?? '{}'), true);
+    if (!is_array($scoresByInstance)) $scoresByInstance = [];
+    $scoresByInstance = array_combine(array_map('intval', array_keys($scoresByInstance)), array_values($scoresByInstance));
+    $r = hrf_auto_sign_bulk($db, $ids, $signDate, $uid, $uname, $scoresByInstance);
     jout(['done'=>count($r['done']), 'errors'=>$r['errors']]);
 }
 
@@ -223,7 +233,10 @@ case 'template_list': {
 }
 
 case 'template_get': {
-    if (!$perms['canAdmin']) jerr('僅管理員可管理範本', 403);
+    // 這個動作同時給「管理員編輯範本」與「一般使用者列印表單要拿圖章模板」兩種情境用（見 hr_position_forms.php
+    // fetchTplForPrint()），原本卡 canAdmin 會讓非管理員印表單時完全拿不到範本設定(含圖章模板)，永遠退回系統
+    // 預設章，2026-08-13 使用者回報印出來圖章太小才發現。寫入(template_save)仍然只有管理員可以，這裡只放寬讀取。
+    if (!$perms['canPrint'] && !$perms['canAdmin']) jerr('無權檢視此範本', 403);
     $t = hrf_template_get($db, (int)($_GET['id'] ?? 0));
     if (!$t) jerr('找不到此範本', 404);
     jout(['template'=>$t]);
@@ -294,6 +307,17 @@ case 'dept_type_setting_save': {
     $deptId = (int)($_POST['department_id'] ?? 0);
     if ($deptId <= 0) jerr('部門不正確');
     hrf_dept_type_setting_save($db, $deptId, !empty($_POST['produce_skill_assess']), !empty($_POST['produce_competency']));
+    jout([]);
+}
+
+/* ============================================================ 員工編號前綴（管理員） ============================================================ */
+
+case 'user_no_prefix_get': jout(['prefix'=>hrf_user_no_prefix_get($db)]);
+
+case 'user_no_prefix_save': {
+    hrf_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可設定', 403);
+    hrf_user_no_prefix_save($db, trim((string)($_POST['prefix'] ?? '')), $uname);
     jout([]);
 }
 

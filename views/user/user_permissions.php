@@ -713,6 +713,14 @@ $_quotDepts = array_keys($_deptSet);
             float: none !important;
             text-align: left !important;
         }
+
+        .scroll-to-top {
+            position: fixed; bottom: 20px; right: 20px; width: 50px; height: 50px;
+            background-color: rgba(255,255,255,0.5); color: #000; border: none; border-radius: 50%;
+            text-align: center; line-height: 50px; cursor: pointer; font-size: 12px; font-weight: bold;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2); transition: all 0.3s; z-index: 1000;
+        }
+        .scroll-to-top:hover { background-color: rgba(255,255,255,0.7); }
     </style>
 </head>
 
@@ -2063,6 +2071,7 @@ $_quotDepts = array_keys($_deptSet);
         }
         // ══════════════════════════════════════════════════════════════
     </script>
+    <button class="scroll-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})">回頂端</button>
 </body>
 
 </html>

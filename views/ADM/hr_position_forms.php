@@ -39,25 +39,28 @@ $perms = hrf_perms($db, $hrfUser);
         .hf-toolbar button { cursor:pointer; }
         .hf-toolbar .btn-warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .hf-toolbar .btn-danger { background:#DD5138; color:#fff; border-color:#c23f28; }
-        .page-help-btn { margin-left:auto; height:30px; font-size:13px; padding:0 14px; border:1px solid #D8BE93;
+        .hf-pager { display:flex; align-items:center; gap:4px; margin-left:auto; font-size:12.5px; color:#5b3a1e; }
+        .hf-pager select, .hf-pager button { height:26px; font-size:12px; padding:0 6px; }
+        .page-help-btn { height:30px; font-size:13px; padding:0 14px; border:1px solid #D8BE93;
             border-radius:4px; background:#fff; color:#5b3a1e; cursor:pointer; }
         .help-doc h4 { font-size:14px; color:#8A5A2B; margin:10px 0 4px; }
-        .hf-asdoc { font-size:12px; color:#8a6d45; margin-left:6px; }
+        .hf-asdoc { font-size:12px; color:#8a6d45; }
         table.hf-tbl { width:100%; border-collapse:collapse; font-size:13px; background:#fff; }
         table.hf-tbl th, table.hf-tbl td { border:1px solid #EADFC8; padding:6px 8px; }
         table.hf-tbl thead th { background:#F7E0BD; color:#5b3a1e; }
         .hf-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; }
         .st-badge { border-radius:10px; padding:2px 9px; font-size:11.5px; color:#fff; white-space:nowrap; }
         .st-draft,.st-active{background:#b0a390;} .st-confirming,.st-approving{background:#F0A24B;} .st-signed{background:#3f9142;} .st-rejected{background:#DD5138;}
+        .na-tag{color:#b0a390;font-style:italic;}
         .hf-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; overflow-y:auto; }
         .hf-modal { background:#fff; border-radius:8px; max-width:1040px; margin:24px auto; box-shadow:0 5px 25px rgba(0,0,0,.3); }
-        #viewMask .hf-modal { max-width:min(1100px, 94vw); }
+        #viewMask .hf-modal, #autoSignMask .hf-modal { max-width:min(1100px, 94vw); }
         .hf-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
             display:flex; justify-content:space-between; position:sticky; top:0; }
         .hf-modal .m-head .m-close { cursor:pointer; color:#b5762a; }
         .hf-modal .m-body { padding:15px; }
         .hf-modal .m-body label { display:block; font-size:13px; color:#5b3a1e; margin:9px 0 3px; }
-        .hf-modal .m-body input[type=text], .hf-modal .m-body input[type=date], .hf-modal .m-body select, .hf-modal .m-body textarea
+        .hf-modal .m-body input[type=text], .hf-modal .m-body input[type=date], .hf-modal .m-body input[type=password], .hf-modal .m-body select, .hf-modal .m-body textarea
             { border:1px solid #D8BE93; border-radius:4px; padding:5px 8px; font-size:13px; box-sizing:border-box; width:100%; }
         .hf-modal .m-foot { padding:10px 15px; border-top:1px solid #EADFC8; text-align:right; }
         .hf-modal .m-foot button { height:30px; padding:0 16px; border-radius:4px; font-size:13px; border:1px solid #d98a33; cursor:pointer; margin-left:6px; }
@@ -71,10 +74,13 @@ $perms = hrf_perms($db, $hrfUser);
         table.itm-tbl select { width:100%; border:1px solid #D8BE93; border-radius:4px; padding:3px 5px; font-size:12px; box-sizing:border-box; }
         .hf-people-pick { border:1px solid #D8BE93; border-radius:6px; padding:6px; }
         .hf-people-pick .flt { width:100%; border:1px solid #D8BE93; border-radius:4px; padding:5px 8px; font-size:12.5px; margin-bottom:6px; box-sizing:border-box; }
-        .hf-people-list { max-height:220px; overflow-y:auto; }
-        .hf-people-list label { display:block; font-size:12.5px; padding:2px 4px; margin:0; cursor:pointer; }
+        .hf-people-list { max-height:260px; overflow-y:auto; }
+        .ppl-dept-hd { background:#FBF0DD; font-weight:bold; font-size:12px; color:#8A5A2B; padding:3px 5px; cursor:pointer; margin-top:4px; border-radius:3px; }
+        .ppl-dept-hd:hover { background:#F7E0BD; }
+        .hf-people-list label { display:block; font-size:12.5px; padding:2px 4px 2px 16px; margin:0; cursor:pointer; }
         .hf-people-list label:hover { background:#FBF0DD; }
         .hf-people-list .leave-tag { color:#DD5138; font-size:11px; }
+        .hf-people-list .concur-tag { color:#c0782d; font-size:11px; }
         .hf-machine-pick { max-height:200px; overflow-y:auto; border:1px solid #D8BE93; border-radius:6px; padding:6px; margin-top:4px; }
         .hf-machine-pick label { display:block; font-size:12.5px; padding:2px 4px; cursor:pointer; }
         .hf-radio-row label { display:inline-block; margin-right:14px; font-weight:normal; font-size:13px; }
@@ -86,6 +92,10 @@ $perms = hrf_perms($db, $hrfUser);
         .hf-tabpane { display:none; }
         .hf-tabpane.active { display:block; }
         .err-list { color:#DD5138; font-size:12px; margin-top:6px; }
+        .as-fill-box { border:1px dashed #D8BE93; border-radius:6px; padding:8px; margin-bottom:10px; background:#FBF0DD; }
+        .as-fill-box .lbl { font-size:12px; color:#8a6d45; margin-right:4px; }
+        .as-fill-box select { width:52px; height:26px; font-size:12px; display:inline-block; }
+        table.as-sign-tbl input[type=number] { width:48px; text-align:center; }
         @media print { .page-help-btn { display:none; } }
     </style>
 </head>
@@ -96,7 +106,8 @@ $perms = hrf_perms($db, $hrfUser);
     <div class="right_col" role="main">
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;clear:both;">
             <h2 style="margin:6px 0;">人資職務表單 <small style="color:#8a6d45;">職務說明書／專業技能鑑定考核表／員工職能鑑定表</small></h2>
-            <button class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
+            <a href="hr_position_forms_template.php" class="admin-only" style="display:none;margin-left:12px;">範本管理→</a>
+            <button class="page-help-btn" id="btnPageHelp" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
         <div class="clearfix"></div>
 
@@ -127,12 +138,15 @@ $perms = hrf_perms($db, $hrfUser);
                 <button class="btn-auto-sign" style="display:none;background:#8A5A2B;color:#fff;"><i class="fa fa-magic"></i> 超管自動簽核</button>
                 <?php endif; ?>
                 <span class="hf-asdoc"></span>
-                <a href="hr_position_forms_template.php" class="admin-only" style="display:none;margin-left:auto;height:30px;line-height:28px;padding:0 12px;border:1px solid #D8BE93;border-radius:4px;color:#5b3a1e;text-decoration:none;">範本管理→</a>
+                <div class="hf-pager">
+                    每頁<select class="page-size"><option>5</option><option selected>10</option><option>20</option><option>50</option></select>筆
+                    <button class="pg-prev">‹</button><span class="pg-label">1/1</span><button class="pg-next">›</button>
+                </div>
             </div>
             <div class="hf-table-wrap">
             <table class="hf-tbl">
                 <thead class="thead-<?= $ft ?>"></thead>
-                <tbody class="list-body"><tr><td colspan="9" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody class="list-body"><tr><td colspan="10" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
             </div>
         </div>
@@ -146,12 +160,12 @@ $perms = hrf_perms($db, $hrfUser);
 <div class="hf-mask" id="createMask"><div class="hf-modal" style="max-width:640px;">
     <div class="m-head"><span id="createTitle">建立表單</span><span class="m-close" onclick="closeMask('createMask')">✕</span></div>
     <div class="m-body">
-        <label>選擇員工（可複選；選 1 人＝單人建立，選多人＝批次建立）</label>
+        <label>選擇員工（可複選；選 1 人＝單人建立，選多人＝批次建立；點部門標題可整組全選/取消，兼任職務的人會同時列在各自部門底下）</label>
         <div class="hf-people-pick">
             <input type="text" class="flt" placeholder="輸入姓名/部門/職稱篩選…" oninput="hfFilterPeople(this)">
             <div class="hf-people-list" id="createPeopleList"></div>
         </div>
-        <label>業務日期（建立日期，可自行指定以利補登舊資料）</label>
+        <label>日期（可自行指定以利補登舊資料）</label>
         <input type="date" id="createBizDate" max="9999-12-31">
         <div id="createMachineBlock" style="display:none;">
             <label>機型來源</label>
@@ -159,7 +173,10 @@ $perms = hrf_perms($db, $hrfUser);
                 <label><input type="radio" name="mSrc" value="tpl" checked onchange="hfToggleMachineSrc()"> 依各員工職位範本自動帶入（預設）</label>
                 <label><input type="radio" name="mSrc" value="manual" onchange="hfToggleMachineSrc()"> 手動指定機型（套用到全部選取員工）</label>
             </div>
-            <div class="hf-machine-pick" id="createMachineList" style="display:none;"></div>
+            <div id="createMachineList" style="display:none;">
+                <div style="margin-bottom:4px;"><button type="button" class="hf-btn-sm" onclick="hfMachineCkAll(true)">全選</button> <button type="button" class="hf-btn-sm" onclick="hfMachineCkAll(false)">取消全選</button></div>
+                <div class="hf-machine-pick" id="createMachineListBody"></div>
+            </div>
         </div>
         <div class="err-list" id="createErrList"></div>
     </div>
@@ -173,13 +190,25 @@ $perms = hrf_perms($db, $hrfUser);
 </div></div>
 
 <!-- 超管自動簽核 modal -->
-<div class="hf-mask" id="autoSignMask"><div class="hf-modal" style="max-width:440px;">
+<div class="hf-mask" id="autoSignMask"><div class="hf-modal">
     <div class="m-head"><span>超級管理員自動簽核</span><span class="m-close" onclick="closeMask('autoSignMask')">✕</span></div>
     <div class="m-body">
-        <p style="font-size:12.5px;color:#8a6d45;">已勾選 <b id="autoSignCount">0</b> 筆表單，將把尚未完成的確認/核准關卡一次補簽。用於補登舊資料，請謹慎使用。</p>
+        <p style="font-size:12.5px;color:#8a6d45;">已勾選 <b id="autoSignCount">0</b> 筆表單，請先確認/調整下方各筆分數，再輸入操作確認密碼執行。技能鑑定表 NA 欄位（課長考核，該員工直屬主管與核准人為同一人時無中間層可考核）不可填寫。</p>
+        <div class="as-fill-box">
+            <span class="lbl">一鍵套用固定分數到全部技能鑑定表（可再個別修改）：</span><br>
+            總經理－品質<select id="fillQGm"></select> 效率<select id="fillEGm"></select> 熟練度<select id="fillPGm"></select>
+            　課長－品質<select id="fillQMgr"></select> 效率<select id="fillEMgr"></select> 熟練度<select id="fillPMgr"></select>
+            <button type="button" class="hf-btn-sm" onclick="hfAutoSignApplyAll()">套用到全部</button>
+        </div>
+        <div class="hf-table-wrap" style="max-height:260px;overflow-y:auto;">
+        <table class="hf-tbl as-sign-tbl" id="autoSignRowsTbl">
+            <thead><tr><th>姓名</th><th>類型/機型</th><th>品質(總經理/課長)</th><th>效率(總經理/課長)</th><th>熟練度(總經理/課長)</th></tr></thead>
+            <tbody id="autoSignRowsBody"></tbody>
+        </table>
+        </div>
         <label>操作確認密碼</label>
         <input type="password" id="autoSignPwd">
-        <label>簽核日期（決行時間會在此日期內隨機錯開，不跨天）</label>
+        <label>簽核日期（決行時間會在此日期內隨機錯開，不跨天；預設抓所選表單的日期）</label>
         <input type="date" id="autoSignDate" max="9999-12-31">
         <div class="err-list" id="autoSignErr"></div>
     </div>
@@ -193,18 +222,18 @@ $perms = hrf_perms($db, $hrfUser);
         <h4>功能說明</h4>
         三張固定表單：<b>職務說明書</b>（每位員工一份，內容依職位範本帶入，不需簽核，僅留記錄）、<b>專業技能鑑定考核表</b>（每位員工「每個機型」一份，總經理／課長各自評分，需確認＋核准）、<b>員工職能鑑定表</b>（每位員工一份，職能項目依職位範本帶入，需確認＋核准）。三張表單各自獨立綁定 AS 文件編號。
         <h4>操作步驟</h4>
-        <b>①建立表單</b>：勾選一位或多位員工＋指定業務日期即可建立（勾 1 人＝單人建立，勾多人＝批次建立）；系統會依該員工當下的部門×職位比對「職位範本」自動帶入內容，找不到範本會在建立結果顯示錯誤，需請管理員先到「範本管理」設定。專業技能鑑定考核表另需選機型（預設依職位範本的適用機型清單自動展開成多筆，也可手動指定機型套用到所有選取員工）。<br>
-        <b>②填寫／評分</b>：職務說明書內容欄可直接編輯存檔；技能鑑定表由課長／總經理各自在「確認」「核准」時填寫自己那欄分數；職能鑑定表的操作/異常排除評分由確認人（直屬主管）填寫。<br>
+        <b>①建立表單</b>：勾選一位或多位員工＋指定日期即可建立（勾 1 人＝單人建立，勾多人＝批次建立；點部門標題可整組全選/取消）；系統會依該員工當下的部門×職位比對「職位範本」自動帶入內容，找不到範本會在建立結果顯示錯誤，需請管理員先到「範本管理」設定。專業技能鑑定考核表另需選機型（預設依職位範本的適用機型清單自動展開成多筆，也可手動指定機型套用到所有選取員工）。<br>
+        <b>②填寫／評分</b>：職務說明書內容欄可直接編輯存檔；技能鑑定表由課長／總經理各自在「確認」「核准」時填寫自己那欄分數；職能鑑定表的操作/異常排除評分由確認人（直屬主管）填寫。若員工本身職等已無中間層主管可考核（其直屬主管解析結果與總經理相同），課長考核欄位為 NA，不可填寫。<br>
         <b>③送出</b>：技能鑑定表／職能鑑定表草稿建立後需按「送出」才會通知確認人（該員工直屬主管）；確認通過後自動通知核准人（總經理）；任一關退回都需填寫原因，退回後表單回到草稿可修改重送。<br>
         <b>④複製表單</b>：任何表單都可按「複製」，以複製者身分建立一份新草稿（機型/內容原樣帶入），需重新走送出流程。<br>
-        <b>⑤列印</b>：可單筆列印，或「列印全部」依目前清單篩選結果批次列印（每位員工自己一頁，批次列印不顯示頁碼）。<br>
-        <b>⑥超級管理員自動簽核</b>：僅 id=1 可用，勾選表單後輸入操作確認密碼＋指定簽核日期，一次補齊尚未完成的確認/核准關卡，用於補登舊紙本資料。
+        <b>⑤列印</b>：可單筆列印，或「列印全部」依目前清單篩選結果逐筆各自開視窗列印（結果較多會先詢問是否自動分批排隊）；每份文件各自獨立分頁計算頁碼，只有內容超過一頁時才顯示「第X頁/共Y頁」，單頁文件不顯示頁碼。<br>
+        <b>⑥超級管理員自動簽核</b>：僅 id=1 可用，勾選表單後可先逐筆調整分數（或用「一鍵套用固定分數」快速帶入再個別修改），輸入操作確認密碼＋指定簽核日期，一次補齊尚未完成的確認/核准關卡，用於補登舊紙本資料。
         <h4>重要行為</h4>
         ・部門是否產生技能鑑定表／職能鑑定表由管理員在「範本管理」設定，職務說明書全員適用。<br>
         ・機型/量具選項為管理員從既有機台主檔與量測儀器校驗的量具主檔勾選建立的白名單，不是全部主檔都能選。<br>
         ・確認人固定為該員工直屬主管、核准人固定為全站最高決策者（多數為總經理），無法個別調整。
         <h4>權限角色</h4>
-        人資職務表單檢閱＝看清單（僅看跟自己有關的）；檢視全部＝看全部人的表單；建立＝新增/批次建立/複製/編輯/送出；列印；範本管理＝到「範本管理」頁設定範本/白名單/部門資格/AS文件綁定；管理者全權。
+        人資職務表單檢閱＝看清單（僅看跟自己有關的）；檢視全部＝可檢視自己職位以下員工的表單（同職級以上看不到）；建立＝新增/批次建立/複製/編輯/送出；列印；範本管理＝到「範本管理」頁設定範本/白名單/部門資格/AS文件綁定；管理者全權。
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">關閉</button></div>
 </div></div>
@@ -222,6 +251,7 @@ var API = '../../src/store/HrForm_API.php';
 var META = {};
 var CUR_TAB = 'job_desc';
 var LISTS = {job_desc:[], skill_assess:[], competency:[]};
+var PAGE_STATE = {job_desc:{page:1,size:10}, skill_assess:{page:1,size:10}, competency:{page:1,size:10}};
 var FORM_LABEL = {job_desc:'職務說明書', skill_assess:'專業技能鑑定考核表', competency:'員工職能鑑定表'};
 var STATUS_LABEL = {draft:'草稿', active:'已建立', confirming:'確認中', approving:'核准中', signed:'已完成', rejected:'已退回'};
 var CUR = null; // 目前檢視中的 instance
@@ -250,8 +280,11 @@ $('#hfTabs a').on('click', function(e){
     CUR_TAB = t;
     loadList(t);
 });
-$('.hf-tabpane .kw').on('input', function(){ renderList($(this).closest('.hf-tabpane').data('type')); });
-$('.hf-tabpane .st-filter').on('change', function(){ renderList($(this).closest('.hf-tabpane').data('type')); });
+$('.hf-tabpane .kw').on('input', function(){ var ft=$(this).closest('.hf-tabpane').data('type'); PAGE_STATE[ft].page=1; renderList(ft); });
+$('.hf-tabpane .st-filter').on('change', function(){ var ft=$(this).closest('.hf-tabpane').data('type'); PAGE_STATE[ft].page=1; renderList(ft); });
+$('.hf-tabpane .page-size').on('change', function(){ var ft=$(this).closest('.hf-tabpane').data('type'); PAGE_STATE[ft].size=parseInt(this.value,10); PAGE_STATE[ft].page=1; renderList(ft); });
+$('.hf-tabpane .pg-prev').on('click', function(){ var ft=$(this).closest('.hf-tabpane').data('type'); if (PAGE_STATE[ft].page>1){ PAGE_STATE[ft].page--; renderList(ft); } });
+$('.hf-tabpane .pg-next').on('click', function(){ var ft=$(this).closest('.hf-tabpane').data('type'); PAGE_STATE[ft].page++; renderList(ft); });
 $('.hf-tabpane .btn-create').on('click', function(){ openCreateModal($(this).closest('.hf-tabpane').data('type')); });
 $('.hf-tabpane .btn-print-all').on('click', function(){ printAll($(this).closest('.hf-tabpane').data('type')); });
 $('.hf-tabpane .btn-auto-sign').on('click', function(){ openAutoSignModal($(this).closest('.hf-tabpane').data('type')); });
@@ -276,36 +309,53 @@ function loadAsDoc(ft){
     });
 }
 function buildTableHeads(){
-    var ck = META.perms.isSuperAdmin ? '<th style="width:22px;"></th>' : '';
-    $('.thead-job_desc').html('<tr><th>部門</th><th>職位</th><th>姓名</th><th>建立日期</th><th style="width:150px;">操作</th></tr>');
+    var ck = META.perms.isSuperAdmin ? '<th style="width:26px;"><input type="checkbox" class="ck-all" onclick="toggleAllCk(this)"></th>' : '';
+    $('.thead-job_desc').html('<tr><th>部門</th><th>職位</th><th>姓名</th><th>日期</th><th style="width:150px;">操作</th></tr>');
     $('.thead-skill_assess').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>機型</th><th>項目名稱</th><th>總經理考核</th><th>課長考核</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
     $('.thead-competency').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>職務</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
+}
+function toggleAllCk(box){
+    $(box).closest('table').find('tbody .auto-ck').prop('checked', box.checked);
 }
 
 function loadList(ft){
     var url = {action:'list', form_type:ft};
     $.getJSON(API, url, function(res){
-        if (!res.ok){ $('#pane-'+ft+' .list-body').html('<tr><td colspan="9" style="color:#DD5138;">'+esc(res.error||'載入失敗')+'</td></tr>'); return; }
+        if (!res.ok){ $('#pane-'+ft+' .list-body').html('<tr><td colspan="10" style="color:#DD5138;">'+esc(res.error||'載入失敗')+'</td></tr>'); return; }
         LISTS[ft] = res.instances || [];
+        PAGE_STATE[ft].page = 1;
         renderList(ft);
     });
 }
 
 function scoreAvg(a,b,c){ var v=[a,b,c].filter(function(x){return x!==null && x!=='';}); if(!v.length) return null; var s=0; v.forEach(function(x){s+=Number(x);}); return Math.round((s/v.length)*100)/100; }
 
-function renderList(ft){
-    ft = ft || CUR_TAB;
+/** 依目前篩選條件(搜尋字/狀態)過濾，不含分頁——「列印全部」要用這份，不能只印當頁。 */
+function filteredRows(ft){
     var $pane = $('#pane-'+ft);
     var kw = ($pane.find('.kw').val()||'').toLowerCase();
     var stf = $pane.find('.st-filter').val()||'';
-    var rows = (LISTS[ft]||[]).filter(function(r){
+    return (LISTS[ft]||[]).filter(function(r){
         if (stf && r.status !== stf) return false;
         if (!kw) return true;
         var hay = (r.dept_name+' '+r.position_name+' '+r.user_cname+' '+(r.machine_display_name||'')+' '+(r.item_name||'')).toLowerCase();
         return hay.indexOf(kw) >= 0;
     });
+}
+
+function renderList(ft){
+    ft = ft || CUR_TAB;
+    var $pane = $('#pane-'+ft);
+    var all = filteredRows(ft);
+    var st = PAGE_STATE[ft];
+    var totalPages = Math.max(1, Math.ceil(all.length / st.size));
+    if (st.page > totalPages) st.page = totalPages;
+    var rows = all.slice((st.page-1)*st.size, st.page*st.size);
+    $pane.find('.pg-label').text(st.page + '/' + totalPages + '（共' + all.length + '筆）');
+    $pane.find('.pg-prev').prop('disabled', st.page<=1);
+    $pane.find('.pg-next').prop('disabled', st.page>=totalPages);
     var $tb = $pane.find('.list-body');
-    if (!rows.length){ $tb.html('<tr><td colspan="9" style="text-align:center;color:#8a6d45;">尚無資料</td></tr>'); return; }
+    if (!rows.length){ $tb.html('<tr><td colspan="10" style="text-align:center;color:#8a6d45;">尚無資料</td></tr>'); return; }
     var html = '';
     rows.forEach(function(r){
         var stBadge = '<span class="st-badge st-'+r.status+'">'+(STATUS_LABEL[r.status]||r.status)+'</span>';
@@ -318,10 +368,11 @@ function renderList(ft){
             html += '<tr><td>'+esc(r.dept_name)+'</td><td>'+esc(r.position_name)+'</td><td>'+esc(r.user_cname)+'</td><td>'+dispDate(r.business_date)+'</td><td>'+opBtns+'</td></tr>';
         } else if (ft === 'skill_assess') {
             var gmAvg = scoreAvg(r.score_quality_gm,r.score_efficiency_gm,r.score_proficiency_gm);
-            var mgrAvg = scoreAvg(r.score_quality_mgr,r.score_efficiency_mgr,r.score_proficiency_mgr);
+            var mgrAvg = r.confirm_na ? null : scoreAvg(r.score_quality_mgr,r.score_efficiency_mgr,r.score_proficiency_mgr);
+            var confirmCell = r.confirm_na ? '<span class="na-tag">NA</span>' : (r.confirm_user_name?esc(r.confirm_user_name):stBadge);
             html += '<tr>'+ck+'<td>'+esc(r.dept_name)+'</td><td>'+esc(r.user_cname)+'</td><td>'+esc(r.machine_display_name)+'</td><td>'+esc(r.item_name)+'</td>'
-                  + '<td>'+(gmAvg===null?'-':gmAvg)+'</td><td>'+(mgrAvg===null?'-':mgrAvg)+'</td>'
-                  + '<td>'+(r.confirm_user_name?esc(r.confirm_user_name):stBadge)+'</td><td>'+(r.approve_user_name?esc(r.approve_user_name):(r.status==='signed'?stBadge:'-'))+'</td>'
+                  + '<td>'+(gmAvg===null?'-':gmAvg)+'</td><td>'+(r.confirm_na?'<span class="na-tag">NA</span>':(mgrAvg===null?'-':mgrAvg))+'</td>'
+                  + '<td>'+confirmCell+'</td><td>'+(r.approve_user_name?esc(r.approve_user_name):(r.status==='signed'?stBadge:'-'))+'</td>'
                   + '<td>'+opBtns+'</td></tr>';
         } else {
             html += '<tr>'+ck+'<td>'+esc(r.dept_name)+'</td><td>'+esc(r.user_cname)+'</td><td>'+esc(r.position_name)+'</td>'
@@ -330,21 +381,60 @@ function renderList(ft){
         }
     });
     $tb.html(html);
+    $pane.find('.ck-all').prop('checked', false);
 }
 </script>
 <style>.hf-btn-sm{height:26px;padding:0 8px;border-radius:4px;font-size:11.5px;border:1px solid #D8BE93;background:#fff;color:#5b3a1e;cursor:pointer;}.hf-btn-sm:hover{background:#FBF0DD;}</style>
 <script>
-/* ============================================================ 員工/機型挑選元件 ============================================================ */
+/* ============================================================ 員工/機型挑選元件（依部門分組，兼任職務同時列在各自部門底下） ============================================================ */
 
-function hfPeopleRowHtml(p, checked){
-    var lv = p.on_leave ? ' <span class="leave-tag">['+esc(p.leave_note)+']</span>' : '';
-    return '<label data-hay="'+esc((p.dept_name||'')+' '+(p.position_name||'')+' '+p.user_cname).toLowerCase()+'">'
-         + '<input type="checkbox" value="'+p.id+'"'+(checked?' checked':'')+'> '
-         + esc(p.dept_name||'') + ' / ' + esc(p.position_name||'') + ' / ' + esc(p.user_cname) + lv + '</label>';
+function hfDeptGroups(people){
+    var byDept = {}; // dept_id(或0=無部門) -> {name, rows:[{p, isPrimary}]}
+    people.forEach(function(p){
+        var ids = (p.dept_ids && p.dept_ids.length) ? p.dept_ids : [p.dept_id || 0];
+        ids.forEach(function(did){
+            did = did || 0;
+            if (!byDept[did]) {
+                var dName = did ? ((META.departments||[]).find(function(d){ return String(d.id)===String(did); }) || {}).name : '（未設定部門）';
+                byDept[did] = {name: dName || '（未知部門）', rows: []};
+            }
+            byDept[did].rows.push({p: p, isPrimary: String(p.dept_id) === String(did)});
+        });
+    });
+    return byDept;
+}
+function hfPeoplePickerHtml(people, containerIdPrefix){
+    var groups = hfDeptGroups(people);
+    var deptIds = Object.keys(groups).sort(function(a,b){ return groups[a].name.localeCompare(groups[b].name, 'zh-Hant'); });
+    var html = '';
+    deptIds.forEach(function(did){
+        var g = groups[did];
+        html += '<div class="ppl-dept-hd" data-dept="'+did+'" onclick="hfDeptGroupToggle(this)"><i class="fa fa-folder-o"></i> '+esc(g.name)+'（'+g.rows.length+'人，點擊全選/取消）</div>';
+        g.rows.forEach(function(row){
+            var p = row.p;
+            var lv = p.on_leave ? ' <span class="leave-tag">['+esc(p.leave_note)+']</span>' : '';
+            var ct = !row.isPrimary ? ' <span class="concur-tag">(兼)</span>' : '';
+            html += '<label data-dept="'+did+'" data-hay="'+esc((g.name||'')+' '+(p.position_name||'')+' '+p.user_cname).toLowerCase()+'">'
+                  + '<input type="checkbox" class="ppl-ck" value="'+p.id+'" onchange="hfPplSync(this)"> '
+                  + esc(p.position_name||'') + ' / ' + esc(p.user_cname) + ct + lv + '</label>';
+        });
+    });
+    return html || '<span style="color:#8a6d45;">目前沒有符合資格的員工（請確認部門表單資格設定）</span>';
+}
+/** 同一人可能因兼任出現在多個部門群組下，勾一處要連動其他處，狀態才不會不一致。 */
+function hfPplSync(box){
+    $('.ppl-ck[value="'+box.value+'"]').prop('checked', box.checked);
+}
+function hfDeptGroupToggle(hd){
+    var did = $(hd).data('dept');
+    var $boxes = $('.ppl-ck').filter(function(){ return $(this).closest('label').data('dept') == did; });
+    var allChecked = $boxes.length && $boxes.filter(':checked').length === $boxes.length;
+    $boxes.each(function(){ $(this).prop('checked', !allChecked); hfPplSync(this); });
 }
 function hfFilterPeople(input){
     var kw = (input.value||'').toLowerCase();
-    $(input).closest('.hf-people-pick').find('.hf-people-list label').each(function(){
+    $(input).closest('.hf-people-pick').find('.hf-people-list label, .hf-people-list .ppl-dept-hd').each(function(){
+        if ($(this).hasClass('ppl-dept-hd')) return; // 部門標題永遠顯示，方便當群組操作入口
         $(this).toggle(!kw || ($(this).data('hay')+'').indexOf(kw) >= 0);
     });
 }
@@ -364,30 +454,32 @@ function openCreateModal(ft){
         if (!eligDeptIds) return true;
         return (p.dept_ids||[]).some(function(d){ return eligDeptIds.indexOf(d) >= 0; });
     });
-    $('#createPeopleList').html(people.map(function(p){ return hfPeopleRowHtml(p,false); }).join('') || '<span style="color:#8a6d45;">目前沒有符合資格的員工（請確認部門表單資格設定）</span>');
+    $('#createPeopleList').html(hfPeoplePickerHtml(people));
     $('#createMachineBlock').toggle(ft === 'skill_assess');
     if (ft === 'skill_assess') {
         $('input[name=mSrc][value=tpl]').prop('checked', true);
         $('#createMachineList').hide();
         $.getJSON(API, {action:'whitelist_list'}, function(res){
-            if (!res.ok) { $('#createMachineList').html('<span style="color:#8a6d45;">（僅管理員可預覽白名單，手動指定請洽管理員）</span>'); return; }
-            $('#createMachineList').html((res.whitelist||[]).map(function(w){
-                return '<label><input type="checkbox" value="'+w.id+'"> '+esc(w.item_name||w.display_name)+'（'+esc(w.display_name)+'）</label>';
+            if (!res.ok) { $('#createMachineListBody').html('<span style="color:#8a6d45;">（僅管理員可預覽白名單，手動指定請洽管理員）</span>'); return; }
+            $('#createMachineListBody').html((res.whitelist||[]).map(function(w){
+                return '<label><input type="checkbox" class="mach-ck" value="'+w.id+'"> '+esc(w.item_name||w.display_name)+'（'+esc(w.display_name)+'）</label>';
             }).join('') || '<span style="color:#8a6d45;">尚未建立白名單</span>');
         });
     }
     openMask('createMask');
 }
+function hfMachineCkAll(check){ $('#createMachineListBody .mach-ck').prop('checked', check); }
 function hfToggleMachineSrc(){
     $('#createMachineList').toggle($('input[name=mSrc]:checked').val() === 'manual');
 }
 function hfSubmitCreate(){
-    var uids = $('#createPeopleList input:checked').map(function(){ return $(this).val(); }).get();
+    var uids = $('#createPeopleList .ppl-ck:checked').map(function(){ return $(this).val(); }).get();
+    uids = uids.filter(function(v,i){ return uids.indexOf(v)===i; }); // 兼任會出現多次checkbox但value相同，去重
     if (!uids.length){ $('#createErrList').text('請至少選擇一位員工'); return; }
     var bizDate = $('#createBizDate').val() || META.today;
     var wids = [];
     if (CREATE_TYPE === 'skill_assess' && $('input[name=mSrc]:checked').val() === 'manual') {
-        wids = $('#createMachineList input:checked').map(function(){ return $(this).val(); }).get();
+        wids = $('#createMachineListBody .mach-ck:checked').map(function(){ return $(this).val(); }).get();
         if (!wids.length){ $('#createErrList').text('請至少選擇一個機型，或改選「依職位範本自動帶入」'); return; }
     }
     ajaxPost('batch_create', {form_type:CREATE_TYPE, user_ids:JSON.stringify(uids), whitelist_ids:JSON.stringify(wids), business_date:bizDate}, function(res){
@@ -473,7 +565,7 @@ function headTableHtml(r){
           + '<tr><th style="width:90px;">部門</th><td>'+esc(r.dept_name||'')+'</td><th style="width:90px;">職位</th><td>'+esc(r.position_name||'')+'</td></tr>'
           + '<tr><th>姓名</th><td>'+esc(r.user_cname||'')+'</td><th>員工編號</th><td>'+esc(r.user_no||'')+'</td></tr>'
           + '<tr><th>到職日</th><td>'+dispDate(r.onboard_date)+'</td><th>主管</th><td>'+esc(r.supervisor_name||'')+'</td></tr>'
-          + '<tr><th>業務日期</th><td>'+dispDate(r.business_date)+'</td><th>狀態</th><td>'+(STATUS_LABEL[r.status]||r.status)+'</td></tr>';
+          + '<tr><th>日期</th><td>'+dispDate(r.business_date)+'</td><th>狀態</th><td>'+(STATUS_LABEL[r.status]||r.status)+'</td></tr>';
     if (r.form_type === 'skill_assess') h += '<tr><th>機型</th><td>'+esc(r.machine_display_name||'')+'</td><th>項目名稱</th><td>'+esc(r.item_name||'')+'</td></tr>';
     h += '</tbody></table>';
     return h;
@@ -482,12 +574,16 @@ function decideBoxHtml(level, r){
     if (r.status !== level) return '';
     var scoreInputs = '';
     if (r.form_type === 'skill_assess') {
-        var suf = level === 'confirming' ? 'mgr' : 'gm';
-        var label = level === 'confirming' ? '課長考核' : '總經理考核';
-        scoreInputs = '<p style="font-weight:bold;">'+label+'評分（1~4分）</p>'
-            + '<table class="itm-tbl hf-score-tbl"><tr><td>品質</td><td><input type="number" min="1" max="4" id="sc-quality" value="'+(r['score_quality_'+suf]??'')+'"></td>'
-            + '<td>效率</td><td><input type="number" min="1" max="4" id="sc-efficiency" value="'+(r['score_efficiency_'+suf]??'')+'"></td>'
-            + '<td>熟練度</td><td><input type="number" min="1" max="4" id="sc-proficiency" value="'+(r['score_proficiency_'+suf]??'')+'"></td></tr></table>';
+        if (level === 'confirming' && r.confirm_na) {
+            scoreInputs = '<p style="color:#b0a390;">此員工職等已無中間層可考核，課長考核為 <b>NA</b>，直接按下方「確認通過」即可。</p>';
+        } else {
+            var suf = level === 'confirming' ? 'mgr' : 'gm';
+            var label = level === 'confirming' ? '課長考核' : '總經理考核';
+            scoreInputs = '<p style="font-weight:bold;">'+label+'評分（1~4分）</p>'
+                + '<table class="itm-tbl hf-score-tbl"><tr><td>品質</td><td><input type="number" min="1" max="4" id="sc-quality" value="'+(r['score_quality_'+suf]??'')+'"></td>'
+                + '<td>效率</td><td><input type="number" min="1" max="4" id="sc-efficiency" value="'+(r['score_efficiency_'+suf]??'')+'"></td>'
+                + '<td>熟練度</td><td><input type="number" min="1" max="4" id="sc-proficiency" value="'+(r['score_proficiency_'+suf]??'')+'"></td></tr></table>';
+        }
     }
     var btnLabel = level === 'confirming' ? '確認' : '核准';
     var fn = level === 'confirming' ? 'hfConfirmDecide' : 'hfApproveDecide';
@@ -499,15 +595,16 @@ function decideBoxHtml(level, r){
 }
 function renderViewBody(ft, r){
     var h = statusNote(r) + headTableHtml(r);
-    var editable = (ft === 'job_desc') || (r.status === 'draft');
     if (ft === 'job_desc') {
         h += jdItemsTableHtml(r.items);
         h += '<div style="margin-top:10px;"><button class="b-ok" onclick="hfSaveItems(\'job_desc\')">存檔</button> <button class="hf-btn-sm" onclick="printOne(\'job_desc\','+r.id+')">列印</button> <button class="hf-btn-sm" onclick="copyInstance(\'job_desc\','+r.id+')">複製</button></div>';
     } else if (ft === 'skill_assess') {
+        var mgrNA = !!r.confirm_na;
         h += '<table class="itm-tbl hf-score-tbl"><thead><tr><th></th><th>品質</th><th>效率</th><th>熟練度</th><th>平均</th></tr></thead><tbody>'
            + '<tr><th>總經理考核</th><td>'+(r.score_quality_gm??'-')+'</td><td>'+(r.score_efficiency_gm??'-')+'</td><td>'+(r.score_proficiency_gm??'-')+'</td><td>'+(scoreAvg(r.score_quality_gm,r.score_efficiency_gm,r.score_proficiency_gm)??'-')+'</td></tr>'
-           + '<tr><th>課長考核</th><td>'+(r.score_quality_mgr??'-')+'</td><td>'+(r.score_efficiency_mgr??'-')+'</td><td>'+(r.score_proficiency_mgr??'-')+'</td><td>'+(scoreAvg(r.score_quality_mgr,r.score_efficiency_mgr,r.score_proficiency_mgr)??'-')+'</td></tr>'
-           + '</tbody></table>';
+           + '<tr><th>課長考核</th>'+(mgrNA ? '<td colspan="4" class="na-tag">NA（此員工職等已無中間層可考核）</td>' :
+               ('<td>'+(r.score_quality_mgr??'-')+'</td><td>'+(r.score_efficiency_mgr??'-')+'</td><td>'+(r.score_proficiency_mgr??'-')+'</td><td>'+(scoreAvg(r.score_quality_mgr,r.score_efficiency_mgr,r.score_proficiency_mgr)??'-')+'</td>'))
+           + '</tr></tbody></table>';
         if (r.status === 'draft') h += '<div style="margin-top:8px;"><button class="b-ok" onclick="hfSubmitInstance()">送出（通知直屬主管確認）</button></div>';
         h += decideBoxHtml('confirming', r) + decideBoxHtml('approving', r);
         h += '<div style="margin-top:10px;"><button class="hf-btn-sm" onclick="printOne(\'skill_assess\','+r.id+')">列印</button> <button class="hf-btn-sm" onclick="copyInstance(\'skill_assess\','+r.id+')">複製</button></div>';
@@ -536,7 +633,7 @@ function hfConfirmDecide(decision){
     var note = $('#decideNote').val();
     if (decision === 'rejected' && !note){ alert('退回請填寫原因'); return; }
     var payload = {id:CUR.id, decision:decision, note:note};
-    if (CUR.form_type === 'skill_assess') payload.scores = JSON.stringify({quality_mgr:$('#sc-quality').val(), efficiency_mgr:$('#sc-efficiency').val(), proficiency_mgr:$('#sc-proficiency').val()});
+    if (CUR.form_type === 'skill_assess' && !CUR.confirm_na) payload.scores = JSON.stringify({quality_mgr:$('#sc-quality').val(), efficiency_mgr:$('#sc-efficiency').val(), proficiency_mgr:$('#sc-proficiency').val()});
     if (CUR.form_type === 'competency') payload.items = JSON.stringify(cpItemsCollect());
     ajaxPost('confirm_decide', payload, function(res){
         if (!res.ok){ alert(res.error||'處理失敗'); return; }
@@ -569,21 +666,77 @@ function deleteInstance(ft, id){
 }
 </script>
 <script>
-/* ============================================================ 超管自動簽核 ============================================================ */
+/* ============================================================ 超管自動簽核（逐筆可調分數＋一鍵套用固定分數） ============================================================ */
 var AUTO_SIGN_TYPE = null;
+var AUTO_SIGN_ROWS = []; // 選取當下的 instance 快照
+
+function scoreOptHtml(cls){ return '<select class="'+cls+'"><option value="">—</option><option>1</option><option>2</option><option>3</option><option>4</option></select>'; }
+function mostCommonDate(rows){
+    var count = {};
+    rows.forEach(function(r){ if (r.business_date) count[r.business_date] = (count[r.business_date]||0)+1; });
+    var best = null, bestN = 0;
+    Object.keys(count).forEach(function(d){ if (count[d] > bestN){ best = d; bestN = count[d]; } });
+    return best || META.today;
+}
 function openAutoSignModal(ft){
     AUTO_SIGN_TYPE = ft;
     var ids = $('#pane-'+ft+' .auto-ck:checked').map(function(){ return this.value; }).get();
     if (!ids.length){ alert('請先在清單勾選要補簽核的表單'); return; }
-    $('#autoSignCount').text(ids.length);
-    $('#autoSignPwd').val(''); $('#autoSignDate').val(META.today); $('#autoSignErr').empty();
+    AUTO_SIGN_ROWS = (LISTS[ft]||[]).filter(function(r){ return ids.indexOf(String(r.id)) >= 0; });
+    $('#autoSignCount').text(AUTO_SIGN_ROWS.length);
+    $('#autoSignPwd').val('');
+    $('#autoSignDate').val(mostCommonDate(AUTO_SIGN_ROWS));
+    $('#autoSignErr').empty();
+    ['fillQGm','fillEGm','fillPGm','fillQMgr','fillEMgr','fillPMgr'].forEach(function(id){
+        $('#'+id).html('<option value="">—</option><option>1</option><option>2</option><option>3</option><option>4</option>');
+    });
+    var rowsHtml = AUTO_SIGN_ROWS.map(function(r, idx){
+        if (r.form_type !== 'skill_assess') {
+            return '<tr data-idx="'+idx+'"><td>'+esc(r.user_cname)+'</td><td>'+FORM_LABEL[r.form_type]+'（無評分欄，僅簽核）</td><td colspan="3">-</td></tr>';
+        }
+        function pair(gmCls, mgrCls){
+            var mgrHtml = r.confirm_na ? '<span class="na-tag">NA</span>' : scoreOptHtml(mgrCls).replace('<select', '<select data-idx="'+idx+'"');
+            return scoreOptHtml(gmCls).replace('<select', '<select data-idx="'+idx+'"') + ' / ' + mgrHtml;
+        }
+        var html = '<tr data-idx="'+idx+'"><td>'+esc(r.user_cname)+'</td><td>'+esc(r.machine_display_name||'')+'</td>'
+             + '<td>'+pair('as-q-gm','as-q-mgr')+'</td><td>'+pair('as-e-gm','as-e-mgr')+'</td><td>'+pair('as-p-gm','as-p-mgr')+'</td></tr>';
+        return html;
+    }).join('');
+    $('#autoSignRowsBody').html(rowsHtml);
+    // 帶入既有分數當預設值
+    AUTO_SIGN_ROWS.forEach(function(r, idx){
+        if (r.form_type !== 'skill_assess') return;
+        var $tr = $('#autoSignRowsBody tr[data-idx="'+idx+'"]');
+        $tr.find('.as-q-gm').val(r.score_quality_gm||''); $tr.find('.as-e-gm').val(r.score_efficiency_gm||''); $tr.find('.as-p-gm').val(r.score_proficiency_gm||'');
+        if (!r.confirm_na) { $tr.find('.as-q-mgr').val(r.score_quality_mgr||''); $tr.find('.as-e-mgr').val(r.score_efficiency_mgr||''); $tr.find('.as-p-mgr').val(r.score_proficiency_mgr||''); }
+    });
     openMask('autoSignMask');
 }
+function hfAutoSignApplyAll(){
+    var v = {qGm:$('#fillQGm').val(), eGm:$('#fillEGm').val(), pGm:$('#fillPGm').val(), qMgr:$('#fillQMgr').val(), eMgr:$('#fillEMgr').val(), pMgr:$('#fillPMgr').val()};
+    AUTO_SIGN_ROWS.forEach(function(r, idx){
+        if (r.form_type !== 'skill_assess') return;
+        var $tr = $('#autoSignRowsBody tr[data-idx="'+idx+'"]');
+        if (v.qGm) $tr.find('.as-q-gm').val(v.qGm); if (v.eGm) $tr.find('.as-e-gm').val(v.eGm); if (v.pGm) $tr.find('.as-p-gm').val(v.pGm);
+        if (!r.confirm_na) { if (v.qMgr) $tr.find('.as-q-mgr').val(v.qMgr); if (v.eMgr) $tr.find('.as-e-mgr').val(v.eMgr); if (v.pMgr) $tr.find('.as-p-mgr').val(v.pMgr); }
+    });
+}
 function hfSubmitAutoSign(){
-    var ids = $('#pane-'+AUTO_SIGN_TYPE+' .auto-ck:checked').map(function(){ return this.value; }).get();
     var pwd = $('#autoSignPwd').val();
     if (!pwd){ $('#autoSignErr').text('請輸入操作確認密碼'); return; }
-    ajaxPost('auto_sign_bulk', {ids:JSON.stringify(ids), password:pwd, sign_date:$('#autoSignDate').val()||META.today}, function(res){
+    var ids = AUTO_SIGN_ROWS.map(function(r){ return r.id; });
+    var scoresByInstance = {};
+    AUTO_SIGN_ROWS.forEach(function(r, idx){
+        if (r.form_type !== 'skill_assess') return;
+        var $tr = $('#autoSignRowsBody tr[data-idx="'+idx+'"]');
+        scoresByInstance[r.id] = {
+            quality_gm: $tr.find('.as-q-gm').val()||null, efficiency_gm: $tr.find('.as-e-gm').val()||null, proficiency_gm: $tr.find('.as-p-gm').val()||null,
+            quality_mgr: r.confirm_na ? null : ($tr.find('.as-q-mgr').val()||null),
+            efficiency_mgr: r.confirm_na ? null : ($tr.find('.as-e-mgr').val()||null),
+            proficiency_mgr: r.confirm_na ? null : ($tr.find('.as-p-mgr').val()||null),
+        };
+    });
+    ajaxPost('auto_sign_bulk', {ids:JSON.stringify(ids), password:pwd, sign_date:$('#autoSignDate').val()||META.today, scores_by_instance:JSON.stringify(scoresByInstance)}, function(res){
         if (!res.ok){ $('#autoSignErr').text(res.error||'執行失敗'); return; }
         var msg = '已補簽 '+res.done+' 筆';
         if (res.errors && res.errors.length) msg += '；失敗：'+res.errors.join('；');
@@ -594,27 +747,12 @@ function hfSubmitAutoSign(){
 }
 </script>
 <script>
-/* ============================================================ 列印 ============================================================ */
+/* ============================================================ 列印（逐筆各自開視窗；多筆時自動分批排隊，比照 type_id_ctrl_doc.php 手法；
+   頁碼交給瀏覽器列印引擎算，JS只負責量高度決定要不要注入頁碼CSS，完全不影響分頁本身，只有超過一頁才顯示） ============================================================ */
 
-function egPrintWindow(title, bodyHtml, extraCss, docNo, showPageNum){
-    var asCss = String(docNo||'').replace(/['\\]/g,'');
-    var css = '@page{size:A4 portrait;margin:12mm 8mm 16mm;}'
-            + 'html,body{margin:0;padding:0;}'
-            + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-            + '.pt-head{text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
-            + '.hf-page-num{position:fixed;left:8mm;bottom:6mm;font-size:9pt;color:#333;}'
-            + '.hf-as-doc{position:fixed;right:8mm;bottom:6mm;font-size:9pt;color:#333;}'
-            + '.hf-page{page-break-after:always;}'
-            + hfPrintCss() + (extraCss||'');
-    var w = window.open('', '_blank');
-    if (!w){ alert('請允許彈出視窗'); return; }
-    w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
-        + bodyHtml
-        + (asCss ? '<div class="hf-as-doc">'+asCss+'</div>' : '')
-        + (showPageNum ? '<div class="hf-page-num">第 1 頁／共 1 頁</div>' : '')
-        + '<scr'+'ipt>window.onload=function(){ setTimeout(function(){ window.print(); }, 300); };</scr'+'ipt></body></html>');
-    w.document.close();
-}
+// 圖章尺寸換算（比照 ai-rules/18 第6條、review_form.php 既有做法，2026-08-13 修正）：
+// px = 實際外徑公分 × 96 ÷ 2.54，96px=1英吋=2.54公分；外徑沿用 review_form.php 同一顆公司章的 2.5cm。
+var HF_STAMP_PX = (2.5 * 96 / 2.54).toFixed(1);
 function hfPrintCss(){
     return 'table.hf-p-head{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;margin-bottom:6px;}'
          + 'table.hf-p-head th{background:#fff;font-weight:bold;border:1px solid #333;padding:5px 6px;width:90px;text-align:center;}'
@@ -626,10 +764,14 @@ function hfPrintCss(){
          + 'table.hf-p-foot td{padding:6px;width:33.33%;text-align:center;vertical-align:top;}'
          + 'table.hf-p-foot .foot-lbl{margin-bottom:4px;}'
          + '.hf-p-note{font-size:11px;color:#333;margin-top:8px;line-height:1.6;}'
-         + 'table.hf-p-foot svg{width:76px !important;height:76px !important;max-width:76px;max-height:76px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
+         // 只有「沒有指定圖章模板」時才用換算出的固定尺寸覆蓋；有指定模板時完全尊重模板自己的「大小(px)」，
+         // 不要像舊寫法直接選 table.hf-p-foot svg 把所有章(含模板章)一起蓋成固定值（ai-rules/18 第6條）。
+         + '.hf-stamp-defsize svg{width:'+HF_STAMP_PX+'px !important;height:'+HF_STAMP_PX+'px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
 }
 function stampOrName(name, date, isDeputy, schema){
-    return (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
+    var html = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
+    if (!schema) html = '<span class="hf-stamp-defsize">'+html+'</span>';
+    return html;
 }
 
 function jdPrintHtml(r){
@@ -637,7 +779,7 @@ function jdPrintHtml(r){
     h += '<table class="hf-p-head"><tr><th>工號</th><td>'+esc(r.user_no||'')+'</td><th>姓名</th><td>'+esc(r.user_cname||'')+'</td></tr>'
        + '<tr><th>職務名稱</th><td>'+esc(r.position_name||'')+'</td><th>到職日</th><td>'+dispDate(r.onboard_date)+'</td></tr>'
        + '<tr><th>所屬部門</th><td>'+esc(r.dept_name||'')+'</td><th>直屬主管</th><td>'+esc(r.supervisor_name||'')+'</td></tr>'
-       + '<tr><th>建立日期</th><td colspan="3">'+dispDate(r.business_date)+'</td></tr></table>';
+       + '<tr><th>日期</th><td colspan="3">'+dispDate(r.business_date)+'</td></tr></table>';
     h += '<table class="hf-p-items"><thead><tr><th>工作摘要</th><th>工作相關程序書</th><th>產出表單名稱</th><th>DPI 項目（績效標準計算方式）</th></tr></thead><tbody>';
     (r.items||[]).forEach(function(it){
         var d = it.data||{};
@@ -652,14 +794,15 @@ function saPrintHtml(r, tpl){
     h += '<table class="hf-p-head"><tr><th>單位</th><td>'+esc(r.dept_name||'')+'</td><th>姓名</th><td>'+esc(r.user_cname||'')+'</td></tr>'
        + '<tr><th>機型</th><td>'+esc(r.machine_display_name||'')+'</td><th>項目名稱</th><td>'+esc(r.item_name||'')+'</td></tr>'
        + '<tr><th>日期</th><td colspan="3">'+dispDate(r.business_date)+'</td></tr></table>';
+    var mgrNA = !!r.confirm_na;
     h += '<table class="hf-p-items"><thead><tr><th style="width:25%;">分類項目</th><th>總經理考核</th><th>課長考核</th></tr></thead><tbody>'
        + ['quality','efficiency','proficiency'].map(function(k,i){
            var lbl = ['品質','效率','熟練度'][i];
-           return '<tr><td>'+lbl+'</td><td>'+(r['score_'+k+'_gm']??'')+'</td><td>'+(r['score_'+k+'_mgr']??'')+'</td></tr>';
+           return '<tr><td>'+lbl+'</td><td>'+(r['score_'+k+'_gm']??'')+'</td><td>'+(mgrNA?'NA':(r['score_'+k+'_mgr']??''))+'</td></tr>';
          }).join('')
-       + '<tr><td>平均</td><td>'+(scoreAvg(r.score_quality_gm,r.score_efficiency_gm,r.score_proficiency_gm)??'')+'</td><td>'+(scoreAvg(r.score_quality_mgr,r.score_efficiency_mgr,r.score_proficiency_mgr)??'')+'</td></tr>'
+       + '<tr><td>平均</td><td>'+(scoreAvg(r.score_quality_gm,r.score_efficiency_gm,r.score_proficiency_gm)??'')+'</td><td>'+(mgrNA?'NA':(scoreAvg(r.score_quality_mgr,r.score_efficiency_mgr,r.score_proficiency_mgr)??''))+'</td></tr>'
        + '</tbody></table>';
-    h += '<div class="hf-p-note">說明：品質：依合格率計算(1分=25%、2分=50%、3分=75%、4分=100%)　效率：依標準工時計算效率(1分60%以下、2分=60~74%、3分=75~84%、4分=85%以上)　熟練度：1分=略、2分=熟、3分=獨立作業、4分=可教學<br>考核分數：1~4分，評分2分以上才合格，總經理、課長均要3分以上才合格。</div>';
+    h += '<div class="hf-p-note">說明：品質：依合格率計算(1分=25%、2分=50%、3分=75%、4分=100%)　效率：依標準工時計算效率(1分60%以下、2分=60~74%、3分=75~84%、4分=85%以上)　熟練度：1分=略、2分=熟、3分=獨立作業、4分=可教學<br>考核分數：1~4分，評分2分以上才合格，總經理、課長均要3分以上才合格。NA表示該員工職等已無中間層可考核。</div>';
     h += printFootHtml(r, tpl);
     return h;
 }
@@ -668,7 +811,7 @@ function cpPrintHtml(r, tpl){
     h += '<table class="hf-p-head"><tr><th>部門</th><td>'+esc(r.dept_name||'')+'</td><th>員工編號</th><td>'+esc(r.user_no||'')+'</td></tr>'
        + '<tr><th>姓名</th><td>'+esc(r.user_cname||'')+'</td><th>到職日</th><td>'+dispDate(r.onboard_date)+'</td></tr>'
        + '<tr><th>職務</th><td>'+esc(r.position_name||'')+'</td><th>主管</th><td>'+esc(r.supervisor_name||'')+'</td></tr>'
-       + '<tr><th>建立日期</th><td>'+dispDate(r.business_date)+'</td><th>最新更新日期</th><td>'+dispDate(r.updated_at?r.updated_at.substr(0,10):r.business_date)+'</td></tr></table>';
+       + '<tr><th>日期</th><td>'+dispDate(r.business_date)+'</td><th>最新更新日期</th><td>'+dispDate(r.updated_at?r.updated_at.substr(0,10):r.business_date)+'</td></tr></table>';
     h += '<table class="hf-p-items"><thead><tr><th style="width:50px;">編號</th><th>項目名稱</th><th style="width:90px;">操作</th><th style="width:90px;">異常排除</th></tr></thead><tbody>';
     (r.items||[]).forEach(function(it,i){
         var d = it.data||{};
@@ -680,7 +823,6 @@ function cpPrintHtml(r, tpl){
     return h;
 }
 function printFootHtml(r, tpl){
-    var listSchema = tpl && tpl.list_stamp ? tpl.list_stamp.schema : null;
     var footSchema = tpl && tpl.footer_stamp ? tpl.footer_stamp.schema : null;
     var approveStamp = r.approve_user_name ? stampOrName(r.approve_user_name, r.approve_at?r.approve_at.substr(0,10):r.business_date, false, footSchema) : '';
     var confirmStamp = r.confirm_user_name ? stampOrName(r.confirm_user_name, r.confirm_at?r.confirm_at.substr(0,10):r.business_date, false, footSchema) : '';
@@ -690,57 +832,71 @@ function printFootHtml(r, tpl){
          + '</tr></table>';
 }
 
+/* 原本卡 !META.perms.canAdmin，等於非管理員印表單時永遠拿不到範本設定(含圖章模板)，一律退回系統預設章
+   （2026-08-13 使用者回報印出來圖章太小才追出來）。API 端 template_get 動作已同步從 canAdmin 放寬成
+   canPrint（見 HrForm_API.php），這裡跟著放寬，寫入(template_save)仍然只有管理員可以，不受影響。 */
 function fetchTplForPrint(r, cb){
-    if (!r.template_id || !META.perms.canAdmin) { cb(null); return; }
+    if (!r.template_id || !(META.perms.canPrint || META.perms.canAdmin)) { cb(null); return; }
     $.getJSON(API, {action:'template_get', id:r.template_id}, function(res){ cb(res.ok ? res.template : null); });
 }
-function printOne(ft, id){
+
+/** 開單一份文件的列印視窗；zero-JS版面計算鐵則：分頁100%交給列印引擎，JS只決定要不要插入頁碼CSS。 */
+function openPrintWindow(title, bodyHtml, docNo){
+    var asCss = String(docNo||'').replace(/['\\]/g,'');
+    var css = '@page{size:A4 portrait;margin:12mm 8mm 16mm;}'
+            + 'html,body{margin:0;padding:0;}'
+            + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+            + '.pt-head{text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
+            + '.hf-as-doc{position:fixed;right:8mm;bottom:6mm;font-size:9pt;color:#333;}'
+            + hfPrintCss();
+    var w = window.open('', '_blank');
+    if (!w){ alert('請允許彈出視窗'); return null; }
+    w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
+        + bodyHtml
+        + (asCss ? '<div class="hf-as-doc">'+asCss+'</div>' : '')
+        + '<scr'+'ipt>window.onload=function(){'
+        + 'var onePageA4=(297-28)*96/25.4;'
+        + 'if(document.body.scrollHeight>onePageA4*0.92){'
+        + 'var st=document.createElement("style");'
+        + 'st.textContent="@page{ @bottom-left{ content: \'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
+        + 'document.head.appendChild(st);}'
+        + 'setTimeout(function(){window.print();},300);};</scr'+'ipt></body></html>');
+    w.document.close();
+    return w;
+}
+
+/** 單一表單列印（也是「列印全部」批次排隊呼叫的基礎單位，onDone 給排隊機制用）。 */
+function printDoc(ft, id, onDone){
     $.getJSON(API, {action:'get', id:id}, function(res){
-        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        if (!res.ok){ alert(res.error||'載入失敗'); if (onDone) onDone(); return; }
         var r = res.instance;
         $.getJSON(API, {action:'asdoc_get', form_type:ft}, function(dres){
-            var docNo = '';
-            if (dres.ok && dres.doc) {
-                docNo = dres.doc.doc_no; // 版次依業務日期回推，交由後端 hrf_asdoc_no_display 較精準，這裡先用現行編號顯示
-            }
+            var docNo = (dres.ok && dres.doc) ? dres.doc.doc_no : '';
             fetchTplForPrint(r, function(tpl){
-                var html = ft === 'job_desc' ? jdPrintHtml(r) : (ft === 'skill_assess' ? saPrintHtml(r, tpl) : cpPrintHtml(r, tpl));
-                egPrintWindow(FORM_LABEL[ft]+' - '+r.user_cname, '<div class="hf-page">'+html+'</div>', '', docNo, true);
+                var body = ft === 'job_desc' ? jdPrintHtml(r) : (ft === 'skill_assess' ? saPrintHtml(r, tpl) : cpPrintHtml(r, tpl));
+                openPrintWindow(FORM_LABEL[ft]+' - '+r.user_cname, body, docNo);
+                if (onDone) setTimeout(onDone, 500);
             });
         });
     });
 }
+function printOne(ft, id){ printDoc(ft, id); }
 
-/** 列印全部：依目前頁籤篩選結果，每位員工自己一頁，不印頁碼（使用者明確要求的例外）。 */
+/** 列印全部：依目前分頁籤的篩選結果（不受分頁限制），逐筆各自開視窗、各自獨立分頁計算頁碼；
+ *  一張表單＝一份獨立文件＝一頁（結構上都在一頁內），絕對不會合併計算頁碼。比照型態識別文件管制表的做法。 */
+var PRINT_ALL_BATCH_THRESHOLD = 15;
 function printAll(ft){
-    var rows = (LISTS[ft]||[]).slice();
-    if (!rows.length){ alert('目前沒有可列印的資料'); return; }
-    var byUser = {};
-    rows.forEach(function(r){ (byUser[r.user_id] = byUser[r.user_id] || []).push(r); });
-    $.getJSON(API, {action:'asdoc_get', form_type:ft}, function(dres){
-        var docNo = (dres.ok && dres.doc) ? dres.doc.doc_no : '';
-        var pages = '';
-        Object.keys(byUser).forEach(function(uidKey){
-            var list = byUser[uidKey];
-            if (ft === 'job_desc') {
-                pages += '<div class="hf-page">'+jdPrintHtml(list[0])+'</div>';
-            } else if (ft === 'skill_assess') {
-                var h = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">專業技能鑑定考核表</div></div>';
-                h += '<table class="hf-p-head"><tr><th>單位</th><td>'+esc(list[0].dept_name||'')+'</td><th>姓名</th><td>'+esc(list[0].user_cname||'')+'</td></tr></table>';
-                list.forEach(function(r){
-                    h += '<div style="margin-top:8px;font-weight:bold;">機型：'+esc(r.machine_display_name||'')+'　項目名稱：'+esc(r.item_name||'')+'　日期：'+dispDate(r.business_date)+'</div>';
-                    h += '<table class="hf-p-items"><thead><tr><th style="width:25%;">分類項目</th><th>總經理考核</th><th>課長考核</th></tr></thead><tbody>'
-                       + ['quality','efficiency','proficiency'].map(function(k,i){ var lbl=['品質','效率','熟練度'][i]; return '<tr><td>'+lbl+'</td><td>'+(r['score_'+k+'_gm']??'')+'</td><td>'+(r['score_'+k+'_mgr']??'')+'</td></tr>'; }).join('')
-                       + '<tr><td>平均</td><td>'+(scoreAvg(r.score_quality_gm,r.score_efficiency_gm,r.score_proficiency_gm)??'')+'</td><td>'+(scoreAvg(r.score_quality_mgr,r.score_efficiency_mgr,r.score_proficiency_mgr)??'')+'</td></tr></tbody></table>';
-                    h += printFootHtml(r, null);
-                });
-                pages += '<div class="hf-page">'+h+'</div>';
-            } else {
-                pages += '<div class="hf-page">'+cpPrintHtml(list[0], null)+'</div>';
-            }
-        });
-        egPrintWindow(FORM_LABEL[ft]+' - 全部列印', pages, '', docNo, false);
-    });
+    var ids = filteredRows(ft).map(function(r){ return r.id; });
+    if (!ids.length){ alert('目前沒有可列印的資料'); return; }
+    if (ids.length > PRINT_ALL_BATCH_THRESHOLD) {
+        if (!confirm('目前共 '+ids.length+' 筆，數量較多，一次列印可能造成瀏覽器負擔。\n是否改為自動分批列印（依序逐筆觸發，不需手動操作）？\n（若瀏覽器跳出「已封鎖快顯視窗」提示，請允許本頁彈出視窗）')) return;
+    }
+    var idx = 0;
+    function next(){
+        if (idx >= ids.length){ alert('已完成列印 '+ids.length+' 筆。'); return; }
+        printDoc(ft, ids[idx++], next);
+    }
+    next();
 }
 
 loadMeta(function(){ loadList('job_desc'); });
