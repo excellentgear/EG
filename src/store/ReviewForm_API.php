@@ -112,6 +112,15 @@ case 'template_schema_save': {
     jout(['version'=>$ver, 'template'=>rvf_template_get($db, $id)]);
 }
 
+case 'template_duplicate': {
+    rvf_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可複製模板', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!rvf_template_get($db, $id)) jerr('找不到來源模板', 404);
+    $newId = rvf_template_duplicate($db, $id, $uname);
+    jout(['id'=>$newId, 'template'=>rvf_template_get($db, $newId)]);
+}
+
 case 'maintainer_add': case 'maintainer_remove': {
     rvf_need_csrf();
     $id = (int)($_POST['template_id'] ?? 0);

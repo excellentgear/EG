@@ -301,6 +301,33 @@ function rvf_maintainer_remove(PDO $db, int $templateId, int $userId): void {
     $db->prepare("DELETE FROM rf_template_maintainer_user WHERE template_id=? AND user_id=?")->execute([$templateId, $userId]);
 }
 
+/** 複製模板（2026-08-14 新增，使用者明確要求）：設定（審核/核准/圖章樣式/維護部門）與目前生效的項次欄位定義
+ *  一起複製成一筆全新模板，名稱自動加「(複製)」尾碼避免混淆；維護人員名單也一併複製，省得管理員重新指派。
+ *  **不複製 AS 文件綁定**——那是每個模板各自獨立的文件編號，複製出來的是全新模板，不該自動掛在來源模板
+ *  的文件編號上（AS_DOC_BIND 用模板 id 當 key，複製出的新模板 id 本來就沒有綁定紀錄，天然是未綁定狀態，
+ *  管理員複製後要記得自己到「編輯設定」另外綁）。複製出來的模板版本從 1 開始，不沿用來源模板的版本號
+ *  （兩者送出後是完全獨立的模板，版本序不該互相牽扯）。 */
+function rvf_template_duplicate(PDO $db, int $srcId, string $byName): int {
+    $src = rvf_template_get($db, $srcId);
+    if (!$src) throw new Exception('找不到來源模板');
+    $newId = rvf_template_settings_save($db, 0, [
+        'name' => $src['name'] . '(複製)',
+        'paper_size' => $src['paper_size'],
+        'orientation' => $src['orientation'],
+        'list_stamp_tpl_id' => $src['list_stamp_tpl_id'],
+        'footer_stamp_tpl_id' => $src['footer_stamp_tpl_id'],
+        'need_review' => $src['need_review'], 'auto_review' => $src['auto_review'], 'review_dept_id' => $src['review_dept_id'],
+        'need_approval' => $src['need_approval'], 'auto_approval' => $src['auto_approval'],
+        'approver_dept_id' => $src['approver_dept_id'], 'approver_user_id' => $src['approver_user_id'],
+        'approver_chain' => json_decode((string)$src['approver_chain_json'], true) ?: ['top_approver'],
+        'maintain_dept_id' => $src['maintain_dept_id'],
+    ], $byName);
+    $schema = json_decode((string)$src['current_schema_json'], true) ?: ['fields'=>[], 'sign_mode'=>'password'];
+    rvf_template_schema_save($db, $newId, $schema, $byName);
+    foreach (rvf_maintainer_list($db, $srcId) as $m) rvf_maintainer_add($db, $newId, (int)$m['user_id'], $byName);
+    return $newId;
+}
+
 /* ============================================================ 表單（instance） ============================================================ */
 
 function rvf_instance_create(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate): int {

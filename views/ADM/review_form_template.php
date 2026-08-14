@@ -397,13 +397,25 @@ function loadTemplates(){
                + '<td>'+(t.maintain_dept_id?deptName(t.maintain_dept_id):'<span class="tag-off">（未設定）</span>')+'</td>'
                + '<td>'
                + (META.perms.canAdmin ? '<button onclick="openSettingModal('+t.id+')" style="margin-right:4px;">編輯設定</button>' : '')
-               + (t.can_edit_items ? '<button onclick="openSchemaModal('+t.id+')">編輯項次</button>' : '')
+               + (t.can_edit_items ? '<button onclick="openSchemaModal('+t.id+')" style="margin-right:4px;">編輯項次</button>' : '')
+               + (META.perms.canAdmin ? '<button onclick="duplicateTemplate('+t.id+')">複製</button>' : '')
                + '</td></tr>';
         });
         $('#tplBody').html(h || '<tr><td colspan="7" style="text-align:center;color:#8a6d45;padding:10px;">尚未建立任何模板</td></tr>');
     });
 }
 function deptName(id){ var d=(META.departments||[]).find(function(x){ return String(x.id)===String(id); }); return d?esc(d.name):''; }
+/* 複製模板（2026-08-14 新增）：設定＋目前生效的項次欄位定義一起複製成新模板，名稱自動加「(複製)」；
+   AS文件綁定不複製(每個模板要各自獨立綁)，複製完直接開「編輯設定」讓管理員改名/綁AS文件。 */
+function duplicateTemplate(id){
+    var t = TEMPLATES.find(function(x){ return String(x.id)===String(id); });
+    if (!confirm('確定要複製模板「'+(t?t.name:'')+'」？會複製設定與目前的項次欄位定義，AS文件綁定需另外設定。')) return;
+    $.post(API, {action:'template_duplicate', csrf:META.csrf, id:id}, function(res){
+        if (!res.ok){ alert(res.error||'複製失敗'); return; }
+        loadTemplates();
+        openSettingModal(res.id);
+    }, 'json');
+}
 
 /* ============ 模板設定 ============ */
 function openSettingModal(id){
