@@ -292,13 +292,15 @@ function pfmea_ref_requirement_list_exact(PDO $db, int $functionOptionId, int $p
 
 function pfmea_ref_control_options(PDO $db): array {
     $rows = $db->query("SELECT id, option_type, option_text FROM pfmea_control_option WHERE is_active=1 ORDER BY option_type, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
-    $out = ['prevention'=>[], 'detection'=>[]];
+    $out = ['prevention'=>[], 'detection'=>[], 'action'=>[]];
     foreach ($rows as $r) { $out[$r['option_type']][] = $r; }
     return $out;
 }
 
+/** option_type沿用同一張表同一套CRUD：prevention/detection(既有控制預防/控制偵測)、
+ * action(2026-08-14使用者要求新增的建議措施樣板句庫) */
 function pfmea_ref_control_option_add(PDO $db, string $type, string $text, int $uid, string $uname): int {
-    $type = $type === 'detection' ? 'detection' : 'prevention';
+    $type = in_array($type, ['detection','action'], true) ? $type : 'prevention';
     $text = trim($text);
     $st = $db->prepare("SELECT id FROM pfmea_control_option WHERE option_type=? AND option_text=? LIMIT 1");
     $st->execute([$type, $text]);
