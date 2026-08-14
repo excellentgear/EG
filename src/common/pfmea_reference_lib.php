@@ -6,6 +6,9 @@
  * 資料表定義見 pfmea_lib.php ensure_schema()。
  */
 
+/** 「料號＋製程代號」複合鍵的分隔字元，需與 views/TD/pfmea.php 前端的 PART_PROCESS_SEP 完全一致 */
+if (!defined('PFMEA_PART_PROCESS_SEP')) define('PFMEA_PART_PROCESS_SEP', '｜');
+
 /** 填表用：只回傳管理員已開放使用(is_enabled=1)的製程，避免全公司205筆製程一次全部塞進下拉選單 */
 /** 幾何公差／特殊項目符號清單（2026-08-14使用者要求，設定畫面「對應的目標值」輸入框符號按鈕用）：
  * 直接沿用QC模組既有的 qc_special_characteristic 字典表(views/QC/inspection_standard_setting.php
@@ -334,6 +337,14 @@ function pfmea_requirement_option_rebind(PDO $db, int $id, int $partDId, string 
        ->execute([$partDId ?: null, $partDId ? null : ($partText !== '' ? $partText : null), $id]);
 }
 
+/** 要求總覽可編輯要求文字本身（2026-08-14使用者反映：先前只能重新綁定料號／刪除，完全無法改
+ * 文字本身內容，如xlsm匯入時OCR/謄打有誤要能直接修正）。 */
+function pfmea_requirement_option_update_text(PDO $db, int $id, string $text): void {
+    $text = trim($text);
+    if ($text === '') return;
+    $db->prepare("UPDATE pfmea_requirement_option SET requirement_text=? WHERE id=?")->execute([$text, $id]);
+}
+
 function pfmea_ref_control_options(PDO $db): array {
     $rows = $db->query("SELECT id, option_type, option_text FROM pfmea_control_option WHERE is_active=1 ORDER BY option_type, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     $out = ['prevention'=>[], 'detection'=>[], 'action'=>[]];
@@ -463,7 +474,47 @@ function pfmea_field_link_distinct_sources(PDO $db, string $sourceField, string 
                          FROM pfmea_field_link WHERE source_field=? AND target_field=? AND is_active=1
                          GROUP BY source_value ORDER BY source_value");
     $st->execute([$sourceField, $targetField]);
-    return $st->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if ($sourceField !== 'part_process') return $rows;
+    // 「料號＋製程代號」同時也是「要求」(pfmea_requirement_option)天然的主鍵，使用者明確指出
+    // 兩者本來就是同一份資料（同一個料號+製程底下，圖面要求跟要求是同一件事的兩個欄位），這裡
+    // 合併兩邊已設定的組合：只要該料號+製程在「要求」有資料，即使還沒設定過圖面要求(field_link)
+    // 也要能在這個清單看到並可以點進去補設定，preview一併附上要求內容方便對照
+    // （2026-08-14使用者要求：篩選料號時兩邊要顯示同一份資料、有綁定料號要同時列在這個清單內）。
+    $byValue = [];
+    foreach ($rows as $r) { $byValue[$r['value']] = $r; }
+    $reqRows = $db->query("SELECT r.requirement_text, r.part_d_id, r.part_no_text, p.process_code
+                            FROM pfmea_requirement_option r JOIN pfmea_process p ON p.id=r.process_id
+                            WHERE r.function_option_id IS NULL AND r.is_active=1
+                              AND (r.part_d_id IS NOT NULL OR (r.part_no_text IS NOT NULL AND r.part_no_text<>''))")
+                  ->fetchAll(PDO::FETCH_ASSOC);
+    if ($reqRows) {
+        $partIds = array_values(array_unique(array_filter(array_column($reqRows, 'part_d_id'))));
+        $partLabels = [];
+        if ($partIds) {
+            $in = implode(',', array_fill(0, count($partIds), '?'));
+            $ps = $db->prepare("SELECT d_id, D_Setting_Id FROM d_setting WHERE d_id IN ($in)");
+            $ps->execute($partIds);
+            foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $p) { $partLabels[$p['d_id']] = $p['D_Setting_Id']; }
+        }
+        $reqTextsByCombo = [];
+        foreach ($reqRows as $r) {
+            $partStr = $r['part_d_id'] ? ($partLabels[$r['part_d_id']] ?? ('#'.$r['part_d_id'])) : $r['part_no_text'];
+            if ($partStr === null || $partStr === '') continue;
+            $combo = $partStr . PFMEA_PART_PROCESS_SEP . $r['process_code'];
+            $reqTextsByCombo[$combo][] = $r['requirement_text'];
+        }
+        foreach ($reqTextsByCombo as $combo => $texts) {
+            $reqPreview = '要求：'.implode('、', array_unique($texts));
+            if (isset($byValue[$combo])) {
+                $byValue[$combo]['preview'] = ($byValue[$combo]['preview'] !== '' ? $byValue[$combo]['preview'].'／' : '').$reqPreview;
+            } else {
+                $byValue[$combo] = ['value'=>$combo, 'preview'=>$reqPreview];
+            }
+        }
+    }
+    ksort($byValue, SORT_STRING | SORT_FLAG_CASE);
+    return array_values($byValue);
 }
 
 /** 設定畫面「潛在失效模式」來源值候選清單：只看已經設定過對應值的來源會漏掉「已經在製程底下建立，
