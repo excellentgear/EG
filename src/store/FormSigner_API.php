@@ -224,7 +224,14 @@ case 'asdoc_save': {
 case 'case_list': {
     $tid = (int)($_GET['template_id'] ?? 0);
     $onlyMine = $perms['canViewAll'] ? null : $uid;
-    jout(['cases'=>fsd_case_list($db, $tid, $onlyMine)]);
+    $cases = fsd_case_list($db, $tid, $onlyMine);
+    foreach ($cases as &$c) {
+        if (in_array($c['status'], ['draft', 'void'], true)) continue; // 尚未送出/已刪除不需要進度摘要
+        $schema = fsd_case_schema($db, $c);
+        $c['progress'] = fsd_case_progress_chips($db, $c, $schema, fsd_case_responses($db, (int)$c['id']));
+    }
+    unset($c);
+    jout(['cases'=>$cases]);
 }
 
 case 'case_get': {
@@ -239,7 +246,7 @@ case 'case_get': {
         foreach ($schema['stages'] ?? [] as $s) if ((int)$s['seq'] === (int)$case['current_stage_seq']) { $stage = $s; break; }
         $isPending = false;
         if ($stage) foreach ($stage['signers'] as $sg) {
-            $r = fsd_resolve_signer($db, $sg, (int)$case['applicant_id']);
+            $r = fsd_resolve_signer($db, $sg, $case);
             if ($r && (int)$r['id'] === $uid) { $isPending = true; break; }
         }
         if (!$isPending) jerr('無權檢視他人建立的案件', 403);
@@ -260,7 +267,7 @@ case 'case_get': {
                 // 決策階段(決定型/線性)：只有「目前輪到的那一位」能決策，不是整關任何一位槽位成員都能決
                 $pendingSg = fsd_case_decision_next_pending_signer($db, $id, (int)$case['current_stage_seq'], $curStage);
                 if ($pendingSg) {
-                    $r = fsd_resolve_signer($db, $pendingSg, (int)$case['applicant_id']);
+                    $r = fsd_resolve_signer($db, $pendingSg, $case);
                     if ($r && (int)$r['id'] === $uid) $canDecision = true;
                 }
             }
@@ -273,7 +280,7 @@ case 'case_get': {
         'can_advisory_respond'=>$canAdvisory, 'can_decision_respond'=>$canDecision,
         'can_edit_fields'=>$case['status']==='draft' && ($isOwner || $perms['canAdmin']),
         'can_delete_draft'=>$case['status']==='draft' && ($isOwner || $perms['canAdmin']),
-        'can_delete_hard'=>$canDeleteHard, 'can_delete_soft'=>$canDeleteSoft,
+        'can_delete_hard'=>$canDeleteHard, 'can_delete_soft'=>$canDeleteSoft, 'can_set_filler'=>$uid === 1,
         'pages'=>fsd_case_pages_get($db, $id), 'fields'=>fsd_case_field_list($db, $id),
         'field_whitelist'=>array_keys(fsd_case_field_whitelist($db, $case)),
         'as_doc_no'=>fsd_asdoc_no_display($db, (int)$case['template_id'], $case['business_date']),
@@ -324,7 +331,7 @@ case 'case_file': {
         foreach ($schema['stages'] ?? [] as $s) if ((int)$s['seq'] === (int)$case['current_stage_seq']) { $stage = $s; break; }
         $isPending = false;
         if ($stage) foreach ($stage['signers'] as $sg) {
-            $r = fsd_resolve_signer($db, $sg, (int)$case['applicant_id']);
+            $r = fsd_resolve_signer($db, $sg, $case);
             if ($r && (int)$r['id'] === $uid) { $isPending = true; break; }
         }
         if (!$isPending) jerr('無權檢視此檔案', 403);
@@ -456,6 +463,17 @@ case 'decision_respond': {
     $r = fsd_case_decision_respond($db, $id, $uid, $uname, $decision, $note ?: null);
     if (!$r['ok']) jerr($r['msg']);
     jout(['status'=>$r['status']]);
+}
+
+/** 事後回改填表人：僅超級管理員(id=1)，比照ai-rules/21業務日期回改精神，一般人不可竄改簽核解析基準。 */
+case 'case_set_filler': {
+    fsd_need_csrf();
+    $id = (int)($_POST['case_id'] ?? 0);
+    $fillerId = (int)($_POST['filler_id'] ?? 0);
+    if (!$fillerId) jerr('請選擇填表人');
+    $r = fsd_case_set_filler($db, $id, $uid, $fillerId);
+    if (!$r['ok']) jerr($r['msg']);
+    jout($r);
 }
 
 case 'case_urge': {

@@ -27,7 +27,7 @@ require_once __DIR__ . '/approval_lib.php';
 require_once __DIR__ . '/delegate_lib.php';
 require_once __DIR__ . '/org_role_lib.php';
 
-const FSD_SIGNER_MODES = ['user', 'dept_auto_manager', 'submitter_supervisor', 'top_approver'];
+const FSD_SIGNER_MODES = ['user', 'dept_auto_manager', 'submitter_supervisor', 'top_approver', 'filler'];
 
 const FSD_FEATURES = [
     ['code' => 'fsd_view',          'group' => 'view', 'label' => '檢閱案件列表（沒勾也看得到自己建立的案件）'],
@@ -113,9 +113,26 @@ function fsd_field_min_frac(array $page, ?array $stampSchema = null): array {
 
 /* ============================================================ 槽位解析 ============================================================ */
 
-/** 依 mode 解析出「恰好一人」（或 null）。純解析，不做 SoD 判斷（SoD 由呼叫端比對 submitterUid 處理）。 */
-function fsd_resolve_signer(PDO $db, array $signer, int $submitterUid): ?array {
+/** 某人主要部門id(user_department_position_map.is_main=1)；查無回null。 */
+function fsd_user_main_dept_id(PDO $db, int $uid): ?int {
+    if (!$uid) return null;
+    $st = $db->prepare("SELECT department_id FROM user_department_position_map WHERE user_id=? AND is_main=1 LIMIT 1");
+    $st->execute([$uid]);
+    $v = $st->fetchColumn();
+    return $v ? (int)$v : null;
+}
+
+/**
+ * 依 mode 解析出「恰好一人」（或 null）。純解析，不做 SoD 判斷（SoD 由呼叫端比對 fillerUid/applicantUid 處理）。
+ * $case 需含 applicant_id；filler_id/filler_name 有給則用，沒有(舊資料/呼叫端未帶)則退回 applicant 本人
+ * （使用者2026-08-14明確要求新增「填表人」概念：管理員代為建立案件時，簽核解析基準要以填表人為準，
+ *   不是技術上按下建立的人）。
+ */
+function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
     $mode = $signer['mode'] ?? '';
+    $applicantUid = (int)($case['applicant_id'] ?? 0);
+    $fillerUid = (int)($case['filler_id'] ?? $applicantUid) ?: $applicantUid;
+    $fillerName = (string)($case['filler_name'] ?? $case['applicant_name'] ?? '');
     switch ($mode) {
         case 'user':
             $uid = (int)($signer['user_id'] ?? 0);
@@ -126,11 +143,12 @@ function fsd_resolve_signer(PDO $db, array $signer, int $submitterUid): ?array {
             return $r ? ['id'=>(int)$r['id'], 'user_cname'=>$r['user_cname']] : null;
         case 'dept_auto_manager':
             $deptId = (int)($signer['dept_id'] ?? 0);
+            if (!$deptId) $deptId = (int)(fsd_user_main_dept_id($db, $fillerUid) ?? 0); // 未指定部門→用填表人自己的部門(使用者明確要求)
             if (!$deptId) return null;
             $m = eg_org_dept_manager($db, $deptId);
             return $m ? ['id'=>(int)$m['id'], 'user_cname'=>$m['user_cname']] : null;
         case 'submitter_supervisor':
-            $supId = eg_resolve_supervisor($db, $submitterUid);
+            $supId = eg_resolve_supervisor($db, $applicantUid);
             if (!$supId) return null;
             $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
             $st->execute([$supId]);
@@ -139,15 +157,23 @@ function fsd_resolve_signer(PDO $db, array $signer, int $submitterUid): ?array {
         case 'top_approver':
             $u = eg_org_user($db, 'top_approver');
             return $u ? ['id'=>(int)$u['id'], 'user_cname'=>$u['user_cname']] : null;
+        case 'filler':
+            if (!$fillerUid) return null;
+            $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+            $st->execute([$fillerUid]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            return $r ? ['id'=>(int)$r['id'], 'user_cname'=>$r['user_cname']] : ($fillerName !== '' ? ['id'=>$fillerUid, 'user_cname'=>$fillerName] : null);
         default:
             return null;
     }
 }
 
-/** 解析＋強制SoD：結果等於送出人本人視同該槽位無結果(該階段免簽略過)。回傳 ['user'=>arr|null,'skipped_sod'=>bool] */
-function fsd_resolve_signer_for_case(PDO $db, array $signer, int $submitterUid): array {
-    $u = fsd_resolve_signer($db, $signer, $submitterUid);
-    if ($u && (int)$u['id'] === $submitterUid) return ['user'=>null, 'skipped_sod'=>true];
+/** 解析＋強制SoD：結果等於填表人或送出人本人視同該槽位無結果(該階段免簽略過)。回傳 ['user'=>arr|null,'skipped_sod'=>bool] */
+function fsd_resolve_signer_for_case(PDO $db, array $signer, array $case): array {
+    $u = fsd_resolve_signer($db, $signer, $case);
+    $applicantUid = (int)($case['applicant_id'] ?? 0);
+    $fillerUid = (int)($case['filler_id'] ?? $applicantUid) ?: $applicantUid;
+    if ($u && ((int)$u['id'] === $applicantUid || (int)$u['id'] === $fillerUid)) return ['user'=>null, 'skipped_sod'=>true];
     return ['user'=>$u, 'skipped_sod'=>false];
 }
 
@@ -470,6 +496,35 @@ function fsd_case_responses(PDO $db, int $caseId): array {
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
+/** 案件進度摘要(供列表顯示簽核順序與狀態用，2026-08-14使用者明確要求)：依樣板快照stages順序，
+ *  每階段列出各槽位「標籤(顯示用)＋已解析姓名＋狀態」；決策階段(線性)槽位間視覺上以箭頭串接，
+ *  意見階段(並簽)槽位間並列無箭頭；階段與階段之間一律視為串接(本系統各階段本來就是逐關推進)。 */
+function fsd_case_progress_chips(PDO $db, array $case, array $schema, array $responses): array {
+    $bySlot = [];
+    foreach ($responses as $r) $bySlot[$r['slot_key']] = $r;
+    $modeLabel = ['user'=>'固定人員', 'dept_auto_manager'=>'部門主管', 'submitter_supervisor'=>'上一階主管', 'top_approver'=>'最高決策者', 'filler'=>'填表人'];
+    $stages = $schema['stages'] ?? [];
+    usort($stages, function($a, $b) { return ($a['seq'] ?? 0) <=> ($b['seq'] ?? 0); });
+    $out = [];
+    foreach ($stages as $s) {
+        $signers = [];
+        foreach ($s['signers'] ?? [] as $sg) {
+            $r = $bySlot[$sg['slot_key']] ?? null;
+            $label = $sg['label'] !== '' && $sg['label'] !== null ? $sg['label'] : ($modeLabel[$sg['mode']] ?? $sg['mode']);
+            $status = 'not_started'; $name = '';
+            if ($r) {
+                $name = $r['resolved_user_name'] ?? '';
+                if ($r['decision'] === 'skipped_sod') $status = 'skipped';
+                elseif ($r['decision'] === null) $status = 'pending';
+                else $status = 'done';
+            }
+            $signers[] = ['label'=>$label, 'name'=>$name, 'status'=>$status];
+        }
+        $out[] = ['seq'=>(int)($s['seq'] ?? 0), 'stage_type'=>$s['stage_type'] ?? 'advisory', 'name'=>$s['name'] ?? '', 'signers'=>$signers];
+    }
+    return $out;
+}
+
 /* -------- 通知（比照 rvf_notify） -------- */
 
 function fsd_notify(PDO $db, int $refId, array $toUids, string $title, string $content, int $fromUid, string $refType, string $mode = 'sign'): int {
@@ -555,7 +610,7 @@ function fsd_case_decision_advance(PDO $db, array $case, array $schema, int $sta
             // 這一關(含所有槽位)都處理完了：真的推進到下一關或整個案件完成(current_stage_seq已由呼叫端設為本關)
             return fsd_case_go_next_stage($db, $case, $schema);
         }
-        $r = fsd_resolve_signer_for_case($db, $sg, $submitterUid);
+        $r = fsd_resolve_signer_for_case($db, $sg, $case);
         if ($r['skipped_sod'] || !$r['user']) {
             // SoD自動迴避，或解析不到人(部門無主管等，比照as_form_builder已知限制)：這一位跳過，繼續看下一位
             $db->prepare("INSERT IGNORE INTO fsd_case_response (case_id,stage_seq,slot_key,decision) VALUES (?,?,?, 'skipped_sod')")
@@ -578,7 +633,7 @@ function fsd_case_decision_auto_sign_all(PDO $db, array $case, array $stage, int
     $cumOffset = 0;
     $anySigned = false;
     foreach ($stage['signers'] as $sg) {
-        $r = fsd_resolve_signer_for_case($db, $sg, $submitterUid);
+        $r = fsd_resolve_signer_for_case($db, $sg, $case);
         if ($r['skipped_sod'] || !$r['user']) {
             $db->prepare("INSERT IGNORE INTO fsd_case_response (case_id,stage_seq,slot_key,decision) VALUES (?,?,?, 'skipped_sod')")
                ->execute([$case['id'], $stageSeq, $sg['slot_key']]);
@@ -606,7 +661,7 @@ function fsd_case_open_stage(PDO $db, array $case, array $schema, int $stageSeq)
     if ($stage['stage_type'] === 'advisory') {
         $activeSigners = []; // ['slot_key'=>, 'user'=>]
         foreach ($stage['signers'] as $sg) {
-            $r = fsd_resolve_signer_for_case($db, $sg, $submitterUid);
+            $r = fsd_resolve_signer_for_case($db, $sg, $case);
             if ($r['skipped_sod']) {
                 $db->prepare("INSERT IGNORE INTO fsd_case_response (case_id,stage_seq,slot_key,decision) VALUES (?,?,?, 'skipped_sod')")
                    ->execute([$case['id'], $stageSeq, $sg['slot_key']]);
@@ -683,10 +738,23 @@ function fsd_case_create_draft(PDO $db, int $templateId, int $uid, string $uname
     if ((int)$tpl['published_version'] < 1) return ['ok'=>false, 'msg'=>'此樣板尚未發布，請聯絡管理員'];
     if ($tpl['status'] !== 'active') return ['ok'=>false, 'msg'=>'此樣板已停用'];
     $bizDate = $bizDate ?: date('Y-m-d');
-    $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,business_date,status,current_stage_seq)
-                  VALUES (?,?,?,?,?,?,?,?,'draft',0)")
-       ->execute([$templateId, (int)$tpl['published_version'], $fileType ?: null, $fileName ?: null, $title ?: $tpl['name'], $uid, $uname, $bizDate]);
+    $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,status,current_stage_seq)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,'draft',0)")
+       ->execute([$templateId, (int)$tpl['published_version'], $fileType ?: null, $fileName ?: null, $title ?: $tpl['name'], $uid, $uname, $uid, $uname, $bizDate]);
     return ['ok'=>true, 'id'=>(int)$db->lastInsertId()];
+}
+
+/** 事後回改填表人(僅超級管理員 id=1；比照 ai-rules/21 業務日期回改精神，一般人不可竄改簽核解析基準)。 */
+function fsd_case_set_filler(PDO $db, int $caseId, int $byUid, int $newFillerId): array {
+    if ($byUid !== 1) return ['ok'=>false, 'msg'=>'僅超級管理員可設定填表人'];
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+    $st->execute([$newFillerId]);
+    $u = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$u) return ['ok'=>false, 'msg'=>'找不到此使用者或該使用者已離職'];
+    $db->prepare("UPDATE fsd_case SET filler_id=?,filler_name=?,updated_at=NOW() WHERE id=?")->execute([$u['id'], $u['user_cname'], $caseId]);
+    return ['ok'=>true, 'filler_id'=>(int)$u['id'], 'filler_name'=>$u['user_cname']];
 }
 
 /** 草稿階段允許重新上傳/更換文件(換一份重新框選，之前框選的位置一併清空，避免對到舊文件版面)。 */
@@ -903,7 +971,7 @@ function fsd_case_decision_respond(PDO $db, int $caseId, int $uid, string $uname
     if (!$stage) return ['ok'=>false, 'msg'=>'找不到此階段'];
     $sg = fsd_case_decision_next_pending_signer($db, $caseId, $stageSeq, $stage);
     if (!$sg) return ['ok'=>false, 'msg'=>'目前沒有待您決策的項目'];
-    $resolved = fsd_resolve_signer($db, $sg, (int)$case['applicant_id']);
+    $resolved = fsd_resolve_signer($db, $sg, $case);
     if (!$resolved || (int)$resolved['id'] !== $uid) return ['ok'=>false, 'msg'=>'您不是此案件目前這一位的決策人'];
     $r = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, $decision, $note);
     if (!$r['success']) return ['ok'=>false, 'msg'=>$r['message']];
@@ -941,7 +1009,7 @@ function fsd_case_urge(PDO $db, int $caseId, int $byUid): array {
         if ($rec && $rec['status'] === 'pending') {
             $pendingSg = fsd_case_decision_next_pending_signer($db, $caseId, $stageSeq, $stage);
             if ($pendingSg) {
-                $r = fsd_resolve_signer($db, $pendingSg, (int)$case['applicant_id']);
+                $r = fsd_resolve_signer($db, $pendingSg, $case);
                 if ($r) $uids[] = (int)$r['id'];
             }
         }

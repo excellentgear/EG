@@ -433,7 +433,7 @@ function submitStampTpl(){
 }
 
 /* -------- 階段/槽位設定 -------- */
-var SIGNER_MODE_LABEL = {user:'固定人員', dept_auto_manager:'部門自動主管', submitter_supervisor:'送出者上一階主管', top_approver:'全站最高決策者'};
+var SIGNER_MODE_LABEL = {user:'固定人員', dept_auto_manager:'部門自動主管', submitter_supervisor:'送出者上一階主管', top_approver:'全站最高決策者', filler:'填表人'};
 function addStage(){ STAGES.push({stage_type:'advisory', name:'第'+(STAGES.length+1)+'關', auto_sign:0, signers:[]}); renderStages(); }
 function delStage(i){ if (!confirm('確定刪除此階段？')) return; STAGES.splice(i,1); renderStages(); }
 function stageEdit(i,k,v){ STAGES[i][k]=v; }
@@ -441,7 +441,7 @@ function addSigner(si){ STAGES[si].signers = STAGES[si].signers||[]; STAGES[si].
 function delSigner(si,gi){ STAGES[si].signers.splice(gi,1); renderStages(); }
 function signerEdit(si,gi,k,v){ STAGES[si].signers[gi][k]=v; }
 function renderStages(){
-    var deptOpts = '<option value="">選部門…</option>' + (META.departments||[]).map(function(d){ return '<option value="'+d.id+'">'+esc(d.name)+'</option>'; }).join('');
+    var deptOpts = '<option value="">（不指定＝以填表人所屬部門自動判斷）</option>' + (META.departments||[]).map(function(d){ return '<option value="'+d.id+'">'+esc(d.name)+'</option>'; }).join('');
     var userOpts = '<option value="">選人員…</option>' + (META.people||[]).map(function(p){ return '<option value="'+p.id+'">'+esc(p.display)+'</option>'; }).join('');
     var h = '';
     STAGES.forEach(function(s, si){

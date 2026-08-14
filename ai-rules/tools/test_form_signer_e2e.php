@@ -351,8 +351,69 @@ if ($stampTplRow) {
     echo "  （系統無任何啟用中的圖章模板，跳過本節）\n";
 }
 
+echo "\n== 14. 填表人(filler)功能：來源解析/部門自動主管fallback/強制SoD/僅超管可回改(2026-08-14使用者明確要求) ==\n";
+$tplId5 = fsd_template_create($db, '端到端測試模板5(填表人)', 'image', 'e2e_test5.png', 1, 'CLI測試');
+fsd_template_pages_save($db, $tplId5, [['page_no'=>1, 'width_pt'=>595, 'height_pt'=>842]]);
+$fillerRow = $db->query("SELECT m.user_id, m.department_id, u.user_cname FROM user_department_position_map m
+    JOIN user u ON u.id=m.user_id WHERE m.is_main=1 AND m.user_id<>$SUBMITTER AND COALESCE(u.state,1) NOT IN (0,90) LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+fsd_stages_save($db, $tplId5, [
+    ['stage_type'=>'decision', 'name'=>'填表人決策', 'auto_sign'=>0, 'signers'=>[
+        ['mode'=>'filler', 'label'=>'填表人本人'],
+    ]],
+    ['stage_type'=>'decision', 'name'=>'部門自動主管(未指定部門)', 'auto_sign'=>0, 'signers'=>[
+        ['mode'=>'dept_auto_manager', 'dept_id'=>0, 'label'=>'填表人部門主管'],
+    ]],
+]);
+fsd_template_schema_publish($db, $tplId5, 'CLI測試');
+
+$caseId9 = createAndSubmitCase($db, $tplId5, $SUBMITTER, $SUBMITTER_NAME, '填表人測試案', $minFrac);
+$case9 = fsd_case_get($db, $caseId9);
+chk('建立時filler預設=applicant(建立者本人)', (int)$case9['filler_id'] === $SUBMITTER && $case9['filler_name'] === $SUBMITTER_NAME);
+
+$denyResult = fsd_case_set_filler($db, $caseId9, $SUBMITTER, $U_A);
+chk('非超級管理員不可設定填表人', $denyResult['ok'] === false);
+
+if ($fillerRow) {
+    $setResult = fsd_case_set_filler($db, $caseId9, 1, (int)$fillerRow['user_id']);
+    chk('超級管理員(uid=1)可設定填表人', $setResult['ok'] === true);
+    $case9b = fsd_case_get($db, $caseId9);
+    chk('filler_id已更新為指定人員', (int)$case9b['filler_id'] === (int)$fillerRow['user_id']);
+
+    $schema9 = fsd_case_schema($db, $case9b);
+    $resolvedFiller = fsd_resolve_signer($db, $schema9['stages'][0]['signers'][0], $case9b);
+    chk('filler模式解析出的人＝填表人本人(非applicant)', $resolvedFiller && (int)$resolvedFiller['id'] === (int)$fillerRow['user_id']);
+
+    $expectMgr = eg_org_dept_manager($db, (int)$fillerRow['department_id']);
+    $resolvedDeptMgr = fsd_resolve_signer($db, $schema9['stages'][1]['signers'][0], $case9b);
+    if ($expectMgr) {
+        chk('部門自動主管未指定部門時,以填表人所屬部門自動判斷(非applicant部門)', $resolvedDeptMgr && (int)$resolvedDeptMgr['id'] === (int)$expectMgr['id']);
+    } else {
+        echo "  （填表人所屬部門查無主管，跳過此斷言）\n";
+    }
+} else {
+    echo "  （查無可用測試人員的部門主檔，跳過超管回改/部門fallback斷言）\n";
+}
+
+$caseId10 = createAndSubmitCase($db, $tplId5, $SUBMITTER, $SUBMITTER_NAME, '填表人SoD測試案', $minFrac);
+$responses10 = fsd_case_responses($db, $caseId10);
+chk('填表人=送出人本人時,filler模式槽位強制SoD自動略過', count(array_filter($responses10, function($x){ return $x['decision']==='skipped_sod'; })) >= 1);
+
+echo "\n== 15. 案件進度摘要(順序/並列簽核狀態,供列表顯示,2026-08-14使用者明確要求) ==\n";
+$schema6 = fsd_template_schema_at_version($db, $tplId4, (int)fsd_case_get($db, $caseId6)['template_version']);
+$progress6 = fsd_case_progress_chips($db, fsd_case_get($db, $caseId6), $schema6, fsd_case_responses($db, $caseId6));
+chk('決策鏈(2槽位)進度摘要階段數與樣板一致', count($progress6) === count($schema6['stages']));
+$decisionStageProg = null;
+foreach ($progress6 as $s) if ($s['stage_type'] === 'decision') { $decisionStageProg = $s; break; }
+chk('決策階段的槽位數量正確(線性2位)', $decisionStageProg && count($decisionStageProg['signers']) === 2);
+chk('已核准的槽位狀態標記為done', $decisionStageProg && $decisionStageProg['signers'][0]['status'] === 'done');
+// caseId9送出當下filler尚未被超管回改(=applicant)，filler模式槽位當場觸發SoD略過，驗證進度摘要正確標記為skipped
+$progress9 = fsd_case_progress_chips($db, fsd_case_get($db, $caseId9), fsd_case_schema($db, fsd_case_get($db, $caseId9)), fsd_case_responses($db, $caseId9));
+$fillerSlotProg = $progress9[0]['signers'][0] ?? null;
+chk('進度摘要正確標記SoD略過的槽位狀態為skipped', $fillerSlotProg && $fillerSlotProg['status'] === 'skipped');
+
 echo "\n========================================\n";
 echo "測試template_id=$tplId(核准案$caseId/駁回案$caseId2), template_id3=$tplId3(全自動案$caseId3), 軟刪復原案$caseId4\n";
 echo "template_id4=$tplId4(決策鏈: 手動$caseId6/駁回$caseId7/自動$caseId8)\n";
+echo "template_id5=$tplId5(填表人測試: $caseId9/SoD:$caseId10)\n";
 echo $fail === 0 ? "全部通過\n" : "$fail 項失敗\n";
 exit($fail === 0 ? 0 : 1);

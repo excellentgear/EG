@@ -54,6 +54,15 @@ $perms = fsd_perms($db, $fsdUser);
         .badge-approved { background:#dcefdc; color:#2e6b2e; }
         .badge-rejected { background:#f6d9d3; color:#a13a24; }
         .badge-void { background:#eee; color:#999; }
+        .prog-wrap { display:flex; flex-wrap:wrap; align-items:center; gap:2px; }
+        .prog-chip { display:inline-flex; align-items:center; gap:3px; padding:2px 8px; border-radius:14px; border:1px solid #D8BE93;
+            background:#FBF3E4; color:#7a5217; font-size:12px; white-space:nowrap; }
+        .prog-chip.done { background:#dcefdc; border-color:#8fc98f; color:#2e6b2e; }
+        .prog-chip.pending { background:#F0A24B; border-color:#c97f30; color:#5b3a1e; font-weight:bold; }
+        .prog-chip.skipped { background:#eee; border-color:#ddd; color:#999; }
+        .prog-chip.not_started { background:#fff; color:#b0a390; }
+        .prog-chip i.fa-check-circle { color:#2e6b2e; }
+        .prog-arrow { color:#c9a876; font-size:12px; margin:0 1px; }
         .fsd-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
         .fsd-modal { background:#fff; border-radius:8px; max-width:520px; margin:30px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
             max-height:90vh; display:flex; flex-direction:column; }
@@ -181,6 +190,8 @@ $perms = fsd_perms($db, $fsdUser);
                 <button id="btnBackList"><i class="fa fa-arrow-left"></i> 返回列表</button>
                 <b id="dtlTitle" style="margin-left:6px;"></b>
                 <span id="dtlStageInfo" style="margin-left:8px;color:#5b3a1e;font-size:12.5px;"></span>
+                <span id="dtlFillerInfo" style="margin-left:8px;color:#8a6d45;font-size:12.5px;"></span>
+                <button id="btnEditFiller" style="display:none;" onclick="openEditFiller()"><i class="fa fa-user-edit"></i> 設定填表人</button>
                 <button style="margin-left:auto;" id="btnUrge"><i class="fa fa-bell"></i> 催辦</button>
                 <button id="btnRestore" style="display:none;color:#2e6b2e;border-color:#7ab57a;"><i class="fa fa-undo"></i> 復原</button>
                 <button id="btnDeleteHard" class="btn-danger" style="display:none;"><i class="fa fa-trash"></i> 永久刪除</button>
@@ -276,6 +287,17 @@ $perms = fsd_perms($db, $fsdUser);
         <button class="b-ok" onclick="pwConfirm()">確認刪除</button></div>
 </div></div>
 
+<!-- 設定填表人 modal（僅超級管理員；填表人=表單實際歸屬者,簽核解析基準,通常由管理員代建案件後補設定） -->
+<div class="fsd-mask" id="fillerMask"><div class="fsd-modal">
+    <div class="m-head"><span>設定填表人</span><span class="m-close" onclick="closeMask('fillerMask')">✕</span></div>
+    <div class="m-body">
+        <label>填表人（表單實際歸屬者；簽核人來源選「填表人」或「部門自動主管」未指定部門時，即以此人為解析基準）</label>
+        <select id="fillerSel" data-eg-filter="輸入姓名篩選…"></select>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('fillerMask')">取消</button>
+        <button class="b-ok" onclick="submitEditFiller()">儲存</button></div>
+</div></div>
+
 <!-- 已刪除案件 modal（管理員） -->
 <div class="fsd-mask" id="deletedMask"><div class="fsd-modal wide">
     <div class="m-head"><span>已刪除案件（可復原）</span><span class="m-close" onclick="closeMask('deletedMask')">✕</span></div>
@@ -368,13 +390,31 @@ function loadTemplateOptionsForCreate(){
         $('#crTpl').html('<option value="">請選擇…</option>' + TEMPLATES.map(function(t){ return '<option value="'+t.id+'">'+esc(t.name)+'</option>'; }).join(''));
     });
 }
+/** 進度欄位：每個簽核槽位畫成一顆「按鈕」樣式的膠囊(如規格「()表示按鈕」)，已簽核加綠色勾勾圖示；
+ *  決策階段(線性)槽位間用箭頭串接(如：(審核 林雅婷)->(核准 陳俊宏))，意見階段(並簽)槽位間並列無箭頭；
+ *  不同階段之間一律視為串接(本系統各階段本來就是逐關推進，2026-08-14使用者明確要求)。 */
+function renderProgressChips(c){
+    if (!c.progress || !c.progress.length) return c.status==='draft' ? '<span style="color:#8a6d45;">待框選/送出</span>' : '—';
+    var parts = [];
+    c.progress.forEach(function(s, si){
+        var chips = (s.signers||[]).map(function(sg){
+            var cls = 'prog-chip ' + sg.status;
+            var icon = sg.status==='done' ? '<i class="fa fa-check-circle"></i> ' : (sg.status==='skipped' ? '<i class="fa fa-minus-circle"></i> ' : '');
+            var nameTxt = sg.name ? ' '+esc(sg.name) : '';
+            return '<span class="'+cls+'" title="'+esc(s.name)+'">'+icon+'('+esc(sg.label)+nameTxt+')</span>';
+        });
+        var innerJoiner = s.stage_type==='decision' ? '<span class="prog-arrow">→</span>' : ' ';
+        parts.push(chips.join(innerJoiner));
+    });
+    return '<div class="prog-wrap">' + parts.join('<span class="prog-arrow">→</span>') + '</div>';
+}
 function loadCases(){
     $.getJSON(API, {action:'case_list'}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         CASES = (res.cases||[]).filter(function(c){ return c.status !== 'void'; });
         var h = '';
         CASES.forEach(function(c){
-            var stageTxt = c.status==='in_progress' ? ('第'+c.current_stage_seq+'關') : (c.status==='draft' ? '待框選/送出' : '—');
+            var stageTxt = renderProgressChips(c);
             var isOwner = String(c.applicant_id)===String(META.uid);
             var actions = '';
             if (c.status === 'draft') {
@@ -512,6 +552,8 @@ function openCase(id){
         $('#btnDeleteHard').toggle(!!res.can_delete_hard);
         $('#btnDeleteSoft').toggle(!!res.can_delete_soft);
         $('#btnRestore').toggle(CUR_CASE.status==='void' && META.perms.canAdmin);
+        $('#dtlFillerInfo').text(CUR_CASE.filler_name && CUR_CASE.filler_name !== CUR_CASE.applicant_name ? ('填表人：'+CUR_CASE.filler_name) : '');
+        $('#btnEditFiller').toggle(!!res.can_set_filler);
         CUR_AS_DOC_NO = res.as_doc_no || '';
         CUR_CASE_PAGES = res.pages || []; // 案件自己上傳文件的頁面(不是CUR_SCHEMA.pages那份樣板參考頁!)，doPrint()量版面一定要用這份
         renderResponses();
@@ -568,6 +610,20 @@ function restoreFromList(id){
         if (!res.ok){ alert(res.error||'復原失敗'); return; }
         $('#btnDeletedList').click();
         loadCases();
+    }, 'json');
+}
+function openEditFiller(){
+    if (!CUR_CASE) return;
+    var opts = (META.people||[]).map(function(p){ return '<option value="'+p.id+'"'+(String(p.id)===String(CUR_CASE.filler_id)?' selected':'')+'>'+esc(p.display)+'</option>'; }).join('');
+    $('#fillerSel').html(opts);
+    openMask('fillerMask');
+}
+function submitEditFiller(){
+    var fid = $('#fillerSel').val();
+    if (!fid){ alert('請選擇填表人'); return; }
+    $.post(API, {action:'case_set_filler', csrf:META.csrf, case_id:CUR_CASE.id, filler_id:fid}, function(res){
+        if (!res.ok){ alert(res.error||'設定失敗'); return; }
+        closeMask('fillerMask'); openCase(CUR_CASE.id);
     }, 'json');
 }
 function submitAdvisory(decision){
