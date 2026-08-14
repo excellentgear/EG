@@ -38,6 +38,7 @@ $perms = fsd_perms($db, $fsdUser);
         .fsd-toolbar button { height:30px; font-size:13px; padding:0 12px; border:1px solid #D8BE93; border-radius:4px;
             background:#fff; color:#5b3a1e; cursor:pointer; }
         .fsd-toolbar .btn-warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        .btn-danger { color:#a13a24; border-color:#DD5138; }
         .page-help-btn { margin-left:auto; height:30px; font-size:13px; padding:0 14px; border:1px solid #D8BE93;
             border-radius:4px; background:#fff; color:#5b3a1e; cursor:pointer; }
         .help-doc h4 { font-size:14px; color:#8A5A2B; margin:10px 0 4px; }
@@ -279,7 +280,9 @@ function loadTemplates(){
                + '<td>'+(t.status==='active'?'<span class="tag-on">啟用</span>':'<span class="tag-off">停用</span>')+'</td>'
                + '<td>'
                + (META.perms.canAdmin ? '<button onclick="openDesigner('+t.id+')" style="margin-right:4px;">設計</button>' : '')
-               + (META.perms.canAdmin ? '<button onclick="toggleStatus('+t.id+',\''+t.status+'\')">'+(t.status==='active'?'停用':'啟用')+'</button>' : '')
+               + (META.perms.canAdmin ? '<button onclick="toggleStatus('+t.id+',\''+t.status+'\')" style="margin-right:4px;">'+(t.status==='active'?'停用':'啟用')+'</button>' : '')
+               + (META.perms.canAdmin && t.can_delete ? '<button class="btn-danger" onclick="deleteTpl('+t.id+')" title="從未被任何案件使用過,可直接刪除"><i class="fa fa-trash"></i> 刪除</button>' : '')
+               + (META.perms.canAdmin && !t.can_delete ? '<span style="color:#b0a390;font-size:11.5px;" title="已有案件使用過此樣板,無法刪除,只能停用">（已使用,不可刪除）</span>' : '')
                + '</td></tr>';
         });
         $('#tplBody').html(h || '<tr><td colspan="7" style="text-align:center;color:#8a6d45;padding:10px;">尚未上傳任何樣板</td></tr>');
@@ -288,6 +291,13 @@ function loadTemplates(){
 function toggleStatus(id, cur){
     $.post(API, {action:'template_set_status', csrf:META.csrf, id:id, status: cur==='active'?'inactive':'active'}, function(res){
         if (!res.ok){ alert(res.error||'操作失敗'); return; }
+        loadTemplates();
+    }, 'json');
+}
+function deleteTpl(id){
+    if (!confirm('確定要永久刪除此樣板？(僅限從未被任何案件使用過的樣板，此動作無法復原)')) return;
+    $.post(API, {action:'template_delete', csrf:META.csrf, id:id}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
         loadTemplates();
     }, 'json');
 }

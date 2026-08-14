@@ -137,6 +137,20 @@ case 'template_set_status': {
     jout(['template'=>fsd_template_get($db, $id)]);
 }
 
+/** 刪除樣板：僅限「從未被任何案件使用過」的樣板，已使用過的一律只能停用(2026-08-14使用者明確要求)。 */
+case 'template_delete': {
+    fsd_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可刪除樣板', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    $r = fsd_template_delete_unused($db, $id);
+    if (!$r['ok']) jerr($r['msg']);
+    if (!empty($r['file_name'])) {
+        $fp = fsd_attach_dir_safe($db) . $r['file_name'];
+        if (is_file($fp)) @unlink($fp);
+    }
+    jout([]);
+}
+
 case 'pages_save': {
     fsd_need_csrf();
     if (!$perms['canAdmin']) jerr('僅管理員可設定樣板', 403);

@@ -191,7 +191,11 @@ function fsd_asdoc_module(int $templateId): string { return 'fsd_tpl_' . $templa
 
 function fsd_template_list(PDO $db): array {
     $rows = $db->query("SELECT * FROM fsd_template ORDER BY (status='active') DESC, id DESC")->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($rows as &$r) $r['as_doc'] = eg_asdoc_get($db, fsd_asdoc_module((int)$r['id']));
+    $usedIds = array_flip(array_map('intval', $db->query("SELECT DISTINCT template_id FROM fsd_case")->fetchAll(PDO::FETCH_COLUMN)));
+    foreach ($rows as &$r) {
+        $r['as_doc'] = eg_asdoc_get($db, fsd_asdoc_module((int)$r['id']));
+        $r['can_delete'] = !isset($usedIds[(int)$r['id']]); // 從未被任何案件使用過才可刪除,已使用過只能停用
+    }
     return $rows;
 }
 
@@ -244,6 +248,33 @@ function fsd_template_rename(PDO $db, int $id, string $name, string $byName): vo
 function fsd_template_set_status(PDO $db, int $id, string $status, string $byName): void {
     $status = $status === 'inactive' ? 'inactive' : 'active';
     $db->prepare("UPDATE fsd_template SET status=?,updated_by=?,updated_at=NOW() WHERE id=?")->execute([$status, $byName, $id]);
+}
+
+/**
+ * 刪除「未使用」的樣板(從未被任何案件引用過)：已被引用的樣板一律只能停用不能刪除
+ * (2026-08-14使用者明確要求；案件已pin住樣板某個版本的schema快照，刪掉樣板會讓已存在案件的
+ * 合成文件/簽核歷史失去對照依據)。回傳['ok'=>bool,'msg'=>?string,'file_name'=>?string](供API刪實體檔用)。
+ */
+function fsd_template_delete_unused(PDO $db, int $id): array {
+    $t = fsd_template_get($db, $id);
+    if (!$t) return ['ok'=>false, 'msg'=>'找不到此樣板'];
+    $st = $db->prepare("SELECT COUNT(*) FROM fsd_case WHERE template_id=?");
+    $st->execute([$id]);
+    if ((int)$st->fetchColumn() > 0) return ['ok'=>false, 'msg'=>'此樣板已有案件使用過，只能停用不能刪除'];
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM fsd_field WHERE template_id=?")->execute([$id]);
+        $db->prepare("DELETE FROM fsd_stage_signer WHERE stage_id IN (SELECT id FROM fsd_stage WHERE template_id=?)")->execute([$id]);
+        $db->prepare("DELETE FROM fsd_stage WHERE template_id=?")->execute([$id]);
+        $db->prepare("DELETE FROM fsd_template_version WHERE template_id=?")->execute([$id]);
+        $db->prepare("DELETE FROM fsd_template_page WHERE template_id=?")->execute([$id]);
+        $db->prepare("DELETE FROM fsd_template WHERE id=?")->execute([$id]);
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        return ['ok'=>false, 'msg'=>'刪除失敗：' . $e->getMessage()];
+    }
+    return ['ok'=>true, 'file_name'=>$t['file_name']];
 }
 
 /** 頁面尺寸快照：整批覆蓋(前端上傳/量測完一次送齊；旋轉時前端重算width_pt/height_pt(90/270互換)後也走這支)。

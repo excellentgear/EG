@@ -439,6 +439,21 @@ $progress11 = fsd_case_progress_chips($db, fsd_case_get($db, $caseId11), fsd_cas
 $fillerSlotProg = $progress11[0]['signers'][0] ?? null;
 chk('進度摘要正確標記決策階段目前輪到的槽位狀態為pending(不是skipped)', $fillerSlotProg && $fillerSlotProg['status'] === 'pending');
 
+echo "\n== 16. 樣板刪除：未使用可刪除／已使用只能停用不能刪除(2026-08-14使用者明確要求) ==\n";
+$tplUnused = fsd_template_create($db, '端到端測試模板6(未使用可刪)', 'image', 'e2e_test6.png', 1, 'CLI測試');
+$listBeforeDel = fsd_template_list($db);
+$rowUnused = null; foreach ($listBeforeDel as $x) if ((int)$x['id'] === $tplUnused) { $rowUnused = $x; break; }
+chk('從未被案件使用的樣板can_delete=true', $rowUnused && $rowUnused['can_delete'] === true);
+$rowUsed = null; foreach ($listBeforeDel as $x) if ((int)$x['id'] === $tplId) { $rowUsed = $x; break; }
+chk('已有案件使用過的樣板can_delete=false', $rowUsed && $rowUsed['can_delete'] === false);
+$delUsed = fsd_template_delete_unused($db, $tplId);
+chk('已使用過的樣板拒絕刪除', $delUsed['ok'] === false);
+$stillThere = fsd_template_get($db, $tplId);
+chk('拒絕刪除後樣板仍存在', $stillThere !== null);
+$delUnused = fsd_template_delete_unused($db, $tplUnused);
+chk('未使用過的樣板刪除成功', $delUnused['ok'] === true);
+chk('刪除後查無此樣板', fsd_template_get($db, $tplUnused) === null);
+
 echo "\n========================================\n";
 echo "測試template_id=$tplId(核准案$caseId/駁回案$caseId2), template_id3=$tplId3(全自動案$caseId3), 軟刪復原案$caseId4\n";
 echo "template_id4=$tplId4(決策鏈: 手動$caseId6/駁回$caseId7/自動$caseId8)\n";
