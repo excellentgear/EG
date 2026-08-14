@@ -406,18 +406,31 @@ function fsd_auto_sign_decision(PDO $db, int $caseId, int $stageSeq, string $lev
     $db->prepare("UPDATE approval_record SET decided_at = LEAST(DATE_ADD(submitted_at, INTERVAL ? MINUTE), CONCAT(?, ' 23:59:59')) WHERE id=?")
        ->execute([$offsetMin, $bizDate, $aid]);
     $rec = eg_approval_latest($db, 'form_signer', $caseId, $level);
-    $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,reply_text,responded_at)
-                  VALUES (?,?,?,?,?, 'approved', '（系統自動簽核）', ?)")
+    $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,reply_text,responded_at)
+                  VALUES (?,?,?,?,?, 'approved', 1, '（系統自動簽核）', ?)")
        ->execute([$caseId, $stageSeq, $slotKey, (int)$signer['id'], $signer['user_cname'], $rec['decided_at'] ?? date('Y-m-d H:i:s')]);
 }
 
-/** 意見階段全體槽位自動同意(auto_sign開啟時)，每人各自隨機錯開5~30分鐘(比照決策自動簽核的鐵則精神)。 */
+/** 意見階段全體槽位自動同意(auto_sign開啟時)，每人各自隨機錯開5~30分鐘(比照決策自動簽核的鐵則精神)。
+ *  時間戳一律用DB NOW()+INTERVAL計算,不可用PHP time()/date()(PHP與DB時區可能差8小時，見as_form_builder記憶的跨模組教訓)。 */
 function fsd_auto_sign_advisory_slot(PDO $db, int $caseId, int $stageSeq, string $slotKey, array $signer, string $bizDate): void {
     $offsetMin = random_int(5, 30);
-    $at = date('Y-m-d H:i:s', min(strtotime($bizDate . ' 23:59:59'), time() + $offsetMin * 60));
-    $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,reply_text,responded_at)
-                  VALUES (?,?,?,?,?, 'agree', '（系統自動簽核）', ?)")
-       ->execute([$caseId, $stageSeq, $slotKey, (int)$signer['id'], $signer['user_cname'], $at]);
+    $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,reply_text,responded_at)
+                  VALUES (?,?,?,?,?, 'agree', 1, '（系統自動簽核）',
+                          LEAST(DATE_ADD(NOW(), INTERVAL ? MINUTE), CONCAT(?, ' 23:59:59')))")
+       ->execute([$caseId, $stageSeq, $slotKey, (int)$signer['id'], $signer['user_cname'], $offsetMin, $bizDate]);
+}
+
+/** 依檢視者權限清洗回應紀錄：「系統自動簽核」字樣(is_auto=1)只有管理員能看到，一般/唯讀使用者一律隱藏該筆回覆文字與自動簽核事實，
+ *  只保留姓名/決定/時間(看起來與真人簽核無異，2026-08-14使用者明確要求)。 */
+function fsd_sanitize_responses_for_viewer(array $responses, bool $isAdminViewer): array {
+    if ($isAdminViewer) return $responses;
+    foreach ($responses as &$r) {
+        if (!empty($r['is_auto'])) { $r['reply_text'] = null; }
+        unset($r['is_auto']);
+    }
+    unset($r);
+    return $responses;
 }
 
 /** 開啟指定階段(schema.stages 1-based索引)：解析槽位(含強制SoD)、建立placeholder/自動簽核/送出approval_record、發通知。 */
@@ -513,21 +526,188 @@ function fsd_case_go_next_stage(PDO $db, array $case, array $schema): array {
 
 /* -------- 建立/送出案件 -------- */
 
-function fsd_case_create(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate): array {
+/**
+ * 建立案件＝草稿：案件要自己上傳要簽核的文件(不是沿用樣板的檔案，樣板只提供欄位提示/白名單，
+ * 2026-08-14 使用者明確要求)。建立後停在 draft，前端接著要像樣板設計頁一樣把樣板已框選過的槽位
+ * (白名單，見 fsd_case_field_whitelist)拖放到這份自己上傳的文件上，才能「存草稿」或「儲存並送出」。
+ */
+function fsd_case_create_draft(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, string $fileType, string $fileName): array {
     $tpl = fsd_template_get($db, $templateId);
     if (!$tpl) return ['ok'=>false, 'msg'=>'找不到此樣板'];
     if ((int)$tpl['published_version'] < 1) return ['ok'=>false, 'msg'=>'此樣板尚未發布，請聯絡管理員'];
     if ($tpl['status'] !== 'active') return ['ok'=>false, 'msg'=>'此樣板已停用'];
     $bizDate = $bizDate ?: date('Y-m-d');
-    $db->prepare("INSERT INTO fsd_case (template_id,template_version,title,applicant_id,applicant_name,business_date,submitted_at,status,current_stage_seq)
-                  VALUES (?,?,?,?,?,?,NOW(),'in_progress',0)")
-       ->execute([$templateId, (int)$tpl['published_version'], $title ?: $tpl['name'], $uid, $uname, $bizDate]);
-    $caseId = (int)$db->lastInsertId();
+    $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,business_date,status,current_stage_seq)
+                  VALUES (?,?,?,?,?,?,?,?,'draft',0)")
+       ->execute([$templateId, (int)$tpl['published_version'], $fileType ?: null, $fileName ?: null, $title ?: $tpl['name'], $uid, $uname, $bizDate]);
+    return ['ok'=>true, 'id'=>(int)$db->lastInsertId()];
+}
+
+/** 草稿階段允許重新上傳/更換文件(換一份重新框選，之前框選的位置一併清空，避免對到舊文件版面)。 */
+function fsd_case_replace_file(PDO $db, int $caseId, string $fileType, string $fileName): array {
     $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可更換文件'];
+    $db->prepare("UPDATE fsd_case SET file_type=?,file_name=?,updated_at=NOW() WHERE id=?")->execute([$fileType, $fileName, $caseId]);
+    $db->prepare("DELETE FROM fsd_case_field WHERE case_id=?")->execute([$caseId]);
+    $db->prepare("DELETE FROM fsd_case_page WHERE case_id=?")->execute([$caseId]);
+    return ['ok'=>true];
+}
+
+function fsd_case_pages_save(PDO $db, int $caseId, array $pages): void {
+    $db->prepare("DELETE FROM fsd_case_page WHERE case_id=?")->execute([$caseId]);
+    $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt) VALUES (?,?,?,?)");
+    foreach ($pages as $p) $ins->execute([$caseId, (int)$p['page_no'], (float)$p['width_pt'], (float)$p['height_pt']]);
+}
+
+function fsd_case_pages_get(PDO $db, int $caseId): array {
+    $st = $db->prepare("SELECT * FROM fsd_case_page WHERE case_id=? ORDER BY page_no");
+    $st->execute([$caseId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 白名單：案件能拖放的欄位＝樣板本身已框選過的(slot_key,box_type)組合而已；樣板沒框選過的欄位案件也不會有。 */
+function fsd_case_field_whitelist(PDO $db, array $case): array {
+    $schema = fsd_case_schema($db, $case);
+    $out = [];
+    foreach ($schema['fields'] ?? [] as $f) $out[$f['slot_key'] . '_' . $f['box_type']] = true;
+    return $out;
+}
+
+function fsd_case_field_list(PDO $db, int $caseId): array {
+    $st = $db->prepare("SELECT * FROM fsd_case_field WHERE case_id=? ORDER BY page_no,id");
+    $st->execute([$caseId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 存一個案件框選區塊；只允許草稿狀態編輯；(slot_key,box_type) 必須在樣板白名單內；圖章框最小尺寸驗證同樣板規則。 */
+function fsd_case_field_save(PDO $db, int $caseId, array $f): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可調整框選'];
+    $slotKey = trim((string)($f['slot_key'] ?? ''));
+    $boxType = ($f['box_type'] ?? '') === 'reply' ? 'reply' : 'stamp';
+    $whitelist = fsd_case_field_whitelist($db, $case);
+    if (!$slotKey || !isset($whitelist[$slotKey . '_' . $boxType])) return ['ok'=>false, 'msg'=>'樣板未提供此欄位，無法框選（樣板本身沒有框選過這個位置）'];
+    $pageNo = (int)($f['page_no'] ?? 1);
+    $x = (float)($f['x'] ?? 0); $y = (float)($f['y'] ?? 0);
+    $w = (float)($f['w'] ?? 0); $h = (float)($f['h'] ?? 0);
+    if ($boxType === 'stamp') {
+        $pst = $db->prepare("SELECT width_pt,height_pt FROM fsd_case_page WHERE case_id=? AND page_no=?");
+        $pst->execute([$caseId, $pageNo]);
+        $page = $pst->fetch(PDO::FETCH_ASSOC);
+        if ($page) {
+            $min = fsd_field_min_frac($page);
+            if ($w < $min['min_w'] || $h < $min['min_h']) {
+                return ['ok'=>false, 'msg'=>sprintf('圖章框太小，至少需要頁面寬度%.1f%%、高度%.1f%%（比照全站列印圖章91px標準換算），請拖大一點', $min['min_w']*100, $min['min_h']*100)];
+            }
+        }
+    }
+    $dup = $db->prepare("SELECT id FROM fsd_case_field WHERE case_id=? AND slot_key=? AND box_type=?");
+    $dup->execute([$caseId, $slotKey, $boxType]);
+    $id = (int)($dup->fetchColumn() ?: 0);
+    if ($id) {
+        $db->prepare("UPDATE fsd_case_field SET page_no=?,x=?,y=?,w=?,h=? WHERE id=?")->execute([$pageNo, $x, $y, $w, $h, $id]);
+    } else {
+        $db->prepare("INSERT INTO fsd_case_field (case_id,slot_key,box_type,page_no,x,y,w,h) VALUES (?,?,?,?,?,?,?,?)")
+           ->execute([$caseId, $slotKey, $boxType, $pageNo, $x, $y, $w, $h]);
+        $id = (int)$db->lastInsertId();
+    }
+    return ['ok'=>true, 'id'=>$id, 'fields'=>fsd_case_field_list($db, $caseId)];
+}
+
+function fsd_case_field_delete(PDO $db, int $caseId, int $fieldId): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可調整框選'];
+    $db->prepare("DELETE FROM fsd_case_field WHERE id=? AND case_id=?")->execute([$fieldId, $caseId]);
+    return ['ok'=>true, 'fields'=>fsd_case_field_list($db, $caseId)];
+}
+
+/** 草稿→送出：轉 in_progress 並開始跑第1關（原本 fsd_case_create 送出部分抽出來，讓建立與送出分開兩步）。 */
+function fsd_case_submit(PDO $db, int $caseId, int $uid): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'此案件已送出，不可重複送出'];
+    if ((int)$case['applicant_id'] !== $uid) return ['ok'=>false, 'msg'=>'只有申請人本人可以送出'];
+    if (!$case['file_name']) return ['ok'=>false, 'msg'=>'請先上傳要簽核的文件'];
+    $db->prepare("UPDATE fsd_case SET status='in_progress',submitted_at=NOW(),updated_at=NOW() WHERE id=?")->execute([$caseId]);
+    $case['status'] = 'in_progress';
     $schema = fsd_case_schema($db, $case);
     $r = fsd_case_go_next_stage($db, $case, $schema);
     if (!$r['ok']) return $r;
-    return ['ok'=>true, 'id'=>$caseId];
+    return ['ok'=>true, 'status'=>$r['status'] ?? 'in_progress'];
+}
+
+/** 草稿刪除：申請人本人或管理員，什麼都還沒開始跑，直接硬刪不留紀錄。 */
+function fsd_case_delete_draft(PDO $db, int $caseId, int $uid, bool $isAdminOrCanAdmin): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'此案件已送出，請改用刪除功能（依權限走硬刪/軟刪流程）'];
+    if ((int)$case['applicant_id'] !== $uid && !$isAdminOrCanAdmin) return ['ok'=>false, 'msg'=>'只有申請人本人或管理員可以刪除'];
+    $db->prepare("DELETE FROM fsd_case_field WHERE case_id=?")->execute([$caseId]);
+    $db->prepare("DELETE FROM fsd_case_page WHERE case_id=?")->execute([$caseId]);
+    $db->prepare("DELETE FROM fsd_case WHERE id=?")->execute([$caseId]);
+    return ['ok'=>true];
+}
+
+/** 超級管理員(id=1)硬刪：任何狀態的案件都能刪，不寫刪除紀錄。呼叫端(API)自行驗證 $uid===1，這裡不重複驗證。 */
+function fsd_case_delete_hard(PDO $db, int $caseId): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    $db->prepare("DELETE FROM fsd_case_response WHERE case_id=?")->execute([$caseId]);
+    $db->prepare("DELETE FROM approval_record WHERE module='form_signer' AND entity_id=?")->execute([$caseId]);
+    $evIds = $db->prepare("SELECT id FROM live_event WHERE ref_type LIKE 'FSD_%' AND ref_id=?");
+    $evIds->execute([$caseId]);
+    $ids = array_map('intval', $evIds->fetchAll(PDO::FETCH_COLUMN));
+    if ($ids) {
+        $in = implode(',', $ids);
+        $db->exec("DELETE FROM live_event_target WHERE live_event_id IN ($in)");
+        $db->exec("DELETE FROM live_event WHERE id IN ($in)");
+    }
+    $db->prepare("DELETE FROM fsd_case_field WHERE case_id=?")->execute([$caseId]);
+    $db->prepare("DELETE FROM fsd_case_page WHERE case_id=?")->execute([$caseId]);
+    $db->prepare("DELETE FROM fsd_case_delete_log WHERE case_id=?")->execute([$caseId]);
+    $db->prepare("DELETE FROM fsd_case WHERE id=?")->execute([$caseId]);
+    return ['ok'=>true];
+}
+
+/** 一般管理員(有操作確認密碼)軟刪：轉 void 並記錄可復原；呼叫端(API)自行驗證操作確認密碼，這裡不重複驗證。 */
+function fsd_case_delete_soft(PDO $db, int $caseId, int $byUid, string $byName): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    if ($case['status'] === 'void') return ['ok'=>false, 'msg'=>'此案件已是刪除狀態'];
+    $db->prepare("INSERT INTO fsd_case_delete_log (case_id,prior_status,deleted_by,deleted_by_name) VALUES (?,?,?,?)")
+       ->execute([$caseId, $case['status'], $byUid, $byName]);
+    $db->prepare("UPDATE fsd_case SET status='void',updated_at=NOW() WHERE id=?")->execute([$caseId]);
+    return ['ok'=>true];
+}
+
+/** 復原軟刪：取回最近一筆尚未復原的刪除紀錄，把狀態改回去。 */
+function fsd_case_restore(PDO $db, int $caseId, int $byUid, string $byName): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    if ($case['status'] !== 'void') return ['ok'=>false, 'msg'=>'此案件不是刪除狀態'];
+    $st = $db->prepare("SELECT * FROM fsd_case_delete_log WHERE case_id=? AND restored_at IS NULL ORDER BY id DESC LIMIT 1");
+    $st->execute([$caseId]);
+    $log = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$log) return ['ok'=>false, 'msg'=>'找不到可復原的刪除紀錄(可能是超級管理員硬刪,硬刪不留紀錄無法復原)'];
+    $db->prepare("UPDATE fsd_case SET status=?,updated_at=NOW() WHERE id=?")->execute([$log['prior_status'], $caseId]);
+    $db->prepare("UPDATE fsd_case_delete_log SET restored_by=?,restored_by_name=?,restored_at=NOW() WHERE id=?")
+       ->execute([$byUid, $byName, $log['id']]);
+    return ['ok'=>true, 'status'=>$log['prior_status']];
+}
+
+/** 已刪除(void)案件清單，含最近一筆刪除紀錄，供管理員檢視/復原。 */
+function fsd_case_deleted_list(PDO $db): array {
+    $rows = $db->query("SELECT c.*, t.name AS template_name FROM fsd_case c JOIN fsd_template t ON t.id=c.template_id
+                        WHERE c.status='void' ORDER BY c.id DESC")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $st = $db->prepare("SELECT * FROM fsd_case_delete_log WHERE case_id=? AND restored_at IS NULL ORDER BY id DESC LIMIT 1");
+        $st->execute([$r['id']]);
+        $r['delete_log'] = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+    return $rows;
 }
 
 /** 意見階段回應：同意/不同意+回覆文字，沒有駁回動作、不卡關。 */

@@ -45,6 +45,22 @@ chk('階段數=2', count($stages) === 2);
 chk('第1關4槽位', count($stages[0]['signers']) === 4);
 chk('第2關1槽位', count($stages[1]['signers']) === 1);
 
+/** 建立一個已送出(in_progress)的案件：走完整草稿→上傳→框選(白名單全放)→送出流程，回傳case_id。供後面章節重複使用。 */
+function createAndSubmitCase(PDO $db, int $tplId, int $submitter, string $submitterName, string $title, array $minFrac): int {
+    $r = fsd_case_create_draft($db, $tplId, $submitter, $submitterName, $title, date('Y-m-d'), 'image', 'e2e_'.bin2hex(random_bytes(3)).'.png');
+    $caseId = $r['id'];
+    fsd_case_pages_save($db, $caseId, [['page_no'=>1, 'width_pt'=>595, 'height_pt'=>842]]);
+    $case = fsd_case_get($db, $caseId);
+    foreach (array_keys(fsd_case_field_whitelist($db, $case)) as $key) {
+        $slotKey = substr($key, 0, strrpos($key,'_')); $boxType = substr($key, strrpos($key,'_')+1);
+        $w = $boxType === 'stamp' ? $minFrac['min_w']+0.02 : 0.25;
+        $h = $boxType === 'stamp' ? $minFrac['min_h']+0.02 : 0.06;
+        fsd_case_field_save($db, $caseId, ['slot_key'=>$slotKey, 'box_type'=>$boxType, 'page_no'=>1, 'x'=>0.1, 'y'=>0.1, 'w'=>$w, 'h'=>$h]);
+    }
+    fsd_case_submit($db, $caseId, $submitter);
+    return $caseId;
+}
+
 echo "\n== 2. 框選區塊(圖章框最小尺寸驗證) ==\n";
 $slot1 = $stages[0]['signers'][0]['id']; // U_A
 $minFrac = fsd_field_min_frac(['width_pt'=>595, 'height_pt'=>842]);
@@ -72,10 +88,38 @@ $schema = fsd_template_schema_at_version($db, $tplId, 1);
 chk('schema含2階段', count($schema['stages']) === 2);
 chk('schema含6個框選(孤兒框已排除)', count($schema['fields']) === 6);
 
-echo "\n== 4. 建立案件(直接送出開始跑第1關) ==\n";
-$r = fsd_case_create($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '端到端測試案件', date('Y-m-d'));
-chk('建立案件成功: ' . ($r['msg'] ?? ''), $r['ok'] === true);
+echo "\n== 4. 建立案件草稿(自己上傳文件)+框選(白名單)+送出 ==\n";
+$r = fsd_case_create_draft($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '端到端測試案件', date('Y-m-d'), 'image', 'e2e_case_test.png');
+chk('建立案件草稿成功: ' . ($r['msg'] ?? ''), $r['ok'] === true);
 $caseId = $r['id'] ?? 0;
+$case = fsd_case_get($db, $caseId);
+chk('案件狀態draft', $case['status'] === 'draft');
+chk('案件檔名已存', $case['file_name'] === 'e2e_case_test.png');
+
+fsd_case_pages_save($db, $caseId, [['page_no'=>1, 'width_pt'=>595, 'height_pt'=>842]]);
+chk('案件頁面尺寸已存', count(fsd_case_pages_get($db, $caseId)) === 1);
+
+$whitelist = fsd_case_field_whitelist($db, $case);
+chk('白名單共6個(等同樣板已框選的6個)', count($whitelist) === 6);
+$badTry = fsd_case_field_save($db, $caseId, ['slot_key'=>'s2_g1', 'box_type'=>'reply', 'page_no'=>1, 'x'=>0.1, 'y'=>0.1, 'w'=>0.3, 'h'=>0.08]);
+chk('樣板沒框選過的欄位(決策階段回覆框)案件不可框選', $badTry['ok'] === false);
+foreach (array_keys($whitelist) as $key) {
+    list($slotKey, $boxType) = [substr($key, 0, strrpos($key,'_')), substr($key, strrpos($key,'_')+1)];
+    $w = $boxType === 'stamp' ? $minFrac['min_w']+0.02 : 0.25;
+    $h = $boxType === 'stamp' ? $minFrac['min_h']+0.02 : 0.06;
+    $fr = fsd_case_field_save($db, $caseId, ['slot_key'=>$slotKey, 'box_type'=>$boxType, 'page_no'=>1, 'x'=>0.1, 'y'=>0.1, 'w'=>$w, 'h'=>$h]);
+    if (!$fr['ok']) { chk('案件框選'.$key.'失敗: '.$fr['msg'], false); }
+}
+chk('案件框選共6個(白名單全部放好)', count(fsd_case_field_list($db, $caseId)) === 6);
+
+$badSubmit = null;
+$caseNoFields = fsd_case_create_draft($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '未上傳測試', date('Y-m-d'), '', '');
+$rNoFile = fsd_case_submit($db, $caseNoFields['id'], $SUBMITTER);
+chk('未上傳文件不可送出', $rNoFile['ok'] === false);
+$db->prepare("DELETE FROM fsd_case WHERE id=?")->execute([$caseNoFields['id']]);
+
+$rSubmit = fsd_case_submit($db, $caseId, $SUBMITTER);
+chk('送出成功: ' . ($rSubmit['msg'] ?? ''), $rSubmit['ok'] === true);
 $case = fsd_case_get($db, $caseId);
 chk('案件狀態in_progress', $case['status'] === 'in_progress');
 chk('目前在第1關', (int)$case['current_stage_seq'] === 1);
@@ -132,8 +176,7 @@ $evCount = $db->query("SELECT COUNT(*) FROM live_event WHERE ref_type LIKE 'FSD_
 chk('本案件累計產生至少3筆live_event通知(意見階段開啟+決策階段開啟+完成通知)', (int)$evCount >= 3);
 
 echo "\n== 8. 駁回流程測試(另建一案) ==\n";
-$r2 = fsd_case_create($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '駁回測試案件', date('Y-m-d'));
-$caseId2 = $r2['id'];
+$caseId2 = createAndSubmitCase($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '駁回測試案件', $minFrac);
 fsd_case_advisory_respond($db, $caseId2, $U_A, $U_A_NAME, 'disagree', 'x');
 fsd_case_advisory_respond($db, $caseId2, $U_B, $U_B_NAME, 'agree', 'x');
 fsd_case_advisory_respond($db, $caseId2, $DEPT_MGR_EXPECT, '吳佳靜', 'agree', 'x');
@@ -145,7 +188,62 @@ chk('案件狀態=rejected', $case2['status'] === 'rejected');
 echo "\n== 9. AS文件編號動態module code ==\n";
 chk('module code格式正確', fsd_asdoc_module($tplId) === 'fsd_tpl_' . $tplId);
 
+echo "\n== 10. 自動簽核is_auto旗標與清洗(一般使用者看不到「系統自動簽核」) ==\n";
+$stagesAuto = [
+    ['stage_type'=>'advisory', 'name'=>'自動意見關', 'auto_sign'=>1, 'signers'=>[
+        ['mode'=>'user', 'user_id'=>$U_A, 'label'=>$U_A_NAME],
+    ]],
+    ['stage_type'=>'decision', 'name'=>'自動決策關', 'auto_sign'=>1, 'signers'=>[
+        ['mode'=>'top_approver', 'label'=>'最高決策者'],
+    ]],
+];
+$tplId3 = fsd_template_create($db, '自動簽核測試模板', 'image', 'e2e3.png', 1, 'CLI測試');
+fsd_template_pages_save($db, $tplId3, [['page_no'=>1, 'width_pt'=>595, 'height_pt'=>842]]);
+fsd_stages_save($db, $tplId3, $stagesAuto);
+$stages3 = fsd_stage_list($db, $tplId3);
+foreach ($stages3 as $s3) foreach ($s3['signers'] as $sg3) {
+    fsd_field_save($db, $tplId3, ['stage_signer_id'=>$sg3['id'], 'box_type'=>'stamp', 'page_no'=>1, 'x'=>0.1, 'y'=>0.1, 'w'=>$minFrac['min_w']+0.02, 'h'=>$minFrac['min_h']+0.02]);
+}
+fsd_template_schema_publish($db, $tplId3, 'CLI測試');
+$caseId3 = createAndSubmitCase($db, $tplId3, $SUBMITTER, $SUBMITTER_NAME, '自動簽核測試案件', $minFrac);
+$case3 = fsd_case_get($db, $caseId3);
+chk('全自動簽核案件直接完成(approved)', $case3['status'] === 'approved');
+$rawResps = fsd_case_responses($db, $caseId3);
+chk('原始資料含is_auto=1的紀錄', count(array_filter($rawResps, fn($x)=>!empty($x['is_auto']))) >= 1);
+$adminView = fsd_sanitize_responses_for_viewer($rawResps, true);
+chk('管理員視角看得到「系統自動簽核」', count(array_filter($adminView, fn($x)=>strpos((string)$x['reply_text'],'系統自動簽核')!==false)) >= 1);
+$userView = fsd_sanitize_responses_for_viewer($rawResps, false);
+chk('一般使用者視角完全看不到「系統自動簽核」字樣', count(array_filter($userView, fn($x)=>strpos((string)$x['reply_text'],'系統自動簽核')!==false)) === 0);
+chk('一般使用者視角不含is_auto欄位', !isset($userView[0]['is_auto']));
+
+echo "\n== 11. 刪除與復原(超級管理員硬刪不留紀錄／一般管理員+操作密碼軟刪可復原) ==\n";
+$caseId4 = createAndSubmitCase($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '軟刪測試案件', $minFrac);
+$softR = fsd_case_delete_soft($db, $caseId4, $U_B, $U_B_NAME);
+chk('軟刪成功', $softR['ok'] === true);
+$case4 = fsd_case_get($db, $caseId4);
+chk('軟刪後狀態=void', $case4['status'] === 'void');
+$log = $db->query("SELECT * FROM fsd_case_delete_log WHERE case_id=$caseId4 ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+chk('軟刪留有刪除紀錄且記住原狀態(in_progress)', $log && $log['prior_status'] === 'in_progress');
+$deletedList = fsd_case_deleted_list($db);
+chk('已刪除清單查得到此案件', in_array($caseId4, array_column($deletedList,'id'), true));
+$restoreR = fsd_case_restore($db, $caseId4, 1, '超級管理員');
+chk('復原成功', $restoreR['ok'] === true && $restoreR['status'] === 'in_progress');
+$case4 = fsd_case_get($db, $caseId4);
+chk('復原後狀態回到in_progress', $case4['status'] === 'in_progress');
+
+$caseId5 = createAndSubmitCase($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '硬刪測試案件', $minFrac);
+$hardR = fsd_case_delete_hard($db, $caseId5);
+chk('硬刪成功', $hardR['ok'] === true);
+chk('硬刪後查無此案件', fsd_case_get($db, $caseId5) === null);
+$logCount = $db->query("SELECT COUNT(*) FROM fsd_case_delete_log WHERE case_id=$caseId5")->fetchColumn();
+chk('硬刪不留任何刪除紀錄', (int)$logCount === 0);
+
+$draftForDelete = fsd_case_create_draft($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '草稿刪除測試', date('Y-m-d'), 'image', 'e2e_draftdel.png');
+$draftDelR = fsd_case_delete_draft($db, $draftForDelete['id'], $SUBMITTER, false);
+chk('草稿本人可直接刪除', $draftDelR['ok'] === true);
+chk('草稿刪除後查無此案件', fsd_case_get($db, $draftForDelete['id']) === null);
+
 echo "\n========================================\n";
-echo "測試template_id=$tplId, case_id=$caseId(核准), case_id2=$caseId2(駁回)\n";
+echo "測試template_id=$tplId(核准案$caseId/駁回案$caseId2), template_id3=$tplId3(全自動案$caseId3), 軟刪復原案$caseId4\n";
 echo $fail === 0 ? "全部通過\n" : "$fail 項失敗\n";
 exit($fail === 0 ? 0 : 1);
