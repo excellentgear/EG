@@ -398,6 +398,14 @@ function pfmea_field_link_delete(PDO $db, int $id): void {
     $db->prepare("UPDATE pfmea_field_link SET is_active=0 WHERE id=?")->execute([$id]);
 }
 
+/** 參考資料設定畫面用：某組(source_field,target_field)已經設定過的所有來源值清單，供瀏覽/鑽入
+ * 查看該來源值對應的目標值（一般填表流程只查已知source_value，管理畫面要能瀏覽全部才找得到） */
+function pfmea_field_link_distinct_sources(PDO $db, string $sourceField, string $targetField): array {
+    $st = $db->prepare("SELECT DISTINCT source_value FROM pfmea_field_link WHERE source_field=? AND target_field=? AND is_active=1 ORDER BY source_value");
+    $st->execute([$sourceField, $targetField]);
+    return $st->fetchAll(PDO::FETCH_COLUMN);
+}
+
 /* ---------- 評價S/O/D建議規則（2026-08-14使用者要求第7段）----------
  * 依「製程+項目+功能+潛在失效模式+失效模式潛在效果+嚴重度+失效潛在原因」完整組合查建議評價值，
  * 只在新增列時自動帶入、存檔後鎖定不回頭覆蓋(前端控管，這裡只負責查/存)。 */

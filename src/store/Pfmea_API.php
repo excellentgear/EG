@@ -440,6 +440,10 @@ case 'field_link_list':
     needView($perms);
     jout(['success'=>true,'rows'=>pfmea_field_link_list($db, (string)($_GET['source_field']??''), (string)($_GET['source_value']??''), (string)($_GET['target_field']??''))]);
 
+case 'field_link_distinct_sources':
+    needAdmin($perms);
+    jout(['success'=>true,'rows'=>pfmea_field_link_distinct_sources($db, (string)($_GET['source_field']??''), (string)($_GET['target_field']??''))]);
+
 case 'field_link_add':
     needEdit($perms);
     $sf = (string)($_POST['source_field'] ?? ''); $sv = (string)($_POST['source_value'] ?? '');
