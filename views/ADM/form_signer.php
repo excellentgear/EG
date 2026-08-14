@@ -306,7 +306,7 @@ $perms = fsd_perms($db, $fsdUser);
 <script>
 var API = '../../src/store/FormSigner_API.php';
 var META = {}, CASES = [], TEMPLATES = [];
-var CUR_CASE = null, CUR_SCHEMA = null, CUR_RESPONSES = null, CUR_AS_DOC_NO = '';
+var CUR_CASE = null, CUR_SCHEMA = null, CUR_RESPONSES = null, CUR_AS_DOC_NO = '', CUR_CASE_PAGES = [];
 var FP_CASE = null, FP_TPL_SCHEMA = null, FP_WHITELIST = [], FP_CANVASES = {}, FP_SELECTED = null;
 function esc(s){ return $('<div>').text(s==null?'':s).html(); }
 function dispDate(s){ return (window.egFmtDate && s) ? egFmtDate(s) : (s||''); }
@@ -476,8 +476,9 @@ function openCase(id){
         $('#btnDeleteSoft').toggle(!!res.can_delete_soft);
         $('#btnRestore').toggle(CUR_CASE.status==='void' && META.perms.canAdmin);
         CUR_AS_DOC_NO = res.as_doc_no || '';
+        CUR_CASE_PAGES = res.pages || []; // 案件自己上傳文件的頁面(不是CUR_SCHEMA.pages那份樣板參考頁!)，doPrint()量版面一定要用這份
         renderResponses();
-        renderDocGrid(res.pages||[], res.fields||[]);
+        renderDocGrid(CUR_CASE_PAGES, res.fields||[]);
     });
 }
 $('#btnBackList').on('click', function(){ $('#detailPanel').hide(); $('#listPanel').show(); CUR_CASE=null; loadCases(); });
@@ -614,7 +615,9 @@ function renderDocGrid(pages, fields){
  *  保證單頁一定裝得下、不會被瀏覽器整頁shrink-to-fit縮放(那正是先前多空白頁/圖章列印跟畫面大小不一致的根因)；
  *  AS文件編號比照ai-rules/16釘在頁面右下角，同一次列印工作只對應同一份文件，position:fixed安全無虞。 */
 function doPrint(){
-    var pages = (CUR_SCHEMA && CUR_SCHEMA.pages) || [];
+    // 一定要用案件自己的頁面(CUR_CASE_PAGES)，不能用CUR_SCHEMA.pages(那是樣板參考頁，尺寸/頁數
+    // 跟案件實際上傳的文件通常對不上——先前這裡誤用樣板頁面算版面，正是「明明只傳1頁卻印出2張紙」的根因)。
+    var pages = CUR_CASE_PAGES || [];
     var lands = isLandscapeDoc(pages);
     var pageWmm = lands ? 297 : 210, pageHmm = lands ? 210 : 297;
     var marginLR = 8, marginTB = 10;
