@@ -625,6 +625,12 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <button type="button" class="pf-row-btn" onclick="rsConfirmRebind()">確認綁定</button>
             <button type="button" class="pf-row-btn" onclick="$('#rsReqRebindBar').hide()">取消</button>
         </div>
+        <div id="rsReqEditBar" style="display:none;margin-top:8px;padding:8px;background:#FFF7E8;border:1px dashed #F0A24B;border-radius:4px;">
+            正在編輯要求文字：
+            <input type="text" id="rsReqEditText" style="width:360px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
+            <button type="button" class="pf-row-btn" onclick="rsConfirmEditReqText()">儲存</button>
+            <button type="button" class="pf-row-btn" onclick="$('#rsReqEditBar').hide()">取消</button>
+        </div>
         </div>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('refSettingsMask')">關閉</button></div>
@@ -657,7 +663,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>項目→功能→要求／潛在失效模式 階層式連動</b>：填完「項目」離開該欄位，會自動帶出這個項目底下的「功能」下拉選項；填完「功能」離開該欄位，會自動帶出這個功能底下的「要求」下拉（優先顯示綁定的料號專屬要求，沒有才顯示該功能通用要求）與更精確的「潛在失效模式」下拉（優先套用這個功能專屬的清單，還沒累積過資料才逐層退回項目層級、製程層級的通用清單）。四層清單都可以直接手動輸入新值，離開欄位或存檔時會自動加進清單供下次選用，僅管理員能刪除。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期自動帶入），分析項目仍需逐份手動填寫。</li>
             <li><b>製程代號</b>：改可從全站製程主檔同步帶入（含大項分類），輸入時同時模糊搜尋代號/名稱/大項分類（多關鍵字皆需命中），顯示清單供點選。</li>
-            <li><b>參考資料設定</b>：工具列同名按鈕（僅管理員可見），分四個頁籤：①<b>製程與階層</b>——「從全站製程主檔同步」拉入公司所有製程（含大項分類），大項分類可一鍵批次開放/取消其底下所有製程（仍可個別覆蓋），只有開放的製程會出現在分析表下拉；並可逐層鑽取設定該製程底下的項目、項目底下的功能，以及目前鑽取深度對應的潛在失效模式／要求清單（鑽到功能就是功能專屬、只選到項目就是項目通用、只選製程就是製程通用），還有全域共用的控制預防／控制偵測／建議措施選項（皆可新增/刪除，僅管理員可刪除）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>欄位個別設定對應</b>——瀏覽/新增/刪除「潛在失效模式→失效模式潛在後果/分類/失效潛在原因」「料號＋製程代號→圖面要求」的對應清單，目標值輸入框可用工程符號／幾何公差特殊項目按鈕快速插入。④<b>要求總覽</b>——不分製程/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
+            <li><b>參考資料設定</b>：工具列同名按鈕（僅管理員可見），分四個頁籤：①<b>製程與階層</b>——「從全站製程主檔同步」拉入公司所有製程（含大項分類），大項分類可一鍵批次開放/取消其底下所有製程（仍可個別覆蓋），只有開放的製程會出現在分析表下拉；並可逐層鑽取設定該製程底下的項目、項目底下的功能，以及目前鑽取深度對應的潛在失效模式／要求清單（鑽到功能就是功能專屬、只選到項目就是項目通用、只選製程就是製程通用），還有全域共用的控制預防／控制偵測／建議措施選項（皆可新增/刪除，僅管理員可刪除）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>欄位個別設定對應</b>——瀏覽/新增/刪除「潛在失效模式→失效模式潛在後果/分類/失效潛在原因」「料號＋製程代號→圖面要求」的對應清單，目標值輸入框可用工程符號／幾何公差特殊項目按鈕快速插入；「料號＋製程代號」的已設定來源清單會<b>合併顯示④要求總覽的資料</b>（同一個料號+製程只要在「要求」有設定，即使還沒設定過圖面要求也會列出，preview 一併顯示要求內容，兩邊本來就是同一份「這個料號這個製程的規格要求」資料，只是分別對應到不同欄位）。④<b>要求總覽</b>——不分製程/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、點擊要求文字或鉛筆圖示可直接編輯文字內容、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
             <li><b>建議措施樣板</b>：「建議措施」欄位標題旁「選樣板（可複選）」可開跳窗勾選預先在參考資料設定建立好的建議措施句庫，套用時自動接續編號（1. 2. 3.…）；手動輸入時只要目前這行是「數字.」開頭，按 Enter 換行會自動接下一個編號，不必自己算。</li>
             <li><b>基本資料欄位自動縮小字級</b>：項目/功能/要求/潛在失效模式/失效模式潛在後果/分類這幾欄是可挑選也可手動輸入的欄位，受限於瀏覽器限制無法真正多行換行，文字太長時會自動縮小字級（最小9px）以盡量完整顯示，欄位變短時字級會自動還原。</li>
             <li><b>檢視（唯讀）</b>：只有檢閱權限、無登錄權限的使用者，清單「操作」欄看到的是眼睛圖示「檢視」而非鉛筆「編輯」，點開版面跟列印版完全一樣（不會誤觸修改），並提供「評級對照表說明」「開圖」兩個按鈕方便對照查閱，不會觸發實際列印動作。</li>
@@ -2244,8 +2250,9 @@ function rsRenderReqList(){
         var statusHtml = r.bound === true ? '<span style="color:#3a8f4a;">✓ '+esc(r.part_label)+'</span>'
             : r.bound === false ? '<span style="color:#DD5138;">⚠ '+esc(r.part_label)+'（純文字）</span>'
             : '<span style="color:#8a6d45;">'+esc(r.part_label)+'</span>';
-        return '<tr><td>'+esc(r.scope_label)+'</td><td class="pf-op" style="text-align:left;">'+esc(r.requirement_text)+'</td><td>'+statusHtml+'</td>'
+        return '<tr><td>'+esc(r.scope_label)+'</td><td class="pf-op" style="text-align:left;" onclick="rsStartEditReqText('+r.id+',\''+esc(r.requirement_text).replace(/'/g,"&#39;")+'\')" title="點擊編輯要求文字">'+esc(r.requirement_text)+'</td><td>'+statusHtml+'</td>'
             + '<td>'
+            + '<i class="fa fa-pencil pf-op" title="編輯要求文字" onclick="rsStartEditReqText('+r.id+',\''+esc(r.requirement_text).replace(/'/g,"&#39;")+'\')"></i> '
             + '<i class="fa fa-exchange pf-op" title="重新綁定料號" onclick="rsStartRebind('+r.id+',\''+esc(r.scope_label+'／'+r.requirement_text).replace(/'/g,"&#39;")+'\')"></i> '
             + '<i class="fa fa-trash pf-op" title="刪除" onclick="rsDeleteReqListRow('+r.id+')"></i>'
             + '</td></tr>';
@@ -2262,6 +2269,7 @@ window.rsDeleteReqListRow = function(id){
     }, 'json');
 };
 window.rsStartRebind = function(id, label){
+    $('#rsReqEditBar').hide();
     RS_REBIND_ID = id; RS_REBIND_PART_D_ID = 0;
     $('#rsReqRebindLabel').text(label);
     $('#rsReqRebindPart').val('');
@@ -2280,6 +2288,24 @@ window.rsConfirmRebind = function(){
     $.post(API, {action:'requirement_option_rebind', id:RS_REBIND_ID, part_d_id:partDId, part_no_text:partText}, function(res){
         if (!res.success){ alert(res.message||'綁定失敗'); return; }
         $('#rsReqRebindBar').hide();
+        rsLoadReqListAll();
+    }, 'json');
+};
+/* 要求文字本身可編輯（2026-08-14使用者反映：先前只能重新綁定料號／刪除，完全無法改文字內容） */
+var RS_REQ_EDIT_ID = 0;
+window.rsStartEditReqText = function(id, text){
+    $('#rsReqRebindBar').hide();
+    RS_REQ_EDIT_ID = id;
+    $('#rsReqEditText').val(text);
+    $('#rsReqEditBar').show();
+};
+window.rsConfirmEditReqText = function(){
+    if (!RS_REQ_EDIT_ID) return;
+    var text = $('#rsReqEditText').val().trim();
+    if (!text) { alert('要求文字不可空白'); return; }
+    $.post(API, {action:'requirement_option_update_text', id:RS_REQ_EDIT_ID, requirement_text:text}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        $('#rsReqEditBar').hide();
         rsLoadReqListAll();
     }, 'json');
 };
