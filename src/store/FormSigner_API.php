@@ -385,6 +385,7 @@ case 'case_field_delete_page': {
     if ((int)$case['applicant_id'] !== $uid && !$perms['canAdmin']) jerr('只有申請人本人或管理員可以編輯', 403);
     $pageNo = (int)($_POST['page_no'] ?? 0);
     $r = fsd_case_field_delete_by_page($db, $id, $pageNo);
+    if (!$r['ok']) jerr($r['msg']);
     jout(['fields'=>$r['fields']]);
 }
 

@@ -158,6 +158,25 @@ $perms = fsd_perms($db, $fsdUser);
         <button class="b-ok" onclick="submitUpload()">上傳</button></div>
 </div></div>
 
+<!-- A4/A3裁切框 modal：框住文件實際內容範圍，取代直接信任原始像素量測出的寬高比 -->
+<div class="fsd-mask" id="cropMask"><div class="fsd-modal wide">
+    <div class="m-head"><span>A4/A3 裁切框</span><span class="m-close" onclick="closeMask('cropMask')">✕</span></div>
+    <div class="m-body">
+        <p style="font-size:11.5px;color:#8a6d45;">拖曳/縮放橘色框，框住文件上實際的頁面內容範圍（比例已鎖定為所選紙張大小），之後的圖章最小尺寸與列印版面都會依此範圍換算的實際公分數計算，比直接信任原始掃描/拍照的像素比例更準確。套用後會清空這一頁已框選的位置。</p>
+        <div style="display:flex;gap:10px;margin-bottom:8px;align-items:center;">
+            <label style="margin:0;">紙張</label>
+            <select id="cropPaperSize" style="width:80px;"><option value="A4">A4</option><option value="A3">A3</option></select>
+            <label style="margin:0;">方向</label>
+            <select id="cropOrientation" style="width:90px;"><option value="portrait">直式</option><option value="landscape">橫式</option></select>
+        </div>
+        <div style="border:1px solid #E8D5B5;border-radius:6px;background:#faf6ee;padding:6px;text-align:center;">
+            <canvas id="cropCanvas"></canvas>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('cropMask')">取消</button>
+        <button class="b-ok" onclick="confirmCrop()">套用裁切框</button></div>
+</div></div>
+
 <!-- 角色設定 modal（管理員；定義本模組角色能看到/做什麼，指派給誰在「使用者權限設定」頁） -->
 <div class="fsd-mask" id="roleSetMask"><div class="fsd-modal wide">
     <div class="m-head"><span>角色設定</span><span class="m-close" onclick="closeMask('roleSetMask')">✕</span></div>
@@ -571,16 +590,88 @@ function renderDocPages(fileType, fileUrl, pages, cb){
 /** 旋轉該頁90度：交換有效寬高、清空該頁既有框選(座標系已變)、存檔後整個重繪。 */
 function rotatePage(pageNo){
     var p = (CUR_TPL.pages||[]).filter(function(x){ return x.page_no==pageNo; })[0];
-    if (!p) return;
+    if (!p){ alert('找不到第'+pageNo+'頁的資料'); return; }
     if (!confirm('旋轉這一頁會清空此頁已框選的位置，確定要旋轉嗎？')) return;
-    p.rotation = ((p.rotation||0) + 90) % 360;
-    var w = p.width_pt, h2 = p.height_pt; p.width_pt = h2; p.height_pt = w;
-    $.post(API, {action:'field_delete_page', csrf:META.csrf, template_id:CUR_TPL.id, page_no:pageNo}, function(){
+    var newRotation = ((p.rotation||0) + 90) % 360;
+    var newWidthPt = p.height_pt, newHeightPt = p.width_pt;
+    $.post(API, {action:'field_delete_page', csrf:META.csrf, template_id:CUR_TPL.id, page_no:pageNo}, function(res0){
+        if (!res0.ok){ alert(res0.error||'清空框選失敗'); return; }
+        p.rotation = newRotation; p.width_pt = newWidthPt; p.height_pt = newHeightPt;
         $.post(API, {action:'pages_save', csrf:META.csrf, template_id:CUR_TPL.id, pages:JSON.stringify(CUR_TPL.pages)}, function(res){
             if (!res.ok){ alert(res.error||'旋轉失敗'); return; }
             CUR_TPL.pages = res.pages;
             $.getJSON(API, {action:'template_get', id:CUR_TPL.id}, function(res2){
                 CUR_TPL.fields = res2.template.fields;
+                buildPageCanvases();
+            }).fail(function(xhr){ alert('重新載入樣板失敗(連線錯誤 '+xhr.status+')'); });
+        }, 'json').fail(function(xhr){ alert('旋轉失敗(連線錯誤 '+xhr.status+')：'+xhr.responseText); });
+    }, 'json').fail(function(xhr){ alert('清空框選失敗(連線錯誤 '+xhr.status+')：'+xhr.responseText); });
+}
+
+/* -------- A4/A3裁切框：用固定比例的框框住文件實際內容範圍，取代直接信任原始像素量測出的寬高比 -------- */
+var CROP_CANVAS = null, CROP_RECT = null, CROP_PAGE_NO = 0;
+function cropRatio(){
+    // A4/A3同屬ISO 216 A系列,長寬比皆為1:根號2,紙張大小只影響實際公分數不影響框的形狀
+    var r = 1/Math.SQRT2;
+    return $('#cropOrientation').val()==='landscape' ? 1/r : r;
+}
+function openCropModal(pageNo){
+    var p = (CUR_TPL.pages||[]).filter(function(x){ return x.page_no==pageNo; })[0];
+    if (!p) return;
+    CROP_PAGE_NO = pageNo;
+    $('#cropPaperSize').val(p.paper_size || 'A4');
+    $('#cropOrientation').val(parseFloat(p.width_pt) >= parseFloat(p.height_pt) ? 'landscape' : 'portrait');
+    openMask('cropMask');
+    var dispW = 600, dispH = Math.round(dispW * (p.height_pt / p.width_pt || 1.414));
+    $('#cropCanvas').attr({width:dispW, height:dispH});
+    if (CROP_CANVAS) { CROP_CANVAS.dispose(); CROP_CANVAS = null; }
+    CROP_CANVAS = new fabric.Canvas('cropCanvas', {width:dispW, height:dispH, selection:false});
+    var fileUrl = API + '?action=template_file&id=' + CUR_TPL.id;
+    renderDocPages(CUR_TPL.file_type, fileUrl, [p], function(pageNo2, src){
+        fabric.Image.fromURL(src, function(img){
+            img.set({left:0, top:0, scaleX:dispW/img.width, scaleY:dispH/img.height, selectable:false, evented:false});
+            CROP_CANVAS.setBackgroundImage(img, CROP_CANVAS.renderAll.bind(CROP_CANVAS));
+            addCropRect();
+        }, {crossOrigin:'anonymous'});
+    });
+}
+function addCropRect(){
+    if (CROP_RECT) { CROP_CANVAS.remove(CROP_RECT); CROP_RECT = null; }
+    var cv = CROP_CANVAS, ratio = cropRatio();
+    var w = cv.width * 0.8, h = w / ratio;
+    if (h > cv.height * 0.9) { h = cv.height * 0.9; w = h * ratio; }
+    var rect = new fabric.Rect({
+        left:(cv.width-w)/2, top:(cv.height-h)/2, width:w, height:h,
+        fill:'rgba(240,162,75,.15)', stroke:'#d98a33', strokeWidth:2, lockRotation:true, hasRotatingPoint:false,
+    });
+    rect.on('scaling', function(){
+        var newW = rect.width * rect.scaleX;
+        rect.set({scaleY: (newW/ratio) / rect.height});
+    });
+    cv.add(rect); cv.setActiveObject(rect); cv.renderAll();
+    CROP_RECT = rect;
+}
+$('#cropPaperSize, #cropOrientation').on('change', function(){ if (CROP_CANVAS && CROP_RECT) addCropRect(); });
+function confirmCrop(){
+    if (!CROP_CANVAS || !CROP_RECT) return;
+    if (!confirm('確定套用此裁切框？會清空這一頁已框選的位置。')) return;
+    var cv = CROP_CANVAS, rect = CROP_RECT;
+    var cx = rect.left / cv.width, cy = rect.top / cv.height;
+    var cw = (rect.width * rect.scaleX) / cv.width, ch = (rect.height * rect.scaleY) / cv.height;
+    var paper = $('#cropPaperSize').val(), orient = $('#cropOrientation').val();
+    var mm = paper === 'A4' ? [210,297] : [297,420];
+    var wMm = orient === 'landscape' ? Math.max(mm[0],mm[1]) : Math.min(mm[0],mm[1]);
+    var hMm = orient === 'landscape' ? Math.min(mm[0],mm[1]) : Math.max(mm[0],mm[1]);
+    var p = (CUR_TPL.pages||[]).filter(function(x){ return x.page_no==CROP_PAGE_NO; })[0];
+    p.paper_size = paper; p.crop_x = cx; p.crop_y = cy; p.crop_w = cw; p.crop_h = ch;
+    p.width_pt = wMm/25.4*72; p.height_pt = hMm/25.4*72;
+    $.post(API, {action:'field_delete_page', csrf:META.csrf, template_id:CUR_TPL.id, page_no:CROP_PAGE_NO}, function(){
+        $.post(API, {action:'pages_save', csrf:META.csrf, template_id:CUR_TPL.id, pages:JSON.stringify(CUR_TPL.pages)}, function(res){
+            if (!res.ok){ alert(res.error||'裁切失敗'); return; }
+            CUR_TPL.pages = res.pages;
+            $.getJSON(API, {action:'template_get', id:CUR_TPL.id}, function(res2){
+                CUR_TPL.fields = res2.template.fields;
+                closeMask('cropMask');
                 buildPageCanvases();
             });
         }, 'json');
@@ -623,7 +714,11 @@ function buildPageCanvases(){
     var pages = CUR_TPL.pages || [{page_no:1, width_pt:595, height_pt:842}];
     var h = '';
     pages.forEach(function(p){
-        h += '<div class="fsd-page-wrap"><div class="pno">第 '+p.page_no+' 頁 <button type="button" onclick="rotatePage('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-rotate-right"></i> 旋轉90°</button></div><canvas id="pgcv_'+p.page_no+'"></canvas></div>';
+        h += '<div class="fsd-page-wrap"><div class="pno">第 '+p.page_no+' 頁'
+           + (p.paper_size ? ' <span style="color:#3f8a3f;">['+p.paper_size+'已裁切]</span>' : '')
+           + ' <button type="button" onclick="rotatePage('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-rotate-right"></i> 旋轉90°</button>'
+           + ' <button type="button" onclick="openCropModal('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-crop"></i> A4/A3裁切</button>'
+           + '</div><canvas id="pgcv_'+p.page_no+'"></canvas></div>';
     });
     $('#pageGrid').html(h);
     var fileUrl = API + '?action=template_file&id=' + CUR_TPL.id;

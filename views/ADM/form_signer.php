@@ -246,6 +246,25 @@ $perms = fsd_perms($db, $fsdUser);
         <button class="b-ok" onclick="submitReplaceFile()">更換</button></div>
 </div></div>
 
+<!-- A4/A3裁切框 modal：框住文件實際內容範圍，取代直接信任原始像素量測出的寬高比 -->
+<div class="fsd-mask" id="cropMask"><div class="fsd-modal wide">
+    <div class="m-head"><span>A4/A3 裁切框</span><span class="m-close" onclick="closeMask('cropMask')">✕</span></div>
+    <div class="m-body">
+        <p style="font-size:11.5px;color:#8a6d45;">拖曳/縮放橘色框，框住文件上實際的頁面內容範圍（比例已鎖定為所選紙張大小），之後的圖章最小尺寸與列印版面都會依此範圍換算的實際公分數計算。套用後會清空這一頁已框選的位置。</p>
+        <div style="display:flex;gap:10px;margin-bottom:8px;align-items:center;">
+            <label style="margin:0;">紙張</label>
+            <select id="cropPaperSize" style="width:80px;"><option value="A4">A4</option><option value="A3">A3</option></select>
+            <label style="margin:0;">方向</label>
+            <select id="cropOrientation" style="width:90px;"><option value="portrait">直式</option><option value="landscape">橫式</option></select>
+        </div>
+        <div style="border:1px solid #E8D5B5;border-radius:6px;background:#faf6ee;padding:6px;text-align:center;">
+            <canvas id="cropCanvas"></canvas>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('cropMask')">取消</button>
+        <button class="b-ok" onclick="confirmCrop()">套用裁切框</button></div>
+</div></div>
+
 <!-- 操作確認密碼 modal（一般管理員軟刪用） -->
 <div class="fsd-mask" id="pwMask"><div class="fsd-modal">
     <div class="m-head"><span>輸入操作確認密碼</span><span class="m-close" onclick="closeMask('pwMask')">✕</span></div>
@@ -429,6 +448,15 @@ function rotateToCanvas(src, srcW, srcH, rotationDeg){
 }
 /** 每頁各自的 rotation(0/90/180/270,人工修正掃描歪斜方向用)：PDF直接用pdf.js viewport rotation參數轉正
  *  最省事；圖片(image類型整份文件只有1頁)用canvas重繪轉正。回呼cb(pageNo, dataURL)。 */
+/** 裁切(A4/A3裁切框)：從來源(已轉正)畫面擷取crop_x/y/w/h(0~1分數)範圍畫到新canvas。crop_w/h=1且x/y=0時視為不裁切。 */
+function cropCanvas(src, srcW, srcH, cx, cy, cw, ch){
+    if ((!cx && !cy && cw>=1 && ch>=1)) return src;
+    var outW = Math.round(srcW*cw), outH = Math.round(srcH*ch);
+    var cv = document.createElement('canvas'); cv.width = outW; cv.height = outH;
+    var ctx = cv.getContext('2d');
+    ctx.drawImage(src, srcW*cx, srcH*cy, outW, outH, 0, 0, outW, outH);
+    return cv;
+}
 function renderDocPages(fileType, fileUrl, pages, cb) {
     if (fileType === 'pdf') {
         ensurePdfJs().then(function(lib){ return lib.getDocument({url:fileUrl, withCredentials:true}).promise; }).then(function(doc){
@@ -440,15 +468,24 @@ function renderDocPages(fileType, fileUrl, pages, cb) {
                     var vp = page.getViewport({scale:scale, rotation:rotation});
                     var cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
                     var ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);
-                    page.render({canvasContext:ctx, viewport:vp}).promise.then(function(){ cb(p.page_no, cv.toDataURL('image/png')); });
+                    page.render({canvasContext:ctx, viewport:vp}).promise.then(function(){
+                        var out = cropCanvas(cv, cv.width, cv.height, p.crop_x||0, p.crop_y||0, p.crop_w!=null?p.crop_w:1, p.crop_h!=null?p.crop_h:1);
+                        cb(p.page_no, out.toDataURL('image/png'));
+                    });
                 });
             });
         }).catch(function(e){ alert('PDF讀取失敗：'+(e.message||e)); });
     } else {
         pages.forEach(function(p){
-            if (!p.rotation) { cb(p.page_no, fileUrl); return; }
+            var hasCrop = (p.crop_x||0)>0 || (p.crop_y||0)>0 || (p.crop_w!=null && p.crop_w<1) || (p.crop_h!=null && p.crop_h<1);
+            if (!p.rotation && !hasCrop) { cb(p.page_no, fileUrl); return; }
             var img = new Image();
-            img.onload = function(){ cb(p.page_no, rotateToCanvas(img, img.naturalWidth, img.naturalHeight, p.rotation).toDataURL('image/png')); };
+            img.onload = function(){
+                var base = p.rotation ? rotateToCanvas(img, img.naturalWidth, img.naturalHeight, p.rotation) : img;
+                var baseW = base.width || img.naturalWidth, baseH = base.height || img.naturalHeight;
+                var out = cropCanvas(base, baseW, baseH, p.crop_x||0, p.crop_y||0, p.crop_w!=null?p.crop_w:1, p.crop_h!=null?p.crop_h:1);
+                cb(p.page_no, out.toDataURL ? out.toDataURL('image/png') : fileUrl);
+            };
             img.src = fileUrl;
         });
     }
@@ -651,6 +688,7 @@ function openFieldDesigner(id){
         FP_CASE = res.case; FP_TPL_SCHEMA = res.schema; FP_WHITELIST = res.field_whitelist || [];
         $('#listPanel,#detailPanel').hide(); $('#fieldPanel').show();
         $('#fpTitle').text(FP_CASE.title || '');
+        buildSlotColorMap();
         renderRefPanel();
         if (!res.pages || !res.pages.length) {
             measureAndSaveCasePages(function(){ buildFpCanvases(res.fields||[]); });
@@ -711,6 +749,18 @@ function measureAndSaveCasePages(done){
         img.src = fileUrl;
     }
 }
+/* 待框選標籤跟樣板參考縮圖用同一套顏色對應同一個槽位(slot_key)，方便肉眼比對「這個標籤=參考圖裡哪一個框」
+   (2026-08-14使用者明確要求)。暖色系調色盤(ai-rules/10)，依樣板stages/signers出現順序依序指派、循環使用。 */
+var SLOT_COLORS = ['#F0A24B','#DD5138','#C0782D','#8A5A2B','#D98A33','#B5762A','#E8A33D','#A0662E','#CC7722','#996633'];
+var SLOT_COLOR_MAP = {};
+function buildSlotColorMap(){
+    SLOT_COLOR_MAP = {};
+    var i = 0;
+    (FP_TPL_SCHEMA.stages||[]).forEach(function(s){
+        (s.signers||[]).forEach(function(sg){ SLOT_COLOR_MAP[sg.slot_key] = SLOT_COLORS[i % SLOT_COLORS.length]; i++; });
+    });
+}
+function slotColor(slotKey){ return SLOT_COLOR_MAP[slotKey] || '#F0A24B'; }
 function renderRefPanel(){
     var refPages = FP_TPL_SCHEMA.pages || [];
     var refFields = FP_TPL_SCHEMA.fields || [];
@@ -722,7 +772,9 @@ function renderRefPanel(){
         var $pg = $('#refpg_'+pageNo);
         $pg.prepend('<img src="'+src+'">');
         refFields.filter(function(f){ return f.page_no == pageNo; }).forEach(function(f){
-            $('<div class="fsd-ref-box '+f.box_type+'"></div>').css({left:(f.x*100)+'%', top:(f.y*100)+'%', width:(f.w*100)+'%', height:(f.h*100)+'%'})
+            var c = slotColor(f.slot_key);
+            $('<div class="fsd-ref-box '+f.box_type+'"></div>').css({left:(f.x*100)+'%', top:(f.y*100)+'%', width:(f.w*100)+'%', height:(f.h*100)+'%',
+                borderColor:c, backgroundColor:c+'2e', color:c})
                 .text(f.box_type==='stamp'?'章':'覆').appendTo($pg);
         });
     });
@@ -743,7 +795,8 @@ function renderFpLabelList(placedKeys){
         var us = key.lastIndexOf('_');
         var slotKey = key.substring(0,us), boxType = key.substring(us+1);
         var isPlaced = placedKeys.indexOf(key) > -1;
-        h += '<div class="fsd-label type-'+boxType+'" draggable="true" data-slot="'+slotKey+'" data-boxtype="'+boxType+'">'+esc(fpLabelText(slotKey,boxType))
+        var c = slotColor(slotKey);
+        h += '<div class="fsd-label type-'+boxType+'" draggable="true" data-slot="'+slotKey+'" data-boxtype="'+boxType+'" style="border-color:'+c+';background:'+c+'22;">'+esc(fpLabelText(slotKey,boxType))
            + (isPlaced ? '<span class="placed"><i class="fa fa-check"></i></span>' : '') + '</div>';
     });
     $('#fpLabelList').html(h || '<p style="padding:8px;color:#8a6d45;font-size:12px;">樣板尚未框選任何欄位，請聯絡管理員先在樣板設計頁完成框選</p>');
@@ -755,23 +808,98 @@ $(document).on('dragstart', '#fpLabelList .fsd-label', function(e){
 /** 旋轉該頁90度(修正掃描歪斜方向)：交換有效寬高、清空該頁既有框選(座標系已變)、存檔後整個重繪。 */
 function fpRotatePage(pageNo){
     var p = (FP_CASE.pages||[]).filter(function(x){ return x.page_no==pageNo; })[0];
-    if (!p) return;
+    if (!p){ alert('找不到第'+pageNo+'頁的資料'); return; }
     if (!confirm('旋轉這一頁會清空此頁已框選的位置(白名單標籤會變回未框選)，確定要旋轉嗎？')) return;
-    p.rotation = ((p.rotation||0) + 90) % 360;
-    var w = p.width_pt, h2 = p.height_pt; p.width_pt = h2; p.height_pt = w;
-    $.post(API, {action:'case_field_delete_page', csrf:META.csrf, case_id:FP_CASE.id, page_no:pageNo}, function(){
+    var newRotation = ((p.rotation||0) + 90) % 360;
+    var newWidthPt = p.height_pt, newHeightPt = p.width_pt;
+    $.post(API, {action:'case_field_delete_page', csrf:META.csrf, case_id:FP_CASE.id, page_no:pageNo}, function(res0){
+        if (!res0.ok){ alert(res0.error||'清空框選失敗'); return; }
+        p.rotation = newRotation; p.width_pt = newWidthPt; p.height_pt = newHeightPt;
         $.post(API, {action:'case_pages_save', csrf:META.csrf, case_id:FP_CASE.id, pages:JSON.stringify(FP_CASE.pages)}, function(res){
             if (!res.ok){ alert(res.error||'旋轉失敗'); return; }
             FP_CASE.pages = res.pages;
             buildFpCanvases([]);
+        }, 'json').fail(function(xhr){ alert('旋轉失敗(連線錯誤 '+xhr.status+')：'+xhr.responseText); });
+    }, 'json').fail(function(xhr){ alert('清空框選失敗(連線錯誤 '+xhr.status+')：'+xhr.responseText); });
+}
+
+/* -------- A4/A3裁切框：用固定比例的框框住文件實際內容範圍，取代直接信任原始像素量測出的寬高比 -------- */
+var CROP_CANVAS = null, CROP_RECT = null, CROP_PAGE_NO = 0;
+function cropRatio(){
+    var r = 1/Math.SQRT2; // A4/A3同屬ISO 216 A系列,長寬比皆為1:根號2
+    return $('#cropOrientation').val()==='landscape' ? 1/r : r;
+}
+function openCropModal(pageNo){
+    var p = (FP_CASE.pages||[]).filter(function(x){ return x.page_no==pageNo; })[0];
+    if (!p) return;
+    CROP_PAGE_NO = pageNo;
+    $('#cropPaperSize').val(p.paper_size || 'A4');
+    $('#cropOrientation').val(parseFloat(p.width_pt) >= parseFloat(p.height_pt) ? 'landscape' : 'portrait');
+    openMask('cropMask');
+    var dispW = 600, dispH = Math.round(dispW * (p.height_pt / p.width_pt || 1.414));
+    $('#cropCanvas').attr({width:dispW, height:dispH});
+    if (CROP_CANVAS) { CROP_CANVAS.dispose(); CROP_CANVAS = null; }
+    CROP_CANVAS = new fabric.Canvas('cropCanvas', {width:dispW, height:dispH, selection:false});
+    var fileUrl = API + '?action=case_file&id=' + FP_CASE.id;
+    renderDocPages(FP_CASE.file_type, fileUrl, [p], function(pageNo2, src){
+        fabric.Image.fromURL(src, function(img){
+            img.set({left:0, top:0, scaleX:dispW/img.width, scaleY:dispH/img.height, selectable:false, evented:false});
+            CROP_CANVAS.setBackgroundImage(img, CROP_CANVAS.renderAll.bind(CROP_CANVAS));
+            addCropRect();
+        }, {crossOrigin:'anonymous'});
+    });
+}
+function addCropRect(){
+    if (CROP_RECT) { CROP_CANVAS.remove(CROP_RECT); CROP_RECT = null; }
+    var cv = CROP_CANVAS, ratio = cropRatio();
+    var w = cv.width * 0.8, h = w / ratio;
+    if (h > cv.height * 0.9) { h = cv.height * 0.9; w = h * ratio; }
+    var rect = new fabric.Rect({
+        left:(cv.width-w)/2, top:(cv.height-h)/2, width:w, height:h,
+        fill:'rgba(240,162,75,.15)', stroke:'#d98a33', strokeWidth:2, lockRotation:true, hasRotatingPoint:false,
+    });
+    rect.on('scaling', function(){
+        var newW = rect.width * rect.scaleX;
+        rect.set({scaleY: (newW/ratio) / rect.height});
+    });
+    cv.add(rect); cv.setActiveObject(rect); cv.renderAll();
+    CROP_RECT = rect;
+}
+$('#cropPaperSize, #cropOrientation').on('change', function(){ if (CROP_CANVAS && CROP_RECT) addCropRect(); });
+function confirmCrop(){
+    if (!CROP_CANVAS || !CROP_RECT) return;
+    if (!confirm('確定套用此裁切框？會清空這一頁已框選的位置。')) return;
+    var cv = CROP_CANVAS, rect = CROP_RECT;
+    var cx = rect.left / cv.width, cy = rect.top / cv.height;
+    var cw = (rect.width * rect.scaleX) / cv.width, ch = (rect.height * rect.scaleY) / cv.height;
+    var paper = $('#cropPaperSize').val(), orient = $('#cropOrientation').val();
+    var mm = paper === 'A4' ? [210,297] : [297,420];
+    var wMm = orient === 'landscape' ? Math.max(mm[0],mm[1]) : Math.min(mm[0],mm[1]);
+    var hMm = orient === 'landscape' ? Math.min(mm[0],mm[1]) : Math.max(mm[0],mm[1]);
+    var p = (FP_CASE.pages||[]).filter(function(x){ return x.page_no==CROP_PAGE_NO; })[0];
+    p.paper_size = paper; p.crop_x = cx; p.crop_y = cy; p.crop_w = cw; p.crop_h = ch;
+    p.width_pt = wMm/25.4*72; p.height_pt = hMm/25.4*72;
+    $.post(API, {action:'case_field_delete_page', csrf:META.csrf, case_id:FP_CASE.id, page_no:CROP_PAGE_NO}, function(){
+        $.post(API, {action:'case_pages_save', csrf:META.csrf, case_id:FP_CASE.id, pages:JSON.stringify(FP_CASE.pages)}, function(res){
+            if (!res.ok){ alert(res.error||'裁切失敗'); return; }
+            FP_CASE.pages = res.pages;
+            closeMask('cropMask');
+            buildFpCanvases([]);
         }, 'json');
     }, 'json');
 }
+
 function buildFpCanvases(existingFields){
     FP_CANVASES = {};
     var pages = FP_CASE.pages || [{page_no:1, width_pt:595, height_pt:842}];
     var h = '';
-    pages.forEach(function(p){ h += '<div class="fsd-page-wrap"><div class="pno">第 '+p.page_no+' 頁 <button type="button" onclick="fpRotatePage('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-rotate-right"></i> 旋轉90°</button></div><canvas id="fpcv_'+p.page_no+'"></canvas></div>'; });
+    pages.forEach(function(p){
+        h += '<div class="fsd-page-wrap"><div class="pno">第 '+p.page_no+' 頁'
+           + (p.paper_size ? ' <span style="color:#3f8a3f;">['+p.paper_size+'已裁切]</span>' : '')
+           + ' <button type="button" onclick="fpRotatePage('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-rotate-right"></i> 旋轉90°</button>'
+           + ' <button type="button" onclick="openCropModal('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-crop"></i> A4/A3裁切</button>'
+           + '</div><canvas id="fpcv_'+p.page_no+'"></canvas></div>';
+    });
     $('#fpPageGrid').html(h);
     var fileUrl = API + '?action=case_file&id=' + FP_CASE.id;
     pages.forEach(function(p){
@@ -813,7 +941,7 @@ function buildFpCanvases(existingFields){
 function fpAddFieldBox(pageNo, slotKey, boxType, xFrac, yFrac, wFrac, hFrac, fieldId){
     var cv = FP_CANVASES[pageNo];
     if (!cv) return;
-    var color = boxType === 'stamp' ? '#F0A24B' : '#8A5A2B';
+    var color = slotColor(slotKey); // 跟待框選標籤/樣板參考同一套顏色，方便對照是哪一個槽位
     var label = boxType === 'stamp' ? '章' : '覆';
     var rect = new fabric.Rect({originX:'left', originY:'top', fill:color, opacity:0.32, stroke:color, strokeWidth:1.5});
     var text = new fabric.Text(label, {fontSize:13, fill:'#5b3a1e', originX:'center', originY:'center'});
