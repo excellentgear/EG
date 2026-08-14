@@ -573,7 +573,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
         </select>
         <div style="display:flex;gap:16px;margin-top:10px;">
             <div style="flex:1;">
-                <label style="font-size:12px;color:#5b3a1e;">來源值（<span id="rsLinkSourceLabel">潛在失效模式</span>）</label>
+                <label style="font-size:12px;color:#5b3a1e;">新增來源值（<span id="rsLinkSourceLabel">潛在失效模式</span>）</label>
                 <div class="pf-proc-box" id="rsLinkSourceNewTextBox">
                     <input type="text" id="rsLinkSourceNewText" placeholder="輸入新的潛在失效模式文字以新增來源">
                     <button type="button" class="pf-row-btn" onclick="rsSelectNewFailureModeSource()">選定</button>
@@ -586,15 +586,19 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
                         <button type="button" class="pf-row-btn" onclick="rsSelectNewPartProcessSource()">選定</button>
                     </div>
                 </div>
-                <div class="rs-list" id="rsLinkSourceList" style="max-height:150px;margin-top:6px;"></div>
             </div>
             <div style="flex:1;">
                 <label style="font-size:12px;color:#5b3a1e;">對應的目標值（<span id="rsLinkTargetLabel">失效模式潛在後果</span>）</label>
-                <div class="rs-list" id="rsLinkTargetList" style="max-height:220px;"></div>
+                <div class="rs-list" id="rsLinkTargetList" style="max-height:180px;"></div>
                 <div class="pf-proc-box"><input type="text" id="rsLinkTargetNew" placeholder="新增對應值" disabled><button type="button" class="pf-row-btn" onclick="rsAddLinkTarget()" disabled id="rsLinkTargetAddBtn">新增</button></div>
                 <div style="margin-top:4px;"><b style="font-size:11px;color:#8a6d45;">工程符號（點選插入目前游標位置）</b><div class="pf-sym-row" id="rsEngSymRow"></div></div>
                 <div><b style="font-size:11px;color:#8a6d45;">幾何公差／特殊項目</b><div class="pf-sym-row" id="rsGdtSymRow"></div></div>
             </div>
+        </div>
+        <div style="margin-top:14px;padding-top:10px;border-top:1px dashed #EADFC8;">
+            <div style="font-size:12px;color:#5b3a1e;font-weight:bold;">已設定的來源清單（與上方新增區分開、獨立捲動；點一筆可在上方查看/編輯它對應的目標值）</div>
+            <div class="pf-proc-box" style="margin-top:4px;"><input type="text" id="rsLinkSourceFilter" placeholder="搜尋來源值／料號／製程…"></div>
+            <div class="rs-list" id="rsLinkSourceList" style="max-height:200px;margin-top:6px;"></div>
         </div>
         </div>
 
@@ -2083,18 +2087,29 @@ function rsLoadLinkSources(){
     // 否則已建立但還沒設定過後果/原因的失效模式會找不到、無從新增（2026-08-14使用者要求）
     var action = pair[0] === 'failure_mode' ? 'field_link_all_failure_modes' : 'field_link_distinct_sources';
     var targetLabel = $('#rsLinkTargetLabel').text();
+    $('#rsLinkSourceFilter').val('');
     $.getJSON(API, {action:action, source_field:pair[0], target_field:pair[1]}, function(res){
         if (!res.success) return;
-        // 每筆帶目標值預覽(preview)，來源清單不用點進去就能大概看到已經設定了什麼
-        // （2026-08-14使用者要求：料號+製程代號右側要能直接看到對應的目標值）
-        var html = (res.rows||[]).map(function(r){
+        // 快取完整清單(含算好的顯示文字)供下方搜尋框過濾用；清單獨立成一區、跟上方新增區分開
+        // （2026-08-14使用者要求：輸入新料號時清單不該還顯示不相干料號的資料，容易誤會成錯誤資料）
+        RS_LINK_SOURCE_ALL = (res.rows||[]).map(function(r){
             var label = isPartProcess ? rsPartProcessLabel(r.value) : r.value;
             if (r.preview) label += '　'+targetLabel+'：'+r.preview;
-            return '<div class="rs-row" data-src="'+esc(r.value)+'"><span>'+esc(label)+'</span></div>';
-        }).join('');
-        $('#rsLinkSourceList').html(html || '<div class="rs-empty">尚無資料，可用上方欄位新增</div>');
+            return {value:r.value, label:label};
+        });
+        rsRenderLinkSourceList();
     });
 }
+var RS_LINK_SOURCE_ALL = [];
+function rsRenderLinkSourceList(){
+    var kw = ($('#rsLinkSourceFilter').val()||'').trim().toLowerCase();
+    var rows = kw ? RS_LINK_SOURCE_ALL.filter(function(r){ return r.label.toLowerCase().indexOf(kw) >= 0; }) : RS_LINK_SOURCE_ALL;
+    var html = rows.map(function(r){
+        return '<div class="rs-row" data-src="'+esc(r.value)+'"><span>'+esc(r.label)+'</span></div>';
+    }).join('');
+    $('#rsLinkSourceList').html(html || '<div class="rs-empty">'+(kw?'查無符合搜尋條件的資料':'尚無資料，可用上方欄位新增')+'</div>');
+}
+$('#rsLinkSourceFilter').on('input', rsRenderLinkSourceList);
 window.rsSelectNewFailureModeSource = function(){
     var v = $('#rsLinkSourceNewText').val().trim();
     if (!v) return;
