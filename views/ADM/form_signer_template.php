@@ -1,0 +1,532 @@
+<?php
+/**
+ * 表單簽核設計器 — 樣板管理（管理員）— 2026-08-14 新增
+ * 資料一律走 src/store/FormSigner_API.php；權限 src/common/form_signer_lib.php fsd_perms()
+ * 上傳表單原始檔(圖片/多頁PDF) → 側邊標籤清單拖放框選圖章/回覆內容區塊 → 設定意見/決策階段與槽位 → 發布。
+ * 帶參數子頁，鐵律6不登記選單，由 form_signer.php 內連結進入。
+ */
+session_start();
+if (!isset($_SESSION['userName'])) {
+    $_SESSION['lastpage'] = "../../views/ADM/form_signer_template.php";
+    header("Location:../../index.php");
+    exit;
+}
+include_once '../../src/common/_config.php';
+include_once '../../src/common/DBConnection.php';
+include_once '../../src/common/form_signer_lib.php';
+
+$db = (new DBConnection())->getPDO();
+$fsdUser = fsd_current_user($db);
+$perms = fsd_perms($db, $fsdUser);
+?>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>表單簽核設計器 - 樣板管理</title>
+    <link href="../../resource/css/bootstrap.css" rel="stylesheet">
+    <link href="../../resource/css/font-awesome.css" rel="stylesheet">
+    <link href="../../resource/css/nprogress.css" rel="stylesheet">
+    <link href="../../resource/css/custom.css" rel="stylesheet">
+    <style>
+        #sidebar-menu { visibility: hidden; }
+        .right_col .page-title { margin:8px 0 4px; overflow:hidden; clear:both; }
+        .fsd-toolbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; clear:both;
+            border:1.5px solid #E8D5B5; border-radius:8px; padding:8px 10px; margin-bottom:10px; background:#FDF8EF; }
+        .fsd-toolbar button { height:30px; font-size:13px; padding:0 12px; border:1px solid #D8BE93; border-radius:4px;
+            background:#fff; color:#5b3a1e; cursor:pointer; }
+        .fsd-toolbar .btn-warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        .page-help-btn { margin-left:auto; height:30px; font-size:13px; padding:0 14px; border:1px solid #D8BE93;
+            border-radius:4px; background:#fff; color:#5b3a1e; cursor:pointer; }
+        .help-doc h4 { font-size:14px; color:#8A5A2B; margin:10px 0 4px; }
+        table.fsd-tbl { width:100%; border-collapse:collapse; font-size:13px; background:#fff; }
+        table.fsd-tbl th, table.fsd-tbl td { border:1px solid #EADFC8; padding:6px 8px; }
+        table.fsd-tbl thead th { background:#F7E0BD; color:#5b3a1e; }
+        .fsd-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; }
+        .tag-on { color:#7a5217; font-weight:bold; } .tag-off { color:#b0a390; }
+        .fsd-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
+        .fsd-modal { background:#fff; border-radius:8px; max-width:640px; margin:30px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
+            max-height:90vh; display:flex; flex-direction:column; }
+        .fsd-modal.wide { max-width:960px; }
+        .fsd-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
+            display:flex; justify-content:space-between; }
+        .fsd-modal .m-head .m-close { cursor:pointer; color:#b5762a; }
+        .fsd-modal .m-body { padding:15px; overflow-y:auto; }
+        .fsd-modal .m-body label { display:block; font-size:13px; color:#5b3a1e; margin:9px 0 3px; }
+        .fsd-modal .m-body input[type=text], .fsd-modal .m-body input[type=file], .fsd-modal .m-body select {
+            width:100%; border:1px solid #D8BE93; border-radius:4px; padding:5px 8px; font-size:13px; box-sizing:border-box; }
+        .fsd-modal .m-foot { padding:10px 15px; border-top:1px solid #EADFC8; text-align:right; }
+        .fsd-modal .m-foot button { height:30px; padding:0 16px; border-radius:4px; font-size:13px; border:1px solid #d98a33; cursor:pointer; }
+        .fsd-modal .m-foot .b-ok { background:#F0A24B; color:#fff; }
+        .fsd-modal .m-foot .b-cancel { background:#fff; color:#5b3a1e; border-color:#D8BE93; margin-right:6px; }
+        #designerPanel { display:none; }
+        .fsd-stage-card { border:1px solid #E8D5B5; border-radius:8px; background:#fff; margin-bottom:10px; }
+        .fsd-stage-head { background:#F7E0BD; padding:6px 10px; border-radius:8px 8px 0 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+        .fsd-stage-head input[type=text] { width:200px; border:1px solid #D8BE93; border-radius:4px; padding:3px 6px; }
+        .fsd-stage-body { padding:8px 10px; }
+        table.signer-tbl { width:100%; border-collapse:collapse; font-size:12.5px; margin-bottom:6px; }
+        table.signer-tbl th, table.signer-tbl td { border:1px solid #EADFC8; padding:4px 6px; }
+        table.signer-tbl thead th { background:#FBF0DD; color:#5b3a1e; }
+        table.signer-tbl select, table.signer-tbl input { width:100%; border:1px solid #D8BE93; border-radius:4px; padding:3px 5px; font-size:12px; box-sizing:border-box; }
+        .fsd-del { color:#DD5138; cursor:pointer; }
+        .fsd-design-layout { display:flex; gap:12px; align-items:flex-start; }
+        .fsd-label-panel { flex:0 0 220px; border:1px solid #E8D5B5; border-radius:8px; background:#fff; max-height:74vh; overflow-y:auto; }
+        .fsd-label-panel .lp-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:6px 10px; border-radius:8px 8px 0 0; }
+        .fsd-label { padding:6px 8px; margin:6px; border-radius:6px; font-size:12px; cursor:grab; border:1px dashed #D8BE93; background:#FDF8EF; color:#5b3a1e; }
+        .fsd-label.type-stamp { border-color:#d98a33; }
+        .fsd-label.type-reply { border-color:#8A5A2B; }
+        .fsd-label .placed { float:right; color:#3f8a3f; }
+        .fsd-page-grid { flex:1; display:grid; grid-template-columns:1fr 1fr; gap:16px; max-height:74vh; overflow-y:auto; padding:4px; }
+        .fsd-page-wrap { border:1px solid #E8D5B5; border-radius:6px; padding:6px; background:#faf6ee; }
+        .fsd-page-wrap .pno { font-size:11px; color:#8a6d45; margin-bottom:4px; }
+        @media print { .page-help-btn { display:none; } }
+    </style>
+</head>
+<body class="nav-sm">
+<div class="container body">
+<div class="main_container">
+    <?php include '../partPage/sideAndTopBarMenu.html' ?>
+    <div class="right_col" role="main">
+        <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;clear:both;">
+            <h2 style="margin:6px 0;">表單簽核設計器 - 樣板管理 <small style="color:#8a6d45;">上傳原始檔、框選圖章/回覆區塊、設定簽核流程</small></h2>
+            <button class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
+        </div>
+        <div class="clearfix"></div>
+
+<?php if (!$perms['canView']): ?>
+        <div><h4><i class="fa fa-lock"></i> 無表單簽核設計器檢閱權限</h4><p>請洽系統管理者於「使用者權限設定」指派「表單簽核設計器」相關角色。</p></div>
+<?php else: ?>
+        <div id="listPanel">
+            <div class="fsd-toolbar">
+                <span>在上傳的表單原始檔上直接框選圖章/回覆區塊，保留原始版面。</span>
+                <button class="btn-warm" id="btnAddTpl" style="display:none;margin-left:auto;"><i class="fa fa-upload"></i> 上傳新樣板</button>
+                <a href="form_signer.php" style="height:30px;line-height:28px;padding:0 12px;border:1px solid #D8BE93;border-radius:4px;color:#5b3a1e;text-decoration:none;">前往「案件」→</a>
+            </div>
+            <div class="fsd-table-wrap">
+            <table class="fsd-tbl">
+                <thead><tr><th>樣板名稱</th><th>檔案類型</th><th>頁數</th><th>綁定AS文件</th><th>已發布版本</th><th>狀態</th><th style="width:220px;">操作</th></tr></thead>
+                <tbody id="tplBody"><tr><td colspan="7" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
+            </table>
+            </div>
+        </div>
+
+        <div id="designerPanel">
+            <div class="fsd-toolbar">
+                <button id="btnBackList"><i class="fa fa-arrow-left"></i> 返回列表</button>
+                <b id="dsgTplName" style="margin-left:6px;"></b>
+                <button onclick="openAsDocPicker()">綁定AS文件</button>
+                <span id="dsgAsDoc" style="color:#5b3a1e;font-size:12px;"></span>
+                <button class="btn-warm" style="margin-left:auto;" onclick="addStage()"><i class="fa fa-plus"></i> 新增階段</button>
+                <button class="btn-warm" onclick="saveStages()"><i class="fa fa-save"></i> 儲存階段設定</button>
+                <button style="background:#F0A24B;color:#fff;border-color:#d98a33;" onclick="publishTemplate()"><i class="fa fa-check"></i> 發布</button>
+            </div>
+            <div id="stageArea"></div>
+
+            <div class="fsd-toolbar" style="margin-top:14px;">
+                <span>框選工作區：把左側標籤拖到頁面對應位置；點選已放置的框可拖曳調整位置/大小，選取後按下方按鈕可刪除。</span>
+                <button class="fsd-del" style="border:1px solid #DD5138;margin-left:auto;" onclick="deleteSelectedField()"><i class="fa fa-trash"></i> 刪除選取框</button>
+            </div>
+            <div class="fsd-design-layout">
+                <div class="fsd-label-panel">
+                    <div class="lp-head">待框選標籤</div>
+                    <div id="labelList"></div>
+                </div>
+                <div class="fsd-page-grid" id="pageGrid"></div>
+            </div>
+        </div>
+<?php endif; ?>
+    </div>
+</div>
+</div>
+
+<!-- 上傳新樣板 modal -->
+<div class="fsd-mask" id="uploadMask"><div class="fsd-modal">
+    <div class="m-head"><span>上傳新樣板</span><span class="m-close" onclick="closeMask('uploadMask')">✕</span></div>
+    <div class="m-body">
+        <label>樣板名稱</label><input type="text" id="upName" maxlength="100" placeholder="例：出貨檢驗簽核單">
+        <label>原始檔案（圖片 png/jpg 或多頁 PDF）</label><input type="file" id="upFile" accept=".png,.jpg,.jpeg,.pdf">
+        <p style="font-size:11.5px;color:#8a6d45;">上傳後系統會自動量測每頁尺寸，接著即可進入框選工作區設定簽核流程與框選位置。</p>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('uploadMask')">取消</button>
+        <button class="b-ok" onclick="submitUpload()">上傳</button></div>
+</div></div>
+
+<!-- 使用說明 modal（鐵律7） -->
+<div class="fsd-mask" id="helpUseMask"><div class="fsd-modal wide">
+    <div class="m-head"><span>使用說明 — 表單簽核設計器</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
+    <div class="m-body help-doc" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
+        <h4>功能說明</h4>
+        在管理員上傳的表單原始檔（圖片或多頁PDF）上，用「拖拽標籤到畫面定位」的方式框選出圖章區與回覆內容區，設定意見階段（並簽、不卡關）與決策階段（1~2人、真正決定流程走向）的有序流程。與「審核表單」「AS線上表單設計器」是三套獨立引擎，本模組專門用在需要保留原始版面（如客戶指定格式、紙本掃描件）的表單。
+        <h4>操作步驟</h4>
+        <b>①上傳新樣板</b>：填名稱、選檔案（圖片或PDF），上傳後系統自動量測頁面尺寸。<br>
+        <b>②設定階段</b>：新增階段（意見/決策二擇一）、每階段可加多個槽位（簽核人來源：固定人員／部門自動主管／送出者上一階主管／全站最高決策者），設定完按「儲存階段設定」。<br>
+        <b>③框選</b>：左側「待框選標籤」依剛設定的階段槽位自動產生（每槽位各一個圖章框標籤＋一個回覆框標籤），拖到右側頁面對應位置放開即完成框選；已放置的框可再拖曳調整位置/大小，選取後可刪除。圖章框有最小尺寸限制（比照全站列印圖章91px標準換算），太小會被擋下。<br>
+        <b>④綁定AS文件</b>：可選填，綁定後列印時頁尾會顯示對應的AS文件編號與版次。<br>
+        <b>⑤發布</b>：設定完成後按「發布」，會把目前的階段/槽位/框選整包存成一個版本快照，之後才能在「案件」頁選用此樣板建立案件。
+        <h4>重要行為</h4>
+        ・發布是「存檔即生效」的版本快照，已建立的案件會固定使用建立當下的版本，之後改版不影響進行中的案件。<br>
+        ・意見階段沒有駁回動作、不互相卡關，全部槽位（扣除迴避的）都回應才算完成；逾期未回應僅會提醒，不會自動略過。<br>
+        ・槽位解析出的人若剛好是送出案件的本人，該槽位自動略過（強制迴避，避免球員兼裁判）。
+        <h4>設定入口</h4>
+        本頁「上傳新樣板」／清單「設計」。
+        <h4>權限角色</h4>
+        表單簽核設計器檢閱＝看清單；建立/送出案件＝可到「案件」頁使用；樣板管理＝本頁全部設定；管理者全權。
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">關閉</button></div>
+</div></div>
+
+<script src="../../resource/js/jquery.min.js"></script>
+<script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/nprogress.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
+<script src="../../resource/js/fabric.min.js?v=<?= @filemtime(__DIR__.'/../../resource/js/fabric.min.js') ?>"></script>
+<script>
+var API = '../../src/store/FormSigner_API.php';
+var META = {}, TEMPLATES = [];
+var CUR_TPL = null;     // 目前設計中的樣板(template_get回傳整包)
+var STAGES = [];        // 設計中的階段陣列(前端暫存,儲存後才回寫DB)
+var CANVASES = {};      // page_no -> fabric.Canvas
+var SELECTED_OBJ = null;
+
+function esc(s){ return $('<div>').text(s==null?'':s).html(); }
+function openMask(id){ $('#'+id).css('display','block'); }
+function closeMask(id){ $('#'+id).css('display','none'); }
+$(document).ready(function(){
+    var $am = $('#sidebar-menu .nav.side-menu > li.active');
+    if ($am.length) { $am.removeClass('active').find('ul.child_menu').hide(); $am.find('li.current-page').removeClass('current-page'); }
+    $('#sidebar-menu').css('visibility','visible');
+});
+$('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
+
+function loadMeta(cb){
+    $.getJSON(API, {action:'meta'}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        META = res;
+        if (META.perms.canAdmin) $('#btnAddTpl').show();
+        if (cb) cb();
+    });
+}
+function loadTemplates(){
+    $.getJSON(API, {action:'template_list'}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        TEMPLATES = res.templates;
+        var h = '';
+        TEMPLATES.forEach(function(t){
+            var docTxt = t.as_doc ? (t.as_doc.doc_no + ' ' + t.as_doc.doc_name) : '<span class="tag-off">未綁定</span>';
+            h += '<tr><td>'+esc(t.name)+'</td><td>'+(t.file_type==='pdf'?'PDF':'圖片')+'</td><td>'+t.page_count+'</td><td>'+docTxt+'</td>'
+               + '<td>'+(t.published_version>0?('v'+t.published_version):'<span class="tag-off">尚未發布</span>')+'</td>'
+               + '<td>'+(t.status==='active'?'<span class="tag-on">啟用</span>':'<span class="tag-off">停用</span>')+'</td>'
+               + '<td>'
+               + (META.perms.canAdmin ? '<button onclick="openDesigner('+t.id+')" style="margin-right:4px;">設計</button>' : '')
+               + (META.perms.canAdmin ? '<button onclick="toggleStatus('+t.id+',\''+t.status+'\')">'+(t.status==='active'?'停用':'啟用')+'</button>' : '')
+               + '</td></tr>';
+        });
+        $('#tplBody').html(h || '<tr><td colspan="7" style="text-align:center;color:#8a6d45;padding:10px;">尚未上傳任何樣板</td></tr>');
+    });
+}
+function toggleStatus(id, cur){
+    $.post(API, {action:'template_set_status', csrf:META.csrf, id:id, status: cur==='active'?'inactive':'active'}, function(res){
+        if (!res.ok){ alert(res.error||'操作失敗'); return; }
+        loadTemplates();
+    }, 'json');
+}
+function submitUpload(){
+    var name = $.trim($('#upName').val());
+    if (!name){ alert('請輸入樣板名稱'); return; }
+    var f = $('#upFile')[0].files[0];
+    if (!f){ alert('請選擇檔案'); return; }
+    var fd = new FormData();
+    fd.append('action','template_upload'); fd.append('csrf', META.csrf); fd.append('name', name); fd.append('file', f);
+    fetch(API, {method:'POST', body:fd}).then(function(r){ return r.json(); }).then(function(res){
+        if (!res.ok){ alert(res.error||'上傳失敗'); return; }
+        closeMask('uploadMask'); $('#upName').val(''); $('#upFile').val('');
+        loadTemplates();
+        openDesigner(res.id);
+    }).catch(function(){ alert('上傳失敗（連線錯誤）'); });
+}
+$('#btnAddTpl').on('click', function(){ openMask('uploadMask'); });
+
+/* ============================================================ 設計工作區 ============================================================ */
+function openDesigner(id){
+    $.getJSON(API, {action:'template_get', id:id}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        CUR_TPL = res.template;
+        STAGES = (CUR_TPL.stages||[]).map(function(s){ return $.extend({}, s); });
+        $('#listPanel').hide(); $('#designerPanel').show();
+        $('#dsgTplName').text(CUR_TPL.name + '（'+(CUR_TPL.file_type==='pdf'?'PDF':'圖片')+'，共'+CUR_TPL.page_count+'頁）');
+        $('#dsgAsDoc').text(CUR_TPL.as_doc ? ('已綁定：'+CUR_TPL.as_doc.doc_no+' '+CUR_TPL.as_doc.doc_name) : '未綁定AS文件');
+        renderStages();
+        if (!CUR_TPL.pages || !CUR_TPL.pages.length) {
+            measureAndSavePages(function(){ buildPageCanvases(); });
+        } else {
+            buildPageCanvases();
+        }
+    });
+}
+$('#btnBackList').on('click', function(){
+    $('#designerPanel').hide(); $('#listPanel').show();
+    CANVASES = {}; loadTemplates();
+});
+function openAsDocPicker(){
+    $.getJSON(API, {action:'asdoc_list'}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        EGAsDoc.open({ docs: res.docs||[], current: CUR_TPL.as_doc?CUR_TPL.as_doc.id:0, title:'樣板 AS 文件綁定',
+            onSave: function(id, doc){
+                $.post(API, {action:'asdoc_save', csrf:META.csrf, template_id:CUR_TPL.id, as_doc_id:id}, function(r){
+                    if (!r.ok){ alert(r.error||'綁定失敗'); return; }
+                    CUR_TPL.as_doc = doc;
+                    $('#dsgAsDoc').text(doc ? ('已綁定：'+doc.doc_no+' '+doc.doc_name) : '未綁定AS文件');
+                }, 'json');
+            }
+        });
+    });
+}
+
+/* -------- 階段/槽位設定 -------- */
+var SIGNER_MODE_LABEL = {user:'固定人員', dept_auto_manager:'部門自動主管', submitter_supervisor:'送出者上一階主管', top_approver:'全站最高決策者'};
+function addStage(){ STAGES.push({stage_type:'advisory', name:'第'+(STAGES.length+1)+'關', auto_sign:0, signers:[]}); renderStages(); }
+function delStage(i){ if (!confirm('確定刪除此階段？')) return; STAGES.splice(i,1); renderStages(); }
+function stageEdit(i,k,v){ STAGES[i][k]=v; }
+function addSigner(si){ STAGES[si].signers = STAGES[si].signers||[]; STAGES[si].signers.push({mode:'top_approver', user_id:null, dept_id:null, label:''}); renderStages(); }
+function delSigner(si,gi){ STAGES[si].signers.splice(gi,1); renderStages(); }
+function signerEdit(si,gi,k,v){ STAGES[si].signers[gi][k]=v; }
+function renderStages(){
+    var deptOpts = '<option value="">選部門…</option>' + (META.departments||[]).map(function(d){ return '<option value="'+d.id+'">'+esc(d.name)+'</option>'; }).join('');
+    var userOpts = '<option value="">選人員…</option>' + (META.people||[]).map(function(p){ return '<option value="'+p.id+'">'+esc(p.display)+'</option>'; }).join('');
+    var h = '';
+    STAGES.forEach(function(s, si){
+        h += '<div class="fsd-stage-card"><div class="fsd-stage-head">'
+           + '<span>第'+(si+1)+'關</span>'
+           + '<select onchange="stageEdit('+si+',\'stage_type\',this.value)"><option value="advisory"'+(s.stage_type==='advisory'?' selected':'')+'>意見階段(並簽,不卡關)</option><option value="decision"'+(s.stage_type==='decision'?' selected':'')+'>決策階段(1~2人,決定流程走向)</option></select>'
+           + '<input type="text" value="'+esc(s.name)+'" placeholder="階段名稱" onchange="stageEdit('+si+',\'name\',this.value)">'
+           + '<label style="margin:0;font-size:12px;"><input type="checkbox" '+(s.auto_sign?'checked':'')+' onchange="stageEdit('+si+',\'auto_sign\',this.checked?1:0)"> 自動簽核(免真人,依ai-rules/21規則)</label>'
+           + '<span class="fsd-del" style="margin-left:auto;" onclick="delStage('+si+')"><i class="fa fa-trash"></i> 刪除階段</span>'
+           + '</div><div class="fsd-stage-body">'
+           + '<table class="signer-tbl"><thead><tr><th style="width:22%;">簽核人來源</th><th style="width:28%;">指定對象</th><th style="width:20%;">標籤名稱(顯示用)</th><th style="width:10%;"></th></tr></thead><tbody>';
+        (s.signers||[]).forEach(function(sg, gi){
+            h += '<tr><td><select onchange="signerEdit('+si+','+gi+',\'mode\',this.value)">';
+            Object.keys(SIGNER_MODE_LABEL).forEach(function(m){ h += '<option value="'+m+'"'+(sg.mode===m?' selected':'')+'>'+SIGNER_MODE_LABEL[m]+'</option>'; });
+            h += '</select></td><td>';
+            if (sg.mode === 'user') h += '<select onchange="signerEdit('+si+','+gi+',\'user_id\',this.value)">'+userOpts.replace('value="'+sg.user_id+'"','value="'+sg.user_id+'" selected')+'</select>';
+            else if (sg.mode === 'dept_auto_manager') h += '<select onchange="signerEdit('+si+','+gi+',\'dept_id\',this.value)">'+deptOpts.replace('value="'+sg.dept_id+'"','value="'+sg.dept_id+'" selected')+'</select>';
+            else h += '<span style="color:#8a6d45;">（自動解析,無需指定）</span>';
+            h += '</td><td><input type="text" value="'+esc(sg.label||'')+'" placeholder="如:品管部主管" onchange="signerEdit('+si+','+gi+',\'label\',this.value)"></td>'
+               + '<td style="text-align:center;"><span class="fsd-del" onclick="delSigner('+si+','+gi+')"><i class="fa fa-times"></i></span></td></tr>';
+        });
+        h += '</tbody></table><button type="button" onclick="addSigner('+si+')" style="height:24px;font-size:12px;border:1px solid #D8BE93;background:#fff;border-radius:4px;cursor:pointer;">+ 新增槽位(一位簽核人)</button>'
+           + '</div></div>';
+    });
+    $('#stageArea').html(h || '<p style="color:#8a6d45;">尚未設定任何階段，請按「新增階段」。</p>');
+}
+function saveStages(){
+    if (!STAGES.length){ alert('請至少新增一個階段'); return; }
+    for (var i=0;i<STAGES.length;i++){
+        if (!STAGES[i].signers || !STAGES[i].signers.length){ alert('第'+(i+1)+'關尚未設定任何槽位(簽核人)'); return; }
+    }
+    $.post(API, {action:'stages_save', csrf:META.csrf, template_id:CUR_TPL.id, stages:JSON.stringify(STAGES)}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        CUR_TPL.stages = res.stages; STAGES = res.stages.map(function(s){ return $.extend({}, s); });
+        renderStages();
+        renderLabelList();
+        alert('階段設定已儲存，可到下方框選工作區拖放標籤');
+    }, 'json');
+}
+function publishTemplate(){
+    if (!confirm('確定要發布目前的設定？發布後即可在「案件」頁選用此樣板建立新案件。')) return;
+    $.post(API, {action:'schema_publish', csrf:META.csrf, template_id:CUR_TPL.id}, function(res){
+        if (!res.ok){ alert(res.error||'發布失敗'); return; }
+        CUR_TPL = res.template;
+        alert('已發布 v'+res.version);
+        loadTemplates();
+    }, 'json');
+}
+
+/* -------- 頁面尺寸量測(上傳後首次進入設計頁自動跑一次) -------- */
+const PDFJS_BASE = '../../resource/js/pdfjs/';
+const PDFJS_V = '<?= @filemtime(__DIR__.'/../../resource/js/pdfjs/pdf.min.js') ?>';
+let pdfjsLoading = null;
+function ensurePdfJs(){
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    if (pdfjsLoading) return pdfjsLoading;
+    pdfjsLoading = new Promise(function(resolve, reject){
+        var s = document.createElement('script');
+        s.src = PDFJS_BASE + 'pdf.min.js?v=' + PDFJS_V;
+        s.onload = function(){
+            if (!window.pdfjsLib){ pdfjsLoading = null; reject(new Error('pdfjsLib未載入')); return; }
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.js?v=' + PDFJS_V;
+            resolve(window.pdfjsLib);
+        };
+        s.onerror = function(){ pdfjsLoading = null; reject(new Error('pdf.min.js載入失敗')); };
+        document.head.appendChild(s);
+    });
+    return pdfjsLoading;
+}
+var PDF_PAGE_IMAGES = {}; // page_no -> dataURL（僅PDF類型使用，量測時順便存起來給畫布背景用，不必重渲染）
+function measureAndSavePages(done){
+    var fileUrl = API + '?action=template_file&id=' + CUR_TPL.id;
+    if (CUR_TPL.file_type === 'pdf') {
+        ensurePdfJs().then(function(lib){
+            return lib.getDocument({url: fileUrl, withCredentials:true}).promise;
+        }).then(function(doc){
+            var pages = []; var i = 1;
+            function next(){
+                if (i > doc.numPages) {
+                    $.post(API, {action:'pages_save', csrf:META.csrf, template_id:CUR_TPL.id, pages:JSON.stringify(pages)}, function(res){
+                        if (!res.ok){ alert(res.error||'頁面量測儲存失敗'); return; }
+                        CUR_TPL.pages = res.pages; CUR_TPL.page_count = res.pages.length;
+                        if (done) done();
+                    }, 'json');
+                    return;
+                }
+                doc.getPage(i).then(function(page){
+                    var vp = page.getViewport({scale:1});
+                    pages.push({page_no:i, width_pt:vp.width, height_pt:vp.height});
+                    var scale = Math.min(2, 1000/Math.max(vp.width, vp.height));
+                    var rvp = page.getViewport({scale:scale});
+                    var cv = document.createElement('canvas'); cv.width = Math.round(rvp.width); cv.height = Math.round(rvp.height);
+                    var ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);
+                    page.render({canvasContext:ctx, viewport:rvp}).promise.then(function(){
+                        PDF_PAGE_IMAGES[i] = cv.toDataURL('image/png');
+                        i++; next();
+                    });
+                });
+            }
+            next();
+        }).catch(function(e){ alert('PDF讀取失敗：' + (e.message||e)); });
+    } else {
+        var img = new Image();
+        img.onload = function(){
+            var widthPt = img.naturalWidth / 96 * 72, heightPt = img.naturalHeight / 96 * 72;
+            $.post(API, {action:'pages_save', csrf:META.csrf, template_id:CUR_TPL.id, pages:JSON.stringify([{page_no:1, width_pt:widthPt, height_pt:heightPt}])}, function(res){
+                if (!res.ok){ alert(res.error||'頁面量測儲存失敗'); return; }
+                CUR_TPL.pages = res.pages;
+                if (done) done();
+            }, 'json');
+        };
+        img.onerror = function(){ alert('圖片讀取失敗'); };
+        img.src = fileUrl;
+    }
+}
+
+/* -------- 框選工作區：Fabric.js 座標拖放 -------- */
+function fieldMinFrac(page){
+    var mmMinEdge = 91/96*25.4;
+    var widthMm = (page.width_pt||0)/72*25.4, heightMm = (page.height_pt||0)/72*25.4;
+    return {min_w: widthMm>0 ? mmMinEdge/widthMm : 0.05, min_h: heightMm>0 ? mmMinEdge/heightMm : 0.05};
+}
+function renderLabelList(){
+    var placed = {};
+    (CUR_TPL.fields||[]).forEach(function(f){ placed[f.stage_signer_id+'_'+f.box_type] = true; });
+    var h = '';
+    STAGES.forEach(function(s, si){
+        (s.signers||[]).forEach(function(sg, gi){
+            if (!sg.id) return; // 尚未儲存階段設定，還沒有真正的槽位id可框選
+            ['stamp','reply'].forEach(function(bt){
+                var isPlaced = placed[sg.id+'_'+bt];
+                var text = '第'+(si+1)+'關-'+(sg.label||SIGNER_MODE_LABEL[sg.mode])+'('+(bt==='stamp'?'圖章框':'回覆框')+')';
+                h += '<div class="fsd-label type-'+bt+'" draggable="true" data-ssid="'+sg.id+'" data-boxtype="'+bt+'">'+esc(text)
+                   + (isPlaced ? '<span class="placed"><i class="fa fa-check"></i></span>' : '') + '</div>';
+            });
+        });
+    });
+    $('#labelList').html(h || '<p style="padding:8px;color:#8a6d45;font-size:12px;">請先儲存階段設定</p>');
+}
+function buildPageCanvases(){
+    CANVASES = {};
+    var pages = CUR_TPL.pages || [{page_no:1, width_pt:595, height_pt:842}];
+    var h = '';
+    pages.forEach(function(p){
+        h += '<div class="fsd-page-wrap"><div class="pno">第 '+p.page_no+' 頁</div><canvas id="pgcv_'+p.page_no+'"></canvas></div>';
+    });
+    $('#pageGrid').html(h);
+    pages.forEach(function(p){
+        var dispW = 480, dispH = Math.round(dispW * (p.height_pt / p.width_pt || 1.414));
+        var cv = new fabric.Canvas('pgcv_'+p.page_no, {width:dispW, height:dispH, selection:false});
+        CANVASES[p.page_no] = cv;
+        var bgSrc = CUR_TPL.file_type === 'pdf' ? PDF_PAGE_IMAGES[p.page_no] : (API + '?action=template_file&id=' + CUR_TPL.id);
+        if (bgSrc) {
+            fabric.Image.fromURL(bgSrc, function(img){
+                img.set({left:0, top:0, scaleX:dispW/img.width, scaleY:dispH/img.height, selectable:false, evented:false});
+                cv.setBackgroundImage(img, cv.renderAll.bind(cv));
+            }, {crossOrigin:'anonymous'});
+        }
+        cv.on('selection:created', function(e){ SELECTED_OBJ = {canvas:cv, obj:e.selected[0]}; });
+        cv.on('selection:updated', function(e){ SELECTED_OBJ = {canvas:cv, obj:e.selected[0]}; });
+        cv.on('selection:cleared', function(){ SELECTED_OBJ = null; });
+        cv.on('object:modified', function(e){ saveFieldPosition(p.page_no, e.target); });
+
+        var wrapEl = cv.upperCanvasEl;
+        wrapEl.addEventListener('dragover', function(ev){ ev.preventDefault(); });
+        wrapEl.addEventListener('drop', function(ev){
+            ev.preventDefault();
+            var data = ev.dataTransfer.getData('text/plain');
+            if (!data) return;
+            var d = JSON.parse(data);
+            var rect = wrapEl.getBoundingClientRect();
+            var xFrac = (ev.clientX - rect.left) / dispW, yFrac = (ev.clientY - rect.top) / dispH;
+            var minFrac = fieldMinFrac(p);
+            var wFrac = d.boxtype === 'stamp' ? Math.max(minFrac.min_w + 0.02, 0.12) : 0.26;
+            var hFrac = d.boxtype === 'stamp' ? Math.max(minFrac.min_h + 0.02, 0.09) : 0.07;
+            xFrac = Math.max(0, Math.min(1-wFrac, xFrac - wFrac/2));
+            yFrac = Math.max(0, Math.min(1-hFrac, yFrac - hFrac/2));
+            var g = addFieldBox(p.page_no, d.ssid, d.boxtype, xFrac, yFrac, wFrac, hFrac, 0);
+            saveFieldPosition(p.page_no, g);
+        });
+    });
+    // 載入既有框選
+    (CUR_TPL.fields||[]).forEach(function(f){
+        addFieldBox(f.page_no, f.stage_signer_id, f.box_type, f.x, f.y, f.w, f.h, f.id);
+    });
+    renderLabelList();
+}
+$(document).on('dragstart', '.fsd-label', function(e){
+    var data = JSON.stringify({ssid:$(this).data('ssid'), boxtype:$(this).data('boxtype')});
+    e.originalEvent.dataTransfer.setData('text/plain', data);
+});
+function addFieldBox(pageNo, ssid, boxType, xFrac, yFrac, wFrac, hFrac, fieldId){
+    var cv = CANVASES[pageNo];
+    if (!cv) return;
+    var color = boxType === 'stamp' ? '#F0A24B' : '#8A5A2B';
+    var label = boxType === 'stamp' ? '章' : '覆';
+    var rect = new fabric.Rect({originX:'left', originY:'top', fill:color, opacity:0.32, stroke:color, strokeWidth:1.5});
+    var text = new fabric.Text(label, {fontSize:13, fill:'#5b3a1e', originX:'center', originY:'center'});
+    var group = new fabric.Group([rect, text], {
+        left: xFrac*cv.width, top: yFrac*cv.height, width: wFrac*cv.width, height: hFrac*cv.height,
+        lockRotation:true, hasRotatingPoint:false,
+    });
+    text.set({left: (wFrac*cv.width)/2, top: (hFrac*cv.height)/2});
+    group.fieldId = fieldId||0; group.ssid = ssid; group.boxType = boxType; group.pageNo = pageNo;
+    cv.add(group);
+    return group;
+}
+function saveFieldPosition(pageNo, obj){
+    if (!obj || obj.pageNo === undefined) return;
+    var cv = CANVASES[pageNo];
+    var xFrac = obj.left / cv.width, yFrac = obj.top / cv.height;
+    var wFrac = (obj.width * obj.scaleX) / cv.width, hFrac = (obj.height * obj.scaleY) / cv.height;
+    var field = {id:obj.fieldId||0, stage_signer_id:obj.ssid, box_type:obj.boxType, page_no:pageNo, x:xFrac, y:yFrac, w:wFrac, h:hFrac};
+    $.post(API, {action:'field_save', csrf:META.csrf, template_id:CUR_TPL.id, field:JSON.stringify(field)}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗，請調整後再試一次'); return; }
+        obj.fieldId = res.id; CUR_TPL.fields = res.fields;
+        renderLabelList();
+    }, 'json');
+}
+function deleteSelectedField(){
+    if (!SELECTED_OBJ){ alert('請先點選一個框'); return; }
+    var obj = SELECTED_OBJ.obj, cv = SELECTED_OBJ.canvas;
+    if (!obj.fieldId){ cv.remove(obj); SELECTED_OBJ = null; return; }
+    $.post(API, {action:'field_delete', csrf:META.csrf, template_id:CUR_TPL.id, field_id:obj.fieldId}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        cv.remove(obj); SELECTED_OBJ = null; CUR_TPL.fields = res.fields;
+        renderLabelList();
+    }, 'json');
+}
+
+loadMeta(loadTemplates);
+</script>
+</body>
+</html>
