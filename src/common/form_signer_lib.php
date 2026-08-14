@@ -260,6 +260,12 @@ function fsd_field_save(PDO $db, int $templateId, array $f): array {
         }
     }
     $id = (int)($f['id'] ?? 0);
+    if (!$id) {
+        // 同一槽位+同一框型只保留一個框(拖放到已放過的標籤視同搬動既有框，不產生重複框)
+        $dup = $db->prepare("SELECT id FROM fsd_field WHERE stage_signer_id=? AND box_type=?");
+        $dup->execute([$stageSignerId, $boxType]);
+        $id = (int)($dup->fetchColumn() ?: 0);
+    }
     if ($id) {
         $db->prepare("UPDATE fsd_field SET stage_signer_id=?,page_no=?,box_type=?,x=?,y=?,w=?,h=? WHERE id=? AND template_id=?")
            ->execute([$stageSignerId, $pageNo, $boxType, $x, $y, $w, $h, $id, $templateId]);
