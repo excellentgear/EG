@@ -217,8 +217,12 @@ function fsd_template_set_status(PDO $db, int $id, string $status, string $byNam
  *  伺服器端(最小框選尺寸計算等)不需要另外處理旋轉換算。 */
 function fsd_template_pages_save(PDO $db, int $templateId, array $pages): void {
     $db->prepare("DELETE FROM fsd_template_page WHERE template_id=?")->execute([$templateId]);
-    $ins = $db->prepare("INSERT INTO fsd_template_page (template_id,page_no,width_pt,height_pt,rotation) VALUES (?,?,?,?,?)");
-    foreach ($pages as $p) $ins->execute([$templateId, (int)$p['page_no'], (float)$p['width_pt'], (float)$p['height_pt'], (int)($p['rotation'] ?? 0) % 360]);
+    $ins = $db->prepare("INSERT INTO fsd_template_page (template_id,page_no,width_pt,height_pt,rotation,paper_size,crop_x,crop_y,crop_w,crop_h) VALUES (?,?,?,?,?,?,?,?,?,?)");
+    foreach ($pages as $p) {
+        $paper = in_array($p['paper_size'] ?? '', ['A4','A3'], true) ? $p['paper_size'] : null;
+        $ins->execute([$templateId, (int)$p['page_no'], (float)$p['width_pt'], (float)$p['height_pt'], (int)($p['rotation'] ?? 0) % 360,
+            $paper, (float)($p['crop_x'] ?? 0), (float)($p['crop_y'] ?? 0), (float)($p['crop_w'] ?? 1), (float)($p['crop_h'] ?? 1)]);
+    }
     $db->prepare("UPDATE fsd_template SET page_count=? WHERE id=?")->execute([count($pages) ?: 1, $templateId]);
 }
 
@@ -403,7 +407,9 @@ function fsd_template_schema_build(PDO $db, int $templateId): array {
     }
     return [
         'file'=>['file_type'=>$tpl['file_type'] ?? 'image', 'file_name'=>$tpl['file_name'] ?? null, 'page_count'=>count($pages) ?: 1],
-        'pages'=>array_map(fn($p) => ['page_no'=>(int)$p['page_no'], 'width_pt'=>(float)$p['width_pt'], 'height_pt'=>(float)$p['height_pt'], 'rotation'=>(int)($p['rotation'] ?? 0)], $pages),
+        'pages'=>array_map(fn($p) => ['page_no'=>(int)$p['page_no'], 'width_pt'=>(float)$p['width_pt'], 'height_pt'=>(float)$p['height_pt'],
+            'rotation'=>(int)($p['rotation'] ?? 0), 'crop_x'=>(float)($p['crop_x'] ?? 0), 'crop_y'=>(float)($p['crop_y'] ?? 0),
+            'crop_w'=>(float)($p['crop_w'] ?? 1), 'crop_h'=>(float)($p['crop_h'] ?? 1)], $pages),
         'stamp_tpl'=>$tpl['stamp_tpl'] ?? null,
         'stages'=>$stageOut,
         'fields'=>$fieldsOut,
@@ -696,8 +702,12 @@ function fsd_case_replace_file(PDO $db, int $caseId, string $fileType, string $f
 
 function fsd_case_pages_save(PDO $db, int $caseId, array $pages): void {
     $db->prepare("DELETE FROM fsd_case_page WHERE case_id=?")->execute([$caseId]);
-    $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation) VALUES (?,?,?,?,?)");
-    foreach ($pages as $p) $ins->execute([$caseId, (int)$p['page_no'], (float)$p['width_pt'], (float)$p['height_pt'], (int)($p['rotation'] ?? 0) % 360]);
+    $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation,paper_size,crop_x,crop_y,crop_w,crop_h) VALUES (?,?,?,?,?,?,?,?,?,?)");
+    foreach ($pages as $p) {
+        $paper = in_array($p['paper_size'] ?? '', ['A4','A3'], true) ? $p['paper_size'] : null;
+        $ins->execute([$caseId, (int)$p['page_no'], (float)$p['width_pt'], (float)$p['height_pt'], (int)($p['rotation'] ?? 0) % 360,
+            $paper, (float)($p['crop_x'] ?? 0), (float)($p['crop_y'] ?? 0), (float)($p['crop_w'] ?? 1), (float)($p['crop_h'] ?? 1)]);
+    }
 }
 
 function fsd_case_pages_get(PDO $db, int $caseId): array {
