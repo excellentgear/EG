@@ -423,6 +423,17 @@ case 'ref_item_template_delete':
     pfmea_ref_item_template_delete($db, $id);
     jout(['success'=>true]);
 
+// 整組樣板新增/編輯（2026-08-14使用者要求：參考資料設定畫面要能新增+編輯，不只查看/刪除）
+case 'ref_item_template_save':
+    needAdmin($perms);
+    $tplId = (int)($_POST['id'] ?? 0);
+    $pid = (int)($_POST['process_id'] ?? 0);
+    if (!$pid) jout(['success'=>false,'message'=>'缺少製程']);
+    $data = json_decode((string)($_POST['data'] ?? '{}'), true);
+    if (!is_array($data)) $data = [];
+    $newId = pfmea_ref_item_template_save($db, $tplId, $pid, $data, $uid, $uname);
+    jout(['success'=>true,'id'=>$newId]);
+
 // 欄位個別設定對應（2026-08-14使用者要求）：潛在失效模式->失效模式潛在後果/分類/失效潛在原因、
 // 產品名稱->規格描述等，任一欄位值都能設定對應到另一欄位的建議值
 case 'field_link_list':
