@@ -203,6 +203,23 @@ function pfmea_ensure_schema(PDO $db): void {
         KEY idx_process (process_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-製程整組樣板(項目異常)'");
 
+    // 2026-08-14 使用者要求：基本資料內欄位可個別設定對應到其他欄位(如潛在失效模式->失效模式潛在
+    // 後果/分類/失效潛在原因、產品名稱->規格描述)，選了來源值就連動帶出對應建議清單；通用單一張表
+    // (source_field+source_value+target_field+target_value)取代逐一欄位各建一張表，可填表人新增
+    // 自行輸入新值即註冊，僅管理員可刪除，範圍不限於固定的欄位組合。
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_field_link (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        source_field VARCHAR(30) NOT NULL,
+        source_value VARCHAR(200) NOT NULL,
+        target_field VARCHAR(30) NOT NULL,
+        target_value VARCHAR(300) NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_lookup (source_field, source_value(50), target_field)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-欄位個別設定對應清單(基本資料內某欄位值->建議帶出的其他欄位值)'");
+
     foreach ([['pfmea_view','PFMEA檢閱'],['pfmea_edit','PFMEA登錄'],['pfmea_admin','PFMEA管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='pfmea' LIMIT 1");
         $st->execute([$r[0]]);

@@ -206,3 +206,33 @@ function pfmea_ref_item_templates(PDO $db, int $processId): array {
 function pfmea_ref_item_template_delete(PDO $db, int $id): void {
     $db->prepare("UPDATE pfmea_item_template SET is_active=0 WHERE id=?")->execute([$id]);
 }
+
+/* ---------- 欄位個別設定對應（2026-08-14使用者要求）----------
+ * 通用機制：任一欄位值(source)可設定對應到另一欄位的建議值(target)，如潛在失效模式->失效模式潛在
+ * 後果/分類/失效潛在原因、產品名稱->規格描述。可填表人新增(自行輸入新值即註冊)，僅管理員可刪除。 */
+function pfmea_field_link_list(PDO $db, string $sourceField, string $sourceValue, string $targetField): array {
+    if (trim($sourceValue) === '') return [];
+    $st = $db->prepare("SELECT id, target_value FROM pfmea_field_link
+                         WHERE source_field=? AND source_value=? AND target_field=? AND is_active=1 ORDER BY sort_order, id");
+    $st->execute([$sourceField, trim($sourceValue), $targetField]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function pfmea_field_link_add(PDO $db, string $sourceField, string $sourceValue, string $targetField, string $targetValue, int $uid, string $uname): int {
+    $sourceValue = trim($sourceValue); $targetValue = trim($targetValue);
+    if ($sourceValue === '' || $targetValue === '') return 0;
+    $st = $db->prepare("SELECT id FROM pfmea_field_link WHERE source_field=? AND source_value=? AND target_field=? AND target_value=? LIMIT 1");
+    $st->execute([$sourceField, $sourceValue, $targetField, $targetValue]);
+    $id = $st->fetchColumn();
+    if ($id) return (int)$id;
+    $st = $db->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM pfmea_field_link WHERE source_field=? AND source_value=? AND target_field=?");
+    $st->execute([$sourceField, $sourceValue, $targetField]);
+    $sort = (int)$st->fetchColumn();
+    $st = $db->prepare("INSERT INTO pfmea_field_link (source_field, source_value, target_field, target_value, sort_order, created_by, created_by_name) VALUES (?,?,?,?,?,?,?)");
+    $st->execute([$sourceField, $sourceValue, $targetField, $targetValue, $sort, $uid, $uname]);
+    return (int)$db->lastInsertId();
+}
+
+function pfmea_field_link_delete(PDO $db, int $id): void {
+    $db->prepare("UPDATE pfmea_field_link SET is_active=0 WHERE id=?")->execute([$id]);
+}

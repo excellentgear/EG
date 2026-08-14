@@ -379,6 +379,27 @@ case 'ref_item_template_delete':
     pfmea_ref_item_template_delete($db, $id);
     jout(['success'=>true]);
 
+// 欄位個別設定對應（2026-08-14使用者要求）：潛在失效模式->失效模式潛在後果/分類/失效潛在原因、
+// 產品名稱->規格描述等，任一欄位值都能設定對應到另一欄位的建議值
+case 'field_link_list':
+    needView($perms);
+    jout(['success'=>true,'rows'=>pfmea_field_link_list($db, (string)($_GET['source_field']??''), (string)($_GET['source_value']??''), (string)($_GET['target_field']??''))]);
+
+case 'field_link_add':
+    needEdit($perms);
+    $sf = (string)($_POST['source_field'] ?? ''); $sv = (string)($_POST['source_value'] ?? '');
+    $tf = (string)($_POST['target_field'] ?? ''); $tv = (string)($_POST['target_value'] ?? '');
+    if ($sf==='' || $sv==='' || $tf==='' || $tv==='') jout(['success'=>false,'message'=>'缺少必要參數']);
+    $id = pfmea_field_link_add($db, $sf, $sv, $tf, $tv, $uid, $uname);
+    jout(['success'=>true,'id'=>$id]);
+
+case 'field_link_delete':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    pfmea_field_link_delete($db, $id);
+    jout(['success'=>true]);
+
 // ── 各種自動帶入（2026-08-13 使用者要求）──────────────────────────────
 // 規格描述：沿用 NewOrder_Track.php 料號下方顯示的齒輪規格邏輯，查無資料回傳空字串(前端不覆蓋)
 case 'gear_spec_get':
