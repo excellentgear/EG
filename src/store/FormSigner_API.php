@@ -177,6 +177,16 @@ case 'field_delete': {
     jout(['fields'=>fsd_field_list($db, $id)]);
 }
 
+/** 旋轉頁面時清空該頁既有框選(座標系已改變,舊位置不再適用)。 */
+case 'field_delete_page': {
+    fsd_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可刪除框選', 403);
+    $id = (int)($_POST['template_id'] ?? 0);
+    $pageNo = (int)($_POST['page_no'] ?? 0);
+    fsd_field_delete_by_page($db, $id, $pageNo);
+    jout(['fields'=>fsd_field_list($db, $id)]);
+}
+
 case 'schema_publish': {
     fsd_need_csrf();
     if (!$perms['canAdmin']) jerr('僅管理員可發布樣板', 403);
@@ -363,6 +373,18 @@ case 'case_field_delete': {
     if ((int)$case['applicant_id'] !== $uid && !$perms['canAdmin']) jerr('只有申請人本人或管理員可以編輯', 403);
     $fieldId = (int)($_POST['field_id'] ?? 0);
     $r = fsd_case_field_delete($db, $id, $fieldId);
+    jout(['fields'=>$r['fields']]);
+}
+
+/** 旋轉頁面時清空該頁既有框選(座標系已改變,舊位置不再適用)。 */
+case 'case_field_delete_page': {
+    fsd_need_csrf();
+    $id = (int)($_POST['case_id'] ?? 0);
+    $case = fsd_case_get($db, $id);
+    if (!$case) jerr('找不到此案件', 404);
+    if ((int)$case['applicant_id'] !== $uid && !$perms['canAdmin']) jerr('只有申請人本人或管理員可以編輯', 403);
+    $pageNo = (int)($_POST['page_no'] ?? 0);
+    $r = fsd_case_field_delete_by_page($db, $id, $pageNo);
     jout(['fields'=>$r['fields']]);
 }
 

@@ -121,6 +121,8 @@ $perms = fsd_perms($db, $fsdUser);
                 <b id="dsgTplName" style="margin-left:6px;"></b>
                 <button onclick="openAsDocPicker()">綁定AS文件</button>
                 <span id="dsgAsDoc" style="color:#5b3a1e;font-size:12px;"></span>
+                <span style="margin-left:10px;font-size:12px;color:#5b3a1e;">圖章模板</span>
+                <select id="dsgStampTpl" style="height:28px;font-size:12px;" onchange="submitStampTpl()"><option value="0">（未綁定，比照全站91px預設）</option></select>
                 <button class="btn-warm" style="margin-left:auto;" onclick="addStage()"><i class="fa fa-plus"></i> 新增階段</button>
                 <button class="btn-warm" onclick="saveStages()"><i class="fa fa-save"></i> 儲存階段設定</button>
                 <button style="background:#F0A24B;color:#fff;border-color:#d98a33;" onclick="publishTemplate()"><i class="fa fa-check"></i> 發布</button>
@@ -366,6 +368,7 @@ function openDesigner(id){
         $('#listPanel').hide(); $('#designerPanel').show();
         $('#dsgTplName').text(CUR_TPL.name + '（'+(CUR_TPL.file_type==='pdf'?'PDF':'圖片')+'，共'+CUR_TPL.page_count+'頁）');
         $('#dsgAsDoc').text(CUR_TPL.as_doc ? ('已綁定：'+CUR_TPL.as_doc.doc_no+' '+CUR_TPL.as_doc.doc_name) : '未綁定AS文件');
+        loadStampTplOptions();
         renderStages();
         if (!CUR_TPL.pages || !CUR_TPL.pages.length) {
             measureAndSavePages(function(){ buildPageCanvases(); });
@@ -391,6 +394,23 @@ function openAsDocPicker(){
             }
         });
     });
+}
+/* 圖章模板綁定：圖章尺寸依此模板設定的公分數計算(使用者明確要求)，換算邏輯與最小框選尺寸驗證見form_signer_lib.php fsd_field_min_frac()。 */
+function loadStampTplOptions(){
+    $.getJSON(API, {action:'stamp_tpl_options'}, function(res){
+        if (!res.ok) return;
+        var h = '<option value="0">（未綁定，比照全站91px預設）</option>';
+        (res.templates||[]).forEach(function(t){ h += '<option value="'+t.id+'">'+(t.type_name?esc(t.type_name)+'｜':'')+esc(t.tpl_name)+'</option>'; });
+        $('#dsgStampTpl').html(h).val(CUR_TPL.stamp_tpl ? CUR_TPL.stamp_tpl.id : 0);
+    });
+}
+function submitStampTpl(){
+    var id = $('#dsgStampTpl').val();
+    $.post(API, {action:'stamp_tpl_save', csrf:META.csrf, template_id:CUR_TPL.id, stamp_tpl_id:id}, function(res){
+        if (!res.ok){ alert(res.error||'設定失敗'); return; }
+        CUR_TPL.stamp_tpl = res.template.stamp_tpl;
+        alert('已設定圖章模板，既有框選的最小尺寸限制已依新模板重新計算(僅影響之後新框選/調整，既有框選不會自動變動)');
+    }, 'json');
 }
 
 /* -------- 階段/槽位設定 -------- */
@@ -472,7 +492,6 @@ function ensurePdfJs(){
     });
     return pdfjsLoading;
 }
-var PDF_PAGE_IMAGES = {}; // page_no -> dataURL（僅PDF類型使用，量測時順便存起來給畫布背景用，不必重渲染）
 function measureAndSavePages(done){
     var fileUrl = API + '?action=template_file&id=' + CUR_TPL.id;
     if (CUR_TPL.file_type === 'pdf') {
@@ -492,14 +511,7 @@ function measureAndSavePages(done){
                 doc.getPage(i).then(function(page){
                     var vp = page.getViewport({scale:1});
                     pages.push({page_no:i, width_pt:vp.width, height_pt:vp.height});
-                    var scale = Math.min(2, 1000/Math.max(vp.width, vp.height));
-                    var rvp = page.getViewport({scale:scale});
-                    var cv = document.createElement('canvas'); cv.width = Math.round(rvp.width); cv.height = Math.round(rvp.height);
-                    var ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);
-                    page.render({canvasContext:ctx, viewport:rvp}).promise.then(function(){
-                        PDF_PAGE_IMAGES[i] = cv.toDataURL('image/png');
-                        i++; next();
-                    });
+                    i++; next();
                 });
             }
             next();
@@ -518,12 +530,76 @@ function measureAndSavePages(done){
         img.src = fileUrl;
     }
 }
+/** 把來源(img)依rotation(0/90/180/270)轉正畫到新canvas，回傳該canvas；旋轉會交換寬高。 */
+function rotateToCanvas(src, srcW, srcH, rotationDeg){
+    rotationDeg = ((rotationDeg||0) % 360 + 360) % 360;
+    var swapped = (rotationDeg === 90 || rotationDeg === 270);
+    var outW = swapped ? srcH : srcW, outH = swapped ? srcW : srcH;
+    var cv = document.createElement('canvas'); cv.width = outW; cv.height = outH;
+    var ctx = cv.getContext('2d');
+    ctx.translate(outW/2, outH/2);
+    ctx.rotate(rotationDeg * Math.PI/180);
+    ctx.drawImage(src, -srcW/2, -srcH/2, srcW, srcH);
+    return cv;
+}
+/** 每頁各自rotation(人工修正掃描歪斜方向)：PDF直接用pdf.js viewport rotation參數轉正；
+ *  圖片(image類型整份文件只有1頁)用canvas重繪轉正。回呼cb(pageNo, dataURL)。 */
+function renderDocPages(fileType, fileUrl, pages, cb){
+    if (fileType === 'pdf') {
+        ensurePdfJs().then(function(lib){ return lib.getDocument({url:fileUrl, withCredentials:true}).promise; }).then(function(doc){
+            pages.forEach(function(p){
+                doc.getPage(p.page_no).then(function(page){
+                    var rotation = (p.rotation||0) % 360;
+                    var base = page.getViewport({scale:1, rotation:rotation});
+                    var scale = Math.min(2, 1000/Math.max(base.width, base.height));
+                    var vp = page.getViewport({scale:scale, rotation:rotation});
+                    var cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+                    var ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);
+                    page.render({canvasContext:ctx, viewport:vp}).promise.then(function(){ cb(p.page_no, cv.toDataURL('image/png')); });
+                });
+            });
+        }).catch(function(e){ alert('PDF讀取失敗：'+(e.message||e)); });
+    } else {
+        pages.forEach(function(p){
+            if (!p.rotation) { cb(p.page_no, fileUrl); return; }
+            var img = new Image();
+            img.onload = function(){ cb(p.page_no, rotateToCanvas(img, img.naturalWidth, img.naturalHeight, p.rotation).toDataURL('image/png')); };
+            img.src = fileUrl;
+        });
+    }
+}
+/** 旋轉該頁90度：交換有效寬高、清空該頁既有框選(座標系已變)、存檔後整個重繪。 */
+function rotatePage(pageNo){
+    var p = (CUR_TPL.pages||[]).filter(function(x){ return x.page_no==pageNo; })[0];
+    if (!p) return;
+    if (!confirm('旋轉這一頁會清空此頁已框選的位置，確定要旋轉嗎？')) return;
+    p.rotation = ((p.rotation||0) + 90) % 360;
+    var w = p.width_pt, h2 = p.height_pt; p.width_pt = h2; p.height_pt = w;
+    $.post(API, {action:'field_delete_page', csrf:META.csrf, template_id:CUR_TPL.id, page_no:pageNo}, function(){
+        $.post(API, {action:'pages_save', csrf:META.csrf, template_id:CUR_TPL.id, pages:JSON.stringify(CUR_TPL.pages)}, function(res){
+            if (!res.ok){ alert(res.error||'旋轉失敗'); return; }
+            CUR_TPL.pages = res.pages;
+            $.getJSON(API, {action:'template_get', id:CUR_TPL.id}, function(res2){
+                CUR_TPL.fields = res2.template.fields;
+                buildPageCanvases();
+            });
+        }, 'json');
+    }, 'json');
+}
 
 /* -------- 框選工作區：Fabric.js 座標拖放 -------- */
 function fieldMinFrac(page){
-    var mmMinEdge = 91/96*25.4;
+    var schema = CUR_TPL.stamp_tpl ? CUR_TPL.stamp_tpl.schema : null;
+    var mmEdgeW, mmEdgeH;
+    if (schema && schema.size) {
+        var sizePx = Math.min(600, Math.max(24, +schema.size));
+        var ratio = Math.min(3, Math.max(0.3, +schema.ratio || 1));
+        mmEdgeW = sizePx/96*25.4; mmEdgeH = sizePx*ratio/96*25.4;
+    } else {
+        mmEdgeW = mmEdgeH = 91/96*25.4;
+    }
     var widthMm = (page.width_pt||0)/72*25.4, heightMm = (page.height_pt||0)/72*25.4;
-    return {min_w: widthMm>0 ? mmMinEdge/widthMm : 0.05, min_h: heightMm>0 ? mmMinEdge/heightMm : 0.05};
+    return {min_w: widthMm>0 ? mmEdgeW/widthMm : 0.05, min_h: heightMm>0 ? mmEdgeH/heightMm : 0.05};
 }
 function renderLabelList(){
     var placed = {};
@@ -547,20 +623,20 @@ function buildPageCanvases(){
     var pages = CUR_TPL.pages || [{page_no:1, width_pt:595, height_pt:842}];
     var h = '';
     pages.forEach(function(p){
-        h += '<div class="fsd-page-wrap"><div class="pno">第 '+p.page_no+' 頁</div><canvas id="pgcv_'+p.page_no+'"></canvas></div>';
+        h += '<div class="fsd-page-wrap"><div class="pno">第 '+p.page_no+' 頁 <button type="button" onclick="rotatePage('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-rotate-right"></i> 旋轉90°</button></div><canvas id="pgcv_'+p.page_no+'"></canvas></div>';
     });
     $('#pageGrid').html(h);
+    var fileUrl = API + '?action=template_file&id=' + CUR_TPL.id;
     pages.forEach(function(p){
         var dispW = 480, dispH = Math.round(dispW * (p.height_pt / p.width_pt || 1.414));
         var cv = new fabric.Canvas('pgcv_'+p.page_no, {width:dispW, height:dispH, selection:false});
         CANVASES[p.page_no] = cv;
-        var bgSrc = CUR_TPL.file_type === 'pdf' ? PDF_PAGE_IMAGES[p.page_no] : (API + '?action=template_file&id=' + CUR_TPL.id);
-        if (bgSrc) {
+        renderDocPages(CUR_TPL.file_type, fileUrl, [p], function(pageNo, bgSrc){
             fabric.Image.fromURL(bgSrc, function(img){
                 img.set({left:0, top:0, scaleX:dispW/img.width, scaleY:dispH/img.height, selectable:false, evented:false});
                 cv.setBackgroundImage(img, cv.renderAll.bind(cv));
             }, {crossOrigin:'anonymous'});
-        }
+        });
         cv.on('selection:created', function(e){ SELECTED_OBJ = {canvas:cv, obj:e.selected[0]}; });
         cv.on('selection:updated', function(e){ SELECTED_OBJ = {canvas:cv, obj:e.selected[0]}; });
         cv.on('selection:cleared', function(){ SELECTED_OBJ = null; });

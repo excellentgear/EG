@@ -80,7 +80,10 @@ $perms = fsd_perms($db, $fsdUser);
         .fsd-doc-page img { display:block; width:100%; height:100%; }
         .fsd-box { position:absolute; }
         .fsd-box.stamp { display:flex; align-items:center; justify-content:center; overflow:visible; }
-        .fsd-box.stamp svg, .fsd-box.stamp img { width:100%; height:100%; display:block; }
+        /* 無綁定圖章模板時的預設回墨印/掃描章(car-stamp)：畫面上縮放至框選框大小方便預覽，列印統一91px(下方@media print)。
+           有綁定圖章模板(eg-stamp-tpl)：不縮放，畫面與列印都用模板設定的實際大小(不可縮小,使用者明確要求"所見即所印")。 */
+        .fsd-box.stamp svg.car-stamp, .fsd-box.stamp img { width:100%; height:100%; display:block; }
+        .fsd-box.stamp svg.eg-stamp-tpl { display:block; }
         .fsd-box.reply { background:rgba(255,255,255,.85); border:1px dashed #D8BE93; font-size:11px; color:#5b3a1e; padding:2px 4px; box-sizing:border-box; overflow:hidden; }
         .fsd-box .sod-note { color:#b0a390; font-size:10px; }
         .fsd-action-panel { border:1px solid #E8D5B5; border-radius:8px; background:#fff; padding:10px; margin-top:12px; }
@@ -98,7 +101,7 @@ $perms = fsd_perms($db, $fsdUser);
         .fsd-ref-panel { flex:0 0 200px; border:1px solid #E8D5B5; border-radius:8px; background:#fff; max-height:74vh; overflow-y:auto; padding:8px; }
         .fsd-ref-panel .rp-head { font-weight:bold; color:#5b3a1e; margin-bottom:6px; }
         .fsd-ref-page { position:relative; border:1px solid #EADFC8; margin-bottom:10px; }
-        .fsd-ref-page img { display:block; width:100%; }
+        .fsd-ref-page img { display:block; width:100%; height:100%; }
         .fsd-ref-box { position:absolute; border:1px solid #d98a33; background:rgba(240,162,75,.18); font-size:8px; color:#8A5A2B; overflow:hidden; }
         .fsd-ref-box.reply { border-color:#8A5A2B; background:rgba(138,90,43,.12); }
         @media print {
@@ -108,8 +111,8 @@ $perms = fsd_perms($db, $fsdUser);
             /* 每份頁面各自獨立分頁；page-break-after 只套在非最後一頁，否則最後一頁後面會多印一張空白頁 */
             .fsd-doc-page { page-break-after:always; page-break-inside:avoid; border:none; border-radius:0; }
             .fsd-doc-page:last-child { page-break-after:auto; }
-            /* 圖章列印尺寸全站統一91px(ai-rules/18第6條)，不可隨框選框大小縮小；框選框若比91px小也不裁切 */
-            .fsd-box.stamp svg, .fsd-box.stamp img { width:91px !important; height:91px !important; }
+            /* 未綁定圖章模板時列印統一91px(ai-rules/18第6條)；有綁定模板則維持模板設定的實際大小(見上方基本樣式)不在此覆蓋 */
+            .fsd-box.stamp svg.car-stamp, .fsd-box.stamp img { width:91px !important; height:91px !important; }
             .fsd-box.stamp { overflow:visible; }
             @page { margin:10mm 8mm; }
         }
@@ -408,13 +411,29 @@ function ensurePdfJs(){
     return pdfjsLoading;
 }
 /** 把某文件(image或pdf)的每一頁畫成dataURL/URL陣列回呼 cb(pageNo, src)，pdf額外提供量測到的width_pt/height_pt(cbMeasured可選)。 */
+/** 把來源(img)依rotation(0/90/180/270)轉正畫到新canvas，回傳該canvas；旋轉會交換寬高。 */
+function rotateToCanvas(src, srcW, srcH, rotationDeg){
+    rotationDeg = ((rotationDeg||0) % 360 + 360) % 360;
+    var swapped = (rotationDeg === 90 || rotationDeg === 270);
+    var outW = swapped ? srcH : srcW, outH = swapped ? srcW : srcH;
+    var cv = document.createElement('canvas'); cv.width = outW; cv.height = outH;
+    var ctx = cv.getContext('2d');
+    ctx.translate(outW/2, outH/2);
+    ctx.rotate(rotationDeg * Math.PI/180);
+    ctx.drawImage(src, -srcW/2, -srcH/2, srcW, srcH);
+    return cv;
+}
+/** 每頁各自的 rotation(0/90/180/270,人工修正掃描歪斜方向用)：PDF直接用pdf.js viewport rotation參數轉正
+ *  最省事；圖片(image類型整份文件只有1頁)用canvas重繪轉正。回呼cb(pageNo, dataURL)。 */
 function renderDocPages(fileType, fileUrl, pages, cb) {
     if (fileType === 'pdf') {
         ensurePdfJs().then(function(lib){ return lib.getDocument({url:fileUrl, withCredentials:true}).promise; }).then(function(doc){
             pages.forEach(function(p){
                 doc.getPage(p.page_no).then(function(page){
-                    var scale = Math.min(2, 1000/Math.max(page.getViewport({scale:1}).width, page.getViewport({scale:1}).height));
-                    var vp = page.getViewport({scale:scale});
+                    var rotation = (p.rotation||0) % 360;
+                    var base = page.getViewport({scale:1, rotation:rotation});
+                    var scale = Math.min(2, 1000/Math.max(base.width, base.height));
+                    var vp = page.getViewport({scale:scale, rotation:rotation});
                     var cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
                     var ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);
                     page.render({canvasContext:ctx, viewport:vp}).promise.then(function(){ cb(p.page_no, cv.toDataURL('image/png')); });
@@ -422,7 +441,12 @@ function renderDocPages(fileType, fileUrl, pages, cb) {
             });
         }).catch(function(e){ alert('PDF讀取失敗：'+(e.message||e)); });
     } else {
-        pages.forEach(function(p){ cb(p.page_no, fileUrl); });
+        pages.forEach(function(p){
+            if (!p.rotation) { cb(p.page_no, fileUrl); return; }
+            var img = new Image();
+            img.onload = function(){ cb(p.page_no, rotateToCanvas(img, img.naturalWidth, img.naturalHeight, p.rotation).toDataURL('image/png')); };
+            img.src = fileUrl;
+        });
     }
 }
 /** 文件整體是直式或橫式：以頁面寬高比自動判斷(width_pt>=height_pt視為橫式)，供檢視版面與列印@page自動套用。 */
@@ -552,6 +576,10 @@ function renderDocGrid(pages, fields){
     $('#docGrid').html(h);
     var fileType = CUR_CASE.file_type || 'image';
     var fileUrl = API + '?action=case_file&id=' + CUR_CASE.id;
+    // 圖章尺寸依綁定的圖章模板設定的公分數，不可縮小(使用者明確要求)：本地覆蓋noScale:true，
+    // 不動DB裡模板本身的設定(該模板可能同時被其他頁面用fillRatio縮放模式消費，不能共用一份schema物件改)。
+    var stampSchema = null;
+    if (CUR_SCHEMA.stamp_tpl && CUR_SCHEMA.stamp_tpl.schema) stampSchema = $.extend({}, CUR_SCHEMA.stamp_tpl.schema, {noScale:true});
     function paintOverlay(pageNo){
         var $pg = $('#docpg_'+pageNo);
         fields.filter(function(f){ return f.page_no == pageNo; }).forEach(function(f){
@@ -559,7 +587,7 @@ function renderDocGrid(pages, fields){
             var $box = $('<div class="fsd-box '+f.box_type+'"></div>').css({left:(f.x*100)+'%', top:(f.y*100)+'%', width:(f.w*100)+'%', height:(f.h*100)+'%'});
             if (f.box_type === 'stamp') {
                 if (r && r.decision && r.decision !== 'skipped_sod' && window.EGStamp) {
-                    $box.html(EGStamp.stamp(r.resolved_user_name, (r.responded_at||'').substring(0,10), false));
+                    $box.html(EGStamp.stamp(r.resolved_user_name, (r.responded_at||'').substring(0,10), false, stampSchema));
                 } else if (r && r.decision === 'skipped_sod') {
                     $box.html('<span class="sod-note">（迴避）</span>');
                 }
@@ -658,7 +686,7 @@ function renderRefPanel(){
     var refPages = FP_TPL_SCHEMA.pages || [];
     var refFields = FP_TPL_SCHEMA.fields || [];
     var h = '';
-    refPages.forEach(function(p){ h += '<div class="fsd-ref-page" id="refpg_'+p.page_no+'"><div class="pno" style="font-size:10px;color:#8a6d45;">第'+p.page_no+'頁</div></div>'; });
+    refPages.forEach(function(p){ h += '<div class="fsd-ref-page" id="refpg_'+p.page_no+'" style="aspect-ratio:'+p.width_pt+'/'+p.height_pt+';"><div class="pno" style="font-size:10px;color:#8a6d45;">第'+p.page_no+'頁</div></div>'; });
     $('#refPages').html(h || '<p style="font-size:11px;color:#8a6d45;">（樣板尚無參考位置）</p>');
     var fileUrl = API + '?action=template_file&id=' + FP_CASE.template_id;
     renderDocPages(FP_TPL_SCHEMA.file && FP_TPL_SCHEMA.file.file_type === 'pdf' ? 'pdf' : 'image', fileUrl, refPages, function(pageNo, src){
@@ -695,11 +723,26 @@ $(document).on('dragstart', '#fpLabelList .fsd-label', function(e){
     var data = JSON.stringify({slotKey:$(this).data('slot'), boxType:$(this).data('boxtype')});
     e.originalEvent.dataTransfer.setData('text/plain', data);
 });
+/** 旋轉該頁90度(修正掃描歪斜方向)：交換有效寬高、清空該頁既有框選(座標系已變)、存檔後整個重繪。 */
+function fpRotatePage(pageNo){
+    var p = (FP_CASE.pages||[]).filter(function(x){ return x.page_no==pageNo; })[0];
+    if (!p) return;
+    if (!confirm('旋轉這一頁會清空此頁已框選的位置(白名單標籤會變回未框選)，確定要旋轉嗎？')) return;
+    p.rotation = ((p.rotation||0) + 90) % 360;
+    var w = p.width_pt, h2 = p.height_pt; p.width_pt = h2; p.height_pt = w;
+    $.post(API, {action:'case_field_delete_page', csrf:META.csrf, case_id:FP_CASE.id, page_no:pageNo}, function(){
+        $.post(API, {action:'case_pages_save', csrf:META.csrf, case_id:FP_CASE.id, pages:JSON.stringify(FP_CASE.pages)}, function(res){
+            if (!res.ok){ alert(res.error||'旋轉失敗'); return; }
+            FP_CASE.pages = res.pages;
+            buildFpCanvases([]);
+        }, 'json');
+    }, 'json');
+}
 function buildFpCanvases(existingFields){
     FP_CANVASES = {};
     var pages = FP_CASE.pages || [{page_no:1, width_pt:595, height_pt:842}];
     var h = '';
-    pages.forEach(function(p){ h += '<div class="fsd-page-wrap"><div class="pno">第 '+p.page_no+' 頁</div><canvas id="fpcv_'+p.page_no+'"></canvas></div>'; });
+    pages.forEach(function(p){ h += '<div class="fsd-page-wrap"><div class="pno">第 '+p.page_no+' 頁 <button type="button" onclick="fpRotatePage('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-rotate-right"></i> 旋轉90°</button></div><canvas id="fpcv_'+p.page_no+'"></canvas></div>'; });
     $('#fpPageGrid').html(h);
     var fileUrl = API + '?action=case_file&id=' + FP_CASE.id;
     pages.forEach(function(p){

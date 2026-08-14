@@ -362,6 +362,11 @@ function fsd_field_delete(PDO $db, int $templateId, int $id): void {
     $db->prepare("DELETE FROM fsd_field WHERE id=? AND template_id=?")->execute([$id, $templateId]);
 }
 
+/** 整頁清空框選(旋轉該頁時用，旋轉後座標系不同，既有框選位置已不適用)。 */
+function fsd_field_delete_by_page(PDO $db, int $templateId, int $pageNo): void {
+    $db->prepare("DELETE FROM fsd_field WHERE template_id=? AND page_no=?")->execute([$templateId, $pageNo]);
+}
+
 /* -------- 發布：把目前 live 設計狀態整包快照進 fsd_template_version（比照 rvf_template_schema_save） -------- */
 
 function fsd_template_schema_build(PDO $db, int $templateId): array {
@@ -758,6 +763,15 @@ function fsd_case_field_delete(PDO $db, int $caseId, int $fieldId): array {
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
     if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可調整框選'];
     $db->prepare("DELETE FROM fsd_case_field WHERE id=? AND case_id=?")->execute([$fieldId, $caseId]);
+    return ['ok'=>true, 'fields'=>fsd_case_field_list($db, $caseId)];
+}
+
+/** 整頁清空框選(旋轉該頁時用)。 */
+function fsd_case_field_delete_by_page(PDO $db, int $caseId, int $pageNo): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可調整框選'];
+    $db->prepare("DELETE FROM fsd_case_field WHERE case_id=? AND page_no=?")->execute([$caseId, $pageNo]);
     return ['ok'=>true, 'fields'=>fsd_case_field_list($db, $caseId)];
 }
 
