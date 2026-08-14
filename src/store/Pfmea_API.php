@@ -460,6 +460,18 @@ case 'qc_special_characteristics_list':
     needAdmin($perms);
     jout(['success'=>true,'rows'=>pfmea_qc_special_characteristics($db)]);
 
+// 要求資料總覽/重新綁定料號（2026-08-14使用者要求）
+case 'requirement_option_list_all':
+    needAdmin($perms);
+    jout(['success'=>true,'rows'=>pfmea_requirement_option_list_all($db)]);
+
+case 'requirement_option_rebind':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    pfmea_requirement_option_rebind($db, $id, (int)($_POST['part_d_id']??0), (string)($_POST['part_no_text']??''));
+    jout(['success'=>true]);
+
 case 'field_link_add':
     needEdit($perms);
     $sf = (string)($_POST['source_field'] ?? ''); $sv = (string)($_POST['source_value'] ?? '');
