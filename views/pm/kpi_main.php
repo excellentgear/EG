@@ -2301,7 +2301,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($action === 'get_machine_assets') {
         $filterMtid = intval($_POST['machine_type_id'] ?? 0);
         try {
-            $sql = "SELECT ml.machine_id,ml.machine,ml.machine_type_id,ml.position,ml.state,ml.need_setup,
+            $sql = "SELECT ml.machine_id,ml.machine,ml.machine_type_id,ml.position,ml.state,ml.disabled_date,ml.need_setup,
                 ml.machine_model,ml.asset_no,ml.field_no,ml.spec,ml.note,
                 pt.process_type AS machine_type,
                 kma.asset_id,kma.purchase_date,kma.purchase_amount,kma.residual_value,
@@ -2397,15 +2397,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $fieldNo = trim($_POST['field_no'] ?? '');
         $spec = trim($_POST['spec'] ?? '');
         $note = trim($_POST['note'] ?? '');
+        $state = !empty($_POST['disabled']) ? '1' : null;
+        $disabledDate = $state ? (trim($_POST['disabled_date'] ?? '') ?: date('Y-m-d')) : null;
         if (!$name){echo json_encode(['success'=>false,'message'=>'機台名稱不可為空']);exit;}
         if (!$typeId){echo json_encode(['success'=>false,'message'=>'請選擇機台類型']);exit;}
         try {
             if ($mid) {
-                $pdo->prepare("UPDATE machine_list SET machine=?, machine_type_id=?, need_setup=?, position=?, machine_model=?, asset_no=?, field_no=?, spec=?, note=? WHERE machine_id=?")
-                    ->execute([$name,$typeId,$needSetup,$position,$model,$assetNo,$fieldNo,$spec,$note,$mid]);
+                $pdo->prepare("UPDATE machine_list SET machine=?, machine_type_id=?, need_setup=?, position=?, machine_model=?, asset_no=?, field_no=?, spec=?, note=?, state=?, disabled_date=? WHERE machine_id=?")
+                    ->execute([$name,$typeId,$needSetup,$position,$model,$assetNo,$fieldNo,$spec,$note,$state,$disabledDate,$mid]);
             } else {
-                $pdo->prepare("INSERT INTO machine_list (machine, machine_type_id, need_setup, position, machine_model, asset_no, field_no, spec, note) VALUES (?,?,?,?,?,?,?,?,?)")
-                    ->execute([$name,$typeId,$needSetup,$position,$model,$assetNo,$fieldNo,$spec,$note]);
+                $pdo->prepare("INSERT INTO machine_list (machine, machine_type_id, need_setup, position, machine_model, asset_no, field_no, spec, note, state, disabled_date) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+                    ->execute([$name,$typeId,$needSetup,$position,$model,$assetNo,$fieldNo,$spec,$note,$state,$disabledDate]);
             }
             echo json_encode(['success'=>true]);
         } catch(Exception $e){echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
@@ -2418,7 +2420,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $mid = intval($_POST['machine_id'] ?? 0);
         if (!$mid){echo json_encode(['success'=>false,'message'=>'缺少機台']);exit;}
         try {
-            $pdo->prepare("UPDATE machine_list SET state='1' WHERE machine_id=?")->execute([$mid]);
+            $pdo->prepare("UPDATE machine_list SET state='1', disabled_date=COALESCE(disabled_date, CURDATE()) WHERE machine_id=?")->execute([$mid]);
             echo json_encode(['success'=>true]);
         } catch(Exception $e){echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
         exit;
@@ -3228,7 +3230,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}.for
       </div>
       <div style="overflow-x:auto;"><table class="table table-bordered" style="font-size:12px;margin:0;">
         <thead><tr style="background:#f8f9fa;">
-          <th>機台種類</th><th>機台名稱</th><th>機台編號</th><th>現場編號</th><th>機型</th><th>狀態</th>
+          <th>機台種類</th><th>機台名稱</th><th>機台編號</th><th>現場編號</th><th>機型</th><th>狀態</th><th>停用日期(出售日期)</th>
           <th>購入日期</th><th>購入金額</th><th>殘值</th><th>年限</th><th>折舊方式</th>
           <th class="tooltip-th" title="每月折舊÷(24×30)">每小時成本</th>
           <th>已折舊年數</th><th width="100"></th>
@@ -3533,6 +3535,10 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}.for
         </div>
         <div class="form-group"><label>規格</label><input type="text" class="form-control" id="mi-spec"></div>
         <div class="form-group"><label>備註</label><textarea class="form-control" id="mi-note" rows="2"></textarea></div>
+        <div class="row">
+          <div class="col-sm-6"><div class="form-group"><label><input type="checkbox" id="mi-state" onchange="$('#mi-disabled-date-grp').toggle(this.checked); if(this.checked && !$('#mi-disabled-date').val()) $('#mi-disabled-date').val(new Date().toISOString().slice(0,10));"> 停用</label></div></div>
+          <div class="col-sm-6" id="mi-disabled-date-grp" style="display:none;"><div class="form-group"><label>停用日期(出售日期)</label><input type="date" class="form-control" id="mi-disabled-date"></div></div>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-danger" id="mi-delete-btn" style="float:left;" onclick="deleteMachineInfo()"><i class="fa fa-trash"></i> 刪除機台</button>
@@ -4129,6 +4135,7 @@ function loadAssets(mtid, btn){
               +'<td style="font-size:11px;">'+(m.field_no||'—')+'</td>'
               +'<td style="font-size:11px;">'+(m.machine_model||'—')+'</td>'
               +'<td><span class="'+stateCls+'">'+stateLabel+'</span></td>'
+              +'<td style="font-size:11px;">'+(m.disabled_date||'—')+'</td>'
               +'<td>'+(m.purchase_date||'<span style="color:#aaa;">未設定</span>')+'</td>'
               +'<td>'+(m.purchase_amount?fmtN(parseFloat(m.purchase_amount).toFixed(0)):'<span style="color:#aaa;">—</span>')+'</td>'
               +'<td>'+(m.residual_value?fmtN(parseFloat(m.residual_value).toFixed(0)):'0')+'</td>'
@@ -4186,6 +4193,10 @@ function openMachineInfoModal(m){
     $('#mi-need-setup').val(m?(m.need_setup||0):1);
     $('#mi-spec').val(m?(m.spec||''):'');
     $('#mi-note').val(m?(m.note||''):'');
+    var disabled=!!(m&&m.state==='1');
+    $('#mi-state').prop('checked',disabled);
+    $('#mi-disabled-date').val(m?(m.disabled_date||''):'');
+    $('#mi-disabled-date-grp').toggle(disabled);
     $('#mi-delete-btn').toggle(!!m);
     $('#machine-info-modal').modal('show');
 }
@@ -4196,7 +4207,8 @@ function saveMachineInfo(){
     post({action:'save_machine_info',machine_id:$('#mi-mid').val(),machine:name,machine_type_id:typeId,
         position:$('#mi-position').val(),need_setup:$('#mi-need-setup').val(),
         machine_model:$('#mi-model').val(),asset_no:$('#mi-asset-no').val(),field_no:$('#mi-field-no').val(),
-        spec:$('#mi-spec').val(),note:$('#mi-note').val()},
+        spec:$('#mi-spec').val(),note:$('#mi-note').val(),
+        disabled:$('#mi-state').is(':checked')?1:0,disabled_date:$('#mi-disabled-date').val()},
     function(res){
         res.success?(showToast('已儲存'),$('#machine-info-modal').modal('hide'),loadAssets()):showToast(res.message||'儲存失敗',false);
     });
