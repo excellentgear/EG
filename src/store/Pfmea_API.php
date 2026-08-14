@@ -472,6 +472,14 @@ case 'requirement_option_rebind':
     pfmea_requirement_option_rebind($db, $id, (int)($_POST['part_d_id']??0), (string)($_POST['part_no_text']??''));
     jout(['success'=>true]);
 
+case 'requirement_option_update_text':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    $text = trim((string)($_POST['requirement_text'] ?? ''));
+    if (!$id || $text === '') jout(['success'=>false,'message'=>'缺少id或要求文字']);
+    pfmea_requirement_option_update_text($db, $id, $text);
+    jout(['success'=>true]);
+
 case 'field_link_add':
     needEdit($perms);
     $sf = (string)($_POST['source_field'] ?? ''); $sv = (string)($_POST['source_value'] ?? '');
