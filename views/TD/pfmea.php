@@ -576,6 +576,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
                 </div>
                 <div id="rsLinkSourceNewPartProcessBox" style="display:none;">
                     <div class="pf-proc-box"><input type="text" id="rsLinkSourceNewPart" placeholder="輸入部分料號搜尋"></div>
+                    <div id="rsLinkPartBoundStatus" style="font-size:11px;margin:3px 0;"></div>
                     <div class="pf-proc-box" style="margin-top:4px;">
                         <select id="rsLinkSourceNewProc" style="flex:1;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;" data-eg-filter="輸入製程代號或名稱篩選…"></select>
                         <button type="button" class="pf-row-btn" onclick="rsSelectNewPartProcessSource()">選定</button>
@@ -2040,6 +2041,7 @@ function rsLoadLinkSources(){
     $('#rsLinkTargetLabel').text($('#rsLinkPairSel option:selected').text().split(' → ')[1]);
     RS_LINK_SOURCE = ''; $('#rsLinkTargetList').html(''); $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', true);
     $('#rsLinkSourceNewText').val(''); $('#rsLinkSourceNewPart').val('');
+    rsUpdatePartBoundStatus(false);
     var isPartProcess = pair[0] === 'part_process';
     $('#rsLinkSourceNewTextBox').toggle(!isPartProcess);
     $('#rsLinkSourceNewPartProcessBox').toggle(isPartProcess);
@@ -2070,12 +2072,26 @@ window.rsSelectNewPartProcessSource = function(){
     var part = $('#rsLinkSourceNewPart').val().trim();
     var proc = $('#rsLinkSourceNewProc').val();
     if (!part || !proc) { alert('請輸入料號並選擇製程代號'); return; }
+    if (!RS_LINK_PART_BOUND && !confirm('目前輸入的料號「'+part+'」不是從清單選定的，尚未綁定到真正的料號ID（只是純文字）。\n若這是舊料號/已無主檔資料的料號可以繼續；若只是打錯字，建議從下拉清單重新選擇。\n仍要繼續新增嗎？')) return;
     RS_LINK_SOURCE = part + PART_PROCESS_SEP + proc;
     rsMarkLinkSourceActive(RS_LINK_SOURCE);
     $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', false);
     rsLoadLinkTargets();
 };
-EGPartPicker.attach(document.getElementById('rsLinkSourceNewPart'), { apiUrl: PART_API, onSelect: function(){} });
+/* 已選定料號提示（2026-08-14使用者要求）：從清單選到真正的料號ID才算「已綁定」，純打字沒有真的
+   選到清單裡的項目時要清楚提示，避免使用者以為已經綁定成功、實際上只是存了一段文字 */
+var RS_LINK_PART_BOUND = false;
+function rsUpdatePartBoundStatus(bound){
+    RS_LINK_PART_BOUND = bound;
+    if (bound) $('#rsLinkPartBoundStatus').html('<span style="color:#3a8f4a;"><i class="fa fa-check-circle"></i> 已綁定料號</span>');
+    else if ($('#rsLinkSourceNewPart').val().trim()) $('#rsLinkPartBoundStatus').html('<span style="color:#DD5138;"><i class="fa fa-exclamation-circle"></i> 尚未綁定料號ID（純文字，請從清單選擇）</span>');
+    else $('#rsLinkPartBoundStatus').html('');
+}
+EGPartPicker.attach(document.getElementById('rsLinkSourceNewPart'), {
+    apiUrl: PART_API,
+    onSelect: function(row){ rsUpdatePartBoundStatus(true); }
+});
+$(document).on('input', '#rsLinkSourceNewPart', function(){ rsUpdatePartBoundStatus(false); });
 function rsLoadLinkTargets(){
     var pair = rsLinkPair();
     if (!RS_LINK_SOURCE) return;
