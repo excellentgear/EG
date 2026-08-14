@@ -355,8 +355,10 @@ function fieldInputHtml(i, k, c){
         var opts = '<option value="">'+(c.placeholder?esc(c.placeholder):'請選擇')+'</option>' + (c.options||[]).map(function(o){ return '<option value="'+esc(o)+'"'+(o===v?' selected':'')+'>'+esc(o)+'</option>'; }).join('');
         return '<div class="'+cls+'">'+lbl+'<select '+dis+' onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)">'+opts+'</select></div>';
     }
-    if (c.type==='textarea') return '<div class="'+cls+'">'+lbl+'<textarea '+dis+' placeholder="'+esc(c.placeholder)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)">'+esc(v)+'</textarea></div>';
-    return '<div class="'+cls+'">'+lbl+'<input type="text" '+dis+' placeholder="'+esc(c.placeholder)+'" value="'+esc(v)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)"></div>';
+    // 文字對齊（2026-08-14 使用者明確要求，只有單行/多行文字欄位有這個設定，預設靠左）
+    var alignStyle = ' style="text-align:'+(c.align||'left')+';"';
+    if (c.type==='textarea') return '<div class="'+cls+'">'+lbl+'<textarea'+alignStyle+' '+dis+' placeholder="'+esc(c.placeholder)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)">'+esc(v)+'</textarea></div>';
+    return '<div class="'+cls+'">'+lbl+'<input type="text"'+alignStyle+' '+dis+' placeholder="'+esc(c.placeholder)+'" value="'+esc(v)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)"></div>';
 }
 /* 整欄套用（2026-08-12 新增，使用者明確要求）：日期／下拉選單欄位可在表頭選一次值，一鍵套用到目前所有項目、
    所有小項的這一欄，取代逐列手動填相同值。只在草稿本人編輯時顯示；只支援 date/select 兩種類型。 */
@@ -523,7 +525,31 @@ function saveDraft(cb){
         if (cb) cb(); else { loadList(); openView(CUR.id); alert('已儲存'); }
     }, 'json');
 }
+/* 送出前檢查所有必填欄位都已填寫（2026-08-14 使用者明確要求；欄位是否必填在「項次欄位定義」逐欄設定，
+   預設必填，管理員可個別勾選允許留空）。「項目」內容固定必填（含大項標題列，因為那是它唯一要填的欄位）；
+   schema 自訂欄位只檢查 required=1 且非 seq 類型（seq 是自動編號，本來就沒有輸入值）。
+   前端擋是即時體驗，後端 rvf_instance_submit() 會用同一套規則再驗一次，不可只做前端。 */
+function findMissingRequiredFields(){
+    var missing = [];
+    ITEMS.forEach(function(it, i){
+        var subs = it.subitems || [];
+        subs.forEach(function(sub, k){
+            var label = '第'+(i+1)+'項' + (subs.length>1 ? '第'+(k+1)+'小項' : '');
+            if (!$.trim(sub.content||'')) missing.push(label+'「項目」內容');
+            var isHeading = (k===0 && subs.length>1);
+            if (isHeading) return; // 標題列只需要項目內容，其餘欄位本來就返灰不填
+            (CUR_SCHEMA.fields||[]).forEach(function(c){
+                if (!c.required || c.type==='seq') return;
+                var v = sub.data[c.key];
+                if (v===undefined || v===null || $.trim(String(v))==='') missing.push(label+'「'+c.label+'」');
+            });
+        });
+    });
+    return missing;
+}
 function submitForm(){
+    var missing = findMissingRequiredFields();
+    if (missing.length){ alert('以下必填欄位尚未填寫，請填完再送出：\n' + missing.join('\n')); return; }
     saveDraft(function(){
         $.post(API, {action:'instance_submit', csrf:META.csrf, instance_id:CUR.id}, function(res){
             if (!res.ok){ alert(res.error||'送出失敗'); return; }
@@ -641,7 +667,8 @@ function printForm(){
             }
             inlineFieldsP.forEach(function(c){
                 var cellTxt = c.type==='seq' ? (k===0?String(i+1):'') : (c.type==='date' ? dispDate(sub.data[c.key]||'') : esc(sub.data[c.key]||''));
-                h += '<td>'+cellTxt+'</td>';
+                var cellAlign = (c.type==='text'||c.type==='textarea') ? (c.align||'left') : 'center';
+                h += '<td style="text-align:'+cellAlign+';">'+cellTxt+'</td>';
             });
             // 負責單位/人分開兩組各自用頓號連接，兩組之間改用「 / 」分隔（2026-08-13 使用者明確要求，
             // 例：「資材部 / 吳佳靜」而不是「資材部、吳佳靜」，跟欄名「負責單位/人」的斜線一致）。

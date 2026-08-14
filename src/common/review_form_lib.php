@@ -641,6 +641,30 @@ function rvf_advance_to_approval(PDO $db, int $instanceId, array $tpl, array $in
     return ['ok'=>true, 'status'=>'approving'];
 }
 
+/** 送出前檢查必填欄位（2026-08-14 使用者明確要求，前端 findMissingRequiredFields() 同一套規則的後端把關，
+ *  防止繞過前端直打 API）。「項目」內容固定必填；schema 自訂欄位只檢查 required=1 且非 seq。
+ *  @return string[] 缺漏欄位描述清單，空陣列代表通過。 */
+function rvf_instance_missing_required(PDO $db, int $instanceId, array $schema): array {
+    $missing = [];
+    $fields = array_filter($schema['fields'] ?? [], fn($c) => !empty($c['required']) && ($c['type'] ?? '') !== 'seq');
+    $items = rvf_instance_items_get($db, $instanceId);
+    foreach ($items as $i => $it) {
+        $subs = $it['subitems'] ?? [];
+        $n = count($subs);
+        foreach ($subs as $k => $sub) {
+            $label = '第' . ($i + 1) . '項' . ($n > 1 ? '第' . ($k + 1) . '小項' : '');
+            if (trim((string)($sub['content'] ?? '')) === '') $missing[] = $label . '「項目」內容';
+            if ($k === 0 && $n > 1) continue; // 標題列只需要項目內容
+            $data = (array)($sub['data'] ?? []); // data 沒內容時 json_decode 退回 stdClass，這裡統一轉陣列避免存取報錯
+            foreach ($fields as $c) {
+                $v = $data[$c['key']] ?? null;
+                if ($v === null || trim((string)$v) === '') $missing[] = $label . '「' . $c['label'] . '」';
+            }
+        }
+    }
+    return $missing;
+}
+
 function rvf_instance_submit(PDO $db, int $instanceId, int $uid, string $uname): array {
     $inst = rvf_instance_get($db, $instanceId);
     if (!$inst) return ['ok'=>false, 'msg'=>'找不到此表單'];
@@ -648,6 +672,9 @@ function rvf_instance_submit(PDO $db, int $instanceId, int $uid, string $uname):
     if ($inst['status'] !== 'draft') return ['ok'=>false, 'msg'=>'此表單已送出，不可重複送出'];
     $tpl = rvf_template_get($db, (int)$inst['template_id']);
     if (!$tpl) return ['ok'=>false, 'msg'=>'模板不存在'];
+    $schema = json_decode((string)$tpl['current_schema_json'], true) ?: [];
+    $missing = rvf_instance_missing_required($db, $instanceId, $schema);
+    if ($missing) return ['ok'=>false, 'msg'=>"以下必填欄位尚未填寫：\n" . implode("\n", $missing)];
 
     // 送出日鐵則(ai-rules/21)：一般使用者不可自選，一律當下日期；業務日期跟精確時間戳分開存，送出後鎖定不可再改。
     $submitDate = date('Y-m-d');

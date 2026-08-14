@@ -171,7 +171,7 @@ $perms = rvf_perms($db, $rvfUser);
         <div class="rf-sec-title">逐列可填欄位（除固定的「項目」文字外，額外可設定審查結果／其他欄位／日期欄位，可自由混合排序）</div>
         <div class="rf-hint">每列固定含「項目」文字欄；以下欄位會依此清單的順序顯示在項目欄之後，文字/下拉/日期/項次欄位可任意混合排序——拖動最左側 <i class="fa fa-bars"></i> 調整順序。「排版」選整行代表獨佔一列（適合長文字），選並排代表與其他並排欄位同一列。輸入欄按鍵盤 ↓ 鍵在最後一列會自動新增一列，最後一列空白時按鍵盤 ↑ 鍵會自動移除。</div>
         <table class="col-tbl">
-            <thead><tr><th style="width:5%;"></th><th style="width:15%;">標籤</th><th style="width:11%;">類型</th><th style="width:18%;">提示詞（灰字）</th><th style="width:17%;">選項(逗號分隔，僅下拉用)</th><th style="width:7%;">必填</th><th style="width:9%;">排版</th><th style="width:10%;"></th></tr></thead>
+            <thead><tr><th style="width:5%;"></th><th style="width:13%;">標籤</th><th style="width:10%;">類型</th><th style="width:15%;">提示詞（灰字）</th><th style="width:15%;">選項(逗號分隔，僅下拉用)</th><th style="width:6%;">必填</th><th style="width:8%;">排版</th><th style="width:9%;">文字對齊</th><th style="width:9%;"></th></tr></thead>
             <tbody id="colBody" data-eg-row-add="fieldAdd" data-eg-row-del="fieldDelLast"></tbody>
         </table>
         <button type="button" onclick="fieldAdd()" style="height:26px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;">+ 新增欄位</button>
@@ -476,7 +476,7 @@ function submitTplSettings(){
 /* ============ 項次欄位定義 ============ */
 var FIELDS = [], CUR_SCHEMA_TPL = null;
 var FIELD_TYPES = {text:'單行文字', textarea:'多行文字', select:'下拉選單', date:'日期', seq:'項次（自動編號）'};
-function fieldAdd(){ FIELDS.push({key:'', label:'', type:'text', placeholder:'', required:0, layout:'inline', options:''}); renderFields(); }
+function fieldAdd(){ FIELDS.push({key:'', label:'', type:'text', placeholder:'', required:1, layout:'inline', align:'left', options:''}); renderFields(); }
 function fieldDel(i){ FIELDS.splice(i,1); renderFields(); }
 function fieldDelLast(){ if (FIELDS.length) FIELDS.pop(); renderFields(); }
 function fieldEdit(i,k,v){ FIELDS[i][k]=v; if (k==='label' && !FIELDS[i]._keyManual) FIELDS[i].key = slugify(v); renderFields(); }
@@ -494,9 +494,12 @@ function renderFields(){
            + '<td><input type="text" value="'+esc(c.options)+'" '+(c.type!=='select'?'disabled':'')+' title="下拉選項用逗號分隔，例如：合格,不合格,其他" onchange="fieldEdit('+i+',\'options\',this.value)"></td>'
            + '<td style="text-align:center;"><input type="checkbox" '+(c.required?'checked':'')+' '+(c.type==='seq'?'disabled':'')+' onchange="fieldEdit('+i+',\'required\',this.checked?1:0)"></td>'
            + '<td><select onchange="fieldEdit('+i+',\'layout\',this.value)"><option value="inline"'+(c.layout==='inline'?' selected':'')+'>並排</option><option value="block"'+(c.layout==='block'?' selected':'')+'>整行</option></select></td>'
+           + '<td><select '+(c.type==='text'||c.type==='textarea'?'':'disabled')+' onchange="fieldEdit('+i+',\'align\',this.value)" title="只有單行/多行文字欄位需要設定，其他類型不受影響">'
+           +   ['left','center','right'].map(function(a){ return '<option value="'+a+'"'+((c.align||'left')===a?' selected':'')+'>'+({left:'靠左',center:'置中',right:'靠右'})[a]+'</option>'; }).join('')
+           + '</select></td>'
            + '<td style="text-align:center;white-space:nowrap;"><span class="rf-del" onclick="fieldDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
     });
-    $('#colBody').html(h || '<tr><td colspan="8" style="text-align:center;color:#8a6d45;">尚未新增欄位</td></tr>');
+    $('#colBody').html(h || '<tr><td colspan="9" style="text-align:center;color:#8a6d45;">尚未新增欄位</td></tr>');
 }
 /* 拖移重排序（使用者明確要求「上下拖移」）：原生 HTML5 drag and drop，不引入額外套件。 */
 var FLD_DRAG_FROM = null;
@@ -564,6 +567,7 @@ function buildSchemaObj(){
         fields: FIELDS.filter(function(c){ return $.trim(c.label)!==''; }).map(function(c){
             var optStr = Array.isArray(c.options) ? c.options.join(',') : String(c.options||'');
             return {key:c.key, label:c.label, type:c.type, placeholder:c.placeholder||'', required:c.required?1:0, layout:c.layout,
+                     align: (c.type==='text'||c.type==='textarea') ? (c.align||'left') : 'left',
                      options: c.type==='select' ? optStr.split(',').map(function(s){return $.trim(s);}).filter(Boolean) : []};
         }),
         sign_mode: $('input[name=signMode]:checked').val() || 'password'
