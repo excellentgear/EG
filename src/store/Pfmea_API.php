@@ -261,6 +261,10 @@ case 'process_list_all':
     needAdmin($perms);
     jout(['success'=>true, 'rows'=>pfmea_process_list_all($db)]);
 
+case 'process_enable_configured':
+    needAdmin($perms);
+    jout(['success'=>true, 'enabled'=>pfmea_process_enable_configured($db)]);
+
 case 'process_set_enabled':
     needAdmin($perms);
     $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
@@ -443,6 +447,10 @@ case 'field_link_list':
 case 'field_link_distinct_sources':
     needAdmin($perms);
     jout(['success'=>true,'rows'=>pfmea_field_link_distinct_sources($db, (string)($_GET['source_field']??''), (string)($_GET['target_field']??''))]);
+
+case 'field_link_backfill':
+    needAdmin($perms);
+    jout(['success'=>true] + pfmea_field_link_backfill_from_templates($db, $uid, $uname));
 
 case 'field_link_add':
     needEdit($perms);
