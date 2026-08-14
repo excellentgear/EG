@@ -123,6 +123,7 @@ $perms = rvf_perms($db, $rvfUser);
     <div class="m-body">
         <input type="hidden" id="stId" value="0">
         <label>模板名稱</label><input type="text" id="stName" maxlength="100" placeholder="例：仿冒零件防制審核表">
+        <div id="stNameHint" style="font-size:11px;color:#8a6d45;margin-top:-4px;margin-bottom:6px;display:none;">已綁定 AS 文件，名稱自動＝該文件的文件名稱，不可自訂；取消綁定後才能自訂名稱。</div>
         <label>綁定 AS 文件編號</label>
         <div><span id="stDocLabel" style="color:#5b3a1e;">未綁定</span>
             <button type="button" onclick="openTplAsDocPicker()" style="margin-left:8px;height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">選擇…</button></div>
@@ -430,12 +431,19 @@ function duplicateTemplate(id){
 }
 
 /* ============ 模板設定 ============ */
+/* 模板名稱一旦綁定 AS 文件編號，一律強制＝該文件的文件名稱（2026-08-14 使用者明確要求），未綁定才能自訂；
+   後端 template_settings_save 會再次強制覆蓋，這裡只是即時 UI 回饋，不是唯一防線。 */
+function applyStNameLock(doc){
+    if (doc) { $('#stName').val(doc.doc_name).prop('readonly', true); $('#stNameHint').show(); }
+    else { $('#stName').prop('readonly', false); $('#stNameHint').hide(); }
+}
 function openSettingModal(id){
     $('#stId').val(id||0);
     if (!id){
         $('#settingTitle').text('新增模板'); $('#stName').val(''); $('#stPaper').val('A4'); $('#stOrientation').val('landscape');
         $('#stListStamp').val('0'); $('#stFooterStamp').val('0');
         $('#stDocLabel').text('未綁定').data('id',0);
+        applyStNameLock(null);
         $('#stNeedReview').prop('checked',false); $('#stAutoReview').prop('checked',false); $('#stReviewDept').val('');
         $('#stNeedApproval').prop('checked',false); $('#stAutoApproval').prop('checked',false); $('#stApproverDept').val(''); $('#stApproverUser').val('');
         renderChainBox(); $('.chain-sel[data-idx=0]').val('top_approver');
@@ -450,6 +458,7 @@ function openSettingModal(id){
         $('#stName').val(t.name); $('#stPaper').val(t.paper_size); $('#stOrientation').val(t.orientation||'landscape');
         $('#stListStamp').val(t.list_stamp_tpl_id||0); $('#stFooterStamp').val(t.footer_stamp_tpl_id||0);
         $('#stDocLabel').text(t.as_doc ? (t.as_doc.doc_no+' '+t.as_doc.doc_name) : '未綁定').data('id', t.as_doc?t.as_doc.id:0);
+        applyStNameLock(t.as_doc||null);
         $('#stNeedReview').prop('checked', t.need_review==1); $('#stAutoReview').prop('checked', t.auto_review==1); $('#stReviewDept').val(t.review_dept_id||'');
         $('#stNeedApproval').prop('checked', t.need_approval==1); $('#stAutoApproval').prop('checked', t.auto_approval==1);
         $('#stApproverDept').val(t.approver_dept_id||''); $('#stApproverUser').val(t.approver_user_id||'');
@@ -464,7 +473,7 @@ function openTplAsDocPicker(){
     $.getJSON(API, {action:'asdoc_list'}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         EGAsDoc.open({ docs: res.docs||[], current: $('#stDocLabel').data('id')||0, title:'模板 AS 文件綁定',
-            onSave: function(id, doc){ $('#stDocLabel').text(doc?(doc.doc_no+' '+doc.doc_name):'未綁定').data('id', id); }
+            onSave: function(id, doc){ $('#stDocLabel').text(doc?(doc.doc_no+' '+doc.doc_name):'未綁定').data('id', id); applyStNameLock(doc); }
         });
     });
 }

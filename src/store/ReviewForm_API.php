@@ -78,6 +78,17 @@ case 'template_settings_save': {
     if (!$perms['canAdmin']) jerr('僅管理員可設定模板', 403);
     $id = (int)($_POST['id'] ?? 0);
     $name = trim((string)($_POST['name'] ?? ''));
+    $docId = (int)($_POST['as_doc_id'] ?? 0);
+    // 模板名稱一旦綁定 AS 文件編號，一律強制＝該文件的文件名稱（2026-08-14 使用者明確要求，避免模板名稱跟
+    // 綁定文件對不上）；未綁定才允許自訂名稱。已產生的表單顯示名稱是即時查 rf_template.name（見 instance_list/
+    // instance_get 都是 JOIN 現況，不是各自存一份快照），這裡改了名稱，所有既有表單清單顯示會自動一起更新。
+    if ($docId > 0) {
+        $st = $db->prepare("SELECT doc_name FROM as_document WHERE id=? AND is_deleted=0");
+        $st->execute([$docId]);
+        $docName = $st->fetchColumn();
+        if ($docName === false) jerr('找不到綁定的AS文件');
+        $name = (string)$docName;
+    }
     if ($name === '') jerr('請輸入模板名稱');
     $paper = ($_POST['paper_size'] ?? 'A4') === 'A3' ? 'A3' : 'A4';
     $orientation = ($_POST['orientation'] ?? 'landscape') === 'portrait' ? 'portrait' : 'landscape';
@@ -95,7 +106,6 @@ case 'template_settings_save': {
         'maintain_dept_id'=>(int)($_POST['maintain_dept_id'] ?? 0) ?: null,
         'has_year_heading'=>!empty($_POST['has_year_heading']),
     ], $uname);
-    $docId = (int)($_POST['as_doc_id'] ?? 0);
     if ($docId >= 0) eg_asdoc_save($db, rvf_asdoc_module($tid), $docId, $uname);
     jout(['template'=>rvf_template_get($db, $tid)]);
 }
