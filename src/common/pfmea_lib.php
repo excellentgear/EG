@@ -110,6 +110,15 @@ function pfmea_ensure_schema(PDO $db): void {
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY uq_code (process_code)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-製程代號主檔'");
+    // 2026-08-14 使用者要求：製程代號改從全站製程主檔(process_no/process_type)同步帶入，不再只靠
+    // xlsm匯入；同步進來的每一筆預設不開放使用(is_enabled=0)，管理員在參考資料設定畫面逐一或整個
+    // 大項分類批次開放，避免全公司205筆製程一次全部塞進PFMEA選單造成難以選擇。
+    foreach ([
+        "ALTER TABLE pfmea_process ADD COLUMN master_process_no_id INT NULL COMMENT '連結全站製程主檔process_no.ProcessNo，NULL=舊xlsm匯入尚未對應' AFTER process_name",
+        "ALTER TABLE pfmea_process ADD COLUMN master_type_id INT NULL COMMENT '連結process_type.process_type_id(製程大項分類)，供批次開放用' AFTER master_process_no_id",
+        "ALTER TABLE pfmea_process ADD COLUMN category_name VARCHAR(100) NULL COMMENT '製程大項分類名稱(從process_type同步的顯示用文字)' AFTER master_type_id",
+        "ALTER TABLE pfmea_process ADD COLUMN is_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否開放本頁(PFMEA)使用；既有資料預設開放，新同步進來的預設關閉待管理員確認' AFTER is_active",
+    ] as $alter) { try { $db->exec($alter); } catch (Throwable $e) {} }
 
     $db->exec("CREATE TABLE IF NOT EXISTS pfmea_process_failure_mode (
         id INT AUTO_INCREMENT PRIMARY KEY,

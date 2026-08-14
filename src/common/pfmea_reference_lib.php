@@ -6,8 +6,67 @@
  * 資料表定義見 pfmea_lib.php ensure_schema()。
  */
 
+/** 填表用：只回傳管理員已開放使用(is_enabled=1)的製程，避免全公司205筆製程一次全部塞進下拉選單 */
 function pfmea_ref_process_list(PDO $db): array {
-    return $db->query("SELECT id, process_code, process_name FROM pfmea_process WHERE is_active=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    return $db->query("SELECT id, process_code, process_name FROM pfmea_process WHERE is_active=1 AND is_enabled=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/* ---------- 製程主檔同步（2026-08-14使用者要求）----------
+ * 製程代號改從全站製程主檔(process_no/process_type)同步帶入，不再只靠xlsm匯入；同步進來的每一筆
+ * 預設不開放使用(is_enabled=0)，管理員在參考資料設定畫面逐一或整個大項分類批次開放。
+ * 已存在的pfmea_process.process_code(含舊xlsm匯入的)只補上master_process_no_id/分類關聯，
+ * 不覆蓋process_name——避免代號剛好相同但實際意義不同時(如公司製程主檔後來改過用途)靜默改名，
+ * 造成已經用該代號填過的分析表看起來對不上；名稱要不要改由管理員自行到設定畫面手動確認調整。 */
+function pfmea_process_sync_from_master(PDO $db, int $uid, string $uname): array {
+    $rows = $db->query("SELECT pn.ProcessNo, pn.ProcessName, pn.process_type_id, pt.process_type
+                         FROM process_no pn LEFT JOIN process_type pt ON pt.process_type_id=pn.process_type_id
+                         WHERE pn.ProcessName IS NOT NULL AND pn.ProcessName<>''")->fetchAll(PDO::FETCH_ASSOC);
+    $created = 0; $linked = 0;
+    foreach ($rows as $r) {
+        $code = (string)$r['ProcessNo'];
+        $st = $db->prepare("SELECT id, master_process_no_id FROM pfmea_process WHERE process_code=? LIMIT 1");
+        $st->execute([$code]);
+        $existing = $st->fetch(PDO::FETCH_ASSOC);
+        if ($existing) {
+            if (!$existing['master_process_no_id']) {
+                $db->prepare("UPDATE pfmea_process SET master_process_no_id=?, master_type_id=?, category_name=? WHERE id=?")
+                   ->execute([(int)$r['ProcessNo'], $r['process_type_id'] ?: null, $r['process_type'] ?: null, $existing['id']]);
+                $linked++;
+            }
+            continue;
+        }
+        $st = $db->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM pfmea_process");
+        $st->execute();
+        $sort = (int)$st->fetchColumn();
+        $db->prepare("INSERT INTO pfmea_process (process_code, process_name, master_process_no_id, master_type_id, category_name, sort_order, is_enabled, created_by, created_by_name)
+                      VALUES (?,?,?,?,?,?,0,?,?)")
+           ->execute([$code, $r['ProcessName'], (int)$r['ProcessNo'], $r['process_type_id'] ?: null, $r['process_type'] ?: null, $sort, $uid, $uname]);
+        $created++;
+    }
+    return ['created'=>$created, 'linked'=>$linked, 'total_master'=>count($rows)];
+}
+
+/** 參考資料設定畫面用：全部製程(不篩is_enabled)，含大項分類，供批次開放/個別勾選介面 */
+function pfmea_process_list_all(PDO $db): array {
+    return $db->query("SELECT id, process_code, process_name, master_type_id, category_name, is_enabled
+                        FROM pfmea_process WHERE is_active=1 ORDER BY (category_name IS NULL), category_name, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function pfmea_process_set_enabled(PDO $db, array $ids, bool $enabled): void {
+    if (!$ids) return;
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $db->prepare("UPDATE pfmea_process SET is_enabled=? WHERE id IN ($in)")->execute(array_merge([$enabled?1:0], $ids));
+}
+
+function pfmea_process_set_enabled_by_type(PDO $db, int $masterTypeId, bool $enabled): void {
+    $db->prepare("UPDATE pfmea_process SET is_enabled=? WHERE master_type_id=?")->execute([$enabled?1:0, $masterTypeId]);
+}
+
+/** 管理員手動改製程名稱(用於同代號但主檔名稱不同的情況，如何處理由管理員自行確認) */
+function pfmea_process_rename(PDO $db, int $id, string $name): void {
+    $name = trim($name);
+    if ($name === '') return;
+    $db->prepare("UPDATE pfmea_process SET process_name=? WHERE id=?")->execute([$name, $id]);
 }
 
 /** 新增或取得製程代號（代號已存在則直接回傳其id，不重複新增；名稱不同時不覆蓋既有名稱） */
