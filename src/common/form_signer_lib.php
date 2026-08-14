@@ -818,12 +818,73 @@ function fsd_case_replace_file(PDO $db, int $caseId, string $fileType, string $f
 
 function fsd_case_pages_save(PDO $db, int $caseId, array $pages): void {
     $db->prepare("DELETE FROM fsd_case_page WHERE case_id=?")->execute([$caseId]);
-    $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation,paper_size,crop_x,crop_y,crop_w,crop_h) VALUES (?,?,?,?,?,?,?,?,?,?)");
+    $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation,paper_size,crop_x,crop_y,crop_w,crop_h,file_name) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
     foreach ($pages as $p) {
         $paper = in_array($p['paper_size'] ?? '', ['A4','A3'], true) ? $p['paper_size'] : null;
         $ins->execute([$caseId, (int)$p['page_no'], (float)$p['width_pt'], (float)$p['height_pt'], (int)($p['rotation'] ?? 0) % 360,
-            $paper, (float)($p['crop_x'] ?? 0), (float)($p['crop_y'] ?? 0), (float)($p['crop_w'] ?? 1), (float)($p['crop_h'] ?? 1)]);
+            $paper, (float)($p['crop_x'] ?? 0), (float)($p['crop_y'] ?? 0), (float)($p['crop_w'] ?? 1), (float)($p['crop_h'] ?? 1),
+            ($p['file_name'] ?? '') !== '' ? $p['file_name'] : null]);
     }
+}
+
+/** 解析某案件某頁要串流的實體檔名：優先用該頁自己的file_name(新版多圖案件，每頁各自一張圖片)，
+ *  沒有則退回case.file_name(舊版單檔圖片/PDF案件相容，2026-08-14前建立的案件皆屬此類)。 */
+function fsd_case_page_file_name(array $case, array $page): ?string {
+    $own = $page['file_name'] ?? null;
+    return ($own !== null && $own !== '') ? $own : ($case['file_name'] ?? null);
+}
+
+/**
+ * 建立案件(草稿)：案件一律只能上傳圖片，不可PDF，且一次可多張各自成一頁(2026-08-14使用者明確要求，
+ * 因PDF轉圖列印畫質實測不如圖片清楚)。$images = [['file_name'=>str,'width_pt'=>float,'height_pt'=>float], ...]，
+ * 依陣列順序＝page_no 1..N(順序由前端上傳/拖拽排序決定)。
+ */
+function fsd_case_create_draft_images(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, array $images): array {
+    $tpl = fsd_template_get($db, $templateId);
+    if (!$tpl) return ['ok'=>false, 'msg'=>'找不到此樣板'];
+    if ((int)$tpl['published_version'] < 1) return ['ok'=>false, 'msg'=>'此樣板尚未發布，請聯絡管理員'];
+    if ($tpl['status'] !== 'active') return ['ok'=>false, 'msg'=>'此樣板已停用'];
+    if (!$images) return ['ok'=>false, 'msg'=>'請至少上傳一張圖片'];
+    $bizDate = $bizDate ?: date('Y-m-d');
+    $db->beginTransaction();
+    try {
+        $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,status,current_stage_seq)
+                      VALUES (?,?,'image',NULL,?,?,?,?,?,?,'draft',0)")
+           ->execute([$templateId, (int)$tpl['published_version'], $title ?: $tpl['name'], $uid, $uname, $uid, $uname, $bizDate]);
+        $caseId = (int)$db->lastInsertId();
+        $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation,file_name) VALUES (?,?,?,?,0,?)");
+        foreach (array_values($images) as $i => $img) {
+            $ins->execute([$caseId, $i + 1, (float)$img['width_pt'], (float)$img['height_pt'], $img['file_name']]);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        return ['ok'=>false, 'msg'=>'建立失敗：' . $e->getMessage()];
+    }
+    return ['ok'=>true, 'id'=>$caseId];
+}
+
+/** 草稿階段更換文件(多圖模式版本)：整批換掉，之前框選的位置一併清空(避免對到舊文件版面)。 */
+function fsd_case_replace_file_images(PDO $db, int $caseId, array $images): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可更換文件'];
+    if (!$images) return ['ok'=>false, 'msg'=>'請至少上傳一張圖片'];
+    $db->beginTransaction();
+    try {
+        $db->prepare("UPDATE fsd_case SET file_type='image',file_name=NULL,updated_at=NOW() WHERE id=?")->execute([$caseId]);
+        $db->prepare("DELETE FROM fsd_case_field WHERE case_id=?")->execute([$caseId]);
+        $db->prepare("DELETE FROM fsd_case_page WHERE case_id=?")->execute([$caseId]);
+        $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation,file_name) VALUES (?,?,?,?,0,?)");
+        foreach (array_values($images) as $i => $img) {
+            $ins->execute([$caseId, $i + 1, (float)$img['width_pt'], (float)$img['height_pt'], $img['file_name']]);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        return ['ok'=>false, 'msg'=>'更換失敗：' . $e->getMessage()];
+    }
+    return ['ok'=>true];
 }
 
 function fsd_case_pages_get(PDO $db, int $caseId): array {

@@ -16,8 +16,9 @@ include_once $document_root . '/EGsystem/src/common/confirm_password_lib.php';
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
-// template_file/case_file 直接串流檔案內容，Content-Type 依檔案類型而定，其餘動作一律 JSON
-if ($action !== 'template_file' && $action !== 'case_file') header('Content-Type: application/json; charset=utf-8');
+// template_file/case_file/case_page_file 直接串流檔案內容，Content-Type 依檔案類型而定，其餘動作一律 JSON
+$fsdStreamActions = ['template_file', 'case_file', 'case_page_file'];
+if (!in_array($action, $fsdStreamActions, true)) header('Content-Type: application/json; charset=utf-8');
 
 function jout($a) { echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code = 400) { http_response_code($code); echo json_encode(['ok'=>false, 'error'=>$msg], JSON_UNESCAPED_UNICODE); exit; }
@@ -43,6 +44,18 @@ function fsd_case_attach_dir_safe(PDO $db): string {
     eg_attach_ensure_dir($dir);
     return $dir;
 }
+/** case_file/case_page_file共用權限檢查：本人/可檢視全部者放行，否則須是目前階段待處理人才能看，不是就jerr中止。 */
+function fsd_case_view_file_perm_check(PDO $db, array $case, int $uid, array $perms): void {
+    if ($perms['canViewAll'] || (int)$case['applicant_id'] === $uid) return;
+    $schema = fsd_case_schema($db, $case);
+    $stage = null;
+    foreach ($schema['stages'] ?? [] as $s) if ((int)$s['seq'] === (int)$case['current_stage_seq']) { $stage = $s; break; }
+    if ($stage) foreach ($stage['signers'] as $sg) {
+        $r = fsd_resolve_signer($db, $sg, $case);
+        if ($r && (int)$r['id'] === $uid) return;
+    }
+    jerr('無權檢視此檔案', 403);
+}
 /** 上傳檔案共用檢查：回傳 ['ext'=>,'is_pdf'=>] 或直接 jerr 中止。 */
 function fsd_check_upload_ext(): array {
     if (empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) jerr('請選擇要上傳的檔案');
@@ -51,6 +64,30 @@ function fsd_check_upload_ext(): array {
     $isImg = in_array($ext, ['png','jpg','jpeg'], true);
     if (!$isPdf && !$isImg) jerr('僅接受圖片(png/jpg)或PDF檔');
     return ['ext'=>$ext, 'is_pdf'=>$isPdf];
+}
+/**
+ * 案件圖片多檔上傳共用檢查(2026-08-14使用者明確要求：案件一律只能上傳圖片,不可PDF,可一次多張)。
+ * $_FILES[$field]須為陣列上傳(<input multiple name="xxx[]">)。只接受png/jpg/jpeg，用getimagesize()
+ * 量測尺寸(換算72dpi的pt，同前端img.naturalWidth/96*72換算慣例)。回傳依原始順序=page_no 1..N；
+ * 任何一張不合格即整批中止(jerr直接結束)。
+ */
+function fsd_case_upload_images(PDO $db, string $field): array {
+    if (empty($_FILES[$field]) || empty($_FILES[$field]['name'][0])) jerr('請至少上傳一張圖片(案件僅接受圖片檔,不可上傳PDF)');
+    $dir = fsd_case_attach_dir_safe($db);
+    $n = count($_FILES[$field]['name']);
+    $images = [];
+    for ($i = 0; $i < $n; $i++) {
+        if ($_FILES[$field]['error'][$i] !== UPLOAD_ERR_OK) jerr('第' . ($i + 1) . '個檔案上傳失敗');
+        $orig = (string)$_FILES[$field]['name'][$i];
+        $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['png', 'jpg', 'jpeg'], true)) jerr('案件僅接受圖片檔(png/jpg)，不可上傳PDF：' . $orig);
+        $dim = @getimagesize($_FILES[$field]['tmp_name'][$i]);
+        if (!$dim) jerr('無法讀取圖片尺寸，檔案可能已損毀：' . $orig);
+        $fname = 'fsdc_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '_' . $i . '.' . $ext;
+        if (!move_uploaded_file($_FILES[$field]['tmp_name'][$i], $dir . $fname)) jerr('檔案寫入失敗：' . $orig, 500);
+        $images[] = ['file_name' => $fname, 'width_pt' => $dim[0] / 96 * 72, 'height_pt' => $dim[1] / 96 * 72];
+    }
+    return $images;
 }
 
 switch ($action) {
@@ -302,34 +339,32 @@ case 'case_get': {
     ]);
 }
 
-/** 建立案件草稿：需一併上傳要簽核的文件(不是沿用樣板檔案，樣板只提供欄位提示/白名單，2026-08-14使用者明確要求)。 */
+/**
+ * 建立案件草稿：需一併上傳要簽核的文件(不是沿用樣板檔案，樣板只提供欄位提示/白名單)。
+ * 案件一律只能上傳圖片、可一次多張(2026-08-14使用者明確要求：PDF轉圖列印畫質實測不如圖片清楚，
+ * 故案件不再接受PDF；多張圖片依前端拖拽排序後的順序依序成頁，樣板仍可上傳PDF不受影響)。
+ */
 case 'case_create_draft': {
     fsd_need_csrf();
     if (!$perms['canCreate']) jerr('您沒有建立案件的權限', 403);
     $tid = (int)($_POST['template_id'] ?? 0);
     $title = trim((string)($_POST['title'] ?? ''));
     $bizDate = trim((string)($_POST['business_date'] ?? '')) ?: date('Y-m-d');
-    $up = fsd_check_upload_ext();
-    $dir = fsd_case_attach_dir_safe($db);
-    $fname = 'fsdc_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.' . $up['ext'];
-    if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir . $fname)) jerr('檔案寫入失敗', 500);
-    $r = fsd_case_create_draft($db, $tid, $uid, $uname, $title, $bizDate, $up['is_pdf'] ? 'pdf' : 'image', $fname);
+    $images = fsd_case_upload_images($db, 'files');
+    $r = fsd_case_create_draft_images($db, $tid, $uid, $uname, $title, $bizDate, $images);
     if (!$r['ok']) jerr($r['msg']);
     jout(['id'=>$r['id']]);
 }
 
-/** 草稿階段更換文件(換一份重新框選)。 */
+/** 草稿階段更換文件(換一份重新框選)：同樣一律圖片、可多張(2026-08-14使用者明確要求)。 */
 case 'case_replace_file': {
     fsd_need_csrf();
     $id = (int)($_POST['case_id'] ?? 0);
     $case = fsd_case_get($db, $id);
     if (!$case) jerr('找不到此案件', 404);
     if ((int)$case['applicant_id'] !== $uid && !$perms['canAdmin']) jerr('只有申請人本人或管理員可以編輯', 403);
-    $up = fsd_check_upload_ext();
-    $dir = fsd_case_attach_dir_safe($db);
-    $fname = 'fsdc_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.' . $up['ext'];
-    if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir . $fname)) jerr('檔案寫入失敗', 500);
-    $r = fsd_case_replace_file($db, $id, $up['is_pdf'] ? 'pdf' : 'image', $fname);
+    $images = fsd_case_upload_images($db, 'files');
+    $r = fsd_case_replace_file_images($db, $id, $images);
     if (!$r['ok']) jerr($r['msg']);
     jout([]);
 }
@@ -339,21 +374,39 @@ case 'case_file': {
     $id = (int)($_GET['id'] ?? 0);
     $case = fsd_case_get($db, $id);
     if (!$case || !$case['file_name']) jerr('找不到此案件的檔案', 404);
-    if (!$perms['canViewAll'] && (int)$case['applicant_id'] !== $uid) {
-        $schema = fsd_case_schema($db, $case);
-        $stage = null;
-        foreach ($schema['stages'] ?? [] as $s) if ((int)$s['seq'] === (int)$case['current_stage_seq']) { $stage = $s; break; }
-        $isPending = false;
-        if ($stage) foreach ($stage['signers'] as $sg) {
-            $r = fsd_resolve_signer($db, $sg, $case);
-            if ($r && (int)$r['id'] === $uid) { $isPending = true; break; }
-        }
-        if (!$isPending) jerr('無權檢視此檔案', 403);
-    }
+    fsd_case_view_file_perm_check($db, $case, $uid, $perms);
     $dir = fsd_case_attach_dir_safe($db);
     $fp = $dir . $case['file_name'];
     if (!is_file($fp)) jerr('檔案不存在或已被搬移', 404);
     $ext = strtolower(pathinfo($case['file_name'], PATHINFO_EXTENSION));
+    $mime = $ext === 'pdf' ? 'application/pdf' : ($ext === 'png' ? 'image/png' : 'image/jpeg');
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . filesize($fp));
+    readfile($fp);
+    exit;
+}
+
+/**
+ * 串流案件某一頁自己的圖片(新版多圖案件，每頁各自一張)；找不到該頁專屬檔名時退回case.file_name
+ * (向下相容2026-08-14前建立的舊版單檔/PDF案件——但PDF案件的多頁本來就該走case_file交給pdf.js處理，
+ * 這裡只服務image型別)。權限比照case_file。
+ */
+case 'case_page_file': {
+    $id = (int)($_GET['id'] ?? 0);
+    $pageNo = (int)($_GET['page_no'] ?? 0);
+    $case = fsd_case_get($db, $id);
+    if (!$case) jerr('找不到此案件', 404);
+    fsd_case_view_file_perm_check($db, $case, $uid, $perms);
+    $pages = fsd_case_pages_get($db, $id);
+    $page = null;
+    foreach ($pages as $p) if ((int)$p['page_no'] === $pageNo) { $page = $p; break; }
+    if (!$page) jerr('找不到此頁', 404);
+    $fname = fsd_case_page_file_name($case, $page);
+    if (!$fname) jerr('找不到此頁的檔案', 404);
+    $dir = fsd_case_attach_dir_safe($db);
+    $fp = $dir . $fname;
+    if (!is_file($fp)) jerr('檔案不存在或已被搬移', 404);
+    $ext = strtolower(pathinfo($fname, PATHINFO_EXTENSION));
     $mime = $ext === 'pdf' ? 'application/pdf' : ($ext === 'png' ? 'image/png' : 'image/jpeg');
     header('Content-Type: ' . $mime);
     header('Content-Length: ' . filesize($fp));

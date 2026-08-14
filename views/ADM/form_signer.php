@@ -63,6 +63,18 @@ $perms = fsd_perms($db, $fsdUser);
         .prog-chip.not_started { background:#fff; color:#b0a390; }
         .prog-chip i.fa-check-circle { color:#2e6b2e; }
         .prog-arrow { color:#c9a876; font-size:12px; margin:0 1px; }
+        .fsd-thumb-grid { display:flex; flex-wrap:wrap; gap:8px; margin:6px 0; min-height:0; }
+        .fsd-thumb-grid .thumb { position:relative; width:72px; height:96px; border:1.5px solid #D8BE93; border-radius:5px;
+            overflow:hidden; cursor:grab; background:#fff; }
+        .fsd-thumb-grid .thumb.dragover { border-color:#F0A24B; box-shadow:0 0 0 2px #F0A24B inset; }
+        .fsd-thumb-grid .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+        .fsd-thumb-grid .thumb .tno { position:absolute; left:2px; top:2px; background:#F0A24B; color:#fff; font-size:10px;
+            padding:0 4px; border-radius:3px; }
+        .fsd-thumb-grid .thumb .tdel { position:absolute; right:2px; top:2px; background:rgba(0,0,0,.55); color:#fff;
+            font-size:11px; width:16px; height:16px; line-height:16px; text-align:center; border-radius:50%; cursor:pointer; }
+        .flt-status-btn { height:28px; font-size:12.5px; padding:0 10px; border:1px solid #D8BE93; border-radius:14px;
+            background:#fff; color:#5b3a1e; cursor:pointer; }
+        .flt-status-btn.active { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .fsd-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
         .fsd-modal { background:#fff; border-radius:8px; max-width:520px; margin:30px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
             max-height:90vh; display:flex; flex-direction:column; }
@@ -152,6 +164,16 @@ $perms = fsd_perms($db, $fsdUser);
                 <button id="btnDeletedList" style="display:none;"><i class="fa fa-trash-o"></i> 已刪除案件</button>
                 <a href="form_signer_template.php" id="lnkTplAdmin" style="display:none;height:30px;line-height:28px;padding:0 12px;border:1px solid #D8BE93;border-radius:4px;color:#5b3a1e;text-decoration:none;">樣板管理→</a>
             </div>
+            <div class="fsd-toolbar" style="margin-top:0;">
+                <input type="text" id="fltKeyword" placeholder="搜尋案件/樣板/業務日期…" style="width:220px;" oninput="applyCaseFilter()">
+                <select id="fltApplicant" onchange="applyCaseFilter()" style="width:160px;" data-eg-filter="輸入申請人姓名篩選…"><option value="">全部申請人</option></select>
+                <span style="color:#8a6d45;margin-left:6px;">狀態：</span>
+                <button type="button" class="flt-status-btn active" data-status="" onclick="toggleStatusFilter(this)">全部</button>
+                <button type="button" class="flt-status-btn" data-status="draft" onclick="toggleStatusFilter(this)">草稿</button>
+                <button type="button" class="flt-status-btn" data-status="in_progress" onclick="toggleStatusFilter(this)">進行中</button>
+                <button type="button" class="flt-status-btn" data-status="approved" onclick="toggleStatusFilter(this)">已完成</button>
+                <button type="button" class="flt-status-btn" data-status="rejected" onclick="toggleStatusFilter(this)">已駁回</button>
+            </div>
             <div class="fsd-table-wrap">
             <table class="fsd-tbl">
                 <thead><tr><th>案件</th><th>樣板</th><th>申請人</th><th>業務日期</th><th>進度</th><th>狀態</th><th style="width:160px;">操作</th></tr></thead>
@@ -236,8 +258,9 @@ $perms = fsd_perms($db, $fsdUser);
     <div class="m-body">
         <label>選擇樣板</label>
         <select id="crTpl"><option value="">請選擇…</option></select>
-        <label>要簽核的文件（圖片 png/jpg 或多頁 PDF，這是實際要簽核的文件，不是樣板本身的檔案）</label>
-        <input type="file" id="crFile" accept=".png,.jpg,.jpeg,.pdf">
+        <label>要簽核的文件（僅接受圖片png/jpg，不可上傳PDF；可一次選多張，每張各成一頁，可拖曳縮圖調整頁面順序）</label>
+        <input type="file" id="crFile" accept="image/png,image/jpeg" multiple onchange="crFilesChanged(this.files)">
+        <div id="crThumbs" class="fsd-thumb-grid"></div>
         <label>案件標題（可留空，預設用樣板名稱）</label><input type="text" id="crTitle" maxlength="200">
         <label>業務日期</label><input type="date" id="crDate" max="9999-12-31">
         <p style="font-size:11.5px;color:#8a6d45;">建立後進入框選畫面，把樣板提供的欄位拖到您上傳的文件上對應位置，再選擇「存草稿」或「儲存並送出」。</p>
@@ -250,7 +273,9 @@ $perms = fsd_perms($db, $fsdUser);
 <div class="fsd-mask" id="replaceMask"><div class="fsd-modal">
     <div class="m-head"><span>更換文件</span><span class="m-close" onclick="closeMask('replaceMask')">✕</span></div>
     <div class="m-body">
-        <label>新文件（圖片 png/jpg 或多頁 PDF）</label><input type="file" id="rpFile" accept=".png,.jpg,.jpeg,.pdf">
+        <label>新文件（僅接受圖片png/jpg，可一次多張，拖曳縮圖調整頁面順序）</label>
+        <input type="file" id="rpFile" accept="image/png,image/jpeg" multiple onchange="rpFilesChanged(this.files)">
+        <div id="rpThumbs" class="fsd-thumb-grid"></div>
         <p style="font-size:11.5px;color:#8a6d45;">更換後之前框選的位置會清空，需要重新拖放。</p>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('replaceMask')">取消</button>
@@ -408,26 +433,57 @@ function renderProgressChips(c){
     });
     return '<div class="prog-wrap">' + parts.join('<span class="prog-arrow">→</span>') + '</div>';
 }
+function renderCaseRow(c){
+    var stageTxt = renderProgressChips(c);
+    var isOwner = String(c.applicant_id)===String(META.uid);
+    var actions = '';
+    if (c.status === 'draft') {
+        actions += '<button onclick="openFieldDesigner('+c.id+')">繼續框選</button> ';
+        if (isOwner || META.perms.canAdmin) actions += '<button class="btn-danger" onclick="deleteDraftFromList('+c.id+')"><i class="fa fa-trash"></i></button>';
+    } else {
+        actions += '<button onclick="openCase('+c.id+')">檢視</button>';
+    }
+    return '<tr><td>'+esc(c.title||c.template_name)+'</td><td>'+esc(c.template_name)+'</td><td>'+esc(c.applicant_name)+'</td>'
+        + '<td>'+dispDate(c.business_date)+'</td><td>'+stageTxt+'</td><td>'+statusBadge(c.status)+'</td>'
+        + '<td>'+actions+'</td></tr>';
+}
+/** 篩選：申請人為下拉(僅列出實際有案件的人)；案件/樣板/業務日期共用同一個模糊搜尋框；狀態為單選按鈕列(2026-08-14使用者明確要求)。 */
+var FLT_STATUS = '';
+function buildApplicantFilterOptions(){
+    var seen = {}, opts = [];
+    CASES.forEach(function(c){
+        if (!seen[c.applicant_id]) { seen[c.applicant_id] = true; opts.push({id:c.applicant_id, name:c.applicant_name}); }
+    });
+    opts.sort(function(a,b){ return String(a.name).localeCompare(String(b.name), 'zh-Hant'); });
+    $('#fltApplicant').html('<option value="">全部申請人</option>' + opts.map(function(o){ return '<option value="'+o.id+'">'+esc(o.name)+'</option>'; }).join(''));
+}
+function toggleStatusFilter(btn){
+    $('.flt-status-btn').removeClass('active');
+    $(btn).addClass('active');
+    FLT_STATUS = $(btn).data('status') || '';
+    applyCaseFilter();
+}
+function applyCaseFilter(){
+    var kw = $.trim($('#fltKeyword').val()).toLowerCase();
+    var applicant = $('#fltApplicant').val();
+    var list = CASES.filter(function(c){
+        if (FLT_STATUS && c.status !== FLT_STATUS) return false;
+        if (applicant && String(c.applicant_id) !== String(applicant)) return false;
+        if (kw) {
+            var hay = [c.title, c.template_name, c.business_date].join(' ').toLowerCase();
+            if (hay.indexOf(kw) === -1) return false;
+        }
+        return true;
+    });
+    var h = list.map(renderCaseRow).join('');
+    $('#caseBody').html(h || '<tr><td colspan="7" style="text-align:center;color:#8a6d45;padding:10px;">'+(CASES.length?'沒有符合篩選條件的案件':'尚無案件')+'</td></tr>');
+}
 function loadCases(){
     $.getJSON(API, {action:'case_list'}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         CASES = (res.cases||[]).filter(function(c){ return c.status !== 'void'; });
-        var h = '';
-        CASES.forEach(function(c){
-            var stageTxt = renderProgressChips(c);
-            var isOwner = String(c.applicant_id)===String(META.uid);
-            var actions = '';
-            if (c.status === 'draft') {
-                actions += '<button onclick="openFieldDesigner('+c.id+')">繼續框選</button> ';
-                if (isOwner || META.perms.canAdmin) actions += '<button class="btn-danger" onclick="deleteDraftFromList('+c.id+')"><i class="fa fa-trash"></i></button>';
-            } else {
-                actions += '<button onclick="openCase('+c.id+')">檢視</button>';
-            }
-            h += '<tr><td>'+esc(c.title||c.template_name)+'</td><td>'+esc(c.template_name)+'</td><td>'+esc(c.applicant_name)+'</td>'
-               + '<td>'+dispDate(c.business_date)+'</td><td>'+stageTxt+'</td><td>'+statusBadge(c.status)+'</td>'
-               + '<td>'+actions+'</td></tr>';
-        });
-        $('#caseBody').html(h || '<tr><td colspan="7" style="text-align:center;color:#8a6d45;padding:10px;">尚無案件</td></tr>');
+        buildApplicantFilterOptions();
+        applyCaseFilter();
     });
 }
 function deleteDraftFromList(id){
@@ -437,18 +493,42 @@ function deleteDraftFromList(id){
         loadCases();
     }, 'json');
 }
-$('#btnAddCase').on('click', function(){ loadTemplateOptionsForCreate(); openMask('createMask'); });
+$('#btnAddCase').on('click', function(){ loadTemplateOptionsForCreate(); CR_FILES=[]; renderCrThumbs(); $('#crFile').val(''); openMask('createMask'); });
+/** 建立案件的多圖選擇+拖曳排序(2026-08-14使用者明確要求：案件只能傳圖片,可一次多張,拖曳排序決定頁序)。 */
+var CR_FILES = [];
+function crFilesChanged(fileList){ CR_FILES = Array.prototype.slice.call(fileList); renderCrThumbs(); }
+function crRemoveThumb(i){ CR_FILES.splice(i,1); renderCrThumbs(); }
+function renderCrThumbs(){
+    var h = '';
+    CR_FILES.forEach(function(f, i){
+        h += '<div class="thumb" draggable="true" data-idx="'+i+'"><img src="'+URL.createObjectURL(f)+'">'
+           + '<span class="tno">'+(i+1)+'</span><span class="tdel" onclick="crRemoveThumb('+i+')">×</span></div>';
+    });
+    var $g = $('#crThumbs').html(h);
+    var dragIdx = null;
+    $g.find('.thumb').on('dragstart', function(){ dragIdx = $(this).data('idx'); });
+    $g.find('.thumb').on('dragover', function(e){ e.preventDefault(); $(this).addClass('dragover'); });
+    $g.find('.thumb').on('dragleave', function(){ $(this).removeClass('dragover'); });
+    $g.find('.thumb').on('drop', function(e){
+        e.preventDefault(); $(this).removeClass('dragover');
+        var dropIdx = $(this).data('idx');
+        if (dragIdx === null || dragIdx === dropIdx) return;
+        var moved = CR_FILES.splice(dragIdx, 1)[0];
+        CR_FILES.splice(dropIdx, 0, moved);
+        renderCrThumbs();
+    });
+}
 function submitCreate(){
     var tid = $('#crTpl').val();
     if (!tid){ alert('請選擇樣板'); return; }
-    var f = $('#crFile')[0].files[0];
-    if (!f){ alert('請上傳要簽核的文件'); return; }
+    if (!CR_FILES.length){ alert('請至少上傳一張要簽核的文件圖片'); return; }
     var fd = new FormData();
     fd.append('action','case_create_draft'); fd.append('csrf', META.csrf); fd.append('template_id', tid);
-    fd.append('title', $.trim($('#crTitle').val())); fd.append('business_date', $('#crDate').val()); fd.append('file', f);
+    fd.append('title', $.trim($('#crTitle').val())); fd.append('business_date', $('#crDate').val());
+    CR_FILES.forEach(function(f){ fd.append('files[]', f); });
     fetch(API, {method:'POST', body:fd}).then(function(r){ return r.json(); }).then(function(res){
         if (!res.ok){ alert(res.error||'建立失敗'); return; }
-        closeMask('createMask'); $('#crTitle').val(''); $('#crFile').val('');
+        closeMask('createMask'); $('#crTitle').val(''); $('#crFile').val(''); CR_FILES=[]; renderCrThumbs();
         openFieldDesigner(res.id);
     }).catch(function(){ alert('建立失敗（連線錯誤）'); });
 }
@@ -497,6 +577,12 @@ function cropCanvas(src, srcW, srcH, cx, cy, cw, ch){
     ctx.drawImage(src, srcW*cx, srcH*cy, outW, outH, 0, 0, outW, outH);
     return cv;
 }
+/** 案件文件URL解析：pdf型別維持單一多頁檔案(case_file)；image型別一律走case_page_file(每頁各自檔案，
+ *  向下相容單檔舊案件——後端case_page_file找不到該頁自己的檔名時會自動退回case.file_name)。 */
+function caseDocUrl(caseObj, fileType){
+    if (fileType === 'pdf') return API + '?action=case_file&id=' + caseObj.id;
+    return function(pageNo){ return API + '?action=case_page_file&id=' + caseObj.id + '&page_no=' + pageNo; };
+}
 function renderDocPages(fileType, fileUrl, pages, cb) {
     if (fileType === 'pdf') {
         ensurePdfJs().then(function(lib){ return lib.getDocument({url:fileUrl, withCredentials:true}).promise; }).then(function(doc){
@@ -519,16 +605,18 @@ function renderDocPages(fileType, fileUrl, pages, cb) {
         }).catch(function(e){ alert('PDF讀取失敗：'+(e.message||e)); });
     } else {
         pages.forEach(function(p){
+            // image型別的fileUrl可以是字串(舊版單檔案案件/樣板)或函式(新版每頁各自檔案,依page_no解析各自URL)
+            var url = (typeof fileUrl === 'function') ? fileUrl(p.page_no) : fileUrl;
             var hasCrop = (p.crop_x||0)>0 || (p.crop_y||0)>0 || (p.crop_w!=null && p.crop_w<1) || (p.crop_h!=null && p.crop_h<1);
-            if (!p.rotation && !hasCrop) { cb(p.page_no, fileUrl); return; }
+            if (!p.rotation && !hasCrop) { cb(p.page_no, url); return; }
             var img = new Image();
             img.onload = function(){
                 var base = p.rotation ? rotateToCanvas(img, img.naturalWidth, img.naturalHeight, p.rotation) : img;
                 var baseW = base.width || img.naturalWidth, baseH = base.height || img.naturalHeight;
                 var out = cropCanvas(base, baseW, baseH, p.crop_x||0, p.crop_y||0, p.crop_w!=null?p.crop_w:1, p.crop_h!=null?p.crop_h:1);
-                cb(p.page_no, out.toDataURL ? out.toDataURL('image/png') : fileUrl);
+                cb(p.page_no, out.toDataURL ? out.toDataURL('image/png') : url);
             };
-            img.src = fileUrl;
+            img.src = url;
         });
     }
 }
@@ -676,7 +764,7 @@ function renderDocGrid(pages, fields){
     });
     $('#docGrid').html(h);
     var fileType = CUR_CASE.file_type || 'image';
-    var fileUrl = API + '?action=case_file&id=' + CUR_CASE.id;
+    var fileUrl = caseDocUrl(CUR_CASE, fileType);
     // 圖章尺寸依綁定的圖章模板設定的公分數，不可縮小(使用者明確要求)：本地覆蓋noScale:true，
     // 不動DB裡模板本身的設定(該模板可能同時被其他頁面用fillRatio縮放模式消費，不能共用一份schema物件改)。
     var stampSchema = null;
@@ -756,15 +844,38 @@ function openFieldDesigner(id){
     });
 }
 $('#btnFieldBack').on('click', function(){ $('#fieldPanel').hide(); $('#listPanel').show(); FP_CASE=null; loadCases(); });
-function openReplaceFile(){ $('#rpFile').val(''); openMask('replaceMask'); }
+function openReplaceFile(){ $('#rpFile').val(''); RP_FILES=[]; renderRpThumbs(); openMask('replaceMask'); }
+var RP_FILES = [];
+function rpFilesChanged(fileList){ RP_FILES = Array.prototype.slice.call(fileList); renderRpThumbs(); }
+function rpRemoveThumb(i){ RP_FILES.splice(i,1); renderRpThumbs(); }
+function renderRpThumbs(){
+    var h = '';
+    RP_FILES.forEach(function(f, i){
+        h += '<div class="thumb" draggable="true" data-idx="'+i+'"><img src="'+URL.createObjectURL(f)+'">'
+           + '<span class="tno">'+(i+1)+'</span><span class="tdel" onclick="rpRemoveThumb('+i+')">×</span></div>';
+    });
+    var $g = $('#rpThumbs').html(h);
+    var dragIdx = null;
+    $g.find('.thumb').on('dragstart', function(){ dragIdx = $(this).data('idx'); });
+    $g.find('.thumb').on('dragover', function(e){ e.preventDefault(); $(this).addClass('dragover'); });
+    $g.find('.thumb').on('dragleave', function(){ $(this).removeClass('dragover'); });
+    $g.find('.thumb').on('drop', function(e){
+        e.preventDefault(); $(this).removeClass('dragover');
+        var dropIdx = $(this).data('idx');
+        if (dragIdx === null || dragIdx === dropIdx) return;
+        var moved = RP_FILES.splice(dragIdx, 1)[0];
+        RP_FILES.splice(dropIdx, 0, moved);
+        renderRpThumbs();
+    });
+}
 function submitReplaceFile(){
-    var f = $('#rpFile')[0].files[0];
-    if (!f){ alert('請選擇檔案'); return; }
+    if (!RP_FILES.length){ alert('請至少選擇一張圖片'); return; }
     var fd = new FormData();
-    fd.append('action','case_replace_file'); fd.append('csrf', META.csrf); fd.append('case_id', FP_CASE.id); fd.append('file', f);
+    fd.append('action','case_replace_file'); fd.append('csrf', META.csrf); fd.append('case_id', FP_CASE.id);
+    RP_FILES.forEach(function(f){ fd.append('files[]', f); });
     fetch(API, {method:'POST', body:fd}).then(function(r){ return r.json(); }).then(function(res){
         if (!res.ok){ alert(res.error||'更換失敗'); return; }
-        closeMask('replaceMask');
+        closeMask('replaceMask'); RP_FILES=[]; renderRpThumbs();
         openFieldDesigner(FP_CASE.id);
     }).catch(function(){ alert('更換失敗（連線錯誤）'); });
 }
@@ -898,8 +1009,7 @@ function openCropModal(pageNo){
     $('#cropCanvas').attr({width:dispW, height:dispH});
     if (CROP_CANVAS) { CROP_CANVAS.dispose(); CROP_CANVAS = null; }
     CROP_CANVAS = new fabric.Canvas('cropCanvas', {width:dispW, height:dispH, selection:false});
-    var fileUrl = API + '?action=case_file&id=' + FP_CASE.id;
-    renderDocPages(FP_CASE.file_type, fileUrl, [p], function(pageNo2, src){
+    renderDocPages(FP_CASE.file_type, caseDocUrl(FP_CASE, FP_CASE.file_type), [p], function(pageNo2, src){
         fabric.Image.fromURL(src, function(img){
             img.set({left:0, top:0, scaleX:dispW/img.width, scaleY:dispH/img.height, selectable:false, evented:false});
             CROP_CANVAS.setBackgroundImage(img, CROP_CANVAS.renderAll.bind(CROP_CANVAS));
@@ -959,7 +1069,7 @@ function buildFpCanvases(existingFields){
            + '</div><canvas id="fpcv_'+p.page_no+'"></canvas></div>';
     });
     $('#fpPageGrid').html(h);
-    var fileUrl = API + '?action=case_file&id=' + FP_CASE.id;
+    var fileUrl = caseDocUrl(FP_CASE, FP_CASE.file_type);
     pages.forEach(function(p){
         var dispW = 480, dispH = Math.round(dispW * (p.height_pt / p.width_pt || 1.414));
         var cv = new fabric.Canvas('fpcv_'+p.page_no, {width:dispW, height:dispH, selection:false});

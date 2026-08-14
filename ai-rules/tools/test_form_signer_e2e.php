@@ -454,9 +454,37 @@ $delUnused = fsd_template_delete_unused($db, $tplUnused);
 chk('未使用過的樣板刪除成功', $delUnused['ok'] === true);
 chk('刪除後查無此樣板', fsd_template_get($db, $tplUnused) === null);
 
+echo "\n== 17. 案件多圖片上傳(不接受PDF,每張各成一頁)＋向下相容舊版單檔案件(2026-08-14使用者明確要求) ==\n";
+$images3 = [
+    ['file_name'=>'e2e_multi_1.png', 'width_pt'=>595, 'height_pt'=>842],
+    ['file_name'=>'e2e_multi_2.png', 'width_pt'=>842, 'height_pt'=>595],
+    ['file_name'=>'e2e_multi_3.png', 'width_pt'=>595, 'height_pt'=>842],
+];
+$rMulti = fsd_case_create_draft_images($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '多圖上傳測試案', date('Y-m-d'), $images3);
+chk('多圖建立案件成功', $rMulti['ok'] === true);
+$caseId12 = $rMulti['id'];
+$pages12 = fsd_case_pages_get($db, $caseId12);
+chk('頁數等於上傳圖片數(3張=3頁)', count($pages12) === 3);
+chk('頁面順序依上傳陣列順序編page_no', $pages12[0]['file_name']==='e2e_multi_1.png' && $pages12[1]['file_name']==='e2e_multi_2.png' && $pages12[2]['file_name']==='e2e_multi_3.png');
+$case12 = fsd_case_get($db, $caseId12);
+chk('多圖案件本身file_name為NULL(檔案都掛在各頁上)', $case12['file_name'] === null);
+$emptyImages = fsd_case_create_draft_images($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '空清單測試', date('Y-m-d'), []);
+chk('未上傳任何圖片時建立失敗', $emptyImages['ok'] === false);
+
+$rReplace = fsd_case_replace_file_images($db, $caseId12, [['file_name'=>'e2e_multi_new.png','width_pt'=>595,'height_pt'=>842]]);
+chk('多圖模式更換文件成功', $rReplace['ok'] === true);
+chk('更換後頁數變成1', count(fsd_case_pages_get($db, $caseId12)) === 1);
+
+// 向下相容：舊版單檔案件(page沒有自己的file_name)要退回case.file_name
+$legacyCase = ['file_name'=>'legacy_whole_doc.pdf'];
+$legacyPageNoFile = ['file_name'=>null];
+chk('頁面無自己檔名時,退回案件整體file_name(舊版相容)', fsd_case_page_file_name($legacyCase, $legacyPageNoFile) === 'legacy_whole_doc.pdf');
+$newPageWithFile = ['file_name'=>'own_page.png'];
+chk('頁面有自己檔名時,優先用該頁自己的檔名', fsd_case_page_file_name($legacyCase, $newPageWithFile) === 'own_page.png');
+
 echo "\n========================================\n";
 echo "測試template_id=$tplId(核准案$caseId/駁回案$caseId2), template_id3=$tplId3(全自動案$caseId3), 軟刪復原案$caseId4\n";
 echo "template_id4=$tplId4(決策鏈: 手動$caseId6/駁回$caseId7/自動$caseId8)\n";
-echo "template_id5=$tplId5(填表人測試: $caseId9/SoD:$caseId10)\n";
+echo "template_id5=$tplId5(填表人測試: $caseId9/SoD:$caseId10), 多圖案$caseId12\n";
 echo $fail === 0 ? "全部通過\n" : "$fail 項失敗\n";
 exit($fail === 0 ? 0 : 1);
