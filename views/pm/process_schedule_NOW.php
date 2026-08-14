@@ -7668,6 +7668,12 @@ function get_state_badge($state)
                         $('#machineSettingModal').modal('show');
                     });
 
+                    <?php if ($can_manage_machine): ?>
+                    if (new URLSearchParams(window.location.search).get('auto_open_machine') === '1') {
+                        $('#btnOpenMachineSettings').trigger('click');
+                    }
+                    <?php endif; ?>
+
                     function loadMachineSettings() {
                         $.post('process_schedule_NOW.php', {
                             action: 'get_machine_settings'

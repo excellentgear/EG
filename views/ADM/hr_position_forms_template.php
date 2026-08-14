@@ -17,6 +17,31 @@ $db = (new DBConnection())->getPDO();
 $hrfUser = hrf_current_user($db);
 $perms = hrf_perms($db, $hrfUser);
 if (!$perms['canAdmin']) { header('Location: hr_position_forms.php'); exit; }
+
+// 判斷目前使用者是否有「待加工排程」頁機台設定的操作權限，決定白名單頁的跳窗連結要不要顯示成可點擊
+function hrf_can_open_machine_setting(PDO $db, int $uid): bool {
+    try {
+        $page = $db->query("SELECT page_id, group_id FROM system_module_pages WHERE page_url LIKE '%process_schedule_NOW.php' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        if (!$page) return false;
+        $st = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='page' AND module_code=?");
+        $st->execute([$uid, $page['page_id']]);
+        $rows = array_filter($st->fetchAll(PDO::FETCH_COLUMN));
+        if (!$rows && !empty($page['group_id'])) {
+            $mc = $db->prepare("SELECT module_code FROM system_modules WHERE group_id=? LIMIT 1");
+            $mc->execute([$page['group_id']]);
+            $moduleCode = $mc->fetchColumn();
+            if ($moduleCode) {
+                $st2 = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='group' AND module_code=?");
+                $st2->execute([$uid, $moduleCode]);
+                $rows = array_filter($st2->fetchAll(PDO::FETCH_COLUMN));
+            }
+        }
+        $chars = [];
+        foreach ($rows as $r) { $chars = array_merge($chars, str_split($r)); }
+        return (bool)array_intersect(['A','C','U','D'], array_unique($chars));
+    } catch (Throwable $e) { return false; }
+}
+$canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -116,12 +141,12 @@ if (!$perms['canAdmin']) { header('Location: hr_position_forms.php'); exit; }
 <?php endforeach; ?>
 
         <div class="hf-tabpane" id="pane-whitelist" data-type="whitelist">
-            <p style="font-size:12.5px;color:#8a6d45;">技能鑑定考核是針對「機型」訓練，不是針對實體機台——同一機型有多台機台編號也只算一個考核對象，所以下方生產機台清單已依機型去重（比照 process_schedule_NOW.php「機台設定」頁的欄位認定：機型=machine_model，不使用現場編號field_no），勾選的是機型不是機台名稱或機台種類。量測儀器校驗量具主檔（qc_tool）沒有獨立的機型欄位，維持逐支量具編號勾選。</p>
-            <p id="wlUnmodeledWarn" style="display:none;font-size:12.5px;color:#DD5138;"></p>
+            <div style="text-align:right;margin-bottom:8px;"><button class="btn-warm" onclick="wlSave()">儲存白名單</button> <span id="wlSaveMsg" style="font-size:12.5px;color:#3f9142;"></span></div>
+            <p style="font-size:12.5px;color:#8a6d45;">技能鑑定考核是針對「機型」訓練，不是針對實體機台——同一機型有多台機台編號也只算一個考核對象，所以下方生產機台清單已依機型去重（比照「待加工排程」頁的機台設定欄位認定：機型=machine_model，不使用現場編號field_no），勾選的是機型不是機台名稱或機台種類。量測儀器校驗量具主檔（qc_tool）沒有獨立的機型欄位，維持逐支量具編號勾選。</p>
+            <p id="wlUnmodeledWarn" style="display:none;font-size:12.5px;color:#DD5138;" data-can-open="<?= $canOpenMachineSetting ? '1' : '0' ?>"></p>
             <input type="text" class="flt" id="wlFilter" placeholder="輸入名稱篩選…" oninput="wlFilterList(this.value)">
             <div class="wl-col"><h4>生產機台（machine_list）</h4><div class="wl-list" id="wlMachines"></div></div>
             <div class="wl-col" style="margin-left:1%;"><h4>量測儀器校驗量具（qc_tool）</h4><div class="wl-list" id="wlTools"></div></div>
-            <div style="clear:both;margin-top:10px;"><button class="btn-warm" onclick="wlSave()">儲存白名單</button> <span id="wlSaveMsg" style="font-size:12.5px;color:#3f9142;"></span></div>
         </div>
 
         <div class="hf-tabpane" id="pane-deptset" data-type="deptset">
@@ -571,7 +596,13 @@ function loadWhitelist(){
         renderWlGroup('#wlMachines', res.machines||[]);
         renderWlGroup('#wlTools', res.tools||[]);
         if (res.unmodeled_count > 0) {
-            $('#wlUnmodeledWarn').show().text('⚠ 另有 '+res.unmodeled_count+' 台在職機台尚未填寫「機型」，不會出現在下方清單，請先到 process_schedule_NOW.php「機台設定」頁補值。');
+            var $w = $('#wlUnmodeledWarn');
+            var msg = '⚠ 另有 '+res.unmodeled_count+' 台在職機台尚未填寫「機型」，不會出現在下方清單，請先到「待加工排程」頁補值。';
+            if ($w.data('can-open') == 1 || $w.attr('data-can-open') === '1') {
+                $w.show().html(msg + ' <a href="#" onclick="window.open(\'../pm/process_schedule_NOW.php?auto_open_machine=1\',\'_blank\',\'width=1200,height=800\');return false;" style="color:#DD5138;text-decoration:underline;font-weight:600;">點我開啟機台設定</a>');
+            } else {
+                $w.show().text(msg + '（您無該頁機台設定操作權限，請洽有權限人員協助補值）');
+            }
         } else {
             $('#wlUnmodeledWarn').hide();
         }
