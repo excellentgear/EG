@@ -140,6 +140,10 @@ $perms = rvf_perms($db, $rvfUser);
     <div class="m-body">
         <label>選擇模板</label><select id="addTplSel" style="width:100%;"></select>
         <label>建立日期</label><input type="date" id="addBizDate" max="9999-12-31" style="width:100%;">
+        <div id="addYearBox" style="display:none;">
+            <label id="addYearLbl">年度</label><input type="text" id="addYear" style="width:100%;" data-eg-skip>
+            <div id="addYearErr" style="color:#c0392b;font-size:12px;display:none;margin-top:2px;"></div>
+        </div>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('addMask')">取消</button><button class="b-ok" onclick="submitAdd()">建立</button></div>
 </div></div>
@@ -190,6 +194,8 @@ function dispDate(d){ return (typeof egFmtDate === 'function') ? egFmtDate(d) : 
 // 欄位標題可在「項次欄位定義」用 Enter 手動換行(最多3行)，這裡把換行字元轉成 <br>；
 // 手動換行後若欄位仍太窄導致真正列印時還是擠爆，由 egPrintWindow() 內的自動縮小接手（2026-08-14）。
 function hdrLabelHtml(label){ return esc(label||'').replace(/\n/g,'<br>'); }
+// 年度標題顯示：內部一律存西元年，依模板設定的格式換算顯示成西元或民國年（2026-08-14）。
+function yearDisplay(adYear, fmt){ if (!adYear) return ''; return fmt==='roc' ? ((adYear-1911)+'年') : (adYear+'年'); }
 // 負責部門/人員配對顯示：依每個人員實際所屬部門(dept_ids，含兼任)比對是否屬於已選部門之一，
 // 有就配對成一行「部門 / 人員」；配對不到的部門單獨顯示部門名；配對不到任何部門的人員單獨顯示人名。
 function ownerPairLines(deptIds, userIds){
@@ -259,12 +265,48 @@ function loadTemplates(cb){
 }
 $('#btnAdd').on('click', function(){
     $('#addBizDate').val(META.today);
+    $('#addYear').val('');
+    updateAddYearBox();
     openMask('addMask');
 });
+/* 年度標題（2026-08-14 使用者明確要求）：模板勾選「有年度標題」時，新建表單多一個年度輸入框，
+   依模板設定的格式(西元年/民國年)提示，即時檢查年度需落在建立日期年份的前一年～後一年之間，內部一律存西元年。 */
+function curAddTpl(){ return (TEMPLATES||[]).find(function(x){ return String(x.id)===String($('#addTplSel').val()); }); }
+function yearAdFromInput(v, fmt){ var n = parseInt(v,10); if (isNaN(n)) return null; return fmt==='roc' ? n+1911 : n; }
+function yearInputFromAd(adYear, fmt){ return fmt==='roc' ? (adYear-1911) : adYear; }
+function updateAddYearBox(){
+    var t = curAddTpl();
+    var has = t && t.has_year_heading==1;
+    $('#addYearBox').toggle(!!has);
+    if (!has) return;
+    var fmt = (t.schema && t.schema.year_format) || 'ad';
+    $('#addYearLbl').text('年度（請輸入'+(fmt==='roc'?'民國年':'西元年')+'）');
+    var bizYear = new Date($('#addBizDate').val()||META.today).getFullYear();
+    if (!$.trim($('#addYear').val())) $('#addYear').val(yearInputFromAd(bizYear, fmt));
+    validateAddYear();
+}
+function validateAddYear(){
+    var t = curAddTpl();
+    if (!t || t.has_year_heading!=1){ $('#addYearErr').hide(); return true; }
+    var fmt = (t.schema && t.schema.year_format) || 'ad';
+    var bizYear = new Date($('#addBizDate').val()||META.today).getFullYear();
+    var ad = yearAdFromInput($('#addYear').val(), fmt);
+    var ok = ad!==null && ad>=bizYear-1 && ad<=bizYear+1;
+    $('#addYearErr').text('年度需在建立日期年份的前一年到後一年之間').toggle(!ok);
+    return ok;
+}
+$('#addTplSel').on('change', updateAddYearBox);
+$('#addBizDate').on('change', updateAddYearBox);
+$('#addYear').on('input', validateAddYear);
 function submitAdd(){
     var tid = $('#addTplSel').val();
     if (!tid){ alert('請選擇模板'); return; }
-    $.post(API, {action:'instance_create', csrf:META.csrf, template_id:tid, business_date:$('#addBizDate').val()}, function(res){
+    var t = curAddTpl(), yearHeading = null;
+    if (t && t.has_year_heading==1) {
+        if (!validateAddYear()){ alert('請輸入正確的年度'); return; }
+        yearHeading = yearAdFromInput($('#addYear').val(), (t.schema && t.schema.year_format) || 'ad');
+    }
+    $.post(API, {action:'instance_create', csrf:META.csrf, template_id:tid, business_date:$('#addBizDate').val(), year_heading:yearHeading}, function(res){
         if (!res.ok){ alert(res.error||'建立失敗'); return; }
         closeMask('addMask'); loadList(); openView(res.id);
     }, 'json');
@@ -309,6 +351,9 @@ function renderView(){
     if (PREVIEW_MODE) h += '<div style="background:#FFF7E8;border:1px dashed #E8D5B5;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:12.5px;color:#8a6d45;">'
         + '<i class="fa fa-flask"></i> 試填預覽模式：這裡的內容<b>不會儲存、不會建立實際表單資料</b>，純粹用來檢查目前欄位定義的排版與列印效果。關閉分頁即消失。</div>';
     h += '<div style="max-width:220px;"><label>建立日期</label><input type="date" id="vBizDate" max="9999-12-31" value="'+esc(CUR.business_date)+'" '+(isDraftMine()?'':'disabled')+'></div>';
+    if (CUR.tpl.has_year_heading==1 && CUR.year_heading) {
+        h += '<div style="color:#8a6d45;font-size:12.5px;margin-top:2px;">年度：'+yearDisplay(CUR.year_heading, (CUR_SCHEMA.year_format||'ad'))+'（建立時已固定，不可更改）</div>';
+    }
     if (!PREVIEW_MODE && CUR.status!=='draft' && CUR.submit_date) {
         h += '<div style="margin-top:4px;font-size:12.5px;color:#8a6d45;">送出日：'+dispDate(CUR.submit_date)+
              (META.perms.isAdmin ? ' <a href="javascript:void(0)" onclick="editSubmitDate()" style="margin-left:6px;">（超級管理員：修改送出日）</a>' : '')+'</div>';
@@ -648,7 +693,8 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
     var css = '@page{size:'+(paper||'A4')+' '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;}'
             + 'html,body{margin:0;padding:0;}'
             + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-            + '.pt-head{text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
+            + '.pt-head{position:relative;text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
+            + '.pt-head .yr{font-size:13px;color:#333;}.pt-head .yr-left{position:absolute;left:0;top:50%;transform:translateY(-50%);}.pt-head .yr-right{position:absolute;right:0;top:50%;transform:translateY(-50%);}.pt-head .yr-center{margin-top:3px;}'
             + '.rf-as-doc{position:fixed;right:8mm;bottom:6mm;font-size:9pt;color:#333;}'
             + (extraCss||'');
     var w = window.open('', '_blank');
@@ -709,7 +755,15 @@ function stampList(name, date, isDeputy){ return stampOrName(name, date, isDeput
 function stampFooter(name, date, isDeputy){ return stampOrName(name, date, isDeputy, CUR.tpl.footer_stamp ? CUR.tpl.footer_stamp.schema : null); }
 function printForm(){
     var t = CUR.tpl, schema = CUR_SCHEMA;
-    var h = '<div class="pt-head"><div class="co">'+esc(CUR.company_name||'')+'</div><div class="tt">'+esc(t.name)+'</div></div>';
+    // 年度標題：跟大標題(公司名/模板名稱)同一區塊顯示（2026-08-14 使用者明確確認位置語意）；
+    // 左/右＝該區塊左右兩側（絕對定位不佔版面），置中＝模板名稱下方。
+    var yearTxt = (t.has_year_heading==1 && CUR.year_heading) ? yearDisplay(CUR.year_heading, schema.year_format||'ad') : '';
+    var yearPos = schema.year_position || 'left';
+    var h = '<div class="pt-head">';
+    if (yearTxt && yearPos!=='center') h += '<div class="yr yr-'+yearPos+'">'+esc(yearTxt)+'</div>';
+    h += '<div class="co">'+esc(CUR.company_name||'')+'</div><div class="tt">'+esc(t.name)+'</div>';
+    if (yearTxt && yearPos==='center') h += '<div class="yr yr-center">'+esc(yearTxt)+'</div>';
+    h += '</div>';
     // 表頭不重複顯示狀態/填表人（2026-08-13 使用者明確要求：製表人姓名+日期下方本來就有「製表」圖章，不必再印一次；
     // 狀態對已完成的表單沒有意義），建立日期改印在項目表格右上角。
     h += '<div class="rf-p-datebar">建立日期：'+dispDate(CUR.business_date)+'</div>';

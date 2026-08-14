@@ -93,6 +93,7 @@ case 'template_settings_save': {
         'approver_user_id'=>(int)($_POST['approver_user_id'] ?? 0) ?: null,
         'approver_chain'=>is_array($chain) ? $chain : ['top_approver'],
         'maintain_dept_id'=>(int)($_POST['maintain_dept_id'] ?? 0) ?: null,
+        'has_year_heading'=>!empty($_POST['has_year_heading']),
     ], $uname);
     $docId = (int)($_POST['as_doc_id'] ?? 0);
     if ($docId >= 0) eg_asdoc_save($db, rvf_asdoc_module($tid), $docId, $uname);
@@ -190,7 +191,10 @@ case 'instance_create': {
     $tid = (int)($_POST['template_id'] ?? 0);
     $title = trim((string)($_POST['title'] ?? ''));
     $bizDate = trim((string)($_POST['business_date'] ?? '')) ?: date('Y-m-d');
-    $id = rvf_instance_create($db, $tid, $uid, $uname, $title, $bizDate);
+    $yearHeading = ($_POST['year_heading'] ?? '') !== '' ? (int)$_POST['year_heading'] : null;
+    try {
+        $id = rvf_instance_create($db, $tid, $uid, $uname, $title, $bizDate, $yearHeading);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
     jout(['id'=>$id]);
 }
 
@@ -240,7 +244,12 @@ case 'instance_duplicate': {
     $src = rvf_instance_get($db, $id);
     if (!$src) jerr('找不到此表單', 404);
     if (!$perms['canViewAll'] && (int)$src['created_by'] !== $uid) jerr('無權複製他人建立的表單', 403);
-    $newId = rvf_instance_create($db, (int)$src['template_id'], $uid, $uname, (string)$src['title'], date('Y-m-d'));
+    // 複製出來的新表單建立日期＝今天，來源的年度標題若超出今天年份的可接受範圍(前一年~後一年)就改用今年，
+    // 避免複製舊表單時卡在年度驗證（例如複製去年的表單）。
+    $bizYearNow = (int)date('Y');
+    $yh = $src['year_heading'] !== null ? (int)$src['year_heading'] : $bizYearNow;
+    if ($yh < $bizYearNow - 1 || $yh > $bizYearNow + 1) $yh = $bizYearNow;
+    $newId = rvf_instance_create($db, (int)$src['template_id'], $uid, $uname, (string)$src['title'], date('Y-m-d'), $yh);
     $items = rvf_instance_items_get($db, $id);
     rvf_instance_items_save($db, $newId, array_map(function($it) {
         return ['id'=>0, 'subitems'=>array_map(function($s) {

@@ -229,21 +229,21 @@ function rvf_template_settings_save(PDO $db, int $id, array $d, string $byName):
     if ($id) {
         $db->prepare("UPDATE rf_template SET name=?,paper_size=?,orientation=?,list_stamp_tpl_id=?,footer_stamp_tpl_id=?,
                       need_review=?,auto_review=?,review_dept_id=?,need_approval=?,auto_approval=?,
-                      approver_dept_id=?,approver_user_id=?,approver_chain_json=?,maintain_dept_id=?,updated_by=?,updated_at=NOW() WHERE id=?")
+                      approver_dept_id=?,approver_user_id=?,approver_chain_json=?,maintain_dept_id=?,has_year_heading=?,updated_by=?,updated_at=NOW() WHERE id=?")
            ->execute([$d['name'], $d['paper_size'], $orientation, $d['list_stamp_tpl_id'] ?: null, $d['footer_stamp_tpl_id'] ?: null,
                       $d['need_review']?1:0, $d['auto_review']?1:0, $d['review_dept_id'] ?: null,
                       $d['need_approval']?1:0, $d['auto_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
-                      $chain, $d['maintain_dept_id'] ?: null, $byName, $id]);
+                      $chain, $d['maintain_dept_id'] ?: null, $d['has_year_heading']?1:0, $byName, $id]);
         return $id;
     }
     $db->prepare("INSERT INTO rf_template (name,paper_size,orientation,list_stamp_tpl_id,footer_stamp_tpl_id,
                   need_review,auto_review,review_dept_id,need_approval,auto_approval,approver_dept_id,
-                  approver_user_id,approver_chain_json,maintain_dept_id,current_schema_json,published_version,created_by)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)")
+                  approver_user_id,approver_chain_json,maintain_dept_id,has_year_heading,current_schema_json,published_version,created_by)
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)")
        ->execute([$d['name'], $d['paper_size'], $orientation, $d['list_stamp_tpl_id'] ?: null, $d['footer_stamp_tpl_id'] ?: null,
                   $d['need_review']?1:0, $d['auto_review']?1:0, $d['review_dept_id'] ?: null,
                   $d['need_approval']?1:0, $d['auto_approval']?1:0, $d['approver_dept_id'] ?: null, $d['approver_user_id'] ?: null,
-                  $chain, $d['maintain_dept_id'] ?: null,
+                  $chain, $d['maintain_dept_id'] ?: null, $d['has_year_heading']?1:0,
                   json_encode(['fields'=>[], 'sign_mode'=>'password'], JSON_UNESCAPED_UNICODE), $byName]);
     return (int)$db->lastInsertId();
 }
@@ -321,6 +321,7 @@ function rvf_template_duplicate(PDO $db, int $srcId, string $byName): int {
         'approver_dept_id' => $src['approver_dept_id'], 'approver_user_id' => $src['approver_user_id'],
         'approver_chain' => json_decode((string)$src['approver_chain_json'], true) ?: ['top_approver'],
         'maintain_dept_id' => $src['maintain_dept_id'],
+        'has_year_heading' => $src['has_year_heading'],
     ], $byName);
     $schema = json_decode((string)$src['current_schema_json'], true) ?: ['fields'=>[], 'sign_mode'=>'password'];
     rvf_template_schema_save($db, $newId, $schema, $byName);
@@ -330,12 +331,24 @@ function rvf_template_duplicate(PDO $db, int $srcId, string $byName): int {
 
 /* ============================================================ 表單（instance） ============================================================ */
 
-function rvf_instance_create(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate): int {
+/** 有勾選「年度標題」的模板，建立表單時必須帶年度（西元年，內部一律存西元年，民國年只在顯示時換算），
+ *  年度限制在建立日期年份的前一年～後一年之間（2026-08-14 使用者明確要求，例如跨年度時仍可標記上一/下一年度）。
+ *  前端 review_form.php 已有同規則的即時檢查，這裡是後端最終防線。 */
+function rvf_instance_create(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, ?int $yearHeading = null): int {
     $tpl = rvf_template_get($db, $templateId);
     if (!$tpl) throw new Exception('找不到此模板');
-    $db->prepare("INSERT INTO rf_instance (template_id,template_version,title,business_date,status,created_by,created_by_name)
-                  VALUES (?,?,?,?,'draft',?,?)")
-       ->execute([$templateId, (int)$tpl['published_version'], $title, $bizDate ?: date('Y-m-d'), $uid, $uname]);
+    $bizDate = $bizDate ?: date('Y-m-d');
+    if (!empty($tpl['has_year_heading'])) {
+        $bizYear = (int)date('Y', strtotime($bizDate));
+        if ($yearHeading === null || $yearHeading < $bizYear - 1 || $yearHeading > $bizYear + 1) {
+            throw new Exception('年度需在建立日期年份的前一年到後一年之間');
+        }
+    } else {
+        $yearHeading = null;
+    }
+    $db->prepare("INSERT INTO rf_instance (template_id,template_version,title,business_date,year_heading,status,created_by,created_by_name)
+                  VALUES (?,?,?,?,?,'draft',?,?)")
+       ->execute([$templateId, (int)$tpl['published_version'], $title, $bizDate, $yearHeading, $uid, $uname]);
     return (int)$db->lastInsertId();
 }
 

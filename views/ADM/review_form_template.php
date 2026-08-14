@@ -158,6 +158,10 @@ $perms = rvf_perms($db, $rvfUser);
             <label>維護部門（此部門內主管、以及被指派的維護人員可修改「項次欄位定義」，其餘設定仍僅管理員可改）</label>
             <select id="stMaintainDept"><option value="">（未設定，僅管理員可維護）</option></select>
         </div>
+
+        <div class="rf-sec"><div class="rf-sec-title">年度標題（可選）</div>
+            <label><input type="checkbox" id="stHasYear"> 有年度標題（適用整年度彙總類表單，勾選後在「項次欄位定義」內設定年度格式與顯示位置，新建表單時會多一個年度輸入框）</label>
+        </div>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('settingMask')">取消</button>
         <button class="b-ok" onclick="submitTplSettings()">儲存</button></div>
@@ -175,6 +179,14 @@ $perms = rvf_perms($db, $rvfUser);
             <tbody id="colBody" data-eg-row-add="fieldAdd" data-eg-row-del="fieldDelLast"></tbody>
         </table>
         <button type="button" onclick="fieldAdd()" style="height:26px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;">+ 新增欄位</button>
+
+        <div class="rf-sec" id="scYearBox" style="display:none;"><div class="rf-sec-title">年度標題設定（模板已勾選「有年度標題」）</div>
+            <div class="grid2">
+                <div><label>年度格式</label><select id="scYearFormat"><option value="ad">西元年</option><option value="roc">民國年</option></select></div>
+                <div><label>顯示位置</label><select id="scYearPos"><option value="left">大標題左側</option><option value="center">置中（模板名稱下方）</option><option value="right">大標題右側</option></select></div>
+            </div>
+            <div class="rf-hint">新建表單時會多一個年度輸入框，需在建立日期年份的前一年～後一年之間。</div>
+        </div>
 
         <div class="rf-sec"><div class="rf-sec-title">負責人簽名方式</div>
             <label><input type="radio" name="signMode" value="password"> 現場輸入本人密碼線上簽名</label>
@@ -428,6 +440,7 @@ function openSettingModal(id){
         $('#stNeedApproval').prop('checked',false); $('#stAutoApproval').prop('checked',false); $('#stApproverDept').val(''); $('#stApproverUser').val('');
         renderChainBox(); $('.chain-sel[data-idx=0]').val('top_approver');
         $('#stMaintainDept').val('');
+        $('#stHasYear').prop('checked',false);
         openMask('settingMask'); return;
     }
     $.getJSON(API, {action:'template_get', id:id}, function(res){
@@ -443,6 +456,7 @@ function openSettingModal(id){
         renderChainBox();
         (t.approver_chain||['top_approver']).forEach(function(m,i){ $('.chain-sel[data-idx='+i+']').val(m); });
         $('#stMaintainDept').val(t.maintain_dept_id||'');
+        $('#stHasYear').prop('checked', t.has_year_heading==1);
         openMask('settingMask');
     });
 }
@@ -466,7 +480,8 @@ function submitTplSettings(){
         need_approval: $('#stNeedApproval').is(':checked')?1:0, auto_approval: $('#stAutoApproval').is(':checked')?1:0,
         approver_dept_id:$('#stApproverDept').val(), approver_user_id:$('#stApproverUser').val(),
         approver_chain: JSON.stringify(chain.length?chain:['top_approver']),
-        maintain_dept_id:$('#stMaintainDept').val(), as_doc_id:$('#stDocLabel').data('id')||0
+        maintain_dept_id:$('#stMaintainDept').val(), as_doc_id:$('#stDocLabel').data('id')||0,
+        has_year_heading: $('#stHasYear').is(':checked')?1:0
     }, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         closeMask('settingMask'); loadTemplates();
@@ -544,6 +559,9 @@ function openSchemaModal(id){
         renderFields();
         $('input[name=signMode][value="'+(t.schema.sign_mode||'password')+'"]').prop('checked',true);
         renderMaintainers(t.maintainers||[]);
+        $('#scYearBox').toggle(t.has_year_heading==1);
+        $('#scYearFormat').val(t.schema.year_format||'ad');
+        $('#scYearPos').val(t.schema.year_position||'left');
         $('#scBumpAsDoc').prop('checked',false); $('#bumpBox').hide();
         openMask('schemaMask');
     });
@@ -576,7 +594,9 @@ function buildSchemaObj(){
                      align: (c.type==='text'||c.type==='textarea') ? (c.align||'left') : 'left',
                      options: c.type==='select' ? optStr.split(',').map(function(s){return $.trim(s);}).filter(Boolean) : []};
         }),
-        sign_mode: $('input[name=signMode]:checked').val() || 'password'
+        sign_mode: $('input[name=signMode]:checked').val() || 'password',
+        year_format: $('#scYearFormat').val() || 'ad',
+        year_position: $('#scYearPos').val() || 'left'
     };
 }
 /* 試填預覽（2026-08-11 使用者明確要求）：用目前編輯中、尚未存檔的欄位定義開一個新分頁試填+試列印，
