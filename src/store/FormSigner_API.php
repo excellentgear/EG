@@ -187,6 +187,17 @@ case 'schema_publish': {
     jout(['version'=>$ver, 'template'=>fsd_template_get($db, $id)]);
 }
 
+case 'stamp_tpl_options': jout(['templates'=>fsd_stamp_tpl_options($db)]);
+
+case 'stamp_tpl_save': {
+    fsd_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可設定圖章模板', 403);
+    $id = (int)($_POST['template_id'] ?? 0);
+    $stampTplId = (int)($_POST['stamp_tpl_id'] ?? 0);
+    fsd_template_set_stamp_tpl($db, $id, $stampTplId, $uname);
+    jout(['template'=>fsd_template_get($db, $id)]);
+}
+
 case 'asdoc_list': jout(['docs'=>eg_asdoc_list($db)]);
 
 case 'asdoc_save': {

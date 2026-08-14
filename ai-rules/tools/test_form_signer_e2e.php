@@ -331,6 +331,26 @@ $times8 = array_column($autoApproved8, 'responded_at');
 sort($times8);
 chk('兩筆自動簽核時間不同(依序遞增,不是同一秒疊在一起)', $times8[0] !== $times8[1]);
 
+echo "\n== 13. 圖章框最小尺寸依綁定的圖章模板公分數計算(2026-08-14使用者要求「以圖章模板設定尺寸為主」) ==\n";
+$stampTplRow = $db->query("SELECT id FROM stamp_template WHERE is_active=1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+if ($stampTplRow) {
+    $stampTplId = (int)$stampTplRow['id'];
+    fsd_template_set_stamp_tpl($db, $tplId4, $stampTplId, 'CLI測試');
+    $tpl4 = fsd_template_get($db, $tplId4);
+    chk('樣板已綁定圖章模板', $tpl4['stamp_tpl'] && (int)$tpl4['stamp_tpl']['id'] === $stampTplId);
+    $minWithTpl = fsd_field_min_frac(['width_pt'=>595,'height_pt'=>842], $tpl4['stamp_tpl']['schema']);
+    $minWithout = fsd_field_min_frac(['width_pt'=>595,'height_pt'=>842], null);
+    chk('綁定模板後最小尺寸計算改用模板size(94px)而非預設91px(數字應不同)', abs($minWithTpl['min_w'] - $minWithout['min_w']) > 0.0001);
+    // 用比模板要求還小的框驗證會被擋下
+    $stages4b = fsd_stage_list($db, $tplId4);
+    $tooSmallForTpl = fsd_field_save($db, $tplId4, ['stage_signer_id'=>$stages4b[0]['signers'][0]['id'], 'box_type'=>'stamp', 'page_no'=>1, 'x'=>0.1,'y'=>0.1,'w'=>$minWithout['min_w'],'h'=>$minWithout['min_h']]);
+    chk('小於模板要求尺寸的框(但符合91px預設)仍被擋下', $tooSmallForTpl['ok'] === false);
+    $tplOptions = fsd_stamp_tpl_options($db);
+    chk('圖章模板選項清單非空', count($tplOptions) > 0);
+} else {
+    echo "  （系統無任何啟用中的圖章模板，跳過本節）\n";
+}
+
 echo "\n========================================\n";
 echo "測試template_id=$tplId(核准案$caseId/駁回案$caseId2), template_id3=$tplId3(全自動案$caseId3), 軟刪復原案$caseId4\n";
 echo "template_id4=$tplId4(決策鏈: 手動$caseId6/駁回$caseId7/自動$caseId8)\n";

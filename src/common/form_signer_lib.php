@@ -91,13 +91,23 @@ function fsd_need_csrf(): void {
 /* ============================================================ 圖章框最小尺寸（換算自 ai-rules/18 全站列印圖章 91px＠96dpi） ============================================================ */
 
 /** 圖章實際列印邊長 91px@96dpi ≈ 24.06mm，換算成該頁面寬高的最小分數。回覆框不設限（回傳0）。 */
-function fsd_field_min_frac(array $page): array {
-    $mmMinEdge = 91 / 96 * 25.4;
+/** $stampSchema有給(該樣板綁定的圖章模板schema)時，最小尺寸改依模板實際設定的公分數計算(使用者明確要求
+ *  「圖章尺寸要依照圖章模板內設定的公分數」)；沒綁定模板時退回ai-rules/18的91px全站預設。
+ *  換算：schema.size是模板設計寬度(px@96dpi)，ratio是高/寬比。 */
+function fsd_field_min_frac(array $page, ?array $stampSchema = null): array {
+    if ($stampSchema && !empty($stampSchema['size'])) {
+        $sizePx = min(600, max(24, (float)$stampSchema['size']));
+        $ratio = min(3, max(0.3, (float)($stampSchema['ratio'] ?? 1)));
+        $minEdgeMmW = $sizePx / 96 * 25.4;
+        $minEdgeMmH = $sizePx * $ratio / 96 * 25.4;
+    } else {
+        $minEdgeMmW = $minEdgeMmH = 91 / 96 * 25.4;
+    }
     $widthMm  = (float)($page['width_pt']  ?? 0) / 72 * 25.4;
     $heightMm = (float)($page['height_pt'] ?? 0) / 72 * 25.4;
     return [
-        'min_w' => $widthMm  > 0 ? $mmMinEdge / $widthMm  : 0.05,
-        'min_h' => $heightMm > 0 ? $mmMinEdge / $heightMm : 0.05,
+        'min_w' => $widthMm  > 0 ? $minEdgeMmW / $widthMm  : 0.05,
+        'min_h' => $heightMm > 0 ? $minEdgeMmH / $heightMm : 0.05,
     ];
 }
 
@@ -155,8 +165,35 @@ function fsd_template_get(PDO $db, int $id): ?array {
     $st = $db->prepare("SELECT * FROM fsd_template WHERE id=?");
     $st->execute([$id]);
     $t = $st->fetch(PDO::FETCH_ASSOC);
-    if ($t) $t['as_doc'] = eg_asdoc_get($db, fsd_asdoc_module($id));
+    if ($t) {
+        $t['as_doc'] = eg_asdoc_get($db, fsd_asdoc_module($id));
+        $t['stamp_tpl'] = fsd_stamp_tpl_get($db, (int)($t['stamp_tpl_id'] ?? 0));
+    }
     return $t ?: null;
+}
+
+/** 圖章模板(stamp_template)：id=0或查無資料回null。 */
+function fsd_stamp_tpl_get(PDO $db, int $tplId): ?array {
+    if (!$tplId) return null;
+    try {
+        $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$tplId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ? ['id'=>(int)$r['id'], 'tpl_name'=>$r['tpl_name'], 'schema'=>json_decode((string)$r['schema_json'], true)] : null;
+    } catch (Throwable $e) { return null; }
+}
+
+function fsd_stamp_tpl_options(PDO $db): array {
+    try {
+        return $db->query("SELECT p.id, p.tpl_name, t.type_name
+                           FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
+                           WHERE p.is_active=1 ORDER BY p.tpl_name")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+function fsd_template_set_stamp_tpl(PDO $db, int $id, int $stampTplId, string $byName): void {
+    $db->prepare("UPDATE fsd_template SET stamp_tpl_id=?,updated_by=?,updated_at=NOW() WHERE id=?")
+       ->execute([$stampTplId ?: null, $byName, $id]);
 }
 
 function fsd_template_create(PDO $db, string $name, string $fileType, ?string $fileName, int $pageCount, string $byName): int {
@@ -175,11 +212,13 @@ function fsd_template_set_status(PDO $db, int $id, string $status, string $byNam
     $db->prepare("UPDATE fsd_template SET status=?,updated_by=?,updated_at=NOW() WHERE id=?")->execute([$status, $byName, $id]);
 }
 
-/** 頁面尺寸快照：整批覆蓋(前端上傳/量測完一次送齊)。 */
+/** 頁面尺寸快照：整批覆蓋(前端上傳/量測完一次送齊；旋轉時前端重算width_pt/height_pt(90/270互換)後也走這支)。
+ *  width_pt/height_pt 一律代表「旋轉後(使用者實際看到)的有效尺寸」，rotation只給前端渲染時知道要轉幾度，
+ *  伺服器端(最小框選尺寸計算等)不需要另外處理旋轉換算。 */
 function fsd_template_pages_save(PDO $db, int $templateId, array $pages): void {
     $db->prepare("DELETE FROM fsd_template_page WHERE template_id=?")->execute([$templateId]);
-    $ins = $db->prepare("INSERT INTO fsd_template_page (template_id,page_no,width_pt,height_pt) VALUES (?,?,?,?)");
-    foreach ($pages as $p) $ins->execute([$templateId, (int)$p['page_no'], (float)$p['width_pt'], (float)$p['height_pt']]);
+    $ins = $db->prepare("INSERT INTO fsd_template_page (template_id,page_no,width_pt,height_pt,rotation) VALUES (?,?,?,?,?)");
+    foreach ($pages as $p) $ins->execute([$templateId, (int)$p['page_no'], (float)$p['width_pt'], (float)$p['height_pt'], (int)($p['rotation'] ?? 0) % 360]);
     $db->prepare("UPDATE fsd_template SET page_count=? WHERE id=?")->execute([count($pages) ?: 1, $templateId]);
 }
 
@@ -293,9 +332,11 @@ function fsd_field_save(PDO $db, int $templateId, array $f): array {
         $pst->execute([$templateId, $pageNo]);
         $page = $pst->fetch(PDO::FETCH_ASSOC);
         if ($page) {
-            $min = fsd_field_min_frac($page);
+            $tpl = fsd_template_get($db, $templateId);
+            $stampSchema = $tpl['stamp_tpl']['schema'] ?? null;
+            $min = fsd_field_min_frac($page, $stampSchema);
             if ($w < $min['min_w'] || $h < $min['min_h']) {
-                return ['ok'=>false, 'msg'=>sprintf('圖章框太小，至少需要頁面寬度%.1f%%、高度%.1f%%（比照全站列印圖章91px標準換算），請拖大一點', $min['min_w']*100, $min['min_h']*100)];
+                return ['ok'=>false, 'msg'=>sprintf('圖章框太小，至少需要頁面寬度%.1f%%、高度%.1f%%（依綁定的圖章模板設定尺寸換算，未綁定模板則比照全站列印91px標準），請拖大一點', $min['min_w']*100, $min['min_h']*100)];
             }
         }
     }
@@ -357,7 +398,8 @@ function fsd_template_schema_build(PDO $db, int $templateId): array {
     }
     return [
         'file'=>['file_type'=>$tpl['file_type'] ?? 'image', 'file_name'=>$tpl['file_name'] ?? null, 'page_count'=>count($pages) ?: 1],
-        'pages'=>array_map(fn($p) => ['page_no'=>(int)$p['page_no'], 'width_pt'=>(float)$p['width_pt'], 'height_pt'=>(float)$p['height_pt']], $pages),
+        'pages'=>array_map(fn($p) => ['page_no'=>(int)$p['page_no'], 'width_pt'=>(float)$p['width_pt'], 'height_pt'=>(float)$p['height_pt'], 'rotation'=>(int)($p['rotation'] ?? 0)], $pages),
+        'stamp_tpl'=>$tpl['stamp_tpl'] ?? null,
         'stages'=>$stageOut,
         'fields'=>$fieldsOut,
     ];
@@ -649,8 +691,8 @@ function fsd_case_replace_file(PDO $db, int $caseId, string $fileType, string $f
 
 function fsd_case_pages_save(PDO $db, int $caseId, array $pages): void {
     $db->prepare("DELETE FROM fsd_case_page WHERE case_id=?")->execute([$caseId]);
-    $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt) VALUES (?,?,?,?)");
-    foreach ($pages as $p) $ins->execute([$caseId, (int)$p['page_no'], (float)$p['width_pt'], (float)$p['height_pt']]);
+    $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation) VALUES (?,?,?,?,?)");
+    foreach ($pages as $p) $ins->execute([$caseId, (int)$p['page_no'], (float)$p['width_pt'], (float)$p['height_pt'], (int)($p['rotation'] ?? 0) % 360]);
 }
 
 function fsd_case_pages_get(PDO $db, int $caseId): array {
@@ -690,9 +732,11 @@ function fsd_case_field_save(PDO $db, int $caseId, array $f): array {
         $pst->execute([$caseId, $pageNo]);
         $page = $pst->fetch(PDO::FETCH_ASSOC);
         if ($page) {
-            $min = fsd_field_min_frac($page);
+            $schema = fsd_case_schema($db, $case);
+            $stampSchema = $schema['stamp_tpl']['schema'] ?? null;
+            $min = fsd_field_min_frac($page, $stampSchema);
             if ($w < $min['min_w'] || $h < $min['min_h']) {
-                return ['ok'=>false, 'msg'=>sprintf('圖章框太小，至少需要頁面寬度%.1f%%、高度%.1f%%（比照全站列印圖章91px標準換算），請拖大一點', $min['min_w']*100, $min['min_h']*100)];
+                return ['ok'=>false, 'msg'=>sprintf('圖章框太小，至少需要頁面寬度%.1f%%、高度%.1f%%（依樣板綁定的圖章模板設定尺寸換算，未綁定模板則比照全站列印91px標準），請拖大一點', $min['min_w']*100, $min['min_h']*100)];
             }
         }
     }
