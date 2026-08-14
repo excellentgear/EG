@@ -168,9 +168,17 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
     }
 }
 
-/** 解析＋強制SoD：結果等於填表人或送出人本人視同該槽位無結果(該階段免簽略過)。回傳 ['user'=>arr|null,'skipped_sod'=>bool] */
+/**
+ * 解析＋強制SoD：結果等於填表人或送出人本人視同該槽位無結果(該階段免簽略過)。回傳 ['user'=>arr|null,'skipped_sod'=>bool]
+ * SoD只針對「系統自動解析出上級」的來源(部門自動主管/送出者上一階主管/全站最高決策者)才有意義——這幾種
+ * 是系統幫忙找一個「不是本人」的審核者，若剛好繞回本人才需要迴避。'user'(固定人員)跟'filler'(填表人)
+ * 是管理員刻意指定的結果，填表人本來就允許＝文件建立者本人，強制迴避反而讓這兩種模式失去意義
+ * (2026-08-14使用者實測回報：設定填表人簽章卻被自動迴避擋掉，明確要求這兩種模式不受SoD限制)。
+ */
 function fsd_resolve_signer_for_case(PDO $db, array $signer, array $case): array {
     $u = fsd_resolve_signer($db, $signer, $case);
+    $mode = $signer['mode'] ?? '';
+    if (in_array($mode, ['user', 'filler'], true)) return ['user'=>$u, 'skipped_sod'=>false];
     $applicantUid = (int)($case['applicant_id'] ?? 0);
     $fillerUid = (int)($case['filler_id'] ?? $applicantUid) ?: $applicantUid;
     if ($u && ((int)$u['id'] === $applicantUid || (int)$u['id'] === $fillerUid)) return ['user'=>null, 'skipped_sod'=>true];
@@ -498,16 +506,22 @@ function fsd_case_responses(PDO $db, int $caseId): array {
 
 /** 案件進度摘要(供列表顯示簽核順序與狀態用，2026-08-14使用者明確要求)：依樣板快照stages順序，
  *  每階段列出各槽位「標籤(顯示用)＋已解析姓名＋狀態」；決策階段(線性)槽位間視覺上以箭頭串接，
- *  意見階段(並簽)槽位間並列無箭頭；階段與階段之間一律視為串接(本系統各階段本來就是逐關推進)。 */
+ *  意見階段(並簽)槽位間並列無箭頭；階段與階段之間一律視為串接(本系統各階段本來就是逐關推進)。
+ *  決策階段(線性)在真人回應/自動簽核前不會有fsd_case_response列(「待處理」狀態是靠approval_record，
+ *  不像意見階段開關就先插placeholder)，所以目前這一關第一個「還沒有紀錄」的槽位才是真正輪到的那一位，
+ *  標記pending；同一關後面排隊尚未輪到的維持not_started，跟「案件還沒跑到的未來階段」視覺上一致。 */
 function fsd_case_progress_chips(PDO $db, array $case, array $schema, array $responses): array {
     $bySlot = [];
     foreach ($responses as $r) $bySlot[$r['slot_key']] = $r;
     $modeLabel = ['user'=>'固定人員', 'dept_auto_manager'=>'部門主管', 'submitter_supervisor'=>'上一階主管', 'top_approver'=>'最高決策者', 'filler'=>'填表人'];
     $stages = $schema['stages'] ?? [];
     usort($stages, function($a, $b) { return ($a['seq'] ?? 0) <=> ($b['seq'] ?? 0); });
+    $curStageSeq = (int)($case['current_stage_seq'] ?? 0);
+    $isLive = ($case['status'] ?? '') === 'in_progress';
     $out = [];
     foreach ($stages as $s) {
         $signers = [];
+        $markNextPending = $isLive && (int)($s['seq'] ?? 0) === $curStageSeq && ($s['stage_type'] ?? '') === 'decision';
         foreach ($s['signers'] ?? [] as $sg) {
             $r = $bySlot[$sg['slot_key']] ?? null;
             $label = $sg['label'] !== '' && $sg['label'] !== null ? $sg['label'] : ($modeLabel[$sg['mode']] ?? $sg['mode']);
@@ -517,6 +531,9 @@ function fsd_case_progress_chips(PDO $db, array $case, array $schema, array $res
                 if ($r['decision'] === 'skipped_sod') $status = 'skipped';
                 elseif ($r['decision'] === null) $status = 'pending';
                 else $status = 'done';
+            } elseif ($markNextPending) {
+                $status = 'pending';
+                $markNextPending = false;
             }
             $signers[] = ['label'=>$label, 'name'=>$name, 'status'=>$status];
         }

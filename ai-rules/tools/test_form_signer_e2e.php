@@ -15,7 +15,8 @@ function chk($label, $cond) {
     if (!$cond) $fail++;
 }
 
-// 測試人員(取自現有在職員工)：submitter=105030102(林雅婷)；stage1 slot=107022301(黃文德)、10(陳俊宏)、105030102(=submitter,測SoD)；
+// 測試人員(取自現有在職員工)：submitter=105030102(林雅婷)；stage1 slot=107022301(黃文德)、10(陳俊宏)、
+// 105030102(=submitter,固定人員模式測試「本人可以是固定簽核人,不受SoD限制」)；
 // dept_auto_manager 測 department_id=5(預期解析出 110052601 吳佳靜, level=2 最高)；決策階段 top_approver 解析出 10(陳俊宏)。
 $SUBMITTER = 105030102; $SUBMITTER_NAME = '林雅婷';
 $U_A = 107022301; $U_A_NAME = '黃文德';
@@ -33,7 +34,7 @@ fsd_stages_save($db, $tplId, [
     ['stage_type'=>'advisory', 'name'=>'意見階段測試', 'auto_sign'=>0, 'signers'=>[
         ['mode'=>'user', 'user_id'=>$U_A, 'label'=>$U_A_NAME],
         ['mode'=>'user', 'user_id'=>$U_B, 'label'=>$U_B_NAME],
-        ['mode'=>'user', 'user_id'=>$SUBMITTER, 'label'=>$SUBMITTER_NAME], // 測SoD自動略過
+        ['mode'=>'user', 'user_id'=>$SUBMITTER, 'label'=>$SUBMITTER_NAME], // 固定人員=送出人本人,不受SoD限制,應正常待回應
         ['mode'=>'dept_auto_manager', 'dept_id'=>$DEPT_MGR_DEPT, 'label'=>'部門5主管'],
     ]],
     ['stage_type'=>'decision', 'name'=>'決策階段測試', 'auto_sign'=>0, 'signers'=>[
@@ -156,11 +157,11 @@ chk('目前在第1關', (int)$case['current_stage_seq'] === 1);
 $resps = fsd_case_responses($db, $caseId);
 $bySlot = [];
 foreach ($resps as $rr) $bySlot[$rr['slot_key']] = $rr;
-chk('第1關產生4筆回應紀錄(含1筆SoD略過)', count($resps) === 4);
+chk('第1關產生4筆回應紀錄', count($resps) === 4);
 $sodCount = count(array_filter($resps, fn($x) => $x['decision'] === 'skipped_sod'));
-chk('恰好1筆SoD自動略過(送出人自己那槽)', $sodCount === 1);
+chk('固定人員模式即使等於送出人本人也不受SoD限制,0筆被強制略過', $sodCount === 0);
 $pendingCount = count(array_filter($resps, fn($x) => $x['decision'] === null));
-chk('3筆待回應(扣除SoD略過)', $pendingCount === 3);
+chk('4筆皆待回應(含送出人自己那槽)', $pendingCount === 4);
 
 // 驗證 dept_auto_manager 槽位確實解析到部門5的最高階主管
 $deptSlotResp = null;
@@ -177,6 +178,9 @@ chk('U_A不可重複回應', $rA2['ok'] === false);
 
 $rB = fsd_case_advisory_respond($db, $caseId, $U_B, $U_B_NAME, 'disagree', '有疑慮，不同意。');
 chk('U_B回應成功', $rB['ok'] === true);
+
+$rSelf = fsd_case_advisory_respond($db, $caseId, $SUBMITTER, $SUBMITTER_NAME, 'agree', '本人身兼固定簽核人');
+chk('固定人員=送出人本人可以正常回應自己那槽(不受SoD限制)', $rSelf['ok'] === true);
 
 $rDept = fsd_case_advisory_respond($db, $caseId, $DEPT_MGR_EXPECT, '吳佳靜', 'agree', '同意');
 chk('部門主管回應後應推進到第2關: ' . ($rDept['status'] ?? ''), $rDept['ok'] === true && $rDept['status'] === 'in_progress');
@@ -208,6 +212,7 @@ echo "\n== 8. 駁回流程測試(另建一案) ==\n";
 $caseId2 = createAndSubmitCase($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '駁回測試案件', $minFrac);
 fsd_case_advisory_respond($db, $caseId2, $U_A, $U_A_NAME, 'disagree', 'x');
 fsd_case_advisory_respond($db, $caseId2, $U_B, $U_B_NAME, 'agree', 'x');
+fsd_case_advisory_respond($db, $caseId2, $SUBMITTER, $SUBMITTER_NAME, 'agree', 'x'); // 固定人員=送出人本人,不受SoD限制,一樣要回應
 fsd_case_advisory_respond($db, $caseId2, $DEPT_MGR_EXPECT, '吳佳靜', 'agree', 'x');
 $rReject = fsd_case_decision_respond($db, $caseId2, $U_B, $U_B_NAME, 'rejected', '不核准，退回');
 chk('決策駁回成功', $rReject['ok'] === true && $rReject['status'] === 'rejected');
@@ -394,9 +399,31 @@ if ($fillerRow) {
     echo "  （查無可用測試人員的部門主檔，跳過超管回改/部門fallback斷言）\n";
 }
 
-$caseId10 = createAndSubmitCase($db, $tplId5, $SUBMITTER, $SUBMITTER_NAME, '填表人SoD測試案', $minFrac);
+// 2026-08-14使用者實測回報：設定填表人簽章卻被自動迴避擋住，明確要求「填表人跟固定人員本來就要可以是
+// 文件建立者本人，不應該擋」——SoD只對系統自動解析出上級的來源(部門自動主管/上一階主管/最高決策者)有意義。
+$caseId10 = createAndSubmitCase($db, $tplId5, $SUBMITTER, $SUBMITTER_NAME, '填表人=本人測試案', $minFrac);
 $responses10 = fsd_case_responses($db, $caseId10);
-chk('填表人=送出人本人時,filler模式槽位強制SoD自動略過', count(array_filter($responses10, function($x){ return $x['decision']==='skipped_sod'; })) >= 1);
+chk('填表人=送出人本人時,0筆被強制SoD略過', count(array_filter($responses10, function($x){ return $x['decision']==='skipped_sod'; })) === 0);
+$case10 = fsd_case_get($db, $caseId10);
+chk('案件正常停在第1關等待填表人(=送出人)本人決策(未被跳過)', $case10['status']==='in_progress' && (int)$case10['current_stage_seq']===1);
+// 決策階段(線性)在真人回應前不會有fsd_case_response placeholder列(不像意見階段開關就先插pending列)，
+// 「待處理」狀態是靠approval_record，這裡驗證approval_record確實指向填表人(=送出人)本人，不是被略過。
+$rec10 = eg_approval_latest($db, 'form_signer', $caseId10, 'stage_1');
+chk('decision stage待簽核approval_record已建立且狀態pending(未被SoD跳過)', $rec10 !== null && $rec10['status'] === 'pending');
+$rSelfDecide = fsd_case_decision_respond($db, $caseId10, $SUBMITTER, $SUBMITTER_NAME, 'approved', '本人身兼填表人與決策人');
+chk('填表人(=送出人)本人可以正常決策自己那槽(不受SoD限制)', $rSelfDecide['ok'] === true);
+
+// 對照組：系統自動解析模式(如top_approver)若剛好解析到送出人本人,仍應維持強制SoD略過(純函式測試,不受真人組織資料影響)
+$topApprover = eg_org_user($db, 'top_approver');
+if ($topApprover) {
+    $fakeCase = ['applicant_id'=>(int)$topApprover['id'], 'applicant_name'=>$topApprover['user_cname'], 'filler_id'=>(int)$topApprover['id'], 'filler_name'=>$topApprover['user_cname']];
+    $rAuto = fsd_resolve_signer_for_case($db, ['mode'=>'top_approver'], $fakeCase);
+    chk('系統自動解析模式(top_approver)解析到送出人本人時,仍強制SoD略過', $rAuto['skipped_sod'] === true && $rAuto['user'] === null);
+    $rFixedSelf = fsd_resolve_signer_for_case($db, ['mode'=>'user', 'user_id'=>(int)$topApprover['id']], $fakeCase);
+    chk('固定人員模式(user)即使解析對象=送出人本人,仍不受SoD限制', $rFixedSelf['skipped_sod'] === false && $rFixedSelf['user'] !== null);
+} else {
+    echo "  （系統未設定top_approver，跳過自動解析模式SoD對照組斷言）\n";
+}
 
 echo "\n== 15. 案件進度摘要(順序/並列簽核狀態,供列表顯示,2026-08-14使用者明確要求) ==\n";
 $schema6 = fsd_template_schema_at_version($db, $tplId4, (int)fsd_case_get($db, $caseId6)['template_version']);
@@ -406,10 +433,11 @@ $decisionStageProg = null;
 foreach ($progress6 as $s) if ($s['stage_type'] === 'decision') { $decisionStageProg = $s; break; }
 chk('決策階段的槽位數量正確(線性2位)', $decisionStageProg && count($decisionStageProg['signers']) === 2);
 chk('已核准的槽位狀態標記為done', $decisionStageProg && $decisionStageProg['signers'][0]['status'] === 'done');
-// caseId9送出當下filler尚未被超管回改(=applicant)，filler模式槽位當場觸發SoD略過，驗證進度摘要正確標記為skipped
-$progress9 = fsd_case_progress_chips($db, fsd_case_get($db, $caseId9), fsd_case_schema($db, fsd_case_get($db, $caseId9)), fsd_case_responses($db, $caseId9));
-$fillerSlotProg = $progress9[0]['signers'][0] ?? null;
-chk('進度摘要正確標記SoD略過的槽位狀態為skipped', $fillerSlotProg && $fillerSlotProg['status'] === 'skipped');
+// 另建一案(尚未決策)：驗證決策階段(線性)目前輪到但尚無回應紀錄的槽位,進度摘要要標記pending(不是skipped也不是not_started)
+$caseId11 = createAndSubmitCase($db, $tplId5, $SUBMITTER, $SUBMITTER_NAME, '進度摘要pending狀態測試案', $minFrac);
+$progress11 = fsd_case_progress_chips($db, fsd_case_get($db, $caseId11), fsd_case_schema($db, fsd_case_get($db, $caseId11)), fsd_case_responses($db, $caseId11));
+$fillerSlotProg = $progress11[0]['signers'][0] ?? null;
+chk('進度摘要正確標記決策階段目前輪到的槽位狀態為pending(不是skipped)', $fillerSlotProg && $fillerSlotProg['status'] === 'pending');
 
 echo "\n========================================\n";
 echo "測試template_id=$tplId(核准案$caseId/駁回案$caseId2), template_id3=$tplId3(全自動案$caseId3), 軟刪復原案$caseId4\n";
