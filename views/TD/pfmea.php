@@ -589,6 +589,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             </div>
             <div style="flex:1;">
                 <label style="font-size:12px;color:#5b3a1e;">對應的目標值（<span id="rsLinkTargetLabel">失效模式潛在後果</span>）</label>
+                <div id="rsLinkReqHint" style="font-size:11px;color:#8a6d45;margin:2px 0;"></div>
                 <div class="rs-list" id="rsLinkTargetList" style="max-height:180px;"></div>
                 <div class="pf-proc-box"><input type="text" id="rsLinkTargetNew" placeholder="新增對應值" disabled><button type="button" class="pf-row-btn" onclick="rsAddLinkTarget()" disabled id="rsLinkTargetAddBtn">新增</button></div>
                 <div style="margin-top:4px;"><b style="font-size:11px;color:#8a6d45;">工程符號（點選插入目前游標位置）</b><div class="pf-sym-row" id="rsEngSymRow"></div></div>
@@ -2082,6 +2083,7 @@ function rsLoadLinkSources(){
     $('#rsLinkTargetLabel').text($('#rsLinkPairSel option:selected').text().split(' → ')[1]);
     RS_LINK_SOURCE = ''; $('#rsLinkTargetList').html(''); $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', true);
     $('#rsLinkSourceNewText').val(''); $('#rsLinkSourceNewPart').val('');
+    $('#rsLinkReqHint').html('');
     rsUpdatePartBoundStatus(false);
     var isPartProcess = pair[0] === 'part_process';
     $('#rsLinkSourceNewTextBox').toggle(!isPartProcess);
@@ -2100,8 +2102,11 @@ function rsLoadLinkSources(){
         // （2026-08-14使用者要求：輸入新料號時清單不該還顯示不相干料號的資料，容易誤會成錯誤資料）
         RS_LINK_SOURCE_ALL = (res.rows||[]).map(function(r){
             var label = isPartProcess ? rsPartProcessLabel(r.value) : r.value;
-            if (r.preview) label += '　'+targetLabel+'：'+r.preview;
-            return {value:r.value, label:label};
+            var previewParts = [];
+            if (r.preview) previewParts.push(targetLabel+'：'+r.preview);
+            if (r.req_preview) previewParts.push('要求：'+r.req_preview);
+            if (previewParts.length) label += '　'+previewParts.join('／');
+            return {value:r.value, label:label, reqPreview:r.req_preview||''};
         });
         rsRenderLinkSourceList();
     });
@@ -2122,6 +2127,7 @@ window.rsSelectNewFailureModeSource = function(){
     RS_LINK_SOURCE = v;
     rsMarkLinkSourceActive(v);
     $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', false);
+    rsShowReqHintFor(v);
     rsLoadLinkTargets();
 };
 window.rsSelectNewPartProcessSource = function(){
@@ -2132,8 +2138,13 @@ window.rsSelectNewPartProcessSource = function(){
     RS_LINK_SOURCE = part + PART_PROCESS_SEP + proc;
     rsMarkLinkSourceActive(RS_LINK_SOURCE);
     $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', false);
+    rsShowReqHintFor(RS_LINK_SOURCE);
     rsLoadLinkTargets();
 };
+function rsShowReqHintFor(sourceValue){
+    var meta = RS_LINK_SOURCE_ALL.filter(function(r){ return r.value === sourceValue; })[0];
+    $('#rsLinkReqHint').html((meta && meta.reqPreview) ? '<i class="fa fa-info-circle"></i> 此組合已設定的「要求」：'+esc(meta.reqPreview)+'（不同於圖面要求，如需新增圖面要求請於下方輸入）' : '');
+}
 /* 已選定料號提示（2026-08-14使用者要求）：從清單選到真正的料號ID才算「已綁定」，純打字沒有真的
    選到清單裡的項目時要清楚提示，避免使用者以為已經綁定成功、實際上只是存了一段文字 */
 var RS_LINK_PART_BOUND = false;
@@ -2165,6 +2176,26 @@ $(document).on('click', '#rsLinkSourceList .rs-row', function(){
     $(this).addClass('active');
     RS_LINK_SOURCE = $(this).attr('data-src');
     $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', false);
+    // 點選既有來源列要把「新增來源值」上方欄位同步秀出目前選中的內容，不然使用者看不出點了有反應
+    // （2026-08-14使用者反映點了列表沒有任何欄位出現資料）
+    var pair = rsLinkPair();
+    if (pair[0] === 'part_process') {
+        var parts = RS_LINK_SOURCE.split(PART_PROCESS_SEP);
+        $('#rsLinkSourceNewPart').val(parts[0]||'');
+        // 製程下拉是data-eg-filter篩選型select，先清空篩選框還原完整選項清單，避免因篩選文字殘留
+        // 導致目標製程代號不在目前渲染出來的選項裡而選不到
+        var procSel = document.getElementById('rsLinkSourceNewProc');
+        var procFilterBox = procSel.previousElementSibling;
+        if (procFilterBox && procFilterBox.classList && procFilterBox.classList.contains('eg-filter-box')) procFilterBox.value = '';
+        if (procSel.egFilterResnap) procSel.egFilterResnap();
+        procSel.value = parts[1]||'';
+        $('#rsLinkPartBoundStatus').html('<span style="color:#8a6d45;"><i class="fa fa-info-circle"></i> 瀏覽既有組合（如需改料號請至「要求總覽」頁籤重新綁定）</span>');
+    } else {
+        $('#rsLinkSourceNewText').val(RS_LINK_SOURCE);
+    }
+    // 這個組合若只在「要求」有資料、還沒設定過「圖面要求」，下方目標值清單會是空的（本來就沒有可編輯
+    // 的圖面要求），用提示文字說明，避免使用者誤以為點了沒反應
+    rsShowReqHintFor(RS_LINK_SOURCE);
     rsLoadLinkTargets();
 });
 window.rsAddLinkTarget = function(){

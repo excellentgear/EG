@@ -475,6 +475,8 @@ function pfmea_field_link_distinct_sources(PDO $db, string $sourceField, string 
                          GROUP BY source_value ORDER BY source_value");
     $st->execute([$sourceField, $targetField]);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) { $r['req_preview'] = ''; }
+    unset($r);
     if ($sourceField !== 'part_process') return $rows;
     // 「料號＋製程代號」同時也是「要求」(pfmea_requirement_option)天然的主鍵，使用者明確指出
     // 兩者本來就是同一份資料（同一個料號+製程底下，圖面要求跟要求是同一件事的兩個欄位），這裡
@@ -505,11 +507,11 @@ function pfmea_field_link_distinct_sources(PDO $db, string $sourceField, string 
             $reqTextsByCombo[$combo][] = $r['requirement_text'];
         }
         foreach ($reqTextsByCombo as $combo => $texts) {
-            $reqPreview = '要求：'.implode('、', array_unique($texts));
+            $reqPreview = implode('、', array_unique($texts));
             if (isset($byValue[$combo])) {
-                $byValue[$combo]['preview'] = ($byValue[$combo]['preview'] !== '' ? $byValue[$combo]['preview'].'／' : '').$reqPreview;
+                $byValue[$combo]['req_preview'] = $reqPreview;
             } else {
-                $byValue[$combo] = ['value'=>$combo, 'preview'=>$reqPreview];
+                $byValue[$combo] = ['value'=>$combo, 'preview'=>'', 'req_preview'=>$reqPreview];
             }
         }
     }
