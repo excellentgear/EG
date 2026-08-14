@@ -36,6 +36,10 @@ if (!defined('EG_ORG_ROLES')) define('EG_ORG_ROLES', [
     // ── 部門或人員擇一類（「部門內任一主管，或固定某關鍵人員，都未設定則自動判斷」）──
     'vendor_audit_plan_approver' => ['label'=>'供應商稽核計劃核准', 'type'=>'dept_or_user',
         'desc'=>'年度稽核計劃送出後的核准人。綁部門＝該部門(含子部門)內任一主管皆可核准(核准人職級不可低於送出者)；綁人員＝固定該人核准；兩者都未設定＝自動依「供應商稽核計劃」目前綁定的 AS 文件(2-PH-01-06)所屬部門，套用同一套「部門內任一主管」規則。'],
+    'equip_machine_list_approver' => ['label'=>'機台設備一覽表年度核准', 'type'=>'dept_or_user',
+        'desc'=>'機台設備一覽表年度整份送簽的核准人。規則同供應商稽核計劃核准；都未設定則自動依「機台設備一覽表」目前綁定的 AS 文件所屬部門套用同一套規則。'],
+    'equip_qc_list_approver' => ['label'=>'檢驗設備一覽表年度核准', 'type'=>'dept_or_user',
+        'desc'=>'檢驗設備一覽表年度整份送簽的核准人。規則同上，改綁「檢驗設備一覽表」自己的 AS 文件。'],
 ]);
 
 if (!function_exists('eg_org_ensure_schema')) {
