@@ -415,6 +415,19 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
     <div class="m-foot"><button class="b-ok" onclick="closeMask('ratingInfoMask')">關閉</button></div>
 </div></div>
 
+<!-- 檢視（唯讀，第8段使用者要求）：版面跟列印完全一樣塞進iframe顯示，另提供評級對照表說明/開圖 -->
+<div class="pf-mask" id="viewMask"><div class="pf-modal xwide" style="max-width:1200px;">
+    <div class="m-head"><span>檢視PFMEA分析表（唯讀）</span><span class="m-close" onclick="closeMask('viewMask')">✕</span></div>
+    <div class="m-body" style="padding:0;">
+        <div style="padding:8px 15px;border-bottom:1px solid #EADFC8;">
+            <button type="button" class="pf-row-btn" onclick="openRatingInfo()"><i class="fa fa-question-circle"></i> 評級對照表說明</button>
+            <button type="button" class="pf-row-btn" id="btnViewDrawing" onclick="openViewDrawing()" style="margin-left:6px;"><i class="fa fa-image"></i> 開圖</button>
+        </div>
+        <iframe id="viewFrame" style="width:100%;height:70vh;border:0;"></iframe>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('viewMask')">關閉</button></div>
+</div></div>
+
 <!-- AS 文件綁定 -->
 <div class="pf-mask" id="asDocMask"><div class="pf-modal">
     <div class="m-head"><span>AS 文件編號綁定</span><span class="m-close" onclick="closeMask('asDocMask')">✕</span></div>
@@ -451,6 +464,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>製程代號</b>：卡片內輸入已建立的製程代號會自動帶出該製程的「項目」下拉選項；輸入清單中沒有的新代號會詢問製程名稱並即時建立。「控制預防」「控制偵測」同樣是下拉可選/可手動輸入。按「整組列表」可叫出此製程所有樣板（組名＝製程名稱_項目名稱），點選後直接把該筆的基本資料/評級/控制/建議措施/評價欄位整批帶入，帶入後仍可個別修改。這些清單新增不限身分，僅管理員能刪除。</li>
             <li><b>項目→功能→要求／潛在失效模式 階層式連動</b>：填完「項目」離開該欄位，會自動帶出這個項目底下的「功能」下拉選項；填完「功能」離開該欄位，會自動帶出這個功能底下的「要求」下拉（優先顯示綁定的料號專屬要求，沒有才顯示該功能通用要求）與更精確的「潛在失效模式」下拉（優先套用這個功能專屬的清單，還沒累積過資料才逐層退回項目層級、製程層級的通用清單）。四層清單都可以直接手動輸入新值，離開欄位或存檔時會自動加進清單供下次選用，僅管理員能刪除。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期自動帶入），分析項目仍需逐份手動填寫。</li>
+            <li><b>檢視（唯讀）</b>：只有檢閱權限、無登錄權限的使用者，清單「操作」欄看到的是眼睛圖示「檢視」而非鉛筆「編輯」，點開版面跟列印版完全一樣（不會誤觸修改），並提供「評級對照表說明」「開圖」兩個按鈕方便對照查閱，不會觸發實際列印動作。</li>
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
@@ -523,7 +537,7 @@ function loadList(){
                 + '<td>'+esc(r.created_by_name||'')+'</td>'
                 + '<td>'+fmtDate((r.created_at||'').substring(0,10))+'</td>'
                 + '<td>'
-                + '<span class="pf-op" title="'+(CAN_EDIT?'編輯':'檢視')+'" onclick="openEdit('+r.id+')"><i class="fa fa-'+(CAN_EDIT?'pencil':'eye')+'"></i></span>'
+                + (CAN_EDIT ? '<span class="pf-op" title="編輯" onclick="openEdit('+r.id+')"><i class="fa fa-pencil"></i></span>' : '<span class="pf-op" title="檢視(唯讀)" onclick="viewDoc('+r.id+')"><i class="fa fa-eye"></i></span>')
                 + '<span class="pf-op" title="列印" onclick="printDoc('+r.id+')"><i class="fa fa-print"></i></span>'
                 + (CAN_ADMIN ? '<span class="pf-op" title="刪除" onclick="delDoc('+r.id+')"><i class="fa fa-trash"></i></span>' : '')
                 + '</td></tr>';
@@ -1252,10 +1266,10 @@ function createSuggested(){
    相關部門勾選，下方為橫式分析表格，欄位順序與分組皆與官方表單一致；表單自身版次履歷由AS文件
    管理維護，本頁不印） ---------- */
 var ITEM_TYPE_LABEL = {part:'零件', assembly:'組合件'};
-function printDoc(id){
-    $.getJSON(API, {action:'print_get', id:id}, function(res){
-        if (!res.success){ alert(res.message||'載入失敗'); return; }
-        var d = res.doc;
+/* 列印／檢視共用：組出表頭合併表格+分析表格的body與css，printDoc開新視窗直接印，viewDoc(第8段
+   使用者要求的唯讀檢視功能)則塞進本頁iframe跳窗顯示，兩者版面完全一致，避免維護兩份 */
+function buildPrintDoc(res){
+    var d = res.doc;
         var rows = '';
         (res.items||[]).forEach(function(it, i){
             rows += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.process_desc)+'</td><td class="tl">'+esc(it.function_desc)+'</td>'
@@ -1361,8 +1375,14 @@ function printDoc(id){
             + '@page{margin:10mm 8mm 16mm;size:A4 landscape;'
             + (res.as_doc_no ? " @bottom-right{ content:'"+String(res.as_doc_no).replace(/['\\]/g,'')+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
             + '}';
+    return {css:css, body:body, partNo:d.part_no||''};
+}
+function printDoc(id){
+    $.getJSON(API, {action:'print_get', id:id}, function(res){
+        if (!res.success){ alert(res.message||'載入失敗'); return; }
+        var pd = buildPrintDoc(res);
         var w = window.open('', '_blank');
-        w.document.write('<html><head><meta charset="utf-8"><title>PFMEA潛在失效模式及效應分析</title><style>'+css+'</style></head><body>'+body
+        w.document.write('<html><head><meta charset="utf-8"><title>PFMEA潛在失效模式及效應分析</title><style>'+pd.css+'</style></head><body>'+pd.body
             +'<scr'+'ipt>window.onload=function(){'
             +'var st=document.createElement(\'style\');'
             +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
@@ -1371,6 +1391,23 @@ function printDoc(id){
         w.document.close();
     });
 }
+/* ---------- 檢視（唯讀，2026-08-13使用者要求第8段）：跟列印版面完全一樣，塞進本頁iframe跳窗顯示
+   （不觸發列印動作），另外提供「評級對照表說明」（沿用既有ratingInfoMask）跟「開圖」按鈕 ---------- */
+var VIEW_PART_NO = '';
+function viewDoc(id){
+    $.getJSON(API, {action:'print_get', id:id}, function(res){
+        if (!res.success){ alert(res.message||'載入失敗'); return; }
+        var pd = buildPrintDoc(res);
+        VIEW_PART_NO = pd.partNo;
+        $('#btnViewDrawing').toggle(!!VIEW_PART_NO);
+        openMask('viewMask');
+        var doc = document.getElementById('viewFrame').contentWindow.document;
+        doc.open();
+        doc.write('<html><head><meta charset="utf-8"><style>'+pd.css+'body{padding:6mm;}</style></head><body>'+pd.body+'</body></html>');
+        doc.close();
+    });
+}
+window.openViewDrawing = function(){ if (VIEW_PART_NO) EGPartPicker.openViewer(VIEW_PART_NO, VIEWER_URL); };
 
 /* ---------- AS 文件綁定 ---------- */
 function renderAsDocLabel(){
