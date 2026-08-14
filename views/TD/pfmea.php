@@ -96,6 +96,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .pf-proc-box { display:flex; gap:4px; }
         .pf-proc-box input { flex:1 1 auto; }
         .pf-proc-box button { flex:0 0 auto; white-space:nowrap; }
+        .rs-list { max-height:150px; overflow-y:auto; border:1px solid #EADFC8; border-radius:4px; margin-bottom:4px; }
+        .rs-row { display:flex; justify-content:space-between; align-items:center; padding:3px 8px; font-size:12px; border-bottom:1px solid #F3EAD6; cursor:pointer; color:#5b3a1e; }
+        .rs-row:last-child { border-bottom:none; }
+        .rs-row:hover { background:#FFF7E8; }
+        .rs-row.active { background:#F7E0BD; font-weight:bold; }
+        .rs-row .fa-trash { color:#DD5138; cursor:pointer; }
+        .rs-empty { padding:6px 8px; font-size:12px; color:#8a6d45; }
         table.pf-tpl-table { width:100%; border-collapse:collapse; font-size:12px; }
         table.pf-tpl-table th, table.pf-tpl-table td { border:1px solid #EADFC8; padding:5px 8px; text-align:left; }
         table.pf-tpl-table thead th { background:#F7E0BD; color:#5b3a1e; }
@@ -173,6 +180,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
             <button id="btnSuggest" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="從已建立產品開發評估表(2-TD-02-01)、但還沒建立PFMEA的料號自動列出建議清單"><i class="fa fa-magic"></i> 建議建立清單</button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
+            <button id="btnRefSettings" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-cogs"></i> 參考資料設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <span class="pf-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
@@ -438,6 +446,49 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('asDocMask')">關閉</button></div>
 </div></div>
 
+<!-- 參考資料設定（2026-08-14使用者要求：找不到能個別設定各欄下拉選單/階層的地方）僅管理員 -->
+<div class="pf-mask" id="refSettingsMask"><div class="pf-modal xwide" style="max-width:1100px;">
+    <div class="m-head"><span>參考資料設定（僅管理員）</span><span class="m-close" onclick="closeMask('refSettingsMask')">✕</span></div>
+    <div class="m-body">
+        <div class="pf-sec-title">製程代號</div>
+        <div class="rs-list" id="rsProcessList"></div>
+        <div class="pf-proc-box"><input type="text" id="rsProcCodeNew" placeholder="製程代號" style="flex:0 0 100px;"><input type="text" id="rsProcNameNew" placeholder="製程名稱"><button type="button" class="pf-row-btn" onclick="rsAddProcess()">新增</button></div>
+
+        <div id="rsProcessScope" style="display:none;">
+            <div style="color:#8a6d45;font-size:12px;margin:10px 0 6px;padding-top:10px;border-top:1px dashed #EADFC8;">目前選擇製程：<b id="rsCurProcessLabel"></b></div>
+            <div class="pf-sec-title">項目（此製程底下）</div>
+            <div class="rs-list" id="rsItemList"></div>
+            <div class="pf-proc-box"><input type="text" id="rsItemNew" placeholder="項目名稱"><button type="button" class="pf-row-btn" onclick="rsAddItem()">新增</button></div>
+
+            <div id="rsItemScope" style="display:none;">
+                <div style="color:#8a6d45;font-size:12px;margin:10px 0 6px;">目前選擇項目：<b id="rsCurItemLabel"></b></div>
+                <div class="pf-sec-title">功能（此項目底下）</div>
+                <div class="rs-list" id="rsFuncList"></div>
+                <div class="pf-proc-box"><input type="text" id="rsFuncNew" placeholder="功能"><button type="button" class="pf-row-btn" onclick="rsAddFunc()">新增</button></div>
+            </div>
+
+            <div class="pf-sec-title" style="margin-top:10px;">潛在失效模式（<span id="rsFmScopeLabel">此製程通用</span>）</div>
+            <div class="rs-list" id="rsFmList"></div>
+            <div class="pf-proc-box"><input type="text" id="rsFmNew" placeholder="潛在失效模式"><button type="button" class="pf-row-btn" onclick="rsAddFm()">新增</button></div>
+
+            <div class="pf-sec-title" style="margin-top:10px;">要求（<span id="rsReqScopeLabel">此製程通用</span>）</div>
+            <div class="rs-list" id="rsReqList"></div>
+            <div class="pf-proc-box"><input type="text" id="rsReqNew" placeholder="要求文字（此處只新增通用值；料號專屬要求填分析表時自動建立，僅能在此刪除）"><button type="button" class="pf-row-btn" onclick="rsAddReq()">新增</button></div>
+        </div>
+
+        <div class="pf-sec-title" style="margin-top:16px;">控制預防／控制偵測（全域通用，不分製程）</div>
+        <div style="display:flex;gap:16px;">
+            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">控制預防</b>
+                <div class="rs-list" id="rsPrevList"></div>
+                <div class="pf-proc-box"><input type="text" id="rsPrevNew" placeholder="新增控制預防"><button type="button" class="pf-row-btn" onclick="rsAddControl('prevention')">新增</button></div></div>
+            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">控制偵測</b>
+                <div class="rs-list" id="rsDetList"></div>
+                <div class="pf-proc-box"><input type="text" id="rsDetNew" placeholder="新增控制偵測"><button type="button" class="pf-row-btn" onclick="rsAddControl('detection')">新增</button></div></div>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('refSettingsMask')">關閉</button></div>
+</div></div>
+
 <!-- 角色權限說明 -->
 <div class="pf-mask" id="roleHelpMask"><div class="pf-modal">
     <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('roleHelpMask')">✕</span></div>
@@ -464,6 +515,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>製程代號</b>：卡片內輸入已建立的製程代號會自動帶出該製程的「項目」下拉選項；輸入清單中沒有的新代號會詢問製程名稱並即時建立。「控制預防」「控制偵測」同樣是下拉可選/可手動輸入。按「整組列表」可叫出此製程所有樣板（組名＝製程名稱_項目名稱），點選後直接把該筆的基本資料/評級/控制/建議措施/評價欄位整批帶入，帶入後仍可個別修改。這些清單新增不限身分，僅管理員能刪除。</li>
             <li><b>項目→功能→要求／潛在失效模式 階層式連動</b>：填完「項目」離開該欄位，會自動帶出這個項目底下的「功能」下拉選項；填完「功能」離開該欄位，會自動帶出這個功能底下的「要求」下拉（優先顯示綁定的料號專屬要求，沒有才顯示該功能通用要求）與更精確的「潛在失效模式」下拉（優先套用這個功能專屬的清單，還沒累積過資料才逐層退回項目層級、製程層級的通用清單）。四層清單都可以直接手動輸入新值，離開欄位或存檔時會自動加進清單供下次選用，僅管理員能刪除。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期自動帶入），分析項目仍需逐份手動填寫。</li>
+            <li><b>參考資料設定</b>：工具列同名按鈕（僅管理員可見），可直接瀏覽/新增/刪除製程代號、逐層鑽取查看該製程底下的項目、該項目底下的功能，以及目前鑽取深度對應的潛在失效模式／要求清單（鑽到功能就是功能專屬、只選到項目就是項目通用、只選製程就是製程通用），還有全域共用的控制預防／控制偵測選項。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
             <li><b>檢視（唯讀）</b>：只有檢閱權限、無登錄權限的使用者，清單「操作」欄看到的是眼睛圖示「檢視」而非鉛筆「編輯」，點開版面跟列印版完全一樣（不會誤觸修改），並提供「評級對照表說明」「開圖」兩個按鈕方便對照查閱，不會觸發實際列印動作。</li>
         </ul>
         <h4>其他行為／常見疑問</h4>
@@ -508,6 +560,7 @@ var PROCESS_LIST = []; // [{id,process_code,process_name}] 製程代號主檔，
 var CONTROL_OPTIONS = {prevention:[], detection:[]}; // 控制預防/控制偵測固定選項，跳窗開啟時載入一次
 var PROCESS_ID_BY_CODE = {}; // process_code -> id 對照，製程代號連動查失效模式/整組樣板用
 var TEMPLATE_ROWS = [], TEMPLATE_TARGET = null; // 整組列表跳窗暫存
+var RS_PROC_ID = 0, RS_ITEM_OPT_ID = 0, RS_FUNC_OPT_ID = 0; // 參考資料設定跳窗目前鑽取到哪一層
 /* 官方紙本表單(F-11210-UE2-0001)固定的相關部門勾選清單，跟Pfmea_API.php的PFMEA_DEPT_LIST同一份 */
 var DEPT_LIST = ['管理課','技術課','業務組','品保組','倉管組','採購組','生管組','生產課'];
 var FIELDS = ['process_code','process_desc','function_desc','requirement','failure_mode','failure_effect',
@@ -1445,6 +1498,163 @@ function openAsDocPicker(){
         }
     });
 }
+
+/* ---------- 參考資料設定（2026-08-14使用者要求：找不到能個別設定各欄下拉選單/階層的地方）----------
+ * 製程代號→項目→功能 逐層鑽取，潛在失效模式/要求隨鑽取深度自動切換到目前最深層級；控制預防/控制
+ * 偵測為全域清單獨立顯示。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。 */
+function rsRow(scope, id, label, activeId){
+    return '<div class="rs-row'+(activeId===id?' active':'')+'" data-scope="'+scope+'" data-id="'+id+'"><span>'+esc(label)+'</span>'
+        + (CAN_ADMIN ? '<i class="fa fa-trash" title="刪除"></i>' : '') + '</div>';
+}
+function rsLoadProcessList(){
+    $.getJSON(API, {action:'ref_process_list'}, function(res){
+        if (!res.success) return;
+        var html = (res.rows||[]).map(function(p){ return rsRow('process', p.id, p.process_code+' '+p.process_name, RS_PROC_ID); }).join('');
+        $('#rsProcessList').html(html || '<div class="rs-empty">尚無資料</div>');
+    });
+}
+function rsSelectProcess(id, label){
+    RS_PROC_ID = id; RS_ITEM_OPT_ID = 0; RS_FUNC_OPT_ID = 0;
+    $('#rsCurProcessLabel').text(label);
+    $('#rsProcessScope').show(); $('#rsItemScope').hide();
+    rsLoadProcessList(); rsLoadItems(); rsLoadFm(); rsLoadReq();
+}
+window.rsAddProcess = function(){
+    var code = $('#rsProcCodeNew').val().trim(), name = $('#rsProcNameNew').val().trim();
+    if (!code || !name){ alert('請輸入製程代號與名稱'); return; }
+    $.post(API, {action:'ref_process_add', process_code:code, process_name:name}, function(res){
+        if (!res.success){ alert(res.message||'新增失敗'); return; }
+        $('#rsProcCodeNew,#rsProcNameNew').val('');
+        loadProcessList(); rsLoadProcessList();
+    }, 'json');
+};
+function rsLoadItems(){
+    if (!RS_PROC_ID) return;
+    $.getJSON(API, {action:'ref_item_options_list', process_id:RS_PROC_ID}, function(res){
+        if (!res.success) return;
+        var html = (res.rows||[]).map(function(it){ return rsRow('item', it.id, it.item_name, RS_ITEM_OPT_ID); }).join('');
+        $('#rsItemList').html(html || '<div class="rs-empty">尚無資料</div>');
+    });
+}
+function rsSelectItem(id, label){
+    RS_ITEM_OPT_ID = id; RS_FUNC_OPT_ID = 0;
+    $('#rsCurItemLabel').text(label);
+    $('#rsItemScope').show();
+    rsLoadItems(); rsLoadFuncs(); rsLoadFm(); rsLoadReq();
+}
+window.rsAddItem = function(){
+    var name = $('#rsItemNew').val().trim();
+    if (!RS_PROC_ID || !name) return;
+    $.post(API, {action:'ref_item_option_add', process_id:RS_PROC_ID, item_name:name}, function(res){
+        if (!res.success){ alert(res.message||'新增失敗'); return; }
+        $('#rsItemNew').val(''); rsLoadItems();
+    }, 'json');
+};
+function rsLoadFuncs(){
+    if (!RS_ITEM_OPT_ID) return;
+    $.getJSON(API, {action:'ref_function_options_list', item_option_id:RS_ITEM_OPT_ID}, function(res){
+        if (!res.success) return;
+        var html = (res.rows||[]).map(function(f){ return rsRow('func', f.id, f.function_desc, RS_FUNC_OPT_ID); }).join('');
+        $('#rsFuncList').html(html || '<div class="rs-empty">尚無資料</div>');
+    });
+}
+function rsSelectFunc(id, label){
+    RS_FUNC_OPT_ID = id;
+    rsLoadFuncs(); rsLoadFm(); rsLoadReq();
+}
+window.rsAddFunc = function(){
+    var name = $('#rsFuncNew').val().trim();
+    if (!RS_ITEM_OPT_ID || !name) return;
+    $.post(API, {action:'ref_function_option_add', item_option_id:RS_ITEM_OPT_ID, function_desc:name}, function(res){
+        if (!res.success){ alert(res.message||'新增失敗'); return; }
+        $('#rsFuncNew').val(''); rsLoadFuncs();
+    }, 'json');
+};
+function rsLoadFm(){
+    $('#rsFmScopeLabel').text(RS_FUNC_OPT_ID ? '此功能專屬' : (RS_ITEM_OPT_ID ? '此項目通用' : '此製程通用'));
+    $.getJSON(API, {action:'ref_failure_mode_list_exact', process_id:RS_PROC_ID, item_option_id:RS_ITEM_OPT_ID, function_option_id:RS_FUNC_OPT_ID}, function(res){
+        if (!res.success) return;
+        var html = (res.rows||[]).map(function(r){ return rsRow('fm', r.id, r.failure_mode, -1); }).join('');
+        $('#rsFmList').html(html || '<div class="rs-empty">尚無資料</div>');
+    });
+}
+window.rsAddFm = function(){
+    var text = $('#rsFmNew').val().trim();
+    if (!RS_PROC_ID || !text) return;
+    $.post(API, {action:'ref_failure_mode_add', process_id:RS_PROC_ID, failure_mode:text, item_option_id:RS_ITEM_OPT_ID, function_option_id:RS_FUNC_OPT_ID}, function(res){
+        if (!res.success){ alert(res.message||'新增失敗'); return; }
+        $('#rsFmNew').val(''); rsLoadFm();
+    }, 'json');
+};
+function rsLoadReq(){
+    $('#rsReqScopeLabel').text(RS_FUNC_OPT_ID ? '此功能' : '此製程');
+    $.getJSON(API, {action:'ref_requirement_list_exact', process_id:RS_PROC_ID, function_option_id:RS_FUNC_OPT_ID}, function(res){
+        if (!res.success) return;
+        var html = (res.rows||[]).map(function(r){
+            return rsRow('req', r.id, r.requirement_text + (r.part_label ? '　['+r.part_label+']' : '　[通用]'), -1);
+        }).join('');
+        $('#rsReqList').html(html || '<div class="rs-empty">尚無資料</div>');
+    });
+}
+window.rsAddReq = function(){
+    var text = $('#rsReqNew').val().trim();
+    if (!RS_PROC_ID || !text) return;
+    $.post(API, {action:'ref_requirement_option_add', function_option_id:RS_FUNC_OPT_ID, process_id:RS_PROC_ID, requirement_text:text}, function(res){
+        if (!res.success){ alert(res.message||'新增失敗'); return; }
+        $('#rsReqNew').val(''); rsLoadReq();
+    }, 'json');
+};
+function rsLoadControlLists(){
+    $.getJSON(API, {action:'ref_control_options'}, function(res){
+        if (!res.success) return;
+        $('#rsPrevList').html((res.options.prevention||[]).map(function(o){ return rsRow('prevention', o.id, o.option_text, -1); }).join('') || '<div class="rs-empty">尚無資料</div>');
+        $('#rsDetList').html((res.options.detection||[]).map(function(o){ return rsRow('detection', o.id, o.option_text, -1); }).join('') || '<div class="rs-empty">尚無資料</div>');
+    });
+}
+window.rsAddControl = function(type){
+    var $input = type==='prevention' ? $('#rsPrevNew') : $('#rsDetNew');
+    var text = $input.val().trim();
+    if (!text) return;
+    $.post(API, {action:'ref_control_option_add', option_type:type, option_text:text}, function(res){
+        if (!res.success){ alert(res.message||'新增失敗'); return; }
+        $input.val(''); rsLoadControlLists();
+    }, 'json');
+};
+function rsDeleteAction(scope){
+    return {process:'ref_process_delete', item:'ref_item_option_delete', func:'ref_function_option_delete',
+        fm:'ref_failure_mode_delete', req:'ref_requirement_option_delete',
+        prevention:'ref_control_option_delete', detection:'ref_control_option_delete'}[scope];
+}
+function rsReloadForScope(scope){
+    if (scope==='process') { rsLoadProcessList(); loadProcessList(); }
+    else if (scope==='item') rsLoadItems();
+    else if (scope==='func') rsLoadFuncs();
+    else if (scope==='fm') rsLoadFm();
+    else if (scope==='req') rsLoadReq();
+    else rsLoadControlLists();
+}
+$(document).on('click', '#refSettingsMask .rs-list .fa-trash', function(e){
+    e.stopPropagation();
+    var $row = $(this).closest('.rs-row');
+    var scope = $row.attr('data-scope'), id = parseInt($row.attr('data-id'),10);
+    if (!confirm('確定刪除？（僅影響此清單設定，不影響已填寫存檔的分析表資料）')) return;
+    $.post(API, {action:rsDeleteAction(scope), id:id}, function(res){
+        if (!res.success){ alert(res.message||'刪除失敗'); return; }
+        rsReloadForScope(scope);
+    }, 'json');
+});
+$(document).on('click', '#refSettingsMask .rs-row', function(){
+    var scope = $(this).attr('data-scope'), id = parseInt($(this).attr('data-id'),10), label = $(this).find('span').text();
+    if (scope === 'process') rsSelectProcess(id, label);
+    else if (scope === 'item') rsSelectItem(id, label);
+    else if (scope === 'func') rsSelectFunc(id, label);
+});
+$('#btnRefSettings').on('click', function(){
+    RS_PROC_ID = 0; RS_ITEM_OPT_ID = 0; RS_FUNC_OPT_ID = 0;
+    $('#rsProcessScope, #rsItemScope').hide();
+    openMask('refSettingsMask');
+    rsLoadProcessList(); rsLoadControlLists();
+});
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('#btnRoleHelp').on('click', function(){ openMask('roleHelpMask'); });
