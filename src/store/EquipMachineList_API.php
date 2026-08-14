@@ -43,6 +43,7 @@ case 'meta': {
     jout([
         'perms' => $perms,
         'company_name' => eml_company_name($db),
+        'cur_user_name' => $uname,
         'today' => date('Y-m-d'),
         'cur_year' => (int)date('Y'),
         'machine_types' => $types,
