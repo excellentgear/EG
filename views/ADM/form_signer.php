@@ -504,7 +504,9 @@ function renderDocPages(fileType, fileUrl, pages, cb) {
                 doc.getPage(p.page_no).then(function(page){
                     var rotation = (p.rotation||0) % 360;
                     var base = page.getViewport({scale:1, rotation:rotation});
-                    var scale = Math.min(2, 1000/Math.max(base.width, base.height));
+                    // 列印畫質：base是72dpi的pt尺寸,scale=目標dpi/72；原本用1000px長邊上限換算約只有70~120dpi,
+                    // 印出來會糊(2026-08-14使用者實測回報)。改成約220dpi、長邊另設3500px上限防止巨大PDF記憶體爆掉。
+                    var scale = Math.min(220/72, 3500/Math.max(base.width, base.height));
                     var vp = page.getViewport({scale:scale, rotation:rotation});
                     var cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
                     var ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);

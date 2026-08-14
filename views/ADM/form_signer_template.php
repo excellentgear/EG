@@ -580,7 +580,8 @@ function renderDocPages(fileType, fileUrl, pages, cb){
                 doc.getPage(p.page_no).then(function(page){
                     var rotation = (p.rotation||0) % 360;
                     var base = page.getViewport({scale:1, rotation:rotation});
-                    var scale = Math.min(2, 1000/Math.max(base.width, base.height));
+                    // 同form_signer.php修正：改用約220dpi(scale=dpi/72)，長邊3500px上限防止巨大PDF記憶體爆掉(2026-08-14)。
+                    var scale = Math.min(220/72, 3500/Math.max(base.width, base.height));
                     var vp = page.getViewport({scale:scale, rotation:rotation});
                     var cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
                     var ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cv.width,cv.height);
