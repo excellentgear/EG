@@ -187,6 +187,36 @@ var META = {}, TEMPLATES = [], ITEMS = [], CUR = null, CUR_SCHEMA = null;
 var PREVIEW_MODE = (new URLSearchParams(location.search).get('preview') === '1');
 function esc(s){ return $('<div>').text(s==null?'':s).html(); }
 function dispDate(d){ return (typeof egFmtDate === 'function') ? egFmtDate(d) : (d||''); }
+// 負責部門/人員配對顯示：依每個人員實際所屬部門(dept_ids，含兼任)比對是否屬於已選部門之一，
+// 有就配對成一行「部門 / 人員」；配對不到的部門單獨顯示部門名；配對不到任何部門的人員單獨顯示人名。
+function ownerPairLines(deptIds, userIds){
+    var lines = [];
+    var usedUserIds = {};
+    (deptIds||[]).forEach(function(did){
+        var d = (META.departments||[]).find(function(x){ return String(x.id)===String(did); });
+        var dName = d ? d.name : '';
+        var matched = (userIds||[]).filter(function(uid){
+            var p = (META.people||[]).find(function(x){ return String(x.id)===String(uid); });
+            var pDeptIds = (p && (p.dept_ids && p.dept_ids.length ? p.dept_ids : [p.dept_id])) || [];
+            return pDeptIds.map(String).indexOf(String(did)) >= 0;
+        });
+        if (matched.length) {
+            matched.forEach(function(uid){
+                usedUserIds[uid] = true;
+                var p = (META.people||[]).find(function(x){ return String(x.id)===String(uid); });
+                lines.push(dName + ' / ' + (p ? p.user_cname : ''));
+            });
+        } else {
+            lines.push(dName);
+        }
+    });
+    (userIds||[]).forEach(function(uid){
+        if (usedUserIds[uid]) return;
+        var p = (META.people||[]).find(function(x){ return String(x.id)===String(uid); });
+        lines.push(p ? p.user_cname : '');
+    });
+    return lines.filter(Boolean);
+}
 function openMask(id){ $('#'+id).css('display','block'); }
 function closeMask(id){ $('#'+id).css('display','none'); }
 $(document).ready(function(){
@@ -547,9 +577,36 @@ function findMissingRequiredFields(){
     });
     return missing;
 }
+/* 負責人所屬部門要能對到已選的負責部門之一，對不到就跳出提示要求設定（2026-08-14 使用者明確要求：
+   「不知道部門的人員就自動抓取此人員所屬部門是否有符合上面設定的部門之一…沒有就跳出提示要求設定」）。
+   比對用 dept_ids（含兼任）。只有小項同時有選負責部門時才檢查，未選部門(全公司名單挑人)不受此限。 */
+function findOwnerDeptMismatch(){
+    var msgs = [];
+    ITEMS.forEach(function(it, i){
+        var subs = it.subitems || [];
+        subs.forEach(function(sub, k){
+            var subs2 = subs; var isHeading = (k===0 && subs2.length>1);
+            if (isHeading) return;
+            var deptIds = (sub.owner_depts||[]).map(String);
+            if (!deptIds.length) return;
+            (sub.owner_users||[]).forEach(function(uid){
+                var p = (META.people||[]).find(function(x){ return String(x.id)===String(uid); });
+                var pDeptIds = (p && (p.dept_ids && p.dept_ids.length ? p.dept_ids : [p.dept_id])) || [];
+                var hit = pDeptIds.map(String).some(function(d){ return deptIds.indexOf(d)>=0; });
+                if (!hit) {
+                    var label = '第'+(i+1)+'項' + (subs2.length>1 ? '第'+(k+1)+'小項' : '');
+                    msgs.push(label+'負責人「'+(p?p.user_cname:uid)+'」所屬部門與已選負責部門不符，請確認負責部門設定或改選正確人員');
+                }
+            });
+        });
+    });
+    return msgs;
+}
 function submitForm(){
     var missing = findMissingRequiredFields();
     if (missing.length){ alert('以下必填欄位尚未填寫，請填完再送出：\n' + missing.join('\n')); return; }
+    var mismatch = findOwnerDeptMismatch();
+    if (mismatch.length){ alert('負責部門/人員設定有誤，請修正後再送出：\n' + mismatch.join('\n')); return; }
     saveDraft(function(){
         $.post(API, {action:'instance_submit', csrf:META.csrf, instance_id:CUR.id}, function(res){
             if (!res.ok){ alert(res.error||'送出失敗'); return; }
@@ -670,12 +727,11 @@ function printForm(){
                 var cellAlign = (c.type==='text'||c.type==='textarea') ? (c.align||'left') : 'center';
                 h += '<td style="text-align:'+cellAlign+';">'+cellTxt+'</td>';
             });
-            // 負責單位/人分開兩組各自用頓號連接，兩組之間改用「 / 」分隔（2026-08-13 使用者明確要求，
-            // 例：「資材部 / 吳佳靜」而不是「資材部、吳佳靜」，跟欄名「負責單位/人」的斜線一致）。
-            var deptTxt = (sub.owner_depts||[]).map(function(id){ var d=(META.departments||[]).find(function(x){return String(x.id)===String(id);}); return d?d.name:''; }).filter(Boolean).join('、');
-            var userTxt = (sub.owner_users||[]).map(function(id){ var p=(META.people||[]).find(function(x){return String(x.id)===String(id);}); return p?p.user_cname:''; }).filter(Boolean).join('、');
-            var ownerTxt = [deptTxt, userTxt].filter(Boolean).join(' / ');
-            h += '<td>'+esc(ownerTxt)+'</td>';
+            // 負責單位/人改成依人員實際所屬部門逐一配對顯示（2026-08-14 使用者明確要求），
+            // 例：負責部門[生產部,生產2廠,生產3廠]+負責人[林鴻銘,李汪達,陳智民]，
+            // 各自比對每個人員的 dept_ids 屬於哪個已選部門，印成「生產部 / 林鴻銘」「生產2廠 / 李汪達」…逐行顯示，
+            // 而不是把部門、人員各自攤平成一整串再用「/」分隔。見 ownerPairLines()。
+            h += '<td>'+ownerPairLines(sub.owner_depts, sub.owner_users).map(esc).join('<br>')+'</td>';
             if (pHasSignCol) {
                 var signHtml = (sub.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
                 if (!signHtml && PREVIEW_MODE && (sub.owner_depts.length || sub.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
