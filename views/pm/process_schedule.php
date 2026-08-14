@@ -4853,9 +4853,10 @@ function get_state_badge($state)
                 // 將 PHP 機台資料傳遞給 JS
                 var allMachines = <?= json_encode($all_machines_raw) ?>;
 
-                // 機台選單顯示文字：機台編號 現場自訂編號 機型（三者皆未填才退回機台名稱＋位置）
+                // 機台選單顯示文字：現場編號（未填才退回機台編號/機型，皆未填才退回機台名稱＋位置）
                 function machineOptionLabel(m) {
-                    var parts = [m.asset_no, m.field_no, m.machine_model].filter(function(v) { return v && String(v).trim() !== ''; });
+                    if (m.field_no && String(m.field_no).trim() !== '') return m.field_no;
+                    var parts = [m.asset_no, m.machine_model].filter(function(v) { return v && String(v).trim() !== ''; });
                     if (parts.length === 0) return m.machine + ' (' + m.position + ')';
                     return parts.join(' ');
                 }
