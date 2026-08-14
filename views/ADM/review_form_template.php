@@ -480,13 +480,19 @@ function fieldAdd(){ FIELDS.push({key:'', label:'', type:'text', placeholder:'',
 function fieldDel(i){ FIELDS.splice(i,1); renderFields(); }
 function fieldDelLast(){ if (FIELDS.length) FIELDS.pop(); renderFields(); }
 function fieldEdit(i,k,v){ FIELDS[i][k]=v; if (k==='label' && !FIELDS[i]._keyManual) FIELDS[i].key = slugify(v); renderFields(); }
+/* 標題最多接受3行手動換行（2026-08-14 使用者明確要求：Enter換行，最多3行；已滿3行時擋掉Enter）。 */
+function fieldLabelKeydown(e, el){
+    if (e.key !== 'Enter') return;
+    var lines = (el.value.match(/\n/g) || []).length;
+    if (lines >= 2) e.preventDefault();
+}
 function slugify(s){ return 'c_' + String(s).replace(/[^a-zA-Z0-9一-龥]+/g,'').substr(0,20) + '_' + Math.floor(Math.random()*900+100); }
 function renderFields(){
     var h = '';
     FIELDS.forEach(function(c,i){
         h += '<tr class="fld-row" draggable="true" data-i="'+i+'">'
            + '<td class="fld-drag-handle"><i class="fa fa-bars"></i></td>'
-           + '<td><input type="text" value="'+esc(c.label)+'" onchange="fieldEdit('+i+',\'label\',this.value)"></td>'
+           + '<td><textarea rows="2" style="resize:vertical;min-height:28px;" placeholder="Enter換行，最多3行" onkeydown="fieldLabelKeydown(event,this)" onchange="fieldEdit('+i+',\'label\',this.value)">'+esc(c.label)+'</textarea></td>'
            + '<td><select onchange="fieldEdit('+i+',\'type\',this.value)">'
            +   Object.keys(FIELD_TYPES).map(function(tp){ return '<option value="'+tp+'"'+(c.type===tp?' selected':'')+'>'+FIELD_TYPES[tp]+'</option>'; }).join('')
            + '</select></td>'

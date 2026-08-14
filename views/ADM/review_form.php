@@ -187,6 +187,9 @@ var META = {}, TEMPLATES = [], ITEMS = [], CUR = null, CUR_SCHEMA = null;
 var PREVIEW_MODE = (new URLSearchParams(location.search).get('preview') === '1');
 function esc(s){ return $('<div>').text(s==null?'':s).html(); }
 function dispDate(d){ return (typeof egFmtDate === 'function') ? egFmtDate(d) : (d||''); }
+// 欄位標題可在「項次欄位定義」用 Enter 手動換行(最多3行)，這裡把換行字元轉成 <br>；
+// 手動換行後若欄位仍太窄導致真正列印時還是擠爆，由 egPrintWindow() 內的自動縮小接手（2026-08-14）。
+function hdrLabelHtml(label){ return esc(label||'').replace(/\n/g,'<br>'); }
 // 負責部門/人員配對顯示：依每個人員實際所屬部門(dept_ids，含兼任)比對是否屬於已選部門之一，
 // 有就配對成一行「部門 / 人員」；配對不到的部門單獨顯示部門名；配對不到任何部門的人員單獨顯示人名。
 function ownerPairLines(deptIds, userIds){
@@ -311,7 +314,7 @@ function renderView(){
              (META.perms.isAdmin ? ' <a href="javascript:void(0)" onclick="editSubmitDate()" style="margin-left:6px;">（超級管理員：修改送出日）</a>' : '')+'</div>';
     }
     h += '<div class="itm-tbl-wrap"><table class="itm-tbl"><thead><tr><th style="width:26px;">#</th><th>項目</th>';
-    (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+esc(c.label)+colFillHtml(c)+'</th>'; });
+    (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+hdrLabelHtml(c.label)+colFillHtml(c)+'</th>'; });
     h += '<th>負責單位/負責人</th>';
     if ((CUR_SCHEMA.sign_mode||'password')!=='none') h += '<th>簽名</th>';
     h += (isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody" data-eg-row-add="itemAdd" data-eg-row-del="itemDelLast"></tbody></table></div>';
@@ -377,7 +380,7 @@ function fieldInputHtml(i, k, c){
     var sub = ITEMS[i].subitems[k];
     var v = sub.data[c.key] || '';
     var cls = c.layout==='block' ? 'fld-block' : '';
-    var lbl = c.layout==='block' ? '<div class="fld-lbl">'+esc(c.label)+'</div>' : '';
+    var lbl = c.layout==='block' ? '<div class="fld-lbl">'+hdrLabelHtml(c.label)+'</div>' : '';
     var dis = isDraftMine() ? '' : 'disabled';
     if (c.type==='seq') return '<div class="'+cls+'" style="text-align:center;font-weight:bold;color:#5b3a1e;">'+lbl+(k===0?(i+1):'')+'</div>';
     if (c.type==='date') return '<div class="'+cls+'">'+lbl+'<input type="date" max="9999-12-31" '+dis+' value="'+esc(v)+'" onchange="subItemFieldEdit('+i+','+k+',\''+c.key+'\',this.value)"></div>';
@@ -663,6 +666,12 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
         // 量 scrollHeight 前先讓一拍：印章 SVG 內含 textLength/lengthAdjust 需要字型計量才能定案排版，
         // onload 觸發當下量到的高度有時還沒完全穩定。
         + 'setTimeout(function(){'
+        // 欄位標題手動換行(最多3行)後，若欄寬還是太窄導致行數超過3行，逐步縮小該表頭字級直到符合
+        // （只縮該 th 本身字級，不是整頁 zoom，不會影響圖章尺寸；2026-08-14 使用者明確要求）。
+        + 'document.querySelectorAll("th.hdr-auto").forEach(function(th){'
+        + 'var fs=12,minFs=8,tries=0;'
+        + 'while(tries<16){th.style.fontSize=fs+"px";var lh=fs*1.25;var lines=th.scrollHeight/lh;if(lines<=3.15||fs<=minFs)break;fs-=0.5;tries++;}'
+        + '});'
         + 'var pageH=('+(landscape ? (paper==='A3'?'297':'210') : (paper==='A3'?'420':'297'))+'-28)*96/25.4;'
         // 頁碼只在超過一頁才顯示（ai-rules/16 第二節，比照 quotation_list_test.php／training_record.php 既有作法）：
         + 'if(document.body.scrollHeight>pageH*0.92){'
@@ -707,7 +716,7 @@ function printForm(){
     var pHasSignCol = (schema.sign_mode||'password')!=='none';
     var inlineFieldsP = (schema.fields||[]);
     h += '<table class="rf-p-items"><thead><tr><th>#</th><th>項目</th>';
-    inlineFieldsP.forEach(function(c){ h += '<th>'+esc(c.label)+'</th>'; });
+    inlineFieldsP.forEach(function(c){ h += '<th class="hdr-auto">'+hdrLabelHtml(c.label)+'</th>'; });
     h += '<th>負責單位/人</th>'+(pHasSignCol?'<th>簽名</th>':'')+'</tr></thead><tbody>';
     var headingSpanP = inlineFieldsP.length + 1 + (pHasSignCol?1:0);
     ITEMS.forEach(function(it,i){
