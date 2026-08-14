@@ -105,15 +105,19 @@ $perms = fsd_perms($db, $fsdUser);
         .fsd-ref-box { position:absolute; border:1px solid #d98a33; background:rgba(240,162,75,.18); font-size:8px; color:#8A5A2B; overflow:hidden; }
         .fsd-ref-box.reply { border-color:#8A5A2B; background:rgba(138,90,43,.12); }
         @media print {
-            .page-help-btn, .fsd-toolbar, #listPanel, #fieldPanel, .fsd-action-panel, .top_nav, .left_col { display:none !important; }
-            .right_col { margin:0 !important; }
-            .fsd-doc-grid { grid-template-columns:1fr; max-height:none; overflow:visible; border:none; padding:0; gap:0; }
-            /* 每份頁面各自獨立分頁；page-break-after 只套在非最後一頁，否則最後一頁後面會多印一張空白頁 */
+            .page-help-btn, .fsd-toolbar, #listPanel, #fieldPanel, .fsd-action-panel, .top_nav, .left_col,
+            .page-title, .clearfix { display:none !important; }
+            .right_col { margin:0 !important; padding:0 !important; }
+            .fsd-doc-grid { display:block; max-height:none; overflow:visible; border:none; padding:0; gap:0; }
+            /* 每份頁面各自獨立分頁；page-break-after 只套在非最後一頁，否則最後一頁後面會多印一張空白頁。
+               寬高改由 doPrint() 依可印範圍算好明確mm尺寸蓋掉aspect-ratio，保證單頁裝得下(不會被瀏覽器
+               shrink-to-fit縮放整頁，那正是先前「圖章畫面跟列印大小不同/多空白頁」的共同根因)。 */
             .fsd-doc-page { page-break-after:always; page-break-inside:avoid; border:none; border-radius:0; }
             .fsd-doc-page:last-child { page-break-after:auto; }
             /* 未綁定圖章模板時列印統一91px(ai-rules/18第6條)；有綁定模板則維持模板設定的實際大小(見上方基本樣式)不在此覆蓋 */
             .fsd-box.stamp svg.car-stamp, .fsd-box.stamp img { width:91px !important; height:91px !important; }
             .fsd-box.stamp { overflow:visible; }
+            .pt-asdoc { position:fixed; right:8mm; bottom:5mm; font-size:9pt; color:#333; }
             @page { margin:10mm 8mm; }
         }
     </style>
@@ -302,7 +306,7 @@ $perms = fsd_perms($db, $fsdUser);
 <script>
 var API = '../../src/store/FormSigner_API.php';
 var META = {}, CASES = [], TEMPLATES = [];
-var CUR_CASE = null, CUR_SCHEMA = null, CUR_RESPONSES = null;
+var CUR_CASE = null, CUR_SCHEMA = null, CUR_RESPONSES = null, CUR_AS_DOC_NO = '';
 var FP_CASE = null, FP_TPL_SCHEMA = null, FP_WHITELIST = [], FP_CANVASES = {}, FP_SELECTED = null;
 function esc(s){ return $('<div>').text(s==null?'':s).html(); }
 function dispDate(s){ return (window.egFmtDate && s) ? egFmtDate(s) : (s||''); }
@@ -471,6 +475,7 @@ function openCase(id){
         $('#btnDeleteHard').toggle(!!res.can_delete_hard);
         $('#btnDeleteSoft').toggle(!!res.can_delete_soft);
         $('#btnRestore').toggle(CUR_CASE.status==='void' && META.perms.canAdmin);
+        CUR_AS_DOC_NO = res.as_doc_no || '';
         renderResponses();
         renderDocGrid(res.pages||[], res.fields||[]);
     });
@@ -605,12 +610,33 @@ function renderDocGrid(pages, fields){
         paintOverlay(pageNo);
     });
 }
-/** 列印：依文件直橫式動態插入@page size，滿足「自動判斷直式或橫式」需求，不需要另外在樣板加設定。 */
+/** 列印：依文件直橫式動態插入@page size；並依可印範圍(A4扣邊界)幫每一頁算出明確mm尺寸蓋掉aspect-ratio，
+ *  保證單頁一定裝得下、不會被瀏覽器整頁shrink-to-fit縮放(那正是先前多空白頁/圖章列印跟畫面大小不一致的根因)；
+ *  AS文件編號比照ai-rules/16釘在頁面右下角，同一次列印工作只對應同一份文件，position:fixed安全無虞。 */
 function doPrint(){
     var pages = (CUR_SCHEMA && CUR_SCHEMA.pages) || [];
     var lands = isLandscapeDoc(pages);
+    var pageWmm = lands ? 297 : 210, pageHmm = lands ? 210 : 297;
+    var marginLR = 8, marginTB = 10;
+    // 0.97安全係數：吸收版型本身可能殘留的微量padding等未預期偏移，避免算出來剛好貼邊反而又溢出一點點
+    var printW = (pageWmm - marginLR*2) * 0.97, printH = (pageHmm - marginTB*2) * 0.97;
+    pages.forEach(function(p){
+        var srcWmm = parseFloat(p.width_pt)/72*25.4, srcHmm = parseFloat(p.height_pt)/72*25.4;
+        var scale = Math.min(printW/srcWmm, printH/srcHmm, 1);
+        $('#docpg_'+p.page_no).css({width:(srcWmm*scale)+'mm', height:(srcHmm*scale)+'mm', margin:'0 auto'});
+    });
     $('#fsdPrintCss').remove();
-    $('<style id="fsdPrintCss">@media print{ @page{ size:A4 '+(lands?'landscape':'portrait')+'; } }</style>').appendTo('head');
+    // 頁碼左下角(多頁才顯示)+AS文件編號右下角，比照ai-rules/16第二、三節全站列印標準
+    var pageCounterCss = pages.length > 1 ? " @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#333; }" : '';
+    $('<style id="fsdPrintCss">@media print{ @page{ size:A4 '+(lands?'landscape':'portrait')+'; margin:10mm 8mm;'+pageCounterCss+' } }</style>').appendTo('head');
+    $('#printAsDocFoot').remove();
+    if (CUR_AS_DOC_NO) $('<div id="printAsDocFoot" class="pt-asdoc"></div>').text(CUR_AS_DOC_NO).appendTo('#detailPanel');
+    function restore(){
+        pages.forEach(function(p){ $('#docpg_'+p.page_no).css({width:'', height:'', margin:''}); });
+        $('#printAsDocFoot').remove();
+        window.removeEventListener('afterprint', restore);
+    }
+    window.addEventListener('afterprint', restore);
     setTimeout(function(){ window.print(); }, 50);
 }
 
