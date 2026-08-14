@@ -717,6 +717,64 @@ $(document).on('input', '#itemBody .sod-in', function(){
     $card.find('[data-new-rpn]').val(newRpn).toggleClass('rpn-hi', newRpn !== '' && newRpn > 200);
 });
 
+/* ---------- 評價S/O/D建議規則（2026-08-14使用者要求第8段）----------
+ * 嚴重度/發生率/偵測度(含評價S/O/D)一律只能是評級對照表定義範圍內的數值(1~10整數，超出直接
+ * 擋下並提示合法範圍)；評價S/O/D另外依「製程+項目+功能+潛在失效模式+失效模式潛在效果+嚴重度+
+ * 失效潛在原因」完整組合自動帶建議值——只在新增列(尚未存檔，data-id=0)生效，存檔後鎖定不再自動
+ * 覆蓋；手動輸入跟建議值不同級距時允許但跳警示。 */
+var S_TIERS = [[1,1],[2,2],[3,6],[7,7],[8,8],[9,10]];
+var O_TIERS = [[1,1],[2,3],[4,6],[7,9],[10,10]];
+var D_TIERS = [[1,1],[2,2],[3,3],[4,4],[5,5],[6,6],[7,7],[8,9],[10,10]];
+function tierOf(tiers, v){ for (var i=0;i<tiers.length;i++){ if (v>=tiers[i][0] && v<=tiers[i][1]) return i; } return -1; }
+$(document).on('blur', '#itemBody .sod-in', function(){
+    var raw = $(this).val().trim();
+    if (raw === '') return;
+    var v = parseInt(raw, 10);
+    if (isNaN(v) || v < 1 || v > 10 || String(v) !== raw) {
+        alert('數值必須是1~10之間的整數（評級對照表整體有效範圍），請重新輸入。');
+        $(this).val('').trigger('input');
+    }
+});
+function ratingRuleKey($card){
+    var code = $card.find('.f-proccode').val().trim();
+    return {
+        process_id: code && PROCESS_ID_BY_CODE[code] ? PROCESS_ID_BY_CODE[code].id : 0,
+        item_option_id: parseInt($card.attr('data-item-opt-id'),10) || 0,
+        function_option_id: parseInt($card.attr('data-func-opt-id'),10) || 0,
+        failure_mode: $card.find('[data-f="failure_mode"]').val().trim(),
+        failure_effect: $card.find('[data-f="failure_effect"]').val().trim(),
+        severity: parseInt($card.find('[data-f="severity"]').val(),10) || 0,
+        failure_cause: $card.find('[data-f="failure_cause"]').val().trim(),
+    };
+}
+function maybeSuggestRating($card){
+    if ($card.attr('data-id')|0) return; // 已存檔的既有列鎖定，不再自動帶入覆蓋
+    var k = ratingRuleKey($card);
+    if (!k.process_id || !k.failure_mode || !k.failure_effect || !k.severity || !k.failure_cause) return;
+    $.getJSON(API, {action:'rating_rule_lookup', process_id:k.process_id, item_option_id:k.item_option_id, function_option_id:k.function_option_id,
+        failure_mode:k.failure_mode, failure_effect:k.failure_effect, severity:k.severity, failure_cause:k.failure_cause}, function(res){
+        if (!res.success || !res.rule) return;
+        var r = res.rule;
+        if (!$card.find('[data-f="new_severity"]').val()) $card.find('[data-f="new_severity"]').val(r.new_severity).trigger('input');
+        if (!$card.find('[data-f="new_occurrence"]').val()) $card.find('[data-f="new_occurrence"]').val(r.new_occurrence).trigger('input');
+        if (!$card.find('[data-f="new_detection"]').val()) $card.find('[data-f="new_detection"]').val(r.new_detection).trigger('input');
+        $card.data('ratingSuggest', r);
+    });
+}
+$(document).on('blur', '#itemBody [data-f="failure_effect"], #itemBody [data-f="severity"], #itemBody [data-f="failure_cause"]', function(){
+    maybeSuggestRating($(this).closest('.pf-card'));
+});
+$(document).on('blur', '#itemBody [data-f="new_severity"], #itemBody [data-f="new_occurrence"], #itemBody [data-f="new_detection"]', function(){
+    var $card = $(this).closest('.pf-card'), suggest = $card.data('ratingSuggest');
+    if (!suggest) return;
+    var f = $(this).attr('data-f');
+    var tiers = f==='new_severity' ? S_TIERS : (f==='new_occurrence' ? O_TIERS : D_TIERS);
+    var suggestVal = f==='new_severity' ? suggest.new_severity : (f==='new_occurrence' ? suggest.new_occurrence : suggest.new_detection);
+    var v = parseInt($(this).val(),10);
+    if (!v || tierOf(tiers, v) === tierOf(tiers, suggestVal)) return;
+    alert('您輸入的數值（'+v+'）跟系統依過去紀錄建議的數值（'+suggestVal+'）不在同一個評級對照表級距內，仍會採用您輸入的數值。');
+});
+
 function collectItems(){
     var out = [];
     $('#itemBody .pf-card').each(function(){
@@ -1078,6 +1136,18 @@ function registerNewRefValues(){
                 var known3 = $card.find('datalist.dl-'+f+' option').map(function(){ return this.value; }).get();
                 if (v && known3.indexOf(v) < 0) $.post(API, {action:'field_link_add', source_field:'failure_mode', source_value:fmVal, target_field:f, target_value:v});
             });
+        }
+        // 評價S/O/D建議規則：只有新增列(尚未存檔)才登記，存檔後鎖定不回頭改規則
+        if (!($card.attr('data-id')|0)) {
+            var k = ratingRuleKey($card);
+            var ns2 = parseInt($card.find('[data-f="new_severity"]').val(),10) || 0;
+            var no2 = parseInt($card.find('[data-f="new_occurrence"]').val(),10) || 0;
+            var nd2 = parseInt($card.find('[data-f="new_detection"]').val(),10) || 0;
+            if (k.process_id && k.failure_mode && k.failure_effect && k.severity && k.failure_cause && ns2 && no2 && nd2) {
+                $.post(API, {action:'rating_rule_add', process_id:k.process_id, item_option_id:k.item_option_id, function_option_id:k.function_option_id,
+                    failure_mode:k.failure_mode, failure_effect:k.failure_effect, severity:k.severity, failure_cause:k.failure_cause,
+                    new_severity:ns2, new_occurrence:no2, new_detection:nd2});
+            }
         }
     });
     // 產品名稱->規格描述
