@@ -141,14 +141,35 @@ $ASDOC_MODULE_LABELS = [
     'part_process_report' => ['零件製程報告',            '../Sales/part_process_report.php'],
     'order_change'        => ['訂單變更 · 變更單',       '../Sales/NewOrder_Track.php'],
     'order_change_history'=> ['訂單變更 · 歷史清單',     '../Sales/NewOrder_Track.php'],
+    'hr_form_job_desc'     => ['職務說明書',             '../ADM/hr_position_forms.php'],
+    'hr_form_skill_assess' => ['專業技能鑑定考核表',     '../ADM/hr_position_forms.php'],
+    'hr_form_competency'   => ['員工職能鑑定表',         '../ADM/hr_position_forms.php'],
 ];
+// 「每個模板一組編號」的通用引擎（審核表單/表單簽核設計器）：module code 是動態組出來的
+// 'review_form_tpl_<id>'／'fsd_tpl_<id>'，不可能事先窮舉進上面的固定表，改由對應模板表現查名稱。
+$RVF_TPL_NAMES = [];
+try {
+    foreach ($conn->query("SELECT id, name FROM rf_template") as $r) { $RVF_TPL_NAMES[(int)$r['id']] = (string)$r['name']; }
+} catch (Exception $e) { /* 表不存在時忽略 */ }
+$FSD_TPL_NAMES = [];
+try {
+    foreach ($conn->query("SELECT id, name FROM fsd_template") as $r) { $FSD_TPL_NAMES[(int)$r['id']] = (string)$r['name']; }
+} catch (Exception $e) { /* 表不存在時忽略 */ }
 try {
     foreach ($conn->query("SELECT param_key, param_value FROM system_parameters WHERE param_group='AS_DOC_BIND'") as $r) {
         $did = (int)(json_decode((string)$r['param_value'], true) ?? $r['param_value']);
-        if ($did > 0) {
-            $lbl = $ASDOC_MODULE_LABELS[$r['param_key']] ?? [$r['param_key'], ''];
-            $PGBIND[$did] = ['name' => $lbl[0], 'url' => $lbl[1]];
+        if ($did <= 0) { continue; }
+        $key = (string)$r['param_key'];
+        if (preg_match('/^review_form_tpl_(\d+)$/', $key, $mm) && isset($RVF_TPL_NAMES[(int)$mm[1]])) {
+            $PGBIND[$did] = ['name' => '審核表單 · ' . $RVF_TPL_NAMES[(int)$mm[1]], 'url' => '../ADM/review_form.php'];
+            continue;
         }
+        if (preg_match('/^fsd_tpl_(\d+)$/', $key, $mm) && isset($FSD_TPL_NAMES[(int)$mm[1]])) {
+            $PGBIND[$did] = ['name' => '表單簽核設計器 · ' . $FSD_TPL_NAMES[(int)$mm[1]], 'url' => '../ADM/form_signer.php'];
+            continue;
+        }
+        $lbl = $ASDOC_MODULE_LABELS[$key] ?? [$key, ''];
+        $PGBIND[$did] = ['name' => $lbl[0], 'url' => $lbl[1]];
     }
 } catch (Exception $e) { error_log('as_flow_guide pagebind(asdoc_lib): ' . $e->getMessage()); }
 
