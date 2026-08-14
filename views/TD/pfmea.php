@@ -103,6 +103,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .rs-row.active { background:#F7E0BD; font-weight:bold; }
         .rs-row .fa-trash { color:#DD5138; cursor:pointer; }
         .rs-empty { padding:6px 8px; font-size:12px; color:#8a6d45; }
+        .rs-cat-block { border-bottom:1px solid #F3EAD6; padding:4px 0; }
+        .rs-cat-block:last-child { border-bottom:none; }
+        .rs-cat-hd { display:block; font-size:12.5px; color:#5b3a1e; padding:2px 4px; cursor:pointer; }
+        .rs-proc-ck-row { display:block; font-size:12px; color:#5b3a1e; padding:2px 4px 2px 22px; cursor:pointer; }
+        .rs-proc-ck-row:hover, .rs-cat-hd:hover { background:#FFF7E8; }
         table.pf-tpl-table { width:100%; border-collapse:collapse; font-size:12px; }
         table.pf-tpl-table th, table.pf-tpl-table td { border:1px solid #EADFC8; padding:5px 8px; text-align:left; }
         table.pf-tpl-table thead th { background:#F7E0BD; color:#5b3a1e; }
@@ -450,9 +455,20 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
 <div class="pf-mask" id="refSettingsMask"><div class="pf-modal xwide" style="max-width:1100px;">
     <div class="m-head"><span>參考資料設定（僅管理員）</span><span class="m-close" onclick="closeMask('refSettingsMask')">✕</span></div>
     <div class="m-body">
-        <div class="pf-sec-title">製程代號</div>
+        <div class="pf-rt-tabs">
+            <div class="pf-rt-tab" data-rstab="proc" onclick="switchRsTab('proc')">製程與階層</div>
+            <div class="pf-rt-tab" data-rstab="tpl" onclick="switchRsTab('tpl')">整組樣板</div>
+            <div class="pf-rt-tab" data-rstab="link" onclick="switchRsTab('link')">欄位個別設定對應</div>
+        </div>
+
+        <div class="pf-rt-pane" data-rstab="proc">
+        <div class="pf-sec-title">製程開放使用設定<span class="pf-op" onclick="rsSyncProcesses()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:10px;"><i class="fa fa-refresh"></i> 從全站製程主檔同步</span></div>
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:4px;">勾選大項分類＝該分類底下製程全選/取消全選；仍可個別勾選調整。只有勾選開放的製程會出現在分析表的製程代號下拉。</div>
+        <div id="rsProcessEnableList" style="max-height:220px;overflow-y:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px 8px;margin-bottom:10px;"></div>
+
+        <div class="pf-sec-title">選擇製程以設定項目／功能／潛在失效模式／要求（僅列出已開放使用的製程）</div>
         <div class="rs-list" id="rsProcessList"></div>
-        <div class="pf-proc-box"><input type="text" id="rsProcCodeNew" placeholder="製程代號" style="flex:0 0 100px;"><input type="text" id="rsProcNameNew" placeholder="製程名稱"><button type="button" class="pf-row-btn" onclick="rsAddProcess()">新增</button></div>
+        <div class="pf-proc-box"><input type="text" id="rsProcCodeNew" placeholder="製程代號" style="flex:0 0 100px;"><input type="text" id="rsProcNameNew" placeholder="製程名稱（手動新增，非主檔製程）"><button type="button" class="pf-row-btn" onclick="rsAddProcess()">新增</button></div>
 
         <div id="rsProcessScope" style="display:none;">
             <div style="color:#8a6d45;font-size:12px;margin:10px 0 6px;padding-top:10px;border-top:1px dashed #EADFC8;">目前選擇製程：<b id="rsCurProcessLabel"></b></div>
@@ -484,6 +500,64 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">控制偵測</b>
                 <div class="rs-list" id="rsDetList"></div>
                 <div class="pf-proc-box"><input type="text" id="rsDetNew" placeholder="新增控制偵測"><button type="button" class="pf-row-btn" onclick="rsAddControl('detection')">新增</button></div></div>
+        </div>
+        </div>
+
+        <div class="pf-rt-pane" data-rstab="tpl">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">整組樣板：套用時一次把項目/功能/潛在失效模式/失效模式潛在後果/評級/控制/建議措施/評價欄位整批帶入分析表卡片。可直接在此新增/編輯/刪除，不必再靠xlsm匯入。</div>
+        <label style="font-size:13px;color:#5b3a1e;">選擇製程</label>
+        <select id="rsTplProcSel" style="width:260px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;" data-eg-filter="輸入製程代號或名稱篩選…"></select>
+        <button type="button" class="pf-row-btn" style="margin-left:8px;" onclick="rsOpenTplForm(0)"><i class="fa fa-plus"></i> 新增樣板</button>
+        <table class="pf-tpl-table" id="rsTplTable" style="margin-top:10px;">
+            <thead><tr><th>組名</th><th style="width:50px;">S</th><th style="width:50px;">O</th><th style="width:50px;">D</th><th style="width:60px;">RPN</th><th style="width:80px;">操作</th></tr></thead>
+            <tbody id="rsTplBody"></tbody>
+        </table>
+
+        <div id="rsTplForm" style="display:none;margin-top:14px;padding-top:10px;border-top:1px dashed #EADFC8;">
+            <input type="hidden" id="rsTplId" value="0">
+            <div class="pf-card-grid">
+                <div><label>項目</label><input type="text" id="rsTplItemName"></div>
+                <div><label>功能</label><input type="text" id="rsTplFunctionDesc"></div>
+                <div><label>潛在失效模式</label><input type="text" id="rsTplFailureMode"></div>
+                <div><label>失效模式潛在後果</label><input type="text" id="rsTplFailureEffect"></div>
+                <div><label>嚴重度 S</label><input type="number" min="1" max="10" id="rsTplSeverity"></div>
+                <div><label>失效潛在原因</label><input type="text" id="rsTplFailureCause"></div>
+                <div><label>發生率 O</label><input type="number" min="1" max="10" id="rsTplOccurrence"></div>
+                <div><label>控制預防</label><input type="text" id="rsTplPrevention"></div>
+                <div><label>控制偵測</label><input type="text" id="rsTplDetectionCtrl"></div>
+                <div><label>偵測度 D</label><input type="number" min="1" max="10" id="rsTplDetection"></div>
+                <div><label>建議措施</label><input type="text" id="rsTplRecAction"></div>
+                <div><label>評價S</label><input type="number" min="1" max="10" id="rsTplNewSeverity"></div>
+                <div><label>評價O</label><input type="number" min="1" max="10" id="rsTplNewOccurrence"></div>
+                <div><label>評價D</label><input type="number" min="1" max="10" id="rsTplNewDetection"></div>
+            </div>
+            <div style="margin-top:8px;">
+                <button type="button" class="pf-row-btn" onclick="rsSaveTpl()">儲存樣板</button>
+                <button type="button" class="pf-row-btn" onclick="$('#rsTplForm').hide();">取消</button>
+            </div>
+        </div>
+        </div>
+
+        <div class="pf-rt-pane" data-rstab="link">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">欄位個別設定對應：填了來源欄位的值就建議帶出目標欄位的值（如潛在失效模式→失效模式潛在後果/分類/失效潛在原因、產品名稱→規格描述）。</div>
+        <label style="font-size:13px;color:#5b3a1e;">對應組合</label>
+        <select id="rsLinkPairSel" style="width:320px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
+            <option value="failure_mode|failure_effect">潛在失效模式 → 失效模式潛在後果</option>
+            <option value="failure_mode|classification">潛在失效模式 → 分類</option>
+            <option value="failure_mode|failure_cause">潛在失效模式 → 失效潛在原因</option>
+            <option value="product_name|spec_desc">產品名稱 → 規格描述</option>
+        </select>
+        <div style="display:flex;gap:16px;margin-top:10px;">
+            <div style="flex:1;">
+                <label style="font-size:12px;color:#5b3a1e;">來源值（<span id="rsLinkSourceLabel">潛在失效模式</span>）</label>
+                <div class="rs-list" id="rsLinkSourceList" style="max-height:220px;"></div>
+            </div>
+            <div style="flex:1;">
+                <label style="font-size:12px;color:#5b3a1e;">對應的目標值（<span id="rsLinkTargetLabel">失效模式潛在後果</span>）</label>
+                <div class="rs-list" id="rsLinkTargetList" style="max-height:220px;"></div>
+                <div class="pf-proc-box"><input type="text" id="rsLinkTargetNew" placeholder="新增對應值" disabled><button type="button" class="pf-row-btn" onclick="rsAddLinkTarget()" disabled id="rsLinkTargetAddBtn">新增</button></div>
+            </div>
+        </div>
         </div>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('refSettingsMask')">關閉</button></div>
@@ -1623,7 +1697,7 @@ window.rsAddControl = function(type){
 function rsDeleteAction(scope){
     return {process:'ref_process_delete', item:'ref_item_option_delete', func:'ref_function_option_delete',
         fm:'ref_failure_mode_delete', req:'ref_requirement_option_delete',
-        prevention:'ref_control_option_delete', detection:'ref_control_option_delete'}[scope];
+        prevention:'ref_control_option_delete', detection:'ref_control_option_delete', link:'field_link_delete'}[scope];
 }
 function rsReloadForScope(scope){
     if (scope==='process') { rsLoadProcessList(); loadProcessList(); }
@@ -1631,6 +1705,7 @@ function rsReloadForScope(scope){
     else if (scope==='func') rsLoadFuncs();
     else if (scope==='fm') rsLoadFm();
     else if (scope==='req') rsLoadReq();
+    else if (scope==='link') rsLoadLinkTargets();
     else rsLoadControlLists();
 }
 $(document).on('click', '#refSettingsMask .rs-list .fa-trash', function(e){
@@ -1649,11 +1724,192 @@ $(document).on('click', '#refSettingsMask .rs-row', function(){
     else if (scope === 'item') rsSelectItem(id, label);
     else if (scope === 'func') rsSelectFunc(id, label);
 });
+window.switchRsTab = function(tab){
+    $('#refSettingsMask .pf-rt-tab').removeClass('active');
+    $('#refSettingsMask .pf-rt-tab[data-rstab="'+tab+'"]').addClass('active');
+    $('#refSettingsMask .pf-rt-pane').hide();
+    $('#refSettingsMask .pf-rt-pane[data-rstab="'+tab+'"]').show();
+};
+
+/* ---------- 製程開放使用設定（2026-08-14使用者要求）----------
+ * 製程代號改從全站製程主檔(process_no/process_type)同步；大項分類可一鍵全選/取消全選底下製程，
+ * 仍可個別勾選調整；只有勾選開放的製程才會出現在分析表的製程代號下拉，避免全公司205筆製程一次
+ * 全塞進去難以選擇。 */
+function rsRenderProcessEnableList(){
+    $.getJSON(API, {action:'process_list_all'}, function(res){
+        if (!res.success) return;
+        var byCat = {};
+        (res.rows||[]).forEach(function(p){
+            var cat = p.category_name || '（未分類／尚未同步主檔）';
+            (byCat[cat] = byCat[cat] || []).push(p);
+        });
+        var html = '';
+        Object.keys(byCat).sort().forEach(function(cat){
+            var procs = byCat[cat];
+            var allChecked = procs.every(function(p){ return p.is_enabled==1; });
+            var typeId = procs[0].master_type_id || 0;
+            html += '<div class="rs-cat-block">'
+                + '<label class="rs-cat-hd"><input type="checkbox" class="rs-cat-ck" data-type="'+typeId+'"'+(allChecked?' checked':'')+'> <b>'+esc(cat)+'</b>　('+procs.length+'個)</label>';
+            procs.forEach(function(p){
+                html += '<label class="rs-proc-ck-row"><input type="checkbox" class="rs-proc-ck" data-id="'+p.id+'"'+(p.is_enabled==1?' checked':'')+'> '+esc(p.process_code)+' '+esc(p.process_name)+'</label>';
+            });
+            html += '</div>';
+        });
+        $('#rsProcessEnableList').html(html || '<div class="rs-empty">尚無資料，請先按「從全站製程主檔同步」</div>');
+    });
+}
+window.rsSyncProcesses = function(){
+    if (!confirm('從全站製程主檔（process_no）重新同步製程清單？\n已存在的製程代號不會被覆蓋名稱，只會補上大項分類關聯；新出現的製程預設不開放使用，需另外勾選。')) return;
+    $.post(API, {action:'process_sync_master'}, function(res){
+        if (!res.success){ alert(res.message||'同步失敗'); return; }
+        alert('同步完成：新增 '+res.created+' 筆，補連結 '+res.linked+' 筆（主檔共 '+res.total_master+' 筆製程）。');
+        rsRenderProcessEnableList(); loadProcessList();
+    }, 'json');
+};
+$(document).on('change', '#rsProcessEnableList .rs-proc-ck', function(){
+    var id = parseInt($(this).data('id'),10), checked = this.checked;
+    $.post(API, {action:'process_set_enabled', ids:JSON.stringify([id]), enabled:checked?1:0}, function(res){
+        if (!res.success){ alert(res.message||'設定失敗'); return; }
+        loadProcessList(); rsLoadProcessList();
+    }, 'json');
+    var $block = $(this).closest('.rs-cat-block');
+    $block.find('.rs-cat-ck').prop('checked', $block.find('.rs-proc-ck').length === $block.find('.rs-proc-ck:checked').length);
+});
+$(document).on('change', '#rsProcessEnableList .rs-cat-ck', function(){
+    var typeId = parseInt($(this).data('type'),10), checked = this.checked;
+    var $block = $(this).closest('.rs-cat-block');
+    $block.find('.rs-proc-ck').prop('checked', checked);
+    if (!typeId) {
+        var ids = $block.find('.rs-proc-ck').map(function(){ return parseInt($(this).data('id'),10); }).get();
+        $.post(API, {action:'process_set_enabled', ids:JSON.stringify(ids), enabled:checked?1:0}, function(res){
+            if (res.success) { loadProcessList(); rsLoadProcessList(); }
+        }, 'json');
+        return;
+    }
+    $.post(API, {action:'process_set_enabled_by_type', master_type_id:typeId, enabled:checked?1:0}, function(res){
+        if (res.success) { loadProcessList(); rsLoadProcessList(); }
+    }, 'json');
+});
+
+/* ---------- 整組樣板 新增/編輯/刪除（2026-08-14使用者要求：不再只能查看/刪除）---------- */
+var RS_TPL_ROWS = [];
+function rsLoadTplProcSel(){
+    $.getJSON(API, {action:'ref_process_list'}, function(res){
+        if (!res.success) return;
+        var $sel = $('#rsTplProcSel');
+        var cur = $sel.val();
+        $sel.html((res.rows||[]).map(function(p){ return '<option value="'+p.id+'">'+esc(p.process_code)+' '+esc(p.process_name)+'</option>'; }).join(''));
+        if (cur) $sel.val(cur);
+        rsLoadTplList();
+    });
+}
+function rsLoadTplList(){
+    var pid = parseInt($('#rsTplProcSel').val(),10) || 0;
+    $('#rsTplForm').hide();
+    if (!pid) { $('#rsTplBody').html(''); return; }
+    $.getJSON(API, {action:'ref_item_templates', process_id:pid}, function(res){
+        if (!res.success) return;
+        RS_TPL_ROWS = res.rows || [];
+        var html = RS_TPL_ROWS.map(function(t){
+            var rpn = (t.severity&&t.occurrence&&t.detection) ? (t.severity*t.occurrence*t.detection) : '';
+            return '<tr><td class="pf-op" style="cursor:pointer;color:#b5762a;text-decoration:underline;" onclick="rsOpenTplForm('+t.id+')">'+esc(t.group_name)+'</td>'
+                + '<td>'+esc(t.severity)+'</td><td>'+esc(t.occurrence)+'</td><td>'+esc(t.detection)+'</td><td>'+rpn+'</td>'
+                + '<td><i class="fa fa-trash pf-op" title="刪除" onclick="rsDeleteTpl('+t.id+')"></i></td></tr>';
+        }).join('');
+        $('#rsTplBody').html(html || '<tr><td colspan="6" class="rs-empty">此製程尚無樣板</td></tr>');
+    });
+}
+window.rsOpenTplForm = function(id){
+    var t = id ? RS_TPL_ROWS.find(function(r){ return r.id===id; }) : {};
+    t = t || {};
+    $('#rsTplId').val(id||0);
+    $('#rsTplItemName').val(t.item_name||''); $('#rsTplFunctionDesc').val(t.function_desc||'');
+    $('#rsTplFailureMode').val(t.failure_mode||''); $('#rsTplFailureEffect').val(t.failure_effect||'');
+    $('#rsTplSeverity').val(t.severity||''); $('#rsTplFailureCause').val(t.failure_cause||'');
+    $('#rsTplOccurrence').val(t.occurrence||''); $('#rsTplPrevention').val(t.prevention_controls||'');
+    $('#rsTplDetectionCtrl').val(t.detection_controls||''); $('#rsTplDetection').val(t.detection||'');
+    $('#rsTplRecAction').val(t.recommended_actions||''); $('#rsTplNewSeverity').val(t.new_severity||'');
+    $('#rsTplNewOccurrence').val(t.new_occurrence||''); $('#rsTplNewDetection').val(t.new_detection||'');
+    $('#rsTplForm').show();
+};
+window.rsSaveTpl = function(){
+    var pid = parseInt($('#rsTplProcSel').val(),10) || 0;
+    if (!pid){ alert('請先選擇製程'); return; }
+    var data = {
+        item_name:$('#rsTplItemName').val(), function_desc:$('#rsTplFunctionDesc').val(),
+        failure_mode:$('#rsTplFailureMode').val(), failure_effect:$('#rsTplFailureEffect').val(),
+        severity:$('#rsTplSeverity').val(), failure_cause:$('#rsTplFailureCause').val(),
+        occurrence:$('#rsTplOccurrence').val(), prevention_controls:$('#rsTplPrevention').val(),
+        detection_controls:$('#rsTplDetectionCtrl').val(), detection:$('#rsTplDetection').val(),
+        recommended_actions:$('#rsTplRecAction').val(), new_severity:$('#rsTplNewSeverity').val(),
+        new_occurrence:$('#rsTplNewOccurrence').val(), new_detection:$('#rsTplNewDetection').val(),
+    };
+    $.post(API, {action:'ref_item_template_save', id:$('#rsTplId').val()||0, process_id:pid, data:JSON.stringify(data)}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        $('#rsTplForm').hide(); rsLoadTplList();
+    }, 'json');
+};
+window.rsDeleteTpl = function(id){
+    if (!confirm('確定刪除此整組樣板？（不影響已套用過的分析表資料）')) return;
+    $.post(API, {action:'ref_item_template_delete', id:id}, function(res){
+        if (!res.success){ alert(res.message||'刪除失敗'); return; }
+        rsLoadTplList();
+    }, 'json');
+};
+$('#rsTplProcSel').on('change', rsLoadTplList);
+
+/* ---------- 欄位個別設定對應 瀏覽/新增/刪除（2026-08-14使用者要求）---------- */
+var RS_LINK_SOURCE = '';
+function rsLinkPair(){ return ($('#rsLinkPairSel').val()||'').split('|'); }
+function rsLoadLinkSources(){
+    var pair = rsLinkPair();
+    $('#rsLinkSourceLabel').text($('#rsLinkPairSel option:selected').text().split(' → ')[0]);
+    $('#rsLinkTargetLabel').text($('#rsLinkPairSel option:selected').text().split(' → ')[1]);
+    RS_LINK_SOURCE = ''; $('#rsLinkTargetList').html(''); $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', true);
+    $.getJSON(API, {action:'field_link_distinct_sources', source_field:pair[0], target_field:pair[1]}, function(res){
+        if (!res.success) return;
+        var html = (res.rows||[]).map(function(v){ return '<div class="rs-row" data-src="'+esc(v)+'"><span>'+esc(v)+'</span></div>'; }).join('');
+        $('#rsLinkSourceList').html(html || '<div class="rs-empty">尚無資料</div>');
+    });
+}
+function rsLoadLinkTargets(){
+    var pair = rsLinkPair();
+    if (!RS_LINK_SOURCE) return;
+    $.getJSON(API, {action:'field_link_list', source_field:pair[0], source_value:RS_LINK_SOURCE, target_field:pair[1]}, function(res){
+        if (!res.success) return;
+        var html = (res.rows||[]).map(function(r){
+            return '<div class="rs-row" data-scope="link" data-id="'+r.id+'"><span>'+esc(r.target_value)+'</span>'
+                + (CAN_ADMIN ? '<i class="fa fa-trash" title="刪除"></i>' : '') + '</div>';
+        }).join('');
+        $('#rsLinkTargetList').html(html || '<div class="rs-empty">尚無資料</div>');
+    });
+}
+$(document).on('click', '#rsLinkSourceList .rs-row', function(){
+    $('#rsLinkSourceList .rs-row').removeClass('active');
+    $(this).addClass('active');
+    RS_LINK_SOURCE = $(this).attr('data-src');
+    $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', false);
+    rsLoadLinkTargets();
+});
+window.rsAddLinkTarget = function(){
+    var v = $('#rsLinkTargetNew').val().trim();
+    if (!RS_LINK_SOURCE || !v) return;
+    var pair = rsLinkPair();
+    $.post(API, {action:'field_link_add', source_field:pair[0], source_value:RS_LINK_SOURCE, target_field:pair[1], target_value:v}, function(res){
+        if (!res.success){ alert(res.message||'新增失敗'); return; }
+        $('#rsLinkTargetNew').val(''); rsLoadLinkTargets();
+    }, 'json');
+};
+$('#rsLinkPairSel').on('change', rsLoadLinkSources);
+
 $('#btnRefSettings').on('click', function(){
     RS_PROC_ID = 0; RS_ITEM_OPT_ID = 0; RS_FUNC_OPT_ID = 0;
     $('#rsProcessScope, #rsItemScope').hide();
     openMask('refSettingsMask');
-    rsLoadProcessList(); rsLoadControlLists();
+    switchRsTab('proc');
+    rsRenderProcessEnableList(); rsLoadProcessList(); rsLoadControlLists();
+    rsLoadTplProcSel();
+    rsLoadLinkSources();
 });
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
