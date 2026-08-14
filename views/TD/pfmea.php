@@ -103,6 +103,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .rs-row.active { background:#F7E0BD; font-weight:bold; }
         .rs-row .fa-trash { color:#DD5138; cursor:pointer; }
         .rs-empty { padding:6px 8px; font-size:12px; color:#8a6d45; }
+        .pf-sym-row { display:flex; flex-wrap:wrap; gap:3px; margin:3px 0 6px; }
+        .pf-sym-row button { width:28px; height:26px; border:1px solid #D8BE93; border-radius:3px; background:#fff; cursor:pointer; font-size:13px; color:#5b3a1e; padding:0; }
+        .pf-sym-row button:hover { background:#FFF7E8; border-color:#F0A24B; }
         .rs-cat-block { border-bottom:1px solid #F3EAD6; padding:4px 0; }
         .rs-cat-block:last-child { border-bottom:none; }
         .rs-cat-hd { display:block; font-size:12.5px; color:#5b3a1e; padding:2px 4px; cursor:pointer; }
@@ -565,7 +568,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <option value="failure_mode|failure_effect">潛在失效模式 → 失效模式潛在後果</option>
             <option value="failure_mode|classification">潛在失效模式 → 分類</option>
             <option value="failure_mode|failure_cause">潛在失效模式 → 失效潛在原因</option>
-            <option value="part_process|spec_desc">料號＋製程代號 → 規格描述</option>
+            <option value="part_process|spec_desc">料號＋製程代號 → 圖面要求</option>
         </select>
         <div style="display:flex;gap:16px;margin-top:10px;">
             <div style="flex:1;">
@@ -588,6 +591,8 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
                 <label style="font-size:12px;color:#5b3a1e;">對應的目標值（<span id="rsLinkTargetLabel">失效模式潛在後果</span>）</label>
                 <div class="rs-list" id="rsLinkTargetList" style="max-height:220px;"></div>
                 <div class="pf-proc-box"><input type="text" id="rsLinkTargetNew" placeholder="新增對應值" disabled><button type="button" class="pf-row-btn" onclick="rsAddLinkTarget()" disabled id="rsLinkTargetAddBtn">新增</button></div>
+                <div style="margin-top:4px;"><b style="font-size:11px;color:#8a6d45;">工程符號（點選插入目前游標位置）</b><div class="pf-sym-row" id="rsEngSymRow"></div></div>
+                <div><b style="font-size:11px;color:#8a6d45;">幾何公差／特殊項目</b><div class="pf-sym-row" id="rsGdtSymRow"></div></div>
             </div>
         </div>
         </div>
@@ -2051,11 +2056,15 @@ function rsLoadLinkSources(){
     // 潛在失效模式：改用系統全部已知的失效模式(不分製程)，不再只看「已經設定過對應值」的來源，
     // 否則已建立但還沒設定過後果/原因的失效模式會找不到、無從新增（2026-08-14使用者要求）
     var action = pair[0] === 'failure_mode' ? 'field_link_all_failure_modes' : 'field_link_distinct_sources';
+    var targetLabel = $('#rsLinkTargetLabel').text();
     $.getJSON(API, {action:action, source_field:pair[0], target_field:pair[1]}, function(res){
         if (!res.success) return;
-        var html = (res.rows||[]).map(function(v){
-            var label = isPartProcess ? rsPartProcessLabel(v) : v;
-            return '<div class="rs-row" data-src="'+esc(v)+'"><span>'+esc(label)+'</span></div>';
+        // 每筆帶目標值預覽(preview)，來源清單不用點進去就能大概看到已經設定了什麼
+        // （2026-08-14使用者要求：料號+製程代號右側要能直接看到對應的目標值）
+        var html = (res.rows||[]).map(function(r){
+            var label = isPartProcess ? rsPartProcessLabel(r.value) : r.value;
+            if (r.preview) label += '　'+targetLabel+'：'+r.preview;
+            return '<div class="rs-row" data-src="'+esc(r.value)+'"><span>'+esc(label)+'</span></div>';
         }).join('');
         $('#rsLinkSourceList').html(html || '<div class="rs-empty">尚無資料，可用上方欄位新增</div>');
     });
@@ -2130,6 +2139,40 @@ window.rsBackfillLinks = function(){
     }, 'json');
 };
 
+/* ---------- 符號按鈕：工程符號(比照 views/Sales/image_editor.php 既有符號) + 幾何公差／特殊項目
+   (沿用 QC 模組 qc_special_characteristic 字典) ----------（2026-08-14使用者要求）
+   兩組分開顯示；點擊插入「對應的目標值」輸入框目前游標位置，不影響其他文字。 */
+var ENG_SYMBOLS = [
+    ['Ø','直徑'], ['°','度'], ['±','正負公差'], ['▽','加工符號（研磨＝連按多個）'],
+    ['↧','深度'], ['⌴','沉頭孔／柱坑'], ['⌵','錐坑'], ['□','正方形'],
+    ['⌒','圓弧'], ['Ra','表面粗糙度'], ['×','乘號']
+];
+function rsRenderEngSymbols(){
+    $('#rsEngSymRow').html(ENG_SYMBOLS.map(function(s){
+        return '<button type="button" class="pf-sym-btn" data-sym="'+esc(s[0])+'" title="'+esc(s[1])+'">'+esc(s[0])+'</button>';
+    }).join(''));
+}
+function rsRenderGdtSymbols(){
+    $.getJSON(API, {action:'qc_special_characteristics_list'}, function(res){
+        if (!res.success) return;
+        $('#rsGdtSymRow').html((res.rows||[]).map(function(s){
+            var t = s.name + (s.description ? '（'+s.description+'）' : '');
+            return '<button type="button" class="pf-sym-btn" data-sym="'+esc(s.symbol)+'" title="'+esc(t)+'">'+esc(s.symbol)+'</button>';
+        }).join('') || '<span class="rs-empty">尚無資料</span>');
+    });
+}
+$(document).on('click', '#refSettingsMask .pf-sym-btn', function(){
+    var sym = $(this).attr('data-sym');
+    var el = document.getElementById('rsLinkTargetNew');
+    if (el.disabled) { alert('請先選定左側來源值'); return; }
+    var start = el.selectionStart || 0, end = el.selectionEnd || 0;
+    var val = el.value;
+    el.value = val.substring(0, start) + sym + val.substring(end);
+    var newPos = start + sym.length;
+    el.focus();
+    el.setSelectionRange(newPos, newPos);
+});
+
 $('#btnRefSettings').on('click', function(){
     RS_PROC_ID = 0; RS_ITEM_OPT_ID = 0; RS_FUNC_OPT_ID = 0;
     $('#rsProcessScope, #rsItemScope').hide();
@@ -2138,6 +2181,7 @@ $('#btnRefSettings').on('click', function(){
     rsRenderProcessEnableList(); rsLoadProcessList(); rsLoadControlLists();
     rsLoadTplProcSel();
     rsLoadLinkSources();
+    rsRenderEngSymbols(); rsRenderGdtSymbols();
 });
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
