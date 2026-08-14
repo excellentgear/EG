@@ -324,6 +324,50 @@ function pfmea_ref_item_template_delete(PDO $db, int $id): void {
     $db->prepare("UPDATE pfmea_item_template SET is_active=0 WHERE id=?")->execute([$id]);
 }
 
+/** 整組樣板新增/編輯（2026-08-14使用者要求：整組設定要能新增+編輯+刪除，不再只能查看/刪除）。
+ * $id=0 新增，非0 編輯既有列；$data 用欄位名為鍵，缺的欄位存NULL。 */
+function pfmea_ref_item_template_save(PDO $db, int $id, int $processId, array $data, int $uid, string $uname): int {
+    $textFields = ['item_name','failure_mode','function_desc','failure_effect','failure_cause','prevention_controls','detection_controls','recommended_actions'];
+    $numFields = ['severity','occurrence','detection','new_severity','new_occurrence','new_detection'];
+    $fields = array_merge(
+        ['item_name','failure_mode','function_desc','failure_effect'],
+        ['severity'],
+        ['failure_cause'],
+        ['occurrence','prevention_controls','detection_controls','detection','recommended_actions'],
+        ['new_severity','new_occurrence','new_detection']
+    );
+    $vals = [];
+    foreach ($fields as $f) {
+        $v = $data[$f] ?? null;
+        if (in_array($f, $numFields, true)) {
+            $v = ($v === null || $v === '') ? null : max(1, min(10, (int)$v));
+        } else {
+            $v = $v !== null ? trim((string)$v) : '';
+            if ($v === '') $v = null;
+        }
+        $vals[] = $v;
+    }
+    $st = $db->prepare("SELECT process_name FROM pfmea_process WHERE id=?"); $st->execute([$processId]);
+    $procName = (string)($st->fetchColumn() ?: '');
+    $templateKey = $procName . '_' . ($vals[0] ?: ($vals[1] ?: ''));
+    if ($id) {
+        $db->prepare("UPDATE pfmea_item_template SET process_id=?, template_key=?, item_name=?, failure_mode=?, function_desc=?, failure_effect=?,
+            severity=?, failure_cause=?, occurrence=?, prevention_controls=?, detection_controls=?, detection=?, recommended_actions=?,
+            new_severity=?, new_occurrence=?, new_detection=? WHERE id=?")
+           ->execute(array_merge([$processId, $templateKey], $vals, [$id]));
+        return $id;
+    }
+    $st = $db->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM pfmea_item_template WHERE process_id=?");
+    $st->execute([$processId]);
+    $sort = (int)$st->fetchColumn();
+    $db->prepare("INSERT INTO pfmea_item_template (process_id, template_key, item_name, failure_mode, function_desc, failure_effect,
+        severity, failure_cause, occurrence, prevention_controls, detection_controls, detection, recommended_actions,
+        new_severity, new_occurrence, new_detection, sort_order, created_by, created_by_name)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+       ->execute(array_merge([$processId, $templateKey], $vals, [$sort, $uid, $uname]));
+    return (int)$db->lastInsertId();
+}
+
 /* ---------- 欄位個別設定對應（2026-08-14使用者要求）----------
  * 通用機制：任一欄位值(source)可設定對應到另一欄位的建議值(target)，如潛在失效模式->失效模式潛在
  * 後果/分類/失效潛在原因、產品名稱->規格描述。可填表人新增(自行輸入新值即註冊)，僅管理員可刪除。 */
