@@ -4124,8 +4124,8 @@ function loadAssets(mtid, btn){
         if(!res.success){$('#asset-tbody').html('<tr><td colspan="11" style="color:var(--danger);padding:15px;text-align:center;">'+res.message+'</td></tr>');return;}
         var h='';
         res.data.forEach(function(m){
-            var stateCls=m.state==='1'?'asset-state-bad':'asset-state-ok';
-            var stateLabel=m.state==='1'?'淘汰/賣出':'正常';
+            var stateCls=String(m.state)==='1'?'asset-state-bad':'asset-state-ok';
+            var stateLabel=String(m.state)==='1'?'淘汰/賣出':'正常';
             var costStr=m.hourly_cost!==null?'<strong>'+parseFloat(m.hourly_cost).toFixed(2)+'</strong> 元/h':'<span style="color:#aaa;">未設定</span>';
             var depStr=m.is_fully_depreciated?'<span class="cbadge cbadge-warn">已折舊完畢</span>':(m.elapsed_years||'—')+'年';
             h+='<tr>'
@@ -4193,7 +4193,7 @@ function openMachineInfoModal(m){
     $('#mi-need-setup').val(m?(m.need_setup||0):1);
     $('#mi-spec').val(m?(m.spec||''):'');
     $('#mi-note').val(m?(m.note||''):'');
-    var disabled=!!(m&&m.state==='1');
+    var disabled=!!(m&&String(m.state)==='1');
     $('#mi-state').prop('checked',disabled);
     $('#mi-disabled-date').val(m?(m.disabled_date||''):'');
     $('#mi-disabled-date-grp').toggle(disabled);
