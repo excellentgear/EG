@@ -156,16 +156,25 @@ function pfmea_ensure_schema(PDO $db): void {
 
     $db->exec("CREATE TABLE IF NOT EXISTS pfmea_requirement_option (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        function_option_id INT NOT NULL,
-        part_d_id INT NULL COMMENT '綁特定料號時填此;留空且part_no_text也空=此功能通用預設值',
+        function_option_id INT NULL,
+        process_id INT NULL COMMENT '製程層級的要求(無功能細分資料時用，如製作表單.xlsm匯入的舊資料)',
+        part_d_id INT NULL COMMENT '綁特定料號時填此;留空且part_no_text也空=此功能/製程通用預設值',
         part_no_text VARCHAR(100) NULL COMMENT '無d_setting主鍵的手動輸入料號才用這欄',
         requirement_text VARCHAR(300) NOT NULL COMMENT '要求',
         sort_order INT NOT NULL DEFAULT 0,
         is_active TINYINT(1) NOT NULL DEFAULT 1,
         created_by INT NULL, created_by_name VARCHAR(50) NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        KEY idx_func (function_option_id)
-    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-功能+料號對應要求清單'");
+        KEY idx_func (function_option_id),
+        KEY idx_proc (process_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-功能/製程+料號對應要求清單'");
+    // 既有表(function_option_id原本是NOT NULL)要放寬成可空，並補process_id欄位——CREATE TABLE IF NOT
+    // EXISTS對已存在的表不生效，2026-08-14使用者要求匯入「製作表單」工作表的料號->製程->要求舊資料，
+    // 那份資料沒有功能細分，只能存到製程層級
+    foreach ([
+        "ALTER TABLE pfmea_requirement_option MODIFY COLUMN function_option_id INT NULL",
+        "ALTER TABLE pfmea_requirement_option ADD COLUMN process_id INT NULL COMMENT '製程層級的要求(無功能細分資料時用，如製作表單.xlsm匯入的舊資料)' AFTER function_option_id",
+    ] as $alter) { try { $db->exec($alter); } catch (Throwable $e) {} }
 
     $db->exec("CREATE TABLE IF NOT EXISTS pfmea_control_option (
         id INT AUTO_INCREMENT PRIMARY KEY,

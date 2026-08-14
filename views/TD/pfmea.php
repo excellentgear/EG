@@ -655,6 +655,7 @@ function refreshAllCardDatalists(){
         if (!code || !PROCESS_ID_BY_CODE[code]) return;
         var pid = PROCESS_ID_BY_CODE[code].id;
         loadItemOptionsForCard($card, pid);
+        loadRequirementOptionsForCard($card, 0); // 製程層級要求先帶出，功能層級解析完成後會再刷新一次(見resolveFunctionOption)
         if ($card.find('[data-f="process_desc"]').val().trim() && CAN_EDIT) {
             resolveItemOption($card, function(itemOptId){
                 if (itemOptId && $card.find('[data-f="function_desc"]').val().trim()) resolveFunctionOption($card);
@@ -865,12 +866,16 @@ function loadFunctionOptionsForCard($card, itemOptId){
         if (res.success) $dl.each(function(){ fillDatalist(this, res.rows, function(r){ return r.function_desc; }); });
     });
 }
+/* 要求下拉：優先套用funcOptId(功能層級)專屬清單，沒有funcOptId或該層級查無資料時後端會退回
+   process_id(製程層級，如製作表單.xlsm匯入的舊資料)——這裡兩個id都傳，讓後端決定退回順序 */
 function loadRequirementOptionsForCard($card, funcOptId){
     var $dl = $card.find('datalist.dl-requirement');
-    if (!funcOptId){ $dl.each(function(){ this.innerHTML=''; }); return; }
+    var code = $card.find('.f-proccode').val().trim();
+    var pid = code && PROCESS_ID_BY_CODE[code] ? PROCESS_ID_BY_CODE[code].id : 0;
+    if (!funcOptId && !pid){ $dl.each(function(){ this.innerHTML=''; }); return; }
     var partDId = $('#fPartDId').val() || 0;
     var partText = (partDId|0) ? '' : $('#fPartNo').val();
-    $.getJSON(API, {action:'ref_requirement_options_list', function_option_id:funcOptId, part_d_id:partDId, part_no_text:partText}, function(res){
+    $.getJSON(API, {action:'ref_requirement_options_list', function_option_id:funcOptId||0, process_id:pid, part_d_id:partDId, part_no_text:partText}, function(res){
         if (res.success) $dl.each(function(){ fillDatalist(this, res.rows, function(r){ return r.requirement_text; }); });
     });
 }
@@ -934,6 +939,7 @@ $(document).on('change', '#itemBody .f-proccode', function(){
     if (PROCESS_ID_BY_CODE[code]){
         loadFailureModesForCard($card, PROCESS_ID_BY_CODE[code].id, 0, 0);
         loadItemOptionsForCard($card, PROCESS_ID_BY_CODE[code].id);
+        loadRequirementOptionsForCard($card, 0); // 製程層級要求(如製作表單.xlsm匯入的舊資料)，項目/功能還沒填也能先帶出
         return;
     }
     if (!CAN_EDIT) return;
@@ -941,7 +947,7 @@ $(document).on('change', '#itemBody .f-proccode', function(){
     if (!name){ $input.val(''); return; }
     $.post(API, {action:'ref_process_add', process_code:code, process_name:name}, function(res){
         if (!res.success){ alert(res.message||'新增製程失敗'); $input.val(''); return; }
-        loadProcessList(function(){ loadFailureModesForCard($card, res.id, 0, 0); loadItemOptionsForCard($card, res.id); });
+        loadProcessList(function(){ loadFailureModesForCard($card, res.id, 0, 0); loadItemOptionsForCard($card, res.id); loadRequirementOptionsForCard($card, 0); });
     }, 'json');
 });
 
@@ -1129,13 +1135,13 @@ function registerNewRefValues(){
             var known = $card.find('datalist.dl-failure_mode option').map(function(){ return this.value; }).get();
             if (fm && known.indexOf(fm) < 0) $.post(API, {action:'ref_failure_mode_add', process_id:pid, failure_mode:fm, item_option_id:itemOptId, function_option_id:funcOptId});
         }
-        if (funcOptId) {
+        if (funcOptId || pid) {
             var req = $card.find('[data-f="requirement"]').val().trim();
             var knownReq = $card.find('datalist.dl-requirement option').map(function(){ return this.value; }).get();
             if (req && knownReq.indexOf(req) < 0) {
                 var partDId = $('#fPartDId').val() || 0;
                 var partText = (partDId|0) ? '' : $('#fPartNo').val();
-                $.post(API, {action:'ref_requirement_option_add', function_option_id:funcOptId, part_d_id:partDId, part_no_text:partText, requirement_text:req});
+                $.post(API, {action:'ref_requirement_option_add', function_option_id:funcOptId, process_id:pid, part_d_id:partDId, part_no_text:partText, requirement_text:req});
             }
         }
         ['prevention_controls','detection_controls'].forEach(function(f){

@@ -125,37 +125,58 @@ function pfmea_ref_function_option_delete(PDO $db, int $id): void {
     $db->prepare("UPDATE pfmea_function_option SET is_active=0 WHERE id=?")->execute([$id]);
 }
 
-/** 要求清單：優先給這個料號綁定過的專屬要求，沒有才退回該功能底下沒綁料號的通用要求 */
-function pfmea_ref_requirement_options(PDO $db, int $functionOptionId, int $partDId = 0, string $partText = ''): array {
-    if ($partDId || $partText !== '') {
-        $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option
-                             WHERE function_option_id=? AND is_active=1 AND ((part_d_id=? AND part_d_id IS NOT NULL) OR (part_no_text=? AND part_no_text IS NOT NULL AND part_no_text<>''))
-                             ORDER BY sort_order, id");
-        $st->execute([$functionOptionId, $partDId ?: 0, $partText]);
+/** 要求清單：優先給這個料號在「功能」層級綁定過的專屬要求，沒有才退回該功能通用要求，還是沒有
+ * 才退回「製程」層級(較粗，如製作表單.xlsm匯入的舊資料只到製程沒有功能細分)——同樣先試料號專屬
+ * 再試通用。$processId 由呼叫端傳目前卡片解析出的製程id，沒有就傳0（略過製程層級查詢）。 */
+function pfmea_ref_requirement_options(PDO $db, int $functionOptionId, int $partDId = 0, string $partText = '', int $processId = 0): array {
+    if ($functionOptionId) {
+        if ($partDId || $partText !== '') {
+            $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option
+                                 WHERE function_option_id=? AND is_active=1 AND ((part_d_id=? AND part_d_id IS NOT NULL) OR (part_no_text=? AND part_no_text IS NOT NULL AND part_no_text<>''))
+                                 ORDER BY sort_order, id");
+            $st->execute([$functionOptionId, $partDId ?: 0, $partText]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            if ($rows) return $rows;
+        }
+        $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option WHERE function_option_id=? AND part_d_id IS NULL AND (part_no_text IS NULL OR part_no_text='') AND is_active=1 ORDER BY sort_order, id");
+        $st->execute([$functionOptionId]);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         if ($rows) return $rows;
     }
-    $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option WHERE function_option_id=? AND part_d_id IS NULL AND (part_no_text IS NULL OR part_no_text='') AND is_active=1 ORDER BY sort_order, id");
-    $st->execute([$functionOptionId]);
-    return $st->fetchAll(PDO::FETCH_ASSOC);
+    if ($processId) {
+        if ($partDId || $partText !== '') {
+            $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option
+                                 WHERE process_id=? AND function_option_id IS NULL AND is_active=1 AND ((part_d_id=? AND part_d_id IS NOT NULL) OR (part_no_text=? AND part_no_text IS NOT NULL AND part_no_text<>''))
+                                 ORDER BY sort_order, id");
+            $st->execute([$processId, $partDId ?: 0, $partText]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            if ($rows) return $rows;
+        }
+        $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option WHERE process_id=? AND function_option_id IS NULL AND part_d_id IS NULL AND (part_no_text IS NULL OR part_no_text='') AND is_active=1 ORDER BY sort_order, id");
+        $st->execute([$processId]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    }
+    return [];
 }
 
-function pfmea_ref_requirement_option_add(PDO $db, int $functionOptionId, int $partDId, string $partText, string $text, int $uid, string $uname): int {
+function pfmea_ref_requirement_option_add(PDO $db, int $functionOptionId, int $partDId, string $partText, string $text, int $uid, string $uname, int $processId = 0): int {
     $text = trim($text);
     $partDId = $partDId ?: null; $partText = $partText !== '' ? $partText : null;
-    $cond = $partDId ? "part_d_id=?" : ($partText ? "part_no_text=?" : "part_d_id IS NULL AND (part_no_text IS NULL OR part_no_text='')");
-    $key = $partDId ?: $partText;
-    $sql = "SELECT id FROM pfmea_requirement_option WHERE function_option_id=? AND $cond AND requirement_text=? LIMIT 1";
-    $params = $key !== null ? [$functionOptionId, $key, $text] : [$functionOptionId, $text];
+    $partCond = $partDId ? "part_d_id=?" : ($partText ? "part_no_text=?" : "part_d_id IS NULL AND (part_no_text IS NULL OR part_no_text='')");
+    $partKey = $partDId ?: $partText;
+    $scopeCond = $functionOptionId ? "function_option_id=?" : "process_id=? AND function_option_id IS NULL";
+    $scopeKey = $functionOptionId ?: $processId;
+    $sql = "SELECT id FROM pfmea_requirement_option WHERE $scopeCond AND $partCond AND requirement_text=? LIMIT 1";
+    $params = [$scopeKey]; if ($partKey !== null) $params[] = $partKey; $params[] = $text;
     $st = $db->prepare($sql);
     $st->execute($params);
     $id = $st->fetchColumn();
     if ($id) return (int)$id;
-    $st = $db->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM pfmea_requirement_option WHERE function_option_id=?");
-    $st->execute([$functionOptionId]);
+    $st = $db->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM pfmea_requirement_option WHERE $scopeCond");
+    $st->execute([$scopeKey]);
     $sort = (int)$st->fetchColumn();
-    $st = $db->prepare("INSERT INTO pfmea_requirement_option (function_option_id, part_d_id, part_no_text, requirement_text, sort_order, created_by, created_by_name) VALUES (?,?,?,?,?,?,?)");
-    $st->execute([$functionOptionId, $partDId, $partText, $text, $sort, $uid, $uname]);
+    $st = $db->prepare("INSERT INTO pfmea_requirement_option (function_option_id, process_id, part_d_id, part_no_text, requirement_text, sort_order, created_by, created_by_name) VALUES (?,?,?,?,?,?,?,?)");
+    $st->execute([$functionOptionId ?: null, $functionOptionId ? null : ($processId ?: null), $partDId, $partText, $text, $sort, $uid, $uname]);
     return (int)$db->lastInsertId();
 }
 

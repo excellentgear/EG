@@ -321,23 +321,26 @@ case 'ref_function_option_delete':
     pfmea_ref_function_option_delete($db, $id);
     jout(['success'=>true]);
 
-// 要求：依綁定的功能+料號查，優先給該料號的專屬要求，沒有才退回該功能通用要求
+// 要求：依綁定的功能+料號查，優先給該料號在功能層級的專屬要求，逐層退回功能通用/製程層級(較粗，
+// 沒有功能細分資料時用，如製作表單.xlsm匯入的舊資料)
 case 'ref_requirement_options_list':
     needView($perms);
     $funcOptId = (int)($_GET['function_option_id'] ?? 0);
+    $procId = (int)($_GET['process_id'] ?? 0);
     $partDId = (int)($_GET['part_d_id'] ?? 0);
     $partText = trim((string)($_GET['part_no_text'] ?? ''));
-    if (!$funcOptId) jout(['success'=>true,'rows'=>[]]);
-    jout(['success'=>true,'rows'=>pfmea_ref_requirement_options($db, $funcOptId, $partDId, $partText)]);
+    if (!$funcOptId && !$procId) jout(['success'=>true,'rows'=>[]]);
+    jout(['success'=>true,'rows'=>pfmea_ref_requirement_options($db, $funcOptId, $partDId, $partText, $procId)]);
 
 case 'ref_requirement_option_add':
     needEdit($perms);
     $funcOptId = (int)($_POST['function_option_id'] ?? 0);
+    $procId = (int)($_POST['process_id'] ?? 0);
     $partDId = (int)($_POST['part_d_id'] ?? 0);
     $partText = trim((string)($_POST['part_no_text'] ?? ''));
     $text = trim((string)($_POST['requirement_text'] ?? ''));
-    if (!$funcOptId || $text === '') jout(['success'=>false,'message'=>'缺少功能或要求文字']);
-    $id = pfmea_ref_requirement_option_add($db, $funcOptId, $partDId, $partText, $text, $uid, $uname);
+    if ((!$funcOptId && !$procId) || $text === '') jout(['success'=>false,'message'=>'缺少功能/製程或要求文字']);
+    $id = pfmea_ref_requirement_option_add($db, $funcOptId, $partDId, $partText, $text, $uid, $uname, $procId);
     jout(['success'=>true,'id'=>$id]);
 
 case 'ref_requirement_option_delete':
