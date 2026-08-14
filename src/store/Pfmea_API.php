@@ -448,6 +448,10 @@ case 'field_link_distinct_sources':
     needAdmin($perms);
     jout(['success'=>true,'rows'=>pfmea_field_link_distinct_sources($db, (string)($_GET['source_field']??''), (string)($_GET['target_field']??''))]);
 
+case 'field_link_all_failure_modes':
+    needAdmin($perms);
+    jout(['success'=>true,'rows'=>pfmea_field_link_all_failure_modes($db)]);
+
 case 'field_link_backfill':
     needAdmin($perms);
     jout(['success'=>true] + pfmea_field_link_backfill_from_templates($db, $uid, $uname));

@@ -416,6 +416,17 @@ function pfmea_field_link_distinct_sources(PDO $db, string $sourceField, string 
     return $st->fetchAll(PDO::FETCH_COLUMN);
 }
 
+/** 設定畫面「潛在失效模式」來源值候選清單：只看已經設定過對應值的來源會漏掉「已經在製程底下建立，
+ * 但還沒設定過任何後果/原因對應」的失效模式，改成系統全部已知的潛在失效模式(不分製程)都能選來
+ * 開始設定，不必先繞去別的地方新增一筆對應才看得到（2026-08-14使用者要求） */
+function pfmea_field_link_all_failure_modes(PDO $db): array {
+    $a = $db->query("SELECT DISTINCT failure_mode FROM pfmea_process_failure_mode WHERE is_active=1")->fetchAll(PDO::FETCH_COLUMN);
+    $b = $db->query("SELECT DISTINCT source_value FROM pfmea_field_link WHERE source_field='failure_mode' AND is_active=1")->fetchAll(PDO::FETCH_COLUMN);
+    $all = array_values(array_unique(array_merge($a, $b)));
+    sort($all, SORT_STRING|SORT_FLAG_CASE);
+    return $all;
+}
+
 /** 從已匯入的整組樣板(pfmea_item_template，來源3-TD-01-02...xlsm的「項目異常」工作表)回填欄位
  * 個別設定對應：失效模式->失效模式潛在後果、失效模式->失效潛在原因，兩者才是真正同時存在
  * 「潛在失效模式」與「後果/原因」欄位的原始資料（「資料庫」工作表只有單一潛在失效模式清單，
