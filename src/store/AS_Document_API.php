@@ -403,11 +403,14 @@ case 'list_documents':
                    v.revised_date, v.change_status, v.file_name AS current_file_name,
                    pd.doc_no AS parent_doc_no, pd.doc_name AS parent_doc_name,
                    (SELECT COUNT(*) FROM as_document c WHERE c.parent_doc_id = d.id AND c.is_deleted = 0) AS children_count,
-                   (SELECT COUNT(*) FROM as_form_record fr WHERE fr.form_doc_id = d.id AND fr.is_deleted = 0) AS record_count
+                   (SELECT COUNT(*) FROM as_form_record fr WHERE fr.form_doc_id = d.id AND fr.is_deleted = 0) AS record_count,
+                   rt.id AS rvf_tpl_id, rt.name AS rvf_tpl_name
             FROM as_document d
             LEFT JOIN department dep ON dep.id = d.department_id
             LEFT JOIN as_document_version v ON v.id = d.current_version_id
             LEFT JOIN as_document pd ON pd.id = d.parent_doc_id
+            LEFT JOIN system_parameters rvfsp ON rvfsp.param_group='AS_DOC_BIND' AND rvfsp.param_key LIKE 'review_form_tpl\\_%' AND rvfsp.param_value = d.id
+            LEFT JOIN rf_template rt ON rt.id = CAST(SUBSTRING(rvfsp.param_key, 17) AS UNSIGNED) AND rt.status='active'
             $wsql
             ORDER BY d.doc_no ASC";
     $stmt = $db->prepare($sql);

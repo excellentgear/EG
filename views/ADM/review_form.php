@@ -823,20 +823,23 @@ function printForm(){
     egPrintWindow(t.name, h, rfCss(), CUR.as_doc_no, t.paper_size, t.orientation!=='portrait');
 }
 
-/* 試填預覽入口（由 review_form_template.php 的「試填預覽並列印」開新分頁帶 ?preview=1 進來）：
-   讀 sessionStorage 裡未存檔的欄位定義，組一個假的 CUR/CUR_SCHEMA 直接開檢視畫面，不呼叫 instance_get，
-   不建立任何 rf_instance 資料列；存檔/送出/刪除/審核/核准一律不顯示，只留增減列與列印可用。 */
+/* 試填預覽入口：①由 review_form_template.php 的「試填預覽並列印」開新分頁帶 ?preview=1 進來，讀
+   sessionStorage 裡未存檔的欄位定義（畫面上正在編輯、可能還沒存檔的草稿）；②由 as_document_management.php
+   的文件列表直接帶 ?preview=1&tpl_id=X 進來（2026-08-14 使用者明確要求串接），這種情況沒有 sessionStorage
+   草稿，改用該模板目前「已存檔」的欄位定義。兩種都不呼叫 instance_get，不建立任何 rf_instance 資料列；
+   存檔/送出/刪除/審核/核准一律不顯示，只留增減列與列印可用。 */
 function initPreview(){
+    var qTplId = new URLSearchParams(location.search).get('tpl_id');
     var raw = sessionStorage.getItem('rvf_preview_payload');
-    if (!raw) { alert('找不到預覽資料，請從「審核表單模板管理」的「試填預覽並列印」按鈕開啟'); return; }
-    var payload = JSON.parse(raw);
-    CUR_SCHEMA = payload.schema || {fields:[], sign_mode:'password'};
+    var payload = raw ? JSON.parse(raw) : null;
+    if (!payload && !qTplId) { alert('找不到預覽資料，請從「審核表單模板管理」的「試填預覽並列印」按鈕開啟'); return; }
+    if (payload) CUR_SCHEMA = payload.schema || {fields:[], sign_mode:'password'};
     ITEMS = [];
     function openPreview(tpl, asDocNo){
         CUR = {
             id: 0, title: '', business_date: META.today, status: 'draft',
             created_by: META.uid, created_by_name: META.uname,
-            tpl: tpl || {name: payload.tpl_name || '(未命名模板)', paper_size: payload.paper_size || 'A4', orientation:'landscape'},
+            tpl: tpl || {name: (payload&&payload.tpl_name) || '(未命名模板)', paper_size: (payload&&payload.paper_size) || 'A4', orientation:'landscape'},
             as_doc_no: asDocNo || '', company_name: META.company_name,
             review: null, approval: null, can_review: false, can_approve: false
         };
@@ -844,10 +847,13 @@ function initPreview(){
         renderView();
         openMask('viewMask');
     }
-    if (payload.tpl_id) {
+    var tplId = (payload && payload.tpl_id) || qTplId;
+    if (tplId) {
         // 用真實模板列（含紙張/方向/圖章綁定等設定），確保試列印跟正式列印用同一套設定，不是只用畫面上暫存的兩三個欄位。
-        $.getJSON(API, {action:'template_get', id:payload.tpl_id}, function(res){
-            openPreview(res.ok ? res.template : null, res.ok && res.template.as_doc ? res.template.as_doc.doc_no : '');
+        $.getJSON(API, {action:'template_get', id:tplId}, function(res){
+            if (!res.ok){ alert(res.error||'找不到此模板'); return; }
+            if (!payload) CUR_SCHEMA = res.template.schema || {fields:[], sign_mode:'password'};
+            openPreview(res.template, res.template.as_doc ? res.template.as_doc.doc_no : '');
         });
     } else openPreview(null, '');
 }

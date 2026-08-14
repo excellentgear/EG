@@ -1076,6 +1076,10 @@ $(function(){
       const sRec = `<button class="btn btn-xs ${rc>0||d.linked_module?'btn-warning':'btn-default'} op-record" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="${recTitle}">${recLabel}${rc>0?'×'+rc:''}</button>`;
       const sHist = `<button class="btn btn-xs btn-default op-hist" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="歷史版本"><i class="fa fa-history"></i></button>`;
       const sVer = canU ? `<button class="btn btn-xs btn-warning op-ver" data-id="${d.id}" data-name="${esc(d.doc_name)}" title="上傳新版本（附制修申請單）">改版</button>` : '';
+      // 反查此文件是否被「審核表單」模板綁定（2026-08-14 使用者明確要求串接）：有綁定才出現，開新分頁進
+      // review_form.php 的試填預覽並列印（不建立任何表單資料，日期用今天、年度/簽章皆空白，僅供檢視版面樣式）。
+      const sRvf = d.rvf_tpl_id
+        ? `<a class="btn btn-xs btn-default" href="review_form.php?preview=1&tpl_id=${d.rvf_tpl_id}" target="_blank" title="檢視「${esc(d.rvf_tpl_name)}」審核表單樣式（試填預覽，可直接列印）"><i class="fa fa-file-text-o"></i></a>` : '';
       let mgmt = '';
       if(canU) mgmt += `<li><a href="javascript:void(0)" class="op-edit" data-id="${d.id}"><i class="fa fa-pencil-square-o"></i> 編輯資料 / 修正版本資訊</a></li>`;
       if(canS) mgmt += `<li><a href="javascript:void(0)" class="op-perm" data-id="${d.id}" data-name="${esc(d.doc_name)}"><i class="fa fa-lock"></i> 文件開啟權限</a></li>`;
@@ -1088,7 +1092,7 @@ $(function(){
       if(window.asPerm.super_delete) mgmt += `<li><a href="javascript:void(0)" class="op-del-permanent" data-id="${d.id}" data-name="${esc(d.doc_name)}" style="color:#a94442;"><i class="fa fa-trash-o"></i> 永久刪除（含改版紀錄，不可復原）</a></li>`;
       const sGear = mgmt
         ? `<div class="btn-group"><button class="btn btn-xs btn-default dropdown-toggle" data-toggle="dropdown" title="管理（編輯/權限/刪除）"><i class="fa fa-cog"></i> <span class="caret"></span></button><ul class="dropdown-menu dropdown-menu-right">${mgmt}</ul></div>` : '';
-      ops = slot(sPrev,32)+slot(sDl,32)+slot(sHist,32)+slot(sVer,46)+slot(sRec,60)+slot(sGear,44);
+      ops = slot(sPrev,32)+slot(sDl,32)+slot(sRvf,32)+slot(sHist,32)+slot(sVer,46)+slot(sRec,60)+slot(sGear,44);
       const delMark = d.is_deleted==1 ? ' <span class="label label-default">已刪除</span>' : '';
       tb.append(`<tr>
         ${canU?`<td><input type="checkbox" class="doc-chk" value="${d.id}"></td>`:''}
