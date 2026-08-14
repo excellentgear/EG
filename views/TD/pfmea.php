@@ -462,7 +462,10 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
         </div>
 
         <div class="pf-rt-pane" data-rstab="proc">
-        <div class="pf-sec-title">製程開放使用設定<span class="pf-op" onclick="rsSyncProcesses()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:10px;"><i class="fa fa-refresh"></i> 從全站製程主檔同步</span></div>
+        <div class="pf-sec-title">製程開放使用設定
+            <span class="pf-op" onclick="rsSyncProcesses()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:10px;"><i class="fa fa-refresh"></i> 從全站製程主檔同步</span>
+            <span class="pf-op" onclick="rsEnableConfigured()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:10px;"><i class="fa fa-check-square-o"></i> 一鍵開放已設定製程</span>
+        </div>
         <div style="font-size:12px;color:#8a6d45;margin-bottom:4px;">勾選大項分類＝該分類底下製程全選/取消全選；仍可個別勾選調整。只有勾選開放的製程會出現在分析表的製程代號下拉。</div>
         <div id="rsProcessEnableList" style="max-height:220px;overflow-y:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px 8px;margin-bottom:10px;"></div>
 
@@ -539,7 +542,9 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
         </div>
 
         <div class="pf-rt-pane" data-rstab="link">
-        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">欄位個別設定對應：填了來源欄位的值就建議帶出目標欄位的值（如潛在失效模式→失效模式潛在後果/分類/失效潛在原因、產品名稱→規格描述）。</div>
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">欄位個別設定對應：填了來源欄位的值就建議帶出目標欄位的值（如潛在失效模式→失效模式潛在後果/分類/失效潛在原因、產品名稱→規格描述）。
+            <span class="pf-op" onclick="rsBackfillLinks()" style="color:#b5762a;text-decoration:underline;cursor:pointer;"><i class="fa fa-download"></i> 從整組樣板回填</span>
+        </div>
         <label style="font-size:13px;color:#5b3a1e;">對應組合</label>
         <select id="rsLinkPairSel" style="width:320px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
             <option value="failure_mode|failure_effect">潛在失效模式 → 失效模式潛在後果</option>
@@ -1786,7 +1791,8 @@ function rsRenderProcessEnableList(){
             html += '<div class="rs-cat-block">'
                 + '<label class="rs-cat-hd"><input type="checkbox" class="rs-cat-ck" data-type="'+typeId+'"'+(allChecked?' checked':'')+'> <b>'+esc(cat)+'</b>　('+procs.length+'個)</label>';
             procs.forEach(function(p){
-                html += '<label class="rs-proc-ck-row"><input type="checkbox" class="rs-proc-ck" data-id="'+p.id+'"'+(p.is_enabled==1?' checked':'')+'> '+esc(p.process_code)+' '+esc(p.process_name)+'</label>';
+                var badge = p.fm_count > 0 ? ' <span style="color:#b5762a;">（已設定'+p.fm_count+'個潛在失效模式）</span>' : '';
+                html += '<label class="rs-proc-ck-row"><input type="checkbox" class="rs-proc-ck" data-id="'+p.id+'"'+(p.is_enabled==1?' checked':'')+'> '+esc(p.process_code)+' '+esc(p.process_name)+badge+'</label>';
             });
             html += '</div>';
         });
@@ -1798,6 +1804,13 @@ window.rsSyncProcesses = function(){
     $.post(API, {action:'process_sync_master'}, function(res){
         if (!res.success){ alert(res.message||'同步失敗'); return; }
         alert('同步完成：新增 '+res.created+' 筆，補連結 '+res.linked+' 筆（主檔共 '+res.total_master+' 筆製程）。');
+        rsRenderProcessEnableList(); loadProcessList();
+    }, 'json');
+};
+window.rsEnableConfigured = function(){
+    $.post(API, {action:'process_enable_configured'}, function(res){
+        if (!res.success){ alert(res.message||'設定失敗'); return; }
+        alert('已將 '+res.enabled+' 個已設定過潛在失效模式、但尚未開放的製程改為開放使用。');
         rsRenderProcessEnableList(); loadProcessList();
     }, 'json');
 };
@@ -1936,6 +1949,14 @@ window.rsAddLinkTarget = function(){
     }, 'json');
 };
 $('#rsLinkPairSel').on('change', rsLoadLinkSources);
+window.rsBackfillLinks = function(){
+    if (!confirm('從已匯入的整組樣板(項目異常工作表)回填「失效模式→失效模式潛在後果」「失效模式→失效潛在原因」的對應清單？\n（已存在的對應不會重複新增）')) return;
+    $.post(API, {action:'field_link_backfill'}, function(res){
+        if (!res.success){ alert(res.message||'回填失敗'); return; }
+        alert('回填處理完成（共處理 '+res.processed+' 筆組合，已存在的不重複新增）。');
+        rsLoadLinkSources();
+    }, 'json');
+};
 
 $('#btnRefSettings').on('click', function(){
     RS_PROC_ID = 0; RS_ITEM_OPT_ID = 0; RS_FUNC_OPT_ID = 0;
