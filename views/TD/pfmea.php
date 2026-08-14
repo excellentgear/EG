@@ -348,6 +348,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('templateMask')">關閉</button></div>
 </div></div>
 
+<!-- 建議措施樣板挑選（可複選，套用時自動加編號，2026-08-14使用者要求） -->
+<div class="pf-mask" id="actionPickerMask" style="z-index:1200;"><div class="pf-modal">
+    <div class="m-head"><span>選擇建議措施樣板（可複選）</span><span class="m-close" onclick="closeMask('actionPickerMask')">✕</span></div>
+    <div class="m-body">
+        <div id="actionPickerList" style="max-height:320px;overflow-y:auto;"></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('actionPickerMask')">取消</button>
+        <button class="b-ok" onclick="applyActionPicker()">套用（附加編號）</button>
+    </div>
+</div></div>
+
 <!-- 評級對照表說明（嚴重度/發生率/偵測度/R.P.N值 四分頁，內容比照 3-TD-01-02-潛在失效模式及效應分析.xlsm） -->
 <div class="pf-mask" id="ratingInfoMask" style="z-index:1200;"><div class="pf-modal xwide">
     <div class="m-head"><span>評級對照表說明</span><span class="m-close" onclick="closeMask('ratingInfoMask')">✕</span></div>
@@ -495,7 +507,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <div class="pf-proc-box"><input type="text" id="rsReqNew" placeholder="要求文字（此處只新增通用值；料號專屬要求填分析表時自動建立，僅能在此刪除）"><button type="button" class="pf-row-btn" onclick="rsAddReq()">新增</button></div>
         </div>
 
-        <div class="pf-sec-title" style="margin-top:16px;">控制預防／控制偵測（全域通用，不分製程）</div>
+        <div class="pf-sec-title" style="margin-top:16px;">控制預防／控制偵測／建議措施（全域通用，不分製程）</div>
         <div style="display:flex;gap:16px;">
             <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">控制預防</b>
                 <div class="rs-list" id="rsPrevList"></div>
@@ -503,6 +515,9 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">控制偵測</b>
                 <div class="rs-list" id="rsDetList"></div>
                 <div class="pf-proc-box"><input type="text" id="rsDetNew" placeholder="新增控制偵測"><button type="button" class="pf-row-btn" onclick="rsAddControl('detection')">新增</button></div></div>
+            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">建議措施（樣板句庫，卡片內可多選組成整段建議措施）</b>
+                <div class="rs-list" id="rsActionList"></div>
+                <div class="pf-proc-box"><input type="text" id="rsActionNew" placeholder="新增建議措施句子"><button type="button" class="pf-row-btn" onclick="rsAddControl('action')">新增</button></div></div>
         </div>
         </div>
 
@@ -542,7 +557,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
         </div>
 
         <div class="pf-rt-pane" data-rstab="link">
-        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">欄位個別設定對應：填了來源欄位的值就建議帶出目標欄位的值（如潛在失效模式→失效模式潛在後果/分類/失效潛在原因、料號→規格描述）。
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">欄位個別設定對應：填了來源欄位的值就建議帶出目標欄位的值（如潛在失效模式→失效模式潛在後果/分類/失效潛在原因、料號＋製程代號→規格描述）。
             <span class="pf-op" onclick="rsBackfillLinks()" style="color:#b5762a;text-decoration:underline;cursor:pointer;"><i class="fa fa-download"></i> 從整組樣板回填</span>
         </div>
         <label style="font-size:13px;color:#5b3a1e;">對應組合</label>
@@ -550,19 +565,23 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <option value="failure_mode|failure_effect">潛在失效模式 → 失效模式潛在後果</option>
             <option value="failure_mode|classification">潛在失效模式 → 分類</option>
             <option value="failure_mode|failure_cause">潛在失效模式 → 失效潛在原因</option>
-            <option value="part_no|spec_desc">料號 → 規格描述</option>
+            <option value="part_process|spec_desc">料號＋製程代號 → 規格描述</option>
         </select>
         <div style="display:flex;gap:16px;margin-top:10px;">
             <div style="flex:1;">
                 <label style="font-size:12px;color:#5b3a1e;">來源值（<span id="rsLinkSourceLabel">潛在失效模式</span>）</label>
-                <div class="rs-list" id="rsLinkSourceList" style="max-height:200px;"></div>
                 <div class="pf-proc-box" id="rsLinkSourceNewTextBox">
                     <input type="text" id="rsLinkSourceNewText" placeholder="輸入新的潛在失效模式文字以新增來源">
                     <button type="button" class="pf-row-btn" onclick="rsSelectNewFailureModeSource()">選定</button>
                 </div>
-                <div class="pf-proc-box" id="rsLinkSourceNewPartBox" style="display:none;">
-                    <input type="text" id="rsLinkSourceNewPart" placeholder="輸入部分料號搜尋">
+                <div id="rsLinkSourceNewPartProcessBox" style="display:none;">
+                    <div class="pf-proc-box"><input type="text" id="rsLinkSourceNewPart" placeholder="輸入部分料號搜尋"></div>
+                    <div class="pf-proc-box" style="margin-top:4px;">
+                        <select id="rsLinkSourceNewProc" style="flex:1;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;" data-eg-filter="輸入製程代號或名稱篩選…"></select>
+                        <button type="button" class="pf-row-btn" onclick="rsSelectNewPartProcessSource()">選定</button>
+                    </div>
                 </div>
+                <div class="rs-list" id="rsLinkSourceList" style="max-height:150px;margin-top:6px;"></div>
             </div>
             <div style="flex:1;">
                 <label style="font-size:12px;color:#5b3a1e;">對應的目標值（<span id="rsLinkTargetLabel">失效模式潛在後果</span>）</label>
@@ -602,7 +621,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>項目→功能→要求／潛在失效模式 階層式連動</b>：填完「項目」離開該欄位，會自動帶出這個項目底下的「功能」下拉選項；填完「功能」離開該欄位，會自動帶出這個功能底下的「要求」下拉（優先顯示綁定的料號專屬要求，沒有才顯示該功能通用要求）與更精確的「潛在失效模式」下拉（優先套用這個功能專屬的清單，還沒累積過資料才逐層退回項目層級、製程層級的通用清單）。四層清單都可以直接手動輸入新值，離開欄位或存檔時會自動加進清單供下次選用，僅管理員能刪除。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期自動帶入），分析項目仍需逐份手動填寫。</li>
             <li><b>製程代號</b>：改可從全站製程主檔同步帶入（含大項分類），輸入時同時模糊搜尋代號/名稱/大項分類（多關鍵字皆需命中），顯示清單供點選。</li>
-            <li><b>參考資料設定</b>：工具列同名按鈕（僅管理員可見），分三個頁籤：①<b>製程與階層</b>——「從全站製程主檔同步」拉入公司所有製程（含大項分類），大項分類可一鍵批次開放/取消其底下所有製程（仍可個別覆蓋），只有開放的製程會出現在分析表下拉；並可逐層鑽取設定該製程底下的項目、項目底下的功能，以及目前鑽取深度對應的潛在失效模式／要求清單（鑽到功能就是功能專屬、只選到項目就是項目通用、只選製程就是製程通用），還有全域共用的控制預防／控制偵測選項。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>欄位個別設定對應</b>——瀏覽/新增/刪除「潛在失效模式→失效模式潛在後果/分類/失效潛在原因」「料號→規格描述」的對應清單。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
+            <li><b>參考資料設定</b>：工具列同名按鈕（僅管理員可見），分三個頁籤：①<b>製程與階層</b>——「從全站製程主檔同步」拉入公司所有製程（含大項分類），大項分類可一鍵批次開放/取消其底下所有製程（仍可個別覆蓋），只有開放的製程會出現在分析表下拉；並可逐層鑽取設定該製程底下的項目、項目底下的功能，以及目前鑽取深度對應的潛在失效模式／要求清單（鑽到功能就是功能專屬、只選到項目就是項目通用、只選製程就是製程通用），還有全域共用的控制預防／控制偵測選項。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>欄位個別設定對應</b>——瀏覽/新增/刪除「潛在失效模式→失效模式潛在後果/分類/失效潛在原因」「料號＋製程代號→規格描述」的對應清單。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
             <li><b>檢視（唯讀）</b>：只有檢閱權限、無登錄權限的使用者，清單「操作」欄看到的是眼睛圖示「檢視」而非鉛筆「編輯」，點開版面跟列印版完全一樣（不會誤觸修改），並提供「評級對照表說明」「開圖」兩個按鈕方便對照查閱，不會觸發實際列印動作。</li>
         </ul>
         <h4>其他行為／常見疑問</h4>
@@ -760,7 +779,9 @@ function itemCardHtml(it, idx, expanded){
         + '</div>'
         + '<div class="pf-card-grp-title">建議措施</div>'
         + '<div class="pf-card-grid">'
-        + fld('recommended_actions','建議措施') + fld('target_date','目標完成日','date')
+        + '<div><label>建議措施<span class="pf-op" onclick="openActionPicker(this)" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"'+dis+'><i class="fa fa-list"></i> 選樣板（可複選）</span></label>'
+        + '<textarea data-f="recommended_actions" class="f-action">'+esc(it.recommended_actions!=null?it.recommended_actions:'')+'</textarea></div>'
+        + fld('target_date','目標完成日','date')
         + '</div>'
         + '<div class="pf-card-grp-title">措施結果</div>'
         + '<div class="pf-card-grid">'
@@ -828,6 +849,8 @@ window.toggleCard = function(hdEl){
     }
     $card.toggleClass('collapsed', willCollapse);
     $card.find('.toggle-ic').attr('class', 'fa fa-chevron-'+(willCollapse?'right':'down')+' toggle-ic');
+    // 展開後欄位才有實際寬度可量測，順便檢查基本資料欄位文字是否過長要縮小字級
+    if (!willCollapse) $card.find('.pf-card-grid input[list]').each(function(){ autoShrinkFit($(this)); });
 };
 window.pfAddRow = function(){
     // 新增一列失效模式分析：目標完成日/生效日期預設帶入業務日期，減少逐列手填（2026-08-13使用者要求）
@@ -943,6 +966,21 @@ function collectItems(){
     return out;
 }
 
+/* 基本資料欄位文字太長時自動縮小字級（2026-08-14使用者要求）：這些欄位是<input list=datalist>
+   實作(挑選/自行輸入二選一)，datalist只能綁在單行input上、瀏覽器不支援真正的多行自動換行，
+   退而求其次做「內容溢出時自動縮小字級直到放得下(最小9px)」，欄位變短/清空時字級自動還原。 */
+function autoShrinkFit($el){
+    var el = $el && $el[0];
+    if (!el || !el.offsetParent) return; // 欄位不可見(如卡片收合中)時無法量測寬度，略過
+    $el.css('font-size', '');
+    var min = 9, size = 12;
+    while (el.scrollWidth > el.clientWidth + 1 && size > min) {
+        size--;
+        $el.css('font-size', size + 'px');
+    }
+}
+$(document).on('input', '#itemBody .pf-card-grid input[list]', function(){ autoShrinkFit($(this)); });
+
 /* ---------- 製程代號連動下拉／整組樣板套用（2026-08-13 使用者要求）----------
  * 製程代號、控制預防、控制偵測都用 <input list=datalist> 實作：既能從清單挑選，也能直接手動輸入
  * 新值（清單本身可填表人就能新增，僅管理員能刪除，設定入口見下方 loadRefLists 載入的清單資料）。
@@ -1026,8 +1064,8 @@ function refreshFailureModeForCard($card){
 }
 /* ---------- 欄位個別設定對應（2026-08-14使用者要求：基本資料內欄位可個別設定對應到其他欄位）----------
  * 通用機制：任一欄位值可設定對應到另一欄位的建議清單，如潛在失效模式->失效模式潛在後果/分類/
- * 失效潛在原因、料號->規格描述。離開來源欄位時查詢並帶出建議清單，仍可直接手動輸入新值
- * （存檔/離開目標欄位時自動註冊，見registerNewRefValues與#fSpecDesc blur）。 */
+ * 失效潛在原因、料號+製程代號(複合鍵)->規格描述。離開來源欄位時查詢並帶出建議清單，仍可直接
+ * 手動輸入新值（存檔時自動註冊，見registerNewRefValues）。 */
 function loadFieldLink($dl, sourceField, sourceValue, targetField){
     if (!sourceValue){ $dl.each(function(){ this.innerHTML=''; }); return; }
     $.getJSON(API, {action:'field_link_list', source_field:sourceField, source_value:sourceValue, target_field:targetField}, function(res){
@@ -1076,6 +1114,7 @@ $(document).on('change', '#itemBody .f-proccode', function(){
         loadFailureModesForCard($card, PROCESS_ID_BY_CODE[code].id, 0, 0);
         loadItemOptionsForCard($card, PROCESS_ID_BY_CODE[code].id);
         loadRequirementOptionsForCard($card, 0); // 製程層級要求(如製作表單.xlsm匯入的舊資料)，項目/功能還沒填也能先帶出
+        loadSpecDescSuggestion(code);
         return;
     }
     if (!CAN_EDIT) return;
@@ -1083,9 +1122,16 @@ $(document).on('change', '#itemBody .f-proccode', function(){
     if (!name){ $input.val(''); return; }
     $.post(API, {action:'ref_process_add', process_code:code, process_name:name}, function(res){
         if (!res.success){ alert(res.message||'新增製程失敗'); $input.val(''); return; }
-        loadProcessList(function(){ loadFailureModesForCard($card, res.id, 0, 0); loadItemOptionsForCard($card, res.id); loadRequirementOptionsForCard($card, 0); });
+        loadProcessList(function(){ loadFailureModesForCard($card, res.id, 0, 0); loadItemOptionsForCard($card, res.id); loadRequirementOptionsForCard($card, 0); loadSpecDescSuggestion(code); });
     }, 'json');
 });
+/* 規格描述建議：依「文件綁定的料號」+「這張卡片的製程代號」複合鍵查詢(2026-08-14使用者更正，
+   不能只依料號，要多一層製程代號) */
+function loadSpecDescSuggestion(processCode){
+    var partNo = $('#fPartNo').val().trim();
+    if (!partNo || !processCode) return;
+    loadFieldLink($('#dl_specDesc'), 'part_process', partNo + PART_PROCESS_SEP + processCode, 'spec_desc');
+}
 
 /* ---------- 製程代號模糊搜尋（2026-08-14使用者要求）----------
  * 輸入時同時比對製程代號/名稱/大項分類(多關鍵字空白分隔、每個都要命中)，顯示清單供點選，
@@ -1120,6 +1166,54 @@ $(document).on('mousedown', '#procSearchDD .proc-search-item', function(e){
     if (!PROC_SEARCH_TARGET) return;
     PROC_SEARCH_TARGET.val($(this).attr('data-code')).trigger('change');
     $('#procSearchDD').hide();
+});
+
+/* ---------- 建議措施樣板挑選（可複選，自動加編號；2026-08-14使用者要求）----------
+ * 樣板句庫沿用控制選項同一張表(option_type='action')，在參考資料設定畫面維護；套用時依目前欄位
+ * 內容已有的最大編號接續往下編，手動輸入時Enter偵測目前行是否為「N.」格式，是的話自動接下一號。 */
+var ACTION_PICKER_TARGET = null;
+window.openActionPicker = function(el){
+    if (!CAN_EDIT) return;
+    ACTION_PICKER_TARGET = $(el).closest('.pf-card').find('[data-f="recommended_actions"]');
+    var opts = (CONTROL_OPTIONS.action || []);
+    var html = opts.map(function(o){
+        return '<label class="pf-chk" style="display:block;margin-bottom:6px;"><input type="checkbox" value="'+esc(o.option_text)+'"> '+esc(o.option_text)+'</label>';
+    }).join('') || '<div class="rs-empty">尚無資料，請先到工具列「參考資料設定→製程與階層」頁籤新增建議措施樣板</div>';
+    $('#actionPickerList').html(html);
+    openMask('actionPickerMask');
+};
+function actionNextNumber(text){
+    var maxNum = 0;
+    (text||'').split('\n').forEach(function(l){
+        var m = l.match(/^(\d+)\./);
+        if (m) maxNum = Math.max(maxNum, parseInt(m[1],10));
+    });
+    return maxNum + 1;
+}
+window.applyActionPicker = function(){
+    var checked = $('#actionPickerList input:checked').map(function(){ return $(this).val(); }).get();
+    closeMask('actionPickerMask');
+    if (!checked.length || !ACTION_PICKER_TARGET) return;
+    var cur = ACTION_PICKER_TARGET.val();
+    var n = actionNextNumber(cur);
+    var newLines = checked.map(function(t, i){ return (n+i)+'.'+t; });
+    var combined = cur.trim() ? cur.replace(/\n+$/, '') + '\n' + newLines.join('\n') : newLines.join('\n');
+    ACTION_PICKER_TARGET.val(combined).trigger('input');
+};
+// 手動輸入時Enter換行自動接續編號：偵測目前這行是否為「N.」開頭，是的話換行後自動補「N+1.」
+$(document).on('keydown', '#itemBody .f-action', function(e){
+    if (e.key !== 'Enter') return;
+    var el = this, val = el.value, pos = el.selectionStart;
+    var currentLineStart = val.substring(0, pos).lastIndexOf('\n') + 1;
+    var currentLine = val.substring(currentLineStart, pos);
+    var m = currentLine.match(/^(\d+)\./);
+    if (!m) return;
+    e.preventDefault();
+    var insert = '\n' + (parseInt(m[1],10) + 1) + '.';
+    el.value = val.substring(0, pos) + insert + val.substring(pos);
+    var newPos = pos + insert.length;
+    el.setSelectionRange(newPos, newPos);
+    $(el).trigger('input');
 });
 
 window.openTemplatePicker = function(btn){
@@ -1215,10 +1309,11 @@ function onPartBound(partDId, partText, custName){
         $('#fOrderProcPanel').hide();
     }
     if (!CUR_ID) loadBizDateQuick(partDId, partText, custName || '');
-    // 規格描述欄位個別設定對應：依綁定的「料號」而非產品名稱查建議清單(2026-08-14使用者要求改用料號)
-    if (partText) loadFieldLink($('#dl_specDesc'), 'part_no', partText, 'spec_desc');
-    // 料號重新綁定時，已解析出功能層級的卡片要重新查一次要求清單(要求依綁定的料號而不同)
+    // 料號重新綁定時，已經填了製程代號的卡片要重新查一次規格描述建議(依料號+製程複合鍵，2026-08-14使用者更正)
+    // 跟要求清單(要求依綁定的料號而不同)
     $('#itemBody .pf-card').each(function(){
+        var code = $(this).find('.f-proccode').val().trim();
+        if (code) loadSpecDescSuggestion(code);
         var funcOptId = parseInt($(this).attr('data-func-opt-id'),10) || 0;
         if (funcOptId) loadRequirementOptionsForCard($(this), funcOptId);
     });
@@ -1344,10 +1439,18 @@ function registerNewRefValues(){
             }
         }
     });
-    // 料號->規格描述（2026-08-14使用者要求改依料號而非產品名稱，同一產品名稱下不同料號規格常常不同）
+    // 料號＋製程代號->規格描述（2026-08-14使用者更正：要多一層製程代號，不能只依料號/產品名稱）
+    // 一份文件可能有多張卡片用不同製程，逐一為文件目前用到的每個製程代號都登記一次複合鍵
     var pnNo = $('#fPartNo').val().trim(), sd = $('#fSpecDesc').val().trim();
-    var knownSd = $('#dl_specDesc option').map(function(){ return this.value; }).get();
-    if (pnNo && sd && knownSd.indexOf(sd) < 0) $.post(API, {action:'field_link_add', source_field:'part_no', source_value:pnNo, target_field:'spec_desc', target_value:sd});
+    if (pnNo && sd) {
+        var seenCodes = {};
+        $('#itemBody .pf-card').each(function(){
+            var code = $(this).find('.f-proccode').val().trim();
+            if (!code || seenCodes[code]) return;
+            seenCodes[code] = true;
+            $.post(API, {action:'field_link_add', source_field:'part_process', source_value:pnNo+PART_PROCESS_SEP+code, target_field:'spec_desc', target_value:sd});
+        });
+    }
 }
 /* 編輯既有文件時，若某列的分析內容(不含目標完成日/生效日期本身)有異動，詢問是否要一併把該列的
    目標完成日/生效日期更新為業務日期(2026-08-13使用者要求) */
@@ -1726,12 +1829,14 @@ window.rsAddReq = function(){
 function rsLoadControlLists(){
     $.getJSON(API, {action:'ref_control_options'}, function(res){
         if (!res.success) return;
+        CONTROL_OPTIONS = res.options || {prevention:[], detection:[], action:[]};
         $('#rsPrevList').html((res.options.prevention||[]).map(function(o){ return rsRow('prevention', o.id, o.option_text, -1); }).join('') || '<div class="rs-empty">尚無資料</div>');
         $('#rsDetList').html((res.options.detection||[]).map(function(o){ return rsRow('detection', o.id, o.option_text, -1); }).join('') || '<div class="rs-empty">尚無資料</div>');
+        $('#rsActionList').html((res.options.action||[]).map(function(o){ return rsRow('action', o.id, o.option_text, -1); }).join('') || '<div class="rs-empty">尚無資料</div>');
     });
 }
 window.rsAddControl = function(type){
-    var $input = type==='prevention' ? $('#rsPrevNew') : $('#rsDetNew');
+    var $input = type==='prevention' ? $('#rsPrevNew') : (type==='detection' ? $('#rsDetNew') : $('#rsActionNew'));
     var text = $input.val().trim();
     if (!text) return;
     $.post(API, {action:'ref_control_option_add', option_type:type, option_text:text}, function(res){
@@ -1742,7 +1847,7 @@ window.rsAddControl = function(type){
 function rsDeleteAction(scope){
     return {process:'ref_process_delete', item:'ref_item_option_delete', func:'ref_function_option_delete',
         fm:'ref_failure_mode_delete', req:'ref_requirement_option_delete',
-        prevention:'ref_control_option_delete', detection:'ref_control_option_delete', link:'field_link_delete'}[scope];
+        prevention:'ref_control_option_delete', detection:'ref_control_option_delete', action:'ref_control_option_delete', link:'field_link_delete'}[scope];
 }
 function rsReloadForScope(scope){
     if (scope==='process') { rsLoadProcessList(); loadProcessList(); }
@@ -1918,22 +2023,37 @@ function rsMarkLinkSourceActive(v){
     $('#rsLinkSourceList .rs-row').removeClass('active');
     $('#rsLinkSourceList .rs-row').filter(function(){ return $(this).attr('data-src')===v; }).addClass('active');
 }
+/* 料號＋製程代號 → 規格描述：來源是複合鍵(partNo+'｜'+processCode)存在同一個source_value欄位裡，
+   沿用field_link通用機制不必另建表；填表時卡片的製程代號一變更、且文件已綁定料號，就用這個複合鍵
+   查建議規格描述（2026-08-14使用者更正：規格描述要依「料號+當下這張卡片的製程」才對，不是只依料號）。 */
+var PART_PROCESS_SEP = '｜';
+function rsPartProcessLabel(v){
+    var parts = v.split(PART_PROCESS_SEP);
+    var procName = (PROCESS_ID_BY_CODE[parts[1]] || {}).process_name || '';
+    return '料號 '+parts[0]+'　製程 '+(parts[1]||'')+(procName?'('+procName+')':'');
+}
 function rsLoadLinkSources(){
     var pair = rsLinkPair();
     $('#rsLinkSourceLabel').text($('#rsLinkPairSel option:selected').text().split(' → ')[0]);
     $('#rsLinkTargetLabel').text($('#rsLinkPairSel option:selected').text().split(' → ')[1]);
     RS_LINK_SOURCE = ''; $('#rsLinkTargetList').html(''); $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', true);
     $('#rsLinkSourceNewText').val(''); $('#rsLinkSourceNewPart').val('');
-    var isPart = pair[0] === 'part_no';
-    $('#rsLinkSourceNewTextBox').toggle(!isPart);
-    $('#rsLinkSourceNewPartBox').toggle(isPart);
+    var isPartProcess = pair[0] === 'part_process';
+    $('#rsLinkSourceNewTextBox').toggle(!isPartProcess);
+    $('#rsLinkSourceNewPartProcessBox').toggle(isPartProcess);
+    if (isPartProcess) {
+        $('#rsLinkSourceNewProc').html((PROCESS_LIST||[]).map(function(p){ return '<option value="'+esc(p.process_code)+'">'+esc(p.process_code)+' '+esc(p.process_name)+'</option>'; }).join(''));
+    }
     // 潛在失效模式：改用系統全部已知的失效模式(不分製程)，不再只看「已經設定過對應值」的來源，
     // 否則已建立但還沒設定過後果/原因的失效模式會找不到、無從新增（2026-08-14使用者要求）
     var action = pair[0] === 'failure_mode' ? 'field_link_all_failure_modes' : 'field_link_distinct_sources';
     $.getJSON(API, {action:action, source_field:pair[0], target_field:pair[1]}, function(res){
         if (!res.success) return;
-        var html = (res.rows||[]).map(function(v){ return '<div class="rs-row" data-src="'+esc(v)+'"><span>'+esc(v)+'</span></div>'; }).join('');
-        $('#rsLinkSourceList').html(html || '<div class="rs-empty">尚無資料，可用下方欄位新增</div>');
+        var html = (res.rows||[]).map(function(v){
+            var label = isPartProcess ? rsPartProcessLabel(v) : v;
+            return '<div class="rs-row" data-src="'+esc(v)+'"><span>'+esc(label)+'</span></div>';
+        }).join('');
+        $('#rsLinkSourceList').html(html || '<div class="rs-empty">尚無資料，可用上方欄位新增</div>');
     });
 }
 window.rsSelectNewFailureModeSource = function(){
@@ -1944,17 +2064,16 @@ window.rsSelectNewFailureModeSource = function(){
     $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', false);
     rsLoadLinkTargets();
 };
-EGPartPicker.attach(document.getElementById('rsLinkSourceNewPart'), {
-    apiUrl: PART_API,
-    onSelect: function(row){
-        var v = row.part_no || '';
-        if (!v) return;
-        RS_LINK_SOURCE = v;
-        rsMarkLinkSourceActive(v);
-        $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', false);
-        rsLoadLinkTargets();
-    }
-});
+window.rsSelectNewPartProcessSource = function(){
+    var part = $('#rsLinkSourceNewPart').val().trim();
+    var proc = $('#rsLinkSourceNewProc').val();
+    if (!part || !proc) { alert('請輸入料號並選擇製程代號'); return; }
+    RS_LINK_SOURCE = part + PART_PROCESS_SEP + proc;
+    rsMarkLinkSourceActive(RS_LINK_SOURCE);
+    $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', false);
+    rsLoadLinkTargets();
+};
+EGPartPicker.attach(document.getElementById('rsLinkSourceNewPart'), { apiUrl: PART_API, onSelect: function(){} });
 function rsLoadLinkTargets(){
     var pair = rsLinkPair();
     if (!RS_LINK_SOURCE) return;
