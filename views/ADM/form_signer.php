@@ -72,9 +72,12 @@ $perms = fsd_perms($db, $fsdUser);
         .fsd-modal .m-foot .b-cancel { background:#fff; color:#5b3a1e; border-color:#D8BE93; margin-right:6px; }
         #detailPanel, #fieldPanel { display:none; }
         .fsd-doc-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; max-height:75vh; overflow-y:auto; padding:4px; border:1px solid #E8D5B5; border-radius:8px; background:#faf6ee; }
+        /* .fsd-doc-page 用 aspect-ratio(來自頁面實際width_pt/height_pt,inline style設定)固定高寬比，
+           不讓瀏覽器依img載入時機自行reflow決定高度——這是列印會多出一堆空白頁/圖章位置跑掉的根因，
+           容器高寬比不確定時列印引擎可能need「縮小以符合單頁」或把圖片切成兩截，疊圖層的絕對定位%就對不準了。 */
         .fsd-doc-page { position:relative; border:1px solid #E8D5B5; border-radius:6px; overflow:hidden; background:#fff; }
         .fsd-doc-page.landscape { grid-column:1 / -1; }
-        .fsd-doc-page img { display:block; width:100%; height:auto; }
+        .fsd-doc-page img { display:block; width:100%; height:100%; }
         .fsd-box { position:absolute; }
         .fsd-box.stamp { display:flex; align-items:center; justify-content:center; overflow:visible; }
         .fsd-box.stamp svg, .fsd-box.stamp img { width:100%; height:100%; display:block; }
@@ -101,8 +104,13 @@ $perms = fsd_perms($db, $fsdUser);
         @media print {
             .page-help-btn, .fsd-toolbar, #listPanel, #fieldPanel, .fsd-action-panel, .top_nav, .left_col { display:none !important; }
             .right_col { margin:0 !important; }
-            .fsd-doc-grid { grid-template-columns:1fr; max-height:none; overflow:visible; border:none; }
-            .fsd-doc-page { page-break-after:always; }
+            .fsd-doc-grid { grid-template-columns:1fr; max-height:none; overflow:visible; border:none; padding:0; gap:0; }
+            /* 每份頁面各自獨立分頁；page-break-after 只套在非最後一頁，否則最後一頁後面會多印一張空白頁 */
+            .fsd-doc-page { page-break-after:always; page-break-inside:avoid; border:none; border-radius:0; }
+            .fsd-doc-page:last-child { page-break-after:auto; }
+            /* 圖章列印尺寸全站統一91px(ai-rules/18第6條)，不可隨框選框大小縮小；框選框若比91px小也不裁切 */
+            .fsd-box.stamp svg, .fsd-box.stamp img { width:91px !important; height:91px !important; }
+            .fsd-box.stamp { overflow:visible; }
             @page { margin:10mm 8mm; }
         }
     </style>
@@ -537,7 +545,10 @@ function renderDocGrid(pages, fields){
     (CUR_RESPONSES||[]).forEach(function(r){ bySlot[r.slot_key] = r; });
     var lands = isLandscapeDoc(pages);
     var h = '';
-    pages.forEach(function(p){ h += '<div class="fsd-doc-page'+(lands?' landscape':'')+'" id="docpg_'+p.page_no+'" data-w="'+p.width_pt+'" data-h="'+p.height_pt+'"></div>'; });
+    pages.forEach(function(p){
+        h += '<div class="fsd-doc-page'+(lands?' landscape':'')+'" id="docpg_'+p.page_no+'" data-w="'+p.width_pt+'" data-h="'+p.height_pt+'"'
+           + ' style="aspect-ratio:'+p.width_pt+'/'+p.height_pt+';"></div>';
+    });
     $('#docGrid').html(h);
     var fileType = CUR_CASE.file_type || 'image';
     var fileUrl = API + '?action=case_file&id=' + CUR_CASE.id;
