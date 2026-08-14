@@ -550,12 +550,19 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <option value="failure_mode|failure_effect">潛在失效模式 → 失效模式潛在後果</option>
             <option value="failure_mode|classification">潛在失效模式 → 分類</option>
             <option value="failure_mode|failure_cause">潛在失效模式 → 失效潛在原因</option>
-            <option value="product_name|spec_desc">產品名稱 → 規格描述</option>
+            <option value="part_no|spec_desc">料號 → 規格描述</option>
         </select>
         <div style="display:flex;gap:16px;margin-top:10px;">
             <div style="flex:1;">
                 <label style="font-size:12px;color:#5b3a1e;">來源值（<span id="rsLinkSourceLabel">潛在失效模式</span>）</label>
-                <div class="rs-list" id="rsLinkSourceList" style="max-height:220px;"></div>
+                <div class="rs-list" id="rsLinkSourceList" style="max-height:200px;"></div>
+                <div class="pf-proc-box" id="rsLinkSourceNewTextBox">
+                    <input type="text" id="rsLinkSourceNewText" placeholder="輸入新的潛在失效模式文字以新增來源">
+                    <button type="button" class="pf-row-btn" onclick="rsSelectNewFailureModeSource()">選定</button>
+                </div>
+                <div class="pf-proc-box" id="rsLinkSourceNewPartBox" style="display:none;">
+                    <input type="text" id="rsLinkSourceNewPart" placeholder="輸入部分料號搜尋">
+                </div>
             </div>
             <div style="flex:1;">
                 <label style="font-size:12px;color:#5b3a1e;">對應的目標值（<span id="rsLinkTargetLabel">失效模式潛在後果</span>）</label>
@@ -1033,9 +1040,6 @@ $(document).on('blur', '#itemBody [data-f="failure_mode"]', function(){
     loadFieldLink($card.find('datalist.dl-classification'), 'failure_mode', v, 'classification');
     loadFieldLink($card.find('datalist.dl-failure_cause'), 'failure_mode', v, 'failure_cause');
 });
-$(document).on('blur', '#fProductName', function(){
-    loadFieldLink($('#dl_specDesc'), 'product_name', $(this).val().trim(), 'spec_desc');
-});
 function resolveItemOption($card, cb){
     var code = $card.find('.f-proccode').val().trim();
     var itemName = $card.find('[data-f="process_desc"]').val().trim();
@@ -1211,6 +1215,8 @@ function onPartBound(partDId, partText, custName){
         $('#fOrderProcPanel').hide();
     }
     if (!CUR_ID) loadBizDateQuick(partDId, partText, custName || '');
+    // 規格描述欄位個別設定對應：依綁定的「料號」而非產品名稱查建議清單(2026-08-14使用者要求改用料號)
+    if (partText) loadFieldLink($('#dl_specDesc'), 'part_no', partText, 'spec_desc');
     // 料號重新綁定時，已解析出功能層級的卡片要重新查一次要求清單(要求依綁定的料號而不同)
     $('#itemBody .pf-card').each(function(){
         var funcOptId = parseInt($(this).attr('data-func-opt-id'),10) || 0;
@@ -1253,7 +1259,6 @@ function openEdit(id){
         $('#fPartNo').val(res.doc.part_no||''); $('#fPartDId').val(res.doc.part_d_id||0);
         $('#fCustomerName').val(res.doc.customer_name||'');
         $('#fProductName').val(res.doc.product_name||''); $('#fSpecDesc').val(res.doc.spec_desc||'');
-        if (res.doc.product_name) loadFieldLink($('#dl_specDesc'), 'product_name', res.doc.product_name, 'spec_desc');
         $('#fBizDate').val((res.doc.biz_date||'').substring(0,10));
         $('input[name=fItemType][value='+(res.doc.item_type==='assembly'?'assembly':'part')+']').prop('checked', true);
         $('#fDeptChecks').html(deptChecksHtml((res.doc.related_depts||'').split(',').filter(Boolean)));
@@ -1266,7 +1271,7 @@ function openEdit(id){
             ITEM_ORIG[it.id] = JSON.stringify(FIELDS.filter(function(f){ return f!=='target_date' && f!=='action_date'; })
                 .map(function(f){ return it[f]==null ? '' : String(it[f]); }));
         });
-        onPartBound(res.doc.part_d_id||0, res.doc.part_no_text||'', res.doc.customer_name||'');
+        onPartBound(res.doc.part_d_id||0, res.doc.part_no||'', res.doc.customer_name||'');
         openMask('editMask');
     });
 }
@@ -1339,10 +1344,10 @@ function registerNewRefValues(){
             }
         }
     });
-    // 產品名稱->規格描述
-    var pn = $('#fProductName').val().trim(), sd = $('#fSpecDesc').val().trim();
+    // 料號->規格描述（2026-08-14使用者要求改依料號而非產品名稱，同一產品名稱下不同料號規格常常不同）
+    var pnNo = $('#fPartNo').val().trim(), sd = $('#fSpecDesc').val().trim();
     var knownSd = $('#dl_specDesc option').map(function(){ return this.value; }).get();
-    if (pn && sd && knownSd.indexOf(sd) < 0) $.post(API, {action:'field_link_add', source_field:'product_name', source_value:pn, target_field:'spec_desc', target_value:sd});
+    if (pnNo && sd && knownSd.indexOf(sd) < 0) $.post(API, {action:'field_link_add', source_field:'part_no', source_value:pnNo, target_field:'spec_desc', target_value:sd});
 }
 /* 編輯既有文件時，若某列的分析內容(不含目標完成日/生效日期本身)有異動，詢問是否要一併把該列的
    目標完成日/生效日期更新為業務日期(2026-08-13使用者要求) */
@@ -1909,17 +1914,47 @@ $('#rsTplProcSel').on('change', rsLoadTplList);
 /* ---------- 欄位個別設定對應 瀏覽/新增/刪除（2026-08-14使用者要求）---------- */
 var RS_LINK_SOURCE = '';
 function rsLinkPair(){ return ($('#rsLinkPairSel').val()||'').split('|'); }
+function rsMarkLinkSourceActive(v){
+    $('#rsLinkSourceList .rs-row').removeClass('active');
+    $('#rsLinkSourceList .rs-row').filter(function(){ return $(this).attr('data-src')===v; }).addClass('active');
+}
 function rsLoadLinkSources(){
     var pair = rsLinkPair();
     $('#rsLinkSourceLabel').text($('#rsLinkPairSel option:selected').text().split(' → ')[0]);
     $('#rsLinkTargetLabel').text($('#rsLinkPairSel option:selected').text().split(' → ')[1]);
     RS_LINK_SOURCE = ''; $('#rsLinkTargetList').html(''); $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', true);
-    $.getJSON(API, {action:'field_link_distinct_sources', source_field:pair[0], target_field:pair[1]}, function(res){
+    $('#rsLinkSourceNewText').val(''); $('#rsLinkSourceNewPart').val('');
+    var isPart = pair[0] === 'part_no';
+    $('#rsLinkSourceNewTextBox').toggle(!isPart);
+    $('#rsLinkSourceNewPartBox').toggle(isPart);
+    // 潛在失效模式：改用系統全部已知的失效模式(不分製程)，不再只看「已經設定過對應值」的來源，
+    // 否則已建立但還沒設定過後果/原因的失效模式會找不到、無從新增（2026-08-14使用者要求）
+    var action = pair[0] === 'failure_mode' ? 'field_link_all_failure_modes' : 'field_link_distinct_sources';
+    $.getJSON(API, {action:action, source_field:pair[0], target_field:pair[1]}, function(res){
         if (!res.success) return;
         var html = (res.rows||[]).map(function(v){ return '<div class="rs-row" data-src="'+esc(v)+'"><span>'+esc(v)+'</span></div>'; }).join('');
-        $('#rsLinkSourceList').html(html || '<div class="rs-empty">尚無資料</div>');
+        $('#rsLinkSourceList').html(html || '<div class="rs-empty">尚無資料，可用下方欄位新增</div>');
     });
 }
+window.rsSelectNewFailureModeSource = function(){
+    var v = $('#rsLinkSourceNewText').val().trim();
+    if (!v) return;
+    RS_LINK_SOURCE = v;
+    rsMarkLinkSourceActive(v);
+    $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', false);
+    rsLoadLinkTargets();
+};
+EGPartPicker.attach(document.getElementById('rsLinkSourceNewPart'), {
+    apiUrl: PART_API,
+    onSelect: function(row){
+        var v = row.part_no || '';
+        if (!v) return;
+        RS_LINK_SOURCE = v;
+        rsMarkLinkSourceActive(v);
+        $('#rsLinkTargetNew,#rsLinkTargetAddBtn').prop('disabled', false);
+        rsLoadLinkTargets();
+    }
+});
 function rsLoadLinkTargets(){
     var pair = rsLinkPair();
     if (!RS_LINK_SOURCE) return;
