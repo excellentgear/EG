@@ -364,6 +364,7 @@ $_tdevRoles     = [];  $_userTdevRoles   = [];
 $_pfmeaRoles    = [];  $_userPfmeaRoles  = [];
 $_hrfRoles      = [];  $_userHrfRoles    = [];
 $_fsdRoles      = [];  $_userFsdRoles    = [];
+$_eqmRoles      = [];  $_userEqmRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -406,6 +407,7 @@ try {
     $st->execute(['pfmea']); $_pfmeaRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['hr_form']); $_hrfRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['form_signer']); $_fsdRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['equip_machine']); $_eqmRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -557,6 +559,10 @@ try {
     $st->execute(['form_signer']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userFsdRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['equip_machine']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userEqmRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -785,6 +791,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'tidc-role-section'      => '型態識別文件管制表',
                                         'tdev-role-section'      => '產品開發評估表',
                                         'pfmea-role-section'     => 'PFMEA',
+                                        'eqm-role-section'       => '機台設備一覽表',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -1247,6 +1254,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('vaud', 'vendor_audit', '供應商稽核管理', 'fa-clipboard', '#b06f27',
                         '為每位使用者指派「供應商稽核管理」頁的操作角色（KPI #6 廠商稽核按時執行率的來源頁）。角色功能：<strong>稽核檢閱</strong>＝檢視廠商清單/稽核歷史/半年統計與匯出；<strong>稽核登錄</strong>＝檢閱＋登錄各廠商稽核完成紀錄；<strong>稽核管理員</strong>＝登錄＋設定週期/納管/基準到期日、刪除誤登紀錄。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         $_vaudRoles, $_userVaudRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('eqm', 'equip_machine', '機台設備一覽表', 'fa-cogs', '#b06f27',
+                        '為每位使用者指派「機台設備一覽表」頁的操作角色（主檔與 KPI「機台資產設定」共用同一張 machine_list）。角色功能：<strong>設備唯讀</strong>＝檢視機台清單/保養人歷程/機器設備履歴表；<strong>設備登錄</strong>＝唯讀＋新增/編輯機台、指派保養人、登錄履歴表、送出年度整份清單；<strong>設備管理員</strong>＝登錄＋停用機台、校正/刪除歷史紀錄、AS文件綁定、送簽設定、核准/退回年度清單。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
+                        $_eqmRoles, $_userEqmRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('leave', 'leave', '請假系統', 'fa-calendar-minus-o', '#d99a4e',
                         '<strong>所有登入者都能申請請假、查看與撤回／銷假自己的單</strong>，不需要在這裡指派角色。此處只指派 <strong>人事（可看全部請假單）</strong>＝可檢視全公司請假單（不含代為簽核的權力）。<br>
