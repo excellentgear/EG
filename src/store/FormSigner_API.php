@@ -236,9 +236,11 @@ case 'case_get': {
         } else {
             $rec = eg_approval_latest($db, 'form_signer', $id, 'stage_' . $case['current_stage_seq']);
             if ($rec && $rec['status'] === 'pending') {
-                foreach ($curStage['signers'] as $sg) {
-                    $r = fsd_resolve_signer($db, $sg, (int)$case['applicant_id']);
-                    if ($r && (int)$r['id'] === $uid) { $canDecision = true; break; }
+                // 決策階段(決定型/線性)：只有「目前輪到的那一位」能決策，不是整關任何一位槽位成員都能決
+                $pendingSg = fsd_case_decision_next_pending_signer($db, $id, (int)$case['current_stage_seq'], $curStage);
+                if ($pendingSg) {
+                    $r = fsd_resolve_signer($db, $pendingSg, (int)$case['applicant_id']);
+                    if ($r && (int)$r['id'] === $uid) $canDecision = true;
                 }
             }
         }

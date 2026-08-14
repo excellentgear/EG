@@ -272,7 +272,67 @@ $draftDelR = fsd_case_delete_draft($db, $draftForDelete['id'], $SUBMITTER, false
 chk('草稿本人可直接刪除', $draftDelR['ok'] === true);
 chk('草稿刪除後查無此案件', fsd_case_get($db, $draftForDelete['id']) === null);
 
+echo "\n== 12. 決策階段線性多槽位(審核→核准鏈，2026-08-14使用者回報「兩個流程簽核卻只簽一處」bug回歸測試) ==\n";
+$tplId4 = fsd_template_create($db, '決策鏈測試模板', 'image', 'e2e4.png', 1, 'CLI測試');
+fsd_template_pages_save($db, $tplId4, [['page_no'=>1, 'width_pt'=>595, 'height_pt'=>842]]);
+fsd_stages_save($db, $tplId4, [
+    ['stage_type'=>'decision', 'name'=>'第1關', 'auto_sign'=>0, 'signers'=>[
+        ['mode'=>'user', 'user_id'=>$U_A, 'label'=>'審核(部門主管)'],
+        ['mode'=>'user', 'user_id'=>$U_B, 'label'=>'核准(最高決策者)'],
+    ]],
+]);
+$stages4 = fsd_stage_list($db, $tplId4);
+foreach ($stages4[0]['signers'] as $sg4) {
+    fsd_field_save($db, $tplId4, ['stage_signer_id'=>$sg4['id'], 'box_type'=>'stamp', 'page_no'=>1, 'x'=>0.1, 'y'=>0.1, 'w'=>$minFrac['min_w']+0.02, 'h'=>$minFrac['min_h']+0.02]);
+}
+fsd_template_schema_publish($db, $tplId4, 'CLI測試');
+
+echo "  -- 12a. 手動模式：第2位在第1位核准前不可決策，核准後才輪到 --\n";
+$caseId6 = createAndSubmitCase($db, $tplId4, $SUBMITTER, $SUBMITTER_NAME, '決策鏈手動測試', $minFrac);
+$case6 = fsd_case_get($db, $caseId6);
+chk('案件送出後在第1關(決策階段)', $case6['status'] === 'in_progress' && (int)$case6['current_stage_seq'] === 1);
+$respsBeforeB = fsd_case_responses($db, $caseId6);
+chk('第1位(審核)已建立待簽核approval_record', eg_approval_latest($db,'form_signer',$caseId6,'stage_1')['status'] === 'pending');
+$tryB = fsd_case_decision_respond($db, $caseId6, $U_B, $U_B_NAME, 'approved', '核准');
+chk('第2位在輪到自己之前不可決策', $tryB['ok'] === false);
+$decA = fsd_case_decision_respond($db, $caseId6, $U_A, $U_A_NAME, 'approved', '審核通過');
+chk('第1位(審核)核准成功', $decA['ok'] === true && $decA['status'] === 'in_progress');
+$case6 = fsd_case_get($db, $caseId6);
+chk('案件仍在同一關(等第2位處理)', $case6['status'] === 'in_progress' && (int)$case6['current_stage_seq'] === 1);
+$decB = fsd_case_decision_respond($db, $caseId6, $U_B, $U_B_NAME, 'approved', '核准通過');
+chk('第2位(核准)核准成功後整個案件完成', $decB['ok'] === true && $decB['status'] === 'approved');
+$responses6 = fsd_case_responses($db, $caseId6);
+chk('兩位都留有回應紀錄(不是只簽一處)', count(array_filter($responses6, fn($x)=>$x['decision']==='approved')) === 2);
+
+echo "  -- 12b. 手動模式：第1位駁回，第2位永遠不會被通知到 --\n";
+$caseId7 = createAndSubmitCase($db, $tplId4, $SUBMITTER, $SUBMITTER_NAME, '決策鏈駁回測試', $minFrac);
+$decAReject = fsd_case_decision_respond($db, $caseId7, $U_A, $U_A_NAME, 'rejected', '不通過');
+chk('第1位駁回後案件立即終止', $decAReject['ok'] === true && $decAReject['status'] === 'rejected');
+$case7 = fsd_case_get($db, $caseId7);
+chk('案件狀態=rejected', $case7['status'] === 'rejected');
+$responses7 = fsd_case_responses($db, $caseId7);
+chk('第2位完全沒有回應紀錄(從未輪到)', count($responses7) === 1);
+
+echo "  -- 12c. 自動簽核模式：兩位都要被自動簽過，不是只簽第一位就跳過 --\n";
+fsd_stages_save($db, $tplId4, [
+    ['id'=>$stages4[0]['id'], 'stage_type'=>'decision', 'name'=>'第1關', 'auto_sign'=>1, 'signers'=>[
+        ['id'=>$stages4[0]['signers'][0]['id'], 'mode'=>'user', 'user_id'=>$U_A, 'label'=>'審核(部門主管)'],
+        ['id'=>$stages4[0]['signers'][1]['id'], 'mode'=>'user', 'user_id'=>$U_B, 'label'=>'核准(最高決策者)'],
+    ]],
+]);
+fsd_template_schema_publish($db, $tplId4, 'CLI測試');
+$caseId8 = createAndSubmitCase($db, $tplId4, $SUBMITTER, $SUBMITTER_NAME, '決策鏈自動簽核測試', $minFrac);
+$case8 = fsd_case_get($db, $caseId8);
+chk('全自動簽核後案件直接完成', $case8['status'] === 'approved');
+$responses8 = fsd_case_responses($db, $caseId8);
+$autoApproved8 = array_filter($responses8, fn($x)=>$x['decision']==='approved' && !empty($x['is_auto']));
+chk('兩位都被自動簽核過(修正前的bug是只簽一處)', count($autoApproved8) === 2);
+$times8 = array_column($autoApproved8, 'responded_at');
+sort($times8);
+chk('兩筆自動簽核時間不同(依序遞增,不是同一秒疊在一起)', $times8[0] !== $times8[1]);
+
 echo "\n========================================\n";
 echo "測試template_id=$tplId(核准案$caseId/駁回案$caseId2), template_id3=$tplId3(全自動案$caseId3), 軟刪復原案$caseId4\n";
+echo "template_id4=$tplId4(決策鏈: 手動$caseId6/駁回$caseId7/自動$caseId8)\n";
 echo $fail === 0 ? "全部通過\n" : "$fail 項失敗\n";
 exit($fail === 0 ? 0 : 1);

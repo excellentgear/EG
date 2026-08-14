@@ -439,16 +439,19 @@ function fsd_notify(PDO $db, int $refId, array $toUids, string $title, string $c
 
 /* -------- 自動簽核(ai-rules/21 三條鐵則，比照 rvf_auto_sign，僅用於決策階段) -------- */
 
-function fsd_auto_sign_decision(PDO $db, int $caseId, int $stageSeq, string $level, array $signer, string $slotKey, string $submitterName, string $bizDate): void {
+/** 對決策階段單一槽位自動簽核；$cumulativeOffsetMin是從本階段開始算起累加的分鐘數(讓連續多槽位的自動簽核
+ *  時間依序遞增,不會全部疊在同一秒,呼叫端逐槽位累加後傳入)，回傳這次用掉的累加值供下一槽位接續使用。 */
+function fsd_auto_sign_decision(PDO $db, int $caseId, int $stageSeq, string $level, array $signer, string $slotKey, string $bizDate, int $cumulativeOffsetMin): int {
     $aid = eg_approval_submit($db, 'form_signer', $caseId, $level, (int)$signer['id'], $signer['user_cname']);
     eg_approval_decide($db, $aid, (int)$signer['id'], $signer['user_cname'], 'approved', '（系統自動簽核）');
-    $offsetMin = random_int(5, 30);
+    $cumulativeOffsetMin += random_int(5, 30);
     $db->prepare("UPDATE approval_record SET decided_at = LEAST(DATE_ADD(submitted_at, INTERVAL ? MINUTE), CONCAT(?, ' 23:59:59')) WHERE id=?")
-       ->execute([$offsetMin, $bizDate, $aid]);
+       ->execute([$cumulativeOffsetMin, $bizDate, $aid]);
     $rec = eg_approval_latest($db, 'form_signer', $caseId, $level);
     $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,reply_text,responded_at)
                   VALUES (?,?,?,?,?, 'approved', 1, '（系統自動簽核）', ?)")
        ->execute([$caseId, $stageSeq, $slotKey, (int)$signer['id'], $signer['user_cname'], $rec['decided_at'] ?? date('Y-m-d H:i:s')]);
+    return $cumulativeOffsetMin;
 }
 
 /** 意見階段全體槽位自動同意(auto_sign開啟時)，每人各自隨機錯開5~30分鐘(比照決策自動簽核的鐵則精神)。
@@ -473,28 +476,92 @@ function fsd_sanitize_responses_for_viewer(array $responses, bool $isAdminViewer
     return $responses;
 }
 
-/** 開啟指定階段(schema.stages 1-based索引)：解析槽位(含強制SoD)、建立placeholder/自動簽核/送出approval_record、發通知。 */
-function fsd_case_open_stage(PDO $db, array $case, array $schema, int $stageSeq): array {
-    $stages = $schema['stages'] ?? [];
-    $stage = null;
-    foreach ($stages as $s) if ((int)$s['seq'] === $stageSeq) { $stage = $s; break; }
+function fsd_case_find_stage(array $schema, int $stageSeq): ?array {
+    foreach ($schema['stages'] ?? [] as $s) if ((int)$s['seq'] === $stageSeq) return $s;
+    return null;
+}
+
+/** 決策階段(規格「決定型/線性」)找出下一個「還沒有回應紀錄」的槽位；已有紀錄(不論真決定或SoD略過)視為該槽位已處理過。 */
+function fsd_case_decision_next_pending_signer(PDO $db, int $caseId, int $stageSeq, array $stage): ?array {
+    $st = $db->prepare("SELECT slot_key FROM fsd_case_response WHERE case_id=? AND stage_seq=?");
+    $st->execute([$caseId, $stageSeq]);
+    $done = $st->fetchAll(PDO::FETCH_COLUMN);
+    foreach ($stage['signers'] as $sg) if (!in_array($sg['slot_key'], $done, true)) return $sg;
+    return null;
+}
+
+/** 決策階段線性推進：依序找下一個槽位，SoD/解析不到人自動略過並繼續往下一位；找到真人就送出approval_record+通知並停下等待；
+ *  全部槽位都處理完(含全部略過)則整個階段結束，推進到下一關(或案件完成)。 */
+function fsd_case_decision_advance(PDO $db, array $case, array $schema, int $stageSeq): array {
+    $stage = fsd_case_find_stage($schema, $stageSeq);
     if (!$stage) return ['ok'=>false, 'msg'=>'找不到此階段'];
     $submitterUid = (int)$case['applicant_id'];
-    $bizDate = (string)($case['business_date'] ?: date('Y-m-d'));
-
-    $activeSigners = []; // ['slot_key'=>, 'user'=>]
-    foreach ($stage['signers'] as $sg) {
+    while (true) {
+        $sg = fsd_case_decision_next_pending_signer($db, (int)$case['id'], $stageSeq, $stage);
+        if (!$sg) {
+            // 這一關(含所有槽位)都處理完了：真的推進到下一關或整個案件完成(current_stage_seq已由呼叫端設為本關)
+            return fsd_case_go_next_stage($db, $case, $schema);
+        }
         $r = fsd_resolve_signer_for_case($db, $sg, $submitterUid);
-        if ($r['skipped_sod']) {
+        if ($r['skipped_sod'] || !$r['user']) {
+            // SoD自動迴避，或解析不到人(部門無主管等，比照as_form_builder已知限制)：這一位跳過，繼續看下一位
             $db->prepare("INSERT IGNORE INTO fsd_case_response (case_id,stage_seq,slot_key,decision) VALUES (?,?,?, 'skipped_sod')")
                ->execute([$case['id'], $stageSeq, $sg['slot_key']]);
             continue;
         }
-        if (!$r['user']) continue; // 解析不到人(部門無主管等)，該槽位留空不擋流程，比照 as_form_builder 已知限制
-        $activeSigners[] = ['slot_key'=>$sg['slot_key'], 'user'=>$r['user']];
+        $level = 'stage_' . $stageSeq;
+        eg_approval_submit($db, 'form_signer', (int)$case['id'], $level, $submitterUid, $case['applicant_name']);
+        fsd_notify($db, (int)$case['id'], [(int)$r['user']['id']],
+            '「' . $stage['name'] . '」待您決策', $case['applicant_name'] . ' 送出的案件，「' . $stage['name'] . '」待您決策。',
+            $submitterUid, 'FSD_DECISION', 'sign');
+        return ['ok'=>true, 'status'=>'in_progress'];
     }
+}
+
+/** 決策階段整段自動簽核(auto_sign開啟時)：依序把每個槽位都自動核准過一輪(規格「線性」——不是只簽一位就跳過其他人)，
+ *  全部槽位都解析不到人時比照人工流程退回最高決策者/送出者本人兜底單一決策。 */
+function fsd_case_decision_auto_sign_all(PDO $db, array $case, array $stage, int $stageSeq, string $bizDate): void {
+    $submitterUid = (int)$case['applicant_id'];
+    $cumOffset = 0;
+    $anySigned = false;
+    foreach ($stage['signers'] as $sg) {
+        $r = fsd_resolve_signer_for_case($db, $sg, $submitterUid);
+        if ($r['skipped_sod'] || !$r['user']) {
+            $db->prepare("INSERT IGNORE INTO fsd_case_response (case_id,stage_seq,slot_key,decision) VALUES (?,?,?, 'skipped_sod')")
+               ->execute([$case['id'], $stageSeq, $sg['slot_key']]);
+            continue;
+        }
+        $cumOffset = fsd_auto_sign_decision($db, (int)$case['id'], $stageSeq, 'stage_'.$stageSeq, $r['user'], $sg['slot_key'], $bizDate, $cumOffset);
+        $anySigned = true;
+    }
+    if (!$anySigned) {
+        // 整關都解析不到人：退回全站最高決策者，再不行就讓送出者自己決(比照 review_form 邊界情況)
+        $top = eg_org_user($db, 'top_approver');
+        $fallback = ($top && (int)$top['id'] !== $submitterUid) ? ['id'=>(int)$top['id'],'user_cname'=>$top['user_cname']] : ['id'=>$submitterUid,'user_cname'=>$case['applicant_name']];
+        $slotKey = $stage['signers'][0]['slot_key'] ?? ('s'.$stageSeq.'_g1');
+        fsd_auto_sign_decision($db, (int)$case['id'], $stageSeq, 'stage_'.$stageSeq, $fallback, $slotKey, $bizDate, 0);
+    }
+}
+
+/** 開啟指定階段(schema.stages 1-based索引)：意見階段(並簽)一次通知全體槽位；決策階段(線性)依序開啟槽位，見上方函式。 */
+function fsd_case_open_stage(PDO $db, array $case, array $schema, int $stageSeq): array {
+    $stage = fsd_case_find_stage($schema, $stageSeq);
+    if (!$stage) return ['ok'=>false, 'msg'=>'找不到此階段'];
+    $submitterUid = (int)$case['applicant_id'];
+    $bizDate = (string)($case['business_date'] ?: date('Y-m-d'));
 
     if ($stage['stage_type'] === 'advisory') {
+        $activeSigners = []; // ['slot_key'=>, 'user'=>]
+        foreach ($stage['signers'] as $sg) {
+            $r = fsd_resolve_signer_for_case($db, $sg, $submitterUid);
+            if ($r['skipped_sod']) {
+                $db->prepare("INSERT IGNORE INTO fsd_case_response (case_id,stage_seq,slot_key,decision) VALUES (?,?,?, 'skipped_sod')")
+                   ->execute([$case['id'], $stageSeq, $sg['slot_key']]);
+                continue;
+            }
+            if (!$r['user']) continue; // 解析不到人(部門無主管等)，該槽位留空不擋流程，比照 as_form_builder 已知限制
+            $activeSigners[] = ['slot_key'=>$sg['slot_key'], 'user'=>$r['user']];
+        }
         if (!empty($stage['auto_sign'])) {
             foreach ($activeSigners as $as) fsd_auto_sign_advisory_slot($db, (int)$case['id'], $stageSeq, $as['slot_key'], $as['user'], $bizDate);
         } else {
@@ -509,26 +576,12 @@ function fsd_case_open_stage(PDO $db, array $case, array $schema, int $stageSeq)
         return fsd_case_advance_if_ready($db, (int)$case['id']);
     }
 
-    // 決策階段
-    $level = 'stage_' . $stageSeq;
-    if (!empty($stage['auto_sign']) && $activeSigners) {
-        fsd_auto_sign_decision($db, (int)$case['id'], $stageSeq, $level, $activeSigners[0]['user'], $activeSigners[0]['slot_key'], $case['applicant_name'], $bizDate);
-        return fsd_case_advance_if_ready($db, (int)$case['id']);
+    // 決策階段(決定型/線性)：多槽位是依序一關關來(審核→核准這種鏈)，不是誰先簽就算數的OR-gate
+    if (!empty($stage['auto_sign'])) {
+        fsd_case_decision_auto_sign_all($db, $case, $stage, $stageSeq, $bizDate);
+        return fsd_case_go_next_stage($db, $case, $schema);
     }
-    if (!$activeSigners) {
-        // 解析不到任何決策人：退回全站最高決策者，再不行就讓送出者自己決(比照 review_form 邊界情況)
-        $top = eg_org_user($db, 'top_approver');
-        if ($top && (int)$top['id'] !== $submitterUid) {
-            $activeSigners[] = ['slot_key'=>$stage['signers'][0]['slot_key'] ?? ('s'.$stageSeq.'_g1'), 'user'=>['id'=>(int)$top['id'],'user_cname'=>$top['user_cname']]];
-        } else {
-            $activeSigners[] = ['slot_key'=>$stage['signers'][0]['slot_key'] ?? ('s'.$stageSeq.'_g1'), 'user'=>['id'=>$submitterUid,'user_cname'=>$case['applicant_name']]];
-        }
-    }
-    eg_approval_submit($db, 'form_signer', (int)$case['id'], $level, $submitterUid, $case['applicant_name']);
-    fsd_notify($db, (int)$case['id'], array_column(array_column($activeSigners, 'user'), 'id'),
-        '「' . $stage['name'] . '」待您決策', $case['applicant_name'] . ' 送出的案件，「' . $stage['name'] . '」待您決策。',
-        $submitterUid, 'FSD_DECISION', 'sign');
-    return ['ok'=>true, 'status'=>'in_progress'];
+    return fsd_case_decision_advance($db, $case, $schema, $stageSeq);
 }
 
 /** 意見階段是否全體(未SoD略過的)槽位都已回應；決策階段一律視為未完成(要靠實際 decide 動作推進，不走本函式)。 */
@@ -766,6 +819,8 @@ function fsd_case_advisory_respond(PDO $db, int $caseId, int $uid, string $uname
 }
 
 /** 決策階段回應：approved/rejected，OR-gate 由 eg_approval_decide 內建競態鎖保證先搶先贏。 */
+/** 決策階段回應(規格「決定型/線性」)：多槽位是依序一關關來(如「審核」通過才輪到「核准」)，不是誰先簽就算數的OR-gate。
+ *  駁回一律立即終止整個案件(不管是鏈中第幾位駁回)；核准則往同一階段的下一個槽位推進，該階段全部槽位都過了才算此關結束。 */
 function fsd_case_decision_respond(PDO $db, int $caseId, int $uid, string $uname, string $decision, ?string $note = null): array {
     if (!in_array($decision, ['approved','rejected'], true)) return ['ok'=>false, 'msg'=>'決定值不正確'];
     $case = fsd_case_get($db, $caseId);
@@ -776,25 +831,24 @@ function fsd_case_decision_respond(PDO $db, int $caseId, int $uid, string $uname
     $rec = eg_approval_latest($db, 'form_signer', $caseId, $level);
     if (!$rec || $rec['status'] !== 'pending') return ['ok'=>false, 'msg'=>'目前沒有待您決策的項目'];
     $schema = fsd_case_schema($db, $case);
-    $stage = null;
-    foreach ($schema['stages'] ?? [] as $s) if ((int)$s['seq'] === $stageSeq) { $stage = $s; break; }
-    $slotKey = $stage['signers'][0]['slot_key'] ?? ('s'.$stageSeq.'_g1');
-    foreach ($stage['signers'] ?? [] as $sg) {
-        $r = fsd_resolve_signer($db, $sg, (int)$case['applicant_id']);
-        if ($r && (int)$r['id'] === $uid) { $slotKey = $sg['slot_key']; break; }
-    }
+    $stage = fsd_case_find_stage($schema, $stageSeq);
+    if (!$stage) return ['ok'=>false, 'msg'=>'找不到此階段'];
+    $sg = fsd_case_decision_next_pending_signer($db, $caseId, $stageSeq, $stage);
+    if (!$sg) return ['ok'=>false, 'msg'=>'目前沒有待您決策的項目'];
+    $resolved = fsd_resolve_signer($db, $sg, (int)$case['applicant_id']);
+    if (!$resolved || (int)$resolved['id'] !== $uid) return ['ok'=>false, 'msg'=>'您不是此案件目前這一位的決策人'];
     $r = eg_approval_decide($db, (int)$rec['id'], $uid, $uname, $decision, $note);
     if (!$r['success']) return ['ok'=>false, 'msg'=>$r['message']];
     $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,reply_text,responded_at)
                   VALUES (?,?,?,?,?,?,?,NOW())")
-       ->execute([$caseId, $stageSeq, $slotKey, $uid, $uname, $decision, $note]);
+       ->execute([$caseId, $stageSeq, $sg['slot_key'], $uid, $uname, $decision, $note]);
     if ($decision === 'rejected') {
         $db->prepare("UPDATE fsd_case SET status='rejected',updated_at=NOW() WHERE id=?")->execute([$caseId]);
         fsd_notify($db, $caseId, [(int)$case['applicant_id']], '您的案件已被退回',
             $uname . ' 退回了「' . ($case['title'] ?: '案件') . '」。原因：' . ($note ?: '(未填寫)'), $uid, 'FSD_RESULT', 'read');
         return ['ok'=>true, 'status'=>'rejected'];
     }
-    return fsd_case_advance_if_ready($db, $caseId);
+    return fsd_case_decision_advance($db, $case, $schema, $stageSeq);
 }
 
 /** 催辦(比照使用者確認的「逾期僅提醒不強制」)：對目前階段尚未回應的人重發一次通知，不強制略過/不自動推進。 */
@@ -812,12 +866,14 @@ function fsd_case_urge(PDO $db, int $caseId, int $byUid): array {
         $st->execute([$caseId, $stageSeq]);
         $uids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
     } else {
+        // 決策階段(決定型/線性)：只催辦目前輪到的那一位，不是整關所有槽位成員
         $level = 'stage_' . $stageSeq;
         $rec = eg_approval_latest($db, 'form_signer', $caseId, $level);
         $uids = [];
         if ($rec && $rec['status'] === 'pending') {
-            foreach ($stage['signers'] ?? [] as $sg) {
-                $r = fsd_resolve_signer($db, $sg, (int)$case['applicant_id']);
+            $pendingSg = fsd_case_decision_next_pending_signer($db, $caseId, $stageSeq, $stage);
+            if ($pendingSg) {
+                $r = fsd_resolve_signer($db, $pendingSg, (int)$case['applicant_id']);
                 if ($r) $uids[] = (int)$r['id'];
             }
         }
