@@ -411,22 +411,33 @@ function pfmea_field_link_delete(PDO $db, int $id): void {
 }
 
 /** 參考資料設定畫面用：某組(source_field,target_field)已經設定過的所有來源值清單，供瀏覽/鑽入
- * 查看該來源值對應的目標值（一般填表流程只查已知source_value，管理畫面要能瀏覽全部才找得到） */
+ * 查看該來源值對應的目標值（一般填表流程只查已知source_value，管理畫面要能瀏覽全部才找得到）。
+ * 附上preview(已設定的目標值預覽，逗號分隔)，讓清單不用點進去就能大概看到已經設定了什麼
+ * （2026-08-14使用者要求：料號+製程代號 右側要能直接看到對應的規格描述內容）。 */
 function pfmea_field_link_distinct_sources(PDO $db, string $sourceField, string $targetField): array {
-    $st = $db->prepare("SELECT DISTINCT source_value FROM pfmea_field_link WHERE source_field=? AND target_field=? AND is_active=1 ORDER BY source_value");
+    $st = $db->prepare("SELECT source_value AS value, GROUP_CONCAT(target_value ORDER BY sort_order, id SEPARATOR '、') AS preview
+                         FROM pfmea_field_link WHERE source_field=? AND target_field=? AND is_active=1
+                         GROUP BY source_value ORDER BY source_value");
     $st->execute([$sourceField, $targetField]);
-    return $st->fetchAll(PDO::FETCH_COLUMN);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
 /** 設定畫面「潛在失效模式」來源值候選清單：只看已經設定過對應值的來源會漏掉「已經在製程底下建立，
  * 但還沒設定過任何後果/原因對應」的失效模式，改成系統全部已知的潛在失效模式(不分製程)都能選來
- * 開始設定，不必先繞去別的地方新增一筆對應才看得到（2026-08-14使用者要求） */
-function pfmea_field_link_all_failure_modes(PDO $db): array {
+ * 開始設定，不必先繞去別的地方新增一筆對應才看得到（2026-08-13使用者要求）；同樣附上針對目前
+ * $targetField 的目標值預覽。 */
+function pfmea_field_link_all_failure_modes(PDO $db, string $targetField = 'failure_effect'): array {
     $a = $db->query("SELECT DISTINCT failure_mode FROM pfmea_process_failure_mode WHERE is_active=1")->fetchAll(PDO::FETCH_COLUMN);
     $b = $db->query("SELECT DISTINCT source_value FROM pfmea_field_link WHERE source_field='failure_mode' AND is_active=1")->fetchAll(PDO::FETCH_COLUMN);
     $all = array_values(array_unique(array_merge($a, $b)));
     sort($all, SORT_STRING|SORT_FLAG_CASE);
-    return $all;
+    $st = $db->prepare("SELECT target_value FROM pfmea_field_link WHERE source_field='failure_mode' AND source_value=? AND target_field=? AND is_active=1 ORDER BY sort_order, id");
+    $out = [];
+    foreach ($all as $v) {
+        $st->execute([$v, $targetField]);
+        $out[] = ['value'=>$v, 'preview'=>implode('、', $st->fetchAll(PDO::FETCH_COLUMN))];
+    }
+    return $out;
 }
 
 /** 從已匯入的整組樣板(pfmea_item_template，來源3-TD-01-02...xlsm的「項目異常」工作表)回填欄位

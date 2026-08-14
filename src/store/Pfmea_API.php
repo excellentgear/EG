@@ -450,7 +450,7 @@ case 'field_link_distinct_sources':
 
 case 'field_link_all_failure_modes':
     needAdmin($perms);
-    jout(['success'=>true,'rows'=>pfmea_field_link_all_failure_modes($db)]);
+    jout(['success'=>true,'rows'=>pfmea_field_link_all_failure_modes($db, (string)($_GET['target_field']??'failure_effect'))]);
 
 case 'field_link_backfill':
     needAdmin($perms);
