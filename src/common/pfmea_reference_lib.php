@@ -46,10 +46,20 @@ function pfmea_process_sync_from_master(PDO $db, int $uid, string $uname): array
     return ['created'=>$created, 'linked'=>$linked, 'total_master'=>count($rows)];
 }
 
-/** 參考資料設定畫面用：全部製程(不篩is_enabled)，含大項分類，供批次開放/個別勾選介面 */
+/** 參考資料設定畫面用：全部製程(不篩is_enabled)，含大項分類+已設定幾個潛在失效模式(製程層級)，
+ * 供批次開放/個別勾選介面；筆數提醒使用者這個製程已經有人設定過內容，理應開放使用 */
 function pfmea_process_list_all(PDO $db): array {
-    return $db->query("SELECT id, process_code, process_name, master_type_id, category_name, is_enabled
-                        FROM pfmea_process WHERE is_active=1 ORDER BY (category_name IS NULL), category_name, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    return $db->query("SELECT p.id, p.process_code, p.process_name, p.master_type_id, p.category_name, p.is_enabled,
+                               (SELECT COUNT(*) FROM pfmea_process_failure_mode f WHERE f.process_id=p.id AND f.item_option_id IS NULL AND f.function_option_id IS NULL AND f.is_active=1) AS fm_count
+                        FROM pfmea_process p WHERE p.is_active=1 ORDER BY (p.category_name IS NULL), p.category_name, p.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 把已經有配置「潛在失效模式」的製程一併開放使用（2026-08-14使用者要求：有設定內容的製程理應
+ * 開放，不該還要管理員逐一手動勾選） */
+function pfmea_process_enable_configured(PDO $db): int {
+    $st = $db->exec("UPDATE pfmea_process p SET is_enabled=1
+                      WHERE is_enabled=0 AND EXISTS(SELECT 1 FROM pfmea_process_failure_mode f WHERE f.process_id=p.id AND f.is_active=1)");
+    return (int)$st;
 }
 
 function pfmea_process_set_enabled(PDO $db, array $ids, bool $enabled): void {
@@ -404,6 +414,21 @@ function pfmea_field_link_distinct_sources(PDO $db, string $sourceField, string 
     $st = $db->prepare("SELECT DISTINCT source_value FROM pfmea_field_link WHERE source_field=? AND target_field=? AND is_active=1 ORDER BY source_value");
     $st->execute([$sourceField, $targetField]);
     return $st->fetchAll(PDO::FETCH_COLUMN);
+}
+
+/** 從已匯入的整組樣板(pfmea_item_template，來源3-TD-01-02...xlsm的「項目異常」工作表)回填欄位
+ * 個別設定對應：失效模式->失效模式潛在後果、失效模式->失效潛在原因，兩者才是真正同時存在
+ * 「潛在失效模式」與「後果/原因」欄位的原始資料（「資料庫」工作表只有單一潛在失效模式清單，
+ * 沒有後果欄位，2026-08-14使用者一開始誤會了來源，查證後改用這份）。 */
+function pfmea_field_link_backfill_from_templates(PDO $db, int $uid, string $uname): array {
+    $rows = $db->query("SELECT DISTINCT failure_mode, failure_effect, failure_cause FROM pfmea_item_template
+                         WHERE failure_mode IS NOT NULL AND failure_mode<>'' AND is_active=1")->fetchAll(PDO::FETCH_ASSOC);
+    $created = 0;
+    foreach ($rows as $r) {
+        if (!empty($r['failure_effect'])) { pfmea_field_link_add($db, 'failure_mode', $r['failure_mode'], 'failure_effect', $r['failure_effect'], $uid, $uname); $created++; }
+        if (!empty($r['failure_cause'])) { pfmea_field_link_add($db, 'failure_mode', $r['failure_mode'], 'failure_cause', $r['failure_cause'], $uid, $uname); $created++; }
+    }
+    return ['processed'=>$created];
 }
 
 /* ---------- 評價S/O/D建議規則（2026-08-14使用者要求第7段）----------
