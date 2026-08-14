@@ -699,7 +699,11 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
             + (extraCss||'');
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
-    w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
+    // <!DOCTYPE html> 不可省略：少了它視窗會落入 Quirks Mode，<body> 內容不滿版時會被撐滿整個視窗高度
+    // （document.body.scrollHeight 量出來永遠接近視窗高度而非實際內容高度），下面靠 scrollHeight 判斷單頁/多頁
+    // 的頁碼顯示邏輯會失準，導致只有一頁的文件也顯示「第1頁／共1頁」（2026-08-14 使用者實測回報、絕對禁止；
+    // 比照 training_record.php 既有正確寫法修正）。
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
         + bodyHtml
         + (asCss ? '<div class="rf-as-doc">'+asCss+'</div>' : '')
         + '<scr'+'ipt>window.onload=function(){'
@@ -809,14 +813,17 @@ function printForm(){
     // 三顆章的日期一律印「建立日期」（CUR.business_date），不是簽核當下的實際系統時間（ai-rules/18 第4條既有
     // 全站慣例：簽章日期＝該單據的業務日期；2026-08-13 使用者實測回報審核/核准章印出系統時間、跟製表章的
     // 建立日期對不起來才發現這裡沒有跟上慣例，decided_at 仍照實記錄精確時間戳，只是不拿來當章面顯示值）。
+    // 簽章欄由左到右固定「核准、審核、製表」（2026-08-14 使用者明確更正：先前做反了；A4橫式全站簽核流程
+    // 一律比照此順序——最左側＝核准(或本張單上的最高簽核人員)，中間＝審核(與製表同部門主管或設定好的部門內主管)，
+    // 最右側＝製表，詳見 ai-rules/18 新規則）。
     h += '<table class="rf-p-foot"><tr>';
-    h += '<td><div class="foot-lbl">審核</div>' + (
-        !t.need_review ? '<div class="foot-na">（本模板免審核）</div>'
-        : (CUR.review && CUR.review.status==='approved' ? stampFooter(CUR.review.approver_name, dispDate(CUR.business_date)) : '')
-    ) + '</td>';
     h += '<td><div class="foot-lbl">核准</div>' + (
         !t.need_approval ? '<div class="foot-na">（本模板免核准）</div>'
         : (CUR.approval && CUR.approval.status==='approved' ? stampFooter(CUR.approval.approver_name, dispDate(CUR.business_date)) : '')
+    ) + '</td>';
+    h += '<td><div class="foot-lbl">審核</div>' + (
+        !t.need_review ? '<div class="foot-na">（本模板免審核）</div>'
+        : (CUR.review && CUR.review.status==='approved' ? stampFooter(CUR.review.approver_name, dispDate(CUR.business_date)) : '')
     ) + '</td>';
     h += '<td><div class="foot-lbl">製表</div>' + stampFooter(CUR.created_by_name, dispDate(CUR.business_date)) + '</td>';
     h += '</tr></table>';

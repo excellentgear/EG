@@ -954,7 +954,9 @@ function openPrintWindow(title, bodyHtml, docNo){
             + hfPrintCss();
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return null; }
-    w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
+    // <!DOCTYPE html> 不可省略：少了它視窗會落入 Quirks Mode，scrollHeight 量出來永遠接近視窗高度而非實際內容
+    // 高度，單頁判斷會失準導致只有一頁也印「第1頁/共1頁」（2026-08-14 比照 review_form.php 同批修正）。
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
         + bodyHtml
         + (asCss ? '<div class="hf-as-doc">'+asCss+'</div>' : '')
         + '<scr'+'ipt>window.onload=function(){'
