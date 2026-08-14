@@ -8,7 +8,7 @@
 
 /** 填表用：只回傳管理員已開放使用(is_enabled=1)的製程，避免全公司205筆製程一次全部塞進下拉選單 */
 function pfmea_ref_process_list(PDO $db): array {
-    return $db->query("SELECT id, process_code, process_name FROM pfmea_process WHERE is_active=1 AND is_enabled=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    return $db->query("SELECT id, process_code, process_name, category_name FROM pfmea_process WHERE is_active=1 AND is_enabled=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
 }
 
 /* ---------- 製程主檔同步（2026-08-14使用者要求）----------
