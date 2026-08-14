@@ -781,6 +781,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'otrk-role-section'      => '訂單追蹤',
                                         'rvf-role-section'       => '審核表單',
                                         'hrf-role-section'       => '人資職務表單',
+                                        'fsd-role-section'       => '表單簽核設計器',
                                         'tidc-role-section'      => '型態識別文件管制表',
                                         'tdev-role-section'      => '產品開發評估表',
                                         'pfmea-role-section'     => 'PFMEA',
