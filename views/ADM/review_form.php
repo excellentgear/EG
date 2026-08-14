@@ -794,7 +794,9 @@ function printForm(){
             // 例：負責部門[生產部,生產2廠,生產3廠]+負責人[林鴻銘,李汪達,陳智民]，
             // 各自比對每個人員的 dept_ids 屬於哪個已選部門，印成「生產部 / 林鴻銘」「生產2廠 / 李汪達」…逐行顯示，
             // 而不是把部門、人員各自攤平成一整串再用「/」分隔。見 ownerPairLines()。
-            h += '<td>'+ownerPairLines(sub.owner_depts, sub.owner_users).map(esc).join('<br>')+'</td>';
+            // 每行「部門 / 人員」本身不可斷行（2026-08-14 使用者實測回報：欄位太窄時姓名被硬拆成「陳俊」「宏」兩行），
+            // 只在多組部門/人員之間換行；nowrap 讓瀏覽器在該欄位寬度不夠時自動撐開欄寬，不會拆字。
+            h += '<td>'+ownerPairLines(sub.owner_depts, sub.owner_users).map(function(l){ return '<span style="white-space:nowrap;">'+esc(l)+'</span>'; }).join('<br>')+'</td>';
             if (pHasSignCol) {
                 var signHtml = (sub.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
                 if (!signHtml && PREVIEW_MODE && (sub.owner_depts.length || sub.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
