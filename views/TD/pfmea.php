@@ -219,7 +219,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
             </div>
             <div>
                 <label>規格描述</label>
-                <input type="text" id="fSpecDesc" placeholder="規格描述（綁定料號時自動偵測齒輪規格，可自行修改）">
+                <input type="text" id="fSpecDesc" list="dl_specDesc" placeholder="規格描述（綁定料號時自動偵測齒輪規格，可自行修改）"><datalist id="dl_specDesc"></datalist>
             </div>
         </div>
         <div class="pf-head-grid" style="margin-top:8px;">
@@ -593,11 +593,11 @@ function itemCardHtml(it, idx, expanded){
         + '<button type="button" class="pf-row-btn" onclick="openTemplatePicker(this)" title="此製程的整組樣板列表"'+dis+'><i class="fa fa-list"></i> 整組列表</button>'
         + '</div></div>'
         + fld('process_desc','項目','list:item') + fld('function_desc','功能','list:function') + fld('requirement','要求','list:requirement')
-        + fld('failure_mode','潛在失效模式','list:failure_mode') + fld('failure_effect','失效模式潛在後果') + fld('classification','分類')
+        + fld('failure_mode','潛在失效模式','list:failure_mode') + fld('failure_effect','失效模式潛在後果','list:failure_effect') + fld('classification','分類','list:classification')
         + '</div>'
         + '<div class="pf-card-grp-title">風險評估與現行設計管制（RPN 系統自動計算）</div>'
         + '<div class="pf-rating-quad">'
-        + fld('severity','嚴重度 S','rating') + fld('failure_cause','失效潛在原因')
+        + fld('severity','嚴重度 S','rating') + fld('failure_cause','失效潛在原因','list:failure_cause')
         + fld('occurrence','發生率 O','rating') + fld('prevention_controls','控制預防','list:prevention')
         + fld('detection_controls','控制偵測','list:detection') + fld('detection','偵測度 D','rating')
         + '<div><label>RPN</label><input type="text" class="rpn-out'+rpnCls+'" data-rpn value="'+rpn+'" readonly></div>'
@@ -645,6 +645,12 @@ function refreshAllCardDatalists(){
             });
         } else {
             loadFailureModesForCard($card, pid, 0, 0);
+        }
+        var fmVal = $card.find('[data-f="failure_mode"]').val().trim();
+        if (fmVal) {
+            ['failure_effect','classification','failure_cause'].forEach(function(f){
+                loadFieldLink($card.find('datalist.dl-'+f), 'failure_mode', fmVal, f);
+            });
         }
     });
 }
@@ -800,6 +806,25 @@ function refreshFailureModeForCard($card){
     if (!pid) return;
     loadFailureModesForCard($card, pid, parseInt($card.attr('data-item-opt-id'),10)||0, parseInt($card.attr('data-func-opt-id'),10)||0);
 }
+/* ---------- 欄位個別設定對應（2026-08-14使用者要求：基本資料內欄位可個別設定對應到其他欄位）----------
+ * 通用機制：任一欄位值可設定對應到另一欄位的建議清單，如潛在失效模式->失效模式潛在後果/分類/
+ * 失效潛在原因、產品名稱->規格描述。離開來源欄位時查詢並帶出建議清單，仍可直接手動輸入新值
+ * （存檔/離開目標欄位時自動註冊，見registerNewRefValues與#fSpecDesc blur）。 */
+function loadFieldLink($dl, sourceField, sourceValue, targetField){
+    if (!sourceValue){ $dl.each(function(){ this.innerHTML=''; }); return; }
+    $.getJSON(API, {action:'field_link_list', source_field:sourceField, source_value:sourceValue, target_field:targetField}, function(res){
+        if (res.success) $dl.each(function(){ fillDatalist(this, res.rows, function(r){ return r.target_value; }); });
+    });
+}
+$(document).on('blur', '#itemBody [data-f="failure_mode"]', function(){
+    var $card = $(this).closest('.pf-card'), v = $(this).val().trim();
+    loadFieldLink($card.find('datalist.dl-failure_effect'), 'failure_mode', v, 'failure_effect');
+    loadFieldLink($card.find('datalist.dl-classification'), 'failure_mode', v, 'classification');
+    loadFieldLink($card.find('datalist.dl-failure_cause'), 'failure_mode', v, 'failure_cause');
+});
+$(document).on('blur', '#fProductName', function(){
+    loadFieldLink($('#dl_specDesc'), 'product_name', $(this).val().trim(), 'spec_desc');
+});
 function resolveItemOption($card, cb){
     var code = $card.find('.f-proccode').val().trim();
     var itemName = $card.find('[data-f="process_desc"]').val().trim();
@@ -981,6 +1006,7 @@ function openEdit(id){
         $('#fPartNo').val(res.doc.part_no||''); $('#fPartDId').val(res.doc.part_d_id||0);
         $('#fCustomerName').val(res.doc.customer_name||'');
         $('#fProductName').val(res.doc.product_name||''); $('#fSpecDesc').val(res.doc.spec_desc||'');
+        if (res.doc.product_name) loadFieldLink($('#dl_specDesc'), 'product_name', res.doc.product_name, 'spec_desc');
         $('#fBizDate').val((res.doc.biz_date||'').substring(0,10));
         $('input[name=fItemType][value='+(res.doc.item_type==='assembly'?'assembly':'part')+']').prop('checked', true);
         $('#fDeptChecks').html(deptChecksHtml((res.doc.related_depts||'').split(',').filter(Boolean)));
@@ -1044,7 +1070,20 @@ function registerNewRefValues(){
             var known2 = (CONTROL_OPTIONS[type]||[]).map(function(o){ return o.option_text; });
             if (v && known2.indexOf(v) < 0) $.post(API, {action:'ref_control_option_add', option_type:type, option_text:v});
         });
+        // 欄位個別設定對應：潛在失效模式->失效模式潛在後果/分類/失效潛在原因，手動輸入的新組合順便註冊
+        var fmVal = $card.find('[data-f="failure_mode"]').val().trim();
+        if (fmVal) {
+            ['failure_effect','classification','failure_cause'].forEach(function(f){
+                var v = $card.find('[data-f="'+f+'"]').val().trim();
+                var known3 = $card.find('datalist.dl-'+f+' option').map(function(){ return this.value; }).get();
+                if (v && known3.indexOf(v) < 0) $.post(API, {action:'field_link_add', source_field:'failure_mode', source_value:fmVal, target_field:f, target_value:v});
+            });
+        }
     });
+    // 產品名稱->規格描述
+    var pn = $('#fProductName').val().trim(), sd = $('#fSpecDesc').val().trim();
+    var knownSd = $('#dl_specDesc option').map(function(){ return this.value; }).get();
+    if (pn && sd && knownSd.indexOf(sd) < 0) $.post(API, {action:'field_link_add', source_field:'product_name', source_value:pn, target_field:'spec_desc', target_value:sd});
 }
 /* 編輯既有文件時，若某列的分析內容(不含目標完成日/生效日期本身)有異動，詢問是否要一併把該列的
    目標完成日/生效日期更新為業務日期(2026-08-13使用者要求) */
