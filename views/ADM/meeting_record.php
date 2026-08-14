@@ -2,7 +2,8 @@
 /**
  * 會議紀錄管理（2-GM-05-01 會議記錄／2-GM-05-03 會議通知單）
  * 資料一律走 src/store/Meeting_API.php；權限 src/common/meeting_lib.php
- * 草稿僅記錄人本人看得到；送出後由角色設定「檢視全部」或出席／主席／總經理身分才看得到（見 meeting_can_view）。
+ * 草稿(未完成)除記錄人本人／管理員外，出席人員／主席／總經理／項目負責部門或指定人員(需簽名的人)也看得到；「檢視全部」角色僅適用已送出的會議紀錄
+ *（見 meeting_can_view）。列印則另外收斂：僅記錄人本人／管理員／已完成(status=done)可印，避免他人印出草稿或簽核中的未定案內容（見 meeting_can_print）。
  */
 session_start();
 if (!isset($_SESSION['userName'])) {
@@ -326,9 +327,9 @@ foreach ($roleRows as $rr) {
     <div class="m-head"><span id="viewTitle">會議紀錄</span><span class="m-close" onclick="closeMask('viewMask')">✕</span></div>
     <div class="m-body view-box" id="viewBody"></div>
     <div class="m-foot">
-        <button class="b-cancel" onclick="printBlankSignSheet()"><i class="fa fa-file-o"></i> 列印空白簽到表</button>
+        <button class="b-cancel" id="btnPrintBlank" onclick="printBlankSignSheet()"><i class="fa fa-file-o"></i> 列印空白簽到表</button>
         <button class="b-cancel" id="btnPrintSignedSheet" style="display:none;" onclick="printSignedSignSheet()"><i class="fa fa-file-text-o"></i> 列印簽到表</button>
-        <button class="b-cancel" onclick="printMeetingRecord()"><i class="fa fa-print"></i> 列印會議紀錄(預覽用)</button>
+        <button class="b-cancel" id="btnPrintRecord" onclick="printMeetingRecord()"><i class="fa fa-print"></i> 列印會議紀錄(預覽用)</button>
         <button class="b-cancel" id="btnPrintKpi" style="display:none;" onclick="printKpiOnly()"><i class="fa fa-line-chart"></i> 列印出貨目標達成率</button>
         <button class="b-ok" onclick="closeMask('viewMask')">關閉</button>
     </div>
@@ -461,7 +462,8 @@ foreach ($roleRows as $rr) {
         兩種模式下，負責人（部門或指定人員）本次沒有人出席、或現場代表尚未來得及簽名時，「存檔並通知」都會改發通知（該部門本次所有出席人員＋部門主管，或指定人員本人）請對方回覆確認，任一人回覆即算完成，回覆內容會顯示在項目下方；同一份通知一旦有人完成回覆就會自動關閉，其他被通知的人之後開啟只會看到唯讀狀態，不會再重複送出回覆蓋掉別人。<br>
         <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。已完成核准的會議記錄在「檢視」畫面也能再插入/更新：一般人插入後會<b>清空目前簽核紀錄改回草稿</b>，需重新送出取得主席／總經理簽章；<b>超級管理員</b>插入後<b>維持已核准狀態</b>，不需重新送審。
         <h4>重要行為</h4>
-        ・草稿只有記錄人本人看得到；送出後，出席人員／主席／總經理都自動有唯讀權限，其餘人是否看得到全部會議記錄依角色設定的「檢視全部」功能。<br>
+        ・草稿（未完成）除記錄人本人／管理員外，<b>出席人員／主席／總經理／項目負責部門或指定人員（需簽名的人）</b>也自動有唯讀權限可以檢視；一般「檢視全部」角色僅適用<b>已送出</b>的會議記錄，不含草稿。<br>
+        ・<b>列印權限比檢視更嚴格</b>：不論是否看得到，只有<b>記錄人本人／管理員／已完成核准（狀態＝已完成）</b>的會議記錄才能列印，其餘人檢視他人尚未完成的會議記錄時看不到任何列印按鈕，避免印出還在簽核中、之後可能被退回或修改的內容。<br>
         ・列印的會議記錄／空白簽到表<b>不含電子簽章</b>，供現場紙本簽名或掃描存查；主席／總經理的簽核仍在系統內完成並自動蓋章存證；出席人員<b>全部完成電子簽到</b>後會多一顆「列印簽到表」按鈕，印出來的是已蓋章版；有插入出貨目標達成率時會多一顆「列印出貨目標達成率」按鈕。<b>每顆列印按鈕各自印一份文件</b>（不提供多份文件合併列印），確保各自的AS文件編號都能正確印在頁面右下角。<br>
         ・主席或總經理今日若有請假等行程，會自動由代理人處理（依「代理系統設定」解析，不必自己找人代簽）。<br>
         ・清單上方「狀態」按鈕可複選篩選（點選切換開關），每顆按鈕會顯示目前年度符合筆數。<br>
@@ -1178,9 +1180,11 @@ function openView(id){
         VIEW = res;
         $('#viewTitle').text(res.meeting.subject);
         $('#viewBody').html(viewHtml(res));
-        $('#btnPrintKpi').toggle(!!res.meeting.kpi_snapshot_json);
+        var canPrint = !!res.meeting.can_print;
+        $('#btnPrintBlank,#btnPrintRecord').toggle(canPrint);
+        $('#btnPrintKpi').toggle(canPrint && !!res.meeting.kpi_snapshot_json);
         var allSigned = (res.attendees||[]).length>0 && (res.attendees||[]).every(function(a){ return +a.signed===1; });
-        $('#btnPrintSignedSheet').toggle(allSigned);
+        $('#btnPrintSignedSheet').toggle(canPrint && allSigned);
         openMask('viewMask');
     });
 }

@@ -136,6 +136,7 @@ case 'list': {
         $m['approval_status'] = meeting_display_status($db, $m);
         $m['notifying'] = $m['approval_status'] === 'notifying';
         $m['is_mine'] = (int)$m['recorder_user_id'] === $uid;
+        $m['can_print'] = meeting_can_print($uid, $perms, $m);
         $out[] = $m;
     }
     jout(['meetings'=>$out]);
@@ -151,6 +152,7 @@ case 'get_detail': {
     $m['chair_approval'] = $ap['chair'];
     $m['gm_approval'] = $ap['gm'];
     $m['can_edit'] = ((int)$m['recorder_user_id'] === $uid || $perms['canAdmin']) && in_array($m['status'], ['draft','rejected'], true) && !$m['notifying'];
+    $m['can_print'] = meeting_can_print($uid, $perms, $m);
     // 解出「目前實際該簽的人」(含代理)，前端才能正確顯示簽核按鈕給代理人看，不只給原本的主席/總經理
     $m['chair_signer_id'] = $m['chair_user_id'] ? meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name'])['id'] : null;
     $gmSigner = meeting_gm_signer_effective($db);

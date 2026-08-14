@@ -245,8 +245,10 @@ function meeting_perms(PDO $db, ?array $u): array {
 function meeting_can_view(PDO $db, int $uid, array $perms, array $m): bool {
     if ((int)$m['recorder_user_id'] === $uid) return true;
     if (!empty($perms['canAdmin'])) return true;
-    if (($m['status'] ?? '') === 'draft') return false;
-    if (!empty($perms['canViewAll'])) return true;
+    // 草稿是否可看：canViewAll(一般查閱者角色)僅適用已送出的會議紀錄，草稿仍需與此筆有關才看得到，
+    // 「有關」＝出席人員／主席／總經理／項目負責部門或指定人員(需簽名的人)，2026-08-14使用者明確要求擴大。
+    $isDraft = (($m['status'] ?? '') === 'draft');
+    if (!$isDraft && !empty($perms['canViewAll'])) return true;
     if ((int)($m['chair_user_id'] ?? 0) === $uid) return true;
     try {
         $st = $db->prepare("SELECT 1 FROM meeting_attendee WHERE meeting_id=? AND user_id=? LIMIT 1");
@@ -255,7 +257,38 @@ function meeting_can_view(PDO $db, int $uid, array $perms, array $m): bool {
     } catch (Throwable $e) {}
     $gm = eg_org_user($db, 'top_approver');
     if ($gm && (int)$gm['id'] === $uid) return true;
+    if (meeting_is_item_signer($db, (int)$m['meeting_id'], $uid)) return true;
     return false;
+}
+
+/** 是否為此會議任一項目的負責部門(含兼任)或指定負責人＝「需簽名的人」，草稿階段也要能看到，判斷才不會晚到送出後。 */
+function meeting_is_item_signer(PDO $db, int $meetingId, int $uid): bool {
+    $st = $db->prepare("SELECT owner_depts, owner_users FROM meeting_item WHERE meeting_id=?");
+    $st->execute([$meetingId]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return false;
+    $userDeptIds = null;
+    foreach ($rows as $r) {
+        $ownerUsers = array_filter(array_map('intval', explode(',', (string)($r['owner_users'] ?? ''))));
+        if ($ownerUsers && in_array($uid, $ownerUsers, true)) return true;
+        $ownerDepts = array_filter(array_map('intval', explode(',', (string)($r['owner_depts'] ?? ''))));
+        if ($ownerDepts) {
+            if ($userDeptIds === null) {
+                $ust = $db->prepare("SELECT DISTINCT department_id FROM user_department_position_map WHERE user_id=?");
+                $ust->execute([$uid]);
+                $userDeptIds = array_map('intval', $ust->fetchAll(PDO::FETCH_COLUMN));
+            }
+            if (array_intersect($ownerDepts, $userDeptIds)) return true;
+        }
+    }
+    return false;
+}
+
+/** 是否可列印此筆會議紀錄：只有建立人／管理員／已完成(status=done)可印，避免他人在草稿/簽核中階段印出未定案內容。 */
+function meeting_can_print(int $uid, array $perms, array $m): bool {
+    if (!empty($perms['canAdmin'])) return true;
+    if ((int)$m['recorder_user_id'] === $uid) return true;
+    return ($m['status'] ?? '') === 'done';
 }
 
 /* ============================================================
