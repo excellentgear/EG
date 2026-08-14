@@ -474,6 +474,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <div class="pf-rt-tab" data-rstab="proc" onclick="switchRsTab('proc')">製程與階層</div>
             <div class="pf-rt-tab" data-rstab="tpl" onclick="switchRsTab('tpl')">整組樣板</div>
             <div class="pf-rt-tab" data-rstab="link" onclick="switchRsTab('link')">欄位個別設定對應</div>
+            <div class="pf-rt-tab" data-rstab="reqlist" onclick="switchRsTab('reqlist')">要求總覽</div>
         </div>
 
         <div class="pf-rt-pane" data-rstab="proc">
@@ -594,6 +595,31 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
                 <div style="margin-top:4px;"><b style="font-size:11px;color:#8a6d45;">工程符號（點選插入目前游標位置）</b><div class="pf-sym-row" id="rsEngSymRow"></div></div>
                 <div><b style="font-size:11px;color:#8a6d45;">幾何公差／特殊項目</b><div class="pf-sym-row" id="rsGdtSymRow"></div></div>
             </div>
+        </div>
+        </div>
+
+        <div class="pf-rt-pane" data-rstab="reqlist">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">所有已設定的「要求」資料總覽（含製作表單.xlsm匯入的舊資料），不分製程/功能層級一次列出，方便快速檢視／重新綁定料號／刪除，不必逐一點進每個製程才看得到。</div>
+        <div class="pf-proc-box">
+            <input type="text" id="rsReqListFilter" placeholder="搜尋製程／要求文字／料號…">
+            <select id="rsReqListBoundFilter" style="flex:0 0 160px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
+                <option value="">全部</option>
+                <option value="bound">已綁定料號</option>
+                <option value="unbound">純文字未綁定</option>
+            </select>
+        </div>
+        <div style="font-size:11px;color:#8a6d45;margin:4px 0;" id="rsReqListSummary"></div>
+        <div style="max-height:340px;overflow-y:auto;">
+            <table class="pf-tpl-table" id="rsReqListTable">
+                <thead><tr><th>範圍</th><th>要求文字</th><th>料號狀態</th><th style="width:90px;">操作</th></tr></thead>
+                <tbody id="rsReqListBody"></tbody>
+            </table>
+        </div>
+        <div id="rsReqRebindBar" style="display:none;margin-top:8px;padding:8px;background:#FFF7E8;border:1px dashed #F0A24B;border-radius:4px;">
+            正在重新綁定：<b id="rsReqRebindLabel"></b>
+            <input type="text" id="rsReqRebindPart" placeholder="輸入部分料號搜尋" style="width:220px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
+            <button type="button" class="pf-row-btn" onclick="rsConfirmRebind()">確認綁定</button>
+            <button type="button" class="pf-row-btn" onclick="$('#rsReqRebindBar').hide()">取消</button>
         </div>
         </div>
     </div>
@@ -2173,6 +2199,76 @@ $(document).on('click', '#refSettingsMask .pf-sym-btn', function(){
     el.setSelectionRange(newPos, newPos);
 });
 
+/* ---------- 要求資料總覽（2026-08-14使用者要求）----------
+ * 先前要看「要求」清單得先選定製程才會顯示該製程底下的資料，製作表單.xlsm匯入的111筆散落在
+ * 5個製程底下，一個個點很不方便；改成一次列出全部(不分製程/功能層級)，可搜尋/篩選綁定狀態，
+ * 並提供「重新綁定」把純文字料號(舊料號主檔已無資料，或當初xlsm匯入時比對不到)改綁到正確料號ID。 */
+var RS_REQ_LIST_ALL = [];
+var RS_REBIND_ID = 0, RS_REBIND_PART_D_ID = 0;
+function rsLoadReqListAll(){
+    $.getJSON(API, {action:'requirement_option_list_all'}, function(res){
+        if (!res.success) return;
+        RS_REQ_LIST_ALL = res.rows || [];
+        rsRenderReqList();
+    });
+}
+function rsRenderReqList(){
+    var kw = ($('#rsReqListFilter').val()||'').trim().toLowerCase();
+    var boundFilter = $('#rsReqListBoundFilter').val();
+    var rows = RS_REQ_LIST_ALL.filter(function(r){
+        if (boundFilter === 'bound' && r.bound !== true) return false;
+        if (boundFilter === 'unbound' && r.bound !== false) return false;
+        if (kw) {
+            var hay = (r.scope_label+' '+r.requirement_text+' '+r.part_label).toLowerCase();
+            if (hay.indexOf(kw) < 0) return false;
+        }
+        return true;
+    });
+    $('#rsReqListSummary').text('共 '+RS_REQ_LIST_ALL.length+' 筆，符合篩選條件 '+rows.length+' 筆');
+    var html = rows.map(function(r){
+        var statusHtml = r.bound === true ? '<span style="color:#3a8f4a;">✓ '+esc(r.part_label)+'</span>'
+            : r.bound === false ? '<span style="color:#DD5138;">⚠ '+esc(r.part_label)+'（純文字）</span>'
+            : '<span style="color:#8a6d45;">'+esc(r.part_label)+'</span>';
+        return '<tr><td>'+esc(r.scope_label)+'</td><td class="pf-op" style="text-align:left;">'+esc(r.requirement_text)+'</td><td>'+statusHtml+'</td>'
+            + '<td>'
+            + '<i class="fa fa-exchange pf-op" title="重新綁定料號" onclick="rsStartRebind('+r.id+',\''+esc(r.scope_label+'／'+r.requirement_text).replace(/'/g,"&#39;")+'\')"></i> '
+            + '<i class="fa fa-trash pf-op" title="刪除" onclick="rsDeleteReqListRow('+r.id+')"></i>'
+            + '</td></tr>';
+    }).join('');
+    $('#rsReqListBody').html(html || '<tr><td colspan="4" class="rs-empty">尚無資料</td></tr>');
+}
+$('#rsReqListFilter').on('input', rsRenderReqList);
+$('#rsReqListBoundFilter').on('change', rsRenderReqList);
+window.rsDeleteReqListRow = function(id){
+    if (!confirm('確定刪除此筆要求設定？')) return;
+    $.post(API, {action:'ref_requirement_option_delete', id:id}, function(res){
+        if (!res.success){ alert(res.message||'刪除失敗'); return; }
+        rsLoadReqListAll();
+    }, 'json');
+};
+window.rsStartRebind = function(id, label){
+    RS_REBIND_ID = id; RS_REBIND_PART_D_ID = 0;
+    $('#rsReqRebindLabel').text(label);
+    $('#rsReqRebindPart').val('');
+    $('#rsReqRebindBar').show();
+};
+EGPartPicker.attach(document.getElementById('rsReqRebindPart'), {
+    apiUrl: PART_API,
+    onSelect: function(row){ RS_REBIND_PART_D_ID = row.d_id; }
+});
+$(document).on('input', '#rsReqRebindPart', function(){ RS_REBIND_PART_D_ID = 0; });
+window.rsConfirmRebind = function(){
+    if (!RS_REBIND_ID) return;
+    var partDId = RS_REBIND_PART_D_ID;
+    var partText = partDId ? '' : $('#rsReqRebindPart').val().trim();
+    if (!partDId && !partText) { alert('請從清單選擇料號，或至少輸入文字料號'); return; }
+    $.post(API, {action:'requirement_option_rebind', id:RS_REBIND_ID, part_d_id:partDId, part_no_text:partText}, function(res){
+        if (!res.success){ alert(res.message||'綁定失敗'); return; }
+        $('#rsReqRebindBar').hide();
+        rsLoadReqListAll();
+    }, 'json');
+};
+
 $('#btnRefSettings').on('click', function(){
     RS_PROC_ID = 0; RS_ITEM_OPT_ID = 0; RS_FUNC_OPT_ID = 0;
     $('#rsProcessScope, #rsItemScope').hide();
@@ -2182,6 +2278,7 @@ $('#btnRefSettings').on('click', function(){
     rsLoadTplProcSel();
     rsLoadLinkSources();
     rsRenderEngSymbols(); rsRenderGdtSymbols();
+    rsLoadReqListAll();
 });
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
