@@ -88,6 +88,35 @@ $schema = fsd_template_schema_at_version($db, $tplId, 1);
 chk('schema含2階段', count($schema['stages']) === 2);
 chk('schema含6個框選(孤兒框已排除)', count($schema['fields']) === 6);
 
+echo "\n== 3b. 階段/槽位差異更新(不可誤刪既有框選,2026-08-14使用者實測回報的bug回歸測試) ==\n";
+$beforeFieldCount = count(fsd_field_list($db, $tplId));
+$stagesForRelabel = fsd_stage_list($db, $tplId);
+// 模擬「編輯標籤名稱(顯示用)」：只改第1關第1槽位的label文字，其餘槽位/階段原封不動地連id一起送回去
+$stagesForRelabel[0]['signers'][0]['label'] = '改過的標籤名稱';
+$payload = array_map(function($s) {
+    return ['id'=>$s['id'], 'stage_type'=>$s['stage_type'], 'name'=>$s['name'], 'auto_sign'=>$s['auto_sign'],
+            'signers'=>array_map(function($sg) {
+                return ['id'=>$sg['id'], 'mode'=>$sg['mode'], 'user_id'=>$sg['user_id'], 'dept_id'=>$sg['dept_id'], 'label'=>$sg['label']];
+            }, $s['signers'])];
+}, $stagesForRelabel);
+fsd_stages_save($db, $tplId, $payload);
+chk('改標籤名稱後框選數量不變(未被連帶砍掉)', count(fsd_field_list($db, $tplId)) === $beforeFieldCount);
+$relabeled = fsd_stage_signer_list($db, $stagesForRelabel[0]['id']);
+chk('標籤名稱確實改到了', $relabeled[0]['label'] === '改過的標籤名稱');
+$sameSignerIds = array_column(fsd_stage_signer_list($db, $stagesForRelabel[0]['id']), 'id');
+chk('槽位id保持不變(不是delete+insert重來)', in_array($stagesForRelabel[0]['signers'][0]['id'], $sameSignerIds, true));
+
+// 真的刪除一個槽位(第1關第4槽位=部門主管槽)時，該槽位的框選才應該被連動清掉
+$removedSignerId = $stagesForRelabel[0]['signers'][3]['id'];
+$fieldsForRemovedSigner = count(array_filter(fsd_field_list($db, $tplId), fn($f) => (int)$f['stage_signer_id'] === (int)$removedSignerId));
+chk('待刪除槽位原本有框選', $fieldsForRemovedSigner > 0);
+$payload2 = $payload;
+array_splice($payload2[0]['signers'], 3, 1); // 真的移除第4個槽位
+fsd_stages_save($db, $tplId, $payload2);
+chk('框選數量因真的刪除槽位而減少', count(fsd_field_list($db, $tplId)) === $beforeFieldCount - $fieldsForRemovedSigner);
+chk('其餘槽位的框選仍完整保留', count(fsd_field_list($db, $tplId)) === $beforeFieldCount - 1);
+// 注意：後面章節都是對published v1快照(建立案件用schema)操作，不受這裡live table後續異動影響，故不需要復原。
+
 echo "\n== 4. 建立案件草稿(自己上傳文件)+框選(白名單)+送出 ==\n";
 $r = fsd_case_create_draft($db, $tplId, $SUBMITTER, $SUBMITTER_NAME, '端到端測試案件', date('Y-m-d'), 'image', 'e2e_case_test.png');
 chk('建立案件草稿成功: ' . ($r['msg'] ?? ''), $r['ok'] === true);

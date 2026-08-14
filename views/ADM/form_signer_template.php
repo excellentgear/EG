@@ -436,9 +436,9 @@ function saveStages(){
     }
     $.post(API, {action:'stages_save', csrf:META.csrf, template_id:CUR_TPL.id, stages:JSON.stringify(STAGES)}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
-        CUR_TPL.stages = res.stages; STAGES = res.stages.map(function(s){ return $.extend({}, s); });
-        renderStages();
-        renderLabelList();
+        // 存檔後整個重新載入(而不是只拿res.stages局部更新)：槽位若真的被刪除，對應框選也會被連動清掉，
+        // 必須重抓CUR_TPL.fields與重畫畫布才能反映實際現況，避免畫面留著已經不存在的舊框選(2026-08-14修正)。
+        openDesigner(CUR_TPL.id);
         alert('階段設定已儲存，可到下方框選工作區拖放標籤');
     }, 'json');
 }

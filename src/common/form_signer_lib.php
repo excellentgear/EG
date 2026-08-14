@@ -199,30 +199,70 @@ function fsd_stage_list(PDO $db, int $templateId): array {
     return $stages;
 }
 
-/** 整批覆蓋樣板底下所有階段+槽位(設計頁一次送整份陣列進來，比逐筆增刪簡單，反正發布前都還在草稿狀態)。
- *  $stages = [['stage_type'=>,'name'=>,'auto_sign'=>,'signers'=>[['mode'=>,'user_id'=>,'dept_id'=>,'label'=>],...]],...] */
+/** 存階段+槽位：以 id 對應差異更新(有id且存在→UPDATE，否則→INSERT，送出清單裡沒出現的既有列→DELETE)，
+ *  不採用「delete+insert 全部重來」——那樣每次存檔階段/槽位 id 全部改變，已框選的 fsd_field(FK槽位id)
+ *  會被連帶砍光，光是改個標籤文字都會把所有框選位置洗掉(2026-08-14使用者實測回報的根因，比照
+ *  rvf_instance_items_save() 的差異更新手法修正，同一個坑review_form那邊已經踩過一次)。
+ *  $stages = [['id'=>?,'stage_type'=>,'name'=>,'auto_sign'=>,'signers'=>[['id'=>?,'mode'=>,'user_id'=>,'dept_id'=>,'label'=>],...]],...] */
 function fsd_stages_save(PDO $db, int $templateId, array $stages): void {
-    $oldIds = array_map('intval', $db->query("SELECT id FROM fsd_stage WHERE template_id=" . (int)$templateId)->fetchAll(PDO::FETCH_COLUMN));
-    if ($oldIds) {
-        $in = implode(',', $oldIds);
-        $db->exec("DELETE FROM fsd_field WHERE stage_signer_id IN (SELECT id FROM fsd_stage_signer WHERE stage_id IN ($in))");
-        $db->exec("DELETE FROM fsd_stage_signer WHERE stage_id IN ($in)");
-        $db->exec("DELETE FROM fsd_stage WHERE id IN ($in)");
-    }
+    $st = $db->prepare("SELECT id FROM fsd_stage WHERE template_id=?");
+    $st->execute([$templateId]);
+    $existingStageIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    $keepStageIds = [];
+
     $insStage = $db->prepare("INSERT INTO fsd_stage (template_id,seq,stage_type,name,auto_sign) VALUES (?,?,?,?,?)");
+    $updStage = $db->prepare("UPDATE fsd_stage SET seq=?,stage_type=?,name=?,auto_sign=? WHERE id=? AND template_id=?");
     $insSigner = $db->prepare("INSERT INTO fsd_stage_signer (stage_id,seq,mode,user_id,dept_id,label) VALUES (?,?,?,?,?,?)");
+    $updSigner = $db->prepare("UPDATE fsd_stage_signer SET seq=?,mode=?,user_id=?,dept_id=?,label=? WHERE id=? AND stage_id=?");
+
     $seq = 1;
     foreach ($stages as $s) {
         $stageType = ($s['stage_type'] ?? '') === 'decision' ? 'decision' : 'advisory';
-        $insStage->execute([$templateId, $seq, $stageType, trim((string)($s['name'] ?? '')) ?: ('第'.$seq.'關'), !empty($s['auto_sign']) ? 1 : 0]);
-        $stageId = (int)$db->lastInsertId();
+        $name = trim((string)($s['name'] ?? '')) ?: ('第'.$seq.'關');
+        $autoSign = !empty($s['auto_sign']) ? 1 : 0;
+        $stageId = (int)($s['id'] ?? 0);
+        if ($stageId && in_array($stageId, $existingStageIds, true)) {
+            $updStage->execute([$seq, $stageType, $name, $autoSign, $stageId, $templateId]);
+        } else {
+            $insStage->execute([$templateId, $seq, $stageType, $name, $autoSign]);
+            $stageId = (int)$db->lastInsertId();
+        }
+        $keepStageIds[] = $stageId;
+
+        $sgSt = $db->prepare("SELECT id FROM fsd_stage_signer WHERE stage_id=?");
+        $sgSt->execute([$stageId]);
+        $existingSignerIds = array_map('intval', $sgSt->fetchAll(PDO::FETCH_COLUMN));
+        $keepSignerIds = [];
         $gseq = 1;
         foreach (($s['signers'] ?? []) as $sg) {
             $mode = in_array($sg['mode'] ?? '', FSD_SIGNER_MODES, true) ? $sg['mode'] : 'top_approver';
-            $insSigner->execute([$stageId, $gseq, $mode, (int)($sg['user_id'] ?? 0) ?: null, (int)($sg['dept_id'] ?? 0) ?: null, trim((string)($sg['label'] ?? '')) ?: null]);
+            $userId = (int)($sg['user_id'] ?? 0) ?: null;
+            $deptId = (int)($sg['dept_id'] ?? 0) ?: null;
+            $label = trim((string)($sg['label'] ?? '')) ?: null;
+            $signerId = (int)($sg['id'] ?? 0);
+            if ($signerId && in_array($signerId, $existingSignerIds, true)) {
+                $updSigner->execute([$gseq, $mode, $userId, $deptId, $label, $signerId, $stageId]);
+            } else {
+                $insSigner->execute([$stageId, $gseq, $mode, $userId, $deptId, $label]);
+                $signerId = (int)$db->lastInsertId();
+            }
+            $keepSignerIds[] = $signerId;
             $gseq++;
         }
+        $removedSigners = array_values(array_diff($existingSignerIds, $keepSignerIds));
+        if ($removedSigners) {
+            $in = implode(',', $removedSigners);
+            $db->exec("DELETE FROM fsd_field WHERE stage_signer_id IN ($in)");
+            $db->exec("DELETE FROM fsd_stage_signer WHERE id IN ($in)");
+        }
         $seq++;
+    }
+    $removedStages = array_values(array_diff($existingStageIds, $keepStageIds));
+    if ($removedStages) {
+        $in = implode(',', $removedStages);
+        $db->exec("DELETE FROM fsd_field WHERE stage_signer_id IN (SELECT id FROM fsd_stage_signer WHERE stage_id IN ($in))");
+        $db->exec("DELETE FROM fsd_stage_signer WHERE stage_id IN ($in)");
+        $db->exec("DELETE FROM fsd_stage WHERE id IN ($in)");
     }
 }
 
