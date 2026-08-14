@@ -303,7 +303,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         </div>
         <div class="pf-rpn-note">風險優先指數 RPN = S × O × D（系統自動計算，不可手填），改善後RPN = 評價S × 評價O × 評價D，超過200需優先改善。</div>
 
-        <datalist id="dl_process"></datalist>
+        <div id="procSearchDD" style="display:none;position:fixed;z-index:2000;background:#fff;border:1px solid #D8BE93;border-radius:4px;box-shadow:0 4px 14px rgba(0,0,0,.18);max-height:260px;overflow-y:auto;"></div>
         <div class="pf-sec-title">失效模式分析（逐項卡片，預設收合成一行；<b>點擊卡片標題展開才會顯示完整輸入欄位</b>，列印仍是您提供的橫式表格格式）</div>
         <div id="itemBody"></div>
         <div style="margin-top:6px;">
@@ -732,7 +732,7 @@ function itemCardHtml(it, idx, expanded){
         + '<div class="pf-card-grp-title">基本資料</div>'
         + '<div class="pf-card-grid">'
         + '<div><label>製程代號</label><div class="pf-proc-box">'
-        + '<input type="text" class="f-proccode" data-f="process_code" value="'+esc(procCode)+'" list="dl_process" placeholder="輸入製程代號"'+dis+'>'
+        + '<input type="text" class="f-proccode" data-f="process_code" value="'+esc(procCode)+'" autocomplete="off" placeholder="輸入製程代號/名稱/大項分類模糊搜尋"'+dis+'>'
         + '<button type="button" class="pf-row-btn" onclick="openTemplatePicker(this)" title="此製程的整組樣板列表"'+dis+'><i class="fa fa-list"></i> 整組列表</button>'
         + '</div></div>'
         + fld('process_desc','項目','list:item') + fld('function_desc','功能','list:function') + fld('requirement','要求','list:requirement')
@@ -947,7 +947,6 @@ function loadProcessList(cb){
         PROCESS_LIST = res.rows || [];
         PROCESS_ID_BY_CODE = {};
         PROCESS_LIST.forEach(function(p){ PROCESS_ID_BY_CODE[p.process_code] = p; });
-        fillDatalist(document.getElementById('dl_process'), PROCESS_LIST, function(p){ return p.process_code; }, function(p){ return p.process_name; });
         if (cb) cb();
     });
 }
@@ -1076,6 +1075,41 @@ $(document).on('change', '#itemBody .f-proccode', function(){
         if (!res.success){ alert(res.message||'新增製程失敗'); $input.val(''); return; }
         loadProcessList(function(){ loadFailureModesForCard($card, res.id, 0, 0); loadItemOptionsForCard($card, res.id); loadRequirementOptionsForCard($card, 0); });
     }, 'json');
+});
+
+/* ---------- 製程代號模糊搜尋（2026-08-14使用者要求）----------
+ * 輸入時同時比對製程代號/名稱/大項分類(多關鍵字空白分隔、每個都要命中)，顯示清單供點選，
+ * 取代原生datalist(只會前綴比對、無法連大項分類一起搜)。 */
+var PROC_SEARCH_TARGET = null;
+function procSearchRender(kw){
+    var terms = kw.toLowerCase().split(/\s+/).filter(Boolean);
+    var rows = PROCESS_LIST.filter(function(p){
+        var hay = (p.process_code+' '+p.process_name+' '+(p.category_name||'')).toLowerCase();
+        return terms.every(function(t){ return hay.indexOf(t) >= 0; });
+    });
+    if (!rows.length){ $('#procSearchDD').hide(); return; }
+    var html = rows.slice(0, 50).map(function(p){
+        return '<div class="proc-search-item" data-code="'+esc(p.process_code)+'" style="padding:6px 10px;cursor:pointer;font-size:12px;border-bottom:1px solid #F3EAD6;">'
+            + '<b>'+esc(p.process_code)+'</b> '+esc(p.process_name)
+            + (p.category_name ? ' <span style="color:#8a6d45;">['+esc(p.category_name)+']</span>' : '')
+            + '</div>';
+    }).join('');
+    $('#procSearchDD').html(html).show();
+}
+$(document).on('mouseover', '#procSearchDD .proc-search-item', function(){ $(this).css('background', '#FFF7E8'); });
+$(document).on('mouseout', '#procSearchDD .proc-search-item', function(){ $(this).css('background', ''); });
+$(document).on('focus input', '#itemBody .f-proccode', function(){
+    PROC_SEARCH_TARGET = $(this);
+    var rect = this.getBoundingClientRect();
+    $('#procSearchDD').css({left:rect.left+'px', top:(rect.bottom+2)+'px', width:Math.max(rect.width,260)+'px'});
+    procSearchRender($(this).val().trim());
+});
+$(document).on('blur', '#itemBody .f-proccode', function(){ $('#procSearchDD').hide(); });
+$(document).on('mousedown', '#procSearchDD .proc-search-item', function(e){
+    e.preventDefault(); // 防止輸入框先blur把清單關掉，選取事件就進不來
+    if (!PROC_SEARCH_TARGET) return;
+    PROC_SEARCH_TARGET.val($(this).attr('data-code')).trigger('change');
+    $('#procSearchDD').hide();
 });
 
 window.openTemplatePicker = function(btn){
