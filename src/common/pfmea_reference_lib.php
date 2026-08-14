@@ -7,6 +7,13 @@
  */
 
 /** 填表用：只回傳管理員已開放使用(is_enabled=1)的製程，避免全公司205筆製程一次全部塞進下拉選單 */
+/** 幾何公差／特殊項目符號清單（2026-08-14使用者要求，設定畫面「對應的目標值」輸入框符號按鈕用）：
+ * 直接沿用QC模組既有的 qc_special_characteristic 字典表(views/QC/inspection_standard_setting.php
+ * 管理)，不重複建一份——這個表本來就是全站共用的幾何公差/特殊檢驗項目字典，PFMEA只讀取不寫入。 */
+function pfmea_qc_special_characteristics(PDO $db): array {
+    return $db->query("SELECT characteristic_id, name, symbol, description FROM qc_special_characteristic WHERE is_active=1 ORDER BY characteristic_id")->fetchAll(PDO::FETCH_ASSOC);
+}
+
 function pfmea_ref_process_list(PDO $db): array {
     return $db->query("SELECT id, process_code, process_name, category_name FROM pfmea_process WHERE is_active=1 AND is_enabled=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
 }

@@ -456,6 +456,10 @@ case 'field_link_backfill':
     needAdmin($perms);
     jout(['success'=>true] + pfmea_field_link_backfill_from_templates($db, $uid, $uname));
 
+case 'qc_special_characteristics_list':
+    needAdmin($perms);
+    jout(['success'=>true,'rows'=>pfmea_qc_special_characteristics($db)]);
+
 case 'field_link_add':
     needEdit($perms);
     $sf = (string)($_POST['source_field'] ?? ''); $sv = (string)($_POST['source_value'] ?? '');
