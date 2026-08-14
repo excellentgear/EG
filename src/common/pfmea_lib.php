@@ -220,6 +220,28 @@ function pfmea_ensure_schema(PDO $db): void {
         KEY idx_lookup (source_field, source_value(50), target_field)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-欄位個別設定對應清單(基本資料內某欄位值->建議帶出的其他欄位值)'");
 
+    // 2026-08-14 使用者要求(第7段)：評價S/評價O/評價D 依「製程+項目+功能+潛在失效模式+失效模式
+    // 潛在效果+嚴重度+失效潛在原因」完整組合建議值，只在新增列時自動帶入(auto-varies)，存檔後鎖定
+    // 不再回頭覆蓋；評價S/O/D本身仍要落在1~10(評級對照表整體有效範圍)才允許存成規則。
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_rating_rule (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        process_id INT NOT NULL,
+        item_option_id INT NULL,
+        function_option_id INT NULL,
+        failure_mode VARCHAR(200) NOT NULL,
+        failure_effect VARCHAR(200) NOT NULL,
+        severity TINYINT NOT NULL,
+        failure_cause VARCHAR(200) NOT NULL,
+        new_severity TINYINT NOT NULL,
+        new_occurrence TINYINT NOT NULL,
+        new_detection TINYINT NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_lookup (process_id, failure_mode(50), failure_cause(50))
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-評價S/O/D建議規則(組合鍵->建議評價值，新記錄自動帶入)'");
+
     foreach ([['pfmea_view','PFMEA檢閱'],['pfmea_edit','PFMEA登錄'],['pfmea_admin','PFMEA管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='pfmea' LIMIT 1");
         $st->execute([$r[0]]);

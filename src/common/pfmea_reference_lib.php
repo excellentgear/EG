@@ -236,3 +236,31 @@ function pfmea_field_link_add(PDO $db, string $sourceField, string $sourceValue,
 function pfmea_field_link_delete(PDO $db, int $id): void {
     $db->prepare("UPDATE pfmea_field_link SET is_active=0 WHERE id=?")->execute([$id]);
 }
+
+/* ---------- 評價S/O/D建議規則（2026-08-14使用者要求第7段）----------
+ * 依「製程+項目+功能+潛在失效模式+失效模式潛在效果+嚴重度+失效潛在原因」完整組合查建議評價值，
+ * 只在新增列時自動帶入、存檔後鎖定不回頭覆蓋(前端控管，這裡只負責查/存)。 */
+function pfmea_rating_rule_lookup(PDO $db, int $processId, int $itemOptId, int $funcOptId, string $failureMode, string $failureEffect, int $severity, string $failureCause): ?array {
+    $st = $db->prepare("SELECT id, new_severity, new_occurrence, new_detection FROM pfmea_rating_rule
+        WHERE process_id=? AND (item_option_id<=>?) AND (function_option_id<=>?) AND failure_mode=? AND failure_effect=? AND severity=? AND failure_cause=? AND is_active=1
+        ORDER BY id DESC LIMIT 1");
+    $st->execute([$processId, $itemOptId ?: null, $funcOptId ?: null, $failureMode, $failureEffect, $severity, $failureCause]);
+    return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+}
+
+/** 評價S/O/D須落在1~10(評級對照表整體有效範圍)才允許存成規則；同組合已有規則就不重複建立
+ *（第一次出現的組合優先，避免同組合多筆互相覆蓋、規則來源不確定） */
+function pfmea_rating_rule_add(PDO $db, int $processId, int $itemOptId, int $funcOptId, string $failureMode, string $failureEffect, int $severity, string $failureCause, int $ns, int $no, int $nd, int $uid, string $uname): int {
+    foreach ([$ns, $no, $nd] as $v) { if ($v < 1 || $v > 10) return 0; }
+    $st = $db->prepare("SELECT id FROM pfmea_rating_rule WHERE process_id=? AND (item_option_id<=>?) AND (function_option_id<=>?) AND failure_mode=? AND failure_effect=? AND severity=? AND failure_cause=? AND is_active=1 LIMIT 1");
+    $st->execute([$processId, $itemOptId ?: null, $funcOptId ?: null, $failureMode, $failureEffect, $severity, $failureCause]);
+    $id = $st->fetchColumn();
+    if ($id) return (int)$id;
+    $st = $db->prepare("INSERT INTO pfmea_rating_rule (process_id, item_option_id, function_option_id, failure_mode, failure_effect, severity, failure_cause, new_severity, new_occurrence, new_detection, created_by, created_by_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+    $st->execute([$processId, $itemOptId ?: null, $funcOptId ?: null, $failureMode, $failureEffect, $severity, $failureCause, $ns, $no, $nd, $uid, $uname]);
+    return (int)$db->lastInsertId();
+}
+
+function pfmea_rating_rule_delete(PDO $db, int $id): void {
+    $db->prepare("UPDATE pfmea_rating_rule SET is_active=0 WHERE id=?")->execute([$id]);
+}

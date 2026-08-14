@@ -400,6 +400,32 @@ case 'field_link_delete':
     pfmea_field_link_delete($db, $id);
     jout(['success'=>true]);
 
+// 評價S/O/D建議規則（2026-08-14使用者要求第7段）：依製程+項目+功能+潛在失效模式+失效模式潛在
+// 效果+嚴重度+失效潛在原因完整組合查/存建議評價值，只給新增列自動帶入用
+case 'rating_rule_lookup':
+    needView($perms);
+    $pid = (int)($_GET['process_id'] ?? 0);
+    if (!$pid) jout(['success'=>true,'rule'=>null]);
+    $rule = pfmea_rating_rule_lookup($db, $pid, (int)($_GET['item_option_id']??0), (int)($_GET['function_option_id']??0),
+        (string)($_GET['failure_mode']??''), (string)($_GET['failure_effect']??''), (int)($_GET['severity']??0), (string)($_GET['failure_cause']??''));
+    jout(['success'=>true,'rule'=>$rule]);
+
+case 'rating_rule_add':
+    needEdit($perms);
+    $pid = (int)($_POST['process_id'] ?? 0);
+    if (!$pid) jout(['success'=>false,'message'=>'缺少製程']);
+    $id = pfmea_rating_rule_add($db, $pid, (int)($_POST['item_option_id']??0), (int)($_POST['function_option_id']??0),
+        (string)($_POST['failure_mode']??''), (string)($_POST['failure_effect']??''), (int)($_POST['severity']??0), (string)($_POST['failure_cause']??''),
+        (int)($_POST['new_severity']??0), (int)($_POST['new_occurrence']??0), (int)($_POST['new_detection']??0), $uid, $uname);
+    jout(['success'=>true,'id'=>$id]);
+
+case 'rating_rule_delete':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    pfmea_rating_rule_delete($db, $id);
+    jout(['success'=>true]);
+
 // ── 各種自動帶入（2026-08-13 使用者要求）──────────────────────────────
 // 規格描述：沿用 NewOrder_Track.php 料號下方顯示的齒輪規格邏輯，查無資料回傳空字串(前端不覆蓋)
 case 'gear_spec_get':
