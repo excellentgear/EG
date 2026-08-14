@@ -73,6 +73,22 @@ function pfmea_ref_failure_mode_delete(PDO $db, int $id): void {
     $db->prepare("UPDATE pfmea_process_failure_mode SET is_active=0 WHERE id=?")->execute([$id]);
 }
 
+/** 參考資料設定畫面用：只回傳「剛好存在這個確切層級」的資料，不像 pfmea_ref_failure_mode_list()
+ * 會逐層退回帶入下拉——管理畫面要讓使用者清楚知道自己正在編輯哪一層，不能被退回結果混淆。 */
+function pfmea_ref_failure_mode_list_exact(PDO $db, int $processId, int $itemOptionId, int $functionOptionId): array {
+    if ($functionOptionId) {
+        $st = $db->prepare("SELECT id, failure_mode FROM pfmea_process_failure_mode WHERE function_option_id=? AND is_active=1 ORDER BY sort_order, id");
+        $st->execute([$functionOptionId]);
+    } elseif ($itemOptionId) {
+        $st = $db->prepare("SELECT id, failure_mode FROM pfmea_process_failure_mode WHERE item_option_id=? AND function_option_id IS NULL AND is_active=1 ORDER BY sort_order, id");
+        $st->execute([$itemOptionId]);
+    } else {
+        $st = $db->prepare("SELECT id, failure_mode FROM pfmea_process_failure_mode WHERE process_id=? AND item_option_id IS NULL AND function_option_id IS NULL AND is_active=1 ORDER BY sort_order, id");
+        $st->execute([$processId]);
+    }
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
 /* ---------- 料號-製程-項目-功能-要求 階層式連動（2026-08-13使用者要求）----------
  * 製程代號→項目(pfmea_item_option)→功能(pfmea_function_option)→要求(pfmea_requirement_option，
  * 依綁定料號再細分)；潛在失效模式改走上面的階層式pfmea_ref_failure_mode_list。
@@ -182,6 +198,27 @@ function pfmea_ref_requirement_option_add(PDO $db, int $functionOptionId, int $p
 
 function pfmea_ref_requirement_option_delete(PDO $db, int $id): void {
     $db->prepare("UPDATE pfmea_requirement_option SET is_active=0 WHERE id=?")->execute([$id]);
+}
+
+/** 參考資料設定畫面用：只回傳「剛好存在這個確切層級」的資料(含料號綁定資訊供顯示)，理由同
+ * pfmea_ref_failure_mode_list_exact()。 */
+function pfmea_ref_requirement_list_exact(PDO $db, int $functionOptionId, int $processId): array {
+    if ($functionOptionId) {
+        $st = $db->prepare("SELECT id, requirement_text, part_d_id, part_no_text FROM pfmea_requirement_option WHERE function_option_id=? AND is_active=1 ORDER BY sort_order, id");
+        $st->execute([$functionOptionId]);
+    } else {
+        $st = $db->prepare("SELECT id, requirement_text, part_d_id, part_no_text FROM pfmea_requirement_option WHERE process_id=? AND function_option_id IS NULL AND is_active=1 ORDER BY sort_order, id");
+        $st->execute([$processId]);
+    }
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        if ($r['part_d_id']) {
+            $p = $db->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?"); $p->execute([$r['part_d_id']]);
+            $r['part_label'] = $p->fetchColumn() ?: ('#'.$r['part_d_id']);
+        } else { $r['part_label'] = $r['part_no_text'] ?: ''; }
+    }
+    unset($r);
+    return $rows;
 }
 
 function pfmea_ref_control_options(PDO $db): array {

@@ -278,6 +278,15 @@ case 'ref_failure_mode_delete':
     pfmea_ref_failure_mode_delete($db, $id);
     jout(['success'=>true]);
 
+// 參考資料設定畫面(2026-08-14使用者要求)專用：只回傳確切層級的資料，不做退回帶入
+case 'ref_failure_mode_list_exact':
+    needAdmin($perms);
+    jout(['success'=>true,'rows'=>pfmea_ref_failure_mode_list_exact($db, (int)($_GET['process_id']??0), (int)($_GET['item_option_id']??0), (int)($_GET['function_option_id']??0))]);
+
+case 'ref_requirement_list_exact':
+    needAdmin($perms);
+    jout(['success'=>true,'rows'=>pfmea_ref_requirement_list_exact($db, (int)($_GET['function_option_id']??0), (int)($_GET['process_id']??0))]);
+
 // ── 料號-製程-項目-功能-要求 階層式連動（2026-08-13使用者要求）──────────────────
 case 'ref_item_options_list':
     needView($perms);
