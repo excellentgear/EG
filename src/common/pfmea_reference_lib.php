@@ -297,6 +297,43 @@ function pfmea_ref_requirement_list_exact(PDO $db, int $functionOptionId, int $p
     return $rows;
 }
 
+/** 要求資料總覽（2026-08-14使用者要求）：先前只能逐一選製程才看得到該製程的要求清單，匯入
+ * 製作表單.xlsm的112筆資料散落在5個製程底下要一個個點才看得完；改成一次列出全部要求(不分
+ * 製程/功能層級)，含每筆的料號綁定狀態，供快速檢視/重新綁定/刪除。 */
+function pfmea_requirement_option_list_all(PDO $db): array {
+    $rows = $db->query("SELECT r.id, r.requirement_text, r.part_d_id, r.part_no_text, r.function_option_id,
+                                p.process_code, p.process_name, f.function_desc
+                         FROM pfmea_requirement_option r
+                         LEFT JOIN pfmea_process p ON p.id=r.process_id
+                         LEFT JOIN pfmea_function_option f ON f.id=r.function_option_id
+                         WHERE r.is_active=1
+                         ORDER BY (p.sort_order IS NULL), p.sort_order, p.id, r.sort_order, r.id")->fetchAll(PDO::FETCH_ASSOC);
+    $partIds = array_values(array_unique(array_filter(array_column($rows, 'part_d_id'))));
+    $partLabels = [];
+    if ($partIds) {
+        $in = implode(',', array_fill(0, count($partIds), '?'));
+        $st = $db->prepare("SELECT d_id, D_Setting_Id FROM d_setting WHERE d_id IN ($in)");
+        $st->execute($partIds);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $p) { $partLabels[$p['d_id']] = $p['D_Setting_Id']; }
+    }
+    foreach ($rows as &$r) {
+        $r['scope_label'] = $r['function_desc'] ? '功能：'.$r['function_desc'] : (($r['process_code']||$r['process_name']) ? '製程：'.$r['process_code'].' '.$r['process_name'] : '（未知）');
+        if ($r['part_d_id']) { $r['part_label'] = $partLabels[$r['part_d_id']] ?? ('#'.$r['part_d_id']); $r['bound'] = true; }
+        elseif ($r['part_no_text']) { $r['part_label'] = $r['part_no_text']; $r['bound'] = false; }
+        else { $r['part_label'] = '（通用，不限料號）'; $r['bound'] = null; }
+    }
+    unset($r);
+    return $rows;
+}
+
+/** 重新綁定既有要求列的料號（2026-08-14使用者要求）：製作表單.xlsm匯入時46筆比對不到現存
+ * d_setting主鍵、只存成文字料號，管理員可在此重新綁定到正確的料號ID */
+function pfmea_requirement_option_rebind(PDO $db, int $id, int $partDId, string $partText): void {
+    $partText = trim($partText);
+    $db->prepare("UPDATE pfmea_requirement_option SET part_d_id=?, part_no_text=? WHERE id=?")
+       ->execute([$partDId ?: null, $partDId ? null : ($partText !== '' ? $partText : null), $id]);
+}
+
 function pfmea_ref_control_options(PDO $db): array {
     $rows = $db->query("SELECT id, option_type, option_text FROM pfmea_control_option WHERE is_active=1 ORDER BY option_type, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     $out = ['prevention'=>[], 'detection'=>[], 'action'=>[]];
