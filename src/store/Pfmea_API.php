@@ -251,6 +251,38 @@ case 'ref_process_delete':
     pfmea_ref_process_delete($db, $id);
     jout(['success'=>true]);
 
+// 製程主檔同步/開放使用設定（2026-08-14使用者要求）：製程代號改從process_no/process_type同步，
+// 管理員逐一或整個大項分類批次決定哪些開放給PFMEA使用
+case 'process_sync_master':
+    needAdmin($perms);
+    jout(['success'=>true] + pfmea_process_sync_from_master($db, $uid, $uname));
+
+case 'process_list_all':
+    needAdmin($perms);
+    jout(['success'=>true, 'rows'=>pfmea_process_list_all($db)]);
+
+case 'process_set_enabled':
+    needAdmin($perms);
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    if (!is_array($ids)) $ids = [];
+    pfmea_process_set_enabled($db, array_map('intval', $ids), !empty($_POST['enabled']));
+    jout(['success'=>true]);
+
+case 'process_set_enabled_by_type':
+    needAdmin($perms);
+    $typeId = (int)($_POST['master_type_id'] ?? 0);
+    if (!$typeId) jout(['success'=>false,'message'=>'缺少大項分類id']);
+    pfmea_process_set_enabled_by_type($db, $typeId, !empty($_POST['enabled']));
+    jout(['success'=>true]);
+
+case 'process_rename':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    $name = trim((string)($_POST['process_name'] ?? ''));
+    if (!$id || $name === '') jout(['success'=>false,'message'=>'缺少id或名稱']);
+    pfmea_process_rename($db, $id, $name);
+    jout(['success'=>true]);
+
 // 潛在失效模式：2026-08-13使用者要求改階層式，優先套用功能層級專屬清單，該層級還沒人填過才逐層
 // 退回項目層級、製程層級(舊148筆通用清單)——item_option_id/function_option_id為0時等同純製程層級查詢
 case 'ref_failure_mode_list':
