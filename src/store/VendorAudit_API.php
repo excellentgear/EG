@@ -63,6 +63,25 @@ $scopedPerms['canEdit'] = vendor_audit_can_edit_scope($db, $perms, $uid, $scope)
  *  刻意不隨scope收斂(2026-08-17使用者明確選擇AS文件綁定暫時兩邊共用)，這些畫面按鈕仍要看原本的 canAdmin。 */
 $canAdminScope = vendor_audit_can_admin_scope($db, $perms, $uid, $scope);
 $scopedPerms['canAdminScope'] = $canAdminScope;
+/** 可視範疇（稽核管理員依「被設定的人員部門」分成採購/生管，只看得到自己那一份分頁）。
+ *  後端硬擋：請求帶了不屬於自己的 scope 一律拒絕，避免有人直接改 URL/localStorage 繞過前端隱藏的分頁
+ *  （2026-08-17使用者明確要求「只能看到與操作自己部份分頁，避免弄亂資料」）。'meta' 必須放行——
+ *  前端就是靠它取回 visible_scopes 才知道要自動切到哪一個範疇（見 loadMeta 的自動修正邏輯）。 */
+$visibleScopes = vendor_audit_visible_scopes($db, $perms, $uid);
+if (!in_array($scope, $visibleScopes, true)) {
+    if ($action === 'meta') {
+        // meta 不擋、改「就地修正」成第一個可視範疇：前端就是靠 meta 取回 visible_scopes 才知道要切到哪，
+        // 擋掉會讓只有單一範疇的人一開頁就空白（localStorage 殘留舊範疇時很常見）。順便讓這次 meta 直接
+        // 回傳正確範疇的查核表/門檻設定，不會先閃一次對方範疇的內容。
+        $scope = $visibleScopes[0];
+        $scopedPerms['canEdit'] = vendor_audit_can_edit_scope($db, $perms, $uid, $scope);
+        $canAdminScope = vendor_audit_can_admin_scope($db, $perms, $uid, $scope);
+        $scopedPerms['canAdminScope'] = $canAdminScope;
+    } else {
+        jerr('您的稽核範疇為「'.implode('／', array_map('vendor_audit_scope_label', $visibleScopes)).'」，不可操作「'
+            .vendor_audit_scope_label($scope).'」的資料', 403);
+    }
+}
 
 /** 大類篩選條件（比照 master_data 廠商分頁：主檔大類 或 小類經階層歸屬） */
 function va_maincat_cond(int $mainCat, array &$bind): string {
@@ -102,11 +121,11 @@ case 'meta': {
           'company_name'=>vendor_audit_company_name($db),
           'sign_setting'=>$canAdminScope ? vendor_audit_sign_setting($db, $scope) : null,
           'plan_sign_setting'=>$canAdminScope ? vendor_audit_plan_sign_setting($db, $scope) : null,
-          'plan_approver_names'=>$perms['canAdmin'] ? array_column(vendor_audit_plan_approver_pool($db, $uid, $scope), 'user_cname') : [],
+          'plan_approver_names'=>$canAdminScope ? array_column(vendor_audit_plan_approver_pool($db, $uid, $scope), 'user_cname') : [],
           'confirm_pw_allowed'=>eg_confirm_password_allowed($db, $uid),
           'eval_settings'=>vendor_eval_settings($db, $scope),
           'scope'=>$scope, 'scopes'=>[['v'=>'outsource','l'=>'外包加工(生管)'],['v'=>'purchase','l'=>'採購']],
-          'visible_scopes'=>vendor_audit_visible_scopes($db, $perms, $uid),
+          'visible_scopes'=>$visibleScopes,
         ], vendor_audit_checklist_config($db, $scope)));
 }
 
@@ -507,7 +526,9 @@ case 'remove_target': {
     if (!$row) jerr('找不到對象');
     $targetScope = vendor_audit_scope_of($row['main_category_id'] !== null ? (int)$row['main_category_id'] : null);
     if (!vendor_audit_can_edit_scope($db, $perms, $uid, $targetScope)) jerr('您沒有本廠商所屬範疇（'.vendor_audit_scope_label($targetScope).'）的稽核登錄權限', 403);
-    if ($row['audit_date'] !== null && !$perms['canAdmin']) jerr('已稽核之對象僅管理員可移除');
+    // 「已稽核者僅管理員可移除」的管理員也要限定在該廠商所屬範疇，採購管理員不可移除生管已稽核的對象
+    if ($row['audit_date'] !== null && !vendor_audit_can_admin_scope($db, $perms, $uid, $targetScope))
+        jerr('已稽核之對象僅本範疇（'.vendor_audit_scope_label($targetScope).'）的稽核管理員可移除');
     try {
         $db->beginTransaction();
         $db->prepare("DELETE FROM vendor_audit_target WHERE target_id=?")->execute([$tid]);
@@ -580,13 +601,28 @@ case 'people': {   // 部門人員（設定稽核員用）
     jout(['people'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
 }
 case 'auditors_all': {
+    // 稽核員資格設定是管理設定，只給本範疇的稽核管理員看（原本任何檢閱者都能列全部人，順手收斂）
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
     $rows = $db->query("SELECT a.auditor_id, a.user_id, a.user_name, a.dept_id, a.dept_name, a.scope,
                                CASE WHEN u.id IS NULL THEN 1 WHEN u.state=0 THEN 1 ELSE 0 END AS has_left
                         FROM vendor_auditor a LEFT JOIN user u ON u.id=a.user_id
                         WHERE a.is_active=1 ORDER BY has_left, a.scope, a.dept_name, a.user_name")->fetchAll(PDO::FETCH_ASSOC);
+    // 非系統管理員只看得到自己管得到的範疇（'all'=通用者跨兩邊，仍列出讓人知道有誰能碰自己的資料，
+    // 但實際刪除仍需同時具備兩邊管理權，見 remove_auditor）
+    $bothScopes = vendor_audit_can_admin_scope($db,$perms,$uid,'outsource') && vendor_audit_can_admin_scope($db,$perms,$uid,'purchase');
+    if (empty($perms['isAdmin'])) {
+        $rows = array_values(array_filter($rows, function ($r) use ($visibleScopes) {
+            return $r['scope'] === 'all' || in_array($r['scope'], $visibleScopes, true);
+        }));
+    }
     $depts = $db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
-    jout(['auditors'=>$rows, 'departments'=>$depts,
-          'scopes'=>[['v'=>'outsource','l'=>'外包加工'],['v'=>'purchase','l'=>'採購'],['v'=>'all','l'=>'通用']]]);
+    // 可指派的管理範圍：只列自己管得到的；「通用」需同時具備兩邊管理權才給選（對稱 add_auditors 的後端驗證）
+    $scopeOpts = [];
+    foreach ([['v'=>'outsource','l'=>'外包加工'], ['v'=>'purchase','l'=>'採購']] as $so) {
+        if (!empty($perms['isAdmin']) || in_array($so['v'], $visibleScopes, true)) $scopeOpts[] = $so;
+    }
+    if (!empty($perms['isAdmin']) || $bothScopes) $scopeOpts[] = ['v'=>'all','l'=>'通用'];
+    jout(['auditors'=>$rows, 'departments'=>$depts, 'scopes'=>$scopeOpts, 'cur_scope'=>$scope]);
 }
 /* 新增稽核員資格：只能指派自己有管理權的 scope(對稱 vendor_audit_can_admin_scope)；
    指派 all(通用=兩邊都能操作)是把人授予跨範疇權限的動作，需同時具備兩邊的管理權才准，
@@ -862,7 +898,9 @@ case 'sign_decide': {
     $approval = eg_approval_latest($db, 'vendor_audit_sign', $tid, 'manager');
     if (!$approval || $approval['status'] !== 'pending') jerr('此筆目前無待簽核紀錄');
     $signer = vendor_audit_resolve_signer($db, (int)($row['completed_by'] ?? 0), $targetScope);
-    if (!$perms['canAdmin'] && (!$signer || (int)$signer['id'] !== $uid)) jerr('您不是此筆的簽核人', 403);
+    // 管理員代簽也限定在該廠商所屬範疇（採購的稽核管理員不可代簽生管的稽核記錄表，反之亦然）
+    if (!vendor_audit_can_admin_scope($db, $perms, $uid, $targetScope) && (!$signer || (int)$signer['id'] !== $uid))
+        jerr('您不是此筆的簽核人', 403);
 
     $res = eg_approval_decide($db, (int)$approval['id'], $uid, $uname, $decision, $noteIn ?: null);
     if (!$res['success']) jerr($res['message']);
@@ -991,9 +1029,9 @@ case 'plan_data': {
             // 送出者(常常同時是稽核員/管理者)一律不顯示核准/退回按鈕，避免誤按；
             // 除非真的完全解析不到其他合格核准人(pool為空)且本人是管理者，才放行讓送出者自己
             // 處理，避免計劃卡死——跟plan_decide的「除非真的不可避免」規則一致(使用者2026-08-10明確要求)。
-            $canDecide = !$decidePool && $perms['canAdmin'];
+            $canDecide = !$decidePool && $canAdminScope;
         } else {
-            $canDecide = $perms['canAdmin'] || in_array($uid, array_column($decidePool, 'id'), true);
+            $canDecide = $canAdminScope || in_array($uid, array_column($decidePool, 'id'), true);
         }
     }
     jout(['year'=>$year, 'scope'=>$scope, 'rows'=>vendor_audit_plan_data($db, $year, $scope), 'lock'=>$lock,
@@ -1039,15 +1077,17 @@ case 'plan_decide': {
     if ($decision === 'approved') {
         // 球員兼裁判只擋「核准」：若還有其他合格人選，即使是管理者也不准自己核准自己送出的計劃，
         // 只有全公司真的找不到別人(pool為空)時才放行讓送出者(仍須canAdmin)自行核准，避免卡死(使用者2026-08-10明確要求)。
+        // 這裡的「管理者放行」一律用 $canAdminScope（依範疇收斂），否則採購的稽核管理員可以核准
+        // 生管年度計劃，反之亦然（2026-08-17使用者明確要求兩邊資料不可互相干涉）。
         if ($isSubmitter) {
             if ($pool) jerr('您是本計劃的送出人，請改由其他核准人員核准，避免球員兼裁判', 403);
-            if (!$perms['canAdmin']) jerr('您不是本計劃的核准人員', 403);
-        } elseif (!$perms['canAdmin'] && !$inPool) {
+            if (!$canAdminScope) jerr('您不是本計劃的核准人員', 403);
+        } elseif (!$canAdminScope && !$inPool) {
             jerr('您不是本計劃的核准人員', 403);
         }
     } else {
-        // 退回不算球員兼裁判：送出人自己撤回等同簡化版取消送出，允許；合格核准人/管理者也能退回。
-        if (!$isSubmitter && !$inPool && !$perms['canAdmin']) jerr('您不是本計劃的核准人員', 403);
+        // 退回不算球員兼裁判：送出人自己撤回等同簡化版取消送出，允許；合格核准人/本範疇管理者也能退回。
+        if (!$isSubmitter && !$inPool && !$canAdminScope) jerr('您不是本計劃的核准人員', 403);
     }
     if ($decision === 'approved') {
         $db->prepare("UPDATE vendor_audit_plan_lock SET status='approved', approved_by_name=?, approved_at=NOW(), approved_date=? WHERE year=? AND scope=?")

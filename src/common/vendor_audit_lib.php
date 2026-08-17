@@ -688,16 +688,63 @@ function vendor_audit_perms(PDO $db, ?array $u): array {
 }
 
 /**
+ * 此人「被設定的稽核範疇」(2026-08-17使用者明確要求：稽核管理員也要依人員部門分成
+ * 生管(外包加工)／採購兩種，只能看到與操作自己那一份分頁，避免跨範疇弄亂資料)。判定優先序：
+ *  ① 稽核員資格設定(vendor_auditor)登記的 scope——管理員在該頁明確指派的「部門×人員」，最權威；
+ *     登記 all=通用者兩邊都算。
+ *  ② 沒登記過且 $deptFallback=true → 依「組織角色綁定設定」的生管部門(pm_dept)／採購部門
+ *     (purchase_dept)推導（一律走 eg_org_in_dept 的含子部門判定，禁寫死部門 id）：在生管部門→
+ *     outsource、在採購部門→purchase，同時屬於兩邊者兩邊都算；部門取 user_department_position_map
+ *     的**全部**對應（含兼任），不只主要部門。
+ *  ③ 兩者都判不出來 → 回空陣列＝「無法判定」，呼叫端一律不收斂（維持既有行為，不把人鎖死）。
+ * $deptFallback=false 用於「只認明確登記」的呼叫端（純檢閱者，2026-08-17既有決定：唯讀查閱不收斂）。
+ * 同一請求內快取，避免各處重複查。
+ */
+function vendor_audit_user_scopes(PDO $db, int $uid, bool $deptFallback = true): array {
+    static $cache = [];
+    $ck = $uid . ($deptFallback ? ':d' : ':r');
+    if (isset($cache[$ck])) return $cache[$ck];
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT DISTINCT scope FROM vendor_auditor WHERE user_id=? AND is_active=1");
+        $st->execute([$uid]);
+        $reg = $st->fetchAll(PDO::FETCH_COLUMN);
+        if ($reg) {
+            $out = in_array('all', $reg, true) ? ['outsource', 'purchase']
+                 : array_values(array_intersect(['outsource', 'purchase'], $reg));
+        }
+        if (!$out && $deptFallback) {
+            $st = $db->prepare("SELECT DISTINCT department_id FROM user_department_position_map WHERE user_id=?");
+            $st->execute([$uid]);
+            $hit = [];
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $did) {
+                $did = ($did === null) ? null : (int)$did;
+                if (eg_org_in_dept($db, 'pm_dept', $did))       $hit['outsource'] = true;
+                if (eg_org_in_dept($db, 'purchase_dept', $did)) $hit['purchase']  = true;
+            }
+            $out = array_values(array_intersect(['outsource', 'purchase'], array_keys($hit)));
+        }
+    } catch (Throwable $e) { $out = []; }
+    return $cache[$ck] = $out;
+}
+
+/**
  * 稽核登錄操作是否限定於某 scope(2026-08-17使用者明確要求)：
- * 系統管理員／稽核管理員(canAdmin) 不受限制，生管/採購兩邊都可操作；
+ * 系統管理員(isAdmin)不受限制，生管/採購兩邊都可操作；
+ * 「稽核管理員」(canAdmin)也要依 vendor_audit_user_scopes()「被設定的人員部門」收斂——採購的稽核
+ * 管理員不可以去登錄/改動外包加工(生管)的資料，反之亦然（判不出範疇者維持不收斂，不把人鎖死）；
  * 一般「稽核登錄」角色者，還必須是「稽核員資格設定」(vendor_auditor)中該 scope(或 all=通用)
  * 的有效在職稽核員才算數——只有角色沒有登記成稽核員=不能操作任何一邊；
  * 登記成 outsource 只能操作外包加工，登記成 purchase 只能操作採購，避免跨範疇誤改對方資料。
  */
 function vendor_audit_can_edit_scope(PDO $db, array $perms, int $uid, string $scope): bool {
-    if (!empty($perms['canAdmin'])) return true;
-    if (empty($perms['canEdit'])) return false;
+    if (!empty($perms['isAdmin'])) return true;
     $scope = vendor_audit_norm_scope($scope);
+    if (!empty($perms['canAdmin'])) {
+        $my = vendor_audit_user_scopes($db, $uid);
+        return !$my || in_array($scope, $my, true);
+    }
+    if (empty($perms['canEdit'])) return false;
     $st = $db->prepare("SELECT 1 FROM vendor_auditor WHERE user_id=? AND is_active=1 AND scope IN (?, 'all') LIMIT 1");
     $st->execute([$uid, $scope]);
     return (bool)$st->fetchColumn();
@@ -707,34 +754,31 @@ function vendor_audit_can_edit_scope(PDO $db, array $perms, int $uid, string $sc
  * 稽核管理設定操作是否限定於某 scope(2026-08-17使用者明確要求：查核表設定/簽核設定/定期評核門檻/
  * 年度計劃簽核開關與核准鏈選項/稽核員資格設定本身，全部比照稽核登錄的機制收斂)：
  * 系統管理員(isAdmin)不受限制，兩邊都可管理；一般「稽核管理員」角色者，也必須是「稽核員資格設定」
- * 中該 scope(或 all=通用)的有效在職稽核員才算數——只掛角色沒登記=不能管任何一邊。
+ * 中該 scope(或 all=通用)的有效在職稽核員、**或**其部門被綁定為生管/採購部門者才算數
+ * （見 vendor_audit_user_scopes；兩者都判不出來=不能管任何一邊，維持原本的 fail-closed）。
  * 週期設定/附件路徑/AS文件綁定不受此限(使用者明確選擇這些暫時共用infra，見 save_cycle 呼叫端)。
  */
 function vendor_audit_can_admin_scope(PDO $db, array $perms, int $uid, string $scope): bool {
     if (!empty($perms['isAdmin'])) return true;
     if (empty($perms['canAdmin'])) return false;
     $scope = vendor_audit_norm_scope($scope);
-    $st = $db->prepare("SELECT 1 FROM vendor_auditor WHERE user_id=? AND is_active=1 AND scope IN (?, 'all') LIMIT 1");
-    $st->execute([$uid, $scope]);
-    return (bool)$st->fetchColumn();
+    $my = vendor_audit_user_scopes($db, $uid);
+    return $my ? in_array($scope, $my, true) : false;
 }
 
 /**
  * 此人在畫面上應該看得到哪些範疇切換鈕(2026-08-17使用者明確要求：只有採購資格的人不該連「外包加工(生管)」
  * 分頁都看得到，避免誤觸/誤以為自己能操作)：
- * 管理員／稽核管理員 → 兩邊都看得到；已登記為稽核員(outsource/purchase/all) → 依登記的 scope 決定
- * （all=兩邊都看得到）；完全沒登記過稽核員資格(例如只有「稽核檢閱」角色的純檢視人員) → 維持兩邊都看得到
- * (唯讀查閱不受此限，避免誤擋掉合理的跨部門查核需求)。
+ * 系統管理員 → 兩邊都看得到；**稽核管理員也要依「被設定的人員部門」分成採購/生管兩種**，只看得到
+ * 自己那一份分頁（登記的稽核員資格優先，沒登記則依組織角色綁定的生管部門/採購部門推導）；
+ * 一般稽核員 → 依登記的 scope 決定（all=兩邊）；完全判不出範疇者(例如只有「稽核檢閱」角色的純檢視
+ * 人員、或部門沒被綁成生管/採購) → 維持兩邊都看得到(唯讀查閱不受此限，避免誤擋跨部門查核需求)。
  */
 function vendor_audit_visible_scopes(PDO $db, array $perms, int $uid): array {
-    if (!empty($perms['canAdmin'])) return ['outsource', 'purchase'];
-    $st = $db->prepare("SELECT DISTINCT scope FROM vendor_auditor WHERE user_id=? AND is_active=1");
-    $st->execute([$uid]);
-    $scopes = $st->fetchAll(PDO::FETCH_COLUMN);
-    if (!$scopes) return ['outsource', 'purchase'];
-    if (in_array('all', $scopes, true)) return ['outsource', 'purchase'];
-    $visible = array_values(array_intersect(['outsource', 'purchase'], $scopes));
-    return $visible ?: ['outsource', 'purchase'];
+    if (!empty($perms['isAdmin'])) return ['outsource', 'purchase'];
+    // 部門推導只對「稽核管理員」開啟：純檢閱/一般登錄者沿用「只認明確登記」的既有口徑
+    $my = vendor_audit_user_scopes($db, $uid, !empty($perms['canAdmin']));
+    return $my ?: ['outsource', 'purchase'];
 }
 
 /* ============================================================

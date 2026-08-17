@@ -742,12 +742,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-body">
         <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">
             設定管理供應商的部門與稽核員。<b>外包加工</b>與<b>採購</b>供應商的管理部門通常不同，請分別指定；「通用」表示兩者皆可稽核。
+            <span id="audScopeFixed" style="color:#B5762A;font-weight:bold;"></span>
         </div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;border:1px dashed #E8D5B5;border-radius:6px;padding:8px;margin-bottom:8px;">
-            <label style="margin:0;font-size:12px;">管理範圍</label>
-            <select id="audScope" style="height:28px;border:1px solid #D8BE93;border-radius:4px;">
-                <option value="outsource">外包加工</option><option value="purchase">採購</option><option value="all">通用</option>
-            </select>
+            <span id="audScopeRow" style="display:none;">
+                <label style="margin:0;font-size:12px;">管理範圍</label>
+                <select id="audScope" style="height:28px;border:1px solid #D8BE93;border-radius:4px;"></select>
+            </span>
             <label style="margin:0;font-size:12px;">部門</label>
             <select id="audDept" style="height:28px;border:1px solid #D8BE93;border-radius:4px;min-width:120px;"><option value="">選部門…</option></select>
             <button type="button" class="b-att2" onclick="audAddChecked()"><i class="fa fa-user-plus"></i> 加入勾選為稽核員</button>
@@ -807,6 +808,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <b>稽核管理員</b>：登錄＋設定廠商納管、共用週期。<br>
         <b>管理者</b>：系統管理者固定擁有全部權限。<br>
         <hr style="border-color:#EADFC8;">
+        <b>稽核登錄／稽核管理員都會依範疇（外包加工＝生管／採購）收斂</b>：依「稽核員資格設定」登記的管理範圍，
+        稽核管理員未登記者則依系統設定→組織角色綁定的<b>生管部門／採購部門</b>推導；只看得到、也只能操作自己那一份分頁。
+        <hr style="border-color:#EADFC8;">
         本頁為 KPI「廠商稽核按時執行率(#6)」來源；每期對象由本頁挑選，執行率＝已完成÷對象數。停用廠商不列入。
     </div>
 </div></div>
@@ -822,6 +826,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li>頁面最上方有「外包加工（生管）／採購」切換鈕：<b>生管管的外包加工廠</b>與<b>採購管的一般供應商</b>共用同一支頁面，但<b>稽核批次對象、合格供應商清冊、查核表題庫、年度稽核計劃各自獨立</b>，切換後看到的是該範疇自己的資料，兩邊互不干涉、互不影響。</li>
             <li>供應商屬於哪個範疇由 master_data 廠商主檔的<b>加工大類</b>自動判定（大類=外包加工廠者歸生管，其餘歸採購），不必手動指定。</li>
             <li>查核表設定、年度計畫送簽核准，都是「目前切換到哪個範疇，就是在編輯/送出哪個範疇的資料」，管理員留意畫面上的範疇標示再操作。</li>
+            <li><b>稽核管理員也依人員部門分成「採購」與「生管」兩種</b>（2026-08-17）：您<b>只會看到、也只能操作自己那一份分頁</b>，切換鈕不會出現對方的範疇，年度計畫核准／代簽／移除已稽核對象／查核表與門檻設定等動作也一律只能對自己範疇做，避免兩邊互相改到對方的資料。範疇怎麼判定：<b>①</b>「稽核員資格設定」裡登記的管理範圍優先（登記「通用」＝兩邊都能管）；<b>②</b>沒登記過就依<b>系統設定→組織角色綁定</b>的<b>生管部門／採購部門</b>推導（含子部門，也含兼任部門）；<b>③</b>兩者都判不出來＝不具任何一邊的管理設定權限，請洽系統管理員登記。<b>系統管理者</b>不受此限，兩邊都看得到。</li>
         </ul>
 
         <h4>一、稽核批次（實地稽核，半年一期）</h4>
@@ -879,6 +884,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <h4>六、權限角色</h4>
         <ul>
             <li><b>稽核檢閱</b>：檢視/歷史/統計/匯出；<b>稽核登錄</b>：＋加入/移除對象、登錄稽核、上傳附件、清冊維護；<b>稽核管理員</b>：＋稽核員/週期/附件/AS綁定/門檻設定、兩年未交易移除；<b>管理者</b>固定全權。</li>
+            <li><b>稽核登錄／稽核管理員都會依範疇收斂</b>：只有角色、卻沒被登記成該範疇的稽核員（管理員則另可由生管／採購部門綁定推導），就不能操作那一邊；詳見上方「○、範疇切換」。週期設定、附件路徑、AS 文件綁定是兩邊共用的基礎設定，不隨範疇收斂。</li>
         </ul>
         <div style="font-size:11px;color:#8a6d45;margin-top:8px;">列印文件標頭一律取「本公司」（master_data 客戶分頁設為本公司之客戶全名/發票用）。</div>
     </div>
@@ -2212,6 +2218,13 @@ function loadAuditorMgr(){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         var $d=$('#audDept').html('<option value="">選部門…</option>');
         res.departments.forEach(function(d){ $d.append('<option value="'+d.id+'" data-name="'+esc(d.name)+'">'+esc(d.name)+'</option>'); });
+        // 可指派的管理範圍由後端依「自己管得到哪些範疇」給（稽核管理員依部門分成採購/生管），
+        // 不在前端寫死三個選項；只有一種可選時預設就是它，避免管理員選到自己權限外的範疇被後端擋。
+        var $sc=$('#audScope').empty();
+        (res.scopes||[]).forEach(function(s){ $sc.append('<option value="'+s.v+'">'+esc(s.l)+'</option>'); });
+        if ((res.scopes||[]).some(function(s){ return s.v===res.cur_scope; })) $sc.val(res.cur_scope);
+        $('#audScopeRow').toggle((res.scopes||[]).length > 1);
+        $('#audScopeFixed').text((res.scopes||[]).length === 1 ? '（本設定僅適用「'+esc(res.scopes[0].l)+'」）' : '');
         $('#audPeople').html('<span style="color:#b0a390;">選部門載入人員</span>');
         var h='';
         (res.auditors||[]).forEach(function(a){
