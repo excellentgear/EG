@@ -133,7 +133,7 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
             </div>
             <div class="hf-table-wrap">
             <table class="hf-tbl">
-                <thead><tr><th>範本名稱</th><th>適用部門×職位</th><th><?= $ft==='skill_assess' ? '適用機型數' : '內容列數' ?></th><th style="width:140px;">操作</th></tr></thead>
+                <thead><tr><th>範本名稱</th><th>適用部門×職位</th><th><?= $ft==='skill_assess' ? '適用機型數' : '內容列數' ?></th><th style="width:<?= $ft==='skill_assess' ? 140 : 200 ?>px;">操作</th></tr></thead>
                 <tbody class="tpl-list-body"><tr><td colspan="4" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
             </div>
@@ -178,6 +178,9 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
 <div class="hf-mask" id="tplMask"><div class="hf-modal">
     <div class="m-head"><span id="tplTitle">範本</span><span class="m-close" onclick="closeMask('tplMask')">✕</span></div>
     <div class="m-body">
+        <div id="tplCopyNote" style="display:none;font-size:12.5px;color:#8a5a2b;background:#FDF0DC;border:1px solid #F0A24B;border-radius:6px;padding:6px 8px;margin-bottom:8px;">
+            這是<b>複製</b>出來的新範本，內容已整份帶入、可自行增刪修改；<b>「適用部門×職位」刻意留空</b>（同一個部門×職位若被兩個範本綁定，建立表單時會分不清該用哪一份），請在下方指定這份複製版要套用的部門×職位，按「儲存」才會真的建立。原範本不會被改動。
+        </div>
         <label>範本名稱</label><input type="text" id="tplName">
         <div id="tplStampBlock">
             <label>逐列/評分區圖章樣式（不設定則用系統預設）</label><select id="tplListStamp"></select>
@@ -255,6 +258,7 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
         管理員在這裡設定「職位範本」：建立表單時系統會依員工的部門×職位比對範本，自動帶入內容（職務說明書的工作職責表、員工職能鑑定表的職能項目清單）或適用機型清單（專業技能鑑定考核表）。一個範本可以綁定多筆部門×職位。
         <h4>操作步驟</h4>
         <b>①新增/編輯範本</b>：填範本名稱、綁定適用的部門×職位（選一個部門後可一次勾選多個職位加入，部門選「不限部門」代表該職位不論哪個部門都適用）、編輯內容（職務說明書填4欄工作職責表；員工職能鑑定表填職能項目清單；專業技能鑑定考核表勾選適用機型，可用「全選/取消全選」快速操作，需先在「機型/量具白名單」建立好白名單）。<br>
+        <b>①-1 複製範本</b>（職務說明書範本／職能鑑定表範本的清單「複製」鈕）：以該筆為母本開啟新增跳窗，名稱自動變成「原名（複製）」、內容整份帶入可再增刪修改；<b>「適用部門×職位」刻意留空</b>（同一個部門×職位被兩份範本綁到，建立表單時會分不清該用哪一份，系統只會取後建立的那筆），請自行指定這份複製版要套用的部門×職位。按「儲存」才會真的建立新範本，原範本不會被改動。<br>
         <b>①-2 範本之間互相帶入內容</b>：三種範本的內容可以互抓，避免同一份工作內容要打兩次——<br>
         　・職務說明書範本 ←→ 職能鑑定表範本：<b>雙向</b>。職務說明書的「工作摘要」＝職能鑑定表的「項目名稱」，在任一邊的編輯跳窗選「對應的另一種範本」，勾選要帶入的列後按「加入所選」即可（已存在的內容不會重複加入），清單上方有「全選／取消全選」可一次勾完整份。<br>
         　・技能鑑定表範本 →職能鑑定表範本：勾選其適用機型帶入成職能項目；或勾「動態帶入」改成建立表單當下依該員工已有的技能鑑定表機型/量具自動產生。<br>
@@ -336,7 +340,9 @@ function loadTplList(ft){
         var html = '';
         rows.forEach(function(t){
             html += '<tr><td>'+esc(t.name)+'</td><td>'+(t.scope_summary||'（載入中）')+'</td><td>'+(t.count_summary||'')+'</td>'
-                  + '<td><button class="hf-btn-sm" onclick="openTplModal(\''+ft+'\','+t.id+')">編輯</button> <button class="hf-btn-sm" onclick="tplDelete('+t.id+',\''+ft+'\')">刪除</button></td></tr>';
+                  + '<td><button class="hf-btn-sm" onclick="openTplModal(\''+ft+'\','+t.id+')">編輯</button>'
+                  + (ft === 'skill_assess' ? '' : ' <button class="hf-btn-sm" onclick="openTplModal(\''+ft+'\','+t.id+',true)">複製</button>')
+                  + ' <button class="hf-btn-sm" onclick="tplDelete('+t.id+',\''+ft+'\')">刪除</button></td></tr>';
         });
         $tb.html(html);
         // 補讀每筆的 scope/count 摘要
@@ -388,9 +394,12 @@ function scopeAddSelected(){
     posIds.forEach(function(pid){ scopeAddRow(deptId, pid); });
     $('.scope-pos-ck').prop('checked', false);
 }
-function openTplModal(ft, id){
-    TPL_TYPE = ft; TPL_ID = id; CP_TPL_SA_ID = null;
-    $('#tplTitle').text((id?'編輯':'新增')+'範本 — '+FORM_LABEL[ft]);
+/** asCopy=true＝以 id 這筆為母本開「新增」跳窗（TPL_ID 維持 0，按儲存才建立新範本，原範本不動）。 */
+function openTplModal(ft, id, asCopy){
+    var srcId = id || 0;
+    TPL_TYPE = ft; TPL_ID = asCopy ? 0 : srcId; CP_TPL_SA_ID = null;
+    $('#tplTitle').text((asCopy ? '複製' : (srcId?'編輯':'新增'))+'範本 — '+FORM_LABEL[ft]);
+    $('#tplCopyNote').toggle(!!asCopy);
     $('#tplName').val('');
     $('#scopeBody').empty();
     scopeInitPicker();
@@ -410,23 +419,24 @@ function openTplModal(ft, id){
                      + wl.map(function(w){ return '<label style="display:block;font-size:12.5px;"><input type="checkbox" class="tm-ck" value="'+w.id+'"> '+esc(hfMachineLabel(w,w.source_type))+'</label>'; }).join('')
                      + '</div>';
             $('#tplContentBlock').html(html);
-            if (id) fillTplForEdit(id);
+            if (srcId) fillTplForEdit(srcId, !!asCopy);
         });
     } else {
-        $('#tplContentBlock').html(id ? '' : (ft==='job_desc' ? jdTplTableHtml([]) : cpTplTableHtml([])));
-        if (id) fillTplForEdit(id);
-        else if (!id) { /* 空白範本，至少一列 */ }
+        $('#tplContentBlock').html(srcId ? '' : (ft==='job_desc' ? jdTplTableHtml([]) : cpTplTableHtml([])));
+        if (srcId) fillTplForEdit(srcId, !!asCopy);
     }
-    if (!id) openMask('tplMask');
+    if (!srcId) openMask('tplMask');
 }
-function fillTplForEdit(id){
+function fillTplForEdit(id, asCopy){
     $.getJSON(API, {action:'template_get', id:id}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         var t = res.template;
-        $('#tplName').val(t.name);
+        $('#tplName').val(asCopy ? (t.name + '（複製）') : t.name);
         $('#tplListStamp').val(t.list_stamp_tpl_id||0);
         $('#tplFootStamp').val(t.footer_stamp_tpl_id||0);
-        (t.scope||[]).forEach(function(s){ scopeAddRow(s.department_id, s.position_id); });
+        // 複製時「適用部門×職位」刻意不帶（同一個部門×職位被兩份範本綁到，hrf_match_template() 只會取
+        // id 較大的那筆＝新複製的悄悄取代原範本），改由管理員在跳窗裡自己指定。
+        if (!asCopy) (t.scope||[]).forEach(function(s){ scopeAddRow(s.department_id, s.position_id); });
         if (t.form_type === 'skill_assess') {
             var ids = (t.machines||[]).map(function(m){ return String(m.id); });
             $('#tplMachineList .tm-ck').each(function(){ if (ids.indexOf($(this).val()) >= 0) $(this).prop('checked', true); });
