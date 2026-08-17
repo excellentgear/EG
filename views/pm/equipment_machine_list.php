@@ -140,15 +140,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button id="btnSignSetting" style="display:none;"><i class="fa fa-pencil-square-o"></i> 送簽設定</button>
             <button id="btnPlan"><i class="fa fa-calendar-check-o"></i> 年度整份送簽</button>
             <button id="btnPrintAllService"><i class="fa fa-files-o"></i> 批次列印履歴表</button>
-            <button onclick="window.print()"><i class="fa fa-print"></i> 列印清單</button>
+            <button id="btnPrintList"><i class="fa fa-print"></i> 列印清單</button>
             <span class="eq-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b></span>
         </div>
 
         <div class="eq-table-wrap">
             <table class="eq-table" id="eqTable">
                 <thead><tr>
-                    <th>機台種類</th><th>機台名稱</th><th>機台編號</th><th>現場編號</th><th>機型</th>
-                    <th>製造商</th><th>保養人</th><th>狀態</th><th width="170">操作</th>
+                    <th>機台種類</th><th>機器名稱</th><th>機台編號</th><th>現場編號</th>
+                    <th>製造商</th><th>購入日期</th><th>保養人</th><th>狀態</th><th width="170">操作</th>
                 </tr></thead>
                 <tbody id="eqBody"><tr><td colspan="9" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
@@ -164,7 +164,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-head"><span id="miTitle"><i class="fa fa-cog"></i> 新增機台</span><span class="m-close" onclick="closeMask('miMask')">✕</span></div>
     <div class="m-body">
         <input type="hidden" id="mi-mid">
-        <label>機台名稱 <span class="text-danger">*</span></label><input type="text" id="mi-name">
+        <label>機器名稱 <span class="text-danger">*</span></label><input type="text" id="mi-name">
         <div class="grid2">
             <div><label>機台編號(公司財產編號)</label><input type="text" id="mi-asset-no"></div>
             <div><label>現場自訂編號</label><input type="text" id="mi-field-no"></div>
@@ -175,7 +175,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         </div>
         <div class="grid2">
             <div><label>製造商</label><input type="text" id="mi-manufacturer"></div>
-            <div><label>位置(廠別)</label><input type="text" id="mi-position"></div>
+            <div><label>位置(廠別)</label><select id="mi-position"></select></div>
+        </div>
+        <div class="grid2">
+            <div><label>購入日期</label><input type="date" id="mi-pdate">
+                <div style="font-size:11px;color:#8a6d45;margin-top:3px;">與生管 KPI「機台資產設定」共用同一筆，兩邊即時同步；留空＝不變更既有設定。</div></div>
         </div>
         <label>規格</label><input type="text" id="mi-spec">
         <label>備註</label><textarea id="mi-note" rows="2"></textarea>
@@ -286,7 +290,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <p>本頁是機台設備的正式 AS9100 文件呈現（機台設備一覽表＋機器設備履歴表），資料與 <b>生管 KPI「機台資產設定」共用同一張機台主檔</b>，兩邊新增/編輯即時互相反映。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>「新增機台」／點列表「機台資料」：編輯機台名稱、編號、機型、製造商、規格、停用狀態等基本資料。</li>
+            <li>「新增機台」／點列表「機台資料」：編輯機器名稱、編號、機型、製造商、購入日期、規格、位置(廠別)、停用狀態等基本資料。位置(廠別)是<b>廠區下拉</b>（一廠/二廠/三廠，取自庫存區域設定），不是自由輸入。</li>
             <li>「保養人」：指派保養人並記錄日期區間；保養人異動時系統自動把前一位的生效區間結束、接續新一位。若目前指派中的保養人已離職，會以紅字警示提醒改派。</li>
             <li>「履歴」：登錄設備故障/維修紀錄（日期／廠商／問題／解決方式／執行者），可逐筆核准並列印。</li>
             <li>「年度整份送簽」：每年將目前機台清單整份送出核准（比照供應商稽核計劃模式），核准後產生該年度快照，之後清單異動不影響已核准的快照內容。</li>
@@ -295,7 +299,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <h4>重要行為</h4>
         <ul>
             <li>停用機台採軟刪除（<code>machine_list.state=1</code>），列表預設不顯示，勾選「含已停用」可查看。</li>
-            <li>AS 文件編號綁定：一覽表與履歴表各自獨立綁定，列印頁尾自動顯示對應編號。</li>
+            <li><b>購入日期與生管 KPI「機台資產設定」是同一筆資料</b>（兩邊改都即時同步）。該筆同時存放購入金額／折舊方式等成本設定，故本頁購入日期<b>留空＝不變更</b>，不會把整筆折舊設定刪掉；金額與折舊參數請到 KPI 機台資產設定維護。</li>
+            <li>AS 文件編號綁定：一覽表與履歴表各自獨立綁定，列印頁尾自動顯示對應編號；列印標題也取自綁定文件的名稱。</li>
+            <li><b>列印清單</b>依目前查詢結果印出，欄位固定為：機器編號／機器名稱（機型自動換行印在名稱下方）／規格／製造商／保養人員／購買日期／備註，直式 A4、頁碼左下、AS 編號右下、左核准右製表。</li>
+            <li>畫面上「機器名稱」欄位一格顯示兩行：第一行機器名稱、第二行機型。</li>
             <li>保養人下拉僅列在職人員（含留職停薪/育嬰留停會標記假別，離職者一律不可選）。</li>
         </ul>
         <h4>設定入口</h4>
@@ -351,6 +358,8 @@ function loadMeta(cb){
         m.machine_types.forEach(function(t){ $t.append('<option value="'+t.process_type_id+'">'+esc(t.process_type)+'</option>'); });
         var $mt = $('#mi-type').empty().append('<option value="">-- 請選擇 --</option>');
         m.machine_types.forEach(function(t){ $mt.append('<option value="'+t.process_type_id+'">'+esc(t.process_type)+'</option>'); });
+        var $ar = $('#mi-position').empty().append('<option value="0">-- 未設定 --</option>');
+        (m.areas||[]).forEach(function(a){ $ar.append('<option value="'+a.area_id+'">'+esc(a.area_name)+'</option>'); });
         var $py = $('#planYear').empty();
         for (var y=m.cur_year+1; y>=m.cur_year-4; y--) $py.append('<option value="'+y+'">'+y+'</option>');
         $py.val(m.cur_year);
@@ -375,17 +384,23 @@ function assigneeCellHtml(a){
     else if (a.on_leave) h += ' <span class="eq-leave">（'+esc(a.state_label)+'）</span>';
     return h;
 }
+// 機器名稱：名稱一行，機型自動換到下一行（使用者指定顯示方式）
+function machineNameCell(r){
+    var h = '<b>'+esc(r.machine)+'</b>';
+    if (r.machine_model) h += '<br><span style="font-size:11px;color:#8a6d45;">'+esc(r.machine_model)+'</span>';
+    return h;
+}
 function renderList(){
     var h = '';
     ROWS.forEach(function(r){
         var dis = r.state == 1;
         h += '<tr class="'+(dis?'dis':'')+'">'
            + '<td>'+esc(r.machine_type||'—')+'</td>'
-           + '<td><b>'+esc(r.machine)+'</b></td>'
+           + '<td>'+machineNameCell(r)+'</td>'
            + '<td>'+esc(r.asset_no||'—')+'</td>'
            + '<td>'+esc(r.field_no||'—')+'</td>'
-           + '<td>'+esc(r.machine_model||'—')+'</td>'
            + '<td>'+esc(r.manufacturer||'—')+'</td>'
+           + '<td>'+(r.purchase_date ? dispDate(r.purchase_date) : '<span class="eq-none">未設定</span>')+'</td>'
            + '<td>'+assigneeCellHtml(r.assignee)+'</td>'
            + '<td>'+(dis?'停用':'正常')+'</td>'
            + '<td>'
@@ -404,7 +419,8 @@ window.addEventListener('scroll', function(){ $('#btnTotop').toggle(window.scrol
 function openMachineModal(mid){
     if (!mid){
         $('#miTitle').html('<i class="fa fa-cog"></i> 新增機台'); $('#mi-mid').val('');
-        $('#mi-name,#mi-asset-no,#mi-field-no,#mi-model,#mi-manufacturer,#mi-position,#mi-spec,#mi-note').val('');
+        $('#mi-name,#mi-asset-no,#mi-field-no,#mi-model,#mi-manufacturer,#mi-spec,#mi-note,#mi-pdate').val('');
+        $('#mi-position').val('0');
         $('#mi-type').val(''); $('#mi-state').prop('checked', false); $('#mi-disabled-grp').hide(); $('#mi-disabled-date').val('');
         $('#mi-delete-btn').hide();
         openMask('miMask');
@@ -414,8 +430,15 @@ function openMachineModal(mid){
         var m = res.row;
         $('#miTitle').html('<i class="fa fa-cog"></i> 編輯機台'); $('#mi-mid').val(m.machine_id);
         $('#mi-name').val(m.machine||''); $('#mi-asset-no').val(m.asset_no||''); $('#mi-field-no').val(m.field_no||'');
-        $('#mi-model').val(m.machine_model||''); $('#mi-manufacturer').val(m.manufacturer||''); $('#mi-position').val(m.position||'');
+        $('#mi-model').val(m.machine_model||''); $('#mi-manufacturer').val(m.manufacturer||'');
+        // 廠別選項若已被停用/刪除，補一個選項保住原值，避免存檔時被洗成未設定
+        var pos = String(parseInt(m.position||0, 10) || 0);
+        if (pos !== '0' && !$('#mi-position option[value="'+pos+'"]').length) {
+            $('#mi-position').append('<option value="'+pos+'">（原設定廠別 #'+pos+'）</option>');
+        }
+        $('#mi-position').val(pos);
         $('#mi-spec').val(m.spec||''); $('#mi-note').val(m.note||''); $('#mi-type').val(m.machine_type_id||'');
+        $('#mi-pdate').val(m.purchase_date||'');
         var disabled = String(m.state) === '1';
         $('#mi-state').prop('checked', disabled); $('#mi-disabled-grp').toggle(disabled); $('#mi-disabled-date').val(m.disabled_date||'');
         $('#mi-delete-btn').toggle(!!PERMS.canAdmin && !disabled);
@@ -429,12 +452,13 @@ $('#mi-state').on('change', function(){
 $('#btnAdd').on('click', function(){ openMachineModal(0); });
 function saveMachine(){
     var name = $('#mi-name').val().trim();
-    if (!name){ alert('機台名稱不可為空'); return; }
+    if (!name){ alert('機器名稱不可為空'); return; }
     if (!$('#mi-type').val()){ alert('請選擇機台類型'); return; }
     post('save', {
         machine_id: $('#mi-mid').val(), machine: name, machine_type_id: $('#mi-type').val(),
         machine_model: $('#mi-model').val(), asset_no: $('#mi-asset-no').val(), field_no: $('#mi-field-no').val(),
         manufacturer: $('#mi-manufacturer').val(), position: $('#mi-position').val(), spec: $('#mi-spec').val(), note: $('#mi-note').val(),
+        purchase_date: $('#mi-pdate').val(),
         disabled: $('#mi-state').is(':checked')?1:0, disabled_date: $('#mi-disabled-date').val()
     }, function(){ closeMask('miMask'); loadList(); });
 }
@@ -643,6 +667,7 @@ function loadPlanData(){
 function submitPlan(){
     var snapshot = ROWS.map(function(r){ return {machine_id:r.machine_id, machine:r.machine, asset_no:r.asset_no, field_no:r.field_no,
         machine_model:r.machine_model, manufacturer:r.manufacturer, machine_type:r.machine_type,
+        purchase_date:r.purchase_date, spec:r.spec, note:r.note,
         assignee: r.assignee ? r.assignee.user_cname : ''}; });
     post('plan_submit', {year: CUR_PLAN_YEAR||$('#planYear').val(), submit_date: $('#planSubmitDate').val(), snapshot: JSON.stringify(snapshot)}, function(){
         loadPlanData(); alert('已送出');
@@ -654,34 +679,67 @@ function decidePlan(decision){
         loadPlanData(); alert(decision==='approved'?'已核准':'已退回');
     });
 }
+/* ── 清單列印（欄位由使用者指定：機器編號／機器名稱／規格／製造商／保養人員／購買日期／備註） ── */
+function machineListPrintCss(docNo){
+    return 'body{font-family:"Microsoft JhengHei",sans-serif;color:#3b2a17;margin:0;}.pg{margin:12mm 8mm 16mm;}'
+      + '.co{text-align:center;font-size:20px;font-weight:bold;letter-spacing:2px;}h2{font-size:15px;margin:2px 0 10px;text-align:center;}'
+      + 'table{width:100%;border-collapse:collapse;font-size:11px;}th,td{border:1px solid #999;padding:3px 5px;text-align:center;vertical-align:middle;}'
+      + 'th{background:#F7E0BD;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + 'tr{page-break-inside:avoid;}'
+      + 'svg{width:66px !important;height:66px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + '@page{size:A4 portrait;margin:10mm 8mm 16mm 8mm;'
+      + (docNo ? '@bottom-right{content:"'+docNo.replace(/["\\]/g,'')+'";font-size:9pt;color:#333;}' : '')
+      + '@bottom-left{content:"第" counter(page) "頁／共" counter(pages) "頁";font-size:9pt;color:#333;}}';
+}
+function machineListPrintRows(rows, nameOf, assigneeOf){
+    var body = '<table><thead><tr><th width="12%">機器編號</th><th width="20%">機器名稱</th><th>規格</th>'
+             + '<th width="12%">製造商</th><th width="10%">保養人員</th><th width="12%">購買日期</th><th width="16%">備註</th></tr></thead><tbody>';
+    rows.forEach(function(r){
+        var nm = esc(nameOf(r));
+        if (r.machine_model) nm += '<br><span style="font-size:10px;">'+esc(r.machine_model)+'</span>';
+        body += '<tr><td>'+esc(r.asset_no||'')+'</td><td>'+nm+'</td>'
+              + '<td style="text-align:left;">'+esc(r.spec||'')+'</td>'
+              + '<td>'+esc(r.manufacturer||'')+'</td>'
+              + '<td>'+esc(assigneeOf(r))+'</td>'
+              + '<td>'+dispDate(r.purchase_date)+'</td>'
+              + '<td style="text-align:left;">'+esc(r.note||'')+'</td></tr>';
+    });
+    return body + '</tbody></table>';
+}
+function openPrintWindow(title, heading, body, docNo){
+    var w = window.open('', '_blank');
+    if (!w){ alert('瀏覽器阻擋了列印視窗，請允許彈出視窗'); return; }
+    w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'
+      + machineListPrintCss(docNo)
+      + '</style></head><body><div class="pg"><div class="co">'+esc((META&&META.company_name)||'')+'</div>'
+      + '<h2>'+esc(heading)+'</h2>' + body + '</div></body></html>');
+    w.document.close(); w.focus(); setTimeout(function(){ w.print(); }, 300);
+}
+// 表頭一律用綁定的 AS 文件名稱（ai-rules/16 第一節：禁寫死），未綁定才退回頁面名稱
+function listDocName(doc){ return (doc && doc.doc_name) ? doc.doc_name : '機台設備一覽表'; }
+function listDocNo(doc){ return doc ? (doc.doc_no + (doc.doc_level==='四階'?(doc.current_version||''):'')) : ''; }
+$('#btnPrintList').on('click', function(){
+    if (!ROWS.length){ alert('目前沒有搜尋結果可列印'); return; }
+    var doc = META.list_as_doc;
+    var body = machineListPrintRows(ROWS, function(r){ return r.machine||''; },
+                                   function(r){ return r.assignee ? r.assignee.user_cname : ''; });
+    body += '<div style="display:flex;justify-content:space-between;margin-top:26px;">'
+          + '<div>核准：'+stampHtml('', '', false)+'</div>'
+          + '<div>製表：'+stampHtml(META.cur_user_name||'', META.today, false)+'</div></div>';
+    openPrintWindow(listDocName(doc), listDocName(doc), body, listDocNo(doc));
+});
+
 function printPlanSnapshot(){
     post('plan_data', {year: CUR_PLAN_YEAR}, function(res){
         var lock = res.lock;
         var rows = lock && lock.snapshot_json ? JSON.parse(lock.snapshot_json) : [];
-        var docNo = res.list_as_doc ? (res.list_as_doc.doc_no + (res.list_as_doc.doc_level==='四階'?(res.list_as_doc.current_version||''):'')) : '';
-        var body = '<table><thead><tr><th>機台種類</th><th>機台名稱</th><th>機台編號</th><th>機型</th><th>製造商</th><th>保養人</th></tr></thead><tbody>';
-        rows.forEach(function(r){
-            body += '<tr><td>'+esc(r.machine_type||'')+'</td><td>'+esc(r.machine||'')+'</td><td>'+esc(r.asset_no||'')+'</td>'
-                  + '<td>'+esc(r.machine_model||'')+'</td><td>'+esc(r.manufacturer||'')+'</td><td>'+esc(r.assignee||'')+'</td></tr>';
-        });
-        body += '</tbody></table>';
+        var doc = res.list_as_doc;
+        var body = machineListPrintRows(rows, function(r){ return r.machine||''; }, function(r){ return r.assignee||''; });
         body += '<div style="display:flex;justify-content:space-between;margin-top:26px;">'
               + '<div>核准：'+stampHtml(lock.approved_by_name, lock.approved_date, false)+'</div>'
               + '<div>製表：'+stampHtml(lock.submitted_by_name, lock.submit_date, false)+'</div></div>';
-        var w = window.open('', '_blank');
-        if (!w){ alert('瀏覽器阻擋了列印視窗'); return; }
-        w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>機台設備一覽表 '+CUR_PLAN_YEAR+'年度</title><style>'
-          + 'body{font-family:"Microsoft JhengHei",sans-serif;color:#3b2a17;margin:0;}.pg{margin:12mm 8mm 16mm;}'
-          + '.co{text-align:center;font-size:20px;font-weight:bold;letter-spacing:2px;}h2{font-size:15px;margin:2px 0 10px;text-align:center;}'
-          + 'table{width:100%;border-collapse:collapse;font-size:11px;}th,td{border:1px solid #999;padding:3px 5px;text-align:center;}'
-          + 'th{background:#F7E0BD;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-          + 'svg{width:66px !important;height:66px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-          + '@page{size:A4 landscape;margin:10mm 8mm 16mm 8mm;'
-          + (docNo ? '@bottom-right{content:"'+docNo.replace(/["\\]/g,'')+'";font-size:9pt;color:#333;}' : '')
-          + '@bottom-left{content:"第" counter(page) "頁／共" counter(pages) "頁";font-size:9pt;color:#333;}}'
-          + '</style></head><body><div class="pg"><div class="co">'+esc((META&&META.company_name)||'')+'</div>'
-          + '<h2>機台設備一覽表（'+CUR_PLAN_YEAR+' 年度核准清單）</h2>' + body + '</div></body></html>');
-        w.document.close(); w.focus(); setTimeout(function(){ w.print(); }, 300);
+        openPrintWindow(listDocName(doc)+' '+CUR_PLAN_YEAR+'年度',
+                        listDocName(doc)+'（'+CUR_PLAN_YEAR+' 年度核准清單）', body, listDocNo(doc));
     });
 }
 

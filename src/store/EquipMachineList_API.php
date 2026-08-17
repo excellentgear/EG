@@ -38,6 +38,8 @@ switch ($action) {
 
 case 'meta': {
     $types = $db->query("SELECT process_type_id, process_type FROM process_type WHERE COALESCE(is_active,1)=1 ORDER BY sort_order, process_type")->fetchAll(PDO::FETCH_ASSOC);
+    // 位置(廠別)：machine_list.position 其實是 stock_areas.area_id（int NOT NULL，0＝未設定），不是自由輸入文字
+    $areas = $db->query("SELECT area_id, area_name FROM stock_areas WHERE COALESCE(is_active,1)=1 ORDER BY area_id")->fetchAll(PDO::FETCH_ASSOC);
     $signSet = equip_list_plan_sign_setting($db, EQ);
     $chain = equip_list_plan_approver_chain($db, EQ);
     jout([
@@ -47,6 +49,7 @@ case 'meta': {
         'today' => date('Y-m-d'),
         'cur_year' => (int)date('Y'),
         'machine_types' => $types,
+        'areas' => $areas,
         'sign_setting' => $signSet,
         'approver_chain' => $chain,
         'approver_methods' => EQUIP_LIST_APPROVER_METHODS,
@@ -62,9 +65,11 @@ case 'list': {
     $showDisabled = !empty($_REQUEST['show_disabled']);
     $sql = "SELECT ml.machine_id, ml.machine, ml.machine_type_id, ml.machine_model, ml.asset_no, ml.field_no,
                    ml.spec, ml.note, ml.manufacturer, ml.state, ml.disabled_date, ml.position,
-                   pt.process_type AS machine_type
+                   pt.process_type AS machine_type,
+                   kma.purchase_date
             FROM machine_list ml
             LEFT JOIN process_type pt ON pt.process_type_id = ml.machine_type_id
+            LEFT JOIN kpi_machine_asset kma ON kma.machine_id = ml.machine_id
             WHERE 1=1";
     $params = [];
     if (!$showDisabled) $sql .= " AND (ml.state IS NULL OR ml.state<>1)";
@@ -87,8 +92,10 @@ case 'list': {
 case 'get': {
     $mid = (int)($_REQUEST['machine_id'] ?? 0);
     if (!$mid) jerr('缺少機台');
-    $st = $db->prepare("SELECT ml.*, pt.process_type AS machine_type FROM machine_list ml
-                        LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id WHERE ml.machine_id=?");
+    // 購入日期存於 kpi_machine_asset（與 kpi_main.php「機台資產設定」共用同一筆，兩邊即時同步）
+    $st = $db->prepare("SELECT ml.*, pt.process_type AS machine_type, kma.purchase_date FROM machine_list ml
+                        LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id
+                        LEFT JOIN kpi_machine_asset kma ON kma.machine_id=ml.machine_id WHERE ml.machine_id=?");
     $st->execute([$mid]);
     $row = $st->fetch(PDO::FETCH_ASSOC);
     if (!$row) jerr('找不到機台', 404);
@@ -100,7 +107,7 @@ case 'save': {
     $mid = (int)($_POST['machine_id'] ?? 0);
     $name = trim((string)($_POST['machine'] ?? ''));
     $typeId = (int)($_POST['machine_type_id'] ?? 0);
-    if ($name === '') jerr('機台名稱不可為空');
+    if ($name === '') jerr('機器名稱不可為空');
     if (!$typeId) jerr('請選擇機台類型');
     $model = trim((string)($_POST['machine_model'] ?? ''));
     $assetNo = trim((string)($_POST['asset_no'] ?? ''));
@@ -108,7 +115,14 @@ case 'save': {
     $spec = trim((string)($_POST['spec'] ?? ''));
     $note = trim((string)($_POST['note'] ?? ''));
     $manufacturer = trim((string)($_POST['manufacturer'] ?? ''));
-    $position = trim((string)($_POST['position'] ?? ''));
+    // position＝stock_areas.area_id（int NOT NULL，0＝未設定）；原本當文字欄位送 '' 會觸發 MySQL 1366 讓整筆存不進去
+    $position = (int)($_POST['position'] ?? 0);
+    if ($position && !$db->query("SELECT COUNT(*) FROM stock_areas WHERE area_id=".$position)->fetchColumn()) jerr('位置(廠別)不存在');
+    if (!isset($_POST['position']) && $mid) {
+        $st = $db->prepare("SELECT position FROM machine_list WHERE machine_id=?");
+        $st->execute([$mid]);
+        $position = (int)$st->fetchColumn();
+    }
     // 本頁沒有「是否需要架機」欄位（該設定在加工排程的機台管理設定維護）：
     // 未送出時一律沿用資料庫現值，不可預設 0，否則編輯機台會把排程頁的架機人員欄位一起關掉
     if (isset($_POST['need_setup']) && $_POST['need_setup'] !== '') {
@@ -123,6 +137,10 @@ case 'save': {
     $disabled = !empty($_POST['disabled']);
     $state = $disabled ? 1 : null;
     $disabledDate = $disabled ? (trim((string)($_POST['disabled_date'] ?? '')) ?: date('Y-m-d')) : null;
+    // 購入日期：存在 kpi_machine_asset（NOT NULL，且同一筆還放 kpi_main.php 的折舊/成本設定）
+    // 故只 upsert purchase_date 一欄，其餘欄位新增時吃 DB 預設值、既有列一律不動；空白＝不變更（不刪除該筆資產設定）
+    $purchaseDate = trim((string)($_POST['purchase_date'] ?? ''));
+    if ($purchaseDate !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $purchaseDate)) jerr('購入日期格式不正確');
     if ($mid) {
         $db->prepare("UPDATE machine_list SET machine=?, machine_type_id=?, need_setup=?, position=?, machine_model=?, asset_no=?, field_no=?, spec=?, note=?, manufacturer=?, state=?, disabled_date=? WHERE machine_id=?")
            ->execute([$name,$typeId,$needSetup,$position,$model,$assetNo,$fieldNo,$spec,$note,$manufacturer,$state,$disabledDate,$mid]);
@@ -130,6 +148,11 @@ case 'save': {
         $db->prepare("INSERT INTO machine_list (machine, machine_type_id, need_setup, position, machine_model, asset_no, field_no, spec, note, manufacturer, state, disabled_date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
            ->execute([$name,$typeId,$needSetup,$position,$model,$assetNo,$fieldNo,$spec,$note,$manufacturer,$state,$disabledDate]);
         $mid = (int)$db->lastInsertId();
+    }
+    if ($purchaseDate !== '') {
+        $db->prepare("INSERT INTO kpi_machine_asset (machine_id, purchase_date, created_by, updated_by) VALUES (?,?,?,?)
+                      ON DUPLICATE KEY UPDATE purchase_date=VALUES(purchase_date), updated_by=VALUES(updated_by)")
+           ->execute([$mid, $purchaseDate, $uid, $uid]);
     }
     jout(['machine_id' => $mid]);
 }
