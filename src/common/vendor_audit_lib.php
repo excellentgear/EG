@@ -772,6 +772,8 @@ function vendor_eval_settings(PDO $db, string $scope = 'outsource'): array {
         'late_max'     => (float)vendor_eval_setting($db, 'vendor_eval_late_max'.$sfx, vendor_eval_setting($db, 'vendor_eval_late_max', 30)),     // 遲交率上限%
         'default_days' => (int)vendor_eval_setting($db, 'vendor_eval_default_days'.$sfx, vendor_eval_setting($db, 'vendor_eval_default_days', 7)),    // 約定工作天(算應交日)
         'grades'       => vendor_eval_grades($db, $scope),                                          // 評核等級門檻
+        'q_max'        => VENDOR_EVAL_Q_MAX,                                                        // 品質分滿分(供前端顯示用)
+        'd_max'        => VENDOR_EVAL_D_MAX,                                                        // 交期分滿分
     ];
 }
 function vendor_eval_save_settings(PDO $db, array $vals, string $scope = 'outsource'): void {
@@ -810,7 +812,16 @@ function vendor_eval_grade_of($score, array $grades): ?string {
     foreach ($grades as $g) if ($score >= (float)($g['min'] ?? 0)) return (string)($g['label'] ?? '');
     return null;
 }
-/** 彙總一段期間：回傳率/判定/分數(品質分+交期分,各50滿分,四捨五入)/等級 */
+/* 計分滿分配置（使用者2026-08-17定案，比照紙本 2-PH-01-05 Excel）：品質60＋交期40 */
+const VENDOR_EVAL_Q_MAX = 60;   // 品質分滿分
+const VENDOR_EVAL_D_MAX = 40;   // 交期分滿分
+
+/** 彙總一段期間：回傳率/判定/分數(品質60+交期40,無條件捨去)/等級
+ *  品質分 = 60×(1-(不良數+特採數)/進貨數)   ← 特採與不良同權重(使用者2026-08-17決定)
+ *  交期分 = 40×(1-遲交數/進貨數)
+ *  捨去方式比照紙本 Excel 的 ROUNDDOWN；該分項整段期間無資料(分母0)視同無缺失給滿分（沿用舊行為，
+ *  避免只有交期資料的廠商被品質0分硬拉成D）。
+ */
 function vendor_eval_summ(int $qc, int $ng, int $sp, int $di, int $lt, array $set, array $grades): array {
     $ngR = $qc ? round($ng/$qc*100,1) : null;
     $spR = $qc ? round($sp/$qc*100,1) : null;
@@ -822,8 +833,8 @@ function vendor_eval_summ(int $qc, int $ng, int $sp, int $di, int $lt, array $se
         if ($ltR!==null && $ltR>$set['late_max']) $ok=false;
         if ($set['special_max']<100 && $spR!==null && $spR>$set['special_max']) $ok=false;
         $judge = $ok ? 'pass' : 'fail';
-        $qScore = $qc>0 ? (int)round((1-$ng/$qc)*50) : 50;   // 品質分=(1-不良率)×50
-        $dScore = $di>0 ? (int)round((1-$lt/$di)*50) : 50;   // 交期分=(1-遲交率)×50
+        $qScore = $qc>0 ? (int)floor(VENDOR_EVAL_Q_MAX*(1-min(1,($ng+$sp)/$qc))) : VENDOR_EVAL_Q_MAX;
+        $dScore = $di>0 ? (int)floor(VENDOR_EVAL_D_MAX*(1-min(1,$lt/$di)))      : VENDOR_EVAL_D_MAX;
         $score = $qScore + $dScore;                          // 總分(0~100)
     }
     return ['qc_in'=>$qc,'ng'=>$ng,'special'=>$sp,'del_in'=>$di,'late'=>$lt,
@@ -833,7 +844,7 @@ function vendor_eval_summ(int $qc, int $ng, int $sp, int $di, int $lt, array $se
 
 /* ============================================================
  * 定期評核（2-PH-01-05）：單一廠商×年度 月不良率/特採率/遲交率（ERP bom_ing 自動算）
- *  品質：QC_check_date 歸月；進貨數=有檢驗筆數、不良=ng、特採=QQ
+ *  品質：QC_check_date 歸月；進貨數=有檢驗結果的批數、不良=ng(驗退)、特採=AOD(資料字典：QQ是異常不是特採)
  *  交期：應交日=outsource_date+約定工作天(沿用#7)；歸應交月；遲交=未回廠或回廠>應交
  * ============================================================ */
 function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): array {
@@ -850,7 +861,7 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
         $m = (int)$r['m']; if ($m<1||$m>12) continue;
         $mon[$m]['qc_in'] += (int)$r['c'];
         if ($r['QC_check']==='ng') $mon[$m]['ng'] += (int)$r['c'];
-        elseif ($r['QC_check']==='QQ') $mon[$m]['special'] += (int)$r['c'];
+        elseif ($r['QC_check']==='AOD') $mon[$m]['special'] += (int)$r['c'];  // 特採=AOD(2026-08-17更正,原誤抓QQ)
     }
 
     // 交期：進貨數=實際回廠(有 return_date)筆數，依回廠日歸月；遲交=回廠日晚於應交日(發包+約定工作天)
@@ -889,6 +900,17 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
         $fqc+=$qc;$fng+=$ng;$fsp+=$sp;$fdi+=$di;$flt+=$lt;
     }
     $full = vendor_eval_summ($fqc,$fng,$fsp,$fdi,$flt,$set,$grades);
+    // 總判定(全年等級)＝上、下半年總分的平均，不是拿全年數量重算一次(使用者2026-08-17定案)。
+    // 只有一個半年有資料時就用該半年；平均比照分數規則無條件捨去。率/筆數仍維持全年加總值。
+    $hs = [];
+    foreach ([1,2] as $h) if ($halves[$h]['score'] !== null) $hs[] = $halves[$h];
+    if ($hs) {
+        $n = count($hs);
+        $full['q_score'] = (int)floor(array_sum(array_column($hs,'q_score'))/$n);
+        $full['d_score'] = (int)floor(array_sum(array_column($hs,'d_score'))/$n);
+        $full['score']   = (int)floor(array_sum(array_column($hs,'score'))/$n);
+        $full['grade']   = vendor_eval_grade_of($full['score'], $grades);
+    }
     return ['months'=>$rows, 'halves'=>$halves, 'full'=>$full];
 }
 

@@ -153,7 +153,7 @@ case 'periodic_eval': {
     $set = vendor_eval_settings($db, $scope);
     $res = vendor_periodic_eval($db, $mid, $year, $set);
     jout(['maker_id_no'=>$mid, 'maker_name'=>$name, 'year'=>$year, 'settings'=>$set,
-          'months'=>$res['months'], 'halves'=>$res['halves']]);
+          'months'=>$res['months'], 'halves'=>$res['halves'], 'full'=>$res['full']]);
 }
 
 /* 定期評核：全部納管廠商（自動略過整年無資料者） */
@@ -171,7 +171,7 @@ case 'periodic_eval_all': {
         if (($h1['qc_in'] + $h1['del_in'] + $h2['qc_in'] + $h2['del_in']) === 0) continue; // 整年無資料→略過
         $fail = ($h1['judge'] === 'fail' || $h2['judge'] === 'fail');
         $out[] = ['maker_id_no'=>$m['maker_id_no'], 'maker_name'=>$m['maker_id'],
-                  'months'=>$res['months'], 'halves'=>$res['halves'], 'fail'=>$fail];
+                  'months'=>$res['months'], 'halves'=>$res['halves'], 'full'=>$res['full'], 'fail'=>$fail];
     }
     // 定期評核表本身沒有單筆業務日期(選定年度的全廠商彙總報表)，比照該年度稽核計畫的送出日期回推
     // AS 編號版次(使用者明確要求：兩者用同一套業務日期認定，ai-rules/16 第三之四節)。
