@@ -1061,22 +1061,25 @@ function hfSubmitAutoSign(){
 // px = 實際外徑公分 × 96 ÷ 2.54，96px=1英吋=2.54公分；外徑沿用 review_form.php 同一顆公司章的 2.5cm。
 var HF_STAMP_PX = (2.5 * 96 / 2.54).toFixed(1);
 function hfPrintCss(){
-    // 使用者實測：印出圖章比模板設定小，根因是表格內容略寬於A4可印範圍，印表機/瀏覽器整頁等比縮小連圖章一起縮。
+    // 使用者實測：印出圖章比模板設定小，根因是表格內容略寬/略高於A4可印範圍，印表機/瀏覽器整頁等比縮小連圖章一起縮。
     // 對策：*{box-sizing:border-box} 防止padding疊加撐寬；所有表格 table-layout:fixed + word-break，內容一律
     // 只能在欄寬內換行，絕不撐寬版面；寬度不足時交給 openPrintWindow() 的 #pw-shrink 縮文字，不縮圖章。
+    // padding/margin 一律用 em（不用px）：#pw-shrink 縮小 font-size 時這些值會跟著等比縮小，縮字才真正有效降低
+    // 總高度（技能鑑定考核表比職能鑑定表多一列「平均」+一段說明文字，原本px版縮字對它幾乎沒用，只有這裡是px不隨字縮）。
     return '*{box-sizing:border-box;}'
-         + 'table.hf-p-head{width:100%;max-width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;margin-bottom:6px;}'
-         + 'table.hf-p-head th{background:#fff;font-weight:bold;border:1px solid #333;padding:8px 6px;width:90px;text-align:center;word-break:break-word;}'
-         + 'table.hf-p-head td{border:1px solid #333;padding:8px 8px;text-align:left;word-break:break-word;}'
-         + 'table.hf-p-items{width:100%;max-width:100%;border-collapse:collapse;font-size:11.5px;table-layout:fixed;margin-top:6px;}'
-         + 'table.hf-p-items th,table.hf-p-items td{border:1px solid #333;padding:9px 6px;text-align:center;word-break:break-word;}'
+         + 'table.hf-p-head{width:100%;max-width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;margin-bottom:0.5em;}'
+         + 'table.hf-p-head th{background:#fff;font-weight:bold;border:1px solid #333;padding:0.6em 0.45em;width:90px;text-align:center;word-break:break-word;}'
+         + 'table.hf-p-head td{border:1px solid #333;padding:0.6em 0.6em;text-align:left;word-break:break-word;}'
+         + 'table.hf-p-items{width:100%;max-width:100%;border-collapse:collapse;font-size:11.5px;table-layout:fixed;margin-top:0.5em;}'
+         + 'table.hf-p-items th,table.hf-p-items td{border:1px solid #333;padding:0.7em 0.45em;text-align:center;word-break:break-word;}'
          + 'table.hf-p-items td.t-left{text-align:left;}'
-         + 'table.hf-p-foot{width:100%;max-width:100%;table-layout:fixed;margin-top:16px;margin-bottom:12mm;font-size:13px;}'
-         + 'table.hf-p-foot td{padding:6px;width:33.33%;text-align:center;vertical-align:top;}'
-         + 'table.hf-p-foot .foot-lbl{margin-bottom:4px;}'
-         + '.hf-p-note{font-size:11px;color:#333;margin-top:8px;line-height:1.6;}'
+         + 'table.hf-p-foot{width:100%;max-width:100%;table-layout:fixed;margin-top:1.2em;margin-bottom:6mm;font-size:13px;}'
+         + 'table.hf-p-foot td{padding:0.45em;width:33.33%;text-align:center;vertical-align:top;}'
+         + 'table.hf-p-foot .foot-lbl{margin-bottom:0.3em;}'
+         + '.hf-p-note{font-size:11px;color:#333;margin-top:0.6em;line-height:1.5;}'
          // 只有「沒有指定圖章模板」時才用換算出的固定尺寸覆蓋；有指定模板時完全尊重模板自己的「大小(px)」，
-         // 不要像舊寫法直接選 table.hf-p-foot svg 把所有章(含模板章)一起蓋成固定值（ai-rules/18 第6條）。
+         // 不要像舊寫法直接選 table.hf-p-foot svg 把所有章(含模板章)一起蓋成固定值（ai-rules/18 第6條）。圖章尺寸
+         // 固定用 px !important，不受 #pw-shrink 的 font-size 縮放影響，這是唯一不隨文字縮小的元素。
          + '.hf-stamp-defsize svg{width:'+HF_STAMP_PX+'px !important;height:'+HF_STAMP_PX+'px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
 }
 function stampOrName(name, date, isDeputy, schema){
@@ -1124,7 +1127,7 @@ function cpPrintHtml(r, tpl){
     h += '<table class="hf-p-items"><thead><tr><th style="width:50px;">編號</th><th>'+(deptHasSkillAssess(r.dept_id)?'機台設定':'項目名稱')+'</th><th style="width:90px;">操作</th><th style="width:90px;">異常排除</th></tr></thead><tbody>';
     (r.items||[]).forEach(function(it,i){
         var d = it.data||{};
-        h += '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(d.skill_name||'')+'</td><td>'+(d.score_op||'')+'</td><td>'+(d.score_ex||'')+'</td></tr>';
+        h += '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(d.skill_name||'').replace(/\n/g,'<br>')+'</td><td>'+(d.score_op||'')+'</td><td>'+(d.score_ex||'')+'</td></tr>';
     });
     h += '</tbody></table>';
     h += '<div class="hf-p-note">填寫說明：人員依技能項目其純熟度可分為： 1=略(大部分須人員指導)　2=熟(少部分須人員指導)　3=獨立作業　4=可教學。其鑑別方式，由主管依據教育訓練後評鑑方式依職能鑑定考核表確認。</div>';
@@ -1175,8 +1178,8 @@ function openPrintWindow(title, bodyHtml, docNo){
         + 'var onePageA4=(297-28)*96/25.4;'
         + 'var wrap=document.getElementById("pw-shrink");'
         + 'var pct=100;'
-        + 'while(document.body.scrollHeight>onePageA4*0.98 && pct>75){'
-        + 'pct-=5; wrap.style.fontSize=pct+"%";}'
+        + 'while(document.body.scrollHeight>onePageA4*0.98 && pct>60){'
+        + 'pct-=3; wrap.style.fontSize=pct+"%";}'
         + 'if(document.body.scrollHeight>onePageA4*0.92){'
         + 'var st=document.createElement("style");'
         + 'st.textContent="@page{ @bottom-left{ content: \'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'

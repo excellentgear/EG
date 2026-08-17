@@ -408,18 +408,22 @@ function hrf_template_machines_get(PDO $db, int $templateId): array {
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
-/** 「機型」優先、沒有機型就顯示「機台/量具名稱」，不含機台編號/量具編號（10職能鑑定表項目清單格式，使用者明確要求）。 */
+/** 機型+機台/量具名稱兩行（機型換行接名稱）；沒機型只顯示名稱；一律不含機台編號/量具編號（10職能鑑定表項目清單格式，使用者明確要求）。 */
 function hrf_skill_item_label(array $r): string {
-    $model = $r['machine_model'] ?? ($r['whitelist_machine_model'] ?? '');
-    if ($model) return $model;
-    if (!empty($r['machine_name'])) return $r['machine_name'];
-    return $r['display_name'] ?? '';
+    $model = trim((string)($r['machine_model'] ?? ($r['whitelist_machine_model'] ?? '')));
+    $name = trim((string)($r['machine_name'] ?? ''));
+    if ($model !== '' && $name !== '' && $name !== $model) return $model . "\n" . $name;
+    if ($model !== '') return $model;
+    if ($name !== '') return $name;
+    return (string)($r['display_name'] ?? '');
 }
 
 /**
  * 10員工職能鑑定表「動態帶入」模式：依員工目前已有的09技能鑑定表(機型/量具)即時組項目清單，
  * 每筆技能鑑定表一列，標籤格式比照 hrf_skill_item_label()。建立當下組一次寫入 hr_form_instance_item，
  * 之後跟一般項目一樣可編輯，不會隨09表單增減自動再變動（比照本模組其他「建立當下snapshot」慣例）。
+ * hr_form_instance 快照的 machine_display_name 對機台來源其實是 machine_model 的重複值(非真機台名稱)，
+ * 名稱一律現查來源主檔(machine_list.machine / qc_tool.machine) 才拿得到真正的機台/量具名稱。
  */
 function hrf_cp_dynamic_items_for_user(PDO $db, int $targetUid): array {
     $st = $db->prepare("SELECT i.machine_model, i.machine_display_name, w.source_type, w.source_id
@@ -428,22 +432,24 @@ function hrf_cp_dynamic_items_for_user(PDO $db, int $targetUid): array {
     $st->execute([$targetUid]);
     $items = [];
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
-        $label = trim((string)($row['machine_model'] ?? ''));
-        if ($label === '') {
-            // machine_model 沒存到(舊資料/量具來源)時現查來源主檔拿真正的機台/量具名稱，不落回機台編號/量具編號
-            try {
-                if ($row['source_type'] === 'machine' && $row['source_id']) {
-                    $st2 = $db->prepare("SELECT machine_model, machine FROM machine_list WHERE machine_id=?");
-                    $st2->execute([$row['source_id']]);
-                    if ($m = $st2->fetch(PDO::FETCH_ASSOC)) $label = $m['machine_model'] ?: $m['machine'];
-                } elseif ($row['source_type'] === 'tool' && $row['source_id']) {
-                    $st2 = $db->prepare("SELECT machine_model, machine FROM qc_tool WHERE Tool_id=?");
-                    $st2->execute([$row['source_id']]);
-                    if ($t = $st2->fetch(PDO::FETCH_ASSOC)) $label = $t['machine_model'] ?: $t['machine'];
-                }
-            } catch (Throwable $e) {}
-            if ($label === '') $label = (string)($row['machine_display_name'] ?? '');
+        $model = ''; $name = '';
+        try {
+            if ($row['source_type'] === 'machine' && $row['source_id']) {
+                $st2 = $db->prepare("SELECT machine_model, machine FROM machine_list WHERE machine_id=?");
+                $st2->execute([$row['source_id']]);
+                if ($m = $st2->fetch(PDO::FETCH_ASSOC)) { $model = trim((string)$m['machine_model']); $name = trim((string)$m['machine']); }
+            } elseif ($row['source_type'] === 'tool' && $row['source_id']) {
+                $st2 = $db->prepare("SELECT machine_model, machine FROM qc_tool WHERE Tool_id=?");
+                $st2->execute([$row['source_id']]);
+                if ($t = $st2->fetch(PDO::FETCH_ASSOC)) { $model = trim((string)$t['machine_model']); $name = trim((string)$t['machine']); }
+            }
+        } catch (Throwable $e) {}
+        if ($model === '' && $name === '') {
+            // 來源主檔已刪除或極舊資料無whitelist_id時才退回表單當下存的快照值
+            $model = trim((string)($row['machine_model'] ?? ''));
+            if ($model === '') $model = trim((string)($row['machine_display_name'] ?? ''));
         }
+        $label = ($model !== '' && $name !== '' && $name !== $model) ? ($model . "\n" . $name) : ($model !== '' ? $model : $name);
         if ($label !== '') $items[] = ['data' => ['skill_name' => $label]];
     }
     return $items;

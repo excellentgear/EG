@@ -517,11 +517,13 @@ function openKpiPicker(targetTextarea){
         multiPickRender(MULTI_PICK_ITEMS);
     });
 }
-/** 標籤格式使用者明確要求：只顯示機型，沒機型才顯示機台/量具名稱，一律不帶機台編號/量具編號。 */
+/** 標籤格式使用者明確要求：機型換行接機台/量具名稱，沒機型只顯示名稱，一律不帶機台編號/量具編號。 */
 function hfSkillItemLabel(m){
     var model = m.machine_model || m.whitelist_machine_model || '';
+    var name = m.machine_name || '';
+    if (model && name && name !== model) return model + '\n' + name;
     if (model) return model;
-    if (m.machine_name) return m.machine_name;
+    if (name) return name;
     return m.display_name || '';
 }
 function cpTplTableHtml(items){
@@ -535,7 +537,7 @@ function cpTplTableHtml(items){
           + '<div style="margin-bottom:6px;"><button type="button" class="hf-btn-sm" onclick="hfCpApplySaMachines()">加入所選（不重複加入已存在的項目）</button></div>'
           + '<table class="itm-tbl"><thead><tr><th style="width:40px;">編號</th><th>項目名稱</th></tr></thead>'
           + '<tbody id="tplItemsBody" data-eg-row-add="hfTplCpAdd" data-eg-row-del="hfTplCpDel">';
-    rows.forEach(function(it,i){ var d=it.data||{}; h += '<tr><td style="text-align:center;">'+(i+1)+'</td><td><input type="text" class="c-name" value="'+esc(d.skill_name||'')+'"></td></tr>'; });
+    rows.forEach(function(it,i){ var d=it.data||{}; h += '<tr><td style="text-align:center;">'+(i+1)+'</td><td><textarea class="c-name">'+esc(d.skill_name||'')+'</textarea></td></tr>'; });
     h += '</tbody></table><button class="hf-btn-sm" type="button" onclick="hfTplCpAdd()">+新增列</button> <button class="hf-btn-sm" type="button" onclick="hfTplCpDel()">-刪除末列</button></div>';
     $.getJSON(API, {action:'template_list', form_type:'skill_assess'}, function(res){
         var tpls = res.ok ? (res.templates||[]) : [];
@@ -546,7 +548,7 @@ function cpTplTableHtml(items){
     });
     return h;
 }
-function hfTplCpAdd(){ var n=$('#tplItemsBody tr').length+1; $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><input type="text" class="c-name"></td></tr>'); }
+function hfTplCpAdd(){ var n=$('#tplItemsBody tr').length+1; $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><textarea class="c-name"></textarea></td></tr>'); }
 function hfTplCpDel(){ var $r=$('#tplItemsBody tr'); if ($r.length>1) $r.last().remove(); }
 function hfCpAutoFillToggle(){
     $('#cpFixedBox').toggle(!$('#cpAutoFillDynamic').is(':checked'));
@@ -560,7 +562,7 @@ function hfCpSaTplChange(){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         var machines = res.template.machines || [];
         $('#cpSaMachineList').html(machines.length ? machines.map(function(m){
-            return '<label style="display:block;font-size:12.5px;"><input type="checkbox" class="cp-sa-ck" value="'+esc(hfSkillItemLabel(m))+'"> '+esc(hfSkillItemLabel(m))+'</label>';
+            return '<label style="display:block;font-size:12.5px;white-space:pre-line;"><input type="checkbox" class="cp-sa-ck" value="'+esc(hfSkillItemLabel(m))+'"> '+esc(hfSkillItemLabel(m))+'</label>';
         }).join('') : '<span style="color:#8a6d45;font-size:12px;">此技能鑑定表範本尚未設定適用機型</span>');
     });
 }
@@ -572,7 +574,7 @@ function hfCpApplySaMachines(){
     picked.forEach(function(label){
         if (existing.indexOf(label) >= 0) return; // 已存在不重複加入
         var n = $('#tplItemsBody tr').length + 1;
-        $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><input type="text" class="c-name" value="'+esc(label)+'"></td></tr>');
+        $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><textarea class="c-name">'+esc(label)+'</textarea></td></tr>');
     });
 }
 
