@@ -57,9 +57,9 @@ case 'meta': {
 }
 
 case 'list': {
-    $kw = trim((string)($_GET['keyword'] ?? ''));
-    $typeId = (int)($_GET['machine_type_id'] ?? 0);
-    $showDisabled = !empty($_GET['show_disabled']);
+    $kw = trim((string)($_REQUEST['keyword'] ?? ''));
+    $typeId = (int)($_REQUEST['machine_type_id'] ?? 0);
+    $showDisabled = !empty($_REQUEST['show_disabled']);
     $sql = "SELECT ml.machine_id, ml.machine, ml.machine_type_id, ml.machine_model, ml.asset_no, ml.field_no,
                    ml.spec, ml.note, ml.manufacturer, ml.state, ml.disabled_date, ml.position,
                    pt.process_type AS machine_type
@@ -85,7 +85,7 @@ case 'list': {
 }
 
 case 'get': {
-    $mid = (int)($_GET['machine_id'] ?? 0);
+    $mid = (int)($_REQUEST['machine_id'] ?? 0);
     if (!$mid) jerr('缺少機台');
     $st = $db->prepare("SELECT ml.*, pt.process_type AS machine_type FROM machine_list ml
                         LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id WHERE ml.machine_id=?");
@@ -134,12 +134,12 @@ case 'delete': {
 
 /* ---- 保養人指派歷程 ---- */
 case 'assignee_candidates': {
-    $kw = trim((string)($_GET['keyword'] ?? ''));
+    $kw = trim((string)($_REQUEST['keyword'] ?? ''));
     $rows = eg_people_list($db, ['keyword' => $kw]);
     jout(['rows' => $rows]);
 }
 case 'assignee_history': {
-    $mid = (int)($_GET['machine_id'] ?? 0);
+    $mid = (int)($_REQUEST['machine_id'] ?? 0);
     if (!$mid) jerr('缺少機台');
     jout(['rows' => equip_list_assignee_history($db, EQ, $mid), 'current' => equip_list_current_assignee($db, EQ, $mid)]);
 }
@@ -173,7 +173,7 @@ case 'assignee_delete': {
 
 /* ---- 履歴表（故障維修紀錄） ---- */
 case 'service_list': {
-    $mid = (int)($_GET['machine_id'] ?? 0);
+    $mid = (int)($_REQUEST['machine_id'] ?? 0);
     if (!$mid) jerr('缺少機台');
     jout(['rows' => equip_service_log_list($db, EQ, $mid)]);
 }
@@ -202,7 +202,7 @@ case 'service_approve': {
 }
 case 'service_print_list': {
     // 履歴表批次列印用：依目前篩選出的機台清單各自帶出履歴表資料
-    $ids = array_filter(array_map('intval', explode(',', (string)($_GET['machine_ids'] ?? ''))));
+    $ids = array_filter(array_map('intval', explode(',', (string)($_REQUEST['machine_ids'] ?? ''))));
     if (!$ids) jerr('缺少機台清單');
     $in = implode(',', array_fill(0, count($ids), '?'));
     $st = $db->prepare("SELECT machine_id, machine, asset_no, field_no FROM machine_list WHERE machine_id IN ($in)");
@@ -212,7 +212,7 @@ case 'service_print_list': {
 
 /* ---- 年度整份送簽 ---- */
 case 'plan_data': {
-    $year = (int)($_GET['year'] ?? date('Y'));
+    $year = (int)($_REQUEST['year'] ?? date('Y'));
     $signSet = equip_list_plan_sign_setting($db, EQ);
     $lock = equip_list_plan_lock_get($db, EQ, $year);
     $decidePool = [];
