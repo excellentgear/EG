@@ -109,7 +109,17 @@ case 'save': {
     $note = trim((string)($_POST['note'] ?? ''));
     $manufacturer = trim((string)($_POST['manufacturer'] ?? ''));
     $position = trim((string)($_POST['position'] ?? ''));
-    $needSetup = (int)($_POST['need_setup'] ?? 0);
+    // 本頁沒有「是否需要架機」欄位（該設定在加工排程的機台管理設定維護）：
+    // 未送出時一律沿用資料庫現值，不可預設 0，否則編輯機台會把排程頁的架機人員欄位一起關掉
+    if (isset($_POST['need_setup']) && $_POST['need_setup'] !== '') {
+        $needSetup = (int)$_POST['need_setup'];
+    } elseif ($mid) {
+        $st = $db->prepare("SELECT need_setup FROM machine_list WHERE machine_id=?");
+        $st->execute([$mid]);
+        $needSetup = (int)$st->fetchColumn();
+    } else {
+        $needSetup = 1; // 新增機台預設需要架機（與加工排程機台管理設定的預設值一致）
+    }
     $disabled = !empty($_POST['disabled']);
     $state = $disabled ? 1 : null;
     $disabledDate = $disabled ? (trim((string)($_POST['disabled_date'] ?? '')) ?: date('Y-m-d')) : null;
