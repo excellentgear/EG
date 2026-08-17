@@ -674,7 +674,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <div id="atPendingFiles"></div>
                 <span style="font-size:12px;color:#5b3a1e;">為選好的檔案勾選類別（可複選）</span>
                 <span id="atCatBox" style="display:flex;gap:2px 12px;flex-wrap:wrap;margin-top:2px;"></span>
-                <button type="button" class="b-att nw" id="atUploadBtn" style="margin-top:4px;" onclick="atConfirmUpload()" disabled><i class="fa fa-check"></i> 確認上傳</button>
+                <button type="button" class="b-att nw" id="atUploadBtn" style="margin-top:4px;" onclick="atConfirmUpload()"><i class="fa fa-check"></i> 確認上傳</button>
                 <button type="button" class="b-att nw" style="margin-top:4px;background:#fff;color:#8A5A2B;" onclick="atCancelPending()">取消</button>
                 <span id="atMsg" style="font-size:12px;color:#8a6d45;"></span>
             </div>
@@ -2584,27 +2584,31 @@ function renderAttach(){
    後端 upload_attach 仍然要求類別不可空（鐵律8附件標籤鐵則：沒勾類別一律不准存檔），這裡只是把「勾類別」這一步
    從「選檔案之前」搬到「選檔案之後、實際送出之前」，不是取消這條規則。 */
 var AT_PENDING_FILES = null;
-$('#atFile').on('change', function(){
-    AT_PENDING_FILES = (this.files && this.files.length) ? this.files : null;
-    this.value = '';        // 同一個檔案可以再選一次（實際檔案內容已存在 AT_PENDING_FILES）
+/* change 改綁原生 addEventListener（2026-08-17 實測回報選檔後完全無反應，原因不明；
+   改用原生綁定排除是 jQuery 委派在這個環境失效的可能，且不依賴 jQuery 內部事件系統）。 */
+function atFileChanged(fileInput){
+    AT_PENDING_FILES = (fileInput.files && fileInput.files.length) ? fileInput.files : null;
+    fileInput.value = '';   // 同一個檔案可以再選一次（實際檔案內容已存在 AT_PENDING_FILES）
     renderAtPending();
-});
+}
+document.getElementById('atFile').addEventListener('change', function(){ atFileChanged(this); });
 $(document).on('change', '#atCatBox .at-cat', renderAtPending);
 function renderAtPending(){
     var has = !!(AT_PENDING_FILES && AT_PENDING_FILES.length);
     $('#atPendingBox').toggle(has);
-    $('#atSelInfo').text(has ? '已選 '+AT_PENDING_FILES.length+' 個檔案，請勾選類別後確認上傳' : '');
-    if (!has){ $('#atPendingFiles').html(''); return; }
-    var names = '';
-    for (var i=0;i<AT_PENDING_FILES.length;i++) names += '<span><i class="fa fa-paperclip"></i> '+esc(AT_PENDING_FILES[i].name)+'</span>';
-    $('#atPendingFiles').html(names);
-    var cats = []; $('#atCatBox .at-cat:checked').each(function(){ cats.push(this.value); });
-    $('#atUploadBtn').prop('disabled', !cats.length);
+    $('#atSelInfo').text(has ? '已選 '+AT_PENDING_FILES.length+' 個檔案，請勾選類別後按「確認上傳」' : '');
+    $('#atPendingFiles').html(has ? (function(){
+        var names = '';
+        for (var i=0;i<AT_PENDING_FILES.length;i++) names += '<span><i class="fa fa-paperclip"></i> '+esc(AT_PENDING_FILES[i].name)+'</span>';
+        return names;
+    })() : '');
 }
 function atCancelPending(){ AT_PENDING_FILES = null; renderAtPending(); }
+/* 確認上傳鈕故意不設 disabled（灰底自訂樣式的按鈕停用時視覺上跟可點幾乎沒差，容易讓人以為卡住沒反應）；
+   缺檔案/缺類別一律用 alert 明確告知原因，不要讓按下去悄悄沒有任何動作。 */
 function atConfirmUpload(){
     var files = AT_PENDING_FILES, sid = $('#exMask').data('sid');
-    if (!files || !files.length) return;
+    if (!files || !files.length){ alert('請先按「選擇檔案」挑選要上傳的檔案。'); return; }
     var cats = [];                                  // 類別可複選（同一份 PDF 可能同時是簽到表＋試卷）
     $('#atCatBox .at-cat:checked').each(function(){ cats.push(this.value); });
     if (!cats.length){ alert('請至少勾選一個附件類別'); return; }
