@@ -1160,7 +1160,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             // 一般查詢 (依 bom_ing_fid 與 process_no)
             $stmt = $pdo->prepare("
                 SELECT r.*, r.process_face, u1.user_cname as setup_user_name, u2.user_cname as prod_user_name,
-                m.machine as machine_name,
+                COALESCE(NULLIF(TRIM(m.field_no),''), m.machine) as machine_name,
                 (SELECT SUM(ng_qty) FROM pm_process_daily_ng WHERE report_id = r.report_id) as total_ng
                 FROM pm_process_daily_report r
                 LEFT JOIN user u1 ON r.setup_user_id = u1.id
@@ -1224,7 +1224,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     WHERE (
                         bi.bom LIKE ? OR b.d_id LIKE ? OR b.Client_Name LIKE ? OR
                         dsg.Module LIKE ? OR dsg.Teeth LIKE ? OR dsg.Face_Width LIKE ? OR dsg.Workpiece_Length LIKE ? OR
-                        m.machine LIKE ?
+                        m.machine LIKE ? OR m.field_no LIKE ? OR m.asset_no LIKE ?
                     )
                     AND pdr.report_id IS NOT NULL
                     GROUP BY bi.bom_ing_fid
@@ -1232,7 +1232,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     LIMIT 100";
             $like = "%$term%";
             $stmt = $pdo->prepare($sql);
-            $stmt->execute([$like, $like, $like, $like, $like, $like, $like, $like]);
+            $stmt->execute([$like, $like, $like, $like, $like, $like, $like, $like, $like, $like]);
             $fids = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
             foreach ($fids as $f) {
@@ -1250,7 +1250,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             // --- 處理臨時加工 (TEMP) ---
             if ($source === 'TEMP') {
                 $stmt_temp = $pdo->prepare("
-                    SELECT r.*, u1.user_cname as setup_user, u2.user_cname as prod_user, m.machine, pn.ProcessName
+                    SELECT r.*, u1.user_cname as setup_user, u2.user_cname as prod_user, COALESCE(NULLIF(TRIM(m.field_no),''), m.machine) AS machine, pn.ProcessName
                     FROM pm_process_daily_report r
                     LEFT JOIN user u1 ON r.setup_user_id = u1.id
                     LEFT JOIN user u2 ON r.production_user_id = u2.id
@@ -1359,7 +1359,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
             // 報工紀錄 (最近 10 筆)
             // Requirement 2: Fetch more log details
-            $sql_logs = "SELECT pdr.report_date, pdr.setup_start_time, pdr.setup_end_time, pdr.production_start_time, pdr.production_end_time, pdr.produced_qty, m.machine,
+            $sql_logs = "SELECT pdr.report_date, pdr.setup_start_time, pdr.setup_end_time, pdr.production_start_time, pdr.production_end_time, pdr.produced_qty, COALESCE(NULLIF(TRIM(m.field_no),''), m.machine) AS machine,
                                 pdr.process_face, u1.user_cname as setup_user, u2.user_cname as prod_user,
                                 (SELECT SUM(ng_qty) FROM pm_process_daily_ng WHERE report_id = pdr.report_id) as log_ng_qty
                          FROM pm_process_daily_report pdr
@@ -2165,7 +2165,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $end_ts = $date . ' 23:59:59';
 
         // Fetch all machines
-        $sql_machines = "SELECT machine_id, machine, position FROM machine_list WHERE (state IS NULL OR state != '1')";
+        $sql_machines = "SELECT machine_id, machine, position, field_no, asset_no, machine_model FROM machine_list WHERE (state IS NULL OR state != '1')";
         $params_machines = [];
         if (!empty($machine_type_id)) {
             $sql_machines .= " AND machine_type_id = ?";
@@ -2609,16 +2609,22 @@ $sql_all_machines = "
 ";
 $all_machines_raw = $pdo->query($sql_all_machines)->fetchAll(PDO::FETCH_ASSOC);
 
+// 機台顯示名稱：一律用「現場編號(field_no)」，未填才退回機台編號/機型，皆未填才用機台名稱
+// （與前端 machineOptionLabel() 同一套規則，避免同一台機台在儀表板與下拉選單顯示不同名稱）
+function eg_machine_disp_name($m) {
+    if (isset($m['field_no']) && trim((string)$m['field_no']) !== '') return trim($m['field_no']);
+    $parts = array_filter([$m['asset_no'] ?? '', $m['machine_model'] ?? ''], function($v) { return trim((string)$v) !== ''; });
+    if (!empty($parts)) return implode(' ', array_map('trim', $parts));
+    return (string)($m['machine'] ?? '');
+}
+
 foreach ($all_machines_raw as $machine) {
     $type_id = $machine['machine_type_id'];
     if (!isset($machines_by_type[$type_id])) {
         $machines_by_type[$type_id] = [];
     }
     $machines_by_type[$type_id][] = $machine['machine_id'];
-    // Shorten name logic: "EG-028 銑床13 AQ1050" -> "EG-028 銑床13"
-    $name_parts = explode(' ', $machine['machine']);
-    $short_name = (count($name_parts) > 2) ? $name_parts[0] . ' ' . $name_parts[1] : $machine['machine'];
-    $machine_names[$machine['machine_id']] = $short_name . " (" . $machine['position'] . "廠)";
+    $machine_names[$machine['machine_id']] = eg_machine_disp_name($machine) . " (" . $machine['position'] . "廠)";
 }
 
 // 3. Group tasks into buckets: assigned to a machine, or unassigned (grouped by process type)
@@ -8627,7 +8633,8 @@ function get_state_badge($state)
                         // 2. Machine Rows
                         machines.forEach(function(mach) {
                             var rowHtml = `<div class="machine-row">`;
-                            rowHtml += `<div class="machine-name" title="${mach.machine}">${mach.machine}</div>`;
+                            var machDisp = machineOptionLabel(mach);
+                            rowHtml += `<div class="machine-name" title="${machDisp}">${machDisp}</div>`;
                             rowHtml += `<div class="machine-timeline">`;
 
                             // Background Grid
