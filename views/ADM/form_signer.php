@@ -119,6 +119,15 @@ $perms = fsd_perms($db, $fsdUser);
         .fsd-page-grid { flex:1; display:grid; grid-template-columns:1fr 1fr; gap:16px; max-height:74vh; overflow-y:auto; padding:4px; }
         .fsd-page-wrap { border:1px solid #E8D5B5; border-radius:6px; padding:6px; background:#faf6ee; }
         .fsd-page-wrap .pno { font-size:11px; color:#8a6d45; margin-bottom:4px; }
+        /* 補案件的圖章清單列（每章一格：頁次/人員/圖章模板/定位/刪除） */
+        .bf-row { border-bottom:1px solid #F0E7D5; padding:6px 8px; }
+        .bf-row.bad { background:#FDF2E6; }
+        .bf-row .bf-row-hd { display:flex; align-items:center; gap:6px; font-size:12px; color:#5b3a1e; margin-bottom:4px; }
+        .bf-row .bf-row-hd .bf-pg { color:#8a6d45; }
+        .bf-row .bf-row-hd .bf-warn { color:#DD5138; }
+        .bf-row .bf-row-hd button { height:22px; font-size:11px; padding:0 6px; }
+        .bf-row .bf-row-hd button:last-child { margin-left:auto; }
+        .bf-row select { width:100%; margin-bottom:4px; }
         .fsd-ref-panel { flex:0 0 200px; border:1px solid #E8D5B5; border-radius:8px; background:#fff; max-height:74vh; overflow-y:auto; padding:8px; }
         .fsd-ref-panel .rp-head { font-weight:bold; color:#5b3a1e; margin-bottom:6px; }
         .fsd-ref-page { position:relative; border:1px solid #EADFC8; margin-bottom:10px; }
@@ -161,6 +170,7 @@ $perms = fsd_perms($db, $fsdUser);
             <div class="fsd-toolbar">
                 <span>依樣板建立案件並上傳要簽核的文件，系統依序通知各關卡簽核人。</span>
                 <button class="btn-warm" id="btnAddCase" style="display:none;margin-left:auto;"><i class="fa fa-plus"></i> 建立案件</button>
+                <button id="btnBackfill" style="display:none;"><i class="fa fa-file-import"></i> 補案件</button>
                 <button id="btnDeletedList" style="display:none;"><i class="fa fa-trash-o"></i> 已刪除案件</button>
                 <a href="form_signer_template.php" id="lnkTplAdmin" style="display:none;height:30px;line-height:28px;padding:0 12px;border:1px solid #D8BE93;border-radius:4px;color:#5b3a1e;text-decoration:none;">樣板管理→</a>
             </div>
@@ -188,7 +198,8 @@ $perms = fsd_perms($db, $fsdUser);
                 <button id="btnFieldBack"><i class="fa fa-arrow-left"></i> 返回列表（已自動存檔）</button>
                 <b id="fpTitle" style="margin-left:6px;"></b>
                 <button onclick="openReplaceFile()">更換文件</button>
-                <button class="btn-warm" style="margin-left:auto;" onclick="fpSubmit()"><i class="fa fa-check"></i> 儲存並送出</button>
+                <button id="btnBfEditHead" style="display:none;" onclick="openBfCreate(FP_CASE)"><i class="fa fa-pen"></i> 編輯表頭</button>
+                <button class="btn-warm" id="btnFpSubmit" style="margin-left:auto;" onclick="fpSubmit()"><i class="fa fa-check"></i> 儲存並送出</button>
             </div>
             <div class="fsd-toolbar">
                 <span>把左側「待框選標籤」拖到您上傳的文件對應位置；只能框選樣板本身已框選過的欄位（樣板沒有的欄位這裡也不會出現）。</span>
@@ -199,9 +210,20 @@ $perms = fsd_perms($db, $fsdUser);
                     <div class="rp-head">樣板參考（僅供對照，不可編輯）</div>
                     <div id="refPages"></div>
                 </div>
-                <div class="fsd-label-panel">
+                <div class="fsd-label-panel" id="labelPanel">
                     <div class="lp-head">待框選標籤</div>
                     <div id="fpLabelList"></div>
+                </div>
+                <!-- 補案件專用：圖章清單（每個圖章各自選人員與圖章模板） -->
+                <div class="fsd-label-panel" id="bfStampPanel" style="display:none;flex:0 0 330px;">
+                    <div class="lp-head">圖章清單 <span id="bfCount" style="float:right;font-weight:normal;"></span></div>
+                    <div style="padding:8px;border-bottom:1px solid #F0E7D5;">
+                        <label style="font-size:12px;color:#5b3a1e;">預設圖章模板（新增的圖章都用它，可再逐個修改）</label>
+                        <select id="bfDefaultTpl" style="width:100%;" data-eg-filter="輸入圖章模板名稱篩選…"></select>
+                        <button type="button" style="margin-top:6px;width:100%;" onclick="bfApplyTplAll()"><i class="fa fa-copy"></i> 一次套用到全部圖章</button>
+                        <p style="font-size:11.5px;color:#8a6d45;margin:6px 0 0;">在右邊每一頁上方按「＋新增圖章」加章，再拖曳/縮放到正確位置。每個圖章都要選人員才能完成。</p>
+                    </div>
+                    <div id="bfList"></div>
                 </div>
                 <div class="fsd-page-grid" id="fpPageGrid"></div>
             </div>
@@ -267,6 +289,28 @@ $perms = fsd_perms($db, $fsdUser);
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('createMask')">取消</button>
         <button class="b-ok" onclick="submitCreate()">建立</button></div>
+</div></div>
+
+<!-- 補案件 modal（管理員把已簽好章的紙本補進系統：不需樣板、固定自動審核） -->
+<div class="fsd-mask" id="bfCreateMask"><div class="fsd-modal">
+    <div class="m-head"><span id="bfCreateTitle">補案件</span><span class="m-close" onclick="closeMask('bfCreateMask')">✕</span></div>
+    <div class="m-body">
+        <p style="font-size:12px;color:#8a6d45;margin:0 0 8px;">把紙本上「已經簽好章」的歷史文件掃描檔補進系統：不需要樣板、送出後直接完成（固定自動審核，不會通知任何人去簽）。</p>
+        <label>文件標題</label><input type="text" id="bfTitle" maxlength="200" placeholder="例：2024年度供應商稽核計劃">
+        <label>業務日期（＝所有圖章要印的簽章日期）</label><input type="date" id="bfDate" max="9999-12-31">
+        <label>AS 文件編號（列印右下角；可不綁）</label>
+        <div style="display:flex;gap:6px;align-items:center;">
+            <input type="text" id="bfAsDocLabel" readonly style="flex:1;background:#f5f0e6;" value="尚未綁定">
+            <button type="button" onclick="bfPickAsDoc()">挑選…</button>
+        </div>
+        <div id="bfFileWrap">
+            <label>文件掃描檔（僅接受圖片png/jpg；可一次選多張，每張各成一頁，可拖曳縮圖調整頁序）</label>
+            <input type="file" id="bfFile" accept="image/png,image/jpeg" multiple onchange="bfFilesChanged(this.files)">
+            <div id="bfThumbs" class="fsd-thumb-grid"></div>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('bfCreateMask')">取消</button>
+        <button class="b-ok" id="bfCreateOk" onclick="submitBfCreate()">建立並開始設定圖章</button></div>
 </div></div>
 
 <!-- 更換文件 modal（草稿階段） -->
@@ -349,14 +393,21 @@ $perms = fsd_perms($db, $fsdUser);
         <b>⑤催辦</b>：案件申請人或管理員可對目前階段尚未回應的人重新發送一次通知（不會強制略過或自動代為回應）。<br>
         <b>⑥列印</b>：進入案件詳情後按「列印」，瀏覽器會印出目前已疊上所有圖章/回覆內容的合成文件（自動依文件是直式或橫式調整版面，每頁各自分頁列印）。<br>
         <b>⑦刪除</b>：草稿可直接刪除；已送出的案件，超級管理員可永久刪除（不留紀錄），一般管理員需輸入操作確認密碼刪除（會留刪除紀錄，可在「已刪除案件」復原）。
+        <h4>補案件（管理員專屬）</h4>
+        用途：把「紙本上已經簽好章」的歷史文件掃描檔補進系統。<b>不需要樣板</b>、<b>固定自動審核</b>（送出＝直接完成，不會通知任何人去簽）。<br>
+        <b>①</b>列表右上角按「補案件」，填標題、業務日期（＝所有圖章要印的簽章日期）、可選一份 AS 文件（列印右下角編號，版次依業務日期回推當時生效版），上傳文件掃描圖片（可多張，拖曳縮圖排頁序）。<br>
+        <b>②</b>建立後進入設定畫面：左側先選好「預設圖章模板」，再到右邊每一頁上方按「＋新增圖章」，把章拖曳/縮放到紙本上原本蓋章的位置。<br>
+        <b>③</b>左側圖章清單裡逐個選「這個章是誰的」（<b>含已離職人員</b>，補舊表單用）與「這個章用哪個圖章模板」；按「一次套用到全部圖章」可把全部圖章的模板一次改成目前預設值，之後仍可逐個修改。<br>
+        <b>④</b>圖章上限 <b>30</b> 個；每個圖章都必須指定人員才能按「儲存並完成」。完成後即為「已完成」狀態，可直接檢視與列印。
         <h4>重要行為</h4>
+        ・補案件的所有圖章都印<b>案件業務日期</b>（不逐章設定日期）；框太小會被擋下，最小尺寸依該圖章所選模板的實際大小換算。<br>
         ・槽位解析出的人若剛好是案件申請人本人，該槽位自動略過（強制迴避），不會顯示在回覆框裡等待回應。<br>
         ・已核准/已駁回/已作廢的案件不可再回應，只能檢視與列印。<br>
         ・系統自動簽核的紀錄只有管理員看得到「系統自動簽核」字樣，一般使用者看到的是正常的簽核紀錄。
         <h4>設定入口</h4>
         樣板的階段/槽位/框選提示由管理員在「樣板管理」頁設定；操作確認密碼在「修改個人密碼」頁設定（需超級管理員先授權）。
         <h4>權限角色</h4>
-        表單簽核設計器檢閱＝看得到自己建立的案件；檢視全部案件＝看得到所有人的案件；建立/送出案件＝可建立新案件；樣板管理＝管理員專屬。
+        表單簽核設計器檢閱＝看得到自己建立的案件；檢視全部案件＝看得到所有人的案件；建立/送出案件＝可建立新案件；樣板管理＝管理員專屬（<b>補案件也屬於此權限</b>，含一般管理員，不必另外設定角色）。
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">關閉</button></div>
 </div></div>
@@ -370,10 +421,11 @@ $perms = fsd_perms($db, $fsdUser);
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/fabric.min.js?v=<?= @filemtime(__DIR__.'/../../resource/js/fabric.min.js') ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script>
 var API = '../../src/store/FormSigner_API.php';
 var META = {}, CASES = [], TEMPLATES = [];
-var CUR_CASE = null, CUR_SCHEMA = null, CUR_RESPONSES = null, CUR_AS_DOC_NO = '', CUR_CASE_PAGES = [];
+var CUR_CASE = null, CUR_SCHEMA = null, CUR_RESPONSES = null, CUR_AS_DOC_NO = '', CUR_CASE_PAGES = [], CUR_FIELDS = [];
 var FP_CASE = null, FP_TPL_SCHEMA = null, FP_WHITELIST = [], FP_CANVASES = {}, FP_SELECTED = null;
 /* API 用 HTTP 狀態碼回錯(jerr 400/401/403…)，jQuery 在非 2xx 時不會呼叫 success，
    各處 `if(!res.ok){alert(...)}` 全都跑不到＝畫面完全沒反應、只有 console 一行紅字。
@@ -410,7 +462,7 @@ function loadMeta(cb){
         window.__ownCompany = META.company_name;
         if (!$('#crDate').val()) $('#crDate').val(META.today);
         if (META.perms.canCreate) $('#btnAddCase').show();
-        if (META.perms.canAdmin) { $('#lnkTplAdmin').show(); $('#btnDeletedList').show(); }
+        if (META.perms.canAdmin) { $('#lnkTplAdmin').show(); $('#btnDeletedList').show(); $('#btnBackfill').show(); }
         if (cb) cb();
     });
 }
@@ -430,6 +482,10 @@ function loadTemplateOptionsForCreate(){
  *  決策階段(線性)槽位間用箭頭串接(如：(審核 林雅婷)->(核准 陳俊宏))，意見階段(並簽)槽位間並列無箭頭；
  *  不同階段之間一律視為串接(本系統各階段本來就是逐關推進，2026-08-14使用者明確要求)。 */
 function renderProgressChips(c){
+    if (c.case_kind === 'backfill') {
+        return c.status==='draft' ? '<span style="color:#8a6d45;">待設定圖章</span>'
+                                  : '<span class="prog-chip done"><i class="fa fa-check-circle"></i> (補登・自動審核完成)</span>';
+    }
     if (!c.progress || !c.progress.length) return c.status==='draft' ? '<span style="color:#8a6d45;">待框選/送出</span>' : '—';
     var parts = [];
     c.progress.forEach(function(s, si){
@@ -447,14 +503,16 @@ function renderProgressChips(c){
 function renderCaseRow(c){
     var stageTxt = renderProgressChips(c);
     var isOwner = String(c.applicant_id)===String(META.uid);
+    var isBf = c.case_kind === 'backfill';
     var actions = '';
     if (c.status === 'draft') {
-        actions += '<button onclick="openFieldDesigner('+c.id+')">繼續框選</button> ';
+        actions += '<button onclick="openFieldDesigner('+c.id+')">'+(isBf?'繼續設定圖章':'繼續框選')+'</button> ';
         if (isOwner || META.perms.canAdmin) actions += '<button class="btn-danger" onclick="deleteDraftFromList('+c.id+')"><i class="fa fa-trash"></i></button>';
     } else {
         actions += '<button onclick="openCase('+c.id+')">檢視</button>';
     }
-    return '<tr><td>'+esc(c.title||c.template_name)+'</td><td>'+esc(c.template_name)+'</td><td>'+esc(c.applicant_name)+'</td>'
+    var tplCell = isBf ? '<span class="badge-stage badge-draft">補案件</span>' : esc(c.template_name);
+    return '<tr><td>'+esc(c.title||c.template_name)+'</td><td>'+tplCell+'</td><td>'+esc(c.applicant_name)+'</td>'
         + '<td>'+dispDate(c.business_date)+'</td><td>'+stageTxt+'</td><td>'+statusBadge(c.status)+'</td>'
         + '<td>'+actions+'</td></tr>';
 }
@@ -542,6 +600,235 @@ function submitCreate(){
         closeMask('createMask'); $('#crTitle').val(''); $('#crFile').val(''); CR_FILES=[]; renderCrThumbs();
         openFieldDesigner(res.id);
     }).catch(function(){ alert('建立失敗（連線錯誤）'); });
+}
+
+/* ============================================================ 補案件（管理員補登已簽好章的紙本；不需樣板、固定自動審核） ============================================================
+   跟一般案件的差別：沒有樣板＝沒有待框選標籤白名單，改成自己按「＋新增圖章」加章，每個章各自選「誰的章」與
+   「用哪個圖章模板」（模板可先用左側預設值一次套用再逐個改），上限 30 個；送出＝直接完成，不跑關卡不發通知。
+   簽章日期一律用案件業務日期（2026-08-17 使用者拍板）。 */
+var BF_META = null, BF_FILES = [], BF_AS_DOC_ID = 0, BF_EDIT_CASE = null;
+var FP_BACKFILL = false, BF_FIELDS = [], BF_OBJS = {};
+
+function bfMaxStamps(){ return (BF_META && BF_META.max_stamps) || 30; }
+function bfEnsureMeta(cb){
+    if (BF_META){ cb(); return; }
+    $.getJSON(API, {action:'backfill_meta'}, function(res){
+        if (!res.ok){ alert(res.error||'載入補案件資料失敗'); return; }
+        BF_META = res; cb();
+    });
+}
+function bfPeopleOptionsHtml(selId){
+    var h = '<option value="">請選擇人員…</option>';
+    ((BF_META&&BF_META.people)||[]).forEach(function(p){
+        h += '<option value="'+p.id+'"'+(String(p.id)===String(selId||'')?' selected':'')+'>'+esc(p.label)+'</option>';
+    });
+    return h;
+}
+function bfTplOptionsHtml(selId){
+    var h = '<option value="0"'+(!selId||String(selId)==='0'?' selected':'')+'>（系統預設回墨印）</option>';
+    ((BF_META&&BF_META.stamp_tpls)||[]).forEach(function(t){
+        var nm = t.tpl_name + (t.type_name ? '（'+t.type_name+'）' : '');
+        h += '<option value="'+t.id+'"'+(String(t.id)===String(selId||'')?' selected':'')+'>'+esc(nm)+'</option>';
+    });
+    return h;
+}
+function bfTplSchema(tplId){
+    var out = null;
+    ((BF_META&&BF_META.stamp_tpls)||[]).forEach(function(t){ if (String(t.id)===String(tplId||'')) out = t.schema||null; });
+    return out;
+}
+function bfDefaultTplId(){ return parseInt($('#bfDefaultTpl').val(), 10) || 0; }
+function bfFieldById(fid){
+    var out = null;
+    BF_FIELDS.forEach(function(f){ if (String(f.id)===String(fid)) out = f; });
+    return out;
+}
+function bfFieldBySlot(slotKey){
+    var out = null;
+    BF_FIELDS.forEach(function(f){ if (f.slot_key === slotKey) out = f; });
+    return out;
+}
+
+/* -------- 建立/編輯表頭 -------- */
+$('#btnBackfill').on('click', function(){ bfEnsureMeta(function(){ openBfCreate(null); }); });
+function openBfCreate(caseObj){
+    bfEnsureMeta(function(){
+        var isEdit = !!(caseObj && caseObj.id);
+        BF_EDIT_CASE = isEdit ? caseObj : null;
+        $('#bfCreateTitle').text(isEdit ? '編輯補案件表頭' : '補案件');
+        $('#bfCreateOk').text(isEdit ? '儲存' : '建立並開始設定圖章');
+        $('#bfFileWrap').toggle(!isEdit);   // 編輯表頭不換檔案(要換檔走「更換文件」)
+        $('#bfTitle').val(isEdit ? (caseObj.title||'') : '');
+        $('#bfDate').val(isEdit ? (caseObj.business_date||'') : (META.today||''));
+        BF_AS_DOC_ID = isEdit ? (parseInt(caseObj.as_doc_id,10)||0) : 0;
+        renderBfAsDocLabel();
+        BF_FILES = []; $('#bfFile').val(''); renderBfThumbs();
+        openMask('bfCreateMask');
+    });
+}
+function renderBfAsDocLabel(){
+    var doc = null;
+    ((BF_META&&BF_META.as_docs)||[]).forEach(function(d){ if (String(d.id)===String(BF_AS_DOC_ID)) doc = d; });
+    $('#bfAsDocLabel').val(window.EGAsDoc ? EGAsDoc.label(doc) : (doc ? doc.doc_no : '尚未綁定'));
+}
+/* AS文件一律走共用挑選器(打編號即時篩選)，禁止純下拉——AS文件已160多份(ai-rules/16 第一之三節) */
+function bfPickAsDoc(){
+    if (!window.EGAsDoc){ alert('AS文件挑選器未載入'); return; }
+    EGAsDoc.open({ docs:(BF_META&&BF_META.as_docs)||[], current:BF_AS_DOC_ID, title:'補案件 AS 文件編號（列印右下角）',
+        onSave: function(id){ BF_AS_DOC_ID = id||0; renderBfAsDocLabel(); } });
+}
+function bfFilesChanged(fileList){ BF_FILES = Array.prototype.slice.call(fileList); renderBfThumbs(); }
+function bfRemoveThumb(i){ BF_FILES.splice(i,1); renderBfThumbs(); }
+function renderBfThumbs(){
+    var h = '';
+    BF_FILES.forEach(function(f, i){
+        h += '<div class="thumb" draggable="true" data-idx="'+i+'"><img src="'+URL.createObjectURL(f)+'">'
+           + '<span class="tno">'+(i+1)+'</span><span class="tdel" onclick="bfRemoveThumb('+i+')">×</span></div>';
+    });
+    var $g = $('#bfThumbs').html(h);
+    var dragIdx = null;
+    $g.find('.thumb').on('dragstart', function(){ dragIdx = $(this).data('idx'); });
+    $g.find('.thumb').on('dragover', function(e){ e.preventDefault(); $(this).addClass('dragover'); });
+    $g.find('.thumb').on('dragleave', function(){ $(this).removeClass('dragover'); });
+    $g.find('.thumb').on('drop', function(e){
+        e.preventDefault(); $(this).removeClass('dragover');
+        var dropIdx = $(this).data('idx');
+        if (dragIdx === null || dragIdx === dropIdx) return;
+        var moved = BF_FILES.splice(dragIdx, 1)[0];
+        BF_FILES.splice(dropIdx, 0, moved);
+        renderBfThumbs();
+    });
+}
+function submitBfCreate(){
+    var title = $.trim($('#bfTitle').val()), bizDate = $('#bfDate').val();
+    if (!bizDate){ alert('請填業務日期（所有圖章都會印這個日期）'); return; }
+    if (BF_EDIT_CASE){
+        $.post(API, {action:'backfill_update_head', csrf:META.csrf, case_id:BF_EDIT_CASE.id,
+                     title:title, business_date:bizDate, as_doc_id:BF_AS_DOC_ID}, function(res){
+            if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+            closeMask('bfCreateMask');
+            if (FP_CASE && String(FP_CASE.id)===String(BF_EDIT_CASE.id)) { FP_CASE.title=res.case.title; FP_CASE.business_date=res.case.business_date; FP_CASE.as_doc_id=res.case.as_doc_id; $('#fpTitle').text(FP_CASE.title||''); }
+            BF_EDIT_CASE = null;
+        }, 'json');
+        return;
+    }
+    if (!BF_FILES.length){ alert('請至少上傳一張文件掃描圖片'); return; }
+    var fd = new FormData();
+    fd.append('action','backfill_create_draft'); fd.append('csrf', META.csrf);
+    fd.append('title', title); fd.append('business_date', bizDate); fd.append('as_doc_id', BF_AS_DOC_ID);
+    BF_FILES.forEach(function(f){ fd.append('files[]', f); });
+    fetch(API, {method:'POST', body:fd}).then(function(r){ return r.json(); }).then(function(res){
+        if (!res.ok){ alert(res.error||'建立失敗'); return; }
+        closeMask('bfCreateMask'); BF_FILES=[]; $('#bfFile').val(''); renderBfThumbs();
+        openFieldDesigner(res.id);
+    }).catch(function(){ alert('建立失敗（連線錯誤）'); });
+}
+
+/* -------- 圖章清單（每章各自選人員/模板） -------- */
+function renderBfList(){
+    $('#bfCount').text(BF_FIELDS.length + ' / ' + bfMaxStamps() + ' 個');
+    var h = '';
+    BF_FIELDS.forEach(function(f, i){
+        var warn = f.signer_user_id ? '' : '<span class="bf-warn">未指定人員</span>';
+        h += '<div class="bf-row'+(f.signer_user_id?'':' bad')+'">'
+           + '<div class="bf-row-hd"><b>圖章 '+(i+1)+'</b><span class="bf-pg">第'+f.page_no+'頁</span>'+warn
+           + '<button type="button" onclick="bfFocus('+f.id+')">定位</button>'
+           + '<button type="button" class="btn-danger" onclick="bfDeleteStamp('+f.id+')"><i class="fa fa-trash"></i></button></div>'
+           + '<select onchange="bfSetSigner('+f.id+',this.value)" data-eg-filter="輸入姓名篩選…">'+bfPeopleOptionsHtml(f.signer_user_id)+'</select>'
+           + '<select onchange="bfSetTpl('+f.id+',this.value)" data-eg-filter="輸入圖章模板名稱篩選…">'+bfTplOptionsHtml(f.stamp_tpl_id)+'</select>'
+           + '</div>';
+    });
+    $('#bfList').html(h || '<p style="padding:8px;color:#8a6d45;font-size:12px;">尚未新增圖章，請到右邊頁面上方按「＋新增圖章」。</p>');
+}
+/** 共用存檔：把某個圖章目前的位置＋人員＋模板整包送後端（後端會驗最小尺寸與 30 個上限）。 */
+function bfSaveField(fieldObj, onDone, onFail){
+    $.post(API, {action:'backfill_field_save', csrf:META.csrf, case_id:FP_CASE.id, field:JSON.stringify(fieldObj)}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); if (onFail) onFail(); return; }
+        BF_FIELDS = res.fields || [];
+        renderBfList();
+        if (onDone) onDone(res);
+    }, 'json').fail(function(){ if (onFail) onFail(); });
+}
+function bfSaveFieldPosition(pageNo, obj){
+    var cv = FP_CANVASES[pageNo];
+    if (!cv || !obj) return;
+    var cur = obj.fieldId ? bfFieldById(obj.fieldId) : null;
+    var f = {
+        id: obj.fieldId||0, page_no: pageNo,
+        x: obj.left/cv.width, y: obj.top/cv.height,
+        w: (obj.width*obj.scaleX)/cv.width, h: (obj.height*obj.scaleY)/cv.height,
+        signer_user_id: cur ? (cur.signer_user_id||0) : 0,
+        stamp_tpl_id: cur ? (cur.stamp_tpl_id||0) : bfDefaultTplId()
+    };
+    bfSaveField(f, function(res){
+        obj.fieldId = res.id; BF_OBJS[res.id] = obj;
+        bfPaintBoxLabel(obj);
+    }, function(){
+        // 被後端擋下(例如框太小)：新框直接移除、既有框重新載入回上一個已存檔狀態，畫面不留下假資料
+        if (!obj.fieldId) { cv.remove(obj); FP_SELECTED = null; cv.renderAll(); }
+        else openFieldDesigner(FP_CASE.id);
+    });
+}
+function bfAddStamp(pageNo){
+    if (BF_FIELDS.length >= bfMaxStamps()){ alert('圖章數量已達上限 '+bfMaxStamps()+' 個'); return; }
+    var p = (FP_CASE.pages||[]).filter(function(x){ return x.page_no==pageNo; })[0];
+    if (!p){ alert('找不到第'+pageNo+'頁'); return; }
+    var minFrac = fieldMinFrac(p, bfTplSchema(bfDefaultTplId()));
+    var wFrac = Math.min(0.9, minFrac.min_w*1.06 + 0.005), hFrac = Math.min(0.9, minFrac.min_h*1.06 + 0.005);
+    // 依已有張數往右下角錯開一點，連續新增才不會整疊在同一個位置上互相蓋住
+    var off = (BF_FIELDS.filter(function(f){ return f.page_no==pageNo; }).length % 6) * 0.04;
+    var xFrac = Math.max(0, Math.min(1-wFrac, 0.10 + off)), yFrac = Math.max(0, Math.min(1-hFrac, 0.70 + off));
+    var g = fpAddFieldBox(pageNo, '', 'stamp', xFrac, yFrac, wFrac, hFrac, 0);
+    bfSaveFieldPosition(pageNo, g);
+}
+function bfSetSigner(fid, uid){
+    var f = bfFieldById(fid); if (!f) return;
+    bfSaveField({id:f.id, page_no:f.page_no, x:f.x, y:f.y, w:f.w, h:f.h,
+                 signer_user_id:parseInt(uid,10)||0, stamp_tpl_id:f.stamp_tpl_id||0},
+        function(){ bfPaintBoxLabel(BF_OBJS[fid]); }, function(){ renderBfList(); });
+}
+function bfSetTpl(fid, tplId){
+    var f = bfFieldById(fid); if (!f) return;
+    bfSaveField({id:f.id, page_no:f.page_no, x:f.x, y:f.y, w:f.w, h:f.h,
+                 signer_user_id:f.signer_user_id||0, stamp_tpl_id:parseInt(tplId,10)||0},
+        null, function(){ renderBfList(); });
+}
+function bfApplyTplAll(){
+    if (!BF_FIELDS.length){ alert('目前還沒有圖章'); return; }
+    var tplId = bfDefaultTplId();
+    if (!confirm('確定把全部 '+BF_FIELDS.length+' 個圖章的模板都改成目前選的預設模板？（之後仍可逐個修改）')) return;
+    $.post(API, {action:'backfill_apply_tpl_all', csrf:META.csrf, case_id:FP_CASE.id, stamp_tpl_id:tplId}, function(res){
+        if (!res.ok){ alert(res.error||'套用失敗'); return; }
+        BF_FIELDS = res.fields || [];
+        renderBfList();
+    }, 'json');
+}
+function bfDeleteStamp(fid){
+    if (!confirm('確定刪除這個圖章？')) return;
+    $.post(API, {action:'case_field_delete', csrf:META.csrf, case_id:FP_CASE.id, field_id:fid}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        var obj = BF_OBJS[fid];
+        if (obj && FP_CANVASES[obj.pageNo]) { FP_CANVASES[obj.pageNo].remove(obj); FP_CANVASES[obj.pageNo].renderAll(); }
+        delete BF_OBJS[fid];
+        BF_FIELDS = res.fields || [];
+        FP_SELECTED = null;
+        renderBfList();
+    }, 'json');
+}
+function bfFocus(fid){
+    var obj = BF_OBJS[fid]; if (!obj) return;
+    var cv = FP_CANVASES[obj.pageNo]; if (!cv) return;
+    cv.setActiveObject(obj); cv.renderAll();
+    FP_SELECTED = {canvas:cv, obj:obj};
+    var el = document.getElementById('fpcv_'+obj.pageNo);
+    if (el && el.scrollIntoView) el.scrollIntoView({block:'center', behavior:'smooth'});
+}
+/** 框內顯示的字：補案件顯示這個章是誰的（沒選人顯示「未指定」），一眼看得出哪個位置蓋誰的章。 */
+function bfPaintBoxLabel(obj){
+    if (!obj || !obj._objects || !obj._objects[1]) return;
+    var f = obj.fieldId ? bfFieldById(obj.fieldId) : null;
+    obj._objects[1].set({text: (f && f.signer_name) ? f.signer_name : '未指定'});
+    if (FP_CANVASES[obj.pageNo]) FP_CANVASES[obj.pageNo].renderAll();
 }
 
 /* ============================================================ PDF.js（案件文件/樣板參考共用） ============================================================ */
@@ -657,8 +944,10 @@ function openCase(id){
         $('#btnEditFiller').toggle(!!res.can_set_filler);
         CUR_AS_DOC_NO = res.as_doc_no || '';
         CUR_CASE_PAGES = res.pages || []; // 案件自己上傳文件的頁面(不是CUR_SCHEMA.pages那份樣板參考頁!)，doPrint()量版面一定要用這份
+        CUR_FIELDS = res.fields || [];
+        $('#btnUrge').toggle(CUR_CASE.case_kind !== 'backfill'); // 補案件沒有待處理人，催辦沒有意義
         renderResponses();
-        renderDocGrid(CUR_CASE_PAGES, res.fields||[]);
+        renderDocGrid(CUR_CASE_PAGES, CUR_FIELDS);
     });
 }
 $('#btnBackList').on('click', function(){ $('#detailPanel').hide(); $('#listPanel').show(); CUR_CASE=null; loadCases(); });
@@ -742,6 +1031,16 @@ function submitDecision(decision){
     }, 'json');
 }
 function renderResponses(){
+    if (CUR_CASE && CUR_CASE.case_kind === 'backfill') {
+        // 補案件沒有關卡，紀錄就是「哪個位置蓋了誰的章」；日期一律案件業務日期
+        var hb = '<div class="r-row"><b>補案件（管理員補登紙本，固定自動審核）</b>｜建立人：'+esc(CUR_CASE.applicant_name||'')+'｜業務日期：'+dispDate(CUR_CASE.business_date)+'</div>';
+        (CUR_FIELDS||[]).forEach(function(f, i){
+            hb += '<div class="r-row" style="padding-left:10px;">圖章 '+(i+1)+'（第'+f.page_no+'頁）：'+esc(f.signer_name||'（未指定）')
+                + (f.stamp_tpl && f.stamp_tpl.tpl_name ? '｜模板：'+esc(f.stamp_tpl.tpl_name) : '｜模板：系統預設回墨印') + '</div>';
+        });
+        $('#respList').html(hb);
+        return;
+    }
     var stages = CUR_SCHEMA.stages || [];
     var bySlot = {};
     (CUR_RESPONSES||[]).forEach(function(r){ bySlot[r.slot_key] = r; });
@@ -785,7 +1084,11 @@ function renderDocGrid(pages, fields){
         fields.filter(function(f){ return f.page_no == pageNo; }).forEach(function(f){
             var r = bySlot[f.slot_key];
             var $box = $('<div class="fsd-box '+f.box_type+'"></div>').css({left:(f.x*100)+'%', top:(f.y*100)+'%', width:(f.w*100)+'%', height:(f.h*100)+'%'});
-            if (f.box_type === 'stamp') {
+            if (f.box_type === 'stamp' && CUR_CASE.case_kind === 'backfill') {
+                // 補案件：每個章各自帶人員與自己的圖章模板；日期一律用案件業務日期(2026-08-17使用者拍板)
+                var bfSchema = (f.stamp_tpl && f.stamp_tpl.schema) ? $.extend({}, f.stamp_tpl.schema, {noScale:true}) : null;
+                if (f.signer_name && window.EGStamp) $box.html(EGStamp.stamp(f.signer_name, dispDate(CUR_CASE.business_date), false, bfSchema));
+            } else if (f.box_type === 'stamp') {
                 if (r && r.decision && r.decision !== 'skipped_sod' && window.EGStamp) {
                     // 圖章日期一律走 dispDate() 顯示成 YYYY.MM.DD(ai-rules/20)，不可直接丟原始的 YYYY-MM-DD
                     $box.html(EGStamp.stamp(r.resolved_user_name, dispDate((r.responded_at||'').substring(0,10)), false, stampSchema));
@@ -844,8 +1147,26 @@ function openFieldDesigner(id){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         if (!res.can_edit_fields){ alert('此案件不可編輯（可能已送出或無權限）'); return; }
         FP_CASE = res.case; FP_TPL_SCHEMA = res.schema; FP_WHITELIST = res.field_whitelist || [];
+        FP_BACKFILL = FP_CASE.case_kind === 'backfill';
         $('#listPanel,#detailPanel').hide(); $('#fieldPanel').show();
         $('#fpTitle').text(FP_CASE.title || '');
+        // 補案件沒有樣板：關掉樣板參考與待框選標籤，改用圖章清單面板
+        $('#refPanel').toggle(!FP_BACKFILL);
+        $('#labelPanel').toggle(!FP_BACKFILL);
+        $('#bfStampPanel').toggle(FP_BACKFILL);
+        $('#btnBfEditHead').toggle(FP_BACKFILL);
+        $('#btnFpSubmit').html(FP_BACKFILL ? '<i class="fa fa-check"></i> 儲存並完成（自動審核）' : '<i class="fa fa-check"></i> 儲存並送出');
+        if (FP_BACKFILL) {
+            bfEnsureMeta(function(){
+                BF_FIELDS = res.fields || []; BF_OBJS = {};
+                // 預設模板：沿用目前圖章已經在用的那一個(回來繼續設定時不會被洗掉)，都沒有才空白
+                var pre = 0;
+                BF_FIELDS.forEach(function(f){ if (!pre && f.stamp_tpl_id) pre = f.stamp_tpl_id; });
+                $('#bfDefaultTpl').html(bfTplOptionsHtml(pre));
+                buildFpCanvases(BF_FIELDS);
+            });
+            return;
+        }
         buildSlotColorMap();
         renderRefPanel();
         if (!res.pages || !res.pages.length) {
@@ -891,10 +1212,17 @@ function submitReplaceFile(){
         openFieldDesigner(FP_CASE.id);
     }).catch(function(){ alert('更換失敗（連線錯誤）'); });
 }
-function fieldMinFrac(page){
-    var mmMinEdge = 91/96*25.4;
+/* 圖章框最小尺寸：有給圖章模板 schema 就照該模板的實際大小換算(跟後端 fsd_field_min_frac 同一套算法)，
+   沒給就沿用全站列印 91px 標準。既有呼叫端只傳 page(不傳 schema)，行為與先前完全相同。 */
+function fieldMinFrac(page, stampSchema){
+    var mmW, mmH;
+    if (stampSchema && stampSchema.size) {
+        var sizePx = Math.min(600, Math.max(24, parseFloat(stampSchema.size)||91));
+        var ratio  = Math.min(3, Math.max(0.3, parseFloat(stampSchema.ratio)||1));
+        mmW = sizePx/96*25.4; mmH = sizePx*ratio/96*25.4;
+    } else { mmW = mmH = 91/96*25.4; }
     var widthMm = (page.width_pt||0)/72*25.4, heightMm = (page.height_pt||0)/72*25.4;
-    return {min_w: widthMm>0 ? mmMinEdge/widthMm : 0.05, min_h: heightMm>0 ? mmMinEdge/heightMm : 0.05};
+    return {min_w: widthMm>0 ? mmW/widthMm : 0.05, min_h: heightMm>0 ? mmH/heightMm : 0.05};
 }
 function measureAndSaveCasePages(done){
     var fileUrl = API + '?action=case_file&id=' + FP_CASE.id;
@@ -1078,6 +1406,7 @@ function buildFpCanvases(existingFields){
            + (p.paper_size ? ' <span style="color:#3f8a3f;">['+p.paper_size+'已裁切]</span>' : '')
            + ' <button type="button" onclick="fpRotatePage('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-rotate-right"></i> 旋轉90°</button>'
            + ' <button type="button" onclick="openCropModal('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-crop"></i> A4/A3裁切</button>'
+           + (FP_BACKFILL ? ' <button type="button" onclick="bfAddStamp('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-plus"></i> 新增圖章</button>' : '')
            + '</div><canvas id="fpcv_'+p.page_no+'"></canvas></div>';
     });
     $('#fpPageGrid').html(h);
@@ -1115,14 +1444,19 @@ function buildFpCanvases(existingFields){
             fpSaveFieldPosition(p.page_no, g);
         });
     });
-    existingFields.forEach(function(f){ fpAddFieldBox(f.page_no, f.slot_key, f.box_type, f.x, f.y, f.w, f.h, f.id); });
-    renderFpLabelList(existingFields.map(function(f){ return f.slot_key+'_'+f.box_type; }));
+    existingFields.forEach(function(f){
+        var g = fpAddFieldBox(f.page_no, f.slot_key, f.box_type, f.x, f.y, f.w, f.h, f.id);
+        if (FP_BACKFILL && g) BF_OBJS[f.id] = g;
+    });
+    if (FP_BACKFILL) renderBfList();
+    else renderFpLabelList(existingFields.map(function(f){ return f.slot_key+'_'+f.box_type; }));
 }
 function fpAddFieldBox(pageNo, slotKey, boxType, xFrac, yFrac, wFrac, hFrac, fieldId){
     var cv = FP_CANVASES[pageNo];
     if (!cv) return;
     var color = slotColor(slotKey); // 跟待框選標籤/樣板參考同一套顏色，方便對照是哪一個槽位
     var label = boxType === 'stamp' ? '章' : '覆';
+    if (FP_BACKFILL) { var bff = bfFieldBySlot(slotKey); label = (bff && bff.signer_name) ? bff.signer_name : '未指定'; }
     var rect = new fabric.Rect({originX:'left', originY:'top', fill:color, opacity:0.32, stroke:color, strokeWidth:1.5});
     var text = new fabric.Text(label, {fontSize:13, fill:'#5b3a1e', originX:'center', originY:'center'});
     var group = new fabric.Group([rect, text], {
@@ -1136,6 +1470,7 @@ function fpAddFieldBox(pageNo, slotKey, boxType, xFrac, yFrac, wFrac, hFrac, fie
 }
 function fpSaveFieldPosition(pageNo, obj){
     if (!obj || obj.pageNo === undefined) return;
+    if (FP_BACKFILL) { bfSaveFieldPosition(pageNo, obj); return; }  // 補案件走自己的存檔(沒有樣板槽位白名單)
     var cv = FP_CANVASES[pageNo];
     var xFrac = obj.left / cv.width, yFrac = obj.top / cv.height;
     var wFrac = (obj.width * obj.scaleX) / cv.width, hFrac = (obj.height * obj.scaleY) / cv.height;
@@ -1157,7 +1492,12 @@ function fpDeleteSelected(){
     }, 'json');
 }
 function fpSubmit(){
-    if (!confirm('確定要送出嗎？送出後開始通知第一關的簽核人，框選內容將不可再修改。')) return;
+    if (FP_BACKFILL) {
+        if (!BF_FIELDS.length){ alert('請至少新增一個圖章'); return; }
+        var bad = BF_FIELDS.filter(function(f){ return !f.signer_user_id; });
+        if (bad.length){ alert('還有 '+bad.length+' 個圖章沒有指定人員，請每個圖章都選好是誰的章再完成'); return; }
+        if (!confirm('確定要完成嗎？補案件送出後直接標記為已完成（固定自動審核），不會通知任何人簽核，圖章內容也不可再修改。')) return;
+    } else if (!confirm('確定要送出嗎？送出後開始通知第一關的簽核人，框選內容將不可再修改。')) return;
     $.post(API, {action:'case_submit', csrf:META.csrf, case_id:FP_CASE.id}, function(res){
         if (!res.ok){ alert(res.error||'送出失敗'); return; }
         $('#fieldPanel').hide();

@@ -332,9 +332,11 @@ case 'case_get': {
         'can_edit_fields'=>$case['status']==='draft' && ($isOwner || $perms['canAdmin']),
         'can_delete_draft'=>$case['status']==='draft' && ($isOwner || $perms['canAdmin']),
         'can_delete_hard'=>$canDeleteHard, 'can_delete_soft'=>$canDeleteSoft, 'can_set_filler'=>$uid === 1,
-        'pages'=>fsd_case_pages_get($db, $id), 'fields'=>fsd_case_field_list($db, $id),
+        'pages'=>fsd_case_pages_get($db, $id),
+        // 補案件的圖章框要附上人員姓名與該章自己綁的圖章模板 schema（一般案件是全部共用樣板那一個模板）
+        'fields'=>fsd_is_backfill($case) ? fsd_backfill_fields_for_view($db, $id) : fsd_case_field_list($db, $id),
         'field_whitelist'=>array_keys(fsd_case_field_whitelist($db, $case)),
-        'as_doc_no'=>fsd_asdoc_no_display($db, (int)$case['template_id'], $case['business_date']),
+        'as_doc_no'=>fsd_case_asdoc_no($db, $case),
         'company_name'=>eg_company_full_name($db),
     ]);
 }
@@ -459,6 +461,58 @@ case 'case_field_delete_page': {
     if ((int)$case['applicant_id'] !== $uid && !$perms['canAdmin']) jerr('只有申請人本人或管理員可以編輯', 403);
     $pageNo = (int)($_POST['page_no'] ?? 0);
     $r = fsd_case_field_delete_by_page($db, $id, $pageNo);
+    if (!$r['ok']) jerr($r['msg']);
+    jout(['fields'=>$r['fields']]);
+}
+
+/* ============================================================ 補案件（管理員把已簽好章的紙本補進系統） ============================================================ */
+
+/** 補案件用的下拉資料：簽章人員（含已離職者）、圖章模板清單、AS文件清單。 */
+case 'backfill_meta': {
+    if (!$perms['canAdmin']) jerr('僅管理員可使用補案件功能', 403);
+    // 模板要連 schema 一起給前端：新增圖章框的預設大小/最小尺寸要照該模板實際公分數換算(跟後端同一套口徑)
+    $tpls = fsd_stamp_tpl_options($db);
+    foreach ($tpls as &$t) { $t['schema'] = fsd_stamp_tpl_get($db, (int)$t['id'])['schema'] ?? null; }
+    unset($t);
+    jout(['people'=>fsd_backfill_people($db), 'stamp_tpls'=>$tpls,
+          'as_docs'=>eg_asdoc_list($db), 'max_stamps'=>FSD_BACKFILL_MAX_STAMPS]);
+}
+
+case 'backfill_create_draft': {
+    fsd_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可使用補案件功能', 403);
+    $title   = trim((string)($_POST['title'] ?? ''));
+    $bizDate = trim((string)($_POST['business_date'] ?? '')) ?: date('Y-m-d');
+    $asDocId = (int)($_POST['as_doc_id'] ?? 0);
+    $images  = fsd_case_upload_images($db, 'files');
+    $r = fsd_backfill_create_draft($db, $uid, $uname, $title, $bizDate, $asDocId, $images);
+    if (!$r['ok']) jerr($r['msg']);
+    jout(['id'=>$r['id']]);
+}
+
+case 'backfill_update_head': {
+    fsd_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可使用補案件功能', 403);
+    $r = fsd_backfill_update_head($db, (int)($_POST['case_id'] ?? 0), trim((string)($_POST['title'] ?? '')),
+        trim((string)($_POST['business_date'] ?? '')), (int)($_POST['as_doc_id'] ?? 0));
+    if (!$r['ok']) jerr($r['msg']);
+    jout(['case'=>$r['case']]);
+}
+
+case 'backfill_field_save': {
+    fsd_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可使用補案件功能', 403);
+    $field = json_decode((string)($_POST['field'] ?? '{}'), true);
+    if (!is_array($field)) jerr('圖章資料格式不正確');
+    $r = fsd_backfill_field_save($db, (int)($_POST['case_id'] ?? 0), $field);
+    if (!$r['ok']) jerr($r['msg']);
+    jout(['id'=>$r['id'], 'fields'=>$r['fields']]);
+}
+
+case 'backfill_apply_tpl_all': {
+    fsd_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可使用補案件功能', 403);
+    $r = fsd_backfill_apply_stamp_tpl_all($db, (int)($_POST['case_id'] ?? 0), (int)($_POST['stamp_tpl_id'] ?? 0));
     if (!$r['ok']) jerr($r['msg']);
     jout(['fields'=>$r['fields']]);
 }

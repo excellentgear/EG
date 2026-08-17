@@ -515,7 +515,9 @@ function fsd_case_get(PDO $db, int $id): ?array {
 }
 
 function fsd_case_list(PDO $db, int $templateId = 0, ?int $onlyApplicant = null): array {
-    $sql = "SELECT c.*, t.name AS template_name FROM fsd_case c JOIN fsd_template t ON t.id=c.template_id WHERE 1=1";
+    // LEFT JOIN：補案件(case_kind='backfill')沒有樣板、template_id 固定 0，INNER JOIN 會讓補案件整批查不到
+    $sql = "SELECT c.*, COALESCE(t.name, IF(c.case_kind='backfill','（補案件・無樣板）','')) AS template_name
+            FROM fsd_case c LEFT JOIN fsd_template t ON t.id=c.template_id WHERE 1=1";
     $params = [];
     if ($templateId) { $sql .= " AND c.template_id=?"; $params[] = $templateId; }
     if ($onlyApplicant !== null) { $sql .= " AND c.applicant_id=?"; $params[] = $onlyApplicant; }
@@ -962,10 +964,187 @@ function fsd_case_field_delete_by_page(PDO $db, int $caseId, int $pageNo): array
     return ['ok'=>true, 'fields'=>fsd_case_field_list($db, $caseId)];
 }
 
+/* ============================================================ 補案件（backfill；2026-08-17 使用者明確要求） ============================================================
+ * 管理員（含一般管理員＝有 fsd_template_admin 的人）把「紙本上已經簽好章」的歷史文件掃描檔補進系統：
+ *   ①不需要樣板（template_id 固定存 0、case_kind='backfill'）②固定自動審核（送出＝直接完成，不跑任何關卡、不發通知）
+ *   ③上傳檔案後才自己框選要蓋哪些圖章，每個圖章各自選「是哪位人員的章」與「用哪個圖章模板」
+ *   ④圖章上限 30 個 ⑤各圖章的模板可先一次套用同一個預設值再逐個修改（預設值由前端套進每筆 stamp_tpl_id，後端只存實際值）
+ * 使用者拍板的兩個口徑：簽章日期一律用案件業務日期（不逐章設定）；人員候選含已離職者（補的是舊表單）。
+ */
+
+const FSD_BACKFILL_MAX_STAMPS = 30;
+
+function fsd_is_backfill(?array $case): bool { return $case && ($case['case_kind'] ?? 'normal') === 'backfill'; }
+
+/** 補案件可選的簽章人員：在職者走 people_lib（鐵則），另補上已離職者並標示（比照 AS_Document_API 的任期候選人做法）。 */
+function fsd_backfill_people(PDO $db): array {
+    require_once __DIR__ . '/people_lib.php';
+    $out = [];
+    foreach (eg_people_list($db) as $p) {
+        $out[] = ['id'=>(int)$p['id'], 'name'=>$p['user_cname'], 'resigned'=>0,
+                  'label'=>trim(($p['dept_name'] ?? '') . ' ' . ($p['position_name'] ?? '') . ' ' . $p['user_cname'])];
+    }
+    try {
+        $st = $db->query("SELECT u.id, u.user_cname, d.name AS dept_name FROM `user` u
+                          LEFT JOIN user_department_position_map m ON m.id = (SELECT m2.id FROM user_department_position_map m2 WHERE m2.user_id=u.id ORDER BY m2.is_main DESC, m2.id ASC LIMIT 1)
+                          LEFT JOIN department d ON d.id = m.department_id
+                          WHERE u.state = 0 ORDER BY u.user_cname");
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $u) {
+            $out[] = ['id'=>(int)$u['id'], 'name'=>$u['user_cname'], 'resigned'=>1,
+                      'label'=>trim(($u['dept_name'] ?? '') . ' ' . $u['user_cname'] . '（已離職）')];
+        }
+    } catch (Throwable $e) { /* 離職者查不到就只給在職名單，不影響主要功能 */ }
+    return $out;
+}
+
+/** 補案件建立草稿：不綁樣板，直接吃上傳的多張圖片成頁（圖片處理與一般案件共用 API 端的 fsd_case_upload_images）。 */
+function fsd_backfill_create_draft(PDO $db, int $uid, string $uname, string $title, string $bizDate, int $asDocId, array $images): array {
+    if (!$images) return ['ok'=>false, 'msg'=>'請至少上傳一張圖片'];
+    $bizDate = $bizDate ?: date('Y-m-d');
+    $db->beginTransaction();
+    try {
+        $db->prepare("INSERT INTO fsd_case (template_id,template_version,case_kind,as_doc_id,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,status,current_stage_seq)
+                      VALUES (0,0,'backfill',?,'image',NULL,?,?,?,?,?,?,'draft',0)")
+           ->execute([$asDocId ?: null, $title ?: '補案件', $uid, $uname, $uid, $uname, $bizDate]);
+        $caseId = (int)$db->lastInsertId();
+        $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation,file_name) VALUES (?,?,?,?,0,?)");
+        foreach (array_values($images) as $i => $img) {
+            $ins->execute([$caseId, $i + 1, (float)$img['width_pt'], (float)$img['height_pt'], $img['file_name']]);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        return ['ok'=>false, 'msg'=>'建立失敗：' . $e->getMessage()];
+    }
+    return ['ok'=>true, 'id'=>$caseId];
+}
+
+/** 補案件更新表頭（標題／業務日期／AS文件），僅草稿可改。 */
+function fsd_backfill_update_head(PDO $db, int $caseId, string $title, string $bizDate, int $asDocId): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case || !fsd_is_backfill($case)) return ['ok'=>false, 'msg'=>'找不到此補案件'];
+    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可修改'];
+    $db->prepare("UPDATE fsd_case SET title=?,business_date=?,as_doc_id=?,updated_at=NOW() WHERE id=?")
+       ->execute([$title ?: '補案件', $bizDate ?: $case['business_date'], $asDocId ?: null, $caseId]);
+    return ['ok'=>true, 'case'=>fsd_case_get($db, $caseId)];
+}
+
+/** 補案件的圖章框存檔（新增/移動/改人/改模板都走這支）。slot_key 由後端配（bf1..bf30），前端不需要也不可自訂。 */
+function fsd_backfill_field_save(PDO $db, int $caseId, array $f): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case || !fsd_is_backfill($case)) return ['ok'=>false, 'msg'=>'找不到此補案件'];
+    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可調整圖章'];
+    $fieldId = (int)($f['id'] ?? 0);
+    $pageNo  = (int)($f['page_no'] ?? 1);
+    $x = (float)($f['x'] ?? 0); $y = (float)($f['y'] ?? 0);
+    $w = (float)($f['w'] ?? 0); $h = (float)($f['h'] ?? 0);
+    $signerId  = (int)($f['signer_user_id'] ?? 0);
+    $stampTpl  = (int)($f['stamp_tpl_id'] ?? 0);
+
+    $cnt = $db->prepare("SELECT COUNT(*) FROM fsd_case_field WHERE case_id=?");
+    $cnt->execute([$caseId]);
+    if (!$fieldId && (int)$cnt->fetchColumn() >= FSD_BACKFILL_MAX_STAMPS) {
+        return ['ok'=>false, 'msg'=>'圖章數量已達上限 ' . FSD_BACKFILL_MAX_STAMPS . ' 個，請先刪除不需要的圖章'];
+    }
+    $signerName = null;
+    if ($signerId) {
+        $ust = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
+        $ust->execute([$signerId]);
+        $signerName = $ust->fetchColumn() ?: null;
+        if (!$signerName) return ['ok'=>false, 'msg'=>'找不到此人員'];
+    }
+    // 圖章框最小尺寸：依「這個圖章自己綁的模板」換算（跟一般案件用樣板模板的口徑一致，只是來源不同）
+    $pst = $db->prepare("SELECT width_pt,height_pt FROM fsd_case_page WHERE case_id=? AND page_no=?");
+    $pst->execute([$caseId, $pageNo]);
+    $page = $pst->fetch(PDO::FETCH_ASSOC);
+    if ($page) {
+        $min = fsd_field_min_frac($page, fsd_stamp_tpl_get($db, $stampTpl)['schema'] ?? null);
+        if ($w < $min['min_w'] || $h < $min['min_h']) {
+            return ['ok'=>false, 'msg'=>sprintf('圖章框太小，至少需要頁面寬度%.1f%%、高度%.1f%%（依所選圖章模板的實際尺寸換算），請拖大一點', $min['min_w']*100, $min['min_h']*100)];
+        }
+    }
+    if ($fieldId) {
+        $db->prepare("UPDATE fsd_case_field SET page_no=?,x=?,y=?,w=?,h=?,signer_user_id=?,signer_name=?,stamp_tpl_id=? WHERE id=? AND case_id=?")
+           ->execute([$pageNo, $x, $y, $w, $h, $signerId ?: null, $signerName, $stampTpl ?: null, $fieldId, $caseId]);
+    } else {
+        // slot_key 找目前沒用到的最小號碼（刪掉中間某個圖章後號碼可回收，不會因為累計新增而爆掉 bf30）
+        $used = $db->prepare("SELECT slot_key FROM fsd_case_field WHERE case_id=?");
+        $used->execute([$caseId]);
+        $usedKeys = array_flip($used->fetchAll(PDO::FETCH_COLUMN));
+        $slotKey = '';
+        for ($i = 1; $i <= FSD_BACKFILL_MAX_STAMPS; $i++) { if (!isset($usedKeys['bf' . $i])) { $slotKey = 'bf' . $i; break; } }
+        if ($slotKey === '') return ['ok'=>false, 'msg'=>'圖章數量已達上限 ' . FSD_BACKFILL_MAX_STAMPS . ' 個'];
+        $db->prepare("INSERT INTO fsd_case_field (case_id,slot_key,box_type,page_no,x,y,w,h,signer_user_id,signer_name,stamp_tpl_id)
+                      VALUES (?,?,'stamp',?,?,?,?,?,?,?,?)")
+           ->execute([$caseId, $slotKey, $pageNo, $x, $y, $w, $h, $signerId ?: null, $signerName, $stampTpl ?: null]);
+        $fieldId = (int)$db->lastInsertId();
+    }
+    return ['ok'=>true, 'id'=>$fieldId, 'fields'=>fsd_case_field_list($db, $caseId)];
+}
+
+/** 一次把所有圖章的模板套成同一個（前端「預設模板一次套用」用；之後仍可逐個修改）。 */
+function fsd_backfill_apply_stamp_tpl_all(PDO $db, int $caseId, int $stampTplId): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case || !fsd_is_backfill($case)) return ['ok'=>false, 'msg'=>'找不到此補案件'];
+    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可調整圖章'];
+    $db->prepare("UPDATE fsd_case_field SET stamp_tpl_id=? WHERE case_id=?")->execute([$stampTplId ?: null, $caseId]);
+    return ['ok'=>true, 'fields'=>fsd_case_field_list($db, $caseId)];
+}
+
+/**
+ * 補案件送出＝固定自動審核：直接轉 approved，不跑關卡、不發任何通知（補的是已經簽好的紙本，不需要再找人簽）。
+ * 每個圖章各寫一筆 fsd_case_response 當簽核紀錄（is_auto=1，比照 ai-rules/21：業務日期與精確時間戳分離，
+ * 時間刻意錯開且不跨天——這裡日期一律用案件業務日期，時間由 09:00 起每章隨機加 5~30 分鐘、超過當日 23:00 就停在 23:00）。
+ */
+function fsd_backfill_submit(PDO $db, int $caseId, int $uid): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case || !fsd_is_backfill($case)) return ['ok'=>false, 'msg'=>'找不到此補案件'];
+    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'此補案件已完成，不可重複送出'];
+    $fields = fsd_case_field_list($db, $caseId);
+    if (!$fields) return ['ok'=>false, 'msg'=>'請至少框選一個圖章'];
+    if (count($fields) > FSD_BACKFILL_MAX_STAMPS) return ['ok'=>false, 'msg'=>'圖章數量超過上限 ' . FSD_BACKFILL_MAX_STAMPS . ' 個'];
+    foreach ($fields as $f) {
+        if (!(int)$f['signer_user_id']) return ['ok'=>false, 'msg'=>'還有圖章沒有指定人員，請每個圖章都選好是誰的章再送出'];
+    }
+    $bizDate = (string)($case['business_date'] ?: date('Y-m-d'));
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM fsd_case_response WHERE case_id=?")->execute([$caseId]);
+        $ins = $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,responded_at)
+                             VALUES (?,0,?,?,?,'approved',1,?)");
+        $minutes = 9 * 60;
+        foreach ($fields as $f) {
+            $minutes = min(23 * 60, $minutes + random_int(5, 30));
+            $ts = $bizDate . ' ' . sprintf('%02d:%02d:00', intdiv($minutes, 60), $minutes % 60);
+            $ins->execute([$caseId, $f['slot_key'], (int)$f['signer_user_id'], $f['signer_name'], $ts]);
+        }
+        $db->prepare("UPDATE fsd_case SET status='approved',submitted_at=NOW(),current_stage_seq=0,updated_at=NOW() WHERE id=?")->execute([$caseId]);
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        return ['ok'=>false, 'msg'=>'送出失敗：' . $e->getMessage()];
+    }
+    return ['ok'=>true, 'status'=>'approved'];
+}
+
+/** 檢視/列印用：補案件的圖章框附上人員姓名與該圖章模板的 schema（一般案件全部圖章共用樣板那一個模板，補案件是逐章各自綁）。 */
+function fsd_backfill_fields_for_view(PDO $db, int $caseId): array {
+    $fields = fsd_case_field_list($db, $caseId);
+    $cache = [];
+    foreach ($fields as &$f) {
+        $tplId = (int)($f['stamp_tpl_id'] ?? 0);
+        if ($tplId && !array_key_exists($tplId, $cache)) $cache[$tplId] = fsd_stamp_tpl_get($db, $tplId);
+        $f['stamp_tpl'] = $tplId ? ($cache[$tplId] ?? null) : null;
+    }
+    unset($f);
+    return $fields;
+}
+
 /** 草稿→送出：轉 in_progress 並開始跑第1關（原本 fsd_case_create 送出部分抽出來，讓建立與送出分開兩步）。 */
 function fsd_case_submit(PDO $db, int $caseId, int $uid): array {
     $case = fsd_case_get($db, $caseId);
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    if (fsd_is_backfill($case)) return fsd_backfill_submit($db, $caseId, $uid); // 補案件＝固定自動審核，不跑關卡
     if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'此案件已送出，不可重複送出'];
     if ((int)$case['applicant_id'] !== $uid) return ['ok'=>false, 'msg'=>'只有申請人本人可以送出'];
     // 檔案存在與否要逐頁判定：2026-08-14 改多圖案件後檔名存在 fsd_case_page.file_name，
@@ -1137,4 +1316,12 @@ function fsd_case_urge(PDO $db, int $caseId, int $byUid): array {
 
 function fsd_asdoc_no_display(PDO $db, int $templateId, ?string $bizDate = null): string {
     return eg_asdoc_no_asof($db, fsd_asdoc_module($templateId), $bizDate);
+}
+
+/** 某案件列印右下角要印的 AS 文件編號：一般案件走樣板綁定，補案件走案件自己挑的 as_doc_id；
+ *  兩者版次都依業務日期回推當時生效版（ai-rules/16 第三之四節）。 */
+function fsd_case_asdoc_no(PDO $db, array $case): string {
+    $bizDate = $case['business_date'] ?? null;
+    if (fsd_is_backfill($case)) return eg_asdoc_no_asof_id($db, (int)($case['as_doc_id'] ?? 0), $bizDate);
+    return fsd_asdoc_no_display($db, (int)$case['template_id'], $bizDate);
 }
