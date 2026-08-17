@@ -186,7 +186,7 @@ case 'periodic_eval_all': {
 case 'roster_list': {
     $year = (int)($_GET['year'] ?? '') ?: (int)date('Y');
     $set = vendor_eval_settings($db, $scope);
-    $rows = $db->query("SELECT m.maker_id_no, m.maker_id, m.m_note, m.audit_managed, m.in_roster, m.roster_grade, m.main_category_id,
+    $rows = $db->query("SELECT m.maker_id_no, m.maker_id, m.audit_managed, m.in_roster, m.roster_grade, m.roster_note, m.main_category_id,
                                sc.sub_cat_names
                         FROM maker_list m " . vendor_audit_subcat_join() . "
                         WHERE (m.status IS NULL OR m.status<>'" . VENDOR_AUDIT_DISABLED . "') AND (m.audit_managed=1 OR m.in_roster=1)
@@ -196,14 +196,19 @@ case 'roster_list': {
     foreach ($rows as $r) {
         $ev = vendor_periodic_eval($db, $r['maker_id_no'], $year, $set);
         $sg = $ev['full']['grade']; $ss = $ev['full']['score'];
+        $final = ($r['roster_grade'] !== null && $r['roster_grade'] !== '') ? $r['roster_grade'] : $sg;
         $out[] = [
-            'maker_id_no'=>$r['maker_id_no'], 'maker_id'=>$r['maker_id'], 'm_note'=>$r['m_note'],
+            'maker_id_no'=>$r['maker_id_no'], 'maker_id'=>$r['maker_id'],
             'main_cat_name'=>$r['sub_cat_names'], 'is_managed'=>(int)$r['audit_managed'], 'in_roster'=>(int)$r['in_roster'],
             'suggest_grade'=>$sg, 'suggest_score'=>$ss, 'roster_grade'=>$r['roster_grade'],
-            'final_grade'=>($r['roster_grade'] !== null && $r['roster_grade'] !== '') ? $r['roster_grade'] : $sg,
+            'final_grade'=>$final,
+            // 備註：有存過用存的，沒存過則未達標(等級不在前三級或無等級)預設「老闆指定」
+            'roster_note'=>$r['roster_note'],
+            'note'=>vendor_roster_note_effective($r['roster_note'], $final, $set['grades']),
+            'substandard'=>vendor_roster_is_substandard($final, $set['grades']) ? 1 : 0,
         ];
     }
-    jout(['year'=>$year, 'settings'=>$set, 'rows'=>$out]);
+    jout(['year'=>$year, 'settings'=>$set, 'note_options'=>vendor_roster_note_options(), 'rows'=>$out]);
 }
 /* 加入清冊（手動列入非納管廠商）：只能加自己範疇(或all)的廠商，SQL層再擋一次防跨範疇竄改 */
 case 'roster_add': {
@@ -237,6 +242,18 @@ case 'roster_set_grade': {
     $ph = implode(',', array_fill(0, count($ids), '?'));
     $st = $db->prepare("UPDATE maker_list m SET roster_grade=? WHERE m.maker_id_no IN ($ph) AND " . vendor_audit_scope_sql_cond($scope));
     $st->execute(array_merge([$g], $ids));
+    jout(['updated'=>$st->rowCount()]);
+}
+/* 清冊備註（老闆指定／客戶指定，空=清除改回預設）：只能改自己範疇(或all)的廠商 */
+case 'roster_set_note': {
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $scope)) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核登錄權限，請洽管理員於「稽核員資格設定」指派', 403);
+    $ids = va_ids($_POST['maker_ids'] ?? '');
+    if (!$ids) jerr('請選擇廠商');
+    $n = trim((string)($_POST['note'] ?? ''));
+    if ($n !== '' && !array_key_exists($n, vendor_roster_note_options())) jerr('備註值不正確');
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $st = $db->prepare("UPDATE maker_list m SET roster_note=? WHERE m.maker_id_no IN ($ph) AND " . vendor_audit_scope_sql_cond($scope));
+    $st->execute(array_merge([$n !== '' ? $n : null], $ids));
     jout(['updated'=>$st->rowCount()]);
 }
 /* 合格供應商清冊列印簽章名單：製表＝目前登入者(前端已知不必回傳)；

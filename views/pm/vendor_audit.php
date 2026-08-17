@@ -367,8 +367,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <table class="va-table" id="rosterTable">
                     <thead><tr>
                         <th style="width:32px;"><input type="checkbox" id="rsAllCk"></th>
-                        <th style="text-align:left;">項目</th><th>廠商</th><th>廠商備註</th>
-                        <th>建議等級</th><th>採用等級</th><th>類型</th><th>操作</th>
+                        <th style="text-align:left;">項目</th><th>廠商</th>
+                        <th>建議等級</th><th>採用等級</th>
+                        <th title="未達標（等級 A/B/C 以外或無等級）預設「老闆指定」，可改選「客戶指定」">備註</th>
+                        <th>類型</th><th>操作</th>
                     </tr></thead>
                     <tbody id="rosterBody"><tr><td colspan="8" style="padding:18px;color:#8a6d45;">載入中…</td></tr></tbody>
                 </table>
@@ -838,6 +840,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <ul>
             <li><b>組成</b>：清冊＝<b>納管廠商</b>（固定要稽核）∪ <b>手動列入</b>（不需納管但認定合格者，靠定期評核績效監控）。清單<b>每頁 10 家</b>、下方可翻頁；匯出 CSV／列印清冊皆為全部廠商，不受翻頁影響。</li>
             <li><b>評核等級</b>：建議等級來自定期評核全年成績；可勾選<b>批次設定採用等級</b>覆寫建議，或清除改回建議。</li>
+            <li><b>備註（老闆指定／客戶指定）</b>：等級<b>未達標</b>（不在等級門檻最高的前三級內，預設設定即 A/B/C 以外，含當年度無資料而<b>無等級</b>者）一律<b>預設顯示「老闆指定」</b>，說明它為何仍留在合格清冊；可自行改選「客戶指定」或清成（無）。達標者預設空白。改選即存，CSV 與列印清冊都會帶出這欄（原本的「廠商備註」欄已取消）。</li>
             <li><b>檢查兩年未交易外包廠</b>：列出納管/在冊、有發包史但最後發包超過兩年的外包廠（顯示最後發包日）；<b>需你勾選確認</b>後才移除（取消納管＋移出清冊＋刪未稽核對象），不會自動靜默移除。</li>
         </ul>
 
@@ -2203,15 +2206,33 @@ function renderRoster(){
         h+='<tr><td><input type="checkbox" class="rs-ck" value="'+esc(r.maker_id_no)+'"></td>';
         h+='<td class="t-left">'+esc(r.main_cat_name||'—')+'</td>';
         h+='<td class="t-left"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#8a6d45;">'+esc(r.maker_id_no)+'</div></td>';
-        h+='<td class="t-left" style="max-width:200px;white-space:normal;">'+esc(r.m_note||'')+'</td>';
         h+='<td>'+(r.suggest_grade?r.suggest_grade+'（'+(r.suggest_score==null?'—':r.suggest_score)+'）':'—')+'</td>';
         h+='<td><b style="color:#8A5A2B;">'+esc(r.final_grade||'—')+'</b>'+(over?' <span style="font-size:10px;color:#c0762c;">手動</span>':'')+'</td>';
+        h+='<td>'+rsNoteCell(r)+'</td>';
         h+='<td>'+(r.is_managed?'<span class="st-pill st-done">納管</span>':'<span class="st-pill st-todo">手動列入</span>')+'</td>';
         h+='<td>'+((!r.is_managed&&r.in_roster&&PERMS.canEdit)?'<span class="va-op" style="color:#DD5138;" onclick="rsRemove(\''+esc(r.maker_id_no)+'\')"><i class="fa fa-times"></i>移出</span>':'—')+'</td></tr>';
     });
-    $('#rosterBody').html(h||'<tr><td colspan="9" style="padding:16px;color:#8a6d45;">清冊尚無廠商，請設定納管或「加入清冊廠商」</td></tr>');
+    $('#rosterBody').html(h||'<tr><td colspan="8" style="padding:16px;color:#8a6d45;">清冊尚無廠商，請設定納管或「加入清冊廠商」</td></tr>');
     $('#rsAllCk').prop('checked',false);
 }
+/* 清冊備註：未達標(等級A/B/C以外或無等級)預設「老闆指定」，可改「客戶指定」；無權限者只顯示文字 */
+function rsNoteOptions(){ return (ROSTER&&ROSTER.note_options)||{boss:'老闆指定',customer:'客戶指定'}; }
+function rsNoteText(v){ var o=rsNoteOptions(); return v&&o[v]?o[v]:''; }
+function rsNoteCell(r){
+    var cur=r.note||'', o=rsNoteOptions();
+    if(!PERMS.canEdit) return cur?('<span class="st-pill st-todo">'+esc(rsNoteText(cur))+'</span>'):'—';
+    var h='<select class="rs-note" data-mid="'+esc(r.maker_id_no)+'" style="font-size:12px;padding:1px 3px;"><option value="">（無）</option>';
+    Object.keys(o).forEach(function(k){ h+='<option value="'+esc(k)+'"'+(cur===k?' selected':'')+'>'+esc(o[k])+'</option>'; });
+    return h+'</select>'+(r.substandard&&!r.roster_note?'<div style="font-size:10px;color:#c0762c;">未達標預設</div>':'');
+}
+/* 選了就存（點開即刷新鐵則：存完重載清冊，確保等級/備註與他人改動同步） */
+$('#rosterBody').on('change','select.rs-note',function(){
+    var mid=$(this).data('mid'), v=$(this).val();
+    $.post(API,{action:'roster_set_note',maker_ids:mid,note:v},function(res){
+        if(!res.ok){ alert(res.error||'儲存失敗'); }
+        loadRoster();
+    },'json');
+});
 $('#rsAllCk').on('change', function(){ $('#rosterBody input.rs-ck').prop('checked', this.checked); });
 function rsChecked(){ return $('#rosterBody input.rs-ck:checked').map(function(){return this.value;}).get(); }
 $('#rsBatchGrade').on('click', function(){
@@ -2249,8 +2270,8 @@ function rsAddSelected(){
 }
 $('#rsCsvBtn').on('click', function(){
     if(!ROSTER) return;
-    var rows=[['項目','廠商ID','廠商名稱','廠商備註','建議等級','採用等級','類型']];
-    ROSTER.rows.forEach(function(r){ rows.push([r.main_cat_name||'',r.maker_id_no,r.maker_id||'',r.m_note||'',(r.suggest_grade||'')+(r.suggest_score==null?'':'('+r.suggest_score+')'),r.final_grade||'',r.is_managed?'納管':'手動列入']); });
+    var rows=[['項目','廠商ID','廠商名稱','建議等級','採用等級','備註','類型']];
+    ROSTER.rows.forEach(function(r){ rows.push([r.main_cat_name||'',r.maker_id_no,r.maker_id||'',(r.suggest_grade||'')+(r.suggest_score==null?'':'('+r.suggest_score+')'),r.final_grade||'',rsNoteText(r.note),r.is_managed?'納管':'手動列入']); });
     var csv='﻿'+rows.map(function(l){return l.map(function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
     var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'})); a.download='合格供應商清冊_'+ROSTER.year+'_'+scopeLabel(CUR_SCOPE)+'.csv'; a.click();
 });
@@ -2275,12 +2296,12 @@ $('#rsPrintBtn').on('click', function(){
             +'<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
             +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>'
             +'<div style="text-align:left;font-size:14px;font-weight:bold;margin-top:8px;">'+(ROSTER.year||new Date().getFullYear())+' 年（'+scopeLabel(CUR_SCOPE)+'）</div>';
-        var rows='<table class="pf" style="table-layout:fixed;margin-top:2px;"><colgroup><col style="width:5%;"><col style="width:26%;">'
-            +'<col style="width:13%;"><col style="width:46%;"><col style="width:10%;"></colgroup>'
-            +'<thead><tr><th>序</th><th style="text-align:left;">項目</th><th>廠商</th><th>廠商備註</th><th>評核等級</th></tr></thead><tbody>';
+        var rows='<table class="pf" style="table-layout:fixed;margin-top:2px;"><colgroup><col style="width:5%;"><col style="width:39%;">'
+            +'<col style="width:24%;"><col style="width:14%;"><col style="width:18%;"></colgroup>'
+            +'<thead><tr><th>序</th><th style="text-align:left;">項目</th><th>廠商</th><th>評核等級</th><th>備註</th></tr></thead><tbody>';
         ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td class="q">'+esc(r.main_cat_name||'')+'</td>'
             +'<td class="q"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#555;">'+esc(r.maker_id_no)+'</div></td>'
-            +'<td class="q">'+esc(r.m_note||'')+'</td><td>'+esc(r.final_grade||'—')+'</td></tr>'; });
+            +'<td>'+esc(r.final_grade||'—')+'</td><td>'+esc(rsNoteText(r.note))+'</td></tr>'; });
         rows+='</tbody></table>';
         var sign='<table class="pf-sign" style="page-break-inside:avoid;"><tr>'
             +'<td style="width:33%;"><div style="font-size:11px;color:#555;">製表</div><div style="margin-top:2px;min-height:91px;">'+makeStamp+'</div></td>'

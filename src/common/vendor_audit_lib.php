@@ -34,6 +34,7 @@ function vendor_audit_ensure_schema(PDO $db): void {
         "ALTER TABLE maker_list ADD COLUMN audit_next_due DATE NULL COMMENT '(保留,改用批次模型)'",
         "ALTER TABLE maker_list ADD COLUMN in_roster TINYINT(1) NOT NULL DEFAULT 0 COMMENT '手動列入合格供應商清冊(非納管也可列冊)'",
         "ALTER TABLE maker_list ADD COLUMN roster_grade VARCHAR(6) NULL COMMENT '合格清冊-手動指定評核等級(覆寫定期評核建議值)'",
+        "ALTER TABLE maker_list ADD COLUMN roster_note VARCHAR(10) NULL COMMENT '合格清冊-備註(boss=老闆指定 customer=客戶指定)；未達標等級預設老闆指定'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }
@@ -806,6 +807,23 @@ function vendor_eval_save_grades(PDO $db, array $grades, string $scope = 'outsou
     $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
     $up->execute(['vendor_eval_grades_'.$scope, json_encode($clean, JSON_UNESCAPED_UNICODE)]);
+}
+/* ---- 合格供應商清冊：備註（老闆指定／客戶指定） ----
+ * 使用者2026-08-17要求：未達標的廠商（等級不在最高的前三級內，預設設定即 A/B/C 以外，含無等級者）
+ * 一律預設顯示「老闆指定」，可改選「客戶指定」；達標者預設不顯示。等級標籤可由管理員自訂，
+ * 因此這裡用「等級清單由高至低的前三名」判定，不寫死 A/B/C（鐵律4）。 */
+function vendor_roster_note_options(): array { return ['boss'=>'老闆指定', 'customer'=>'客戶指定']; }
+function vendor_roster_is_substandard(?string $grade, array $grades): bool {
+    if ($grade === null || $grade === '') return true;          // 無等級(當年度無資料)也算未達標
+    foreach (array_slice($grades, 0, 3) as $g) {                 // $grades 已依 min 由高至低排序
+        if ((string)($g['label'] ?? '') === $grade) return false;
+    }
+    return true;
+}
+/** 實際要顯示的備註值：有存過就用存的，沒存過則未達標者預設 boss、達標者空白 */
+function vendor_roster_note_effective(?string $stored, ?string $grade, array $grades): string {
+    if ($stored === 'boss' || $stored === 'customer') return $stored;
+    return vendor_roster_is_substandard($grade, $grades) ? 'boss' : '';
 }
 function vendor_eval_grade_of($score, array $grades): ?string {
     if ($score === null) return null;
