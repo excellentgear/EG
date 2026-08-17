@@ -1060,13 +1060,17 @@ function hfSubmitAutoSign(){
 // px = 實際外徑公分 × 96 ÷ 2.54，96px=1英吋=2.54公分；外徑沿用 review_form.php 同一顆公司章的 2.5cm。
 var HF_STAMP_PX = (2.5 * 96 / 2.54).toFixed(1);
 function hfPrintCss(){
-    return 'table.hf-p-head{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;margin-bottom:6px;}'
-         + 'table.hf-p-head th{background:#fff;font-weight:bold;border:1px solid #333;padding:5px 6px;width:90px;text-align:center;}'
-         + 'table.hf-p-head td{border:1px solid #333;padding:5px 8px;text-align:left;}'
-         + 'table.hf-p-items{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:6px;}'
-         + 'table.hf-p-items th,table.hf-p-items td{border:1px solid #333;padding:5px 6px;text-align:center;}'
+    // 使用者實測：印出圖章比模板設定小，根因是表格內容略寬於A4可印範圍，印表機/瀏覽器整頁等比縮小連圖章一起縮。
+    // 對策：*{box-sizing:border-box} 防止padding疊加撐寬；所有表格 table-layout:fixed + word-break，內容一律
+    // 只能在欄寬內換行，絕不撐寬版面；寬度不足時交給 openPrintWindow() 的 #pw-shrink 縮文字，不縮圖章。
+    return '*{box-sizing:border-box;}'
+         + 'table.hf-p-head{width:100%;max-width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;margin-bottom:6px;}'
+         + 'table.hf-p-head th{background:#fff;font-weight:bold;border:1px solid #333;padding:8px 6px;width:90px;text-align:center;word-break:break-word;}'
+         + 'table.hf-p-head td{border:1px solid #333;padding:8px 8px;text-align:left;word-break:break-word;}'
+         + 'table.hf-p-items{width:100%;max-width:100%;border-collapse:collapse;font-size:11.5px;table-layout:fixed;margin-top:6px;}'
+         + 'table.hf-p-items th,table.hf-p-items td{border:1px solid #333;padding:9px 6px;text-align:center;word-break:break-word;}'
          + 'table.hf-p-items td.t-left{text-align:left;}'
-         + 'table.hf-p-foot{width:100%;margin-top:16px;margin-bottom:12mm;font-size:13px;}'
+         + 'table.hf-p-foot{width:100%;max-width:100%;table-layout:fixed;margin-top:16px;margin-bottom:12mm;font-size:13px;}'
          + 'table.hf-p-foot td{padding:6px;width:33.33%;text-align:center;vertical-align:top;}'
          + 'table.hf-p-foot .foot-lbl{margin-bottom:4px;}'
          + '.hf-p-note{font-size:11px;color:#333;margin-top:8px;line-height:1.6;}'
@@ -1153,11 +1157,11 @@ function fetchTplForPrint(r, cb){
 function openPrintWindow(title, bodyHtml, docNo){
     var asCss = String(docNo||'').replace(/['\\]/g,'');
     var css = '@page{size:A4 portrait;margin:12mm 8mm 16mm;}'
-            + 'html,body{margin:0;padding:0;}'
+            + 'html,body{margin:0;padding:0;width:194mm;max-width:194mm;overflow-x:hidden;}'
             + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-            + '.pt-head{text-align:center;margin-bottom:6px;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
+            + '.pt-head{text-align:center;margin-bottom:6px;word-break:break-word;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
             + '.hf-as-doc{position:fixed;right:8mm;bottom:6mm;font-size:9pt;color:#333;}'
-            + '#pw-shrink{font-size:100%;}'
+            + '#pw-shrink{font-size:100%;width:100%;max-width:100%;}'
             + hfPrintCss();
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return null; }
