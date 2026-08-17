@@ -1158,7 +1158,9 @@ function printFootHtml(r, tpl){
    canPrint（見 HrForm_API.php），這裡跟著放寬，寫入(template_save)仍然只有管理員可以，不受影響。 */
 function fetchTplForPrint(r, cb){
     if (!r.template_id || !(META.perms.canPrint || META.perms.canAdmin)) { cb(null); return; }
-    $.getJSON(API, {action:'template_get', id:r.template_id}, function(res){ cb(res.ok ? res.template : null); });
+    // 加時間戳防瀏覽器快取這個GET請求：管理員在「圖章管理」改了模板的fillRatio/noScale後，
+    // 沒有防快取參數的話同一個 template_id 查詢可能吃到舊回應，印出來的圖章設定跟資料庫現況對不上。
+    $.getJSON(API, {action:'template_get', id:r.template_id, _:Date.now()}, function(res){ cb(res.ok ? res.template : null); });
 }
 
 /** 開單一份文件的列印視窗；zero-JS版面計算鐵則：分頁100%交給列印引擎，JS只決定要不要插入頁碼CSS。
