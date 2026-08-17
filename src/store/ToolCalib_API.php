@@ -13,7 +13,8 @@ include_once $document_root . '/EGsystem/src/common/tool_calib_lib.php';
 include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
 
 /** 本模組可綁定 AS 文件編號的三個列印文件（ai-rules/16 第一之三節，一律走 asdoc_lib.php，白名單防呼叫端亂帶模組代碼） */
-const TOOL_CALIB_ASDOC_MODULES = ['tool_calib_record' => '校驗紀錄', 'tool_calib_plan' => '校驗計畫表', 'tool_calib_dossier' => '檢驗設備履歷表'];
+const TOOL_CALIB_ASDOC_MODULES = ['tool_calib_record' => '校驗紀錄', 'tool_calib_plan' => '校驗計畫表', 'tool_calib_dossier' => '檢驗設備履歷表(校驗歷史)',
+    'tool_calib_equip_list' => '檢驗設備一覽表', 'tool_calib_equip_service' => '檢驗設備履歴表(故障維修紀錄)'];
 
 function jout($a){ echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code=400){ http_response_code($code); echo json_encode(['ok'=>false,'error'=>$msg], JSON_UNESCAPED_UNICODE); exit; }
@@ -127,6 +128,7 @@ case 'meta': {
           'staff_multi_dept'=>eg_people_multi_dept($metaStaff),
           'qc_dept_set'=>count(tool_calib_qc_dept_ids($db)) > 0,
           'company_name'=>eg_company_full_name($db),
+          'cur_user_name'=>$uname,
           'as_docs'=>$asDocs,
           // 圖章樣式(schema)一律回傳給所有看得到頁面的人（列印是全體使用者都會用到的動作，不限管理員）
           'list_stamp'=>tool_calib_stamp_tpl_get($db, (int)($approvalCfg['list_stamp_tpl_id'] ?? 0)),
@@ -475,11 +477,15 @@ case 'create_tool': {
     $managed = (int)($_POST['managed'] ?? 0) === 1 ? 1 : 0;
     $method = trim((string)($_POST['method'] ?? '')) ?: null;
     $baseDue = tool_calib_month_start(trim((string)($_POST['baseline_due'] ?? '')) ?: null);   // 到期以「月」為單位
+    $manufacturer = trim((string)($_POST['manufacturer'] ?? '')) ?: null;
+    $specDesc = trim((string)($_POST['spec_desc'] ?? '')) ?: null;
+    $purchaseDate = trim((string)($_POST['purchase_date'] ?? '')) ?: null;
+    $equipNote = trim((string)($_POST['equip_note'] ?? '')) ?: null;
     try {
         $db->beginTransaction();
-        $db->prepare("INSERT INTO qc_tool (Tool_No, QC_Tool_List_id, Created_at, calib_cycle_months, calib_managed, calib_method, calibration_due)
-                      VALUES (?,?,?,?,?,?,?)")
-           ->execute([$no, $cat, date('Y-m-d H:i:s'), $cycle, $managed, $method, $baseDue]);
+        $db->prepare("INSERT INTO qc_tool (Tool_No, QC_Tool_List_id, Created_at, calib_cycle_months, calib_managed, calib_method, calibration_due, manufacturer, spec_desc, purchase_date, note)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$no, $cat, date('Y-m-d H:i:s'), $cycle, $managed, $method, $baseDue, $manufacturer, $specDesc, $purchaseDate, $equipNote]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('新增失敗：'.$e->getMessage(), 500); }
     jout(['tool_id'=>(int)$db->lastInsertId()]);
@@ -509,12 +515,178 @@ case 'save_tool': {
         $c->execute([$newNo, $tid]);
         if ($c->fetchColumn()) jerr('量具編號已存在：'.$newNo);
     }
+    $manufacturer = array_key_exists('manufacturer', $_POST) ? (trim((string)$_POST['manufacturer']) ?: null) : $t['manufacturer'];
+    $specDesc = array_key_exists('spec_desc', $_POST) ? (trim((string)$_POST['spec_desc']) ?: null) : $t['spec_desc'];
+    $purchaseDate = array_key_exists('purchase_date', $_POST) ? (trim((string)$_POST['purchase_date']) ?: null) : $t['purchase_date'];
+    $equipNote = array_key_exists('equip_note', $_POST) ? (trim((string)$_POST['equip_note']) ?: null) : $t['note'];
     try {
         $db->beginTransaction();
-        $db->prepare("UPDATE qc_tool SET Tool_No=?, QC_Tool_List_id=?, calib_cycle_months=?, calib_managed=?, calib_method=?, calibration_due=? WHERE Tool_id=?")
-           ->execute([$newNo, $newCat, $cycle, $managed, $method, $baseDue, $tid]);
+        $db->prepare("UPDATE qc_tool SET Tool_No=?, QC_Tool_List_id=?, calib_cycle_months=?, calib_managed=?, calib_method=?, calibration_due=?,
+                        manufacturer=?, spec_desc=?, purchase_date=?, note=? WHERE Tool_id=?")
+           ->execute([$newNo, $newCat, $cycle, $managed, $method, $baseDue, $manufacturer, $specDesc, $purchaseDate, $equipNote, $tid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    jout([]);
+}
+
+/* ============================================================
+ * 檢驗設備一覽表（2026-08-17新增，AS9100文件視角；沿用 qc_tool 主檔不重複建表）
+ * 保管人員歷程/履歴表(故障維修紀錄)/年度整份送簽 一律呼叫 equip_list_lib.php，equip_type 固定 'qc_tool'
+ * ============================================================ */
+case 'equip_list': {
+    $kw = trim((string)($_GET['keyword'] ?? ''));
+    $sql = "SELECT t.Tool_id, t.Tool_No, t.manufacturer, t.spec_desc, t.purchase_date, t.note,
+                   l.QC_Tool AS category_name
+            FROM qc_tool t LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id
+            WHERE 1=1";
+    $params = [];
+    if ($kw !== '') {
+        $sql .= " AND (t.Tool_No LIKE ? OR t.manufacturer LIKE ? OR l.QC_Tool LIKE ?)";
+        for ($i=0;$i<3;$i++) $params[] = '%'.$kw.'%';
+    }
+    $sql .= " ORDER BY l.QC_Tool, t.Tool_No";
+    $st = $db->prepare($sql); $st->execute($params);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $assignMap = equip_list_resigned_map($db, 'qc_tool', array_column($rows, 'Tool_id'));
+    foreach ($rows as &$r) {
+        $r['Tool_id'] = (int)$r['Tool_id'];
+        $r['assignee'] = $assignMap[$r['Tool_id']] ?? null;
+    }
+    jout(['rows' => $rows]);
+}
+case 'equip_asdoc_meta': {
+    jout([
+        'list_as_doc' => equip_list_bound_asdoc($db, 'qc_tool', 'list'),
+        'service_as_doc' => equip_list_bound_asdoc($db, 'qc_tool', 'service'),
+        'sign_setting' => equip_list_plan_sign_setting($db, 'qc_tool'),
+        'approver_chain' => equip_list_plan_approver_chain($db, 'qc_tool'),
+        'approver_methods' => EQUIP_LIST_APPROVER_METHODS,
+    ]);
+}
+case 'equip_candidates': {
+    $rows = eg_people_list($db, ['keyword' => trim((string)($_GET['keyword'] ?? ''))]);
+    jout(['rows' => $rows]);
+}
+case 'equip_assignee_history': {
+    $tid = (int)($_GET['tool_id'] ?? 0);
+    if (!$tid) jerr('缺少量具');
+    jout(['rows' => equip_list_assignee_history($db, 'qc_tool', $tid), 'current' => equip_list_current_assignee($db, 'qc_tool', $tid)]);
+}
+case 'equip_assignee_assign': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $tid = (int)($_POST['tool_id'] ?? 0);
+    $userId = (int)($_POST['user_id'] ?? 0);
+    $startDate = trim((string)($_POST['start_date'] ?? '')) ?: date('Y-m-d');
+    $note = trim((string)($_POST['note'] ?? ''));
+    if (!$tid || !$userId) jerr('請選擇量具與人員');
+    try { $cur = equip_list_assign_new($db, 'qc_tool', $tid, $userId, $startDate, $note ?: null, $uid, $uname); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['current' => $cur]);
+}
+case 'equip_assignee_delete': {
+    if (!$perms['canAdmin']) jerr('僅設備管理員可刪除歷史紀錄', 403);
+    $histId = (int)($_POST['hist_id'] ?? 0);
+    if (!$histId) jerr('缺少紀錄');
+    equip_list_history_delete($db, $histId);
+    jout([]);
+}
+case 'equip_service_list': {
+    $tid = (int)($_GET['tool_id'] ?? 0);
+    if (!$tid) jerr('缺少量具');
+    jout(['rows' => equip_service_log_list($db, 'qc_tool', $tid)]);
+}
+case 'equip_service_save': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $row = $_POST; $row['equip_type'] = 'qc_tool'; $row['equip_ref_id'] = $_POST['tool_id'] ?? 0;
+    try { $saved = equip_service_log_save($db, $row, $uid, $uname); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['row' => $saved]);
+}
+case 'equip_service_delete': {
+    if (!$perms['canAdmin']) jerr('僅設備管理員可刪除履歴紀錄', 403);
+    $logId = (int)($_POST['log_id'] ?? 0);
+    if (!$logId) jerr('缺少紀錄');
+    equip_service_log_delete($db, $logId);
+    jout([]);
+}
+case 'equip_service_approve': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $logId = (int)($_POST['log_id'] ?? 0);
+    $approvedDate = trim((string)($_POST['approved_date'] ?? '')) ?: date('Y-m-d');
+    if (!$logId) jerr('缺少紀錄');
+    equip_service_log_approve($db, $logId, $uid, $uname, $approvedDate, !empty($_POST['is_deputy']));
+    jout([]);
+}
+case 'equip_plan_data': {
+    $year = (int)($_GET['year'] ?? date('Y'));
+    $signSet = equip_list_plan_sign_setting($db, 'qc_tool');
+    $lock = equip_list_plan_lock_get($db, 'qc_tool', $year);
+    $decidePool = []; $canDecide = false;
+    if ($lock && $lock['status'] === 'pending') {
+        $submittedBy = (int)($lock['submitted_by'] ?? 0);
+        $decidePool = equip_list_plan_approver_pool($db, 'qc_tool', $submittedBy);
+        if ($uid === $submittedBy) $canDecide = !$decidePool && $perms['canAdmin'];
+        else $canDecide = $perms['canAdmin'] || in_array($uid, array_column($decidePool, 'id'), true);
+    }
+    $bizDate = $lock['submit_date'] ?? null;
+    jout(['year' => $year, 'lock' => $lock, 'sign_setting' => $signSet, 'can_decide' => $canDecide,
+          'list_as_doc' => equip_list_bound_asdoc($db, 'qc_tool', 'list', $bizDate),
+          'company_name' => eg_company_full_name($db)]);
+}
+case 'equip_plan_submit': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $year = (int)($_POST['year'] ?? 0);
+    if ($year < 2000) jerr('年度不正確');
+    $submitDate = trim((string)($_POST['submit_date'] ?? '')) ?: date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $submitDate)) jerr('日期格式不正確');
+    $lock = equip_list_plan_lock_get($db, 'qc_tool', $year);
+    if ($lock && in_array($lock['status'], ['pending','approved'], true)) jerr('此年度清單已送出，請重新整理確認狀態');
+    $snapshot = json_decode((string)($_POST['snapshot'] ?? '[]'), true);
+    if (!is_array($snapshot)) $snapshot = [];
+    $need = equip_list_plan_sign_setting($db, 'qc_tool')['need'];
+    $pool = [];
+    if ($need) {
+        $pool = equip_list_plan_approver_pool($db, 'qc_tool', $uid);
+        if (!$pool) jerr('尚未設定合格的核准人員，請先至「組織角色綁定設定」指定「檢驗設備一覽表年度核准」');
+    }
+    $lock = equip_list_plan_submit($db, 'qc_tool', $year, $submitDate, $snapshot, $uid, $uname);
+    if ($need && $pool) equip_list_notify_sign($db, 'qc_tool', $year, array_column($pool, 'id'), $uid, $uname);
+    jout(['lock' => $lock]);
+}
+case 'equip_plan_decide': {
+    $year = (int)($_POST['year'] ?? 0);
+    $decision = (string)($_POST['decision'] ?? '');
+    $noteIn = trim((string)($_POST['note'] ?? ''));
+    $approvedDate = trim((string)($_POST['approved_date'] ?? '')) ?: date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $approvedDate)) jerr('核准日期格式不正確');
+    if (!in_array($decision, ['approved','rejected'], true)) jerr('無效的決定');
+    if ($decision === 'rejected' && $noteIn === '') jerr('退回必須填寫原因');
+    $lock = equip_list_plan_lock_get($db, 'qc_tool', $year);
+    if (!$lock || $lock['status'] !== 'pending') jerr('此年度清單目前無待核准紀錄');
+    $submittedBy = (int)($lock['submitted_by'] ?? 0);
+    $pool = equip_list_plan_approver_pool($db, 'qc_tool', $submittedBy);
+    $isSubmitter = ($uid === $submittedBy);
+    $inPool = in_array($uid, array_column($pool, 'id'), true);
+    if (!$perms['canAdmin']) {
+        if ($isSubmitter) { if ($pool) jerr('您是送出人，請由核准人員決行', 403); }
+        elseif (!$inPool) jerr('您不是本清單的核准人員', 403);
+    }
+    if ($decision === 'approved') {
+        $db->prepare("UPDATE equip_list_plan_lock SET status='approved', approved_by_name=?, approved_at=NOW(), approved_date=? WHERE equip_type='qc_tool' AND year=?")
+           ->execute([$uname, $approvedDate, $year]);
+    } else {
+        $db->prepare("UPDATE equip_list_plan_lock SET status='rejected' WHERE equip_type='qc_tool' AND year=?")->execute([$year]);
+    }
+    equip_list_notify_sign_result($db, 'qc_tool', $year, $lock['submitted_by'] ? (int)$lock['submitted_by'] : null, $uname, $decision, $noteIn ?: null);
+    jout([]);
+}
+case 'equip_sign_setting_save': {
+    if (!$perms['canAdmin']) jerr('僅設備管理員可設定', 403);
+    equip_list_plan_sign_save_setting($db, 'qc_tool', !empty($_POST['need']) ? 1 : 0);
+    if (isset($_POST['chain'])) {
+        $chain = json_decode((string)$_POST['chain'], true);
+        if (is_array($chain)) equip_list_plan_approver_chain_save($db, 'qc_tool', $chain);
+    }
     jout([]);
 }
 

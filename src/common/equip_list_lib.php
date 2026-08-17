@@ -18,10 +18,13 @@ require_once __DIR__ . '/asdoc_lib.php';
 
 const EQUIP_LIST_APPROVER_METHODS = ['dept_or_user', 'auto_supervisor', 'top_approver'];
 
-/** 四個固定 AS 文件綁定模組代碼（equip_type => ['list'=>清單模組代碼, 'service'=>履歴表模組代碼]） */
+/** 四個固定 AS 文件綁定模組代碼（equip_type => ['list'=>清單模組代碼, 'service'=>履歴表模組代碼]）
+ *  qc_tool 這組刻意跟 src/store/ToolCalib_API.php 的 TOOL_CALIB_ASDOC_MODULES 用同一組字串——
+ *  該頁的 asdoc_list/save_asdoc 是既有共用 action，檢驗設備一覽表整合進該頁沿用同一套，
+ *  綁定值存放的 module 代碼兩邊必須完全一致，否則存進去卻讀不出來（已在CLI測試中踩過這個坑）。 */
 const EQUIP_ASDOC_MODULES = [
     'machine' => ['list' => 'equip_machine_list', 'service' => 'equip_machine_service_log'],
-    'qc_tool' => ['list' => 'equip_qc_list',       'service' => 'equip_qc_service_log'],
+    'qc_tool' => ['list' => 'tool_calib_equip_list', 'service' => 'tool_calib_equip_service'],
 ];
 
 /* ============================================================
