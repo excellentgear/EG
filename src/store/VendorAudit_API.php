@@ -47,6 +47,11 @@ if (!$perms['canView']) {
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 /** 目前操作範疇(外包加工/採購)：GET/POST 皆可帶 scope，未帶或非法值一律回退 outsource(既有資料的預設 scope) */
 $scope = vendor_audit_norm_scope($_GET['scope'] ?? $_POST['scope'] ?? '');
+/** 給前端顯示用的 perms：canEdit 依目前 scope 收斂為「稽核員資格設定中該 scope(或all)的有效稽核員」才算(管理員不受限)，
+ *  避免畫面顯示了登錄/移除等按鈕，實際點下去卻被後端擋（2026-08-17使用者明確要求）。$perms 本身(未收斂版)仍保留給
+ *  下面各 case 對特定 target/maker 自行以其實際 scope 重新判斷用，不要互相覆蓋。 */
+$scopedPerms = $perms;
+$scopedPerms['canEdit'] = vendor_audit_can_edit_scope($db, $perms, $uid, $scope);
 
 /** 大類篩選條件（比照 master_data 廠商分頁：主檔大類 或 小類經階層歸屬） */
 function va_maincat_cond(int $mainCat, array &$bind): string {
@@ -73,7 +78,7 @@ case 'meta': {
     $cats = $db->query("SELECT main_cat_id, main_cat_name FROM dict_maker_main_category
                         WHERE is_active=1 ORDER BY sort_order, main_cat_id")->fetchAll(PDO::FETCH_ASSOC);
     jout(array_merge([
-          'perms'=>$perms, 'cur_year'=>(int)date('Y'), 'cur_month'=>(int)date('n'),
+          'perms'=>$scopedPerms, 'cur_year'=>(int)date('Y'), 'cur_month'=>(int)date('n'),
           'cur_half'=>((int)date('n') <= 6 ? 1 : 2), 'today'=>date('Y-m-d'),
           'cycle_months'=>vendor_audit_cycle_months($db), 'main_categories'=>$cats,
           'attach_base'=>vendor_eval_setting($db, 'vendor_audit_attach_base', ''),
@@ -188,32 +193,39 @@ case 'roster_list': {
     }
     jout(['year'=>$year, 'settings'=>$set, 'rows'=>$out]);
 }
-/* 加入清冊（手動列入非納管廠商） */
+/* 加入清冊（手動列入非納管廠商）：只能加自己範疇(或all)的廠商，SQL層再擋一次防跨範疇竄改 */
 case 'roster_add': {
-    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $scope)) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核登錄權限，請洽管理員於「稽核員資格設定」指派', 403);
     $ids = va_ids($_POST['maker_ids'] ?? '');
     if (!$ids) jerr('請選擇廠商');
     $ph = implode(',', array_fill(0, count($ids), '?'));
-    $db->prepare("UPDATE maker_list SET in_roster=1 WHERE maker_id_no IN ($ph)")->execute($ids);
-    jout(['added'=>count($ids)]);
+    $st = $db->prepare("UPDATE maker_list m SET in_roster=1 WHERE m.maker_id_no IN ($ph) AND " . vendor_audit_scope_sql_cond($scope));
+    $st->execute($ids);
+    jout(['added'=>$st->rowCount()]);
 }
-/* 移出清冊（僅清 in_roster；納管廠商仍會因 audit_managed 留在清冊） */
+/* 移出清冊（僅清 in_roster；納管廠商仍會因 audit_managed 留在清冊）：依該廠商實際 scope 判斷權限 */
 case 'roster_remove': {
-    if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $mid = trim((string)($_POST['maker_id_no'] ?? ''));
     if ($mid==='') jerr('缺少廠商');
+    $mk = $db->prepare("SELECT main_category_id FROM maker_list WHERE maker_id_no=?");
+    $mk->execute([$mid]);
+    $mcRow = $mk->fetch(PDO::FETCH_ASSOC);
+    if (!$mcRow) jerr('找不到廠商');
+    $makerScope = vendor_audit_scope_of($mcRow['main_category_id'] !== null ? (int)$mcRow['main_category_id'] : null);
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $makerScope)) jerr('您沒有本廠商所屬範疇（'.vendor_audit_scope_label($makerScope).'）的稽核登錄權限', 403);
     $db->prepare("UPDATE maker_list SET in_roster=0 WHERE maker_id_no=?")->execute([$mid]);
     jout([]);
 }
-/* 批次設定/清除採用等級（覆寫建議；grade 空=清除改用建議值） */
+/* 批次設定/清除採用等級（覆寫建議；grade 空=清除改用建議值）：只能改自己範疇(或all)的廠商 */
 case 'roster_set_grade': {
-    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $scope)) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核登錄權限，請洽管理員於「稽核員資格設定」指派', 403);
     $ids = va_ids($_POST['maker_ids'] ?? '');
     if (!$ids) jerr('請選擇廠商');
     $g = trim((string)($_POST['grade'] ?? '')) ?: null;
     $ph = implode(',', array_fill(0, count($ids), '?'));
-    $db->prepare("UPDATE maker_list SET roster_grade=? WHERE maker_id_no IN ($ph)")->execute(array_merge([$g], $ids));
-    jout(['updated'=>count($ids)]);
+    $st = $db->prepare("UPDATE maker_list m SET roster_grade=? WHERE m.maker_id_no IN ($ph) AND " . vendor_audit_scope_sql_cond($scope));
+    $st->execute(array_merge([$g], $ids));
+    jout(['updated'=>$st->rowCount()]);
 }
 /* 合格供應商清冊列印簽章名單：製表＝目前登入者(前端已知不必回傳)；
    審核＝eg_resolve_supervisor()解析目前登入者的部門上一階主管(同人再往上一層部門找，找不到回null由前端退回製表人)；
@@ -322,7 +334,7 @@ case 'round': {
     $lastRow = $db->query("SELECT year, half FROM vendor_audit_round ORDER BY year DESC, half DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
 
     jout(['year'=>$year, 'half'=>$half, 'round_exists'=>$rid !== null,
-          'targets'=>$targets, 'stat'=>$stat, 'perms'=>$perms,
+          'targets'=>$targets, 'stat'=>$stat, 'perms'=>$scopedPerms,
           'cycle_months'=>$cyc, 'last_round'=>$lastRow ?: null]);
 }
 
@@ -362,7 +374,7 @@ case 'pool': {
 
 /* 多選加入本期對象 */
 case 'add_targets': {
-    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $scope)) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核登錄權限，請洽管理員於「稽核員資格設定」指派', 403);
     $year = (int)($_POST['year'] ?? 0);
     $half = (int)($_POST['half'] ?? 0);
     if ($year < 2000 || ($half !== 1 && $half !== 2)) jerr('期別不正確');
@@ -385,7 +397,7 @@ case 'add_targets': {
 
 /* 隨機抽 N 家加入（自納管、非停用、符合篩選、未在本期者中隨機） */
 case 'random_targets': {
-    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $scope)) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核登錄權限，請洽管理員於「稽核員資格設定」指派', 403);
     $year = (int)($_POST['year'] ?? 0);
     $half = (int)($_POST['half'] ?? 0);
     $n = (int)($_POST['n'] ?? 0);
@@ -417,12 +429,13 @@ case 'random_targets': {
 
 /* 移除本期對象（尚未稽核者，或管理員） */
 case 'remove_target': {
-    if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $tid = (int)($_POST['target_id'] ?? 0);
-    $st = $db->prepare("SELECT audit_date FROM vendor_audit_target WHERE target_id=?");
+    $st = $db->prepare("SELECT t.audit_date, m.main_category_id FROM vendor_audit_target t JOIN maker_list m ON m.maker_id_no=t.maker_id_no WHERE t.target_id=?");
     $st->execute([$tid]);
     $row = $st->fetch(PDO::FETCH_ASSOC);
     if (!$row) jerr('找不到對象');
+    $targetScope = vendor_audit_scope_of($row['main_category_id'] !== null ? (int)$row['main_category_id'] : null);
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $targetScope)) jerr('您沒有本廠商所屬範疇（'.vendor_audit_scope_label($targetScope).'）的稽核登錄權限', 403);
     if ($row['audit_date'] !== null && !$perms['canAdmin']) jerr('已稽核之對象僅管理員可移除');
     try {
         $db->beginTransaction();
@@ -531,12 +544,16 @@ case 'remove_auditor': {
 
 /* ===== 稽核佐證附件（供應商自評等） ===== */
 case 'attach_upload': {
-    if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $tid = (int)($_POST['target_id'] ?? 0);
-    $tr = $db->prepare("SELECT r.year FROM vendor_audit_target t JOIN vendor_audit_round r ON r.round_id=t.round_id WHERE t.target_id=?");
+    $tr = $db->prepare("SELECT r.year, m.main_category_id FROM vendor_audit_target t
+                        JOIN vendor_audit_round r ON r.round_id=t.round_id
+                        JOIN maker_list m ON m.maker_id_no=t.maker_id_no WHERE t.target_id=?");
     $tr->execute([$tid]);
-    $yr = $tr->fetchColumn();
-    if ($yr === false) jerr('找不到對象');
+    $trRow = $tr->fetch(PDO::FETCH_ASSOC);
+    if (!$trRow) jerr('找不到對象');
+    $yr = $trRow['year'];
+    $targetScope = vendor_audit_scope_of($trRow['main_category_id'] !== null ? (int)$trRow['main_category_id'] : null);
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $targetScope)) jerr('您沒有本廠商所屬範疇（'.vendor_audit_scope_label($targetScope).'）的稽核登錄權限', 403);
     if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) jerr('請選擇檔案');
     if ($_FILES['file']['size'] > 20*1024*1024) jerr('單檔上限 20MB');
     $orig = (string)$_FILES['file']['name'];
@@ -551,12 +568,15 @@ case 'attach_upload': {
     jout(['attach_id'=>(int)$db->lastInsertId()]);
 }
 case 'attach_delete': {
-    if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $aid = (int)($_POST['attach_id'] ?? 0);
-    $st = $db->prepare("SELECT * FROM vendor_audit_attach WHERE attach_id=?");
+    $st = $db->prepare("SELECT a.*, m.main_category_id FROM vendor_audit_attach a
+                        JOIN vendor_audit_target t ON t.target_id=a.target_id
+                        JOIN maker_list m ON m.maker_id_no=t.maker_id_no WHERE a.attach_id=?");
     $st->execute([$aid]);
     $a = $st->fetch(PDO::FETCH_ASSOC);
     if (!$a) jerr('找不到附件');
+    $targetScope = vendor_audit_scope_of($a['main_category_id'] !== null ? (int)$a['main_category_id'] : null);
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $targetScope)) jerr('您沒有本廠商所屬範疇（'.vendor_audit_scope_label($targetScope).'）的稽核登錄權限', 403);
     $p = vendor_audit_attach_path($db, $a);
     if ($p) @unlink($p);
     $db->prepare("DELETE FROM vendor_audit_attach WHERE attach_id=?")->execute([$aid]);
@@ -589,6 +609,7 @@ case 'record_target': {
     $cur = $st->fetch(PDO::FETCH_ASSOC);
     if (!$cur) jerr('找不到對象');
     $targetScope = vendor_audit_scope_of($cur['main_category_id'] !== null ? (int)$cur['main_category_id'] : null);
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $targetScope)) jerr('您沒有本廠商所屬範疇（'.vendor_audit_scope_label($targetScope).'）的稽核登錄權限', 403);
     if (in_array($cur['status'], ['pending','approved'], true)) jerr('此筆已送審核/已核准，請先重新整理確認狀態，如需修改請聯絡管理員');
     $auditDate = trim((string)($_POST['audit_date'] ?? ''));
     $clear = ($auditDate === '');
@@ -672,6 +693,7 @@ case 'complete_target': {
             $db->rollBack(); jerr('此筆狀態已變更(可能已完成/送審核)，請重新整理後再試');
         }
         $targetScope = vendor_audit_scope_of($cur['main_category_id'] !== null ? (int)$cur['main_category_id'] : null);
+        if (!vendor_audit_can_edit_scope($db, $perms, $uid, $targetScope)) { $db->rollBack(); jerr('您沒有本廠商所屬範疇（'.vendor_audit_scope_label($targetScope).'）的稽核登錄權限', 403); }
         $cfg = vendor_audit_resolve_cfg($db, $cur['checklist_snapshot'], $targetScope);
         $errs = vendor_audit_validate_complete(['auditor'=>$auditor, 'conclusion'=>$conclusion, 'review_type'=>$reviewType, 'scores'=>$scores], $cfg);
         if ($errs) { $db->rollBack(); jerr(implode('；', $errs)); }
@@ -716,12 +738,13 @@ case 'complete_target': {
 
 /* 送審核：完成待審者由此送出通知給解析出的簽核人（保留供舊流程/意外中斷後補送使用） */
 case 'submit_sign': {
-    if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $tid = (int)($_POST['target_id'] ?? 0);
-    $st = $db->prepare("SELECT t.status, m.maker_id FROM vendor_audit_target t JOIN maker_list m ON m.maker_id_no=t.maker_id_no WHERE t.target_id=?");
+    $st = $db->prepare("SELECT t.status, m.maker_id, m.main_category_id FROM vendor_audit_target t JOIN maker_list m ON m.maker_id_no=t.maker_id_no WHERE t.target_id=?");
     $st->execute([$tid]);
     $row = $st->fetch(PDO::FETCH_ASSOC);
     if (!$row) jerr('找不到對象');
+    $targetScope = vendor_audit_scope_of($row['main_category_id'] !== null ? (int)$row['main_category_id'] : null);
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $targetScope)) jerr('您沒有本廠商所屬範疇（'.vendor_audit_scope_label($targetScope).'）的稽核登錄權限', 403);
     if ($row['status'] !== 'completed') jerr('此筆狀態非「已完成待送審」，請重新整理後再試');
     $signer = vendor_audit_resolve_signer($db, $uid);
     if (!$signer) jerr('尚未設定簽核部門，請聯絡管理員先於「簽核設定」指定簽核部門');
@@ -891,7 +914,7 @@ case 'plan_data': {
           'company_name'=>vendor_audit_company_name($db)]);
 }
 case 'plan_submit': {
-    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    if (!vendor_audit_can_edit_scope($db, $perms, $uid, $scope)) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核登錄權限，請洽管理員於「稽核員資格設定」指派', 403);
     $year = (int)($_POST['year'] ?? 0);
     if ($year < 2000) jerr('年度不正確');
     $submitDate = trim((string)($_POST['submit_date'] ?? '')) ?: date('Y-m-d');

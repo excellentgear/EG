@@ -680,6 +680,22 @@ function vendor_audit_perms(PDO $db, ?array $u): array {
     return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canEdit'=>$canEdit,'canView'=>$canView];
 }
 
+/**
+ * 稽核登錄操作是否限定於某 scope(2026-08-17使用者明確要求)：
+ * 系統管理員／稽核管理員(canAdmin) 不受限制，生管/採購兩邊都可操作；
+ * 一般「稽核登錄」角色者，還必須是「稽核員資格設定」(vendor_auditor)中該 scope(或 all=通用)
+ * 的有效在職稽核員才算數——只有角色沒有登記成稽核員=不能操作任何一邊；
+ * 登記成 outsource 只能操作外包加工，登記成 purchase 只能操作採購，避免跨範疇誤改對方資料。
+ */
+function vendor_audit_can_edit_scope(PDO $db, array $perms, int $uid, string $scope): bool {
+    if (!empty($perms['canAdmin'])) return true;
+    if (empty($perms['canEdit'])) return false;
+    $scope = vendor_audit_norm_scope($scope);
+    $st = $db->prepare("SELECT 1 FROM vendor_auditor WHERE user_id=? AND is_active=1 AND scope IN (?, 'all') LIMIT 1");
+    $st->execute([$uid, $scope]);
+    return (bool)$st->fetchColumn();
+}
+
 /* ============================================================
  * 全域設定（system_settings）
  * ============================================================ */
