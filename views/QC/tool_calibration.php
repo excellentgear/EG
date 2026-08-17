@@ -499,8 +499,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="cfg-pane" id="cfgCat">
 <div class="m-body">
         <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;line-height:1.7;">
-            類別的<b>新增／更名／刪除</b>請至
-            <a href="inspection_combined_prototype.php" target="_blank" style="color:#b5762a;">線上檢驗－量具設定</a>（本頁不重複提供）。<br>
+            類別可在此<b>新增／更名／刪除</b>（點類別名旁的鉛筆/垃圾桶圖示；與「線上檢驗－量具設定」
+            <a href="inspection_combined_prototype.php" target="_blank" style="color:#b5762a;">同一張表</a>，改一邊兩邊都會同步）。<br>
+            底下有量具編號的類別無法直接刪除，請先清空/移動編號。<br>
             <b>需校驗</b>：不是實體量具、只是檢驗方式者（例如「目視」）請取消勾選，其量具不會出現在本頁、也不列入 KPI。<br>
             <b>可設定量具編號</b>：取消後該類別不能再新增／移入量具編號。<br>
             <b>列入分頁</b>：勾選者會在清單上方出現專屬分頁；需先勾「需校驗」才能設定，未列入分頁者歸在「其他」分頁。<br>
@@ -512,6 +513,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <a href="#" onclick="addTab();return false;" style="color:#b5762a;margin-left:8px;"><i class="fa fa-plus"></i> 新增分頁</a>
             </div>
             <div id="tabChips" style="display:flex;flex-wrap:wrap;gap:6px;font-size:12px;"></div>
+        </div>
+        <div style="margin-bottom:6px;">
+            <a href="#" onclick="addCategory();return false;" style="color:#b5762a;font-size:12px;"><i class="fa fa-plus"></i> 新增類別</a>
         </div>
         <div style="max-height:42vh;overflow-y:auto;">
         <table class="hist" id="catTable">
@@ -1289,7 +1293,9 @@ function renderCatBody(state){
         var grp   = s ? s.grp : (c.calib_tab_group || '');
         if (grp && !TABS_DEF.some(function(t){ return String(t.tab_id)===String(grp); })) grp = '';   // 分頁已被刪除
         return '<tr data-id="'+id+'">'
-            + '<td style="text-align:left;">'+esc(c.QC_Tool)+'</td>'
+            + '<td style="text-align:left;white-space:nowrap;">'+esc(c.QC_Tool)
+            + ' <i class="fa fa-pencil cat-edit" title="更名" style="color:#b5762a;cursor:pointer;"></i>'
+            + ' <i class="fa fa-trash cat-del" title="刪除" style="color:#b5762a;cursor:pointer;"></i></td>'
             + '<td>'+c.tool_cnt+(c.managed_cnt>0 ? '（列入統計 '+c.managed_cnt+'）' : '')+'</td>'
             + '<td><input type="checkbox" class="ck-req"'+(req?' checked':'')+'></td>'
             + '<td><input type="checkbox" class="ck-hasno"'+(hasNo?' checked':'')+'></td>'
@@ -1374,6 +1380,43 @@ $('#tabChips').on('click', '.fa-trash', function(){
         if (!res.ok){ alert(res.error||'刪除失敗'); return; }
         TABS_DEF = res.tabs; CATS = res.categories;
         renderTabChips(); renderCatBody(st); renderTabs();
+    }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+});
+
+/* 類別本身：新增／更名／刪除（管理員；2026-08-17 使用者要求本頁直接可管理） */
+function addCategory(){
+    var name = prompt('新增類別名稱：');
+    if (name === null) return;
+    name = $.trim(name);
+    if (!name) return;
+    saveCategory(0, name);
+}
+function saveCategory(id, name){
+    var st = collectCatUI();
+    $.post(API, {action:'save_category', id:id, name:name}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        CATS = res.categories; if (res.tabs) TABS_DEF = res.tabs;
+        renderTabChips(); renderCatBody(st); renderTabs();
+    }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+}
+$('#catBody').on('click', '.cat-edit', function(){
+    var $tr = $(this).closest('tr'), id = $tr.attr('data-id');
+    var c = CATS.filter(function(x){ return String(x.QC_Tool_List_id)===String(id); })[0] || {};
+    var name = prompt('類別改名：', c.QC_Tool || '');
+    if (name === null) return;
+    name = $.trim(name);
+    if (!name) return;
+    saveCategory(id, name);
+});
+$('#catBody').on('click', '.cat-del', function(){
+    var $tr = $(this).closest('tr'), id = $tr.attr('data-id');
+    var c = CATS.filter(function(x){ return String(x.QC_Tool_List_id)===String(id); })[0] || {};
+    if (!confirm('確定刪除類別「'+(c.QC_Tool||'')+'」？（底下有量具編號的類別無法刪除）')) return;
+    var st = collectCatUI();
+    $.post(API, {action:'delete_category', id:id}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        CATS = res.categories;
+        renderCatBody(st);
     }, 'json').fail(function(x){ alert('刪除失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 });
 

@@ -427,6 +427,46 @@ case 'save_categories': {
     jout(['categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db)]);
 }
 
+/* ---------- 類別新增/更名/刪除（管理員；2026-08-17 使用者要求本頁直接可管理，不必再切到「線上檢驗－量具設定」） ---------- */
+case 'save_category': {
+    if (!$perms['canAdmin']) jerr('無類別設定權限', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    $name = trim((string)($_POST['name'] ?? ''));
+    if ($name === '') jerr('請輸入類別名稱');
+    if (mb_strlen($name) > 30) jerr('類別名稱請在 30 字以內');
+    $chk = $db->prepare("SELECT QC_Tool_List_id FROM qc_tool_list WHERE QC_Tool=? AND QC_Tool_List_id<>? LIMIT 1");
+    $chk->execute([$name, $id]);
+    if ($chk->fetchColumn()) jerr('類別名稱已存在：'.$name);
+    try {
+        $db->beginTransaction();
+        if ($id > 0) {
+            $db->prepare("UPDATE qc_tool_list SET QC_Tool=? WHERE QC_Tool_List_id=?")->execute([$name, $id]);
+        } else {
+            $so = (int)$db->query("SELECT COALESCE(MAX(sort_order),0)+1 FROM qc_tool_list")->fetchColumn();
+            $db->prepare("INSERT INTO qc_tool_list (QC_Tool, sort_order) VALUES (?,?)")->execute([$name, $so]);
+            $id = (int)$db->lastInsertId();
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    jout(['id'=>$id, 'categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db)]);
+}
+
+/* ---------- 類別刪除（管理員；底下尚有量具編號時擋下，需先清空編號） ---------- */
+case 'delete_category': {
+    if (!$perms['canAdmin']) jerr('無類別設定權限', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jerr('缺少類別 id');
+    $chk = $db->prepare("SELECT COUNT(*) FROM qc_tool WHERE QC_Tool_List_id=?");
+    $chk->execute([$id]);
+    if ((int)$chk->fetchColumn() > 0) jerr('此類別底下尚有量具編號，請先清空/移動編號後再刪除');
+    try {
+        $db->beginTransaction();
+        $db->prepare("DELETE FROM qc_tool_list WHERE QC_Tool_List_id=?")->execute([$id]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：'.$e->getMessage(), 500); }
+    jout(['categories'=>tool_calib_categories($db), 'tabs'=>tool_calib_tabs($db)]);
+}
+
 /* ---------- 自訂合併分頁：新增/更名（管理員） ---------- */
 case 'save_tab': {
     if (!$perms['canAdmin']) jerr('無分頁設定權限', 403);
