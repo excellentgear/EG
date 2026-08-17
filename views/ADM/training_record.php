@@ -173,6 +173,9 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
         .att-people label { font-size:12px; color:#5b3a1e; margin:0; font-weight:normal; cursor:pointer; }
         .att-people .empty { color:#b0a390; font-size:12px; }
         button.b-att { height:28px; font-size:12px; border:1px solid #d98a33; background:#F0A24B; color:#fff; border-radius:4px; cursor:pointer; padding:0 10px; }
+        button.b-att:disabled { opacity:.4; cursor:not-allowed; }
+        #atPendingFiles { font-size:12px; color:#5b3a1e; margin:2px 0 4px; }
+        #atPendingFiles span { display:inline-block; background:#fff; border:1px solid #EADFC8; border-radius:3px; padding:1px 6px; margin:2px 4px 2px 0; }
         .att-list-wrap { max-height:180px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; }
         table.att-tbl { width:100%; border-collapse:collapse; font-size:12px; }
         table.att-tbl th, table.att-tbl td { border-bottom:1px solid #F0E7D5; padding:3px 8px; text-align:center; }
@@ -668,6 +671,7 @@ $roleLabel = $perms['isAdmin'] ? ($myRoleNames ? implode('、', $myRoleNames) : 
                 <span id="atSelInfo" style="font-size:12px;color:#8a6d45;"></span>
             </div>
             <div id="atPendingBox" style="display:none;margin-bottom:4px;padding:6px 8px;background:#FDF8EF;border:1px solid #EADFC8;border-radius:4px;">
+                <div id="atPendingFiles"></div>
                 <span style="font-size:12px;color:#5b3a1e;">為選好的檔案勾選類別（可複選）</span>
                 <span id="atCatBox" style="display:flex;gap:2px 12px;flex-wrap:wrap;margin-top:2px;"></span>
                 <button type="button" class="b-att nw" id="atUploadBtn" style="margin-top:4px;" onclick="atConfirmUpload()" disabled><i class="fa fa-check"></i> 確認上傳</button>
@@ -1575,6 +1579,7 @@ function openExBody(sid){
     setLocSel(r.location||'');
     $('#exOutline').val(r.outline||'');
     $('#exEvalMethod').val(r.eval_method||''); applyEvalMethod();
+    AT_PENDING_FILES = null; renderAtPending();   // 每次重開modal都要清掉上次沒送出的待上傳選擇，避免誤傳到別場次
     loadAttach(r.session_id);
     renderDays();
     $('#attDept').val(''); $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>');
@@ -2586,10 +2591,13 @@ $('#atFile').on('change', function(){
 });
 $(document).on('change', '#atCatBox .at-cat', renderAtPending);
 function renderAtPending(){
-    var has = !!AT_PENDING_FILES;
+    var has = !!(AT_PENDING_FILES && AT_PENDING_FILES.length);
     $('#atPendingBox').toggle(has);
     $('#atSelInfo').text(has ? '已選 '+AT_PENDING_FILES.length+' 個檔案，請勾選類別後確認上傳' : '');
-    if (!has) return;
+    if (!has){ $('#atPendingFiles').html(''); return; }
+    var names = '';
+    for (var i=0;i<AT_PENDING_FILES.length;i++) names += '<span><i class="fa fa-paperclip"></i> '+esc(AT_PENDING_FILES[i].name)+'</span>';
+    $('#atPendingFiles').html(names);
     var cats = []; $('#atCatBox .at-cat:checked').each(function(){ cats.push(this.value); });
     $('#atUploadBtn').prop('disabled', !cats.length);
 }
