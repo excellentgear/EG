@@ -1082,8 +1082,17 @@ function hfPrintCss(){
          // 固定用 px !important，不受 #pw-shrink 的 font-size 縮放影響，這是唯一不隨文字縮小的元素。
          + '.hf-stamp-defsize svg{width:'+HF_STAMP_PX+'px !important;height:'+HF_STAMP_PX+'px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}';
 }
+/**
+ * 找到真正根因（2026-08-17 實測比對）：本頁簽章欄是「有充足空間的簽核欄」，本該用模板設計的實際大小
+ * （ai-rules/18 第10條），但範本若指定了帶 fillRatio 的圖章模板（例如「本人簽章(圓)」fillRatio=0.9），
+ * eg_stamp.js 的 wrap() 會依 fillRatio 產生 stamp-fill + height:90% 讓圖章自動縮放去填滿所在儲存格高度
+ * ——這是設計給「密集逐列表格」（一人一列蓋章）用的機制，本頁誤用同一顆共用範本才被壓小。不動共用圖章
+ * 範本本身（其他頁面的密集列表用法仍需要 fillRatio），只在這裡呼叫時強制 noScale，一律用模板設計的
+ * 實際大小；沒有自訂模板（schema為null）的情況本來就已經用固定94.5px不受影響。
+ */
 function stampOrName(name, date, isDeputy, schema){
-    var html = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, schema) : esc(name||'');
+    var effSchema = schema ? $.extend({}, schema, {noScale:true}) : schema;
+    var html = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, effSchema) : esc(name||'');
     if (!schema) html = '<span class="hf-stamp-defsize">'+html+'</span>';
     return html;
 }
