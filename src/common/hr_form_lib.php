@@ -356,15 +356,15 @@ function hrf_template_get(PDO $db, int $id): ?array {
     return $t;
 }
 
-function hrf_template_save(PDO $db, int $id, string $formType, string $name, ?int $listStampId, ?int $footerStampId, string $byName): int {
+function hrf_template_save(PDO $db, int $id, string $formType, string $name, ?int $listStampId, ?int $footerStampId, string $byName, bool $cpAutoFillDynamic = false, ?int $cpAutoFillSkillTplId = null): int {
     hrf_ensure_schema($db);
     if ($id) {
-        $db->prepare("UPDATE hr_form_template SET name=?,list_stamp_tpl_id=?,footer_stamp_tpl_id=?,updated_at=NOW() WHERE id=?")
-           ->execute([$name, $listStampId, $footerStampId, $id]);
+        $db->prepare("UPDATE hr_form_template SET name=?,list_stamp_tpl_id=?,footer_stamp_tpl_id=?,cp_auto_fill_dynamic=?,cp_auto_fill_skill_tpl_id=?,updated_at=NOW() WHERE id=?")
+           ->execute([$name, $listStampId, $footerStampId, $cpAutoFillDynamic?1:0, $cpAutoFillSkillTplId, $id]);
         return $id;
     }
-    $db->prepare("INSERT INTO hr_form_template (form_type,name,list_stamp_tpl_id,footer_stamp_tpl_id,created_by_name) VALUES (?,?,?,?,?)")
-       ->execute([$formType, $name, $listStampId, $footerStampId, $byName]);
+    $db->prepare("INSERT INTO hr_form_template (form_type,name,list_stamp_tpl_id,footer_stamp_tpl_id,created_by_name,cp_auto_fill_dynamic,cp_auto_fill_skill_tpl_id) VALUES (?,?,?,?,?,?,?)")
+       ->execute([$formType, $name, $listStampId, $footerStampId, $byName, $cpAutoFillDynamic?1:0, $cpAutoFillSkillTplId]);
     return (int)$db->lastInsertId();
 }
 
@@ -395,11 +395,58 @@ function hrf_template_items_save(PDO $db, int $templateId, array $items): void {
 }
 
 function hrf_template_machines_get(PDO $db, int $templateId): array {
-    $st = $db->prepare("SELECT m.id AS map_id, w.* FROM hr_form_template_machine m
+    $st = $db->prepare("SELECT m.id AS map_id, w.*, COALESCE(mm.machine_name, qt.machine) AS machine_name,
+                        COALESCE(w.machine_model, qt.machine_model) AS whitelist_machine_model
+                        FROM hr_form_template_machine m
                         JOIN hr_equipment_whitelist w ON w.id=m.whitelist_id
+                        LEFT JOIN (SELECT machine_model, MIN(machine) AS machine_name FROM machine_list
+                                   WHERE machine_model IS NOT NULL AND machine_model<>'' GROUP BY machine_model) mm
+                               ON mm.machine_model = w.machine_model AND w.source_type='machine'
+                        LEFT JOIN qc_tool qt ON qt.Tool_id = w.source_id AND w.source_type='tool'
                         WHERE m.template_id=? ORDER BY m.sort_order,m.id");
     $st->execute([$templateId]);
     return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 「機型」優先、沒有機型就顯示「機台/量具名稱」，不含機台編號/量具編號（10職能鑑定表項目清單格式，使用者明確要求）。 */
+function hrf_skill_item_label(array $r): string {
+    $model = $r['machine_model'] ?? ($r['whitelist_machine_model'] ?? '');
+    if ($model) return $model;
+    if (!empty($r['machine_name'])) return $r['machine_name'];
+    return $r['display_name'] ?? '';
+}
+
+/**
+ * 10員工職能鑑定表「動態帶入」模式：依員工目前已有的09技能鑑定表(機型/量具)即時組項目清單，
+ * 每筆技能鑑定表一列，標籤格式比照 hrf_skill_item_label()。建立當下組一次寫入 hr_form_instance_item，
+ * 之後跟一般項目一樣可編輯，不會隨09表單增減自動再變動（比照本模組其他「建立當下snapshot」慣例）。
+ */
+function hrf_cp_dynamic_items_for_user(PDO $db, int $targetUid): array {
+    $st = $db->prepare("SELECT i.machine_model, i.machine_display_name, w.source_type, w.source_id
+                         FROM hr_form_instance i LEFT JOIN hr_equipment_whitelist w ON w.id=i.whitelist_id
+                         WHERE i.form_type='skill_assess' AND i.user_id=? ORDER BY i.id");
+    $st->execute([$targetUid]);
+    $items = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $label = trim((string)($row['machine_model'] ?? ''));
+        if ($label === '') {
+            // machine_model 沒存到(舊資料/量具來源)時現查來源主檔拿真正的機台/量具名稱，不落回機台編號/量具編號
+            try {
+                if ($row['source_type'] === 'machine' && $row['source_id']) {
+                    $st2 = $db->prepare("SELECT machine_model, machine FROM machine_list WHERE machine_id=?");
+                    $st2->execute([$row['source_id']]);
+                    if ($m = $st2->fetch(PDO::FETCH_ASSOC)) $label = $m['machine_model'] ?: $m['machine'];
+                } elseif ($row['source_type'] === 'tool' && $row['source_id']) {
+                    $st2 = $db->prepare("SELECT machine_model, machine FROM qc_tool WHERE Tool_id=?");
+                    $st2->execute([$row['source_id']]);
+                    if ($t = $st2->fetch(PDO::FETCH_ASSOC)) $label = $t['machine_model'] ?: $t['machine'];
+                }
+            } catch (Throwable $e) {}
+            if ($label === '') $label = (string)($row['machine_display_name'] ?? '');
+        }
+        if ($label !== '') $items[] = ['data' => ['skill_name' => $label]];
+    }
+    return $items;
 }
 
 function hrf_template_machines_save(PDO $db, int $templateId, array $whitelistIds): void {
@@ -780,7 +827,10 @@ function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int
             $formType === 'competency' ? $bizDate : null,
         ]);
     $iid = (int)$db->lastInsertId();
-    if ($formType !== 'skill_assess') {
+    if ($formType === 'competency' && !empty($tpl['cp_auto_fill_dynamic'])) {
+        $items = hrf_cp_dynamic_items_for_user($db, $targetUid);
+        if ($items) hrf_instance_items_save($db, $iid, $items);
+    } elseif ($formType !== 'skill_assess') {
         $items = [];
         foreach (($tpl['items'] ?? []) as $it) $items[] = ['item_no'=>$it['item_no'], 'data'=>$it['data']];
         if ($items) hrf_instance_items_save($db, $iid, $items);

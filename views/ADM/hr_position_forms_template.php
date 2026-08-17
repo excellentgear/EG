@@ -355,7 +355,7 @@ function tplDelete(id, ft){
 }
 
 /* ============================================================ 範本編輯 ============================================================ */
-var TPL_TYPE = 'job_desc', TPL_ID = 0;
+var TPL_TYPE = 'job_desc', TPL_ID = 0, CP_TPL_SA_ID = null;
 /** 加一列已定案的部門×職位（唯讀顯示＋刪除鈕），deptId 為 0/空＝不限部門。同一組合已存在就不重複加入。 */
 function scopeAddRow(deptId, posId){
     deptId = deptId || '';
@@ -384,7 +384,7 @@ function scopeAddSelected(){
     $('.scope-pos-ck').prop('checked', false);
 }
 function openTplModal(ft, id){
-    TPL_TYPE = ft; TPL_ID = id;
+    TPL_TYPE = ft; TPL_ID = id; CP_TPL_SA_ID = null;
     $('#tplTitle').text((id?'編輯':'新增')+'範本 — '+FORM_LABEL[ft]);
     $('#tplName').val('');
     $('#scopeBody').empty();
@@ -428,7 +428,10 @@ function fillTplForEdit(id){
         } else if (t.form_type === 'job_desc') {
             $('#tplContentBlock').html(jdTplTableHtml(t.items||[]));
         } else {
+            CP_TPL_SA_ID = t.cp_auto_fill_skill_tpl_id || null;
             $('#tplContentBlock').html(cpTplTableHtml(t.items||[]));
+            $('#cpAutoFillDynamic').prop('checked', !!Number(t.cp_auto_fill_dynamic));
+            hfCpAutoFillToggle();
         }
         openMask('tplMask');
     });
@@ -514,38 +517,62 @@ function openKpiPicker(targetTextarea){
         multiPickRender(MULTI_PICK_ITEMS);
     });
 }
+/** 標籤格式使用者明確要求：只顯示機型，沒機型才顯示機台/量具名稱，一律不帶機台編號/量具編號。 */
+function hfSkillItemLabel(m){
+    var model = m.machine_model || m.whitelist_machine_model || '';
+    if (model) return model;
+    if (m.machine_name) return m.machine_name;
+    return m.display_name || '';
+}
 function cpTplTableHtml(items){
     var rows = items && items.length ? items : [{data:{}}];
     var h = '<label>職能項目清單（可手動增設項目，也可從已建立的「專業技能鑑定考核表範本」適用機型清單自動帶入）</label>'
-          + '<div style="margin-bottom:6px;"><select id="cpFromSaTpl" style="max-width:260px;"></select> <button type="button" class="hf-btn-sm" onclick="hfCpFillFromSaTpl()">從此技能鑑定表範本帶入項目</button></div>'
+          + '<div style="margin-bottom:6px;">對應技能鑑定表範本 <select id="cpFromSaTpl" style="max-width:260px;" onchange="hfCpSaTplChange()"></select>'
+          + ' <label style="margin-left:10px;font-weight:normal;"><input type="checkbox" id="cpAutoFillDynamic" onchange="hfCpAutoFillToggle()"> 從此技能鑑定表範本帶入項目（動態：依員工建立表單當下已有的技能鑑定表機型/量具自動帶入）</label></div>'
+          + '<div id="cpDynamicNote" style="display:none;font-size:12.5px;color:#8a6d45;margin-bottom:6px;">已勾選動態帶入，下方項目清單改為建立表單當下自動產生，此處不需（也不會用到）預先設定固定清單。</div>'
+          + '<div id="cpFixedBox">'
+          + '<div id="cpSaMachineList" style="max-height:160px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;margin-bottom:6px;"><span style="color:#8a6d45;font-size:12px;">請先在上方選擇對應的技能鑑定表範本</span></div>'
+          + '<div style="margin-bottom:6px;"><button type="button" class="hf-btn-sm" onclick="hfCpApplySaMachines()">加入所選（不重複加入已存在的項目）</button></div>'
           + '<table class="itm-tbl"><thead><tr><th style="width:40px;">編號</th><th>項目名稱</th></tr></thead>'
           + '<tbody id="tplItemsBody" data-eg-row-add="hfTplCpAdd" data-eg-row-del="hfTplCpDel">';
     rows.forEach(function(it,i){ var d=it.data||{}; h += '<tr><td style="text-align:center;">'+(i+1)+'</td><td><input type="text" class="c-name" value="'+esc(d.skill_name||'')+'"></td></tr>'; });
-    h += '</tbody></table><button class="hf-btn-sm" type="button" onclick="hfTplCpAdd()">+新增列</button> <button class="hf-btn-sm" type="button" onclick="hfTplCpDel()">-刪除末列</button>';
+    h += '</tbody></table><button class="hf-btn-sm" type="button" onclick="hfTplCpAdd()">+新增列</button> <button class="hf-btn-sm" type="button" onclick="hfTplCpDel()">-刪除末列</button></div>';
     $.getJSON(API, {action:'template_list', form_type:'skill_assess'}, function(res){
         var tpls = res.ok ? (res.templates||[]) : [];
-        var opts = tpls.length ? tpls.map(function(t){ return '<option value="'+t.id+'">'+esc(t.name)+'</option>'; }).join('')
-                                : '<option value="">（尚未建立任何專業技能鑑定考核表範本，請先建立）</option>';
+        var opts = '<option value="">（未指定）</option>' + (tpls.length ? tpls.map(function(t){ return '<option value="'+t.id+'">'+esc(t.name)+'</option>'; }).join('')
+                                : '');
         $('#cpFromSaTpl').html(opts);
+        if (CP_TPL_SA_ID) { $('#cpFromSaTpl').val(CP_TPL_SA_ID); hfCpSaTplChange(); }
     });
     return h;
 }
 function hfTplCpAdd(){ var n=$('#tplItemsBody tr').length+1; $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><input type="text" class="c-name"></td></tr>'); }
 function hfTplCpDel(){ var $r=$('#tplItemsBody tr'); if ($r.length>1) $r.last().remove(); }
-/** 職能鑑定表範本的職能項目清單自動從技能鑑定表範本的適用機型清單帶入（使用者明確要求）；附加在既有列後面，不覆蓋已手動填的內容。 */
-function hfCpFillFromSaTpl(){
+function hfCpAutoFillToggle(){
+    $('#cpFixedBox').toggle(!$('#cpAutoFillDynamic').is(':checked'));
+    $('#cpDynamicNote').toggle($('#cpAutoFillDynamic').is(':checked'));
+}
+/** 選對應的技能鑑定表範本後，載入其適用機型清單供下方勾選自選帶入（標籤格式比照 hfSkillItemLabel）。 */
+function hfCpSaTplChange(){
     var saId = $('#cpFromSaTpl').val();
-    if (!saId){ alert('請先建立此職位的「專業技能鑑定考核表範本」（設定適用機型），才能自動帶入職能項目'); return; }
+    if (!saId){ $('#cpSaMachineList').html('<span style="color:#8a6d45;font-size:12px;">請先在上方選擇對應的技能鑑定表範本</span>'); return; }
     $.getJSON(API, {action:'template_get', id:saId}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         var machines = res.template.machines || [];
-        if (!machines.length){ alert('此技能鑑定表範本尚未設定適用機型'); return; }
-        // 若唯一一列是空白列（初始狀態），先清掉再帶入，避免留一列空白
-        if ($('#tplItemsBody tr').length === 1 && !$('#tplItemsBody .c-name').val()) $('#tplItemsBody').empty();
-        machines.forEach(function(m){
-            var n = $('#tplItemsBody tr').length + 1;
-            $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><input type="text" class="c-name" value="'+esc(m.display_name)+'"></td></tr>');
-        });
+        $('#cpSaMachineList').html(machines.length ? machines.map(function(m){
+            return '<label style="display:block;font-size:12.5px;"><input type="checkbox" class="cp-sa-ck" value="'+esc(hfSkillItemLabel(m))+'"> '+esc(hfSkillItemLabel(m))+'</label>';
+        }).join('') : '<span style="color:#8a6d45;font-size:12px;">此技能鑑定表範本尚未設定適用機型</span>');
+    });
+}
+function hfCpApplySaMachines(){
+    var existing = $('#tplItemsBody .c-name').map(function(){ return $(this).val(); }).get();
+    var picked = $('.cp-sa-ck:checked').map(function(){ return $(this).val(); }).get();
+    if (!picked.length){ alert('請至少勾選一個項目'); return; }
+    if ($('#tplItemsBody tr').length === 1 && !$('#tplItemsBody .c-name').val()) $('#tplItemsBody').empty();
+    picked.forEach(function(label){
+        if (existing.indexOf(label) >= 0) return; // 已存在不重複加入
+        var n = $('#tplItemsBody tr').length + 1;
+        $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><input type="text" class="c-name" value="'+esc(label)+'"></td></tr>');
     });
 }
 
@@ -563,6 +590,8 @@ function tplSave(){
         payload.items = JSON.stringify($('#tplItemsBody tr').map(function(){ var $t=$(this); return {data:{summary:$t.find('.c-a').val(), process:$t.find('.c-b').val(), form_name:$t.find('.c-c').val(), dpi:$t.find('.c-d').val()}}; }).get());
     } else {
         payload.items = JSON.stringify($('#tplItemsBody tr').map(function(){ return {data:{skill_name:$(this).find('.c-name').val()}}; }).get());
+        payload.cp_auto_fill_dynamic = $('#cpAutoFillDynamic').is(':checked') ? 1 : 0;
+        payload.cp_auto_fill_skill_tpl_id = $('#cpFromSaTpl').val() || '';
     }
     ajaxPost('template_save', payload, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }

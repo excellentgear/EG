@@ -289,7 +289,8 @@ case 'template_save': {
     $name = trim((string)($_POST['name'] ?? ''));
     if ($name === '') jerr('請輸入範本名稱');
     $tid = hrf_template_save($db, $id, $formType, $name,
-        (int)($_POST['list_stamp_tpl_id'] ?? 0) ?: null, (int)($_POST['footer_stamp_tpl_id'] ?? 0) ?: null, $uname);
+        (int)($_POST['list_stamp_tpl_id'] ?? 0) ?: null, (int)($_POST['footer_stamp_tpl_id'] ?? 0) ?: null, $uname,
+        (int)($_POST['cp_auto_fill_dynamic'] ?? 0) === 1, (int)($_POST['cp_auto_fill_skill_tpl_id'] ?? 0) ?: null);
 
     $scope = json_decode((string)($_POST['scope'] ?? '[]'), true);
     if (is_array($scope)) hrf_template_scope_save($db, $tid, $scope);

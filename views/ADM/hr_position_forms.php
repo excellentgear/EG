@@ -1120,7 +1120,7 @@ function cpPrintHtml(r, tpl){
     h += '<table class="hf-p-head"><tr><th>部門</th><td>'+esc(r.dept_name||'')+'</td><th>員工編號</th><td>'+esc(r.user_no||'')+'</td></tr>'
        + '<tr><th>姓名</th><td>'+esc(r.user_cname||'')+'</td><th>到職日</th><td>'+dispDate(r.onboard_date)+'</td></tr>'
        + '<tr><th>職務</th><td>'+esc(r.position_name||'')+'</td><th>主管</th><td>'+esc(r.supervisor_name||'')+'</td></tr>'
-       + '<tr><th>日期</th><td>'+dispDate(r.business_date)+'</td><th>最新更新日期</th><td>'+dispDate(r.cp_update_date||r.business_date)+'</td></tr></table>';
+       + '<tr><th>首次登錄<br>日期</th><td>'+dispDate(r.business_date)+'</td><th>最新更新<br>日期</th><td>'+dispDate(r.cp_update_date||r.business_date)+'</td></tr></table>';
     h += '<table class="hf-p-items"><thead><tr><th style="width:50px;">編號</th><th>'+(deptHasSkillAssess(r.dept_id)?'機台設定':'項目名稱')+'</th><th style="width:90px;">操作</th><th style="width:90px;">異常排除</th></tr></thead><tbody>';
     (r.items||[]).forEach(function(it,i){
         var d = it.data||{};
