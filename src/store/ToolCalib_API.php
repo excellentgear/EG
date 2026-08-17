@@ -526,6 +526,7 @@ case 'create_tool': {
     $machine = trim((string)($_POST['machine'] ?? '')) ?: null;
     $machineModel = trim((string)($_POST['machine_model'] ?? '')) ?: null;
     $position = trim((string)($_POST['position'] ?? '')) ?: null;
+    if ($machine === null || $position === null) jerr('請填機台名稱與位置（廠別）');
     $state = (int)($_POST['state'] ?? 0) === 1 ? 1 : 0;
     $disabledDate = $state ? (trim((string)($_POST['disabled_date'] ?? '')) ?: null) : null;
     try {
@@ -569,6 +570,7 @@ case 'save_tool': {
     $machine = array_key_exists('machine', $_POST) ? (trim((string)$_POST['machine']) ?: null) : $t['machine'];
     $machineModel = array_key_exists('machine_model', $_POST) ? (trim((string)$_POST['machine_model']) ?: null) : $t['machine_model'];
     $position = array_key_exists('position', $_POST) ? (trim((string)$_POST['position']) ?: null) : $t['position'];
+    if ($machine === null || $position === null) jerr('請填機台名稱與位置（廠別）');
     $state = array_key_exists('state', $_POST) ? ((int)$_POST['state'] === 1 ? 1 : 0) : (int)$t['state'];
     $disabledDate = $state ? (array_key_exists('disabled_date', $_POST) ? (trim((string)$_POST['disabled_date']) ?: null) : $t['disabled_date']) : null;
     try {

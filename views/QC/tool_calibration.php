@@ -250,10 +250,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div class="tc-table-wrap">
             <table class="tc-table" id="tcTable">
                 <thead><tr>
-                    <th>量具編號</th><th>類別</th><th>規格</th><th>週期(月)</th><th>校驗方式</th>
+                    <th>量具編號</th><th>類別</th><th>機台名稱</th><th>規格</th><th>週期(月)</th><th>校驗方式</th>
                     <th>下次應校驗月</th><th>狀態</th><th>最近校驗</th><th>列入校驗率統計</th><th>操作</th>
                 </tr></thead>
-                <tbody id="tcBody"><tr><td colspan="10" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="tcBody"><tr><td colspan="11" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
         <div style="font-size:11px;color:#8a6d45;margin-top:4px;">
@@ -344,9 +344,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>規格</label><input type="text" id="setSpecDesc" maxlength="255"></div>
             <div><label>購買日期</label><input type="date" id="setPurchaseDate"></div>
             <div><label>備註</label><input type="text" id="setEquipNote" maxlength="200"></div>
-            <div><label>機台名稱<span style="color:#8a6d45;font-weight:400;">（機型/量具白名單顯示用）</span></label><input type="text" id="setMachine" maxlength="100"></div>
+            <div><label>機台名稱 *<span style="color:#8a6d45;font-weight:400;">（機型/量具白名單顯示用）</span></label><input type="text" id="setMachine" maxlength="100"></div>
             <div><label>機型</label><input type="text" id="setMachineModel" maxlength="100"></div>
-            <div><label>位置（廠別）</label><input type="text" id="setPosition" maxlength="50"></div>
+            <div><label>位置（廠別） *</label><input type="text" id="setPosition" maxlength="50"></div>
             <div>
                 <label style="display:inline-block;"><input type="checkbox" id="setDisabled" onchange="$('#setDisabledDateBox').toggle(this.checked)"> 停用</label>
                 <div id="setDisabledDateBox" style="display:none;margin-top:4px;"><input type="date" id="setDisabledDate"></div>
@@ -1024,6 +1024,7 @@ function renderTable(){
         html += '<tr>';
         html += '<td class="t-left"><b>'+esc(r.Tool_No)+'</b></td>';
         html += '<td>'+esc(r.category_name||'')+'</td>';
+        html += '<td>'+(Number(r.state)===1 ? '—' : esc(r.machine||''))+'</td>';
         html += '<td class="t-left">'+specCell(r)+'</td>';
         html += '<td>'+(r.calib_cycle_months==null?'—':r.calib_cycle_months)+'</td>';
         html += '<td>'+esc(r.calib_method||'—')+'</td>';
@@ -1040,7 +1041,7 @@ function renderTable(){
         html += '<span class="tc-op" onclick="printDossier('+r.Tool_id+')"><i class="fa fa-id-card-o"></i>履歷表</span>';
         html += '</td></tr>';
     });
-    $('#tcBody').html(html || '<tr><td colspan="10" style="padding:16px;color:#8a6d45;">無符合條件的儀器</td></tr>');
+    $('#tcBody').html(html || '<tr><td colspan="11" style="padding:16px;color:#8a6d45;">無符合條件的儀器</td></tr>');
 }
 /**
  * 規格欄：只顯示規格文字，**不重複顯示品項名稱（＝左邊「類別」欄已經有了）**。
@@ -1244,6 +1245,8 @@ function openSet(tid){
 $('#btnAdd').on('click', function(){ openSet(null); });
 function submitSet(){
     if (!$.trim($('#setNo').val())){ alert('請填量具編號'); return; }
+    if (!$.trim($('#setMachine').val())){ alert('請填機台名稱'); return; }
+    if (!$.trim($('#setPosition').val())){ alert('請填位置（廠別）'); return; }
     var disabled = $('#setDisabled').is(':checked');
     if (disabled && !$('#setDisabledDate').val()){ alert('勾選停用請輸入停用日期'); return; }
     var data = {cycle:$('#setCycle').val(), managed:$('#setManaged').val(),
