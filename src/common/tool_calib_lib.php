@@ -32,6 +32,7 @@ require_once __DIR__ . '/people_lib.php';   // 人員列表鐵則（只列未離
 require_once __DIR__ . '/org_role_lib.php'; // 組織角色綁定（最高核准人員、部門主管）
 require_once __DIR__ . '/delegate_lib.php'; // 核准鏈「自動抓上一階主管」方法
 require_once __DIR__ . '/approval_lib.php'; // 跨模組共用簽核紀錄（approval_record）
+require_once __DIR__ . '/equip_list_lib.php'; // 檢驗設備一覽表：保管人員歷程/履歴表/年度整份送簽（equip_type='qc_tool'，與機台設備一覽表共用邏輯）
 
 /** 核准鏈可用方法（比照 ai-rules/19 第五節；唯一參考實作 review_form_lib.php 的 RVF_APPROVER_METHODS） */
 const TOOL_CALIB_APPROVER_METHODS = ['dept_or_user', 'auto_supervisor', 'top_approver'];
@@ -40,6 +41,7 @@ const TOOL_CALIB_APPROVER_METHODS = ['dept_or_user', 'auto_supervisor', 'top_app
  * Schema（CREATE TABLE IF NOT EXISTS + qc_tool 加欄 + roles seed）
  * ============================================================ */
 function tool_calib_ensure_schema(PDO $db): void {
+    equip_list_ensure_schema($db); // 檢驗設備一覽表共用表(equip_assignee_history/equip_service_log/equip_list_plan_lock)
     // 儀器主檔加欄（既有 qc_tool，僅新增可空欄，不動既有資料）
     foreach ([
         "ALTER TABLE qc_tool ADD COLUMN calib_cycle_months INT NULL COMMENT '校驗週期(月)'",
@@ -49,6 +51,11 @@ function tool_calib_ensure_schema(PDO $db): void {
         // （2026-07-30 使用者定案）；實體仍以 Tool_No 為主，這裡只是往上指向規格。
         "ALTER TABLE qc_tool ADD COLUMN purchase_spec_id INT NULL COMMENT '對應採購料號規格 purchase_spec.spec_id'",
         "ALTER TABLE qc_tool ADD INDEX idx_purchase_spec (purchase_spec_id)",
+        // 檢驗設備一覽表（2026-08-17新增）用欄位：純文字描述，不強迫綁 purchase_spec_id（很多舊量具沒設過採購規格）
+        "ALTER TABLE qc_tool ADD COLUMN manufacturer VARCHAR(100) NULL COMMENT '製造商'",
+        "ALTER TABLE qc_tool ADD COLUMN spec_desc VARCHAR(255) NULL COMMENT '規格(檢驗設備一覽表顯示用，純文字，與purchase_spec關聯規格用途不同不可混用)'",
+        "ALTER TABLE qc_tool ADD COLUMN purchase_date DATE NULL COMMENT '購買日期'",
+        "ALTER TABLE qc_tool ADD COLUMN note VARCHAR(200) NULL COMMENT '備註(檢驗設備一覽表用)'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }
