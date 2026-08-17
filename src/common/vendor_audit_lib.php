@@ -501,9 +501,12 @@ function vendor_audit_prod_type(?string $mainCatName): ?string {
 /* ============================================================
  * 稽核紀錄簽核（完成後自動核可 或 送審核給生管部門往上主管；OR-gate 單層，見 approval_lib.php）
  * ============================================================ */
-/** 簽核設定：自動簽核開關 + 簽核部門(管理員從「生管組或往上部門」擇一) */
-function vendor_audit_sign_setting(PDO $db): array {
-    $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_SIGN', ''), true);
+/** 簽核設定(依 scope 各自獨立,2026-08-17)：自動簽核開關 + 簽核部門(管理員從「生管組/採購組或往上部門」擇一)。
+ *  未設定過該 scope 專屬值時回退共用舊鍵(相容既有生管設定，不必重設)。 */
+function vendor_audit_sign_setting(PDO $db, string $scope = 'outsource'): array {
+    $scope = vendor_audit_norm_scope($scope);
+    $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_SIGN_'.strtoupper($scope), ''), true);
+    if (!is_array($raw)) $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_SIGN', ''), true);
     $auto = (is_array($raw) && !empty($raw['auto'])) ? 1 : 0;
     $deptId = (is_array($raw) && !empty($raw['dept_id'])) ? (int)$raw['dept_id'] : null;
     $deptName = null;
@@ -512,15 +515,17 @@ function vendor_audit_sign_setting(PDO $db): array {
     }
     return ['auto'=>$auto, 'dept_id'=>$deptId, 'dept_name'=>$deptName];
 }
-function vendor_audit_sign_save_setting(PDO $db, int $auto, ?int $deptId): void {
+function vendor_audit_sign_save_setting(PDO $db, int $auto, ?int $deptId, string $scope = 'outsource'): void {
+    $scope = vendor_audit_norm_scope($scope);
     $val = json_encode(['auto'=>$auto?1:0, 'dept_id'=>$deptId], JSON_UNESCAPED_UNICODE);
-    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('VENDOR_AUDIT_SIGN', ?)
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
-    $st->execute([$val]);
+    $st->execute(['VENDOR_AUDIT_SIGN_'.strtoupper($scope), $val]);
 }
-/** 簽核部門下拉選項：從「生管部門」(org_role pm_dept)出發沿 department.parent_id 往上收集(含自己)，上限8層防呆 */
-function vendor_audit_sign_dept_options(PDO $db): array {
-    $startId = eg_org_dept($db, 'pm_dept');
+/** 簽核部門下拉選項：外包加工從「生管部門」、採購從「採購部門」(org_role pm_dept/purchase_dept)出發，
+ *  沿 department.parent_id 往上收集(含自己)，上限8層防呆 */
+function vendor_audit_sign_dept_options(PDO $db, string $scope = 'outsource'): array {
+    $startId = eg_org_dept($db, vendor_audit_norm_scope($scope) === 'purchase' ? 'purchase_dept' : 'pm_dept');
     if (!$startId) return [];
     $out = []; $cur = $startId;
     for ($hop = 0; $hop < 8 && $cur; $hop++) {
@@ -544,8 +549,8 @@ function vendor_audit_sign_dept_options(PDO $db): array {
  * 若目前「自動簽核」開關(set.auto)為開，帶給 eg_resolve_signer() 的行程閘門是 auto_sign 模式
  * （只看主管今天是否請假，忽略開會等一般行程），因為自動簽核是系統當下直接數位蓋章，不需要主管人在場。
  */
-function vendor_audit_resolve_signer(PDO $db, int $applicantUserId = 0): ?array {
-    $set = vendor_audit_sign_setting($db);
+function vendor_audit_resolve_signer(PDO $db, int $applicantUserId = 0, string $scope = 'outsource'): ?array {
+    $set = vendor_audit_sign_setting($db, $scope);
     if (!$set['dept_id']) return null;
     $deptId = $set['dept_id'];
     $fallback = null;
@@ -697,6 +702,22 @@ function vendor_audit_can_edit_scope(PDO $db, array $perms, int $uid, string $sc
 }
 
 /**
+ * 稽核管理設定操作是否限定於某 scope(2026-08-17使用者明確要求：查核表設定/簽核設定/定期評核門檻/
+ * 年度計劃簽核開關與核准鏈選項/稽核員資格設定本身，全部比照稽核登錄的機制收斂)：
+ * 系統管理員(isAdmin)不受限制，兩邊都可管理；一般「稽核管理員」角色者，也必須是「稽核員資格設定」
+ * 中該 scope(或 all=通用)的有效在職稽核員才算數——只掛角色沒登記=不能管任何一邊。
+ * 週期設定/附件路徑/AS文件綁定不受此限(使用者明確選擇這些暫時共用infra，見 save_cycle 呼叫端)。
+ */
+function vendor_audit_can_admin_scope(PDO $db, array $perms, int $uid, string $scope): bool {
+    if (!empty($perms['isAdmin'])) return true;
+    if (empty($perms['canAdmin'])) return false;
+    $scope = vendor_audit_norm_scope($scope);
+    $st = $db->prepare("SELECT 1 FROM vendor_auditor WHERE user_id=? AND is_active=1 AND scope IN (?, 'all') LIMIT 1");
+    $st->execute([$uid, $scope]);
+    return (bool)$st->fetchColumn();
+}
+
+/**
  * 此人在畫面上應該看得到哪些範疇切換鈕(2026-08-17使用者明確要求：只有採購資格的人不該連「外包加工(生管)」
  * 分頁都看得到，避免誤觸/誤以為自己能操作)：
  * 管理員／稽核管理員 → 兩邊都看得到；已登記為稽核員(outsource/purchase/all) → 依登記的 scope 決定
@@ -741,40 +762,48 @@ function vendor_eval_setting(PDO $db, string $key, $default) {
         return ($v === false || $v === null || $v === '') ? $default : $v;
     } catch (Throwable $e) { return $default; }
 }
-function vendor_eval_settings(PDO $db): array {
+/** 定期評核門檻(依 scope 各自獨立,2026-08-17)：未設定過該 scope 專屬值時回退共用舊鍵(相容既有生管設定)。 */
+function vendor_eval_settings(PDO $db, string $scope = 'outsource'): array {
+    $scope = vendor_audit_norm_scope($scope);
+    $sfx = '_'.$scope;
     return [
-        'ng_max'       => (float)vendor_eval_setting($db, 'vendor_eval_ng_max', 5),        // 不良率上限%
-        'special_max'  => (float)vendor_eval_setting($db, 'vendor_eval_special_max', 100), // 特採率上限%(100=不判定)
-        'late_max'     => (float)vendor_eval_setting($db, 'vendor_eval_late_max', 30),     // 遲交率上限%
-        'default_days' => (int)vendor_eval_setting($db, 'vendor_eval_default_days', 7),    // 約定工作天(算應交日)
-        'grades'       => vendor_eval_grades($db),                                          // 評核等級門檻
+        'ng_max'       => (float)vendor_eval_setting($db, 'vendor_eval_ng_max'.$sfx, vendor_eval_setting($db, 'vendor_eval_ng_max', 5)),        // 不良率上限%
+        'special_max'  => (float)vendor_eval_setting($db, 'vendor_eval_special_max'.$sfx, vendor_eval_setting($db, 'vendor_eval_special_max', 100)), // 特採率上限%(100=不判定)
+        'late_max'     => (float)vendor_eval_setting($db, 'vendor_eval_late_max'.$sfx, vendor_eval_setting($db, 'vendor_eval_late_max', 30)),     // 遲交率上限%
+        'default_days' => (int)vendor_eval_setting($db, 'vendor_eval_default_days'.$sfx, vendor_eval_setting($db, 'vendor_eval_default_days', 7)),    // 約定工作天(算應交日)
+        'grades'       => vendor_eval_grades($db, $scope),                                          // 評核等級門檻
     ];
 }
-function vendor_eval_save_settings(PDO $db, array $vals): void {
+function vendor_eval_save_settings(PDO $db, array $vals, string $scope = 'outsource'): void {
+    $scope = vendor_audit_norm_scope($scope);
     $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
     foreach (['vendor_eval_ng_max','vendor_eval_special_max','vendor_eval_late_max','vendor_eval_default_days'] as $k) {
-        if (array_key_exists($k, $vals)) $up->execute([$k, (string)$vals[$k]]);
+        if (array_key_exists($k, $vals)) $up->execute([$k.'_'.$scope, (string)$vals[$k]]);
     }
 }
 
-/* ---- 評核等級（分數→等級；管理員可設門檻）---- */
-function vendor_eval_grades(PDO $db): array {
-    $g = json_decode((string)vendor_eval_setting($db, 'vendor_eval_grades', ''), true);
+/* ---- 評核等級（分數→等級；管理員可設門檻，依 scope 各自獨立）---- */
+function vendor_eval_grades(PDO $db, string $scope = 'outsource'): array {
+    $scope = vendor_audit_norm_scope($scope);
+    $raw = vendor_eval_setting($db, 'vendor_eval_grades_'.$scope, '');
+    if ($raw === '') $raw = vendor_eval_setting($db, 'vendor_eval_grades', '');
+    $g = json_decode((string)$raw, true);
     if (!is_array($g) || !$g) $g = [['min'=>90,'label'=>'A'],['min'=>80,'label'=>'B'],['min'=>70,'label'=>'C'],['min'=>0,'label'=>'D']];
     usort($g, function($a,$b){ return (float)($b['min']??0) <=> (float)($a['min']??0); });
     return $g;
 }
-function vendor_eval_save_grades(PDO $db, array $grades): void {
+function vendor_eval_save_grades(PDO $db, array $grades, string $scope = 'outsource'): void {
+    $scope = vendor_audit_norm_scope($scope);
     $clean = [];
     foreach ($grades as $g) {
         $label = trim((string)($g['label'] ?? '')); if ($label==='') continue;
         $clean[] = ['min'=>max(0,(float)($g['min'] ?? 0)), 'label'=>$label];
     }
     if (!$clean) return;
-    $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('vendor_eval_grades', ?)
+    $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
-    $up->execute([json_encode($clean, JSON_UNESCAPED_UNICODE)]);
+    $up->execute(['vendor_eval_grades_'.$scope, json_encode($clean, JSON_UNESCAPED_UNICODE)]);
 }
 function vendor_eval_grade_of($score, array $grades): ?string {
     if ($score === null) return null;
@@ -848,8 +877,9 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
             'late_rate'    => $d['del_in'] ? round($d['late']/$d['del_in']*100,1) : null,
         ];
     }
-    // 半年彙總 + 全年彙總（率/判定/分數/等級）
-    $grades = vendor_eval_grades($db);
+    // 半年彙總 + 全年彙總（率/判定/分數/等級）：等級門檻沿用呼叫端已依 scope 算好的 $set['grades']，
+    // 不在這裡重查(重查會漏 scope 參數,見vendor_eval_settings)。
+    $grades = $set['grades'] ?? vendor_eval_grades($db);
     $halves = [];
     $fqc=0;$fng=0;$fsp=0;$fdi=0;$flt=0;
     foreach ([1=>[1,6], 2=>[7,12]] as $h => $rg) {
@@ -906,14 +936,17 @@ function vendor_audit_kpi_compute(PDO $db, int $year, int $month, array $params)
  * 送出計畫＝鎖定該年度不可再增列稽核對象；可設定是否需要核准(最高核准人員 org_role top_approver)簽核。
  * ============================================================ */
 /** 是否需要核准簽核(不需=送出即視同已核准) */
-function vendor_audit_plan_sign_setting(PDO $db): array {
-    $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_PLAN_SIGN', ''), true);
+function vendor_audit_plan_sign_setting(PDO $db, string $scope = 'outsource'): array {
+    $scope = vendor_audit_norm_scope($scope);
+    $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_PLAN_SIGN_'.strtoupper($scope), ''), true);
+    if (!is_array($raw)) $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_PLAN_SIGN', ''), true);
     return ['need' => (is_array($raw) && !empty($raw['need'])) ? 1 : 0];
 }
-function vendor_audit_plan_sign_save_setting(PDO $db, int $need): void {
-    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('VENDOR_AUDIT_PLAN_SIGN', ?)
+function vendor_audit_plan_sign_save_setting(PDO $db, int $need, string $scope = 'outsource'): void {
+    $scope = vendor_audit_norm_scope($scope);
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
-    $st->execute([json_encode(['need'=>$need?1:0])]);
+    $st->execute(['VENDOR_AUDIT_PLAN_SIGN_'.strtoupper($scope), json_encode(['need'=>$need?1:0])]);
 }
 /** 核准來源可用方法目錄（供設定頁下拉與後端驗證共用，順序無意義，實際順序看 vendor_audit_plan_approver_chain()） */
 const VENDOR_AUDIT_APPROVER_METHODS = ['dept_or_user', 'auto_supervisor', 'top_approver'];
@@ -990,18 +1023,21 @@ function vendor_audit_plan_approver_pool_top_approver(PDO $db): array {
 }
 
 /** 目前設定的核准來源優先序（system_settings VENDOR_AUDIT_PLAN_APPROVER_CHAIN，JSON 陣列）；未設定＝三種依序全用。 */
-function vendor_audit_plan_approver_chain(PDO $db): array {
-    $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_PLAN_APPROVER_CHAIN', ''), true);
+function vendor_audit_plan_approver_chain(PDO $db, string $scope = 'outsource'): array {
+    $scope = vendor_audit_norm_scope($scope);
+    $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_PLAN_APPROVER_CHAIN_'.strtoupper($scope), ''), true);
+    if (!is_array($raw)) $raw = json_decode((string)vendor_eval_setting($db, 'VENDOR_AUDIT_PLAN_APPROVER_CHAIN', ''), true);
     $chain = is_array($raw)
         ? array_values(array_filter($raw, fn($m) => in_array($m, VENDOR_AUDIT_APPROVER_METHODS, true)))
         : [];
     return $chain ?: VENDOR_AUDIT_APPROVER_METHODS;
 }
-function vendor_audit_plan_approver_chain_save(PDO $db, array $chain): void {
+function vendor_audit_plan_approver_chain_save(PDO $db, array $chain, string $scope = 'outsource'): void {
+    $scope = vendor_audit_norm_scope($scope);
     $chain = array_values(array_unique(array_filter($chain, fn($m) => in_array($m, VENDOR_AUDIT_APPROVER_METHODS, true))));
-    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES ('VENDOR_AUDIT_PLAN_APPROVER_CHAIN', ?)
+    $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
                         ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)");
-    $st->execute([json_encode($chain)]);
+    $st->execute(['VENDOR_AUDIT_PLAN_APPROVER_CHAIN_'.strtoupper($scope), json_encode($chain)]);
 }
 
 /**
@@ -1012,8 +1048,8 @@ function vendor_audit_plan_approver_chain_save(PDO $db, array $chain): void {
  * 自動改試優先序中的下一個方法（等同再往上一層找）。
  * @return array 合格核准人清單 [['id'=>int,'user_cname'=>string], ...]；全部方法都解析不到回傳空陣列。
  */
-function vendor_audit_plan_approver_pool(PDO $db, int $submitterUid): array {
-    foreach (vendor_audit_plan_approver_chain($db) as $method) {
+function vendor_audit_plan_approver_pool(PDO $db, int $submitterUid, string $scope = 'outsource'): array {
+    foreach (vendor_audit_plan_approver_chain($db, $scope) as $method) {
         $pool = match ($method) {
             'dept_or_user'    => vendor_audit_plan_approver_pool_dept_or_user($db, $submitterUid),
             'auto_supervisor' => vendor_audit_plan_approver_pool_auto_supervisor($db, $submitterUid),

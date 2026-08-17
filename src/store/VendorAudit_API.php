@@ -29,13 +29,18 @@ if (!$perms['canView']) {
     // 否則被指派簽核的主管收到通知點進來卻進不了頁面，違反 ai-rules/17「通知要能直接看到內容並決行」。
     $isResolvedSigner = false;
     try {
-        $sg = vendor_audit_resolve_signer($db, 0);
-        if ($sg && (int)$sg['id'] === $uid) $isResolvedSigner = true;
+        foreach (['outsource','purchase'] as $chkScope) {
+            $sg = vendor_audit_resolve_signer($db, 0, $chkScope);
+            if ($sg && (int)$sg['id'] === $uid) { $isResolvedSigner = true; break; }
+        }
         if (!$isResolvedSigner) {
             // 稽核計劃核准人現在是「部門內任一主管」的一批人(見 vendor_audit_plan_approver_pool)，
             // 不是單一固定的人，用「是否實際被通知去核准某年度計劃」判斷比重算整批人選更直接準確。
+            // ref_type 依 scope 各自獨立(VENDOR_AUDIT_PLAN_OUTSOURCE/PURCHASE)，兩種都要查；
+            // 'VENDOR_AUDIT_PLAN' 是改版前的舊格式，保留相容避免升版當下還沒結案的舊通知失效。
             $st = $db->prepare("SELECT 1 FROM live_event_target t JOIN live_event e ON e.id=t.live_event_id
-                                WHERE e.ref_type='VENDOR_AUDIT_PLAN' AND t.target_id=? AND (e.enddate IS NULL OR e.enddate>=CURDATE()) LIMIT 1");
+                                WHERE e.ref_type IN ('VENDOR_AUDIT_PLAN','VENDOR_AUDIT_PLAN_OUTSOURCE','VENDOR_AUDIT_PLAN_PURCHASE')
+                                  AND t.target_id=? AND (e.enddate IS NULL OR e.enddate>=CURDATE()) LIMIT 1");
             $st->execute([$uid]);
             if ($st->fetchColumn()) $isResolvedSigner = true;
         }
@@ -52,6 +57,12 @@ $scope = vendor_audit_norm_scope($_GET['scope'] ?? $_POST['scope'] ?? '');
  *  下面各 case 對特定 target/maker 自行以其實際 scope 重新判斷用，不要互相覆蓋。 */
 $scopedPerms = $perms;
 $scopedPerms['canEdit'] = vendor_audit_can_edit_scope($db, $perms, $uid, $scope);
+/** 稽核管理設定操作是否限定於本次請求的 scope(2026-08-17使用者明確要求：查核表設定/簽核設定/
+ *  定期評核門檻/年度計劃簽核開關與核准鏈/稽核員資格設定本身，全部收斂成跟稽核登錄一樣的機制)。
+ *  獨立成 canAdminScope 欄位而不是直接覆寫 canAdmin——週期設定/附件路徑/AS文件綁定是共用infra，
+ *  刻意不隨scope收斂(2026-08-17使用者明確選擇AS文件綁定暫時兩邊共用)，這些畫面按鈕仍要看原本的 canAdmin。 */
+$canAdminScope = vendor_audit_can_admin_scope($db, $perms, $uid, $scope);
+$scopedPerms['canAdminScope'] = $canAdminScope;
 
 /** 大類篩選條件（比照 master_data 廠商分頁：主檔大類 或 小類經階層歸屬） */
 function va_maincat_cond(int $mainCat, array &$bind): string {
@@ -89,11 +100,11 @@ case 'meta': {
           'roster_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_roster_as_doc_id'),
           'plan_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_plan_as_doc_id'),
           'company_name'=>vendor_audit_company_name($db),
-          'sign_setting'=>$perms['canAdmin'] ? vendor_audit_sign_setting($db) : null,
-          'plan_sign_setting'=>$perms['canAdmin'] ? vendor_audit_plan_sign_setting($db) : null,
-          'plan_approver_names'=>$perms['canAdmin'] ? array_column(vendor_audit_plan_approver_pool($db, $uid), 'user_cname') : [],
+          'sign_setting'=>$canAdminScope ? vendor_audit_sign_setting($db, $scope) : null,
+          'plan_sign_setting'=>$canAdminScope ? vendor_audit_plan_sign_setting($db, $scope) : null,
+          'plan_approver_names'=>$perms['canAdmin'] ? array_column(vendor_audit_plan_approver_pool($db, $uid, $scope), 'user_cname') : [],
           'confirm_pw_allowed'=>eg_confirm_password_allowed($db, $uid),
-          'eval_settings'=>vendor_eval_settings($db),
+          'eval_settings'=>vendor_eval_settings($db, $scope),
           'scope'=>$scope, 'scopes'=>[['v'=>'outsource','l'=>'外包加工(生管)'],['v'=>'purchase','l'=>'採購']],
           'visible_scopes'=>vendor_audit_visible_scopes($db, $perms, $uid),
         ], vendor_audit_checklist_config($db, $scope)));
@@ -139,7 +150,7 @@ case 'periodic_eval': {
     $mk->execute([$mid]);
     $name = $mk->fetchColumn();
     if ($name === false) jerr('找不到廠商');
-    $set = vendor_eval_settings($db);
+    $set = vendor_eval_settings($db, $scope);
     $res = vendor_periodic_eval($db, $mid, $year, $set);
     jout(['maker_id_no'=>$mid, 'maker_name'=>$name, 'year'=>$year, 'settings'=>$set,
           'months'=>$res['months'], 'halves'=>$res['halves']]);
@@ -148,7 +159,7 @@ case 'periodic_eval': {
 /* 定期評核：全部納管廠商（自動略過整年無資料者） */
 case 'periodic_eval_all': {
     $year = (int)($_GET['year'] ?? date('Y'));
-    $set = vendor_eval_settings($db);
+    $set = vendor_eval_settings($db, $scope);
     $mk = $db->query("SELECT maker_id_no, maker_id FROM maker_list
                       WHERE (status IS NULL OR status<>'" . VENDOR_AUDIT_DISABLED . "') AND audit_managed=1
                         AND " . vendor_audit_scope_sql_cond($scope, 'maker_list') . " ORDER BY maker_id")
@@ -164,7 +175,7 @@ case 'periodic_eval_all': {
     }
     // 定期評核表本身沒有單筆業務日期(選定年度的全廠商彙總報表)，比照該年度稽核計畫的送出日期回推
     // AS 編號版次(使用者明確要求：兩者用同一套業務日期認定，ai-rules/16 第三之四節)。
-    $evalLock = vendor_audit_plan_lock_get($db, $year);
+    $evalLock = vendor_audit_plan_lock_get($db, $year, $scope);
     $evalBizDate = $evalLock['submit_date'] ?? null;
     jout(['year'=>$year, 'settings'=>$set, 'vendors'=>$out,
           'eval_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_eval_as_doc_id', $evalBizDate)]);
@@ -174,7 +185,7 @@ case 'periodic_eval_all': {
 /* 清冊清單：納管 或 手動列入(in_roster)，非停用；含定期評核建議等級 + 手動覆寫 */
 case 'roster_list': {
     $year = (int)($_GET['year'] ?? '') ?: (int)date('Y');
-    $set = vendor_eval_settings($db);
+    $set = vendor_eval_settings($db, $scope);
     $rows = $db->query("SELECT m.maker_id_no, m.maker_id, m.m_note, m.audit_managed, m.in_roster, m.roster_grade, m.main_category_id,
                                sc.sub_cat_names
                         FROM maker_list m " . vendor_audit_subcat_join() . "
@@ -262,33 +273,36 @@ case 'stale_vendors': {
 }
 /* 確認移除：取消納管+移出清冊，並刪未稽核之稽核對象(已稽核者保留可追溯) */
 case 'stale_remove': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
     $ids = va_ids($_POST['maker_ids'] ?? '');
     if (!$ids) jerr('請選擇廠商');
     $ph = implode(',', array_fill(0, count($ids), '?'));
+    $scopeCond = vendor_audit_scope_sql_cond($scope);
     try {
         $db->beginTransaction();
-        $db->prepare("UPDATE maker_list SET audit_managed=0, in_roster=0 WHERE maker_id_no IN ($ph)")->execute($ids);
-        $db->prepare("DELETE FROM vendor_audit_target WHERE audit_date IS NULL AND maker_id_no IN ($ph)")->execute($ids);
+        $st = $db->prepare("UPDATE maker_list m SET audit_managed=0, in_roster=0 WHERE m.maker_id_no IN ($ph) AND $scopeCond");
+        $st->execute($ids);
+        $db->prepare("DELETE t FROM vendor_audit_target t JOIN maker_list m ON m.maker_id_no=t.maker_id_no
+                      WHERE t.audit_date IS NULL AND t.maker_id_no IN ($ph) AND $scopeCond")->execute($ids);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('移除失敗：'.$e->getMessage(), 500); }
-    jout(['removed'=>count($ids)]);
+    jout(['removed'=>$st->rowCount()]);
 }
 
-/* 定期評核門檻設定（管理員） */
+/* 定期評核門檻設定（管理員，依 scope 各自獨立） */
 case 'save_eval_settings': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
     vendor_eval_save_settings($db, [
         'vendor_eval_ng_max'      => max(0, (float)($_POST['ng_max'] ?? 5)),
         'vendor_eval_special_max' => max(0, (float)($_POST['special_max'] ?? 100)),
         'vendor_eval_late_max'    => max(0, (float)($_POST['late_max'] ?? 30)),
         'vendor_eval_default_days'=> max(0, (int)($_POST['default_days'] ?? 7)),
-    ]);
+    ], $scope);
     if (array_key_exists('grades', $_POST)) {
         $g = json_decode((string)$_POST['grades'], true);
-        if (is_array($g)) vendor_eval_save_grades($db, $g);
+        if (is_array($g)) vendor_eval_save_grades($db, $g, $scope);
     }
-    jout(['settings'=>vendor_eval_settings($db)]);
+    jout(['settings'=>vendor_eval_settings($db, $scope)]);
 }
 
 /* 某大類下的加工項目(小類) */
@@ -518,11 +532,19 @@ case 'auditors_all': {
     jout(['auditors'=>$rows, 'departments'=>$depts,
           'scopes'=>[['v'=>'outsource','l'=>'外包加工'],['v'=>'purchase','l'=>'採購'],['v'=>'all','l'=>'通用']]]);
 }
+/* 新增稽核員資格：只能指派自己有管理權的 scope(對稱 vendor_audit_can_admin_scope)；
+   指派 all(通用=兩邊都能操作)是把人授予跨範疇權限的動作，需同時具備兩邊的管理權才准，
+   避免採購管理員把人登記成「通用」藉此讓對方也能碰生管資料(2026-08-17使用者明確要求)。 */
 case 'add_auditors': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
     $deptId = (int)($_POST['dept_id'] ?? 0);
     $deptName = trim((string)($_POST['dept_name'] ?? '')) ?: null;
-    $scope = in_array($_POST['scope'] ?? '', ['outsource','purchase','all'], true) ? $_POST['scope'] : 'all';
+    $assignScope = in_array($_POST['scope'] ?? '', ['outsource','purchase','all'], true) ? $_POST['scope'] : 'all';
+    if ($assignScope === 'all') {
+        if (!vendor_audit_can_admin_scope($db,$perms,$uid,'outsource') || !vendor_audit_can_admin_scope($db,$perms,$uid,'purchase'))
+            jerr('指派「通用」需同時具備生管與採購兩邊的稽核管理權限', 403);
+    } elseif (!vendor_audit_can_admin_scope($db, $perms, $uid, $assignScope)) {
+        jerr('您沒有本範疇（'.vendor_audit_scope_label($assignScope).'）的稽核管理權限', 403);
+    }
     $ids = va_ids($_POST['user_ids'] ?? '');
     if (!$ids) jerr('請選擇人員');
     try {
@@ -531,14 +553,23 @@ case 'add_auditors': {
                              SELECT u.id, u.user_cname, ?, ?, ?, ?, ? FROM user u WHERE u.id=?
                              ON DUPLICATE KEY UPDATE dept_id=VALUES(dept_id), dept_name=VALUES(dept_name), is_active=1");
         $n = 0;
-        foreach ($ids as $u2) { $ins->execute([$deptId ?: null, $deptName, $scope, $uid, $uname, (int)$u2]); $n++; }
+        foreach ($ids as $u2) { $ins->execute([$deptId ?: null, $deptName, $assignScope, $uid, $uname, (int)$u2]); $n++; }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('新增失敗：'.$e->getMessage(), 500); }
     jout(['added'=>$n]);
 }
 case 'remove_auditor': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
     $aid = (int)($_POST['auditor_id'] ?? 0);
+    $ast = $db->prepare("SELECT scope FROM vendor_auditor WHERE auditor_id=?");
+    $ast->execute([$aid]);
+    $auditorScope = $ast->fetchColumn();
+    if ($auditorScope === false) jerr('找不到此筆稽核員資格');
+    if ($auditorScope === 'all') {
+        if (!vendor_audit_can_admin_scope($db,$perms,$uid,'outsource') || !vendor_audit_can_admin_scope($db,$perms,$uid,'purchase'))
+            jerr('移除「通用」資格需同時具備生管與採購兩邊的稽核管理權限', 403);
+    } elseif (!vendor_audit_can_admin_scope($db, $perms, $uid, (string)$auditorScope)) {
+        jerr('您沒有本範疇（'.vendor_audit_scope_label((string)$auditorScope).'）的稽核管理權限', 403);
+    }
     $db->prepare("DELETE FROM vendor_auditor WHERE auditor_id=?")->execute([$aid]);
     jout([]);
 }
@@ -703,8 +734,8 @@ case 'complete_target': {
         $tt = $rates['total'];
         $snapshotToSave = $cur['checklist_snapshot'] ?: json_encode($cfg, JSON_UNESCAPED_UNICODE);
 
-        $set = vendor_audit_sign_setting($db);
-        $signer = vendor_audit_resolve_signer($db, $uid);
+        $set = vendor_audit_sign_setting($db, $targetScope);
+        $signer = vendor_audit_resolve_signer($db, $uid, $targetScope);
         $autoApprove = !empty($set['auto']) || ($signer && (int)$signer['id'] === $uid);
         if (!$autoApprove && !$signer) { $db->rollBack(); jerr('尚未設定簽核部門，請聯絡管理員先於「簽核設定」指定簽核部門'); }
         $newStatus = $autoApprove ? 'approved' : 'pending';
@@ -747,7 +778,7 @@ case 'submit_sign': {
     $targetScope = vendor_audit_scope_of($row['main_category_id'] !== null ? (int)$row['main_category_id'] : null);
     if (!vendor_audit_can_edit_scope($db, $perms, $uid, $targetScope)) jerr('您沒有本廠商所屬範疇（'.vendor_audit_scope_label($targetScope).'）的稽核登錄權限', 403);
     if ($row['status'] !== 'completed') jerr('此筆狀態非「已完成待送審」，請重新整理後再試');
-    $signer = vendor_audit_resolve_signer($db, $uid);
+    $signer = vendor_audit_resolve_signer($db, $uid, $targetScope);
     if (!$signer) jerr('尚未設定簽核部門，請聯絡管理員先於「簽核設定」指定簽核部門');
     try {
         $db->beginTransaction();
@@ -767,13 +798,14 @@ case 'sign_decide': {
     $noteIn = trim((string)($_POST['note'] ?? ''));
     if (!in_array($decision, ['approved','rejected'], true)) jerr('無效的簽核決定');
     if ($decision === 'rejected' && $noteIn === '') jerr('退回必須填寫原因');
-    $st = $db->prepare("SELECT t.*, m.maker_id FROM vendor_audit_target t JOIN maker_list m ON m.maker_id_no=t.maker_id_no WHERE t.target_id=?");
+    $st = $db->prepare("SELECT t.*, m.maker_id, m.main_category_id FROM vendor_audit_target t JOIN maker_list m ON m.maker_id_no=t.maker_id_no WHERE t.target_id=?");
     $st->execute([$tid]);
     $row = $st->fetch(PDO::FETCH_ASSOC);
     if (!$row) jerr('找不到對象');
+    $targetScope = vendor_audit_scope_of($row['main_category_id'] !== null ? (int)$row['main_category_id'] : null);
     $approval = eg_approval_latest($db, 'vendor_audit_sign', $tid, 'manager');
     if (!$approval || $approval['status'] !== 'pending') jerr('此筆目前無待簽核紀錄');
-    $signer = vendor_audit_resolve_signer($db, (int)($row['completed_by'] ?? 0));
+    $signer = vendor_audit_resolve_signer($db, (int)($row['completed_by'] ?? 0), $targetScope);
     if (!$perms['canAdmin'] && (!$signer || (int)$signer['id'] !== $uid)) jerr('您不是此筆的簽核人', 403);
 
     $res = eg_approval_decide($db, (int)$approval['id'], $uid, $uname, $decision, $noteIn ?: null);
@@ -793,25 +825,25 @@ case 'sign_decide': {
 
 /* 簽核部門下拉選項(生管組本身或往上部門) */
 case 'sign_dept_options': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
-    jout(['options'=>vendor_audit_sign_dept_options($db)]);
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
+    jout(['options'=>vendor_audit_sign_dept_options($db, $scope)]);
 }
 /* 儲存簽核設定(自動簽核開關+簽核部門) */
 case 'save_sign_setting': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
     $auto = (int)($_POST['auto'] ?? 0) === 1 ? 1 : 0;
     $deptId = (int)($_POST['dept_id'] ?? 0) ?: null;
-    vendor_audit_sign_save_setting($db, $auto, $deptId);
-    jout(['setting'=>vendor_audit_sign_setting($db)]);
+    vendor_audit_sign_save_setting($db, $auto, $deptId, $scope);
+    jout(['setting'=>vendor_audit_sign_setting($db, $scope)]);
 }
 
 /* 查核表設定(可設定化題庫)：讀取/儲存 */
 case 'get_checklist': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
     jout(vendor_audit_checklist_config($db, $scope));
 }
 case 'save_checklist': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
     $cats = json_decode((string)($_POST['cats'] ?? ''), true);
     if (!is_array($cats) || !$cats) jerr('查核表內容不可為空');
     $selfW = (float)($_POST['self_w'] ?? VENDOR_AUDIT_SELF_W);
@@ -826,20 +858,20 @@ case 'save_checklist': {
     jout(vendor_audit_checklist_config($db, $scope));
 }
 
-/* 設定廠商是否納入稽核管理（管理員；支援批次） */
+/* 設定廠商是否納入稽核管理（管理員；支援批次；只能動自己範疇(或all)的廠商） */
 case 'set_managed': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
     $ids = va_ids($_POST['maker_ids'] ?? '');
     if (!$ids) jerr('請選擇廠商');
     $managed = (int)($_POST['managed'] ?? 0) === 1 ? 1 : 0;
     try {
         $db->beginTransaction();
         $ph = implode(',', array_fill(0, count($ids), '?'));
-        $db->prepare("UPDATE maker_list SET audit_managed=? WHERE maker_id_no IN ($ph)")
-           ->execute(array_merge([$managed], $ids));
+        $st = $db->prepare("UPDATE maker_list m SET audit_managed=? WHERE m.maker_id_no IN ($ph) AND " . vendor_audit_scope_sql_cond($scope));
+        $st->execute(array_merge([$managed], $ids));
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('設定失敗：'.$e->getMessage(), 500); }
-    jout(['updated'=>count($ids)]);
+    jout(['updated'=>$st->rowCount()]);
 }
 
 /* 全域稽核週期設定（管理員） */
@@ -880,13 +912,13 @@ case 'save_cycle': {
 /* ===== 供應商稽核計劃(2-PH-01-06,年度版) ===== */
 case 'plan_data': {
     $year = (int)($_GET['year'] ?? date('Y'));
-    $signSet = vendor_audit_plan_sign_setting($db);
+    $signSet = vendor_audit_plan_sign_setting($db, $scope);
     $lock = vendor_audit_plan_lock_get($db, $year, $scope);
     // 待核准中：顯示這筆實際的合格核准人清單(依送出者職級解析)；尚未送出：用目前使用者身分預覽會是誰(僅供參考)
     $approverNames = [];
     if ($signSet['need']) {
         $approverNames = array_column(
-            vendor_audit_plan_approver_pool($db, $lock && !empty($lock['submitted_by']) ? (int)$lock['submitted_by'] : $uid),
+            vendor_audit_plan_approver_pool($db, $lock && !empty($lock['submitted_by']) ? (int)$lock['submitted_by'] : $uid, $scope),
             'user_cname'
         );
     }
@@ -898,7 +930,7 @@ case 'plan_data': {
     $canDecide = false;
     if ($lock && $lock['status'] === 'pending') {
         $submittedBy = (int)($lock['submitted_by'] ?? 0);
-        $decidePool = vendor_audit_plan_approver_pool($db, $submittedBy); // 已排除送出者本人
+        $decidePool = vendor_audit_plan_approver_pool($db, $submittedBy, $scope); // 已排除送出者本人
         if ($uid === $submittedBy) {
             // 送出者(常常同時是稽核員/管理者)一律不顯示核准/退回按鈕，避免誤按；
             // 除非真的完全解析不到其他合格核准人(pool為空)且本人是管理者，才放行讓送出者自己
@@ -922,10 +954,10 @@ case 'plan_submit': {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $submitDate)) jerr('日期格式不正確');
     $lock = vendor_audit_plan_lock_get($db, $year, $scope);
     if ($lock && in_array($lock['status'], ['pending','approved'], true)) jerr('此年度計劃已送出，請重新整理確認狀態');
-    $need = vendor_audit_plan_sign_setting($db)['need'];
+    $need = vendor_audit_plan_sign_setting($db, $scope)['need'];
     $pool = [];
     if ($need) {
-        $pool = vendor_audit_plan_approver_pool($db, $uid);
+        $pool = vendor_audit_plan_approver_pool($db, $uid, $scope);
         if (!$pool) jerr('尚未設定核准人員，請聯絡管理員先於「組織角色綁定設定」的「供應商稽核計劃核准」指定部門或人員');
     }
     $lock = vendor_audit_plan_submit($db, $year, $submitDate, $uid, $uname, $scope);
@@ -945,7 +977,7 @@ case 'plan_decide': {
     $lock = vendor_audit_plan_lock_get($db, $year, $scope);
     if (!$lock || $lock['status'] !== 'pending') jerr('此年度計劃目前無待核准紀錄');
     $submittedBy = (int)($lock['submitted_by'] ?? 0);
-    $pool = vendor_audit_plan_approver_pool($db, $submittedBy); // 已排除送出者本人
+    $pool = vendor_audit_plan_approver_pool($db, $submittedBy, $scope); // 已排除送出者本人
     $isSubmitter = ($uid === $submittedBy);
     $inPool = in_array($uid, array_column($pool, 'id'), true);
     if ($decision === 'approved') {
@@ -972,15 +1004,15 @@ case 'plan_decide': {
     jout(['status'=>$decision]);
 }
 case 'get_approver_chain': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
-    jout(['chain'=>vendor_audit_plan_approver_chain($db), 'methods'=>VENDOR_AUDIT_APPROVER_METHODS]);
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
+    jout(['chain'=>vendor_audit_plan_approver_chain($db, $scope), 'methods'=>VENDOR_AUDIT_APPROVER_METHODS]);
 }
 case 'save_approver_chain': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
     $chain = json_decode((string)($_POST['chain'] ?? '[]'), true);
     if (!is_array($chain)) jerr('格式不正確');
-    vendor_audit_plan_approver_chain_save($db, $chain);
-    jout(['chain'=>vendor_audit_plan_approver_chain($db)]);
+    vendor_audit_plan_approver_chain_save($db, $chain, $scope);
+    jout(['chain'=>vendor_audit_plan_approver_chain($db, $scope)]);
 }
 /* 超級管理員或被授權的管理員：取消已送出/已核准的年度計畫，解除鎖定回到可增列對象的狀態
    (2026-08-06使用者明確要求；密碼驗證改用全站共用的操作確認密碼 confirm_password_lib.php，
@@ -999,10 +1031,10 @@ case 'plan_cancel': {
     jout(['ok'=>true]);
 }
 case 'save_plan_sign_setting': {
-    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
     $need = (int)($_POST['need'] ?? 0) === 1 ? 1 : 0;
-    vendor_audit_plan_sign_save_setting($db, $need);
-    jout(['setting'=>vendor_audit_plan_sign_setting($db)]);
+    vendor_audit_plan_sign_save_setting($db, $need, $scope);
+    jout(['setting'=>vendor_audit_plan_sign_setting($db, $scope)]);
 }
 
 /* 某廠商跨期稽核歷史 */

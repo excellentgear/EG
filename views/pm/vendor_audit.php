@@ -964,14 +964,18 @@ function loadMeta(cb){
         for (var mi=1; mi<=12; mi++) mo += '<option value="'+mi+'">'+mi+'月</option>';
         $('#pkMonth').html(mo).val(m.cur_month);
         $('#recPlanMonth').html(mo);
-        if (m.perms.canEdit) $('#btnPick').show();
-        if (m.perms.canAdmin){ $('#btnCycle').show(); $('#btnAttachSet').show(); $('#btnAsDoc').show(); $('#btnAuditor').show();
-            $('#btnChecklist').show(); $('#btnSignSetting').show(); $('#pkManageGrp').show(); $('#evSet').show(); }
+        $('#btnPick').toggle(!!m.perms.canEdit);
+        // 週期設定/附件路徑/AS文件綁定是共用infra，不隨scope收斂(使用者2026-08-17明確選擇暫時兩邊共用)，
+        // 仍用原本的 canAdmin；查核表設定/簽核設定/稽核員設定/納管切換/定期評核門檻/兩年未交易檢查
+        // 全部依範疇收斂，改用 canAdminScope，避免顯示了按鈕但點下去被後端擋。用 toggle 而非 show，
+        // 因為現在切換範疇後這些權限可能從有變沒有，需要能連帶隱藏回去。
+        $('#btnCycle,#btnAttachSet,#btnAsDoc').toggle(!!m.perms.canAdmin);
+        $('#btnAuditor,#btnChecklist,#btnSignSetting,#pkManageGrp,#evSet').toggle(!!m.perms.canAdminScope);
         var $ey = $('#evYear').empty(), $ry = $('#rsYear').empty(), $py = $('#planYear').empty();
         for (var yy=m.cur_year; yy>=m.cur_year-5; yy--){ $ey.append('<option value="'+yy+'">'+yy+'</option>'); $ry.append('<option value="'+yy+'">'+yy+'</option>'); $py.append('<option value="'+yy+'">'+yy+'</option>'); }
         $ey.val(m.cur_year); $ry.val(m.cur_year); $py.val(m.cur_year);
-        if (m.perms.canEdit){ $('#rsAdd,#rsBatchGrade,#rsClearGrade').show(); }
-        if (m.perms.canAdmin){ $('#rsStaleBtn').show(); }
+        $('#rsAdd,#rsBatchGrade,#rsClearGrade').toggle(!!m.perms.canEdit);
+        $('#rsStaleBtn').toggle(!!m.perms.canAdminScope);
         loadEvVendors('');
         if (cb) cb();
     });
@@ -2038,6 +2042,8 @@ $('#evSet').on('click', function(){
     var s=(EVAL&&EVAL.settings)||META.eval_settings||{ng_max:5,late_max:30,special_max:100,default_days:7};
     $('#stNgMax').val(s.ng_max); $('#stLateMax').val(s.late_max); $('#stSpMax').val(s.special_max); $('#stDays').val(s.default_days);
     $('#stGrades').empty(); ((s.grades&&s.grades.length)?s.grades:[{min:90,label:'A'},{min:80,label:'B'},{min:70,label:'C'},{min:0,label:'D'}]).forEach(function(g){ gradeAddRow(g.label,g.min); });
+    // 定期評核門檻依範疇各自獨立，標題標示目前正在編輯哪一份
+    $('#evSetMask .m-head span:first').text('定期評核門檻設定（'+scopeLabel(CUR_SCOPE)+'）');
     openMask('evSetMask');
 });
 function submitEvSet(){
@@ -2486,6 +2492,8 @@ function renderChainBox(chain){
     $('#chainBox').html(h);
 }
 $('#btnSignSetting').on('click', function(){
+    // 稽核紀錄簽核設定+年度計畫簽核開關/核准鏈依範疇各自獨立，標題標示目前正在編輯哪一份
+    $('#signSetMask .m-head span:first').text('簽核設定（'+scopeLabel(CUR_SCOPE)+'）');
     $('#ssAuto').prop('checked', !!(META.sign_setting && META.sign_setting.auto));
     $('#ssPlanNeed').prop('checked', !!(META.plan_sign_setting && META.plan_sign_setting.need));
     $('#ssTopApprover').text((META.plan_approver_names && META.plan_approver_names.length) ? META.plan_approver_names.join('、')
