@@ -112,6 +112,47 @@ function asTreeBoundDoc(PDO $db): ?array {
     $r['doc_no'] = eg_asdoc_no($r);
     return $r;
 }
+/* ── 修改（製表）簽章人員任期 ──────────────────────────────────────
+ * 文件管制總覽表各階的簽章日期＝該階最新修改日期，可能是好幾年前；
+ * 那時的 AS 負責人不一定是現任（例：2026-07-13 交接），一律蓋現任＝簽章不實。
+ * 故以任期表（誰、從哪天到哪天）依日期回推當時的負責人；任期內就算數（不再檢查在職／請假，
+ * 使用者拍板：那天他本來就是負責人，事後離職不該讓舊表印不出章）。 */
+function asEditorTermEnsure(PDO $db): void {
+    static $done = false;
+    if ($done) return;
+    $db->exec("CREATE TABLE IF NOT EXISTS as_doc_editor_term (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        start_date DATE NULL COMMENT '空=最早（不限）',
+        end_date DATE NULL COMMENT '空=至今',
+        note VARCHAR(100) NULL,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_range (start_date, end_date)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS文件管制總覽表－修改(製表)簽章人員任期'");
+    $done = true;
+}
+/** 任期清單（依起日排序；起日空者最前） */
+function asEditorTerms(PDO $db): array {
+    asEditorTermEnsure($db);
+    $rows = $db->query("SELECT t.id, t.user_id, t.start_date, t.end_date, t.note, u.user_cname, u.state
+                        FROM as_doc_editor_term t LEFT JOIN `user` u ON u.id = t.user_id
+                        ORDER BY COALESCE(t.start_date,'0001-01-01') ASC, t.id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    return array_map(fn($r)=>[
+        'id'=>(int)$r['id'], 'user_id'=>(int)$r['user_id'], 'name'=>(string)($r['user_cname'] ?? ''),
+        'start_date'=>$r['start_date'], 'end_date'=>$r['end_date'], 'note'=>(string)($r['note'] ?? ''),
+        'resigned'=>((int)($r['state'] ?? 1) === 0),
+    ], $rows);
+}
+/** 某日期當時的簽章人（沒有任期涵蓋該日＝回 null，由畫面手選遞補） */
+function asEditorOfDate(array $terms, string $date): ?array {
+    foreach ($terms as $t) {
+        if ($t['start_date'] && $date < $t['start_date']) continue;
+        if ($t['end_date']   && $date > $t['end_date'])   continue;
+        if ($t['name'] === '') continue;
+        return ['id'=>$t['user_id'], 'name'=>$t['name'], 'term_id'=>$t['id']];
+    }
+    return null;
+}
 function asSetSetting(PDO $db, string $key, string $val): void {
     $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?)
                   ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)")
@@ -304,6 +345,7 @@ $asGate = [
     'get_settings'=>'settings', 'save_settings'=>'settings', 'upload_template'=>'settings',
     'tree_print_meta'=>'view', 'save_tree_as_doc'=>'settings', 'tree_signers'=>'view',
     'save_tree_auto'=>'settings', 'tree_submit_approval'=>'update',
+    'tree_editor_terms'=>'view', 'save_tree_editor_terms'=>'settings',
     // tree_approval_decide 於 case 內檢查（核准人本人／管理員），核准人不一定有 AS 文件角色
     'save_dept_codes'=>'settings',
     'form_records_list'=>'view', 'form_records_upload'=>'upload_record', 'form_record_delete'=>'delete',
@@ -922,10 +964,19 @@ case 'tree_submit_approval':
     require_once __DIR__ . '/../common/org_role_lib.php';
     $pages = json_decode((string)($_POST['pages'] ?? '[]'), true);
     if (!is_array($pages) || !$pages) jout(['status'=>'error','message'=>'沒有可送審的內容']);
-    $edId = (int)($_POST['editor_id'] ?? 0);
-    $st = $db->prepare("SELECT user_cname FROM user WHERE id=?"); $st->execute([$edId]);
-    $edName = (string)($st->fetchColumn() ?: '');
-    if ($edName==='') jout(['status'=>'error','message'=>'請選擇修改簽章人員']);
+    // 各階的修改簽章人可能不同（依任期回推），逐頁解析後存進快照；任期沒涵蓋的日期用畫面手選的人遞補
+    $terms  = asEditorTerms($db);
+    $fbId   = (int)($_POST['editor_id'] ?? 0);
+    $fbName = '';
+    if ($fbId) { $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $st->execute([$fbId]); $fbName = (string)($st->fetchColumn() ?: ''); }
+    foreach ($pages as $i => $p) {
+        $e = asEditorOfDate($terms, (string)($p['date'] ?? ''));
+        $pages[$i]['editor_id']   = $e ? $e['id']   : $fbId;
+        $pages[$i]['editor_name'] = $e ? $e['name'] : $fbName;
+        if ($pages[$i]['editor_name'] === '')
+            jout(['status'=>'error','message'=>($p['level'] ?? '').'（'.($p['date'] ?? '').'）沒有對應的修改簽章人員，請設定任期或於下拉選擇']);
+    }
+    $edId = (int)$pages[0]['editor_id']; $edName = (string)$pages[0]['editor_name'];   // 相容舊快照欄位
     $ap = eg_org_user($db, 'top_approver');
     if (!$ap) jout(['status'=>'error','message'=>'尚未綁定「最高核准人員」，請先至組織角色設定頁設定']);
 
@@ -941,9 +992,9 @@ case 'tree_submit_approval':
     ], JSON_UNESCAPED_UNICODE));
 
     // 通知（點進去＝結構總覽審核頁，內容完整可看＋核准/退回鈕）
-    $lvTxt = implode('、', array_map(fn($p)=>($p['level'].'（'.$p['count'].'份，最新修改 '.$p['date'].'）'), $pages));
+    $lvTxt = implode('、', array_map(fn($p)=>($p['level'].'（'.$p['count'].'份，最新修改 '.$p['date'].'，修改簽章 '.$p['editor_name'].'）'), $pages));
     $title = 'AS 文件結構總覽待核准';
-    $content = $currentCname.' 送出「文件管制總覽表」變更請核准：'.$lvTxt.'；修改簽章人員：'.$edName.'。';
+    $content = $currentCname.' 送出「文件管制總覽表」變更請核准：'.$lvTxt.'。';
     $db->prepare("UPDATE live_event SET enddate = DATE_SUB(CURDATE(), INTERVAL 1 DAY)
                   WHERE ref_type='AS_TREE_APPROVAL' AND (enddate IS NULL OR enddate >= CURDATE())")->execute();
     $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source, show_status_to_others, ref_type, ref_id)
@@ -1050,7 +1101,67 @@ case 'tree_signers':
             $editors[] = ['id'=>(int)$u['id'], 'name'=>$u['user_cname'], 'avail'=>$availOf((int)$u['id'])];
         }
     }
-    jout(['status'=>'success', 'approver'=>$approver, 'editors'=>$editors, 'dates'=>$dates]);
+    // 任期回推：各階簽章日期對應「當時」的修改簽章人（沒設任期涵蓋的日期才用畫面手選的人）
+    $terms  = asEditorTerms($db);
+    $byDate = [];
+    foreach ($dates as $d) { $e = asEditorOfDate($terms, $d); if ($e) $byDate[$d] = $e; }
+    jout(['status'=>'success', 'approver'=>$approver, 'editors'=>$editors, 'dates'=>$dates,
+          'by_date'=>$byDate, 'has_terms'=>count($terms) > 0]);
+
+// 任期設定：清單＋可選人員（含已離職者——歷史任期本來就可能是已離職的人）
+case 'tree_editor_terms':
+    require_once __DIR__ . '/../common/people_lib.php';
+    $cand = [];
+    foreach (eg_people_list($db) as $p) {
+        $cand[] = ['id'=>(int)$p['id'], 'name'=>$p['user_cname'],
+                   'label'=>trim(($p['dept_name'] ?? '').' '.($p['position_name'] ?? '').' '.$p['user_cname'])];
+    }
+    // 已離職者 people_lib 一律不列（鐵則），但任期是歷史紀錄，需另行補上並標示
+    $st = $db->query("SELECT u.id, u.user_cname, d.name AS dept_name
+                      FROM `user` u
+                      LEFT JOIN user_department_position_map m ON m.id = (SELECT m2.id FROM user_department_position_map m2 WHERE m2.user_id=u.id ORDER BY m2.is_main DESC, m2.id ASC LIMIT 1)
+                      LEFT JOIN department d ON d.id = m.department_id
+                      WHERE u.state = 0 ORDER BY u.user_cname");
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $u) {
+        $cand[] = ['id'=>(int)$u['id'], 'name'=>$u['user_cname'],
+                   'label'=>trim(($u['dept_name'] ?? '').' '.$u['user_cname'].'（已離職）')];
+    }
+    jout(['status'=>'success', 'terms'=>asEditorTerms($db), 'candidates'=>$cand]);
+
+case 'save_tree_editor_terms':
+    asEditorTermEnsure($db);          // DDL 先做完再開 transaction（DDL 會隱式 commit）
+    $rows = json_decode((string)($_POST['terms'] ?? '[]'), true);
+    if (!is_array($rows)) jout(['status'=>'error','message'=>'資料格式錯誤']);
+    $clean = [];
+    foreach ($rows as $i => $r) {
+        $uid = (int)($r['user_id'] ?? 0);
+        $sd  = trim((string)($r['start_date'] ?? ''));
+        $ed  = trim((string)($r['end_date'] ?? ''));
+        if (!$uid) continue;                                   // 沒選人的空列直接略過
+        foreach ([[$sd,'起日'],[$ed,'迄日']] as [$v,$lb])
+            if ($v !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) jout(['status'=>'error','message'=>"第".($i+1)."列的{$lb}格式不正確"]);
+        if ($sd !== '' && $ed !== '' && $sd > $ed) jout(['status'=>'error','message'=>"第".($i+1)."列：起日不可晚於迄日"]);
+        $s = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $s->execute([$uid]);
+        $nm = $s->fetchColumn();
+        if ($nm === false) jout(['status'=>'error','message'=>"第".($i+1)."列的人員不存在"]);
+        $clean[] = ['user_id'=>$uid, 'name'=>$nm, 'start'=>$sd, 'end'=>$ed, 'note'=>mb_substr(trim((string)($r['note'] ?? '')),0,100)];
+    }
+    // 任期不可重疊：同一天有兩個負責人時無法判斷該蓋誰的章
+    foreach ($clean as $a => $x) foreach ($clean as $b => $y) {
+        if ($b <= $a) continue;
+        $xs = $x['start'] ?: '0001-01-01'; $xe = $x['end'] ?: '9999-12-31';
+        $ys = $y['start'] ?: '0001-01-01'; $ye = $y['end'] ?: '9999-12-31';
+        if ($xs <= $ye && $ys <= $xe)
+            jout(['status'=>'error','message'=>"任期重疊：{$x['name']} 與 {$y['name']} 的期間有交集，請調整起訖日"]);
+    }
+    try {
+        $db->beginTransaction();
+        $db->exec("DELETE FROM as_doc_editor_term");
+        $ins = $db->prepare("INSERT INTO as_doc_editor_term (user_id, start_date, end_date, note) VALUES (?,?,?,?)");
+        foreach ($clean as $c) $ins->execute([$c['user_id'], $c['start'] ?: null, $c['end'] ?: null, $c['note']]);
+        $db->commit();
+    } catch (Exception $e) { if ($db->inTransaction()) $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
+    jout(['status'=>'success','message'=>'已儲存任期設定','terms'=>asEditorTerms($db)]);
 
 case 'save_tree_as_doc':
     $docId = (int)($_POST['as_doc_id'] ?? 0);

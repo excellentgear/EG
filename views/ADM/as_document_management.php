@@ -346,9 +346,11 @@ if ($deptPerm === 'R') {
       <div class="modal-footer">
         <!-- 左下：簽章人員選擇＋送審（未開自動核可時） -->
         <div style="float:left;text-align:left;font-size:12px;line-height:1.8;">
-          <span>修改簽章人員：</span>
+          <span id="treeSignerLbl">修改簽章人員：</span>
           <select id="treeSigner" class="form-control input-sm" style="display:inline-block;width:auto;min-width:130px;"></select>
           <span id="treeApproverTxt" class="text-muted" style="margin-left:6px;"></span>
+          <!-- 各階簽章日期不同、當時的 AS 負責人也可能不同（交接），逐階列出實際會蓋誰的章 -->
+          <div id="treeSignPreview" style="margin-top:2px;color:#666;"></div>
           <div id="treeApprovalBar" style="margin-top:4px;display:none;">
             <button type="button" class="btn btn-danger btn-sm" id="btnTreeSubmitApproval"><i class="fa fa-paper-plane"></i> 變更送出審核</button>
             <span id="treeApprovalStatus" class="text-muted" style="margin-left:6px;"></span>
@@ -855,6 +857,24 @@ if ($deptPerm === 'R') {
             </p>
           </div>
           <div class="form-group">
+            <label>修改（製表）簽章人員任期</label>
+            <p class="text-muted" style="font-size:12px;margin:0 0 4px;">
+              各階的簽章日期＝<b>該階文件的最新修改日期</b>（可能是好幾年前），簽章要蓋<b>當時</b>的 AS 負責人，不是一律蓋現任。
+              設定每位負責人的任期後，列印時各階會自動帶出當時的人；<b>起日空白＝最早、迄日空白＝至今</b>，任期不可重疊。
+              已離職者也可以設（任期內就算數，不再檢查在職／請假）；日期沒被任何任期涵蓋時，才用「結構總覽」跳窗左下手選的人員。
+            </p>
+            <input type="text" class="form-control input-sm" id="termKw" placeholder="人員太多時可在此打字篩選下拉選項（姓名／部門／職稱）" style="margin-bottom:6px;">
+            <div style="max-height:220px;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:6px;">
+              <table class="table table-condensed" style="margin-bottom:0;">
+                <thead><tr><th style="width:40%;">簽章人員</th><th style="width:24%;">起日</th><th style="width:24%;">迄日</th><th>備註</th><th style="width:36px;"></th></tr></thead>
+                <tbody id="termList"></tbody>
+              </table>
+            </div>
+            <button type="button" class="btn btn-sm btn-success" id="termAddRow" style="margin-top:6px;"><i class="fa fa-plus"></i> 加一段任期</button>
+            <button type="button" class="btn btn-sm btn-info" id="termSave" style="margin-top:6px;">儲存任期設定</button>
+            <span id="termMsg" class="text-muted" style="margin-left:8px;font-size:12px;"></span>
+          </div>
+          <div class="form-group">
             <label>列印綁定的 AS 文件編號</label>
             <p class="text-muted" style="font-size:12px;margin:0;">於「結構總覽」跳窗底部的「AS 文件編號綁定」設定；綁定後大標題下方表頭＝該文件名稱、頁尾右下＝該文件編號。</p>
           </div>
@@ -875,6 +895,7 @@ if ($deptPerm === 'R') {
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script>
 window.asPerm = <?php echo json_encode($asCaps); ?>;
 $(function(){
@@ -887,6 +908,8 @@ $(function(){
   const canDL = !!window.asPerm.download;
   const canNA = !!window.asPerm.no_attach; // 免附件補登
   const canRecUp = !!window.asPerm.upload_record; // 上傳紀錄（與新增文件分開設定）
+  // 顯示用日期一律 YYYY.MM.DD（ai-rules/20；唯一實作 eg_date_fmt.js 的 egFmtDate）
+  const dispDate = d => (typeof egFmtDate==='function' ? egFmtDate(d) : (d||''));
 
   // 操作欄 ⚙ 下拉在 .table-responsive 內會被裁切：展開時暫時放開 overflow
   $(document).on('show.bs.dropdown', '#docTableBody .btn-group', function(){
@@ -1438,13 +1461,15 @@ $(function(){
       loadTreeSigners();
     });
   }
-  /** 簽章人員：核准＝最高核准人員；修改＝AS負責人（只列各階簽章日期當天在職且未請假者） */
+  /** 簽章人員：核准＝最高核准人員；修改＝依「任期」回推該階簽章日期當時的 AS 負責人，
+   *  任期沒涵蓋的日期才用下拉手選（手選者仍須該日在職且未請假） */
   function loadTreeSigners(){
     const dates = [...new Set(treePages().map(p=>p.date).filter(Boolean))];
     $.getJSON(API+'?action=tree_signers', {dates: dates.join(',')}, r=>{
       if(r.status!=='success') return;
-      TREE_SIGN = {approver:r.approver||null, editors:r.editors||[]};
-      const okAll = u => dates.length ? dates.every(d=>u.avail && u.avail[d] && u.avail[d].ok) : true;
+      TREE_SIGN = {approver:r.approver||null, editors:r.editors||[], by_date:r.by_date||{}, has_terms:!!r.has_terms};
+      const free = dates.filter(d=>!TREE_SIGN.by_date[d]);       // 任期未涵蓋、要靠手選的日期
+      const okAll = u => free.length ? free.every(d=>u.avail && u.avail[d] && u.avail[d].ok) : true;
       const $s = $('#treeSigner').empty();
       const usable = (TREE_SIGN.editors||[]).filter(okAll);
       if(!usable.length){
@@ -1454,9 +1479,15 @@ $(function(){
       }
       // 不可簽者也列出但停用，讓使用者知道為什麼沒出現
       (TREE_SIGN.editors||[]).filter(u=>!okAll(u)).forEach(u=>{
-        const why = dates.map(d=>(u.avail&&u.avail[d]&&!u.avail[d].ok)?u.avail[d].why:'').filter(Boolean)[0]||'當日不在';
+        const why = free.map(d=>(u.avail&&u.avail[d]&&!u.avail[d].ok)?u.avail[d].why:'').filter(Boolean)[0]||'當日不在';
         $s.append(`<option value="${u.id}" disabled>${esc(u.name)}（${esc(why)}）</option>`);
       });
+      // 全部日期都有任期涵蓋時，下拉沒有作用，直接停用避免誤會
+      const allCovered = dates.length && !free.length;
+      $('#treeSigner').prop('disabled', allCovered);
+      $('#treeSignerLbl').text(allCovered ? '修改簽章人員（已依任期自動帶出）：'
+                                          : (TREE_SIGN.has_terms ? '修改簽章人員（未設任期的日期用）：' : '修改簽章人員：'));
+      renderTreeSignPreview();
       const ap = TREE_SIGN.approver;
       const apOk = ap && okAll(ap);
       $('#treeApproverTxt').html(ap ? ('核准：'+esc(ap.name)+(apOk?'':'<span style="color:#DD5138;">（'+esc(Object.values(ap.avail||{}).filter(v=>!v.ok).map(v=>v.why)[0]||'當日不在')+'）</span>'))
@@ -1464,6 +1495,25 @@ $(function(){
       renderTreeApprovalBar();
     });
   }
+  /** 某一階要蓋誰的修改章：任期優先，沒任期涵蓋才用下拉手選 */
+  function treeEditorFor(p){
+    const t = (TREE_SIGN.by_date||{})[p.date];
+    if(t) return {id:t.id, name:t.name, from:'term'};
+    const $sel = $('#treeSigner option:selected'), v = $('#treeSigner').val();
+    return (v && !$sel.prop('disabled')) ? {id:+v, name:$sel.text(), from:'manual'} : {id:0, name:'', from:''};
+  }
+  /** 逐階列出實際會蓋的修改章，避免「明明各階日期不同卻都印同一個製表人」看不出來 */
+  function renderTreeSignPreview(){
+    const rows = treePages().map(p=>{
+      const e = treeEditorFor(p);
+      const src = e.from==='term' ? '任期' : (e.from==='manual' ? '手選' : '');
+      return `${esc(p.level)}（${esc(dispDate(p.date))}）→ 修改：`
+           + (e.name ? `<b>${esc(e.name)}</b><span class="text-muted">（${src}）</span>`
+                     : '<span style="color:#DD5138;">未設定（列印為空白線）</span>');
+    });
+    $('#treeSignPreview').html(rows.length ? ('各階簽章：'+rows.join('　｜　')) : '');
+  }
+  $(document).on('change','#treeSigner', renderTreeSignPreview);
   function renderTreeAsDoc(){
     const d = TREE_META.as_doc;
     $('#treeAsDocNo').text(d ? (d.doc_no+'　'+d.doc_name) : '尚未綁定');
@@ -1483,29 +1533,38 @@ $(function(){
   function renderTreeApprovalBar(){
     if(TREE_META.auto_approve){ $('#treeApprovalBar').hide(); return; }
     $('#treeApprovalBar').show();
-    const cur = JSON.stringify(treePages().map(p=>[p.level,p.date]));
+    const cur = treeSignKeyNow();
     const ap = TREE_META.approved, pd = TREE_META.pending;
     let txt = '';
     if(pd) txt = `<span style="color:#F0A24B;">審核中（${esc(pd.submitted_at||'')} 由 ${esc(pd.submitted_by_name||'')} 送出，待 ${esc((TREE_SIGN.approver||{}).name||'核准人')} 核准）</span>`;
-    else if(ap && JSON.stringify((ap.pages||[]).map(p=>[p.level,p.date]))===cur)
+    else if(ap && treeSignKeySnap(ap)===cur)
       txt = `<span style="color:#2e7d32;">已核准（${esc(ap.approved_at||'')} ${esc(ap.approver_name||'')}）－列印會顯示簽章</span>`;
     else if(ap) txt = '<span style="color:#DD5138;">文件已變更，核准內容已失效－請重新送出審核（列印不顯示簽章）</span>';
     else txt = '<span class="text-muted">尚未送審－列印不顯示簽章</span>';
     $('#treeApprovalStatus').html(txt);
     $('#btnTreeSubmitApproval').prop('disabled', !!pd);
   }
+  /** 核准比對鍵：階層＋簽章日期＋該階的修改簽章人（任期改了＝簽章會變，要重新送審） */
+  function treeSignKeyNow(){ return JSON.stringify(treePages().map(p=>[p.level,p.date,treeEditorFor(p).name])); }
+  function treeSignKeySnap(ap){ return JSON.stringify((ap.pages||[]).map(p=>[p.level,p.date,p.editor_name||ap.editor_name||''])); }
   /** 目前的核准快照是否對應現在的內容（決定列印要不要蓋章） */
   function treeApprovedNow(){
     if(TREE_META.auto_approve) return true;
     const ap = TREE_META.approved;
     if(!ap) return false;
-    return JSON.stringify((ap.pages||[]).map(p=>[p.level,p.date])) === JSON.stringify(treePages().map(p=>[p.level,p.date]));
+    return treeSignKeySnap(ap) === treeSignKeyNow();
   }
   $('#btnTreeSubmitApproval').on('click', function(){
     const pages = treePages().map(p=>({level:p.level, date:p.date, count:p.rows.length}));
     if(!pages.length){ alert('尚無文件可送審'); return; }
-    const sid = $('#treeSigner').val();
-    if(!sid){ alert('沒有可簽章的 AS 負責人（當日需在職且未請假），無法送審'); return; }
+    const miss = treePages().filter(p=>!treeEditorFor(p).name);
+    if(miss.length){
+      alert('下列階層沒有對應的修改簽章人員，無法送審：\n'
+            + miss.map(p=>`・${p.level}（${dispDate(p.date)}）`).join('\n')
+            + '\n\n請於「系統設定 → 結構總覽列印 → 修改（製表）簽章人員任期」補上該日期的任期，或於下拉選擇一位當日在職且未請假的 AS 負責人。');
+      return;
+    }
+    const sid = $('#treeSigner').val() || 0;   // 任期沒涵蓋的日期用手選這位遞補（後端逐階再解析一次）
     if(!confirm('確定將目前的文件結構總覽送出審核？\n核准後列印才會顯示核准／修改簽章。')) return;
     $.post(API, {action:'tree_submit_approval', pages: JSON.stringify(pages), editor_id: sid}, r=>{
       if(r.status!=='success'){ alert(r.message||'送審失敗'); return; }
@@ -1552,10 +1611,13 @@ $(function(){
     const showSign = forApproval ? true : treeApprovedNow();
     const ap = TREE_SIGN.approver, apName = (TREE_META.approved && !TREE_META.auto_approve && !forApproval)
                  ? (TREE_META.approved.approver_name||'') : (ap?ap.name:'');
-    const $sel = $('#treeSigner option:selected');
-    const edName = (TREE_META.approved && !TREE_META.auto_approve && !forApproval)
-                 ? (TREE_META.approved.editor_name||'')
-                 : (($('#treeSigner').val() && !$sel.prop('disabled')) ? $sel.text() : '');
+    // 修改（製表）簽章逐階解析：已核准的印快照當時記的人（各階可能不同），否則依任期／手選即時解析
+    const useSnap = !!(TREE_META.approved && !TREE_META.auto_approve && !forApproval);
+    const edNameOf = (p)=>{
+      if(!useSnap) return treeEditorFor(p).name;
+      const sp = (TREE_META.approved.pages||[]).find(x=>x.level===p.level);
+      return (sp && sp.editor_name) || TREE_META.approved.editor_name || '';   // 舊快照沒逐階欄位時退回單一欄位
+    };
     let body = '';
     pages.forEach((p, pi)=>{
       const boxes = pages.map(x=>`<span class="p-box">${x.level===p.level?'☑':'□'}${x.level}文件</span>`).join('');
@@ -1579,7 +1641,7 @@ $(function(){
             ? EGStamp.stamp(nm, dot, false).replace(/(href|src)="\//g, '$1="'+location.origin+'/')
             : '<span class="p-blank"></span>';
       body += `</tbody></table>
-        <div class="p-sign"><div class="s-cell">核准：${st(apName)}</div><div class="s-cell">修改：${st(edName)}</div></div>
+        <div class="p-sign"><div class="s-cell">核准：${st(apName)}</div><div class="s-cell">修改：${st(edNameOf(p))}</div></div>
       </div>`;
       if(pi < pages.length-1) body += '<div class="p-break"></div>';
     });
@@ -2598,7 +2660,64 @@ $(function(){
       if(r.status==='success'){ alert('部門代碼已儲存'); loadMeta(renderDeptCodes); } else alert(r.message);
     },'json');
   });
+  // ── 系統設定：修改（製表）簽章人員任期 ──
+  // 各階簽章日期常常是好幾年前，那時的 AS 負責人不一定是現任；依任期回推才不會簽章不實。
+  let TERM_CAND = [];
+  function termOpts(sel, kw){
+    kw = (kw||'').toLowerCase();
+    return '<option value="">請選人員</option>' + TERM_CAND.filter(c=>{
+      if(String(c.id)===String(sel)) return true;                 // 已選的人永遠保留，篩選不會把他洗掉
+      return !kw || (c.label||c.name).toLowerCase().indexOf(kw)>=0;
+    }).map(c=>`<option value="${c.id}" ${String(c.id)===String(sel)?'selected':''}>${esc(c.label||c.name)}</option>`).join('');
+  }
+  function termRowHtml(row){
+    row = row||{};
+    return `<tr class="tm-row">
+      <td><select class="form-control input-sm tm-user">${termOpts(row.user_id||'', $('#termKw').val())}</select></td>
+      <td><input type="date" class="form-control input-sm tm-start" value="${esc(row.start_date||'')}" title="空白＝最早"></td>
+      <td><input type="date" class="form-control input-sm tm-end" value="${esc(row.end_date||'')}" title="空白＝至今"></td>
+      <td><input type="text" class="form-control input-sm tm-note" value="${esc(row.note||'')}" maxlength="100" placeholder="如：交接"></td>
+      <td class="text-center" style="vertical-align:middle;"><a href="#" class="tm-del text-danger"><i class="fa fa-trash"></i></a></td>
+    </tr>`;
+  }
+  function renderTerms(terms){
+    const tb=$('#termList').empty();
+    (terms||[]).forEach(r=>tb.append(termRowHtml(r)));
+    if(!(terms||[]).length) tb.append(termRowHtml());
+  }
+  function loadTerms(){
+    $.getJSON(API+'?action=tree_editor_terms', r=>{
+      if(r.status!=='success') return;
+      TERM_CAND = r.candidates||[];
+      renderTerms(r.terms||[]);
+    });
+  }
+  $('#termKw').on('input', function(){                            // 打字篩選：保留各列已選的人
+    const kw=$(this).val();
+    $('#termList .tm-row').each(function(){
+      const $s=$(this).find('.tm-user'); $s.html(termOpts($s.val(), kw));
+    });
+  });
+  $('#termAddRow').on('click', ()=>$('#termList').append(termRowHtml()));
+  $('#termList').on('click','.tm-del', function(e){ e.preventDefault(); $(this).closest('tr').remove(); if(!$('#termList .tm-row').length) $('#termList').append(termRowHtml()); });
+  $('#termSave').on('click', function(){
+    const rows=[];
+    $('#termList .tm-row').each(function(){
+      const uid=$(this).find('.tm-user').val();
+      if(!uid) return;                                            // 空列忽略
+      rows.push({user_id:uid, start_date:$(this).find('.tm-start').val(), end_date:$(this).find('.tm-end').val(), note:$(this).find('.tm-note').val()});
+    });
+    $.post(API+'?action=save_tree_editor_terms', {terms:JSON.stringify(rows)}, r=>{
+      if(r.status!=='success'){ $('#termMsg').css('color','#DD5138').text(r.message||'儲存失敗'); return; }
+      $('#termMsg').css('color','#2e7d32').text('已儲存');
+      renderTerms(r.terms||[]);
+      if($('#treeModal').hasClass('in')) loadTreeSigners();       // 結構總覽開著就即時反映
+      setTimeout(()=>$('#termMsg').text(''), 3000);
+    },'json');
+  });
+
   $('#btnSettings').on('click', function(){
+    loadTerms();
     $.getJSON(API+'?action=get_settings', r=>{
       const d=r.data;
       $('#set_nas_dir').val(d.nas_dir);
