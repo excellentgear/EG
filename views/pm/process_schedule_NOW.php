@@ -22,6 +22,15 @@ if (!isset($_SESSION['user_id']) && !isset($_SESSION['id'])) {
     }
 }
 
+// 機台顯示名稱：一律用「現場編號(field_no)」，未填才退回機台編號/機型，皆未填才用機台名稱
+// （與前端 machineOptionLabel() 同一套規則，避免同一台機台在儀表板與下拉選單顯示不同名稱）
+function eg_machine_disp_name($m) {
+    if (isset($m['field_no']) && trim((string)$m['field_no']) !== '') return trim($m['field_no']);
+    $parts = array_filter([$m['asset_no'] ?? '', $m['machine_model'] ?? ''], function($v) { return trim((string)$v) !== ''; });
+    if (!empty($parts)) return implode(' ', array_map('trim', $parts));
+    return (string)($m['machine'] ?? '');
+}
+
 // =================================================================================
 // 後端邏輯：儲存製程設定 (AJAX from Modal)
 // =================================================================================
@@ -328,12 +337,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     'gear_info' => $task['gear_info']
                 ];
             }
-            $name_parts = explode(' ', $m['machine']);
-            $short_name = (count($name_parts) > 2) ? $name_parts[0] . ' ' . $name_parts[1] : $m['machine'];
+            $disp_name = eg_machine_disp_name($m); // 現場編號優先
             $result[$pos][$type][] = [
-                'id' => $mid, 
-                'name' => $short_name, 
-                'full_name' => $m['machine'],
+                'id' => $mid,
+                'name' => $disp_name,
+                'full_name' => $disp_name,
                 'status' => $status, 
                 'info' => $info, 
                 'detail' => $detail, 
@@ -2608,15 +2616,6 @@ $sql_all_machines = "
     ORDER BY ml.machine_id ASC
 ";
 $all_machines_raw = $pdo->query($sql_all_machines)->fetchAll(PDO::FETCH_ASSOC);
-
-// 機台顯示名稱：一律用「現場編號(field_no)」，未填才退回機台編號/機型，皆未填才用機台名稱
-// （與前端 machineOptionLabel() 同一套規則，避免同一台機台在儀表板與下拉選單顯示不同名稱）
-function eg_machine_disp_name($m) {
-    if (isset($m['field_no']) && trim((string)$m['field_no']) !== '') return trim($m['field_no']);
-    $parts = array_filter([$m['asset_no'] ?? '', $m['machine_model'] ?? ''], function($v) { return trim((string)$v) !== ''; });
-    if (!empty($parts)) return implode(' ', array_map('trim', $parts));
-    return (string)($m['machine'] ?? '');
-}
 
 foreach ($all_machines_raw as $machine) {
     $type_id = $machine['machine_type_id'];
