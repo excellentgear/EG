@@ -331,12 +331,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                         <thead><tr>
                             <th rowspan="2">月份</th>
                             <th rowspan="2" title="數量(PCS)；同月取「被檢驗量」與「回廠量」較大者，品質與交期共用同一分母">進貨數<br><span style="font-weight:normal;font-size:11px;">(PCS)</span></th>
-                            <th colspan="4">品質（進料檢驗）</th>
-                            <th colspan="3">交期</th>
+                            <th colspan="3">品質（進料檢驗）</th>
+                            <th colspan="2">交期</th>
                             <th rowspan="2">判定</th>
                         </tr><tr>
-                            <th>不良數</th><th>不良率</th><th>特採率</th><th>品質分<span style="font-weight:normal;">(60)</span></th>
-                            <th>遲交數</th><th>遲交率</th><th>交期分<span style="font-weight:normal;">(40)</span></th>
+                            <th>不良數</th><th>特採數</th><th>品質分<span style="font-weight:normal;">(60)</span></th>
+                            <th>遲交數</th><th>交期分<span style="font-weight:normal;">(40)</span></th>
                         </tr></thead>
                         <tbody id="evBody"></tbody>
                     </table>
@@ -369,7 +369,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                         <th style="width:32px;"><input type="checkbox" id="rsAllCk"></th>
                         <th style="text-align:left;">項目</th><th>廠商</th>
                         <th>建議等級</th><th>採用等級</th>
-                        <th title="未達標（等級 A/B/C 以外或無等級）預設「老闆指定」，可改選「客戶指定」">備註</th>
+                        <th title="未達標（等級設定中最低的一階，目前為 C；或無等級）預設「老闆指定」，可改選「客戶指定」">備註</th>
                         <th>類型</th><th>操作</th>
                     </tr></thead>
                     <tbody id="rosterBody"><tr><td colspan="8" style="padding:18px;color:#8a6d45;">載入中…</td></tr></tbody>
@@ -829,7 +829,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <ul>
             <li><b>資料來源</b>：自 ERP（bom_ing）自動計算，<b>單位一律數量（PCS）</b>，不是批數——品質依<b>檢驗日</b>歸月（不良＝ng 驗退、特採＝AOD，顆數優先取該批 QC 記錄的異常數量，抓不到才算整批發包數）；交期依<b>回廠日</b>歸月（遲交＝回廠日晚於「發包日＋約定工作天」，遲交量＝該批數量）。</li>
             <li><b>進貨數（共用分母）</b>：同一個月<b>取「被檢驗量」與「回廠量」較大者</b>，品質與交期共用同一個進貨數。原因：同一批的檢驗日與回廠日常常跨月（例如 3 月回廠、4 月才驗），兩邊各自當分母會出現「一邊 0 一邊有量」對不起來的情形。滑鼠移到進貨數上會顯示原始的被檢驗量／回廠量。</li>
-            <li><b>有進貨、沒有不良</b> → 不良率顯示 <b>0%</b>（不是「—」）；只有整個月完全沒有進貨（分母 0）才顯示「—」。</li>
+            <li><b>畫面欄位是「數量」不是「率」</b>：不良數／特採數／遲交數直接顯示 PCS；<b>滑鼠移到數字上會顯示它佔進貨數的百分比</b>，超過門檻的數字一樣標紅。匯出 CSV 兩者都有。</li>
             <li><b>分數／等級</b>：以半年<b>加總</b>後計算——<b>品質分＝60×(1−(不良數＋特採數)÷進貨數)</b>、<b>交期分＝40×(1−遲交數÷進貨數)</b>，皆<b>無條件捨去</b>（比照紙本 Excel）；半年總分＝品質分＋交期分（0～100），依等級門檻判 A/B/C/D。<b>總判定＝上半年與下半年總分的平均</b>（只有一個半年有資料就用該半年）。該分項整段期間沒有資料（分母 0）視同無缺失給滿分。</li>
             <li><b>合格／不合格</b>（紅字）與分數是<b>兩套判定</b>：合格與否看門檻設定（不良率／遲交率／特採率上限），等級 A/B/C/D 看分數。</li>
             <li><b>全部納管廠商</b>：一次列出所有納管廠商，2 欄卡片，<b>每頁 10 家</b>、下方可翻頁（只畫當頁避免一次載入過慢）；可「只看不合格」；橫式列印一頁 6 間（列印為全部廠商，不受翻頁影響）。</li>
@@ -840,7 +840,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <ul>
             <li><b>組成</b>：清冊＝<b>納管廠商</b>（固定要稽核）∪ <b>手動列入</b>（不需納管但認定合格者，靠定期評核績效監控）。清單<b>每頁 10 家</b>、下方可翻頁；匯出 CSV／列印清冊皆為全部廠商，不受翻頁影響。</li>
             <li><b>評核等級</b>：建議等級來自定期評核全年成績；可勾選<b>批次設定採用等級</b>覆寫建議，或清除改回建議。</li>
-            <li><b>備註（老闆指定／客戶指定）</b>：等級<b>未達標</b>（不在等級門檻最高的前三級內，預設設定即 A/B/C 以外，含當年度無資料而<b>無等級</b>者）一律<b>預設顯示「老闆指定」</b>，說明它為何仍留在合格清冊；可自行改選「客戶指定」或清成（無）。達標者預設空白。改選即存，CSV 與列印清冊都會帶出這欄（原本的「廠商備註」欄已取消）。</li>
+            <li><b>備註（老闆指定／客戶指定）</b>：等級<b>未達標</b>（＝等級設定中<b>最低的那一階</b>，目前設 A/B/C 三級時就是 <b>C</b>；若改成 A/B/C/D 四級就是 D；含當年度無資料而<b>無等級</b>者）一律<b>預設顯示「老闆指定」</b>，說明它為何仍留在合格清冊；可自行改選「客戶指定」或清成（無）。達標者預設空白。改選即存，CSV 與列印清冊都會帶出這欄（原本的「廠商備註」欄已取消）。</li>
             <li><b>檢查兩年未交易外包廠</b>：列出納管/在冊、有發包史但最後發包超過兩年的外包廠（顯示最後發包日）；<b>需你勾選確認</b>後才移除（取消納管＋移出清冊＋刪未稽核對象），不會自動靜默移除。</li>
         </ul>
 
@@ -1894,6 +1894,15 @@ $('#evVendor,#evYear').on('change', loadEval);
 function rate(v){ return v==null?'—':v+'%'; }
 /* 數量顯示：0 一律顯示 0（不顯示破折號，使用者要求「有進貨沒不良就是 0%」的同一原則） */
 function qty(v){ return (v==null)?'—':Number(v).toLocaleString(); }
+/* 門檻超標判定（全域版，畫面各處共用；s=該次查詢回傳的門檻設定） */
+function ovNg(v,s){ return v!=null&&s&&v>s.ng_max; }
+function ovLt(v,s){ return v!=null&&s&&v>s.late_max; }
+function ovSp(v,s){ return s&&s.special_max<100&&v!=null&&v>s.special_max; }
+/* 數量欄：顯示數量、滑鼠移上去看該欄佔進貨數的比率；超過門檻仍標紅（比率不再單獨佔一欄） */
+function qtyCell(v, r, over, overCls){
+    return '<td'+(over?' class="'+(overCls||'af-judge-fail')+'"':'')
+        +(r==null?'':' title="佔進貨數 '+r+'%"')+'>'+qty(v)+'</td>';
+}
 /* 進貨數欄提示：說明這個月是取檢驗量還是回廠量（兩者取大） */
 function inTip(d){
     if(d.in_qty==null) return '';
@@ -1916,17 +1925,15 @@ function loadEval(){
                 +'<span class="s-lab"> 分</span> <b style="font-size:16px;color:'+(hf.judge==='fail'?'#DD5138':'#8A5A2B')+';">'+(hf.grade||'—')+'</b></div>'; };
         $('#evScoreTop').html(sc(res.halves[1],'上半年')+sc(res.halves[2],'下半年')+sc(res.full,'全年(總判定)')
             +'<div class="s-lab" style="margin-left:auto;">品質分＝'+(s.q_max||60)+'×(1−(不良＋特採)÷進貨數)、交期分＝'+(s.d_max||40)+'×(1−遲交÷進貨數)；總判定＝上下半年平均分</div>');
-        var overNg=function(v){return v!=null&&v>s.ng_max;}, overLt=function(v){return v!=null&&v>s.late_max;}, overSp=function(v){return s.special_max<100&&v!=null&&v>s.special_max;};
         var h='';
         for(var m=1;m<=12;m++){
             var d=res.months[m];
             h+='<tr><td>'+m+'月</td>';
-            h+='<td'+inTip(d)+'>'+qty(d.in_qty)+'</td><td>'+qty(d.ng)+'</td>';
-            h+='<td'+(overNg(d.ng_rate)?' class="af-judge-fail"':'')+'>'+rate(d.ng_rate)+'</td>';
-            h+='<td'+(overSp(d.special_rate)?' class="af-judge-fail"':'')+'>'+rate(d.special_rate)+'</td>';
+            h+='<td'+inTip(d)+'>'+qty(d.in_qty)+'</td>';
+            h+=qtyCell(d.ng, d.ng_rate, ovNg(d.ng_rate,s));
+            h+=qtyCell(d.special, d.special_rate, ovSp(d.special_rate,s));
             h+='<td class="ev-sc">—</td>';                       // 分數只在半年/全年列計算
-            h+='<td>'+qty(d.late)+'</td>';
-            h+='<td'+(overLt(d.late_rate)?' class="af-judge-fail"':'')+'>'+rate(d.late_rate)+'</td>';
+            h+=qtyCell(d.late, d.late_rate, ovLt(d.late_rate,s));
             h+='<td class="ev-sc">—</td><td>—</td></tr>';
             if(m===6) h+=halfRow(res.halves[1],'上半年',s);
             if(m===12) h+=halfRow(res.halves[2],'下半年',s)+halfRow(res.full,'全年（總判定）',s,true);
@@ -1942,8 +1949,9 @@ function halfRow(hf,label,s,isFull){
     var num=function(v){ return v==null?'—':v; };
     return '<tr style="background:'+(isFull?'#F6E3C5':'#FDF3E0')+';font-weight:bold;"><td>'+label+'</td>'
         +'<td'+inTip(hf)+'>'+qty(hf.in_qty)+'</td>'
-        +'<td>'+qty(hf.ng)+'</td><td>'+rate(hf.ng_rate)+'</td><td>'+rate(hf.special_rate)+'</td><td class="ev-sc">'+num(hf.q_score)+'</td>'
-        +'<td>'+qty(hf.late)+'</td><td>'+rate(hf.late_rate)+'</td><td class="ev-sc">'+num(hf.d_score)+'</td>'
+        +qtyCell(hf.ng, hf.ng_rate, ovNg(hf.ng_rate,s))+qtyCell(hf.special, hf.special_rate, ovSp(hf.special_rate,s))
+        +'<td class="ev-sc">'+num(hf.q_score)+'</td>'
+        +qtyCell(hf.late, hf.late_rate, ovLt(hf.late_rate,s))+'<td class="ev-sc">'+num(hf.d_score)+'</td>'
         +'<td>'+grade+'　'+judge+'</td></tr>';
 }
 
@@ -1986,7 +1994,6 @@ var evPage=1;
 function renderEvalCards(){
     if(!EVAL_ALL) return;
     var s=EVAL_ALL.settings, failOnly=$('#evFailOnly').is(':checked');
-    var overNg=function(v){return v!=null&&v>s.ng_max;}, overLt=function(v){return v!=null&&v>s.late_max;}, overSp=function(v){return s.special_max<100&&v!=null&&v>s.special_max;};
     var list=EVAL_ALL.vendors.filter(function(v){ return !failOnly || v.fail; });
     evPage=vaBuildPager('#evPager', list.length, evPage, function(p){ evPage=p; renderEvalCards(); var el=document.getElementById('evCards'); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); });
     var pageList=list.slice((evPage-1)*VA_PER, evPage*VA_PER);
@@ -1996,15 +2003,14 @@ function renderEvalCards(){
         html+='<div class="ev-card"><div class="h"><span>'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）</span><span>'+g+'</span></div>';
         html+='<table class="ev-mini"><thead>'
             +'<tr><th rowspan="2">月</th><th rowspan="2" title="數量(PCS)：同月取被檢驗量與回廠量較大者">進貨數</th>'
-            +'<th colspan="3">品質（進料檢驗）</th><th colspan="3">交期</th><th rowspan="2">判定</th></tr>'
-            +'<tr><th>不良率</th><th>特採率</th><th>品質分</th><th>遲交數</th><th>遲交率</th><th>交期分</th></tr></thead><tbody>';
+            +'<th colspan="3">品質（進料檢驗）</th><th colspan="2">交期</th><th rowspan="2">判定</th></tr>'
+            +'<tr><th>不良數</th><th>特採數</th><th>品質分</th><th>遲交數</th><th>交期分</th></tr></thead><tbody>';
         for(var m=1;m<=12;m++){ var d=v.months[m];
             html+='<tr><td>'+m+'</td><td'+inTip(d)+'>'+qty(d.in_qty)+'</td>'
-                +'<td'+(overNg(d.ng_rate)?' class="over"':'')+'>'+rate(d.ng_rate)+'</td>'
-                +'<td'+(overSp(d.special_rate)?' class="over"':'')+'>'+rate(d.special_rate)+'</td>'
+                +qtyCell(d.ng, d.ng_rate, ovNg(d.ng_rate,s), 'over')
+                +qtyCell(d.special, d.special_rate, ovSp(d.special_rate,s), 'over')
                 +'<td class="ev-sc">—</td>'
-                +'<td>'+qty(d.late)+'</td>'
-                +'<td'+(overLt(d.late_rate)?' class="over"':'')+'>'+rate(d.late_rate)+'</td>'
+                +qtyCell(d.late, d.late_rate, ovLt(d.late_rate,s), 'over')
                 +'<td class="ev-sc">—</td><td>—</td></tr>';
             if(m===6) html+=miniHalf(v.halves[1],'上半年');
             if(m===12) html+=miniHalf(v.halves[2],'下半年')+miniHalf(v.full,'全年',true);
@@ -2018,8 +2024,8 @@ function miniHalf(hf,label,isFull){
     var num=function(x){ return x==null?'—':x; };
     var g=(hf.score==null)?'—':('<b style="color:'+(hf.judge==='fail'?'#DD5138':'#8A5A2B')+';">'+esc(hf.grade||'—')+'</b> '+hf.score+'分');
     return '<tr class="'+(isFull?'full':'half')+'"><td>'+label+'</td><td'+inTip(hf)+'>'+qty(hf.in_qty)+'</td>'
-        +'<td>'+rate(hf.ng_rate)+'</td><td>'+rate(hf.special_rate)+'</td><td class="ev-sc">'+num(hf.q_score)+'</td>'
-        +'<td>'+qty(hf.late)+'</td><td>'+rate(hf.late_rate)+'</td><td class="ev-sc">'+num(hf.d_score)+'</td><td>'+g+'</td></tr>';
+        +qtyCell(hf.ng, hf.ng_rate, false)+qtyCell(hf.special, hf.special_rate, false)+'<td class="ev-sc">'+num(hf.q_score)+'</td>'
+        +qtyCell(hf.late, hf.late_rate, false)+'<td class="ev-sc">'+num(hf.d_score)+'</td><td>'+g+'</td></tr>';
 }
 /* 全部評核 橫式列印：一頁6間(3欄×2列)，頁首公司名+文件名，右上頁碼，右下AS編號 */
 function evCardPrintHTML(v){
@@ -2030,17 +2036,17 @@ function evCardPrintHTML(v){
         if(!hf) return '';
         var jj=hf.judge?(hf.judge==='pass'?'合格':'不合格'):'—';
         var g=(hf.score==null)?'—':((hf.grade||'—')+' '+hf.score+'分');
-        return '<tr class="'+cls+'"><td>'+label+'</td><td>'+qty(hf.in_qty)+'</td><td>'+qty(hf.ng)+'</td><td>'+rate(hf.ng_rate)+'</td><td>'+rate(hf.special_rate)+'</td><td>'+num(hf.q_score)+'</td>'
-            +'<td>'+qty(hf.late)+'</td><td>'+rate(hf.late_rate)+'</td><td>'+num(hf.d_score)+'</td><td>'+g+' '+jj+'</td></tr>';
+        return '<tr class="'+cls+'"><td>'+label+'</td><td>'+qty(hf.in_qty)+'</td><td>'+qty(hf.ng)+'</td><td>'+qty(hf.special)+'</td><td>'+num(hf.q_score)+'</td>'
+            +'<td>'+qty(hf.late)+'</td><td>'+num(hf.d_score)+'</td><td>'+g+' '+jj+'</td></tr>';
     };
     var h='<div class="pc"><div class="pc-h">'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）'+(v.fail?'<span class="jf">不合格</span>':'<span class="jp">合格</span>')+'</div>'
         +'<table class="pm"><thead>'
-        +'<tr><th rowspan="2">月</th><th rowspan="2">進貨數</th><th colspan="4">品質</th><th colspan="3">交期</th><th rowspan="2">判定</th></tr>'
-        +'<tr><th>不良數</th><th>不良率</th><th>特採率</th><th>品質分</th><th>遲交數</th><th>遲交率</th><th>交期分</th></tr></thead><tbody>';
+        +'<tr><th rowspan="2">月</th><th rowspan="2">進貨數</th><th colspan="3">品質</th><th colspan="2">交期</th><th rowspan="2">判定</th></tr>'
+        +'<tr><th>不良數</th><th>特採數</th><th>品質分</th><th>遲交數</th><th>交期分</th></tr></thead><tbody>';
     for(var m=1;m<=12;m++){ var d=v.months[m];
         h+='<tr><td>'+m+'</td><td>'+qty(d.in_qty)+'</td>'
-            +'<td>'+qty(d.ng)+'</td><td'+oNg(d.ng_rate)+'>'+rate(d.ng_rate)+'</td><td'+oSp(d.special_rate)+'>'+rate(d.special_rate)+'</td><td>—</td>'
-            +'<td>'+qty(d.late)+'</td><td'+oLt(d.late_rate)+'>'+rate(d.late_rate)+'</td><td>—</td><td>—</td></tr>';
+            +'<td'+oNg(d.ng_rate)+'>'+qty(d.ng)+'</td><td'+oSp(d.special_rate)+'>'+qty(d.special)+'</td><td>—</td>'
+            +'<td'+oLt(d.late_rate)+'>'+qty(d.late)+'</td><td>—</td></tr>';
         if(m===6)  h+=sumRow(v.halves[1],'上半','ph');
         if(m===12) h+=sumRow(v.halves[2],'下半','ph')+sumRow(v.full,'總判定','pf');
     }

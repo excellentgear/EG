@@ -809,16 +809,18 @@ function vendor_eval_save_grades(PDO $db, array $grades, string $scope = 'outsou
     $up->execute(['vendor_eval_grades_'.$scope, json_encode($clean, JSON_UNESCAPED_UNICODE)]);
 }
 /* ---- 合格供應商清冊：備註（老闆指定／客戶指定） ----
- * 使用者2026-08-17要求：未達標的廠商（等級不在最高的前三級內，預設設定即 A/B/C 以外，含無等級者）
- * 一律預設顯示「老闆指定」，可改選「客戶指定」；達標者預設不顯示。等級標籤可由管理員自訂，
- * 因此這裡用「等級清單由高至低的前三名」判定，不寫死 A/B/C（鐵律4）。 */
+ * 使用者2026-08-17要求：未達標的廠商一律預設顯示「老闆指定」（說明它為何仍留在合格清冊），
+ * 可改選「客戶指定」；達標者預設空白。
+ * 「未達標」＝**等級清單中最低的那一階**或無等級：等級設 A/B/C/D 時是 D，改成只有 A/B/C 時就是 C
+ * （使用者2026-08-17先後給的兩個例子都符合這條）。等級標籤可由管理員自訂，故一律由設定推導，
+ * 不在這裡寫死 A/B/C（鐵律4）。 */
 function vendor_roster_note_options(): array { return ['boss'=>'老闆指定', 'customer'=>'客戶指定']; }
 function vendor_roster_is_substandard(?string $grade, array $grades): bool {
     if ($grade === null || $grade === '') return true;          // 無等級(當年度無資料)也算未達標
-    foreach (array_slice($grades, 0, 3) as $g) {                 // $grades 已依 min 由高至低排序
-        if ((string)($g['label'] ?? '') === $grade) return false;
-    }
-    return true;
+    $labels = array_map(function($g){ return (string)($g['label'] ?? ''); }, $grades);
+    if (!in_array($grade, $labels, true)) return true;          // 手動指定的是已不存在的舊標籤→視為未達標
+    $last = end($grades);                                        // $grades 已依 min 由高至低排序，最後一筆＝最低階
+    return $last && (string)($last['label'] ?? '') === $grade;
 }
 /** 實際要顯示的備註值：有存過就用存的，沒存過則未達標者預設 boss、達標者空白 */
 function vendor_roster_note_effective(?string $stored, ?string $grade, array $grades): string {
