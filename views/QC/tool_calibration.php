@@ -344,12 +344,20 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>規格</label><input type="text" id="setSpecDesc" maxlength="255"></div>
             <div><label>購買日期</label><input type="date" id="setPurchaseDate"></div>
             <div><label>備註</label><input type="text" id="setEquipNote" maxlength="200"></div>
+            <div><label>機台名稱<span style="color:#8a6d45;font-weight:400;">（機型/量具白名單顯示用）</span></label><input type="text" id="setMachine" maxlength="100"></div>
+            <div><label>機型</label><input type="text" id="setMachineModel" maxlength="100"></div>
+            <div><label>位置（廠別）</label><input type="text" id="setPosition" maxlength="50"></div>
+            <div>
+                <label style="display:inline-block;"><input type="checkbox" id="setDisabled" onchange="$('#setDisabledDateBox').toggle(this.checked)"> 停用</label>
+                <div id="setDisabledDateBox" style="display:none;margin-top:4px;"><input type="date" id="setDisabledDate"></div>
+            </div>
         </div>
         <div style="font-size:12px;color:#8a6d45;margin-top:8px;">
             到期以「月」為單位——同一月份內完成校驗即算準時。設定基準到期月後，之後每次登錄校驗會依週期自動前滾，不需再手動維護。<br>
             類別下拉只列出「需校驗且可設定量具編號」的類別；類別的新增／更名／刪除請至
             <a href="inspection_combined_prototype.php" target="_blank" style="color:#b5762a;">線上檢驗－量具設定</a>，
-            其校驗屬性則於本頁工具列「類別設定」勾選。
+            其校驗屬性則於本頁工具列「類別設定」勾選。<br>
+            機台名稱／機型／位置提供「機型/量具白名單」（人資職務表單）顯示用，與生產機台一覽表同一套欄位認定慣例。
         </div>
     </div>
     <div class="m-foot">
@@ -1212,23 +1220,36 @@ function openSet(tid){
         $('#setManaged').val(String(setTool.calib_managed));
         $('#setManufacturer').val(setTool.manufacturer||''); $('#setSpecDesc').val(setTool.spec_desc||'');
         $('#setPurchaseDate').val(setTool.purchase_date||''); $('#setEquipNote').val(setTool.note||'');
+        $('#setMachine').val(setTool.machine||''); $('#setMachineModel').val(setTool.machine_model||'');
+        $('#setPosition').val(setTool.position||'');
+        var isDisabled = !!(setTool.state && Number(setTool.state) !== 0);
+        $('#setDisabled').prop('checked', isDisabled);
+        $('#setDisabledDateBox').toggle(isDisabled);
+        $('#setDisabledDate').val(setTool.disabled_date||'');
     } else {
         $('#setTitle').text('新增儀器');
         $('#setNoBox,#setCatBox').show();
         $('#setNo').val(''); $('#setCat').prop('selectedIndex',0);
         $('#setCycle').val(12); $('#setMethod').val(''); $('#setBase').val(''); $('#setManaged').val('1');
         $('#setManufacturer,#setSpecDesc,#setPurchaseDate,#setEquipNote').val('');
+        $('#setMachine,#setMachineModel,#setPosition,#setDisabledDate').val('');
+        $('#setDisabled').prop('checked', false); $('#setDisabledDateBox').hide();
     }
     openMask('setMask');
 }
 $('#btnAdd').on('click', function(){ openSet(null); });
 function submitSet(){
     if (!$.trim($('#setNo').val())){ alert('請填量具編號'); return; }
+    var disabled = $('#setDisabled').is(':checked');
+    if (disabled && !$('#setDisabledDate').val()){ alert('勾選停用請輸入停用日期'); return; }
     var data = {cycle:$('#setCycle').val(), managed:$('#setManaged').val(),
                 method:$('#setMethod').val(), baseline_due:$('#setBase').val(),
                 tool_no:$('#setNo').val(), category_id:$('#setCat').val(),
                 manufacturer:$('#setManufacturer').val(), spec_desc:$('#setSpecDesc').val(),
-                purchase_date:$('#setPurchaseDate').val(), equip_note:$('#setEquipNote').val()};
+                purchase_date:$('#setPurchaseDate').val(), equip_note:$('#setEquipNote').val(),
+                machine:$('#setMachine').val(), machine_model:$('#setMachineModel').val(),
+                position:$('#setPosition').val(), state:disabled?1:0,
+                disabled_date:disabled?$('#setDisabledDate').val():''};
     if (setTool){ data.action='save_tool'; data.tool_id=setTool.Tool_id; }
     else { data.action='create_tool'; }
     $.post(API, data, function(res){

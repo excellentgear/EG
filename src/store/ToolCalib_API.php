@@ -349,6 +349,8 @@ case 'list': {
     } catch (Throwable $e) {}
     $st = $db->query("SELECT t.Tool_id, t.Tool_No, t.QC_Tool_List_id, t.calibration_due,
                              t.calib_cycle_months, t.calib_managed, t.calib_method, t.purchase_spec_id,
+                             t.manufacturer, t.spec_desc, t.purchase_date, t.note,
+                             t.machine, t.machine_model, t.position, t.state, t.disabled_date,
                              l.QC_Tool AS category_name,
                              COALESCE(l.calib_required,1) AS cat_required,
                              COALESCE(l.calib_tab,0)      AS cat_tab"
@@ -481,11 +483,16 @@ case 'create_tool': {
     $specDesc = trim((string)($_POST['spec_desc'] ?? '')) ?: null;
     $purchaseDate = trim((string)($_POST['purchase_date'] ?? '')) ?: null;
     $equipNote = trim((string)($_POST['equip_note'] ?? '')) ?: null;
+    $machine = trim((string)($_POST['machine'] ?? '')) ?: null;
+    $machineModel = trim((string)($_POST['machine_model'] ?? '')) ?: null;
+    $position = trim((string)($_POST['position'] ?? '')) ?: null;
+    $state = (int)($_POST['state'] ?? 0) === 1 ? 1 : 0;
+    $disabledDate = $state ? (trim((string)($_POST['disabled_date'] ?? '')) ?: null) : null;
     try {
         $db->beginTransaction();
-        $db->prepare("INSERT INTO qc_tool (Tool_No, QC_Tool_List_id, Created_at, calib_cycle_months, calib_managed, calib_method, calibration_due, manufacturer, spec_desc, purchase_date, note)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-           ->execute([$no, $cat, date('Y-m-d H:i:s'), $cycle, $managed, $method, $baseDue, $manufacturer, $specDesc, $purchaseDate, $equipNote]);
+        $db->prepare("INSERT INTO qc_tool (Tool_No, QC_Tool_List_id, Created_at, calib_cycle_months, calib_managed, calib_method, calibration_due, manufacturer, spec_desc, purchase_date, note, machine, machine_model, position, state, disabled_date)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$no, $cat, date('Y-m-d H:i:s'), $cycle, $managed, $method, $baseDue, $manufacturer, $specDesc, $purchaseDate, $equipNote, $machine, $machineModel, $position, $state, $disabledDate]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('新增失敗：'.$e->getMessage(), 500); }
     jout(['tool_id'=>(int)$db->lastInsertId()]);
@@ -519,11 +526,16 @@ case 'save_tool': {
     $specDesc = array_key_exists('spec_desc', $_POST) ? (trim((string)$_POST['spec_desc']) ?: null) : $t['spec_desc'];
     $purchaseDate = array_key_exists('purchase_date', $_POST) ? (trim((string)$_POST['purchase_date']) ?: null) : $t['purchase_date'];
     $equipNote = array_key_exists('equip_note', $_POST) ? (trim((string)$_POST['equip_note']) ?: null) : $t['note'];
+    $machine = array_key_exists('machine', $_POST) ? (trim((string)$_POST['machine']) ?: null) : $t['machine'];
+    $machineModel = array_key_exists('machine_model', $_POST) ? (trim((string)$_POST['machine_model']) ?: null) : $t['machine_model'];
+    $position = array_key_exists('position', $_POST) ? (trim((string)$_POST['position']) ?: null) : $t['position'];
+    $state = array_key_exists('state', $_POST) ? ((int)$_POST['state'] === 1 ? 1 : 0) : (int)$t['state'];
+    $disabledDate = $state ? (array_key_exists('disabled_date', $_POST) ? (trim((string)$_POST['disabled_date']) ?: null) : $t['disabled_date']) : null;
     try {
         $db->beginTransaction();
         $db->prepare("UPDATE qc_tool SET Tool_No=?, QC_Tool_List_id=?, calib_cycle_months=?, calib_managed=?, calib_method=?, calibration_due=?,
-                        manufacturer=?, spec_desc=?, purchase_date=?, note=? WHERE Tool_id=?")
-           ->execute([$newNo, $newCat, $cycle, $managed, $method, $baseDue, $manufacturer, $specDesc, $purchaseDate, $equipNote, $tid]);
+                        manufacturer=?, spec_desc=?, purchase_date=?, note=?, machine=?, machine_model=?, position=?, state=?, disabled_date=? WHERE Tool_id=?")
+           ->execute([$newNo, $newCat, $cycle, $managed, $method, $baseDue, $manufacturer, $specDesc, $purchaseDate, $equipNote, $machine, $machineModel, $position, $state, $disabledDate, $tid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout([]);

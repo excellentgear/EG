@@ -56,6 +56,12 @@ function tool_calib_ensure_schema(PDO $db): void {
         "ALTER TABLE qc_tool ADD COLUMN spec_desc VARCHAR(255) NULL COMMENT '規格(檢驗設備一覽表顯示用，純文字，與purchase_spec關聯規格用途不同不可混用)'",
         "ALTER TABLE qc_tool ADD COLUMN purchase_date DATE NULL COMMENT '購買日期'",
         "ALTER TABLE qc_tool ADD COLUMN note VARCHAR(200) NULL COMMENT '備註(檢驗設備一覽表用)'",
+        // 機型/量具白名單顯示比照機台一覽表(2026-08-17新增)：欄位命名刻意比照 machine_list 同名欄位
+        "ALTER TABLE qc_tool ADD COLUMN machine VARCHAR(100) NULL COMMENT '機台名稱(機型/量具白名單顯示用，比照machine_list.machine)'",
+        "ALTER TABLE qc_tool ADD COLUMN machine_model VARCHAR(100) NULL COMMENT '機型(比照machine_list.machine_model)'",
+        "ALTER TABLE qc_tool ADD COLUMN position VARCHAR(50) NULL COMMENT '位置(廠別)(比照machine_list.position)'",
+        "ALTER TABLE qc_tool ADD COLUMN state TINYINT NULL COMMENT '停用狀態，0/NULL=正常，比照machine_list.state語意'",
+        "ALTER TABLE qc_tool ADD COLUMN disabled_date DATE NULL COMMENT '停用日期(比照machine_list.disabled_date)'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }

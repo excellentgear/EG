@@ -571,7 +571,8 @@ function openCreateModal(ft){
         $.getJSON(API, {action:'whitelist_list'}, function(res){
             if (!res.ok) { $('#createMachineListBody').html('<span style="color:#8a6d45;">（僅管理員可預覽白名單，手動指定請洽管理員）</span>'); return; }
             $('#createMachineListBody').html((res.whitelist||[]).map(function(w){
-                var label = (w.source_type === 'machine' && w.machine_name && w.machine_name !== w.machine_model) ? ((w.machine_model||w.display_name)+' '+w.machine_name) : w.display_name;
+                var model = w.machine_model || w.whitelist_machine_model || (w.source_type==='machine' ? w.display_name : '') || '';
+                var label = w.machine_name ? (w.machine_name !== model ? (model ? (model+' '+w.machine_name) : w.machine_name) : model) : w.display_name;
                 return '<label><input type="checkbox" class="mach-ck" value="'+w.id+'"> '+esc(label)+'</label>';
             }).join('') || '<span style="color:#8a6d45;">尚未建立白名單</span>');
         });

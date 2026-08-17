@@ -505,8 +505,11 @@ function hrf_whitelist_sources(PDO $db): array {
     } catch (Throwable $e) {}
     $tools = [];
     try {
-        $tools = $db->query("SELECT t.Tool_id AS source_id, t.Tool_No AS display_name, l.QC_Tool AS group_name
+        // 比照機台：機台名稱/機型顯示用；量具編號(Tool_No)＝機台編號等同角色，一律逐支勾選不去重（量具個別校驗，非同機型共用一次考核）。
+        $tools = $db->query("SELECT t.Tool_id AS source_id, t.Tool_No AS display_name, t.Tool_No AS asset_no,
+                             t.machine AS machine_name, t.machine_model, l.QC_Tool AS group_name
                              FROM qc_tool t LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id
+                             WHERE (t.state IS NULL OR t.state=0)
                              ORDER BY l.sort_order, t.Tool_No")->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) {}
     $existing = [];
@@ -519,13 +522,19 @@ function hrf_whitelist_sources(PDO $db): array {
     return ['machines' => $machines, 'tools' => $tools, 'unmodeled_count' => $unmodeledCount];
 }
 
-/** machine_name 即時依 machine_model 對照 machine_list 取代表機台名稱（僅 source_type=machine 會對到），供畫面顯示「機型 機台名稱」用。 */
+/**
+ * machine_name/machine_model 即時對照來源主檔取得（machine 依 machine_model 對 machine_list、tool 直接對
+ * qc_tool 該支量具本身），供畫面統一顯示「機型 機台名稱」用，兩種來源顯示格式比照辦理。
+ */
 function hrf_whitelist_list(PDO $db): array {
     hrf_ensure_schema($db);
-    return $db->query("SELECT w.*, mm.machine_name FROM hr_equipment_whitelist w
+    return $db->query("SELECT w.*, COALESCE(mm.machine_name, qt.machine) AS machine_name,
+                        COALESCE(w.machine_model, qt.machine_model) AS whitelist_machine_model
+                        FROM hr_equipment_whitelist w
                         LEFT JOIN (SELECT machine_model, MIN(machine) AS machine_name FROM machine_list
                                    WHERE machine_model IS NOT NULL AND machine_model<>'' GROUP BY machine_model) mm
-                               ON mm.machine_model = w.machine_model
+                               ON mm.machine_model = w.machine_model AND w.source_type='machine'
+                        LEFT JOIN qc_tool qt ON qt.Tool_id = w.source_id AND w.source_type='tool'
                         WHERE w.is_active=1 ORDER BY w.sort_order,w.id")->fetchAll(PDO::FETCH_ASSOC);
 }
 

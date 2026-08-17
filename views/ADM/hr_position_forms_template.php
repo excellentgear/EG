@@ -612,10 +612,10 @@ function loadWhitelist(){
 }
 /** 機型項目統一顯示「機型 機台名稱」（machine_name 即時對照 machine_list 取得，沒有名稱或跟機型重複就只顯示機型）。 */
 function hfMachineLabel(r, type){
-    if (type !== 'machine') return r.display_name;
-    var model = r.machine_model || r.display_name || '';
+    var model = r.machine_model || r.whitelist_machine_model || (type==='machine' ? r.display_name : '') || '';
     var name = r.machine_name || '';
-    return (name && name !== model) ? (model + ' ' + name) : model;
+    if (!name) return type === 'machine' ? model : r.display_name;
+    return (name && name !== model) ? (model ? (model + ' ' + name) : name) : model;
 }
 function renderWlGroup(sel, rows){
     var groups = {};
@@ -627,7 +627,8 @@ function renderWlGroup(sel, rows){
             var type = sel === '#wlMachines' ? 'machine' : 'tool';
             // 技能鑑定考核是針對「機型」訓練，不是針對實體機台：勾選項＝一個機型(已去重)，
             // 底下標的機台編號只是給管理員參考「這個機型實際有幾台」，不是要各自訓練一次
-            var meta = (type === 'machine' && r.unit_count > 1) ? ('　共'+r.unit_count+'台，機台編號：'+esc(r.asset_no||'-')) : '';
+            var meta = (type === 'machine' && r.unit_count > 1) ? ('　共'+r.unit_count+'台，機台編號：'+esc(r.asset_no||'-'))
+                     : (type === 'tool' && r.machine_name ? ('　量具編號：'+esc(r.asset_no||r.display_name||'-')) : '');
             html += '<div class="wl-row" data-hay="'+esc(r.display_name+' '+(r.machine_name||'')+' '+(r.asset_no||'')).toLowerCase()+'"><label style="flex:1;"><input type="checkbox" class="wl-ck" data-type="'+type+'" data-id="'+r.source_id+'"'+(r.checked?' checked':'')+'> '+esc(hfMachineLabel(r,type))+'<span style="color:#8a6d45;font-size:11px;">'+meta+'</span></label></div>';
         });
     });
