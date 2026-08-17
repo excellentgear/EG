@@ -339,7 +339,11 @@ function hrf_template_list(PDO $db, string $formType): array {
     hrf_ensure_schema($db);
     $st = $db->prepare("SELECT * FROM hr_form_template WHERE form_type=? ORDER BY is_active DESC, id DESC");
     $st->execute([$formType]);
-    return $st->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    // 附上適用部門×職位（新增欄位、不動既有欄位）：範本編輯畫面要在「對應另一種範本」的下拉裡直接顯示
+    // 適用範圍，並自動預選 scope 有重疊的那筆，否則管理員得先記住哪個範本對哪個職位。
+    foreach ($rows as &$r) $r['scope'] = hrf_template_scope_get($db, (int)$r['id']);
+    return $rows;
 }
 
 function hrf_template_get(PDO $db, int $id): ?array {

@@ -255,6 +255,11 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
         管理員在這裡設定「職位範本」：建立表單時系統會依員工的部門×職位比對範本，自動帶入內容（職務說明書的工作職責表、員工職能鑑定表的職能項目清單）或適用機型清單（專業技能鑑定考核表）。一個範本可以綁定多筆部門×職位。
         <h4>操作步驟</h4>
         <b>①新增/編輯範本</b>：填範本名稱、綁定適用的部門×職位（選一個部門後可一次勾選多個職位加入，部門選「不限部門」代表該職位不論哪個部門都適用）、編輯內容（職務說明書填4欄工作職責表；員工職能鑑定表填職能項目清單；專業技能鑑定考核表勾選適用機型，可用「全選/取消全選」快速操作，需先在「機型/量具白名單」建立好白名單）。<br>
+        <b>①-2 範本之間互相帶入內容</b>：三種範本的內容可以互抓，避免同一份工作內容要打兩次——<br>
+        　・職務說明書範本 ←→ 職能鑑定表範本：<b>雙向</b>。職務說明書的「工作摘要」＝職能鑑定表的「項目名稱」，在任一邊的編輯跳窗選「對應的另一種範本」，勾選要帶入的列後按「加入所選」即可（已存在的內容不會重複加入）。<br>
+        　・技能鑑定表範本 →職能鑑定表範本：勾選其適用機型帶入成職能項目；或勾「動態帶入」改成建立表單當下依該員工已有的技能鑑定表機型/量具自動產生。<br>
+        　・「對應的另一種範本」下拉會<b>自動預選適用部門×職位有重疊的那一筆</b>（下拉選項後面括號就是該範本的適用範圍），也可以自己改選別筆。<br>
+        　・帶入是「當下複製一份」，<b>帶進來之後可以自由改字、刪列、再新增</b>，不會跟來源範本連動；來源範本日後改了也不會回頭蓋掉這裡已調整過的內容（要同步就再帶入一次）。<br>
         <b>②機型/量具白名單</b>：從既有機台主檔（machine_list，機型/機台編號比照process_schedule_NOW.php機台設定頁欄位認定，機台名稱固定取自主檔不可手動改字）與量測儀器校驗的量具主檔勾選，儲存後才能在範本裡勾選。<br>
         <b>③部門表單資格</b>：勾選哪些部門的人要產生技能鑑定表/職能鑑定表，職務說明書不受此限制、全員都會有。<br>
         <b>④AS文件編號綁定</b>：三張表單各自獨立綁定，在各自分頁右上角按鈕設定。<br>
@@ -436,6 +441,52 @@ function fillTplForEdit(id){
         openMask('tplMask');
     });
 }
+/* ---------- 職務說明書 ⇄ 職能鑑定表 互相帶入（共用小工具） ----------
+   兩種範本的內容可以互抓：職務說明書的「工作摘要」＝職能鑑定表的「項目名稱」。帶入後就是一般的
+   輸入列，可以再手動改字或刪列（使用者明確要求「要可以刪減跟手動修改」），所以一律是「當下複製一份」
+   而不是動態連動（動態連動改了來源就會蓋掉手改內容）。 */
+/** 目前編輯中範本已定案的 部門×職位 鍵值（用來自動預選對應的另一種範本）。 */
+function hfCurrentScopeKeys(){
+    return $('#scopeBody .scope-chip').map(function(){ return ($(this).data('dept')||'')+'-'+$(this).data('pos'); }).get();
+}
+function hfScopeSummary(scope){
+    return (scope||[]).map(function(s){ return (s.department_name||'不限部門')+'×'+s.position_name; }).join('、');
+}
+/** 載入另一種表單類型的範本清單到 select（label 附帶適用部門×職位），並自動預選 scope 有重疊的那筆。 */
+function hfLoadPeerTplOptions(formType, selId, onReady){
+    $.getJSON(API, {action:'template_list', form_type:formType}, function(res){
+        var tpls = res.ok ? (res.templates||[]) : [];
+        var mine = hfCurrentScopeKeys(), best = 0;
+        var opts = '<option value="">（未指定）</option>' + tpls.map(function(t){
+            var keys = (t.scope||[]).map(function(s){ return (s.department_id||'')+'-'+s.position_id; });
+            if (!best && mine.length && keys.some(function(k){ return mine.indexOf(k) >= 0; })) best = t.id;
+            var sum = hfScopeSummary(t.scope);
+            return '<option value="'+t.id+'">'+esc(t.name)+(sum?'（'+esc(sum)+'）':'')+'</option>';
+        }).join('');
+        $('#'+selId).html(opts);
+        if (best) $('#'+selId).val(best);
+        if (onReady) onReady(best);
+    });
+}
+/** 把某範本的內容列取出成「一行一筆」的字串清單（去空白、去重複），供勾選帶入。 */
+function hfTplLinesFor(tplId, field, cb){
+    $.getJSON(API, {action:'template_get', id:tplId}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); cb([]); return; }
+        var out = [];
+        (res.template.items||[]).forEach(function(it){
+            var v = (((it.data||{})[field])||'').trim();
+            if (v !== '' && out.indexOf(v) < 0) out.push(v);
+        });
+        cb(out);
+    });
+}
+function hfPeerLineListHtml(lines, ckClass, emptyMsg){
+    if (!lines.length) return '<span style="color:#8a6d45;font-size:12px;">'+esc(emptyMsg)+'</span>';
+    return lines.map(function(s){
+        return '<label style="display:block;font-size:12.5px;white-space:pre-line;"><input type="checkbox" class="'+ckClass+'" value="'+esc(s)+'"> '+esc(s)+'</label>';
+    }).join('');
+}
+
 function jdTplRowHtml(d){
     d = d || {};
     return '<tr><td><textarea class="c-a">'+esc(d.summary||'')+'</textarea></td>'
@@ -449,11 +500,43 @@ function jdTplRowHtml(d){
 function jdTplTableHtml(items){
     var rows = items && items.length ? items : [{data:{}}];
     var h = '<label>工作職責內容（「程序書」「表單」可從既有 AS 文件多選帶入編號+名稱，「產出表單名稱」欄仍可在選完後手動追加內容；「DPI 項目」可從 KPI 頁既有標準多選模糊搜尋帶入）</label>'
+          + '<div style="border:1px dashed #D8BE93;border-radius:6px;padding:6px;margin-bottom:8px;background:#FDF7EE;">'
+          + '<div style="margin-bottom:6px;">對應職能鑑定表範本 <select id="jdFromCpTpl" style="max-width:320px;" onchange="hfJdCpTplChange()"></select>'
+          + ' <span style="font-size:12px;color:#8a6d45;">（勾選其職能項目帶入成「工作摘要」，帶入後仍可手動改字或刪列）</span></div>'
+          + '<div id="jdCpItemList" style="max-height:160px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;margin-bottom:6px;background:#fff;"><span style="color:#8a6d45;font-size:12px;">請先在上方選擇對應的職能鑑定表範本</span></div>'
+          + '<button type="button" class="hf-btn-sm" onclick="hfJdApplyCpItems()">加入所選（不重複加入已存在的工作摘要）</button>'
+          + '</div>'
           + '<table class="itm-tbl"><thead><tr><th>工作摘要</th><th>工作相關程序書</th><th>產出表單名稱</th><th>DPI 項目</th></tr></thead>'
           + '<tbody id="tplItemsBody" data-eg-row-add="hfTplJdAdd" data-eg-row-del="hfTplJdDel">';
     rows.forEach(function(it){ h += jdTplRowHtml(it.data); });
     h += '</tbody></table><button class="hf-btn-sm" type="button" onclick="hfTplJdAdd()">+新增列</button> <button class="hf-btn-sm" type="button" onclick="hfTplJdDel()">-刪除末列</button>';
+    setTimeout(function(){ hfLoadPeerTplOptions('competency', 'jdFromCpTpl', function(best){ if (best) hfJdCpTplChange(); }); }, 0);
     return h;
+}
+/** 選定對應的職能鑑定表範本後，列出其職能項目供勾選。 */
+function hfJdCpTplChange(){
+    var id = $('#jdFromCpTpl').val();
+    if (!id){ $('#jdCpItemList').html('<span style="color:#8a6d45;font-size:12px;">請先在上方選擇對應的職能鑑定表範本</span>'); return; }
+    $('#jdCpItemList').html('<span style="color:#8a6d45;font-size:12px;">載入中…</span>');
+    hfTplLinesFor(id, 'skill_name', function(lines){
+        $('#jdCpItemList').html(hfPeerLineListHtml(lines, 'jd-cp-ck', '此職能鑑定表範本尚未設定職能項目（若該範本是設定成「動態帶入」，就沒有固定清單可帶）'));
+    });
+}
+function hfJdApplyCpItems(){
+    var picked = $('.jd-cp-ck:checked').map(function(){ return $(this).val(); }).get();
+    if (!picked.length){ alert('請至少勾選一個項目'); return; }
+    var existing = $('#tplItemsBody .c-a').map(function(){ return ($(this).val()||'').trim(); }).get();
+    var $rows = $('#tplItemsBody tr');
+    // 只有一列且整列全空＝使用者還沒填任何東西，直接用帶入的內容取代這一空列
+    if ($rows.length === 1 && !$rows.find('textarea').filter(function(){ return ($(this).val()||'').trim() !== ''; }).length) $('#tplItemsBody').empty();
+    var added = 0;
+    picked.forEach(function(s){
+        s = (s||'').trim();
+        if (s === '' || existing.indexOf(s) >= 0) return;
+        existing.push(s); added++;
+        $('#tplItemsBody').append(jdTplRowHtml({summary:s}));
+    });
+    if (!added) alert('所勾選的項目已經都在工作摘要裡了，未重複加入。');
 }
 function hfTplJdAdd(){ $('#tplItemsBody').append(jdTplRowHtml({})); }
 function hfTplJdDel(){ var $r=$('#tplItemsBody tr'); if ($r.length>1) $r.last().remove(); }
@@ -528,13 +611,19 @@ function hfSkillItemLabel(m){
 }
 function cpTplTableHtml(items){
     var rows = items && items.length ? items : [{data:{}}];
-    var h = '<label>職能項目清單（可手動增設項目，也可從已建立的「專業技能鑑定考核表範本」適用機型清單自動帶入）</label>'
+    var h = '<label>職能項目清單（可手動增設項目，也可從已建立的「專業技能鑑定考核表範本」適用機型清單、或「職務說明書範本」的工作摘要自動帶入）</label>'
           + '<div style="margin-bottom:6px;">對應技能鑑定表範本 <select id="cpFromSaTpl" style="max-width:260px;" onchange="hfCpSaTplChange()"></select>'
           + ' <label style="margin-left:10px;font-weight:normal;"><input type="checkbox" id="cpAutoFillDynamic" onchange="hfCpAutoFillToggle()"> 從此技能鑑定表範本帶入項目（動態：依員工建立表單當下已有的技能鑑定表機型/量具自動帶入）</label></div>'
           + '<div id="cpDynamicNote" style="display:none;font-size:12.5px;color:#8a6d45;margin-bottom:6px;">已勾選動態帶入，下方項目清單改為建立表單當下自動產生，此處不需（也不會用到）預先設定固定清單。</div>'
           + '<div id="cpFixedBox">'
           + '<div id="cpSaMachineList" style="max-height:160px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;margin-bottom:6px;"><span style="color:#8a6d45;font-size:12px;">請先在上方選擇對應的技能鑑定表範本</span></div>'
           + '<div style="margin-bottom:6px;"><button type="button" class="hf-btn-sm" onclick="hfCpApplySaMachines()">加入所選（不重複加入已存在的項目）</button></div>'
+          + '<div style="border:1px dashed #D8BE93;border-radius:6px;padding:6px;margin-bottom:8px;background:#FDF7EE;">'
+          + '<div style="margin-bottom:6px;">對應職務說明書範本 <select id="cpFromJdTpl" style="max-width:320px;" onchange="hfCpJdTplChange()"></select>'
+          + ' <span style="font-size:12px;color:#8a6d45;">（勾選其「工作摘要」帶入成職能項目，帶入後仍可手動改字或刪列）</span></div>'
+          + '<div id="cpJdItemList" style="max-height:160px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;margin-bottom:6px;background:#fff;"><span style="color:#8a6d45;font-size:12px;">請先在上方選擇對應的職務說明書範本</span></div>'
+          + '<button type="button" class="hf-btn-sm" onclick="hfCpApplyJdItems()">加入所選（不重複加入已存在的項目）</button>'
+          + '</div>'
           + '<table class="itm-tbl"><thead><tr><th style="width:40px;">編號</th><th>項目名稱</th></tr></thead>'
           + '<tbody id="tplItemsBody" data-eg-row-add="hfTplCpAdd" data-eg-row-del="hfTplCpDel">';
     rows.forEach(function(it,i){ var d=it.data||{}; h += '<tr><td style="text-align:center;">'+(i+1)+'</td><td><textarea class="c-name">'+esc(d.skill_name||'')+'</textarea></td></tr>'; });
@@ -546,10 +635,11 @@ function cpTplTableHtml(items){
         $('#cpFromSaTpl').html(opts);
         if (CP_TPL_SA_ID) { $('#cpFromSaTpl').val(CP_TPL_SA_ID); hfCpSaTplChange(); }
     });
+    setTimeout(function(){ hfLoadPeerTplOptions('job_desc', 'cpFromJdTpl', function(best){ if (best) hfCpJdTplChange(); }); }, 0);
     return h;
 }
-function hfTplCpAdd(){ var n=$('#tplItemsBody tr').length+1; $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><textarea class="c-name"></textarea></td></tr>'); }
-function hfTplCpDel(){ var $r=$('#tplItemsBody tr'); if ($r.length>1) $r.last().remove(); }
+function hfTplCpAdd(){ $('#tplItemsBody').append('<tr><td style="text-align:center;"></td><td><textarea class="c-name"></textarea></td></tr>'); hfCpRenumber(); }
+function hfTplCpDel(){ var $r=$('#tplItemsBody tr'); if ($r.length>1) { $r.last().remove(); hfCpRenumber(); } }
 function hfCpAutoFillToggle(){
     $('#cpFixedBox').toggle(!$('#cpAutoFillDynamic').is(':checked'));
     $('#cpDynamicNote').toggle($('#cpAutoFillDynamic').is(':checked'));
@@ -566,16 +656,37 @@ function hfCpSaTplChange(){
         }).join('') : '<span style="color:#8a6d45;font-size:12px;">此技能鑑定表範本尚未設定適用機型</span>');
     });
 }
-function hfCpApplySaMachines(){
-    var existing = $('#tplItemsBody .c-name').map(function(){ return $(this).val(); }).get();
-    var picked = $('.cp-sa-ck:checked').map(function(){ return $(this).val(); }).get();
+/** 把一批項目名稱加進職能項目清單（不重複、自動重編編號）；技能鑑定表機型與職務說明書工作摘要共用。 */
+function hfCpAppendItems(picked){
     if (!picked.length){ alert('請至少勾選一個項目'); return; }
-    if ($('#tplItemsBody tr').length === 1 && !$('#tplItemsBody .c-name').val()) $('#tplItemsBody').empty();
+    var existing = $('#tplItemsBody .c-name').map(function(){ return ($(this).val()||'').trim(); }).get();
+    if ($('#tplItemsBody tr').length === 1 && !($('#tplItemsBody .c-name').val()||'').trim()) $('#tplItemsBody').empty();
+    var added = 0;
     picked.forEach(function(label){
-        if (existing.indexOf(label) >= 0) return; // 已存在不重複加入
-        var n = $('#tplItemsBody tr').length + 1;
-        $('#tplItemsBody').append('<tr><td style="text-align:center;">'+n+'</td><td><textarea class="c-name">'+esc(label)+'</textarea></td></tr>');
+        label = (label||'').trim();
+        if (label === '' || existing.indexOf(label) >= 0) return; // 已存在不重複加入
+        existing.push(label); added++;
+        $('#tplItemsBody').append('<tr><td style="text-align:center;"></td><td><textarea class="c-name">'+esc(label)+'</textarea></td></tr>');
     });
+    hfCpRenumber();
+    if (!added) alert('所勾選的項目已經都在清單中，未重複加入。');
+}
+/** 編號欄一律依目前列序重編（帶入/刪列後才不會出現跳號）。 */
+function hfCpRenumber(){ $('#tplItemsBody tr').each(function(i){ $(this).find('td').eq(0).text(i+1); }); }
+function hfCpApplySaMachines(){
+    hfCpAppendItems($('.cp-sa-ck:checked').map(function(){ return $(this).val(); }).get());
+}
+/** 選定對應的職務說明書範本後，列出其「工作摘要」供勾選帶入成職能項目。 */
+function hfCpJdTplChange(){
+    var id = $('#cpFromJdTpl').val();
+    if (!id){ $('#cpJdItemList').html('<span style="color:#8a6d45;font-size:12px;">請先在上方選擇對應的職務說明書範本</span>'); return; }
+    $('#cpJdItemList').html('<span style="color:#8a6d45;font-size:12px;">載入中…</span>');
+    hfTplLinesFor(id, 'summary', function(lines){
+        $('#cpJdItemList').html(hfPeerLineListHtml(lines, 'cp-jd-ck', '此職務說明書範本尚未填寫工作摘要'));
+    });
+}
+function hfCpApplyJdItems(){
+    hfCpAppendItems($('.cp-jd-ck:checked').map(function(){ return $(this).val(); }).get());
 }
 
 function tplSave(){
