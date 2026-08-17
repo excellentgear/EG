@@ -128,6 +128,7 @@ $perms = fsd_perms($db, $fsdUser);
         .bf-row .bf-row-hd button { height:22px; font-size:11px; padding:0 6px; }
         .bf-row .bf-row-hd button:last-child { margin-left:auto; }
         .bf-row select { width:100%; margin-bottom:4px; }
+        .bf-row .eg-filter-box { max-width:100%; }   /* 共用篩選框在窄面板內要滿版，不要卡在 280px */
         .fsd-ref-panel { flex:0 0 200px; border:1px solid #E8D5B5; border-radius:8px; background:#fff; max-height:74vh; overflow-y:auto; padding:8px; }
         .fsd-ref-panel .rp-head { font-weight:bold; color:#5b3a1e; margin-bottom:6px; }
         .fsd-ref-page { position:relative; border:1px solid #EADFC8; margin-bottom:10px; }
@@ -730,23 +731,32 @@ function renderBfList(){
     $('#bfCount').text(BF_FIELDS.length + ' / ' + bfMaxStamps() + ' 個');
     var h = '';
     BF_FIELDS.forEach(function(f, i){
-        var warn = f.signer_user_id ? '' : '<span class="bf-warn">未指定人員</span>';
-        h += '<div class="bf-row'+(f.signer_user_id?'':' bad')+'">'
-           + '<div class="bf-row-hd"><b>圖章 '+(i+1)+'</b><span class="bf-pg">第'+f.page_no+'頁</span>'+warn
+        h += '<div class="bf-row'+(f.signer_user_id?'':' bad')+'" id="bfrow_'+f.id+'">'
+           + '<div class="bf-row-hd"><b>圖章 '+(i+1)+'</b><span class="bf-pg">第'+f.page_no+'頁</span>'
+           + '<span class="bf-warn"'+(f.signer_user_id?' style="display:none;"':'')+'>未指定人員</span>'
            + '<button type="button" onclick="bfFocus('+f.id+')">定位</button>'
            + '<button type="button" class="btn-danger" onclick="bfDeleteStamp('+f.id+')"><i class="fa fa-trash"></i></button></div>'
-           + '<select onchange="bfSetSigner('+f.id+',this.value)" data-eg-filter="輸入姓名篩選…">'+bfPeopleOptionsHtml(f.signer_user_id)+'</select>'
+           + '<select onchange="bfSetSigner('+f.id+',this.value)" data-eg-filter="打部分姓名／部門／職稱即可篩選…">'+bfPeopleOptionsHtml(f.signer_user_id)+'</select>'
            + '<select onchange="bfSetTpl('+f.id+',this.value)" data-eg-filter="輸入圖章模板名稱篩選…">'+bfTplOptionsHtml(f.stamp_tpl_id)+'</select>'
            + '</div>';
     });
     $('#bfList').html(h || '<p style="padding:8px;color:#8a6d45;font-size:12px;">尚未新增圖章，請到右邊頁面上方按「＋新增圖章」。</p>');
 }
-/** 共用存檔：把某個圖章目前的位置＋人員＋模板整包送後端（後端會驗最小尺寸與 30 個上限）。 */
-function bfSaveField(fieldObj, onDone, onFail){
+/** 只更新某一列的狀態（改人員/改模板時用）：整份 renderBfList() 會把使用者正在打字的篩選框洗掉、捲軸也跳回頂端。 */
+function bfRefreshRow(fid){
+    var f = bfFieldById(fid); if (!f) return;
+    var $row = $('#bfrow_'+fid);
+    $row.toggleClass('bad', !f.signer_user_id);
+    $row.find('.bf-warn').toggle(!f.signer_user_id);
+    $row.find('.bf-pg').text('第'+f.page_no+'頁');
+}
+/** 共用存檔：把某個圖章目前的位置＋人員＋模板整包送後端（尺寸由後端依模板決定，30 個上限也由後端擋）。
+ *  skipRender=true 時只更新該列狀態，不整份重畫清單。 */
+function bfSaveField(fieldObj, onDone, onFail, skipRender){
     $.post(API, {action:'backfill_field_save', csrf:META.csrf, case_id:FP_CASE.id, field:JSON.stringify(fieldObj)}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); if (onFail) onFail(); return; }
         BF_FIELDS = res.fields || [];
-        renderBfList();
+        if (skipRender) bfRefreshRow(res.id); else renderBfList();
         if (onDone) onDone(res);
     }, 'json').fail(function(){ if (onFail) onFail(); });
 }
@@ -787,14 +797,14 @@ function bfSetSigner(fid, uid){
     var f = bfFieldById(fid); if (!f) return;
     bfSaveField({id:f.id, page_no:f.page_no, x:f.x, y:f.y, w:f.w, h:f.h,
                  signer_user_id:parseInt(uid,10)||0, stamp_tpl_id:f.stamp_tpl_id||0},
-        function(){ bfPaintBoxLabel(BF_OBJS[fid]); }, function(){ renderBfList(); });
+        function(){ bfPaintBoxLabel(BF_OBJS[fid]); }, function(){ renderBfList(); }, true);
 }
 function bfSetTpl(fid, tplId){
     var f = bfFieldById(fid); if (!f) return;
     bfSaveField({id:f.id, page_no:f.page_no, x:f.x, y:f.y, w:f.w, h:f.h,
                  signer_user_id:f.signer_user_id||0, stamp_tpl_id:parseInt(tplId,10)||0},
         function(){ bfSyncBox(fid); },   // 換模板＝章的實際大小跟著變，框要重畫成新尺寸
-        function(){ renderBfList(); });
+        function(){ renderBfList(); }, true);
 }
 function bfApplyTplAll(){
     if (!BF_FIELDS.length){ alert('目前還沒有圖章'); return; }

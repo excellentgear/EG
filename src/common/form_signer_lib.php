@@ -976,22 +976,36 @@ const FSD_BACKFILL_MAX_STAMPS = 30;
 
 function fsd_is_backfill(?array $case): bool { return $case && ($case['case_kind'] ?? 'normal') === 'backfill'; }
 
-/** 補案件可選的簽章人員：在職者走 people_lib（鐵則），另補上已離職者並標示（比照 AS_Document_API 的任期候選人做法）。 */
+/**
+ * 補案件可選的簽章人員：在職者走 people_lib（鐵則），另補上已離職者並標示（比照 AS_Document_API 的任期候選人做法）。
+ * 顯示與排序依 ai-rules/08 第五節鐵則 5：文字一律「部門 職稱 姓名」，排序鍵依**部門→職稱**的 sort_order
+ * （不是姓名筆畫；people_lib 預設是職稱優先，這裡自己重排），長期請假者標出假別與期間；已離職者排在最後。
+ */
 function fsd_backfill_people(PDO $db): array {
     require_once __DIR__ . '/people_lib.php';
     $out = [];
-    foreach (eg_people_list($db) as $p) {
-        $out[] = ['id'=>(int)$p['id'], 'name'=>$p['user_cname'], 'resigned'=>0,
-                  'label'=>trim(($p['dept_name'] ?? '') . ' ' . ($p['position_name'] ?? '') . ' ' . $p['user_cname'])];
+    $rows = eg_people_list($db);
+    usort($rows, function ($a, $b) {
+        return [(int)$a['dept_sort'], (int)$a['position_sort'], (string)$a['dept_name'], (string)$a['user_cname']]
+           <=> [(int)$b['dept_sort'], (int)$b['position_sort'], (string)$b['dept_name'], (string)$b['user_cname']];
+    });
+    foreach ($rows as $p) {
+        $label = trim(($p['dept_name'] ?? '') . ' ' . ($p['position_name'] ?? '') . ' ' . $p['user_cname']);
+        if (!empty($p['on_leave'])) $label .= '［' . $p['leave_note'] . '］';
+        $out[] = ['id'=>(int)$p['id'], 'name'=>$p['user_cname'], 'resigned'=>0, 'label'=>$label];
     }
     try {
-        $st = $db->query("SELECT u.id, u.user_cname, d.name AS dept_name FROM `user` u
+        $st = $db->query("SELECT u.id, u.user_cname, d.name AS dept_name, COALESCE(d.sort_order,999) AS dept_sort,
+                                 p.name AS position_name, COALESCE(p.sort_order,999) AS position_sort
+                          FROM `user` u
                           LEFT JOIN user_department_position_map m ON m.id = (SELECT m2.id FROM user_department_position_map m2 WHERE m2.user_id=u.id ORDER BY m2.is_main DESC, m2.id ASC LIMIT 1)
                           LEFT JOIN department d ON d.id = m.department_id
-                          WHERE u.state = 0 ORDER BY u.user_cname");
+                          LEFT JOIN position p ON p.id = m.position_id
+                          WHERE u.state = 0
+                          ORDER BY dept_sort, position_sort, u.user_cname");
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $u) {
             $out[] = ['id'=>(int)$u['id'], 'name'=>$u['user_cname'], 'resigned'=>1,
-                      'label'=>trim(($u['dept_name'] ?? '') . ' ' . $u['user_cname'] . '（已離職）')];
+                      'label'=>trim(($u['dept_name'] ?? '') . ' ' . ($u['position_name'] ?? '') . ' ' . $u['user_cname']) . '（已離職）'];
         }
     } catch (Throwable $e) { /* 離職者查不到就只給在職名單，不影響主要功能 */ }
     return $out;
