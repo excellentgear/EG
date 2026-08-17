@@ -485,7 +485,7 @@ function loadTemplateOptionsForCreate(){
 function renderProgressChips(c){
     if (c.case_kind === 'backfill') {
         return c.status==='draft' ? '<span style="color:#8a6d45;">待設定圖章</span>'
-                                  : '<span class="prog-chip done"><i class="fa fa-check-circle"></i> (補登・自動審核完成)</span>';
+                                  : '<span class="prog-chip done"><i class="fa fa-check-circle"></i> (補登)</span>';
     }
     if (!c.progress || !c.progress.length) return c.status==='draft' ? '<span style="color:#8a6d45;">待框選/送出</span>' : '—';
     var parts = [];
