@@ -277,7 +277,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button id="btnBlank"><i class="fa fa-file-o"></i> 列印空白表單</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印清單</button>
-            <span class="va-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
+            <span class="va-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b><span id="scopeVerBadge" style="display:none;"></span>
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
         </div>
 
@@ -940,6 +940,10 @@ function loadMeta(cb){
         var vis = m.visible_scopes || ['outsource','purchase'];
         $('.va-scope-btn').each(function(){ $(this).toggle(vis.indexOf($(this).data('scope')) !== -1); });
         $('.va-scope-switch').toggle(vis.length > 1);
+        // 只看得到單一範疇的人(左上角沒有切換鈕可看)，在角色徽章旁補顯示目前是哪個版本；
+        // 兩邊都看得到的人不必重複顯示，切換鈕本身就是最清楚的指示（使用者2026-08-17明確要求）。
+        if (vis.length === 1) $('#scopeVerBadge').text('（'+scopeLabel(vis[0])+'）').show();
+        else $('#scopeVerBadge').hide();
         if (vis.indexOf(CUR_SCOPE) === -1) {
             CUR_SCOPE = vis[0] || 'outsource';
             localStorage.setItem('va_cur_scope', CUR_SCOPE);
