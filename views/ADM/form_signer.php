@@ -202,7 +202,7 @@ $perms = fsd_perms($db, $fsdUser);
                 <button class="btn-warm" id="btnFpSubmit" style="margin-left:auto;" onclick="fpSubmit()"><i class="fa fa-check"></i> 儲存並送出</button>
             </div>
             <div class="fsd-toolbar">
-                <span>把左側「待框選標籤」拖到您上傳的文件對應位置；只能框選樣板本身已框選過的欄位（樣板沒有的欄位這裡也不會出現）。</span>
+                <span id="fpHintText">把左側「待框選標籤」拖到您上傳的文件對應位置；只能框選樣板本身已框選過的欄位（樣板沒有的欄位這裡也不會出現）。</span>
                 <button class="btn-danger" style="margin-left:auto;" onclick="fpDeleteSelected()"><i class="fa fa-trash"></i> 刪除選取框</button>
             </div>
             <div class="fsd-design-layout">
@@ -400,7 +400,8 @@ $perms = fsd_perms($db, $fsdUser);
         <b>③</b>左側圖章清單裡逐個選「這個章是誰的」（<b>含已離職人員</b>，補舊表單用）與「這個章用哪個圖章模板」；按「一次套用到全部圖章」可把全部圖章的模板一次改成目前預設值，之後仍可逐個修改。<br>
         <b>④</b>圖章上限 <b>30</b> 個；每個圖章都必須指定人員才能按「儲存並完成」。完成後即為「已完成」狀態，可直接檢視與列印。
         <h4>重要行為</h4>
-        ・補案件的所有圖章都印<b>案件業務日期</b>（不逐章設定日期）；框太小會被擋下，最小尺寸依該圖章所選模板的實際大小換算。<br>
+        ・補案件的所有圖章都印<b>案件業務日期</b>（不逐章設定日期）。<br>
+        ・補案件的<b>圖章大小固定</b>＝該章所選圖章模板的實際尺寸（所見即所印），只能移動位置、不能拉大縮小；要換大小就換一個圖章模板（換模板時框會自動變成新尺寸）。<br>
         ・槽位解析出的人若剛好是案件申請人本人，該槽位自動略過（強制迴避），不會顯示在回覆框裡等待回應。<br>
         ・已核准/已駁回/已作廢的案件不可再回應，只能檢視與列印。<br>
         ・系統自動簽核的紀錄只有管理員看得到「系統自動簽核」字樣，一般使用者看到的是正常的簽核紀錄。
@@ -762,7 +763,7 @@ function bfSaveFieldPosition(pageNo, obj){
     };
     bfSaveField(f, function(res){
         obj.fieldId = res.id; BF_OBJS[res.id] = obj;
-        bfPaintBoxLabel(obj);
+        bfSyncBox(res.id);   // 尺寸/夾邊以後端為準（圖章大小固定）
     }, function(){
         // 被後端擋下(例如框太小)：新框直接移除、既有框重新載入回上一個已存檔狀態，畫面不留下假資料
         if (!obj.fieldId) { cv.remove(obj); FP_SELECTED = null; cv.renderAll(); }
@@ -773,8 +774,9 @@ function bfAddStamp(pageNo){
     if (BF_FIELDS.length >= bfMaxStamps()){ alert('圖章數量已達上限 '+bfMaxStamps()+' 個'); return; }
     var p = (FP_CASE.pages||[]).filter(function(x){ return x.page_no==pageNo; })[0];
     if (!p){ alert('找不到第'+pageNo+'頁'); return; }
+    // 先用同一套算法在本機估一個框（存檔後 bfSyncBox 會以後端算出的固定尺寸為準）
     var minFrac = fieldMinFrac(p, bfTplSchema(bfDefaultTplId()));
-    var wFrac = Math.min(0.9, minFrac.min_w*1.06 + 0.005), hFrac = Math.min(0.9, minFrac.min_h*1.06 + 0.005);
+    var wFrac = Math.min(0.98, minFrac.min_w), hFrac = Math.min(0.98, minFrac.min_h);
     // 依已有張數往右下角錯開一點，連續新增才不會整疊在同一個位置上互相蓋住
     var off = (BF_FIELDS.filter(function(f){ return f.page_no==pageNo; }).length % 6) * 0.04;
     var xFrac = Math.max(0, Math.min(1-wFrac, 0.10 + off)), yFrac = Math.max(0, Math.min(1-hFrac, 0.70 + off));
@@ -791,7 +793,8 @@ function bfSetTpl(fid, tplId){
     var f = bfFieldById(fid); if (!f) return;
     bfSaveField({id:f.id, page_no:f.page_no, x:f.x, y:f.y, w:f.w, h:f.h,
                  signer_user_id:f.signer_user_id||0, stamp_tpl_id:parseInt(tplId,10)||0},
-        null, function(){ renderBfList(); });
+        function(){ bfSyncBox(fid); },   // 換模板＝章的實際大小跟著變，框要重畫成新尺寸
+        function(){ renderBfList(); });
 }
 function bfApplyTplAll(){
     if (!BF_FIELDS.length){ alert('目前還沒有圖章'); return; }
@@ -801,6 +804,7 @@ function bfApplyTplAll(){
         if (!res.ok){ alert(res.error||'套用失敗'); return; }
         BF_FIELDS = res.fields || [];
         renderBfList();
+        BF_FIELDS.forEach(function(f){ bfSyncBox(f.id); });   // 全部換模板＝全部的框尺寸都要跟著重畫
     }, 'json');
 }
 function bfDeleteStamp(fid){
@@ -822,6 +826,23 @@ function bfFocus(fid){
     FP_SELECTED = {canvas:cv, obj:obj};
     var el = document.getElementById('fpcv_'+obj.pageNo);
     if (el && el.scrollIntoView) el.scrollIntoView({block:'center', behavior:'smooth'});
+}
+/** 圖章框固定大小：尺寸與夾邊都由後端算好，畫面上的框一律以後端回來的值為準（不一致就整個重畫那一個框）。 */
+function bfSyncBox(fid){
+    var f = bfFieldById(fid); if (!f) return;
+    var cv = FP_CANVASES[f.page_no]; if (!cv) return;
+    var obj = BF_OBJS[fid];
+    var needL = parseFloat(f.x)*cv.width, needT = parseFloat(f.y)*cv.height;
+    var needW = parseFloat(f.w)*cv.width, needH = parseFloat(f.h)*cv.height;
+    if (obj) {
+        var curW = obj.width*obj.scaleX, curH = obj.height*obj.scaleY;
+        if (Math.abs(curW-needW) < 0.8 && Math.abs(curH-needH) < 0.8 &&
+            Math.abs(obj.left-needL) < 0.8 && Math.abs(obj.top-needT) < 0.8) { bfPaintBoxLabel(obj); return; }
+        cv.remove(obj);
+    }
+    var g = fpAddFieldBox(f.page_no, f.slot_key, 'stamp', parseFloat(f.x), parseFloat(f.y), parseFloat(f.w), parseFloat(f.h), f.id);
+    BF_OBJS[fid] = g;
+    cv.renderAll();
 }
 /** 框內顯示的字：補案件顯示這個章是誰的（沒選人顯示「未指定」），一眼看得出哪個位置蓋誰的章。 */
 function bfPaintBoxLabel(obj){
@@ -1160,6 +1181,8 @@ function openFieldDesigner(id){
         $('#bfStampPanel').toggle(FP_BACKFILL);
         $('#btnBfEditHead').toggle(FP_BACKFILL);
         $('#btnFpSubmit').html(FP_BACKFILL ? '<i class="fa fa-check"></i> 儲存並完成（自動審核）' : '<i class="fa fa-check"></i> 儲存並送出');
+        if (FP_BACKFILL) $('#fpHintText').text('在每一頁上方按「＋新增圖章」，再把章拖到紙本原本蓋章的位置。圖章大小固定＝該章圖章模板的實際尺寸（所見即所印），只能移動位置、不能拉大縮小；要改大小請改用別的圖章模板。');
+        else $('#fpHintText').text('把左側「待框選標籤」拖到您上傳的文件對應位置；只能框選樣板本身已框選過的欄位（樣板沒有的欄位這裡也不會出現）。');
         if (FP_BACKFILL) {
             bfEnsureMeta(function(){
                 BF_FIELDS = res.fields || []; BF_OBJS = {};
@@ -1469,6 +1492,9 @@ function fpAddFieldBox(pageNo, slotKey, boxType, xFrac, yFrac, wFrac, hFrac, fie
     });
     text.set({left: (wFrac*cv.width)/2, top: (hFrac*cv.height)/2});
     group.fieldId = fieldId||0; group.slotKey = slotKey; group.boxType = boxType; group.pageNo = pageNo;
+    // 補案件的圖章大小固定（＝該章圖章模板的實際尺寸），只能搬位置不能拉大縮小：拿掉縮放控制點
+    // （使用者2026-08-17明確要求；印出來的大小本來就由模板決定，拉框只會讓畫面跟列印對不起來）
+    if (FP_BACKFILL) group.set({lockScalingX:true, lockScalingY:true, hasControls:false, hasBorders:true});
     cv.add(group);
     return group;
 }

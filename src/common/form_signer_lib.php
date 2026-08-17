@@ -1029,6 +1029,17 @@ function fsd_backfill_update_head(PDO $db, int $caseId, string $title, string $b
     return ['ok'=>true, 'case'=>fsd_case_get($db, $caseId)];
 }
 
+/**
+ * 補案件圖章框的固定大小：一律＝該章所選圖章模板的實際尺寸換算成頁面比例（使用者 2026-08-17 明確要求
+ * 「圖章大小要固定，不能被拉大縮小」）。實際印出來的大小本來就由模板決定（列印用 noScale 不縮放），
+ * 框拉大拉小只會讓畫面跟列印對不起來，所以尺寸不採信前端傳來的 w/h，一律由後端算。
+ */
+function fsd_backfill_stamp_box(PDO $db, ?array $page, int $stampTplId): array {
+    if (!$page) return ['w'=>0.12, 'h'=>0.09];
+    $min = fsd_field_min_frac($page, fsd_stamp_tpl_get($db, $stampTplId)['schema'] ?? null);
+    return ['w'=>min(0.98, $min['min_w']), 'h'=>min(0.98, $min['min_h'])];
+}
+
 /** 補案件的圖章框存檔（新增/移動/改人/改模板都走這支）。slot_key 由後端配（bf1..bf30），前端不需要也不可自訂。 */
 function fsd_backfill_field_save(PDO $db, int $caseId, array $f): array {
     $case = fsd_case_get($db, $caseId);
@@ -1053,16 +1064,14 @@ function fsd_backfill_field_save(PDO $db, int $caseId, array $f): array {
         $signerName = $ust->fetchColumn() ?: null;
         if (!$signerName) return ['ok'=>false, 'msg'=>'找不到此人員'];
     }
-    // 圖章框最小尺寸：依「這個圖章自己綁的模板」換算（跟一般案件用樣板模板的口徑一致，只是來源不同）
+    // 尺寸固定：不採信前端送來的 w/h，一律用所選圖章模板換算；位置再夾回頁面內，避免章有一半跑到紙外
     $pst = $db->prepare("SELECT width_pt,height_pt FROM fsd_case_page WHERE case_id=? AND page_no=?");
     $pst->execute([$caseId, $pageNo]);
     $page = $pst->fetch(PDO::FETCH_ASSOC);
-    if ($page) {
-        $min = fsd_field_min_frac($page, fsd_stamp_tpl_get($db, $stampTpl)['schema'] ?? null);
-        if ($w < $min['min_w'] || $h < $min['min_h']) {
-            return ['ok'=>false, 'msg'=>sprintf('圖章框太小，至少需要頁面寬度%.1f%%、高度%.1f%%（依所選圖章模板的實際尺寸換算），請拖大一點', $min['min_w']*100, $min['min_h']*100)];
-        }
-    }
+    $box = fsd_backfill_stamp_box($db, $page ?: null, $stampTpl);
+    $w = $box['w']; $h = $box['h'];
+    $x = max(0, min(1 - $w, $x));
+    $y = max(0, min(1 - $h, $y));
     if ($fieldId) {
         $db->prepare("UPDATE fsd_case_field SET page_no=?,x=?,y=?,w=?,h=?,signer_user_id=?,signer_name=?,stamp_tpl_id=? WHERE id=? AND case_id=?")
            ->execute([$pageNo, $x, $y, $w, $h, $signerId ?: null, $signerName, $stampTpl ?: null, $fieldId, $caseId]);
@@ -1087,7 +1096,16 @@ function fsd_backfill_apply_stamp_tpl_all(PDO $db, int $caseId, int $stampTplId)
     $case = fsd_case_get($db, $caseId);
     if (!$case || !fsd_is_backfill($case)) return ['ok'=>false, 'msg'=>'找不到此補案件'];
     if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可調整圖章'];
-    $db->prepare("UPDATE fsd_case_field SET stamp_tpl_id=? WHERE case_id=?")->execute([$stampTplId ?: null, $caseId]);
+    // 換模板＝章的實際大小跟著變，每個框的尺寸要重算（尺寸固定不給拉，見 fsd_backfill_stamp_box）
+    $pages = [];
+    foreach (fsd_case_pages_get($db, $caseId) as $p) $pages[(int)$p['page_no']] = $p;
+    $upd = $db->prepare("UPDATE fsd_case_field SET stamp_tpl_id=?,x=?,y=?,w=?,h=? WHERE id=? AND case_id=?");
+    foreach (fsd_case_field_list($db, $caseId) as $f) {
+        $box = fsd_backfill_stamp_box($db, $pages[(int)$f['page_no']] ?? null, $stampTplId);
+        $x = max(0, min(1 - $box['w'], (float)$f['x']));
+        $y = max(0, min(1 - $box['h'], (float)$f['y']));
+        $upd->execute([$stampTplId ?: null, $x, $y, $box['w'], $box['h'], (int)$f['id'], $caseId]);
+    }
     return ['ok'=>true, 'fields'=>fsd_case_field_list($db, $caseId)];
 }
 
