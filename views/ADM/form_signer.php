@@ -787,7 +787,8 @@ function renderDocGrid(pages, fields){
             var $box = $('<div class="fsd-box '+f.box_type+'"></div>').css({left:(f.x*100)+'%', top:(f.y*100)+'%', width:(f.w*100)+'%', height:(f.h*100)+'%'});
             if (f.box_type === 'stamp') {
                 if (r && r.decision && r.decision !== 'skipped_sod' && window.EGStamp) {
-                    $box.html(EGStamp.stamp(r.resolved_user_name, (r.responded_at||'').substring(0,10), false, stampSchema));
+                    // 圖章日期一律走 dispDate() 顯示成 YYYY.MM.DD(ai-rules/20)，不可直接丟原始的 YYYY-MM-DD
+                    $box.html(EGStamp.stamp(r.resolved_user_name, dispDate((r.responded_at||'').substring(0,10)), false, stampSchema));
                 } else if (r && r.decision === 'skipped_sod') {
                     $box.html('<span class="sod-note">（迴避）</span>');
                 }
