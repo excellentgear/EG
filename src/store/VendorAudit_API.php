@@ -168,7 +168,7 @@ case 'periodic_eval_all': {
     foreach ($mk as $m) {
         $res = vendor_periodic_eval($db, $m['maker_id_no'], $year, $set);
         $h1 = $res['halves'][1]; $h2 = $res['halves'][2];
-        if (($h1['qc_in'] + $h1['del_in'] + $h2['qc_in'] + $h2['del_in']) === 0) continue; // 整年無資料→略過
+        if (($h1['in_qty'] + $h2['in_qty']) === 0) continue; // 整年無進貨→略過
         $fail = ($h1['judge'] === 'fail' || $h2['judge'] === 'fail');
         $out[] = ['maker_id_no'=>$m['maker_id_no'], 'maker_name'=>$m['maker_id'],
                   'months'=>$res['months'], 'halves'=>$res['halves'], 'full'=>$res['full'], 'fail'=>$fail];

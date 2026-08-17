@@ -817,89 +817,106 @@ const VENDOR_EVAL_Q_MAX = 60;   // 品質分滿分
 const VENDOR_EVAL_D_MAX = 40;   // 交期分滿分
 
 /** 彙總一段期間：回傳率/判定/分數(品質60+交期40,無條件捨去)/等級
+ *  單位一律 PCS 數量（使用者2026-08-17改：原為批數）。
+ *  進貨數 = max(該期間被檢驗的數量, 該期間回廠的數量)——品質與交期共用同一個分母（使用者明確要求
+ *  「兩邊進貨數要相等，取較大的那邊」；同一批的檢驗日與回廠日常跨月，分開算會出現一邊 0 一邊有量的怪象）。
  *  品質分 = 60×(1-(不良數+特採數)/進貨數)   ← 特採與不良同權重(使用者2026-08-17決定)
  *  交期分 = 40×(1-遲交數/進貨數)
- *  捨去方式比照紙本 Excel 的 ROUNDDOWN；該分項整段期間無資料(分母0)視同無缺失給滿分（沿用舊行為，
- *  避免只有交期資料的廠商被品質0分硬拉成D）。
+ *  捨去方式比照紙本 Excel 的 ROUNDDOWN；整段期間完全無進貨(分母0)才視同無缺失給滿分。
+ *  $qcQty/$delQty 只是原始兩邊數量，供畫面提示用，不參與計算。
  */
-function vendor_eval_summ(int $qc, int $ng, int $sp, int $di, int $lt, array $set, array $grades): array {
-    $ngR = $qc ? round($ng/$qc*100,1) : null;
-    $spR = $qc ? round($sp/$qc*100,1) : null;
-    $ltR = $di ? round($lt/$di*100,1) : null;
+function vendor_eval_summ(int $inq, int $ng, int $sp, int $lt, array $set, array $grades, int $qcQty = 0, int $delQty = 0): array {
+    $ngR = $inq ? round($ng/$inq*100,1) : null;
+    $spR = $inq ? round($sp/$inq*100,1) : null;
+    $ltR = $inq ? round($lt/$inq*100,1) : null;
     $judge = null; $qScore = null; $dScore = null; $score = null;
-    if ($qc>0 || $di>0) {
+    if ($inq > 0) {
         $ok = true;
         if ($ngR!==null && $ngR>$set['ng_max']) $ok=false;
         if ($ltR!==null && $ltR>$set['late_max']) $ok=false;
         if ($set['special_max']<100 && $spR!==null && $spR>$set['special_max']) $ok=false;
         $judge = $ok ? 'pass' : 'fail';
-        $qScore = $qc>0 ? (int)floor(VENDOR_EVAL_Q_MAX*(1-min(1,($ng+$sp)/$qc))) : VENDOR_EVAL_Q_MAX;
-        $dScore = $di>0 ? (int)floor(VENDOR_EVAL_D_MAX*(1-min(1,$lt/$di)))      : VENDOR_EVAL_D_MAX;
+        $qScore = (int)floor(VENDOR_EVAL_Q_MAX*(1-min(1,($ng+$sp)/$inq)));
+        $dScore = (int)floor(VENDOR_EVAL_D_MAX*(1-min(1,$lt/$inq)));
         $score = $qScore + $dScore;                          // 總分(0~100)
     }
-    return ['qc_in'=>$qc,'ng'=>$ng,'special'=>$sp,'del_in'=>$di,'late'=>$lt,
+    return ['in_qty'=>$inq,'qc_qty'=>$qcQty,'del_qty'=>$delQty,'ng'=>$ng,'special'=>$sp,'late'=>$lt,
             'ng_rate'=>$ngR,'special_rate'=>$spR,'late_rate'=>$ltR,'judge'=>$judge,
             'q_score'=>$qScore,'d_score'=>$dScore,'score'=>$score,'grade'=>vendor_eval_grade_of($score,$grades)];
 }
 
 /* ============================================================
  * 定期評核（2-PH-01-05）：單一廠商×年度 月不良率/特採率/遲交率（ERP bom_ing 自動算）
- *  品質：QC_check_date 歸月；進貨數=有檢驗結果的批數、不良=ng(驗退)、特採=AOD(資料字典：QQ是異常不是特採)
- *  交期：應交日=outsource_date+約定工作天(沿用#7)；歸應交月；遲交=未回廠或回廠>應交
+ *  單位一律 PCS 數量（使用者2026-08-17改，原為批數）：
+ *  品質：QC_check_date 歸月；檢驗量=該月被檢驗批的發包數(sqty)、不良=判定ng者、特採=判定AOD者
+ *        不良/特採的顆數優先取該批 qc_check 記錄的異常數量(QC_QQ_sqty)，抓不到才退回整批 sqty
+ *        （實測 QC_ng_sqty 全庫皆 0 沒人填，唯一有量的欄位是 QC_QQ_sqty）
+ *  交期：應交日=outsource_date+約定工作天(沿用#7)；依回廠日歸月；回廠量/遲交量都用 sqty
+ *  進貨數：同月取 max(檢驗量, 回廠量) 當品質與交期共用分母（使用者要求兩邊必須相等）
  * ============================================================ */
 function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): array {
     require_once __DIR__ . '/kpi_as_lib.php';
     $mon = [];
-    for ($m = 1; $m <= 12; $m++) $mon[$m] = ['qc_in'=>0,'ng'=>0,'special'=>0,'del_in'=>0,'late'=>0];
+    for ($m = 1; $m <= 12; $m++) $mon[$m] = ['qc_qty'=>0,'del_qty'=>0,'in_qty'=>0,'ng'=>0,'special'=>0,'late'=>0];
+    $from = sprintf('%04d-01-01',$year); $to = sprintf('%04d-01-01',$year+1);
 
-    // 品質：依 QC_check_date 月份
-    $st = $db->prepare("SELECT MONTH(QC_check_date) m, QC_check, COUNT(*) c FROM bom_ing
-                        WHERE maker_id_no=? AND QC_check_date>=? AND QC_check_date<? AND QC_check IS NOT NULL AND QC_check<>''
-                        GROUP BY MONTH(QC_check_date), QC_check");
-    $st->execute([$mid, sprintf('%04d-01-01',$year), sprintf('%04d-01-01',$year+1)]);
+    // 品質：依 QC_check_date 月份，數量用 sqty；不良/特採顆數優先用該批異常數量(逐筆取 min 以免超出整批數)
+    $st = $db->prepare("SELECT MONTH(b.QC_check_date) m, b.QC_check, IFNULL(b.sqty,0) sqty, IFNULL(q.qq,0) qq
+                        FROM bom_ing b
+                        LEFT JOIN (SELECT bom_ing_fid_ref, SUM(IFNULL(QC_QQ_sqty,0)) qq FROM qc_check GROUP BY bom_ing_fid_ref) q
+                               ON q.bom_ing_fid_ref = b.bom_ing_fid
+                        WHERE b.maker_id_no=? AND b.QC_check_date>=? AND b.QC_check_date<? AND b.QC_check IS NOT NULL AND b.QC_check<>''");
+    $st->execute([$mid, $from, $to]);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $m = (int)$r['m']; if ($m<1||$m>12) continue;
-        $mon[$m]['qc_in'] += (int)$r['c'];
-        if ($r['QC_check']==='ng') $mon[$m]['ng'] += (int)$r['c'];
-        elseif ($r['QC_check']==='AOD') $mon[$m]['special'] += (int)$r['c'];  // 特採=AOD(2026-08-17更正,原誤抓QQ)
+        $sqty = (int)$r['sqty'];
+        $mon[$m]['qc_qty'] += $sqty;
+        $bad = ((int)$r['qq'] > 0) ? min((int)$r['qq'], $sqty ?: (int)$r['qq']) : $sqty;  // 有異常數量就用它，沒有才算整批
+        if ($r['QC_check']==='ng')       $mon[$m]['ng']      += $bad;
+        elseif ($r['QC_check']==='AOD')  $mon[$m]['special'] += $bad;  // 特採=AOD(2026-08-17更正,原誤抓QQ)
     }
 
-    // 交期：進貨數=實際回廠(有 return_date)筆數，依回廠日歸月；遲交=回廠日晚於應交日(發包+約定工作天)
+    // 交期：回廠量=實際回廠(有 return_date)批的 sqty，依回廠日歸月；遲交=回廠日晚於應交日(發包+約定工作天)
     $days = max(0, (int)$set['default_days']);
-    $st = $db->prepare("SELECT outsource_date, return_date FROM bom_ing
+    $st = $db->prepare("SELECT outsource_date, return_date, IFNULL(sqty,0) sqty FROM bom_ing
                         WHERE maker_id_no=? AND return_date IS NOT NULL AND return_date>=? AND return_date<?");
-    $st->execute([$mid, sprintf('%04d-01-01',$year), sprintf('%04d-01-01',$year+1)]);
+    $st->execute([$mid, $from, $to]);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $ret = substr((string)$r['return_date'],0,10);
         $m = (int)substr($ret,5,2); if ($m<1||$m>12) continue;
-        $mon[$m]['del_in']++;
+        $sqty = (int)$r['sqty'];
+        $mon[$m]['del_qty'] += $sqty;
         if (!empty($r['outsource_date'])) {
             $due = kpi_as_add_workdays($db, (string)$r['outsource_date'], $days);
-            if ($ret > $due) $mon[$m]['late']++;
+            if ($ret > $due) $mon[$m]['late'] += $sqty;
         }
     }
 
-    // 各月率
+    // 各月進貨數(取大者當共用分母) + 各月率
     $rows = [];
     foreach ($mon as $m => $d) {
-        $rows[$m] = $d + [
-            'ng_rate'      => $d['qc_in']  ? round($d['ng']/$d['qc_in']*100,1) : null,
-            'special_rate' => $d['qc_in']  ? round($d['special']/$d['qc_in']*100,1) : null,
-            'late_rate'    => $d['del_in'] ? round($d['late']/$d['del_in']*100,1) : null,
+        $inq = max($d['qc_qty'], $d['del_qty']);
+        $mon[$m]['in_qty'] = $inq;
+        $rows[$m] = $mon[$m] + [
+            'ng_rate'      => $inq ? round($d['ng']/$inq*100,1) : null,
+            'special_rate' => $inq ? round($d['special']/$inq*100,1) : null,
+            'late_rate'    => $inq ? round($d['late']/$inq*100,1) : null,
         ];
     }
     // 半年彙總 + 全年彙總（率/判定/分數/等級）：等級門檻沿用呼叫端已依 scope 算好的 $set['grades']，
     // 不在這裡重查(重查會漏 scope 參數,見vendor_eval_settings)。
     $grades = $set['grades'] ?? vendor_eval_grades($db);
+    // 半年進貨數＝各月「取大者」之加總（讓半年列等於畫面上該欄 6 個月相加，不會對不起來）
     $halves = [];
-    $fqc=0;$fng=0;$fsp=0;$fdi=0;$flt=0;
+    $fin=0;$fqc=0;$fdi=0;$fng=0;$fsp=0;$flt=0;
     foreach ([1=>[1,6], 2=>[7,12]] as $h => $rg) {
-        $qc=0;$ng=0;$sp=0;$di=0;$lt=0;
-        for ($m=$rg[0]; $m<=$rg[1]; $m++){ $qc+=$mon[$m]['qc_in']; $ng+=$mon[$m]['ng']; $sp+=$mon[$m]['special']; $di+=$mon[$m]['del_in']; $lt+=$mon[$m]['late']; }
-        $halves[$h] = vendor_eval_summ($qc,$ng,$sp,$di,$lt,$set,$grades);
-        $fqc+=$qc;$fng+=$ng;$fsp+=$sp;$fdi+=$di;$flt+=$lt;
+        $in=0;$qc=0;$di=0;$ng=0;$sp=0;$lt=0;
+        for ($m=$rg[0]; $m<=$rg[1]; $m++){ $in+=$mon[$m]['in_qty']; $qc+=$mon[$m]['qc_qty']; $di+=$mon[$m]['del_qty'];
+                                           $ng+=$mon[$m]['ng']; $sp+=$mon[$m]['special']; $lt+=$mon[$m]['late']; }
+        $halves[$h] = vendor_eval_summ($in,$ng,$sp,$lt,$set,$grades,$qc,$di);
+        $fin+=$in;$fqc+=$qc;$fdi+=$di;$fng+=$ng;$fsp+=$sp;$flt+=$lt;
     }
-    $full = vendor_eval_summ($fqc,$fng,$fsp,$fdi,$flt,$set,$grades);
+    $full = vendor_eval_summ($fin,$fng,$fsp,$flt,$set,$grades,$fqc,$fdi);
     // 總判定(全年等級)＝上、下半年總分的平均，不是拿全年數量重算一次(使用者2026-08-17定案)。
     // 只有一個半年有資料時就用該半年；平均比照分數規則無條件捨去。率/筆數仍維持全年加總值。
     $hs = [];
