@@ -256,7 +256,7 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
         <h4>操作步驟</h4>
         <b>①新增/編輯範本</b>：填範本名稱、綁定適用的部門×職位（選一個部門後可一次勾選多個職位加入，部門選「不限部門」代表該職位不論哪個部門都適用）、編輯內容（職務說明書填4欄工作職責表；員工職能鑑定表填職能項目清單；專業技能鑑定考核表勾選適用機型，可用「全選/取消全選」快速操作，需先在「機型/量具白名單」建立好白名單）。<br>
         <b>①-2 範本之間互相帶入內容</b>：三種範本的內容可以互抓，避免同一份工作內容要打兩次——<br>
-        　・職務說明書範本 ←→ 職能鑑定表範本：<b>雙向</b>。職務說明書的「工作摘要」＝職能鑑定表的「項目名稱」，在任一邊的編輯跳窗選「對應的另一種範本」，勾選要帶入的列後按「加入所選」即可（已存在的內容不會重複加入）。<br>
+        　・職務說明書範本 ←→ 職能鑑定表範本：<b>雙向</b>。職務說明書的「工作摘要」＝職能鑑定表的「項目名稱」，在任一邊的編輯跳窗選「對應的另一種範本」，勾選要帶入的列後按「加入所選」即可（已存在的內容不會重複加入），清單上方有「全選／取消全選」可一次勾完整份。<br>
         　・技能鑑定表範本 →職能鑑定表範本：勾選其適用機型帶入成職能項目；或勾「動態帶入」改成建立表單當下依該員工已有的技能鑑定表機型/量具自動產生。<br>
         　・「對應的另一種範本」下拉會<b>自動預選適用部門×職位有重疊的那一筆</b>（下拉選項後面括號就是該範本的適用範圍），也可以自己改選別筆。<br>
         　・帶入是「當下複製一份」，<b>帶進來之後可以自由改字、刪列、再新增</b>，不會跟來源範本連動；來源範本日後改了也不會回頭蓋掉這裡已調整過的內容（要同步就再帶入一次）。<br>
@@ -480,6 +480,8 @@ function hfTplLinesFor(tplId, field, cb){
         cb(out);
     });
 }
+/** 勾選清單的全選／取消全選（只動目前顯示出來的項目）。 */
+function hfPeerCkAll(ckClass, check){ $('.'+ckClass).filter(':visible').prop('checked', check); }
 function hfPeerLineListHtml(lines, ckClass, emptyMsg){
     if (!lines.length) return '<span style="color:#8a6d45;font-size:12px;">'+esc(emptyMsg)+'</span>';
     return lines.map(function(s){
@@ -503,6 +505,7 @@ function jdTplTableHtml(items){
           + '<div style="border:1px dashed #D8BE93;border-radius:6px;padding:6px;margin-bottom:8px;background:#FDF7EE;">'
           + '<div style="margin-bottom:6px;">對應職能鑑定表範本 <select id="jdFromCpTpl" style="max-width:320px;" onchange="hfJdCpTplChange()"></select>'
           + ' <span style="font-size:12px;color:#8a6d45;">（勾選其職能項目帶入成「工作摘要」，帶入後仍可手動改字或刪列）</span></div>'
+          + '<div style="margin-bottom:4px;"><button type="button" class="hf-btn-sm" onclick="hfPeerCkAll(\'jd-cp-ck\',true)">全選</button> <button type="button" class="hf-btn-sm" onclick="hfPeerCkAll(\'jd-cp-ck\',false)">取消全選</button></div>'
           + '<div id="jdCpItemList" style="max-height:160px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;margin-bottom:6px;background:#fff;"><span style="color:#8a6d45;font-size:12px;">請先在上方選擇對應的職能鑑定表範本</span></div>'
           + '<button type="button" class="hf-btn-sm" onclick="hfJdApplyCpItems()">加入所選（不重複加入已存在的工作摘要）</button>'
           + '</div>'
@@ -621,6 +624,7 @@ function cpTplTableHtml(items){
           + '<div style="border:1px dashed #D8BE93;border-radius:6px;padding:6px;margin-bottom:8px;background:#FDF7EE;">'
           + '<div style="margin-bottom:6px;">對應職務說明書範本 <select id="cpFromJdTpl" style="max-width:320px;" onchange="hfCpJdTplChange()"></select>'
           + ' <span style="font-size:12px;color:#8a6d45;">（勾選其「工作摘要」帶入成職能項目，帶入後仍可手動改字或刪列）</span></div>'
+          + '<div style="margin-bottom:4px;"><button type="button" class="hf-btn-sm" onclick="hfPeerCkAll(\'cp-jd-ck\',true)">全選</button> <button type="button" class="hf-btn-sm" onclick="hfPeerCkAll(\'cp-jd-ck\',false)">取消全選</button></div>'
           + '<div id="cpJdItemList" style="max-height:160px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;margin-bottom:6px;background:#fff;"><span style="color:#8a6d45;font-size:12px;">請先在上方選擇對應的職務說明書範本</span></div>'
           + '<button type="button" class="hf-btn-sm" onclick="hfCpApplyJdItems()">加入所選（不重複加入已存在的項目）</button>'
           + '</div>'
