@@ -81,12 +81,19 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .va-tab { border:1px solid #E8D5B5; border-bottom:none; background:#FBF3E5; color:#8a6d45; cursor:pointer;
             padding:7px 16px; font-size:14px; border-radius:6px 6px 0 0; margin-bottom:-2px; }
         .va-tab.active { background:#fff; color:#5b3a1e; font-weight:bold; border-bottom:2px solid #fff; }
+        .va-scope-switch { display:flex; gap:0; margin-bottom:10px; }
+        .va-scope-btn { border:1px solid #DD8A38; background:#fff; color:#B5762A; cursor:pointer;
+            padding:7px 20px; font-size:14px; font-weight:bold; }
+        .va-scope-btn:first-child { border-radius:6px 0 0 6px; }
+        .va-scope-btn:last-child { border-radius:0 6px 6px 0; border-left:none; }
+        .va-scope-btn.active { background:#DD8A38; color:#fff; }
         /* 凍結窗格：標題→分頁→工具列→門檻說明 固定在頂端(僅螢幕) */
         @media screen {
             .right_col .page-title { position:sticky; top:0; z-index:32; background:#fff; }
-            .va-tabs { position:sticky; top:34px; z-index:31; background:#fff; }
-            #tabEval .va-toolbar { position:sticky; top:72px; z-index:30; }
-            #tabEval #evThresh { position:sticky; top:120px; z-index:29; background:#fff; padding:3px 0; margin:0; }
+            .va-scope-switch { position:sticky; top:34px; z-index:31; background:#fff; padding-top:4px; }
+            .va-tabs { position:sticky; top:76px; z-index:31; background:#fff; }
+            #tabEval .va-toolbar { position:sticky; top:112px; z-index:30; }
+            #tabEval #evThresh { position:sticky; top:160px; z-index:29; background:#fff; padding:3px 0; margin:0; }
         }
         /* 回頂端按鈕 */
         .va-totop { position:fixed; bottom:22px; right:22px; width:48px; height:48px; border:none; border-radius:50%;
@@ -104,7 +111,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         table.ev-mini tr.half td { background:#FDF3E0; font-weight:bold; }
         table.ev-mini td.over { color:#DD5138; font-weight:bold; }
         @media print {
-            .va-tabs, .va-toolbar, .va-remind { display:none !important; }
+            .va-scope-switch, .va-tabs, .va-toolbar, .va-remind { display:none !important; }
             .ev-cards { gap:4px; }
             .ev-card:nth-child(4n) { page-break-after: always; }
         }
@@ -244,6 +251,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <p>請洽管理者於「使用者權限設定」指派「稽核檢閱／登錄／管理員」角色。</p>
         </div>
 <?php else: ?>
+        <div class="va-scope-switch">
+            <button class="va-scope-btn active" data-scope="outsource" onclick="setScope('outsource')"><i class="fa fa-industry"></i> 外包加工（生管）</button>
+            <button class="va-scope-btn" data-scope="purchase" onclick="setScope('purchase')"><i class="fa fa-shopping-cart"></i> 採購</button>
+        </div>
         <div class="va-tabs">
             <button class="va-tab active" data-tab="audit"><i class="fa fa-check-square-o"></i> 稽核批次</button>
             <button class="va-tab" data-tab="eval"><i class="fa fa-line-chart"></i> 定期評核（月不良/遲交率）</button>
@@ -791,6 +802,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-body help-doc">
         <p>本頁為 KPI「2-GM-04-01 #6 廠商稽核按時執行率」的來源頁，並整合供應商評鑑相關 AS 表單。分三個分頁：<b>稽核批次</b>、<b>定期評核</b>、<b>合格供應商清冊</b>。</p>
 
+        <h4>○、範疇切換（外包加工／採購）</h4>
+        <ul>
+            <li>頁面最上方有「外包加工（生管）／採購」切換鈕：<b>生管管的外包加工廠</b>與<b>採購管的一般供應商</b>共用同一支頁面，但<b>稽核批次對象、合格供應商清冊、查核表題庫、年度稽核計劃各自獨立</b>，切換後看到的是該範疇自己的資料，兩邊互不干涉、互不影響。</li>
+            <li>供應商屬於哪個範疇由 master_data 廠商主檔的<b>加工大類</b>自動判定（大類=外包加工廠者歸生管，其餘歸採購），不必手動指定。</li>
+            <li>查核表設定、年度計畫送簽核准，都是「目前切換到哪個範疇，就是在編輯/送出哪個範疇的資料」，管理員留意畫面上的範疇標示再操作。</li>
+        </ul>
+
         <h4>一、稽核批次（實地稽核，半年一期）</h4>
         <ul>
             <li><b>模型</b>：每期（上半年 1–6 月／下半年 7–12 月）挑一批廠商稽核。KPI 執行率＝已完成 ÷ 本期對象數。</li>
@@ -864,6 +882,33 @@ $(document).ready(function(){
 
 var API = '../../src/store/VendorAudit_API.php';
 var META = null, TARGETS = [], PERMS = null, POOL = [], ROUND_YEAR = null, CUR_CFG = null, CUR_PROD_TYPE = null, CUR_REC = null;
+/** 目前操作範疇(外包加工/採購)：生管/採購同頁面共用，資料各自獨立(2026-08-17)。
+ *  一律用 ajaxPrefilter 幫本頁所有 API 請求自動帶上 scope，不必逐一改每個 $.getJSON/$.post 呼叫點。 */
+var CUR_SCOPE = localStorage.getItem('va_cur_scope') === 'purchase' ? 'purchase' : 'outsource';
+$.ajaxPrefilter(function(options){
+    if (options.url !== API) return;
+    if (options.data instanceof FormData) { options.data.append('scope', CUR_SCOPE); return; }
+    if (options.data == null) { options.data = {scope: CUR_SCOPE}; return; }
+    if (typeof options.data === 'string') {
+        if (!/(^|&)scope=/.test(options.data)) options.data += (options.data ? '&' : '') + 'scope=' + encodeURIComponent(CUR_SCOPE);
+    } else if (options.data.scope === undefined) {
+        options.data.scope = CUR_SCOPE;
+    }
+});
+function setScope(s){
+    if (s !== 'outsource' && s !== 'purchase') return;
+    CUR_SCOPE = s;
+    localStorage.setItem('va_cur_scope', s);
+    $('.va-scope-btn').removeClass('active').filter('[data-scope="'+s+'"]').addClass('active');
+    loadMeta(function(){ reloadCurrentTab(); });
+}
+function reloadCurrentTab(){
+    var t = $('.va-tab.active').data('tab');
+    if (t === 'audit') loadRound();
+    else if (t === 'eval') { loadEvVendors($('#evKw').val()||''); $('#evSingle,#evCards,#evPager').hide(); $('#evEmpty').hide(); }
+    else if (t === 'roster') loadRoster();
+    else if (t === 'plan') loadPlan();
+}
 function planTimeliness(t){
     if (!t.plan_month) return '';
     var planYM = ROUND_YEAR+'-'+('0'+t.plan_month).slice(-2);
@@ -925,7 +970,7 @@ function renderListPrintHead(year, half){
     var title = META.list_print_title || '供應商稽核計畫實施結果';
     $('#vaListPrintHead').html('<div class="co">'+esc(META.company_name||'')+'</div>'
         + '<div class="tt">'+esc(title)+'</div>'
-        + '<div class="sub">'+year+' 年　'+(half===1?'上半年':'下半年')+'</div>');
+        + '<div class="sub">'+year+' 年　'+(half===1?'上半年':'下半年')+'（'+scopeLabel(CUR_SCOPE)+'）</div>');
 }
 
 function renderStat(res){
@@ -2135,7 +2180,7 @@ $('#rsCsvBtn').on('click', function(){
     var rows=[['項目','廠商ID','廠商名稱','廠商備註','建議等級','採用等級','類型']];
     ROSTER.rows.forEach(function(r){ rows.push([r.main_cat_name||'',r.maker_id_no,r.maker_id||'',r.m_note||'',(r.suggest_grade||'')+(r.suggest_score==null?'':'('+r.suggest_score+')'),r.final_grade||'',r.is_managed?'納管':'手動列入']); });
     var csv='﻿'+rows.map(function(l){return l.map(function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
-    var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'})); a.download='合格供應商清冊_'+ROSTER.year+'.csv'; a.click();
+    var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'})); a.download='合格供應商清冊_'+ROSTER.year+'_'+scopeLabel(CUR_SCOPE)+'.csv'; a.click();
 });
 /** 合格供應商清冊三欄簽章：製表＝目前登入者，審核＝eg_resolve_supervisor()解析的部門上一階主管
  *  (若解不到就退回製表人本人)，核准＝全站共用「最高核准人員」(org_role_lib top_approver)；
@@ -2157,7 +2202,7 @@ $('#rsPrintBtn').on('click', function(){
         var head='<div style="text-align:center;">'
             +'<div style="font-size:24px;font-weight:bold;letter-spacing:1px;">'+esc(META.company_name||'')+'</div>'
             +'<div style="font-size:18px;font-weight:bold;margin-top:3px;">'+esc(docName)+'</div></div>'
-            +'<div style="text-align:left;font-size:14px;font-weight:bold;margin-top:8px;">'+(ROSTER.year||new Date().getFullYear())+' 年</div>';
+            +'<div style="text-align:left;font-size:14px;font-weight:bold;margin-top:8px;">'+(ROSTER.year||new Date().getFullYear())+' 年（'+scopeLabel(CUR_SCOPE)+'）</div>';
         var rows='<table class="pf" style="table-layout:fixed;margin-top:2px;"><colgroup><col style="width:5%;"><col style="width:26%;">'
             +'<col style="width:13%;"><col style="width:46%;"><col style="width:10%;"></colgroup>'
             +'<thead><tr><th>序</th><th style="text-align:left;">項目</th><th>廠商</th><th>廠商備註</th><th>評核等級</th></tr></thead><tbody>';
@@ -2312,7 +2357,7 @@ $('#planPrintBtn').on('click', function(){
         var head = '<div style="text-align:center;">'
             + '<div style="font-size:20px;font-weight:bold;letter-spacing:1px;">'+esc(PLANDATA.company_name||'')+'</div>'
             + '<div style="font-size:14px;font-weight:bold;margin-top:2px;">'+esc(docName)+'</div></div>'
-            + '<div style="text-align:left;font-size:14px;font-weight:bold;margin-top:8px;">'+esc(year)+' 年</div>';
+            + '<div style="text-align:left;font-size:14px;font-weight:bold;margin-top:8px;">'+esc(year)+' 年（'+scopeLabel(CUR_SCOPE)+'）</div>';
         var table = '<table class="pf plan-table" style="table-layout:fixed;margin-top:2px;"><colgroup><col style="width:15%;">';
         for (var m=1;m<=12;m++) table += '<col>';
         table += '<col style="width:16%;"></colgroup><thead><tr><th>供應商名稱</th>';
@@ -2345,6 +2390,8 @@ $('#btnChecklist').on('click', function(){
             return {code:cat[0], name:cat[1], items:cat[2].map(function(it){ return {item_id:+it[0], item_no:it[1], question:it[2], item_max:it[3]}; })};
         });
         $('#clSelfW').val(res.self_w); $('#clAuditW').val(res.audit_w); $('#clPassRate').val(res.pass_rate);
+        // 查核表依範疇(外包加工/採購)各自獨立一份，標題標示目前正在編輯哪一份，避免誤改成對方的題庫
+        $('#checklistMask .m-head span:first').text('查核表設定（'+scopeLabel(CUR_SCOPE)+'）');
         clRenderCats();
         openMask('checklistMask');
     });
@@ -2486,6 +2533,13 @@ $('.va-mask').on('click', function(e){ if (e.target===this) this.style.display='
 
 $(window).on('scroll', function(){ $('#vaToTop').toggle($(window).scrollTop()>200); });
 
+// 通知深連結可能指定範疇(生管/採購各自獨立年度計畫，見VENDOR_AUDIT_PLAN_OUTSOURCE/PURCHASE)；
+// 開頁當下就要用對的 scope 呼叫 meta/loadRound，不能等載入完才切換(切換會整批重打API)。
+(function(){
+    var sm = /[?&]scope=(outsource|purchase)/.exec(location.search);
+    if (sm) { CUR_SCOPE = sm[1]; localStorage.setItem('va_cur_scope', CUR_SCOPE); }
+    $('.va-scope-btn').removeClass('active').filter('[data-scope="'+CUR_SCOPE+'"]').addClass('active');
+})();
 if (canView) loadMeta(function(){
     loadRound();
     var m = /[?&]sign=(\d+)/.exec(location.search);

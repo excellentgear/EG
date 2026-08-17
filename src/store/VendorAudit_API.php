@@ -45,6 +45,8 @@ if (!$perms['canView']) {
 }
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
+/** 目前操作範疇(外包加工/採購)：GET/POST 皆可帶 scope，未帶或非法值一律回退 outsource(既有資料的預設 scope) */
+$scope = vendor_audit_norm_scope($_GET['scope'] ?? $_POST['scope'] ?? '');
 
 /** 大類篩選條件（比照 master_data 廠商分頁：主檔大類 或 小類經階層歸屬） */
 function va_maincat_cond(int $mainCat, array &$bind): string {
@@ -87,7 +89,8 @@ case 'meta': {
           'plan_approver_names'=>$perms['canAdmin'] ? array_column(vendor_audit_plan_approver_pool($db, $uid), 'user_cname') : [],
           'confirm_pw_allowed'=>eg_confirm_password_allowed($db, $uid),
           'eval_settings'=>vendor_eval_settings($db),
-        ], vendor_audit_checklist_config($db)));
+          'scope'=>$scope, 'scopes'=>[['v'=>'outsource','l'=>'外包加工(生管)'],['v'=>'purchase','l'=>'採購']],
+        ], vendor_audit_checklist_config($db, $scope)));
 }
 
 /* AS 表單清單（綁定列印表單名稱/編號用） */
@@ -107,14 +110,15 @@ case 'as_forms': {
 /* 定期評核：廠商下拉（納管非停用；有關鍵字則全廠搜尋） */
 case 'eval_vendors': {
     $kw = trim((string)($_GET['kw'] ?? ''));
+    $scopeCond = vendor_audit_scope_sql_cond($scope, 'maker_list');
     if ($kw !== '') {
         $st = $db->prepare("SELECT maker_id_no, maker_id FROM maker_list
-                            WHERE (status IS NULL OR status<>?) AND (maker_id LIKE ? OR maker_id_no LIKE ? OR maker_id_all LIKE ?)
+                            WHERE (status IS NULL OR status<>?) AND $scopeCond AND (maker_id LIKE ? OR maker_id_no LIKE ? OR maker_id_all LIKE ?)
                             ORDER BY maker_id LIMIT 50");
         $st->execute([VENDOR_AUDIT_DISABLED, "%$kw%", "%$kw%", "%$kw%"]);
     } else {
         $st = $db->prepare("SELECT maker_id_no, maker_id FROM maker_list
-                            WHERE (status IS NULL OR status<>?) AND audit_managed=1 ORDER BY maker_id LIMIT 300");
+                            WHERE (status IS NULL OR status<>?) AND $scopeCond AND audit_managed=1 ORDER BY maker_id LIMIT 300");
         $st->execute([VENDOR_AUDIT_DISABLED]);
     }
     jout(['vendors'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
@@ -140,7 +144,8 @@ case 'periodic_eval_all': {
     $year = (int)($_GET['year'] ?? date('Y'));
     $set = vendor_eval_settings($db);
     $mk = $db->query("SELECT maker_id_no, maker_id FROM maker_list
-                      WHERE (status IS NULL OR status<>'" . VENDOR_AUDIT_DISABLED . "') AND audit_managed=1 ORDER BY maker_id")
+                      WHERE (status IS NULL OR status<>'" . VENDOR_AUDIT_DISABLED . "') AND audit_managed=1
+                        AND " . vendor_audit_scope_sql_cond($scope, 'maker_list') . " ORDER BY maker_id")
              ->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
     foreach ($mk as $m) {
@@ -168,6 +173,7 @@ case 'roster_list': {
                                sc.sub_cat_names
                         FROM maker_list m " . vendor_audit_subcat_join() . "
                         WHERE (m.status IS NULL OR m.status<>'" . VENDOR_AUDIT_DISABLED . "') AND (m.audit_managed=1 OR m.in_roster=1)
+                          AND " . vendor_audit_scope_sql_cond($scope) . "
                         ORDER BY m.main_category_id IS NULL, m.main_category_id, m.maker_id")->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
     foreach ($rows as $r) {
@@ -233,6 +239,7 @@ case 'stale_vendors': {
                       " . vendor_audit_subcat_join() . "
                       WHERE (m.status IS NULL OR m.status<>'" . VENDOR_AUDIT_DISABLED . "')
                         AND (m.audit_managed=1 OR m.in_roster=1)
+                        AND " . vendor_audit_scope_sql_cond($scope) . "
                       GROUP BY m.maker_id_no, m.maker_id, m.audit_managed, m.in_roster, sc.sub_cat_names
                       HAVING MAX(bi.outsource_date) < DATE_SUB(CURDATE(), INTERVAL 2 YEAR)
                       ORDER BY last_date");
@@ -300,7 +307,8 @@ case 'round': {
                             FROM vendor_audit_target t
                             JOIN maker_list m ON m.maker_id_no=t.maker_id_no
                             " . vendor_audit_subcat_join() . "
-                            WHERE t.round_id=? ORDER BY t.audit_date IS NOT NULL, m.maker_id");
+                            WHERE t.round_id=? AND " . vendor_audit_scope_sql_cond($scope) . "
+                            ORDER BY t.audit_date IS NOT NULL, m.maker_id");
         $st->execute([$rid]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $r['disabled'] = ($r['status'] === VENDOR_AUDIT_DISABLED);
@@ -328,7 +336,7 @@ case 'pool': {
     $kw = trim((string)($_GET['kw'] ?? ''));
     $managedOnly = (int)($_GET['managed_only'] ?? 0) === 1;
 
-    $where = ["(m.status IS NULL OR m.status<>?)"];
+    $where = ["(m.status IS NULL OR m.status<>?)", vendor_audit_scope_sql_cond($scope)];
     $bind = [VENDOR_AUDIT_DISABLED];
     if ($managedOnly) $where[] = "m.audit_managed=1";
     if ($mainCat > 0) $where[] = va_maincat_cond($mainCat, $bind);
@@ -358,7 +366,7 @@ case 'add_targets': {
     $year = (int)($_POST['year'] ?? 0);
     $half = (int)($_POST['half'] ?? 0);
     if ($year < 2000 || ($half !== 1 && $half !== 2)) jerr('期別不正確');
-    if (vendor_audit_plan_locked($db, $year)) jerr($year.' 年度稽核計劃已送出鎖定，不可再增列對象');
+    if (vendor_audit_plan_locked($db, $year, $scope)) jerr($year.' 年度稽核計劃（'.vendor_audit_scope_label($scope).'）已送出鎖定，不可再增列對象');
     $ids = va_ids($_POST['maker_ids'] ?? '');
     if (!$ids) jerr('請選擇廠商');
     $pm = (int)($_POST['plan_month'] ?? 0); $pm = ($pm >= 1 && $pm <= 12) ? $pm : null;
@@ -367,7 +375,7 @@ case 'add_targets': {
         $rid = vendor_audit_round_id($db, $year, $half, true, $u);
         $ins = $db->prepare("INSERT IGNORE INTO vendor_audit_target (round_id, maker_id_no, plan_month, added_by, added_by_name)
                              SELECT ?, m.maker_id_no, ?, ?, ? FROM maker_list m
-                             WHERE m.maker_id_no=? AND (m.status IS NULL OR m.status<>?)");
+                             WHERE m.maker_id_no=? AND (m.status IS NULL OR m.status<>?) AND " . vendor_audit_scope_sql_cond($scope));
         $n = 0;
         foreach ($ids as $mid) { $ins->execute([$rid, $pm, $uid, $uname, $mid, VENDOR_AUDIT_DISABLED]); $n += $ins->rowCount(); }
         $db->commit();
@@ -382,7 +390,7 @@ case 'random_targets': {
     $half = (int)($_POST['half'] ?? 0);
     $n = (int)($_POST['n'] ?? 0);
     if ($year < 2000 || ($half !== 1 && $half !== 2)) jerr('期別不正確');
-    if (vendor_audit_plan_locked($db, $year)) jerr($year.' 年度稽核計劃已送出鎖定，不可再增列對象');
+    if (vendor_audit_plan_locked($db, $year, $scope)) jerr($year.' 年度稽核計劃（'.vendor_audit_scope_label($scope).'）已送出鎖定，不可再增列對象');
     if ($n < 1) jerr('請輸入抽取家數');
     $mainCat = (int)($_POST['main_cat_id'] ?? 0);
     $subCat = (int)($_POST['sub_cat_id'] ?? 0);
@@ -391,7 +399,7 @@ case 'random_targets': {
     try {
         $db->beginTransaction();
         $rid = vendor_audit_round_id($db, $year, $half, true, $u);
-        $where = ["(m.status IS NULL OR m.status<>?)", "m.audit_managed=1",
+        $where = ["(m.status IS NULL OR m.status<>?)", "m.audit_managed=1", vendor_audit_scope_sql_cond($scope),
                   "NOT EXISTS (SELECT 1 FROM vendor_audit_target t WHERE t.round_id=? AND t.maker_id_no=m.maker_id_no)"];
         $bind = [VENDOR_AUDIT_DISABLED, $rid];
         if ($mainCat > 0) $where[] = va_maincat_cond($mainCat, $bind);
@@ -437,9 +445,10 @@ case 'get_form': {
     $t = $st->fetch(PDO::FETCH_ASSOC);
     if (!$t) jerr('找不到對象');
     $scores = json_decode((string)($t['scores_json'] ?? ''), true);
-    $scope = vendor_audit_scope_of($t['main_category_id'] !== null ? (int)$t['main_category_id'] : null);
-    $auditors = vendor_audit_auditors($db, $scope);
-    $cfg = vendor_audit_resolve_cfg($db, $t['checklist_snapshot']);
+    // 這裡的 scope 一律以該供應商主檔實際歸屬為準(而非請求帶的 scope 參數)，因為同一期(round)可能同時有兩種 scope 的對象
+    $targetScope = vendor_audit_scope_of($t['main_category_id'] !== null ? (int)$t['main_category_id'] : null);
+    $auditors = vendor_audit_auditors($db, $targetScope);
+    $cfg = vendor_audit_resolve_cfg($db, $t['checklist_snapshot'], $targetScope);
     // 附件
     $at = $db->prepare("SELECT attach_id, original_name, note, created_by_name, created_at, file_name, year
                         FROM vendor_audit_attach WHERE target_id=? ORDER BY attach_id");
@@ -461,7 +470,7 @@ case 'get_form': {
     $recordDoc = vendor_audit_bound_asdoc($db, 'vendor_record_as_doc_id', $bizDate);
     jout(['target'=>[
         'target_id'=>(int)$t['target_id'], 'maker_id_no'=>$t['maker_id_no'], 'maker_id'=>$t['maker_id'],
-        'main_cat_name'=>$t['main_cat_name'], 'scope'=>$scope, 'scope_label'=>vendor_audit_scope_label($scope),
+        'main_cat_name'=>$t['main_cat_name'], 'scope'=>$targetScope, 'scope_label'=>vendor_audit_scope_label($targetScope),
         'audit_date'=>$t['audit_date'], 'auditor'=>$t['auditor'],
         'report_no'=>$t['report_no'], 'note'=>$t['note'], 'audit_mode'=>$t['audit_mode'], 'plan_month'=>$t['plan_month'],
         'self_evaluator'=>$t['self_evaluator'], 'conclusion'=>$t['conclusion'], 'review_type'=>$t['review_type'],
@@ -574,10 +583,12 @@ case 'attach_open': {
 case 'record_target': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
     $tid = (int)($_POST['target_id'] ?? 0);
-    $st = $db->prepare("SELECT status, checklist_snapshot FROM vendor_audit_target WHERE target_id=?");
+    $st = $db->prepare("SELECT t.status, t.checklist_snapshot, m.main_category_id
+                        FROM vendor_audit_target t JOIN maker_list m ON m.maker_id_no=t.maker_id_no WHERE t.target_id=?");
     $st->execute([$tid]);
     $cur = $st->fetch(PDO::FETCH_ASSOC);
     if (!$cur) jerr('找不到對象');
+    $targetScope = vendor_audit_scope_of($cur['main_category_id'] !== null ? (int)$cur['main_category_id'] : null);
     if (in_array($cur['status'], ['pending','approved'], true)) jerr('此筆已送審核/已核准，請先重新整理確認狀態，如需修改請聯絡管理員');
     $auditDate = trim((string)($_POST['audit_date'] ?? ''));
     $clear = ($auditDate === '');
@@ -596,7 +607,7 @@ case 'record_target': {
     // scores：{item_id:{self,audit,note}}
     $scores = json_decode((string)($_POST['scores'] ?? ''), true);
     if (!is_array($scores)) $scores = [];
-    $cfg = vendor_audit_resolve_cfg($db, $cur['checklist_snapshot']);
+    $cfg = vendor_audit_resolve_cfg($db, $cur['checklist_snapshot'], $targetScope);
     $rates = vendor_audit_compute_rates($scores, $cfg);
     $hasScore = false;
     foreach ($scores as $s) { if (is_array($s) && ((isset($s['self']) && $s['self'] !== '') || (isset($s['audit']) && $s['audit'] !== ''))) { $hasScore = true; break; } }
@@ -652,14 +663,16 @@ case 'complete_target': {
 
     try {
         $db->beginTransaction();
-        $st = $db->prepare("SELECT status, checklist_snapshot FROM vendor_audit_target WHERE target_id=? FOR UPDATE");
+        $st = $db->prepare("SELECT t.status, t.checklist_snapshot, m.main_category_id
+                            FROM vendor_audit_target t JOIN maker_list m ON m.maker_id_no=t.maker_id_no WHERE t.target_id=? FOR UPDATE");
         $st->execute([$tid]);
         $cur = $st->fetch(PDO::FETCH_ASSOC);
         if (!$cur) { $db->rollBack(); jerr('找不到對象'); }
         if (!in_array($cur['status'], ['draft','rejected'], true)) {
             $db->rollBack(); jerr('此筆狀態已變更(可能已完成/送審核)，請重新整理後再試');
         }
-        $cfg = vendor_audit_resolve_cfg($db, $cur['checklist_snapshot']);
+        $targetScope = vendor_audit_scope_of($cur['main_category_id'] !== null ? (int)$cur['main_category_id'] : null);
+        $cfg = vendor_audit_resolve_cfg($db, $cur['checklist_snapshot'], $targetScope);
         $errs = vendor_audit_validate_complete(['auditor'=>$auditor, 'conclusion'=>$conclusion, 'review_type'=>$reviewType, 'scores'=>$scores], $cfg);
         if ($errs) { $db->rollBack(); jerr(implode('；', $errs)); }
 
@@ -771,7 +784,7 @@ case 'save_sign_setting': {
 /* 查核表設定(可設定化題庫)：讀取/儲存 */
 case 'get_checklist': {
     if (!$perms['canAdmin']) jerr('無設定權限', 403);
-    jout(vendor_audit_checklist_config($db));
+    jout(vendor_audit_checklist_config($db, $scope));
 }
 case 'save_checklist': {
     if (!$perms['canAdmin']) jerr('無設定權限', 403);
@@ -782,11 +795,11 @@ case 'save_checklist': {
     $passRate = (float)($_POST['pass_rate'] ?? VENDOR_AUDIT_PASS_RATE);
     try {
         $db->beginTransaction();
-        vendor_audit_checklist_save($db, $cats);
-        vendor_audit_save_weights($db, $selfW, $auditW, $passRate);
+        vendor_audit_checklist_save($db, $cats, $scope);
+        vendor_audit_save_weights($db, $selfW, $auditW, $passRate, $scope);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
-    jout(vendor_audit_checklist_config($db));
+    jout(vendor_audit_checklist_config($db, $scope));
 }
 
 /* 設定廠商是否納入稽核管理（管理員；支援批次） */
@@ -844,7 +857,7 @@ case 'save_cycle': {
 case 'plan_data': {
     $year = (int)($_GET['year'] ?? date('Y'));
     $signSet = vendor_audit_plan_sign_setting($db);
-    $lock = vendor_audit_plan_lock_get($db, $year);
+    $lock = vendor_audit_plan_lock_get($db, $year, $scope);
     // 待核准中：顯示這筆實際的合格核准人清單(依送出者職級解析)；尚未送出：用目前使用者身分預覽會是誰(僅供參考)
     $approverNames = [];
     if ($signSet['need']) {
@@ -871,8 +884,8 @@ case 'plan_data': {
             $canDecide = $perms['canAdmin'] || in_array($uid, array_column($decidePool, 'id'), true);
         }
     }
-    jout(['year'=>$year, 'rows'=>vendor_audit_plan_data($db, $year), 'lock'=>$lock,
-          'locked'=>vendor_audit_plan_locked($db, $year), 'sign_setting'=>$signSet,
+    jout(['year'=>$year, 'scope'=>$scope, 'rows'=>vendor_audit_plan_data($db, $year, $scope), 'lock'=>$lock,
+          'locked'=>vendor_audit_plan_locked($db, $year, $scope), 'sign_setting'=>$signSet,
           'approver_names'=>$approverNames, 'can_decide'=>$canDecide,
           'plan_as_doc'=>vendor_audit_bound_asdoc($db, 'vendor_plan_as_doc_id', $planBizDate),
           'company_name'=>vendor_audit_company_name($db)]);
@@ -883,7 +896,7 @@ case 'plan_submit': {
     if ($year < 2000) jerr('年度不正確');
     $submitDate = trim((string)($_POST['submit_date'] ?? '')) ?: date('Y-m-d');
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $submitDate)) jerr('日期格式不正確');
-    $lock = vendor_audit_plan_lock_get($db, $year);
+    $lock = vendor_audit_plan_lock_get($db, $year, $scope);
     if ($lock && in_array($lock['status'], ['pending','approved'], true)) jerr('此年度計劃已送出，請重新整理確認狀態');
     $need = vendor_audit_plan_sign_setting($db)['need'];
     $pool = [];
@@ -891,9 +904,9 @@ case 'plan_submit': {
         $pool = vendor_audit_plan_approver_pool($db, $uid);
         if (!$pool) jerr('尚未設定核准人員，請聯絡管理員先於「組織角色綁定設定」的「供應商稽核計劃核准」指定部門或人員');
     }
-    $lock = vendor_audit_plan_submit($db, $year, $submitDate, $uid, $uname);
+    $lock = vendor_audit_plan_submit($db, $year, $submitDate, $uid, $uname, $scope);
     if ($lock['status'] === 'pending') {
-        vendor_audit_notify_plan_sign($db, $year, array_column($pool, 'id'), $uid, $uname);
+        vendor_audit_notify_plan_sign($db, $year, array_column($pool, 'id'), $uid, $uname, $scope);
     }
     jout(['lock'=>$lock]);
 }
@@ -905,7 +918,7 @@ case 'plan_decide': {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $approvedDate)) jerr('核准日期格式不正確');
     if (!in_array($decision, ['approved','rejected'], true)) jerr('無效的決定');
     if ($decision === 'rejected' && $noteIn === '') jerr('退回必須填寫原因');
-    $lock = vendor_audit_plan_lock_get($db, $year);
+    $lock = vendor_audit_plan_lock_get($db, $year, $scope);
     if (!$lock || $lock['status'] !== 'pending') jerr('此年度計劃目前無待核准紀錄');
     $submittedBy = (int)($lock['submitted_by'] ?? 0);
     $pool = vendor_audit_plan_approver_pool($db, $submittedBy); // 已排除送出者本人
@@ -925,13 +938,13 @@ case 'plan_decide': {
         if (!$isSubmitter && !$inPool && !$perms['canAdmin']) jerr('您不是本計劃的核准人員', 403);
     }
     if ($decision === 'approved') {
-        $db->prepare("UPDATE vendor_audit_plan_lock SET status='approved', approved_by_name=?, approved_at=NOW(), approved_date=? WHERE year=?")
-           ->execute([$uname, $approvedDate, $year]);
+        $db->prepare("UPDATE vendor_audit_plan_lock SET status='approved', approved_by_name=?, approved_at=NOW(), approved_date=? WHERE year=? AND scope=?")
+           ->execute([$uname, $approvedDate, $year, $scope]);
     } else {
-        $db->prepare("UPDATE vendor_audit_plan_lock SET status='rejected' WHERE year=?")->execute([$year]);
+        $db->prepare("UPDATE vendor_audit_plan_lock SET status='rejected' WHERE year=? AND scope=?")->execute([$year, $scope]);
     }
-    vendor_audit_close_plan_notice($db, $year, $uid);
-    vendor_audit_notify_plan_result($db, $year, $lock['submitted_by'] ? (int)$lock['submitted_by'] : null, $uname, $decision, $noteIn ?: null);
+    vendor_audit_close_plan_notice($db, $year, $uid, $scope);
+    vendor_audit_notify_plan_result($db, $year, $lock['submitted_by'] ? (int)$lock['submitted_by'] : null, $uname, $decision, $noteIn ?: null, $scope);
     jout(['status'=>$decision]);
 }
 case 'get_approver_chain': {
@@ -954,11 +967,11 @@ case 'plan_cancel': {
     if (!$pwCheck['ok']) jerr($pwCheck['msg']);
     $year = (int)($_POST['year'] ?? 0);
     if ($year < 2000) jerr('年度不正確');
-    $lock = vendor_audit_plan_lock_get($db, $year);
+    $lock = vendor_audit_plan_lock_get($db, $year, $scope);
     if (!$lock) jerr('此年度計畫尚未送出，無需取消');
-    $db->prepare("DELETE FROM vendor_audit_plan_lock WHERE year=?")->execute([$year]);
+    $db->prepare("DELETE FROM vendor_audit_plan_lock WHERE year=? AND scope=?")->execute([$year, $scope]);
     $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by) VALUES ('views/pm/vendor_audit.php', ?, ?, NOW(), ?)")
-       ->execute(['取消送出計畫', $year.'年度稽核計畫原狀態：'.$lock['status'].'，已由 '.$uname.'（操作確認密碼驗證）取消鎖定，可重新增列對象/送出', $uname]);
+       ->execute(['取消送出計畫', $year.'年度稽核計畫（'.vendor_audit_scope_label($scope).'）原狀態：'.$lock['status'].'，已由 '.$uname.'（操作確認密碼驗證）取消鎖定，可重新增列對象/送出', $uname]);
     jout(['ok'=>true]);
 }
 case 'save_plan_sign_setting': {

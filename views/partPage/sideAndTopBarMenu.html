@@ -585,12 +585,15 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 nmMarkRead(nmRemoveFromList);
                 return;
             }
-            if (refType === 'VENDOR_AUDIT_PLAN') {
+            if (refType === 'VENDOR_AUDIT_PLAN' || refType === 'VENDOR_AUDIT_PLAN_OUTSOURCE' || refType === 'VENDOR_AUDIT_PLAN_PURCHASE') {
                 // 供應商稽核計劃待核准：比照MEETING_APPROVAL修正(2026-08-10使用者實測回報同一種bug)——
                 // 通用回覆/回簽只會標記通知本身，不會真的呼叫plan_decide。改開稽核管理頁帶
                 // plan_approve=year，頁面會自動切到「供應商稽核計劃」分頁並跳出核准/退回跳窗；
                 // 核准/退回完成前不移除(mode=sign)。
-                window.open('../pm/vendor_audit.php?plan_approve=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                // ref_type 依 scope 各自獨立(2026-08-17起新增OUTSOURCE/PURCHASE後綴，帶scope到頁面切到對應範疇；
+                // 舊格式'VENDOR_AUDIT_PLAN'(改版前既有通知)沒有後綴，回退外包加工維持原行為)。
+                var vaScope = refType === 'VENDOR_AUDIT_PLAN_PURCHASE' ? 'purchase' : 'outsource';
+                window.open('../pm/vendor_audit.php?plan_approve=' + ($(this).data('refid') || 0) + '&scope=' + vaScope + '&event=' + nmId);
                 if (parseInt($(this).data('needmode'), 10) <= 1) {
                     nmMarkRead(nmRemoveFromList);
                 }
