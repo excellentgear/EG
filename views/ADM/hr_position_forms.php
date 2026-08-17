@@ -1076,7 +1076,7 @@ function hfPrintCss(){
          + 'table.hf-p-foot{width:100%;max-width:100%;table-layout:fixed;margin-top:1.2em;margin-bottom:6mm;font-size:13px;}'
          + 'table.hf-p-foot td{padding:0.45em;width:33.33%;text-align:center;vertical-align:top;}'
          + 'table.hf-p-foot .foot-lbl{margin-bottom:0.3em;}'
-         + '.hf-p-note{font-size:11px;color:#333;margin-top:0.6em;line-height:1.5;}'
+         + '.hf-p-note{font-size:11px;color:#333;margin-top:0.6em;line-height:1.5;border:1px solid #ddd;padding:2px 4px;}'
          // 只有「沒有指定圖章模板」時才用換算出的固定尺寸覆蓋；有指定模板時完全尊重模板自己的「大小(px)」，
          // 不要像舊寫法直接選 table.hf-p-foot svg 把所有章(含模板章)一起蓋成固定值（ai-rules/18 第6條）。圖章尺寸
          // 固定用 px !important，不受 #pw-shrink 的 font-size 縮放影響，這是唯一不隨文字縮小的元素。
