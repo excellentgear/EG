@@ -351,7 +351,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <table class="va-table" id="rosterTable">
                     <thead><tr>
                         <th style="width:32px;"><input type="checkbox" id="rsAllCk"></th>
-                        <th style="text-align:left;">加工項目</th><th>廠商</th><th>廠商備註</th>
+                        <th style="text-align:left;">項目</th><th>廠商</th><th>廠商備註</th>
                         <th>建議等級</th><th>採用等級</th><th>類型</th><th>操作</th>
                     </tr></thead>
                     <tbody id="rosterBody"><tr><td colspan="8" style="padding:18px;color:#8a6d45;">載入中…</td></tr></tbody>
@@ -2132,7 +2132,7 @@ function rsAddSelected(){
 }
 $('#rsCsvBtn').on('click', function(){
     if(!ROSTER) return;
-    var rows=[['加工項目','廠商ID','廠商名稱','廠商備註','建議等級','採用等級','類型']];
+    var rows=[['項目','廠商ID','廠商名稱','廠商備註','建議等級','採用等級','類型']];
     ROSTER.rows.forEach(function(r){ rows.push([r.main_cat_name||'',r.maker_id_no,r.maker_id||'',r.m_note||'',(r.suggest_grade||'')+(r.suggest_score==null?'':'('+r.suggest_score+')'),r.final_grade||'',r.is_managed?'納管':'手動列入']); });
     var csv='﻿'+rows.map(function(l){return l.map(function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
     var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'})); a.download='合格供應商清冊_'+ROSTER.year+'.csv'; a.click();
@@ -2160,7 +2160,7 @@ $('#rsPrintBtn').on('click', function(){
             +'<div style="text-align:left;font-size:14px;font-weight:bold;margin-top:8px;">'+(ROSTER.year||new Date().getFullYear())+' 年</div>';
         var rows='<table class="pf" style="table-layout:fixed;margin-top:2px;"><colgroup><col style="width:5%;"><col style="width:26%;">'
             +'<col style="width:13%;"><col style="width:46%;"><col style="width:10%;"></colgroup>'
-            +'<thead><tr><th>序</th><th style="text-align:left;">加工項目</th><th>廠商</th><th>廠商備註</th><th>評核等級</th></tr></thead><tbody>';
+            +'<thead><tr><th>序</th><th style="text-align:left;">項目</th><th>廠商</th><th>廠商備註</th><th>評核等級</th></tr></thead><tbody>';
         ROSTER.rows.forEach(function(r,i){ rows+='<tr><td>'+(i+1)+'</td><td class="q">'+esc(r.main_cat_name||'')+'</td>'
             +'<td class="q"><b>'+esc(r.maker_id||'')+'</b><div style="font-size:11px;color:#555;">'+esc(r.maker_id_no)+'</div></td>'
             +'<td class="q">'+esc(r.m_note||'')+'</td><td>'+esc(r.final_grade||'—')+'</td></tr>'; });
