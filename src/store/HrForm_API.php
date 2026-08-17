@@ -142,10 +142,36 @@ case 'save_items': {
     $inst = hrf_instance_get($db, $id);
     if (!$inst) jerr('找不到此表單', 404);
     if (!$perms['canAdmin'] && (int)$inst['created_by'] !== $uid) jerr('僅建立者或管理員可編輯', 403);
-    if (!in_array($inst['status'], ['draft','active'], true)) jerr('此表單已送出簽核，不可再編輯內容');
+    // 10員工職能鑑定表使用者明確要求送簽後仍可修改（改動會自動退回草稿並要求重新送簽，見 hrf_instance_save_items()）；
+    // 01職務說明書本就恆為 active 不受影響；09技能鑑定表沒有這個動作可呼叫，不受影響。
+    if ($inst['form_type'] !== 'competency' && !in_array($inst['status'], ['draft','active'], true)) jerr('此表單已送出簽核，不可再編輯內容');
     $items = json_decode((string)($_POST['items'] ?? '[]'), true);
     if (!is_array($items)) jerr('內容格式錯誤');
     hrf_instance_save_items($db, $id, $items);
+    jout([]);
+}
+
+case 'cp_set_update_date': {
+    hrf_need_csrf();
+    if (!$perms['isSuperAdmin']) jerr('僅超級管理員可設定此欄位', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    $date = (string)($_POST['date'] ?? '');
+    if (!$date) jerr('請指定日期');
+    $r = hrf_cp_set_update_date($db, $id, $date);
+    if (!$r['ok']) jerr($r['msg']);
+    jout([]);
+}
+
+case 'jd_confirm': {
+    hrf_need_csrf();
+    if (!$perms['canCreate']) jerr('無確認權限', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    $inst = hrf_instance_get($db, $id);
+    if (!$inst) jerr('找不到此表單', 404);
+    if ($inst['form_type'] !== 'job_desc') jerr('僅職務說明書可標記確認完成');
+    if (!$perms['canAdmin'] && (int)$inst['created_by'] !== $uid) jerr('僅建立者或管理員可確認', 403);
+    $r = hrf_job_desc_confirm($db, $id, $uid, $uname);
+    if (!$r['ok']) jerr($r['msg']);
     jout([]);
 }
 
@@ -209,7 +235,10 @@ case 'auto_sign_bulk': {
     $scoresByInstance = json_decode((string)($_POST['scores_by_instance'] ?? '{}'), true);
     if (!is_array($scoresByInstance)) $scoresByInstance = [];
     $scoresByInstance = array_combine(array_map('intval', array_keys($scoresByInstance)), array_values($scoresByInstance));
-    $r = hrf_auto_sign_bulk($db, $ids, $signDate, $uid, $uname, $scoresByInstance);
+    $itemsByInstance = json_decode((string)($_POST['items_by_instance'] ?? '{}'), true);
+    if (!is_array($itemsByInstance)) $itemsByInstance = [];
+    $itemsByInstance = array_combine(array_map('intval', array_keys($itemsByInstance)), array_values($itemsByInstance));
+    $r = hrf_auto_sign_bulk($db, $ids, $signDate, $uid, $uname, $scoresByInstance, $itemsByInstance);
     jout(['done'=>count($r['done']), 'errors'=>$r['errors']]);
 }
 

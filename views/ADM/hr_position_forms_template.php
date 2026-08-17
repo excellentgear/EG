@@ -189,7 +189,7 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
             <div style="flex:1;min-width:220px;border:1px solid #D8BE93;border-radius:4px;padding:6px;max-height:150px;overflow-y:auto;" id="scopeNewPosList"></div>
         </div>
         <div style="margin:6px 0;"><button type="button" class="hf-btn-sm" onclick="scopeAddSelected()">+ 新增選取的職位</button></div>
-        <table class="itm-tbl" id="scopeTbl"><thead><tr><th>部門</th><th>職位</th><th style="width:50px;"></th></tr></thead><tbody id="scopeBody"></tbody></table>
+        <div id="scopeBody" style="display:flex;flex-wrap:wrap;gap:6px;border:1px solid #E8D5B5;border-radius:6px;padding:8px;min-height:40px;background:#fffdfa;"></div>
 
         <div id="tplContentBlock"></div>
     </div>
@@ -359,11 +359,13 @@ var TPL_TYPE = 'job_desc', TPL_ID = 0;
 /** 加一列已定案的部門×職位（唯讀顯示＋刪除鈕），deptId 為 0/空＝不限部門。同一組合已存在就不重複加入。 */
 function scopeAddRow(deptId, posId){
     deptId = deptId || '';
-    var exists = $('#scopeBody tr').filter(function(){ return String($(this).data('dept'))===String(deptId) && String($(this).data('pos'))===String(posId); }).length;
+    var exists = $('#scopeBody .scope-chip').filter(function(){ return String($(this).data('dept'))===String(deptId) && String($(this).data('pos'))===String(posId); }).length;
     if (exists) return;
     var deptName = deptId ? (((META.departments||[]).find(function(d){ return String(d.id)===String(deptId); })||{}).name || '') : '不限部門';
     var posName = ((META.positions||[]).find(function(p){ return String(p.id)===String(posId); })||{}).name || posId;
-    $('#scopeBody').append('<tr data-dept="'+deptId+'" data-pos="'+posId+'"><td>'+esc(deptName)+'</td><td>'+esc(posName)+'</td><td><button class="hf-btn-sm" onclick="$(this).closest(\'tr\').remove()">刪除</button></td></tr>');
+    $('#scopeBody').append('<span class="scope-chip" data-dept="'+deptId+'" data-pos="'+posId+'" style="display:inline-flex;align-items:center;gap:5px;background:#F7E0BD;color:#5b3a1e;border-radius:14px;padding:3px 6px 3px 10px;font-size:12px;white-space:nowrap;">'
+        + esc(deptName)+'×'+esc(posName)
+        + '<button type="button" onclick="$(this).closest(\'.scope-chip\').remove()" style="border:none;background:#fff;color:#8a5a2b;border-radius:50%;width:16px;height:16px;line-height:14px;font-size:11px;cursor:pointer;padding:0;">✕</button></span>');
 }
 /** 初始化「選部門＋多選職位」的新增區塊。 */
 function scopeInitPicker(){
@@ -400,7 +402,7 @@ function openTplModal(ft, id){
             var html = '<label>適用機型（勾選；建立表單時系統會依這份清單自動展開每個機型各一筆）</label>'
                      + '<div style="margin-bottom:4px;"><button type="button" class="hf-btn-sm" onclick="tplMachineCkAll(true)">全選</button> <button type="button" class="hf-btn-sm" onclick="tplMachineCkAll(false)">取消全選</button></div>'
                      + '<div style="max-height:220px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;" id="tplMachineList">'
-                     + wl.map(function(w){ return '<label style="display:block;font-size:12.5px;"><input type="checkbox" class="tm-ck" value="'+w.id+'"> '+esc(w.display_name)+'</label>'; }).join('')
+                     + wl.map(function(w){ return '<label style="display:block;font-size:12.5px;"><input type="checkbox" class="tm-ck" value="'+w.id+'"> '+esc(hfMachineLabel(w,w.source_type))+'</label>'; }).join('')
                      + '</div>';
             $('#tplContentBlock').html(html);
             if (id) fillTplForEdit(id);
@@ -550,7 +552,7 @@ function hfCpFillFromSaTpl(){
 function tplSave(){
     var name = $('#tplName').val().trim();
     if (!name){ alert('請輸入範本名稱'); return; }
-    var scope = $('#scopeBody tr').map(function(){
+    var scope = $('#scopeBody .scope-chip').map(function(){
         var $t = $(this);
         return {department_id: $t.data('dept') || null, position_id: $t.data('pos')};
     }).get().filter(function(s){ return !!s.position_id; });
@@ -608,6 +610,13 @@ function loadWhitelist(){
         }
     });
 }
+/** 機型項目統一顯示「機型 機台名稱」（machine_name 即時對照 machine_list 取得，沒有名稱或跟機型重複就只顯示機型）。 */
+function hfMachineLabel(r, type){
+    if (type !== 'machine') return r.display_name;
+    var model = r.machine_model || r.display_name || '';
+    var name = r.machine_name || '';
+    return (name && name !== model) ? (model + ' ' + name) : model;
+}
 function renderWlGroup(sel, rows){
     var groups = {};
     rows.forEach(function(r){ var g = r.group_name || '未分類'; (groups[g]=groups[g]||[]).push(r); });
@@ -619,7 +628,7 @@ function renderWlGroup(sel, rows){
             // 技能鑑定考核是針對「機型」訓練，不是針對實體機台：勾選項＝一個機型(已去重)，
             // 底下標的機台編號只是給管理員參考「這個機型實際有幾台」，不是要各自訓練一次
             var meta = (type === 'machine' && r.unit_count > 1) ? ('　共'+r.unit_count+'台，機台編號：'+esc(r.asset_no||'-')) : '';
-            html += '<div class="wl-row" data-hay="'+esc(r.display_name+' '+(r.asset_no||'')).toLowerCase()+'"><label style="flex:1;"><input type="checkbox" class="wl-ck" data-type="'+type+'" data-id="'+r.source_id+'"'+(r.checked?' checked':'')+'> '+esc(r.display_name)+'<span style="color:#8a6d45;font-size:11px;">'+meta+'</span></label></div>';
+            html += '<div class="wl-row" data-hay="'+esc(r.display_name+' '+(r.machine_name||'')+' '+(r.asset_no||'')).toLowerCase()+'"><label style="flex:1;"><input type="checkbox" class="wl-ck" data-type="'+type+'" data-id="'+r.source_id+'"'+(r.checked?' checked':'')+'> '+esc(hfMachineLabel(r,type))+'<span style="color:#8a6d45;font-size:11px;">'+meta+'</span></label></div>';
         });
     });
     $(sel).html(html || '<span style="color:#8a6d45;font-size:12px;">（查無資料）</span>');

@@ -495,7 +495,7 @@ function hrf_whitelist_sources(PDO $db): array {
     $unmodeledCount = 0;
     try {
         $machines = $db->query("SELECT MIN(ml.machine_id) AS source_id, ml.machine_model AS display_name,
-                                ml.machine_model AS machine_model, COUNT(*) AS unit_count,
+                                ml.machine_model AS machine_model, MIN(ml.machine) AS machine_name, COUNT(*) AS unit_count,
                                 GROUP_CONCAT(DISTINCT ml.asset_no ORDER BY ml.asset_no SEPARATOR '、') AS asset_no,
                                 MIN(pt.process_type) AS group_name
                                 FROM machine_list ml LEFT JOIN process_type pt ON pt.process_type_id=ml.machine_type_id
@@ -519,9 +519,14 @@ function hrf_whitelist_sources(PDO $db): array {
     return ['machines' => $machines, 'tools' => $tools, 'unmodeled_count' => $unmodeledCount];
 }
 
+/** machine_name 即時依 machine_model 對照 machine_list 取代表機台名稱（僅 source_type=machine 會對到），供畫面顯示「機型 機台名稱」用。 */
 function hrf_whitelist_list(PDO $db): array {
     hrf_ensure_schema($db);
-    return $db->query("SELECT * FROM hr_equipment_whitelist WHERE is_active=1 ORDER BY sort_order,id")->fetchAll(PDO::FETCH_ASSOC);
+    return $db->query("SELECT w.*, mm.machine_name FROM hr_equipment_whitelist w
+                        LEFT JOIN (SELECT machine_model, MIN(machine) AS machine_name FROM machine_list
+                                   WHERE machine_model IS NOT NULL AND machine_model<>'' GROUP BY machine_model) mm
+                               ON mm.machine_model = w.machine_model
+                        WHERE w.is_active=1 ORDER BY w.sort_order,w.id")->fetchAll(PDO::FETCH_ASSOC);
 }
 
 /**
@@ -580,6 +585,29 @@ function hrf_stamp_tpl_options(PDO $db): array {
 
 /* ============================================================ 表單（instance） ============================================================ */
 
+/**
+ * 依機型(machine_model)即時查 machine_list：代表機台名稱＋目前所有「未停用」機台編號清單。
+ * 供09表單頭「機型」列右側附帶顯示機台名稱、下一格列出機台編號，畫面與列印共用同一份資料
+ * （view/print 都吃 hrf_instance_get() 回傳值），現查現組不快照，機台若改名/新增編號會自動反映最新狀態。
+ */
+function hrf_machine_asset_info(PDO $db, ?string $machineModel): array {
+    $machineModel = trim((string)($machineModel ?? ''));
+    if ($machineModel === '') return ['name' => '', 'asset_nos' => []];
+    $name = '';
+    $assetNos = [];
+    try {
+        $st = $db->prepare("SELECT machine, asset_no, state FROM machine_list WHERE machine_model=?
+                             ORDER BY (state IS NULL OR state=0) DESC, machine_id");
+        $st->execute([$machineModel]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            if ($name === '' && trim((string)$row['machine']) !== '') $name = trim($row['machine']);
+            $assetNo = trim((string)($row['asset_no'] ?? ''));
+            if (($row['state'] === null || (int)$row['state'] === 0) && $assetNo !== '') $assetNos[] = $assetNo;
+        }
+    } catch (Throwable $e) {}
+    return ['name' => $name, 'asset_nos' => array_values(array_unique($assetNos))];
+}
+
 function hrf_instance_get(PDO $db, int $id): ?array {
     hrf_ensure_schema($db);
     $st = $db->prepare("SELECT * FROM hr_form_instance WHERE id=?");
@@ -587,7 +615,12 @@ function hrf_instance_get(PDO $db, int $id): ?array {
     $r = $st->fetch(PDO::FETCH_ASSOC);
     if (!$r) return null;
     if (in_array($r['form_type'], ['job_desc','competency'], true)) $r['items'] = hrf_instance_items_get($db, $id);
-    if ($r['form_type'] === 'skill_assess') $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id']);
+    if ($r['form_type'] === 'skill_assess') {
+        $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id']);
+        $info = hrf_machine_asset_info($db, $r['machine_model'] ?? null);
+        $r['machine_real_name'] = $info['name'];
+        $r['machine_asset_nos'] = $info['asset_nos'];
+    }
     return $r;
 }
 
@@ -610,9 +643,30 @@ function hrf_instance_list(PDO $db, array $opt = []): array {
     $st = $db->prepare($sql);
     $st->execute($params);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    // 列表用「機型 機台名稱＋機台編號」批次查一次 machine_list，避免逐列各查一次
+    $models = [];
+    foreach ($rows as $r) { if ($r['form_type'] === 'skill_assess' && !empty($r['machine_model'])) $models[$r['machine_model']] = true; }
+    $assetMap = [];
+    if ($models) {
+        $in = implode(',', array_fill(0, count($models), '?'));
+        $st2 = $db->prepare("SELECT machine_model, machine, asset_no, state FROM machine_list WHERE machine_model IN ($in)");
+        $st2->execute(array_keys($models));
+        foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $m) {
+            $mm = $m['machine_model'];
+            if (!isset($assetMap[$mm])) $assetMap[$mm] = ['name' => '', 'asset_nos' => []];
+            if ($assetMap[$mm]['name'] === '' && trim((string)$m['machine']) !== '') $assetMap[$mm]['name'] = trim($m['machine']);
+            $an = trim((string)($m['asset_no'] ?? ''));
+            if (($m['state'] === null || (int)$m['state'] === 0) && $an !== '') $assetMap[$mm]['asset_nos'][] = $an;
+        }
+    }
     foreach ($rows as &$r) {
         $r['target_level'] = $r['target_level'] === null ? null : (int)$r['target_level'];
-        if ($r['form_type'] === 'skill_assess') $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id']);
+        if ($r['form_type'] === 'skill_assess') {
+            $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id']);
+            $info = $assetMap[$r['machine_model']] ?? ['name' => '', 'asset_nos' => []];
+            $r['machine_real_name'] = $info['name'];
+            $r['machine_asset_nos'] = array_values(array_unique($info['asset_nos']));
+        }
     }
     return $rows;
 }
@@ -641,7 +695,17 @@ function hrf_instance_items_save(PDO $db, int $instanceId, array $items): void {
     $upd = $db->prepare("UPDATE hr_form_instance_item SET seq=?,item_no=?,data_json=? WHERE id=? AND instance_id=?");
     $seq = 0;
     foreach ($items as $it) {
-        $dataJson = json_encode($it['data'] ?? new stdClass(), JSON_UNESCAPED_UNICODE);
+        $data = $it['data'] ?? [];
+        // 10 職能鑑定表 操作/異常排除 分數範圍後端夾緣(1~4)，前端只是即時提示，真正把關在這裡（其餘欄位如01的文字內容不受影響）。
+        if (is_array($data)) {
+            foreach (['score_op', 'score_ex'] as $k) {
+                if (array_key_exists($k, $data)) {
+                    $v = $data[$k];
+                    $data[$k] = ($v === '' || $v === null) ? null : max(1, min(4, (int)$v));
+                }
+            }
+        }
+        $dataJson = json_encode($data === [] ? new stdClass() : $data, JSON_UNESCAPED_UNICODE);
         $itemNo = $it['item_no'] ?? null;
         $id = (int)($it['id'] ?? 0);
         if ($id && in_array($id, $existingIds, true)) {
@@ -697,13 +761,14 @@ function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int
     $needSign = in_array($formType, ['skill_assess', 'competency'], true);
     $db->prepare("INSERT INTO hr_form_instance
         (form_type,user_id,dept_id,position_id,template_id,business_date,status,created_by,created_by_name,
-         user_no,user_cname,dept_name,position_name,supervisor_name,onboard_date,whitelist_id,machine_display_name,machine_model)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+         user_no,user_cname,dept_name,position_name,supervisor_name,onboard_date,whitelist_id,machine_display_name,machine_model,cp_update_date)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
        ->execute([
             $formType, $targetUid, $snap['dept_id'], $snap['position_id'], $tpl['id'], $bizDate, $needSign ? 'draft' : 'active',
             $byUid, $byName,
             $snap['user_no'], $snap['user_cname'], $snap['dept_name'], $snap['position_name'], $snap['supervisor_name'], $snap['onboard_date'],
             $whitelist['id'] ?? null, $whitelist['display_name'] ?? null, $whitelist['machine_model'] ?? null,
+            $formType === 'competency' ? $bizDate : null,
         ]);
     $iid = (int)$db->lastInsertId();
     if ($formType !== 'skill_assess') {
@@ -848,10 +913,42 @@ function hrf_instance_delete(PDO $db, int $id): void {
     $db->prepare("DELETE FROM hr_form_instance WHERE id=?")->execute([$id]);
 }
 
-/** 01/10 內容列存檔；僅 draft 或(01無簽核概念)未鎖定狀態可編輯，呼叫端先自行判斷狀態。 */
+/**
+ * 01/10 內容列存檔。01(職務說明書)無簽核概念，隨時可編輯。10(員工職能鑑定表)使用者明確要求送簽後仍可修改：
+ * 若目前狀態已不是 draft（代表已送出，可能正在確認中/核准中/已完成/已退回），存檔時自動視為內容有異動，
+ * 「最新更新日期」改今天、狀態打回 draft、既有確認/核准紀錄清空，需要重新走一次送出流程（approval_record
+ * 舊紀錄保留當歷史軌跡不刪，重新送出時 hrf_instance_submit() 會建立新的一筆，eg_approval_latest() 自然抓到新的）。
+ */
 function hrf_instance_save_items(PDO $db, int $instanceId, array $items): void {
     hrf_instance_items_save($db, $instanceId, $items);
-    $db->prepare("UPDATE hr_form_instance SET updated_at=NOW() WHERE id=?")->execute([$instanceId]);
+    $st = $db->prepare("SELECT form_type, status FROM hr_form_instance WHERE id=?");
+    $st->execute([$instanceId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if ($row && $row['form_type'] === 'competency' && $row['status'] !== 'draft') {
+        $db->prepare("UPDATE hr_form_instance SET cp_update_date=CURDATE(), status='draft',
+                       confirm_user_id=NULL, confirm_user_name=NULL, confirm_at=NULL,
+                       approve_user_id=NULL, approve_user_name=NULL, approve_at=NULL, updated_at=NOW() WHERE id=?")
+           ->execute([$instanceId]);
+    } else {
+        $db->prepare("UPDATE hr_form_instance SET updated_at=NOW() WHERE id=?")->execute([$instanceId]);
+    }
+}
+
+/** 超級管理員手動調整員工職能鑑定表「最新更新日期」（業務日期，非精確時間戳，比照 ai-rules/21）。 */
+function hrf_cp_set_update_date(PDO $db, int $instanceId, string $date): array {
+    $inst = hrf_instance_get($db, $instanceId);
+    if (!$inst || $inst['form_type'] !== 'competency') return ['ok'=>false, 'msg'=>'僅員工職能鑑定表可設定此欄位'];
+    $db->prepare("UPDATE hr_form_instance SET cp_update_date=? WHERE id=?")->execute([$date, $instanceId]);
+    return ['ok'=>true];
+}
+
+/** 01職務說明書「確認完成」：借用 confirm_user_id/confirm_user_name/confirm_at 三欄（01不走簽核流程，這三欄原本恆為NULL，不與09/10衝突）。 */
+function hrf_job_desc_confirm(PDO $db, int $instanceId, int $uid, string $uname): array {
+    $inst = hrf_instance_get($db, $instanceId);
+    if (!$inst || $inst['form_type'] !== 'job_desc') return ['ok'=>false, 'msg'=>'找不到此表單'];
+    $db->prepare("UPDATE hr_form_instance SET confirm_user_id=?, confirm_user_name=?, confirm_at=NOW() WHERE id=?")
+       ->execute([$uid, $uname, $instanceId]);
+    return ['ok'=>true];
 }
 
 /** 09 評分存檔：$scores 可含 quality_gm/quality_mgr/efficiency_gm/efficiency_mgr/proficiency_gm/proficiency_mgr（1-4或null）。 */
@@ -986,9 +1083,11 @@ function hrf_approve_decide(PDO $db, int $instanceId, int $uid, string $uname, s
  */
 /**
  * 超級管理員(id=1)補簽核。$scoresByInstance＝[instance_id => ['quality_gm'=>,'quality_mgr'=>,...]]（僅
- * skill_assess 適用，未帶入該筆 id 就不動分數，維持原值）；簽核前先存分數，NA(課長考核)欄位強制清空。
+ * skill_assess 適用，未帶入該筆 id 就不動分數，維持原值）；$itemsByInstance＝[instance_id => items[]]（僅
+ * competency 適用，比照真正確認流程 hrf_confirm_decide() 允許順便調整操作/異常排除分數，未帶入該筆 id
+ * 就不動內容）；簽核前先存分數/項目，NA(課長考核)欄位強制清空。
  */
-function hrf_auto_sign_bulk(PDO $db, array $instanceIds, string $signDate, int $byUid, string $byName, array $scoresByInstance = []): array {
+function hrf_auto_sign_bulk(PDO $db, array $instanceIds, string $signDate, int $byUid, string $byName, array $scoresByInstance = [], array $itemsByInstance = []): array {
     $done = []; $errors = [];
     foreach (array_unique(array_map('intval', $instanceIds)) as $iid) {
         $inst = hrf_instance_get($db, $iid);
@@ -1000,6 +1099,9 @@ function hrf_auto_sign_bulk(PDO $db, array $instanceIds, string $signDate, int $
                 $sc = $scoresByInstance[$iid];
                 if (!empty($inst['confirm_na'])) { $sc['quality_mgr'] = null; $sc['efficiency_mgr'] = null; $sc['proficiency_mgr'] = null; }
                 hrf_instance_save_scores($db, $iid, $sc);
+            }
+            if ($inst['form_type'] === 'competency' && isset($itemsByInstance[$iid])) {
+                hrf_instance_items_save($db, $iid, $itemsByInstance[$iid]);
             }
             if ($inst['status'] === 'draft') {
                 $pool = hrf_supervisor_pool($db, (int)$inst['user_id']);
