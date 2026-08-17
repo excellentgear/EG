@@ -153,7 +153,8 @@ case 'periodic_eval': {
     $set = vendor_eval_settings($db, $scope);
     $res = vendor_periodic_eval($db, $mid, $year, $set);
     jout(['maker_id_no'=>$mid, 'maker_name'=>$name, 'year'=>$year, 'settings'=>$set,
-          'months'=>$res['months'], 'halves'=>$res['halves'], 'full'=>$res['full']]);
+          'months'=>$res['months'], 'halves'=>$res['halves'], 'full'=>$res['full'],
+          'lead_days'=>$res['lead_days'], 'lead_days_custom'=>$res['lead_days_custom']]);
 }
 
 /* 定期評核：全部納管廠商（自動略過整年無資料者） */
@@ -320,6 +321,41 @@ case 'save_eval_settings': {
         if (is_array($g)) vendor_eval_save_grades($db, $g, $scope);
     }
     jout(['settings'=>vendor_eval_settings($db, $scope)]);
+}
+
+/* 廠商專屬約定工作天：目前已設定的清單（未設定者不列，畫面上再由使用者加） */
+case 'eval_lead_days_list': {
+    $st = $db->prepare("SELECT maker_id_no, maker_id, audit_lead_days FROM maker_list
+                        WHERE audit_lead_days IS NOT NULL AND (status IS NULL OR status<>?)
+                          AND " . vendor_audit_scope_sql_cond($scope, 'maker_list') . " ORDER BY maker_id");
+    $st->execute([VENDOR_AUDIT_DISABLED]);
+    jout(['rows'=>$st->fetchAll(PDO::FETCH_ASSOC), 'default_days'=>(int)vendor_eval_settings($db, $scope)['default_days']]);
+}
+/* 儲存廠商專屬約定工作天：整批覆寫(送出畫面上目前的所有列)，沒被送到的廠商一律清回用預設 */
+case 'eval_lead_days_save': {
+    if (!$canAdminScope) jerr('您沒有本範疇（'.vendor_audit_scope_label($scope).'）的稽核管理權限', 403);
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows)) jerr('資料格式不正確');
+    $keep = [];
+    foreach ($rows as $r) {
+        $mid = trim((string)($r['maker_id_no'] ?? ''));
+        $d   = $r['days'] ?? '';
+        if ($mid === '' || $d === '' || $d === null) continue;
+        if ((int)$d < 0) jerr('約定工作天不可小於 0');
+        $keep[$mid] = (int)$d;
+    }
+    $scopeCond = vendor_audit_scope_sql_cond($scope);
+    try {
+        $db->beginTransaction();
+        // 先清掉本範疇既有設定，再寫入這次送來的（整批覆寫語意，畫面刪掉一列＝清回預設）
+        $db->prepare("UPDATE maker_list m SET audit_lead_days=NULL WHERE m.audit_lead_days IS NOT NULL AND $scopeCond")->execute();
+        if ($keep) {
+            $up = $db->prepare("UPDATE maker_list m SET audit_lead_days=? WHERE m.maker_id_no=? AND $scopeCond");
+            foreach ($keep as $mid => $d) $up->execute([$d, $mid]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
+    jout(['saved'=>count($keep)]);
 }
 
 /* 某大類下的加工項目(小類) */

@@ -35,6 +35,7 @@ function vendor_audit_ensure_schema(PDO $db): void {
         "ALTER TABLE maker_list ADD COLUMN in_roster TINYINT(1) NOT NULL DEFAULT 0 COMMENT '手動列入合格供應商清冊(非納管也可列冊)'",
         "ALTER TABLE maker_list ADD COLUMN roster_grade VARCHAR(6) NULL COMMENT '合格清冊-手動指定評核等級(覆寫定期評核建議值)'",
         "ALTER TABLE maker_list ADD COLUMN roster_note VARCHAR(10) NULL COMMENT '合格清冊-備註(boss=老闆指定 customer=客戶指定)；未達標等級預設老闆指定'",
+        "ALTER TABLE maker_list ADD COLUMN audit_lead_days INT NULL COMMENT '定期評核-該廠商專屬約定工作天(NULL=用全域預設)'",
     ] as $sql) {
         try { $db->exec($sql); } catch (Throwable $e) { /* 欄位已存在 */ }
     }
@@ -874,6 +875,16 @@ function vendor_eval_summ(int $inq, int $ng, int $sp, int $lt, array $set, array
  *  交期：應交日=outsource_date+約定工作天(沿用#7)；依回廠日歸月；回廠量/遲交量都用 sqty
  *  進貨數：同月取 max(檢驗量, 回廠量) 當品質與交期共用分母（使用者要求兩邊必須相等）
  * ============================================================ */
+/** 該廠商實際採用的約定工作天：廠商專屬設定優先，沒設才用全域預設（使用者2026-08-17：有些廠商本來就比較久） */
+function vendor_eval_lead_days(PDO $db, string $mid, array $set): int {
+    try {
+        $st = $db->prepare("SELECT audit_lead_days FROM maker_list WHERE maker_id_no=? LIMIT 1");
+        $st->execute([$mid]);
+        $v = $st->fetchColumn();
+        if ($v !== false && $v !== null && $v !== '') return max(0, (int)$v);
+    } catch (Throwable $e) { /* 欄位尚未建立時退回全域預設 */ }
+    return max(0, (int)$set['default_days']);
+}
 function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): array {
     require_once __DIR__ . '/kpi_as_lib.php';
     $mon = [];
@@ -897,7 +908,7 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
     }
 
     // 交期：回廠量=實際回廠(有 return_date)批的 sqty，依回廠日歸月；遲交=回廠日晚於應交日(發包+約定工作天)
-    $days = max(0, (int)$set['default_days']);
+    $days = vendor_eval_lead_days($db, $mid, $set);   // 廠商專屬工作天優先
     $st = $db->prepare("SELECT outsource_date, return_date, IFNULL(sqty,0) sqty FROM bom_ing
                         WHERE maker_id_no=? AND return_date IS NOT NULL AND return_date>=? AND return_date<?");
     $st->execute([$mid, $from, $to]);
@@ -948,7 +959,8 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
         $full['score']   = (int)floor(array_sum(array_column($hs,'score'))/$n);
         $full['grade']   = vendor_eval_grade_of($full['score'], $grades);
     }
-    return ['months'=>$rows, 'halves'=>$halves, 'full'=>$full];
+    return ['months'=>$rows, 'halves'=>$halves, 'full'=>$full,
+            'lead_days'=>$days, 'lead_days_custom'=>($days !== max(0,(int)$set['default_days'])) ? 1 : 0];
 }
 
 /* ============================================================

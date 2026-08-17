@@ -772,6 +772,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>約定工作天（算應交日）</label><input type="number" id="stDays" step="1" min="0"></div>
         </div>
         <div style="font-size:12px;color:#8a6d45;margin:8px 0 12px;">半年不良率／遲交率超過上限即判不合格；特採率上限設 100 表示不納入判定。約定工作天沿用 KPI#7 準交口徑。</div>
+        <label>特定廠商的約定工作天（未列出的廠商用上面的預設）</label>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;">
+            <input type="text" id="stLeadKw" placeholder="廠商下拉找不到？打名稱或編號查詢後再選…" style="flex:1;">
+            <button type="button" class="b-att2" id="stLeadKwGo"><i class="fa fa-search"></i> 查詢廠商</button>
+        </div>
+        <div id="stLeadRows" style="border:1px solid #EADFC8;border-radius:6px;padding:6px 8px;max-height:200px;overflow:auto;"></div>
+        <div style="margin:4px 0 12px;"><button type="button" class="b-att2" onclick="leadAddRow('','')"><i class="fa fa-plus"></i> 新增廠商</button>
+            <span style="font-size:11px;color:#8a6d45;">熱處理／表面處理等交期本來就較長的廠商可個別設定（例 14 天）；<b>刪除該列＝恢復用預設</b>。設定後遲交判定與交期分數會依該廠商的天數重算。</span></div>
         <label>評核等級門檻（分數 ≥ 該值即為該等級，由高到低）</label>
         <div id="stGrades" style="border:1px solid #EADFC8;border-radius:6px;padding:6px 8px;"></div>
         <div style="margin:4px 0 4px;"><button type="button" class="b-att2" onclick="gradeAddRow('',0)"><i class="fa fa-plus"></i> 新增等級</button>
@@ -864,7 +872,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>週期設定</b>：共用稽核週期（月），僅供「多久辦一期」提醒。</li>
             <li><b>附件路徑</b>：佐證附件實體存放資料夾（可填 NAS），DB 只存檔名、路徑即時組。</li>
             <li><b>AS文件綁定</b>：四份文件（2-PH-01-02 查檢表／03 記錄表／04 清冊／05 定期評核表）的列印名稱與編號跟 AS 文件管理連動，AS 改名/改號自動跟著變。</li>
-            <li><b>門檻設定</b>（定期評核）：不良率／遲交率／特採率上限、約定工作天、評核等級門檻。</li>
+            <li><b>門檻設定</b>（定期評核）：不良率／遲交率／特採率上限、約定工作天、評核等級門檻，以及<b>特定廠商的約定工作天</b>（廠商層級覆寫：熱處理等交期本來就較長的廠商可個別設天數，未設定者用預設；刪除該列即恢復預設。單一廠商查詢時上方會標示「本廠商專屬設定」）。</li>
         </ul>
 
         <h4>六、權限角色</h4>
@@ -1918,7 +1926,9 @@ function loadEval(){
         $('#evSingle').show(); $('#evCards').empty().hide(); $('#evPager').hide(); $('#evEmpty').hide(); $('#evCsv').show(); $('#evFailBox').hide();
         var s=res.settings;
         $('#evThresh').html('廠商：<b>'+esc(res.maker_name)+'</b>　'+res.year+' 年　門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
-            +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')+'　約定工作天 '+s.default_days+' 天');
+            +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')
+            +'　約定工作天 '+(res.lead_days==null?s.default_days:res.lead_days)+' 天'
+            +(res.lead_days_custom?'<span style="color:#c0762c;">（本廠商專屬設定）</span>':''));
         // 上方：半年/全年 分數與等級
         var sc=function(hf,lab){ if(!hf||hf.score==null) return '<div><span class="s-lab">'+lab+'</span> <span class="s-num" style="font-size:16px;">—</span></div>';
             return '<div><span class="s-lab">'+lab+'</span> <span class="s-num" style="font-size:18px;">'+hf.score+'</span>'
@@ -2091,8 +2101,52 @@ function gradeAddRow(label, min){
         +' 分數 ≥ <input type="number" class="gr-min" step="1" min="0" max="100" value="'+(min==null?'':min)+'" style="width:70px;">'
         +' <span class="af-del" style="color:#DD5138;cursor:pointer;" onclick="$(this).closest(\'.gr-row\').remove()"><i class="fa fa-times"></i></span></div>');
 }
+/* ---- 特定廠商的約定工作天（廠商層級覆寫；未設定＝用預設） ---- */
+var LEAD_VENDORS = null;   // 廠商候選清單(納管廠商)，只抓一次
+function leadVendorOptions(sel){
+    var h='<option value="">選廠商…</option>';
+    (LEAD_VENDORS||[]).forEach(function(v){
+        h+='<option value="'+esc(v.maker_id_no)+'"'+(sel===v.maker_id_no?' selected':'')+'>'+esc(v.maker_id||v.maker_id_no)+'（'+esc(v.maker_id_no)+'）</option>';
+    });
+    return h;
+}
+function leadAddRow(mid, days){
+    $('#stLeadRows').append('<div class="lead-row" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">'
+        +'<select class="lead-mid" style="flex:1;min-width:150px;">'+leadVendorOptions(mid)+'</select>'
+        +'<input type="number" class="lead-days" step="1" min="0" value="'+(days==null||days===''?'':days)+'" style="width:70px;"> 工作天'
+        +' <span class="af-del" style="color:#DD5138;cursor:pointer;" onclick="$(this).closest(\'.lead-row\').remove()"><i class="fa fa-times"></i></span></div>');
+}
+function leadLoadRows(){
+    $('#stLeadRows').html('<div style="font-size:12px;color:#8a6d45;">載入中…</div>');
+    var render=function(rows){
+        $('#stLeadRows').empty();
+        (rows||[]).forEach(function(r){ leadAddRow(r.maker_id_no, r.audit_lead_days); });
+        if(!rows||!rows.length) $('#stLeadRows').html('<div style="font-size:12px;color:#8a6d45;">尚未設定任何廠商（全部用上面的預設天數）</div>');
+    };
+    var go=function(rows){ if(LEAD_VENDORS) render(rows); else
+        $.getJSON(API,{action:'eval_vendors'},function(res){ LEAD_VENDORS=(res&&res.vendors)||[]; render(rows); }); };
+    $.getJSON(API,{action:'eval_lead_days_list'},function(res){ go(res&&res.ok?res.rows:[]); })
+      .fail(function(){ go([]); });
+}
+/* 下拉預設只有納管廠商；打關鍵字可查全廠商後併進候選清單（沿用本頁 #evKw 既有做法，
+   本頁不在 eg_input_rules.js 覆蓋範圍內故不用 data-eg-filter） */
+function leadSearchVendors(){
+    var kw=$.trim($('#stLeadKw').val());
+    $.getJSON(API,{action:'eval_vendors',kw:kw},function(res){
+        if(!res.ok) return;
+        var have={}; (LEAD_VENDORS||[]).forEach(function(v){ have[v.maker_id_no]=1; });
+        (res.vendors||[]).forEach(function(v){ if(!have[v.maker_id_no]){ LEAD_VENDORS.push(v); have[v.maker_id_no]=1; } });
+        LEAD_VENDORS.sort(function(a,b){ return String(a.maker_id||'').localeCompare(String(b.maker_id||'')); });
+        // 重建所有列的選項但保留各列目前已選的廠商
+        $('#stLeadRows .lead-row').each(function(){ var $s=$(this).find('.lead-mid'), cur=$s.val(); $s.html(leadVendorOptions(cur)); });
+        if(kw) alert('已把符合「'+kw+'」的 '+(res.vendors||[]).length+' 家併入下拉候選');
+    });
+}
+$('#stLeadKwGo').on('click', leadSearchVendors);
+$('#stLeadKw').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); leadSearchVendors(); } });
 $('#evSet').on('click', function(){
     var s=(EVAL&&EVAL.settings)||META.eval_settings||{ng_max:5,late_max:30,special_max:100,default_days:7};
+    $('#stLeadKw').val(''); leadLoadRows();
     $('#stNgMax').val(s.ng_max); $('#stLateMax').val(s.late_max); $('#stSpMax').val(s.special_max); $('#stDays').val(s.default_days);
     $('#stGrades').empty(); ((s.grades&&s.grades.length)?s.grades:[{min:90,label:'A'},{min:80,label:'B'},{min:70,label:'C'},{min:0,label:'D'}]).forEach(function(g){ gradeAddRow(g.label,g.min); });
     // 定期評核門檻依範疇各自獨立，標題標示目前正在編輯哪一份
@@ -2102,11 +2156,26 @@ $('#evSet').on('click', function(){
 function submitEvSet(){
     var grades=[]; $('#stGrades .gr-row').each(function(){ var l=$.trim($(this).find('.gr-label').val()), mn=$(this).find('.gr-min').val();
         if(l!=='') grades.push({label:l, min:mn===''?0:+mn}); });
+    // 廠商專屬工作天：前端先驗（選了廠商就一定要填天數、同一廠商不可重複），後端 API 再驗一次
+    var leads=[], seen={}, bad=null;
+    $('#stLeadRows .lead-row').each(function(){
+        var mid=$(this).find('.lead-mid').val(), d=$.trim($(this).find('.lead-days').val());
+        if(!mid && d==='') return;                       // 空白列直接略過
+        if(!mid){ bad='「特定廠商的約定工作天」有一列沒選廠商'; return; }
+        if(d===''||+d<0){ bad='廠商「'+mid+'」的約定工作天沒填或小於 0'; return; }
+        if(seen[mid]){ bad='廠商「'+mid+'」重複設定了兩次'; return; }
+        seen[mid]=1; leads.push({maker_id_no:mid, days:+d});
+    });
+    if(bad){ alert(bad); return; }
     $.post(API, {action:'save_eval_settings', ng_max:$('#stNgMax').val(), late_max:$('#stLateMax').val(),
         special_max:$('#stSpMax').val(), default_days:$('#stDays').val(), grades:JSON.stringify(grades)}, function(res){
         if(!res.ok){ alert(res.error||'儲存失敗'); return; }
-        META.eval_settings=res.settings; closeMask('evSetMask');
-        if(EVAL_ALL) $('#evAll').click(); else if($('#evVendor').val()) loadEval();
+        META.eval_settings=res.settings;
+        $.post(API, {action:'eval_lead_days_save', rows:JSON.stringify(leads)}, function(r2){
+            if(!r2.ok){ alert('門檻已存，但廠商專屬工作天儲存失敗：'+(r2.error||'')); return; }
+            closeMask('evSetMask');
+            if(EVAL_ALL) $('#evAll').click(); else if($('#evVendor').val()) loadEval();
+        }, 'json');
     }, 'json');
 }
 $('#evCsv').on('click', function(){
