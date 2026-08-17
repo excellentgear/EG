@@ -1165,7 +1165,12 @@ function openPrintWindow(title, bodyHtml, docNo){
             + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.pt-head{text-align:center;margin-bottom:6px;word-break:break-word;}.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
             + '.hf-as-doc{position:fixed;right:8mm;bottom:6mm;font-size:9pt;color:#333;}'
-            + '#pw-shrink{font-size:100%;width:100%;max-width:100%;}'
+            // 使用者實測技能鑑定考核表圖章仍偏小、職能鑑定表已正常：兩者共用同一顆圖章模板，差異在
+            // 技能鑑定表的說明文字(.hf-p-note)有多段「中文+數字+%」不易斷行的片段，之前只給表格
+            // 加了 word-break，這段自由文字沒加到，可能是仍偶發撐寬的根因，這裡補齊、範圍擴大到整個
+            // #pw-shrink（所有子元素一律禁止撐寬，寧可斷行/多印一頁，也不讓寬度有機會超出A4）。
+            + '#pw-shrink{font-size:100%;width:100%;max-width:100%;word-break:break-word;overflow-wrap:break-word;}'
+            + '#pw-shrink *{max-width:100%;word-break:break-word;overflow-wrap:break-word;}'
             + hfPrintCss();
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return null; }
