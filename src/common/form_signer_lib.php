@@ -968,7 +968,11 @@ function fsd_case_submit(PDO $db, int $caseId, int $uid): array {
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
     if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'此案件已送出，不可重複送出'];
     if ((int)$case['applicant_id'] !== $uid) return ['ok'=>false, 'msg'=>'只有申請人本人可以送出'];
-    if (!$case['file_name']) return ['ok'=>false, 'msg'=>'請先上傳要簽核的文件'];
+    // 檔案存在與否要逐頁判定：2026-08-14 改多圖案件後檔名存在 fsd_case_page.file_name，
+    // fsd_case.file_name 一律為 NULL(只有舊版單檔/PDF案件才有值)，不可只看 fsd_case.file_name。
+    $hasFile = false;
+    foreach (fsd_case_pages_get($db, $caseId) as $p) if (fsd_case_page_file_name($case, $p)) { $hasFile = true; break; }
+    if (!$hasFile && !$case['file_name']) return ['ok'=>false, 'msg'=>'請先上傳要簽核的文件'];
     $db->prepare("UPDATE fsd_case SET status='in_progress',submitted_at=NOW(),updated_at=NOW() WHERE id=?")->execute([$caseId]);
     $case['status'] = 'in_progress';
     $schema = fsd_case_schema($db, $case);

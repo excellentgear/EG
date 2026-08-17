@@ -375,6 +375,16 @@ var API = '../../src/store/FormSigner_API.php';
 var META = {}, CASES = [], TEMPLATES = [];
 var CUR_CASE = null, CUR_SCHEMA = null, CUR_RESPONSES = null, CUR_AS_DOC_NO = '', CUR_CASE_PAGES = [];
 var FP_CASE = null, FP_TPL_SCHEMA = null, FP_WHITELIST = [], FP_CANVASES = {}, FP_SELECTED = null;
+/* API 用 HTTP 狀態碼回錯(jerr 400/401/403…)，jQuery 在非 2xx 時不會呼叫 success，
+   各處 `if(!res.ok){alert(...)}` 全都跑不到＝畫面完全沒反應、只有 console 一行紅字。
+   統一在這裡把錯誤訊息顯示出來，讓使用者看得到原因(鐵律8：錯誤要顯示原因，不可靜默失敗)。 */
+$(document).ajaxError(function(ev, xhr, opt){
+    if (!opt || String(opt.url||'').indexOf('FormSigner_API.php') < 0) return;
+    if (xhr.statusText === 'abort') return;
+    var msg = '';
+    try { msg = (JSON.parse(xhr.responseText || '{}') || {}).error || ''; } catch(e){}
+    alert(msg || ('操作失敗（HTTP ' + (xhr.status || 0) + '），請重新整理後再試一次'));
+});
 function esc(s){ return $('<div>').text(s==null?'':s).html(); }
 function dispDate(s){ return (window.egFmtDate && s) ? egFmtDate(s) : (s||''); }
 /* 簽核紀錄要顯示時間(ai-rules/21隨機錯開分鐘規定的重點就在時間，date-only的egFmtDate()不適用這裡)。 */
