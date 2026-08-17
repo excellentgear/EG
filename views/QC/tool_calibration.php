@@ -217,6 +217,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button id="btnPending" style="display:none;position:relative;"><i class="fa fa-hourglass-half"></i> 待核准
                 <span id="pendBadge" style="display:none;position:absolute;top:-7px;right:-7px;background:#DD5138;color:#fff;border-radius:9px;font-size:10px;line-height:16px;min-width:16px;height:16px;text-align:center;padding:0 3px;">0</span></button>
             <button class="btn-warm" id="btnAdd" style="display:none;"><i class="fa fa-plus"></i> 新增儀器</button>
+            <button id="btnEquipList"><i class="fa fa-list-alt"></i> 檢驗設備一覽表</button>
             <button id="btnCfg" style="display:none;"><i class="fa fa-cog"></i> 設定</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button onclick="window.print()"><i class="fa fa-print"></i> 列印</button>
@@ -339,6 +340,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>列入校驗率統計（計入 KPI）</label><select id="setManaged">
                 <option value="1">是</option><option value="0">否</option>
             </select></div>
+            <div><label>製造商<span style="color:#8a6d45;font-weight:400;">（檢驗設備一覽表用）</span></label><input type="text" id="setManufacturer" maxlength="100"></div>
+            <div><label>規格</label><input type="text" id="setSpecDesc" maxlength="255"></div>
+            <div><label>購買日期</label><input type="date" id="setPurchaseDate"></div>
+            <div><label>備註</label><input type="text" id="setEquipNote" maxlength="200"></div>
         </div>
         <div style="font-size:12px;color:#8a6d45;margin-top:8px;">
             到期以「月」為單位——同一月份內完成校驗即算準時。設定基準到期月後，之後每次登錄校驗會依週期自動前滾，不需再手動維護。<br>
@@ -707,6 +712,114 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     </div>
 </div></div>
 
+<!-- ══ 檢驗設備一覽表（2026-08-17新增，AS9100文件視角） ══ -->
+<div class="tc-mask" id="eqlMask"><div class="tc-modal xwide">
+    <div class="m-head"><span><i class="fa fa-list-alt"></i> 檢驗設備一覽表</span><span class="m-close" onclick="closeMask('eqlMask')">✕</span></div>
+    <div class="m-body">
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px;">
+            <input type="text" id="eqlKw" placeholder="搜尋編號/名稱/製造商" style="width:180px;">
+            <button onclick="loadEquipList()"><i class="fa fa-search"></i> 查詢</button>
+            <button id="eqlAsDocBtn" style="display:none;"><i class="fa fa-link"></i> AS文件綁定</button>
+            <button id="eqlSignSetBtn" style="display:none;"><i class="fa fa-pencil-square-o"></i> 送簽設定</button>
+            <button onclick="openMask('eqpMask');loadEquipPlan();"><i class="fa fa-calendar-check-o"></i> 年度整份送簽</button>
+            <button id="eqlPrintAllBtn"><i class="fa fa-files-o"></i> 批次列印履歴表</button>
+            <button onclick="printEquipList()"><i class="fa fa-print"></i> 列印清單</button>
+        </div>
+        <div style="overflow-x:auto;">
+        <table class="hist" style="min-width:900px;">
+            <thead><tr><th>機器編號</th><th>機器名稱</th><th>規格</th><th>製造商</th><th>保管人員</th><th>購買日期</th><th>備註</th><th width="150">操作</th></tr></thead>
+            <tbody id="eqlBody"></tbody>
+        </table>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('eqlMask')">關閉</button></div>
+</div></div>
+
+<!-- ══ 保管人員歷程 ══ -->
+<div class="tc-mask" id="eqaMask"><div class="tc-modal">
+    <div class="m-head"><span><i class="fa fa-user-circle-o"></i> 保管人員歷程：<span id="eqaToolName"></span></span><span class="m-close" onclick="closeMask('eqaMask')">✕</span></div>
+    <div class="m-body">
+        <div id="eqaCurrent" style="margin-bottom:10px;"></div>
+        <div id="eqaAssignBox" style="border:1px dashed #E8D5B5;border-radius:6px;padding:10px;margin-bottom:12px;">
+            <div class="grid2">
+                <div><label>指派新保管人員</label><select id="eqa-user" data-eg-filter="輸入姓名篩選人員…"></select></div>
+                <div><label>生效起日</label><input type="date" id="eqa-start"></div>
+            </div>
+            <label>備註</label><input type="text" id="eqa-note">
+            <button class="b-ok" style="margin-top:8px;" onclick="assignEquipUser()"><i class="fa fa-check"></i> 指派</button>
+        </div>
+        <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;">歷史紀錄</div>
+        <table class="hist"><thead><tr><th>保管人員</th><th>起日</th><th>迄日</th><th>備註</th><th id="eqaAdminCol" style="display:none;">操作</th></tr></thead>
+        <tbody id="eqaHistBody"></tbody></table>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('eqaMask')">關閉</button></div>
+</div></div>
+
+<!-- ══ 檢驗設備履歴表(故障維修紀錄) ══ -->
+<div class="tc-mask" id="eqsMask"><div class="tc-modal xwide">
+    <div class="m-head"><span><i class="fa fa-wrench"></i> 檢驗設備履歴表：<span id="eqsToolName"></span></span><span class="m-close" onclick="closeMask('eqsMask')">✕</span></div>
+    <div class="m-body">
+        <div id="eqsFormBox" style="border:1px dashed #E8D5B5;border-radius:6px;padding:10px;margin-bottom:12px;">
+            <input type="hidden" id="eqs-log-id">
+            <div class="grid2">
+                <div><label>日期 *</label><input type="date" id="eqs-date"></div>
+                <div><label>廠商</label><input type="text" id="eqs-vendor"></div>
+            </div>
+            <label>問題</label><input type="text" id="eqs-problem">
+            <label>解決方式</label><input type="text" id="eqs-solution">
+            <div class="grid2">
+                <div><label>執行者</label><input type="text" id="eqs-executor"></div>
+                <div><label>備註</label><input type="text" id="eqs-note"></div>
+            </div>
+            <div style="margin-top:8px;">
+                <button class="b-ok" onclick="saveEquipService()"><i class="fa fa-save"></i> 儲存</button>
+                <button class="b-cancel" onclick="resetEquipServiceForm()">清除</button>
+            </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <div style="font-weight:bold;color:#5b3a1e;">紀錄清單</div>
+            <button onclick="printEquipService(CUR_EQS_TID)"><i class="fa fa-print"></i> 列印本設備履歴表</button>
+        </div>
+        <table class="hist"><thead><tr><th>日期</th><th>廠商</th><th>問題</th><th>解決方式</th><th>執行者</th><th>核准</th><th width="90">操作</th></tr></thead>
+        <tbody id="eqsBody"></tbody></table>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('eqsMask')">關閉</button></div>
+</div></div>
+
+<!-- ══ 年度整份送簽 ══ -->
+<div class="tc-mask" id="eqpMask"><div class="tc-modal">
+    <div class="m-head"><span><i class="fa fa-calendar-check-o"></i> 檢驗設備一覽表 年度整份送簽</span><span class="m-close" onclick="closeMask('eqpMask')">✕</span></div>
+    <div class="m-body">
+        <label>年度</label><select id="eqpYear"></select>
+        <div id="eqpStatus" style="margin:10px 0;font-size:13px;"></div>
+        <label>送出日期</label><input type="date" id="eqpSubmitDate">
+        <div id="eqpDecideBox" style="display:none;margin-top:10px;border-top:1px dashed #EADFC8;padding-top:10px;">
+            <label>核准日期</label><input type="date" id="eqpApproveDate">
+            <label>退回原因(僅退回需填)</label><input type="text" id="eqpRejectNote">
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('eqpMask')">關閉</button>
+        <button class="b-cancel" id="eqpPrintBtn" onclick="printEquipPlanSnapshot()" style="display:none;"><i class="fa fa-print"></i> 列印年度清單</button>
+        <button class="b-ok" id="eqpSubmitBtn" style="display:none;" onclick="submitEquipPlan()">送出</button>
+        <button class="b-cancel" id="eqpRejectBtn" style="display:none;color:#DD5138;border-color:#DD5138;" onclick="decideEquipPlan('rejected')">退回</button>
+        <button class="b-ok" id="eqpApproveBtn" style="display:none;" onclick="decideEquipPlan('approved')">核准</button>
+    </div>
+</div></div>
+
+<!-- ══ 送簽設定 ══ -->
+<div class="tc-mask" id="eqSignSetMask"><div class="tc-modal">
+    <div class="m-head"><span><i class="fa fa-pencil-square-o"></i> 送簽設定</span><span class="m-close" onclick="closeMask('eqSignSetMask')">✕</span></div>
+    <div class="m-body">
+        <label><input type="checkbox" id="eqss-need"> 年度整份送簽需要主管核准</label>
+        <div style="font-size:12px;color:#8a6d45;margin:8px 0 4px;">核准優先序（依序嘗試，取第一個有結果的方法；核准人不可為送出者本人）：</div>
+        <label><input type="checkbox" class="eqss-chain" value="dept_or_user" checked> 部門或指定人員（於「組織角色綁定設定」設定「檢驗設備一覽表年度核准」）</label>
+        <label><input type="checkbox" class="eqss-chain" value="auto_supervisor" checked> 自動抓送出者的上一階主管</label>
+        <label><input type="checkbox" class="eqss-chain" value="top_approver" checked> 全站最高決策者</label>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('eqSignSetMask')">取消</button><button class="b-ok" onclick="saveEquipSignSetting()">儲存</button></div>
+</div></div>
+
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/nprogress.js"></script>
@@ -714,6 +827,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
+<script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -1096,11 +1210,14 @@ function openSet(tid){
         $('#setMethod').val(setTool.calib_method||'');
         $('#setBase').val(fmtMonth(setTool.calibration_due));
         $('#setManaged').val(String(setTool.calib_managed));
+        $('#setManufacturer').val(setTool.manufacturer||''); $('#setSpecDesc').val(setTool.spec_desc||'');
+        $('#setPurchaseDate').val(setTool.purchase_date||''); $('#setEquipNote').val(setTool.note||'');
     } else {
         $('#setTitle').text('新增儀器');
         $('#setNoBox,#setCatBox').show();
         $('#setNo').val(''); $('#setCat').prop('selectedIndex',0);
         $('#setCycle').val(12); $('#setMethod').val(''); $('#setBase').val(''); $('#setManaged').val('1');
+        $('#setManufacturer,#setSpecDesc,#setPurchaseDate,#setEquipNote').val('');
     }
     openMask('setMask');
 }
@@ -1109,7 +1226,9 @@ function submitSet(){
     if (!$.trim($('#setNo').val())){ alert('請填量具編號'); return; }
     var data = {cycle:$('#setCycle').val(), managed:$('#setManaged').val(),
                 method:$('#setMethod').val(), baseline_due:$('#setBase').val(),
-                tool_no:$('#setNo').val(), category_id:$('#setCat').val()};
+                tool_no:$('#setNo').val(), category_id:$('#setCat').val(),
+                manufacturer:$('#setManufacturer').val(), spec_desc:$('#setSpecDesc').val(),
+                purchase_date:$('#setPurchaseDate').val(), equip_note:$('#setEquipNote').val()};
     if (setTool){ data.action='save_tool'; data.tool_id=setTool.Tool_id; }
     else { data.action='create_tool'; }
     $.post(API, data, function(res){
@@ -2554,6 +2673,336 @@ $('.tc-mask').on('click', function(e){ if (e.target===this) this.style.display='
 $(document).on('focus', '.tc-modal input[type=text], .tc-modal input[type=number]', function(){ this.select(); });
 // 清空後補送 input 事件，讓有在監聽的欄位（附件備註、量具料號對應草稿…）同步到記憶體狀態
 $(document).on('dblclick', '.tc-modal input[type=text], .tc-modal input[type=number]', function(){ this.value=''; $(this).trigger('input'); });
+
+/* ══════════════════════════════════════════════════════════════
+ * 檢驗設備一覽表（2026-08-17新增）
+ * ══════════════════════════════════════════════════════════════ */
+var EQL_ROWS = [], CUR_EQS_TID = 0, CUR_EQS_NAME = '', CUR_EQA_TID = 0, EQL_SIGN_SETTING = {need:0}, EQL_APPROVER_CHAIN = [];
+
+function equipAssigneeCellHtml(a){
+    if (!a) return '<span style="color:#c9a876;">尚未指派</span>';
+    var h = esc(a.user_cname);
+    if (a.is_resigned) h += ' <span style="color:#DD5138;font-weight:bold;"><i class="fa fa-exclamation-triangle"></i> 已離職</span>';
+    else if (a.on_leave) h += ' <span style="color:#8a6d45;font-size:11px;">（'+esc(a.state_label)+'）</span>';
+    return h;
+}
+
+$('#btnEquipList').on('click', function(){
+    if (PERMS && PERMS.canAdmin){ $('#eqlAsDocBtn,#eqlSignSetBtn').show(); }
+    openMask('eqlMask');
+    loadEquipList();
+});
+function loadEquipList(){
+    $.getJSON(API, {action:'equip_list', keyword:$('#eqlKw').val()}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        EQL_ROWS = res.rows;
+        var h = '';
+        EQL_ROWS.forEach(function(r){
+            h += '<tr><td>'+esc(r.Tool_No)+'</td><td>'+esc(r.category_name||'')+'</td><td>'+esc(r.spec_desc||'—')+'</td>'
+               + '<td>'+esc(r.manufacturer||'—')+'</td><td>'+equipAssigneeCellHtml(r.assignee)+'</td>'
+               + '<td>'+dispDate(r.purchase_date)+'</td><td>'+esc(r.note||'')+'</td>'
+               + '<td><span class="tc-op" onclick="openSet('+r.Tool_id+')">編輯</span>'
+               + '<span class="tc-op" onclick="openEquipAssignee('+r.Tool_id+',\''+esc(r.Tool_No).replace(/\'/g,"\\\'")+'\')">保管人員</span>'
+               + '<span class="tc-op" onclick="openEquipService('+r.Tool_id+',\''+esc(r.Tool_No).replace(/\'/g,"\\\'")+'\')">履歴</span></td></tr>';
+        });
+        $('#eqlBody').html(h || '<tr><td colspan="8" style="color:#8a6d45;padding:12px;">查無資料</td></tr>');
+    });
+}
+
+/* ── AS 文件綁定 ── */
+$('#eqlAsDocBtn').on('click', function(){
+    var kind = confirm('確定要設定「檢驗設備一覽表」的綁定？\n（取消則改設定「檢驗設備履歴表」）') ? 'tool_calib_equip_list' : 'tool_calib_equip_service';
+    var cur = META.as_docs ? META.as_docs[kind] : null;
+    $.getJSON(API, {action:'asdoc_list'}, function(res){
+        EGAsDoc.open({ docs: res.docs, current: cur?cur.id:0, title: (kind==='tool_calib_equip_list'?'檢驗設備一覽表':'檢驗設備履歴表')+' AS文件綁定',
+            onSave: function(id){ $.post(API, {action:'save_asdoc', module:kind, doc_id:id}, function(){ loadMeta(); alert('已儲存綁定'); }, 'json'); } });
+    });
+});
+
+/* ── 送簽設定 ── */
+$('#eqlSignSetBtn').on('click', function(){
+    $.getJSON(API, {action:'equip_asdoc_meta'}, function(res){
+        EQL_SIGN_SETTING = res.sign_setting; EQL_APPROVER_CHAIN = res.approver_chain;
+        $('#eqss-need').prop('checked', !!EQL_SIGN_SETTING.need);
+        $('.eqss-chain').prop('checked', false);
+        EQL_APPROVER_CHAIN.forEach(function(m){ $('.eqss-chain[value="'+m+'"]').prop('checked', true); });
+        openMask('eqSignSetMask');
+    });
+});
+function saveEquipSignSetting(){
+    var chain = $('.eqss-chain:checked').map(function(){ return this.value; }).get();
+    $.post(API, {action:'equip_sign_setting_save', need: $('#eqss-need').is(':checked')?1:0, chain: JSON.stringify(chain)}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        closeMask('eqSignSetMask'); alert('已儲存');
+    }, 'json');
+}
+
+/* ── 保管人員歷程 ── */
+function openEquipAssignee(tid, name){
+    CUR_EQA_TID = tid;
+    $('#eqaToolName').text(name);
+    $('#eqaAdminCol').toggle(!!(PERMS && PERMS.canAdmin));
+    $('#eqaAssignBox').toggle(!!(PERMS && PERMS.canEdit));
+    $('#eqa-start').val(META.today); $('#eqa-note').val('');
+    $.getJSON(API, {action:'equip_candidates'}, function(res){
+        var $s = $('#eqa-user').empty().append('<option value="">-- 請選擇 --</option>');
+        res.rows.forEach(function(p){ $s.append('<option value="'+p.id+'">'+esc(p.display)+'</option>'); });
+    });
+    loadEquipAssigneeHistory();
+    openMask('eqaMask');
+}
+function loadEquipAssigneeHistory(){
+    $.getJSON(API, {action:'equip_assignee_history', tool_id:CUR_EQA_TID}, function(res){
+        $('#eqaCurrent').html('<b>目前保管人員：</b>'+equipAssigneeCellHtml(res.current));
+        var h = '';
+        res.rows.forEach(function(r){
+            h += '<tr><td>'+esc(r.user_cname)+(r.state===0?' <span style="color:#DD5138;">(已離職)</span>':'')+'</td>'
+               + '<td>'+dispDate(r.start_date)+'</td><td>'+(r.end_date?dispDate(r.end_date):'現任')+'</td><td>'+esc(r.note||'')+'</td>';
+            if (PERMS && PERMS.canAdmin) h += '<td><span class="tc-op" onclick="deleteEquipAssigneeHist('+r.hist_id+')">刪除</span></td>';
+            h += '</tr>';
+        });
+        $('#eqaHistBody').html(h || '<tr><td colspan="5" style="color:#8a6d45;">尚無紀錄</td></tr>');
+    });
+}
+function assignEquipUser(){
+    var userId = $('#eqa-user').val();
+    if (!userId){ alert('請選擇人員'); return; }
+    $.post(API, {action:'equip_assignee_assign', tool_id:CUR_EQA_TID, user_id:userId, start_date:$('#eqa-start').val(), note:$('#eqa-note').val()}, function(res){
+        if (!res.ok){ alert(res.error||'指派失敗'); return; }
+        loadEquipAssigneeHistory(); loadEquipList();
+    }, 'json');
+}
+function deleteEquipAssigneeHist(histId){
+    if (!confirm('確定刪除此筆歷史紀錄？')) return;
+    $.post(API, {action:'equip_assignee_delete', hist_id:histId}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        loadEquipAssigneeHistory(); loadEquipList();
+    }, 'json');
+}
+
+/* ── 履歴表(故障維修紀錄) ── */
+function openEquipService(tid, name){
+    CUR_EQS_TID = tid; CUR_EQS_NAME = name;
+    $('#eqsToolName').text(name);
+    $('#eqsFormBox').toggle(!!(PERMS && PERMS.canEdit));
+    resetEquipServiceForm();
+    loadEquipService();
+    openMask('eqsMask');
+}
+function resetEquipServiceForm(){
+    $('#eqs-log-id').val(''); $('#eqs-date').val(META.today);
+    $('#eqs-vendor,#eqs-problem,#eqs-solution,#eqs-executor,#eqs-note').val('');
+}
+function loadEquipService(){
+    $.getJSON(API, {action:'equip_service_list', tool_id:CUR_EQS_TID}, function(res){
+        var h = '';
+        res.rows.forEach(function(r){
+            h += '<tr><td>'+dispDate(r.service_date)+'</td><td>'+esc(r.vendor_name||'')+'</td>'
+               + '<td style="white-space:normal;text-align:left;">'+esc(r.problem_desc||'')+'</td><td style="white-space:normal;text-align:left;">'+esc(r.solution_desc||'')+'</td>'
+               + '<td>'+esc(r.executor_name||'')+'</td>'
+               + '<td>'+(r.approved_by_name ? esc(r.approved_by_name)+' '+dispDate(r.approved_date) : (PERMS && PERMS.canEdit ? '<span class="tc-op" onclick="approveEquipService('+r.log_id+')">核准</span>' : '（未核准）'))+'</td>'
+               + '<td>'
+               + (PERMS && PERMS.canEdit ? '<span class="tc-op" onclick="editEquipService('+r.log_id+')">編輯</span>' : '')
+               + (PERMS && PERMS.canAdmin ? '<span class="tc-op" onclick="deleteEquipService('+r.log_id+')">刪除</span>' : '')
+               + '</td></tr>';
+        });
+        $('#eqsBody').html(h || '<tr><td colspan="7" style="color:#8a6d45;">尚無紀錄</td></tr>');
+        window.__eqsRows = res.rows;
+    });
+}
+function editEquipService(logId){
+    var r = (window.__eqsRows||[]).find(function(x){ return x.log_id==logId; });
+    if (!r) return;
+    $('#eqs-log-id').val(r.log_id); $('#eqs-date').val(r.service_date); $('#eqs-vendor').val(r.vendor_name||'');
+    $('#eqs-problem').val(r.problem_desc||''); $('#eqs-solution').val(r.solution_desc||''); $('#eqs-executor').val(r.executor_name||'');
+    $('#eqs-note').val(r.note||'');
+}
+function saveEquipService(){
+    if (!$('#eqs-date').val()){ alert('請填日期'); return; }
+    $.post(API, {action:'equip_service_save', log_id:$('#eqs-log-id').val(), tool_id:CUR_EQS_TID, service_date:$('#eqs-date').val(),
+        vendor_name:$('#eqs-vendor').val(), problem_desc:$('#eqs-problem').val(), solution_desc:$('#eqs-solution').val(),
+        executor_name:$('#eqs-executor').val(), note:$('#eqs-note').val()}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        resetEquipServiceForm(); loadEquipService();
+    }, 'json');
+}
+function deleteEquipService(logId){
+    if (!confirm('確定刪除此筆履歴紀錄？')) return;
+    $.post(API, {action:'equip_service_delete', log_id:logId}, function(res){
+        if (!res.ok){ alert(res.error||'刪除失敗'); return; }
+        loadEquipService();
+    }, 'json');
+}
+function approveEquipService(logId){
+    if (!confirm('確定核准此筆紀錄？')) return;
+    $.post(API, {action:'equip_service_approve', log_id:logId, approved_date:META.today}, function(res){
+        if (!res.ok){ alert(res.error||'核准失敗'); return; }
+        loadEquipService();
+    }, 'json');
+}
+
+/* ── 履歴表列印（單筆＋批次排隊，ai-rules/16第三之五節） ── */
+function printEquipServiceDoc(tid, tname, rows, onDone){
+    var d = META.as_docs ? META.as_docs.tool_calib_equip_service : null;
+    var docNo = d ? (d.doc_no + (d.doc_level==='四階'?(d.current_version||''):'')) : '';
+    var body = '<table class="hist" style="margin-bottom:10px;"><tbody><tr><th style="width:110px;">量具編號</th><td>'+esc(tname)+'</td></tr></tbody></table>';
+    if (!rows.length) body += '<div style="color:#8a6d45;padding:8px 0;">尚無履歴紀錄</div>';
+    else {
+        body += '<table class="hist"><thead><tr><th>日期</th><th>廠商</th><th>問題</th><th>解決方式</th><th>執行者</th><th>核准</th></tr></thead><tbody>';
+        rows.forEach(function(r){
+            body += '<tr><td>'+dispDate(r.service_date)+'</td><td>'+esc(r.vendor_name||'')+'</td>'
+               + '<td style="text-align:left;">'+esc(r.problem_desc||'')+'</td><td style="text-align:left;">'+esc(r.solution_desc||'')+'</td>'
+               + '<td>'+esc(r.executor_name||'')+'</td><td>'+(r.approved_by_name?esc(r.approved_by_name)+' '+dispDate(r.approved_date):'（未核准）')+'</td></tr>';
+        });
+        body += '</tbody></table>';
+    }
+    body += '<div style="display:flex;justify-content:space-between;margin-top:26px;">'
+          + '<div>核准：'+footerStampHtml('', '')+'</div><div>製表：'+footerStampHtml(META.cur_user_name||'', META.today)+'</div></div>';
+    var w = window.open('', '_blank');
+    if (!w){ alert('瀏覽器阻擋了列印視窗，請允許彈出視窗'); if (onDone) onDone(); return; }
+    w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>檢驗設備履歴表：'+esc(tname)+'</title><style>'
+      + 'body{font-family:"Microsoft JhengHei",sans-serif;color:#3b2a17;margin:0;}.pg{margin:12mm 8mm 16mm;}'
+      + '.co{text-align:center;font-size:20px;font-weight:bold;letter-spacing:2px;}h2{font-size:15px;margin:2px 0 10px;text-align:center;}'
+      + 'table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:4px;}th,td{border:1px solid #999;padding:3px 5px;text-align:center;}'
+      + 'table th{background:#F7E0BD;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + 'svg{width:66px !important;height:66px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + '@page{size:A4 landscape;margin:10mm 8mm 16mm 8mm;'
+      + (docNo ? '@bottom-right{content:"'+docNo.replace(/["\\]/g,'')+'";font-size:9pt;color:#333;}' : '')
+      + '@bottom-left{content:"第" counter(page) "頁／共" counter(pages) "頁";font-size:9pt;color:#333;}}'
+      + '</style></head><body><div class="pg"><div class="co">'+esc((META&&META.company_name)||'')+'</div>'
+      + '<h2>檢驗設備履歴表(故障維修紀錄)</h2>' + body + '</div></body></html>');
+    w.document.close(); w.focus();
+    setTimeout(function(){ w.print(); if (onDone) setTimeout(onDone, 500); }, 300);
+}
+function printEquipService(tid){
+    if (!tid) return;
+    $.getJSON(API, {action:'equip_service_list', tool_id:tid}, function(res){ printEquipServiceDoc(tid, CUR_EQS_NAME, res.rows); });
+}
+var EQ_PRINT_ALL_THRESHOLD = 15;
+$('#eqlPrintAllBtn').on('click', function(){
+    if (!EQL_ROWS.length){ alert('目前沒有搜尋結果可列印'); return; }
+    if (EQL_ROWS.length > EQ_PRINT_ALL_THRESHOLD) {
+        if (!confirm('共 '+EQL_ROWS.length+' 支量具，將逐一開啟列印視窗，請確認瀏覽器允許彈出視窗。是否繼續？')) return;
+    }
+    var idx = 0;
+    function next(){
+        if (idx >= EQL_ROWS.length){ alert('已完成列印 '+EQL_ROWS.length+' 筆履歴表。'); return; }
+        var r = EQL_ROWS[idx++];
+        $.getJSON(API, {action:'equip_service_list', tool_id:r.Tool_id}, function(res){
+            printEquipServiceDoc(r.Tool_id, r.Tool_No, res.rows, next);
+        });
+    }
+    next();
+});
+
+/* ── 一覽表列印（單一連續表格） ── */
+function printEquipList(){
+    var d = META.as_docs ? META.as_docs.tool_calib_equip_list : null;
+    var docNo = d ? (d.doc_no + (d.doc_level==='四階'?(d.current_version||''):'')) : '';
+    var body = '<table><thead><tr><th>機器編號</th><th>機器名稱</th><th>規格</th><th>製造商</th><th>保管人員</th><th>購買日期</th><th>備註</th></tr></thead><tbody>';
+    EQL_ROWS.forEach(function(r){
+        body += '<tr><td>'+esc(r.Tool_No)+'</td><td>'+esc(r.category_name||'')+'</td><td>'+esc(r.spec_desc||'')+'</td>'
+              + '<td>'+esc(r.manufacturer||'')+'</td><td>'+esc(r.assignee?r.assignee.user_cname:'')+'</td>'
+              + '<td>'+dispDate(r.purchase_date)+'</td><td>'+esc(r.note||'')+'</td></tr>';
+    });
+    body += '</tbody></table>';
+    body += '<div style="display:flex;justify-content:space-between;margin-top:26px;">'
+          + '<div>核准：'+footerStampHtml('', '')+'</div><div>製表：'+footerStampHtml(META.cur_user_name||'', META.today)+'</div></div>';
+    var w = window.open('', '_blank');
+    if (!w){ alert('瀏覽器阻擋了列印視窗'); return; }
+    w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>檢驗設備一覽表</title><style>'
+      + 'body{font-family:"Microsoft JhengHei",sans-serif;color:#3b2a17;margin:0;}.pg{margin:12mm 8mm 16mm;}'
+      + '.co{text-align:center;font-size:20px;font-weight:bold;letter-spacing:2px;}h2{font-size:15px;margin:2px 0 10px;text-align:center;}'
+      + 'table{width:100%;border-collapse:collapse;font-size:11px;}th,td{border:1px solid #999;padding:3px 5px;text-align:center;}'
+      + 'th{background:#F7E0BD;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + 'svg{width:66px !important;height:66px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + '@page{size:A4 landscape;margin:10mm 8mm 16mm 8mm;'
+      + (docNo ? '@bottom-right{content:"'+docNo.replace(/["\\]/g,'')+'";font-size:9pt;color:#333;}' : '')
+      + '@bottom-left{content:"第" counter(page) "頁／共" counter(pages) "頁";font-size:9pt;color:#333;}}'
+      + '</style></head><body><div class="pg"><div class="co">'+esc((META&&META.company_name)||'')+'</div>'
+      + '<h2>檢驗設備一覽表</h2>' + body + '</div></body></html>');
+    w.document.close(); w.focus();
+    setTimeout(function(){ w.print(); }, 300);
+}
+
+/* ── 年度整份送簽 ── */
+var CUR_EQP_YEAR = null;
+$('#eqpYear').on('change', loadEquipPlan);
+function ensureEqpYearOptions(){
+    if ($('#eqpYear option').length) return;
+    var $y = $('#eqpYear');
+    for (var y=META.cur_year+1; y>=META.cur_year-4; y--) $y.append('<option value="'+y+'">'+y+'</option>');
+    $y.val(META.cur_year);
+}
+function loadEquipPlan(){
+    ensureEqpYearOptions();
+    var year = $('#eqpYear').val() || META.cur_year;
+    $.getJSON(API, {action:'equip_plan_data', year:year}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        CUR_EQP_YEAR = res.year;
+        $('#eqpSubmitDate').val(META.today);
+        var s = '';
+        if (!res.lock) s = '尚未送出。';
+        else {
+            var stMap = {pending:'待核准', approved:'已核准', rejected:'已退回'};
+            s = '狀態：<b>'+(stMap[res.lock.status]||res.lock.status)+'</b>　送出：'+esc(res.lock.submitted_by_name||'')+' '+dispDate(res.lock.submit_date);
+            if (res.lock.status==='approved') s += '<br>核准：'+esc(res.lock.approved_by_name||'')+' '+dispDate(res.lock.approved_date);
+        }
+        $('#eqpStatus').html(s);
+        var canSubmit = PERMS && PERMS.canEdit && (!res.lock || res.lock.status==='rejected');
+        $('#eqpSubmitBtn').toggle(!!canSubmit);
+        $('#eqpDecideBox,#eqpApproveBtn,#eqpRejectBtn').toggle(!!res.can_decide);
+        $('#eqpPrintBtn').toggle(!!(res.lock && res.lock.status==='approved'));
+        if (res.can_decide) $('#eqpApproveDate').val(META.today);
+    });
+}
+function submitEquipPlan(){
+    var snapshot = EQL_ROWS.map(function(r){ return {Tool_id:r.Tool_id, Tool_No:r.Tool_No, category_name:r.category_name,
+        spec_desc:r.spec_desc, manufacturer:r.manufacturer, purchase_date:r.purchase_date, note:r.note,
+        assignee: r.assignee ? r.assignee.user_cname : ''}; });
+    $.post(API, {action:'equip_plan_submit', year:CUR_EQP_YEAR||$('#eqpYear').val(), submit_date:$('#eqpSubmitDate').val(), snapshot:JSON.stringify(snapshot)}, function(res){
+        if (!res.ok){ alert(res.error||'送出失敗'); return; }
+        loadEquipPlan(); alert('已送出');
+    }, 'json');
+}
+function decideEquipPlan(decision){
+    if (decision==='rejected' && !$('#eqpRejectNote').val().trim()){ alert('請填寫退回原因'); return; }
+    $.post(API, {action:'equip_plan_decide', year:CUR_EQP_YEAR, decision:decision, approved_date:$('#eqpApproveDate').val(), note:$('#eqpRejectNote').val()}, function(res){
+        if (!res.ok){ alert(res.error||'操作失敗'); return; }
+        loadEquipPlan(); alert(decision==='approved'?'已核准':'已退回');
+    }, 'json');
+}
+function printEquipPlanSnapshot(){
+    $.getJSON(API, {action:'equip_plan_data', year:CUR_EQP_YEAR}, function(res){
+        var lock = res.lock;
+        var rows = lock && lock.snapshot_json ? JSON.parse(lock.snapshot_json) : [];
+        var d = res.list_as_doc;
+        var docNo = d ? (d.doc_no + (d.doc_level==='四階'?(d.current_version||''):'')) : '';
+        var body = '<table><thead><tr><th>機器編號</th><th>機器名稱</th><th>規格</th><th>製造商</th><th>保管人員</th></tr></thead><tbody>';
+        rows.forEach(function(r){
+            body += '<tr><td>'+esc(r.Tool_No||'')+'</td><td>'+esc(r.category_name||'')+'</td><td>'+esc(r.spec_desc||'')+'</td>'
+                  + '<td>'+esc(r.manufacturer||'')+'</td><td>'+esc(r.assignee||'')+'</td></tr>';
+        });
+        body += '</tbody></table>';
+        body += '<div style="display:flex;justify-content:space-between;margin-top:26px;">'
+              + '<div>核准：'+footerStampHtml(lock.approved_by_name, lock.approved_date)+'</div>'
+              + '<div>製表：'+footerStampHtml(lock.submitted_by_name, lock.submit_date)+'</div></div>';
+        var w = window.open('', '_blank');
+        if (!w){ alert('瀏覽器阻擋了列印視窗'); return; }
+        w.document.write('<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8"><title>檢驗設備一覽表 '+CUR_EQP_YEAR+'年度</title><style>'
+          + 'body{font-family:"Microsoft JhengHei",sans-serif;color:#3b2a17;margin:0;}.pg{margin:12mm 8mm 16mm;}'
+          + '.co{text-align:center;font-size:20px;font-weight:bold;letter-spacing:2px;}h2{font-size:15px;margin:2px 0 10px;text-align:center;}'
+          + 'table{width:100%;border-collapse:collapse;font-size:11px;}th,td{border:1px solid #999;padding:3px 5px;text-align:center;}'
+          + 'th{background:#F7E0BD;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+          + 'svg{width:66px !important;height:66px !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+          + '@page{size:A4 landscape;margin:10mm 8mm 16mm 8mm;'
+          + (docNo ? '@bottom-right{content:"'+docNo.replace(/["\\]/g,'')+'";font-size:9pt;color:#333;}' : '')
+          + '@bottom-left{content:"第" counter(page) "頁／共" counter(pages) "頁";font-size:9pt;color:#333;}}'
+          + '</style></head><body><div class="pg"><div class="co">'+esc((META&&META.company_name)||'')+'</div>'
+          + '<h2>檢驗設備一覽表（'+CUR_EQP_YEAR+' 年度核准清單）</h2>' + body + '</div></body></html>');
+        w.document.close(); w.focus(); setTimeout(function(){ w.print(); }, 300);
+    });
+}
 
 if (canView) loadMeta(function(){ loadList(); });
 </script>
