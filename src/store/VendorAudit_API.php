@@ -170,9 +170,14 @@ case 'periodic_eval_all': {
         $res = vendor_periodic_eval($db, $m['maker_id_no'], $year, $set);
         $h1 = $res['halves'][1]; $h2 = $res['halves'][2];
         if (($h1['in_qty'] + $h2['in_qty']) === 0) continue; // 整年無進貨→略過
-        $fail = ($h1['judge'] === 'fail' || $h2['judge'] === 'fail');
+        // 合格與否一律以「總判定」(上下半年平均分的等級)為準，避免卡片標題跟總判定列互相矛盾
+        // （使用者2026-08-17發現：聯鑫下半年C不合格但平均86分B合格，標題卻標不合格）。
+        // 任一半年不合格另外用 half_fail 標示，資訊不遺失。
+        $fail = ($res['full']['judge'] === 'fail');
+        $halfFail = ($h1['judge'] === 'fail' || $h2['judge'] === 'fail');
         $out[] = ['maker_id_no'=>$m['maker_id_no'], 'maker_name'=>$m['maker_id'],
-                  'months'=>$res['months'], 'halves'=>$res['halves'], 'full'=>$res['full'], 'fail'=>$fail];
+                  'months'=>$res['months'], 'halves'=>$res['halves'], 'full'=>$res['full'],
+                  'fail'=>$fail, 'half_fail'=>$halfFail];
     }
     // 定期評核表本身沒有單筆業務日期(選定年度的全廠商彙總報表)，比照該年度稽核計畫的送出日期回推
     // AS 編號版次(使用者明確要求：兩者用同一套業務日期認定，ai-rules/16 第三之四節)。

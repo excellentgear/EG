@@ -840,6 +840,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>畫面欄位是「數量」不是「率」</b>：不良數／特採數／遲交數直接顯示 PCS；<b>滑鼠移到數字上會顯示它佔進貨數的百分比</b>，超過門檻的數字一樣標紅。匯出 CSV 兩者都有。</li>
             <li><b>分數／等級</b>：以半年<b>加總</b>後計算——<b>品質分＝60×(1−(不良數＋特採數)÷進貨數)</b>、<b>交期分＝40×(1−遲交數÷進貨數)</b>，皆<b>無條件捨去</b>（比照紙本 Excel）；半年總分＝品質分＋交期分（0～100），依等級門檻判 A/B/C/D。<b>總判定＝上半年與下半年總分的平均</b>（只有一個半年有資料就用該半年）。該分項整段期間沒有資料（分母 0）視同無缺失給滿分。</li>
             <li><b>合格／不合格由等級決定</b>：在「門檻設定」的評核等級區塊逐級勾選<b>「視為不合格」</b>（例：A≥95、B≥85、C≥0，把 C 勾起來＝落到 C 就是不合格；可勾多級）。<b>不良率／遲交率／特採率上限只做超標標紅提醒</b>，不再把整個半年判成不合格（所以不會再出現「A 級卻標不合格」）。舊資料沒設過時，預設把最低一階當不合格。</li>
+            <li><b>卡片標題的合格徽章＝總判定</b>（上下半年平均分的等級），與表格最後一列「全年（總判定）」永遠一致；若總判定合格但<b>某個半年不合格</b>，會另外加註「有半年不合格」提醒。「只看不合格」篩選也是看總判定。</li>
             <li><b>全部納管廠商</b>：一次列出所有納管廠商，2 欄卡片，<b>每頁 10 家</b>、下方可翻頁（只畫當頁避免一次載入過慢）；可「只看不合格」；橫式列印一頁 6 間（列印為全部廠商，不受翻頁影響）。</li>
             <li><b>單一廠商</b>：查一家的 12 個月明細，上方顯示上／下半年／全年分數與等級。</li>
         </ul>
@@ -2015,7 +2016,10 @@ function renderEvalCards(){
     var pageList=list.slice((evPage-1)*VA_PER, evPage*VA_PER);
     var html='';
     pageList.forEach(function(v){
-        var g=v.full&&v.full.grade?('等級 <b style="color:'+(v.fail?'#DD5138':'#8A5A2B')+';">'+esc(v.full.grade)+'</b>（'+(v.full.score==null?'—':v.full.score)+'分）'):'';
+        // 標題徽章一律跟隨「總判定」，另外標示是否有某個半年不合格（避免與總判定列矛盾）
+        var g=v.full&&v.full.grade?('總判定 <b style="color:'+(v.fail?'#DD5138':'#8A5A2B')+';">'+esc(v.full.grade)+'</b>（'+(v.full.score==null?'—':v.full.score)+'分）'
+                +(v.fail?' <span class="af-judge-fail">不合格</span>':' <span class="af-judge-pass">合格</span>')
+                +(v.half_fail&&!v.fail?' <span style="font-size:10px;color:#c0762c;">有半年不合格</span>':'')):'';
         html+='<div class="ev-card"><div class="h"><span>'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）</span><span>'+g+'</span></div>';
         html+='<table class="ev-mini"><thead>'
             +'<tr><th rowspan="2">月</th><th rowspan="2" title="數量(PCS)：同月取被檢驗量與回廠量較大者">進貨數</th>'
@@ -2055,7 +2059,8 @@ function evCardPrintHTML(v){
         return '<tr class="'+cls+'"><td>'+label+'</td><td>'+qty(hf.in_qty)+'</td><td>'+qty(hf.ng)+'</td><td>'+qty(hf.special)+'</td><td>'+num(hf.q_score)+'</td>'
             +'<td>'+qty(hf.late)+'</td><td>'+num(hf.d_score)+'</td><td>'+g+' '+jj+'</td></tr>';
     };
-    var h='<div class="pc"><div class="pc-h">'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）'+(v.fail?'<span class="jf">不合格</span>':'<span class="jp">合格</span>')+'</div>'
+    var h='<div class="pc"><div class="pc-h">'+esc(v.maker_name)+'（'+esc(v.maker_id_no)+'）'
+        +(v.fail?'<span class="jf">不合格</span>':'<span class="jp">合格</span>'+(v.half_fail?'<span class="jf" style="font-size:9px;">（有半年不合格）</span>':''))+'</div>'
         +'<table class="pm"><thead>'
         +'<tr><th rowspan="2">月</th><th rowspan="2">進貨數</th><th colspan="3">品質</th><th colspan="2">交期</th><th rowspan="2">判定</th></tr>'
         +'<tr><th>不良數</th><th>特採數</th><th>品質分</th><th>遲交數</th><th>交期分</th></tr></thead><tbody>';
