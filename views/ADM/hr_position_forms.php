@@ -1093,7 +1093,9 @@ function hfPrintCss(){
  */
 function stampOrName(name, date, isDeputy, schema){
     var effSchema = schema ? $.extend({}, schema, {noScale:true}) : schema;
-    var html = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, date, !!isDeputy, effSchema) : esc(name||'');
+    // 圖章上的日期也是「顯示用」日期，一律走 dispDate()→egFmtDate() 轉成 YYYY.MM.DD（ai-rules/20）；
+    // 在這裡統一轉，呼叫端仍傳原始 Y-m-d 即可，比照 meeting_record.php／tool_calibration.php 的做法。
+    var html = (window.EGStamp && EGStamp.stamp) ? EGStamp.stamp(name, dispDate(date), !!isDeputy, effSchema) : esc(name||'');
     if (!schema) html = '<span class="hf-stamp-defsize">'+html+'</span>';
     return html;
 }
