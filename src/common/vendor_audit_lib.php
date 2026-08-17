@@ -795,14 +795,29 @@ function vendor_eval_grades(PDO $db, string $scope = 'outsource'): array {
     $g = json_decode((string)$raw, true);
     if (!is_array($g) || !$g) $g = [['min'=>90,'label'=>'A'],['min'=>80,'label'=>'B'],['min'=>70,'label'=>'C'],['min'=>0,'label'=>'D']];
     usort($g, function($a,$b){ return (float)($b['min']??0) <=> (float)($a['min']??0); });
+    // fail＝該等級視為不合格（管理員逐級勾選，使用者2026-08-17要求）。
+    // 舊資料整份都沒有 fail 這個鍵時，預設把「最低一階」當不合格（比照清冊未達標的認定）；
+    // 只要存過一次（即使全部沒勾）就尊重設定，不再自動補。
+    $hasKey = false;
+    foreach ($g as $x) if (is_array($x) && array_key_exists('fail', $x)) { $hasKey = true; break; }
+    $last = count($g) - 1;
+    foreach ($g as $i => $x) {
+        $g[$i]['fail'] = $hasKey ? (!empty($x['fail']) ? 1 : 0) : (($i === $last) ? 1 : 0);
+    }
     return $g;
+}
+/** 分數落在哪一級（回傳整筆設定，含 fail 旗標）；無分數回 null */
+function vendor_eval_grade_entry($score, array $grades): ?array {
+    if ($score === null) return null;
+    foreach ($grades as $g) if ($score >= (float)($g['min'] ?? 0)) return $g;
+    return null;
 }
 function vendor_eval_save_grades(PDO $db, array $grades, string $scope = 'outsource'): void {
     $scope = vendor_audit_norm_scope($scope);
     $clean = [];
     foreach ($grades as $g) {
         $label = trim((string)($g['label'] ?? '')); if ($label==='') continue;
-        $clean[] = ['min'=>max(0,(float)($g['min'] ?? 0)), 'label'=>$label];
+        $clean[] = ['min'=>max(0,(float)($g['min'] ?? 0)), 'label'=>$label, 'fail'=>!empty($g['fail']) ? 1 : 0];
     }
     if (!$clean) return;
     $up = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?, ?)
@@ -850,20 +865,22 @@ function vendor_eval_summ(int $inq, int $ng, int $sp, int $lt, array $set, array
     $ngR = $inq ? round($ng/$inq*100,1) : null;
     $spR = $inq ? round($sp/$inq*100,1) : null;
     $ltR = $inq ? round($lt/$inq*100,1) : null;
-    $judge = null; $qScore = null; $dScore = null; $score = null;
+    $judge = null; $qScore = null; $dScore = null; $score = null; $grade = null; $over = 0;
     if ($inq > 0) {
-        $ok = true;
-        if ($ngR!==null && $ngR>$set['ng_max']) $ok=false;
-        if ($ltR!==null && $ltR>$set['late_max']) $ok=false;
-        if ($set['special_max']<100 && $spR!==null && $spR>$set['special_max']) $ok=false;
-        $judge = $ok ? 'pass' : 'fail';
+        // 率上限只做「超標提醒」，不再決定合格與否（使用者2026-08-17定案：合格只看等級）
+        if ($ngR!==null && $ngR>$set['ng_max']) $over=1;
+        if ($ltR!==null && $ltR>$set['late_max']) $over=1;
+        if ($set['special_max']<100 && $spR!==null && $spR>$set['special_max']) $over=1;
         $qScore = (int)floor(VENDOR_EVAL_Q_MAX*(1-min(1,($ng+$sp)/$inq)));
         $dScore = (int)floor(VENDOR_EVAL_D_MAX*(1-min(1,$lt/$inq)));
         $score = $qScore + $dScore;                          // 總分(0~100)
+        $ge = vendor_eval_grade_entry($score, $grades);
+        $grade = $ge ? (string)($ge['label'] ?? '') : null;
+        $judge = ($ge && !empty($ge['fail'])) ? 'fail' : 'pass';   // 合格＝該等級沒被標為不合格
     }
     return ['in_qty'=>$inq,'qc_qty'=>$qcQty,'del_qty'=>$delQty,'ng'=>$ng,'special'=>$sp,'late'=>$lt,
-            'ng_rate'=>$ngR,'special_rate'=>$spR,'late_rate'=>$ltR,'judge'=>$judge,
-            'q_score'=>$qScore,'d_score'=>$dScore,'score'=>$score,'grade'=>vendor_eval_grade_of($score,$grades)];
+            'ng_rate'=>$ngR,'special_rate'=>$spR,'late_rate'=>$ltR,'judge'=>$judge,'over_threshold'=>$over,
+            'q_score'=>$qScore,'d_score'=>$dScore,'score'=>$score,'grade'=>$grade];
 }
 
 /* ============================================================
@@ -957,7 +974,9 @@ function vendor_periodic_eval(PDO $db, string $mid, int $year, array $set): arra
         $full['q_score'] = (int)floor(array_sum(array_column($hs,'q_score'))/$n);
         $full['d_score'] = (int)floor(array_sum(array_column($hs,'d_score'))/$n);
         $full['score']   = (int)floor(array_sum(array_column($hs,'score'))/$n);
-        $full['grade']   = vendor_eval_grade_of($full['score'], $grades);
+        $ge = vendor_eval_grade_entry($full['score'], $grades);
+        $full['grade']   = $ge ? (string)($ge['label'] ?? '') : null;
+        $full['judge']   = ($ge && !empty($ge['fail'])) ? 'fail' : 'pass';   // 總判定的合格也只看等級
     }
     return ['months'=>$rows, 'halves'=>$halves, 'full'=>$full,
             'lead_days'=>$days, 'lead_days_custom'=>($days !== max(0,(int)$set['default_days'])) ? 1 : 0];

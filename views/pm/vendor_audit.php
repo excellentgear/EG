@@ -771,7 +771,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>特採率上限（%，100=不判定）</label><input type="number" id="stSpMax" step="0.1" min="0"></div>
             <div><label>約定工作天（算應交日）</label><input type="number" id="stDays" step="1" min="0"></div>
         </div>
-        <div style="font-size:12px;color:#8a6d45;margin:8px 0 12px;">半年不良率／遲交率超過上限即判不合格；特採率上限設 100 表示不納入判定。約定工作天沿用 KPI#7 準交口徑。</div>
+        <div style="font-size:12px;color:#8a6d45;margin:8px 0 12px;"><b>合格與否只看下面的評核等級</b>（勾「視為不合格」的等級才算不合格）；這三個率上限只做<b>超標標紅提醒</b>，不會把整個半年判成不合格（特採率設 100＝連提醒都不做）。約定工作天沿用 KPI#7 準交口徑。</div>
         <label>特定廠商的約定工作天（未列出的廠商用上面的預設）</label>
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;">
             <input type="text" id="stLeadKw" placeholder="廠商下拉找不到？打名稱或編號查詢後再選…" style="flex:1;">
@@ -782,8 +782,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <span style="font-size:11px;color:#8a6d45;">熱處理／表面處理等交期本來就較長的廠商可個別設定（例 14 天）；<b>刪除該列＝恢復用預設</b>。設定後遲交判定與交期分數會依該廠商的天數重算。</span></div>
         <label>評核等級門檻（分數 ≥ 該值即為該等級，由高到低）</label>
         <div id="stGrades" style="border:1px solid #EADFC8;border-radius:6px;padding:6px 8px;"></div>
-        <div style="margin:4px 0 4px;"><button type="button" class="b-att2" onclick="gradeAddRow('',0)"><i class="fa fa-plus"></i> 新增等級</button>
-            <span style="font-size:11px;color:#8a6d45;">總分0~100；例：A≥90、B≥80、C≥70、D≥0</span></div>
+        <div style="margin:4px 0 4px;"><button type="button" class="b-att2" onclick="gradeAddRow('',0,0)"><i class="fa fa-plus"></i> 新增等級</button>
+            <span style="font-size:11px;color:#8a6d45;">總分0~100；例：A≥95、B≥85、C≥0，並把 C 勾「視為不合格」＝落到 C 就是不合格。可勾多級。</span></div>
         <div style="font-size:11px;color:#8a6d45;">AS 文件綁定（含定期評核表）已移至「稽核批次」工具列的「AS文件綁定」設定。</div>
     </div>
     <div class="m-foot">
@@ -839,7 +839,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>進貨數（共用分母）</b>：同一個月<b>取「被檢驗量」與「回廠量」較大者</b>，品質與交期共用同一個進貨數。原因：同一批的檢驗日與回廠日常常跨月（例如 3 月回廠、4 月才驗），兩邊各自當分母會出現「一邊 0 一邊有量」對不起來的情形。滑鼠移到進貨數上會顯示原始的被檢驗量／回廠量。</li>
             <li><b>畫面欄位是「數量」不是「率」</b>：不良數／特採數／遲交數直接顯示 PCS；<b>滑鼠移到數字上會顯示它佔進貨數的百分比</b>，超過門檻的數字一樣標紅。匯出 CSV 兩者都有。</li>
             <li><b>分數／等級</b>：以半年<b>加總</b>後計算——<b>品質分＝60×(1−(不良數＋特採數)÷進貨數)</b>、<b>交期分＝40×(1−遲交數÷進貨數)</b>，皆<b>無條件捨去</b>（比照紙本 Excel）；半年總分＝品質分＋交期分（0～100），依等級門檻判 A/B/C/D。<b>總判定＝上半年與下半年總分的平均</b>（只有一個半年有資料就用該半年）。該分項整段期間沒有資料（分母 0）視同無缺失給滿分。</li>
-            <li><b>合格／不合格</b>（紅字）與分數是<b>兩套判定</b>：合格與否看門檻設定（不良率／遲交率／特採率上限），等級 A/B/C/D 看分數。</li>
+            <li><b>合格／不合格由等級決定</b>：在「門檻設定」的評核等級區塊逐級勾選<b>「視為不合格」</b>（例：A≥95、B≥85、C≥0，把 C 勾起來＝落到 C 就是不合格；可勾多級）。<b>不良率／遲交率／特採率上限只做超標標紅提醒</b>，不再把整個半年判成不合格（所以不會再出現「A 級卻標不合格」）。舊資料沒設過時，預設把最低一階當不合格。</li>
             <li><b>全部納管廠商</b>：一次列出所有納管廠商，2 欄卡片，<b>每頁 10 家</b>、下方可翻頁（只畫當頁避免一次載入過慢）；可「只看不合格」；橫式列印一頁 6 間（列印為全部廠商，不受翻頁影響）。</li>
             <li><b>單一廠商</b>：查一家的 12 個月明細，上方顯示上／下半年／全年分數與等級。</li>
         </ul>
@@ -1900,6 +1900,12 @@ $('#evKw').on('input', function(){ clearTimeout(evKwT); var k=$(this).val(); evK
 $('#evGo').on('click', loadEval);
 $('#evVendor,#evYear').on('change', loadEval);
 function rate(v){ return v==null?'—':v+'%'; }
+/* 哪些等級被設為不合格（合格判定唯一依據，率上限只做標紅提醒） */
+function failGradeText(s){
+    var f=((s&&s.grades)||[]).filter(function(g){ return g.fail; }).map(function(g){ return g.label; });
+    return f.length?('　<span style="color:#DD5138;">不合格等級：'+esc(f.join('／'))+'</span>')
+                   :'　<span style="color:#c0762c;">尚未設定哪個等級算不合格</span>';
+}
 /* 數量顯示：0 一律顯示 0（不顯示破折號，使用者要求「有進貨沒不良就是 0%」的同一原則） */
 function qty(v){ return (v==null)?'—':Number(v).toLocaleString(); }
 /* 門檻超標判定（全域版，畫面各處共用；s=該次查詢回傳的門檻設定） */
@@ -1925,10 +1931,10 @@ function loadEval(){
         EVAL=res; EVAL_ALL=null;
         $('#evSingle').show(); $('#evCards').empty().hide(); $('#evPager').hide(); $('#evEmpty').hide(); $('#evCsv').show(); $('#evFailBox').hide();
         var s=res.settings;
-        $('#evThresh').html('廠商：<b>'+esc(res.maker_name)+'</b>　'+res.year+' 年　門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
+        $('#evThresh').html('廠商：<b>'+esc(res.maker_name)+'</b>　'+res.year+' 年　提醒門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
             +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')
             +'　約定工作天 '+(res.lead_days==null?s.default_days:res.lead_days)+' 天'
-            +(res.lead_days_custom?'<span style="color:#c0762c;">（本廠商專屬設定）</span>':''));
+            +(res.lead_days_custom?'<span style="color:#c0762c;">（本廠商專屬設定）</span>':'')+failGradeText(s));
         // 上方：半年/全年 分數與等級
         var sc=function(hf,lab){ if(!hf||hf.score==null) return '<div><span class="s-lab">'+lab+'</span> <span class="s-num" style="font-size:16px;">—</span></div>';
             return '<div><span class="s-lab">'+lab+'</span> <span class="s-num" style="font-size:18px;">'+hf.score+'</span>'
@@ -1974,8 +1980,8 @@ $('#evAll').on('click', function(){
         if(!res.ok){ alert(res.error||'載入失敗'); return; }
         EVAL_ALL=res; EVAL=null;
         var s=res.settings;
-        $('#evThresh').html(res.year+' 年　全部納管廠商（'+res.vendors.length+' 家有資料，已略過無資料者）　門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
-            +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')+'　約定工作天 '+s.default_days+' 天');
+        $('#evThresh').html(res.year+' 年　全部納管廠商（'+res.vendors.length+' 家有資料，已略過無資料者）　提醒門檻：不良率≤'+s.ng_max+'%、遲交率≤'+s.late_max+'%'
+            +(s.special_max<100?('、特採率≤'+s.special_max+'%'):'（特採率不判定）')+'　約定工作天 '+s.default_days+' 天（部分廠商可個別設定）'+failGradeText(s));
         $('#evSingle').hide(); $('#evEmpty').hide(); $('#evCsv').hide(); $('#evFailBox').show(); $('#evCards').css('display','grid');
         evPage=1; renderEvalCards();
     }).fail(function(x){ NProgress.done(); alert('載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
@@ -2095,10 +2101,11 @@ function printEvalAll(){
     w.document.close();
 }
 $('#evPrint').on('click', function(){ if(EVAL_ALL) printEvalAll(); else window.print(); });
-function gradeAddRow(label, min){
+function gradeAddRow(label, min, fail){
     $('#stGrades').append('<div class="gr-row" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">'
         +'等級 <input type="text" class="gr-label" maxlength="6" value="'+esc(label||'')+'" style="width:60px;">'
         +' 分數 ≥ <input type="number" class="gr-min" step="1" min="0" max="100" value="'+(min==null?'':min)+'" style="width:70px;">'
+        +' <label style="margin:0;font-weight:normal;color:#DD5138;white-space:nowrap;"><input type="checkbox" class="gr-fail"'+(fail?' checked':'')+'> 視為不合格</label>'
         +' <span class="af-del" style="color:#DD5138;cursor:pointer;" onclick="$(this).closest(\'.gr-row\').remove()"><i class="fa fa-times"></i></span></div>');
 }
 /* ---- 特定廠商的約定工作天（廠商層級覆寫；未設定＝用預設） ---- */
@@ -2148,14 +2155,16 @@ $('#evSet').on('click', function(){
     var s=(EVAL&&EVAL.settings)||META.eval_settings||{ng_max:5,late_max:30,special_max:100,default_days:7};
     $('#stLeadKw').val(''); leadLoadRows();
     $('#stNgMax').val(s.ng_max); $('#stLateMax').val(s.late_max); $('#stSpMax').val(s.special_max); $('#stDays').val(s.default_days);
-    $('#stGrades').empty(); ((s.grades&&s.grades.length)?s.grades:[{min:90,label:'A'},{min:80,label:'B'},{min:70,label:'C'},{min:0,label:'D'}]).forEach(function(g){ gradeAddRow(g.label,g.min); });
+    $('#stGrades').empty(); ((s.grades&&s.grades.length)?s.grades:[{min:90,label:'A'},{min:80,label:'B'},{min:70,label:'C'},{min:0,label:'D',fail:1}]).forEach(function(g){ gradeAddRow(g.label,g.min,g.fail); });
     // 定期評核門檻依範疇各自獨立，標題標示目前正在編輯哪一份
     $('#evSetMask .m-head span:first').text('定期評核門檻設定（'+scopeLabel(CUR_SCOPE)+'）');
     openMask('evSetMask');
 });
 function submitEvSet(){
     var grades=[]; $('#stGrades .gr-row').each(function(){ var l=$.trim($(this).find('.gr-label').val()), mn=$(this).find('.gr-min').val();
-        if(l!=='') grades.push({label:l, min:mn===''?0:+mn}); });
+        if(l!=='') grades.push({label:l, min:mn===''?0:+mn, fail:$(this).find('.gr-fail').is(':checked')?1:0}); });
+    if(grades.length && !grades.some(function(g){return g.fail;})
+       && !confirm('沒有勾選任何「視為不合格」的等級，所有廠商都會判合格。確定要這樣存？')) return;
     // 廠商專屬工作天：前端先驗（選了廠商就一定要填天數、同一廠商不可重複），後端 API 再驗一次
     var leads=[], seen={}, bad=null;
     $('#stLeadRows .lead-row').each(function(){
