@@ -1147,6 +1147,10 @@ function openFieldDesigner(id){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         if (!res.can_edit_fields){ alert('此案件不可編輯（可能已送出或無權限）'); return; }
         FP_CASE = res.case; FP_TPL_SCHEMA = res.schema; FP_WHITELIST = res.field_whitelist || [];
+        // 頁面清單是 API 另外回傳的 res.pages，不在 res.case 裡；一定要掛上去，
+        // 否則 buildFpCanvases()/fpRotatePage()/openCropModal()/bfAddStamp() 讀 FP_CASE.pages 全都會落空
+        // （先前多圖案件在框選畫面只畫得出一頁 595x842 的預設頁、補案件按新增圖章會說「找不到第1頁」，都是這個原因）
+        FP_CASE.pages = res.pages || [];
         FP_BACKFILL = FP_CASE.case_kind === 'backfill';
         $('#listPanel,#detailPanel').hide(); $('#fieldPanel').show();
         $('#fpTitle').text(FP_CASE.title || '');
