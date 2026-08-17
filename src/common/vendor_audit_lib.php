@@ -696,6 +696,24 @@ function vendor_audit_can_edit_scope(PDO $db, array $perms, int $uid, string $sc
     return (bool)$st->fetchColumn();
 }
 
+/**
+ * 此人在畫面上應該看得到哪些範疇切換鈕(2026-08-17使用者明確要求：只有採購資格的人不該連「外包加工(生管)」
+ * 分頁都看得到，避免誤觸/誤以為自己能操作)：
+ * 管理員／稽核管理員 → 兩邊都看得到；已登記為稽核員(outsource/purchase/all) → 依登記的 scope 決定
+ * （all=兩邊都看得到）；完全沒登記過稽核員資格(例如只有「稽核檢閱」角色的純檢視人員) → 維持兩邊都看得到
+ * (唯讀查閱不受此限，避免誤擋掉合理的跨部門查核需求)。
+ */
+function vendor_audit_visible_scopes(PDO $db, array $perms, int $uid): array {
+    if (!empty($perms['canAdmin'])) return ['outsource', 'purchase'];
+    $st = $db->prepare("SELECT DISTINCT scope FROM vendor_auditor WHERE user_id=? AND is_active=1");
+    $st->execute([$uid]);
+    $scopes = $st->fetchAll(PDO::FETCH_COLUMN);
+    if (!$scopes) return ['outsource', 'purchase'];
+    if (in_array('all', $scopes, true)) return ['outsource', 'purchase'];
+    $visible = array_values(array_intersect(['outsource', 'purchase'], $scopes));
+    return $visible ?: ['outsource', 'purchase'];
+}
+
 /* ============================================================
  * 全域設定（system_settings）
  * ============================================================ */

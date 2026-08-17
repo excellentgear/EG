@@ -95,6 +95,7 @@ case 'meta': {
           'confirm_pw_allowed'=>eg_confirm_password_allowed($db, $uid),
           'eval_settings'=>vendor_eval_settings($db),
           'scope'=>$scope, 'scopes'=>[['v'=>'outsource','l'=>'外包加工(生管)'],['v'=>'purchase','l'=>'採購']],
+          'visible_scopes'=>vendor_audit_visible_scopes($db, $perms, $uid),
         ], vendor_audit_checklist_config($db, $scope)));
 }
 

@@ -897,6 +897,8 @@ $.ajaxPrefilter(function(options){
 });
 function setScope(s){
     if (s !== 'outsource' && s !== 'purchase') return;
+    var vis = (META && META.visible_scopes) || ['outsource','purchase'];
+    if (vis.indexOf(s) === -1) return;
     CUR_SCOPE = s;
     localStorage.setItem('va_cur_scope', s);
     $('.va-scope-btn').removeClass('active').filter('[data-scope="'+s+'"]').addClass('active');
@@ -931,6 +933,20 @@ function fmtDate(d){ return d ? egFmtDate(d) : ''; }
 function loadMeta(cb){
     $.getJSON(API, {action:'meta'}, function(m){
         if (!m.ok){ alert(m.error||'載入失敗'); return; }
+        // 範疇可視性(2026-08-17使用者明確要求)：只有管理員/該範疇登記的稽核員才看得到該切換鈕，
+        // 避免純採購資格的人連「外包加工(生管)」分頁都看得到、誤以為自己能操作。
+        // 目前 CUR_SCOPE 若不在可視清單內(例：換人共用瀏覽器留下舊 localStorage)，強制修正成第一個
+        // 可視範疇並整批重打一次，確保後續 canEdit/checklist 等 scope 相依欄位是對的範疇。
+        var vis = m.visible_scopes || ['outsource','purchase'];
+        $('.va-scope-btn').each(function(){ $(this).toggle(vis.indexOf($(this).data('scope')) !== -1); });
+        $('.va-scope-switch').toggle(vis.length > 1);
+        if (vis.indexOf(CUR_SCOPE) === -1) {
+            CUR_SCOPE = vis[0] || 'outsource';
+            localStorage.setItem('va_cur_scope', CUR_SCOPE);
+            $('.va-scope-btn').removeClass('active').filter('[data-scope="'+CUR_SCOPE+'"]').addClass('active');
+            loadMeta(cb);
+            return;
+        }
         META = m; PERMS = m.perms;
         window.__ownCompany = m.company_name;
         var $y = $('#yearSel').empty(), cy = m.cur_year;
