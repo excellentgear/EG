@@ -124,16 +124,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         table.pf-rt-table td.lv { text-align:center; font-weight:bold; color:#8A5A2B; white-space:nowrap; }
         .pf-rt-note { font-size:12px; color:#8a6d45; margin-top:8px; white-space:pre-line; background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:8px 10px; }
         /* 平面表格編輯器（2026-08-18）：一列＝一條完整路徑，比照 Excel 的操作手感 */
-        .fg-wrap { border:1px solid #E8D5B5; border-radius:4px; overflow:auto; max-height:420px; }
-        table.fg { width:100%; border-collapse:separate; border-spacing:0; font-size:12px; table-layout:fixed; min-width:1080px; }
+        .fg-wrap { border:1px solid #E8D5B5; border-radius:4px; overflow-y:auto; overflow-x:hidden; max-height:460px; }
+        table.fg { width:100%; border-collapse:separate; border-spacing:0; font-size:12px; table-layout:fixed; }
         table.fg th { position:sticky; top:0; z-index:2; background:#F3EAD6; color:#5b3a1e; font-weight:bold;
             padding:5px 6px; text-align:left; border-bottom:1px solid #D8BE93; border-right:1px solid #EADFC8; white-space:nowrap; }
         table.fg td { padding:0; border-bottom:1px solid #F1E6D2; border-right:1px solid #F1E6D2; }
         table.fg tr.fg-dirty td { background:#FFF7E8; }
         table.fg input.fg-inherit { color:#A8906E; font-style:italic; }
         table.fg tr.fg-new td { background:#FFFBF3; }
-        table.fg input { width:100%; border:0; background:transparent; padding:5px 6px; font-size:12px;
-            color:#5b3a1e; font-family:inherit; outline:none; }
+        table.fg input { width:100%; border:0; background:transparent; padding:5px 4px; font-size:12px;
+            color:#5b3a1e; font-family:inherit; outline:none; text-overflow:ellipsis; }
+        /* 多值欄位（後果／分類／原因）一格會有好幾個值，字窄一點才塞得下 */
+        table.fg input.fg-multi { font-size:11.5px; letter-spacing:-.2px; }
         table.fg input:focus { background:#fff; box-shadow:inset 0 0 0 2px #F0A24B; border-radius:2px; }
         table.fg td.fg-del { text-align:center; }
         table.fg .fg-del i { color:#C0824A; cursor:pointer; padding:5px; }
@@ -518,7 +520,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
 </div></div>
 
 <!-- 參考資料設定（2026-08-14使用者要求：找不到能個別設定各欄下拉選單/階層的地方）僅管理員 -->
-<div class="pf-mask" id="refSettingsMask"><div class="pf-modal xwide" style="max-width:1100px;">
+<div class="pf-mask" id="refSettingsMask"><div class="pf-modal xwide" style="max-width:1560px;">
     <div class="m-head"><span>參考資料設定（僅管理員）</span><span class="m-close" onclick="closeMask('refSettingsMask')">✕</span></div>
     <div class="m-body">
         <div class="pf-rt-tabs">
@@ -549,12 +551,14 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <button type="button" class="pf-row-btn" id="fgSaveBtn" onclick="fgSave()" style="background:#F0A24B;color:#fff;border-color:#DD9A45;"><i class="fa fa-save"></i> 儲存變更</button>
         </div>
         <div class="fg-hint">在最後一列按 <b>↓</b> 自動新增一列並帶入上一列的製程／項目／功能（只要改不同的地方）；後果／分類／原因可填多個，用「、」隔開；改過的列會標成米黃色，按「儲存變更」才會寫入。<br>
-            <span style="color:#A8906E;font-style:italic;">灰色斜體</span>＝目前沿用全站共用清單（同名失效模式共通），編輯該格後就會轉成這一列專屬的設定。</div>
+            <span style="color:#A8906E;font-style:italic;">灰色斜體</span>＝目前沿用全站共用清單（同名失效模式共通），編輯該格後就會轉成這一列專屬的設定；一格填了多個值而欄寬放不下時，<b>滑鼠移到該格</b>會列出完整的每一項。</div>
         <div class="fg-wrap">
             <table class="fg" id="fgTable">
+                <!-- 百分比欄寬合計 100%，配合 table-layout:fixed 讓表格永遠塞得下、不出現左右拉桿；
+                     後果／原因是多值欄位（一格好幾個值）故給最寬 -->
                 <colgroup>
-                    <col style="width:80px"><col style="width:120px"><col style="width:150px"><col style="width:150px">
-                    <col style="width:170px"><col style="width:180px"><col style="width:110px"><col style="width:170px"><col style="width:34px">
+                    <col style="width:4.4%"><col style="width:7%"><col style="width:11%"><col style="width:11%">
+                    <col style="width:14.6%"><col style="width:22.7%"><col style="width:8%"><col style="width:19%"><col style="width:2.3%">
                 </colgroup>
                 <thead><tr>
                     <th>製程代號</th><th>製程名稱</th><th>項目</th><th>功能</th>
@@ -2382,8 +2386,16 @@ function fgRender(){
         var cls = row._new ? ' class="fg-new"' : (row._dirty ? ' class="fg-dirty"' : '');
         var tds = FG_COLS.map(function(c){
             var inh = row._inh && row._inh[c[0]] ? ' fg-inherit' : '';
-            var tip = inh ? ' title="目前沿用全站共用清單（同名失效模式共通），改動後會轉成這一列專屬"' : '';
-            return '<td><input type="text" class="fg-cell'+inh+'" data-i="'+i+'" data-c="'+c[0]+'" list="'+c[1]+'" data-eg-skip="1" autocomplete="off"'+tip+' value="'+esc(row[c[0]]||'')+'"></td>';
+            var multi = FG_MULTI.indexOf(c[0]) >= 0 ? ' fg-multi' : '';
+            var v = row[c[0]]||'';
+            // 多值欄位一格可能有四五個值，欄寬再怎麼給都可能塞不下，一律掛 title 讓滑鼠移上去看全文；
+            // 多值的還順便標出共有幾項，才不會以為只有看得到的那幾個
+            var n = (multi && v) ? v.split(/[、,，]/).filter(function(x){ return x.trim(); }).length : 0;
+            var tipText = inh ? '目前沿用全站共用清單（同名失效模式共通），改動後會轉成這一列專屬\n\n' : '';
+            if (n > 1) tipText += '共 '+n+' 項：\n' + v.split(/[、,，]/).map(function(x,k){ return (k+1)+'. '+x.trim(); }).join('\n');
+            else tipText += v;
+            var tip = tipText ? ' title="'+esc(tipText)+'"' : '';
+            return '<td><input type="text" class="fg-cell'+inh+multi+'" data-i="'+i+'" data-c="'+c[0]+'" list="'+c[1]+'" data-eg-skip="1" autocomplete="off"'+tip+' value="'+esc(v)+'"></td>';
         }).join('');
         return '<tr'+cls+' data-i="'+i+'">'+tds+'<td class="fg-del"><i class="fa fa-trash" title="刪除此列"></i></td></tr>';
     }).join('');
