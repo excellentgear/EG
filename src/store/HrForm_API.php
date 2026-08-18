@@ -79,7 +79,9 @@ case 'get': {
     $id = (int)($_GET['id'] ?? 0);
     $r = hrf_instance_get($db, $id);
     if (!$r) jerr('找不到此表單', 404);
-    jout(['instance'=>$r]);
+    // 列印頁尾右下的 AS 文件編號一律含版次，且版次要依「這張表單自己的業務日期」回推當時生效的版本
+    // （ai-rules/16 第三之四節）。前端不可只印 doc_no——那會漏掉版次，改版後仍印舊編號。
+    jout(['instance'=>$r, 'as_doc_no'=>hrf_asdoc_no_display((string)$r['form_type'], $db, (string)($r['business_date'] ?? ''))]);
 }
 
 case 'create': {
@@ -249,7 +251,10 @@ case 'asdoc_list': jout(['docs'=>eg_asdoc_list($db)]);
 case 'asdoc_get': {
     $formType = (string)($_GET['form_type'] ?? '');
     if (!isset(HRF_FORM_TYPES[$formType])) jerr('不明的表單類型');
-    jout(['doc'=>eg_asdoc_get($db, hrf_asdoc_module($formType))]);
+    $doc = eg_asdoc_get($db, hrf_asdoc_module($formType));
+    // print_no＝含版次的完整編號（四階才附版次，見 eg_asdoc_no()），畫面上顯示綁定資訊時用它，
+    // 免得畫面顯示「2-MM-01-09」而列印是「2-MM-01-09A」看起來像兩份文件。
+    jout(['doc'=>$doc, 'print_no'=>eg_asdoc_no($doc)]);
 }
 
 case 'asdoc_save': {

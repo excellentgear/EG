@@ -339,7 +339,7 @@ function loadMeta(cb){
 function loadAsDoc(ft){
     $.getJSON(API, {action:'asdoc_get', form_type:ft}, function(res){
         if (!res.ok) return;
-        var t = res.doc ? (res.doc.doc_no+' '+res.doc.doc_name) : '（尚未綁定 AS 文件編號）';
+        var t = res.doc ? ((res.print_no || res.doc.doc_no)+' '+res.doc.doc_name) : '（尚未綁定 AS 文件編號）';
         $('#pane-'+ft+' .hf-asdoc').text('AS文件：'+t);
     });
 }
@@ -1235,14 +1235,14 @@ function printDoc(ft, id, onDone){
     $.getJSON(API, {action:'get', id:id}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); if (onDone) onDone(); return; }
         var r = res.instance;
-        $.getJSON(API, {action:'asdoc_get', form_type:ft}, function(dres){
-            var docNo = (dres.ok && dres.doc) ? dres.doc.doc_no : '';
-            fetchTplForPrint(r, function(tpl){
-                var body = ft === 'job_desc' ? jdPrintHtml(r) : (ft === 'skill_assess' ? saPrintHtml(r, tpl) : cpPrintHtml(r, tpl));
-                var titleWho = ft === 'job_desc' ? (r.dept_name+'-'+r.position_name) : r.user_cname;
-                openPrintWindow(FORM_LABEL[ft]+' - '+titleWho, body, docNo);
-                if (onDone) setTimeout(onDone, 500);
-            });
+        // 頁尾 AS 文件編號直接用 get 回傳的 as_doc_no：已含版次、且版次是依這張表單的業務日期回推
+        // （ai-rules/16 第三之四節）。原本另外呼叫 asdoc_get 只取 doc_no，改版成 A 版後仍印無版次的舊編號。
+        var docNo = res.as_doc_no || '';
+        fetchTplForPrint(r, function(tpl){
+            var body = ft === 'job_desc' ? jdPrintHtml(r) : (ft === 'skill_assess' ? saPrintHtml(r, tpl) : cpPrintHtml(r, tpl));
+            var titleWho = ft === 'job_desc' ? (r.dept_name+'-'+r.position_name) : r.user_cname;
+            openPrintWindow(FORM_LABEL[ft]+' - '+titleWho, body, docNo);
+            if (onDone) setTimeout(onDone, 500);
         });
     });
 }
