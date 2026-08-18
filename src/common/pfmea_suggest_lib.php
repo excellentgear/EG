@@ -40,13 +40,27 @@ function pfmea_suggest_candidates(PDO $db): array {
  * 批次建立：$rows 每筆 [customer_name, part_d_id, part_no_text, product_name]，只建立表頭殼
  * （比照 td_dev_eval_suggest_bulk_create 慣例，分析項目仍需逐一填寫，不代填）；
  * 分類(零件/組合件)自動從料號 d_setting.Is_Assembly 帶入，查無料號時預設「零件」。
+ * 2026-08-18 使用者要求補兩件事：
+ *  ①自動綁定料號——來源 td_dev_eval 有些列只有純文字料號沒有 d_setting 主鍵，照抄過來的 PFMEA
+ *    就變成沒綁定的孤兒（開不了圖、客戶名稱空白、料號+製程的要求也對不上），改成建立當下用料號
+ *    文字回查 d_setting 主鍵，查得到就綁定，查不到才退回純文字。
+ *  ②自動帶入預設相關部門——手動新建走的是前端預設勾選，批次建立先前完全沒帶，開起來整排沒勾。
  */
 function pfmea_suggest_bulk_create(PDO $db, array $rows, int $uid, string $uname): array {
     $created = 0; $errors = [];
+    $deptDefaults = implode(',', pfmea_dept_defaults_get($db));
     foreach ($rows as $row) {
         $partDId = !empty($row['part_d_id']) ? (int)$row['part_d_id'] : null;
         $partText = trim((string)($row['part_no_text'] ?? ''));
         if (!$partDId && $partText === '') { $errors[] = '缺少料號，略過'; continue; }
+        // 純文字料號回查主檔，查得到就自動綁定（同一料號號碼在 d_setting 可能有多筆，取最小 d_id
+        // ——比照全站「重複料號一律歸戶到 MIN(d_id)」的既有慣例）
+        if (!$partDId && $partText !== '') {
+            $st = $db->prepare("SELECT MIN(d_id) FROM d_setting WHERE D_Setting_Id=?");
+            $st->execute([$partText]);
+            $found = (int)$st->fetchColumn();
+            if ($found) $partDId = $found;
+        }
         try {
             $itemType = 'part';
             if ($partDId) {
@@ -56,9 +70,9 @@ function pfmea_suggest_bulk_create(PDO $db, array $rows, int $uid, string $uname
             }
             $docNo = pfmea_next_doc_no($db);
             $bizDate = trim((string)($row['td_dev_eval_created_date'] ?? '')) ?: null;
-            $st = $db->prepare("INSERT INTO pfmea_doc (doc_no, part_d_id, part_no_text, item_type, product_name, biz_date, created_by, created_by_name)
-                                 VALUES (?,?,?,?,?,?,?,?)");
-            $st->execute([$docNo, $partDId, $partDId ? null : $partText, $itemType, $row['product_name'] ?? null, $bizDate, $uid, $uname]);
+            $st = $db->prepare("INSERT INTO pfmea_doc (doc_no, part_d_id, part_no_text, item_type, product_name, related_depts, biz_date, created_by, created_by_name)
+                                 VALUES (?,?,?,?,?,?,?,?,?)");
+            $st->execute([$docNo, $partDId, $partDId ? null : $partText, $itemType, $row['product_name'] ?? null, $deptDefaults ?: null, $bizDate, $uid, $uname]);
             pfmea_revision_add($db, (int)$db->lastInsertId(), '新增文件', $uname);
             $created++;
         } catch (Throwable $e) { $errors[] = ($partText ?: '(無料號)').'：'.$e->getMessage(); }
