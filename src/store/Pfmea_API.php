@@ -442,6 +442,27 @@ case 'ref_requirement_option_delete':
     pfmea_ref_requirement_option_delete($db, $id);
     jout(['success'=>true]);
 
+// ── 平面表格編輯器（2026-08-18 使用者回饋鑽取式難用、Excel 比較好用）────────────────
+case 'flat_list':
+    needAdmin($perms);
+    jout(['success'=>true, 'rows'=>pfmea_flat_list($db), 'tree'=>pfmea_flat_tree($db)]);
+
+case 'flat_save':
+    needAdmin($perms);
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows)) jout(['success'=>false,'message'=>'資料格式錯誤']);
+    if (!$rows) jout(['success'=>false,'message'=>'沒有要儲存的變更']);
+    $r = pfmea_flat_save($db, $rows, $uid, $uname);
+    if (empty($r['ok'])) jout(['success'=>false,'message'=>'儲存失敗：'.implode('；', $r['errors'])]);
+    jout(['success'=>true] + $r);
+
+case 'flat_delete_row':
+    needAdmin($perms);
+    $fmId = (int)($_POST['fm_id'] ?? 0);
+    if (!$fmId) jout(['success'=>false,'message'=>'缺少列 id']);
+    pfmea_flat_delete_row($db, $fmId);
+    jout(['success'=>true]);
+
 case 'ref_control_options':
     needView($perms);
     jout(['success'=>true,'options'=>pfmea_ref_control_options($db)]);

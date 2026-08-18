@@ -123,6 +123,24 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         table.pf-rt-table thead th { background:#F7E0BD; color:#5b3a1e; text-align:center; }
         table.pf-rt-table td.lv { text-align:center; font-weight:bold; color:#8A5A2B; white-space:nowrap; }
         .pf-rt-note { font-size:12px; color:#8a6d45; margin-top:8px; white-space:pre-line; background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:8px 10px; }
+        /* 平面表格編輯器（2026-08-18）：一列＝一條完整路徑，比照 Excel 的操作手感 */
+        .fg-wrap { border:1px solid #E8D5B5; border-radius:4px; overflow:auto; max-height:420px; }
+        table.fg { width:100%; border-collapse:separate; border-spacing:0; font-size:12px; table-layout:fixed; min-width:1080px; }
+        table.fg th { position:sticky; top:0; z-index:2; background:#F3EAD6; color:#5b3a1e; font-weight:bold;
+            padding:5px 6px; text-align:left; border-bottom:1px solid #D8BE93; border-right:1px solid #EADFC8; white-space:nowrap; }
+        table.fg td { padding:0; border-bottom:1px solid #F1E6D2; border-right:1px solid #F1E6D2; }
+        table.fg tr.fg-dirty td { background:#FFF7E8; }
+        table.fg input.fg-inherit { color:#A8906E; font-style:italic; }
+        table.fg tr.fg-new td { background:#FFFBF3; }
+        table.fg input { width:100%; border:0; background:transparent; padding:5px 6px; font-size:12px;
+            color:#5b3a1e; font-family:inherit; outline:none; }
+        table.fg input:focus { background:#fff; box-shadow:inset 0 0 0 2px #F0A24B; border-radius:2px; }
+        table.fg td.fg-del { text-align:center; }
+        table.fg .fg-del i { color:#C0824A; cursor:pointer; padding:5px; }
+        table.fg .fg-del i:hover { color:#DD5138; }
+        .fg-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
+        .fg-hint { font-size:11px; color:#8a6d45; }
+        .fg-stat { font-size:12px; color:#B5762A; font-weight:bold; }
         .pf-rt-pane { display:none; }
         .pf-row-btn { border:1px solid #D8BE93; background:#fff; color:#5b3a1e; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; }
         .pf-row-btn:hover { background:#F7E0BD; }
@@ -352,6 +370,26 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
 </div></div>
 
 <!-- 建議措施樣板挑選（可複選，套用時自動加編號，2026-08-14使用者要求） -->
+<!-- 從 Excel 貼上（2026-08-18）：直接吃 Excel 複製出來的 TSV，避免一格一格重打 -->
+<div class="pf-mask" id="fgPasteMask" style="z-index:1200;"><div class="pf-modal" style="max-width:720px;">
+    <div class="m-head"><span>從 Excel 貼上</span><span class="m-close" onclick="closeMask('fgPasteMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">
+            在 Excel 選取範圍複製，然後在下面貼上（Ctrl+V）。欄位順序需為：<br>
+            <b>製程代號　製程名稱　項目　功能　潛在失效模式　失效模式潛在後果　分類　失效潛在原因</b><br>
+            後果／分類／原因要填多個時，同一格內用「、」隔開。含標題列會自動略過。
+        </div>
+        <textarea id="fgPasteBox" style="width:100%;height:220px;border:1px solid #D8BE93;border-radius:4px;padding:6px;font-size:12px;font-family:monospace;" placeholder="在這裡貼上（Ctrl+V）"></textarea>
+        <div style="font-size:12px;color:#5b3a1e;margin-top:6px;">
+            <label><input type="checkbox" id="fgPasteReplace"> 取代目前表格內容（不勾＝附加在後面）</label>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('fgPasteMask')">取消</button>
+        <button class="b-ok" onclick="fgApplyPaste()">帶入表格</button>
+    </div>
+</div></div>
+
 <!-- 分類樣板挑選（2026-08-18 使用者要求：分類要跟建議措施一樣有樣本可選） -->
 <div class="pf-mask" id="classPickerMask" style="z-index:1200;"><div class="pf-modal">
     <div class="m-head"><span>選擇分類樣板（可複選）</span><span class="m-close" onclick="closeMask('classPickerMask')">✕</span></div>
@@ -497,6 +535,43 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
         <div style="font-size:12px;color:#8a6d45;margin-bottom:4px;">勾選大項分類＝該分類底下製程全選/取消全選；仍可個別勾選調整。只有勾選開放的製程會出現在分析表的製程代號下拉。</div>
         <div id="rsProcessEnableList" style="max-height:220px;overflow-y:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px 8px;margin-bottom:10px;"></div>
 
+        <!-- 平面表格編輯器（2026-08-18 使用者回饋：鑽取式「有點難用，excel 好像更好用」）
+             一列＝一條完整路徑，看得到全貌、可直接改、可整批貼上，每一格都可打字也可下拉選，
+             候選值依左邊欄位過濾（選了製程，項目欄就只出現該製程底下的）。 -->
+        <div class="pf-sec-title">階層對應總表（一列＝一條完整路徑，可直接編輯）</div>
+        <div class="fg-bar">
+            <input type="text" id="fgFilter" placeholder="搜尋任一欄內容…" style="flex:1;min-width:200px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
+            <button type="button" class="pf-row-btn" onclick="fgAddRow()"><i class="fa fa-plus"></i> 新增一列</button>
+            <button type="button" class="pf-row-btn" onclick="fgOpenPaste()"><i class="fa fa-clipboard"></i> 從 Excel 貼上</button>
+            <button type="button" class="pf-row-btn" onclick="fgFillDown()"><i class="fa fa-arrow-down"></i> 整欄填滿</button>
+            <button type="button" class="pf-row-btn" onclick="fgExportCsv()"><i class="fa fa-download"></i> 匯出 CSV</button>
+            <span class="fg-stat" id="fgStat"></span>
+            <button type="button" class="pf-row-btn" id="fgSaveBtn" onclick="fgSave()" style="background:#F0A24B;color:#fff;border-color:#DD9A45;"><i class="fa fa-save"></i> 儲存變更</button>
+        </div>
+        <div class="fg-hint">在最後一列按 <b>↓</b> 自動新增一列並帶入上一列的製程／項目／功能（只要改不同的地方）；後果／分類／原因可填多個，用「、」隔開；改過的列會標成米黃色，按「儲存變更」才會寫入。<br>
+            <span style="color:#A8906E;font-style:italic;">灰色斜體</span>＝目前沿用全站共用清單（同名失效模式共通），編輯該格後就會轉成這一列專屬的設定。</div>
+        <div class="fg-wrap">
+            <table class="fg" id="fgTable">
+                <colgroup>
+                    <col style="width:80px"><col style="width:120px"><col style="width:150px"><col style="width:150px">
+                    <col style="width:170px"><col style="width:180px"><col style="width:110px"><col style="width:170px"><col style="width:34px">
+                </colgroup>
+                <thead><tr>
+                    <th>製程代號</th><th>製程名稱</th><th>項目</th><th>功能</th>
+                    <th>潛在失效模式</th><th>失效模式潛在後果</th><th>分類</th><th>失效潛在原因</th><th></th>
+                </tr></thead>
+                <tbody id="fgBody"></tbody>
+            </table>
+        </div>
+        <datalist id="fgDlProcess"></datalist><datalist id="fgDlProcName"></datalist>
+        <datalist id="fgDlItem"></datalist><datalist id="fgDlFunction"></datalist><datalist id="fgDlFm"></datalist>
+        <datalist id="fgDlFailureEffect"></datalist><datalist id="fgDlClassification"></datalist><datalist id="fgDlFailureCause"></datalist>
+
+        <div class="pf-sec-title pf-collapsible" style="margin-top:16px;cursor:pointer;" onclick="$('#rsDrillWrap').toggle()">
+            <i class="fa fa-caret-down"></i> 逐層鑽取（進階：料號綁定與要求設定）
+            <span style="font-weight:normal;font-size:11px;color:#8a6d45;margin-left:8px;">要求是掛在「路徑」上而非掛在失效模式上，同一路徑的多筆失效模式共用同一批要求，故不併入上方總表以免改一列卻動到別列</span>
+        </div>
+        <div id="rsDrillWrap" style="display:none;">
         <div class="pf-sec-title">選擇製程以設定項目／功能／潛在失效模式／要求（僅列出已開放使用的製程）</div>
         <div class="rs-list" id="rsProcessList"></div>
         <div class="pf-proc-box"><input type="text" id="rsProcCodeNew" placeholder="製程代號" style="flex:0 0 100px;"><input type="text" id="rsProcNameNew" placeholder="製程名稱（手動新增，非主檔製程）"><button type="button" class="pf-row-btn" onclick="rsAddProcess()">新增</button></div>
@@ -566,7 +641,9 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <div class="pf-proc-box"><input type="text" id="rsReqNew" placeholder="要求文字"><button type="button" class="pf-row-btn" onclick="rsAddReq()">新增</button></div>
         </div>
 
-        <div class="pf-sec-title" style="margin-top:16px;">控制預防／控制偵測／建議措施（全域通用，不分製程）</div>
+        </div><!-- /#rsDrillWrap -->
+
+        <div class="pf-sec-title" style="margin-top:16px;">控制預防／控制偵測／建議措施／分類（全域通用，不分製程）</div>
         <div style="display:flex;gap:16px;">
             <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">控制預防</b>
                 <div class="rs-list" id="rsPrevList"></div>
@@ -705,7 +782,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>項目→功能→要求／潛在失效模式 階層式連動</b>：填完「項目」離開該欄位，會自動帶出這個項目底下的「功能」下拉選項；填完「功能」離開該欄位，會自動帶出這個功能底下的「要求」下拉（優先顯示綁定的料號專屬要求，沒有才顯示該功能通用要求）與更精確的「潛在失效模式」下拉（優先套用這個功能專屬的清單，還沒累積過資料才逐層退回項目層級、製程層級的通用清單）。四層清單都可以直接手動輸入新值，離開欄位或存檔時會自動加進清單供下次選用，僅管理員能刪除。填完「潛在失效模式」離開欄位，還會再帶出這一筆失效模式專屬的「失效模式潛在後果／分類／失效潛在原因」建議清單。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期／相關部門預設值自動帶入；來源只有純文字料號時會自動回查主檔綁定成正式料號，綁定後才開得了圖、客戶名稱才帶得出來），分析項目仍需逐份手動填寫。</li>
             <li><b>製程代號</b>：改可從全站製程主檔同步帶入（含大項分類），輸入時同時模糊搜尋代號/名稱/大項分類（多關鍵字皆需命中），顯示清單供點選。</li>
-            <li><b>參考資料設定</b>：工具列同名按鈕（僅管理員可見），分三個頁籤：①<b>階層對應（一條龍）</b>——所有下拉選項的來源，由粗到細串成一條鑽取鏈：<b>製程 → 項目 → 功能 → 潛在失效模式 → 後果／分類／原因</b>，每一層點下去就往下鑽一層，該層清單可直接新增／刪除。頂端另有「從全站製程主檔同步」拉入公司所有製程（含大項分類，可整個大項一鍵批次開放），只有開放的製程會出現在分析表下拉。<b>「要求」這一層可以指定料號</b>：料號欄留空＝這一層的通用要求（所有料號共用），輸入料號＝只給該料號用的專屬要求（會蓋過通用值），且同一個組合底下<b>可以輸入多筆要求</b>，填表時下拉會全部列出讓您挑本次要用的。指定料號後還可以「把目前鑽到的這條路徑綁給此料號」或「一次綁多組」（選了製程就自動帶出該製程底下整套項目／功能供勾選，已綁過的會標示鎖住），以及設定該料號＋製程的<b>圖面要求</b>（列印表頭的規格描述）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>要求總覽</b>——不分製程/項目/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、直接編輯文字內容、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
+            <li><b>參考資料設定</b>：工具列同名按鈕（僅管理員可見），分三個頁籤：①<b>階層對應</b>——最上面是<b>階層對應總表</b>，一列＝一條完整路徑（製程／項目／功能／潛在失效模式／後果／分類／原因），像 Excel 一樣直接在格子裡改：每一格都可打字也可下拉選，候選值會依左邊欄位過濾（選了製程，項目欄就只出現該製程底下的）；在最後一列按 <b>↓</b> 會自動新增一列並帶入上一列的製程／項目／功能，只要改不同的地方；「從 Excel 貼上」可把 Excel 複製的整塊資料直接帶進來；「整欄填滿」把游標所在格的值套用到下面所有列；後果／分類／原因一格可填多個，用「、」隔開；<b>灰色斜體</b>代表該格目前沿用全站共用清單（同名失效模式共通），編輯後就轉成這一列專屬。改過的列會標成米黃色，按「儲存變更」才寫入。往下還有<b>逐層鑽取（進階）</b>可收合區塊，處理料號綁定與要求設定（要求是掛在「路徑」上而非掛在失效模式上，同一路徑的多筆失效模式共用同一批要求，故不併入總表以免改一列卻動到別列）。此外——所有下拉選項的來源，由粗到細串成一條鑽取鏈：<b>製程 → 項目 → 功能 → 潛在失效模式 → 後果／分類／原因</b>，每一層點下去就往下鑽一層，該層清單可直接新增／刪除。頂端另有「從全站製程主檔同步」拉入公司所有製程（含大項分類，可整個大項一鍵批次開放），只有開放的製程會出現在分析表下拉。<b>「要求」這一層可以指定料號</b>：料號欄留空＝這一層的通用要求（所有料號共用），輸入料號＝只給該料號用的專屬要求（會蓋過通用值），且同一個組合底下<b>可以輸入多筆要求</b>，填表時下拉會全部列出讓您挑本次要用的。指定料號後還可以「把目前鑽到的這條路徑綁給此料號」或「一次綁多組」（選了製程就自動帶出該製程底下整套項目／功能供勾選，已綁過的會標示鎖住），以及設定該料號＋製程的<b>圖面要求</b>（列印表頭的規格描述）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>要求總覽</b>——不分製程/項目/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、直接編輯文字內容、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
             <li><b>分類樣板</b>：「分類」欄位標題旁「選樣板（可複選）」可開跳窗勾選預先建立好的常用分類（如關鍵／重要），勾選後以「、」串接填入，已有的值不重複加。樣板在「參考資料設定」維護。<b>樣板與綁定並存</b>：樣板是全站共用的常用值（從跳窗挑），綁定是「這一筆潛在失效模式慣用哪幾個分類」（出現在欄位下拉），兩邊都能用。</li>
             <li><b>建議措施樣板</b>：「建議措施」欄位標題旁「選樣板（可複選）」可開跳窗勾選預先在參考資料設定建立好的建議措施句庫，套用時自動接續編號（1. 2. 3.…）；手動輸入時只要目前這行是「數字.」開頭，按 Enter 換行會自動接下一個編號，不必自己算。</li>
             <li><b>基本資料欄位自動縮小字級</b>：項目/功能/要求/潛在失效模式/失效模式潛在後果/分類這幾欄是可挑選也可手動輸入的欄位，受限於瀏覽器限制無法真正多行換行，文字太長時會自動縮小字級（最小9px）以盡量完整顯示，欄位變短時字級會自動還原。</li>
@@ -2258,6 +2335,231 @@ $('#rsTplProcSel').on('change', rsLoadTplList);
 /** 「料號＋製程代號」複合鍵的分隔字元，需與後端 PFMEA_PART_PROCESS_SEP 完全一致 */
 var PART_PROCESS_SEP = '｜';
 
+/* ==========================================================================================
+   平面表格編輯器（2026-08-18）
+   使用者回饋：「參考資料設定有點難用… 我會覺得 excel 好像更好用」，痛點＝一次要建很多筆點不完／
+   看不到全貌／修改既有麻煩／希望建立完盡量用選的不要重複輸入。
+   對策：一列＝一條完整路徑的平面表格。每一格都是「可打字也可下拉選」的 input，候選值依左邊欄位
+   即時過濾（選了製程，項目欄就只出現該製程底下的），整棵樹在載入時就抓回本機算，打字不往返後端。
+   ========================================================================================== */
+var FG_ROWS = [];       // 畫面上的列（含未存檔的新列）
+var FG_TREE = {processes:[], items:[], functions:[], link_pool:[], fm_pool:[]};
+var FG_COLS = [
+    ['process_code','fgDlProcess'], ['process_name','fgDlProcName'], ['item_name','fgDlItem'],
+    ['function_desc','fgDlFunction'], ['failure_mode','fgDlFm'],
+    ['failure_effect','fgDlFailureEffect'], ['classification','fgDlClassification'], ['failure_cause','fgDlFailureCause']
+];
+var FG_MULTI = ['failure_effect','classification','failure_cause'];  // 多值欄位，以「、」串接
+
+function fgLoad(){
+    $.getJSON(API, {action:'flat_list'}, function(res){
+        if (!res.success){ alert(res.message||'載入失敗'); return; }
+        FG_TREE = res.tree || FG_TREE;
+        FG_ROWS = (res.rows||[]).map(function(r){
+            return {
+                fm_id: parseInt(r.fm_id,10)||0,
+                process_code: r.process_code||'', process_name: r.process_name||'',
+                item_name: r.item_name||'', function_desc: r.function_desc||'',
+                failure_mode: r.failure_mode||'',
+                failure_effect: r.failure_effect||'', classification: r.classification||'', failure_cause: r.failure_cause||'',
+                _inh: {failure_effect: !!r.failure_effect_inherited, classification: !!r.classification_inherited, failure_cause: !!r.failure_cause_inherited},
+                _dirty:false, _new:false
+            };
+        });
+        fgRender();
+    });
+}
+function fgRender(){
+    var kw = ($('#fgFilter').val()||'').trim().toLowerCase();
+    var html = FG_ROWS.map(function(row, i){
+        if (kw) {
+            var hay = FG_COLS.map(function(c){ return row[c[0]]||''; }).join(' ').toLowerCase();
+            if (hay.indexOf(kw) < 0) return '';
+        }
+        var cls = row._new ? ' class="fg-new"' : (row._dirty ? ' class="fg-dirty"' : '');
+        var tds = FG_COLS.map(function(c){
+            var inh = row._inh && row._inh[c[0]] ? ' fg-inherit' : '';
+            var tip = inh ? ' title="目前沿用全站共用清單（同名失效模式共通），改動後會轉成這一列專屬"' : '';
+            return '<td><input type="text" class="fg-cell'+inh+'" data-i="'+i+'" data-c="'+c[0]+'" list="'+c[1]+'" data-eg-skip="1" autocomplete="off"'+tip+' value="'+esc(row[c[0]]||'')+'"></td>';
+        }).join('');
+        return '<tr'+cls+' data-i="'+i+'">'+tds+'<td class="fg-del"><i class="fa fa-trash" title="刪除此列"></i></td></tr>';
+    }).join('');
+    $('#fgBody').html(html || '<tr><td colspan="9" style="padding:14px;text-align:center;color:#8a6d45;">沒有符合的資料</td></tr>');
+    fgUpdateStat();
+}
+function fgUpdateStat(){
+    var d = FG_ROWS.filter(function(r){ return r._dirty || r._new; }).length;
+    $('#fgStat').text(d ? ('有 '+d+' 列未儲存') : '');
+    $('#fgSaveBtn').prop('disabled', !d).css('opacity', d ? 1 : .5);
+}
+/* 這一格可以選什麼：依同一列左邊已填的值過濾（使用者要求「盡量用選的，避免重複輸入」） */
+function fgFillDatalist($input){
+    var col = $input.attr('data-c'), row = FG_ROWS[parseInt($input.attr('data-i'),10)];
+    if (!row) return;
+    var vals = [];
+    var proc = FG_TREE.processes.filter(function(p){ return p.process_code === row.process_code; })[0];
+    var item = proc ? FG_TREE.items.filter(function(x){ return x.process_id == proc.id && x.item_name === row.item_name; })[0] : null;
+    if (col === 'process_code')      vals = FG_TREE.processes.map(function(p){ return p.process_code; });
+    else if (col === 'process_name') vals = FG_TREE.processes.map(function(p){ return p.process_name; });
+    else if (col === 'item_name')    vals = FG_TREE.items.filter(function(x){ return !proc || x.process_id == proc.id; }).map(function(x){ return x.item_name; });
+    else if (col === 'function_desc')vals = FG_TREE.functions.filter(function(x){ return !item || x.item_option_id == item.id; }).map(function(x){ return x.function_desc; });
+    else if (col === 'failure_mode') vals = FG_TREE.fm_pool || [];
+    else vals = (FG_TREE.link_pool||[]).filter(function(x){ return x.target_field === col; }).map(function(x){ return x.target_value; });
+    var uniq = [];
+    vals.forEach(function(v){ if (v && uniq.indexOf(v) < 0) uniq.push(v); });
+    document.getElementById($input.attr('list')).innerHTML = uniq.map(function(v){ return '<option value="'+esc(v)+'">'; }).join('');
+}
+$(document).on('focus', '#fgBody input', function(){
+    fgFillDatalist($(this));
+    $(this).data('focusVal', this.value);
+});
+$(document).on('input change', '#fgBody input', function(){
+    var i = parseInt($(this).attr('data-i'),10), col = $(this).attr('data-c'), row = FG_ROWS[i];
+    if (!row) return;
+    var v = this.value;
+    // 多值欄位從下拉選一個時「附加」而不是「取代」——datalist 原生行為是整格覆蓋，
+    // 但這幾欄本來就允許填多個，直接覆蓋等於把先前選的洗掉
+    if (FG_MULTI.indexOf(col) >= 0) {
+        var pool = (FG_TREE.link_pool||[]).filter(function(x){ return x.target_field === col; }).map(function(x){ return x.target_value; });
+        var before = $(this).data('focusVal') || '';
+        if (pool.indexOf(v) >= 0 && before && before !== v && before.indexOf(v) < 0) {
+            v = before.replace(/[、,]\s*$/, '') + '、' + v;
+            this.value = v;
+        }
+    }
+    row[col] = v;
+    // 一經編輯就不再是「沿用全站共用」，存檔後會變成這一列自己的設定
+    if (row._inh && row._inh[col]) { row._inh[col] = false; $(this).removeClass('fg-inherit').removeAttr('title'); }
+    if (!row._new) row._dirty = true;
+    // 打了製程代號就自動帶出製程名稱，省去重複輸入
+    if (col === 'process_code') {
+        var p = FG_TREE.processes.filter(function(x){ return x.process_code === v; })[0];
+        if (p) { row.process_name = p.process_name; $('#fgBody input[data-i="'+i+'"][data-c="process_name"]').val(p.process_name); }
+    }
+    $(this).closest('tr').addClass(row._new ? 'fg-new' : 'fg-dirty');
+    fgUpdateStat();
+});
+/* 最後一列按 ↓ 自動新增一列並帶入上一列的路徑欄位；↑↓ 在列間移動同一欄（比照全站可增列表格慣例） */
+$(document).on('keydown', '#fgBody input', function(e){
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
+    var $in = $(this), i = parseInt($in.attr('data-i'),10), col = $in.attr('data-c');
+    if (e.key === 'ArrowUp') {
+        if (i <= 0) return;
+        e.preventDefault();
+        $('#fgBody input[data-i="'+(i-1)+'"][data-c="'+col+'"]').focus().select();
+        return;
+    }
+    e.preventDefault();
+    if (i >= FG_ROWS.length - 1) fgAddRow(i);   // 最後一列 → 長出新的一列
+    var $next = $('#fgBody input[data-i="'+(i+1)+'"][data-c="'+col+'"]');
+    if ($next.length) $next.focus().select();
+});
+window.fgAddRow = function(copyFrom){
+    var src = (typeof copyFrom === 'number' && FG_ROWS[copyFrom]) ? FG_ROWS[copyFrom] : null;
+    FG_ROWS.push({
+        fm_id:0,
+        // 只帶路徑欄位，失效模式與後果／分類／原因留白等使用者填（帶過來反而要一個個清掉）
+        process_code: src ? src.process_code : '', process_name: src ? src.process_name : '',
+        item_name: src ? src.item_name : '', function_desc: src ? src.function_desc : '',
+        failure_mode:'', failure_effect:'', classification:'', failure_cause:'',
+        _dirty:false, _new:true
+    });
+    $('#fgFilter').val('');   // 有篩選時新列會被藏起來，看起來像沒反應
+    fgRender();
+    var last = FG_ROWS.length - 1;
+    $('#fgBody input[data-i="'+last+'"][data-c="'+(src ? 'failure_mode' : 'process_code')+'"]').focus();
+};
+/* 整欄填滿：把目前游標所在欄、該列的值往下套用到所有列（取代逐列手打相同值） */
+window.fgFillDown = function(){
+    var $f = $(document.activeElement);
+    if (!$f.is('#fgBody input')) { alert('請先點一下要填滿的那一格（會把該格的值套用到下面所有列）'); return; }
+    var i = parseInt($f.attr('data-i'),10), col = $f.attr('data-c'), v = $f.val();
+    if (!confirm('把「'+(v||'(空白)')+'」套用到第 '+(i+2)+' 列以下所有列的這一欄？')) return;
+    for (var k = i+1; k < FG_ROWS.length; k++) {
+        FG_ROWS[k][col] = v;
+        if (!FG_ROWS[k]._new) FG_ROWS[k]._dirty = true;
+    }
+    fgRender();
+};
+window.fgOpenPaste = function(){ $('#fgPasteBox').val(''); $('#fgPasteReplace').prop('checked', false); openMask('fgPasteMask'); $('#fgPasteBox').focus(); };
+window.fgApplyPaste = function(){
+    var raw = $('#fgPasteBox').val();
+    if (!raw.trim()){ alert('請先貼上內容'); return; }
+    var lines = raw.split(/\r?\n/).filter(function(l){ return l.trim() !== ''; });
+    var added = [];
+    lines.forEach(function(line, idx){
+        var c = line.split('\t');
+        // 首列若是標題（第一格不是既有製程代號、且內容像欄位名）就略過
+        if (idx === 0 && /製程/.test(c[0]||'')) return;
+        var row = {
+            fm_id:0,
+            process_code:(c[0]||'').trim(), process_name:(c[1]||'').trim(),
+            item_name:(c[2]||'').trim(), function_desc:(c[3]||'').trim(),
+            failure_mode:(c[4]||'').trim(), failure_effect:(c[5]||'').trim(),
+            classification:(c[6]||'').trim(), failure_cause:(c[7]||'').trim(),
+            _dirty:false, _new:true
+        };
+        if (!row.process_code && !row.failure_mode) return;
+        // 只給代號沒給名稱時自動補上既有製程的名稱
+        if (row.process_code && !row.process_name) {
+            var p = FG_TREE.processes.filter(function(x){ return x.process_code === row.process_code; })[0];
+            if (p) row.process_name = p.process_name;
+        }
+        added.push(row);
+    });
+    if (!added.length){ alert('沒有解析到可用的資料列'); return; }
+    if ($('#fgPasteReplace').is(':checked')) FG_ROWS = added;
+    else FG_ROWS = FG_ROWS.concat(added);
+    closeMask('fgPasteMask');
+    $('#fgFilter').val('');
+    fgRender();
+    alert('已帶入 '+added.length+' 列，確認內容後請按「儲存變更」才會寫入。');
+};
+window.fgExportCsv = function(){
+    var head = ['製程代號','製程名稱','項目','功能','潛在失效模式','失效模式潛在後果','分類','失效潛在原因'];
+    var lines = [head.join(',')];
+    FG_ROWS.forEach(function(r){
+        lines.push(FG_COLS.map(function(c){
+            var v = (r[c[0]]||'').replace(/"/g, '""');
+            return /[",\n]/.test(v) ? '"'+v+'"' : v;
+        }).join(','));
+    });
+    // BOM 讓 Excel 正確辨識 UTF-8 中文
+    var blob = new Blob(['\ufeff'+lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    // 用本地日期組檔名：egFmtDate 對 Date 物件是走 toISOString()＝UTC，台灣凌晨會印成前一天
+    var now = new Date();
+    var stamp = now.getFullYear() + ('0'+(now.getMonth()+1)).slice(-2) + ('0'+now.getDate()).slice(-2);
+    a.download = 'PFMEA階層對應_'+stamp+'.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+};
+window.fgSave = function(){
+    var dirty = FG_ROWS.filter(function(r){ return r._dirty || r._new; });
+    if (!dirty.length) return;
+    var bad = dirty.filter(function(r){ return !r.process_code.trim() || !r.failure_mode.trim(); });
+    if (bad.length && !confirm('有 '+bad.length+' 列缺少「製程代號」或「潛在失效模式」，這些列會被略過不儲存。\n要繼續嗎？')) return;
+    $.post(API, {action:'flat_save', rows:JSON.stringify(dirty)}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        alert('已儲存 '+res.rows+' 列（新增 '+res.added+' 筆對應、移除 '+res.removed+' 筆）。');
+        fgLoad();
+        rsLoadProcessList();   // 製程可能有新建，順帶更新鑽取區與卡片用的清單
+        loadProcessList();
+    }, 'json');
+};
+$(document).on('click', '#fgBody .fg-del i', function(){
+    var i = parseInt($(this).closest('tr').attr('data-i'),10), row = FG_ROWS[i];
+    if (!row) return;
+    if (!row.fm_id){ FG_ROWS.splice(i,1); fgRender(); return; }   // 還沒存過的新列直接移除
+    if (!confirm('確定刪除這一列？（連同它的後果／分類／原因設定；不影響已填寫存檔的分析表資料）')) return;
+    $.post(API, {action:'flat_delete_row', fm_id:row.fm_id}, function(res){
+        if (!res.success){ alert(res.message||'刪除失敗'); return; }
+        fgLoad();
+    }, 'json');
+});
+$(document).on('input', '#fgFilter', function(){ fgRender(); });
+
 /* ---------- 階層對應鏈的後三層：潛在失效模式 → 後果／分類／原因（2026-08-18 使用者要求）----------
  * 原本這三個欄位是另一個頁籤的平面文字對應（只認「潛在失效模式的文字」全站共用一份），使用者要求
  * 改成跟製程→項目→功能一樣串成一條龍：掛在鑽取鏈上「選中的那一筆失效模式」底下。該筆還沒設定過
@@ -2540,6 +2842,7 @@ $('#btnRefSettings').on('click', function(){
     openMask('refSettingsMask');
     switchRsTab('proc');
     rsRenderProcessEnableList(); rsLoadProcessList(); rsLoadControlLists();
+    fgLoad();
     rsLoadTplProcSel();
     rsRenderEngSymbols(); rsRenderGdtSymbols();
     rsLoadReqListAll();

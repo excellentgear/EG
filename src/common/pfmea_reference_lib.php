@@ -465,6 +465,171 @@ function pfmea_requirement_option_update_text(PDO $db, int $id, string $text): v
     $db->prepare("UPDATE pfmea_requirement_option SET requirement_text=? WHERE id=?")->execute([$text, $id]);
 }
 
+/* ---------- 平面表格編輯器（2026-08-18 使用者回饋「參考資料設定有點難用，excel 好像更好用」）----------
+ * 鑽取式介面適合「查一筆、確認層級」，完全不適合「一次建很多筆」——要建 100 組就是幾百次點擊，
+ * 而 Excel 貼上就結束了。改成一列＝一條完整路徑的平面表格：看得到全貌、可直接改、可整批貼上。
+ * 使用者同時要求「建立完可以盡量用選的，避免一直重複輸入」，故每一格的候選值都由左邊欄位過濾
+ * （選了製程，項目欄就只出現該製程底下的），前端用 pfmea_flat_list() 回的整棵樹在本機算，
+ * 不必每打一格就往返後端。
+ *
+ * 一列＝一筆「潛在失效模式」（它就是這條路徑的葉節點）；後果／分類／原因是掛在它底下的多值欄位，
+ * 以「、」串接顯示與編輯（比照使用者原始 xlsm 就是把多個後果橫向排在同一列的做法）。
+ * 「要求」不在這張表——要求掛在路徑(製程/項目/功能)上而非掛在失效模式上，同一路徑的多筆失效模式
+ * 會共用同一批要求，硬塞進同一張表會變成「改一列卻默默改到別列」，故另用「要求總覽」那張表維護。 */
+
+const PFMEA_FLAT_MULTI = ['failure_effect', 'classification', 'failure_cause'];
+
+/** 平面表格的資料來源：所有失效模式各自的完整路徑 + 掛在它底下的後果／分類／原因 */
+function pfmea_flat_list(PDO $db): array {
+    $rows = $db->query("SELECT f.id AS fm_id, f.failure_mode, f.process_id, f.item_option_id, f.function_option_id,
+                                p.process_code, p.process_name, i.item_name, fn.function_desc, fn.item_option_id AS fn_item_id
+                         FROM pfmea_process_failure_mode f
+                         LEFT JOIN pfmea_process p ON p.id = f.process_id
+                         LEFT JOIN pfmea_function_option fn ON fn.id = f.function_option_id
+                         LEFT JOIN pfmea_item_option i ON i.id = COALESCE(f.item_option_id, fn.item_option_id)
+                         WHERE f.is_active = 1
+                         ORDER BY p.sort_order, p.id, i.sort_order, i.id, fn.sort_order, fn.id, f.sort_order, f.id")
+              ->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return [];
+
+    // 一次撈完所有掛層級的對應再分配到各列，避免每列各發一次查詢（88 列會變 264 次往返）
+    $links = $db->query("SELECT scope_fm_id, target_field, target_value FROM pfmea_field_link
+                          WHERE scope_fm_id IS NOT NULL AND is_active = 1 ORDER BY sort_order, id")
+                ->fetchAll(PDO::FETCH_ASSOC);
+    $byFm = [];
+    foreach ($links as $l) { $byFm[(int)$l['scope_fm_id']][$l['target_field']][] = $l['target_value']; }
+
+    // 舊的全站共用文字對應（scope_fm_id IS NULL）：這一筆還沒設過專屬值時拿來顯示，並標成 inherited。
+    // 不這樣做的話，既有 88 筆失效模式在表格上會是整片空白（因為 scope_fm_id 是新欄位），
+    // 看起來像資料不見了，但填表時其實仍會退回這些值——畫面必須反映填表的實際結果。
+    $global = $db->query("SELECT source_value, target_field, target_value FROM pfmea_field_link
+                           WHERE scope_fm_id IS NULL AND source_field='failure_mode' AND is_active = 1
+                           ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+    $byText = [];
+    foreach ($global as $g) { $byText[$g['source_value']][$g['target_field']][] = $g['target_value']; }
+
+    foreach ($rows as &$r) {
+        // 失效模式的 item_option_id 可能是空的(只綁到功能層)，用功能反推它所屬的項目才顯示得出完整路徑
+        $r['item_option_id'] = (int)($r['item_option_id'] ?: $r['fn_item_id'] ?: 0);
+        unset($r['fn_item_id']);
+        $fm = (int)$r['fm_id'];
+        foreach (PFMEA_FLAT_MULTI as $f) {
+            $own = $byFm[$fm][$f] ?? [];
+            if ($own) {
+                $r[$f] = implode('、', $own);
+                $r[$f.'_inherited'] = false;
+            } else {
+                $inherited = $byText[$r['failure_mode']][$f] ?? [];
+                $r[$f] = implode('、', $inherited);
+                $r[$f.'_inherited'] = $inherited ? true : false;
+            }
+        }
+    }
+    unset($r);
+    return $rows;
+}
+
+/** 前端算「這一格可以選什麼」用的整棵樹（含各層 id，才能在本機依左邊欄位過濾候選值） */
+function pfmea_flat_tree(PDO $db): array {
+    return [
+        'processes' => $db->query("SELECT id, process_code, process_name, category_name FROM pfmea_process
+                                    WHERE is_active=1 AND is_enabled=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC),
+        'items'     => $db->query("SELECT id, process_id, item_name FROM pfmea_item_option
+                                    WHERE is_active=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC),
+        'functions' => $db->query("SELECT id, item_option_id, function_desc FROM pfmea_function_option
+                                    WHERE is_active=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC),
+        // 全站曾經用過的後果／分類／原因，當作每一格的候選建議（使用者要求「盡量用選的」）
+        'link_pool' => $db->query("SELECT DISTINCT target_field, target_value FROM pfmea_field_link
+                                    WHERE is_active=1 AND target_field IN ('failure_effect','classification','failure_cause')
+                                    ORDER BY target_field, target_value")->fetchAll(PDO::FETCH_ASSOC),
+        'fm_pool'   => $db->query("SELECT DISTINCT failure_mode FROM pfmea_process_failure_mode
+                                    WHERE is_active=1 ORDER BY failure_mode")->fetchAll(PDO::FETCH_COLUMN),
+    ];
+}
+
+/** 多值欄位字串拆成陣列（接受「、」「,」「，」與換行，順便去空白去重） */
+function pfmea_flat_split(string $text): array {
+    $parts = preg_split('/[、,，\r\n]+/u', $text);
+    $out = [];
+    foreach ($parts as $t) {
+        $t = trim($t);
+        if ($t !== '' && !in_array($t, $out, true)) $out[] = $t;
+    }
+    return $out;
+}
+
+/**
+ * 平面表格存檔：逐列把路徑 get_or_add 建出來，再把三個多值欄位同步成該列現在的內容
+ * （多的新增、少的停用）。整批包在 transaction 裡，一列失敗就全部回復，不會存成半套。
+ * $rows 每筆：[fm_id, process_code, process_name, item_name, function_desc, failure_mode,
+ *              failure_effect, classification, failure_cause]
+ * 回傳統計供前端顯示「新增 N 筆、移除 M 筆」。
+ */
+function pfmea_flat_save(PDO $db, array $rows, int $uid, string $uname): array {
+    $stat = ['rows' => 0, 'added' => 0, 'removed' => 0, 'errors' => []];
+    $db->beginTransaction();
+    try {
+        foreach ($rows as $idx => $r) {
+            $code = trim((string)($r['process_code'] ?? ''));
+            $fmText = trim((string)($r['failure_mode'] ?? ''));
+            if ($code === '' || $fmText === '') {
+                // 製程與失效模式是這一列的骨幹，缺任一個就無法定位，直接略過（不當成錯誤中斷整批）
+                continue;
+            }
+            $procId = pfmea_ref_process_get_or_add($db, $code, trim((string)($r['process_name'] ?? '')) ?: $code, $uid, $uname);
+            $itemName = trim((string)($r['item_name'] ?? ''));
+            $funcDesc = trim((string)($r['function_desc'] ?? ''));
+            $itemId = $itemName !== '' ? pfmea_ref_item_option_get_or_add($db, $procId, $itemName, $uid, $uname) : 0;
+            $funcId = ($itemId && $funcDesc !== '') ? pfmea_ref_function_option_get_or_add($db, $itemId, $funcDesc, $uid, $uname) : 0;
+
+            $fmId = (int)($r['fm_id'] ?? 0);
+            if ($fmId) {
+                // 既有列：路徑或文字被改過就直接更新這一筆，不要新增一筆造成重複
+                $db->prepare("UPDATE pfmea_process_failure_mode SET failure_mode=?, process_id=?, item_option_id=?, function_option_id=? WHERE id=?")
+                   ->execute([$fmText, $procId, $itemId ?: null, $funcId ?: null, $fmId]);
+            } else {
+                $fmId = pfmea_ref_failure_mode_add($db, $procId, $fmText, $uid, $uname, $itemId, $funcId);
+                $stat['added']++;
+            }
+
+            foreach (PFMEA_FLAT_MULTI as $field) {
+                $want = pfmea_flat_split((string)($r[$field] ?? ''));
+                $st = $db->prepare("SELECT id, target_value FROM pfmea_field_link WHERE scope_fm_id=? AND target_field=? AND is_active=1");
+                $st->execute([$fmId, $field]);
+                $have = $st->fetchAll(PDO::FETCH_ASSOC);
+                $haveVals = array_column($have, 'target_value');
+                foreach ($have as $h) {
+                    if (!in_array($h['target_value'], $want, true)) {
+                        $db->prepare("UPDATE pfmea_field_link SET is_active=0 WHERE id=?")->execute([$h['id']]);
+                        $stat['removed']++;
+                    }
+                }
+                foreach ($want as $w) {
+                    if (!in_array($w, $haveVals, true)) {
+                        pfmea_field_link_add($db, 'failure_mode', $fmText, $field, $w, $uid, $uname, $fmId);
+                        $stat['added']++;
+                    }
+                }
+            }
+            $stat['rows']++;
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        $stat['errors'][] = $e->getMessage();
+        $stat['ok'] = false;
+        return $stat;
+    }
+    $stat['ok'] = true;
+    return $stat;
+}
+
+/** 平面表格刪除一整列（失效模式本身停用，連同掛在它底下的後果／分類／原因） */
+function pfmea_flat_delete_row(PDO $db, int $fmId): void {
+    $db->prepare("UPDATE pfmea_process_failure_mode SET is_active=0 WHERE id=?")->execute([$fmId]);
+    $db->prepare("UPDATE pfmea_field_link SET is_active=0 WHERE scope_fm_id=?")->execute([$fmId]);
+}
+
 function pfmea_ref_control_options(PDO $db): array {
     $rows = $db->query("SELECT id, option_type, option_text FROM pfmea_control_option WHERE is_active=1 ORDER BY option_type, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     $out = ['prevention'=>[], 'detection'=>[], 'action'=>[], 'classification'=>[]];
