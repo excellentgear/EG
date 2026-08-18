@@ -8,10 +8,12 @@
 
 /** 候選清單：td_dev_eval 已有紀錄、pfmea_doc 還沒有紀錄的客戶+料號組合 */
 function pfmea_suggest_candidates(PDO $db): array {
-    // biz_date：轉入的PFMEA沿用該筆td_dev_eval的建立日期（2026-08-13使用者要求）；同一料號有多筆
-    // td_dev_eval紀錄時取最早的建立日期最有參考價值
+    // biz_date：轉入的PFMEA沿用該筆td_dev_eval的「填表日期」(fill_date，即紙本表單上那個日期欄位)。
+    // 2026-08-18 使用者更正：原本抓的是 created_at（資料列被建進資料庫的時間戳），那是「什麼時候
+    // 被登錄進系統」不是「表單上寫的日期」，補登歷史單據時兩者可能差很多。fill_date 為空的舊資料
+    // 才退回 created_at，避免完全沒有日期可用。同一料號有多筆紀錄時取最早的那張最有參考價值。
     $rows = $db->query("SELECT customer_name, part_d_id, part_no_text, MIN(product_name) AS product_name,
-                                MIN(DATE(created_at)) AS td_dev_eval_created_date
+                                MIN(COALESCE(fill_date, DATE(created_at))) AS td_dev_eval_fill_date
                          FROM td_dev_eval WHERE is_deleted=0
                            AND (part_d_id IS NOT NULL OR (part_no_text IS NOT NULL AND part_no_text<>''))
                          GROUP BY customer_name, part_d_id, part_no_text
@@ -69,7 +71,7 @@ function pfmea_suggest_bulk_create(PDO $db, array $rows, int $uid, string $uname
                 if ((int)$st->fetchColumn() === 1) $itemType = 'assembly';
             }
             $docNo = pfmea_next_doc_no($db);
-            $bizDate = trim((string)($row['td_dev_eval_created_date'] ?? '')) ?: null;
+            $bizDate = trim((string)($row['td_dev_eval_fill_date'] ?? '')) ?: null;
             $st = $db->prepare("INSERT INTO pfmea_doc (doc_no, part_d_id, part_no_text, item_type, product_name, related_depts, biz_date, created_by, created_by_name)
                                  VALUES (?,?,?,?,?,?,?,?,?)");
             $st->execute([$docNo, $partDId, $partDId ? null : $partText, $itemType, $row['product_name'] ?? null, $deptDefaults ?: null, $bizDate, $uid, $uname]);
