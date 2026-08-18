@@ -86,6 +86,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .pf-modal .m-foot { padding:10px 15px; border-top:1px solid #EADFC8; text-align:right; }
         .pf-modal .m-foot button { height:30px; padding:0 16px; border-radius:4px; font-size:13px; border:1px solid #d98a33; cursor:pointer; }
         .pf-modal .m-foot .b-ok { background:#F0A24B; color:#fff; }
+        .pf-modal .m-foot .b-rev { background:#fff; color:#8a6d45; border-color:#D8BE93; }
+        .pf-modal .m-foot .b-rev.on { background:#B5762A; color:#fff; border-color:#8a5a1e; }
         .pf-modal .m-foot .b-cancel { background:#fff; color:#5b3a1e; border-color:#D8BE93; margin-right:6px; }
         .pf-head-grid { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
         .pf-chk-row { display:flex; flex-wrap:wrap; gap:4px 16px; margin-top:4px; }
@@ -334,6 +336,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         </div>
     </div>
     <div class="m-foot">
+        <!-- 改版改成左下角獨立按鈕（2026-08-18 使用者要求：原本每次儲存都跳「是否記為新版本」確認，
+             容易誤按）。按下才算改版，儲存本身一律不動修訂履歷。 -->
+        <button type="button" class="b-rev" id="btnMakeRevision" onclick="toggleMakeRevision()" style="float:left;">
+            <i class="fa fa-file-text-o"></i> 記為改版
+        </button>
+        <span id="revHint" style="float:left;margin-left:10px;line-height:30px;font-size:12px;color:#8a6d45;"></span>
         <button class="b-cancel" onclick="closeMask('editMask')">取消</button>
         <button class="b-ok" id="btnSave" onclick="saveHeader()">儲存</button>
     </div>
@@ -788,6 +796,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>製程代號</b>：改可從全站製程主檔同步帶入（含大項分類），輸入時同時模糊搜尋代號/名稱/大項分類（多關鍵字皆需命中），顯示清單供點選。</li>
             <li><b>參考資料設定</b>：工具列同名按鈕（僅管理員可見），分三個頁籤：①<b>階層對應</b>——最上面是<b>階層對應總表</b>，一列＝一條完整路徑（製程／項目／功能／潛在失效模式／後果／分類／原因），像 Excel 一樣直接在格子裡改：每一格都可打字也可下拉選，候選值會依左邊欄位過濾（選了製程，項目欄就只出現該製程底下的）；在最後一列按 <b>↓</b> 會自動新增一列並帶入上一列的製程／項目／功能，只要改不同的地方；「從 Excel 貼上」可把 Excel 複製的整塊資料直接帶進來；「整欄填滿」把游標所在格的值套用到下面所有列；後果／分類／原因一格可填多個，用「、」隔開；<b>灰色斜體</b>代表該格目前沿用全站共用清單（同名失效模式共通），編輯後就轉成這一列專屬。改過的列會標成米黃色，按「儲存變更」才寫入。往下還有<b>逐層鑽取（進階）</b>可收合區塊，處理料號綁定與要求設定（要求是掛在「路徑」上而非掛在失效模式上，同一路徑的多筆失效模式共用同一批要求，故不併入總表以免改一列卻動到別列）。此外——所有下拉選項的來源，由粗到細串成一條鑽取鏈：<b>製程 → 項目 → 功能 → 潛在失效模式 → 後果／分類／原因</b>，每一層點下去就往下鑽一層，該層清單可直接新增／刪除。頂端另有「從全站製程主檔同步」拉入公司所有製程（含大項分類，可整個大項一鍵批次開放），只有開放的製程會出現在分析表下拉。<b>「要求」這一層可以指定料號</b>：料號欄留空＝這一層的通用要求（所有料號共用），輸入料號＝只給該料號用的專屬要求（會蓋過通用值），且同一個組合底下<b>可以輸入多筆要求</b>，填表時下拉會全部列出讓您挑本次要用的。指定料號後還可以「把目前鑽到的這條路徑綁給此料號」或「一次綁多組」（選了製程就自動帶出該製程底下整套項目／功能供勾選，已綁過的會標示鎖住），以及設定該料號＋製程的<b>圖面要求</b>（列印表頭的規格描述）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>要求總覽</b>——不分製程/項目/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、直接編輯文字內容、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
             <li><b>分類樣板</b>：「分類」欄位標題旁「選樣板（可複選）」可開跳窗勾選預先建立好的常用分類（如關鍵／重要），勾選後以「、」串接填入，已有的值不重複加。樣板在「參考資料設定」維護。<b>樣板與綁定並存</b>：樣板是全站共用的常用值（從跳窗挑），綁定是「這一筆潛在失效模式慣用哪幾個分類」（出現在欄位下拉），兩邊都能用。</li>
+            <li><b>建議措施的列印換行</b>：列印時「建議措施」會依編號一項一行（1. 2. 3. 各自獨立一行）；不論您是用 Enter 換行輸入，或是編號連著寫成一整段，列印都會自動斷行。公差小數（如 0.02、Ra1.6）不會被誤判成編號。</li>
             <li><b>建議措施樣板</b>：「建議措施」欄位標題旁「選樣板（可複選）」可開跳窗勾選預先在參考資料設定建立好的建議措施句庫，套用時自動接續編號（1. 2. 3.…）；手動輸入時只要目前這行是「數字.」開頭，按 Enter 換行會自動接下一個編號，不必自己算。</li>
             <li><b>基本資料欄位自動縮小字級</b>：項目/功能/要求/潛在失效模式/失效模式潛在後果/分類這幾欄是可挑選也可手動輸入的欄位，受限於瀏覽器限制無法真正多行換行，文字太長時會自動縮小字級（最小9px）以盡量完整顯示，欄位變短時字級會自動還原。</li>
             <li><b>檢視（唯讀）</b>：只有檢閱權限、無登錄權限的使用者，清單「操作」欄看到的是眼睛圖示「檢視」而非鉛筆「編輯」，點開版面跟列印版完全一樣（不會誤觸修改），並提供「評級對照表說明」「開圖」兩個按鈕方便對照查閱，不會觸發實際列印動作。</li>
@@ -803,7 +812,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li>料號可點擊開啟圖面查閱（比照報價單頁做法）。</li>
             <li><b>相關部門預設值</b>：勾選好常用部門後，點旁邊「設為預設勾選值」（僅管理員可見）即可設定新建文件時自動帶勾的部門，仍可逐份調整。</li>
             <li>列印比照官方紙本表單版面（表頭資訊＋評級對照表＋相關部門置於上方，分析表格逐列對齊官方欄位順序與分組），同時比照全站列印標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
-            <li><b>修訂履歷</b>：列印版右上角顯示本筆分析表自己的「編號／日期／修訂內容／準備」記錄（比照官方表單，取消批准/檢查欄位）。第一次存檔自動記1筆「新增文件」，準備人為當時建立者；之後修改存檔時會詢問是否要記為新版本，選是才會新增一列「修改文件」（準備人為當次修改者），選否代表只是小幅調整、不記版次，避免每次存檔都一直跳號。（此為本筆填寫紀錄自己的履歷，跟 AS 文件本身的版次管理是兩件事，AS 文件範本本身的改版仍由 AS 文件管理維護。）</li>
+            <li><b>修訂履歷</b>：列印版右上角顯示本筆分析表自己的「編號／日期／修訂內容／準備」記錄（比照官方表單，取消批准/檢查欄位）。第一次存檔自動記1筆「新增文件」，準備人為當時建立者；之後要記版次時，按編輯跳窗<b>左下角的「記為改版」按鈕</b>（按下會變深色並提示），該次儲存才會新增一列「修改文件」（準備人為當次修改者）；沒按就只是單純存檔、不動版次，避免每次存檔都一直跳號。（原本是存檔時跳確認視窗，容易誤按，已改成這個方式。）（此為本筆填寫紀錄自己的履歷，跟 AS 文件本身的版次管理是兩件事，AS 文件範本本身的改版仍由 AS 文件管理維護。）</li>
         </ul>
         <h4>設定入口</h4>
         <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。角色指派：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「PFMEA潛在失效模式及效應分析」區塊。</p>
@@ -1492,7 +1501,7 @@ function deptChecksHtml(checked){
     }).join('');
 }
 function resetEditForm(){
-    CUR_ID = 0; ITEM_ORIG = {};
+    CUR_ID = 0; ITEM_ORIG = {}; resetMakeRevision();
     $('#fPartNo').val(''); $('#fPartDId').val('0'); $('#fCustomerName').val('');
     $('#fProductName').val(DEFAULT_PRODUCT_NAME || ''); $('#fSpecDesc').val('');
     $('#fBizDate').val(''); $('#fBizDateQuick').html('');
@@ -1572,7 +1581,7 @@ function openEdit(id){
     if (!id){ openMask('editMask'); return; }
     $.getJSON(API, {action:'get', id:id}, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
-        CUR_ID = id;
+        CUR_ID = id; resetMakeRevision();
         $('#fPartNo').val(res.doc.part_no||''); $('#fPartDId').val(res.doc.part_d_id||0);
         $('#fCustomerName').val(res.doc.customer_name||'');
         $('#fProductName').val(res.doc.product_name||''); $('#fSpecDesc').val(res.doc.spec_desc||'');
@@ -1696,12 +1705,24 @@ function maybeUpdateItemDates(){
         $card.find('[data-f="action_date"]').val(bizDate);
     });
 }
+/* 改版旗標（2026-08-18 使用者要求）：原本每次儲存都跳「是否記為新版本」確認、很容易誤按，
+   改成跳窗左下角一顆獨立按鈕，按下才算數；沒按就只是單純存檔、不動修訂履歷。
+   新建文件不適用——第一次存檔一律自動記 1 筆「新增文件」，見 Pfmea_API.php save 動作。 */
+var MAKE_REVISION = 0;
+window.toggleMakeRevision = function(){
+    if (!CUR_ID){ alert('新建的文件第一次存檔會自動記錄一筆「新增文件」，不需要另外按改版。'); return; }
+    MAKE_REVISION = MAKE_REVISION ? 0 : 1;
+    $('#btnMakeRevision').toggleClass('on', !!MAKE_REVISION);
+    $('#revHint').text(MAKE_REVISION ? '← 這次儲存會新增一列「修改文件」版次記錄' : '');
+};
+function resetMakeRevision(){
+    MAKE_REVISION = 0;
+    $('#btnMakeRevision').removeClass('on').toggle(!!CUR_ID);
+    $('#revHint').text('');
+}
 function saveHeader(){
     maybeUpdateItemDates();
-    // 既有文件修改存檔時，問使用者是否要記為新版本（修訂履歷才新增一列，避免小幅調整就一直跳版次；
-    // 新建文件不用問，第一次存檔一律自動記1筆「新增文件」，見 Pfmea_API.php save 動作）
-    var newRevision = 0;
-    if (CUR_ID) newRevision = confirm('是否要將此次修改記錄為新版本？\n（是＝修訂履歷新增一列「修改文件」；否＝僅存檔不加版次記錄，適用小幅調整）') ? 1 : 0;
+    var newRevision = CUR_ID ? MAKE_REVISION : 0;
     var payload = {
         action: 'save', id: CUR_ID,
         part_d_id: $('#fPartDId').val() || 0,
@@ -1772,6 +1793,17 @@ function createSuggested(){
 var ITEM_TYPE_LABEL = {part:'零件', assembly:'組合件'};
 /* 列印／檢視共用：組出表頭合併表格+分析表格的body與css，printDoc開新視窗直接印，viewDoc(第8段
    使用者要求的唯讀檢視功能)則塞進本頁iframe跳窗顯示，兩者版面完全一致，避免維護兩份 */
+/* 建議措施列印用換行（2026-08-18 使用者要求）：這欄內容是「1.xxx 2.yyy」的條列，列印時要一項一行。
+   已經有換行字元的照原樣斷行；沒有換行、編號連著寫的則偵測編號自動補斷行。
+   偵測條件是「數字＋點＋非數字」，所以 0.02、Ra1.6 這類小數不會被誤判成編號。 */
+function fmtActions(t){
+    if (t == null || t === '') return '';
+    var s = esc(String(t)).replace(/\r?\n/g, '<br>');
+    s = s.replace(/(.)(\s*)(\d+\.)(?=[^\d])/g, function(m, prev, sp, num){
+        return prev === '>' ? m : prev + '<br>' + num;   // prev 是 '>' 代表前面已經是 <br>
+    });
+    return s;
+}
 function buildPrintDoc(res){
     var d = res.doc;
         var rows = '';
@@ -1783,7 +1815,7 @@ function buildPrintDoc(res){
                 + '<td class="tl">'+esc(it.failure_cause)+'</td><td>'+esc(it.occurrence)+'</td>'
                 + '<td class="tl">'+esc(it.prevention_controls)+'</td><td class="tl">'+esc(it.detection_controls)+'</td>'
                 + '<td>'+esc(it.detection)+'</td><td>'+esc(it.rpn)+'</td>'
-                + '<td class="tl">'+esc(it.recommended_actions)+'</td><td>'+fmtDate(it.target_date)+'</td>'
+                + '<td class="tl">'+fmtActions(it.recommended_actions)+'</td><td>'+fmtDate(it.target_date)+'</td>'
                 + '<td>'+fmtDate(it.action_date)+'</td>'
                 + '<td>'+esc(it.new_severity)+'</td><td>'+esc(it.new_occurrence)+'</td><td>'+esc(it.new_detection)+'</td><td>'+esc(it.new_rpn)+'</td></tr>';
         });
