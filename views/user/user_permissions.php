@@ -365,6 +365,7 @@ $_pfmeaRoles    = [];  $_userPfmeaRoles  = [];
 $_hrfRoles      = [];  $_userHrfRoles    = [];
 $_fsdRoles      = [];  $_userFsdRoles    = [];
 $_eqmRoles      = [];  $_userEqmRoles    = [];
+$_btrpRoles     = [];  $_userBtrpRoles   = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -408,6 +409,7 @@ try {
     $st->execute(['hr_form']); $_hrfRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['form_signer']); $_fsdRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['equip_machine']); $_eqmRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['business_trip']); $_btrpRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -563,6 +565,10 @@ try {
     $st->execute(['equip_machine']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userEqmRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['business_trip']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userBtrpRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -792,6 +798,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'tdev-role-section'      => '產品開發評估表',
                                         'pfmea-role-section'     => 'PFMEA',
                                         'eqm-role-section'       => '機台設備一覽表',
+                                        'btrp-role-section'      => '公出單',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -1258,6 +1265,10 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('eqm', 'equip_machine', '機台設備一覽表', 'fa-cogs', '#b06f27',
                         '為每位使用者指派「機台設備一覽表」頁的操作角色（主檔與 KPI「機台資產設定」共用同一張 machine_list）。角色功能：<strong>設備唯讀</strong>＝檢視機台清單/保養人歷程/機器設備履歴表；<strong>設備登錄</strong>＝唯讀＋新增/編輯機台、指派保養人、登錄履歴表、送出年度整份清單；<strong>設備管理員</strong>＝登錄＋停用機台、校正/刪除歷史紀錄、AS文件綁定、送簽設定、核准/退回年度清單。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         $_eqmRoles, $_userEqmRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('btrp', 'business_trip', '公出單', 'fa-sign-out', '#d99a4e',
+                        '為每位使用者指派「公出單」頁（2-MM-01-06）的角色。<strong>所有在職員工不需要指派任何角色</strong>，就能開立／檢視／列印<strong>自己的</strong>公出單，並核准指派給自己的單（核准人＝公出人的單位主管，主管本人公出時自動改為最高核准人員，主管請假時依代理設定轉給代理人）。此處只指派兩種加值角色：<strong>公出單檢閱</strong>＝可查看全部人員的公出單（唯讀）；<strong>公出單管理員</strong>＝查全部＋代其他人開單、刪除、模組設定（AS 文件綁定／外訓是否自動產生／核准圖章／列印簽章三格來源）、從外訓場次批次帶入。<span style="color:#b06f27;">「是否需要主管簽核（免簽核）」僅系統管理者可改</span>。管理者固定擁有全部權限。',
+                        $_btrpRoles, $_userBtrpRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('leave', 'leave', '請假系統', 'fa-calendar-minus-o', '#d99a4e',
                         '<strong>所有登入者都能申請請假、查看與撤回／銷假自己的單</strong>，不需要在這裡指派角色。此處只指派 <strong>人事（可看全部請假單）</strong>＝可檢視全公司請假單（不含代為簽核的權力）。<br>

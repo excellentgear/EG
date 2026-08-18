@@ -599,6 +599,19 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 }
                 return;
             }
+            if (refType === 'BUSINESS_TRIP_APPROVAL') {
+                // 公出單待核准：通用回覆/回簽不會真的呼叫 decide，改開公出單頁帶 trip_approve，
+                // 頁面會自動跳出核准/退回跳窗；核准/退回完成前不移除(mode=sign)。
+                window.open('../ADM/business_trip.php?trip_approve=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) { nmMarkRead(nmRemoveFromList); }
+                return;
+            }
+            if (refType === 'BUSINESS_TRIP_RESULT') {
+                // 核准/退回結果通知（給申請人）：純資訊型，開該張公出單後標記已讀移除
+                window.open('../ADM/business_trip.php?trip_id=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
             if (refType === 'VENDOR_AUDIT_PLAN_RESULT') {
                 // 核准/退回結果通知（給送出人）：純資訊型，開對應年度分頁後標記已讀移除
                 window.open('../pm/vendor_audit.php?plan_year=' + ($(this).data('refid') || 0) + '&event=' + nmId);

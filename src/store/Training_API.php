@@ -914,8 +914,15 @@ case 'save_execution': {
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     // 確定開課後自動寫入行事曆（一天一筆；失敗不擋存檔）
     $evCount = training_event_sync($db, $sid);
+    // 外訓場次確認開課後，為每位參加人員各產生一張公出單草稿（2-MM-01-06；可在公出單模組設定關閉）。
+    // 在 commit 之後呼叫、內部自行吞例外，失敗不影響訓練存檔。
+    $btRes = ['created'=>0, 'updated'=>0, 'skipped'=>0];
+    try {
+        require_once __DIR__ . '/../common/business_trip_lib.php';
+        $btRes = bt_create_from_training($db, $sid);
+    } catch (Throwable $e) {}
     jout(['session_id'=>$sid, 'status'=>$newStatus, 'days'=>count($clean), 'events'=>$evCount,
-          'total_hours'=>$hasH ? round($totalH, 1) : null]);
+          'total_hours'=>$hasH ? round($totalH, 1) : null, 'business_trip'=>$btRes]);
 }
 
 /* 狀態切換（登錄權）：退回計畫中 / 取消計畫 / 恢復計畫。

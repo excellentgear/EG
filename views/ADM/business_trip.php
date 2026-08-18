@@ -1,0 +1,775 @@
+<?php
+/**
+ * 公出單（2-MM-01-06）— 全新獨立頁面（2026-08-18 建立）
+ * 外出都要填的單據，不限教育訓練：全體在職員工都能開自己的單；外訓場次「確認開課」時會自動產生草稿。
+ * 簽核＝單位主管一關（主管本人公出改由最高核准人員），系統管理者可設「免簽核」＝送出即核准。
+ * 資料一律走 src/store/BusinessTrip_API.php；共用邏輯 src/common/business_trip_lib.php
+ */
+session_start();
+if (!isset($_SESSION['userName'])) {
+    $_SESSION['lastpage'] = "../../views/ADM/business_trip.php";
+    header("Location:../../index.php");
+    exit;
+}
+include_once '../../src/common/_config.php';
+include_once '../../src/common/DBConnection.php';
+include_once '../../src/common/business_trip_lib.php';
+
+$db = (new DBConnection())->getPDO();
+bt_ensure_schema($db);
+$btUser  = bt_current_user($db);
+$perms   = bt_perms($db, $btUser);
+$roleLabel = $perms['isAdmin'] ? '管理者'
+           : ($perms['canAdmin'] ? '公出單管理員'
+           : ($perms['canViewAll'] ? '公出單檢閱' : ($perms['canApply'] ? '一般員工（可開自己的單）' : '無權限')));
+?>
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>公出單</title>
+    <link href="../../resource/css/bootstrap.css" rel="stylesheet">
+    <link href="../../resource/css/font-awesome.css" rel="stylesheet">
+    <link href="../../resource/css/nprogress.css" rel="stylesheet">
+    <link href="../../resource/css/custom.css" rel="stylesheet">
+    <style>
+        #sidebar-menu { visibility: hidden; }
+        .right_col .page-title { margin:8px 0 4px; overflow:hidden; clear:both; }
+        .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
+            background:#F0A24B; color:#fff; cursor:pointer; }
+        .page-help-btn:hover { background:#d98a33; }
+        @media print { .page-help-btn { display:none !important; } }
+        .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
+        .help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
+        .help-doc h4:first-child { margin-top:0; }
+        .help-doc b { color:#8A5A2B; }
+        .bt-toolbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; clear:both;
+            border:1.5px solid #E8D5B5; border-radius:8px; padding:8px 10px; margin-bottom:10px; background:#FDF8EF; }
+        .bt-toolbar label { margin:0; font-size:13px; color:#5b3a1e; }
+        .bt-toolbar select, .bt-toolbar input, .bt-toolbar button {
+            height:30px; font-size:13px; line-height:1; padding:0 10px; border:1px solid #D8BE93;
+            border-radius:4px; background:#fff; color:#5b3a1e; }
+        .bt-toolbar button { cursor:pointer; }
+        .bt-toolbar button:hover { background:#F7E0BD; }
+        .bt-toolbar .btn-warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        .bt-toolbar .btn-warm:hover { background:#d98a33; }
+        .bt-role-badge { margin-left:auto; font-size:13px; color:#5b3a1e; background:#F7E0BD; border-radius:12px; padding:4px 12px; }
+        .bt-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; background:#fff; }
+        table.bt-table { width:100%; border-collapse:collapse; font-size:13px; }
+        table.bt-table th, table.bt-table td { border:1px solid #EADFC8; padding:5px 8px; text-align:center; }
+        table.bt-table thead th { background:#F7E0BD; color:#5b3a1e; font-weight:bold; white-space:nowrap; }
+        table.bt-table tbody tr:nth-child(even) { background:#FBF6EC; }
+        table.bt-table td.l { text-align:left; }
+        .bt-op { color:#b5762a; cursor:pointer; margin:0 4px; white-space:nowrap; }
+        .bt-op:hover { color:#8A5A2B; text-decoration:underline; }
+        .bt-pager { display:flex; justify-content:flex-end; align-items:center; gap:6px; margin:6px 0; font-size:13px; color:#5b3a1e; }
+        .bt-pager button { height:26px; padding:0 9px; border:1px solid #D8BE93; background:#fff; border-radius:4px; cursor:pointer; }
+        .bt-pager button.on { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        .st { display:inline-block; padding:1px 9px; border-radius:10px; font-size:12px; }
+        .st-draft { background:#EFE7D8; color:#6b5535; }
+        .st-submitted { background:#F7E0BD; color:#8A5A2B; }
+        .st-approved { background:#F0A24B; color:#fff; }
+        .st-rejected { background:#DD5138; color:#fff; }
+        .bt-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:9000; overflow:auto; }
+        .bt-modal { background:#fff; border-radius:8px; margin:40px auto; max-width:820px; width:94%; box-shadow:0 8px 30px rgba(0,0,0,.3); }
+        .bt-modal.narrow { max-width:520px; }
+        .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:9px 14px; border-radius:8px 8px 0 0; display:flex; }
+        .m-close { margin-left:auto; cursor:pointer; }
+        .m-body { padding:14px; max-height:70vh; overflow:auto; }
+        .m-foot { padding:10px 14px; border-top:1px solid #EADFC8; text-align:right; }
+        .m-foot button, .b-att { height:32px; padding:0 14px; border-radius:4px; border:1px solid #D8BE93; background:#fff; color:#5b3a1e; cursor:pointer; }
+        .m-foot .b-ok { background:#F0A24B; color:#fff; border-color:#d98a33; margin-left:6px; }
+        .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+        .m-body label { display:block; font-size:13px; color:#5b3a1e; margin:0 0 3px; font-weight:normal; }
+        .m-body input[type=text], .m-body input[type=date], .m-body input[type=number], .m-body select, .m-body textarea {
+            width:100%; border:1px solid #D8BE93; border-radius:4px; padding:5px 8px; font-size:13px; color:#5b3a1e; }
+        .m-body textarea { resize:vertical; }
+        .ro-auto { background:#F3EADB; color:#7a6446; }
+        .bt-hint { font-size:12px; color:#8a6d45; line-height:1.7; }
+        .bt-err { color:#DD5138; font-size:12px; margin-top:2px; display:none; }
+        table.day-tbl { width:100%; border-collapse:collapse; font-size:13px; }
+        table.day-tbl th, table.day-tbl td { border:1px solid #EADFC8; padding:3px 5px; text-align:center; }
+        table.day-tbl th { background:#F7E0BD; color:#5b3a1e; }
+        table.day-tbl input { width:100%; border:1px solid #E8D5B5; border-radius:3px; padding:3px 5px; font-size:13px; }
+        .bt-noperm { border:1.5px solid #E8D5B5; background:#FDF8EF; border-radius:8px; padding:24px; color:#5b3a1e; }
+        .bt-top { position:fixed; right:24px; bottom:24px; width:40px; height:40px; border-radius:20px; background:#F0A24B;
+            color:#fff; border:none; cursor:pointer; display:none; z-index:100; }
+    </style>
+</head>
+<body class="nav-sm">
+<div class="container body">
+<div class="main_container">
+    <?php include '../partPage/sideAndTopBarMenu.html' ?>
+    <div class="right_col" role="main">
+        <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
+            <h2 style="margin:6px 0;">公出單
+                <small style="color:#8a6d45;">2-MM-01-06　外出（含外訓）都要填的單據</small></h2>
+            <button id="btnPageHelp" class="page-help-btn" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
+        </div>
+        <div class="clearfix"></div>
+
+<?php if (!$perms['canApply'] && !$perms['canViewAll']): ?>
+        <div class="bt-noperm">
+            <h4><i class="fa fa-lock"></i> 無公出單使用權限</h4>
+            <p>此帳號目前不是在職狀態，無法開立公出單。如有疑問請洽人事或系統管理者。</p>
+        </div>
+<?php else: ?>
+        <div class="bt-toolbar">
+            <label>範圍</label>
+            <select id="scopeSel">
+                <option value="mine">我的公出單</option>
+                <option value="pending">待我核准</option>
+                <?php if ($perms['canViewAll']): ?><option value="all">全部（管理）</option><?php endif; ?>
+            </select>
+            <label>狀態</label>
+            <select id="statusSel">
+                <option value="">全部</option>
+                <option value="draft">草稿</option>
+                <option value="submitted">待核准</option>
+                <option value="approved">已核准</option>
+                <option value="rejected">已退回</option>
+            </select>
+            <label>期間</label>
+            <input type="date" id="fDateFrom" max="9999-12-31" style="width:140px;">
+            <span>～</span>
+            <input type="date" id="fDateTo" max="9999-12-31" style="width:140px;">
+            <input type="text" id="fKw" placeholder="姓名/地點/事由/單號" style="width:170px;">
+            <button id="btnSearch" class="btn-warm"><i class="fa fa-search"></i> 查詢</button>
+            <button id="btnAdd"><i class="fa fa-plus"></i> 新增公出單</button>
+            <button id="btnPrintSel"><i class="fa fa-print"></i> 批次列印所選</button>
+            <?php if ($perms['canAdmin']): ?>
+            <button id="btnFromTraining"><i class="fa fa-graduation-cap"></i> 從外訓帶入</button>
+            <button id="btnSetting"><i class="fa fa-cog"></i> 模組設定</button>
+            <?php endif; ?>
+            <span class="bt-role-badge">目前角色：<?= htmlspecialchars($roleLabel, ENT_QUOTES) ?></span>
+        </div>
+
+        <div class="bt-pager">
+            <span id="pgInfo"></span>
+            <label>每頁</label>
+            <select id="pgSize" style="height:26px;border:1px solid #D8BE93;border-radius:4px;">
+                <option>5</option><option selected>10</option><option>20</option><option>50</option>
+            </select>
+            <span id="pgBtns"></span>
+        </div>
+        <div class="bt-table-wrap">
+            <table class="bt-table">
+                <thead><tr>
+                    <th style="width:32px;"><input type="checkbox" id="chkAll"></th>
+                    <th>單號</th><th>單據日期</th><th>公出人</th><th>單位</th><th>級職</th>
+                    <th>公出時間</th><th>地點</th><th>事由</th><th>狀態</th><th>核准人</th><th>操作</th>
+                </tr></thead>
+                <tbody id="listBody"><tr><td colspan="12" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+            </table>
+        </div>
+<?php endif; ?>
+        <button class="bt-top" id="btnTop" title="回到頂端"><i class="fa fa-arrow-up"></i></button>
+    </div>
+</div>
+</div>
+
+<!-- 公出單編輯 -->
+<div class="bt-mask" id="editMask"><div class="bt-modal" data-eg-form data-eg-submit="#btnSave">
+    <div class="m-head"><span id="editTitle">新增公出單</span><span class="m-close" onclick="closeMask('editMask')">✕</span></div>
+    <div class="m-body">
+        <div class="grid2">
+            <div><label>單據日期 *</label><input type="date" id="fApplyDate" max="9999-12-31"></div>
+            <div id="forUserBox" style="display:none;"><label>公出人（管理員可代開）</label>
+                <select id="fUser" data-eg-filter="輸入姓名篩選…"></select></div>
+            <div><label>單位</label><select id="fDept" data-eg-filter="輸入部門篩選…"></select></div>
+            <div><label>級職</label><input type="text" id="fPosition" maxlength="100"></div>
+            <div><label>公出起日 *</label><input type="date" id="fFrom" max="9999-12-31"></div>
+            <div><label>公出迄日 *</label><input type="date" id="fTo" max="9999-12-31"></div>
+            <div><label>開始時間（可直接輸入 0900／900／9）</label><input type="text" id="fTimeFrom" maxlength="5" placeholder="09:00">
+                <div class="bt-err" id="errTimeFrom"></div></div>
+            <div><label>結束時間</label><input type="text" id="fTimeTo" maxlength="5" placeholder="17:00">
+                <div class="bt-err" id="errTimeTo"></div></div>
+            <div style="grid-column:1/3;"><label>公出地點 *</label><input type="text" id="fLocation" maxlength="200">
+                <div class="bt-err" id="errLocation"></div></div>
+            <div style="grid-column:1/3;"><label>事由 *</label><textarea id="fReason" rows="3" maxlength="2000"></textarea>
+                <div class="bt-err" id="errReason"></div></div>
+        </div>
+        <div id="dayBox" style="display:none;margin-top:10px;">
+            <div style="font-weight:bold;color:#5b3a1e;margin-bottom:4px;">每日時段（多天且各天時間不同時才需要逐日填；不填就用上面的起訖時間）</div>
+            <table class="day-tbl">
+                <thead><tr><th style="width:44px;">第</th><th style="width:150px;">日期</th><th style="width:90px;">開始</th>
+                    <th style="width:90px;">結束</th><th style="width:30px;"></th></tr></thead>
+                <tbody id="dayBody" data-eg-row-add="btDayAdd" data-eg-row-del="btDayDelLast"></tbody>
+            </table>
+            <div class="bt-hint" style="margin-top:4px;">
+                <button type="button" class="b-att" onclick="btDayAdd()"><i class="fa fa-plus"></i> 新增一天</button>
+                末列按 ↓ 自動加一列；日期需落在公出起訖日之間。
+            </div>
+        </div>
+        <div class="bt-hint" id="editHint" style="margin-top:10px;"></div>
+    </div>
+    <div class="m-foot">
+        <button onclick="printTrip(CUR_ID)" id="btnPrintOne"><i class="fa fa-print"></i> 列印</button>
+        <button onclick="closeMask('editMask')">取消</button>
+        <button class="b-ok" id="btnSave">儲存草稿</button>
+        <button class="b-ok" id="btnSubmit"><i class="fa fa-paper-plane"></i> 儲存並送出</button>
+    </div>
+</div></div>
+
+<!-- 核准／退回 -->
+<div class="bt-mask" id="decideMask"><div class="bt-modal narrow" data-eg-form data-eg-submit="#btnDecideOk">
+    <div class="m-head"><span id="decideTitle">核准公出單</span><span class="m-close" onclick="closeMask('decideMask')">✕</span></div>
+    <div class="m-body">
+        <div id="decideInfo" class="bt-hint" style="margin-bottom:10px;"></div>
+        <label>決定 *</label>
+        <select id="decideSel"><option value="approved">核准</option><option value="rejected">退回</option></select>
+        <label style="margin-top:8px;">核准日期（業務日期）</label>
+        <input type="date" id="decideDate" max="9999-12-31">
+        <label style="margin-top:8px;">意見／退回原因<span id="noteReq" style="color:#DD5138;"> *（退回必填）</span></label>
+        <textarea id="decideNote" rows="3" maxlength="500"></textarea>
+        <div class="bt-err" id="errNote"></div>
+    </div>
+    <div class="m-foot">
+        <button onclick="closeMask('decideMask')">取消</button>
+        <button class="b-ok" id="btnDecideOk">送出決行</button>
+    </div>
+</div></div>
+
+<?php if ($perms['canAdmin']): ?>
+<!-- 模組設定 -->
+<div class="bt-mask" id="setMask"><div class="bt-modal">
+    <div class="m-head"><span>公出單 — 模組設定</span><span class="m-close" onclick="closeMask('setMask')">✕</span></div>
+    <div class="m-body">
+        <label>公出單 — AS 文件編號</label>
+        <div style="display:flex;gap:6px;align-items:center;">
+            <input type="text" id="setAsDoc" class="ro-auto" readonly style="flex:1;">
+            <button type="button" class="b-att" id="btnPickAsDoc"><i class="fa fa-search"></i> 挑選</button>
+            <button type="button" class="b-att" id="btnClearAsDoc">清除</button>
+        </div>
+        <div class="bt-hint" style="margin-top:4px;">列印表頭的表單名稱與右下角編號都由這裡的綁定推導（版次依單據日期回推），不在頁面寫死。</div>
+
+        <div style="border-top:1px dashed #EADFC8;margin:14px 0 10px;"></div>
+        <label>是否需要主管簽核<span id="needApprLock" style="color:#8a6d45;font-size:12px;"></span></label>
+        <select id="setNeedAppr">
+            <option value="0">免簽核（送出即視同核准，列印自動蓋章）</option>
+            <option value="1">需要簽核（送出後通知單位主管核准／退回）</option>
+        </select>
+        <div class="bt-hint" style="margin-top:4px;">此項僅系統管理者可改。找不到單位主管與最高核准人員時，一律自動核准避免卡關。
+            主管本人公出時，核准人自動改為最高核准人員（比照紙本附註）。</div>
+
+        <label style="margin-top:10px;">外訓場次確認開課時自動產生公出單</label>
+        <select id="setAutoTr">
+            <option value="1">自動產生（每位參加人員各一張草稿）</option>
+            <option value="0">不自動產生（改用「從外訓帶入」手動補）</option>
+        </select>
+
+        <label style="margin-top:10px;">核准圖章樣式</label>
+        <select id="setStampTpl"><option value="0">（預設圓形圖章）</option></select>
+        <div class="bt-hint" style="margin-top:4px;">有上傳掃描實體章的人一律優先用掃描章，這裡只影響沒掃描章時自動產生的印章樣式。</div>
+
+        <div style="border-top:1px dashed #EADFC8;margin:14px 0 10px;"></div>
+        <div style="font-weight:bold;color:#5b3a1e;margin-bottom:6px;">列印簽章三格的來源（紙本為 會計／課長／組長）</div>
+        <div class="grid2">
+            <div><label>會計格</label><select id="setSignAcc"></select></div>
+            <div><label>課長格</label><select id="setSignSection"></select></div>
+            <div><label>組長格</label><select id="setSignGroup"></select></div>
+        </div>
+        <div class="bt-hint" style="margin-top:4px;">選「留白」的格子列印時空白，供紙本手蓋。選項的實際人員都是當下查組織角色綁定得出，不寫死人名。</div>
+    </div>
+    <div class="m-foot">
+        <button onclick="closeMask('setMask')">關閉</button>
+        <button class="b-ok" id="btnSaveSet">儲存設定</button>
+    </div>
+</div></div>
+
+<!-- 從外訓帶入 -->
+<div class="bt-mask" id="trMask"><div class="bt-modal">
+    <div class="m-head"><span>從外訓場次帶入公出單</span><span class="m-close" onclick="closeMask('trMask')">✕</span></div>
+    <div class="m-body">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+            <label style="margin:0;">年度</label>
+            <input type="number" id="trYear" style="width:100px;" min="2000" max="2999">
+            <button type="button" class="b-att" id="btnTrLoad">查詢</button>
+        </div>
+        <div class="bt-table-wrap">
+            <table class="bt-table">
+                <thead><tr><th>開課日</th><th>課程名稱</th><th>外訓單位</th><th>參加人數</th><th>已開公出單</th><th>操作</th></tr></thead>
+                <tbody id="trBody"><tr><td colspan="6" style="padding:16px;color:#8a6d45;">請先查詢</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+    <div class="m-foot"><button onclick="closeMask('trMask')">關閉</button></div>
+</div></div>
+<?php endif; ?>
+
+<!-- 使用說明（鐵律7） -->
+<div class="bt-mask" id="helpUseMask"><div class="bt-modal">
+    <div class="m-head"><span>公出單 — 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
+    <div class="m-body help-doc">
+        <h4>這個頁面在做什麼</h4>
+        <p>把紙本 <b>2-MM-01-06 公出單</b> 線上化。<b>任何因公外出都要填</b>（拜訪客戶、送件、外訓…），不限教育訓練。
+        送出後由單位主管核准，核准後即可列印（含簽章圖章），紙本交管理課存查。</p>
+        <h4>操作步驟</h4>
+        <p>①按<b>「新增公出單」</b>填單據日期、公出起訖日期時間、地點、事由（單位與級職會自動帶入，可改）。<br>
+        ②多天且每天時段不同時，展開<b>「每日時段」</b>逐日填；同一個時段就不用填。<br>
+        ③按<b>「儲存並送出」</b>：需要簽核時會通知你的單位主管；設定為免簽核時，送出即視同核准。<br>
+        ④主管在通知或本頁<b>「待我核准」</b>分頁核准／退回（<b>退回一定要填原因</b>）。<br>
+        ⑤已核准的單按<b>「列印」</b>印出紙本；清單勾選多筆可<b>批次列印</b>（依序各自開視窗，請允許彈出視窗）。</p>
+        <h4>重要行為／常見疑問</h4>
+        <p>・<b>外訓會自動產生公出單</b>：教育訓練的外訓場次按「確認開課」時，系統會為每位參加人員各產生一張<b>草稿</b>
+        （日期／時間／地點／事由自動帶入，一張涵蓋整個訓練期間），你只要確認後送出即可。已送出／已核准的單不會被覆蓋。<br>
+        ・<b>主管本人公出</b>：核准人自動改為最高核准人員（比照紙本附註「主管公出請總經理代理」）。<br>
+        ・<b>主管請假</b>時，核准人會依代理設定自動轉給代理人（全站共用的代理系統，不是這一頁自己猜）。<br>
+        ・<b>已送出的單不能改</b>，要改請先請主管退回，或另開新單。<br>
+        ・列印的表單名稱、右下角文件編號、版次都來自 AS 文件綁定，<b>版次依單據日期回推</b>當時生效的版本。</p>
+        <h4>設定入口</h4>
+        <p>本頁工具列<b>「模組設定」</b>（限公出單管理員）：AS 文件編號綁定、是否需要主管簽核（<b>僅系統管理者可改</b>）、
+        外訓是否自動產生、核准圖章樣式、列印簽章三格（會計／課長／組長）各自的來源。
+        部門主管與最高核准人員的認定來自<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>。</p>
+        <h4>權限角色</h4>
+        <p><b>一般在職員工</b>：不需指派任何角色，就能開立／檢視／列印<b>自己的</b>公出單，並核准指派給自己的單。
+        <b>公出單檢閱</b>：可查看全部人的公出單（唯讀）。<b>公出單管理員</b>：查全部＋代其他人開單、刪除、模組設定、AS 綁定、從外訓批次帶入。
+        管理者固定擁有全部權限。角色指派於「使用者權限設定」。</p>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">我知道了</button></div>
+</div></div>
+
+<script src="../../resource/js/jquery.min.js"></script>
+<script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/fastclick.js"></script>
+<script src="../../resource/js/nprogress.js"></script>
+<script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
+<script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
+<script>
+$(document).ready(function(){
+    var $am = $('#sidebar-menu .nav.side-menu > li.active');
+    if ($am.length) { $am.removeClass('active').find('ul.child_menu').hide(); $am.find('li.current-page').removeClass('current-page'); }
+    $('#sidebar-menu').css('visibility','visible');
+});
+
+var API = '../../src/store/BusinessTrip_API.php';
+var META = null, ROWS = [], CUR_ID = 0, CUR_TRIP = null, PAGE = 1, PSIZE = 10, DECIDE_ID = 0;
+var STATUS_LABEL = {draft:'草稿', submitted:'待核准', approved:'已核准', rejected:'已退回'};
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function dispDate(d){ return d ? egFmtDate(d) : ''; }        // 顯示一律 YYYY.MM.DD（ai-rules/20）
+function openMask(id){ document.getElementById(id).style.display='block'; }
+function closeMask(id){ document.getElementById(id).style.display='none'; }
+function stampHtml(name, date){
+    try { if (window.EGStamp && EGStamp.stamp)
+        return EGStamp.stamp(name, date||'', false, (META && META.stamp_template) ? META.stamp_template.schema : null); } catch(e){}
+    return '<span style="font-size:14px;">'+esc(name)+'</span>'+(date?'<div style="font-size:10px;color:#555;">'+esc(date)+'</div>':'');
+}
+$(document).ajaxError(function(e, x){
+    var m = (x.responseJSON && x.responseJSON.error) || ('HTTP '+x.status);
+    alert('操作失敗：'+m);
+});
+
+/* ================= 載入 ================= */
+function loadMeta(then){
+    $.getJSON(API, {action:'meta'}, function(res){
+        if (!res.ok) return;
+        META = res;
+        $('#fApplyDate').val(res.today);
+        $('#trYear').val(new Date().getFullYear());
+        var dh = '<option value="">（未設定）</option>';
+        (res.depts||[]).forEach(function(d){ dh += '<option value="'+d.id+'">'+esc(d.name)+'</option>'; });
+        $('#fDept').html(dh);
+        if ((res.people||[]).length) {
+            var ph = '';
+            res.people.forEach(function(p){
+                ph += '<option value="'+p.id+'">'+esc((p.dept_name||'')+' '+(p.position_name||'')+' '+(p.user_cname||p.name||''))+'</option>';
+            });
+            $('#fUser').html(ph);
+            $('#forUserBox').show();
+        }
+        if (res.perms && res.perms.canAdmin) fillSettingUI(res);
+        if (typeof then === 'function') then();
+    });
+}
+function loadList(){
+    var q = {action:'list', scope:$('#scopeSel').val(), status:$('#statusSel').val(),
+             date_from:$('#fDateFrom').val(), date_to:$('#fDateTo').val(), kw:$('#fKw').val()};
+    $('#listBody').html('<tr><td colspan="12" style="padding:20px;color:#8a6d45;">載入中…</td></tr>');
+    $.getJSON(API, q, function(res){
+        if (!res.ok) return;
+        ROWS = res.rows || [];
+        PAGE = 1;
+        renderList();
+    });
+}
+function renderList(){
+    PSIZE = parseInt($('#pgSize').val(), 10) || 10;
+    var total = ROWS.length, pages = Math.max(1, Math.ceil(total / PSIZE));
+    if (PAGE > pages) PAGE = pages;
+    var start = (PAGE - 1) * PSIZE, part = ROWS.slice(start, start + PSIZE), h = '';
+    part.forEach(function(r){
+        var ops = '<span class="bt-op" onclick="openTrip('+r.trip_id+')"><i class="fa fa-folder-open-o"></i> 開啟</span>'
+                + '<span class="bt-op" onclick="printTrip('+r.trip_id+')"><i class="fa fa-print"></i> 列印</span>';
+        if (r.can_decide) ops += '<span class="bt-op" onclick="openDecide('+r.trip_id+')"><i class="fa fa-gavel"></i> 核准/退回</span>';
+        if (r.can_edit)   ops += '<span class="bt-op" onclick="delTrip('+r.trip_id+')"><i class="fa fa-trash"></i> 刪除</span>';
+        h += '<tr><td><input type="checkbox" class="chkRow" value="'+r.trip_id+'"></td>'
+           + '<td>'+esc(r.trip_no||('#'+r.trip_id))+'</td>'
+           + '<td>'+esc(dispDate(r.apply_date))+'</td>'
+           + '<td>'+esc(r.user_name||'')+'</td><td>'+esc(r.dept_name||'')+'</td><td>'+esc(r.position_name||'')+'</td>'
+           + '<td>'+esc(r.period||'')+'</td><td class="l">'+esc(r.location||'')+'</td>'
+           + '<td class="l" title="'+esc(r.reason||'')+'">'+esc((r.reason||'').substr(0,20))+((r.reason||'').length>20?'…':'')+'</td>'
+           + '<td><span class="st st-'+esc(r.status)+'">'+esc(STATUS_LABEL[r.status]||r.status)+'</span>'
+           + (+r.is_auto ? '<div style="font-size:11px;color:#8a6d45;">自動核准</div>' : '')+'</td>'
+           + '<td>'+esc(r.approver_name||'')+(+r.is_delegated?'<div style="font-size:11px;color:#8a6d45;">代理簽核</div>':'')+'</td>'
+           + '<td>'+ops+'</td></tr>';
+    });
+    $('#listBody').html(h || '<tr><td colspan="12" style="padding:20px;color:#8a6d45;">查無資料</td></tr>');
+    $('#pgInfo').text('共 '+total+' 筆');
+    var bh = '';
+    for (var i=1; i<=pages; i++) bh += '<button class="pgb'+(i===PAGE?' on':'')+'" data-p="'+i+'">'+i+'</button>';
+    $('#pgBtns').html(bh);
+    $('#chkAll').prop('checked', false);
+}
+$(document).on('click', '.pgb', function(){ PAGE = parseInt($(this).data('p'), 10); renderList(); });
+$('#pgSize').on('change', function(){ PAGE = 1; renderList(); });
+$('#chkAll').on('change', function(){ $('.chkRow').prop('checked', $(this).is(':checked')); });
+$('#btnSearch').on('click', loadList);
+$('#scopeSel,#statusSel').on('change', loadList);
+
+/* ================= 編輯 ================= */
+function newTrip(){
+    CUR_ID = 0; CUR_TRIP = null;
+    $('#editTitle').text('新增公出單');
+    $('#fApplyDate').val(META ? META.today : '');
+    $('#fFrom').val(META ? META.today : ''); $('#fTo').val(META ? META.today : '');
+    $('#fTimeFrom').val(''); $('#fTimeTo').val('');
+    $('#fLocation').val(''); $('#fReason').val('');
+    if (META && META.me) {
+        $('#fDept').val(META.me.dept_id || '');
+        $('#fPosition').val(META.me.position_name || '');
+        if ($('#fUser').length) $('#fUser').val(META.me.id);
+    }
+    $('#dayBody').html(''); btDayAdd();
+    $('#dayBox').hide();
+    $('#editHint').text('儲存草稿後仍可修改；按「儲存並送出」才會進入簽核。');
+    $('#btnSave').show(); $('#btnSubmit').show(); $('#btnPrintOne').hide();
+    openMask('editMask');
+}
+function openTrip(id){
+    // 點開即刷新（ai-rules/08 第六節）：先抓後端最新狀態再決定按鈕
+    $.getJSON(API, {action:'get', trip_id:id}, function(res){
+        if (!res.ok) return;
+        var t = res.trip; CUR_ID = id; CUR_TRIP = t;
+        $('#editTitle').text((t.can_edit ? '編輯' : '檢視') + '公出單　' + (t.trip_no||('#'+id))
+                             + '（' + (STATUS_LABEL[t.status]||t.status) + '）');
+        $('#fApplyDate').val(t.apply_date);
+        if ($('#fUser').length) $('#fUser').val(t.user_id);
+        $('#fDept').val(t.dept_id || '');
+        $('#fPosition').val(t.position_name || '');
+        $('#fFrom').val(t.date_from); $('#fTo').val(t.date_to);
+        $('#fTimeFrom').val(t.time_from || ''); $('#fTimeTo').val(t.time_to || '');
+        $('#fLocation').val(t.location || ''); $('#fReason').val(t.reason || '');
+        $('#dayBody').html('');
+        (t.days||[]).forEach(function(d){ btDayAdd(d); });
+        if (!(t.days||[]).length) btDayAdd();
+        syncDayBox();
+        var hint = [];
+        if (t.source === 'training') hint.push('本單由教育訓練外訓場次自動產生。');
+        if (t.approver_name) hint.push('核准人：' + esc(t.approver_name) + (+t.is_delegated ? '（代理簽核）' : ''));
+        if (t.status === 'approved') hint.push('核准日期：' + dispDate(t.approved_date) + (+t.is_auto ? '（' + esc(t.auto_note||'自動核准') + '）' : ''));
+        if (t.status === 'rejected') hint.push('<span style="color:#DD5138;">退回原因：' + esc(t.decide_note||'') + '</span>');
+        $('#editHint').html(hint.join('<br>'));
+        var ro = !t.can_edit;
+        $('#editMask input, #editMask select, #editMask textarea').prop('disabled', ro);
+        $('#btnSave').toggle(!ro); $('#btnSubmit').toggle(!ro); $('#btnPrintOne').show();
+        openMask('editMask');
+    });
+}
+function collectDays(){
+    var out = [];
+    $('#dayBody tr').each(function(){
+        var d = $(this).find('.dDate').val(), s = $(this).find('.dStart').val(), e = $(this).find('.dEnd').val();
+        if (d) out.push({day_date:d, start_time:s, end_time:e});
+    });
+    return out;
+}
+function btDayAdd(d){
+    d = d || {};
+    var n = $('#dayBody tr').length + 1;
+    $('#dayBody').append('<tr><td>'+n+'</td>'
+        + '<td><input type="date" class="dDate" max="9999-12-31" value="'+esc(d.day_date||'')+'"></td>'
+        + '<td><input type="text" class="dStart" maxlength="5" value="'+esc(d.start_time||'')+'"></td>'
+        + '<td><input type="text" class="dEnd" maxlength="5" value="'+esc(d.end_time||'')+'"></td>'
+        + '<td><span class="bt-op" onclick="$(this).closest(\'tr\').remove();renumDays();">✕</span></td></tr>');
+    renumDays();
+}
+function btDayDelLast(){ if ($('#dayBody tr').length > 1) { $('#dayBody tr').last().remove(); renumDays(); } }
+function renumDays(){ $('#dayBody tr').each(function(i){ $(this).find('td').first().text(i+1); }); }
+function syncDayBox(){
+    var multi = $('#fFrom').val() && $('#fTo').val() && $('#fFrom').val() !== $('#fTo').val();
+    $('#dayBox').toggle(!!multi);
+}
+$('#fFrom,#fTo').on('change', function(){
+    if ($('#fTo').val() && $('#fFrom').val() && $('#fTo').val() < $('#fFrom').val()) $('#fTo').val($('#fFrom').val());
+    syncDayBox();
+});
+/* 時間欄即時檢查（錯誤當場顯示原因，不等送出；後端會再驗一次） */
+function normTime(v){
+    var s = String(v||'').trim();
+    if (s === '') return '';
+    var m;
+    if ((m = s.match(/^(\d{1,2}):(\d{1,2})$/)))      { var h=+m[1], i=+m[2]; }
+    else if ((m = s.match(/^(\d{3,4})$/)))           { var h=+m[1].slice(0,-2), i=+m[1].slice(-2); }
+    else if ((m = s.match(/^(\d{1,2})$/)))           { var h=+m[1], i=0; }
+    else return null;
+    if (h<0||h>23||i<0||i>59) return null;
+    return (h<10?'0':'')+h+':'+(i<10?'0':'')+i;
+}
+$('#fTimeFrom,#fTimeTo').on('blur', function(){
+    var $e = $(this).attr('id')==='fTimeFrom' ? $('#errTimeFrom') : $('#errTimeTo');
+    var v = normTime($(this).val());
+    if (v === null) { $e.text('時間格式不正確（時須 0-23、分須 0-59，可輸入 0900／900／9）').show(); $(this).css('border-color','#DD5138'); return; }
+    $(this).val(v).css('border-color','#D8BE93'); $e.hide();
+    if ($('#fFrom').val() === $('#fTo').val()) {
+        var a = normTime($('#fTimeFrom').val()), b = normTime($('#fTimeTo').val());
+        if (a && b && b <= a) { $('#errTimeTo').text('同一天的結束時間不可早於或等於開始時間').show(); }
+        else $('#errTimeTo').hide();
+    }
+});
+function validEdit(){
+    var ok = true;
+    $('.bt-err').hide();
+    if (!$('#fLocation').val().trim()) { $('#errLocation').text('請填公出地點').show(); ok = false; }
+    if (!$('#fReason').val().trim())   { $('#errReason').text('請填事由').show(); ok = false; }
+    if (normTime($('#fTimeFrom').val()) === null) { $('#errTimeFrom').text('時間格式不正確').show(); ok = false; }
+    if (normTime($('#fTimeTo').val()) === null)   { $('#errTimeTo').text('時間格式不正確').show(); ok = false; }
+    return ok;
+}
+function saveTrip(submitAfter){
+    if (!validEdit()) return;
+    var d = {action:'save', trip_id:CUR_ID, apply_date:$('#fApplyDate').val(),
+             dept_id:$('#fDept').val(), position_name:$('#fPosition').val(),
+             date_from:$('#fFrom').val(), date_to:$('#fTo').val(),
+             time_from:$('#fTimeFrom').val(), time_to:$('#fTimeTo').val(),
+             location:$('#fLocation').val(), reason:$('#fReason').val(),
+             days:JSON.stringify($('#dayBox').is(':visible') ? collectDays() : [])};
+    if ($('#fUser').length && $('#forUserBox').is(':visible')) d.user_id = $('#fUser').val();
+    $.post(API, d, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        CUR_ID = res.trip_id;
+        if (!submitAfter) { alert('已儲存草稿'); closeMask('editMask'); loadList(); return; }
+        $.post(API, {action:'submit', trip_id:res.trip_id}, function(r2){
+            if (!r2.ok) { alert(r2.error||'送出失敗'); return; }
+            alert(r2.status === 'approved'
+                ? ('已送出並自動核准（' + (r2.note||'') + '）')
+                : ('已送出，待「' + (r2.approver||'') + '」核准。'));
+            closeMask('editMask'); loadList();
+        }, 'json');
+    }, 'json');
+}
+$('#btnSave').on('click', function(){ saveTrip(false); });
+$('#btnSubmit').on('click', function(){ saveTrip(true); });
+$('#btnAdd').on('click', newTrip);
+function delTrip(id){
+    if (!confirm('確定刪除這張公出單？')) return;
+    $.post(API, {action:'delete', trip_id:id}, function(res){
+        if (!res.ok) { alert(res.error||'刪除失敗'); return; }
+        loadList();
+    }, 'json');
+}
+
+/* ================= 核准／退回 ================= */
+function openDecide(id){
+    $.getJSON(API, {action:'get', trip_id:id}, function(res){       // 點開即刷新
+        if (!res.ok) return;
+        var t = res.trip;
+        if (!t.can_decide) { alert('這張單目前不是待您核准的狀態（可能已被處理），已重新整理清單。'); loadList(); return; }
+        DECIDE_ID = id;
+        $('#decideInfo').html('<b>'+esc(t.user_name||'')+'</b>（'+esc(t.dept_name||'')+' '+esc(t.position_name||'')+'）<br>'
+            + '公出時間：'+esc(t.period||'')+'<br>公出地點：'+esc(t.location||'')+'<br>事由：'+esc(t.reason||''));
+        $('#decideSel').val('approved');
+        $('#decideDate').val((META && META.today) || '');
+        $('#decideNote').val(''); $('#errNote').hide();
+        openMask('decideMask');
+    });
+}
+$('#btnDecideOk').on('click', function(){
+    var dec = $('#decideSel').val(), note = $('#decideNote').val().trim();
+    if (dec === 'rejected' && !note) { $('#errNote').text('退回一定要填原因，申請人才知道要改什麼').show(); return; }
+    $.post(API, {action:'decide', trip_id:DECIDE_ID, decision:dec, note:note, decide_date:$('#decideDate').val()}, function(res){
+        if (!res.ok) { alert(res.error||'決行失敗'); return; }
+        alert(dec === 'approved' ? '已核准' : '已退回');
+        closeMask('decideMask'); loadList();
+    }, 'json');
+});
+
+/* ================= 列印（版面比照紙本 2-MM-01-06） ================= */
+function printTrip(id){
+    if (!id) { alert('請先儲存後再列印'); return; }
+    $.getJSON(API, {action:'print_meta', trip_id:id}, function(res){
+        if (!res.ok) { alert(res.error||'讀取失敗'); return; }
+        var w = window.open('', '_blank');
+        if (!w) { alert('請允許彈出視窗'); return; }
+        w.document.write(tripPrintHtml(res));
+        w.document.close();
+    });
+}
+function tripPrintHtml(res){
+    var t = res.trip, sg = res.signers || {}, ready = (t.status === 'approved');
+    var dt = ready ? dispDate(t.approved_date || t.apply_date) : '';
+    var stamp = function(nm){ return (ready && nm) ? stampHtml(nm, dt) : ''; };
+    var timeText = (t.time_from||'') + ((t.time_to||'') ? ' 至 ' + t.time_to : '');
+    var dayRows = '';
+    (t.days||[]).forEach(function(d){
+        dayRows += '<div class="dl">' + esc(dispDate(d.day_date)) + '　'
+                 + esc((d.start_time||'') + ((d.end_time||'') ? ' 至 '+d.end_time : '')) + '</div>';
+    });
+    // 有逐日時段明細時，起訖時間對整段期間並不成立，改指向事由欄的每日清單，避免印出不實的時段
+    var period = (t.date_from === t.date_to)
+        ? dispDate(t.date_from) + '　自 ' + timeText
+        : dispDate(t.date_from) + ' ～ ' + dispDate(t.date_to)
+          + (dayRows ? '（各日時段詳事由欄）' : '　自 ' + timeText);
+    var ymd = String(t.apply_date||'').split('-');
+    var css = '@page{size:A4 portrait;margin:0;}html,body{margin:0;padding:0;}'
+        + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;padding:14mm 12mm 12mm;'
+        + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        + '.hd{text-align:center;}.hd .co{font-size:22px;font-weight:bold;letter-spacing:2px;}'
+        + '.hd .tt{font-size:20px;font-weight:bold;letter-spacing:14px;margin-top:6px;text-decoration:underline;}'
+        + '.ymd{text-align:right;font-size:13px;margin:8px 2px 4px;}'
+        + '.wrap{display:flex;border:1.5px solid #000;}'
+        + 'table.f{flex:1;border-collapse:collapse;table-layout:fixed;font-size:14px;}'
+        + 'table.f th,table.f td{border:1px solid #000;padding:6px 8px;line-height:1.7;word-wrap:break-word;}'
+        + 'table.f th{background:#F5EEE3;text-align:center;font-weight:bold;letter-spacing:3px;}'
+        + 'table.f td{text-align:left;white-space:pre-wrap;}'
+        + 'table.f td.reason{height:38mm;vertical-align:top;}'
+        + 'table.f th.reason{vertical-align:middle;}'
+        + '.dl{font-size:12.5px;color:#333;}'
+        + '.keep{width:16mm;border-left:1px solid #000;display:flex;align-items:center;justify-content:center;}'
+        + '.keep span{writing-mode:vertical-rl;letter-spacing:6px;font-size:15px;font-weight:bold;}'
+        + '.sg{width:100%;border-collapse:collapse;table-layout:fixed;}'
+        + '.sg td{border:1px solid #000;height:26mm;padding:0;vertical-align:top;}'
+        + '.sg .lb{font-size:12px;background:#F5EEE3;border-bottom:1px solid #000;padding:2px 5px;text-align:center;letter-spacing:2px;}'
+        + '.sg .bx{height:calc(26mm - 20px);display:flex;align-items:center;justify-content:center;}'
+        + '.sg .stamp-wrap svg,.sg svg.car-stamp{width:70px;height:70px;}'
+        + '.note{font-size:12px;margin-top:6px;color:#333;}'
+        + '.docno{position:fixed;right:12mm;bottom:8mm;font-size:10pt;}';
+    var body = '<div class="hd"><div class="co">'+esc(res.company)+'</div>'
+        + '<div class="tt">'+esc(res.doc_name || '公出單')+'</div></div>'
+        + '<div class="ymd">'+esc(ymd[0]||'')+' 年 '+esc(ymd[1]||'')+' 月 '+esc(ymd[2]||'')+' 日</div>'
+        + '<div class="wrap"><table class="f"><colgroup><col style="width:24mm"><col><col style="width:22mm"><col style="width:58mm"></colgroup><tbody>'
+        + '<tr><th>姓　名</th><td>'+esc(t.user_name||'')+'</td><th>單　位</th><td>'+esc(t.dept_name||'')+'</td></tr>'
+        + '<tr><th>級　職</th><td>'+esc(t.position_name||'')+'</td><th>公出時間</th><td>'+esc(period)+'</td></tr>'
+        + '<tr><th>公出地點</th><td colspan="3">'+esc(t.location||'')+'</td></tr>'
+        + '<tr><th class="reason">事　由</th><td colspan="3" class="reason">'+esc(t.reason||'')+(dayRows?'<div style="margin-top:6px;">'+dayRows+'</div>':'')+'</td></tr>'
+        + '<tr><td colspan="4" style="padding:0;"><table class="sg"><tbody><tr>'
+        +   '<td><div class="lb">會　計</div><div class="bx">'+stamp(sg.acc)+'</div></td>'
+        +   '<td><div class="lb">課　長</div><div class="bx">'+stamp(sg.section)+'</div></td>'
+        +   '<td><div class="lb">組　長</div><div class="bx">'+stamp(sg.group)+'</div></td>'
+        + '</tr></tbody></table></td></tr>'
+        + '</tbody></table><div class="keep"><span>外出時交管理課存查</span></div></div>'
+        + '<div class="note">＊業務、會計、品管、採購物料單位因公外出時，請單位主管核准即可；主管公出請總經理代理</div>'
+        + (res.doc_no ? '<div class="docno">'+esc(res.doc_no)+'</div>' : '');
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(res.doc_name||'公出單')+'</title>'
+         + '<style>'+css+'</style></head><body>'+body
+         + '<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>';
+}
+/* 批次列印：依序各自開視窗排隊（ai-rules/16 第三之五節），上一份關閉才開下一份 */
+$('#btnPrintSel').on('click', function(){
+    var ids = $('.chkRow:checked').map(function(){ return +this.value; }).get();
+    if (!ids.length) { alert('請先勾選要列印的公出單'); return; }
+    var i = 0;
+    (function next(){
+        if (i >= ids.length) return;
+        $.getJSON(API, {action:'print_meta', trip_id:ids[i++]}, function(res){
+            if (!res.ok) { next(); return; }
+            var w = window.open('', '_blank');
+            if (!w) { alert('請允許彈出視窗'); return; }
+            w.document.write(tripPrintHtml(res)); w.document.close();
+            var timer = setInterval(function(){ if (w.closed) { clearInterval(timer); next(); } }, 600);
+        });
+    })();
+});
+
+/* ================= 設定（管理員） ================= */
+function fillSettingUI(res){
+    var s = res.settings || {};
+    $('#setNeedAppr').val(String(s.bt_need_approval));
+    $('#setAutoTr').val(String(s.bt_auto_from_training));
+    var th = '<option value="0">（預設圓形圖章）</option>';
+    (res.stamp_tpls||[]).forEach(function(t){
+        th += '<option value="'+t.id+'">'+esc(t.tpl_name + (t.type_name ? '（'+t.type_name+'）' : ''))+'</option>';
+    });
+    $('#setStampTpl').html(th).val(String(s.bt_stamp_tpl_id || 0));
+    var sh = '';
+    $.each(res.sign_sources || {}, function(k, v){ sh += '<option value="'+esc(k)+'">'+esc(v)+'</option>'; });
+    $('#setSignAcc').html(sh).val(s.bt_sign_acc || '');
+    $('#setSignSection').html(sh).val(s.bt_sign_section || '');
+    $('#setSignGroup').html(sh).val(s.bt_sign_group || '');
+    $('#setAsDoc').val(res.as_doc ? EGAsDoc.label(res.as_doc) : '');
+    if (!res.perms.isAdmin) { $('#setNeedAppr').prop('disabled', true).addClass('ro-auto'); $('#needApprLock').text('（僅系統管理者可改）'); }
+}
+$('#btnSetting').on('click', function(){ openMask('setMask'); });
+$('#btnPickAsDoc').on('click', function(){
+    EGAsDoc.open({
+        docs: (META && META.as_docs) || [],
+        current: (META && META.as_doc) ? META.as_doc.id : 0,
+        title: '公出單 — AS 文件編號綁定',
+        onSave: function(id){
+            $.post(API, {action:'save_asdoc', doc_id:id||0}, function(res){
+                if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+                $('#setAsDoc').val(res.as_doc ? EGAsDoc.label(res.as_doc) : '');
+                loadMeta();
+            }, 'json');
+        }
+    });
+});
+$('#btnClearAsDoc').on('click', function(){
+    $.post(API, {action:'save_asdoc', doc_id:0}, function(res){
+        if (!res.ok) { alert(res.error||'清除失敗'); return; }
+        $('#setAsDoc').val(''); loadMeta();
+    }, 'json');
+});
+$('#btnSaveSet').on('click', function(){
+    var d = {action:'save_settings', bt_auto_from_training:$('#setAutoTr').val(), bt_stamp_tpl_id:$('#setStampTpl').val(),
+             bt_sign_acc:$('#setSignAcc').val(), bt_sign_section:$('#setSignSection').val(), bt_sign_group:$('#setSignGroup').val()};
+    if (!$('#setNeedAppr').prop('disabled')) d.bt_need_approval = $('#setNeedAppr').val();
+    $.post(API, d, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        alert('設定已儲存'); closeMask('setMask'); loadMeta();
+    }, 'json');
+});
+
+/* ================= 從外訓帶入（管理員） ================= */
+$('#btnFromTraining').on('click', function(){ openMask('trMask'); });
+$('#btnTrLoad').on('click', function(){
+    $.getJSON(API, {action:'training_sessions', year:$('#trYear').val()}, function(res){
+        if (!res.ok) return;
+        var h = '';
+        (res.rows||[]).forEach(function(r){
+            h += '<tr><td>'+esc(dispDate(r.done_date))+'</td><td class="l">'+esc(r.course_name||'')+'</td>'
+               + '<td>'+esc(r.org_unit||'')+'</td><td>'+esc(r.att_cnt)+'</td><td>'+esc(r.trip_cnt)+'</td>'
+               + '<td><span class="bt-op" onclick="pullTraining('+r.session_id+')"><i class="fa fa-download"></i> 帶入</span></td></tr>';
+        });
+        $('#trBody').html(h || '<tr><td colspan="6" style="padding:16px;color:#8a6d45;">該年度沒有已排定/已完成的外訓場次</td></tr>');
+    });
+});
+function pullTraining(sid){
+    $.post(API, {action:'from_training', session_id:sid}, function(res){
+        if (!res.ok) { alert(res.error||'帶入失敗'); return; }
+        alert('新增 '+res.created+' 張、更新 '+res.updated+' 張草稿'+(res.skipped?('，'+res.skipped+' 張已送出不覆蓋'):''));
+        $('#btnTrLoad').click(); loadList();
+    }, 'json');
+}
+
+/* ================= 其他 ================= */
+$('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
+$(window).on('scroll', function(){ $('#btnTop').toggle($(window).scrollTop() > 300); });
+$('#btnTop').on('click', function(){ $('html,body').animate({scrollTop:0}, 200); });
+$(function(){
+    loadMeta(function(){
+        var q = new URLSearchParams(location.search);
+        if (q.get('trip_approve')) { $('#scopeSel').val('pending'); loadList(); openDecide(+q.get('trip_approve')); return; }
+        if (q.get('trip_id')) { loadList(); openTrip(+q.get('trip_id')); return; }
+        loadList();
+    });
+});
+</script>
+</body>
+</html>
