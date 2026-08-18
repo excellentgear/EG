@@ -179,9 +179,13 @@ $perms = hrf_perms($db, $hrfUser);
             </div>
         </div>
         <div id="createPeopleBlock">
-        <label>選擇員工（可複選；選 1 人＝單人建立，選多人＝批次建立；點部門標題可整組全選/取消，兼任職務的人會同時列在各自部門底下）</label>
+        <label id="createPeopleLabel">選擇員工（可複選；選 1 人＝單人建立，選多人＝批次建立；點部門標題可整組全選/取消，兼任職務的人會同時列在各自部門底下）</label>
         <div class="hf-people-pick">
             <input type="text" class="flt" placeholder="輸入姓名/部門/職稱篩選…" oninput="hfFilterPeople(this)">
+            <div id="createPosFilterWrap" style="display:none;margin:4px 0;font-size:12.5px;color:#5b3a1e;">
+                職務篩選：<select id="createPosFilter" style="max-width:220px;height:30px;" onchange="hfFilterPeople($('#createPeopleBlock .flt')[0])"></select>
+                <span style="color:#8a6d45;">（只顯示該職務的列，可搭配上面的關鍵字一起用；部門標題全選只會勾目前看得到的列）</span>
+            </div>
             <div class="hf-people-list" id="createPeopleList"></div>
         </div>
         </div>
@@ -267,9 +271,9 @@ $perms = hrf_perms($db, $hrfUser);
     <div class="m-head"><span>使用說明 — 人資職務表單</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
         <h4>功能說明</h4>
-三張固定表單：<b>職務說明書</b>（以部門×職位為主，不綁單一員工——有人在職的部門×職位組合都需要一份，含兼任職位，內容依職位範本帶入，不需簽核，僅留記錄）、<b>專業技能鑑定考核表</b>（每位員工「每個機型」一份，固定不重複建立，總經理／課長各自評分，需確認＋核准）、<b>職能鑑定表</b>（每位員工一份，部門/職稱不變只需沿用既有那份不重複建立，職能項目依職位範本帶入，需確認＋核准）。三張表單各自獨立綁定 AS 文件編號。
+三張固定表單：<b>職務說明書</b>（以部門×職位為主，不綁單一員工——有人在職的部門×職位組合都需要一份，含兼任職位，內容依職位範本帶入，不需簽核，僅留記錄）、<b>專業技能鑑定考核表</b>（每位員工「每個機型」一份，固定不重複建立，總經理／課長各自評分，需確認＋核准）、<b>職能鑑定表</b>（<b>一個人一種職務一份</b>——兼任兩種職務的人兩種職務各一份；同一個人同一個部門×職位只會有一份，部門/職稱沒變就沿用既有那份不重複建立，職能項目依該職務比對到的職位範本帶入，需確認＋核准）。三張表單各自獨立綁定 AS 文件編號。
         <h4>操作步驟</h4>
-        <b>①建立表單</b>：職務說明書勾選一組或多組「部門×職位」＋指定日期即可建立（灰底＝已建立過或全站最高決策者不需要）；技能鑑定表／職能鑑定表<b>先填日期、再勾選一位或多位員工</b>（勾 1 人＝單人建立，勾多人＝批次建立；點部門標題可整組全選/取消）——<b>員工清單會依填入的日期自動改為「該日期當時」的組織</b>：當時所屬部門/職稱（依人事的職務調動紀錄回推，沒有異動紀錄的人用現況），且<b>當時在職、現在已離職的人也會列出並標示「已離職」</b>，方便補登舊表單；日期改一次清單就重抓一次，已勾選的人會保留。建立出來的表單存的部門/職稱/直屬主管也一律是該日期當時的狀態，不是今天的；系統會依比對到的部門×職位「職位範本」自動帶入內容，找不到範本會在建立結果顯示錯誤，需請管理員先到「範本管理」設定。專業技能鑑定考核表另需選機型（預設依職位範本的適用機型清單自動展開成多筆，也可手動指定機型套用到所有選取員工）。<br>
+        <b>①建立表單</b>：職務說明書勾選一組或多組「部門×職位」＋指定日期即可建立（灰底＝已建立過或全站最高決策者不需要）；技能鑑定表／職能鑑定表<b>先填日期、再勾選對象</b>（勾 1 筆＝單筆建立，勾多筆＝批次建立；點部門標題可整組全選/取消，有下篩選時只會勾到目前看得到的列）——技能鑑定表勾的是<b>人</b>（一人一機型一張，職務取主要職務）；<b>職能鑑定表勾的是「員工×職務」</b>，兼任兩種職務的人會列成兩列可各自勾選、各建一張，清單上方另有<b>職務篩選下拉</b>可只看某個職務（選項依目前清單實際出現的職務產生），可與關鍵字並用；只會列出「該部門有開職能鑑定表」的職務——<b>員工清單會依填入的日期自動改為「該日期當時」的組織</b>：當時所屬部門/職稱（依人事的職務調動紀錄回推，沒有異動紀錄的人用現況），且<b>當時在職、現在已離職的人也會列出並標示「已離職」</b>，方便補登舊表單；日期改一次清單就重抓一次，已勾選的人會保留。建立出來的表單存的部門/職稱/直屬主管也一律是該日期當時的狀態，不是今天的；系統會依比對到的部門×職位「職位範本」自動帶入內容，找不到範本會在建立結果顯示錯誤，需請管理員先到「範本管理」設定。專業技能鑑定考核表另需選機型（預設依職位範本的適用機型清單自動展開成多筆，也可手動指定機型套用到所有選取員工）。<br>
         <b>②填寫／評分</b>：職務說明書內容欄可直接編輯存檔；技能鑑定表由課長／總經理各自在「確認」「核准」時填寫自己那欄分數；職能鑑定表的評分由確認人（直屬主管）填寫，評分欄依部門而定：有在「人資職務表單設定→部門表單資格」勾選<b>職能鑑定表含「機台設定」評分欄</b>的部門＝<b>機台設定／操作／異常排除</b>三欄，其餘部門＝<b>操作／異常排除</b>兩欄；不論哪一種，最左側固定都是<b>編號＋項目名稱</b>。分數一律 1~4，可用表格下方的「一鍵套用」把同一個分數套到整欄。若員工本身職等已無中間層主管可考核（其直屬主管解析結果與總經理相同），課長考核欄位為 NA，不可填寫。<br>
         <b>③送出</b>：技能鑑定表／職能鑑定表草稿建立後需按「送出」才會通知確認人（該員工直屬主管）；確認通過後自動通知核准人（總經理）；任一關退回都需填寫原因，退回後表單回到草稿可修改重送。<br>
         <b>④複製表單</b>：技能鑑定表／職能鑑定表可按「複製」，以複製者身分建立一份新草稿（機型/內容原樣帶入），需重新走送出流程；職務說明書以部門×職位為主不提供複製，內容直接在原表單編輯存檔即可。<br>
@@ -277,6 +281,7 @@ $perms = hrf_perms($db, $hrfUser);
         <b>⑥超級管理員自動簽核</b>：僅 id=1 可用，勾選表單後可先逐筆調整分數（或用「一鍵套用固定分數」快速帶入再個別修改），輸入操作確認密碼＋指定簽核日期，一次補齊尚未完成的確認/核准關卡，用於補登舊紙本資料。<br>
         <b>⑦超級管理員批次刪除</b>：僅 id=1 可用，於清單勾選（表頭勾選框可整頁全選）後按「超管批次刪除」，跳窗會列出即將刪除的表單供核對，輸入操作確認密碼即可一次刪除；<b>連同表單內容、簽核紀錄與相關通知一併移除且無法復原</b>，已完成簽核的表單也會被刪除，補登錯誤要重做時用。
         <h4>重要行為</h4>
+        ・「缺件提示」對職能鑑定表也是逐職務比對——兼任的第二個職務還沒建的話一樣算缺件。<br>
         ・部門是否產生技能鑑定表／職能鑑定表、以及該部門的職能鑑定表要不要多一欄「機台設定」評分，都由管理員在「範本管理→部門表單資格」逐部門勾選（可多部門），職務說明書全員適用。<br>
         ・機型選項為管理員從既有機台主檔（依機型去重，同機型多台機台編號只算一個考核對象）與量測儀器校驗的量具主檔勾選建立的白名單，不是全部主檔都能選。<br>
         ・確認人固定為該員工直屬主管、核准人固定為全站最高決策者（多數為總經理），無法個別調整。
@@ -488,39 +493,73 @@ function renderList(ft){
 <script>
 /* ============================================================ 員工/機型挑選元件（依部門分組，兼任職務同時列在各自部門底下） ============================================================ */
 
-function hfDeptGroups(people){
-    var byDept = {}; // dept_id(或0=無部門) -> {name, rows:[{p, isPrimary}]}
+function hfDeptGroupName(did){
+    if (!did) return '（未設定部門）';
+    var d = (META.departments||[]).find(function(x){ return String(x.id)===String(did); });
+    return (d && d.name) || ASOF_DEPT_NAMES[did] || '（未知部門）';
+}
+/* byPost=true（職能鑑定表）＝逐「人×職務」展開，一個兼任兩種職務的人會出現兩列、可各自勾選各建一張
+   （使用者明確要求「一個人一種職務一張」，2026-08-18）；false＝以人為單位（技能鑑定表沿用原本行為，
+   一人一機型一張，職務只取主要職務）。 */
+function hfDeptGroups(people, byPost){
+    var byDept = {}; // dept_id(或0=無部門) -> {name, rows:[{p, post, isPrimary}]}
+    function bucket(did){
+        did = did || 0;
+        if (!byDept[did]) byDept[did] = {name: hfDeptGroupName(did), rows: []};
+        return byDept[did];
+    }
     people.forEach(function(p){
+        if (byPost) {
+            var posts = (p.posts && p.posts.length) ? p.posts
+                      : [{department_id:p.dept_id||0, position_id:p.position_id||null, position_name:p.position_name||'', is_main:1}];
+            posts.forEach(function(po){
+                bucket(po.department_id).rows.push({p: p, post: po, isPrimary: !!po.is_main});
+            });
+            return;
+        }
         var ids = (p.dept_ids && p.dept_ids.length) ? p.dept_ids : [p.dept_id || 0];
         ids.forEach(function(did){
-            did = did || 0;
-            if (!byDept[did]) {
-                var dName = did ? (((META.departments||[]).find(function(d){ return String(d.id)===String(did); }) || {}).name || ASOF_DEPT_NAMES[did]) : '（未設定部門）';
-                byDept[did] = {name: dName || '（未知部門）', rows: []};
-            }
-            byDept[did].rows.push({p: p, isPrimary: String(p.dept_id) === String(did)});
+            bucket(did).rows.push({p: p, post: null, isPrimary: String(p.dept_id) === String(did)});
         });
     });
     return byDept;
 }
-function hfPeoplePickerHtml(people, containerIdPrefix){
-    var groups = hfDeptGroups(people);
+function hfPeoplePickerHtml(people, byPost){
+    var groups = hfDeptGroups(people, byPost);
     var deptIds = Object.keys(groups).sort(function(a,b){ return groups[a].name.localeCompare(groups[b].name, 'zh-Hant'); });
     var html = '';
     deptIds.forEach(function(did){
         var g = groups[did];
-        html += '<div class="ppl-dept-hd" data-dept="'+did+'" onclick="hfDeptGroupToggle(this)"><i class="fa fa-folder-o"></i> '+esc(g.name)+'（'+g.rows.length+'人，點擊全選/取消）</div>';
+        html += '<div class="ppl-dept-hd" data-dept="'+did+'" onclick="hfDeptGroupToggle(this)"><i class="fa fa-folder-o"></i> '+esc(g.name)+'（'+g.rows.length+(byPost?' 筆':' 人')+'，點擊全選/取消）</div>';
         g.rows.forEach(function(row){
             var p = row.p;
+            var posName = byPost ? (row.post.position_name || '') : (p.position_name || '');
+            // 職能鑑定表：一列＝一個人的一種職務，value 帶上部門×職位，同一人不同職務各自獨立勾選
+            var val = byPost ? (p.id + ':' + (row.post.department_id || 0) + ':' + (row.post.position_id || 0)) : p.id;
             var lv = p.on_leave ? ' <span class="leave-tag">['+esc(p.leave_note)+']</span>' : '';
             if (p.resigned) lv += ' <span class="leave-tag">['+esc(p.resign_note||'已離職')+']</span>';
             var ct = !row.isPrimary ? ' <span class="concur-tag">(兼)</span>' : '';
-            html += '<label data-dept="'+did+'" data-hay="'+esc((g.name||'')+' '+(p.position_name||'')+' '+p.user_cname).toLowerCase()+'">'
-                  + '<input type="checkbox" class="ppl-ck" value="'+p.id+'" onchange="hfPplSync(this)"> '
-                  + esc(p.position_name||'') + ' / ' + esc(p.user_cname) + ct + lv + '</label>';
+            html += '<label data-dept="'+did+'" data-pos="'+esc(posName)+'" data-hay="'+esc((g.name||'')+' '+posName+' '+p.user_cname).toLowerCase()+'">'
+                  + '<input type="checkbox" class="ppl-ck" value="'+val+'" onchange="hfPplSync(this)"> '
+                  + esc(posName) + ' / ' + esc(p.user_cname) + ct + lv + '</label>';
         });
     });
     return html || '<span style="color:#8a6d45;">目前沒有符合資格的員工（請確認部門表單資格設定）</span>';
+}
+/** 職務篩選下拉的選項＝目前清單裡實際出現的職務（不寫死職稱清單）。 */
+function hfBuildPosFilter(){
+    var seen = {}, opts = [];
+    $('#createPeopleList label').each(function(){
+        var v = $(this).data('pos');
+        if (v === undefined || v === null || v === '') return;
+        if (!seen[v]) { seen[v] = 1; opts.push(String(v)); }
+    });
+    opts.sort(function(a,b){ return a.localeCompare(b, 'zh-Hant'); });
+    var cur = $('#createPosFilter').val() || '';
+    $('#createPosFilter').html('<option value="">（全部職務）</option>' + opts.map(function(v){
+        return '<option value="'+esc(v)+'">'+esc(v)+'</option>';
+    }).join(''));
+    if (cur && opts.indexOf(cur) >= 0) $('#createPosFilter').val(cur);
 }
 /** 同一人可能因兼任出現在多個部門群組下，勾一處要連動其他處，狀態才不會不一致。 */
 function hfPplSync(box){
@@ -528,15 +567,22 @@ function hfPplSync(box){
 }
 function hfDeptGroupToggle(hd){
     var did = $(hd).data('dept');
-    var $boxes = $('.ppl-ck').filter(function(){ return $(this).closest('label').data('dept') == did; });
+    // 只作用於「目前看得到」的列：有下關鍵字/職務篩選時，全選不該連被篩掉的人一起勾（會勾到看不到的東西）
+    var $boxes = $('.ppl-ck').filter(function(){
+        var $l = $(this).closest('label');
+        return $l.data('dept') == did && $l.is(':visible');
+    });
     var allChecked = $boxes.length && $boxes.filter(':checked').length === $boxes.length;
     $boxes.each(function(){ $(this).prop('checked', !allChecked); hfPplSync(this); });
 }
 function hfFilterPeople(input){
     var kw = (input.value||'').toLowerCase();
+    var pos = $('#createPosFilterWrap').is(':visible') ? ($('#createPosFilter').val() || '') : '';
     $(input).closest('.hf-people-pick').find('.hf-people-list label, .hf-people-list .ppl-dept-hd').each(function(){
         if ($(this).hasClass('ppl-dept-hd')) return; // 部門標題永遠顯示，方便當群組操作入口
-        $(this).toggle(!kw || ($(this).data('hay')+'').indexOf(kw) >= 0);
+        var okKw = !kw || ($(this).data('hay')+'').indexOf(kw) >= 0;
+        var okPos = !pos || String($(this).data('pos')) === pos;
+        $(this).toggle(okKw && okPos);
     });
 }
 
@@ -595,9 +641,23 @@ function hfLoadCreatePeople(){
         var people = (res.people||[]).filter(function(p){
             return (p.dept_ids||[]).some(function(d){ return eligDeptIds.indexOf(d) >= 0; });
         });
-        $('#createPeopleList').html(hfPeoplePickerHtml(people));
+        var byPost = ft === 'competency';
+        if (byPost) {
+            // 逐職務列出時，只列「該部門有開職能鑑定表」的職務：兼任到沒開的部門那一筆列出來也建不成
+            // （後端 hrf_dept_can_produce() 會擋），不如一開始就不要讓人勾。
+            people = people.map(function(p){
+                var posts = (p.posts||[]).filter(function(po){ return eligDeptIds.indexOf(po.department_id) >= 0; });
+                return $.extend({}, p, {posts: posts});
+            }).filter(function(p){ return p.posts.length > 0; });
+        }
+        $('#createPeopleList').html(hfPeoplePickerHtml(people, byPost));
         $('#createPeopleList .ppl-ck').each(function(){ if (checked[this.value]) this.checked = true; });
-        if (kw) hfFilterPeople($('#createPeopleBlock .flt')[0]);
+        $('#createPosFilterWrap').toggle(byPost);
+        $('#createPeopleLabel').text(byPost
+            ? '選擇「員工×職務」（職能鑑定表是一個人一種職務一張；兼任兩種職務的人會出現兩列，可各自勾選各建一張。點部門標題可整組全選/取消）'
+            : '選擇員工（可複選；選 1 人＝單人建立，選多人＝批次建立；點部門標題可整組全選/取消，兼任職務的人會同時列在各自部門底下）');
+        if (byPost) hfBuildPosFilter(); else $('#createPosFilter').val('');
+        if (kw || byPost) hfFilterPeople($('#createPeopleBlock .flt')[0]);
         var isPast = bizDate < META.today;
         $('#createAsofHint').toggle(isPast).text(isPast
             ? '＊已依 '+dispDate(bizDate)+' 當時的組織列出人員（部門/職稱為當時的狀態，含當時在職但現已離職者）'
@@ -679,15 +739,21 @@ function hfSubmitCreate(){
         });
         return;
     }
-    var uids = $('#createPeopleList .ppl-ck:checked').map(function(){ return $(this).val(); }).get();
-    uids = uids.filter(function(v,i){ return uids.indexOf(v)===i; }); // 兼任會出現多次checkbox但value相同，去重
-    if (!uids.length){ $('#createErrList').text('請至少選擇一位員工'); return; }
+    var vals = $('#createPeopleList .ppl-ck:checked').map(function(){ return $(this).val(); }).get();
+    vals = vals.filter(function(v,i){ return vals.indexOf(v)===i; }); // 兼任會出現多次checkbox但value相同，去重
+    if (!vals.length){ $('#createErrList').text(CREATE_TYPE === 'competency' ? '請至少選擇一筆員工×職務' : '請至少選擇一位員工'); return; }
+    // 職能鑑定表的 value 是「員工:部門:職位」，要原封不動送出，後端才知道這張是掛哪一個職務
+    var targets = CREATE_TYPE === 'competency' ? vals.map(function(v){
+        var a = String(v).split(':');
+        return {user_id:a[0], department_id:a[1]||0, position_id:a[2]||0};
+    }) : [];
+    var uids = targets.length ? [] : vals;
     var wids = [];
     if (CREATE_TYPE === 'skill_assess' && $('input[name=mSrc]:checked').val() === 'manual') {
         wids = $('#createMachineListBody .mach-ck:checked').map(function(){ return $(this).val(); }).get();
         if (!wids.length){ $('#createErrList').text('請至少選擇一個機型，或改選「依職位範本自動帶入」'); return; }
     }
-    ajaxPost('batch_create', {form_type:CREATE_TYPE, user_ids:JSON.stringify(uids), whitelist_ids:JSON.stringify(wids), business_date:bizDate}, function(res){
+    ajaxPost('batch_create', {form_type:CREATE_TYPE, user_ids:JSON.stringify(uids), targets:JSON.stringify(targets), whitelist_ids:JSON.stringify(wids), business_date:bizDate}, function(res){
         if (!res.ok){ $('#createErrList').text(res.error||'建立失敗'); return; }
         var msg = '成功建立 '+res.created+' 筆';
         if (res.skipped && res.skipped.length) msg += '；' + res.skipped.length + ' 筆已存在略過：' + res.skipped.join('；');
@@ -708,9 +774,21 @@ function hfMissingReport(ft){
         if (ft === 'competency') have[r.user_id+'-'+r.dept_id+'-'+r.position_id] = true;
         else have[r.user_id] = true;
     });
-    return people.filter(function(p){
-        return ft === 'competency' ? !have[p.id+'-'+p.dept_id+'-'+p.position_id] : !have[p.id];
+    if (ft !== 'competency') return people.filter(function(p){ return !have[p.id]; });
+    // 職能鑑定表一人一職務一張：缺件要逐職務比對（兼任第二個職務沒建也算缺件）
+    var out = [];
+    people.forEach(function(p){
+        var posts = (p.posts && p.posts.length) ? p.posts
+                  : [{department_id:p.dept_id, position_id:p.position_id, position_name:p.position_name, is_main:1}];
+        posts.forEach(function(po){
+            if (eligDeptIds.indexOf(po.department_id) < 0) return;
+            if (have[p.id+'-'+po.department_id+'-'+po.position_id]) return;
+            out.push({id:p.id, user_cname:p.user_cname, dept_name:po.dept_name || hfDeptGroupName(po.department_id),
+                      position_name:po.position_name, dept_id:po.department_id, position_id:po.position_id,
+                      pick_value:p.id+':'+(po.department_id||0)+':'+(po.position_id||0)});
+        });
     });
+    return out;
 }
 function openMissingModal(ft){
     var missing = hfMissingReport(ft);
@@ -718,7 +796,10 @@ function openMissingModal(ft){
     var names = missing.map(function(p){ return esc(p.dept_name)+'／'+esc(p.position_name)+'／'+esc(p.user_cname); });
     if (!confirm('偵測到 '+missing.length+' 位員工尚未建立「'+FORM_LABEL[ft]+'」：\n'+names.join('\n')+'\n\n是否開啟建立表單視窗並預先勾選這些人？')) return;
     openCreateModal(ft);
-    setTimeout(function(){ missing.forEach(function(p){ hfPplSync($('.ppl-ck[value="'+p.id+'"]').prop('checked', true)[0]); }); }, 30);
+    setTimeout(function(){ missing.forEach(function(p){
+        var $ck = $('.ppl-ck[value="'+(p.pick_value || p.id)+'"]').prop('checked', true);
+        if ($ck[0]) hfPplSync($ck[0]);
+    }); }, 30);
 }
 </script>
 <script>

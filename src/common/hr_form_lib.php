@@ -313,13 +313,59 @@ function hrf_user_no_display(PDO $db, $rawId): string { return hrf_user_no_prefi
 
 /** $asOfDate：表單的業務日期。填過去的日期＝補歷史表單，部門/職稱一律回推「當時」的（user_position_history，
  *  ai-rules/14；沒有異動紀錄的人回現況），不可用現在的部門去存一張 2025 年的表單。傳 null／今天＝用現況。 */
-function hrf_user_snapshot(PDO $db, int $uid, ?string $asOfDate = null): ?array {
+/**
+ * 某人在某業務日期「所有」的部門×職位（含兼任）。職能鑑定表是**一個人一種職務一張**（使用者明確要求，
+ * 2026-08-18），挑人時要逐職務列出、逐職務各建一張，不能只看主要職務。
+ * 過去日期走職務調動紀錄回推（ai-rules/14），今天以後直接讀現況 user_department_position_map。
+ * 回傳每列：department_id/dept_name/position_id/position_name/is_main，主職排前、其餘依職稱 sort_order。
+ */
+function hrf_user_posts(PDO $db, int $uid, ?string $asOfDate = null): array {
+    $asOf = ($asOfDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', $asOfDate) && $asOfDate < date('Y-m-d')) ? $asOfDate : null;
+    $rows = $asOf ? eg_position_snapshot_at($db, $uid, $asOf) : eg_position_snapshot_now($db, $uid);
+    static $deptMap = null, $posMap = null;
+    if ($deptMap === null) {
+        $deptMap = []; $posMap = [];
+        foreach ($db->query("SELECT id,name,COALESCE(sort_order,999) so FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d)
+            $deptMap[(int)$d['id']] = ['name'=>(string)$d['name'], 'so'=>(int)$d['so']];
+        foreach ($db->query("SELECT id,name,COALESCE(sort_order,999) so FROM position")->fetchAll(PDO::FETCH_ASSOC) as $pp)
+            $posMap[(int)$pp['id']] = ['name'=>(string)$pp['name'], 'so'=>(int)$pp['so']];
+    }
+    $out = [];
+    foreach ($rows as $r) {
+        $did = (int)($r['department_id'] ?? 0);
+        $pid = (int)($r['position_id'] ?? 0);
+        if (!$did && !$pid) continue;
+        $key = $did . '-' . $pid;
+        if (isset($out[$key])) continue;
+        $out[$key] = [
+            'department_id' => $did ?: null,
+            // 名稱優先用主檔現況（改名後看得懂），主檔查不到才用快照當時存的名稱
+            'dept_name'     => $deptMap[$did]['name'] ?? (string)($r['department_name'] ?? ''),
+            'dept_sort'     => $deptMap[$did]['so'] ?? 999,
+            'position_id'   => $pid ?: null,
+            'position_name' => $posMap[$pid]['name'] ?? (string)($r['position_name'] ?? ''),
+            'position_sort' => $posMap[$pid]['so'] ?? 999,
+            'is_main'       => (int)($r['is_main'] ?? 0),
+        ];
+    }
+    $out = array_values($out);
+    usort($out, function ($a, $b) {
+        return [$b['is_main'], $a['position_sort'], $a['dept_sort']] <=> [$a['is_main'], $b['position_sort'], $b['dept_sort']];
+    });
+    return $out;
+}
+
+function hrf_user_snapshot(PDO $db, int $uid, ?string $asOfDate = null, ?array $post = null): ?array {
     $st = $db->prepare("SELECT u.id, u.user_cname, u.hire_date FROM user u WHERE u.id=?");
     $st->execute([$uid]);
     $u = $st->fetch(PDO::FETCH_ASSOC);
     if (!$u) return null;
     $asOf = ($asOfDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', $asOfDate) && $asOfDate < date('Y-m-d')) ? $asOfDate : null;
-    if ($asOf) {
+    // $post＝指定用哪一個「部門×職位」（職能鑑定表一人一職務一張時由挑選器指定）；沒指定＝主要職務（原行為）
+    if ($post !== null) {
+        $deptId = ((int)($post['department_id'] ?? 0)) ?: null;
+        $posId  = ((int)($post['position_id'] ?? 0)) ?: null;
+    } elseif ($asOf) {
         $snapRows = eg_position_snapshot_at($db, $uid, $asOf);
         $pick = null;
         foreach ($snapRows as $srow) { if (!empty($srow['is_main'])) { $pick = $srow; break; } }
@@ -450,7 +496,11 @@ function hrf_instance_supervisor_pool(PDO $db, array $inst, bool $activeOnly = f
 
 function hrf_people_asof(PDO $db, string $date): array {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = date('Y-m-d');
-    if ($date >= date('Y-m-d')) return eg_people_list($db, []);
+    if ($date >= date('Y-m-d')) {
+        $people = eg_people_list($db, []);
+        foreach ($people as &$pr) $pr['posts'] = hrf_user_posts($db, (int)$pr['id'], null);
+        return $people;
+    }
 
     $snaps = eg_position_snapshot_at_bulk($db, $date);
     $deptMap = []; $posMap = [];
@@ -480,6 +530,7 @@ function hrf_people_asof(PDO $db, string $date): array {
             'dept_id'=>$deptId ?: null, 'dept_name'=>$deptName, 'dept_sort'=>$deptMap[$deptId]['so'] ?? 999,
             'dept_ids'=>$deptIds,
             'position_id'=>$posId ?: null, 'position_name'=>$posName, 'position_sort'=>$posMap[$posId]['so'] ?? 999,
+            'posts'=>hrf_user_posts($db, $uid, $date),
             'on_leave'=>0, 'leave_note'=>'',
             'resigned'=>$resigned ? 1 : 0,
             'resign_note'=>$resigned ? ('已離職' . ($leaveD !== '' ? '（' . $leaveD . '）' : '（離職日未登錄）')) : '',
@@ -1109,10 +1160,20 @@ function hrf_instance_items_save(PDO $db, int $instanceId, array $items): void {
 }
 
 /** 建立單一員工單一機型(09)或單一表單(10)的一筆表單。01(job_desc) 改走 hrf_instance_create_job_desc()，以部門x職位為主不綁單一員工。 */
-function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int $whitelistId, string $bizDate, int $byUid, string $byName): array {
+function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int $whitelistId, string $bizDate, int $byUid, string $byName, ?array $post = null): array {
     hrf_ensure_schema($db);
     if (!isset(HRF_FORM_TYPES[$formType]) || $formType === 'job_desc') return ['ok'=>false, 'msg'=>'不明的表單類型'];
-    $snap = hrf_user_snapshot($db, $targetUid, $bizDate);   // 補歷史表單：部門/職稱依業務日期回推
+    // $post＝指定的部門×職位（職能鑑定表一人一職務一張）。前端送什麼都要在這裡對照該員工當時真的有的職務，
+    // 不採信前端（可繞過畫面直打 API），對不上就當沒指定不了了之會建錯人，所以直接擋下。
+    if ($post !== null) {
+        $want = ((int)($post['department_id'] ?? 0)) . '-' . ((int)($post['position_id'] ?? 0));
+        $ok = false;
+        foreach (hrf_user_posts($db, $targetUid, $bizDate) as $pp) {
+            if (((int)$pp['department_id']) . '-' . ((int)$pp['position_id']) === $want) { $ok = true; break; }
+        }
+        if (!$ok) return ['ok'=>false, 'msg'=>'指定的職務不是該員工當時擔任的職務'];
+    }
+    $snap = hrf_user_snapshot($db, $targetUid, $bizDate, $post);   // 補歷史表單：部門/職稱依業務日期回推
     if (!$snap) return ['ok'=>false, 'msg'=>'找不到此員工'];
     if (!hrf_dept_can_produce($db, $snap['dept_id'], $formType)) {
         return ['ok'=>false, 'msg'=>$snap['user_cname'] . ' 所屬部門未設定產生「' . HRF_FORM_TYPES[$formType] . '」'];
@@ -1247,12 +1308,30 @@ function hrf_instance_create_batch_job_desc(PDO $db, array $pairs, string $bizDa
 function hrf_instance_create_batch(PDO $db, string $formType, array $targetUids, array $whitelistIds, string $bizDate, int $byUid, string $byName): array {
     hrf_ensure_schema($db);
     $created = []; $errors = []; $skipped = [];
-    foreach (array_unique(array_map('intval', $targetUids)) as $uid) {
-        if ($uid <= 0) continue;
-        $snap = hrf_user_snapshot($db, $uid, $bizDate);
+    // $targetUids 的元素可以是 user_id，也可以是 ['user_id'=>,'department_id'=>,'position_id'=>]（職能鑑定表
+    // 一人一職務一張，同一人可能要建多張＝多個職務，所以不能再用 array_unique 把同一人壓成一筆）。
+    $targets = [];
+    foreach ($targetUids as $t) {
+        if (is_array($t)) {
+            $uid = (int)($t['user_id'] ?? 0);
+            if ($uid <= 0) continue;
+            $targets[] = ['uid'=>$uid, 'post'=>['department_id'=>(int)($t['department_id'] ?? 0), 'position_id'=>(int)($t['position_id'] ?? 0)]];
+        } else {
+            $uid = (int)$t;
+            if ($uid > 0) $targets[] = ['uid'=>$uid, 'post'=>null];
+        }
+    }
+    $seen = [];
+    foreach ($targets as $tg) {
+        $uid = $tg['uid']; $post = $tg['post'];
+        $key = $uid . '|' . ($post ? $post['department_id'] . '-' . $post['position_id'] : '*');
+        if (isset($seen[$key])) continue;
+        $seen[$key] = 1;
+        $snap = hrf_user_snapshot($db, $uid, $bizDate, $post);
         $label = $snap['user_cname'] ?? ('#' . $uid);
+        if ($post && ($snap['position_name'] ?? '')) $label .= '（' . ($snap['dept_name'] ?: '') . '/' . $snap['position_name'] . '）';
         if ($formType !== 'skill_assess') {
-            $r = hrf_instance_create_one($db, $formType, $uid, null, $bizDate, $byUid, $byName);
+            $r = hrf_instance_create_one($db, $formType, $uid, null, $bizDate, $byUid, $byName, $post);
             if ($r['ok']) $created[] = $r['id'];
             elseif (!empty($r['duplicate'])) $skipped[] = $label . '：' . $r['msg'];
             else $errors[] = $label . '：' . $r['msg'];

@@ -36,6 +36,9 @@ case 'meta': {
     $depts = $db->query("SELECT id, name, parent_id FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     $positions = $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
     $people = eg_people_list($db, []);
+    // 職能鑑定表是一人一職務一張，缺件提示要逐職務比對 → 每人附上所有部門x職位（含兼任）
+    foreach ($people as &$pRow) $pRow['posts'] = hrf_user_posts($db, (int)$pRow['id'], null);
+    unset($pRow);
     jout([
         'perms'=>$perms, 'uid'=>$uid, 'uname'=>$uname, 'today'=>date('Y-m-d'),
         'departments'=>$depts, 'positions'=>$positions, 'people'=>$people, 'features'=>HRF_FEATURES,
@@ -118,7 +121,14 @@ case 'batch_create': {
         $r = hrf_instance_create_batch_job_desc($db, $pairs, $bizDate, $uid, $uname);
         jout(['created'=>count($r['created']), 'created_ids'=>$r['created'], 'errors'=>$r['errors'], 'skipped'=>$r['skipped']]);
     }
-    $targetUids = json_decode((string)($_POST['user_ids'] ?? '[]'), true);
+    // 10職能鑑定表是「一個人一種職務一張」：挑選器逐職務勾選，改送 targets=[{user_id,department_id,position_id},...]；
+    // 沒送 targets（09技能鑑定表、或舊呼叫端）就沿用 user_ids 純員工清單＝用該員主要職務，行為不變。
+    $targets = json_decode((string)($_POST['targets'] ?? '[]'), true);
+    if (is_array($targets) && $targets) {
+        $targetUids = $targets;
+    } else {
+        $targetUids = json_decode((string)($_POST['user_ids'] ?? '[]'), true);
+    }
     if (!is_array($targetUids) || !$targetUids) jerr('請至少選擇一位員工');
     $whitelistIds = json_decode((string)($_POST['whitelist_ids'] ?? '[]'), true);
     if (!is_array($whitelistIds)) $whitelistIds = [];
