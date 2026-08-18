@@ -352,6 +352,88 @@ function hrf_user_snapshot(PDO $db, int $uid, ?string $asOfDate = null): ?array 
  * 日期＝今天(或未來) 時完全不走上面這套，直接回全站共用的 eg_people_list()（人員列表鐵則的唯一實作），
  * 行為與 meta 的 people 一模一樣，避免「現況」在兩個地方各算一次而不一致。
  */
+/**
+ * 「某個日期當時在職」的人：user_id => ['user_cname','state','leave_date']（含現在已離職、當時還在職的人）。
+ * 認定規則（hrf_people_asof() 與主管解析共用同一套，避免兩邊各判一次而不一致）：
+ *   到職日晚於該日 → 當時還沒進公司；已離職且離職日早於該日 → 當時已離開（離職日/到職日當天都算在職）；
+ *   離職日優先取 user.leave_date，沒填才退回 user_status_history 最早一筆轉離職的起日；兩者都沒有＝無從判斷，列入。
+ */
+function hrf_employed_at_map(PDO $db, string $date): array {
+    $resign = [];
+    try {
+        foreach ($db->query("SELECT user_id, MIN(start_date) sd FROM user_status_history WHERE status=0 GROUP BY user_id")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $r) $resign[(int)$r['user_id']] = (string)$r['sd'];
+    } catch (Throwable $e) {}
+    $out = [];
+    $us = $db->query("SELECT id, user_cname, state, hire_date, leave_date FROM `user`
+                      WHERE user_cname IS NOT NULL AND user_cname<>''
+                        AND COALESCE(is_shared_account,0) <> 1
+                        AND COALESCE(state,1) NOT IN (90,99)")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($us as $u) {
+        $uid = (int)$u['id'];
+        $leaveD = (string)($u['leave_date'] ?? '') ?: (string)($resign[$uid] ?? '');
+        if (!empty($u['hire_date']) && (string)$u['hire_date'] > $date) continue;
+        if ((int)($u['state'] ?? 1) === 0 && $leaveD !== '' && $leaveD < $date) continue;
+        $out[$uid] = ['user_cname'=>(string)$u['user_cname'], 'state'=>(int)($u['state'] ?? 1), 'leave_date'=>$leaveD];
+    }
+    return $out;
+}
+
+/**
+ * 「該日期當時」的確認人(課長)：從指定部門開始沿 department.parent_id 往上找，比對**當時**掛著課長對應職位的人
+ * （職務快照走 user_position_history，並限縮在當時在職者＝含現已離職者）。找不到回空陣列，由呼叫端退回現況解析。
+ * 2026-08-18 使用者回報：補 2025 年的舊表單，自動簽核卻蓋現在的主管章（該員後來調部門），簽章與事實不符。
+ */
+function hrf_supervisor_pool_at(PDO $db, int $targetUid, ?int $deptId, string $date): array {
+    $posId = hrf_confirmer_position_get($db);
+    if (!$posId || !$deptId) return [];
+    $snaps = eg_position_snapshot_at_bulk($db, $date);
+    $emp = hrf_employed_at_map($db, $date);
+    $hop = 0; $d = (int)$deptId;
+    while ($d && $hop < 8) {
+        $best = null;
+        foreach ($snaps as $uid2 => $rows) {
+            $uid2 = (int)$uid2;
+            if ($uid2 === $targetUid || !isset($emp[$uid2])) continue;
+            foreach ($rows as $r) {
+                if ((int)$r['department_id'] !== $d || (int)$r['position_id'] !== $posId) continue;
+                $cand = ['id'=>$uid2, 'user_cname'=>$emp[$uid2]['user_cname'], 'is_main'=>(int)$r['is_main']];
+                if (!$best || $cand['is_main'] > $best['is_main']
+                    || ($cand['is_main'] === $best['is_main'] && $cand['id'] < $best['id'])) $best = $cand;
+            }
+        }
+        if ($best) return [['id'=>$best['id'], 'user_cname'=>$best['user_cname']]];
+        $st = $db->prepare("SELECT parent_id FROM department WHERE id=?");
+        $st->execute([$d]);
+        $d = (int)($st->fetchColumn() ?: 0);
+        $hop++;
+    }
+    return [];
+}
+
+/**
+ * 這張表單「應該由誰確認」的人選池。業務日期在過去＝用當時的組織解析（從表單存下來的當時部門往上找當時的課長），
+ * 解析不到才退回現況（但仍從當時的部門開始往上找，不會用該員現在的部門）。
+ * $activeOnly＝只留現在還能登入操作的人（送通知/判斷簽核權限用）；自動補簽核要記錄當時的主管，傳 false。
+ */
+function hrf_instance_supervisor_pool(PDO $db, array $inst, bool $activeOnly = false): array {
+    $uid = (int)($inst['user_id'] ?? 0);
+    $bizDate = substr((string)($inst['business_date'] ?? ''), 0, 10);
+    $deptId = (int)($inst['dept_id'] ?? 0) ?: null;
+    $isPast = $bizDate !== '' && $bizDate < date('Y-m-d');
+    if ($isPast) {
+        $pool = hrf_supervisor_pool_at($db, $uid, $deptId, $bizDate);
+        if ($pool) {
+            if (!$activeOnly) return $pool;
+            $ids = implode(',', array_map('intval', array_column($pool, 'id')));
+            $st = $db->query("SELECT id, user_cname FROM `user` WHERE id IN ($ids) AND COALESCE(state,1) NOT IN (0,90)");
+            $alive = $st->fetchAll(PDO::FETCH_ASSOC);
+            if ($alive) return array_map(fn($r) => ['id'=>(int)$r['id'], 'user_cname'=>(string)$r['user_cname']], $alive);
+        }
+    }
+    return hrf_supervisor_pool($db, $uid, $isPast ? $deptId : null);
+}
+
 function hrf_people_asof(PDO $db, string $date): array {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = date('Y-m-d');
     if ($date >= date('Y-m-d')) return eg_people_list($db, []);
@@ -363,23 +445,10 @@ function hrf_people_asof(PDO $db, string $date): array {
     foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) so FROM position")->fetchAll(PDO::FETCH_ASSOC) as $pp)
         $posMap[(int)$pp['id']] = ['name'=>(string)$pp['name'], 'so'=>(int)$pp['so']];
 
-    $resign = [];   // user_id => 最早一筆轉離職的起日（user.leave_date 沒填時的退路）
-    try {
-        foreach ($db->query("SELECT user_id, MIN(start_date) sd FROM user_status_history WHERE status=0 GROUP BY user_id")
-                    ->fetchAll(PDO::FETCH_ASSOC) as $r) $resign[(int)$r['user_id']] = (string)$r['sd'];
-    } catch (Throwable $e) {}
-
-    $us = $db->query("SELECT id, user_cname, state, hire_date, leave_date FROM `user`
-                      WHERE user_cname IS NOT NULL AND user_cname<>''
-                        AND COALESCE(is_shared_account,0) <> 1
-                        AND COALESCE(state,1) NOT IN (90,99)")->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
-    foreach ($us as $u) {
-        $uid = (int)$u['id'];
+    foreach (hrf_employed_at_map($db, $date) as $uid => $u) {
         $resigned = (int)($u['state'] ?? 1) === 0;
-        $leaveD = (string)($u['leave_date'] ?? '') ?: (string)($resign[$uid] ?? '');
-        if (!empty($u['hire_date']) && (string)$u['hire_date'] > $date) continue;      // 當時尚未到職
-        if ($resigned && $leaveD !== '' && $leaveD < $date) continue;                   // 當時已離職
+        $leaveD = (string)($u['leave_date'] ?? '');
         $rows = $snaps[$uid] ?? [];
         $pick = null;
         foreach ($rows as $r) { if (!empty($r['is_main'])) { $pick = $r; break; } }
@@ -419,8 +488,8 @@ function hrf_dept_name_map(PDO $db): array {
 /** NA 判定（使用者確認之規則）：確認人(直屬主管)解析到跟核准人(全站最高決策者)是同一人時，
  *  代表這位員工往上已經沒有「中階（課長考核）」這一層可以評，課長考核欄位視為 NA（不可填、印NA）。
  *  不硬編「課長」職稱字串，任何職位遇到相同情況都適用。 */
-function hrf_confirm_is_na(PDO $db, int $targetUid): bool {
-    $supPool = hrf_supervisor_pool($db, $targetUid);
+function hrf_confirm_is_na(PDO $db, int $targetUid, ?array $inst = null): bool {
+    $supPool = $inst ? hrf_instance_supervisor_pool($db, $inst, false) : hrf_supervisor_pool($db, $targetUid);
     $apPool = hrf_top_approver_pool($db);
     if (!$supPool || !$apPool) return false;
     return (int)$supPool[0]['id'] === (int)$apPool[0]['id'];
@@ -880,7 +949,7 @@ function hrf_instance_get(PDO $db, int $id): ?array {
     if (!$r) return null;
     if (in_array($r['form_type'], ['job_desc','competency'], true)) $r['items'] = hrf_instance_items_get($db, $id);
     if ($r['form_type'] === 'skill_assess') {
-        $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id']);
+        $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id'], $r);
         $wl = null;
         if (!empty($r['whitelist_id'])) {
             $stw = $db->prepare("SELECT source_type, source_id FROM hr_equipment_whitelist WHERE id=?");
@@ -944,7 +1013,7 @@ function hrf_instance_list(PDO $db, array $opt = []): array {
     foreach ($rows as &$r) {
         $r['target_level'] = $r['target_level'] === null ? null : (int)$r['target_level'];
         if ($r['form_type'] === 'skill_assess') {
-            $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id']);
+            $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id'], $r);
             $tool = (($r['wl_source_type'] ?? '') === 'tool') ? ($toolMap[(int)$r['wl_source_id']] ?? null) : null;
             if ($tool) {
                 hrf_apply_tool_display($r, $tool);
@@ -1300,7 +1369,7 @@ function hrf_instance_submit(PDO $db, int $instanceId, int $uid, string $uname):
     if (!$inst) return ['ok'=>false, 'msg'=>'找不到此表單'];
     if (!in_array($inst['form_type'], ['skill_assess','competency'], true)) return ['ok'=>false, 'msg'=>'此表單類型不需要送出簽核'];
     if ($inst['status'] !== 'draft') return ['ok'=>false, 'msg'=>'此表單已送出，不可重複送出'];
-    $pool = hrf_supervisor_pool($db, (int)$inst['user_id']);
+    $pool = hrf_instance_supervisor_pool($db, $inst, true);
     if (!$pool) return ['ok'=>false, 'msg'=>'解析不到此員工的直屬主管，請聯絡管理員'];
     eg_approval_submit($db, 'hr_form', $instanceId, 'confirm', $uid, $uname);
     $formLabel = HRF_FORM_TYPES[$inst['form_type']];
@@ -1316,8 +1385,11 @@ function hrf_confirm_decide(PDO $db, int $instanceId, int $uid, string $uname, s
     $rec = eg_approval_latest($db, 'hr_form', $instanceId, 'confirm');
     if (!$rec || $rec['status'] !== 'pending') return ['ok'=>false, 'msg'=>'目前沒有待您確認的項目'];
     $inst = hrf_instance_get($db, $instanceId);
-    $pool = hrf_supervisor_pool($db, (int)$inst['user_id']);
-    if (!in_array($uid, array_column($pool, 'id'), true)) return ['ok'=>false, 'msg'=>'您不是此表單的確認人'];
+    // 補歷史表單時「當時的主管」與「現在的主管」可能不同人：兩邊都允許簽（歷史那位已離職時現任才簽得下去），
+    // 實際記錄下來的簽章人就是真的按下確認的那一位。
+    $poolIds = array_merge(array_column(hrf_instance_supervisor_pool($db, $inst, false), 'id'),
+                           array_column(hrf_instance_supervisor_pool($db, $inst, true), 'id'));
+    if (!in_array($uid, array_map('intval', $poolIds), true)) return ['ok'=>false, 'msg'=>'您不是此表單的確認人'];
     if ($decision === 'approved') {
         if ($scores && $inst['form_type'] === 'skill_assess' && !empty($inst['confirm_na'])) {
             // NA：確認人跟核准人是同一人，課長考核這一欄不存在，強制清空、不採信前端送來的值
@@ -1400,7 +1472,8 @@ function hrf_auto_sign_bulk(PDO $db, array $instanceIds, string $signDate, int $
                 hrf_instance_items_save($db, $iid, $itemsByInstance[$iid]);
             }
             if ($inst['status'] === 'draft') {
-                $pool = hrf_supervisor_pool($db, (int)$inst['user_id']);
+                // 補簽核蓋的是「該表單業務日期當時」的主管章（該員後來調部門/主管換人都不影響），見 hrf_instance_supervisor_pool()
+                $pool = hrf_instance_supervisor_pool($db, $inst, false);
                 $supId = $pool ? (int)$pool[0]['id'] : null; $supName = $pool ? $pool[0]['user_cname'] : null;
                 if (!$supName) { $supId = $byUid; $supName = $byName; }
                 $aid = eg_approval_submit($db, 'hr_form', $iid, 'confirm', $byUid, $byName);
