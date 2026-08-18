@@ -638,6 +638,19 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
 </div></div>
 
 <!-- 角色權限說明 -->
+<!-- 列印前完整性檢查結果（2026-08-18 使用者要求） -->
+<div class="pf-mask" id="printCheckMask"><div class="pf-modal" style="max-width:640px;">
+    <div class="m-head"><span><i class="fa fa-exclamation-triangle"></i> 列印前檢查：有欄位尚未填寫</span><span class="m-close" onclick="closeMask('printCheckMask')">✕</span></div>
+    <div class="m-body" style="font-size:13px;color:#5b3a1e;">
+        <div style="margin-bottom:8px;">以下欄位還是空白，列印出去的表單會有空格：</div>
+        <ul id="printCheckList" style="max-height:320px;overflow-y:auto;padding-left:20px;line-height:1.9;"></ul>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('printCheckMask')">返回填寫</button>
+        <button class="b-ok" onclick="printAnyway()">仍要列印</button>
+    </div>
+</div></div>
+
 <div class="pf-mask" id="roleHelpMask"><div class="pf-modal">
     <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('roleHelpMask')">✕</span></div>
     <div class="m-body" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
@@ -658,7 +671,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
         <h4>操作步驟</h4>
         <ul>
             <li>按「新增」→ 選擇「料號」（打部分字元搜尋，查無此料號時可直接手動輸入；選定後客戶名稱與「分類」零件/組合件自動帶入，可手動修改；「規格描述」自動偵測齒輪規格、「產品名稱」自動帶入預設值，皆可手動改）。綁定料號後「料號」欄旁出現「開圖」按鈕（開新視窗看圖面），右側出現此料號的訂單/報價製程履歷面板可對照填寫。</li>
-            <li><b>業務日期</b>：手動新建的紀錄，綁定料號後下方會列出「套用BOM日期／套用最早報工日期／套用最早訂單日期」按鈕，點擊即帶入（比照建議建立清單同一套參考日期邏輯）；由「建議建立清單」批次轉入的紀錄，此欄自動沿用產品開發評估表的建立日期。新增失效模式分析列時，「目標完成日」「生效日期」預設帶入業務日期，可個別修改；編輯既有文件時若某列內容有異動，存檔前會詢問是否要一併把該列這兩個日期更新為業務日期。</li>
+            <li><b>業務日期</b>：手動新建的紀錄，綁定料號後下方會列出「套用BOM日期／套用最早報工日期／套用最早訂單日期」按鈕，點擊即帶入（帶入後會同步回填各項次還空白的目標完成日／生效日期）（比照建議建立清單同一套參考日期邏輯）；由「建議建立清單」批次轉入的紀錄，此欄自動沿用產品開發評估表的建立日期。新增失效模式分析列時，「目標完成日」「生效日期」預設帶入業務日期，可個別修改；編輯既有文件時若某列內容有異動，存檔前會詢問是否要一併把該列這兩個日期更新為業務日期。</li>
             <li>每個潛在失效模式是一張卡片，欄位由上到下分「基本資料／風險評估與現行設計管制／建議措施／措施結果」四區，不需要橫向捲動；S/O/D 每格填 1-10，<b>RPN 由系統自動計算，不可手動輸入</b>。按「新增一項失效模式分析」可再加一張卡片。</li>
             <li><b>製程代號</b>：卡片內輸入已建立的製程代號會自動帶出該製程的「項目」下拉選項；輸入清單中沒有的新代號會詢問製程名稱並即時建立。「控制預防」「控制偵測」同樣是下拉可選/可手動輸入。按「整組列表」可叫出此製程所有樣板（組名＝製程名稱_項目名稱），點選後直接把該筆的基本資料/評級/控制/建議措施/評價欄位整批帶入，帶入後仍可個別修改。這些清單新增不限身分，僅管理員能刪除。</li>
             <li><b>項目→功能→要求／潛在失效模式 階層式連動</b>：填完「項目」離開該欄位，會自動帶出這個項目底下的「功能」下拉選項；填完「功能」離開該欄位，會自動帶出這個功能底下的「要求」下拉（優先顯示綁定的料號專屬要求，沒有才顯示該功能通用要求）與更精確的「潛在失效模式」下拉（優先套用這個功能專屬的清單，還沒累積過資料才逐層退回項目層級、製程層級的通用清單）。四層清單都可以直接手動輸入新值，離開欄位或存檔時會自動加進清單供下次選用，僅管理員能刪除。</li>
@@ -674,6 +687,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li>「評級對照表」隨時可見一組精簡的嚴重度(S)／發生率(O)／偵測度(D)／風險優先指數(RPN)速查小表（比照官方表單版面）；點擊標題列另外開跳窗顯示完整官方說明文字，分四個分頁。兩者內容皆為固定參考，不隨每份分析表個別修改。S/O/D（含評價S/O/D）只能填1~10之間的整數，超出範圍會跳窗擋下並提示合法範圍。</li>
             <li><b>評價S／評價O／評價D 建議值</b>：填完「失效模式潛在後果」「嚴重度」「失效潛在原因」後，系統會依「製程+項目+功能+潛在失效模式+失效模式潛在後果+嚴重度+失效潛在原因」完整組合，自動查過去是否有填過一樣的組合，有的話自動帶入當時的評價S/O/D（只有還沒填的欄位才會被帶入，不覆蓋您已手動填的值）；此機制<b>只在新增列（尚未存檔）時生效</b>，存檔後該列即鎖定，之後編輯不會再被自動覆蓋。若手動輸入的數值跟建議值不在同一個評級對照表級距內，會跳提示但仍會採用您輸入的數值。</li>
             <li><b>欄位個別設定對應</b>：潛在失效模式跟失效模式潛在後果/分類/失效潛在原因、產品名稱跟規格描述，都可以個別設定「填了A就建議帶出B」的對應關係——離開來源欄位時系統會自動查詢並帶出建議清單，仍可手動輸入新值，存檔時會自動記住新的組合供下次使用。</li>
+            <li><b>列印前完整性檢查</b>：按列印時系統會先逐欄檢查，把「哪一項次的哪個欄位還沒填」整理成清單顯示（表頭的料號／客戶名稱／產品名稱／規格描述／業務日期／相關部門，以及每個項次的全部分析欄位）。可按「返回填寫」回去補，也可按「仍要列印」直接印出（舊資料或特殊情況不會被擋死）。</li>
             <li>料號可點擊開啟圖面查閱（比照報價單頁做法）。</li>
             <li><b>相關部門預設值</b>：勾選好常用部門後，點旁邊「設為預設勾選值」（僅管理員可見）即可設定新建文件時自動帶勾的部門，仍可逐份調整。</li>
             <li>列印比照官方紙本表單版面（表頭資訊＋評級對照表＋相關部門置於上方，分析表格逐列對齊官方欄位順序與分組），同時比照全站列印標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
@@ -904,6 +918,11 @@ window.pfAddRow = function(){
     renumberRows();
     populateCardControlDatalists($('#itemBody .pf-card').last());
     return true;
+};
+/* 業務日期一律走這支設值（2026-08-18）：jQuery .val() 不會觸發 change，快速鈕先前直接 .val()
+   導致「目標完成日／生效日期自動帶入業務日期」整段回填邏輯從來沒被觸發過。 */
+window.setBizDate = function(v){
+    $('#fBizDate').val(v).trigger('change');
 };
 // 業務日期填入/變更時，順便回填目前還空白的目標完成日/生效日期欄位（已填過的列不覆蓋）
 $(document).on('change', '#fBizDate', function(){
@@ -1371,9 +1390,9 @@ function loadBizDateQuick(partDId, partText, custName){
         if (!res.success){ $('#fBizDateQuick').html(''); return; }
         var r = res.ref || {};
         var btns = '';
-        if (r.bom_created_at) btns += '<button type="button" class="pf-row-btn" onclick="$(\'#fBizDate\').val(\''+r.bom_created_at.substring(0,10)+'\')">套用BOM日期('+fmtDate(r.bom_created_at)+')</button>';
-        if (r.earliest_report_date) btns += '<button type="button" class="pf-row-btn" onclick="$(\'#fBizDate\').val(\''+r.earliest_report_date.substring(0,10)+'\')">套用最早報工日期('+fmtDate(r.earliest_report_date)+')</button>';
-        if (r.earliest_order_date_all_time) btns += '<button type="button" class="pf-row-btn" onclick="$(\'#fBizDate\').val(\''+r.earliest_order_date_all_time.substring(0,10)+'\')">套用最早訂單日期('+fmtDate(r.earliest_order_date_all_time)+')</button>';
+        if (r.bom_created_at) btns += '<button type="button" class="pf-row-btn" onclick="setBizDate(\''+r.bom_created_at.substring(0,10)+'\')">套用BOM日期('+fmtDate(r.bom_created_at)+')</button>';
+        if (r.earliest_report_date) btns += '<button type="button" class="pf-row-btn" onclick="setBizDate(\''+r.earliest_report_date.substring(0,10)+'\')">套用最早報工日期('+fmtDate(r.earliest_report_date)+')</button>';
+        if (r.earliest_order_date_all_time) btns += '<button type="button" class="pf-row-btn" onclick="setBizDate(\''+r.earliest_order_date_all_time.substring(0,10)+'\')">套用最早訂單日期('+fmtDate(r.earliest_order_date_all_time)+')</button>';
         $('#fBizDateQuick').html(btns || '<span style="color:#8a6d45;font-size:12px;">查無可參考日期，請手動輸入</span>');
     });
 }
@@ -1663,7 +1682,33 @@ function buildPrintDoc(res){
             + '<table class="p-rev"><thead><tr><th>編號</th><th>日期</th><th>修訂內容</th><th>準備</th></tr></thead><tbody>'+revRows+'</tbody></table>'
             + '</div>'
             + '<div class="p-hdgrid">'+hdGrid+'</div>'
-            + '<table class="p-tb"><thead>'
+            + '<table class="p-tb">'
+            // 欄寬明訂（2026-08-18 使用者要求）：table-layout:fixed 沒有 colgroup 時 21 欄會被平均
+            // 分配，建議措施(常是 1. 2. 3. 多行句子)被擠成細長條、S/O/D/RPN(最多 3 位數)卻過寬。
+            // 百分比合計需為 100。
+            + '<colgroup>'
+            + '<col style="width:2.2%">'   /* NO */
+            + '<col style="width:6.5%">'   /* 項目 */
+            + '<col style="width:6.5%">'   /* 功能 */
+            + '<col style="width:6.5%">'   /* 要求 */
+            + '<col style="width:7%">'     /* 潛在失效模式 */
+            + '<col style="width:7%">'     /* 失效模式潛在後果 */
+            + '<col style="width:2.6%">'   /* 嚴重度S */
+            + '<col style="width:3.1%">'   /* 分類 */
+            + '<col style="width:7%">'     /* 失效潛在原因 */
+            + '<col style="width:2.6%">'   /* 發生率O */
+            + '<col style="width:6%">'     /* 控制預防 */
+            + '<col style="width:6%">'     /* 控制偵測 */
+            + '<col style="width:2.6%">'   /* 偵測度D */
+            + '<col style="width:2.8%">'   /* RPN */
+            + '<col style="width:13%">'    /* 建議措施（加寬） */
+            + '<col style="width:4.6%">'   /* 目標完成日 */
+            + '<col style="width:4.6%">'   /* 生效日期 */
+            + '<col style="width:2.2%">'   /* 措施結果 S */
+            + '<col style="width:2.2%">'   /* 措施結果 O */
+            + '<col style="width:2.2%">'   /* 措施結果 D */
+            + '<col style="width:2.8%">'   /* 措施結果 RPN */
+            + '</colgroup><thead>'
             + '<tr><th rowspan="2">NO</th><th rowspan="2">項目</th><th rowspan="2">功能</th><th rowspan="2">要求</th>'
             + '<th rowspan="2">潛在失效模式</th><th rowspan="2">失效模式潛在後果</th><th rowspan="2">嚴重度S</th>'
             + '<th rowspan="2">分類</th><th rowspan="2">失效潛在原因</th><th rowspan="2">發生率O</th>'
@@ -1703,9 +1748,55 @@ function buildPrintDoc(res){
             + '}';
     return {css:css, body:body, partNo:d.part_no||''};
 }
+/* 列印前完整性檢查（2026-08-18 使用者要求）：列印出去就是要歸檔的正式品質紀錄，缺欄位比版面難看
+   更嚴重。逐一列出「哪一項次的哪個欄位」還沒填，讓人直接回去補；但不強制擋死——舊資料／特殊情況
+   仍可按「仍要列印」硬印，避免變成印不出來的死結。 */
+var PRINT_HEAD_FIELDS = [
+    ['part_no','料號'], ['customer_name','客戶名稱'], ['product_name','產品名稱'],
+    ['spec_desc','規格描述'], ['biz_date','業務日期'], ['related_depts','相關部門']
+];
+var PRINT_ITEM_FIELDS = [
+    ['process_desc','項目'], ['function_desc','功能'], ['requirement','要求'],
+    ['failure_mode','潛在失效模式'], ['failure_effect','失效模式潛在後果'], ['severity','嚴重度S'],
+    ['classification','分類'], ['failure_cause','失效潛在原因'], ['occurrence','發生率O'],
+    ['prevention_controls','控制預防'], ['detection_controls','控制偵測'], ['detection','偵測度D'],
+    ['recommended_actions','建議措施'], ['target_date','目標完成日'], ['action_date','生效日期'],
+    ['new_severity','評價S'], ['new_occurrence','評價O'], ['new_detection','評價D']
+];
+function printMissingFields(res){
+    var miss = [];
+    var d = res.doc || {};
+    var headMiss = PRINT_HEAD_FIELDS.filter(function(f){ return !String(d[f[0]] == null ? '' : d[f[0]]).trim(); })
+                                    .map(function(f){ return f[1]; });
+    if (headMiss.length) miss.push('表頭：' + headMiss.join('、'));
+    (res.items || []).forEach(function(it, i){
+        var m = PRINT_ITEM_FIELDS.filter(function(f){ return !String(it[f[0]] == null ? '' : it[f[0]]).trim(); })
+                                 .map(function(f){ return f[1]; });
+        if (m.length) miss.push('項次 ' + (i + 1) + '：' + m.join('、'));
+    });
+    if (!(res.items || []).length) miss.push('尚未建立任何失效模式分析項次');
+    return miss;
+}
 function printDoc(id){
     $.getJSON(API, {action:'print_get', id:id}, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
+        var miss = printMissingFields(res);
+        if (miss.length){
+            $('#printCheckList').html(miss.map(function(m){ return '<li>'+esc(m)+'</li>'; }).join(''));
+            PRINT_PENDING_RES = res;
+            openMask('printCheckMask');
+            return;
+        }
+        doPrintDoc(res);
+    });
+}
+window.printAnyway = function(){
+    closeMask('printCheckMask');
+    if (PRINT_PENDING_RES) doPrintDoc(PRINT_PENDING_RES);
+    PRINT_PENDING_RES = null;
+};
+var PRINT_PENDING_RES = null;
+function doPrintDoc(res){
         var pd = buildPrintDoc(res);
         var w = window.open('', '_blank');
         w.document.write('<html><head><meta charset="utf-8"><title>PFMEA潛在失效模式及效應分析</title><style>'+pd.css+'</style></head><body>'+pd.body
@@ -1715,7 +1806,6 @@ function printDoc(id){
             +'document.head.appendChild(st);'
             +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
         w.document.close();
-    });
 }
 /* ---------- 檢視（唯讀，2026-08-13使用者要求第8段）：跟列印版面完全一樣，塞進本頁iframe跳窗顯示
    （不觸發列印動作），另外提供「評級對照表說明」（沿用既有ratingInfoMask）跟「開圖」按鈕 ---------- */
