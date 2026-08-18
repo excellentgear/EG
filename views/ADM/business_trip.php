@@ -453,14 +453,16 @@ function loadMeta(then){
         if (typeof then === 'function') then();
     });
 }
-function loadList(){
+function loadList(keepPage){
+    /* keepPage=true：操作（存檔／送出／核准／刪除）後重新整理清單時，停留在原本那一頁；
+       篩選／搜尋／切換範圍才回到第 1 頁 */
     var q = {action:'list', scope:$('#scopeSel').val(), status:$('#statusSel').val(),
              date_from:$('#fDateFrom').val(), date_to:$('#fDateTo').val(), kw:$('#fKw').val()};
     $('#listBody').html('<tr><td colspan="12" style="padding:20px;color:#8a6d45;">載入中…</td></tr>');
     $.getJSON(API, q, function(res){
         if (!res.ok) return;
         ROWS = res.rows || [];
-        PAGE = 1;
+        if (!keepPage) PAGE = 1;
         renderList();
     });
 }
@@ -494,8 +496,8 @@ function renderList(){
 $(document).on('click', '.pgb', function(){ PAGE = parseInt($(this).data('p'), 10); renderList(); });
 $('#pgSize').on('change', function(){ PAGE = 1; renderList(); });
 $('#chkAll').on('change', function(){ $('.chkRow').prop('checked', $(this).is(':checked')); });
-$('#btnSearch').on('click', loadList);
-$('#scopeSel,#statusSel').on('change', loadList);
+$('#btnSearch').on('click', function(){ loadList(); });
+$('#scopeSel,#statusSel').on('change', function(){ loadList(); });
 
 /* ================= 編輯 ================= */
 function newTrip(){
@@ -624,14 +626,14 @@ function saveTrip(submitAfter){
     $.post(API, d, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         CUR_ID = res.trip_id;
-        if (!submitAfter) { alert('已儲存草稿'); closeMask('editMask'); loadList(); return; }
+        if (!submitAfter) { alert('已儲存草稿'); closeMask('editMask'); loadList(true); return; }
         $.post(API, {action:'submit', trip_id:res.trip_id}, function(r2){
             if (!r2.ok) { alert(r2.error||'送出失敗'); return; }
             alert(r2.status === 'approved'
                 ? ('已送出並自動核准（' + (r2.note||'') + '）')
                 : (r2.is_self ? '已送出。你是全站最高決策者，這張單由你自己核准——請到「待我核准」按核准。'
                                : ('已送出，待「' + (r2.approver||'') + '」核准。')));
-            closeMask('editMask'); loadList();
+            closeMask('editMask'); loadList(true);
         }, 'json');
     }, 'json');
 }
@@ -642,7 +644,7 @@ function delTrip(id){
     if (!confirm('確定刪除這張公出單？')) return;
     $.post(API, {action:'delete', trip_id:id}, function(res){
         if (!res.ok) { alert(res.error||'刪除失敗'); return; }
-        loadList();
+        loadList(true);
     }, 'json');
 }
 
@@ -781,7 +783,7 @@ $('#btnDelSel').on('click', function(){
         alert('已刪除 ' + res.deleted + ' 張'
             + (res.skipped ? ('，另有 ' + res.skipped + ' 張已被刪除或不存在（略過）') : '') + '。');
         $('#chkAll').prop('checked', false);
-        loadList();
+        loadList(true);
     }, 'json');
 });
 
@@ -790,7 +792,7 @@ function openDecide(id){
     $.getJSON(API, {action:'get', trip_id:id}, function(res){       // 點開即刷新
         if (!res.ok) return;
         var t = res.trip;
-        if (!t.can_decide) { alert('這張單目前不是待您核准的狀態（可能已被處理），已重新整理清單。'); loadList(); return; }
+        if (!t.can_decide) { alert('這張單目前不是待您核准的狀態（可能已被處理），已重新整理清單。'); loadList(true); return; }
         DECIDE_ID = id;
         $('#decideInfo').html('<b>'+esc(t.user_name||'')+'</b>（'+esc(t.dept_name||'')+' '+esc(t.position_name||'')+'）<br>'
             + '公出時間：'+esc(t.period||'')+'<br>公出地點：'+esc(t.location||'')+'<br>事由：'+esc(t.reason||''));
@@ -806,7 +808,7 @@ $('#btnDecideOk').on('click', function(){
     $.post(API, {action:'decide', trip_id:DECIDE_ID, decision:dec, note:note, decide_date:$('#decideDate').val()}, function(res){
         if (!res.ok) { alert(res.error||'決行失敗'); return; }
         alert(dec === 'approved' ? '已核准' : '已退回');
-        closeMask('decideMask'); loadList();
+        closeMask('decideMask'); loadList(true);
     }, 'json');
 });
 
@@ -1002,7 +1004,7 @@ function pullTraining(sid){
     $.post(API, {action:'from_training', session_id:sid}, function(res){
         if (!res.ok) { alert(res.error||'帶入失敗'); return; }
         alert('新增 '+res.created+' 張、更新 '+res.updated+' 張草稿'+(res.skipped?('，'+res.skipped+' 張已送出不覆蓋'):''));
-        $('#btnTrLoad').click(); loadList();
+        $('#btnTrLoad').click(); loadList(true);
     }, 'json');
 }
 
