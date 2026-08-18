@@ -245,16 +245,23 @@ function bt_user_identity(PDO $db, int $uid): array
  */
 function bt_resolve_approver(PDO $db, ?int $deptId, int $tripUserId, bool $autoSign = false): ?array
 {
-    $base = null; $why = '';
+    $base = null; $why = ''; $selfOk = false;
     $mgr = $deptId ? eg_org_dept_manager($db, $deptId) : null;
     if ($mgr && (int)$mgr['id'] !== $tripUserId) {
         $base = (int)$mgr['id'];
         $why  = '單位主管';
     } else {
+        // 主管本人公出 → 往上找全站最高決策者。**最高決策者本人公出時就由他自己簽**（使用者定案）：
+        // 他已經是全站最高一層，再往上沒有人，硬套 SoD 迴避只會變成「查無核准人」而讓單子沒人簽、簽章欄空白。
         $top = eg_org_user($db, 'top_approver');
-        if ($top && (int)$top['id'] !== $tripUserId) {
+        if ($top) {
             $base = (int)$top['id'];
-            $why  = $mgr ? '主管本人公出，改由最高核准人員核准' : '查無單位主管，改由最高核准人員核准';
+            if ($base === $tripUserId) {
+                $selfOk = true;
+                $why    = '最高決策者本人公出，由本人核准（全站已無更上層可簽）';
+            } else {
+                $why = $mgr ? '主管本人公出，改由最高核准人員核准' : '查無單位主管，改由最高核准人員核准';
+            }
         }
     }
     if (!$base) return null;
@@ -268,14 +275,16 @@ function bt_resolve_approver(PDO $db, ?int $deptId, int $tripUserId, bool $autoS
             if ($delegated) $reason = $why . '；' . ($rs['reason'] ?? '轉由代理人簽核');
         }
     } catch (Throwable $e) {}
-    if ($signerId === $tripUserId) return null;      // 迴避：解析結果又繞回公出人本人
+    // 迴避：解析結果又繞回公出人本人（唯獨「最高決策者本人公出」例外，見上方）
+    if ($signerId === $tripUserId && !$selfOk) return null;
     $nm = '';
     try {
         $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
         $st->execute([$signerId]);
         $nm = (string)$st->fetchColumn();
     } catch (Throwable $e) {}
-    return ['id'=>$signerId, 'name'=>$nm, 'base_id'=>$base, 'is_delegated'=>$delegated, 'reason'=>$reason];
+    return ['id'=>$signerId, 'name'=>$nm, 'base_id'=>$base, 'is_delegated'=>$delegated,
+            'is_self'=>($signerId === $tripUserId), 'reason'=>$reason];
 }
 
 /** 自動核准的時間戳：業務日期＝送出日，精確時間隨機錯開 5~30 分鐘且不跨日（ai-rules/21） */

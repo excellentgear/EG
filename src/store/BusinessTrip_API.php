@@ -293,7 +293,8 @@ case 'submit': {
         $ev = bt_notify_approver($db, $trip, (int)$signer['id'], $uid);
         if ($ev) eg_approval_set_live_event($db, $aid, $ev);
     } catch (Throwable $e) { jerr('送出失敗：' . $e->getMessage(), 500); }
-    jout(['status'=>'submitted', 'approver'=>$signer['name'], 'reason'=>$signer['reason']]);
+    jout(['status'=>'submitted', 'approver'=>$signer['name'], 'reason'=>$signer['reason'],
+          'is_self'=>!empty($signer['is_self'])]);
 }
 
 /* ---------------- 核准／退回（退回強制填原因，ai-rules/17） ---------------- */

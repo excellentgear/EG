@@ -629,7 +629,8 @@ function saveTrip(submitAfter){
             if (!r2.ok) { alert(r2.error||'送出失敗'); return; }
             alert(r2.status === 'approved'
                 ? ('已送出並自動核准（' + (r2.note||'') + '）')
-                : ('已送出，待「' + (r2.approver||'') + '」核准。'));
+                : (r2.is_self ? '已送出。你是全站最高決策者，這張單由你自己核准——請到「待我核准」按核准。'
+                               : ('已送出，待「' + (r2.approver||'') + '」核准。')));
             closeMask('editMask'); loadList();
         }, 'json');
     }, 'json');
