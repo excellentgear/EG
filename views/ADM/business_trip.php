@@ -79,6 +79,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                    border-radius:6px; padding:8px 10px; margin-bottom:10px; }
         .bt-pull .bt-hint { margin:0; }
         .bt-pulled { background:#F7E0BD; border-color:#E0BE86; }
+        .bt-toolbar button.btn-danger { background:#DD5138; border-color:#C4442D; color:#fff; }
+        .bt-toolbar button.btn-danger:hover { background:#C4442D; }
         .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:9px 14px; border-radius:8px 8px 0 0; display:flex; }
         .m-close { margin-left:auto; cursor:pointer; }
         .m-body { padding:14px; max-height:70vh; overflow:auto; }
@@ -143,6 +145,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button id="btnSearch" class="btn-warm"><i class="fa fa-search"></i> 查詢</button>
             <button id="btnAdd"><i class="fa fa-plus"></i> 新增公出單</button>
             <button id="btnPrintSel"><i class="fa fa-print"></i> 批次列印所選</button>
+            <?php if ($perms['isAdmin']): ?>
+            <button id="btnDelSel" class="btn-danger"><i class="fa fa-trash"></i> 批次刪除所選</button>
+            <?php endif; ?>
             <?php if ($perms['canAdmin']): ?>
             <button id="btnFromTraining"><i class="fa fa-graduation-cap"></i> 外訓批次帶入</button>
             <button id="btnSetting"><i class="fa fa-cog"></i> 模組設定</button>
@@ -364,6 +369,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <h4>權限角色</h4>
         <p><b>一般在職員工</b>：不需指派任何角色，就能開立／檢視／列印<b>自己的</b>公出單，並核准指派給自己的單。
         <b>公出單檢閱</b>：可查看全部人的公出單（唯讀）。<b>公出單管理員</b>：查全部＋代其他人開單（含代撈該員外訓帶入）、刪除、模組設定、AS 綁定、外訓批次帶入。
+        <b>系統管理者</b>：以上全部，另有<b>「批次刪除所選」</b>——勾選清單後一次刪除（含已送出／已核准的單，
+        整批同一個交易，失敗會整批回捲），主要用在補資料時清掉整批誤產生的單；刪除為軟刪除，清單與統計不再出現。
         管理者固定擁有全部權限。角色指派於「使用者權限設定」。</p>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">我知道了</button></div>
@@ -707,6 +714,32 @@ function pullMyTraining(sid){
     });
 }
 
+/* ================= 批次刪除（僅系統管理者；勾選清單後整批軟刪除） ================= */
+$('#btnDelSel').on('click', function(){
+    var rows = $('.chkRow:checked').map(function(){
+        var id = +this.value;
+        return ROWS.filter(function(r){ return +r.trip_id === id; })[0] || {trip_id:id};
+    }).get();
+    if (!rows.length) { alert('請先勾選要刪除的公出單'); return; }
+    /* 已送出／已核准的單也刪得掉（系統管理者專用），但要先講清楚勾到哪些，避免誤刪 */
+    var cnt = {};
+    rows.forEach(function(r){ var k = STATUS_LABEL[r.status] || r.status || '未知'; cnt[k] = (cnt[k]||0) + 1; });
+    var brief = Object.keys(cnt).map(function(k){ return k + ' ' + cnt[k] + ' 張'; }).join('、');
+    var names = rows.slice(0, 8).map(function(r){ return (r.trip_no||('#'+r.trip_id)) + ' ' + (r.user_name||''); });
+    if (rows.length > 8) names.push('…等共 ' + rows.length + ' 張');
+    if (!confirm('確定刪除勾選的 ' + rows.length + ' 張公出單？\n（' + brief + '）\n\n' + names.join('\n')
+        + '\n\n刪除後不會出現在清單與統計中，需要救回請洽系統管理者。')) return;
+    var $b = $('#btnDelSel').prop('disabled', true);
+    $.post(API, {action:'delete_batch', ids:JSON.stringify(rows.map(function(r){ return r.trip_id; }))}, function(res){
+        $b.prop('disabled', false);
+        if (!res.ok) { alert(res.error||'批次刪除失敗'); return; }
+        alert('已刪除 ' + res.deleted + ' 張'
+            + (res.skipped ? ('，另有 ' + res.skipped + ' 張已被刪除或不存在（略過）') : '') + '。');
+        $('#chkAll').prop('checked', false);
+        loadList();
+    }, 'json');
+});
+
 /* ================= 核准／退回 ================= */
 function openDecide(id){
     $.getJSON(API, {action:'get', trip_id:id}, function(res){       // 點開即刷新
@@ -773,7 +806,7 @@ function tripPrintHtml(res){
     var css = '@page{size:A4 portrait;margin:0;}html,body{margin:0;padding:0;}'
         + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
         + 'padding:14mm 14mm 12mm;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-        + '.pg{display:flex;flex-direction:column;min-height:266mm;}'
+        + '.pg{display:flex;flex-direction:column;}'
         /* 表頭 */
         + '.hd{text-align:center;}'
         + '.hd .co{font-size:23px;font-weight:bold;letter-spacing:3px;}'
@@ -781,9 +814,9 @@ function tripPrintHtml(res){
         +   'padding:0 0 3px 14px;margin-top:8px;border-bottom:2px solid #000;}'
         + '.ymd{text-align:right;font-size:14px;margin:10px 2px 6px;letter-spacing:1px;}'
         /* 表身：整框，右側直書存查欄與表身同高；事由欄吃掉剩餘高度，簽章區自然壓在頁尾 */
-        + '.frm{flex:1;display:flex;border:2px solid #000;}'
+        + '.frm{display:flex;border:1.6px solid #000;}'
         + '.bd{flex:1;display:flex;flex-direction:column;min-width:0;}'
-        + '.r{display:flex;border-bottom:1px solid #000;min-height:15mm;}'
+        + '.r{display:flex;border-bottom:1px solid #000;min-height:13mm;}'
         + '.r>.lb{width:27mm;flex:none;background:#F5EEE3;border-right:1px solid #000;'
         +   'display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:bold;letter-spacing:4px;}'
         + '.r>.vl{flex:1;min-width:0;display:flex;align-items:center;padding:6px 10px;font-size:15px;'
@@ -792,22 +825,22 @@ function tripPrintHtml(res){
         +   'display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:bold;letter-spacing:4px;}'
         + '.r>.vl2{width:62mm;flex:none;display:flex;align-items:center;padding:6px 10px;font-size:15px;line-height:1.7;}'
         /* 事由：留足書寫高度並吃掉整頁剩餘空間 */
-        + '.rs{flex:1;display:flex;border-bottom:1px solid #000;min-height:70mm;}'
+        + '.rs{display:flex;border-bottom:1px solid #000;min-height:34mm;}'
         + '.rs>.vl{align-items:flex-start;white-space:pre-wrap;padding:8px 10px;}'
         + '.rs>.lb{align-items:flex-start;padding-top:8px;}'
         + 'table.sub{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px;margin-top:8px;}'
         + 'table.sub td{border:1px solid #999;padding:4px 5px;text-align:center;height:9mm;white-space:nowrap;}'
         + 'table.sub td.dn{width:10%;color:#444;font-size:12px;}table.sub td.dd{width:19%;}table.sub td.dt{width:21%;}'
         /* 簽章三格（比照紙本：會計／課長／組長） */
-        + '.sg{display:flex;height:34mm;}'
+        + '.sg{display:flex;height:28mm;}'
         + '.sg .cell{flex:1;display:flex;flex-direction:column;border-right:1px solid #000;}'
         + '.sg .cell:last-child{border-right:none;}'
         + '.sg .lb{background:#F5EEE3;border-bottom:1px solid #000;text-align:center;font-size:14px;'
         +   'font-weight:bold;letter-spacing:4px;padding:3px 0;}'
         + '.sg .bx{flex:1;display:flex;align-items:center;justify-content:center;}'
-        + '.sg .stamp-wrap svg,.sg svg.car-stamp{width:82px;height:82px;}'
+        + '.sg .stamp-wrap svg,.sg svg.car-stamp{width:72px;height:72px;}'
         /* 右側直書「外出時交管理課存查」 */
-        + '.keep{width:17mm;flex:none;border-left:2px solid #000;display:flex;align-items:center;justify-content:center;}'
+        + '.keep{width:17mm;flex:none;border-left:1.6px solid #000;display:flex;align-items:center;justify-content:center;}'
         + '.keep span{writing-mode:vertical-rl;letter-spacing:8px;font-size:16px;font-weight:bold;}'
         + '.note{font-size:12.5px;margin-top:8px;color:#333;line-height:1.7;}'
         + '.docno{position:fixed;right:14mm;bottom:8mm;font-size:10pt;color:#333;}';

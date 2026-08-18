@@ -337,6 +337,34 @@ case 'delete': {
     jout(['trip_id'=>$tripId]);
 }
 
+/* ---------------- 批次刪除（僅系統管理者；補資料時清掉整批誤產生的單） ----------------
+   一次一個 transaction，任何一張失敗就整批回捲，不會刪一半。 */
+case 'delete_batch': {
+    if (!$perms['isAdmin']) jerr('只有系統管理者可以批次刪除', 403);
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    if (!is_array($ids)) $ids = [];
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    if (!$ids) jerr('請先勾選要刪除的公出單');
+    if (count($ids) > 500) jerr('一次最多刪除 500 張');
+    $done = []; $skip = [];
+    try {
+        $db->beginTransaction();
+        $upd = $db->prepare("UPDATE business_trip SET is_deleted=1, updated_at=NOW() WHERE trip_id=? AND COALESCE(is_deleted,0)=0");
+        foreach ($ids as $id) {
+            $trip = bt_trip_row($db, $id);
+            if (!$trip) { $skip[] = $id; continue; }      // 已刪或不存在
+            $upd->execute([$id]);
+            bt_close_notice($db, $id);                    // 連帶關掉還掛著的簽核通知
+            $done[] = $id;
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        jerr('批次刪除失敗：' . $e->getMessage(), 500);
+    }
+    jout(['deleted'=>count($done), 'skipped'=>count($skip), 'ids'=>$done]);
+}
+
 /* ---------------- 模組設定（免簽核僅系統管理者可改） ---------------- */
 case 'save_settings': {
     if (!$perms['canAdmin']) jerr('無設定權限', 403);
