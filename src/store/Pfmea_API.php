@@ -96,6 +96,14 @@ case 'list':
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     // MAX(rpn) 需即時依 S*O*D 重算，SQL 端存的 rpn 欄位（若有）不採信；改在 PHP 端重算 max
     foreach ($rows as &$r) {
+        /* 規格描述（2026-08-18 使用者回報：跳窗看得到、清單卻顯示未建立）：
+           pfmea_doc.spec_desc 只有「存過檔」才有值，批次建立的單據是空的；但跳窗開起來時是即時
+           從料號主檔偵測齒輪規格帶出來的。清單若只讀本表就會誤判成未建立，故本表沒有時回退查
+           主檔，並標記 spec_from_master 讓畫面說明它還沒存進這張表。 */
+        if ((trim((string)($r['spec_desc'] ?? '')) === '') && !empty($r['part_d_id'])) {
+            $ms = eg_gear_spec_for_part($db, (int)$r['part_d_id']);
+            if ($ms !== null && trim($ms) !== '') { $r['spec_desc'] = $ms; $r['spec_from_master'] = 1; }
+        }
         $st2 = $db->prepare("SELECT severity, occurrence, detection FROM pfmea_item WHERE doc_id=? AND is_deleted=0");
         $st2->execute([$r['id']]);
         $max = null;

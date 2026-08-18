@@ -370,7 +370,11 @@ function pfmea_templates_of_processes(PDO $db, array $processIds): array {
                          WHERE t.process_id IN ($in) AND t.is_active=1
                          ORDER BY p.sort_order, p.id, t.sort_order, t.id");
     $st->execute($processIds);
-    return $st->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    // is_ai：BOM 帶入清單要標示哪幾筆是 AI 產生的（與 pfmea_ref_item_templates 同一套判定）
+    foreach ($rows as &$r) { $r['is_ai'] = (strtoupper((string)($r['source_tag'] ?? '')) === 'AI'); }
+    unset($r);
+    return $rows;
 }
 
 /* ---------- 料號綁定的製程／項目／功能組合（2026-08-18 使用者拍板）----------

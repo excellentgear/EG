@@ -1004,8 +1004,11 @@ function renderListRows(rows){
                 + '<td>'+esc(r.doc_no)+'</td>'
                 + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):'')+'</td>'
                 // 規格描述空白時明顯標出來，一眼看得出哪幾筆還沒建立（2026-08-18 使用者要求）
-                + '<td class="t-left">'+(r.spec_desc ? esc(r.spec_desc)
-                    : '<span style="color:#DD5138;font-weight:bold;" title="尚未建立規格描述">— 未建立 —</span>')+'</td>'
+                + '<td class="t-left">'+(r.spec_desc
+                    ? (r.spec_from_master
+                        ? '<span style="color:#A8906E;" title="這是料號主檔的規格，本表尚未存檔帶入；開啟編輯後按儲存即會寫入本表">'+esc(r.spec_desc)+' <i class="fa fa-info-circle"></i></span>'
+                        : esc(r.spec_desc))
+                    : '<span style="color:#DD5138;font-weight:bold;" title="料號主檔也查不到規格，需先於料號設定建立">— 未建立 —</span>')+'</td>'
                 + '<td class="t-left">'+esc(r.customer_name||'')+'</td>'
                 + '<td>'+esc(r.item_count)+'</td>'
                 + '<td'+rpnCls+'>'+(r.max_rpn!=null?r.max_rpn:'—')+'</td>'
