@@ -78,6 +78,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         .pf-modal.xwide { max-width:1080px; }
         /* 參考資料設定改成「頁內大分頁」而不是跳窗（2026-08-18 使用者要求：內容太多被小跳窗侷限住
            很難用）。只覆寫這一個 id，其他跳窗維持原樣。 */
+        /* 頁面層級大分頁（2026-08-18 使用者要求：參考資料設定要是頁內分頁、不是擠在底下；
+           比照 views/pm/vendor_audit.php 的稽核批次／定期評核…那組頁籤） */
+        .pf-tabs { display:flex; gap:4px; margin:10px 0 8px; border-bottom:2px solid #E8D5B5; }
+        .pf-tab { border:1px solid #E8D5B5; border-bottom:none; background:#FBF3E5; color:#8a6d45; cursor:pointer;
+            padding:7px 16px; font-size:14px; border-radius:6px 6px 0 0; margin-bottom:-2px; }
+        .pf-tab.active { background:#fff; color:#5b3a1e; font-weight:bold; border-bottom:2px solid #fff; }
+        @media print { .pf-tabs { display:none !important; } }
+
         #refSettingsMask { position:static; inset:auto; background:none; z-index:auto; }
         #refSettingsMask .pf-modal { max-width:none; width:100%; margin:0 0 20px; max-height:none;
             box-shadow:none; border:1px solid #E8D5B5; }
@@ -221,6 +229,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
             <p>請洽管理者於「使用者權限設定」指派「PFMEA檢閱／登錄／管理員」角色。</p>
         </div>
 <?php else: ?>
+        <div class="pf-tabs">
+            <button type="button" class="pf-tab active" data-pftab="list"><i class="fa fa-list"></i> 分析表清單</button>
+<?php if ($perms['canAdmin']): ?>
+            <button type="button" class="pf-tab" data-pftab="ref"><i class="fa fa-sitemap"></i> 參考資料設定</button>
+<?php endif; ?>
+        </div>
         <div class="pf-toolbar pf-list-wrap">
             <label>搜尋</label>
             <input type="text" id="kwInput" placeholder="表單編號／料號" style="width:200px;">
@@ -242,6 +256,204 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
                 <tbody id="pfBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div></div>
+
+<div class="pf-mask" id="refSettingsMask"><div class="pf-modal xwide">
+    <div class="m-head"><span>參考資料設定（僅管理員）</span><span class="m-close" onclick="closeRefSettings()">✕ 回清單</span></div>
+    <div class="m-body">
+        <div class="pf-rt-tabs">
+            <div class="pf-rt-tab" data-rstab="proc" onclick="switchRsTab('proc')">階層對應（一條龍）</div>
+            <div class="pf-rt-tab" data-rstab="tpl" onclick="switchRsTab('tpl')">整組樣板</div>
+            <div class="pf-rt-tab" data-rstab="reqlist" onclick="switchRsTab('reqlist')">要求總覽</div>
+        </div>
+
+        <div class="pf-rt-pane" data-rstab="proc">
+        <div class="pf-sec-title">製程開放使用設定
+            <span class="pf-op" onclick="rsSyncProcesses()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:10px;"><i class="fa fa-refresh"></i> 從全站製程主檔同步</span>
+            <span class="pf-op" onclick="rsEnableConfigured()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:10px;"><i class="fa fa-check-square-o"></i> 一鍵開放已設定製程</span>
+        </div>
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:4px;">勾選大項分類＝該分類底下製程全選/取消全選；仍可個別勾選調整。只有勾選開放的製程會出現在分析表的製程代號下拉。</div>
+        <div id="rsProcessEnableList" style="max-height:220px;overflow-y:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px 8px;margin-bottom:10px;"></div>
+
+        <!-- 左樹右設定（2026-08-18 使用者拍板）：左邊一棵可展開的樹一眼看完整體結構，點哪一節
+             右邊就顯示那一節能設定的東西。右側沿用既有的 rs* 區塊，只是改由樹來導覽。 -->
+        <div class="pf-sec-title">製程與階層設定</div>
+        <div class="rt-layout">
+        <div class="rt-tree-pane">
+            <div class="rt-tree-tools">
+                <input type="text" id="rtSearch" placeholder="搜尋製程／項目／功能／失效模式…">
+                <button type="button" class="pf-row-btn" onclick="rtExpandAll(1)" title="全部展開"><i class="fa fa-plus-square-o"></i></button>
+                <button type="button" class="pf-row-btn" onclick="rtExpandAll(0)" title="全部收合"><i class="fa fa-minus-square-o"></i></button>
+            </div>
+            <label class="rt-onlyset"><input type="checkbox" id="rtOnlyConfigured" checked> 只顯示已設定過內容的製程（取消勾選看全部）</label>
+            <div class="rt-tree" id="rtTree">載入中…</div>
+            <div class="rt-add">
+                <input type="text" id="rsProcCodeNew" placeholder="製程代號" style="flex:0 0 90px;">
+                <input type="text" id="rsProcNameNew" placeholder="製程名稱">
+                <button type="button" class="pf-row-btn" onclick="rsAddProcess()">新增製程</button>
+            </div>
+        </div>
+        <div class="rt-detail-pane">
+        <div id="rtNothing" class="rt-empty">← 請從左邊的樹選一個節點<br>
+            <span>選<b>製程</b>可設定它底下的項目；選<b>項目</b>可設定功能；選<b>功能</b>可設定潛在失效模式與要求；選<b>失效模式</b>可設定它的後果／分類／原因</span></div>
+        <div id="rsDrillWrap" style="display:none;">
+        <div class="rt-crumb" id="rtCrumb"></div>
+
+        <div id="rsProcessScope" style="display:none;">
+            <div style="color:#8a6d45;font-size:12px;margin:10px 0 6px;padding-top:10px;border-top:1px dashed #EADFC8;">目前選擇製程：<b id="rsCurProcessLabel"></b></div>
+            <div class="pf-sec-title">項目（此製程底下）</div>
+            <div class="rs-list" id="rsItemList" style="display:none;"></div>
+            <div class="pf-proc-box"><input type="text" id="rsItemNew" placeholder="項目名稱"><button type="button" class="pf-row-btn" onclick="rsAddItem()">新增</button></div>
+
+            <div id="rsItemScope" style="display:none;">
+                <div style="color:#8a6d45;font-size:12px;margin:10px 0 6px;">目前選擇項目：<b id="rsCurItemLabel"></b></div>
+                <div class="pf-sec-title">功能（此項目底下）</div>
+                <div class="rs-list" id="rsFuncList" style="display:none;"></div>
+                <div class="pf-proc-box"><input type="text" id="rsFuncNew" placeholder="功能"><button type="button" class="pf-row-btn" onclick="rsAddFunc()">新增</button></div>
+            </div>
+
+            <div class="pf-sec-title" style="margin-top:10px;">潛在失效模式（<span id="rsFmScopeLabel">此製程通用</span>）<span style="font-weight:normal;font-size:11px;color:#8a6d45;margin-left:8px;">點一筆可再往下設定它的後果／分類／原因</span></div>
+            <div class="rs-list" id="rsFmList" style="display:none;"></div>
+            <div class="pf-proc-box"><input type="text" id="rsFmNew" placeholder="潛在失效模式"><button type="button" class="pf-row-btn" onclick="rsAddFm()">新增</button></div>
+
+            <!-- 2026-08-18 使用者要求：後果／分類／原因不再是獨立頁籤的平面文字對應，而是這條鑽取鏈
+                 的下一層，掛在上面選中的那一筆潛在失效模式底下（該筆沒設過才退回舊的全域文字對應） -->
+            <div id="rsFmScope" style="display:none;margin-top:8px;padding:8px 10px;background:#FFFBF3;border:1px dashed #E8D5B5;border-radius:4px;">
+                <div style="color:#8a6d45;font-size:12px;margin-bottom:6px;">目前選擇潛在失效模式：<b id="rsCurFmLabel"></b>
+                    <span style="margin-left:8px;">（以下三項只對這一筆生效；沒設定的話填表時會退回舊的「同名失效模式全站共用」清單）</span></div>
+                <div style="display:flex;gap:14px;">
+                    <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">失效模式潛在後果</b>
+                        <div class="rs-list" id="rsFmEffectList" style="max-height:150px;"></div>
+                        <div class="pf-proc-box"><input type="text" id="rsFmEffectNew" placeholder="新增後果"><button type="button" class="pf-row-btn" onclick="rsAddFmLink('failure_effect')">新增</button></div></div>
+                    <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">分類</b>
+                        <div class="rs-list" id="rsFmClassList" style="max-height:150px;"></div>
+                        <div class="pf-proc-box"><input type="text" id="rsFmClassNew" placeholder="新增分類"><button type="button" class="pf-row-btn" onclick="rsAddFmLink('classification')">新增</button></div>
+                        <div style="margin-top:4px;"><b style="font-size:11px;color:#8a6d45;">幾何公差／特殊項目</b><div class="pf-sym-row" id="rsGdtSymRow"></div></div></div>
+                    <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">失效潛在原因</b>
+                        <div class="rs-list" id="rsFmCauseList" style="max-height:150px;"></div>
+                        <div class="pf-proc-box"><input type="text" id="rsFmCauseNew" placeholder="新增原因"><button type="button" class="pf-row-btn" onclick="rsAddFmLink('failure_cause')">新增</button></div></div>
+                </div>
+            </div>
+
+            <div class="pf-sec-title" style="margin-top:10px;">要求（<span id="rsReqScopeLabel">此製程通用</span>）</div>
+            <!-- 料號只在「要求」這一層分岔（2026-08-18 使用者拍板：料號跟要求以外的都是通用）。
+                 選了料號＝在這條路徑上替該料號綁一組，之後新增的要求就是該料號專屬（可多筆）。 -->
+            <div style="background:#FFFBF3;border:1px dashed #E8D5B5;border-radius:4px;padding:8px 10px;margin-bottom:6px;">
+                <div style="font-size:13px;color:#5b3a1e;margin-bottom:4px;">要求要給哪個料號用
+                    <span style="font-weight:normal;font-size:12px;color:#8a6d45;margin-left:6px;">
+                    留空＝這一層的通用要求（所有料號共用）；輸入料號＝這個料號用到這組時要出現的要求清單。
+                    <b>製程／項目／功能這組本身仍是全公司共用</b>，不會變成此料號專屬；不同料號可以各自對同一組設定不同的要求。</span></div>
+                <div class="pf-proc-box">
+                    <input type="text" id="rsReqPartNo" placeholder="輸入部分料號搜尋（留空＝通用）" style="flex:1;">
+                    <button type="button" class="pf-row-btn" onclick="rsClearReqPart()">改回通用</button>
+                </div>
+                <div id="rsReqPartStatus" style="font-size:11px;margin-top:3px;"></div>
+                <div id="rsReqPartBindBox" style="display:none;margin-top:6px;padding-top:6px;border-top:1px dashed #EADFC8;">
+                    <div style="font-size:13px;color:#5b3a1e;margin-bottom:4px;">此料號已設定要求的組合（其他料號不受影響）
+                        <span class="pf-op" onclick="rsBindCurrentPath()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-plus"></i> 為此料號加入目前這組</span>
+                        <span class="pf-op" onclick="rsOpenBindCandidates()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-list"></i> 一次加入多組</span>
+                    </div>
+                    <div class="rs-list" id="rsBindList" style="max-height:150px;"></div>
+                    <div style="margin-top:6px;">
+                        <b style="font-size:12px;color:#5b3a1e;">圖面要求（此料號＋此製程，列印表頭的規格描述用）</b>
+                        <div class="rs-list" id="rsSpecList" style="max-height:120px;"></div>
+                        <div class="pf-proc-box"><input type="text" id="rsSpecNew" placeholder="新增圖面要求"><button type="button" class="pf-row-btn" onclick="rsAddSpec()">新增</button></div>
+                        <div><b style="font-size:11px;color:#8a6d45;">工程符號（點選插入目前游標位置）</b><div class="pf-sym-row" id="rsEngSymRow"></div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="rs-list" id="rsReqList"></div>
+            <div class="pf-proc-box"><input type="text" id="rsReqNew" placeholder="要求文字"><button type="button" class="pf-row-btn" onclick="rsAddReq()">新增</button></div>
+        </div>
+
+        </div><!-- /#rsDrillWrap -->
+        </div><!-- /.rt-detail-pane -->
+        </div><!-- /.rt-layout -->
+
+        <div class="pf-sec-title" style="margin-top:16px;">控制預防／控制偵測／建議措施／分類（全域通用，不分製程）</div>
+        <div style="display:flex;gap:16px;">
+            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">控制預防</b>
+                <div class="rs-list" id="rsPrevList"></div>
+                <div class="pf-proc-box"><input type="text" id="rsPrevNew" placeholder="新增控制預防"><button type="button" class="pf-row-btn" onclick="rsAddControl('prevention')">新增</button></div></div>
+            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">控制偵測</b>
+                <div class="rs-list" id="rsDetList"></div>
+                <div class="pf-proc-box"><input type="text" id="rsDetNew" placeholder="新增控制偵測"><button type="button" class="pf-row-btn" onclick="rsAddControl('detection')">新增</button></div></div>
+            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">建議措施（樣板句庫，卡片內可多選組成整段建議措施）</b>
+                <div class="rs-list" id="rsActionList"></div>
+                <div class="pf-proc-box"><input type="text" id="rsActionNew" placeholder="新增建議措施句子"><button type="button" class="pf-row-btn" onclick="rsAddControl('action')">新增</button></div></div>
+            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">分類（樣板，卡片內可多選）</b>
+                <div class="rs-list" id="rsClassTplList"></div>
+                <div class="pf-proc-box"><input type="text" id="rsClassTplNew" placeholder="新增分類樣板（如 關鍵、重要）"><button type="button" class="pf-row-btn" onclick="rsAddControl('classification')">新增</button></div></div>
+        </div>
+        </div>
+
+        <div class="pf-rt-pane" data-rstab="tpl">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">整組樣板：套用時一次把項目/功能/潛在失效模式/失效模式潛在後果/評級/控制/建議措施/評價欄位整批帶入分析表卡片。可直接在此新增/編輯/刪除，不必再靠xlsm匯入。</div>
+        <label style="font-size:13px;color:#5b3a1e;">選擇製程</label>
+        <select id="rsTplProcSel" style="width:260px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;" data-eg-filter="輸入製程代號或名稱篩選…"></select>
+        <button type="button" class="pf-row-btn" style="margin-left:8px;" onclick="rsOpenTplForm(0)"><i class="fa fa-plus"></i> 新增樣板</button>
+        <table class="pf-tpl-table" id="rsTplTable" style="margin-top:10px;">
+            <thead><tr><th>組名</th><th style="width:50px;">S</th><th style="width:50px;">O</th><th style="width:50px;">D</th><th style="width:60px;">RPN</th><th style="width:80px;">操作</th></tr></thead>
+            <tbody id="rsTplBody"></tbody>
+        </table>
+
+        <div id="rsTplForm" style="display:none;margin-top:14px;padding-top:10px;border-top:1px dashed #EADFC8;">
+            <input type="hidden" id="rsTplId" value="0">
+            <div class="pf-card-grid">
+                <div><label>項目</label><input type="text" id="rsTplItemName"></div>
+                <div><label>功能</label><input type="text" id="rsTplFunctionDesc"></div>
+                <div><label>潛在失效模式</label><input type="text" id="rsTplFailureMode"></div>
+                <div><label>失效模式潛在後果</label><input type="text" id="rsTplFailureEffect"></div>
+                <div><label>嚴重度 S</label><input type="number" min="1" max="10" id="rsTplSeverity"></div>
+                <div><label>失效潛在原因</label><input type="text" id="rsTplFailureCause"></div>
+                <div><label>發生率 O</label><input type="number" min="1" max="10" id="rsTplOccurrence"></div>
+                <div><label>控制預防</label><input type="text" id="rsTplPrevention"></div>
+                <div><label>控制偵測</label><input type="text" id="rsTplDetectionCtrl"></div>
+                <div><label>偵測度 D</label><input type="number" min="1" max="10" id="rsTplDetection"></div>
+                <div><label>建議措施</label><input type="text" id="rsTplRecAction"></div>
+                <div><label>評價S</label><input type="number" min="1" max="10" id="rsTplNewSeverity"></div>
+                <div><label>評價O</label><input type="number" min="1" max="10" id="rsTplNewOccurrence"></div>
+                <div><label>評價D</label><input type="number" min="1" max="10" id="rsTplNewDetection"></div>
+            </div>
+            <div style="margin-top:8px;">
+                <button type="button" class="pf-row-btn" onclick="rsSaveTpl()">儲存樣板</button>
+                <button type="button" class="pf-row-btn" onclick="$('#rsTplForm').hide();">取消</button>
+            </div>
+        </div>
+        </div>
+
+        <div class="pf-rt-pane" data-rstab="reqlist">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">所有已設定的「要求」資料總覽（含製作表單.xlsm匯入的舊資料），不分製程/功能層級一次列出，方便快速檢視／重新綁定料號／刪除，不必逐一點進每個製程才看得到。</div>
+        <div class="pf-proc-box">
+            <input type="text" id="rsReqListFilter" placeholder="搜尋製程／要求文字／料號…">
+            <select id="rsReqListBoundFilter" style="flex:0 0 160px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
+                <option value="">全部</option>
+                <option value="bound">已綁定料號</option>
+                <option value="unbound">純文字未綁定</option>
+            </select>
+        </div>
+        <div style="font-size:11px;color:#8a6d45;margin:4px 0;" id="rsReqListSummary"></div>
+        <div style="max-height:340px;overflow-y:auto;">
+            <table class="pf-tpl-table" id="rsReqListTable">
+                <thead><tr><th>範圍</th><th>要求文字</th><th>料號狀態</th><th style="width:90px;">操作</th></tr></thead>
+                <tbody id="rsReqListBody"></tbody>
+            </table>
+        </div>
+        <div id="rsReqRebindBar" style="display:none;margin-top:8px;padding:8px;background:#FFF7E8;border:1px dashed #F0A24B;border-radius:4px;">
+            正在重新綁定：<b id="rsReqRebindLabel"></b>
+            <input type="text" id="rsReqRebindPart" placeholder="輸入部分料號搜尋" style="width:220px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
+            <button type="button" class="pf-row-btn" onclick="rsConfirmRebind()">確認綁定</button>
+            <button type="button" class="pf-row-btn" onclick="$('#rsReqRebindBar').hide()">取消</button>
+        </div>
+        <div id="rsReqEditBar" style="display:none;margin-top:8px;padding:8px;background:#FFF7E8;border:1px dashed #F0A24B;border-radius:4px;">
+            正在編輯要求文字：
+            <input type="text" id="rsReqEditText" style="width:360px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
+            <button type="button" class="pf-row-btn" onclick="rsConfirmEditReqText()">儲存</button>
+            <button type="button" class="pf-row-btn" onclick="$('#rsReqEditBar').hide()">取消</button>
+        </div>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeRefSettings()">回分析表清單</button></div>
+</div></div>
 <?php endif; ?>
     </div>
 </div>
@@ -551,203 +763,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
 </div></div>
 
 <!-- 參考資料設定（2026-08-14使用者要求：找不到能個別設定各欄下拉選單/階層的地方）僅管理員 -->
-<div class="pf-mask" id="refSettingsMask"><div class="pf-modal xwide">
-    <div class="m-head"><span>參考資料設定（僅管理員）</span><span class="m-close" onclick="closeRefSettings()">✕ 回清單</span></div>
-    <div class="m-body">
-        <div class="pf-rt-tabs">
-            <div class="pf-rt-tab" data-rstab="proc" onclick="switchRsTab('proc')">階層對應（一條龍）</div>
-            <div class="pf-rt-tab" data-rstab="tpl" onclick="switchRsTab('tpl')">整組樣板</div>
-            <div class="pf-rt-tab" data-rstab="reqlist" onclick="switchRsTab('reqlist')">要求總覽</div>
-        </div>
 
-        <div class="pf-rt-pane" data-rstab="proc">
-        <div class="pf-sec-title">製程開放使用設定
-            <span class="pf-op" onclick="rsSyncProcesses()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:10px;"><i class="fa fa-refresh"></i> 從全站製程主檔同步</span>
-            <span class="pf-op" onclick="rsEnableConfigured()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:10px;"><i class="fa fa-check-square-o"></i> 一鍵開放已設定製程</span>
-        </div>
-        <div style="font-size:12px;color:#8a6d45;margin-bottom:4px;">勾選大項分類＝該分類底下製程全選/取消全選；仍可個別勾選調整。只有勾選開放的製程會出現在分析表的製程代號下拉。</div>
-        <div id="rsProcessEnableList" style="max-height:220px;overflow-y:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px 8px;margin-bottom:10px;"></div>
-
-        <!-- 左樹右設定（2026-08-18 使用者拍板）：左邊一棵可展開的樹一眼看完整體結構，點哪一節
-             右邊就顯示那一節能設定的東西。右側沿用既有的 rs* 區塊，只是改由樹來導覽。 -->
-        <div class="pf-sec-title">製程與階層設定</div>
-        <div class="rt-layout">
-        <div class="rt-tree-pane">
-            <div class="rt-tree-tools">
-                <input type="text" id="rtSearch" placeholder="搜尋製程／項目／功能／失效模式…">
-                <button type="button" class="pf-row-btn" onclick="rtExpandAll(1)" title="全部展開"><i class="fa fa-plus-square-o"></i></button>
-                <button type="button" class="pf-row-btn" onclick="rtExpandAll(0)" title="全部收合"><i class="fa fa-minus-square-o"></i></button>
-            </div>
-            <label class="rt-onlyset"><input type="checkbox" id="rtOnlyConfigured" checked> 只顯示已設定過內容的製程（取消勾選看全部）</label>
-            <div class="rt-tree" id="rtTree">載入中…</div>
-            <div class="rt-add">
-                <input type="text" id="rsProcCodeNew" placeholder="製程代號" style="flex:0 0 90px;">
-                <input type="text" id="rsProcNameNew" placeholder="製程名稱">
-                <button type="button" class="pf-row-btn" onclick="rsAddProcess()">新增製程</button>
-            </div>
-        </div>
-        <div class="rt-detail-pane">
-        <div id="rtNothing" class="rt-empty">← 請從左邊的樹選一個節點<br>
-            <span>選<b>製程</b>可設定它底下的項目；選<b>項目</b>可設定功能；選<b>功能</b>可設定潛在失效模式與要求；選<b>失效模式</b>可設定它的後果／分類／原因</span></div>
-        <div id="rsDrillWrap" style="display:none;">
-        <div class="rt-crumb" id="rtCrumb"></div>
-
-        <div id="rsProcessScope" style="display:none;">
-            <div style="color:#8a6d45;font-size:12px;margin:10px 0 6px;padding-top:10px;border-top:1px dashed #EADFC8;">目前選擇製程：<b id="rsCurProcessLabel"></b></div>
-            <div class="pf-sec-title">項目（此製程底下）</div>
-            <div class="rs-list" id="rsItemList" style="display:none;"></div>
-            <div class="pf-proc-box"><input type="text" id="rsItemNew" placeholder="項目名稱"><button type="button" class="pf-row-btn" onclick="rsAddItem()">新增</button></div>
-
-            <div id="rsItemScope" style="display:none;">
-                <div style="color:#8a6d45;font-size:12px;margin:10px 0 6px;">目前選擇項目：<b id="rsCurItemLabel"></b></div>
-                <div class="pf-sec-title">功能（此項目底下）</div>
-                <div class="rs-list" id="rsFuncList" style="display:none;"></div>
-                <div class="pf-proc-box"><input type="text" id="rsFuncNew" placeholder="功能"><button type="button" class="pf-row-btn" onclick="rsAddFunc()">新增</button></div>
-            </div>
-
-            <div class="pf-sec-title" style="margin-top:10px;">潛在失效模式（<span id="rsFmScopeLabel">此製程通用</span>）<span style="font-weight:normal;font-size:11px;color:#8a6d45;margin-left:8px;">點一筆可再往下設定它的後果／分類／原因</span></div>
-            <div class="rs-list" id="rsFmList" style="display:none;"></div>
-            <div class="pf-proc-box"><input type="text" id="rsFmNew" placeholder="潛在失效模式"><button type="button" class="pf-row-btn" onclick="rsAddFm()">新增</button></div>
-
-            <!-- 2026-08-18 使用者要求：後果／分類／原因不再是獨立頁籤的平面文字對應，而是這條鑽取鏈
-                 的下一層，掛在上面選中的那一筆潛在失效模式底下（該筆沒設過才退回舊的全域文字對應） -->
-            <div id="rsFmScope" style="display:none;margin-top:8px;padding:8px 10px;background:#FFFBF3;border:1px dashed #E8D5B5;border-radius:4px;">
-                <div style="color:#8a6d45;font-size:12px;margin-bottom:6px;">目前選擇潛在失效模式：<b id="rsCurFmLabel"></b>
-                    <span style="margin-left:8px;">（以下三項只對這一筆生效；沒設定的話填表時會退回舊的「同名失效模式全站共用」清單）</span></div>
-                <div style="display:flex;gap:14px;">
-                    <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">失效模式潛在後果</b>
-                        <div class="rs-list" id="rsFmEffectList" style="max-height:150px;"></div>
-                        <div class="pf-proc-box"><input type="text" id="rsFmEffectNew" placeholder="新增後果"><button type="button" class="pf-row-btn" onclick="rsAddFmLink('failure_effect')">新增</button></div></div>
-                    <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">分類</b>
-                        <div class="rs-list" id="rsFmClassList" style="max-height:150px;"></div>
-                        <div class="pf-proc-box"><input type="text" id="rsFmClassNew" placeholder="新增分類"><button type="button" class="pf-row-btn" onclick="rsAddFmLink('classification')">新增</button></div>
-                        <div style="margin-top:4px;"><b style="font-size:11px;color:#8a6d45;">幾何公差／特殊項目</b><div class="pf-sym-row" id="rsGdtSymRow"></div></div></div>
-                    <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">失效潛在原因</b>
-                        <div class="rs-list" id="rsFmCauseList" style="max-height:150px;"></div>
-                        <div class="pf-proc-box"><input type="text" id="rsFmCauseNew" placeholder="新增原因"><button type="button" class="pf-row-btn" onclick="rsAddFmLink('failure_cause')">新增</button></div></div>
-                </div>
-            </div>
-
-            <div class="pf-sec-title" style="margin-top:10px;">要求（<span id="rsReqScopeLabel">此製程通用</span>）</div>
-            <!-- 料號只在「要求」這一層分岔（2026-08-18 使用者拍板：料號跟要求以外的都是通用）。
-                 選了料號＝在這條路徑上替該料號綁一組，之後新增的要求就是該料號專屬（可多筆）。 -->
-            <div style="background:#FFFBF3;border:1px dashed #E8D5B5;border-radius:4px;padding:8px 10px;margin-bottom:6px;">
-                <div style="font-size:13px;color:#5b3a1e;margin-bottom:4px;">要求要給哪個料號用
-                    <span style="font-weight:normal;font-size:12px;color:#8a6d45;margin-left:6px;">
-                    留空＝這一層的通用要求（所有料號共用）；輸入料號＝這個料號用到這組時要出現的要求清單。
-                    <b>製程／項目／功能這組本身仍是全公司共用</b>，不會變成此料號專屬；不同料號可以各自對同一組設定不同的要求。</span></div>
-                <div class="pf-proc-box">
-                    <input type="text" id="rsReqPartNo" placeholder="輸入部分料號搜尋（留空＝通用）" style="flex:1;">
-                    <button type="button" class="pf-row-btn" onclick="rsClearReqPart()">改回通用</button>
-                </div>
-                <div id="rsReqPartStatus" style="font-size:11px;margin-top:3px;"></div>
-                <div id="rsReqPartBindBox" style="display:none;margin-top:6px;padding-top:6px;border-top:1px dashed #EADFC8;">
-                    <div style="font-size:13px;color:#5b3a1e;margin-bottom:4px;">此料號已設定要求的組合（其他料號不受影響）
-                        <span class="pf-op" onclick="rsBindCurrentPath()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-plus"></i> 為此料號加入目前這組</span>
-                        <span class="pf-op" onclick="rsOpenBindCandidates()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-list"></i> 一次加入多組</span>
-                    </div>
-                    <div class="rs-list" id="rsBindList" style="max-height:150px;"></div>
-                    <div style="margin-top:6px;">
-                        <b style="font-size:12px;color:#5b3a1e;">圖面要求（此料號＋此製程，列印表頭的規格描述用）</b>
-                        <div class="rs-list" id="rsSpecList" style="max-height:120px;"></div>
-                        <div class="pf-proc-box"><input type="text" id="rsSpecNew" placeholder="新增圖面要求"><button type="button" class="pf-row-btn" onclick="rsAddSpec()">新增</button></div>
-                        <div><b style="font-size:11px;color:#8a6d45;">工程符號（點選插入目前游標位置）</b><div class="pf-sym-row" id="rsEngSymRow"></div></div>
-                    </div>
-                </div>
-            </div>
-            <div class="rs-list" id="rsReqList"></div>
-            <div class="pf-proc-box"><input type="text" id="rsReqNew" placeholder="要求文字"><button type="button" class="pf-row-btn" onclick="rsAddReq()">新增</button></div>
-        </div>
-
-        </div><!-- /#rsDrillWrap -->
-        </div><!-- /.rt-detail-pane -->
-        </div><!-- /.rt-layout -->
-
-        <div class="pf-sec-title" style="margin-top:16px;">控制預防／控制偵測／建議措施／分類（全域通用，不分製程）</div>
-        <div style="display:flex;gap:16px;">
-            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">控制預防</b>
-                <div class="rs-list" id="rsPrevList"></div>
-                <div class="pf-proc-box"><input type="text" id="rsPrevNew" placeholder="新增控制預防"><button type="button" class="pf-row-btn" onclick="rsAddControl('prevention')">新增</button></div></div>
-            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">控制偵測</b>
-                <div class="rs-list" id="rsDetList"></div>
-                <div class="pf-proc-box"><input type="text" id="rsDetNew" placeholder="新增控制偵測"><button type="button" class="pf-row-btn" onclick="rsAddControl('detection')">新增</button></div></div>
-            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">建議措施（樣板句庫，卡片內可多選組成整段建議措施）</b>
-                <div class="rs-list" id="rsActionList"></div>
-                <div class="pf-proc-box"><input type="text" id="rsActionNew" placeholder="新增建議措施句子"><button type="button" class="pf-row-btn" onclick="rsAddControl('action')">新增</button></div></div>
-            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">分類（樣板，卡片內可多選）</b>
-                <div class="rs-list" id="rsClassTplList"></div>
-                <div class="pf-proc-box"><input type="text" id="rsClassTplNew" placeholder="新增分類樣板（如 關鍵、重要）"><button type="button" class="pf-row-btn" onclick="rsAddControl('classification')">新增</button></div></div>
-        </div>
-        </div>
-
-        <div class="pf-rt-pane" data-rstab="tpl">
-        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">整組樣板：套用時一次把項目/功能/潛在失效模式/失效模式潛在後果/評級/控制/建議措施/評價欄位整批帶入分析表卡片。可直接在此新增/編輯/刪除，不必再靠xlsm匯入。</div>
-        <label style="font-size:13px;color:#5b3a1e;">選擇製程</label>
-        <select id="rsTplProcSel" style="width:260px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;" data-eg-filter="輸入製程代號或名稱篩選…"></select>
-        <button type="button" class="pf-row-btn" style="margin-left:8px;" onclick="rsOpenTplForm(0)"><i class="fa fa-plus"></i> 新增樣板</button>
-        <table class="pf-tpl-table" id="rsTplTable" style="margin-top:10px;">
-            <thead><tr><th>組名</th><th style="width:50px;">S</th><th style="width:50px;">O</th><th style="width:50px;">D</th><th style="width:60px;">RPN</th><th style="width:80px;">操作</th></tr></thead>
-            <tbody id="rsTplBody"></tbody>
-        </table>
-
-        <div id="rsTplForm" style="display:none;margin-top:14px;padding-top:10px;border-top:1px dashed #EADFC8;">
-            <input type="hidden" id="rsTplId" value="0">
-            <div class="pf-card-grid">
-                <div><label>項目</label><input type="text" id="rsTplItemName"></div>
-                <div><label>功能</label><input type="text" id="rsTplFunctionDesc"></div>
-                <div><label>潛在失效模式</label><input type="text" id="rsTplFailureMode"></div>
-                <div><label>失效模式潛在後果</label><input type="text" id="rsTplFailureEffect"></div>
-                <div><label>嚴重度 S</label><input type="number" min="1" max="10" id="rsTplSeverity"></div>
-                <div><label>失效潛在原因</label><input type="text" id="rsTplFailureCause"></div>
-                <div><label>發生率 O</label><input type="number" min="1" max="10" id="rsTplOccurrence"></div>
-                <div><label>控制預防</label><input type="text" id="rsTplPrevention"></div>
-                <div><label>控制偵測</label><input type="text" id="rsTplDetectionCtrl"></div>
-                <div><label>偵測度 D</label><input type="number" min="1" max="10" id="rsTplDetection"></div>
-                <div><label>建議措施</label><input type="text" id="rsTplRecAction"></div>
-                <div><label>評價S</label><input type="number" min="1" max="10" id="rsTplNewSeverity"></div>
-                <div><label>評價O</label><input type="number" min="1" max="10" id="rsTplNewOccurrence"></div>
-                <div><label>評價D</label><input type="number" min="1" max="10" id="rsTplNewDetection"></div>
-            </div>
-            <div style="margin-top:8px;">
-                <button type="button" class="pf-row-btn" onclick="rsSaveTpl()">儲存樣板</button>
-                <button type="button" class="pf-row-btn" onclick="$('#rsTplForm').hide();">取消</button>
-            </div>
-        </div>
-        </div>
-
-        <div class="pf-rt-pane" data-rstab="reqlist">
-        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">所有已設定的「要求」資料總覽（含製作表單.xlsm匯入的舊資料），不分製程/功能層級一次列出，方便快速檢視／重新綁定料號／刪除，不必逐一點進每個製程才看得到。</div>
-        <div class="pf-proc-box">
-            <input type="text" id="rsReqListFilter" placeholder="搜尋製程／要求文字／料號…">
-            <select id="rsReqListBoundFilter" style="flex:0 0 160px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
-                <option value="">全部</option>
-                <option value="bound">已綁定料號</option>
-                <option value="unbound">純文字未綁定</option>
-            </select>
-        </div>
-        <div style="font-size:11px;color:#8a6d45;margin:4px 0;" id="rsReqListSummary"></div>
-        <div style="max-height:340px;overflow-y:auto;">
-            <table class="pf-tpl-table" id="rsReqListTable">
-                <thead><tr><th>範圍</th><th>要求文字</th><th>料號狀態</th><th style="width:90px;">操作</th></tr></thead>
-                <tbody id="rsReqListBody"></tbody>
-            </table>
-        </div>
-        <div id="rsReqRebindBar" style="display:none;margin-top:8px;padding:8px;background:#FFF7E8;border:1px dashed #F0A24B;border-radius:4px;">
-            正在重新綁定：<b id="rsReqRebindLabel"></b>
-            <input type="text" id="rsReqRebindPart" placeholder="輸入部分料號搜尋" style="width:220px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
-            <button type="button" class="pf-row-btn" onclick="rsConfirmRebind()">確認綁定</button>
-            <button type="button" class="pf-row-btn" onclick="$('#rsReqRebindBar').hide()">取消</button>
-        </div>
-        <div id="rsReqEditBar" style="display:none;margin-top:8px;padding:8px;background:#FFF7E8;border:1px dashed #F0A24B;border-radius:4px;">
-            正在編輯要求文字：
-            <input type="text" id="rsReqEditText" style="width:360px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
-            <button type="button" class="pf-row-btn" onclick="rsConfirmEditReqText()">儲存</button>
-            <button type="button" class="pf-row-btn" onclick="$('#rsReqEditBar').hide()">取消</button>
-        </div>
-        </div>
-    </div>
-    <div class="m-foot"><button class="b-cancel" onclick="closeRefSettings()">回分析表清單</button></div>
-</div></div>
 
 <!-- 角色權限說明 -->
 <!-- 列印前完整性檢查結果（2026-08-18 使用者要求） -->
@@ -802,7 +818,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>項目→功能→要求／潛在失效模式 階層式連動</b>：填完「項目」離開該欄位，會自動帶出這個項目底下的「功能」下拉選項；填完「功能」離開該欄位，會自動帶出這個功能底下的「要求」下拉（優先顯示綁定的料號專屬要求，沒有才顯示該功能通用要求）與更精確的「潛在失效模式」下拉（優先套用這個功能專屬的清單，還沒累積過資料才逐層退回項目層級、製程層級的通用清單）。四層清單都可以直接手動輸入新值，離開欄位或存檔時會自動加進清單供下次選用，僅管理員能刪除。填完「潛在失效模式」離開欄位，還會再帶出這一筆失效模式專屬的「失效模式潛在後果／分類／失效潛在原因」建議清單。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期／相關部門預設值自動帶入；來源只有純文字料號時會自動回查主檔綁定成正式料號，綁定後才開得了圖、客戶名稱才帶得出來），分析項目仍需逐份手動填寫。</li>
             <li><b>製程代號</b>：改可從全站製程主檔同步帶入（含大項分類），輸入時同時模糊搜尋代號/名稱/大項分類（多關鍵字皆需命中），顯示清單供點選。</li>
-            <li><b>參考資料設定</b>：工具列同名按鈕（僅管理員可見），分三個頁籤：①<b>階層對應</b>——最上面是<b>階層對應總表</b>，一列＝一條完整路徑（製程／項目／功能／潛在失效模式／後果／分類／原因），像 Excel 一樣直接在格子裡改：每一格都可打字也可下拉選，候選值會依左邊欄位過濾（選了製程，項目欄就只出現該製程底下的）；在最後一列按 <b>↓</b> 會自動新增一列並帶入上一列的製程／項目／功能，只要改不同的地方；「從 Excel 貼上」可把 Excel 複製的整塊資料直接帶進來；「整欄填滿」把游標所在格的值套用到下面所有列；後果／分類／原因一格可填多個，用「、」隔開；<b>灰色斜體</b>代表該格目前沿用全站共用清單（同名失效模式共通），編輯後就轉成這一列專屬。改過的列會標成米黃色，按「儲存變更」才寫入。往下還有<b>逐層鑽取（進階）</b>可收合區塊，處理料號綁定與要求設定（要求是掛在「路徑」上而非掛在失效模式上，同一路徑的多筆失效模式共用同一批要求，故不併入總表以免改一列卻動到別列）。此外——所有下拉選項的來源，由粗到細串成一條鑽取鏈：<b>製程 → 項目 → 功能 → 潛在失效模式 → 後果／分類／原因</b>，每一層點下去就往下鑽一層，該層清單可直接新增／刪除。頂端另有「從全站製程主檔同步」拉入公司所有製程（含大項分類，可整個大項一鍵批次開放），只有開放的製程會出現在分析表下拉。<b>「要求」這一層可以指定料號</b>：料號欄留空＝這一層的通用要求（所有料號共用），輸入料號＝只給該料號用的專屬要求（會蓋過通用值），且同一個組合底下<b>可以輸入多筆要求</b>，填表時下拉會全部列出讓您挑本次要用的。指定料號後還可以「把目前鑽到的這條路徑綁給此料號」或「一次綁多組」（選了製程就自動帶出該製程底下整套項目／功能供勾選，已綁過的會標示鎖住），以及設定該料號＋製程的<b>圖面要求</b>（列印表頭的規格描述）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>要求總覽</b>——不分製程/項目/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、直接編輯文字內容、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
+            <li><b>參考資料設定</b>：頁面上方的<b>「參考資料設定」大分頁</b>（僅管理員可見，與「分析表清單」並列；工具列同名按鈕也會切到這裡）。裡面再分三個子頁籤：①<b>階層對應</b>——最上面是<b>階層對應總表</b>，一列＝一條完整路徑（製程／項目／功能／潛在失效模式／後果／分類／原因），像 Excel 一樣直接在格子裡改：每一格都可打字也可下拉選，候選值會依左邊欄位過濾（選了製程，項目欄就只出現該製程底下的）；在最後一列按 <b>↓</b> 會自動新增一列並帶入上一列的製程／項目／功能，只要改不同的地方；「從 Excel 貼上」可把 Excel 複製的整塊資料直接帶進來；「整欄填滿」把游標所在格的值套用到下面所有列；後果／分類／原因一格可填多個，用「、」隔開；<b>灰色斜體</b>代表該格目前沿用全站共用清單（同名失效模式共通），編輯後就轉成這一列專屬。改過的列會標成米黃色，按「儲存變更」才寫入。往下還有<b>逐層鑽取（進階）</b>可收合區塊，處理料號綁定與要求設定（要求是掛在「路徑」上而非掛在失效模式上，同一路徑的多筆失效模式共用同一批要求，故不併入總表以免改一列卻動到別列）。此外——所有下拉選項的來源，由粗到細串成一條鑽取鏈：<b>製程 → 項目 → 功能 → 潛在失效模式 → 後果／分類／原因</b>，每一層點下去就往下鑽一層，該層清單可直接新增／刪除。頂端另有「從全站製程主檔同步」拉入公司所有製程（含大項分類，可整個大項一鍵批次開放），只有開放的製程會出現在分析表下拉。<b>「要求」這一層可以指定料號</b>：料號欄留空＝這一層的通用要求（所有料號共用），輸入料號＝只給該料號用的專屬要求（會蓋過通用值），且同一個組合底下<b>可以輸入多筆要求</b>，填表時下拉會全部列出讓您挑本次要用的。指定料號後還可以「把目前鑽到的這條路徑綁給此料號」或「一次綁多組」（選了製程就自動帶出該製程底下整套項目／功能供勾選，已綁過的會標示鎖住），以及設定該料號＋製程的<b>圖面要求</b>（列印表頭的規格描述）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>要求總覽</b>——不分製程/項目/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、直接編輯文字內容、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
             <li><b>分類自動判定</b>：填寫「嚴重度S」或「發生率O」時，系統會依門檻自動帶入分類——預設 <b>S 介於 5~8</b> <b>或</b> <b>O 介於 4~10</b> 就帶「重要特性」，都不符合帶「一般特性」（兩條件是「或」，其中一個成立即可）。只會寫進<b>還空白、或上次就是系統自動帶的</b>格子，您手動打過的分類不會被蓋掉。門檻與文字可由管理員在分類欄位右側「判定規則」按鈕修改（可整個停用）。</li>
             <li><b>分類樣板</b>：「分類」欄位標題旁「選樣板（可複選）」可開跳窗勾選預先建立好的常用分類（如關鍵／重要），勾選後以「、」串接填入，已有的值不重複加。樣板在「參考資料設定」維護。<b>樣板與綁定並存</b>：樣板是全站共用的常用值（從跳窗挑），綁定是「這一筆潛在失效模式慣用哪幾個分類」（出現在欄位下拉），兩邊都能用。</li>
             <li><b>建議措施的列印換行</b>：列印時「建議措施」會依編號一項一行（1. 2. 3. 各自獨立一行）；不論您是用 Enter 換行輸入，或是編號連著寫成一整段，列印都會自動斷行。公差小數（如 0.02、Ra1.6）不會被誤判成編號。</li>
@@ -2866,11 +2882,21 @@ window.rsConfirmEditReqText = function(){
     }, 'json');
 };
 
-$('#btnRefSettings').on('click', function(){
+/* 參考資料設定改由頁面層級分頁切換（2026-08-18）。先前仍呼叫 openMask()，而本頁又把
+   #refSettingsMask 覆寫成 position:static，結果整塊被畫在頁面最下方——正是使用者說的「擠在底下」。 */
+$(document).on('click', '.pf-tab', function(){
+    var t = $(this).attr('data-pftab');
+    $('.pf-tab').removeClass('active'); $(this).addClass('active');
+    if (t === 'ref') openRefSettings(); else closeRefSettings();
+});
+$(document).on('click', '#btnRefSettings', function(){ $('.pf-tab[data-pftab="ref"]').click(); });
+function openRefSettings(){
     RS_PROC_ID = 0; RS_ITEM_OPT_ID = 0; RS_FUNC_OPT_ID = 0;
     $('#rsProcessScope, #rsItemScope').hide();
     rsResetFmScope(); rsClearReqPart();
-    openMask('refSettingsMask');
+    $('body').addClass('rs-mode');
+    $('#refSettingsMask').show();
+    $('html,body').scrollTop(0);
     switchRsTab('proc');
     rsRenderProcessEnableList(); rsLoadProcessList(); rsLoadControlLists();
     RT_SEL = {type:'', id:0}; $('#rsDrillWrap').hide(); $('#rtNothing').show();
@@ -2878,7 +2904,7 @@ $('#btnRefSettings').on('click', function(){
     rsLoadTplProcSel();
     rsRenderEngSymbols(); rsRenderGdtSymbols();
     rsLoadReqListAll();
-});
+}
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('#btnRoleHelp').on('click', function(){ openMask('roleHelpMask'); });
