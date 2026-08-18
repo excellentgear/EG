@@ -743,6 +743,40 @@ function hrf_machine_asset_info(PDO $db, ?string $machineModel): array {
     return ['name' => $name, 'asset_nos' => array_values(array_unique($assetNos))];
 }
 
+/**
+ * 量具(qc_tool)來源的09表單顯示欄位：機型＝qc_tool.machine_model、名稱＝qc_tool.machine、
+ * **量具編號(Tool_No)視同機台編號（公司財產編號）**，所以顯示格式與機台來源完全一致
+ * （「機型 名稱」＋編號標籤）。白名單舊列的 machine_model/asset_no 是 qc_tool 加欄位之前存的
+ * NULL 快照，一律現查 qc_tool 覆蓋，不採信快照（比照本檔其他「名稱一律現查來源主檔」的作法）。
+ */
+function hrf_apply_tool_display(array &$r, array $t): void {
+    $model = trim((string)($t['machine_model'] ?? ''));
+    $name  = trim((string)($t['machine'] ?? ''));
+    $no    = trim((string)($t['Tool_No'] ?? ''));
+    if ($model !== '') {
+        $r['machine_model'] = $model;
+    } elseif ($name !== '') {
+        // 還沒填機型：機型欄留空、改用名稱當顯示主體，避免印出「QC-002 齒輪檢測機 (QC-002)」重複編號
+        $r['machine_model'] = null;
+        $r['machine_display_name'] = $name;
+    }
+    $r['machine_real_name'] = $name;
+    $r['machine_asset_nos'] = $no !== '' ? [$no] : [];
+}
+/** 取回這批 Tool_id 的量具資料（Tool_id => row），供列表批次套用顯示欄位。 */
+function hrf_tool_info_map(PDO $db, array $toolIds): array {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $toolIds))));
+    if (!$ids) return [];
+    $map = [];
+    try {
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $st = $db->prepare("SELECT Tool_id, Tool_No, machine, machine_model FROM qc_tool WHERE Tool_id IN ($in)");
+        $st->execute($ids);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $t) $map[(int)$t['Tool_id']] = $t;
+    } catch (Throwable $e) {}
+    return $map;
+}
+
 function hrf_instance_get(PDO $db, int $id): ?array {
     hrf_ensure_schema($db);
     $st = $db->prepare("SELECT * FROM hr_form_instance WHERE id=?");
@@ -752,9 +786,20 @@ function hrf_instance_get(PDO $db, int $id): ?array {
     if (in_array($r['form_type'], ['job_desc','competency'], true)) $r['items'] = hrf_instance_items_get($db, $id);
     if ($r['form_type'] === 'skill_assess') {
         $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id']);
-        $info = hrf_machine_asset_info($db, $r['machine_model'] ?? null);
-        $r['machine_real_name'] = $info['name'];
-        $r['machine_asset_nos'] = $info['asset_nos'];
+        $wl = null;
+        if (!empty($r['whitelist_id'])) {
+            $stw = $db->prepare("SELECT source_type, source_id FROM hr_equipment_whitelist WHERE id=?");
+            $stw->execute([(int)$r['whitelist_id']]);
+            $wl = $stw->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+        $tool = ($wl && $wl['source_type'] === 'tool') ? (hrf_tool_info_map($db, [(int)$wl['source_id']])[(int)$wl['source_id']] ?? null) : null;
+        if ($tool) {
+            hrf_apply_tool_display($r, $tool);
+        } else {
+            $info = hrf_machine_asset_info($db, $r['machine_model'] ?? null);
+            $r['machine_real_name'] = $info['name'];
+            $r['machine_asset_nos'] = $info['asset_nos'];
+        }
     }
     return $r;
 }
@@ -772,15 +817,22 @@ function hrf_instance_list(PDO $db, array $opt = []): array {
         $where[] = '(i.user_cname LIKE ? OR i.user_no LIKE ? OR i.dept_name LIKE ? OR i.position_name LIKE ?)';
         $kw = '%' . $opt['keyword'] . '%'; array_push($params, $kw, $kw, $kw, $kw);
     }
-    $sql = "SELECT i.*, pl.level AS target_level FROM hr_form_instance i
+    $sql = "SELECT i.*, pl.level AS target_level, w.source_type AS wl_source_type, w.source_id AS wl_source_id
+            FROM hr_form_instance i
             LEFT JOIN position_level pl ON pl.position_id = i.position_id
+            LEFT JOIN hr_equipment_whitelist w ON w.id = i.whitelist_id
             WHERE " . implode(' AND ', $where) . " ORDER BY i.user_cname, i.whitelist_id, i.id DESC";
     $st = $db->prepare($sql);
     $st->execute($params);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-    // 列表用「機型 機台名稱＋機台編號」批次查一次 machine_list，避免逐列各查一次
-    $models = [];
-    foreach ($rows as $r) { if ($r['form_type'] === 'skill_assess' && !empty($r['machine_model'])) $models[$r['machine_model']] = true; }
+    // 列表用「機型 機台名稱＋機台編號」批次查一次 machine_list / qc_tool，避免逐列各查一次
+    $models = []; $toolIds = [];
+    foreach ($rows as $r) {
+        if ($r['form_type'] !== 'skill_assess') continue;
+        if (($r['wl_source_type'] ?? '') === 'tool') { $toolIds[] = (int)$r['wl_source_id']; continue; }
+        if (!empty($r['machine_model'])) $models[$r['machine_model']] = true;
+    }
+    $toolMap = hrf_tool_info_map($db, $toolIds);
     $assetMap = [];
     if ($models) {
         $in = implode(',', array_fill(0, count($models), '?'));
@@ -798,9 +850,14 @@ function hrf_instance_list(PDO $db, array $opt = []): array {
         $r['target_level'] = $r['target_level'] === null ? null : (int)$r['target_level'];
         if ($r['form_type'] === 'skill_assess') {
             $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id']);
-            $info = $assetMap[$r['machine_model']] ?? ['name' => '', 'asset_nos' => []];
-            $r['machine_real_name'] = $info['name'];
-            $r['machine_asset_nos'] = array_values(array_unique($info['asset_nos']));
+            $tool = (($r['wl_source_type'] ?? '') === 'tool') ? ($toolMap[(int)$r['wl_source_id']] ?? null) : null;
+            if ($tool) {
+                hrf_apply_tool_display($r, $tool);
+            } else {
+                $info = $assetMap[$r['machine_model']] ?? ['name' => '', 'asset_nos' => []];
+                $r['machine_real_name'] = $info['name'];
+                $r['machine_asset_nos'] = array_values(array_unique($info['asset_nos']));
+            }
         }
     }
     return $rows;
@@ -882,7 +939,13 @@ function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int
         $dup = $db->prepare("SELECT id FROM hr_form_instance WHERE form_type='skill_assess' AND user_id=? AND whitelist_id=? LIMIT 1");
         $dup->execute([$targetUid, $whitelistId]);
         if ($existingId = $dup->fetchColumn()) {
-            return ['ok'=>false, 'duplicate'=>true, 'existing_id'=>(int)$existingId, 'msg'=>$snap['user_cname'].'（'.$whitelist['display_name'].'）已建立過，不重複建立'];
+            // 量具來源的 display_name 是量具編號(QC-002)，訊息改顯示「機型 名稱」與畫面一致
+            $wlLabel = (string)$whitelist['display_name'];
+            if ($whitelist['source_type'] === 'tool') {
+                $t = hrf_tool_info_map($db, [(int)$whitelist['source_id']])[(int)$whitelist['source_id']] ?? null;
+                if ($t) $wlLabel = trim(trim((string)$t['machine_model']) . ' ' . trim((string)$t['machine'])) ?: $wlLabel;
+            }
+            return ['ok'=>false, 'duplicate'=>true, 'existing_id'=>(int)$existingId, 'msg'=>$snap['user_cname'].'（'.$wlLabel.'）已建立過，不重複建立'];
         }
     }
     if ($formType === 'competency') {
