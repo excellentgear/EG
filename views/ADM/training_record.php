@@ -3851,34 +3851,78 @@ function printRequestForm(){
     var r = REQ_CUR;
     if (!r){ alert('請先開啟一筆申請單'); return; }
     var deptName = $('#reqDept option:selected').text() || r.dept_name || '';
-    var body = '<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div><div class="tt">教育訓練需求申請單</div>'
-        + '<div class="sub">申請單位：'+esc(deptName)+'　　申請日期：'+esc(dispDate(r.apply_date))+'</div></div>';
-    var kv = function(lb, v){ return '<tr><th style="width:110px;background:#fff;text-align:right;border:none;">'+lb+'</th>'
-        + '<td class="l" style="border:1px solid #333;">'+esc(v||'')+'</td></tr>'; };
-    var trText = (r.trainees_list||[]).map(function(t){ return t.user_name; }).join('、');
-    var dayText = (r.days||[]).map(function(d){ return dispDate(d.day_date)+' '+((d.start_time||'')+(d.end_time?'~'+d.end_time:'')); }).join('、');
-    body += '<table class="pt" style="margin-top:10px;">'
-        + kv('主旨', r.subject)
-        + kv('一、簡述內容', r.content)
-        + kv('二、主管要求學習重點', r.focus)
-        + kv('三、受訓人員', trText)
-        + kv('四、受訓時間', dayText+(r.days&&r.days.length?'，共 '+r.days.length+' 天':'')+(r.hours!=null&&r.hours!==''?'（預估總時數 '+numTrim(r.hours)+' 小時）':''))
-        + kv('受訓地點', r.location)
-        + kv('受訓費用', r.cost)
-        + '</table>';
+    var docTitle = DOC_NAME.request || '教育訓練需求申請單';   // 表頭一律用綁定AS文件的 doc_name，不寫死（ai-rules/16 第一之二節）
+
+    // 受訓人員：欄位順序固定「部門／職稱／姓名」（ai-rules/08 第五節鐵則5）；不足 3 列補空列，紙本可手寫補人
+    var trs = r.trainees_list || [], trRows = '';
+    for (var i=0; i<Math.max(trs.length,3); i++){
+        var t = trs[i] || {};
+        trRows += '<tr><td>'+esc(t.dept_name||'')+'</td><td>'+esc(t.position_name||'')+'</td><td>'+esc(t.user_name||'')+'</td></tr>';
+    }
+    // 受訓時間：逐日一列（日期＋起訖時間），不足 2 列補空列
+    var ds = r.days || [], dRows = '';
+    for (var j=0; j<Math.max(ds.length,2); j++){
+        var d = ds[j] || {}, tm = d.start_time ? (d.start_time + (d.end_time ? ' ~ '+d.end_time : '')) : '';
+        dRows += '<tr><td class="c1">'+(d.day_date?('第 '+(j+1)+' 天'):'')+'</td>'
+               + '<td class="c2">'+(d.day_date?esc(dispDate(d.day_date)):'')+'</td>'
+               + '<td>'+esc(tm)+'</td></tr>';
+    }
+    var sum = [];
+    if (ds.length) sum.push('共 '+ds.length+' 天');
+    if (r.hours!=null && r.hours!=='') sum.push('預估總時數 '+numTrim(r.hours)+' 小時');
+
+    var css = '.rq-wrap{display:flex;flex-direction:column;min-height:262mm;}'
+        + '.rq-no{text-align:right;font-size:11px;color:#333;margin:0 1px 3px;}'
+        + 'table.rq{width:100%;border-collapse:collapse;table-layout:fixed;border:1.5px solid #000;font-size:13.5px;}'
+        + 'table.rq th,table.rq td{border:1px solid #000;padding:6px 8px;line-height:1.7;word-wrap:break-word;overflow-wrap:break-word;}'
+        + 'table.rq th{background:#F5EEE3;font-weight:bold;text-align:center;font-size:13px;letter-spacing:1px;}'
+        + 'table.rq td{text-align:left;white-space:pre-wrap;}'
+        + 'table.rq td.memo{height:32mm;vertical-align:top;}'
+        + 'table.rq th.memo{vertical-align:top;padding-top:8px;}'
+        + 'table.rq td.p0{padding:0;}'
+        + 'table.sub{width:100%;border-collapse:collapse;font-size:12.5px;table-layout:fixed;}'
+        + 'table.sub th,table.sub td{border:none;border-bottom:1px solid #BBB;border-right:1px solid #BBB;padding:4px 8px;text-align:center;height:8mm;}'
+        + 'table.sub th{background:#FAF5EC;font-weight:normal;color:#333;font-size:12px;}'
+        + 'table.sub tr:last-child td{border-bottom:none;}'
+        + 'table.sub td:last-child,table.sub th:last-child{border-right:none;}'
+        + 'table.sub td.c1{width:22%;}table.sub td.c2{width:34%;}'
+        + '.rq-sum{padding:4px 8px;font-size:12px;color:#333;border-top:1px solid #BBB;}'
+        + '.rq-sign{margin-top:auto;padding-top:10px;}'
+        + 'table.sg{width:100%;border-collapse:collapse;table-layout:fixed;border:1.5px solid #000;}'
+        + 'table.sg td{border:1px solid #000;padding:0;vertical-align:top;height:32mm;}'
+        + 'table.sg .lb{font-size:11.5px;background:#F5EEE3;border-bottom:1px solid #000;padding:3px 6px;text-align:center;letter-spacing:.5px;}'
+        + 'table.sg .bx{height:calc(32mm - 22px);display:flex;align-items:center;justify-content:center;}'
+        + '.rq-sign .stamp-wrap svg,.rq-sign svg.car-stamp{width:80px;height:80px;}';
+
+    var body = '<div class="rq-wrap">'
+        + '<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div><div class="tt">'+esc(docTitle)+'</div></div>'
+        + '<div class="rq-no">單號：NO.'+esc(r.request_id||'')+'　狀態：'+esc(REQ_STATUS_LABEL[r.status]||r.status||'')+'</div>'
+        + '<table class="rq"><colgroup><col style="width:30mm"><col><col style="width:26mm"><col style="width:34mm"></colgroup><tbody>'
+        + '<tr><th>申請單位</th><td>'+esc(deptName)+'</td><th>申請日期</th><td>'+esc(dispDate(r.apply_date))+'</td></tr>'
+        + '<tr><th>主　　旨</th><td colspan="3">'+esc(r.subject||'')+'</td></tr>'
+        + '<tr><th class="memo">一、簡述內容</th><td colspan="3" class="memo">'+esc(r.content||'')+'</td></tr>'
+        + '<tr><th class="memo">二、主管要求<br>　　學習重點</th><td colspan="3" class="memo">'+esc(r.focus||'')+'</td></tr>'
+        + '<tr><th>三、受訓人員</th><td colspan="3" class="p0"><table class="sub">'
+        +   '<tr><th style="width:22%">部門</th><th style="width:34%">職稱</th><th>姓名</th></tr>'+trRows+'</table></td></tr>'
+        + '<tr><th>四、受訓時間</th><td colspan="3" class="p0"><table class="sub">'+dRows+'</table>'
+        +   (sum.length ? '<div class="rq-sum">'+esc(sum.join('，'))+'</div>' : '')+'</td></tr>'
+        + '<tr><th>五、受訓地點</th><td colspan="3">'+esc(r.location||'')+'</td></tr>'
+        + '<tr><th>六、受訓費用</th><td>'+esc(r.cost||'')+'</td><th>簡章份數</th><td>'
+        +   (r.brochure_count!=null && r.brochure_count!=='' ? esc(r.brochure_count)+' 份' : '')+'</td></tr>'
+        + '</tbody></table>';
+
     var ready = (r.status==='approved' || r.status==='converted');
     var dt = ready ? dispDate(r.apply_date) : '';
     var stamp = function(nm){ return (ready && nm) ? egApprovalStampHtml(nm, dt) : ''; };
     var top = REQ_SIGNERS.top_approver, hr = REQ_SIGNERS.hr_signer;
-    body += '<table class="pt-sign" style="margin-top:14px;"><tr>'
-        + '<td><div class="lb">會辦（人事）</div><div class="stamp-box">'+stamp(hr?hr.name:'')+'</div></td>'
-        + '<td colspan="3"></td></tr></table>';
-    body += '<table class="pt-sign" style="margin-top:4px;"><tr>'
-        + '<td><div class="lb">批示（核准．最高決策者）</div><div class="stamp-box">'+stamp(top?top.user_cname:'')+'</div></td>'
-        + '<td><div class="lb">主管（申請單位）</div><div class="stamp-box">'+stamp(r.dept_signer_name)+'</div></td>'
-        + '<td><div class="lb">申請人</div><div class="stamp-box">'+stamp(r.user_name)+'</div></td>'
-        + '</tr></table>';
-    egPrintWindow('教育訓練需求申請單', body, '', r.as_doc_no||DOC_NO.request, false);
+    body += '<div class="rq-sign"><table class="sg"><tbody>'
+        + '<tr><td colspan="3"><div class="lb">會辦（人事）</div><div class="bx">'+stamp(hr?hr.name:'')+'</div></td></tr>'
+        + '<tr><td><div class="lb">批示（核准．最高決策者）</div><div class="bx">'+stamp(top?top.user_cname:'')+'</div></td>'
+        +     '<td><div class="lb">主管（申請單位）</div><div class="bx">'+stamp(r.dept_signer_name)+'</div></td>'
+        +     '<td><div class="lb">申請人</div><div class="bx">'+stamp(r.user_name)+'</div></td></tr>'
+        + '</tbody></table></div></div>';
+
+    egPrintWindow(docTitle, body, css, r.as_doc_no||DOC_NO.request, false);
 }
 
 /* ================= 角色設定（角色名稱與功能都可自訂，沿用全站 Roles_API + role_features，比照 purchase_request.php） ================= */
