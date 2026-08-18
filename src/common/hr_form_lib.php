@@ -372,6 +372,12 @@ function hrf_missing_report(PDO $db, string $formType, string $date): array {
     foreach (hrf_dept_type_setting_list($db) as $d) if (!empty($d[$col])) $eligible[(int)$d['department_id']] = true;
 
     $people = hrf_people_asof($db, $date);
+    // 排序鍵一律部門/職稱 sort_order（ai-rules/08 第五節鐵則6），不是名稱筆畫
+    $dSort = []; $pSort = [];
+    foreach ($db->query("SELECT id, COALESCE(sort_order,999) so FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) $dSort[(int)$d['id']] = (int)$d['so'];
+    foreach ($db->query("SELECT id, COALESCE(sort_order,999) so FROM position")->fetchAll(PDO::FETCH_ASSOC) as $pp) $pSort[(int)$pp['id']] = (int)$pp['so'];
+    $sortKey = fn(array $r) => [$dSort[(int)$r['dept_id']] ?? 999, (string)$r['dept_name'],
+                                $pSort[(int)$r['position_id']] ?? 999, (string)$r['position_name'], (string)$r['user_cname']];
     $rows = [];
     if ($formType === 'competency') {
         $map = hrf_cp_existing_map($db);
@@ -400,8 +406,7 @@ function hrf_missing_report(PDO $db, string $formType, string $date): array {
                 ];
             }
         }
-        usort($rows, fn($a, $b) => [$a['dept_name'], $a['position_name'], $a['user_cname']]
-                                <=> [$b['dept_name'], $b['position_name'], $b['user_cname']]);
+        usort($rows, fn($a, $b) => $sortKey($a) <=> $sortKey($b));
         return ['date'=>$date, 'window_from'=>$from, 'window_to'=>$to, 'annual'=>1, 'rows'=>$rows, 'done'=>$done];
     }
 
@@ -420,8 +425,7 @@ function hrf_missing_report(PDO $db, string $formType, string $date): array {
             'last_id'=>null, 'last_date'=>null, 'pick_value'=>(int)$p['id'],
         ];
     }
-    usort($rows, fn($a, $b) => [$a['dept_name'], $a['position_name'], $a['user_cname']]
-                            <=> [$b['dept_name'], $b['position_name'], $b['user_cname']]);
+    usort($rows, fn($a, $b) => $sortKey($a) <=> $sortKey($b));
     return ['date'=>$date, 'window_from'=>null, 'window_to'=>null, 'annual'=>0, 'rows'=>$rows];
 }
 
@@ -1278,11 +1282,18 @@ function hrf_instance_list(PDO $db, array $opt = []): array {
         $where[] = '(i.user_cname LIKE ? OR i.user_no LIKE ? OR i.dept_name LIKE ? OR i.position_name LIKE ?)';
         $kw = '%' . $opt['keyword'] . '%'; array_push($params, $kw, $kw, $kw, $kw);
     }
+    // 排序一律「部門 → 職稱 → 姓名」，且部門/職稱依主檔 sort_order 高低，不是姓名筆畫（ai-rules/08 第五節鐵則6）。
+    // 清單與批次列印吃的是同一份結果，所以列印順序自動跟著一致（2026-08-18 使用者要求）。
     $sql = "SELECT i.*, pl.level AS target_level, w.source_type AS wl_source_type, w.source_id AS wl_source_id
             FROM hr_form_instance i
             LEFT JOIN position_level pl ON pl.position_id = i.position_id
             LEFT JOIN hr_equipment_whitelist w ON w.id = i.whitelist_id
-            WHERE " . implode(' AND ', $where) . " ORDER BY i.user_cname, i.whitelist_id, i.id DESC";
+            LEFT JOIN department d ON d.id = i.dept_id
+            LEFT JOIN position p ON p.id = i.position_id
+            WHERE " . implode(' AND ', $where) . "
+            ORDER BY COALESCE(d.sort_order, 999), i.dept_name,
+                     COALESCE(p.sort_order, 999), i.position_name,
+                     i.user_cname, i.whitelist_id, i.id DESC";
     $st = $db->prepare($sql);
     $st->execute($params);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
