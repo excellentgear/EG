@@ -253,7 +253,26 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
         </div>
 
-        <div class="pf-list-wrap"><div class="pf-table-wrap">
+        <div class="pf-list-wrap">
+        <!-- 分頁與批次列印列（2026-08-18 使用者要求：一頁預設10筆、翻頁在表格右上角；並提供批次列印） -->
+        <div style="display:flex;align-items:center;gap:8px;margin:6px 0;">
+            <label style="font-size:13px;color:#5b3a1e;">狀態</label>
+            <select id="pgStatus" style="border:1px solid #D8BE93;border-radius:4px;padding:4px 6px;font-size:13px;">
+                <option value="">全部</option>
+                <option value="done">已填完（有分析列）</option>
+                <option value="draft">草稿（尚未填失效模式分析）</option>
+            </select>
+            <button type="button" class="pf-row-btn" onclick="batchPrint()" title="把目前篩選結果逐筆開視窗排隊列印"><i class="fa fa-print"></i> 批次列印</button>
+            <span id="pgInfo" style="font-size:13px;color:#8a6d45;"></span>
+            <span style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+                <label style="font-size:13px;color:#5b3a1e;">每頁</label>
+                <select id="pgSize" style="border:1px solid #D8BE93;border-radius:4px;padding:4px 6px;font-size:13px;">
+                    <option>5</option><option selected>10</option><option>20</option><option>50</option>
+                </select>
+                <span id="pgBtns"></span>
+            </span>
+        </div>
+        <div class="pf-table-wrap">
             <table class="pf-table" id="pfTable">
                 <thead><tr>
                     <th>表單編號</th><th>料號</th><th>規格描述</th><th>客戶</th><th>項目數</th><th>最高RPN</th>
@@ -568,6 +587,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <div id="itemBody"></div>
         <div style="margin-top:6px;">
             <button type="button" class="pf-row-btn" onclick="pfAddRow()"><i class="fa fa-plus"></i> 新增一項失效模式分析</button>
+            <button type="button" class="pf-row-btn" id="btnBomFill" style="display:none;background:#F0A24B;color:#fff;border-color:#DD9A45;"
+                onclick="openBomFill()" title="依此料號 BOM 上跑過的製程，勾選要帶入哪些製程的整組樣板"><i class="fa fa-magic"></i> 依 BOM 製程帶入</button>
         </div>
     </div>
     <div class="m-foot">
@@ -615,6 +636,25 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
 </div></div>
 
 <!-- 建議措施樣板挑選（可複選，套用時自動加編號，2026-08-14使用者要求） -->
+<!-- 依 BOM 製程帶入失效模式分析（2026-08-18 使用者要求） -->
+<div class="pf-mask" id="bomFillMask" style="z-index:1200;"><div class="pf-modal" style="max-width:760px;">
+    <div class="m-head"><span><i class="fa fa-magic"></i> 依 BOM 製程帶入失效模式分析</span><span class="m-close" onclick="closeMask('bomFillMask')">✕</span></div>
+    <div class="m-body" style="font-size:14px;color:#5b3a1e;">
+        <div style="font-size:13px;color:#8a6d45;margin-bottom:8px;">
+            下方是<b>此料號 BOM 上跑過的製程</b>（依 BOM 站別順序）。勾選要帶入的製程，按「帶入」即依各製程已建立的整組樣板逐筆長出失效模式分析卡片。<br>
+            帶入後仍可逐張修改或刪除；<b>存檔時會自動把此料號與用到的整組建立關聯</b>，之後同料號再開就查得到。
+        </div>
+        <div id="bomFillList" style="max-height:340px;overflow-y:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px 10px;"></div>
+        <div style="margin-top:8px;font-size:13px;">
+            <label><input type="checkbox" id="bomFillClear"> 帶入前先清掉目前已填的分析列（預設是附加在後面）</label>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('bomFillMask')">取消</button>
+        <button class="b-ok" onclick="applyBomFill()">帶入</button>
+    </div>
+</div></div>
+
 <!-- 分類自動判定規則（2026-08-18 使用者要求，僅管理員） -->
 <div class="pf-mask" id="classRuleMask" style="z-index:1200;"><div class="pf-modal" style="max-width:560px;">
     <div class="m-head"><span>分類自動判定規則</span><span class="m-close" onclick="closeMask('classRuleMask')">✕</span></div>
@@ -822,6 +862,9 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li>每個潛在失效模式是一張卡片，欄位由上到下分「基本資料／風險評估與現行設計管制／建議措施／措施結果」四區，不需要橫向捲動；S/O/D 每格填 1-10，<b>RPN 由系統自動計算，不可手動輸入</b>。按「新增一項失效模式分析」可再加一張卡片。</li>
             <li><b>製程代號</b>：卡片內輸入已建立的製程代號會自動帶出該製程的「項目」下拉選項；輸入清單中沒有的新代號會詢問製程名稱並即時建立。「控制預防」「控制偵測」同樣是下拉可選/可手動輸入。按「整組列表」可叫出此製程所有樣板（組名＝製程名稱_項目名稱），點選後直接把該筆的基本資料/評級/控制/建議措施/評價欄位整批帶入，帶入後仍可個別修改。這些清單新增不限身分，僅管理員能刪除。</li>
             <li><b>項目→功能→要求／潛在失效模式 階層式連動</b>：填完「項目」離開該欄位，會自動帶出這個項目底下的「功能」下拉選項；填完「功能」離開該欄位，會自動帶出這個功能底下的「要求」下拉（優先顯示綁定的料號專屬要求，沒有才顯示該功能通用要求）與更精確的「潛在失效模式」下拉（優先套用這個功能專屬的清單，還沒累積過資料才逐層退回項目層級、製程層級的通用清單）。四層清單都可以直接手動輸入新值，離開欄位或存檔時會自動加進清單供下次選用，僅管理員能刪除。填完「潛在失效模式」離開欄位，還會再帶出這一筆失效模式專屬的「失效模式潛在後果／分類／失效潛在原因」建議清單。</li>
+            <li><b>依 BOM 製程帶入失效模式分析</b>：綁定料號後，編輯畫面下方會出現「依 BOM 製程帶入」按鈕。點開會列出<b>此料號 BOM 上跑過的製程</b>（依站別順序，並顯示各製程可帶入幾筆整組樣板；沒有樣板的無法勾選）。勾選後按「帶入」即依樣板逐筆長出失效模式分析卡片，可選擇附加在後面或先清空既有列。帶入後仍可逐張修改／刪除。<b>存檔時會自動建立「此料號 ↔ 用到的整組」關聯</b>，手動新建的單據同樣適用。</li>
+            <li><b>清單分頁與批次列印</b>：清單預設一頁 10 筆（可改 5／20／50），翻頁鈕在表格右上角。左側「狀態」可篩選<b>已填完</b>（有失效模式分析列）或<b>草稿</b>（尚未填分析列）。「批次列印」會依目前的搜尋與狀態篩選結果逐筆開視窗排隊列印，每份仍會各自跑列印前的欄位完整性檢查。</li>
+            <li><b>AI 產生的整組樣板</b>：由 AI 整理匯入的整組樣板，在選擇樣板的清單上會標示橘色 <b>AI</b> 徽章提醒人工複核；此標記<b>不會印在列印版上</b>。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期／相關部門預設值自動帶入；來源只有純文字料號時會自動回查主檔綁定成正式料號，綁定後才開得了圖、客戶名稱才帶得出來），分析項目仍需逐份手動填寫。</li>
             <li><b>製程代號</b>：改可從全站製程主檔同步帶入（含大項分類），輸入時同時模糊搜尋代號/名稱/大項分類（多關鍵字皆需命中），顯示清單供點選。</li>
             <li><b>參考資料設定</b>：頁面上方的<b>「參考資料設定」大分頁</b>（僅管理員可見，與「分析表清單」並列；工具列同名按鈕也會切到這裡）。裡面再分三個子頁籤：①<b>階層對應</b>——最上面是<b>階層對應總表</b>，一列＝一條完整路徑（製程／項目／功能／潛在失效模式／後果／分類／原因），像 Excel 一樣直接在格子裡改：每一格都可打字也可下拉選，候選值會依左邊欄位過濾（選了製程，項目欄就只出現該製程底下的）；在最後一列按 <b>↓</b> 會自動新增一列並帶入上一列的製程／項目／功能，只要改不同的地方；「從 Excel 貼上」可把 Excel 複製的整塊資料直接帶進來；「整欄填滿」把游標所在格的值套用到下面所有列；後果／分類／原因一格可填多個，用「、」隔開；<b>灰色斜體</b>代表該格目前沿用全站共用清單（同名失效模式共通），編輯後就轉成這一列專屬。改過的列會標成米黃色，按「儲存變更」才寫入。往下還有<b>逐層鑽取（進階）</b>可收合區塊，處理料號綁定與要求設定（要求是掛在「路徑」上而非掛在失效模式上，同一路徑的多筆失效模式共用同一批要求，故不併入總表以免改一列卻動到別列）。此外——所有下拉選項的來源，由粗到細串成一條鑽取鏈：<b>製程 → 項目 → 功能 → 潛在失效模式 → 後果／分類／原因</b>，每一層點下去就往下鑽一層，該層清單可直接新增／刪除。頂端另有「從全站製程主檔同步」拉入公司所有製程（含大項分類，可整個大項一鍵批次開放），只有開放的製程會出現在分析表下拉。<b>「要求」這一層可以指定料號</b>：料號欄留空＝這一層的通用要求（所有料號共用），輸入料號＝只給該料號用的專屬要求（會蓋過通用值），且同一個組合底下<b>可以輸入多筆要求</b>，填表時下拉會全部列出讓您挑本次要用的。指定料號後還可以「把目前鑽到的這條路徑綁給此料號」或「一次綁多組」（選了製程就自動帶出該製程底下整套項目／功能供勾選，已綁過的會標示鎖住），以及設定該料號＋製程的<b>圖面要求</b>（列印表頭的規格描述）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>要求總覽</b>——不分製程/項目/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、直接編輯文字內容、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
@@ -891,12 +934,68 @@ function openMask(id){ document.getElementById(id).style.display='block'; }
 function fmtDate(s){ return (window.egFmtDate ? egFmtDate(s) : (s||'')); }
 
 /* ---------- 清單 ---------- */
+/* 清單分頁（2026-08-18 使用者要求：一頁預設10筆、翻頁鈕在表格右上角）。
+   資料量小，一次抓回全部在前端切頁，換頁不再往返後端（比照產品開發評估表清單的既有做法）。 */
+var LIST_ROWS = [], PG_PAGE = 1;
+function pgSize(){ return parseInt($('#pgSize').val(),10) || 10; }
+/* 目前狀態篩選後的資料（分頁、筆數、批次列印一律以這份為準，
+   否則會出現「畫面只有草稿卻印出全部」的不一致） */
+var LIST_VIEW = [];
+function applyStatusFilter(){
+    var st = $('#pgStatus').val() || '';
+    LIST_VIEW = LIST_ROWS.filter(function(r){
+        var cnt = parseInt(r.item_count,10) || 0;
+        if (st === 'done')  return cnt > 0;
+        if (st === 'draft') return cnt === 0;
+        return true;
+    });
+}
+function renderList(){
+    applyStatusFilter();
+    var size = pgSize(), total = LIST_VIEW.length, pages = Math.max(1, Math.ceil(total/size));
+    if (PG_PAGE > pages) PG_PAGE = pages;
+    var from = (PG_PAGE-1)*size, rows = LIST_VIEW.slice(from, from+size);
+    var all = LIST_ROWS.length;
+    $('#pgInfo').text(total ? ('共 '+total+' 筆'+(total!==all?('（全部 '+all+' 筆）'):'')+'，第 '+PG_PAGE+'／'+pages+' 頁')
+                            : (all ? '此狀態沒有符合的資料（全部 '+all+' 筆）' : ''));
+    var btns = '';
+    if (pages > 1) {
+        btns += '<button type="button" class="pf-row-btn" '+(PG_PAGE<=1?'disabled':'')+' onclick="gotoPage('+(PG_PAGE-1)+')">‹ 上一頁</button>';
+        var st = Math.max(1, PG_PAGE-2), en = Math.min(pages, st+4); st = Math.max(1, en-4);
+        for (var i=st;i<=en;i++) btns += '<button type="button" class="pf-row-btn" style="'+(i===PG_PAGE?'background:#F0A24B;color:#fff;border-color:#DD9A45;':'')+'" onclick="gotoPage('+i+')">'+i+'</button>';
+        btns += '<button type="button" class="pf-row-btn" '+(PG_PAGE>=pages?'disabled':'')+' onclick="gotoPage('+(PG_PAGE+1)+')">下一頁 ›</button>';
+    }
+    $('#pgBtns').html(btns);
+    if (!total){ $('#pfBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">沒有符合條件的資料</td></tr>'); return; }
+    renderListRows(rows);
+}
+window.gotoPage = function(n){ PG_PAGE = n; renderList(); };
+$(document).on('change', '#pgSize, #pgStatus', function(){ PG_PAGE = 1; renderList(); });
+/* 批次列印：依目前篩選結果逐筆各自開視窗排隊（比照 ai-rules/16 第三之五節） */
+window.batchPrint = function(){
+    applyStatusFilter();
+    if (!LIST_VIEW.length){ alert('目前沒有可列印的資料'); return; }
+    if (!confirm('將依目前的搜尋與狀態篩選結果逐筆開啟列印視窗，共 '+LIST_VIEW.length+' 份。\n（瀏覽器可能會詢問是否允許開啟多個視窗，請選允許）')) return;
+    var i = 0;
+    (function next(){
+        if (i >= LIST_VIEW.length) return;
+        printDoc(LIST_VIEW[i].id);
+        i++;
+        setTimeout(next, 1200);      // 間隔開窗，避免瀏覽器把連續彈窗當成廣告擋掉
+        // 註：列印前的「欄位完整性檢查」對每一份仍會生效，缺欄位的那份會先跳出清單讓您決定
+    })();
+};
 function loadList(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
         if (!res.success){ $('#pfBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
-        if (!res.rows.length){ $('#pfBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
+        LIST_ROWS = res.rows || [];
+        PG_PAGE = 1;
+        renderList();
+    });
+}
+function renderListRows(rows){
         var html = '';
-        res.rows.forEach(function(r){
+        rows.forEach(function(r){
             var rpnCls = (r.max_rpn && r.max_rpn > 200) ? ' style="color:#DD5138;font-weight:bold;"' : '';
             html += '<tr>'
                 + '<td>'+esc(r.doc_no)+'</td>'
@@ -917,7 +1016,6 @@ function loadList(){
                 + '</td></tr>';
         });
         $('#pfBody').html(html);
-    });
 }
 var kwT=null;
 $('#kwInput').on('input', function(){ clearTimeout(kwT); kwT=setTimeout(loadList, 300); });
@@ -1442,6 +1540,98 @@ window.applyActionPicker = function(){
     var combined = cur.trim() ? cur.replace(/\n+$/, '') + '\n' + newLines.join('\n') : newLines.join('\n');
     ACTION_PICKER_TARGET.val(combined).trigger('input');
 };
+/* ---------- 依 BOM 製程帶入失效模式分析（2026-08-18 使用者要求）----------
+ * 「有建立BOM的可以從BOM找到製程編號，然後讓我可以勾選顯示哪幾個製程編號的失效模式分析」＋
+ * 「在儲存後都要自動幫我建立此料號與這整組關係」＋「手動新件的單據也要這樣」。
+ * 因此按鈕只要料號綁定了就出現（不分是建議建立清單轉入或手動新建），存檔時一律登記料號↔整組關聯。 */
+var BOM_PROCS = [];
+function refreshBomFillBtn(){
+    var bound = parseInt($('#fPartDId').val(),10) || 0;
+    $('#btnBomFill').toggle(!!(bound && CAN_EDIT));
+}
+window.openBomFill = function(){
+    var pid = parseInt($('#fPartDId').val(),10) || 0;
+    if (!pid){ alert('請先綁定料號（BOM 製程要靠料號才查得到）'); return; }
+    $('#bomFillList').html('載入中…');
+    $('#bomFillClear').prop('checked', false);
+    openMask('bomFillMask');
+    $.getJSON(API, {action:'bom_process_candidates', part_d_id:pid}, function(res){
+        if (!res.success){ $('#bomFillList').text(res.message||'載入失敗'); return; }
+        BOM_PROCS = res.rows || [];
+        if (!BOM_PROCS.length){ $('#bomFillList').html('<div style="color:#8a6d45;padding:10px;">這個料號在 BOM 上查不到製程資料。</div>'); return; }
+        $('#bomFillList').html(BOM_PROCS.map(function(p, i){
+            var has = p.tpl_count > 0;
+            return '<label style="display:block;padding:5px 0;'+(has?'':'color:#A8906E;')+'">'
+                + '<input type="checkbox" data-i="'+i+'" '+(has?'checked':'disabled')+'> '
+                + '<b>'+esc(p.process_code)+'</b> '+esc(p.process_name)
+                + (has ? '<span style="color:#B5762A;margin-left:8px;">可帶入 '+p.tpl_count+' 筆</span>'
+                       : '<span style="margin-left:8px;">尚未建立整組樣板，無法帶入</span>')
+                + '<span style="color:#A8906E;margin-left:8px;font-size:12px;">（BOM '+p.bom_count+' 張）</span></label>';
+        }).join(''));
+    });
+};
+window.applyBomFill = function(){
+    var ids = [];
+    $('#bomFillList input:checked').each(function(){
+        var p = BOM_PROCS[parseInt($(this).attr('data-i'),10)];
+        if (p && p.pfmea_process_id) ids.push(p.pfmea_process_id);
+    });
+    if (!ids.length){ alert('請至少勾選一個有樣板可帶入的製程'); return; }
+    $.getJSON(API, {action:'templates_of_processes', process_ids:ids.join(',')}, function(res){
+        if (!res.success){ alert(res.message||'載入失敗'); return; }
+        var tpls = res.rows || [];
+        if (!tpls.length){ alert('選到的製程沒有可帶入的整組樣板。'); return; }
+        if ($('#bomFillClear').is(':checked')) $('#itemBody').empty();
+        var bizDate = $('#fBizDate').val();
+        tpls.forEach(function(t){
+            var it = {
+                process_code: t.process_code, process_desc: t.item_name, function_desc: t.function_desc,
+                failure_mode: t.failure_mode, failure_effect: t.failure_effect, severity: t.severity,
+                failure_cause: t.failure_cause, occurrence: t.occurrence,
+                prevention_controls: t.prevention_controls, detection_controls: t.detection_controls,
+                detection: t.detection, recommended_actions: t.recommended_actions,
+                new_severity: t.new_severity, new_occurrence: t.new_occurrence, new_detection: t.new_detection,
+                target_date: bizDate || '', action_date: bizDate || ''
+            };
+            $('#itemBody').append(itemCardHtml(it, $('#itemBody .pf-card').length, false));
+        });
+        renumberRows();
+        closeMask('bomFillMask');
+        // 逐張補上製程/項目/功能的連動解析與 RPN（程式塞值不會觸發 blur）
+        $('#itemBody .pf-card').each(function(){
+            var $c = $(this);
+            populateCardControlDatalists($c);
+            $c.find('.sod-in').first().trigger('input');   // RPN 是掛在 .sod-in 的事件，觸發一次讓它算
+            resolveItemOption($c, function(){ resolveFunctionOption($c); });
+        });
+        alert('已帶入 '+tpls.length+' 筆失效模式分析。請逐張確認內容後儲存；存檔時會自動建立此料號與這些整組的關聯。');
+    });
+};
+/* 存檔後：把這份文件用到的每個「製程＋項目＋功能」登記成此料號的組合，
+   之後同一料號再開、或設定畫面查詢時就找得到（使用者要求，手動新建的單據同樣適用）。 */
+function registerPartCombos(){
+    var partDId = parseInt($('#fPartDId').val(),10) || 0;
+    var partText = partDId ? '' : ($('#fPartNo').val()||'').trim();
+    if (!partDId && !partText) return;
+    var seen = {}, byProc = {};
+    $('#itemBody .pf-card').each(function(){
+        var $c = $(this);
+        var code = ($c.find('.f-proccode').val()||'').trim();
+        if (!code || !PROCESS_ID_BY_CODE[code]) return;
+        var pid = PROCESS_ID_BY_CODE[code].id;
+        var iid = parseInt($c.attr('data-item-opt-id'),10) || 0;
+        var fid = parseInt($c.attr('data-func-opt-id'),10) || 0;
+        var key = pid+'/'+iid+'/'+fid;
+        if (seen[key]) return;
+        seen[key] = true;
+        (byProc[pid] = byProc[pid] || []).push({item_option_id:iid, function_option_id:fid});
+    });
+    Object.keys(byProc).forEach(function(pid){
+        $.post(API, {action:'part_binding_add', part_d_id:partDId, part_no_text:partText,
+                     process_id:pid, paths:JSON.stringify(byProc[pid])});
+    });
+}
+
 /* ---------- 分類自動判定（2026-08-18 使用者要求）----------
  * 嚴重度S 或 發生率O 落在管理員設定的區間內 → 自動帶「重要特性」，否則帶「一般特性」。
  * 只在該格「還空白」或「上次就是自動帶的值」時才寫入，不覆蓋使用者手動填的內容；
@@ -1596,7 +1786,7 @@ function deptChecksHtml(checked){
     }).join('');
 }
 function resetEditForm(){
-    CUR_ID = 0; ITEM_ORIG = {}; resetMakeRevision(); loadClassRule();
+    CUR_ID = 0; ITEM_ORIG = {}; resetMakeRevision(); loadClassRule(); refreshBomFillBtn();
     $('#fPartNo').val(''); $('#fPartDId').val('0'); $('#fCustomerName').val('');
     $('#fProductName').val(DEFAULT_PRODUCT_NAME || ''); $('#fSpecDesc').val('');
     $('#fBizDate').val(''); $('#fBizDateQuick').html('');
@@ -1676,7 +1866,7 @@ function openEdit(id){
     if (!id){ openMask('editMask'); return; }
     $.getJSON(API, {action:'get', id:id}, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
-        CUR_ID = id; resetMakeRevision();
+        CUR_ID = id; resetMakeRevision(); refreshBomFillBtn();
         $('#fPartNo').val(res.doc.part_no||''); $('#fPartDId').val(res.doc.part_d_id||0);
         $('#fCustomerName').val(res.doc.customer_name||'');
         $('#fProductName').val(res.doc.product_name||''); $('#fSpecDesc').val(res.doc.spec_desc||'');
@@ -1704,10 +1894,11 @@ EGPartPicker.attach(document.getElementById('fPartNo'), {
         $('#fPartDId').val(row.d_id);
         $('#fCustomerName').val(row.customer_name||'');
         onPartBound(row.d_id, row.part_no||row.d_id, row.customer_name||'');
+        refreshBomFillBtn();
         $('input[name=fItemType][value='+((row.is_assembly=='1'||row.is_assembly===1)?'assembly':'part')+']').prop('checked', true);
     }
 });
-$('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); $('#fCustomerName').val(''); onPartBound(0, '', ''); });
+$('#fPartNo').on('input', function(){ $('#fPartDId').val('0'); $('#fCustomerName').val(''); onPartBound(0, '', ''); refreshBomFillBtn(); });
 $('#fPartNo').on('blur', function(){
     // 沒對到料號選擇器、純手動輸入文字料號時，離開欄位才觸發一次(避免逐字打字就狂call API)
     if (!($('#fPartDId').val()|0) && $(this).val().trim()) onPartBound(0, $(this).val().trim(), '');
@@ -1833,6 +2024,7 @@ function saveHeader(){
     if (CAN_EDIT) registerNewRefValues();
     $.post(API, payload, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        registerPartCombos();          // 自動建立此料號與用到的整組關聯（手動新建的單據同樣適用）
         closeMask('editMask'); loadList();
     }, 'json');
 }
