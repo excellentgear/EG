@@ -47,9 +47,14 @@ $perms = td_dev_eval_perms($db, $teUser);
             border:1.5px solid #E8D5B5; border-radius:8px; padding:8px 10px; margin-bottom:10px; background:#FDF8EF; }
         .sg-toolbar label { margin:0 0 0 8px; font-size:13px; color:#5b3a1e; }
         .sg-toolbar label:first-child { margin-left:0; }
-        .sg-toolbar input[type=date], .sg-toolbar button {
+        .sg-toolbar input[type=date], .sg-toolbar input[type=text], .sg-toolbar button {
             height:30px; font-size:13px; line-height:1; padding:0 10px; border:1px solid #D8BE93;
             border-radius:4px; background:#fff; color:#5b3a1e; cursor:pointer; }
+        .sg-toolbar input[type=text] { cursor:text; }
+        .sg-toolbar #partFilter { width:200px; }
+        .sg-toolbar #partFilter.on { border-color:#F0A24B; background:#FFF6E8; }
+        .sg-filter-clear { color:#8a6d45; font-size:12px; cursor:pointer; }
+        .sg-filter-clear:hover { color:#DD5138; }
         .sg-toolbar button:hover { background:#F7E0BD; }
         .sg-toolbar .btn-warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .sg-toolbar .btn-warm:hover { background:#d98a33; }
@@ -133,6 +138,9 @@ $perms = td_dev_eval_perms($db, $teUser);
             <span>～</span>
             <input type="date" id="dateTo">
             <button class="btn-warm" id="btnQuery"><i class="fa fa-search"></i> 查詢</button>
+            <label for="partFilter">料號篩選</label>
+            <input type="text" id="partFilter" placeholder="打料號即時篩選（可多關鍵字）…" autocomplete="off">
+            <span class="sg-filter-clear" id="btnPartFilterClear" style="display:none;" title="清除料號篩選"><i class="fa fa-times-circle"></i> 清除</span>
             <button id="btnCustSetting"><i class="fa fa-users"></i> 客戶名單設定</button>
             <button id="btnIgnoreList"><i class="fa fa-eye-slash"></i> 已忽略清單</button>
             <button id="btnClearSelected" style="margin-left:auto;"><i class="fa fa-times-circle"></i> 取消全選</button>
@@ -198,6 +206,7 @@ $perms = td_dev_eval_perms($db, $teUser);
             <li>先按「客戶名單設定」，輸入客戶名稱或客戶編號篩選後點選要加入的客戶（可複選，已選客戶會列在上方，點 ✕ 可移除），存檔後只掃這份名單內的客戶。</li>
             <li>設定查詢區間（預設近一年），按「查詢」。</li>
             <li>清單依客戶、料號排序；點「相關記錄」可看該料號在區間內的訂單/出貨/BOM/報工/報價記錄明細。</li>
+            <li>工具列「料號篩選」可打字即時篩選（不用按查詢）：大小寫不分、可空白分隔多個關鍵字（每個都要命中、順序不拘）、「-」等符號忽略（打 RC105N03 也找得到 RC105-N03-A）；雙擊該欄或按旁邊「清除」即解除篩選。</li>
             <li>「建立日期」欄：有解析到訂單日期者自動帶入（可手動改）；查無訂單日期者欄位會標紅，需先手動輸入，或用旁邊「套用BOM日期」「套用最早報工日期」按鈕快速套用參考日期，否則無法勾選建立。若「訂單日期」欄下方出現「⚠更早訂單」提醒（區間外查到更早的訂單），可直接點旁邊「套用」按鈕改用該日期。</li>
             <li>勾選要建立的項目（可用表頭全選，跨頁切換時勾選狀態會保留；右上角「取消全選」可一次清除所有頁面已勾選的項目），按右上角「批次建立已選項目」，即一次建立多筆評估表草稿（僅建立表頭殼，32項確認結果與簽核仍需照正常流程逐一進行）。</li>
             <li>不需要建立的項目可按「忽略」，之後就不會再出現；「已忽略清單」可查看並取消忽略。</li>
@@ -206,6 +215,7 @@ $perms = td_dev_eval_perms($db, $teUser);
         <ul>
             <li>BOM 沒有客戶編號欄位，只能用客戶名稱文字比對，若 BOM 上的客戶名稱與客戶主檔不完全一致，該筆 BOM 記錄可能無法被歸類，此為資料來源限制。</li>
             <li>「BOM日期」「最早報工日期」為參考用途，不受查詢區間限制（越早越有參考價值），只是幫助決定填表日期用，不會寫入評估表其他欄位。</li>
+            <li>料號篩選只影響「顯示」，不會取消已勾選的項目——若先勾選後再改篩選條件，被篩掉（看不到）的項目仍會被批次建立；筆數請看「批次建立已選項目」上的數字，要全部清掉按「取消全選」。</li>
         </ul>
         <h4>設定入口</h4>
         <p>客戶名單設定：本頁工具列「客戶名單設定」按鈕。</p>
@@ -325,10 +335,49 @@ $('#chkAll').on('change', function(){
     renderPage();
 });
 
+/* ---------- 料號模糊即時篩選 ----------
+   前端篩選（清單本來就一次全撈進 ROWS 做前端分頁，不必回後端）。
+   模糊比對：大小寫不分、多關鍵字空白分隔（每個都要命中，順序不拘）、
+   比對時把「-」等非英數字元去掉，所以打 RC105N03 也找得到 RC105-N03-A。 */
+var PART_KW = '';
+function normPart(s){ return String(s==null?'':s).toUpperCase().replace(/[^0-9A-Z一-鿿]/g,''); }
+function partMatch(r){
+    if (!PART_KW) return true;
+    var hay = normPart(r.part_no_text);
+    var kws = PART_KW.split(/\s+/).filter(function(k){ return k; }).map(normPart).filter(function(k){ return k; });
+    if (!kws.length) return true;
+    return kws.every(function(k){ return hay.indexOf(k) >= 0; });
+}
+/** 目前畫面上要顯示的列（含在 ROWS 中的原始索引——rowHtml/applyQuick/openHistory/ignoreRow 一律吃原始索引，
+ *  篩選後不可重新編號，否則會對錯行） */
+function viewRows(){
+    var out = [];
+    ROWS.forEach(function(r, i){ if (partMatch(r)) out.push({r:r, idx:i}); });
+    return out;
+}
+function updateHint(total, shown){
+    var t = '共 '+total+' 筆候選料號（依客戶、料號排序）';
+    if (PART_KW) t += '；料號篩選「'+PART_KW+'」符合 '+shown+' 筆';
+    $('#listHint').text(t);
+}
+$('#partFilter').on('input', function(){
+    PART_KW = $(this).val().trim();
+    $(this).toggleClass('on', !!PART_KW);
+    $('#btnPartFilterClear').toggle(!!PART_KW);
+    CUR_PAGE = 1;
+    renderPage();
+});
+$('#btnPartFilterClear').on('click', function(){
+    $('#partFilter').val('').removeClass('on');
+    PART_KW = ''; CUR_PAGE = 1;
+    $(this).hide();
+    renderPage();
+});
+
 /* ---------- 分頁（預設10筆/頁，翻頁在列表右上角，ai-rules/08） ---------- */
 var PAGE_SIZE = 10, CUR_PAGE = 1;
-function renderPager(){
-    var total = ROWS.length;
+function renderPager(total){
+    if (total === undefined) total = viewRows().length;
     var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (CUR_PAGE > totalPages) CUR_PAGE = totalPages;
     var sizeOpts = [5,10,20,50].map(function(n){ return '<option value="'+n+'"'+(n===PAGE_SIZE?' selected':'')+'>'+n+'</option>'; }).join('');
@@ -342,11 +391,17 @@ function renderPager(){
     $('#sgNext').on('click', function(){ CUR_PAGE++; renderPage(); });
 }
 function renderPage(){
-    renderPager();
-    if (!ROWS.length){ $('#sgBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">此區間內查無候選料號</td></tr>'); updateSelCount(); return; }
+    var view = viewRows();
+    renderPager(view.length);
+    updateHint(ROWS.length, view.length);
+    if (!view.length){
+        var msg = ROWS.length ? '沒有符合料號篩選「'+esc(PART_KW)+'」的資料' : '此區間內查無候選料號';
+        $('#sgBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">'+msg+'</td></tr>');
+        updateSelCount(); return;
+    }
     var start = (CUR_PAGE-1)*PAGE_SIZE, end = start+PAGE_SIZE;
     var html = '';
-    ROWS.slice(start, end).forEach(function(r, i){ html += rowHtml(r, start+i); });
+    view.slice(start, end).forEach(function(v){ html += rowHtml(v.r, v.idx); });
     $('#sgBody').html(html);
     $('#chkAll').prop('checked', false);
     updateSelCount();
@@ -364,7 +419,6 @@ function loadList(){
         }
         ROWS = res.rows || [];
         SELECTED = {}; FILLDATES = {}; CUR_PAGE = 1;
-        $('#listHint').text('共 '+ROWS.length+' 筆候選料號（依客戶、料號排序）');
         renderPage();
     });
 }
@@ -438,7 +492,6 @@ window.ignoreRow = function(idx){
         var key = rowKey(r);
         ROWS.splice(idx, 1);
         delete SELECTED[key]; delete FILLDATES[key];
-        $('#listHint').text('共 '+ROWS.length+' 筆候選料號（依客戶、料號排序）');
         renderPage();
     }, 'json');
 };
