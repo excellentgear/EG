@@ -426,6 +426,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
             <div class="pf-card-grid">
                 <div><label>項目</label><input type="text" id="rsTplItemName"></div>
                 <div><label>功能</label><input type="text" id="rsTplFunctionDesc"></div>
+                <div><label>要求</label><input type="text" id="rsTplRequirement"></div>
                 <div><label>潛在失效模式</label><input type="text" id="rsTplFailureMode"></div>
                 <div><label>失效模式潛在後果</label><input type="text" id="rsTplFailureEffect"></div>
                 <div><label>嚴重度 S</label><input type="number" min="1" max="10" id="rsTplSeverity"></div>
@@ -495,6 +496,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
                 <label>料號 <span id="fPartBindMark" style="font-weight:normal;font-size:12px;margin-left:6px;"></span></label>
                 <div class="pf-proc-box">
                     <input type="text" id="fPartNo" placeholder="輸入部分料號或圖號搜尋；查無時可直接手動輸入" autocomplete="off">
+                    <button type="button" id="btnPartMaster" onclick="openPartMaster()" style="display:none;height:30px;padding:0 8px;border-radius:4px;border:1px solid #D8BE93;background:#fff;color:#b5762a;cursor:pointer;" title="開新視窗編輯此料號的主檔資料（規格描述、產品名稱等）"><i class="fa fa-cog"></i> 料號設定</button>
                     <button type="button" id="btnOpenDrawing" onclick="openPartDrawing()" style="display:none;height:30px;padding:0 8px;border-radius:4px;border:1px solid #D8BE93;background:#fff;color:#b5762a;cursor:pointer;" title="開新視窗看圖面填寫參考"><i class="fa fa-image"></i> 開圖</button>
                 </div>
                 <input type="hidden" id="fPartDId" value="0">
@@ -641,7 +643,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
     <div class="m-head"><span><i class="fa fa-magic"></i> 依 BOM 製程帶入失效模式分析</span><span class="m-close" onclick="closeMask('bomFillMask')">✕</span></div>
     <div class="m-body" style="font-size:14px;color:#5b3a1e;">
         <div style="font-size:13px;color:#8a6d45;margin-bottom:8px;">
-            下方是<b>此料號 BOM 上跑過的製程</b>（依 BOM 站別順序）。勾選要帶入的製程，按「帶入」即依各製程已建立的整組樣板逐筆長出失效模式分析卡片。<br>
+            下方是<b>此料號 BOM 上跑過的製程</b>（依 BOM 站別順序）。點製程名稱可<b>展開</b>看它底下每一筆整組樣板，逐筆勾選要帶入哪些；
+            每個製程各有<b>全選／取消</b>，也可以只挑其中幾筆。<span class="ai-tag">AI</span> 表示該筆由 AI 產生，建議先確認內容。<br>
             帶入後仍可逐張修改或刪除；<b>存檔時會自動把此料號與用到的整組建立關聯</b>，之後同料號再開就查得到。
         </div>
         <div id="bomFillList" style="max-height:340px;overflow-y:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px 10px;"></div>
@@ -1551,6 +1554,7 @@ function refreshBomFillBtn(){
     var bound = parseInt($('#fPartDId').val(),10) || 0;
     var pno = ($('#fPartNo').val()||'').trim();
     $('#btnBomFill').toggle(!!((bound || pno) && CAN_EDIT));
+    $('#btnPartMaster').toggle(!!pno);
     var $s = $('#fPartBindMark');
     if (!pno) $s.html('');
     else if (bound) $s.html('<span style="color:#2e7d32;font-weight:bold;" title="已綁定料號主檔，可開圖、可查BOM製程">🔗 已綁定</span>');
@@ -1570,35 +1574,82 @@ window.openBomFill = function(){
         BOM_PROCS = res.rows || [];
         if (!BOM_PROCS.length){ $('#bomFillList').html('<div style="color:#8a6d45;padding:10px;">這個料號在 BOM 上查不到製程資料（已一併嘗試用料號文字與客戶名稱比對）。</div>'); return; }
         var mb = BOM_PROCS[0].match_by || '';
-        $('#bomFillList').html((mb && mb !== '料號主鍵'
-            ? '<div style="font-size:12px;color:#B5762A;margin-bottom:6px;">※ 此料號未與 BOM 綁定主鍵，以「'+esc(mb)+'」找到下列 BOM 製程，請確認是否正確。</div>' : '')
-            + BOM_PROCS.map(function(p, i){
-            var has = p.tpl_count > 0;
-            return '<label style="display:block;padding:5px 0;'+(has?'':'color:#A8906E;')+'">'
-                + '<input type="checkbox" data-i="'+i+'" '+(has?'checked':'disabled')+'> '
-                + '<b>'+esc(p.process_code)+'</b> '+esc(p.process_name)
-                + (has ? '<span style="color:#B5762A;margin-left:8px;">可帶入 '+p.tpl_count+' 筆</span>'
-                       : '<span style="margin-left:8px;">尚未建立整組樣板，無法帶入</span>')
-                + '<span style="color:#A8906E;margin-left:8px;font-size:12px;">（BOM '+p.bom_count+' 張）</span></label>';
-        }).join(''));
+        BOM_MB = mb;
+        // 先把有樣板的製程的樣板內容一次抓回來，展開時才不用逐次往返
+        var ids = BOM_PROCS.filter(function(p){ return p.tpl_count > 0 && p.pfmea_process_id; })
+                           .map(function(p){ return p.pfmea_process_id; });
+        if (!ids.length){ BOM_TPLS = {}; renderBomFill(); return; }
+        $.getJSON(API, {action:'templates_of_processes', process_ids:ids.join(',')}, function(r2){
+            BOM_TPLS = {};
+            (r2.rows||[]).forEach(function(t){ (BOM_TPLS[t.process_id] = BOM_TPLS[t.process_id] || []).push(t); });
+            BOM_SEL = {};
+            // 預設全選（比照原本行為：勾了製程就整包帶入），使用者可再逐筆取消
+            Object.keys(BOM_TPLS).forEach(function(pid){ BOM_TPLS[pid].forEach(function(t){ BOM_SEL[t.id] = true; }); });
+            renderBomFill();
+        });
     });
 };
-window.applyBomFill = function(){
-    var ids = [];
-    $('#bomFillList input:checked').each(function(){
-        var p = BOM_PROCS[parseInt($(this).attr('data-i'),10)];
-        if (p && p.pfmea_process_id) ids.push(p.pfmea_process_id);
+var BOM_TPLS = {}, BOM_SEL = {}, BOM_OPEN = {}, BOM_MB = '';
+function renderBomFill(){
+    var html = (BOM_MB && BOM_MB !== '料號主鍵')
+        ? '<div style="font-size:12px;color:#B5762A;margin-bottom:6px;">※ 此料號未與 BOM 綁定主鍵，以「'+esc(BOM_MB)+'」找到下列 BOM 製程，請確認是否正確。</div>' : '';
+    BOM_PROCS.forEach(function(p, i){
+        var pid = p.pfmea_process_id, tpls = BOM_TPLS[pid] || [];
+        var picked = tpls.filter(function(t){ return BOM_SEL[t.id]; }).length;
+        var open = !!BOM_OPEN[pid];
+        html += '<div style="border-bottom:1px solid #F1E6D2;padding:6px 0;">';
+        if (!tpls.length) {
+            html += '<div style="color:#A8906E;"><i class="fa fa-minus" style="width:14px;"></i> <b>'+esc(p.process_code)+'</b> '+esc(p.process_name)
+                 + '<span style="margin-left:8px;font-size:12px;">尚未建立整組樣板，無法帶入</span>'
+                 + '<span style="color:#A8906E;margin-left:8px;font-size:12px;">（BOM '+p.bom_count+' 張）</span></div>';
+        } else {
+            html += '<div style="cursor:pointer;" onclick="toggleBomProc('+pid+')">'
+                 + '<i class="fa fa-caret-'+(open?'down':'right')+'" style="width:14px;color:#B5762A;"></i> '
+                 + '<b>'+esc(p.process_code)+'</b> '+esc(p.process_name)
+                 + '<span style="color:#B5762A;margin-left:8px;">已選 '+picked+'／'+tpls.length+' 筆</span>'
+                 + '<span style="color:#A8906E;margin-left:8px;font-size:12px;">（BOM '+p.bom_count+' 張）</span>'
+                 + '<span class="pf-op" style="margin-left:10px;color:#b5762a;text-decoration:underline;font-size:12px;" onclick="event.stopPropagation();bomSelAll('+pid+',1)">全選</span>'
+                 + '<span class="pf-op" style="margin-left:6px;color:#b5762a;text-decoration:underline;font-size:12px;" onclick="event.stopPropagation();bomSelAll('+pid+',0)">取消</span>'
+                 + '</div>';
+            if (open) {
+                html += '<div style="padding:4px 0 2px 24px;">' + tpls.map(function(t){
+                    return '<label style="display:block;padding:3px 0;font-size:13px;">'
+                        + '<input type="checkbox" data-tid="'+t.id+'" '+(BOM_SEL[t.id]?'checked':'')+'> '
+                        + esc(t.failure_mode || '(未命名)')
+                        + (t.is_ai ? '<span class="ai-tag">AI</span>' : '')
+                        + '<span style="color:#8a6d45;margin-left:6px;font-size:12px;">'
+                        + esc([t.item_name, t.function_desc, t.requirement].filter(Boolean).join(' / ')) + '</span>'
+                        + '</label>';
+                }).join('') + '</div>';
+            }
+        }
+        html += '</div>';
     });
-    if (!ids.length){ alert('請至少勾選一個有樣板可帶入的製程'); return; }
-    $.getJSON(API, {action:'templates_of_processes', process_ids:ids.join(',')}, function(res){
-        if (!res.success){ alert(res.message||'載入失敗'); return; }
-        var tpls = res.rows || [];
-        if (!tpls.length){ alert('選到的製程沒有可帶入的整組樣板。'); return; }
+    $('#bomFillList').html(html);
+}
+window.toggleBomProc = function(pid){ BOM_OPEN[pid] = !BOM_OPEN[pid]; renderBomFill(); };
+window.bomSelAll = function(pid, on){
+    (BOM_TPLS[pid]||[]).forEach(function(t){ BOM_SEL[t.id] = !!on; });
+    renderBomFill();
+};
+$(document).on('change', '#bomFillList input[data-tid]', function(){
+    BOM_SEL[parseInt($(this).attr('data-tid'),10)] = this.checked;
+    renderBomFill();
+});
+window.applyBomFill = function(){
+    // 依 BOM 站別順序攤平出被勾選的樣板（保持製程先後，帶入的卡片順序才符合實際加工流程）
+    var tpls = [];
+    BOM_PROCS.forEach(function(p){
+        (BOM_TPLS[p.pfmea_process_id] || []).forEach(function(t){ if (BOM_SEL[t.id]) tpls.push(t); });
+    });
+    if (!tpls.length){ alert('請至少勾選一筆要帶入的整組樣板'); return; }
+    (function(){
         if ($('#bomFillClear').is(':checked')) $('#itemBody').empty();
         var bizDate = $('#fBizDate').val();
         tpls.forEach(function(t){
             var it = {
                 process_code: t.process_code, process_desc: t.item_name, function_desc: t.function_desc,
+                requirement: t.requirement,
                 failure_mode: t.failure_mode, failure_effect: t.failure_effect, severity: t.severity,
                 failure_cause: t.failure_cause, occurrence: t.occurrence,
                 prevention_controls: t.prevention_controls, detection_controls: t.detection_controls,
@@ -1618,7 +1669,7 @@ window.applyBomFill = function(){
             resolveItemOption($c, function(){ resolveFunctionOption($c); });
         });
         alert('已帶入 '+tpls.length+' 筆失效模式分析。請逐張確認內容後儲存；存檔時會自動建立此料號與這些整組的關聯。');
-    });
+    })();
 };
 /* 存檔後：把這份文件用到的每個「製程＋項目＋功能」登記成此料號的組合，
    之後同一料號再開、或設定畫面查詢時就找得到（使用者要求，手動新建的單據同樣適用）。 */
@@ -1769,7 +1820,7 @@ window.openTemplatePicker = function(btn){
 window.applyTemplate = function(i){
     var t = TEMPLATE_ROWS[i], $card = TEMPLATE_TARGET;
     if (!t || !$card) return;
-    var map = {process_desc:t.item_name, failure_mode:t.failure_mode, function_desc:t.function_desc, failure_effect:t.failure_effect,
+    var map = {process_desc:t.item_name, failure_mode:t.failure_mode, function_desc:t.function_desc, requirement:t.requirement, failure_effect:t.failure_effect,
         severity:t.severity, failure_cause:t.failure_cause, occurrence:t.occurrence, prevention_controls:t.prevention_controls,
         detection_controls:t.detection_controls, detection:t.detection, recommended_actions:t.recommended_actions,
         new_severity:t.new_severity, new_occurrence:t.new_occurrence, new_detection:t.new_detection};
@@ -1862,6 +1913,17 @@ function loadBizDateQuick(partDId, partText, custName){
         $('#fBizDateQuick').html(btns || '<span style="color:#8a6d45;font-size:12px;">查無可參考日期，請手動輸入</span>');
     });
 }
+/* 快速跳到料號主檔編輯（2026-08-18 使用者要求）：沿用 master_data_management.php 既有的
+   ?part_search=<料號>&open_part=<d_id> 參數——會自動篩選清單並開啟該料號的編輯跳窗，
+   不必另外改那一頁。未綁定主鍵時只帶 part_search，至少幫使用者篩到那一筆。 */
+window.openPartMaster = function(){
+    var pno = ($('#fPartNo').val()||'').trim();
+    if (!pno) return;
+    var did = parseInt($('#fPartDId').val(),10) || 0;
+    var u = '../pages/master_data_management.php?part_search=' + encodeURIComponent(pno);
+    if (did) u += '&open_part=' + did;
+    window.open(u, '_blank');
+};
 function openPartDrawing(){
     // part_viewer/bom_viewer 用「料號字串」(D_Setting_Id)查表，不是 d_setting.d_id 數字主鍵
     var partNo = $('#fPartNo').val();
@@ -2649,7 +2711,7 @@ window.rsOpenTplForm = function(id){
     var t = id ? RS_TPL_ROWS.find(function(r){ return r.id===id; }) : {};
     t = t || {};
     $('#rsTplId').val(id||0);
-    $('#rsTplItemName').val(t.item_name||''); $('#rsTplFunctionDesc').val(t.function_desc||'');
+    $('#rsTplItemName').val(t.item_name||''); $('#rsTplFunctionDesc').val(t.function_desc||''); $('#rsTplRequirement').val(t.requirement||'');
     $('#rsTplFailureMode').val(t.failure_mode||''); $('#rsTplFailureEffect').val(t.failure_effect||'');
     $('#rsTplSeverity').val(t.severity||''); $('#rsTplFailureCause').val(t.failure_cause||'');
     $('#rsTplOccurrence').val(t.occurrence||''); $('#rsTplPrevention').val(t.prevention_controls||'');
@@ -2662,7 +2724,7 @@ window.rsSaveTpl = function(){
     var pid = parseInt($('#rsTplProcSel').val(),10) || 0;
     if (!pid){ alert('請先選擇製程'); return; }
     var data = {
-        item_name:$('#rsTplItemName').val(), function_desc:$('#rsTplFunctionDesc').val(),
+        item_name:$('#rsTplItemName').val(), function_desc:$('#rsTplFunctionDesc').val(), requirement:$('#rsTplRequirement').val(),
         failure_mode:$('#rsTplFailureMode').val(), failure_effect:$('#rsTplFailureEffect').val(),
         severity:$('#rsTplSeverity').val(), failure_cause:$('#rsTplFailureCause').val(),
         occurrence:$('#rsTplOccurrence').val(), prevention_controls:$('#rsTplPrevention').val(),

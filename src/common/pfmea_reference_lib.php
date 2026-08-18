@@ -770,7 +770,7 @@ function pfmea_ref_item_template_save(PDO $db, int $id, int $processId, array $d
     $textFields = ['item_name','failure_mode','function_desc','failure_effect','failure_cause','prevention_controls','detection_controls','recommended_actions'];
     $numFields = ['severity','occurrence','detection','new_severity','new_occurrence','new_detection'];
     $fields = array_merge(
-        ['item_name','failure_mode','function_desc','failure_effect'],
+        ['item_name','failure_mode','function_desc','requirement','failure_effect'],
         ['severity'],
         ['failure_cause'],
         ['occurrence','prevention_controls','detection_controls','detection','recommended_actions'],
@@ -791,7 +791,7 @@ function pfmea_ref_item_template_save(PDO $db, int $id, int $processId, array $d
     $procName = (string)($st->fetchColumn() ?: '');
     $templateKey = $procName . '_' . ($vals[0] ?: ($vals[1] ?: ''));
     if ($id) {
-        $db->prepare("UPDATE pfmea_item_template SET process_id=?, template_key=?, item_name=?, failure_mode=?, function_desc=?, failure_effect=?,
+        $db->prepare("UPDATE pfmea_item_template SET process_id=?, template_key=?, item_name=?, failure_mode=?, function_desc=?, requirement=?, failure_effect=?,
             severity=?, failure_cause=?, occurrence=?, prevention_controls=?, detection_controls=?, detection=?, recommended_actions=?,
             new_severity=?, new_occurrence=?, new_detection=? WHERE id=?")
            ->execute(array_merge([$processId, $templateKey], $vals, [$id]));
@@ -800,10 +800,10 @@ function pfmea_ref_item_template_save(PDO $db, int $id, int $processId, array $d
     $st = $db->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM pfmea_item_template WHERE process_id=?");
     $st->execute([$processId]);
     $sort = (int)$st->fetchColumn();
-    $db->prepare("INSERT INTO pfmea_item_template (process_id, template_key, item_name, failure_mode, function_desc, failure_effect,
+    $db->prepare("INSERT INTO pfmea_item_template (process_id, template_key, item_name, failure_mode, function_desc, requirement, failure_effect,
         severity, failure_cause, occurrence, prevention_controls, detection_controls, detection, recommended_actions,
         new_severity, new_occurrence, new_detection, sort_order, created_by, created_by_name)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
        ->execute(array_merge([$processId, $templateKey], $vals, [$sort, $uid, $uname]));
     return (int)$db->lastInsertId();
 }
