@@ -234,8 +234,14 @@ $perms = hrf_perms($db, $hrfUser);
 <div class="hf-mask" id="autoSignMask"><div class="hf-modal">
     <div class="m-head"><span>超級管理員自動簽核</span><span class="m-close" onclick="closeMask('autoSignMask')">✕</span></div>
     <div class="m-body">
-        <p style="font-size:12.5px;color:#8a6d45;">已勾選 <b id="autoSignCount">0</b> 筆表單，請先確認/調整下方各筆分數，再輸入操作確認密碼執行。技能鑑定表 NA 欄位（課長考核，該員工直屬主管與核准人為同一人時無中間層可考核）不可填寫。</p>
-        <div class="as-fill-box">
+        <p style="font-size:12.5px;color:#8a6d45;">已勾選 <b id="autoSignCount">0</b> 筆表單，請先確認/調整下方各筆分數，再輸入操作確認密碼執行。<span id="autoSignNote"></span></p>
+        <div class="as-fill-box" id="asFillCp" style="display:none;">
+            <span class="lbl">一鍵套用固定分數到全部職能鑑定表的所有項目（可再個別修改）：</span><br>
+            <span id="asFillCpMsWrap">機台設定<input type="text" id="fillCpMs" class="score-inp" inputmode="numeric" maxlength="1" style="width:36px;height:30px;font-size:13px;">　</span>操作<input type="text" id="fillCpOp" class="score-inp" inputmode="numeric" maxlength="1" style="width:36px;height:30px;font-size:13px;"> 異常排除<input type="text" id="fillCpEx" class="score-inp" inputmode="numeric" maxlength="1" style="width:36px;height:30px;font-size:13px;">
+            <button type="button" class="hf-btn-sm" onclick="hfAutoSignApplyAllCp()">套用到全部</button>
+            <span id="asFillCpMsg" style="font-size:12px;color:#DD5138;margin-left:6px;"></span>
+        </div>
+        <div class="as-fill-box" id="asFillSkill">
             <span class="lbl">一鍵套用固定分數到全部技能鑑定表（可再個別修改）：</span><br>
             總經理－品質<input type="text" id="fillQGm" class="score-inp" inputmode="numeric" maxlength="1" style="width:36px;height:30px;font-size:13px;"> 效率<input type="text" id="fillEGm" class="score-inp" inputmode="numeric" maxlength="1" style="width:36px;height:30px;font-size:13px;"> 熟練度<input type="text" id="fillPGm" class="score-inp" inputmode="numeric" maxlength="1" style="width:36px;height:30px;font-size:13px;">
             　課長－品質<input type="text" id="fillQMgr" class="score-inp" inputmode="numeric" maxlength="1" style="width:36px;height:30px;font-size:13px;"> 效率<input type="text" id="fillEMgr" class="score-inp" inputmode="numeric" maxlength="1" style="width:36px;height:30px;font-size:13px;"> 熟練度<input type="text" id="fillPMgr" class="score-inp" inputmode="numeric" maxlength="1" style="width:36px;height:30px;font-size:13px;">
@@ -243,7 +249,7 @@ $perms = hrf_perms($db, $hrfUser);
         </div>
         <div class="hf-table-wrap" style="max-height:260px;overflow-y:auto;">
         <table class="hf-tbl as-sign-tbl" id="autoSignRowsTbl">
-            <thead><tr><th>姓名</th><th>類型/機型</th><th>品質(總經理/課長)</th><th>效率(總經理/課長)</th><th>熟練度(總經理/課長)</th></tr></thead>
+            <thead id="autoSignRowsHead"><tr><th>姓名</th><th>類型/機型</th><th>品質(總經理/課長)</th><th>效率(總經理/課長)</th><th>熟練度(總經理/課長)</th></tr></thead>
             <tbody id="autoSignRowsBody"></tbody>
         </table>
         </div>
@@ -837,7 +843,8 @@ function cpItemsTableHtml(items, editable, deptId){
               + '<div style="margin-top:8px;font-size:12.5px;">一鍵套用：'
               + (CP_HAS_MS ? '機台設定 <input type="text" id="cpFillMs" class="score-inp" inputmode="numeric" maxlength="1" style="width:40px;height:30px;font-size:13px;"> <button type="button" class="hf-btn-sm" onclick="hfCpFillAll(\'ms\')">套用到全部</button>　' : '')
               + '操作 <input type="text" id="cpFillOp" class="score-inp" inputmode="numeric" maxlength="1" style="width:40px;height:30px;font-size:13px;"> <button type="button" class="hf-btn-sm" onclick="hfCpFillAll(\'op\')">套用到全部</button>'
-              + '　異常排除 <input type="text" id="cpFillEx" class="score-inp" inputmode="numeric" maxlength="1" style="width:40px;height:30px;font-size:13px;"> <button type="button" class="hf-btn-sm" onclick="hfCpFillAll(\'ex\')">套用到全部</button></div>';
+              + '　異常排除 <input type="text" id="cpFillEx" class="score-inp" inputmode="numeric" maxlength="1" style="width:40px;height:30px;font-size:13px;"> <button type="button" class="hf-btn-sm" onclick="hfCpFillAll(\'ex\')">套用到全部</button>'
+              + ' <span id="cpFillMsg" style="font-size:12px;color:#DD5138;"></span></div>';
     }
     return html;
 }
@@ -851,8 +858,11 @@ function cpRowHtml(d, no, editable){
 function hfCpFillAll(which){
     var id = {ms:'Ms', op:'Op', ex:'Ex'}[which];
     var v = ($('#cpFill'+id).val()||'').replace(/[^1-4]/g,'').slice(0,1);
-    if (!v){ alert('請先輸入1~4的數字'); return; }
-    $('#cpItemsBody .c-'+which).val(v);
+    var $msg = $('#cpFillMsg');
+    if (!v){ $msg.css('color','#DD5138').text('請先在左邊的欄位填入 1~4 的分數再按套用'); return; }
+    var $inp = $('#cpItemsBody .c-'+which);
+    $inp.val(v);
+    $msg.css('color','#3f9142').text('已套用到 '+$inp.length+' 列');
 }
 function hfCpRowAdd(){ var n=$('#cpItemsBody tr').length+1; $('#cpItemsBody').append(cpRowHtml({}, n, true)); }
 function hfCpRowDel(){ var $rows=$('#cpItemsBody tr'); if ($rows.length>1) $rows.last().remove(); }
@@ -1090,7 +1100,23 @@ function openAutoSignModal(ft){
     $('#autoSignPwd').val('');
     $('#autoSignDate').val(mostCommonDate(AUTO_SIGN_ROWS));
     $('#autoSignErr').empty();
-    ['fillQGm','fillEGm','fillPGm','fillQMgr','fillEMgr','fillPMgr'].forEach(function(id){ $('#'+id).val(''); });
+    ['fillQGm','fillEGm','fillPGm','fillQMgr','fillEMgr','fillPMgr','fillCpMs','fillCpOp','fillCpEx'].forEach(function(id){ $('#'+id).val(''); });
+    $('#asFillCpMsg').empty();
+    // 跳窗版面依表單類型換：職能鑑定表是「逐項目」評分（機台設定/操作/異常排除），不是技能鑑定考核表的
+    // 品質/效率/熟練度×總經理/課長，原本共用同一套表頭與一鍵套用欄位，對職能鑑定表按「套用到全部」不會有
+    // 任何反應（hfAutoSignApplyAll() 只處理 skill_assess）。2026-08-18 使用者回報。
+    var isCp = ft === 'competency';
+    $('#asFillCp').toggle(isCp);
+    $('#asFillSkill').toggle(!isCp);
+    // 這批表單有沒有部門用三欄（機台設定）；全部都是兩欄就不顯示機台設定的一鍵套用欄位
+    var anyMs = AUTO_SIGN_ROWS.some(function(r){ return r.form_type === 'competency' && deptHasMachineSetup(r.dept_id); });
+    $('#asFillCpMsWrap').toggle(isCp && anyMs);
+    $('#autoSignNote').text(isCp
+        ? '職能鑑定表的評分欄依部門而定：有設定「含機台設定」的部門為機台設定／操作／異常排除三欄，其餘為操作／異常排除兩欄。'
+        : '技能鑑定表 NA 欄位（課長考核，該員工直屬主管與核准人為同一人時無中間層可考核）不可填寫。');
+    $('#autoSignRowsHead').html(isCp
+        ? '<tr><th style="width:110px;">姓名</th><th style="width:120px;">表單</th><th colspan="3">各項目評分</th></tr>'
+        : '<tr><th>姓名</th><th>類型/機型</th><th>品質(總經理/課長)</th><th>效率(總經理/課長)</th><th>熟練度(總經理/課長)</th></tr>');
     $('#autoSignRowsBody').html('<tr><td colspan="5" style="text-align:center;color:#8a6d45;">載入中…</td></tr>');
     openMask('autoSignMask');
     var cpRows = AUTO_SIGN_ROWS.filter(function(r){ return r.form_type === 'competency'; });
@@ -1111,7 +1137,7 @@ function renderAutoSignRows(){
             var itemsHtml = items.length ? items.map(function(it, ii){
                 var d = it.data || {};
                 return '<span style="display:inline-block;margin:2px 10px 2px 0;white-space:nowrap;">'+esc(d.skill_name||('項目'+(ii+1)))
-                     + (deptHasMachineSetup(r.dept_id) ? (' 機台'+scoreInputHtml('as-cp-ms', d.score_ms, ' data-idx="'+idx+'" data-ii="'+ii+'" style="width:34px;height:30px;font-size:12px;"')) : '')
+                     + (deptHasMachineSetup(r.dept_id) ? (' 機台設定'+scoreInputHtml('as-cp-ms', d.score_ms, ' data-idx="'+idx+'" data-ii="'+ii+'" style="width:34px;height:30px;font-size:12px;"')) : '')
                      + ' 操作'+scoreInputHtml('as-cp-op', d.score_op, ' data-idx="'+idx+'" data-ii="'+ii+'" style="width:34px;height:30px;font-size:12px;"')
                      + ' 異常'+scoreInputHtml('as-cp-ex', d.score_ex, ' data-idx="'+idx+'" data-ii="'+ii+'" style="width:34px;height:30px;font-size:12px;"')
                      + '</span>';
@@ -1136,6 +1162,23 @@ function renderAutoSignRows(){
         $tr.find('.as-q-gm').val(r.score_quality_gm||''); $tr.find('.as-e-gm').val(r.score_efficiency_gm||''); $tr.find('.as-p-gm').val(r.score_proficiency_gm||'');
         if (!r.confirm_na) { $tr.find('.as-q-mgr').val(r.score_quality_mgr||''); $tr.find('.as-e-mgr').val(r.score_efficiency_mgr||''); $tr.find('.as-p-mgr').val(r.score_proficiency_mgr||''); }
     });
+}
+/** 職能鑑定表：把填入的分數套到所有表單的所有項目（只套有填的那幾欄；機台設定欄只有三欄制部門的列會有）。 */
+function hfAutoSignApplyAllCp(){
+    var v = {ms:$('#fillCpMs').val()||'', op:$('#fillCpOp').val()||'', ex:$('#fillCpEx').val()||''};
+    if (!v.ms && !v.op && !v.ex){ $('#asFillCpMsg').css('color','#DD5138').text('請先在上面填入 1~4 的分數再按套用'); return; }
+    var n = 0;
+    AUTO_SIGN_ROWS.forEach(function(r, idx){
+        if (r.form_type !== 'competency') return;
+        var $tr = $('#autoSignRowsBody tr[data-idx="'+idx+'"]');
+        ['ms','op','ex'].forEach(function(k){
+            if (!v[k]) return;
+            var $inp = $tr.find('.as-cp-'+k);
+            n += $inp.length;
+            $inp.val(v[k]);
+        });
+    });
+    $('#asFillCpMsg').css('color', n ? '#3f9142' : '#DD5138').text(n ? ('已套用到 '+n+' 個欄位') : '沒有可套用的欄位（所選表單沒有項目）');
 }
 function hfAutoSignApplyAll(){
     var v = {qGm:$('#fillQGm').val(), eGm:$('#fillEGm').val(), pGm:$('#fillPGm').val(), qMgr:$('#fillQMgr').val(), eMgr:$('#fillEMgr').val(), pMgr:$('#fillPMgr').val()};
