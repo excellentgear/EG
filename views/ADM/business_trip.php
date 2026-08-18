@@ -314,13 +314,17 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div class="bt-hint" style="margin-top:4px;">有上傳掃描實體章的人一律優先用掃描章，這裡只影響沒掃描章時自動產生的印章樣式。</div>
 
         <div style="border-top:1px dashed #EADFC8;margin:14px 0 10px;"></div>
-        <div style="font-weight:bold;color:#5b3a1e;margin-bottom:6px;">列印簽章三格的來源（紙本為 會計／課長／組長）</div>
+        <div style="font-weight:bold;color:#5b3a1e;margin-bottom:6px;">列印簽章欄（會計／單位主管 兩格）</div>
         <div class="grid2">
-            <div><label>會計格</label><select id="setSignAcc"></select></div>
-            <div><label>課長格</label><select id="setSignSection"></select></div>
-            <div><label>組長格</label><select id="setSignGroup"></select></div>
+            <div><label>會計格</label>
+                <input type="text" class="ro-auto" readonly value="固定留白（有請款需求時才由會計手蓋）">
+                <div class="bt-hint" style="margin-top:2px;">會計只有在需要請款時才蓋章，故系統不自動帶人、一律留白。</div></div>
+            <div><label>單位主管格</label><select id="setSignGroup"></select>
+                <div class="bt-hint" style="margin-top:2px;">預設「實際核准的單位主管」＝蓋真正核准這張單的人。</div></div>
         </div>
-        <div class="bt-hint" style="margin-top:4px;">選「留白」的格子列印時空白，供紙本手蓋。選項的實際人員都是當下查組織角色綁定得出，不寫死人名。</div>
+        <div class="bt-hint" style="margin-top:4px;">選「留白」列印時空白，供紙本手蓋；選項的實際人員都是當下查組織角色綁定得出，不寫死人名。
+            <b>主管本人公出時</b>核准人會自動改成最高核准人員，選「實際核准的單位主管」時該格就會蓋到總經理的章（比照紙本附註）；
+            由代理人代簽時圖章右下角會加「代」字。</div>
     </div>
     <div class="m-foot">
         <button onclick="closeMask('setMask')">關閉</button>
@@ -378,7 +382,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         ・列印的表單名稱、右下角文件編號、版次都來自 AS 文件綁定，<b>版次依單據日期回推</b>當時生效的版本。</p>
         <h4>設定入口</h4>
         <p>本頁工具列<b>「模組設定」</b>（限公出單管理員）：AS 文件編號綁定、是否需要主管簽核（<b>僅系統管理者可改</b>）、
-        外訓是否自動產生、核准圖章樣式、列印簽章三格（會計／課長／組長）各自的來源。
+        外訓是否自動產生、通勤時間、核准圖章樣式、列印簽章兩格（<b>會計格固定留白</b>，只有需要請款時才由會計手蓋；
+        <b>單位主管格</b>蓋實際核准這張單的人，可另選來源）。
         部門主管與最高核准人員的認定來自<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定設定</a>。</p>
         <h4>權限角色</h4>
         <p><b>一般在職員工</b>：不需指派任何角色，就能開立／檢視／列印<b>自己的</b>公出單，並核准指派給自己的單。
@@ -416,9 +421,9 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
 function dispDate(d){ return d ? egFmtDate(d) : ''; }        // 顯示一律 YYYY.MM.DD（ai-rules/20）
 function openMask(id){ document.getElementById(id).style.display='block'; }
 function closeMask(id){ document.getElementById(id).style.display='none'; }
-function stampHtml(name, date){
+function stampHtml(name, date, isDeputy){
     try { if (window.EGStamp && EGStamp.stamp)
-        return EGStamp.stamp(name, date||'', false, (META && META.stamp_template) ? META.stamp_template.schema : null); } catch(e){}
+        return EGStamp.stamp(name, date||'', !!isDeputy, (META && META.stamp_template) ? META.stamp_template.schema : null); } catch(e){}
     return '<span style="font-size:14px;">'+esc(name)+'</span>'+(date?'<div style="font-size:10px;color:#555;">'+esc(date)+'</div>':'');
 }
 $(document).ajaxError(function(e, x){
@@ -815,13 +820,13 @@ function printTrip(id){
 function tripPrintHtml(res){
     var t = res.trip, sg = res.signers || {}, ready = (t.status === 'approved');
     var dt = ready ? dispDate(t.approved_date || t.apply_date) : '';
-    var stamp = function(nm){ return (ready && nm) ? stampHtml(nm, dt) : ''; };
+    var stamp = function(nm, deputy){ return (ready && nm) ? stampHtml(nm, dt, deputy) : ''; };
     var timeText = (t.time_from||'') + ((t.time_to||'') ? ' 至 ' + t.time_to : '');
     // 逐日時段：一列排兩天（天數多也不撐版），未填滿補空格供手寫
     var ds = t.days || [], dayTbl = '';
     if (ds.length) {
         var cells = [];
-        for (var i = 0; i < Math.max(ds.length, 4); i++) {
+        for (var i = 0; i < ds.length; i++) {                 /* 不補空白格：欄位少、補了反而像沒填完 */
             var d = ds[i] || {}, tm = d.start_time ? (d.start_time + (d.end_time ? '～' + d.end_time : '')) : '';
             cells.push('<td class="dn">' + (d.day_date ? ('第 ' + (i+1) + ' 天') : '') + '</td>'
                      + '<td class="dd">' + (d.day_date ? esc(dispDate(d.day_date)) : '') + '</td>'
@@ -872,7 +877,7 @@ function tripPrintHtml(res){
         + '.sg .cell{flex:1;display:flex;flex-direction:column;border-right:1px solid #000;}'
         + '.sg .cell:last-child{border-right:none;}'
         + '.sg .lb{background:#F5EEE3;border-bottom:1px solid #000;text-align:center;font-size:14px;'
-        +   'font-weight:bold;letter-spacing:4px;padding:3px 0;}'
+        +   'font-weight:bold;letter-spacing:2px;padding:3px 0;}'
         + '.sg .bx{flex:1;display:flex;align-items:center;justify-content:center;}'
         + '.sg .stamp-wrap svg,.sg svg.car-stamp{width:72px;height:72px;}'
         /* 右側直書「外出時交管理課存查」 */
@@ -894,12 +899,14 @@ function tripPrintHtml(res){
         +   '<div class="r rs"><div class="lb">事　由</div><div class="vl"><div style="width:100%;">'
         +     esc(t.reason||'') + dayTbl + '</div></div></div>'
         +   '<div class="sg">'
-        +     '<div class="cell"><div class="lb">會　計</div><div class="bx">' + stamp(sg.acc) + '</div></div>'
-        +     '<div class="cell"><div class="lb">課　長</div><div class="bx">' + stamp(sg.section) + '</div></div>'
-        +     '<div class="cell"><div class="lb">組　長</div><div class="bx">' + stamp(sg.group) + '</div></div>'
+        /* 會計格固定留白：只有需要請款時才由會計手蓋 */
+        +     '<div class="cell"><div class="lb">會　計</div><div class="bx"></div></div>'
+        /* 單位主管格：蓋實際核准這張單的人（主管本人公出時＝總經理）；代理簽核的章帶「代」字 */
+        +     '<div class="cell"><div class="lb">單位主管</div><div class="bx">'
+        +       stamp(sg.group, +t.is_delegated) + '</div></div>'
         +   '</div>'
         + '</div><div class="keep"><span>外出時交管理課存查</span></div></div>'
-        + '<div class="note">＊業務、會計、品管、採購物料單位因公外出時，請單位主管核准即可；主管公出請總經理代理</div>'
+        + '<div class="note">＊業務、會計、品管、採購物料單位因公外出時，請單位主管核准即可；主管公出時單位主管欄位由總經理核准</div>'
         + '</div>'
         + (res.doc_no ? '<div class="docno">' + esc(res.doc_no) + '</div>' : '');
 
@@ -937,8 +944,6 @@ function fillSettingUI(res){
     $('#setStampTpl').html(th).val(String(s.bt_stamp_tpl_id || 0));
     var sh = '';
     $.each(res.sign_sources || {}, function(k, v){ sh += '<option value="'+esc(k)+'">'+esc(v)+'</option>'; });
-    $('#setSignAcc').html(sh).val(s.bt_sign_acc || '');
-    $('#setSignSection').html(sh).val(s.bt_sign_section || '');
     $('#setSignGroup').html(sh).val(s.bt_sign_group || '');
     $('#setAsDoc').val(res.as_doc ? EGAsDoc.label(res.as_doc) : '');
     if (!res.perms.isAdmin) { $('#setNeedAppr').prop('disabled', true).addClass('ro-auto'); $('#needApprLock').text('（僅系統管理者可改）'); }
@@ -967,7 +972,7 @@ $('#btnClearAsDoc').on('click', function(){
 $('#btnSaveSet').on('click', function(){
     var d = {action:'save_settings', bt_auto_from_training:$('#setAutoTr').val(), bt_stamp_tpl_id:$('#setStampTpl').val(),
              bt_commute_min:$('#setCommute').val(),
-             bt_sign_acc:$('#setSignAcc').val(), bt_sign_section:$('#setSignSection').val(), bt_sign_group:$('#setSignGroup').val()};
+             bt_sign_group:$('#setSignGroup').val()};
     if (!$('#setNeedAppr').prop('disabled')) d.bt_need_approval = $('#setNeedAppr').val();
     $.post(API, d, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }

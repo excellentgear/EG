@@ -22,7 +22,7 @@ require_once __DIR__ . '/people_lib.php';
 const BT_ASDOC_MODULE = 'business_trip';          // AS 文件綁定模組代碼（asdoc_lib）
 const BT_SETTING_KEYS = ['bt_need_approval', 'bt_auto_from_training', 'bt_stamp_tpl_id',
                          'bt_sign_acc', 'bt_sign_section', 'bt_sign_group', 'bt_commute_min'];
-/** 列印簽章格的來源選項（三格：會計／課長／組長）；值一律存設定，不在別處寫死對照表（鐵律4） */
+/** 列印簽章格的來源選項（兩格：會計固定留白／單位主管）；值一律存設定，不在別處寫死對照表（鐵律4） */
 const BT_SIGN_SOURCES = [
     ''          => '（留白，紙本手蓋）',
     'approver'  => '實際核准的單位主管',
@@ -148,7 +148,7 @@ function bt_perms(PDO $db, ?array $u): array
 function bt_settings(PDO $db): array
 {
     $out = ['bt_need_approval'=>1, 'bt_auto_from_training'=>1, 'bt_stamp_tpl_id'=>null,
-            'bt_sign_acc'=>'acc_dept', 'bt_sign_section'=>'approver', 'bt_sign_group'=>'',
+            'bt_sign_acc'=>'', 'bt_sign_section'=>'', 'bt_sign_group'=>'approver',
             'bt_commute_min'=>30];      // 外訓帶入時公出時間前後各加的通勤時間（分鐘）
     try {
         $in = implode(',', array_fill(0, count(BT_SETTING_KEYS), '?'));
@@ -384,8 +384,9 @@ function bt_print_signers(PDO $db, array $trip): array
         }
         return '';
     };
-    return ['acc'     => $pick((string)$set['bt_sign_acc']),
-            'section' => $pick((string)$set['bt_sign_section']),
+    // 簽章欄只有兩格：會計固定留白（只有需要請款時才由會計手蓋）、單位主管蓋實際核准人
+    return ['acc'     => '',
+            'section' => '',
             'group'   => $pick((string)$set['bt_sign_group'])];
 }
 

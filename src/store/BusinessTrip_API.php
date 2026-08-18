@@ -381,7 +381,8 @@ case 'save_settings': {
         if ($cm < 0 || $cm > 240) jerr('通勤時間請填 0～240 分鐘');
         bt_save_setting($db, 'bt_commute_min', $cm);
     }
-    foreach (['bt_sign_acc', 'bt_sign_section', 'bt_sign_group'] as $k) {
+    // 會計格固定留白（只有請款才需要會計蓋章），不接受來源設定；列印只剩單位主管格可選
+    foreach (['bt_sign_group'] as $k) {
         if (!isset($_POST[$k])) continue;
         $v = (string)$_POST[$k];
         if (!array_key_exists($v, BT_SIGN_SOURCES)) jerr('簽章欄來源設定值不正確');
