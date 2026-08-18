@@ -616,6 +616,15 @@ case 'product_name_get':
     jout(['success'=>true,'product_name'=>td_dev_eval_default_product_name_get($db) ?? '']);
 
 // 相關部門預設勾選值（管理員設定，新增文件時自動帶入）
+case 'classify_rule_get':
+    needView($perms);
+    jout(['success'=>true,'rule'=>pfmea_classify_rule_get($db)]);
+
+case 'classify_rule_save':
+    needAdmin($perms);
+    pfmea_classify_rule_save($db, $_POST, $uid);
+    jout(['success'=>true,'rule'=>pfmea_classify_rule_get($db)]);
+
 case 'dept_defaults_get':
     needView($perms);
     jout(['success'=>true,'depts'=>pfmea_dept_defaults_get($db)]);

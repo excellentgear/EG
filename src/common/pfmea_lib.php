@@ -354,6 +354,44 @@ function pfmea_next_doc_no(PDO $db): string {
 }
 
 /** 「相關部門」預設勾選值（管理員設定，存 system_parameters，新建文件時自動帶入） */
+/* 分類自動判定（2026-08-18 使用者要求）：嚴重度S 或 發生率O 落在設定的區間內就自動帶「重要特性」，
+   否則帶「一般特性」。門檻不可寫死（鐵律4：可自訂的設定不得在別處寫死一份），一律存 system_parameters
+   讓管理員在分類欄旁的按鈕改；未設定過時回傳使用者當初指定的初始值 S 5~8 或 O 4~10。 */
+function pfmea_classify_rule_get(PDO $db): array {
+    $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='PFMEA' AND param_key='classify_rule' LIMIT 1");
+    $st->execute();
+    $v = $st->fetchColumn();
+    $d = $v ? json_decode((string)$v, true) : null;
+    if (!is_array($d)) $d = [];
+    return [
+        'enabled'   => array_key_exists('enabled', $d) ? (int)$d['enabled'] : 1,
+        's_min'     => isset($d['s_min']) ? (int)$d['s_min'] : 5,
+        's_max'     => isset($d['s_max']) ? (int)$d['s_max'] : 8,
+        'o_min'     => isset($d['o_min']) ? (int)$d['o_min'] : 4,
+        'o_max'     => isset($d['o_max']) ? (int)$d['o_max'] : 10,
+        'hit_text'  => isset($d['hit_text'])  ? (string)$d['hit_text']  : '重要特性',
+        'else_text' => isset($d['else_text']) ? (string)$d['else_text'] : '一般特性',
+    ];
+}
+function pfmea_classify_rule_save(PDO $db, array $r, int $uid): void {
+    $clean = [
+        'enabled'   => !empty($r['enabled']) ? 1 : 0,
+        's_min'     => max(1, min(10, (int)($r['s_min'] ?? 5))),
+        's_max'     => max(1, min(10, (int)($r['s_max'] ?? 8))),
+        'o_min'     => max(1, min(10, (int)($r['o_min'] ?? 4))),
+        'o_max'     => max(1, min(10, (int)($r['o_max'] ?? 10))),
+        'hit_text'  => trim((string)($r['hit_text'] ?? '重要特性')),
+        'else_text' => trim((string)($r['else_text'] ?? '一般特性')),
+    ];
+    if ($clean['s_min'] > $clean['s_max']) [$clean['s_min'], $clean['s_max']] = [$clean['s_max'], $clean['s_min']];
+    if ($clean['o_min'] > $clean['o_max']) [$clean['o_min'], $clean['o_max']] = [$clean['o_max'], $clean['o_min']];
+    $json = json_encode($clean, JSON_UNESCAPED_UNICODE);
+    $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group='PFMEA' AND param_key='classify_rule' LIMIT 1");
+    $st->execute();
+    if ($st->fetchColumn()) $db->prepare("UPDATE system_parameters SET param_value=? WHERE param_group='PFMEA' AND param_key='classify_rule'")->execute([$json]);
+    else $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value) VALUES ('PFMEA','classify_rule',?)")->execute([$json]);
+}
+
 function pfmea_dept_defaults_get(PDO $db): array {
     $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='PFMEA' AND param_key='default_depts' LIMIT 1");
     $st->execute();

@@ -397,6 +397,32 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
 </div></div>
 
 <!-- 建議措施樣板挑選（可複選，套用時自動加編號，2026-08-14使用者要求） -->
+<!-- 分類自動判定規則（2026-08-18 使用者要求，僅管理員） -->
+<div class="pf-mask" id="classRuleMask" style="z-index:1200;"><div class="pf-modal" style="max-width:560px;">
+    <div class="m-head"><span>分類自動判定規則</span><span class="m-close" onclick="closeMask('classRuleMask')">✕</span></div>
+    <div class="m-body" style="font-size:14px;color:#5b3a1e;">
+        <label style="font-size:14px;"><input type="checkbox" id="crEnabled"> 啟用自動判定（填寫 S／O 時自動帶入分類）</label>
+        <div style="margin:10px 0;padding:10px;background:#FFFBF3;border:1px dashed #E8D5B5;border-radius:4px;line-height:2.2;">
+            嚴重度 S 介於
+            <input type="number" id="crSMin" min="1" max="10" style="width:60px;"> ～
+            <input type="number" id="crSMax" min="1" max="10" style="width:60px;">
+            <br><b>或</b> 發生率 O 介於
+            <input type="number" id="crOMin" min="1" max="10" style="width:60px;"> ～
+            <input type="number" id="crOMax" min="1" max="10" style="width:60px;">
+            <br>符合 → 分類帶入 <input type="text" id="crHit" style="width:130px;">
+            <br>都不符合 → 分類帶入 <input type="text" id="crElse" style="width:130px;">
+        </div>
+        <div style="font-size:12px;color:#8a6d45;line-height:1.8;">
+            兩個條件是「或」的關係，只要其中一個成立就算符合。<br>
+            自動帶入只會寫進<b>還空白、或上次就是系統自動帶的</b>格子；您手動打過的分類不會被蓋掉。
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('classRuleMask')">取消</button>
+        <button class="b-ok" onclick="saveClassRule()">儲存</button>
+    </div>
+</div></div>
+
 <!-- 分類樣板挑選（2026-08-18 使用者要求：分類要跟建議措施一樣有樣本可選） -->
 <div class="pf-mask" id="classPickerMask" style="z-index:1200;"><div class="pf-modal">
     <div class="m-head"><span>選擇分類樣板（可複選）</span><span class="m-close" onclick="closeMask('classPickerMask')">✕</span></div>
@@ -606,17 +632,19 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <!-- 料號只在「要求」這一層分岔（2026-08-18 使用者拍板：料號跟要求以外的都是通用）。
                  選了料號＝在這條路徑上替該料號綁一組，之後新增的要求就是該料號專屬（可多筆）。 -->
             <div style="background:#FFFBF3;border:1px dashed #E8D5B5;border-radius:4px;padding:8px 10px;margin-bottom:6px;">
-                <div style="font-size:12px;color:#5b3a1e;margin-bottom:4px;">料號範圍
-                    <span style="font-weight:normal;font-size:11px;color:#8a6d45;margin-left:6px;">留空＝這一層的通用要求（所有料號共用）；輸入料號＝只給該料號用的專屬要求，會蓋過通用值</span></div>
+                <div style="font-size:13px;color:#5b3a1e;margin-bottom:4px;">要求要給哪個料號用
+                    <span style="font-weight:normal;font-size:12px;color:#8a6d45;margin-left:6px;">
+                    留空＝這一層的通用要求（所有料號共用）；輸入料號＝這個料號用到這組時要出現的要求清單。
+                    <b>製程／項目／功能這組本身仍是全公司共用</b>，不會變成此料號專屬；不同料號可以各自對同一組設定不同的要求。</span></div>
                 <div class="pf-proc-box">
                     <input type="text" id="rsReqPartNo" placeholder="輸入部分料號搜尋（留空＝通用）" style="flex:1;">
                     <button type="button" class="pf-row-btn" onclick="rsClearReqPart()">改回通用</button>
                 </div>
                 <div id="rsReqPartStatus" style="font-size:11px;margin-top:3px;"></div>
                 <div id="rsReqPartBindBox" style="display:none;margin-top:6px;padding-top:6px;border-top:1px dashed #EADFC8;">
-                    <div style="font-size:12px;color:#5b3a1e;margin-bottom:4px;">此料號在本製程底下已綁定的組合
-                        <span class="pf-op" onclick="rsBindCurrentPath()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-plus"></i> 把目前鑽到的這條路徑綁給此料號</span>
-                        <span class="pf-op" onclick="rsOpenBindCandidates()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-list"></i> 一次綁多組</span>
+                    <div style="font-size:13px;color:#5b3a1e;margin-bottom:4px;">此料號已設定要求的組合（其他料號不受影響）
+                        <span class="pf-op" onclick="rsBindCurrentPath()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-plus"></i> 為此料號加入目前這組</span>
+                        <span class="pf-op" onclick="rsOpenBindCandidates()" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-list"></i> 一次加入多組</span>
                     </div>
                     <div class="rs-list" id="rsBindList" style="max-height:150px;"></div>
                     <div style="margin-top:6px;">
@@ -775,6 +803,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期／相關部門預設值自動帶入；來源只有純文字料號時會自動回查主檔綁定成正式料號，綁定後才開得了圖、客戶名稱才帶得出來），分析項目仍需逐份手動填寫。</li>
             <li><b>製程代號</b>：改可從全站製程主檔同步帶入（含大項分類），輸入時同時模糊搜尋代號/名稱/大項分類（多關鍵字皆需命中），顯示清單供點選。</li>
             <li><b>參考資料設定</b>：工具列同名按鈕（僅管理員可見），分三個頁籤：①<b>階層對應</b>——最上面是<b>階層對應總表</b>，一列＝一條完整路徑（製程／項目／功能／潛在失效模式／後果／分類／原因），像 Excel 一樣直接在格子裡改：每一格都可打字也可下拉選，候選值會依左邊欄位過濾（選了製程，項目欄就只出現該製程底下的）；在最後一列按 <b>↓</b> 會自動新增一列並帶入上一列的製程／項目／功能，只要改不同的地方；「從 Excel 貼上」可把 Excel 複製的整塊資料直接帶進來；「整欄填滿」把游標所在格的值套用到下面所有列；後果／分類／原因一格可填多個，用「、」隔開；<b>灰色斜體</b>代表該格目前沿用全站共用清單（同名失效模式共通），編輯後就轉成這一列專屬。改過的列會標成米黃色，按「儲存變更」才寫入。往下還有<b>逐層鑽取（進階）</b>可收合區塊，處理料號綁定與要求設定（要求是掛在「路徑」上而非掛在失效模式上，同一路徑的多筆失效模式共用同一批要求，故不併入總表以免改一列卻動到別列）。此外——所有下拉選項的來源，由粗到細串成一條鑽取鏈：<b>製程 → 項目 → 功能 → 潛在失效模式 → 後果／分類／原因</b>，每一層點下去就往下鑽一層，該層清單可直接新增／刪除。頂端另有「從全站製程主檔同步」拉入公司所有製程（含大項分類，可整個大項一鍵批次開放），只有開放的製程會出現在分析表下拉。<b>「要求」這一層可以指定料號</b>：料號欄留空＝這一層的通用要求（所有料號共用），輸入料號＝只給該料號用的專屬要求（會蓋過通用值），且同一個組合底下<b>可以輸入多筆要求</b>，填表時下拉會全部列出讓您挑本次要用的。指定料號後還可以「把目前鑽到的這條路徑綁給此料號」或「一次綁多組」（選了製程就自動帶出該製程底下整套項目／功能供勾選，已綁過的會標示鎖住），以及設定該料號＋製程的<b>圖面要求</b>（列印表頭的規格描述）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>要求總覽</b>——不分製程/項目/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、直接編輯文字內容、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
+            <li><b>分類自動判定</b>：填寫「嚴重度S」或「發生率O」時，系統會依門檻自動帶入分類——預設 <b>S 介於 5~8</b> <b>或</b> <b>O 介於 4~10</b> 就帶「重要特性」，都不符合帶「一般特性」（兩條件是「或」，其中一個成立即可）。只會寫進<b>還空白、或上次就是系統自動帶的</b>格子，您手動打過的分類不會被蓋掉。門檻與文字可由管理員在分類欄位右側「判定規則」按鈕修改（可整個停用）。</li>
             <li><b>分類樣板</b>：「分類」欄位標題旁「選樣板（可複選）」可開跳窗勾選預先建立好的常用分類（如關鍵／重要），勾選後以「、」串接填入，已有的值不重複加。樣板在「參考資料設定」維護。<b>樣板與綁定並存</b>：樣板是全站共用的常用值（從跳窗挑），綁定是「這一筆潛在失效模式慣用哪幾個分類」（出現在欄位下拉），兩邊都能用。</li>
             <li><b>建議措施的列印換行</b>：列印時「建議措施」會依編號一項一行（1. 2. 3. 各自獨立一行）；不論您是用 Enter 換行輸入，或是編號連著寫成一整段，列印都會自動斷行。公差小數（如 0.02、Ra1.6）不會被誤判成編號。</li>
             <li><b>建議措施樣板</b>：「建議措施」欄位標題旁「選樣板（可複選）」可開跳窗勾選預先在參考資料設定建立好的建議措施句庫，套用時自動接續編號（1. 2. 3.…）；手動輸入時只要目前這行是「數字.」開頭，按 Enter 換行會自動接下一個編號，不必自己算。</li>
@@ -931,7 +960,8 @@ function itemCardHtml(it, idx, expanded){
         + fld('process_desc','項目','list:item') + fld('function_desc','功能','list:function') + fld('requirement','要求','list:requirement')
         + fld('failure_mode','潛在失效模式','list:failure_mode') + fld('failure_effect','失效模式潛在後果','list:failure_effect')
         + fld('classification','分類','list:classification',
-              '<span class="pf-op" onclick="openClassPicker(this)" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"'+dis+'><i class="fa fa-list"></i> 選樣板（可複選）</span>')
+              '<span class="pf-op" onclick="openClassPicker(this)" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"'+dis+'><i class="fa fa-list"></i> 選樣板</span>'
+              + (CAN_ADMIN ? '<span class="pf-op" onclick="openClassRule()" title="設定自動判定的S/O門檻" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"><i class="fa fa-cog"></i> 判定規則</span>' : ''))
         + '</div>'
         + '<div class="pf-card-grp-title">風險評估與現行設計管制（RPN 系統自動計算）</div>'
         + '<div class="pf-rating-quad">'
@@ -1387,6 +1417,65 @@ window.applyActionPicker = function(){
     var combined = cur.trim() ? cur.replace(/\n+$/, '') + '\n' + newLines.join('\n') : newLines.join('\n');
     ACTION_PICKER_TARGET.val(combined).trigger('input');
 };
+/* ---------- 分類自動判定（2026-08-18 使用者要求）----------
+ * 嚴重度S 或 發生率O 落在管理員設定的區間內 → 自動帶「重要特性」，否則帶「一般特性」。
+ * 只在該格「還空白」或「上次就是自動帶的值」時才寫入，不覆蓋使用者手動填的內容；
+ * 手動改過的格子會標記 data-cls-manual，之後 S/O 再變也不再自動蓋掉。 */
+var CLASS_RULE = null;
+function loadClassRule(cb){
+    if (CLASS_RULE) { if (cb) cb(); return; }
+    $.getJSON(API, {action:'classify_rule_get'}, function(res){
+        if (res.success) CLASS_RULE = res.rule;
+        if (cb) cb();
+    });
+}
+function classifyBySO(sev, occ){
+    var r = CLASS_RULE;
+    if (!r || !r.enabled) return null;
+    var s = parseInt(sev,10), o = parseInt(occ,10);
+    if (!s && !o) return null;                       // S/O 都還沒填就先不判定
+    var hit = (s && s >= r.s_min && s <= r.s_max) || (o && o >= r.o_min && o <= r.o_max);
+    return hit ? r.hit_text : r.else_text;
+}
+function applyClassify($card){
+    if (!CAN_EDIT) return;
+    var $cls = $card.find('[data-f="classification"]');
+    if ($cls.attr('data-cls-manual') === '1') return;          // 使用者自己打過就不再自動蓋
+    var want = classifyBySO($card.find('[data-f="severity"]').val(), $card.find('[data-f="occurrence"]').val());
+    if (want === null) return;
+    var cur = ($cls.val()||'').trim();
+    var auto = $cls.attr('data-cls-auto') || '';
+    if (cur !== '' && cur !== auto) { $cls.attr('data-cls-manual','1'); return; }   // 內容不是我們帶的＝手動值
+    $cls.val(want).attr('data-cls-auto', want);
+}
+$(document).on('input change', '#itemBody [data-f="severity"], #itemBody [data-f="occurrence"]', function(){
+    applyClassify($(this).closest('.pf-card'));
+});
+$(document).on('input', '#itemBody [data-f="classification"]', function(){
+    var v = ($(this).val()||'').trim();
+    $(this).attr('data-cls-manual', (v && v !== ($(this).attr('data-cls-auto')||'')) ? '1' : '0');
+});
+window.openClassRule = function(){
+    loadClassRule(function(){
+        var r = CLASS_RULE || {};
+        $('#crEnabled').prop('checked', !!r.enabled);
+        $('#crSMin').val(r.s_min); $('#crSMax').val(r.s_max);
+        $('#crOMin').val(r.o_min); $('#crOMax').val(r.o_max);
+        $('#crHit').val(r.hit_text); $('#crElse').val(r.else_text);
+        openMask('classRuleMask');
+    });
+};
+window.saveClassRule = function(){
+    $.post(API, {action:'classify_rule_save', enabled:$('#crEnabled').is(':checked')?1:0,
+        s_min:$('#crSMin').val(), s_max:$('#crSMax').val(), o_min:$('#crOMin').val(), o_max:$('#crOMax').val(),
+        hit_text:$('#crHit').val(), else_text:$('#crElse').val()}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        CLASS_RULE = res.rule;
+        closeMask('classRuleMask');
+        alert('已儲存。之後填寫 S／O 時就會依新的門檻自動帶入分類。');
+    }, 'json');
+};
+
 /* 分類樣板挑選（2026-08-18 使用者要求：分類要跟建議措施一樣有樣本可選，但也要可以綁定）。
    句庫沿用控制選項同一張表 option_type='classification'；跟「綁定」並存互不衝突——綁定值
    （掛在該筆失效模式底下）會出現在欄位下拉，樣板值則從這個跳窗挑，兩邊都能用。
@@ -1481,7 +1570,7 @@ function deptChecksHtml(checked){
     }).join('');
 }
 function resetEditForm(){
-    CUR_ID = 0; ITEM_ORIG = {}; resetMakeRevision();
+    CUR_ID = 0; ITEM_ORIG = {}; resetMakeRevision(); loadClassRule();
     $('#fPartNo').val(''); $('#fPartDId').val('0'); $('#fCustomerName').val('');
     $('#fProductName').val(DEFAULT_PRODUCT_NAME || ''); $('#fSpecDesc').val('');
     $('#fBizDate').val(''); $('#fBizDateQuick').html('');
@@ -2584,7 +2673,7 @@ function rsLoadBindList(){
         $('#rsBindList').html(rows.map(function(b){
             var reqTxt = (b.requirements||[]).map(function(r){ return r.requirement_text; }).join('、');
             return rsRow('bind', b.id, b.path_label + (reqTxt ? '　【要求：'+reqTxt+'】' : '　（尚未輸入要求）'), RS_BIND_ID);
-        }).join('') || '<div class="rs-empty">此料號在本製程尚未綁定任何組合</div>');
+        }).join('') || '<div class="rs-empty">此料號在本製程還沒設定過要求</div>');
     });
 }
 window.rsBindCurrentPath = function(){
