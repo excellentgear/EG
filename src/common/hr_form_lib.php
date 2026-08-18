@@ -600,6 +600,28 @@ function hrf_instance_supervisor_pool(PDO $db, array $inst, bool $activeOnly = f
     return hrf_supervisor_pool($db, $uid, $isPast ? $deptId : null);
 }
 
+/**
+ * 這張表單「確認關卡」的人選池（＝確認欄要蓋誰的章、誰按得下確認、通知寄給誰）。
+ *
+ * 正常＝hrf_instance_supervisor_pool() 解析出來的直屬主管。但當這個人**本身就是全站最高決策者**
+ * （例：技術課課長就是總經理本人），往上已經沒有中間層，supervisor pool 會刻意排除本人而回空——
+ * 這時確認章要蓋**最高決策者本人**的章（使用者明確要求，2026-08-18；先前這種情況自動補簽核會退回
+ * 「操作補簽的那個人」，結果印出來的確認章是「超級管理員」＝簽章不實）。
+ */
+function hrf_confirm_pool(PDO $db, array $inst, bool $activeOnly = false): array {
+    $pool = hrf_instance_supervisor_pool($db, $inst, $activeOnly);
+    if ($pool) return $pool;
+    $top = hrf_top_approver_pool($db);
+    if (!$top) return [];
+    if ($activeOnly) {
+        $st = $db->prepare("SELECT id, user_cname FROM `user` WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+        $st->execute([(int)$top[0]['id']]);
+        $u = $st->fetch(PDO::FETCH_ASSOC);
+        return $u ? [['id'=>(int)$u['id'], 'user_cname'=>(string)$u['user_cname']]] : [];
+    }
+    return $top;
+}
+
 function hrf_people_asof(PDO $db, string $date): array {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = date('Y-m-d');
     if ($date >= date('Y-m-d')) {
@@ -660,7 +682,8 @@ function hrf_dept_name_map(PDO $db): array {
  *  代表這位員工往上已經沒有「中階（課長考核）」這一層可以評，課長考核欄位視為 NA（不可填、印NA）。
  *  不硬編「課長」職稱字串，任何職位遇到相同情況都適用。 */
 function hrf_confirm_is_na(PDO $db, int $targetUid, ?array $inst = null): bool {
-    $supPool = $inst ? hrf_instance_supervisor_pool($db, $inst, false) : hrf_supervisor_pool($db, $targetUid);
+    // 09 的 NA 判定同樣走確認池：本人就是最高決策者時，確認人＝核准人＝本人，等同「已無中間層可考核」
+    $supPool = $inst ? hrf_confirm_pool($db, $inst, false) : hrf_supervisor_pool($db, $targetUid);
     $apPool = hrf_top_approver_pool($db);
     if (!$supPool || !$apPool) return false;
     return (int)$supPool[0]['id'] === (int)$apPool[0]['id'];
@@ -1724,7 +1747,7 @@ function hrf_instance_submit(PDO $db, int $instanceId, int $uid, string $uname):
     if (!$inst) return ['ok'=>false, 'msg'=>'找不到此表單'];
     if (!in_array($inst['form_type'], ['skill_assess','competency'], true)) return ['ok'=>false, 'msg'=>'此表單類型不需要送出簽核'];
     if ($inst['status'] !== 'draft') return ['ok'=>false, 'msg'=>'此表單已送出，不可重複送出'];
-    $pool = hrf_instance_supervisor_pool($db, $inst, true);
+    $pool = hrf_confirm_pool($db, $inst, true);
     if (!$pool) return ['ok'=>false, 'msg'=>'解析不到此員工的直屬主管，請聯絡管理員'];
     eg_approval_submit($db, 'hr_form', $instanceId, 'confirm', $uid, $uname);
     $formLabel = HRF_FORM_TYPES[$inst['form_type']];
@@ -1742,8 +1765,8 @@ function hrf_confirm_decide(PDO $db, int $instanceId, int $uid, string $uname, s
     $inst = hrf_instance_get($db, $instanceId);
     // 補歷史表單時「當時的主管」與「現在的主管」可能不同人：兩邊都允許簽（歷史那位已離職時現任才簽得下去），
     // 實際記錄下來的簽章人就是真的按下確認的那一位。
-    $poolIds = array_merge(array_column(hrf_instance_supervisor_pool($db, $inst, false), 'id'),
-                           array_column(hrf_instance_supervisor_pool($db, $inst, true), 'id'));
+    $poolIds = array_merge(array_column(hrf_confirm_pool($db, $inst, false), 'id'),
+                           array_column(hrf_confirm_pool($db, $inst, true), 'id'));
     if (!in_array($uid, array_map('intval', $poolIds), true)) return ['ok'=>false, 'msg'=>'您不是此表單的確認人'];
     if ($decision === 'approved') {
         if ($scores && $inst['form_type'] === 'skill_assess' && !empty($inst['confirm_na'])) {
@@ -1828,7 +1851,8 @@ function hrf_auto_sign_bulk(PDO $db, array $instanceIds, string $signDate, int $
             }
             if ($inst['status'] === 'draft') {
                 // 補簽核蓋的是「該表單業務日期當時」的主管章（該員後來調部門/主管換人都不影響），見 hrf_instance_supervisor_pool()
-                $pool = hrf_instance_supervisor_pool($db, $inst, false);
+                // 這個人本身就是最高決策者時，確認章蓋最高決策者本人（不是操作補簽的那個人＝以前會印成「超級管理員」）
+                $pool = hrf_confirm_pool($db, $inst, false);
                 $supId = $pool ? (int)$pool[0]['id'] : null; $supName = $pool ? $pool[0]['user_cname'] : null;
                 if (!$supName) { $supId = $byUid; $supName = $byName; }
                 $aid = eg_approval_submit($db, 'hr_form', $iid, 'confirm', $byUid, $byName);
