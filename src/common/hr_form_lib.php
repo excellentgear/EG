@@ -804,22 +804,45 @@ function hrf_whitelist_sources(PDO $db): array {
         $unmodeledCount = (int)$db->query("SELECT COUNT(*) FROM machine_list WHERE (state IS NULL OR state=0) AND (machine_model IS NULL OR machine_model='')")->fetchColumn();
     } catch (Throwable $e) {}
     $tools = [];
+    $unmodeledToolCount = 0;
     try {
-        // 比照機台：機台名稱/機型顯示用；量具編號(Tool_No)＝機台編號等同角色，一律逐支勾選不去重（量具個別校驗，非同機型共用一次考核）。
-        $tools = $db->query("SELECT t.Tool_id AS source_id, t.Tool_No AS display_name, t.Tool_No AS asset_no,
-                             t.machine AS machine_name, t.machine_model, l.QC_Tool AS group_name
+        // 量具比照機台：**填了同一個「機型」的量具合併成一筆**（技能鑑定考核是針對機型訓練，同機型的多支量具
+        // 只算一個考核對象；2026-08-18 使用者要求，先前是逐支列出），畫面另外標出共幾支與各支量具編號。
+        // 尚未填機型的量具沒有可合併的依據，維持逐支列出（機台那邊是直接不列＋提示補值，但量具目前多數
+        // 沒填機型，全部不列會讓既有白名單挑不到，故改成照列並另外提示）。量具編號(Tool_No)＝機台編號等同角色。
+        $tools = $db->query("SELECT MIN(t.Tool_id) AS source_id,
+                             COALESCE(MIN(NULLIF(TRIM(t.machine_model),'')), MIN(t.Tool_No)) AS display_name,
+                             GROUP_CONCAT(DISTINCT t.Tool_No ORDER BY t.Tool_No SEPARATOR '、') AS asset_no,
+                             COUNT(*) AS unit_count, MIN(t.machine) AS machine_name,
+                             MIN(NULLIF(TRIM(t.machine_model),'')) AS machine_model, MIN(l.QC_Tool) AS group_name
                              FROM qc_tool t LEFT JOIN qc_tool_list l ON l.QC_Tool_List_id=t.QC_Tool_List_id
                              WHERE (t.state IS NULL OR t.state=0)
-                             ORDER BY l.sort_order, t.Tool_No")->fetchAll(PDO::FETCH_ASSOC);
+                             GROUP BY CASE WHEN TRIM(COALESCE(t.machine_model,''))<>'' THEN CONCAT('m:',TRIM(t.machine_model))
+                                           ELSE CONCAT('t:',t.Tool_id) END
+                             ORDER BY MIN(l.sort_order), display_name")->fetchAll(PDO::FETCH_ASSOC);
+        $unmodeledToolCount = (int)$db->query("SELECT COUNT(*) FROM qc_tool WHERE (state IS NULL OR state=0)
+                                               AND (machine_model IS NULL OR TRIM(machine_model)='')")->fetchColumn();
     } catch (Throwable $e) {}
     $existing = [];
     try {
         $st = $db->query("SELECT source_type, source_id, id FROM hr_equipment_whitelist");
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $existing[$r['source_type'] . ':' . $r['source_id']] = $r;
     } catch (Throwable $e) {}
-    foreach ($machines as &$m) { $m['checked'] = isset($existing['machine:' . $m['source_id']]); }
-    foreach ($tools as &$t) { $t['checked'] = isset($existing['tool:' . $t['source_id']]); }
-    return ['machines' => $machines, 'tools' => $tools, 'unmodeled_count' => $unmodeledCount];
+    foreach ($machines as &$m) { $m['unit_count'] = (int)$m['unit_count']; $m['checked'] = isset($existing['machine:' . $m['source_id']]); }
+    unset($m);
+    // 同機型的量具合併後，代表量具是 MIN(Tool_id)；白名單若是勾到同組的其他支（合併前存的），
+    // 這一組一樣要算「已勾選」，否則設定頁會顯示沒勾、一存檔就把既有選取洗掉。
+    $toolGroupIds = hrf_tool_group_member_ids($db);
+    foreach ($tools as &$t) {
+        $t['unit_count'] = (int)$t['unit_count'];
+        $t['checked'] = false;
+        foreach ($toolGroupIds[(int)$t['source_id']] ?? [(int)$t['source_id']] as $tid) {
+            if (isset($existing['tool:' . $tid])) { $t['checked'] = true; break; }
+        }
+    }
+    unset($t);
+    return ['machines' => $machines, 'tools' => $tools, 'unmodeled_count' => $unmodeledCount,
+            'unmodeled_tool_count' => $unmodeledToolCount];
 }
 
 /**
@@ -843,6 +866,12 @@ function hrf_whitelist_list(PDO $db): array {
     foreach ($src['machines'] as $m) $byModel[(string)$m['machine_model']] = $m;
     $byTool = [];
     foreach ($src['tools'] as $t) $byTool[(int)$t['source_id']] = $t;
+    // 該組任一支 Tool_id => 該組的代表列（白名單舊列存的可能不是代表那支）
+    $toolRep = [];
+    foreach (hrf_tool_group_member_ids($db) as $repId => $ids) {
+        if (!isset($byTool[$repId])) continue;
+        foreach ($ids as $tid) $toolRep[$tid] = $byTool[$repId];
+    }
     // 白名單存的是「代表機台」的 machine_id，機台之後可能被停用或機型被清空 → 一律用 machine_list 當下現況回推
     $cur = [];
     try {
@@ -882,13 +911,21 @@ function hrf_whitelist_list(PDO $db): array {
                 $seen[$key] = 1;
             }
         } else {
-            $t = $byTool[(int)$w['source_id']] ?? null;
+            // 合併後挑選清單的代表量具是 MIN(Tool_id)：白名單存的若是同組另一支（合併前勾的），
+            // 一樣要對到那一組，不能當成失效。
+            $t = $byTool[(int)$w['source_id']] ?? ($toolRep[(int)$w['source_id']] ?? null);
             if (!$t) { $w['stale'] = 1; $w['stale_reason'] = '來源量具已停用或已不存在'; }
             else {
                 $w['group_name'] = (string)($t['group_name'] ?: '未分類');
+                $w['unit_count'] = (int)($t['unit_count'] ?? 1);
                 $w['asset_no_list'] = (string)($t['asset_no'] ?? '');
                 $w['machine_name'] = $t['machine_name'];
                 $w['machine_model'] = $t['machine_model'];
+                $w['display_name'] = (string)$t['display_name'];
+                // 同機型只留一筆（比照機台）：同組的第二筆白名單不再重複列出
+                $key = 'tool:' . (int)$t['source_id'];
+                if (isset($seen[$key])) continue;
+                $seen[$key] = 1;
             }
         }
         if (!array_key_exists('machine_name', $w)) $w['machine_name'] = null;
@@ -928,9 +965,12 @@ function hrf_whitelist_save(PDO $db, array $entries, string $byName): void {
         $insMachine = $db->prepare("INSERT INTO hr_equipment_whitelist (source_type,source_id,display_name,machine_model,asset_no,created_by)
                                     SELECT 'machine', machine_id, machine_model, machine_model, asset_no, ? FROM machine_list WHERE machine_id=?
                                     ON DUPLICATE KEY UPDATE display_name=VALUES(display_name), machine_model=VALUES(machine_model), asset_no=VALUES(asset_no), is_active=1");
-        $insTool = $db->prepare("INSERT INTO hr_equipment_whitelist (source_type,source_id,display_name,created_by)
-                                 SELECT 'tool', Tool_id, Tool_No, ? FROM qc_tool WHERE Tool_id=?
-                                 ON DUPLICATE KEY UPDATE display_name=VALUES(display_name), is_active=1");
+        // display_name 比照機台＝「機型」本身（同機型的量具已在挑選清單合併成一筆），沒填機型才退回量具編號
+        $insTool = $db->prepare("INSERT INTO hr_equipment_whitelist (source_type,source_id,display_name,machine_model,asset_no,created_by)
+                                 SELECT 'tool', Tool_id, COALESCE(NULLIF(TRIM(machine_model),''), Tool_No),
+                                        NULLIF(TRIM(machine_model),''), Tool_No, ? FROM qc_tool WHERE Tool_id=?
+                                 ON DUPLICATE KEY UPDATE display_name=VALUES(display_name), machine_model=VALUES(machine_model),
+                                                         asset_no=VALUES(asset_no), is_active=1");
         foreach ($entries as $e) {
             $type = ($e['source_type'] ?? '') === 'tool' ? 'tool' : 'machine';
             $sid = (int)($e['source_id'] ?? 0);
@@ -992,7 +1032,7 @@ function hrf_machine_asset_info(PDO $db, ?string $machineModel): array {
  * （「機型 名稱」＋編號標籤）。白名單舊列的 machine_model/asset_no 是 qc_tool 加欄位之前存的
  * NULL 快照，一律現查 qc_tool 覆蓋，不採信快照（比照本檔其他「名稱一律現查來源主檔」的作法）。
  */
-function hrf_apply_tool_display(array &$r, array $t): void {
+function hrf_apply_tool_display(array &$r, array $t, ?array $groupInfo = null): void {
     $model = trim((string)($t['machine_model'] ?? ''));
     $name  = trim((string)($t['machine'] ?? ''));
     $no    = trim((string)($t['Tool_No'] ?? ''));
@@ -1003,9 +1043,57 @@ function hrf_apply_tool_display(array &$r, array $t): void {
         $r['machine_model'] = null;
         $r['machine_display_name'] = $name;
     }
-    $r['machine_real_name'] = $name;
-    $r['machine_asset_nos'] = $no !== '' ? [$no] : [];
+    $r['machine_real_name'] = ($groupInfo && $groupInfo['name'] !== '') ? $groupInfo['name'] : $name;
+    // 有填機型＝同機型的量具是同一個考核對象，編號要全列（比照機台來源列出同機型所有機台編號）
+    $r['machine_asset_nos'] = ($model !== '' && $groupInfo && $groupInfo['asset_nos'])
+        ? array_values(array_unique($groupInfo['asset_nos']))
+        : ($no !== '' ? [$no] : []);
+    $r['machine_is_tool'] = 1;
 }
+/**
+ * 量具依機型分組：代表量具 Tool_id => 該組所有 Tool_id（含自己）。沒填機型的量具自成一組。
+ * 用途一：白名單勾選狀態比對（合併前可能勾的是同組另一支）。用途二：反查某支量具屬於哪一組。
+ */
+function hrf_tool_group_member_ids(PDO $db): array {
+    $out = [];
+    try {
+        $rows = $db->query("SELECT Tool_id, NULLIF(TRIM(machine_model),'') AS model FROM qc_tool
+                            WHERE (state IS NULL OR state=0) ORDER BY Tool_id")->fetchAll(PDO::FETCH_ASSOC);
+        $byModel = [];
+        foreach ($rows as $r) {
+            $key = ($r['model'] !== null && $r['model'] !== '') ? 'm:' . $r['model'] : 't:' . $r['Tool_id'];
+            $byModel[$key][] = (int)$r['Tool_id'];
+        }
+        foreach ($byModel as $ids) { sort($ids); $out[$ids[0]] = $ids; }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/**
+ * 某個機型底下所有未停用量具的名稱與量具編號（機型空白＝只有這一支）。
+ * 09技能鑑定考核表顯示量具時比照機台：印出「機型 名稱」＋同機型所有量具編號（2026-08-18 使用者要求）。
+ * @return array [model => ['name'=>..., 'asset_nos'=>[...]]]
+ */
+function hrf_tool_model_info_map(PDO $db, array $models): array {
+    $models = array_values(array_unique(array_filter(array_map(fn($m) => trim((string)$m), $models))));
+    if (!$models) return [];
+    $map = [];
+    try {
+        $in = implode(',', array_fill(0, count($models), '?'));
+        $st = $db->prepare("SELECT Tool_No, machine, TRIM(machine_model) AS machine_model FROM qc_tool
+                            WHERE (state IS NULL OR state=0) AND TRIM(machine_model) IN ($in) ORDER BY Tool_No");
+        $st->execute($models);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $t) {
+            $m = (string)$t['machine_model'];
+            if (!isset($map[$m])) $map[$m] = ['name' => '', 'asset_nos' => []];
+            if ($map[$m]['name'] === '' && trim((string)$t['machine']) !== '') $map[$m]['name'] = trim((string)$t['machine']);
+            $no = trim((string)$t['Tool_No']);
+            if ($no !== '') $map[$m]['asset_nos'][] = $no;
+        }
+    } catch (Throwable $e) {}
+    return $map;
+}
+
 /** 取回這批 Tool_id 的量具資料（Tool_id => row），供列表批次套用顯示欄位。 */
 function hrf_tool_info_map(PDO $db, array $toolIds): array {
     $ids = array_values(array_unique(array_filter(array_map('intval', $toolIds))));
@@ -1037,7 +1125,8 @@ function hrf_instance_get(PDO $db, int $id): ?array {
         }
         $tool = ($wl && $wl['source_type'] === 'tool') ? (hrf_tool_info_map($db, [(int)$wl['source_id']])[(int)$wl['source_id']] ?? null) : null;
         if ($tool) {
-            hrf_apply_tool_display($r, $tool);
+            $gm = hrf_tool_model_info_map($db, [$tool['machine_model'] ?? '']);
+            hrf_apply_tool_display($r, $tool, $gm[trim((string)($tool['machine_model'] ?? ''))] ?? null);
         } else {
             $info = hrf_machine_asset_info($db, $r['machine_model'] ?? null);
             $r['machine_real_name'] = $info['name'];
@@ -1076,6 +1165,7 @@ function hrf_instance_list(PDO $db, array $opt = []): array {
         if (!empty($r['machine_model'])) $models[$r['machine_model']] = true;
     }
     $toolMap = hrf_tool_info_map($db, $toolIds);
+    $toolModelMap = hrf_tool_model_info_map($db, array_column($toolMap, 'machine_model'));
     $assetMap = [];
     if ($models) {
         $in = implode(',', array_fill(0, count($models), '?'));
@@ -1095,7 +1185,7 @@ function hrf_instance_list(PDO $db, array $opt = []): array {
             $r['confirm_na'] = hrf_confirm_is_na($db, (int)$r['user_id'], $r);
             $tool = (($r['wl_source_type'] ?? '') === 'tool') ? ($toolMap[(int)$r['wl_source_id']] ?? null) : null;
             if ($tool) {
-                hrf_apply_tool_display($r, $tool);
+                hrf_apply_tool_display($r, $tool, $toolModelMap[trim((string)$tool['machine_model'])] ?? null);
             } else {
                 $info = $assetMap[$r['machine_model']] ?? ['name' => '', 'asset_nos' => []];
                 $r['machine_real_name'] = $info['name'];

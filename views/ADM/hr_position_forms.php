@@ -709,7 +709,8 @@ function hfMachinePickHtml(wl){
             var label = w.machine_name ? (w.machine_name !== model ? (model ? (model+' '+w.machine_name) : w.machine_name) : model) : w.display_name;
             var meta = w.source_type === 'machine'
                      ? (Number(w.unit_count) > 1 ? ('　共'+w.unit_count+'台，機台編號：'+esc(w.asset_no_list||'-')) : '')
-                     : (w.machine_name ? ('　量具編號：'+esc(w.asset_no_list||w.display_name||'-')) : '');
+                     : (Number(w.unit_count) > 1 ? ('　共'+w.unit_count+'支，量具編號：'+esc(w.asset_no_list||'-'))
+                        : (w.machine_name ? ('　量具編號：'+esc(w.asset_no_list||w.display_name||'-')) : ''));
             html += '<label><input type="checkbox" class="mach-ck" value="'+w.id+'"> '+esc(label)
                   + '<span style="color:#8a6d45;font-size:11px;">'+meta+'</span></label>';
         });
@@ -993,7 +994,7 @@ function headTableHtml(r){
     h += '<tr><th>姓名</th><td>'+esc(r.user_cname||'')+'</td><th>員工編號</th><td>'+esc(r.user_no||'')+'</td></tr>'
        + '<tr><th>到職日</th><td>'+dispDate(r.onboard_date)+'</td><th>主管</th><td>'+esc(r.supervisor_name||'')+'</td></tr>'
        + '<tr><th>日期</th><td>'+dispDate(r.business_date)+'</td><th>狀態</th><td>'+(STATUS_LABEL[r.status]||r.status)+'</td></tr>';
-    if (r.form_type === 'skill_assess') h += '<tr><th>機型</th><td>'+esc(machineNameLabel(r))+'</td><th>機台編號</th><td>'+esc(machineAssetNoText(r))+'</td></tr>';
+    if (r.form_type === 'skill_assess') h += '<tr><th>機型</th><td>'+esc(machineNameLabel(r))+'</td><th>'+(r.machine_is_tool?'量具編號':'機台編號')+'</th><td>'+esc(machineAssetNoText(r))+'</td></tr>';
     if (r.form_type === 'competency') {
         var updCell = META.perms.isSuperAdmin
             ? '<input type="date" id="cpUpdDate" max="9999-12-31" value="'+esc(r.cp_update_date||r.business_date||'')+'" style="width:150px;"> <button type="button" class="hf-btn-sm" onclick="hfCpUpdDateSave()">儲存</button>'

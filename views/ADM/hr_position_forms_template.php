@@ -142,7 +142,8 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
 
         <div class="hf-tabpane" id="pane-whitelist" data-type="whitelist">
             <div style="text-align:right;margin-bottom:8px;"><button class="btn-warm" onclick="wlSave()">儲存白名單</button> <span id="wlSaveMsg" style="font-size:12.5px;color:#3f9142;"></span></div>
-            <p style="font-size:12.5px;color:#8a6d45;">技能鑑定考核是針對「機型」訓練，不是針對實體機台——同一機型有多台機台編號也只算一個考核對象，所以下方生產機台清單已依機型去重（比照「待加工排程」頁的機台設定欄位認定：機型=machine_model，不使用現場編號field_no），勾選的是機型不是機台名稱或機台種類。量測儀器校驗量具主檔（qc_tool）沒有獨立的機型欄位，維持逐支量具編號勾選。</p>
+            <p style="font-size:12.5px;color:#8a6d45;">技能鑑定考核是針對「機型」訓練，不是針對實體機台——同一機型有多台機台編號也只算一個考核對象，所以下方生產機台清單已依機型去重（比照「待加工排程」頁的機台設定欄位認定：機型=machine_model，不使用現場編號field_no），勾選的是機型不是機台名稱或機台種類。量測儀器校驗量具（qc_tool）比照辦理：<b>填了同一個「機型」的量具會合併成一筆</b>並標出共幾支與各支量具編號；尚未填機型的量具沒有合併依據，維持逐支列出（可到「量測儀器校驗管理」的儀器設定補機型）。</p>
+            <p id="wlToolNote" style="display:none;font-size:12.5px;color:#8a6d45;"></p>
             <p id="wlUnmodeledWarn" style="display:none;font-size:12.5px;color:#DD5138;" data-can-open="<?= $canOpenMachineSetting ? '1' : '0' ?>"></p>
             <input type="text" class="flt" id="wlFilter" placeholder="輸入名稱篩選…" oninput="wlFilterList(this.value)">
             <div class="wl-col"><h4>生產機台（machine_list）</h4><div class="wl-list" id="wlMachines"></div></div>
@@ -258,7 +259,7 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
         <h4>功能說明</h4>
         管理員在這裡設定「職位範本」：建立表單時系統會依員工的部門×職位比對範本，自動帶入內容（職務說明書的工作職責表、職能鑑定表的職能項目清單）或適用機型清單（專業技能鑑定考核表）。一個範本可以綁定多筆部門×職位。
         <h4>操作步驟</h4>
-        <b>①新增/編輯範本</b>：填範本名稱、綁定適用的部門×職位（選一個部門後可一次勾選多個職位加入，部門選「不限部門」代表該職位不論哪個部門都適用）、編輯內容（職務說明書填4欄工作職責表；職能鑑定表填職能項目清單；專業技能鑑定考核表勾選適用機型，可用「全選/取消全選」快速操作，需先在「機型/量具白名單」建立好白名單；清單依<b>機台類型／量具類別分組</b>並標示台數與機台(量具)編號，跟白名單設定頁一致，同一個機型只會出現一次。若白名單裡有<b>來源機台已停用或尚未填寫機型</b>的舊項目（設定頁已不會列出它），只有在該範本先前就勾著時才會以紅字列在最下方，取消勾選後就不會再出現）。<br>
+        <b>①新增/編輯範本</b>：填範本名稱、綁定適用的部門×職位（選一個部門後可一次勾選多個職位加入，部門選「不限部門」代表該職位不論哪個部門都適用）、編輯內容（職務說明書填4欄工作職責表；職能鑑定表填職能項目清單；專業技能鑑定考核表勾選適用機型，可用「全選/取消全選」快速操作，需先在「機型/量具白名單」建立好白名單；清單依<b>機台類型／量具類別分組</b>並標示台數/支數與機台(量具)編號，跟白名單設定頁一致，同一個機型只會出現一次（量具也一樣：填了同一個機型的量具合併成一筆並列出各支量具編號）。若白名單裡有<b>來源機台已停用或尚未填寫機型</b>的舊項目（設定頁已不會列出它），只有在該範本先前就勾著時才會以紅字列在最下方，取消勾選後就不會再出現）。<br>
         <b>①-0 部門表單資格</b>（分頁「部門表單資格」）：逐部門勾選要不要產生專業技能鑑定考核表／職能鑑定表，以及<b>該部門的職能鑑定表評分欄要不要多一欄「機台設定」</b>——勾了＝機台設定／操作／異常排除三欄，沒勾＝操作／異常排除兩欄；兩種情況最左側都固定是編號＋項目名稱。可多個部門各自勾選，變更即時儲存，既有表單下次開啟/列印就會依現在的設定顯示。<br>
         <b>①-1 複製範本</b>（三種範本的清單都有「複製」鈕）：以該筆為母本開啟新增跳窗，名稱自動變成「原名（複製）」、內容整份帶入可再增刪修改（職務說明書＝工作職責表各列；職能鑑定表＝職能項目清單；<b>技能鑑定表＝已勾選的適用機型</b>，圖章樣式設定也一併帶入）；<b>「適用部門×職位」刻意留空</b>（同一個部門×職位被兩份範本綁到，建立表單時會分不清該用哪一份，系統只會取後建立的那筆），請自行指定這份複製版要套用的部門×職位。按「儲存」才會真的建立新範本，原範本不會被改動。<br>
         <b>①-2 範本之間互相帶入內容</b>：三種範本的內容可以互抓，避免同一份工作內容要打兩次——<br>
@@ -420,7 +421,8 @@ function tplMachineRowHtml(w, isStale){
     var meta = isStale ? ('　' + (w.stale_reason || '已失效'))
              : (w.source_type === 'machine'
                     ? (Number(w.unit_count) > 1 ? ('　共' + w.unit_count + '台，機台編號：' + esc(w.asset_no_list || '-')) : '')
-                    : (w.machine_name ? ('　量具編號：' + esc(w.asset_no_list || w.display_name || '-')) : ''));
+                    : (Number(w.unit_count) > 1 ? ('　共' + w.unit_count + '支，量具編號：' + esc(w.asset_no_list || '-'))
+                       : (w.machine_name ? ('　量具編號：' + esc(w.asset_no_list || w.display_name || '-')) : '')));
     return '<label class="tm-row' + (isStale ? ' tm-stale' : '') + '" style="display:' + (isStale ? 'none' : 'block') + ';font-size:12.5px;' + (isStale ? 'color:#DD5138;' : '') + '">'
          + '<input type="checkbox" class="tm-ck" value="' + w.id + '"> ' + esc(hfMachineLabel(w, w.source_type))
          + '<span style="color:' + (isStale ? '#DD5138' : '#8a6d45') + ';font-size:11px;">' + meta + '</span></label>';
@@ -800,6 +802,10 @@ function loadWhitelist(){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         renderWlGroup('#wlMachines', res.machines||[]);
         renderWlGroup('#wlTools', res.tools||[]);
+        var utc = Number(res.unmodeled_tool_count || 0);
+        $('#wlToolNote').toggle(utc > 0).text(utc > 0
+            ? ('※ 另有 ' + utc + ' 支在職量具尚未填寫「機型」，沒有合併依據，維持逐支列出；填了機型的量具會自動合併成一筆並列出各支量具編號。')
+            : '');
         if (res.unmodeled_count > 0) {
             var $w = $('#wlUnmodeledWarn');
             var msg = '⚠ 另有 '+res.unmodeled_count+' 台在職機台尚未填寫「機型」，不會出現在下方清單，請先到「待加工排程」頁補值。';
@@ -830,8 +836,10 @@ function renderWlGroup(sel, rows){
             var type = sel === '#wlMachines' ? 'machine' : 'tool';
             // 技能鑑定考核是針對「機型」訓練，不是針對實體機台：勾選項＝一個機型(已去重)，
             // 底下標的機台編號只是給管理員參考「這個機型實際有幾台」，不是要各自訓練一次
-            var meta = (type === 'machine' && r.unit_count > 1) ? ('　共'+r.unit_count+'台，機台編號：'+esc(r.asset_no||'-'))
-                     : (type === 'tool' && r.machine_name ? ('　量具編號：'+esc(r.asset_no||r.display_name||'-')) : '');
+            var meta = type === 'machine'
+                     ? (Number(r.unit_count) > 1 ? ('　共'+r.unit_count+'台，機台編號：'+esc(r.asset_no||'-')) : '')
+                     : (Number(r.unit_count) > 1 ? ('　共'+r.unit_count+'支，量具編號：'+esc(r.asset_no||'-'))
+                        : (r.machine_name ? ('　量具編號：'+esc(r.asset_no||r.display_name||'-')) : ''));
             html += '<div class="wl-row" data-hay="'+esc(r.display_name+' '+(r.machine_name||'')+' '+(r.asset_no||'')).toLowerCase()+'"><label style="flex:1;"><input type="checkbox" class="wl-ck" data-type="'+type+'" data-id="'+r.source_id+'"'+(r.checked?' checked':'')+'> '+esc(hfMachineLabel(r,type))+'<span style="color:#8a6d45;font-size:11px;">'+meta+'</span></label></div>';
         });
     });
