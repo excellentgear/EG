@@ -75,7 +75,7 @@ function pfmea_suggest_bulk_create(PDO $db, array $rows, int $uid, string $uname
             $st = $db->prepare("INSERT INTO pfmea_doc (doc_no, part_d_id, part_no_text, item_type, product_name, related_depts, biz_date, created_by, created_by_name)
                                  VALUES (?,?,?,?,?,?,?,?,?)");
             $st->execute([$docNo, $partDId, $partDId ? null : $partText, $itemType, $row['product_name'] ?? null, $deptDefaults ?: null, $bizDate, $uid, $uname]);
-            pfmea_revision_add($db, (int)$db->lastInsertId(), '新增文件', $uname);
+            pfmea_revision_add($db, (int)$db->lastInsertId(), '新增文件', $uname, $bizDate);
             $created++;
         } catch (Throwable $e) { $errors[] = ($partText ?: '(無料號)').'：'.$e->getMessage(); }
     }

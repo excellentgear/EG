@@ -378,13 +378,29 @@ function pfmea_dept_defaults_save(PDO $db, array $depts, int $uid): void {
 }
 
 /** 新增一筆修訂履歷（新增文件/修改文件），rev_no 自動接續 */
-function pfmea_revision_add(PDO $db, int $docId, string $content, string $preparedByName): int {
+/* $revDate（2026-08-18 使用者要求）：列印修訂履歷第一列「新增文件」的日期要等於這份分析表的
+   業務日期，不是它被建進系統那天；後續「修改文件」維持原本邏輯用當天日期，不受影響。 */
+function pfmea_revision_add(PDO $db, int $docId, string $content, string $preparedByName, ?string $revDate = null): int {
     $st = $db->prepare("SELECT COALESCE(MAX(rev_no),0)+1 FROM pfmea_revision WHERE doc_id=?");
     $st->execute([$docId]);
     $revNo = (int)$st->fetchColumn();
-    $st = $db->prepare("INSERT INTO pfmea_revision (doc_id, rev_no, rev_date, rev_content, prepared_by_name) VALUES (?,?,CURDATE(),?,?)");
-    $st->execute([$docId, $revNo, $content, $preparedByName]);
+    $revDate = ($revDate !== null && trim($revDate) !== '') ? substr(trim($revDate), 0, 10) : null;
+    if ($revDate) {
+        $st = $db->prepare("INSERT INTO pfmea_revision (doc_id, rev_no, rev_date, rev_content, prepared_by_name) VALUES (?,?,?,?,?)");
+        $st->execute([$docId, $revNo, $revDate, $content, $preparedByName]);
+    } else {
+        $st = $db->prepare("INSERT INTO pfmea_revision (doc_id, rev_no, rev_date, rev_content, prepared_by_name) VALUES (?,?,CURDATE(),?,?)");
+        $st->execute([$docId, $revNo, $content, $preparedByName]);
+    }
     return (int)$db->lastInsertId();
+}
+
+/** 業務日期後來被改動時，把「新增文件」那一列（rev_no=1）的日期跟著同步；只動第一列，
+ *  後續「修改文件」各列維持它們當初實際修改的日期不變。 */
+function pfmea_revision_sync_first_date(PDO $db, int $docId, ?string $bizDate): void {
+    $bizDate = ($bizDate !== null && trim($bizDate) !== '') ? substr(trim($bizDate), 0, 10) : null;
+    if (!$bizDate) return;
+    $db->prepare("UPDATE pfmea_revision SET rev_date=? WHERE doc_id=? AND rev_no=1")->execute([$bizDate, $docId]);
 }
 
 function pfmea_revision_list(PDO $db, int $docId): array {

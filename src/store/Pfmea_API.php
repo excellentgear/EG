@@ -160,8 +160,12 @@ case 'save':
         }
         // 修訂履歷：第一次存檔一律記「新增文件」；既有文件只有使用者確認要記為新版本才加「修改文件」
         // 一列，避免每次小幅調整都讓版次一直往上跳（2026-08-13 使用者明確要求）
-        if ($isNew) { pfmea_revision_add($db, $id, '新增文件', $uname); }
-        elseif ($newRevision) { pfmea_revision_add($db, $id, '修改文件', $uname); }
+        if ($isNew) { pfmea_revision_add($db, $id, '新增文件', $uname, $bizDate); }
+        else {
+            // 業務日期可能被改過，第一列「新增文件」要跟著走；修改文件各列不動
+            pfmea_revision_sync_first_date($db, $id, $bizDate);
+            if ($newRevision) pfmea_revision_add($db, $id, '修改文件', $uname);
+        }
 
         $st = $db->prepare("SELECT id FROM pfmea_item WHERE doc_id=? AND is_deleted=0");
         $st->execute([$id]);

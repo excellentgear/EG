@@ -76,6 +76,47 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
            不可用 vw 相對整個瀏覽器視窗寬度（會蓋過側邊選單、超出內頁實際可視寬度，已踩過一次坑）；
            卡片展開/收合改由 pf-card-grid 的 auto-fit/minmax 自動換行因應，跳窗本身寬度不隨之變動。 */
         .pf-modal.xwide { max-width:1080px; }
+        /* 參考資料設定改成「頁內大分頁」而不是跳窗（2026-08-18 使用者要求：內容太多被小跳窗侷限住
+           很難用）。只覆寫這一個 id，其他跳窗維持原樣。 */
+        #refSettingsMask { position:static; inset:auto; background:none; z-index:auto; }
+        #refSettingsMask .pf-modal { max-width:none; width:100%; margin:0 0 20px; max-height:none;
+            box-shadow:none; border:1px solid #E8D5B5; }
+        #refSettingsMask .m-body { max-height:none; overflow:visible; padding:14px 16px; }
+        #refSettingsMask .m-head { font-size:16px; }
+        body.rs-mode .pf-list-wrap { display:none; }
+        /* 字級整體放大（2026-08-18 使用者：「文字都太小了，希望再放大一點」） */
+        #refSettingsMask .m-body,
+        #refSettingsMask .m-body label,
+        #refSettingsMask .rs-row,
+        #refSettingsMask .pf-sec-title { font-size:14px; }
+        #refSettingsMask .m-body input[type=text],
+        #refSettingsMask .m-body select { font-size:14px; padding:6px 9px; }
+        #refSettingsMask .pf-row-btn { font-size:13px; height:30px; }
+
+        /* 左樹右設定（2026-08-18 使用者拍板的版面） */
+        .rt-layout { display:flex; gap:14px; align-items:flex-start; }
+        .rt-tree-pane { flex:0 0 340px; border:1px solid #E8D5B5; border-radius:6px; background:#fff; padding:8px; }
+        .rt-detail-pane { flex:1 1 auto; min-width:0; }
+        .rt-tree-tools { display:flex; gap:6px; margin-bottom:6px; }
+        .rt-tree-tools input { flex:1; border:1px solid #D8BE93; border-radius:4px; padding:6px 9px; font-size:14px; }
+        .rt-onlyset { display:block; font-size:13px; color:#5b3a1e; margin:4px 0 6px; cursor:pointer; }
+        .rt-tree { max-height:520px; overflow:auto; font-size:14px; }
+        .rt-node { padding:4px 6px; border-radius:4px; cursor:pointer; white-space:nowrap;
+            overflow:hidden; text-overflow:ellipsis; color:#5b3a1e; }
+        .rt-node:hover { background:#FFF3E0; }
+        .rt-node.on { background:#F0A24B; color:#fff; font-weight:bold; }
+        .rt-node .fa { width:14px; color:#B5762A; }
+        .rt-node.on .fa { color:#fff; }
+        .rt-node .rt-cnt { color:#A8906E; font-size:12px; margin-left:4px; }
+        .rt-node.on .rt-cnt { color:#FFE9CC; }
+        .rt-lv1 { padding-left:4px; } .rt-lv2 { padding-left:24px; }
+        .rt-lv3 { padding-left:44px; } .rt-lv4 { padding-left:64px; }
+        .rt-empty { color:#8a6d45; padding:28px 10px; text-align:center; line-height:2; }
+        .rt-empty span { font-size:13px; color:#A8906E; }
+        .rt-crumb { background:#FFF7E8; border:1px solid #EADFC8; border-radius:4px; padding:7px 10px;
+            font-size:14px; color:#5b3a1e; margin-bottom:10px; }
+        .rt-add { display:flex; gap:6px; margin-top:8px; }
+        .rt-add input { border:1px solid #D8BE93; border-radius:4px; padding:6px 8px; font-size:13px; flex:1; min-width:0; }
         .pf-modal .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
             display:flex; justify-content:space-between; }
         .pf-modal .m-head .m-close { cursor:pointer; color:#b5762a; }
@@ -125,30 +166,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         table.pf-rt-table thead th { background:#F7E0BD; color:#5b3a1e; text-align:center; }
         table.pf-rt-table td.lv { text-align:center; font-weight:bold; color:#8A5A2B; white-space:nowrap; }
         .pf-rt-note { font-size:12px; color:#8a6d45; margin-top:8px; white-space:pre-line; background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:8px 10px; }
-        /* 平面表格編輯器（2026-08-18）：一列＝一條完整路徑，比照 Excel 的操作手感 */
-        .fg-wrap { border:1px solid #E8D5B5; border-radius:4px; overflow-y:auto; overflow-x:hidden; max-height:460px; }
-        table.fg { width:100%; border-collapse:separate; border-spacing:0; font-size:12px; table-layout:fixed; }
-        table.fg th { position:sticky; top:0; z-index:2; background:#F3EAD6; color:#5b3a1e; font-weight:bold;
-            padding:5px 6px; text-align:left; border-bottom:1px solid #D8BE93; border-right:1px solid #EADFC8; white-space:nowrap; }
-        table.fg td { padding:0; border-bottom:1px solid #F1E6D2; border-right:1px solid #F1E6D2; }
-        table.fg tr.fg-dirty td { background:#FFF7E8; }
-        table.fg input.fg-inherit { color:#A8906E; font-style:italic; }
-        table.fg tr.fg-new td { background:#FFFBF3; }
-        table.fg input { width:100%; border:0; background:transparent; padding:5px 4px; font-size:12px;
-            color:#5b3a1e; font-family:inherit; outline:none; text-overflow:ellipsis; }
-        /* 多值欄位（後果／分類／原因）一格會有好幾個值，字窄一點才塞得下 */
-        table.fg input.fg-multi { font-size:11.5px; letter-spacing:-.2px; }
-        table.fg input:focus { background:#fff; box-shadow:inset 0 0 0 2px #F0A24B; border-radius:2px; }
-        table.fg td.fg-del { text-align:center; }
-        table.fg .fg-del i { color:#C0824A; cursor:pointer; padding:5px; }
-        table.fg .fg-del i:hover { color:#DD5138; }
-        .fg-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
-        .fg-hint { font-size:11px; color:#8a6d45; }
-        .fg-stat { font-size:12px; color:#B5762A; font-weight:bold; }
-        .pf-rt-pane { display:none; }
-        .pf-row-btn { border:1px solid #D8BE93; background:#fff; color:#5b3a1e; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; }
-        .pf-row-btn:hover { background:#F7E0BD; }
-        .pf-row-btn.del { color:#DD5138; border-color:#f0c4bd; }
         .pf-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
         .pf-sec-title { font-size:14px; font-weight:bold; color:#8A5A2B; border-left:4px solid #F0A24B; padding-left:8px; margin:16px 0 6px; }
@@ -204,7 +221,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
             <p>請洽管理者於「使用者權限設定」指派「PFMEA檢閱／登錄／管理員」角色。</p>
         </div>
 <?php else: ?>
-        <div class="pf-toolbar">
+        <div class="pf-toolbar pf-list-wrap">
             <label>搜尋</label>
             <input type="text" id="kwInput" placeholder="表單編號／料號" style="width:200px;">
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
@@ -216,7 +233,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
         </div>
 
-        <div class="pf-table-wrap">
+        <div class="pf-list-wrap"><div class="pf-table-wrap">
             <table class="pf-table" id="pfTable">
                 <thead><tr>
                     <th>表單編號</th><th>料號</th><th>客戶</th><th>項目數</th><th>最高RPN</th>
@@ -224,7 +241,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
                 </tr></thead>
                 <tbody id="pfBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
-        </div>
+        </div></div>
 <?php endif; ?>
     </div>
 </div>
@@ -380,26 +397,6 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
 </div></div>
 
 <!-- 建議措施樣板挑選（可複選，套用時自動加編號，2026-08-14使用者要求） -->
-<!-- 從 Excel 貼上（2026-08-18）：直接吃 Excel 複製出來的 TSV，避免一格一格重打 -->
-<div class="pf-mask" id="fgPasteMask" style="z-index:1200;"><div class="pf-modal" style="max-width:720px;">
-    <div class="m-head"><span>從 Excel 貼上</span><span class="m-close" onclick="closeMask('fgPasteMask')">✕</span></div>
-    <div class="m-body">
-        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">
-            在 Excel 選取範圍複製，然後在下面貼上（Ctrl+V）。欄位順序需為：<br>
-            <b>製程代號　製程名稱　項目　功能　潛在失效模式　失效模式潛在後果　分類　失效潛在原因</b><br>
-            後果／分類／原因要填多個時，同一格內用「、」隔開。含標題列會自動略過。
-        </div>
-        <textarea id="fgPasteBox" style="width:100%;height:220px;border:1px solid #D8BE93;border-radius:4px;padding:6px;font-size:12px;font-family:monospace;" placeholder="在這裡貼上（Ctrl+V）"></textarea>
-        <div style="font-size:12px;color:#5b3a1e;margin-top:6px;">
-            <label><input type="checkbox" id="fgPasteReplace"> 取代目前表格內容（不勾＝附加在後面）</label>
-        </div>
-    </div>
-    <div class="m-foot">
-        <button class="b-cancel" onclick="closeMask('fgPasteMask')">取消</button>
-        <button class="b-ok" onclick="fgApplyPaste()">帶入表格</button>
-    </div>
-</div></div>
-
 <!-- 分類樣板挑選（2026-08-18 使用者要求：分類要跟建議措施一樣有樣本可選） -->
 <div class="pf-mask" id="classPickerMask" style="z-index:1200;"><div class="pf-modal">
     <div class="m-head"><span>選擇分類樣板（可複選）</span><span class="m-close" onclick="closeMask('classPickerMask')">✕</span></div>
@@ -528,8 +525,8 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
 </div></div>
 
 <!-- 參考資料設定（2026-08-14使用者要求：找不到能個別設定各欄下拉選單/階層的地方）僅管理員 -->
-<div class="pf-mask" id="refSettingsMask"><div class="pf-modal xwide" style="max-width:1560px;">
-    <div class="m-head"><span>參考資料設定（僅管理員）</span><span class="m-close" onclick="closeMask('refSettingsMask')">✕</span></div>
+<div class="pf-mask" id="refSettingsMask"><div class="pf-modal xwide">
+    <div class="m-head"><span>參考資料設定（僅管理員）</span><span class="m-close" onclick="closeRefSettings()">✕ 回清單</span></div>
     <div class="m-body">
         <div class="pf-rt-tabs">
             <div class="pf-rt-tab" data-rstab="proc" onclick="switchRsTab('proc')">階層對應（一條龍）</div>
@@ -545,64 +542,45 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
         <div style="font-size:12px;color:#8a6d45;margin-bottom:4px;">勾選大項分類＝該分類底下製程全選/取消全選；仍可個別勾選調整。只有勾選開放的製程會出現在分析表的製程代號下拉。</div>
         <div id="rsProcessEnableList" style="max-height:220px;overflow-y:auto;border:1px solid #EADFC8;border-radius:4px;padding:6px 8px;margin-bottom:10px;"></div>
 
-        <!-- 平面表格編輯器（2026-08-18 使用者回饋：鑽取式「有點難用，excel 好像更好用」）
-             一列＝一條完整路徑，看得到全貌、可直接改、可整批貼上，每一格都可打字也可下拉選，
-             候選值依左邊欄位過濾（選了製程，項目欄就只出現該製程底下的）。 -->
-        <div class="pf-sec-title">階層對應總表（一列＝一條完整路徑，可直接編輯）</div>
-        <div class="fg-bar">
-            <input type="text" id="fgFilter" placeholder="搜尋任一欄內容…" style="flex:1;min-width:200px;border:1px solid #D8BE93;border-radius:4px;padding:5px 8px;font-size:13px;">
-            <button type="button" class="pf-row-btn" onclick="fgAddRow()"><i class="fa fa-plus"></i> 新增一列</button>
-            <button type="button" class="pf-row-btn" onclick="fgOpenPaste()"><i class="fa fa-clipboard"></i> 從 Excel 貼上</button>
-            <button type="button" class="pf-row-btn" onclick="fgFillDown()"><i class="fa fa-arrow-down"></i> 整欄填滿</button>
-            <button type="button" class="pf-row-btn" onclick="fgExportCsv()"><i class="fa fa-download"></i> 匯出 CSV</button>
-            <span class="fg-stat" id="fgStat"></span>
-            <button type="button" class="pf-row-btn" id="fgSaveBtn" onclick="fgSave()" style="background:#F0A24B;color:#fff;border-color:#DD9A45;"><i class="fa fa-save"></i> 儲存變更</button>
+        <!-- 左樹右設定（2026-08-18 使用者拍板）：左邊一棵可展開的樹一眼看完整體結構，點哪一節
+             右邊就顯示那一節能設定的東西。右側沿用既有的 rs* 區塊，只是改由樹來導覽。 -->
+        <div class="pf-sec-title">製程與階層設定</div>
+        <div class="rt-layout">
+        <div class="rt-tree-pane">
+            <div class="rt-tree-tools">
+                <input type="text" id="rtSearch" placeholder="搜尋製程／項目／功能／失效模式…">
+                <button type="button" class="pf-row-btn" onclick="rtExpandAll(1)" title="全部展開"><i class="fa fa-plus-square-o"></i></button>
+                <button type="button" class="pf-row-btn" onclick="rtExpandAll(0)" title="全部收合"><i class="fa fa-minus-square-o"></i></button>
+            </div>
+            <label class="rt-onlyset"><input type="checkbox" id="rtOnlyConfigured" checked> 只顯示已設定過內容的製程（取消勾選看全部）</label>
+            <div class="rt-tree" id="rtTree">載入中…</div>
+            <div class="rt-add">
+                <input type="text" id="rsProcCodeNew" placeholder="製程代號" style="flex:0 0 90px;">
+                <input type="text" id="rsProcNameNew" placeholder="製程名稱">
+                <button type="button" class="pf-row-btn" onclick="rsAddProcess()">新增製程</button>
+            </div>
         </div>
-        <div class="fg-hint">在最後一列按 <b>↓</b> 自動新增一列並帶入上一列的製程／項目／功能（只要改不同的地方）；後果／分類／原因可填多個，用「、」隔開；改過的列會標成米黃色，按「儲存變更」才會寫入。<br>
-            <span style="color:#A8906E;font-style:italic;">灰色斜體</span>＝目前沿用全站共用清單（同名失效模式共通），編輯該格後就會轉成這一列專屬的設定；一格填了多個值而欄寬放不下時，<b>滑鼠移到該格</b>會列出完整的每一項。</div>
-        <div class="fg-wrap">
-            <table class="fg" id="fgTable">
-                <!-- 百分比欄寬合計 100%，配合 table-layout:fixed 讓表格永遠塞得下、不出現左右拉桿；
-                     後果／原因是多值欄位（一格好幾個值）故給最寬 -->
-                <colgroup>
-                    <col style="width:4.4%"><col style="width:7%"><col style="width:11%"><col style="width:11%">
-                    <col style="width:14.6%"><col style="width:22.7%"><col style="width:8%"><col style="width:19%"><col style="width:2.3%">
-                </colgroup>
-                <thead><tr>
-                    <th>製程代號</th><th>製程名稱</th><th>項目</th><th>功能</th>
-                    <th>潛在失效模式</th><th>失效模式潛在後果</th><th>分類</th><th>失效潛在原因</th><th></th>
-                </tr></thead>
-                <tbody id="fgBody"></tbody>
-            </table>
-        </div>
-        <datalist id="fgDlProcess"></datalist><datalist id="fgDlProcName"></datalist>
-        <datalist id="fgDlItem"></datalist><datalist id="fgDlFunction"></datalist><datalist id="fgDlFm"></datalist>
-        <datalist id="fgDlFailureEffect"></datalist><datalist id="fgDlClassification"></datalist><datalist id="fgDlFailureCause"></datalist>
-
-        <div class="pf-sec-title pf-collapsible" style="margin-top:16px;cursor:pointer;" onclick="$('#rsDrillWrap').toggle()">
-            <i class="fa fa-caret-down"></i> 逐層鑽取（進階：料號綁定與要求設定）
-            <span style="font-weight:normal;font-size:11px;color:#8a6d45;margin-left:8px;">要求是掛在「路徑」上而非掛在失效模式上，同一路徑的多筆失效模式共用同一批要求，故不併入上方總表以免改一列卻動到別列</span>
-        </div>
+        <div class="rt-detail-pane">
+        <div id="rtNothing" class="rt-empty">← 請從左邊的樹選一個節點<br>
+            <span>選<b>製程</b>可設定它底下的項目；選<b>項目</b>可設定功能；選<b>功能</b>可設定潛在失效模式與要求；選<b>失效模式</b>可設定它的後果／分類／原因</span></div>
         <div id="rsDrillWrap" style="display:none;">
-        <div class="pf-sec-title">選擇製程以設定項目／功能／潛在失效模式／要求（僅列出已開放使用的製程）</div>
-        <div class="rs-list" id="rsProcessList"></div>
-        <div class="pf-proc-box"><input type="text" id="rsProcCodeNew" placeholder="製程代號" style="flex:0 0 100px;"><input type="text" id="rsProcNameNew" placeholder="製程名稱（手動新增，非主檔製程）"><button type="button" class="pf-row-btn" onclick="rsAddProcess()">新增</button></div>
+        <div class="rt-crumb" id="rtCrumb"></div>
 
         <div id="rsProcessScope" style="display:none;">
             <div style="color:#8a6d45;font-size:12px;margin:10px 0 6px;padding-top:10px;border-top:1px dashed #EADFC8;">目前選擇製程：<b id="rsCurProcessLabel"></b></div>
             <div class="pf-sec-title">項目（此製程底下）</div>
-            <div class="rs-list" id="rsItemList"></div>
+            <div class="rs-list" id="rsItemList" style="display:none;"></div>
             <div class="pf-proc-box"><input type="text" id="rsItemNew" placeholder="項目名稱"><button type="button" class="pf-row-btn" onclick="rsAddItem()">新增</button></div>
 
             <div id="rsItemScope" style="display:none;">
                 <div style="color:#8a6d45;font-size:12px;margin:10px 0 6px;">目前選擇項目：<b id="rsCurItemLabel"></b></div>
                 <div class="pf-sec-title">功能（此項目底下）</div>
-                <div class="rs-list" id="rsFuncList"></div>
+                <div class="rs-list" id="rsFuncList" style="display:none;"></div>
                 <div class="pf-proc-box"><input type="text" id="rsFuncNew" placeholder="功能"><button type="button" class="pf-row-btn" onclick="rsAddFunc()">新增</button></div>
             </div>
 
             <div class="pf-sec-title" style="margin-top:10px;">潛在失效模式（<span id="rsFmScopeLabel">此製程通用</span>）<span style="font-weight:normal;font-size:11px;color:#8a6d45;margin-left:8px;">點一筆可再往下設定它的後果／分類／原因</span></div>
-            <div class="rs-list" id="rsFmList"></div>
+            <div class="rs-list" id="rsFmList" style="display:none;"></div>
             <div class="pf-proc-box"><input type="text" id="rsFmNew" placeholder="潛在失效模式"><button type="button" class="pf-row-btn" onclick="rsAddFm()">新增</button></div>
 
             <!-- 2026-08-18 使用者要求：後果／分類／原因不再是獨立頁籤的平面文字對應，而是這條鑽取鏈
@@ -654,6 +632,8 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
         </div>
 
         </div><!-- /#rsDrillWrap -->
+        </div><!-- /.rt-detail-pane -->
+        </div><!-- /.rt-layout -->
 
         <div class="pf-sec-title" style="margin-top:16px;">控制預防／控制偵測／建議措施／分類（全域通用，不分製程）</div>
         <div style="display:flex;gap:16px;">
@@ -738,7 +718,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
         </div>
         </div>
     </div>
-    <div class="m-foot"><button class="b-cancel" onclick="closeMask('refSettingsMask')">關閉</button></div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeRefSettings()">回分析表清單</button></div>
 </div></div>
 
 <!-- 角色權限說明 -->
@@ -1804,19 +1784,25 @@ function fmtActions(t){
     });
     return s;
 }
+/* 數字不從中間斷行（2026-08-18 使用者要求）：「偏擺0.02」被拆成「偏擺0.」＋「02」很難讀。
+   把連續的數字／小數點／正負公差符號包成 nowrap 區段，中文部分照常換行。 */
+function nbNum(t){
+    if (t == null || t === '') return '';
+    return esc(String(t)).replace(/([\u00b1+\-]?[0-9][0-9.,\/\-\u00b1\u00d7\u00b0]*)/g, '<span class="nb">$1</span>');
+}
 function buildPrintDoc(res){
     var d = res.doc;
         var rows = '';
         (res.items||[]).forEach(function(it, i){
             rows += '<tr><td>'+(i+1)+'</td><td class="tl">'+esc(it.process_desc)+'</td><td class="tl">'+esc(it.function_desc)+'</td>'
-                + '<td class="tl">'+esc(it.requirement)+'</td>'
+                + '<td class="tl">'+nbNum(it.requirement)+'</td>'
                 + '<td class="tl">'+esc(it.failure_mode)+'</td><td class="tl">'+esc(it.failure_effect)+'</td>'
                 + '<td>'+esc(it.severity)+'</td><td class="tl">'+esc(it.classification)+'</td>'
                 + '<td class="tl">'+esc(it.failure_cause)+'</td><td>'+esc(it.occurrence)+'</td>'
                 + '<td class="tl">'+esc(it.prevention_controls)+'</td><td class="tl">'+esc(it.detection_controls)+'</td>'
                 + '<td>'+esc(it.detection)+'</td><td>'+esc(it.rpn)+'</td>'
-                + '<td class="tl">'+fmtActions(it.recommended_actions)+'</td><td>'+fmtDate(it.target_date)+'</td>'
-                + '<td>'+fmtDate(it.action_date)+'</td>'
+                + '<td class="tl">'+fmtActions(it.recommended_actions)+'</td><td class="nw">'+fmtDate(it.target_date)+'</td>'
+                + '<td class="nw">'+fmtDate(it.action_date)+'</td>'
                 + '<td>'+esc(it.new_severity)+'</td><td>'+esc(it.new_occurrence)+'</td><td>'+esc(it.new_detection)+'</td><td>'+esc(it.new_rpn)+'</td></tr>';
         });
         var depts = (d.related_depts||'').split(',').filter(Boolean);
@@ -1892,9 +1878,9 @@ function buildPrintDoc(res){
             + '<col style="width:6%">'     /* 控制偵測 */
             + '<col style="width:2.6%">'   /* 偵測度D */
             + '<col style="width:2.8%">'   /* RPN */
-            + '<col style="width:13%">'    /* 建議措施（加寬） */
-            + '<col style="width:4.6%">'   /* 目標完成日 */
-            + '<col style="width:4.6%">'   /* 生效日期 */
+            + '<col style="width:11.8%">'  /* 建議措施（加寬） */
+            + '<col style="width:5.2%">'   /* 目標完成日（日期不可超出欄位，故留寬一點） */
+            + '<col style="width:5.2%">'   /* 生效日期 */
             + '<col style="width:2.2%">'   /* 措施結果 S */
             + '<col style="width:2.2%">'   /* 措施結果 O */
             + '<col style="width:2.2%">'   /* 措施結果 D */
@@ -1913,7 +1899,7 @@ function buildPrintDoc(res){
             + '.p-comp-wrap{flex:1 1 auto;}'
             + '.p-comp{font-size:20px;font-weight:bold;text-align:center;margin-bottom:1px;}'
             + '.p-title{font-size:15px;font-weight:bold;text-align:center;letter-spacing:3px;margin-bottom:6px;}'
-            + 'table.p-rev{flex:0 0 auto;border-collapse:collapse;font-size:7.5px;align-self:flex-start;}'
+            + 'table.p-rev{flex:0 0 auto;border-collapse:collapse;font-size:9px;align-self:flex-start;}'
             + 'table.p-rev th,table.p-rev td{border:1px solid #666;padding:1px 4px;text-align:center;white-space:nowrap;}'
             + 'table.p-rev thead th{background:#f3ead6;}'
             // 表頭資訊+評級對照表+相關部門，比照Excel原始檔版面：改用CSS Grid固定列高格線（不是HTML
@@ -1921,20 +1907,24 @@ function buildPrintDoc(res){
             // 使用者實測發現「原本置中的字跑掉」正是這個根因；Grid的固定列高格線不會被內容撐大，
             // 這裡才能真正做到像Excel那樣所有欄位共用同一套格線，2026-08-13使用者比對Excel畫面後要求）
             + '.p-hdgrid{display:grid;grid-template-columns:8% 16% 4% 9% 4% 8% 4% 9% 6% 8% 20% 4%;'
-            + 'grid-auto-rows:10px;font-size:8px;margin-bottom:6px;border-top:1px solid #666;border-left:1px solid #666;}'
+            + 'grid-auto-rows:12px;font-size:9.5px;margin-bottom:6px;border-top:1px solid #666;border-left:1px solid #666;}'
             + '.p-hdgrid > div{border-right:1px solid #666;border-bottom:1px solid #666;padding:0 3px;'
             + 'display:flex;align-items:center;justify-content:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}'
             + '.p-hdgrid .hdh{background:#f3ead6;font-weight:bold;}'
             + '.p-hdgrid .hdc-label{background:#f3ead6;font-weight:bold;justify-content:flex-start;}'
-            + '.p-hdgrid .hdc-value{justify-content:flex-start;white-space:normal;overflow-wrap:anywhere;line-height:1.15;}'
+            + '.p-hdgrid .hdc-value{justify-content:flex-start;white-space:normal;overflow-wrap:break-word;line-height:1.2;}'
             + '.p-hdgrid .hdc-deptname{justify-content:flex-start;}'
             + '.p-hdgrid .hdc-deptck{font-weight:bold;}'
-            + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:8px;}'
+            + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;}'
             + 'table.p-tb thead{display:table-header-group;}'
-            + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 3px;text-align:center;overflow-wrap:anywhere;}'
+            + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:1px 2px;text-align:center;word-break:break-word;overflow-wrap:break-word;line-height:1.25;}'
+            // 日期一律不斷行（2026-08-18 使用者要求：日期被拆成兩行很難讀）
+            + 'table.p-tb td.nw{white-space:nowrap;font-size:8.5px;overflow:hidden;letter-spacing:-.2px;}'
+            // 數字/公差不可從中間斷開（如 0.02 被拆成 0. 與 02）
+            + 'table.p-tb .nb{white-space:nowrap;}'
             + 'table.p-tb thead th{background:#f3ead6;} table.p-tb td.tl{text-align:left;}'
             + 'table.p-tb tr{break-inside:avoid;}'
-            + '@page{margin:10mm 8mm 16mm;size:A4 landscape;'
+            + '@page{margin:8mm 5mm 14mm;size:A4 landscape;'
             + (res.as_doc_no ? " @bottom-right{ content:'"+String(res.as_doc_no).replace(/['\\]/g,'')+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
             + '}';
     return {css:css, body:body, partNo:d.part_no||''};
@@ -2082,7 +2072,7 @@ window.rsAddProcess = function(){
     $.post(API, {action:'ref_process_add', process_code:code, process_name:name}, function(res){
         if (!res.success){ alert(res.message||'新增失敗'); return; }
         $('#rsProcCodeNew,#rsProcNameNew').val('');
-        loadProcessList(); rsLoadProcessList();
+        loadProcessList(); rsLoadProcessList(); rtLoad();
     }, 'json');
 };
 function rsLoadItems(){
@@ -2142,7 +2132,7 @@ window.rsAddFm = function(){
     if (!RS_PROC_ID || !text) return;
     $.post(API, {action:'ref_failure_mode_add', process_id:RS_PROC_ID, failure_mode:text, item_option_id:RS_ITEM_OPT_ID, function_option_id:RS_FUNC_OPT_ID}, function(res){
         if (!res.success){ alert(res.message||'新增失敗'); return; }
-        $('#rsFmNew').val(''); rsLoadFm();
+        $('#rsFmNew').val(''); rsLoadFm(); rtLoad();
     }, 'json');
 };
 function rsLoadReq(){
@@ -2202,6 +2192,7 @@ function rsDeleteAction(scope){
         link:'field_link_delete', bind:'part_binding_delete'}[scope];
 }
 function rsReloadForScope(scope){
+    if (['process','item','func','fm'].indexOf(scope) >= 0) setTimeout(rtLoad, 150);   // 樹要跟著長出/消失
     if (scope==='process') { rsLoadProcessList(); loadProcessList(); }
     else if (scope==='item') rsLoadItems();
     else if (scope==='func') rsLoadFuncs();
@@ -2375,237 +2366,141 @@ $('#rsTplProcSel').on('change', rsLoadTplList);
 var PART_PROCESS_SEP = '｜';
 
 /* ==========================================================================================
-   平面表格編輯器（2026-08-18）
-   使用者回饋：「參考資料設定有點難用… 我會覺得 excel 好像更好用」，痛點＝一次要建很多筆點不完／
-   看不到全貌／修改既有麻煩／希望建立完盡量用選的不要重複輸入。
-   對策：一列＝一條完整路徑的平面表格。每一格都是「可打字也可下拉選」的 input，候選值依左邊欄位
-   即時過濾（選了製程，項目欄就只出現該製程底下的），整棵樹在載入時就抓回本機算，打字不往返後端。
+   左側階層樹（2026-08-18 使用者拍板版面：左邊樹狀目錄＋右邊設定）
+   資料一次由 flat_list/flat_tree 取回在本機組樹，展開/搜尋都不再往返後端。
+   樹只負責「導覽」，點到哪一節就呼叫既有的 rsSelectProcess/rsSelectItem/rsSelectFunc/rsSelectFm，
+   右側沿用原本那套設定區塊——不重寫一份設定邏輯。
    ========================================================================================== */
-var FG_ROWS = [];       // 畫面上的列（含未存檔的新列）
-var FG_TREE = {processes:[], items:[], functions:[], link_pool:[], fm_pool:[]};
-var FG_COLS = [
-    ['process_code','fgDlProcess'], ['process_name','fgDlProcName'], ['item_name','fgDlItem'],
-    ['function_desc','fgDlFunction'], ['failure_mode','fgDlFm'],
-    ['failure_effect','fgDlFailureEffect'], ['classification','fgDlClassification'], ['failure_cause','fgDlFailureCause']
-];
-var FG_MULTI = ['failure_effect','classification','failure_cause'];  // 多值欄位，以「、」串接
+var RT = {proc:[], item:[], func:[], fm:[]};
+var RT_OPEN = {};                 // 展開狀態： 'p12' / 'i3' / 'f5'
+var RT_SEL = {type:'', id:0};
 
-function fgLoad(){
+function rtLoad(){
+    $('#rtTree').text('載入中…');
     $.getJSON(API, {action:'flat_list'}, function(res){
-        if (!res.success){ alert(res.message||'載入失敗'); return; }
-        FG_TREE = res.tree || FG_TREE;
-        FG_ROWS = (res.rows||[]).map(function(r){
-            return {
-                fm_id: parseInt(r.fm_id,10)||0,
-                process_code: r.process_code||'', process_name: r.process_name||'',
-                item_name: r.item_name||'', function_desc: r.function_desc||'',
-                failure_mode: r.failure_mode||'',
-                failure_effect: r.failure_effect||'', classification: r.classification||'', failure_cause: r.failure_cause||'',
-                _inh: {failure_effect: !!r.failure_effect_inherited, classification: !!r.classification_inherited, failure_cause: !!r.failure_cause_inherited},
-                _dirty:false, _new:false
-            };
+        if (!res.success){ $('#rtTree').text(res.message||'載入失敗'); return; }
+        var t = res.tree || {};
+        RT.proc = t.processes || [];
+        RT.item = t.items || [];
+        RT.func = t.functions || [];
+        RT.fm   = (res.rows || []).map(function(r){
+            return {id:+r.fm_id, text:r.failure_mode, process_id:+r.process_id,
+                    item_option_id:+(r.item_option_id||0), function_option_id:+(r.function_option_id||0)};
         });
-        fgRender();
+        rtRender();
     });
 }
-function fgRender(){
-    var kw = ($('#fgFilter').val()||'').trim().toLowerCase();
-    var html = FG_ROWS.map(function(row, i){
-        if (kw) {
-            var hay = FG_COLS.map(function(c){ return row[c[0]]||''; }).join(' ').toLowerCase();
-            if (hay.indexOf(kw) < 0) return '';
-        }
-        var cls = row._new ? ' class="fg-new"' : (row._dirty ? ' class="fg-dirty"' : '');
-        var tds = FG_COLS.map(function(c){
-            var inh = row._inh && row._inh[c[0]] ? ' fg-inherit' : '';
-            var multi = FG_MULTI.indexOf(c[0]) >= 0 ? ' fg-multi' : '';
-            var v = row[c[0]]||'';
-            // 多值欄位一格可能有四五個值，欄寬再怎麼給都可能塞不下，一律掛 title 讓滑鼠移上去看全文；
-            // 多值的還順便標出共有幾項，才不會以為只有看得到的那幾個
-            var n = (multi && v) ? v.split(/[、,，]/).filter(function(x){ return x.trim(); }).length : 0;
-            var tipText = inh ? '目前沿用全站共用清單（同名失效模式共通），改動後會轉成這一列專屬\n\n' : '';
-            if (n > 1) tipText += '共 '+n+' 項：\n' + v.split(/[、,，]/).map(function(x,k){ return (k+1)+'. '+x.trim(); }).join('\n');
-            else tipText += v;
-            var tip = tipText ? ' title="'+esc(tipText)+'"' : '';
-            return '<td><input type="text" class="fg-cell'+inh+multi+'" data-i="'+i+'" data-c="'+c[0]+'" list="'+c[1]+'" data-eg-skip="1" autocomplete="off"'+tip+' value="'+esc(v)+'"></td>';
-        }).join('');
-        return '<tr'+cls+' data-i="'+i+'">'+tds+'<td class="fg-del"><i class="fa fa-trash" title="刪除此列"></i></td></tr>';
-    }).join('');
-    $('#fgBody').html(html || '<tr><td colspan="9" style="padding:14px;text-align:center;color:#8a6d45;">沒有符合的資料</td></tr>');
-    fgUpdateStat();
+function rtKids(arr, key, val){ return arr.filter(function(x){ return +x[key] === +val; }); }
+/* 這個製程底下有沒有任何內容（項目或失效模式）——「只顯示已設定過的製程」用；
+   全公司 96 個製程大多是空的，預設全列出來會找不到東西 */
+function rtProcHasContent(pid){
+    if (rtKids(RT.item, 'process_id', pid).length) return true;
+    return RT.fm.some(function(f){ return f.process_id === +pid; });
 }
-function fgUpdateStat(){
-    var d = FG_ROWS.filter(function(r){ return r._dirty || r._new; }).length;
-    $('#fgStat').text(d ? ('有 '+d+' 列未儲存') : '');
-    $('#fgSaveBtn').prop('disabled', !d).css('opacity', d ? 1 : .5);
+function rtMatch(kw, node){ return !kw || (node||'').toLowerCase().indexOf(kw) >= 0; }
+
+function rtRender(){
+    var kw = ($('#rtSearch').val()||'').trim().toLowerCase();
+    var onlySet = $('#rtOnlyConfigured').is(':checked');
+    var html = '';
+    RT.proc.forEach(function(p){
+        var items = rtKids(RT.item, 'process_id', p.id);
+        var procFm = RT.fm.filter(function(f){ return f.process_id === +p.id && !f.item_option_id && !f.function_option_id; });
+        // 搜尋時只要這個製程底下任一層命中就整支留著（否則打「齒輪研磨不佳」會什麼都看不到）
+        var hit = rtMatch(kw, p.process_code + ' ' + p.process_name)
+               || items.some(function(i){ return rtMatch(kw, i.item_name)
+                    || rtKids(RT.func, 'item_option_id', i.id).some(function(f){ return rtMatch(kw, f.function_desc); }); })
+               || RT.fm.some(function(f){ return f.process_id === +p.id && rtMatch(kw, f.text); });
+        if (kw && !hit) return;
+        if (!kw && onlySet && !rtProcHasContent(p.id)) return;
+        var open = kw ? true : !!RT_OPEN['p'+p.id];
+        var cnt = items.length + procFm.length;
+        html += rtNode('proc', p.id, 1, open, (p.process_code+' '+p.process_name), cnt);
+        if (!open) return;
+        items.forEach(function(it){
+            var funcs = rtKids(RT.func, 'item_option_id', it.id);
+            var itemFm = RT.fm.filter(function(f){ return +f.item_option_id === +it.id && !f.function_option_id; });
+            var iopen = kw ? true : !!RT_OPEN['i'+it.id];
+            html += rtNode('item', it.id, 2, iopen, it.item_name, funcs.length + itemFm.length);
+            if (!iopen) return;
+            funcs.forEach(function(fn){
+                var fnFm = RT.fm.filter(function(f){ return +f.function_option_id === +fn.id; });
+                var fopen = kw ? true : !!RT_OPEN['f'+fn.id];
+                html += rtNode('func', fn.id, 3, fopen, fn.function_desc, fnFm.length);
+                if (fopen) fnFm.forEach(function(f){ html += rtNode('fm', f.id, 4, null, f.text, 0); });
+            });
+            itemFm.forEach(function(f){ html += rtNode('fm', f.id, 3, null, f.text, 0); });
+        });
+        procFm.forEach(function(f){ html += rtNode('fm', f.id, 2, null, f.text, 0); });
+    });
+    $('#rtTree').html(html || '<div class="rt-empty">沒有符合的資料</div>');
 }
-/* 這一格可以選什麼：依同一列左邊已填的值過濾（使用者要求「盡量用選的，避免重複輸入」） */
-function fgFillDatalist($input){
-    var col = $input.attr('data-c'), row = FG_ROWS[parseInt($input.attr('data-i'),10)];
-    if (!row) return;
-    var vals = [];
-    var proc = FG_TREE.processes.filter(function(p){ return p.process_code === row.process_code; })[0];
-    var item = proc ? FG_TREE.items.filter(function(x){ return x.process_id == proc.id && x.item_name === row.item_name; })[0] : null;
-    if (col === 'process_code')      vals = FG_TREE.processes.map(function(p){ return p.process_code; });
-    else if (col === 'process_name') vals = FG_TREE.processes.map(function(p){ return p.process_name; });
-    else if (col === 'item_name')    vals = FG_TREE.items.filter(function(x){ return !proc || x.process_id == proc.id; }).map(function(x){ return x.item_name; });
-    else if (col === 'function_desc')vals = FG_TREE.functions.filter(function(x){ return !item || x.item_option_id == item.id; }).map(function(x){ return x.function_desc; });
-    else if (col === 'failure_mode') vals = FG_TREE.fm_pool || [];
-    else vals = (FG_TREE.link_pool||[]).filter(function(x){ return x.target_field === col; }).map(function(x){ return x.target_value; });
-    var uniq = [];
-    vals.forEach(function(v){ if (v && uniq.indexOf(v) < 0) uniq.push(v); });
-    document.getElementById($input.attr('list')).innerHTML = uniq.map(function(v){ return '<option value="'+esc(v)+'">'; }).join('');
+function rtNode(type, id, lv, open, label, cnt){
+    var icon = (open === null) ? 'fa-exclamation-triangle'
+             : (open ? 'fa-caret-down' : 'fa-caret-right');
+    var on = (RT_SEL.type === type && +RT_SEL.id === +id) ? ' on' : '';
+    return '<div class="rt-node rt-lv'+lv+on+'" data-t="'+type+'" data-id="'+id+'">'
+         + '<i class="fa '+icon+'"></i>' + esc(label)
+         + (cnt ? '<span class="rt-cnt">('+cnt+')</span>' : '') + '</div>';
 }
-$(document).on('focus', '#fgBody input', function(){
-    fgFillDatalist($(this));
-    $(this).data('focusVal', this.value);
+$(document).on('click', '#rtTree .rt-node', function(){
+    var t = $(this).attr('data-t'), id = +$(this).attr('data-id');
+    var key = {proc:'p', item:'i', func:'f'}[t];
+    if (key && RT_SEL.type === t && +RT_SEL.id === id) RT_OPEN[key+id] = !RT_OPEN[key+id];  // 再點一次＝展開/收合
+    else if (key) RT_OPEN[key+id] = true;
+    RT_SEL = {type:t, id:id};
+    var label = $(this).text().replace(/\(\d+\)$/, '').trim();
+    $('#rtNothing').hide(); $('#rsDrillWrap').show();
+    if (t === 'proc')      { rsSelectProcess(id, label); }
+    else if (t === 'item') { rsSelectItem(id, label); }
+    else if (t === 'func') { rsSelectFunc(id, label); }
+    else if (t === 'fm')   { rtSelectFmNode(id, label); }
+    rtRender();
+    rtCrumb();
 });
-$(document).on('input change', '#fgBody input', function(){
-    var i = parseInt($(this).attr('data-i'),10), col = $(this).attr('data-c'), row = FG_ROWS[i];
-    if (!row) return;
-    var v = this.value;
-    // 多值欄位從下拉選一個時「附加」而不是「取代」——datalist 原生行為是整格覆蓋，
-    // 但這幾欄本來就允許填多個，直接覆蓋等於把先前選的洗掉
-    if (FG_MULTI.indexOf(col) >= 0) {
-        var pool = (FG_TREE.link_pool||[]).filter(function(x){ return x.target_field === col; }).map(function(x){ return x.target_value; });
-        var before = $(this).data('focusVal') || '';
-        if (pool.indexOf(v) >= 0 && before && before !== v && before.indexOf(v) < 0) {
-            v = before.replace(/[、,]\s*$/, '') + '、' + v;
-            this.value = v;
-        }
+/* 點樹上的失效模式：它可能掛在功能層／項目層／製程層，要先把上層的 rs 狀態一起補齊，
+   右側的「後果／分類／原因」與「要求」才會對應到正確的層級 */
+function rtSelectFmNode(fmId, label){
+    var f = RT.fm.filter(function(x){ return x.id === +fmId; })[0];
+    if (!f) return;
+    var proc = RT.proc.filter(function(x){ return +x.id === f.process_id; })[0];
+    if (proc && RS_PROC_ID !== f.process_id) rsSelectProcess(f.process_id, proc.process_code+' '+proc.process_name);
+    if (f.item_option_id) {
+        var it = RT.item.filter(function(x){ return +x.id === f.item_option_id; })[0];
+        if (it) rsSelectItem(f.item_option_id, it.item_name);
     }
-    row[col] = v;
-    // 一經編輯就不再是「沿用全站共用」，存檔後會變成這一列自己的設定
-    if (row._inh && row._inh[col]) { row._inh[col] = false; $(this).removeClass('fg-inherit').removeAttr('title'); }
-    if (!row._new) row._dirty = true;
-    // 打了製程代號就自動帶出製程名稱，省去重複輸入
-    if (col === 'process_code') {
-        var p = FG_TREE.processes.filter(function(x){ return x.process_code === v; })[0];
-        if (p) { row.process_name = p.process_name; $('#fgBody input[data-i="'+i+'"][data-c="process_name"]').val(p.process_name); }
+    if (f.function_option_id) {
+        var fn = RT.func.filter(function(x){ return +x.id === f.function_option_id; })[0];
+        if (fn) rsSelectFunc(f.function_option_id, fn.function_desc);
     }
-    $(this).closest('tr').addClass(row._new ? 'fg-new' : 'fg-dirty');
-    fgUpdateStat();
-});
-/* 最後一列按 ↓ 自動新增一列並帶入上一列的路徑欄位；↑↓ 在列間移動同一欄（比照全站可增列表格慣例） */
-$(document).on('keydown', '#fgBody input', function(e){
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
-    var $in = $(this), i = parseInt($in.attr('data-i'),10), col = $in.attr('data-c');
-    if (e.key === 'ArrowUp') {
-        if (i <= 0) return;
-        e.preventDefault();
-        $('#fgBody input[data-i="'+(i-1)+'"][data-c="'+col+'"]').focus().select();
-        return;
+    rsSelectFm(fmId, label);
+}
+function rtCrumb(){
+    var parts = [];
+    var p = RT.proc.filter(function(x){ return +x.id === RS_PROC_ID; })[0];
+    if (p) parts.push(p.process_code + ' ' + p.process_name);
+    var i = RT.item.filter(function(x){ return +x.id === RS_ITEM_OPT_ID; })[0];
+    if (i) parts.push(i.item_name);
+    var f = RT.func.filter(function(x){ return +x.id === RS_FUNC_OPT_ID; })[0];
+    if (f) parts.push(f.function_desc);
+    if (RS_FM_TEXT) parts.push(RS_FM_TEXT);
+    $('#rtCrumb').html('<b>目前位置：</b>' + (parts.map(esc).join(' <span style="color:#B5762A;">›</span> ') || '（未選擇）'));
+}
+window.rtExpandAll = function(on){
+    RT_OPEN = {};
+    if (on) {
+        RT.proc.forEach(function(p){ RT_OPEN['p'+p.id] = true; });
+        RT.item.forEach(function(i){ RT_OPEN['i'+i.id] = true; });
+        RT.func.forEach(function(f){ RT_OPEN['f'+f.id] = true; });
     }
-    e.preventDefault();
-    if (i >= FG_ROWS.length - 1) fgAddRow(i);   // 最後一列 → 長出新的一列
-    var $next = $('#fgBody input[data-i="'+(i+1)+'"][data-c="'+col+'"]');
-    if ($next.length) $next.focus().select();
-});
-window.fgAddRow = function(copyFrom){
-    var src = (typeof copyFrom === 'number' && FG_ROWS[copyFrom]) ? FG_ROWS[copyFrom] : null;
-    FG_ROWS.push({
-        fm_id:0,
-        // 只帶路徑欄位，失效模式與後果／分類／原因留白等使用者填（帶過來反而要一個個清掉）
-        process_code: src ? src.process_code : '', process_name: src ? src.process_name : '',
-        item_name: src ? src.item_name : '', function_desc: src ? src.function_desc : '',
-        failure_mode:'', failure_effect:'', classification:'', failure_cause:'',
-        _dirty:false, _new:true
-    });
-    $('#fgFilter').val('');   // 有篩選時新列會被藏起來，看起來像沒反應
-    fgRender();
-    var last = FG_ROWS.length - 1;
-    $('#fgBody input[data-i="'+last+'"][data-c="'+(src ? 'failure_mode' : 'process_code')+'"]').focus();
+    rtRender();
 };
-/* 整欄填滿：把目前游標所在欄、該列的值往下套用到所有列（取代逐列手打相同值） */
-window.fgFillDown = function(){
-    var $f = $(document.activeElement);
-    if (!$f.is('#fgBody input')) { alert('請先點一下要填滿的那一格（會把該格的值套用到下面所有列）'); return; }
-    var i = parseInt($f.attr('data-i'),10), col = $f.attr('data-c'), v = $f.val();
-    if (!confirm('把「'+(v||'(空白)')+'」套用到第 '+(i+2)+' 列以下所有列的這一欄？')) return;
-    for (var k = i+1; k < FG_ROWS.length; k++) {
-        FG_ROWS[k][col] = v;
-        if (!FG_ROWS[k]._new) FG_ROWS[k]._dirty = true;
-    }
-    fgRender();
+$(document).on('input', '#rtSearch', rtRender);
+$(document).on('change', '#rtOnlyConfigured', rtRender);
+window.closeRefSettings = function(){
+    $('body').removeClass('rs-mode');
+    $('#refSettingsMask').hide();
 };
-window.fgOpenPaste = function(){ $('#fgPasteBox').val(''); $('#fgPasteReplace').prop('checked', false); openMask('fgPasteMask'); $('#fgPasteBox').focus(); };
-window.fgApplyPaste = function(){
-    var raw = $('#fgPasteBox').val();
-    if (!raw.trim()){ alert('請先貼上內容'); return; }
-    var lines = raw.split(/\r?\n/).filter(function(l){ return l.trim() !== ''; });
-    var added = [];
-    lines.forEach(function(line, idx){
-        var c = line.split('\t');
-        // 首列若是標題（第一格不是既有製程代號、且內容像欄位名）就略過
-        if (idx === 0 && /製程/.test(c[0]||'')) return;
-        var row = {
-            fm_id:0,
-            process_code:(c[0]||'').trim(), process_name:(c[1]||'').trim(),
-            item_name:(c[2]||'').trim(), function_desc:(c[3]||'').trim(),
-            failure_mode:(c[4]||'').trim(), failure_effect:(c[5]||'').trim(),
-            classification:(c[6]||'').trim(), failure_cause:(c[7]||'').trim(),
-            _dirty:false, _new:true
-        };
-        if (!row.process_code && !row.failure_mode) return;
-        // 只給代號沒給名稱時自動補上既有製程的名稱
-        if (row.process_code && !row.process_name) {
-            var p = FG_TREE.processes.filter(function(x){ return x.process_code === row.process_code; })[0];
-            if (p) row.process_name = p.process_name;
-        }
-        added.push(row);
-    });
-    if (!added.length){ alert('沒有解析到可用的資料列'); return; }
-    if ($('#fgPasteReplace').is(':checked')) FG_ROWS = added;
-    else FG_ROWS = FG_ROWS.concat(added);
-    closeMask('fgPasteMask');
-    $('#fgFilter').val('');
-    fgRender();
-    alert('已帶入 '+added.length+' 列，確認內容後請按「儲存變更」才會寫入。');
-};
-window.fgExportCsv = function(){
-    var head = ['製程代號','製程名稱','項目','功能','潛在失效模式','失效模式潛在後果','分類','失效潛在原因'];
-    var lines = [head.join(',')];
-    FG_ROWS.forEach(function(r){
-        lines.push(FG_COLS.map(function(c){
-            var v = (r[c[0]]||'').replace(/"/g, '""');
-            return /[",\n]/.test(v) ? '"'+v+'"' : v;
-        }).join(','));
-    });
-    // BOM 讓 Excel 正確辨識 UTF-8 中文
-    var blob = new Blob(['\ufeff'+lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    // 用本地日期組檔名：egFmtDate 對 Date 物件是走 toISOString()＝UTC，台灣凌晨會印成前一天
-    var now = new Date();
-    var stamp = now.getFullYear() + ('0'+(now.getMonth()+1)).slice(-2) + ('0'+now.getDate()).slice(-2);
-    a.download = 'PFMEA階層對應_'+stamp+'.csv';
-    a.click();
-    URL.revokeObjectURL(a.href);
-};
-window.fgSave = function(){
-    var dirty = FG_ROWS.filter(function(r){ return r._dirty || r._new; });
-    if (!dirty.length) return;
-    var bad = dirty.filter(function(r){ return !r.process_code.trim() || !r.failure_mode.trim(); });
-    if (bad.length && !confirm('有 '+bad.length+' 列缺少「製程代號」或「潛在失效模式」，這些列會被略過不儲存。\n要繼續嗎？')) return;
-    $.post(API, {action:'flat_save', rows:JSON.stringify(dirty)}, function(res){
-        if (!res.success){ alert(res.message||'儲存失敗'); return; }
-        alert('已儲存 '+res.rows+' 列（新增 '+res.added+' 筆對應、移除 '+res.removed+' 筆）。');
-        fgLoad();
-        rsLoadProcessList();   // 製程可能有新建，順帶更新鑽取區與卡片用的清單
-        loadProcessList();
-    }, 'json');
-};
-$(document).on('click', '#fgBody .fg-del i', function(){
-    var i = parseInt($(this).closest('tr').attr('data-i'),10), row = FG_ROWS[i];
-    if (!row) return;
-    if (!row.fm_id){ FG_ROWS.splice(i,1); fgRender(); return; }   // 還沒存過的新列直接移除
-    if (!confirm('確定刪除這一列？（連同它的後果／分類／原因設定；不影響已填寫存檔的分析表資料）')) return;
-    $.post(API, {action:'flat_delete_row', fm_id:row.fm_id}, function(res){
-        if (!res.success){ alert(res.message||'刪除失敗'); return; }
-        fgLoad();
-    }, 'json');
-});
-$(document).on('input', '#fgFilter', function(){ fgRender(); });
 
 /* ---------- 階層對應鏈的後三層：潛在失效模式 → 後果／分類／原因（2026-08-18 使用者要求）----------
  * 原本這三個欄位是另一個頁籤的平面文字對應（只認「潛在失效模式的文字」全站共用一份），使用者要求
@@ -2889,7 +2784,8 @@ $('#btnRefSettings').on('click', function(){
     openMask('refSettingsMask');
     switchRsTab('proc');
     rsRenderProcessEnableList(); rsLoadProcessList(); rsLoadControlLists();
-    fgLoad();
+    RT_SEL = {type:'', id:0}; $('#rsDrillWrap').hide(); $('#rtNothing').show();
+    rtLoad();
     rsLoadTplProcSel();
     rsRenderEngSymbols(); rsRenderGdtSymbols();
     rsLoadReqListAll();
