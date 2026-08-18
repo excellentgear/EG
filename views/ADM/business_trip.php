@@ -401,6 +401,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
@@ -830,26 +831,22 @@ function tripPrintHtml(res){
     var dt = ready ? dispDate(t.approved_date || t.apply_date) : '';
     var stamp = function(nm, deputy){ return (ready && nm) ? stampHtml(nm, dt, deputy) : ''; };
     var timeText = (t.time_from||'') + ((t.time_to||'') ? ' 至 ' + t.time_to : '');
-    // 逐日時段：一列排兩天（天數多也不撐版），未填滿補空格供手寫
-    var ds = t.days || [], dayTbl = '';
-    if (ds.length) {
-        var cells = [];
-        for (var i = 0; i < ds.length; i++) {                 /* 不補空白格：欄位少、補了反而像沒填完 */
-            var d = ds[i] || {}, tm = d.start_time ? (d.start_time + (d.end_time ? '～' + d.end_time : '')) : '';
-            cells.push('<td class="dn">' + (d.day_date ? ('第 ' + (i+1) + ' 天') : '') + '</td>'
-                     + '<td class="dd">' + (d.day_date ? esc(dispDate(d.day_date)) : '') + '</td>'
-                     + '<td class="dt">' + esc(tm) + '</td>');
-        }
-        if (cells.length % 2) cells.push('<td class="dn"></td><td class="dd"></td><td class="dt"></td>');
-        var rows = '';
-        for (var k = 0; k < cells.length; k += 2) rows += '<tr>' + cells[k] + cells[k+1] + '</tr>';
-        dayTbl = '<table class="sub"><tbody>' + rows + '</tbody></table>';
-    }
+    // 逐日時段：直接寫成文字列接在事由下方（使用者明確要求，不要在事由欄內畫表格）
+    //   參加外訓：…（台中市總工業會）
+    //   2025.03.06 08:30～17:30
+    //   2025.03.13 08:30～17:30
+    var ds = t.days || [], dayLines = '';
+    ds.forEach(function(d){
+        d = d || {};
+        if (!d.day_date) return;
+        var tm = d.start_time ? (d.start_time + (d.end_time ? '～' + d.end_time : '')) : '';
+        dayLines += '<div class="dl">' + esc(dispDate(d.day_date)) + (tm ? '　' + esc(tm) : '') + '</div>';
+    });
     // 有逐日明細時，整段期間套同一組起訖時間並不成立，改指向下方每日清單，避免印出不實的時段
     var period = (t.date_from === t.date_to)
         ? dispDate(t.date_from) + '　自 ' + timeText
         : dispDate(t.date_from) + ' ～ ' + dispDate(t.date_to)
-          + (dayTbl ? '（各日時段如下）' : '　自 ' + timeText);
+          + (dayLines ? '（各日時段見事由欄）' : '　自 ' + timeText);
     var ymd = String(t.apply_date||'').split('-');
 
     var css = '@page{size:A4 portrait;margin:0;}html,body{margin:0;padding:0;}'
@@ -877,17 +874,22 @@ function tripPrintHtml(res){
         + '.rs{display:flex;border-bottom:1px solid #000;min-height:34mm;}'
         + '.rs>.vl{align-items:flex-start;white-space:pre-wrap;padding:8px 10px;}'
         + '.rs>.lb{align-items:flex-start;padding-top:8px;}'
-        + 'table.sub{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px;margin-top:8px;}'
-        + 'table.sub td{border:1px solid #999;padding:4px 5px;text-align:center;height:9mm;white-space:nowrap;}'
-        + 'table.sub td.dn{width:10%;color:#444;font-size:12px;}table.sub td.dd{width:19%;}table.sub td.dt{width:21%;}'
+        + '.rs .dl{font-size:15px;line-height:1.9;letter-spacing:1px;}'
         /* 簽章三格（比照紙本：會計／課長／組長） */
-        + '.sg{display:flex;height:28mm;}'
+        /* 簽章列：min-height 而非固定 height——圖章一律真實尺寸不縮放，欄位自動加大來容納（ai-rules/18 第6條） */
+        + '.sg{display:flex;min-height:28mm;}'
         + '.sg .cell{flex:1;display:flex;flex-direction:column;border-right:1px solid #000;}'
         + '.sg .cell:last-child{border-right:none;}'
         + '.sg .lb{background:#F5EEE3;border-bottom:1px solid #000;text-align:center;font-size:14px;'
         +   'font-weight:bold;letter-spacing:2px;padding:3px 0;}'
-        + '.sg .bx{flex:1;display:flex;align-items:center;justify-content:center;}'
-        + '.sg .stamp-wrap svg,.sg svg.car-stamp{width:72px;height:72px;}'
+        + '.sg .bx{flex:1;display:flex;align-items:center;justify-content:center;padding:2mm 0;overflow:visible;}'
+        /* 圖章固定 91px 不隨欄位縮放（ai-rules/18 第6條，直接抄不自行推導；可超出欄位） */
+        /* 本頁只有一格簽章、使用者明確要求「圖章不可縮放，可超出欄位」：
+           指定圖章模板時 eg_stamp.js 會加 inline style="height:90%"（fillRatio），inline 樣式壓得過一般規則，
+           故此處用 !important 讓它退回真實尺寸（ai-rules/18 第10條的 fillRatio 是給密集逐列表格用的，本頁不適用） */
+        + '.sg .stamp-wrap{height:auto !important;display:inline-flex;align-items:center;}'
+        + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;'
+        +   '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         /* 右側直書「外出時交管理課存查」 */
         + '.keep{width:17mm;flex:none;border-left:1.6px solid #000;display:flex;align-items:center;justify-content:center;}'
         + '.keep span{writing-mode:vertical-rl;letter-spacing:8px;font-size:16px;font-weight:bold;}'
@@ -905,7 +907,7 @@ function tripPrintHtml(res){
         +     '<div class="lb2">公出時間</div><div class="vl2">' + esc(period) + '</div></div>'
         +   '<div class="r"><div class="lb">公出地點</div><div class="vl">' + esc(t.location||'') + '</div></div>'
         +   '<div class="r rs"><div class="lb">事　由</div><div class="vl"><div style="width:100%;">'
-        +     esc(t.reason||'') + dayTbl + '</div></div></div>'
+        +     esc(t.reason||'') + dayLines + '</div></div></div>'
         +   '<div class="sg">'
         /* 會計格固定留白：只有需要請款時才由會計手蓋 */
         +     '<div class="cell"><div class="lb">會　計</div><div class="bx"></div></div>'
