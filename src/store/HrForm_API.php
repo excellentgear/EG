@@ -251,6 +251,20 @@ case 'auto_sign_bulk': {
     jout(['done'=>count($r['done']), 'errors'=>$r['errors']]);
 }
 
+/* 超級管理員批次刪除（勾選後一次刪多筆，連同簽核紀錄與通知一併清除）。與自動簽核同一層防護：
+   僅 id=1＋操作確認密碼，避免誤刪已簽核的歷史表單。2026-08-18 使用者要求。 */
+case 'delete_bulk': {
+    hrf_need_csrf();
+    if ($uid !== 1) jerr('僅超級管理員可批次刪除', 403);
+    $pwCheck = eg_confirm_password_verify($db, $uid, (string)($_POST['password'] ?? ''));
+    if (!$pwCheck['ok']) jerr($pwCheck['msg']);
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    if (!is_array($ids) || !$ids) jerr('請至少選擇一筆表單');
+    $r = hrf_instance_delete_bulk($db, $ids);
+    if (!$r['deleted'] && $r['errors']) jerr(implode('；', $r['errors']));
+    jout(['deleted'=>$r['deleted'], 'labels'=>$r['labels'], 'errors'=>$r['errors']]);
+}
+
 /* ============================================================ AS 文件編號綁定 ============================================================ */
 
 case 'asdoc_list': jout(['docs'=>eg_asdoc_list($db)]);

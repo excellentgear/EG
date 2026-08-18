@@ -143,6 +143,7 @@ $perms = hrf_perms($db, $hrfUser);
                     <option value="rejected">已退回</option>
                 </select>
                 <button class="btn-auto-sign" style="display:none;background:#8A5A2B;color:#fff;"><i class="fa fa-magic"></i> 超管自動簽核</button>
+                <button class="btn-bulk-del" style="display:none;background:#DD5138;color:#fff;"><i class="fa fa-trash"></i> 超管批次刪除</button>
                 <?php endif; ?>
                 <span class="hf-asdoc"></span>
                 <div class="hf-pager">
@@ -200,6 +201,19 @@ $perms = hrf_perms($db, $hrfUser);
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('createMask')">取消</button><button class="b-ok" onclick="hfSubmitCreate()">建立</button></div>
 </div></div>
 
+<!-- 超管批次刪除 modal -->
+<div class="hf-mask" id="bulkDelMask"><div class="hf-modal" style="max-width:720px;">
+    <div class="m-head"><span>超級管理員批次刪除</span><span class="m-close" onclick="closeMask('bulkDelMask')">✕</span></div>
+    <div class="m-body">
+        <p style="font-size:12.5px;color:#DD5138;">將刪除下列 <b id="bulkDelCount">0</b> 筆表單，連同表單內容、簽核紀錄與相關通知一併移除，<b>刪除後無法復原</b>。已完成簽核的表單也會被刪除，請確認後再執行。</p>
+        <div style="max-height:300px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;" id="bulkDelList"></div>
+        <label>操作確認密碼</label>
+        <input type="password" id="bulkDelPwd">
+        <div class="err-list" id="bulkDelErr"></div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('bulkDelMask')">取消</button><button class="b-ok" style="background:#DD5138;" onclick="hfSubmitBulkDel()">確認刪除</button></div>
+</div></div>
+
 <!-- 檢視/編輯/簽核 modal -->
 <div class="hf-mask" id="viewMask"><div class="hf-modal">
     <div class="m-head"><span id="viewTitle">表單</span><span class="m-close" onclick="closeMask('viewMask')">✕</span></div>
@@ -254,7 +268,8 @@ $perms = hrf_perms($db, $hrfUser);
         <b>③送出</b>：技能鑑定表／職能鑑定表草稿建立後需按「送出」才會通知確認人（該員工直屬主管）；確認通過後自動通知核准人（總經理）；任一關退回都需填寫原因，退回後表單回到草稿可修改重送。<br>
         <b>④複製表單</b>：技能鑑定表／職能鑑定表可按「複製」，以複製者身分建立一份新草稿（機型/內容原樣帶入），需重新走送出流程；職務說明書以部門×職位為主不提供複製，內容直接在原表單編輯存檔即可。<br>
         <b>⑤列印</b>：可單筆列印，或「列印全部」依目前清單篩選結果逐筆各自開視窗列印（結果較多會先詢問是否自動分批排隊）；每份文件各自獨立分頁計算頁碼，只有內容超過一頁時才顯示「第X頁/共Y頁」，單頁文件不顯示頁碼。<br>
-        <b>⑥超級管理員自動簽核</b>：僅 id=1 可用，勾選表單後可先逐筆調整分數（或用「一鍵套用固定分數」快速帶入再個別修改），輸入操作確認密碼＋指定簽核日期，一次補齊尚未完成的確認/核准關卡，用於補登舊紙本資料。
+        <b>⑥超級管理員自動簽核</b>：僅 id=1 可用，勾選表單後可先逐筆調整分數（或用「一鍵套用固定分數」快速帶入再個別修改），輸入操作確認密碼＋指定簽核日期，一次補齊尚未完成的確認/核准關卡，用於補登舊紙本資料。<br>
+        <b>⑦超級管理員批次刪除</b>：僅 id=1 可用，於清單勾選（表頭勾選框可整頁全選）後按「超管批次刪除」，跳窗會列出即將刪除的表單供核對，輸入操作確認密碼即可一次刪除；<b>連同表單內容、簽核紀錄與相關通知一併移除且無法復原</b>，已完成簽核的表單也會被刪除，補登錯誤要重做時用。
         <h4>重要行為</h4>
         ・部門是否產生技能鑑定表／職能鑑定表由管理員在「範本管理」設定，職務說明書全員適用。<br>
         ・機型選項為管理員從既有機台主檔（依機型去重，同機型多台機台編號只算一個考核對象）與量測儀器校驗的量具主檔勾選建立的白名單，不是全部主檔都能選。<br>
@@ -325,6 +340,7 @@ $('.hf-tabpane .pg-next').on('click', function(){ var ft=$(this).closest('.hf-ta
 $('.hf-tabpane .btn-create').on('click', function(){ openCreateModal($(this).closest('.hf-tabpane').data('type')); });
 $('.hf-tabpane .btn-print-all').on('click', function(){ printAll($(this).closest('.hf-tabpane').data('type')); });
 $('.hf-tabpane .btn-auto-sign').on('click', function(){ openAutoSignModal($(this).closest('.hf-tabpane').data('type')); });
+$('.hf-tabpane .btn-bulk-del').on('click', function(){ openBulkDelModal($(this).closest('.hf-tabpane').data('type')); });
 $('.hf-tabpane .btn-missing').on('click', function(){ openMissingModal($(this).closest('.hf-tabpane').data('type')); });
 
 function loadMeta(cb){
@@ -333,7 +349,11 @@ function loadMeta(cb){
         META = res;
         window.__ownCompany = META.company_name || '';
         if (META.perms.canAdmin) $('.admin-only').show();
-        if (META.perms.isSuperAdmin) $('.btn-auto-sign').show();
+        if (META.perms.isSuperAdmin) {
+            // 職務說明書不需簽核，該分頁只顯示批次刪除，不顯示自動簽核
+            $('.hf-tabpane:not([data-type="job_desc"]) .btn-auto-sign').show();
+            $('.btn-bulk-del').show();
+        }
         if (!META.perms.canCreate) $('.btn-create').prop('disabled', true).attr('title', '無建立權限，請洽管理員於「使用者權限設定」指派「人資職務表單」角色');
         if (!META.perms.canPrint) $('.btn-print-all').prop('disabled', true).attr('title', '無列印權限');
         loadAsDoc('job_desc'); loadAsDoc('skill_assess'); loadAsDoc('competency');
@@ -350,7 +370,7 @@ function loadAsDoc(ft){
 }
 function buildTableHeads(){
     var ck = META.perms.isSuperAdmin ? '<th style="width:26px;"><input type="checkbox" class="ck-all" onclick="toggleAllCk(this)"></th>' : '';
-    $('.thead-job_desc').html('<tr><th>部門</th><th>職位</th><th>日期</th><th>確認完成</th><th style="width:150px;">操作</th></tr>');
+    $('.thead-job_desc').html('<tr>'+ck+'<th>部門</th><th>職位</th><th>日期</th><th>確認完成</th><th style="width:150px;">操作</th></tr>');
     $('.thead-skill_assess').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>機型</th><th>總經理考核</th><th>課長考核</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
     $('.thead-competency').html('<tr>'+ck+'<th>部門</th><th>姓名</th><th>職務</th><th>確認</th><th>核准</th><th style="width:170px;">操作</th></tr>');
 }
@@ -433,10 +453,10 @@ function renderList(ft){
                    + '<button class="hf-btn-sm" onclick="printOne(\''+ft+'\','+r.id+')">列印</button> '
                    + (ft==='job_desc' ? '' : '<button class="hf-btn-sm" onclick="copyInstance(\''+ft+'\','+r.id+')">複製</button> ')
                    + (META.perms.canAdmin || r.created_by == META.uid ? '<button class="hf-btn-sm" onclick="deleteInstance(\''+ft+'\','+r.id+')">刪除</button>' : '');
-        var ck = (META.perms.isSuperAdmin && ft!=='job_desc') ? '<td><input type="checkbox" class="auto-ck" value="'+r.id+'"></td>' : '';
+        var ck = META.perms.isSuperAdmin ? '<td><input type="checkbox" class="auto-ck" value="'+r.id+'"></td>' : '';
         if (ft === 'job_desc') {
             var jdConfirmCell = r.confirm_user_name ? (dispDate(r.confirm_at?r.confirm_at.substr(0,10):'')+' '+esc(r.confirm_user_name)) : '<span style="color:#8a6d45;">未確認</span>';
-            html += '<tr><td>'+esc(r.dept_name)+'</td><td>'+esc(r.position_name)+'</td><td>'+dispDate(r.business_date)+'</td><td>'+jdConfirmCell+'</td><td>'+opBtns+'</td></tr>';
+            html += '<tr>'+ck+'<td>'+esc(r.dept_name)+'</td><td>'+esc(r.position_name)+'</td><td>'+dispDate(r.business_date)+'</td><td>'+jdConfirmCell+'</td><td>'+opBtns+'</td></tr>';
         } else if (ft === 'skill_assess') {
             var gmAvg = scoreAvg(r.score_quality_gm,r.score_efficiency_gm,r.score_proficiency_gm);
             var mgrAvg = r.confirm_na ? null : scoreAvg(r.score_quality_mgr,r.score_efficiency_mgr,r.score_proficiency_mgr);
@@ -997,6 +1017,40 @@ function deleteInstance(ft, id){
 </script>
 <script>
 /* ============================================================ 超管自動簽核（逐筆可調分數＋一鍵套用固定分數） ============================================================ */
+/* ============================================================ 超管批次刪除 ============================================================ */
+var BULK_DEL_TYPE = null, BULK_DEL_ROWS = [];
+function openBulkDelModal(ft){
+    BULK_DEL_TYPE = ft;
+    var ids = $('#pane-'+ft+' .auto-ck:checked').map(function(){ return this.value; }).get();
+    if (!ids.length){ alert('請先在清單勾選要刪除的表單'); return; }
+    BULK_DEL_ROWS = (LISTS[ft]||[]).filter(function(r){ return ids.indexOf(String(r.id)) >= 0; });
+    $('#bulkDelCount').text(BULK_DEL_ROWS.length);
+    $('#bulkDelPwd').val('');
+    $('#bulkDelErr').empty();
+    $('#bulkDelList').html(BULK_DEL_ROWS.map(function(r){
+        var who = ft === 'job_desc' ? (esc(r.dept_name)+' / '+esc(r.position_name))
+                                    : (esc(r.dept_name)+' / '+esc(r.user_cname)+(r.machine_display_name ? '（'+esc(r.machine_display_name)+'）' : ''));
+        return '<div style="font-size:12.5px;padding:2px 0;border-bottom:1px dashed #E8DCC6;">'+who
+             + ' ｜ '+dispDate(r.business_date)+' ｜ <span class="st-badge st-'+r.status+'">'+(STATUS_LABEL[r.status]||r.status)+'</span></div>';
+    }).join(''));
+    openMask('bulkDelMask');
+}
+function hfSubmitBulkDel(){
+    var pwd = $('#bulkDelPwd').val();
+    if (!pwd){ $('#bulkDelErr').text('請輸入操作確認密碼'); return; }
+    var ids = BULK_DEL_ROWS.map(function(r){ return r.id; });
+    if (!ids.length){ $('#bulkDelErr').text('沒有選取任何表單'); return; }
+    if (!confirm('確定要刪除這 '+ids.length+' 筆表單嗎？此動作無法復原。')) return;
+    ajaxPost('delete_bulk', {ids:JSON.stringify(ids), password:pwd}, function(res){
+        if (!res.ok){ $('#bulkDelErr').text(res.error||'刪除失敗'); return; }
+        var msg = '已刪除 '+res.deleted+' 筆';
+        if (res.errors && res.errors.length) msg += '；' + res.errors.join('；');
+        alert(msg);
+        closeMask('bulkDelMask');
+        loadList(BULK_DEL_TYPE);
+    });
+}
+
 var AUTO_SIGN_TYPE = null;
 var AUTO_SIGN_ROWS = []; // 選取當下的 instance 快照
 

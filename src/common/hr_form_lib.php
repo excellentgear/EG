@@ -1279,6 +1279,51 @@ function hrf_instance_delete(PDO $db, int $id): void {
 }
 
 /**
+ * 超級管理員批次刪除（2026-08-18 使用者要求）：一次刪多筆表單，連同**內容列、簽核紀錄(approval_record)、
+ * 相關通知(live_event/live_event_target)** 一併清乾淨——單筆刪除只清內容列，補登資料重做時若留著舊的簽核
+ * 紀錄與通知，會在待辦/通知裡留下指向已不存在表單的殘骸。整批同一個 transaction，任一筆失敗全部復原。
+ * 呼叫端須先驗超級管理員身分與操作確認密碼。
+ */
+function hrf_instance_delete_bulk(PDO $db, array $ids): array {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    if (!$ids) return ['deleted'=>0, 'labels'=>[], 'errors'=>['沒有指定要刪除的表單']];
+    $in = implode(',', $ids);
+    $rows = $db->query("SELECT id, form_type, user_cname, dept_name, position_name, machine_display_name, business_date, status
+                        FROM hr_form_instance WHERE id IN ($in)")->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return ['deleted'=>0, 'labels'=>[], 'errors'=>['找不到要刪除的表單（可能已被刪除）']];
+    $labels = [];
+    foreach ($rows as $r) {
+        $labels[] = (HRF_FORM_TYPES[$r['form_type']] ?? $r['form_type']) . '｜'
+                  . ($r['form_type'] === 'job_desc' ? ($r['dept_name'] . '/' . $r['position_name'])
+                                                    : ($r['user_cname'] . ($r['machine_display_name'] ? '（' . $r['machine_display_name'] . '）' : '')))
+                  . '｜' . $r['business_date'];
+    }
+    $foundIds = array_map(fn($r) => (int)$r['id'], $rows);
+    $inFound = implode(',', $foundIds);
+    $own = !$db->inTransaction();
+    if ($own) $db->beginTransaction();
+    try {
+        // 通知：live_event_target 先清，再清 live_event（本模組的通知都帶 ref_type=HRF_*、ref_id=表單id）
+        $evs = $db->query("SELECT id FROM live_event WHERE ref_type LIKE 'HRF%' AND ref_id IN ($inFound)")->fetchAll(PDO::FETCH_COLUMN);
+        if ($evs) {
+            $evIn = implode(',', array_map('intval', $evs));
+            $db->exec("DELETE FROM live_event_target WHERE live_event_id IN ($evIn)");
+            $db->exec("DELETE FROM live_event WHERE id IN ($evIn)");
+        }
+        $db->exec("DELETE FROM approval_record WHERE module='hr_form' AND entity_id IN ($inFound)");
+        $db->exec("DELETE FROM hr_form_instance_item WHERE instance_id IN ($inFound)");
+        $db->exec("DELETE FROM hr_form_instance WHERE id IN ($inFound)");
+        if ($own) $db->commit();
+    } catch (Throwable $e) {
+        if ($own && $db->inTransaction()) $db->rollBack();
+        return ['deleted'=>0, 'labels'=>[], 'errors'=>['刪除失敗：' . $e->getMessage()]];
+    }
+    $missing = array_values(array_diff($ids, $foundIds));
+    return ['deleted'=>count($foundIds), 'labels'=>$labels,
+            'errors'=>$missing ? ['下列表單已不存在，略過：#' . implode('、#', $missing)] : []];
+}
+
+/**
  * 01/10 內容列存檔。01(職務說明書)無簽核概念，隨時可編輯。10(員工職能鑑定表)使用者明確要求送簽後仍可修改：
  * 若目前狀態已不是 draft（代表已送出，可能正在確認中/核准中/已完成/已退回），存檔時自動視為內容有異動，
  * 「最新更新日期」改今天、狀態打回 draft、既有確認/核准紀錄清空，需要重新走一次送出流程（approval_record
