@@ -220,47 +220,56 @@ function pfmea_ref_function_option_delete(PDO $db, int $id): void {
     $db->prepare("UPDATE pfmea_function_option SET is_active=0 WHERE id=?")->execute([$id]);
 }
 
-/** 要求清單：優先給這個料號在「功能」層級綁定過的專屬要求，沒有才退回該功能通用要求，還是沒有
- * 才退回「製程」層級(較粗，如製作表單.xlsm匯入的舊資料只到製程沒有功能細分)——同樣先試料號專屬
- * 再試通用。$processId 由呼叫端傳目前卡片解析出的製程id，沒有就傳0（略過製程層級查詢）。 */
-function pfmea_ref_requirement_options(PDO $db, int $functionOptionId, int $partDId = 0, string $partText = '', int $processId = 0): array {
-    if ($functionOptionId) {
-        if ($partDId || $partText !== '') {
-            $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option
-                                 WHERE function_option_id=? AND is_active=1 AND ((part_d_id=? AND part_d_id IS NOT NULL) OR (part_no_text=? AND part_no_text IS NOT NULL AND part_no_text<>''))
-                                 ORDER BY sort_order, id");
-            $st->execute([$functionOptionId, $partDId ?: 0, $partText]);
-            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-            if ($rows) return $rows;
-        }
-        $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option WHERE function_option_id=? AND part_d_id IS NULL AND (part_no_text IS NULL OR part_no_text='') AND is_active=1 ORDER BY sort_order, id");
-        $st->execute([$functionOptionId]);
+/** 要求清單（2026-08-18 補上「項目」層級）：由細到粗逐層退回，每一層都先試「這個料號專屬」再試
+ * 「該層通用」——功能層 → 項目層 → 製程層。某一層有資料就停在那層（不把各層混在一起，避免粗層的
+ * 通用值把細層特地設定的值淹掉）。同一層內可以有多筆，全部回傳供前端下拉挑本次要用的。
+ * $processId／$itemOptionId／$functionOptionId 由呼叫端傳目前卡片解析到的層級，沒有就傳 0 略過。 */
+function pfmea_req_level_rows(PDO $db, string $scopeCond, $scopeKey, int $partDId, string $partText): array {
+    if ($partDId || $partText !== '') {
+        $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option
+                             WHERE $scopeCond AND is_active=1 AND ((part_d_id=? AND part_d_id IS NOT NULL) OR (part_no_text=? AND part_no_text IS NOT NULL AND part_no_text<>''))
+                             ORDER BY sort_order, id");
+        $st->execute([$scopeKey, $partDId ?: 0, $partText]);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         if ($rows) return $rows;
     }
+    $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option
+                         WHERE $scopeCond AND part_d_id IS NULL AND (part_no_text IS NULL OR part_no_text='') AND is_active=1
+                         ORDER BY sort_order, id");
+    $st->execute([$scopeKey]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function pfmea_ref_requirement_options(PDO $db, int $functionOptionId, int $partDId = 0, string $partText = '', int $processId = 0, int $itemOptionId = 0): array {
+    if ($functionOptionId) {
+        $rows = pfmea_req_level_rows($db, "function_option_id=?", $functionOptionId, $partDId, $partText);
+        if ($rows) return $rows;
+    }
+    if ($itemOptionId) {
+        $rows = pfmea_req_level_rows($db, "item_option_id=? AND function_option_id IS NULL", $itemOptionId, $partDId, $partText);
+        if ($rows) return $rows;
+    }
     if ($processId) {
-        if ($partDId || $partText !== '') {
-            $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option
-                                 WHERE process_id=? AND function_option_id IS NULL AND is_active=1 AND ((part_d_id=? AND part_d_id IS NOT NULL) OR (part_no_text=? AND part_no_text IS NOT NULL AND part_no_text<>''))
-                                 ORDER BY sort_order, id");
-            $st->execute([$processId, $partDId ?: 0, $partText]);
-            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-            if ($rows) return $rows;
-        }
-        $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option WHERE process_id=? AND function_option_id IS NULL AND part_d_id IS NULL AND (part_no_text IS NULL OR part_no_text='') AND is_active=1 ORDER BY sort_order, id");
-        $st->execute([$processId]);
-        return $st->fetchAll(PDO::FETCH_ASSOC);
+        return pfmea_req_level_rows($db, "process_id=? AND item_option_id IS NULL AND function_option_id IS NULL", $processId, $partDId, $partText);
     }
     return [];
 }
 
-function pfmea_ref_requirement_option_add(PDO $db, int $functionOptionId, int $partDId, string $partText, string $text, int $uid, string $uname, int $processId = 0): int {
+/** 要求所在層級的 WHERE 條件（功能 > 項目 > 製程，由細到粗取第一個有值的） */
+function pfmea_req_scope(int $functionOptionId, int $itemOptionId, int $processId): array {
+    if ($functionOptionId) return ["function_option_id=?", $functionOptionId];
+    if ($itemOptionId)     return ["item_option_id=? AND function_option_id IS NULL", $itemOptionId];
+    return ["process_id=? AND item_option_id IS NULL AND function_option_id IS NULL", $processId];
+}
+
+function pfmea_ref_requirement_option_add(PDO $db, int $functionOptionId, int $partDId, string $partText, string $text, int $uid, string $uname, int $processId = 0, int $itemOptionId = 0, int $bindId = 0): int {
     $text = trim($text);
+    if ($text === '') return 0;
     $partDId = $partDId ?: null; $partText = $partText !== '' ? $partText : null;
     $partCond = $partDId ? "part_d_id=?" : ($partText ? "part_no_text=?" : "part_d_id IS NULL AND (part_no_text IS NULL OR part_no_text='')");
     $partKey = $partDId ?: $partText;
-    $scopeCond = $functionOptionId ? "function_option_id=?" : "process_id=? AND function_option_id IS NULL";
-    $scopeKey = $functionOptionId ?: $processId;
+    [$scopeCond, $scopeKey] = pfmea_req_scope($functionOptionId, $itemOptionId, $processId);
+    if (!$scopeKey) return 0;
     $sql = "SELECT id FROM pfmea_requirement_option WHERE $scopeCond AND $partCond AND requirement_text=? LIMIT 1";
     $params = [$scopeKey]; if ($partKey !== null) $params[] = $partKey; $params[] = $text;
     $st = $db->prepare($sql);
@@ -270,8 +279,14 @@ function pfmea_ref_requirement_option_add(PDO $db, int $functionOptionId, int $p
     $st = $db->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM pfmea_requirement_option WHERE $scopeCond");
     $st->execute([$scopeKey]);
     $sort = (int)$st->fetchColumn();
-    $st = $db->prepare("INSERT INTO pfmea_requirement_option (function_option_id, process_id, part_d_id, part_no_text, requirement_text, sort_order, created_by, created_by_name) VALUES (?,?,?,?,?,?,?,?)");
-    $st->execute([$functionOptionId ?: null, $functionOptionId ? null : ($processId ?: null), $partDId, $partText, $text, $sort, $uid, $uname]);
+    // 三個層級欄位只填「這一筆實際掛的那一層」，粗層欄位留 NULL，查詢才分得出層級
+    $st = $db->prepare("INSERT INTO pfmea_requirement_option (function_option_id, item_option_id, process_id, part_d_id, part_no_text, bind_id, requirement_text, sort_order, created_by, created_by_name) VALUES (?,?,?,?,?,?,?,?,?,?)");
+    $st->execute([
+        $functionOptionId ?: null,
+        $functionOptionId ? null : ($itemOptionId ?: null),
+        ($functionOptionId || $itemOptionId) ? null : ($processId ?: null),
+        $partDId, $partText, $bindId ?: null, $text, $sort, $uid, $uname
+    ]);
     return (int)$db->lastInsertId();
 }
 
@@ -281,14 +296,11 @@ function pfmea_ref_requirement_option_delete(PDO $db, int $id): void {
 
 /** 參考資料設定畫面用：只回傳「剛好存在這個確切層級」的資料(含料號綁定資訊供顯示)，理由同
  * pfmea_ref_failure_mode_list_exact()。 */
-function pfmea_ref_requirement_list_exact(PDO $db, int $functionOptionId, int $processId): array {
-    if ($functionOptionId) {
-        $st = $db->prepare("SELECT id, requirement_text, part_d_id, part_no_text FROM pfmea_requirement_option WHERE function_option_id=? AND is_active=1 ORDER BY sort_order, id");
-        $st->execute([$functionOptionId]);
-    } else {
-        $st = $db->prepare("SELECT id, requirement_text, part_d_id, part_no_text FROM pfmea_requirement_option WHERE process_id=? AND function_option_id IS NULL AND is_active=1 ORDER BY sort_order, id");
-        $st->execute([$processId]);
-    }
+function pfmea_ref_requirement_list_exact(PDO $db, int $functionOptionId, int $processId, int $itemOptionId = 0): array {
+    [$scopeCond, $scopeKey] = pfmea_req_scope($functionOptionId, $itemOptionId, $processId);
+    if (!$scopeKey) return [];
+    $st = $db->prepare("SELECT id, requirement_text, part_d_id, part_no_text FROM pfmea_requirement_option WHERE $scopeCond AND is_active=1 ORDER BY sort_order, id");
+    $st->execute([$scopeKey]);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     foreach ($rows as &$r) {
         if ($r['part_d_id']) {
@@ -304,11 +316,12 @@ function pfmea_ref_requirement_list_exact(PDO $db, int $functionOptionId, int $p
  * 製作表單.xlsm的112筆資料散落在5個製程底下要一個個點才看得完；改成一次列出全部要求(不分
  * 製程/功能層級)，含每筆的料號綁定狀態，供快速檢視/重新綁定/刪除。 */
 function pfmea_requirement_option_list_all(PDO $db): array {
-    $rows = $db->query("SELECT r.id, r.requirement_text, r.part_d_id, r.part_no_text, r.function_option_id,
-                                p.process_code, p.process_name, f.function_desc
+    $rows = $db->query("SELECT r.id, r.requirement_text, r.part_d_id, r.part_no_text, r.function_option_id, r.item_option_id,
+                                p.process_code, p.process_name, f.function_desc, i.item_name
                          FROM pfmea_requirement_option r
                          LEFT JOIN pfmea_process p ON p.id=r.process_id
                          LEFT JOIN pfmea_function_option f ON f.id=r.function_option_id
+                         LEFT JOIN pfmea_item_option i ON i.id=r.item_option_id
                          WHERE r.is_active=1
                          ORDER BY (p.sort_order IS NULL), p.sort_order, p.id, r.sort_order, r.id")->fetchAll(PDO::FETCH_ASSOC);
     $partIds = array_values(array_unique(array_filter(array_column($rows, 'part_d_id'))));
@@ -320,7 +333,9 @@ function pfmea_requirement_option_list_all(PDO $db): array {
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $p) { $partLabels[$p['d_id']] = $p['D_Setting_Id']; }
     }
     foreach ($rows as &$r) {
-        $r['scope_label'] = $r['function_desc'] ? '功能：'.$r['function_desc'] : (($r['process_code']||$r['process_name']) ? '製程：'.$r['process_code'].' '.$r['process_name'] : '（未知）');
+        $r['scope_label'] = $r['function_desc'] ? '功能：'.$r['function_desc']
+            : ($r['item_name'] ? '項目：'.$r['item_name']
+            : ((($r['process_code'] ?? '') !== '' || ($r['process_name'] ?? '') !== '') ? '製程：'.$r['process_code'].' '.$r['process_name'] : '（未知）'));
         if ($r['part_d_id']) { $r['part_label'] = $partLabels[$r['part_d_id']] ?? ('#'.$r['part_d_id']); $r['bound'] = true; }
         elseif ($r['part_no_text']) { $r['part_label'] = $r['part_no_text']; $r['bound'] = false; }
         else { $r['part_label'] = '（通用，不限料號）'; $r['bound'] = null; }
@@ -438,26 +453,50 @@ function pfmea_ref_item_template_save(PDO $db, int $id, int $processId, array $d
 /* ---------- 欄位個別設定對應（2026-08-14使用者要求）----------
  * 通用機制：任一欄位值(source)可設定對應到另一欄位的建議值(target)，如潛在失效模式->失效模式潛在
  * 後果/分類/失效潛在原因、產品名稱->規格描述。可填表人新增(自行輸入新值即註冊)，僅管理員可刪除。 */
-function pfmea_field_link_list(PDO $db, string $sourceField, string $sourceValue, string $targetField): array {
+function pfmea_field_link_list(PDO $db, string $sourceField, string $sourceValue, string $targetField, int $scopeFmId = 0): array {
+    if (trim($sourceValue) === '' && !$scopeFmId) return [];
+    // 2026-08-18：先找掛在「這一筆潛在失效模式」底下的專屬對應（已隱含製程／項目／功能層級），
+    // 該層級還沒設定過才退回舊的全域純文字對應——比照失效模式清單本來就在用的逐層退回作風，
+    // 不會因為新層級還沒累積資料就讓使用者一個建議值都選不到。
+    if ($scopeFmId) {
+        $st = $db->prepare("SELECT id, target_value FROM pfmea_field_link
+                             WHERE scope_fm_id=? AND target_field=? AND is_active=1 ORDER BY sort_order, id");
+        $st->execute([$scopeFmId, $targetField]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        if ($rows) return $rows;
+    }
     if (trim($sourceValue) === '') return [];
     $st = $db->prepare("SELECT id, target_value FROM pfmea_field_link
-                         WHERE source_field=? AND source_value=? AND target_field=? AND is_active=1 ORDER BY sort_order, id");
+                         WHERE source_field=? AND source_value=? AND target_field=? AND scope_fm_id IS NULL AND is_active=1 ORDER BY sort_order, id");
     $st->execute([$sourceField, trim($sourceValue), $targetField]);
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
-function pfmea_field_link_add(PDO $db, string $sourceField, string $sourceValue, string $targetField, string $targetValue, int $uid, string $uname): int {
+/** 設定畫面用：只回傳剛好掛在這一筆潛在失效模式底下的對應（不退回全域），理由同
+ * pfmea_ref_failure_mode_list_exact()——管理畫面要讓人清楚知道自己在編哪一層。 */
+function pfmea_field_link_list_exact(PDO $db, int $scopeFmId, string $targetField): array {
+    $st = $db->prepare("SELECT id, target_value FROM pfmea_field_link WHERE scope_fm_id=? AND target_field=? AND is_active=1 ORDER BY sort_order, id");
+    $st->execute([$scopeFmId, $targetField]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function pfmea_field_link_add(PDO $db, string $sourceField, string $sourceValue, string $targetField, string $targetValue, int $uid, string $uname, int $scopeFmId = 0): int {
     $sourceValue = trim($sourceValue); $targetValue = trim($targetValue);
-    if ($sourceValue === '' || $targetValue === '') return 0;
-    $st = $db->prepare("SELECT id FROM pfmea_field_link WHERE source_field=? AND source_value=? AND target_field=? AND target_value=? LIMIT 1");
-    $st->execute([$sourceField, $sourceValue, $targetField, $targetValue]);
+    if ($targetValue === '') return 0;
+    if ($sourceValue === '' && !$scopeFmId) return 0;
+    // 掛層級的(scope_fm_id)與舊的全域文字對應各自去重，同一組值可以同時存在兩層而不互相蓋掉
+    $dupCond = $scopeFmId ? "scope_fm_id=?" : "source_field=? AND source_value=? AND scope_fm_id IS NULL";
+    $dupKey  = $scopeFmId ? [$scopeFmId] : [$sourceField, $sourceValue];
+    $st = $db->prepare("SELECT id FROM pfmea_field_link WHERE $dupCond AND target_field=? AND target_value=? LIMIT 1");
+    $st->execute(array_merge($dupKey, [$targetField, $targetValue]));
     $id = $st->fetchColumn();
     if ($id) return (int)$id;
-    $st = $db->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM pfmea_field_link WHERE source_field=? AND source_value=? AND target_field=?");
-    $st->execute([$sourceField, $sourceValue, $targetField]);
+    $st = $db->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM pfmea_field_link WHERE $dupCond AND target_field=?");
+    $st->execute(array_merge($dupKey, [$targetField]));
     $sort = (int)$st->fetchColumn();
-    $st = $db->prepare("INSERT INTO pfmea_field_link (source_field, source_value, target_field, target_value, sort_order, created_by, created_by_name) VALUES (?,?,?,?,?,?,?)");
-    $st->execute([$sourceField, $sourceValue, $targetField, $targetValue, $sort, $uid, $uname]);
+    // scope_fm_id 有值時 source_value 仍存失效模式文字，供總覽／搜尋顯示得出來是哪個失效模式
+    $st = $db->prepare("INSERT INTO pfmea_field_link (source_field, source_value, scope_fm_id, target_field, target_value, sort_order, created_by, created_by_name) VALUES (?,?,?,?,?,?,?,?)");
+    $st->execute([$sourceField, $sourceValue, $scopeFmId ?: null, $targetField, $targetValue, $sort, $uid, $uname]);
     return (int)$db->lastInsertId();
 }
 

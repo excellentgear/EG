@@ -238,6 +238,40 @@ function pfmea_ensure_schema(PDO $db): void {
         KEY idx_lookup (source_field, source_value(50), target_field)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-欄位個別設定對應清單(基本資料內某欄位值->建議帶出的其他欄位值)'");
 
+    // 2026-08-18 使用者要求：對應組合要一條龍串成階層（像縣市地址）。失效模式潛在後果／分類／
+    // 失效潛在原因不再只認「潛在失效模式的文字」全域對應，而是掛在「哪一筆失效模式」（已含製程／
+    // 項目／功能層級）底下。scope_fm_id 留空 = 舊的全域純文字對應，查不到專屬值時的退回層，
+    // 既有全域對應資料原封不動仍然有效。
+    try { $db->exec("ALTER TABLE pfmea_field_link ADD COLUMN scope_fm_id INT NULL COMMENT '掛在哪一筆潛在失效模式(pfmea_process_failure_mode.id)底下；NULL=舊的全域純文字對應(退回層)' AFTER source_value"); } catch (Throwable $e) {}
+    try { $db->exec("ALTER TABLE pfmea_field_link ADD KEY idx_scope_fm (scope_fm_id, target_field)"); } catch (Throwable $e) {}
+
+    // 2026-08-18 使用者拍板：料號只管「要求／圖面要求」，其餘層級一律通用。料號先綁定製程代號，
+    // 系統自動帶出該製程整套選項(項目/功能)，可快速建多組綁到同一個料號底下，每組再自行輸入
+    // 多筆要求（前端卡片下拉列出供挑本次要用的）。組合本身要單獨存一筆——否則「已綁定但還沒輸入
+    // 要求」的組合會從畫面上消失，使用者會以為沒存到。
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_part_binding (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        part_d_id INT NULL COMMENT '綁定到 d_setting 主鍵；與 part_no_text 二選一',
+        part_no_text VARCHAR(100) NULL COMMENT '無 d_setting 主鍵的手動輸入料號才用這欄',
+        process_id INT NOT NULL,
+        item_option_id INT NULL COMMENT '組合可只到製程層，也可精確到項目／功能層',
+        function_option_id INT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_part (part_d_id, part_no_text(30)),
+        KEY idx_proc (process_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-料號綁定的製程／項目／功能組合(要求掛在這下面)'");
+
+    // 要求補上「項目層級」與「所屬料號組合」——原本只能掛在功能或製程兩端，中間的項目層
+    // 沒辦法設；bind_id 只用於設定畫面分組顯示，實際查詢仍走 process/item/function + 料號欄位。
+    foreach ([
+        "ALTER TABLE pfmea_requirement_option ADD COLUMN item_option_id INT NULL COMMENT '項目層級的要求(功能層與製程層之間)' AFTER function_option_id",
+        "ALTER TABLE pfmea_requirement_option ADD COLUMN bind_id INT NULL COMMENT '來自哪一筆料號綁定組合(pfmea_part_binding.id)；NULL=舊資料或填表時自動註冊' AFTER part_no_text",
+        "ALTER TABLE pfmea_requirement_option ADD KEY idx_item (item_option_id)",
+    ] as $alter) { try { $db->exec($alter); } catch (Throwable $e) {} }
+
     // 2026-08-14 使用者要求(第7段)：評價S/評價O/評價D 依「製程+項目+功能+潛在失效模式+失效模式
     // 潛在效果+嚴重度+失效潛在原因」完整組合建議值，只在新增列時自動帶入(auto-varies)，存檔後鎖定
     // 不再回頭覆蓋；評價S/O/D本身仍要落在1~10(評級對照表整體有效範圍)才允許存成規則。
