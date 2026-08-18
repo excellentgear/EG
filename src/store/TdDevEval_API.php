@@ -90,7 +90,10 @@ case 'list':
     $kw = trim((string)($_GET['kw'] ?? ''));
     $sql = "SELECT h.id, h.doc_no, h.customer_name, h.part_d_id, COALESCE(ds.D_Setting_Id, h.part_no_text,'') AS part_no,
                    h.product_name, h.fill_date, h.decision, h.status, h.created_by_name, h.created_at,
-                   (SELECT COUNT(*) FROM td_dev_eval_signoff s WHERE s.doc_id=h.id AND s.signed_by IS NOT NULL) AS signed_count
+                   (SELECT COUNT(*) FROM td_dev_eval_signoff s WHERE s.doc_id=h.id AND s.signed_by IS NOT NULL) AS signed_count,
+                   (SELECT MAX(s2.signed_at) FROM td_dev_eval_signoff s2 WHERE s2.doc_id=h.id AND s2.signed_by IS NOT NULL) AS last_signed_at,
+                   (SELECT MAX(pl.printed_at) FROM td_dev_eval_print_log pl WHERE pl.doc_id=h.id) AS last_printed_at,
+                   (SELECT COUNT(*) FROM td_dev_eval_print_log pl2 WHERE pl2.doc_id=h.id) AS print_count
             FROM td_dev_eval h
             LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
             LEFT JOIN customer_list clP ON clP.customer_id = ds.Customer_Id
@@ -425,6 +428,9 @@ case 'print_get':
     $st->execute([$id]);
     $doc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$doc) jout(['success'=>false,'message'=>'找不到該筆']);
+
+    // 列印紀錄：本動作只有列印會呼叫（含批次列印逐筆），清單「列印日期」讀這裡的最後一筆
+    td_dev_eval_log_print($db, $id, $uid, $uname);
 
     $st = $db->prepare("SELECT item_no, result FROM td_dev_eval_answer WHERE doc_id=?");
     $st->execute([$id]);

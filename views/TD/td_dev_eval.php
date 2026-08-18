@@ -175,9 +175,9 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
             <table class="te-table" id="teTable">
                 <thead><tr>
                     <th>表單編號</th><th>客戶名稱</th><th>產品件號</th><th>產品名稱</th>
-                    <th>填表日期</th><th>狀態</th><th>決行</th><th>簽核進度</th><th>操作</th>
+                    <th>填表日期</th><th>簽核日期</th><th>列印日期</th><th>狀態</th><th>決行</th><th>簽核進度</th><th>操作</th>
                 </tr></thead>
-                <tbody id="teBody"><tr><td colspan="9" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="teBody"><tr><td colspan="11" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
 <?php endif; ?>
@@ -258,7 +258,7 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
 
         <div class="te-admin-panel" id="adminQuickPanel" style="<?= $perms['isAdmin']?'':'display:none;' ?>">
             <h5><i class="fa fa-user-secret"></i> 系統管理員快速設定（僅補歷史紙本資料用，會跳過送出/簽核流程）</h5>
-            <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">確認項目結果請先按上方「開啟全表填寫模式」輸入密碼後編輯；決行結果請在下方選擇（不是上方表格內的選項——上方選項一樣要照正常流程走完六部門/生產課才會開放），選好後按下方按鈕一次把尚未簽核的欄位全部自動簽核。</div>
+            <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">確認項目結果請先按上方「開啟全表填寫模式」輸入密碼後編輯；決行結果請在下方選擇（不是上方表格內的選項——上方選項一樣要照正常流程走完六部門/生產課才會開放），選好後按下方按鈕一次把尚未簽核的欄位全部自動簽核。<b>表頭「填表日期」會一併自動改成下方指定的簽核業務日期</b>（補紙本時兩者本來就是同一天）。</div>
             <label style="display:inline-block;margin:0 8px 0 0;">決行結果</label>
             <select id="adminDecisionSelect" style="width:140px;display:inline-block;">
                 <option value="">（未選擇）</option>
@@ -385,11 +385,12 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
         <ul>
             <li><b>開啟全表填寫模式</b>（僅系統管理員，非「評估表管理員」角色即可，需輸入操作確認密碼）：開啟後可自行填寫上方全部 32 項確認結果，不受部門/簽核順序限制；每次重新開啟此筆的編輯視窗都要重新輸入密碼，不會記住。填完後仍需用下方「補登簽核」或「全部自動簽核」才能正式完成簽核，本身不會直接完成簽核。</li>
             <li>具「操作確認密碼」資格者，可用「補登簽核」一次把已送出但尚未簽核的欄位補齊——<b>仍須逐格指定當初實際簽核的人</b>，系統會清楚記錄「此筆為補登，由誰執行補登」，跟本人即時線上簽核的紀錄分開標示，不會誤植成操作者本人簽的。</li>
-            <li>系統管理員另有「全部自動簽核」：於快速設定面板選擇決行結果、指定一個業務日期，一次把尚未簽核的欄位全部自動簽核完成（簽核人取該欄目前解析池第一位），連同尚未送出的表單一併補上送出紀錄；此功能不受送出/簽核狀態限制，僅供補歷史紙本資料使用。</li>
+            <li>系統管理員另有「全部自動簽核」：於快速設定面板選擇決行結果、指定一個業務日期，一次把尚未簽核的欄位全部自動簽核完成（簽核人取該欄目前解析池第一位），連同尚未送出的表單一併補上送出紀錄；此功能不受送出/簽核狀態限制，僅供補歷史紙本資料使用。<b>執行後表頭「填表日期」會自動同步成指定的簽核業務日期</b>（2026-08-18 起；補紙本時填表日與簽章日本來就是同一天，先前留著建檔當天的日期會讓列印出來的填表日期跟各欄簽章日期對不起來，既有已自動簽核的資料也已一次回填）。</li>
         </ul>
         <h4>其他行為／常見疑問</h4>
         <ul>
             <li>產品件號可點擊開啟圖面查閱（比照報價單頁做法）。</li>
+            <li>清單的<b>簽核日期</b>＝該筆最後一次簽核的日期（人工逐關簽核時就是最後簽的那一關；自動簽核則為指定的簽核業務日期），滑鼠移上去可看完整時間；<b>列印日期</b>＝最後一次列印的日期，每按一次列印（含批次列印）就會留一筆紀錄，滑鼠移上去可看完整時間與累計列印次數。</li>
             <li>簽章使用全站通用圓形姓名章（若本人有上傳掃描實體章會優先用掃描章）；由代理人代簽時右下角加「代」字。</li>
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號。</li>
         </ul>
@@ -446,12 +447,14 @@ function loadTemplate(cb){
 }
 
 /* ---------- 清單 ---------- */
+/** 清單日期格：DATETIME 只取日期顯示（YYYY.MM.DD，ai-rules/20），沒有紀錄時顯示破折號 */
+function dateCell(dt){ return dt ? fmtDate(String(dt).substring(0,10)) : '<span style="color:#b9a68c;">—</span>'; }
 var CUR_LIST_ROWS = [];
 function loadList(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
-        if (!res.success){ $('#teBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        if (!res.success){ $('#teBody').html('<tr><td colspan="11" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
         CUR_LIST_ROWS = res.rows || [];
-        if (!res.rows.length){ $('#teBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
+        if (!res.rows.length){ $('#teBody').html('<tr><td colspan="11" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
         var html = '';
         res.rows.forEach(function(r){
             var slotTotal = Object.keys(SLOTS).length || 8;
@@ -461,6 +464,8 @@ function loadList(){
                 + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):'')+'</td>'
                 + '<td class="t-left">'+esc(r.product_name||'')+'</td>'
                 + '<td>'+fmtDate(r.fill_date)+'</td>'
+                + '<td'+(r.last_signed_at?' title="最後簽核時間 '+esc(r.last_signed_at)+'"':'')+'>'+dateCell(r.last_signed_at)+'</td>'
+                + '<td'+(r.last_printed_at?' title="最後列印時間 '+esc(r.last_printed_at)+'（累計列印 '+(r.print_count||0)+' 次）"':'')+'>'+dateCell(r.last_printed_at)+'</td>'
                 + '<td><span class="te-status te-status-'+esc(r.status)+'">'+esc(r.status_label||r.status)+'</span></td>'
                 + '<td>'+esc(r.decision_label||'')+'</td>'
                 + '<td>'+r.signed_count+' / '+slotTotal+(r.is_complete?' <i class="fa fa-check-circle" style="color:#8A5A2B;"></i>':'')+'</td>'
@@ -496,10 +501,12 @@ $('#btnPrintAll').on('click', function(){
 $('#btnCsv').on('click', function(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
         if (!res.success) return;
-        var lines = ['表單編號,客戶名稱,產品件號,產品名稱,填表日期,狀態,決行,簽核進度,建立人,建立時間'];
+        var lines = ['表單編號,客戶名稱,產品件號,產品名稱,填表日期,簽核日期,列印日期,狀態,決行,簽核進度,建立人,建立時間'];
         var slotTotal = Object.keys(SLOTS).length || 8;
         res.rows.forEach(function(r){
-            lines.push([r.doc_no, r.customer_name||'', r.part_no||'', r.product_name||'', fmtDate(r.fill_date), r.status_label||r.status,
+            lines.push([r.doc_no, r.customer_name||'', r.part_no||'', r.product_name||'', fmtDate(r.fill_date),
+                r.last_signed_at?fmtDate(String(r.last_signed_at).substring(0,10)):'',
+                r.last_printed_at?fmtDate(String(r.last_printed_at).substring(0,10)):'', r.status_label||r.status,
                 r.decision_label||'', r.signed_count+'/'+slotTotal, r.created_by_name||'', (r.created_at||'').substring(0,10)]
                 .map(function(v){ return '"'+String(v).replace(/"/g,'""')+'"'; }).join(','));
         });
@@ -817,7 +824,7 @@ $('#btnAdminAutoSignAll').on('click', function(){
     var decision = $('#adminDecisionSelect').val();
     if (!decision){ alert('請先在上方選擇決行結果，才能全部自動簽核。'); return; }
     var applyDefaults = $('#adminApplyDefaults').prop('checked');
-    if (!confirm('確定要把此筆尚未簽核的欄位，全部以「'+bizDate+'」自動簽核完成嗎？決行結果將設為「'+esc(DECISIONS[decision]||decision)+'」。'+(applyDefaults?'（未填項次會套用預設值）':'')+'此功能僅供補歷史紙本資料使用。')) return;
+    if (!confirm('確定要把此筆尚未簽核的欄位，全部以「'+bizDate+'」自動簽核完成嗎？決行結果將設為「'+esc(DECISIONS[decision]||decision)+'」，表頭填表日期也會一併改為「'+bizDate+'」。'+(applyDefaults?'（未填項次會套用預設值）':'')+'此功能僅供補歷史紙本資料使用。')) return;
     $.post(API, {action:'admin_auto_sign_all', doc_id:CUR_ID, biz_date:bizDate, decision:decision, apply_defaults:applyDefaults?1:0}, function(res){
         if (!res.success){ alert(res.message||'自動簽核失敗'); return; }
         openEdit(CUR_ID); loadList();

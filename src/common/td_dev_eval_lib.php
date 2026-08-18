@@ -134,6 +134,9 @@ function td_dev_eval_ensure_schema(PDO $db): void {
     // 生產課與總經理各印各的；表頭 decision 仍維持「最終決策」語意不動（清單與其他呼叫端不受影響）。
     foreach ([
         "ALTER TABLE td_dev_eval_signoff ADD COLUMN decision_value VARCHAR(20) NULL COMMENT '該欄簽核當下的決行結果(僅prod_decision/gm有值)' AFTER note",
+        // 「全部自動簽核」寫進來的欄位要標記出來：管理員用錯日期重跑一次時，只有這種欄位可以連圖章日期一起改，
+        // 人工簽核與「補登簽核」(逐格指定原簽核人與日期)的欄位一律不動（2026-08-18）
+        "ALTER TABLE td_dev_eval_signoff ADD COLUMN is_auto_sign TINYINT(1) NOT NULL DEFAULT 0 COMMENT '由系統管理員「全部自動簽核」寫入(可被重跑覆蓋日期)' AFTER is_backfill",
     ] as $ddl) { try { $db->exec($ddl); } catch (Throwable $e) {} }
 
     // 產品名稱預設值：2026-08-12版誤做成「綁定特定料號」，2026-08-13使用者更正為「全部產品通用的單一預設值」，
@@ -168,6 +171,17 @@ function td_dev_eval_ensure_schema(PDO $db): void {
         updated_by_name VARCHAR(50) NULL,
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) DEFAULT CHARSET=utf8mb4 COMMENT='產品開發評估表-確認項目及結果預設值(補舊資料自動簽核用)'");
+
+    // 列印紀錄：清單要顯示「最後一次列印日期」（2026-08-18 使用者要求），比照 quotation_print_log 慣例逐次留紀錄
+    $db->exec("CREATE TABLE IF NOT EXISTS td_dev_eval_print_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        doc_id INT NOT NULL,
+        printed_by INT NULL,
+        printed_by_name VARCHAR(50) NULL,
+        printed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '列印時間(取DB時間NOW()，勿用PHP date()＝UTC)',
+        KEY idx_doc (doc_id),
+        KEY idx_printed_at (printed_at)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='產品開發評估表-列印紀錄'");
 
     foreach ([['td_dev_eval_view','評估表檢閱'],['td_dev_eval_edit','評估表登錄'],['td_dev_eval_admin','評估表管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='td_dev_eval' LIMIT 1");
@@ -527,8 +541,18 @@ function td_dev_eval_answer_defaults_save(PDO $db, array $map, int $uid, string 
     }
 }
 
+/** 列印紀錄：每次列印（API print_get）留一筆，清單顯示最後一次列印日期。時間戳取 DB 的 NOW()（PHP date() 是 UTC 會差 8 小時） */
+function td_dev_eval_log_print(PDO $db, int $docId, int $uid, string $uname): void {
+    try {
+        $db->prepare("INSERT INTO td_dev_eval_print_log (doc_id, printed_by, printed_by_name, printed_at) VALUES (?,?,?,NOW())")
+           ->execute([$docId, $uid ?: null, $uname]);
+    } catch (Throwable $e) {}
+}
+
 /**
  * 超級管理員專用：全部欄位自動簽核（補舊資料用，指定業務日期，不受送出/簽核狀態與分階段卡關限制）。
+ * 表頭「填表日期」一律同步成指定的簽核業務日期（2026-08-18 使用者明確要求）——本功能是補歷史紙本，
+ * 紙本上的填表日期就是那一天，留著系統建立當下的日期會讓列印出來的填表日期跟各欄簽章日期對不起來。
  * 若尚未送出會一併補上送出紀錄；每欄簽核人取該欄目前解析池的第一位；時間比照 ai-rules/21——
  * 跟當天固定基準時刻隨機錯開5~30分鐘、不跨天。$applyDefaults=true 時，尚未填的項次套用管理員設定的
  * 預設值（只補未填，不覆蓋既有答案）。$decision 由快速設定面板自己的下拉選單提供（不是表單內生產課決行
@@ -549,7 +573,8 @@ function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, i
                           submitted_by=?, submitted_by_name=? WHERE id=?")
                ->execute([$bizDate, $bizDate, $adminUid, $adminName, $docId]);
         }
-        $db->prepare("UPDATE td_dev_eval SET decision=? WHERE id=?")->execute([$decision, $docId]);
+        // 填表日期＝簽核業務日期（見函式說明）
+        $db->prepare("UPDATE td_dev_eval SET decision=?, fill_date=? WHERE id=?")->execute([$decision, $bizDate, $docId]);
         if ($applyDefaults) {
             $defaults = td_dev_eval_answer_defaults_get($db);
             if ($defaults) {
@@ -566,7 +591,20 @@ function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, i
         }
         $lastSignedAt = null;
         foreach (array_keys(TD_DEV_EVAL_SLOTS) as $slotKey) {
-            if (td_dev_eval_slot_signed($db, $docId, $slotKey)) continue;
+            if (td_dev_eval_slot_signed($db, $docId, $slotKey)) {
+                // 已經簽過的欄位：人工簽核／補登簽核一律不動；只有「上次也是用本功能自動簽的」才跟著改成新的
+                // 業務日期（否則管理員發現日期選錯、重跑一次會完全沒反應，圖章日期與填表日期還是對不起來）
+                $st = $db->prepare("SELECT is_auto_sign FROM td_dev_eval_signoff WHERE doc_id=? AND slot_key=?");
+                $st->execute([$docId, $slotKey]);
+                if (!(int)$st->fetchColumn()) continue;
+                $slotDecision = in_array($slotKey, ['prod_decision','gm'], true) ? $decision : null;
+                $db->prepare("UPDATE td_dev_eval_signoff
+                                 SET signed_at = LEAST(DATE_ADD(CONCAT(?,' 08:30:00'), INTERVAL ? MINUTE), CONCAT(?,' 23:59:59')),
+                                     decision_value = ?, backfill_by_name = ?
+                               WHERE doc_id=? AND slot_key=?")
+                   ->execute([$bizDate, random_int(5, 30), $bizDate, $slotDecision, $adminName, $docId, $slotKey]);
+                continue;
+            }
             $pool = td_dev_eval_slot_pool($db, $slotKey, $docId);
             $signerId = $pool ? (int)$pool[0]['id'] : null;
             $signerName = $pool ? $pool[0]['user_cname'] : null;
@@ -574,10 +612,10 @@ function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, i
             $offsetMin = random_int(5, 30);
             // 決行欄位(生產課/總經理)要各自留下自己那格的決行結果，列印時兩格才印得出來；其他欄位存 NULL
             $slotDecision = in_array($slotKey, ['prod_decision','gm'], true) ? $decision : null;
-            $st = $db->prepare("INSERT INTO td_dev_eval_signoff (doc_id, slot_key, decision_value, signed_by, signed_by_name, signed_at, is_backfill, backfill_by_name)
-                VALUES (?,?,?,?,?, LEAST(DATE_ADD(CONCAT(?,' 08:30:00'), INTERVAL ? MINUTE), CONCAT(?,' 23:59:59')), 1, ?)
+            $st = $db->prepare("INSERT INTO td_dev_eval_signoff (doc_id, slot_key, decision_value, signed_by, signed_by_name, signed_at, is_backfill, is_auto_sign, backfill_by_name)
+                VALUES (?,?,?,?,?, LEAST(DATE_ADD(CONCAT(?,' 08:30:00'), INTERVAL ? MINUTE), CONCAT(?,' 23:59:59')), 1, 1, ?)
                 ON DUPLICATE KEY UPDATE decision_value=VALUES(decision_value), signed_by=VALUES(signed_by), signed_by_name=VALUES(signed_by_name),
-                    signed_at=VALUES(signed_at), is_backfill=1, backfill_by_name=VALUES(backfill_by_name)");
+                    signed_at=VALUES(signed_at), is_backfill=1, is_auto_sign=1, backfill_by_name=VALUES(backfill_by_name)");
             $st->execute([$docId, $slotKey, $slotDecision, $signerId, $signerName, $bizDate, $offsetMin, $bizDate, $adminName]);
             $lastSignedAt = $bizDate;
         }
