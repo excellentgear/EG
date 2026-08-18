@@ -571,14 +571,36 @@ function openCreateModal(ft){
         $('#createMachineList').hide();
         $.getJSON(API, {action:'whitelist_list'}, function(res){
             if (!res.ok) { $('#createMachineListBody').html('<span style="color:#8a6d45;">（僅管理員可預覽白名單，手動指定請洽管理員）</span>'); return; }
-            $('#createMachineListBody').html((res.whitelist||[]).map(function(w){
-                var model = w.machine_model || w.whitelist_machine_model || (w.source_type==='machine' ? w.display_name : '') || '';
-                var label = w.machine_name ? (w.machine_name !== model ? (model ? (model+' '+w.machine_name) : w.machine_name) : model) : w.display_name;
-                return '<label><input type="checkbox" class="mach-ck" value="'+w.id+'"> '+esc(label)+'</label>';
-            }).join('') || '<span style="color:#8a6d45;">尚未建立白名單</span>');
+            $('#createMachineListBody').html(hfMachinePickHtml(res.whitelist||[]));
         });
     }
     openMask('createMask');
+}
+/* 手動指定機型的清單一律跟「機型/量具白名單」設定頁長得一樣：同機台類型/量具類別放一起、標示台數與
+   機台(量具)編號，同一個機型只出現一次（分組與去重由後端 hrf_whitelist_list() 算好）。來源機台已停用或
+   機型未填的失效白名單項目不列出——建立新表單不該再挑到它們。2026-08-18 使用者要求。 */
+function hfMachinePickHtml(wl){
+    var order = [], map = {};
+    (wl||[]).forEach(function(w){
+        if (Number(w.stale)) return;
+        var g = w.group_name || '未分類';
+        if (!map[g]) { map[g] = []; order.push(g); }
+        map[g].push(w);
+    });
+    var html = '';
+    order.forEach(function(g){
+        html += '<div style="font-weight:bold;color:#8a6d45;margin:8px 0 2px;font-size:12.5px;">'+esc(g)+'</div>';
+        map[g].forEach(function(w){
+            var model = w.machine_model || w.whitelist_machine_model || (w.source_type==='machine' ? w.display_name : '') || '';
+            var label = w.machine_name ? (w.machine_name !== model ? (model ? (model+' '+w.machine_name) : w.machine_name) : model) : w.display_name;
+            var meta = w.source_type === 'machine'
+                     ? (Number(w.unit_count) > 1 ? ('　共'+w.unit_count+'台，機台編號：'+esc(w.asset_no_list||'-')) : '')
+                     : (w.machine_name ? ('　量具編號：'+esc(w.asset_no_list||w.display_name||'-')) : '');
+            html += '<label><input type="checkbox" class="mach-ck" value="'+w.id+'"> '+esc(label)
+                  + '<span style="color:#8a6d45;font-size:11px;">'+meta+'</span></label>';
+        });
+    });
+    return html || '<span style="color:#8a6d45;">尚未建立白名單</span>';
 }
 function hfMachineCkAll(check){ $('#createMachineListBody .mach-ck').prop('checked', check); }
 function hfToggleMachineSrc(){

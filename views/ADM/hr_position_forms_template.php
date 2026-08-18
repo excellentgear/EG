@@ -133,7 +133,7 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
             </div>
             <div class="hf-table-wrap">
             <table class="hf-tbl">
-                <thead><tr><th>範本名稱</th><th>適用部門×職位</th><th><?= $ft==='skill_assess' ? '適用機型數' : '內容列數' ?></th><th style="width:<?= $ft==='skill_assess' ? 140 : 200 ?>px;">操作</th></tr></thead>
+                <thead><tr><th>範本名稱</th><th>適用部門×職位</th><th><?= $ft==='skill_assess' ? '適用機型數' : '內容列數' ?></th><th style="width:200px;">操作</th></tr></thead>
                 <tbody class="tpl-list-body"><tr><td colspan="4" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
             </div>
@@ -179,7 +179,7 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
     <div class="m-head"><span id="tplTitle">範本</span><span class="m-close" onclick="closeMask('tplMask')">✕</span></div>
     <div class="m-body">
         <div id="tplCopyNote" style="display:none;font-size:12.5px;color:#8a5a2b;background:#FDF0DC;border:1px solid #F0A24B;border-radius:6px;padding:6px 8px;margin-bottom:8px;">
-            這是<b>複製</b>出來的新範本，內容已整份帶入、可自行增刪修改；<b>「適用部門×職位」刻意留空</b>（同一個部門×職位若被兩個範本綁定，建立表單時會分不清該用哪一份），請在下方指定這份複製版要套用的部門×職位，按「儲存」才會真的建立。原範本不會被改動。
+            這是<b>複製</b>出來的新範本，內容（技能鑑定表範本＝已勾選的適用機型）已整份帶入、可自行增刪修改；<b>「適用部門×職位」刻意留空</b>（同一個部門×職位若被兩個範本綁定，建立表單時會分不清該用哪一份），請在下方指定這份複製版要套用的部門×職位，按「儲存」才會真的建立。原範本不會被改動。
         </div>
         <label>範本名稱</label><input type="text" id="tplName">
         <div id="tplStampBlock">
@@ -257,8 +257,8 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
         <h4>功能說明</h4>
         管理員在這裡設定「職位範本」：建立表單時系統會依員工的部門×職位比對範本，自動帶入內容（職務說明書的工作職責表、員工職能鑑定表的職能項目清單）或適用機型清單（專業技能鑑定考核表）。一個範本可以綁定多筆部門×職位。
         <h4>操作步驟</h4>
-        <b>①新增/編輯範本</b>：填範本名稱、綁定適用的部門×職位（選一個部門後可一次勾選多個職位加入，部門選「不限部門」代表該職位不論哪個部門都適用）、編輯內容（職務說明書填4欄工作職責表；員工職能鑑定表填職能項目清單；專業技能鑑定考核表勾選適用機型，可用「全選/取消全選」快速操作，需先在「機型/量具白名單」建立好白名單）。<br>
-        <b>①-1 複製範本</b>（職務說明書範本／職能鑑定表範本的清單「複製」鈕）：以該筆為母本開啟新增跳窗，名稱自動變成「原名（複製）」、內容整份帶入可再增刪修改；<b>「適用部門×職位」刻意留空</b>（同一個部門×職位被兩份範本綁到，建立表單時會分不清該用哪一份，系統只會取後建立的那筆），請自行指定這份複製版要套用的部門×職位。按「儲存」才會真的建立新範本，原範本不會被改動。<br>
+        <b>①新增/編輯範本</b>：填範本名稱、綁定適用的部門×職位（選一個部門後可一次勾選多個職位加入，部門選「不限部門」代表該職位不論哪個部門都適用）、編輯內容（職務說明書填4欄工作職責表；員工職能鑑定表填職能項目清單；專業技能鑑定考核表勾選適用機型，可用「全選/取消全選」快速操作，需先在「機型/量具白名單」建立好白名單；清單依<b>機台類型／量具類別分組</b>並標示台數與機台(量具)編號，跟白名單設定頁一致，同一個機型只會出現一次。若白名單裡有<b>來源機台已停用或尚未填寫機型</b>的舊項目（設定頁已不會列出它），只有在該範本先前就勾著時才會以紅字列在最下方，取消勾選後就不會再出現）。<br>
+        <b>①-1 複製範本</b>（三種範本的清單都有「複製」鈕）：以該筆為母本開啟新增跳窗，名稱自動變成「原名（複製）」、內容整份帶入可再增刪修改（職務說明書＝工作職責表各列；職能鑑定表＝職能項目清單；<b>技能鑑定表＝已勾選的適用機型</b>，圖章樣式設定也一併帶入）；<b>「適用部門×職位」刻意留空</b>（同一個部門×職位被兩份範本綁到，建立表單時會分不清該用哪一份，系統只會取後建立的那筆），請自行指定這份複製版要套用的部門×職位。按「儲存」才會真的建立新範本，原範本不會被改動。<br>
         <b>①-2 範本之間互相帶入內容</b>：三種範本的內容可以互抓，避免同一份工作內容要打兩次——<br>
         　・職務說明書範本 ←→ 職能鑑定表範本：<b>雙向</b>。職務說明書的「工作摘要」＝職能鑑定表的「項目名稱」，在任一邊的編輯跳窗選「對應的另一種範本」，勾選要帶入的列後按「加入所選」即可（已存在的內容不會重複加入），清單上方有「全選／取消全選」可一次勾完整份。<br>
         　・技能鑑定表範本 →職能鑑定表範本：勾選其適用機型帶入成職能項目；或勾「動態帶入」改成建立表單當下依該員工已有的技能鑑定表機型/量具自動產生。<br>
@@ -341,7 +341,7 @@ function loadTplList(ft){
         rows.forEach(function(t){
             html += '<tr><td>'+esc(t.name)+'</td><td>'+(t.scope_summary||'（載入中）')+'</td><td>'+(t.count_summary||'')+'</td>'
                   + '<td><button class="hf-btn-sm" onclick="openTplModal(\''+ft+'\','+t.id+')">編輯</button>'
-                  + (ft === 'skill_assess' ? '' : ' <button class="hf-btn-sm" onclick="openTplModal(\''+ft+'\','+t.id+',true)">複製</button>')
+                  + ' <button class="hf-btn-sm" onclick="openTplModal(\''+ft+'\','+t.id+',true)">複製</button>'
                   + ' <button class="hf-btn-sm" onclick="tplDelete('+t.id+',\''+ft+'\')">刪除</button></td></tr>';
         });
         $tb.html(html);
@@ -386,7 +386,51 @@ function scopeInitPicker(){
         return '<label style="display:inline-block;width:48%;font-size:12.5px;"><input type="checkbox" class="scope-pos-ck" value="'+p.id+'"> '+esc(p.name)+'</label>';
     }).join(''));
 }
-function tplMachineCkAll(check){ $('#tplMachineList .tm-ck').prop('checked', check); }
+/* 全選只勾「目前看得到」的項目：已失效項（來源機台停用/機型未填）預設藏著，不該被全選一起勾進來；
+   取消全選則連已顯示的失效項一起取消。 */
+function tplMachineCkAll(check){
+    if (check) $('#tplMachineList .tm-row:not(.tm-stale) .tm-ck').prop('checked', true);
+    else       $('#tplMachineList .tm-ck').prop('checked', false);
+}
+/* 適用機型清單一律跟「機型/量具白名單」設定頁長得一樣：同一個機台類型/量具類別放在一起、
+   加上台數與機台(量具)編號標示（2026-08-18 使用者要求）。分組與去重都在後端 hrf_whitelist_list()
+   算好（同機型只會回一筆），這裡只負責照著畫。 */
+function tplMachineListHtml(wl){
+    var order = [], map = {}, stale = [];
+    (wl||[]).forEach(function(w){
+        if (Number(w.stale)) { stale.push(w); return; }
+        var g = w.group_name || '未分類';
+        if (!map[g]) { map[g] = []; order.push(g); }
+        map[g].push(w);
+    });
+    var html = '';
+    order.forEach(function(g){
+        html += '<div class="wl-group">' + esc(g) + '</div>';
+        map[g].forEach(function(w){ html += tplMachineRowHtml(w, false); });
+    });
+    if (stale.length) {
+        html += '<div class="wl-group tm-stale-head" style="display:none;color:#DD5138;">⚠ 已不在白名單（來源機台已停用或尚未填寫機型，設定頁已不會列出）——以下只列出這份範本先前已勾選的項目，取消勾選後就不會再回來</div>';
+        stale.forEach(function(w){ html += tplMachineRowHtml(w, true); });
+    }
+    return html || '<span style="color:#8a6d45;font-size:12px;">尚未建立白名單，請先到「機型/量具白名單」設定。</span>';
+}
+function tplMachineRowHtml(w, isStale){
+    var meta = isStale ? ('　' + (w.stale_reason || '已失效'))
+             : (w.source_type === 'machine'
+                    ? (Number(w.unit_count) > 1 ? ('　共' + w.unit_count + '台，機台編號：' + esc(w.asset_no_list || '-')) : '')
+                    : (w.machine_name ? ('　量具編號：' + esc(w.asset_no_list || w.display_name || '-')) : ''));
+    return '<label class="tm-row' + (isStale ? ' tm-stale' : '') + '" style="display:' + (isStale ? 'none' : 'block') + ';font-size:12.5px;' + (isStale ? 'color:#DD5138;' : '') + '">'
+         + '<input type="checkbox" class="tm-ck" value="' + w.id + '"> ' + esc(hfMachineLabel(w, w.source_type))
+         + '<span style="color:' + (isStale ? '#DD5138' : '#8a6d45') + ';font-size:11px;">' + meta + '</span></label>';
+}
+/** 編輯/複製既有範本時，把「已失效但這份範本本來就勾著」的項目顯示出來（否則存檔會把它們悄悄弄丟）。 */
+function tplMachineRevealCheckedStale(){
+    var any = false;
+    $('#tplMachineList .tm-row.tm-stale').each(function(){
+        if ($(this).find('.tm-ck').is(':checked')) { $(this).show(); any = true; }
+    });
+    $('#tplMachineList .tm-stale-head').toggle(any);
+}
 function scopeAddSelected(){
     var deptId = $('#scopeNewDept').val();
     var posIds = $('.scope-pos-ck:checked').map(function(){ return $(this).val(); }).get();
@@ -416,7 +460,7 @@ function openTplModal(ft, id, asCopy){
             var html = '<label>適用機型（勾選；建立表單時系統會依這份清單自動展開每個機型各一筆）</label>'
                      + '<div style="margin-bottom:4px;"><button type="button" class="hf-btn-sm" onclick="tplMachineCkAll(true)">全選</button> <button type="button" class="hf-btn-sm" onclick="tplMachineCkAll(false)">取消全選</button></div>'
                      + '<div style="max-height:220px;overflow-y:auto;border:1px solid #D8BE93;border-radius:6px;padding:6px;" id="tplMachineList">'
-                     + wl.map(function(w){ return '<label style="display:block;font-size:12.5px;"><input type="checkbox" class="tm-ck" value="'+w.id+'"> '+esc(hfMachineLabel(w,w.source_type))+'</label>'; }).join('')
+                     + tplMachineListHtml(wl)
                      + '</div>';
             $('#tplContentBlock').html(html);
             if (srcId) fillTplForEdit(srcId, !!asCopy);
@@ -440,6 +484,7 @@ function fillTplForEdit(id, asCopy){
         if (t.form_type === 'skill_assess') {
             var ids = (t.machines||[]).map(function(m){ return String(m.id); });
             $('#tplMachineList .tm-ck').each(function(){ if (ids.indexOf($(this).val()) >= 0) $(this).prop('checked', true); });
+            tplMachineRevealCheckedStale();
         } else if (t.form_type === 'job_desc') {
             $('#tplContentBlock').html(jdTplTableHtml(t.items||[]));
         } else {

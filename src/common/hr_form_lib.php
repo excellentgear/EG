@@ -582,17 +582,86 @@ function hrf_whitelist_sources(PDO $db): array {
 /**
  * machine_name/machine_model 即時對照來源主檔取得（machine 依 machine_model 對 machine_list、tool 直接對
  * qc_tool 該支量具本身），供畫面統一顯示「機型 機台名稱」用，兩種來源顯示格式比照辦理。
+ * 另外回傳 group_name（機台類型/量具類別）、unit_count、asset_no_list，讓消費端（範本跳窗的適用機型、
+ * 建立表單的手動指定）能跟設定頁一樣「同機台類型放一起並標示」。
+ * stale=1＝這筆白名單的來源已停用/機型被清空/已不在設定頁候選清單（2026-08-18 使用者回報 P40 在前端
+ * 清單出現兩次、設定頁只有一次：machine_list 的 P40(id=1895)/TTI-300H(id=1896) 已 state=1 停用，設定頁
+ * 不列所以取消不掉，白名單舊列卻仍 is_active=1，就跟 qc_tool 的同名量具撞成兩列）。這種列不刪（既有範本
+ * 還引用著，直接刪會讓範本內容悄悄變少），改成標記後由前端預設隱藏、只有既有範本已勾選的才顯示並標紅。
  */
 function hrf_whitelist_list(PDO $db): array {
     hrf_ensure_schema($db);
-    return $db->query("SELECT w.*, COALESCE(mm.machine_name, qt.machine) AS machine_name,
-                        COALESCE(w.machine_model, qt.machine_model) AS whitelist_machine_model
-                        FROM hr_equipment_whitelist w
-                        LEFT JOIN (SELECT machine_model, MIN(machine) AS machine_name FROM machine_list
-                                   WHERE machine_model IS NOT NULL AND machine_model<>'' GROUP BY machine_model) mm
-                               ON mm.machine_model = w.machine_model AND w.source_type='machine'
-                        LEFT JOIN qc_tool qt ON qt.Tool_id = w.source_id AND w.source_type='tool'
-                        WHERE w.is_active=1 ORDER BY w.sort_order,w.id")->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $db->query("SELECT w.* FROM hr_equipment_whitelist w WHERE w.is_active=1 ORDER BY w.sort_order,w.id")
+               ->fetchAll(PDO::FETCH_ASSOC);
+    // 設定頁候選清單就是權威畫面（機台依機型去重分組、附機台類型/台數/機台編號；量具逐支附量具類別），
+    // 這裡直接沿用同一支函式的結果去對照，前端清單才會跟設定頁長得一樣、也不會各自算出不同分組。
+    $src = hrf_whitelist_sources($db);
+    $byModel = [];
+    foreach ($src['machines'] as $m) $byModel[(string)$m['machine_model']] = $m;
+    $byTool = [];
+    foreach ($src['tools'] as $t) $byTool[(int)$t['source_id']] = $t;
+    // 白名單存的是「代表機台」的 machine_id，機台之後可能被停用或機型被清空 → 一律用 machine_list 當下現況回推
+    $cur = [];
+    try {
+        foreach ($db->query("SELECT machine_id, machine, machine_model, state FROM machine_list") as $r) {
+            $cur[(int)$r['machine_id']] = $r;
+        }
+    } catch (Throwable $e) {}
+
+    $out = [];
+    $seen = [];
+    foreach ($rows as $w) {
+        $w['group_name'] = '';
+        $w['unit_count'] = 1;
+        $w['asset_no_list'] = '';
+        $w['stale'] = 0;
+        $w['stale_reason'] = '';
+        if (($w['source_type'] ?? '') === 'machine') {
+            $ml = $cur[(int)$w['source_id']] ?? null;
+            $model = $ml ? trim((string)$ml['machine_model']) : '';
+            if (!$ml)                                  { $w['stale'] = 1; $w['stale_reason'] = '來源機台資料已不存在'; }
+            elseif ((int)($ml['state'] ?? 0) !== 0)    { $w['stale'] = 1; $w['stale_reason'] = '來源機台已停用'; }
+            elseif ($model === '')                     { $w['stale'] = 1; $w['stale_reason'] = '來源機台尚未填寫機型'; }
+            elseif (!isset($byModel[$model]))          { $w['stale'] = 1; $w['stale_reason'] = '已不在白名單候選清單內'; }
+            if ($w['stale']) {
+                $w['machine_name'] = $ml['machine'] ?? null;
+            } else {
+                $m = $byModel[$model];
+                $w['group_name'] = (string)($m['group_name'] ?: '未分類');
+                $w['unit_count'] = (int)$m['unit_count'];
+                $w['asset_no_list'] = (string)($m['asset_no'] ?? '');
+                $w['machine_model'] = $model;
+                $w['machine_name'] = $m['machine_name'];
+                // 同一個機型只留一筆（比照設定頁「同機型只算一個考核對象」的去重），避免同機型的
+                // 兩台機台各留過一筆白名單時，前端清單同一個機型印出兩列。
+                $key = 'model:' . $model;
+                if (isset($seen[$key])) continue;
+                $seen[$key] = 1;
+            }
+        } else {
+            $t = $byTool[(int)$w['source_id']] ?? null;
+            if (!$t) { $w['stale'] = 1; $w['stale_reason'] = '來源量具已停用或已不存在'; }
+            else {
+                $w['group_name'] = (string)($t['group_name'] ?: '未分類');
+                $w['asset_no_list'] = (string)($t['asset_no'] ?? '');
+                $w['machine_name'] = $t['machine_name'];
+                $w['machine_model'] = $t['machine_model'];
+            }
+        }
+        if (!array_key_exists('machine_name', $w)) $w['machine_name'] = null;
+        $w['whitelist_machine_model'] = $w['machine_model'] ?? null;   // 相容既有前端欄位名
+        $out[] = $w;
+    }
+    // 排序比照設定頁：先分組（未分類墊底），組內依機型/量具編號；已失效的一律排最後。
+    usort($out, function ($a, $b) {
+        if ((int)$a['stale'] !== (int)$b['stale']) return (int)$a['stale'] <=> (int)$b['stale'];
+        $ea = ($a['group_name'] === '') ? 1 : 0;
+        $eb = ($b['group_name'] === '') ? 1 : 0;
+        if ($ea !== $eb) return $ea <=> $eb;                        // 沒有分類的墊底
+        if ($a['group_name'] !== $b['group_name']) return strcmp((string)$a['group_name'], (string)$b['group_name']);
+        return strcmp((string)$a['display_name'], (string)$b['display_name']);
+    });
+    return $out;
 }
 
 /**
