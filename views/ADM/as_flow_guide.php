@@ -143,7 +143,7 @@ $ASDOC_MODULE_LABELS = [
     'order_change_history'=> ['訂單變更 · 歷史清單',     '../Sales/NewOrder_Track.php'],
     'hr_form_job_desc'     => ['職務說明書',             '../ADM/hr_position_forms.php'],
     'hr_form_skill_assess' => ['專業技能鑑定考核表',     '../ADM/hr_position_forms.php'],
-    'hr_form_competency'   => ['員工職能鑑定表',         '../ADM/hr_position_forms.php'],
+    'hr_form_competency'   => ['職能鑑定表',         '../ADM/hr_position_forms.php'],
 ];
 // 「每個模板一組編號」的通用引擎（審核表單/表單簽核設計器）：module code 是動態組出來的
 // 'review_form_tpl_<id>'／'fsd_tpl_<id>'，不可能事先窮舉進上面的固定表，改由對應模板表現查名稱。

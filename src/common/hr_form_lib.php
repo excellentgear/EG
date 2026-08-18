@@ -37,7 +37,7 @@ const HRF_FEATURES = [
 const HRF_FORM_TYPES = [
     'job_desc'     => '職務說明書',
     'skill_assess' => '專業技能鑑定考核表',
-    'competency'   => '員工職能鑑定表',
+    'competency'   => '職能鑑定表',
 ];
 
 const HRF_ASDOC_MODULE = [
@@ -93,8 +93,22 @@ function hrf_ensure_schema(PDO $db): void {
         $db->exec("CREATE TABLE IF NOT EXISTS hr_form_dept_type_setting (
             department_id INT NOT NULL PRIMARY KEY,
             produce_skill_assess TINYINT NOT NULL DEFAULT 0,
-            produce_competency TINYINT NOT NULL DEFAULT 0
+            produce_competency TINYINT NOT NULL DEFAULT 0,
+            cp_machine_setup TINYINT NOT NULL DEFAULT 0 COMMENT '10職能鑑定表是否多一欄「機台設定」評分'
         ) DEFAULT CHARSET=utf8mb4 COMMENT='部門是否產生09/10表單(01全員適用不受此表限制)'");
+        // 2026-08-18 新增欄位（既有資料庫用 ALTER 補；MySQL 9.4 的 ADD COLUMN 沒有 IF NOT EXISTS，先查 information_schema）
+        try {
+            $has = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE()
+                                    AND TABLE_NAME='hr_form_dept_type_setting' AND COLUMN_NAME='cp_machine_setup'")->fetchColumn();
+            if (!$has) {
+                $db->exec("ALTER TABLE hr_form_dept_type_setting ADD COLUMN cp_machine_setup TINYINT NOT NULL DEFAULT 0
+                           COMMENT '10職能鑑定表是否多一欄「機台設定」評分'");
+                // 沿用舊行為：本次改版前，會產生技能鑑定考核表的部門，職能鑑定表的項目名稱欄本來就標成「機台設定」
+                // （那時只是換欄位標題、沒有獨立評分欄）。改版後改成獨立評分欄，這些部門預設先勾起來，
+                // 管理員可自行在設定頁增減，不寫死。
+                $db->exec("UPDATE hr_form_dept_type_setting SET cp_machine_setup=1 WHERE produce_skill_assess=1");
+            }
+        } catch (Throwable $e) {}
 
         $db->exec("CREATE TABLE IF NOT EXISTS hr_equipment_whitelist (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -676,17 +690,31 @@ function hrf_match_template(PDO $db, string $formType, ?int $deptId, ?int $posId
 function hrf_dept_type_setting_list(PDO $db): array {
     hrf_ensure_schema($db);
     $st = $db->query("SELECT d.id AS department_id, d.name, COALESCE(s.produce_skill_assess,0) AS produce_skill_assess,
-                       COALESCE(s.produce_competency,0) AS produce_competency
+                       COALESCE(s.produce_competency,0) AS produce_competency,
+                       COALESCE(s.cp_machine_setup,0) AS cp_machine_setup
                        FROM department d LEFT JOIN hr_form_dept_type_setting s ON s.department_id=d.id
                        ORDER BY d.sort_order, d.id");
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
-function hrf_dept_type_setting_save(PDO $db, int $deptId, bool $skillAssess, bool $competency): void {
+function hrf_dept_type_setting_save(PDO $db, int $deptId, bool $skillAssess, bool $competency, bool $cpMachineSetup = false): void {
     hrf_ensure_schema($db);
-    $db->prepare("INSERT INTO hr_form_dept_type_setting (department_id,produce_skill_assess,produce_competency) VALUES (?,?,?)
-                  ON DUPLICATE KEY UPDATE produce_skill_assess=VALUES(produce_skill_assess), produce_competency=VALUES(produce_competency)")
-       ->execute([$deptId, $skillAssess?1:0, $competency?1:0]);
+    $db->prepare("INSERT INTO hr_form_dept_type_setting (department_id,produce_skill_assess,produce_competency,cp_machine_setup) VALUES (?,?,?,?)
+                  ON DUPLICATE KEY UPDATE produce_skill_assess=VALUES(produce_skill_assess), produce_competency=VALUES(produce_competency),
+                                          cp_machine_setup=VALUES(cp_machine_setup)")
+       ->execute([$deptId, $skillAssess?1:0, $competency?1:0, $cpMachineSetup?1:0]);
+}
+
+/**
+ * 這個部門的職能鑑定表評分欄是不是三欄（機台設定／操作／異常排除）；沒設定＝兩欄（操作／異常排除）。
+ * 使用者明確要求可逐部門多選（設定入口：人資職務表單設定→部門表單設定）。編號與項目名稱兩欄固定都有。
+ */
+function hrf_dept_cp_machine_setup(PDO $db, ?int $deptId): bool {
+    if (!$deptId) return false;
+    hrf_ensure_schema($db);
+    $st = $db->prepare("SELECT cp_machine_setup FROM hr_form_dept_type_setting WHERE department_id=?");
+    $st->execute([$deptId]);
+    return (bool)$st->fetchColumn();
 }
 
 function hrf_dept_can_produce(PDO $db, ?int $deptId, string $formType): bool {
@@ -1052,9 +1080,9 @@ function hrf_instance_items_save(PDO $db, int $instanceId, array $items): void {
     $seq = 0;
     foreach ($items as $it) {
         $data = $it['data'] ?? [];
-        // 10 職能鑑定表 操作/異常排除 分數範圍後端夾緣(1~4)，前端只是即時提示，真正把關在這裡（其餘欄位如01的文字內容不受影響）。
+        // 10 職能鑑定表 機台設定/操作/異常排除 分數範圍後端夾緣(1~4)，前端只是即時提示，真正把關在這裡（其餘欄位如01的文字內容不受影響）。
         if (is_array($data)) {
-            foreach (['score_op', 'score_ex'] as $k) {
+            foreach (['score_ms', 'score_op', 'score_ex'] as $k) {
                 if (array_key_exists($k, $data)) {
                     $v = $data[$k];
                     $data[$k] = ($v === '' || $v === null) ? null : max(1, min(4, (int)$v));
@@ -1347,7 +1375,7 @@ function hrf_instance_save_items(PDO $db, int $instanceId, array $items): void {
 /** 超級管理員手動調整員工職能鑑定表「最新更新日期」（業務日期，非精確時間戳，比照 ai-rules/21）。 */
 function hrf_cp_set_update_date(PDO $db, int $instanceId, string $date): array {
     $inst = hrf_instance_get($db, $instanceId);
-    if (!$inst || $inst['form_type'] !== 'competency') return ['ok'=>false, 'msg'=>'僅員工職能鑑定表可設定此欄位'];
+    if (!$inst || $inst['form_type'] !== 'competency') return ['ok'=>false, 'msg'=>'僅職能鑑定表可設定此欄位'];
     $db->prepare("UPDATE hr_form_instance SET cp_update_date=? WHERE id=?")->execute([$date, $instanceId]);
     return ['ok'=>true];
 }

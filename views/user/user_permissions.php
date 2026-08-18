@@ -1187,7 +1187,7 @@ $_quotDepts = array_keys($_deptSet);
                         $_rvfRoles, $_userRvfRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('hrf', 'hr_form', '人資職務表單', 'fa-id-card', '#a0662e',
-                        '為每位使用者指派人資職務表單（職務說明書／專業技能鑑定考核表／員工職能鑑定表）的操作角色（檢閱、檢視全部人員表單、建立/批次建立/複製/編輯、列印、範本管理）。確認人（該員工直屬主管）／核准人（總經理）為固定角色，不透過此處角色指派，由系統依組織架構自動解析。角色與功能定義請至 <strong>人資職務表單設定 → 使用說明</strong>。',
+                        '為每位使用者指派人資職務表單（職務說明書／專業技能鑑定考核表／職能鑑定表）的操作角色（檢閱、檢視全部人員表單、建立/批次建立/複製/編輯、列印、範本管理）。確認人（該員工直屬主管）／核准人（總經理）為固定角色，不透過此處角色指派，由系統依組織架構自動解析。角色與功能定義請至 <strong>人資職務表單設定 → 使用說明</strong>。',
                         $_hrfRoles, $_userHrfRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('fsd', 'form_signer', '表單簽核設計器', 'fa-object-group', '#7a5217',

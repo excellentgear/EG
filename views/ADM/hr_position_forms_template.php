@@ -150,10 +150,11 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
         </div>
 
         <div class="hf-tabpane" id="pane-deptset" data-type="deptset">
-            <p style="font-size:12.5px;color:#8a6d45;">勾選哪些部門的人員要產生「專業技能鑑定考核表」「員工職能鑑定表」（職務說明書全員適用，不受此設定限制）。變更即時儲存。</p>
+            <p style="font-size:12.5px;color:#8a6d45;">勾選哪些部門的人員要產生「專業技能鑑定考核表」「職能鑑定表」（職務說明書全員適用，不受此設定限制）。
+            最右欄＝該部門的職能鑑定表評分欄要不要多一欄「機台設定」（勾＝機台設定／操作／異常排除三欄，不勾＝操作／異常排除兩欄；不論勾不勾，最左側固定都是編號＋項目名稱）。變更即時儲存。</p>
             <div class="hf-table-wrap">
             <table class="hf-tbl">
-                <thead><tr><th>部門</th><th style="width:160px;">產生專業技能鑑定考核表</th><th style="width:160px;">產生員工職能鑑定表</th></tr></thead>
+                <thead><tr><th>部門</th><th style="width:160px;">產生專業技能鑑定考核表</th><th style="width:160px;">產生職能鑑定表</th><th style="width:190px;">職能鑑定表含「機台設定」評分欄</th></tr></thead>
                 <tbody id="deptSetBody"></tbody>
             </table>
             </div>
@@ -255,9 +256,10 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
     <div class="m-head"><span>使用說明 — 人資職務表單設定</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
         <h4>功能說明</h4>
-        管理員在這裡設定「職位範本」：建立表單時系統會依員工的部門×職位比對範本，自動帶入內容（職務說明書的工作職責表、員工職能鑑定表的職能項目清單）或適用機型清單（專業技能鑑定考核表）。一個範本可以綁定多筆部門×職位。
+        管理員在這裡設定「職位範本」：建立表單時系統會依員工的部門×職位比對範本，自動帶入內容（職務說明書的工作職責表、職能鑑定表的職能項目清單）或適用機型清單（專業技能鑑定考核表）。一個範本可以綁定多筆部門×職位。
         <h4>操作步驟</h4>
-        <b>①新增/編輯範本</b>：填範本名稱、綁定適用的部門×職位（選一個部門後可一次勾選多個職位加入，部門選「不限部門」代表該職位不論哪個部門都適用）、編輯內容（職務說明書填4欄工作職責表；員工職能鑑定表填職能項目清單；專業技能鑑定考核表勾選適用機型，可用「全選/取消全選」快速操作，需先在「機型/量具白名單」建立好白名單；清單依<b>機台類型／量具類別分組</b>並標示台數與機台(量具)編號，跟白名單設定頁一致，同一個機型只會出現一次。若白名單裡有<b>來源機台已停用或尚未填寫機型</b>的舊項目（設定頁已不會列出它），只有在該範本先前就勾著時才會以紅字列在最下方，取消勾選後就不會再出現）。<br>
+        <b>①新增/編輯範本</b>：填範本名稱、綁定適用的部門×職位（選一個部門後可一次勾選多個職位加入，部門選「不限部門」代表該職位不論哪個部門都適用）、編輯內容（職務說明書填4欄工作職責表；職能鑑定表填職能項目清單；專業技能鑑定考核表勾選適用機型，可用「全選/取消全選」快速操作，需先在「機型/量具白名單」建立好白名單；清單依<b>機台類型／量具類別分組</b>並標示台數與機台(量具)編號，跟白名單設定頁一致，同一個機型只會出現一次。若白名單裡有<b>來源機台已停用或尚未填寫機型</b>的舊項目（設定頁已不會列出它），只有在該範本先前就勾著時才會以紅字列在最下方，取消勾選後就不會再出現）。<br>
+        <b>①-0 部門表單資格</b>（分頁「部門表單資格」）：逐部門勾選要不要產生專業技能鑑定考核表／職能鑑定表，以及<b>該部門的職能鑑定表評分欄要不要多一欄「機台設定」</b>——勾了＝機台設定／操作／異常排除三欄，沒勾＝操作／異常排除兩欄；兩種情況最左側都固定是編號＋項目名稱。可多個部門各自勾選，變更即時儲存，既有表單下次開啟/列印就會依現在的設定顯示。<br>
         <b>①-1 複製範本</b>（三種範本的清單都有「複製」鈕）：以該筆為母本開啟新增跳窗，名稱自動變成「原名（複製）」、內容整份帶入可再增刪修改（職務說明書＝工作職責表各列；職能鑑定表＝職能項目清單；<b>技能鑑定表＝已勾選的適用機型</b>，圖章樣式設定也一併帶入）；<b>「適用部門×職位」刻意留空</b>（同一個部門×職位被兩份範本綁到，建立表單時會分不清該用哪一份，系統只會取後建立的那筆），請自行指定這份複製版要套用的部門×職位。按「儲存」才會真的建立新範本，原範本不會被改動。<br>
         <b>①-2 範本之間互相帶入內容</b>：三種範本的內容可以互抓，避免同一份工作內容要打兩次——<br>
         　・職務說明書範本 ←→ 職能鑑定表範本：<b>雙向</b>。職務說明書的「工作摘要」＝職能鑑定表的「項目名稱」，在任一邊的編輯跳窗選「對應的另一種範本」，勾選要帶入的列後按「加入所選」即可（已存在的內容不會重複加入），清單上方有「全選／取消全選」可一次勾完整份。<br>
@@ -285,7 +287,7 @@ $canOpenMachineSetting = hrf_can_open_machine_setting($db, (int)$hrfUser['id']);
 <script>
 var API = '../../src/store/HrForm_API.php';
 var META = {};
-var FORM_LABEL = {job_desc:'職務說明書', skill_assess:'專業技能鑑定考核表', competency:'員工職能鑑定表'};
+var FORM_LABEL = {job_desc:'職務說明書', skill_assess:'專業技能鑑定考核表', competency:'職能鑑定表'};
 function esc(s){ return $('<div>').text(s==null?'':s).html(); }
 function openMask(id){ $('#'+id).css('display','block'); }
 function closeMask(id){ $('#'+id).css('display','none'); }
@@ -857,15 +859,22 @@ function loadDeptSet(){
     var html = rows.map(function(d){
         return '<tr><td>'+esc(d.name)+'</td>'
              + '<td style="text-align:center;"><input type="checkbox" class="ds-sa" data-id="'+d.department_id+'"'+(d.produce_skill_assess?' checked':'')+' onchange="dsSave('+d.department_id+')"></td>'
-             + '<td style="text-align:center;"><input type="checkbox" class="ds-cp" data-id="'+d.department_id+'"'+(d.produce_competency?' checked':'')+' onchange="dsSave('+d.department_id+')"></td></tr>';
+             + '<td style="text-align:center;"><input type="checkbox" class="ds-cp" data-id="'+d.department_id+'"'+(d.produce_competency?' checked':'')+' onchange="dsSave('+d.department_id+')"></td>'
+             + '<td style="text-align:center;"><input type="checkbox" class="ds-ms" data-id="'+d.department_id+'"'+(d.cp_machine_setup?' checked':'')+' onchange="dsSave('+d.department_id+')"></td></tr>';
     }).join('');
-    $('#deptSetBody').html(html || '<tr><td colspan="3" style="text-align:center;color:#8a6d45;">尚無部門資料</td></tr>');
+    $('#deptSetBody').html(html || '<tr><td colspan="4" style="text-align:center;color:#8a6d45;">尚無部門資料</td></tr>');
 }
 function dsSave(deptId){
     var sa = $('.ds-sa[data-id='+deptId+']').is(':checked');
     var cp = $('.ds-cp[data-id='+deptId+']').is(':checked');
-    ajaxPost('dept_type_setting_save', {department_id:deptId, produce_skill_assess:sa?1:0, produce_competency:cp?1:0}, function(res){
+    var ms = $('.ds-ms[data-id='+deptId+']').is(':checked');   // 職能鑑定表要不要多一欄「機台設定」評分
+    ajaxPost('dept_type_setting_save', {department_id:deptId, produce_skill_assess:sa?1:0, produce_competency:cp?1:0, cp_machine_setup:ms?1:0}, function(res){
         if (!res.ok) alert(res.error||'儲存失敗');
+        else if (META && META.dept_type_settings) {
+            // 本頁 META 是進頁時快照，改完要同步更新，否則同一次瀏覽中其它地方讀到的還是舊值
+            var d = META.dept_type_settings.find(function(x){ return String(x.department_id) === String(deptId); });
+            if (d) { d.produce_skill_assess = sa?1:0; d.produce_competency = cp?1:0; d.cp_machine_setup = ms?1:0; }
+        }
     });
 }
 

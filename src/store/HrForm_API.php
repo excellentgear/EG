@@ -151,7 +151,7 @@ case 'save_items': {
     $inst = hrf_instance_get($db, $id);
     if (!$inst) jerr('找不到此表單', 404);
     if (!$perms['canAdmin'] && (int)$inst['created_by'] !== $uid) jerr('僅建立者或管理員可編輯', 403);
-    // 10員工職能鑑定表使用者明確要求送簽後仍可修改（改動會自動退回草稿並要求重新送簽，見 hrf_instance_save_items()）；
+    // 10職能鑑定表使用者明確要求送簽後仍可修改（改動會自動退回草稿並要求重新送簽，見 hrf_instance_save_items()）；
     // 01職務說明書本就恆為 active 不受影響；09技能鑑定表沒有這個動作可呼叫，不受影響。
     if ($inst['form_type'] !== 'competency' && !in_array($inst['status'], ['draft','active'], true)) jerr('此表單已送出簽核，不可再編輯內容');
     $items = json_decode((string)($_POST['items'] ?? '[]'), true);
@@ -371,7 +371,8 @@ case 'dept_type_setting_save': {
     if (!$perms['canAdmin']) jerr('僅管理員可設定', 403);
     $deptId = (int)($_POST['department_id'] ?? 0);
     if ($deptId <= 0) jerr('部門不正確');
-    hrf_dept_type_setting_save($db, $deptId, !empty($_POST['produce_skill_assess']), !empty($_POST['produce_competency']));
+    hrf_dept_type_setting_save($db, $deptId, !empty($_POST['produce_skill_assess']), !empty($_POST['produce_competency']),
+                               !empty($_POST['cp_machine_setup']));
     jout([]);
 }
 

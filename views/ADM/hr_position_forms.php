@@ -1,6 +1,6 @@
 <?php
 /**
- * 人資職務表單 — 職務說明書／專業技能鑑定考核表／員工職能鑑定表（三分頁同一頁）—— 2026-08-13 新增
+ * 人資職務表單 — 職務說明書／專業技能鑑定考核表／職能鑑定表（三分頁同一頁）—— 2026-08-13 新增
  * 範本/白名單/部門設定請至「人資職務表單設定」hr_position_forms_template.php（僅管理員）。
  * 資料一律走 src/store/HrForm_API.php；權限 src/common/hr_form_lib.php hrf_perms()
  */
@@ -106,7 +106,7 @@ $perms = hrf_perms($db, $hrfUser);
     <?php include '../partPage/sideAndTopBarMenu.html' ?>
     <div class="right_col" role="main">
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;clear:both;">
-            <h2 style="margin:6px 0;">人資職務表單 <small style="color:#8a6d45;">職務說明書／專業技能鑑定考核表／員工職能鑑定表</small></h2>
+            <h2 style="margin:6px 0;">人資職務表單 <small style="color:#8a6d45;">職務說明書／專業技能鑑定考核表／職能鑑定表</small></h2>
             <a href="hr_position_forms_template.php" class="admin-only" style="display:none;margin-left:12px;">範本管理→</a>
             <button class="page-help-btn" id="btnPageHelp" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
@@ -118,7 +118,7 @@ $perms = hrf_perms($db, $hrfUser);
         <ul class="nav nav-tabs nav-hf" id="hfTabs">
             <li class="active"><a href="#" data-type="job_desc">職務說明書</a></li>
             <li><a href="#" data-type="skill_assess">專業技能鑑定考核表</a></li>
-            <li><a href="#" data-type="competency">員工職能鑑定表</a></li>
+            <li><a href="#" data-type="competency">職能鑑定表</a></li>
         </ul>
 
 <?php foreach (['job_desc','skill_assess','competency'] as $ft): ?>
@@ -261,17 +261,17 @@ $perms = hrf_perms($db, $hrfUser);
     <div class="m-head"><span>使用說明 — 人資職務表單</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
         <h4>功能說明</h4>
-三張固定表單：<b>職務說明書</b>（以部門×職位為主，不綁單一員工——有人在職的部門×職位組合都需要一份，含兼任職位，內容依職位範本帶入，不需簽核，僅留記錄）、<b>專業技能鑑定考核表</b>（每位員工「每個機型」一份，固定不重複建立，總經理／課長各自評分，需確認＋核准）、<b>員工職能鑑定表</b>（每位員工一份，部門/職稱不變只需沿用既有那份不重複建立，職能項目依職位範本帶入，需確認＋核准）。三張表單各自獨立綁定 AS 文件編號。
+三張固定表單：<b>職務說明書</b>（以部門×職位為主，不綁單一員工——有人在職的部門×職位組合都需要一份，含兼任職位，內容依職位範本帶入，不需簽核，僅留記錄）、<b>專業技能鑑定考核表</b>（每位員工「每個機型」一份，固定不重複建立，總經理／課長各自評分，需確認＋核准）、<b>職能鑑定表</b>（每位員工一份，部門/職稱不變只需沿用既有那份不重複建立，職能項目依職位範本帶入，需確認＋核准）。三張表單各自獨立綁定 AS 文件編號。
         <h4>操作步驟</h4>
         <b>①建立表單</b>：職務說明書勾選一組或多組「部門×職位」＋指定日期即可建立（灰底＝已建立過或全站最高決策者不需要）；技能鑑定表／職能鑑定表<b>先填日期、再勾選一位或多位員工</b>（勾 1 人＝單人建立，勾多人＝批次建立；點部門標題可整組全選/取消）——<b>員工清單會依填入的日期自動改為「該日期當時」的組織</b>：當時所屬部門/職稱（依人事的職務調動紀錄回推，沒有異動紀錄的人用現況），且<b>當時在職、現在已離職的人也會列出並標示「已離職」</b>，方便補登舊表單；日期改一次清單就重抓一次，已勾選的人會保留。建立出來的表單存的部門/職稱/直屬主管也一律是該日期當時的狀態，不是今天的；系統會依比對到的部門×職位「職位範本」自動帶入內容，找不到範本會在建立結果顯示錯誤，需請管理員先到「範本管理」設定。專業技能鑑定考核表另需選機型（預設依職位範本的適用機型清單自動展開成多筆，也可手動指定機型套用到所有選取員工）。<br>
-        <b>②填寫／評分</b>：職務說明書內容欄可直接編輯存檔；技能鑑定表由課長／總經理各自在「確認」「核准」時填寫自己那欄分數；職能鑑定表的操作/異常排除評分由確認人（直屬主管）填寫。若員工本身職等已無中間層主管可考核（其直屬主管解析結果與總經理相同），課長考核欄位為 NA，不可填寫。<br>
+        <b>②填寫／評分</b>：職務說明書內容欄可直接編輯存檔；技能鑑定表由課長／總經理各自在「確認」「核准」時填寫自己那欄分數；職能鑑定表的評分由確認人（直屬主管）填寫，評分欄依部門而定：有在「人資職務表單設定→部門表單資格」勾選<b>職能鑑定表含「機台設定」評分欄</b>的部門＝<b>機台設定／操作／異常排除</b>三欄，其餘部門＝<b>操作／異常排除</b>兩欄；不論哪一種，最左側固定都是<b>編號＋項目名稱</b>。分數一律 1~4，可用表格下方的「一鍵套用」把同一個分數套到整欄。若員工本身職等已無中間層主管可考核（其直屬主管解析結果與總經理相同），課長考核欄位為 NA，不可填寫。<br>
         <b>③送出</b>：技能鑑定表／職能鑑定表草稿建立後需按「送出」才會通知確認人（該員工直屬主管）；確認通過後自動通知核准人（總經理）；任一關退回都需填寫原因，退回後表單回到草稿可修改重送。<br>
         <b>④複製表單</b>：技能鑑定表／職能鑑定表可按「複製」，以複製者身分建立一份新草稿（機型/內容原樣帶入），需重新走送出流程；職務說明書以部門×職位為主不提供複製，內容直接在原表單編輯存檔即可。<br>
         <b>⑤列印</b>：可單筆列印，或「列印全部」依目前清單篩選結果逐筆各自開視窗列印（結果較多會先詢問是否自動分批排隊）；每份文件各自獨立分頁計算頁碼，只有內容超過一頁時才顯示「第X頁/共Y頁」，單頁文件不顯示頁碼。<br>
         <b>⑥超級管理員自動簽核</b>：僅 id=1 可用，勾選表單後可先逐筆調整分數（或用「一鍵套用固定分數」快速帶入再個別修改），輸入操作確認密碼＋指定簽核日期，一次補齊尚未完成的確認/核准關卡，用於補登舊紙本資料。<br>
         <b>⑦超級管理員批次刪除</b>：僅 id=1 可用，於清單勾選（表頭勾選框可整頁全選）後按「超管批次刪除」，跳窗會列出即將刪除的表單供核對，輸入操作確認密碼即可一次刪除；<b>連同表單內容、簽核紀錄與相關通知一併移除且無法復原</b>，已完成簽核的表單也會被刪除，補登錯誤要重做時用。
         <h4>重要行為</h4>
-        ・部門是否產生技能鑑定表／職能鑑定表由管理員在「範本管理」設定，職務說明書全員適用。<br>
+        ・部門是否產生技能鑑定表／職能鑑定表、以及該部門的職能鑑定表要不要多一欄「機台設定」評分，都由管理員在「範本管理→部門表單資格」逐部門勾選（可多部門），職務說明書全員適用。<br>
         ・機型選項為管理員從既有機台主檔（依機型去重，同機型多台機台編號只算一個考核對象）與量測儀器校驗的量具主檔勾選建立的白名單，不是全部主檔都能選。<br>
         ・確認人固定為該員工直屬主管、核准人固定為全站最高決策者（多數為總經理），無法個別調整。
         <h4>權限角色</h4>
@@ -295,7 +295,7 @@ var META = {};
 var CUR_TAB = 'job_desc';
 var LISTS = {job_desc:[], skill_assess:[], competency:[]};
 var PAGE_STATE = {job_desc:{page:1,size:10}, skill_assess:{page:1,size:10}, competency:{page:1,size:10}};
-var FORM_LABEL = {job_desc:'職務說明書', skill_assess:'專業技能鑑定考核表', competency:'員工職能鑑定表'};
+var FORM_LABEL = {job_desc:'職務說明書', skill_assess:'專業技能鑑定考核表', competency:'職能鑑定表'};
 var STATUS_LABEL = {draft:'草稿', active:'已建立', confirming:'確認中', approving:'核准中', signed:'已完成', rejected:'已退回'};
 var CUR = null; // 目前檢視中的 instance
 
@@ -808,21 +808,35 @@ function jdItemsCollect(){
     return out;
 }
 
-/** 有建立「專業技能鑑定考核表」的部門，員工職能鑑定表的項目本來就是機台清單帶入，欄位標題改標「機台設定」；其餘部門維持通用「項目名稱」。 */
+/** 有建立「專業技能鑑定考核表」的部門（目前只用在建立表單的候選判斷，欄位標題不再依這個決定）。 */
 function deptHasSkillAssess(deptId){
     var d = (META.dept_type_settings||[]).find(function(x){ return String(x.department_id)===String(deptId); });
     return !!(d && d.produce_skill_assess);
 }
+/** 這個部門的職能鑑定表評分欄是不是三欄（機台設定／操作／異常排除）。設定入口：人資職務表單設定→部門表單資格
+    最右欄，可多部門各自勾選；沒勾＝兩欄（操作／異常排除）。編號＋項目名稱兩欄固定都有，不受這個設定影響。 */
+function deptHasMachineSetup(deptId){
+    var d = (META.dept_type_settings||[]).find(function(x){ return String(x.department_id)===String(deptId); });
+    return !!(d && d.cp_machine_setup);
+}
+/* 評分欄：有勾「含機台設定」的部門＝機台設定／操作／異常排除三欄，其餘部門＝操作／異常排除兩欄；
+   最左側的編號＋項目名稱兩欄固定都在（使用者明確要求，2026-08-18）。CP_HAS_MS 記住目前這份表單是哪一種，
+   讓 hfCpRowAdd()／cpItemsCollect() 增列與收集時跟表頭一致。 */
+var CP_HAS_MS = false;
 function cpItemsTableHtml(items, editable, deptId){
     var rows = items && items.length ? items : [{data:{}}];
-    var nameLabel = deptHasSkillAssess(deptId) ? '機台設定' : '項目名稱';
-    var html = '<div class="itm-tbl-wrap"><table class="itm-tbl"><thead><tr><th style="width:36px;">編號</th><th>'+nameLabel+'</th><th style="width:110px;">操作</th><th style="width:110px;">異常排除</th></tr></thead>'
+    CP_HAS_MS = deptHasMachineSetup(deptId);
+    var html = '<div class="itm-tbl-wrap"><table class="itm-tbl"><thead><tr><th style="width:36px;">編號</th><th>項目名稱</th>'
+             + (CP_HAS_MS ? '<th style="width:110px;">機台設定</th>' : '')
+             + '<th style="width:110px;">操作</th><th style="width:110px;">異常排除</th></tr></thead>'
              + '<tbody id="cpItemsBody" data-eg-row-add="hfCpRowAdd" data-eg-row-del="hfCpRowDel">';
     rows.forEach(function(it,i){ html += cpRowHtml(it.data||{}, i+1, editable); });
     html += '</tbody></table></div>';
     if (editable) {
         html += '<button class="hf-btn-sm" onclick="hfCpRowAdd()">+新增列</button> <button class="hf-btn-sm" onclick="hfCpRowDel()">-刪除末列</button>'
-              + '<div style="margin-top:8px;font-size:12.5px;">一鍵套用：操作 <input type="text" id="cpFillOp" class="score-inp" inputmode="numeric" maxlength="1" style="width:40px;height:30px;font-size:13px;"> <button type="button" class="hf-btn-sm" onclick="hfCpFillAll(\'op\')">套用到全部</button>'
+              + '<div style="margin-top:8px;font-size:12.5px;">一鍵套用：'
+              + (CP_HAS_MS ? '機台設定 <input type="text" id="cpFillMs" class="score-inp" inputmode="numeric" maxlength="1" style="width:40px;height:30px;font-size:13px;"> <button type="button" class="hf-btn-sm" onclick="hfCpFillAll(\'ms\')">套用到全部</button>　' : '')
+              + '操作 <input type="text" id="cpFillOp" class="score-inp" inputmode="numeric" maxlength="1" style="width:40px;height:30px;font-size:13px;"> <button type="button" class="hf-btn-sm" onclick="hfCpFillAll(\'op\')">套用到全部</button>'
               + '　異常排除 <input type="text" id="cpFillEx" class="score-inp" inputmode="numeric" maxlength="1" style="width:40px;height:30px;font-size:13px;"> <button type="button" class="hf-btn-sm" onclick="hfCpFillAll(\'ex\')">套用到全部</button></div>';
     }
     return html;
@@ -830,11 +844,13 @@ function cpItemsTableHtml(items, editable, deptId){
 function cpRowHtml(d, no, editable){
     var nameCell = editable ? '<textarea class="c-name">'+esc(d.skill_name||'')+'</textarea>' : esc(d.skill_name||'');
     return '<tr><td style="text-align:center;">'+no+'</td><td>'+nameCell+'</td>'
+         + (CP_HAS_MS ? '<td>'+(editable ? scoreInputHtml('c-ms', d.score_ms) : esc(d.score_ms||'-'))+'</td>' : '')
          + '<td>'+(editable ? scoreInputHtml('c-op', d.score_op) : esc(d.score_op||'-'))+'</td>'
          + '<td>'+(editable ? scoreInputHtml('c-ex', d.score_ex) : esc(d.score_ex||'-'))+'</td></tr>';
 }
 function hfCpFillAll(which){
-    var v = ($('#cpFill'+(which==='op'?'Op':'Ex')).val()||'').replace(/[^1-4]/g,'').slice(0,1);
+    var id = {ms:'Ms', op:'Op', ex:'Ex'}[which];
+    var v = ($('#cpFill'+id).val()||'').replace(/[^1-4]/g,'').slice(0,1);
     if (!v){ alert('請先輸入1~4的數字'); return; }
     $('#cpItemsBody .c-'+which).val(v);
 }
@@ -844,7 +860,10 @@ function cpItemsCollect(){
     var out = [];
     $('#cpItemsBody tr').each(function(){
         var $t = $(this);
-        out.push({data:{skill_name:$t.find('.c-name').val() || $t.find('td').eq(1).text(), score_op:$t.find('.c-op').val()||null, score_ex:$t.find('.c-ex').val()||null}});
+        var d = {skill_name:$t.find('.c-name').val() || $t.find('td').eq(1).text(),
+                 score_op:$t.find('.c-op').val()||null, score_ex:$t.find('.c-ex').val()||null};
+        if (CP_HAS_MS) d.score_ms = $t.find('.c-ms').val()||null;
+        out.push({data:d});
     });
     return out;
 }
@@ -948,7 +967,7 @@ function renderViewBody(ft, r){
         h += decideBoxHtml('confirming', r) + decideBoxHtml('approving', r);
         h += '<div style="margin-top:10px;"><button class="hf-btn-sm" onclick="printOne(\'skill_assess\','+r.id+')">列印</button> <button class="hf-btn-sm" onclick="copyInstance(\'skill_assess\','+r.id+')">複製</button></div>';
     } else {
-        // 使用者明確要求：送簽後的員工職能鑑定表仍可修改，存檔時後端會自動退回草稿＋改今天的最新更新日期並要求重新送簽（見 hrf_instance_save_items()）
+        // 使用者明確要求：送簽後的職能鑑定表仍可修改，存檔時後端會自動退回草稿＋改今天的最新更新日期並要求重新送簽（見 hrf_instance_save_items()）
         h += cpItemsTableHtml(r.items, true, r.dept_id);
         h += '<div style="margin-top:8px;"><button class="b-ok" onclick="hfSaveItems(\'competency\')">存檔</button> '
            + (r.status === 'draft' ? '<button class="b-ok" onclick="hfSubmitInstance()">送出（通知直屬主管確認）</button>' : '')
@@ -1092,11 +1111,12 @@ function renderAutoSignRows(){
             var itemsHtml = items.length ? items.map(function(it, ii){
                 var d = it.data || {};
                 return '<span style="display:inline-block;margin:2px 10px 2px 0;white-space:nowrap;">'+esc(d.skill_name||('項目'+(ii+1)))
+                     + (deptHasMachineSetup(r.dept_id) ? (' 機台'+scoreInputHtml('as-cp-ms', d.score_ms, ' data-idx="'+idx+'" data-ii="'+ii+'" style="width:34px;height:30px;font-size:12px;"')) : '')
                      + ' 操作'+scoreInputHtml('as-cp-op', d.score_op, ' data-idx="'+idx+'" data-ii="'+ii+'" style="width:34px;height:30px;font-size:12px;"')
                      + ' 異常'+scoreInputHtml('as-cp-ex', d.score_ex, ' data-idx="'+idx+'" data-ii="'+ii+'" style="width:34px;height:30px;font-size:12px;"')
                      + '</span>';
             }).join('') : '<span style="color:#8a6d45;">（無項目）</span>';
-            return '<tr data-idx="'+idx+'"><td>'+esc(r.user_cname)+'</td><td>員工職能鑑定表</td><td colspan="3">'+itemsHtml+'</td></tr>';
+            return '<tr data-idx="'+idx+'"><td>'+esc(r.user_cname)+'</td><td>職能鑑定表</td><td colspan="3">'+itemsHtml+'</td></tr>';
         }
         if (r.form_type !== 'skill_assess') {
             return '<tr data-idx="'+idx+'"><td>'+esc(r.user_cname)+'</td><td>'+FORM_LABEL[r.form_type]+'（無評分欄，僅簽核）</td><td colspan="3">-</td></tr>';
@@ -1144,7 +1164,9 @@ function hfSubmitAutoSign(){
         } else if (r.form_type === 'competency' && r.items && r.items.length) {
             itemsByInstance[r.id] = r.items.map(function(it, ii){
                 var d = it.data || {};
-                return {id:it.id, item_no:it.item_no, data:{skill_name:d.skill_name||'', score_op:$tr.find('.as-cp-op[data-ii="'+ii+'"]').val()||null, score_ex:$tr.find('.as-cp-ex[data-ii="'+ii+'"]').val()||null}};
+                var dd = {skill_name:d.skill_name||'', score_op:$tr.find('.as-cp-op[data-ii="'+ii+'"]').val()||null, score_ex:$tr.find('.as-cp-ex[data-ii="'+ii+'"]').val()||null};
+                if (deptHasMachineSetup(r.dept_id)) dd.score_ms = $tr.find('.as-cp-ms[data-ii="'+ii+'"]').val()||null;
+                return {id:it.id, item_no:it.item_no, data:dd};
             });
         }
     });
@@ -1235,15 +1257,20 @@ function saPrintHtml(r, tpl){
     return h;
 }
 function cpPrintHtml(r, tpl){
-    var h = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">員工職能鑑定表</div></div>';
+    var h = '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">職能鑑定表</div></div>';
     h += '<table class="hf-p-head"><tr><th>部門</th><td>'+esc(r.dept_name||'')+'</td><th>員工編號</th><td>'+esc(r.user_no||'')+'</td></tr>'
        + '<tr><th>姓名</th><td>'+esc(r.user_cname||'')+'</td><th>到職日</th><td>'+dispDate(r.onboard_date)+'</td></tr>'
        + '<tr><th>職務</th><td>'+esc(r.position_name||'')+'</td><th>主管</th><td>'+esc(r.supervisor_name||'')+'</td></tr>'
        + '<tr><th>首次登錄<br>日期</th><td>'+dispDate(r.business_date)+'</td><th>最新更新<br>日期</th><td>'+dispDate(r.cp_update_date||r.business_date)+'</td></tr></table>';
-    h += '<table class="hf-p-items"><thead><tr><th style="width:50px;">編號</th><th>'+(deptHasSkillAssess(r.dept_id)?'機台設定':'項目名稱')+'</th><th style="width:90px;">操作</th><th style="width:90px;">異常排除</th></tr></thead><tbody>';
+    var hasMs = deptHasMachineSetup(r.dept_id);
+    h += '<table class="hf-p-items"><thead><tr><th style="width:50px;">編號</th><th>項目名稱</th>'
+       + (hasMs ? '<th style="width:90px;">機台設定</th>' : '')
+       + '<th style="width:90px;">操作</th><th style="width:90px;">異常排除</th></tr></thead><tbody>';
     (r.items||[]).forEach(function(it,i){
         var d = it.data||{};
-        h += '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(d.skill_name||'').replace(/\n/g,'<br>')+'</td><td>'+(d.score_op||'')+'</td><td>'+(d.score_ex||'')+'</td></tr>';
+        h += '<tr><td>'+(i+1)+'</td><td class="t-left">'+esc(d.skill_name||'').replace(/\n/g,'<br>')+'</td>'
+           + (hasMs ? '<td>'+(d.score_ms||'')+'</td>' : '')
+           + '<td>'+(d.score_op||'')+'</td><td>'+(d.score_ex||'')+'</td></tr>';
     });
     h += '</tbody></table>';
     h += '<div class="hf-p-note">填寫說明：人員依技能項目其純熟度可分為： 1=略(大部分須人員指導)　2=熟(少部分須人員指導)　3=獨立作業　4=可教學。其鑑別方式，由主管依據教育訓練後評鑑方式依職能鑑定考核表確認。</div>';
