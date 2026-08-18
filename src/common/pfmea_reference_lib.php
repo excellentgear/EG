@@ -467,7 +467,7 @@ function pfmea_requirement_option_update_text(PDO $db, int $id, string $text): v
 
 function pfmea_ref_control_options(PDO $db): array {
     $rows = $db->query("SELECT id, option_type, option_text FROM pfmea_control_option WHERE is_active=1 ORDER BY option_type, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
-    $out = ['prevention'=>[], 'detection'=>[], 'action'=>[]];
+    $out = ['prevention'=>[], 'detection'=>[], 'action'=>[], 'classification'=>[]];
     foreach ($rows as $r) { $out[$r['option_type']][] = $r; }
     return $out;
 }
@@ -475,7 +475,9 @@ function pfmea_ref_control_options(PDO $db): array {
 /** option_type沿用同一張表同一套CRUD：prevention/detection(既有控制預防/控制偵測)、
  * action(2026-08-14使用者要求新增的建議措施樣板句庫) */
 function pfmea_ref_control_option_add(PDO $db, string $type, string $text, int $uid, string $uname): int {
-    $type = in_array($type, ['detection','action'], true) ? $type : 'prevention';
+    // classification（2026-08-18 使用者要求：分類也要像建議措施一樣有樣本可選，同時保留原本掛在
+    // 個別失效模式底下的綁定——兩者並存：樣板＝全站共用的常用值，綁定＝這一筆失效模式慣用哪幾個）
+    $type = in_array($type, ['detection','action','classification'], true) ? $type : 'prevention';
     $text = trim($text);
     $st = $db->prepare("SELECT id FROM pfmea_control_option WHERE option_type=? AND option_text=? LIMIT 1");
     $st->execute([$type, $text]);

@@ -352,6 +352,19 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
 </div></div>
 
 <!-- 建議措施樣板挑選（可複選，套用時自動加編號，2026-08-14使用者要求） -->
+<!-- 分類樣板挑選（2026-08-18 使用者要求：分類要跟建議措施一樣有樣本可選） -->
+<div class="pf-mask" id="classPickerMask" style="z-index:1200;"><div class="pf-modal">
+    <div class="m-head"><span>選擇分類樣板（可複選）</span><span class="m-close" onclick="closeMask('classPickerMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;">勾選後以「、」串接填入分類欄；已經有的值不會重複加。樣板在「參考資料設定」維護。</div>
+        <div id="classPickerList" style="max-height:320px;overflow-y:auto;"></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('classPickerMask')">取消</button>
+        <button class="b-ok" onclick="applyClassPicker()">套用</button>
+    </div>
+</div></div>
+
 <div class="pf-mask" id="actionPickerMask" style="z-index:1200;"><div class="pf-modal">
     <div class="m-head"><span>選擇建議措施樣板（可複選）</span><span class="m-close" onclick="closeMask('actionPickerMask')">✕</span></div>
     <div class="m-body">
@@ -564,6 +577,9 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">建議措施（樣板句庫，卡片內可多選組成整段建議措施）</b>
                 <div class="rs-list" id="rsActionList"></div>
                 <div class="pf-proc-box"><input type="text" id="rsActionNew" placeholder="新增建議措施句子"><button type="button" class="pf-row-btn" onclick="rsAddControl('action')">新增</button></div></div>
+            <div style="flex:1;"><b style="font-size:12px;color:#5b3a1e;">分類（樣板，卡片內可多選）</b>
+                <div class="rs-list" id="rsClassTplList"></div>
+                <div class="pf-proc-box"><input type="text" id="rsClassTplNew" placeholder="新增分類樣板（如 關鍵、重要）"><button type="button" class="pf-row-btn" onclick="rsAddControl('classification')">新增</button></div></div>
         </div>
         </div>
 
@@ -690,6 +706,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期／相關部門預設值自動帶入；來源只有純文字料號時會自動回查主檔綁定成正式料號，綁定後才開得了圖、客戶名稱才帶得出來），分析項目仍需逐份手動填寫。</li>
             <li><b>製程代號</b>：改可從全站製程主檔同步帶入（含大項分類），輸入時同時模糊搜尋代號/名稱/大項分類（多關鍵字皆需命中），顯示清單供點選。</li>
             <li><b>參考資料設定</b>：工具列同名按鈕（僅管理員可見），分三個頁籤：①<b>階層對應（一條龍）</b>——所有下拉選項的來源，由粗到細串成一條鑽取鏈：<b>製程 → 項目 → 功能 → 潛在失效模式 → 後果／分類／原因</b>，每一層點下去就往下鑽一層，該層清單可直接新增／刪除。頂端另有「從全站製程主檔同步」拉入公司所有製程（含大項分類，可整個大項一鍵批次開放），只有開放的製程會出現在分析表下拉。<b>「要求」這一層可以指定料號</b>：料號欄留空＝這一層的通用要求（所有料號共用），輸入料號＝只給該料號用的專屬要求（會蓋過通用值），且同一個組合底下<b>可以輸入多筆要求</b>，填表時下拉會全部列出讓您挑本次要用的。指定料號後還可以「把目前鑽到的這條路徑綁給此料號」或「一次綁多組」（選了製程就自動帶出該製程底下整套項目／功能供勾選，已綁過的會標示鎖住），以及設定該料號＋製程的<b>圖面要求</b>（列印表頭的規格描述）。②<b>整組樣板</b>——選製程後可新增/編輯/刪除整組樣板（不必再靠 xlsm 匯入）。③<b>要求總覽</b>——不分製程/項目/功能層級一次列出全部「要求」資料（含製作表單.xlsm匯入的舊資料），可搜尋/篩選料號綁定狀態、直接編輯文字內容、重新綁定料號、刪除，不必逐一點進每個製程才看得到。刪除只影響清單設定本身，不會動到已經填寫存檔的分析表資料。</li>
+            <li><b>分類樣板</b>：「分類」欄位標題旁「選樣板（可複選）」可開跳窗勾選預先建立好的常用分類（如關鍵／重要），勾選後以「、」串接填入，已有的值不重複加。樣板在「參考資料設定」維護。<b>樣板與綁定並存</b>：樣板是全站共用的常用值（從跳窗挑），綁定是「這一筆潛在失效模式慣用哪幾個分類」（出現在欄位下拉），兩邊都能用。</li>
             <li><b>建議措施樣板</b>：「建議措施」欄位標題旁「選樣板（可複選）」可開跳窗勾選預先在參考資料設定建立好的建議措施句庫，套用時自動接續編號（1. 2. 3.…）；手動輸入時只要目前這行是「數字.」開頭，按 Enter 換行會自動接下一個編號，不必自己算。</li>
             <li><b>基本資料欄位自動縮小字級</b>：項目/功能/要求/潛在失效模式/失效模式潛在後果/分類這幾欄是可挑選也可手動輸入的欄位，受限於瀏覽器限制無法真正多行換行，文字太長時會自動縮小字級（最小9px）以盡量完整顯示，欄位變短時字級會自動還原。</li>
             <li><b>檢視（唯讀）</b>：只有檢閱權限、無登錄權限的使用者，清單「操作」欄看到的是眼睛圖示「檢視」而非鉛筆「編輯」，點開版面跟列印版完全一樣（不會誤觸修改），並提供「評級對照表說明」「開圖」兩個按鈕方便對照查閱，不會觸發實際列印動作。</li>
@@ -807,7 +824,7 @@ function cardSummaryText(it){
 function itemCardHtml(it, idx, expanded){
     it = it || {};
     expanded = !!expanded;
-    function fld(field, label, type){
+    function fld(field, label, type, labelExtra){
         var v = it[field] != null ? it[field] : '';
         var dis = CAN_EDIT ? '' : ' disabled';
         var ctrl;
@@ -818,7 +835,7 @@ function itemCardHtml(it, idx, expanded){
             ctrl = '<input type="text" data-f="'+field+'" value="'+esc(v)+'" list="'+dlId+'"'+dis+'><datalist id="'+dlId+'" class="dl-'+type.substring(5)+'"></datalist>';
         }
         else ctrl = '<textarea data-f="'+field+'"'+dis+'>'+esc(v)+'</textarea>';
-        return '<div><label>'+label+'</label>'+ctrl+'</div>';
+        return '<div><label>'+label+(labelExtra||'')+'</label>'+ctrl+'</div>';
     }
     var rpn = it.rpn != null ? it.rpn : '';
     var newRpn = it.new_rpn != null ? it.new_rpn : '';
@@ -840,7 +857,9 @@ function itemCardHtml(it, idx, expanded){
         + '<button type="button" class="pf-row-btn" onclick="openTemplatePicker(this)" title="此製程的整組樣板列表"'+dis+'><i class="fa fa-list"></i> 整組列表</button>'
         + '</div></div>'
         + fld('process_desc','項目','list:item') + fld('function_desc','功能','list:function') + fld('requirement','要求','list:requirement')
-        + fld('failure_mode','潛在失效模式','list:failure_mode') + fld('failure_effect','失效模式潛在後果','list:failure_effect') + fld('classification','分類','list:classification')
+        + fld('failure_mode','潛在失效模式','list:failure_mode') + fld('failure_effect','失效模式潛在後果','list:failure_effect')
+        + fld('classification','分類','list:classification',
+              '<span class="pf-op" onclick="openClassPicker(this)" style="font-weight:normal;color:#b5762a;text-decoration:underline;cursor:pointer;margin-left:8px;"'+dis+'><i class="fa fa-list"></i> 選樣板（可複選）</span>')
         + '</div>'
         + '<div class="pf-card-grp-title">風險評估與現行設計管制（RPN 系統自動計算）</div>'
         + '<div class="pf-rating-quad">'
@@ -1295,6 +1314,30 @@ window.applyActionPicker = function(){
     var newLines = checked.map(function(t, i){ return (n+i)+'.'+t; });
     var combined = cur.trim() ? cur.replace(/\n+$/, '') + '\n' + newLines.join('\n') : newLines.join('\n');
     ACTION_PICKER_TARGET.val(combined).trigger('input');
+};
+/* 分類樣板挑選（2026-08-18 使用者要求：分類要跟建議措施一樣有樣本可選，但也要可以綁定）。
+   句庫沿用控制選項同一張表 option_type='classification'；跟「綁定」並存互不衝突——綁定值
+   （掛在該筆失效模式底下）會出現在欄位下拉，樣板值則從這個跳窗挑，兩邊都能用。
+   分類是短代號不需要編號，複選時以「、」串接，已經有的值不重複加。 */
+var CLASS_PICKER_TARGET = null;
+window.openClassPicker = function(el){
+    if (!CAN_EDIT) return;
+    CLASS_PICKER_TARGET = $(el).closest('.pf-card').find('[data-f="classification"]');
+    var opts = (CONTROL_OPTIONS.classification || []);
+    var html = opts.map(function(o){
+        return '<label class="pf-chk" style="display:block;margin-bottom:6px;"><input type="checkbox" value="'+esc(o.option_text)+'"> '+esc(o.option_text)+'</label>';
+    }).join('') || '<div class="rs-empty">尚無資料，請先到工具列「參考資料設定」新增分類樣板</div>';
+    $('#classPickerList').html(html);
+    openMask('classPickerMask');
+};
+window.applyClassPicker = function(){
+    var checked = $('#classPickerList input:checked').map(function(){ return $(this).val(); }).get();
+    closeMask('classPickerMask');
+    if (!checked.length || !CLASS_PICKER_TARGET) return;
+    var cur = (CLASS_PICKER_TARGET.val() || '').trim();
+    var have = cur ? cur.split(/[、,]/).map(function(t){ return t.trim(); }).filter(Boolean) : [];
+    checked.forEach(function(t){ if (have.indexOf(t) < 0) have.push(t); });
+    CLASS_PICKER_TARGET.val(have.join('、')).trigger('input');
 };
 // 手動輸入時Enter換行自動接續編號：偵測目前這行是否為「N.」開頭，是的話換行後自動補「N+1.」
 $(document).on('keydown', '#itemBody .f-action', function(e){
@@ -2023,10 +2066,11 @@ function rsLoadControlLists(){
         $('#rsPrevList').html((res.options.prevention||[]).map(function(o){ return rsRow('prevention', o.id, o.option_text, -1); }).join('') || '<div class="rs-empty">尚無資料</div>');
         $('#rsDetList').html((res.options.detection||[]).map(function(o){ return rsRow('detection', o.id, o.option_text, -1); }).join('') || '<div class="rs-empty">尚無資料</div>');
         $('#rsActionList').html((res.options.action||[]).map(function(o){ return rsRow('action', o.id, o.option_text, -1); }).join('') || '<div class="rs-empty">尚無資料</div>');
+        $('#rsClassTplList').html((res.options.classification||[]).map(function(o){ return rsRow('classification', o.id, o.option_text, -1); }).join('') || '<div class="rs-empty">尚無資料</div>');
     });
 }
 window.rsAddControl = function(type){
-    var $input = type==='prevention' ? $('#rsPrevNew') : (type==='detection' ? $('#rsDetNew') : $('#rsActionNew'));
+    var $input = {prevention:$('#rsPrevNew'), detection:$('#rsDetNew'), action:$('#rsActionNew'), classification:$('#rsClassTplNew')}[type];
     var text = $input.val().trim();
     if (!text) return;
     $.post(API, {action:'ref_control_option_add', option_type:type, option_text:text}, function(res){
@@ -2038,6 +2082,7 @@ function rsDeleteAction(scope){
     return {process:'ref_process_delete', item:'ref_item_option_delete', func:'ref_function_option_delete',
         fm:'ref_failure_mode_delete', req:'ref_requirement_option_delete',
         prevention:'ref_control_option_delete', detection:'ref_control_option_delete', action:'ref_control_option_delete',
+        classification:'ref_control_option_delete',
         link:'field_link_delete', bind:'part_binding_delete'}[scope];
 }
 function rsReloadForScope(scope){
