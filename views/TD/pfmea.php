@@ -1848,7 +1848,7 @@ $('#btnSuggest').on('click', function(){
         SUGGEST_ROWS.forEach(function(r, i){
             html += '<tr><td><input type="checkbox" class="suggest-ck" data-idx="'+i+'"></td>'
                 + '<td>'+esc(r.customer_name||'')+'</td>'
-                + '<td class="t-left">'+esc(r.part_no_text||'')+'</td>'
+                + '<td class="t-left">'+esc(r.part_no||r.part_no_text||'')+'</td>'
                 + '<td>'+esc(r.product_name||'')+'</td>'
                 + '<td>'+fmtDate(r.td_dev_eval_fill_date)+'</td></tr>';
         });

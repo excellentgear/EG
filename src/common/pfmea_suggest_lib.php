@@ -12,12 +12,18 @@ function pfmea_suggest_candidates(PDO $db): array {
     // 2026-08-18 使用者更正：原本抓的是 created_at（資料列被建進資料庫的時間戳），那是「什麼時候
     // 被登錄進系統」不是「表單上寫的日期」，補登歷史單據時兩者可能差很多。fill_date 為空的舊資料
     // 才退回 created_at，避免完全沒有日期可用。同一料號有多筆紀錄時取最早的那張最有參考價值。
-    $rows = $db->query("SELECT customer_name, part_d_id, part_no_text, MIN(product_name) AS product_name,
-                                MIN(COALESCE(fill_date, DATE(created_at))) AS td_dev_eval_fill_date
-                         FROM td_dev_eval WHERE is_deleted=0
-                           AND (part_d_id IS NOT NULL OR (part_no_text IS NOT NULL AND part_no_text<>''))
-                         GROUP BY customer_name, part_d_id, part_no_text
-                         ORDER BY customer_name, part_no_text")->fetchAll(PDO::FETCH_ASSOC);
+    // part_no：畫面顯示用的料號。已正式綁定料號的列 part_no_text 是 NULL（料號存在 part_d_id），
+    // 只讀 part_no_text 會整欄空白（2026-08-18 使用者回報「怎麼會有空白料號」），故 join 主檔取回。
+    $rows = $db->query("SELECT t.customer_name, t.part_d_id, t.part_no_text,
+                                COALESCE(ds.D_Setting_Id, t.part_no_text, '') AS part_no,
+                                MIN(t.product_name) AS product_name,
+                                MIN(COALESCE(t.fill_date, DATE(t.created_at))) AS td_dev_eval_fill_date
+                         FROM td_dev_eval t
+                         LEFT JOIN d_setting ds ON ds.d_id = t.part_d_id
+                         WHERE t.is_deleted=0
+                           AND (t.part_d_id IS NOT NULL OR (t.part_no_text IS NOT NULL AND t.part_no_text<>''))
+                         GROUP BY t.customer_name, t.part_d_id, t.part_no_text, ds.D_Setting_Id
+                         ORDER BY t.customer_name, part_no")->fetchAll(PDO::FETCH_ASSOC);
     if (!$rows) return [];
 
     $exist = $db->query("SELECT part_d_id, part_no_text FROM pfmea_doc WHERE is_deleted=0")->fetchAll(PDO::FETCH_ASSOC);
