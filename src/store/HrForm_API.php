@@ -108,6 +108,14 @@ case 'create': {
     jout(['id'=>$r['id']]);
 }
 
+/* 缺件偵測（畫面輸入日期後即時重算）：10職能鑑定表看該日期前後 11 個月內有沒有建過（一年一次評鑑），
+   09技能鑑定考核表看這個人有沒有任何一張。人員一律用該日期當時的組織。 */
+case 'missing_report': {
+    $formType = (string)($_GET['form_type'] ?? '');
+    if (!isset(HRF_FORM_TYPES[$formType]) || $formType === 'job_desc') jerr('不明的表單類型');
+    jout(hrf_missing_report($db, $formType, (string)($_GET['date'] ?? date('Y-m-d'))));
+}
+
 case 'batch_create': {
     hrf_need_csrf();
     if (!$perms['canCreate']) jerr('無建立權限', 403);

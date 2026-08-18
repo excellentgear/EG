@@ -25,6 +25,7 @@ require_once __DIR__ . '/org_role_lib.php';
 require_once __DIR__ . '/people_lib.php';
 require_once __DIR__ . '/confirm_password_lib.php';
 require_once __DIR__ . '/position_history_lib.php';
+require_once __DIR__ . '/date_fmt_lib.php';   // 日期顯示一律 YYYY.MM.DD（ai-rules/20）
 
 const HRF_FEATURES = [
     ['code' => 'hrf_view',           'group' => 'view', 'label' => '檢閱人資職務表單列表（沒勾也看得到跟自己有關的表單）'],
@@ -319,6 +320,111 @@ function hrf_user_no_display(PDO $db, $rawId): string { return hrf_user_no_prefi
  * 過去日期走職務調動紀錄回推（ai-rules/14），今天以後直接讀現況 user_department_position_map。
  * 回傳每列：department_id/dept_name/position_id/position_name/is_main，主職排前、其餘依職稱 sort_order。
  */
+/**
+ * 10職能鑑定表是**一年一次**評鑑（使用者明確要求，2026-08-18）：判斷「這個人的這個職務要不要再建一張」
+ * 一律看業務日期的前後 11 個月內有沒有既有表單——有＝這次不用建（提早/延後一個月做都算同一年度那次），
+ * 沒有＝缺件要建。11 個月而不是 12 個月，是為了讓「去年 12/24 做、今年 11/24 做」這種提早一個月的情況
+ * 仍判定成新的一年度（12 個月會把它當成同一次）。
+ */
+const HRF_CP_ANNUAL_MONTHS = 11;
+
+function hrf_cp_window(string $date): array {
+    $t = strtotime($date);
+    if ($t === false) $t = time();
+    return [date('Y-m-d', strtotime('-' . HRF_CP_ANNUAL_MONTHS . ' months', $t)),
+            date('Y-m-d', strtotime('+' . HRF_CP_ANNUAL_MONTHS . ' months', $t))];
+}
+
+/** 既有職能鑑定表索引：'user-dept-pos' => [['id'=>,'date'=>], ...]（日期新到舊） */
+function hrf_cp_existing_map(PDO $db): array {
+    hrf_ensure_schema($db);
+    $out = [];
+    $rows = $db->query("SELECT id, user_id, dept_id, position_id, business_date, status
+                        FROM hr_form_instance WHERE form_type='competency'
+                        ORDER BY business_date DESC, id DESC")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as $r) {
+        $out[(int)$r['user_id'] . '-' . (int)$r['dept_id'] . '-' . (int)$r['position_id']][] =
+            ['id'=>(int)$r['id'], 'date'=>(string)$r['business_date'], 'status'=>(string)$r['status']];
+    }
+    return $out;
+}
+
+/** 該職務在指定業務日期的前後 11 個月內是否已有表單；有就回傳那一筆，沒有回傳 null。 */
+function hrf_cp_hit_in_window(array $existingMap, int $uid, ?int $deptId, ?int $posId, string $date): ?array {
+    [$from, $to] = hrf_cp_window($date);
+    foreach ($existingMap[$uid . '-' . (int)$deptId . '-' . (int)$posId] ?? [] as $e) {
+        if ($e['date'] >= $from && $e['date'] <= $to) return $e;
+    }
+    return null;
+}
+
+/**
+ * 缺件偵測（指定業務日期，畫面輸入日期後即時重算）。
+ * 10職能鑑定表：逐「員工×職務」比對，前後 11 個月內沒有表單就算缺件（附上「上次是哪一張、哪一天」）。
+ * 09技能鑑定考核表：不是年度制，維持原本判定＝這個人完全沒有任何一張就算缺件。
+ * 人員一律用該日期當時的組織（含當時在職、現已離職者），比照建立表單的挑選器。
+ */
+function hrf_missing_report(PDO $db, string $formType, string $date): array {
+    hrf_ensure_schema($db);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = date('Y-m-d');
+    $col = $formType === 'skill_assess' ? 'produce_skill_assess' : 'produce_competency';
+    $eligible = [];
+    foreach (hrf_dept_type_setting_list($db) as $d) if (!empty($d[$col])) $eligible[(int)$d['department_id']] = true;
+
+    $people = hrf_people_asof($db, $date);
+    $rows = [];
+    if ($formType === 'competency') {
+        $map = hrf_cp_existing_map($db);
+        [$from, $to] = hrf_cp_window($date);
+        $done = [];
+        foreach ($people as $p) {
+            foreach (($p['posts'] ?? []) as $po) {
+                $did = (int)($po['department_id'] ?? 0);
+                $pid = (int)($po['position_id'] ?? 0);
+                if (!isset($eligible[$did])) continue;
+                if ($hit = hrf_cp_hit_in_window($map, (int)$p['id'], $did, $pid, $date)) {
+                    // 已在年度視窗內建立過：建立表單挑選器要據此標示灰底不可再勾，所以一併回傳
+                    $done[] = ['pick_value'=>(int)$p['id'] . ':' . $did . ':' . $pid,
+                               'instance_id'=>$hit['id'], 'business_date'=>$hit['date']];
+                    continue;
+                }
+                $all = $map[(int)$p['id'] . '-' . $did . '-' . $pid] ?? [];
+                $rows[] = [
+                    'user_id'=>(int)$p['id'], 'user_cname'=>$p['user_cname'],
+                    'dept_id'=>$did, 'dept_name'=>$po['dept_name'],
+                    'position_id'=>$pid, 'position_name'=>$po['position_name'],
+                    'is_main'=>(int)($po['is_main'] ?? 0),
+                    'resigned'=>(int)($p['resigned'] ?? 0), 'leave_note'=>(string)($p['leave_note'] ?? ''),
+                    'last_id'=>$all ? $all[0]['id'] : null, 'last_date'=>$all ? $all[0]['date'] : null,
+                    'pick_value'=>(int)$p['id'] . ':' . $did . ':' . $pid,
+                ];
+            }
+        }
+        usort($rows, fn($a, $b) => [$a['dept_name'], $a['position_name'], $a['user_cname']]
+                                <=> [$b['dept_name'], $b['position_name'], $b['user_cname']]);
+        return ['date'=>$date, 'window_from'=>$from, 'window_to'=>$to, 'annual'=>1, 'rows'=>$rows, 'done'=>$done];
+    }
+
+    $have = [];
+    foreach ($db->query("SELECT DISTINCT user_id FROM hr_form_instance WHERE form_type='skill_assess'")->fetchAll(PDO::FETCH_COLUMN) as $u)
+        $have[(int)$u] = true;
+    foreach ($people as $p) {
+        $inElig = false;
+        foreach (($p['dept_ids'] ?? []) as $d) if (isset($eligible[(int)$d])) { $inElig = true; break; }
+        if (!$inElig || isset($have[(int)$p['id']])) continue;
+        $rows[] = [
+            'user_id'=>(int)$p['id'], 'user_cname'=>$p['user_cname'],
+            'dept_id'=>(int)($p['dept_id'] ?? 0), 'dept_name'=>$p['dept_name'],
+            'position_id'=>(int)($p['position_id'] ?? 0), 'position_name'=>$p['position_name'],
+            'is_main'=>1, 'resigned'=>(int)($p['resigned'] ?? 0), 'leave_note'=>(string)($p['leave_note'] ?? ''),
+            'last_id'=>null, 'last_date'=>null, 'pick_value'=>(int)$p['id'],
+        ];
+    }
+    usort($rows, fn($a, $b) => [$a['dept_name'], $a['position_name'], $a['user_cname']]
+                            <=> [$b['dept_name'], $b['position_name'], $b['user_cname']]);
+    return ['date'=>$date, 'window_from'=>null, 'window_to'=>null, 'annual'=>0, 'rows'=>$rows];
+}
+
 function hrf_user_posts(PDO $db, int $uid, ?string $asOfDate = null): array {
     $asOf = ($asOfDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', $asOfDate) && $asOfDate < date('Y-m-d')) ? $asOfDate : null;
     $rows = $asOf ? eg_position_snapshot_at($db, $uid, $asOf) : eg_position_snapshot_now($db, $uid);
@@ -1292,11 +1398,18 @@ function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int
         }
     }
     if ($formType === 'competency') {
-        // 部門與職稱不變只需沿用既有那份（可檢視/列印/更新），不開放同員工同部門同職位有兩份（使用者明確要求）
-        $dup = $db->prepare("SELECT id FROM hr_form_instance WHERE form_type='competency' AND user_id=? AND dept_id<=>? AND position_id<=>? LIMIT 1");
-        $dup->execute([$targetUid, $snap['dept_id'], $snap['position_id']]);
-        if ($existingId = $dup->fetchColumn()) {
-            return ['ok'=>false, 'duplicate'=>true, 'existing_id'=>(int)$existingId, 'msg'=>$snap['user_cname'].'（'.($snap['dept_name']?:'').'/'.($snap['position_name']?:'').'）部門職稱未變更，已有既存表單可直接檢視/更新，不重複建立'];
+        // 一年一次評鑑（2026-08-18 使用者明確要求）：同員工同部門同職位，只有在**業務日期前後 11 個月內**
+        // 已有表單時才算重複不再建立；超過這個範圍＝新的一年度，要建新的一張（原本是不分日期只准一張，
+        // 那樣隔年就永遠建不出來）。
+        [$wFrom, $wTo] = hrf_cp_window($bizDate);
+        $dup = $db->prepare("SELECT id, business_date FROM hr_form_instance WHERE form_type='competency'
+                             AND user_id=? AND dept_id<=>? AND position_id<=>? AND business_date BETWEEN ? AND ?
+                             ORDER BY business_date DESC, id DESC LIMIT 1");
+        $dup->execute([$targetUid, $snap['dept_id'], $snap['position_id'], $wFrom, $wTo]);
+        if ($ex = $dup->fetch(PDO::FETCH_ASSOC)) {
+            return ['ok'=>false, 'duplicate'=>true, 'existing_id'=>(int)$ex['id'],
+                    'msg'=>$snap['user_cname'].'（'.($snap['dept_name']?:'').'/'.($snap['position_name']?:'').'）'
+                          .eg_fmt_date($ex['business_date']).' 已建立過（前後 '.HRF_CP_ANNUAL_MONTHS.' 個月內視為同一年度那次），不重複建立'];
         }
     }
     $needSign = in_array($formType, ['skill_assess', 'competency'], true);

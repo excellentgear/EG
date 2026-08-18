@@ -235,6 +235,26 @@ $perms = hrf_perms($db, $hrfUser);
 </div></div>
 
 <!-- 超管自動簽核 modal -->
+<div class="hf-mask" id="missingMask"><div class="hf-modal">
+    <div class="m-head"><span id="missingTitle">缺件提示</span><span class="m-close" onclick="closeMask('missingMask')">✕</span></div>
+    <div class="m-body">
+        <label>業務日期（改日期會立刻重新偵測）</label>
+        <input type="date" id="missingDate" max="9999-12-31" style="max-width:200px;" onchange="hfMissingReload()">
+        <p id="missingSummary" style="font-size:12.5px;color:#8a6d45;margin:8px 0;"></p>
+        <div style="margin-bottom:4px;">
+            <button type="button" class="hf-btn-sm" onclick="hfMissingCkAll(true)">全選</button>
+            <button type="button" class="hf-btn-sm" onclick="hfMissingCkAll(false)">取消全選</button>
+        </div>
+        <div class="hf-table-wrap" style="max-height:300px;overflow-y:auto;">
+        <table class="hf-tbl">
+            <thead><tr><th style="width:40px;"></th><th style="width:120px;">部門</th><th>職務／姓名</th><th style="width:190px;">狀況</th></tr></thead>
+            <tbody id="missingBody"></tbody>
+        </table>
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('missingMask')">關閉</button><button class="b-ok" onclick="hfMissingToCreate()">建立勾選的缺件</button></div>
+</div></div>
+
 <div class="hf-mask" id="autoSignMask"><div class="hf-modal">
     <div class="m-head"><span>超級管理員自動簽核</span><span class="m-close" onclick="closeMask('autoSignMask')">✕</span></div>
     <div class="m-body">
@@ -271,7 +291,7 @@ $perms = hrf_perms($db, $hrfUser);
     <div class="m-head"><span>使用說明 — 人資職務表單</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
         <h4>功能說明</h4>
-三張固定表單：<b>職務說明書</b>（以部門×職位為主，不綁單一員工——有人在職的部門×職位組合都需要一份，含兼任職位，內容依職位範本帶入，不需簽核，僅留記錄）、<b>專業技能鑑定考核表</b>（每位員工「每個機型」一份，固定不重複建立，總經理／課長各自評分，需確認＋核准）、<b>職能鑑定表</b>（<b>一個人一種職務一份</b>——兼任兩種職務的人兩種職務各一份；同一個人同一個部門×職位只會有一份，部門/職稱沒變就沿用既有那份不重複建立，職能項目依該職務比對到的職位範本帶入，需確認＋核准）。三張表單各自獨立綁定 AS 文件編號。
+三張固定表單：<b>職務說明書</b>（以部門×職位為主，不綁單一員工——有人在職的部門×職位組合都需要一份，含兼任職位，內容依職位範本帶入，不需簽核，僅留記錄）、<b>專業技能鑑定考核表</b>（每位員工「每個機型」一份，固定不重複建立，總經理／課長各自評分，需確認＋核准）、<b>職能鑑定表</b>（<b>一個人一種職務一份、一年一次評鑑</b>——兼任兩種職務的人兩種職務各一份；同一個部門×職位在<b>業務日期前後 11 個月內</b>已建立過就視為同一年度那次、不重複建立，超過就是新的一年度可以建新的一張，職能項目依該職務比對到的職位範本帶入，需確認＋核准）。三張表單各自獨立綁定 AS 文件編號。
         <h4>操作步驟</h4>
         <b>①建立表單</b>：職務說明書勾選一組或多組「部門×職位」＋指定日期即可建立（灰底＝已建立過或全站最高決策者不需要）；技能鑑定表／職能鑑定表<b>先填日期、再勾選對象</b>（勾 1 筆＝單筆建立，勾多筆＝批次建立；點部門標題可整組全選/取消，有下篩選時只會勾到目前看得到的列）——技能鑑定表勾的是<b>人</b>（一人一機型一張，職務取主要職務）；<b>職能鑑定表勾的是「員工×職務」</b>，兼任兩種職務的人會列成兩列可各自勾選、各建一張，清單上方另有<b>職務篩選下拉</b>可只看某個職務（選項依目前清單實際出現的職務產生），可與關鍵字並用；只會列出「該部門有開職能鑑定表」的職務——<b>員工清單會依填入的日期自動改為「該日期當時」的組織</b>：當時所屬部門/職稱（依人事的職務調動紀錄回推，沒有異動紀錄的人用現況），且<b>當時在職、現在已離職的人也會列出並標示「已離職」</b>，方便補登舊表單；日期改一次清單就重抓一次，已勾選的人會保留。建立出來的表單存的部門/職稱/直屬主管也一律是該日期當時的狀態，不是今天的；系統會依比對到的部門×職位「職位範本」自動帶入內容，找不到範本會在建立結果顯示錯誤，需請管理員先到「範本管理」設定。專業技能鑑定考核表另需選機型（預設依職位範本的適用機型清單自動展開成多筆，也可手動指定機型套用到所有選取員工）。<br>
         <b>②填寫／評分</b>：職務說明書內容欄可直接編輯存檔；技能鑑定表由課長／總經理各自在「確認」「核准」時填寫自己那欄分數；職能鑑定表的評分由確認人（直屬主管）填寫，評分欄依部門而定：有在「人資職務表單設定→部門表單資格」勾選<b>職能鑑定表含「機台設定」評分欄</b>的部門＝<b>機台設定／操作／異常排除</b>三欄，其餘部門＝<b>操作／異常排除</b>兩欄；不論哪一種，最左側固定都是<b>編號＋項目名稱</b>。分數一律 1~4，可用表格下方的「一鍵套用」把同一個分數套到整欄。若員工本身職等已無中間層主管可考核（其直屬主管解析結果與總經理相同），課長考核欄位為 NA，不可填寫。<br>
@@ -281,7 +301,8 @@ $perms = hrf_perms($db, $hrfUser);
         <b>⑥超級管理員自動簽核</b>：僅 id=1 可用，勾選表單後可先逐筆調整分數（或用「一鍵套用固定分數」快速帶入再個別修改），輸入操作確認密碼＋指定簽核日期，一次補齊尚未完成的確認/核准關卡，用於補登舊紙本資料。<br>
         <b>⑦超級管理員批次刪除</b>：僅 id=1 可用，於清單勾選（表頭勾選框可整頁全選）後按「超管批次刪除」，跳窗會列出即將刪除的表單供核對，輸入操作確認密碼即可一次刪除；<b>連同表單內容、簽核紀錄與相關通知一併移除且無法復原</b>，已完成簽核的表單也會被刪除，補登錯誤要重做時用。
         <h4>重要行為</h4>
-        ・「缺件提示」對職能鑑定表也是逐職務比對——兼任的第二個職務還沒建的話一樣算缺件。<br>
+        <b>⑤缺件提示</b>：點工具列的「缺件提示」會開跳窗，<b>輸入業務日期即時偵測</b>（改日期就重算）——職能鑑定表是一年一次，所以看的是<b>該日期前後 11 個月內有沒有建過</b>，逐「員工×職務」比對（兼任的第二個職務還沒建一樣算缺件），每列會標示是「從未建立」還是「上次某年某月、已超過 11 個月」；技能鑑定考核表不是年度制，維持「完全沒有任何一張」才算缺件。勾選後按「建立勾選的缺件」會帶著同一個日期開建立表單跳窗並自動勾好。建立跳窗本身也會依日期把<b>已在 11 個月內建立過的列灰底標示「已建立 日期」不可再勾</b>，沒灰的就是這個日期還沒建的。<br>
+        
         ・部門是否產生技能鑑定表／職能鑑定表、以及該部門的職能鑑定表要不要多一欄「機台設定」評分，都由管理員在「範本管理→部門表單資格」逐部門勾選（可多部門），職務說明書全員適用。<br>
         ・機型選項為管理員從既有機台主檔（依機型去重，同機型多台機台編號只算一個考核對象）與量測儀器校驗的量具主檔勾選建立的白名單，不是全部主檔都能選。<br>
         ・確認人固定為該員工直屬主管、核准人固定為全站最高決策者（多數為總經理），無法個別調整。
@@ -539,9 +560,13 @@ function hfPeoplePickerHtml(people, byPost){
             var lv = p.on_leave ? ' <span class="leave-tag">['+esc(p.leave_note)+']</span>' : '';
             if (p.resigned) lv += ' <span class="leave-tag">['+esc(p.resign_note||'已離職')+']</span>';
             var ct = !row.isPrimary ? ' <span class="concur-tag">(兼)</span>' : '';
-            html += '<label data-dept="'+did+'" data-pos="'+esc(posName)+'" data-hay="'+esc((g.name||'')+' '+posName+' '+p.user_cname).toLowerCase()+'">'
-                  + '<input type="checkbox" class="ppl-ck" value="'+val+'" onchange="hfPplSync(this)"> '
-                  + esc(posName) + ' / ' + esc(p.user_cname) + ct + lv + '</label>';
+            // 職能鑑定表一年一次：這個業務日期前後 11 個月內已建立過的，灰底不可再勾並標出上次日期，
+            // 剩下沒灰的就是「這個日期還沒建」的人（2026-08-18 使用者要求）
+            var doneAt = byPost ? CP_DONE_MAP[val] : null;
+            var doneTag = doneAt ? ' <span class="na-tag">(已建立 '+dispDate(doneAt)+')</span>' : '';
+            html += '<label data-dept="'+did+'" data-pos="'+esc(posName)+'" data-done="'+(doneAt?1:0)+'" data-hay="'+esc((g.name||'')+' '+posName+' '+p.user_cname).toLowerCase()+'"'+(doneAt?' style="opacity:.55;"':'')+'>'
+                  + '<input type="checkbox" class="ppl-ck" value="'+val+'"'+(doneAt?' disabled':'')+' onchange="hfPplSync(this)"> '
+                  + esc(posName) + ' / ' + esc(p.user_cname) + ct + lv + doneTag + '</label>';
         });
     });
     return html || '<span style="color:#8a6d45;">目前沒有符合資格的員工（請確認部門表單資格設定）</span>';
@@ -568,7 +593,7 @@ function hfPplSync(box){
 function hfDeptGroupToggle(hd){
     var did = $(hd).data('dept');
     // 只作用於「目前看得到」的列：有下關鍵字/職務篩選時，全選不該連被篩掉的人一起勾（會勾到看不到的東西）
-    var $boxes = $('.ppl-ck').filter(function(){
+    var $boxes = $('.ppl-ck:not(:disabled)').filter(function(){
         var $l = $(this).closest('label');
         return $l.data('dept') == did && $l.is(':visible');
     });
@@ -624,6 +649,8 @@ function hfDeptPosGroupToggle(hd){
    那一天的組織——當時在生產2廠、現在調到別廠的人要出現在生產2廠底下，當時在職、現在已離職的人也要挑得到。
    回推邏輯在後端 hrf_people_asof()（走 user_position_history，ai-rules/14），這裡只負責重畫與保留已勾選的人。 */
 var ASOF_DEPT_NAMES = {};
+/** pick_value('員工:部門:職位') => 該業務日期年度視窗內既有表單的日期；用來把已建立的列標成灰底不可勾。 */
+var CP_DONE_MAP = {};
 function hfLoadCreatePeople(){
     if (CREATE_TYPE === 'job_desc') return;
     var ft = CREATE_TYPE;
@@ -632,6 +659,17 @@ function hfLoadCreatePeople(){
     $('#createPeopleList .ppl-ck:checked').each(function(){ checked[this.value] = true; });
     var kw = $('#createPeopleBlock .flt').val() || '';
     $('#createPeopleList').html('<span style="color:#8a6d45;">載入中…</span>');
+    // 職能鑑定表：先問後端「這個日期的年度視窗內誰已經建過」，再畫清單（沒建過的才勾得動）
+    var doneReq = ft === 'competency'
+        ? $.getJSON(API, {action:'missing_report', form_type:ft, date:bizDate})
+        : $.Deferred().resolve(null).promise();
+    doneReq.always(function(dres){
+        CP_DONE_MAP = {};
+        if (dres && dres.ok) (dres.done||[]).forEach(function(d){ CP_DONE_MAP[d.pick_value] = d.business_date; });
+        hfRenderCreatePeople(ft, bizDate, checked, kw);
+    });
+}
+function hfRenderCreatePeople(ft, bizDate, checked, kw){
     $.getJSON(API, {action:'people_asof', date:bizDate}, function(res){
         if (CREATE_TYPE !== ft) return;                       // 期間使用者已切換表單類型，這次結果作廢
         if (!res.ok){ $('#createPeopleList').html('<span style="color:#DD5138;">'+esc(res.error||'人員載入失敗')+'</span>'); return; }
@@ -653,8 +691,10 @@ function hfLoadCreatePeople(){
         $('#createPeopleList').html(hfPeoplePickerHtml(people, byPost));
         $('#createPeopleList .ppl-ck').each(function(){ if (checked[this.value]) this.checked = true; });
         $('#createPosFilterWrap').toggle(byPost);
+        var doneCnt = Object.keys(CP_DONE_MAP).length;
         $('#createPeopleLabel').text(byPost
-            ? '選擇「員工×職務」（職能鑑定表是一個人一種職務一張；兼任兩種職務的人會出現兩列，可各自勾選各建一張。點部門標題可整組全選/取消）'
+            ? ('選擇「員工×職務」（職能鑑定表是一個人一種職務一張、一年一次評鑑：此日期前後 11 個月內已建立過的會灰底標示「已建立」不可再勾'
+               + (doneCnt ? ('，目前有 '+doneCnt+' 筆已建立') : '') + '。兼任兩種職務的人會出現兩列，可各自勾選各建一張；點部門標題可整組全選/取消）')
             : '選擇員工（可複選；選 1 人＝單人建立，選多人＝批次建立；點部門標題可整組全選/取消，兼任職務的人會同時列在各自部門底下）');
         if (byPost) hfBuildPosFilter(); else $('#createPosFilter').val('');
         if (kw || byPost) hfFilterPeople($('#createPeopleBlock .flt')[0]);
@@ -765,42 +805,73 @@ function hfSubmitCreate(){
     });
 }
 
-/** 缺件提示：找出符合部門資格、但目前完全沒有任何該類表單的員工（09/10 專用；01有各自的部門×職位灰底提示不需要這支）。 */
-function hfMissingReport(ft){
-    var col = ft === 'skill_assess' ? 'produce_skill_assess' : 'produce_competency';
-    var eligDeptIds = (META.dept_type_settings||[]).filter(function(d){ return !!d[col]; }).map(function(d){ return d.department_id; });
-    var people = (META.people||[]).filter(function(p){ return (p.dept_ids||[]).some(function(d){ return eligDeptIds.indexOf(d) >= 0; }); });
-    var have = {};
-    (LISTS[ft]||[]).forEach(function(r){
-        if (ft === 'competency') have[r.user_id+'-'+r.dept_id+'-'+r.position_id] = true;
-        else have[r.user_id] = true;
-    });
-    if (ft !== 'competency') return people.filter(function(p){ return !have[p.id]; });
-    // 職能鑑定表一人一職務一張：缺件要逐職務比對（兼任第二個職務沒建也算缺件）
-    var out = [];
-    people.forEach(function(p){
-        var posts = (p.posts && p.posts.length) ? p.posts
-                  : [{department_id:p.dept_id, position_id:p.position_id, position_name:p.position_name, is_main:1}];
-        posts.forEach(function(po){
-            if (eligDeptIds.indexOf(po.department_id) < 0) return;
-            if (have[p.id+'-'+po.department_id+'-'+po.position_id]) return;
-            out.push({id:p.id, user_cname:p.user_cname, dept_name:po.dept_name || hfDeptGroupName(po.department_id),
-                      position_name:po.position_name, dept_id:po.department_id, position_id:po.position_id,
-                      pick_value:p.id+':'+(po.department_id||0)+':'+(po.position_id||0)});
-        });
-    });
-    return out;
-}
+/* 缺件提示（09/10 專用；01 有各自的部門×職位灰底提示不需要這支）。
+   一律由後端 missing_report 依「輸入的業務日期」即時算：10職能鑑定表是一年一次評鑑，所以看的是
+   **該日期前後 11 個月內有沒有建過**（逐員工×職務比對，超過就算缺件並附上上次日期）；09技能鑑定考核表
+   不是年度制，維持「這個人完全沒有任何一張」才算缺件。人員用該日期當時的組織（含當時在職現已離職者）。
+   2026-08-18 使用者要求「輸入日期後自動檢測缺件」。 */
+var MISSING_TYPE = null, MISSING_ROWS = [];
 function openMissingModal(ft){
-    var missing = hfMissingReport(ft);
-    if (!missing.length){ alert('未偵測到缺件，符合資格的員工目前都已建立過「'+FORM_LABEL[ft]+'」。'); return; }
-    var names = missing.map(function(p){ return esc(p.dept_name)+'／'+esc(p.position_name)+'／'+esc(p.user_cname); });
-    if (!confirm('偵測到 '+missing.length+' 位員工尚未建立「'+FORM_LABEL[ft]+'」：\n'+names.join('\n')+'\n\n是否開啟建立表單視窗並預先勾選這些人？')) return;
-    openCreateModal(ft);
-    setTimeout(function(){ missing.forEach(function(p){
-        var $ck = $('.ppl-ck[value="'+(p.pick_value || p.id)+'"]').prop('checked', true);
-        if ($ck[0]) hfPplSync($ck[0]);
-    }); }, 30);
+    MISSING_TYPE = ft;
+    MISSING_ROWS = [];
+    $('#missingTitle').text('缺件提示 — ' + FORM_LABEL[ft]);
+    $('#missingDate').val(META.today);
+    $('#missingBody').html('<tr><td colspan="4" style="text-align:center;color:#8a6d45;">載入中…</td></tr>');
+    $('#missingSummary').empty();
+    openMask('missingMask');
+    hfMissingReload();
+}
+function hfMissingReload(){
+    var ft = MISSING_TYPE;
+    var date = $('#missingDate').val() || META.today;
+    $('#missingBody').html('<tr><td colspan="4" style="text-align:center;color:#8a6d45;">偵測中…</td></tr>');
+    $.getJSON(API, {action:'missing_report', form_type:ft, date:date}, function(res){
+        if (MISSING_TYPE !== ft) return;                       // 期間已切換表單類型，這次結果作廢
+        if (!res.ok){ $('#missingBody').html('<tr><td colspan="4" style="color:#DD5138;">'+esc(res.error||'偵測失敗')+'</td></tr>'); return; }
+        MISSING_ROWS = res.rows || [];
+        $('#missingSummary').html(Number(res.annual)
+            ? ('依業務日期 <b>'+dispDate(res.date)+'</b> 偵測：職能鑑定表是<b>一年一次</b>評鑑，'
+               + '前後 11 個月內（'+dispDate(res.window_from)+' ～ '+dispDate(res.window_to)+'）已建立過的就不算缺件。'
+               + '目前偵測到 <b>'+MISSING_ROWS.length+'</b> 筆「員工×職務」尚未建立。')
+            : ('依業務日期 <b>'+dispDate(res.date)+'</b> 偵測：技能鑑定考核表不是年度制，'
+               + '完全沒有任何一張的人才算缺件，目前 <b>'+MISSING_ROWS.length+'</b> 位。'));
+        if (!MISSING_ROWS.length){
+            $('#missingBody').html('<tr><td colspan="4" style="text-align:center;color:#3f9142;">未偵測到缺件，符合資格的人員在這個日期都已建立過。</td></tr>');
+            return;
+        }
+        $('#missingBody').html(MISSING_ROWS.map(function(r, i){
+            var tags = (r.is_main ? '' : ' <span class="concur-tag">(兼)</span>')
+                     + (Number(r.resigned) ? ' <span class="leave-tag">[已離職]</span>' : '')
+                     + (r.leave_note ? ' <span class="leave-tag">['+esc(r.leave_note)+']</span>' : '');
+            var last = r.last_date
+                     ? ('上次 ' + dispDate(r.last_date) + '（已超過 11 個月）')
+                     : '<span style="color:#DD5138;">從未建立</span>';
+            return '<tr><td style="text-align:center;"><input type="checkbox" class="ms-ck" value="'+esc(r.pick_value)+'" checked></td>'
+                 + '<td>'+esc(r.dept_name||'')+'</td><td>'+esc(r.position_name||'')+' / '+esc(r.user_cname||'')+tags+'</td>'
+                 + '<td>'+last+'</td></tr>';
+        }).join(''));
+    });
+}
+function hfMissingCkAll(check){ $('#missingBody .ms-ck').prop('checked', check); }
+/** 帶著勾選的缺件與同一個日期開建立表單跳窗，日期一致才不會挑到不同日期的組織/年度視窗。 */
+function hfMissingToCreate(){
+    var picks = $('#missingBody .ms-ck:checked').map(function(){ return String($(this).val()); }).get();
+    if (!picks.length){ alert('請至少勾選一筆要建立的缺件'); return; }
+    var date = $('#missingDate').val() || META.today;
+    closeMask('missingMask');
+    openCreateModal(MISSING_TYPE);
+    $('#createBizDate').val(date);
+    hfLoadCreatePeople();
+    var tries = 0;
+    (function apply(){
+        var hit = 0;
+        picks.forEach(function(v){
+            var $ck = $('#createPeopleList .ppl-ck[value="'+v+'"]');
+            if ($ck.length && !$ck.is(':disabled')) { $ck.prop('checked', true); hfPplSync($ck[0]); hit++; }
+        });
+        // 人員清單是 AJAX 回來才畫的，畫好之前勾不到 → 重試幾次再放棄（不無限等）
+        if (!hit && ++tries < 20) setTimeout(apply, 100);
+    })();
 }
 </script>
 <script>
