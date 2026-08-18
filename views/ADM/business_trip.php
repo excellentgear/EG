@@ -480,8 +480,7 @@ function renderList(){
            + '<td>'+esc(r.user_name||'')+'</td><td>'+esc(r.dept_name||'')+'</td><td>'+esc(r.position_name||'')+'</td>'
            + '<td>'+esc(r.period||'')+'</td><td class="l">'+esc(r.location||'')+'</td>'
            + '<td class="l" title="'+esc(r.reason||'')+'">'+esc((r.reason||'').substr(0,20))+((r.reason||'').length>20?'…':'')+'</td>'
-           + '<td><span class="st st-'+esc(r.status)+'">'+esc(STATUS_LABEL[r.status]||r.status)+'</span>'
-           + (+r.is_auto ? '<div style="font-size:11px;color:#8a6d45;">自動核准</div>' : '')+'</td>'
+           + '<td><span class="st st-'+esc(r.status)+'">'+esc(STATUS_LABEL[r.status]||r.status)+'</span></td>'
            + '<td>'+esc(r.approver_name||'')+(+r.is_delegated?'<div style="font-size:11px;color:#8a6d45;">代理簽核</div>':'')+'</td>'
            + '<td>'+ops+'</td></tr>';
     });
