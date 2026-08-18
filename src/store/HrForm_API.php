@@ -84,6 +84,13 @@ case 'get': {
     jout(['instance'=>$r, 'as_doc_no'=>hrf_asdoc_no_display((string)$r['form_type'], $db, (string)($r['business_date'] ?? ''))]);
 }
 
+/* 建立表單挑選人員用的「該業務日期當時」員工清單（部門/職稱依 user_position_history 回推，含當時在職、
+   現在已離職者；日期＝今天則等同 meta 的 people）。2026-08-18 使用者明確要求。 */
+case 'people_asof': {
+    $date = trim((string)($_GET['date'] ?? ''));
+    jout(['people'=>hrf_people_asof($db, $date), 'date'=>$date, 'dept_names'=>hrf_dept_name_map($db)]);
+}
+
 case 'create': {
     hrf_need_csrf();
     if (!$perms['canCreate']) jerr('無建立權限', 403);

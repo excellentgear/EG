@@ -167,6 +167,9 @@ $perms = hrf_perms($db, $hrfUser);
 <div class="hf-mask" id="createMask"><div class="hf-modal" style="max-width:640px;">
     <div class="m-head"><span id="createTitle">建立表單</span><span class="m-close" onclick="closeMask('createMask')">✕</span></div>
     <div class="m-body">
+        <label>日期（可自行指定以利補登舊資料）</label>
+        <input type="date" id="createBizDate" max="9999-12-31">
+        <div id="createAsofHint" style="display:none;font-size:12px;color:#8a6d45;margin:2px 0 6px;"></div>
         <div id="createDeptPosBlock" style="display:none;">
             <label>選擇部門×職位（可複選；01職務說明書以部門×職位為主，不綁單一員工，有人在職的組合都需要一份，含兼任職位；灰底＝已建立過或全站最高決策者不需要）</label>
             <div class="hf-people-pick">
@@ -181,8 +184,6 @@ $perms = hrf_perms($db, $hrfUser);
             <div class="hf-people-list" id="createPeopleList"></div>
         </div>
         </div>
-        <label>日期（可自行指定以利補登舊資料）</label>
-        <input type="date" id="createBizDate" max="9999-12-31">
         <div id="createMachineBlock" style="display:none;">
             <label>機型來源</label>
             <div class="hf-radio-row">
@@ -248,7 +249,7 @@ $perms = hrf_perms($db, $hrfUser);
         <h4>功能說明</h4>
 三張固定表單：<b>職務說明書</b>（以部門×職位為主，不綁單一員工——有人在職的部門×職位組合都需要一份，含兼任職位，內容依職位範本帶入，不需簽核，僅留記錄）、<b>專業技能鑑定考核表</b>（每位員工「每個機型」一份，固定不重複建立，總經理／課長各自評分，需確認＋核准）、<b>員工職能鑑定表</b>（每位員工一份，部門/職稱不變只需沿用既有那份不重複建立，職能項目依職位範本帶入，需確認＋核准）。三張表單各自獨立綁定 AS 文件編號。
         <h4>操作步驟</h4>
-        <b>①建立表單</b>：職務說明書勾選一組或多組「部門×職位」＋指定日期即可建立（灰底＝已建立過或全站最高決策者不需要）；技能鑑定表／職能鑑定表勾選一位或多位員工＋指定日期（勾 1 人＝單人建立，勾多人＝批次建立；點部門標題可整組全選/取消）；系統會依比對到的部門×職位「職位範本」自動帶入內容，找不到範本會在建立結果顯示錯誤，需請管理員先到「範本管理」設定。專業技能鑑定考核表另需選機型（預設依職位範本的適用機型清單自動展開成多筆，也可手動指定機型套用到所有選取員工）。<br>
+        <b>①建立表單</b>：職務說明書勾選一組或多組「部門×職位」＋指定日期即可建立（灰底＝已建立過或全站最高決策者不需要）；技能鑑定表／職能鑑定表<b>先填日期、再勾選一位或多位員工</b>（勾 1 人＝單人建立，勾多人＝批次建立；點部門標題可整組全選/取消）——<b>員工清單會依填入的日期自動改為「該日期當時」的組織</b>：當時所屬部門/職稱（依人事的職務調動紀錄回推，沒有異動紀錄的人用現況），且<b>當時在職、現在已離職的人也會列出並標示「已離職」</b>，方便補登舊表單；日期改一次清單就重抓一次，已勾選的人會保留。建立出來的表單存的部門/職稱/直屬主管也一律是該日期當時的狀態，不是今天的；系統會依比對到的部門×職位「職位範本」自動帶入內容，找不到範本會在建立結果顯示錯誤，需請管理員先到「範本管理」設定。專業技能鑑定考核表另需選機型（預設依職位範本的適用機型清單自動展開成多筆，也可手動指定機型套用到所有選取員工）。<br>
         <b>②填寫／評分</b>：職務說明書內容欄可直接編輯存檔；技能鑑定表由課長／總經理各自在「確認」「核准」時填寫自己那欄分數；職能鑑定表的操作/異常排除評分由確認人（直屬主管）填寫。若員工本身職等已無中間層主管可考核（其直屬主管解析結果與總經理相同），課長考核欄位為 NA，不可填寫。<br>
         <b>③送出</b>：技能鑑定表／職能鑑定表草稿建立後需按「送出」才會通知確認人（該員工直屬主管）；確認通過後自動通知核准人（總經理）；任一關退回都需填寫原因，退回後表單回到草稿可修改重送。<br>
         <b>④複製表單</b>：技能鑑定表／職能鑑定表可按「複製」，以複製者身分建立一份新草稿（機型/內容原樣帶入），需重新走送出流程；職務說明書以部門×職位為主不提供複製，內容直接在原表單編輯存檔即可。<br>
@@ -302,6 +303,10 @@ $(document).ready(function(){
     $('#sidebar-menu').css('visibility','visible');
 });
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
+
+/* 日期一改就重抓「那一天」的員工清單（09/10 才有人員挑選；01 是部門×職位不受日期影響）。
+   change＝月曆選日期/輸入完成離開欄位都會觸發；直接打字中的半成品日期不會誤觸發。 */
+$('#createBizDate').on('change', function(){ hfLoadCreatePeople(); });
 
 $('#hfTabs a').on('click', function(e){
     e.preventDefault();
@@ -464,7 +469,7 @@ function hfDeptGroups(people){
         ids.forEach(function(did){
             did = did || 0;
             if (!byDept[did]) {
-                var dName = did ? ((META.departments||[]).find(function(d){ return String(d.id)===String(did); }) || {}).name : '（未設定部門）';
+                var dName = did ? (((META.departments||[]).find(function(d){ return String(d.id)===String(did); }) || {}).name || ASOF_DEPT_NAMES[did]) : '（未設定部門）';
                 byDept[did] = {name: dName || '（未知部門）', rows: []};
             }
             byDept[did].rows.push({p: p, isPrimary: String(p.dept_id) === String(did)});
@@ -482,6 +487,7 @@ function hfPeoplePickerHtml(people, containerIdPrefix){
         g.rows.forEach(function(row){
             var p = row.p;
             var lv = p.on_leave ? ' <span class="leave-tag">['+esc(p.leave_note)+']</span>' : '';
+            if (p.resigned) lv += ' <span class="leave-tag">['+esc(p.resign_note||'已離職')+']</span>';
             var ct = !row.isPrimary ? ' <span class="concur-tag">(兼)</span>' : '';
             html += '<label data-dept="'+did+'" data-hay="'+esc((g.name||'')+' '+(p.position_name||'')+' '+p.user_cname).toLowerCase()+'">'
                   + '<input type="checkbox" class="ppl-ck" value="'+p.id+'" onchange="hfPplSync(this)"> '
@@ -542,10 +548,41 @@ function hfDeptPosGroupToggle(hd){
     var allChecked = $boxes.length && $boxes.filter(':checked').length === $boxes.length;
     $boxes.prop('checked', !allChecked);
 }
+/* 建立表單的員工清單一律「依輸入的日期」重算（2026-08-18 使用者明確要求）：補 2025 年的舊表單時，要看到的是
+   那一天的組織——當時在生產2廠、現在調到別廠的人要出現在生產2廠底下，當時在職、現在已離職的人也要挑得到。
+   回推邏輯在後端 hrf_people_asof()（走 user_position_history，ai-rules/14），這裡只負責重畫與保留已勾選的人。 */
+var ASOF_DEPT_NAMES = {};
+function hfLoadCreatePeople(){
+    if (CREATE_TYPE === 'job_desc') return;
+    var ft = CREATE_TYPE;
+    var bizDate = $('#createBizDate').val() || META.today;
+    var checked = {};
+    $('#createPeopleList .ppl-ck:checked').each(function(){ checked[this.value] = true; });
+    var kw = $('#createPeopleBlock .flt').val() || '';
+    $('#createPeopleList').html('<span style="color:#8a6d45;">載入中…</span>');
+    $.getJSON(API, {action:'people_asof', date:bizDate}, function(res){
+        if (CREATE_TYPE !== ft) return;                       // 期間使用者已切換表單類型，這次結果作廢
+        if (!res.ok){ $('#createPeopleList').html('<span style="color:#DD5138;">'+esc(res.error||'人員載入失敗')+'</span>'); return; }
+        ASOF_DEPT_NAMES = res.dept_names || {};
+        var col = ft === 'skill_assess' ? 'produce_skill_assess' : 'produce_competency';
+        var eligDeptIds = (META.dept_type_settings||[]).filter(function(d){ return !!d[col]; }).map(function(d){ return d.department_id; });
+        var people = (res.people||[]).filter(function(p){
+            return (p.dept_ids||[]).some(function(d){ return eligDeptIds.indexOf(d) >= 0; });
+        });
+        $('#createPeopleList').html(hfPeoplePickerHtml(people));
+        $('#createPeopleList .ppl-ck').each(function(){ if (checked[this.value]) this.checked = true; });
+        if (kw) hfFilterPeople($('#createPeopleBlock .flt')[0]);
+        var isPast = bizDate < META.today;
+        $('#createAsofHint').toggle(isPast).text(isPast
+            ? '＊已依 '+dispDate(bizDate)+' 當時的組織列出人員（部門/職稱為當時的狀態，含當時在職但現已離職者）'
+            : '');
+    });
+}
 function openCreateModal(ft){
     CREATE_TYPE = ft;
     $('#createTitle').text('建立表單 — '+FORM_LABEL[ft]);
     $('#createBizDate').val(META.today);
+    $('#createAsofHint').hide();
     $('#createErrList').empty();
     $('#createDeptPosBlock').toggle(ft === 'job_desc');
     $('#createPeopleBlock').toggle(ft !== 'job_desc');
@@ -555,16 +592,7 @@ function openCreateModal(ft){
         openMask('createMask');
         return;
     }
-    var eligDeptIds = null;
-    if (ft !== 'job_desc') {
-        var col = ft === 'skill_assess' ? 'produce_skill_assess' : 'produce_competency';
-        eligDeptIds = (META.dept_type_settings||[]).filter(function(d){ return !!d[col]; }).map(function(d){ return d.department_id; });
-    }
-    var people = (META.people||[]).filter(function(p){
-        if (!eligDeptIds) return true;
-        return (p.dept_ids||[]).some(function(d){ return eligDeptIds.indexOf(d) >= 0; });
-    });
-    $('#createPeopleList').html(hfPeoplePickerHtml(people));
+    hfLoadCreatePeople();
     $('#createMachineBlock').toggle(ft === 'skill_assess');
     if (ft === 'skill_assess') {
         $('input[name=mSrc][value=tpl]').prop('checked', true);

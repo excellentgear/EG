@@ -24,6 +24,7 @@ require_once __DIR__ . '/delegate_lib.php';
 require_once __DIR__ . '/org_role_lib.php';
 require_once __DIR__ . '/people_lib.php';
 require_once __DIR__ . '/confirm_password_lib.php';
+require_once __DIR__ . '/position_history_lib.php';
 
 const HRF_FEATURES = [
     ['code' => 'hrf_view',           'group' => 'view', 'label' => '檢閱人資職務表單列表（沒勾也看得到跟自己有關的表單）'],
@@ -226,11 +227,12 @@ function hrf_confirmer_position_save(PDO $db, ?int $positionId, string $byName):
  * 沒設定課長對應職位，或整條路徑都找不到人，才退回全站共用的 eg_resolve_supervisor()（delegate_lib.php，
  * 不修改該共用函式，只在本模組內優先改用部門x職位比對）。
  */
-function hrf_supervisor_pool(PDO $db, int $targetUid): array {
+function hrf_supervisor_pool(PDO $db, int $targetUid, ?int $deptIdOverride = null): array {
     $posId = hrf_confirmer_position_get($db);
     if ($posId) {
+        // $deptIdOverride：補歷史表單時傳入「該業務日期當時」的部門，才不會用現在的部門去找當時的課長
         $main = eg_user_main_identity($db, $targetUid);
-        $deptId = $main['department_id'] ?? null;
+        $deptId = $deptIdOverride ?: ($main['department_id'] ?? null);
         $hop = 0;
         while ($deptId && $hop < 8) {
             try {
@@ -295,14 +297,26 @@ function hrf_user_no_prefix_save(PDO $db, string $prefix, string $byName): void 
 }
 function hrf_user_no_display(PDO $db, $rawId): string { return hrf_user_no_prefix_get($db) . $rawId; }
 
-function hrf_user_snapshot(PDO $db, int $uid): ?array {
+/** $asOfDate：表單的業務日期。填過去的日期＝補歷史表單，部門/職稱一律回推「當時」的（user_position_history，
+ *  ai-rules/14；沒有異動紀錄的人回現況），不可用現在的部門去存一張 2025 年的表單。傳 null／今天＝用現況。 */
+function hrf_user_snapshot(PDO $db, int $uid, ?string $asOfDate = null): ?array {
     $st = $db->prepare("SELECT u.id, u.user_cname, u.hire_date FROM user u WHERE u.id=?");
     $st->execute([$uid]);
     $u = $st->fetch(PDO::FETCH_ASSOC);
     if (!$u) return null;
-    $main = eg_user_main_identity($db, $uid);
-    $deptId = $main['department_id'] ?? null;
-    $posId  = $main['position_id'] ?? null;
+    $asOf = ($asOfDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', $asOfDate) && $asOfDate < date('Y-m-d')) ? $asOfDate : null;
+    if ($asOf) {
+        $snapRows = eg_position_snapshot_at($db, $uid, $asOf);
+        $pick = null;
+        foreach ($snapRows as $srow) { if (!empty($srow['is_main'])) { $pick = $srow; break; } }
+        if (!$pick) $pick = $snapRows[0] ?? null;
+        $deptId = $pick ? ((int)$pick['department_id'] ?: null) : null;
+        $posId  = $pick ? ((int)$pick['position_id'] ?: null) : null;
+    } else {
+        $main = eg_user_main_identity($db, $uid);
+        $deptId = $main['department_id'] ?? null;
+        $posId  = $main['position_id'] ?? null;
+    }
     $deptName = null; $posName = null;
     if ($deptId) {
         $s = $db->prepare("SELECT name FROM department WHERE id=?"); $s->execute([$deptId]); $deptName = $s->fetchColumn() ?: null;
@@ -310,7 +324,7 @@ function hrf_user_snapshot(PDO $db, int $uid): ?array {
     if ($posId) {
         $s = $db->prepare("SELECT name FROM position WHERE id=?"); $s->execute([$posId]); $posName = $s->fetchColumn() ?: null;
     }
-    $supPool = hrf_supervisor_pool($db, $uid);
+    $supPool = hrf_supervisor_pool($db, $uid, $asOf ? ($deptId ? (int)$deptId : null) : null);
     $supId = $supPool ? (int)$supPool[0]['id'] : null;
     $supName = $supPool ? $supPool[0]['user_cname'] : null;
     return [
@@ -319,6 +333,87 @@ function hrf_user_snapshot(PDO $db, int $uid): ?array {
         'position_id' => $posId ? (int)$posId : null, 'position_name' => $posName, 'supervisor_name' => $supName,
         'supervisor_id' => $supId ? (int)$supId : null,
     ];
+}
+
+/**
+ * 「某個業務日期當時」的員工清單（建立表單挑選人員用；2026-08-18 使用者明確要求）。
+ *
+ * 為什麼要有這支：09技能鑑定表／10職能鑑定表常常在補過去的紙本表單，挑人時看到的必須是「那一天」的組織，
+ * 不是今天的組織——那天在生產2廠、現在調到生產3廠的人要出現在生產2廠底下；那天還在職、現在已離職的人
+ * 也必須挑得到（不然舊表單根本補不進來）。部門/職稱回推走 ai-rules/14 的 user_position_history
+ * （position_history_lib.php，沒有異動紀錄的人回現況）。
+ *
+ * 在職與否的認定（含已離職者）：
+ *   ・到職日晚於該日期 → 當時還沒進公司，不列
+ *   ・已離職且離職日早於該日期 → 當時已經離開，不列（離職日當天仍算在職）
+ *   ・離職日未登錄的離職者 → 無從判斷，一律列出並標「離職日未登錄」，由使用者自己判斷
+ *   ・離職日優先取 user.leave_date，沒填才退回 user_status_history 最早一筆轉離職的起日
+ *
+ * 日期＝今天(或未來) 時完全不走上面這套，直接回全站共用的 eg_people_list()（人員列表鐵則的唯一實作），
+ * 行為與 meta 的 people 一模一樣，避免「現況」在兩個地方各算一次而不一致。
+ */
+function hrf_people_asof(PDO $db, string $date): array {
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = date('Y-m-d');
+    if ($date >= date('Y-m-d')) return eg_people_list($db, []);
+
+    $snaps = eg_position_snapshot_at_bulk($db, $date);
+    $deptMap = []; $posMap = [];
+    foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) so FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d)
+        $deptMap[(int)$d['id']] = ['name'=>(string)$d['name'], 'so'=>(int)$d['so']];
+    foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) so FROM position")->fetchAll(PDO::FETCH_ASSOC) as $pp)
+        $posMap[(int)$pp['id']] = ['name'=>(string)$pp['name'], 'so'=>(int)$pp['so']];
+
+    $resign = [];   // user_id => 最早一筆轉離職的起日（user.leave_date 沒填時的退路）
+    try {
+        foreach ($db->query("SELECT user_id, MIN(start_date) sd FROM user_status_history WHERE status=0 GROUP BY user_id")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $r) $resign[(int)$r['user_id']] = (string)$r['sd'];
+    } catch (Throwable $e) {}
+
+    $us = $db->query("SELECT id, user_cname, state, hire_date, leave_date FROM `user`
+                      WHERE user_cname IS NOT NULL AND user_cname<>''
+                        AND COALESCE(is_shared_account,0) <> 1
+                        AND COALESCE(state,1) NOT IN (90,99)")->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($us as $u) {
+        $uid = (int)$u['id'];
+        $resigned = (int)($u['state'] ?? 1) === 0;
+        $leaveD = (string)($u['leave_date'] ?? '') ?: (string)($resign[$uid] ?? '');
+        if (!empty($u['hire_date']) && (string)$u['hire_date'] > $date) continue;      // 當時尚未到職
+        if ($resigned && $leaveD !== '' && $leaveD < $date) continue;                   // 當時已離職
+        $rows = $snaps[$uid] ?? [];
+        $pick = null;
+        foreach ($rows as $r) { if (!empty($r['is_main'])) { $pick = $r; break; } }
+        if (!$pick) $pick = $rows[0] ?? null;
+        $deptId = $pick ? (int)$pick['department_id'] : 0;
+        $posId  = $pick ? (int)$pick['position_id'] : 0;
+        $deptIds = [];
+        foreach ($rows as $r) { $d = (int)$r['department_id']; if ($d && !in_array($d, $deptIds, true)) $deptIds[] = $d; }
+        // 部門/職稱名稱優先用現在主檔的名稱（改名後看得懂），主檔查不到才用快照裡當時存的名稱
+        $deptName = $deptMap[$deptId]['name'] ?? ($pick['department_name'] ?? '');
+        $posName  = $posMap[$posId]['name']   ?? ($pick['position_name'] ?? '');
+        $out[] = [
+            'id'=>$uid, 'user_cname'=>(string)$u['user_cname'], 'state'=>(int)($u['state'] ?? 1),
+            'state_label'=>eg_people_state_label($u['state'] ?? 1),
+            'dept_id'=>$deptId ?: null, 'dept_name'=>$deptName, 'dept_sort'=>$deptMap[$deptId]['so'] ?? 999,
+            'dept_ids'=>$deptIds,
+            'position_id'=>$posId ?: null, 'position_name'=>$posName, 'position_sort'=>$posMap[$posId]['so'] ?? 999,
+            'on_leave'=>0, 'leave_note'=>'',
+            'resigned'=>$resigned ? 1 : 0,
+            'resign_note'=>$resigned ? ('已離職' . ($leaveD !== '' ? '（' . $leaveD . '）' : '（離職日未登錄）')) : '',
+        ];
+    }
+    // 人員列表鐵則5：排序依部門/職稱 sort_order，不是姓名筆畫
+    usort($out, function ($a, $b) {
+        return [$a['position_sort'], $a['dept_sort'], $a['id']] <=> [$b['position_sort'], $b['dept_sort'], $b['id']];
+    });
+    return $out;
+}
+
+/** 挑選器分組要用的部門名稱對照（含已不在現行清單/已停用的部門，前端查不到 id 時的退路） */
+function hrf_dept_name_map(PDO $db): array {
+    $m = [];
+    foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) $m[(int)$d['id']] = (string)$d['name'];
+    return $m;
 }
 
 /** NA 判定（使用者確認之規則）：確認人(直屬主管)解析到跟核准人(全站最高決策者)是同一人時，
@@ -920,7 +1015,7 @@ function hrf_instance_items_save(PDO $db, int $instanceId, array $items): void {
 function hrf_instance_create_one(PDO $db, string $formType, int $targetUid, ?int $whitelistId, string $bizDate, int $byUid, string $byName): array {
     hrf_ensure_schema($db);
     if (!isset(HRF_FORM_TYPES[$formType]) || $formType === 'job_desc') return ['ok'=>false, 'msg'=>'不明的表單類型'];
-    $snap = hrf_user_snapshot($db, $targetUid);
+    $snap = hrf_user_snapshot($db, $targetUid, $bizDate);   // 補歷史表單：部門/職稱依業務日期回推
     if (!$snap) return ['ok'=>false, 'msg'=>'找不到此員工'];
     if (!hrf_dept_can_produce($db, $snap['dept_id'], $formType)) {
         return ['ok'=>false, 'msg'=>$snap['user_cname'] . ' 所屬部門未設定產生「' . HRF_FORM_TYPES[$formType] . '」'];
@@ -1057,7 +1152,7 @@ function hrf_instance_create_batch(PDO $db, string $formType, array $targetUids,
     $created = []; $errors = []; $skipped = [];
     foreach (array_unique(array_map('intval', $targetUids)) as $uid) {
         if ($uid <= 0) continue;
-        $snap = hrf_user_snapshot($db, $uid);
+        $snap = hrf_user_snapshot($db, $uid, $bizDate);
         $label = $snap['user_cname'] ?? ('#' . $uid);
         if ($formType !== 'skill_assess') {
             $r = hrf_instance_create_one($db, $formType, $uid, null, $bizDate, $byUid, $byName);
