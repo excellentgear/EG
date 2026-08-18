@@ -290,6 +290,111 @@ function pfmea_ref_requirement_option_add(PDO $db, int $functionOptionId, int $p
     return (int)$db->lastInsertId();
 }
 
+/* ---------- 料號綁定的製程／項目／功能組合（2026-08-18 使用者拍板）----------
+ * 使用者口徑：「料號會對應製程編號跟項目延伸出其他要求／圖面要求，料號跟要求以外的都是通用；
+ * 可以設定料號綁定哪個製程編號，自動帶出整套選項可以快速設定多組綁到此料號底下（其他料號還是
+ * 要可以綁定），然後依照選定的整套選項自行輸入要求（不限定一個）」。
+ * 因此：階層本身（製程→項目→功能→潛在失效模式→後果／分類／原因）一律全公司通用、不分料號；
+ * 料號只在最末端的「要求」分岔。組合本身要單獨存一筆，否則「已綁定但還沒輸入要求」的組合會從
+ * 畫面上消失，使用者會以為沒存到。 */
+
+/** 這個料號已綁定的所有組合（含該組合底下目前設了幾筆要求，供設定畫面顯示） */
+function pfmea_part_binding_list(PDO $db, int $partDId, string $partText): array {
+    $partText = trim($partText);
+    if (!$partDId && $partText === '') return [];
+    $cond = $partDId ? "b.part_d_id=?" : "b.part_no_text=?";
+    $key  = $partDId ?: $partText;
+    $st = $db->prepare("SELECT b.id, b.process_id, b.item_option_id, b.function_option_id,
+                                p.process_code, p.process_name, i.item_name, f.function_desc
+                         FROM pfmea_part_binding b
+                         LEFT JOIN pfmea_process p ON p.id=b.process_id
+                         LEFT JOIN pfmea_item_option i ON i.id=b.item_option_id
+                         LEFT JOIN pfmea_function_option f ON f.id=b.function_option_id
+                         WHERE $cond AND b.is_active=1
+                         ORDER BY b.sort_order, b.id");
+    $st->execute([$key]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $parts = [trim($r['process_code'].' '.$r['process_name'])];
+        if ($r['item_name'])     $parts[] = $r['item_name'];
+        if ($r['function_desc']) $parts[] = $r['function_desc'];
+        $r['path_label'] = implode(' → ', array_filter($parts));
+        $r['requirements'] = pfmea_part_binding_requirements($db, (int)$r['id']);
+    }
+    unset($r);
+    return $rows;
+}
+
+/** 這個組合底下已輸入的要求（一組可以有多筆，前端卡片下拉再挑本次要用的） */
+function pfmea_part_binding_requirements(PDO $db, int $bindId): array {
+    $st = $db->prepare("SELECT id, requirement_text FROM pfmea_requirement_option WHERE bind_id=? AND is_active=1 ORDER BY sort_order, id");
+    $st->execute([$bindId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** 綁一組（同一料號＋同一條路徑重複綁時直接回傳既有 id，不重複建） */
+function pfmea_part_binding_add(PDO $db, int $partDId, string $partText, int $processId, int $itemOptionId, int $functionOptionId, int $uid, string $uname): int {
+    $partText = trim($partText);
+    if ((!$partDId && $partText === '') || !$processId) return 0;
+    $cond = $partDId ? "part_d_id=?" : "part_no_text=?";
+    $key  = $partDId ?: $partText;
+    $st = $db->prepare("SELECT id FROM pfmea_part_binding WHERE $cond AND process_id=?
+                         AND item_option_id <=> ? AND function_option_id <=> ? AND is_active=1 LIMIT 1");
+    $st->execute([$key, $processId, $itemOptionId ?: null, $functionOptionId ?: null]);
+    $id = $st->fetchColumn();
+    if ($id) return (int)$id;
+    $st = $db->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM pfmea_part_binding WHERE $cond");
+    $st->execute([$key]);
+    $sort = (int)$st->fetchColumn();
+    $st = $db->prepare("INSERT INTO pfmea_part_binding (part_d_id, part_no_text, process_id, item_option_id, function_option_id, sort_order, created_by, created_by_name)
+                         VALUES (?,?,?,?,?,?,?,?)");
+    $st->execute([$partDId ?: null, $partDId ? null : $partText, $processId, $itemOptionId ?: null, $functionOptionId ?: null, $sort, $uid, $uname]);
+    return (int)$db->lastInsertId();
+}
+
+/** 解除綁定：連同這組底下的要求一起停用——組合都不要了，掛在它下面的要求留著只會變成沒有歸屬的
+ * 孤兒資料，之後在要求總覽看到也不知道是哪來的。 */
+function pfmea_part_binding_delete(PDO $db, int $id): void {
+    $db->prepare("UPDATE pfmea_part_binding SET is_active=0 WHERE id=?")->execute([$id]);
+    $db->prepare("UPDATE pfmea_requirement_option SET is_active=0 WHERE bind_id=?")->execute([$id]);
+}
+
+/** 綁定製程後「自動帶出整套選項」：該製程底下所有項目與其功能，攤平成可勾選的路徑清單，供一次
+ * 快速建多組。已經綁過的路徑標記 bound_id，畫面上才知道哪些已綁、不會重複勾。 */
+function pfmea_part_binding_candidates(PDO $db, int $processId, int $partDId, string $partText): array {
+    if (!$processId) return [];
+    $bound = [];
+    foreach (pfmea_part_binding_list($db, $partDId, $partText) as $b) {
+        if ((int)$b['process_id'] !== $processId) continue;
+        $bound[(int)$b['item_option_id'].'/'.(int)$b['function_option_id']] = (int)$b['id'];
+    }
+    $out = [];
+    $out[] = ['item_option_id'=>0, 'function_option_id'=>0, 'label'=>'（整個製程，不分項目）', 'bound_id'=>$bound['0/0'] ?? 0];
+    foreach (pfmea_ref_item_options($db, $processId) as $it) {
+        $iid = (int)$it['id'];
+        $out[] = ['item_option_id'=>$iid, 'function_option_id'=>0, 'label'=>$it['item_name'], 'bound_id'=>$bound[$iid.'/0'] ?? 0];
+        foreach (pfmea_ref_function_options($db, $iid) as $fn) {
+            $fid = (int)$fn['id'];
+            $out[] = ['item_option_id'=>$iid, 'function_option_id'=>$fid,
+                      'label'=>$it['item_name'].' → '.$fn['function_desc'], 'bound_id'=>$bound[$iid.'/'.$fid] ?? 0];
+        }
+    }
+    return $out;
+}
+
+/** 在某個綁定組合底下新增一筆要求（可重複呼叫加多筆）。實際仍寫進 pfmea_requirement_option 並把
+ * 製程／項目／功能／料號欄位一併填好，填表時原本那套逐層退回查詢不必改就找得到。 */
+function pfmea_part_binding_requirement_add(PDO $db, int $bindId, string $text, int $uid, string $uname): int {
+    $st = $db->prepare("SELECT * FROM pfmea_part_binding WHERE id=? AND is_active=1");
+    $st->execute([$bindId]);
+    $b = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$b) return 0;
+    return pfmea_ref_requirement_option_add(
+        $db, (int)$b['function_option_id'], (int)$b['part_d_id'], (string)($b['part_no_text'] ?? ''),
+        $text, $uid, $uname, (int)$b['process_id'], (int)$b['item_option_id'], $bindId
+    );
+}
+
 function pfmea_ref_requirement_option_delete(PDO $db, int $id): void {
     $db->prepare("UPDATE pfmea_requirement_option SET is_active=0 WHERE id=?")->execute([$id]);
 }

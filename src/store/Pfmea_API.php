@@ -321,7 +321,52 @@ case 'ref_failure_mode_list_exact':
 
 case 'ref_requirement_list_exact':
     needAdmin($perms);
-    jout(['success'=>true,'rows'=>pfmea_ref_requirement_list_exact($db, (int)($_GET['function_option_id']??0), (int)($_GET['process_id']??0))]);
+    jout(['success'=>true,'rows'=>pfmea_ref_requirement_list_exact($db, (int)($_GET['function_option_id']??0), (int)($_GET['process_id']??0), (int)($_GET['item_option_id']??0))]);
+
+// ── 料號綁定的製程／項目／功能組合（2026-08-18 使用者拍板：料號只在「要求」分岔）──────────
+case 'part_binding_list':
+    needView($perms);
+    jout(['success'=>true,'rows'=>pfmea_part_binding_list($db, (int)($_GET['part_d_id']??0), (string)($_GET['part_no_text']??''))]);
+
+case 'part_binding_candidates':
+    needAdmin($perms);
+    jout(['success'=>true,'rows'=>pfmea_part_binding_candidates($db, (int)($_GET['process_id']??0), (int)($_GET['part_d_id']??0), (string)($_GET['part_no_text']??''))]);
+
+case 'part_binding_add':
+    needAdmin($perms);
+    $partDId = (int)($_POST['part_d_id'] ?? 0);
+    $partText = trim((string)($_POST['part_no_text'] ?? ''));
+    $procId = (int)($_POST['process_id'] ?? 0);
+    if ((!$partDId && $partText === '') || !$procId) jout(['success'=>false,'message'=>'缺少料號或製程']);
+    // paths：一次可勾多組路徑快速建立，格式 [{item_option_id, function_option_id}, ...]
+    $paths = json_decode((string)($_POST['paths'] ?? '[]'), true);
+    if (!is_array($paths) || !$paths) $paths = [['item_option_id'=>0, 'function_option_id'=>0]];
+    $ids = [];
+    $db->beginTransaction();
+    try {
+        foreach ($paths as $pt) {
+            $bid = pfmea_part_binding_add($db, $partDId, $partText, $procId, (int)($pt['item_option_id']??0), (int)($pt['function_option_id']??0), $uid, $uname);
+            if ($bid) $ids[] = $bid;
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'綁定失敗：'.$e->getMessage()]); }
+    jout(['success'=>true,'ids'=>$ids,'count'=>count($ids)]);
+
+case 'part_binding_delete':
+    needAdmin($perms);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jout(['success'=>false,'message'=>'缺少id']);
+    pfmea_part_binding_delete($db, $id);
+    jout(['success'=>true]);
+
+case 'part_binding_requirement_add':
+    needAdmin($perms);
+    $bindId = (int)($_POST['bind_id'] ?? 0);
+    $text = trim((string)($_POST['requirement_text'] ?? ''));
+    if (!$bindId || $text === '') jout(['success'=>false,'message'=>'缺少綁定組合或要求文字']);
+    $id = pfmea_part_binding_requirement_add($db, $bindId, $text, $uid, $uname);
+    if (!$id) jout(['success'=>false,'message'=>'找不到該綁定組合']);
+    jout(['success'=>true,'id'=>$id]);
 
 // ── 料號-製程-項目-功能-要求 階層式連動（2026-08-13使用者要求）──────────────────
 case 'ref_item_options_list':
@@ -374,8 +419,9 @@ case 'ref_requirement_options_list':
     $procId = (int)($_GET['process_id'] ?? 0);
     $partDId = (int)($_GET['part_d_id'] ?? 0);
     $partText = trim((string)($_GET['part_no_text'] ?? ''));
-    if (!$funcOptId && !$procId) jout(['success'=>true,'rows'=>[]]);
-    jout(['success'=>true,'rows'=>pfmea_ref_requirement_options($db, $funcOptId, $partDId, $partText, $procId)]);
+    $itemOptId = (int)($_GET['item_option_id'] ?? 0);
+    if (!$funcOptId && !$procId && !$itemOptId) jout(['success'=>true,'rows'=>[]]);
+    jout(['success'=>true,'rows'=>pfmea_ref_requirement_options($db, $funcOptId, $partDId, $partText, $procId, $itemOptId)]);
 
 case 'ref_requirement_option_add':
     needEdit($perms);
@@ -384,8 +430,9 @@ case 'ref_requirement_option_add':
     $partDId = (int)($_POST['part_d_id'] ?? 0);
     $partText = trim((string)($_POST['part_no_text'] ?? ''));
     $text = trim((string)($_POST['requirement_text'] ?? ''));
-    if ((!$funcOptId && !$procId) || $text === '') jout(['success'=>false,'message'=>'缺少功能/製程或要求文字']);
-    $id = pfmea_ref_requirement_option_add($db, $funcOptId, $partDId, $partText, $text, $uid, $uname, $procId);
+    $itemOptId = (int)($_POST['item_option_id'] ?? 0);
+    if ((!$funcOptId && !$procId && !$itemOptId) || $text === '') jout(['success'=>false,'message'=>'缺少功能/項目/製程或要求文字']);
+    $id = pfmea_ref_requirement_option_add($db, $funcOptId, $partDId, $partText, $text, $uid, $uname, $procId, $itemOptId);
     jout(['success'=>true,'id'=>$id]);
 
 case 'ref_requirement_option_delete':
@@ -442,7 +489,14 @@ case 'ref_item_template_save':
 // 產品名稱->規格描述等，任一欄位值都能設定對應到另一欄位的建議值
 case 'field_link_list':
     needView($perms);
-    jout(['success'=>true,'rows'=>pfmea_field_link_list($db, (string)($_GET['source_field']??''), (string)($_GET['source_value']??''), (string)($_GET['target_field']??''))]);
+    jout(['success'=>true,'rows'=>pfmea_field_link_list($db, (string)($_GET['source_field']??''), (string)($_GET['source_value']??''), (string)($_GET['target_field']??''), (int)($_GET['scope_fm_id']??0))]);
+
+// 設定畫面用：只看剛好掛在這一筆潛在失效模式底下的對應，不退回舊的全域文字對應
+case 'field_link_list_exact':
+    needAdmin($perms);
+    $fmId = (int)($_GET['scope_fm_id'] ?? 0);
+    if (!$fmId) jout(['success'=>true,'rows'=>[]]);
+    jout(['success'=>true,'rows'=>pfmea_field_link_list_exact($db, $fmId, (string)($_GET['target_field']??''))]);
 
 case 'field_link_distinct_sources':
     needAdmin($perms);
@@ -484,8 +538,10 @@ case 'field_link_add':
     needEdit($perms);
     $sf = (string)($_POST['source_field'] ?? ''); $sv = (string)($_POST['source_value'] ?? '');
     $tf = (string)($_POST['target_field'] ?? ''); $tv = (string)($_POST['target_value'] ?? '');
-    if ($sf==='' || $sv==='' || $tf==='' || $tv==='') jout(['success'=>false,'message'=>'缺少必要參數']);
-    $id = pfmea_field_link_add($db, $sf, $sv, $tf, $tv, $uid, $uname);
+    $scopeFmId = (int)($_POST['scope_fm_id'] ?? 0);
+    // 掛層級時 source_value 可省（由失效模式那筆推導），只有純全域文字對應才一定要 source_value
+    if ($tf==='' || $tv==='' || ($sf==='' && !$scopeFmId) || ($sv==='' && !$scopeFmId)) jout(['success'=>false,'message'=>'缺少必要參數']);
+    $id = pfmea_field_link_add($db, $sf, $sv, $tf, $tv, $uid, $uname, $scopeFmId);
     jout(['success'=>true,'id'=>$id]);
 
 case 'field_link_delete':
