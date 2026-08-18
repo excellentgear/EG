@@ -506,6 +506,35 @@ case 'delete_tab': {
 }
 
 /* ---------- 新增儀器（管理員） ---------- */
+/* ---------- 儀器設定跳窗：可對應的採購料號（規格變體）＋一鍵比對建議 ----------
+ * 規格／製造商一律連動採購料號（purchase_item→purchase_spec），不再各寫各的。
+ * category_id 帶「跳窗當下選的類別」（可能還沒存檔），tool_id 有帶就一併算舊資料的比對建議。
+ */
+case 'spec_options': {
+    if (!$perms['canAdmin']) jerr('無設定權限', 403);
+    $catId = trim((string)($_GET['category_id'] ?? ''));
+    $tid   = (int)($_GET['tool_id'] ?? 0);
+    $catName = '';
+    if ($catId !== '') {
+        $st = $db->prepare("SELECT QC_Tool FROM qc_tool_list WHERE QC_Tool_List_id=? LIMIT 1");
+        $st->execute([$catId]);
+        $catName = (string)($st->fetchColumn() ?: '');
+    }
+    $cur = null; $specDesc = '';
+    if ($tid) {
+        $t = tc_get_tool($db, $tid);
+        if ($t) {
+            $cur = $t['purchase_spec_id'] ? (int)$t['purchase_spec_id'] : null;
+            $specDesc = (string)($t['spec_desc'] ?? '');
+            if ($catName === '') $catName = (string)($t['category_name'] ?? '');
+        }
+    }
+    $o = tool_calib_spec_options($db, $catName, $cur, $specDesc);
+    jout(['category_name'=>$catName, 'item'=>$o['item'], 'specs'=>$o['specs'],
+          'current_spec_id'=>$cur, 'suggest_spec_id'=>$o['suggest_spec_id'],
+          'suggest_reason'=>$o['suggest_reason'], 'spec_desc'=>$specDesc,
+          'see_spec_code'=>tool_calib_can_see_spec_code($db, $u, $perms) ? 1 : 0]);
+}
 case 'create_tool': {
     if (!$perms['canAdmin']) jerr('無新增儀器權限', 403);
     $no  = trim((string)($_POST['tool_no'] ?? ''));
@@ -521,6 +550,15 @@ case 'create_tool': {
     $baseDue = tool_calib_month_start(trim((string)($_POST['baseline_due'] ?? '')) ?: null);   // 到期以「月」為單位
     $manufacturer = trim((string)($_POST['manufacturer'] ?? '')) ?: null;
     $specDesc = trim((string)($_POST['spec_desc'] ?? '')) ?: null;
+    // 採購料號對應：綁定成立時規格文字一律以料號為準（前端反灰、後端再算一次，不採信前端送的值）
+    $specId = (int)($_POST['purchase_spec_id'] ?? 0) ?: null;
+    $catName = (string)($db->query("SELECT QC_Tool FROM qc_tool_list WHERE QC_Tool_List_id=" . $db->quote($cat))->fetchColumn() ?: '');
+    [$okSpec, $errSpec, $specRow] = tool_calib_spec_assert($db, $specId, $catName);
+    if (!$okSpec) jerr($errSpec);
+    if ($specRow) {
+        $specDesc = trim((string)$specRow['spec_text']) ?: null;
+        if ($manufacturer === null && trim((string)$specRow['brand']) !== '') $manufacturer = trim((string)$specRow['brand']);
+    }
     $purchaseDate = trim((string)($_POST['purchase_date'] ?? '')) ?: null;
     $equipNote = trim((string)($_POST['equip_note'] ?? '')) ?: null;
     $machine = trim((string)($_POST['machine'] ?? '')) ?: null;
@@ -531,9 +569,9 @@ case 'create_tool': {
     $disabledDate = $state ? (trim((string)($_POST['disabled_date'] ?? '')) ?: null) : null;
     try {
         $db->beginTransaction();
-        $db->prepare("INSERT INTO qc_tool (Tool_No, QC_Tool_List_id, Created_at, calib_cycle_months, calib_managed, calib_method, calibration_due, manufacturer, spec_desc, purchase_date, note, machine, machine_model, position, state, disabled_date)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-           ->execute([$no, $cat, date('Y-m-d H:i:s'), $cycle, $managed, $method, $baseDue, $manufacturer, $specDesc, $purchaseDate, $equipNote, $machine, $machineModel, $position, $state, $disabledDate]);
+        $db->prepare("INSERT INTO qc_tool (Tool_No, QC_Tool_List_id, Created_at, calib_cycle_months, calib_managed, calib_method, calibration_due, manufacturer, spec_desc, purchase_spec_id, purchase_date, note, machine, machine_model, position, state, disabled_date)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$no, $cat, date('Y-m-d H:i:s'), $cycle, $managed, $method, $baseDue, $manufacturer, $specDesc, $specId, $purchaseDate, $equipNote, $machine, $machineModel, $position, $state, $disabledDate]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('新增失敗：'.$e->getMessage(), 500); }
     jout(['tool_id'=>(int)$db->lastInsertId()]);
@@ -565,6 +603,20 @@ case 'save_tool': {
     }
     $manufacturer = array_key_exists('manufacturer', $_POST) ? (trim((string)$_POST['manufacturer']) ?: null) : $t['manufacturer'];
     $specDesc = array_key_exists('spec_desc', $_POST) ? (trim((string)$_POST['spec_desc']) ?: null) : $t['spec_desc'];
+    // 採購料號對應（有帶才動）：綁定成立時規格文字一律以料號為準——前端反灰唯讀，後端再算一次不採信前端送的值
+    $curSpec = $t['purchase_spec_id'] ? (int)$t['purchase_spec_id'] : null;
+    $specId  = $curSpec;
+    if (array_key_exists('purchase_spec_id', $_POST)) {
+        $specId = (int)$_POST['purchase_spec_id'] ?: null;
+        $newCatName = (string)($db->query("SELECT QC_Tool FROM qc_tool_list WHERE QC_Tool_List_id=" . $db->quote((string)$newCat))->fetchColumn() ?: '');
+        [$okSpec, $errSpec, $specRow] = tool_calib_spec_assert($db, $specId, $newCatName, $curSpec);
+        if (!$okSpec) jerr($errSpec);
+        if ($specRow) {
+            $specDesc = trim((string)$specRow['spec_text']) ?: null;
+            if (($manufacturer === null || $manufacturer === '') && trim((string)$specRow['brand']) !== '')
+                $manufacturer = trim((string)$specRow['brand']);
+        }
+    }
     $purchaseDate = array_key_exists('purchase_date', $_POST) ? (trim((string)$_POST['purchase_date']) ?: null) : $t['purchase_date'];
     $equipNote = array_key_exists('equip_note', $_POST) ? (trim((string)$_POST['equip_note']) ?: null) : $t['note'];
     $machine = array_key_exists('machine', $_POST) ? (trim((string)$_POST['machine']) ?: null) : $t['machine'];
@@ -576,8 +628,8 @@ case 'save_tool': {
     try {
         $db->beginTransaction();
         $db->prepare("UPDATE qc_tool SET Tool_No=?, QC_Tool_List_id=?, calib_cycle_months=?, calib_managed=?, calib_method=?, calibration_due=?,
-                        manufacturer=?, spec_desc=?, purchase_date=?, note=?, machine=?, machine_model=?, position=?, state=?, disabled_date=? WHERE Tool_id=?")
-           ->execute([$newNo, $newCat, $cycle, $managed, $method, $baseDue, $manufacturer, $specDesc, $purchaseDate, $equipNote, $machine, $machineModel, $position, $state, $disabledDate, $tid]);
+                        manufacturer=?, spec_desc=?, purchase_spec_id=?, purchase_date=?, note=?, machine=?, machine_model=?, position=?, state=?, disabled_date=? WHERE Tool_id=?")
+           ->execute([$newNo, $newCat, $cycle, $managed, $method, $baseDue, $manufacturer, $specDesc, $specId, $purchaseDate, $equipNote, $machine, $machineModel, $position, $state, $disabledDate, $tid]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
     jout([]);

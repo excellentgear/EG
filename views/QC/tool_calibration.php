@@ -148,6 +148,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .tc-modal .m-foot .b-ok { background:#F0A24B; color:#fff; }
         .tc-modal .m-foot .b-cancel { background:#fff; color:#5b3a1e; border-color:#D8BE93; margin-right:6px; }
         .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+        /* 由採購料號連動、不給手填的欄位（規格）；比照全站 .ro-auto 慣例 */
+        .ro-auto { background:#F3EEE4 !important; color:#6b5334; cursor:not-allowed; }
+        .spec-link { grid-column:1 / -1; }
+        .spec-hint { font-size:12px; color:#8a6d45; margin:2px 0 8px; line-height:1.6; }
+        .spec-hint b { color:#b5762a; }
+        .spec-sugg { background:#FDF3E2; border:1px solid #F0A24B; border-radius:4px; padding:6px 8px; margin:4px 0 8px;
+            font-size:12px; color:#5b3a1e; grid-column:1 / -1; }
+        .spec-sugg button { margin-left:6px; background:#F0A24B; border:0; color:#fff; border-radius:3px; padding:2px 10px; cursor:pointer; }
+        .spec-warn { color:#DD5138; font-size:12px; margin:2px 0 8px; grid-column:1 / -1; }
         table.hist { width:100%; border-collapse:collapse; font-size:12px; }
         table.hist th, table.hist td { border:1px solid #EADFC8; padding:4px 6px; text-align:center; }
         table.hist thead th { background:#F7E0BD; color:#5b3a1e; }
@@ -340,7 +349,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div><label>列入校驗率統計（計入 KPI）</label><select id="setManaged">
                 <option value="1">是</option><option value="0">否</option>
             </select></div>
-            <div><label>製造商<span style="color:#8a6d45;font-weight:400;">（檢驗設備一覽表用）</span></label><input type="text" id="setManufacturer" maxlength="100"></div>
+            <div class="spec-link"><label>採購料號（規格）<span style="color:#8a6d45;font-weight:400;">（連動「申請採購→採購品主檔」的規格變體）</span></label>
+                <select id="setSpecPick" data-eg-filter="輸入規格或料號篩選…"><option value="">（未對應料號）</option></select></div>
+            <div class="spec-hint" id="setSpecHint" style="grid-column:1 / -1;"></div>
+            <div class="spec-sugg" id="setSpecSugg" style="display:none;"></div>
+            <div class="spec-warn" id="setSpecWarn" style="display:none;"></div>
+            <div><label>製造商<span style="color:#8a6d45;font-weight:400;">（檢驗設備一覽表用；可覆寫料號品牌）</span></label><input type="text" id="setManufacturer" maxlength="100"></div>
             <div><label>規格</label><input type="text" id="setSpecDesc" maxlength="255"></div>
             <div><label>購買日期</label><input type="date" id="setPurchaseDate"></div>
             <div><label>備註</label><input type="text" id="setEquipNote" maxlength="200"></div>
@@ -357,7 +371,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             類別下拉只列出「需校驗且可設定量具編號」的類別；類別的新增／更名／刪除請至
             <a href="inspection_combined_prototype.php" target="_blank" style="color:#b5762a;">線上檢驗－量具設定</a>，
             其校驗屬性則於本頁工具列「類別設定」勾選。<br>
-            機台名稱／機型／位置提供「機型/量具白名單」（人資職務表單）顯示用，與生產機台一覽表同一套欄位認定慣例。
+            機台名稱／機型／位置提供「機型/量具白名單」（人資職務表單）顯示用，與生產機台一覽表同一套欄位認定慣例。<br>
+            <b>規格一律連動採購料號</b>：選了採購料號後，規格欄自動帶入該料號的規格文字並反灰（避免這裡手打一份、採購那邊另一份對不起來）；
+            製造商會在空白時帶入料號品牌，仍可自行覆寫。要新增／修改規格變體請至
+            <a href="../pages/purchase_request.php" target="_blank" style="color:#b5762a;">申請採購－採購品主檔</a>。
         </div>
     </div>
     <div class="m-foot">
@@ -1048,7 +1065,12 @@ function renderTable(){
  * 採購料號代碼(spec_code)只給採購看得到，其他人用中文品名／規格查即可（使用者 2026-07-30 指示）。
  */
 function specCell(r){
-    if (!r.purchase_spec_id) return '<span style="color:#b0a390;">未對應料號</span>';
+    // 未對應料號者：手打的規格仍要看得到（否則使用者只看到「未對應料號」，不知道自己填過什麼）
+    if (!r.purchase_spec_id) {
+        var d = $.trim(r.spec_desc || '');
+        return d ? esc(d) + ' <span style="color:#DD5138;font-size:11px;">未對應料號</span>'
+                 : '<span style="color:#b0a390;">未對應料號</span>';
+    }
     // 品牌是獨立欄位（≠ 購買廠商），跟規格文字一起顯示才看得出是哪一支
     var t = $.trim(($.trim(r.spec_brand||'') + ' ' + $.trim(r.spec_text||''))) || '（未填規格）';
     var h = esc(t);
@@ -1224,6 +1246,7 @@ function openSet(tid){
         $('#setBase').val(fmtMonth(setTool.calibration_due));
         $('#setManaged').val(String(setTool.calib_managed));
         $('#setManufacturer').val(setTool.manufacturer||''); $('#setSpecDesc').val(setTool.spec_desc||'');
+        loadSpecPick(setTool.Tool_id);
         $('#setPurchaseDate').val(setTool.purchase_date||''); $('#setEquipNote').val(setTool.note||'');
         $('#setMachine').val(setTool.machine||''); $('#setMachineModel').val(setTool.machine_model||'');
         $('#setPosition').val(setTool.position||'');
@@ -1237,6 +1260,7 @@ function openSet(tid){
         $('#setNo').val(''); $('#setCat').prop('selectedIndex',0);
         $('#setCycle').val(12); $('#setMethod').val(''); $('#setBase').val(''); $('#setManaged').val('1');
         $('#setManufacturer,#setSpecDesc,#setPurchaseDate,#setEquipNote').val('');
+        loadSpecPick(0);
         $('#setMachine,#setMachineModel,#setPosition,#setDisabledDate').val('');
         $('#setDisabled').prop('checked', false); $('#setDisabledDateBox').hide();
     }
@@ -1253,6 +1277,7 @@ function submitSet(){
                 method:$('#setMethod').val(), baseline_due:$('#setBase').val(),
                 tool_no:$('#setNo').val(), category_id:$('#setCat').val(),
                 manufacturer:$('#setManufacturer').val(), spec_desc:$('#setSpecDesc').val(),
+                purchase_spec_id:$('#setSpecPick').val()||'',
                 purchase_date:$('#setPurchaseDate').val(), equip_note:$('#setEquipNote').val(),
                 machine:$('#setMachine').val(), machine_model:$('#setMachineModel').val(),
                 position:$('#setPosition').val(), state:disabled?1:0,
@@ -1265,6 +1290,86 @@ function submitSet(){
     }, 'json').fail(function(x){ alert('儲存失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
 }
 
+/* ---------- 儀器設定：採購料號（規格）連動 ----------
+ * 使用者 2026-08-18 定案：規格不再在這裡手打一份，一律連動「申請採購→採購品主檔」的規格變體
+ *（採購品項名稱＝量具類別名稱，例 類別「游標卡尺」＝品項 QC-0001，其 QC-0001-01/02/03 就是可挑的規格）。
+ * 製造商在空白時帶入料號品牌、仍可覆寫；舊資料手打過規格者開窗時給「一鍵比對建議」。
+ */
+var SPEC_OPTS = [], SPEC_LOADING = false;
+function loadSpecPick(tid){
+    var cat = $('#setCat').val() || '';
+    $('#setSpecSugg').hide(); $('#setSpecWarn').hide();
+    $('#setSpecHint').text('載入採購料號中…');
+    $('#setSpecPick').html('<option value="">（未對應料號）</option>').prop('disabled', true);
+    SPEC_LOADING = true;
+    $.getJSON(API, {action:'spec_options', category_id:cat, tool_id:tid||0}, function(res){
+        SPEC_LOADING = false;
+        if (!res.ok){ $('#setSpecHint').text(res.error||'採購料號載入失敗'); return; }
+        SPEC_OPTS = res.specs || [];
+        var h = '<option value="">（未對應料號）</option>';
+        SPEC_OPTS.forEach(function(o){
+            var t = $.trim(($.trim(o.brand||'')+' '+$.trim(o.spec_text||''))) || '（未填規格）';
+            if (res.see_spec_code && o.spec_code) t += '　' + o.spec_code;
+            if (o.other_item) t += '（屬品項：'+(o.item_name||'')+'）';
+            if (o.is_active !== 1) t += '（已停用）';
+            h += '<option value="'+o.spec_id+'">'+esc(t)+'</option>';
+        });
+        $('#setSpecPick').html(h).prop('disabled', false)
+                         .val(res.current_spec_id ? String(res.current_spec_id) : '').trigger('change');
+        // 說明：這個類別對到哪個採購品項；沒有對應品項時直接告訴使用者去哪裡建
+        if (res.item){
+            $('#setSpecHint').html('對應採購品項：<b>'+esc(res.item.item_name)+'</b>'
+                + (res.see_spec_code && res.item.item_code ? '（'+esc(res.item.item_code)+'）' : '')
+                + '　共 '+SPEC_OPTS.length+' 個規格變體。'
+                + (SPEC_OPTS.length ? '' : '　此品項底下尚未建立規格，請至採購品主檔新增。'));
+        } else {
+            $('#setSpecHint').html('採購品主檔目前<b>沒有</b>名稱為「'+esc(res.category_name||'')+'」的品項，'
+                + '所以沒有料號可挑。可至<a href="../pages/purchase_request.php" target="_blank" style="color:#b5762a;">申請採購－採購品主檔</a>建立，'
+                + '或用工具列「量具料號對應」批次產生。');
+        }
+        // 一鍵比對建議：舊資料手打過規格、且找得到同規格的料號時才出現
+        if (res.suggest_spec_id && !res.current_spec_id){
+            var sg = SPEC_OPTS.filter(function(o){ return Number(o.spec_id)===Number(res.suggest_spec_id); })[0];
+            if (sg){
+                $('#setSpecSugg').html('這支量具目前手打的規格「<b>'+esc(res.spec_desc||'')+'</b>」'
+                    + '與採購料號「<b>'+esc(sg.spec_text||'')+'</b>」'+esc(res.suggest_reason?('（'+res.suggest_reason+'）'):'')+'，要對應過去嗎？'
+                    + '<button type="button" onclick="applySpecSuggest('+sg.spec_id+')">套用</button>').show();
+            }
+        }
+    }).fail(function(x){
+        SPEC_LOADING = false;
+        $('#setSpecHint').text('採購料號載入失敗：'+(x.responseJSON&&x.responseJSON.error||x.status));
+    });
+}
+function applySpecSuggest(sid){
+    $('#setSpecPick').val(String(sid)).trigger('change');
+    $('#setSpecSugg').hide();
+}
+/** 選了料號 → 規格欄自動帶入該料號規格文字並反灰；沒選 → 恢復手填 */
+$('#setSpecPick').on('change', function(){
+    var sid = Number($(this).val()||0);
+    var o = SPEC_OPTS.filter(function(x){ return Number(x.spec_id)===sid; })[0];
+    $('#setSpecWarn').hide();
+    if (!o){
+        $('#setSpecDesc').prop('readonly', false).removeClass('ro-auto').removeAttr('data-eg-skip');
+        return;
+    }
+    var txt = $.trim(o.spec_text||'');
+    var cur = $.trim($('#setSpecDesc').val()||'');
+    // 原本手打的內容跟料號規格不同時要講清楚，不可默默蓋掉（例：規格欄被拿來記氣壓需求）
+    if (cur && cur !== txt)
+        $('#setSpecWarn').html('原本手打的規格「'+esc(cur)+'」與料號規格不同，存檔後會以料號規格為準；'
+            + '若那段文字要保留，請先複製到「備註」欄。').show();
+    $('#setSpecDesc').val(txt).prop('readonly', true).addClass('ro-auto').attr('data-eg-skip','1');
+    // 製造商空白才帶品牌（使用者 2026-08-18：由採購品牌帶入、可覆寫）
+    if (!$.trim($('#setManufacturer').val()||'') && $.trim(o.brand||''))
+        $('#setManufacturer').val($.trim(o.brand));
+});
+/** 類別改了＝可挑的採購品項也跟著換，要重載並清掉舊的對應 */
+$('#setCat').on('change', function(){
+    if (!$('#setMask').is(':visible')) return;
+    loadSpecPick(setTool ? setTool.Tool_id : 0);
+});
 /* ---------- 類別設定（管理員；校驗屬性旗標＋自訂合併分頁） ---------- */
 /** 讀取 modal 目前畫面上的勾選狀態（新增/刪除分頁後重繪時保留未存的編輯） */
 function collectCatUI(){

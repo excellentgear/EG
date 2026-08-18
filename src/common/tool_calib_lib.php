@@ -846,6 +846,105 @@ function tool_calib_spec_draft(PDO $db): array {
     return $out;
 }
 
+/**
+ * 儀器設定跳窗用：這支量具「可以對應的採購料號（規格變體）」清單
+ * 對應規則沿用 tool_calib_spec_draft()／spec_apply 的既有口徑——**採購品項名稱＝量具類別名稱**
+ *（量具類別「游標卡尺」＝採購品項 QC-0001 游標卡尺，其規格變體 QC-0001-01/02/03 就是可挑的規格），
+ * 不另外建對照表，採購那邊改名／新增規格這裡即時跟著變（鐵律4：不寫死對照）。
+ * 已綁到別的品項底下的歷史資料，一併把那筆帶回來，避免下拉裡看不到自己現在綁的那一支。
+ * $specDesc 有值時順便算「一鍵比對建議」：拿手打的規格文字去比規格變體，回傳建議的 spec_id。
+ * 回傳 ['item'=>?品項, 'specs'=>[...], 'suggest_spec_id'=>?int, 'suggest_reason'=>string]
+ */
+function tool_calib_spec_options(PDO $db, string $catName, ?int $curSpecId = null, string $specDesc = ''): array {
+    $out = ['item' => null, 'specs' => [], 'suggest_spec_id' => null, 'suggest_reason' => ''];
+    try {
+        if (!$db->query("SHOW TABLES LIKE 'purchase_spec'")->fetchColumn()) return $out;
+    } catch (Throwable $e) { return $out; }
+    $hasBrand = false;
+    try { $hasBrand = (bool)$db->query("SHOW COLUMNS FROM purchase_spec LIKE 'brand'")->fetchColumn(); } catch (Throwable $e) {}
+    $brandSel = $hasBrand ? "ps.brand" : "''";
+
+    $catName = trim($catName);
+    $item = null;
+    if ($catName !== '') {
+        $st = $db->prepare("SELECT item_id, item_code, item_name FROM purchase_item
+                            WHERE item_name = ? ORDER BY is_active DESC, item_id LIMIT 1");
+        $st->execute([$catName]);
+        $item = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+    if ($item) $out['item'] = ['item_id'=>(int)$item['item_id'], 'item_code'=>(string)$item['item_code'],
+                              'item_name'=>(string)$item['item_name']];
+
+    // 停用的規格不列（但目前綁著的那一筆一定要列，否則存檔會被洗掉）
+    $where = []; $p = [];
+    if ($item) { $where[] = "(ps.item_id = ? AND ps.is_active = 1)"; $p[] = (int)$item['item_id']; }
+    if ($curSpecId) { $where[] = "ps.spec_id = ?"; $p[] = $curSpecId; }
+    if (!$where) return $out;
+    $st = $db->prepare("SELECT ps.spec_id, ps.spec_code, ps.spec_text, ps.is_active, $brandSel AS brand,
+                               pi.item_id, pi.item_name
+                        FROM purchase_spec ps
+                        LEFT JOIN purchase_item pi ON pi.item_id = ps.item_id
+                        WHERE " . implode(' OR ', $where) . "
+                        ORDER BY ps.spec_code");
+    $st->execute($p);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out['specs'][] = [
+            'spec_id'   => (int)$r['spec_id'],
+            'spec_code' => (string)$r['spec_code'],
+            'spec_text' => (string)$r['spec_text'],
+            'brand'     => (string)($r['brand'] ?? ''),
+            'is_active' => (int)$r['is_active'],
+            'item_id'   => (int)$r['item_id'],
+            'item_name' => (string)($r['item_name'] ?? ''),
+            'other_item'=> ($item && (int)$r['item_id'] !== (int)$item['item_id']) ? 1 : 0,
+        ];
+    }
+
+    // 一鍵比對建議：手打規格 vs 規格變體文字。完全相同 > 去空白相同 > 一方包含另一方（如 0-600mm ⊂ 0-600mm 電子）
+    $specDesc = trim($specDesc);
+    if ($specDesc !== '' && !$curSpecId) {
+        $norm = function (string $s): string {
+            return (string)preg_replace('/\s+/u', '', mb_strtolower(trim($s)));
+        };
+        $n = $norm($specDesc);
+        $best = null; $reason = '';
+        foreach ($out['specs'] as $s) {
+            if ($s['is_active'] !== 1) continue;
+            $t = $norm($s['spec_text']);
+            if ($t === '' || $n === '') continue;
+            if ($t === $n) { $best = $s; $reason = '規格文字完全相同'; break; }
+            if ($best === null && (mb_strpos($t, $n) !== false || mb_strpos($n, $t) !== false)) {
+                $best = $s; $reason = '規格文字相符';
+            }
+        }
+        if ($best) { $out['suggest_spec_id'] = $best['spec_id']; $out['suggest_reason'] = $reason; }
+    }
+    return $out;
+}
+
+/**
+ * 驗證「這個 spec_id 可以綁給這支量具嗎」——存檔前後端都要擋（鐵律8：不可只擋前端）
+ * 只接受「本類別對應採購品項底下、仍啟用」的規格；$curBound＝這支量具原本就綁著的那一筆，
+ * 沒被改動時一律放行（歷史資料可能綁在別的品項或已停用的規格上，不強迫使用者當下改掉）。
+ * 回傳 [是否可用, 錯誤訊息]；$specId 為 0/null＝解除對應，一律放行。
+ * 回傳綁定成功時第三個元素帶回該規格（存檔要用它的 spec_text／brand 連動）。
+ */
+function tool_calib_spec_assert(PDO $db, ?int $specId, string $catName, ?int $curBound = null): array {
+    if (!$specId) return [true, '', null];
+    try {
+        if (!$db->query("SHOW TABLES LIKE 'purchase_spec'")->fetchColumn()) return [false, '採購料號主檔尚未建立', null];
+    } catch (Throwable $e) { return [false, '採購料號主檔尚未建立', null]; }
+    $opt = tool_calib_spec_options($db, $catName, $curBound ?: null);
+    foreach ($opt['specs'] as $s) {
+        if ($s['spec_id'] !== $specId) continue;
+        if ($curBound && $specId === (int)$curBound) return [true, '', $s];      // 沒改動＝維持原狀
+        if ($s['is_active'] !== 1) return [false, '該採購料號已停用，請改選其他規格', null];
+        if ($s['other_item'] === 1) return [false, '該採購料號不屬於本類別對應的採購品項', null];
+        return [true, '', $s];
+    }
+    return [false, '找不到該採購料號，或它不屬於本類別（' . $catName . '）對應的採購品項', null];
+}
+
 /** 採購品類別清單（purchase_item.category_id 用；預設挑「品管 檢/量具」那一類） */
 function tool_calib_purchase_categories(PDO $db): array {
     try {
