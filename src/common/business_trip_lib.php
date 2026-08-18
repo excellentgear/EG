@@ -447,16 +447,15 @@ function bt_create_from_training(PDO $db, int $sessionId): array
                 $out['updated']++;
                 continue;
             }
-            $ident = bt_user_identity($db, $uidA);
+            $who = bt_resolve_user_dept($db, $uidA, (string)($a['dept_name'] ?? ''), (string)($a['position_name'] ?? ''));
             $db->prepare("INSERT INTO business_trip
                           (trip_no, apply_date, user_id, user_name, dept_id, dept_name, position_name,
                            date_from, date_to, time_from, time_to, location, reason,
                            status, source, ref_type, ref_id, created_by, created_at, updated_at)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'draft','training','training_session',?,?,NOW(),NOW())")
                ->execute([bt_next_no($db, $applyDate), $applyDate, $uidA,
-                          $a['user_name'] ?: $ident['user_name'],
-                          $ident['dept_id'], $a['dept_name'] ?: $ident['dept_name'],
-                          $a['position_name'] ?: $ident['position_name'],
+                          $a['user_name'] ?: $who['user_name'],
+                          $who['dept_id'], $who['dept_name'], $who['position_name'],
                           $dateFrom, $dateTo, $timeFrom, $timeTo, $location, $reason, $sessionId, $uidA]);
             bt_replace_days($db, (int)$db->lastInsertId(), $days);
             $out['created']++;
@@ -488,6 +487,47 @@ function bt_norm_time($v): ?string
     else return null;
     if ($h < 0 || $h > 23 || $i < 0 || $i > 59) return null;
     return sprintf('%02d:%02d', $h, $i);
+}
+
+/**
+ * 兼任人員的身分解析：一個人可能同時掛技術部工程師（主要）與生管組組長（兼任），
+ * 外訓當時登記的是哪個身分（training_attendee 的 dept_name/position_name 快照），公出單就要跟著印那個身分，
+ * 不能一律套主要職務。做法：先在這個人自己的部門職務對應中找同名部門，找到就連同該部門的職稱一起回傳；
+ * 找不到才退回全域部門表查 id（職稱沿用快照文字），再不行才用主要職務。
+ */
+function bt_resolve_user_dept(PDO $db, int $uid, string $deptName, string $posName = ''): array
+{
+    $ident = bt_user_identity($db, $uid);
+    $out = ['dept_id'=>$ident['dept_id'], 'dept_name'=>$ident['dept_name'],
+            'position_name'=>($posName !== '' ? $posName : $ident['position_name']),
+            'user_name'=>$ident['user_name']];
+    $deptName = trim($deptName);
+    if ($deptName === '') return $out;
+    try {
+        $st = $db->prepare("SELECT m.department_id, d.name AS dept_name, p.name AS position_name
+                            FROM user_department_position_map m
+                            LEFT JOIN department d ON d.id=m.department_id
+                            LEFT JOIN position p ON p.id=m.position_id
+                            WHERE m.user_id=? ORDER BY m.is_main DESC");
+        $st->execute([$uid]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (trim((string)$r['dept_name']) === $deptName) {      // 這個人確實掛在這個部門（含兼任）
+                return ['dept_id'=>(int)$r['department_id'], 'dept_name'=>(string)$r['dept_name'],
+                        'position_name'=>($posName !== '' ? $posName : (string)$r['position_name']),
+                        'user_name'=>$ident['user_name']];
+            }
+        }
+        $d = $db->prepare("SELECT id, name FROM department WHERE name=? LIMIT 1");   // 已調離等情況：至少把部門對上
+        $d->execute([$deptName]);
+        if ($r = $d->fetch(PDO::FETCH_ASSOC)) {
+            $out['dept_id']   = (int)$r['id'];
+            $out['dept_name'] = (string)$r['name'];
+            return $out;
+        }
+        $out['dept_name'] = $deptName;      // 部門表也查不到（舊名稱），至少印當時登記的文字
+        $out['dept_id']   = null;
+    } catch (Throwable $e) {}
+    return $out;
 }
 
 /** 這張公出單綁的外訓場次資訊（課程名稱＋原始上課日期時間），供編輯時對照用；沒綁外訓回 null */
@@ -645,9 +685,13 @@ function bt_training_fill(PDO $db, int $sessionId, int $uid): ?array
         $tq->execute([$sessionId, $uid]);
         $trip = $tq->fetch(PDO::FETCH_ASSOC) ?: null;
     }
+    $who = $uid ? bt_resolve_user_dept($db, $uid, (string)($att['dept_name'] ?? ''), (string)($att['position_name'] ?? '')) : null;
     return [
         'session_id'  => (int)$sessionId,
         'course_name' => (string)$s['course_name'],
+        'dept_id'     => $who['dept_id'] ?? null,             // 兼任者：用外訓當時登記的部門/職稱，不套主要職務
+        'dept_name'   => $who['dept_name'] ?? '',
+        'position_name' => $who['position_name'] ?? '',
         'org_unit'    => (string)($s['org_unit'] ?? ''),
         'apply_date'  => (string)$first['day_date'],        // ← 單據日期＝外訓最早日期
         'date_from'   => (string)$first['day_date'],

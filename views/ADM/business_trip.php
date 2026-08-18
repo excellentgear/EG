@@ -736,7 +736,9 @@ function pullMyTraining(sid){
         $('#fFrom').val(f.date_from || ''); $('#fTo').val(f.date_to || '');
         $('#fTimeFrom').val(f.time_from || ''); $('#fTimeTo').val(f.time_to || '');
         $('#fLocation').val(f.location || ''); $('#fReason').val(f.reason || '');
-        if (f.attendee && f.attendee.position_name) $('#fPosition').val(f.attendee.position_name);
+        /* 兼任人員：帶入外訓當時登記的部門與職稱（例：技術部工程師／生管組組長是同一人的兩個身分） */
+        if (f.dept_id) $('#fDept').val(String(f.dept_id));
+        if (f.position_name) $('#fPosition').val(f.position_name);
         /* 多天才需要逐日時段明細；單日用主檔起訖時間就夠 */
         $('#dayBody').html('');
         var days = f.days || [];
@@ -746,7 +748,9 @@ function pullMyTraining(sid){
         PULL_REF = +sid;
         renderClassRef(f);
         $('#pullBox').addClass('bt-pulled');
+        var whoTxt = [f.dept_name || '', f.position_name || ''].filter(function(x){ return x; }).join('　');
         $('#pullHint').html('已帶入外訓：<b>' + esc(f.course_name || '') + '</b>'
+            + (whoTxt ? '　身分：<b>' + esc(whoTxt) + '</b>（外訓當時登記的部門／職稱）' : '')
             + (f.org_unit ? '（' + esc(f.org_unit) + '）' : '')
             + '　單據日期已自動設為最早上課日 <b>' + esc(dispDate(f.apply_date)) + '</b>'
             + ((+f.commute_min) ? '，公出時間已前後各加 <b>' + (+f.commute_min) + ' 分鐘</b>通勤時間' : '')
