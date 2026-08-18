@@ -269,8 +269,10 @@ case 'submit': {
                                      (int)$trip['user_id'], !$needAppr);
     try {
         if (!$needAppr || !$signer) {
-            // 自動核准：業務日期＝送出日，精確時間錯開 5~30 分鐘不跨日（ai-rules/21）
+            // 自動核准：核准業務日期＝單據日期（apply_date，使用者明確要求；補舊資料時章上日期才會跟單據一致），
+            // 精確時間戳仍是真實發生時間、錯開 5~30 分鐘不跨日（ai-rules/21 的業務日期／時間戳分離）
             $autoAt   = bt_auto_sign_time($now);
+            $apprDate = (string)($trip['apply_date'] ?? '') ?: $today;
             $autoNote = !$needAppr ? '模組設定為「免簽核」，送出即視同核准'
                                    : '查無可核准的單位主管與最高核准人員，系統自動核准';
             $aid = eg_approval_submit($db, 'business_trip', $tripId, 'manager', $uid, $uname);
@@ -280,7 +282,7 @@ case 'submit': {
                                  approved_date=?, approved_at=?, updated_at=NOW()
                           WHERE trip_id=?")
                ->execute([$today, $now, $signer['id'] ?? null, $signer['name'] ?? '',
-                          !empty($signer['is_delegated']) ? 1 : 0, $autoNote, $today, $autoAt, $tripId]);
+                          !empty($signer['is_delegated']) ? 1 : 0, $autoNote, $apprDate, $autoAt, $tripId]);
             jout(['status'=>'approved', 'auto'=>1, 'note'=>$autoNote,
                   'approver'=>$signer['name'] ?? '', 'approved_at'=>$autoAt]);
         }

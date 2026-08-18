@@ -436,6 +436,7 @@ function loadMeta(then){
     $.getJSON(API, {action:'meta'}, function(res){
         if (!res.ok) return;
         META = res;
+        window.__ownCompany = res.company || '';   // eg_stamp.js 畫回墨印章的上弧公司名讀這個全域變數（漏設＝章上公司名整片消失）
         $('#fApplyDate').val(res.today);
         $('#trYear').val(new Date().getFullYear());
         var dh = '<option value="">（未設定）</option>';
@@ -817,6 +818,7 @@ function printTrip(id){
     if (!id) { alert('請先儲存後再列印'); return; }
     $.getJSON(API, {action:'print_meta', trip_id:id}, function(res){
         if (!res.ok) { alert(res.error||'讀取失敗'); return; }
+        window.__ownCompany = res.company || window.__ownCompany || '';   // 圖章公司名（列印前再確保一次）
         var w = window.open('', '_blank');
         if (!w) { alert('請允許彈出視窗'); return; }
         w.document.write(tripPrintHtml(res));
