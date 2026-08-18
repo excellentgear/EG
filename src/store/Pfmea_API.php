@@ -331,7 +331,8 @@ case 'ref_requirement_list_exact':
 // 依 BOM 帶入失效模式分析（2026-08-18 使用者要求）
 case 'bom_process_candidates':
     needEdit($perms);
-    jout(['success'=>true,'rows'=>pfmea_part_bom_processes($db, (int)($_GET['part_d_id'] ?? 0))]);
+    jout(['success'=>true,'rows'=>pfmea_part_bom_processes($db, (int)($_GET['part_d_id'] ?? 0),
+          (string)($_GET['part_no'] ?? ''), (string)($_GET['customer_name'] ?? ''))]);
 
 case 'templates_of_processes':
     needEdit($perms);

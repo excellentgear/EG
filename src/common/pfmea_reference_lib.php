@@ -296,18 +296,49 @@ function pfmea_ref_requirement_option_add(PDO $db, int $functionOptionId, int $p
  * 來源 vw_bom_process_list（BOM 各站別製程），以 bom.d_id 對應料號；同一料號多張 BOM 取聯集。
  * 一併回傳該製程目前有幾筆整組樣板可帶入，畫面上才知道勾了會長出幾列。
  */
-function pfmea_part_bom_processes(PDO $db, int $partDId): array {
-    if (!$partDId) return [];
-    $st = $db->prepare("SELECT v.process_no, MIN(v.ProcessName) AS process_name,
-                               MIN(v.bom_sn) AS first_sn, COUNT(DISTINCT b.bom) AS bom_count
-                          FROM bom b
-                          JOIN vw_bom_process_list v ON v.bom = b.bom
-                         WHERE b.d_id = ? AND v.process_no IS NOT NULL
-                         GROUP BY v.process_no
-                         ORDER BY first_sn, v.process_no");
-    $st->execute([$partDId]);
-    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+function pfmea_part_bom_processes(PDO $db, int $partDId, string $partNo = '', string $customer = ''): array {
+    $partNo = trim($partNo); $customer = trim($customer);
+    if (!$partDId && $partNo === '') return [];
+
+    /* ⚠ bom 這張表的欄位名稱與實際內容相反（實測）：
+         bom.d_id        = 料號「文字」（如 DRW_AA98366_001）
+         bom.d_setting_id= d_setting 的數字主鍵
+       另外製程明細要讀 bom_ing，不能用 vw_bom_process_list——那個檢視只涵蓋在製中的 BOM，
+       已完工的 BOM 查不到（實測 B-1150227006 在檢視表 0 筆、在 bom_ing 有資料）。 */
+    $sql = "SELECT i.process_no, MIN(i.maker_id) AS maker_id, MIN(i.bom_sn) AS first_sn,
+                   COUNT(DISTINCT b.bom) AS bom_count
+              FROM bom b
+              JOIN bom_ing i ON i.bom = b.bom
+             WHERE %s AND i.process_no IS NOT NULL
+             GROUP BY i.process_no
+             ORDER BY first_sn, i.process_no";
+
+    $rows = []; $matchBy = '';
+    if ($partDId) {
+        $st = $db->prepare(sprintf($sql, 'b.d_setting_id = ?'));
+        $st->execute([$partDId]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        if ($rows) $matchBy = '料號主鍵';
+    }
+    // 舊料號當初沒跟 BOM 綁主鍵（2026-08-18 使用者要求）：退而求其次用「料號文字完全相同
+    // ＋客戶名稱模糊相同」比對；沒給客戶就只比料號文字。
+    if (!$rows && $partNo !== '') {
+        if ($customer !== '') {
+            $st = $db->prepare(sprintf($sql, 'b.d_id = ? AND b.Client_Name LIKE ?'));
+            $st->execute([$partNo, '%' . $customer . '%']);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            if ($rows) $matchBy = '料號文字＋客戶模糊比對';
+        }
+        if (!$rows) {
+            $st = $db->prepare(sprintf($sql, 'b.d_id = ?'));
+            $st->execute([$partNo]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            if ($rows) $matchBy = '料號文字比對';
+        }
+    }
     if (!$rows) return [];
+    foreach ($rows as &$rr) { $rr['match_by'] = $matchBy; }
+    unset($rr);
     foreach ($rows as &$r) {
         $code = (string)$r['process_no'];
         $st2 = $db->prepare("SELECT p.id, p.process_name,
@@ -315,9 +346,14 @@ function pfmea_part_bom_processes(PDO $db, int $partDId): array {
                                FROM pfmea_process p WHERE p.process_code=? AND p.is_active=1 LIMIT 1");
         $st2->execute([$code]);
         $p = $st2->fetch(PDO::FETCH_ASSOC);
+        if (!$p) {   // PFMEA 還沒建過這個代號，用全站製程主檔補名稱讓畫面看得懂
+            $st3 = $db->prepare("SELECT ProcessName FROM process_no WHERE ProcessNo=? LIMIT 1");
+            $st3->execute([$code]);
+            $r['master_name'] = (string)($st3->fetchColumn() ?: '');
+        }
         $r['process_code']  = $code;
         $r['pfmea_process_id'] = $p ? (int)$p['id'] : 0;
-        $r['process_name']  = $p['process_name'] ?? $r['process_name'];
+        $r['process_name']  = $p['process_name'] ?? ($r['master_name'] ?? ($r['maker_id'] ?? ''));
         $r['tpl_count']     = $p ? (int)$p['tpl_count'] : 0;
     }
     unset($r);

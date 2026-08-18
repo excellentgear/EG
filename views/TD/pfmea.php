@@ -492,7 +492,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <div style="flex:1;min-width:0;">
         <div class="pf-head-grid">
             <div>
-                <label>料號</label>
+                <label>料號 <span id="fPartBindMark" style="font-weight:normal;font-size:12px;margin-left:6px;"></span></label>
                 <div class="pf-proc-box">
                     <input type="text" id="fPartNo" placeholder="輸入部分料號或圖號搜尋；查無時可直接手動輸入" autocomplete="off">
                     <button type="button" id="btnOpenDrawing" onclick="openPartDrawing()" style="display:none;height:30px;padding:0 8px;border-radius:4px;border:1px solid #D8BE93;background:#fff;color:#b5762a;cursor:pointer;" title="開新視窗看圖面填寫參考"><i class="fa fa-image"></i> 開圖</button>
@@ -1545,21 +1545,34 @@ window.applyActionPicker = function(){
  * 「在儲存後都要自動幫我建立此料號與這整組關係」＋「手動新件的單據也要這樣」。
  * 因此按鈕只要料號綁定了就出現（不分是建議建立清單轉入或手動新建），存檔時一律登記料號↔整組關聯。 */
 var BOM_PROCS = [];
+/* 綁定狀態符號 + BOM 按鈕顯示（2026-08-18 使用者要求：要有綁定符號方便識別；
+   且不應該要重新綁定一次料號按鈕才出現——改成任何會變動料號的時機都重算）。 */
 function refreshBomFillBtn(){
     var bound = parseInt($('#fPartDId').val(),10) || 0;
-    $('#btnBomFill').toggle(!!(bound && CAN_EDIT));
+    var pno = ($('#fPartNo').val()||'').trim();
+    $('#btnBomFill').toggle(!!((bound || pno) && CAN_EDIT));
+    var $s = $('#fPartBindMark');
+    if (!pno) $s.html('');
+    else if (bound) $s.html('<span style="color:#2e7d32;font-weight:bold;" title="已綁定料號主檔，可開圖、可查BOM製程">🔗 已綁定</span>');
+    else $s.html('<span style="color:#DD5138;font-weight:bold;" title="僅為文字料號，未綁定料號主檔">⚠ 未綁定</span>');
 }
 window.openBomFill = function(){
     var pid = parseInt($('#fPartDId').val(),10) || 0;
-    if (!pid){ alert('請先綁定料號（BOM 製程要靠料號才查得到）'); return; }
+    var pno = ($('#fPartNo').val()||'').trim();
+    if (!pid && !pno){ alert('請先輸入或綁定料號（BOM 製程要靠料號才查得到）'); return; }
     $('#bomFillList').html('載入中…');
     $('#bomFillClear').prop('checked', false);
     openMask('bomFillMask');
-    $.getJSON(API, {action:'bom_process_candidates', part_d_id:pid}, function(res){
+    // 舊料號當初沒跟 BOM 綁主鍵，後端會自動退而用「料號文字＋客戶模糊」比對，故一併送出
+    $.getJSON(API, {action:'bom_process_candidates', part_d_id:pid, part_no:pno,
+                    customer_name:($('#fCustomerName').val()||'').trim()}, function(res){
         if (!res.success){ $('#bomFillList').text(res.message||'載入失敗'); return; }
         BOM_PROCS = res.rows || [];
-        if (!BOM_PROCS.length){ $('#bomFillList').html('<div style="color:#8a6d45;padding:10px;">這個料號在 BOM 上查不到製程資料。</div>'); return; }
-        $('#bomFillList').html(BOM_PROCS.map(function(p, i){
+        if (!BOM_PROCS.length){ $('#bomFillList').html('<div style="color:#8a6d45;padding:10px;">這個料號在 BOM 上查不到製程資料（已一併嘗試用料號文字與客戶名稱比對）。</div>'); return; }
+        var mb = BOM_PROCS[0].match_by || '';
+        $('#bomFillList').html((mb && mb !== '料號主鍵'
+            ? '<div style="font-size:12px;color:#B5762A;margin-bottom:6px;">※ 此料號未與 BOM 綁定主鍵，以「'+esc(mb)+'」找到下列 BOM 製程，請確認是否正確。</div>' : '')
+            + BOM_PROCS.map(function(p, i){
             var has = p.tpl_count > 0;
             return '<label style="display:block;padding:5px 0;'+(has?'':'color:#A8906E;')+'">'
                 + '<input type="checkbox" data-i="'+i+'" '+(has?'checked':'disabled')+'> '
@@ -1803,6 +1816,7 @@ function resetEditForm(){
 /* 綁定料號後共用動作：開圖按鈕/訂單製程履歷側欄/齒輪規格自動偵測/建議建立日期快速套用按鈕
    （2026-08-13使用者要求，皆綁定料號後才有意義，未綁定料號時全部隱藏/清空） */
 function onPartBound(partDId, partText, custName){
+    refreshBomFillBtn();   // 綁定狀態一變就重算(原本只在少數入口呼叫，開既有文件時要重綁一次才出現)
     if (!partDId && !partText) {
         $('#btnOpenDrawing').hide(); $('#fOrderProcPanel').hide(); $('#fBizDateQuick').html('');
         return;
