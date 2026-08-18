@@ -3853,20 +3853,23 @@ function printRequestForm(){
     var deptName = $('#reqDept option:selected').text() || r.dept_name || '';
     var docTitle = DOC_NAME.request || '教育訓練需求申請單';   // 表頭一律用綁定AS文件的 doc_name，不寫死（ai-rules/16 第一之二節）
 
-    // 受訓人員：欄位順序固定「部門／職稱／姓名」（ai-rules/08 第五節鐵則5）；不足 3 列補空列，紙本可手寫補人
-    var trs = r.trainees_list || [], trRows = '';
-    for (var i=0; i<Math.max(trs.length,3); i++){
-        var t = trs[i] || {};
-        trRows += '<tr><td>'+esc(t.dept_name||'')+'</td><td>'+esc(t.position_name||'')+'</td><td>'+esc(t.user_name||'')+'</td></tr>';
+    // 受訓人員：人數不固定（可能十幾二十位），不用逐列表格以免撐爆版面，改用可自動換行的流式清單「姓名（部門／職稱）」
+    var trs = r.trainees_list || [];
+    var trHtml = trs.map(function(t){
+        var sub = [t.dept_name||'', t.position_name||''].filter(function(x){ return x; }).join('／');
+        return '<span class="pp">'+esc(t.user_name||'')+(sub?'<i>（'+esc(sub)+'）</i>':'')+'</span>';
+    }).join('');
+    // 受訓時間：天數不固定，一列排兩天（省一半高度），未填滿補到至少 6 格供手寫
+    var ds = r.days || [], cells = [];
+    for (var j=0; j<Math.max(ds.length,6); j++){
+        var d = ds[j] || {}, tm = d.start_time ? (d.start_time + (d.end_time ? '~'+d.end_time : '')) : '';
+        cells.push('<td class="dn">'+(d.day_date?('第 '+(j+1)+' 天'):'')+'</td>'
+                 + '<td class="dd">'+(d.day_date?esc(dispDate(d.day_date)):'')+'</td>'
+                 + '<td class="dt">'+esc(tm)+'</td>');
     }
-    // 受訓時間：逐日一列（日期＋起訖時間），不足 2 列補空列
-    var ds = r.days || [], dRows = '';
-    for (var j=0; j<Math.max(ds.length,2); j++){
-        var d = ds[j] || {}, tm = d.start_time ? (d.start_time + (d.end_time ? ' ~ '+d.end_time : '')) : '';
-        dRows += '<tr><td class="c1">'+(d.day_date?('第 '+(j+1)+' 天'):'')+'</td>'
-               + '<td class="c2">'+(d.day_date?esc(dispDate(d.day_date)):'')+'</td>'
-               + '<td>'+esc(tm)+'</td></tr>';
-    }
+    if (cells.length % 2) cells.push('<td class="dn"></td><td class="dd"></td><td class="dt"></td>');
+    var dRows = '';
+    for (var k=0; k<cells.length; k+=2) dRows += '<tr>'+cells[k]+cells[k+1]+'</tr>';
     var sum = [];
     if (ds.length) sum.push('共 '+ds.length+' 天');
     if (r.hours!=null && r.hours!=='') sum.push('預估總時數 '+numTrim(r.hours)+' 小時');
@@ -3877,22 +3880,25 @@ function printRequestForm(){
         + 'table.rq th,table.rq td{border:1px solid #000;padding:6px 8px;line-height:1.7;word-wrap:break-word;overflow-wrap:break-word;}'
         + 'table.rq th{background:#F5EEE3;font-weight:bold;text-align:center;font-size:13px;letter-spacing:1px;}'
         + 'table.rq td{text-align:left;white-space:pre-wrap;}'
-        + 'table.rq td.memo{height:32mm;vertical-align:top;}'
+        + 'table.rq td.memo{height:30mm;vertical-align:top;}'
         + 'table.rq th.memo{vertical-align:top;padding-top:8px;}'
         + 'table.rq td.p0{padding:0;}'
+        + '.rq-people{min-height:20mm;padding:6px 8px;font-size:13px;line-height:2;}'
+        + '.rq-people .pp{display:inline-block;margin:0 14px 2px 0;white-space:nowrap;}'
+        + '.rq-people .pp i{font-style:normal;font-size:11px;color:#444;}'
+        + '.rq-people .cnt{color:#444;font-size:11.5px;margin-right:10px;}'
         + 'table.sub{width:100%;border-collapse:collapse;font-size:12.5px;table-layout:fixed;}'
-        + 'table.sub th,table.sub td{border:none;border-bottom:1px solid #BBB;border-right:1px solid #BBB;padding:4px 8px;text-align:center;height:8mm;}'
-        + 'table.sub th{background:#FAF5EC;font-weight:normal;color:#333;font-size:12px;}'
+        + 'table.sub td{border:none;border-bottom:1px solid #BBB;border-right:1px solid #BBB;padding:3px 6px;text-align:center;height:7.5mm;}'
         + 'table.sub tr:last-child td{border-bottom:none;}'
-        + 'table.sub td:last-child,table.sub th:last-child{border-right:none;}'
-        + 'table.sub td.c1{width:22%;}table.sub td.c2{width:34%;}'
+        + 'table.sub td:last-child{border-right:none;}'
+        + 'table.sub td.dn{width:11%;color:#444;font-size:11.5px;}table.sub td.dd{width:19%;}table.sub td.dt{width:20%;}'
         + '.rq-sum{padding:4px 8px;font-size:12px;color:#333;border-top:1px solid #BBB;}'
         + '.rq-sign{margin-top:auto;padding-top:10px;}'
         + 'table.sg{width:100%;border-collapse:collapse;table-layout:fixed;border:1.5px solid #000;}'
-        + 'table.sg td{border:1px solid #000;padding:0;vertical-align:top;height:32mm;}'
+        + 'table.sg td{border:1px solid #000;padding:0;vertical-align:top;height:30mm;}'
         + 'table.sg .lb{font-size:11.5px;background:#F5EEE3;border-bottom:1px solid #000;padding:3px 6px;text-align:center;letter-spacing:.5px;}'
-        + 'table.sg .bx{height:calc(32mm - 22px);display:flex;align-items:center;justify-content:center;}'
-        + '.rq-sign .stamp-wrap svg,.rq-sign svg.car-stamp{width:80px;height:80px;}';
+        + 'table.sg .bx{height:calc(30mm - 22px);display:flex;align-items:center;justify-content:center;}'
+        + '.rq-sign .stamp-wrap svg,.rq-sign svg.car-stamp{width:78px;height:78px;}';
 
     var body = '<div class="rq-wrap">'
         + '<div class="pt-head"><div class="co">'+esc(COMPANY)+'</div><div class="tt">'+esc(docTitle)+'</div></div>'
@@ -3902,9 +3908,9 @@ function printRequestForm(){
         + '<tr><th>主　　旨</th><td colspan="3">'+esc(r.subject||'')+'</td></tr>'
         + '<tr><th class="memo">一、簡述內容</th><td colspan="3" class="memo">'+esc(r.content||'')+'</td></tr>'
         + '<tr><th class="memo">二、主管要求<br>　　學習重點</th><td colspan="3" class="memo">'+esc(r.focus||'')+'</td></tr>'
-        + '<tr><th>三、受訓人員</th><td colspan="3" class="p0"><table class="sub">'
-        +   '<tr><th style="width:22%">部門</th><th style="width:34%">職稱</th><th>姓名</th></tr>'+trRows+'</table></td></tr>'
-        + '<tr><th>四、受訓時間</th><td colspan="3" class="p0"><table class="sub">'+dRows+'</table>'
+        + '<tr><th>三、受訓人員</th><td colspan="3" class="p0"><div class="rq-people">'
+        +   (trs.length ? '<span class="cnt">共 '+trs.length+' 人：</span>'+trHtml : '')+'</div></td></tr>'
+        + '<tr><th>四、受訓時間</th><td colspan="3" class="p0"><table class="sub"><tbody>'+dRows+'</tbody></table>'
         +   (sum.length ? '<div class="rq-sum">'+esc(sum.join('，'))+'</div>' : '')+'</td></tr>'
         + '<tr><th>五、受訓地點</th><td colspan="3">'+esc(r.location||'')+'</td></tr>'
         + '<tr><th>六、受訓費用</th><td>'+esc(r.cost||'')+'</td><th>簡章份數</th><td>'
