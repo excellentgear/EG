@@ -129,6 +129,13 @@ function td_dev_eval_ensure_schema(PDO $db): void {
         UNIQUE KEY uq_doc_slot (doc_id, slot_key)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='產品開發評估表-APQP小組簽認+決行'");
 
+    // 決行結果原本只存在表頭 td_dev_eval.decision 一欄（生產課先選、總經理可覆蓋），列印時「總經理決行」那格
+    // 印不出他自己決行的結果（只有一行印在生產課那格上方）。改為簽核當下把該欄自己的決行結果一併留存，
+    // 生產課與總經理各印各的；表頭 decision 仍維持「最終決策」語意不動（清單與其他呼叫端不受影響）。
+    foreach ([
+        "ALTER TABLE td_dev_eval_signoff ADD COLUMN decision_value VARCHAR(20) NULL COMMENT '該欄簽核當下的決行結果(僅prod_decision/gm有值)' AFTER note",
+    ] as $ddl) { try { $db->exec($ddl); } catch (Throwable $e) {} }
+
     // 產品名稱預設值：2026-08-12版誤做成「綁定特定料號」，2026-08-13使用者更正為「全部產品通用的單一預設值」，
     // 非特定料號；舊table保留既有資料但不再寫入，改用system_parameters存一個全域值。首次切換時若舊table已有
     // 使用者設定過的值，直接帶過來當全域預設值，不必使用者重新輸入一次。
@@ -565,11 +572,13 @@ function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, i
             $signerName = $pool ? $pool[0]['user_cname'] : null;
             if (!$signerName) { $signerId = $adminUid; $signerName = $adminName; }
             $offsetMin = random_int(5, 30);
-            $st = $db->prepare("INSERT INTO td_dev_eval_signoff (doc_id, slot_key, signed_by, signed_by_name, signed_at, is_backfill, backfill_by_name)
-                VALUES (?,?,?,?, LEAST(DATE_ADD(CONCAT(?,' 08:30:00'), INTERVAL ? MINUTE), CONCAT(?,' 23:59:59')), 1, ?)
-                ON DUPLICATE KEY UPDATE signed_by=VALUES(signed_by), signed_by_name=VALUES(signed_by_name),
+            // 決行欄位(生產課/總經理)要各自留下自己那格的決行結果，列印時兩格才印得出來；其他欄位存 NULL
+            $slotDecision = in_array($slotKey, ['prod_decision','gm'], true) ? $decision : null;
+            $st = $db->prepare("INSERT INTO td_dev_eval_signoff (doc_id, slot_key, decision_value, signed_by, signed_by_name, signed_at, is_backfill, backfill_by_name)
+                VALUES (?,?,?,?,?, LEAST(DATE_ADD(CONCAT(?,' 08:30:00'), INTERVAL ? MINUTE), CONCAT(?,' 23:59:59')), 1, ?)
+                ON DUPLICATE KEY UPDATE decision_value=VALUES(decision_value), signed_by=VALUES(signed_by), signed_by_name=VALUES(signed_by_name),
                     signed_at=VALUES(signed_at), is_backfill=1, backfill_by_name=VALUES(backfill_by_name)");
-            $st->execute([$docId, $slotKey, $signerId, $signerName, $bizDate, $offsetMin, $bizDate, $adminName]);
+            $st->execute([$docId, $slotKey, $slotDecision, $signerId, $signerName, $bizDate, $offsetMin, $bizDate, $adminName]);
             $lastSignedAt = $bizDate;
         }
         $db->prepare("UPDATE td_dev_eval SET status='closed', closed_at=CONCAT(?,' 23:59:00') WHERE id=?")

@@ -58,6 +58,7 @@ function buildSlotView(PDO $db, string $slotKey, array $row, int $docId, int $cu
     return [
         'slot_key' => $slotKey, 'label' => $label,
         'note' => $row['note'], 'signed_by' => $row['signed_by'] ? (int)$row['signed_by'] : null,
+        'decision_value' => $row['decision_value'] ?? null, // 該欄簽核當下的決行結果(僅生產課決行/總經理決行)
         'signed_by_name' => $row['signed_by_name'], 'signed_at' => $row['signed_at'],
         'is_deputy' => !empty($row['is_deputy']), 'is_backfill' => !empty($row['is_backfill']),
         'backfill_by_name' => $row['backfill_by_name'],
@@ -135,7 +136,7 @@ case 'get':
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $s) $signRows[$s['slot_key']] = $s;
     $slots = [];
     foreach (array_keys(TD_DEV_EVAL_SLOTS) as $slotKey) {
-        $row = $signRows[$slotKey] ?? ['note'=>null,'signed_by'=>null,'signed_by_name'=>null,'signed_at'=>null,'is_deputy'=>0,'is_backfill'=>0,'backfill_by_name'=>null];
+        $row = $signRows[$slotKey] ?? ['note'=>null,'decision_value'=>null,'signed_by'=>null,'signed_by_name'=>null,'signed_at'=>null,'is_deputy'=>0,'is_backfill'=>0,'backfill_by_name'=>null];
         $slots[$slotKey] = buildSlotView($db, $slotKey, $row, $id, $uid, $doc);
     }
     jout(['success'=>true,'doc'=>$doc,'answers'=>$answers,'slots'=>$slots]);
@@ -276,11 +277,14 @@ case 'sign':
             $db->prepare("UPDATE td_dev_eval SET decision=?, updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=?")
                ->execute([$decision, $uid, $uname, $docId]);
         }
-        $st = $db->prepare("INSERT INTO td_dev_eval_signoff (doc_id, slot_key, note, signed_by, signed_by_name, signed_at, is_deputy)
-                             VALUES (?,?,?,?,?,NOW(),?)
-                             ON DUPLICATE KEY UPDATE note=VALUES(note), signed_by=VALUES(signed_by),
+        // 決行欄位另存「這一格自己選的決行結果」：表頭 decision 是最終決策(總經理會覆蓋生產課)，只留表頭的話
+        // 列印時總經理那格印不出自己的結果，且生產課被覆蓋前選了什麼也查不到
+        $slotDecision = ($slotKey === 'prod_decision' || $slotKey === 'gm') ? $decision : null;
+        $st = $db->prepare("INSERT INTO td_dev_eval_signoff (doc_id, slot_key, note, decision_value, signed_by, signed_by_name, signed_at, is_deputy)
+                             VALUES (?,?,?,?,?,?,NOW(),?)
+                             ON DUPLICATE KEY UPDATE note=VALUES(note), decision_value=VALUES(decision_value), signed_by=VALUES(signed_by),
                                  signed_by_name=VALUES(signed_by_name), signed_at=NOW(), is_deputy=VALUES(is_deputy)");
-        $st->execute([$docId, $slotKey, $note ?: null, $uid, $uname, !empty($mine['is_deputy']) ? 1 : 0]);
+        $st->execute([$docId, $slotKey, $note ?: null, $slotDecision, $uid, $uname, !empty($mine['is_deputy']) ? 1 : 0]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'簽核失敗：'.$e->getMessage()]); }
     td_dev_eval_advance_after_sign($db, $docId, $slotKey, $uid, $uname);
@@ -362,9 +366,11 @@ case 'backfill_sign_all':
     if (!is_array($assignments) || !$assignments) jout(['success'=>false,'message'=>'沒有要補登的欄位']);
     $chk = eg_confirm_password_verify($db, $uid, $password);
     if (!$chk['ok']) jout(['success'=>false,'message'=>$chk['msg']]);
-    $st = $db->prepare("SELECT status FROM td_dev_eval WHERE id=? AND is_deleted=0");
+    $st = $db->prepare("SELECT status, decision FROM td_dev_eval WHERE id=? AND is_deleted=0");
     $st->execute([$docId]);
-    $curStatus = $st->fetchColumn();
+    $curRow = $st->fetch(PDO::FETCH_ASSOC);
+    $curStatus = $curRow === false ? false : $curRow['status'];
+    $curDecision = $curRow === false ? null : ($curRow['decision'] ?: null); // 補登沒有逐欄選決行結果的欄位，沿用表頭目前的值
     if ($curStatus === false) jout(['success'=>false,'message'=>'找不到該筆']);
     if ($curStatus === 'draft') jout(['success'=>false,'message'=>'此表單尚未送出，請先送出，或改用系統管理員的「全部自動簽核」功能']);
 
@@ -381,12 +387,13 @@ case 'backfill_sign_all':
             $st->execute([$signerUid]);
             $signerName = $st->fetchColumn();
             if (!$signerName) continue;
+            $slotDecision = in_array($slotKey, ['prod_decision','gm'], true) ? $curDecision : null;
             $st = $db->prepare("INSERT INTO td_dev_eval_signoff
-                (doc_id, slot_key, note, signed_by, signed_by_name, signed_at, is_backfill, backfill_by_name)
-                VALUES (?,?,?,?,?,?,1,?)
-                ON DUPLICATE KEY UPDATE note=VALUES(note), signed_by=VALUES(signed_by), signed_by_name=VALUES(signed_by_name),
+                (doc_id, slot_key, note, decision_value, signed_by, signed_by_name, signed_at, is_backfill, backfill_by_name)
+                VALUES (?,?,?,?,?,?,?,1,?)
+                ON DUPLICATE KEY UPDATE note=VALUES(note), decision_value=VALUES(decision_value), signed_by=VALUES(signed_by), signed_by_name=VALUES(signed_by_name),
                     signed_at=VALUES(signed_at), is_backfill=1, backfill_by_name=VALUES(backfill_by_name)");
-            $st->execute([$docId, $slotKey, $note ?: null, $signerUid, $signerName, $signedAt ?: date('Y-m-d H:i:s'), $uname]);
+            $st->execute([$docId, $slotKey, $note ?: null, $slotDecision, $signerUid, $signerName, $signedAt ?: date('Y-m-d H:i:s'), $uname]);
             $signedSlots[] = $slotKey;
         }
         $db->commit();

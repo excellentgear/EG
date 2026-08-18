@@ -375,7 +375,7 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
             <li>按「新增」→ 填客戶名稱、產品件號（打部分字元搜尋，選定後自動帶出客戶名稱；查無此料號時可直接手動輸入新產品件號，不強制要求已存在的料號）、產品名稱、預估需求量、填表日期、送樣時間。此階段（草稿）僅能編輯表頭；32 項確認結果任何人都還不能點選填寫（含評估表管理員），要等送出後由各部門在自己的簽核關卡才能填自己負責的項次——確認項目及結果的填寫/簽核權限只看「本人是否在該部門目前的簽核池內」，跟評估表登錄／管理員這種頁面操作角色無關。</li>
             <li>填好後按「送出」：表頭與 32 項確認結果隨即鎖定（僅系統管理員可再整批修改），系統會通知六部門（技術/業務/管理/生產/品保/資材課）的合格簽核人開始填寫。</li>
             <li>APQP 小組簽認：輪到自己部門簽核時，「確認項目及結果」表格中屬於本部門的項次列會醒目標示且可編輯，填完後在「APQP 小組簽認」該部門列填意見（非必填）按「我要簽核」即完成並蓋章；六部門不限順序、任一位主管都可以簽，不限定特定一人。</li>
-            <li>六部門<b>全部</b>簽認完成後，「生產課決行」才會開放：勾選「可行自製／可行委外／再評估／中止」並簽核（點選當下不會存檔，要按「我要簽核」才正式生效）；決行完成後「總經理決行」才會開放，總經理同樣要從這四個選項中選一個並簽核——<b>總經理的選擇才是最終決策</b>，可以直接沿用生產課的結果，也可以改選後覆蓋；總經理簽完系統自動將本表單標記為「已結案」。</li>
+            <li>六部門<b>全部</b>簽認完成後，「生產課決行」才會開放：勾選「可行自製／可行委外／再評估／中止」並簽核（點選當下不會存檔，要按「我要簽核」才正式生效）；決行完成後「總經理決行」才會開放，總經理同樣要從這四個選項中選一個並簽核——<b>總經理的選擇才是最終決策</b>，可以直接沿用生產課的結果，也可以改選後覆蓋；總經理簽完系統自動將本表單標記為「已結案」。<b>生產課與總經理各自選的決行結果會分別留存</b>，列印時兩格各印各的（總經理覆蓋後，生產課那格仍印生產課當初選的結果）。</li>
         </ul>
         <h4>建議建立料號清單（管理員）</h4>
         <ul>
@@ -633,11 +633,16 @@ function renderDecisionRadios($grp, name, cur, editable){
     });
     $grp.html(html);
 }
+/* cur = 表頭最終決行結果；生產課那組要顯示「生產課自己簽的那個結果」（總經理覆蓋後表頭已經是總經理的值，
+   拿表頭去填生產課那組會把總經理的選擇誤植成生產課的），故優先讀該欄簽核當下留存的 decision_value */
 function renderDecisionGrp(cur, prodSlot){
-    renderDecisionRadios($('#decisionGrp'), 'decision', cur, FULL_EDIT_MODE || !!(prodSlot && prodSlot.can_sign));
-    renderDecisionRadios($('#gmDecisionGrp'), 'gm_decision', cur, FULL_EDIT_MODE || !!(CUR_SLOTS['gm'] && CUR_SLOTS['gm'].can_sign));
-    // 總經理決行時要看得到生產課決行了什麼，不用往上滑動翻找（使用者明確要求）；上方選項預設沿用同一個值，可自行覆蓋
-    $('#gmDecisionInfo').html(cur ? ('生產課決行結果：<b>'+esc(DECISIONS[cur]||cur)+'</b>') : '<span style="color:#b0a390;">（生產課尚未決行）</span>');
+    var prodCur = (prodSlot && prodSlot.decision_value) ? prodSlot.decision_value : cur;
+    var gmSlot = CUR_SLOTS['gm'];
+    var gmCur = (gmSlot && gmSlot.decision_value) ? gmSlot.decision_value : cur; // 總經理未簽時預設沿用生產課的值，可自行覆蓋
+    renderDecisionRadios($('#decisionGrp'), 'decision', prodCur, FULL_EDIT_MODE || !!(prodSlot && prodSlot.can_sign));
+    renderDecisionRadios($('#gmDecisionGrp'), 'gm_decision', gmCur, FULL_EDIT_MODE || !!(gmSlot && gmSlot.can_sign));
+    // 總經理決行時要看得到生產課決行了什麼，不用往上滑動翻找（使用者明確要求）
+    $('#gmDecisionInfo').html(prodCur ? ('生產課決行結果：<b>'+esc(DECISIONS[prodCur]||prodCur)+'</b>') : '<span style="color:#b0a390;">（生產課尚未決行）</span>');
     $('#adminDecisionSelect').val(cur || '');
 }
 /* 全表填寫模式下改上方決行選項，要同步進管理員快速設定面板自己的下拉選單，「全部自動簽核」才真的會用這個值——
@@ -950,6 +955,13 @@ function printDoc(id, onDone){
             return '<div style="font-size:11px;color:#555;margin-bottom:2px;">'+(s.note?esc(s.note):'（無意見）')+'</div>'
                 + stampHtml(s.signed_by_name, fmtDate((s.signed_at||'').substring(0,10)), s.is_deputy);
         };
+        /* 決行結果逐欄印：生產課與總經理各自印自己簽核當下選的結果（總經理可覆蓋生產課，只印表頭最終值會讓
+           總經理那格看起來沒有結果、也會把總經理的選擇誤植到生產課那格）。舊資料沒存逐欄值時退回表頭 decision */
+        var decisionText = function(k){
+            var s = signoffs[k];
+            var v = (s && s.decision_value) ? s.decision_value : ((s && s.signed_by_name) ? d.decision : '');
+            return esc(DECISIONS[v] || '（未決行）');
+        };
         var apqpRows = '';
         ['tech','sales','mgmt','prod','qa','material'].forEach(function(k){
             apqpRows += '<tr><td class="dept">'+esc(SLOTS[k][0])+'</td><td class="tl">'+slotCell(k)+'</td></tr>';
@@ -961,9 +973,9 @@ function printDoc(id, onDone){
             + '<table class="p-tb"><thead><tr><th style="width:60px;">區分</th><th style="width:30px;">項次</th><th>評估項目</th><th style="width:60px;">評估單位</th><th style="width:50px;">結果</th></tr></thead><tbody>'+chkRows+'</tbody></table>'
             + '<div class="p-sec p-sec-break">APQP 小組簽認</div>'
             + '<table class="p-tb"><tbody>'+apqpRows+'</tbody></table>'
-            + '<div class="p-sec">決行結果：'+esc(DECISIONS[d.decision]||'（未決行）')+'（以總經理決行為最終決策）</div>'
+            + '<div class="p-sec">生產課決行　決行結果：'+decisionText('prod_decision')+'</div>'
             + '<table class="p-tb"><tr><td class="dept">生產課</td><td class="tl">'+slotCell('prod_decision')+'</td></tr></table>'
-            + '<div class="p-sec">總經理決行</div>'
+            + '<div class="p-sec">總經理決行（最終決策）　決行結果：'+decisionText('gm')+'</div>'
             + '<table class="p-tb"><tr><td class="dept">總經理</td><td class="tl">'+slotCell('gm')+'</td></tr></table>';
         var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
