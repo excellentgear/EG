@@ -395,7 +395,11 @@ function renderPage(){
     renderPager(view.length);
     updateHint(ROWS.length, view.length);
     if (!view.length){
-        var msg = ROWS.length ? '沒有符合料號篩選「'+esc(PART_KW)+'」的資料' : '此區間內查無候選料號';
+        // 查無資料時順便說明「本來就不會出現」的兩種情況，避免誤以為是漏抓（使用者實測回報過：
+        // 該料號有訂單也有BOM，但已經建立過評估表，依規則不再列入候選）
+        var msg = ROWS.length
+            ? '沒有符合料號篩選「'+esc(PART_KW)+'」的資料<br><span style="font-size:12px;">（已建立過評估表、或已被忽略的客戶＋料號組合，本來就不會出現在候選清單）</span>'
+            : '此區間內查無候選料號';
         $('#sgBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">'+msg+'</td></tr>');
         updateSelCount(); return;
     }
