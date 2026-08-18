@@ -290,6 +290,53 @@ function pfmea_ref_requirement_option_add(PDO $db, int $functionOptionId, int $p
     return (int)$db->lastInsertId();
 }
 
+/**
+ * 這個料號在 BOM 上跑過哪些製程（2026-08-18 使用者要求：「有建立BOM的可以從BOM找到製程編號，
+ * 然後讓我可以勾選顯示哪幾個製程編號的失效模式分析」）。
+ * 來源 vw_bom_process_list（BOM 各站別製程），以 bom.d_id 對應料號；同一料號多張 BOM 取聯集。
+ * 一併回傳該製程目前有幾筆整組樣板可帶入，畫面上才知道勾了會長出幾列。
+ */
+function pfmea_part_bom_processes(PDO $db, int $partDId): array {
+    if (!$partDId) return [];
+    $st = $db->prepare("SELECT v.process_no, MIN(v.ProcessName) AS process_name,
+                               MIN(v.bom_sn) AS first_sn, COUNT(DISTINCT b.bom) AS bom_count
+                          FROM bom b
+                          JOIN vw_bom_process_list v ON v.bom = b.bom
+                         WHERE b.d_id = ? AND v.process_no IS NOT NULL
+                         GROUP BY v.process_no
+                         ORDER BY first_sn, v.process_no");
+    $st->execute([$partDId]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return [];
+    foreach ($rows as &$r) {
+        $code = (string)$r['process_no'];
+        $st2 = $db->prepare("SELECT p.id, p.process_name,
+                                    (SELECT COUNT(*) FROM pfmea_item_template t WHERE t.process_id=p.id AND t.is_active=1) AS tpl_count
+                               FROM pfmea_process p WHERE p.process_code=? AND p.is_active=1 LIMIT 1");
+        $st2->execute([$code]);
+        $p = $st2->fetch(PDO::FETCH_ASSOC);
+        $r['process_code']  = $code;
+        $r['pfmea_process_id'] = $p ? (int)$p['id'] : 0;
+        $r['process_name']  = $p['process_name'] ?? $r['process_name'];
+        $r['tpl_count']     = $p ? (int)$p['tpl_count'] : 0;
+    }
+    unset($r);
+    return $rows;
+}
+
+/** 指定製程的整組樣板全文（勾選後要據以長出失效模式分析列） */
+function pfmea_templates_of_processes(PDO $db, array $processIds): array {
+    $processIds = array_values(array_filter(array_map('intval', $processIds)));
+    if (!$processIds) return [];
+    $in = implode(',', array_fill(0, count($processIds), '?'));
+    $st = $db->prepare("SELECT t.*, p.process_code, p.process_name
+                          FROM pfmea_item_template t JOIN pfmea_process p ON p.id=t.process_id
+                         WHERE t.process_id IN ($in) AND t.is_active=1
+                         ORDER BY p.sort_order, p.id, t.sort_order, t.id");
+    $st->execute($processIds);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
 /* ---------- 料號綁定的製程／項目／功能組合（2026-08-18 使用者拍板）----------
  * 使用者口徑：「料號會對應製程編號跟項目延伸出其他要求／圖面要求，料號跟要求以外的都是通用；
  * 可以設定料號綁定哪個製程編號，自動帶出整套選項可以快速設定多組綁到此料號底下（其他料號還是
@@ -669,7 +716,10 @@ function pfmea_ref_item_templates(PDO $db, int $processId): array {
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     // 組名＝製程中文名稱_項目名稱（使用者明確指定的命名規則；item_name 才是原始樣板裡的「項目」
     // 欄位值，跟 failure_mode「潛在失效模式」欄位是兩件事，不能混用）
-    foreach ($rows as &$r) { $r['group_name'] = $r['process_name'].'_'.($r['item_name'] ?: $r['failure_mode']); }
+    foreach ($rows as &$r) {
+        $r['group_name'] = $r['process_name'].'_'.($r['item_name'] ?: $r['failure_mode']);
+        $r['is_ai'] = (strtoupper((string)($r['source_tag'] ?? '')) === 'AI');
+    }
     unset($r);
     return $rows;
 }

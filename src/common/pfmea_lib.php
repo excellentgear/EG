@@ -221,6 +221,10 @@ function pfmea_ensure_schema(PDO $db): void {
         KEY idx_process (process_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-製程整組樣板(項目異常)'");
 
+    // 2026-08-18 使用者要求：AI 產生的整組樣板要在「選擇時」標示出來（列印不印），
+    // 才知道哪些內容是 AI 擬的、需要人工複核；空值＝人工建立。
+    try { $db->exec("ALTER TABLE pfmea_item_template ADD COLUMN source_tag VARCHAR(20) NULL COMMENT '內容來源標記，如 AI；空＝人工建立' AFTER template_key"); } catch (Throwable $e) {}
+
     // 2026-08-14 使用者要求：基本資料內欄位可個別設定對應到其他欄位(如潛在失效模式->失效模式潛在
     // 後果/分類/失效潛在原因、產品名稱->規格描述)，選了來源值就連動帶出對應建議清單；通用單一張表
     // (source_field+source_value+target_field+target_value)取代逐一欄位各建一張表，可填表人新增

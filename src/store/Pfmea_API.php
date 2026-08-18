@@ -78,7 +78,7 @@ case 'list':
     needView($perms);
     $kw = trim((string)($_GET['kw'] ?? ''));
     $sql = "SELECT h.id, h.doc_no, h.part_d_id, COALESCE(ds.D_Setting_Id, h.part_no_text,'') AS part_no,
-                   COALESCE(cl.customer,'') AS customer_name, h.created_by_name, h.created_at, h.biz_date,
+                   COALESCE(cl.customer,'') AS customer_name, h.created_by_name, h.created_at, h.biz_date, h.spec_desc,
                    (SELECT COUNT(*) FROM pfmea_item i WHERE i.doc_id=h.id AND i.is_deleted=0) AS item_count,
                    (SELECT MAX(i.rpn) FROM pfmea_item i WHERE i.doc_id=h.id AND i.is_deleted=0
                      AND i.severity IS NOT NULL AND i.occurrence IS NOT NULL AND i.detection IS NOT NULL) AS max_rpn
@@ -328,6 +328,16 @@ case 'ref_requirement_list_exact':
     jout(['success'=>true,'rows'=>pfmea_ref_requirement_list_exact($db, (int)($_GET['function_option_id']??0), (int)($_GET['process_id']??0), (int)($_GET['item_option_id']??0))]);
 
 // ── 料號綁定的製程／項目／功能組合（2026-08-18 使用者拍板：料號只在「要求」分岔）──────────
+// 依 BOM 帶入失效模式分析（2026-08-18 使用者要求）
+case 'bom_process_candidates':
+    needEdit($perms);
+    jout(['success'=>true,'rows'=>pfmea_part_bom_processes($db, (int)($_GET['part_d_id'] ?? 0))]);
+
+case 'templates_of_processes':
+    needEdit($perms);
+    $ids = array_filter(array_map('intval', explode(',', (string)($_GET['process_ids'] ?? ''))));
+    jout(['success'=>true,'rows'=>pfmea_templates_of_processes($db, $ids)]);
+
 case 'part_binding_list':
     needView($perms);
     jout(['success'=>true,'rows'=>pfmea_part_binding_list($db, (int)($_GET['part_d_id']??0), (string)($_GET['part_no_text']??''))]);

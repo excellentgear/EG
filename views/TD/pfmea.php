@@ -80,6 +80,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
            很難用）。只覆寫這一個 id，其他跳窗維持原樣。 */
         /* 頁面層級大分頁（2026-08-18 使用者要求：參考資料設定要是頁內分頁、不是擠在底下；
            比照 views/pm/vendor_audit.php 的稽核批次／定期評核…那組頁籤） */
+        /* AI 產生內容的標記（2026-08-18 使用者要求：AI 幫我寫的要註明是 AI，在我選擇時看得到，
+           但列印不需要印出來）——因此只掛在挑選清單上，且 @media print 一律隱藏。 */
+        .ai-tag { display:inline-block; margin-left:6px; padding:0 5px; border-radius:3px; font-size:11px;
+            font-weight:bold; background:#F0A24B; color:#fff; vertical-align:middle; }
+        @media print { .ai-tag { display:none !important; } }
+
         .pf-tabs { display:flex; gap:4px; margin:10px 0 8px; border-bottom:2px solid #E8D5B5; }
         .pf-tab { border:1px solid #E8D5B5; border-bottom:none; background:#FBF3E5; color:#8a6d45; cursor:pointer;
             padding:7px 16px; font-size:14px; border-radius:6px 6px 0 0; margin-bottom:-2px; }
@@ -250,10 +256,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <div class="pf-list-wrap"><div class="pf-table-wrap">
             <table class="pf-table" id="pfTable">
                 <thead><tr>
-                    <th>表單編號</th><th>料號</th><th>客戶</th><th>項目數</th><th>最高RPN</th>
+                    <th>表單編號</th><th>料號</th><th>規格描述</th><th>客戶</th><th>項目數</th><th>最高RPN</th>
                     <th>建立人</th><th>業務日期</th><th>操作</th>
                 </tr></thead>
-                <tbody id="pfBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="pfBody"><tr><td colspan="9" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div></div>
 
@@ -887,14 +893,17 @@ function fmtDate(s){ return (window.egFmtDate ? egFmtDate(s) : (s||'')); }
 /* ---------- 清單 ---------- */
 function loadList(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
-        if (!res.success){ $('#pfBody').html('<tr><td colspan="8" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
-        if (!res.rows.length){ $('#pfBody').html('<tr><td colspan="8" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
+        if (!res.success){ $('#pfBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        if (!res.rows.length){ $('#pfBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); return; }
         var html = '';
         res.rows.forEach(function(r){
             var rpnCls = (r.max_rpn && r.max_rpn > 200) ? ' style="color:#DD5138;font-weight:bold;"' : '';
             html += '<tr>'
                 + '<td>'+esc(r.doc_no)+'</td>'
                 + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):'')+'</td>'
+                // 規格描述空白時明顯標出來，一眼看得出哪幾筆還沒建立（2026-08-18 使用者要求）
+                + '<td class="t-left">'+(r.spec_desc ? esc(r.spec_desc)
+                    : '<span style="color:#DD5138;font-weight:bold;" title="尚未建立規格描述">— 未建立 —</span>')+'</td>'
                 + '<td class="t-left">'+esc(r.customer_name||'')+'</td>'
                 + '<td>'+esc(r.item_count)+'</td>'
                 + '<td'+rpnCls+'>'+(r.max_rpn!=null?r.max_rpn:'—')+'</td>'
@@ -1546,7 +1555,8 @@ window.openTemplatePicker = function(btn){
         var html = '';
         TEMPLATE_ROWS.forEach(function(t, i){
             var rpn = (t.severity&&t.occurrence&&t.detection) ? (t.severity*t.occurrence*t.detection) : '';
-            html += '<tr><td class="pf-op" onclick="applyTemplate('+i+')" style="cursor:pointer;color:#b5762a;text-decoration:underline;">'+esc(t.group_name)+'</td>'
+            html += '<tr><td class="pf-op" onclick="applyTemplate('+i+')" style="cursor:pointer;color:#b5762a;text-decoration:underline;">'+esc(t.group_name)
+                + (t.is_ai ? '<span class="ai-tag" title="此整組內容由 AI 產生，套用後請人工複核">AI</span>' : '')+'</td>'
                 + '<td>'+esc(t.severity)+'</td><td>'+esc(t.occurrence)+'</td><td>'+esc(t.detection)+'</td><td>'+rpn+'</td>'
                 + '<td>'+(CAN_ADMIN?'<i class="fa fa-trash pf-op" title="刪除此樣板" onclick="event.stopPropagation();deleteTemplate('+t.id+')"></i>':'')+'</td></tr>';
         });
@@ -2421,7 +2431,8 @@ function rsLoadTplList(){
         RS_TPL_ROWS = res.rows || [];
         var html = RS_TPL_ROWS.map(function(t){
             var rpn = (t.severity&&t.occurrence&&t.detection) ? (t.severity*t.occurrence*t.detection) : '';
-            return '<tr><td class="pf-op" style="cursor:pointer;color:#b5762a;text-decoration:underline;" onclick="rsOpenTplForm('+t.id+')">'+esc(t.group_name)+'</td>'
+            return '<tr><td class="pf-op" style="cursor:pointer;color:#b5762a;text-decoration:underline;" onclick="rsOpenTplForm('+t.id+')">'+esc(t.group_name)
+                + (t.is_ai ? '<span class="ai-tag" title="此整組內容由 AI 產生，請人工複核">AI</span>' : '')+'</td>'
                 + '<td>'+esc(t.severity)+'</td><td>'+esc(t.occurrence)+'</td><td>'+esc(t.detection)+'</td><td>'+rpn+'</td>'
                 + '<td><i class="fa fa-trash pf-op" title="刪除" onclick="rsDeleteTpl('+t.id+')"></i></td></tr>';
         }).join('');
