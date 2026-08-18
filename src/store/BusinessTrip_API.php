@@ -80,7 +80,8 @@ case 'meta': {
         'people'   => $people,
         'stamp_tpls' => $stampTpls,
         'stamp_template' => bt_stamp_template($db),
-        'today'    => date('Y-m-d'),
+        // PHP date() 是 UTC、MySQL 是本地時間，混用會差一天（CLAUDE.md 已記的坑）——業務日期一律取 DB 當天
+        'today'    => (string)$db->query("SELECT CURDATE()")->fetchColumn(),
     ]);
 }
 
@@ -167,6 +168,15 @@ case 'save': {
     if ($reason === '')   jerr('請填事由');
     if (mb_strlen($reason) > 2000) jerr('事由過長（上限 2000 字）');
 
+    // 外訓來源：由「帶入外訓」挑選而來時記下場次，之後就查得到是哪一場、也才擋得住同一場重複開單
+    $refType = trim((string)($_POST['ref_type'] ?? ''));
+    $refId   = (int)($_POST['ref_id'] ?? 0);
+    if ($refType !== '' && $refType !== 'training_session') jerr('不支援的來源類型');
+    if ($refType === 'training_session') {
+        if (!$refId) jerr('缺少外訓場次');
+        if (!bt_training_fill($db, $refId, $forUid)) jerr('這場外訓的參加人員名單中沒有這位人員，不可帶入', 403);
+    } else { $refId = 0; }
+
     $deptId   = ($_POST['dept_id'] ?? '') === '' ? null : (int)$_POST['dept_id'];
     $deptName = trim((string)($_POST['dept_name'] ?? ''));
     $posName  = trim((string)($_POST['position_name'] ?? ''));
@@ -213,12 +223,20 @@ case 'save': {
                ->execute([$applyDate, $forUid, $ident['user_name'], $deptId, $deptName, $posName,
                           $dateFrom, $dateTo, $timeFrom ?: null, $timeTo ?: null, $location, $reason, $tripId]);
         } else {
+            if ($refId) {      // 同一人同一場外訓只留一張（前端會先提示，這裡是後端再擋一次）
+                $dup = $db->prepare("SELECT trip_no FROM business_trip WHERE ref_type='training_session' AND ref_id=?
+                                       AND user_id=? AND COALESCE(is_deleted,0)=0 LIMIT 1");
+                $dup->execute([$refId, $forUid]);
+                if ($no = $dup->fetchColumn()) { $db->rollBack(); jerr('這場外訓已經有公出單（' . $no . '），請直接編輯那一張'); }
+            }
             $db->prepare("INSERT INTO business_trip
                           (trip_no, apply_date, user_id, user_name, dept_id, dept_name, position_name,
-                           date_from, date_to, time_from, time_to, location, reason, status, source, created_by, created_at, updated_at)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft', 'manual', ?, NOW(), NOW())")
+                           date_from, date_to, time_from, time_to, location, reason, status, source, ref_type, ref_id,
+                           created_by, created_at, updated_at)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft', ?, ?, ?, ?, NOW(), NOW())")
                ->execute([bt_next_no($db, $applyDate), $applyDate, $forUid, $ident['user_name'], $deptId, $deptName, $posName,
-                          $dateFrom, $dateTo, $timeFrom ?: null, $timeTo ?: null, $location, $reason, $uid]);
+                          $dateFrom, $dateTo, $timeFrom ?: null, $timeTo ?: null, $location, $reason,
+                          $refId ? 'training' : 'manual', $refId ? 'training_session' : null, $refId ?: null, $uid]);
             $tripId = (int)$db->lastInsertId();
         }
         bt_replace_days($db, $tripId, $cleanDays);
@@ -385,6 +403,27 @@ case 'training_sessions': {
                         ORDER BY s.done_date DESC, s.session_id DESC");
     $st->execute([$year]);
     jout(['rows'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+}
+
+/* ---------------- 我的外訓場次（新增公出單時自行帶入用） ----------------
+   一般員工：只撈得到自己有列在參加人員名單的外訓；
+   管理員／系統管理者：可指定 user_id 撈任一員工的外訓（方便補資料）。 */
+case 'my_training': {
+    $target = (int)($_GET['user_id'] ?? 0);
+    if (!$target || !$perms['canAdmin']) $target = $uid;      // 非管理員一律只能是自己（後端守門）
+    $year = (int)($_GET['year'] ?? 0);
+    jout(['rows'=>bt_user_training_sessions($db, $target, $year), 'user_id'=>$target]);
+}
+
+/* ---------------- 取一場外訓要帶進表單的內容（單據日期＝該場最早一天） ---------------- */
+case 'training_fill': {
+    $sid    = (int)($_GET['session_id'] ?? $_POST['session_id'] ?? 0);
+    $target = (int)($_GET['user_id'] ?? $_POST['user_id'] ?? 0);
+    if (!$target || !$perms['canAdmin']) $target = $uid;
+    if (!$sid) jerr('請指定外訓場次');
+    $fill = bt_training_fill($db, $sid, $target);
+    if (!$fill) jerr('找不到這場外訓，或該員不在此場次的參加人員名單中', 404);
+    jout(['fill'=>$fill]);
 }
 
 default:

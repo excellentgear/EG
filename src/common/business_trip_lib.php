@@ -406,24 +406,18 @@ function bt_create_from_training(PDO $db, int $sessionId): array
         $st->execute([$sessionId]);
         $s = $st->fetch(PDO::FETCH_ASSOC);
         if (!$s || (string)$s['train_type'] !== 'external') return $out;      // 只有外訓要開公出單
-        $dq = $db->prepare("SELECT day_date, start_time, end_time FROM training_session_day WHERE session_id=? ORDER BY day_no");
-        $dq->execute([$sessionId]);
-        $days = $dq->fetchAll(PDO::FETCH_ASSOC);
-        if (!$days) {
-            if (!$s['done_date']) return $out;
-            $days = [['day_date'=>$s['done_date'], 'start_time'=>$s['start_time'], 'end_time'=>$s['end_time']]];
-        }
+        $days = bt_session_days($db, $s);          // 已依 day_date 排序，第一筆即最早那天
+        if (!$days) return $out;
         $dateFrom = $days[0]['day_date'];
         $dateTo   = $days[count($days) - 1]['day_date'];
         $timeFrom = $days[0]['start_time'];
         $timeTo    = $days[count($days) - 1]['end_time'];
         $location = (string)($s['location'] ?? '');
-        $reason   = '參加外訓：' . (string)$s['course_name']
-                  . ((string)($s['org_unit'] ?? '') !== '' ? '（' . $s['org_unit'] . '）' : '');
+        $reason   = bt_training_reason($s);
         $aq = $db->prepare("SELECT user_id, user_name, dept_name, position_name FROM training_attendee WHERE session_id=?");
         $aq->execute([$sessionId]);
-        // 業務日期取 DB 當天（PHP 時區與 MySQL 不同，混用會差一天）
-        $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();
+        // 單據日期＝該場外訓最早一天（使用者要求：從外訓帶入的單據日期＝外訓最早日期；補舊資料才不會全印成今天）
+        $applyDate = $dateFrom;
         foreach ($aq->fetchAll(PDO::FETCH_ASSOC) as $a) {
             $uidA = (int)$a['user_id'];
             if (!$uidA) continue;
@@ -434,9 +428,9 @@ function bt_create_from_training(PDO $db, int $sessionId): array
             $old = $ex->fetch(PDO::FETCH_ASSOC);
             if ($old) {
                 if ($old['status'] !== 'draft') { $out['skipped']++; continue; }
-                $db->prepare("UPDATE business_trip SET date_from=?, date_to=?, time_from=?, time_to=?, location=?, reason=?, updated_at=NOW()
+                $db->prepare("UPDATE business_trip SET apply_date=?, date_from=?, date_to=?, time_from=?, time_to=?, location=?, reason=?, updated_at=NOW()
                               WHERE trip_id=?")
-                   ->execute([$dateFrom, $dateTo, $timeFrom, $timeTo, $location, $reason, (int)$old['trip_id']]);
+                   ->execute([$applyDate, $dateFrom, $dateTo, $timeFrom, $timeTo, $location, $reason, (int)$old["trip_id"]]);
                 bt_replace_days($db, (int)$old['trip_id'], $days);
                 $out['updated']++;
                 continue;
@@ -447,7 +441,7 @@ function bt_create_from_training(PDO $db, int $sessionId): array
                            date_from, date_to, time_from, time_to, location, reason,
                            status, source, ref_type, ref_id, created_by, created_at, updated_at)
                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'draft','training','training_session',?,?,NOW(),NOW())")
-               ->execute([bt_next_no($db, $today), $today, $uidA,
+               ->execute([bt_next_no($db, $applyDate), $applyDate, $uidA,
                           $a['user_name'] ?: $ident['user_name'],
                           $ident['dept_id'], $a['dept_name'] ?: $ident['dept_name'],
                           $a['position_name'] ?: $ident['position_name'],
@@ -482,4 +476,123 @@ function bt_norm_time($v): ?string
     else return null;
     if ($h < 0 || $h > 23 || $i < 0 || $i > 59) return null;
     return sprintf('%02d:%02d', $h, $i);
+}
+
+/* ============================ 從教育訓練外訓帶入（供使用者自行帶入用） ============================ */
+
+/**
+ * 一個外訓場次的逐日時段（沒建逐日資料時退回 done_date 當單日）。
+ * 一律依 day_date 由小到大排序——「最早日期」要靠這個排序決定，不採信 day_no。
+ */
+function bt_session_days(PDO $db, array $s): array
+{
+    $days = [];
+    try {
+        $dq = $db->prepare("SELECT day_date, start_time, end_time FROM training_session_day
+                            WHERE session_id=? ORDER BY day_date, day_no");
+        $dq->execute([(int)$s['session_id']]);
+        $days = $dq->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) {}
+    if (!$days && !empty($s['done_date'])) {
+        $days = [['day_date'=>$s['done_date'], 'start_time'=>$s['start_time'] ?? null, 'end_time'=>$s['end_time'] ?? null]];
+    }
+    usort($days, fn($a, $b) => strcmp((string)$a['day_date'], (string)$b['day_date']));
+    return $days;
+}
+
+/** 外訓帶入公出單的事由文字（課程名稱＋外訓單位），與自動產生的寫法一致 */
+function bt_training_reason(array $s): string
+{
+    return '參加外訓：' . (string)$s['course_name']
+         . ((string)($s['org_unit'] ?? '') !== '' ? '（' . $s['org_unit'] . '）' : '');
+}
+
+/**
+ * 指定人員可帶入的外訓場次清單（本人有列在參加人員名單、且已「確認實行」＝已排定或已完成的外訓）。
+ * $uid=0 代表不限人員（管理員撈全部，方便補資料）。
+ */
+function bt_user_training_sessions(PDO $db, int $uid, int $year): array
+{
+    $sql = "SELECT s.session_id, s.course_name, s.org_unit, s.location, s.done_date, s.status,
+                   s.start_time, s.end_time,
+                   (SELECT MIN(d.day_date) FROM training_session_day d WHERE d.session_id=s.session_id) AS d_min,
+                   (SELECT MAX(d.day_date) FROM training_session_day d WHERE d.session_id=s.session_id) AS d_max,
+                   (SELECT COUNT(*) FROM training_session_day d WHERE d.session_id=s.session_id) AS day_cnt";
+    $par = [];
+    if ($uid) {
+        $sql .= ", a.user_id, a.user_name,
+                  (SELECT t.status FROM business_trip t
+                    WHERE t.ref_type='training_session' AND t.ref_id=s.session_id AND t.user_id=a.user_id
+                      AND COALESCE(t.is_deleted,0)=0 ORDER BY t.trip_id LIMIT 1) AS trip_status
+                  FROM training_session s
+                  JOIN training_attendee a ON a.session_id=s.session_id AND a.user_id=?";
+        $par[] = $uid;
+    } else {
+        $sql .= ", 0 AS user_id, '' AS user_name, NULL AS trip_status,
+                  (SELECT COUNT(*) FROM training_attendee a WHERE a.session_id=s.session_id) AS att_cnt
+                  FROM training_session s";
+    }
+    $sql .= " WHERE s.train_type='external' AND s.status IN ('scheduled','done')";
+    if ($year) { $sql .= " AND s.year=?"; $par[] = $year; }
+    $sql .= " ORDER BY COALESCE((SELECT MIN(d.day_date) FROM training_session_day d WHERE d.session_id=s.session_id),
+                                s.done_date) DESC, s.session_id DESC";
+    try {
+        $st = $db->prepare($sql);
+        $st->execute($par);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+    foreach ($rows as &$r) {
+        $r['date_from'] = $r['d_min'] ?: $r['done_date'];
+        $r['date_to']   = $r['d_max'] ?: $r['done_date'];
+    }
+    return $rows;
+}
+
+/**
+ * 取一個外訓場次要帶進公出單的內容。
+ * 單據日期（apply_date）＝該場外訓的**最早一天**（使用者明確要求；補舊資料時才不會全部印成今天）。
+ * $uid 有給就檢查此人確實是該場次的參加人員（後端守門，避免直打 API 撈別人的訓練）。
+ */
+function bt_training_fill(PDO $db, int $sessionId, int $uid): ?array
+{
+    $st = $db->prepare("SELECT * FROM training_session WHERE session_id=?");
+    $st->execute([$sessionId]);
+    $s = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$s || (string)$s['train_type'] !== 'external') return null;
+    if (!in_array((string)$s['status'], ['scheduled', 'done'], true)) return null;   // 未「確認實行」的不給帶
+    $att = null;
+    if ($uid) {
+        $aq = $db->prepare("SELECT user_id, user_name, dept_name, position_name FROM training_attendee
+                            WHERE session_id=? AND user_id=? LIMIT 1");
+        $aq->execute([$sessionId, $uid]);
+        $att = $aq->fetch(PDO::FETCH_ASSOC) ?: null;
+        if (!$att) return null;
+    }
+    $days = bt_session_days($db, $s);
+    if (!$days) return null;
+    $first = $days[0];
+    $last  = $days[count($days) - 1];
+    $trip = null;
+    if ($uid) {
+        $tq = $db->prepare("SELECT trip_id, trip_no, status FROM business_trip
+                            WHERE ref_type='training_session' AND ref_id=? AND user_id=? AND COALESCE(is_deleted,0)=0
+                            ORDER BY trip_id LIMIT 1");
+        $tq->execute([$sessionId, $uid]);
+        $trip = $tq->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+    return [
+        'session_id'  => (int)$sessionId,
+        'course_name' => (string)$s['course_name'],
+        'org_unit'    => (string)($s['org_unit'] ?? ''),
+        'apply_date'  => (string)$first['day_date'],        // ← 單據日期＝外訓最早日期
+        'date_from'   => (string)$first['day_date'],
+        'date_to'     => (string)$last['day_date'],
+        'time_from'   => (string)($first['start_time'] ?? ''),
+        'time_to'     => (string)($last['end_time'] ?? ''),
+        'location'    => (string)($s['location'] ?? ''),
+        'reason'      => bt_training_reason($s),
+        'days'        => $days,
+        'attendee'    => $att,
+        'exist_trip'  => $trip,
+    ];
 }
