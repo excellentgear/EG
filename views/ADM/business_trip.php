@@ -79,6 +79,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                    border-radius:6px; padding:8px 10px; margin-bottom:10px; }
         .bt-pull .bt-hint { margin:0; }
         .bt-pulled { background:#F7E0BD; border-color:#E0BE86; }
+        .bt-class-ref { background:#FDF8F0; border:1px solid #E0BE86; border-left:4px solid #F0A24B; border-radius:6px;
+                        padding:8px 10px; margin-bottom:10px; font-size:13px; color:#5b3a1e; line-height:1.8; }
+        .bt-class-ref b { color:#8A5A2B; }
+        .bt-class-ref table { border-collapse:collapse; margin-top:4px; }
+        .bt-class-ref td { border:1px solid #E0BE86; padding:2px 8px; white-space:nowrap; }
+        .bt-class-ref td.d { color:#5b3a1e; }
+        .bt-class-ref td.c { background:#FBF5EA; }
         .bt-toolbar button.btn-danger { background:#DD5138; border-color:#C4442D; color:#fff; }
         .bt-toolbar button.btn-danger:hover { background:#C4442D; }
         .m-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:9px 14px; border-radius:8px 8px 0 0; display:flex; }
@@ -167,7 +174,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <table class="bt-table">
                 <thead><tr>
                     <th style="width:32px;"><input type="checkbox" id="chkAll"></th>
-                    <th>單號</th><th>單據日期</th><th>公出人</th><th>單位</th><th>級職</th>
+                    <th>單號</th><th>單據日期</th><th>公出人</th><th>單位</th><th>職稱</th>
                     <th>公出時間</th><th>地點</th><th>事由</th><th>狀態</th><th>核准人</th><th>操作</th>
                 </tr></thead>
                 <tbody id="listBody"><tr><td colspan="12" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
@@ -187,12 +194,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button type="button" class="b-att" id="btnPullTraining"><i class="fa fa-graduation-cap"></i> 從外訓帶入</button>
             <span class="bt-hint" id="pullHint">已「確認實行」的外訓課程，可一鍵帶入日期／時間／地點／事由；<b>單據日期會自動帶該場外訓的最早一天</b>。</span>
         </div>
+        <div class="bt-class-ref" id="classRefBox" style="display:none;"></div>
         <div class="grid2">
             <div><label>單據日期 *</label><input type="date" id="fApplyDate" max="9999-12-31"></div>
             <div id="forUserBox" style="display:none;"><label>公出人（管理員可代開）</label>
                 <select id="fUser" data-eg-filter="輸入姓名篩選…"></select></div>
             <div><label>單位</label><select id="fDept" data-eg-filter="輸入部門篩選…"></select></div>
-            <div><label>級職</label><input type="text" id="fPosition" maxlength="100"></div>
+            <div><label>職稱</label><input type="text" id="fPosition" maxlength="100"></div>
             <div><label>公出起日 *</label><input type="date" id="fFrom" max="9999-12-31"></div>
             <div><label>公出迄日 *</label><input type="date" id="fTo" max="9999-12-31"></div>
             <div><label>開始時間（可直接輸入 0900／900／9）</label><input type="text" id="fTimeFrom" maxlength="5" placeholder="09:00">
@@ -296,6 +304,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <option value="0">不自動產生（改用「從外訓帶入」手動補）</option>
         </select>
 
+        <label style="margin-top:10px;">外訓帶入的通勤時間（分鐘）</label>
+        <input type="number" id="setCommute" min="0" max="240" step="5" style="width:120px;">
+        <div class="bt-hint" style="margin-top:4px;">從外訓帶入（含自動產生、批次帶入）時，公出時間會自動
+            <b>提前這個分鐘數出發、延後這個分鐘數結束</b>，作為往返通勤時間；填 0 表示公出時間就等於上課時間。帶入後仍可自行修改。</div>
+
         <label style="margin-top:10px;">核准圖章樣式</label>
         <select id="setStampTpl"><option value="0">（預設圓形圖章）</option></select>
         <div class="bt-hint" style="margin-top:4px;">有上傳掃描實體章的人一律優先用掃描章，這裡只影響沒掃描章時自動產生的印章樣式。</div>
@@ -343,7 +356,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <p>把紙本 <b>2-MM-01-06 公出單</b> 線上化。<b>任何因公外出都要填</b>（拜訪客戶、送件、外訓…），不限教育訓練。
         送出後由單位主管核准，核准後即可列印（含簽章圖章），紙本交管理課存查。</p>
         <h4>操作步驟</h4>
-        <p>①按<b>「新增公出單」</b>填單據日期、公出起訖日期時間、地點、事由（單位與級職會自動帶入，可改）。<br>
+        <p>①按<b>「新增公出單」</b>填單據日期、公出起訖日期時間、地點、事由（單位與職稱會自動帶入，可改）。<br>
         　　參加外訓的話，直接按跳窗上方的<b>「從外訓帶入」</b>選課程，日期／時間／地點／事由會一次帶好（見下方說明）。<br>
         ②多天且每天時段不同時，展開<b>「每日時段」</b>逐日填；同一個時段就不用填。<br>
         ③按<b>「儲存並送出」</b>：需要簽核時會通知你的單位主管；設定為免簽核時，送出即視同核准。<br>
@@ -352,7 +365,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <h4>重要行為／常見疑問</h4>
         <p>・<b>從外訓帶入（自己補開單用）</b>：新增／編輯公出單時按<b>「從外訓帶入」</b>，會列出教育訓練頁已
         <b>確認實行</b>（已排定／已完成）且<b>你本人列在參加人員名單</b>裡的外訓課程，點「帶入」即自動填入公出起訖日期、
-        每日時段、上課地點與事由。<b>單據日期會自動設成該場外訓的最早一天</b>（補舊資料才不會全部印成今天）；
+        每日時段、上課地點與事由；<b>公出時間會自動比上課時間提前出發、延後結束</b>（分鐘數在模組設定的
+        「外訓帶入的通勤時間」，預設 30 分鐘），跳窗上方會列出<b>原始上課日期時間</b>供你對照修改。<b>單據日期會自動設成該場外訓的最早一天</b>（補舊資料才不會全部印成今天）；
         帶入後所有欄位仍可自行修改。已經有公出單的場次會標示狀態，重複帶入前會再確認一次。<br>
         　　<b>公出單管理員／系統管理者</b>在跳窗選定「公出人」後按「從外訓帶入」，撈到的是<b>該員</b>的外訓資料，方便代為補單。<br>
         ・<b>外訓會自動產生公出單</b>：教育訓練的外訓場次按「確認開課」時，系統會為每位參加人員各產生一張<b>草稿</b>
@@ -519,6 +533,7 @@ function openTrip(id){
         if (!(t.days||[]).length) btDayAdd();
         syncDayBox();
         clearPull();
+        renderClassRef(t.training);        // 這張單綁著外訓場次時，顯示原始上課日期時間
         var hint = [];
         if (t.source === 'training') hint.push('本單資料由教育訓練外訓場次帶入。');
         if (t.approver_name) hint.push('核准人：' + esc(t.approver_name) + (+t.is_delegated ? '（代理簽核）' : ''));
@@ -629,8 +644,26 @@ function delTrip(id){
 /* ================= 從外訓帶入（全體員工：自己的外訓；管理員：可代任一員工撈，方便補資料） =================
    來源＝教育訓練已「確認實行」（已排定／已完成）的外訓場次；
    單據日期一律自動帶該場外訓的**最早一天**（使用者明確要求，補舊資料才不會全部印成今天）。 */
+/* 上課時間對照區：帶入／編輯外訓來源的公出單時顯示原始上課日期時間，
+   方便手動調整公出時間時對照（公出時間已自動前後各留通勤時間） */
+function renderClassRef(info){
+    if (!info || !(info.class_days||[]).length) { $('#classRefBox').hide().html(''); return; }
+    var cm = +info.commute_min || 0;
+    var rows = '';
+    (info.class_days||[]).forEach(function(d, i){
+        rows += '<tr><td class="d">第 ' + (i+1) + ' 天</td><td class="d">' + esc(dispDate(d.day_date)) + '</td>'
+             +  '<td class="c">' + esc((d.start_time||'') + ((d.end_time||'') ? '～' + d.end_time : '')) + '</td></tr>';
+    });
+    $('#classRefBox').html('<div><i class="fa fa-graduation-cap"></i> 外訓上課時間（對照用）：<b>'
+        + esc(info.course_name||'') + '</b>' + (info.org_unit ? '（' + esc(info.org_unit) + '）' : '') + '</div>'
+        + '<table><tbody>' + rows + '</tbody></table>'
+        + (cm ? '<div style="margin-top:4px;">公出時間已自動<b>提前 ' + cm + ' 分鐘出發、延後 ' + cm
+              + ' 分鐘結束</b>作為通勤時間，可自行修改。</div>'
+              : '<div style="margin-top:4px;">目前設定不加通勤時間，公出時間＝上課時間。</div>')).show();
+}
 function clearPull(){
     PULL_REF = 0;
+    renderClassRef(null);
     $('#pullBox').removeClass('bt-pulled');
     $('#pullHint').html('已「確認實行」的外訓課程，可一鍵帶入日期／時間／地點／事由；<b>單據日期會自動帶該場外訓的最早一天</b>。');
 }
@@ -706,10 +739,13 @@ function pullMyTraining(sid){
         if (!$('#dayBody tr').length) btDayAdd();
         syncDayBox();
         PULL_REF = +sid;
+        renderClassRef(f);
         $('#pullBox').addClass('bt-pulled');
         $('#pullHint').html('已帶入外訓：<b>' + esc(f.course_name || '') + '</b>'
             + (f.org_unit ? '（' + esc(f.org_unit) + '）' : '')
-            + '　單據日期已自動設為最早上課日 <b>' + esc(dispDate(f.apply_date)) + '</b>；內容仍可修改。');
+            + '　單據日期已自動設為最早上課日 <b>' + esc(dispDate(f.apply_date)) + '</b>'
+            + ((+f.commute_min) ? '，公出時間已前後各加 <b>' + (+f.commute_min) + ' 分鐘</b>通勤時間' : '')
+            + '；內容仍可修改。');
         closeMask('myTrMask');
     });
 }
@@ -852,7 +888,7 @@ function tripPrintHtml(res){
         + '<div class="frm"><div class="bd">'
         +   '<div class="r"><div class="lb">姓　名</div><div class="vl">' + esc(t.user_name||'') + '</div>'
         +     '<div class="lb2">單　位</div><div class="vl2">' + esc(t.dept_name||'') + '</div></div>'
-        +   '<div class="r"><div class="lb">級　職</div><div class="vl">' + esc(t.position_name||'') + '</div>'
+        +   '<div class="r"><div class="lb">職　稱</div><div class="vl">' + esc(t.position_name||'') + '</div>'
         +     '<div class="lb2">公出時間</div><div class="vl2">' + esc(period) + '</div></div>'
         +   '<div class="r"><div class="lb">公出地點</div><div class="vl">' + esc(t.location||'') + '</div></div>'
         +   '<div class="r rs"><div class="lb">事　由</div><div class="vl"><div style="width:100%;">'
@@ -893,6 +929,7 @@ function fillSettingUI(res){
     var s = res.settings || {};
     $('#setNeedAppr').val(String(s.bt_need_approval));
     $('#setAutoTr').val(String(s.bt_auto_from_training));
+    $('#setCommute').val(s.bt_commute_min == null ? 30 : s.bt_commute_min);
     var th = '<option value="0">（預設圓形圖章）</option>';
     (res.stamp_tpls||[]).forEach(function(t){
         th += '<option value="'+t.id+'">'+esc(t.tpl_name + (t.type_name ? '（'+t.type_name+'）' : ''))+'</option>';
@@ -929,6 +966,7 @@ $('#btnClearAsDoc').on('click', function(){
 });
 $('#btnSaveSet').on('click', function(){
     var d = {action:'save_settings', bt_auto_from_training:$('#setAutoTr').val(), bt_stamp_tpl_id:$('#setStampTpl').val(),
+             bt_commute_min:$('#setCommute').val(),
              bt_sign_acc:$('#setSignAcc').val(), bt_sign_section:$('#setSignSection').val(), bt_sign_group:$('#setSignGroup').val()};
     if (!$('#setNeedAppr').prop('disabled')) d.bt_need_approval = $('#setNeedAppr').val();
     $.post(API, d, function(res){

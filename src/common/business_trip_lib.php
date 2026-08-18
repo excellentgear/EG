@@ -21,7 +21,7 @@ require_once __DIR__ . '/people_lib.php';
 
 const BT_ASDOC_MODULE = 'business_trip';          // AS 文件綁定模組代碼（asdoc_lib）
 const BT_SETTING_KEYS = ['bt_need_approval', 'bt_auto_from_training', 'bt_stamp_tpl_id',
-                         'bt_sign_acc', 'bt_sign_section', 'bt_sign_group'];
+                         'bt_sign_acc', 'bt_sign_section', 'bt_sign_group', 'bt_commute_min'];
 /** 列印簽章格的來源選項（三格：會計／課長／組長）；值一律存設定，不在別處寫死對照表（鐵律4） */
 const BT_SIGN_SOURCES = [
     ''          => '（留白，紙本手蓋）',
@@ -148,14 +148,15 @@ function bt_perms(PDO $db, ?array $u): array
 function bt_settings(PDO $db): array
 {
     $out = ['bt_need_approval'=>1, 'bt_auto_from_training'=>1, 'bt_stamp_tpl_id'=>null,
-            'bt_sign_acc'=>'acc_dept', 'bt_sign_section'=>'approver', 'bt_sign_group'=>''];
+            'bt_sign_acc'=>'acc_dept', 'bt_sign_section'=>'approver', 'bt_sign_group'=>'',
+            'bt_commute_min'=>30];      // 外訓帶入時公出時間前後各加的通勤時間（分鐘）
     try {
         $in = implode(',', array_fill(0, count(BT_SETTING_KEYS), '?'));
         $st = $db->prepare("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ($in)");
         $st->execute(BT_SETTING_KEYS);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $k = $r['setting_key']; $v = $r['setting_value'];
-            if (in_array($k, ['bt_need_approval', 'bt_auto_from_training'], true)) $out[$k] = (int)$v;
+            if (in_array($k, ['bt_need_approval', 'bt_auto_from_training', 'bt_commute_min'], true)) $out[$k] = (int)$v;
             elseif ($k === 'bt_stamp_tpl_id')  $out[$k] = ($v === '' || $v === null) ? null : (int)$v;
             else                               $out[$k] = (string)$v;
         }
@@ -408,6 +409,7 @@ function bt_create_from_training(PDO $db, int $sessionId): array
         if (!$s || (string)$s['train_type'] !== 'external') return $out;      // 只有外訓要開公出單
         $days = bt_session_days($db, $s);          // 已依 day_date 排序，第一筆即最早那天
         if (!$days) return $out;
+        $days     = bt_days_with_commute($days, (int)($set['bt_commute_min'] ?? 30));   // 公出時間前後各留通勤時間
         $dateFrom = $days[0]['day_date'];
         $dateTo   = $days[count($days) - 1]['day_date'];
         $timeFrom = $days[0]['start_time'];
@@ -476,6 +478,57 @@ function bt_norm_time($v): ?string
     else return null;
     if ($h < 0 || $h > 23 || $i < 0 || $i > 59) return null;
     return sprintf('%02d:%02d', $h, $i);
+}
+
+/** 這張公出單綁的外訓場次資訊（課程名稱＋原始上課日期時間），供編輯時對照用；沒綁外訓回 null */
+function bt_trip_training_ref(PDO $db, array $trip): ?array
+{
+    if ((string)($trip['ref_type'] ?? '') !== 'training_session' || !(int)($trip['ref_id'] ?? 0)) return null;
+    try {
+        $st = $db->prepare("SELECT * FROM training_session WHERE session_id=?");
+        $st->execute([(int)$trip['ref_id']]);
+        $s = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$s) return null;
+        return [
+            'session_id'  => (int)$s['session_id'],
+            'course_name' => (string)$s['course_name'],
+            'org_unit'    => (string)($s['org_unit'] ?? ''),
+            'location'    => (string)($s['location'] ?? ''),
+            'class_days'  => bt_session_days($db, $s),
+            'commute_min' => (int)(bt_settings($db)['bt_commute_min'] ?? 30),
+        ];
+    } catch (Throwable $e) { return null; }
+}
+
+/**
+ * 時刻前後位移（通勤時間用）。跨越 00:00／24:00 一律夾在當日範圍內——公出單是以「日」為單位的單據，
+ * 讓時間跑到前一天或隔天只會讓單子看起來像跨日，寧可貼齊 00:00／23:59。
+ */
+function bt_shift_time(?string $hhmm, int $deltaMin): string
+{
+    $t = bt_norm_time($hhmm);
+    if ($t === null || $t === '') return '';
+    [$h, $i] = array_map('intval', explode(':', $t));
+    $m = $h * 60 + $i + $deltaMin;
+    if ($m < 0)    $m = 0;
+    if ($m > 1439) $m = 1439;
+    return sprintf('%02d:%02d', intdiv($m, 60), $m % 60);
+}
+
+/** 外訓的逐日上課時段 → 公出用時段（前後各加通勤時間）；原始上課時間另外保留給畫面對照 */
+function bt_days_with_commute(array $days, int $commuteMin): array
+{
+    $out = [];
+    foreach ($days as $d) {
+        $out[] = [
+            'day_date'     => $d['day_date'],
+            'start_time'   => bt_shift_time($d['start_time'] ?? '', -$commuteMin),
+            'end_time'     => bt_shift_time($d['end_time'] ?? '', +$commuteMin),
+            'class_start'  => (string)($d['start_time'] ?? ''),      // 原始上課時間（對照用，不寫進 DB）
+            'class_end'    => (string)($d['end_time'] ?? ''),
+        ];
+    }
+    return $out;
 }
 
 /* ============================ 從教育訓練外訓帶入（供使用者自行帶入用） ============================ */
@@ -570,8 +623,10 @@ function bt_training_fill(PDO $db, int $sessionId, int $uid): ?array
     }
     $days = bt_session_days($db, $s);
     if (!$days) return null;
-    $first = $days[0];
-    $last  = $days[count($days) - 1];
+    $commute = (int)(bt_settings($db)['bt_commute_min'] ?? 30);
+    $trip_days = bt_days_with_commute($days, $commute);       // 公出時段＝上課時間前後各加通勤時間
+    $first = $trip_days[0];
+    $last  = $trip_days[count($trip_days) - 1];
     $trip = null;
     if ($uid) {
         $tq = $db->prepare("SELECT trip_id, trip_no, status FROM business_trip
@@ -591,7 +646,11 @@ function bt_training_fill(PDO $db, int $sessionId, int $uid): ?array
         'time_to'     => (string)($last['end_time'] ?? ''),
         'location'    => (string)($s['location'] ?? ''),
         'reason'      => bt_training_reason($s),
-        'days'        => $days,
+        'days'        => $trip_days,
+        'class_days'  => $days,                                   // 原始上課日期時間（畫面對照用）
+        'class_time_from' => (string)($days[0]['start_time'] ?? ''),
+        'class_time_to'   => (string)($days[count($days) - 1]['end_time'] ?? ''),
+        'commute_min' => $commute,
         'attendee'    => $att,
         'exist_trip'  => $trip,
     ];

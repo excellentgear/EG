@@ -139,6 +139,7 @@ case 'get': {
     $trip['can_decide'] = bt_can_decide($db, $trip, $perms, $uid);
     $trip['period']     = bt_period_text($trip);
     $trip['signers']    = bt_print_signers($db, $trip);
+    $trip['training']   = bt_trip_training_ref($db, $trip);   // 有綁外訓時附上原始上課日期時間供對照
     jout(['trip'=>$trip]);
 }
 
@@ -375,6 +376,11 @@ case 'save_settings': {
     }
     if (isset($_POST['bt_auto_from_training'])) bt_save_setting($db, 'bt_auto_from_training', (int)$_POST['bt_auto_from_training'] === 1 ? 1 : 0);
     if (isset($_POST['bt_stamp_tpl_id']))       bt_save_setting($db, 'bt_stamp_tpl_id', (int)$_POST['bt_stamp_tpl_id'] ?: '');
+    if (isset($_POST['bt_commute_min'])) {
+        $cm = (int)$_POST['bt_commute_min'];
+        if ($cm < 0 || $cm > 240) jerr('通勤時間請填 0～240 分鐘');
+        bt_save_setting($db, 'bt_commute_min', $cm);
+    }
     foreach (['bt_sign_acc', 'bt_sign_section', 'bt_sign_group'] as $k) {
         if (!isset($_POST[$k])) continue;
         $v = (string)$_POST[$k];
