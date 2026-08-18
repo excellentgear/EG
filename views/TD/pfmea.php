@@ -262,7 +262,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
                 <option value="done">已填完（有分析列）</option>
                 <option value="draft">草稿（尚未填失效模式分析）</option>
             </select>
-            <button type="button" class="pf-row-btn" onclick="batchPrint()" title="把目前篩選結果逐筆開視窗排隊列印"><i class="fa fa-print"></i> 批次列印</button>
+            <button type="button" class="pf-row-btn" onclick="selAllFiltered(1)" title="勾選目前篩選出的全部單據（含其他頁）">全選</button>
+            <button type="button" class="pf-row-btn" onclick="selAllFiltered(0)">取消全選</button>
+            <span id="selInfo" style="font-size:13px;color:#B5762A;font-weight:bold;"></span>
+            <button type="button" class="pf-row-btn" onclick="batchPrint()" title="把勾選的單據逐筆開視窗排隊列印"><i class="fa fa-print"></i> 批次列印</button>
             <span id="pgInfo" style="font-size:13px;color:#8a6d45;"></span>
             <span style="margin-left:auto;display:flex;align-items:center;gap:6px;">
                 <label style="font-size:13px;color:#5b3a1e;">每頁</label>
@@ -275,10 +278,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
         <div class="pf-table-wrap">
             <table class="pf-table" id="pfTable">
                 <thead><tr>
+                    <th style="width:34px;"><input type="checkbox" id="ckAllPage" data-eg-skip="1" title="全選／取消本頁"></th>
                     <th>表單編號</th><th>料號</th><th>規格描述</th><th>客戶</th><th>項目數</th><th>最高RPN</th>
                     <th>建立人</th><th>業務日期</th><th>操作</th>
                 </tr></thead>
-                <tbody id="pfBody"><tr><td colspan="9" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="pfBody"><tr><td colspan="10" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div></div>
 
@@ -866,7 +870,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>製程代號</b>：卡片內輸入已建立的製程代號會自動帶出該製程的「項目」下拉選項；輸入清單中沒有的新代號會詢問製程名稱並即時建立。「控制預防」「控制偵測」同樣是下拉可選/可手動輸入。按「整組列表」可叫出此製程所有樣板（組名＝製程名稱_項目名稱），點選後直接把該筆的基本資料/評級/控制/建議措施/評價欄位整批帶入，帶入後仍可個別修改。這些清單新增不限身分，僅管理員能刪除。</li>
             <li><b>項目→功能→要求／潛在失效模式 階層式連動</b>：填完「項目」離開該欄位，會自動帶出這個項目底下的「功能」下拉選項；填完「功能」離開該欄位，會自動帶出這個功能底下的「要求」下拉（優先顯示綁定的料號專屬要求，沒有才顯示該功能通用要求）與更精確的「潛在失效模式」下拉（優先套用這個功能專屬的清單，還沒累積過資料才逐層退回項目層級、製程層級的通用清單）。四層清單都可以直接手動輸入新值，離開欄位或存檔時會自動加進清單供下次選用，僅管理員能刪除。填完「潛在失效模式」離開欄位，還會再帶出這一筆失效模式專屬的「失效模式潛在後果／分類／失效潛在原因」建議清單。</li>
             <li><b>依 BOM 製程帶入失效模式分析</b>：綁定料號後，編輯畫面下方會出現「依 BOM 製程帶入」按鈕。點開會列出<b>此料號 BOM 上跑過的製程</b>（依站別順序，並顯示各製程可帶入幾筆整組樣板；沒有樣板的無法勾選）。勾選後按「帶入」即依樣板逐筆長出失效模式分析卡片，可選擇附加在後面或先清空既有列。帶入後仍可逐張修改／刪除。<b>存檔時會自動建立「此料號 ↔ 用到的整組」關聯</b>，手動新建的單據同樣適用。</li>
-            <li><b>清單分頁與批次列印</b>：清單預設一頁 10 筆（可改 5／20／50），翻頁鈕在表格右上角。左側「狀態」可篩選<b>已填完</b>（有失效模式分析列）或<b>草稿</b>（尚未填分析列）。「批次列印」會依目前的搜尋與狀態篩選結果逐筆開視窗排隊列印，每份仍會各自跑列印前的欄位完整性檢查。</li>
+            <li><b>清單分頁與批次列印</b>：清單預設一頁 10 筆（可改 5／20／50），翻頁鈕在表格右上角。左側「狀態」可篩選<b>已填完</b>（有失效模式分析列）或<b>草稿</b>（尚未填分析列）。<b>批次列印</b>：先在每列最左側<b>勾選</b>要印的單據——表頭那顆勾選框可全選／取消<b>本頁</b>，工具列的「全選／取消全選」則針對<b>目前篩選出的全部</b>（含其他頁）；勾選狀態換頁不會消失，右側會顯示已勾選筆數。按「批次列印」即逐筆開視窗排隊列印，每份仍會各自跑列印前的欄位完整性檢查。沒有勾選任何一筆時會提醒而不會整批印出（避免誤觸）。</li>
             <li><b>AI 產生的整組樣板</b>：由 AI 整理匯入的整組樣板，在選擇樣板的清單上會標示橘色 <b>AI</b> 徽章提醒人工複核；此標記<b>不會印在列印版上</b>。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期／相關部門預設值自動帶入；來源只有純文字料號時會自動回查主檔綁定成正式料號，綁定後才開得了圖、客戶名稱才帶得出來），分析項目仍需逐份手動填寫。</li>
             <li><b>製程代號</b>：改可從全站製程主檔同步帶入（含大項分類），輸入時同時模糊搜尋代號/名稱/大項分類（多關鍵字皆需命中），顯示清單供點選。</li>
@@ -969,20 +973,57 @@ function renderList(){
         btns += '<button type="button" class="pf-row-btn" '+(PG_PAGE>=pages?'disabled':'')+' onclick="gotoPage('+(PG_PAGE+1)+')">下一頁 ›</button>';
     }
     $('#pgBtns').html(btns);
-    if (!total){ $('#pfBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">沒有符合條件的資料</td></tr>'); return; }
+    if (!total){ $('#pfBody').html('<tr><td colspan="10" style="padding:20px;color:#8a6d45;">沒有符合條件的資料</td></tr>'); return; }
     renderListRows(rows);
+    refreshSelInfo();
 }
 window.gotoPage = function(n){ PG_PAGE = n; renderList(); };
+/* 批次列印的勾選（2026-08-18 使用者要求）：以 id 記錄，換頁／改篩選都不會掉，
+   但「全選」只針對目前篩選出來的結果，避免不小心把被篩掉的單據也印出去。 */
+var SEL_IDS = {};
+function selCount(){ return Object.keys(SEL_IDS).filter(function(k){ return SEL_IDS[k]; }).length; }
+function refreshSelInfo(){
+    var n = selCount();
+    $('#selInfo').text(n ? ('已勾選 '+n+' 筆') : '');
+    // 本頁是否全勾（表頭那顆的狀態要跟著走）
+    var ids = $('#pfBody .row-ck').map(function(){ return $(this).attr('data-id'); }).get();
+    $('#ckAllPage').prop('checked', ids.length > 0 && ids.every(function(i){ return SEL_IDS[i]; }));
+}
+window.selAllFiltered = function(on){
+    applyStatusFilter();
+    LIST_VIEW.forEach(function(r){ if (on) SEL_IDS[r.id] = true; else delete SEL_IDS[r.id]; });
+    renderList();
+};
+$(document).on('change', '#ckAllPage', function(){
+    var on = this.checked;
+    $('#pfBody .row-ck').each(function(){
+        var id = $(this).attr('data-id');
+        if (on) SEL_IDS[id] = true; else delete SEL_IDS[id];
+        $(this).prop('checked', on);
+    });
+    refreshSelInfo();
+});
+$(document).on('change', '#pfBody .row-ck', function(){
+    var id = $(this).attr('data-id');
+    if (this.checked) SEL_IDS[id] = true; else delete SEL_IDS[id];
+    refreshSelInfo();
+});
 $(document).on('change', '#pgSize, #pgStatus', function(){ PG_PAGE = 1; renderList(); });
 /* 批次列印：依目前篩選結果逐筆各自開視窗排隊（比照 ai-rules/16 第三之五節） */
 window.batchPrint = function(){
     applyStatusFilter();
-    if (!LIST_VIEW.length){ alert('目前沒有可列印的資料'); return; }
-    if (!confirm('將依目前的搜尋與狀態篩選結果逐筆開啟列印視窗，共 '+LIST_VIEW.length+' 份。\n（瀏覽器可能會詢問是否允許開啟多個視窗，請選允許）')) return;
+    // 只印勾選的；一筆都沒勾就提醒（不要預設整批印出去，那太容易誤觸）
+    var list = LIST_VIEW.filter(function(r){ return SEL_IDS[r.id]; });
+    if (!list.length){
+        if (!LIST_VIEW.length){ alert('目前沒有可列印的資料'); return; }
+        alert('請先勾選要列印的單據（可用上方「全選」勾選目前篩選出的全部）。');
+        return;
+    }
+    if (!confirm('將逐筆開啟列印視窗，共 '+list.length+' 份。\n（瀏覽器可能會詢問是否允許開啟多個視窗，請選允許）')) return;
     var i = 0;
     (function next(){
-        if (i >= LIST_VIEW.length) return;
-        printDoc(LIST_VIEW[i].id);
+        if (i >= list.length) return;
+        printDoc(list[i].id);
         i++;
         setTimeout(next, 1200);      // 間隔開窗，避免瀏覽器把連續彈窗當成廣告擋掉
         // 註：列印前的「欄位完整性檢查」對每一份仍會生效，缺欄位的那份會先跳出清單讓您決定
@@ -990,7 +1031,7 @@ window.batchPrint = function(){
 };
 function loadList(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
-        if (!res.success){ $('#pfBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        if (!res.success){ $('#pfBody').html('<tr><td colspan="10" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
         LIST_ROWS = res.rows || [];
         PG_PAGE = 1;
         renderList();
@@ -1001,6 +1042,7 @@ function renderListRows(rows){
         rows.forEach(function(r){
             var rpnCls = (r.max_rpn && r.max_rpn > 200) ? ' style="color:#DD5138;font-weight:bold;"' : '';
             html += '<tr>'
+                + '<td><input type="checkbox" class="row-ck" data-eg-skip="1" data-id="'+r.id+'" '+(SEL_IDS[r.id]?'checked':'')+'></td>'
                 + '<td>'+esc(r.doc_no)+'</td>'
                 + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):'')+'</td>'
                 // 規格描述空白時明顯標出來，一眼看得出哪幾筆還沒建立（2026-08-18 使用者要求）
