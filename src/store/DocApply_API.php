@@ -197,6 +197,69 @@ case 'list': {
     jout(['rows'=>$q->fetchAll(PDO::FETCH_ASSOC), 'total'=>$total, 'page'=>$page, 'size'=>$size]);
 }
 
+/* ══════════════════ CSV 匯出（後端對「全部符合條件」的資料算，不是只匯出目前這一頁） ══════════════════ */
+case 'export_csv': {
+    $kw   = trim((string)($_GET['kw'] ?? ''));
+    $stF  = trim((string)($_GET['status'] ?? ''));
+    $from = trim((string)($_GET['from'] ?? ''));
+    $to   = trim((string)($_GET['to'] ?? ''));
+
+    $w = ['COALESCE(a.is_deleted,0)=0']; $args = [];
+    if (!$P['canView']) {
+        $w[] = '(a.applicant_id=? OR a.created_by=? OR EXISTS (SELECT 1 FROM doc_apply_cosign c WHERE c.apply_id=a.apply_id AND c.signer_id=?))';
+        array_push($args, $uid, $uid, $uid);
+    }
+    if ($stF !== '')  { $w[] = 'a.status=?';      $args[] = $stF; }
+    if ($from !== '') { $w[] = 'a.apply_date>=?'; $args[] = $from; }
+    if ($to !== '')   { $w[] = 'a.apply_date<=?'; $args[] = $to; }
+    if ($kw !== '') {
+        $cols = ['a.apply_no','a.doc_no','a.doc_name','a.doc_type','a.doc_status','a.version',
+                 'a.dept_name','a.applicant_name','a.auto_note','a.decide_note'];
+        foreach (preg_split('/\s+/', $kw) as $k) {
+            if ($k === '') continue;
+            $w[] = '(' . implode(' OR ', array_map(fn($c) => "$c LIKE ?", $cols)) . ')';
+            foreach ($cols as $c) $args[] = '%' . $k . '%';
+        }
+    }
+    $sql = "SELECT a.*,
+                   (SELECT COUNT(*) FROM doc_apply_cosign c WHERE c.apply_id=a.apply_id AND c.is_checked=1) AS cos_total,
+                   (SELECT COUNT(*) FROM doc_apply_cosign c WHERE c.apply_id=a.apply_id AND c.is_checked=1 AND c.agree IS NOT NULL) AS cos_done,
+                   (SELECT COUNT(*) FROM doc_apply_cosign c WHERE c.apply_id=a.apply_id AND c.is_checked=1 AND c.agree=0) AS cos_bad,
+                   (SELECT MAX(p.printed_at) FROM doc_apply_print_log p WHERE p.apply_id=a.apply_id) AS last_print_at,
+                   (SELECT COUNT(*) FROM doc_apply_print_log p WHERE p.apply_id=a.apply_id) AS print_count
+            FROM doc_apply a WHERE " . implode(' AND ', $w) . "
+            ORDER BY a.apply_date DESC, a.apply_id DESC";
+    $q = $db->prepare($sql);
+    $q->execute($args);
+    $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+
+    $stName = ['draft'=>'草稿', 'submitted'=>'已送出', 'approved'=>'已核准', 'rejected'=>'已退回'];
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="doc_apply_' . date('Ymd_His') . '.csv"');
+    $out = fopen('php://output', 'w');
+    fwrite($out, chr(0xEF).chr(0xBB).chr(0xBF));    // BOM：Excel 開啟才不會亂碼
+    fputcsv($out, ['單號','申請日期','文件狀況','文件類別','文件編碼','版本','文件名稱','申請部門','申請人',
+                   '需會簽','會簽狀態','單據狀態','核准日期','最新列印日期','列印次數','備註']);
+    foreach ($rows as $r) {
+        $cs = '不需會簽';
+        if ((int)$r['need_cosign']) {
+            $t = (int)$r['cos_total']; $d = (int)$r['cos_done']; $b = (int)$r['cos_bad'];
+            $cs = !$t ? '尚未指定' : ($d < $t ? "會簽中 $d/$t" : ($b ? "有不同意（$b）" : "全部同意 $d/$t"));
+        }
+        fputcsv($out, [
+            $r['apply_no'], eg_fmt_date($r['apply_date']), $r['doc_status'], $r['doc_type'],
+            $r['doc_no'], $r['version'], $r['doc_name'], $r['dept_name'], $r['applicant_name'],
+            ((int)$r['need_cosign'] ? '是' : '否'), $cs,
+            ($stName[$r['status']] ?? $r['status']) . ((int)$r['is_auto'] ? '（自動簽核）' : ''),
+            eg_fmt_date($r['approved_date']),
+            $r['last_print_at'] ? eg_fmt_date(substr((string)$r['last_print_at'], 0, 10)) : '未列印',
+            (int)$r['print_count'], (string)$r['decide_note'],
+        ]);
+    }
+    fclose($out);
+    exit;
+}
+
 /* ══════════════════ 明細 ══════════════════ */
 case 'detail': {
     $id = (int)($_GET['apply_id'] ?? 0);
@@ -206,6 +269,7 @@ case 'detail': {
     $r['cosign_status'] = da_cosign_status($r);
     $r['can_edit']      = da_can_edit_row($r, $P, $uid);
     $r['my_cosign']     = da_cosign_rows_for_user($db, $id, $uid);
+    $r['signer_preview'] = ($r['status'] === 'approved') ? null : da_resolve_signers($db, $r, false);
     $r['prints']        = [];
     try {
         $q = $db->prepare("SELECT printed_name, printed_at FROM doc_apply_print_log WHERE apply_id=? ORDER BY log_id DESC LIMIT 50");
@@ -332,7 +396,7 @@ case 'save': {
     }
 
     // 會簽列（未勾需會簽＝清空）
-    da_sync_cosign_rows($db, $id, $r['need_cosign'] ? $cosDept : [], $r['applicant_id']);
+    da_sync_cosign_rows($db, $id, $r['need_cosign'] ? $cosDept : [], $r['applicant_id'], $r['apply_date']);
     $db->commit();
 
     da_link_asdoc($db, $id);
@@ -545,7 +609,7 @@ case 'auto_sign': {
         foreach ($r['cosigns'] as $c) {
             if ((int)$c['is_checked'] !== 1 || $c['agree'] !== null) continue;
             $sgc = ($c['signer_id']) ? ['id'=>(int)$c['signer_id'], 'name'=>(string)$c['signer_name']]
-                                     : da_cosign_signer($db, (int)$c['dept_id'], (int)$r['applicant_id'], true);
+                                     : da_cosign_signer($db, (int)$c['dept_id'], (int)$r['applicant_id'], true, $bizDate);
             $db->prepare("UPDATE doc_apply_cosign SET agree=1, signer_id=?, signer_name=?, signed_date=?, signed_at=?, is_auto=1 WHERE cos_id=?")
                ->execute([$sgc['id'] ?: null, $sgc['name'], $bizDate, da_auto_sign_time($submittedAt), (int)$c['cos_id']]);
             da_close_cosign_notice($db, (int)$c['cos_id']);
@@ -633,6 +697,14 @@ case 'delete_cosign_default': {
     if (!$P['canAdmin']) jerr('無權限', 403);
     $db->prepare("DELETE FROM doc_apply_cosign_default WHERE def_id=?")->execute([(int)($_POST['def_id'] ?? 0)]);
     jout([]);
+}
+
+/* ══════════════════ 依業務日期回推當時的人員候選 ══════════════════ */
+/* 補歷史單據時，申請人下拉要列「該申請日期當時在職」的人（含現已離職者）與當時的職務，
+   不能用現況——否則當時的人選不到、當時還沒到職的人卻被列出（使用者明確要求）。 */
+case 'people_asof': {
+    $date = trim((string)($_GET['date'] ?? ''));
+    jout(['rows' => da_people_posts_asof($db, $date), 'date' => $date]);
 }
 
 /* ══════════════════ 制修訂內容預設組 ══════════════════ */

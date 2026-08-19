@@ -154,6 +154,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button id="btnAdd"><i class="fa fa-plus"></i> 新增申請單</button>
             <?php endif; ?>
             <button id="btnPrintSel"><i class="fa fa-print"></i> 批次列印所選</button>
+            <button id="btnCsv" title="匯出目前搜尋條件的「全部」資料（不是只匯出這一頁）"><i class="fa fa-file-excel-o"></i> 匯出 CSV</button>
             <?php if ($perms['canAdmin']): ?>
             <button id="btnAutoSel"><i class="fa fa-bolt"></i> 批次自動簽核</button>
             <button id="btnSuggest"><i class="fa fa-magic"></i> 建議建立</button>
@@ -202,7 +203,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             </div>
             <div class="grid2" style="margin-top:8px;">
                 <div id="w_dept_id"><label>申請部門 *</label><select id="e_dept_id" data-eg-filter="輸入部門名稱篩選…"></select><div class="da-err"></div></div>
-                <div id="w_applicant_id"><label>申請人 *（填表人）</label><select id="e_applicant_id" data-eg-filter="輸入姓名篩選…"></select><div class="da-err"></div></div>
+                <div id="w_applicant_id"><label>申請人 *（填表人）<span class="da-hint" id="applicantAsofHint"></span></label>
+                    <select id="e_applicant_id" data-eg-filter="輸入姓名篩選…"></select><div class="da-err"></div></div>
             </div>
             <div style="margin-top:8px;" id="w_doc_name"><label>文件名稱 *</label><input type="text" id="e_doc_name" maxlength="200"><div class="da-err"></div></div>
         </div>
@@ -523,10 +525,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>回收記錄</b>：簽收者＝<b>填寫單位</b>的主管（不是申請人），回收者<b>固定為文管中心負責人</b>，由系統帶入。</li>
             <li><b>建議建立</b>（管理員）：掃描 AS 文件管理裡「有新文件或改版、但還沒有線上申請單」的版本，可設定只掃某日期之後、可多選或全選一次建立；建立出來的草稿<b>日期以修訂日為準</b>並自動帶入相關資料。</li>
             <li><b>自動簽核</b>（管理員）：需輸入<b>操作確認密碼</b>；簽核日期＝申請日期，精確時間戳自動錯開 5～30 分鐘且不跨日。可在跳窗<b>手動指定本次填表人與日期</b>（補歷史紙本用）。</li>
+            <li><b>匯出</b>：「匯出 CSV」會依<b>目前的搜尋條件把全部資料</b>由後端組檔（不是只匯出畫面上這一頁）；
+                需要 PDF 就用<b>列印</b>（列印目的地選「另存為 PDF」即可，版面與紙本完全一致）。</li>
             <li><b>列印是 A4 直式 1:1</b>：版面以 mm 定寸、不做縮放，避免圖章大小失真。頁尾右下角的文件編號與版次<b>依本單申請日期回推</b>當時生效的版本。</li>
             <li><b>簽章一律是帶日期的圖章</b>，不只印人名；代理人代簽時圖章右下角會有「代」字。</li>
             <li><b>核准日期預設＝本單申請日期</b>（可由系統管理者在核准跳窗改成其他日期）；四格簽章的圖章日期一律跟著核准日期，精確時間戳另存不影響業務日期。</li>
             <li><b>申請人本身就是單位主管時，「單位主管」欄一樣蓋他自己的章</b>——不做權責迴避、不往上找人、也不留白。</li>
+            <li><b>申請人候選與所有簽章人都依「申請日期」回推當時的狀況</b>：候選只列<b>該日期當時在職</b>的人
+                （含當時在職、<b>現在已離職</b>的人，會標「已離職」），職務也是<b>當時的部門與職稱</b>；
+                單位主管、管理代表、會簽單位主管一律解析成<b>當時的那位主管</b>，不會蓋成現任者的章。
+                職務回推取自「職務調動紀錄」，沒補登異動紀錄的人一律以現況計算。
+                <span style="color:#b06f27;">「核准」欄綁的是固定人員（最高核准人員），不隨日期變動</span>——補很舊的單據時請自行確認該欄是否合適。</li>
+            <li>申請日期一改，申請人候選就會<b>重新依新日期抓一次</b>；未核准的單在明細跳窗會顯示「預計會蓋誰」。</li>
             <li><b>申請人下拉是「逐職務」列出的</b>：一個人有兼任就會出現多列（標「兼任」），
                 依<b>部門 → 職稱</b>順序排序（不是姓名筆畫）；選了哪一個職務，<b>申請部門就自動帶成該職務的部門</b>。</li>
         </ul>
@@ -734,6 +744,7 @@ function openEdit(id){
         $('#e_need_overview').prop('checked', true); $('#e_need_cosign').prop('checked', false);
         for (var i = 0; i < 4; i++) chgAddRow();
         for (var j = 0; j < 3; j++) distAddRow();
+        loadPeopleAsof(function(){ setApplicant(META.me.id, META.me.dept_id); });
         syncMode(); renderCosChips(); loadParents(); openMask('editMask');
         return;
     }
@@ -755,6 +766,7 @@ function openEdit(id){
         (d.dists || []).forEach(function(x){ distAddRow(x); });
         for (var j = (d.dists || []).length; j < 3; j++) distAddRow();
         cosSel = (d.cosigns || []).map(function(c){ return {id:+c.dept_id, name:c.dept_name}; });
+        loadPeopleAsof(function(){ setApplicant(d.applicant_id, d.dept_id); });
         syncMode(); renderCosChips(); loadParents(); openMask('editMask');
     });
 }
@@ -811,7 +823,25 @@ $('#e_doc_status, #e_doc_type').on('change', function(){
     if ($('#e_doc_status').val() === '制訂') { $('#e_first_issue_date').val(''); }
     else { var id = +$('#e_asdoc_label').data('id') || 0; if (id) pullAsDoc(id); }
 });
-$('#e_apply_date').on('change', function(){ $('#e_change_date').val($(this).val()); });
+$('#e_apply_date').on('change', function(){ $('#e_change_date').val($(this).val()); loadPeopleAsof(); });
+/* 申請人候選一律依「申請日期」回推當時在職者與當時的職務（含當時在職、現已離職者）。
+   來源日期一改就重抓，選不到原本那個人時清空讓使用者重選（推導欄位鐵則）。 */
+function loadPeopleAsof(cb){
+    var date = $('#e_apply_date').val() || META.today;
+    var keep = $('#e_applicant_id').val();
+    $.getJSON(API, {action:'people_asof', date:date}, function(r){
+        if (!r.ok) return;
+        var $s = $('#e_applicant_id').empty();
+        (r.rows || []).forEach(function(p){
+            $s.append('<option value="' + esc(p.post_key) + '" data-uid="' + p.id + '" data-dept="' + (p.dept_id || '')
+                + '">' + esc(p.display) + '</option>');
+        });
+        if (keep && $s.find('option[value="' + keep + '"]').length) $s.val(keep);
+        $('#applicantAsofHint').text('（依申請日期 ' + dispDate(date) + ' 當時在職者與當時職務列出，共 '
+            + (r.rows || []).length + ' 筆）');
+        if (cb) cb();
+    });
+}
 /* 選申請人＝選「他的哪一個職務」（含兼任）→ 申請部門自動帶成該職務的部門 */
 $('#e_applicant_id').on('change', function(){
     var d = $(this).find('option:selected').data('dept');
@@ -1079,8 +1109,12 @@ function openView(id){
 function kv(k, v){ return '<div><label>' + esc(k) + '</label><div style="color:#5b3a1e;">' + esc(v || '－') + '</div></div>'; }
 function sigCell(d, slot){
     var nm = d['sign_' + slot + '_name'], dt = d['sign_' + slot + '_date'], dep = parseInt(d['sign_' + slot + '_dep']);
-    if (d.status !== 'approved' || !nm) return '<span class="da-hint">（未核准）</span>';
-    return stampHtml(nm, dispDate(dt), dep, META.stamp_main);
+    if (d.status === 'approved' && nm) return stampHtml(nm, dispDate(dt), dep, META.stamp_main);
+    // 未核准：顯示「依本單申請日期回推、核准時會蓋誰」，讓補歷史單據時看得出來對不對
+    var pv = (d.signer_preview || {})[slot];
+    if (pv && pv.name) return '<span class="da-hint">（未核准）預計：' + esc(pv.name)
+        + (pv.is_delegated ? '（代）' : '') + '</span>';
+    return '<span class="da-hint">（未核准）</span>';
 }
 function saveCosCheck(id){
     var ids = $('.cosChk:checked').map(function(){ return +this.value; }).get();
@@ -1549,6 +1583,13 @@ function DA_STATUS_HTML(cur){
         return (s === cur ? '☑' : '☐') + s;
     }).join('　');
 }
+
+/* CSV 匯出：條件送給後端，由後端對「全部符合條件」的資料組檔（不可只用前端這一頁算） */
+$('#btnCsv').on('click', function(){
+    var q = $.param({action:'export_csv', kw:$('#fKw').val(), status:$('#fStatus').val(),
+                     from:$('#fFrom').val(), to:$('#fTo').val()});
+    window.location = API + '?' + q;
+});
 
 /* ══════════════════ 使用說明／回到頂端 ══════════════════ */
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });

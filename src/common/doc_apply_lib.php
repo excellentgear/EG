@@ -461,9 +461,11 @@ function da_user_name(PDO $db, ?int $uid): string
 function da_resolve_signer_src(PDO $db, string $src, array $row): array
 {
     $none = ['id'=>null, 'name'=>''];
-    $byMgr = function ($deptIds) use ($db, $none) {
+    // 業務日期＝本單申請日期：部門主管一律回推「當時」是誰（使用者要求：表單要注意日期與當時職務與在職人員）
+    $asof  = (string)($row['apply_date'] ?? '');
+    $byMgr = function ($deptIds) use ($db, $none, $asof) {
         if (!$deptIds) return $none;
-        $m = eg_org_dept_manager($db, $deptIds);
+        $m = da_dept_manager_asof($db, (array)$deptIds, $asof);
         return $m ? ['id'=>(int)$m['id'], 'name'=>(string)$m['user_cname']] : $none;
     };
     switch ($src) {
@@ -485,11 +487,14 @@ function da_resolve_signer_src(PDO $db, string $src, array $row): array
             // 申請人本身就是該單位的主管時，「單位主管」欄一樣蓋他自己的章
             // （使用者明確要求：不做權責迴避，不要為了避嫌往上找人或留白）
             if ($aid && $did) {
-                $m = eg_org_dept_manager($db, [$did]);
+                $m = da_dept_manager_asof($db, [$did], $asof);
                 if ($m && (int)$m['id'] === $aid) {
                     return ['id'=>$aid, 'name'=>(string)($row['applicant_name'] ?? da_user_name($db, $aid))];
                 }
             }
+            // 申請人不是該單位主管 → 蓋當時該單位主管的章；查不到才退回現況的上一級主管解析
+            $m2 = $did ? da_dept_manager_asof($db, [$did], $asof) : null;
+            if ($m2 && (int)$m2['id'] !== $aid) return ['id'=>(int)$m2['id'], 'name'=>(string)$m2['user_cname']];
             $sup = eg_resolve_supervisor($db, $aid, $did);
             return $sup ? ['id'=>(int)$sup, 'name'=>da_user_name($db, (int)$sup)] : $none;
         case 'applicant':
@@ -585,11 +590,12 @@ function da_save_cosign_default(PDO $db, string $type, int $id, int $need, array
 }
 
 /** 某會簽列的簽核人＝該部門主管，再經代理解析（ai-rules/11） */
-function da_cosign_signer(PDO $db, int $deptId, int $applicantId, bool $autoSign = false): array
+function da_cosign_signer(PDO $db, int $deptId, int $applicantId, bool $autoSign = false, string $asof = ''): array
 {
     $none = ['id'=>null, 'name'=>'', 'is_delegated'=>0];
     if ($deptId <= 0) return $none;
-    $m = eg_org_dept_manager($db, eg_dept_subtree_ids($db, $deptId) ?: [$deptId]);
+    // 會簽單位主管同樣依單據業務日期回推當時是誰（補歷史單據才不會蓋成現任者的章）
+    $m = da_dept_manager_asof($db, eg_dept_subtree_ids($db, $deptId) ?: [$deptId], $asof);
     if (!$m) return $none;
     $base = (int)$m['id'];
     $out  = ['id'=>$base, 'name'=>(string)$m['user_cname'], 'is_delegated'=>0];
@@ -905,12 +911,12 @@ function da_create_from_version(PDO $db, array $v, int $createdBy, string $creat
         $db->prepare("INSERT INTO doc_apply_change (apply_id,row_no,page_no,item,before_txt,after_txt) VALUES (?,1,?,?,?,?)")
            ->execute([$applyId, $pages, $sum !== '' ? mb_substr($sum, 0, 120) : '', '', $sum]);
     }
-    da_sync_cosign_rows($db, $applyId, $def['dept_ids'], $applicantId);
+    da_sync_cosign_rows($db, $applyId, $def['dept_ids'], $applicantId, $applyDate);
     return $applyId;
 }
 
 /** 依指定的會簽單位重建會簽列（保留已簽的意見，不覆蓋） */
-function da_sync_cosign_rows(PDO $db, int $applyId, array $deptIds, int $applicantId): void
+function da_sync_cosign_rows(PDO $db, int $applyId, array $deptIds, int $applicantId, string $asof = ''): void
 {
     $deptIds = array_values(array_unique(array_filter(array_map('intval', $deptIds))));
     $keep = [];
@@ -942,7 +948,7 @@ function da_sync_cosign_rows(PDO $db, int $applyId, array $deptIds, int $applica
                           $old['signed_date'], $old['signed_at'], $old['is_delegated'], $old['is_auto'], $old['notice_id']]);
             continue;
         }
-        $sg = da_cosign_signer($db, $did, $applicantId);
+        $sg = da_cosign_signer($db, $did, $applicantId, false, $asof);
         $db->prepare("INSERT INTO doc_apply_cosign (apply_id,row_no,dept_id,dept_name,is_checked,signer_id,signer_name,is_delegated)
                       VALUES (?,?,?,?,1,?,?,?)")
            ->execute([$applyId, $no, $did, $names[$did] ?? '', $sg['id'], $sg['name'], $sg['is_delegated']]);
@@ -996,4 +1002,121 @@ function da_save_change_preset(PDO $db, int $presetId, string $name, array $rows
 function da_delete_change_preset(PDO $db, int $presetId): void
 {
     if ($presetId > 0) $db->prepare("DELETE FROM doc_apply_change_preset WHERE preset_id=?")->execute([$presetId]);
+}
+
+/* ============================ 依「業務日期」回推當時的人與職務 ============================ */
+/*
+ * 為什麼要這一段（使用者明確要求：「表單都要注意日期與當時職務與在職人員」）：
+ * 本頁大量用於**補歷史單據**（建議建立會掃出好幾年前的改版），若人員候選與簽章人一律用「現況」解析，
+ * 會出現三種不實：①當時的申請人已離職 → 選不到人 ②當時他還沒到職 → 卻被列為候選
+ * ③當時的單位主管不是現在這位 → 印出來的章是別人。做法比照 AS 文件管理「文件管制總覽表」依任期回推製表人。
+ * 職務回推走既有共用庫 position_history_lib.php 的 eg_position_snapshot_at_bulk()（ai-rules/14），不自己發明。
+ */
+
+/** 該員在指定日期是否在職：到職日已到、且尚未離職（離職當天仍算在職）；state=90 特殊帳號一律不列 */
+function da_in_service_asof(array $u, string $date): bool
+{
+    if ((int)($u['state'] ?? 1) === 90) return false;
+    $hire  = (string)($u['hire_date'] ?? '');
+    $leave = (string)($u['leave_date'] ?? '');
+    if ($hire !== '' && $hire > $date) return false;
+    if ($leave !== '' && $leave < $date) return false;
+    // 已離職但沒填離職日：只能用現況判斷，維持「不列」以免印出早已不在的人
+    if ($leave === '' && (int)($u['state'] ?? 1) === 0) return false;
+    return true;
+}
+
+/**
+ * 依業務日期回推的「逐職務」人員清單（含兼任），排序依 部門 → 職稱 sort_order。
+ * 與 eg_people_posts() 的差別：這支的部門/職稱來自 user_position_history 在該日期的快照，
+ * 在職與否也是用該日期判定，所以**當時在職、現已離職的人也會列出**（標 is_former=1）。
+ * $date 空字串＝退回現況（等同 eg_people_posts()）。
+ */
+function da_people_posts_asof(PDO $db, string $date): array
+{
+    if ($date === '') { try { return eg_people_posts($db, []); } catch (Throwable $e) { return []; } }
+    require_once __DIR__ . '/position_history_lib.php';
+
+    $users = [];
+    try {
+        $users = $db->query("SELECT id, user_cname, state, hire_date, leave_date FROM `user`")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+
+    $deptMap = []; $posMap = [];
+    try {
+        foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d)
+            $deptMap[(int)$d['id']] = ['name'=>(string)$d['name'], 'sort'=>(int)$d['s']];
+        foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM position")->fetchAll(PDO::FETCH_ASSOC) as $p)
+            $posMap[(int)$p['id']] = ['name'=>(string)$p['name'], 'sort'=>(int)$p['s']];
+    } catch (Throwable $e) {}
+
+    $snapAll = eg_position_snapshot_at_bulk($db, $date);
+    $out = [];
+    foreach ($users as $u) {
+        if (!da_in_service_asof($u, $date)) continue;
+        $uid = (int)$u['id'];
+        foreach (($snapAll[$uid] ?? []) as $s) {
+            $did = (int)($s['department_id'] ?? 0);
+            $pid = (int)($s['position_id'] ?? 0);
+            $dn  = $deptMap[$did]['name'] ?? (string)($s['department_name'] ?? '');
+            $pn  = $posMap[$pid]['name']  ?? (string)($s['position_name'] ?? '');
+            $isFormer = (int)($u['state'] ?? 1) === 0 ? 1 : 0;
+            $out[] = [
+                'id'            => $uid,
+                'user_cname'    => (string)$u['user_cname'],
+                'dept_id'       => $did ?: null,
+                'dept_name'     => $dn,
+                'dept_sort'     => $deptMap[$did]['sort'] ?? 999,
+                'position_id'   => $pid ?: null,
+                'position_name' => $pn,
+                'position_sort' => $posMap[$pid]['sort'] ?? 999,
+                'is_main'       => (int)($s['is_main'] ?? 0),
+                'is_former'     => $isFormer,
+                'post_key'      => $uid . ':' . $did,
+                'display'       => trim($dn . '　' . $pn . '　' . $u['user_cname'])
+                                 . ((int)($s['is_main'] ?? 0) ? '' : '（兼任）')
+                                 . ($isFormer ? '（已離職）' : ''),
+            ];
+        }
+    }
+    // 欄位順序固定「部門/職稱/姓名」，排序依 sort_order（人員列表鐵則第 5 條）
+    usort($out, function ($a, $b) {
+        return [$a['dept_sort'], $a['dept_id'], $a['position_sort'], $a['id']]
+           <=> [$b['dept_sort'], $b['dept_id'], $b['position_sort'], $b['id']];
+    });
+    return $out;
+}
+
+/**
+ * 某部門（可多個，含子部門請由呼叫端展開）在該日期的主管。
+ * 判定「主管」＝該職稱在 position_level 有設 level；同部門多位取 level 最小（職級最高）者。
+ * 與 eg_org_dept_manager() 的差別：這支用當時的職務快照＋當時的在職判定，
+ * 所以當時在職、現已離職的主管也找得到（補歷史單據時才不會蓋成現任者的章）。
+ * $date 空字串＝退回 eg_org_dept_manager()（現況）。
+ */
+function da_dept_manager_asof(PDO $db, array $deptIds, string $date): ?array
+{
+    $deptIds = array_values(array_filter(array_map('intval', $deptIds)));
+    if (!$deptIds) return null;
+    if ($date === '') {
+        $m = eg_org_dept_manager($db, $deptIds);
+        return $m ? ['id'=>(int)$m['id'], 'user_cname'=>(string)$m['user_cname']] : null;
+    }
+    $levels = [];
+    try {
+        foreach ($db->query("SELECT position_id, level FROM position_level WHERE level IS NOT NULL")->fetchAll(PDO::FETCH_ASSOC) as $l)
+            $levels[(int)$l['position_id']] = (int)$l['level'];
+    } catch (Throwable $e) { return null; }
+    if (!$levels) return null;
+
+    $best = null;
+    foreach (da_people_posts_asof($db, $date) as $p) {
+        if (!in_array((int)$p['dept_id'], $deptIds, true)) continue;
+        $lv = $levels[(int)$p['position_id']] ?? null;
+        if ($lv === null) continue;
+        if ($best === null || $lv < $best['level']) {
+            $best = ['id'=>(int)$p['id'], 'user_cname'=>(string)$p['user_cname'], 'level'=>$lv];
+        }
+    }
+    return $best ? ['id'=>$best['id'], 'user_cname'=>$best['user_cname']] : null;
 }
