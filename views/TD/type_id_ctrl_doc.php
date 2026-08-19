@@ -114,6 +114,18 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         .ic-row-btn { border:1px solid #D8BE93; background:#fff; color:#5b3a1e; border-radius:4px; padding:2px 6px; font-size:11px; cursor:pointer; }
         .ic-row-btn:hover { background:#F7E0BD; }
         .ic-row-btn.del { color:#DD5138; border-color:#f0c4bd; }
+        /* 建議名單「來源」標籤（暖色系固定調色盤，見 ai-rules/10；顏色不是唯一資訊，另有文字） */
+        .ic-src { display:inline-block; padding:1px 7px; border-radius:9px; font-size:11px; white-space:nowrap; }
+        .ic-src.s-ext   { background:#F7E0BD; color:#8A5A2B; }
+        .ic-src.s-pfmea { background:#F0A24B; color:#fff; }
+        .ic-src.s-both  { background:#C9772A; color:#fff; }
+        /* 上傳跳窗：即時錯誤原因（表單三總則③，不可只在送出時丟一句「資料有誤」） */
+        .ic-err { color:#DD5138; font-size:12px; margin:3px 0 0; display:none; }
+        .ic-err.on { display:block; }
+        .ic-bad { border-color:#DD5138 !important; background:#FFF3F0; }
+        .ic-cat-list { border:1px solid #D8BE93; border-radius:4px; padding:6px 9px; max-height:150px; overflow-y:auto; background:#fffdf8; }
+        .ic-cat-list label { display:inline-block !important; margin:2px 14px 2px 0 !important; font-size:13px; cursor:pointer; }
+        .ic-cat-list input { margin-right:4px; }
         .ic-noperm { margin:40px auto; max-width:520px; text-align:center; border:1.5px solid #E8D5B5; border-radius:10px;
             padding:30px; background:#FDF8EF; color:#5b3a1e; }
         .ic-status { display:inline-block; font-size:11px; border-radius:10px; padding:2px 9px; white-space:nowrap; }
@@ -163,9 +175,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
                 <option value="needs_recheck">需重新確認</option>
                 <option value="confirmed">已確認</option>
             </select>
+            <label>PFMEA</label>
+            <select id="pfmeaFilter" title="是否已在「潛在失效模式及效應分析」建檔">
+                <option value="">全部</option>
+                <option value="yes">PFMEA 已建立</option>
+                <option value="no">PFMEA 未建立</option>
+            </select>
             <button class="btn-warm" id="btnAdd" style="<?= $perms['canEdit']?'':'display:none;' ?>"><i class="fa fa-plus"></i> 新增</button>
             <span style="border-left:1px solid #D8BE93;height:20px;"></span>
-            <button class="btn-warm" id="btnScanMissing" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="掃描外來文件清單中有附件、但還沒建立型態識別文件管制表的料號"><i class="fa fa-search"></i> 掃描待建立料號</button>
+            <button class="btn-warm" id="btnScanMissing" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="掃描「外來文件清單有附件」或「PFMEA 已建檔」、但還沒建立型態識別文件管制表的料號"><i class="fa fa-search"></i> 掃描待建立料號</button>
             <input type="text" id="syncPartNo" placeholder="或手動指定單一料號同步" style="width:150px;<?= $perms['canEdit']?'':'display:none;' ?>" autocomplete="off">
             <button id="btnSyncPart" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="依此料號的訂單/報價單製程，自動建立(或更新)各製程的型態識別文件管制表，並同步外來文件清單附件"><i class="fa fa-refresh"></i> 同步</button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
@@ -195,10 +213,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <table class="ic-table" id="icTable">
                 <thead><tr>
                     <th style="<?= $perms['canAdmin']?'':'display:none;' ?>"><input type="checkbox" id="ckAll" data-eg-skip="1" title="全選/取消全選"></th>
-                    <th>文件編號</th><th>客戶</th><th>產品編號(料號)</th><th>確認狀態</th>
+                    <th>文件編號</th><th>客戶</th><th>產品編號(料號)</th><th>PFMEA</th><th>確認狀態</th>
                     <th>建立人</th><th>建立時間</th><th>操作</th>
                 </tr></thead>
-                <tbody id="icBody"><tr><td colspan="8" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="icBody"><tr><td colspan="9" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
 <?php endif; ?>
@@ -257,6 +275,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         </table>
         <div style="margin-top:6px;">
             <button type="button" class="ic-row-btn" onclick="icAddRow()"><i class="fa fa-plus"></i> 新增一列</button>
+            <button type="button" class="ic-row-btn" id="btnUpload" onclick="openUpload()" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="直接上傳檔案給這個料號，上傳完會自動加成下方的項目列"><i class="fa fa-upload"></i> 上傳檔案</button>
         </div>
         <div class="tip" style="margin-top:8px;">選定產品編號(料號)後會自動列出「外來文件清單」中此料號的附件（拖曳列前的 <i class="fa fa-ellipsis-v"></i> 可調整順序，項次自動重編）；「所屬製程」欄能辨識來源（報價附件對應到有勾選製程的報價項目）時會自動帶入，共用文件（如原圖，或無法辨識製程來源）留空即代表適用全部製程，可手動修改或清空。這些自動列出的列用「納入」勾選框決定是否套用，取消勾選＝人工確認此文件不適用，不會被之後的同步再次加回。手動新增的列可按「選外來文件」自行連結，或直接手動輸入版別／文件編號。</div>
     </div>
@@ -286,20 +305,69 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('procMask')">取消</button></div>
 </div></div>
 
-<!-- 掃描待建立料號 -->
+<!-- 掃描待建立料號（來源：外來文件清單附件／PFMEA 已建檔） -->
 <div class="ic-mask" id="missingMask"><div class="ic-modal xwide">
     <div class="m-head"><span>掃描到的待建立料號</span><span class="m-close" onclick="closeMask('missingMask')">✕</span></div>
     <div class="m-body">
         <div id="missingEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
         <div id="missingCnt" style="font-size:12px;color:#8a6d45;margin-bottom:6px;"></div>
+        <div id="missingTools" style="display:none;margin-bottom:6px;">
+            <label style="display:inline-block !important;margin:0 10px 0 0 !important;">來源篩選
+                <select id="missingSrcFilter" data-eg-skip="1" style="height:26px;font-size:12px;padding:0 4px;">
+                    <option value="">全部</option>
+                    <option value="ext">只看 外來文件</option>
+                    <option value="pfmea">只看 PFMEA</option>
+                    <option value="both">只看 兩者皆有</option>
+                </select>
+            </label>
+            <button type="button" class="ic-row-btn" onclick="missingSelect('all')">全選</button>
+            <button type="button" class="ic-row-btn" onclick="missingSelect('pfmea')">只選 PFMEA 來源</button>
+            <button type="button" class="ic-row-btn" onclick="missingSelect('ext')">只選 外來文件來源</button>
+            <button type="button" class="ic-row-btn" onclick="missingSelect('none')">全不選</button>
+        </div>
         <table class="ic-item-table" id="missingTable" style="display:none;">
-            <thead><tr><th style="width:16%;">料號</th><th style="width:16%;">客戶</th><th style="width:12%;">外來文件筆數</th></tr></thead>
+            <thead><tr>
+                <th style="width:30px;"><input type="checkbox" id="ckMissAll" data-eg-skip="1" title="全選/取消全選(目前篩選出的)"></th>
+                <th style="width:20%;">料號</th><th style="width:18%;">客戶</th>
+                <th style="width:14%;">來源</th><th style="width:12%;">外來文件筆數</th><th style="width:12%;">PFMEA 筆數</th>
+            </tr></thead>
             <tbody id="missingBody"></tbody>
         </table>
     </div>
     <div class="m-foot">
         <button class="b-cancel" onclick="closeMask('missingMask')">取消</button>
-        <button class="b-ok" id="btnBuildAll" onclick="buildAllMissing()"><i class="fa fa-magic"></i> 一鍵建立全部</button>
+        <button class="b-ok" id="btnBuildAll" onclick="buildSelectedMissing()"><i class="fa fa-magic"></i> 建立勾選的</button>
+    </div>
+</div></div>
+
+<!-- 上傳檔案（存成料號附件，上傳完自動加成項目列） -->
+<div class="ic-mask" id="upMask" style="z-index:1200;"><div class="ic-modal">
+    <div class="m-head"><span>上傳檔案</span><span class="m-close" onclick="closeMask('upMask')">✕</span></div>
+    <div class="m-body">
+        <div class="tip" style="background:#FFF7E8;border:1px dashed #F0A24B;border-radius:6px;padding:6px 10px;font-size:12px;color:#8a6d45;">
+            檔案會存成這個料號的<b>料號附件</b>（跟主檔管理／外來文件清單是同一份檔案，不會變成兩套），
+            上傳成功後自動加到下方項目列，記得再按<b>儲存</b>保存這張管制表。
+        </div>
+        <label>料號</label>
+        <input type="text" id="upPartNo" readonly data-eg-skip="1">
+        <label>選擇檔案 <span style="color:#DD5138;">*</span></label>
+        <input type="file" id="upFile" style="display:block;width:100%;font-size:13px;padding:4px 0;">
+        <div class="ic-err" id="upFileErr"></div>
+        <label>附件類別標籤 <span style="color:#DD5138;">*</span>（至少勾一個；決定它以什麼名稱出現在項目列）</label>
+        <div id="upCatList" class="ic-cat-list">載入中…</div>
+        <div class="ic-err" id="upCatErr"></div>
+        <div class="ic-head-grid" style="grid-template-columns:1fr 1fr 1fr;">
+            <div><label>版次</label><input type="text" id="upRevision" placeholder="例：A（沒有可留空）"></div>
+            <div><label>文件日期 <span style="color:#DD5138;">*</span></label><input type="date" id="upDocDate"><div class="ic-err" id="upDocErr"></div></div>
+            <div><label id="upIssueLabel">發行章日期</label><input type="date" id="upIssueDate"><div class="ic-err" id="upIssueErr"></div></div>
+        </div>
+        <div id="upDateHint" style="font-size:12px;color:#8a6d45;margin-top:4px;"></div>
+        <label>備註</label>
+        <input type="text" id="upNote" placeholder="選填">
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('upMask')">取消</button>
+        <button class="b-ok" id="btnUpDo"><i class="fa fa-upload"></i> 上傳</button>
     </div>
 </div></div>
 
@@ -348,12 +416,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <p><b>每個料號建立一份</b>「型態識別文件管制表」，逐列記錄目前定義該料號狀態的文件（原圖、報價單、加工圖、產品開發評估表、PFMEA、檢驗報告…），用來追溯「這個料號現在的配置由哪些文件定義」。項目列以「外來文件清單」為主要來源，可自動產生／同步，也可以手動增加。</p>
         <h4>所屬製程（同一張圖若多個製程共用，不會重複列出）</h4>
         <ul>
+            <li>清單的 <b>PFMEA</b> 欄顯示這個料號是否已在「潛在失效模式及效應分析」建檔（<b>PFMEA已建立</b>／未建立，點擊可開啟 PFMEA 頁面），是每次查詢當下即時查 pfmea_doc 的結果、不是快照；工具列的「PFMEA」下拉可篩選出已建立／未建立的清單，匯出 CSV 也含這一欄。</li>
             <li>每一列項目可標記「所屬製程」：來源是報價附件、且能對應到<b>有勾選製程</b>的報價項目時，系統會自動帶入該製程（可手動修改或清空）；無法辨識來源製程的文件（例如料號附件、或不特定的共用圖面如原圖）留空，代表<b>適用全部製程</b>，不會特別標記。</li>
             <li>找不到需要的製程文字時，按欄位旁的 <i class="fa fa-list"></i> 從此料號的訂單/報價紀錄挑選。</li>
         </ul>
         <h4>兩種建立方式</h4>
         <ul>
-            <li><b>自動產生／同步（推薦）</b>：工具列輸入料號→按「同步」（或用「掃描待建立料號」批次列出所有還沒建立的料號，一鍵全部建立），系統把外來文件清單中此料號的所有附件同步進項目列，每列依來源自動帶入所屬製程。之後每次執行都是「同步」：新出現的外來文件會被加入、已確認過的清單會被改成「需重新確認」提醒覆核。</li>
+            <li><b>自動產生／同步（推薦）</b>：工具列輸入料號→按「同步」，系統把外來文件清單中此料號的所有附件同步進項目列，每列依來源自動帶入所屬製程。之後每次執行都是「同步」：新出現的外來文件會被加入、已確認過的清單會被改成「需重新確認」提醒覆核。</li>
+            <li><b>掃描待建立料號（批次）</b>：列出所有還沒建立管制表的料號，來源有兩種並在「來源」欄各自標示——<b>外來文件</b>＝外來文件清單／廠內圖面標籤裡有附件的料號；<b>PFMEA</b>＝已在「潛在失效模式及效應分析」建檔的料號（<b>就算一份附件都沒有也會列出來</b>，這是刻意的：那正是需要補建管制表再上傳資料的情況）。清單可逐筆勾選，並有「只選 PFMEA 來源」「只選 外來文件來源」可以獨立整批選取，另有「來源篩選」只影響顯示、不影響已勾選的項目。PFMEA 來的料號若沒有附件，會先建成<b>空白清單</b>，開啟後用「上傳檔案」把資料補上去。</li>
+            <li><b>上傳檔案（直接補資料）</b>：編輯跳窗項目列下方的「上傳檔案」按鈕（需登錄權限，且要先選定料號）。檔案存成該料號的<b>料號附件</b>——跟主檔管理／外來文件清單是同一份檔案，不會變成兩套，同一張圖不用傳兩次；上傳成功後自動加成項目列，記得再按「儲存」保存這張管制表。<b>附件類別標籤至少要勾一個</b>（沒勾不准存檔，前端擋、後端也擋），候選只列出會被本模組同步進來的類別，避免傳了卻不會出現在清單上。<b>文件日期</b>必填（預設今天）：料號附件沒有獨立的文件日期欄位，本表的「型態生效日期」在沒有發行章日期時是取附件建立日期，所以存檔時會把附件建立日期一併改成你填的文件日期（只改日期、保留時分秒），補傳舊文件才不會全部變成上傳當天。若勾到「自家出的圖」類別，<b>發行章日期必填</b>且型態生效日期改以發行章日期為準（判準見圖面變更規定）；系統若判定這次上傳屬於「圖面變更」，會提示到「圖面變更紀錄」頁補登變更內容與簽收名單。</li>
             <li><b>新增（手動）</b>：按「新增」→ 選擇「產品編號(料號)」（打部分字元直接搜尋，不需先點按鈕；選定後自動帶出客戶、外來文件清單中此料號的資料也會自動列出），可再用「新增一列」手動加項目，或用列上的「選外來文件」挑選既有附件連結。</li>
         </ul>
         <h4>人工確認（審查是否有文件不適用）</h4>
@@ -411,6 +482,12 @@ function openMask(id){ document.getElementById(id).style.display='block'; }
 function fmtDate(s){ return (window.egFmtDate ? egFmtDate(s) : (s||'')); }
 var STATUS_CLS = {pending:'st-pending', needs_recheck:'st-recheck', confirmed:'st-confirmed'};
 function statusBadge(status, label){ return '<span class="ic-status '+(STATUS_CLS[status]||'st-pending')+'">'+esc(label||status)+'</span>'; }
+/* 此料號是否已在 PFMEA(潛在失效模式及效應分析)建檔 —— 顯示與篩選都由後端即時查 pfmea_doc，不落快照 */
+function pfmeaBadge(r){
+    if (!r.has_pfmea) return '<span style="color:#b09a78;font-size:12px;">未建立</span>';
+    var n = r.pfmea_count > 1 ? (' '+r.pfmea_count+' 份') : '';
+    return '<a href="pfmea.php" target="_blank" class="ic-src s-pfmea" style="text-decoration:none;" title="已在 PFMEA 建檔，點擊開啟 PFMEA 頁面">PFMEA已建立'+n+'</a>';
+}
 
 /* ---------- 清單（前端分頁：'list' 動作本身仍一次撈回全部符合篩選條件的資料，批次確認全選／
    匯出CSV／列印全部搜尋結果都要看全部結果，不能只看目前這一頁；分頁只影響畫面顯示哪一段） ---------- */
@@ -420,12 +497,13 @@ var PAGE_SIZE = 10;
 function curFilterParams(){
     return {
         kw: $('#kwInput').val()||'', status: $('#statusFilter').val()||'',
-        customer: $('#filterCustomer').val()||'', part_no: $('#filterPartNo').val()||''
+        customer: $('#filterCustomer').val()||'', part_no: $('#filterPartNo').val()||'',
+        pfmea: $('#pfmeaFilter').val()||''
     };
 }
 function loadList(){
     $.getJSON(API, $.extend({action:'list'}, curFilterParams()), function(res){
-        if (!res.success){ CUR_LIST_ROWS=[]; CUR_PAGE=1; $('#icBody').html('<tr><td colspan="8" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); renderPager(); return; }
+        if (!res.success){ CUR_LIST_ROWS=[]; CUR_PAGE=1; $('#icBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); renderPager(); return; }
         CUR_LIST_ROWS = res.rows || [];
         CUR_PAGE = 1;
         renderTablePage();
@@ -437,6 +515,7 @@ function rowHtml(r){
         + '<td>'+esc(r.doc_no)+'</td>'
         + '<td>'+esc(r.customer_name||r.customer_id||'')+'</td>'
         + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):esc(r.part_no))+'</td>'
+        + '<td>'+pfmeaBadge(r)+'</td>'
         + '<td>'+statusBadge(r.review_status, r.review_status_label)+'</td>'
         + '<td>'+esc(r.created_by_name||'')+'</td>'
         + '<td>'+fmtDate((r.created_at||'').substring(0,10))+'</td>'
@@ -448,7 +527,7 @@ function rowHtml(r){
 }
 function renderTablePage(){
     $('#ckAll').prop('checked', false);
-    if (!CUR_LIST_ROWS.length){ $('#icBody').html('<tr><td colspan="8" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); renderPager(); return; }
+    if (!CUR_LIST_ROWS.length){ $('#icBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); renderPager(); return; }
     var totalPages = Math.max(1, Math.ceil(CUR_LIST_ROWS.length / PAGE_SIZE));
     if (CUR_PAGE > totalPages) CUR_PAGE = totalPages;
     var start = (CUR_PAGE-1) * PAGE_SIZE;
@@ -475,6 +554,7 @@ $('#filterCustomer').on('input', function(){ clearTimeout(custT); custT=setTimeo
 var partT=null;
 $('#filterPartNo').on('input', function(){ clearTimeout(partT); partT=setTimeout(loadList, 300); });
 $('#statusFilter').on('change', loadList);
+$('#pfmeaFilter').on('change', loadList);
 $('#ckAll').on('change', function(){ $('#icBody .ck-row').prop('checked', this.checked); });
 
 /* ---------- 批次確認清單（型態文件管理員／管理員；確認者自動記為目前登入者。簽章日期不受影響——
@@ -493,9 +573,9 @@ $('#btnBatchConfirm').on('click', function(){
 $('#btnCsv').on('click', function(){
     $.getJSON(API, $.extend({action:'list'}, curFilterParams()), function(res){
         if (!res.success) return;
-        var lines = ['文件編號,客戶,產品編號,確認狀態,建立人,建立時間'];
+        var lines = ['文件編號,客戶,產品編號,PFMEA,確認狀態,建立人,建立時間'];
         res.rows.forEach(function(r){
-            lines.push([r.doc_no, r.customer_name||r.customer_id||'', r.part_no||'', r.review_status_label||'', r.created_by_name||'', (r.created_at||'').substring(0,10)]
+            lines.push([r.doc_no, r.customer_name||r.customer_id||'', r.part_no||'', (r.has_pfmea?'PFMEA已建立':'未建立'), r.review_status_label||'', r.created_by_name||'', (r.created_at||'').substring(0,10)]
                 .map(function(v){ return '"'+String(v).replace(/"/g,'""')+'"'; }).join(','));
         });
         var blob = new Blob(["\uFEFF"+lines.join("\n")], {type:'text/csv;charset=utf-8;'});
@@ -521,35 +601,202 @@ $('#btnSyncPart').on('click', function(){
     }, 'json');
 });
 
-/* ---------- 掃描待建立料號 → 一鍵建立全部 ---------- */
+/* ---------- 掃描待建立料號 → 逐筆勾選建立 ----------
+   來源有兩種並各自標示：ext=外來文件清單有附件、pfmea=PFMEA 已建檔（可能一份附件都沒有，
+   建出來是空白清單，接著用編輯跳窗的「上傳檔案」把資料補上去）。
+   列一律全部畫出來，「來源篩選」只是隱藏不重畫，這樣勾選狀態不會因為切篩選被洗掉，
+   「只選 PFMEA 來源」也才能不受目前篩選影響獨立生效。 */
 var missingRows = [];
 $('#btnScanMissing').on('click', function(){
-    $('#missingEmpty').show().text('掃描中…'); $('#missingTable').hide(); $('#missingCnt').text('');
+    $('#missingEmpty').show().text('掃描中…'); $('#missingTable').hide(); $('#missingTools').hide(); $('#missingCnt').text('');
     openMask('missingMask');
     $.getJSON(API, {action:'find_missing_parts'}, function(res){
         if (!res.success){ $('#missingEmpty').text(res.message||'掃描失敗'); return; }
         missingRows = res.rows || [];
-        if (!missingRows.length){ $('#missingEmpty').text('沒有找到待建立的料號——外來文件清單中的料號都已建立型態識別文件管制表。'); return; }
-        $('#missingEmpty').hide(); $('#missingTable').show();
-        $('#missingCnt').text('共找到 '+missingRows.length+' 個料號，外來文件清單中有附件但尚未建立型態識別文件管制表：');
-        var html = '';
-        missingRows.forEach(function(r){
-            html += '<tr><td class="t-left">'+esc(r.part_no)+'</td><td class="t-left">'+esc(r.customer_name||'')+'</td><td>'+esc(r.ext_count)+'</td></tr>';
-        });
-        $('#missingBody').html(html);
+        if (!missingRows.length){ $('#missingEmpty').text('沒有找到待建立的料號——外來文件清單與 PFMEA 裡的料號都已建立型態識別文件管制表。'); return; }
+        var nPf = missingRows.filter(function(r){ return r.pfmea_count > 0; }).length;
+        $('#missingEmpty').hide(); $('#missingTable').show(); $('#missingTools').show();
+        $('#missingCnt').html('共找到 '+missingRows.length+' 個尚未建立型態識別文件管制表的料號（其中 <b>'+nPf+'</b> 個已在 PFMEA 建檔）。勾選要建立的料號後按右下角建立；PFMEA 來的料號若沒有任何外來文件附件，會先建成空白清單，再用編輯跳窗的「上傳檔案」補資料。');
+        $('#missingSrcFilter').val('');
+        $('#missingBody').html(missingRows.map(missingRowHtml).join(''));
+        missingSelect('all');
     }, 'json');
 });
-function buildAllMissing(){
-    if (!missingRows.length) return;
-    if (!confirm('確定要一次建立全部 '+missingRows.length+' 個料號的型態識別文件管制表嗎？')) return;
+function missingRowHtml(r){
+    var cls = r.sources === 'both' ? 's-both' : (r.sources === 'pfmea' ? 's-pfmea' : 's-ext');
+    return '<tr data-src="'+esc(r.sources)+'">'
+        + '<td><input type="checkbox" class="ck-miss" data-id="'+r.d_id+'" data-eg-skip="1"></td>'
+        + '<td class="t-left">'+esc(r.part_no)+'</td>'
+        + '<td class="t-left">'+esc(r.customer_name||'')+'</td>'
+        + '<td><span class="ic-src '+cls+'">'+esc(r.source_label)+'</span></td>'
+        + '<td>'+esc(r.ext_count)+'</td>'
+        + '<td>'+esc(r.pfmea_count)+'</td></tr>';
+}
+window.missingSelect = function(mode){
+    $('#missingBody tr').each(function(){
+        var src = $(this).attr('data-src'), on;
+        if (mode === 'all')        on = true;
+        else if (mode === 'none')  on = false;
+        else if (mode === 'pfmea') on = (src === 'pfmea' || src === 'both');   // PFMEA 有的都算
+        else if (mode === 'ext')   on = (src === 'ext');                        // 純外來文件，不含 PFMEA
+        $(this).find('.ck-miss').prop('checked', !!on);
+    });
+    missingSyncFoot();
+};
+function missingApplyFilter(){
+    var f = $('#missingSrcFilter').val() || '';
+    $('#missingBody tr').each(function(){ $(this).toggle(!f || $(this).attr('data-src') === f); });
+}
+function missingSyncFoot(){
+    var n = $('#missingBody .ck-miss:checked').length;
+    $('#btnBuildAll').prop('disabled', n === 0).html('<i class="fa fa-magic"></i> 建立勾選的 ('+n+')');
+    $('#ckMissAll').prop('checked', n > 0 && n === $('#missingBody .ck-miss').length);
+}
+$('#missingSrcFilter').on('change', missingApplyFilter);
+$('#ckMissAll').on('change', function(){ $('#missingBody tr:visible .ck-miss').prop('checked', this.checked); missingSyncFoot(); });
+$('#missingBody').on('change', '.ck-miss', missingSyncFoot);
+function buildSelectedMissing(){
+    var ids = $('#missingBody .ck-miss:checked').map(function(){ return parseInt($(this).data('id'),10); }).get();
+    if (!ids.length){ alert('請先勾選要建立的料號'); return; }
+    if (!confirm('確定要建立勾選的 '+ids.length+' 個料號的型態識別文件管制表嗎？')) return;
     $('#btnBuildAll').prop('disabled', true).text('建立中…');
-    var ids = missingRows.map(function(r){ return r.d_id; });
     $.post(API, {action:'sync_all_missing', part_ids: JSON.stringify(ids)}, function(res){
-        $('#btnBuildAll').prop('disabled', false).html('<i class="fa fa-magic"></i> 一鍵建立全部');
+        missingSyncFoot();
         if (!res.success){ alert(res.message||'建立失敗'); return; }
-        alert('已處理 '+res.part_count+' 個料號，共新增 '+res.item_count+' 筆項目');
+        alert('已處理 '+res.part_count+' 個料號，共新增 '+res.item_count+' 筆項目。\n沒有附件的料號會是空白清單，請開啟後用「上傳檔案」補資料。');
         closeMask('missingMask');
         loadList();
+    }, 'json');
+}
+
+/* ---------- 上傳檔案（存成料號附件，上傳完直接加成項目列）----------
+   刻意沿用既有的料號附件 API，不另開一套本模組專屬附件：這樣同一份檔案在主檔管理／外來文件
+   清單／本頁看到的都是同一筆，不會出現「同一張圖要傳兩次」。附件類別標籤沒勾一律不准存
+   （鐵律8 附件標籤鐵則，前端即時擋＋Part_Attachment_API 後端同步再擋一次）。
+   file input 一律用可見的原生元件、送出時直接讀 input.files（不依賴 change 事件，
+   使用者環境的 change 事件會被靜默吞掉，見記憶 file_upload_change_event）。 */
+var PART_ATTACH_API = '../../src/store/Part_Attachment_API.php';
+var UP_CATS = [], UP_DWG_URL = '../QC/drawing_change_log.php';
+function todayStr(){ var d = new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
+window.openUpload = function(){
+    var dId = parseInt($('#fPartDId').val(),10) || 0;
+    if (!dId){ alert('請先選擇產品編號(料號)——檔案要掛在料號底下才知道要放進哪一份清單。'); return; }
+    $('#upPartNo').val($('#fPartNo').val()||'');
+    $('#upFile').val(''); $('#upRevision').val(''); $('#upNote').val('');
+    $('#upDocDate').val(todayStr()); $('#upIssueDate').val('');
+    $('.ic-err').removeClass('on').text(''); $('#upFile,#upDocDate,#upIssueDate').removeClass('ic-bad');
+    $('#btnUpDo').prop('disabled', false).html('<i class="fa fa-upload"></i> 上傳');
+    openMask('upMask');
+    if (UP_CATS.length){ renderUpCats(); return; }
+    $('#upCatList').text('載入中…');
+    $.getJSON(API, {action:'upload_categories'}, function(res){
+        if (!res.success){ $('#upCatList').text(res.message||'載入失敗'); return; }
+        UP_CATS = res.rows || [];
+        if (res.dwg_change_url) UP_DWG_URL = res.dwg_change_url;
+        renderUpCats();
+    });
+};
+function renderUpCats(){
+    if (!UP_CATS.length){ $('#upCatList').text('目前沒有任何可用的附件類別（需先在外來文件清單或本頁「廠內圖面標籤設定」勾選）。'); return; }
+    $('#upCatList').html(UP_CATS.map(function(c){
+        // 顯示名稱可能重複(例：BOSS圖與單製++圖都顯示成「加工圖」)，重複時補上類別原名才分得出來
+        var dup = UP_CATS.filter(function(x){ return x.name === c.name; }).length > 1;
+        var label = esc(c.name) + (dup && c.raw_name !== c.name ? '<span style="color:#8a6d45;font-size:11px;">（'+esc(c.raw_name)+'）</span>' : '');
+        return '<label><input type="checkbox" class="up-cat" value="'+c.id+'" data-need-issue="'+c.need_issue_date+'" data-eg-skip="1">'+label+(c.need_issue_date?'<span style="color:#b5762a;font-size:11px;">（自家出的圖）</span>':'')+'</label>';
+    }).join(''));
+    upRefreshDateRule();
+}
+function upSelectedCats(){ return $('#upCatList .up-cat:checked').map(function(){ return parseInt(this.value,10); }).get(); }
+function upNeedIssue(){ return $('#upCatList .up-cat:checked').filter(function(){ return $(this).attr('data-need-issue') == 1; }).length > 0; }
+function upRefreshDateRule(){
+    var need = upNeedIssue();
+    $('#upIssueLabel').html('發行章日期'+(need?' <span style="color:#DD5138;">*</span>':''));
+    if (need && !$('#upIssueDate').val()) $('#upIssueDate').val(todayStr());
+    $('#upDateHint').html(need
+        ? '此類別屬「自家出的圖」，<b>型態生效日期會用發行章日期</b>（請填圖上實際的蓋章日）；文件日期仍會寫進附件的建立日期。'
+        : '此類別沒有發行章日期，<b>型態生效日期會用文件日期</b>——存檔時附件的建立日期會一併改成這一天，不是用實際上傳的今天。');
+}
+$('#upCatList').on('change', '.up-cat', function(){ upRefreshDateRule(); upValidate(); });
+$('#upFile').on('change', function(){ upValidate(); });
+$('#upDocDate,#upIssueDate').on('change input', function(){ upValidate(); });
+function upErr(id, inputSel, msg){
+    var $e = $(id);
+    if (msg){ $e.addClass('on').text(msg); if (inputSel) $(inputSel).addClass('ic-bad'); }
+    else { $e.removeClass('on').text(''); if (inputSel) $(inputSel).removeClass('ic-bad'); }
+    return !msg;
+}
+function upValidate(){
+    var f = document.getElementById('upFile').files;   // 直讀 files，不依賴 change 事件
+    var ok = true;
+    ok = upErr('#upFileErr', '#upFile', (f && f.length) ? '' : '請選擇要上傳的檔案') && ok;
+    ok = upErr('#upCatErr', null, upSelectedCats().length ? '' : '請至少勾選一個附件類別標籤（沒勾就不會出現在項目列，也不准存檔）') && ok;
+    ok = upErr('#upDocErr', '#upDocDate', /^\d{4}-\d{2}-\d{2}$/.test($('#upDocDate').val()||'') ? '' : '請填文件日期（決定型態生效日期與附件建立日期）') && ok;
+    ok = upErr('#upIssueErr', '#upIssueDate', (upNeedIssue() && !$('#upIssueDate').val()) ? '此標籤屬「自家出的圖」，發行章日期必填（請填圖上實際的蓋章日）' : '') && ok;
+    return ok;
+}
+$('#btnUpDo').on('click', function(){
+    if (!upValidate()) return;
+    var dId = parseInt($('#fPartDId').val(),10) || 0;
+    if (!dId){ alert('請先選擇產品編號(料號)'); return; }
+    var files = document.getElementById('upFile').files;
+    var fd = new FormData();
+    fd.append('action', 'upload');
+    fd.append('d_id', dId);
+    fd.append('category_ids', upSelectedCats().join(','));
+    fd.append('revision', $('#upRevision').val()||'');
+    fd.append('issue_stamp_date', $('#upIssueDate').val()||'');
+    fd.append('note', $('#upNote').val()||'');
+    fd.append('file', files[0]);
+    $('#btnUpDo').prop('disabled', true).text('上傳中…');
+    $.ajax({url: PART_ATTACH_API, type:'POST', data: fd, processData:false, contentType:false, dataType:'json'})
+    .done(function(res){
+        if (!res || !res.success){
+            $('#btnUpDo').prop('disabled', false).html('<i class="fa fa-upload"></i> 上傳');
+            upErr('#upFileErr', '#upFile', (res && res.message) || '上傳失敗');
+            return;
+        }
+        // 文件日期：料號附件沒有獨立的日期欄位，本模組的型態生效日期沒有發行章日期時會退回附件
+        // 建立日期，所以這裡把建立日期改成使用者填的文件日期（只改日期、保留時分秒）
+        $.post(API, {action:'set_attach_doc_date', attach_id: res.id, doc_date: $('#upDocDate').val()}, function(){
+            $('#btnUpDo').prop('disabled', false).html('<i class="fa fa-upload"></i> 上傳');
+            closeMask('upMask');
+            upAppendNewRows(dId, res.dwg_verdict);
+        }, 'json');
+    })
+    .fail(function(){
+        $('#btnUpDo').prop('disabled', false).html('<i class="fa fa-upload"></i> 上傳');
+        upErr('#upFileErr', '#upFile', '上傳失敗（連線或檔案過大）');
+    });
+});
+/* 上傳後把新出現的附件直接加成項目列（不動已填未存的其他列，也不會提前替新增中的清單建表頭） */
+function upAppendNewRows(dId, verdict){
+    $.post(API, {action:'fetch_ext_for_part', part_d_id:dId}, function(res){
+        var msg = '檔案已上傳。';
+        if (res && res.success){
+            var have = {};
+            $('#itemBody tr').each(function(){
+                var src = $(this).attr('data-ref-source')||'', aid = $(this).attr('data-ref-attach-id')||'';
+                if (src) have[src+'|'+aid] = 1;
+            });
+            // 完全空白的手動列先移除，免得上傳完留下一列空的跟著被存進去
+            $('#itemBody tr').each(function(){
+                var $t = $(this);
+                if (($t.attr('data-ref-source')||'') === '' && !$t.find('.f-name').val() && !$t.find('.f-docno').val() && !$t.find('.f-date').val()) $t.remove();
+            });
+            var added = 0;
+            (res.rows||[]).forEach(function(r){
+                if (have[r.ref_source+'|'+r.ref_attach_id]) return;
+                $('#itemBody').append(itemRowHtml(r, $('#itemBody tr').length));
+                added++;
+            });
+            renumberRows();
+            msg += added ? ('已加入 '+added+' 筆項目列，請按「儲存」保存這張管制表。')
+                         : '（此檔案的類別標籤不在本模組同步範圍，項目列沒有變動。）';
+        }
+        if (verdict && verdict.kind === 'change'){
+            msg += '\n\n注意：系統依發行章日期判定這是一次「圖面變更」，變更內容與簽收名單請到「圖面變更紀錄」頁補登（' + UP_DWG_URL + '）。';
+        }
+        alert(msg);
     }, 'json');
 }
 

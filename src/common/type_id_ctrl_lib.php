@@ -266,21 +266,17 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
 }
 
 /**
- * 掃描「外來文件清單中有附件、但一筆型態識別文件管制表都還沒建立」的料號（2026-08-12 使用者要求，
- * 不想每次都要自己手動打料號）。回傳 [d_id, part_no, customer_name, ext_count] 陣列，供批次一鍵建立用。
+ * 掃描「應該要有、但一筆型態識別文件管制表都還沒建立」的料號（2026-08-12 使用者要求，不想每次都要
+ * 自己手動打料號）。來源有兩種，同一份清單一起列出並各自標示（2026-08-19 使用者要求加入 PFMEA）：
+ *   ext   ＝外來文件清單（含管理員勾選納入的廠內圖面標籤）裡有附件的料號
+ *   pfmea ＝PFMEA 潛在失效模式及效應分析（pfmea_doc）已建檔的料號
+ * PFMEA 來的料號可能一份外來文件附件都沒有，建立出來會是空白清單——那正是預期行為，使用者接著
+ * 用本頁的「上傳檔案」把資料補上去。回傳 [d_id, part_no, customer_name, ext_count, pfmea_count,
+ * sources, source_label]，供逐筆勾選批次建立用。
  */
 function type_id_ctrl_find_missing_parts(PDO $db): array {
     $existing = $db->query("SELECT DISTINCT part_d_id FROM type_id_ctrl_doc WHERE is_deleted=0 AND part_d_id IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
     $existingSet = array_flip(array_map('intval', $existing));
-
-    $cats = $db->query("SELECT id FROM quotation_file_categories WHERE is_external_doc=1 OR type_id_ctrl_include=1")->fetchAll(PDO::FETCH_COLUMN);
-    if (!$cats) return [];
-    $catCond = function (string $col, string $singleCol = '') use ($cats): string {
-        $parts = [];
-        foreach ($cats as $cid) $parts[] = "FIND_IN_SET($cid, REPLACE(COALESCE($col,''),' ',''))";
-        if ($singleCol !== '') $parts[] = "$singleCol IN (" . implode(',', $cats) . ")";
-        return '(' . implode(' OR ', $parts) . ')';
-    };
 
     $counts = [];
     $add = function (array $rows) use (&$counts) {
@@ -291,31 +287,95 @@ function type_id_ctrl_find_missing_parts(PDO $db): array {
         }
     };
 
-    $add($db->query("SELECT pa.d_id, COUNT(*) c FROM part_attachments pa
-                      WHERE pa.deleted_at IS NULL AND " . $catCond('pa.category_ids') . " GROUP BY pa.d_id")->fetchAll(PDO::FETCH_ASSOC));
+    // ── 來源一：外來文件清單／廠內圖面標籤的附件 ──────────────────────────
+    $cats = $db->query("SELECT id FROM quotation_file_categories WHERE is_external_doc=1 OR type_id_ctrl_include=1")->fetchAll(PDO::FETCH_COLUMN);
+    if ($cats) {
+        $catCond = function (string $col, string $singleCol = '') use ($cats): string {
+            $parts = [];
+            foreach ($cats as $cid) $parts[] = "FIND_IN_SET($cid, REPLACE(COALESCE($col,''),' ',''))";
+            if ($singleCol !== '') $parts[] = "$singleCol IN (" . implode(',', $cats) . ")";
+            return '(' . implode(' OR ', $parts) . ')';
+        };
 
-    $add($db->query("SELECT qi.d_setting_d_id AS d_id, COUNT(*) c
-                      FROM quotation_attachments a
-                      JOIN quotation_item qi ON qi.quote_id=(SELECT quote_id FROM quotation_list WHERE quote_no=a.quote_no)
-                      WHERE a.status='active' AND a.linked_parts IS NULL AND " . $catCond('a.category_ids', 'a.category_id') . "
-                      GROUP BY qi.d_setting_d_id")->fetchAll(PDO::FETCH_ASSOC));
+        $add($db->query("SELECT pa.d_id, COUNT(*) c FROM part_attachments pa
+                          WHERE pa.deleted_at IS NULL AND " . $catCond('pa.category_ids') . " GROUP BY pa.d_id")->fetchAll(PDO::FETCH_ASSOC));
 
-    $add($db->query("SELECT ds.d_id AS d_id, COUNT(*) c
-                      FROM quotation_attachments a
-                      JOIN d_setting ds ON JSON_CONTAINS(a.linked_parts, JSON_QUOTE(ds.D_Setting_Id))
-                      WHERE a.status='active' AND a.linked_parts IS NOT NULL AND " . $catCond('a.category_ids', 'a.category_id') . "
-                      GROUP BY ds.d_id")->fetchAll(PDO::FETCH_ASSOC));
+        $add($db->query("SELECT qi.d_setting_d_id AS d_id, COUNT(*) c
+                          FROM quotation_attachments a
+                          JOIN quotation_item qi ON qi.quote_id=(SELECT quote_id FROM quotation_list WHERE quote_no=a.quote_no)
+                          WHERE a.status='active' AND a.linked_parts IS NULL AND " . $catCond('a.category_ids', 'a.category_id') . "
+                          GROUP BY qi.d_setting_d_id")->fetchAll(PDO::FETCH_ASSOC));
 
-    $missingIds = array_values(array_filter(array_keys($counts), function ($id) use ($existingSet) { return !isset($existingSet[$id]); }));
+        $add($db->query("SELECT ds.d_id AS d_id, COUNT(*) c
+                          FROM quotation_attachments a
+                          JOIN d_setting ds ON JSON_CONTAINS(a.linked_parts, JSON_QUOTE(ds.D_Setting_Id))
+                          WHERE a.status='active' AND a.linked_parts IS NOT NULL AND " . $catCond('a.category_ids', 'a.category_id') . "
+                          GROUP BY ds.d_id")->fetchAll(PDO::FETCH_ASSOC));
+    }
+
+    // ── 來源二：PFMEA 已建檔的料號（可能完全沒有附件，照樣要列進建議名單）──────
+    // PFMEA 模組若尚未建表就當作沒有這個來源，不能讓本掃描整個失敗。
+    $pfmeaCounts = [];
+    try {
+        foreach ($db->query("SELECT part_d_id AS d_id, COUNT(*) c FROM pfmea_doc
+                              WHERE is_deleted=0 AND part_d_id IS NOT NULL GROUP BY part_d_id")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $id = (int)$r['d_id'];
+            if ($id) $pfmeaCounts[$id] = (int)$r['c'];
+        }
+    } catch (Throwable $e) { $pfmeaCounts = []; }
+
+    $allIds = array_unique(array_merge(array_keys($counts), array_keys($pfmeaCounts)));
+    $missingIds = array_values(array_filter($allIds, function ($id) use ($existingSet) { return !isset($existingSet[$id]); }));
     if (!$missingIds) return [];
 
     $in = implode(',', array_map('intval', $missingIds));
     $rows = $db->query("SELECT ds.d_id, ds.D_Setting_Id AS part_no, COALESCE(cl.customer,'') AS customer_name
                          FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id=ds.Customer_Id
                          WHERE ds.d_id IN ($in) ORDER BY ds.D_Setting_Id")->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($rows as &$r) { $r['ext_count'] = $counts[(int)$r['d_id']] ?? 0; }
+    foreach ($rows as &$r) {
+        $id = (int)$r['d_id'];
+        $r['ext_count']   = $counts[$id] ?? 0;
+        $r['pfmea_count'] = $pfmeaCounts[$id] ?? 0;
+        $hasExt = $r['ext_count'] > 0; $hasPf = $r['pfmea_count'] > 0;
+        $r['sources']      = $hasExt && $hasPf ? 'both' : ($hasPf ? 'pfmea' : 'ext');
+        $r['source_label'] = $hasExt && $hasPf ? '外來文件＋PFMEA' : ($hasPf ? 'PFMEA' : '外來文件');
+    }
     unset($r);
     return $rows;
+}
+
+/** PFMEA 模組是否已建表（未安裝時本頁的 PFMEA 欄位/篩選一律當作沒有，不可讓查詢整個失敗） */
+function type_id_ctrl_pfmea_table_exists(PDO $db): bool {
+    static $ok = null;
+    if ($ok !== null) return $ok;
+    try { $db->query("SELECT 1 FROM pfmea_doc LIMIT 1"); $ok = true; }
+    catch (Throwable $e) { $ok = false; }
+    return $ok;
+}
+
+/**
+ * 本頁「上傳檔案」可選的附件類別：只列出會被本模組同步進項目列的類別（外來文件清單標籤
+ * is_external_doc=1，或管理員勾選納入的廠內圖面標籤 type_id_ctrl_include=1）——挑到別的類別
+ * 會發生「傳了卻不會出現在清單上」，所以候選一開始就只給這些。
+ * need_issue_date=1 者屬「自家出的圖」，發行章日期必填（判準見 ai-rules/15）。
+ */
+function type_id_ctrl_upload_categories(PDO $db): array {
+    $rows = $db->query("SELECT id, category_name,
+                               COALESCE(NULLIF(external_doc_name,''), category_name) AS disp,
+                               COALESCE(is_own_drawing,0) AS is_own_drawing
+                          FROM quotation_file_categories
+                         WHERE is_external_doc=1 OR type_id_ctrl_include=1
+                         ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = [
+            'id'   => (int)$r['id'],
+            'name' => $r['disp'],
+            'raw_name' => $r['category_name'],
+            'need_issue_date' => (int)$r['is_own_drawing'] === 1 ? 1 : 0,
+        ];
+    }
+    return $out;
 }
 
 /** 依類別名稱猜測型態類別代碼（僅供自動同步預設值，使用者仍可手動修改） */

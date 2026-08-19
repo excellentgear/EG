@@ -87,10 +87,14 @@ case 'list':
     $status = trim((string)($_GET['status'] ?? ''));
     $customerKw = trim((string)($_GET['customer'] ?? ''));
     $partKw = trim((string)($_GET['part_no'] ?? ''));
+    // PFMEA 是否已為此料號建檔（2026-08-19 使用者要求：清單要看得到、也要能篩選）
+    $hasPf   = type_id_ctrl_pfmea_table_exists($db);
+    $pfWhere = "SELECT 1 FROM pfmea_doc pf WHERE pf.is_deleted=0 AND pf.part_d_id=h.part_d_id";
+    $pfSel   = $hasPf ? "(SELECT COUNT(*) FROM pfmea_doc pf WHERE pf.is_deleted=0 AND pf.part_d_id=h.part_d_id)" : "0";
     $sql = "SELECT h.id, h.doc_no, h.customer_id, COALESCE(cl.customer,'') AS customer_name,
                    h.part_d_id, COALESCE(ds.D_Setting_Id,'') AS part_no,
                    h.review_status, h.confirmed_by_name, h.confirmed_at,
-                   h.created_by_name, h.created_at
+                   h.created_by_name, h.created_at, $pfSel AS pfmea_count
             FROM type_id_ctrl_doc h
             LEFT JOIN customer_list cl ON cl.customer_id = h.customer_id
             LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
@@ -109,10 +113,17 @@ case 'list':
         $args[] = '%'.$partKw.'%';
     }
     if (isset(REVIEW_LABELS[$status])) { $sql .= " AND h.review_status=?"; $args[] = $status; }
+    $pfFilter = trim((string)($_GET['pfmea'] ?? ''));
+    if ($hasPf && $pfFilter === 'yes')     $sql .= " AND EXISTS ($pfWhere)";
+    else if ($hasPf && $pfFilter === 'no') $sql .= " AND NOT EXISTS ($pfWhere)";
     $sql .= " ORDER BY h.created_at DESC";
     $st = $db->prepare($sql); $st->execute($args);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($rows as &$r) { $r['review_status_label'] = REVIEW_LABELS[$r['review_status']] ?? $r['review_status']; }
+    foreach ($rows as &$r) {
+        $r['review_status_label'] = REVIEW_LABELS[$r['review_status']] ?? $r['review_status'];
+        $r['pfmea_count'] = (int)$r['pfmea_count'];
+        $r['has_pfmea']   = $r['pfmea_count'] > 0;
+    }
     unset($r);
     jout(['success'=>true,'rows'=>$rows]);
 
@@ -296,7 +307,27 @@ case 'sync_part':
     if (!$r['doc_id']) jout(['success'=>false,'message'=>'找不到此料號']);
     jout(['success'=>true,'doc_id'=>$r['doc_id'],'is_new'=>$r['is_new'],'added_count'=>$r['added_count']]);
 
-// ── 掃描「外來文件清單有附件、但還沒建立型態識別文件管制表」的料號 ─────────
+// ── 上傳後把附件的建立日期改成使用者填的「文件日期」（2026-08-19 使用者要求）─────
+// 料號附件沒有獨立的文件日期欄位，本模組的「型態生效日期」＝發行章日期，沒填才退回上傳日
+// (type_id_ctrl_resolve_ref)。所以「以上傳日認定日期」的文件要能補正日期，只能改 uploaded_at；
+// 只改日期、保留原本的時分秒，同一天內多筆的先後順序才不會被洗掉。
+case 'set_attach_doc_date':
+    needEdit($perms);
+    $aid  = (int)($_POST['attach_id'] ?? 0);
+    $ddate = trim((string)($_POST['doc_date'] ?? ''));
+    if (!$aid) jout(['success'=>false,'message'=>'缺少附件編號']);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $ddate)) jout(['success'=>false,'message'=>'文件日期格式錯誤（需 YYYY-MM-DD）']);
+    $st = $db->prepare("UPDATE part_attachments SET uploaded_at=CONCAT(?,' ',TIME(uploaded_at)) WHERE id=? AND deleted_at IS NULL");
+    $st->execute([$ddate, $aid]);
+    jout(['success'=>true,'updated'=>$st->rowCount()]);
+
+// ── 本頁「上傳檔案」可選的附件類別（只給會被本模組同步進項目列的類別）──────
+case 'upload_categories':
+    needEdit($perms);
+    jout(['success'=>true,'rows'=>type_id_ctrl_upload_categories($db),
+          'dwg_change_url'=>'../QC/drawing_change_log.php']);
+
+// ── 掃描「應該要有、但還沒建立型態識別文件管制表」的料號（外來文件附件／PFMEA 兩種來源）──
 case 'find_missing_parts':
     needView($perms);
     jout(['success'=>true,'rows'=>type_id_ctrl_find_missing_parts($db)]);
