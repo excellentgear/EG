@@ -779,6 +779,96 @@ case 'restore_document':
     $db->prepare("UPDATE as_document SET is_deleted=0, updated_at=NOW() WHERE id=?")->execute([$id]);
     jout(['status'=>'success']);
 
+// ══════════════ 品質記錄一覽表（2-DC-01-03）══════════════
+/* 一覽表＝挑出哪些「表單」屬於品質記錄，逐筆記保存年限／保管單位／備註，供列印。
+ * 綁哪份 AS 文件走全站唯一實作 asdoc_lib（ai-rules/16 第一之三節，模組代碼 as_doc_quality_record_list），
+ * 列印的表頭＝該文件 doc_name、頁尾右下＝依製表日期回推版次的文件編號（第三之四節）。
+ * 預設保存年限放 system_settings，逐筆可覆寫（NULL＝套用預設，改預設值時未覆寫者一起跟著變）。 */
+case 'qr_get':
+    if (!asCan('view')) jout(['status'=>'error','message'=>'無檢閱權限']);
+    $defYears = (int)(asGetSetting($db, 'as_doc_qr_default_years') ?: 3);
+    $makeDate = asGetSetting($db, 'as_doc_qr_make_date');
+    $bound    = eg_asdoc_get($db, 'as_doc_quality_record_list');
+    if ($bound) $bound['doc_no_asof'] = eg_asdoc_no_asof_id($db, (int)$bound['id'], $makeDate ?: null);
+
+    // 明細：以 as_document 現況即時帶出編號/名稱/部門（DB 不存快照，改名後一覽表自動跟著對）
+    $items = $db->query("SELECT i.*, d.doc_no, d.doc_name, d.doc_type, d.doc_level, d.is_deleted, d.is_obsolete,
+                                d.obsolete_date, d.department_id AS doc_dept_id,
+                                dep0.name AS doc_dept_name, dep1.name AS keeper_dept_name
+                         FROM as_quality_record_item i
+                         JOIN as_document d ON d.id = i.doc_id
+                         LEFT JOIN department dep0 ON dep0.id = d.department_id
+                         LEFT JOIN department dep1 ON dep1.id = i.keeper_dept_id
+                         ORDER BY i.sort_order, d.doc_no")->fetchAll(PDO::FETCH_ASSOC);
+
+    // 可挑選的表單：四階/表單，未刪除；已廢止者仍可留在一覽表（歷史紀錄還在保存期內），但不主動列入候選
+    $cand = $db->query("SELECT d.id, d.doc_no, d.doc_name, d.department_id, dep.name AS dept_name, d.is_obsolete
+                        FROM as_document d LEFT JOIN department dep ON dep.id=d.department_id
+                        WHERE d.is_deleted=0 AND (d.doc_type='表單' OR d.doc_level='四階')
+                        ORDER BY d.doc_no")->fetchAll(PDO::FETCH_ASSOC);
+
+    jout(['status'=>'success',
+          'default_years'=>$defYears, 'make_date'=>$makeDate,
+          'as_doc'=>$bound, 'as_docs'=>eg_asdoc_list($db),
+          'company_name'=>asOwnCompanyName($db),
+          'departments'=>$db->query("SELECT id, name FROM department ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC),
+          'items'=>$items, 'candidates'=>$cand,
+          'can_edit'=>asCan('settings')]);
+
+case 'qr_save_settings':
+    if (!asCan('settings')) jout(['status'=>'error','message'=>'無設定權限']);
+    $years = (int)($_POST['default_years'] ?? 0);
+    if ($years < 0 || $years > 99) jout(['status'=>'error','message'=>'預設保存年限請填 0~99 年']);
+    $md = trim((string)($_POST['make_date'] ?? ''));
+    if ($md !== '') {
+        $chk = DateTime::createFromFormat('Y-m-d', $md);
+        if (!$chk || $chk->format('Y-m-d') !== $md) jout(['status'=>'error','message'=>'製表日期格式不正確']);
+    }
+    asSetSetting($db, 'as_doc_qr_default_years', (string)$years);
+    asSetSetting($db, 'as_doc_qr_make_date', $md);
+    if (array_key_exists('as_doc_id', $_POST)) {
+        eg_asdoc_save($db, 'as_doc_quality_record_list', (int)$_POST['as_doc_id'], $currentCname ?: $currentUserName);
+    }
+    $bound = eg_asdoc_get($db, 'as_doc_quality_record_list');
+    jout(['status'=>'success','as_doc'=>$bound]);
+
+case 'qr_save_items':
+    if (!asCan('settings')) jout(['status'=>'error','message'=>'無設定權限']);
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows)) jout(['status'=>'error','message'=>'資料格式錯誤']);
+    $seen = [];
+    foreach ($rows as $i => $r) {
+        $did = (int)($r['doc_id'] ?? 0);
+        if ($did <= 0) jout(['status'=>'error','message'=>'第'.($i+1).'列：缺少文件']);
+        if (isset($seen[$did])) jout(['status'=>'error','message'=>'第'.($i+1).'列：同一份表單重複列入']);
+        $seen[$did] = true;
+        $ry = trim((string)($r['retention_years'] ?? ''));
+        if ($ry !== '' && (!ctype_digit($ry) || (int)$ry > 99))
+            jout(['status'=>'error','message'=>'第'.($i+1).'列：保存年限請填 0~99 的整數，或留空套用預設']);
+    }
+    // 文件必須存在且未刪除（避免刪掉的文件還被列印出來）
+    if ($seen) {
+        $ph = implode(',', array_fill(0, count($seen), '?'));
+        $st = $db->prepare("SELECT COUNT(*) FROM as_document WHERE id IN ($ph) AND is_deleted=0");
+        $st->execute(array_keys($seen));
+        if ((int)$st->fetchColumn() !== count($seen)) jout(['status'=>'error','message'=>'有文件不存在或已刪除，請重新整理後再存']);
+    }
+    try {
+        $db->beginTransaction();
+        $db->exec("DELETE FROM as_quality_record_item");
+        $ins = $db->prepare("INSERT INTO as_quality_record_item (doc_id, retention_years, keeper_dept_id, note, sort_order)
+                             VALUES (?,?,?,?,?)");
+        foreach ($rows as $i => $r) {
+            $ry = trim((string)($r['retention_years'] ?? ''));
+            $kd = trim((string)($r['keeper_dept_id'] ?? ''));
+            $ins->execute([(int)$r['doc_id'], $ry === '' ? null : (int)$ry,
+                           $kd === '' ? null : (int)$kd,
+                           (trim((string)($r['note'] ?? '')) ?: null), $i]);
+        }
+        $db->commit();
+    } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
+    jout(['status'=>'success','count'=>count($rows)]);
+
 // ══════════════ 廢止／取消廢止（管理員；與軟刪除是兩種獨立狀態） ══════════════
 /* 廢止＝這份文件正式停用，但仍是品質紀錄的一部分：主清單照樣列出（粉紅底），
  * 檔案只有管理員能開，結構總覽預設不列、勾「含已廢止」才列並在備註印廢止日期。

@@ -359,6 +359,7 @@ if ($deptPerm === 'R') {
           </div>
         </div>
         <button type="button" class="btn btn-warning btn-sm" id="btnTreeAsDoc" style="display:none;"><i class="fa fa-link"></i> AS 文件編號綁定</button>
+        <button type="button" class="btn btn-success btn-sm" id="btnQrOpen"><i class="fa fa-list-alt"></i> 品質記錄一覽表</button>
         <button type="button" class="btn btn-primary btn-sm" id="btnTreePrint"><i class="fa fa-print"></i> 列印文件管制總覽表</button>
         <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
       </div>
@@ -412,6 +413,85 @@ if ($deptPerm === 'R') {
 <!-- 常用文字 datalist（頁次/摘要 欄位原生下拉建議，來源同 as_doc_phrase） -->
 <datalist id="dlPages"></datalist>
 <datalist id="dlSummary"></datalist>
+
+<!-- ═════════ 品質記錄一覽表（2-DC-01-03）設定＋列印 Modal ═════════ -->
+<div class="modal fade" id="qrModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:96%;max-width:1150px;" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-list-alt"></i> 品質記錄一覽表 <small id="qrInfo" class="text-muted"></small></h4>
+      </div>
+      <div class="modal-body" style="max-height:72vh;overflow-y:auto;">
+        <div class="row" style="margin-bottom:6px;">
+          <div class="col-md-5">
+            <label style="font-size:12px;">綁定 AS 文件編號</label>
+            <div>
+              <b id="qrAsDocNo" style="font-size:13px;">尚未綁定</b>
+              <button type="button" class="btn btn-xs btn-warning qr-edit" id="qrAsDocBtn" style="margin-left:6px;"><i class="fa fa-link"></i> 變更</button>
+            </div>
+            <span class="text-muted" style="font-size:11px;">列印表頭＝該文件的表單名稱；頁尾右下＝文件編號（版次依製表日期回推）。</span>
+          </div>
+          <div class="col-md-3">
+            <label style="font-size:12px;">預設保存年限（年）</label>
+            <input type="number" class="form-control input-sm" id="qrDefYears" min="0" max="99" style="max-width:110px;">
+            <span class="text-muted" style="font-size:11px;">沒有個別填寫的表單一律套用這個值。</span>
+          </div>
+          <div class="col-md-4">
+            <label style="font-size:12px;">製表日期（簽章與版次回推用）</label>
+            <input type="date" class="form-control input-sm" id="qrMakeDate" max="9999-12-31" style="max-width:170px;">
+            <div class="text-muted" style="font-size:11px;" id="qrSignInfo"></div>
+          </div>
+        </div>
+        <div style="border-top:1px solid #eee;padding-top:8px;">
+          <button type="button" class="btn btn-sm btn-success qr-edit" id="qrAddBtn"><i class="fa fa-plus"></i> 加入表單（可多選）</button>
+          <span class="text-muted" style="font-size:11px;margin-left:8px;">保存年限留空＝套用預設；保管單位留空＝用該表單所屬部門。用 ↑↓ 調整列印順序。</span>
+        </div>
+        <div class="table-responsive" style="margin-top:6px;">
+          <table class="table table-condensed table-bordered" style="font-size:12px;">
+            <thead><tr>
+              <th style="width:44px;">項次</th><th style="width:130px;">表單號碼</th><th>表單名稱</th>
+              <th style="width:110px;">保存年限</th><th style="width:150px;">保管單位</th><th style="width:170px;">備註</th>
+              <th style="width:76px;">操作</th>
+            </tr></thead>
+            <tbody id="qrRows"></tbody>
+          </table>
+        </div>
+        <div id="qrResult"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary qr-edit pull-left" id="qrSave"><i class="fa fa-save"></i> 儲存設定</button>
+        <button type="button" class="btn btn-info" id="qrPrint"><i class="fa fa-print"></i> 列印品質記錄一覽表</button>
+        <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ 品質記錄一覽表：加入表單（多選） Modal ═════════ -->
+<div class="modal fade" id="qrPickModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:94%;max-width:760px;" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title">加入表單到品質記錄一覽表（可多選）</h4>
+      </div>
+      <div class="modal-body">
+        <input type="text" class="form-control" id="qrPickKw" placeholder="輸入文件編號或名稱過濾…" data-eg-skip>
+        <div style="margin:6px 0;">
+          <button type="button" class="btn btn-xs btn-default" id="qrPickAll">勾選目前篩選結果</button>
+          <button type="button" class="btn btn-xs btn-default" id="qrPickNone">全部取消</button>
+          <span class="text-muted" style="font-size:11px;margin-left:6px;">已在一覽表中的表單不會出現在這裡。</span>
+        </div>
+        <div id="qrPickList" style="max-height:52vh;overflow-y:auto;border:1px solid #ddd;padding:6px;font-size:13px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="qrPickAdd"><i class="fa fa-plus"></i> 加入已勾選（<span id="qrPickN">0</span>）</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ═════════ 廢止文件 Modal（管理員；不需上傳任何檔案） ═════════ -->
 <div class="modal fade" id="obsoleteModal" tabindex="-1" role="dialog">
@@ -942,6 +1022,7 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script>
 window.asPerm = <?php echo json_encode($asCaps); ?>;
 $(function(){
@@ -1750,6 +1831,211 @@ $(function(){
     w.document.close();
   });
   $('#treeShowObsolete').on('change', loadTree);
+
+  // ══ 品質記錄一覽表（2-DC-01-03）：設定＋列印 ══════════════════════════════
+  // 綁定 AS 文件走共用 EGAsDoc（禁自刻長下拉）；列印三固定元素見 ai-rules/16。
+  let QR = {default_years:3, make_date:'', as_doc:null, as_docs:[], company_name:'',
+            departments:[], items:[], candidates:[], can_edit:false};
+  let QR_SIGN = {approver:null, editors:[], by_date:{}};
+
+  function qrToday(){ return new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10); }
+  function qrMakeDate(){ return $('#qrMakeDate').val() || qrToday(); }
+  /** 保存年限：個別填了用個別的，留空＝套用目前的預設值（改預設值時未覆寫者一起變） */
+  function qrYears(it){
+    const v = String(it.retention_years==null?'':it.retention_years).trim();
+    return v==='' ? (parseInt($('#qrDefYears').val())||0) : parseInt(v);
+  }
+  function qrKeeper(it){
+    if(it.keeper_dept_id) return it.keeper_dept_name||'';
+    return it.doc_dept_name||'';
+  }
+  function qrRenderRows(){
+    const tb=$('#qrRows').empty();
+    const ed=QR.can_edit;
+    if(!QR.items.length){ tb.append('<tr><td colspan="7" class="text-center text-muted">尚未選入任何表單——點「加入表單」挑選</td></tr>'); }
+    QR.items.forEach((it,i)=>{
+      const deptOpts = '<option value="">（用該表單所屬部門）</option>'
+        + QR.departments.map(d=>`<option value="${d.id}" ${String(it.keeper_dept_id||'')===String(d.id)?'selected':''}>${esc(d.name)}</option>`).join('');
+      const obTag = it.is_obsolete==1 ? ` <span class="label ob-tag" style="font-size:10px;">已廢止 ${esc(dispDate(it.obsolete_date||''))}</span>` : '';
+      tb.append(`<tr data-i="${i}" class="${it.is_obsolete==1?'doc-obsolete':''}">
+        <td class="text-center">${i+1}</td>
+        <td>${esc(it.doc_no)}${obTag}</td>
+        <td>${esc(it.doc_name)}</td>
+        <td>${ed?`<input type="number" class="form-control input-sm qr-yr" min="0" max="99" value="${esc(it.retention_years==null?'':it.retention_years)}" placeholder="預設 ${QR.default_years}">`
+                :(qrYears(it)+' 年')}</td>
+        <td>${ed?`<select class="form-control input-sm qr-kd" data-eg-filter="輸入部門名稱篩選…">${deptOpts}</select>`:esc(qrKeeper(it))}</td>
+        <td>${ed?`<input type="text" class="form-control input-sm qr-note" maxlength="255" value="${esc(it.note||'')}">`:esc(it.note||'')}</td>
+        <td class="text-nowrap">${ed?`<a href="javascript:void(0)" class="qr-up" title="上移"><i class="fa fa-arrow-up"></i></a>
+            <a href="javascript:void(0)" class="qr-dn" title="下移" style="margin:0 4px;"><i class="fa fa-arrow-down"></i></a>
+            <a href="javascript:void(0)" class="qr-del text-danger" title="移出一覽表"><i class="fa fa-trash"></i></a>`:''}</td>
+      </tr>`);
+    });
+    $('#qrInfo').text(`共 ${QR.items.length} 份表單`);
+  }
+  /** 把畫面上的輸入值收回 QR.items（重繪／存檔／列印前都要先做，避免用到舊值） */
+  function qrCollect(){
+    if(!QR.can_edit) return;
+    $('#qrRows tr[data-i]').each(function(){
+      const it=QR.items[+$(this).data('i')]; if(!it) return;
+      it.retention_years = $(this).find('.qr-yr').val().trim()===''? null : parseInt($(this).find('.qr-yr').val());
+      const kd=$(this).find('.qr-kd').val();
+      it.keeper_dept_id = kd? +kd : null;
+      it.keeper_dept_name = kd? ((QR.departments.find(d=>String(d.id)===String(kd))||{}).name||'') : '';
+      it.note = $(this).find('.qr-note').val();
+    });
+  }
+  function qrLoadSigners(){
+    $.getJSON(API+'?action=tree_signers', {dates: qrMakeDate()}, r=>{
+      if(r.status!=='success') return;
+      QR_SIGN = {approver:r.approver||null, editors:r.editors||[], by_date:r.by_date||{}};
+      const mk = (QR_SIGN.by_date[qrMakeDate()]||{}).name || '';
+      $('#qrSignInfo').html('列印簽章 → 製表：'
+        + (mk ? '<b>'+esc(mk)+'</b>（依任期）' : '<span style="color:#DD5138;">未設定（印空白線）</span>')
+        + '　審核：' + (QR_SIGN.approver ? '<b>'+esc(QR_SIGN.approver.name)+'</b>' : '<span style="color:#DD5138;">未綁定最高核准人員</span>'));
+    });
+  }
+  function qrRenderAsDoc(){
+    $('#qrAsDocNo').text(QR.as_doc ? ((QR.as_doc.doc_no_asof||QR.as_doc.doc_no)+'　'+QR.as_doc.doc_name) : '尚未綁定');
+  }
+  function qrLoad(cb){
+    $.getJSON(API+'?action=qr_get', r=>{
+      if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
+      QR = r;
+      $('#qrDefYears').val(QR.default_years);
+      $('#qrMakeDate').val(QR.make_date || qrToday());
+      $('.qr-edit').toggle(!!QR.can_edit);
+      qrRenderAsDoc(); qrRenderRows(); qrLoadSigners();
+      if(cb) cb();
+    });
+  }
+  $('#btnQrOpen').on('click', function(){ qrLoad(()=>$('#qrModal').modal('show')); });
+  $('#qrDefYears').on('change input', function(){ QR.default_years = parseInt(this.value)||0; if(!QR.can_edit) qrRenderRows(); });
+  $('#qrMakeDate').on('change', qrLoadSigners);
+  $('#qrAsDocBtn').on('click', function(){
+    EGAsDoc.open({docs:QR.as_docs, current: QR.as_doc?QR.as_doc.id:0, title:'品質記錄一覽表－AS 文件編號綁定',
+      onSave:function(id){
+        $.post(API+'?action=qr_save_settings', {default_years:$('#qrDefYears').val(), make_date:$('#qrMakeDate').val(), as_doc_id:id}, r=>{
+          if(r.status!=='success'){ alert(r.message||'儲存失敗'); return; }
+          QR.as_doc = r.as_doc||null; qrRenderAsDoc(); showToast('已更新 AS 文件綁定');
+        },'json');
+      }});
+  });
+  $('#qrRows').on('click','.qr-del', function(){
+    qrCollect(); QR.items.splice(+$(this).closest('tr').data('i'),1); qrRenderRows();
+  });
+  $('#qrRows').on('click','.qr-up', function(){
+    qrCollect(); const i=+$(this).closest('tr').data('i'); if(i<=0) return;
+    QR.items.splice(i-1,0,QR.items.splice(i,1)[0]); qrRenderRows();
+  });
+  $('#qrRows').on('click','.qr-dn', function(){
+    qrCollect(); const i=+$(this).closest('tr').data('i'); if(i>=QR.items.length-1) return;
+    QR.items.splice(i+1,0,QR.items.splice(i,1)[0]); qrRenderRows();
+  });
+  // 加入表單（多選）
+  function qrPickRender(){
+    const kw = $('#qrPickKw').val().trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const have = new Set(QR.items.map(x=>String(x.doc_id)));
+    const box=$('#qrPickList').empty();
+    let n=0;
+    (QR.candidates||[]).forEach(c=>{
+      if(have.has(String(c.id))) return;
+      const txt = (c.doc_no+' '+c.doc_name+' '+(c.dept_name||'')).toLowerCase();
+      if(kw.length && !kw.every(k=>txt.includes(k))) return;
+      n++;
+      box.append(`<label style="display:block;font-weight:normal;padding:2px 0;border-bottom:1px dashed #f0f0f0;">
+        <input type="checkbox" class="qr-pick" value="${c.id}"> <b>${esc(c.doc_no)}</b> ${esc(c.doc_name)}
+        <span class="text-muted" style="font-size:11px;">${esc(c.dept_name||'跨部門')}</span>
+        ${c.is_obsolete==1?'<span class="label ob-tag" style="font-size:10px;">已廢止</span>':''}</label>`);
+    });
+    if(!n) box.append('<span class="text-muted">沒有符合的表單</span>');
+    qrPickCount();
+  }
+  function qrPickCount(){ $('#qrPickN').text($('#qrPickList .qr-pick:checked').length); }
+  $('#qrAddBtn').on('click', function(){ qrCollect(); $('#qrPickKw').val(''); qrPickRender(); $('#qrPickModal').modal('show'); });
+  $('#qrPickKw').on('input', qrPickRender);
+  $('#qrPickList').on('change','.qr-pick', qrPickCount);
+  $('#qrPickAll').on('click', function(){ $('#qrPickList .qr-pick').prop('checked', true); qrPickCount(); });
+  $('#qrPickNone').on('click', function(){ $('#qrPickList .qr-pick').prop('checked', false); qrPickCount(); });
+  $('#qrPickAdd').on('click', function(){
+    const ids = $('#qrPickList .qr-pick:checked').map(function(){ return String(this.value); }).get();
+    if(!ids.length){ alert('請先勾選要加入的表單'); return; }
+    ids.forEach(id=>{
+      const c=(QR.candidates||[]).find(x=>String(x.id)===id); if(!c) return;
+      QR.items.push({doc_id:c.id, doc_no:c.doc_no, doc_name:c.doc_name, doc_dept_id:c.department_id,
+                     doc_dept_name:c.dept_name, is_obsolete:c.is_obsolete,
+                     retention_years:null, keeper_dept_id:null, keeper_dept_name:'', note:''});
+    });
+    $('#qrPickModal').modal('hide'); qrRenderRows(); showToast(`已加入 ${ids.length} 份表單（記得按「儲存設定」）`);
+  });
+  $('#qrSave').on('click', function(){
+    qrCollect();
+    const rows = QR.items.map(it=>({doc_id:it.doc_id, retention_years: it.retention_years==null?'':it.retention_years,
+                                    keeper_dept_id: it.keeper_dept_id||'', note: it.note||''}));
+    const $b=$(this).prop('disabled',true); NProgress.start();
+    $.post(API+'?action=qr_save_settings', {default_years:$('#qrDefYears').val(), make_date:$('#qrMakeDate').val()}, r1=>{
+      if(r1.status!=='success'){ $('#qrResult').html(`<div class="alert alert-danger">${esc(r1.message)}</div>`); NProgress.done(); $b.prop('disabled',false); return; }
+      $.post(API+'?action=qr_save_items', {rows:JSON.stringify(rows)}, r=>{
+        if(r.status==='success'){ $('#qrResult').empty(); showToast(`已儲存（${r.count} 份表單）`); qrLoad(); }
+        else $('#qrResult').html(`<div class="alert alert-danger">${esc(r.message)}</div>`);
+      },'json').fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
+    },'json');
+  });
+
+  // ── 列印品質記錄一覽表（格式比照紙本 2-DC-01-03：6 欄＋頁尾製表/審核）──
+  $('#qrPrint').on('click', function(){
+    qrCollect();
+    if(!QR.items.length){ alert('尚無表單可列印，請先加入表單'); return; }
+    const md = qrMakeDate(), dot = md.replace(/-/g,'.');
+    const asDoc = QR.as_doc;
+    const title = asDoc ? asDoc.doc_name : '品質記錄一覽表';   // 表頭＝綁定文件的表單名稱，禁寫死
+    const mkName = (QR_SIGN.by_date[md]||{}).name || '';
+    const apName = (QR_SIGN.approver||{}).name || '';
+    const st = nm => (nm && window.EGStamp)
+        ? EGStamp.stamp(nm, dot, false).replace(/(href|src)="\//g, '$1="'+location.origin+'/')
+        : '<span class="p-blank"></span>';
+    let body = `<div class="p-comp">${esc(QR.company_name||'')}</div>
+      <div class="p-title">${esc(title)}</div>
+      <table class="p-tb">
+      <colgroup><col style="width:6.7%"><col style="width:15.2%"><col style="width:35.4%"><col style="width:13.7%"><col style="width:16.8%"><col style="width:12.2%"></colgroup>
+      <thead><tr><th>項次</th><th>表 單 號 碼</th><th>表　單　名　稱</th><th>保存年限</th><th>保管單位</th><th>備　　註</th></tr></thead><tbody>`;
+    QR.items.forEach((it,i)=>{
+      const note = [it.note||'', (it.is_obsolete==1 ? '廢止 '+dispDate(it.obsolete_date||'') : '')].filter(Boolean).join('／');
+      body += `<tr><td>${i+1}</td><td>${esc(it.doc_no)}</td><td class="tl">${esc(it.doc_name)}</td>`
+            + `<td>${qrYears(it)} 年</td><td>${esc(qrKeeper(it))}</td><td>${esc(note)}</td></tr>`;
+    });
+    body += `</tbody></table>
+      <div class="p-sign"><div class="s-cell">製表：${st(mkName)}</div><div class="s-cell">審核：${st(apName)}</div></div>`;
+    // 頁尾右下＝AS 文件編號（版次已由後端依製表日期回推，ai-rules/16 第三之四節）
+    const asTxt = asDoc ? String(asDoc.doc_no_asof||asDoc.doc_no).replace(/['\\]/g,'') : '';
+    const css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0 auto;width:186mm;max-width:100%;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}'
+      + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:8px;}'
+      + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;}'
+      + 'table.p-tb thead{display:table-header-group;}'
+      + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:4px 5px;text-align:center;overflow-wrap:anywhere;word-break:break-all;}'
+      + 'table.p-tb thead th{background:#f3ead6;}'
+      + 'table.p-tb td.tl{text-align:left;}'
+      + 'table.p-tb tr{break-inside:avoid;}'
+      + '.p-sign{display:flex;justify-content:center;gap:150px;margin-top:10px;break-inside:avoid;}'
+      + '.p-sign .s-cell{font-size:13px;display:flex;align-items:center;min-height:80px;}'
+      + '.p-blank{display:inline-block;width:150px;border-bottom:1px solid #999;height:1px;margin-left:6px;}'
+      + 'svg.car-stamp{width:91px !important;height:91px !important;opacity:.92;vertical-align:middle;}'
+      + '.stamp-wrap{display:inline-block;text-align:center;margin:0 8px;}'
+      + '.stamp-wrap .stamp-title{display:none;}'
+      + '@page{margin:12mm 12mm 18mm;'
+      + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
+      + '}';
+    const w = window.open('', '_blank');
+    w.document.write('<html><head><meta charset="utf-8"><title></title><style>'+css+'</style></head><body>'+body
+      +'<scr'+'ipt>window.onload=function(){'
+      +'var onePageA4=(297-30)*96/25.4;'
+      +'if(document.body.scrollHeight>onePageA4*0.92){'
+      +'var st=document.createElement(\'style\');'
+      +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
+      +'document.head.appendChild(st);}'
+      +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+    w.document.close();
+  });
   $('#treeBody').on('click','.tree-toggle', function(){
     const $kids = $(this).closest('.tree-node').children('.tree-kids');
     $kids.toggle();
