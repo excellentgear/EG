@@ -852,9 +852,11 @@ $('#btnPrint').on('click', function(){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
         var unit = res.issue_unit||'';
         var company = res.company_name || COMPANY || '';
+        // 列印表頭＝已綁定 AS 文件的表單名稱 doc_name（ai-rules/16：禁寫死；沒綁定才退回頁面名稱）
+        var title = (res.as_doc && res.as_doc.doc_name) ? res.as_doc.doc_name : '外來文件清單';
         // 列印不再印篩選條件副標（年度/客戶/筆數/列印日期）——使用者明確要求拿掉
         var body = '<div class="p-comp">'+esc(company)+'</div>'
-                 + '<div class="p-title">外來文件清單</div>';
+                 + '<div class="p-title">'+esc(title)+'</div>';
         (res.groups||[]).forEach(function(g){
             body += '<div class="p-cust">客戶：'+esc(g.customer_name)+'</div>';
             body += '<table class="p-tb"><thead><tr><th style="width:30%;">料號</th>'
@@ -887,7 +889,7 @@ $('#btnPrint').on('click', function(){
             + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
             + '}';
         var w = window.open('', '_blank');
-        w.document.write('<html><head><meta charset="utf-8"><title>外來文件清單</title><style>'+css+'</style></head><body>'+body
+        w.document.write('<html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'+body
             +'<scr'+'ipt>window.onload=function(){'
             // 內容超過一頁(以A4概算)才加頁碼——只影響顯示不影響分頁；counter(pages) 由列印引擎在列印當下計算
             +'var onePageA4=(297-30)*96/25.4;'

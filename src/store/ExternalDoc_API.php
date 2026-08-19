@@ -150,6 +150,14 @@ function extdoc_pfmea_of(array $map, $dsPk, string $partNo): string {
  * $opt: mode('bound'|'all'), customer_id(''=全部), year(0=全部), pfmea(''|'yes'|'no')
  */
 function extdoc_fetch_rows(PDO $db, array $opt): array {
+ // 同一次請求內同條件只算一次（一次頁面載入會問到 4 次：清單、選項、待補計數、不列入計數）
+ static $memo = [];
+ $key = json_encode([$opt['mode'] ?? 'all', (string)($opt['customer_id'] ?? ''), (int)($opt['year'] ?? 0),
+                        (int)($opt['category'] ?? 0), $opt['show'] ?? 'active', $opt['pfmea'] ?? '']);
+ if (isset($memo[$key])) return $memo[$key];
+ return $memo[$key] = extdoc_fetch_rows_raw($db, $opt);
+}
+function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
     $cats = extdoc_categories($db);
     if (!$cats) return [];
     $catIds = array_keys($cats);
@@ -232,31 +240,78 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $r['source'] = 'quote'; $rows[] = $r; }
 
     // ③ 報價附件（linked_parts 指定料號字串；同料號字串可能多筆 d_setting——先全撈，PHP 端優先取「客戶＝報價單客戶」那筆）
-    $sql = "SELECT a.id AS attach_id, ds.d_id AS ds_pk, ds.D_Setting_Id AS part_no,
-                   ds.Customer_Id AS customer_id, COALESCE(cl.customer,'') AS customer_name,
+    //   原本 JOIN d_setting ON JSON_CONTAINS(...)＝每筆報價附件都要拿全部料號逐一比 JSON（索引完全用不到），
+    //   實測單這一句 1.86 秒、一次頁面載入問 4 次就是 7 秒的「載入中」。改成先撈附件、PHP 解出 linked_parts 的
+    //   料號字串，再用 IN (...) 一次查 d_setting（走索引），最後在 PHP 端對回去；比對維持嚴格字串相等，
+    //   語意與原本的 JSON_CONTAINS 相同（大小寫/尾空白不同的料號不會被多撈進來）。
+    $sql = "SELECT a.id AS attach_id,
                    COALESCE(NULLIF(a.original_name,''), a.filename) AS doc_name,
-                   a.filename, COALESCE(a.note,'') AS note,
+                   a.filename, COALESCE(a.note,'') AS note, a.linked_parts,
                    a.category_ids, COALESCE(a.category_id,'') AS category_id_single, a.uploaded_at,
                    COALESCE(u.user_cname, a.uploaded_by, '') AS uploaded_by, a.quote_no, ql.client_id AS quote_client
             FROM quotation_attachments a
             JOIN quotation_list ql ON ql.quote_no = a.quote_no
-            JOIN d_setting ds ON JSON_CONTAINS(a.linked_parts, JSON_QUOTE(ds.D_Setting_Id))
-            LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
             LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
             WHERE a.status='active' AND a.linked_parts IS NOT NULL AND " . $catCond('a.category_ids', 'a.category_id');
     $args = [];
     if ($year) { $sql .= " AND YEAR(a.uploaded_at) = ?"; $args[] = $year; }
-    if ($mode === 'bound') $sql .= " AND $boundCond";
     $st = $db->prepare($sql); $st->execute($args);
+    $linkAtt = $st->fetchAll(PDO::FETCH_ASSOC);
+
+    $wantNo = [];   // 大寫去空白 => 原字串（查 d_setting 用）
+    foreach ($linkAtt as $i => $a) {
+        $lp = json_decode((string)$a['linked_parts'], true);
+        $ps = [];
+        if (is_array($lp)) {
+            foreach ($lp as $p) {
+                if (!is_scalar($p)) continue;
+                $p = (string)$p;
+                if ($p !== '') { $ps[] = $p; $wantNo[strtoupper(trim($p))] = $p; }
+            }
+        }
+        $linkAtt[$i]['_parts'] = array_values(array_unique($ps));
+    }
+    $dsByNo = [];   // 大寫去空白料號 => 該料號的 d_setting 候選列（同料號可能多客戶）
+    foreach (array_chunk(array_values($wantNo), 500) as $chunk) {
+        $ph = implode(',', array_fill(0, count($chunk), '?'));
+        $q  = "SELECT ds.d_id, ds.D_Setting_Id, ds.Customer_Id, COALESCE(cl.customer,'') AS customer_name
+               FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
+               WHERE ds.D_Setting_Id IN ($ph)";
+        if ($mode === 'bound') $q .= " AND $boundCond";
+        $s2 = $db->prepare($q); $s2->execute($chunk);
+        foreach ($s2->fetchAll(PDO::FETCH_ASSOC) as $d) $dsByNo[strtoupper(trim((string)$d['D_Setting_Id']))][] = $d;
+    }
+
     $linkedRaw = [];
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $key = $r['attach_id'] . '|' . $r['part_no'];
-        // 同附件×同料號字串可能對到多筆 d_setting（不同客戶）：客戶符合報價單客戶者優先
-        if (!isset($linkedRaw[$key])) {
-            $linkedRaw[$key] = $r;
-        } elseif ($r['customer_id'] === $r['quote_client']
-                  && $linkedRaw[$key]['customer_id'] !== $linkedRaw[$key]['quote_client']) {
-            $linkedRaw[$key] = $r;
+    foreach ($linkAtt as $a) {
+        foreach ($a['_parts'] as $pno) {
+            foreach ($dsByNo[strtoupper(trim($pno))] ?? [] as $d) {
+                if ((string)$d['D_Setting_Id'] !== $pno) continue;   // 嚴格相等＝原 JSON_CONTAINS 的比對語意
+                $r = [
+                    'attach_id'          => $a['attach_id'],
+                    'ds_pk'              => $d['d_id'],
+                    'part_no'            => $d['D_Setting_Id'],
+                    'customer_id'        => $d['Customer_Id'],
+                    'customer_name'      => $d['customer_name'],
+                    'doc_name'           => $a['doc_name'],
+                    'filename'           => $a['filename'],
+                    'note'               => $a['note'],
+                    'category_ids'       => $a['category_ids'],
+                    'category_id_single' => $a['category_id_single'],
+                    'uploaded_at'        => $a['uploaded_at'],
+                    'uploaded_by'        => $a['uploaded_by'],
+                    'quote_no'           => $a['quote_no'],
+                    'quote_client'       => $a['quote_client'],
+                ];
+                $key = $r['attach_id'] . '|' . $r['part_no'];
+                // 同附件×同料號字串可能對到多筆 d_setting（不同客戶）：客戶符合報價單客戶者優先
+                if (!isset($linkedRaw[$key])) {
+                    $linkedRaw[$key] = $r;
+                } elseif ($r['customer_id'] === $r['quote_client']
+                          && $linkedRaw[$key]['customer_id'] !== $linkedRaw[$key]['quote_client']) {
+                    $linkedRaw[$key] = $r;
+                }
+            }
         }
     }
     foreach ($linkedRaw as $r) {
