@@ -805,7 +805,12 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
             <div class="phrase-bar" data-field="summary" data-t="#ver_revised_summary" style="margin-top:3px;"></div></div>
           <div class="row">
             <div class="form-group col-md-4"><label>新版文件檔（下載版）*</label><input type="file" name="file" id="ver_file" required>
-              <span class="text-muted" style="font-size:11px;">具下載權限者下載的就是這一份（可修改的原檔）。</span></div>
+              <span class="text-muted" style="font-size:11px;">具下載權限者下載的就是這一份（可修改的原檔）。</span>
+              <div id="ver_fsd_wrap" style="display:none;margin-top:4px;">
+                <label style="font-weight:normal;font-size:12px;margin-bottom:2px;">或由「表單簽核案件」導入（同一份文件不用上傳兩次）</label>
+                <select class="form-control input-sm" name="fsd_case_id" id="ver_fsd_case"></select>
+                <span class="text-muted" style="font-size:11px;">只列出已簽核完成、已產生 PDF、且連結到本文件編號的案件。選了就不用再選上傳檔案。</span>
+              </div></div>
             <div class="form-group col-md-4"><label>檢視版（選填）</label><input type="file" name="view_file" id="ver_view_file">
               <span class="text-muted" style="font-size:11px;">線上預覽會顯示這一份；不傳＝預覽直接用下載版，之後也可在歷史版本補傳。</span></div>
             <div class="form-group col-md-4"><label>文件制修申請單（附件一）* <span class="req-note">改版必附</span></label><input type="file" name="apply_form" id="ver_apply_form" required></div>
@@ -2208,6 +2213,15 @@ $(function(){
     const drow = DOCS.find(x=>x.id==vid) || {};
     $('#ver_cur_ver').text(drow.current_version||'-');
     $('#ver_cur_date').text(drow.revised_date||'-');
+    // 可由表單簽核案件導入的清單（有才顯示這一區；選了案件就不必再上傳下載版）
+    $('#ver_fsd_wrap').hide(); $('#ver_fsd_case').html('');
+    $.getJSON(API, {action:'fsd_import_list', doc_id:vid}, function(r){
+      const cs = (r && r.status==='success') ? (r.cases||[]) : [];
+      if(!cs.length) return;
+      $('#ver_fsd_case').html('<option value="">（不導入，改用上方上傳）</option>' + cs.map(c =>
+        `<option value="${c.id}">${$('<div>').text((c.title||'')+'　'+(c.business_date||'')+'　'+(c.filler_name||c.applicant_name||'')).html()}</option>`).join(''));
+      $('#ver_fsd_wrap').show();
+    });
     // 免附件補登權限：新版文件檔與申請單皆可不附（後端同樣豁免）
     $('#ver_file').prop('required', !canNA);
     $('#ver_apply_form').prop('required', !canNA);
@@ -2216,8 +2230,17 @@ $(function(){
     $('#versionModal').modal('show');
   });
   $('#dlTplBtn').on('click', function(e){ e.preventDefault(); window.location = API+'?action=download_template'; });
+  // 選了導入來源就放開「新版文件檔」的必填（後端同樣二擇一，不做只擋前端的半套）
+  $('#ver_fsd_case').on('change', function(){
+    const on = !!$(this).val();
+    $('#ver_file').prop('required', !on && !canNA).prop('disabled', on);
+    if(on) $('#ver_file').val('');
+  });
   $('#versionForm').on('submit', function(e){
     e.preventDefault();
+    if($('#ver_fsd_case').val() && $('#ver_file')[0].files.length){
+      alert('新版文件檔請擇一：上傳檔案，或由表單簽核案件導入。'); return;
+    }
     const fd = new FormData(this);
     NProgress.start();
     $.ajax({url:API+'?action=add_version', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})

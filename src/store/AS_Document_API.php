@@ -11,6 +11,10 @@ session_start();
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
+// 表單簽核案件導入（同一份文件不用上傳兩次）：只用到查詢與路徑函式，不碰簽核流程
+include_once $document_root . '/EGsystem/src/common/form_signer_lib.php';
+include_once $document_root . '/EGsystem/src/common/attach_lib.php';
+include_once $document_root . '/EGsystem/src/common/date_fmt_lib.php';
 
 $db_connection = new DBConnection();
 $db = $db_connection->getPDO();
@@ -212,6 +216,34 @@ function asSafeExt(string $orig): ?string {
 function asMakeName(string $ext): string {
     return date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;
 }
+
+/**
+ * 表單簽核案件導入：把已簽核完成案件的合成 PDF 複製一份到 AS 文件資料夾，回傳
+ * ['file_name'=>存檔名, 'original_name'=>顯示名, 'case_id'=>來源案件id]，不合格直接 jout 中止。
+ * 守門三條缺一不可：案件已完成、已產生 PDF、連結的正是這份 AS 文件——
+ * 否則會把半成品或別份文件掛進 AS 文件版本裡。
+ */
+function asFsdImportFile(PDO $db, int $caseId, int $docId, string $destDir): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) jout(['status'=>'error','message'=>'找不到要導入的表單簽核案件']);
+    if ((int)($case['link_as_doc_id'] ?? 0) !== $docId)
+        jout(['status'=>'error','message'=>'該案件連結的不是這份 AS 文件，不可導入']);
+    if (($case['status'] ?? '') !== 'approved')
+        jout(['status'=>'error','message'=>'該案件尚未完成簽核，不可導入']);
+    $src = trim((string)($case['export_pdf_name'] ?? ''));
+    if ($src === '') jout(['status'=>'error','message'=>'該案件尚未產生合成 PDF，請先到表單簽核設計器開啟一次該案件']);
+    $srcDir = eg_attach_dir($db, 'fsd_case_nas_dir', '表單簽核設計器-案件');
+    $srcPath = rtrim($srcDir, '\\/') . DIRECTORY_SEPARATOR . $src;
+    if (!is_file($srcPath)) jout(['status'=>'error','message'=>'找不到該案件的 PDF 實體檔，請先重新產生']);
+    $name = asMakeName('pdf');
+    if (!@copy($srcPath, rtrim($destDir, '\\/') . DIRECTORY_SEPARATOR . $name))
+        jout(['status'=>'error','message'=>'導入寫入失敗（NAS 未連線？）']);
+    // 顯示名比照案件下載檔名「案件名稱 業務日期.pdf」，版本清單看得出是哪一件
+    $safe = preg_replace('/[\\\\\/:*?"<>|]+/u', '_', trim((string)$case['title']) ?: ('案件' . $caseId));
+    return ['file_name'=>$name,
+            'original_name'=>trim($safe . ' ' . eg_fmt_date($case['business_date'])) . '.pdf',
+            'case_id'=>$caseId];
+}
 /** 串流下載/開啟一個實體檔案（$inline=true 時 PDF/圖片直接在瀏覽器開啟） */
 function asStream(string $fullpath, string $downloadName, bool $inline = false): void {
     if (!is_file($fullpath)) { http_response_code(404); header('Content-Type: text/plain; charset=utf-8'); echo '檔案不存在或 NAS 未連線'; exit; }
@@ -379,6 +411,7 @@ $asGate = [
     'download_template'=>'update',
     'create_document'=>'create', 'create_documents_batch'=>'create',
     'add_version'=>'update', 'update_document_meta'=>'update',
+    'fsd_import_list'=>'update',   // 改版時查「有哪些表單簽核案件可導入」，與 add_version 同一組權限
     'open_online'=>'edit_online',
     'delete_document'=>'delete', 'restore_document'=>'delete', 'delete_document_permanent'=>'delete',
     'delete_version_permanent'=>'delete',
@@ -653,6 +686,12 @@ case 'create_document':
     }
 
 // ══════════════ 改版（新版本，舊版保留） ══════════════
+/** 某份 AS 文件可導入的表單簽核案件清單（已完成＋已產生 PDF＋連結到本文件）。 */
+case 'fsd_import_list':
+    $docId = (int)($_REQUEST['doc_id'] ?? 0);
+    if ($docId <= 0) jout(['status'=>'error','message'=>'缺少文件id']);
+    jout(['status'=>'success','cases'=>fsd_asdoc_importable_cases($db, $docId)]);
+
 case 'add_version':
     $docId  = (int)($_POST['doc_id'] ?? 0);
     $version= asNormVer($_POST['version'] ?? '');
@@ -677,11 +716,15 @@ case 'add_version':
     // 改版版本號必須比目前版本新（不可倒退）
     if ($vErr = asValidateVersionOrder((string)($doc['current_version'] ?? ''), $version)) jout(['status'=>'error','message'=>$vErr]);
 
+    // 下載版可改用「由表單簽核案件導入」取代上傳（同一份文件不用上傳兩次）
+    $fsdCaseId = (int)($_POST['fsd_case_id'] ?? 0);
     $hasFile  = isset($_FILES['file']) && $_FILES['file']['error']===UPLOAD_ERR_OK;
     $hasView  = isset($_FILES['view_file']) && $_FILES['view_file']['error']===UPLOAD_ERR_OK;   // 檢視版（選填）
     $hasApply = isset($_FILES['apply_form']) && $_FILES['apply_form']['error']===UPLOAD_ERR_OK;
-    if (!$hasFile && !$asNoAttach)
-        jout(['status'=>'error','message'=>'請上傳新版文件檔']);
+    if ($fsdCaseId > 0 && $hasFile)
+        jout(['status'=>'error','message'=>'新版文件檔請擇一：上傳檔案，或由表單簽核案件導入']);
+    if (!$hasFile && $fsdCaseId <= 0 && !$asNoAttach)
+        jout(['status'=>'error','message'=>'請上傳新版文件檔（或改由表單簽核案件導入）']);
     // 改版一律需附「文件制修申請單(附件一)」；「補登免附件」角色豁免（補舊資料用）
     if (!$hasApply && !$asNoAttach)
         jout(['status'=>'error','message'=>'改版必須一併上傳「文件制修申請單」(附件一)']);
@@ -702,13 +745,16 @@ case 'add_version':
     $db->beginTransaction();
     try {
         $dir = asDocDir($db, $docId);
-        if (($hasFile || $hasApply || $hasView) && !is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
+        if (($hasFile || $hasApply || $hasView || $fsdCaseId > 0) && !is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
 
-        $fname = null; $orig = null;
+        $fname = null; $orig = null; $srcCaseId = null;
         if ($hasFile) {
             $fname = asMakeName($ext);
             if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) throw new Exception('文件寫入失敗');
             $orig = basename($_FILES['file']['name']);
+        } elseif ($fsdCaseId > 0) {
+            $imp = asFsdImportFile($db, $fsdCaseId, $docId, $dir);
+            $fname = $imp['file_name']; $orig = $imp['original_name']; $srcCaseId = $imp['case_id'];
         }
 
         $applyName = null; $applyOrig = null;
@@ -728,9 +774,9 @@ case 'add_version':
 
         // 舊版快照沿用主檔當下的階級/部門
         $db->prepare("INSERT INTO as_document_version
-              (doc_id,version,change_status,revised_date,revised_pages,revised_summary,doc_level_snapshot,department_id_snapshot,file_name,original_name,view_file_name,view_original_name,apply_form_file_name,apply_form_original_name,uploaded_by,uploaded_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
-           ->execute([$docId,$version,$cstat,$rdate,$rpages,$rsum,$doc['doc_level'],$doc['department_id'],$fname,$orig,$viewName,$viewOrig,$applyName,$applyOrig,$GLOBALS['currentCname']]);
+              (doc_id,version,change_status,revised_date,revised_pages,revised_summary,doc_level_snapshot,department_id_snapshot,file_name,original_name,view_file_name,view_original_name,apply_form_file_name,apply_form_original_name,src_fsd_case_id,uploaded_by,uploaded_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+           ->execute([$docId,$version,$cstat,$rdate,$rpages,$rsum,$doc['doc_level'],$doc['department_id'],$fname,$orig,$viewName,$viewOrig,$applyName,$applyOrig,$srcCaseId,$GLOBALS['currentCname']]);
         $verId = (int)$db->lastInsertId();
 
         $db->prepare("UPDATE as_document SET current_version=?, current_version_id=?, updated_at=NOW() WHERE id=?")
