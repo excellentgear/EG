@@ -1569,6 +1569,60 @@ case 'version_attach_file':
        ->execute([$fname, basename($_FILES['file']['name']), $verId]);
     jout(['status'=>'success']);
 
+// ══════════════ 修改某一版的修訂日期（管理員；打錯日期就地更正） ══════════════
+/* 只改 revised_date，版本號與檔案都不動。守門：版本越新、修訂日期必須越晚——
+ * 依業務日期回推版次（eg_asdoc_version_asof，ai-rules/16 第三之四節）是拿 revised_date 排序的，
+ * 日期與版本順序一旦顛倒，列印舊單據就會取到錯的版次。前後版本各以「版本號」認定（不是 id）。 */
+case 'version_update_date':
+    if (!($asIsRoleAdmin || strpos($asPagePerm,'A')!==false))
+        jout(['status'=>'error','message'=>'修改修訂日期僅限管理員使用']);
+    $verId   = (int)($_POST['version_id'] ?? 0);
+    $newDate = trim((string)($_POST['revised_date'] ?? ''));
+    if ($verId<=0) jout(['status'=>'error','message'=>'缺少版本 ID']);
+    $d = DateTime::createFromFormat('Y-m-d', $newDate);
+    if (!$d || $d->format('Y-m-d') !== $newDate) jout(['status'=>'error','message'=>'修訂日期格式不正確']);
+
+    $st = $db->prepare("SELECT * FROM as_document_version WHERE id=?");
+    $st->execute([$verId]);
+    $v = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$v) jout(['status'=>'error','message'=>'版本不存在']);
+    $docId = (int)$v['doc_id'];
+    if ((string)$v['revised_date'] === $newDate) jout(['status'=>'success','unchanged'=>1]);
+
+    $st = $db->prepare("SELECT doc_no, doc_name FROM as_document WHERE id=?");
+    $st->execute([$docId]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
+
+    // 前一版＝版本號比它舊的當中最新的一筆；下一版＝比它新的當中最舊的一筆（無日期者不納入比較）
+    $st = $db->prepare("SELECT id, version, revised_date FROM as_document_version WHERE doc_id=? AND id<>?");
+    $st->execute([$docId, $verId]);
+    $prev = null; $next = null;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $o) {
+        if (trim((string)$o['revised_date']) === '') continue;
+        $c = asVersionCmp((string)$o['version'], (string)$v['version']);
+        if ($c === null || $c === 0) continue; // 版本號無法比較（型式不一致）就不當作前後版
+        if ($c < 0) { if ($prev === null || asVersionCmp((string)$o['version'], (string)$prev['version']) > 0) $prev = $o; }
+        else        { if ($next === null || asVersionCmp((string)$o['version'], (string)$next['version']) < 0) $next = $o; }
+    }
+    if ($prev && $newDate <= $prev['revised_date'])
+        jout(['status'=>'error','message'=>"修訂日期 {$newDate} 不晚於前一版 {$prev['version']}（{$prev['revised_date']}）；版本越新、修訂日期必須越晚，否則依業務日期回推版次會取錯版"]);
+    if ($next && $newDate >= $next['revised_date'])
+        jout(['status'=>'error','message'=>"修訂日期 {$newDate} 不早於下一版 {$next['version']}（{$next['revised_date']}）；版本越新、修訂日期必須越晚，否則依業務日期回推版次會取錯版"]);
+
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE as_document_version SET revised_date=? WHERE id=?")->execute([$newDate, $verId]);
+        $db->prepare("UPDATE as_document SET updated_at=NOW() WHERE id=?")->execute([$docId]);
+        $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
+                      VALUES ('views/ADM/as_document_management.php', ?, ?, NOW(), ?)")
+           ->execute(['修改版本的修訂日期',
+               "doc_no={$doc['doc_no']} doc_name={$doc['doc_name']} version={$v['version']} {$v['revised_date']} → {$newDate}",
+               $currentCname ?: $currentUserName]);
+        $db->commit();
+    } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
+    jout(['status'=>'success']);
+
 // ══════════════ 替換「目前版本」的檔案（傳錯檔補救；歷史版本不可替換） ══════════════
 /* version_attach_file 只補「空缺」，這支處理「已有檔案要換掉」。
  * 刻意只開放文件的 current_version_id 那一筆：舊版是已發行的紀錄，內容有誤一律走「改版」，

@@ -1,6 +1,7 @@
 <?php
 /**
- * AS 文件管理：補舊版次（add_old_versions_batch）＋替換目前版本檔案（version_replace_file）功能測試。
+ * AS 文件管理：補舊版次（add_old_versions_batch）＋替換目前版本檔案（version_replace_file）
+ * ＋修改修訂日期（version_update_date）功能測試。
  * 以偽造 session（超級管理員 id=1）直接跑真 API。測試資料用完即刪。
  * 用法： php ai-rules/tools/test_asdoc_old_version.php
  */
@@ -137,6 +138,45 @@ try {
 
     $r = api('version_replace_file', ['version_id' => 0], $superName);
     ck('缺版本 ID 被擋下', ($r['status'] ?? '') === 'error', $r['message'] ?? '');
+
+    echo "\n── 修改修訂日期（version_update_date）──\n";
+    // 目前版本歷史：A(2024-01-10) B(2025-05-01) B-1(2025-09-01) B-2(2025-10-01) C(2026-01-10)
+    $vid   = fn(string $ver) => (int)$db->query("SELECT id FROM as_document_version WHERE doc_id=$docId AND version='$ver'")->fetchColumn();
+    $vdate = fn(string $ver) => (string)$db->query("SELECT revised_date FROM as_document_version WHERE doc_id=$docId AND version='$ver'")->fetchColumn();
+
+    $r = api('version_update_date', ['version_id' => $vid('B'), 'revised_date' => '2025-06-15'], $superName);
+    ck('改到前後版之間（B→2025-06-15）成功', ($r['status'] ?? '') === 'success', json_encode($r, JSON_UNESCAPED_UNICODE));
+    ck('DB 日期已更新', $vdate('B') === '2025-06-15', '實際=' . $vdate('B'));
+
+    $r = api('version_update_date', ['version_id' => $vid('B'), 'revised_date' => '2024-01-05'], $superName);
+    ck('早於前一版 A 被擋下', ($r['status'] ?? '') === 'error' && str_contains($r['message'] ?? '', '不晚於前一版'), $r['message'] ?? '');
+
+    $r = api('version_update_date', ['version_id' => $vid('B'), 'revised_date' => '2024-01-10'], $superName);
+    ck('與前一版 A 同日也被擋下', ($r['status'] ?? '') === 'error' && str_contains($r['message'] ?? '', '不晚於前一版'), $r['message'] ?? '');
+
+    $r = api('version_update_date', ['version_id' => $vid('B'), 'revised_date' => '2025-12-01'], $superName);
+    ck('晚於下一版 B-1 被擋下', ($r['status'] ?? '') === 'error' && str_contains($r['message'] ?? '', '不早於下一版'), $r['message'] ?? '');
+    ck('被擋下時日期未被改動', $vdate('B') === '2025-06-15', '實際=' . $vdate('B'));
+
+    $r = api('version_update_date', ['version_id' => $vid('A'), 'revised_date' => '2023-05-05'], $superName);
+    ck('最舊版往前改（無前一版）成功', ($r['status'] ?? '') === 'success', json_encode($r, JSON_UNESCAPED_UNICODE));
+
+    $r = api('version_update_date', ['version_id' => $vid('C'), 'revised_date' => '2026-08-01'], $superName);
+    ck('目前版本往後改（無下一版）成功', ($r['status'] ?? '') === 'success', json_encode($r, JSON_UNESCAPED_UNICODE));
+
+    $r = api('version_update_date', ['version_id' => $vid('C'), 'revised_date' => '2025-01-01'], $superName);
+    ck('目前版本改到早於 B-2 被擋下', ($r['status'] ?? '') === 'error' && str_contains($r['message'] ?? '', '不晚於前一版'), $r['message'] ?? '');
+
+    $r = api('version_update_date', ['version_id' => $vid('B'), 'revised_date' => '2025/06/20'], $superName);
+    ck('日期格式錯誤被擋下', ($r['status'] ?? '') === 'error' && str_contains($r['message'] ?? '', '格式'), $r['message'] ?? '');
+
+    $r = api('version_update_date', ['version_id' => $vid('B'), 'revised_date' => ''], $superName);
+    ck('日期空白被擋下', ($r['status'] ?? '') === 'error', $r['message'] ?? '');
+
+    if ($other) {
+        $r = api('version_update_date', ['version_id' => $vid('B'), 'revised_date' => '2025-07-01'], $other);
+        ck("非管理員（{$other}）不可改修訂日期", ($r['status'] ?? '') === 'error' && str_contains($r['message'] ?? '', '管理員'), $r['message'] ?? '');
+    }
 
     echo "\n── 一般改版（add_version）不受影響 ──\n";
     $r = api('add_version', ['doc_id' => $docId, 'version' => 'B-3', 'revised_date' => '2026-03-01'], $superName);

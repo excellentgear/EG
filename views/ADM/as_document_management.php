@@ -1900,6 +1900,10 @@ $(function(){
       curHistCurDate  = (r.data.versions||[]).find(v=>v.id==curHistCurVerId)?.revised_date || '';
       (r.data.versions||[]).forEach(v=>{
         const isCur = (v.id==curHistCurVerId);
+        // 修訂日期：管理員可就地改（打錯日期不必刪版重建）；其他人唯讀顯示
+        const verDateCell = v => window.asPerm.admin
+          ? `<input type="date" class="form-control input-sm ver-date" data-ver="${v.id}" data-version="${esc(v.version)}" data-old="${esc(v.revised_date||'')}" value="${esc(v.revised_date||'')}" max="9999-12-31" style="width:135px;padding:2px 4px;height:26px;" title="直接改修訂日期（版本越新、日期必須越晚）">`
+          : (v.revised_date ? esc(dispDate(v.revised_date)) : '-');
         // 只有目前版本能替換檔案：傳錯檔當場換掉，不必再開一版
         const repBtn = (which,label)=> (canU && isCur)
           ? ` <label class="btn btn-xs btn-warning" style="margin:0;" title="替換此檔案（僅限目前版本 ${esc(curHistCurVer)}）">${label}<input type="file" class="ver-replace" data-ver="${v.id}" data-which="${which}" style="display:none;"></label>` : '';
@@ -1927,7 +1931,7 @@ $(function(){
           <td>${esc(v.change_status)||'-'}</td>
           <td>${esc(v.doc_level_snapshot)||'-'}</td>
           <td>${esc(v.dept_name_snapshot)||'-'}</td>
-          <td>${esc(v.revised_date)||'-'}</td>
+          <td>${verDateCell(v)}</td>
           <td>${esc(v.revised_pages)||'-'}</td>
           <td>${esc(v.revised_summary)||'-'}</td>
           <td>${esc(v.uploaded_by)||'-'}</td>
@@ -1973,6 +1977,20 @@ $(function(){
         else alert(r.message||'失敗');
      })
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
+  });
+
+  // 修訂日期就地修改（管理員）：版本越新、日期必須越晚，後端以前後版的版本號認定並同樣擋一次
+  $(document).on('change','#historyBody .ver-date', function(){
+    const $in=$(this), verId=$in.data('ver'), verName=$in.data('version');
+    const oldD=$in.data('old')||'', newD=$in.val();
+    if(newD===oldD) return;
+    if(!newD){ alert('修訂日期不可清空'); $in.val(oldD); return; }
+    if(!confirm(`【修改修訂日期】版本 ${verName}\n${oldD?dispDate(oldD):'（無）'} → ${dispDate(newD)}\n\n此日期會影響「依業務日期回推版次」的結果（列印舊單據時要印哪一版）。\n確定要修改？`)){ $in.val(oldD); return; }
+    NProgress.start();
+    $.post(API+'?action=version_update_date', {version_id:verId, revised_date:newD}, r=>{
+      if(r.status==='success'){ showToast(`版本 ${verName} 的修訂日期已改為 ${dispDate(newD)}`); openHistory(curHistDocId, curHistDocName); loadDocs(true); }
+      else { alert(r.message||'失敗'); $in.val(oldD); }
+    },'json').fail(()=>{ alert('請求失敗'); $in.val(oldD); }).always(()=>NProgress.done());
   });
 
   // 替換目前版本的檔案：傳錯檔補救（舊版不提供此鈕，後端也只放行目前版本）
