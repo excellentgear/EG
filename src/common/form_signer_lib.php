@@ -537,8 +537,14 @@ function fsd_case_get(PDO $db, int $id): ?array {
 
 function fsd_case_list(PDO $db, int $templateId = 0, ?int $onlyApplicant = null): array {
     // LEFT JOIN：補案件(case_kind='backfill')沒有樣板、template_id 固定 0，INNER JOIN 會讓補案件整批查不到
-    $sql = "SELECT c.*, COALESCE(t.name, IF(c.case_kind='backfill','（補案件・無樣板）','')) AS template_name
-            FROM fsd_case c LEFT JOIN fsd_template t ON t.id=c.template_id WHERE 1=1";
+    // 列印紀錄：列表只需要「最新一次是什麼時候、總共印過幾次」，明細點開才查（2026-08-19 使用者要求只加在列表）
+    $sql = "SELECT c.*, COALESCE(t.name, IF(c.case_kind='backfill','（補案件・無樣板）','')) AS template_name,
+                   pl.last_printed_at, pl.print_count
+            FROM fsd_case c
+            LEFT JOIN fsd_template t ON t.id=c.template_id
+            LEFT JOIN (SELECT case_id, MAX(printed_at) AS last_printed_at, COUNT(*) AS print_count
+                         FROM fsd_case_print_log GROUP BY case_id) pl ON pl.case_id=c.id
+            WHERE 1=1";
     $params = [];
     if ($templateId) { $sql .= " AND c.template_id=?"; $params[] = $templateId; }
     if ($onlyApplicant !== null) { $sql .= " AND c.applicant_id=?"; $params[] = $onlyApplicant; }
@@ -546,6 +552,27 @@ function fsd_case_list(PDO $db, int $templateId = 0, ?int $onlyApplicant = null)
     $st = $db->prepare($sql);
     $st->execute($params);
     return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/* -------- 列印紀錄：誰在什麼時候把案件印出來／開啟或下載合成 PDF（列表顯示最新一次） -------- */
+
+/** 記一筆。時間戳一律取 DB 的 NOW()（PHP 是 UTC、MySQL 是本地，混用會差 8 小時，見 CLAUDE.md 踩坑）。 */
+function fsd_case_print_log_add(PDO $db, int $caseId, string $kind, int $uid, string $uname): void {
+    try {
+        $kind = in_array($kind, ['print', 'pdf_open', 'pdf_download'], true) ? $kind : 'print';
+        $db->prepare("INSERT INTO fsd_case_print_log (case_id,kind,printed_by,printed_by_name,printed_at) VALUES (?,?,?,?,NOW())")
+           ->execute([$caseId, $kind, $uid ?: null, $uname]);
+    } catch (Throwable $e) { /* 記不起來不該擋住列印本身 */ }
+}
+
+/** 某案件的完整列印紀錄（新到舊）。 */
+function fsd_case_print_log(PDO $db, int $caseId, int $limit = 200): array {
+    try {
+        $st = $db->prepare("SELECT kind, printed_by_name, printed_at FROM fsd_case_print_log
+                            WHERE case_id=? ORDER BY printed_at DESC, id DESC LIMIT " . max(1, (int)$limit));
+        $st->execute([$caseId]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
 }
 
 function fsd_case_schema(PDO $db, array $case): array {

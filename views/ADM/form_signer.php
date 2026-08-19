@@ -197,7 +197,7 @@ $perms = fsd_perms($db, $fsdUser);
             </div>
             <div class="fsd-table-wrap">
             <table class="fsd-tbl">
-                <thead><tr><th>案件</th><th>樣板</th><th>申請人</th><th>業務日期</th><th>進度</th><th>狀態</th><th style="width:160px;">操作</th></tr></thead>
+                <thead><tr><th>案件</th><th>樣板</th><th>申請人</th><th>業務日期</th><th>進度</th><th>狀態</th><th style="width:110px;">最新列印</th><th style="width:160px;">操作</th></tr></thead>
                 <tbody id="caseBody"><tr><td colspan="7" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
             </div>
@@ -386,6 +386,13 @@ $perms = fsd_perms($db, $fsdUser);
         <button class="b-ok" onclick="pwConfirm()">確認刪除</button></div>
 </div></div>
 
+<!-- 列印紀錄 modal（從列表「最新列印」欄點入） -->
+<div class="fsd-mask" id="printLogMask"><div class="fsd-modal">
+    <div class="m-head"><span>列印紀錄</span><span class="m-close" onclick="closeMask('printLogMask')">✕</span></div>
+    <div class="m-body"><div id="printLogList" class="fsd-resp-list" style="max-height:50vh;overflow-y:auto;"></div></div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('printLogMask')">關閉</button></div>
+</div></div>
+
 <!-- 設定填表人 modal（草稿：申請人本人或管理員；已送出：僅超級管理員回改。填表人=表單實際歸屬者,簽核解析基準） -->
 <div class="fsd-mask" id="fillerMask"><div class="fsd-modal">
     <div class="m-head"><span>設定填表人</span><span class="m-close" onclick="closeMask('fillerMask')">✕</span></div>
@@ -438,7 +445,7 @@ $perms = fsd_perms($db, $fsdUser);
         ・<b>上傳 PDF 不會被轉成圖片</b>：匯出的 PDF 直接沿用原始 PDF 的頁面內容，畫質與原檔完全相同（掃描影像是原封不動搬過去的）；畫面上看到的預覽底圖才是轉圖產生的，只用來給您拖曳定位，不影響最終檔案。<br>
         ・<b>加密保護的 PDF 無法處理</b>，會在上傳當下就擋下並說明原因，請改上傳未加密的 PDF 或圖片檔——系統不會自動改用畫質較差的方式硬做。<br>
         ・PDF 裡的圖章大小與位置跟列印版一致（未綁定圖章模板＝固定 91px，有綁定＝該模板設定的實際尺寸，皆置中於框內）。<br>
-        ・<b>頁碼可關閉</b>：案件詳情工具列有「顯示頁碼」勾選框，取消後列印與匯出的 PDF 都不會在左下角印「第X頁／共Y頁」（適合本身表格已有頁次欄的 AS 表單）。<b>建立後隨時可改</b>，改動會讓已產生的 PDF 作廢、下次開啟時用新設定重新產生；單頁文件本來就不印頁碼。可調整者：申請人本人或管理員。<br>・<b>列表的「申請人」欄顯示的是填表人</b>（建立時選定或事後修改的那一位），不是技術上按下建立鈕的人；還沒選填表人的案件才會顯示建立者並標註。<br>・<b>連結 AS 文件編號</b>（樣板有開放才會出現）：純粹是「這份簽核完成的文件＝那份 AS 文件的內容」的對應關係，讓「AS 文件管理」上傳同一編號的版本附件時可以直接<b>由表單簽核案件導入</b>，同一份文件不用上傳兩次。<b>這不是列印右下角要印的 AS 編號</b>（那個由樣板綁定，兩者互不影響）。連結後案件名稱會自動加上 AS 編號當開頭，列表一眼看得出對應哪份文件。<br>・簽核人來源有「<b>送出者上一階主管</b>」與「<b>填表人上一階主管</b>」兩種，差別在於從誰往上找：前者是按下建立/送出的人，後者是表單真正歸屬的填表人。管理員代別人建案件時通常要用後者。<b>樣板只要用到「填表人上一階主管」，該案件就一定要指定填表人才能送出</b>（否則那一關找不到人會被整關略過）。<br>・<b>填表人＝這張表單實際上是誰填的</b>，也是簽核來源選「填表人」時圖章要蓋的人；簽核來源選「部門自動主管」但沒指定部門時，也是用填表人的部門去找主管（沒選填表人才退回用申請人的部門）。<br>・<b>填表人預設未選定</b>（以前會自動帶成建立案件的人，管理員代別人建案件時圖章就會蓋到管理員，所以改掉）。<b>只有框了「填表人」圖章欄位的案件，未指定填表人就不能送出</b>；沒用到填表人圖章的案件不強迫選，但仍可自願填。<br>・設定填表人的權限：<b>草稿階段</b>由申請人本人或管理員設定；<b>送出後</b>只有超級管理員可以回改。<br>・<b>回改填表人會連已經蓋好的填表人圖章一起換成新的人</b>，儲存前會跳出確認告訴您會動到幾個章；同時已產生的合成 PDF 會作廢，下次開啟案件時自動用新的章重新產生。<br>・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
+        ・<b>列表有「最新列印」欄</b>：顯示這件最近一次被列印的日期，印過不只一次會標次數，點日期可看完整紀錄（誰、什麼時候、用哪一種方式）。<b>瀏覽器列印、開啟合成PDF、下載合成PDF 三種都算一次列印</b>，因為三者都等於文件被拿出去用了。<br>・<b>頁碼可關閉</b>：案件詳情工具列有「顯示頁碼」勾選框，取消後列印與匯出的 PDF 都不會在左下角印「第X頁／共Y頁」（適合本身表格已有頁次欄的 AS 表單）。<b>建立後隨時可改</b>，改動會讓已產生的 PDF 作廢、下次開啟時用新設定重新產生；單頁文件本來就不印頁碼。可調整者：申請人本人或管理員。<br>・<b>列表的「申請人」欄顯示的是填表人</b>（建立時選定或事後修改的那一位），不是技術上按下建立鈕的人；還沒選填表人的案件才會顯示建立者並標註。<br>・<b>連結 AS 文件編號</b>（樣板有開放才會出現）：純粹是「這份簽核完成的文件＝那份 AS 文件的內容」的對應關係，讓「AS 文件管理」上傳同一編號的版本附件時可以直接<b>由表單簽核案件導入</b>，同一份文件不用上傳兩次。<b>這不是列印右下角要印的 AS 編號</b>（那個由樣板綁定，兩者互不影響）。連結後案件名稱會自動加上 AS 編號當開頭，列表一眼看得出對應哪份文件。<br>・簽核人來源有「<b>送出者上一階主管</b>」與「<b>填表人上一階主管</b>」兩種，差別在於從誰往上找：前者是按下建立/送出的人，後者是表單真正歸屬的填表人。管理員代別人建案件時通常要用後者。<b>樣板只要用到「填表人上一階主管」，該案件就一定要指定填表人才能送出</b>（否則那一關找不到人會被整關略過）。<br>・<b>填表人＝這張表單實際上是誰填的</b>，也是簽核來源選「填表人」時圖章要蓋的人；簽核來源選「部門自動主管」但沒指定部門時，也是用填表人的部門去找主管（沒選填表人才退回用申請人的部門）。<br>・<b>填表人預設未選定</b>（以前會自動帶成建立案件的人，管理員代別人建案件時圖章就會蓋到管理員，所以改掉）。<b>只有框了「填表人」圖章欄位的案件，未指定填表人就不能送出</b>；沒用到填表人圖章的案件不強迫選，但仍可自願填。<br>・設定填表人的權限：<b>草稿階段</b>由申請人本人或管理員設定；<b>送出後</b>只有超級管理員可以回改。<br>・<b>回改填表人會連已經蓋好的填表人圖章一起換成新的人</b>，儲存前會跳出確認告訴您會動到幾個章；同時已產生的合成 PDF 會作廢，下次開啟案件時自動用新的章重新產生。<br>・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
         <h4>設定入口</h4>
         樣板的階段/槽位/框選提示由管理員在「樣板管理」頁設定；操作確認密碼在「修改個人密碼」頁設定（需超級管理員先授權）。
         <h4>權限角色</h4>
@@ -567,6 +574,33 @@ function renderProgressChips(c){
     });
     return '<div class="prog-wrap">' + parts.join('<span class="prog-arrow">→</span>') + '</div>';
 }
+/* -------- 列表的「最新列印」欄（2026-08-19 使用者要求只加在列表） --------
+   預設顯示最新一次的列印日期；印過不只一次會標次數，點下去看完整紀錄（誰、什麼時候、用哪種方式）。
+   列印＝瀏覽器列印、開啟合成PDF、下載合成PDF 三種都算，因為三者都等於文件被拿出去用了。 */
+var PRINT_KIND_LABEL = {print:'瀏覽器列印', pdf_open:'開啟PDF', pdf_download:'下載PDF'};
+function printCell(c){
+    if (!c.last_printed_at) return '<span style="color:#b0a390;">未列印</span>';
+    var n = parseInt(c.print_count, 10) || 1;
+    return '<a href="javascript:;" onclick="openPrintLog('+c.id+')" title="點擊查看完整列印紀錄">'
+         + dispDate(String(c.last_printed_at).substring(0,10))
+         + (n > 1 ? '<span style="color:#8a6d45;font-size:11px;">（'+n+'次）</span>' : '') + '</a>';
+}
+function openPrintLog(id){
+    $.getJSON(API, {action:'case_print_log', id:id}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+        var rows = (res.logs||[]).map(function(l){
+            return '<div class="r-row">'+dispDateTime(l.printed_at)+'｜'+esc(l.printed_by_name||'')
+                 + '｜'+esc(PRINT_KIND_LABEL[l.kind]||l.kind)+'</div>';
+        }).join('');
+        $('#printLogList').html(rows || '<span style="color:#8a6d45;">（尚無列印紀錄）</span>');
+        openMask('printLogMask');
+    });
+}
+/** 記一筆列印紀錄（失敗不擋列印本身，只是紀錄少一筆）。 */
+function logPrint(kind){
+    if (!CUR_CASE) return;
+    $.post(API, {action:'case_print_log_add', csrf:META.csrf, case_id:CUR_CASE.id, kind:kind||'print'});
+}
 function renderCaseRow(c){
     var stageTxt = renderProgressChips(c);
     var isOwner = String(c.applicant_id)===String(META.uid);
@@ -584,6 +618,7 @@ function renderCaseRow(c){
     var tplCell = isBf ? '<span class="badge-stage badge-draft">補案件</span>' : esc(c.template_name);
     return '<tr><td>'+esc(c.title||c.template_name)+'</td><td>'+tplCell+'</td><td>'+caseOwnerCell(c)+'</td>'
         + '<td>'+dispDate(c.business_date)+'</td><td>'+stageTxt+'</td><td>'+statusBadge(c.status)+'</td>'
+        + '<td>'+printCell(c)+'</td>'
         + '<td>'+actions+'</td></tr>';
 }
 /* -------- 列表上的「申請人」＝這張表單實際歸屬的人 --------
@@ -627,7 +662,7 @@ function applyCaseFilter(){
         return true;
     });
     var h = list.map(renderCaseRow).join('');
-    $('#caseBody').html(h || '<tr><td colspan="7" style="text-align:center;color:#8a6d45;padding:10px;">'+(CASES.length?'沒有符合篩選條件的案件':'尚無案件')+'</td></tr>');
+    $('#caseBody').html(h || '<tr><td colspan="8" style="text-align:center;color:#8a6d45;padding:10px;">'+(CASES.length?'沒有符合篩選條件的案件':'尚無案件')+'</td></tr>');
 }
 function loadCases(){
     $.getJSON(API, {action:'case_list'}, function(res){
@@ -1497,6 +1532,7 @@ function doPrint(){
         window.removeEventListener('afterprint', restore);
     }
     window.addEventListener('afterprint', restore);
+    logPrint('print');
     setTimeout(function(){ window.print(); }, 50);
 }
 

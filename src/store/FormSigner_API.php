@@ -658,6 +658,26 @@ case 'case_set_page_no': {
     jout($r);
 }
 
+/** 記一筆列印紀錄（瀏覽器列印時由前端呼叫；開啟/下載合成PDF由 case_export_file 自己記）。 */
+case 'case_print_log_add': {
+    fsd_need_csrf();
+    $id = (int)($_POST['case_id'] ?? 0);
+    $case = fsd_case_get($db, $id);
+    if (!$case) jerr('找不到此案件', 404);
+    fsd_case_view_file_perm_check($db, $case, $uid, $perms);   // 看得到才印得到
+    fsd_case_print_log_add($db, $id, (string)($_POST['kind'] ?? 'print'), $uid, $uname);
+    jout([]);
+}
+
+/** 某案件的列印紀錄明細（列表點日期時開）。 */
+case 'case_print_log': {
+    $id = (int)($_GET['id'] ?? 0);
+    $case = fsd_case_get($db, $id);
+    if (!$case) jerr('找不到此案件', 404);
+    fsd_case_view_file_perm_check($db, $case, $uid, $perms);
+    jout(['logs'=>fsd_case_print_log($db, $id)]);
+}
+
 case 'case_urge': {
     fsd_need_csrf();
     $id = (int)($_POST['case_id'] ?? 0);
@@ -720,6 +740,7 @@ case 'case_export_file': {
     // 檔名不能出現 \ / : * ? " < > | 這些字元，一律換成底線。
     $safe = preg_replace('/[\\\/:*?"<>|]+/u', '_', trim((string)$case['title']) ?: ('案件' . $id));
     $show = trim($safe . ' ' . eg_fmt_date($case['business_date'])) . '.pdf';
+    fsd_case_print_log_add($db, $id, !empty($_GET['dl']) ? 'pdf_download' : 'pdf_open', $uid, $uname);
     header('Content-Type: application/pdf');
     header('Content-Length: ' . filesize($fp));
     header('Content-Disposition: ' . (!empty($_GET['dl']) ? 'attachment' : 'inline')
