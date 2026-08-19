@@ -470,8 +470,17 @@ function da_resolve_signer_src(PDO $db, string $src, array $row): array
         case 'apply_dept_mgr':
             return $byMgr($row['dept_id'] ? [(int)$row['dept_id']] : []);
         case 'applicant_sup':
-            $sup = eg_resolve_supervisor($db, (int)($row['applicant_id'] ?? 0),
-                                         $row['dept_id'] !== null ? (int)$row['dept_id'] : null);
+            $aid = (int)($row['applicant_id'] ?? 0);
+            $did = $row['dept_id'] !== null ? (int)$row['dept_id'] : null;
+            // 申請人本身就是該單位的主管時，「單位主管」欄一樣蓋他自己的章
+            // （使用者明確要求：不做權責迴避，不要為了避嫌往上找人或留白）
+            if ($aid && $did) {
+                $m = eg_org_dept_manager($db, [$did]);
+                if ($m && (int)$m['id'] === $aid) {
+                    return ['id'=>$aid, 'name'=>(string)($row['applicant_name'] ?? da_user_name($db, $aid))];
+                }
+            }
+            $sup = eg_resolve_supervisor($db, $aid, $did);
             return $sup ? ['id'=>(int)$sup, 'name'=>da_user_name($db, (int)$sup)] : $none;
         case 'applicant':
             return ['id'=>$row['applicant_id'] ? (int)$row['applicant_id'] : null,
@@ -493,6 +502,9 @@ function da_resolve_signers(PDO $db, array $row, bool $autoSign = false): array
         $base = da_resolve_signer_src($db, (string)$set[$key], $row);
         $out[$slot] = ['id'=>$base['id'], 'name'=>$base['name'], 'is_delegated'=>0, 'src'=>(string)$set[$key]];
         if ($slot === 'applicant' || !$base['id']) continue;
+        // 解析結果就是申請人本人（例：申請人自己就是單位主管）→ 直接蓋他的章，
+        // 不進代理/權責迴避流程（使用者明確要求：不須迴避）
+        if ((int)$base['id'] === (int)($row['applicant_id'] ?? 0)) continue;
         try {
             $rs = eg_resolve_signer($db, (int)$base['id'], [
                 'applicant_id'        => (int)($row['applicant_id'] ?? 0),

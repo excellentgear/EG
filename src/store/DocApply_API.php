@@ -449,8 +449,10 @@ case 'decide': {
            ->execute([$note, $now['dt'], $id]);
     } else {
         $sg   = da_resolve_signers($db, $r, false);
-        $date = trim((string)($_POST['approved_date'] ?? '')) ?: $now['d'];
-        if (!$P['isAdmin']) $date = $now['d'];        // 只有系統管理者可回填業務日期（ai-rules/21）
+        // 核准業務日期預設＝本單申請日期（使用者要求）；只有系統管理者可自行指定其他日期（ai-rules/21）
+        $date = (string)$r['apply_date'];
+        $in   = trim((string)($_POST['approved_date'] ?? ''));
+        if ($in !== '' && $P['isAdmin']) $date = $in;
         $db->prepare("UPDATE doc_apply SET status='approved', approved_date=?, approved_at=?, decide_note=?,
                         sign_approve_id=?, sign_approve_name=?, sign_approve_date=?, sign_approve_dep=?,
                         sign_mgmt_id=?, sign_mgmt_name=?, sign_mgmt_date=?, sign_mgmt_dep=?,

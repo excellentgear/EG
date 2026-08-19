@@ -316,7 +316,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <div id="decideInfo" class="da-hint" style="margin-bottom:10px;"></div>
         <label>決定 *</label>
         <select id="decideSel"><option value="approved">核准</option><option value="rejected">退回</option></select>
-        <label style="margin-top:8px;">核准日期（業務日期）</label>
+        <label style="margin-top:8px;">核准日期（業務日期）<span class="da-hint">— 預設＝本單申請日期</span></label>
         <input type="date" id="decideDate" max="9999-12-31">
         <label style="margin-top:8px;">意見／退回原因<span style="color:#DD5138;"> *（退回必填）</span></label>
         <textarea id="decideNote" rows="3" maxlength="500"></textarea>
@@ -477,6 +477,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>自動簽核</b>（管理員）：需輸入<b>操作確認密碼</b>；簽核日期＝申請日期，精確時間戳自動錯開 5～30 分鐘且不跨日。可在跳窗<b>手動指定本次填表人與日期</b>（補歷史紙本用）。</li>
             <li><b>列印是 A4 直式 1:1</b>：版面以 mm 定寸、不做縮放，避免圖章大小失真。頁尾右下角的文件編號與版次<b>依本單申請日期回推</b>當時生效的版本。</li>
             <li><b>簽章一律是帶日期的圖章</b>，不只印人名；代理人代簽時圖章右下角會有「代」字。</li>
+            <li><b>核准日期預設＝本單申請日期</b>（可由系統管理者在核准跳窗改成其他日期）；四格簽章的圖章日期一律跟著核准日期，精確時間戳另存不影響業務日期。</li>
+            <li><b>申請人本身就是單位主管時，「單位主管」欄一樣蓋他自己的章</b>——不做權責迴避、不往上找人、也不留白。</li>
         </ul>
 
         <h4>設定入口</h4>
@@ -1039,7 +1041,8 @@ function openDecide(id){
         curViewId = id;
         $('#decideInfo').html('申請單：<b>' + esc(d.apply_no || ('#' + d.apply_id)) + '</b>　' + esc(d.doc_no || '') + '　' + esc(d.doc_name || '')
             + '<br>會簽狀態：' + esc(d.cosign_status.text));
-        $('#decideSel').val('approved'); $('#decideDate').val(META.today); $('#decideNote').val('');
+        // 核准日期預設＝本單申請日期（使用者要求；仍可手改，回填權限由後端把關）
+        $('#decideSel').val('approved'); $('#decideDate').val(d.apply_date || META.today); $('#decideNote').val('');
         $('#err_decide').hide();
         openMask('decideMask');
     });
