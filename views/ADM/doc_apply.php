@@ -1447,7 +1447,10 @@ function printHtml(res){
         + 'table{border-collapse:collapse;width:100%;table-layout:fixed;}'
         + 'td,th{border:0.4mm solid #000;padding:0.8mm 1.2mm;font-size:9.5pt;vertical-align:middle;'
         +   'word-wrap:break-word;overflow-wrap:break-word;}'
-        + '.lb{background:#F2F2F2;text-align:center;font-weight:bold;white-space:nowrap;}'
+        + '.lb{background:#F2F2F2;text-align:center;font-weight:bold;white-space:nowrap;overflow:hidden;}'
+        /* 長標籤（首次發行日期／版本變更日期＝6 字）在 22mm 格內放不下 → 允許換行並縮字，'
+           不可讓文字壓出格線（table-layout:fixed 下 nowrap 會直接溢出到隔壁欄） */
+        + '.lbn{white-space:normal;word-break:keep-all;font-size:8pt;line-height:1.15;letter-spacing:0;padding:0.5mm 0.6mm;}'
         + '.h9{height:9mm;} .h7{height:7mm;}'
         + '.sec-t{border:0.4mm solid #000;border-bottom:none;background:#F2F2F2;font-size:9.5pt;'
         +   'font-weight:bold;padding:1mm 1.5mm;}'
@@ -1471,7 +1474,7 @@ function printHtml(res){
         + '<div class="ymd">' + esc(ymd[0] || '　') + ' 年 ' + esc(ymd[1] || '　') + ' 月 ' + esc(ymd[2] || '　') + ' 日</div>'
 
         /* 表頭 */
-        + '<table><colgroup><col style="width:18mm"><col style="width:58mm"><col style="width:18mm"><col style="width:58mm">'
+        + '<table><colgroup><col style="width:22mm"><col style="width:54mm"><col style="width:22mm"><col style="width:54mm">'
         +   '<col style="width:18mm"><col style="width:24mm"></colgroup>'
         + '<tr class="h9"><td class="lb">文件狀況</td><td colspan="3" class="chk">'
         +   DA_STATUS_HTML(d.doc_status) + '</td>'
@@ -1481,8 +1484,8 @@ function printHtml(res){
         + '<tr class="h9"><td class="lb">文件編碼</td><td>' + esc(d.doc_no || '') + '</td>'
         +   '<td class="lb">版　本</td><td>' + esc(d.version || '') + '</td>'
         +   '<td class="lb">申 請 人</td><td>' + esc(d.applicant_name || '') + '</td></tr>'
-        + '<tr class="h9"><td class="lb">首次發行日期</td><td>' + esc(dispDate(d.first_issue_date)) + '</td>'
-        +   '<td class="lb">版本變更日期</td><td colspan="3">' + esc(dispDate(d.change_date || d.apply_date)) + '</td></tr>'
+        + '<tr class="h9"><td class="lb lbn">首次發行日期</td><td>' + esc(dispDate(d.first_issue_date)) + '</td>'
+        +   '<td class="lb lbn">版本變更日期</td><td colspan="3">' + esc(dispDate(d.change_date || d.apply_date)) + '</td></tr>'
         + '</table>'
 
         /* 制修訂內容 */
