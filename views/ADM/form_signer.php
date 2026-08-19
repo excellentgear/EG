@@ -253,6 +253,9 @@ $perms = fsd_perms($db, $fsdUser);
                 <button id="btnRestore" style="display:none;color:#2e6b2e;border-color:#7ab57a;"><i class="fa fa-undo"></i> 復原</button>
                 <button id="btnDeleteHard" class="btn-danger" style="display:none;"><i class="fa fa-trash"></i> 永久刪除</button>
                 <button id="btnDeleteSoft" class="btn-danger" style="display:none;"><i class="fa fa-trash"></i> 刪除</button>
+                <label id="dtlPageNoWrap" style="display:none;margin:0 6px 0 0;font-size:12px;color:#5b3a1e;white-space:nowrap;"
+                       title="關掉後，列印與匯出的 PDF 都不會在左下角印「第X頁／共Y頁」。單頁文件本來就不印頁碼。改動會讓已產生的 PDF 重新產生。">
+                    <input type="checkbox" id="dtlPageNo" onchange="setPageNo(this.checked)"> 顯示頁碼</label>
                 <button id="btnPdfOpen" style="display:none;" onclick="fsdOpenPdf(false)" title="開啟已存檔的合成PDF，可直接在檢視器內列印"><i class="fa fa-file-pdf-o"></i> PDF</button>
                 <button id="btnPdfDl" style="display:none;" onclick="fsdOpenPdf(true)" title="下載合成PDF檔"><i class="fa fa-download"></i> 下載PDF</button>
                 <button class="btn-warm" onclick="doPrint()"><i class="fa fa-print"></i> 列印</button>
@@ -435,7 +438,7 @@ $perms = fsd_perms($db, $fsdUser);
         ・<b>上傳 PDF 不會被轉成圖片</b>：匯出的 PDF 直接沿用原始 PDF 的頁面內容，畫質與原檔完全相同（掃描影像是原封不動搬過去的）；畫面上看到的預覽底圖才是轉圖產生的，只用來給您拖曳定位，不影響最終檔案。<br>
         ・<b>加密保護的 PDF 無法處理</b>，會在上傳當下就擋下並說明原因，請改上傳未加密的 PDF 或圖片檔——系統不會自動改用畫質較差的方式硬做。<br>
         ・PDF 裡的圖章大小與位置跟列印版一致（未綁定圖章模板＝固定 91px，有綁定＝該模板設定的實際尺寸，皆置中於框內）。<br>
-        ・<b>列表的「申請人」欄顯示的是填表人</b>（建立時選定或事後修改的那一位），不是技術上按下建立鈕的人；還沒選填表人的案件才會顯示建立者並標註。<br>・<b>連結 AS 文件編號</b>（樣板有開放才會出現）：純粹是「這份簽核完成的文件＝那份 AS 文件的內容」的對應關係，讓「AS 文件管理」上傳同一編號的版本附件時可以直接<b>由表單簽核案件導入</b>，同一份文件不用上傳兩次。<b>這不是列印右下角要印的 AS 編號</b>（那個由樣板綁定，兩者互不影響）。連結後案件名稱會自動加上 AS 編號當開頭，列表一眼看得出對應哪份文件。<br>・簽核人來源有「<b>送出者上一階主管</b>」與「<b>填表人上一階主管</b>」兩種，差別在於從誰往上找：前者是按下建立/送出的人，後者是表單真正歸屬的填表人。管理員代別人建案件時通常要用後者。<b>樣板只要用到「填表人上一階主管」，該案件就一定要指定填表人才能送出</b>（否則那一關找不到人會被整關略過）。<br>・<b>填表人＝這張表單實際上是誰填的</b>，也是簽核來源選「填表人」時圖章要蓋的人；簽核來源選「部門自動主管」但沒指定部門時，也是用填表人的部門去找主管（沒選填表人才退回用申請人的部門）。<br>・<b>填表人預設未選定</b>（以前會自動帶成建立案件的人，管理員代別人建案件時圖章就會蓋到管理員，所以改掉）。<b>只有框了「填表人」圖章欄位的案件，未指定填表人就不能送出</b>；沒用到填表人圖章的案件不強迫選，但仍可自願填。<br>・設定填表人的權限：<b>草稿階段</b>由申請人本人或管理員設定；<b>送出後</b>只有超級管理員可以回改。<br>・<b>回改填表人會連已經蓋好的填表人圖章一起換成新的人</b>，儲存前會跳出確認告訴您會動到幾個章；同時已產生的合成 PDF 會作廢，下次開啟案件時自動用新的章重新產生。<br>・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
+        ・<b>頁碼可關閉</b>：案件詳情工具列有「顯示頁碼」勾選框，取消後列印與匯出的 PDF 都不會在左下角印「第X頁／共Y頁」（適合本身表格已有頁次欄的 AS 表單）。<b>建立後隨時可改</b>，改動會讓已產生的 PDF 作廢、下次開啟時用新設定重新產生；單頁文件本來就不印頁碼。可調整者：申請人本人或管理員。<br>・<b>列表的「申請人」欄顯示的是填表人</b>（建立時選定或事後修改的那一位），不是技術上按下建立鈕的人；還沒選填表人的案件才會顯示建立者並標註。<br>・<b>連結 AS 文件編號</b>（樣板有開放才會出現）：純粹是「這份簽核完成的文件＝那份 AS 文件的內容」的對應關係，讓「AS 文件管理」上傳同一編號的版本附件時可以直接<b>由表單簽核案件導入</b>，同一份文件不用上傳兩次。<b>這不是列印右下角要印的 AS 編號</b>（那個由樣板綁定，兩者互不影響）。連結後案件名稱會自動加上 AS 編號當開頭，列表一眼看得出對應哪份文件。<br>・簽核人來源有「<b>送出者上一階主管</b>」與「<b>填表人上一階主管</b>」兩種，差別在於從誰往上找：前者是按下建立/送出的人，後者是表單真正歸屬的填表人。管理員代別人建案件時通常要用後者。<b>樣板只要用到「填表人上一階主管」，該案件就一定要指定填表人才能送出</b>（否則那一關找不到人會被整關略過）。<br>・<b>填表人＝這張表單實際上是誰填的</b>，也是簽核來源選「填表人」時圖章要蓋的人；簽核來源選「部門自動主管」但沒指定部門時，也是用填表人的部門去找主管（沒選填表人才退回用申請人的部門）。<br>・<b>填表人預設未選定</b>（以前會自動帶成建立案件的人，管理員代別人建案件時圖章就會蓋到管理員，所以改掉）。<b>只有框了「填表人」圖章欄位的案件，未指定填表人就不能送出</b>；沒用到填表人圖章的案件不強迫選，但仍可自願填。<br>・設定填表人的權限：<b>草稿階段</b>由申請人本人或管理員設定；<b>送出後</b>只有超級管理員可以回改。<br>・<b>回改填表人會連已經蓋好的填表人圖章一起換成新的人</b>，儲存前會跳出確認告訴您會動到幾個章；同時已產生的合成 PDF 會作廢，下次開啟案件時自動用新的章重新產生。<br>・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
         <h4>設定入口</h4>
         樣板的階段/槽位/框選提示由管理員在「樣板管理」頁設定；操作確認密碼在「修改個人密碼」頁設定（需超級管理員先授權）。
         <h4>權限角色</h4>
@@ -1084,6 +1087,9 @@ function openCase(id){
         renderResponses();
         renderDocGrid(CUR_CASE_PAGES, CUR_FIELDS);
         renderPdfButtons();
+        // 頁碼開關：申請人本人或管理員可隨時改（多頁文件才看得出差別）
+        $('#dtlPageNo').prop('checked', Number(CUR_CASE.show_page_no ?? 1) === 1);
+        $('#dtlPageNoWrap').toggle(String(CUR_CASE.applicant_id) === String(META.uid) || META.perms.canAdmin);
         // 已完成但還沒有合成PDF（剛簽完的、或當初產生失敗的舊案件）→ 背景補產一份，失敗不吵使用者
         if (CUR_CASE.status === 'approved' && !CUR_CASE.export_pdf_name) fsdExportPdf(CUR_CASE.id, true);
     });
@@ -1421,6 +1427,16 @@ function fsdOpenPdf(dl){
     });
 }
 /** PDF 按鈕只在「已完成」的案件上出現（2026-08-19 使用者拍板：未簽完不可匯出，避免半成品被當成正式文件） */
+/** 切換頁碼顯示。改了會作廢已產生的 PDF，所以要重讀案件讓 PDF 鈕狀態跟著更新。 */
+function setPageNo(on){
+    if (!CUR_CASE) return;
+    $.post(API, {action:'case_set_page_no', csrf:META.csrf, case_id:CUR_CASE.id, on:on?1:0}, function(res){
+        if (!res.ok){ alert(res.error||'設定失敗'); $('#dtlPageNo').prop('checked', !on); return; }
+        CUR_CASE.show_page_no = res.show_page_no;
+        CUR_CASE.export_pdf_name = null;
+        renderPdfButtons();
+    }, 'json');
+}
 function renderPdfButtons(){
     $('#btnPdfOpen,#btnPdfDl').toggle(!!(CUR_CASE && CUR_CASE.status === 'approved'));
 }
@@ -1471,7 +1487,7 @@ function doPrint(){
     });
     $('#fsdPrintCss').remove();
     // 頁碼左下角(多頁才顯示)+AS文件編號右下角，比照ai-rules/16第二、三節全站列印標準
-    var pageCounterCss = pages.length > 1 ? " @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#333; }" : '';
+    var pageCounterCss = (pages.length > 1 && Number(CUR_CASE && CUR_CASE.show_page_no != null ? CUR_CASE.show_page_no : 1) === 1) ? " @bottom-left{ content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁'; font-size:9pt; color:#333; }" : '';
     $('<style id="fsdPrintCss">@media print{ @page{ size:A4 '+(lands?'landscape':'portrait')+'; margin:10mm 8mm;'+pageCounterCss+' } }</style>').appendTo('head');
     $('#printAsDocFoot').remove();
     if (CUR_AS_DOC_NO) $('<div id="printAsDocFoot" class="pt-asdoc"></div>').text(CUR_AS_DOC_NO).appendTo('#detailPanel');

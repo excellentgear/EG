@@ -647,6 +647,17 @@ case 'case_set_filler': {
     jout($r);
 }
 
+/** 切換「列印/匯出PDF是否顯示頁碼」。可在建立後隨時改；改了會作廢已產生的PDF並刪實體檔。 */
+case 'case_set_page_no': {
+    fsd_need_csrf();
+    $id = (int)($_POST['case_id'] ?? 0);
+    $dir = fsd_case_attach_dir_safe($db);
+    $r = fsd_case_set_show_page_no($db, $id, $uid, !empty($_POST['on']), $perms['canAdmin'],
+        function ($oldName) use ($dir) { if ($oldName !== '' && is_file($dir . $oldName)) @unlink($dir . $oldName); });
+    if (!$r['ok']) jerr($r['msg']);
+    jout($r);
+}
+
 case 'case_urge': {
     fsd_need_csrf();
     $id = (int)($_POST['case_id'] ?? 0);

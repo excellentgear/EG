@@ -1095,6 +1095,25 @@ function fsd_case_replace_file_images(PDO $db, int $caseId, array $images): arra
 
 /* -------- 合成 PDF 存檔（案件完成時自動產生，列表可重複開啟列印/下載） -------- */
 
+/**
+ * 設定「列印/匯出 PDF 要不要顯示頁碼」。可在案件建立後隨時改（申請人本人或管理員）。
+ * 改了就把已產生的合成 PDF 作廢（$onExportInvalidated 由呼叫端刪實體檔），下次開啟會用新設定重產，
+ * 否則畫面設定改了、存檔的 PDF 還是舊的頁碼樣子。
+ */
+function fsd_case_set_show_page_no(PDO $db, int $caseId, int $byUid, bool $on, bool $canAdmin = false, ?callable $onExportInvalidated = null): array {
+    $case = fsd_case_get($db, $caseId);
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    if ((int)$case['applicant_id'] !== $byUid && !$canAdmin && $byUid !== 1)
+        return ['ok'=>false, 'msg'=>'只有申請人本人或管理員可以調整'];
+    if ((int)($case['show_page_no'] ?? 1) === ($on ? 1 : 0))
+        return ['ok'=>true, 'show_page_no'=>$on ? 1 : 0];
+    $old = trim((string)($case['export_pdf_name'] ?? ''));
+    $db->prepare("UPDATE fsd_case SET show_page_no=?, export_pdf_name=NULL, export_pdf_at=NULL, export_mode=NULL, updated_at=NOW() WHERE id=?")
+       ->execute([$on ? 1 : 0, $caseId]);
+    if ($old !== '' && $onExportInvalidated) { try { $onExportInvalidated($old); } catch (Throwable $e) {} }
+    return ['ok'=>true, 'show_page_no'=>$on ? 1 : 0];
+}
+
 /** 記下這份案件的合成PDF檔名（只存檔名不存絕對路徑，鐵律5；時間戳一律取DB時間避免PHP/DB時區差8小時）。 */
 function fsd_case_export_set(PDO $db, int $caseId, string $fileName, string $mode): void {
     $db->prepare("UPDATE fsd_case SET export_pdf_name=?,export_pdf_at=NOW(),export_mode=? WHERE id=?")

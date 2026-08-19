@@ -112,6 +112,8 @@ function fsd_pdf_compose(array $case, array $pages, string $srcDir, array $overl
             $pdf->setSourceFile($srcPdfFile);
         }
 
+        // 頁碼顯示與否由案件設定決定（預設顯示；單頁本來就不印，頁碼沒有意義）
+        $showPageNo = (int)($case['show_page_no'] ?? 1) === 1;
         $stamps = $overlay['stamps'] ?? [];
         $texts  = $overlay['texts']  ?? [];
         $total  = count($pages);
@@ -180,7 +182,7 @@ function fsd_pdf_compose(array $case, array $pages, string $srcDir, array $overl
             // ---- 頁尾：頁碼左下（多頁才印）＋ AS 文件編號右下（ai-rules/16 第二、三節）----
             $pdf->SetFont(eg_att_pdf_font(), '', 9);
             $pdf->SetTextColor(51, 51, 51);
-            if ($total > 1) {
+            if ($total > 1 && $showPageNo) {
                 $pdf->SetXY(FSD_PDF_MARGIN_LR, $pageH - FSD_PDF_MARGIN_TB + 1.5);
                 $pdf->Cell($availW / 2, 5, '第 ' . $pageNo . ' 頁／共 ' . $total . ' 頁', 0, 0, 'L');
             }
