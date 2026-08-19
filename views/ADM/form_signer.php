@@ -546,8 +546,9 @@ function fillCreateFillerOptions(){
     var keep = $('#crFiller').val() || '';
     $.getJSON(API, {action:'people_at', date:$('#crDate').val() || ''}, function(res){
         if (!res.ok) return;
+        // value＝「人員id:部門id」——同一個人兼任兩個部門會有兩個選項，選哪個決定往上找誰簽核
         $('#crFiller').html('<option value="">（未選定）</option>' + (res.people||[]).map(function(p){
-            return '<option value="'+p.id+'"'+(String(p.id)===String(keep)?' selected':'')+'>'+esc(p.label)+'</option>';
+            return '<option value="'+p.key+'"'+(String(p.key)===String(keep)?' selected':'')+'>'+esc(p.label)+'</option>';
         }).join(''));
         // 換日期後那個人當時不在職 → 選項不存在，明確清掉並提示，不要留一個看不見的舊值
         if (keep && !$('#crFiller').val()) alert('原本選的填表人在這個業務日期當時不在職（或無職務紀錄），已清除，請重新選擇。');
@@ -740,7 +741,9 @@ function submitCreate(){
     var fd = new FormData();
     fd.append('action','case_create_draft'); fd.append('csrf', META.csrf); fd.append('template_id', tid);
     fd.append('title', $.trim($('#crTitle').val())); fd.append('business_date', $('#crDate').val());
-    fd.append('filler_id', $('#crFiller').val() || 0);
+    var fk = String($('#crFiller').val() || '').split(':');
+    fd.append('filler_id', fk[0] || 0);
+    fd.append('filler_dept_id', fk[1] || 0);
     fd.append('link_as_doc_id', CR_AS_DOC_ID || 0);
     CR_FILES.forEach(function(f){ fd.append('files[]', f); });
     fetch(API, {method:'POST', body:fd}).then(function(r){ return r.json(); }).then(function(res){
@@ -1220,18 +1223,22 @@ function openEditFiller(ctx){
     FILLER_CTX = (ctx === 'fp') ? 'fp' : 'dtl';
     var c = (FILLER_CTX === 'fp') ? FP_CASE : CUR_CASE;
     if (!c) return;
-    var opts = '<option value="">（未選定）</option>' + (META.people||[]).map(function(p){
-        return '<option value="'+p.id+'"'+(String(p.id)===String(c.filler_id)?' selected':'')+'>'+esc(p.display)+'</option>';
-    }).join('');
-    $('#fillerSel').html(opts);
-    openMask('fillerMask');
+    // 一個職務一個選項（value＝人員id:部門id）：選哪個部門會決定「上一階主管」往哪裡找
+    var cur = (c.filler_id||'') + ':' + (c.filler_dept_id||0);
+    $.getJSON(API, {action:'people_at', date:c.business_date || ''}, function(res){
+        $('#fillerSel').html('<option value="">（未選定）</option>' + ((res.people)||[]).map(function(p){
+            return '<option value="'+p.key+'"'+(String(p.key)===cur?' selected':'')+'>'+esc(p.label)+'</option>';
+        }).join(''));
+        openMask('fillerMask');
+    });
 }
 function submitEditFiller(){
     var c = (FILLER_CTX === 'fp') ? FP_CASE : CUR_CASE;
     if (!c) return;
-    var fid = $('#fillerSel').val();
-    if (!fid){ alert('請選擇填表人'); return; }
-    if (String(fid) === String(c.filler_id)){ closeMask('fillerMask'); return; }
+    var sel = String($('#fillerSel').val() || '');
+    if (!sel){ alert('請選擇填表人'); return; }
+    var fid = sel.split(':')[0], fdept = sel.split(':')[1] || 0;
+    if (String(fid) === String(c.filler_id) && String(fdept) === String(c.filler_dept_id||0)){ closeMask('fillerMask'); return; }
     // 已經蓋過填表人章才需要確認（使用者拍板：自動換，但要先跳確認說明會動到什麼）
     var stamped = (FILLER_CTX === 'fp') ? 0 : CUR_FILLER_STAMPED;
     if (stamped > 0) {
@@ -1240,11 +1247,11 @@ function submitEditFiller(){
             + '儲存後文件上這 ' + stamped + ' 個章會全部改成「' + who + '」，已產生的合成 PDF 也會作廢並在下次開啟時重新產生。\n\n'
             + '確定要更換嗎？')) return;
     }
-    $.post(API, {action:'case_set_filler', csrf:META.csrf, case_id:c.id, filler_id:fid}, function(res){
+    $.post(API, {action:'case_set_filler', csrf:META.csrf, case_id:c.id, filler_id:fid, filler_dept_id:fdept}, function(res){
         if (!res.ok){ alert(res.error||'設定失敗'); return; }
         closeMask('fillerMask');
         if (FILLER_CTX === 'fp'){
-            FP_CASE.filler_id = res.filler_id; FP_CASE.filler_name = res.filler_name;
+            FP_CASE.filler_id = res.filler_id; FP_CASE.filler_name = res.filler_name; FP_CASE.filler_dept_id = res.filler_dept_id;
             renderFpFiller();
         } else {
             openCase(c.id);

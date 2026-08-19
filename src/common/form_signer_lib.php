@@ -140,6 +140,8 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
     // 業務日期＝這張表單「當時」的日期。部門/主管一律回推當時的職務（見上方 fsd_pos_snapshot_at 區塊說明），
     // 沒補登過異動紀錄的人解析結果與現況完全相同，既有案件行為不變。
     $bizDate = (string)($case['business_date'] ?? '') ?: date('Y-m-d');
+    // 填表人選定的部門：兼任者選不同部門，往上找到的主管不同，所以以這個為準（沒選才回退主職）
+    $fillerDeptId = (int)($case['filler_dept_id'] ?? 0);
     switch ($mode) {
         case 'user':
             $uid = (int)($signer['user_id'] ?? 0);
@@ -152,8 +154,12 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
             $deptId = (int)($signer['dept_id'] ?? 0);
             // 未指定部門→用填表人在「業務日期當時」所屬的部門（未選填表人才退回申請人）
             if (!$deptId) {
-                $job = fsd_user_job_at($db, $deptBaseUid, $bizDate);
-                $deptId = (int)($job['dept_id'] ?? 0) ?: (int)(fsd_user_main_dept_id($db, $deptBaseUid) ?? 0);
+                // 填表人挑選時選定的部門優先（同一個人兼任兩個部門，簽核主管完全不同）
+                $deptId = ($fillerUid && $fillerDeptId) ? $fillerDeptId : 0;
+                if (!$deptId) {
+                    $job = fsd_user_job_at($db, $deptBaseUid, $bizDate);
+                    $deptId = (int)($job['dept_id'] ?? 0) ?: (int)(fsd_user_main_dept_id($db, $deptBaseUid) ?? 0);
+                }
             }
             if (!$deptId) return null;
             $mid = fsd_dept_manager_at($db, $deptId, $bizDate);   // 當時的部門主管
@@ -168,7 +174,9 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
             // 不是按下建立鈕的管理員的主管）。沒選填表人時解析不到人，送出前會被擋（fsd_case_needs_filler）。
             $baseUid = ($mode === 'filler_supervisor') ? $fillerUid : $applicantUid;
             if (!$baseUid) return null;
-            $supId = fsd_supervisor_at($db, $baseUid, $bizDate);      // 用業務日期當時的職務回推
+            // 填表人上一階主管：從「填表人選定的那個部門」往上找；沒選才用他當時的主職
+            $baseDept = ($mode === 'filler_supervisor' && $fillerDeptId) ? $fillerDeptId : 0;
+            $supId = fsd_supervisor_at($db, $baseUid, $bizDate, $baseDept);
             // 業務日期是「過去」時，回推不到人就是當時真的沒有這個角色——**絕對不可以退回現況解析**，
             // 那會把「現在才上任的人」蓋到舊文件上（2026-08-19 使用者實測抓到：2025-12-09 才兼任品管部課長的人，
             // 被蓋在 2025-11-28 的文件上）。寧可這一關解析不到人，也不要蓋錯人。
@@ -688,9 +696,11 @@ function fsd_auto_sign_advisory_slot(PDO $db, int $caseId, int $stageSeq, string
 /** 依檢視者權限清洗回應紀錄：「系統自動簽核」字樣(is_auto=1)只有管理員能看到，一般/唯讀使用者一律隱藏該筆回覆文字與自動簽核事實，
  *  只保留姓名/決定/時間(看起來與真人簽核無異，2026-08-14使用者明確要求)。 */
 /** 給簽核紀錄補上「簽這張表當時」的部門/職稱，供圖章模板的 {部門}{職稱} 使用。 */
-function fsd_responses_with_job(PDO $db, array $responses, string $date): array {
+function fsd_responses_with_job(PDO $db, array $responses, string $date, int $fillerId = 0, int $fillerDeptId = 0): array {
     foreach ($responses as &$r) {
-        $j = fsd_sign_job_label($db, (int)($r['resolved_user_id'] ?? 0), $date);
+        $uid = (int)($r['resolved_user_id'] ?? 0);
+        // 填表人本人的章要印他「以什麼身分填這張表」的那個部門職稱
+        $j = fsd_sign_job_label($db, $uid, $date, ($fillerId && $uid === $fillerId) ? $fillerDeptId : 0);
         $r['sign_dept'] = $j['dept']; $r['sign_position'] = $j['position'];
     }
     unset($r);
@@ -989,8 +999,19 @@ function fsd_dept_manager_at(PDO $db, int $deptId, string $date): ?int {
 }
 
 /** 某人在該日期的上一階主管：同部門更高階 → 逐層上溯父部門。找不到回 null。 */
-function fsd_supervisor_at(PDO $db, int $uid, string $date): ?int {
+function fsd_supervisor_at(PDO $db, int $uid, string $date, int $fromDeptId = 0): ?int {
     $job = fsd_user_job_at($db, $uid, $date);
+    // $fromDeptId＝指定「以哪個部門的身分」往上找（兼任者用）：職級也要換成他在該部門的那一個，
+    // 不然會拿主職的職級去比對另一個部門的人，找出來的層級不對。
+    if ($fromDeptId) {
+        $lv = fsd_position_levels($db);
+        foreach (fsd_pos_snapshot_at($db, $date)[$uid] ?? [] as $r) {
+            if ((int)$r['department_id'] !== $fromDeptId) continue;
+            $job = ['dept_id'=>$fromDeptId, 'dept_name'=>(string)$r['department_name'],
+                    'position_name'=>(string)$r['position_name'], 'level'=>$lv[(int)$r['position_id']] ?? 99];
+            break;
+        }
+    }
     if (!$job || !$job['dept_id']) return null;
     $ok = fsd_usable_uids_at($db, $date);
     $lv = fsd_position_levels($db);
@@ -1066,9 +1087,47 @@ function fsd_user_jobs_at(PDO $db, int $uid, string $date): array {
 }
 
 /** 圖章上要印的「部門／職稱」＝該人在業務日期當時的主職（圖章模板有 {部門}{職稱} token 才會用到）。 */
-function fsd_sign_job_label(PDO $db, int $uid, string $date): array {
+function fsd_sign_job_label(PDO $db, int $uid, string $date, int $deptId = 0): array {
+    // 有指定部門（填表人選定的身分）就印那一個，否則印職級最高的那筆
+    if ($deptId) {
+        foreach (fsd_pos_snapshot_at($db, $date)[$uid] ?? [] as $r)
+            if ((int)$r['department_id'] === $deptId)
+                return ['dept'=>(string)$r['department_name'], 'position'=>(string)$r['position_name']];
+    }
     $job = fsd_user_job_at($db, $uid, $date);
     return ['dept'=>(string)($job['dept_name'] ?? ''), 'position'=>(string)($job['position_name'] ?? '')];
+}
+
+/**
+ * 把一個人展開成挑人選單的項目：**每個職務各一列**（主職＋兼任分開）。
+ * 為什麼要拆開：填表人是「以哪個部門的身分」填這張表，決定了「上一階主管」往哪個部門找——
+ * 高志宏以技術部工程師身分填，簽核主管是技術部往上；以品管部課長身分填，就是品管部往上。
+ * 沒有任何職務紀錄的人仍給一列（dept_id=0），不然會整個從清單消失。
+ */
+function fsd_case_people_entries(PDO $db, int $uid, string $name, string $date,
+                                 string $fallbackHead = '', string $leaveNote = '', int $resigned = 0): array {
+    $snap = fsd_pos_snapshot_at($db, $date)[$uid] ?? [];
+    $lv = fsd_position_levels($db);
+    usort($snap, function ($a, $b) use ($lv) {
+        $am = empty($a['is_main']) ? 1 : 0; $bm = empty($b['is_main']) ? 1 : 0;
+        if ($am !== $bm) return $am <=> $bm;
+        return ($lv[(int)$a['position_id']] ?? 999) <=> ($lv[(int)$b['position_id']] ?? 999);
+    });
+    $suffix = ($leaveNote !== '' ? '［' . $leaveNote . '］' : '') . ($resigned ? '［已離職］' : '');
+    $out = []; $seen = [];
+    foreach ($snap as $r) {
+        $dept = (int)$r['department_id'];
+        if (isset($seen[$dept])) continue;
+        $seen[$dept] = 1;
+        $head = trim((string)$r['department_name'] . ' ' . (string)$r['position_name']);
+        $out[] = ['id'=>$uid, 'dept_id'=>$dept, 'key'=>$uid . ':' . $dept, 'name'=>$name,
+                  'resigned'=>$resigned, 'is_main'=>empty($r['is_main']) ? 0 : 1,
+                  'label'=>trim($head . ' ' . $name) . $suffix];
+    }
+    if (!$out) $out[] = ['id'=>$uid, 'dept_id'=>0, 'key'=>$uid . ':0', 'name'=>$name,
+                         'resigned'=>$resigned, 'is_main'=>1,
+                         'label'=>trim($fallbackHead . ' ' . $name) . $suffix];
+    return $out;
 }
 
 /** 填表人候選：在職者（離職/特殊帳號不列）。回傳 ['id','user_cname'] 或 null。 */
@@ -1142,7 +1201,7 @@ function fsd_case_filler_stamped_count(PDO $db, array $case): int {
  * 換人時**已經蓋下去的填表人圖章一併換成新的人**（2026-08-19 使用者拍板，前端會先跳確認說明會動到幾個章），
  * 並作廢已產生的合成 PDF（$onExportInvalidated 由呼叫端傳入，負責刪實體檔），下次開啟時會用新的章重產。
  */
-function fsd_case_set_filler(PDO $db, int $caseId, int $byUid, int $newFillerId, bool $canAdmin = false, ?callable $onExportInvalidated = null): array {
+function fsd_case_set_filler(PDO $db, int $caseId, int $byUid, int $newFillerId, bool $canAdmin = false, ?callable $onExportInvalidated = null, int $newFillerDeptId = 0): array {
     $case = fsd_case_get($db, $caseId);
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
     $isDraft = ($case['status'] ?? '') === 'draft';
@@ -1154,16 +1213,17 @@ function fsd_case_set_filler(PDO $db, int $caseId, int $byUid, int $newFillerId,
     }
     $u = fsd_filler_user($db, $newFillerId);
     if (!$u) return ['ok'=>false, 'msg'=>'找不到此使用者或該使用者已離職'];
-    if ((int)($case['filler_id'] ?? 0) === (int)$u['id'])
-        return ['ok'=>true, 'filler_id'=>(int)$u['id'], 'filler_name'=>$u['user_cname'], 'stamps_changed'=>0];
+    if ((int)($case['filler_id'] ?? 0) === (int)$u['id'] && (int)($case['filler_dept_id'] ?? 0) === $newFillerDeptId)
+        return ['ok'=>true, 'filler_id'=>(int)$u['id'], 'filler_name'=>$u['user_cname'],
+                'filler_dept_id'=>$newFillerDeptId, 'stamps_changed'=>0];
 
     $slots = fsd_case_filler_slots($db, $case);
     $oldExport = trim((string)($case['export_pdf_name'] ?? ''));
     $changed = 0;
     $db->beginTransaction();
     try {
-        $db->prepare("UPDATE fsd_case SET filler_id=?,filler_name=?,updated_at=NOW() WHERE id=?")
-           ->execute([$u['id'], $u['user_cname'], $caseId]);
+        $db->prepare("UPDATE fsd_case SET filler_id=?,filler_name=?,filler_dept_id=?,updated_at=NOW() WHERE id=?")
+           ->execute([$u['id'], $u['user_cname'], $newFillerDeptId ?: null, $caseId]);
         if ($slots) {
             $in = implode(',', array_fill(0, count($slots), '?'));
             $st = $db->prepare("UPDATE fsd_case_response SET resolved_user_id=?, resolved_user_name=?
@@ -1180,7 +1240,8 @@ function fsd_case_set_filler(PDO $db, int $caseId, int $byUid, int $newFillerId,
         return ['ok'=>false, 'msg'=>'設定失敗：' . $e->getMessage()];
     }
     if ($oldExport !== '' && $onExportInvalidated) { try { $onExportInvalidated($oldExport); } catch (Throwable $e) {} }
-    return ['ok'=>true, 'filler_id'=>(int)$u['id'], 'filler_name'=>$u['user_cname'], 'stamps_changed'=>$changed];
+    return ['ok'=>true, 'filler_id'=>(int)$u['id'], 'filler_name'=>$u['user_cname'],
+            'filler_dept_id'=>$newFillerDeptId, 'stamps_changed'=>$changed];
 }
 
 /** 草稿階段允許重新上傳/更換文件(換一份重新框選，之前框選的位置一併清空，避免對到舊文件版面)。 */
@@ -1243,7 +1304,7 @@ function fsd_case_doc_empty(array $doc): bool {
 }
 
 /** 建立案件(草稿)。$doc 見 fsd_case_doc_pages_write() 說明。 */
-function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, array $doc, int $fillerId = 0, int $linkAsDocId = 0): array {
+function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, array $doc, int $fillerId = 0, int $linkAsDocId = 0, int $fillerDeptId = 0): array {
     $tpl = fsd_template_get($db, $templateId);
     if (!$tpl) return ['ok'=>false, 'msg'=>'找不到此樣板'];
     if ((int)$tpl['published_version'] < 1) return ['ok'=>false, 'msg'=>'此樣板尚未發布，請聯絡管理員'];
@@ -1263,11 +1324,12 @@ function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $u
         $title = fsd_case_title_with_asdoc($db, $linkId, $title ?: $tpl['name']);
         // 頁碼預設沿用樣板設定（案件建立後仍可逐案修改，2026-08-19 使用者要求）
         $showPageNo = (int)($tpl['default_show_page_no'] ?? 1) === 1 ? 1 : 0;
-        $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,link_as_doc_id,show_page_no,status,current_stage_seq)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'draft',0)")
+        $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,filler_dept_id,business_date,link_as_doc_id,show_page_no,status,current_stage_seq)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',0)")
            ->execute([$templateId, (int)$tpl['published_version'], $isPdf ? 'pdf' : 'image',
                       $isPdf ? $doc['file_name'] : null, $title, $uid, $uname,
-                      $filler ? (int)$filler['id'] : null, $filler ? $filler['user_cname'] : null, $bizDate, $linkId, $showPageNo]);
+                      $filler ? (int)$filler['id'] : null, $filler ? $filler['user_cname'] : null,
+                      ($filler && $fillerDeptId) ? $fillerDeptId : null, $bizDate, $linkId, $showPageNo]);
         $caseId = (int)$db->lastInsertId();
         fsd_case_doc_pages_write($db, $caseId, $doc);
         $db->commit();
@@ -1522,13 +1584,12 @@ function fsd_backfill_people(PDO $db, string $asOfDate = ''): array {
            <=> [(int)$b['dept_sort'], (int)$b['position_sort'], (string)$b['dept_name'], (string)$b['user_cname']];
     });
     foreach ($rows as $p) {
-        // 標籤顯示「業務日期當時」的部門/職稱，不然補 2023 年的舊表單會照現職挑，很容易挑錯人；
-        // 兼任也要一起列出來（例「技術部 工程師／品管部 課長 高志宏」），只看主職會挑錯人
-        $jobs = fsd_user_jobs_at($db, (int)$p['id'], $asOfDate !== '' ? $asOfDate : date('Y-m-d'));
-        $head = $jobs ? implode('／', $jobs) : trim(($p['dept_name'] ?? '') . ' ' . ($p['position_name'] ?? ''));
-        $label = trim($head . ' ' . $p['user_cname']);
-        if (!empty($p['on_leave'])) $label .= '［' . $p['leave_note'] . '］';
-        $out[] = ['id'=>(int)$p['id'], 'name'=>$p['user_cname'], 'resigned'=>0, 'label'=>$label];
+        // 一個「職務」一個選項（主職與兼任分開列）：**選哪個部門會決定往上找誰簽核**，
+        // 所以不能只選到人。標籤與部門一律是「業務日期當時」的（補舊表單照現職挑會挑錯人）。
+        foreach (fsd_case_people_entries($db, (int)$p['id'], $p['user_cname'],
+                 $asOfDate !== '' ? $asOfDate : date('Y-m-d'),
+                 trim(($p['dept_name'] ?? '') . ' ' . ($p['position_name'] ?? '')),
+                 !empty($p['on_leave']) ? (string)$p['leave_note'] : '', 0) as $e) $out[] = $e;
     }
     try {
         $st = $db->query("SELECT u.id, u.user_cname, d.name AS dept_name, COALESCE(d.sort_order,999) AS dept_sort,

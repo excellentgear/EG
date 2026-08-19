@@ -351,7 +351,8 @@ case 'case_get': {
     }
     $schema = fsd_case_schema($db, $case);
     $responses = fsd_sanitize_responses_for_viewer(
-        fsd_responses_with_job($db, fsd_case_responses($db, $id), (string)($case['business_date'] ?? '')), $perms['canAdmin']);
+        fsd_responses_with_job($db, fsd_case_responses($db, $id), (string)($case['business_date'] ?? ''),
+                               (int)($case['filler_id'] ?? 0), (int)($case['filler_dept_id'] ?? 0)), $perms['canAdmin']);
     $curStage = null;
     foreach ($schema['stages'] ?? [] as $s) if ((int)$s['seq'] === (int)$case['current_stage_seq']) { $curStage = $s; break; }
     $canAdvisory = false; $canDecision = false;
@@ -418,7 +419,8 @@ case 'case_create_draft': {
     $doc = fsd_case_upload_doc($db, 'files');
     // 填表人可留空（預設未選定）；有填表人圖章欄位的案件會在送出時強制補選
     $r = fsd_case_create_draft_doc($db, $tid, $uid, $uname, $title, $bizDate, $doc,
-                                   (int)($_POST['filler_id'] ?? 0), (int)($_POST['link_as_doc_id'] ?? 0));
+                                   (int)($_POST['filler_id'] ?? 0), (int)($_POST['link_as_doc_id'] ?? 0),
+                                   (int)($_POST['filler_dept_id'] ?? 0));
     if (!$r['ok']) jerr($r['msg']);
     jout(['id'=>$r['id']]);
 }
@@ -666,7 +668,7 @@ case 'case_set_filler': {
     $dir = fsd_case_attach_dir_safe($db);
     $r = fsd_case_set_filler($db, $id, $uid, $fillerId, $perms['canAdmin'], function ($oldName) use ($dir) {
         if ($oldName !== '' && is_file($dir . $oldName)) @unlink($dir . $oldName);
-    });
+    }, (int)($_POST['filler_dept_id'] ?? 0));
     if (!$r['ok']) jerr($r['msg']);
     jout($r);
 }
