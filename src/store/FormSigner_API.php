@@ -398,6 +398,17 @@ case 'case_get': {
  * 案件一律只能上傳圖片、可一次多張(2026-08-14使用者明確要求：PDF轉圖列印畫質實測不如圖片清楚，
  * 故案件不再接受PDF；多張圖片依前端拖拽排序後的順序依序成頁，樣板仍可上傳PDF不受影響)。
  */
+/**
+ * 某業務日期當時可選的人員（建立案件的填表人下拉用）。標籤顯示**當時**的部門/職稱；
+ * 業務日期在過去才把已離職者列進來（當年他在職），今日/未來只列在職者。見 ai-rules/22。
+ */
+case 'people_at': {
+    $d = trim((string)($_GET['date'] ?? '')) ?: date('Y-m-d');
+    $list = fsd_backfill_people($db, $d);
+    if (!fsd_allow_resigned_at($d)) $list = array_values(array_filter($list, fn($p) => empty($p['resigned'])));
+    jout(['people'=>$list, 'date'=>$d]);
+}
+
 case 'case_create_draft': {
     fsd_need_csrf();
     if (!$perms['canCreate']) jerr('您沒有建立案件的權限', 403);

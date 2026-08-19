@@ -539,12 +539,21 @@ function crPickAsDoc(){
         CR_AS_DOCS = res.docs || []; open();
     });
 }
-/** 建立案件視窗的填表人下拉：預設「（未選定）」（2026-08-19 使用者要求，不再自動帶成建立者）。 */
+/** 建立案件視窗的填表人下拉：預設「（未選定）」（2026-08-19 使用者要求，不再自動帶成建立者）。
+ *  清單依**業務日期**取當時的在職人員與職稱（ai-rules/22）——補舊表單時照現職挑很容易挑錯人；
+ *  業務日期在過去時會一併列出當年在職、現已離職的人。改業務日期會重抓，已選的人盡量保留。 */
 function fillCreateFillerOptions(){
-    $('#crFiller').html('<option value="">（未選定）</option>' + (META.people||[]).map(function(p){
-        return '<option value="'+p.id+'">'+esc(p.display)+'</option>';
-    }).join(''));
+    var keep = $('#crFiller').val() || '';
+    $.getJSON(API, {action:'people_at', date:$('#crDate').val() || ''}, function(res){
+        if (!res.ok) return;
+        $('#crFiller').html('<option value="">（未選定）</option>' + (res.people||[]).map(function(p){
+            return '<option value="'+p.id+'"'+(String(p.id)===String(keep)?' selected':'')+'>'+esc(p.label)+'</option>';
+        }).join(''));
+        // 換日期後那個人當時不在職 → 選項不存在，明確清掉並提示，不要留一個看不見的舊值
+        if (keep && !$('#crFiller').val()) alert('原本選的填表人在這個業務日期當時不在職（或無職務紀錄），已清除，請重新選擇。');
+    });
 }
+$('#crDate').on('change', fillCreateFillerOptions);   // 改業務日期 → 人員清單跟著換成當時的
 function loadTemplateOptionsForCreate(){
     $.getJSON(API, {action:'template_list'}, function(res){
         if (!res.ok) return;
