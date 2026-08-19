@@ -1648,9 +1648,10 @@ window.openBomFill = function(){
         $.getJSON(API, {action:'templates_of_processes', process_ids:ids.join(',')}, function(r2){
             BOM_TPLS = {};
             (r2.rows||[]).forEach(function(t){ (BOM_TPLS[t.process_id] = BOM_TPLS[t.process_id] || []).push(t); });
+            // 預設一筆都不勾（2026-08-18 使用者要求）：帶入是會長出一堆分析列的動作，
+            // 預設全選很容易一按就整包灌進去，改成由使用者主動挑或用製程的「全選」。
             BOM_SEL = {};
-            // 預設全選（比照原本行為：勾了製程就整包帶入），使用者可再逐筆取消
-            Object.keys(BOM_TPLS).forEach(function(pid){ BOM_TPLS[pid].forEach(function(t){ BOM_SEL[t.id] = true; }); });
+            BOM_OPEN = {};
             renderBomFill();
         });
     });
