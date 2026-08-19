@@ -850,18 +850,11 @@ $('#btnPrint').on('click', function(){
     f.action = 'get_print';
     $.post(API, f, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
-        var yearTxt = $('#yearSel').val() ? $('#yearSel').val()+' 年度' : '全部年度';
-        var custTxt = $('#custSel').val() ? $('#custSel option:selected').text() : '全部客戶';
-        var modeTxt = (MODE==='bound') ? '有訂單綁定的料號' : '所有有附件的料號';
-        var catTxt  = CAT ? ('類別：'+($('#catFilterBar .cat-btn.active').text()||'')) : '';
-        var pfTxt   = $('#pfmeaSel').val() ? ('PFMEA：'+$('#pfmeaSel option:selected').text()) : '';
         var unit = res.issue_unit||'';
         var company = res.company_name || COMPANY || '';
+        // 列印不再印篩選條件副標（年度/客戶/筆數/列印日期）——使用者明確要求拿掉
         var body = '<div class="p-comp">'+esc(company)+'</div>'
-                 + '<div class="p-title">外來文件清單</div>'
-                 + '<div class="p-sub">'+esc(yearTxt)+'｜'+esc(custTxt)+'｜'+esc(modeTxt)+(catTxt?'｜'+esc(catTxt):'')
-                 + (pfTxt?'｜'+esc(pfTxt):'')+'｜共 '+res.total+' 筆'
-                 + '｜列印日期：'+dispDate(new Date().toISOString().substr(0,10))+'</div>';
+                 + '<div class="p-title">外來文件清單</div>';
         (res.groups||[]).forEach(function(g){
             body += '<div class="p-cust">客戶：'+esc(g.customer_name)+'</div>';
             body += '<table class="p-tb"><thead><tr><th style="width:30%;">料號</th>'
@@ -879,8 +872,7 @@ $('#btnPrint').on('click', function(){
         // 左右各留 6mm 安全邊：邊界選「最小值」時 @page 的 10mm 會被覆蓋，最右欄(發行單位)會被印表機不可印區裁掉
         var css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0;padding:0 6mm;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:1px;}'
-            + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:6px;margin-bottom:2px;}'
-            + '.p-sub{font-size:11px;text-align:center;color:#555;margin-bottom:10px;}'
+            + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:6px;margin-bottom:10px;}'
             + '.p-cust{font-size:14px;font-weight:bold;margin:10px 0 3px;border-left:4px solid #F0A24B;padding-left:6px;break-after:avoid;}'
             + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;margin-bottom:6px;}'
             + 'table.p-tb thead{display:table-header-group;}'   // 跨頁時每頁重印表頭
