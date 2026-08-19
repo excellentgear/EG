@@ -114,6 +114,8 @@ $perms = fsd_perms($db, $fsdUser);
         .fsd-box .sod-note { color:#b0a390; font-size:10px; }
         .fsd-action-panel { border:1px solid #E8D5B5; border-radius:8px; background:#fff; padding:10px; margin-top:12px; }
         .fsd-resp-list { font-size:12.5px; }
+        .fp-filler { margin-left:8px; font-size:12.5px; color:#5b3a1e; }
+        .fp-filler.unset { color:#DD5138; font-weight:bold; }
         .fsd-resp-list .r-row { border-bottom:1px solid #F0E7D5; padding:5px 0; }
         /* 自動簽核標記：僅管理員在簽核紀錄區看得到，@media print 不需另外隱藏（列印時整個 .fsd-action-panel 已隱藏） */
         .fsd-resp-list .auto-sign-tag { display:inline-block; background:#F7E0BD; color:#8A5A2B; border:1px solid #D8BE93;
@@ -208,6 +210,8 @@ $perms = fsd_perms($db, $fsdUser);
                 <b id="fpTitle" style="margin-left:6px;"></b>
                 <button onclick="openReplaceFile()">更換文件</button>
                 <button id="btnBfEditHead" style="display:none;" onclick="openBfCreate(FP_CASE)"><i class="fa fa-pen"></i> 編輯表頭</button>
+                <span id="fpFillerInfo" class="fp-filler"></span>
+                <button id="btnFpSetFiller" style="display:none;" onclick="openEditFiller('fp')"><i class="fa fa-user-edit"></i> 設定填表人</button>
                 <button class="btn-warm" id="btnFpSubmit" style="margin-left:auto;" onclick="fpSubmit()"><i class="fa fa-check"></i> 儲存並送出</button>
             </div>
             <div class="fsd-toolbar">
@@ -244,7 +248,7 @@ $perms = fsd_perms($db, $fsdUser);
                 <b id="dtlTitle" style="margin-left:6px;"></b>
                 <span id="dtlStageInfo" style="margin-left:8px;color:#5b3a1e;font-size:12.5px;"></span>
                 <span id="dtlFillerInfo" style="margin-left:8px;color:#8a6d45;font-size:12.5px;"></span>
-                <button id="btnEditFiller" style="display:none;" onclick="openEditFiller()"><i class="fa fa-user-edit"></i> 設定填表人</button>
+                <button id="btnEditFiller" style="display:none;" onclick="openEditFiller('dtl')"><i class="fa fa-user-edit"></i> 設定填表人</button>
                 <button style="margin-left:auto;" id="btnUrge"><i class="fa fa-bell"></i> 催辦</button>
                 <button id="btnRestore" style="display:none;color:#2e6b2e;border-color:#7ab57a;"><i class="fa fa-undo"></i> 復原</button>
                 <button id="btnDeleteHard" class="btn-danger" style="display:none;"><i class="fa fa-trash"></i> 永久刪除</button>
@@ -295,6 +299,8 @@ $perms = fsd_perms($db, $fsdUser);
         <input type="file" id="crFile" accept="image/png,image/jpeg,application/pdf" multiple onchange="crFilesChanged(this.files)">
         <p style="font-size:11.5px;color:#8a6d45;margin:2px 0 0;">上傳 PDF 時最終產出的 PDF 會直接沿用原檔內容（不重新轉圖，畫質完全不損）；PDF 與圖片不可混著傳，一次也只能傳一份 PDF。加密保護的 PDF 無法處理，會在上傳時擋下。</p>
         <div id="crThumbs" class="fsd-thumb-grid"></div>
+        <label>填表人（可留空，之後再指定；<b>樣板有「填表人」圖章欄位時，未指定就不能送出</b>——那個章會蓋這個人）</label>
+        <select id="crFiller" data-eg-filter="輸入姓名篩選…"></select>
         <label>案件標題（可留空，預設用樣板名稱）</label><input type="text" id="crTitle" maxlength="200">
         <label>業務日期</label><input type="date" id="crDate" max="9999-12-31">
         <p style="font-size:11.5px;color:#8a6d45;">建立後進入框選畫面，把樣板提供的欄位拖到您上傳的文件上對應位置，再選擇「存草稿」或「儲存並送出」。</p>
@@ -368,7 +374,7 @@ $perms = fsd_perms($db, $fsdUser);
         <button class="b-ok" onclick="pwConfirm()">確認刪除</button></div>
 </div></div>
 
-<!-- 設定填表人 modal（僅超級管理員；填表人=表單實際歸屬者,簽核解析基準,通常由管理員代建案件後補設定） -->
+<!-- 設定填表人 modal（草稿：申請人本人或管理員；已送出：僅超級管理員回改。填表人=表單實際歸屬者,簽核解析基準） -->
 <div class="fsd-mask" id="fillerMask"><div class="fsd-modal">
     <div class="m-head"><span>設定填表人</span><span class="m-close" onclick="closeMask('fillerMask')">✕</span></div>
     <div class="m-body">
@@ -398,8 +404,8 @@ $perms = fsd_perms($db, $fsdUser);
         <h4>功能說明</h4>
         依管理員設計好的樣板建立案件並上傳「實際要簽核的文件」；樣板本身的框選結果只作為欄位提示（白名單）與參考位置，不是實際背景文件。系統依序通知各關卡簽核人，簽核人以圖章模板蓋章回應，回覆內容顯示在您自己框選好的對應位置，最終呈現一份已簽核完成的合成文件（線上檢視＋瀏覽器列印），並在案件完成時自動產生一份合成 PDF 存檔，之後可隨時重複開啟列印或下載。
         <h4>操作步驟</h4>
-        <b>①建立案件</b>：選擇樣板、上傳要簽核的文件、填標題與業務日期。文件可以是<b>多張圖片</b>（png/jpg，每張各成一頁、可拖曳調整頁序），也可以是<b>一份多頁 PDF</b>；兩者不可混傳，一次也只能傳一份 PDF。<br>
-        <b>②框選</b>：進入框選畫面，左側「待框選標籤」只會列出樣板本身已框選過的欄位（樣板沒有的欄位這裡也不會出現），拖到您上傳的文件對應位置；右上角可參考樣板原本的框選位置提示。完成後選「存草稿」（暫存，之後可回來繼續）或「儲存並送出」（開始跑第一關）。<br>
+        <b>①建立案件</b>：選擇樣板、上傳要簽核的文件、填標題與業務日期。文件可以是<b>多張圖片</b>（png/jpg，每張各成一頁、可拖曳調整頁序），也可以是<b>一份多頁 PDF</b>；兩者不可混傳，一次也只能傳一份 PDF。<b>填表人預設「未選定」</b>，可以在這裡先選，也可以之後在框選畫面再選。<br>
+        <b>②框選</b>：進入框選畫面，左側「待框選標籤」只會列出樣板本身已框選過的欄位（樣板沒有的欄位這裡也不會出現），拖到您上傳的文件對應位置；右上角可參考樣板原本的框選位置提示。完成後選「存草稿」（暫存，之後可回來繼續）或「儲存並送出」（開始跑第一關）。工具列上會顯示目前的<b>填表人</b>，可在這裡設定；若這張案件框了「填表人」的圖章欄位卻還沒指定填表人，送出時會被擋下並自動打開設定視窗。<br>
         <b>③意見階段</b>：該階段的每位槽位成員各自表示同意/不同意並可留言，沒有駁回動作、不會互相卡關，全部人（扣除自動迴避的）都回應後自動進入下一關。<br>
         <b>④決策階段</b>：1~2位決策者其中一人核准或駁回即決定流程走向；核准才會繼續跑下一關（或結案），駁回則案件立即終止。<br>
         <b>⑤催辦</b>：案件申請人或管理員可對目前階段尚未回應的人重新發送一次通知（不會強制略過或自動代為回應）。<br>
@@ -420,7 +426,7 @@ $perms = fsd_perms($db, $fsdUser);
         ・<b>上傳 PDF 不會被轉成圖片</b>：匯出的 PDF 直接沿用原始 PDF 的頁面內容，畫質與原檔完全相同（掃描影像是原封不動搬過去的）；畫面上看到的預覽底圖才是轉圖產生的，只用來給您拖曳定位，不影響最終檔案。<br>
         ・<b>加密保護的 PDF 無法處理</b>，會在上傳當下就擋下並說明原因，請改上傳未加密的 PDF 或圖片檔——系統不會自動改用畫質較差的方式硬做。<br>
         ・PDF 裡的圖章大小與位置跟列印版一致（未綁定圖章模板＝固定 91px，有綁定＝該模板設定的實際尺寸，皆置中於框內）。<br>
-        ・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
+        ・<b>填表人＝這張表單實際上是誰填的</b>，也是簽核來源選「填表人」時圖章要蓋的人；簽核來源選「部門自動主管」但沒指定部門時，也是用填表人的部門去找主管（沒選填表人才退回用申請人的部門）。<br>・<b>填表人預設未選定</b>（以前會自動帶成建立案件的人，管理員代別人建案件時圖章就會蓋到管理員，所以改掉）。<b>只有框了「填表人」圖章欄位的案件，未指定填表人就不能送出</b>；沒用到填表人圖章的案件不強迫選，但仍可自願填。<br>・設定填表人的權限：<b>草稿階段</b>由申請人本人或管理員設定；<b>送出後</b>只有超級管理員可以回改。<br>・<b>回改填表人會連已經蓋好的填表人圖章一起換成新的人</b>，儲存前會跳出確認告訴您會動到幾個章；同時已產生的合成 PDF 會作廢，下次開啟案件時自動用新的章重新產生。<br>・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
         <h4>設定入口</h4>
         樣板的階段/槽位/框選提示由管理員在「樣板管理」頁設定；操作確認密碼在「修改個人密碼」頁設定（需超級管理員先授權）。
         <h4>權限角色</h4>
@@ -487,6 +493,12 @@ function statusBadge(s){
     var map = {draft:['草稿','badge-draft'], in_progress:['進行中','badge-progress'], approved:['已完成','badge-approved'], rejected:['已駁回','badge-rejected'], void:['已刪除','badge-void']};
     var m = map[s] || [s,'badge-progress'];
     return '<span class="badge-stage '+m[1]+'">'+m[0]+'</span>';
+}
+/** 建立案件視窗的填表人下拉：預設「（未選定）」（2026-08-19 使用者要求，不再自動帶成建立者）。 */
+function fillCreateFillerOptions(){
+    $('#crFiller').html('<option value="">（未選定）</option>' + (META.people||[]).map(function(p){
+        return '<option value="'+p.id+'">'+esc(p.display)+'</option>';
+    }).join(''));
 }
 function loadTemplateOptionsForCreate(){
     $.getJSON(API, {action:'template_list'}, function(res){
@@ -582,7 +594,7 @@ function deleteDraftFromList(id){
         loadCases();
     }, 'json');
 }
-$('#btnAddCase').on('click', function(){ loadTemplateOptionsForCreate(); CR_FILES=[]; renderCrThumbs(); $('#crFile').val(''); openMask('createMask'); });
+$('#btnAddCase').on('click', function(){ loadTemplateOptionsForCreate(); fillCreateFillerOptions(); CR_FILES=[]; renderCrThumbs(); $('#crFile').val(''); openMask('createMask'); });
 /** 建立案件的多圖選擇+拖曳排序(2026-08-14使用者明確要求：案件只能傳圖片,可一次多張,拖曳排序決定頁序)。 */
 var CR_FILES = [];
 /* -------- 上傳檔案共用處理（圖片多張 或 單一多頁PDF，2026-08-19 重新開放 PDF） --------
@@ -633,10 +645,11 @@ function submitCreate(){
     var fd = new FormData();
     fd.append('action','case_create_draft'); fd.append('csrf', META.csrf); fd.append('template_id', tid);
     fd.append('title', $.trim($('#crTitle').val())); fd.append('business_date', $('#crDate').val());
+    fd.append('filler_id', $('#crFiller').val() || 0);
     CR_FILES.forEach(function(f){ fd.append('files[]', f); });
     fetch(API, {method:'POST', body:fd}).then(function(r){ return r.json(); }).then(function(res){
         if (!res.ok){ alert(res.error||'建立失敗'); return; }
-        closeMask('createMask'); $('#crTitle').val(''); $('#crFile').val(''); CR_FILES=[]; renderCrThumbs();
+        closeMask('createMask'); $('#crTitle').val(''); $('#crFile').val(''); $('#crFiller').val(''); CR_FILES=[]; renderCrThumbs();
         openFieldDesigner(res.id);
     }).catch(function(){ alert('建立失敗（連線錯誤）'); });
 }
@@ -1008,7 +1021,11 @@ function openCase(id){
         $('#btnDeleteHard').toggle(!!res.can_delete_hard);
         $('#btnDeleteSoft').toggle(!!res.can_delete_soft);
         $('#btnRestore').toggle(CUR_CASE.status==='void' && META.perms.canAdmin);
-        $('#dtlFillerInfo').text(CUR_CASE.filler_name && CUR_CASE.filler_name !== CUR_CASE.applicant_name ? ('填表人：'+CUR_CASE.filler_name) : '');
+        CUR_FILLER_STAMPED = parseInt(res.filler_stamped, 10) || 0;
+        // 填表人一律顯示出來（含「未選定」），不再只有跟申請人不同時才顯示——看不到就不會發現章要蓋誰還沒決定
+        $('#dtlFillerInfo').html(CUR_CASE.filler_id
+            ? '填表人：'+esc(CUR_CASE.filler_name||'')
+            : '<span style="color:#DD5138;font-weight:bold;">填表人：未選定</span>');
         $('#btnEditFiller').toggle(!!res.can_set_filler);
         CUR_AS_DOC_NO = res.as_doc_no || '';
         CUR_CASE_PAGES = res.pages || []; // 案件自己上傳文件的頁面(不是CUR_SCHEMA.pages那份樣板參考頁!)，doPrint()量版面一定要用這份
@@ -1073,18 +1090,55 @@ function restoreFromList(id){
         loadCases();
     }, 'json');
 }
-function openEditFiller(){
-    if (!CUR_CASE) return;
-    var opts = (META.people||[]).map(function(p){ return '<option value="'+p.id+'"'+(String(p.id)===String(CUR_CASE.filler_id)?' selected':'')+'>'+esc(p.display)+'</option>'; }).join('');
+/* ============================================================ 填表人 ============================================================
+   填表人＝這張表單「實際上是誰填的」，也是簽核來源選「填表人」時圖章要蓋的人。
+   2026-08-19 使用者要求改為**預設未選定**（以前一律自動帶成建立者，管理員代建案件時章就蓋到管理員），
+   並在**有框「填表人圖章欄位」的案件送出前強制補選**（後端 fsd_case_submit 同步擋，前端只是先講清楚）。 */
+var CUR_FILLER_STAMPED = 0, FP_NEEDS_FILLER = false, FP_CAN_SET_FILLER = false, FILLER_CTX = 'dtl';
+
+/** 框選畫面上的填表人狀態列：未選定且這張案件用得到填表人圖章時，紅字提醒（送出會被擋）。 */
+function renderFpFiller(){
+    if (!FP_CASE || FP_BACKFILL){ $('#fpFillerInfo').hide(); $('#btnFpSetFiller').hide(); return; }
+    var has = !!FP_CASE.filler_id;
+    $('#fpFillerInfo').show().toggleClass('unset', !has).text(
+        has ? ('填表人：' + (FP_CASE.filler_name || ''))
+            : (FP_NEEDS_FILLER ? '填表人：未選定（本案件有填表人圖章欄位，未指定不能送出）' : '填表人：未選定'));
+    $('#btnFpSetFiller').toggle(FP_CAN_SET_FILLER);
+}
+/** ctx='fp' 改草稿（框選畫面）／'dtl' 改已送出的案件（詳情頁，僅超管）。 */
+function openEditFiller(ctx){
+    FILLER_CTX = (ctx === 'fp') ? 'fp' : 'dtl';
+    var c = (FILLER_CTX === 'fp') ? FP_CASE : CUR_CASE;
+    if (!c) return;
+    var opts = '<option value="">（未選定）</option>' + (META.people||[]).map(function(p){
+        return '<option value="'+p.id+'"'+(String(p.id)===String(c.filler_id)?' selected':'')+'>'+esc(p.display)+'</option>';
+    }).join('');
     $('#fillerSel').html(opts);
     openMask('fillerMask');
 }
 function submitEditFiller(){
+    var c = (FILLER_CTX === 'fp') ? FP_CASE : CUR_CASE;
+    if (!c) return;
     var fid = $('#fillerSel').val();
     if (!fid){ alert('請選擇填表人'); return; }
-    $.post(API, {action:'case_set_filler', csrf:META.csrf, case_id:CUR_CASE.id, filler_id:fid}, function(res){
+    if (String(fid) === String(c.filler_id)){ closeMask('fillerMask'); return; }
+    // 已經蓋過填表人章才需要確認（使用者拍板：自動換，但要先跳確認說明會動到什麼）
+    var stamped = (FILLER_CTX === 'fp') ? 0 : CUR_FILLER_STAMPED;
+    if (stamped > 0) {
+        var who = $('#fillerSel option:selected').text();
+        if (!confirm('這張案件已經蓋了 ' + stamped + ' 個「填表人」的圖章，目前蓋的是「' + (c.filler_name||'') + '」。\n\n'
+            + '儲存後文件上這 ' + stamped + ' 個章會全部改成「' + who + '」，已產生的合成 PDF 也會作廢並在下次開啟時重新產生。\n\n'
+            + '確定要更換嗎？')) return;
+    }
+    $.post(API, {action:'case_set_filler', csrf:META.csrf, case_id:c.id, filler_id:fid}, function(res){
         if (!res.ok){ alert(res.error||'設定失敗'); return; }
-        closeMask('fillerMask'); openCase(CUR_CASE.id);
+        closeMask('fillerMask');
+        if (FILLER_CTX === 'fp'){
+            FP_CASE.filler_id = res.filler_id; FP_CASE.filler_name = res.filler_name;
+            renderFpFiller();
+        } else {
+            openCase(c.id);
+        }
     }, 'json');
 }
 function submitAdvisory(decision){
@@ -1392,6 +1446,9 @@ function openFieldDesigner(id){
         FP_BACKFILL = FP_CASE.case_kind === 'backfill';
         $('#listPanel,#detailPanel').hide(); $('#fieldPanel').show();
         $('#fpTitle').text(FP_CASE.title || '');
+        FP_NEEDS_FILLER = !!res.needs_filler;
+        FP_CAN_SET_FILLER = !!res.can_set_filler;
+        renderFpFiller();
         // 補案件沒有樣板：關掉樣板參考與待框選標籤，改用圖章清單面板
         $('#refPanel').toggle(!FP_BACKFILL);
         $('#labelPanel').toggle(!FP_BACKFILL);
@@ -1744,9 +1801,22 @@ function fpSubmit(){
         var bad = BF_FIELDS.filter(function(f){ return !f.signer_user_id; });
         if (bad.length){ alert('還有 '+bad.length+' 個圖章沒有指定人員，請每個圖章都選好是誰的章再完成'); return; }
         if (!confirm('確定要完成嗎？補案件送出後直接標記為已完成（固定自動審核），不會通知任何人簽核，圖章內容也不可再修改。')) return;
-    } else if (!confirm('確定要送出嗎？送出後開始通知第一關的簽核人，框選內容將不可再修改。')) return;
+    } else {
+        // 送出前先確認有選定填表人（後端 fsd_case_submit 也會擋，這裡只是先講清楚、順手把設定視窗打開）
+        if (!FP_CASE.filler_id && FP_NEEDS_FILLER){
+            alert('這張案件有「填表人」的圖章欄位，請先指定填表人是誰再送出（那個章會蓋這個人）。');
+            if (FP_CAN_SET_FILLER) openEditFiller('fp');
+            return;
+        }
+        if (!confirm('確定要送出嗎？送出後開始通知第一關的簽核人，框選內容將不可再修改。')) return;
+    }
     $.post(API, {action:'case_submit', csrf:META.csrf, case_id:FP_CASE.id}, function(res){
-        if (!res.ok){ alert(res.error||'送出失敗'); return; }
+        if (!res.ok){
+            alert(res.error||'送出失敗');
+            // 後端才發現沒選填表人（例如框選完才加上填表人圖章框，前端旗標是載入當下算的會過期）
+            if (res.need_filler){ FP_NEEDS_FILLER = true; renderFpFiller(); if (FP_CAN_SET_FILLER) openEditFiller('fp'); }
+            return;
+        }
         $('#fieldPanel').hide();
         openCase(FP_CASE.id);
     }, 'json');

@@ -22,7 +22,7 @@ $fsdStreamActions = ['template_file', 'case_file', 'case_page_file', 'case_expor
 if (!in_array($action, $fsdStreamActions, true)) header('Content-Type: application/json; charset=utf-8');
 
 function jout($a) { echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
-function jerr($msg, $code = 400) { http_response_code($code); echo json_encode(['ok'=>false, 'error'=>$msg], JSON_UNESCAPED_UNICODE); exit; }
+function jerr($msg, $code = 400, array $extra = []) { http_response_code($code); echo json_encode(array_merge(['ok'=>false, 'error'=>$msg], $extra), JSON_UNESCAPED_UNICODE); exit; }
 
 try {
     $db = (new DBConnection())->getPDO();
@@ -352,7 +352,11 @@ case 'case_get': {
         'can_advisory_respond'=>$canAdvisory, 'can_decision_respond'=>$canDecision,
         'can_edit_fields'=>$case['status']==='draft' && ($isOwner || $perms['canAdmin']),
         'can_delete_draft'=>$case['status']==='draft' && ($isOwner || $perms['canAdmin']),
-        'can_delete_hard'=>$canDeleteHard, 'can_delete_soft'=>$canDeleteSoft, 'can_set_filler'=>$uid === 1,
+        'can_delete_hard'=>$canDeleteHard, 'can_delete_soft'=>$canDeleteSoft,
+        // 草稿：申請人本人或管理員可設填表人（不然「預設未選定」會沒人設得了）；已送出：仍限超級管理員回改
+        'can_set_filler'=>$case['status']==='draft' ? ($isOwner || $perms['canAdmin'] || $uid === 1) : $uid === 1,
+        'needs_filler'=>fsd_case_needs_filler($db, $case),          // 有框填表人圖章＝沒選填表人不准送出
+        'filler_stamped'=>fsd_case_filler_stamped_count($db, $case), // 已蓋幾個填表人章（換人前跳確認用）
         'pages'=>fsd_case_pages_get($db, $id),
         // 補案件的圖章框要附上人員姓名與該章自己綁的圖章模板 schema（一般案件是全部共用樣板那一個模板）
         'fields'=>fsd_is_backfill($case) ? fsd_backfill_fields_for_view($db, $id) : fsd_case_field_list($db, $id),
@@ -374,7 +378,8 @@ case 'case_create_draft': {
     $title = trim((string)($_POST['title'] ?? ''));
     $bizDate = trim((string)($_POST['business_date'] ?? '')) ?: date('Y-m-d');
     $doc = fsd_case_upload_doc($db, 'files');
-    $r = fsd_case_create_draft_doc($db, $tid, $uid, $uname, $title, $bizDate, $doc);
+    // 填表人可留空（預設未選定）；有填表人圖章欄位的案件會在送出時強制補選
+    $r = fsd_case_create_draft_doc($db, $tid, $uid, $uname, $title, $bizDate, $doc, (int)($_POST['filler_id'] ?? 0));
     if (!$r['ok']) jerr($r['msg']);
     jout(['id'=>$r['id']]);
 }
@@ -542,7 +547,8 @@ case 'case_submit': {
     fsd_need_csrf();
     $id = (int)($_POST['case_id'] ?? 0);
     $r = fsd_case_submit($db, $id, $uid);
-    if (!$r['ok']) jerr($r['msg']);
+    // need_filler：讓前端知道是「沒選填表人」被擋，可直接把設定填表人的視窗打開，不用叫使用者自己找
+    if (!$r['ok']) jerr($r['msg'], 400, !empty($r['need_filler']) ? ['need_filler'=>true] : []);
     jout(['status'=>$r['status']]);
 }
 
@@ -607,13 +613,20 @@ case 'decision_respond': {
     jout(['status'=>$r['status']]);
 }
 
-/** 事後回改填表人：僅超級管理員(id=1)，比照ai-rules/21業務日期回改精神，一般人不可竄改簽核解析基準。 */
+/**
+ * 設定/回改填表人。草稿階段申請人本人或管理員可設；已送出後仍僅超級管理員(id=1)可回改
+ * （比照 ai-rules/21 業務日期回改精神）。換人時已蓋的填表人圖章一併換成新的人，
+ * 並把已產生的合成 PDF 作廢＋刪實體檔，下次開啟案件時會用新的章重新產生。
+ */
 case 'case_set_filler': {
     fsd_need_csrf();
     $id = (int)($_POST['case_id'] ?? 0);
     $fillerId = (int)($_POST['filler_id'] ?? 0);
     if (!$fillerId) jerr('請選擇填表人');
-    $r = fsd_case_set_filler($db, $id, $uid, $fillerId);
+    $dir = fsd_case_attach_dir_safe($db);
+    $r = fsd_case_set_filler($db, $id, $uid, $fillerId, $perms['canAdmin'], function ($oldName) use ($dir) {
+        if ($oldName !== '' && is_file($dir . $oldName)) @unlink($dir . $oldName);
+    });
     if (!$r['ok']) jerr($r['msg']);
     jout($r);
 }

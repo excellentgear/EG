@@ -131,8 +131,12 @@ function fsd_user_main_dept_id(PDO $db, int $uid): ?int {
 function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
     $mode = $signer['mode'] ?? '';
     $applicantUid = (int)($case['applicant_id'] ?? 0);
-    $fillerUid = (int)($case['filler_id'] ?? $applicantUid) ?: $applicantUid;
-    $fillerName = (string)($case['filler_name'] ?? $case['applicant_name'] ?? '');
+    // 2026-08-19 起填表人「預設未選定」，這裡不可以再靜默退回建立者——那正是圖章蓋到錯的人的原因
+    // （管理員代建案件時 filler 自動＝管理員本人，章就印管理員）。未選定＝0，'filler' 模式直接解析不到人。
+    $fillerUid = (int)($case['filler_id'] ?? 0);
+    $fillerName = (string)($case['filler_name'] ?? '');
+    // 「要用誰的部門去找主管」可以退回申請人：這只影響往上找哪個部門的主管，不會把誰的名字蓋在章上
+    $deptBaseUid = $fillerUid ?: $applicantUid;
     switch ($mode) {
         case 'user':
             $uid = (int)($signer['user_id'] ?? 0);
@@ -143,7 +147,7 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
             return $r ? ['id'=>(int)$r['id'], 'user_cname'=>$r['user_cname']] : null;
         case 'dept_auto_manager':
             $deptId = (int)($signer['dept_id'] ?? 0);
-            if (!$deptId) $deptId = (int)(fsd_user_main_dept_id($db, $fillerUid) ?? 0); // 未指定部門→用填表人自己的部門(使用者明確要求)
+            if (!$deptId) $deptId = (int)(fsd_user_main_dept_id($db, $deptBaseUid) ?? 0); // 未指定部門→用填表人的部門(未選填表人才退回申請人)
             if (!$deptId) return null;
             $m = eg_org_dept_manager($db, $deptId);
             return $m ? ['id'=>(int)$m['id'], 'user_cname'=>$m['user_cname']] : null;
@@ -180,7 +184,7 @@ function fsd_resolve_signer_for_case(PDO $db, array $signer, array $case): array
     $mode = $signer['mode'] ?? '';
     if (in_array($mode, ['user', 'filler'], true)) return ['user'=>$u, 'skipped_sod'=>false];
     $applicantUid = (int)($case['applicant_id'] ?? 0);
-    $fillerUid = (int)($case['filler_id'] ?? $applicantUid) ?: $applicantUid;
+    $fillerUid = (int)($case['filler_id'] ?? 0) ?: $applicantUid; // SoD 比對用：沒選填表人時以申請人為準（原行為不變）
     if ($u && ((int)$u['id'] === $applicantUid || (int)$u['id'] === $fillerUid)) return ['user'=>null, 'skipped_sod'=>true];
     return ['user'=>$u, 'skipped_sod'=>false];
 }
@@ -794,17 +798,103 @@ function fsd_case_create_draft(PDO $db, int $templateId, int $uid, string $uname
     return ['ok'=>true, 'id'=>(int)$db->lastInsertId()];
 }
 
-/** 事後回改填表人(僅超級管理員 id=1；比照 ai-rules/21 業務日期回改精神，一般人不可竄改簽核解析基準)。 */
-function fsd_case_set_filler(PDO $db, int $caseId, int $byUid, int $newFillerId): array {
-    if ($byUid !== 1) return ['ok'=>false, 'msg'=>'僅超級管理員可設定填表人'];
+/** 填表人候選：在職者（離職/特殊帳號不列）。回傳 ['id','user_cname'] 或 null。 */
+function fsd_filler_user(PDO $db, int $uid): ?array {
+    if ($uid <= 0) return null;
+    $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
+    $st->execute([$uid]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    return $r ? ['id'=>(int)$r['id'], 'user_cname'=>(string)$r['user_cname']] : null;
+}
+
+/** 這張案件的樣板裡，哪些槽位的簽核來源是「填表人」。回傳 slot_key => true。 */
+function fsd_case_filler_slots(PDO $db, array $case): array {
+    $out = [];
+    $schema = fsd_case_schema($db, $case);
+    foreach ($schema['stages'] ?? [] as $stage)
+        foreach ($stage['signers'] ?? [] as $sg)
+            if (($sg['mode'] ?? '') === 'filler' && ($sg['slot_key'] ?? '') !== '') $out[$sg['slot_key']] = true;
+    return $out;
+}
+
+/**
+ * 這張案件「非選填表人不可」嗎？＝案件上框了至少一個**填表人的圖章框**。
+ * 2026-08-19 使用者拍板只擋這種：章會把人名印在文件上，選錯/沒選就是簽章不實；
+ * 樣板沒用到填表人圖章的案件不強迫多選一次（仍可自願選填）。補案件沒有關卡，一律不擋。
+ */
+function fsd_case_needs_filler(PDO $db, array $case): bool {
+    if (fsd_is_backfill($case)) return false;
+    $slots = fsd_case_filler_slots($db, $case);
+    if (!$slots) return false;
+    foreach (fsd_case_field_list($db, (int)$case['id']) as $f)
+        if (($f['box_type'] ?? '') === 'stamp' && isset($slots[$f['slot_key'] ?? ''])) return true;
+    return false;
+}
+
+/**
+ * 目前已經以「填表人」身分**實際蓋下去**的圖章筆數，換人前跳確認用。
+ * 只算已經有決定的（decision 有值且非迴避）——還在等待回應的關卡雖然也已經解析出人，
+ * 但畫面/文件上還沒有章，講「會改掉 N 個章」會誤導。（換人時 UPDATE 仍會連待回應的那筆一起換，
+ * 否則舊的人還留著簽核權限。） */
+function fsd_case_filler_stamped_count(PDO $db, array $case): int {
+    $slots = fsd_case_filler_slots($db, $case);
+    if (!$slots) return 0;
+    $n = 0;
+    foreach (fsd_case_responses($db, (int)$case['id']) as $r) {
+        if (!isset($slots[$r['slot_key'] ?? ''])) continue;
+        if (!($r['resolved_user_id'] ?? null)) continue;
+        $d = $r['decision'] ?? null;
+        if ($d !== null && $d !== 'skipped_sod') $n++;
+    }
+    return $n;
+}
+
+/**
+ * 設定/回改填表人。
+ *  - 草稿：申請人本人或管理員可設（不然「預設未選定」會變成沒人設得了、案件永遠送不出去）。
+ *  - 已送出：仍僅超級管理員(id=1)，比照 ai-rules/21 業務日期回改精神，一般人不可竄改簽核解析基準。
+ * 換人時**已經蓋下去的填表人圖章一併換成新的人**（2026-08-19 使用者拍板，前端會先跳確認說明會動到幾個章），
+ * 並作廢已產生的合成 PDF（$onExportInvalidated 由呼叫端傳入，負責刪實體檔），下次開啟時會用新的章重產。
+ */
+function fsd_case_set_filler(PDO $db, int $caseId, int $byUid, int $newFillerId, bool $canAdmin = false, ?callable $onExportInvalidated = null): array {
     $case = fsd_case_get($db, $caseId);
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
-    $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
-    $st->execute([$newFillerId]);
-    $u = $st->fetch(PDO::FETCH_ASSOC);
+    $isDraft = ($case['status'] ?? '') === 'draft';
+    if ($isDraft) {
+        if ((int)$case['applicant_id'] !== $byUid && !$canAdmin && $byUid !== 1)
+            return ['ok'=>false, 'msg'=>'只有申請人本人或管理員可以設定填表人'];
+    } elseif ($byUid !== 1) {
+        return ['ok'=>false, 'msg'=>'案件已送出，僅超級管理員可回改填表人'];
+    }
+    $u = fsd_filler_user($db, $newFillerId);
     if (!$u) return ['ok'=>false, 'msg'=>'找不到此使用者或該使用者已離職'];
-    $db->prepare("UPDATE fsd_case SET filler_id=?,filler_name=?,updated_at=NOW() WHERE id=?")->execute([$u['id'], $u['user_cname'], $caseId]);
-    return ['ok'=>true, 'filler_id'=>(int)$u['id'], 'filler_name'=>$u['user_cname']];
+    if ((int)($case['filler_id'] ?? 0) === (int)$u['id'])
+        return ['ok'=>true, 'filler_id'=>(int)$u['id'], 'filler_name'=>$u['user_cname'], 'stamps_changed'=>0];
+
+    $slots = fsd_case_filler_slots($db, $case);
+    $oldExport = trim((string)($case['export_pdf_name'] ?? ''));
+    $changed = 0;
+    $db->beginTransaction();
+    try {
+        $db->prepare("UPDATE fsd_case SET filler_id=?,filler_name=?,updated_at=NOW() WHERE id=?")
+           ->execute([$u['id'], $u['user_cname'], $caseId]);
+        if ($slots) {
+            $in = implode(',', array_fill(0, count($slots), '?'));
+            $st = $db->prepare("UPDATE fsd_case_response SET resolved_user_id=?, resolved_user_name=?
+                                WHERE case_id=? AND resolved_user_id IS NOT NULL AND slot_key IN ($in)");
+            $st->execute(array_merge([$u['id'], $u['user_cname'], $caseId], array_keys($slots)));
+            $changed = $st->rowCount();
+        }
+        // 章換人了，已產生的合成 PDF 就是舊的，必須作廢重產（開啟案件時會自動補產）
+        if ($oldExport !== '')
+            $db->prepare("UPDATE fsd_case SET export_pdf_name=NULL,export_pdf_at=NULL,export_mode=NULL WHERE id=?")->execute([$caseId]);
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        return ['ok'=>false, 'msg'=>'設定失敗：' . $e->getMessage()];
+    }
+    if ($oldExport !== '' && $onExportInvalidated) { try { $onExportInvalidated($oldExport); } catch (Throwable $e) {} }
+    return ['ok'=>true, 'filler_id'=>(int)$u['id'], 'filler_name'=>$u['user_cname'], 'stamps_changed'=>$changed];
 }
 
 /** 草稿階段允許重新上傳/更換文件(換一份重新框選，之前框選的位置一併清空，避免對到舊文件版面)。 */
@@ -867,7 +957,7 @@ function fsd_case_doc_empty(array $doc): bool {
 }
 
 /** 建立案件(草稿)。$doc 見 fsd_case_doc_pages_write() 說明。 */
-function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, array $doc): array {
+function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, array $doc, int $fillerId = 0): array {
     $tpl = fsd_template_get($db, $templateId);
     if (!$tpl) return ['ok'=>false, 'msg'=>'找不到此樣板'];
     if ((int)$tpl['published_version'] < 1) return ['ok'=>false, 'msg'=>'此樣板尚未發布，請聯絡管理員'];
@@ -875,12 +965,16 @@ function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $u
     if (fsd_case_doc_empty($doc)) return ['ok'=>false, 'msg'=>'請上傳要簽核的文件'];
     $isPdf = (($doc['type'] ?? 'image') === 'pdf');
     $bizDate = $bizDate ?: date('Y-m-d');
+    // 填表人預設「未選定」（2026-08-19 使用者明確要求）：以前一律自動帶成建立者，管理員代建案件時
+    // 填表人圖章就會印成管理員。未選定時存 NULL，要送出前才強制補選（有填表人圖章欄位的案件）。
+    $filler = $fillerId > 0 ? fsd_filler_user($db, $fillerId) : null;
     $db->beginTransaction();
     try {
         $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,status,current_stage_seq)
                       VALUES (?,?,?,?,?,?,?,?,?,?,'draft',0)")
            ->execute([$templateId, (int)$tpl['published_version'], $isPdf ? 'pdf' : 'image',
-                      $isPdf ? $doc['file_name'] : null, $title ?: $tpl['name'], $uid, $uname, $uid, $uname, $bizDate]);
+                      $isPdf ? $doc['file_name'] : null, $title ?: $tpl['name'], $uid, $uname,
+                      $filler ? (int)$filler['id'] : null, $filler ? $filler['user_cname'] : null, $bizDate]);
         $caseId = (int)$db->lastInsertId();
         fsd_case_doc_pages_write($db, $caseId, $doc);
         $db->commit();
@@ -1239,6 +1333,10 @@ function fsd_case_submit(PDO $db, int $caseId, int $uid): array {
     $hasFile = false;
     foreach (fsd_case_pages_get($db, $caseId) as $p) if (fsd_case_page_file_name($case, $p)) { $hasFile = true; break; }
     if (!$hasFile && !$case['file_name']) return ['ok'=>false, 'msg'=>'請先上傳要簽核的文件'];
+    // 有框「填表人圖章」卻沒選填表人＝那個章不知道要蓋誰，一律擋下（2026-08-19 使用者要求；前端同步擋）
+    if (!(int)($case['filler_id'] ?? 0) && fsd_case_needs_filler($db, $case))
+        return ['ok'=>false, 'need_filler'=>true,
+                'msg'=>'這張案件有「填表人」的圖章欄位，請先指定填表人是誰再送出（那個章會蓋這個人）'];
     $db->prepare("UPDATE fsd_case SET status='in_progress',submitted_at=NOW(),updated_at=NOW() WHERE id=?")->execute([$caseId]);
     $case['status'] = 'in_progress';
     $schema = fsd_case_schema($db, $case);
