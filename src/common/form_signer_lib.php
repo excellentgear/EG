@@ -27,7 +27,7 @@ require_once __DIR__ . '/approval_lib.php';
 require_once __DIR__ . '/delegate_lib.php';
 require_once __DIR__ . '/org_role_lib.php';
 
-const FSD_SIGNER_MODES = ['user', 'dept_auto_manager', 'submitter_supervisor', 'top_approver', 'filler'];
+const FSD_SIGNER_MODES = ['user', 'dept_auto_manager', 'submitter_supervisor', 'filler_supervisor', 'top_approver', 'filler'];
 
 const FSD_FEATURES = [
     ['code' => 'fsd_view',          'group' => 'view', 'label' => '檢閱案件列表（沒勾也看得到自己建立的案件）'],
@@ -152,7 +152,13 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
             $m = eg_org_dept_manager($db, $deptId);
             return $m ? ['id'=>(int)$m['id'], 'user_cname'=>$m['user_cname']] : null;
         case 'submitter_supervisor':
-            $supId = eg_resolve_supervisor($db, $applicantUid);
+        case 'filler_supervisor':
+            // submitter_supervisor＝送出案件的人(申請人)的上一階主管；
+            // filler_supervisor＝**填表人**的上一階主管（管理員代建案件時，該找的是表單真正歸屬者的主管，
+            // 不是按下建立鈕的管理員的主管）。沒選填表人時解析不到人，送出前會被擋（fsd_case_needs_filler）。
+            $baseUid = ($mode === 'filler_supervisor') ? $fillerUid : $applicantUid;
+            if (!$baseUid) return null;
+            $supId = eg_resolve_supervisor($db, $baseUid);
             if (!$supId) return null;
             $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
             $st->execute([$supId]);
@@ -550,7 +556,7 @@ function fsd_case_responses(PDO $db, int $caseId): array {
 function fsd_case_progress_chips(PDO $db, array $case, array $schema, array $responses): array {
     $bySlot = [];
     foreach ($responses as $r) $bySlot[$r['slot_key']] = $r;
-    $modeLabel = ['user'=>'固定人員', 'dept_auto_manager'=>'部門主管', 'submitter_supervisor'=>'上一階主管', 'top_approver'=>'最高決策者', 'filler'=>'填表人'];
+    $modeLabel = ['user'=>'固定人員', 'dept_auto_manager'=>'部門主管', 'submitter_supervisor'=>'上一階主管', 'filler_supervisor'=>'填表人上一階主管', 'top_approver'=>'最高決策者', 'filler'=>'填表人'];
     $stages = $schema['stages'] ?? [];
     usort($stages, function($a, $b) { return ($a['seq'] ?? 0) <=> ($b['seq'] ?? 0); });
     $curStageSeq = (int)($case['current_stage_seq'] ?? 0);
@@ -807,7 +813,8 @@ function fsd_filler_user(PDO $db, int $uid): ?array {
     return $r ? ['id'=>(int)$r['id'], 'user_cname'=>(string)$r['user_cname']] : null;
 }
 
-/** 這張案件的樣板裡，哪些槽位的簽核來源是「填表人」。回傳 slot_key => true。 */
+/** 這張案件的樣板裡，哪些槽位的簽核來源是「填表人」（本人）。回傳 slot_key => true。
+ *  不含「填表人上一階主管」——那個蓋的是主管的章，換填表人時不該把主管的章換掉。 */
 function fsd_case_filler_slots(PDO $db, array $case): array {
     $out = [];
     $schema = fsd_case_schema($db, $case);
@@ -817,6 +824,15 @@ function fsd_case_filler_slots(PDO $db, array $case): array {
     return $out;
 }
 
+/** 樣板裡有沒有用到「填表人上一階主管」——這種槽位沒有填表人就解析不到人（整關會被當成無人可簽略過）。 */
+function fsd_case_uses_filler_supervisor(PDO $db, array $case): bool {
+    $schema = fsd_case_schema($db, $case);
+    foreach ($schema['stages'] ?? [] as $stage)
+        foreach ($stage['signers'] ?? [] as $sg)
+            if (($sg['mode'] ?? '') === 'filler_supervisor') return true;
+    return false;
+}
+
 /**
  * 這張案件「非選填表人不可」嗎？＝案件上框了至少一個**填表人的圖章框**。
  * 2026-08-19 使用者拍板只擋這種：章會把人名印在文件上，選錯/沒選就是簽章不實；
@@ -824,6 +840,9 @@ function fsd_case_filler_slots(PDO $db, array $case): array {
  */
 function fsd_case_needs_filler(PDO $db, array $case): bool {
     if (fsd_is_backfill($case)) return false;
+    // 用到「填表人上一階主管」時一定要有填表人：那不是章好不好看的問題，是根本解析不到簽核人，
+    // 整關會被當成無人可簽直接略過（2026-08-19 新增這個來源時一併補上）
+    if (fsd_case_uses_filler_supervisor($db, $case)) return true;
     $slots = fsd_case_filler_slots($db, $case);
     if (!$slots) return false;
     foreach (fsd_case_field_list($db, (int)$case['id']) as $f)
@@ -957,7 +976,7 @@ function fsd_case_doc_empty(array $doc): bool {
 }
 
 /** 建立案件(草稿)。$doc 見 fsd_case_doc_pages_write() 說明。 */
-function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, array $doc, int $fillerId = 0): array {
+function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, array $doc, int $fillerId = 0, int $linkAsDocId = 0): array {
     $tpl = fsd_template_get($db, $templateId);
     if (!$tpl) return ['ok'=>false, 'msg'=>'找不到此樣板'];
     if ((int)$tpl['published_version'] < 1) return ['ok'=>false, 'msg'=>'此樣板尚未發布，請聯絡管理員'];
@@ -970,11 +989,16 @@ function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $u
     $filler = $fillerId > 0 ? fsd_filler_user($db, $fillerId) : null;
     $db->beginTransaction();
     try {
-        $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,status,current_stage_seq)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,'draft',0)")
+        // 樣板沒開放連結 AS 文件就一律不存（避免前端亂送；開關是管理員在樣板設定的）
+        $linkId = fsd_template_allows_as_link($tpl) && $linkAsDocId > 0 ? $linkAsDocId : null;
+        // 有連結 AS 文件時，案件名稱自動變成「AS編號 原本填的名稱」（使用者要求）：
+        // 列表一眼看得出這件對應哪份 AS 文件，AS 文件管理那邊要導入時也好認。
+        $title = fsd_case_title_with_asdoc($db, $linkId, $title ?: $tpl['name']);
+        $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,link_as_doc_id,status,current_stage_seq)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,'draft',0)")
            ->execute([$templateId, (int)$tpl['published_version'], $isPdf ? 'pdf' : 'image',
-                      $isPdf ? $doc['file_name'] : null, $title ?: $tpl['name'], $uid, $uname,
-                      $filler ? (int)$filler['id'] : null, $filler ? $filler['user_cname'] : null, $bizDate]);
+                      $isPdf ? $doc['file_name'] : null, $title, $uid, $uname,
+                      $filler ? (int)$filler['id'] : null, $filler ? $filler['user_cname'] : null, $bizDate, $linkId]);
         $caseId = (int)$db->lastInsertId();
         fsd_case_doc_pages_write($db, $caseId, $doc);
         $db->commit();
@@ -1035,6 +1059,78 @@ function fsd_case_has_export(array $case): bool {
  */
 function fsd_case_export_allowed(array $case): bool {
     return ($case['status'] ?? '') === 'approved';
+}
+
+/* -------- 案件連結 AS 文件編號（讓 AS 文件管理可以直接導入這份簽核完成的檔案，同一份文件不用上傳兩次） --------
+   注意：這裡的 link_as_doc_id 跟「列印右下角要印哪個 AS 編號」完全是兩回事——
+   列印用的綁定在樣板上（fsd_asdoc_module / eg_asdoc_get），補案件則是 fsd_case.as_doc_id。
+   link_as_doc_id 純粹是「這份簽核完成的文件，就是那份 AS 文件的內容」這個對應關係。 */
+
+/** 這個樣板有沒有開放「建立案件時可連結 AS 文件編號」。 */
+function fsd_template_allows_as_link(?array $tpl): bool {
+    return !empty($tpl['allow_case_as_link']);
+}
+
+/**
+ * 案件名稱＝「AS編號 原本填的名稱」（有連結 AS 文件時）。沒連結就原樣回傳。
+ * 已經以該編號開頭的不重複加（回改連結或補跑時不會變成「編號 編號 名稱」）。
+ */
+function fsd_case_title_with_asdoc(PDO $db, ?int $asDocId, string $title): string {
+    $title = trim($title);
+    if (!$asDocId) return $title;
+    try {
+        $st = $db->prepare("SELECT doc_no FROM as_document WHERE id=? AND is_deleted=0");
+        $st->execute([$asDocId]);
+        $no = trim((string)$st->fetchColumn());
+    } catch (Throwable $e) { $no = ''; }
+    if ($no === '') return $title;
+    if ($title !== '' && mb_strpos($title, $no) === 0) return $title;   // 已經有編號前綴就不重複加
+    return trim($no . ' ' . $title);
+}
+
+/**
+ * 給 AS 文件管理用：某個 AS 文件編號底下，有哪些「已完成且已產生 PDF」的表單簽核案件可以導入。
+ * 只列 approved＋有 export_pdf_name 的案件——沒簽完或還沒產生 PDF 的沒有檔案可導。
+ */
+function fsd_asdoc_importable_cases(PDO $db, int $asDocId): array {
+    if ($asDocId <= 0) return [];
+    $st = $db->prepare("SELECT c.id, c.title, c.business_date, c.applicant_name, c.filler_name,
+                               c.export_pdf_name, c.export_pdf_at,
+                               COALESCE(t.name, '（補案件）') AS template_name
+                        FROM fsd_case c
+                        LEFT JOIN fsd_template t ON t.id = c.template_id
+                        WHERE c.link_as_doc_id = ? AND c.status = 'approved'
+                          AND c.export_pdf_name IS NOT NULL AND c.export_pdf_name <> ''
+                        ORDER BY c.business_date DESC, c.id DESC");
+    $st->execute([$asDocId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * 這個案件的檔案有沒有被 AS 文件管理採用（採用了就不准刪案件，要先去 AS 文件管理刪掉那個版本）。
+ * 回傳被採用的版本清單（含文件編號/名稱/版次），空陣列＝沒被採用。
+ */
+function fsd_case_asdoc_usage(PDO $db, int $caseId): array {
+    try {
+        $st = $db->prepare("SELECT v.id AS version_id, v.version, d.doc_no, d.doc_name
+                            FROM as_document_version v
+                            JOIN as_document d ON d.id = v.doc_id
+                            WHERE v.src_fsd_case_id = ?
+                            ORDER BY d.doc_no, v.id");
+        $st->execute([$caseId]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        // 欄位還沒建（migrate 未跑）時不要讓刪除整個炸掉，當作沒有採用
+        return [];
+    }
+}
+
+/** 刪除守門共用訊息：被 AS 文件採用時要講清楚去哪裡處理，不能只說「不可刪除」。 */
+function fsd_case_delete_block_msg(array $usage): string {
+    $list = [];
+    foreach ($usage as $u) $list[] = $u['doc_no'] . ' ' . $u['doc_name'] . '（' . $u['version'] . ' 版）';
+    return '已經有 AS 文件套用此案件的文件：' . implode('、', $list)
+         . '。請先至「AS 文件管理」刪除此版本，才可刪除本案件。';
 }
 
 function fsd_case_pages_get(PDO $db, int $caseId): array {
@@ -1351,6 +1447,8 @@ function fsd_case_delete_draft(PDO $db, int $caseId, int $uid, bool $isAdminOrCa
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
     if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'此案件已送出，請改用刪除功能（依權限走硬刪/軟刪流程）'];
     if ((int)$case['applicant_id'] !== $uid && !$isAdminOrCanAdmin) return ['ok'=>false, 'msg'=>'只有申請人本人或管理員可以刪除'];
+    $usage = fsd_case_asdoc_usage($db, $caseId);
+    if ($usage) return ['ok'=>false, 'msg'=>fsd_case_delete_block_msg($usage), 'asdoc_usage'=>$usage];
     $db->prepare("DELETE FROM fsd_case_field WHERE case_id=?")->execute([$caseId]);
     $db->prepare("DELETE FROM fsd_case_page WHERE case_id=?")->execute([$caseId]);
     $db->prepare("DELETE FROM fsd_case WHERE id=?")->execute([$caseId]);
@@ -1361,6 +1459,9 @@ function fsd_case_delete_draft(PDO $db, int $caseId, int $uid, bool $isAdminOrCa
 function fsd_case_delete_hard(PDO $db, int $caseId): array {
     $case = fsd_case_get($db, $caseId);
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    // 被 AS 文件採用的案件連超級管理員也不能直接刪：AS 那邊的版本會變成指向不存在的來源
+    $usage = fsd_case_asdoc_usage($db, $caseId);
+    if ($usage) return ['ok'=>false, 'msg'=>fsd_case_delete_block_msg($usage), 'asdoc_usage'=>$usage];
     $db->prepare("DELETE FROM fsd_case_response WHERE case_id=?")->execute([$caseId]);
     $db->prepare("DELETE FROM approval_record WHERE module='form_signer' AND entity_id=?")->execute([$caseId]);
     $evIds = $db->prepare("SELECT id FROM live_event WHERE ref_type LIKE 'FSD_%' AND ref_id=?");
@@ -1383,6 +1484,8 @@ function fsd_case_delete_soft(PDO $db, int $caseId, int $byUid, string $byName):
     $case = fsd_case_get($db, $caseId);
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
     if ($case['status'] === 'void') return ['ok'=>false, 'msg'=>'此案件已是刪除狀態'];
+    $usage = fsd_case_asdoc_usage($db, $caseId);
+    if ($usage) return ['ok'=>false, 'msg'=>fsd_case_delete_block_msg($usage), 'asdoc_usage'=>$usage];
     $db->prepare("INSERT INTO fsd_case_delete_log (case_id,prior_status,deleted_by,deleted_by_name) VALUES (?,?,?,?)")
        ->execute([$caseId, $case['status'], $byUid, $byName]);
     $db->prepare("UPDATE fsd_case SET status='void',updated_at=NOW() WHERE id=?")->execute([$caseId]);

@@ -122,6 +122,9 @@ $perms = fsd_perms($db, $fsdUser);
                 <b id="dsgTplName" style="margin-left:6px;"></b>
                 <button onclick="openAsDocPicker()">綁定AS文件</button>
                 <span id="dsgAsDoc" style="color:#5b3a1e;font-size:12px;"></span>
+                <label style="margin:0 0 0 10px;font-size:12px;color:#5b3a1e;white-space:nowrap;"
+                       title="打勾後，用這個樣板建立案件時可以挑一個 AS 文件編號。之後在「AS 文件管理」上傳同一個編號的版本附件時，就能直接選「由表單簽核案件導入」拿這份已簽核完成的 PDF，同一份文件不用上傳兩次。此設定與上方「列印用的 AS 編號綁定」無關。">
+                    <input type="checkbox" id="dsgAllowAsLink" onchange="saveAllowAsLink(this.checked)"> 建立案件時可連結 AS 文件編號</label>
                 <span style="margin-left:10px;font-size:12px;color:#5b3a1e;">圖章模板</span>
                 <select id="dsgStampTpl" style="height:28px;font-size:12px;" onchange="submitStampTpl()"><option value="0">（未綁定，比照全站91px預設）</option></select>
                 <button class="btn-warm" style="margin-left:auto;" onclick="addStage()"><i class="fa fa-plus"></i> 新增階段</button>
@@ -397,6 +400,7 @@ function openDesigner(id){
         $('#listPanel').hide(); $('#designerPanel').show();
         $('#dsgTplName').text(CUR_TPL.name + '（'+(CUR_TPL.file_type==='pdf'?'PDF':'圖片')+'，共'+CUR_TPL.page_count+'頁）');
         $('#dsgAsDoc').text(CUR_TPL.as_doc ? ('已綁定：'+CUR_TPL.as_doc.doc_no+' '+CUR_TPL.as_doc.doc_name) : '未綁定AS文件');
+        $('#dsgAllowAsLink').prop('checked', !!Number(CUR_TPL.allow_case_as_link));
         loadStampTplOptions();
         renderStages();
         if (!CUR_TPL.pages || !CUR_TPL.pages.length) {
@@ -410,6 +414,13 @@ $('#btnBackList').on('click', function(){
     $('#designerPanel').hide(); $('#listPanel').show();
     CANVASES = {}; loadTemplates();
 });
+/** 樣板開關：建立案件時可不可以挑一個 AS 文件編號（供 AS 文件管理導入同一份檔案；與列印綁定無關）。 */
+function saveAllowAsLink(on){
+    $.post(API, {action:'template_set_as_link', csrf:META.csrf, id:CUR_TPL.id, allow:on?1:0}, function(r){
+        if (!r.ok){ alert(r.error||'設定失敗'); $('#dsgAllowAsLink').prop('checked', !on); return; }
+        CUR_TPL.allow_case_as_link = on ? 1 : 0;
+    }, 'json');
+}
 function openAsDocPicker(){
     $.getJSON(API, {action:'asdoc_list'}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
@@ -443,13 +454,22 @@ function submitStampTpl(){
 }
 
 /* -------- 階段/槽位設定 -------- */
-var SIGNER_MODE_LABEL = {user:'固定人員', dept_auto_manager:'部門自動主管', submitter_supervisor:'送出者上一階主管', top_approver:'全站最高決策者', filler:'填表人'};
+var SIGNER_MODE_LABEL = {user:'固定人員', dept_auto_manager:'部門自動主管', submitter_supervisor:'送出者上一階主管',
+                        filler_supervisor:'填表人上一階主管', top_approver:'全站最高決策者', filler:'填表人'};
 function addStage(){ STAGES.push({stage_type:'advisory', name:'第'+(STAGES.length+1)+'關', auto_sign:0, signers:[]}); renderStages(); }
 function delStage(i){ if (!confirm('確定刪除此階段？')) return; STAGES.splice(i,1); renderStages(); }
 function stageEdit(i,k,v){ STAGES[i][k]=v; }
 function addSigner(si){ STAGES[si].signers = STAGES[si].signers||[]; STAGES[si].signers.push({mode:'top_approver', user_id:null, dept_id:null, label:''}); renderStages(); }
 function delSigner(si,gi){ STAGES[si].signers.splice(gi,1); renderStages(); }
-function signerEdit(si,gi,k,v){ STAGES[si].signers[gi][k]=v; }
+/** 改槽位設定。改的是「簽核人來源」時要立刻重畫——「指定對象」那一格的內容是依來源決定的
+ *  （固定人員→選人員、部門自動主管→選部門、其餘→自動解析無需指定），只改資料不重畫的話畫面
+ *  會停在舊的一格，要存檔重新載入才看得到（2026-08-19 使用者回報）。
+ *  換來源時一併清掉舊的指定對象，避免把「選固定人員時挑的那個人」留著存進部門自動主管的設定裡。 */
+function signerEdit(si,gi,k,v){
+    var sg = STAGES[si].signers[gi];
+    sg[k] = v;
+    if (k === 'mode'){ sg.user_id = null; sg.dept_id = null; renderStages(); }
+}
 function renderStages(){
     var deptOpts = '<option value="">（不指定＝以填表人所屬部門自動判斷）</option>' + (META.departments||[]).map(function(d){ return '<option value="'+d.id+'">'+esc(d.name)+'</option>'; }).join('');
     var userOpts = '<option value="">選人員…</option>' + (META.people||[]).map(function(p){ return '<option value="'+p.id+'">'+esc(p.display)+'</option>'; }).join('');
@@ -467,7 +487,7 @@ function renderStages(){
             h += '<tr><td><select onchange="signerEdit('+si+','+gi+',\'mode\',this.value)">';
             Object.keys(SIGNER_MODE_LABEL).forEach(function(m){ h += '<option value="'+m+'"'+(sg.mode===m?' selected':'')+'>'+SIGNER_MODE_LABEL[m]+'</option>'; });
             h += '</select></td><td>';
-            if (sg.mode === 'user') h += '<select onchange="signerEdit('+si+','+gi+',\'user_id\',this.value)">'+userOpts.replace('value="'+sg.user_id+'"','value="'+sg.user_id+'" selected')+'</select>';
+            if (sg.mode === 'user') h += '<select data-eg-filter="輸入人員姓名篩選…" onchange="signerEdit('+si+','+gi+',\'user_id\',this.value)">'+userOpts.replace('value="'+sg.user_id+'"','value="'+sg.user_id+'" selected')+'</select>';
             else if (sg.mode === 'dept_auto_manager') h += '<select onchange="signerEdit('+si+','+gi+',\'dept_id\',this.value)">'+deptOpts.replace('value="'+sg.dept_id+'"','value="'+sg.dept_id+'" selected')+'</select>';
             else h += '<span style="color:#8a6d45;">（自動解析,無需指定）</span>';
             h += '</td><td><input type="text" value="'+esc(sg.label||'')+'" placeholder="如:品管部主管" onchange="signerEdit('+si+','+gi+',\'label\',this.value)"></td>'

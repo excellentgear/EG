@@ -14,6 +14,7 @@ include_once $document_root . '/EGsystem/src/common/attach_lib.php';
 include_once $document_root . '/EGsystem/src/common/people_lib.php';
 include_once $document_root . '/EGsystem/src/common/org_role_lib.php';
 include_once $document_root . '/EGsystem/src/common/confirm_password_lib.php';
+include_once $document_root . '/EGsystem/src/common/date_fmt_lib.php';   // eg_fmt_date()：日期顯示格式全站唯一實作(ai-rules/20)
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
@@ -183,6 +184,20 @@ case 'template_rename': {
     $name = trim((string)($_POST['name'] ?? ''));
     if ($name === '') jerr('請輸入樣板名稱');
     fsd_template_rename($db, $id, $name, $uname);
+    jout(['template'=>fsd_template_get($db, $id)]);
+}
+
+/**
+ * 樣板開關：用這個樣板建立案件時，要不要讓人選「連結 AS 文件編號」。
+ * 注意這跟 asdoc_save（列印右下角要印哪個 AS 編號）是兩回事，只是「同一份文件不用上傳兩次」的對應關係。
+ */
+case 'template_set_as_link': {
+    fsd_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可修改樣板', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!fsd_template_get($db, $id)) jerr('找不到此樣板', 404);
+    $db->prepare("UPDATE fsd_template SET allow_case_as_link=?, updated_by=?, updated_at=NOW() WHERE id=?")
+       ->execute([!empty($_POST['allow']) ? 1 : 0, $uname, $id]);
     jout(['template'=>fsd_template_get($db, $id)]);
 }
 
@@ -379,7 +394,8 @@ case 'case_create_draft': {
     $bizDate = trim((string)($_POST['business_date'] ?? '')) ?: date('Y-m-d');
     $doc = fsd_case_upload_doc($db, 'files');
     // 填表人可留空（預設未選定）；有填表人圖章欄位的案件會在送出時強制補選
-    $r = fsd_case_create_draft_doc($db, $tid, $uid, $uname, $title, $bizDate, $doc, (int)($_POST['filler_id'] ?? 0));
+    $r = fsd_case_create_draft_doc($db, $tid, $uid, $uname, $title, $bizDate, $doc,
+                                   (int)($_POST['filler_id'] ?? 0), (int)($_POST['link_as_doc_id'] ?? 0));
     if (!$r['ok']) jerr($r['msg']);
     jout(['id'=>$r['id']]);
 }
@@ -689,9 +705,10 @@ case 'case_export_file': {
     if (!fsd_case_has_export($case)) jerr('此案件尚未產生 PDF', 404);
     $fp = fsd_case_attach_dir_safe($db) . $case['export_pdf_name'];
     if (!is_file($fp)) jerr('PDF 檔不存在或已被搬移，請重新產生', 404);
-    // 下載檔名用「案件標題-日期」，不用內部亂數檔名，使用者存到自己電腦才認得出是哪一份
+    // 下載檔名＝「案件名稱 業務日期」（使用者指定）。日期用全站顯示格式 YYYY.MM.DD（ai-rules/20）；
+    // 檔名不能出現 \ / : * ? " < > | 這些字元，一律換成底線。
     $safe = preg_replace('/[\\\/:*?"<>|]+/u', '_', trim((string)$case['title']) ?: ('案件' . $id));
-    $show = $safe . '_' . (string)$case['business_date'] . '.pdf';
+    $show = trim($safe . ' ' . eg_fmt_date($case['business_date'])) . '.pdf';
     header('Content-Type: application/pdf');
     header('Content-Length: ' . filesize($fp));
     header('Content-Disposition: ' . (!empty($_GET['dl']) ? 'attachment' : 'inline')

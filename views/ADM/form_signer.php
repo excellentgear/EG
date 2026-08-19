@@ -299,6 +299,15 @@ $perms = fsd_perms($db, $fsdUser);
         <input type="file" id="crFile" accept="image/png,image/jpeg,application/pdf" multiple onchange="crFilesChanged(this.files)">
         <p style="font-size:11.5px;color:#8a6d45;margin:2px 0 0;">上傳 PDF 時最終產出的 PDF 會直接沿用原檔內容（不重新轉圖，畫質完全不損）；PDF 與圖片不可混著傳，一次也只能傳一份 PDF。加密保護的 PDF 無法處理，會在上傳時擋下。</p>
         <div id="crThumbs" class="fsd-thumb-grid"></div>
+        <div id="crAsLinkWrap" style="display:none;">
+            <label>連結 AS 文件編號（可留空）</label>
+            <div style="display:flex;gap:6px;align-items:center;">
+                <input type="text" id="crAsLinkLabel" readonly style="flex:1;background:#F5EFE4;color:#5b3a1e;" value="尚未連結">
+                <button type="button" onclick="crPickAsDoc()">挑選…</button>
+                <button type="button" onclick="crClearAsDoc()">清除</button>
+            </div>
+            <p style="font-size:11.5px;color:#8a6d45;margin:2px 0 0;">連結後，在「AS 文件管理」上傳<b>同一個編號</b>的版本附件時，可以直接選「由表單簽核案件導入」拿這份簽核完成的 PDF，同一份文件不用上傳兩次。<b>這不是列印右下角要印的 AS 編號</b>（那個由樣板綁定）。已被 AS 文件採用的案件不能刪除。</p>
+        </div>
         <label>填表人（可留空，之後再指定；<b>樣板有「填表人」圖章欄位時，未指定就不能送出</b>——那個章會蓋這個人）</label>
         <select id="crFiller" data-eg-filter="輸入姓名篩選…"></select>
         <label>案件標題（可留空，預設用樣板名稱）</label><input type="text" id="crTitle" maxlength="200">
@@ -404,14 +413,14 @@ $perms = fsd_perms($db, $fsdUser);
         <h4>功能說明</h4>
         依管理員設計好的樣板建立案件並上傳「實際要簽核的文件」；樣板本身的框選結果只作為欄位提示（白名單）與參考位置，不是實際背景文件。系統依序通知各關卡簽核人，簽核人以圖章模板蓋章回應，回覆內容顯示在您自己框選好的對應位置，最終呈現一份已簽核完成的合成文件（線上檢視＋瀏覽器列印），並在案件完成時自動產生一份合成 PDF 存檔，之後可隨時重複開啟列印或下載。
         <h4>操作步驟</h4>
-        <b>①建立案件</b>：選擇樣板、上傳要簽核的文件、填標題與業務日期。文件可以是<b>多張圖片</b>（png/jpg，每張各成一頁、可拖曳調整頁序），也可以是<b>一份多頁 PDF</b>；兩者不可混傳，一次也只能傳一份 PDF。<b>填表人預設「未選定」</b>，可以在這裡先選，也可以之後在框選畫面再選。<br>
+        <b>①建立案件</b>：選擇樣板、上傳要簽核的文件、填標題與業務日期。文件可以是<b>多張圖片</b>（png/jpg，每張各成一頁、可拖曳調整頁序），也可以是<b>一份多頁 PDF</b>；兩者不可混傳，一次也只能傳一份 PDF。<b>填表人預設「未選定」</b>，可以在這裡先選，也可以之後在框選畫面再選。若這個樣板有開放，還會出現「連結 AS 文件編號」，選了之後<b>案件名稱會自動加上該 AS 編號當開頭</b>。<br>
         <b>②框選</b>：進入框選畫面，左側「待框選標籤」只會列出樣板本身已框選過的欄位（樣板沒有的欄位這裡也不會出現），拖到您上傳的文件對應位置；右上角可參考樣板原本的框選位置提示。完成後選「存草稿」（暫存，之後可回來繼續）或「儲存並送出」（開始跑第一關）。工具列上會顯示目前的<b>填表人</b>，可在這裡設定；若這張案件框了「填表人」的圖章欄位卻還沒指定填表人，送出時會被擋下並自動打開設定視窗。<br>
         <b>③意見階段</b>：該階段的每位槽位成員各自表示同意/不同意並可留言，沒有駁回動作、不會互相卡關，全部人（扣除自動迴避的）都回應後自動進入下一關。<br>
         <b>④決策階段</b>：1~2位決策者其中一人核准或駁回即決定流程走向；核准才會繼續跑下一關（或結案），駁回則案件立即終止。<br>
         <b>⑤催辦</b>：案件申請人或管理員可對目前階段尚未回應的人重新發送一次通知（不會強制略過或自動代為回應）。<br>
         <b>⑥列印</b>：進入案件詳情後按「列印」，瀏覽器會印出目前已疊上所有圖章/回覆內容的合成文件（自動依文件是直式或橫式調整版面，每頁各自分頁列印）。<br>
-        <b>⑦PDF</b>：案件<b>完成的當下會自動產生一份合成 PDF 存檔</b>，詳情頁的「PDF」可直接開起來列印、「下載PDF」可存到自己電腦；列表上已產生 PDF 的案件也有一顆 PDF 鈕可直接開啟。同一份案件重複開啟拿到的都是同一個檔案。<b>只有已完成的案件才能匯出</b>（避免半成品被當成正式文件流出去）。<br>
-        <b>⑧刪除</b>：草稿可直接刪除；已送出的案件，超級管理員可永久刪除（不留紀錄），一般管理員需輸入操作確認密碼刪除（會留刪除紀錄，可在「已刪除案件」復原）。
+        <b>⑦PDF</b>：案件<b>完成的當下會自動產生一份合成 PDF 存檔</b>，詳情頁的「PDF」可直接開起來列印、「下載PDF」可存到自己電腦（檔名＝<b>案件名稱 業務日期</b>）；列表上已產生 PDF 的案件也有一顆 PDF 鈕可直接開啟。同一份案件重複開啟拿到的都是同一個檔案。<b>只有已完成的案件才能匯出</b>（避免半成品被當成正式文件流出去）。<br>
+        <b>⑧刪除</b>：草稿可直接刪除；已送出的案件，超級管理員可永久刪除（不留紀錄），一般管理員需輸入操作確認密碼刪除（會留刪除紀錄，可在「已刪除案件」復原）。<b>已經被 AS 文件管理採用（導入過檔案）的案件一律不可刪除</b>，畫面會告訴您是哪一份 AS 文件的哪一版，要先到「AS 文件管理」刪掉那個版本才能刪本案件。
         <h4>補案件（管理員專屬）</h4>
         用途：把「紙本上已經簽好章」的歷史文件掃描檔補進系統。<b>不需要樣板</b>、<b>固定自動審核</b>（送出＝直接完成，不會通知任何人去簽）。<br>
         <b>①</b>列表右上角按「補案件」，填標題、業務日期（＝所有圖章要印的簽章日期）、可選一份 AS 文件（列印右下角編號，版次依業務日期回推當時生效版），上傳文件掃描檔（多張圖片可拖曳縮圖排頁序，或一份多頁 PDF）。<br>
@@ -426,7 +435,7 @@ $perms = fsd_perms($db, $fsdUser);
         ・<b>上傳 PDF 不會被轉成圖片</b>：匯出的 PDF 直接沿用原始 PDF 的頁面內容，畫質與原檔完全相同（掃描影像是原封不動搬過去的）；畫面上看到的預覽底圖才是轉圖產生的，只用來給您拖曳定位，不影響最終檔案。<br>
         ・<b>加密保護的 PDF 無法處理</b>，會在上傳當下就擋下並說明原因，請改上傳未加密的 PDF 或圖片檔——系統不會自動改用畫質較差的方式硬做。<br>
         ・PDF 裡的圖章大小與位置跟列印版一致（未綁定圖章模板＝固定 91px，有綁定＝該模板設定的實際尺寸，皆置中於框內）。<br>
-        ・<b>填表人＝這張表單實際上是誰填的</b>，也是簽核來源選「填表人」時圖章要蓋的人；簽核來源選「部門自動主管」但沒指定部門時，也是用填表人的部門去找主管（沒選填表人才退回用申請人的部門）。<br>・<b>填表人預設未選定</b>（以前會自動帶成建立案件的人，管理員代別人建案件時圖章就會蓋到管理員，所以改掉）。<b>只有框了「填表人」圖章欄位的案件，未指定填表人就不能送出</b>；沒用到填表人圖章的案件不強迫選，但仍可自願填。<br>・設定填表人的權限：<b>草稿階段</b>由申請人本人或管理員設定；<b>送出後</b>只有超級管理員可以回改。<br>・<b>回改填表人會連已經蓋好的填表人圖章一起換成新的人</b>，儲存前會跳出確認告訴您會動到幾個章；同時已產生的合成 PDF 會作廢，下次開啟案件時自動用新的章重新產生。<br>・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
+        ・<b>列表的「申請人」欄顯示的是填表人</b>（建立時選定或事後修改的那一位），不是技術上按下建立鈕的人；還沒選填表人的案件才會顯示建立者並標註。<br>・<b>連結 AS 文件編號</b>（樣板有開放才會出現）：純粹是「這份簽核完成的文件＝那份 AS 文件的內容」的對應關係，讓「AS 文件管理」上傳同一編號的版本附件時可以直接<b>由表單簽核案件導入</b>，同一份文件不用上傳兩次。<b>這不是列印右下角要印的 AS 編號</b>（那個由樣板綁定，兩者互不影響）。連結後案件名稱會自動加上 AS 編號當開頭，列表一眼看得出對應哪份文件。<br>・簽核人來源有「<b>送出者上一階主管</b>」與「<b>填表人上一階主管</b>」兩種，差別在於從誰往上找：前者是按下建立/送出的人，後者是表單真正歸屬的填表人。管理員代別人建案件時通常要用後者。<b>樣板只要用到「填表人上一階主管」，該案件就一定要指定填表人才能送出</b>（否則那一關找不到人會被整關略過）。<br>・<b>填表人＝這張表單實際上是誰填的</b>，也是簽核來源選「填表人」時圖章要蓋的人；簽核來源選「部門自動主管」但沒指定部門時，也是用填表人的部門去找主管（沒選填表人才退回用申請人的部門）。<br>・<b>填表人預設未選定</b>（以前會自動帶成建立案件的人，管理員代別人建案件時圖章就會蓋到管理員，所以改掉）。<b>只有框了「填表人」圖章欄位的案件，未指定填表人就不能送出</b>；沒用到填表人圖章的案件不強迫選，但仍可自願填。<br>・設定填表人的權限：<b>草稿階段</b>由申請人本人或管理員設定；<b>送出後</b>只有超級管理員可以回改。<br>・<b>回改填表人會連已經蓋好的填表人圖章一起換成新的人</b>，儲存前會跳出確認告訴您會動到幾個章；同時已產生的合成 PDF 會作廢，下次開啟案件時自動用新的章重新產生。<br>・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
         <h4>設定入口</h4>
         樣板的階段/槽位/框選提示由管理員在「樣板管理」頁設定；操作確認密碼在「修改個人密碼」頁設定（需超級管理員先授權）。
         <h4>權限角色</h4>
@@ -494,6 +503,32 @@ function statusBadge(s){
     var m = map[s] || [s,'badge-progress'];
     return '<span class="badge-stage '+m[1]+'">'+m[0]+'</span>';
 }
+/* -------- 建立案件：連結 AS 文件編號（僅樣板有開放時才出現） --------
+   純粹是「這份簽核完成的文件＝那份 AS 文件的內容」的對應關係，讓 AS 文件管理可以直接導入，
+   不是列印右下角要印的 AS 編號（那個綁在樣板上）。挑選器一律走共用 eg_asdoc_picker（ai-rules/16
+   第一之三節：AS 文件已上百份，禁止純下拉、禁止各頁自刻）。 */
+var CR_AS_DOC_ID = 0, CR_AS_DOCS = null;
+function crRenderAsLink(){
+    var t = (TEMPLATES||[]).filter(function(x){ return String(x.id) === String($('#crTpl').val()); })[0];
+    var on = !!(t && Number(t.allow_case_as_link));
+    $('#crAsLinkWrap').toggle(on);
+    if (!on){ CR_AS_DOC_ID = 0; }
+    var doc = (CR_AS_DOCS||[]).filter(function(d){ return String(d.id) === String(CR_AS_DOC_ID); })[0];
+    $('#crAsLinkLabel').val(CR_AS_DOC_ID && doc ? (window.EGAsDoc ? EGAsDoc.label(doc) : doc.doc_no) : '尚未連結');
+}
+function crClearAsDoc(){ CR_AS_DOC_ID = 0; crRenderAsLink(); }
+function crPickAsDoc(){
+    if (!window.EGAsDoc){ alert('AS文件挑選器未載入'); return; }
+    var open = function(){
+        EGAsDoc.open({ docs:CR_AS_DOCS||[], current:CR_AS_DOC_ID, title:'案件連結的 AS 文件編號（供 AS 文件管理導入用）',
+            onSave: function(id){ CR_AS_DOC_ID = id || 0; crRenderAsLink(); } });
+    };
+    if (CR_AS_DOCS) { open(); return; }
+    $.getJSON(API, {action:'asdoc_list'}, function(res){
+        if (!res.ok){ alert(res.error||'AS文件清單載入失敗'); return; }
+        CR_AS_DOCS = res.docs || []; open();
+    });
+}
 /** 建立案件視窗的填表人下拉：預設「（未選定）」（2026-08-19 使用者要求，不再自動帶成建立者）。 */
 function fillCreateFillerOptions(){
     $('#crFiller').html('<option value="">（未選定）</option>' + (META.people||[]).map(function(p){
@@ -544,16 +579,27 @@ function renderCaseRow(c){
             actions += ' <button onclick="window.open(API+\'?action=case_export_file&id='+c.id+'\',\'_blank\')" title="開啟合成PDF（可直接列印）"><i class="fa fa-file-pdf-o"></i></button>';
     }
     var tplCell = isBf ? '<span class="badge-stage badge-draft">補案件</span>' : esc(c.template_name);
-    return '<tr><td>'+esc(c.title||c.template_name)+'</td><td>'+tplCell+'</td><td>'+esc(c.applicant_name)+'</td>'
+    return '<tr><td>'+esc(c.title||c.template_name)+'</td><td>'+tplCell+'</td><td>'+caseOwnerCell(c)+'</td>'
         + '<td>'+dispDate(c.business_date)+'</td><td>'+stageTxt+'</td><td>'+statusBadge(c.status)+'</td>'
         + '<td>'+actions+'</td></tr>';
+}
+/* -------- 列表上的「申請人」＝這張表單實際歸屬的人 --------
+   顯示的是**填表人**（建立案件時選定、或事後修改過的那一位），不是技術上按下建立鈕的人
+   （2026-08-19 使用者要求）——管理員代別人建案件時，列表要看得出這張表是誰的。
+   填表人還沒選的案件退回顯示建立者並標註，才不會變成一片空白看不出是誰建的。 */
+function caseOwnerId(c){ return c.filler_id || c.applicant_id; }
+function caseOwnerName(c){ return c.filler_name || c.applicant_name || ''; }
+function caseOwnerCell(c){
+    if (c.filler_id) return esc(c.filler_name || '');
+    return esc(c.applicant_name || '') + '<span style="color:#8a6d45;font-size:11px;">（建立者・未選填表人）</span>';
 }
 /** 篩選：申請人為下拉(僅列出實際有案件的人)；案件/樣板/業務日期共用同一個模糊搜尋框；狀態為單選按鈕列(2026-08-14使用者明確要求)。 */
 var FLT_STATUS = '';
 function buildApplicantFilterOptions(){
     var seen = {}, opts = [];
     CASES.forEach(function(c){
-        if (!seen[c.applicant_id]) { seen[c.applicant_id] = true; opts.push({id:c.applicant_id, name:c.applicant_name}); }
+        var id = caseOwnerId(c);
+        if (id && !seen[id]) { seen[id] = true; opts.push({id:id, name:caseOwnerName(c)}); }
     });
     opts.sort(function(a,b){ return String(a.name).localeCompare(String(b.name), 'zh-Hant'); });
     $('#fltApplicant').html('<option value="">全部申請人</option>' + opts.map(function(o){ return '<option value="'+o.id+'">'+esc(o.name)+'</option>'; }).join(''));
@@ -569,9 +615,10 @@ function applyCaseFilter(){
     var applicant = $('#fltApplicant').val();
     var list = CASES.filter(function(c){
         if (FLT_STATUS && c.status !== FLT_STATUS) return false;
-        if (applicant && String(c.applicant_id) !== String(applicant)) return false;
+        if (applicant && String(caseOwnerId(c)) !== String(applicant)) return false;
         if (kw) {
-            var hay = [c.title, c.template_name, c.business_date].join(' ').toLowerCase();
+            // 全表搜尋要掃過畫面上看得到的欄位（含人名），不然搜尋結果跟眼睛看到的對不起來
+            var hay = [c.title, c.template_name, c.business_date, caseOwnerName(c)].join(' ').toLowerCase();
             if (hay.indexOf(kw) === -1) return false;
         }
         return true;
@@ -594,7 +641,8 @@ function deleteDraftFromList(id){
         loadCases();
     }, 'json');
 }
-$('#btnAddCase').on('click', function(){ loadTemplateOptionsForCreate(); fillCreateFillerOptions(); CR_FILES=[]; renderCrThumbs(); $('#crFile').val(''); openMask('createMask'); });
+$('#btnAddCase').on('click', function(){ loadTemplateOptionsForCreate(); fillCreateFillerOptions(); CR_AS_DOC_ID=0; CR_FILES=[]; renderCrThumbs(); $('#crFile').val(''); crRenderAsLink(); openMask('createMask'); });
+$('#crTpl').on('change', crRenderAsLink);   // 換樣板要重算「這個樣板有沒有開放連結 AS 文件」
 /** 建立案件的多圖選擇+拖曳排序(2026-08-14使用者明確要求：案件只能傳圖片,可一次多張,拖曳排序決定頁序)。 */
 var CR_FILES = [];
 /* -------- 上傳檔案共用處理（圖片多張 或 單一多頁PDF，2026-08-19 重新開放 PDF） --------
@@ -646,10 +694,12 @@ function submitCreate(){
     fd.append('action','case_create_draft'); fd.append('csrf', META.csrf); fd.append('template_id', tid);
     fd.append('title', $.trim($('#crTitle').val())); fd.append('business_date', $('#crDate').val());
     fd.append('filler_id', $('#crFiller').val() || 0);
+    fd.append('link_as_doc_id', CR_AS_DOC_ID || 0);
     CR_FILES.forEach(function(f){ fd.append('files[]', f); });
     fetch(API, {method:'POST', body:fd}).then(function(r){ return r.json(); }).then(function(res){
         if (!res.ok){ alert(res.error||'建立失敗'); return; }
-        closeMask('createMask'); $('#crTitle').val(''); $('#crFile').val(''); $('#crFiller').val(''); CR_FILES=[]; renderCrThumbs();
+        closeMask('createMask'); $('#crTitle').val(''); $('#crFile').val(''); $('#crFiller').val('');
+        CR_AS_DOC_ID = 0; CR_FILES=[]; renderCrThumbs();
         openFieldDesigner(res.id);
     }).catch(function(){ alert('建立失敗（連線錯誤）'); });
 }
@@ -1184,7 +1234,8 @@ function renderResponses(){
         h += '<div class="r-row"><b>第'+s.seq+'關｜'+esc(s.name)+'</b>（'+(s.stage_type==='advisory'?'意見階段':'決策階段')+'）</div>';
         (s.signers||[]).forEach(function(sg){
             var r = bySlot[sg.slot_key];
-            var who = sg.label || '（'+({user:'固定人員',dept_auto_manager:'部門自動主管',submitter_supervisor:'上一階主管',top_approver:'最高決策者'}[sg.mode]||sg.mode)+'）';
+            var who = sg.label || '（'+({user:'固定人員',dept_auto_manager:'部門自動主管',submitter_supervisor:'上一階主管',
+                filler_supervisor:'填表人上一階主管',top_approver:'最高決策者',filler:'填表人'}[sg.mode]||sg.mode)+'）';
             var txt;
             if (!r) txt = '<span style="color:#8a6d45;">尚未開始</span>';
             else if (r.decision === 'skipped_sod') txt = '<span class="sod-note">（本人迴避,自動略過）</span>';
