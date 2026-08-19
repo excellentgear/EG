@@ -159,6 +159,14 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
             $baseUid = ($mode === 'filler_supervisor') ? $fillerUid : $applicantUid;
             if (!$baseUid) return null;
             $supId = eg_resolve_supervisor($db, $baseUid);
+            // 填表人自己就是（部門一路往上都沒有更高階的）最高主管時，eg_resolve_supervisor() 會回 null——
+            // 那一關若就這樣解析不到人會被整關略過、章也不會出現。使用者要求此時改由**本人簽**，
+            // 並帶 self_top 旗標讓 SoD 不要把他自己迴避掉（fsd_resolve_signer_for_case）。
+            if (!$supId && $mode === 'filler_supervisor') $supId = fsd_upper_dept_manager($db, $baseUid);
+            if (!$supId && $mode === 'filler_supervisor') {
+                $self = fsd_filler_user($db, $baseUid);
+                return $self ? $self + ['self_top'=>true] : null;
+            }
             if (!$supId) return null;
             $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
             $st->execute([$supId]);
@@ -189,6 +197,9 @@ function fsd_resolve_signer_for_case(PDO $db, array $signer, array $case): array
     $u = fsd_resolve_signer($db, $signer, $case);
     $mode = $signer['mode'] ?? '';
     if (in_array($mode, ['user', 'filler'], true)) return ['user'=>$u, 'skipped_sod'=>false];
+    // 填表人本人就是最高主管時（上面已回退成本人），不迴避、由本人簽（使用者明確要求）——
+    // 迴避的用意是「別讓自己審自己」，但這裡本來就沒有更上級的人可以審，迴避只會變成沒人簽。
+    if (!empty($u['self_top'])) return ['user'=>$u, 'skipped_sod'=>false];
     $applicantUid = (int)($case['applicant_id'] ?? 0);
     $fillerUid = (int)($case['filler_id'] ?? 0) ?: $applicantUid; // SoD 比對用：沒選填表人時以申請人為準（原行為不變）
     if ($u && ((int)$u['id'] === $applicantUid || (int)$u['id'] === $fillerUid)) return ['user'=>null, 'skipped_sod'=>true];
@@ -802,6 +813,48 @@ function fsd_case_create_draft(PDO $db, int $templateId, int $uid, string $uname
                   VALUES (?,?,?,?,?,?,?,?,?,?,'draft',0)")
        ->execute([$templateId, (int)$tpl['published_version'], $fileType ?: null, $fileName ?: null, $title ?: $tpl['name'], $uid, $uname, $uid, $uname, $bizDate]);
     return ['ok'=>true, 'id'=>(int)$db->lastInsertId()];
+}
+
+/**
+ * 往「上層部門」找職級比自己高的主管（品管組 → 品管課 → …）。
+ *
+ * 為什麼不直接用 eg_resolve_supervisor()：它上溯父部門時**只認父部門的「指定負責人」**
+ * （department_position.primary_user_id）。父部門沒設指定負責人、但實際有職級更高的主管時，
+ * 它會回 null，於是「填表人上一階主管」就會被誤判成「已經是最高主管」而變成本人簽
+ * （2026-08-19 使用者明確指出：品管組組長上面還有品管課課長或其他主管可以審核）。
+ * 這裡不去改 eg_resolve_supervisor（請假/採購等都在用，鐵律4），只在本模組多補這一段查找。
+ *
+ * 作法：沿父部門往上走，每一層找職級高於本人（level 數字更小）的在職者，取最接近的一位；
+ * 同層有多位時優先該職位的指定負責人。找不到回 null＝整條線上真的沒有更高的人。
+ */
+function fsd_upper_dept_manager(PDO $db, int $uid): ?int {
+    try {
+        $main = function_exists('eg_user_main_identity') ? eg_user_main_identity($db, $uid) : null;
+        $dep = $main['department_id'] ?? null;
+        $level = $main['level'] ?? 99;   // 非主管視為最低階
+        if (!$dep) return null;
+        $cursor = (int)$dep;
+        for ($hop = 0; $hop < 6; $hop++) {   // 與 delegate_lib 同樣的防無限迴圈上限
+            $pst = $db->prepare("SELECT parent_id FROM department WHERE id=?");
+            $pst->execute([$cursor]);
+            $parent = (int)$pst->fetchColumn();
+            if (!$parent) return null;
+            $st = $db->prepare("SELECT u.id,
+                                       (SELECT dp.primary_user_id FROM department_position dp
+                                         WHERE dp.department_id=m.department_id AND dp.position_id=m.position_id LIMIT 1) AS primary_uid
+                                FROM user_department_position_map m
+                                JOIN user u ON u.id=m.user_id AND COALESCE(u.state,1) NOT IN (0,90)
+                                JOIN position_level pl ON pl.position_id=m.position_id
+                                WHERE m.department_id=? AND u.id<>? AND pl.level IS NOT NULL AND pl.level < ?
+                                ORDER BY pl.level DESC, (primary_uid = u.id) DESC
+                                LIMIT 1");
+            $st->execute([$parent, $uid, $level]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+            if ($r) return (int)($r['primary_uid'] ?: $r['id']);
+            $cursor = $parent;
+        }
+        return null;
+    } catch (Throwable $e) { return null; }
 }
 
 /** 填表人候選：在職者（離職/特殊帳號不列）。回傳 ['id','user_cname'] 或 null。 */
