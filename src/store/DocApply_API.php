@@ -81,6 +81,9 @@ case 'meta': {
     catch (Throwable $e) {}
     $people = [];
     try { $people = eg_people_list($db, []); } catch (Throwable $e) {}
+    // 申請人下拉：逐「職務」列出（含兼任），依 部門 → 職稱 sort_order 排序（人員列表鐵則第 5 條）
+    $posts = [];
+    try { $posts = eg_people_posts($db, []); } catch (Throwable $e) {}
     $me = da_user_identity($db, $uid);
     // 圖章模板清單（會簽簽名欄／四格簽章／回收記錄各自可選）
     $tpls = [];
@@ -98,6 +101,8 @@ case 'meta': {
         'departments'   => $depts,
         'cosign_depts'  => da_cosign_dept_options($db),
         'people'   => $people,
+        'people_posts' => $posts,
+        'change_presets' => da_change_presets($db),
         'me'       => ['id'=>$uid, 'name'=>$uname] + $me,
         'stamp_tpls' => $tpls,
         'stamp_main'   => da_stamp_template($db, 'da_stamp_tpl_id'),
@@ -498,7 +503,14 @@ case 'auto_sign': {
         if ($ovUser) {
             $ident = da_user_identity($db, $ovUser);
             $r['applicant_id'] = $ovUser; $r['applicant_name'] = $ident['user_name'];
-            if ($ident['dept_id']) { $r['dept_id'] = (int)$ident['dept_id']; $r['dept_name'] = $ident['dept_name']; }
+            // 兼任職務：前端送的是「該人在哪個部門的身分」，優先採用它，查不到才退回主要職務部門
+            $ovDept = (int)($_POST['override_dept_id'] ?? 0);
+            $useDept = $ovDept ?: (int)($ident['dept_id'] ?? 0);
+            if ($useDept) {
+                $r['dept_id'] = $useDept;
+                $q = $db->prepare("SELECT name FROM department WHERE id=?"); $q->execute([$useDept]);
+                $r['dept_name'] = (string)$q->fetchColumn();
+            }
         }
         if ($ovDate !== '') $r['apply_date'] = $ovDate;
 
@@ -620,6 +632,27 @@ case 'save_cosign_default': {
 case 'delete_cosign_default': {
     if (!$P['canAdmin']) jerr('無權限', 403);
     $db->prepare("DELETE FROM doc_apply_cosign_default WHERE def_id=?")->execute([(int)($_POST['def_id'] ?? 0)]);
+    jout([]);
+}
+
+/* ══════════════════ 制修訂內容預設組 ══════════════════ */
+case 'change_presets':
+    jout(['rows' => da_change_presets($db, $P['canAdmin'])]);
+
+case 'save_change_preset': {
+    if (!$P['canAdmin']) jerr('無權限', 403);
+    $name = trim((string)($_POST['preset_name'] ?? ''));
+    if ($name === '') jerr('請填寫預設組名稱');
+    $rows = da_json_arr('rows');
+    if (!$rows) jerr('請至少填寫一列制修訂內容');
+    $id = da_save_change_preset($db, (int)($_POST['preset_id'] ?? 0), $name, $rows,
+                                (int)($_POST['sort_order'] ?? 0), (int)($_POST['is_active'] ?? 1), $uname);
+    jout(['preset_id' => $id]);
+}
+
+case 'delete_change_preset': {
+    if (!$P['canAdmin']) jerr('無權限', 403);
+    da_delete_change_preset($db, (int)($_POST['preset_id'] ?? 0));
     jout([]);
 }
 

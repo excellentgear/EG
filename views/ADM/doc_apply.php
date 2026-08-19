@@ -152,6 +152,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <button id="btnAutoSel"><i class="fa fa-bolt"></i> 批次自動簽核</button>
             <button id="btnSuggest"><i class="fa fa-magic"></i> 建議建立</button>
             <button id="btnCosDef"><i class="fa fa-sitemap"></i> 會簽預設</button>
+            <button id="btnChgDef"><i class="fa fa-list-alt"></i> 制修訂內容預設</button>
             <button id="btnSetting"><i class="fa fa-cog"></i> 模組設定</button>
             <button id="btnDelSel" class="btn-danger"><i class="fa fa-trash"></i> 批次刪除所選</button>
             <?php endif; ?>
@@ -237,6 +238,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 
         <div class="sec">
             <h5>制修訂內容（頁次、項目、修訂前、修訂後）</h5>
+            <div id="chgPresetBar" style="display:none;gap:6px;align-items:center;margin-bottom:6px;">
+                <label style="margin:0;white-space:nowrap;">帶入預設內容</label>
+                <select id="chgPreset" style="flex:1;"><option value="">— 請選擇 —</option></select>
+                <button type="button" class="b-att" id="btnChgPreset"><i class="fa fa-download"></i> 帶入</button>
+                <span class="da-hint">帶入後仍可自行修改</span>
+            </div>
             <table class="sub-tbl">
                 <thead><tr><th style="width:80px;">頁次</th><th style="width:150px;">項目</th><th>修訂前</th><th>修訂後</th><th style="width:34px;"></th></tr></thead>
                 <tbody id="chgBody" data-eg-row-add="chgAddRow" data-eg-row-del="chgDelRow"></tbody>
@@ -409,6 +416,40 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
     <div class="m-foot"><button onclick="closeMask('cosDefMask')">關閉</button></div>
 </div></div>
 
+<!-- ══════════ 制修訂內容預設組（管理員） ══════════ -->
+<div class="da-mask" id="chgDefMask"><div class="da-modal">
+    <div class="m-head"><span>制修訂內容預設組</span><span class="m-close" onclick="closeMask('chgDefMask')">✕</span></div>
+    <div class="m-body">
+        <div class="sec">
+            <h5 id="cpEditTitle">新增一組預設</h5>
+            <div class="grid3">
+                <div><label>預設組名稱 *</label><input type="text" id="cp_name" maxlength="100" placeholder="例：全冊檢視及修正"></div>
+                <div><label>排序（小的排前面）</label><input type="number" id="cp_sort" value="0"></div>
+                <div><label>啟用</label>
+                    <select id="cp_active"><option value="1">啟用（填單時可選）</option><option value="0">停用</option></select></div>
+            </div>
+            <label style="margin-top:8px;">內容（可多列，填單時整組帶入）</label>
+            <table class="sub-tbl">
+                <thead><tr><th style="width:80px;">頁次</th><th style="width:150px;">項目</th><th>修訂前</th><th>修訂後</th><th style="width:34px;"></th></tr></thead>
+                <tbody id="cpBody" data-eg-row-add="cpAddRow" data-eg-row-del="cpDelRow"></tbody>
+            </table>
+            <div style="text-align:right;margin-top:8px;">
+                <button type="button" class="b-att" id="btnCpNew">清空改為新增</button>
+                <button type="button" class="b-att" id="btnCpSave" style="background:#F0A24B;color:#fff;border-color:#d98a33;">
+                    <i class="fa fa-save"></i> 儲存這組</button>
+            </div>
+        </div>
+        <div class="da-table-wrap">
+            <table class="da-table">
+                <thead><tr><th style="width:60px;">排序</th><th>名稱</th><th style="width:70px;">列數</th><th style="width:70px;">狀態</th>
+                    <th class="l">預覽</th><th style="width:100px;">操作</th></tr></thead>
+                <tbody id="cpListBody"><tr><td colspan="6" style="padding:14px;color:#8a6d45;">載入中…</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+    <div class="m-foot"><button onclick="closeMask('chgDefMask')">關閉</button></div>
+</div></div>
+
 <!-- ══════════ 模組設定 ══════════ -->
 <div class="da-mask" id="setMask"><div class="da-modal mid">
     <div class="m-head"><span>模組設定</span><span class="m-close" onclick="closeMask('setMask')">✕</span></div>
@@ -459,7 +500,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>新增申請單</b> → 選文件狀況與類別 → 填文件名稱、申請部門、申請人。</li>
             <li><b>制訂</b>：文件編碼按「自動產生」（規則與 AS 文件管理完全相同——表單依<b>母文件</b>遞增、其餘依<b>階級＋部門代碼</b>遞增）。</li>
             <li><b>修正／廢止／增發／補發</b>：改為「選擇文件」挑既有 AS 文件，<b>首次發行日期會自動帶入</b>；版本變更日期固定＝本次申請日。</li>
-            <li>填<b>制修訂內容</b>（頁次／項目／修訂前／修訂後），末列按 ↓ 自動加列。</li>
+            <li>填<b>制修訂內容</b>（頁次／項目／修訂前／修訂後），末列按 ↓ 自動加列；管理員若已建好<b>預設內容</b>，
+                上方會出現「帶入預設內容」下拉，選一組按<b>帶入</b>即整組接上去，帶入後仍可自行修改。</li>
             <li>勾選<b>是否需會簽</b>並指定會簽單位（會依該文件所屬部門的預設自動帶入）。</li>
             <li>按<b>「儲存並送出」</b>；未填的必填欄位會即時標紅並列出原因，<b>擋住送出</b>。</li>
             <li>送出後，被指定的會簽單位主管會收到<b>通知</b>，點通知即可開啟會簽：<b>必須先選同意／不同意</b>才能填寫會簽意見（意見非必填），送出即完成簽名。</li>
@@ -479,10 +521,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <li><b>簽章一律是帶日期的圖章</b>，不只印人名；代理人代簽時圖章右下角會有「代」字。</li>
             <li><b>核准日期預設＝本單申請日期</b>（可由系統管理者在核准跳窗改成其他日期）；四格簽章的圖章日期一律跟著核准日期，精確時間戳另存不影響業務日期。</li>
             <li><b>申請人本身就是單位主管時，「單位主管」欄一樣蓋他自己的章</b>——不做權責迴避、不往上找人、也不留白。</li>
+            <li><b>申請人下拉是「逐職務」列出的</b>：一個人有兼任就會出現多列（標「兼任」），
+                依<b>部門 → 職稱</b>順序排序（不是姓名筆畫）；選了哪一個職務，<b>申請部門就自動帶成該職務的部門</b>。</li>
         </ul>
 
         <h4>設定入口</h4>
         <p>工具列<b>「模組設定」</b>（管理員）：AS 文件編號綁定、四格簽章來源、三組圖章模板（四格簽章／會簽單位簽名欄／核發回收簽收欄）。<br>
+        工具列<b>「制修訂內容預設」</b>（管理員）：建立幾組常用的制修訂內容（可多列、可排序、可停用），填單時一鍵帶入再修改。<br>
         工具列<b>「會簽預設」</b>（管理員）：以<b>部門</b>分類設定「預設是否會簽＋預設會簽單位」，也可對<b>單一 AS 文件（可到表單層）</b>個別覆寫；
         解析優先序＝單一文件 → 部門 → 全站預設。<br>
         部門主管、最高核准人員、管理課、文管中心的認定來自
@@ -551,11 +596,13 @@ $.getJSON(API, {action:'meta'}, function(r){
     var cos = $('#e_cos_pick, #cd_pick').empty();
     (r.cosign_depts || []).forEach(function(d){ cos.append('<option value="' + d.id + '">' + esc(d.name) + '</option>'); });
 
-    var pp = $('#e_applicant_id, #autoUser');
+    // 申請人／填表人：逐「職務」列出（含兼任），已由後端依 部門→職稱 sort_order 排序
     $('#e_applicant_id').empty();
-    (r.people || []).forEach(function(p){
-        $('#e_applicant_id').append('<option value="' + p.id + '">' + esc((p.dept_name ? p.dept_name + '　' : '') + (p.position_name ? p.position_name + '　' : '') + p.user_cname) + '</option>');
-        $('#autoUser').append('<option value="' + p.id + '">' + esc(p.user_cname) + '</option>');
+    (r.people_posts || []).forEach(function(p){
+        var o = '<option value="' + esc(p.post_key) + '" data-uid="' + p.id + '" data-dept="' + (p.dept_id || '') + '">'
+              + esc(p.display) + '</option>';
+        $('#e_applicant_id').append(o);
+        $('#autoUser').append(o);
     });
 
     // 設定跳窗
@@ -570,6 +617,7 @@ $.getJSON(API, {action:'meta'}, function(r){
         $('#s_' + k).html(tplOpts).val(r.settings[k] || '');
     });
     $('#setAsDocLabel').text(r.asdoc ? (r.asdoc.doc_no + '　' + r.asdoc.doc_name) : '尚未綁定');
+    fillPresetSelect(r.change_presets || []);
     loadList();
     openFromQuery();
 });
@@ -669,7 +717,7 @@ function openEdit(id){
     if (!id) {
         $('#e_apply_date').val(META.today); $('#e_change_date').val(META.today);
         $('#e_doc_status').val('制訂'); $('#e_doc_type').val('表單');
-        $('#e_dept_id').val(META.me.dept_id || ''); $('#e_applicant_id').val(META.me.id);
+        $('#e_dept_id').val(META.me.dept_id || ''); setApplicant(META.me.id, META.me.dept_id);
         $('#e_doc_name').val(''); $('#e_doc_no').val(''); $('#e_version').val('');
         $('#e_first_issue_date').val(''); $('#e_asdoc_label').val('').data('id', 0);
         $('#e_need_overview').prop('checked', true); $('#e_need_cosign').prop('checked', false);
@@ -685,7 +733,7 @@ function openEdit(id){
         if (!d.can_edit) { alert('此單已送出或非你可編輯，已改為檢視。'); openView(id); return; }
         $('#e_apply_date').val(d.apply_date); $('#e_change_date').val(d.change_date || d.apply_date);
         $('#e_doc_status').val(d.doc_status); $('#e_doc_type').val(d.doc_type);
-        $('#e_dept_id').val(d.dept_id || ''); $('#e_applicant_id').val(d.applicant_id || '');
+        $('#e_dept_id').val(d.dept_id || ''); setApplicant(d.applicant_id, d.dept_id);
         $('#e_doc_name').val(d.doc_name || ''); $('#e_doc_no').val(d.doc_no || '');
         $('#e_version').val(d.version || ''); $('#e_first_issue_date').val(d.first_issue_date || '');
         $('#e_asdoc_label').data('id', d.as_doc_id || 0).val(d.as_doc_id ? (d.doc_no + '　' + d.doc_name) : '');
@@ -753,6 +801,11 @@ $('#e_doc_status, #e_doc_type').on('change', function(){
     else { var id = +$('#e_asdoc_label').data('id') || 0; if (id) pullAsDoc(id); }
 });
 $('#e_apply_date').on('change', function(){ $('#e_change_date').val($(this).val()); });
+/* 選申請人＝選「他的哪一個職務」（含兼任）→ 申請部門自動帶成該職務的部門 */
+$('#e_applicant_id').on('change', function(){
+    var d = $(this).find('option:selected').data('dept');
+    if (d) $('#e_dept_id').val(String(d));
+});
 $('#e_dept_id').on('change', function(){ $('#e_code').html('<option value="">（自動）</option>'); });
 $('#distBody').on('change', '.d-dept', function(){
     // 簽收者＝該填寫單位主管，由後端存檔時帶入；這裡先清空避免留著舊部門的人（推導欄位鐵則）
@@ -849,6 +902,17 @@ function renderCosChips(){
 }
 function cosDel(i){ cosSel.splice(i, 1); renderCosChips(); }
 
+/** 以「使用者＋部門」定位到那一個職務選項；該部門的職務不存在時退回此人的第一個職務 */
+function setApplicant(uid, deptId){
+    var $s = $('#e_applicant_id');
+    if (!uid) { $s.prop('selectedIndex', 0); return; }
+    var key = uid + ':' + (deptId || '');
+    if ($s.find('option[value="' + key + '"]').length) { $s.val(key); return; }
+    var $first = $s.find('option[data-uid="' + uid + '"]').first();
+    if ($first.length) $s.val($first.attr('value'));
+}
+function applicantUid(){ return +String($('#e_applicant_id').val() || '').split(':')[0] || 0; }
+
 function collectForm(){
     var changes = [];
     $('#chgBody tr').each(function(){
@@ -869,7 +933,7 @@ function collectForm(){
         doc_name:$('#e_doc_name').val(), doc_no:$('#e_doc_no').val(),
         as_doc_id:(+$('#e_asdoc_label').data('id') || 0),
         version:$('#e_version').val(), first_issue_date:$('#e_first_issue_date').val(),
-        dept_id:$('#e_dept_id').val(), applicant_id:$('#e_applicant_id').val(),
+        dept_id:$('#e_dept_id').val(), applicant_id:applicantUid(),
         need_overview:$('#e_need_overview').is(':checked') ? 1 : 0,
         need_cosign:$('#e_need_cosign').is(':checked') ? 1 : 0,
         changes:JSON.stringify(changes), dists:JSON.stringify(dists),
@@ -1072,7 +1136,9 @@ $('#btnAutoSel').on('click', function(){
 $('#btnAutoOk').on('click', function(){
     if (!$('#autoPw').val()) { $('#err_auto').text('請輸入操作確認密碼').show(); return; }
     $.post(API, {action:'auto_sign', apply_ids:JSON.stringify(autoIds), confirm_password:$('#autoPw').val(),
-                 override_applicant_id:$('#autoUser').val() || 0, override_date:$('#autoDate').val() || ''}, function(r){
+                 override_applicant_id:(+String($('#autoUser').val() || '').split(':')[0] || 0),
+                 override_dept_id:($('#autoUser option:selected').data('dept') || 0),
+                 override_date:$('#autoDate').val() || ''}, function(r){
         if (!r.ok) return;
         closeMask('autoMask'); loadList();
         alert('已自動簽核 ' + r.done + ' 張' + ((r.skipped || []).length ? ('\n略過：\n・' + r.skipped.join('\n・')) : ''));
@@ -1118,6 +1184,107 @@ $('#btnSugCreate').on('click', function(){
         $('#btnSugScan').click(); loadList();
     }, 'json');
 });
+
+/* ══════════════════ 制修訂內容預設組 ══════════════════ */
+var PRESETS = [];
+function fillPresetSelect(rows){
+    PRESETS = rows || [];
+    var $s = $('#chgPreset').empty().append('<option value="">— 請選擇 —</option>');
+    PRESETS.forEach(function(p){
+        if (!parseInt(p.is_active)) return;
+        $s.append('<option value="' + p.preset_id + '">' + esc(p.preset_name) + '（' + (p.rows || []).length + ' 列）</option>');
+    });
+    // 沒有任何可用預設就不佔版面
+    $('#chgPresetBar').css('display', $s.find('option').length > 1 ? 'flex' : 'none');
+}
+$('#btnChgPreset').on('click', function(){
+    var id = +$('#chgPreset').val() || 0;
+    if (!id) { alert('請先選擇要帶入的預設內容'); return; }
+    var p = PRESETS.filter(function(x){ return +x.preset_id === id; })[0];
+    if (!p || !(p.rows || []).length) { alert('這組預設沒有內容'); return; }
+    // 先清掉尾端空白列，再把預設整組接上去（既有已填內容不動）
+    $('#chgBody tr').each(function(){
+        var $t = $(this), empty = true;
+        $t.find('input,textarea').each(function(){ if (String(this.value || '').trim() !== '') empty = false; });
+        if (empty) $t.remove();
+    });
+    p.rows.forEach(function(c){ chgAddRow(c); });
+    chgAddRow();     // 末尾留一列空白方便繼續填
+});
+
+$('#btnChgDef').on('click', function(){ cpReset(); loadPresets(); openMask('chgDefMask'); });
+function cpAddRow(c){
+    c = c || {};
+    $('#cpBody').append('<tr>'
+        + '<td><input type="text" class="p-page" maxlength="60" value="' + esc(c.page_no || '') + '"></td>'
+        + '<td><input type="text" class="p-item" maxlength="120" value="' + esc(c.item || '') + '"></td>'
+        + '<td><textarea class="p-bf" rows="1">' + esc(c.before_txt || '') + '</textarea></td>'
+        + '<td><textarea class="p-af" rows="1">' + esc(c.after_txt || '') + '</textarea></td>'
+        + '<td><span class="da-op cp-x">✕</span></td></tr>');
+}
+$('#cpBody').on('click', '.cp-x', function(){ if ($('#cpBody tr').length > 1) $(this).closest('tr').remove(); });
+function cpDelRow(){ if ($('#cpBody tr').length > 1) $('#cpBody tr:last').remove(); }
+function cpReset(){
+    $('#cpEditTitle').text('新增一組預設');
+    $('#btnCpSave').data('id', 0);
+    $('#cp_name').val(''); $('#cp_sort').val(0); $('#cp_active').val('1');
+    $('#cpBody').empty(); for (var i = 0; i < 3; i++) cpAddRow();
+}
+$('#btnCpNew').on('click', cpReset);
+function cpEdit(id){
+    var p = PRESETS.filter(function(x){ return +x.preset_id === id; })[0];
+    if (!p) return;
+    $('#cpEditTitle').text('修改預設組：' + p.preset_name);
+    $('#btnCpSave').data('id', id);
+    $('#cp_name').val(p.preset_name); $('#cp_sort').val(p.sort_order); $('#cp_active').val(String(p.is_active));
+    $('#cpBody').empty();
+    (p.rows || []).forEach(function(c){ cpAddRow(c); });
+    cpAddRow();
+    $('#chgDefMask .m-body').scrollTop(0);
+}
+$('#btnCpSave').on('click', function(){
+    var name = $('#cp_name').val().trim();
+    if (!name) { alert('請填寫預設組名稱'); return; }
+    var rows = [];
+    $('#cpBody tr').each(function(){
+        var $t = $(this);
+        var r = {page_no:$t.find('.p-page').val(), item:$t.find('.p-item').val(),
+                 before_txt:$t.find('.p-bf').val(), after_txt:$t.find('.p-af').val()};
+        if ((r.page_no + r.item + r.before_txt + r.after_txt).trim() !== '') rows.push(r);
+    });
+    if (!rows.length) { alert('請至少填寫一列制修訂內容'); return; }
+    $.post(API, {action:'save_change_preset', preset_id:$(this).data('id') || 0, preset_name:name,
+                 sort_order:$('#cp_sort').val() || 0, is_active:$('#cp_active').val(),
+                 rows:JSON.stringify(rows)}, function(r){
+        if (!r.ok) return;
+        alert('已儲存'); cpReset(); loadPresets();
+    }, 'json');
+});
+function cpDelete(id){
+    if (!confirm('確定刪除這組預設？（已建立的申請單內容不受影響）')) return;
+    $.post(API, {action:'delete_change_preset', preset_id:id}, function(r){ if (r.ok) { cpReset(); loadPresets(); } }, 'json');
+}
+function loadPresets(){
+    $.getJSON(API, {action:'change_presets'}, function(r){
+        if (!r.ok) return;
+        PRESETS = r.rows || [];
+        fillPresetSelect(PRESETS);
+        var b = $('#cpListBody').empty();
+        if (!PRESETS.length) { b.append('<tr><td colspan="6" style="padding:14px;color:#8a6d45;">尚未建立任何預設組</td></tr>'); return; }
+        PRESETS.forEach(function(p){
+            var prev = (p.rows || []).slice(0, 2).map(function(c){
+                return [c.page_no, c.item, c.after_txt].filter(Boolean).join('／');
+            }).join('　｜　') + ((p.rows || []).length > 2 ? ' …' : '');
+            b.append('<tr><td>' + esc(p.sort_order) + '</td>'
+                + '<td class="l">' + esc(p.preset_name) + '</td>'
+                + '<td>' + (p.rows || []).length + '</td>'
+                + '<td>' + (parseInt(p.is_active) ? '啟用' : '停用') + '</td>'
+                + '<td class="l">' + esc(prev) + '</td>'
+                + '<td><span class="da-op" onclick="cpEdit(' + p.preset_id + ')">修改</span>'
+                + '<span class="da-op" onclick="cpDelete(' + p.preset_id + ')">刪除</span></td></tr>');
+        });
+    });
+}
 
 /* ══════════════════ 會簽預設 ══════════════════ */
 $('#btnCosDef').on('click', function(){ cdSel = []; renderCdChips(); loadCosDef(); openMask('cosDefMask'); });

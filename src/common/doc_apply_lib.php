@@ -147,6 +147,16 @@ function da_ensure_schema(PDO $db): void
             UNIQUE KEY uk_scope (scope_type, scope_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會簽預設（部門分類＋單一文件覆寫）'");
 
+        // 制修訂內容預設組：管理員預先建好幾組常用內容，填單時一鍵帶入再自行修改
+        $db->exec("CREATE TABLE IF NOT EXISTS doc_apply_change_preset (
+            preset_id   INT AUTO_INCREMENT PRIMARY KEY,
+            preset_name VARCHAR(100) NOT NULL COMMENT '預設組名稱（填單時的下拉選項）',
+            rows_json   TEXT NULL COMMENT '[{page_no,item,before_txt,after_txt},…]',
+            sort_order  INT NOT NULL DEFAULT 0,
+            is_active   TINYINT NOT NULL DEFAULT 1,
+            updated_by  VARCHAR(60) NULL, updated_at DATETIME NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='制修訂內容預設組'");
+
         foreach ([['doc_apply_view', '文件制修申請單檢閱'], ['doc_apply_edit', '文件制修申請單申請'],
                   ['doc_apply_admin', '文件制修申請單管理員']] as $r) {
             $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='doc_apply' LIMIT 1");
@@ -937,4 +947,53 @@ function da_sync_cosign_rows(PDO $db, int $applyId, array $deptIds, int $applica
                       VALUES (?,?,?,?,1,?,?,?)")
            ->execute([$applyId, $no, $did, $names[$did] ?? '', $sg['id'], $sg['name'], $sg['is_delegated']]);
     }
+}
+
+/* ============================ 制修訂內容預設組 ============================ */
+
+/** 可用的預設組（填單時的下拉；$all=true 連停用的也列給管理員維護） */
+function da_change_presets(PDO $db, bool $all = false): array
+{
+    try {
+        $sql = "SELECT preset_id, preset_name, rows_json, sort_order, is_active
+                FROM doc_apply_change_preset " . ($all ? '' : 'WHERE is_active=1 ') . "
+                ORDER BY sort_order, preset_id";
+        $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    foreach ($rows as &$r) {
+        $d = json_decode((string)$r['rows_json'], true);
+        $r['rows'] = is_array($d) ? $d : [];
+        unset($r['rows_json']);
+    }
+    return $rows;
+}
+
+/** 新增／修改一組預設（$presetId=0＝新增）；回傳 preset_id */
+function da_save_change_preset(PDO $db, int $presetId, string $name, array $rows, int $sort, int $active, string $byName): int
+{
+    $clean = [];
+    foreach ($rows as $r) {
+        $x = ['page_no'    => mb_substr(trim((string)($r['page_no'] ?? '')), 0, 60),
+              'item'       => mb_substr(trim((string)($r['item'] ?? '')), 0, 120),
+              'before_txt' => trim((string)($r['before_txt'] ?? '')),
+              'after_txt'  => trim((string)($r['after_txt'] ?? ''))];
+        if ($x['page_no'] === '' && $x['item'] === '' && $x['before_txt'] === '' && $x['after_txt'] === '') continue;
+        $clean[] = $x;
+    }
+    $json = json_encode($clean, JSON_UNESCAPED_UNICODE);
+    if ($presetId > 0) {
+        $db->prepare("UPDATE doc_apply_change_preset SET preset_name=?, rows_json=?, sort_order=?, is_active=?,
+                        updated_by=?, updated_at=NOW() WHERE preset_id=?")
+           ->execute([$name, $json, $sort, $active ? 1 : 0, $byName, $presetId]);
+        return $presetId;
+    }
+    $db->prepare("INSERT INTO doc_apply_change_preset (preset_name, rows_json, sort_order, is_active, updated_by, updated_at)
+                  VALUES (?,?,?,?,?,NOW())")
+       ->execute([$name, $json, $sort, $active ? 1 : 0, $byName]);
+    return (int)$db->lastInsertId();
+}
+
+function da_delete_change_preset(PDO $db, int $presetId): void
+{
+    if ($presetId > 0) $db->prepare("DELETE FROM doc_apply_change_preset WHERE preset_id=?")->execute([$presetId]);
 }

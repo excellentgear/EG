@@ -185,3 +185,71 @@ if (!function_exists('eg_people_multi_dept')) {
         return count($seen) > 1;
     }
 }
+
+if (!function_exists('eg_people_posts')) {
+    /**
+     * 逐「職務」列出人員（**一人有兼任就會出現多列**，主要職務與兼任職務各一列）。
+     * 與 eg_people_list() 的差別：那支是「一人一列」（只取主要/挑一個職務顯示），
+     * 這支是「一職務一列」——需要讓使用者「以某個部門的身分」被挑選時用（例：申請單的申請人、
+     * 負責人挑選器要選得到兼任該部門的人）。
+     *
+     * 遵守人員列表鐵則（ai-rules/08 第五節）：只列未離職者（user.state，0/90 不列）、
+     * 長期請假者仍列出並帶 leave_note、**排序依 部門 sort_order → 職稱 sort_order → 姓名 id**
+     * （不是姓名筆畫），每列都帶 dept_name / position_name 供「部門/職稱/姓名」欄位順序顯示。
+     *
+     * $opt: ['states'=>[1,2,3], 'dept_ids'=>[..只列這些部門..], 'user_ids'=>[..]]
+     * 回傳每列：post_key('uid:deptId')、id、user_cname、dept_id、dept_name、dept_sort、
+     *           position_id、position_name、position_sort、is_main、state、state_label、
+     *           on_leave、leave_note、display（「部門　職稱　姓名」）
+     */
+    function eg_people_posts(PDO $db, array $opt = []): array {
+        $exclude = array_map('intval', explode(',', EG_PEOPLE_EXCLUDE_STATES));
+        $states  = isset($opt['states']) && is_array($opt['states']) ? array_map('intval', $opt['states']) : [1, 2, 3];
+        $states  = array_values(array_diff($states, $exclude));
+        if (!$states) return [];
+
+        $where  = ["u.state IN (" . implode(',', $states) . ")"];
+        $deptIds = isset($opt['dept_ids']) && is_array($opt['dept_ids'])
+                 ? array_values(array_filter(array_map('intval', $opt['dept_ids']))) : [];
+        if ($deptIds) $where[] = "m.department_id IN (" . implode(',', $deptIds) . ")";
+        $userIds = isset($opt['user_ids']) && is_array($opt['user_ids'])
+                 ? array_values(array_filter(array_map('intval', $opt['user_ids']))) : [];
+        if ($userIds) $where[] = "u.id IN (" . implode(',', $userIds) . ")";
+
+        $sql = "SELECT u.id, u.user_cname, u.user_uname, u.state,
+                       m.department_id AS dept_id, d.name AS dept_name, COALESCE(d.sort_order,999) AS dept_sort,
+                       m.position_id, p.name AS position_name, COALESCE(p.sort_order,999) AS position_sort,
+                       COALESCE(m.is_main,0) AS is_main
+                FROM user_department_position_map m
+                JOIN `user` u ON u.id = m.user_id
+                LEFT JOIN department d ON d.id = m.department_id
+                LEFT JOIN position  p ON p.id = m.position_id
+                WHERE " . implode(' AND ', $where) . "
+                ORDER BY dept_sort, d.id, position_sort, p.id, u.id";
+        try {
+            $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { return []; }
+        if (!$rows) return [];
+
+        $leave = eg_people_long_leave_map($db, array_values(array_unique(array_column($rows, 'id'))));
+        foreach ($rows as &$r) {
+            $r['id']          = (int)$r['id'];
+            $r['state']       = (int)$r['state'];
+            $r['state_label'] = eg_people_state_label($r['state']);
+            $r['dept_id']     = $r['dept_id'] === null ? null : (int)$r['dept_id'];
+            $r['position_id'] = $r['position_id'] === null ? null : (int)$r['position_id'];
+            $r['dept_name']     = (string)($r['dept_name'] ?? '');
+            $r['position_name'] = (string)($r['position_name'] ?? '');
+            $r['is_main']     = (int)$r['is_main'];
+            $r['post_key']    = $r['id'] . ':' . (int)$r['dept_id'];
+            $lv = $leave[$r['id']] ?? null;
+            $r['on_leave']    = $lv ? 1 : 0;
+            $r['leave_note']  = $lv['note'] ?? '';
+            // 欄位順序固定「部門/職稱/姓名」（鐵則第 5 條）
+            $r['display'] = trim($r['dept_name'] . '　' . $r['position_name'] . '　' . $r['user_cname'])
+                          . ($r['is_main'] ? '' : '（兼任）')
+                          . ($r['on_leave'] ? '［' . $r['leave_note'] . '］' : '');
+        }
+        return $rows;
+    }
+}
