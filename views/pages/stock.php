@@ -14,6 +14,7 @@ function safe_html($v) { return htmlspecialchars($v ?? '', ENT_QUOTES, 'UTF-8');
 // 只引入一次 DBConnection
 include_once '../../src/common/DBConnection.php';
 require_once '../../src/common/stock_notify.php';
+require_once '../../src/common/asdoc_lib.php';   // AS 文件編號綁定（ai-rules/16 第一之三節：後端唯一實作點）
 $conn   = new DBConnection();
 $pdo    = $conn->getPDO();
 $userId = intval($_SESSION['id'] ?? 0);
@@ -87,6 +88,81 @@ foreach(['is_active TINYINT NOT NULL DEFAULT 1','deleted_by INT NULL','deleted_a
 // 不再用本頁自建的 stock_req_notifications 表＋輪詢彈窗(多分頁/多裝置容易重複彈出、且未走全站已讀機制)。
 function getNotifTargetUsers($pdo){
     try{ return $pdo->query("SELECT DISTINCT user_id FROM user_module_permissions WHERE module_code='stock' AND (permission='A' OR (permission LIKE '%C%' AND permission LIKE '%R%' AND permission LIKE '%U%' AND permission LIKE '%D%'))")->fetchAll(PDO::FETCH_COLUMN); }catch(Exception $e){ return []; }
+}
+
+// ── 領料需求單列印用：公司全名／圖章模板（ai-rules/16 第一節、ai-rules/18）──────
+// 模組代碼 stock_req：AS 文件綁定走 asdoc_lib（system_parameters AS_DOC_BIND/stock_req）、
+// 圖章模板另存 system_parameters STOCK_REQ/req_stamp_tpl_id（只存 stamp_template.id，禁存名稱字串）。
+define('STOCK_REQ_ASDOC_MODULE', 'stock_req');
+
+/** 列印大標題＝本公司公司全名（發票用），唯一來源 customer_list.is_own_company=1，禁寫死（ai-rules/16 第一節） */
+function stock_req_company_name(PDO $pdo): string {
+    try {
+        $r = $pdo->query("SELECT customer_full, customer FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        if ($r) return trim((string)($r['customer_full'] ?: $r['customer']));
+    } catch (Throwable $e) {}
+    return '';
+}
+
+/** 領料人圖章要套用的模板 id（0＝未設定，消費端退回 EGStamp 預設回墨印） */
+function stock_req_stamp_tpl_id(PDO $pdo): int {
+    try {
+        $st = $pdo->prepare("SELECT param_value FROM system_parameters WHERE param_group='STOCK_REQ' AND param_key='req_stamp_tpl_id' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v === false) return 0;
+        $d = json_decode((string)$v, true);
+        return (int)(is_numeric($d) ? $d : (is_numeric($v) ? $v : 0));
+    } catch (Throwable $e) { return 0; }
+}
+
+/** 圖章模板內容（停用或查無回 null） */
+function stock_req_stamp_tpl(PDO $pdo, int $tplId): ?array {
+    if (!$tplId) return null;
+    try {
+        $st = $pdo->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$tplId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ? ['id'=>(int)$r['id'], 'tpl_name'=>$r['tpl_name'], 'schema'=>json_decode((string)$r['schema_json'], true)] : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 圖章模板下拉清單（設定跳窗用） */
+function stock_req_stamp_tpl_options(PDO $pdo): array {
+    try {
+        return $pdo->query("SELECT p.id, p.tpl_name, t.type_name FROM stamp_template p
+                            LEFT JOIN stamp_type t ON t.id=p.type_id
+                            WHERE p.is_active=1 ORDER BY p.tpl_name")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/** 需求單的「業務日期」＝建立日期（本單無其他日期欄位，見 ai-rules/16 第三之四節業務日期認定②） */
+function stock_req_biz_date(?array $req): ?string {
+    $d = substr((string)($req['Created_At'] ?? ''), 0, 10);
+    return preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) ? $d : null;
+}
+
+/** 圖章上的職稱：一律回推「該單業務日期當時」的職稱（ai-rules/22；沒補登過異動的人＝現況）。
+ *  只有姓名沒有 user_id，故先以姓名＋申請部門回查；同名多人或查無一律留空，不猜人
+ *  （模板沒有 {職稱} token 時本來就用不到這個值）。 */
+function stock_req_position_asof(PDO $pdo, string $name, string $deptName, ?string $bizDate): string {
+    $name = trim($name); if ($name === '') return '';
+    try {
+        $sql = "SELECT DISTINCT u.id FROM user u
+                LEFT JOIN user_department_position_map m ON m.user_id=u.id
+                LEFT JOIN department d ON d.id=m.department_id
+                WHERE u.user_cname=?" . ($deptName !== '' ? " AND d.name=?" : "");
+        $st = $pdo->prepare($sql);
+        $st->execute($deptName !== '' ? [$name, $deptName] : [$name]);
+        $ids = $st->fetchAll(PDO::FETCH_COLUMN);
+        if (count($ids) !== 1) return '';                       // 同名多人＝不猜
+        require_once __DIR__ . '/../../src/common/position_history_lib.php';
+        $snap = eg_position_snapshot_at($pdo, (int)$ids[0], $bizDate ?: date('Y-m-d'));
+        if (!$snap) return '';
+        foreach ($snap as $r) { if ($deptName !== '' && ($r['department_name'] ?? '') === $deptName) return (string)($r['position_name'] ?? ''); }
+        foreach ($snap as $r) { if (!empty($r['is_main'])) return (string)($r['position_name'] ?? ''); }
+        return (string)($snap[0]['position_name'] ?? '');
+    } catch (Throwable $e) { return ''; }
 }
 
 // ─────────────────────────────────────────────────
@@ -3683,6 +3759,75 @@ LBLSQL;
         exit;
     }
 
+    // ── 列印中繼資料（公司全名／AS 文件／領料人圖章模板）──────────────────────
+    // ai-rules/16：大標題＝公司全名、表頭＝綁定 AS 文件的 doc_name、頁尾右下＝doc_no（版次依業務日期回推）。
+    // 讀取不卡管理員（ai-rules/18 鐵則9：卡了會讓一般人列印永遠拿不到圖章模板），只有寫入才要 A 權限。
+    if ($_POST['action'] === 'req_print_meta') {
+        try {
+            $reqId = intval($_POST['req_id'] ?? 0);
+            $req = null;
+            if ($reqId) {
+                $st = $pdo->prepare("SELECT req_no,dept_name,requester_name,Created_At,issued_at,issued_by_name FROM stock_requisitions WHERE req_id=?");
+                $st->execute([$reqId]); $req = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+            $docId  = eg_asdoc_id($pdo, STOCK_REQ_ASDOC_MODULE);
+            $doc    = eg_asdoc_get($pdo, STOCK_REQ_ASDOC_MODULE);
+            $biz    = stock_req_biz_date($req);          // 未指定單據＝null＝視為今天（比照現況列印）
+            $tpl    = stock_req_stamp_tpl($pdo, stock_req_stamp_tpl_id($pdo));
+            echo json_encode(['success'=>true,
+                'company'    => stock_req_company_name($pdo),
+                'doc'        => $doc ? ['id'=>(int)$doc['id'],'doc_no'=>$doc['doc_no'],'doc_name'=>$doc['doc_name']] : null,
+                'doc_no_print'=> eg_asdoc_no_asof_id($pdo, $docId, $biz),   // 版次依業務日期回推（ai-rules/16 三之四）
+                'biz_date'   => $biz,
+                'stamp_tpl'  => $tpl,
+                'requester_position' => $req ? stock_req_position_asof($pdo, (string)($req['requester_name'] ?? ''), (string)($req['dept_name'] ?? ''), $biz) : '',
+            ]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ── 列印設定（AS 文件綁定＋領料人圖章模板）讀取：限 A 權限 ──
+    if ($_POST['action'] === 'req_print_setting_get') {
+        try {
+            $pp=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'"); $pp->execute([$userId]);
+            if (($pp->fetch(PDO::FETCH_ASSOC)['permission'] ?? '') !== 'A') throw new Exception('需要 A 級權限才能修改列印設定');
+            echo json_encode(['success'=>true,
+                'as_docs'      => eg_asdoc_list($pdo),
+                'as_doc_id'    => eg_asdoc_id($pdo, STOCK_REQ_ASDOC_MODULE),
+                'as_doc'       => eg_asdoc_get($pdo, STOCK_REQ_ASDOC_MODULE),
+                'stamp_tpls'   => stock_req_stamp_tpl_options($pdo),
+                'stamp_tpl_id' => stock_req_stamp_tpl_id($pdo),
+            ]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ── 列印設定儲存：限 A 權限 ──
+    if ($_POST['action'] === 'req_print_setting_save') {
+        try {
+            $pp=$pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'"); $pp->execute([$userId]);
+            if (($pp->fetch(PDO::FETCH_ASSOC)['permission'] ?? '') !== 'A') throw new Exception('需要 A 級權限才能修改列印設定');
+            $docId = intval($_POST['as_doc_id'] ?? 0);
+            $tplId = intval($_POST['stamp_tpl_id'] ?? 0);
+            if ($docId) {
+                $chk=$pdo->prepare("SELECT id FROM as_document WHERE id=? AND is_deleted=0"); $chk->execute([$docId]);
+                if (!$chk->fetchColumn()) throw new Exception('選擇的 AS 文件不存在或已刪除');
+            }
+            if ($tplId) {
+                $chk2=$pdo->prepare("SELECT id FROM stamp_template WHERE id=? AND is_active=1"); $chk2->execute([$tplId]);
+                if (!$chk2->fetchColumn()) throw new Exception('選擇的圖章模板不存在或已停用');
+            }
+            eg_asdoc_save($pdo, STOCK_REQ_ASDOC_MODULE, $docId, $_SESSION['userName'] ?? '');
+            $ex=$pdo->prepare("SELECT id FROM system_parameters WHERE param_group='STOCK_REQ' AND param_key='req_stamp_tpl_id' LIMIT 1"); $ex->execute();
+            $rid=$ex->fetchColumn();
+            if ($rid) $pdo->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([(string)$tplId, $_SESSION['userName'] ?? '', $rid]);
+            else $pdo->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,description,updated_by) VALUES ('STOCK_REQ','req_stamp_tpl_id',?,?,?)")
+                     ->execute([(string)$tplId, '領料需求單列印：領料人圖章模板 id（0=用系統預設印章）', $_SESSION['userName'] ?? '']);
+            echo json_encode(['success'=>true]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
     // ── 列印需求單（含品項） ──
     if ($_POST['action'] === 'print_requisitions') {
         try {
@@ -4145,7 +4290,11 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
     <h4 style="margin:0;font-weight:700;color:var(--primary);"><i class="fa fa-clipboard"></i> 領庫需求單</h4>
     <button id="btn-create-req" class="btn-pill" onclick="openCreateReqModal()"><i class="fa fa-plus"></i> 新增需求單</button>
     <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="openDeletedReqModal()"><i class="fa fa-trash-o"></i> 已刪除</button>
-    <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="printAllReq()" title="列印目前篩選的所有需求單"><i class="fa fa-print"></i> 列印</button>
+    <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="printAllReq()" title="依目前篩選結果，逐筆各自列印正式表單"><i class="fa fa-print"></i> 列印</button>
+    <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="printReqSummary()" title="多筆彙總成一份內部清單（非正式表單，不印 AS 文件編號）"><i class="fa fa-list-alt"></i> 清單彙總</button>
+<?php if (($PAGE_PERM ?? '') === 'A'): ?>
+    <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="openReqPrintSetting()" title="設定列印用的 AS 文件編號與領料人圖章模板"><i class="fa fa-cog"></i> 列印設定</button>
+<?php endif; ?>
     <span id="req-perm-badge" style="font-size:11px;padding:3px 8px;border-radius:10px;background:#e8f4fd;color:#1a78c2;border:1px solid #b8d8f0;font-weight:600;"></span>
     <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <div class="btn-group btn-group-sm" role="group" id="req-status-btns">
@@ -4395,6 +4544,37 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <div class="modal-footer">
         <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
         <button type="button" class="btn btn-danger" onclick="confirmDeleteReq()"><i class="fa fa-trash"></i> 確認刪除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Modal: 領料需求單列印設定（AS 文件綁定＋領料人圖章模板）══ -->
+<div class="modal fade" id="reqPrintSetModal" tabindex="-1">
+  <div class="modal-dialog" style="width:min(95vw,640px);">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-cog"></i> 領料需求單列印設定</h4></div>
+      <div class="modal-body" style="padding:14px 16px;">
+        <div style="margin-bottom:16px;">
+          <label style="font-weight:700;">AS 文件編號綁定</label>
+          <div style="font-size:12px;color:#888;margin-bottom:6px;">綁定後：列印表頭＝該文件的表單名稱、頁尾右下＝文件編號（四階文件依需求單建立日期回推當時版次）。</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span id="rps-asdoc-label" style="flex:1;min-width:220px;padding:6px 10px;background:#faf6ee;border:1px solid #e3d4b6;border-radius:4px;color:#5b3a1e;">尚未綁定</span>
+            <button class="btn btn-sm btn-default" onclick="pickReqAsDoc()"><i class="fa fa-search"></i> 選擇 AS 文件</button>
+            <button class="btn btn-sm btn-default" onclick="clearReqAsDoc()"><i class="fa fa-times"></i> 取消綁定</button>
+          </div>
+        </div>
+        <div style="margin-bottom:6px;">
+          <label style="font-weight:700;">領料人圖章模板</label>
+          <div style="font-size:12px;color:#888;margin-bottom:6px;">列印時「已領貨」欄會蓋上領料人（申請人）圖章。模板在「圖章管理 → 線上圖章設計」建立；未指定則用系統預設回墨印。列印一律用模板設計的實際尺寸，不會被縮小。</div>
+          <select id="rps-stamp-tpl" class="form-control input-sm" style="max-width:420px;">
+            <option value="0">（用系統預設印章）</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" onclick="saveReqPrintSetting()"><i class="fa fa-save"></i> 儲存設定</button>
       </div>
     </div>
   </div>
@@ -5390,6 +5570,11 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 <script src="../../resource/js/bootstrap.min.js"></script>
 <!-- 不使用 Chart.js，改用純 Canvas 2D API，徹底避開 custom.min.js 衝突 -->
 <script src="../../resource/js/custom.min.js"></script>
+<!-- 領料需求單列印：圖章(ai-rules/18，eg_stamp_tpl.js 缺一不可)／AS 文件綁定選擇器(ai-rules/16 一之三)／日期顯示格式(ai-rules/20) -->
+<script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script>
 // ── 全域 ────────────────────────────────────────
 var G = { page:1, rows:[], sortCol:'Modified_At', sortDir:'desc', allLocs:[], allCats:[], allUnits:[], allDepts:[], allAreas:[], currentItemDsid:null, currentItemUnits:[], countLoaded:false, reqLoaded:false, reportLoaded:false, currentCountSession:null, _todayOnly:false, _isAdminUser:false, _canCount:false, _canBatch:false, locPage:1, catPage:1, unitPage:1, safetyPage:1, managePageSize:8, locAreaFilter: 'all',
@@ -10301,8 +10486,10 @@ function setReqStatusFilter(status, btn){
     loadRequisitions();
 }
 
-// ── 列印篩選結果 ──────────────────────────────────
-function printAllReq(){
+// ── 列印彙總清單（多筆合併成一份內部清單）──────────────────
+// ai-rules/16 三之三：多份文件混排在同一次列印工作裡，AS 編號會疊字/漏印，故本彙總清單**不印 AS 文件編號**，
+// 正式表單一律走 printRequisition()（一次列印工作只對應一份文件）。
+function printReqSummary(){
     var activeBtn=$('.req-status-btn.btn-primary');
     var status=activeBtn.length?(activeBtn.data('status')??''):'0';
     var kw=$('#req-filter-kw').val().trim();
@@ -11021,56 +11208,197 @@ function submitEditReq(){
     });
 }
 
-function printRequisition(){
-    var req=G.req.currentReq;
-    if(!req){ toast('請先開啟需求單詳情','error'); return; }
+// ══════════════════════════════════════════════════════
+// ── 領料需求單「正式表單」列印（ai-rules/16 / 18 / 20）────────────
+// 一次列印工作只對應一份需求單（三之三），故 AS 編號可安全走 @page @bottom-right；
+// 版次依該單業務日期（建立日期）回推（三之四），表頭取綁定 AS 文件的 doc_name（一之二），
+// 大標題取本公司全名（第一節），日期顯示 YYYY.MM.DD（ai-rules/20）。
+// ══════════════════════════════════════════════════════
+function reqDispDate(v){
+    var d=String(v||'').substr(0,10);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return '';
+    return (window.egFmtDate ? egFmtDate(d) : d);
+}
+
+// 領料人圖章：模板由管理員在「列印設定」指定；未指定時退回系統預設回墨印並套 91px（ai-rules/18 鐵則6）
+function reqStampHtml(name, dateStr, meta){
+    if(!name) return '';
+    var schema=(meta && meta.stamp_tpl && meta.stamp_tpl.schema) ? meta.stamp_tpl.schema : null;
+    // 章的長相由 eg_stamp.js 決定（掃描實體章 > 模板章 > 預設回墨印），列印尺寸則看 svg 自己的 class，
+    // 不能用「有沒有傳模板」來判斷——有實體章的人即使指定了模板，回來的仍是 car-stamp。
+    return EGStamp.stamp(name, dateStr, false, schema, (meta&&meta.dept_name)||'', (meta&&meta.requester_position)||'');
+}
+
+// reqId 省略＝印詳情跳窗目前開著的那張；onDone＝批次列印排隊用（ai-rules/16 三之五）
+function printRequisition(reqId, onDone){
+    var cur=G.req.currentReq;
+    if(!reqId){
+        if(!cur){ toast('請先開啟需求單詳情','error'); if(onDone) onDone(); return; }
+        doPrintRequisition(cur, onDone); return;
+    }
+    ajx({action:'get_req_detail', req_id:reqId}, function(r){
+        if(!r.success||!r.req){ toast(r.message||'載入需求單失敗','error'); if(onDone) onDone(); return; }
+        doPrintRequisition(r.req, onDone);
+    });
+}
+
+function doPrintRequisition(req, onDone){
+    ajx({action:'req_print_meta', req_id:req.req_id}, function(m){
+        var meta=(m&&m.success)?m:{};
+        meta.dept_name=req.dept_name||'';
+        // 掃描實體章對照表是非同步載入的，沒等它會把有實體章的人印成預設 SVG 章（eg_stamp.js whenReady）
+        if(window.EGStamp && EGStamp.whenReady) EGStamp.whenReady(function(){ buildReqPrintWindow(req, meta, onDone); });
+        else buildReqPrintWindow(req, meta, onDone);
+    });
+}
+
+function buildReqPrintWindow(req, meta, onDone){
+    var company=meta.company||'';
+    window.__ownCompany=company;   // eg_stamp.js 畫預設回墨印時要用（ai-rules/18 鐵則2）
+    var title=(meta.doc&&meta.doc.doc_name)?meta.doc.doc_name:'領庫需求單';
+    var asTxt=String(meta.doc_no_print||'').replace(/['\\]/g,'');
+    // 簽章日期＝該單業務日期：已出庫用出庫日，否則用建立日（ai-rules/16 三之二：同一份文件共用同一套認定）
+    var stampDate=reqDispDate(req.issued_at||req.Created_At);
+    var picker=req.requester_name||req.creator_name||'';
     var hasUrgent=(req.items||[]).some(function(it){ return parseInt(it.is_urgent)===1; });
-    var hdr='<table style="width:100%;margin-bottom:8px;border-collapse:collapse;font-size:10px;">'
-        +'<tr>'
-        +'<td><strong>需求單號：</strong>'+esc(req.req_no||'—')+'</td>'
-        +'<td><strong>申請部門：</strong>'+esc(req.dept_name||'—')+'</td>'
-        +'<td><strong>申請人：</strong>'+esc(req.requester_name||req.creator_name||'—')+'</td>'
-        +(hasUrgent?'<td style="color:red;font-weight:700;">★ 含急件</td>':'<td></td>')
-        +'</tr>'
-        +'<tr>'
-        +'<td><strong>標題：</strong>'+esc(req.title||'—')+'</td>'
-        +'<td colspan="2"><strong>備註：</strong>'+esc(req.req_remark||'—')+'</td>'
-        +'<td><strong>日期：</strong>'+(req.Created_At||'').substr(0,10)+'</td>'
-        +'</tr>'
+
+    var metaTbl='<table class="p-meta"><colgroup><col style="width:14%"><col style="width:22%"><col style="width:14%"><col style="width:22%"><col style="width:12%"><col style="width:16%"></colgroup>'
+        +'<tr><th>需求單號</th><td>'+esc(req.req_no||'')+'</td>'
+        +'<th>申請部門</th><td>'+esc(req.dept_name||'')+'</td>'
+        +'<th>日期</th><td>'+esc(reqDispDate(req.Created_At))+'</td></tr>'
+        +'<tr><th>標題</th><td>'+esc(req.title||'')+'</td>'
+        +'<th>申請人</th><td>'+esc(picker)+'</td>'
+        +'<th>出庫日期</th><td>'+esc(reqDispDate(req.issued_at))+'</td></tr>'
+        +'<tr><th>備註</th><td colspan="3">'+esc(req.req_remark||'')+'</td>'
+        +'<th>急件</th><td>'+(hasUrgent?'<span class="p-urg">★ 含急件</span>':'—')+'</td></tr>'
         +'</table>';
+
     var tbody='';
-    (req.items||[]).forEach(function(it){
-        var urgCell=parseInt(it.is_urgent)===1?'<span style="color:red;font-weight:700;margin-right:3px;">★急</span>':'';
+    (req.items||[]).forEach(function(it,i){
+        var urg=parseInt(it.is_urgent)===1?'<span class="p-urg">★急</span> ':'';
+        var issued=parseFloat(it.qty_issued||0)||0;
         tbody+='<tr>'
-            +'<td>'+urgCell+esc(it.client_name||'')+'</td>'
-            +'<td>'+esc(it.d_id||'')+'</td>'
-            +'<td>'+esc(it.category_name||'—')+'</td>'
-            +'<td>'+esc(it.storage_location||'')+'</td>'
-            +'<td style="text-align:center;">'+esc(it.qty_requested)+'</td>'
-            +'<td style="text-align:center;">'+esc(it.current_qty||0)+'</td>'
-            +'<td></td>'
-            +'<td>'+esc(it.item_remark||'')+'</td>'
+            +'<td class="c">'+(i+1)+'</td>'
+            +'<td class="tl">'+esc(it.client_name||'')+'</td>'
+            +'<td class="tl">'+urg+esc(it.d_id||'')+'</td>'
+            +'<td>'+esc(it.category_name||'')+'</td>'
+            +'<td class="tl">'+esc(it.storage_location||it.all_locations||'')+'</td>'
+            +'<td class="c">'+esc(it.qty_requested)+'</td>'
+            +'<td class="c">'+esc(it.current_qty||0)+'</td>'
+            +'<td class="p-sign">'+(issued>0?'<div class="p-qty">'+issued+'</div>':'')+reqStampHtml(picker, stampDate, meta)+'</td>'
+            +'<td class="tl">'+esc(it.item_remark||'')+'</td>'
             +'</tr>';
     });
-    var tbl='<table style="width:100%;border-collapse:collapse;white-space:nowrap;">'
-        +'<thead><tr style="background:#eee;">'
-        +'<th>客戶</th><th>料號</th><th>倉別</th><th>儲位</th>'
-        +'<th>申請量</th><th>庫存</th><th style="min-width:60px;">已領貨</th><th>備註</th>'
-        +'</tr></thead><tbody>'+tbody+'</tbody></table>';
-    var w=window.open('','_blank','width=1100,height=750');
-    w.document.write('<html><head><title>領庫需求單 '+esc(req.req_no||'')+'</title><style>'
-        +'body{font-family:Arial,sans-serif;font-size:9px;margin:12px;}'
-        +'table{width:100%;border-collapse:collapse;}'
-        +'th,td{border:1px solid #ccc;padding:3px 5px;white-space:nowrap;}'
-        +'th{background:#eee;font-weight:600;}'
-        +'@page{size:A4 landscape;margin:10mm;}'
-        +'@media print{body{-webkit-print-color-adjust:exact;}}'
-        +'</style></head><body>'
-        +'<h4 style="margin-bottom:6px;font-size:12px;">領庫需求單</h4>'
-        +hdr+tbl
-        +'</body></html>');
+    if(!tbody) tbody='<tr><td colspan="9" style="padding:14px;color:#888;">無料號明細</td></tr>';
+
+    var tbl='<table class="p-tb">'
+        +'<colgroup><col style="width:4%"><col style="width:13%"><col style="width:17%"><col style="width:9%"><col style="width:11%">'
+        +'<col style="width:7%"><col style="width:7%"><col style="width:16%"><col style="width:16%"></colgroup>'
+        +'<thead><tr><th>#</th><th>客戶</th><th>料號</th><th>種類</th><th>儲位</th><th>申請量</th><th>庫存</th><th>已領貨</th><th>備註</th></tr></thead>'
+        +'<tbody>'+tbody+'</tbody></table>';
+
+    var body='<div class="p-comp">'+esc(company)+'</div>'
+        +'<div class="p-title">'+esc(title)+'</div>'
+        +metaTbl+tbl;
+
+    var css='body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;margin:0;padding:0 4mm;color:#222;'
+        +'-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        +'*{box-sizing:border-box;}'
+        +'.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}'
+        +'.p-title{font-size:16px;font-weight:bold;text-align:center;letter-spacing:5px;margin-bottom:8px;}'
+        +'table{width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;}'
+        +'table.p-meta{font-size:11px;margin-bottom:6px;}'
+        +'table.p-meta th,table.p-meta td{border:1px solid #666;padding:3px 6px;text-align:left;overflow-wrap:break-word;word-break:break-word;}'
+        +'table.p-meta th{background:#f3ead6;white-space:nowrap;}'
+        +'table.p-tb{font-size:11px;}'
+        +'table.p-tb thead{display:table-header-group;}'
+        +'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 5px;text-align:center;overflow-wrap:break-word;word-break:break-word;}'
+        +'table.p-tb thead th{background:#f3ead6;}'
+        +'table.p-tb td.tl{text-align:left;}'
+        +'table.p-tb td.c{text-align:center;}'
+        +'table.p-tb tr{break-inside:avoid;page-break-inside:avoid;}'
+        +'td.p-sign{padding:2px;}'
+        +'td.p-sign .p-qty{font-size:11px;font-weight:700;}'
+        +'.p-urg{color:#DD5138;font-weight:700;}'
+        // 圖章（列印視窗拿不到 eg_stamp.js 注入的樣式，必須自己寫齊）：
+        //  ①掃描實體章／系統預設回墨印＝ai-rules/18 鐵則6 的 91px
+        //  ②模板章＝一律用模板設計的實際尺寸，並用 height:auto 蓋掉 fillRatio 的 height:%（使用者明確要求：列印不可縮小印章）
+        +'.stamp-wrap{display:inline-block;text-align:center;margin:2px 0;}'
+        +'.stamp-wrap .stamp-title{display:block;font-size:11px;color:#999;}'
+        +'.stamp-wrap svg{-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        +'.stamp-wrap svg.car-stamp{width:91px;height:91px;}'
+        +'.stamp-wrap.stamp-fill{height:auto !important;display:inline-block;}'
+        +'@page{size:A4 landscape;margin:12mm 8mm 16mm;'
+        +(asTxt?" @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }":'')
+        +'}';
+
+    var w=window.open('','_blank');
+    if(!w){ toast('請允許彈出視窗以列印','warning'); if(onDone) onDone(); return; }
+    // <!DOCTYPE html> 不可省：漏了會落入 Quirks Mode，scrollHeight 量不準、單頁文件也會誤印頁碼（ai-rules/16 三之二）
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+' '+esc(req.req_no||'')+'</title>'
+        +'<style>'+css+'</style></head><body>'+body
+        +'<scr'+'ipt>window.onload=function(){'
+        +'var onePage=(210-28)*96/25.4;'
+        +'if(document.body.scrollHeight>onePage*0.92){'
+        +'var st=document.createElement(\'style\');'
+        +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
+        +'document.head.appendChild(st);}'
+        +'setTimeout(function(){window.print();},250);};</scr'+'ipt></body></html>');
     w.document.close(); w.focus();
-    setTimeout(function(){ w.print(); }, 300);
+    if(onDone) setTimeout(onDone, 500);
+}
+
+// ── 批次列印：逐筆各自開視窗排隊（ai-rules/16 三之五，不做內容合併）──────
+var REQ_PRINT_BATCH_THRESHOLD = 15;
+function printAllReq(){
+    var activeBtn=$('.req-status-btn.btn-primary');
+    var status=activeBtn.length?(activeBtn.data('status')??''):'0';
+    var kw=$('#req-filter-kw').val().trim();
+    ajx({action:'print_requisitions', status:status===''?'all':status, kw:kw}, function(r){
+        if(!r.success){ toast(r.message||'載入失敗，無法列印','error'); return; }
+        var ids=(r.reqs||[]).map(function(x){ return x.req_id; });
+        if(!ids.length){ toast('目前篩選條件下沒有需求單','info'); return; }
+        if(ids.length>REQ_PRINT_BATCH_THRESHOLD &&
+           !confirm('共 '+ids.length+' 張需求單，會逐張各自開一個列印視窗，瀏覽器可能跳出快顯封鎖提示。確定要繼續嗎？')) return;
+        var i=0;
+        (function next(){
+            if(i>=ids.length){ toast('已送出 '+ids.length+' 張需求單的列印','success'); return; }
+            printRequisition(ids[i++], next);
+        })();
+    });
+}
+
+// ── 列印設定（AS 文件綁定＋領料人圖章模板）：限 A 權限 ──────────────
+var REQ_PRINT_SET={docs:[],docId:0,doc:null};
+function openReqPrintSetting(){
+    ajx({action:'req_print_setting_get'}, function(r){
+        if(!r.success){ toast(r.message||'載入設定失敗','error'); return; }
+        REQ_PRINT_SET.docs=r.as_docs||[]; REQ_PRINT_SET.docId=parseInt(r.as_doc_id||0)||0; REQ_PRINT_SET.doc=r.as_doc||null;
+        renderReqAsDocLabel();
+        var $s=$('#rps-stamp-tpl').html('<option value="0">（用系統預設印章）</option>');
+        (r.stamp_tpls||[]).forEach(function(t){
+            $s.append('<option value="'+t.id+'">'+esc(t.tpl_name)+(t.type_name?'（'+esc(t.type_name)+'）':'')+'</option>');
+        });
+        $s.val(String(parseInt(r.stamp_tpl_id||0)||0));
+        if($s.val()===null) $s.val('0');
+        $('#reqPrintSetModal').modal('show');
+    });
+}
+function renderReqAsDocLabel(){
+    var txt=(window.EGAsDoc&&EGAsDoc.label)?EGAsDoc.label(REQ_PRINT_SET.doc):(REQ_PRINT_SET.doc?REQ_PRINT_SET.doc.doc_no:'尚未綁定');
+    $('#rps-asdoc-label').text(txt);
+}
+function pickReqAsDoc(){
+    EGAsDoc.open({docs:REQ_PRINT_SET.docs, current:REQ_PRINT_SET.docId, title:'領料需求單－AS 文件編號綁定',
+        onSave:function(id,doc){ REQ_PRINT_SET.docId=parseInt(id)||0; REQ_PRINT_SET.doc=doc||null; renderReqAsDocLabel(); }});
+}
+function clearReqAsDoc(){ REQ_PRINT_SET.docId=0; REQ_PRINT_SET.doc=null; renderReqAsDocLabel(); }
+function saveReqPrintSetting(){
+    ajx({action:'req_print_setting_save', as_doc_id:REQ_PRINT_SET.docId, stamp_tpl_id:parseInt($('#rps-stamp-tpl').val()||0)||0}, function(r){
+        if(!r.success){ toast(r.message||'儲存失敗','error'); return; }
+        toast('列印設定已儲存','success');
+        $('#reqPrintSetModal').modal('hide');
+    });
 }
 
 // ══════════════════════════════════════════════════════
