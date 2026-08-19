@@ -3232,7 +3232,16 @@ function openRefSettings(){
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 $('#btnRoleHelp').on('click', function(){ openMask('roleHelpMask'); });
-$('.pf-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });
+/* 點跳窗外自動關閉——但排除會遺失輸入的視窗（2026-08-18 使用者要求）：
+   #editMask 是整份分析表的填寫畫面，誤點一下外圍就整份消失、資料全沒了；
+   #refSettingsMask 現在是頁內大分頁（position:static、寬度佔滿），點到它的留白處
+   e.target 也會等於它本身，會把整個設定畫面收掉，同樣要排除。 */
+var NO_OUTSIDE_CLOSE = ['editMask', 'refSettingsMask'];
+$('.pf-mask').on('click', function(e){
+    if (e.target !== this) return;
+    if (NO_OUTSIDE_CLOSE.indexOf(this.id) >= 0) return;
+    this.style.display = 'none';
+});
 
 <?php if ($perms['canView']): ?>
 loadList();
