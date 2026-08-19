@@ -1706,13 +1706,27 @@ case 'add_old_versions_batch':
     $st->execute([$docId, $curVer]);
     $curDate = (string)($st->fetchColumn() ?: '');
 
+    // 補舊版次不要求使用者自己排順序（都在補歷史了，還卡填寫順序不合理）：
+    // 後端一律先依版本號由舊到新自動排序（版本號無法比較時退回用修訂日期），
+    // 但錯誤訊息與檔案欄位仍對回「畫面上的原始列號」，使用者才找得到是哪一列。
+    $rows = array_values($rows);
+    foreach ($rows as $k => $r) { $rows[$k]['_row'] = $k; }
+    usort($rows, function ($a, $b) {
+        $c = asVersionCmp(asNormVer($a['version'] ?? ''), asNormVer($b['version'] ?? ''));
+        if ($c !== null && $c !== 0) return $c;
+        $da = trim($a['revised_date'] ?? ''); $dbb = trim($b['revised_date'] ?? '');
+        if ($da !== $dbb) return strcmp($da, $dbb);
+        return $a['_row'] <=> $b['_row'];
+    });
+
     $dir = asDocDir($db, $docId);
     $movedFiles = [];
     $db->beginTransaction();
     try {
-        $prevVersion = ''; $prevDate = '';
-        foreach ($rows as $i => $r) {
-            $rowNo = $i + 1;
+        $prevVersion = ''; $prevDate = ''; $done = [];
+        foreach ($rows as $r) {
+            $srcIdx = (int)$r['_row'];
+            $rowNo = $srcIdx + 1;
             $version = asNormVer($r['version'] ?? '');
             $rdate   = trim($r['revised_date'] ?? '') ?: null;
             if ($version==='') throw new Exception("第{$rowNo}列：版本號必填");
@@ -1725,19 +1739,18 @@ case 'add_old_versions_batch':
             $cmp = asVersionCmp($version, $curVer);
             if ($cmp === null) throw new Exception("第{$rowNo}列：版本號 {$version} 無法與目前版本 {$curVer} 比較新舊，請確認格式一致");
             if ($cmp >= 0) throw new Exception("第{$rowNo}列：版本號 {$version} 不比目前版本 {$curVer} 舊；補舊版次只能補歷史紀錄，要新增更新的版本請用「改版」或「批次補建版本」");
-            // 本批內由舊到新
-            if ($prevVersion !== '') {
-                $c2 = asVersionCmp($version, $prevVersion);
-                if ($c2 !== null && $c2 <= 0) throw new Exception("第{$rowNo}列：版本號 {$version} 未比上一列 {$prevVersion} 新，請由舊到新排列");
-            }
-            // 日期：早於目前版本、且不早於上一列（依業務日期回推版次靠 revised_date 排序）
+            // 已自動排序，這裡只會擋到「版本號彼此無法比較」（型式不一致的漏網之魚）
+            if ($prevVersion !== '' && asVersionCmp($version, $prevVersion) === null)
+                throw new Exception("第{$rowNo}列：版本號 {$version} 與 {$prevVersion} 無法比較新舊，請確認版本號格式一致");
+            // 日期：早於目前版本（依業務日期回推版次靠 revised_date 排序，順序顛倒會取錯版）
             if ($curDate !== '' && $rdate >= $curDate)
                 throw new Exception("第{$rowNo}列：修訂日期 {$rdate} 不早於目前版本 {$curVer} 的修訂日期 {$curDate}；舊版次的日期必須更早，否則依日期回推版次會取錯版");
+            // 版本越新、日期應該越晚；排序後仍矛盾＝日期真的填錯了（不是順序問題）
             if ($prevDate !== '' && $rdate < $prevDate)
-                throw new Exception("第{$rowNo}列：修訂日期 {$rdate} 早於上一列的 {$prevDate}，請由舊到新排列");
+                throw new Exception("第{$rowNo}列：版本 {$version} 的修訂日期 {$rdate}，比更舊的版本 {$prevVersion}（{$prevDate}）還早，版本越新日期應該越晚，請確認日期是否填錯");
 
             $fname = null; $orig = null;
-            $fkey = 'file_'.$i;
+            $fkey = 'file_'.$srcIdx; // 排序後仍對回畫面該列選的檔案
             if (isset($_FILES[$fkey]) && $_FILES[$fkey]['error']===UPLOAD_ERR_OK) {
                 $ext = asSafeExt($_FILES[$fkey]['name']);
                 if (!$ext) throw new Exception("第{$rowNo}列：不允許此檔案類型");
@@ -1753,6 +1766,7 @@ case 'add_old_versions_batch':
                ->execute([$docId,$version,trim($r['change_status'] ?? '修正') ?: '修正',$rdate,
                           trim($r['revised_pages'] ?? '') ?: null, trim($r['revised_summary'] ?? '') ?: null,
                           $doc['doc_level'],$doc['department_id'],$fname,$orig,$GLOBALS['currentCname']]);
+            $done[] = $version;
             $prevVersion = $version;
             $prevDate = $rdate;
         }
@@ -1760,10 +1774,10 @@ case 'add_old_versions_batch':
         $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
                       VALUES ('views/ADM/as_document_management.php', ?, ?, NOW(), ?)")
            ->execute(['補舊版次（歷史版本紀錄）',
-               "doc_no={$doc['doc_no']} doc_name={$doc['doc_name']} 目前版本={$curVer} 補入=".implode('、', array_map(fn($r)=>asNormVer($r['version'] ?? ''), $rows)),
+               "doc_no={$doc['doc_no']} doc_name={$doc['doc_name']} 目前版本={$curVer} 補入=".implode('、', $done),
                $currentCname ?: $currentUserName]);
         $db->commit();
-        jout(['status'=>'success','count'=>count($rows),'current_version'=>$curVer]);
+        jout(['status'=>'success','count'=>count($rows),'current_version'=>$curVer,'versions'=>$done]);
     } catch (Exception $e) {
         $db->rollBack();
         foreach ($movedFiles as $f) @unlink($f); // 交易失敗，清掉已搬入的檔案

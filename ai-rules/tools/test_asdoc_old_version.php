@@ -91,20 +91,25 @@ try {
     $r = api('add_old_versions_batch', $rows([['version' => '1.5', 'revised_date' => '2025-07-01']]), $superName);
     ck('數字/字母型混用被擋下', ($r['status'] ?? '') === 'error', $r['message'] ?? '');
 
+    // 倒著填（新→舊）也要能過：系統自動排序，不該卡使用者的填寫順序
     $r = api('add_old_versions_batch', $rows([
-        ['version' => 'B-2', 'revised_date' => '2025-09-01'],
-        ['version' => 'B-1', 'revised_date' => '2025-10-01'],
-    ]), $superName);
-    ck('本批未由舊到新排列被擋下', ($r['status'] ?? '') === 'error' && str_contains($r['message'] ?? '', '未比上一列'), $r['message'] ?? '');
-    $cnt = (int)$db->query("SELECT COUNT(*) FROM as_document_version WHERE doc_id=$docId AND version='B-2'")->fetchColumn();
-    ck('整批失敗時第一列也未寫入（transaction 回滾）', $cnt === 0);
-
-    $r = api('add_old_versions_batch', $rows([
-        ['version' => 'B-1', 'revised_date' => '2025-09-01'],
         ['version' => 'B-2', 'revised_date' => '2025-10-01'],
+        ['version' => 'B-1', 'revised_date' => '2025-09-01'],
     ]), $superName);
-    ck('一次補兩版（由舊到新）成功', ($r['status'] ?? '') === 'success', json_encode($r, JSON_UNESCAPED_UNICODE));
+    ck('倒著填（新→舊）自動排序後成功', ($r['status'] ?? '') === 'success', json_encode($r, JSON_UNESCAPED_UNICODE));
+    ck('回傳的寫入順序已排成由舊到新 B-1→B-2', ($r['versions'] ?? []) === ['B-1', 'B-2'], json_encode($r['versions'] ?? []));
+    $ordOk = $db->query("SELECT GROUP_CONCAT(version ORDER BY id) FROM as_document_version WHERE doc_id=$docId AND version LIKE 'B-%'")->fetchColumn();
+    ck('DB 內寫入順序也是 B-1,B-2', $ordOk === 'B-1,B-2', '實際=' . $ordOk);
     ck('補完目前版本仍是 C', $curVerOf() === 'C', '實際=' . $curVerOf());
+
+    // 排序後仍矛盾＝日期真的填錯（版本越新日期卻越早），要擋下並整批回滾
+    $r = api('add_old_versions_batch', $rows([
+        ['version' => 'A-9', 'revised_date' => '2024-03-01'],
+        ['version' => 'A-8', 'revised_date' => '2024-08-01'],
+    ]), $superName);
+    ck('版本與日期矛盾被擋下', ($r['status'] ?? '') === 'error' && str_contains($r['message'] ?? '', '版本越新日期應該越晚'), $r['message'] ?? '');
+    $cnt = (int)$db->query("SELECT COUNT(*) FROM as_document_version WHERE doc_id=$docId AND version IN ('A-8','A-9')")->fetchColumn();
+    ck('整批失敗時較舊那列也未寫入（transaction 回滾）', $cnt === 0);
 
     // 非超級管理員（另找一個一般帳號）
     $other = $db->query("SELECT user_uname FROM `user` WHERE id<>1 AND state=1 AND user_uname<>'' ORDER BY id LIMIT 1")->fetchColumn();

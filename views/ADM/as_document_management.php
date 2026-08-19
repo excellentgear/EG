@@ -2052,7 +2052,7 @@ $(function(){
     $('#vb_doc_name').text(curHistDocName);
     $('#vb_mode_title').text(mode==='old' ? '補舊版次（超級管理員）' : '批次補建版本');
     $('#vb_mode_hint').html(mode==='old'
-      ? `補「比目前版本 <b>${esc(curHistCurVer)}</b> 舊」的歷史版次紀錄：<b>目前版本不會被改動</b>，只把漏掉的舊版補回版本歷史（讓依業務日期回推版次時查得到）。由上到下＝由舊到新；每列的修訂日期必須<b>早於目前版本的修訂日期${curHistCurDate?'（'+esc(dispDate(curHistCurDate))+'）':''}</b>。免制修申請單；檔案可附可不附。`
+      ? `補「比目前版本 <b>${esc(curHistCurVer)}</b> 舊」的歷史版次紀錄：<b>目前版本不會被改動</b>，只把漏掉的舊版補回版本歷史（讓依業務日期回推版次時查得到）。<b>填寫順序不拘，系統會自動由舊到新排好</b>；每列的修訂日期必須<b>早於目前版本的修訂日期${curHistCurDate?'（'+esc(dispDate(curHistCurDate))+'）':''}</b>。免制修申請單；檔案可附可不附。`
       : '由上到下＝由舊到新依序建立（版本號必須遞增），最後一列會成為目前版本。前期補件用：免制修申請單；檔案可附可不附（之後可在歷史版本「補檔」）。');
     $('#vbSubmit').html(mode==='old' ? '<i class="fa fa-history"></i> 補入舊版次' : '<i class="fa fa-upload"></i> 依序建立');
     $('#vbRows').empty().append(vbRowHtml());
@@ -2086,7 +2086,7 @@ $(function(){
      .done(r=>{
         if(r.status==='success'){
           $('#verBatchModal').modal('hide');
-          showToast(isOld ? `已補入 ${r.count} 個舊版次（目前版本仍為 ${r.current_version}）`
+          showToast(isOld ? `已補入 ${r.count} 個舊版次：${(r.versions||[]).join('→')}（目前版本仍為 ${r.current_version}）`
                           : `已依序建立 ${r.count} 個版本（目前版本 ${r.current_version}）`);
           loadDocs(true);
         } else { $('#vbResult').html(`<div class="alert alert-danger" style="margin-top:8px;">${esc(r.message)}（全部未寫入，修正後重送）</div>`); }
