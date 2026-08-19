@@ -20,12 +20,15 @@ $db = (new DBConnection())->getPDO();
 da_ensure_schema($db);
 $daUser = da_current_user($db);
 $perms  = da_perms($db, $daUser);
+/* 嵌入模式（?embed=1&apply_id=n）：只顯示這一筆的檢視跳窗，供其他頁面（如 AS 文件管理）用 iframe 叫出來，
+   列印仍是本頁自己的列印（不在別頁重刻一份），權限一樣由 API 的 da_can_see 把關。 */
+$daEmbed = !empty($_GET['embed']);
 $roleLabel = $perms['isAdmin'] ? '管理者'
            : ($perms['canAdmin'] ? '文件制修申請單管理員'
            : ($perms['canEdit'] ? '文件制修申請單申請' : ($perms['canView'] ? '文件制修申請單檢閱' : '無角色（僅能處理指派給你的會簽）')));
 ?>
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-Hant"<?= $daEmbed ? ' class="da-embed"' : '' ?>>
 <head>
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -83,6 +86,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .cs-agreed { background:#F0A24B; color:#fff; }
         .cs-disagree { background:#DD5138; color:#fff; }
         .da-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:9000; overflow:auto; }
+        /* 嵌入模式：整頁只剩跳窗，遮罩底色仍由本頁的 .da-mask 畫（不依賴 iframe 透明度） */
+        html.da-embed, body.da-embed { background:transparent !important; }
+        body.da-embed .container.body { display:none !important; }
         .da-modal { background:#fff; border-radius:8px; margin:30px auto; max-width:1000px; width:96%; box-shadow:0 8px 30px rgba(0,0,0,.3); }
         .da-modal.narrow { max-width:520px; }
         .da-modal.mid { max-width:760px; }
@@ -117,7 +123,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .chip .x { cursor:pointer; color:#b5762a; margin-left:4px; font-weight:bold; }
     </style>
 </head>
-<body class="nav-sm">
+<body class="nav-sm<?= $daEmbed ? ' da-embed' : '' ?>">
 <div class="container body">
 <div class="main_container">
     <?php include '../partPage/sideAndTopBarMenu.html' ?>
@@ -562,6 +568,7 @@ $(document).ready(function(){
 var API   = '../../src/store/DocApply_API.php';
 var PERMS = <?= json_encode($perms, JSON_UNESCAPED_UNICODE) ?>;
 var META  = null, ASDOCS = null;
+var DA_EMBED = <?= $daEmbed ? 'true' : 'false' ?>;   /* 被 iframe 嵌入時只跑檢視跳窗 */
 var page = 1, pageSize = 10, listRows = [], curEditId = 0, curViewId = 0, curCosId = 0;
 var cosSel = [], cdSel = [], sugRows = [], autoIds = [];
 
@@ -570,7 +577,11 @@ function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
 function dispDate(v){ try { return window.egFmtDate ? egFmtDate(v) : (v || ''); } catch(e){ return v || ''; } }
 function dispDT(v){ if(!v) return ''; var p = String(v).split(' '); return dispDate(p[0]) + (p[1] ? ' ' + p[1].substring(0,5) : ''); }
 function openMask(id){ document.getElementById(id).style.display='block'; }
-function closeMask(id){ document.getElementById(id).style.display='none'; }
+function closeMask(id){
+    document.getElementById(id).style.display='none';
+    /* 嵌入模式關掉檢視窗＝請外層頁面收掉 iframe（否則會留下一片空白遮罩） */
+    if (DA_EMBED && id === 'viewMask') { try { parent.postMessage({t:'daEmbedClose'}, '*'); } catch(e){} }
+}
 /* API 用 HTTP 狀態碼回錯，jQuery 非 2xx 不進 success —— 統一在這裡顯示，避免「按了沒反應」 */
 $(document).ajaxError(function(e, xhr){
     if (xhr && xhr.responseJSON && xhr.responseJSON.error) alert(xhr.responseJSON.error);
@@ -618,7 +629,7 @@ $.getJSON(API, {action:'meta'}, function(r){
     });
     $('#setAsDocLabel').text(r.asdoc ? (r.asdoc.doc_no + '　' + r.asdoc.doc_name) : '尚未綁定');
     fillPresetSelect(r.change_presets || []);
-    loadList();
+    if (!DA_EMBED) loadList();   // 嵌入模式不需要清單，少打一次 API
     openFromQuery();
 });
 
@@ -986,7 +997,7 @@ function doSave(submit){
 /* ══════════════════ 檢視／會簽／核准 ══════════════════ */
 function openView(id){
     curViewId = id;
-    $.getJSON(API, {action:'detail', apply_id:id}, function(r){
+    var jq = $.getJSON(API, {action:'detail', apply_id:id}, function(r){
         if (!r.ok) return;
         var d = r.row;
         $('#viewTitle').text('申請單 ' + (d.apply_no || ('#' + d.apply_id)) + '　' + (d.doc_no || '') + '　' + (d.doc_name || ''));
@@ -1062,6 +1073,8 @@ function openView(id){
         $('#viewBody').html(h);
         openMask('viewMask');
     });
+    /* 嵌入模式取不到資料（無權限/已刪）就請外層收掉 iframe，不要留一片空白 */
+    if (DA_EMBED) jq.fail(function(){ try { parent.postMessage({t:'daEmbedClose'}, '*'); } catch(e){} });
 }
 function kv(k, v){ return '<div><label>' + esc(k) + '</label><div style="color:#5b3a1e;">' + esc(v || '－') + '</div></div>'; }
 function sigCell(d, slot){

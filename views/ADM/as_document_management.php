@@ -2307,8 +2307,8 @@ $(function(){
         // 線上文件制、修申請單（2-DC-01-01）自動連結：有線上單就直接給連結，沒有就給「去建立」入口
         if(v.online_apply){
           const oa = v.online_apply, oaSt = {draft:'草稿',submitted:'已送出',approved:'已核准',rejected:'已退回'}[oa.status]||oa.status;
-          af += ` <a class="btn btn-xs btn-success" href="doc_apply.php" target="_blank" rel="noopener"
-                    title="此版本已有線上文件制、修申請單（${esc(oa.apply_no||'')}　${esc(dispDate(oa.apply_date))}　${esc(oaSt)}）">線上申請單</a>`;
+          af += ` <a class="btn btn-xs btn-success" href="javascript:void(0)" onclick="openApplyEmbed(${parseInt(oa.apply_id)||0})"
+                    title="此版本已有線上文件制、修申請單（${esc(oa.apply_no||'')}　${esc(dispDate(oa.apply_date))}　${esc(oaSt)}）；點擊直接開啟該筆明細（列印在跳窗內）">線上申請單</a>`;
         } else {
           af += ` <a class="btn btn-xs btn-warning" href="doc_apply.php" target="_blank" rel="noopener"
                     title="此版本尚無線上文件制、修申請單，可到該頁用「建議建立」一次補齊">補線上單</a>`;
@@ -3226,6 +3226,26 @@ $(function(){
     $.ajax({url:API+'?action=upload_template',type:'POST',data:fd,processData:false,contentType:false,dataType:'json'})
      .done(r=>{ if(r.status==='success'){ $('#tplStatus').text('已上傳'); $('#tplDownload').show(); alert('範本已上傳'); } else alert(r.message); });
   });
+
+  // ── 線上文件制、修申請單：直接開該筆的檢視跳窗 ──
+  // 用 iframe 嵌入 doc_apply.php?embed=1&apply_id=n（該頁只顯示這筆的檢視窗），
+  // 檢視內容、權限守門與「列印此筆」全部沿用 doc_apply.php 自己那一套，這裡不重刻。
+  window.openApplyEmbed = function(applyId){
+    applyId = parseInt(applyId) || 0;
+    if (!applyId) { alert('查無此線上申請單'); return; }
+    closeApplyEmbed();
+    // 遮罩底色由 doc_apply.php 的 .da-mask 在 iframe 內畫，這層保持透明（不依賴 iframe 透明度設定）
+    const box = $('<div id="applyEmbedMask" style="position:fixed;inset:0;z-index:10500;">'
+      + '<iframe src="doc_apply.php?embed=1&apply_id=' + applyId + '" '
+      + 'style="width:100%;height:100%;border:0;"></iframe></div>');
+    $('body').append(box);
+  };
+  function closeApplyEmbed(){ $('#applyEmbedMask').remove(); }
+  // 跳窗內按關閉/✕（或無權限讀不到）時，doc_apply.php 會 postMessage 回來
+  window.addEventListener('message', function(ev){
+    if (ev && ev.data && ev.data.t === 'daEmbedClose') closeApplyEmbed();
+  });
+  $(document).on('keydown', function(e){ if (e.key === 'Escape') closeApplyEmbed(); });
 
   $('#rbacHelp').on('click', function(e){ e.preventDefault(); alert('權限規則（職稱為主、個人優先）：\n1. 預設依「職稱」自動套用角色\n2. 個人另有指派角色時，以個人設定為準（覆蓋職稱）\n3. 職稱與個人的指派都在「權限設定頁 → AS9100 文件管理」區塊操作\n4. 管理員固定擁有全部權限\n\n可勾選的角色功能（本頁「角色設定」定義角色）：\n・檢閱/預覽＝線上預覽（不可下載原檔）\n・新增文件、改版/編輯、下載原檔（各自獨立）\n・刪除/還原\n・文管設定＝標籤/各文件開啟權限/NAS路徑/AS負責人/範本\n・線上開檔＝開工作副本直接打字列印'); });
 
