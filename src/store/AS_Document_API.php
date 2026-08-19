@@ -716,15 +716,15 @@ case 'add_version':
     // 改版版本號必須比目前版本新（不可倒退）
     if ($vErr = asValidateVersionOrder((string)($doc['current_version'] ?? ''), $version)) jout(['status'=>'error','message'=>$vErr]);
 
-    // 下載版可改用「由表單簽核案件導入」取代上傳（同一份文件不用上傳兩次）
+    // 檢視版可改用「由表單簽核案件導入」取代上傳（同一份文件不用上傳兩次）；下載版一律自行上傳
     $fsdCaseId = (int)($_POST['fsd_case_id'] ?? 0);
     $hasFile  = isset($_FILES['file']) && $_FILES['file']['error']===UPLOAD_ERR_OK;
     $hasView  = isset($_FILES['view_file']) && $_FILES['view_file']['error']===UPLOAD_ERR_OK;   // 檢視版（選填）
     $hasApply = isset($_FILES['apply_form']) && $_FILES['apply_form']['error']===UPLOAD_ERR_OK;
-    if ($fsdCaseId > 0 && $hasFile)
-        jout(['status'=>'error','message'=>'新版文件檔請擇一：上傳檔案，或由表單簽核案件導入']);
-    if (!$hasFile && $fsdCaseId <= 0 && !$asNoAttach)
-        jout(['status'=>'error','message'=>'請上傳新版文件檔（或改由表單簽核案件導入）']);
+    if ($fsdCaseId > 0 && $hasView)
+        jout(['status'=>'error','message'=>'檢視版請擇一：上傳檔案，或由表單簽核案件導入']);
+    if (!$hasFile && !$asNoAttach)
+        jout(['status'=>'error','message'=>'請上傳新版文件檔（下載版）']);
     // 改版一律需附「文件制修申請單(附件一)」；「補登免附件」角色豁免（補舊資料用）
     if (!$hasApply && !$asNoAttach)
         jout(['status'=>'error','message'=>'改版必須一併上傳「文件制修申請單」(附件一)']);
@@ -747,14 +747,11 @@ case 'add_version':
         $dir = asDocDir($db, $docId);
         if (($hasFile || $hasApply || $hasView || $fsdCaseId > 0) && !is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
 
-        $fname = null; $orig = null; $srcCaseId = null;
+        $fname = null; $orig = null;
         if ($hasFile) {
             $fname = asMakeName($ext);
             if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) throw new Exception('文件寫入失敗');
             $orig = basename($_FILES['file']['name']);
-        } elseif ($fsdCaseId > 0) {
-            $imp = asFsdImportFile($db, $fsdCaseId, $docId, $dir);
-            $fname = $imp['file_name']; $orig = $imp['original_name']; $srcCaseId = $imp['case_id'];
         }
 
         $applyName = null; $applyOrig = null;
@@ -764,12 +761,16 @@ case 'add_version':
             $applyOrig = basename($_FILES['apply_form']['name']);
         }
 
-        // 檢視版（選填）：沒傳＝線上預覽退回用下載版，之後可在歷史版本「補檔」
-        $viewName = null; $viewOrig = null;
+        // 檢視版（選填）：沒傳＝線上預覽退回用下載版，之後可在歷史版本「補檔」；
+        // 也可改由「表單簽核案件」導入該案件已簽核完成的合成 PDF（線上預覽看到的就是簽好章那一份）
+        $viewName = null; $viewOrig = null; $srcCaseId = null;
         if ($hasView) {
             $viewName = asMakeName($viewExt);
             if (!move_uploaded_file($_FILES['view_file']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$viewName)) throw new Exception('檢視版寫入失敗');
             $viewOrig = basename($_FILES['view_file']['name']);
+        } elseif ($fsdCaseId > 0) {
+            $imp = asFsdImportFile($db, $fsdCaseId, $docId, $dir);
+            $viewName = $imp['file_name']; $viewOrig = $imp['original_name']; $srcCaseId = $imp['case_id'];
         }
 
         // 舊版快照沿用主檔當下的階級/部門
