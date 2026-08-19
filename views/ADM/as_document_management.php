@@ -78,6 +78,8 @@ $asCaps = [
     'admin' => $asIsRoleAdmin || strpos($pp,'A')!==false,
     // 永久刪除（含改版紀錄，不可復原）：僅超級管理員 id=1 本人且具管理者權限，用於傳錯文件
     'super_delete' => ($id == 1 && $asIsRoleAdmin),
+    // 補舊版次（往前補比目前版本舊的歷史紀錄，會動到已發行的版本歷史）：僅超級管理員 id=1 本人且具管理者權限
+    'backfill_old' => ($id == 1 && $asIsRoleAdmin),
 ];
 
 if (!$asCaps['view']) {
@@ -417,11 +419,11 @@ if ($deptPerm === 'R') {
     <div class="modal-content">
       <div class="modal-header">
         <button type="button" class="close" data-dismiss="modal">&times;</button>
-        <h4 class="modal-title">批次補建版本 － <span id="vb_doc_name"></span></h4>
+        <h4 class="modal-title"><span id="vb_mode_title">批次補建版本</span> － <span id="vb_doc_name"></span></h4>
       </div>
       <div class="modal-body">
         <input type="hidden" id="vb_doc_id">
-        <p class="text-muted" style="font-size:12px;">由上到下＝由舊到新依序建立（版本號必須遞增），最後一列會成為目前版本。前期補件用：免制修申請單；檔案可附可不附（之後可在歷史版本「補檔」）。</p>
+        <p class="text-muted" style="font-size:12px;" id="vb_mode_hint">由上到下＝由舊到新依序建立（版本號必須遞增），最後一列會成為目前版本。前期補件用：免制修申請單；檔案可附可不附（之後可在歷史版本「補檔」）。</p>
         <div class="table-responsive">
           <table class="table table-condensed table-bordered" style="font-size:12px;">
             <thead><tr><th style="width:10%;">版本 *</th><th style="width:9%;">狀況</th><th style="width:13%;">修訂日期 *</th><th style="width:12%;">頁次</th><th>摘要</th><th style="width:20%;">文件檔（可不附）</th><th style="width:36px;"></th></tr></thead>
@@ -1885,18 +1887,27 @@ $(function(){
   });
 
   // ── 歷史版本 ──
-  let curHistDocId = 0, curHistDocName = '';
+  let curHistDocId = 0, curHistDocName = '', curHistCurVerId = 0, curHistCurVer = '', curHistCurDate = '';
   function openHistory(id, name){
     curHistDocId = id; curHistDocName = name;
     $('#his_doc_name').text(name);
     $.getJSON(API+'?action=get_document',{id:id}, r=>{
       if(r.status!=='success'){ alert(r.message); return; }
       const tb=$('#historyBody').empty();
+      // 目前版本（可替換檔案的唯一一筆；舊版是已發行紀錄不可替換）
+      curHistCurVerId = parseInt(r.data.current_version_id||0,10);
+      curHistCurVer   = r.data.current_version||'';
+      curHistCurDate  = (r.data.versions||[]).find(v=>v.id==curHistCurVerId)?.revised_date || '';
       (r.data.versions||[]).forEach(v=>{
+        const isCur = (v.id==curHistCurVerId);
+        // 只有目前版本能替換檔案：傳錯檔當場換掉，不必再開一版
+        const repBtn = (which,label)=> (canU && isCur)
+          ? ` <label class="btn btn-xs btn-warning" style="margin:0;" title="替換此檔案（僅限目前版本 ${esc(curHistCurVer)}）">${label}<input type="file" class="ver-replace" data-ver="${v.id}" data-which="${which}" style="display:none;"></label>` : '';
         let dl = '<span class="text-muted">無檔（補登）</span>';
         if(v.file_name){
           dl = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
           if(canDL) dl += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${v.id}">下載</a>`;
+          dl += repBtn('file','替換');
         } else if(canU){
           // 補登缺檔 → 可補上傳（只允許補空缺，不可替換）
           dl = `<label class="btn btn-xs btn-primary" style="margin:0;" title="補上傳此版本的文件檔">補檔<input type="file" class="ver-attach" data-ver="${v.id}" data-which="file" style="display:none;"></label>`;
@@ -1905,6 +1916,7 @@ $(function(){
         if(v.apply_form_file_name){
           af = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
           if(canDL) af += `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}">下載</a>`;
+          af += repBtn('apply','替換');
         } else if(canU){
           af = `<label class="btn btn-xs btn-default" style="margin:0;" title="補上傳此版本的制修申請單">補申請單<input type="file" class="ver-attach" data-ver="${v.id}" data-which="apply" style="display:none;"></label>`;
         }
@@ -1923,8 +1935,11 @@ $(function(){
         </tr>`);
       });
       if((r.data.versions||[]).length===0) tb.append('<tr><td colspan="10" class="text-center text-muted">無版本</td></tr>');
-      // 管理員：批次補建版本入口
-      $('#hisBatchBtn').remove();
+      // 管理員：批次補建版本入口／超級管理員：補舊版次入口
+      $('#hisBatchBtn, #hisOldBtn').remove();
+      if(window.asPerm.backfill_old && curHistCurVer){
+        $('#historyModal .modal-footer').prepend(`<button type="button" class="btn btn-default pull-left" id="hisOldBtn" style="margin-left:6px;" title="補「比目前版本舊」的歷史版次，不會變動目前版本"><i class="fa fa-history"></i> 補舊版次（超管）</button>`);
+      }
       if(window.asPerm.admin){
         $('#historyModal .modal-footer').prepend(`<button type="button" class="btn btn-warning pull-left" id="hisBatchBtn"><i class="fa fa-plus-square"></i> 批次補建版本（管理員）</button>`);
       }
@@ -1960,7 +1975,26 @@ $(function(){
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
   });
 
-  // ══ 批次補建版本（管理員）══
+  // 替換目前版本的檔案：傳錯檔補救（舊版不提供此鈕，後端也只放行目前版本）
+  $(document).on('change','.ver-replace', function(){
+    const f = this.files[0]; const $in=$(this); if(!f) return;
+    const which = $in.data('which'), label = which==='apply' ? '制修申請單' : '文件檔';
+    if(!confirm(`【替換${label}】目前版本 ${curHistCurVer}\n新檔：${f.name}\n\n舊檔會被刪除且無法復原（僅換檔案，版本號與修訂日期不變）。\n若是「內容改版」請改用「改版」建立新版本。\n\n確定要替換？`)){ $in.val(''); return; }
+    const fd = new FormData();
+    fd.append('version_id', $in.data('ver'));
+    fd.append('which', which);
+    fd.append('file', f);
+    NProgress.start();
+    $.ajax({url:API+'?action=version_replace_file', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+     .done(r=>{
+        if(r.status==='success'){ showToast('已替換'+label); openHistory(curHistDocId, curHistDocName); loadDocs(true); }
+        else alert(r.message||'失敗');
+     })
+     .fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $in.val(''); });
+  });
+
+  // ══ 批次補建版本（管理員）／補舊版次（超管）══
+  let vbMode = 'append'; // append=往後接新版（最後一列成為目前版本）｜old=往前補歷史舊版（不動目前版本）
   function vbRowHtml(){
     return `<tr>
       <td><input type="text" class="form-control input-sm vb-ver" placeholder="0.0 / A"></td>
@@ -2012,14 +2046,22 @@ $(function(){
     const $d = $(this).closest('tr').find('.vb-date');
     if(this.files[0] && !$d.val()) $d.val(fileDate(this.files[0]));
   });
-  $(document).on('click','#hisBatchBtn', function(){
+  function openVerBatch(mode){
+    vbMode = mode;
     $('#vb_doc_id').val(curHistDocId);
     $('#vb_doc_name').text(curHistDocName);
+    $('#vb_mode_title').text(mode==='old' ? '補舊版次（超級管理員）' : '批次補建版本');
+    $('#vb_mode_hint').html(mode==='old'
+      ? `補「比目前版本 <b>${esc(curHistCurVer)}</b> 舊」的歷史版次紀錄：<b>目前版本不會被改動</b>，只把漏掉的舊版補回版本歷史（讓依業務日期回推版次時查得到）。由上到下＝由舊到新；每列的修訂日期必須<b>早於目前版本的修訂日期${curHistCurDate?'（'+esc(dispDate(curHistCurDate))+'）':''}</b>。免制修申請單；檔案可附可不附。`
+      : '由上到下＝由舊到新依序建立（版本號必須遞增），最後一列會成為目前版本。前期補件用：免制修申請單；檔案可附可不附（之後可在歷史版本「補檔」）。');
+    $('#vbSubmit').html(mode==='old' ? '<i class="fa fa-history"></i> 補入舊版次' : '<i class="fa fa-upload"></i> 依序建立');
     $('#vbRows').empty().append(vbRowHtml());
     $('#vbResult').empty();
     $('#historyModal').modal('hide');
     $('#verBatchModal').modal('show');
-  });
+  }
+  $(document).on('click','#hisBatchBtn', ()=>openVerBatch('append'));
+  $(document).on('click','#hisOldBtn',   ()=>openVerBatch('old'));
   $('#vbAddRow').on('click', ()=>$('#vbRows').append(vbRowHtml()));
   $(document).on('click','.vb-del', function(){ $(this).closest('tr').remove(); });
   $('#vbSubmit').on('click', function(){
@@ -2038,12 +2080,14 @@ $(function(){
     fd.append('doc_id', $('#vb_doc_id').val());
     fd.append('rows', JSON.stringify(rows));
     files.forEach((f,i)=>{ if(f) fd.append('file_'+i, f); });
+    const isOld = (vbMode==='old');
     const $b=$(this).prop('disabled',true); NProgress.start();
-    $.ajax({url:API+'?action=add_versions_batch', type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+    $.ajax({url:API+'?action='+(isOld?'add_old_versions_batch':'add_versions_batch'), type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
      .done(r=>{
         if(r.status==='success'){
           $('#verBatchModal').modal('hide');
-          showToast(`已依序建立 ${r.count} 個版本（目前版本 ${r.current_version}）`);
+          showToast(isOld ? `已補入 ${r.count} 個舊版次（目前版本仍為 ${r.current_version}）`
+                          : `已依序建立 ${r.count} 個版本（目前版本 ${r.current_version}）`);
           loadDocs(true);
         } else { $('#vbResult').html(`<div class="alert alert-danger" style="margin-top:8px;">${esc(r.message)}（全部未寫入，修正後重送）</div>`); }
      })
