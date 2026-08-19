@@ -323,8 +323,57 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
 // ── 待補檔案項目（external_doc_pending）─────────────────────────────
 // 「PFMEA 已建立、但外來文件清單一列都沒有」的料號，由偵測建立成待補項目；
 // 補上傳附件後轉 status=done，該附件本身即成為正式清單的一列。
+// ── 共用：目前正式清單裡「已經有外來文件」的料號集合（ds_pk => 最新一筆來源）────
+// 一次算好給待補自動結案與 PFMEA 缺件偵測共用（同一次請求內快取，避免重複掃全部附件）
+function extdoc_parts_with_doc(PDO $db, bool $fresh = false): array {
+    static $cache = null;
+    if ($fresh) $cache = null;
+    if ($cache !== null) return $cache;
+    $cache = [];
+    foreach (extdoc_fetch_rows($db, ['mode' => 'all']) as $r) {
+        $pk = (int)$r['ds_pk'];
+        if (!isset($cache[$pk]) || $r['doc_date'] >= $cache[$pk]['doc_date']) {
+            $cache[$pk] = ['doc_date' => $r['doc_date'], 'source' => $r['source'], 'attach_id' => (int)$r['attach_id']];
+        }
+    }
+    return $cache;
+}
+
+/**
+ * 待補項目自動結案：料號只要已經有外來文件（不論從哪個入口上傳），待補項目就標記為已補。
+ * 走型態識別文件管制表／主檔管理／報價單上傳的檔案不會經過本頁的「上傳補檔」，
+ * 若只認本頁的補檔動作，待補清單會一直掛著一筆其實已經補好的項目（使用者實測回報）。
+ * 「不列入(ignored)」是人工決定，維持原狀不自動動它。
+ */
+function extdoc_pending_autoclose(PDO $db): int {
+    static $done = false;
+    if ($done) return 0;
+    $done = true;
+    try {
+        $rows = $db->query("SELECT id, ds_pk FROM external_doc_pending WHERE status='pending'")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) { return 0; }
+    if (!$rows) return 0;
+    $has = extdoc_parts_with_doc($db);
+    $n = 0; $up = null;
+    foreach ($rows as $r) {
+        $pk = (int)$r['ds_pk'];
+        if (!isset($has[$pk])) continue;
+        if ($up === null) {
+            $up = $db->prepare("UPDATE external_doc_pending
+                                SET status='done', filled_attach_id=?, filled_at=NOW(), filled_by=?
+                                WHERE id=? AND status='pending'");
+        }
+        // filled_attach_id 只在料號附件時有意義（報價附件是另一張表，同一個欄位塞進去語意會錯）
+        $up->execute([$has[$pk]['source'] === 'part' ? $has[$pk]['attach_id'] : null,
+                      '系統自動（已有外來文件）', (int)$r['id']]);
+        $n++;
+    }
+    return $n;
+}
+
 function extdoc_pending_rows(PDO $db, string $status = 'pending'): array {
     $status = in_array($status, ['pending','ignored','done'], true) ? $status : 'pending';
+    extdoc_pending_autoclose($db);   // 先把「已從別的入口補到文件」的項目結案，清單與計數才一致
     try {
         $st = $db->prepare("SELECT p.*, ds.D_Setting_Id AS cur_part_no, ds.Customer_Id AS cur_customer_id,
                                    COALESCE(cl.customer,'') AS customer_name
@@ -385,8 +434,7 @@ function extdoc_pfmea_missing(PDO $db): array {
     if (!$parts) return ['rows' => [], 'unresolved' => $unresolved];
 
     // ② 目前清單（正式清單，不含已排除）已經有文件的料號
-    $hasDoc = [];
-    foreach (extdoc_fetch_rows($db, ['mode' => 'all']) as $r) $hasDoc[(int)$r['ds_pk']] = 1;
+    $hasDoc = extdoc_parts_with_doc($db);
 
     // ③ 既有待補/忽略項目
     $exist = [];
@@ -665,7 +713,8 @@ case 'pending_create':
     // 點開即刷新：以偵測當下的實際狀態再算一次，已補齊/已存在的不重複建立
     $scan = extdoc_pfmea_missing($db);
     $can = [];
-    foreach ($scan['rows'] as $r) if (!$r['already'] && !$r['done']) $can[(int)$r['ds_pk']] = $r;
+    // done＝之前補過；但它會出現在偵測結果就代表文件現在又不在清單上了，故允許重新建立待補
+    foreach ($scan['rows'] as $r) if (!$r['already']) $can[(int)$r['ds_pk']] = $r;
     $opName = extdoc_op_name($db, $uid);
     $made = 0; $skip = 0;
     $db->beginTransaction();
@@ -673,7 +722,8 @@ case 'pending_create':
         $ins = $db->prepare("INSERT INTO external_doc_pending
             (ds_pk, part_no, customer_id, source_kind, ref_no, status, created_by, created_at)
             VALUES (?,?,?,'pfmea',?,'pending',?,NOW())
-            ON DUPLICATE KEY UPDATE status='pending', ref_no=VALUES(ref_no)");
+            ON DUPLICATE KEY UPDATE status='pending', ref_no=VALUES(ref_no),
+                                    filled_attach_id=NULL, filled_at=NULL, filled_by=NULL");
         foreach ($ids as $dsPk) {
             if (!isset($can[$dsPk])) { $skip++; continue; }
             $r = $can[$dsPk];

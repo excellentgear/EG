@@ -216,6 +216,7 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
         </div>
         <div id="pendBar" style="display:none;margin-bottom:8px;font-size:12px;color:#8a6d45;">
             這裡是「PFMEA 已建立、但外來文件清單一筆都沒有」的料號，補上傳檔案後就會自動出現在正式清單（本分頁不列印、不匯出）。
+            <b>從主檔管理／型態識別文件管制表／報價單上傳的外來文件也算數</b>，系統一偵測到就會自動把該筆移出待補清單。
             <label style="margin-left:10px;font-size:12px;"><input type="checkbox" id="chkIgnored" data-eg-skip> 顯示已標記「不列入」的（<span id="ignCnt">0</span>）</label>
         </div>
 
@@ -337,6 +338,7 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
             <li><b>PFMEA 欄</b>：顯示該料號有沒有在 <b>PFMEA（潛在失效模式及效應分析，3-TD-01-02）</b> 建過表；有的顯示「PFMEA已建立」（滑鼠移上去看 PFMEA 文件編號）。工具列的 <b>PFMEA</b> 下拉可只看「已建立／未建立」，篩選結果連動列印與 CSV。</li>
             <li><b>PFMEA 缺件偵測</b>（管理角色）：找出「PFMEA 已建立、但外來文件清單一筆都沒有」的料號 —— 這代表已經在做失效分析、卻沒有把客戶提供的圖面/規格納入外來文件管制。勾選後按「建立待補項目」。</li>
             <li><b>待補檔案分頁</b>：待補項目點「上傳補檔」→ 選檔案、勾外來文件類別、填<b>文件日期</b>，存檔後檔案會存成<b>該料號的料號附件</b>（主檔管理／報價單頁看到的是同一份），並自動出現在正式清單，發行日期＝你填的文件日期。</li>
+            <li><b>不是只認這裡上傳的檔案</b>：在主檔管理、型態識別文件管制表、報價單等任何地方替該料號上傳了外來文件類別的附件，下次開啟本頁時該筆待補項目會<b>自動結案並從待補清單消失</b>（不必回來這裡再補一次）。反之若文件之後被刪掉，再按一次「PFMEA 缺件偵測」就能重新建立待補項目。</li>
             <li><b>不列入</b>：該料號本來就沒有外來文件（例如自家開發品）時，按「不列入」，之後偵測就不會再吵；勾「顯示已標記不列入的」可加回。</li>
             <li>待補項目<b>不會</b>出現在正式清單、列印與 CSV（沒有檔案的空列不進管制清單）。</li>
         </ul>
@@ -783,7 +785,8 @@ $('#btnPfmeaScan').on('click', function(){
         SCAN_ROWS.forEach(function(r, i){
             var stat = r.already ? '<span style="color:#C77C1A;">已在待補清單</span>'
                      : (r.ignored ? '<span style="color:#8a6d45;">已標記不列入</span>'
-                     : '<span style="color:#DD5138;">缺件</span>');
+                     : (r.done ? '<span style="color:#8a6d45;" title="之前補過檔案，但目前清單上又找不到文件（可能已刪除）">曾補檔（文件已不在清單）</span>'
+                     : '<span style="color:#DD5138;">缺件</span>'));
             var selectable = !r.already;
             if (selectable) newCnt++;
             h += '<tr><td>'+(selectable
