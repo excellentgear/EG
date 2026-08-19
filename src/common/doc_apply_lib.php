@@ -157,6 +157,15 @@ function da_ensure_schema(PDO $db): void
             updated_by  VARCHAR(60) NULL, updated_at DATETIME NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='制修訂內容預設組'");
 
+        // 代理人代為填表（被代理人請假時）：申請人＝代理人本人，另存被代理人是誰
+        foreach ([['applicant_on_behalf_id',   "INT NULL COMMENT '代理誰填表（被代理人 user.id）'"],
+                  ['applicant_on_behalf_name', "VARCHAR(60) NULL COMMENT '被代理人姓名（存當時）'"]] as $c) {
+            $has = $db->prepare("SELECT 1 FROM information_schema.COLUMNS
+                                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='doc_apply' AND COLUMN_NAME=?");
+            $has->execute([$c[0]]);
+            if (!$has->fetchColumn()) $db->exec("ALTER TABLE doc_apply ADD COLUMN {$c[0]} {$c[1]}");
+        }
+
         foreach ([['doc_apply_view', '文件制修申請單檢閱'], ['doc_apply_edit', '文件制修申請單申請'],
                   ['doc_apply_admin', '文件制修申請單管理員']] as $r) {
             $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='doc_apply' LIMIT 1");
@@ -506,7 +515,9 @@ function da_resolve_signer_src(PDO $db, string $src, array $row): array
 
 /**
  * 四格簽章（核准／管理代表／單位主管／申請人）解析結果。
- * 申請人格不套代理（本人填表本人簽）；其餘三格經 delegate_lib 轉代理（ai-rules/11）。
+ * 申請人格不跑代理解析（本人填表本人簽）；但「本人請假、代理人代為填表」的單，
+ * 申請人本身就是代理人，圖章要加「代」字（依 applicant_on_behalf_id 判定）。
+ * 其餘三格經 delegate_lib 轉代理（ai-rules/11）。
  */
 function da_resolve_signers(PDO $db, array $row, bool $autoSign = false): array
 {
@@ -516,7 +527,13 @@ function da_resolve_signers(PDO $db, array $row, bool $autoSign = false): array
     foreach ($map as $slot => $key) {
         $base = da_resolve_signer_src($db, (string)$set[$key], $row);
         $out[$slot] = ['id'=>$base['id'], 'name'=>$base['name'], 'is_delegated'=>0, 'src'=>(string)$set[$key]];
-        if ($slot === 'applicant' || !$base['id']) continue;
+        if ($slot === 'applicant') {
+            // 申請人格不套代理解析（本人填表本人簽）；唯一例外＝「本人請假、由代理人代為填表」，
+            // 此時申請人本來就是代理人，圖章右下角要加「代」字（ai-rules/18）
+            $out[$slot]['is_delegated'] = (int)($row['applicant_on_behalf_id'] ?? 0) ? 1 : 0;
+            continue;
+        }
+        if (!$base['id']) continue;
         // 解析結果就是申請人本人（例：申請人自己就是單位主管）→ 直接蓋他的章，
         // 不進代理/權責迴避流程（使用者明確要求：不須迴避）
         if ((int)$base['id'] === (int)($row['applicant_id'] ?? 0)) continue;
@@ -1087,6 +1104,148 @@ function da_people_posts_asof(PDO $db, string $date): array
            <=> [$b['dept_sort'], $b['dept_id'], $b['position_sort'], $b['id']];
     });
     return $out;
+}
+
+/**
+ * 指定日期「當天請假／整天不在」的人員 id 集合（[uid => true]）。
+ * 與 delegate_lib 的 eg_user_on_leave_today() 同口徑（行事曆休假類事件＋已核准請假單），
+ * 差別只在這支吃「指定日期」而非今天——申請單的業務日期可能是過去，不能拿今天的狀況判。
+ */
+function da_users_on_leave_asof(PDO $db, string $date): array
+{
+    static $cache = [];
+    if ($date === '') return [];
+    if (isset($cache[$date])) return $cache[$date];
+    $set = [];
+    try {
+        // 行事曆：休假類（含特休/事假…）事件，全天與時段皆以「日期涵蓋」判定
+        $st = $db->prepare("SELECT DISTINCT a.user_id FROM evenement e
+                            JOIN evenement_actor a ON a.event_id = e.id
+                            LEFT JOIN event_category ec ON ec.id = e.category_id
+                            WHERE (ec.day_type IS NULL OR ec.day_type = '')
+                              AND ec.category_name LIKE '%休假%'
+                              AND DATE(e.start) <= ? AND DATE(e.end) >= ?");
+        $st->execute([$date, $date]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $x) $set[(int)$x] = true;
+    } catch (Throwable $e) {}
+    try {
+        $st = $db->prepare("SELECT DISTINCT employee_id FROM leave_request
+                            WHERE status IN ('approved','核准')
+                              AND DATE(start_datetime) <= ? AND DATE(end_datetime) >= ?");
+        $st->execute([$date, $date]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $x) $set[(int)$x] = true;
+    } catch (Throwable $e) {}
+    return $cache[$date] = $set;
+}
+
+/** 單一人員版（內部走上面那支的整批結果，不逐人打 DB） */
+function da_user_on_leave_asof(PDO $db, int $uid, string $date): bool
+{
+    if ($uid <= 0 || $date === '') return false;
+    return isset(da_users_on_leave_asof($db, $date)[$uid]);
+}
+
+/**
+ * 某人某個職務在指定日期「當時有效」的代理人（依 priority），比照 delegate_lib 的兩層：
+ * 精準職務身分（部門＋職稱都對）優先，沒有才用全域代理（scope 皆 NULL）。
+ * 與 eg_person_delegates() 的差別：日期用參數，不是 CURDATE()。
+ */
+function da_delegates_asof(PDO $db, int $uid, string $date, int $deptId, int $posId): array
+{
+    if ($uid <= 0 || $date === '') return [];
+    try {
+        if ($deptId && $posId) {
+            $st = $db->prepare("SELECT delegate_id FROM user_delegate
+                                WHERE user_id=? AND active=1 AND start_date<=? AND end_date>=?
+                                  AND scope_department_id=? AND scope_position_id=?
+                                ORDER BY priority ASC");
+            $st->execute([$uid, $date, $date, $deptId, $posId]);
+            $rows = $st->fetchAll(PDO::FETCH_COLUMN);
+            if ($rows) return array_map('intval', $rows);
+        }
+        $st = $db->prepare("SELECT delegate_id FROM user_delegate
+                            WHERE user_id=? AND active=1 AND start_date<=? AND end_date>=?
+                              AND scope_department_id IS NULL AND scope_position_id IS NULL
+                            ORDER BY priority ASC");
+        $st->execute([$uid, $date, $date]);
+        return array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 申請人（填表人）下拉的完整候選：da_people_posts_asof() 的逐職務清單，
+ * 再加上「本人當天請假、由代理人代為填表」的職務列（使用者拍板的三個口徑）：
+ *   (1) 只有本人在該申請日期**真的請假**時才多出這一列（不是設了代理就一直出現）
+ *   (2) 代理人自己那天也請假／當時不在職＝不列（找一個也不在的人代填沒有意義）
+ *   (3) 所有人都看得到（管理員補單也要選得到），不限代理人本人登入
+ * 代理列的 post_key 格式＝「代理人id:部門id:b被代理人id」，後端存檔會再驗一次（鐵律8）。
+ */
+function da_people_posts_pick(PDO $db, string $date): array
+{
+    $posts = da_people_posts_asof($db, $date);
+    foreach ($posts as &$p0) {
+        $p0['on_behalf_id']   = 0;
+        $p0['on_behalf_name'] = '';
+        $p0['sort_uid']       = (int)$p0['id'];
+    }
+    unset($p0);
+    if ($date === '') return $posts;   // 沒有業務日期就無從判斷「當時請假」，維持原清單
+
+    $names = [];
+    foreach ($posts as $p) $names[(int)$p['id']] = (string)$p['user_cname'];
+
+    $extra = [];
+    foreach ($posts as $p) {
+        $uid = (int)$p['id'];
+        if (!da_user_on_leave_asof($db, $uid, $date)) continue;
+        foreach (da_delegates_asof($db, $uid, $date, (int)$p['dept_id'], (int)$p['position_id']) as $dg) {
+            if ($dg === $uid || !isset($names[$dg])) continue;      // 代理人當時不在職＝跳過
+            if (da_user_on_leave_asof($db, $dg, $date)) continue;   // 代理人自己也不在＝跳過
+            $extra[] = [
+                'id'            => $dg,
+                'user_cname'    => $names[$dg],
+                'dept_id'       => $p['dept_id'],
+                'dept_name'     => $p['dept_name'],
+                'dept_sort'     => $p['dept_sort'],
+                'position_id'   => $p['position_id'],
+                'position_name' => $p['position_name'],
+                'position_sort' => $p['position_sort'],
+                'is_main'       => 0,
+                'is_former'     => 0,
+                'on_behalf_id'  => $uid,
+                'on_behalf_name'=> (string)$p['user_cname'],
+                'sort_uid'      => $uid,
+                'post_key'      => $dg . ':' . (int)$p['dept_id'] . ':b' . $uid,
+                'display'       => trim((string)$p['dept_name'] . '　' . (string)$p['position_name'] . '　' . $names[$dg])
+                                 . '（代理 ' . $p['user_cname'] . '）',
+            ];
+            break;   // 只取第一順位可代理的人
+        }
+    }
+    if (!$extra) return $posts;
+
+    $out = array_merge($posts, $extra);
+    // 代理列緊接在被代理的那個職務後面（欄位順序仍是部門/職稱/姓名，鐵則第 5 條）
+    usort($out, function ($a, $b) {
+        return [$a['dept_sort'], $a['dept_id'], $a['position_sort'], $a['sort_uid'], $a['on_behalf_id'] ? 1 : 0]
+           <=> [$b['dept_sort'], $b['dept_id'], $b['position_sort'], $b['sort_uid'], $b['on_behalf_id'] ? 1 : 0];
+    });
+    return $out;
+}
+
+/**
+ * 從候選清單裡把「使用者送來的那一個職務」找回來（存檔時後端自己重算一次，不採信前端）。
+ * $onBehalfId=0＝本人職務；>0＝代理某人的職務。找不到回 null＝這個組合不成立。
+ */
+function da_pick_post(PDO $db, int $uid, int $deptId, int $onBehalfId, string $date): ?array
+{
+    foreach (da_people_posts_pick($db, $date) as $p) {
+        if ((int)$p['id'] !== $uid) continue;
+        if ((int)$p['on_behalf_id'] !== $onBehalfId) continue;
+        if ($deptId && (int)$p['dept_id'] !== $deptId) continue;
+        return $p;
+    }
+    return null;
 }
 
 /**

@@ -170,7 +170,7 @@ case 'list': {
     if ($kw !== '') {
         // 全表搜尋：LIKE 掃過畫面看得到的欄位（禁 FULLTEXT，料號/編號含「-」會比對不到）
         $cols = ['a.apply_no','a.doc_no','a.doc_name','a.doc_type','a.doc_status','a.version',
-                 'a.dept_name','a.applicant_name','a.auto_note','a.decide_note'];
+                 'a.dept_name','a.applicant_name','a.applicant_on_behalf_name','a.auto_note','a.decide_note'];
         foreach (preg_split('/\s+/', $kw) as $k) {
             if ($k === '') continue;
             $w[] = '(' . implode(' OR ', array_map(fn($c) => "$c LIKE ?", $cols)) . ')';
@@ -214,7 +214,7 @@ case 'export_csv': {
     if ($to !== '')   { $w[] = 'a.apply_date<=?'; $args[] = $to; }
     if ($kw !== '') {
         $cols = ['a.apply_no','a.doc_no','a.doc_name','a.doc_type','a.doc_status','a.version',
-                 'a.dept_name','a.applicant_name','a.auto_note','a.decide_note'];
+                 'a.dept_name','a.applicant_name','a.applicant_on_behalf_name','a.auto_note','a.decide_note'];
         foreach (preg_split('/\s+/', $kw) as $k) {
             if ($k === '') continue;
             $w[] = '(' . implode(' OR ', array_map(fn($c) => "$c LIKE ?", $cols)) . ')';
@@ -248,9 +248,10 @@ case 'export_csv': {
         }
         fputcsv($out, [
             $r['apply_no'], eg_fmt_date($r['apply_date']), $r['doc_status'], $r['doc_type'],
-            $r['doc_no'], $r['version'], $r['doc_name'], $r['dept_name'], $r['applicant_name'],
+            $r['doc_no'], $r['version'], $r['doc_name'], $r['dept_name'],
+            $r['applicant_name'] . ($r['applicant_on_behalf_name'] ? '（代理 ' . $r['applicant_on_behalf_name'] . '）' : ''),
             ((int)$r['need_cosign'] ? '是' : '否'), $cs,
-            ($stName[$r['status']] ?? $r['status']) . ((int)$r['is_auto'] ? '（自動簽核）' : ''),
+            ($stName[$r['status']] ?? $r['status']),
             eg_fmt_date($r['approved_date']),
             $r['last_print_at'] ? eg_fmt_date(substr((string)$r['last_print_at'], 0, 10)) : '未列印',
             (int)$r['print_count'], (string)$r['decide_note'],
@@ -287,8 +288,9 @@ case 'save': {
     $cosDept = array_values(array_filter(array_map('intval', da_json_arr('cosign_dept_ids'))));
 
     $applicantId = (int)($_POST['applicant_id'] ?? 0) ?: $uid;
-    // 非管理員只能以自己名義開單
-    if (!$P['canAdmin'] && $applicantId !== $uid) $applicantId = $uid;
+    $onBehalfId  = (int)($_POST['on_behalf_id'] ?? 0);
+    // 非管理員只能以自己名義開單（代理填表時「自己」＝代理人本人，一樣成立）
+    if (!$P['canAdmin'] && $applicantId !== $uid) { $applicantId = $uid; $onBehalfId = 0; }
     // 申請人的姓名／部門一律取「本單申請日期當時」的身分（補歷史單據才不會存成他現在的部門）
     $bizDay = trim((string)($_POST['apply_date'] ?? '')) ?: da_db_now($db)['d'];
     $ident  = da_user_identity_asof($db, $applicantId, $bizDay, (int)($_POST['dept_id'] ?? 0));
@@ -300,6 +302,18 @@ case 'save': {
     if ($deptId && $deptName === '') {
         $q = $db->prepare("SELECT name FROM department WHERE id=?"); $q->execute([$deptId]);
         $deptName = (string)$q->fetchColumn();
+    }
+
+    // 代理人代為填表：前端擋過一次，後端用同一份候選清單再算一次（鐵律8，不做半套）。
+    // 成立時申請部門＝**被代理人**那個職務的部門（文管中心…），申請人仍是代理人本人。
+    $onBehalfName = '';
+    if ($onBehalfId) {
+        $post = da_pick_post($db, $applicantId, (int)($_POST['dept_id'] ?? 0), $onBehalfId, $bizDay);
+        if (!$post) jerr('代理身分不成立：申請日期當天被代理人並未請假，或你不是他在該職務的代理人，請重新選擇申請人。');
+        $deptId       = (int)$post['dept_id'];
+        $deptName     = (string)$post['dept_name'];
+        $onBehalfName = (string)$post['on_behalf_name'];
+        $ident['user_name'] = (string)$post['user_cname'];
     }
 
     $r = [
@@ -315,6 +329,8 @@ case 'save': {
         'dept_name'    => $deptName,
         'applicant_id' => $applicantId,
         'applicant_name' => (string)$ident['user_name'],
+        'applicant_on_behalf_id'   => $onBehalfId,
+        'applicant_on_behalf_name' => $onBehalfName,
         'need_overview'=> (int)($_POST['need_overview'] ?? 0) ? 1 : 0,
         'need_cosign'  => (int)($_POST['need_cosign'] ?? 0) ? 1 : 0,
         'cosign_dept_ids' => $cosDept,
@@ -336,22 +352,27 @@ case 'save': {
         if (!da_can_edit_row($old, $P, $uid)) { $db->rollBack(); jerr('此單已送出或非你可編輯', 403); }
         $db->prepare("UPDATE doc_apply SET apply_date=?, doc_status=?, doc_type=?, doc_name=?, doc_no=?,
                         as_doc_id=?, version=?, first_issue_date=?, change_date=?, dept_id=?, dept_name=?,
-                        applicant_id=?, applicant_name=?, need_overview=?, need_cosign=?, updated_at=?
+                        applicant_id=?, applicant_name=?, applicant_on_behalf_id=?, applicant_on_behalf_name=?,
+                        need_overview=?, need_cosign=?, updated_at=?
                       WHERE apply_id=?")
            ->execute([$r['apply_date'], $r['doc_status'], $r['doc_type'], $r['doc_name'], $r['doc_no'],
                       $r['as_doc_id'] ?: null, $r['version'], $r['first_issue_date'] ?: null, $changeDate,
                       $r['dept_id'] ?: null, $r['dept_name'], $r['applicant_id'], $r['applicant_name'],
+                      $r['applicant_on_behalf_id'] ?: null, $r['applicant_on_behalf_name'] ?: null,
                       $r['need_overview'], $r['need_cosign'], $now['dt'], $id]);
     } else {
         $db->prepare("INSERT INTO doc_apply
             (apply_no, apply_date, doc_status, doc_type, doc_name, doc_no, as_doc_id, version, first_issue_date,
-             change_date, dept_id, dept_name, applicant_id, applicant_name, need_overview, need_cosign,
+             change_date, dept_id, dept_name, applicant_id, applicant_name,
+             applicant_on_behalf_id, applicant_on_behalf_name, need_overview, need_cosign,
              status, source, created_by, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft','manual',?,?,?)")
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft','manual',?,?,?)")
            ->execute([da_next_no($db, $r['apply_date']), $r['apply_date'], $r['doc_status'], $r['doc_type'],
                       $r['doc_name'], $r['doc_no'], $r['as_doc_id'] ?: null, $r['version'],
                       $r['first_issue_date'] ?: null, $changeDate, $r['dept_id'] ?: null, $r['dept_name'],
-                      $r['applicant_id'], $r['applicant_name'], $r['need_overview'], $r['need_cosign'],
+                      $r['applicant_id'], $r['applicant_name'],
+                      $r['applicant_on_behalf_id'] ?: null, $r['applicant_on_behalf_name'] ?: null,
+                      $r['need_overview'], $r['need_cosign'],
                       $uid, $now['dt'], $now['dt']]);
         $id = (int)$db->lastInsertId();
     }
@@ -537,7 +558,7 @@ case 'decide': {
                       $sg['approve']['id'], $sg['approve']['name'], $date, $sg['approve']['is_delegated'],
                       $sg['mgmt']['id'],    $sg['mgmt']['name'],    $date, $sg['mgmt']['is_delegated'],
                       $sg['sup']['id'],     $sg['sup']['name'],     $date, $sg['sup']['is_delegated'],
-                      $sg['applicant']['id'], $sg['applicant']['name'], $r['apply_date'], 0,
+                      $sg['applicant']['id'], $sg['applicant']['name'], $r['apply_date'], $sg['applicant']['is_delegated'],
                       $now['dt'], $id]);
     }
     $db->commit();
@@ -574,6 +595,8 @@ case 'auto_sign': {
             $identDay = trim((string)($_POST['override_date'] ?? '')) ?: (string)$r['apply_date'];
             $ident = da_user_identity_asof($db, $ovUser, $identDay, (int)($_POST['override_dept_id'] ?? 0));
             $r['applicant_id'] = $ovUser; $r['applicant_name'] = $ident['user_name'];
+            // 換了填表人，原本「代理某人」的關係就不成立了，一併清掉（否則會蓋著別人的代理章）
+            $r['applicant_on_behalf_id'] = null; $r['applicant_on_behalf_name'] = null;
             // 兼任職務：前端送的是「該人在哪個部門的身分」，優先採用它，查不到才退回主要職務部門
             $ovDept = (int)($_POST['override_dept_id'] ?? 0);
             $useDept = $ovDept ?: (int)($ident['dept_id'] ?? 0);
@@ -603,6 +626,7 @@ case 'auto_sign': {
                         sign_mgmt_id=?, sign_mgmt_name=?, sign_mgmt_date=?, sign_mgmt_dep=?,
                         sign_sup_id=?, sign_sup_name=?, sign_sup_date=?, sign_sup_dep=?,
                         sign_applicant_id=?, sign_applicant_name=?, sign_applicant_date=?, sign_applicant_dep=?,
+                        applicant_on_behalf_id=?, applicant_on_behalf_name=?,
                         updated_at=NOW() WHERE apply_id=?")
            ->execute([$r['applicant_id'] ?: null, $r['applicant_name'], $r['dept_id'] ?: null, $r['dept_name'],
                       $bizDate, $bizDate, '由 ' . $uname . ' 執行管理員自動簽核',
@@ -610,7 +634,8 @@ case 'auto_sign': {
                       $sg['approve']['id'], $sg['approve']['name'], $bizDate, $sg['approve']['is_delegated'],
                       $sg['mgmt']['id'],    $sg['mgmt']['name'],    $bizDate, $sg['mgmt']['is_delegated'],
                       $sg['sup']['id'],     $sg['sup']['name'],     $bizDate, $sg['sup']['is_delegated'],
-                      $sg['applicant']['id'], $sg['applicant']['name'], $bizDate, 0,
+                      $sg['applicant']['id'], $sg['applicant']['name'], $bizDate, $sg['applicant']['is_delegated'],
+                      $r['applicant_on_behalf_id'] ?: null, $r['applicant_on_behalf_name'] ?: null,
                       $id]);
         // 會簽列一併自動簽（同意），日期同業務日期、時間錯開
         foreach ($r['cosigns'] as $c) {
@@ -711,7 +736,7 @@ case 'delete_cosign_default': {
    不能用現況——否則當時的人選不到、當時還沒到職的人卻被列出（使用者明確要求）。 */
 case 'people_asof': {
     $date = trim((string)($_GET['date'] ?? ''));
-    jout(['rows' => da_people_posts_asof($db, $date), 'date' => $date]);
+    jout(['rows' => da_people_posts_pick($db, $date), 'date' => $date]);
 }
 
 /* ══════════════════ 制修訂內容預設組 ══════════════════ */

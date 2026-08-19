@@ -545,6 +545,12 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 依<b>部門 → 職稱</b>順序排序（不是姓名筆畫）。<b>「申請部門」不是自己選的</b>——它由你挑的那一個職務
                 自動帶出、欄位反灰不可手填（後端也用同一套規則再算一次，直打 API 也不會存進對不起來的部門）。
                 所以要換部門，就選<b>該人在那個部門的那一列</b>。</li>
+            <li><b>本人請假時可由代理人代為填表</b>：被代理人在<b>申請日期當天真的請假</b>時，申請人下拉會多出一列
+                「<b>該部門　職稱　代理人姓名（代理 被代理人）</b>」，選它即可——<b>申請部門＝被代理人的那個部門</b>
+                （例：文管中心），申請人印<b>代理人本人</b>的名字、圖章右下角自動加「<b>代</b>」字，清單與明細顯示
+                「代理人（代理 被代理人）」。代理人名單取自<b>代理設定</b>（同一職務有多位時取第一順位）；
+                代理人自己那天也請假、或當時不在職，就不會列出來。沒有請假就不會有這一列（避免下拉被長期代理設定灌爆）。
+                後端存檔時會用同一套規則<b>再驗一次</b>，直打 API 也塞不進不成立的代理身分。</li>
             <li>把申請日期改到某人<b>當時還沒到職／已離職</b>的區間時，該人不會出現在候選裡；若是既有單據，
                 系統會保留「原紀錄」那一筆並標示<b>（原紀錄，當時清單查無）</b>提醒你確認，<b>不會默默改選成別人</b>。</li>
         </ul>
@@ -604,6 +610,11 @@ function closeMask(id){
 $(document).ajaxError(function(e, xhr){
     if (xhr && xhr.responseJSON && xhr.responseJSON.error) alert(xhr.responseJSON.error);
 });
+/** 申請人顯示文字：代理人代為填表時加註「（代理 被代理人）」 */
+function applicantDisp(d){
+    var n = d.applicant_name || '';
+    return n + (d.applicant_on_behalf_name ? '（代理 ' + d.applicant_on_behalf_name + '）' : '');
+}
 function stampHtml(name, date, deputy, tpl){
     try { if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, date || '', !!deputy, tpl ? tpl.schema : null); }
     catch(e){}
@@ -629,7 +640,8 @@ $.getJSON(API, {action:'meta'}, function(r){
     $('#e_applicant_id').empty();
     (r.people_posts || []).forEach(function(p){
         var o = '<option value="' + esc(p.post_key) + '" data-uid="' + p.id + '" data-dept="' + (p.dept_id || '')
-              + '" data-deptname="' + esc(p.dept_name || '') + '">' + esc(p.display) + '</option>';
+              + '" data-deptname="' + esc(p.dept_name || '') + '" data-behalf="0" data-behalfname="">'
+              + esc(p.display) + '</option>';
         $('#e_applicant_id').append(o);
         $('#autoUser').append(o);
     });
@@ -692,9 +704,9 @@ function loadList(){
                 + '<td>' + esc(d.version || '－') + '</td>'
                 + '<td class="l">' + esc(d.doc_name || '') + '</td>'
                 + '<td>' + esc(d.dept_name || '') + '</td>'
-                + '<td>' + esc(d.applicant_name || '') + '</td>'
+                + '<td>' + esc(applicantDisp(d)) + '</td>'
                 + '<td><span class="st ' + cs.cls + '">' + esc(cs.txt) + '</span></td>'
-                + '<td><span class="st st-' + esc(d.status) + '">' + esc(stName(d.status)) + (parseInt(d.is_auto) ? '（自動）' : '') + '</span></td>'
+                + '<td><span class="st st-' + esc(d.status) + '">' + esc(stName(d.status)) + '</span></td>'
                 + '<td>' + esc(pr) + '</td>'
                 + '<td>' + ops + '</td></tr>');
         });
@@ -774,7 +786,8 @@ function openEdit(id){
         (d.dists || []).forEach(function(x){ distAddRow(x); });
         for (var j = (d.dists || []).length; j < 3; j++) distAddRow();
         cosSel = (d.cosigns || []).map(function(c){ return {id:+c.dept_id, name:c.dept_name}; });
-        loadPeopleAsof(function(){ setApplicant(d.applicant_id, d.dept_id, d.applicant_name, d.dept_name); });
+        loadPeopleAsof(function(){ setApplicant(d.applicant_id, d.dept_id, d.applicant_name, d.dept_name,
+                                                 d.applicant_on_behalf_id); });
         syncMode(); renderCosChips(); loadParents(); openMask('editMask');
     });
 }
@@ -842,12 +855,22 @@ function loadPeopleAsof(cb){
         var $s = $('#e_applicant_id').empty();
         (r.rows || []).forEach(function(p){
             $s.append('<option value="' + esc(p.post_key) + '" data-uid="' + p.id + '" data-dept="' + (p.dept_id || '')
-                + '" data-deptname="' + esc(p.dept_name || '') + '">' + esc(p.display) + '</option>');
+                + '" data-deptname="' + esc(p.dept_name || '') + '" data-behalf="' + (p.on_behalf_id || 0)
+                + '" data-behalfname="' + esc(p.on_behalf_name || '') + '">' + esc(p.display) + '</option>');
         });
-        if (keep && $s.find('option[value="' + keep + '"]').length) $s.val(keep);
+        if (keep && $s.find('option[value="' + keep + '"]').length) {
+            $s.val(keep);
+        } else if (keep) {
+            // 改了申請日期後原本選的職務不再成立（當時還沒到職／已離職／那天沒請假所以沒有代理列）：
+            // 不可默默改選成清單第一個人，一律清空要求重選（推導欄位鐵則）
+            $s.prepend('<option value="" data-uid="0" data-dept="" data-deptname="" data-behalf="0" data-behalfname="">— 請重新選擇申請人 —</option>').val('');
+            $('#w_applicant_id').find('.da-err').text('原本選的職務在新的申請日期不成立，請重新選擇申請人。').show();
+        }
         syncDeptFromApplicant();
+        var nb = (r.rows || []).filter(function(p){ return +p.on_behalf_id > 0; }).length;
         $('#applicantAsofHint').text('（依申請日期 ' + dispDate(date) + ' 當時在職者與當時職務列出，共 '
-            + (r.rows || []).length + ' 筆）');
+            + (r.rows || []).length + ' 筆'
+            + (nb ? '；含 ' + nb + ' 筆「本人當天請假、代理人代為填表」的職務' : '') + '）');
         if (cb) cb();
     });
 }
@@ -887,9 +910,8 @@ $('#btnGenNo').on('click', function(){
              code:$('#e_code').val() || ''};
     // 表單的編碼是掛在母文件底下遞增，沒有母文件就算不出來——但不是死路：直接手動輸入既有編碼即可
     if ($('#e_doc_type').val() === '表單' && !p.parent_doc_id) {
-        alert('表單的編碼是掛在母文件底下遞增，沒有選母文件就無法自動產生。
-
-若這份表單沒有上階程序書、而你已經有既有的文件編碼，請直接在「文件編碼」欄手動輸入。');
+        alert('表單的編碼是掛在母文件底下遞增，沒有選母文件就無法自動產生。\n\n'
+            + '若這份表單沒有上階程序書、而你已經有既有的文件編碼，請直接在「文件編碼」欄手動輸入。');
         $('#e_doc_no').focus(); return;
     }
     $.getJSON(API, p, function(r){
@@ -962,11 +984,11 @@ function renderCosChips(){
 }
 function cosDel(i){ cosSel.splice(i, 1); renderCosChips(); }
 
-/** 以「使用者＋部門」定位到那一個職務選項；該部門的職務不存在時退回此人的第一個職務 */
-function setApplicant(uid, deptId, fbName, fbDept){
+/** 以「使用者＋部門（＋代理誰）」定位到那一個職務選項；該職務不存在時退回此人的第一個職務 */
+function setApplicant(uid, deptId, fbName, fbDept, behalfId){
     var $s = $('#e_applicant_id');
     if (!uid) { $s.prop('selectedIndex', 0); syncDeptFromApplicant(); return; }
-    var key = uid + ':' + (deptId || '');
+    var key = uid + ':' + (deptId || '') + (+behalfId ? ':b' + behalfId : '');
     if ($s.find('option[value="' + key + '"]').length) { $s.val(key); syncDeptFromApplicant(); return; }
     var $first = $s.find('option[data-uid="' + uid + '"]').first();
     if ($first.length) { $s.val($first.attr('value')); syncDeptFromApplicant(); return; }
@@ -983,6 +1005,8 @@ function setApplicant(uid, deptId, fbName, fbDept){
     syncDeptFromApplicant();
 }
 function applicantUid(){ return +String($('#e_applicant_id').val() || '').split(':')[0] || 0; }
+/** 代理人代為填表時＝被代理人的 user id，本人填表＝0 */
+function applicantBehalf(){ return +$('#e_applicant_id option:selected').attr('data-behalf') || 0; }
 
 function collectForm(){
     var changes = [];
@@ -1004,7 +1028,7 @@ function collectForm(){
         doc_name:$('#e_doc_name').val(), doc_no:$('#e_doc_no').val(),
         as_doc_id:(+$('#e_asdoc_label').data('id') || 0),
         version:$('#e_version').val(), first_issue_date:$('#e_first_issue_date').val(),
-        dept_id:$('#e_dept_id').val(), applicant_id:applicantUid(),
+        dept_id:$('#e_dept_id').val(), applicant_id:applicantUid(), on_behalf_id:applicantBehalf(),
         need_overview:$('#e_need_overview').is(':checked') ? 1 : 0,
         need_cosign:$('#e_need_cosign').is(':checked') ? 1 : 0,
         changes:JSON.stringify(changes), dists:JSON.stringify(dists),
@@ -1064,9 +1088,9 @@ function openView(id){
         var h = '<div class="sec"><h5>表頭</h5><div class="grid3">'
             + kv('申請日期', dispDate(d.apply_date)) + kv('文件狀況', d.doc_status) + kv('文件類別', d.doc_type)
             + kv('文件編碼', d.doc_no) + kv('版本', d.version || '－') + kv('文件名稱', d.doc_name)
-            + kv('申請部門', d.dept_name) + kv('申請人', d.applicant_name)
+            + kv('申請部門', d.dept_name) + kv('申請人', applicantDisp(d))
             + kv('首次發行日期', dispDate(d.first_issue_date)) + kv('版本變更日期', dispDate(d.change_date))
-            + kv('單據狀態', stName(d.status) + (parseInt(d.is_auto) ? '（自動簽核）' : ''))
+            + kv('單據狀態', stName(d.status))
             + kv('核准日期', dispDate(d.approved_date))
             + '</div>'
             + '<div style="margin-top:6px;">' + (parseInt(d.need_overview) ? '☑' : '☐')
@@ -1529,6 +1553,7 @@ function printHtml(res){
            不可讓文字壓出格線（table-layout:fixed 下 nowrap 會直接溢出到隔壁欄） */
         + '.lbn{white-space:normal;word-break:keep-all;font-size:8pt;line-height:1.15;letter-spacing:0;padding:0.5mm 0.6mm;}'
         + '.h9{height:9mm;} .h7{height:7mm;}'
+        + '.behalf{font-size:7.5pt;white-space:nowrap;}'   /* 申請人「（代理 ○○○）」不要撐爆 24mm 的欄寬 */
         + '.sec-t{border:0.4mm solid #000;border-bottom:none;background:#F2F2F2;font-size:9.5pt;'
         +   'font-weight:bold;padding:1mm 1.5mm;}'
         + '.chk{font-size:10pt;letter-spacing:1px;}'
@@ -1560,7 +1585,9 @@ function printHtml(res){
         +   '<td class="lb">申請部門</td><td>' + esc(d.dept_name || '') + '</td></tr>'
         + '<tr class="h9"><td class="lb">文件編碼</td><td>' + esc(d.doc_no || '') + '</td>'
         +   '<td class="lb">版　本</td><td>' + esc(d.version || '') + '</td>'
-        +   '<td class="lb">申 請 人</td><td>' + esc(d.applicant_name || '') + '</td></tr>'
+        +   '<td class="lb">申 請 人</td><td>' + esc(d.applicant_name || '')
+        +   (d.applicant_on_behalf_name ? '<span class="behalf">（代理 ' + esc(d.applicant_on_behalf_name) + '）</span>' : '')
+        +   '</td></tr>'
         + '<tr class="h9"><td class="lb lbn">首次發行日期</td><td>' + esc(dispDate(d.first_issue_date)) + '</td>'
         +   '<td class="lb lbn">版本變更日期</td><td colspan="3">' + esc(dispDate(d.change_date || d.apply_date)) + '</td></tr>'
         + '</table>'
