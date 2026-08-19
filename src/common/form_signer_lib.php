@@ -137,6 +137,9 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
     $fillerName = (string)($case['filler_name'] ?? '');
     // 「要用誰的部門去找主管」可以退回申請人：這只影響往上找哪個部門的主管，不會把誰的名字蓋在章上
     $deptBaseUid = $fillerUid ?: $applicantUid;
+    // 業務日期＝這張表單「當時」的日期。部門/主管一律回推當時的職務（見上方 fsd_pos_snapshot_at 區塊說明），
+    // 沒補登過異動紀錄的人解析結果與現況完全相同，既有案件行為不變。
+    $bizDate = (string)($case['business_date'] ?? '') ?: date('Y-m-d');
     switch ($mode) {
         case 'user':
             $uid = (int)($signer['user_id'] ?? 0);
@@ -147,9 +150,15 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
             return $r ? ['id'=>(int)$r['id'], 'user_cname'=>$r['user_cname']] : null;
         case 'dept_auto_manager':
             $deptId = (int)($signer['dept_id'] ?? 0);
-            if (!$deptId) $deptId = (int)(fsd_user_main_dept_id($db, $deptBaseUid) ?? 0); // 未指定部門→用填表人的部門(未選填表人才退回申請人)
+            // 未指定部門→用填表人在「業務日期當時」所屬的部門（未選填表人才退回申請人）
+            if (!$deptId) {
+                $job = fsd_user_job_at($db, $deptBaseUid, $bizDate);
+                $deptId = (int)($job['dept_id'] ?? 0) ?: (int)(fsd_user_main_dept_id($db, $deptBaseUid) ?? 0);
+            }
             if (!$deptId) return null;
-            $m = eg_org_dept_manager($db, $deptId);
+            $mid = fsd_dept_manager_at($db, $deptId, $bizDate);   // 當時的部門主管
+            if ($mid && ($mu = fsd_user_any($db, $mid))) return $mu;
+            $m = eg_org_dept_manager($db, $deptId);               // 回推不到才退回現況（行為與先前相同）
             return $m ? ['id'=>(int)$m['id'], 'user_cname'=>$m['user_cname']] : null;
         case 'submitter_supervisor':
         case 'filler_supervisor':
@@ -158,7 +167,8 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
             // 不是按下建立鈕的管理員的主管）。沒選填表人時解析不到人，送出前會被擋（fsd_case_needs_filler）。
             $baseUid = ($mode === 'filler_supervisor') ? $fillerUid : $applicantUid;
             if (!$baseUid) return null;
-            $supId = eg_resolve_supervisor($db, $baseUid);
+            $supId = fsd_supervisor_at($db, $baseUid, $bizDate);      // 先用業務日期當時的職務回推
+            if (!$supId) $supId = eg_resolve_supervisor($db, $baseUid); // 回推不到才走現況（含指定負責人規則）
             // 填表人自己就是（部門一路往上都沒有更高階的）最高主管時，eg_resolve_supervisor() 會回 null——
             // 那一關若就這樣解析不到人會被整關略過、章也不會出現。使用者要求此時改由**本人簽**，
             // 並帶 self_top 旗標讓 SoD 不要把他自己迴避掉（fsd_resolve_signer_for_case）。
@@ -168,10 +178,8 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
                 return $self ? $self + ['self_top'=>true] : null;
             }
             if (!$supId) return null;
-            $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) NOT IN (0,90)");
-            $st->execute([$supId]);
-            $r = $st->fetch(PDO::FETCH_ASSOC);
-            return $r ? ['id'=>(int)$r['id'], 'user_cname'=>$r['user_cname']] : null;
+            // 補歷史文件時當年的主管可能已離職，仍要解析得到（fsd_usable_uids_at 已依業務日期決定放不放行）
+            return fsd_allow_resigned_at($bizDate) ? fsd_user_any($db, $supId) : fsd_filler_user($db, $supId);
         case 'top_approver':
             $u = eg_org_user($db, 'top_approver');
             return $u ? ['id'=>(int)$u['id'], 'user_cname'=>$u['user_cname']] : null;
@@ -672,6 +680,16 @@ function fsd_auto_sign_advisory_slot(PDO $db, int $caseId, int $stageSeq, string
 
 /** 依檢視者權限清洗回應紀錄：「系統自動簽核」字樣(is_auto=1)只有管理員能看到，一般/唯讀使用者一律隱藏該筆回覆文字與自動簽核事實，
  *  只保留姓名/決定/時間(看起來與真人簽核無異，2026-08-14使用者明確要求)。 */
+/** 給簽核紀錄補上「簽這張表當時」的部門/職稱，供圖章模板的 {部門}{職稱} 使用。 */
+function fsd_responses_with_job(PDO $db, array $responses, string $date): array {
+    foreach ($responses as &$r) {
+        $j = fsd_sign_job_label($db, (int)($r['resolved_user_id'] ?? 0), $date);
+        $r['sign_dept'] = $j['dept']; $r['sign_position'] = $j['position'];
+    }
+    unset($r);
+    return $responses;
+}
+
 function fsd_sanitize_responses_for_viewer(array $responses, bool $isAdminViewer): array {
     if ($isAdminViewer) return $responses;
     foreach ($responses as &$r) {
@@ -882,6 +900,126 @@ function fsd_upper_dept_manager(PDO $db, int $uid): ?int {
         }
         return null;
     } catch (Throwable $e) { return null; }
+}
+
+/* ============================================================ 依「業務日期」回推當時的職務 ============================================================
+   簽章要反映**簽這張表的當下**那個人是誰、在哪個部門、什麼職稱——不是他現在的樣子。
+   例：2023 年的舊表單上蓋的是「倉管組 陳彥驊」，就算他現在已經升課長，補進系統時仍要是當年的職務。
+   資料來源＝ai-rules/14 的 user_position_history（設定入口：員工管理→異動紀錄，沒補登過的人一律回現況，
+   與既有行為完全相同）。共用解析走 position_history_lib.php 的 eg_position_snapshot_at_bulk()，不自己解讀 json。 */
+
+/** 某業務日期當時的全員職務快照（uid => [{department_id,department_name,position_id,position_name,is_main}...]）。同一次請求內快取。 */
+function fsd_pos_snapshot_at(PDO $db, string $date): array {
+    static $cache = [];
+    $date = $date ?: date('Y-m-d');
+    if (isset($cache[$date])) return $cache[$date];
+    require_once __DIR__ . '/position_history_lib.php';
+    try { $cache[$date] = eg_position_snapshot_at_bulk($db, $date); }
+    catch (Throwable $e) { $cache[$date] = []; }
+    return $cache[$date];
+}
+
+/** position_id => 職級 level（數字越小越高階）。 */
+function fsd_position_levels(PDO $db): array {
+    static $lv = null;
+    if ($lv !== null) return $lv;
+    $lv = [];
+    try {
+        foreach ($db->query("SELECT position_id, level FROM position_level WHERE level IS NOT NULL")->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $lv[(int)$r['position_id']] = (int)$r['level'];
+    } catch (Throwable $e) {}
+    return $lv;
+}
+
+/** 某人在該日期的**主職**：['dept_id','dept_name','position_name','level']；查不到回空陣列。 */
+function fsd_user_job_at(PDO $db, int $uid, string $date): array {
+    $snap = fsd_pos_snapshot_at($db, $date)[$uid] ?? [];
+    if (!$snap) return [];
+    $main = $snap[0];                                   // 快照本身已把主職排最前
+    foreach ($snap as $r) if (!empty($r['is_main'])) { $main = $r; break; }
+    $lv = fsd_position_levels($db);
+    return ['dept_id'=>(int)$main['department_id'], 'dept_name'=>(string)$main['department_name'],
+            'position_name'=>(string)$main['position_name'],
+            'level'=>$lv[(int)$main['position_id']] ?? 99];
+}
+
+/** 業務日期是過去的（補歷史文件）才放行已離職者——當年他在職，事後離職不該讓舊表單解析不到人。 */
+function fsd_allow_resigned_at(string $date): bool {
+    return $date !== '' && $date < date('Y-m-d');
+}
+
+/** 該日期可用的人員 id（排除特殊帳號 90；未來/今日的案件另外排除已離職）。 */
+function fsd_usable_uids_at(PDO $db, string $date): array {
+    static $cache = [];
+    $k = fsd_allow_resigned_at($date) ? 'past' : 'now';
+    if (isset($cache[$k])) return $cache[$k];
+    $sql = "SELECT id FROM user WHERE COALESCE(state,1) <> 90" . ($k === 'now' ? " AND COALESCE(state,1) NOT IN (0)" : "");
+    $cache[$k] = array_flip(array_map('intval', $db->query($sql)->fetchAll(PDO::FETCH_COLUMN)));
+    return $cache[$k];
+}
+
+/** 某部門在該日期的最高階主管（level 最小者）。找不到回 null。 */
+function fsd_dept_manager_at(PDO $db, int $deptId, string $date): ?int {
+    if ($deptId <= 0) return null;
+    $ok = fsd_usable_uids_at($db, $date);
+    $lv = fsd_position_levels($db);
+    $best = null; $bestLv = 999;
+    foreach (fsd_pos_snapshot_at($db, $date) as $uid => $snap) {
+        if (!isset($ok[$uid])) continue;
+        foreach ($snap as $r) {
+            if ((int)$r['department_id'] !== $deptId) continue;
+            $l = $lv[(int)$r['position_id']] ?? 999;
+            if ($l < $bestLv) { $bestLv = $l; $best = (int)$uid; }
+        }
+    }
+    return $best;
+}
+
+/** 某人在該日期的上一階主管：同部門更高階 → 逐層上溯父部門。找不到回 null。 */
+function fsd_supervisor_at(PDO $db, int $uid, string $date): ?int {
+    $job = fsd_user_job_at($db, $uid, $date);
+    if (!$job || !$job['dept_id']) return null;
+    $ok = fsd_usable_uids_at($db, $date);
+    $lv = fsd_position_levels($db);
+    $snapAll = fsd_pos_snapshot_at($db, $date);
+    $findIn = function (int $deptId, int $myLevel) use ($snapAll, $ok, $lv, $uid): ?int {
+        $best = null; $bestLv = -1;
+        foreach ($snapAll as $u => $snap) {
+            if ((int)$u === $uid || !isset($ok[$u])) continue;
+            foreach ($snap as $r) {
+                if ((int)$r['department_id'] !== $deptId) continue;
+                $l = $lv[(int)$r['position_id']] ?? 999;
+                if ($l < $myLevel && $l > $bestLv) { $bestLv = $l; $best = (int)$u; }   // 取最接近自己上面的那一階
+            }
+        }
+        return $best;
+    };
+    if ($u = $findIn($job['dept_id'], $job['level'])) return $u;
+    $cursor = $job['dept_id'];
+    for ($hop = 0; $hop < 6; $hop++) {
+        $st = $db->prepare("SELECT parent_id FROM department WHERE id=?");
+        $st->execute([$cursor]);
+        $parent = (int)$st->fetchColumn();
+        if (!$parent) return null;
+        if ($u = $findIn($parent, $job['level'])) return $u;
+        $cursor = $parent;
+    }
+    return null;
+}
+
+/** 依 id 取人（用於歷史解析：已離職者也要取得到，由呼叫端決定放不放行）。 */
+function fsd_user_any(PDO $db, int $uid): ?array {
+    if ($uid <= 0) return null;
+    $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? AND COALESCE(state,1) <> 90");
+    $st->execute([$uid]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    return $r ? ['id'=>(int)$r['id'], 'user_cname'=>(string)$r['user_cname']] : null;
+}
+
+/** 圖章上要印的「部門／職稱」＝該人在業務日期當時的主職（圖章模板有 {部門}{職稱} token 才會用到）。 */
+function fsd_sign_job_label(PDO $db, int $uid, string $date): array {
+    $job = fsd_user_job_at($db, $uid, $date);
+    return ['dept'=>(string)($job['dept_name'] ?? ''), 'position'=>(string)($job['position_name'] ?? '')];
 }
 
 /** 填表人候選：在職者（離職/特殊帳號不列）。回傳 ['id','user_cname'] 或 null。 */
@@ -1326,7 +1464,7 @@ function fsd_is_backfill(?array $case): bool { return $case && ($case['case_kind
  * 顯示與排序依 ai-rules/08 第五節鐵則 5：文字一律「部門 職稱 姓名」，排序鍵依**部門→職稱**的 sort_order
  * （不是姓名筆畫；people_lib 預設是職稱優先，這裡自己重排），長期請假者標出假別與期間；已離職者排在最後。
  */
-function fsd_backfill_people(PDO $db): array {
+function fsd_backfill_people(PDO $db, string $asOfDate = ''): array {
     require_once __DIR__ . '/people_lib.php';
     $out = [];
     $rows = eg_people_list($db);
@@ -1335,7 +1473,11 @@ function fsd_backfill_people(PDO $db): array {
            <=> [(int)$b['dept_sort'], (int)$b['position_sort'], (string)$b['dept_name'], (string)$b['user_cname']];
     });
     foreach ($rows as $p) {
-        $label = trim(($p['dept_name'] ?? '') . ' ' . ($p['position_name'] ?? '') . ' ' . $p['user_cname']);
+        // 標籤顯示「業務日期當時」的部門/職稱，不然補 2023 年的舊表單會照現職挑，很容易挑錯人
+        $j = $asOfDate !== '' ? fsd_user_job_at($db, (int)$p['id'], $asOfDate) : [];
+        $dn = $j ? $j['dept_name'] : ($p['dept_name'] ?? '');
+        $pn = $j ? $j['position_name'] : ($p['position_name'] ?? '');
+        $label = trim($dn . ' ' . $pn . ' ' . $p['user_cname']);
         if (!empty($p['on_leave'])) $label .= '［' . $p['leave_note'] . '］';
         $out[] = ['id'=>(int)$p['id'], 'name'=>$p['user_cname'], 'resigned'=>0, 'label'=>$label];
     }
@@ -1507,12 +1649,16 @@ function fsd_backfill_submit(PDO $db, int $caseId, int $uid): array {
 
 /** 檢視/列印用：補案件的圖章框附上人員姓名與該圖章模板的 schema（一般案件全部圖章共用樣板那一個模板，補案件是逐章各自綁）。 */
 function fsd_backfill_fields_for_view(PDO $db, int $caseId): array {
+    $case = fsd_case_get($db, $caseId);
     $fields = fsd_case_field_list($db, $caseId);
     $cache = [];
     foreach ($fields as &$f) {
         $tplId = (int)($f['stamp_tpl_id'] ?? 0);
         if ($tplId && !array_key_exists($tplId, $cache)) $cache[$tplId] = fsd_stamp_tpl_get($db, $tplId);
         $f['stamp_tpl'] = $tplId ? ($cache[$tplId] ?? null) : null;
+        // 圖章上的部門/職稱要用「案件業務日期當時」的，不是這個人現在的職務
+        $j = fsd_sign_job_label($db, (int)($f['signer_user_id'] ?? 0), (string)($case['business_date'] ?? ''));
+        $f['signer_dept'] = $j['dept']; $f['signer_position'] = $j['position'];
     }
     unset($f);
     return $fields;

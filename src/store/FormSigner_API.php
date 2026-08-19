@@ -350,7 +350,8 @@ case 'case_get': {
         if (!$isPending) jerr('無權檢視他人建立的案件', 403);
     }
     $schema = fsd_case_schema($db, $case);
-    $responses = fsd_sanitize_responses_for_viewer(fsd_case_responses($db, $id), $perms['canAdmin']);
+    $responses = fsd_sanitize_responses_for_viewer(
+        fsd_responses_with_job($db, fsd_case_responses($db, $id), (string)($case['business_date'] ?? '')), $perms['canAdmin']);
     $curStage = null;
     foreach ($schema['stages'] ?? [] as $s) if ((int)$s['seq'] === (int)$case['current_stage_seq']) { $curStage = $s; break; }
     $canAdvisory = false; $canDecision = false;
@@ -527,7 +528,8 @@ case 'backfill_meta': {
     $tpls = fsd_stamp_tpl_options($db);
     foreach ($tpls as &$t) { $t['schema'] = fsd_stamp_tpl_get($db, (int)$t['id'])['schema'] ?? null; }
     unset($t);
-    jout(['people'=>fsd_backfill_people($db), 'stamp_tpls'=>$tpls,
+    // 人員標籤依業務日期顯示當時的部門/職稱（前端改業務日期時會重抓）
+    jout(['people'=>fsd_backfill_people($db, trim((string)($_GET['date'] ?? ''))), 'stamp_tpls'=>$tpls,
           'as_docs'=>eg_asdoc_list($db), 'max_stamps'=>FSD_BACKFILL_MAX_STAMPS]);
 }
 
