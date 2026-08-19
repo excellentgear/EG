@@ -4,6 +4,9 @@
  * 附件標籤勾「列入外來文件」者（quotation_file_categories.is_external_doc）依料號/報價附件彙整成清單。
  * 欄位：客戶、料號、文件名稱、外來文件類別、發行日期(上傳日)、發行單位(SALES_SETTING 業務單位)。
  * 可切換「只看有訂單綁定的料號 / 所有有附件的料號」、指定客戶、年度；列印依客戶分組、右下角帶綁定的 AS 文件編號。
+ * PFMEA 連動（2026-08-19）：每列顯示該料號是否已在 views/TD/pfmea.php 建表並可篩選；
+ *   「PFMEA 缺件偵測」找出 PFMEA 已建立卻沒有任何外來文件的料號 → 建立「待補檔案」項目（external_doc_pending）
+ *   → 上傳補檔存成該料號的料號附件，附件上傳日期＝使用者輸入的文件日期（＝清單的發行日期）。
  * 資料一律走 src/store/ExternalDoc_API.php。
  */
 session_start();
@@ -116,6 +119,20 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
         .xd-tab { border:1px solid #E8D5B5; border-bottom:none; background:#FBF3E5; color:#8a6d45; cursor:pointer;
             padding:7px 16px; font-size:14px; border-radius:6px 6px 0 0; margin-bottom:-2px; }
         .xd-tab.active { background:#fff; color:#5b3a1e; font-weight:bold; border-bottom:2px solid #fff; }
+        .xd-cnt { display:inline-block; min-width:18px; padding:0 5px; margin-left:4px; border-radius:9px;
+            background:#F0A24B; color:#fff; font-size:11px; line-height:16px; }
+        .xd-cnt.zero { background:#E8D5B5; color:#8a6d45; }
+        .pf-pill { display:inline-block; font-size:11px; border-radius:10px; padding:1px 8px; white-space:nowrap; }
+        .pf-yes { background:#F0A24B; color:#fff; }
+        .pf-no  { background:#F5EFE3; color:#8a6d45; border:1px solid #E8D5B5; }
+        .xd-scan-tb { width:100%; border-collapse:collapse; font-size:12px; }
+        .xd-scan-tb th, .xd-scan-tb td { border:1px solid #EADFC8; padding:4px 6px; text-align:center; }
+        .xd-scan-tb thead th { background:#F7E0BD; position:sticky; top:0; }
+        .xd-scan-tb td.tl { text-align:left; }
+        .xd-req { color:#DD5138; }
+        .xd-err { color:#DD5138; font-size:12px; margin-top:3px; min-height:16px; }
+        .xd-catbox { border:1px solid #D8BE93; border-radius:4px; padding:6px 8px; max-height:130px; overflow-y:auto; background:#FDF8EF; }
+        .xd-catbox label { display:inline-block !important; margin:2px 10px 2px 0; font-weight:normal; }
         a.xd-doclink { color:#b5762a; text-decoration:underline; }
         a.xd-doclink:hover { color:#8A5A2B; }
         .xd-op { color:#b5762a; cursor:pointer; white-space:nowrap; }
@@ -168,9 +185,16 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
             <select id="custSel"><option value="">全部客戶</option></select>
             <label>年度</label>
             <select id="yearSel"><option value="">全部年度</option></select>
+            <label>PFMEA</label>
+            <select id="pfmeaSel" title="是否已在 PFMEA（潛在失效模式及效應分析）建立此料號">
+                <option value="">全部</option>
+                <option value="yes">PFMEA 已建立</option>
+                <option value="no">PFMEA 未建立</option>
+            </select>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button class="btn-warm" id="btnPrint"><i class="fa fa-print"></i> 列印清單</button>
             <?php if ($canManage): ?>
+            <button id="btnPfmeaScan" title="找出 PFMEA 已建立、但外來文件清單一筆都沒有的料號"><i class="fa fa-search"></i> PFMEA 缺件偵測</button>
             <button id="btnAsDoc"><i class="fa fa-bookmark-o"></i> AS文件編號綁定</button>
             <?php endif; ?>
             <span class="xd-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -187,6 +211,12 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
         <div class="xd-tabs">
             <button type="button" class="xd-tab active" id="tabActive"><i class="fa fa-list"></i> 外來文件清單</button>
             <button type="button" class="xd-tab" id="tabExcluded"><i class="fa fa-ban"></i> 已排除</button>
+            <button type="button" class="xd-tab" id="tabPending"><i class="fa fa-upload"></i> 待補檔案
+                <span class="xd-cnt" id="pendCnt">0</span></button>
+        </div>
+        <div id="pendBar" style="display:none;margin-bottom:8px;font-size:12px;color:#8a6d45;">
+            這裡是「PFMEA 已建立、但外來文件清單一筆都沒有」的料號，補上傳檔案後就會自動出現在正式清單（本分頁不列印、不匯出）。
+            <label style="margin-left:10px;font-size:12px;"><input type="checkbox" id="chkIgnored" data-eg-skip> 顯示已標記「不列入」的（<span id="ignCnt">0</span>）</label>
         </div>
 
         <div class="xd-pagebar">
@@ -209,11 +239,65 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
             點<b>料號</b>可開啟文件；備註直接回寫到附件本體（其他頁面看到同一筆備註）；列印不帶備註。
             同一份文件在報價單與料號都掛了附件而重複時，用「排除」把重複那筆移到「已排除」分頁（可隨時加回）。
             要把某類附件納入本清單：至報價單頁或主檔管理的「附件類別標籤設定」勾選「列入外來文件清單」。
+            <b>PFMEA</b> 欄顯示該料號是否已在 PFMEA（潛在失效模式及效應分析）建表，可用工具列下拉篩選；
+            「PFMEA 缺件偵測」找出 PFMEA 已建立卻沒有任何外來文件的料號，建立成「待補檔案」後可逐筆上傳補檔（可指定文件日期）。
         </div>
 <?php endif; ?>
     </div>
 </div>
 </div>
+
+<!-- PFMEA 缺件偵測結果 -->
+<div class="xd-mask" id="scanMask"><div class="xd-modal" style="max-width:820px;">
+    <div class="m-head"><span><i class="fa fa-search"></i> PFMEA 缺件偵測</span><span class="m-close" onclick="closeMask('scanMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">
+            以下料號在 <b>PFMEA（潛在失效模式及效應分析）</b> 已建立，但在外來文件清單一筆都沒有。
+            勾選後按「建立待補項目」，就會出現在「待補檔案」分頁，可逐筆上傳檔案補齊。
+        </div>
+        <div id="scanSum" style="font-size:13px;color:#5b3a1e;margin-bottom:6px;"></div>
+        <div style="max-height:340px;overflow:auto;border:1px solid #EADFC8;border-radius:4px;">
+            <table class="xd-scan-tb">
+                <thead><tr>
+                    <th style="width:36px;"><input type="checkbox" id="scanAll" data-eg-skip title="全選/全不選"></th>
+                    <th style="width:26%;">客戶</th><th>料號</th><th style="width:22%;">PFMEA 文件編號</th><th style="width:15%;">狀態</th>
+                </tr></thead>
+                <tbody id="scanBody"></tbody>
+            </table>
+        </div>
+        <div id="scanUnres" style="font-size:12px;color:#DD5138;margin-top:6px;"></div>
+    </div>
+    <div class="m-foot">
+        <button class="b-ok" id="btnScanCreate">建立待補項目</button>
+        <button class="b-no" onclick="closeMask('scanMask')">關閉</button>
+    </div>
+</div></div>
+
+<!-- 補檔上傳（存成料號附件；上傳日期＝輸入的文件日期） -->
+<div class="xd-mask" id="upMask"><div class="xd-modal" style="max-width:600px;">
+    <div class="m-head"><span><i class="fa fa-upload"></i> 上傳補檔</span><span class="m-close" onclick="closeMask('upMask')">✕</span></div>
+    <div class="m-body">
+        <div style="background:#FFF7E8;border:1px dashed #F0A24B;border-radius:6px;padding:6px 10px;font-size:12px;color:#5b3a1e;">
+            料號：<b id="upPartNo"></b>　客戶：<b id="upCust"></b><br>
+            檔案會存成<b>該料號的料號附件</b>（主檔管理／報價單頁看到的是同一份），存檔後自動出現在正式清單。
+        </div>
+        <label>選擇檔案 <span class="xd-req">*</span></label>
+        <input type="file" id="upFile" style="width:100%;font-size:13px;" data-eg-skip>
+        <div class="xd-err" id="errFile"></div>
+        <label>外來文件類別 <span class="xd-req">*</span>（至少勾一個，未勾不可存檔）</label>
+        <div class="xd-catbox" id="upCats"></div>
+        <div class="xd-err" id="errCat"></div>
+        <label>文件日期 <span class="xd-req">*</span>（＝清單的發行日期；補歷史文件請填文件上的實際日期）</label>
+        <input type="date" id="upDate" style="width:100%;" data-eg-skip>
+        <div class="xd-err" id="errDate"></div>
+        <label>備註（選填，會寫進附件本體）</label>
+        <input type="text" id="upNote" maxlength="500" placeholder="例如：客戶 2023 年提供之原始圖面">
+    </div>
+    <div class="m-foot">
+        <button class="b-ok" id="btnUpSave">上傳並補入清單</button>
+        <button class="b-no" onclick="closeMask('upMask')">取消</button>
+    </div>
+</div></div>
 
 <!-- AS 文件編號綁定 -->
 <div class="xd-mask" id="asMask"><div class="xd-modal">
@@ -246,17 +330,26 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
             <li><b>點料號</b>＝開啟該份文件；<b>備註</b>點鉛筆直接輸入，Enter 儲存、Esc 取消，會回寫到附件本體（主檔/報價頁看到同一筆備註）。</li>
             <li><b>排除</b>：同一份文件在報價單與料號兩邊都上傳過會重複出現，點「排除」把重複那筆移出清單；到「<b>已排除</b>」分頁可隨時「加回」。排除後列印與 CSV 也不會出現。</li>
             <li><b>列印</b>：依客戶分組；大標題＝本公司全名（主檔客戶頁「定為本公司」者）、左下角頁碼、右下角綁定的 AS 文件編號；<b>不帶備註</b>。CSV 有帶備註與檔名。</li>
+            <li><b>發行日期</b>：＝附件上傳日期。補登舊文件時上傳日不等於文件實際日期，管理角色可點日期旁鉛筆直接改成文件上的日期（會回寫附件本體，主檔管理看到的上傳日期也跟著變）。</li>
         </ul>
-        <h4>三、設定入口</h4>
+        <h4>三、PFMEA 缺件偵測與待補檔案</h4>
+        <ul>
+            <li><b>PFMEA 欄</b>：顯示該料號有沒有在 <b>PFMEA（潛在失效模式及效應分析，3-TD-01-02）</b> 建過表；有的顯示「PFMEA已建立」（滑鼠移上去看 PFMEA 文件編號）。工具列的 <b>PFMEA</b> 下拉可只看「已建立／未建立」，篩選結果連動列印與 CSV。</li>
+            <li><b>PFMEA 缺件偵測</b>（管理角色）：找出「PFMEA 已建立、但外來文件清單一筆都沒有」的料號 —— 這代表已經在做失效分析、卻沒有把客戶提供的圖面/規格納入外來文件管制。勾選後按「建立待補項目」。</li>
+            <li><b>待補檔案分頁</b>：待補項目點「上傳補檔」→ 選檔案、勾外來文件類別、填<b>文件日期</b>，存檔後檔案會存成<b>該料號的料號附件</b>（主檔管理／報價單頁看到的是同一份），並自動出現在正式清單，發行日期＝你填的文件日期。</li>
+            <li><b>不列入</b>：該料號本來就沒有外來文件（例如自家開發品）時，按「不列入」，之後偵測就不會再吵；勾「顯示已標記不列入的」可加回。</li>
+            <li>待補項目<b>不會</b>出現在正式清單、列印與 CSV（沒有檔案的空列不進管制清單）。</li>
+        </ul>
+        <h4>四、設定入口</h4>
         <ul>
             <li><b>哪些標籤算外來文件</b>：報價單頁「附件類別」分頁，或主檔管理「附件類別標籤設定」——勾「列入外來文件清單」，可另設清單顯示用的類別名稱（兩邊同一組設定）。</li>
             <li><b>AS 文件編號</b>：本頁「AS文件編號綁定」按鈕（需管理角色），從 AS9100 文件管理主檔挑選。</li>
             <li><b>發行單位</b>：同 Sales_Track 的業務單位設定（BOM 總覽頁修改）。</li>
         </ul>
-        <h4>四、權限角色</h4>
+        <h4>五、權限角色</h4>
         <ul>
             <li><b>外來文件檢閱</b>：看清單、開文件、匯出、列印。</li>
-            <li><b>外來文件管理</b>：檢閱＋綁 AS 編號、編輯備註、排除/加回。</li>
+            <li><b>外來文件管理</b>：檢閱＋綁 AS 編號、編輯備註、修改發行日期、排除/加回、PFMEA 缺件偵測與上傳補檔。</li>
             <li>管理者固定全權；未指派角色者無法檢視本頁。指派入口：使用者權限設定 →「外來文件清單」區塊。</li>
         </ul>
         <div class="tip">發行日期＝附件上傳日期。若清單是空的，通常是還沒有任何標籤勾「列入外來文件清單」。</div>
@@ -269,7 +362,7 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
     <div class="m-head">角色權限說明<span class="m-close" onclick="closeMask('helpMask')">✕</span></div>
     <div class="m-body" style="line-height:1.8;">
         <b>外來文件檢閱</b>：檢視清單（含點料號開啟文件）、匯出 CSV、列印。<br>
-        <b>外來文件管理</b>：檢閱＋綁定 AS 文件編號、編輯附件備註、排除/加回清單項目。<br>
+        <b>外來文件管理</b>：檢閱＋綁定 AS 文件編號、編輯附件備註、修改發行日期、排除/加回清單項目、PFMEA 缺件偵測與待補檔案上傳。<br>
         <b>管理者</b>：系統管理者固定擁有全部權限。<br>
         <hr style="border-color:#EADFC8;">
         清單來源＝附件標籤有勾「列入外來文件清單」的料號附件與報價附件；
@@ -283,6 +376,7 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -294,7 +388,7 @@ var API = '../../src/store/ExternalDoc_API.php';
 var canView = <?= $canView ? 'true' : 'false' ?>;
 var canManage = <?= $canManage ? 'true' : 'false' ?>;
 var MODE = 'bound', VIEW = 'active', PAGE = 1, TOTAL = 0, AS_DOC = null, AS_DOCS = [], ISSUE_UNIT = '';
-var CAT = 0, CATS = [], CAT_COLOR = {}, COMPANY = '', CUSTOMERS = [];
+var CAT = 0, CATS = [], CAT_COLOR = {}, COMPANY = '', CUSTOMERS = [], EXT_CATS = [];
 
 // 類別固定調色盤（暖色系，依 ai-rules/10；同類別同色，列表/篩選鈕/列印一致）
 var CAT_PALETTE = [
@@ -311,18 +405,38 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function closeMask(id){ document.getElementById(id).style.display='none'; }
 function openMask(id){ document.getElementById(id).style.display='block'; }
+// 日期顯示一律 YYYY.MM.DD（ai-rules/20，唯一實作 eg_date_fmt.js 的 egFmtDate）
+function dispDate(d, withTime){ return (typeof egFmtDate === 'function') ? egFmtDate(d, !!withTime) : (d||''); }
 
 function filters(){
-    return { mode: MODE, customer_id: $('#custSel').val()||'', year: $('#yearSel').val()||0, category: CAT };
+    return { mode: MODE, customer_id: $('#custSel').val()||'', year: $('#yearSel').val()||0,
+             category: CAT, pfmea: $('#pfmeaSel').val()||'' };
+}
+function isPending(){ return VIEW === 'pending' || VIEW === 'ignored'; }
+
+// PFMEA（views/TD/pfmea.php）建立狀態標示
+function pfmeaCell(r){
+    return r.has_pfmea
+        ? '<span class="pf-pill pf-yes" title="PFMEA 文件編號：'+esc(r.pfmea_doc_no||'')+'">PFMEA已建立</span>'
+        : '<span class="pf-pill pf-no">未建立</span>';
 }
 
 function renderHead(){
-    var h = '<th>客戶</th><th>料號</th><th>外來文件類別</th><th>發行日期</th><th>發行單位</th><th>來源</th><th>備註</th>';
-    if (VIEW === 'excluded') h += '<th>排除資訊</th>';
-    if (canManage) h += '<th>操作</th>';
+    var h;
+    if (isPending()){
+        h = '<th>客戶</th><th>料號</th><th>PFMEA</th><th>缺件原因</th><th>建立時間</th><th>建立者</th>';
+        if (canManage) h += '<th>操作</th>';
+    } else {
+        h = '<th>客戶</th><th>料號</th><th>外來文件類別</th><th>發行日期</th><th>發行單位</th><th>PFMEA</th><th>來源</th><th>備註</th>';
+        if (VIEW === 'excluded') h += '<th>排除資訊</th>';
+        if (canManage) h += '<th>操作</th>';
+    }
     $('#xdHead').html(h);
 }
-function colCount(){ return 7 + (VIEW==='excluded'?1:0) + (canManage?1:0); }
+function colCount(){
+    if (isPending()) return 6 + (canManage?1:0);
+    return 8 + (VIEW==='excluded'?1:0) + (canManage?1:0);
+}
 
 function renderCustOptions(kw){
     kw = (kw||'').toLowerCase();
@@ -378,8 +492,11 @@ function loadOptions(first){
         CAT_COLOR = {};
         (res.all_categories||[]).forEach(function(c, i){ CAT_COLOR[c.id] = CAT_PALETTE[i % CAT_PALETTE.length]; });
         CATS = res.categories||[];
+        EXT_CATS = res.ext_cats||[];      // 補檔上傳可勾的類別（＝清單認列的外來文件標籤）
+        setCounts(res);
         if (CAT && !CATS.some(function(c){ return c.id === CAT; })) CAT = 0;
         renderCatBar();
+        if (isPending()) $('#catFilterBar').hide();
         COMPANY = res.company_name||'';
         AS_DOCS = res.as_docs||[];
         renderAsDoc(res.as_doc);
@@ -422,7 +539,32 @@ function loadList(){
         ISSUE_UNIT = res.issue_unit||ISSUE_UNIT;
         $('#issueUnit').text(ISSUE_UNIT || '（未設定業務單位）');
         renderAsDoc(res.as_doc);
+        setCounts(res);
         var h = '';
+        if (isPending()){
+            (res.rows||[]).forEach(function(r){
+                h += '<tr data-pid="'+r.pending_id+'" data-dpk="'+r.ds_pk+'" data-pno="'+esc(r.part_no)+'" data-cust="'+esc(r.customer_name)+'">'
+                   + '<td class="t-left">'+esc(r.customer_name)+'</td>'
+                   + '<td class="t-left">'+esc(r.part_no)+(r.part_missing?' <span style="color:#DD5138;font-size:11px;">(料號已刪除)</span>':'')+'</td>'
+                   + '<td>'+pfmeaCell(r)+'</td>'
+                   + '<td style="font-size:12px;color:#8a6d45;">PFMEA 已建立，但外來文件清單一筆都沒有</td>'
+                   + '<td style="font-size:12px;">'+esc(dispDate(r.created_at, true))+'</td>'
+                   + '<td style="font-size:12px;">'+esc(r.created_by||'')+'</td>';
+                if (canManage) h += '<td style="white-space:nowrap;">'
+                   + (VIEW==='pending'
+                        ? '<span class="xd-op xd-up-btn"><i class="fa fa-upload"></i> 上傳補檔</span>'
+                        + ' <span class="xd-op xd-ign-btn" title="這個料號本來就沒有外來文件，不要再列入待補"><i class="fa fa-ban"></i> 不列入</span>'
+                        : '<span class="xd-op xd-unign-btn"><i class="fa fa-undo"></i> 加回待補</span>')
+                   + '</td>';
+                h += '</tr>';
+            });
+            var pMsg = VIEW==='pending'
+                ? '目前沒有待補項目（按工具列「PFMEA 缺件偵測」找出 PFMEA 已建立但沒有外來文件的料號）'
+                : '沒有標記「不列入」的項目';
+            $('#xdBody').html(h || '<tr><td colspan="'+colCount()+'" style="padding:20px;color:#8a6d45;">'+pMsg+'</td></tr>');
+            renderPager();
+            return;
+        }
         (res.rows||[]).forEach(function(r){
             var cats = (r.categories||[]).map(function(c, i){ return catPill((r.category_ids||[])[i], c); }).join('');
             var src = r.source==='part' ? '<span class="src-pill src-part">料號附件</span>'
@@ -432,12 +574,15 @@ function loadList(){
                 : '<span title="'+esc(r.doc_name)+'">'+esc(r.part_no)+'</span>';
             var noteCell = esc(r.note||'');
             if (canManage) noteCell += ' <i class="fa fa-pencil xd-note-pen" style="cursor:pointer;color:#b5762a;" title="編輯備註（回寫到附件本體）"></i>';
+            var dateCell = esc(dispDate(r.doc_date));
+            if (canManage) dateCell += ' <i class="fa fa-pencil xd-date-pen" style="cursor:pointer;color:#b5762a;" title="修改發行日期（回寫附件的上傳日期）"></i>';
             h += '<tr data-src="'+r.source+'" data-aid="'+r.attach_id+'" data-dpk="'+r.ds_pk+'" data-pno="'+esc(r.part_no)+'">'
                + '<td class="t-left">'+esc(r.customer_name)+'</td>'
                + '<td class="t-left">'+partCell+'</td>'
                + '<td>'+(cats||'<span style="color:#c9bda9;">—</span>')+'</td>'
-               + '<td>'+esc(r.doc_date)+'</td>'
+               + '<td class="xd-date" data-date="'+esc(r.doc_date)+'" style="white-space:nowrap;">'+dateCell+'</td>'
                + '<td>'+esc(ISSUE_UNIT)+'</td>'
+               + '<td>'+pfmeaCell(r)+'</td>'
                + '<td>'+src+'</td>'
                + '<td class="t-left xd-note" data-note="'+esc(r.note||'')+'" style="min-width:120px;">'+noteCell+'</td>';
             if (VIEW === 'excluded')
@@ -455,19 +600,30 @@ function loadList(){
     }, 'json');
 }
 
-// ── 分頁籤：清單 / 已排除（列印與 CSV 只針對正式清單）──────────────
-$('#tabActive').on('click', function(){
-    VIEW = 'active'; PAGE = 1;
-    $(this).addClass('active'); $('#tabExcluded').removeClass('active');
-    $('#btnPrint,#btnCsv').prop('disabled', false).css('opacity', 1);
+// ── 分頁籤：清單 / 已排除 / 待補檔案（列印與 CSV 只針對正式清單）──────────
+function switchTab(view, $btn){
+    VIEW = view; PAGE = 1;
+    $('.xd-tabs .xd-tab').removeClass('active'); $btn.addClass('active');
+    var official = (view === 'active');
+    $('#btnPrint,#btnCsv').prop('disabled', !official).css('opacity', official ? 1 : .45);
+    // 待補分頁沒有附件，年度/類別/PFMEA 這些附件維度的篩選不適用
+    $('#pendBar').toggle(isPending());
+    $('#yearSel,#pfmeaSel').prop('disabled', isPending()).css('opacity', isPending() ? .5 : 1);
+    if (isPending() || !CATS.length) $('#catFilterBar').hide();
+    else $('#catFilterBar').css('display', 'flex');
     loadList();
+}
+$('#tabActive').on('click',   function(){ switchTab('active', $(this)); });
+$('#tabExcluded').on('click', function(){ switchTab('excluded', $(this)); });
+$('#tabPending').on('click',  function(){ switchTab($('#chkIgnored').prop('checked') ? 'ignored' : 'pending', $(this)); });
+$('#chkIgnored').on('change', function(){
+    VIEW = $(this).prop('checked') ? 'ignored' : 'pending'; PAGE = 1; loadList();
 });
-$('#tabExcluded').on('click', function(){
-    VIEW = 'excluded'; PAGE = 1;
-    $(this).addClass('active'); $('#tabActive').removeClass('active');
-    $('#btnPrint,#btnCsv').prop('disabled', true).css('opacity', .45);
-    loadList();
-});
+function setCounts(res){
+    if (res.pending_count !== undefined)
+        $('#pendCnt').text(res.pending_count).toggleClass('zero', !res.pending_count);
+    if (res.ignored_count !== undefined) $('#ignCnt').text(res.ignored_count);
+}
 
 // ── 排除 / 加回 ─────────────────────────────────────────────
 $(document).on('click', '.xd-ex-btn', function(){
@@ -512,6 +668,155 @@ function saveNote(td, val){
     }, 'json').fail(function(){ alert('備註儲存失敗'); loadList(); });
 }
 
+// ── 發行日期修改（回寫附件的上傳日期；補歷史文件時要能填文件實際日期）────
+$(document).on('click', '.xd-date-pen', function(){
+    var td = $(this).closest('td');
+    if (td.find('input').length) return;
+    var cur = td.attr('data-date') || '';
+    td.html('<input type="date" class="xd-note-edit" data-eg-skip style="width:140px;" value="'+esc(cur)+'">'
+          + ' <span class="xd-op xd-date-ok" title="儲存"><i class="fa fa-check"></i></span>'
+          + ' <span class="xd-op xd-date-no" title="取消"><i class="fa fa-times"></i></span>');
+    td.find('input').focus();
+});
+$(document).on('click', '.xd-date-no', function(){ loadList(); });
+$(document).on('keydown', '.xd-date .xd-note-edit', function(ev){
+    if (ev.key === 'Enter'){ ev.preventDefault(); $(this).closest('td').find('.xd-date-ok').click(); }
+    else if (ev.key === 'Escape'){ loadList(); }
+});
+$(document).on('click', '.xd-date-ok', function(){
+    var td = $(this).closest('td'), tr = td.closest('tr');
+    var val = td.find('input').val() || '';
+    if (!val){ alert('請選擇日期'); return; }
+    if (td.data('saving')) return;
+    td.data('saving', 1);
+    $.post(API, {action:'save_doc_date', source:tr.data('src'), attach_id:tr.data('aid'), doc_date:val}, function(res){
+        if (!res.success) alert(res.message||'日期儲存失敗');
+        refreshAll();
+    }, 'json').fail(function(){ alert('日期儲存失敗'); loadList(); });
+});
+
+// ── 待補項目：不列入 / 加回 ─────────────────────────────────────
+$(document).on('click', '.xd-ign-btn', function(){
+    var tr = $(this).closest('tr');
+    if (!confirm('「'+tr.data('pno')+'」不列入待補清單？（可勾「顯示已標記不列入的」加回）')) return;
+    $.post(API, {action:'pending_ignore', pending_id:tr.data('pid')}, function(res){
+        if (!res.success){ alert(res.message||'操作失敗'); return; }
+        loadList();
+    }, 'json');
+});
+$(document).on('click', '.xd-unign-btn', function(){
+    var tr = $(this).closest('tr');
+    $.post(API, {action:'pending_restore', pending_id:tr.data('pid')}, function(res){
+        if (!res.success){ alert(res.message||'操作失敗'); return; }
+        loadList();
+    }, 'json');
+});
+
+// ── 上傳補檔（存成料號附件，上傳日期＝輸入的文件日期）──────────────────
+// 註：file input 用原生可見控制項、類別勾選與存檔鈕常駐顯示、送出時直讀 input.files
+//     （使用者環境的 change 事件可能被擴充功能吞掉，見記憶 file_upload_change_event）
+var UP_PID = 0, UP_DPK = 0;
+function renderUpCats(){
+    var h = '';
+    (EXT_CATS||[]).forEach(function(c){
+        h += '<label><input type="checkbox" class="up-cat" data-eg-skip value="'+c.id+'"> '+esc(c.name)+'</label>';
+    });
+    $('#upCats').html(h || '<span style="color:#DD5138;">尚無「列入外來文件清單」的附件類別標籤，請先到附件類別標籤設定勾選。</span>');
+}
+$(document).on('click', '.xd-up-btn', function(){
+    var tr = $(this).closest('tr');
+    UP_PID = parseInt(tr.data('pid'))||0; UP_DPK = parseInt(tr.data('dpk'))||0;
+    $('#upPartNo').text(tr.data('pno')); $('#upCust').text(tr.data('cust'));
+    $('#upFile').val(''); $('#upNote').val(''); $('#upDate').val('');
+    $('.xd-err').text('');
+    renderUpCats();
+    openMask('upMask');
+});
+// 錯誤即時偵測（表單三總則③）：填/選當下就把紅字消掉
+$(document).on('change', '#upFile', function(){ $('#errFile').text(''); });
+$(document).on('change', '#upCats .up-cat', function(){ $('#errCat').text(''); });
+$('#upDate').on('change input', function(){ $('#errDate').text(''); });
+$('#btnUpSave').on('click', function(){
+    var fileEl = document.getElementById('upFile');
+    var files  = fileEl ? fileEl.files : null;      // 直讀現值，不靠 change 事件同步
+    var cats = [];
+    $('#upCats .up-cat:checked').each(function(){ cats.push($(this).val()); });
+    var d = $('#upDate').val() || '';
+    var ok = true;
+    $('.xd-err').text('');
+    if (!files || !files.length){ $('#errFile').text('請選擇要上傳的檔案'); ok = false; }
+    if (!cats.length){ $('#errCat').text('請至少勾選一個外來文件類別（沒有類別的附件不會出現在清單）'); ok = false; }
+    if (!d){ $('#errDate').text('請輸入文件日期（清單的發行日期會用這個日期）'); ok = false; }
+    else if (d > new Date().toISOString().substr(0,10)){ $('#errDate').text('文件日期不可晚於今天'); ok = false; }
+    if (!ok) return;
+    var fd = new FormData();
+    fd.append('action', 'upload_fill');
+    fd.append('pending_id', UP_PID);
+    fd.append('ds_pk', UP_DPK);
+    fd.append('category_ids', cats.join(','));
+    fd.append('doc_date', d);
+    fd.append('note', $('#upNote').val()||'');
+    fd.append('file', files[0]);
+    var $b = $('#btnUpSave').text('上傳中…');
+    $.ajax({ url: API, type:'POST', data: fd, processData:false, contentType:false, dataType:'json' })
+     .done(function(res){
+        $b.text('上傳並補入清單');
+        if (!res.success){ alert(res.message||'上傳失敗'); return; }
+        closeMask('upMask');
+        alert(res.message||'已上傳');
+        refreshAll();
+     })
+     .fail(function(){ $b.text('上傳並補入清單'); alert('上傳失敗（伺服器沒有回應或檔案過大）'); });
+});
+
+// ── PFMEA 缺件偵測 ───────────────────────────────────────────
+var SCAN_ROWS = [];
+$('#btnPfmeaScan').on('click', function(){
+    // 點開即刷新：一律向後端重新偵測，不用畫面上的快取
+    $('#scanBody').html('<tr><td colspan="5" style="padding:14px;color:#8a6d45;">偵測中…</td></tr>');
+    $('#scanSum').text(''); $('#scanUnres').text(''); $('#scanAll').prop('checked', false);
+    openMask('scanMask');
+    $.post(API, {action:'pfmea_scan'}, function(res){
+        if (!res.success){ $('#scanBody').html('<tr><td colspan="5" style="padding:14px;color:#DD5138;">'+esc(res.message||'偵測失敗')+'</td></tr>'); return; }
+        SCAN_ROWS = res.rows||[];
+        var newCnt = 0, h = '';
+        SCAN_ROWS.forEach(function(r, i){
+            var stat = r.already ? '<span style="color:#C77C1A;">已在待補清單</span>'
+                     : (r.ignored ? '<span style="color:#8a6d45;">已標記不列入</span>'
+                     : '<span style="color:#DD5138;">缺件</span>');
+            var selectable = !r.already;
+            if (selectable) newCnt++;
+            h += '<tr><td>'+(selectable
+                    ? '<input type="checkbox" class="scan-ck" data-eg-skip data-dpk="'+r.ds_pk+'" checked>'
+                    : '')+'</td>'
+               + '<td class="tl">'+esc(r.customer_name)+'</td>'
+               + '<td class="tl">'+esc(r.part_no)+'</td>'
+               + '<td>'+esc(r.pfmea_doc_no)+'</td>'
+               + '<td>'+stat+'</td></tr>';
+        });
+        $('#scanBody').html(h || '<tr><td colspan="5" style="padding:14px;color:#8a6d45;">沒有缺件：PFMEA 已建立的料號都有外來文件了</td></tr>');
+        $('#scanSum').html('偵測到 <b>'+SCAN_ROWS.length+'</b> 個 PFMEA 已建立卻沒有外來文件的料號，其中 <b>'+newCnt+'</b> 個可建立待補項目。');
+        $('#scanAll').prop('checked', newCnt > 0);
+        if ((res.unresolved||[]).length){
+            $('#scanUnres').html('註：另有 '+res.unresolved.length+' 筆 PFMEA 是手動輸入的料號、在料號主檔找不到（'
+                + res.unresolved.map(function(u){ return esc(u.part_no); }).join('、')
+                + '），無法自動建立，請先於主檔建立該料號。');
+        }
+    }, 'json');
+});
+$('#scanAll').on('change', function(){ $('#scanBody .scan-ck').prop('checked', $(this).prop('checked')); });
+$('#btnScanCreate').on('click', function(){
+    var ids = [];
+    $('#scanBody .scan-ck:checked').each(function(){ ids.push($(this).data('dpk')); });
+    if (!ids.length){ alert('請至少勾選一筆料號'); return; }
+    $.post(API, {action:'pending_create', ds_pks: ids}, function(res){
+        if (!res.success){ alert(res.message||'建立失敗'); return; }
+        alert(res.message);
+        closeMask('scanMask');
+        $('#tabPending').click();
+    }, 'json');
+});
+
 function renderPager(){
     var per = parseInt($('#perPageSel').val())||10;
     var pages = Math.max(1, Math.ceil(TOTAL/per));
@@ -527,12 +832,13 @@ function goPage(p){ PAGE = Math.max(1, p); loadList(); }
 
 $('#modeBound').on('click', function(){ MODE='bound'; $(this).addClass('active'); $('#modeAll').removeClass('active'); refreshAll(); });
 $('#modeAll').on('click', function(){ MODE='all'; $(this).addClass('active'); $('#modeBound').removeClass('active'); refreshAll(); });
-$('#custSel, #yearSel').on('change', function(){ refreshAll(); });
+$('#custSel, #yearSel, #pfmeaSel').on('change', function(){ refreshAll(); });
 $('#perPageSel').on('change', function(){ PAGE=1; loadList(); });
 
 $('#btnCsv').on('click', function(){
     var f = filters();
-    location.href = API + '?action=export_csv&mode='+f.mode+'&customer_id='+encodeURIComponent(f.customer_id)+'&year='+f.year;
+    location.href = API + '?action=export_csv&mode='+f.mode+'&customer_id='+encodeURIComponent(f.customer_id)
+                  + '&year='+f.year+'&category='+f.category+'&pfmea='+encodeURIComponent(f.pfmea);
 });
 
 // ── 列印：依客戶分組；右下角固定頁尾＝AS 文件編號 ─────────────────────
@@ -545,12 +851,14 @@ $('#btnPrint').on('click', function(){
         var custTxt = $('#custSel').val() ? $('#custSel option:selected').text() : '全部客戶';
         var modeTxt = (MODE==='bound') ? '有訂單綁定的料號' : '所有有附件的料號';
         var catTxt  = CAT ? ('類別：'+($('#catFilterBar .cat-btn.active').text()||'')) : '';
+        var pfTxt   = $('#pfmeaSel').val() ? ('PFMEA：'+$('#pfmeaSel option:selected').text()) : '';
         var unit = res.issue_unit||'';
         var company = res.company_name || COMPANY || '';
         var body = '<div class="p-comp">'+esc(company)+'</div>'
                  + '<div class="p-title">外來文件清單</div>'
-                 + '<div class="p-sub">'+esc(yearTxt)+'｜'+esc(custTxt)+'｜'+esc(modeTxt)+(catTxt?'｜'+esc(catTxt):'')+'｜共 '+res.total+' 筆'
-                 + '｜列印日期：'+new Date().toISOString().substr(0,10)+'</div>';
+                 + '<div class="p-sub">'+esc(yearTxt)+'｜'+esc(custTxt)+'｜'+esc(modeTxt)+(catTxt?'｜'+esc(catTxt):'')
+                 + (pfTxt?'｜'+esc(pfTxt):'')+'｜共 '+res.total+' 筆'
+                 + '｜列印日期：'+dispDate(new Date().toISOString().substr(0,10))+'</div>';
         (res.groups||[]).forEach(function(g){
             body += '<div class="p-cust">客戶：'+esc(g.customer_name)+'</div>';
             body += '<table class="p-tb"><thead><tr><th style="width:30%;">料號</th>'
@@ -558,7 +866,7 @@ $('#btnPrint').on('click', function(){
             g.rows.forEach(function(r){
                 var cats = (r.categories||[]).map(function(c, i){ return catPill((r.category_ids||[])[i], c); }).join('');
                 body += '<tr><td class="tl">'+esc(r.part_no)+'</td>'
-                      + '<td>'+cats+'</td><td>'+esc(r.doc_date)+'</td><td>'+esc(unit)+'</td></tr>';
+                      + '<td>'+cats+'</td><td>'+esc(dispDate(r.doc_date))+'</td><td>'+esc(unit)+'</td></tr>';
             });
             body += '</tbody></table>';
         });

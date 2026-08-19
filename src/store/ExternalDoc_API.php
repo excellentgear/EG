@@ -118,9 +118,36 @@ function extdoc_categories(PDO $db): array {
     return $map;
 }
 
+// ── 共用：PFMEA（views/TD/pfmea.php）已建立的料號對照 ────────────────────
+// 以 d_setting 主鍵(part_d_id) 為主；PFMEA 允許手打料號字串(part_no_text)，故另備字串對照。
+// 回傳 ['by_id'=>[d_id=>doc_no], 'by_no'=>[大寫去空白料號=>doc_no]]（同料號多份取最新一份）
+function extdoc_pfmea_map(PDO $db): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $byId = []; $byNo = [];
+    try {
+        $rows = $db->query("SELECT doc_no, part_d_id, part_no_text FROM pfmea_doc
+                            WHERE is_deleted=0 ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) {
+            if (!empty($r['part_d_id'])) $byId[(int)$r['part_d_id']] = (string)$r['doc_no'];
+            $txt = strtoupper(str_replace(' ', '', trim((string)$r['part_no_text'])));
+            if ($txt !== '') $byNo[$txt] = (string)$r['doc_no'];
+        }
+    } catch (Exception $e) {}   // PFMEA 模組未建表時視同沒有任何 PFMEA
+    $cache = ['by_id' => $byId, 'by_no' => $byNo];
+    return $cache;
+}
+// 單一列（料號主鍵＋料號字串）是否有 PFMEA，回傳 PFMEA 文件編號或 ''
+function extdoc_pfmea_of(array $map, $dsPk, string $partNo): string {
+    $dsPk = (int)$dsPk;
+    if ($dsPk && isset($map['by_id'][$dsPk])) return $map['by_id'][$dsPk];
+    $txt = strtoupper(str_replace(' ', '', trim($partNo)));
+    return ($txt !== '' && isset($map['by_no'][$txt])) ? $map['by_no'][$txt] : '';
+}
+
 /**
  * 撈出全部符合條件的外來文件列（兩來源合併，PHP 端整理）
- * $opt: mode('bound'|'all'), customer_id(''=全部), year(0=全部)
+ * $opt: mode('bound'|'all'), customer_id(''=全部), year(0=全部), pfmea(''|'yes'|'no')
  */
 function extdoc_fetch_rows(PDO $db, array $opt): array {
     $cats = extdoc_categories($db);
@@ -132,6 +159,8 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
     $year     = (int)($opt['year'] ?? 0);
     $catId    = (int)($opt['category'] ?? 0);   // 外來文件類別篩選（quotation_file_categories.id，0=全部）
     $show     = ($opt['show'] ?? 'active') === 'excluded' ? 'excluded' : 'active';   // excluded=只看已排除
+    $pfmeaF   = in_array(($opt['pfmea'] ?? ''), ['yes','no'], true) ? $opt['pfmea'] : '';  // PFMEA 建立與否篩選
+    $pfmeaMap = extdoc_pfmea_map($db);
 
     // 排除清單（附件×料號為單位）：active 檢視要跳過、excluded 檢視只留這些
     $excludes = [];
@@ -255,6 +284,10 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
         $exKey = $r['source'].'|'.$r['attach_id'].'|'.$r['ds_pk'];
         $isExcluded = isset($excludes[$exKey]);
         if ($show === 'excluded' ? !$isExcluded : $isExcluded) continue;
+        // PFMEA（views/TD/pfmea.php）是否已針對此料號建立
+        $pfmeaNo = extdoc_pfmea_of($pfmeaMap, $r['ds_pk'], (string)$r['part_no']);
+        if ($pfmeaF === 'yes' && $pfmeaNo === '') continue;
+        if ($pfmeaF === 'no'  && $pfmeaNo !== '') continue;
         // 檔案連結：兩種來源都走各自的下載 API（鐵律5：不設 URL 前綴讓瀏覽器直連，
         // 附件位置只由 *_nas_dir 設定決定，換 NAS 免改 httpd.conf 也不綁磁碟機代號）
         $fileUrl = $r['source'] === 'part'
@@ -275,6 +308,8 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
             'quote_no'      => $r['quote_no'],
             'note'          => (string)$r['note'],
             'file_url'      => $fileUrl,
+            'has_pfmea'     => $pfmeaNo !== '',
+            'pfmea_doc_no'  => $pfmeaNo,
             'excluded_by'   => $isExcluded ? (string)($excludes[$exKey]['excluded_by'] ?? '') : '',
             'excluded_at'   => $isExcluded ? substr((string)($excludes[$exKey]['excluded_at'] ?? ''), 0, 16) : '',
         ];
@@ -283,6 +318,125 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
         return [$a['customer_name'], $a['part_no'], $a['doc_date']] <=> [$b['customer_name'], $b['part_no'], $b['doc_date']];
     });
     return $out;
+}
+
+// ── 待補檔案項目（external_doc_pending）─────────────────────────────
+// 「PFMEA 已建立、但外來文件清單一列都沒有」的料號，由偵測建立成待補項目；
+// 補上傳附件後轉 status=done，該附件本身即成為正式清單的一列。
+function extdoc_pending_rows(PDO $db, string $status = 'pending'): array {
+    $status = in_array($status, ['pending','ignored','done'], true) ? $status : 'pending';
+    try {
+        $st = $db->prepare("SELECT p.*, ds.D_Setting_Id AS cur_part_no, ds.Customer_Id AS cur_customer_id,
+                                   COALESCE(cl.customer,'') AS customer_name
+                            FROM external_doc_pending p
+                            LEFT JOIN d_setting ds ON ds.d_id = p.ds_pk
+                            LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
+                            WHERE p.status = ?
+                            ORDER BY customer_name, cur_part_no, p.id");
+        $st->execute([$status]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) { return []; }
+    $map = extdoc_pfmea_map($db);
+    $out = [];
+    foreach ($rows as $r) {
+        // 料號/客戶一律即時查 d_setting（料號改名或改客戶時清單要跟著對）
+        $partNo = (string)($r['cur_part_no'] !== null && $r['cur_part_no'] !== '' ? $r['cur_part_no'] : $r['part_no']);
+        $custId = (string)($r['cur_customer_id'] ?? $r['customer_id'] ?? '');
+        $pfmeaNo = extdoc_pfmea_of($map, $r['ds_pk'], $partNo);
+        $out[] = [
+            'pending_id'    => (int)$r['id'],
+            'source'        => 'pending',
+            'ds_pk'         => (int)$r['ds_pk'],
+            'part_no'       => $partNo,
+            'customer_id'   => $custId,
+            'customer_name' => $r['customer_name'] !== '' ? $r['customer_name'] : $custId,
+            'source_kind'   => (string)$r['source_kind'],
+            'ref_no'        => (string)($r['ref_no'] ?? ''),
+            'has_pfmea'     => $pfmeaNo !== '',
+            'pfmea_doc_no'  => $pfmeaNo !== '' ? $pfmeaNo : (string)($r['ref_no'] ?? ''),
+            'created_by'    => (string)($r['created_by'] ?? ''),
+            'created_at'    => substr((string)($r['created_at'] ?? ''), 0, 16),
+            'part_missing'  => $r['cur_part_no'] === null,   // 料號已被刪除
+        ];
+    }
+    return $out;
+}
+
+/**
+ * PFMEA 缺件偵測：PFMEA 已建立、但該料號在外來文件清單一列都沒有者。
+ * 判定基準（使用者拍板）＝完全沒有任何外來文件（料號附件與報價附件都算，已排除的不算數）。
+ * 回傳每筆含 already（已有待補項目）/ignored（已標記不列入）狀態，供跳窗顯示。
+ */
+function extdoc_pfmea_missing(PDO $db): array {
+    $map = extdoc_pfmea_map($db);
+    // ① PFMEA 的料號集合（純文字料號回查 d_setting 主鍵，重複料號取 MIN(d_id)＝全站歸戶慣例）
+    $parts = [];   // ds_pk => pfmea doc_no
+    foreach ($map['by_id'] as $dsPk => $docNo) $parts[(int)$dsPk] = $docNo;
+    $unresolved = [];
+    foreach ($map['by_no'] as $txt => $docNo) {
+        try {
+            $st = $db->prepare("SELECT MIN(d_id) FROM d_setting WHERE UPPER(REPLACE(D_Setting_Id,' ','')) = ?");
+            $st->execute([$txt]);
+            $dsPk = (int)$st->fetchColumn();
+        } catch (Exception $e) { $dsPk = 0; }
+        if ($dsPk) { if (!isset($parts[$dsPk])) $parts[$dsPk] = $docNo; }
+        else $unresolved[] = ['part_no' => $txt, 'pfmea_doc_no' => $docNo];
+    }
+    if (!$parts) return ['rows' => [], 'unresolved' => $unresolved];
+
+    // ② 目前清單（正式清單，不含已排除）已經有文件的料號
+    $hasDoc = [];
+    foreach (extdoc_fetch_rows($db, ['mode' => 'all']) as $r) $hasDoc[(int)$r['ds_pk']] = 1;
+
+    // ③ 既有待補/忽略項目
+    $exist = [];
+    try {
+        foreach ($db->query("SELECT ds_pk, status FROM external_doc_pending WHERE source_kind='pfmea'")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $e) $exist[(int)$e['ds_pk']] = $e['status'];
+    } catch (Exception $e) {}
+
+    $out = [];
+    foreach ($parts as $dsPk => $docNo) {
+        if (isset($hasDoc[$dsPk])) continue;                  // 已經有外來文件＝不缺
+        $st = $db->prepare("SELECT ds.D_Setting_Id, ds.Customer_Id, COALESCE(cl.customer,'') AS customer_name
+                            FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
+                            WHERE ds.d_id = ?");
+        $st->execute([$dsPk]);
+        $d = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$d) continue;                                    // 料號已刪除
+        $stt = $exist[$dsPk] ?? '';
+        $out[] = [
+            'ds_pk'         => (int)$dsPk,
+            'part_no'       => (string)$d['D_Setting_Id'],
+            'customer_id'   => (string)$d['Customer_Id'],
+            'customer_name' => $d['customer_name'] !== '' ? $d['customer_name'] : (string)$d['Customer_Id'],
+            'pfmea_doc_no'  => $docNo,
+            'already'       => $stt === 'pending',
+            'ignored'       => $stt === 'ignored',
+            'done'          => $stt === 'done',
+        ];
+    }
+    usort($out, function($a, $b) {
+        return [$a['customer_name'], $a['part_no']] <=> [$b['customer_name'], $b['part_no']];
+    });
+    return ['rows' => $out, 'unresolved' => $unresolved];
+}
+
+// 料號附件實體根目錄（同 Part_Attachment_API 的 part_attach_nas_dir；鐵律5：DB 只存檔名，路徑即時組）
+function extdoc_part_attach_base(PDO $db): string {
+    try {
+        $v = $db->query("SELECT setting_value FROM system_settings WHERE setting_key='part_attach_nas_dir'")->fetchColumn();
+        return ($v !== false && $v !== null) ? trim((string)$v) : '';
+    } catch (Exception $e) { return ''; }
+}
+function extdoc_op_name(PDO $db, int $uid): string {
+    try {
+        $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
+        $st->execute([$uid]);
+        $n = (string)($st->fetchColumn() ?: '');
+        if ($n !== '') return $n;
+    } catch (Exception $e) {}
+    return (string)($_SESSION['userName'] ?? '');
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -298,6 +452,7 @@ case 'get_options':
     $selCust = trim((string)($_POST['customer_id'] ?? ''));
     $selYear = (int)($_POST['year'] ?? 0);
     $selCat  = (int)($_POST['category'] ?? 0);
+    $selPf   = in_array(($_POST['pfmea'] ?? ''), ['yes','no'], true) ? $_POST['pfmea'] : '';
     $all = extdoc_fetch_rows($db, ['mode'=>$selMode]);
     $custs = []; $years = []; $presentCats = [];
     foreach ($all as $r) {
@@ -305,6 +460,8 @@ case 'get_options':
         $mCust = $selCust === '' || $r['customer_id'] === $selCust;
         $mYear = !$selYear || $y === $selYear;
         $mCat  = !$selCat  || in_array($selCat, $r['category_ids']);
+        $mPf   = $selPf === '' || ($selPf === 'yes' ? $r['has_pfmea'] : !$r['has_pfmea']);
+        if (!$mPf) continue;   // PFMEA 篩選對每個維度都成立，直接先過濾
         if ($mYear && $mCat && $r['customer_id'] !== '') $custs[$r['customer_id']] = $r['customer_name'];
         if ($mCust && $mCat && $y) $years[$y] = 1;
         if ($mCust && $mYear) foreach ($r['category_ids'] as $cid) $presentCats[$cid] = 1;
@@ -334,17 +491,29 @@ case 'get_options':
         'as_doc'     => extdoc_bound_asdoc($db),
         'as_docs'    => $asDocs,
         'can_manage' => extCan('manage'),
+        'pending_count' => count(extdoc_pending_rows($db, 'pending')),
+        'ignored_count' => count(extdoc_pending_rows($db, 'ignored')),
+        'ext_cats'   => $catAll,   // 補檔上傳可選的外來文件類別（＝清單認列的標籤）
     ]);
 
 case 'get_list':
     if (!extCan('view')) jout(['success'=>false,'message'=>'無檢閱權限']);
-    $rows = extdoc_fetch_rows($db, [
-        'mode'        => $_POST['mode'] ?? 'all',
-        'customer_id' => $_POST['customer_id'] ?? '',
-        'year'        => (int)($_POST['year'] ?? 0),
-        'category'    => (int)($_POST['category'] ?? 0),
-        'show'        => $_POST['show'] ?? 'active',
-    ]);
+    $showArg = $_POST['show'] ?? 'active';
+    if ($showArg === 'pending' || $showArg === 'ignored') {
+        // 待補檔案分頁：資料來自 external_doc_pending（還沒有檔案，故不走附件查詢）
+        $rows = extdoc_pending_rows($db, $showArg);
+        $selCust = trim((string)($_POST['customer_id'] ?? ''));
+        if ($selCust !== '') $rows = array_values(array_filter($rows, fn($r) => $r['customer_id'] === $selCust));
+    } else {
+        $rows = extdoc_fetch_rows($db, [
+            'mode'        => $_POST['mode'] ?? 'all',
+            'customer_id' => $_POST['customer_id'] ?? '',
+            'year'        => (int)($_POST['year'] ?? 0),
+            'category'    => (int)($_POST['category'] ?? 0),
+            'pfmea'       => $_POST['pfmea'] ?? '',
+            'show'        => $showArg,
+        ]);
+    }
     $total   = count($rows);
     $perPage = max(0, (int)($_POST['per_page'] ?? 10));
     $page    = max(1, (int)($_POST['page'] ?? 1));
@@ -357,6 +526,8 @@ case 'get_list':
         'rows'       => $paged,
         'issue_unit' => extdoc_issue_unit($db),
         'as_doc'     => extdoc_bound_asdoc($db),
+        'pending_count' => count(extdoc_pending_rows($db, 'pending')),
+        'ignored_count' => count(extdoc_pending_rows($db, 'ignored')),
     ]);
 
 case 'get_print':
@@ -367,6 +538,7 @@ case 'get_print':
         'customer_id' => $_POST['customer_id'] ?? '',
         'year'        => (int)($_POST['year'] ?? 0),
         'category'    => (int)($_POST['category'] ?? 0),
+        'pfmea'       => $_POST['pfmea'] ?? '',
     ]);
     $groups = [];
     foreach ($rows as $r) {
@@ -390,17 +562,19 @@ case 'export_csv':
         'customer_id' => $_GET['customer_id'] ?? '',
         'year'        => (int)($_GET['year'] ?? 0),
         'category'    => (int)($_GET['category'] ?? 0),
+        'pfmea'       => $_GET['pfmea'] ?? '',
     ]);
     $unit = extdoc_issue_unit($db);
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="external_doc_list_' . date('Ymd') . '.csv"');
     echo "\xEF\xBB\xBF";  // UTF-8 BOM（Excel 相容）
     $fp = fopen('php://output', 'w');
-    fputcsv($fp, ['客戶', '料號', '文件名稱', '外來文件類別', '發行日期', '發行單位', '來源', '報價單號', '備註']);
+    fputcsv($fp, ['客戶', '料號', '文件名稱', '外來文件類別', '發行日期', '發行單位', 'PFMEA', '來源', '報價單號', '備註']);
     foreach ($rows as $r) {
         fputcsv($fp, [
             $r['customer_name'], $r['part_no'], $r['doc_name'],
             implode('、', $r['categories']), $r['doc_date'], $unit,
+            $r['has_pfmea'] ? ('PFMEA已建立 ' . $r['pfmea_doc_no']) : '未建立',
             $r['source'] === 'part' ? '料號附件' : '報價附件', $r['quote_no'], $r['note'],
         ]);
     }
@@ -469,6 +643,162 @@ case 'save_as_doc':
            ->execute([json_encode($docId), $opName]);
     }
     jout(['success'=>true, 'message'=>$docId ? '已綁定' : '已解除綁定', 'as_doc'=>extdoc_bound_asdoc($db)]);
+
+// ── PFMEA 缺件偵測（PFMEA 已建立、但外來文件清單一列都沒有的料號）────────
+case 'pfmea_scan':
+    if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理權限（偵測需「外來文件管理」角色）']);
+    $scan = extdoc_pfmea_missing($db);
+    jout([
+        'success'    => true,
+        'rows'       => $scan['rows'],
+        'unresolved' => $scan['unresolved'],   // PFMEA 手打料號、在料號主檔找不到者（無法自動建立）
+        'total'      => count($scan['rows']),
+    ]);
+
+// 建立待補項目（勾選的料號）
+case 'pending_create':
+    if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理權限']);
+    $ids = $_POST['ds_pks'] ?? [];
+    if (!is_array($ids)) $ids = array_filter(explode(',', (string)$ids));
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    if (!$ids) jout(['success'=>false,'message'=>'請至少勾選一筆料號']);
+    // 點開即刷新：以偵測當下的實際狀態再算一次，已補齊/已存在的不重複建立
+    $scan = extdoc_pfmea_missing($db);
+    $can = [];
+    foreach ($scan['rows'] as $r) if (!$r['already'] && !$r['done']) $can[(int)$r['ds_pk']] = $r;
+    $opName = extdoc_op_name($db, $uid);
+    $made = 0; $skip = 0;
+    $db->beginTransaction();
+    try {
+        $ins = $db->prepare("INSERT INTO external_doc_pending
+            (ds_pk, part_no, customer_id, source_kind, ref_no, status, created_by, created_at)
+            VALUES (?,?,?,'pfmea',?,'pending',?,NOW())
+            ON DUPLICATE KEY UPDATE status='pending', ref_no=VALUES(ref_no)");
+        foreach ($ids as $dsPk) {
+            if (!isset($can[$dsPk])) { $skip++; continue; }
+            $r = $can[$dsPk];
+            $ins->execute([$dsPk, $r['part_no'], $r['customer_id'], $r['pfmea_doc_no'], $opName]);
+            $made++;
+        }
+        $db->commit();
+    } catch (Exception $e) {
+        $db->rollBack();
+        jout(['success'=>false,'message'=>'建立失敗：'.$e->getMessage()]);
+    }
+    jout(['success'=>true, 'created'=>$made, 'skipped'=>$skip,
+          'message'=>'已建立 '.$made.' 筆待補項目'.($skip ? '（'.$skip.' 筆已存在或已補齊，略過）' : '')]);
+
+// 待補項目：標記不列入 / 加回待補 / 刪除
+case 'pending_ignore':
+case 'pending_restore':
+case 'pending_delete':
+    if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理權限']);
+    $pid = (int)($_POST['pending_id'] ?? 0);
+    if (!$pid) jout(['success'=>false,'message'=>'參數錯誤']);
+    if ($action === 'pending_delete') {
+        $db->prepare("DELETE FROM external_doc_pending WHERE id=? AND status<>'done'")->execute([$pid]);
+        jout(['success'=>true,'message'=>'已刪除（下次偵測若仍缺件會再出現）']);
+    }
+    $to = $action === 'pending_ignore' ? 'ignored' : 'pending';
+    $db->prepare("UPDATE external_doc_pending SET status=? WHERE id=? AND status<>'done'")->execute([$to, $pid]);
+    jout(['success'=>true,'message'=>$to === 'ignored' ? '已標記不列入（可在「不列入」檢視加回）' : '已加回待補清單']);
+
+// ── 補檔上傳：存成該料號的「料號附件」，上傳日期＝使用者輸入的文件日期 ────
+// 清單的發行日期＝附件上傳日期，補歷史文件時要能指定實際文件日期（使用者明確要求）。
+case 'upload_fill':
+    if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理權限（補檔需「外來文件管理」角色）']);
+    $pid   = (int)($_POST['pending_id'] ?? 0);
+    $dsPk  = (int)($_POST['ds_pk'] ?? 0);
+    $pend  = null;
+    if ($pid) {
+        $st = $db->prepare("SELECT * FROM external_doc_pending WHERE id=?");
+        $st->execute([$pid]);
+        $pend = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$pend) jout(['success'=>false,'message'=>'待補項目不存在（清單可能已更新，請重新整理）']);
+        if ($pend['status'] === 'done') jout(['success'=>false,'message'=>'這筆已經補過檔案了，請重新整理清單']);
+        $dsPk = (int)$pend['ds_pk'];
+    }
+    if (!$dsPk) jout(['success'=>false,'message'=>'缺少料號']);
+    $st = $db->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
+    $st->execute([$dsPk]);
+    $partNo = $st->fetchColumn();
+    if ($partNo === false) jout(['success'=>false,'message'=>'料號不存在（可能已被刪除）']);
+
+    // 附件標籤鐵則（鐵律8）：沒勾類別一律不准存；且只能勾「列入外來文件清單」的標籤
+    $extCats = array_keys(extdoc_categories($db));
+    $catIds  = array_values(array_unique(array_filter(array_map('intval',
+                 explode(',', (string)($_POST['category_ids'] ?? ''))))));
+    if (!$catIds) jout(['success'=>false,'message'=>'請至少勾選一個外來文件類別']);
+    foreach ($catIds as $cid) {
+        if (!in_array($cid, $extCats, true)) jout(['success'=>false,'message'=>'類別不在「列入外來文件清單」的標籤範圍內']);
+    }
+    // 文件日期（＝附件上傳日期＝清單的發行日期）
+    $docDate = trim((string)($_POST['doc_date'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $docDate)) jout(['success'=>false,'message'=>'請輸入文件日期（YYYY-MM-DD）']);
+    $dParts = explode('-', $docDate);
+    if (!checkdate((int)$dParts[1], (int)$dParts[2], (int)$dParts[0])) jout(['success'=>false,'message'=>'文件日期不是有效日期']);
+    $today = (string)$db->query("SELECT CURDATE()")->fetchColumn();   // 時間戳一律取 DB 時間（PHP date() 是 UTC）
+    if ($docDate > $today) jout(['success'=>false,'message'=>'文件日期不可晚於今天']);
+
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+        jout(['success'=>false,'message'=>'請選擇要上傳的檔案'.(isset($_FILES['file']) ? '（錯誤碼 '.$_FILES['file']['error'].'）' : '')]);
+    }
+    $base = extdoc_part_attach_base($db);
+    if (!$base) jout(['success'=>false,'message'=>'尚未設定料號附件儲存路徑（主檔管理→附件路徑設定）']);
+    $dir = rtrim($base, '/\\') . DIRECTORY_SEPARATOR . $dsPk . DIRECTORY_SEPARATOR;
+    if (!is_dir($dir) && !@mkdir($dir, 0777, true)) jout(['success'=>false,'message'=>'無法建立目錄：'.$dir]);
+    $orig = basename($_FILES['file']['name']);
+    $ext  = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+    $blocked = ['php','php3','php4','php5','phtml','phar','exe','bat','sh','cmd','asp','aspx','jsp','py','rb','htaccess'];
+    if ($ext === '' || in_array($ext, $blocked, true)) jout(['success'=>false,'message'=>'不允許此檔案類型']);
+    $fname = date('Ymd_His_') . bin2hex(random_bytes(4)) . '.' . $ext;
+    if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir . $fname)) jout(['success'=>false,'message'=>'檔案寫入失敗']);
+
+    $sz    = (int)$_FILES['file']['size'];
+    $szTxt = $sz < 1024 ? $sz.' B' : ($sz < 1048576 ? round($sz/1024,1).' KB' : round($sz/1048576,1).' MB');
+    $note  = trim((string)($_POST['note'] ?? ''));
+    if (mb_strlen($note) > 500) $note = mb_substr($note, 0, 500);
+    // 上傳時刻取文件日期＋現在時分秒：日期是使用者指定的業務日期，時分秒僅用於同日多筆的排序
+    $uploadedAt = $docDate . ' ' . (string)$db->query("SELECT CURTIME()")->fetchColumn();
+    $opName = extdoc_op_name($db, $uid);
+    $db->beginTransaction();
+    try {
+        $db->prepare("INSERT INTO part_attachments
+                (d_id, filename, original_name, category_ids, file_size, note, uploaded_by, uploaded_by_id, uploaded_at)
+                VALUES (?,?,?,?,?,?,?,?,?)")
+           ->execute([$dsPk, $fname, $orig, implode(',', $catIds), $szTxt,
+                      $note !== '' ? $note : null, $opName, $uid, $uploadedAt]);
+        $newId = (int)$db->lastInsertId();
+        if ($pid) {
+            $db->prepare("UPDATE external_doc_pending
+                          SET status='done', filled_attach_id=?, filled_at=NOW(), filled_by=? WHERE id=?")
+               ->execute([$newId, $opName, $pid]);
+        }
+        $db->commit();
+    } catch (Exception $e) {
+        $db->rollBack();
+        @unlink($dir . $fname);
+        jout(['success'=>false,'message'=>'存檔失敗：'.$e->getMessage()]);
+    }
+    jout(['success'=>true, 'attach_id'=>$newId, 'message'=>'已上傳並補入清單（發行日期＝'.$docDate.'）']);
+
+// ── 發行日期（＝附件上傳日期）修改：回寫附件本體，主檔/報價頁看到的是同一筆 ──
+case 'save_doc_date':
+    if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理權限（修改發行日期需「外來文件管理」角色）']);
+    $src = ($_POST['source'] ?? '') === 'quote' ? 'quote' : 'part';
+    $aid = (int)($_POST['attach_id'] ?? 0);
+    $d   = trim((string)($_POST['doc_date'] ?? ''));
+    if (!$aid) jout(['success'=>false,'message'=>'參數錯誤']);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) jout(['success'=>false,'message'=>'日期格式錯誤（需 YYYY-MM-DD）']);
+    $dp = explode('-', $d);
+    if (!checkdate((int)$dp[1], (int)$dp[2], (int)$dp[0])) jout(['success'=>false,'message'=>'不是有效日期']);
+    if ($d > (string)$db->query("SELECT CURDATE()")->fetchColumn()) jout(['success'=>false,'message'=>'發行日期不可晚於今天']);
+    $table = $src === 'part' ? 'part_attachments' : 'quotation_attachments';
+    // 只改日期、保留原本的時分秒（同日多筆的先後順序不變）
+    $st = $db->prepare("UPDATE $table SET uploaded_at = CONCAT(?, ' ', TIME(COALESCE(uploaded_at, NOW()))) WHERE id=?");
+    $st->execute([$d, $aid]);
+    if (!$st->rowCount()) jout(['success'=>true,'message'=>'日期未變更','doc_date'=>$d]);
+    jout(['success'=>true,'message'=>'發行日期已更新為 '.$d,'doc_date'=>$d]);
 
 default:
     jout(['success'=>false,'message'=>'未知的 action']);
