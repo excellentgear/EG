@@ -87,6 +87,23 @@ function asIsAdmin(): bool {
     global $asIsRoleAdmin, $asPagePerm;
     return $asIsRoleAdmin || strpos($asPagePerm, 'A') !== false;
 }
+/**
+ * 版本檔案「雙版本」解析（使用者要求 2026-08-19）：
+ *   file_name      ＝下載版（可修改的原檔，具下載權限者下載這個）
+ *   view_file_name ＝檢視版（線上預覽用）
+ * 只上傳其中一種時另一種自動退回同一個檔，所以呼叫端一律走這支，不要各自寫 ?: 判斷。
+ * $want：'download'＝要可修改的原檔｜'view'＝要線上檢視的檔。回 [檔名, 顯示用原始名]；都沒有回 [null,null]。
+ */
+function asVerFile(array $v, string $want): array {
+    $dl   = [$v['file_name']      ?? null, ($v['original_name']      ?? null) ?: ($v['file_name']      ?? null)];
+    $view = [$v['view_file_name'] ?? null, ($v['view_original_name'] ?? null) ?: ($v['view_file_name'] ?? null)];
+    $first  = ($want === 'view') ? $view : $dl;
+    $second = ($want === 'view') ? $dl   : $view;
+    if (!empty($first[0]))  return $first;
+    if (!empty($second[0])) return $second;   // 只上傳一種＝兩邊都用它
+    return [null, null];
+}
+
 /** 已廢止的文件：檔案一律只有管理員能開（線上預覽／下載／線上開檔都走這支擋） */
 function asObsoleteBlocked(PDO $db, int $docId): bool {
     if (asIsAdmin()) return false;
@@ -650,16 +667,21 @@ case 'add_version':
     if ($vErr = asValidateVersionOrder((string)($doc['current_version'] ?? ''), $version)) jout(['status'=>'error','message'=>$vErr]);
 
     $hasFile  = isset($_FILES['file']) && $_FILES['file']['error']===UPLOAD_ERR_OK;
+    $hasView  = isset($_FILES['view_file']) && $_FILES['view_file']['error']===UPLOAD_ERR_OK;   // 檢視版（選填）
     $hasApply = isset($_FILES['apply_form']) && $_FILES['apply_form']['error']===UPLOAD_ERR_OK;
     if (!$hasFile && !$asNoAttach)
         jout(['status'=>'error','message'=>'請上傳新版文件檔']);
     // 改版一律需附「文件制修申請單(附件一)」；「補登免附件」角色豁免（補舊資料用）
     if (!$hasApply && !$asNoAttach)
         jout(['status'=>'error','message'=>'改版必須一併上傳「文件制修申請單」(附件一)']);
-    $ext = null; $applyExt = null;
+    $ext = null; $applyExt = null; $viewExt = null;
     if ($hasFile) {
         $ext = asSafeExt($_FILES['file']['name']);
         if (!$ext) jout(['status'=>'error','message'=>'不允許此文件類型']);
+    }
+    if ($hasView) {
+        $viewExt = asSafeExt($_FILES['view_file']['name']);
+        if (!$viewExt) jout(['status'=>'error','message'=>'檢視版檔案類型不允許']);
     }
     if ($hasApply) {
         $applyExt = asSafeExt($_FILES['apply_form']['name']);
@@ -669,7 +691,7 @@ case 'add_version':
     $db->beginTransaction();
     try {
         $dir = asDocDir($db, $docId);
-        if (($hasFile || $hasApply) && !is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
+        if (($hasFile || $hasApply || $hasView) && !is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
 
         $fname = null; $orig = null;
         if ($hasFile) {
@@ -685,11 +707,19 @@ case 'add_version':
             $applyOrig = basename($_FILES['apply_form']['name']);
         }
 
+        // 檢視版（選填）：沒傳＝線上預覽退回用下載版，之後可在歷史版本「補檔」
+        $viewName = null; $viewOrig = null;
+        if ($hasView) {
+            $viewName = asMakeName($viewExt);
+            if (!move_uploaded_file($_FILES['view_file']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$viewName)) throw new Exception('檢視版寫入失敗');
+            $viewOrig = basename($_FILES['view_file']['name']);
+        }
+
         // 舊版快照沿用主檔當下的階級/部門
         $db->prepare("INSERT INTO as_document_version
-              (doc_id,version,change_status,revised_date,revised_pages,revised_summary,doc_level_snapshot,department_id_snapshot,file_name,original_name,apply_form_file_name,apply_form_original_name,uploaded_by,uploaded_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
-           ->execute([$docId,$version,$cstat,$rdate,$rpages,$rsum,$doc['doc_level'],$doc['department_id'],$fname,$orig,$applyName,$applyOrig,$GLOBALS['currentCname']]);
+              (doc_id,version,change_status,revised_date,revised_pages,revised_summary,doc_level_snapshot,department_id_snapshot,file_name,original_name,view_file_name,view_original_name,apply_form_file_name,apply_form_original_name,uploaded_by,uploaded_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
+           ->execute([$docId,$version,$cstat,$rdate,$rpages,$rsum,$doc['doc_level'],$doc['department_id'],$fname,$orig,$viewName,$viewOrig,$applyName,$applyOrig,$GLOBALS['currentCname']]);
         $verId = (int)$db->lastInsertId();
 
         $db->prepare("UPDATE as_document SET current_version=?, current_version_id=?, updated_at=NOW() WHERE id=?")
@@ -1028,7 +1058,7 @@ case 'delete_version_permanent':
 
     // 刪該版本自己的檔案(文件檔/申請單/預覽快取)，同資料夾內其他版本檔名不同不受影響
     $dir = asDocDir($db, $docId);
-    foreach ([$ver['file_name'], $ver['apply_form_file_name']] as $fn) {
+    foreach ([$ver['file_name'], $ver['view_file_name'], $ver['apply_form_file_name']] as $fn) {
         if (!$fn) continue;
         @unlink($dir . DIRECTORY_SEPARATOR . $fn);
         @unlink($dir . DIRECTORY_SEPARATOR . 'preview_' . pathinfo($fn, PATHINFO_FILENAME) . '.pdf');
@@ -1038,7 +1068,7 @@ case 'delete_version_permanent':
 // ══════════════ 下載：某版本文件 / 申請單 / 目前版 ══════════════
 case 'download':
     $verId = (int)($_GET['version_id'] ?? 0);
-    $which = $_GET['which'] ?? 'file'; // file | apply
+    $which = in_array($_GET['which'] ?? 'file', ['apply','view'], true) ? $_GET['which'] : 'file'; // file(下載版) | view(檢視版) | apply
     if ($verId<=0) { http_response_code(400); exit('bad request'); }
     $st = $db->prepare("SELECT v.*, d.doc_no, d.doc_name FROM as_document_version v JOIN as_document d ON d.id=v.doc_id WHERE v.id=?");
     $st->execute([$verId]);
@@ -1056,10 +1086,16 @@ case 'download':
         http_response_code(403); header('Content-Type: text/plain; charset=utf-8');
         exit('此文件已廢止，僅管理員可開啟或預覽檔案');
     }
-    $fname = ($which==='apply') ? $v['apply_form_file_name'] : $v['file_name'];
-    $oname = ($which==='apply') ? ($v['apply_form_original_name'] ?: $v['apply_form_file_name'])
-                                : ($v['original_name'] ?: $v['file_name']);
-    if ($which==='apply' && !$fname) { http_response_code(404); exit('此版本無申請單'); }
+    if ($which === 'apply') {
+        $fname = $v['apply_form_file_name'];
+        $oname = $v['apply_form_original_name'] ?: $v['apply_form_file_name'];
+        if (!$fname) { http_response_code(404); exit('此版本無申請單'); }
+    } else {
+        // 雙版本：線上預覽(inline)一律優先用檢視版、下載原檔一律優先用下載版；
+        // 只上傳一種時兩邊都退回用同一個檔（asVerFile 統一處理，呼叫端不要自己判斷）
+        $want = ($which === 'view' || $inline) ? 'view' : 'download';
+        [$fname, $oname] = asVerFile($v, $want);
+    }
     if (!$fname) { http_response_code(404); header('Content-Type: text/plain; charset=utf-8'); exit('此版本未上傳文件檔（補登資料，可用「改版」補上檔案）'); }
     // 下載檔名一律改為「文件編號 文件名稱-版次」，副檔名沿用原檔（僅套用於文件本檔，申請單維持原檔名）
     if ($which !== 'apply') {
@@ -1729,14 +1765,15 @@ case 'docs_add_tags':
 // ══════════════ 版本補檔（補登資料忘了附檔時；只允許補「空缺」，不可替換既有檔案） ══════════════
 case 'version_attach_file':
     $verId = (int)($_POST['version_id'] ?? 0);
-    $which = ($_POST['which'] ?? 'file') === 'apply' ? 'apply' : 'file';
+    $which = in_array($_POST['which'] ?? 'file', ['apply','view'], true) ? $_POST['which'] : 'file';
     if ($verId<=0) jout(['status'=>'error','message'=>'缺少版本 ID']);
     $st = $db->prepare("SELECT * FROM as_document_version WHERE id=?");
     $st->execute([$verId]);
     $v = $st->fetch(PDO::FETCH_ASSOC);
     if (!$v) jout(['status'=>'error','message'=>'版本不存在']);
-    $col  = $which==='apply' ? 'apply_form_file_name' : 'file_name';
-    $colO = $which==='apply' ? 'apply_form_original_name' : 'original_name';
+    $COLS = ['file'=>['file_name','original_name'], 'view'=>['view_file_name','view_original_name'],
+             'apply'=>['apply_form_file_name','apply_form_original_name']];
+    [$col, $colO] = $COLS[$which];
     if (!empty($v[$col])) jout(['status'=>'error','message'=>'此版本已有檔案，不可替換（版本檔案為發行紀錄）；內容有誤請走「改版」']);
     if (!isset($_FILES['file']) || $_FILES['file']['error']!==UPLOAD_ERR_OK) jout(['status'=>'error','message'=>'請選擇檔案']);
     $ext = asSafeExt($_FILES['file']['name']);
@@ -1810,7 +1847,7 @@ case 'version_update_date':
 case 'version_replace_file':
     if (!asCan('update')) jout(['status'=>'error','message'=>'無替換檔案權限']);
     $verId = (int)($_POST['version_id'] ?? 0);
-    $which = ($_POST['which'] ?? 'file') === 'apply' ? 'apply' : 'file';
+    $which = in_array($_POST['which'] ?? 'file', ['apply','view'], true) ? $_POST['which'] : 'file';
     if ($verId<=0) jout(['status'=>'error','message'=>'缺少版本 ID']);
     $st = $db->prepare("SELECT * FROM as_document_version WHERE id=?");
     $st->execute([$verId]);
@@ -1823,8 +1860,9 @@ case 'version_replace_file':
     if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
     if ((int)$doc['current_version_id'] !== $verId)
         jout(['status'=>'error','message'=>"只能替換『目前版本』（{$doc['current_version']}）的檔案；版本 {$v['version']} 是歷史發行紀錄，內容有誤請走「改版」建立新版本"]);
-    $col  = $which==='apply' ? 'apply_form_file_name' : 'file_name';
-    $colO = $which==='apply' ? 'apply_form_original_name' : 'original_name';
+    $COLS = ['file'=>['file_name','original_name'], 'view'=>['view_file_name','view_original_name'],
+             'apply'=>['apply_form_file_name','apply_form_original_name']];
+    [$col, $colO] = $COLS[$which];
     if (empty($v[$col])) jout(['status'=>'error','message'=>'此版本尚無檔案，請用「補檔」上傳']);
     if (!isset($_FILES['file']) || $_FILES['file']['error']!==UPLOAD_ERR_OK) jout(['status'=>'error','message'=>'請選擇檔案']);
     $ext = asSafeExt($_FILES['file']['name']);

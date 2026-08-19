@@ -804,8 +804,11 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
           <div class="form-group"><label>制修訂摘要</label><textarea class="form-control" name="revised_summary" id="ver_revised_summary" rows="2"></textarea>
             <div class="phrase-bar" data-field="summary" data-t="#ver_revised_summary" style="margin-top:3px;"></div></div>
           <div class="row">
-            <div class="form-group col-md-6"><label>新版文件檔 *</label><input type="file" name="file" id="ver_file" required></div>
-            <div class="form-group col-md-6"><label>文件制修申請單（附件一）* <span class="req-note">改版必附</span></label><input type="file" name="apply_form" id="ver_apply_form" required></div>
+            <div class="form-group col-md-4"><label>新版文件檔（下載版）*</label><input type="file" name="file" id="ver_file" required>
+              <span class="text-muted" style="font-size:11px;">具下載權限者下載的就是這一份（可修改的原檔）。</span></div>
+            <div class="form-group col-md-4"><label>檢視版（選填）</label><input type="file" name="view_file" id="ver_view_file">
+              <span class="text-muted" style="font-size:11px;">線上預覽會顯示這一份；不傳＝預覽直接用下載版，之後也可在歷史版本補傳。</span></div>
+            <div class="form-group col-md-4"><label>文件制修申請單（附件一）* <span class="req-note">改版必附</span></label><input type="file" name="apply_form" id="ver_apply_form" required></div>
           </div>
         </div>
         <div class="modal-footer">
@@ -829,7 +832,7 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
         <div class="table-responsive">
           <table class="table table-bordered table-condensed">
             <thead><tr>
-              <th>版本</th><th>狀況</th><th>階級</th><th>部門</th><th>修訂日期</th><th>制修訂頁次</th><th>制修訂摘要</th><th>上傳者</th><th>文件</th><th>申請單</th><?= $asCaps['super_delete'] ? '<th>永久刪除</th>' : '' ?>
+              <th>版本</th><th>狀況</th><th>階級</th><th>部門</th><th>修訂日期</th><th>制修訂頁次</th><th>制修訂摘要</th><th>上傳者</th><th>文件檔（下載版）</th><th>檢視版</th><th>申請單</th><?= $asCaps['super_delete'] ? '<th>永久刪除</th>' : '' ?>
             </tr></thead>
             <tbody id="historyBody"></tbody>
           </table>
@@ -2260,6 +2263,15 @@ $(function(){
           // 補登缺檔 → 可補上傳（只允許補空缺，不可替換）
           dl = `<label class="btn btn-xs btn-primary" style="margin:0;" title="補上傳此版本的文件檔">補檔<input type="file" class="ver-attach" data-ver="${v.id}" data-which="file" style="display:none;"></label>`;
         }
+        // 檢視版：線上預覽用的另一份檔；沒有＝預覽直接用下載版（後端 asVerFile 統一退回）
+        let vw = '<span class="text-muted" title="未另外上傳檢視版，線上預覽直接用下載版">同下載版</span>';
+        if(v.view_file_name){
+          vw = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=view&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
+          if(canDL) vw += `<a class="btn btn-xs btn-info" href="${API}?action=download&which=view&version_id=${v.id}">下載</a>`;
+          vw += repBtn('view','替換');
+        } else if(canU){
+          vw += ` <label class="btn btn-xs btn-primary" style="margin:0 0 0 4px;" title="補傳此版本的檢視版（線上預覽會改用它）">補檢視版<input type="file" class="ver-attach" data-ver="${v.id}" data-which="view" style="display:none;"></label>`;
+        }
         let af = '<span class="text-muted">無</span>';
         if(v.apply_form_file_name){
           af = `<a class="btn btn-xs btn-default" href="${API}?action=download&which=apply&version_id=${v.id}&inline=1" target="_blank">預覽</a> `;
@@ -2279,10 +2291,10 @@ $(function(){
           <td>${esc(v.revised_pages)||'-'}</td>
           <td>${esc(v.revised_summary)||'-'}</td>
           <td>${esc(v.uploaded_by)||'-'}</td>
-          <td>${dl}</td><td>${af}</td>${verDel}
+          <td>${dl}</td><td>${vw}</td><td>${af}</td>${verDel}
         </tr>`);
       });
-      if((r.data.versions||[]).length===0) tb.append('<tr><td colspan="10" class="text-center text-muted">無版本</td></tr>');
+      if((r.data.versions||[]).length===0) tb.append('<tr><td colspan="11" class="text-center text-muted">無版本</td></tr>');
       // 管理員：批次補建版本入口／超級管理員：補舊版次入口
       $('#hisBatchBtn, #hisOldBtn').remove();
       if(window.asPerm.backfill_old && curHistCurVer){
@@ -2340,7 +2352,8 @@ $(function(){
   // 替換目前版本的檔案：傳錯檔補救（舊版不提供此鈕，後端也只放行目前版本）
   $(document).on('change','.ver-replace', function(){
     const f = this.files[0]; const $in=$(this); if(!f) return;
-    const which = $in.data('which'), label = which==='apply' ? '制修申請單' : '文件檔';
+    const WL = {apply:'制修申請單', view:'檢視版', file:'文件檔（下載版）'};
+    const which = $in.data('which'), label = WL[which] || '文件檔';
     if(!confirm(`【替換${label}】目前版本 ${curHistCurVer}\n新檔：${f.name}\n\n舊檔會被刪除且無法復原（僅換檔案，版本號與修訂日期不變）。\n若是「內容改版」請改用「改版」建立新版本。\n\n確定要替換？`)){ $in.val(''); return; }
     const fd = new FormData();
     fd.append('version_id', $in.data('ver'));
