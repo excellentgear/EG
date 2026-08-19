@@ -1043,6 +1043,28 @@ function fsd_user_any(PDO $db, int $uid): ?array {
     return $r ? ['id'=>(int)$r['id'], 'user_cname'=>(string)$r['user_cname']] : null;
 }
 
+/**
+ * 某人在該日期的**全部**職務（主職＋兼任），主職排前、其餘依職級高低。
+ * 挑人選單要把兼任一起顯示出來（使用者明確要求）：只顯示主職會看不出他其實還兼著品管部課長，
+ * 挑簽核人時很容易挑錯。回傳 ['技術部 工程師','品管部 課長'] 這種字串陣列。
+ */
+function fsd_user_jobs_at(PDO $db, int $uid, string $date): array {
+    $snap = fsd_pos_snapshot_at($db, $date)[$uid] ?? [];
+    if (!$snap) return [];
+    $lv = fsd_position_levels($db);
+    usort($snap, function ($a, $b) use ($lv) {
+        $am = empty($a['is_main']) ? 1 : 0; $bm = empty($b['is_main']) ? 1 : 0;
+        if ($am !== $bm) return $am <=> $bm;                                   // 主職排最前
+        return ($lv[(int)$a['position_id']] ?? 999) <=> ($lv[(int)$b['position_id']] ?? 999);
+    });
+    $out = [];
+    foreach ($snap as $r) {
+        $t = trim((string)$r['department_name'] . ' ' . (string)$r['position_name']);
+        if ($t !== '' && !in_array($t, $out, true)) $out[] = $t;
+    }
+    return $out;
+}
+
 /** 圖章上要印的「部門／職稱」＝該人在業務日期當時的主職（圖章模板有 {部門}{職稱} token 才會用到）。 */
 function fsd_sign_job_label(PDO $db, int $uid, string $date): array {
     $job = fsd_user_job_at($db, $uid, $date);
@@ -1500,11 +1522,11 @@ function fsd_backfill_people(PDO $db, string $asOfDate = ''): array {
            <=> [(int)$b['dept_sort'], (int)$b['position_sort'], (string)$b['dept_name'], (string)$b['user_cname']];
     });
     foreach ($rows as $p) {
-        // 標籤顯示「業務日期當時」的部門/職稱，不然補 2023 年的舊表單會照現職挑，很容易挑錯人
-        $j = $asOfDate !== '' ? fsd_user_job_at($db, (int)$p['id'], $asOfDate) : [];
-        $dn = $j ? $j['dept_name'] : ($p['dept_name'] ?? '');
-        $pn = $j ? $j['position_name'] : ($p['position_name'] ?? '');
-        $label = trim($dn . ' ' . $pn . ' ' . $p['user_cname']);
+        // 標籤顯示「業務日期當時」的部門/職稱，不然補 2023 年的舊表單會照現職挑，很容易挑錯人；
+        // 兼任也要一起列出來（例「技術部 工程師／品管部 課長 高志宏」），只看主職會挑錯人
+        $jobs = fsd_user_jobs_at($db, (int)$p['id'], $asOfDate !== '' ? $asOfDate : date('Y-m-d'));
+        $head = $jobs ? implode('／', $jobs) : trim(($p['dept_name'] ?? '') . ' ' . ($p['position_name'] ?? ''));
+        $label = trim($head . ' ' . $p['user_cname']);
         if (!empty($p['on_leave'])) $label .= '［' . $p['leave_note'] . '］';
         $out[] = ['id'=>(int)$p['id'], 'name'=>$p['user_cname'], 'resigned'=>0, 'label'=>$label];
     }
