@@ -213,10 +213,10 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <table class="ic-table" id="icTable">
                 <thead><tr>
                     <th style="<?= $perms['canAdmin']?'':'display:none;' ?>"><input type="checkbox" id="ckAll" data-eg-skip="1" title="全選/取消全選"></th>
-                    <th>文件編號</th><th>客戶</th><th>產品編號(料號)</th><th>PFMEA</th><th>確認狀態</th>
+                    <th>文件編號</th><th>客戶</th><th>產品編號(料號)</th><th>內容項次</th><th>PFMEA</th><th>確認狀態</th>
                     <th>建立人</th><th>建立時間</th><th>操作</th>
                 </tr></thead>
-                <tbody id="icBody"><tr><td colspan="9" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="icBody"><tr><td colspan="10" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div>
 <?php endif; ?>
@@ -416,6 +416,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <p><b>每個料號建立一份</b>「型態識別文件管制表」，逐列記錄目前定義該料號狀態的文件（原圖、報價單、加工圖、產品開發評估表、PFMEA、檢驗報告…），用來追溯「這個料號現在的配置由哪些文件定義」。項目列以「外來文件清單」為主要來源，可自動產生／同步，也可以手動增加。</p>
         <h4>所屬製程（同一張圖若多個製程共用，不會重複列出）</h4>
         <ul>
+            <li>清單的 <b>內容項次</b> 欄顯示該筆管制表裡<b>有資料</b>的項目列筆數——只計算「未排除，且已連結到來源文件（料號／報價附件）或手動填了文件編號、型態生效日期」的列；只有項目名稱、還沒帶到任何文件的空白列<b>不計入</b>（滑鼠停留可看見項目列總數）。數字是每次查詢當下即時算出、不是快照，匯出 CSV 也含這一欄。</li>
             <li>清單的 <b>PFMEA</b> 欄顯示這個料號是否已在「潛在失效模式及效應分析」建檔（<b>PFMEA已建立</b>／未建立，點擊可開啟 PFMEA 頁面），是每次查詢當下即時查 pfmea_doc 的結果、不是快照；工具列的「PFMEA」下拉可篩選出已建立／未建立的清單，匯出 CSV 也含這一欄。</li>
             <li>每一列項目可標記「所屬製程」：來源是報價附件、且能對應到<b>有勾選製程</b>的報價項目時，系統會自動帶入該製程（可手動修改或清空）；無法辨識來源製程的文件（例如料號附件、或不特定的共用圖面如原圖）留空，代表<b>適用全部製程</b>，不會特別標記。</li>
             <li>找不到需要的製程文字時，按欄位旁的 <i class="fa fa-list"></i> 從此料號的訂單/報價紀錄挑選。</li>
@@ -489,6 +490,15 @@ function pfmeaBadge(r){
     return '<a href="pfmea.php" target="_blank" class="ic-src s-pfmea" style="text-decoration:none;" title="已在 PFMEA 建檔，點擊開啟 PFMEA 頁面">PFMEA已建立'+n+'</a>';
 }
 
+/* 內容項次筆數：只計「有資料」的項目列（未排除，且已連結來源文件或手動填了文件編號/生效日期）；
+   只有名稱、還沒帶到任何文件的空列不計入，滑鼠停留可看見項目列總數 */
+function itemCountCell(r){
+    var n = r.item_filled_count || 0, t = r.item_total_count || 0;
+    var tip = '有資料 '+n+' 項'+(t>n ? ('，項目列共 '+t+' 項（其餘尚未帶到文件或已排除）') : '');
+    if (!n) return '<span style="color:#b09a78;font-size:12px;" title="'+esc(tip)+'">0</span>';
+    return '<b style="color:#8a5a1e;" title="'+esc(tip)+'">'+n+'</b>';
+}
+
 /* ---------- 清單（前端分頁：'list' 動作本身仍一次撈回全部符合篩選條件的資料，批次確認全選／
    匯出CSV／列印全部搜尋結果都要看全部結果，不能只看目前這一頁；分頁只影響畫面顯示哪一段） ---------- */
 var CUR_LIST_ROWS = [];
@@ -503,7 +513,7 @@ function curFilterParams(){
 }
 function loadList(){
     $.getJSON(API, $.extend({action:'list'}, curFilterParams()), function(res){
-        if (!res.success){ CUR_LIST_ROWS=[]; CUR_PAGE=1; $('#icBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); renderPager(); return; }
+        if (!res.success){ CUR_LIST_ROWS=[]; CUR_PAGE=1; $('#icBody').html('<tr><td colspan="10" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); renderPager(); return; }
         CUR_LIST_ROWS = res.rows || [];
         CUR_PAGE = 1;
         renderTablePage();
@@ -515,6 +525,7 @@ function rowHtml(r){
         + '<td>'+esc(r.doc_no)+'</td>'
         + '<td>'+esc(r.customer_name||r.customer_id||'')+'</td>'
         + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):esc(r.part_no))+'</td>'
+        + '<td>'+itemCountCell(r)+'</td>'
         + '<td>'+pfmeaBadge(r)+'</td>'
         + '<td>'+statusBadge(r.review_status, r.review_status_label)+'</td>'
         + '<td>'+esc(r.created_by_name||'')+'</td>'
@@ -527,7 +538,7 @@ function rowHtml(r){
 }
 function renderTablePage(){
     $('#ckAll').prop('checked', false);
-    if (!CUR_LIST_ROWS.length){ $('#icBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); renderPager(); return; }
+    if (!CUR_LIST_ROWS.length){ $('#icBody').html('<tr><td colspan="10" style="padding:20px;color:#8a6d45;">尚無資料</td></tr>'); renderPager(); return; }
     var totalPages = Math.max(1, Math.ceil(CUR_LIST_ROWS.length / PAGE_SIZE));
     if (CUR_PAGE > totalPages) CUR_PAGE = totalPages;
     var start = (CUR_PAGE-1) * PAGE_SIZE;
@@ -573,9 +584,9 @@ $('#btnBatchConfirm').on('click', function(){
 $('#btnCsv').on('click', function(){
     $.getJSON(API, $.extend({action:'list'}, curFilterParams()), function(res){
         if (!res.success) return;
-        var lines = ['文件編號,客戶,產品編號,PFMEA,確認狀態,建立人,建立時間'];
+        var lines = ['文件編號,客戶,產品編號,內容項次,PFMEA,確認狀態,建立人,建立時間'];
         res.rows.forEach(function(r){
-            lines.push([r.doc_no, r.customer_name||r.customer_id||'', r.part_no||'', (r.has_pfmea?'PFMEA已建立':'未建立'), r.review_status_label||'', r.created_by_name||'', (r.created_at||'').substring(0,10)]
+            lines.push([r.doc_no, r.customer_name||r.customer_id||'', r.part_no||'', (r.item_filled_count||0), (r.has_pfmea?'PFMEA已建立':'未建立'), r.review_status_label||'', r.created_by_name||'', (r.created_at||'').substring(0,10)]
                 .map(function(v){ return '"'+String(v).replace(/"/g,'""')+'"'; }).join(','));
         });
         var blob = new Blob(["\uFEFF"+lines.join("\n")], {type:'text/csv;charset=utf-8;'});

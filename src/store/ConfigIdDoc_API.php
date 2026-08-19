@@ -91,10 +91,19 @@ case 'list':
     $hasPf   = type_id_ctrl_pfmea_table_exists($db);
     $pfWhere = "SELECT 1 FROM pfmea_doc pf WHERE pf.is_deleted=0 AND pf.part_d_id=h.part_d_id";
     $pfSel   = $hasPf ? "(SELECT COUNT(*) FROM pfmea_doc pf WHERE pf.is_deleted=0 AND pf.part_d_id=h.part_d_id)" : "0";
+    // 內容項次筆數（2026-08-19 使用者要求）：只算「有資料」的項目列＝未排除，且已連結來源文件或手動填了文件編號/生效日期；
+    // 另回傳項目列總數供提示用（只有名稱、還沒帶到文件的空列不計入 filled）
+    $itemBase   = "FROM type_id_ctrl_item ti WHERE ti.doc_id=h.id AND ti.is_deleted=0";
+    $itemFilled = "(SELECT COUNT(*) $itemBase AND ti.is_excluded=0
+                      AND ( (ti.ref_source IS NOT NULL AND ti.ref_source<>'' AND COALESCE(ti.ref_attach_id,0)>0)
+                            OR (ti.manual_doc_no IS NOT NULL AND ti.manual_doc_no<>'')
+                            OR ti.manual_effective_date IS NOT NULL ))";
+    $itemTotal  = "(SELECT COUNT(*) $itemBase)";
     $sql = "SELECT h.id, h.doc_no, h.customer_id, COALESCE(cl.customer,'') AS customer_name,
                    h.part_d_id, COALESCE(ds.D_Setting_Id,'') AS part_no,
                    h.review_status, h.confirmed_by_name, h.confirmed_at,
-                   h.created_by_name, h.created_at, $pfSel AS pfmea_count
+                   h.created_by_name, h.created_at, $pfSel AS pfmea_count,
+                   $itemFilled AS item_filled_count, $itemTotal AS item_total_count
             FROM type_id_ctrl_doc h
             LEFT JOIN customer_list cl ON cl.customer_id = h.customer_id
             LEFT JOIN d_setting ds ON ds.d_id = h.part_d_id
@@ -123,6 +132,8 @@ case 'list':
         $r['review_status_label'] = REVIEW_LABELS[$r['review_status']] ?? $r['review_status'];
         $r['pfmea_count'] = (int)$r['pfmea_count'];
         $r['has_pfmea']   = $r['pfmea_count'] > 0;
+        $r['item_filled_count'] = (int)$r['item_filled_count'];
+        $r['item_total_count']  = (int)$r['item_total_count'];
     }
     unset($r);
     jout(['success'=>true,'rows'=>$rows]);
