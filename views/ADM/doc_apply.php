@@ -202,7 +202,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <div id="w_doc_type"><label>文件類別 *</label><select id="e_doc_type"></select><div class="da-err"></div></div>
             </div>
             <div class="grid2" style="margin-top:8px;">
-                <div id="w_dept_id"><label>申請部門 *</label><select id="e_dept_id" data-eg-filter="輸入部門名稱篩選…"></select><div class="da-err"></div></div>
+                <div id="w_dept_id"><label>申請部門 *<span class="da-hint">（由申請人的職務自動帶出）</span></label>
+                    <input type="text" id="e_dept_disp" class="ro-auto" readonly data-eg-skip placeholder="請先選擇申請人">
+                    <input type="hidden" id="e_dept_id"><div class="da-err"></div></div>
                 <div id="w_applicant_id"><label>申請人 *（填表人）<span class="da-hint" id="applicantAsofHint"></span></label>
                     <select id="e_applicant_id" data-eg-filter="輸入姓名篩選…"></select><div class="da-err"></div></div>
             </div>
@@ -538,7 +540,11 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 <span style="color:#b06f27;">「核准」欄綁的是固定人員（最高核准人員），不隨日期變動</span>——補很舊的單據時請自行確認該欄是否合適。</li>
             <li>申請日期一改，申請人候選就會<b>重新依新日期抓一次</b>；未核准的單在明細跳窗會顯示「預計會蓋誰」。</li>
             <li><b>申請人下拉是「逐職務」列出的</b>：一個人有兼任就會出現多列（標「兼任」），
-                依<b>部門 → 職稱</b>順序排序（不是姓名筆畫）；選了哪一個職務，<b>申請部門就自動帶成該職務的部門</b>。</li>
+                依<b>部門 → 職稱</b>順序排序（不是姓名筆畫）。<b>「申請部門」不是自己選的</b>——它由你挑的那一個職務
+                自動帶出、欄位反灰不可手填（後端也用同一套規則再算一次，直打 API 也不會存進對不起來的部門）。
+                所以要換部門，就選<b>該人在那個部門的那一列</b>。</li>
+            <li>把申請日期改到某人<b>當時還沒到職／已離職</b>的區間時，該人不會出現在候選裡；若是既有單據，
+                系統會保留「原紀錄」那一筆並標示<b>（原紀錄，當時清單查無）</b>提醒你確認，<b>不會默默改選成別人</b>。</li>
         </ul>
 
         <h4>設定入口</h4>
@@ -612,7 +618,7 @@ $.getJSON(API, {action:'meta'}, function(r){
     var tp = $('#e_doc_type').empty();
     (r.doc_types || []).forEach(function(s){ tp.append('<option>' + esc(s) + '</option>'); });
 
-    var dep = $('#e_dept_id, #cd_dept').empty();
+    var dep = $('#cd_dept').empty();
     (r.departments || []).forEach(function(d){ dep.append('<option value="' + d.id + '">' + esc(d.name) + '</option>'); });
     var cos = $('#e_cos_pick, #cd_pick').empty();
     (r.cosign_depts || []).forEach(function(d){ cos.append('<option value="' + d.id + '">' + esc(d.name) + '</option>'); });
@@ -620,8 +626,8 @@ $.getJSON(API, {action:'meta'}, function(r){
     // 申請人／填表人：逐「職務」列出（含兼任），已由後端依 部門→職稱 sort_order 排序
     $('#e_applicant_id').empty();
     (r.people_posts || []).forEach(function(p){
-        var o = '<option value="' + esc(p.post_key) + '" data-uid="' + p.id + '" data-dept="' + (p.dept_id || '') + '">'
-              + esc(p.display) + '</option>';
+        var o = '<option value="' + esc(p.post_key) + '" data-uid="' + p.id + '" data-dept="' + (p.dept_id || '')
+              + '" data-deptname="' + esc(p.dept_name || '') + '">' + esc(p.display) + '</option>';
         $('#e_applicant_id').append(o);
         $('#autoUser').append(o);
     });
@@ -738,7 +744,7 @@ function openEdit(id){
     if (!id) {
         $('#e_apply_date').val(META.today); $('#e_change_date').val(META.today);
         $('#e_doc_status').val('制訂'); $('#e_doc_type').val('表單');
-        $('#e_dept_id').val(META.me.dept_id || ''); setApplicant(META.me.id, META.me.dept_id);
+        $('#e_dept_id').val(''); $('#e_dept_disp').val('');
         $('#e_doc_name').val(''); $('#e_doc_no').val(''); $('#e_version').val('');
         $('#e_first_issue_date').val(''); $('#e_asdoc_label').val('').data('id', 0);
         $('#e_need_overview').prop('checked', true); $('#e_need_cosign').prop('checked', false);
@@ -755,7 +761,7 @@ function openEdit(id){
         if (!d.can_edit) { alert('此單已送出或非你可編輯，已改為檢視。'); openView(id); return; }
         $('#e_apply_date').val(d.apply_date); $('#e_change_date').val(d.change_date || d.apply_date);
         $('#e_doc_status').val(d.doc_status); $('#e_doc_type').val(d.doc_type);
-        $('#e_dept_id').val(d.dept_id || ''); setApplicant(d.applicant_id, d.dept_id);
+        $('#e_dept_id').val(d.dept_id || ''); $('#e_dept_disp').val(d.dept_name || '');
         $('#e_doc_name').val(d.doc_name || ''); $('#e_doc_no').val(d.doc_no || '');
         $('#e_version').val(d.version || ''); $('#e_first_issue_date').val(d.first_issue_date || '');
         $('#e_asdoc_label').data('id', d.as_doc_id || 0).val(d.as_doc_id ? (d.doc_no + '　' + d.doc_name) : '');
@@ -766,7 +772,7 @@ function openEdit(id){
         (d.dists || []).forEach(function(x){ distAddRow(x); });
         for (var j = (d.dists || []).length; j < 3; j++) distAddRow();
         cosSel = (d.cosigns || []).map(function(c){ return {id:+c.dept_id, name:c.dept_name}; });
-        loadPeopleAsof(function(){ setApplicant(d.applicant_id, d.dept_id); });
+        loadPeopleAsof(function(){ setApplicant(d.applicant_id, d.dept_id, d.applicant_name, d.dept_name); });
         syncMode(); renderCosChips(); loadParents(); openMask('editMask');
     });
 }
@@ -834,20 +840,25 @@ function loadPeopleAsof(cb){
         var $s = $('#e_applicant_id').empty();
         (r.rows || []).forEach(function(p){
             $s.append('<option value="' + esc(p.post_key) + '" data-uid="' + p.id + '" data-dept="' + (p.dept_id || '')
-                + '">' + esc(p.display) + '</option>');
+                + '" data-deptname="' + esc(p.dept_name || '') + '">' + esc(p.display) + '</option>');
         });
         if (keep && $s.find('option[value="' + keep + '"]').length) $s.val(keep);
+        syncDeptFromApplicant();
         $('#applicantAsofHint').text('（依申請日期 ' + dispDate(date) + ' 當時在職者與當時職務列出，共 '
             + (r.rows || []).length + ' 筆）');
         if (cb) cb();
     });
 }
-/* 選申請人＝選「他的哪一個職務」（含兼任）→ 申請部門自動帶成該職務的部門 */
-$('#e_applicant_id').on('change', function(){
-    var d = $(this).find('option:selected').data('dept');
-    if (d) $('#e_dept_id').val(String(d));
-});
-$('#e_dept_id').on('change', function(){ $('#e_code').html('<option value="">（自動）</option>'); });
+/* 申請部門＝推導欄位：由選定的申請人「那一個職務」算出（含兼任），
+   來源一改就重算、算不出就清空，不給手填（推導欄位鐵則） */
+function syncDeptFromApplicant(){
+    var $o = $('#e_applicant_id option:selected');
+    var did = $o.data('dept'), dn = $o.attr('data-deptname') || '';
+    if (did) { $('#e_dept_id').val(String(did)); $('#e_dept_disp').val(dn); }
+    else     { $('#e_dept_id').val('');          $('#e_dept_disp').val(''); }
+    $('#e_code').html('<option value="">（自動）</option>');   // 部門一變，部門代碼要重挑
+}
+$('#e_applicant_id').on('change', syncDeptFromApplicant);
 $('#distBody').on('change', '.d-dept', function(){
     // 簽收者＝該填寫單位主管，由後端存檔時帶入；這裡先清空避免留著舊部門的人（推導欄位鐵則）
     $(this).closest('tr').find('.d-rn').val('');
@@ -944,13 +955,24 @@ function renderCosChips(){
 function cosDel(i){ cosSel.splice(i, 1); renderCosChips(); }
 
 /** 以「使用者＋部門」定位到那一個職務選項；該部門的職務不存在時退回此人的第一個職務 */
-function setApplicant(uid, deptId){
+function setApplicant(uid, deptId, fbName, fbDept){
     var $s = $('#e_applicant_id');
-    if (!uid) { $s.prop('selectedIndex', 0); return; }
+    if (!uid) { $s.prop('selectedIndex', 0); syncDeptFromApplicant(); return; }
     var key = uid + ':' + (deptId || '');
-    if ($s.find('option[value="' + key + '"]').length) { $s.val(key); return; }
+    if ($s.find('option[value="' + key + '"]').length) { $s.val(key); syncDeptFromApplicant(); return; }
     var $first = $s.find('option[data-uid="' + uid + '"]').first();
-    if ($first.length) $s.val($first.attr('value'));
+    if ($first.length) { $s.val($first.attr('value')); syncDeptFromApplicant(); return; }
+    // 這個人在該申請日期當時不在職／查無職務（多半是舊單改了日期）：
+    // 不能默默改選成別人 —— 補一個沿用原紀錄的選項，並提示使用者確認
+    if (fbName) {
+        $s.prepend('<option value="' + key + '" data-uid="' + uid + '" data-dept="' + (deptId || '')
+            + '" data-deptname="' + esc(fbDept || '') + '">' + esc((fbDept ? fbDept + '　' : '') + fbName)
+            + '（原紀錄，當時清單查無）</option>');
+        $s.val(key);
+    } else {
+        $s.prop('selectedIndex', 0);
+    }
+    syncDeptFromApplicant();
 }
 function applicantUid(){ return +String($('#e_applicant_id').val() || '').split(':')[0] || 0; }
 

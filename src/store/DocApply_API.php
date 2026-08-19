@@ -293,9 +293,11 @@ case 'save': {
     $bizDay = trim((string)($_POST['apply_date'] ?? '')) ?: da_db_now($db)['d'];
     $ident  = da_user_identity_asof($db, $applicantId, $bizDay, (int)($_POST['dept_id'] ?? 0));
 
-    $deptId = (int)($_POST['dept_id'] ?? 0) ?: (int)($ident['dept_id'] ?? 0);
-    $deptName = '';
-    if ($deptId) {
+    // 申請部門是**推導欄位**：以申請人在該日期當時的那個職務為準，不採信前端送的值
+    // （前端已改成唯讀自動帶出，後端同規則再算一次，避免直打 API 送出對不起來的部門，鐵律8）
+    $deptId   = (int)($ident['dept_id'] ?? 0) ?: (int)($_POST['dept_id'] ?? 0);
+    $deptName = (string)($ident['dept_name'] ?? '');
+    if ($deptId && $deptName === '') {
         $q = $db->prepare("SELECT name FROM department WHERE id=?"); $q->execute([$deptId]);
         $deptName = (string)$q->fetchColumn();
     }
