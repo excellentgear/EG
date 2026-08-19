@@ -837,27 +837,52 @@ function fsd_case_page_file_name(array $case, array $page): ?string {
 }
 
 /**
- * 建立案件(草稿)：案件一律只能上傳圖片，不可PDF，且一次可多張各自成一頁(2026-08-14使用者明確要求，
- * 因PDF轉圖列印畫質實測不如圖片清楚)。$images = [['file_name'=>str,'width_pt'=>float,'height_pt'=>float], ...]，
- * 依陣列順序＝page_no 1..N(順序由前端上傳/拖拽排序決定)。
+ * 案件文件來源描述（$doc）：本模組所有「建立/更換案件文件」共用同一種結構，避免圖片版與PDF版各寫一套。
+ *   圖片：['type'=>'image','images'=>[['file_name','width_pt','height_pt'], ...]]  ← 依陣列順序＝page_no 1..N
+ *   PDF ：['type'=>'pdf','file_name'=>str,'pages'=>[['page_no','width_pt','height_pt'], ...]]
+ *
+ * 【為什麼 2026-08-19 又把 PDF 開回來】2026-08-14 曾因「PDF 轉圖列印畫質不如圖片」限定只能傳圖片，
+ * 但那個糊是**前端 pdf.js 把整頁重畫成點陣圖**造成的，不是 PDF 本身的問題。改用 FPDI 直接匯入原頁
+ * （form_signer_pdf_lib.php，實測來源影像串流位元組 100% 原封不動）之後，PDF 匯出反而是最清楚的一條路，
+ * 所以重新開放上傳 PDF。畫面上仍用 pdf.js 轉圖當「框選定位用的預覽底圖」，但那份圖不參與最終輸出。
  */
-function fsd_case_create_draft_images(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, array $images): array {
+function fsd_case_doc_pages_write(PDO $db, int $caseId, array $doc): void {
+    $db->prepare("DELETE FROM fsd_case_page WHERE case_id=?")->execute([$caseId]);
+    $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation,file_name) VALUES (?,?,?,?,0,?)");
+    if (($doc['type'] ?? 'image') === 'pdf') {
+        // PDF 是單一多頁檔案：檔名記在 fsd_case.file_name，每頁的 file_name 留 NULL（沿用既有相容邏輯）
+        foreach (array_values($doc['pages'] ?? []) as $i => $p) {
+            $ins->execute([$caseId, $i + 1, (float)$p['width_pt'], (float)$p['height_pt'], null]);
+        }
+    } else {
+        foreach (array_values($doc['images'] ?? []) as $i => $img) {
+            $ins->execute([$caseId, $i + 1, (float)$img['width_pt'], (float)$img['height_pt'], $img['file_name']]);
+        }
+    }
+}
+
+/** $doc 是否有內容；沒有就不該讓案件存在（建立/更換都要先擋）。 */
+function fsd_case_doc_empty(array $doc): bool {
+    return (($doc['type'] ?? 'image') === 'pdf') ? empty($doc['pages']) : empty($doc['images']);
+}
+
+/** 建立案件(草稿)。$doc 見 fsd_case_doc_pages_write() 說明。 */
+function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, array $doc): array {
     $tpl = fsd_template_get($db, $templateId);
     if (!$tpl) return ['ok'=>false, 'msg'=>'找不到此樣板'];
     if ((int)$tpl['published_version'] < 1) return ['ok'=>false, 'msg'=>'此樣板尚未發布，請聯絡管理員'];
     if ($tpl['status'] !== 'active') return ['ok'=>false, 'msg'=>'此樣板已停用'];
-    if (!$images) return ['ok'=>false, 'msg'=>'請至少上傳一張圖片'];
+    if (fsd_case_doc_empty($doc)) return ['ok'=>false, 'msg'=>'請上傳要簽核的文件'];
+    $isPdf = (($doc['type'] ?? 'image') === 'pdf');
     $bizDate = $bizDate ?: date('Y-m-d');
     $db->beginTransaction();
     try {
         $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,status,current_stage_seq)
-                      VALUES (?,?,'image',NULL,?,?,?,?,?,?,'draft',0)")
-           ->execute([$templateId, (int)$tpl['published_version'], $title ?: $tpl['name'], $uid, $uname, $uid, $uname, $bizDate]);
+                      VALUES (?,?,?,?,?,?,?,?,?,?,'draft',0)")
+           ->execute([$templateId, (int)$tpl['published_version'], $isPdf ? 'pdf' : 'image',
+                      $isPdf ? $doc['file_name'] : null, $title ?: $tpl['name'], $uid, $uname, $uid, $uname, $bizDate]);
         $caseId = (int)$db->lastInsertId();
-        $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation,file_name) VALUES (?,?,?,?,0,?)");
-        foreach (array_values($images) as $i => $img) {
-            $ins->execute([$caseId, $i + 1, (float)$img['width_pt'], (float)$img['height_pt'], $img['file_name']]);
-        }
+        fsd_case_doc_pages_write($db, $caseId, $doc);
         $db->commit();
     } catch (Throwable $e) {
         $db->rollBack();
@@ -866,27 +891,56 @@ function fsd_case_create_draft_images(PDO $db, int $templateId, int $uid, string
     return ['ok'=>true, 'id'=>$caseId];
 }
 
-/** 草稿階段更換文件(多圖模式版本)：整批換掉，之前框選的位置一併清空(避免對到舊文件版面)。 */
-function fsd_case_replace_file_images(PDO $db, int $caseId, array $images): array {
+/** 舊呼叫端相容包裝（只傳圖片時）。 */
+function fsd_case_create_draft_images(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, array $images): array {
+    return fsd_case_create_draft_doc($db, $templateId, $uid, $uname, $title, $bizDate, ['type'=>'image', 'images'=>$images]);
+}
+
+/** 草稿階段更換文件：整批換掉，之前框選的位置一併清空(避免對到舊文件版面)；已產生的匯出PDF一併作廢。 */
+function fsd_case_replace_file_doc(PDO $db, int $caseId, array $doc): array {
     $case = fsd_case_get($db, $caseId);
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
     if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可更換文件'];
-    if (!$images) return ['ok'=>false, 'msg'=>'請至少上傳一張圖片'];
+    if (fsd_case_doc_empty($doc)) return ['ok'=>false, 'msg'=>'請上傳要簽核的文件'];
+    $isPdf = (($doc['type'] ?? 'image') === 'pdf');
     $db->beginTransaction();
     try {
-        $db->prepare("UPDATE fsd_case SET file_type='image',file_name=NULL,updated_at=NOW() WHERE id=?")->execute([$caseId]);
+        $db->prepare("UPDATE fsd_case SET file_type=?,file_name=?,export_pdf_name=NULL,export_pdf_at=NULL,export_mode=NULL,updated_at=NOW() WHERE id=?")
+           ->execute([$isPdf ? 'pdf' : 'image', $isPdf ? $doc['file_name'] : null, $caseId]);
         $db->prepare("DELETE FROM fsd_case_field WHERE case_id=?")->execute([$caseId]);
-        $db->prepare("DELETE FROM fsd_case_page WHERE case_id=?")->execute([$caseId]);
-        $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation,file_name) VALUES (?,?,?,?,0,?)");
-        foreach (array_values($images) as $i => $img) {
-            $ins->execute([$caseId, $i + 1, (float)$img['width_pt'], (float)$img['height_pt'], $img['file_name']]);
-        }
+        fsd_case_doc_pages_write($db, $caseId, $doc);
         $db->commit();
     } catch (Throwable $e) {
         $db->rollBack();
         return ['ok'=>false, 'msg'=>'更換失敗：' . $e->getMessage()];
     }
     return ['ok'=>true];
+}
+
+/** 舊呼叫端相容包裝（只傳圖片時）。 */
+function fsd_case_replace_file_images(PDO $db, int $caseId, array $images): array {
+    return fsd_case_replace_file_doc($db, $caseId, ['type'=>'image', 'images'=>$images]);
+}
+
+/* -------- 合成 PDF 存檔（案件完成時自動產生，列表可重複開啟列印/下載） -------- */
+
+/** 記下這份案件的合成PDF檔名（只存檔名不存絕對路徑，鐵律5；時間戳一律取DB時間避免PHP/DB時區差8小時）。 */
+function fsd_case_export_set(PDO $db, int $caseId, string $fileName, string $mode): void {
+    $db->prepare("UPDATE fsd_case SET export_pdf_name=?,export_pdf_at=NOW(),export_mode=? WHERE id=?")
+       ->execute([$fileName, $mode, $caseId]);
+}
+
+/** 案件是否已有合成PDF可開。 */
+function fsd_case_has_export(array $case): bool {
+    return trim((string)($case['export_pdf_name'] ?? '')) !== '';
+}
+
+/**
+ * 可不可以匯出／開啟合成PDF：只有「已完成」的案件才行（2026-08-19 使用者拍板，
+ * 避免半成品被印出來當正式文件流出去）。補案件送出即 approved，同樣適用。
+ */
+function fsd_case_export_allowed(array $case): bool {
+    return ($case['status'] ?? '') === 'approved';
 }
 
 function fsd_case_pages_get(PDO $db, int $caseId): array {
@@ -1012,19 +1066,18 @@ function fsd_backfill_people(PDO $db): array {
 }
 
 /** 補案件建立草稿：不綁樣板，直接吃上傳的多張圖片成頁（圖片處理與一般案件共用 API 端的 fsd_case_upload_images）。 */
-function fsd_backfill_create_draft(PDO $db, int $uid, string $uname, string $title, string $bizDate, int $asDocId, array $images): array {
-    if (!$images) return ['ok'=>false, 'msg'=>'請至少上傳一張圖片'];
+function fsd_backfill_create_draft(PDO $db, int $uid, string $uname, string $title, string $bizDate, int $asDocId, array $doc): array {
+    if (fsd_case_doc_empty($doc)) return ['ok'=>false, 'msg'=>'請上傳要補進系統的文件'];
+    $isPdf = (($doc['type'] ?? 'image') === 'pdf');
     $bizDate = $bizDate ?: date('Y-m-d');
     $db->beginTransaction();
     try {
         $db->prepare("INSERT INTO fsd_case (template_id,template_version,case_kind,as_doc_id,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,status,current_stage_seq)
-                      VALUES (0,0,'backfill',?,'image',NULL,?,?,?,?,?,?,'draft',0)")
-           ->execute([$asDocId ?: null, $title ?: '補案件', $uid, $uname, $uid, $uname, $bizDate]);
+                      VALUES (0,0,'backfill',?,?,?,?,?,?,?,?,?,'draft',0)")
+           ->execute([$asDocId ?: null, $isPdf ? 'pdf' : 'image', $isPdf ? $doc['file_name'] : null,
+                      $title ?: '補案件', $uid, $uname, $uid, $uname, $bizDate]);
         $caseId = (int)$db->lastInsertId();
-        $ins = $db->prepare("INSERT INTO fsd_case_page (case_id,page_no,width_pt,height_pt,rotation,file_name) VALUES (?,?,?,?,0,?)");
-        foreach (array_values($images) as $i => $img) {
-            $ins->execute([$caseId, $i + 1, (float)$img['width_pt'], (float)$img['height_pt'], $img['file_name']]);
-        }
+        fsd_case_doc_pages_write($db, $caseId, $doc);
         $db->commit();
     } catch (Throwable $e) {
         $db->rollBack();
@@ -1142,8 +1195,10 @@ function fsd_backfill_submit(PDO $db, int $caseId, int $uid): array {
     $db->beginTransaction();
     try {
         $db->prepare("DELETE FROM fsd_case_response WHERE case_id=?")->execute([$caseId]);
-        $ins = $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,responded_at)
-                             VALUES (?,0,?,?,?,'approved',1,?)");
+        // reply_text 一定要寫（先前漏掉，導致補案件的自動簽核紀錄連管理員在畫面上都看不到任何標示）；
+        // 補案件的框一律是圖章(box_type='stamp')，圖章框不會把 reply_text 印在文件上，所以只影響簽核紀錄區。
+        $ins = $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,reply_text,responded_at)
+                             VALUES (?,0,?,?,?,'approved',1,'（系統自動簽核）',?)");
         $minutes = 9 * 60;
         foreach ($fields as $f) {
             $minutes = min(23 * 60, $minutes + random_int(5, 30));

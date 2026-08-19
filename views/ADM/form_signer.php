@@ -68,6 +68,11 @@ $perms = fsd_perms($db, $fsdUser);
             overflow:hidden; cursor:grab; background:#fff; }
         .fsd-thumb-grid .thumb.dragover { border-color:#F0A24B; box-shadow:0 0 0 2px #F0A24B inset; }
         .fsd-thumb-grid .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+        /* PDF 沒辦法用 <img> 預覽，改用檔名磚（暖色系，ai-rules/10） */
+        .fsd-thumb-grid .thumb .thumb-pdf { width:100%; height:100%; display:flex; flex-direction:column; align-items:center;
+            justify-content:center; gap:3px; background:#FBF3E6; color:#8A5A2B; text-align:center; padding:4px; box-sizing:border-box; }
+        .fsd-thumb-grid .thumb .thumb-pdf i { font-size:22px; color:#DD5138; }
+        .fsd-thumb-grid .thumb .thumb-pdf span { font-size:9px; line-height:1.15; word-break:break-all; max-height:44px; overflow:hidden; }
         .fsd-thumb-grid .thumb .tno { position:absolute; left:2px; top:2px; background:#F0A24B; color:#fff; font-size:10px;
             padding:0 4px; border-radius:3px; }
         .fsd-thumb-grid .thumb .tdel { position:absolute; right:2px; top:2px; background:rgba(0,0,0,.55); color:#fff;
@@ -110,6 +115,9 @@ $perms = fsd_perms($db, $fsdUser);
         .fsd-action-panel { border:1px solid #E8D5B5; border-radius:8px; background:#fff; padding:10px; margin-top:12px; }
         .fsd-resp-list { font-size:12.5px; }
         .fsd-resp-list .r-row { border-bottom:1px solid #F0E7D5; padding:5px 0; }
+        /* 自動簽核標記：僅管理員在簽核紀錄區看得到，@media print 不需另外隱藏（列印時整個 .fsd-action-panel 已隱藏） */
+        .fsd-resp-list .auto-sign-tag { display:inline-block; background:#F7E0BD; color:#8A5A2B; border:1px solid #D8BE93;
+            border-radius:3px; font-size:10.5px; line-height:1.5; padding:0 5px; margin-left:4px; vertical-align:1px; }
         .fsd-design-layout { display:flex; gap:12px; align-items:flex-start; }
         .fsd-label-panel { flex:0 0 220px; border:1px solid #E8D5B5; border-radius:8px; background:#fff; max-height:74vh; overflow-y:auto; }
         .fsd-label-panel .lp-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:6px 10px; border-radius:8px 8px 0 0; }
@@ -241,6 +249,8 @@ $perms = fsd_perms($db, $fsdUser);
                 <button id="btnRestore" style="display:none;color:#2e6b2e;border-color:#7ab57a;"><i class="fa fa-undo"></i> 復原</button>
                 <button id="btnDeleteHard" class="btn-danger" style="display:none;"><i class="fa fa-trash"></i> 永久刪除</button>
                 <button id="btnDeleteSoft" class="btn-danger" style="display:none;"><i class="fa fa-trash"></i> 刪除</button>
+                <button id="btnPdfOpen" style="display:none;" onclick="fsdOpenPdf(false)" title="開啟已存檔的合成PDF，可直接在檢視器內列印"><i class="fa fa-file-pdf-o"></i> PDF</button>
+                <button id="btnPdfDl" style="display:none;" onclick="fsdOpenPdf(true)" title="下載合成PDF檔"><i class="fa fa-download"></i> 下載PDF</button>
                 <button class="btn-warm" onclick="doPrint()"><i class="fa fa-print"></i> 列印</button>
             </div>
             <div class="fsd-doc-grid" id="docGrid"></div>
@@ -281,8 +291,9 @@ $perms = fsd_perms($db, $fsdUser);
     <div class="m-body">
         <label>選擇樣板</label>
         <select id="crTpl"><option value="">請選擇…</option></select>
-        <label>要簽核的文件（僅接受圖片png/jpg，不可上傳PDF；可一次選多張，每張各成一頁，可拖曳縮圖調整頁面順序）</label>
-        <input type="file" id="crFile" accept="image/png,image/jpeg" multiple onchange="crFilesChanged(this.files)">
+        <label>要簽核的文件（圖片 png/jpg 可一次選多張、每張各成一頁、可拖曳調整頁序；或改上傳一份多頁 PDF）</label>
+        <input type="file" id="crFile" accept="image/png,image/jpeg,application/pdf" multiple onchange="crFilesChanged(this.files)">
+        <p style="font-size:11.5px;color:#8a6d45;margin:2px 0 0;">上傳 PDF 時最終產出的 PDF 會直接沿用原檔內容（不重新轉圖，畫質完全不損）；PDF 與圖片不可混著傳，一次也只能傳一份 PDF。加密保護的 PDF 無法處理，會在上傳時擋下。</p>
         <div id="crThumbs" class="fsd-thumb-grid"></div>
         <label>案件標題（可留空，預設用樣板名稱）</label><input type="text" id="crTitle" maxlength="200">
         <label>業務日期</label><input type="date" id="crDate" max="9999-12-31">
@@ -305,8 +316,8 @@ $perms = fsd_perms($db, $fsdUser);
             <button type="button" onclick="bfPickAsDoc()">挑選…</button>
         </div>
         <div id="bfFileWrap">
-            <label>文件掃描檔（僅接受圖片png/jpg；可一次選多張，每張各成一頁，可拖曳縮圖調整頁序）</label>
-            <input type="file" id="bfFile" accept="image/png,image/jpeg" multiple onchange="bfFilesChanged(this.files)">
+            <label>文件掃描檔（圖片 png/jpg 可一次選多張、每張各成一頁、可拖曳調整頁序；或改上傳一份多頁 PDF）</label>
+            <input type="file" id="bfFile" accept="image/png,image/jpeg,application/pdf" multiple onchange="bfFilesChanged(this.files)">
             <div id="bfThumbs" class="fsd-thumb-grid"></div>
         </div>
     </div>
@@ -318,8 +329,8 @@ $perms = fsd_perms($db, $fsdUser);
 <div class="fsd-mask" id="replaceMask"><div class="fsd-modal">
     <div class="m-head"><span>更換文件</span><span class="m-close" onclick="closeMask('replaceMask')">✕</span></div>
     <div class="m-body">
-        <label>新文件（僅接受圖片png/jpg，可一次多張，拖曳縮圖調整頁面順序）</label>
-        <input type="file" id="rpFile" accept="image/png,image/jpeg" multiple onchange="rpFilesChanged(this.files)">
+        <label>新文件（圖片 png/jpg 可一次多張、拖曳調整頁序；或改上傳一份多頁 PDF）</label>
+        <input type="file" id="rpFile" accept="image/png,image/jpeg,application/pdf" multiple onchange="rpFilesChanged(this.files)">
         <div id="rpThumbs" class="fsd-thumb-grid"></div>
         <p style="font-size:11.5px;color:#8a6d45;">更換後之前框選的位置會清空，需要重新拖放。</p>
     </div>
@@ -385,18 +396,19 @@ $perms = fsd_perms($db, $fsdUser);
     <div class="m-head"><span>使用說明 — 表單簽核設計器（案件）</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc" style="font-size:13px;color:#5b3a1e;line-height:1.8;">
         <h4>功能說明</h4>
-        依管理員設計好的樣板建立案件並上傳「實際要簽核的文件」；樣板本身的框選結果只作為欄位提示（白名單）與參考位置，不是實際背景文件。系統依序通知各關卡簽核人，簽核人以圖章模板蓋章回應，回覆內容顯示在您自己框選好的對應位置，最終呈現一份已簽核完成的合成文件（線上檢視＋瀏覽器列印）。
+        依管理員設計好的樣板建立案件並上傳「實際要簽核的文件」；樣板本身的框選結果只作為欄位提示（白名單）與參考位置，不是實際背景文件。系統依序通知各關卡簽核人，簽核人以圖章模板蓋章回應，回覆內容顯示在您自己框選好的對應位置，最終呈現一份已簽核完成的合成文件（線上檢視＋瀏覽器列印），並在案件完成時自動產生一份合成 PDF 存檔，之後可隨時重複開啟列印或下載。
         <h4>操作步驟</h4>
-        <b>①建立案件</b>：選擇樣板、上傳要簽核的文件、填標題與業務日期。<br>
+        <b>①建立案件</b>：選擇樣板、上傳要簽核的文件、填標題與業務日期。文件可以是<b>多張圖片</b>（png/jpg，每張各成一頁、可拖曳調整頁序），也可以是<b>一份多頁 PDF</b>；兩者不可混傳，一次也只能傳一份 PDF。<br>
         <b>②框選</b>：進入框選畫面，左側「待框選標籤」只會列出樣板本身已框選過的欄位（樣板沒有的欄位這裡也不會出現），拖到您上傳的文件對應位置；右上角可參考樣板原本的框選位置提示。完成後選「存草稿」（暫存，之後可回來繼續）或「儲存並送出」（開始跑第一關）。<br>
         <b>③意見階段</b>：該階段的每位槽位成員各自表示同意/不同意並可留言，沒有駁回動作、不會互相卡關，全部人（扣除自動迴避的）都回應後自動進入下一關。<br>
         <b>④決策階段</b>：1~2位決策者其中一人核准或駁回即決定流程走向；核准才會繼續跑下一關（或結案），駁回則案件立即終止。<br>
         <b>⑤催辦</b>：案件申請人或管理員可對目前階段尚未回應的人重新發送一次通知（不會強制略過或自動代為回應）。<br>
         <b>⑥列印</b>：進入案件詳情後按「列印」，瀏覽器會印出目前已疊上所有圖章/回覆內容的合成文件（自動依文件是直式或橫式調整版面，每頁各自分頁列印）。<br>
-        <b>⑦刪除</b>：草稿可直接刪除；已送出的案件，超級管理員可永久刪除（不留紀錄），一般管理員需輸入操作確認密碼刪除（會留刪除紀錄，可在「已刪除案件」復原）。
+        <b>⑦PDF</b>：案件<b>完成的當下會自動產生一份合成 PDF 存檔</b>，詳情頁的「PDF」可直接開起來列印、「下載PDF」可存到自己電腦；列表上已產生 PDF 的案件也有一顆 PDF 鈕可直接開啟。同一份案件重複開啟拿到的都是同一個檔案。<b>只有已完成的案件才能匯出</b>（避免半成品被當成正式文件流出去）。<br>
+        <b>⑧刪除</b>：草稿可直接刪除；已送出的案件，超級管理員可永久刪除（不留紀錄），一般管理員需輸入操作確認密碼刪除（會留刪除紀錄，可在「已刪除案件」復原）。
         <h4>補案件（管理員專屬）</h4>
         用途：把「紙本上已經簽好章」的歷史文件掃描檔補進系統。<b>不需要樣板</b>、<b>固定自動審核</b>（送出＝直接完成，不會通知任何人去簽）。<br>
-        <b>①</b>列表右上角按「補案件」，填標題、業務日期（＝所有圖章要印的簽章日期）、可選一份 AS 文件（列印右下角編號，版次依業務日期回推當時生效版），上傳文件掃描圖片（可多張，拖曳縮圖排頁序）。<br>
+        <b>①</b>列表右上角按「補案件」，填標題、業務日期（＝所有圖章要印的簽章日期）、可選一份 AS 文件（列印右下角編號，版次依業務日期回推當時生效版），上傳文件掃描檔（多張圖片可拖曳縮圖排頁序，或一份多頁 PDF）。<br>
         <b>②</b>建立後進入設定畫面：左側先選好「預設圖章模板」，再到右邊每一頁上方按「＋新增圖章」，把章拖曳/縮放到紙本上原本蓋章的位置。<br>
         <b>③</b>左側圖章清單裡逐個選「這個章是誰的」（<b>含已離職人員</b>，補舊表單用）與「這個章用哪個圖章模板」；按「一次套用到全部圖章」可把全部圖章的模板一次改成目前預設值，之後仍可逐個修改。<br>
         <b>④</b>圖章上限 <b>30</b> 個；每個圖章都必須指定人員才能按「儲存並完成」。完成後即為「已完成」狀態，可直接檢視與列印。
@@ -405,7 +417,10 @@ $perms = fsd_perms($db, $fsdUser);
         ・補案件的<b>圖章大小固定</b>＝該章所選圖章模板的實際尺寸（所見即所印），只能移動位置、不能拉大縮小；要換大小就換一個圖章模板（換模板時框會自動變成新尺寸）。<br>
         ・槽位解析出的人若剛好是案件申請人本人，該槽位自動略過（強制迴避），不會顯示在回覆框裡等待回應。<br>
         ・已核准/已駁回/已作廢的案件不可再回應，只能檢視與列印。<br>
-        ・系統自動簽核的紀錄只有管理員看得到「系統自動簽核」字樣，一般使用者看到的是正常的簽核紀錄。
+        ・<b>上傳 PDF 不會被轉成圖片</b>：匯出的 PDF 直接沿用原始 PDF 的頁面內容，畫質與原檔完全相同（掃描影像是原封不動搬過去的）；畫面上看到的預覽底圖才是轉圖產生的，只用來給您拖曳定位，不影響最終檔案。<br>
+        ・<b>加密保護的 PDF 無法處理</b>，會在上傳當下就擋下並說明原因，請改上傳未加密的 PDF 或圖片檔——系統不會自動改用畫質較差的方式硬做。<br>
+        ・PDF 裡的圖章大小與位置跟列印版一致（未綁定圖章模板＝固定 91px，有綁定＝該模板設定的實際尺寸，皆置中於框內）。<br>
+        ・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
         <h4>設定入口</h4>
         樣板的階段/槽位/框選提示由管理員在「樣板管理」頁設定；操作確認密碼在「修改個人密碼」頁設定（需超級管理員先授權）。
         <h4>權限角色</h4>
@@ -512,6 +527,9 @@ function renderCaseRow(c){
         if (isOwner || META.perms.canAdmin) actions += '<button class="btn-danger" onclick="deleteDraftFromList('+c.id+')"><i class="fa fa-trash"></i></button>';
     } else {
         actions += '<button onclick="openCase('+c.id+')">檢視</button>';
+        // 已完成並產生過合成PDF的案件，列表就能直接開起來列印/下載，不必先進詳情
+        if (c.status === 'approved' && c.export_pdf_name)
+            actions += ' <button onclick="window.open(API+\'?action=case_export_file&id='+c.id+'\',\'_blank\')" title="開啟合成PDF（可直接列印）"><i class="fa fa-file-pdf-o"></i></button>';
     }
     var tplCell = isBf ? '<span class="badge-stage badge-draft">補案件</span>' : esc(c.template_name);
     return '<tr><td>'+esc(c.title||c.template_name)+'</td><td>'+tplCell+'</td><td>'+esc(c.applicant_name)+'</td>'
@@ -567,12 +585,31 @@ function deleteDraftFromList(id){
 $('#btnAddCase').on('click', function(){ loadTemplateOptionsForCreate(); CR_FILES=[]; renderCrThumbs(); $('#crFile').val(''); openMask('createMask'); });
 /** 建立案件的多圖選擇+拖曳排序(2026-08-14使用者明確要求：案件只能傳圖片,可一次多張,拖曳排序決定頁序)。 */
 var CR_FILES = [];
-function crFilesChanged(fileList){ CR_FILES = Array.prototype.slice.call(fileList); renderCrThumbs(); }
+/* -------- 上傳檔案共用處理（圖片多張 或 單一多頁PDF，2026-08-19 重新開放 PDF） --------
+   PDF 沒辦法用 <img> 預覽，縮圖改顯示檔名磚；混傳/多份PDF 在選檔當下就擋掉（後端 API 也會再擋一次，
+   不做只擋前端的半套，鐵律8）。 */
+function fsdIsPdfFile(f){ return /\.pdf$/i.test(f.name || '') || f.type === 'application/pdf'; }
+function fsdThumbInner(f){
+    if (fsdIsPdfFile(f)) return '<div class="thumb-pdf"><i class="fa fa-file-pdf-o"></i><span>'+esc(f.name)+'</span></div>';
+    return '<img src="'+URL.createObjectURL(f)+'">';
+}
+/** 回傳整理過的檔案陣列；不合格時 alert 說明原因並回傳 null（呼叫端就維持原本已選的清單不動）。 */
+function fsdCheckFiles(list){
+    var files = Array.prototype.slice.call(list);
+    if (!files.length) return files;
+    var pdfs = files.filter(fsdIsPdfFile);
+    if (pdfs.length && pdfs.length !== files.length){ alert('PDF 不能和圖片混在一起上傳。\n請擇一：整份 PDF，或多張圖片。'); return null; }
+    if (pdfs.length > 1){ alert('一次只能上傳一份 PDF（PDF 本身可以是多頁）。'); return null; }
+    var bad = files.filter(function(f){ return !fsdIsPdfFile(f) && !/\.(png|jpe?g)$/i.test(f.name || ''); });
+    if (bad.length){ alert('只接受圖片(png/jpg)或 PDF：\n' + bad.map(function(f){ return f.name; }).join('\n')); return null; }
+    return files;
+}
+function crFilesChanged(fileList){ var f = fsdCheckFiles(fileList); if (f === null){ $('#crFile').val(''); return; } CR_FILES = f; renderCrThumbs(); }
 function crRemoveThumb(i){ CR_FILES.splice(i,1); renderCrThumbs(); }
 function renderCrThumbs(){
     var h = '';
     CR_FILES.forEach(function(f, i){
-        h += '<div class="thumb" draggable="true" data-idx="'+i+'"><img src="'+URL.createObjectURL(f)+'">'
+        h += '<div class="thumb" draggable="true" data-idx="'+i+'">'+fsdThumbInner(f)
            + '<span class="tno">'+(i+1)+'</span><span class="tdel" onclick="crRemoveThumb('+i+')">×</span></div>';
     });
     var $g = $('#crThumbs').html(h);
@@ -592,7 +629,7 @@ function renderCrThumbs(){
 function submitCreate(){
     var tid = $('#crTpl').val();
     if (!tid){ alert('請選擇樣板'); return; }
-    if (!CR_FILES.length){ alert('請至少上傳一張要簽核的文件圖片'); return; }
+    if (!CR_FILES.length){ alert('請上傳要簽核的文件（圖片或 PDF）'); return; }
     var fd = new FormData();
     fd.append('action','case_create_draft'); fd.append('csrf', META.csrf); fd.append('template_id', tid);
     fd.append('title', $.trim($('#crTitle').val())); fd.append('business_date', $('#crDate').val());
@@ -679,12 +716,12 @@ function bfPickAsDoc(){
     EGAsDoc.open({ docs:(BF_META&&BF_META.as_docs)||[], current:BF_AS_DOC_ID, title:'補案件 AS 文件編號（列印右下角）',
         onSave: function(id){ BF_AS_DOC_ID = id||0; renderBfAsDocLabel(); } });
 }
-function bfFilesChanged(fileList){ BF_FILES = Array.prototype.slice.call(fileList); renderBfThumbs(); }
+function bfFilesChanged(fileList){ var f = fsdCheckFiles(fileList); if (f === null){ $('#bfFile').val(''); return; } BF_FILES = f; renderBfThumbs(); }
 function bfRemoveThumb(i){ BF_FILES.splice(i,1); renderBfThumbs(); }
 function renderBfThumbs(){
     var h = '';
     BF_FILES.forEach(function(f, i){
-        h += '<div class="thumb" draggable="true" data-idx="'+i+'"><img src="'+URL.createObjectURL(f)+'">'
+        h += '<div class="thumb" draggable="true" data-idx="'+i+'">'+fsdThumbInner(f)
            + '<span class="tno">'+(i+1)+'</span><span class="tdel" onclick="bfRemoveThumb('+i+')">×</span></div>';
     });
     var $g = $('#bfThumbs').html(h);
@@ -714,7 +751,7 @@ function submitBfCreate(){
         }, 'json');
         return;
     }
-    if (!BF_FILES.length){ alert('請至少上傳一張文件掃描圖片'); return; }
+    if (!BF_FILES.length){ alert('請上傳文件掃描檔（圖片或 PDF）'); return; }
     var fd = new FormData();
     fd.append('action','backfill_create_draft'); fd.append('csrf', META.csrf);
     fd.append('title', title); fd.append('business_date', bizDate); fd.append('as_doc_id', BF_AS_DOC_ID);
@@ -979,6 +1016,9 @@ function openCase(id){
         $('#btnUrge').toggle(CUR_CASE.case_kind !== 'backfill'); // 補案件沒有待處理人，催辦沒有意義
         renderResponses();
         renderDocGrid(CUR_CASE_PAGES, CUR_FIELDS);
+        renderPdfButtons();
+        // 已完成但還沒有合成PDF（剛簽完的、或當初產生失敗的舊案件）→ 背景補產一份，失敗不吵使用者
+        if (CUR_CASE.status === 'approved' && !CUR_CASE.export_pdf_name) fsdExportPdf(CUR_CASE.id, true);
     });
 }
 $('#btnBackList').on('click', function(){ $('#detailPanel').hide(); $('#listPanel').show(); CUR_CASE=null; loadCases(); });
@@ -1061,13 +1101,23 @@ function submitDecision(decision){
         openCase(CUR_CASE.id);
     }, 'json');
 }
+/** 「系統自動簽核」標記：**只有管理員看得到**（後端 fsd_sanitize_responses_for_viewer() 已把
+ *  非管理員的 is_auto 整個拿掉），而且只出現在這份簽核紀錄清單裡——文件本身、列印版與匯出的 PDF
+ *  一律不顯示，維持 2026-08-14 使用者定下的口徑：對外看起來與真人簽核無異，但內部查得到。 */
+function autoSignTag(r){
+    if (!r || !r.is_auto) return '';
+    return ' <span class="auto-sign-tag" title="這一筆是系統自動產生的簽核紀錄，非本人當場操作。僅管理員看得到此標記。">系統自動簽核</span>';
+}
 function renderResponses(){
     if (CUR_CASE && CUR_CASE.case_kind === 'backfill') {
         // 補案件沒有關卡，紀錄就是「哪個位置蓋了誰的章」；日期一律案件業務日期
         var hb = '<div class="r-row"><b>補案件（管理員補登紙本，固定自動審核）</b>｜建立人：'+esc(CUR_CASE.applicant_name||'')+'｜業務日期：'+dispDate(CUR_CASE.business_date)+'</div>';
+        var bfBySlot = {};
+        (CUR_RESPONSES||[]).forEach(function(r){ bfBySlot[r.slot_key] = r; });
         (CUR_FIELDS||[]).forEach(function(f, i){
             hb += '<div class="r-row" style="padding-left:10px;">圖章 '+(i+1)+'（第'+f.page_no+'頁）：'+esc(f.signer_name||'（未指定）')
-                + (f.stamp_tpl && f.stamp_tpl.tpl_name ? '｜模板：'+esc(f.stamp_tpl.tpl_name) : '｜模板：系統預設回墨印') + '</div>';
+                + (f.stamp_tpl && f.stamp_tpl.tpl_name ? '｜模板：'+esc(f.stamp_tpl.tpl_name) : '｜模板：系統預設回墨印')
+                + autoSignTag(bfBySlot[f.slot_key]) + '</div>';
         });
         $('#respList').html(hb);
         return;
@@ -1087,12 +1137,187 @@ function renderResponses(){
             else if (r.decision === null) txt = '<span style="color:#b5762a;">待回應（'+esc(r.resolved_user_name||'')+'）</span>';
             else {
                 var decLabel = {agree:'同意', disagree:'不同意', approved:'核准', rejected:'駁回'}[r.decision] || r.decision;
-                txt = esc(r.resolved_user_name||'') + '｜' + decLabel + (r.reply_text ? '｜'+esc(r.reply_text) : '') + '｜' + dispDateTime(r.responded_at);
+                txt = esc(r.resolved_user_name||'') + '｜' + decLabel + (r.reply_text ? '｜'+esc(r.reply_text) : '') + '｜' + dispDateTime(r.responded_at) + autoSignTag(r);
             }
             h += '<div class="r-row" style="padding-left:10px;">'+esc(who)+'：'+txt+'</div>';
         });
     });
     $('#respList').html(h || '<span style="color:#8a6d45;">（無資料）</span>');
+}
+/* ============================================================ 圖章/回覆內容：畫面疊圖層與匯出PDF的共用判斷 ============================================================ */
+/** 樣板綁定的圖章模板 schema：本地覆蓋 noScale:true＝所見即所印，不縮小（使用者明確要求）；
+ *  不動 DB 裡模板本身的設定（同一個模板可能被其他頁面用 fillRatio 縮放模式消費，不能共用同一份物件改）。 */
+function fsdCaseStampSchema(){
+    if (CUR_SCHEMA && CUR_SCHEMA.stamp_tpl && CUR_SCHEMA.stamp_tpl.schema) return $.extend({}, CUR_SCHEMA.stamp_tpl.schema, {noScale:true});
+    return null;
+}
+/** 決定某個框現在該顯示什麼。畫面疊圖層(paintOverlay)與匯出PDF(fsdBuildOverlay)一律走這裡，不各寫一套——
+ *  兩邊規則一旦走鐘，就會變成「畫面看到的」跟「PDF 印出來的」不一樣。
+ *  回傳 {kind:'stamp',html} / {kind:'text',text} / {kind:'sod',text} / null（這個框現在沒東西） */
+function fsdBoxContent(f, r){
+    if (f.box_type === 'stamp' && CUR_CASE && CUR_CASE.case_kind === 'backfill'){
+        // 補案件：每個章各自帶人員與自己的圖章模板；日期一律用案件業務日期(2026-08-17使用者拍板)
+        var bfSchema = (f.stamp_tpl && f.stamp_tpl.schema) ? $.extend({}, f.stamp_tpl.schema, {noScale:true}) : null;
+        if (f.signer_name && window.EGStamp) return {kind:'stamp', html:EGStamp.stamp(f.signer_name, dispDate(CUR_CASE.business_date), false, bfSchema)};
+        return null;
+    }
+    if (f.box_type === 'stamp'){
+        // 圖章日期一律走 dispDate() 顯示成 YYYY.MM.DD(ai-rules/20)，不可直接丟原始的 YYYY-MM-DD
+        if (r && r.decision && r.decision !== 'skipped_sod' && window.EGStamp)
+            return {kind:'stamp', html:EGStamp.stamp(r.resolved_user_name, dispDate((r.responded_at||'').substring(0,10)), false, fsdCaseStampSchema())};
+        if (r && r.decision === 'skipped_sod') return {kind:'sod', text:'（迴避）'};
+        return null;
+    }
+    if (r && r.decision && r.decision !== 'skipped_sod'){
+        var decLabel = {agree:'同意', disagree:'不同意', approved:'核准', rejected:'駁回'}[r.decision] || r.decision;
+        return {kind:'text', text:'【'+decLabel+'】'+(r.reply_text||'')};
+    }
+    return null;
+}
+
+/* ============================================================ 匯出合成 PDF ============================================================
+   案件完成時自動產生一份定版 PDF 存進 NAS，列表可重複開啟列印與下載（2026-08-19 使用者要求）。
+   【為什麼圖章要在瀏覽器這邊轉成 PNG 再送後端】章長什麼樣子是 eg_stamp.js / eg_stamp_tpl.js 在瀏覽器算出來的
+   （含掃描實體章、圖章模板、代理「代」字），後端沒有同一套渲染器；要嘛在 PHP 重寫一份（兩邊遲早畫得不一樣），
+   要嘛把畫面上算好的章原樣送過去。選後者，所以「畫面看到的章」＝「PDF 裡的章」。
+   【畫質】章以 450dpi 等效解析度轉 PNG；文件本體則完全不經過轉圖——後端用 FPDI 直接匯入原始 PDF 頁面
+   （實測影像串流位元組 100% 原封不動搬過去），回覆文字也不轉圖，交給 TCPDF 畫成向量文字。
+   先前「PDF 比自己轉圖再上傳還糊」的根因是把整頁重畫成點陣圖，這條路徑完全不做那件事。 */
+var FSD_STAMP_DPI = 450, FSD_STAMP_MAX_PX = 1600, FSD_EXPORTING = false;
+
+/** 章列印時的實際尺寸(px)：未綁定圖章模板的回墨印/掃描章一律 91px（ai-rules/18 第6條，@media print 也是這個值）；
+ *  有綁定模板則用模板自己設定的大小。跟列印版同一套口徑，PDF 裡的章大小才會跟印出來的一致。 */
+function fsdStampPxSize($svg){
+    if ($svg.hasClass('car-stamp')) return {w:91, h:91};
+    var w = parseFloat($svg.attr('width')), h = parseFloat($svg.attr('height'));
+    if (!w || !h) return {w:91, h:91};
+    return {w:w, h:h};
+}
+/** 掃描實體章的底圖是 <image href="API?action=asset_img...">，SVG 被塞進 <img> 渲染時不會去載外部資源，
+ *  所以轉圖前一定要先換成 data: URI，否則畫出來會是一張沒有底圖的空章。 */
+function fsdInlineSvgImages(svgEl){
+    var nodes = svgEl.querySelectorAll('image');
+    if (!nodes.length) return Promise.resolve();
+    var jobs = [];
+    for (var i = 0; i < nodes.length; i++) {
+        (function(node){
+            var href = node.getAttribute('href') || node.getAttribute('xlink:href') || '';
+            if (!href || /^data:/i.test(href)) return;
+            jobs.push(fetch(href, {credentials:'same-origin'}).then(function(rp){ return rp.blob(); }).then(function(b){
+                return new Promise(function(res){
+                    var fr = new FileReader();
+                    fr.onload = function(){
+                        node.setAttribute('href', fr.result);
+                        node.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', fr.result);
+                        res();
+                    };
+                    fr.onerror = function(){ res(); };
+                    fr.readAsDataURL(b);
+                });
+            }).catch(function(){}));
+        })(nodes[i]);
+    }
+    return Promise.all(jobs);
+}
+/** 單一個章：SVG → 去背 PNG dataURL（畫布不鋪白，章必須透明才不會蓋掉底下的文件內容）。失敗回 null。 */
+function fsdStampToPng(svgEl, pxW, pxH){
+    return fsdInlineSvgImages(svgEl).then(function(){
+        svgEl.setAttribute('width', pxW);
+        svgEl.setAttribute('height', pxH);
+        if (!svgEl.getAttribute('xmlns')) svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        var url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svgEl));
+        return new Promise(function(resolve){
+            var img = new Image();
+            img.onload = function(){
+                var cv = document.createElement('canvas'); cv.width = pxW; cv.height = pxH;
+                cv.getContext('2d').drawImage(img, 0, 0, pxW, pxH);
+                try { resolve(cv.toDataURL('image/png')); } catch(e){ resolve(null); }
+            };
+            img.onerror = function(){ resolve(null); };
+            img.src = url;
+        });
+    });
+}
+/** 蒐集整份案件要疊上去的東西 → {stamps:[{page_no,x,y,w,h,png}], texts:[{page_no,x,y,w,h,text}]}
+ *  座標一律換算成「相對該頁的 0~1 分數」，跟畫面疊圖層用的是同一組數字。 */
+function fsdBuildOverlay(){
+    var bySlot = {};
+    (CUR_RESPONSES||[]).forEach(function(r){ bySlot[r.slot_key] = r; });
+    var pageById = {};
+    (CUR_CASE_PAGES||[]).forEach(function(p){ pageById[p.page_no] = p; });
+    var texts = [], jobs = [];
+    (CUR_FIELDS||[]).forEach(function(f){
+        var c = fsdBoxContent(f, bySlot[f.slot_key]);
+        if (!c) return;
+        var box = {page_no:parseInt(f.page_no,10), x:parseFloat(f.x), y:parseFloat(f.y), w:parseFloat(f.w), h:parseFloat(f.h)};
+        if (c.kind !== 'stamp'){ texts.push($.extend({text:c.text}, box)); return; }
+        var $svg = $('<div>').html(c.html).find('svg').first();
+        if (!$svg.length) return;
+        var p = pageById[box.page_no] || {width_pt:595, height_pt:842};
+        var docWmm = parseFloat(p.width_pt)/72*25.4, docHmm = parseFloat(p.height_pt)/72*25.4;
+        // 章不是拉滿整個框：畫面上 .fsd-box.stamp 是 flex 置中、列印用固定實際大小，這裡照同一套規則
+        // 換算出「章自己的矩形」（在框內置中），送給後端的是章的位置與大小，不是框的
+        var px = fsdStampPxSize($svg);
+        var wFrac = Math.min(1, (px.w/96*25.4) / docWmm), hFrac = Math.min(1, (px.h/96*25.4) / docHmm);
+        var rect = {page_no:box.page_no,
+                    x:Math.max(0, Math.min(1-wFrac, box.x + (box.w - wFrac)/2)),
+                    y:Math.max(0, Math.min(1-hFrac, box.y + (box.h - hFrac)/2)),
+                    w:wFrac, h:hFrac};
+        var pxW = Math.max(40, Math.min(FSD_STAMP_MAX_PX, Math.round(rect.w*docWmm/25.4*FSD_STAMP_DPI)));
+        var pxH = Math.max(40, Math.min(FSD_STAMP_MAX_PX, Math.round(rect.h*docHmm/25.4*FSD_STAMP_DPI)));
+        jobs.push({rect:rect, svg:$svg[0], pxW:pxW, pxH:pxH});
+    });
+    var stamps = [];
+    var chain = Promise.resolve();
+    jobs.forEach(function(j){
+        chain = chain.then(function(){
+            return fsdStampToPng(j.svg, j.pxW, j.pxH).then(function(png){
+                if (png) stamps.push($.extend({png:png}, j.rect));
+            });
+        });
+    });
+    return chain.then(function(){ return {stamps:stamps, texts:texts}; });
+}
+/** 產生並存檔。silent=true 為背景自動產生（失敗不吵使用者，只留 console，之後開啟 PDF 時會再試一次）。 */
+function fsdExportPdf(caseId, silent){
+    if (FSD_EXPORTING) return Promise.resolve(false);
+    FSD_EXPORTING = true;
+    return new Promise(function(resolve){
+        // 掃描實體章的對照表是非同步載入的，沒等到就轉圖會把有實體章的人存成預設SVG章（跟畫面看到的不一樣）
+        EGStamp.whenReady(function(){
+            fsdBuildOverlay().then(function(ov){
+                return $.post(API, {action:'case_export_pdf', csrf:META.csrf, case_id:caseId,
+                                    stamps:JSON.stringify(ov.stamps), texts:JSON.stringify(ov.texts)}, null, 'json');
+            }).then(function(res){
+                FSD_EXPORTING = false;
+                if (res && res.ok){
+                    if (CUR_CASE && String(CUR_CASE.id) === String(caseId)){ CUR_CASE.export_pdf_name = res.file_name; renderPdfButtons(); }
+                    resolve(true);
+                } else { if (!silent) alert((res && res.error) || 'PDF 產生失敗'); resolve(false); }
+            }).catch(function(e){
+                FSD_EXPORTING = false;
+                if (!silent) alert('PDF 產生失敗：' + (e && e.message ? e.message : '連線錯誤'));
+                else if (window.console) console.warn('[fsd] 背景產生 PDF 失敗', e);
+                resolve(false);
+            });
+        });
+    });
+}
+/** 開啟（瀏覽器內建檢視器，可直接按列印）／下載已存檔的合成PDF；還沒產生就先產生再開。 */
+function fsdOpenPdf(dl){
+    if (!CUR_CASE) return;
+    var id = CUR_CASE.id;
+    var go = function(){ window.open(API + '?action=case_export_file&id=' + id + (dl ? '&dl=1' : ''), '_blank'); };
+    if (CUR_CASE.export_pdf_name){ go(); return; }
+    $('#btnPdfOpen,#btnPdfDl').prop('disabled', true);
+    fsdExportPdf(id, false).then(function(ok){
+        $('#btnPdfOpen,#btnPdfDl').prop('disabled', false);
+        if (ok) go();
+    });
+}
+/** PDF 按鈕只在「已完成」的案件上出現（2026-08-19 使用者拍板：未簽完不可匯出，避免半成品被當成正式文件） */
+function renderPdfButtons(){
+    $('#btnPdfOpen,#btnPdfDl').toggle(!!(CUR_CASE && CUR_CASE.status === 'approved'));
 }
 function renderDocGrid(pages, fields){
     var bySlot = {};
@@ -1106,32 +1331,14 @@ function renderDocGrid(pages, fields){
     $('#docGrid').html(h);
     var fileType = CUR_CASE.file_type || 'image';
     var fileUrl = caseDocUrl(CUR_CASE, fileType);
-    // 圖章尺寸依綁定的圖章模板設定的公分數，不可縮小(使用者明確要求)：本地覆蓋noScale:true，
-    // 不動DB裡模板本身的設定(該模板可能同時被其他頁面用fillRatio縮放模式消費，不能共用一份schema物件改)。
-    var stampSchema = null;
-    if (CUR_SCHEMA.stamp_tpl && CUR_SCHEMA.stamp_tpl.schema) stampSchema = $.extend({}, CUR_SCHEMA.stamp_tpl.schema, {noScale:true});
     function paintOverlay(pageNo){
         var $pg = $('#docpg_'+pageNo);
         fields.filter(function(f){ return f.page_no == pageNo; }).forEach(function(f){
-            var r = bySlot[f.slot_key];
             var $box = $('<div class="fsd-box '+f.box_type+'"></div>').css({left:(f.x*100)+'%', top:(f.y*100)+'%', width:(f.w*100)+'%', height:(f.h*100)+'%'});
-            if (f.box_type === 'stamp' && CUR_CASE.case_kind === 'backfill') {
-                // 補案件：每個章各自帶人員與自己的圖章模板；日期一律用案件業務日期(2026-08-17使用者拍板)
-                var bfSchema = (f.stamp_tpl && f.stamp_tpl.schema) ? $.extend({}, f.stamp_tpl.schema, {noScale:true}) : null;
-                if (f.signer_name && window.EGStamp) $box.html(EGStamp.stamp(f.signer_name, dispDate(CUR_CASE.business_date), false, bfSchema));
-            } else if (f.box_type === 'stamp') {
-                if (r && r.decision && r.decision !== 'skipped_sod' && window.EGStamp) {
-                    // 圖章日期一律走 dispDate() 顯示成 YYYY.MM.DD(ai-rules/20)，不可直接丟原始的 YYYY-MM-DD
-                    $box.html(EGStamp.stamp(r.resolved_user_name, dispDate((r.responded_at||'').substring(0,10)), false, stampSchema));
-                } else if (r && r.decision === 'skipped_sod') {
-                    $box.html('<span class="sod-note">（迴避）</span>');
-                }
-            } else {
-                if (r && r.decision && r.decision !== 'skipped_sod') {
-                    var decLabel = {agree:'同意', disagree:'不同意', approved:'核准', rejected:'駁回'}[r.decision] || r.decision;
-                    $box.text('【'+decLabel+'】'+(r.reply_text||''));
-                }
-            }
+            var c = fsdBoxContent(f, bySlot[f.slot_key]);
+            if (c && c.kind === 'stamp') $box.html(c.html);
+            else if (c && c.kind === 'sod') $box.html('<span class="sod-note">'+esc(c.text)+'</span>');
+            else if (c && c.kind === 'text') $box.text(c.text);
             $pg.append($box);
         });
     }
@@ -1216,12 +1423,12 @@ function openFieldDesigner(id){
 $('#btnFieldBack').on('click', function(){ $('#fieldPanel').hide(); $('#listPanel').show(); FP_CASE=null; loadCases(); });
 function openReplaceFile(){ $('#rpFile').val(''); RP_FILES=[]; renderRpThumbs(); openMask('replaceMask'); }
 var RP_FILES = [];
-function rpFilesChanged(fileList){ RP_FILES = Array.prototype.slice.call(fileList); renderRpThumbs(); }
+function rpFilesChanged(fileList){ var f = fsdCheckFiles(fileList); if (f === null){ $('#rpFile').val(''); return; } RP_FILES = f; renderRpThumbs(); }
 function rpRemoveThumb(i){ RP_FILES.splice(i,1); renderRpThumbs(); }
 function renderRpThumbs(){
     var h = '';
     RP_FILES.forEach(function(f, i){
-        h += '<div class="thumb" draggable="true" data-idx="'+i+'"><img src="'+URL.createObjectURL(f)+'">'
+        h += '<div class="thumb" draggable="true" data-idx="'+i+'">'+fsdThumbInner(f)
            + '<span class="tno">'+(i+1)+'</span><span class="tdel" onclick="rpRemoveThumb('+i+')">×</span></div>';
     });
     var $g = $('#rpThumbs').html(h);
@@ -1239,7 +1446,7 @@ function renderRpThumbs(){
     });
 }
 function submitReplaceFile(){
-    if (!RP_FILES.length){ alert('請至少選擇一張圖片'); return; }
+    if (!RP_FILES.length){ alert('請選擇新文件（圖片或 PDF）'); return; }
     var fd = new FormData();
     fd.append('action','case_replace_file'); fd.append('csrf', META.csrf); fd.append('case_id', FP_CASE.id);
     RP_FILES.forEach(function(f){ fd.append('files[]', f); });

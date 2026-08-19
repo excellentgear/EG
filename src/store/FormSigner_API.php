@@ -9,6 +9,7 @@ session_start();
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/form_signer_lib.php';
+include_once $document_root . '/EGsystem/src/common/form_signer_pdf_lib.php';
 include_once $document_root . '/EGsystem/src/common/attach_lib.php';
 include_once $document_root . '/EGsystem/src/common/people_lib.php';
 include_once $document_root . '/EGsystem/src/common/org_role_lib.php';
@@ -17,7 +18,7 @@ include_once $document_root . '/EGsystem/src/common/confirm_password_lib.php';
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 // template_file/case_file/case_page_file 直接串流檔案內容，Content-Type 依檔案類型而定，其餘動作一律 JSON
-$fsdStreamActions = ['template_file', 'case_file', 'case_page_file'];
+$fsdStreamActions = ['template_file', 'case_file', 'case_page_file', 'case_export_file'];
 if (!in_array($action, $fsdStreamActions, true)) header('Content-Type: application/json; charset=utf-8');
 
 function jout($a) { echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
@@ -66,28 +67,48 @@ function fsd_check_upload_ext(): array {
     return ['ext'=>$ext, 'is_pdf'=>$isPdf];
 }
 /**
- * 案件圖片多檔上傳共用檢查(2026-08-14使用者明確要求：案件一律只能上傳圖片,不可PDF,可一次多張)。
- * $_FILES[$field]須為陣列上傳(<input multiple name="xxx[]">)。只接受png/jpg/jpeg，用getimagesize()
- * 量測尺寸(換算72dpi的pt，同前端img.naturalWidth/96*72換算慣例)。回傳依原始順序=page_no 1..N；
- * 任何一張不合格即整批中止(jerr直接結束)。
+ * 案件文件上傳共用檢查。兩種來源二擇一，回傳 form_signer_lib.php 的 $doc 結構：
+ *   ①多張圖片(png/jpg)，依上傳順序各成一頁 → ['type'=>'image','images'=>[...]]
+ *   ②單一 PDF（可多頁）                    → ['type'=>'pdf','file_name'=>..,'pages'=>[...]]
+ *
+ * PDF 於 2026-08-19 重新開放（2026-08-14 曾因畫質限定只能傳圖片，但那個糊來自前端把 PDF 重畫成
+ * 點陣圖，不是 PDF 本身；改用 FPDI 直接匯入原頁後畫質完全不損，見 form_signer_pdf_lib.php 檔頭）。
+ * PDF 一律在**上傳當下**就用 FPDI 試解析：讀不了（加密/損毀）直接擋下並說明原因，不接受、也不
+ * 偷偷降級成轉圖（使用者明確要求），順便把每頁尺寸量好，不必再靠前端量測。
+ * 任何一個檔案不合格即整批中止(jerr直接結束)。
  */
-function fsd_case_upload_images(PDO $db, string $field): array {
-    if (empty($_FILES[$field]) || empty($_FILES[$field]['name'][0])) jerr('請至少上傳一張圖片(案件僅接受圖片檔,不可上傳PDF)');
+function fsd_case_upload_doc(PDO $db, string $field): array {
+    if (empty($_FILES[$field]) || empty($_FILES[$field]['name'][0])) jerr('請上傳要簽核的文件（圖片 png/jpg 或 PDF）');
     $dir = fsd_case_attach_dir_safe($db);
     $n = count($_FILES[$field]['name']);
+    $exts = [];
+    for ($i = 0; $i < $n; $i++) $exts[] = strtolower(pathinfo((string)$_FILES[$field]['name'][$i], PATHINFO_EXTENSION));
+    $pdfCount = count(array_filter($exts, fn($e) => $e === 'pdf'));
+    if ($pdfCount > 0 && $pdfCount !== $n) jerr('PDF 不能和圖片混在一起上傳，請擇一：整份 PDF，或多張圖片');
+    if ($pdfCount > 1) jerr('一次只能上傳一份 PDF（PDF 本身可以是多頁）');
+
+    if ($pdfCount === 1) {
+        if ($_FILES[$field]['error'][0] !== UPLOAD_ERR_OK) jerr('PDF 上傳失敗');
+        $fname = 'fsdc_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.pdf';
+        $dest = $dir . $fname;
+        if (!move_uploaded_file($_FILES[$field]['tmp_name'][0], $dest)) jerr('檔案寫入失敗：' . $_FILES[$field]['name'][0], 500);
+        $probe = fsd_pdf_probe($dest);
+        if (!$probe['ok']) { @unlink($dest); jerr($probe['msg']); } // 擋下時順手刪掉已落地的檔，不留垃圾
+        return ['type'=>'pdf', 'file_name'=>$fname, 'pages'=>$probe['pages']];
+    }
+
     $images = [];
     for ($i = 0; $i < $n; $i++) {
         if ($_FILES[$field]['error'][$i] !== UPLOAD_ERR_OK) jerr('第' . ($i + 1) . '個檔案上傳失敗');
         $orig = (string)$_FILES[$field]['name'][$i];
-        $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
-        if (!in_array($ext, ['png', 'jpg', 'jpeg'], true)) jerr('案件僅接受圖片檔(png/jpg)，不可上傳PDF：' . $orig);
+        if (!in_array($exts[$i], ['png', 'jpg', 'jpeg'], true)) jerr('只接受圖片(png/jpg)或 PDF：' . $orig);
         $dim = @getimagesize($_FILES[$field]['tmp_name'][$i]);
         if (!$dim) jerr('無法讀取圖片尺寸，檔案可能已損毀：' . $orig);
-        $fname = 'fsdc_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '_' . $i . '.' . $ext;
+        $fname = 'fsdc_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '_' . $i . '.' . $exts[$i];
         if (!move_uploaded_file($_FILES[$field]['tmp_name'][$i], $dir . $fname)) jerr('檔案寫入失敗：' . $orig, 500);
         $images[] = ['file_name' => $fname, 'width_pt' => $dim[0] / 96 * 72, 'height_pt' => $dim[1] / 96 * 72];
     }
-    return $images;
+    return ['type'=>'image', 'images'=>$images];
 }
 
 switch ($action) {
@@ -352,21 +373,21 @@ case 'case_create_draft': {
     $tid = (int)($_POST['template_id'] ?? 0);
     $title = trim((string)($_POST['title'] ?? ''));
     $bizDate = trim((string)($_POST['business_date'] ?? '')) ?: date('Y-m-d');
-    $images = fsd_case_upload_images($db, 'files');
-    $r = fsd_case_create_draft_images($db, $tid, $uid, $uname, $title, $bizDate, $images);
+    $doc = fsd_case_upload_doc($db, 'files');
+    $r = fsd_case_create_draft_doc($db, $tid, $uid, $uname, $title, $bizDate, $doc);
     if (!$r['ok']) jerr($r['msg']);
     jout(['id'=>$r['id']]);
 }
 
-/** 草稿階段更換文件(換一份重新框選)：同樣一律圖片、可多張(2026-08-14使用者明確要求)。 */
+/** 草稿階段更換文件(換一份重新框選)：多張圖片或一份多頁PDF二擇一，已產生的匯出PDF一併作廢。 */
 case 'case_replace_file': {
     fsd_need_csrf();
     $id = (int)($_POST['case_id'] ?? 0);
     $case = fsd_case_get($db, $id);
     if (!$case) jerr('找不到此案件', 404);
     if ((int)$case['applicant_id'] !== $uid && !$perms['canAdmin']) jerr('只有申請人本人或管理員可以編輯', 403);
-    $images = fsd_case_upload_images($db, 'files');
-    $r = fsd_case_replace_file_images($db, $id, $images);
+    $doc = fsd_case_upload_doc($db, 'files');
+    $r = fsd_case_replace_file_doc($db, $id, $doc);
     if (!$r['ok']) jerr($r['msg']);
     jout([]);
 }
@@ -484,8 +505,8 @@ case 'backfill_create_draft': {
     $title   = trim((string)($_POST['title'] ?? ''));
     $bizDate = trim((string)($_POST['business_date'] ?? '')) ?: date('Y-m-d');
     $asDocId = (int)($_POST['as_doc_id'] ?? 0);
-    $images  = fsd_case_upload_images($db, 'files');
-    $r = fsd_backfill_create_draft($db, $uid, $uname, $title, $bizDate, $asDocId, $images);
+    $doc     = fsd_case_upload_doc($db, 'files');
+    $r = fsd_backfill_create_draft($db, $uid, $uname, $title, $bizDate, $asDocId, $doc);
     if (!$r['ok']) jerr($r['msg']);
     jout(['id'=>$r['id']]);
 }
@@ -606,6 +627,64 @@ case 'case_urge': {
     $r = fsd_case_urge($db, $id, $uid);
     if (!$r['ok']) jerr($r['msg']);
     jout([]);
+}
+
+/* ============================================================ 合成 PDF（完成後定版存檔，可重複開啟列印/下載） ============================================================ */
+
+/**
+ * 產生合成 PDF 並存進 NAS。案件「完成時」由前端自動呼叫一次（前端負責把每個圖章依畫面實際樣式
+ * 渲染成 6 倍解析度去背 PNG 傳上來——圖章長相是 eg_stamp.js/eg_stamp_tpl.js 在瀏覽器算出來的，
+ * 後端不重寫一套，避免兩邊畫出來的章不一樣）。若當下沒產生成功（關掉視窗等），之後任何人開啟
+ * PDF 時會再補產一次，所以這支是可重複執行的。
+ */
+case 'case_export_pdf': {
+    fsd_need_csrf();
+    $id = (int)($_POST['case_id'] ?? 0);
+    $case = fsd_case_get($db, $id);
+    if (!$case) jerr('找不到此案件', 404);
+    fsd_case_view_file_perm_check($db, $case, $uid, $perms);
+    if (!fsd_case_export_allowed($case)) jerr('只有已完成的案件才能匯出 PDF');
+
+    $stamps = json_decode((string)($_POST['stamps'] ?? '[]'), true);
+    $texts  = json_decode((string)($_POST['texts']  ?? '[]'), true);
+    if (!is_array($stamps)) $stamps = [];
+    if (!is_array($texts))  $texts  = [];
+    if (count($stamps) > FSD_BACKFILL_MAX_STAMPS * 2) jerr('圖章數量異常過多，請重新整理後再試');
+
+    $pages = fsd_case_pages_get($db, $id);
+    if (!$pages) jerr('此案件沒有頁面資料，無法匯出');
+
+    $dir  = fsd_case_attach_dir_safe($db);
+    $name = 'fsdpdf_' . $id . '_' . date('Ymd_His') . '_' . bin2hex(random_bytes(3)) . '.pdf';
+    $r = fsd_pdf_compose($case, $pages, rtrim($dir, '\/'), ['stamps'=>$stamps, 'texts'=>$texts],
+                         fsd_case_asdoc_no($db, $case), rtrim($dir, '\/') . DIRECTORY_SEPARATOR . $name);
+    if (!$r['ok']) jerr($r['msg'], 500);
+
+    // 舊的那份直接刪掉，不留一堆同一案件的歷史檔（案件完成後內容不會再變，留著只會佔空間又容易拿錯）
+    $old = trim((string)($case['export_pdf_name'] ?? ''));
+    if ($old !== '' && $old !== $name && is_file($dir . $old)) @unlink($dir . $old);
+    fsd_case_export_set($db, $id, $name, $r['mode']);
+    jout(['file_name'=>$name, 'mode'=>$r['mode']]);
+}
+
+/** 串流合成好的 PDF。dl=1 才是下載（Content-Disposition: attachment），預設 inline 讓瀏覽器直接開起來按列印。 */
+case 'case_export_file': {
+    $id = (int)($_GET['id'] ?? 0);
+    $case = fsd_case_get($db, $id);
+    if (!$case) jerr('找不到此案件', 404);
+    fsd_case_view_file_perm_check($db, $case, $uid, $perms);
+    if (!fsd_case_has_export($case)) jerr('此案件尚未產生 PDF', 404);
+    $fp = fsd_case_attach_dir_safe($db) . $case['export_pdf_name'];
+    if (!is_file($fp)) jerr('PDF 檔不存在或已被搬移，請重新產生', 404);
+    // 下載檔名用「案件標題-日期」，不用內部亂數檔名，使用者存到自己電腦才認得出是哪一份
+    $safe = preg_replace('/[\\\/:*?"<>|]+/u', '_', trim((string)$case['title']) ?: ('案件' . $id));
+    $show = $safe . '_' . (string)$case['business_date'] . '.pdf';
+    header('Content-Type: application/pdf');
+    header('Content-Length: ' . filesize($fp));
+    header('Content-Disposition: ' . (!empty($_GET['dl']) ? 'attachment' : 'inline')
+        . "; filename*=UTF-8''" . rawurlencode($show));
+    readfile($fp);
+    exit;
 }
 
 default: jerr('未知的操作：' . $action, 400);

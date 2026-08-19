@@ -97,14 +97,29 @@
     }
 
     // 對照表載入（非同步）：載到後把畫面上已渲染的章升級成掃描章；載入失敗一律回退純 SVG，不影響簽核顯示
+    // READY：對照表「已經有結果」（成功或失敗都算）的通知點。要把章轉成圖片存檔（如表單簽核設計器匯出 PDF）
+    // 的頁面必須等這個，否則對照表還沒回來就先畫，有掃描實體章的人會被存成預設 SVG 章，跟畫面上看到的不一樣。
+    var READY_CBS = [], READY = false;
+    function markReady() {
+        if (READY) return;
+        READY = true;
+        var cbs = READY_CBS; READY_CBS = [];
+        for (var i = 0; i < cbs.length; i++) { try { cbs[i](); } catch (e) {} }
+    }
+    function whenReady(cb) {
+        if (typeof cb !== 'function') return;
+        if (READY) { cb(); return; }
+        READY_CBS.push(cb);
+    }
     function loadAssets() {
         try {
-            $.getJSON(API, { action: 'asset_map' }).done(function (r) {
-                if (!r || !r.ok || !r.map) return;
-                ASSETS = r.map;
-                upgradeRendered(document);
-            });
-        } catch (e) {}
+            $.getJSON(API, { action: 'asset_map' })
+                .done(function (r) {
+                    if (r && r.ok && r.map) { ASSETS = r.map; upgradeRendered(document); }
+                    markReady();
+                })
+                .fail(function () { markReady(); });
+        } catch (e) { markReady(); }
     }
     function upgradeRendered(root) {
         if (!ASSETS) return;
@@ -170,8 +185,9 @@
     global.EGStamp = {
         stamp: stamp, row: row, badge: badge,                        // badge('sign'|'pending', size)：迷你章圖示（行事曆/列表用）
         scan: scanStamp, svg: svgStamp,                              // 圖章管理頁預覽用（可帶暫時的日期帶值）
-        setAssets: function (m) { ASSETS = m || {}; upgradeRendered(document); },
+        setAssets: function (m) { ASSETS = m || {}; upgradeRendered(document); markReady(); },
         hasAsset: function (name) { return !!(ASSETS && ASSETS[name]); },
-        upgrade: upgradeRendered                                     // 動態插入大量章後可手動再跑一次
+        upgrade: upgradeRendered,                                    // 動態插入大量章後可手動再跑一次
+        whenReady: whenReady                                         // 掃描章對照表載入完成（成功/失敗皆算）後回呼；要把章轉圖存檔的頁面必須等這個
     };
 })(window);
