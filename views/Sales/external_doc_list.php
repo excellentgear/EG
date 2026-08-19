@@ -183,6 +183,8 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
             <label>客戶</label>
             <input type="text" id="custKw" placeholder="ID/名稱模糊搜尋" style="height:30px;width:130px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;font-size:13px;">
             <select id="custSel"><option value="">全部客戶</option></select>
+            <label>料號</label>
+            <input type="text" id="partKw" placeholder="料號模糊搜尋" title="可打片段，多個關鍵字用空白分隔（每個都要命中）；不分大小寫、忽略空白" style="height:30px;width:150px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;font-size:13px;">
             <label>年度</label>
             <select id="yearSel"><option value="">全部年度</option></select>
             <label>PFMEA</label>
@@ -240,6 +242,7 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
             點<b>料號</b>可開啟文件；備註直接回寫到附件本體（其他頁面看到同一筆備註）；列印不帶備註。
             同一份文件在報價單與料號都掛了附件而重複時，用「排除」把重複那筆移到「已排除」分頁（可隨時加回）。
             要把某類附件納入本清單：至報價單頁或主檔管理的「附件類別標籤設定」勾選「列入外來文件清單」。
+            工具列的<b>料號</b>框可打片段模糊搜尋（多個關鍵字用空白分隔、不分大小寫、忽略空白），結果連動列印與 CSV。
             <b>PFMEA</b> 欄顯示該料號是否已在 PFMEA（潛在失效模式及效應分析）建表，可用工具列下拉篩選；
             「PFMEA 缺件偵測」找出 PFMEA 已建立卻沒有任何外來文件的料號，建立成「待補檔案」後可逐筆上傳補檔（可指定文件日期）。
         </div>
@@ -327,6 +330,7 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
         <ul>
             <li><b>範圍</b>：「有訂單綁定的料號」＝該料號曾被任何訂單綁定過（正式生產過的）；「所有有附件的料號」＝包含只報過價的。</li>
             <li><b>客戶</b>：可在搜尋框輸入客戶 ID 或名稱片段模糊過濾；<b>年度</b>＝附件上傳日期年度。</li>
+            <li><b>料號</b>：輸入料號片段即可模糊搜尋（不必打完整料號），不分大小寫、忽略空白；打多個關鍵字用空白分隔＝每個都要命中（例：「rc105 a」找得到 RC105-N03-A）。搜尋結果連動客戶/年度/類別選項、列印與 CSV，待補檔案分頁同樣適用。</li>
             <li><b>類別鈕</b>：點類別標籤只看該類別（顏色與列表標籤一致）。</li>
             <li><b>點料號</b>＝開啟該份文件；<b>備註</b>點鉛筆直接輸入，Enter 儲存、Esc 取消，會回寫到附件本體（主檔/報價頁看到同一筆備註）。</li>
             <li><b>排除</b>：同一份文件在報價單與料號兩邊都上傳過會重複出現，點「排除」把重複那筆移出清單；到「<b>已排除</b>」分頁可隨時「加回」。排除後列印與 CSV 也不會出現。</li>
@@ -412,7 +416,8 @@ function dispDate(d, withTime){ return (typeof egFmtDate === 'function') ? egFmt
 
 function filters(){
     return { mode: MODE, customer_id: $('#custSel').val()||'', year: $('#yearSel').val()||0,
-             category: CAT, pfmea: $('#pfmeaSel').val()||'' };
+             category: CAT, pfmea: $('#pfmeaSel').val()||'',
+             part_kw: $.trim($('#partKw').val()||'') };
 }
 function isPending(){ return VIEW === 'pending' || VIEW === 'ignored'; }
 
@@ -520,6 +525,12 @@ $('#custKw').on('input', function(){
         renderCustOptions(kw);
         if ($('#custSel').val() !== before) refreshAll();
     }, 250);
+});
+
+var partKwT = null;
+$('#partKw').on('input', function(){
+    clearTimeout(partKwT);
+    partKwT = setTimeout(refreshAll, 250);   // 料號模糊搜尋：連動列表/客戶年度類別選項/列印/CSV
 });
 
 function renderAsDoc(doc){
@@ -841,7 +852,8 @@ $('#perPageSel').on('change', function(){ PAGE=1; loadList(); });
 $('#btnCsv').on('click', function(){
     var f = filters();
     location.href = API + '?action=export_csv&mode='+f.mode+'&customer_id='+encodeURIComponent(f.customer_id)
-                  + '&year='+f.year+'&category='+f.category+'&pfmea='+encodeURIComponent(f.pfmea);
+                  + '&year='+f.year+'&category='+f.category+'&pfmea='+encodeURIComponent(f.pfmea)
+                  + '&part_kw='+encodeURIComponent(f.part_kw);
 });
 
 // ── 列印：依客戶分組；右下角固定頁尾＝AS 文件編號 ─────────────────────

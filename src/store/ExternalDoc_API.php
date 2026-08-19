@@ -145,15 +145,35 @@ function extdoc_pfmea_of(array $map, $dsPk, string $partNo): string {
     return ($txt !== '' && isset($map['by_no'][$txt])) ? $map['by_no'][$txt] : '';
 }
 
+// ── 共用：料號模糊搜尋 ─────────────────────────────────────────────
+// 多個關鍵字以空白分隔＝每個都要命中；比對前一律轉大寫並去掉空白（料號常被打成 rc105 n03）
+function extdoc_kw_terms(string $kw): array {
+    $kw = trim(str_replace("　", ' ', $kw));   // 全形空白視同空白
+    if ($kw === '') return [];
+    $out = [];
+    foreach (preg_split('/\s+/', $kw) as $t) {
+        $t = strtoupper(str_replace(' ', '', $t));
+        if ($t !== '') $out[] = $t;
+    }
+    return $out;
+}
+function extdoc_kw_match(array $terms, string $val): bool {
+    if (!$terms) return true;
+    $v = strtoupper(str_replace(' ', '', $val));
+    foreach ($terms as $t) if (strpos($v, $t) === false) return false;
+    return true;
+}
+
 /**
  * 撈出全部符合條件的外來文件列（兩來源合併，PHP 端整理）
- * $opt: mode('bound'|'all'), customer_id(''=全部), year(0=全部), pfmea(''|'yes'|'no')
+ * $opt: mode('bound'|'all'), customer_id(''=全部), year(0=全部), pfmea(''|'yes'|'no'), part_kw(料號模糊搜尋)
  */
 function extdoc_fetch_rows(PDO $db, array $opt): array {
  // 同一次請求內同條件只算一次（一次頁面載入會問到 4 次：清單、選項、待補計數、不列入計數）
  static $memo = [];
  $key = json_encode([$opt['mode'] ?? 'all', (string)($opt['customer_id'] ?? ''), (int)($opt['year'] ?? 0),
-                        (int)($opt['category'] ?? 0), $opt['show'] ?? 'active', $opt['pfmea'] ?? '']);
+                        (int)($opt['category'] ?? 0), $opt['show'] ?? 'active', $opt['pfmea'] ?? '',
+                        (string)($opt['part_kw'] ?? '')]);
  if (isset($memo[$key])) return $memo[$key];
  return $memo[$key] = extdoc_fetch_rows_raw($db, $opt);
 }
@@ -168,6 +188,7 @@ function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
     $catId    = (int)($opt['category'] ?? 0);   // 外來文件類別篩選（quotation_file_categories.id，0=全部）
     $show     = ($opt['show'] ?? 'active') === 'excluded' ? 'excluded' : 'active';   // excluded=只看已排除
     $pfmeaF   = in_array(($opt['pfmea'] ?? ''), ['yes','no'], true) ? $opt['pfmea'] : '';  // PFMEA 建立與否篩選
+    $partKw   = extdoc_kw_terms((string)($opt['part_kw'] ?? ''));   // 料號模糊搜尋（多關鍵字全部命中才算）
     $pfmeaMap = extdoc_pfmea_map($db);
 
     // 排除清單（附件×料號為單位）：active 檢視要跳過、excluded 檢視只留這些
@@ -323,6 +344,7 @@ function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
     $out = [];
     $seen = [];
     foreach ($rows as $r) {
+        if (!extdoc_kw_match($partKw, (string)$r['part_no'])) continue;   // 料號模糊搜尋
         $dedupKey = $r['source'] . '|' . $r['attach_id'] . '|' . $r['ds_pk'];
         if (isset($seen[$dedupKey])) continue;
         $seen[$dedupKey] = 1;
@@ -556,6 +578,7 @@ case 'get_options':
     $selYear = (int)($_POST['year'] ?? 0);
     $selCat  = (int)($_POST['category'] ?? 0);
     $selPf   = in_array(($_POST['pfmea'] ?? ''), ['yes','no'], true) ? $_POST['pfmea'] : '';
+    $selKw   = extdoc_kw_terms((string)($_POST['part_kw'] ?? ''));
     $all = extdoc_fetch_rows($db, ['mode'=>$selMode]);
     $custs = []; $years = []; $presentCats = [];
     foreach ($all as $r) {
@@ -565,6 +588,7 @@ case 'get_options':
         $mCat  = !$selCat  || in_array($selCat, $r['category_ids']);
         $mPf   = $selPf === '' || ($selPf === 'yes' ? $r['has_pfmea'] : !$r['has_pfmea']);
         if (!$mPf) continue;   // PFMEA 篩選對每個維度都成立，直接先過濾
+        if (!extdoc_kw_match($selKw, (string)$r['part_no'])) continue;   // 料號模糊搜尋同理
         if ($mYear && $mCat && $r['customer_id'] !== '') $custs[$r['customer_id']] = $r['customer_name'];
         if ($mCust && $mCat && $y) $years[$y] = 1;
         if ($mCust && $mYear) foreach ($r['category_ids'] as $cid) $presentCats[$cid] = 1;
@@ -607,6 +631,8 @@ case 'get_list':
         $rows = extdoc_pending_rows($db, $showArg);
         $selCust = trim((string)($_POST['customer_id'] ?? ''));
         if ($selCust !== '') $rows = array_values(array_filter($rows, fn($r) => $r['customer_id'] === $selCust));
+        $selKw = extdoc_kw_terms((string)($_POST['part_kw'] ?? ''));
+        if ($selKw) $rows = array_values(array_filter($rows, fn($r) => extdoc_kw_match($selKw, (string)$r['part_no'])));
     } else {
         $rows = extdoc_fetch_rows($db, [
             'mode'        => $_POST['mode'] ?? 'all',
@@ -614,6 +640,7 @@ case 'get_list':
             'year'        => (int)($_POST['year'] ?? 0),
             'category'    => (int)($_POST['category'] ?? 0),
             'pfmea'       => $_POST['pfmea'] ?? '',
+        'part_kw'     => $_POST['part_kw'] ?? '',
             'show'        => $showArg,
         ]);
     }
@@ -642,6 +669,7 @@ case 'get_print':
         'year'        => (int)($_POST['year'] ?? 0),
         'category'    => (int)($_POST['category'] ?? 0),
         'pfmea'       => $_POST['pfmea'] ?? '',
+        'part_kw'     => $_POST['part_kw'] ?? '',
     ]);
     $groups = [];
     foreach ($rows as $r) {
@@ -666,6 +694,7 @@ case 'export_csv':
         'year'        => (int)($_GET['year'] ?? 0),
         'category'    => (int)($_GET['category'] ?? 0),
         'pfmea'       => $_GET['pfmea'] ?? '',
+        'part_kw'     => $_GET['part_kw'] ?? '',
     ]);
     $unit = extdoc_issue_unit($db);
     header('Content-Type: text/csv; charset=utf-8');
