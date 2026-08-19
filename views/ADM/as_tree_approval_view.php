@@ -55,11 +55,28 @@ if ($asId > 0) {
 $title = $asDoc ? $asDoc['doc_name'] : 'AS 文件結構總覽';
 
 // 內容：各階文件（只列送審快照涵蓋的階層，順序照快照）
-$docs = $db->query("SELECT d.doc_no, d.doc_name, d.doc_level, d.current_version, dep.name AS dept_name, v.revised_date
+$docs = $db->query("SELECT d.id, d.parent_doc_id, d.doc_no, d.doc_name, d.doc_level, d.current_version, dep.name AS dept_name, v.revised_date
                     FROM as_document d
                     LEFT JOIN department dep ON dep.id = d.department_id
                     LEFT JOIN as_document_version v ON v.id = d.current_version_id
                     WHERE d.is_deleted = 0 ORDER BY d.doc_no")->fetchAll(PDO::FETCH_ASSOC);
+/* 列印排除項目：優先用送審快照裡記的那份（＝核准人看到的就是送審當下的內容），
+   舊快照沒有這個欄位才退回目前設定。勾選的只有上階，子文件在這裡依 parent_doc_id 展開。 */
+$exIds = array_key_exists('exclude_ids', (array)$snap)
+       ? array_map('intval', (array)$snap['exclude_ids'])
+       : array_filter(array_map('intval', explode(',', $getSet('as_doc_tree_exclude_ids'))));
+$exSet = [];
+foreach ($exIds as $i) if ($i > 0) $exSet[$i] = true;
+if ($exSet) {
+    $kids = [];
+    foreach ($docs as $d) $kids[(int)$d['parent_doc_id']][] = (int)$d['id'];
+    $stack = array_keys($exSet);
+    while ($stack) {
+        $cur = array_pop($stack);
+        foreach ($kids[$cur] ?? [] as $c) if (!isset($exSet[$c])) { $exSet[$c] = true; $stack[] = $c; }
+    }
+    $docs = array_values(array_filter($docs, fn($d) => !isset($exSet[(int)$d['id']])));
+}
 $levels = $snap ? array_column($snap['pages'] ?? [], 'level') : ['一階','二階','三階','四階'];
 $dateOf = [];
 foreach (($snap['pages'] ?? []) as $p) $dateOf[$p['level']] = $p['date'];

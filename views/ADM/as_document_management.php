@@ -342,6 +342,7 @@ if ($deptPerm === 'R') {
           📕手冊　📘程序書　📗標準書　📄表單｜點文件名稱＝跳至該文件；▸/▾ 可收合展開。
           <label style="font-weight:normal;margin-left:10px;" title="勾選＝連已廢止的文件一起列出，備註欄顯示廢止日期（已刪除的文件一律不列）"><input type="checkbox" id="treeShowObsolete"> 含已廢止</label>
           <span style="margin-left:10px;">AS 文件編號：<b id="treeAsDocNo">尚未綁定</b></span>
+          <span id="treeExclHint" style="display:none;color:#8A5A2B;">｜每列左側的勾選框＝<b>列印排除</b>：勾了這份文件，它<b>底下所有表單也一起不印</b>（之後新增到它底下的表單同樣不印）。變更會立即儲存，並使已核准的總覽表失效需重新送審。</span>
         </p>
         <div id="treeBody" style="font-size:13px;line-height:1.9;"></div>
       </div>
@@ -1522,17 +1523,23 @@ $(function(){
 
   // ══ 結構總覽（樹狀圖：依部門代碼分組＋表格式欄位對齊） ══
   const TYPE_ICON = {'手冊':'📕','程序':'📘','標準書':'📗','表單':'📄'};
-  function treeNodeHtml(d, depth, hasKids){
+  function treeNodeHtml(d, depth, hasKids, exSelf, exByParent){
     const icon = TYPE_ICON[d.doc_type] || '📄';
+    // 列印排除：勾了這一份，底下所有子文件（表單）自動跟著不印；子文件顯示為唯讀勾選
+    const exBox = canS
+      ? `<input type="checkbox" class="tree-excl" data-id="${d.id}" ${exSelf||exByParent?'checked':''} ${exByParent?'disabled':''}
+           title="${exByParent?'已隨上階文件一起排除':'勾選＝這份文件與其底下所有表單都不列印'}" style="margin:0 4px 0 0;vertical-align:middle;">`
+      : (exSelf||exByParent ? '<span title="不列印" style="color:#c0392b;margin-right:4px;">✕</span>' : '');
     const caret = hasKids ? `<a href="javascript:void(0)" class="tree-toggle" style="display:inline-block;width:14px;color:#888;text-decoration:none;">▾</a>` : `<span style="display:inline-block;width:14px;"></span>`;
     const rc  = parseInt(d.record_count)||0;
     const recBadge = rc>0 ? `<a href="javascript:void(0)" class="tree-recbadge label label-warning" data-id="${d.id}" data-type="${esc(d.doc_type)}" title="點擊展開附件清單（可預覽/下載）" style="font-size:10px;cursor:pointer;">${d.doc_type==='表單'?'紀錄':'附件'}×${rc} <i class="fa fa-caret-down"></i></a>` : '';
     const isOb = d.is_obsolete==1;
     const del = isOb ? `<span class="label ob-tag" style="font-size:10px;" title="廢止日期 ${esc(dispDate(d.obsolete_date||''))}">廢</span>` : '';
     // 表格式欄位：名稱欄吃縮排，版本/紀錄/部門固定寬度＝虛擬框線對齊
+    const exSty = (exSelf||exByParent) ? 'opacity:.5;text-decoration:line-through;' : '';
     return `<div class="tree-row${isOb?' tree-obsolete':''}" style="display:flex;align-items:center;border-bottom:1px dashed #eee;padding:1px 0;">
       <div style="flex:1;min-width:0;padding-left:${depth*22}px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-        ${caret}${icon} <a href="javascript:void(0)" class="tree-doc" data-no="${esc(d.doc_no)}" title="${esc(d.doc_no)} ${esc(d.doc_name)}｜點擊跳至此文件"><strong>${esc(d.doc_no)}</strong> ${esc(d.doc_name)}</a>
+        ${caret}${exBox}${icon} <a href="javascript:void(0)" class="tree-doc" data-no="${esc(d.doc_no)}" style="${exSty}" title="${esc(d.doc_no)} ${esc(d.doc_name)}｜點擊跳至此文件"><strong>${esc(d.doc_no)}</strong> ${esc(d.doc_name)}</a>
       </div>
       <div style="flex:0 0 56px;text-align:center;">${d.current_version?`<span class="label label-info" style="font-size:10px;">${esc(d.current_version)}</span>`:''}</div>
       <div style="flex:0 0 72px;text-align:center;">${recBadge}</div>
@@ -1544,14 +1551,16 @@ $(function(){
     const kids = {};
     docs.forEach(d=>{ const p=d.parent_doc_id||0; (kids[p]=kids[p]||[]).push(d); });
     Object.values(kids).forEach(a=>a.sort((x,y)=>String(x.doc_no).localeCompare(String(y.doc_no))));
-    let count=0;
-    function walk(list, depth){
+    let count=0, exCount=0;
+    function walk(list, depth, exByParent){
       let html='';
       (list||[]).forEach(d=>{
         count++;
+        const exSelf = TREE_EXCL.has(String(d.id));
+        if(exSelf || exByParent) exCount++;
         const c = kids[d.id]||[];
-        html += `<div class="tree-node">` + treeNodeHtml(d, depth, c.length>0);
-        if(c.length) html += `<div class="tree-kids">` + walk(c, depth+1) + `</div>`;
+        html += `<div class="tree-node">` + treeNodeHtml(d, depth, c.length>0, exSelf, exByParent);
+        if(c.length) html += `<div class="tree-kids">` + walk(c, depth+1, exSelf||exByParent) + `</div>`;
         html += `</div>`;
       });
       return html;
@@ -1576,7 +1585,7 @@ $(function(){
           <i class="fa fa-folder-open" style="color:#3498db;"></i> ${esc(label)}
           <span class="text-muted" style="font-weight:normal;font-size:11px;">（${groups[k].length} 份頂層文件）</span>
         </div>
-        <div class="tree-kids">${walk(groups[k], 1)}</div>
+        <div class="tree-kids">${walk(groups[k], 1, false)}</div>
       </div>`;
     });
     const header = `<div style="display:flex;font-weight:bold;font-size:11px;color:#888;border-bottom:1px solid #ddd;padding-bottom:2px;">
@@ -1587,14 +1596,32 @@ $(function(){
       <div style="flex:0 0 30px;"></div>
     </div>`;
     $('#treeBody').html(html ? header+html : '<div class="text-muted">尚無文件</div>');
-    $('#treeInfo').text(`共 ${count} 份文件`);
+    $('#treeInfo').text(`共 ${count} 份文件` + (exCount ? `（其中 ${exCount} 份不列印）` : ''));
   }
   let TREE_DOCS = [], TREE_META = {company_name:'', as_doc:null, as_docs:[]}, TREE_SIGN = {approver:null, editors:[]};
+  let TREE_EXCL = new Set();   // 列印排除項目：只放「使用者實際勾選的那幾份」的 id（字串）
   const TREE_LEVELS = ['一階','二階','三階','四階'];
-  /** 要印的階層（沒有文件的階不印）＋各階最新修改日期 */
+  /** 排除項目展開成「含底下所有子文件」的 id 集合——勾程序書＝連它的表單一起不印，
+   *  之後在該程序書底下新增的表單也會自動跟著不印（不必回頭再勾一次） */
+  function treeExcludedAll(){
+    const out = new Set();
+    if(!TREE_EXCL.size) return out;
+    const kids = {};
+    TREE_DOCS.forEach(d=>{ const k=String(d.parent_doc_id||0); (kids[k]=kids[k]||[]).push(String(d.id)); });
+    const stack = [];
+    TREE_EXCL.forEach(id=>{ out.add(String(id)); stack.push(String(id)); });
+    while(stack.length){
+      const cur = stack.pop();
+      (kids[cur]||[]).forEach(c=>{ if(!out.has(c)){ out.add(c); stack.push(c); } });
+    }
+    return out;
+  }
+  /** 要印的階層（沒有文件的階不印）＋各階最新修改日期；排除項目在這裡就先濾掉，
+   *  所以各階的「最新修改日期」與簽章日期算的都是實際會印出來的那些文件 */
   function treePages(){
+    const ex = treeExcludedAll();
     return TREE_LEVELS.map(lv=>{
-      const rows = TREE_DOCS.filter(d=>String(d.doc_level||'')===lv)
+      const rows = TREE_DOCS.filter(d=>String(d.doc_level||'')===lv && !ex.has(String(d.id)))
                             .sort((a,b)=>String(a.doc_no).localeCompare(String(b.doc_no)));
       const dates = rows.map(d=>(d.revised_date||'').substring(0,10)).filter(Boolean).sort();
       return {level:lv, rows:rows, date: dates.length ? dates[dates.length-1] : ''};
@@ -1662,6 +1689,19 @@ $(function(){
     $('#treeSignPreview').html(rows.length ? ('各階簽章：'+rows.join('　｜　')) : '');
   }
   $(document).on('change','#treeSigner', renderTreeSignPreview);
+  /* 列印排除項目：勾了就存（文管設定權限才看得到勾選框，後端同樣以 settings 守門）。
+     排除會改變各階的份數與最新修改日期＝簽章日期，所以存完要重抓簽章人並重算核准是否還有效。 */
+  $(document).on('change','#treeBody .tree-excl', function(){
+    const id = String($(this).data('id'));
+    if($(this).is(':checked')) TREE_EXCL.add(id); else TREE_EXCL.delete(id);
+    const ids = []; TREE_EXCL.forEach(v=>ids.push(v));
+    $.post(API, {action:'save_tree_exclude', ids: ids.join(',')}, r=>{
+      if(r.status!=='success'){ alert(r.message||'儲存失敗'); }
+      else TREE_EXCL = new Set((r.exclude_ids||[]).map(String));
+      renderTree(TREE_DOCS);
+      loadTreeSigners();   // 內部會接著 renderTreeApprovalBar()
+    }, 'json').fail(()=>alert('排除設定儲存失敗'));
+  });
   function renderTreeAsDoc(){
     const d = TREE_META.as_doc;
     $('#treeAsDocNo').text(d ? (d.doc_no+'　'+d.doc_name) : '尚未綁定');
@@ -1671,6 +1711,8 @@ $(function(){
       if(r.status!=='success') return;
       TREE_META = {company_name:r.company_name||'', as_doc:r.as_doc||null, as_docs:r.as_docs||[],
                    auto_approve: !!r.auto_approve, approved: r.approved||null, pending: r.pending||null};
+      TREE_EXCL = new Set((r.exclude_ids||[]).map(String));
+      if(TREE_DOCS.length) renderTree(TREE_DOCS);   // 排除清單比樹先/後到都要能正確標示
       window.__ownCompany = TREE_META.company_name;   // eg_stamp.js 畫章時用
       $('#set_tree_auto').prop('checked', TREE_META.auto_approve);
       renderTreeAsDoc();
@@ -1693,8 +1735,8 @@ $(function(){
     $('#btnTreeSubmitApproval').prop('disabled', !!pd);
   }
   /** 核准比對鍵：階層＋簽章日期＋該階的修改簽章人（任期改了＝簽章會變，要重新送審） */
-  function treeSignKeyNow(){ return JSON.stringify(treePages().map(p=>[p.level,p.date,treeEditorFor(p).name])); }
-  function treeSignKeySnap(ap){ return JSON.stringify((ap.pages||[]).map(p=>[p.level,p.date,p.editor_name||ap.editor_name||''])); }
+  function treeSignKeyNow(){ return JSON.stringify(treePages().map(p=>[p.level,p.date,treeEditorFor(p).name,p.rows.length])); }
+  function treeSignKeySnap(ap){ return JSON.stringify((ap.pages||[]).map(p=>[p.level,p.date,p.editor_name||ap.editor_name||'',parseInt(p.count)||0])); }
   /** 目前的核准快照是否對應現在的內容（決定列印要不要蓋章） */
   function treeApprovedNow(){
     if(TREE_META.auto_approve) return true;
@@ -1727,7 +1769,7 @@ $(function(){
       TREE_META.auto_approve = !!v; renderTreeApprovalBar();
     }, 'json');
   });
-  $('#btnTree').on('click', function(){ loadTree(); loadTreeMeta(); if(canS) $('#btnTreeAsDoc').show(); $('#treeModal').modal('show'); });
+  $('#btnTree').on('click', function(){ loadTree(); loadTreeMeta(); if(canS){ $('#btnTreeAsDoc').show(); $('#treeExclHint').show(); } $('#treeModal').modal('show'); });
 
   // ── AS 文件編號綁定 ──────────────────────────────────────────
   function renderTreeAsSel(kw){

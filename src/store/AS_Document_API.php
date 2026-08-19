@@ -146,6 +146,30 @@ function asTreeBoundDoc(PDO $db): ?array {
     $r['doc_no'] = eg_asdoc_no($r);
     return $r;
 }
+/* ── 文件管制總覽表：列印排除項目 ──────────────────────────────────
+ * 設定鍵 as_doc_tree_exclude_ids 只存「使用者實際勾選的那幾份」（CSV of doc id）；
+ * 底下的子文件（表單）不逐一存，而是列印當下依 parent_doc_id 現場展開——
+ * 這樣之後在被排除的程序書底下新增表單，也會自動跟著不印，不必回頭再勾一次。 */
+function asTreeExcludeIds(PDO $db): array {
+    $raw = asGetSetting($db, 'as_doc_tree_exclude_ids');
+    return array_values(array_unique(array_filter(array_map('intval', explode(',', $raw)))));
+}
+/** 把勾選的排除項目展開成「含所有子孫」的 id 集合（回傳 id=>true） */
+function asTreeExcludeExpand(PDO $db, array $ids): array {
+    $out = [];
+    foreach ($ids as $i) { $i = (int)$i; if ($i > 0) $out[$i] = true; }
+    if (!$out) return $out;
+    $kids = [];
+    foreach ($db->query("SELECT id, parent_doc_id FROM as_document WHERE is_deleted=0")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $kids[(int)$r['parent_doc_id']][] = (int)$r['id'];
+    }
+    $stack = array_keys($out);
+    while ($stack) {
+        $cur = array_pop($stack);
+        foreach ($kids[$cur] ?? [] as $c) { if (!isset($out[$c])) { $out[$c] = true; $stack[] = $c; } }
+    }
+    return $out;
+}
 /* ── 修改（製表）簽章人員任期 ──────────────────────────────────────
  * 文件管制總覽表各階的簽章日期＝該階最新修改日期，可能是好幾年前；
  * 那時的 AS 負責人不一定是現任（例：2026-07-13 交接），一律蓋現任＝簽章不實。
@@ -419,6 +443,7 @@ $asGate = [
     'get_perms'=>'settings', 'save_perms'=>'settings',
     'get_settings'=>'settings', 'save_settings'=>'settings', 'upload_template'=>'settings',
     'tree_print_meta'=>'view', 'save_tree_as_doc'=>'settings', 'tree_signers'=>'view',
+    'save_tree_exclude'=>'settings',   // 列印排除項目＝文管設定權限才能改（會影響正式文件內容）
     'save_tree_auto'=>'settings', 'tree_submit_approval'=>'update',
     'tree_editor_terms'=>'view', 'save_tree_editor_terms'=>'settings',
     // tree_approval_decide 於 case 內檢查（核准人本人／管理員），核准人不一定有 AS 文件角色
@@ -1235,6 +1260,7 @@ case 'tree_print_meta':
           'company_name'=>asOwnCompanyName($db),
           'as_doc'=>asTreeBoundDoc($db),
           'auto_approve'=>asGetSetting($db,'as_doc_tree_auto_approve')==='1',
+          'exclude_ids'=>asTreeExcludeIds($db),
           'approved'=>json_decode(asGetSetting($db,'as_doc_tree_approved') ?: 'null', true),
           'pending'=>$pending,
           'as_docs'=>$db->query("SELECT id, doc_no, doc_name FROM as_document WHERE is_deleted=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC)]);
@@ -1242,6 +1268,21 @@ case 'tree_print_meta':
 case 'save_tree_auto':
     asSetSetting($db, 'as_doc_tree_auto_approve', ($_POST['auto'] ?? '0')==='1' ? '1' : '0');
     jout(['status'=>'success']);
+
+// 文件管制總覽表的「列印排除項目」：只存使用者勾選的那幾份，子文件列印當下才展開
+case 'save_tree_exclude':
+    $ids = array_values(array_unique(array_filter(array_map('intval',
+             explode(',', (string)($_POST['ids'] ?? ''))))));
+    if ($ids) {
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        $st = $db->prepare("SELECT id FROM as_document WHERE id IN ($in) AND is_deleted=0");
+        $st->execute($ids);
+        $ok = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+        if (count($ok) !== count($ids)) jout(['status'=>'error','message'=>'排除清單中有不存在或已刪除的文件，請重新整理後再試']);
+        $ids = $ok;
+    }
+    asSetSetting($db, 'as_doc_tree_exclude_ids', implode(',', $ids));
+    jout(['status'=>'success','exclude_ids'=>$ids]);
 
 // 送出審核（未開「自動核可」時）：留 approval_record＋發待簽核通知給最高核准人員（ai-rules/17）
 case 'tree_submit_approval':
@@ -1272,6 +1313,8 @@ case 'tree_submit_approval':
     asSetSetting($db, 'as_doc_tree_pending_id', (string)$apId);
     asSetSetting($db, 'as_doc_tree_pending', json_encode([
         'approval_id'=>$apId, 'pages'=>$pages, 'editor_id'=>$edId, 'editor_name'=>$edName,
+        // 排除項目一起入快照：核准人在審核頁看到的內容＝核准後實際會印的內容
+        'exclude_ids'=>asTreeExcludeIds($db),
         'approver_id'=>(int)$ap['id'], 'approver_name'=>$ap['user_cname'],
         'submitted_by'=>$currentUserId, 'submitted_by_name'=>$currentCname, 'submitted_at'=>date('Y-m-d H:i'),
     ], JSON_UNESCAPED_UNICODE));
