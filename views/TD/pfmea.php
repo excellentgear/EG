@@ -1044,12 +1044,18 @@ window.batchPrint = function(){
         // 註：列印前的「欄位完整性檢查」對每一份仍會生效，缺欄位的那份會先跳出清單讓您決定
     })();
 };
-function loadList(){
+/* keepPage=true：重新載入但停在原本那一頁、原本的捲動位置（2026-08-18 使用者要求）。
+   列印後為了更新「最新列印」欄會重抓清單，若照預設跳回第 1 頁，
+   正在第 2 頁逐份列印的人每印一份就被彈回開頭。 */
+function loadList(keepPage){
+    var keepAt = keepPage ? PG_PAGE : 0;
+    var keepTop = keepPage ? $(window).scrollTop() : null;
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
         if (!res.success){ $('#pfBody').html('<tr><td colspan="11" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
         LIST_ROWS = res.rows || [];
-        PG_PAGE = 1;
+        PG_PAGE = keepAt || 1;          // renderList 內會再夾在有效頁數範圍內
         renderList();
+        if (keepTop !== null) $(window).scrollTop(keepTop);
     });
 }
 function renderListRows(rows){
@@ -2165,10 +2171,13 @@ function saveHeader(){
         new_revision: newRevision,
     };
     if (CAN_EDIT) registerNewRefValues();
+    var wasNew = !CUR_ID;
     $.post(API, payload, function(res){
         if (!res.success){ alert(res.message||'儲存失敗'); return; }
         registerPartCombos();          // 自動建立此料號與用到的整組關聯（手動新建的單據同樣適用）
-        closeMask('editMask'); loadList();
+        closeMask('editMask');
+        // 改既有單據就留在原本那一頁；新建的回第 1 頁，否則新列排在最前面、停在第2頁會看不到
+        loadList(!wasNew);
     }, 'json');
 }
 
@@ -2176,7 +2185,7 @@ function delDoc(id){
     if (!confirm('確定刪除此筆PFMEA分析表？')) return;
     $.post(API, {action:'delete_header', id:id}, function(res){
         if (!res.success){ alert(res.message||'刪除失敗'); return; }
-        loadList();
+        loadList(true);
     }, 'json');
 }
 
@@ -2446,7 +2455,7 @@ var PRINT_KIND = 'single';   // batchPrint 期間會切成 'batch'
 function doPrintDoc(res){
         // 列印紀錄：這裡才是真的開視窗送印的位置；viewDoc 只是唯讀檢視不計入
         if (res.doc && res.doc.id) {
-            $.post(API, {action:'print_log_add', id:res.doc.id, kind:PRINT_KIND}, function(){ loadList(); }, 'json');
+            $.post(API, {action:'print_log_add', id:res.doc.id, kind:PRINT_KIND}, function(){ loadList(true); }, 'json');
         }
         var pd = buildPrintDoc(res);
         var w = window.open('', '_blank');
