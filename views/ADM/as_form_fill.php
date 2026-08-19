@@ -63,7 +63,6 @@ try {
 <?php include '../partPage/sideAndTopBarMenu.html' ?>
 <div class="right_col" role="main">
   <div class="form-toolbar">
-    <a class="btn btn-default btn-sm" href="as_form_list.php" title="回表單清單"><i class="fa fa-list"></i> 返回清單</a>
     <button class="btn btn-default btn-sm act-save" id="btnSaveDraft"><i class="fa fa-save"></i> 存草稿</button>
     <button class="btn btn-success btn-sm act-submit" id="btnSubmit" data-submit><i class="fa fa-paper-plane"></i> 送出簽核</button>
     <button class="btn btn-warning btn-sm" onclick="window.print()"><i class="fa fa-print"></i> 列印(預覽)</button>

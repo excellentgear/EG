@@ -552,6 +552,17 @@ case 'get_document':
     $vs->execute([$id]);
     $doc['versions'] = $vs->fetchAll(PDO::FETCH_ASSOC);
 
+    // 線上「文件制、修申請單」(2-DC-01-01) 自動連結：每個版本掛上對應的線上申請單（沒有就是 null）
+    // 由 doc_apply.as_version_id 連過來；掃描頁「建議建立」會把缺的補上。
+    try {
+        require_once __DIR__ . '/../common/doc_apply_lib.php';
+        foreach ($doc['versions'] as &$_v) { $_v['online_apply'] = da_apply_for_version($db, (int)$_v['id']); }
+        unset($_v);
+    } catch (Throwable $e) {
+        foreach ($doc['versions'] as &$_v) { $_v['online_apply'] = null; }
+        unset($_v);
+    }
+
     $tg = $db->prepare("SELECT t.id,t.name,t.color FROM as_doc_tag_map m JOIN as_doc_tag t ON t.id=m.tag_id WHERE m.doc_id=? ORDER BY t.sort_order");
     $tg->execute([$id]);
     $doc['tags'] = $tg->fetchAll(PDO::FETCH_ASSOC);

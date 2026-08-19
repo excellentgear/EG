@@ -366,6 +366,7 @@ $_hrfRoles      = [];  $_userHrfRoles    = [];
 $_fsdRoles      = [];  $_userFsdRoles    = [];
 $_eqmRoles      = [];  $_userEqmRoles    = [];
 $_btrpRoles     = [];  $_userBtrpRoles   = [];
+$_dapRoles      = [];  $_userDapRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -410,6 +411,7 @@ try {
     $st->execute(['form_signer']); $_fsdRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['equip_machine']); $_eqmRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['business_trip']); $_btrpRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['doc_apply']); $_dapRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -569,6 +571,10 @@ try {
     $st->execute(['business_trip']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userBtrpRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['doc_apply']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userDapRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -799,6 +805,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'pfmea-role-section'     => 'PFMEA',
                                         'eqm-role-section'       => '機台設備一覽表',
                                         'btrp-role-section'      => '公出單',
+                                        'dap-role-section'       => '文件制修申請單',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -1269,6 +1276,16 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('btrp', 'business_trip', '公出單', 'fa-sign-out', '#d99a4e',
                         '為每位使用者指派「公出單」頁（2-MM-01-06）的角色。<strong>所有在職員工不需要指派任何角色</strong>，就能開立／檢視／列印<strong>自己的</strong>公出單，並核准指派給自己的單（核准人＝公出人的單位主管，主管本人公出時自動改為最高核准人員，主管請假時依代理設定轉給代理人）。此處只指派兩種加值角色：<strong>公出單檢閱</strong>＝可查看全部人員的公出單（唯讀）；<strong>公出單管理員</strong>＝查全部＋代其他人開單、刪除、模組設定（AS 文件綁定／外訓是否自動產生／核准圖章／列印簽章三格來源）、從外訓場次批次帶入。<span style="color:#b06f27;">「是否需要主管簽核（免簽核）」僅系統管理者可改</span>。管理者固定擁有全部權限。',
                         $_btrpRoles, $_userBtrpRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('dap', 'doc_apply', '文件制修申請單', 'fa-file-text-o', '#b06f27',
+                        '為每位使用者指派「文件制、修申請單」頁（2-DC-01-01）的角色。角色功能：<strong>文件制修申請單檢閱</strong>＝唯讀查看全部申請單與列印；
+                         <strong>文件制修申請單申請</strong>＝檢閱＋開立／編輯／送出<span style="color:#b06f27;">自己的</span>申請單（文件編碼依 AS 文件管理同一套規則自動產生）；
+                         <strong>文件制修申請單管理員</strong>＝全部＋代他人開單、勾選會簽單位「採用並簽」、核准／退回、<strong>自動簽核（需操作確認密碼）</strong>、
+                         <strong>建議建立</strong>（掃描 AS 文件管理裡有新文件或改版卻沒有申請單者，可設定只掃某日期之後、多選或全選一次建立）、
+                         批次列印／批次刪除、會簽預設（以部門分類設定，也可對單一 AS 文件個別覆寫）與模組設定（AS 文件綁定／四格簽章來源／三組圖章模板）。<br>
+                         <span style="color:#b06f27;">沒有任何角色的人</span>，若被指派為某張單的<strong>會簽單位簽核人</strong>（含代理人），仍可從通知開啟該單完成會簽。
+                         核准／管理代表／單位主管的實際人員一律即時查<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定</a>，不寫死人名。管理者固定擁有全部權限。',
+                        $_dapRoles, $_userDapRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('leave', 'leave', '請假系統', 'fa-calendar-minus-o', '#d99a4e',
                         '<strong>所有登入者都能申請請假、查看與撤回／銷假自己的單</strong>，不需要在這裡指派角色。此處只指派 <strong>人事（可看全部請假單）</strong>＝可檢視全公司請假單（不含代為簽核的權力）。<br>

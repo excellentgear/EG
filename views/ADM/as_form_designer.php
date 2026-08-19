@@ -83,7 +83,6 @@ $template_id = isset($_GET['template_id']) ? (int)$_GET['template_id'] : 0;
   <button class="btn btn-success btn-sm" id="btnSave"><i class="fa fa-save"></i> 存草稿</button>
   <button class="btn btn-warning btn-sm" id="btnPublish"><i class="fa fa-upload"></i> 發布</button>
   <a class="btn btn-primary btn-sm" id="btnTestFill" target="_blank" style="display:none;" title="開新分頁實際填寫→送出簽核"><i class="fa fa-pencil"></i> 填寫測試</a>
-  <a class="btn btn-default btn-sm" href="as_form_list.php" title="回表單清單（紀錄/授權/綁定在此）"><i class="fa fa-list"></i> 清單</a>
   <span id="statusBadge" style="font-size:12px;color:#7a5a2d;margin-left:6px;"></span>
 </div>
 

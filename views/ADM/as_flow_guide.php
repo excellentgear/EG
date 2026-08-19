@@ -785,7 +785,6 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
     <?php endforeach; ?>
     <div class="sd-tools">
       <a href="as_document_management.php"><i class="fa fa-external-link"></i> 前往 AS 文件管理</a>
-      <a href="as_form_list.php"><i class="fa fa-external-link"></i> 前往線上表單</a>
     </div>
   </div>
 
@@ -917,7 +916,6 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       <input type="text" id="onKw" placeholder="搜尋表單編號／名稱…">
       <button id="btnOnClear"><i class="fa fa-eraser"></i> 清除</button>
       <?php if ($showOnlineForm): ?>
-      <a class="btnlink" href="as_form_list.php" target="_blank" rel="noopener"><i class="fa fa-plus"></i> 去建立線上表單</a>
       <?php endif; ?>
       <span class="fg-file">顯示 <span id="onCount"><?= count($FORMS) ?></span> 筆</span>
     </div>
@@ -1134,7 +1132,6 @@ $(document).ready(function () {
                  + '"><i class="fa fa-external-link"></i> 開啟該頁面</a>');
         } else {
             a.push('<span class="on-no">尚未建立線上表單</span>');
-            a.push('<a class="btn-mini" target="_blank" rel="noopener" href="as_form_list.php"><i class="fa fa-plus"></i> 去建立</a>');
         }
         if (d.vid && d.file) {
             a.push('<a class="btn-mini" target="_blank" rel="noopener" href="' + pvUrl(d)

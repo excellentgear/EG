@@ -599,6 +599,19 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 }
                 return;
             }
+            if (refType === 'DOC_APPLY_COSIGN') {
+                // 文件制、修申請單待會簽：開該單明細並自動跳出會簽跳窗（refid = doc_apply_cosign.cos_id）。
+                // 必須先選同意/不同意才能填意見，所以不用通用回覆；完成會簽前不移除(mode=sign)。
+                window.open('../ADM/doc_apply.php?cosign=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) { nmMarkRead(nmRemoveFromList); }
+                return;
+            }
+            if (refType === 'DOC_APPLY_RESULT') {
+                // 會簽完成／核准退回結果通知（給申請人）：純資訊型，開該張申請單後標記已讀移除
+                window.open('../ADM/doc_apply.php?apply_id=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
             if (refType === 'BUSINESS_TRIP_APPROVAL') {
                 // 公出單待核准：通用回覆/回簽不會真的呼叫 decide，改開公出單頁帶 trip_approve，
                 // 頁面會自動跳出核准/退回跳窗；核准/退回完成前不移除(mode=sign)。

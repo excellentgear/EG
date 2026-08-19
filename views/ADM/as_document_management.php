@@ -2280,6 +2280,15 @@ $(function(){
         } else if(canU){
           af = `<label class="btn btn-xs btn-default" style="margin:0;" title="補上傳此版本的制修申請單">補申請單<input type="file" class="ver-attach" data-ver="${v.id}" data-which="apply" style="display:none;"></label>`;
         }
+        // 線上文件制、修申請單（2-DC-01-01）自動連結：有線上單就直接給連結，沒有就給「去建立」入口
+        if(v.online_apply){
+          const oa = v.online_apply, oaSt = {draft:'草稿',submitted:'已送出',approved:'已核准',rejected:'已退回'}[oa.status]||oa.status;
+          af += ` <a class="btn btn-xs btn-success" href="doc_apply.php" target="_blank" rel="noopener"
+                    title="此版本已有線上文件制、修申請單（${esc(oa.apply_no||'')}　${esc(dispDate(oa.apply_date))}　${esc(oaSt)}）">線上申請單</a>`;
+        } else {
+          af += ` <a class="btn btn-xs btn-warning" href="doc_apply.php" target="_blank" rel="noopener"
+                    title="此版本尚無線上文件制、修申請單，可到該頁用「建議建立」一次補齊">補線上單</a>`;
+        }
         const verDel = window.asPerm.super_delete
           ? `<td><a href="javascript:void(0)" class="btn btn-xs btn-danger op-ver-del" data-id="${v.id}" data-version="${esc(v.version)}" title="永久刪除此改版紀錄與附件（不可復原）"><i class="fa fa-trash-o"></i></a></td>` : '';
         tb.append(`<tr>
