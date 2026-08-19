@@ -104,7 +104,7 @@ function stock_req_company_name(PDO $pdo): string {
     return '';
 }
 
-/** 領料人圖章要套用的模板 id（0＝未設定，消費端退回 EGStamp 預設回墨印） */
+/** 倉管圖章要套用的模板 id（0＝未設定，消費端退回 EGStamp 預設回墨印） */
 function stock_req_stamp_tpl_id(PDO $pdo): int {
     try {
         $st = $pdo->prepare("SELECT param_value FROM system_parameters WHERE param_group='STOCK_REQ' AND param_key='req_stamp_tpl_id' LIMIT 1");
@@ -142,27 +142,22 @@ function stock_req_biz_date(?array $req): ?string {
     return preg_match('/^\d{4}-\d{2}-\d{2}$/', $d) ? $d : null;
 }
 
-/** 圖章上的職稱：一律回推「該單業務日期當時」的職稱（ai-rules/22；沒補登過異動的人＝現況）。
- *  只有姓名沒有 user_id，故先以姓名＋申請部門回查；同名多人或查無一律留空，不猜人
- *  （模板沒有 {職稱} token 時本來就用不到這個值）。 */
-function stock_req_position_asof(PDO $pdo, string $name, string $deptName, ?string $bizDate): string {
-    $name = trim($name); if ($name === '') return '';
+/** 圖章上的部門／職稱：一律回推「該日期當時」的職務（ai-rules/22；沒補登過異動的人＝現況）。
+ *  用 user_id 直接解析（比姓名比對可靠），查無回空字串。 */
+function stock_req_person_asof(PDO $pdo, int $userId, ?string $date): array {
+    $out = ['dept'=>'', 'position'=>''];
+    if (!$userId) return $out;
     try {
-        $sql = "SELECT DISTINCT u.id FROM user u
-                LEFT JOIN user_department_position_map m ON m.user_id=u.id
-                LEFT JOIN department d ON d.id=m.department_id
-                WHERE u.user_cname=?" . ($deptName !== '' ? " AND d.name=?" : "");
-        $st = $pdo->prepare($sql);
-        $st->execute($deptName !== '' ? [$name, $deptName] : [$name]);
-        $ids = $st->fetchAll(PDO::FETCH_COLUMN);
-        if (count($ids) !== 1) return '';                       // 同名多人＝不猜
         require_once __DIR__ . '/../../src/common/position_history_lib.php';
-        $snap = eg_position_snapshot_at($pdo, (int)$ids[0], $bizDate ?: date('Y-m-d'));
-        if (!$snap) return '';
-        foreach ($snap as $r) { if ($deptName !== '' && ($r['department_name'] ?? '') === $deptName) return (string)($r['position_name'] ?? ''); }
-        foreach ($snap as $r) { if (!empty($r['is_main'])) return (string)($r['position_name'] ?? ''); }
-        return (string)($snap[0]['position_name'] ?? '');
-    } catch (Throwable $e) { return ''; }
+        $snap = eg_position_snapshot_at($pdo, $userId, $date ?: date('Y-m-d'));
+        if (!$snap) return $out;
+        $row = null;
+        foreach ($snap as $r) { if (!empty($r['is_main'])) { $row = $r; break; } }
+        if (!$row) $row = $snap[0];
+        $out['dept']     = (string)($row['department_name'] ?? '');
+        $out['position'] = (string)($row['position_name'] ?? '');
+        return $out;
+    } catch (Throwable $e) { return $out; }
 }
 
 // ─────────────────────────────────────────────────
@@ -3767,11 +3762,20 @@ LBLSQL;
             $reqId = intval($_POST['req_id'] ?? 0);
             $req = null;
             if ($reqId) {
-                $st = $pdo->prepare("SELECT req_no,dept_name,requester_name,Created_At,issued_at,issued_by_name FROM stock_requisitions WHERE req_id=?");
+                $st = $pdo->prepare("SELECT req_no,dept_name,requester_name,Created_At,issued_at,issued_by,issued_by_name FROM stock_requisitions WHERE req_id=?");
                 $st->execute([$reqId]); $req = $st->fetch(PDO::FETCH_ASSOC) ?: null;
             }
             $docId  = eg_asdoc_id($pdo, STOCK_REQ_ASDOC_MODULE);
             $doc    = eg_asdoc_get($pdo, STOCK_REQ_ASDOC_MODULE);
+            $keeperName = '';
+            if ($req) {
+                $kid = (int)($req['issued_by'] ?? 0);
+                if ($kid) {
+                    $ku = $pdo->prepare("SELECT user_cname FROM user WHERE id=?"); $ku->execute([$kid]);
+                    $keeperName = (string)($ku->fetchColumn() ?: '');
+                }
+                if ($keeperName === '') $keeperName = (string)($req['issued_by_name'] ?? '');
+            }
             $biz    = stock_req_biz_date($req);          // 未指定單據＝null＝視為今天（比照現況列印）
             $tpl    = stock_req_stamp_tpl($pdo, stock_req_stamp_tpl_id($pdo));
             echo json_encode(['success'=>true,
@@ -3780,7 +3784,12 @@ LBLSQL;
                 'doc_no_print'=> eg_asdoc_no_asof_id($pdo, $docId, $biz),   // 版次依業務日期回推（ai-rules/16 三之四）
                 'biz_date'   => $biz,
                 'stamp_tpl'  => $tpl,
-                'requester_position' => $req ? stock_req_position_asof($pdo, (string)($req['requester_name'] ?? ''), (string)($req['dept_name'] ?? ''), $biz) : '',
+                // 「已領貨」欄的簽章＝倉管（實際執行出庫的人，使用者明確要求不是申請人）；
+                // 部門/職稱依出庫日回推當時職務，尚未出庫則沒有簽章人，留白給紙本手簽（ai-rules/18 鐵則5）
+                // 姓名一律以 issued_by 回查 user_cname 為準——issued_by_name 存的是登入帳號/工號（例：008），
+                // 跟畫面上「入出庫紀錄」的倉管欄（join user 取的中文名）對不起來，蓋出來會是一顆代號章
+                'keeper_name' => $keeperName,
+                'keeper' => stock_req_person_asof($pdo, (int)($req['issued_by'] ?? 0), substr((string)($req['issued_at'] ?? ''), 0, 10) ?: $biz),
             ]);
         } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -3822,7 +3831,7 @@ LBLSQL;
             $rid=$ex->fetchColumn();
             if ($rid) $pdo->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([(string)$tplId, $_SESSION['userName'] ?? '', $rid]);
             else $pdo->prepare("INSERT INTO system_parameters (param_group,param_key,param_value,description,updated_by) VALUES ('STOCK_REQ','req_stamp_tpl_id',?,?,?)")
-                     ->execute([(string)$tplId, '領料需求單列印：領料人圖章模板 id（0=用系統預設印章）', $_SESSION['userName'] ?? '']);
+                     ->execute([(string)$tplId, '領料需求單列印：倉管圖章模板 id（0=用系統預設印章）', $_SESSION['userName'] ?? '']);
             echo json_encode(['success'=>true]);
         } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -4293,7 +4302,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
     <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="printAllReq()" title="依目前篩選結果，逐筆各自列印正式表單"><i class="fa fa-print"></i> 列印</button>
     <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="printReqSummary()" title="多筆彙總成一份內部清單（非正式表單，不印 AS 文件編號）"><i class="fa fa-list-alt"></i> 清單彙總</button>
 <?php if (($PAGE_PERM ?? '') === 'A'): ?>
-    <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="openReqPrintSetting()" title="設定列印用的 AS 文件編號與領料人圖章模板"><i class="fa fa-cog"></i> 列印設定</button>
+    <button class="btn btn-sm btn-default" style="border-radius:12px;" onclick="openReqPrintSetting()" title="設定列印用的 AS 文件編號與倉管圖章模板"><i class="fa fa-cog"></i> 列印設定</button>
 <?php endif; ?>
     <span id="req-perm-badge" style="font-size:11px;padding:3px 8px;border-radius:10px;background:#e8f4fd;color:#1a78c2;border:1px solid #b8d8f0;font-weight:600;"></span>
     <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -4565,8 +4574,8 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
           </div>
         </div>
         <div style="margin-bottom:6px;">
-          <label style="font-weight:700;">領料人圖章模板</label>
-          <div style="font-size:12px;color:#888;margin-bottom:6px;">列印時「已領貨」欄會蓋上領料人（申請人）圖章。模板在「圖章管理 → 線上圖章設計」建立；未指定則用系統預設回墨印。列印一律用模板設計的實際尺寸，不會被縮小。</div>
+          <label style="font-weight:700;">倉管圖章模板</label>
+          <div style="font-size:12px;color:#888;margin-bottom:6px;">列印時「已領貨」欄會蓋上倉管（實際執行出庫的人）圖章；尚未出庫的品項留白給現場手簽。模板在「圖章管理 → 線上圖章設計」建立；未指定則用系統預設回墨印。列印一律用模板設計的實際尺寸，不會被縮小。</div>
           <select id="rps-stamp-tpl" class="form-control input-sm" style="max-width:420px;">
             <option value="0">（用系統預設印章）</option>
           </select>
@@ -11220,13 +11229,14 @@ function reqDispDate(v){
     return (window.egFmtDate ? egFmtDate(d) : d);
 }
 
-// 領料人圖章：模板由管理員在「列印設定」指定；未指定時退回系統預設回墨印並套 91px（ai-rules/18 鐵則6）
+// 倉管圖章：模板由管理員在「列印設定」指定；未指定時退回系統預設回墨印並套 91px（ai-rules/18 鐵則6）
 function reqStampHtml(name, dateStr, meta){
     if(!name) return '';
     var schema=(meta && meta.stamp_tpl && meta.stamp_tpl.schema) ? meta.stamp_tpl.schema : null;
     // 章的長相由 eg_stamp.js 決定（掃描實體章 > 模板章 > 預設回墨印），列印尺寸則看 svg 自己的 class，
     // 不能用「有沒有傳模板」來判斷——有實體章的人即使指定了模板，回來的仍是 car-stamp。
-    return EGStamp.stamp(name, dateStr, false, schema, (meta&&meta.dept_name)||'', (meta&&meta.requester_position)||'');
+    var who=(meta&&meta.keeper)||{};
+    return EGStamp.stamp(name, dateStr, false, schema, who.dept||'', who.position||'');
 }
 
 // reqId 省略＝印詳情跳窗目前開著的那張；onDone＝批次列印排隊用（ai-rules/16 三之五）
@@ -11257,9 +11267,10 @@ function buildReqPrintWindow(req, meta, onDone){
     window.__ownCompany=company;   // eg_stamp.js 畫預設回墨印時要用（ai-rules/18 鐵則2）
     var title=(meta.doc&&meta.doc.doc_name)?meta.doc.doc_name:'領庫需求單';
     var asTxt=String(meta.doc_no_print||'').replace(/['\\]/g,'');
-    // 簽章日期＝該單業務日期：已出庫用出庫日，否則用建立日（ai-rules/16 三之二：同一份文件共用同一套認定）
-    var stampDate=reqDispDate(req.issued_at||req.Created_At);
-    var picker=req.requester_name||req.creator_name||'';
+    // 「已領貨」欄的簽章＝倉管（實際出庫的人），簽章日期＝出庫日（ai-rules/16 三之二：簽章日期用該單據的業務日期）；
+    // 尚未出庫＝沒有簽章人，該格留白給紙本當場蓋章，不硬蓋（ai-rules/18 鐵則5）
+    var stampDate=reqDispDate(req.issued_at);
+    var keeper=(meta.keeper_name||req.issued_by_name||'');
     var hasUrgent=(req.items||[]).some(function(it){ return parseInt(it.is_urgent)===1; });
 
     var metaTbl='<table class="p-meta"><colgroup><col style="width:14%"><col style="width:22%"><col style="width:14%"><col style="width:22%"><col style="width:12%"><col style="width:16%"></colgroup>'
@@ -11267,8 +11278,8 @@ function buildReqPrintWindow(req, meta, onDone){
         +'<th>申請部門</th><td>'+esc(req.dept_name||'')+'</td>'
         +'<th>日期</th><td>'+esc(reqDispDate(req.Created_At))+'</td></tr>'
         +'<tr><th>標題</th><td>'+esc(req.title||'')+'</td>'
-        +'<th>申請人</th><td>'+esc(picker)+'</td>'
-        +'<th>出庫日期</th><td>'+esc(reqDispDate(req.issued_at))+'</td></tr>'
+        +'<th>申請人</th><td>'+esc(req.requester_name||req.creator_name||'')+'</td>'
+        +'<th>出庫日期</th><td>'+esc(reqDispDate(req.issued_at))+(keeper?'　倉管：'+esc(keeper):'')+'</td></tr>'
         +'<tr><th>備註</th><td colspan="3">'+esc(req.req_remark||'')+'</td>'
         +'<th>急件</th><td>'+(hasUrgent?'<span class="p-urg">★ 含急件</span>':'—')+'</td></tr>'
         +'</table>';
@@ -11285,7 +11296,7 @@ function buildReqPrintWindow(req, meta, onDone){
             +'<td class="tl">'+esc(it.storage_location||it.all_locations||'')+'</td>'
             +'<td class="c">'+esc(it.qty_requested)+'</td>'
             +'<td class="c">'+esc(it.current_qty||0)+'</td>'
-            +'<td class="p-sign">'+(issued>0?'<div class="p-qty">'+issued+'</div>':'')+reqStampHtml(picker, stampDate, meta)+'</td>'
+            +'<td class="p-sign">'+(issued>0?'<div class="p-qty">'+issued+'</div>'+reqStampHtml(keeper, stampDate, meta):'')+'</td>'
             +'<td class="tl">'+esc(it.item_remark||'')+'</td>'
             +'</tr>';
     });
