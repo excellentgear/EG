@@ -158,7 +158,8 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
             if (!$deptId) return null;
             $mid = fsd_dept_manager_at($db, $deptId, $bizDate);   // 當時的部門主管
             if ($mid && ($mu = fsd_user_any($db, $mid))) return $mu;
-            $m = eg_org_dept_manager($db, $deptId);               // 回推不到才退回現況（行為與先前相同）
+            if (fsd_allow_resigned_at($bizDate)) return null;     // 過去的日期：當時沒有就是沒有，不可退回現況
+            $m = eg_org_dept_manager($db, $deptId);               // 今日/未來的案件才退回現況（行為與先前相同）
             return $m ? ['id'=>(int)$m['id'], 'user_cname'=>$m['user_cname']] : null;
         case 'submitter_supervisor':
         case 'filler_supervisor':
@@ -167,12 +168,18 @@ function fsd_resolve_signer(PDO $db, array $signer, array $case): ?array {
             // 不是按下建立鈕的管理員的主管）。沒選填表人時解析不到人，送出前會被擋（fsd_case_needs_filler）。
             $baseUid = ($mode === 'filler_supervisor') ? $fillerUid : $applicantUid;
             if (!$baseUid) return null;
-            $supId = fsd_supervisor_at($db, $baseUid, $bizDate);      // 先用業務日期當時的職務回推
-            if (!$supId) $supId = eg_resolve_supervisor($db, $baseUid); // 回推不到才走現況（含指定負責人規則）
+            $supId = fsd_supervisor_at($db, $baseUid, $bizDate);      // 用業務日期當時的職務回推
+            // 業務日期是「過去」時，回推不到人就是當時真的沒有這個角色——**絕對不可以退回現況解析**，
+            // 那會把「現在才上任的人」蓋到舊文件上（2026-08-19 使用者實測抓到：2025-12-09 才兼任品管部課長的人，
+            // 被蓋在 2025-11-28 的文件上）。寧可這一關解析不到人，也不要蓋錯人。
+            if (!$supId && !fsd_allow_resigned_at($bizDate)) $supId = eg_resolve_supervisor($db, $baseUid);
             // 填表人自己就是（部門一路往上都沒有更高階的）最高主管時，eg_resolve_supervisor() 會回 null——
             // 那一關若就這樣解析不到人會被整關略過、章也不會出現。使用者要求此時改由**本人簽**，
             // 並帶 self_top 旗標讓 SoD 不要把他自己迴避掉（fsd_resolve_signer_for_case）。
-            if (!$supId && $mode === 'filler_supervisor') $supId = fsd_upper_dept_manager($db, $baseUid);
+            // fsd_upper_dept_manager() 是「現況」版（不吃日期），同樣只能用在今日/未來的案件上；
+            // 過去日期若用它，會把現在才調過去的主管蓋到舊文件（實測抓到的正是這一段）。
+            if (!$supId && $mode === 'filler_supervisor' && !fsd_allow_resigned_at($bizDate))
+                $supId = fsd_upper_dept_manager($db, $baseUid);
             if (!$supId && $mode === 'filler_supervisor') {
                 $self = fsd_filler_user($db, $baseUid);
                 return $self ? $self + ['self_top'=>true] : null;
@@ -935,9 +942,15 @@ function fsd_position_levels(PDO $db): array {
 function fsd_user_job_at(PDO $db, int $uid, string $date): array {
     $snap = fsd_pos_snapshot_at($db, $date)[$uid] ?? [];
     if (!$snap) return [];
-    $main = $snap[0];                                   // 快照本身已把主職排最前
-    foreach ($snap as $r) if (!empty($r['is_main'])) { $main = $r; break; }
     $lv = fsd_position_levels($db);
+    // 取「職級最高」的那一筆（level 越小越高階），平手時用主職。
+    // 兼任常常才是簽核身分：例 主職技術部/工程師、兼任品管部/課長，章上要印課長那個身分。
+    $main = $snap[0];
+    $best = 1000;
+    foreach ($snap as $r) {
+        $l = $lv[(int)$r['position_id']] ?? 999;
+        if ($l < $best || ($l === $best && !empty($r['is_main']))) { $best = $l; $main = $r; }
+    }
     return ['dept_id'=>(int)$main['department_id'], 'dept_name'=>(string)$main['department_name'],
             'position_name'=>(string)$main['position_name'],
             'level'=>$lv[(int)$main['position_id']] ?? 99];
@@ -982,6 +995,19 @@ function fsd_supervisor_at(PDO $db, int $uid, string $date): ?int {
     $ok = fsd_usable_uids_at($db, $date);
     $lv = fsd_position_levels($db);
     $snapAll = fsd_pos_snapshot_at($db, $date);
+    // 部門「指定負責人」也算候選，但必須驗證他在該日期真的隸屬該部門——不然又會抓到現在才調過去的人
+    $primaryOf = function (int $deptId) use ($db, $snapAll, $ok): ?int {
+        try {
+            $st = $db->prepare("SELECT dp.primary_user_id FROM department_position dp
+                                WHERE dp.department_id=? AND dp.primary_user_id IS NOT NULL
+                                ORDER BY (SELECT level FROM position_level pl WHERE pl.position_id=dp.position_id) ASC LIMIT 1");
+            $st->execute([$deptId]);
+            $pid = (int)$st->fetchColumn();
+        } catch (Throwable $e) { return null; }
+        if (!$pid || !isset($ok[$pid])) return null;
+        foreach (($snapAll[$pid] ?? []) as $r) if ((int)$r['department_id'] === $deptId) return $pid;
+        return null;   // 當時不在這個部門就不算
+    };
     $findIn = function (int $deptId, int $myLevel) use ($snapAll, $ok, $lv, $uid): ?int {
         $best = null; $bestLv = -1;
         foreach ($snapAll as $u => $snap) {
@@ -1002,6 +1028,7 @@ function fsd_supervisor_at(PDO $db, int $uid, string $date): ?int {
         $parent = (int)$st->fetchColumn();
         if (!$parent) return null;
         if ($u = $findIn($parent, $job['level'])) return $u;
+        if ($u = $primaryOf($parent)) return $u;
         $cursor = $parent;
     }
     return null;
