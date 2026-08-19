@@ -125,6 +125,9 @@ $perms = fsd_perms($db, $fsdUser);
                 <label style="margin:0 0 0 10px;font-size:12px;color:#5b3a1e;white-space:nowrap;"
                        title="打勾後，用這個樣板建立案件時可以挑一個 AS 文件編號。之後在「AS 文件管理」上傳同一個編號的版本附件時，就能直接選「由表單簽核案件導入」拿這份已簽核完成的 PDF，同一份文件不用上傳兩次。此設定與上方「列印用的 AS 編號綁定」無關。">
                     <input type="checkbox" id="dsgAllowAsLink" onchange="saveAllowAsLink(this.checked)"> 建立案件時可連結 AS 文件編號</label>
+                <label style="margin:0 0 0 10px;font-size:12px;color:#5b3a1e;white-space:nowrap;"
+                       title="用這個樣板建立案件時，「顯示頁碼」的預設值。案件建立後仍可在案件詳情逐案修改，改樣板不會動到已建立的案件。單頁文件本來就不印頁碼。">
+                    <input type="checkbox" id="dsgPageNo" onchange="savePageNoDefault(this.checked)"> 預設顯示頁碼</label>
                 <span style="margin-left:10px;font-size:12px;color:#5b3a1e;">圖章模板</span>
                 <select id="dsgStampTpl" style="height:28px;font-size:12px;" onchange="submitStampTpl()"><option value="0">（未綁定，比照全站91px預設）</option></select>
                 <button class="btn-warm" style="margin-left:auto;" onclick="addStage()"><i class="fa fa-plus"></i> 新增階段</button>
@@ -401,6 +404,7 @@ function openDesigner(id){
         $('#dsgTplName').text(CUR_TPL.name + '（'+(CUR_TPL.file_type==='pdf'?'PDF':'圖片')+'，共'+CUR_TPL.page_count+'頁）');
         $('#dsgAsDoc').text(CUR_TPL.as_doc ? ('已綁定：'+CUR_TPL.as_doc.doc_no+' '+CUR_TPL.as_doc.doc_name) : '未綁定AS文件');
         $('#dsgAllowAsLink').prop('checked', !!Number(CUR_TPL.allow_case_as_link));
+        $('#dsgPageNo').prop('checked', Number(CUR_TPL.default_show_page_no ?? 1) === 1);
         loadStampTplOptions();
         renderStages();
         if (!CUR_TPL.pages || !CUR_TPL.pages.length) {
@@ -419,6 +423,13 @@ function saveAllowAsLink(on){
     $.post(API, {action:'template_set_as_link', csrf:META.csrf, id:CUR_TPL.id, allow:on?1:0}, function(r){
         if (!r.ok){ alert(r.error||'設定失敗'); $('#dsgAllowAsLink').prop('checked', !on); return; }
         CUR_TPL.allow_case_as_link = on ? 1 : 0;
+    }, 'json');
+}
+/** 樣板設定：建立案件時「顯示頁碼」的預設值（只影響之後新建的案件，不動已建立的）。 */
+function savePageNoDefault(on){
+    $.post(API, {action:'template_set_page_no', csrf:META.csrf, id:CUR_TPL.id, on:on?1:0}, function(r){
+        if (!r.ok){ alert(r.error||'設定失敗'); $('#dsgPageNo').prop('checked', !on); return; }
+        CUR_TPL.default_show_page_no = on ? 1 : 0;
     }, 'json');
 }
 function openAsDocPicker(){

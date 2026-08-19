@@ -1074,11 +1074,13 @@ function fsd_case_create_draft_doc(PDO $db, int $templateId, int $uid, string $u
         // 有連結 AS 文件時，案件名稱自動變成「AS編號 原本填的名稱」（使用者要求）：
         // 列表一眼看得出這件對應哪份 AS 文件，AS 文件管理那邊要導入時也好認。
         $title = fsd_case_title_with_asdoc($db, $linkId, $title ?: $tpl['name']);
-        $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,link_as_doc_id,status,current_stage_seq)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,'draft',0)")
+        // 頁碼預設沿用樣板設定（案件建立後仍可逐案修改，2026-08-19 使用者要求）
+        $showPageNo = (int)($tpl['default_show_page_no'] ?? 1) === 1 ? 1 : 0;
+        $db->prepare("INSERT INTO fsd_case (template_id,template_version,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,link_as_doc_id,show_page_no,status,current_stage_seq)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'draft',0)")
            ->execute([$templateId, (int)$tpl['published_version'], $isPdf ? 'pdf' : 'image',
                       $isPdf ? $doc['file_name'] : null, $title, $uid, $uname,
-                      $filler ? (int)$filler['id'] : null, $filler ? $filler['user_cname'] : null, $bizDate, $linkId]);
+                      $filler ? (int)$filler['id'] : null, $filler ? $filler['user_cname'] : null, $bizDate, $linkId, $showPageNo]);
         $caseId = (int)$db->lastInsertId();
         fsd_case_doc_pages_write($db, $caseId, $doc);
         $db->commit();

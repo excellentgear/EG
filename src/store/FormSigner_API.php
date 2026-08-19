@@ -201,6 +201,17 @@ case 'template_set_as_link': {
     jout(['template'=>fsd_template_get($db, $id)]);
 }
 
+/** 樣板設定：用這個樣板建立案件時，預設要不要顯示頁碼（案件建立後仍可逐案修改）。 */
+case 'template_set_page_no': {
+    fsd_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可修改樣板', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    if (!fsd_template_get($db, $id)) jerr('找不到此樣板', 404);
+    $db->prepare("UPDATE fsd_template SET default_show_page_no=?, updated_by=?, updated_at=NOW() WHERE id=?")
+       ->execute([!empty($_POST['on']) ? 1 : 0, $uname, $id]);
+    jout(['template'=>fsd_template_get($db, $id)]);
+}
+
 case 'template_set_status': {
     fsd_need_csrf();
     if (!$perms['canAdmin']) jerr('僅管理員可修改樣板', 403);
