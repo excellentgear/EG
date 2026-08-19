@@ -79,6 +79,8 @@ case 'list':
     $kw = trim((string)($_GET['kw'] ?? ''));
     $sql = "SELECT h.id, h.doc_no, h.part_d_id, COALESCE(ds.D_Setting_Id, h.part_no_text,'') AS part_no,
                    COALESCE(cl.customer,'') AS customer_name, h.created_by_name, h.created_at, h.biz_date, h.spec_desc,
+                   (SELECT COUNT(*) FROM pfmea_print_log pl WHERE pl.doc_id=h.id) AS print_count,
+                   (SELECT MAX(pl.printed_at) FROM pfmea_print_log pl WHERE pl.doc_id=h.id) AS last_printed_at,
                    (SELECT COUNT(*) FROM pfmea_item i WHERE i.doc_id=h.id AND i.is_deleted=0) AS item_count,
                    (SELECT MAX(i.rpn) FROM pfmea_item i WHERE i.doc_id=h.id AND i.is_deleted=0
                      AND i.severity IS NOT NULL AND i.occurrence IS NOT NULL AND i.detection IS NOT NULL) AS max_rpn
@@ -692,6 +694,15 @@ case 'as_doc_save':
     $docId = (int)($_POST['doc_id'] ?? 0);
     eg_asdoc_save($db, 'pfmea', $docId, $uname);
     jout(['success'=>true,'as_doc'=>eg_asdoc_get($db,'pfmea')]);
+
+case 'print_log_add':
+    needView($perms);
+    pfmea_print_log_add($db, (int)($_POST['id'] ?? 0), (string)($_POST['kind'] ?? 'single'), $uid, $uname);
+    jout(['success'=>true]);
+
+case 'print_log_list':
+    needView($perms);
+    jout(['success'=>true,'rows'=>pfmea_print_log_list($db, (int)($_GET['id'] ?? 0))]);
 
 case 'print_get':
     needView($perms);

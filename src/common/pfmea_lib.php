@@ -86,6 +86,17 @@ function pfmea_ensure_schema(PDO $db): void {
     // 2026-08-13 使用者要求：表頭修訂履歷比照官方表單右上角「新增文件/修改文件」記錄(編號/日期/
     // 修訂內容/準備)，取消批准/檢查欄位；存檔時第一次一律記1筆「新增文件」，之後每次修改由使用者
     // 自行決定是否要記為新版本(存檔時詢問，選否就不新增列，避免版次因小幅調整一直往上跳)。
+    // 列印紀錄（2026-08-18 使用者要求：清單要看得到列印紀錄與最新列印日期）。
+    // 只記「真的送去列印」的動作；唯讀檢視(viewDoc)不算，兩者雖共用 print_get 取資料。
+    $db->exec("CREATE TABLE IF NOT EXISTS pfmea_print_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        doc_id INT NOT NULL,
+        print_kind VARCHAR(10) NOT NULL DEFAULT 'single' COMMENT 'single=單筆列印/batch=批次列印',
+        printed_by INT NULL, printed_by_name VARCHAR(50) NULL,
+        printed_at DATETIME NOT NULL,
+        KEY idx_doc (doc_id, printed_at)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='PFMEA-列印紀錄'");
+
     $db->exec("CREATE TABLE IF NOT EXISTS pfmea_revision (
         id INT AUTO_INCREMENT PRIMARY KEY,
         doc_id INT NOT NULL,
@@ -445,6 +456,22 @@ function pfmea_revision_sync_first_date(PDO $db, int $docId, ?string $bizDate): 
     $bizDate = ($bizDate !== null && trim($bizDate) !== '') ? substr(trim($bizDate), 0, 10) : null;
     if (!$bizDate) return;
     $db->prepare("UPDATE pfmea_revision SET rev_date=? WHERE doc_id=? AND rev_no=1")->execute([$bizDate, $docId]);
+}
+
+/** 記一筆列印紀錄。時間戳一律取 DB 時間——PHP date() 是 UTC、MySQL NOW() 是本地，
+ *  混用會讓紀錄差 8 小時（CLAUDE.md 已載明的既有踩坑） */
+function pfmea_print_log_add(PDO $db, int $docId, string $kind, int $uid, string $uname): void {
+    if (!$docId) return;
+    $kind = ($kind === 'batch') ? 'batch' : 'single';
+    $db->prepare("INSERT INTO pfmea_print_log (doc_id, print_kind, printed_by, printed_by_name, printed_at)
+                  VALUES (?,?,?,?,NOW())")->execute([$docId, $kind, $uid ?: null, $uname]);
+}
+
+function pfmea_print_log_list(PDO $db, int $docId): array {
+    $st = $db->prepare("SELECT print_kind, printed_by_name, printed_at FROM pfmea_print_log
+                         WHERE doc_id=? ORDER BY printed_at DESC, id DESC LIMIT 200");
+    $st->execute([$docId]);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
 function pfmea_revision_list(PDO $db, int $docId): array {

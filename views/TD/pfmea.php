@@ -280,9 +280,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
                 <thead><tr>
                     <th style="width:34px;"><input type="checkbox" id="ckAllPage" data-eg-skip="1" title="全選／取消本頁"></th>
                     <th>表單編號</th><th>料號</th><th>規格描述</th><th>客戶</th><th>項目數</th><th>最高RPN</th>
-                    <th>建立人</th><th>業務日期</th><th>操作</th>
+                    <th>建立人</th><th>業務日期</th><th>最新列印</th><th>操作</th>
                 </tr></thead>
-                <tbody id="pfBody"><tr><td colspan="10" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
+                <tbody id="pfBody"><tr><td colspan="11" style="padding:20px;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
         </div></div>
 
@@ -819,6 +819,18 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
 
 
 <!-- 角色權限說明 -->
+<!-- 列印紀錄（2026-08-18 使用者要求） -->
+<div class="pf-mask" id="printLogMask" style="z-index:1200;"><div class="pf-modal" style="max-width:520px;">
+    <div class="m-head"><span><i class="fa fa-print"></i> 列印紀錄 <span id="printLogDoc" style="font-weight:normal;"></span></span><span class="m-close" onclick="closeMask('printLogMask')">✕</span></div>
+    <div class="m-body">
+        <table class="pf-tpl-table" style="width:100%;">
+            <thead><tr><th>列印時間</th><th style="width:80px;">方式</th><th style="width:110px;">列印人</th></tr></thead>
+            <tbody id="printLogBody"></tbody>
+        </table>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('printLogMask')">關閉</button></div>
+</div></div>
+
 <!-- 列印前完整性檢查結果（2026-08-18 使用者要求） -->
 <div class="pf-mask" id="printCheckMask"><div class="pf-modal" style="max-width:640px;">
     <div class="m-head"><span><i class="fa fa-exclamation-triangle"></i> 列印前檢查：有欄位尚未填寫</span><span class="m-close" onclick="closeMask('printCheckMask')">✕</span></div>
@@ -870,6 +882,7 @@ d. 當其中任何一項是大於9時，必須進行設計變更或是適當的�
             <li><b>製程代號</b>：卡片內輸入已建立的製程代號會自動帶出該製程的「項目」下拉選項；輸入清單中沒有的新代號會詢問製程名稱並即時建立。「控制預防」「控制偵測」同樣是下拉可選/可手動輸入。按「整組列表」可叫出此製程所有樣板（組名＝製程名稱_項目名稱），點選後直接把該筆的基本資料/評級/控制/建議措施/評價欄位整批帶入，帶入後仍可個別修改。這些清單新增不限身分，僅管理員能刪除。</li>
             <li><b>項目→功能→要求／潛在失效模式 階層式連動</b>：填完「項目」離開該欄位，會自動帶出這個項目底下的「功能」下拉選項；填完「功能」離開該欄位，會自動帶出這個功能底下的「要求」下拉（優先顯示綁定的料號專屬要求，沒有才顯示該功能通用要求）與更精確的「潛在失效模式」下拉（優先套用這個功能專屬的清單，還沒累積過資料才逐層退回項目層級、製程層級的通用清單）。四層清單都可以直接手動輸入新值，離開欄位或存檔時會自動加進清單供下次選用，僅管理員能刪除。填完「潛在失效模式」離開欄位，還會再帶出這一筆失效模式專屬的「失效模式潛在後果／分類／失效潛在原因」建議清單。</li>
             <li><b>依 BOM 製程帶入失效模式分析</b>：綁定料號後，編輯畫面下方會出現「依 BOM 製程帶入」按鈕。點開會列出<b>此料號 BOM 上跑過的製程</b>（依站別順序，並顯示各製程可帶入幾筆整組樣板；沒有樣板的無法勾選）。勾選後按「帶入」即依樣板逐筆長出失效模式分析卡片，可選擇附加在後面或先清空既有列。帶入後仍可逐張修改／刪除。<b>存檔時會自動建立「此料號 ↔ 用到的整組」關聯</b>，手動新建的單據同樣適用。</li>
+            <li><b>列印紀錄</b>：清單新增「最新列印」欄，顯示這份分析表最後一次列印的日期；列印超過一次會加註次數（如 2026.08.19 (3次)）。點該日期可開啟完整列印紀錄，逐筆列出<b>列印時間、方式（單筆／批次）、列印人</b>。尚未列印過的顯示「未列印」。只有真的送去列印才會記錄，<b>唯讀檢視不計入</b>。</li>
             <li><b>清單分頁與批次列印</b>：清單預設一頁 10 筆（可改 5／20／50），翻頁鈕在表格右上角。左側「狀態」可篩選<b>已填完</b>（有失效模式分析列）或<b>草稿</b>（尚未填分析列）。<b>批次列印</b>：先在每列最左側<b>勾選</b>要印的單據——表頭那顆勾選框可全選／取消<b>本頁</b>，工具列的「全選／取消全選」則針對<b>目前篩選出的全部</b>（含其他頁）；勾選狀態換頁不會消失，右側會顯示已勾選筆數。按「批次列印」即逐筆開視窗排隊列印，每份仍會各自跑列印前的欄位完整性檢查。沒有勾選任何一筆時會提醒而不會整批印出（避免誤觸）。</li>
             <li><b>AI 產生的整組樣板</b>：由 AI 整理匯入的整組樣板，在選擇樣板的清單上會標示橘色 <b>AI</b> 徽章提醒人工複核；此標記<b>不會印在列印版上</b>。</li>
             <li><b>建議建立清單</b>：工具列同名按鈕，自動列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 的料號，勾選（可全選）後一次建立表頭殼（料號／客戶／產品名稱／分類／業務日期／相關部門預設值自動帶入；來源只有純文字料號時會自動回查主檔綁定成正式料號，綁定後才開得了圖、客戶名稱才帶得出來），分析項目仍需逐份手動填寫。</li>
@@ -973,7 +986,7 @@ function renderList(){
         btns += '<button type="button" class="pf-row-btn" '+(PG_PAGE>=pages?'disabled':'')+' onclick="gotoPage('+(PG_PAGE+1)+')">下一頁 ›</button>';
     }
     $('#pgBtns').html(btns);
-    if (!total){ $('#pfBody').html('<tr><td colspan="10" style="padding:20px;color:#8a6d45;">沒有符合條件的資料</td></tr>'); return; }
+    if (!total){ $('#pfBody').html('<tr><td colspan="11" style="padding:20px;color:#8a6d45;">沒有符合條件的資料</td></tr>'); return; }
     renderListRows(rows);
     refreshSelInfo();
 }
@@ -1020,18 +1033,20 @@ window.batchPrint = function(){
         return;
     }
     if (!confirm('將逐筆開啟列印視窗，共 '+list.length+' 份。\n（瀏覽器可能會詢問是否允許開啟多個視窗，請選允許）')) return;
+    PRINT_KIND = 'batch';
     var i = 0;
     (function next(){
         if (i >= list.length) return;
         printDoc(list[i].id);
         i++;
+        if (i >= list.length) setTimeout(function(){ PRINT_KIND = 'single'; }, 2000);
         setTimeout(next, 1200);      // 間隔開窗，避免瀏覽器把連續彈窗當成廣告擋掉
         // 註：列印前的「欄位完整性檢查」對每一份仍會生效，缺欄位的那份會先跳出清單讓您決定
     })();
 };
 function loadList(){
     $.getJSON(API, {action:'list', kw:$('#kwInput').val()||''}, function(res){
-        if (!res.success){ $('#pfBody').html('<tr><td colspan="10" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        if (!res.success){ $('#pfBody').html('<tr><td colspan="11" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
         LIST_ROWS = res.rows || [];
         PG_PAGE = 1;
         renderList();
@@ -1057,6 +1072,12 @@ function renderListRows(rows){
                 + '<td>'+esc(r.created_by_name||'')+'</td>'
                 + '<td'+(r.biz_date?'':' title="此筆尚未填業務日期，暫顯示建檔日期" style="color:#A8906E;"')+'>'
                 + fmtDate(r.biz_date || (r.created_at||'').substring(0,10))+'</td>'
+                + '<td>'+(r.last_printed_at
+                    ? '<span class="pf-op" style="color:#b5762a;text-decoration:underline;" title="點看完整列印紀錄" onclick="openPrintLog('+r.id+',\''+esc(r.doc_no)+'\')">'
+                        + fmtDate((r.last_printed_at||'').substring(0,10))
+                        + (r.print_count > 1 ? '<span style="color:#A8906E;"> ('+r.print_count+'次)</span>' : '')
+                      + '</span>'
+                    : '<span style="color:#A8906E;">未列印</span>')+'</td>'
                 + '<td>'
                 + (CAN_EDIT ? '<span class="pf-op" title="編輯" onclick="openEdit('+r.id+')"><i class="fa fa-pencil"></i></span>' : '<span class="pf-op" title="檢視(唯讀)" onclick="viewDoc('+r.id+')"><i class="fa fa-eye"></i></span>')
                 + '<span class="pf-op" title="列印" onclick="printDoc('+r.id+')"><i class="fa fa-print"></i></span>'
@@ -2399,13 +2420,33 @@ function printDoc(id){
         doPrintDoc(res);
     });
 }
+window.openPrintLog = function(id, docNo){
+    $('#printLogDoc').text(docNo ? ('（'+docNo+'）') : '');
+    $('#printLogBody').html('<tr><td colspan="3" style="padding:12px;color:#8a6d45;">載入中…</td></tr>');
+    openMask('printLogMask');
+    $.getJSON(API, {action:'print_log_list', id:id}, function(res){
+        if (!res.success){ $('#printLogBody').html('<tr><td colspan="3" style="padding:12px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
+        var rows = res.rows || [];
+        $('#printLogBody').html(rows.length ? rows.map(function(r){
+            var t = (r.printed_at||'').replace('T',' ');
+            return '<tr><td>'+fmtDate(t.substring(0,10))+' '+esc(t.substring(11,16))+'</td>'
+                + '<td>'+(r.print_kind === 'batch' ? '批次' : '單筆')+'</td>'
+                + '<td>'+esc(r.printed_by_name||'')+'</td></tr>';
+        }).join('') : '<tr><td colspan="3" style="padding:12px;color:#8a6d45;">尚無列印紀錄</td></tr>');
+    });
+};
 window.printAnyway = function(){
     closeMask('printCheckMask');
     if (PRINT_PENDING_RES) doPrintDoc(PRINT_PENDING_RES);
     PRINT_PENDING_RES = null;
 };
 var PRINT_PENDING_RES = null;
+var PRINT_KIND = 'single';   // batchPrint 期間會切成 'batch'
 function doPrintDoc(res){
+        // 列印紀錄：這裡才是真的開視窗送印的位置；viewDoc 只是唯讀檢視不計入
+        if (res.doc && res.doc.id) {
+            $.post(API, {action:'print_log_add', id:res.doc.id, kind:PRINT_KIND}, function(){ loadList(); }, 'json');
+        }
         var pd = buildPrintDoc(res);
         var w = window.open('', '_blank');
         w.document.write('<html><head><meta charset="utf-8"><title>PFMEA潛在失效模式及效應分析</title><style>'+pd.css+'</style></head><body>'+pd.body
