@@ -217,12 +217,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <div id="boxNew">
                 <div class="grid3">
                     <div><label>文件階級（由類別推導）</label><input type="text" id="e_level" class="ro-auto" readonly data-eg-skip></div>
-                    <div><label>母文件（表單必選，掛在哪份程序書／標準書底下）</label>
-                        <select id="e_parent" data-eg-filter="輸入編號或名稱篩選…"></select></div>
+                    <div><label>母文件（表單掛在哪份程序書／標準書底下）</label>
+                        <select id="e_parent" data-eg-filter="輸入編號或名稱篩選…"></select>
+                        <div class="da-hint">沒有上階程序書可留空，直接在下方手動輸入既有的文件編碼。</div></div>
                     <div><label>部門代碼（同部門多組時選一）</label><select id="e_code"><option value="">（自動）</option></select></div>
                 </div>
                 <div style="margin-top:8px;display:flex;gap:6px;align-items:flex-end;">
-                    <div style="flex:1;" id="w_doc_no"><label>文件編碼 *</label><input type="text" id="e_doc_no" maxlength="80" placeholder="按右側「自動產生」"><div class="da-err"></div></div>
+                    <div style="flex:1;" id="w_doc_no"><label>文件編碼 *</label><input type="text" id="e_doc_no" maxlength="80" placeholder="按右側「自動產生」，或直接輸入既有編碼"><div class="da-err"></div></div>
                     <button type="button" class="b-att" id="btnGenNo"><i class="fa fa-magic"></i> 自動產生</button>
                 </div>
             </div>
@@ -508,7 +509,8 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <h4>操作步驟</h4>
         <ul>
             <li><b>新增申請單</b> → 選文件狀況與類別 → 填文件名稱、申請部門、申請人。</li>
-            <li><b>制訂</b>：文件編碼按「自動產生」（規則與 AS 文件管理完全相同——表單依<b>母文件</b>遞增、其餘依<b>階級＋部門代碼</b>遞增）。</li>
+            <li><b>制訂</b>：文件編碼按「自動產生」（規則與 AS 文件管理完全相同——表單依<b>母文件</b>遞增、其餘依<b>階級＋部門代碼</b>遞增）。
+                <b>沒有上階程序書</b>的文件，母文件留空、直接在「文件編碼」欄手動輸入既有編碼即可，不會被擋下。</li>
             <li><b>修正／廢止／增發／補發</b>：改為「選擇文件」挑既有 AS 文件，<b>首次發行日期會自動帶入</b>；版本變更日期固定＝本次申請日。</li>
             <li>填<b>制修訂內容</b>（頁次／項目／修訂前／修訂後），末列按 ↓ 自動加列；管理員若已建好<b>預設內容</b>，
                 上方會出現「帶入預設內容」下拉，選一組按<b>帶入</b>即整組接上去，帶入後仍可自行修改。</li>
@@ -819,7 +821,7 @@ function syncMode(){
     $('#verReq').toggle(required);
     $('#verHint').text(forbid ? '表單「制訂」時沒有版本，欄位不可填寫。'
         : (type === '表單' ? '表單改版依 A、B、C… 遞增（選定 AS 文件後自動建議下一碼）。' : type + '一律必須填寫版本。'));
-    // 表單制訂必須選母文件（編碼由母文件遞增）
+    // 表單制訂才需要母文件（編碼由母文件遞增）；沒有上階程序書時可留空、手動輸入編碼
     $('#e_parent').closest('div').toggle(isNew && type === '表單');
     $('#e_code').closest('div').toggle(isNew && type !== '表單');
 }
@@ -883,7 +885,13 @@ $('#btnGenNo').on('click', function(){
     var p = {action:'suggest_doc_no', level:$('#e_level').val(),
              department_id:$('#e_dept_id').val() || 0, parent_doc_id:$('#e_parent').val() || 0,
              code:$('#e_code').val() || ''};
-    if ($('#e_doc_type').val() === '表單' && !p.parent_doc_id) { alert('表單的編碼是掛在母文件底下遞增，請先選擇母文件。'); return; }
+    // 表單的編碼是掛在母文件底下遞增，沒有母文件就算不出來——但不是死路：直接手動輸入既有編碼即可
+    if ($('#e_doc_type').val() === '表單' && !p.parent_doc_id) {
+        alert('表單的編碼是掛在母文件底下遞增，沒有選母文件就無法自動產生。
+
+若這份表單沒有上階程序書、而你已經有既有的文件編碼，請直接在「文件編碼」欄手動輸入。');
+        $('#e_doc_no').focus(); return;
+    }
     $.getJSON(API, p, function(r){
         if (!r.ok) return;
         if (r.status === 'choose') {
