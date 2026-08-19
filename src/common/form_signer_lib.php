@@ -936,6 +936,20 @@ function fsd_pos_snapshot_at(PDO $db, string $date): array {
     return $cache[$date];
 }
 
+/** 部門/職稱的顯示排序（department.sort_order / position.sort_order）。 */
+function fsd_sort_maps(PDO $db): array {
+    static $m = null;
+    if ($m !== null) return $m;
+    $m = ['dept'=>[], 'pos'=>[]];
+    try {
+        foreach ($db->query("SELECT id, COALESCE(sort_order,999) so FROM department")->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $m['dept'][(int)$r['id']] = (int)$r['so'];
+        foreach ($db->query("SELECT id, COALESCE(sort_order,999) so FROM position")->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $m['pos'][(int)$r['id']] = (int)$r['so'];
+    } catch (Throwable $e) {}
+    return $m;
+}
+
 /** position_id => 職級 level（數字越小越高階）。 */
 function fsd_position_levels(PDO $db): array {
     static $lv = null;
@@ -1120,12 +1134,16 @@ function fsd_case_people_entries(PDO $db, int $uid, string $name, string $date,
         if (isset($seen[$dept])) continue;
         $seen[$dept] = 1;
         $head = trim((string)$r['department_name'] . ' ' . (string)$r['position_name']);
+        $sm = fsd_sort_maps($db);
         $out[] = ['id'=>$uid, 'dept_id'=>$dept, 'key'=>$uid . ':' . $dept, 'name'=>$name,
                   'resigned'=>$resigned, 'is_main'=>empty($r['is_main']) ? 0 : 1,
+                  'dept_sort'=>$sm['dept'][$dept] ?? 999, 'dept_name'=>(string)$r['department_name'],
+                  'pos_sort'=>$sm['pos'][(int)$r['position_id']] ?? 999,
                   'label'=>trim($head . ' ' . $name) . $suffix];
     }
     if (!$out) $out[] = ['id'=>$uid, 'dept_id'=>0, 'key'=>$uid . ':0', 'name'=>$name,
                          'resigned'=>$resigned, 'is_main'=>1,
+                         'dept_sort'=>999, 'dept_name'=>'', 'pos_sort'=>999,
                          'label'=>trim($fallbackHead . ' ' . $name) . $suffix];
     return $out;
 }
@@ -1601,10 +1619,18 @@ function fsd_backfill_people(PDO $db, string $asOfDate = ''): array {
                           WHERE u.state = 0
                           ORDER BY dept_sort, position_sort, u.user_cname");
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $u) {
-            $out[] = ['id'=>(int)$u['id'], 'name'=>$u['user_cname'], 'resigned'=>1,
-                      'label'=>trim(($u['dept_name'] ?? '') . ' ' . ($u['position_name'] ?? '') . ' ' . $u['user_cname']) . '（已離職）'];
+            // 離職者也走同一支展開/排序邏輯，才會有 dept_sort/pos_sort 等排序鍵（否則排序時會缺鍵）
+            foreach (fsd_case_people_entries($db, (int)$u['id'], (string)$u['user_cname'],
+                     $asOfDate !== '' ? $asOfDate : date('Y-m-d'),
+                     trim(($u['dept_name'] ?? '') . ' ' . ($u['position_name'] ?? '')), '', 1) as $e) $out[] = $e;
         }
     } catch (Throwable $e) { /* 離職者查不到就只給在職名單，不影響主要功能 */ }
+    // 展開成「一個職務一列」之後才排序：先排人再展開會讓同一個課室的人散開（使用者實測回報）。
+    // 順序固定 部門(課室) → 職稱 → 姓名，依 sort_order 而非姓名筆畫（ai-rules/08 第五節鐵則6）。
+    usort($out, function ($a, $b) {
+        return [(int)$a['dept_sort'], (string)$a['dept_name'], (int)$a['pos_sort'], (string)$a['name']]
+           <=> [(int)$b['dept_sort'], (string)$b['dept_name'], (int)$b['pos_sort'], (string)$b['name']];
+    });
     return $out;
 }
 
