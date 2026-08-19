@@ -219,7 +219,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                     <div><label>文件階級（由類別推導）</label><input type="text" id="e_level" class="ro-auto" readonly data-eg-skip></div>
                     <div><label>母文件（表單掛在哪份程序書／標準書底下）</label>
                         <select id="e_parent" data-eg-filter="輸入編號或名稱篩選…"></select>
-                        <div class="da-hint">沒有上階程序書可留空，直接在下方手動輸入既有的文件編碼。</div></div>
+                        <div class="da-hint">填了下方「文件編碼」會<b>自動對回母文件</b>（3-MM-02-04 → 3-MM-02）；也可以先選母文件再按「自動產生」。沒有上階程序書就留空。</div></div>
                     <div><label>部門代碼（同部門多組時選一）</label><select id="e_code"><option value="">（自動）</option></select></div>
                 </div>
                 <div style="margin-top:8px;display:flex;gap:6px;align-items:flex-end;">
@@ -545,6 +545,9 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
                 依<b>部門 → 職稱</b>順序排序（不是姓名筆畫）。<b>「申請部門」不是自己選的</b>——它由你挑的那一個職務
                 自動帶出、欄位反灰不可手填（後端也用同一套規則再算一次，直打 API 也不會存進對不起來的部門）。
                 所以要換部門，就選<b>該人在那個部門的那一列</b>。</li>
+            <li><b>母文件與文件編碼是互相對應的，兩個方向都可以</b>：先選母文件 → 按「自動產生」得到下一個編碼；
+                或直接<b>手動輸入既有編碼</b> → 母文件會<b>自動由編碼去掉最後一段推出來</b>（3-MM-02-04 → 3-MM-02）。
+                推不到對應的母文件時<b>會清空</b>而不是留著上一次選的（避免存到對不起來的母文件）。</li>
             <li><b>本人請假時可由代理人代為填表</b>：被代理人在<b>申請日期當天真的請假</b>時，申請人下拉會多出一列
                 「<b>該部門　職稱　代理人姓名（代理 被代理人）</b>」，選它即可——<b>申請部門＝被代理人的那個部門</b>
                 （例：文管中心），申請人印<b>代理人本人</b>的名字、圖章右下角自動加「<b>代</b>」字，清單與明細顯示
@@ -840,6 +843,7 @@ function syncMode(){
 }
 $('#e_doc_status, #e_doc_type').on('change', function(){
     syncMode();
+    syncParentFromNo();
     // 來源一改就重算，算不出就清空（推導欄位鐵則）
     if ($('#e_doc_status').val() === '制訂') { $('#e_first_issue_date').val(''); }
     else { var id = +$('#e_asdoc_label').data('id') || 0; if (id) pullAsDoc(id); }
@@ -902,7 +906,31 @@ function fillParents(){
         s.append('<option value="' + p.id + '">' + esc(p.doc_no + '　' + p.doc_name) + '</option>');
     });
     if (cur) s.val(cur);
+    syncParentFromNo();     // 清單畫好後，依已填的文件編碼把母文件對回去
 }
+/* 母文件＝推導欄位：由文件編碼去掉最後一段推出來（3-MM-02-04 → 3-MM-02）。
+   來源一改就重算、對不到就清空（推導欄位鐵則）；文件編碼還沒填時不動使用者已選的母文件，
+   因為「先挑母文件→自動產生編碼」這個反方向的流程還要用它。 */
+function parentCodeOf(no){
+    no = String(no || '').trim();
+    var i = no.lastIndexOf('-');
+    return i > 0 ? no.slice(0, i) : '';
+}
+function syncParentFromNo(){
+    // 只有「表單制訂」才有母文件欄（用狀況/類別判定，不用 :visible——跳窗還沒開時也要算得出來）
+    if (!($('#e_doc_status').val() === '制訂' && $('#e_doc_type').val() === '表單')) return;
+    var pc = parentCodeOf($('#e_doc_no').val());
+    if (!pc) return;                                             // 編碼還沒填＝不動已選的母文件
+    var hit = (window.__daParents || []).filter(function(p){ return p.doc_no === pc; })[0];
+    var $s = $('#e_parent');
+    if (!hit) { $s.val(''); return; }                             // 對不到母文件就清空，不留錯的
+    // 篩選框可能把這個選項暫時藏起來（共用篩選是重建 <option>），補回去才選得到
+    if (!$s.find('option[value="' + hit.id + '"]').length)
+        $s.append('<option value="' + hit.id + '">' + esc(hit.doc_no + '　' + hit.doc_name) + '</option>');
+    $s.val(String(hit.id));
+}
+
+$('#e_doc_no').on('input change', syncParentFromNo);
 
 $('#btnGenNo').on('click', function(){
     var p = {action:'suggest_doc_no', level:$('#e_level').val(),

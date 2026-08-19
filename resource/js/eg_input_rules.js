@@ -322,13 +322,23 @@
         box.setAttribute('data-eg-skip', '1');                 // 篩選框本身不套 Enter 跳欄等規則
         sel.parentNode.insertBefore(box, sel);
         var all = [];                                          // 完整選項快照
+        var rendered = '';                                     // 上一次由本函式寫進去的選項簽章
+        function sig() {
+            var a = [];
+            for (var i = 0; i < sel.options.length; i++) a.push(sel.options[i].value);
+            return a.join(String.fromCharCode(1));
+        }
         function snap() {
             all = [];
             for (var i = 0; i < sel.options.length; i++)
                 all.push({v: sel.options[i].value, t: sel.options[i].text});
         }
         snap();
+        rendered = sig();
         function apply() {
+            // 選項不是我們上次寫進去的那批＝頁面自己換過了（AJAX 撈完才填、或重繪整批），
+            // 一定要先重新快照，否則會拿舊快照（常常是「還沒填任何選項」的空快照）把清單洗掉。
+            if (sig() !== rendered) snap();
             var kw = box.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
             var cur = sel.value, html = '', hit = [];
             all.forEach(function (o) {
@@ -341,6 +351,7 @@
             sel.innerHTML = html;
             if (kw.length && hit.length === 1) sel.value = hit[0];   // 只剩一個就直接選起來
             else sel.value = cur;
+            rendered = sig();
             if (sel.value !== cur) fire(sel, 'change');              // 值真的變了才發事件，免得誤觸頁面既有 change
         }
         box.addEventListener('input', apply);
@@ -382,5 +393,5 @@
     })();
 
     /* 對外留一個旗標，檢查工具與頁面都可判斷本檔是否已載入 */
-    window.EG_INPUT_RULES = {version: 3};
+    window.EG_INPUT_RULES = {version: 4};
 })();
