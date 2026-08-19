@@ -875,10 +875,12 @@ function da_create_from_version(PDO $db, array $v, int $createdBy, string $creat
     }
     $deptId = (int)($v['department_id'] ?? 0);
     if (!$applicantId && $deptId) {
-        $m = eg_org_dept_manager($db, [$deptId]);
+        // 建議建立是補歷史單據 → 一律取「該版本修訂日當時」的部門主管，不是現任
+        $m = da_dept_manager_asof($db, [$deptId], $applyDate);
         if ($m) $applicantId = (int)$m['id'];
     }
-    $ident = $applicantId ? da_user_identity($db, $applicantId) : ['user_name'=>'', 'dept_id'=>null, 'dept_name'=>''];
+    $ident = $applicantId ? da_user_identity_asof($db, $applicantId, $applyDate, $deptId)
+                          : ['user_name'=>'', 'dept_id'=>null, 'dept_name'=>''];
     if (!$deptId && $ident['dept_id']) $deptId = (int)$ident['dept_id'];
     $deptName = (string)($v['dept_name'] ?? '') ?: (string)$ident['dept_name'];
 
@@ -1119,4 +1121,29 @@ function da_dept_manager_asof(PDO $db, array $deptIds, string $date): ?array
         }
     }
     return $best ? ['id'=>$best['id'], 'user_cname'=>$best['user_cname']] : null;
+}
+
+/**
+ * 某人在指定業務日期「當時」的身分：姓名＋當時所屬部門／職稱。
+ * $preferDeptId 有值時優先取他當時在該部門的那個職務（兼任的人有多個職務，要挑對申請部門的那一個）。
+ * $date 空字串＝退回現況（等同 da_user_identity()）。
+ */
+function da_user_identity_asof(PDO $db, int $uid, string $date, int $preferDeptId = 0): array
+{
+    $out = da_user_identity($db, $uid);          // 先取現況當底（姓名一定拿得到）
+    if (!$uid || $date === '') return $out;
+    $posts = array_values(array_filter(da_people_posts_asof($db, $date), fn($p) => (int)$p['id'] === $uid));
+    if (!$posts) return $out;                    // 當時不在職／查無職務 → 維持現況值，由呼叫端自行判斷
+    $pick = null;
+    if ($preferDeptId) {
+        foreach ($posts as $p) { if ((int)$p['dept_id'] === $preferDeptId) { $pick = $p; break; } }
+    }
+    if (!$pick) {                                // 沒指定部門或指定的當時沒有 → 取主職，再不然第一個
+        foreach ($posts as $p) { if ((int)$p['is_main'] === 1) { $pick = $p; break; } }
+        $pick = $pick ?: $posts[0];
+    }
+    return ['user_name'     => (string)$pick['user_cname'],
+            'dept_id'       => $pick['dept_id'] !== null ? (int)$pick['dept_id'] : null,
+            'dept_name'     => (string)$pick['dept_name'],
+            'position_name' => (string)$pick['position_name']];
 }

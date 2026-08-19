@@ -289,7 +289,9 @@ case 'save': {
     $applicantId = (int)($_POST['applicant_id'] ?? 0) ?: $uid;
     // 非管理員只能以自己名義開單
     if (!$P['canAdmin'] && $applicantId !== $uid) $applicantId = $uid;
-    $ident = da_user_identity($db, $applicantId);
+    // 申請人的姓名／部門一律取「本單申請日期當時」的身分（補歷史單據才不會存成他現在的部門）
+    $bizDay = trim((string)($_POST['apply_date'] ?? '')) ?: da_db_now($db)['d'];
+    $ident  = da_user_identity_asof($db, $applicantId, $bizDay, (int)($_POST['dept_id'] ?? 0));
 
     $deptId = (int)($_POST['dept_id'] ?? 0) ?: (int)($ident['dept_id'] ?? 0);
     $deptName = '';
@@ -299,7 +301,7 @@ case 'save': {
     }
 
     $r = [
-        'apply_date'   => trim((string)($_POST['apply_date'] ?? '')) ?: da_db_now($db)['d'],
+        'apply_date'   => $bizDay,
         'doc_status'   => trim((string)($_POST['doc_status'] ?? '')),
         'doc_type'     => trim((string)($_POST['doc_type'] ?? '')),
         'doc_name'     => trim((string)($_POST['doc_name'] ?? '')),
@@ -365,7 +367,8 @@ case 'save': {
     }
 
     // 核發／回收記錄（簽收者＝填寫單位；回收者固定文管中心負責人）
-    $docMgr = eg_org_dept_manager($db, eg_org_dept_ids($db, 'doc_dept'));
+    // 回收者＝文管中心負責人；簽收者＝該填寫單位主管——兩者都取「本單申請日期當時」的那一位
+    $docMgr = da_dept_manager_asof($db, eg_org_dept_ids($db, 'doc_dept'), $r['apply_date']);
     $db->prepare("DELETE FROM doc_apply_dist WHERE apply_id=?")->execute([$id]);
     $no = 0;
     foreach ($dists as $d) {
@@ -380,7 +383,7 @@ case 'save': {
         $rid = (int)($d['receiver_id'] ?? 0);
         $rnm = trim((string)($d['receiver_name'] ?? ''));
         if (!$rid && $did) {
-            $m = eg_org_dept_manager($db, eg_dept_subtree_ids($db, $did) ?: [$did]);
+            $m = da_dept_manager_asof($db, eg_dept_subtree_ids($db, $did) ?: [$did], $r['apply_date']);
             if ($m) { $rid = (int)$m['id']; $rnm = (string)$m['user_cname']; }
         }
         $db->prepare("INSERT INTO doc_apply_dist
@@ -565,7 +568,9 @@ case 'auto_sign': {
         if ($r['status'] === 'approved') { $skip[] = ($r['apply_no'] ?: "#$id") . ' 已核准'; continue; }
 
         if ($ovUser) {
-            $ident = da_user_identity($db, $ovUser);
+            // 手動指定的填表人也要用「該單業務日期當時」的身分（$ovDate 有填就以它為準）
+            $identDay = trim((string)($_POST['override_date'] ?? '')) ?: (string)$r['apply_date'];
+            $ident = da_user_identity_asof($db, $ovUser, $identDay, (int)($_POST['override_dept_id'] ?? 0));
             $r['applicant_id'] = $ovUser; $r['applicant_name'] = $ident['user_name'];
             // 兼任職務：前端送的是「該人在哪個部門的身分」，優先採用它，查不到才退回主要職務部門
             $ovDept = (int)($_POST['override_dept_id'] ?? 0);
