@@ -28,6 +28,9 @@ if (!isset($_SESSION['user_id']) && !isset($_SESSION['id'])) {
 
 $db = new DBConnection();
 $pdo = $db->getPDO();
+// AS 文件編號綁定：後端一律走共用庫，禁止各頁自寫綁定讀寫 SQL（ai-rules/16 第一之三節）
+require_once '../../src/common/asdoc_lib.php';
+define('PRQ_ASDOC_MODULE', 'process_report_query');
 
 // --- 權限檢查（比照 process_schedule.php 既有 user_module_permissions 機制，唯讀工具只需「有任一權限」即可檢視） ---
 $id = intval($_SESSION['id'] ?? 0);
@@ -84,6 +87,9 @@ if (is_null($permission_code)) {
     echo "<script>alert('無權限存取此頁面'); window.location.href='../../index.php';</script>";
     exit;
 }
+
+// 誰可以改「列印要綁哪一份 AS 文件」：具修改(U)或全權(A)者；其餘人只看得到目前綁定內容
+$prq_can_bind = (strpos($permission_code, 'A') !== false || strpos($permission_code, 'U') !== false);
 
 // ================= 共用：組出篩選條件（list / get_print / export_csv / get_facets 共用，避免各自重寫一份） =================
 // $exclude：計算某個篩選欄位自己的可選清單(facet)時，要排除該欄位自己的條件，只套用「其餘」條件
@@ -200,7 +206,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $cr = $pdo->query("SELECT customer_full FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
             if ($cr) $company = $cr['customer_full'];
 
-            echo json_encode(['success' => true, 'rows' => $rows, 'total' => count($rows), 'company_name' => $company]);
+            // 綁定的 AS 文件：表頭印 doc_name、頁尾右下印 doc_no（四階自動附加版次，由 eg_asdoc_no() 判斷）。
+            // 本頁列印屬「多筆彙總的清單型列印」，依 ai-rules/16 第三之四節**不做**業務日期回推版次，一律印現況最新版。
+            $doc = eg_asdoc_get($pdo, PRQ_ASDOC_MODULE);
+            echo json_encode(['success' => true, 'rows' => $rows, 'total' => count($rows), 'company_name' => $company,
+                'as_doc_name' => $doc['doc_name'] ?? '', 'as_doc_no' => eg_asdoc_no($doc)]);
         } elseif ($action === 'get_facets') {
             // 每個維度各自排除「自己」的篩選條件，只套用其餘條件，才能算出「若改選這個，還會有資料」的清單（雙向連動）
             // 製程按鈕比照 process_schedule.php「查詢已報工工單」：以製程大類(process_type)為單位，不是逐一製程
@@ -224,6 +234,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $people = $stmtU->fetchAll(PDO::FETCH_COLUMN);
 
             echo json_encode(['success' => true, 'processes' => $processes, 'machines' => $machines, 'people' => $people]);
+        } elseif ($action === 'asdoc_meta') {
+            // 給 eg_asdoc_picker.js 用：可綁定文件清單＋目前綁定；can_bind 決定前端要不要顯示「變更綁定」鈕
+            echo json_encode(['success' => true, 'docs' => eg_asdoc_list($pdo),
+                'cur' => eg_asdoc_get($pdo, PRQ_ASDOC_MODULE), 'can_bind' => $prq_can_bind]);
+        } elseif ($action === 'asdoc_save') {
+            // 前端已依 can_bind 隱藏按鈕，後端仍再擋一次（鐵律8：不可只做前端擋）
+            if (!$prq_can_bind) { echo json_encode(['success' => false, 'message' => '無權限修改 AS 文件綁定']); exit; }
+            $uname = '';
+            try {
+                $stU = $pdo->prepare("SELECT user_cname FROM user WHERE id=?");
+                $stU->execute([$id]);
+                $uname = (string)$stU->fetchColumn();
+            } catch (Exception $e) {}
+            eg_asdoc_save($pdo, PRQ_ASDOC_MODULE, intval($_POST['doc_id'] ?? 0), $uname);
+            echo json_encode(['success' => true, 'cur' => eg_asdoc_get($pdo, PRQ_ASDOC_MODULE)]);
         } else {
             echo json_encode(['success' => false, 'message' => '未知操作']);
         }
@@ -341,6 +366,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <label style="margin-left:0;">人員</label>
                 <input type="text" id="fPerson" list="prqPeopleList" placeholder="架機或生產人員姓名（目前篩選結果內才會出現在建議清單）" style="width:280px;">
                 <datalist id="prqPeopleList"></datalist>
+                <span style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+                    <label style="margin-left:0;">列印AS文件</label>
+                    <!-- 表頭表單名稱與頁尾右下編號皆由綁定推導，一律唯讀反灰不給手填（ai-rules/16 第一之三節） -->
+                    <input type="text" id="asDocLabel" readonly data-eg-skip="1" value="尚未綁定"
+                        title="列印時：表頭顯示這份 AS 文件的表單名稱、頁尾右下角印文件編號（四階文件自動附加版次）。由綁定推導，不可手填。"
+                        style="width:270px;background:#F3ECDF;color:#8a6d45;cursor:default;">
+                    <button id="btnAsDocBind" style="display:none;"><i class="fa fa-link"></i> 變更綁定</button>
+                </span>
             </div>
         </div>
 
@@ -382,17 +415,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <li>日期區間預設近30天；按「清除篩選(查全部)」可清空所有條件、改查全部歷史資料。</li>
             <li>列表分頁顯示（避免一次載入全部拖慢速度），可調整每頁筆數。</li>
             <li>「列印」「匯出CSV」皆依目前篩選條件抓「全部」符合筆數（不受分頁限制）。</li>
+            <li>列印前可先確認右側「列印AS文件」顯示的綁定文件；具修改權限者按「變更綁定」即可用文件編號或名稱關鍵字搜尋、改綁其他 AS 文件。</li>
         </ul>
         <h4>重要行為/常見疑問</h4>
         <div class="tip">若篩選結果筆數較多（超過3000筆），列印/匯出前會先跳出確認提示，避免不小心產生過大的列印工作。</div>
         <ul>
             <li>臨時加工（無綁定工單）的「工單」欄會顯示「臨時加工」、「料號」欄留空，客戶欄改顯示加工原因。</li>
             <li>「架機人員」＝原「設置人員」正名；架機/生產時間欄留空代表該筆報工未填該項時間。</li>
+            <li><b>列印版的 AS 文件編號</b>：綁定後，列印時大標題下方那一行會自動改印該 AS 文件的<b>表單名稱</b>，頁尾<b>右下角每一頁</b>都會印出<b>文件編號</b>（四階文件會自動附加版次，例 2-PM-01-01A）。未綁定時表頭退回顯示「報工紀錄查詢列印」、右下角不印編號。</li>
+            <li>本頁列印屬「多筆彙總的清單型列印」，印的是<b>當下現況</b>，所以文件版次一律取目前最新版，不會依報工日期回推舊版次。</li>
+            <li>編號與表單名稱都直接取自 AS 文件管理主檔，日後該文件改名或改版，本頁列印會自動跟著變，不需回來改設定。</li>
         </ul>
         <h4>設定入口</h4>
-        <p>無需另外設定，資料即時取自報工系統。</p>
+        <p>報工資料無需另外設定，即時取自報工系統。列印用的 AS 文件編號綁定在本頁工具列右側「列印AS文件 → 變更綁定」；文件本身（名稱、編號、版次）於「AS 文件管理」維護。</p>
         <h4>權限角色</h4>
-        <p>凡對「加工排程看板」（測試功能）具有任一權限（檢視/新增/修改/刪除）者即可使用本頁查詢與列印。</p>
+        <p>凡對「加工排程看板」（測試功能）具有任一權限（檢視/新增/修改/刪除）者即可使用本頁查詢與列印。<b>變更 AS 文件綁定</b>則另需<b>修改(U)或全權(A)</b>權限，其餘人只看得到目前綁定內容、不能更動。</p>
     </div>
     <div class="m-foot"><button onclick="document.getElementById('helpUseMask').style.display='none'">我知道了</button></div>
 </div></div>
@@ -403,6 +440,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -592,9 +630,13 @@ $('#btnPrint').on('click', function(){
     $.post('', f, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
         var dateTxt = (f.date_from||f.date_to) ? ((f.date_from||'不限')+' ～ '+(f.date_to||'不限')) : '不限日期(全部)';
-        var sub = '共 ' + res.total + ' 筆｜日期：' + dateTxt + '｜列印日期：' + todayStr();
+        var sub = '共 ' + res.total + ' 筆｜日期：' + dateTxt + '｜列印日期：' + egFmtDate(todayStr());
+        // 表頭＝綁定 AS 文件的表單名稱（禁寫死）；未綁定才退回本頁預設標題（ai-rules/16 第一之二節）
+        var docTitle = res.as_doc_name || '報工紀錄查詢列印';
+        // 頁尾右下角文件編號：塞進 CSS content 前先濾掉 ' 與 \，避免撐破 CSS（ai-rules/16 第三節）
+        var docNo = String(res.as_doc_no || '').replace(/['\\]/g, '');
         var body = '<div class="p-comp">' + esc(res.company_name||'') + '</div>'
-                 + '<div class="p-title">報工紀錄查詢列印</div>'
+                 + '<div class="p-title">' + esc(docTitle) + '</div>'
                  + '<div class="p-sub">' + esc(sub) + '</div>';
         body += '<table class="p-tb"><thead><tr><th>日期</th><th>製程</th><th>機台</th><th>工單</th><th>料號</th><th>客戶</th>'
               + '<th>架機人員</th><th>架機時間</th><th>生產人員</th><th>生產時間</th><th>數量</th><th>完工</th><th>備註</th></tr></thead><tbody>';
@@ -622,9 +664,13 @@ $('#btnPrint').on('click', function(){
             + 'table.p-tb thead th{background:#f3ead6;}'
             + 'table.p-tb td.tl{text-align:left;word-break:break-all;}'
             + 'table.p-tb tr{break-inside:avoid;}'
-            + '@page{margin:12mm 10mm 18mm;}';
+            + '@page{margin:12mm 10mm 18mm;'
+            + (docNo ? " @bottom-right{ content:'"+docNo+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
+            + '}';
         var w = window.open('', '_blank');
-        w.document.write('<html><head><meta charset="utf-8"><title>報工紀錄查詢列印</title><style>'+css+'</style></head><body>'+body
+        // 開頭一定要有 <!DOCTYPE html>：漏寫會落入 Quirks Mode，scrollHeight 恆等於視窗高度，
+        // 單頁文件也會誤判成多頁而印出「第1頁／共1頁」（ai-rules/16 第三之二節踩坑）
+        w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(docTitle)+'</title><style>'+css+'</style></head><body>'+body
             +'<scr'+'ipt>window.onload=function(){'
             +'var onePageA4=(297-30)*96/25.4;'
             +'if(document.body.scrollHeight>onePageA4*0.92){'
@@ -648,8 +694,38 @@ $('#btnExportCsv').on('click', function(){
     $form.remove();
 });
 
+// ── AS 文件編號綁定：UI 一律走共用 eg_asdoc_picker.js（打編號即時篩選＋清單），禁止自刻下拉（ai-rules/16 第一之三節）──
+var AS_DOCS = [], AS_CUR = null;
+function renderAsDocLabel(){
+    $('#asDocLabel').val(AS_CUR ? EGAsDoc.label(AS_CUR) : '尚未綁定');
+}
+function loadAsDoc(){
+    $.post('', {action:'asdoc_meta'}, function(res){
+        if (!res.success) return;
+        AS_DOCS = res.docs || [];
+        AS_CUR = res.cur || null;
+        if (res.can_bind) $('#btnAsDocBind').show();
+        renderAsDocLabel();
+    }, 'json');
+}
+$('#btnAsDocBind').on('click', function(){
+    EGAsDoc.open({
+        docs: AS_DOCS, current: AS_CUR ? AS_CUR.id : 0,
+        title: '報工紀錄查詢列印 AS 文件編號綁定',
+        onSave: function(id){
+            $.post('', {action:'asdoc_save', doc_id:id}, function(res){
+                if (!res.success){ alert(res.message || '儲存綁定失敗'); return; }
+                AS_CUR = res.cur || null;
+                renderAsDocLabel();
+                alert(id ? '已儲存綁定' : '已解除綁定');
+            }, 'json');
+        }
+    });
+});
+
 $('#btnPageHelp').on('click', function(){ $('#helpUseMask').css('display','block'); });
 
+loadAsDoc();
 applyFilters();
 </script>
 </body>
