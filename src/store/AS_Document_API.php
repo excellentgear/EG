@@ -82,6 +82,19 @@ function asCan(string $what): bool {
 // ── 共用工具 ───────────────────────────────────────────────────────
 function jout($arr){ echo json_encode($arr, JSON_UNESCAPED_UNICODE); exit; }
 
+/** 管理員（as_doc 管理者角色或頁面 A 權）——廢止文件的操作與檔案存取都以這個為界 */
+function asIsAdmin(): bool {
+    global $asIsRoleAdmin, $asPagePerm;
+    return $asIsRoleAdmin || strpos($asPagePerm, 'A') !== false;
+}
+/** 已廢止的文件：檔案一律只有管理員能開（線上預覽／下載／線上開檔都走這支擋） */
+function asObsoleteBlocked(PDO $db, int $docId): bool {
+    if (asIsAdmin()) return false;
+    $st = $db->prepare("SELECT is_obsolete FROM as_document WHERE id=?");
+    $st->execute([$docId]);
+    return (int)$st->fetchColumn() === 1;
+}
+
 /** 版本號正規化：去空白＋英文一律轉大寫（a→A、a-1→A-1；數字與中文不受影響）。所有寫入版本號的入口統一套用。 */
 function asNormVer($v): string { return mb_strtoupper(trim((string)$v), 'UTF-8'); }
 
@@ -417,7 +430,7 @@ case 'meta':
     $users = $db->query("SELECT id,user_cname FROM user WHERE state IN (1,90,99) OR state IS NULL ORDER BY user_cname")->fetchAll(PDO::FETCH_ASSOC);
     // 母文件候選：排除表單/四階（表單不可再當母文件）；帶 department_id 供前端自動帶入所屬部門
     $parents = $db->query("SELECT id, doc_no, doc_name, department_id FROM as_document
-                           WHERE is_deleted=0
+                           WHERE is_deleted=0 AND is_obsolete=0
                              AND COALESCE(doc_type,'') != '表單'
                              AND COALESCE(doc_level,'') != '四階'
                            ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
@@ -434,10 +447,13 @@ case 'list_documents':
     $dept  = trim($_GET['department_id'] ?? '');
     $tag   = (int)($_GET['tag_id'] ?? 0);
     $incDeleted = ($_GET['include_deleted'] ?? '0') === '1';
+    // 廢止文件在主清單一律顯示（粉紅底標示）；結構總覽才會傳 0 把它排除掉
+    $incObsolete = ($_GET['include_obsolete'] ?? '1') === '1';
 
     $where = [];
     $params = [];
-    if (!$incDeleted) $where[] = "d.is_deleted = 0";
+    if (!$incDeleted)  $where[] = "d.is_deleted = 0";
+    if (!$incObsolete) $where[] = "d.is_obsolete = 0";
     if ($kw !== '')   {
         // 搜尋範圍：文件編號/名稱＋底下紀錄(附件)的標題/備註（備註可打 #標籤 供搜尋）
         $where[] = "(d.doc_no LIKE ? OR d.doc_name LIKE ?
@@ -763,6 +779,74 @@ case 'restore_document':
     $db->prepare("UPDATE as_document SET is_deleted=0, updated_at=NOW() WHERE id=?")->execute([$id]);
     jout(['status'=>'success']);
 
+// ══════════════ 廢止／取消廢止（管理員；與軟刪除是兩種獨立狀態） ══════════════
+/* 廢止＝這份文件正式停用，但仍是品質紀錄的一部分：主清單照樣列出（粉紅底），
+ * 檔案只有管理員能開，結構總覽預設不列、勾「含已廢止」才列並在備註印廢止日期。
+ * 不需要上傳任何檔案（使用者明確要求），只記業務日期與原因。
+ * 時間戳一律取 DB（PHP date() 是 UTC、MySQL NOW() 是本地，混用會差 8 小時，見 CLAUDE.md）。 */
+case 'doc_obsolete':
+    if (!asIsAdmin()) jout(['status'=>'error','message'=>'廢止文件僅限管理員使用']);
+    $id       = (int)($_POST['id'] ?? 0);
+    $odate    = trim((string)($_POST['obsolete_date'] ?? ''));
+    $reason   = trim((string)($_POST['reason'] ?? ''));
+    $withKids = ($_POST['with_children'] ?? '0') === '1';
+    if ($id<=0) jout(['status'=>'error','message'=>'無效 ID']);
+    $now = $db->query("SELECT CURDATE() AS d, NOW() AS t")->fetch(PDO::FETCH_ASSOC);
+    if ($odate === '') $odate = $now['d'];
+    $chk = DateTime::createFromFormat('Y-m-d', $odate);
+    if (!$chk || $chk->format('Y-m-d') !== $odate) jout(['status'=>'error','message'=>'廢止日期格式不正確']);
+    if ($odate > $now['d']) jout(['status'=>'error','message'=>'廢止日期不可晚於今天']);
+
+    $st = $db->prepare("SELECT id, doc_no, doc_name, is_deleted, is_obsolete FROM as_document WHERE id=?");
+    $st->execute([$id]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
+    if ((int)$doc['is_obsolete'] === 1) jout(['status'=>'error','message'=>'此文件已經是廢止狀態，請重新整理清單']);
+
+    // 一併廢止的子文件（未刪除、未廢止者才處理）
+    $kids = [];
+    if ($withKids) {
+        $st = $db->prepare("SELECT id, doc_no FROM as_document WHERE parent_doc_id=? AND is_deleted=0 AND is_obsolete=0 ORDER BY doc_no");
+        $st->execute([$id]);
+        $kids = $st->fetchAll(PDO::FETCH_ASSOC);
+    }
+    try {
+        $db->beginTransaction();
+        $upd = $db->prepare("UPDATE as_document SET is_obsolete=1, obsolete_date=?, obsolete_reason=?, obsolete_by=?, obsolete_at=?, updated_at=? WHERE id=?");
+        $who = $currentCname ?: $currentUserName;
+        $upd->execute([$odate, ($reason !== '' ? $reason : null), $who, $now['t'], $now['t'], $id]);
+        foreach ($kids as $k) $upd->execute([$odate, ($reason !== '' ? $reason : null), $who, $now['t'], $now['t'], (int)$k['id']]);
+        $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
+                      VALUES ('views/ADM/as_document_management.php', ?, ?, ?, ?)")
+           ->execute(['廢止文件',
+               "doc_no={$doc['doc_no']} doc_name={$doc['doc_name']} 廢止日期={$odate} 原因={$reason}"
+               . ($kids ? ' 一併廢止子文件='.implode('、', array_column($kids,'doc_no')) : ''),
+               $now['t'], $who]);
+        $db->commit();
+    } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
+    jout(['status'=>'success','children'=>count($kids)]);
+
+case 'doc_unobsolete':
+    if (!asIsAdmin()) jout(['status'=>'error','message'=>'取消廢止僅限管理員使用']);
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id<=0) jout(['status'=>'error','message'=>'無效 ID']);
+    $st = $db->prepare("SELECT doc_no, doc_name, obsolete_date FROM as_document WHERE id=?");
+    $st->execute([$id]);
+    $doc = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
+    $now = $db->query("SELECT NOW() AS t")->fetchColumn();
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE as_document SET is_obsolete=0, obsolete_date=NULL, obsolete_reason=NULL, obsolete_by=NULL, obsolete_at=NULL, updated_at=? WHERE id=?")
+           ->execute([$now, $id]);
+        $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
+                      VALUES ('views/ADM/as_document_management.php', ?, ?, ?, ?)")
+           ->execute(['取消廢止文件', "doc_no={$doc['doc_no']} doc_name={$doc['doc_name']} 原廢止日期={$doc['obsolete_date']}",
+                      $now, $currentCname ?: $currentUserName]);
+        $db->commit();
+    } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
+    jout(['status'=>'success']);
+
 // ══════════════ 永久刪除（含改版紀錄與檔案；僅超級管理員，用於傳錯文件） ══════════════
 case 'delete_document_permanent':
     $isSuper = ($currentUserId === 1 && $asIsRoleAdmin);
@@ -876,6 +960,11 @@ case 'download':
     if (!asCan($inline ? 'view' : 'download')) {
         http_response_code(403); header('Content-Type: text/plain; charset=utf-8');
         exit($inline ? '無檢閱權限' : '無下載權限（下載原檔需「下載」權限，檢閱者請用線上預覽）');
+    }
+    // 已廢止的文件：檔案只有管理員能開（避免作廢版本繼續在現場流通）
+    if (asObsoleteBlocked($db, (int)$v['doc_id'])) {
+        http_response_code(403); header('Content-Type: text/plain; charset=utf-8');
+        exit('此文件已廢止，僅管理員可開啟或預覽檔案');
     }
     $fname = ($which==='apply') ? $v['apply_form_file_name'] : $v['file_name'];
     $oname = ($which==='apply') ? ($v['apply_form_original_name'] ?: $v['apply_form_file_name'])
@@ -1313,6 +1402,7 @@ case 'open_online':
     $v = $st->fetch(PDO::FETCH_ASSOC);
     if (!$v) jout(['status'=>'error','message'=>'版本不存在']);
     if (!$v['file_name']) jout(['status'=>'error','message'=>'此版本未上傳文件檔（補登資料），無檔可開']);
+    if (asObsoleteBlocked($db, (int)$v['doc_id'])) jout(['status'=>'error','message'=>'此文件已廢止，僅管理員可開啟檔案']);
     $src = asDocDir($db, (int)$v['doc_id']).DIRECTORY_SEPARATOR.$v['file_name'];
     if (!is_file($src)) jout(['status'=>'error','message'=>'檔案不存在或 NAS 未連線']);
 

@@ -340,7 +340,7 @@ if ($deptPerm === 'R') {
       <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
         <p class="text-muted" style="font-size:12px;margin-bottom:8px;">
           📕手冊　📘程序書　📗標準書　📄表單｜點文件名稱＝跳至該文件；▸/▾ 可收合展開。
-          <label style="font-weight:normal;margin-left:10px;"><input type="checkbox" id="treeShowDeleted"> 含已刪除</label>
+          <label style="font-weight:normal;margin-left:10px;" title="勾選＝連已廢止的文件一起列出，備註欄顯示廢止日期（已刪除的文件一律不列）"><input type="checkbox" id="treeShowObsolete"> 含已廢止</label>
           <span style="margin-left:10px;">AS 文件編號：<b id="treeAsDocNo">尚未綁定</b></span>
         </p>
         <div id="treeBody" style="font-size:13px;line-height:1.9;"></div>
@@ -413,6 +413,50 @@ if ($deptPerm === 'R') {
 <datalist id="dlPages"></datalist>
 <datalist id="dlSummary"></datalist>
 
+<!-- ═════════ 廢止文件 Modal（管理員；不需上傳任何檔案） ═════════ -->
+<div class="modal fade" id="obsoleteModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:94%;max-width:560px;" role="document">
+    <div class="modal-content">
+      <div class="modal-header" style="background:#FBE4E8;">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-ban" style="color:#DD5138;"></i> 廢止文件 － <span id="ob_doc_name"></span></h4>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="ob_doc_id">
+        <p class="text-muted" style="font-size:12px;">
+          廢止＝這份文件正式停用（不需要上傳任何檔案）。廢止後：清單以<b>粉紅底</b>標示、
+          <b>管理員以外的人不能開啟或預覽檔案</b>、結構總覽與其列印資料<b>不會列出</b>，
+          除非在結構總覽勾「含已廢止」——勾了才列出，備註欄顯示廢止日期。
+          文件本身與所有版本紀錄都保留，之後可「取消廢止」還原。
+        </p>
+        <div class="form-group">
+          <label>廢止日期 *</label>
+          <input type="date" class="form-control" id="ob_date" max="9999-12-31" style="max-width:200px;">
+          <span class="text-muted" style="font-size:11px;">列印文件管制總覽表時，備註欄會印這個日期。</span>
+        </div>
+        <div class="form-group">
+          <label>廢止原因（選填）</label>
+          <input type="text" class="form-control" id="ob_reason" maxlength="255" placeholder="例：改由 2-PH-01-08 取代">
+        </div>
+        <div class="checkbox" id="ob_kids_box" style="display:none;">
+          <label><input type="checkbox" id="ob_with_kids"> 一併廢止底下的 <b id="ob_kids_n">0</b> 份子文件（表單）</label>
+        </div>
+        <div id="obResult"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-danger" id="obSubmit"><i class="fa fa-ban"></i> 確定廢止</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+/* 已廢止文件：粉紅底（ai-rules/10 暖色系；顏色不是唯一資訊，旁邊另有「已廢止」文字標籤） */
+tr.doc-obsolete > td { background:#FBE4E8 !important; }
+.tree-row.tree-obsolete { background:#FBE4E8; }
+.ob-tag { background:#DD5138; color:#fff; }
+</style>
 <!-- ═════════ 批次補建版本 Modal（管理員；既有文件一次補多版） ═════════ -->
 <div class="modal fade" id="verBatchModal" tabindex="-1" role="dialog">
   <div class="modal-dialog modal-lg" style="width:94%;max-width:1150px;" role="document">
@@ -1078,9 +1122,12 @@ $(function(){
       if(parseInt(d.children_count)>0) rel += ` <a href="#" class="rel-children label label-success" data-id="${d.id}" data-no="${esc(d.doc_no)}" title="展開此文件底下的表單">表單 ×${d.children_count}</a>`;
       // 文件名稱點擊：有線上開檔權限且為 Office 檔 → 下載工作副本進 Excel/Word 直接打字；
       // 否則 → PDF 線上預覽（後端 download 均另驗權限）
+      // 已廢止：管理員以外不給開啟／預覽／下載檔案（後端 download / open_online 同樣擋一次）
+      const isOb = d.is_obsolete==1;
+      const fileOk = !isOb || window.asPerm.admin;
       let nameCell = esc(d.doc_name);
       if(!d.current_file_name && curVer) nameCell += ' <span class="label label-default" title="補登資料，尚未上傳文件檔">無檔</span>';
-      if(curVer && d.current_file_name){
+      if(curVer && d.current_file_name && fileOk){
         if(canEO && isOffice){
           nameCell = `<a href="#" class="op-online" data-ver="${curVer}" title="下載工作副本，開啟後按「啟用編輯」即可打字/列印（不動正式版本檔）">${esc(d.doc_name)} <i class="fa fa-pencil text-muted" style="font-size:11px;"></i></a>`;
         } else {
@@ -1090,9 +1137,10 @@ $(function(){
       // 操作欄：固定欄位（每列同寬對齊）＋常用圖示鈕＋管理動作收進 ⚙ 下拉
       const hasFile = !!d.current_file_name;
       const slot = (html, w)=>`<span style="display:inline-block;min-width:${w}px;text-align:center;">${html||''}</span>`;
-      const sPrev = (curVer && hasFile)
-        ? `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上預覽（PDF）"><i class="fa fa-eye"></i></a>` : '';
-      const sDl = (curVer && hasFile && canDL)
+      const sPrev = (curVer && hasFile && fileOk)
+        ? `<a class="btn btn-xs btn-default" href="${API}?action=download&which=file&version_id=${curVer}&inline=1" target="_blank" title="線上預覽（PDF）"><i class="fa fa-eye"></i></a>`
+        : ((curVer && hasFile) ? '<span class="text-muted" title="此文件已廢止，僅管理員可開啟檔案"><i class="fa fa-ban"></i></span>' : '');
+      const sDl = (curVer && hasFile && canDL && fileOk)
         ? `<a class="btn btn-xs btn-info" href="${API}?action=download&which=file&version_id=${curVer}" title="下載原檔"><i class="fa fa-download"></i></a>` : '';
       // 表單=「紀錄」（填寫後的表單）；其他文件=「附件」（無編號、僅留存的相關檔案）
       const rc = parseInt(d.record_count)||0;
@@ -1114,12 +1162,19 @@ $(function(){
           ? `<li><a href="javascript:void(0)" class="op-restore" data-id="${d.id}"><i class="fa fa-undo"></i> 還原文件</a></li>`
           : `<li><a href="javascript:void(0)" class="op-del" data-id="${d.id}" style="color:#d9534f;"><i class="fa fa-trash"></i> 刪除文件</a></li>`;
       }
+      if(window.asPerm.admin){
+        if(mgmt) mgmt += '<li class="divider"></li>';
+        mgmt += isOb
+          ? `<li><a href="javascript:void(0)" class="op-unobsolete" data-id="${d.id}" data-name="${esc(d.doc_name)}"><i class="fa fa-undo"></i> 取消廢止</a></li>`
+          : `<li><a href="javascript:void(0)" class="op-obsolete" data-id="${d.id}" data-name="${esc(d.doc_name)}" data-kids="${parseInt(d.children_count)||0}" style="color:#DD5138;"><i class="fa fa-ban"></i> 廢止文件</a></li>`;
+      }
       if(window.asPerm.super_delete) mgmt += `<li><a href="javascript:void(0)" class="op-del-permanent" data-id="${d.id}" data-name="${esc(d.doc_name)}" style="color:#a94442;"><i class="fa fa-trash-o"></i> 永久刪除（含改版紀錄，不可復原）</a></li>`;
       const sGear = mgmt
         ? `<div class="btn-group"><button class="btn btn-xs btn-default dropdown-toggle" data-toggle="dropdown" title="管理（編輯/權限/刪除）"><i class="fa fa-cog"></i> <span class="caret"></span></button><ul class="dropdown-menu dropdown-menu-right">${mgmt}</ul></div>` : '';
       ops = slot(sPrev,32)+slot(sDl,32)+slot(sRvf,32)+slot(sHist,32)+slot(sVer,46)+slot(sRec,60)+slot(sGear,44);
-      const delMark = d.is_deleted==1 ? ' <span class="label label-default">已刪除</span>' : '';
-      tb.append(`<tr>
+      const delMark = (d.is_deleted==1 ? ' <span class="label label-default">已刪除</span>' : '')
+        + (isOb ? ` <span class="label ob-tag" title="廢止日期 ${esc(dispDate(d.obsolete_date||''))}${d.obsolete_reason?'｜'+esc(d.obsolete_reason):''}">已廢止 ${esc(dispDate(d.obsolete_date||''))}</span>` : '');
+      tb.append(`<tr class="${isOb?'doc-obsolete':''}">
         ${canU?`<td><input type="checkbox" class="doc-chk" value="${d.id}"></td>`:''}
         <td>${esc(d.doc_no)}${delMark}</td>
         <td>${nameCell}</td>
@@ -1383,9 +1438,10 @@ $(function(){
     const caret = hasKids ? `<a href="javascript:void(0)" class="tree-toggle" style="display:inline-block;width:14px;color:#888;text-decoration:none;">▾</a>` : `<span style="display:inline-block;width:14px;"></span>`;
     const rc  = parseInt(d.record_count)||0;
     const recBadge = rc>0 ? `<a href="javascript:void(0)" class="tree-recbadge label label-warning" data-id="${d.id}" data-type="${esc(d.doc_type)}" title="點擊展開附件清單（可預覽/下載）" style="font-size:10px;cursor:pointer;">${d.doc_type==='表單'?'紀錄':'附件'}×${rc} <i class="fa fa-caret-down"></i></a>` : '';
-    const del = d.is_deleted==1 ? '<span class="label label-default" style="font-size:10px;">刪</span>' : '';
+    const isOb = d.is_obsolete==1;
+    const del = isOb ? `<span class="label ob-tag" style="font-size:10px;" title="廢止日期 ${esc(dispDate(d.obsolete_date||''))}">廢</span>` : '';
     // 表格式欄位：名稱欄吃縮排，版本/紀錄/部門固定寬度＝虛擬框線對齊
-    return `<div class="tree-row" style="display:flex;align-items:center;border-bottom:1px dashed #eee;padding:1px 0;">
+    return `<div class="tree-row${isOb?' tree-obsolete':''}" style="display:flex;align-items:center;border-bottom:1px dashed #eee;padding:1px 0;">
       <div style="flex:1;min-width:0;padding-left:${depth*22}px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
         ${caret}${icon} <a href="javascript:void(0)" class="tree-doc" data-no="${esc(d.doc_no)}" title="${esc(d.doc_no)} ${esc(d.doc_name)}｜點擊跳至此文件"><strong>${esc(d.doc_no)}</strong> ${esc(d.doc_name)}</a>
       </div>
@@ -1456,7 +1512,8 @@ $(function(){
     }).filter(p=>p.rows.length);   // 無文件的階不印那一頁
   }
   function loadTree(){
-    $.getJSON(API+'?action=list_documents', {include_deleted: $('#treeShowDeleted').is(':checked')?'1':'0'}, r=>{
+    // 結構總覽只認「廢止」：已刪除（誤建）的文件一律不列；廢止的預設不列，勾了才列
+    $.getJSON(API+'?action=list_documents', {include_deleted:'0', include_obsolete: $('#treeShowObsolete').is(':checked')?'1':'0'}, r=>{
       if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
       TREE_DOCS = r.data||[];
       renderTree(TREE_DOCS);
@@ -1635,7 +1692,8 @@ $(function(){
       p.rows.forEach((d,i)=>{
         body += `<tr><td>${i+1}</td><td>${esc(d.doc_no)||''}</td><td class="tl">${esc(d.doc_name)||''}</td>`
               + `<td>${esc(d.dept_name)||''}</td><td>${esc(d.current_version)||''}</td>`
-              + `<td>${esc(d.revised_date)||''}</td><td>${d.is_deleted==1?'已作廢':''}</td></tr>`;
+              + `<td>${esc(dispDate(d.revised_date))||''}</td>`
+              + `<td>${d.is_obsolete==1 ? ('廢止 '+esc(dispDate(d.obsolete_date||''))) : ''}</td></tr>`;
       });
       // 簽章列：左＝核准、右＝修改；日期＝該階文件最新修改日期（未核准則不蓋章）
       const dot = (p.date||'').replace(/-/g,'.');
@@ -1691,7 +1749,7 @@ $(function(){
       +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
     w.document.close();
   });
-  $('#treeShowDeleted').on('change', loadTree);
+  $('#treeShowObsolete').on('change', loadTree);
   $('#treeBody').on('click','.tree-toggle', function(){
     const $kids = $(this).closest('.tree-node').children('.tree-kids');
     $kids.toggle();
@@ -2009,6 +2067,41 @@ $(function(){
         else alert(r.message||'失敗');
      })
      .fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $in.val(''); });
+  });
+
+  // ══ 廢止／取消廢止（管理員；與刪除是兩種獨立狀態）══
+  $('#docTableBody').on('click','.op-obsolete', function(){
+    const kids = parseInt($(this).data('kids'))||0;
+    $('#ob_doc_id').val($(this).data('id'));
+    $('#ob_doc_name').text($(this).data('name'));
+    $('#ob_reason').val('');
+    $('#obResult').empty();
+    $('#ob_with_kids').prop('checked', false);
+    $('#ob_kids_box').toggle(kids>0); $('#ob_kids_n').text(kids);
+    // 廢止日期預設今天（業務日期；時間戳由後端取 DB 時間，見 ai-rules/21）
+    $('#ob_date').val(new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10));
+    $('#obsoleteModal').modal('show');
+  });
+  $('#obSubmit').on('click', function(){
+    const id=$('#ob_doc_id').val(), dt=$('#ob_date').val();
+    if(!dt){ $('#obResult').html('<div class="alert alert-danger" style="margin-top:8px;">請填寫廢止日期</div>'); return; }
+    const $b=$(this).prop('disabled',true); NProgress.start();
+    $.post(API+'?action=doc_obsolete', {id:id, obsolete_date:dt, reason:$('#ob_reason').val(),
+                                        with_children: $('#ob_with_kids').is(':checked')?'1':'0'}, r=>{
+      if(r.status==='success'){
+        $('#obsoleteModal').modal('hide');
+        showToast('已廢止此文件' + (r.children ? `（含 ${r.children} 份子文件）` : ''));
+        loadDocs(true);
+      } else { $('#obResult').html(`<div class="alert alert-danger" style="margin-top:8px;">${esc(r.message)}</div>`); }
+    },'json').fail(()=>alert('請求失敗')).always(()=>{ NProgress.done(); $b.prop('disabled',false); });
+  });
+  $('#docTableBody').on('click','.op-unobsolete', function(){
+    const id=$(this).data('id');
+    if(!confirm(`確定取消廢止「${$(this).data('name')}」？\n取消後這份文件會恢復正常：所有人可依權限開啟檔案，結構總覽也會重新列出。`)) return;
+    NProgress.start();
+    $.post(API+'?action=doc_unobsolete', {id:id}, r=>{
+      if(r.status==='success'){ showToast('已取消廢止'); loadDocs(true); } else alert(r.message||'失敗');
+    },'json').fail(()=>alert('請求失敗')).always(()=>NProgress.done());
   });
 
   // ══ 批次補建版本（管理員）／補舊版次（超管）══
