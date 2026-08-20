@@ -1647,6 +1647,7 @@ $can_op_convert            = $can_create;                               // OP轉
 $can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
 $can_designer_assign_cog   = ($permission_code === 'A');                // 指派設計旁的設定齒輪（無專屬功能碼，沿用管理員門檻）
+$can_master_edit           = ($permission_code === 'A');                // 前往料號主檔編輯按鈕（舊制沿用管理員門檻；RBAC 啟用後改走 ot_master_edit）
 
 // 是否顯示操作欄位 (只有 R 權限時不顯示)
 $show_op_col = ($can_create || $can_update);
@@ -1761,6 +1762,7 @@ if ($OT_USE_RBAC) {
     $can_view_amount            = ot_hasF('ot_view_amount');
     $can_keyway_calc            = ot_hasF('ot_keyway_calc');
     $can_designer_assign_cog   = $IS_OT_RBAC_ADMIN;
+    $can_master_edit           = ot_hasF('ot_master_edit');
     $show_op_col      = ($can_create || $can_update);
     $show_gear_tool   = $IS_OT_RBAC_ADMIN || ot_hasF('ot_gear_calc'); // 齒輪計算改由角色控制
     if (!$IS_OT_RBAC_ADMIN && !ot_hasF('ot_view')) {
@@ -2224,8 +2226,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $cust_dn_map     = [];   // customer_id  => ['count'=>N,'has_img'=>bool]
     $labels_map      = [];   // d_id_ID int  => [['name'=>'…','val'=>'…'],…]
     $has_drawing_map = [];   // d_id string => true（bom 圖面）
-    $has_quote_map   = [];   // d_id string => true（報價單附件）
+    $has_quote_map   = [];   // d_id string => true（報價單附件／報價明細）
     $has_att_map     = [];   // d_id string => true（料號其他附件）
+    $has_order_map   = [];   // d_id string => true（訂單附件）
     $stock_map       = [];   // d_id string => ['qty_single'=>N,'qty_combo'=>N,'locs'=>'…']
     $gear_map        = [];   // d_id_ID int  => gear_spec_str
     $drawing_no_map  = [];   // d_id_ID int  => Drawing_No string
@@ -2473,6 +2476,39 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         }
                     } catch (Exception $e) {}
                 }
+                // (3) 沒有任何報價附件、但這個料號本來就有報價明細 → bom_viewer 的「訂單／報價」分頁一樣有內容
+                //     （該分頁的報價區塊是靠 quotation_item 撈出來的，不是只看附件），所以料號一樣要能點開
+                if (!empty($did_of_part)) {
+                    try {
+                        $pks9 = array_keys($did_of_part);
+                        $ph9  = implode(',', array_fill(0, count($pks9), '?'));
+                        $qi9  = $pdo->prepare("SELECT DISTINCT qi.d_setting_d_id FROM quotation_item qi WHERE qi.d_setting_d_id IN ($ph9)");
+                        $qi9->execute($pks9);
+                        foreach ($qi9->fetchAll(PDO::FETCH_COLUMN) as $pk9) {
+                            $pn9 = $did_of_part[(int)$pk9] ?? null;
+                            if ($pn9 !== null) $has_quote_map[$pn9] = true;
+                        }
+                    } catch (Exception $e) {}
+                }
+            }
+
+            // 訂單附件（order_attachments）：bom_viewer 的「訂單／報價」分頁也會列訂單附件，
+            // 所以就算這個料號沒有圖面／報價／料號附件，只要訂單上傳過附件，料號一樣要是可點的超連結。
+            // 權限沿用其他附件同一組（與 bom_viewer 的 _canOrder = canOtherView 一致）。
+            if ($can_other_view && !empty($did_of_part)) {
+                try {
+                    $pksA = array_keys($did_of_part);
+                    $phA  = implode(',', array_fill(0, count($pksA), '?'));
+                    $oaA  = $pdo->prepare("SELECT DISTINCT ot.d_id_ID
+                                           FROM order_attachments a
+                                           JOIN order_track ot ON ot.Order_id = a.order_id
+                                           WHERE a.status='active' AND ot.d_id_ID IN ($phA)");
+                    $oaA->execute($pksA);
+                    foreach ($oaA->fetchAll(PDO::FETCH_COLUMN) as $pkA) {
+                        $pnA = $did_of_part[(int)$pkA] ?? null;
+                        if ($pnA !== null) $has_order_map[$pnA] = true;
+                    }
+                } catch (Exception $e) {}   // order_attachments 尚未建表時略過
             }
         }
 
@@ -2663,12 +2699,14 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     $_has_draw   = $has_drawing_map[$order['d_id']] ?? false;
                     $_has_quote  = $has_quote_map[$order['d_id']]   ?? false;
                     $_has_att    = $has_att_map[$order['d_id']]     ?? false;
-                    // 只要圖面／報價資料／其他附件任一有資料就可點開（bom_viewer 會自動切到第一個有資料的分頁）
-                    $_has_files  = $_has_draw || $_has_quote || $_has_att;
+                    $_has_ordatt = $has_order_map[$order['d_id']]  ?? false;
+                    // 只要圖面／報價／訂單附件／其他附件任一有資料就可點開（bom_viewer 會自動切到第一個有資料的分頁）
+                    $_has_files  = $_has_draw || $_has_quote || $_has_att || $_has_ordatt;
                     $_file_kinds = [];
-                    if ($_has_draw)  $_file_kinds[] = '圖面';
-                    if ($_has_quote) $_file_kinds[] = '報價資料';
-                    if ($_has_att)   $_file_kinds[] = '其他附件';
+                    if ($_has_draw)   $_file_kinds[] = '圖面';
+                    if ($_has_quote)  $_file_kinds[] = '報價資料';
+                    if ($_has_ordatt) $_file_kinds[] = '訂單附件';
+                    if ($_has_att)    $_file_kinds[] = '其他附件';
                     $_file_tip   = $_has_files ? ('點擊查閱：' . implode('／', $_file_kinds)) : '';
                     $_dn_total   = ($_part_dn ? $_part_dn['count'] : 0) + ($_cust_dn ? $_cust_dn['count'] : 0);
                     $_dn_img     = ($_part_dn && $_part_dn['has_img']) || ($_cust_dn && $_cust_dn['has_img']);
@@ -2690,7 +2728,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <?php if ($_has_files): ?>
                         <span class="part-link" style="cursor:pointer;" title="<?= safe_html($_file_tip) ?>" onclick="openPartDrawing('<?= safe_html($order['d_id']) ?>')"><?= safe_html($order['d_id']) ?></span>
                         <?php else: ?>
-                        <span style="color:#555;cursor:default;" onclick="showNoDrawingToast()" title="無圖面／報價／附件資料"><?= safe_html($order['d_id']) ?></span>
+                        <span style="color:#555;cursor:default;" onclick="showNoDrawingToast()" title="無圖面／報價／訂單附件／其他附件資料"><?= safe_html($order['d_id']) ?></span>
                         <?php endif; ?>
                         <?php if (!empty($order['assembly_parent_order_id'])):
                             $_asm_src = $asmSrcMap[(int)$order['assembly_parent_order_id']] ?? null;
@@ -2721,6 +2759,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             <i class="fa fa-file-text-o"></i><?= $_dn_total ?><?= $_dn_img ? '<i class="fa fa-image" style="font-size:8px;margin-left:1px;"></i>' : '' ?>
                         </button>
                         <?php endif; ?>
+                        <?php endif; ?>
+                        <?php if ($can_master_edit): ?>
                         <?php if (!empty($order['d_id_ID'])): ?>
                         <a href="../../views/pages/master_data_management.php?open_part=<?= intval($order['d_id_ID']) ?>&part_search=<?= urlencode($order['d_id'] ?? '') ?>" target="_blank"
                             class="btn btn-xs" style="padding:0 4px;font-size:10px;line-height:16px;background:#f0fff8;border:1px solid #1ABB9C;color:#1ABB9C;flex-shrink:0;" title="前往料號主檔編輯">
@@ -3213,6 +3253,8 @@ foreach($dCounts as $c) {
         .gear-output-val.val-err   { background: #fff0f0; color: #c0392b; font-weight: 700; }
         .gear-output-val.val-warn  { background: #fffbea; color: #856404; font-weight: 700; }
         .gear-output-val.val-boss  { background: #fff3e0; color: #e65100; font-weight: 700; }
+        .gear-output-val.val-cust  { background: #f3e5f5; color: #6a1b9a; font-weight: 700; }
+        .gear-out-label.lbl-cust   { color: #6a1b9a; font-weight: 700; }
 
         /* DMS 三欄角度輸入 */
         .dms-wrap { display: flex; align-items: center; gap: 4px; }
@@ -5398,7 +5440,7 @@ foreach($dCounts as $c) {
                         var specTxt   = (s.Specification || '').substring(0, 14);
                         var noteTxt   = (s.Content || s.Note || '').substring(0, 20);
                         html += '<tr style="background:' + bg + ';border-bottom:1px solid #eee;">';
-                        html += '<td style="padding:2px 4px;white-space:nowrap;color:#666;">' + (s.Order_date||'').substring(0,10) + '</td>';
+                        html += '<td style="padding:2px 4px;white-space:nowrap;color:#666;">' + (s.Order_date||'').substring(0,10).replace(/-/g,'.') + '</td>';
                         html += '<td style="padding:2px 4px;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(s.Client_name||'') + '">' + escapeHtml((s.Client_name||'').substring(0,6)) + '</td>';
                         html += '<td style="padding:2px 4px;text-align:right;font-weight:600;">' + (parseInt(s.Qty)||0).toLocaleString() + '</td>';
                         html += '<td style="padding:2px 4px;text-align:right;">' + priceStr + '</td>';
@@ -6761,7 +6803,7 @@ foreach($dCounts as $c) {
             });
         }
 
-        // --- Status Update Functions (Copied logic from NewOrder_Track222.php) ---
+        // --- Status Update Functions ---
 
         function updateInReview(orderId) {
             var cell = $(`tr[data-orderid='${orderId}'] td[name='pmGetCell']`);
@@ -6880,7 +6922,7 @@ foreach($dCounts as $c) {
 
         // 無圖面資料提示（5 秒後自動消失）
         function showNoDrawingToast() {
-            showToast('此料號無圖面／報價／附件資料', 'warning');
+            showToast('此料號無圖面／報價／訂單附件／其他附件資料', 'warning');
         }
 
         function showFile(el, path, type) {
@@ -10020,7 +10062,7 @@ foreach($dCounts as $c) {
                             <div class="gear-out-row"><span class="gear-out-label">理論跨齒厚 Wk</span><span class="gear-output-val" id="go-wk">—</span></div>
                             <div class="gear-out-row" id="go-row-wk-bmin"><span class="gear-out-label">最小可量測齒寬 b<small style="color:#999;font-weight:400;">（跨此齒數所需工件厚度）</small></span><span class="gear-output-val" id="go-wk-bmin">—</span></div>
                             <div class="gear-out-row" id="go-row-cust-wk" style="display:none;"><span class="gear-out-label">客戶跨齒厚下限 / 上限</span><span class="gear-output-val" id="go-cust-wk-range">—</span></div>
-                            <div class="gear-out-row"><span class="gear-out-label">建議滾齒跨齒厚（依標準）</span><span class="gear-output-val val-ok" id="go-rechob-wk" style="font-weight:700;">—</span></div>
+                            <div class="gear-out-row"><span class="gear-out-label" id="go-rechob-wk-lbl">建議滾齒跨齒厚（依標準）</span><span class="gear-output-val val-ok" id="go-rechob-wk" style="font-weight:700;">—</span></div>
                             <div class="gear-out-row" id="go-row-cust-rh-wk" style="display:none;"><span class="gear-out-label" style="color:#6a1b9a;">客戶規格 建議滾齒跨齒厚 Wk</span><span class="gear-output-val" id="go-cust-rh-wk" style="font-weight:700;color:#6a1b9a;">—</span></div>
                             <div class="gear-out-row"><span class="gear-out-label">預留量（模數/外徑取大）</span><span class="gear-output-val" id="go-allow-info">—</span></div>
                         </div>
@@ -11170,6 +11212,8 @@ foreach($dCounts as $c) {
         gSetText('go-m-lbl',  _gearInternal ? '跨銷值 M（內量 dc−dp）' : '標準跨珠值 M');
         gSetText('go-m-title',_gearInternal ? '跨銷值 M（內齒）' : '跨珠值 M');
         gSetText('go-rechob-m-range-lbl', _gearInternal ? '跨銷值 M 下/上限' : '建議滾齒 M 下/上限（依標準跨珠值 M 換算）');
+        gSetText('go-rechob-wk-lbl', '建議滾齒跨齒厚（依標準）');
+        var _rlEl = document.getElementById('go-rechob-wk-lbl'); if (_rlEl) _rlEl.classList.remove('lbl-cust');
         var blk = document.getElementById('go-block-wk'); if (blk) blk.style.display = _gearInternal ? 'none' : '';
         var rm  = document.getElementById('go-row-rechob-m'); if (rm) rm.style.display = _gearInternal ? 'none' : '';
         ['go-mt','go-d','go-da','go-df','go-h','go-k','go-wk','go-wk-bmin','go-rechob-wk','go-allow-info','go-dp-used','go-m','go-rechob-m','go-rechob-m-range','go-cust-wk-range'].forEach(function(id){ setOut(id,''); });
@@ -11335,9 +11379,28 @@ foreach($dCounts as $c) {
             }
         }
 
+        // 客戶提供跨齒厚（選填）：有填客戶跨齒厚 Wk 或公差才視為有效客戶規格
+        // 基準值：有填「客戶跨齒厚 Wk」用之，否則用理論跨齒厚 Wk
+        var cwu = gFloat('g-cust-wtol-up'), cwd = gFloat('g-cust-wtol-dn');
+        var custWkNom = gFloat('g-cust-wk');
+        var custWkBase = (custWkNom !== null) ? custWkNom : Wk;
+        var custWkHasData = (custWkNom !== null || cwu !== null || cwd !== null);
+        // 客戶跨齒厚上限（有客戶上公差或客戶 Wk 公稱才算得出上限；僅填下公差則無上限可用）
+        var custWkUpper = (cwu !== null) ? gRound(custWkBase + cwu, 5) : (custWkNom !== null ? custWkNom : null);
+        // 有客戶跨齒厚上限時，建議滾齒跨齒厚改依客戶規格；否則沿用標準理論值
+        var useCustRechob = (custWkUpper !== null);
+        gSetText('go-rechob-wk-lbl', useCustRechob ? '建議滾齒跨齒厚（依客戶）' : '建議滾齒跨齒厚（依標準）');
+        var rechobLblEl = document.getElementById('go-rechob-wk-lbl');
+        if (rechobLblEl) rechobLblEl.classList.toggle('lbl-cust', useCustRechob);
+
         var rec_hob_Wk = null, x_rec = null, M_rec = null, M_rec_up = null, M_rec_dn = null;
         if (!is_boss && allow_val > 0) {
-            rec_hob_Wk = gRound(Wk_actual + allow_val, 5);
+            if (useCustRechob) {
+                // 客戶跨齒厚上限 → 加上公差偏移(0−(−0.02)=0.02，與 showCustRecHob 客戶M上限路徑同一套慣例)→ 加預留量
+                rec_hob_Wk = gRound(custWkUpper + 0.02 + allow_val, 5);
+            } else {
+                rec_hob_Wk = gRound(Wk_actual + allow_val, 5);
+            }
             var A = mn * Math.cos(alpha_n) * (PI * (k_val - 0.5) + z * inv_alpha_t);
             var B = 2 * mn * Math.sin(alpha_n);
             if (B !== 0) {
@@ -11375,18 +11438,14 @@ foreach($dCounts as $c) {
         } else {
             setOut('go-wk-bmin', '≥ ' + fmtNum(gRound(b_min, 3), 3) + ' mm', 'val-ok');
         }
-        // 客戶提供跨齒厚（選填）：有填客戶跨齒厚 Wk 或公差才顯示上下限列
-        // 基準值：有填「客戶跨齒厚 Wk」用之，否則用理論跨齒厚 Wk
-        var cwu = gFloat('g-cust-wtol-up'), cwd = gFloat('g-cust-wtol-dn');
-        var custWkNom = gFloat('g-cust-wk');
-        var custWkBase = (custWkNom !== null) ? custWkNom : Wk;
+        // 客戶提供跨齒厚（選填）：有填客戶跨齒厚 Wk 或公差才顯示上下限列（cwu/cwd/custWkNom/custWkUpper 已於上方讀取）
         var custWkRow = document.getElementById('go-row-cust-wk');
         if (custWkRow) {
-            if (custWkNom !== null || cwu !== null || cwd !== null) {
+            if (custWkHasData) {
                 custWkRow.style.display = '';
                 setOut('go-cust-wk-range',
                     (cwd !== null ? fmtNum(gRound(custWkBase + cwd, 5), 5) : (custWkNom !== null ? fmtNum(custWkNom,5) : '—')) + '  ~  ' +
-                    (cwu !== null ? fmtNum(gRound(custWkBase + cwu, 5), 5) : (custWkNom !== null ? fmtNum(custWkNom,5) : '—')), 'val-ok');
+                    (custWkUpper !== null ? fmtNum(custWkUpper, 5) : '—'), 'val-ok');
             } else {
                 custWkRow.style.display = 'none';
             }
@@ -11400,7 +11459,7 @@ foreach($dCounts as $c) {
             setOut('go-rechob-m', '需詢問BOSS', 'val-boss');
             setOut('go-rechob-m-range', '需詢問BOSS', 'val-boss');
         } else {
-            setOut('go-rechob-wk', allow_val > 0 ? fmtNum(rec_hob_Wk, 5) : '（待查表）', allow_val > 0 ? 'val-ok' : 'val-warn');
+            setOut('go-rechob-wk', allow_val > 0 ? fmtNum(rec_hob_Wk, 5) : '（待查表）', allow_val > 0 ? (useCustRechob ? 'val-cust' : 'val-ok') : 'val-warn');
             setOut('go-m',     typeof M_std === 'string' ? M_std : fmtNum(M_std, 5), typeof M_std === 'string' ? 'val-err' : 'val-ok');
             if (M_rec !== null && typeof M_rec === 'number') {
                 setOut('go-rechob-m', fmtNum(M_rec, 5), 'val-ok');
@@ -11860,6 +11919,7 @@ foreach($dCounts as $c) {
         var gxEl = document.getElementById('g-x');
         if (!gxEl) return;
         gxEl.value = fmtNum(x, 5);
+        calcGearM1();
         var m1btn = document.querySelector('.gear-tab-btn[data-tab="m1"]');
         switchGearTab('m1', m1btn);
         setTimeout(function(){ gxEl.focus(); gxEl.select(); }, 120);
@@ -11873,6 +11933,7 @@ foreach($dCounts as $c) {
         var gxEl = document.getElementById('g-x');
         if (!gxEl) return;
         gxEl.value = fmtNum(x, 5);
+        calcGearM1();
         var m1btn = document.querySelector('.gear-tab-btn[data-tab="m1"]');
         switchGearTab('m1', m1btn);
         setTimeout(function(){ gxEl.focus(); gxEl.select(); }, 120);
@@ -14268,4 +14329,4 @@ window.otHasFeat = function(code) {
 </script>
 
 </body>
-</html>
+</html>
