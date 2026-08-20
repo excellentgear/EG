@@ -1781,7 +1781,12 @@ else if (isset($_POST['action']) && $_POST['action'] === 'create_bom') {
             }
         }
         $db->commit();
-        echo json_encode(['success'=>true,'bom'=>$bom]);
+        // 專案管理（2-GM-02）：這張 BOM 若屬於某個專案的訂單，開立後立刻把製程帶進該專案並提示專案管理人。
+        // 掛勾內部已包 try/catch，任何失敗都不會影響 BOM 開立本身（專案端另有手動「同步 BOM」鈕可補）。
+        try {
+            include_once __DIR__ . '/../../src/common/project_lib.php';
+            prj_on_bom_created($db, $bom, (string)($uid ?? 'system'));
+        } catch (Throwable $e) { /* 不影響 BOM 開立 */ }        echo json_encode(['success'=>true,'bom'=>$bom]);
     } catch(PDOException $e){ $db->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
     exit;
 }
