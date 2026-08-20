@@ -3395,7 +3395,7 @@ function buildQuoteCard(q) {
         <div class="qli-no">${escapeHtml(q.quote_no)}${negoBadge}${draftBadge}${tempBadge}${approvalBadgeHtml(q)}${srcBadge}${attachBadge}</div>
         ${clientRow}
         <div class="qli-foot">
-            <span class="qli-date">${escapeHtml(q.quote_date)}</span>
+            <span class="qli-date">${escapeHtml(String(q.quote_date||'').replace(/-/g,'.'))}</span>
             <span class="qli-amt">${formatNumber(q.total_amount)}</span>
         </div>
     </div>`;
@@ -3520,7 +3520,7 @@ function renderViewPanel(q, contact, detail) {
     $('#viewClientTag').text(q.client_name ? ' — ' + q.client_name : '');
     renderApprovalBar(q, detail);
     updatePrintGate(q);
-    const fmt = s => s ? String(s).replace('T',' ').slice(0,16) : '';
+    const fmt = s => s ? String(s).replace('T',' ').slice(0,16).replace(/^(\d{4})-(\d{2})-(\d{2})/,'$1.$2.$3') : '';
     const cname = (detail && detail.created_by_name) || q.created_by_name || '';
     if (cname) {
         $('#viewHistCreated').html(`<i class="fa fa-user-o"></i>建立：${escapeHtml(cname)}　${escapeHtml(fmt((detail||q).created_at))}`);
@@ -3618,8 +3618,8 @@ function renderViewPanel(q, contact, detail) {
         </div>
         <div class="col-sm-6">
             <table class="table table-condensed" style="margin:0;">
-                <tr><td style="width:80px;color:#888;white-space:nowrap;">報價日期</td><td>${esc(q.quote_date||'—')}</td></tr>
-                <tr><td style="color:#888;">有效日期</td><td>${esc(q.valid_until||'—')}</td></tr>
+                <tr><td style="width:80px;color:#888;white-space:nowrap;">報價日期</td><td>${esc(q.quote_date ? String(q.quote_date).replace(/-/g,'.') : '—')}</td></tr>
+                <tr><td style="color:#888;">有效日期</td><td>${esc(q.valid_until ? String(q.valid_until).replace(/-/g,'.') : '—')}</td></tr>
                 <tr><td style="color:#888;">業務人員</td><td>${esc(q.created_by_name||'')}</td></tr>
                 <tr><td style="color:#888;">總金額</td><td><strong style="color:var(--accent);font-size:15px;">${fmtNum(q.total_amount)}</strong></td></tr>
             </table>
@@ -5767,7 +5767,7 @@ function loadItemHistory($itemRow, productId) {
                 label = r.tiers.map(t => `${formatNumber(t.qty_min)}+: ${formatNumber(t.unit_price)}`).join(' / ');
                 payload = '';
             } else {
-                label = `${escapeHtml(r.quote_date)} @ <b>${formatNumber(r.unit_price)}</b>`;
+                label = `${escapeHtml(String(r.quote_date||'').replace(/-/g,'.'))} @ <b>${formatNumber(r.unit_price)}</b>`;
                 payload = r.unit_price;
             }
             const attr = payload !== '' ? `data-price="${payload}"` : '';
@@ -6392,7 +6392,7 @@ function restoreDeletedQuote(logId) {
 // ══════════════════════════════════════════════════════
 function renderHistoryBar(d) {
     if (!d || !d.created_by_name) { $('#historyBar').hide(); return; }
-    const fmt = s => s ? s.replace('T',' ').slice(0,16) : '';
+    const fmt = s => s ? s.replace('T',' ').slice(0,16).replace(/^(\d{4})-(\d{2})-(\d{2})/,'$1.$2.$3') : '';
     $('#histCreated').html(`<i class="fa fa-user-o"></i>建立：${escapeHtml(d.created_by_name)}　${escapeHtml(fmt(d.created_at))}`);
     const $upd = $('#histUpdated');
     if (d.updated_by_name && d.updated_at) {
@@ -6477,7 +6477,7 @@ function loadDeletedLog() {
             const reason = r.delete_reason ? escapeHtml(r.delete_reason) : '<span style="color:#ccc;">—</span>';
             html += `<tr>
                 <td style="font-weight:600;color:var(--primary);">${escapeHtml(r.quote_no)}</td>
-                <td>${escapeHtml(r.quote_date || '')}</td>
+                <td>${escapeHtml(String(r.quote_date||'').replace(/-/g,'.'))}</td>
                 <td>${escapeHtml(r.client_name || '—')}</td>
                 <td style="text-align:right;">${formatNumber(r.total_amount)}</td>
                 <td style="font-size:12px;color:#555;">${reason}</td>
@@ -6512,10 +6512,11 @@ function showSnapshot(logId, quoteNo) {
         if (!row || !row.snapshot) { $('#snapshotBody').html('<p class="text-muted">無快照資料</p>'); return; }
         let snap;
         try { snap = JSON.parse(row.snapshot); } catch(e) { $('#snapshotBody').html('<pre>' + escapeHtml(row.snapshot) + '</pre>'); return; }
-        const fmt = s => s ? s.replace('T',' ').slice(0,16) : '—';
+        const fmt = s => s ? s.replace('T',' ').slice(0,16).replace(/^(\d{4})-(\d{2})-(\d{2})/,'$1.$2.$3') : '—';
+        const fmtDate = s => s ? String(s).slice(0,10).replace(/-/g,'.') : '';
         let html = `<table class="table table-condensed" style="font-size:12px;">
             <tr><td style="width:100px;color:#888;">報價單號</td><td><strong>${escapeHtml(snap.quote_no||'')}</strong></td>
-                <td style="width:80px;color:#888;">日期</td><td>${escapeHtml(snap.quote_date||'')}</td></tr>
+                <td style="width:80px;color:#888;">日期</td><td>${escapeHtml(fmtDate(snap.quote_date))}</td></tr>
             <tr><td style="color:#888;">客戶</td><td>${escapeHtml(snap.client_name||'')}</td>
                 <td style="color:#888;">幣別</td><td>${escapeHtml(snap.currency||'')}</td></tr>
             <tr><td style="color:#888;">備註</td><td colspan="3">${escapeHtml(snap.note||'')}</td></tr>
@@ -6622,7 +6623,24 @@ function loadFileList(quoteNo, isViewMode) {
         refreshPartAttachBadges();
     });
 }
+// 含必備類別的附件：只有單一料號時不需要使用者手動選，直接自動綁定該料號（多料號仍必須手動選）。
+// 會直接改寫 f.linked_parts；若有 attachment_id 一併存回 DB。回傳（可能更新過的）linked_parts JSON 字串或 null。
+function autoBindSinglePartLinkedParts(f) {
+    const catIds = (f.category_ids || (f.category_id ? String(f.category_id) : '')).split(',').map(s => s.trim()).filter(Boolean);
+    const reqCats = effectiveRequiredCats();
+    const hasReq = catIds.some(id => reqCats.some(r => Number(r) === Number(id)));
+    if (!hasReq) return f.linked_parts || null;
+    const quoteParts = getQuoteParts();
+    if (quoteParts.length !== 1) return f.linked_parts || null;
+    const cur = f.linked_parts ? JSON.parse(f.linked_parts) : null;
+    if (cur && cur.length === 1 && String(cur[0]) === String(quoteParts[0])) return f.linked_parts;
+    const newVal = JSON.stringify([quoteParts[0]]);
+    f.linked_parts = newVal;
+    if (f.attachment_id) saveAttachmentMeta(f.attachment_id, catIds.join(','), newVal);
+    return newVal;
+}
 function appendFileItem(f, quoteNo) {
+    autoBindSinglePartLinkedParts(f);
     const ext  = (f.filename.split('.').pop() || '').toLowerCase();
     const icon = ['pdf'].includes(ext) ? 'fa-file-pdf-o text-danger'
                : ['xls','xlsx'].includes(ext) ? 'fa-file-excel-o text-success'
@@ -6799,8 +6817,8 @@ function appendFileItemView(f, quoteNo) {
 // ── 渲染標籤面板（類別按鈕 + 料號連結）──────────────────────
 function renderFileTagPanel($wrap, f, quoteNo) {
     const attachId     = $wrap.data('attach-id');
-    const linkedParts  = f.linked_parts ? JSON.parse(f.linked_parts) : null;
-    const allLinked    = !linkedParts;
+    let linkedParts    = f.linked_parts ? JSON.parse(f.linked_parts) : null;
+    let allLinked      = !linkedParts;
     const quoteParts   = getQuoteParts();
 
     // 類別按鈕（多選）
@@ -6823,6 +6841,14 @@ function renderFileTagPanel($wrap, f, quoteNo) {
     // 含必備類別的附件：不可為「全部料號」，必須連結單一料號
     const reqCats    = effectiveRequiredCats();
     const hasReqCat  = curCatIds.some(id => reqCats.some(r => Number(r) === Number(id)));
+
+    // 只有單一料號時不需要使用者手動選，直接自動綁定該料號（多料號情況仍必須手動選）
+    const autoBound = autoBindSinglePartLinkedParts(f);
+    if (autoBound !== (linkedParts ? JSON.stringify(linkedParts) : null)) {
+        linkedParts = autoBound ? JSON.parse(autoBound) : null;
+        allLinked = !linkedParts;
+        $wrap.data('linked-parts', autoBound || '');
+    }
 
     // 料號按鈕
     let partsHtml = '';
