@@ -598,7 +598,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!is_dir($dir) && !@mkdir($dir, 0777, true)) throw new Exception('無法建立料號附件目錄（NAS 權限？）');
             $stamp = date('Ymd_His') . '_' . bin2hex(random_bytes(3));
             $pngFile = 'egdraw_' . $stamp . '.png';
+            // 2× 輸出的 PNG 可達十幾 MB（base64 再多 1/3），memory_limit 只有 128M：
+            // 解碼後立刻把 base64 原字串釋放掉，峰值記憶體才不會同時扛兩份
             $bin = base64_decode(substr($png, strpos($png, ',') + 1));
+            $png = ''; unset($_POST['png']);
             if ($bin === false || @file_put_contents($dir . DIRECTORY_SEPARATOR . $pngFile, $bin) === false) throw new Exception('圖檔寫入失敗');
             // 工作檔：抽離內嵌底圖 → 同目錄實體檔，JSON 只留引用
             $n = 0;
@@ -1530,6 +1533,17 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <input type="text" id="pf-name" style="flex:1;">
                 <button class="tb-btn primary" id="pf-save-btn" onclick="pfSave()"><i class="fa fa-save"></i> 儲存</button>
             </div>
+            <!-- 解析度倍率：跟「匯出／列印」跳窗同一個概念，預設 2×＝跟「另存圖片後再上傳」印出來一樣清晰 -->
+            <div class="frm-row"><label>解析度倍率</label>
+                <div style="flex:1;">
+                    <select id="pf-mult" style="width:210px;" onchange="pfRenderMultHint()">
+                        <option value="1">1×（原尺寸，檔案最小）</option>
+                        <option value="2" selected>2×（建議，列印較清晰）</option>
+                        <option value="3">3×（最清晰，檔案很大）</option>
+                    </select>
+                    <div id="pf-mult-hint" style="font-size:11.5px;color:#8b949e;margin-top:3px;"></div>
+                </div>
+            </div>
             <div class="frm-row"><label></label>
                 <span id="pf-save-status" style="font-size:11.5px;color:#8b949e;"></span>
             </div>
@@ -1768,7 +1782,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>匯出/列印：整個畫布或只匯出選取；PNG/JPG、解析度倍率（列印建議2×）；列印會自動依畫面長寬決定直/橫版並縮成一頁</li>
                 <li><b>縮放至框架</b>（頂列「畫布」旁）：先選 A4/A3＋橫式/直式（預設 A4 橫式），按「縮放至框架」把整張圖面等比例縮放＋置中成該標準尺寸（點選才套用，不會自動觸發，可 Ctrl+Z 復原）。因為每張圖面原始解析度不同，蓋章工具的「大小」是用畫布 px 輸入，同樣的數字在不同圖上印出來實際大小會不一樣——先套這個框架再蓋章，蓋出來的章大小才會一致</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
-                <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本</li>
+                <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
                 <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋</li>
                 <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編；<b>標籤（含快速標籤/自組標籤）內改字同樣適用</b></li>
@@ -5966,6 +5980,8 @@ function openPartModal() {
     document.getElementById('pf-save-status').textContent = '';
     document.querySelectorAll('.pf-cat').forEach(c => { c.checked = false; });
     const _pfIss = document.getElementById('pf-issue-date'); if (_pfIss) _pfIss.value = '';
+    document.getElementById('pf-mult').value = '2';   // 每次開窗回到建議值，避免上次調低後忘了調回去
+    pfRenderMultHint();
     pfOnNoWorkfileChange();
     pfRenderCatHint();
     pfShareSelected = new Set();
@@ -6129,18 +6145,33 @@ function nowTimeStr() {
    再另外抓畫布上面積最大那張相片的「原生像素／目前顯示尺寸」比率當作天花板——相片本身沒有
    的細節，放大倍率不該超過它原生就有的解析度，超過只是把既有瑕疵等比放大，不是加畫質。
    小張的貼圖/圖示（面積 <30% 畫布）忽略，只看主要底圖，避免被小圖拖累整體倍率。 */
+/* 存進料號附件的輸出倍率。
+   ★2026-08-20 改寫：原本會用「底圖原始像素 ÷ 畫布顯示尺寸」(srcCap) 把倍率壓回 1×，理由是
+   「輸出不必超過來源解析度，放大也長不出新細節」。但實測列印結果不成立——使用者拿同一張圖比對
+   「另存圖片(匯出跳窗預設 2×) → 再上傳料號附件」與「直接存料號附件」兩份檔案（6682×4834 vs
+   3341×2417），前者印出來明顯銳利。原因有兩個：
+     ① 畫上去的標籤/文字/圈選/遮蓋都是向量，2× 才有 2 倍的邊緣取樣，1× 的斜線與細字會有鋸齒；
+     ② 列印時若圖的像素密度低於印表機所需（A3 橫式 3341px ≈ 202dpi），是由瀏覽器/印表機往上
+        內插放大，掃描圖的細線會被糊成灰邊；先輸出到 2× 再讓它往下取樣，邊緣乾淨得多。
+   故改為「使用者在跳窗選的倍率」（預設 2×＝與另存圖片一致），只保留單邊 8192px 的 canvas 上限保護。 */
 function computeSaveMult() {
-    let mult = Math.max(2, Math.min(3, 8192 / Math.max(artW, artH, 1)));
-    let srcCap = Infinity;
-    const minArea = artW * artH * 0.3;
-    canvas.getObjects().forEach(o => {
-        if (o.type !== 'image' || !o.width || !o.height) return;
-        const dispW = o.getScaledWidth() || 1, dispH = o.getScaledHeight() || 1;
-        if (dispW * dispH < minArea) return;
-        srcCap = Math.min(srcCap, o.width / dispW, o.height / dispH);
-    });
-    if (isFinite(srcCap) && srcCap > 0) mult = Math.min(mult, Math.max(1, srcCap));
-    return mult;
+    const want = parseFloat((document.getElementById('pf-mult') || {}).value) || 2;
+    const cap = Math.max(1, 8192 / Math.max(artW, artH, 1));   // 超過瀏覽器 canvas 上限會直接轉圖失敗
+    return Math.max(1, Math.min(want, cap));
+}
+/* 倍率提示：即時顯示實際輸出像素、被 8192 上限壓下來時要講原因，並粗估檔案大小（線圖 PNG 約 0.8 bytes/px） */
+function pfRenderMultHint() {
+    const hint = document.getElementById('pf-mult-hint');
+    if (!hint) return;
+    const want = parseFloat(document.getElementById('pf-mult').value) || 2;
+    const mult = computeSaveMult();
+    const w = Math.round(artW * mult), h = Math.round(artH * mult);
+    const mb = (w * h * 0.8) / 1048576;
+    let txt = '輸出 ' + w + '×' + h + ' px（約 ' + (mb < 1 ? mb.toFixed(1) : Math.round(mb)) + ' MB）';
+    if (mult < want - 0.01) txt += '　※ 已達瀏覽器單邊 8192px 上限，實際只能用 ' + mult.toFixed(2) + '×';
+    if (mult < 2) { hint.style.color = '#f0a24b'; txt += '　※ 低於 2× 時列印會比「另存圖片後再上傳」模糊'; }
+    else hint.style.color = '#8b949e';
+    hint.textContent = txt;
 }
 async function pfSave() {
     const d = document.getElementById('pf-part').value;
