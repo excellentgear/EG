@@ -1771,9 +1771,14 @@ if ($OT_USE_RBAC) {
         exit;
     }
 }
-// 是否為「不限特定訂單」的全權管理員（跟隨目前生效中的制度：RBAC 開啟看 $IS_OT_RBAC_ADMIN，否則看舊制 'A'）；
-// 審圖/轉生管新規則要用：一般設計人員只能操作自己被指定(order_track.ate)的訂單，管理員不受此限
-$OT_IS_ADMIN_ANY = $OT_USE_RBAC ? $IS_OT_RBAC_ADMIN : ($permission_code === 'A');
+// 審圖/轉生管的「只有本人（該訂單指定的設計人員 order_track.ate）才能操作」限制，誰可以豁免。
+// 2026-08-20 使用者拍板：【只有超級管理員(id=1)】，其餘任何人（含持有系統「管理員」角色者）一律受限。
+// 為什麼改：本頁 2026-08-11 切換 RBAC 後，這裡原本寫 $IS_OT_RBAC_ADMIN（＝全站系統角色「管理員」，
+// 功能碼 all），認定基準跟舊制的頁面權限碼 'A' 不一樣——舊制只有 CRUD 沒有 'A'、order_track 角色是
+// 「業務」（刻意沒勾 ot_batch_draw/ot_to_pm）的人，只要另外掛著系統管理員角色就會每一列都長出
+// 審圖/轉生管按鈕（原本只顯示文字狀態）。後端同規則在 src/common/order_track_perm_lib.php 的
+// ot_can_operate_design()，兩邊要一起改。
+$OT_IS_ADMIN_ANY = ($id === 1);
 
 if (!($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']))) {
     $ate_list = $conn->getAll("SELECT `user_cname`,`user_uname`,`id` FROM `user` WHERE `user_status`=63");
