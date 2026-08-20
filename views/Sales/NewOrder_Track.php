@@ -2226,8 +2226,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $cust_dn_map     = [];   // customer_id  => ['count'=>N,'has_img'=>bool]
     $labels_map      = [];   // d_id_ID int  => [['name'=>'…','val'=>'…'],…]
     $has_drawing_map = [];   // d_id string => true（bom 圖面）
-    $has_quote_map   = [];   // d_id string => true（報價單附件）
+    $has_quote_map   = [];   // d_id string => true（報價單附件／報價明細）
     $has_att_map     = [];   // d_id string => true（料號其他附件）
+    $has_order_map   = [];   // d_id string => true（訂單附件）
     $stock_map       = [];   // d_id string => ['qty_single'=>N,'qty_combo'=>N,'locs'=>'…']
     $gear_map        = [];   // d_id_ID int  => gear_spec_str
     $drawing_no_map  = [];   // d_id_ID int  => Drawing_No string
@@ -2475,6 +2476,39 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         }
                     } catch (Exception $e) {}
                 }
+                // (3) 沒有任何報價附件、但這個料號本來就有報價明細 → bom_viewer 的「訂單／報價」分頁一樣有內容
+                //     （該分頁的報價區塊是靠 quotation_item 撈出來的，不是只看附件），所以料號一樣要能點開
+                if (!empty($did_of_part)) {
+                    try {
+                        $pks9 = array_keys($did_of_part);
+                        $ph9  = implode(',', array_fill(0, count($pks9), '?'));
+                        $qi9  = $pdo->prepare("SELECT DISTINCT qi.d_setting_d_id FROM quotation_item qi WHERE qi.d_setting_d_id IN ($ph9)");
+                        $qi9->execute($pks9);
+                        foreach ($qi9->fetchAll(PDO::FETCH_COLUMN) as $pk9) {
+                            $pn9 = $did_of_part[(int)$pk9] ?? null;
+                            if ($pn9 !== null) $has_quote_map[$pn9] = true;
+                        }
+                    } catch (Exception $e) {}
+                }
+            }
+
+            // 訂單附件（order_attachments）：bom_viewer 的「訂單／報價」分頁也會列訂單附件，
+            // 所以就算這個料號沒有圖面／報價／料號附件，只要訂單上傳過附件，料號一樣要是可點的超連結。
+            // 權限沿用其他附件同一組（與 bom_viewer 的 _canOrder = canOtherView 一致）。
+            if ($can_other_view && !empty($did_of_part)) {
+                try {
+                    $pksA = array_keys($did_of_part);
+                    $phA  = implode(',', array_fill(0, count($pksA), '?'));
+                    $oaA  = $pdo->prepare("SELECT DISTINCT ot.d_id_ID
+                                           FROM order_attachments a
+                                           JOIN order_track ot ON ot.Order_id = a.order_id
+                                           WHERE a.status='active' AND ot.d_id_ID IN ($phA)");
+                    $oaA->execute($pksA);
+                    foreach ($oaA->fetchAll(PDO::FETCH_COLUMN) as $pkA) {
+                        $pnA = $did_of_part[(int)$pkA] ?? null;
+                        if ($pnA !== null) $has_order_map[$pnA] = true;
+                    }
+                } catch (Exception $e) {}   // order_attachments 尚未建表時略過
             }
         }
 
@@ -2665,12 +2699,14 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     $_has_draw   = $has_drawing_map[$order['d_id']] ?? false;
                     $_has_quote  = $has_quote_map[$order['d_id']]   ?? false;
                     $_has_att    = $has_att_map[$order['d_id']]     ?? false;
-                    // 只要圖面／報價資料／其他附件任一有資料就可點開（bom_viewer 會自動切到第一個有資料的分頁）
-                    $_has_files  = $_has_draw || $_has_quote || $_has_att;
+                    $_has_ordatt = $has_order_map[$order['d_id']]  ?? false;
+                    // 只要圖面／報價／訂單附件／其他附件任一有資料就可點開（bom_viewer 會自動切到第一個有資料的分頁）
+                    $_has_files  = $_has_draw || $_has_quote || $_has_att || $_has_ordatt;
                     $_file_kinds = [];
-                    if ($_has_draw)  $_file_kinds[] = '圖面';
-                    if ($_has_quote) $_file_kinds[] = '報價資料';
-                    if ($_has_att)   $_file_kinds[] = '其他附件';
+                    if ($_has_draw)   $_file_kinds[] = '圖面';
+                    if ($_has_quote)  $_file_kinds[] = '報價資料';
+                    if ($_has_ordatt) $_file_kinds[] = '訂單附件';
+                    if ($_has_att)    $_file_kinds[] = '其他附件';
                     $_file_tip   = $_has_files ? ('點擊查閱：' . implode('／', $_file_kinds)) : '';
                     $_dn_total   = ($_part_dn ? $_part_dn['count'] : 0) + ($_cust_dn ? $_cust_dn['count'] : 0);
                     $_dn_img     = ($_part_dn && $_part_dn['has_img']) || ($_cust_dn && $_cust_dn['has_img']);
@@ -2692,7 +2728,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <?php if ($_has_files): ?>
                         <span class="part-link" style="cursor:pointer;" title="<?= safe_html($_file_tip) ?>" onclick="openPartDrawing('<?= safe_html($order['d_id']) ?>')"><?= safe_html($order['d_id']) ?></span>
                         <?php else: ?>
-                        <span style="color:#555;cursor:default;" onclick="showNoDrawingToast()" title="無圖面／報價／附件資料"><?= safe_html($order['d_id']) ?></span>
+                        <span style="color:#555;cursor:default;" onclick="showNoDrawingToast()" title="無圖面／報價／訂單附件／其他附件資料"><?= safe_html($order['d_id']) ?></span>
                         <?php endif; ?>
                         <?php if (!empty($order['assembly_parent_order_id'])):
                             $_asm_src = $asmSrcMap[(int)$order['assembly_parent_order_id']] ?? null;
@@ -6886,7 +6922,7 @@ foreach($dCounts as $c) {
 
         // 無圖面資料提示（5 秒後自動消失）
         function showNoDrawingToast() {
-            showToast('此料號無圖面／報價／附件資料', 'warning');
+            showToast('此料號無圖面／報價／訂單附件／其他附件資料', 'warning');
         }
 
         function showFile(el, path, type) {
