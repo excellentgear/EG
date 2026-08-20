@@ -1344,10 +1344,13 @@ $(document).on('click', '#btnAsCard', function () { pickAsDoc('project_card', '#
 /* 圖章 HTML（掃描實體章是非同步載入的，要等 whenReady 才拿得到正確的章） */
 function stampHtml(name, date, isDeputy, dept, post) {
     if (!name) return '';
+    /* 圖章上的日期也要走 dispDate()（ai-rules/20：顯示一律 YYYY.MM.DD）——
+       這裡很容易漏，漏了就會印成 2026-09-15，其他地方卻是 2026.09.15（既有模組踩過同一個坑） */
+    var d = date ? dispDate(date) : '';
     try {
-        if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, date || '', !!isDeputy, null, dept || '', post || '');
+        if (window.EGStamp && EGStamp.stamp) return EGStamp.stamp(name, d, !!isDeputy, null, dept || '', post || '');
     } catch (e) { /* 落到下面的純文字備援 */ }
-    return '<div style="text-align:center;">' + esc(name) + '<br><span style="font-size:10px;">' + dispDate(date) + '</span></div>';
+    return '<div style="text-align:center;">' + esc(name) + '<br><span style="font-size:10px;">' + d + '</span></div>';
 }
 
 /* 列印共用 CSS：頁碼與 AS 編號都交給 @page，不用 JS 量高度自算分頁（列印分頁鐵則） */
