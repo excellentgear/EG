@@ -6131,7 +6131,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN is_external_doc TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否列入外來文件清單'"); } catch(PDOException $e){}
                 try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN external_doc_name VARCHAR(100) NULL COMMENT '外來文件類別名稱(空=用標籤名)'"); } catch(PDOException $e){}
                 try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN show_in_other_attach TINYINT(1) NOT NULL DEFAULT 0 COMMENT '此類別的附件是否也併入 bom_viewer 其他附件分頁顯示(不影響原上傳位置的分頁)'"); } catch(PDOException $e){}
-                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'data'=>$rows]);
             } elseif ($op_code === 'save') {
                 if (!$can_attach_cat_edit) throw new Exception('無編輯附件類別標籤權限（需 A/CDR/CDRU）');
@@ -6144,6 +6144,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $ext_doc_name = trim($_POST['external_doc_name'] ?? '') ?: null;
                 $tag_vars     = trim($_POST['tag_variables'] ?? '') ?: null;
                 $show_other   = intval($_POST['show_in_other_attach'] ?? 0) ? 1 : 0;
+                // 「已作廢」標籤：掛上的附件不參與圖面新舊版判定（欄位由 dwg_change_lib 的 ensure_schema 建）
+                $obsolete     = intval($_POST['is_obsolete_mark'] ?? 0) ? 1 : 0;
                 $reactivate   = intval($_POST['reactivate'] ?? 0);
                 $op_name      = _get_operator($pdo, $uid);
                 if ($cat_id && $reactivate) {
@@ -6151,14 +6153,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['success'=>true,'message'=>'已重新啟用','cat_id'=>$cat_id]);
                 } elseif ($cat_id) {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=? WHERE id=?")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $cat_id]);
+                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=? WHERE id=?")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $cat_id]);
                     _log_audit($pdo,'update','dict','attach-cat:'.$cat_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已更新','cat_id'=>$cat_id]);
                 } else {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach) VALUES (?,?,?,?,?,?,?,?)")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other]);
+                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark) VALUES (?,?,?,?,?,?,?,?,?)")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete]);
                     $new_id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','attach-cat:'.$new_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已新增','cat_id'=>$new_id]);
@@ -8570,9 +8572,21 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                                 <input type="checkbox" id="acat-own-drawing"> 這是「自家出的圖」
                             </label>
                             <div style="font-size:10px;color:#aaa;margin-top:2px;">
-                                勾選後：上傳此類別的附件時<b>必須填發行章日期</b>，系統會拿它跟同料號既有的自家圖面比對，
+                                勾選後：上傳此類別的附件時<b>必須填發行章日期</b>，系統會拿它跟同料號既有的圖面比對，
                                 比較新就判定為<b>圖面變更</b>並請設計填變更內容。<br>
+                                比對範圍是<b>同料號＋同一個這個標籤＋同製程標籤</b>——不同標籤各自算各自的
+                                （BOSS圖只跟BOSS圖比、++圖只跟++圖比），同料號不同加工項目也各自算
+                                （上傳時選製程標籤；留空＝共用圖，會跟該標籤下所有製程一起比）。<br>
                                 客戶原圖、報價圖不要勾（原圖更新常常只是報價階段，還沒接單）。
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin-bottom:8px;">
+                            <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+                                <input type="checkbox" id="acat-obsolete-mark"> 這是「已作廢」標記
+                            </label>
+                            <div style="font-size:10px;color:#aaa;margin-top:2px;">
+                                勾選後：掛上此標籤的附件<b>一律不參與圖面新舊版判定</b>——不會被當成前一版，也不會把別張圖擠成舊版。
+                                檔案本身仍然保留、照樣看得到。預設只有「作廢」這個標籤是勾的。
                             </div>
                         </div>
                         <div class="form-group" style="margin-bottom:8px;">
@@ -9032,6 +9046,12 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                 <label style="font-size:12px;">版次</label>
                 <input type="text" id="pau-revision" class="form-control input-sm" maxlength="50" placeholder="選填">
             </div>
+            <!-- 製程標籤：同一料號不同加工項目各自一組新舊版（2026-08-20 使用者要求）；
+                 留空＝共用圖。候選只列此料號訂單有過的加工項目＋此料號已經打過的。 -->
+            <div class="form-group" style="margin-bottom:0;width:190px;flex-shrink:0;">
+                <label style="font-size:12px;">製程標籤</label>
+                <select id="pau-proc" class="form-control input-sm"><option value="">（共用）</option></select>
+            </div>
             <div class="form-group" style="margin-bottom:0;flex:1;">
                 <label style="font-size:12px;">備註</label>
                 <input type="text" id="pau-note" class="form-control input-sm" maxlength="200" placeholder="選填">
@@ -9161,6 +9181,11 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
     <div class="form-group">
         <label style="font-size:12px;font-weight:700;color:#555;">版次</label>
         <input type="text" id="pae-revision" class="form-control input-sm" maxlength="50" placeholder="選填">
+    </div>
+    <div class="form-group">
+        <label style="font-size:12px;font-weight:700;color:#555;">製程標籤
+            <small style="color:#aaa;font-weight:normal;">（同料號不同加工項目的圖各自比新舊版；留空＝共用）</small></label>
+        <select id="pae-proc" class="form-control input-sm"><option value="">（共用）</option></select>
     </div>
     <div class="form-group">
         <label style="font-size:12px;font-weight:700;color:#555;">備註</label>
@@ -17885,6 +17910,8 @@ function editAttachCat(id) {
     }
     var otherChk = document.getElementById('acat-show-other-attach');
     if (otherChk) otherChk.checked = (c.show_in_other_attach=='1'||c.show_in_other_attach===1);
+    var obsChk = document.getElementById('acat-obsolete-mark');
+    if (obsChk) obsChk.checked = (c.is_obsolete_mark=='1'||c.is_obsolete_mark===1);
     document.getElementById('acat-form-title').textContent = '修改類別';
     // Render vars
     var varsList = document.getElementById('acat-vars-list');
@@ -17911,6 +17938,8 @@ function resetAttachCatForm() {
     if (extName) extName.value = '';
     var otherChk = document.getElementById('acat-show-other-attach');
     if (otherChk) otherChk.checked = false;
+    var obsChk = document.getElementById('acat-obsolete-mark');
+    if (obsChk) obsChk.checked = false;
     document.getElementById('acat-form-title').textContent = '新增類別';
     var varsList = document.getElementById('acat-vars-list');
     if (varsList) varsList.innerHTML = '';
@@ -17961,7 +17990,8 @@ function saveAttachCategory() {
     if (!name) { showToast('請填寫類別名稱','error'); return; }
     var vars = getAttachCatVars();
     var tagVarsJson = vars.length ? JSON.stringify(vars) : '';
-    api({ action:'manage_attach_categories', op:'save', cat_id:id, category_name:name, sort_order:0, show_in_list:showInList, is_own_drawing:ownDrawing, is_external_doc:isExtDoc, external_doc_name:extDocName, show_in_other_attach:showOtherAttach, tag_variables:tagVarsJson }).done(function(r) {
+    api({ action:'manage_attach_categories', op:'save', cat_id:id, category_name:name, sort_order:0, show_in_list:showInList, is_own_drawing:ownDrawing, is_external_doc:isExtDoc, external_doc_name:extDocName, show_in_other_attach:showOtherAttach, tag_variables:tagVarsJson,
+            is_obsolete_mark:(document.getElementById('acat-obsolete-mark')||{}).checked ? 1 : 0 }).done(function(r) {
         if (r.success) { _attachCatsCache = null; showToast(r.message||'已儲存'); resetAttachCatForm(); loadAttachCatTable(); }
         else showToast(r.message||'儲存失敗','error');
     });
@@ -18574,12 +18604,16 @@ function pavZoomOut() { _pavZoom.scale = Math.max(0.05, _pavZoom.scale / 1.3); i
 function pavZoomFit() { _pavZoom.scale = 1; _pavZoom.tx = 0; _pavZoom.ty = 0; _pavApplyZoom(); }
 
 /* 列印用縮圖：批圖編輯器存出來的圖最長邊可達 8192px、數十 MB，直接整張塞給印表機驅動
-   常常卡在「準備列印時出現錯誤」或預覽跑很久（2026-08-07 使用者回報）。列印只需印表機
-   實際解析度用得到的像素（4000px 長邊已相當於 A3 300dpi 有餘），這裡不動存檔原圖／縮放
-   檢視／下載，只在按下「列印」這一刻另外產生一張縮小版餵給瀏覽器列印。縮圖失敗（跨網域
-   等意外）就退回原圖網址，至少還能印，不讓列印整個失敗。 */
+   常常卡在「準備列印時出現錯誤」或預覽跑很久（2026-08-07 使用者回報）。這裡不動存檔原圖／
+   縮放檢視／下載，只在按下「列印」這一刻另外產生一張縮小版餵給瀏覽器列印。縮圖失敗（跨網域
+   等意外）就退回原圖網址，至少還能印，不讓列印整個失敗。
+   ★2026-08-20 調整：上限 4000→6000px、輸出格式 PNG→JPEG q0.98（與 views/pm/bom_viewer.php
+   的 _bomShrinkForPrint 同步，兩邊是同一套邏輯）。原註解「4000px 相當於 A3 300dpi 有餘」算錯了：
+   4000px 攤在 A3 長邊 16.54 吋只有 242dpi。實測同一張 6682×4834：4000px PNG＝221ms/6.98MB、
+   6000px PNG＝457ms/13.08MB（資料量翻倍會重演當初的列印失敗）、6000px JPEG q0.98＝288ms/4.79MB
+   ——解析度多 50%、資料量反比原本少三成，故選 JPEG。列印當下的暫時副本，不影響原檔。 */
 function _pavShrinkForPrint(url, cb) {
-    var MAXD = 4000;
+    var MAXD = 6000;
     var img = new Image();
     img.onload = function () {
         if (img.naturalWidth <= MAXD && img.naturalHeight <= MAXD) { cb(url); return; }
@@ -18590,8 +18624,11 @@ function _pavShrinkForPrint(url, cb) {
         var ctx = cv.getContext('2d');
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
+        // JPEG 沒有透明色版：不先鋪白底的話，帶透明背景的 PNG 會被壓成整片黑
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, cv.width, cv.height);
         try { ctx.drawImage(img, 0, 0, cv.width, cv.height); } catch (e) { cb(url); return; }
-        cv.toBlob(function (blob) { cb(blob ? URL.createObjectURL(blob) : url); }, 'image/png');
+        cv.toBlob(function (blob) { cb(blob ? URL.createObjectURL(blob) : url); }, 'image/jpeg', 0.98);
     };
     img.onerror = function () { cb(url); };
     img.src = url;
@@ -18793,6 +18830,7 @@ function _pauRenderFileRows(fileArr, cats) {
     html += '<th style="padding:5px 8px;text-align:left;width:22%;">檔案名稱</th>';
     html += '<th style="padding:5px 8px;text-align:left;">類別標籤</th>';
     html += '<th style="padding:5px 8px;text-align:left;width:90px;">版次</th>';
+    html += '<th style="padding:5px 8px;text-align:left;width:150px;">製程標籤</th>';
     html += '<th style="padding:5px 8px;text-align:left;width:18%;">備註</th>';
     html += '</tr></thead><tbody>';
     fileArr.forEach(function(f, idx) {
@@ -18802,13 +18840,14 @@ function _pauRenderFileRows(fileArr, cats) {
               + '<i class="fa '+_fileIcon(ext)+'" style="color:#888;margin-right:4px;"></i>'+escHtml(f.name)+'</td>';
         html += '<td style="padding:5px 8px;">'+_pauBuildFileCatChips(idx, cats, [])+'</td>';
         html += '<td style="padding:5px 8px;"><input type="text" class="form-control input-sm pau-row-rev" data-fidx="'+idx+'" maxlength="50" placeholder="版次" style="font-size:11px;"></td>';
+        html += '<td style="padding:5px 8px;"><select class="form-control input-sm pau-row-proc" data-fidx="'+idx+'" style="font-size:11px;">'+_pauProcOptionsHtml('')+'</select></td>';
         html += '<td style="padding:5px 8px;"><input type="text" class="form-control input-sm pau-row-note" data-fidx="'+idx+'" maxlength="200" placeholder="備註（選填）" style="font-size:11px;"></td>';
         html += '</tr>';
     });
     html += '</tbody></table>';
     // 套用到全部按鈕（在第一列上方）
     var wrapHtml = '<div style="padding:6px 8px;background:#eef4fb;border-bottom:1px solid #d6eaf8;font-size:11px;color:#555;display:flex;align-items:center;gap:8px;">'
-        + '<span><i class="fa fa-info-circle"></i> 每個檔案可個別設定類別標籤與備註</span>'
+        + '<span><i class="fa fa-info-circle"></i> 每個檔案可個別設定類別標籤、製程標籤與備註（同一次出圖的 -1／-2 常常一起傳，製程要逐列各自選）</span>'
         + '<button type="button" class="btn btn-xs btn-default" onclick="pauApplyFirstToAll()" style="margin-left:auto;"><i class="fa fa-copy"></i> 以第一個為準套用全部</button>'
         + '</div>' + html;
     rows.innerHTML = wrapHtml;
@@ -18872,6 +18911,9 @@ function _openPartAttachUploadModal(dId, partNo, preselectedFiles) {
     var cntEl = document.getElementById('pau-file-count');
     if (cntEl) cntEl.textContent = !fileArr.length ? '未選擇' : fileArr.length + ' 個檔案';
     loadActiveCatsForUpload(function(cats) {
+      _pauLoadProcCands(dId, function() {
+        var _pp = document.getElementById('pau-proc');
+        if (_pp) _pp.innerHTML = _pauProcOptionsHtml('');
         if (fileArr.length > 1) {
             _pauRenderFileRows(fileArr, cats);
         } else {
@@ -18887,6 +18929,7 @@ function _openPartAttachUploadModal(dId, partNo, preselectedFiles) {
                 });
             }
         }
+      });
     });
     $('#partAttachViewModal').modal('hide');
     $('#partAttachUploadModal').modal('show');
@@ -18911,6 +18954,8 @@ function onPauFileChange(input) {
             if (single) single.style.display = '';
             // 清除舊勾選
             document.querySelectorAll('.pau-cat-chk').forEach(function(cb){ cb.checked = false; });
+            var _pp2 = document.getElementById('pau-proc');
+            if (_pp2) _pp2.innerHTML = _pauProcOptionsHtml('');
         }
     });
 }
@@ -19043,7 +19088,9 @@ function submitPartAttachUpload() {
             document.querySelectorAll('.pau-row-cat[data-fidx="'+idx+'"]:checked').forEach(function(cb){ catIds.push(cb.value); });
             var noteEl = document.querySelector('.pau-row-note[data-fidx="'+idx+'"]');
             var revEl  = document.querySelector('.pau-row-rev[data-fidx="'+idx+'"]');
-            return { catStr: catIds.join(','), note: noteEl ? noteEl.value.trim() : '', revision: revEl ? revEl.value.trim() : '', tagVarStr: '' };
+            var prcEl  = document.querySelector('.pau-row-proc[data-fidx="'+idx+'"]');
+            return { catStr: catIds.join(','), note: noteEl ? noteEl.value.trim() : '', revision: revEl ? revEl.value.trim() : '',
+                     procTag: prcEl ? prcEl.value : '', tagVarStr: '' };
         } else {
             var selectedCatIds = [];
             document.querySelectorAll('.pau-cat-chk:checked').forEach(function(cb){ selectedCatIds.push(cb.value); });
@@ -19054,6 +19101,7 @@ function submitPartAttachUpload() {
             });
             return { catStr: selectedCatIds.join(','), note: (document.getElementById('pau-note').value||'').trim(),
                      revision: (document.getElementById('pau-revision').value||'').trim(),
+                     procTag: (document.getElementById('pau-proc')||{}).value || '',
                      tagVarStr: Object.keys(tagVarValues).length ? JSON.stringify(tagVarValues) : '' };
         }
     });
@@ -19083,6 +19131,7 @@ function submitPartAttachUpload() {
         fd.append('tag_var_values', s.tagVarStr||'');
         fd.append('note', s.note||'');
         fd.append('revision', s.revision||'');
+        fd.append('process_tag', s.procTag||'');
         fd.append('issue_stamp_date', issueDate);
         $.ajax({ url:PART_ATTACH_API_URL, type:'POST', data:fd, processData:false, contentType:false, success:function(r) {
             if (r.success) {
@@ -19179,6 +19228,39 @@ function dwgSkipChange() {
     if (_dwgCtx) setTimeout(function(){ openAttachAllView(_dwgCtx.dId, _pav.partNo||''); }, 200);
 }
 
+/* ── 製程標籤候選：每個料號各自一份，切料號就重載 ────────────────────────
+   來源＝該料號訂單有過的加工項目＋該料號附件已經打過的（後者就是使用者要的
+   「打過一次就記在這個料號裡」）。不列全公司製程主檔 205 筆——那是全公司的製程，
+   跟這個料號有沒有這道加工無關（2026-08-20 使用者拍板）。 */
+var _pauProcCands = [];
+function _pauLoadProcCands(dId, cb) {
+    _pauProcCands = [];
+    if (!dId) { if (cb) cb(); return; }
+    $.get(PART_ATTACH_API_URL, { action:'process_candidates', d_id:dId }, function(r) {
+        if (r && r.success) _pauProcCands = r.items || [];
+        if (cb) cb();
+    }, 'json').fail(function(){ if (cb) cb(); });   // 候選載不到不擋上傳，留「共用」即可
+}
+function _pauProcOptionsHtml(selected) {
+    var sel = (selected === null || selected === undefined) ? '' : String(selected);
+    var html = '<option value=""' + (sel === '' ? ' selected' : '') + '>（共用）</option>';
+    var groups = [['此料號已經用過','used'], ['此料號的訂單加工項目','order']];
+    var seen = {};
+    groups.forEach(function(g) {
+        var arr = _pauProcCands.filter(function(i){ return i.source === g[1]; });
+        if (!arr.length) return;
+        html += '<optgroup label="' + escHtml(g[0]) + '">';
+        arr.forEach(function(i) {
+            seen[i.value] = 1;
+            html += '<option value="' + escHtml(i.value) + '"' + (sel === i.value ? ' selected' : '') + '>' + escHtml(i.value) + '</option>';
+        });
+        html += '</optgroup>';
+    });
+    // 目前這筆存的值如果已經不在候選裡（訂單被改掉等），照樣要留著，不可以被洗成「共用」
+    if (sel !== '' && !seen[sel]) html += '<option value="' + escHtml(sel) + '" selected>' + escHtml(sel) + '（目前值）</option>';
+    return html;
+}
+
 var _paeStoredIssue = '';   // 目前編輯中附件原本存的發行章日期（不可被「預設今天」蓋掉）
 function pavEditMeta() {
     var f = _pav.currentFile;
@@ -19189,6 +19271,11 @@ function pavEditMeta() {
     document.getElementById('pae-revision').value = (f.revision === null || f.revision === undefined) ? '' : String(f.revision);
     _paeStoredIssue = (f.issue_stamp_date || '').substring(0,10);   // 這筆附件原本存的發行章日期
     document.getElementById('pae-issue-date').value = _paeStoredIssue;
+    // 製程標籤：候選依這筆附件所屬料號現查，目前值就算已不在候選內也會保留（見 _pauProcOptionsHtml）
+    _pauLoadProcCands(_pav.dId, function() {
+        var _pe = document.getElementById('pae-proc');
+        if (_pe) _pe.innerHTML = _pauProcOptionsHtml(f.process_tag || '');
+    });
     var _paeBox0 = document.getElementById('pae-cat-chips'); if (_paeBox0) _paeBox0.style.borderColor = '';
     var _paeErr0 = document.getElementById('pae-cat-err'); if (_paeErr0) _paeErr0.style.display = 'none';
     loadActiveCatsForUpload(function(cats) {
@@ -19267,14 +19354,15 @@ function submitAttachEdit() {
     // 送空字串會把原本存好的發行章日期清成 NULL，而使用者只是改了標籤、完全不會發現。
     var shownIssue = (document.getElementById('pae-issue-wrap').style.display !== 'none');
     var issueDate  = shownIssue ? (document.getElementById('pae-issue-date').value||'') : null;
-    var payload = { action:'update_meta', id:id, category_ids:catIds.join(','), note:note, revision:revision };
+    var procTag = (document.getElementById('pae-proc')||{}).value || '';
+    var payload = { action:'update_meta', id:id, category_ids:catIds.join(','), note:note, revision:revision, process_tag:procTag };
     if (shownIssue) payload.issue_stamp_date = issueDate;
     $.post(PART_ATTACH_API_URL, payload, function(r) {
         if (!r.success) { showToast(r.message||'儲存失敗','error'); return; }
         // 更新本地資料
         var f = _pav.currentFile;
         if (f) {
-            f.category_ids = catIds.join(','); f.note = note; f.revision = revision;
+            f.category_ids = catIds.join(','); f.note = note; f.revision = revision; f.process_tag = procTag;
             if (shownIssue) f.issue_stamp_date = issueDate;   // 沒送就別動本地快取，否則下次開編輯又會變成空的
         }
         showToast('已儲存');

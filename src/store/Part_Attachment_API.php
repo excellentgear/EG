@@ -619,6 +619,14 @@ switch ($action) {
         } catch(Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         break;
 
+    // ── 製程標籤候選（此料號訂單有過的加工項目＋此料號已經打過的）──────
+    // 唯一實作在 dwg_change_lib.php，這裡只是端點；不列全公司製程主檔（使用者拍板 2026-08-20）
+    case 'process_candidates':
+        $pcDid = (int)($_GET['d_id'] ?? $_POST['d_id'] ?? 0);
+        if ($pcDid <= 0) { echo json_encode(['success'=>false,'message'=>'缺少料號 ID']); exit; }
+        echo json_encode(['success'=>true,'items'=>dwg_process_candidates($pdo, $pcDid)], JSON_UNESCAPED_UNICODE);
+        break;
+
     // ── 更新附件 meta ─────────────────────────────────────────────
     case 'update_meta':
         $id      = intval($_POST['id'] ?? 0);
