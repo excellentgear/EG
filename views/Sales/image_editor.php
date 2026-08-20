@@ -585,6 +585,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($dId <= 0) throw new Exception('請先選擇料號');
             // 發行章日期：自家出的圖必填（見 ai-rules/15-圖面變更判定依據.md）。
             // 判定要在寫入這一筆之前算，否則會拿自己跟自己比。
+            // 版次（選填）：跟料號附件頁上傳跳窗同一個欄位 part_attachments.revision(varchar(50))。
+            // 前端有 maxlength 與即時提示，這裡照樣再擋一次（貼上／直打 API 都繞不過）。
+            $revision = trim($_POST['revision'] ?? '');
+            if (mb_strlen($revision, 'UTF-8') > 50) throw new Exception('版次最多 50 個字');
+            if ($revision === '') $revision = null;
             $issueDate = trim($_POST['issue_stamp_date'] ?? '');
             if ($issueDate !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $issueDate)) throw new Exception('發行章日期格式錯誤（需 YYYY-MM-DD）');
             if (dwg_needs_issue_date($pdo, $catIds) && $issueDate === '') throw new Exception('此標籤屬於「自家出的圖」，請填發行章日期');
@@ -613,16 +618,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (@file_put_contents($dir . DIRECTORY_SEPARATOR . $workFile, json_encode($workArr, JSON_UNESCAPED_UNICODE)) === false) throw new Exception('工作檔寫入失敗');
             }
             $pdo->beginTransaction();
-            $ins = $pdo->prepare("INSERT INTO part_attachments (d_id, filename, original_name, category_ids, issue_stamp_date, note, uploaded_by, uploaded_by_id, uploaded_at)
-                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+            $ins = $pdo->prepare("INSERT INTO part_attachments (d_id, filename, original_name, category_ids, revision, issue_stamp_date, note, uploaded_by, uploaded_by_id, uploaded_at)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
             // 輸出 PNG 帶使用者選的標籤與發行章日期；工作檔兩者都不給
             //（它不是圖面，檢視端一律不列，見 imgedit_strip_workfiles，也不該參與圖面變更判定）
-            $ins->execute([$dId, $pngFile, $name . '.png', $catStr, $issueDate, '批圖編輯器輸出圖', $userName, $uid]);
+            $ins->execute([$dId, $pngFile, $name . '.png', $catStr, $revision, $issueDate, '批圖編輯器輸出圖', $userName, $uid]);
             $pngId = $pdo->lastInsertId();
             $workId = null;
             $removed = 0;
             if (!$noWorkfile) {
-                $ins->execute([$dId, $workFile, $name . '.egwork.json', null, null, '批圖工作檔（可用批圖編輯器重新開啟，標籤仍可編輯）', $userName, $uid]);
+                $ins->execute([$dId, $workFile, $name . '.egwork.json', null, null, null, '批圖工作檔（可用批圖編輯器重新開啟，標籤仍可編輯）', $userName, $uid]);
                 $workId = $pdo->lastInsertId();
                 $pdo->prepare("INSERT INTO imgedit_workfile_meta (attachment_id, owner_type, owner_dept_id) VALUES (?, ?, ?)")
                     ->execute([$workId, $scope, ($scope === 'dept' && $deptId) ? $deptId : null]);
@@ -1533,6 +1538,14 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <input type="text" id="pf-name" style="flex:1;">
                 <button class="tb-btn primary" id="pf-save-btn" onclick="pfSave()"><i class="fa fa-save"></i> 儲存</button>
             </div>
+            <!-- 版次：對應 part_attachments.revision，跟料號附件頁上傳跳窗的「版次」是同一個欄位（選填），
+                 存好後在圖面檢視/附件清單上會顯示成 Rev.○ 標籤 -->
+            <div class="frm-row"><label>版次</label>
+                <div style="flex:1;">
+                    <input type="text" id="pf-revision" maxlength="50" style="width:210px;" placeholder="選填，例：C" oninput="pfRenderRevHint()">
+                    <div id="pf-rev-hint" style="font-size:11.5px;color:#8b949e;margin-top:3px;">選填。填了會掛在壓平 PNG 上（工作檔不掛），附件清單會顯示 Rev. 標籤。</div>
+                </div>
+            </div>
             <!-- 解析度倍率：跟「匯出／列印」跳窗同一個概念，預設 2×＝跟「另存圖片後再上傳」印出來一樣清晰 -->
             <div class="frm-row"><label>解析度倍率</label>
                 <div style="flex:1;">
@@ -1782,7 +1795,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>匯出/列印：整個畫布或只匯出選取；PNG/JPG、解析度倍率（列印建議2×）；列印會自動依畫面長寬決定直/橫版並縮成一頁</li>
                 <li><b>縮放至框架</b>（頂列「畫布」旁）：先選 A4/A3＋橫式/直式（預設 A4 橫式），按「縮放至框架」把整張圖面等比例縮放＋置中成該標準尺寸（點選才套用，不會自動觸發，可 Ctrl+Z 復原）。因為每張圖面原始解析度不同，蓋章工具的「大小」是用畫布 px 輸入，同樣的數字在不同圖上印出來實際大小會不一樣——先套這個框架再蓋章，蓋出來的章大小才會一致</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
-                <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）</li>
+                <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
                 <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋</li>
                 <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編；<b>標籤（含快速標籤/自組標籤）內改字同樣適用</b></li>
@@ -5980,6 +5993,8 @@ function openPartModal() {
     document.getElementById('pf-save-status').textContent = '';
     document.querySelectorAll('.pf-cat').forEach(c => { c.checked = false; });
     const _pfIss = document.getElementById('pf-issue-date'); if (_pfIss) _pfIss.value = '';
+    document.getElementById('pf-revision').value = '';
+    pfRenderRevHint();
     document.getElementById('pf-mult').value = '2';   // 每次開窗回到建議值，避免上次調低後忘了調回去
     pfRenderMultHint();
     pfOnNoWorkfileChange();
@@ -6159,6 +6174,23 @@ function computeSaveMult() {
     const cap = Math.max(1, 8192 / Math.max(artW, artH, 1));   // 超過瀏覽器 canvas 上限會直接轉圖失敗
     return Math.max(1, Math.min(want, cap));
 }
+/* 版次即時檢查：唯一規則是長度上限 50（欄位型別 varchar(50)），超過就紅字說明原因。
+   maxlength 擋得住鍵盤輸入，但貼上／自動填入仍可能超長，所以照樣驗一次；後端另有同規則。 */
+function pfRenderRevHint() {
+    const inp = document.getElementById('pf-revision'), hint = document.getElementById('pf-rev-hint');
+    if (!inp || !hint) return true;
+    const v = inp.value.trim();
+    if (v.length > 50) {
+        inp.style.borderColor = '#ff8a80';
+        hint.style.color = '#ff8a80';
+        hint.textContent = '版次最多 50 個字（目前 ' + v.length + ' 個）';
+        return false;
+    }
+    inp.style.borderColor = '';
+    hint.style.color = '#8b949e';
+    hint.textContent = '選填。填了會掛在壓平 PNG 上（工作檔不掛），附件清單會顯示 Rev. 標籤。';
+    return true;
+}
 /* 倍率提示：即時顯示實際輸出像素、被 8192 上限壓下來時要講原因，並粗估檔案大小（線圖 PNG 約 0.8 bytes/px） */
 function pfRenderMultHint() {
     const hint = document.getElementById('pf-mult-hint');
@@ -6183,6 +6215,7 @@ async function pfSave() {
     const cats = pfSelectedCats();
     if (!cats.length) { pfRenderCatHint(); document.getElementById('pf-cats').scrollIntoView({block:'nearest'}); toast('請至少選擇一個附件標籤'); return; }
     if (!pfSyncIssueRow()) { document.getElementById('pf-issue-date').focus(); toast('請確認發行章日期'); return; }
+    if (!pfRenderRevHint()) { document.getElementById('pf-revision').focus(); toast('版次太長，請縮短'); return; }
     const issueDate = (document.getElementById('pf-issue-row').style.display !== 'none')
                     ? (document.getElementById('pf-issue-date').value || '') : '';
     // 存檔要跑一段時間（大圖匯出＋上傳），期間按鈕維持在畫面上不消失、狀態列一路顯示到底──
@@ -6210,6 +6243,7 @@ async function pfSave() {
         }
         fd.append('category_ids', cats.join(','));
         fd.append('issue_stamp_date', issueDate);
+        fd.append('revision', document.getElementById('pf-revision').value.trim());
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
         if (!res.success) throw new Error(res.message || '');
         const savedAt = nowTimeStr();
