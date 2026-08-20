@@ -599,7 +599,18 @@ function type_id_ctrl_find_missing_parts(PDO $db): array {
         }
     } catch (Throwable $e) { $pfmeaCounts = []; }
 
-    $allIds = array_unique(array_merge(array_keys($counts), array_keys($pfmeaCounts)));
+    // ── 來源三：有專案(2-GM-02)但還沒建管制表的料號（2026-08-20 新增，使用者要求與既有偵測合併）──
+    // 專案模組不可用時只是少一個來源，絕不能讓整個掃描失敗。
+    $projectMap = [];
+    try {
+        require_once __DIR__ . '/project_lib.php';
+        prj_ensure_schema($db);
+        foreach (prj_missing_for($db, 'type_id') as $r) {
+            $projectMap[(int)$r['ds_pk']] = $r['project_no'] . ' ' . $r['project_name'];
+        }
+    } catch (Throwable $e) { $projectMap = []; }
+
+    $allIds = array_unique(array_merge(array_keys($counts), array_keys($pfmeaCounts), array_keys($projectMap)));
     $missingIds = array_values(array_filter($allIds, function ($id) use ($existingSet) { return !isset($existingSet[$id]); }));
     if (!$missingIds) return [];
 
@@ -611,9 +622,20 @@ function type_id_ctrl_find_missing_parts(PDO $db): array {
         $id = (int)$r['d_id'];
         $r['ext_count']   = $counts[$id] ?? 0;
         $r['pfmea_count'] = $pfmeaCounts[$id] ?? 0;
-        $hasExt = $r['ext_count'] > 0; $hasPf = $r['pfmea_count'] > 0;
-        $r['sources']      = $hasExt && $hasPf ? 'both' : ($hasPf ? 'pfmea' : 'ext');
-        $r['source_label'] = $hasExt && $hasPf ? '外來文件＋PFMEA' : ($hasPf ? 'PFMEA' : '外來文件');
+        $r['project_ref'] = $projectMap[$id] ?? '';
+        $hasExt = $r['ext_count'] > 0; $hasPf = $r['pfmea_count'] > 0; $hasPrj = $r['project_ref'] !== '';
+        $srcs = [];
+        if ($hasExt) $srcs[] = 'ext';
+        if ($hasPf)  $srcs[] = 'pfmea';
+        if ($hasPrj) $srcs[] = 'project';
+        // sources 舊值 both/pfmea/ext 有既有前端在比對，維持相容：只有專案來源時才回 'project'
+        $r['sources'] = ($hasExt && $hasPf) ? 'both' : ($hasPf ? 'pfmea' : ($hasExt ? 'ext' : 'project'));
+        $r['source_list'] = implode(',', $srcs);
+        $labels = [];
+        if ($hasExt) $labels[] = '外來文件';
+        if ($hasPf)  $labels[] = 'PFMEA';
+        if ($hasPrj) $labels[] = '專案 ' . $r['project_ref'];
+        $r['source_label'] = implode('＋', $labels);
     }
     unset($r);
     return $rows;

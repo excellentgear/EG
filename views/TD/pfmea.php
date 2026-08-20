@@ -614,11 +614,17 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? 'PFMEA管�
     <div class="m-head"><span>建議建立清單</span><span class="m-close" onclick="closeMask('suggestMask')">✕</span></div>
     <div class="m-body">
         <div class="tip" style="background:#FFF7E8;border:1px dashed #F0A24B;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:12px;color:#5b3a1e;">
-            下方列出已建立「產品開發評估表(2-TD-02-01)」、但還沒建立 PFMEA 分析表的料號。勾選要建立的項目（表頭全選框可一次勾全部），按「建立勾選項目」即批次建立表頭殼（料號／客戶／產品名稱／分類自動帶入，分析項目仍需逐份手動填寫）。
+            下方列出「應該要有 PFMEA、但還沒建立」的料號。勾選要建立的項目（表頭全選框可一次勾全部），按「建立勾選項目」即批次建立表頭殼（料號／客戶／產品名稱／分類自動帶入，分析項目仍需逐份手動填寫）。
+        </div>
+        <div style="border:1px solid #EADFC8;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:12px;color:#5b3a1e;">
+            <b>偵測來源</b>（可複選）：
+            <label style="display:inline;margin-left:10px;"><input type="checkbox" class="sug-src" value="dev_eval" checked data-eg-skip="1"> 已建產品開發評估表(2-TD-02-01)</label>
+            <label style="display:inline;margin-left:14px;"><input type="checkbox" class="sug-src" value="project" data-eg-skip="1"> 有專案(2-GM-02)但未建立</label>
+            <button type="button" id="btnSugReload" style="margin-left:12px;height:24px;padding:0 10px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">重新偵測</button>
         </div>
         <div id="suggestEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
         <table class="pf-suggest-table" id="suggestTable" style="display:none;">
-            <thead><tr><th style="width:26px;"><input type="checkbox" id="suggestCkAll" data-eg-skip="1"></th><th>客戶</th><th>料號</th><th>產品名稱</th><th style="width:100px;">填表日期</th></tr></thead>
+            <thead><tr><th style="width:26px;"><input type="checkbox" id="suggestCkAll" data-eg-skip="1"></th><th>客戶</th><th>料號</th><th>產品名稱</th><th style="width:100px;">填表日期</th><th style="width:150px;">來源</th></tr></thead>
             <tbody id="suggestBody"></tbody>
         </table>
     </div>
@@ -2191,26 +2197,33 @@ function delDoc(id){
 }
 
 /* ---------- 建議建立清單（來源：已有產品開發評估表、還沒有PFMEA的料號） ---------- */
-$('#btnSuggest').on('click', function(){
-    $('#suggestEmpty').show().text('載入中…'); $('#suggestTable').hide();
-    openMask('suggestMask');
-    $.getJSON(API, {action:'suggest_list'}, function(res){
+function loadSuggestList(){
+    var srcs = $('.sug-src:checked').map(function(){ return this.value; }).get();
+    if (!srcs.length){ $('#suggestTable').hide(); $('#suggestEmpty').show().text('請至少勾選一個偵測來源。'); return; }
+    $('#suggestEmpty').show().text('偵測中…'); $('#suggestTable').hide();
+    $.getJSON(API, {action:'suggest_list', sources: srcs.join(',')}, function(res){
         if (!res.success){ $('#suggestEmpty').text(res.message||'載入失敗'); return; }
         SUGGEST_ROWS = res.rows || [];
-        if (!SUGGEST_ROWS.length){ $('#suggestEmpty').text('目前沒有候選料號——已建立產品開發評估表的料號都已有對應的PFMEA分析表。'); return; }
+        if (!SUGGEST_ROWS.length){ $('#suggestEmpty').text('目前沒有候選料號——所選來源的料號都已有對應的PFMEA分析表。'); return; }
         $('#suggestEmpty').hide(); $('#suggestTable').show();
         var html = '';
         SUGGEST_ROWS.forEach(function(r, i){
+            var src = r.src_label || '';
+            if (r.project_no) src += '（' + esc(r.project_no) + ' ' + esc(r.project_name||'') + '）';
             html += '<tr><td><input type="checkbox" class="suggest-ck" data-idx="'+i+'"></td>'
                 + '<td>'+esc(r.customer_name||'')+'</td>'
                 + '<td class="t-left">'+esc(r.part_no||r.part_no_text||'')+'</td>'
                 + '<td>'+esc(r.product_name||'')+'</td>'
-                + '<td>'+fmtDate(r.td_dev_eval_fill_date)+'</td></tr>';
+                + '<td>'+fmtDate(r.td_dev_eval_fill_date)+'</td>'
+                + '<td style="font-size:11px;">'+src+'</td></tr>';
         });
         $('#suggestBody').html(html);
         $('#suggestCkAll').prop('checked', false);
     });
-});
+}
+$('#btnSuggest').on('click', function(){ openMask('suggestMask'); loadSuggestList(); });
+$('#btnSugReload').on('click', loadSuggestList);
+$(document).on('change', '.sug-src', loadSuggestList);
 $('#suggestCkAll').on('change', function(){ $('#suggestBody .suggest-ck').prop('checked', this.checked); });
 function createSuggested(){
     var idxs = $('#suggestBody .suggest-ck:checked').map(function(){ return parseInt($(this).data('idx'),10); }).get();

@@ -55,9 +55,33 @@ case 'list':
     needView($perms);
     $from = $_GET['date_from'] ?? date('Y-m-d', strtotime('-1 year'));
     $to   = $_GET['date_to'] ?? date('Y-m-d');
-    if (!td_dev_eval_suggest_get_customers($db)) jout(['success'=>true, 'rows'=>[], 'no_customer_configured'=>true]);
-    $rows = td_dev_eval_suggest_candidates($db, $from, $to);
-    jout(['success'=>true, 'rows'=>$rows]);
+    // 來源可複選：scan＝原本的客戶名單×區間掃訂單/報工/BOM/出貨；project＝有專案但未建立
+    $src = trim((string)($_GET['sources'] ?? ''));
+    $srcArr = $src === '' ? ['scan'] : array_map('trim', explode(',', $src));
+    $rows = [];
+    $noCust = false;
+    if (in_array('scan', $srcArr, true)) {
+        if (!td_dev_eval_suggest_get_customers($db)) {
+            $noCust = true;   // 沒設客戶名單時 scan 來源無效，但 project 來源仍可用
+        } else {
+            foreach (td_dev_eval_suggest_candidates($db, $from, $to) as $r) {
+                $r['src_label'] = '訂單/報工/BOM/出貨掃描';
+                $rows[] = $r;
+            }
+        }
+    }
+    if (in_array('project', $srcArr, true)) {
+        $seen = [];
+        foreach ($rows as $r) $seen[$r['customer_id'] . '|' . $r['part_key']] = true;
+        foreach (td_dev_eval_suggest_project_candidates($db) as $r) {
+            $k = $r['customer_id'] . '|' . $r['part_key'];
+            if (isset($seen[$k])) continue;   // 兩個來源都命中時只留一筆
+            $seen[$k] = true;
+            $rows[] = $r;
+        }
+    }
+    jout(['success'=>true, 'rows'=>$rows,
+          'no_customer_configured'=>($noCust && !$rows)]);
 
 case 'history':
     needView($perms);

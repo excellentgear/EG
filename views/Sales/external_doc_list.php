@@ -207,7 +207,7 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button class="btn-warm" id="btnPrint"><i class="fa fa-print"></i> 列印清單</button>
             <?php if ($canManage): ?>
-            <button id="btnPfmeaScan" title="找出 PFMEA 已建立、但外來文件清單一筆都沒有的料號"><i class="fa fa-search"></i> PFMEA 缺件偵測</button>
+            <button id="btnPfmeaScan" title="找出「應該要有外來文件、但清單上一筆都沒有」的料號（來源可選：PFMEA 已建立／有專案但未建立）"><i class="fa fa-search"></i> 缺件偵測</button>
             <button id="btnAsDoc"><i class="fa fa-bookmark-o"></i> AS文件編號綁定</button>
             <?php endif; ?>
             <span class="xd-role-badge">目前角色：<b><?= htmlspecialchars($roleLabel) ?></b>
@@ -264,18 +264,25 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
 
 <!-- PFMEA 缺件偵測結果 -->
 <div class="xd-mask" id="scanMask"><div class="xd-modal" style="max-width:820px;">
-    <div class="m-head"><span><i class="fa fa-search"></i> PFMEA 缺件偵測</span><span class="m-close" onclick="closeMask('scanMask')">✕</span></div>
+    <div class="m-head"><span><i class="fa fa-search"></i> 缺件偵測</span><span class="m-close" onclick="closeMask('scanMask')">✕</span></div>
     <div class="m-body">
         <div style="font-size:12px;color:#8a6d45;margin-bottom:6px;">
-            以下料號在 <b>PFMEA（潛在失效模式及效應分析）</b> 已建立，但在外來文件清單一筆都沒有。
+            以下料號<b>應該要有外來文件、但清單上一筆都沒有</b>。
             勾選後按「建立待補項目」，就會出現在「待補檔案」分頁，可逐筆上傳檔案補齊。
+        </div>
+        <div style="border:1px solid #EADFC8;border-radius:6px;padding:6px 10px;margin-bottom:8px;font-size:12px;color:#5b3a1e;">
+            <b>偵測來源</b>（可複選）：
+            <label style="display:inline;margin-left:10px;"><input type="checkbox" class="scan-src" value="pfmea" checked data-eg-skip> PFMEA 已建立</label>
+            <label style="display:inline;margin-left:14px;" title="有建立專案(2-GM-02)、但這個料號在外來文件清單一筆都沒有">
+                <input type="checkbox" class="scan-src" value="project" data-eg-skip> 有專案但未建立</label>
+            <button type="button" id="btnScanReload" style="margin-left:12px;height:24px;padding:0 10px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">重新偵測</button>
         </div>
         <div id="scanSum" style="font-size:13px;color:#5b3a1e;margin-bottom:6px;"></div>
         <div style="max-height:340px;overflow:auto;border:1px solid #EADFC8;border-radius:4px;">
             <table class="xd-scan-tb">
                 <thead><tr>
                     <th style="width:36px;"><input type="checkbox" id="scanAll" data-eg-skip title="全選/全不選"></th>
-                    <th style="width:26%;">客戶</th><th>料號</th><th style="width:22%;">PFMEA 文件編號</th><th style="width:15%;">狀態</th>
+                    <th style="width:24%;">客戶</th><th>料號</th><th style="width:24%;">來源</th><th style="width:15%;">狀態</th>
                 </tr></thead>
                 <tbody id="scanBody"></tbody>
             </table>
@@ -867,12 +874,20 @@ $('#btnUpSave').on('click', function(){
 
 // ── PFMEA 缺件偵測 ───────────────────────────────────────────
 var SCAN_ROWS = [];
-$('#btnPfmeaScan').on('click', function(){
+$('#btnPfmeaScan').on('click', function(){ openMask('scanMask'); runScan(); });
+$('#btnScanReload').on('click', runScan);
+$(document).on('change', '.scan-src', runScan);
+function runScan(){
+    var srcs = $('.scan-src:checked').map(function(){ return this.value; }).get();
+    if (!srcs.length){
+        $('#scanBody').html('<tr><td colspan="5" style="padding:14px;color:#8a6d45;">請至少勾選一個偵測來源</td></tr>');
+        $('#scanSum').text(''); $('#scanUnres').text('');
+        return;
+    }
     // 點開即刷新：一律向後端重新偵測，不用畫面上的快取
     $('#scanBody').html('<tr><td colspan="5" style="padding:14px;color:#8a6d45;">偵測中…</td></tr>');
     $('#scanSum').text(''); $('#scanUnres').text(''); $('#scanAll').prop('checked', false);
-    openMask('scanMask');
-    $.post(API, {action:'pfmea_scan'}, function(res){
+    $.post(API, {action:'pfmea_scan', sources: srcs.join(',')}, function(res){
         if (!res.success){ $('#scanBody').html('<tr><td colspan="5" style="padding:14px;color:#DD5138;">'+esc(res.message||'偵測失敗')+'</td></tr>'); return; }
         SCAN_ROWS = res.rows||[];
         var newCnt = 0, h = '';
@@ -888,11 +903,13 @@ $('#btnPfmeaScan').on('click', function(){
                     : '')+'</td>'
                + '<td class="tl">'+esc(r.customer_name)+'</td>'
                + '<td class="tl">'+esc(r.part_no)+'</td>'
-               + '<td>'+esc(r.pfmea_doc_no)+'</td>'
+               + '<td>'+esc(r.src_label || r.pfmea_doc_no || '')
+               + (r.pfmea_doc_no && r.src_label ? '<br><span style="font-size:11px;color:#8a6d45;">'+esc(r.pfmea_doc_no)+'</span>' : '')
+               + '</td>'
                + '<td>'+stat+'</td></tr>';
         });
-        $('#scanBody').html(h || '<tr><td colspan="5" style="padding:14px;color:#8a6d45;">沒有缺件：PFMEA 已建立的料號都有外來文件了</td></tr>');
-        $('#scanSum').html('偵測到 <b>'+SCAN_ROWS.length+'</b> 個 PFMEA 已建立卻沒有外來文件的料號，其中 <b>'+newCnt+'</b> 個可建立待補項目。');
+        $('#scanBody').html(h || '<tr><td colspan="5" style="padding:14px;color:#8a6d45;">沒有缺件：所選來源的料號都已經有外來文件了</td></tr>');
+        $('#scanSum').html('偵測到 <b>'+SCAN_ROWS.length+'</b> 個應該要有外來文件卻一筆都沒有的料號，其中 <b>'+newCnt+'</b> 個可建立待補項目。');
         $('#scanAll').prop('checked', newCnt > 0);
         if ((res.unresolved||[]).length){
             $('#scanUnres').html('註：另有 '+res.unresolved.length+' 筆 PFMEA 是手動輸入的料號、在料號主檔找不到（'
@@ -900,7 +917,7 @@ $('#btnPfmeaScan').on('click', function(){
                 + '），無法自動建立，請先於主檔建立該料號。');
         }
     }, 'json');
-});
+}
 $('#scanAll').on('change', function(){ $('#scanBody .scan-ck').prop('checked', $(this).prop('checked')); });
 $('#btnScanCreate').on('click', function(){
     var ids = [];

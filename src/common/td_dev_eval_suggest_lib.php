@@ -227,6 +227,54 @@ function td_dev_eval_suggest_candidates(PDO $db, string $dateFrom, string $dateT
     return $out;
 }
 
+/**
+ * 「有專案(2-GM-02)但還沒建產品開發評估表」的候選料號（2026-08-20 新增來源，
+ * 使用者要求與既有偵測鈕合併、偵測後可選來源）。
+ * 這個來源**不受客戶名單設定與查詢區間限制**——會被立成專案就代表要管，不必再靠掃訂單去猜。
+ * 回傳欄位刻意對齊 td_dev_eval_suggest_candidates()，前端與批次建立可以共用同一套處理。
+ */
+function td_dev_eval_suggest_project_candidates(PDO $db): array {
+    try {
+        require_once __DIR__ . '/project_lib.php';
+        prj_ensure_schema($db);
+        $rows = prj_missing_for($db, 'dev_eval');
+    } catch (Throwable $e) {
+        return [];   // 專案模組不可用時只是少一個來源，不能讓整份建議清單掛掉
+    }
+    if (!$rows) return [];
+
+    // 已忽略的照樣要排除（跟原本來源同一套忽略清單）
+    $ignSet = [];
+    foreach (td_dev_eval_suggest_ignore_list($db) as $g) $ignSet[$g['customer_id'] . '|' . $g['part_key']] = true;
+
+    require_once __DIR__ . '/td_dev_eval_lib.php';
+    $defaultProductName = td_dev_eval_default_product_name_get($db);
+
+    $out = [];
+    foreach ($rows as $r) {
+        $custId  = (string)($r['Customer_Id'] ?? '');
+        $partKey = 'D' . (int)$r['ds_pk'];
+        if (isset($ignSet[$custId . '|' . $partKey])) continue;
+        $out[] = [
+            'customer_id'   => $custId,
+            'customer_name' => (string)($r['customer_name'] ?: $custId),
+            'part_d_id'     => (int)$r['ds_pk'],
+            'part_no_text'  => (string)$r['part_no'],
+            'part_display'  => (string)$r['part_no'],
+            'part_key'      => $partKey,
+            'product_name'  => $defaultProductName ?: null,
+            'earliest_order_date' => null,
+            'earliest_order_date_all_time' => null,
+            'has_order' => false, 'has_report' => false, 'has_bom' => false, 'has_ship' => false,
+            'bom_no' => null, 'bom_created_at' => null, 'earliest_report_date' => null,
+            'src_label'    => '專案',
+            'project_no'   => (string)$r['project_no'],
+            'project_name' => (string)$r['project_name'],
+        ];
+    }
+    return $out;
+}
+
 /** 單一料號的參考資訊：最新BOM編號/建立日期、最早報工日期、最早訂單日期（皆不受篩選區間限制，越早越有參考價值） */
 function td_dev_eval_suggest_part_reference(PDO $db, ?int $partDId, string $partText, string $custName = ''): array {
     $cond = $partDId ? "(b.d_setting_id = ? OR b.d_id = ?)" : "b.d_id = ?";

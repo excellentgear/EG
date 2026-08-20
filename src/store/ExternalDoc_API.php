@@ -593,6 +593,54 @@ function extdoc_pending_rows(PDO $db, string $status = 'pending'): array {
  * 判定基準（使用者拍板）＝完全沒有任何外來文件（料號附件與報價附件都算，已排除的不算數）。
  * 回傳每筆含 already（已有待補項目）/ignored（已標記不列入）狀態，供跳窗顯示。
  */
+/**
+ * 「有專案(2-GM-02)但外來文件清單一筆都沒有」的料號（2026-08-20 新增偵測來源）。
+ * 判定基準沿用 PFMEA 缺件偵測的既有口徑：完全沒有任何外來文件（料號附件與報價附件都算）。
+ * 回傳欄位與 extdoc_pfmea_missing() 對齊，前端與 pending_create 可以共用同一套處理。
+ */
+function extdoc_project_missing(PDO $db): array {
+    try {
+        require_once __DIR__ . '/../common/project_lib.php';
+        prj_ensure_schema($db);
+        $rows = prj_missing_for($db, 'ext_doc');
+    } catch (Throwable $e) {
+        return [];   // 專案模組不可用時只是少一個來源，不能讓整個偵測掛掉
+    }
+    if (!$rows) return [];
+
+    $hasDoc = extdoc_parts_with_doc($db);
+    $exist = [];
+    try {
+        foreach ($db->query("SELECT ds_pk, status FROM external_doc_pending WHERE source_kind='project'")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $e) $exist[(int)$e['ds_pk']] = $e['status'];
+    } catch (Exception $e) {}
+
+    $out = [];
+    foreach ($rows as $r) {
+        $dsPk = (int)$r['ds_pk'];
+        if (isset($hasDoc[$dsPk])) continue;             // 已經有外來文件＝不缺
+        $stt = $exist[$dsPk] ?? '';
+        $out[] = [
+            'ds_pk'         => $dsPk,
+            'part_no'       => (string)$r['part_no'],
+            'customer_id'   => (string)($r['Customer_Id'] ?? ''),
+            'customer_name' => (string)($r['customer_name'] ?: $r['Customer_Id']),
+            'pfmea_doc_no'  => '',                        // 這個來源不是從 PFMEA 來的
+            'project_no'    => (string)$r['project_no'],
+            'project_name'  => (string)$r['project_name'],
+            'src_kind'      => 'project',
+            'src_label'     => '專案 ' . $r['project_no'],
+            'already'       => $stt === 'pending',
+            'ignored'       => $stt === 'ignored',
+            'done'          => $stt === 'done',
+        ];
+    }
+    usort($out, static function ($a, $b) {
+        return [$a['customer_name'], $a['part_no']] <=> [$b['customer_name'], $b['part_no']];
+    });
+    return $out;
+}
+
 function extdoc_pfmea_missing(PDO $db): array {
     $map = extdoc_pfmea_map($db);
     // ① PFMEA 的料號集合（純文字料號回查 d_setting 主鍵，重複料號取 MIN(d_id)＝全站歸戶慣例）
@@ -934,12 +982,39 @@ case 'save_as_doc':
 // ── PFMEA 缺件偵測（PFMEA 已建立、但外來文件清單一列都沒有的料號）────────
 case 'pfmea_scan':
     if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理權限（偵測需「外來文件管理」角色）']);
-    $scan = extdoc_pfmea_missing($db);
+    // 來源可複選（2026-08-20 使用者要求與既有偵測鈕合併）：
+    //   pfmea  ＝PFMEA 已建立但外來文件一筆都沒有（原本唯一的來源）
+    //   project＝有專案(2-GM-02)但外來文件一筆都沒有
+    $src = trim((string)($_POST['sources'] ?? $_GET['sources'] ?? ''));
+    $srcArr = $src === '' ? ['pfmea'] : array_map('trim', explode(',', $src));
+    $rows = [];
+    $unresolved = [];
+    if (in_array('pfmea', $srcArr, true)) {
+        $scan = extdoc_pfmea_missing($db);
+        foreach ($scan['rows'] as $r) { $r['src_kind'] = 'pfmea'; $r['src_label'] = 'PFMEA'; $rows[] = $r; }
+        $unresolved = $scan['unresolved'];
+    }
+    if (in_array('project', $srcArr, true)) {
+        $seen = [];
+        foreach ($rows as $r) $seen[(int)$r['ds_pk']] = true;
+        foreach (extdoc_project_missing($db) as $r) {
+            if (isset($seen[(int)$r['ds_pk']])) {
+                // 兩個來源都命中：只留一筆，來源標示合併
+                foreach ($rows as &$x) {
+                    if ((int)$x['ds_pk'] === (int)$r['ds_pk']) { $x['src_label'] .= '＋專案 ' . $r['project_no']; break; }
+                }
+                unset($x);
+                continue;
+            }
+            $seen[(int)$r['ds_pk']] = true;
+            $rows[] = $r;
+        }
+    }
     jout([
         'success'    => true,
-        'rows'       => $scan['rows'],
-        'unresolved' => $scan['unresolved'],   // PFMEA 手打料號、在料號主檔找不到者（無法自動建立）
-        'total'      => count($scan['rows']),
+        'rows'       => $rows,
+        'unresolved' => $unresolved,   // PFMEA 手打料號、在料號主檔找不到者（無法自動建立）
+        'total'      => count($rows),
     ]);
 
 // 建立待補項目（勾選的料號）
@@ -950,23 +1025,35 @@ case 'pending_create':
     $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
     if (!$ids) jout(['success'=>false,'message'=>'請至少勾選一筆料號']);
     // 點開即刷新：以偵測當下的實際狀態再算一次，已補齊/已存在的不重複建立
+    // 兩個來源都要重算（PFMEA 缺件＋有專案但未建立），否則勾了專案來源的列會被當成「不在候選清單」略過
     $scan = extdoc_pfmea_missing($db);
     $can = [];
     // done＝之前補過；但它會出現在偵測結果就代表文件現在又不在清單上了，故允許重新建立待補
-    foreach ($scan['rows'] as $r) if (!$r['already']) $can[(int)$r['ds_pk']] = $r;
+    foreach ($scan['rows'] as $r) {
+        if ($r['already']) continue;
+        $r['src_kind'] = 'pfmea';
+        $can[(int)$r['ds_pk']] = $r;
+    }
+    foreach (extdoc_project_missing($db) as $r) {
+        if ($r['already'] || isset($can[(int)$r['ds_pk']])) continue;
+        $can[(int)$r['ds_pk']] = $r;
+    }
     $opName = extdoc_op_name($db, $uid);
     $made = 0; $skip = 0;
     $db->beginTransaction();
     try {
+        // source_kind 隨該列實際來源寫入（唯一鍵是 ds_pk×source_kind，兩個來源不會互相蓋掉）
         $ins = $db->prepare("INSERT INTO external_doc_pending
             (ds_pk, part_no, customer_id, source_kind, ref_no, status, created_by, created_at)
-            VALUES (?,?,?,'pfmea',?,'pending',?,NOW())
+            VALUES (?,?,?,?,?,'pending',?,NOW())
             ON DUPLICATE KEY UPDATE status='pending', ref_no=VALUES(ref_no),
                                     filled_attach_id=NULL, filled_at=NULL, filled_by=NULL");
         foreach ($ids as $dsPk) {
             if (!isset($can[$dsPk])) { $skip++; continue; }
             $r = $can[$dsPk];
-            $ins->execute([$dsPk, $r['part_no'], $r['customer_id'], $r['pfmea_doc_no'], $opName]);
+            $kind = (string)($r['src_kind'] ?? 'pfmea');
+            $refNo = $kind === 'project' ? (string)($r['project_no'] ?? '') : (string)($r['pfmea_doc_no'] ?? '');
+            $ins->execute([$dsPk, $r['part_no'], $r['customer_id'], $kind, $refNo, $opName]);
             $made++;
         }
         $db->commit();

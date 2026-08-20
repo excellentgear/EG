@@ -6,6 +6,57 @@
  * 都該有對應的 PFMEA 分析），排除已存在 pfmea_doc 紀錄的部分即可，不需要客戶名單設定或日期區間。
  */
 
+/**
+ * 候選清單來源（2026-08-20 新增「專案」來源，使用者要求與既有偵測鈕合併、偵測後可選來源）：
+ *   dev_eval＝已建產品開發評估表但沒有 PFMEA（原本唯一的來源）
+ *   project ＝有專案（2-GM-02）但該料號還沒有 PFMEA
+ * 兩者可同時選；同一料號被兩個來源命中時只留一筆，並在 src_label 標示來源。
+ */
+function pfmea_suggest_candidates_multi(PDO $db, array $sources): array {
+    $sources = array_values(array_filter($sources, static fn($s) => in_array($s, ['dev_eval', 'project'], true)));
+    if (!$sources) $sources = ['dev_eval'];
+    $out = [];
+    $seen = [];
+    $push = static function (array $r, string $label) use (&$out, &$seen) {
+        $key = !empty($r['part_d_id']) ? 'D' . (int)$r['part_d_id'] : 'T' . (string)($r['part_no_text'] ?? '');
+        if (isset($seen[$key])) {
+            // 同一料號兩個來源都命中：只留一筆，來源標示合併
+            $i = $seen[$key];
+            if (strpos((string)$out[$i]['src_label'], $label) === false) $out[$i]['src_label'] .= '＋' . $label;
+            return;
+        }
+        $r['src_label'] = $label;
+        $seen[$key] = count($out);
+        $out[] = $r;
+    };
+
+    if (in_array('dev_eval', $sources, true)) {
+        foreach (pfmea_suggest_candidates($db) as $r) $push($r, '產品開發評估表');
+    }
+    if (in_array('project', $sources, true)) {
+        try {
+            require_once __DIR__ . '/project_lib.php';
+            prj_ensure_schema($db);
+            foreach (prj_missing_for($db, 'pfmea') as $r) {
+                $push([
+                    'customer_name' => (string)($r['customer_name'] ?: $r['Customer_Id']),
+                    'part_d_id'     => (int)$r['ds_pk'],
+                    'part_no_text'  => null,
+                    'part_no'       => (string)$r['part_no'],
+                    'product_name'  => null,
+                    // 業務日期沒有更好的來源時留空，讓編號依建檔日產生（不亂猜一個日期）
+                    'td_dev_eval_fill_date' => null,
+                    'project_no'    => (string)$r['project_no'],
+                    'project_name'  => (string)$r['project_name'],
+                ], '專案');
+            }
+        } catch (Throwable $e) {
+            // 專案模組不可用時只是少一個來源，不能讓整個建議清單掛掉
+        }
+    }
+    return $out;
+}
+
 /** 候選清單：td_dev_eval 已有紀錄、pfmea_doc 還沒有紀錄的客戶+料號組合 */
 function pfmea_suggest_candidates(PDO $db): array {
     // biz_date：轉入的PFMEA沿用該筆td_dev_eval的「填表日期」(fill_date，即紙本表單上那個日期欄位)。

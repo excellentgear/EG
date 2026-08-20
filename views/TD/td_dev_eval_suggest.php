@@ -80,6 +80,7 @@ $perms = td_dev_eval_perms($db, $teUser);
         .sg-src-badge { display:inline-block; font-size:10px; border-radius:8px; padding:0 6px; margin:1px; color:#fff; }
         .sg-src-order { background:#F0A24B; } .sg-src-ship { background:#8A5A2B; }
         .sg-src-bom { background:#b5762a; } .sg-src-report { background:#DD5138; }
+        .sg-src-project { background:#C97B2E; }
         .sg-op { color:#b5762a; cursor:pointer; margin:0 4px; }
         .sg-op:hover { color:#8A5A2B; text-decoration:underline; }
         .sg-quick-btn { font-size:10px; padding:1px 5px; border:1px solid #D8BE93; border-radius:3px; background:#fff; cursor:pointer; margin:1px 0; display:block; }
@@ -133,6 +134,10 @@ $perms = td_dev_eval_perms($db, $teUser);
         </div>
 <?php else: ?>
         <div class="sg-toolbar">
+            <label>偵測來源</label>
+            <label style="font-weight:normal;"><input type="checkbox" class="sg-src" value="scan" checked data-eg-skip="1"> 訂單/報工/BOM/出貨掃描</label>
+            <label style="font-weight:normal;" title="有建立專案(2-GM-02)、但這一頁還沒建立產品開發評估表的料號；不受客戶名單與區間限制">
+                <input type="checkbox" class="sg-src" value="project" data-eg-skip="1"> 有專案但未建立</label>
             <label>區間</label>
             <input type="date" id="dateFrom">
             <span>～</span>
@@ -254,6 +259,8 @@ function srcBadges(r){
     if (r.has_ship) out += '<span class="sg-src-badge sg-src-ship">出貨</span>';
     if (r.has_bom) out += '<span class="sg-src-badge sg-src-bom">BOM</span>';
     if (r.has_report) out += '<span class="sg-src-badge sg-src-report">報工</span>';
+    /* 來自「有專案但未建立」的列（2026-08-20）：沒有掃描來源旗標，改標專案代號 */
+    if (r.project_no) out += '<span class="sg-src-badge sg-src-project" title="'+esc(r.project_name||'')+'">專案 '+esc(r.project_no)+'</span>';
     return out;
 }
 /* 客戶+料號的穩定識別鍵（跟後端排除已建立組合同一套邏輯），用來記住選取/日期狀態，
@@ -412,8 +419,15 @@ function renderPage(){
 }
 
 function loadList(){
+    var srcs = $('.sg-src:checked').map(function(){ return this.value; }).get();
+    if (!srcs.length){
+        $('#listHint').text('請至少勾選一個偵測來源。');
+        $('#sgBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">請至少勾選一個偵測來源</td></tr>');
+        $('#sgPager').html('');
+        return;
+    }
     $('#listHint').text('載入中…');
-    $.getJSON(API, {action:'list', date_from:$('#dateFrom').val(), date_to:$('#dateTo').val()}, function(res){
+    $.getJSON(API, {action:'list', sources: srcs.join(','), date_from:$('#dateFrom').val(), date_to:$('#dateTo').val()}, function(res){
         if (!res.success){ $('#sgBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc(res.message||'載入失敗')+'</td></tr>'); return; }
         if (res.no_customer_configured){
             $('#listHint').text('尚未設定客戶名單，請先按「客戶名單設定」選擇要掃描的客戶。');
@@ -427,6 +441,7 @@ function loadList(){
     });
 }
 $('#btnQuery').on('click', loadList);
+$(document).on('change', '.sg-src', loadList);   /* 切換偵測來源就重查 */
 
 /* ---------- 客戶名單設定 ---------- */
 var ALL_CUSTOMERS = [];

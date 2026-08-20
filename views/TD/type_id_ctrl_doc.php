@@ -119,6 +119,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         .ic-src.s-ext   { background:#F7E0BD; color:#8A5A2B; }
         .ic-src.s-pfmea { background:#F0A24B; color:#fff; }
         .ic-src.s-both  { background:#C9772A; color:#fff; }
+        .ic-src.s-project { background:#B5762A; color:#fff; }
         /* 上傳跳窗：即時錯誤原因（表單三總則③，不可只在送出時丟一句「資料有誤」） */
         .ic-err { color:#DD5138; font-size:12px; margin:3px 0 0; display:none; }
         .ic-err.on { display:block; }
@@ -319,11 +320,13 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
                     <option value="ext">只看 外來文件</option>
                     <option value="pfmea">只看 PFMEA</option>
                     <option value="both">只看 兩者皆有</option>
+                    <option value="project">只看 有專案但未建立</option>
                 </select>
             </label>
             <button type="button" class="ic-row-btn" onclick="missingSelect('all')">全選</button>
             <button type="button" class="ic-row-btn" onclick="missingSelect('pfmea')">只選 PFMEA 來源</button>
             <button type="button" class="ic-row-btn" onclick="missingSelect('ext')">只選 外來文件來源</button>
+            <button type="button" class="ic-row-btn" onclick="missingSelect('project')">只選 專案來源</button>
             <button type="button" class="ic-row-btn" onclick="missingSelect('none')">全不選</button>
         </div>
         <table class="ic-item-table" id="missingTable" style="display:none;">
@@ -655,8 +658,11 @@ $('#btnScanMissing').on('click', function(){
     }, 'json');
 });
 function missingRowHtml(r){
-    var cls = r.sources === 'both' ? 's-both' : (r.sources === 'pfmea' ? 's-pfmea' : 's-ext');
-    return '<tr data-src="'+esc(r.sources)+'">'
+    var cls = r.sources === 'both' ? 's-both'
+            : (r.sources === 'pfmea' ? 's-pfmea' : (r.sources === 'project' ? 's-project' : 's-ext'));
+    /* data-srclist 是逗號串（同一料號可能同時來自 外來文件＋PFMEA＋專案），篩選與快速選取都比對它；
+       data-src 維持舊值不動，避免其他既有程式碼比對失準 */
+    return '<tr data-src="'+esc(r.sources)+'" data-srclist="'+esc(r.source_list||r.sources)+'">'
         + '<td><input type="checkbox" class="ck-miss" data-id="'+r.d_id+'" data-eg-skip="1"></td>'
         + '<td class="t-left">'+esc(r.part_no)+'</td>'
         + '<td class="t-left">'+esc(r.customer_name||'')+'</td>'
@@ -664,20 +670,31 @@ function missingRowHtml(r){
         + '<td>'+esc(r.ext_count)+'</td>'
         + '<td>'+esc(r.pfmea_count)+'</td></tr>';
 }
+/* 一個料號可能同時來自多個來源，故一律比對 data-srclist（逗號串）而不是單一 data-src */
+function missingHasSrc($tr, key){
+    var list = ($tr.attr('data-srclist') || $tr.attr('data-src') || '').split(',');
+    return $.inArray(key, list) >= 0;
+}
 window.missingSelect = function(mode){
     $('#missingBody tr').each(function(){
-        var src = $(this).attr('data-src'), on;
-        if (mode === 'all')        on = true;
-        else if (mode === 'none')  on = false;
-        else if (mode === 'pfmea') on = (src === 'pfmea' || src === 'both');   // PFMEA 有的都算
-        else if (mode === 'ext')   on = (src === 'ext');                        // 純外來文件，不含 PFMEA
+        var $tr = $(this), src = $tr.attr('data-src'), on;
+        if (mode === 'all')          on = true;
+        else if (mode === 'none')    on = false;
+        else if (mode === 'pfmea')   on = missingHasSrc($tr, 'pfmea');    // PFMEA 有的都算
+        else if (mode === 'ext')     on = (src === 'ext');                 // 純外來文件，不含 PFMEA
+        else if (mode === 'project') on = missingHasSrc($tr, 'project');   // 有專案但未建立
         $(this).find('.ck-miss').prop('checked', !!on);
     });
     missingSyncFoot();
 };
 function missingApplyFilter(){
     var f = $('#missingSrcFilter').val() || '';
-    $('#missingBody tr').each(function(){ $(this).toggle(!f || $(this).attr('data-src') === f); });
+    $('#missingBody tr').each(function(){
+        var $tr = $(this);
+        // both 是「外來文件＋PFMEA 皆有」的舊語意，仍比對 data-src；其餘比對來源清單
+        var show = !f || (f === 'both' ? ($tr.attr('data-src') === 'both') : missingHasSrc($tr, f));
+        $tr.toggle(show);
+    });
 }
 function missingSyncFoot(){
     var n = $('#missingBody .ck-miss:checked').length;

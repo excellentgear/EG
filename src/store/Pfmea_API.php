@@ -237,7 +237,10 @@ case 'save':
 // ── 建議建立清單（來源：已有 td_dev_eval 紀錄、還沒有 PFMEA 紀錄的料號）──────────
 case 'suggest_list':
     needEdit($perms);
-    jout(['success'=>true,'rows'=>pfmea_suggest_candidates($db)]);
+    // 來源可複選（dev_eval＝產品開發評估表／project＝有專案但未建 PFMEA）；沒帶就維持原本的行為
+    $src = trim((string)($_GET['sources'] ?? $_POST['sources'] ?? ''));
+    $srcArr = $src === '' ? ['dev_eval'] : array_map('trim', explode(',', $src));
+    jout(['success'=>true,'rows'=>pfmea_suggest_candidates_multi($db, $srcArr)]);
 
 case 'suggest_bulk_create':
     needEdit($perms);
