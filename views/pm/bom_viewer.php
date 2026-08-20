@@ -439,7 +439,14 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
         } catch (Exception $_e) {}
         $dlBase = '../../src/store/Order_Attachment_API.php';
         $result = [];
+        // 同一訂單編號＋同一份實體檔案只顯示一列：一張訂單編號底下若有多列料號（同料號分行或多料號），
+        // 「共用附件」在建單時會被複製掛到每一列（見 _NewOrder_Track.php 的 eg_sync_shared_order_attachments），
+        // 實體檔案其實只有一份；這裡不去重會讓使用者只上傳一個附件卻在本頁看到兩個。
+        $seenOrderFile = [];
         foreach ($rows as $r) {
+            $dedupKey = $r['Order_oo'] . '|' . $r['filename'];
+            if (isset($seenOrderFile[$dedupKey])) continue;
+            $seenOrderFile[$dedupKey] = true;
             $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
             $catNames = [];
             if ($r['category_ids']) {
