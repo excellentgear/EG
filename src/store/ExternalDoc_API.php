@@ -14,6 +14,7 @@ session_start();
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
+include_once $document_root . '/EGsystem/src/common/date_fmt_lib.php';   // eg_fmt_date()：日期顯示 YYYY.MM.DD（ai-rules/20）
 
 if (!isset($_SESSION['userName'])) {
     http_response_code(403);
@@ -173,7 +174,7 @@ function extdoc_fetch_rows(PDO $db, array $opt): array {
  static $memo = [];
  $key = json_encode([$opt['mode'] ?? 'all', (string)($opt['customer_id'] ?? ''), (int)($opt['year'] ?? 0),
                         (int)($opt['category'] ?? 0), $opt['show'] ?? 'active', $opt['pfmea'] ?? '',
-                        (string)($opt['part_kw'] ?? '')]);
+                        (string)($opt['part_kw'] ?? ''), !empty($opt['show_history'])]);
  if (isset($memo[$key])) return $memo[$key];
  return $memo[$key] = extdoc_fetch_rows_raw($db, $opt);
 }
@@ -189,6 +190,7 @@ function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
     $show     = ($opt['show'] ?? 'active') === 'excluded' ? 'excluded' : 'active';   // excluded=只看已排除
     $pfmeaF   = in_array(($opt['pfmea'] ?? ''), ['yes','no'], true) ? $opt['pfmea'] : '';  // PFMEA 建立與否篩選
     $partKw   = extdoc_kw_terms((string)($opt['part_kw'] ?? ''));   // 料號模糊搜尋（多關鍵字全部命中才算）
+    $showHist = !empty($opt['show_history']);   // 顯示歷史版本（預設只列現行版）
     $pfmeaMap = extdoc_pfmea_map($db);
 
     // 排除清單（附件×料號為單位）：active 檢視要跳過、excluded 檢視只留這些
@@ -229,7 +231,6 @@ function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
             LEFT JOIN user u ON u.id = pa.uploaded_by_id
             WHERE pa.deleted_at IS NULL AND " . $catCond('pa.category_ids');
     $args = [];
-    if ($year)          { $sql .= " AND YEAR(pa.uploaded_at) = ?"; $args[] = $year; }
     if ($custId !== '') { $sql .= " AND ds.Customer_Id = ?";       $args[] = $custId; }
     if ($mode === 'bound') $sql .= " AND $boundCond";
     $st = $db->prepare($sql); $st->execute($args);
@@ -238,7 +239,6 @@ function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
     // ② 報價附件（linked_parts NULL＝整張報價單的料號都適用；以 quotation_item 展開，d_setting_d_id 為整數 PK）
     $where = ["a.status='active'", "a.linked_parts IS NULL", $catCond('a.category_ids', 'a.category_id')];
     $args  = [];
-    if ($year)          { $where[] = "YEAR(a.uploaded_at) = ?"; $args[] = $year; }
     if ($custId !== '') { $where[] = "ds.Customer_Id = ?";      $args[] = $custId; }
     if ($mode === 'bound') $where[] = $boundCond;
     // ANY_VALUE：only_full_group_by 下，JOIN 出來的非鍵值欄位（同組內值必相同）需明確標示
@@ -275,7 +275,6 @@ function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
             LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
             WHERE a.status='active' AND a.linked_parts IS NOT NULL AND " . $catCond('a.category_ids', 'a.category_id');
     $args = [];
-    if ($year) { $sql .= " AND YEAR(a.uploaded_at) = ?"; $args[] = $year; }
     $st = $db->prepare($sql); $st->execute($args);
     $linkAtt = $st->fetchAll(PDO::FETCH_ASSOC);
 
@@ -357,14 +356,10 @@ function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
         if (!$names && $r['category_id_single'] !== '' && isset($cats[(int)$r['category_id_single']])) {
             $names[(int)$r['category_id_single']] = $cats[(int)$r['category_id_single']]['display'];
         }
-        if ($catId && !isset($names[$catId])) continue;   // 類別篩選（在完整資料上過濾）
         $exKey = $r['source'].'|'.$r['attach_id'].'|'.$r['ds_pk'];
         $isExcluded = isset($excludes[$exKey]);
-        if ($show === 'excluded' ? !$isExcluded : $isExcluded) continue;
         // PFMEA（views/TD/pfmea.php）是否已針對此料號建立
         $pfmeaNo = extdoc_pfmea_of($pfmeaMap, $r['ds_pk'], (string)$r['part_no']);
-        if ($pfmeaF === 'yes' && $pfmeaNo === '') continue;
-        if ($pfmeaF === 'no'  && $pfmeaNo !== '') continue;
         // 檔案連結：兩種來源都走各自的下載 API（鐵律5：不設 URL 前綴讓瀏覽器直連，
         // 附件位置只由 *_nas_dir 設定決定，換 NAS 免改 httpd.conf 也不綁磁碟機代號）
         $fileUrl = $r['source'] === 'part'
@@ -389,12 +384,117 @@ function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
             'pfmea_doc_no'  => $pfmeaNo,
             'excluded_by'   => $isExcluded ? (string)($excludes[$exKey]['excluded_by'] ?? '') : '',
             'excluded_at'   => $isExcluded ? substr((string)($excludes[$exKey]['excluded_at'] ?? ''), 0, 16) : '',
+            '_excluded'     => $isExcluded,
         ];
     }
-    usort($out, function($a, $b) {
+
+    // ── 版本判定（同料號＋同類別只留最新版）────────────────────────────
+    // 一定要在年度/類別/PFMEA 篩選「之前」算，否則篩到 2025 年時舊版會變成該範圍內的最新版。
+    extdoc_mark_versions($db, $out);
+
+    // ── 篩選（版本判定完才套用）──────────────────────────────────────
+    $final = [];
+    foreach ($out as $r) {
+        if ($show === 'excluded' ? !$r['_excluded'] : $r['_excluded']) continue;
+        if ($catId && !in_array($catId, $r['category_ids'], true)) continue;
+        if ($year && (int)substr($r['doc_date'], 0, 4) !== $year) continue;
+        if ($pfmeaF === 'yes' && !$r['has_pfmea']) continue;
+        if ($pfmeaF === 'no'  &&  $r['has_pfmea']) continue;
+        // 舊版預設不列（清單/列印/CSV 一致）；show_history=1 才一起帶出來，由前端標「舊版」
+        if (!$showHist && $show !== 'excluded' && $r['ver_state'] === 'old') continue;
+        unset($r['_excluded']);
+        $final[] = $r;
+    }
+    usort($final, function($a, $b) {
         return [$a['customer_name'], $a['part_no'], $a['doc_date']] <=> [$b['customer_name'], $b['part_no'], $b['doc_date']];
     });
-    return $out;
+    return $final;
+}
+
+// ── 版本判定：同一料號＋同一外來文件類別為一組，只有最新版是現行版 ──────────
+// 使用者拍板（2026-08-20）：
+//   ① 分組鍵＝料號 × 類別標籤（一列有多個標籤就同時屬於多組；只要在任一組是現行版就顯示）
+//   ② 同一天上傳的多筆視同同一版全部保留（多頁掃描不會被吃掉一頁）
+//   ③ 人工覆寫優先於日期：pin=釘選現行版、keep_all=該組不做版本判定（同標籤下本來就是不同文件）
+//   ④ 已排除(external_doc_exclude)的列不參與判定，也不會把別人擠成舊版
+function extdoc_version_overrides(PDO $db, bool $fresh = false): array {
+    static $cache = null;
+    if ($fresh) $cache = null;
+    if ($cache !== null) return $cache;
+    $cache = [];
+    try {
+        foreach ($db->query("SELECT ds_pk, cat_id, kind, source, attach_id FROM external_doc_version_override")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $o) {
+            $cache[(int)$o['ds_pk'] . '|' . (int)$o['cat_id']] = $o;
+        }
+    } catch (Exception $e) {}   // 尚未跑 migration 時視同沒有任何覆寫（純自動判定）
+    return $cache;
+}
+
+// 版本狀態的文字標示（CSV／列印共用）
+function extdoc_ver_label(array $r): string {
+    if (($r['ver_state'] ?? 'current') === 'old')
+        return '舊版' . ($r['ver_superseded'] ? '（已由 ' . eg_fmt_date($r['ver_superseded']) . ' 版取代）' : '');
+    if (!empty($r['ver_keep_all'])) return '並存（不判定版本）';
+    if (!empty($r['ver_pinned']))   return '現行版（釘選）';
+    return (int)($r['ver_total'] ?? 1) > 1 ? '現行版（最新）' : '現行版';
+}
+
+function extdoc_mark_versions(PDO $db, array &$rows): void {
+    $ov = extdoc_version_overrides($db);
+    // 先建組
+    $grp = [];
+    foreach ($rows as $i => $r) {
+        if ($r['_excluded']) continue;
+        foreach ($r['category_ids'] as $cid) $grp[$r['ds_pk'] . '|' . (int)$cid][] = $i;
+    }
+    // 預設值（沒有類別的列、已排除的列都當現行版，不會被自動隱藏）
+    foreach ($rows as $i => $r) {
+        $rows[$i]['ver_state']     = 'current';
+        $rows[$i]['ver_by']        = '';       // pin / keep_all / date
+        $rows[$i]['ver_total']     = 1;        // 同組（含自己）共幾筆，1＝沒有版本問題
+        $rows[$i]['ver_superseded']= '';       // 舊版時＝取代它的那一版的發行日期
+        $rows[$i]['ver_pinned']    = false;
+        $rows[$i]['ver_keep_all']  = false;
+        $rows[$i]['_cur']          = $r['_excluded'] || empty($r['category_ids']);
+        $rows[$i]['_sup']          = [];
+        $rows[$i]['_grpn']         = 1;
+    }
+    foreach ($grp as $key => $idxs) {
+        $o = $ov[$key] ?? null;
+        $n = count($idxs);
+        foreach ($idxs as $i) $rows[$i]['_grpn'] = max($rows[$i]['_grpn'], $n);
+        // ③-a 該組不做版本判定：全部保留
+        if ($o && $o['kind'] === 'keep_all') {
+            foreach ($idxs as $i) { $rows[$i]['_cur'] = true; $rows[$i]['ver_keep_all'] = true; if ($rows[$i]['ver_by'] !== 'pin') $rows[$i]['ver_by'] = 'keep_all'; }
+            continue;
+        }
+        // ③-b 釘選：指定的那一筆是現行版（找不到＝該附件已被刪，退回日期判定）
+        $pin = null;
+        if ($o && $o['kind'] === 'pin') {
+            foreach ($idxs as $i) {
+                if ($rows[$i]['source'] === $o['source'] && (int)$rows[$i]['attach_id'] === (int)$o['attach_id']) { $pin = $i; break; }
+            }
+        }
+        if ($pin !== null) {
+            $rows[$pin]['_cur'] = true; $rows[$pin]['ver_pinned'] = true; $rows[$pin]['ver_by'] = 'pin';
+            foreach ($idxs as $i) if ($i !== $pin) $rows[$i]['_sup'][] = $rows[$pin]['doc_date'];
+            continue;
+        }
+        // ② 自動：發行日期最新者（同日全留）
+        $max = '';
+        foreach ($idxs as $i) if ($rows[$i]['doc_date'] > $max) $max = $rows[$i]['doc_date'];
+        foreach ($idxs as $i) {
+            if ($rows[$i]['doc_date'] === $max) { $rows[$i]['_cur'] = true; if ($rows[$i]['ver_by'] === '') $rows[$i]['ver_by'] = 'date'; }
+            else $rows[$i]['_sup'][] = $max;
+        }
+    }
+    foreach ($rows as $i => $r) {
+        $rows[$i]['ver_state'] = $r['_cur'] ? 'current' : 'old';
+        $rows[$i]['ver_total'] = (int)$r['_grpn'];
+        if (!$r['_cur'] && $r['_sup']) { rsort($r['_sup']); $rows[$i]['ver_superseded'] = $r['_sup'][0]; }
+        unset($rows[$i]['_cur'], $rows[$i]['_sup'], $rows[$i]['_grpn']);
+    }
 }
 
 // ── 待補檔案項目（external_doc_pending）─────────────────────────────
@@ -579,7 +679,7 @@ case 'get_options':
     $selCat  = (int)($_POST['category'] ?? 0);
     $selPf   = in_array(($_POST['pfmea'] ?? ''), ['yes','no'], true) ? $_POST['pfmea'] : '';
     $selKw   = extdoc_kw_terms((string)($_POST['part_kw'] ?? ''));
-    $all = extdoc_fetch_rows($db, ['mode'=>$selMode]);
+    $all = extdoc_fetch_rows($db, ['mode'=>$selMode, 'show_history'=>(!empty($_POST['show_history']) && $_POST['show_history'] !== '0')]);
     $custs = []; $years = []; $presentCats = [];
     foreach ($all as $r) {
         $y = (int)substr($r['doc_date'], 0, 4);
@@ -638,6 +738,7 @@ case 'get_list':
             'mode'        => $_POST['mode'] ?? 'all',
             'customer_id' => $_POST['customer_id'] ?? '',
             'year'        => (int)($_POST['year'] ?? 0),
+            'show_history'=> !empty($_POST['show_history']) && $_POST['show_history'] !== '0',
             'category'    => (int)($_POST['category'] ?? 0),
             'pfmea'       => $_POST['pfmea'] ?? '',
         'part_kw'     => $_POST['part_kw'] ?? '',
@@ -667,6 +768,7 @@ case 'get_print':
         'mode'        => $_POST['mode'] ?? 'all',
         'customer_id' => $_POST['customer_id'] ?? '',
         'year'        => (int)($_POST['year'] ?? 0),
+        'show_history'=> !empty($_POST['show_history']) && $_POST['show_history'] !== '0',
         'category'    => (int)($_POST['category'] ?? 0),
         'pfmea'       => $_POST['pfmea'] ?? '',
         'part_kw'     => $_POST['part_kw'] ?? '',
@@ -692,6 +794,7 @@ case 'export_csv':
         'mode'        => $_GET['mode'] ?? 'all',
         'customer_id' => $_GET['customer_id'] ?? '',
         'year'        => (int)($_GET['year'] ?? 0),
+        'show_history'=> !empty($_GET['show_history']) && $_GET['show_history'] !== '0',
         'category'    => (int)($_GET['category'] ?? 0),
         'pfmea'       => $_GET['pfmea'] ?? '',
         'part_kw'     => $_GET['part_kw'] ?? '',
@@ -701,11 +804,11 @@ case 'export_csv':
     header('Content-Disposition: attachment; filename="external_doc_list_' . date('Ymd') . '.csv"');
     echo "\xEF\xBB\xBF";  // UTF-8 BOM（Excel 相容）
     $fp = fopen('php://output', 'w');
-    fputcsv($fp, ['客戶', '料號', '文件名稱', '外來文件類別', '發行日期', '發行單位', 'PFMEA', '來源', '報價單號', '備註']);
+    fputcsv($fp, ['客戶', '料號', '文件名稱', '外來文件類別', '發行日期', '版本', '發行單位', 'PFMEA', '來源', '報價單號', '備註']);
     foreach ($rows as $r) {
         fputcsv($fp, [
             $r['customer_name'], $r['part_no'], $r['doc_name'],
-            implode('、', $r['categories']), $r['doc_date'], $unit,
+            implode('、', $r['categories']), $r['doc_date'], extdoc_ver_label($r), $unit,
             $r['has_pfmea'] ? ('PFMEA已建立 ' . $r['pfmea_doc_no']) : '未建立',
             $r['source'] === 'part' ? '料號附件' : '報價附件', $r['quote_no'], $r['note'],
         ]);
@@ -753,6 +856,58 @@ case 'restore_item':
     $db->prepare("DELETE FROM external_doc_exclude WHERE source=? AND attach_id=? AND ds_pk=?")
        ->execute([$src, $aid, $dpk]);
     jout(['success'=>true, 'message'=>'已加回清單']);
+
+// ── 版本判定的人工覆寫（釘選現行版／該組不做版本判定）─────────────────
+// 覆寫是以「料號 × 類別」為單位，一列附件掛幾個外來文件標籤就寫幾組（前端只送附件，類別後端自己查）。
+case 'version_pin':        // 把這一筆釘成現行版（不看發行日期）
+case 'version_keep_all':   // 這組不是改版：全部保留
+case 'version_auto':       // 取消覆寫，回到自動判定
+    if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理權限（版本設定需「外來文件管理」角色）']);
+    $src = ($_POST['source'] ?? '') === 'quote' ? 'quote' : 'part';
+    $aid = (int)($_POST['attach_id'] ?? 0);
+    $dpk = (int)($_POST['ds_pk'] ?? 0);
+    if (!$aid || !$dpk) jout(['success'=>false,'message'=>'參數錯誤']);
+    // 後端自己驗（鐵律8）：附件要存在、料號要存在、且該附件真的掛了外來文件標籤
+    $table = $src === 'part' ? 'part_attachments' : 'quotation_attachments';
+    $st = $db->prepare("SELECT category_ids" . ($src === 'part' ? ", '' AS category_id" : ", COALESCE(category_id,'') AS category_id")
+                       . " FROM $table WHERE id=?" . ($src === 'part' ? " AND deleted_at IS NULL" : " AND status='active'"));
+    $st->execute([$aid]);
+    $att = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$att) jout(['success'=>false,'message'=>'附件不存在或已刪除']);
+    $st = $db->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
+    $st->execute([$dpk]);
+    $pno = $st->fetchColumn();
+    if ($pno === false) jout(['success'=>false,'message'=>'料號不存在']);
+    $catsAll = extdoc_categories($db);
+    $myCats  = [];
+    foreach (array_filter(explode(',', str_replace(' ', '', (string)$att['category_ids']))) as $cid) {
+        if (isset($catsAll[(int)$cid])) $myCats[] = (int)$cid;
+    }
+    if (!$myCats && $att['category_id'] !== '' && isset($catsAll[(int)$att['category_id']])) $myCats[] = (int)$att['category_id'];
+    if (!$myCats) jout(['success'=>false,'message'=>'這筆附件沒有外來文件類別標籤，不列入版本判定']);
+    $opName = extdoc_op_name($db, $uid);
+    $db->beginTransaction();
+    try {
+        $del = $db->prepare("DELETE FROM external_doc_version_override WHERE ds_pk=? AND cat_id=?");
+        foreach ($myCats as $cid) $del->execute([$dpk, $cid]);
+        if ($action !== 'version_auto') {
+            $ins = $db->prepare("INSERT INTO external_doc_version_override
+                                 (ds_pk, cat_id, kind, source, attach_id, part_no, created_by, created_at)
+                                 VALUES (?,?,?,?,?,?,?,NOW())");
+            $kind = $action === 'version_pin' ? 'pin' : 'keep_all';
+            foreach ($myCats as $cid) {
+                $ins->execute([$dpk, $cid, $kind, $kind === 'pin' ? $src : null,
+                               $kind === 'pin' ? $aid : null, (string)$pno, $opName]);
+            }
+        }
+        $db->commit();
+    } catch (Exception $e) {
+        $db->rollBack();
+        jout(['success'=>false,'message'=>'設定失敗：'.$e->getMessage()]);
+    }
+    jout(['success'=>true, 'message'=> $action === 'version_pin' ? '已釘選為現行版'
+                                     : ($action === 'version_keep_all' ? '這組已改為全部保留（不做版本判定）'
+                                                                       : '已恢復自動判定（發行日期最新者為現行版）')]);
 
 case 'save_as_doc':
     if (!extCan('manage')) jout(['success'=>false,'message'=>'無管理設定權限']);

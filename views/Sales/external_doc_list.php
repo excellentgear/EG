@@ -135,6 +135,13 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
         .xd-catbox label { display:inline-block !important; margin:2px 10px 2px 0; font-weight:normal; }
         a.xd-doclink { color:#b5762a; text-decoration:underline; }
         a.xd-doclink:hover { color:#8A5A2B; }
+        /* 版本狀態（同料號＋同類別只留最新版）：暖色系，舊版整列淡化 */
+        .ver-pill { display:inline-block; font-size:11px; border-radius:10px; padding:1px 8px; white-space:nowrap; }
+        .ver-cur  { background:#F7E0BD; color:#6b4a1c; }
+        .ver-pin  { background:#F0A24B; color:#fff; }
+        .ver-keep { background:#EAD3A2; color:#6b4a1c; }
+        .ver-old  { background:#EDE4D6; color:#8a7355; border:1px dashed #c9b48c; }
+        tr.xd-oldver td { background:#FAF6EF; color:#8a7355; }
         .xd-op { color:#b5762a; cursor:pointer; white-space:nowrap; }
         .xd-op:hover { color:#DD5138; text-decoration:underline; }
         .xd-note-edit { border:1px solid #D8BE93; border-radius:4px; padding:3px 6px; font-size:12px; width:95%; }
@@ -193,6 +200,10 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
                 <option value="yes">PFMEA 已建立</option>
                 <option value="no">PFMEA 未建立</option>
             </select>
+            <label id="histWrap" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;"
+                   title="同一料號＋同一類別只列最新版；勾選後連被取代的舊版一起列出（灰色標示）">
+                <input type="checkbox" id="chkHistory" style="margin:0;"> 顯示歷史版本
+            </label>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <button class="btn-warm" id="btnPrint"><i class="fa fa-print"></i> 列印清單</button>
             <?php if ($canManage): ?>
@@ -346,19 +357,35 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
             <li><b>不列入</b>：該料號本來就沒有外來文件（例如自家開發品）時，按「不列入」，之後偵測就不會再吵；勾「顯示已標記不列入的」可加回。</li>
             <li>待補項目<b>不會</b>出現在正式清單、列印與 CSV（沒有檔案的空列不進管制清單）。</li>
         </ul>
-        <h4>四、設定入口</h4>
+        <h4>四、同一份文件只留最新版（自動）</h4>
+        <ul>
+            <li><b>怎麼分組</b>：以「<b>同一料號＋同一外來文件類別</b>」為一組（例如某料號的「原圖」）。同組內<b>發行日期最新的那一份是現行版</b>，較舊的自動變成舊版。</li>
+            <li><b>舊版會怎樣</b>：清單、列印、CSV 預設<b>都不會出現</b>；勾工具列的「顯示歷史版本」才會列出來（灰底、標「舊版（已由 ○○ 版取代）」），檔案本身不會被刪，隨時點得開。</li>
+            <li><b>同一天上傳的多份都算現行版</b>：一份圖掃成兩三個檔一起上傳時不會被吃掉。</li>
+            <li><b>要換新版怎麼做</b>：直接把新版上傳成該料號同一個類別的附件即可，清單會自動改用新的、舊的自動退場，<b>不必手動去排除舊檔</b>。</li>
+            <li><b>發行日期就是版本先後</b>：補歷史文件時記得用鉛筆把發行日期改成正確的文件日期，否則會以上傳日判斷新舊。</li>
+            <li><b>判錯了可以人工覆寫</b>（需管理角色，按鈕在該列「操作」欄，只有同組真的有多份時才出現）：
+                <ul>
+                    <li><b>釘選為現行版</b>：不看發行日期，指定某一份為現行版。</li>
+                    <li><b>兩份都要</b>：同一個標籤下本來就是不同文件（例如同一料號的兩張不同加工圖）時，這一組改成不做版本判定、全部保留。</li>
+                    <li><b>取消釘選／恢復自動判定</b>：回到「發行日期最新者為現行版」。</li>
+                </ul>
+            </li>
+            <li>已「排除」的項目不參與版本判定，也不會把別的版本擠成舊版。</li>
+        </ul>
+        <h4>五、設定入口</h4>
         <ul>
             <li><b>哪些標籤算外來文件</b>：報價單頁「附件類別」分頁，或主檔管理「附件類別標籤設定」——勾「列入外來文件清單」，可另設清單顯示用的類別名稱（兩邊同一組設定）。</li>
             <li><b>AS 文件編號</b>：本頁「AS文件編號綁定」按鈕（需管理角色），從 AS9100 文件管理主檔挑選。</li>
             <li><b>發行單位</b>：同 Sales_Track 的業務單位設定（BOM 總覽頁修改）。</li>
         </ul>
-        <h4>五、權限角色</h4>
+        <h4>六、權限角色</h4>
         <ul>
             <li><b>外來文件檢閱</b>：看清單、開文件、匯出、列印。</li>
-            <li><b>外來文件管理</b>：檢閱＋綁 AS 編號、編輯備註、修改發行日期、排除/加回、PFMEA 缺件偵測與上傳補檔。</li>
+            <li><b>外來文件管理</b>：檢閱＋綁 AS 編號、編輯備註、修改發行日期、排除/加回、版本釘選與「兩份都要」、PFMEA 缺件偵測與上傳補檔。</li>
             <li>管理者固定全權；未指派角色者無法檢視本頁。指派入口：使用者權限設定 →「外來文件清單」區塊。</li>
         </ul>
-        <div class="tip">發行日期＝附件上傳日期。若清單是空的，通常是還沒有任何標籤勾「列入外來文件清單」。</div>
+        <div class="tip">發行日期＝附件上傳日期（可用鉛筆修改）。同料號同類別只列最新版，舊版要看請勾「顯示歷史版本」。若清單是空的，通常是還沒有任何標籤勾「列入外來文件清單」。</div>
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">我知道了</button></div>
 </div></div>
@@ -368,7 +395,7 @@ $roleLabel = $extIsRoleAdmin ? '管理者' : ($canManage ? '外來文件管理' 
     <div class="m-head">角色權限說明<span class="m-close" onclick="closeMask('helpMask')">✕</span></div>
     <div class="m-body" style="line-height:1.8;">
         <b>外來文件檢閱</b>：檢視清單（含點料號開啟文件）、匯出 CSV、列印。<br>
-        <b>外來文件管理</b>：檢閱＋綁定 AS 文件編號、編輯附件備註、修改發行日期、排除/加回清單項目、PFMEA 缺件偵測與待補檔案上傳。<br>
+        <b>外來文件管理</b>：檢閱＋綁定 AS 文件編號、編輯附件備註、修改發行日期、排除/加回清單項目、版本人工覆寫（釘選現行版／兩份都要）、PFMEA 缺件偵測與待補檔案上傳。<br>
         <b>管理者</b>：系統管理者固定擁有全部權限。<br>
         <hr style="border-color:#EADFC8;">
         清單來源＝附件標籤有勾「列入外來文件清單」的料號附件與報價附件；
@@ -417,7 +444,8 @@ function dispDate(d, withTime){ return (typeof egFmtDate === 'function') ? egFmt
 function filters(){
     return { mode: MODE, customer_id: $('#custSel').val()||'', year: $('#yearSel').val()||0,
              category: CAT, pfmea: $('#pfmeaSel').val()||'',
-             part_kw: $.trim($('#partKw').val()||'') };
+             part_kw: $.trim($('#partKw').val()||''),
+             show_history: $('#chkHistory').prop('checked') ? 1 : 0 };
 }
 function isPending(){ return VIEW === 'pending' || VIEW === 'ignored'; }
 
@@ -434,7 +462,9 @@ function renderHead(){
         h = '<th>客戶</th><th>料號</th><th>PFMEA</th><th>缺件原因</th><th>建立時間</th><th>建立者</th>';
         if (canManage) h += '<th>操作</th>';
     } else {
-        h = '<th>客戶</th><th>料號</th><th>外來文件類別</th><th>發行日期</th><th>發行單位</th><th>PFMEA</th><th>來源</th><th>備註</th>';
+        h = '<th>客戶</th><th>料號</th><th>外來文件類別</th><th>發行日期</th>';
+        if (VIEW === 'active') h += '<th style="width:130px;">版本</th>';
+        h += '<th>發行單位</th><th>PFMEA</th><th>來源</th><th>備註</th>';
         if (VIEW === 'excluded') h += '<th>排除資訊</th>';
         if (canManage) h += '<th>操作</th>';
     }
@@ -442,7 +472,35 @@ function renderHead(){
 }
 function colCount(){
     if (isPending()) return 6 + (canManage?1:0);
-    return 8 + (VIEW==='excluded'?1:0) + (canManage?1:0);
+    return 8 + (VIEW==='active'?1:0) + (VIEW==='excluded'?1:0) + (canManage?1:0);
+}
+
+// ── 版本狀態（同料號＋同類別只留最新版；ver_* 欄位由後端 extdoc_mark_versions 算好）──
+function verCell(r){
+    if (r.ver_state === 'old')
+        return '<span class="ver-pill ver-old" title="這一份已被較新的版本取代，正式清單/列印/CSV 預設不列">舊版</span>'
+             + (r.ver_superseded ? '<div style="font-size:10px;color:#a08a6a;">已由 '+esc(dispDate(r.ver_superseded))+' 版取代</div>' : '');
+    if (r.ver_keep_all)
+        return '<span class="ver-pill ver-keep" title="這一組已設定為不做版本判定，同標籤下的每一份都是有效文件">並存</span>';
+    if (r.ver_pinned)
+        return '<span class="ver-pill ver-pin" title="已人工釘選為現行版，不受發行日期影響">現行版（釘選）</span>';
+    if ((r.ver_total||1) > 1)
+        return '<span class="ver-pill ver-cur" title="同料號同類別共 '+(r.ver_total||1)+' 份，這是發行日期最新的">現行版</span>';
+    return '<span style="color:#c9bda9;">—</span>';
+}
+// 版本操作（管理權限；只有真的有多份時才出現，避免每列都掛一堆用不到的按鈕）
+function verOps(r){
+    if (!canManage || VIEW !== 'active' || (r.ver_total||1) <= 1) return '';
+    var h = '';
+    if (r.ver_state === 'old')
+        h += ' <span class="xd-op xd-pin-btn" title="不管發行日期，指定這一份為現行版"><i class="fa fa-thumb-tack"></i> 釘選為現行版</span>';
+    else if (r.ver_pinned)
+        h += ' <span class="xd-op xd-auto-btn" title="取消釘選，回到「發行日期最新者為現行版」"><i class="fa fa-magic"></i> 取消釘選</span>';
+    if (r.ver_keep_all)
+        h += ' <span class="xd-op xd-auto-btn" title="回到自動版本判定"><i class="fa fa-magic"></i> 恢復自動判定</span>';
+    else
+        h += ' <span class="xd-op xd-keep-btn" title="這幾份不是改版，是不同的文件：全部保留在清單上"><i class="fa fa-clone"></i> 兩份都要</span>';
+    return h;
 }
 
 function renderCustOptions(kw){
@@ -589,11 +647,12 @@ function loadList(){
             if (canManage) noteCell += ' <i class="fa fa-pencil xd-note-pen" style="cursor:pointer;color:#b5762a;" title="編輯備註（回寫到附件本體）"></i>';
             var dateCell = esc(dispDate(r.doc_date));
             if (canManage) dateCell += ' <i class="fa fa-pencil xd-date-pen" style="cursor:pointer;color:#b5762a;" title="修改發行日期（回寫附件的上傳日期）"></i>';
-            h += '<tr data-src="'+r.source+'" data-aid="'+r.attach_id+'" data-dpk="'+r.ds_pk+'" data-pno="'+esc(r.part_no)+'">'
+            h += '<tr class="'+(r.ver_state==='old'?'xd-oldver':'')+'" data-src="'+r.source+'" data-aid="'+r.attach_id+'" data-dpk="'+r.ds_pk+'" data-pno="'+esc(r.part_no)+'">'
                + '<td class="t-left">'+esc(r.customer_name)+'</td>'
                + '<td class="t-left">'+partCell+'</td>'
                + '<td>'+(cats||'<span style="color:#c9bda9;">—</span>')+'</td>'
                + '<td class="xd-date" data-date="'+esc(r.doc_date)+'" style="white-space:nowrap;">'+dateCell+'</td>'
+               + (VIEW==='active' ? '<td>'+verCell(r)+'</td>' : '')
                + '<td>'+esc(ISSUE_UNIT)+'</td>'
                + '<td>'+pfmeaCell(r)+'</td>'
                + '<td>'+src+'</td>'
@@ -601,9 +660,9 @@ function loadList(){
             if (VIEW === 'excluded')
                 h += '<td style="font-size:11px;color:#8a6d45;">'+esc(r.excluded_by||'')+'<br>'+esc(r.excluded_at||'')+'</td>';
             if (canManage)
-                h += '<td>'+(VIEW==='excluded'
+                h += '<td style="white-space:nowrap;">'+(VIEW==='excluded'
                         ? '<span class="xd-op xd-re-btn"><i class="fa fa-undo"></i> 加回</span>'
-                        : '<span class="xd-op xd-ex-btn"><i class="fa fa-ban"></i> 排除</span>')+'</td>';
+                        : '<span class="xd-op xd-ex-btn"><i class="fa fa-ban"></i> 排除</span>' + verOps(r))+'</td>';
             h += '</tr>';
         });
         var emptyMsg = VIEW==='excluded' ? '沒有被排除的項目'
@@ -621,6 +680,7 @@ function switchTab(view, $btn){
     $('#btnPrint,#btnCsv').prop('disabled', !official).css('opacity', official ? 1 : .45);
     // 待補分頁沒有附件，年度/類別/PFMEA 這些附件維度的篩選不適用
     $('#pendBar').toggle(isPending());
+    $('#histWrap').toggle(view === 'active');   // 版本判定只作用在正式清單
     $('#yearSel,#pfmeaSel').prop('disabled', isPending()).css('opacity', isPending() ? .5 : 1);
     if (isPending() || !CATS.length) $('#catFilterBar').hide();
     else $('#catFilterBar').css('display', 'flex');
@@ -655,6 +715,29 @@ $(document).on('click', '.xd-re-btn', function(){
         if (!res.success){ alert(res.message||'加回失敗'); return; }
         loadList();
     }, 'json');
+});
+
+// ── 版本判定的人工覆寫（釘選現行版／兩份都要／恢復自動判定）──────────────
+function verAction(tr, action, msg){
+    $.post(API, {action:action, source:tr.data('src'), attach_id:tr.data('aid'),
+                 ds_pk:tr.data('dpk')}, function(res){
+        if (!res.success){ alert(res.message||'設定失敗'); return; }
+        loadList(); loadOptions(false);
+    }, 'json');
+}
+$(document).on('click', '.xd-pin-btn', function(){
+    var tr = $(this).closest('tr');
+    if (!confirm('把「'+tr.data('pno')+'」的這一份指定為現行版？\n（不再看發行日期，同料號同類別的其他份會被視為舊版）')) return;
+    verAction(tr, 'version_pin');
+});
+$(document).on('click', '.xd-keep-btn', function(){
+    var tr = $(this).closest('tr');
+    if (!confirm('「'+tr.data('pno')+'」同料號同類別的這幾份不是改版關係，全部保留在清單上？')) return;
+    verAction(tr, 'version_keep_all');
+});
+$(document).on('click', '.xd-auto-btn', function(){
+    var tr = $(this).closest('tr');
+    verAction(tr, 'version_auto');
 });
 
 // ── 備註即時編輯（回寫附件本體：part_attachments.note / quotation_attachments.note）──
@@ -847,13 +930,15 @@ function goPage(p){ PAGE = Math.max(1, p); loadList(); }
 $('#modeBound').on('click', function(){ MODE='bound'; $(this).addClass('active'); $('#modeAll').removeClass('active'); refreshAll(); });
 $('#modeAll').on('click', function(){ MODE='all'; $(this).addClass('active'); $('#modeBound').removeClass('active'); refreshAll(); });
 $('#custSel, #yearSel, #pfmeaSel').on('change', function(){ refreshAll(); });
+$('#chkHistory').on('change', function(){ refreshAll(); });
 $('#perPageSel').on('change', function(){ PAGE=1; loadList(); });
 
 $('#btnCsv').on('click', function(){
     var f = filters();
     location.href = API + '?action=export_csv&mode='+f.mode+'&customer_id='+encodeURIComponent(f.customer_id)
                   + '&year='+f.year+'&category='+f.category+'&pfmea='+encodeURIComponent(f.pfmea)
-                  + '&part_kw='+encodeURIComponent(f.part_kw);
+                  + '&part_kw='+encodeURIComponent(f.part_kw)
+                  + '&show_history='+f.show_history;
 });
 
 // ── 列印：依客戶分組；右下角固定頁尾＝AS 文件編號 ─────────────────────
@@ -875,8 +960,11 @@ $('#btnPrint').on('click', function(){
                   + '<th>外來文件類別</th><th style="width:16%;">發行日期</th><th style="width:16%;">發行單位</th></tr></thead><tbody>';
             g.rows.forEach(function(r){
                 var cats = (r.categories||[]).map(function(c, i){ return catPill((r.category_ids||[])[i], c); }).join('');
-                body += '<tr><td class="tl">'+esc(r.part_no)+'</td>'
-                      + '<td>'+cats+'</td><td>'+esc(dispDate(r.doc_date))+'</td><td>'+esc(unit)+'</td></tr>';
+                // 舊版只有在勾了「顯示歷史版本」時才會出現在資料裡；印出來一定要標明，避免被當成現行文件
+                var dateTxt = esc(dispDate(r.doc_date))
+                            + (r.ver_state === 'old' ? '<div style="font-size:9px;">（舊版）</div>' : '');
+                body += '<tr'+(r.ver_state==='old'?' class="p-old"':'')+'><td class="tl">'+esc(r.part_no)+'</td>'
+                      + '<td>'+cats+'</td><td>'+dateTxt+'</td><td>'+esc(unit)+'</td></tr>';
             });
             body += '</tbody></table>';
         });
@@ -893,6 +981,7 @@ $('#btnPrint').on('click', function(){
             + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 5px;text-align:center;overflow-wrap:anywhere;}'
             + 'table.p-tb thead th{background:#f3ead6;}'
             + 'table.p-tb td.tl{text-align:left;word-break:break-all;}'
+            + 'table.p-tb tr.p-old td{color:#777;}'
             + 'table.p-tb tr{break-inside:avoid;}'
             + '.cat-pill{display:inline-block;font-size:10px;border:1px solid rgba(122,82,23,.25);border-radius:9px;padding:0 6px;margin:1px 2px;}'
             // 左右邊界 10mm、下邊界 18mm：RICOH 等實體印表機邊緣約 4~5mm 印不到，太貼邊會被裁掉
