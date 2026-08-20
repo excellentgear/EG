@@ -863,11 +863,19 @@ $('#btn-zoom-reset').on('click', resetTransform);
 
 // ── 列印用縮圖 ────────────────────────────────────────────────────────────
 // 批圖編輯器存出來的圖最長邊可達 8192px、數十 MB，直接整張塞給印表機驅動常常卡在
-// 「準備列印時出現錯誤」或預覽跑很久（2026-08-07 使用者回報）。列印只需印表機實際
-// 解析度用得到的像素（4000px 長邊已相當於 A3 300dpi 有餘），這裡不動縮放檢視／下載，
+// 「準備列印時出現錯誤」或預覽跑很久（2026-08-07 使用者回報）。這裡不動縮放檢視／下載，
 // 只在按下「列印」這一刻另外產生一張縮小版餵給瀏覽器列印；縮圖失敗就退回原圖網址。
+// ★2026-08-20 調整：上限 4000→6000px、輸出格式 PNG→JPEG q0.98。
+//   ‧原註解寫「4000px 相當於 A3 300dpi 有餘」是算錯的：4000px 攤在 A3 長邊 16.54 吋只有
+//     242dpi，A3 要 300dpi 得有 4961px。批圖存檔改成 2× 之後（6682px）被砍到 4000 太可惜。
+//   ‧真正會害列印卡住的是「送進印表機驅動的資料量」，不是縮圖耗時。實測同一張 6682×4834：
+//       4000px PNG ＝ 221ms／6.98MB（原本）
+//       6000px PNG ＝ 457ms／13.08MB（資料量翻倍，正是當初出事的量級，不可取）
+//       6000px JPEG q0.98 ＝ 288ms／4.79MB（解析度多 50%，資料量反而比原本少三成）
+//     故選 JPEG。品質係數 0.98 比照 image_editor.php 的 PDF 列印（0.95 對細字仍看得出糊）。
+//   ‧這只是列印當下的暫時副本，存檔原圖／檢視／下載完全不受影響。
 function _bomShrinkForPrint(url, cb) {
-    var MAXD = 4000;
+    var MAXD = 6000;
     var img = new Image();
     img.onload = function() {
         if (img.naturalWidth <= MAXD && img.naturalHeight <= MAXD) { cb(url); return; }
@@ -878,8 +886,11 @@ function _bomShrinkForPrint(url, cb) {
         var ctx = cv.getContext('2d');
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
+        // JPEG 沒有透明色版：不先鋪白底的話，帶透明背景的 PNG 會被壓成整片黑
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, cv.width, cv.height);
         try { ctx.drawImage(img, 0, 0, cv.width, cv.height); } catch (e) { cb(url); return; }
-        cv.toBlob(function(blob) { cb(blob ? URL.createObjectURL(blob) : url); }, 'image/png');
+        cv.toBlob(function(blob) { cb(blob ? URL.createObjectURL(blob) : url); }, 'image/jpeg', 0.98);
     };
     img.onerror = function() { cb(url); };
     img.src = url;
