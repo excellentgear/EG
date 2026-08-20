@@ -31,11 +31,17 @@ function needAdmin(array $perms) { if (!$perms['canAdmin']) jout(['success'=>fal
 
 const TYPE_LABELS = ['drawing'=>'圖面','jig'=>'治夾具','report'=>'報告','other'=>'其他文件'];
 
+// 連結來源顯示標籤（畫面上那顆小徽章要看得出這一列是哪裡自動帶進來的）
+const SOURCE_LABELS = ['part'=>'外來文件', 'quote'=>'外來文件', 'dev_eval'=>'產品開發評估表',
+                       'pfmea'=>'PFMEA', 'bomfile'=>'ERP/資材報告'];
+
 /** 組出單筆項目列的顯示資料（即時解析連結，不快照） */
 function buildItemView(PDO $db, array $it): array {
     $linked = null;
-    if ($it['ref_source'] && $it['ref_attach_id']) {
-        $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk']);
+    // bomfile 來源沒有 attach_id，識別鍵是檔名（見 type_id_ctrl_lib 的說明）
+    $hasRef = $it['ref_source'] && ($it['ref_attach_id'] || ($it['ref_source'] === 'bomfile' && !empty($it['ref_file_name'])));
+    if ($hasRef) {
+        $linked = type_id_ctrl_resolve_ref($db, $it['ref_source'], (int)$it['ref_attach_id'], (int)$it['ref_ds_pk'], $it['ref_file_name'] ?? null);
     }
     return [
         'id' => (int)$it['id'],
@@ -48,9 +54,12 @@ function buildItemView(PDO $db, array $it): array {
         'is_linked' => $linked !== null,
         'is_excluded' => !empty($it['is_excluded']),
         'ref_source' => $it['ref_source'],
+        'ref_source_label' => $it['ref_source'] ? (SOURCE_LABELS[$it['ref_source']] ?? '自動帶入') : '',
         'ref_attach_id' => $it['ref_attach_id'] ? (int)$it['ref_attach_id'] : null,
         'ref_ds_pk' => $it['ref_ds_pk'] ? (int)$it['ref_ds_pk'] : null,
-        'ref_broken' => ($it['ref_source'] && $it['ref_attach_id'] && $linked === null), // 曾連結但來源已消失
+        'ref_file_name' => $it['ref_file_name'] ?? null,
+        'ref_bom_tag' => $it['ref_bom_tag'] ?? null,
+        'ref_broken' => ($hasRef && $linked === null), // 曾連結但來源已消失
         'effective_date' => $linked ? $linked['doc_date'] : $it['manual_effective_date'],
         'doc_no_text' => $linked ? $linked['doc_name'] : $it['manual_doc_no'],
         // 列印版：連結列若沒有真正版次、退回顯示檔名時，檔名不算真正的「版別／文件編號」，
@@ -96,6 +105,7 @@ case 'list':
     $itemBase   = "FROM type_id_ctrl_item ti WHERE ti.doc_id=h.id AND ti.is_deleted=0";
     $itemFilled = "(SELECT COUNT(*) $itemBase AND ti.is_excluded=0
                       AND ( (ti.ref_source IS NOT NULL AND ti.ref_source<>'' AND COALESCE(ti.ref_attach_id,0)>0)
+                            OR (ti.ref_source='bomfile' AND ti.ref_file_name IS NOT NULL AND ti.ref_file_name<>'')
                             OR (ti.manual_doc_no IS NOT NULL AND ti.manual_doc_no<>'')
                             OR ti.manual_effective_date IS NOT NULL ))";
     $itemTotal  = "(SELECT COUNT(*) $itemBase)";
@@ -229,7 +239,11 @@ case 'save_all':
             $refSource = trim((string)($it['ref_source'] ?? ''));
             $refAttachId = (int)($it['ref_attach_id'] ?? 0);
             $refDsPk = (int)($it['ref_ds_pk'] ?? 0);
-            $isLinked = in_array($refSource, ['part','quote'], true) && $refAttachId;
+            $refFileName = trim((string)($it['ref_file_name'] ?? ''));
+            $refBomTag = trim((string)($it['ref_bom_tag'] ?? ''));
+            // bomfile（ERP/資材報告）沒有 attach_id，識別鍵是檔名
+            $isLinked = (in_array($refSource, ['part','quote','dev_eval','pfmea'], true) && $refAttachId)
+                        || ($refSource === 'bomfile' && $refFileName !== '');
             $isExcluded = $isLinked && !empty($it['is_excluded']) ? 1 : 0;
             $manualDate = trim((string)($it['manual_effective_date'] ?? ''));
             $manualDocNo = trim((string)($it['manual_doc_no'] ?? ''));
@@ -237,23 +251,25 @@ case 'save_all':
             $rowId = (int)($it['id'] ?? 0);
             if ($rowId && isset($existing[$rowId])) {
                 $st = $db->prepare("UPDATE type_id_ctrl_item SET seq=?, item_name=?, item_type=?, process_tag=?, need_process_hint=?,
-                                     ref_source=?, ref_attach_id=?, ref_ds_pk=?, is_excluded=?,
+                                     ref_source=?, ref_attach_id=?, ref_ds_pk=?, ref_file_name=?, ref_bom_tag=?, is_excluded=?,
                                      manual_effective_date=?, manual_doc_no=?, updated_at=NOW()
                                      WHERE id=?");
                 $st->execute([
                     $seq, $itemName, $itemType, ($processTag !== '' ? $processTag : null), $needProcessHint,
-                    $isLinked ? $refSource : null, $isLinked ? $refAttachId : null, $isLinked ? $refDsPk : null, $isExcluded,
+                    $isLinked ? $refSource : null, $isLinked ? $refAttachId : null, $isLinked ? $refDsPk : null,
+                    $isLinked && $refFileName !== '' ? $refFileName : null, $isLinked && $refBomTag !== '' ? $refBomTag : null, $isExcluded,
                     $isLinked ? null : ($manualDate ?: null), $isLinked ? null : ($manualDocNo ?: null),
                     $rowId,
                 ]);
                 unset($existing[$rowId]);
             } else {
                 $st = $db->prepare("INSERT INTO type_id_ctrl_item
-                    (doc_id, seq, item_name, item_type, process_tag, need_process_hint, ref_source, ref_attach_id, ref_ds_pk, is_excluded, manual_effective_date, manual_doc_no)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+                    (doc_id, seq, item_name, item_type, process_tag, need_process_hint, ref_source, ref_attach_id, ref_ds_pk, ref_file_name, ref_bom_tag, is_excluded, manual_effective_date, manual_doc_no)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
                 $st->execute([
                     $id, $seq, $itemName, $itemType, ($processTag !== '' ? $processTag : null), $needProcessHint,
-                    $isLinked ? $refSource : null, $isLinked ? $refAttachId : null, $isLinked ? $refDsPk : null, $isExcluded,
+                    $isLinked ? $refSource : null, $isLinked ? $refAttachId : null, $isLinked ? $refDsPk : null,
+                    $isLinked && $refFileName !== '' ? $refFileName : null, $isLinked && $refBomTag !== '' ? $refBomTag : null, $isExcluded,
                     $isLinked ? null : ($manualDate ?: null), $isLinked ? null : ($manualDocNo ?: null),
                 ]);
             }
@@ -299,11 +315,13 @@ case 'fetch_ext_for_part':
         return [
             'id'=>0, 'seq'=>0,
             'item_name'=> !empty($er['categories']) ? $er['categories'][0] : $er['doc_name'],
-            'item_type'=> type_id_ctrl_guess_type($er['categories'] ?? []),
+            'item_type'=> !empty($er['force_type']) ? $er['force_type'] : type_id_ctrl_guess_type($er['categories'] ?? []),
             'process_tag'=> $er['origin_process'] ?? null,
             'need_process_hint'=> !empty($er['need_process']),
             'is_linked'=>true, 'is_excluded'=>false,
             'ref_source'=>$er['source'], 'ref_attach_id'=>(int)$er['attach_id'], 'ref_ds_pk'=>(int)$er['ds_pk'],
+            'ref_source_label'=>SOURCE_LABELS[$er['source']] ?? '自動帶入',
+            'ref_file_name'=>$er['file_name'] ?? null, 'ref_bom_tag'=>$er['bom_tag'] ?? null,
             'ref_broken'=>false, 'effective_date'=>$er['doc_date'], 'doc_no_text'=>$er['doc_name'], 'file_url'=>null,
         ];
     }, $ext);
@@ -393,6 +411,62 @@ case 'save_own_drawing_categories':
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
     jout(['success'=>true]);
+
+// ── ERP/資材報告 檔名標籤設定（2026-08-20 使用者要求）───────────────────────
+// 標籤本身在「料號圖面查閱(part_viewer.php)」設定，這裡只設定「要不要列入本模組／列入後的
+// 型態項目名稱與型態類別」，逐標籤分開設定。
+case 'bom_tag_setting_get':
+    needAdmin($perms);
+    $map = type_id_ctrl_bom_tag_map_get($db);
+    $rows = [];
+    foreach (type_id_ctrl_bom_tags_all($db) as $t) {
+        $cfg = $map[$t['suffix']] ?? null;
+        $rows[] = [
+            'suffix'    => $t['suffix'],
+            'label'     => $t['label'],
+            'color'     => $t['color'],
+            'included'  => $cfg ? 1 : 0,
+            'item_name' => $cfg ? $cfg['item_name'] : $t['label'],
+            'item_type' => $cfg ? $cfg['item_type'] : 'report',
+        ];
+    }
+    jout(['success'=>true,'rows'=>$rows,'dir'=>type_id_ctrl_bom_file_dir($db),
+          'type_options'=>TYPE_LABELS, 'part_viewer_url'=>'../pm/part_viewer.php']);
+
+case 'bom_tag_setting_save':
+    needAdmin($perms);
+    $rows = json_decode((string)($_POST['rows'] ?? '[]'), true);
+    if (!is_array($rows)) $rows = [];
+    $dir = trim((string)($_POST['dir'] ?? ''));
+    $map = [];
+    foreach ($rows as $r) {
+        if (empty($r['included'])) continue;                       // 沒勾列入的不存
+        $suffix = trim((string)($r['suffix'] ?? ''));
+        if ($suffix === '') continue;
+        $type = (string)($r['item_type'] ?? 'other');
+        if (!isset(TYPE_LABELS[$type])) jout(['success'=>false,'message'=>'型態類別不合法：'.$type]);
+        $map[$suffix] = ['item_name'=>trim((string)($r['item_name'] ?? '')), 'item_type'=>$type];
+    }
+    try {
+        type_id_ctrl_bom_tag_map_save($db, $map, $dir, $uname);
+    } catch (Throwable $e) { jout(['success'=>false,'message'=>'儲存失敗：'.$e->getMessage()]); }
+    jout(['success'=>true,'saved_count'=>count($map)]);
+
+// NAS 上的 ERP/資材報告檔案下載（走 API 守門＋路徑現場組，不給瀏覽器直連 UNC＝鐵律5）
+case 'download_bom_file':
+    needView($perms);
+    $name = (string)($_GET['name'] ?? '');
+    $full = type_id_ctrl_bom_file_path($db, $name);
+    if ($full === null || !is_file($full)) { http_response_code(404); echo '檔案不存在'; exit; }
+    $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+    $mime = ['pdf'=>'application/pdf','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png',
+             'gif'=>'image/gif','xls'=>'application/vnd.ms-excel',
+             'xlsx'=>'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'][$ext] ?? 'application/octet-stream';
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . filesize($full));
+    header("Content-Disposition: inline; filename*=UTF-8''" . rawurlencode($name));
+    readfile($full);
+    exit;
 
 // 把「廠內圖面標籤設定」目前的顯示名稱／需要顯示製程，套用回已同步進本模組的既有項目列
 // （2026-08-12 使用者要求：沒有批次刪除重轉，改名要能直接更新舊資料）

@@ -69,6 +69,11 @@ function type_id_ctrl_ensure_schema(PDO $db): void {
         // 重複出現，改成「一料號一份」，製程改記在每一列項目上（共用文件留空＝適用全部製程）。
         // process_desc 欄位保留但不再是尋找/建立表頭的鍵值，僅作歷史相容用途，新資料不寫入。
         "ALTER TABLE type_id_ctrl_item ADD COLUMN process_tag VARCHAR(200) NULL COMMENT '所屬製程(空=共用/適用全部製程)，自動由報價項目製程推導，可手動修改或清空' AFTER item_type",
+        // 2026-08-20 使用者要求新增三種自動偵測來源：產品開發評估表(td_dev_eval)、PFMEA(pfmea_doc)
+        // 與 part_viewer 的 ERP/資材報告 NAS 檔案。前兩者用單據 id 當 ref_attach_id 即可，
+        // NAS 檔案沒有 id，另用檔名當識別鍵（同一料號同一標籤只會帶最新一份，故檔名足以識別）。
+        "ALTER TABLE type_id_ctrl_item ADD COLUMN ref_file_name VARCHAR(255) NULL COMMENT '連結NAS檔案時的檔名(ref_source=bomfile專用，其餘來源為NULL)' AFTER ref_ds_pk",
+        "ALTER TABLE type_id_ctrl_item ADD COLUMN ref_bom_tag VARCHAR(30) NULL COMMENT 'ERP/資材報告檔名標籤後綴(ref_source=bomfile專用)；同一標籤永遠只有一列，檔案換新版時原地更新不另開列' AFTER ref_file_name",
     ] as $alter) {
         try { $db->exec($alter); } catch (Throwable $e) {}
     }
@@ -147,7 +152,37 @@ function type_id_ctrl_next_doc_no(PDO $db): string {
  * part 來源優先用「版次(revision)」「發行章日期(issue_stamp_date)」顯示（自家出的圖才會填這兩欄；
  * 客戶提供的外來文件通常沒填，此時自動退回檔名/上傳日——2026-08-12 使用者要求）。
  */
-function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $dsPk): ?array {
+function type_id_ctrl_resolve_ref(PDO $db, string $source, int $attachId, int $dsPk, ?string $fileName = null): ?array {
+    // 2026-08-20 使用者要求新增的三種來源：本系統內建立的表單（產品開發評估表／PFMEA）與 NAS 上的
+    // ERP/資材報告檔案。表單類的「版別／文件編號」＝該表單的表單編號（doc_no，已改為依表單日期產生），
+    // 是真正的文件編號，所以 doc_no_is_filename=false（列印會印出來）。
+    if ($source === 'dev_eval' || $source === 'pfmea') {
+        $def = type_id_ctrl_form_doc_defs($db)[$source] ?? null;
+        if (!$def) return null;
+        $st = $db->prepare("SELECT doc_no, {$def['date_col']} AS doc_date FROM {$def['table']} WHERE id=? AND is_deleted=0 LIMIT 1");
+        $st->execute([$attachId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return null;
+        return [
+            'doc_name' => $r['doc_no'],
+            'doc_no_is_filename' => false,
+            'doc_date' => $r['doc_date'],
+            'file_url' => $def['page'] . '?kw=' . rawurlencode((string)$r['doc_no']),
+        ];
+    }
+    if ($source === 'bomfile') {
+        $fileName = trim((string)$fileName);
+        if ($fileName === '') return null;
+        $full = type_id_ctrl_bom_file_path($db, $fileName);
+        if ($full === null || !is_file($full)) return null;
+        return [
+            // NAS 檔案沒有版次欄位，doc_name 一律是檔名 → 比照料號附件，列印不印檔名當文件編號
+            'doc_name' => $fileName,
+            'doc_no_is_filename' => true,
+            'doc_date' => date('Y-m-d', (int)filemtime($full)),
+            'file_url' => '../../src/store/ConfigIdDoc_API.php?action=download_bom_file&name=' . rawurlencode($fileName),
+        ];
+    }
     if ($source === 'part') {
         $st = $db->prepare("SELECT COALESCE(NULLIF(pa.original_name,''), pa.filename) AS doc_name,
                                     DATE(pa.uploaded_at) AS doc_date, pa.filename, pa.revision, pa.issue_stamp_date
@@ -192,7 +227,12 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     $catRows = $db->query("SELECT id, COALESCE(NULLIF(external_doc_name,''), category_name) AS disp,
                                    COALESCE(type_id_ctrl_need_process,0) AS need_process
                             FROM quotation_file_categories WHERE is_external_doc=1 OR type_id_ctrl_include=1")->fetchAll(PDO::FETCH_ASSOC);
-    if (!$catRows) return [];
+    // 2026-08-20 起本模組還會自動偵測「本系統內建立的表單」與「NAS 上的 ERP/資材報告」，
+    // 跟附件類別設定無關，所以就算一個類別都沒設定也不能整支早退回空陣列。
+    if (!$catRows) {
+        return array_merge(type_id_ctrl_fetch_form_docs_for_part($db, $dsPk),
+                           type_id_ctrl_fetch_bom_files_for_part($db, $dsPk));
+    }
     $cats = [];
     foreach ($catRows as $cr) { $cats[(int)$cr['id']] = ['disp'=>$cr['disp'], 'need_process'=>(bool)$cr['need_process']]; }
     $catIds = array_keys($cats);
@@ -262,7 +302,242 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
         unset($r['category_ids'], $r['category_id_single']);
     }
     unset($r);
-    return $rows;
+
+    // 本系統內建立的表單（產品開發評估表／PFMEA）與 NAS 的 ERP/資材報告檔案（2026-08-20 使用者要求）
+    return array_merge($rows,
+                       type_id_ctrl_fetch_form_docs_for_part($db, $dsPk),
+                       type_id_ctrl_fetch_bom_files_for_part($db, $dsPk));
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * 自動偵測來源二：本系統內建立的表單（2026-08-20 使用者要求）
+ *   dev_eval ＝產品開發評估表(td_dev_eval)、pfmea ＝潛在失效模式及效應分析(pfmea_doc)
+ *   型態項目名稱＝該表單綁定的 AS 文件名稱（沒綁定才退回預設名稱，不寫死一份對照表＝鐵律4）
+ *   型態生效日期＝表單自己的業務日期（填表日期／業務日期）
+ *   版別/文件編號＝表單編號 doc_no（2026-08-20 起編號本身就是依這個日期產生的）
+ *   型態類別一律「其他文件」(other)——使用者明確指定。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/** 兩種表單來源的定義表（資料表/日期欄/頁面/AS綁定模組代碼/預設名稱） */
+function type_id_ctrl_form_doc_defs(PDO $db): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $defs = [
+        'dev_eval' => ['table'=>'td_dev_eval', 'date_col'=>'fill_date', 'page'=>'td_dev_eval.php',
+                       'asdoc_module'=>'td_dev_eval', 'default_name'=>'產品開發評估表'],
+        'pfmea'    => ['table'=>'pfmea_doc',   'date_col'=>'biz_date',  'page'=>'pfmea.php',
+                       'asdoc_module'=>'pfmea', 'default_name'=>'潛在失效模式及效應分析'],
+    ];
+    foreach ($defs as $k => $d) {
+        $name = '';
+        if (function_exists('eg_asdoc_get')) {
+            $doc = eg_asdoc_get($db, $d['asdoc_module']);
+            $name = trim((string)($doc['doc_name'] ?? ''));
+        }
+        $defs[$k]['item_name'] = $name !== '' ? $name : $d['default_name'];
+    }
+    return $cache = $defs;
+}
+
+/** 此料號目前已建立的表單（產品開發評估表／PFMEA），組成與外來文件附件相同格式的列 */
+function type_id_ctrl_fetch_form_docs_for_part(PDO $db, int $dsPk): array {
+    if (!$dsPk) return [];
+    $out = [];
+    foreach (type_id_ctrl_form_doc_defs($db) as $src => $d) {
+        try {
+            $st = $db->prepare("SELECT id, doc_no, {$d['date_col']} AS doc_date FROM {$d['table']}
+                                 WHERE part_d_id=? AND is_deleted=0 ORDER BY {$d['date_col']}, id");
+            $st->execute([$dsPk]);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $out[] = [
+                    'source'      => $src,
+                    'attach_id'   => (int)$r['id'],
+                    'ds_pk'       => $dsPk,
+                    'file_name'   => null,
+                    'doc_name'    => (string)$r['doc_no'],
+                    'doc_date'    => $r['doc_date'],
+                    'categories'  => [$d['item_name']],
+                    'need_process'=> false,
+                    'origin_process' => null,
+                    'force_type'  => 'other',   // 使用者指定：這兩種一律「其他文件」
+                ];
+            }
+        } catch (Throwable $e) { /* 表不存在時略過 */ }
+    }
+    return $out;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * 自動偵測來源三：料號圖面查閱(views/pm/part_viewer.php)的 ERP/資材報告 檔名標籤
+ *   標籤本身（後綴→標籤名稱）的唯一來源是 part_viewer 既有的
+ *   system_parameters('BOM_FILE_TAGS','tags_config')，本模組不另存一份（鐵律4）；
+ *   本模組只另外存「這個標籤要不要列入／列入後的型態項目名稱與型態類別」，逐標籤分開設定。
+ *   檔案 ↔ 料號的對應比照 part_viewer：檔名以「該料號的 BOM 名稱＋後綴」開頭，
+ *   且後綴後面接的不是英數字（避免 -T 誤中 -TR）。
+ *   使用者 2026-08-20 拍板：同一個標籤只帶「最新一份」（跨該料號所有 BOM 比檔案日期）。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/** ERP/資材報告資料夾（可在本頁「BOM檔案標籤設定」改；預設＝part_viewer 目前掃描的位置） */
+function type_id_ctrl_bom_file_dir(PDO $db): string {
+    $dir = '';
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='TYPE_ID_CTRL' AND param_key='bom_file_dir' LIMIT 1");
+        $st->execute();
+        $dir = trim((string)$st->fetchColumn());
+    } catch (Throwable $e) {}
+    if ($dir === '') $dir = 'Z:/BOM/ERP/資材(生管and業務)/BOM/';
+    $dir = str_replace('\\', '/', $dir);
+    if (substr($dir, -1) !== '/') $dir .= '/';
+    return $dir;
+}
+
+/** UTF-8 路徑 → 實際可用來讀檔的路徑（Windows 的 NAS 目錄含中文，PHP 檔案函式吃 Big5） */
+function type_id_ctrl_fs_path(string $utf8Path): string {
+    $isWin = (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN');
+    return $isWin ? mb_convert_encoding($utf8Path, 'Big5', 'UTF-8') : $utf8Path;
+}
+
+/**
+ * 檔名 → 完整實體路徑（同時是下載端點的路徑守門：只允許單純檔名，
+ * 擋掉 .. 與路徑分隔字元，避免被指定成資料夾外的任意檔案）。不合法回 null。
+ */
+function type_id_ctrl_bom_file_path(PDO $db, string $fileName): ?string {
+    $fileName = trim($fileName);
+    if ($fileName === '' || strpbrk($fileName, "/\\") !== false || strpos($fileName, '..') !== false) return null;
+    return type_id_ctrl_fs_path(type_id_ctrl_bom_file_dir($db) . $fileName);
+}
+
+/** part_viewer 既有的檔名標籤設定（唯一來源，本模組只讀不寫） */
+function type_id_ctrl_bom_tags_all(PDO $db): array {
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='BOM_FILE_TAGS' AND param_key='tags_config' LIMIT 1");
+        $st->execute();
+        $arr = json_decode((string)$st->fetchColumn(), true);
+    } catch (Throwable $e) { $arr = null; }
+    if (!is_array($arr)) return [];
+    $out = [];
+    foreach ($arr as $t) {
+        $suffix = trim((string)($t['suffix'] ?? ''));
+        if ($suffix === '') continue;
+        $out[] = ['suffix'=>$suffix, 'label'=>trim((string)($t['label'] ?? '')), 'color'=>(string)($t['color'] ?? '')];
+    }
+    return $out;
+}
+
+/** 本模組對各標籤的設定：suffix => [item_name, item_type]（只存有勾選列入的） */
+function type_id_ctrl_bom_tag_map_get(PDO $db): array {
+    try {
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='TYPE_ID_CTRL' AND param_key='bom_file_tags' LIMIT 1");
+        $st->execute();
+        $arr = json_decode((string)$st->fetchColumn(), true);
+    } catch (Throwable $e) { $arr = null; }
+    if (!is_array($arr)) return [];
+    $valid = ['drawing','jig','report','other'];
+    $out = [];
+    foreach ($arr as $suffix => $cfg) {
+        $suffix = trim((string)$suffix);
+        if ($suffix === '' || !is_array($cfg)) continue;
+        $type = (string)($cfg['item_type'] ?? 'other');
+        $out[$suffix] = [
+            'item_name' => trim((string)($cfg['item_name'] ?? '')),
+            'item_type' => in_array($type, $valid, true) ? $type : 'other',
+        ];
+    }
+    return $out;
+}
+
+/** 儲存標籤設定（$map: suffix => [item_name, item_type]，只傳有勾選列入的） */
+function type_id_ctrl_bom_tag_map_save(PDO $db, array $map, string $dir, string $byUser): void {
+    $tags = [];
+    foreach (type_id_ctrl_bom_tags_all($db) as $t) $tags[$t['suffix']] = $t['label'];
+    $valid = ['drawing','jig','report','other'];
+    $clean = [];
+    foreach ($map as $suffix => $cfg) {
+        $suffix = trim((string)$suffix);
+        if ($suffix === '' || !isset($tags[$suffix]) || !is_array($cfg)) continue;  // 只認 part_viewer 現有的標籤
+        $name = trim((string)($cfg['item_name'] ?? ''));
+        if ($name === '') $name = $tags[$suffix];                                    // 沒填就用標籤名稱
+        $type = (string)($cfg['item_type'] ?? 'other');
+        $clean[$suffix] = ['item_name'=>$name, 'item_type'=>in_array($type, $valid, true) ? $type : 'other'];
+    }
+    type_id_ctrl_param_save($db, 'bom_file_tags', json_encode($clean, JSON_UNESCAPED_UNICODE),
+                            '型態識別文件管制表：要列入的 ERP/資材報告檔名標籤與對應型態項目名稱/類別', $byUser);
+    $dir = trim($dir);
+    if ($dir !== '') type_id_ctrl_param_save($db, 'bom_file_dir', $dir, '型態識別文件管制表：ERP/資材報告掃描資料夾', $byUser);
+}
+
+/** 本模組自己的設定值寫入 system_parameters(TYPE_ID_CTRL) */
+function type_id_ctrl_param_save(PDO $db, string $key, string $value, string $desc, string $byUser): void {
+    $st = $db->prepare("SELECT 1 FROM system_parameters WHERE param_group='TYPE_ID_CTRL' AND param_key=? LIMIT 1");
+    $st->execute([$key]);
+    if ($st->fetchColumn()) {
+        $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=?, updated_at=NOW()
+                       WHERE param_group='TYPE_ID_CTRL' AND param_key=?")->execute([$value, $byUser, $key]);
+    } else {
+        $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by, updated_at)
+                       VALUES ('TYPE_ID_CTRL',?,?,?,?,NOW())")->execute([$key, $value, $desc, $byUser]);
+    }
+}
+
+/**
+ * 此料號的 ERP/資材報告檔案，依標籤設定轉成項目列（每個標籤只留最新一份）。
+ * 以 glob 依 BOM 名稱前綴撈（該資料夾近 6000 個檔，不整個 scandir）。
+ */
+function type_id_ctrl_fetch_bom_files_for_part(PDO $db, int $dsPk): array {
+    if (!$dsPk) return [];
+    $map = type_id_ctrl_bom_tag_map_get($db);
+    if (!$map) return [];                       // 一個標籤都沒設定列入＝這個來源整個關閉
+
+    try {
+        $st = $db->prepare("SELECT DISTINCT bom FROM bom WHERE d_setting_id=? AND bom<>''");
+        $st->execute([$dsPk]);
+        $boms = $st->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) { return []; }
+    if (!$boms) return [];
+
+    $dirUtf8 = type_id_ctrl_bom_file_dir($db);
+    $dirFs   = type_id_ctrl_fs_path($dirUtf8);
+    if (!is_dir($dirFs)) return [];
+    $isWin = (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN');
+
+    $best = [];   // suffix => 該標籤目前最新的一份
+    foreach ($boms as $bom) {
+        $bom = trim((string)$bom);
+        if ($bom === '') continue;
+        foreach (glob($dirFs . $bom . '*') ?: [] as $full) {
+            if (!is_file($full)) continue;
+            $nameUtf8 = $isWin ? mb_convert_encoding(basename($full), 'UTF-8', 'Big5') : basename($full);
+            foreach ($map as $suffix => $cfg) {
+                // 比照 part_viewer：BOM名稱+後綴 開頭，且後綴後面不可再接英數字（-T 不可誤中 -TR）
+                $head = $bom . $suffix;
+                if (stripos($nameUtf8, $head) !== 0) continue;
+                $after = substr($nameUtf8, strlen($head));
+                if ($after !== '' && !preg_match('/^[^a-zA-Z0-9]/', $after)) continue;
+                $mtime = (int)filemtime($full);
+                if (!isset($best[$suffix]) || $mtime > $best[$suffix]['mtime']) {
+                    $best[$suffix] = ['mtime'=>$mtime, 'name'=>$nameUtf8, 'cfg'=>$cfg];
+                }
+            }
+        }
+    }
+
+    $out = [];
+    foreach ($best as $suffix => $b) {
+        $out[] = [
+            'source'      => 'bomfile',
+            'attach_id'   => 0,
+            'ds_pk'       => $dsPk,
+            'file_name'   => $b['name'],
+            'doc_name'    => $b['name'],
+            'doc_date'    => date('Y-m-d', $b['mtime']),
+            'categories'  => [$b['cfg']['item_name']],
+            'need_process'=> false,
+            'origin_process' => null,
+            'force_type'  => $b['cfg']['item_type'],
+            'bom_tag'     => $suffix,
+        ];
+    }
+    return $out;
 }
 
 /**
@@ -464,12 +739,17 @@ function type_id_ctrl_refresh_synced_item_names(PDO $db): array {
         return [$names, $needProcess];
     };
 
-    $items = $db->query("SELECT id, doc_id, item_name, need_process_hint, ref_source, ref_attach_id, ref_ds_pk
+    $items = $db->query("SELECT id, doc_id, item_name, item_type, need_process_hint, ref_source, ref_attach_id, ref_ds_pk, ref_bom_tag
                           FROM type_id_ctrl_item WHERE is_deleted=0 AND ref_source IS NOT NULL AND ref_attach_id IS NOT NULL")
                 ->fetchAll(PDO::FETCH_ASSOC);
 
+    // 2026-08-20 新增的三種來源，名稱同樣要能被設定值改動後套用回既有列
+    $formDefs = type_id_ctrl_form_doc_defs($db);
+    $bomTagMap = type_id_ctrl_bom_tag_map_get($db);
+
     $updated = 0; $affectedDocs = [];
     $updSt = $db->prepare("UPDATE type_id_ctrl_item SET item_name=?, need_process_hint=?, updated_at=NOW() WHERE id=?");
+    $updBomSt = $db->prepare("UPDATE type_id_ctrl_item SET item_name=?, item_type=?, updated_at=NOW() WHERE id=?");
     $partSt = $db->prepare("SELECT category_ids FROM part_attachments WHERE id=? AND d_id=? AND deleted_at IS NULL");
     $quoteSt = $db->prepare("SELECT category_ids, category_id FROM quotation_attachments WHERE id=? AND status='active'");
 
@@ -484,6 +764,19 @@ function type_id_ctrl_refresh_synced_item_names(PDO $db): array {
             $row = $quoteSt->fetch(PDO::FETCH_ASSOC);
             if (!$row) continue;
             [$names, $needProcess] = $resolveNames($row['category_ids'], $row['category_id']);
+        } elseif (isset($formDefs[$it['ref_source']])) {
+            // 產品開發評估表／PFMEA：名稱跟著該表單綁定的 AS 文件名稱走
+            $names = [$formDefs[$it['ref_source']]['item_name']]; $needProcess = false;
+        } elseif ($it['ref_source'] === 'bomfile') {
+            // ERP/資材報告：名稱與型態類別跟著本模組的標籤設定走（該標籤被取消列入就維持原樣不動）
+            $tag = (string)($it['ref_bom_tag'] ?? '');
+            if ($tag === '' || !isset($bomTagMap[$tag])) continue;
+            $cfg = $bomTagMap[$tag];
+            if ($cfg['item_name'] === $it['item_name'] && $cfg['item_type'] === $it['item_type']) continue;
+            $updBomSt->execute([$cfg['item_name'], $cfg['item_type'], $it['id']]);
+            $updated++;
+            $affectedDocs[(int)$it['doc_id']] = true;
+            continue;
         } else {
             continue;
         }
@@ -531,32 +824,56 @@ function type_id_ctrl_sync_part(PDO $db, int $dsPk): array {
         $docId = (int)$db->lastInsertId();
     }
 
-    $st = $db->prepare("SELECT ref_source, ref_attach_id, ref_ds_pk FROM type_id_ctrl_item WHERE doc_id=? AND ref_source IS NOT NULL");
+    $st = $db->prepare("SELECT id, ref_source, ref_attach_id, ref_ds_pk, ref_file_name, ref_bom_tag
+                          FROM type_id_ctrl_item WHERE doc_id=? AND is_deleted=0 AND ref_source IS NOT NULL");
     $st->execute([$docId]);
-    $existingKeys = [];
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $existingKeys[$r['ref_source'] . '|' . $r['ref_attach_id'] . '|' . $r['ref_ds_pk']] = true;
+    $existingKeys = []; $bomRowsByTag = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $existingKeys[$r['ref_source'] . '|' . $r['ref_attach_id'] . '|' . $r['ref_ds_pk']] = true;
+        // ERP/資材報告：同一個標籤永遠只留一列，換新檔案時原地把它指到新檔（不另開一列），
+        // 型態識別文件管制表要看的是「目前的型態」，不是歷次報告的清單（2026-08-20 使用者拍板）
+        if ($r['ref_source'] === 'bomfile' && $r['ref_bom_tag'] !== null && $r['ref_bom_tag'] !== '') {
+            $bomRowsByTag[$r['ref_bom_tag']] = $r;
+        }
+    }
 
     $st = $db->prepare("SELECT COALESCE(MAX(seq),0) FROM type_id_ctrl_item WHERE doc_id=?");
     $st->execute([$docId]);
     $seq = (int)$st->fetchColumn();
 
-    $addedCount = 0;
+    $addedCount = 0; $updatedCount = 0;
     foreach ($extRows as $er) {
+        // ERP/資材報告：先看這個標籤是不是已經有一列了，有就只把它指到最新的那份檔案
+        if (($er['source'] ?? '') === 'bomfile') {
+            $tag = (string)($er['bom_tag'] ?? '');
+            if ($tag !== '' && isset($bomRowsByTag[$tag])) {
+                $row = $bomRowsByTag[$tag];
+                if ((string)$row['ref_file_name'] !== (string)$er['file_name']) {
+                    $db->prepare("UPDATE type_id_ctrl_item SET ref_file_name=?, updated_at=NOW() WHERE id=?")
+                       ->execute([$er['file_name'], $row['id']]);
+                    $updatedCount++;
+                }
+                continue;
+            }
+        }
         $key = $er['source'] . '|' . $er['attach_id'] . '|' . $er['ds_pk'];
-        if (isset($existingKeys[$key])) continue;
+        if ($er['source'] !== 'bomfile' && isset($existingKeys[$key])) continue;
         $seq++;
-        $guessType = type_id_ctrl_guess_type($er['categories'] ?? []);
+        // force_type：表單類(其他文件)與 ERP/資材報告(各標籤自己的設定)由來源直接指定型態類別，
+        // 只有附件類才需要用類別名稱猜
+        $itemType = !empty($er['force_type']) ? $er['force_type'] : type_id_ctrl_guess_type($er['categories'] ?? []);
         $itemName = !empty($er['categories']) ? $er['categories'][0] : $er['doc_name'];
         $originProcess = $er['origin_process'] ?? null;
         $needProcessHint = !empty($er['need_process']) ? 1 : 0;
-        $st = $db->prepare("INSERT INTO type_id_ctrl_item (doc_id, seq, item_name, item_type, process_tag, need_process_hint, ref_source, ref_attach_id, ref_ds_pk)
-                             VALUES (?,?,?,?,?,?,?,?,?)");
-        $st->execute([$docId, $seq, $itemName, $guessType, ($originProcess !== '' ? $originProcess : null), $needProcessHint, $er['source'], $er['attach_id'], $er['ds_pk']]);
+        $st = $db->prepare("INSERT INTO type_id_ctrl_item (doc_id, seq, item_name, item_type, process_tag, need_process_hint, ref_source, ref_attach_id, ref_ds_pk, ref_file_name, ref_bom_tag)
+                             VALUES (?,?,?,?,?,?,?,?,?,?,?)");
+        $st->execute([$docId, $seq, $itemName, $itemType, ($originProcess !== '' ? $originProcess : null), $needProcessHint,
+                      $er['source'], $er['attach_id'], $er['ds_pk'], $er['file_name'] ?? null, $er['bom_tag'] ?? null]);
         $addedCount++;
     }
 
-    if ($addedCount > 0 && $doc && $doc['review_status'] === 'confirmed') {
+    if (($addedCount > 0 || $updatedCount > 0) && $doc && $doc['review_status'] === 'confirmed') {
         $db->prepare("UPDATE type_id_ctrl_doc SET review_status='needs_recheck' WHERE id=?")->execute([$docId]);
     }
-    return ['doc_id'=>$docId, 'is_new'=>$isNew, 'added_count'=>$addedCount];
+    return ['doc_id'=>$docId, 'is_new'=>$isNew, 'added_count'=>$addedCount, 'updated_count'=>$updatedCount];
 }

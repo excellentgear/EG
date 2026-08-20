@@ -188,6 +188,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <button id="btnSyncPart" style="<?= $perms['canEdit']?'':'display:none;' ?>" title="依此料號的訂單/報價單製程，自動建立(或更新)各製程的型態識別文件管制表，並同步外來文件清單附件"><i class="fa fa-refresh"></i> 同步</button>
             <button id="btnAsDoc" style="<?= $perms['canAdmin']?'':'display:none;' ?>"><i class="fa fa-link"></i> AS文件綁定</button>
             <button id="btnOwnDrawCats" style="<?= $perms['canAdmin']?'':'display:none;' ?>" title="設定哪些廠內「自家出的圖」標籤也要納入本模組的自動同步來源"><i class="fa fa-picture-o"></i> 廠內圖面標籤設定</button>
+            <button id="btnBomTags" style="<?= $perms['canAdmin']?'':'display:none;' ?>" title="設定料號圖面查閱(part_viewer)的 ERP/資材報告 檔名標籤要不要列入本模組，以及各標籤對應的型態項目名稱與型態類別"><i class="fa fa-tags"></i> BOM檔案標籤設定</button>
             <span style="border-left:1px solid #D8BE93;height:20px;<?= $perms['canAdmin']?'':'display:none;' ?>"></span>
             <button id="btnBatchConfirm" style="<?= $perms['canAdmin']?'':'display:none;' ?>" title="批次確認勾選的清單，確認者自動記為目前登入者"><i class="fa fa-check-square-o"></i> 批次確認清單</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
@@ -396,6 +397,26 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
     </div>
 </div></div>
 
+<!-- ERP/資材報告 檔名標籤設定（2026-08-20 使用者要求）-->
+<div class="ic-mask" id="bomTagMask"><div class="ic-modal xwide" style="max-width:820px;">
+    <div class="m-head"><span>BOM檔案標籤設定（ERP/資材報告）</span><span class="m-close" onclick="closeMask('bomTagMask')">✕</span></div>
+    <div class="m-body">
+        <div class="tip" style="margin-bottom:8px;">下方標籤來自「<a href="../pm/part_viewer.php" target="_blank">料號圖面查閱</a>」的<b>設定標籤</b>（後綴 → 標籤名稱），要新增/刪除標籤請到那裡改，本頁只設定<b>要不要列入型態識別文件管制表</b>以及<b>列入後要顯示成什麼</b>。<br>勾選「列入」的標籤，同步時會找出這個料號所有 BOM 底下符合該後綴的檔案，<b>每個標籤只帶最新的一份</b>（型態生效日期＝該檔案的日期，版別／文件編號欄顯示檔名）。之後若有更新的同一標籤檔案，同步時會<b>原地把該列指到新檔</b>，不會另外長出一列。<br><b>型態項目名稱</b>留空則沿用標籤名稱；<b>型態類別</b>逐標籤各自設定（圖面／治夾具／報告／其他文件）。設定改了之後按「更新已同步項目」可套用回既有的項目列。</div>
+        <label style="font-size:12px;color:#5b3a1e;">ERP/資材報告資料夾（預設為料號圖面查閱目前掃描的位置，除非搬家否則不用改）</label>
+        <input type="text" id="bomTagDir" style="width:100%;margin-bottom:8px;">
+        <div id="bomTagEmpty" style="color:#8a6d45;padding:10px;">載入中…</div>
+        <table class="ic-item-table" id="bomTagTable" style="display:none;">
+            <thead><tr><th style="width:60px;">列入</th><th style="width:90px;">後綴</th><th style="width:120px;">標籤名稱</th><th>型態項目名稱</th><th style="width:130px;">型態類別</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('bomTagMask')">取消</button>
+        <button class="b-cancel" onclick="saveBomTags(true)" title="先儲存目前設定，再用最新的名稱／類別覆蓋回既有已同步的項目列"><i class="fa fa-refresh"></i> 更新已同步項目</button>
+        <button class="b-ok" onclick="saveBomTags(false)">儲存</button>
+    </div>
+</div></div>
+
 <!-- 角色權限說明 -->
 <div class="ic-mask" id="roleHelpMask"><div class="ic-modal">
     <div class="m-head"><span>角色權限說明</span><span class="m-close" onclick="closeMask('roleHelpMask')">✕</span></div>
@@ -416,14 +437,14 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
         <p><b>每個料號建立一份</b>「型態識別文件管制表」，逐列記錄目前定義該料號狀態的文件（原圖、報價單、加工圖、產品開發評估表、PFMEA、檢驗報告…），用來追溯「這個料號現在的配置由哪些文件定義」。項目列以「外來文件清單」為主要來源，可自動產生／同步，也可以手動增加。</p>
         <h4>所屬製程（同一張圖若多個製程共用，不會重複列出）</h4>
         <ul>
-            <li>清單的 <b>內容項次</b> 欄顯示該筆管制表裡<b>有資料</b>的項目列筆數——只計算「未排除，且已連結到來源文件（料號／報價附件）或手動填了文件編號、型態生效日期」的列；只有項目名稱、還沒帶到任何文件的空白列<b>不計入</b>（滑鼠停留可看見項目列總數）。數字是每次查詢當下即時算出、不是快照，匯出 CSV 也含這一欄。</li>
+            <li>清單的 <b>內容項次</b> 欄顯示該筆管制表裡<b>有資料</b>的項目列筆數——只計算「未排除，且已連結到來源文件（料號／報價附件、產品開發評估表、PFMEA、ERP/資材報告檔案）或手動填了文件編號、型態生效日期」的列；只有項目名稱、還沒帶到任何文件的空白列<b>不計入</b>（滑鼠停留可看見項目列總數）。數字是每次查詢當下即時算出、不是快照，匯出 CSV 也含這一欄。</li>
             <li>清單的 <b>PFMEA</b> 欄顯示這個料號是否已在「潛在失效模式及效應分析」建檔（<b>PFMEA已建立</b>／未建立，點擊可開啟 PFMEA 頁面），是每次查詢當下即時查 pfmea_doc 的結果、不是快照；工具列的「PFMEA」下拉可篩選出已建立／未建立的清單，匯出 CSV 也含這一欄。</li>
             <li>每一列項目可標記「所屬製程」：來源是報價附件、且能對應到<b>有勾選製程</b>的報價項目時，系統會自動帶入該製程（可手動修改或清空）；無法辨識來源製程的文件（例如料號附件、或不特定的共用圖面如原圖）留空，代表<b>適用全部製程</b>，不會特別標記。</li>
             <li>找不到需要的製程文字時，按欄位旁的 <i class="fa fa-list"></i> 從此料號的訂單/報價紀錄挑選。</li>
         </ul>
         <h4>兩種建立方式</h4>
         <ul>
-            <li><b>自動產生／同步（推薦）</b>：工具列輸入料號→按「同步」，系統把外來文件清單中此料號的所有附件同步進項目列，每列依來源自動帶入所屬製程。之後每次執行都是「同步」：新出現的外來文件會被加入、已確認過的清單會被改成「需重新確認」提醒覆核。</li>
+            <li><b>自動產生／同步（推薦）</b>：工具列輸入料號→按「同步」，系統把此料號的相關文件同步進項目列，每列依來源自動帶入所屬製程。之後每次執行都是「同步」：新出現的文件會被加入、已確認過的清單會被改成「需重新確認」提醒覆核。<br>目前<b>自動偵測的來源有四種</b>（2026-08-20 起新增後三種）：①<b>外來文件清單附件</b>（料號附件／報價附件，含廠內圖面標籤勾選納入的類別）；②<b>產品開發評估表</b>（<a href="td_dev_eval.php" target="_blank">2-TD-02-01</a>）；③<b>PFMEA 潛在失效模式及效應分析</b>（<a href="pfmea.php" target="_blank">開啟</a>）；④<b>ERP/資材報告檔案</b>（<a href="../pm/part_viewer.php" target="_blank">料號圖面查閱</a>的檔名標籤，例：齒研、材證、熱處理）。<br>②③兩種的<b>型態項目名稱</b>取自該表單綁定的 AS 文件名稱、<b>型態生效日期</b>取表單自己的日期（產品開發評估表＝填表日期、PFMEA＝業務日期）、<b>版別／文件編號</b>直接帶該表單的<b>表單編號</b>（編號本身即依該日期產生），<b>型態類別一律「其他文件」</b>；點該列的眼睛圖示會開啟對應頁面並自動帶入編號搜尋。④則依「BOM檔案標籤設定」逐標籤決定要不要列入與顯示成什麼，<b>每個標籤只帶最新一份檔案</b>，日後有更新的同標籤檔案時，同步會<b>原地把該列換成新檔</b>（不另外長一列），眼睛圖示可直接開啟該檔案。</li>
             <li><b>掃描待建立料號（批次）</b>：列出所有還沒建立管制表的料號，來源有兩種並在「來源」欄各自標示——<b>外來文件</b>＝外來文件清單／廠內圖面標籤裡有附件的料號；<b>PFMEA</b>＝已在「潛在失效模式及效應分析」建檔的料號（<b>就算一份附件都沒有也會列出來</b>，這是刻意的：那正是需要補建管制表再上傳資料的情況）。清單可逐筆勾選，並有「只選 PFMEA 來源」「只選 外來文件來源」可以獨立整批選取，另有「來源篩選」只影響顯示、不影響已勾選的項目。PFMEA 來的料號若沒有附件，會先建成<b>空白清單</b>，開啟後用「上傳檔案」把資料補上去。</li>
             <li><b>上傳檔案（直接補資料）</b>：編輯跳窗項目列下方的「上傳檔案」按鈕（需登錄權限，且要先選定料號）。檔案存成該料號的<b>料號附件</b>——跟主檔管理／外來文件清單是同一份檔案，不會變成兩套，同一張圖不用傳兩次；上傳成功後自動加成項目列，記得再按「儲存」保存這張管制表。<b>附件類別標籤至少要勾一個</b>（沒勾不准存檔，前端擋、後端也擋），候選只列出會被本模組同步進來的類別，避免傳了卻不會出現在清單上。<b>文件日期</b>必填（預設今天）：料號附件沒有獨立的文件日期欄位，本表的「型態生效日期」在沒有發行章日期時是取附件建立日期，所以存檔時會把附件建立日期一併改成你填的文件日期（只改日期、保留時分秒），補傳舊文件才不會全部變成上傳當天。若勾到「自家出的圖」類別，<b>發行章日期必填</b>且型態生效日期改以發行章日期為準（判準見圖面變更規定）；系統若判定這次上傳屬於「圖面變更」，會提示到「圖面變更紀錄」頁補登變更內容與簽收名單。</li>
             <li><b>新增（手動）</b>：按「新增」→ 選擇「產品編號(料號)」（打部分字元直接搜尋，不需先點按鈕；選定後自動帶出客戶、外來文件清單中此料號的資料也會自動列出），可再用「新增一列」手動加項目，或用列上的「選外來文件」挑選既有附件連結。</li>
@@ -450,7 +471,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者' : ($perms['canAdmin'] ? '型態文�
             <li>列印比照全站標準（ai-rules/16）：大標題為本公司名稱、頁尾右下角印本頁綁定的 AS 文件編號、製表人簽章使用全站通用圓形姓名章（若本人有上傳掃描實體章會優先用掃描章，否則自動產生標準回墨章，不需另外設定模板）。</li>
         </ul>
         <h4>設定入口</h4>
-        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。<b>廠內圖面標籤</b>（哪些「自家出的圖」類別也要納入自動同步）：工具列「廠內圖面標籤設定」按鈕（僅管理員可見；類別本身要先在主檔管理→附件類別標籤設定勾選「自家出的圖」）。同一跳窗每個類別還可設定：<b>顯示名稱</b>（留空沿用類別原名；同步進本模組後即成為項目列的「型態項目名稱」，與外來文件清單共用同一顯示名稱欄位）與<b>需要顯示製程</b>（勾選後，該類別同步出的項目列若「所屬製程」留空，欄位會加提示色塊，僅供提醒不強制填寫）；改了設定不會回頭改到之前已同步的舊資料，跳窗內「更新已同步項目名稱」按鈕會把最新設定覆蓋回所有目前仍連結有效附件的既有項目列（不必整批刪除重轉；手動輸入的項目不受影響；已確認的清單若被更新會改回「需重新確認」）。<b>角色指派</b>（誰可以檢閱／登錄／管理本頁）：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「型態識別文件管制表」區塊。</p>
+        <p>AS 文件編號綁定：工具列「AS文件綁定」按鈕（僅管理員可見）。外來文件標籤設定：<a href="../Sales/external_doc_list.php" target="_blank">外來文件清單</a>頁的類別設定。<b>廠內圖面標籤</b>（哪些「自家出的圖」類別也要納入自動同步）：工具列「廠內圖面標籤設定」按鈕（僅管理員可見；類別本身要先在主檔管理→附件類別標籤設定勾選「自家出的圖」）。同一跳窗每個類別還可設定：<b>顯示名稱</b>（留空沿用類別原名；同步進本模組後即成為項目列的「型態項目名稱」，與外來文件清單共用同一顯示名稱欄位）與<b>需要顯示製程</b>（勾選後，該類別同步出的項目列若「所屬製程」留空，欄位會加提示色塊，僅供提醒不強制填寫）；改了設定不會回頭改到之前已同步的舊資料，跳窗內「更新已同步項目名稱」按鈕會把最新設定覆蓋回所有目前仍連結有效附件的既有項目列（不必整批刪除重轉；手動輸入的項目不受影響；已確認的清單若被更新會改回「需重新確認」）。<b>BOM檔案標籤設定</b>（ERP/資材報告檔案要不要列入本模組）：工具列「BOM檔案標籤設定」按鈕（僅管理員可見）。標籤本身（後綴→標籤名稱）請到<a href="../pm/part_viewer.php" target="_blank">料號圖面查閱</a>的「設定標籤」維護，本頁只設定<b>逐標籤</b>的「列入／型態項目名稱／型態類別」與掃描資料夾；改完可按跳窗內「更新已同步項目」把新設定覆蓋回既有項目列。<b>角色指派</b>（誰可以檢閱／登錄／管理本頁）：<a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>頁→「型態識別文件管制表」區塊。</p>
         <h4>權限角色</h4>
         <p>型態文件檢閱／登錄／管理員（管理者固定擁有全部權限）；點頁面右上角「目前角色」旁的 <i class="fa fa-question-circle"></i> 可看各角色的權限說明。</p>
     </div>
@@ -787,7 +808,7 @@ function upAppendNewRows(dId, verdict){
             var have = {};
             $('#itemBody tr').each(function(){
                 var src = $(this).attr('data-ref-source')||'', aid = $(this).attr('data-ref-attach-id')||'';
-                if (src) have[src+'|'+aid] = 1;
+                if (src) have[src+'|'+aid+'|'+($(this).attr('data-ref-file-name')||'')] = 1;
             });
             // 完全空白的手動列先移除，免得上傳完留下一列空的跟著被存進去
             $('#itemBody tr').each(function(){
@@ -796,7 +817,7 @@ function upAppendNewRows(dId, verdict){
             });
             var added = 0;
             (res.rows||[]).forEach(function(r){
-                if (have[r.ref_source+'|'+r.ref_attach_id]) return;
+                if (have[r.ref_source+'|'+r.ref_attach_id+'|'+(r.ref_file_name||'')]) return;
                 $('#itemBody').append(itemRowHtml(r, $('#itemBody tr').length));
                 added++;
             });
@@ -891,7 +912,8 @@ function itemRowHtml(it, idx){
     var excluded = !!it.is_excluded;
     var needProc = !!it.need_process_hint;
     var typeOpts = TYPE_OPTS.map(function(t){ return '<option value="'+t[0]+'"'+(it.item_type===t[0]?' selected':'')+'>'+t[1]+'</option>'; }).join('');
-    var linkBadge = linked ? '<span class="ic-link-badge"><i class="fa fa-link"></i> 外來文件</span>' : (it.ref_broken ? '<span class="ic-broken-badge">來源已消失</span>' : '');
+    var srcLabel = it.ref_source_label || '外來文件';
+    var linkBadge = linked ? '<span class="ic-link-badge"><i class="fa fa-link"></i> '+esc(srcLabel)+'</span>' : (it.ref_broken ? '<span class="ic-broken-badge">來源已消失</span>' : '');
     var docNoCell = '<div class="ic-part-box"><input type="text" class="f-docno" value="'+esc(it.doc_no_text||'')+'"'+(linked?' disabled':'')+' placeholder="版別／文件編號">'
         + (linked && it.file_url ? ' <a href="'+esc(it.file_url)+'" target="_blank" class="ic-row-btn" title="點開附件確認內容"><i class="fa fa-eye"></i></a>' : '')
         + '</div>';
@@ -901,7 +923,7 @@ function itemRowHtml(it, idx){
         ? '<label class="ic-chk"><input type="checkbox" class="f-included"'+(excluded?'':' checked')+' onchange="toggleExcluded(this)"> 納入</label>'
         : '<button type="button" class="ic-row-btn" onclick="pickExtDoc(this)"'+ (($('#fPartDId').val()|0) ? '' : ' disabled title="請先選擇料號"') +'>選外來文件</button>'
           + ' <button type="button" class="ic-row-btn del" onclick="$(this).closest(\'tr\').remove(); renumberRows();">刪除</button>';
-    return '<tr draggable="true" class="'+(excluded?'ic-excluded':'')+'" data-ref-source="'+esc(it.ref_source||'')+'" data-ref-attach-id="'+esc(it.ref_attach_id||'')+'" data-ref-ds-pk="'+esc(it.ref_ds_pk||'')+'" data-id="'+esc(it.id||0)+'">'
+    return '<tr draggable="true" class="'+(excluded?'ic-excluded':'')+'" data-ref-source="'+esc(it.ref_source||'')+'" data-ref-attach-id="'+esc(it.ref_attach_id||'')+'" data-ref-ds-pk="'+esc(it.ref_ds_pk||'')+'" data-ref-file-name="'+esc(it.ref_file_name||'')+'" data-ref-bom-tag="'+esc(it.ref_bom_tag||'')+'" data-ref-source-label="'+esc(it.ref_source_label||'')+'" data-id="'+esc(it.id||0)+'">'
         + '<td class="drg" title="拖曳調整順序"><i class="fa fa-ellipsis-v"></i></td>'
         + '<td class="seq">'+(idx+1)+'</td>'
         + '<td><input type="text" class="f-name" value="'+esc(it.item_name||'')+'" placeholder="型態項目名稱"></td>'
@@ -946,7 +968,7 @@ $('#itemBody').on('drop', 'tr', function(e){
 $('#itemBody').on('dragend', 'tr', function(){ dragSrcRow = null; $('#itemBody tr').removeClass('drag-over'); });
 
 window.icAddRow = function(){
-    var blank = {id:0, item_name:'', item_type:'other', process_tag:'', need_process_hint:false, effective_date:'', doc_no_text:'', is_linked:false, is_excluded:false, ref_source:null, ref_attach_id:null, ref_ds_pk:null};
+    var blank = {id:0, item_name:'', item_type:'other', process_tag:'', need_process_hint:false, effective_date:'', doc_no_text:'', is_linked:false, is_excluded:false, ref_source:null, ref_attach_id:null, ref_ds_pk:null, ref_file_name:null, ref_bom_tag:null, ref_source_label:''};
     $('#itemBody').append(itemRowHtml(blank, $('#itemBody tr').length));
     renumberRows();
     return true;
@@ -970,7 +992,8 @@ function pickExtDoc(btn){
         $('#extEmpty').hide(); $('#extTable').show();
         var html = '';
         res.rows.forEach(function(r, i){
-            html += '<tr><td class="t-left">'+esc(r.doc_name)+'</td><td>'+fmtDate(r.doc_date)+'</td><td>'+(r.source==='part'?'料號附件':'報價附件')+'</td>'
+            var srcTxt = {part:'料號附件', quote:'報價附件', dev_eval:'產品開發評估表', pfmea:'PFMEA', bomfile:'ERP/資材報告'}[r.source] || r.source;
+            html += '<tr><td class="t-left">'+esc(r.doc_name)+'</td><td>'+fmtDate(r.doc_date)+'</td><td>'+esc(srcTxt)+'</td>'
                 + '<td><button type="button" class="ic-row-btn" onclick="applyExtDoc('+i+')">選取</button></td></tr>';
         });
         $('#extBody').html(html);
@@ -979,11 +1002,15 @@ function pickExtDoc(btn){
 }
 window.applyExtDoc = function(i){
     var r = window._extRows[i], $tr = window._extTarget;
-    $tr.attr('data-ref-source', r.source).attr('data-ref-attach-id', r.attach_id).attr('data-ref-ds-pk', r.ds_pk);
+    $tr.attr('data-ref-source', r.source).attr('data-ref-attach-id', r.attach_id).attr('data-ref-ds-pk', r.ds_pk)
+       .attr('data-ref-file-name', r.file_name||'').attr('data-ref-bom-tag', r.bom_tag||'');
     var idx = $tr.index();
     ITEMS[idx] = collectRow($tr);
     ITEMS[idx].is_linked = true; ITEMS[idx].ref_source = r.source; ITEMS[idx].ref_attach_id = r.attach_id; ITEMS[idx].ref_ds_pk = r.ds_pk;
+    ITEMS[idx].ref_file_name = r.file_name||null; ITEMS[idx].ref_bom_tag = r.bom_tag||null;
+    ITEMS[idx].ref_source_label = {part:'外來文件', quote:'外來文件', dev_eval:'產品開發評估表', pfmea:'PFMEA', bomfile:'ERP/資材報告'}[r.source] || '自動帶入';
     ITEMS[idx].doc_no_text = r.doc_name; ITEMS[idx].effective_date = r.doc_date;
+    if (r.force_type) ITEMS[idx].item_type = r.force_type;
     ITEMS[idx].need_process_hint = !!r.need_process;
     $tr.replaceWith(itemRowHtml(ITEMS[idx], idx));
     closeMask('extMask');
@@ -1003,6 +1030,8 @@ function collectRow($tr){
         ref_source: $tr.attr('data-ref-source') || null,
         ref_attach_id: $tr.attr('data-ref-attach-id') || null,
         ref_ds_pk: $tr.attr('data-ref-ds-pk') || null,
+        ref_file_name: $tr.attr('data-ref-file-name') || null,
+        ref_bom_tag: $tr.attr('data-ref-bom-tag') || null,
     };
 }
 
@@ -1018,6 +1047,8 @@ function saveAll(confirm){
             ref_source: it.is_linked ? it.ref_source : '',
             ref_attach_id: it.is_linked ? it.ref_attach_id : 0,
             ref_ds_pk: it.is_linked ? it.ref_ds_pk : 0,
+            ref_file_name: it.is_linked ? (it.ref_file_name||'') : '',
+            ref_bom_tag: it.is_linked ? (it.ref_bom_tag||'') : '',
             is_excluded: it.is_excluded ? 1 : 0,
             manual_effective_date: it.is_linked ? '' : it.effective_date,
             manual_doc_no: it.is_linked ? '' : it.doc_no_text,
@@ -1190,6 +1221,59 @@ function refreshSyncedItemNames(){
             alert('已更新 '+res2.updated_count+' 筆項目名稱'+(res2.affected_docs?'，其中 '+res2.affected_docs+' 份原已確認的清單已改回「需重新確認」':'')+'。');
             closeMask('ownDrawMask');
             loadList();
+        }, 'json');
+    }, 'json');
+}
+
+/* ---------- BOM檔案標籤設定（ERP/資材報告）---------- */
+var BOM_TYPE_OPTS = null;
+$('#btnBomTags').on('click', function(){
+    $('#bomTagEmpty').show().text('載入中…'); $('#bomTagTable').hide().find('tbody').empty();
+    openMask('bomTagMask');
+    $.getJSON(API, {action:'bom_tag_setting_get'}, function(res){
+        if (!res.success){ $('#bomTagEmpty').text(res.message||'載入失敗'); return; }
+        BOM_TYPE_OPTS = res.type_options || {};
+        $('#bomTagDir').val(res.dir||'');
+        if (!res.rows.length){ $('#bomTagEmpty').text('料號圖面查閱目前沒有設定任何檔名標籤，請先到該頁「設定標籤」建立。'); return; }
+        var html = '';
+        res.rows.forEach(function(r){
+            var opts = '';
+            Object.keys(BOM_TYPE_OPTS).forEach(function(k){
+                opts += '<option value="'+esc(k)+'"'+(r.item_type===k?' selected':'')+'>'+esc(BOM_TYPE_OPTS[k])+'</option>';
+            });
+            html += '<tr data-suffix="'+esc(r.suffix)+'">'
+                + '<td style="text-align:center;"><input type="checkbox" class="bt-ck"'+(r.included?' checked':'')+'></td>'
+                + '<td style="text-align:center;"><b>'+esc(r.suffix)+'</b></td>'
+                + '<td style="text-align:center;">'+esc(r.label)+'</td>'
+                + '<td><input type="text" class="bt-name" value="'+esc(r.item_name||'')+'" placeholder="留空用「'+esc(r.label)+'」"></td>'
+                + '<td><select class="bt-type">'+opts+'</select></td>'
+                + '</tr>';
+        });
+        $('#bomTagEmpty').hide();
+        $('#bomTagTable').show().find('tbody').html(html);
+    });
+});
+function collectBomTagRows(){
+    var rows = [];
+    $('#bomTagTable tbody tr').each(function(){
+        rows.push({
+            suffix: $(this).attr('data-suffix'),
+            included: $(this).find('.bt-ck').is(':checked') ? 1 : 0,
+            item_name: $(this).find('.bt-name').val(),
+            item_type: $(this).find('.bt-type').val(),
+        });
+    });
+    return rows;
+}
+function saveBomTags(alsoRefresh){
+    if (alsoRefresh && !confirm('確定要用目前設定，更新所有已同步的 ERP/資材報告項目列（型態項目名稱與型態類別）嗎？\n（會先儲存目前設定；已確認的清單若被更新會改回「需重新確認」）')) return;
+    $.post(API, {action:'bom_tag_setting_save', rows: JSON.stringify(collectBomTagRows()), dir: $('#bomTagDir').val()||''}, function(res){
+        if (!res.success){ alert(res.message||'儲存失敗'); return; }
+        if (!alsoRefresh){ alert('已儲存，目前列入 '+res.saved_count+' 個標籤。'); closeMask('bomTagMask'); return; }
+        $.post(API, {action:'refresh_item_names_by_category'}, function(res2){
+            if (!res2.success){ alert(res2.message||'更新失敗'); return; }
+            alert('已更新 '+res2.updated_count+' 筆項目'+(res2.affected_docs?'，其中 '+res2.affected_docs+' 份原已確認的清單已改回「需重新確認」':'')+'。');
+            closeMask('bomTagMask'); loadList();
         }, 'json');
     }, 'json');
 }

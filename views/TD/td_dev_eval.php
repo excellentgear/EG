@@ -1118,6 +1118,14 @@ $(window).on('scroll', function(){ $('#btnBackTop').toggle($(window).scrollTop()
 $('#btnBackTop').on('click', function(){ $('html,body').animate({scrollTop:0}, 200); });
 
 <?php if ($perms['canView']): ?>
+/* 由其他頁面(型態識別文件管制表的項目列）帶表單編號進來時，直接把它填進搜尋框
+   —— 2026-08-20 新增，網址列 ?kw=表單編號 */
+(function(){
+    try {
+        var kw = new URLSearchParams(location.search).get('kw');
+        if (kw) $('#kwInput').val(kw);
+    } catch (e) {}
+})();
 loadTemplate(function(){ loadList(); });
 loadAsDocCurrent();
 <?php endif; ?>
