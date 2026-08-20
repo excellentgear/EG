@@ -260,6 +260,16 @@ function prj_ensure_schema(PDO $db): void
         created_by  VARCHAR(60) NULL, created_at DATETIME NULL,
         UNIQUE KEY uq_item (target, ds_pk)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='「有專案但未建立」的待建項目（供四頁偵測合併使用）'");
+
+    // 角色（比照 pfmea_lib 慣例自動建立；名稱之後可在角色管理改，這裡只保證存在）
+    foreach ([['project_view', '專案檢閱'], ['project_edit', '專案登錄'], ['project_admin', '專案管理員']] as $r) {
+        $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='project' LIMIT 1");
+        $st->execute([$r[0]]);
+        if (!$st->fetchColumn()) {
+            $db->prepare("INSERT INTO roles (role_code, role_name, module) VALUES (?,?, 'project')")
+               ->execute([$r[0], $r[1]]);
+        }
+    }
 }
 
 /* ══════════════════════════ 使用者與權限 ══════════════════════════ */

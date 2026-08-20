@@ -634,6 +634,18 @@ case 'submit':
     foreach ($notify as $n) prj_notify_cosign($db, $prj, $n, $uid);
     jout(['message' => '已送簽，會簽通知已發出（' . count($notify) . ' 個單位）']);
 
+/** 通知點進來時只帶 cosign_id，用來問出它屬於哪個專案（會簽人不看角色，故這支不擋 canView） */
+case 'cosign_owner':
+    $cid = (int)($_GET['cosign_id'] ?? 0);
+    $st = $db->prepare("SELECT c.project_id, c.user_id FROM project_cosign c
+                        JOIN project p ON p.project_id=c.project_id AND p.is_deleted=0
+                        WHERE c.id=?");
+    $st->execute([$cid]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) jout(['project_id' => 0]);
+    if (!$P['canView'] && (int)$row['user_id'] !== $uid) jerr('無權限', 403);
+    jout(['project_id' => (int)$row['project_id']]);
+
 /** 會簽：一定要先選同意／不同意才能填意見（意見非必填），比照 doc_apply 的口徑 */
 case 'cosign_save':
     $cid = (int)($_POST['cosign_id'] ?? 0);
@@ -681,7 +693,14 @@ case 'decide':
     prj_notify_result($db, $prj, $ok, $note, $uid);
     jout(['message' => $ok ? '已核准' : '已退回']);
 
-/** 管理員批次自動簽核（補歷史紙本專案）：業務日期與時間戳分離、時間錯開 5~30 分不跨日 */
+/**
+ * 管理員批次自動簽核（補歷史紙本專案）：業務日期與時間戳分離、時間錯開 5~30 分不跨日（ai-rules/21）。
+ *
+ * ⚠ 已知限制（ai-rules/22）：核准人「是誰」是用 prj_approver_pool() 依**目前**組織解析的，
+ *   補很舊的專案時可能挑到當時還沒上任的人。圖章上印的**部門與職稱**已經依業務日期回推
+ *   （prj_sign_post()），但「人選本身」還沒有 as-of 版本——eg_resolve_supervisor() 不支援指定日期。
+ *   補歷史專案時請在跳窗確認核准人是否為當時的權責主管，必要時事後由管理員改。
+ */
 case 'auto_sign':
     if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
     $ids = $_POST['project_ids'] ?? [];

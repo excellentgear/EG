@@ -22,6 +22,7 @@ function pjInit() {
         META = res;
         fillMeta();
         loadList();
+        pjHandleUrlParams();
     });
 
     $('#btnSearch').on('click', function () { PAGE = 1; loadList(); });
@@ -44,6 +45,36 @@ function pjInit() {
         $(this).addClass('active').siblings().removeClass('active');
         $('#' + p).addClass('active').siblings('.pj-pane').removeClass('active');
     });
+}
+
+/* 網址參數：從通知點進來時直接開到該筆
+   ?cosign=n     待會簽通知（PROJECT_COSIGN）→ 開該專案並跳到會簽分頁
+   ?project_id=n 結果通知（PROJECT_RESULT）／文件檢核跳回來
+   ?kw=xxx       其他頁面帶關鍵字過來（比照 td_dev_eval/pfmea 的既有慣例） */
+function pjHandleUrlParams() {
+    var q = {};
+    window.location.search.replace(/^\?/, '').split('&').forEach(function (kv) {
+        if (!kv) return;
+        var i = kv.indexOf('=');
+        q[decodeURIComponent(i < 0 ? kv : kv.slice(0, i))] = i < 0 ? '' : decodeURIComponent(kv.slice(i + 1));
+    });
+    if (q.kw) { $('#fKw').val(q.kw); }
+    var cosId = num(q.cosign);
+    if (cosId) {
+        /* 會簽通知只帶 cosign_id，要先問後端這一列屬於哪個專案 */
+        api('list', {}).done(function () {
+            api('cosign_owner', { cosign_id: cosId }).done(function (r) {
+                if (!num(r.project_id)) { alert('找不到這筆會簽項目（可能已被移除）'); return; }
+                openProject(num(r.project_id));
+                setTimeout(function () {
+                    $('.pj-tab[data-pane="paneSign"]').click();
+                    $('[data-cosign="' + cosId + '"]').trigger('click');
+                }, 500);
+            });
+        });
+        return;
+    }
+    if (num(q.project_id)) openProject(num(q.project_id));
 }
 
 function fillMeta() {

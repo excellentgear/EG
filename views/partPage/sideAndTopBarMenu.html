@@ -612,6 +612,19 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 nmMarkRead(nmRemoveFromList);
                 return;
             }
+            if (refType === 'PROJECT_COSIGN') {
+                // 專案立案待會簽：開專案管理頁並自動跳出會簽跳窗（refid = project_cosign.id）。
+                // 必須先選同意/不同意才能填意見，所以不用通用回覆；完成會簽前不移除(mode=sign)。
+                window.open('../GM/project_mgmt.php?cosign=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) { nmMarkRead(nmRemoveFromList); }
+                return;
+            }
+            if (refType === 'PROJECT_RESULT') {
+                // 專案核准/退回結果通知（給負責人與建立者）：純資訊型，開該專案後標記已讀移除
+                window.open('../GM/project_mgmt.php?project_id=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
             if (refType === 'BUSINESS_TRIP_APPROVAL') {
                 // 公出單待核准：通用回覆/回簽不會真的呼叫 decide，改開公出單頁帶 trip_approve，
                 // 頁面會自動跳出核准/退回跳窗；核准/退回完成前不移除(mode=sign)。

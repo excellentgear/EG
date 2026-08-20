@@ -362,6 +362,7 @@ $_rvfRoles      = [];  $_userRvfRoles    = [];
 $_tidcRoles     = [];  $_userTidcRoles   = [];
 $_tdevRoles     = [];  $_userTdevRoles   = [];
 $_pfmeaRoles    = [];  $_userPfmeaRoles  = [];
+$_prjRoles      = [];  $_userPrjRoles    = [];
 $_hrfRoles      = [];  $_userHrfRoles    = [];
 $_fsdRoles      = [];  $_userFsdRoles    = [];
 $_eqmRoles      = [];  $_userEqmRoles    = [];
@@ -407,6 +408,7 @@ try {
     $st->execute(['type_id_ctrl']); $_tidcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['td_dev_eval']); $_tdevRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['pfmea']); $_pfmeaRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['project']); $_prjRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['hr_form']); $_hrfRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['form_signer']); $_fsdRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['equip_machine']); $_eqmRoles = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -555,6 +557,10 @@ try {
     $st->execute(['pfmea']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userPfmeaRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['project']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userPrjRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
     $st->execute(['hr_form']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
@@ -803,6 +809,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'tidc-role-section'      => '型態識別文件管制表',
                                         'tdev-role-section'      => '產品開發評估表',
                                         'pfmea-role-section'     => 'PFMEA',
+                                        'prj-role-section'       => '專案管理',
                                         'eqm-role-section'       => '機台設備一覽表',
                                         'btrp-role-section'      => '公出單',
                                         'dap-role-section'       => '文件制修申請單',
@@ -1333,6 +1340,11 @@ $_quotDepts = array_keys($_deptSet);
                     eg_render_role_section('pfmea', 'pfmea', 'PFMEA潛在失效模式及效應分析', 'fa-exclamation-triangle', '#8A5A2B',
                         '為每位使用者指派「PFMEA潛在失效模式及效應分析」頁（技術部 &gt; PFMEA，AS 3-TD-01-02）的操作角色。角色功能：<strong>PFMEA檢閱</strong>＝檢視清單、開啟查看、列印；<strong>PFMEA登錄</strong>＝檢閱＋新增/編輯分析列；<strong>PFMEA管理員</strong>＝登錄＋刪除、AS 文件編號綁定。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         $_pfmeaRoles, $_userPfmeaRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('prj', 'project', '專案管理', 'fa-folder-open-o', '#B5762A',
+                        '為每位使用者指派「專案管理」頁（總經理室 &gt; 專案管理，AS 2-GM-02 專案管理程序）的操作角色。角色功能：<strong>專案檢閱</strong>＝檢視清單、明細、列印執行規劃表(2-GM-02-02)與專案管理卡(2-GM-02-03)；<strong>專案登錄</strong>＝檢閱＋建立/編輯專案、訂單轉專案、編排執行規劃表、開立管理卡、同步 BOM 製程；<strong>專案管理員</strong>＝登錄＋刪除專案與管理卡、自訂標籤維護、模組設定（立案核准人、預設會簽單位、結案前文件檢核開關、圖章模板）、AS 文件編號綁定、批次自動簽核。'
+                        . '<br><strong>另有兩種不看角色的身分</strong>：①<strong>專案負責人</strong>（每個專案自己指定的人）即使只有「專案檢閱」角色，也能編輯自己負責的那些專案；②被指派為某一列<strong>會簽人</strong>者不需要任何角色就能處理自己那一列會簽。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
+                        $_prjRoles, $_userPrjRoles, $admins, $_quotDepts, $canEdit);
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
