@@ -291,7 +291,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <h5>一、挑選訂單（只列出尚未被任何專案綁定的訂單）</h5>
             <div class="grid4" style="margin-bottom:8px;">
                 <div><label>關鍵字</label><input type="text" id="oKw" placeholder="訂單號/客戶單號/料號/客戶…"></div>
-                <div><label>客戶</label><select id="oCust" data-eg-filter="輸入客戶名稱篩選…"><option value="">全部</option></select></div>
+                <div><label>客戶</label><input type="text" id="oCust" placeholder="客戶ID或客戶名稱（模糊，可空白分隔多個關鍵字）"></div>
                 <div><label>接單日起</label><input type="date" id="oFrom"></div>
                 <div><label>接單日迄</label><input type="date" id="oTo"></div>
             </div>
@@ -386,6 +386,24 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             </div>
         </div>
         <div class="sec">
+            <h5>專案負責人資格</h5>
+            <p class="pj-hint">指定<b>哪些部門的哪些職稱</b>可以被指派為專案負責人（「訂單轉專案」與「專案基本資料」的負責人下拉只會列出這些人）。
+                職稱選「全部職稱」＝該部門全員皆可。<b>一列都沒設＝不限制</b>（全體在職員工都可以）。
+                兼任多個部門／職稱的人只要任一組合命中就算合格；<b>既有專案原本的負責人不受影響</b>，設定改嚴也不會讓舊專案存不了檔。</p>
+            <div class="grid3" style="margin-bottom:8px;">
+                <div><label>部門</label><select id="setOwnDept" data-eg-filter="輸入部門名稱篩選…"></select></div>
+                <div><label>職稱</label><select id="setOwnPos" data-eg-filter="輸入職稱篩選…"></select></div>
+                <div style="display:flex;align-items:flex-end;">
+                    <button id="btnOwnScopeAdd" style="height:30px;padding:0 14px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;">新增</button></div>
+            </div>
+            <div class="pj-err" id="setOwnErr"></div>
+            <table class="sub-tbl" id="ownScopeTable">
+                <thead><tr><th style="width:180px;">部門</th><th>職稱</th><th style="width:70px;">操作</th></tr></thead>
+                <tbody id="ownScopeBody"></tbody>
+            </table>
+            <p class="pj-hint" id="ownScopeCount" style="margin-top:6px;"></p>
+        </div>
+        <div class="sec">
             <h5>預設會簽單位</h5>
             <p class="pj-hint">送簽時預設勾選這些單位（仍可逐次調整）。會簽人＝該部門主管，並自動經代理人解析。</p>
             <div id="setCosignBox" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
@@ -435,6 +453,10 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <li><b>訂單轉專案（建議）</b>：工具列「訂單轉專案」→ 勾選訂單 →
                 可以①單張訂單建新專案 ②多張訂單合併成一個專案 ③把訂單加入既有專案。
                 客戶、料號、數量、交期會自動帶入；<b>專案起日＝最早接單日、迄日＝最晚交期</b>（可事後改）。</li>
+            <li>挑訂單時的<b>客戶欄位是模糊搜尋</b>（沒有下拉）：打<b>客戶ID或客戶名稱</b>的片段即可，
+                空白分隔多個關鍵字＝每個都要命中。改過名的舊訂單也找得到（會一併比對客戶主檔的簡稱與發票全名）。</li>
+            <li><b>專案負責人下拉只列出符合資格的人</b>——資格由管理員在「模組設定 → 專案負責人資格」以<b>部門×職稱</b>設定；
+                沒設定＝不限制。</li>
             <li><b>手動建立</b>：還沒有訂單的開發型專案（D）用這個，之後訂單進來再用「訂單轉專案→加入既有專案」併進來。
                 沒有訂單時可在「關聯資料」分頁直接掛料號。</li>
             <li><b>一張訂單只能屬於一個專案</b>；重複綁定會被擋下並告訴你它已經在哪個專案。</li>
@@ -493,6 +515,9 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <li>專案填好後<b>送簽</b>：勾選會簽單位 → 系統解析各單位主管（<b>自動套用代理人</b>）並發出通知 →
                 各單位<b>先選同意／不同意才能填審查意見</b>（意見非必填）→ 全部會簽完由核准人核准。</li>
             <li>核准人解析順序見「模組設定 → 立案核准人」；<b>解析到的人如果是送出者本人會自動跳過</b>。</li>
+            <li><b>專案負責人資格</b>（模組設定）：可限定哪些<b>部門的哪些職稱</b>才能被指派為負責人，
+                「訂單轉專案」與「專案基本資料」的負責人下拉都只列這些人（後端存檔時也會再擋一次）。
+                一列都沒設＝不限制；<b>既有專案原本的負責人不受影響</b>，設定改嚴不會讓舊專案存不了檔。</li>
             <li>核准後專案階段自動由「籌備」推進到「規劃」；核准人可自行輸入核准日期。</li>
             <li>補歷史紙本專案：管理員可用<b>批次自動簽核</b>，指定業務日期一次補完（簽核時間會刻意錯開 5~30 分且不跨日）。</li>
         </ul>
@@ -501,7 +526,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         <ul>
             <li><b>專案檢閱</b>：看清單、明細、列印。</li>
             <li><b>專案登錄</b>：檢閱＋建立/編輯專案、訂單轉專案、編執行規劃表、開管理卡、同步 BOM。</li>
-            <li><b>專案管理員</b>：登錄＋刪除、標籤維護、模組設定、AS 文件綁定、批次自動簽核。</li>
+            <li><b>專案管理員</b>：登錄＋刪除、標籤維護、模組設定（含專案負責人資格）、AS 文件綁定、批次自動簽核。</li>
             <li><b>專案負責人</b>（資料層，非角色）：即使只有「檢閱」角色，也能編輯<b>自己負責的專案</b>。</li>
             <li><b>會簽人</b>：不需要任何角色，被指派會簽就進得來處理自己那一列。</li>
             <li>管理者固定擁有全部權限。設定入口：<b>權限設定 → 專案管理</b>。</li>

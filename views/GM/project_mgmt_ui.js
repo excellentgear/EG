@@ -94,6 +94,11 @@ function peopleLabel(p) {
     return s;
 }
 
+/* 可被指派為專案負責人的人（管理員可用「部門×職稱」限定；未設定時＝全體） */
+function ownerPeople() {
+    return (META.owner_people && META.owner_people.length) ? META.owner_people : (META.owner_scope && META.owner_scope.length ? [] : (META.people || []));
+}
+
 function tagsOf(kind) {
     return $.grep(META.tags || [], function (t) { return t.tag_kind === kind && num(t.is_active) === 1; });
 }
@@ -266,7 +271,15 @@ function renderBase(res) {
     var typeOpt = '', phaseOpt = '', ownerOpt = '<option value="">（請選擇）</option>', custOpt = '<option value="">（無）</option>', deptOpt = '<option value="">（無）</option>';
     $.each(META.types || {}, function (k, v) { typeOpt += '<option value="' + k + '"' + (p.project_type === k ? ' selected' : '') + '>' + esc(v + '型（' + k + '）') + '</option>'; });
     $.each(META.phases || {}, function (k, v) { phaseOpt += '<option value="' + k + '"' + (p.phase === k ? ' selected' : '') + '>' + esc(v) + '</option>'; });
-    $.each(META.people || [], function (i, x) { ownerOpt += '<option value="' + x.id + '"' + (num(p.owner_id) === num(x.id) ? ' selected' : '') + '>' + esc(peopleLabel(x)) + '</option>'; });
+    /* 只列合格的人；本專案目前的負責人即使事後不合資格也一定保留，否則一打開就變空白、一存檔就被洗掉 */
+    var ownerCands = ownerPeople().slice(), ownerHas = false;
+    $.each(ownerCands, function (i, x) { if (num(p.owner_id) === num(x.id)) ownerHas = true; });
+    if (!ownerHas && num(p.owner_id) > 0) {
+        var cur = $.grep(META.people || [], function (x) { return num(x.id) === num(p.owner_id); });
+        if (cur.length) ownerCands.unshift(cur[0]);
+        else ownerCands.unshift({ id: p.owner_id, user_cname: p.owner_name || ('#' + p.owner_id) });
+    }
+    $.each(ownerCands, function (i, x) { ownerOpt += '<option value="' + x.id + '"' + (num(p.owner_id) === num(x.id) ? ' selected' : '') + '>' + esc(peopleLabel(x)) + '</option>'; });
     $.each(META.customers || [], function (i, x) { custOpt += '<option value="' + esc(x.customer_id) + '"' + (p.customer_id === x.customer_id ? ' selected' : '') + '>' + esc(x.customer) + '</option>'; });
     $.each(META.depts || [], function (i, x) { deptOpt += '<option value="' + x.id + '"' + (num(p.dept_id) === num(x.id) ? ' selected' : '') + '>' + esc(x.name) + '</option>'; });
 
@@ -1171,14 +1184,13 @@ function openO2P(forceMode) {
     var typeOpt = '';
     $.each(META.types || {}, function (k, v) { typeOpt += '<option value="' + k + '"' + (k === 'C' ? ' selected' : '') + '>' + esc(v + '型（' + k + '）') + '</option>'; });
     $('#o2pType').html(typeOpt);
+    /* 專案負責人只列合格的人（模組設定 → 專案負責人資格）；沒設定時 owner_people＝全體 */
     var ownerOpt = '';
-    $.each(META.people || [], function (i, x) {
+    $.each(ownerPeople(), function (i, x) {
         ownerOpt += '<option value="' + x.id + '"' + (num(x.id) === num(PERM.uid) ? ' selected' : '') + '>' + esc(peopleLabel(x)) + '</option>';
     });
-    $('#o2pOwner').html(ownerOpt);
-    var custOpt = '<option value="">全部</option>';
-    $.each(META.customers || [], function (i, x) { custOpt += '<option value="' + esc(x.customer_id) + '">' + esc(x.customer) + '</option>'; });
-    $('#oCust').html(custOpt);
+    $('#o2pOwner').html(ownerOpt || '<option value="">（沒有符合資格的人員，請洽管理員設定）</option>');
+    $('#oCust').val('');   /* 客戶改為模糊輸入（客戶ID或名稱），不再提供下拉 */
     renderTagPick('o2pTagBar', 'project', [], true);
     $('#oBody').html('<tr><td colspan="9" style="padding:12px;color:#8a6d45;">請先按「查詢」</td></tr>');
     $('#oCount').text('');
@@ -1324,12 +1336,74 @@ function openSetting() {
         $('#setPlanTpl').html(tOpt).val(s.plan_stamp_tpl_id || '0');
         $('#setCardTpl').html(tOpt).val(s.card_stamp_tpl_id || '0');
 
+        /* 專案負責人資格（部門×職稱） */
+        var odOpt = '<option value="">（請選擇部門）</option>';
+        $.each(META.depts || [], function (i, x) { odOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
+        $('#setOwnDept').html(odOpt).val('');
+        var opOpt = '<option value="0">全部職稱</option>';
+        $.each(META.positions || [], function (i, x) { opOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
+        $('#setOwnPos').html(opOpt).val('0');
+        OWN_SCOPE = (res.owner_scope_rows || []).slice();
+        renderOwnScope();
+
         var plan = (META.asdoc || {}).plan || {}, card = (META.asdoc || {}).card || {};
         $('#asPlanTxt').val(plan.bound ? (plan.doc_no + '　' + plan.doc_name) : '（未綁定）');
         $('#asCardTxt').val(card.bound ? (card.doc_no + '　' + card.doc_name) : '（未綁定）');
         openMask('setMask');
     });
 }
+/* ── 專案負責人資格（部門×職稱）───────────────────────────────
+   前端即時擋重複／未選部門並在欄位旁寫出原因；存檔時後端用同一支 parse 再驗一次（鐵律8）。*/
+var OWN_SCOPE = [];
+function renderOwnScope() {
+    if (!OWN_SCOPE.length) {
+        $('#ownScopeBody').html('<tr><td colspan="3" style="padding:10px;color:#8a6d45;">（未設定＝不限制，全體在職員工都可以當專案負責人）</td></tr>');
+        $('#ownScopeCount').text('');
+        return;
+    }
+    var h = '';
+    $.each(OWN_SCOPE, function (i, r) {
+        h += '<tr><td>' + esc(r.dept_name) + '</td><td>' + esc(r.pos_name) + '</td>'
+           + '<td><button class="own-scope-del" data-i="' + i + '" style="height:24px;padding:0 8px;border:1px solid #DD5138;border-radius:4px;background:#fff;color:#DD5138;cursor:pointer;">刪除</button></td></tr>';
+    });
+    $('#ownScopeBody').html(h);
+    $('#ownScopeCount').html('目前設定 ' + OWN_SCOPE.length + ' 組；儲存後負責人下拉只會列出符合的人員。' + ownScopeWhoText());
+}
+/* 目前（已儲存的設定下）符合資格的是誰。
+   兼任的人在下拉上顯示的是「主要職務」，例如主職董事長、兼任技術部課長的人，
+   設定技術部之後他也會出現卻顯示成董事長——只看部門×職稱清單看不出來，所以把名單直接列出來。 */
+function ownScopeWhoText() {
+    if (!(META.owner_scope && META.owner_scope.length)) return '';
+    var ps = META.owner_people || [];
+    if (!ps.length) return '<br><span style="color:#DD5138;">目前沒有任何人符合已儲存的設定，負責人會選不到人。</span>';
+    var names = $.map(ps, function (x) { return (x.dept_name ? x.dept_name + ' ' : '') + (x.position_name ? x.position_name + ' ' : '') + x.user_cname; });
+    return '<br>目前符合資格（依已儲存的設定）共 ' + ps.length + ' 人：' + esc(names.join('、'))
+         + '<br><span style="color:#8a6d45;">※ 兼任者以<b>主要職務</b>顯示，所以名單上的部門/職稱可能跟你設的那一組不同（例：主職董事長、兼任技術部課長，設技術部後他也會出現）。</span>';
+}
+$(document).on('click', '#btnOwnScopeAdd', function () {
+    var d = num($('#setOwnDept').val()), pp = num($('#setOwnPos').val());
+    var $e = $('#setOwnErr');
+    if (!d) { $e.text('請先選擇部門'); return; }
+    var dup = false, covered = false;
+    $.each(OWN_SCOPE, function (i, r) {
+        if (num(r.d) === d && num(r.p) === pp) dup = true;
+        if (num(r.d) === d && num(r.p) === 0)  covered = true;   // 該部門已設「全部職稱」＝再加個別職稱是多餘的
+    });
+    if (dup)     { $e.text('這一組已經在清單裡了'); return; }
+    if (covered) { $e.text('這個部門已設定「全部職稱」，不需要再加個別職稱'); return; }
+    if (pp === 0) OWN_SCOPE = $.grep(OWN_SCOPE, function (r) { return num(r.d) !== d; });  // 改成全部職稱＝收掉該部門的個別列
+    $e.text('');
+    OWN_SCOPE.push({ d: d, p: pp,
+        dept_name: $('#setOwnDept option:selected').text(),
+        pos_name:  pp === 0 ? '全部職稱' : $('#setOwnPos option:selected').text() });
+    renderOwnScope();
+});
+$(document).on('click', '.own-scope-del', function () {
+    OWN_SCOPE.splice(num($(this).data('i')), 1);
+    $('#setOwnErr').text('');
+    renderOwnScope();
+});
+
 $(document).on('click', '#setCosignBox .pj-tag', function () { $(this).toggleClass('on'); });
 $(document).on('click', '#btnSetSave', function () {
     var cos = [];
@@ -1338,10 +1412,15 @@ $(document).on('click', '#btnSetSave', function () {
         approver_user_id: $('#setApUser').val(), approver_dept_id: $('#setApDept').val(),
         default_cosign_depts: cos.join(','),
         block_close_on_missing: $('#setBlockClose').is(':checked') ? '1' : '0',
-        plan_stamp_tpl_id: $('#setPlanTpl').val() || '0', card_stamp_tpl_id: $('#setCardTpl').val() || '0'
+        plan_stamp_tpl_id: $('#setPlanTpl').val() || '0', card_stamp_tpl_id: $('#setCardTpl').val() || '0',
+        owner_scope: JSON.stringify($.map(OWN_SCOPE, function (r) { return { d: num(r.d), p: num(r.p) }; }))
     }, 'POST').done(function (r) {
         alert(r.message);
         META.default_cosign_depts = cos.join(',');
+        /* 資格改完馬上生效：負責人下拉的候選名單同步換掉，不必重新整理頁面 */
+        META.owner_scope  = r.owner_scope_rows || [];
+        META.owner_people = r.owner_people || [];
+        renderOwnScope();
         closeMask('setMask');
     });
 });

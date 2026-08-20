@@ -371,14 +371,26 @@ function prj_next_no(PDO $db, string $type, ?string $bizDate = null): string
     return $prefix . str_pad((string)$seq, 2, '0', STR_PAD_LEFT);
 }
 
-/** 模組設定讀寫（走 system_parameters，比照全站慣例） */
+/**
+ * 模組設定讀寫（走 system_parameters，比照全站慣例）
+ *
+ * 兩個一定要照做的地方（都是實測踩出來的，寫錯不會有明顯症狀）：
+ *  1. 欄位名是 param_group/param_key/param_value，不是 parameter_*。寫錯的話 get 會被 try/catch 吃掉
+ *     而永遠回預設值、save 則直接 500，畫面上看起來就是「按儲存沒反應、設定永遠存不進去」。
+ *  2. param_value 的欄位型別是 JSON（不是 varchar/text），所以不能塞 '' 或 '3,5' 這種非 JSON 字串，
+ *     否則 MySQL 直接丟 3140 Invalid JSON text。這裡一律寫入時 json_encode、讀出時 json_decode，
+ *     讓呼叫端維持原本的「值就是字串」語意，不必每個 key 各自處理。
+ */
 function prj_setting_get(PDO $db, string $key, string $default = ''): string
 {
     try {
-        $st = $db->prepare("SELECT parameter_value FROM system_parameters WHERE parameter_group=? AND parameter_key=?");
+        $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group=? AND param_key=?");
         $st->execute([PRJ_SETTING_GROUP, $key]);
         $v = $st->fetchColumn();
-        return $v === false || $v === null ? $default : (string)$v;
+        if ($v === false || $v === null) return $default;
+        // 正常情況存進去的是 json_encode 後的字串；decode 不出字串（別處寫進來的原始 JSON）就用原文
+        $d = json_decode((string)$v, true);
+        return is_string($d) ? $d : (is_scalar($d) ? (string)$d : (string)$v);
     } catch (Throwable $e) {
         return $default;
     }
@@ -386,12 +398,111 @@ function prj_setting_get(PDO $db, string $key, string $default = ''): string
 
 function prj_setting_save(PDO $db, string $key, string $value, string $desc, string $by): void
 {
-    $st = $db->prepare("INSERT INTO system_parameters (parameter_group, parameter_key, parameter_value, description, updated_by, updated_at)
+    $st = $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by, updated_at)
                         VALUES (?,?,?,?,?,NOW())
-                        ON DUPLICATE KEY UPDATE parameter_value=VALUES(parameter_value),
+                        ON DUPLICATE KEY UPDATE param_value=VALUES(param_value),
                                                 description=VALUES(description),
                                                 updated_by=VALUES(updated_by), updated_at=NOW()");
-    $st->execute([PRJ_SETTING_GROUP, $key, $value, $desc, $by]);
+    $st->execute([PRJ_SETTING_GROUP, $key, json_encode($value, JSON_UNESCAPED_UNICODE), $desc, $by]);
+}
+
+/* ══════════════════════════ 專案負責人資格（部門×職稱） ══════════════════════════ */
+/*
+ * 管理員可指定「哪些部門的哪些職稱」才能被指派為專案負責人（模組設定 → 專案負責人資格）。
+ * 設定值存 system_parameters(PROJECT_MGMT/owner_scope)，格式 JSON：[{"d":部門id,"p":職稱id}, …]，
+ * p=0 代表該部門「全部職稱」。一列都沒設＝不限制（全體在職員工皆可），維持既有行為不動既有資料。
+ * 一個人可能兼任多個部門/職稱（user_department_position_map 有多列），只要任一組合命中就算合格。
+ */
+
+/** 讀出設定，回傳 [['d'=>int,'p'=>int], …]（已去重、已濾掉不合法值） */
+function prj_owner_scope(PDO $db): array
+{
+    $raw = prj_setting_get($db, 'owner_scope', '');
+    return prj_owner_scope_parse($raw);
+}
+
+/** 把設定字串解析成乾淨的組合清單（存檔前也用同一支，前後端同規則＝鐵律8） */
+function prj_owner_scope_parse(string $raw): array
+{
+    $arr = json_decode($raw, true);
+    if (!is_array($arr)) return [];
+    $out = [];
+    foreach ($arr as $row) {
+        if (!is_array($row)) continue;
+        $d = (int)($row['d'] ?? 0);
+        $pp = (int)($row['p'] ?? 0);
+        if ($d <= 0) continue;                       // 一定要指定部門；職稱可以是 0（全部職稱）
+        $out[$d . ':' . $pp] = ['d' => $d, 'p' => $pp];
+    }
+    // 同一部門若已設「全部職稱」，個別職稱那幾列就是多餘的，收斂掉避免清單越積越長
+    foreach ($out as $k => $v) {
+        if ($v['p'] !== 0 && isset($out[$v['d'] . ':0'])) unset($out[$k]);
+    }
+    return array_values($out);
+}
+
+/** 依設定算出合格的 user.id 清單；未設定時回 null＝不限制 */
+function prj_owner_scope_user_ids(PDO $db): ?array
+{
+    $scope = prj_owner_scope($db);
+    if (!$scope) return null;
+    $cond = []; $p = [];
+    foreach ($scope as $sc) {
+        if ($sc['p'] === 0) { $cond[] = '(m.department_id=?)';                    $p[] = $sc['d']; }
+        else                { $cond[] = '(m.department_id=? AND m.position_id=?)'; array_push($p, $sc['d'], $sc['p']); }
+    }
+    try {
+        $st = $db->prepare("SELECT DISTINCT m.user_id FROM user_department_position_map m
+                            WHERE " . implode(' OR ', $cond));
+        $st->execute($p);
+        return array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) {
+        return null;   // 查不出來時寧可不限制，也不要讓整個負責人下拉變空的
+    }
+}
+
+/**
+ * 可被指派為專案負責人的人員清單（人員本身一律走 people_lib＝ai-rules/08 第五節）。
+ * $keepIds：即使不合資格也要保留的人（例如既有專案目前的負責人、目前登入者），
+ * 否則設定改嚴之後，既有專案一打開負責人就變空白、一存檔就被洗掉。
+ */
+function prj_owner_people(PDO $db, array $keepIds = []): array
+{
+    $ids = prj_owner_scope_user_ids($db);
+    if ($ids === null) return eg_people_list($db, []);
+    $keep = array_values(array_filter(array_map('intval', $keepIds)));
+    $all  = array_values(array_unique(array_merge($ids, $keep)));
+    if (!$all) return [];
+    return eg_people_list($db, ['user_ids' => $all]);
+}
+
+/** 這個人現在合不合資格當專案負責人（後端存檔時再驗一次） */
+function prj_owner_allowed(PDO $db, int $userId): bool
+{
+    if ($userId <= 0) return false;
+    $ids = prj_owner_scope_user_ids($db);
+    if ($ids === null) return true;
+    return in_array($userId, $ids, true);
+}
+
+/** 設定畫面用：把組合清單轉成看得懂的字（部門名／職稱名） */
+function prj_owner_scope_labeled(PDO $db): array
+{
+    $scope = prj_owner_scope($db);
+    if (!$scope) return [];
+    $dept = []; $pos = [];
+    try { foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $r) $dept[(int)$r['id']] = $r['name']; } catch (Throwable $e) {}
+    try { foreach ($db->query("SELECT id, name FROM position")->fetchAll(PDO::FETCH_ASSOC) as $r) $pos[(int)$r['id']] = $r['name']; } catch (Throwable $e) {}
+    $out = [];
+    foreach ($scope as $sc) {
+        $out[] = [
+            'd'         => $sc['d'],
+            'p'         => $sc['p'],
+            'dept_name' => $dept[$sc['d']] ?? ('（已刪除的部門 #' . $sc['d'] . '）'),
+            'pos_name'  => $sc['p'] === 0 ? '全部職稱' : ($pos[$sc['p']] ?? ('（已刪除的職稱 #' . $sc['p'] . '）')),
+        ];
+    }
+    return $out;
 }
 
 /* ══════════════════════════ 標籤 ══════════════════════════ */
@@ -608,7 +719,20 @@ function prj_order_candidates(PDO $db, array $q): array
     $w = ["NOT EXISTS(SELECT 1 FROM project_order po JOIN project p2 ON p2.project_id=po.project_id
                       WHERE po.order_id=o.Order_id AND p2.is_deleted=0)"];
     $p = [];
-    if (!empty($q['cust'])) { $w[] = 'o.Client_name_ID=?'; $p[] = $q['cust']; }
+    // 客戶：模糊比對「客戶ID 或 客戶名稱」（使用者要求，不再提供下拉選單）。
+    // 訂單上的 Client_name 是建單當下的文字，客戶主檔改過名的舊訂單只靠它會找不到，
+    // 所以另外以 Client_name_ID 反查 customer_list 的簡稱與發票全名一起比對。
+    // 多個關鍵字以空白分隔＝每個都要命中（可分散在不同欄位），比照全表搜尋鐵則。
+    if (trim((string)($q['cust'] ?? '')) !== '') {
+        foreach (preg_split('/\s+/', trim((string)$q['cust'])) as $ct) {
+            if ($ct === '') continue;
+            $w[] = "(o.Client_name_ID LIKE ? OR o.Client_name LIKE ?
+                     OR EXISTS(SELECT 1 FROM customer_list cl WHERE cl.customer_id=o.Client_name_ID
+                               AND (cl.customer LIKE ? OR cl.customer_full LIKE ?)))";
+            $cl = '%' . $ct . '%';
+            array_push($p, $cl, $cl, $cl, $cl);
+        }
+    }
     if (!empty($q['from'])) { $w[] = 'o.Order_date>=?';    $p[] = $q['from']; }
     if (!empty($q['to']))   { $w[] = 'o.Order_date<=?';    $p[] = $q['to']; }
     if (empty($q['include_closed'])) $w[] = '(o.Order_status IS NULL OR o.Order_status<>9)';

@@ -124,7 +124,14 @@ case 'meta':
     // 人員清單一律走 people_lib（只列未離職、標長期請假、依職稱排序並顯示職稱＝ai-rules/08 第五節）
     $people = [];
     try { $people = eg_people_list($db, []); } catch (Throwable $e) {}
+    // 專案負責人候選：管理員可限定「哪些部門的哪些職稱」（模組設定 → 專案負責人資格）。
+    // 這裡刻意不額外保留目前登入者——下拉列得出來、後端 prj_owner_allowed() 卻擋下來會很難理解。
+    // 既有專案原本的負責人由前端 renderBase() 自己補回下拉（後端存檔時亦放行未變更的負責人）。
+    $ownerPeople = [];
+    try { $ownerPeople = prj_owner_people($db); } catch (Throwable $e) { $ownerPeople = $people; }
     $depts = $db->query("SELECT id, name FROM department ORDER BY sort_order DESC, name")->fetchAll(PDO::FETCH_ASSOC);
+    $positions = [];
+    try { $positions = $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
     $custs = $db->query("SELECT customer_id, customer FROM customer_list
                          WHERE COALESCE(is_inactive,0)=0 ORDER BY customer")->fetchAll(PDO::FETCH_ASSOC);
     $tpls = [];
@@ -140,7 +147,10 @@ case 'meta':
         'doc_checks' => PRJ_DOC_CHECKS,
         'tags'       => prj_tags_all($db),
         'people'     => $people,
+        'owner_people' => $ownerPeople,
+        'owner_scope'  => prj_owner_scope_labeled($db),
         'depts'      => $depts,
+        'positions'  => $positions,
         'customers'  => $custs,
         'stamp_tpls' => $tpls,
         'today'      => $NOW['date'],
@@ -199,6 +209,19 @@ case 'save':
     ];
     if (!isset(PRJ_PHASES[$data['phase']])) $data['phase'] = 'initiating';
     $err = prj_validate($data);
+    // 專案負責人資格（模組設定 → 專案負責人資格）：前端下拉已只列合格的人，後端同規則再擋一次（鐵律8）。
+    // 既有專案的負責人維持原值時一律放行——設定改嚴不該讓舊專案變成存不了檔。
+    if (!$err && $data['owner_id'] > 0 && !prj_owner_allowed($db, $data['owner_id'])) {
+        $oldOwner = 0;
+        if ($pid > 0) {
+            $st = $db->prepare("SELECT owner_id FROM project WHERE project_id=?");
+            $st->execute([$pid]);
+            $oldOwner = (int)$st->fetchColumn();
+        }
+        if ($data['owner_id'] !== $oldOwner) {
+            $err['owner_id'] = '這個人不符合專案負責人資格（部門／職稱不在管理員設定的範圍內）';
+        }
+    }
     if ($err) jerr('資料未填齊', 400, ['fields' => $err]);
 
     $ownerName = '';
@@ -322,6 +345,11 @@ case 'order_to_project':
                 if (count($orders) > 1) $name .= ' 等 ' . count($orders) . ' 項';
             }
             $ownerId = (int)($_POST['owner_id'] ?? 0) ?: $uid;
+            // 負責人資格後端再驗一次（前端下拉已只列合格的人）；沒指定而退回建立者本人時不擋，
+            // 否則不合資格的人連轉專案都做不了，只是專案會留一個要事後改的負責人。
+            if ((int)($_POST['owner_id'] ?? 0) > 0 && !prj_owner_allowed($db, $ownerId)) {
+                throw new RuntimeException('這個人不符合專案負責人資格（部門／職稱不在管理員設定的範圍內）');
+            }
             $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
             $st->execute([$ownerId]);
             $ownerName = (string)$st->fetchColumn();
@@ -922,7 +950,8 @@ case 'setting_get':
         'block_close_on_missing' => prj_setting_get($db, 'block_close_on_missing', '1'),
         'plan_stamp_tpl_id'      => prj_setting_get($db, 'plan_stamp_tpl_id', '0'),
         'card_stamp_tpl_id'      => prj_setting_get($db, 'card_stamp_tpl_id', '0'),
-    ]]);
+        'owner_scope'            => prj_setting_get($db, 'owner_scope', ''),
+    ], 'owner_scope_rows' => prj_owner_scope_labeled($db)]);
 
 case 'setting_save':
     if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
@@ -932,7 +961,14 @@ case 'setting_save':
         if (!array_key_exists($k, $_POST)) continue;
         prj_setting_save($db, $k, trim((string)$_POST[$k]), $desc, $uname);
     }
-    jout(['message' => '已儲存設定']);
+    // 專案負責人資格（部門×職稱）：後端自己再解析驗證一次，不直接採信前端送來的字串
+    if (array_key_exists('owner_scope', $_POST)) {
+        $scope = prj_owner_scope_parse((string)$_POST['owner_scope']);
+        prj_setting_save($db, 'owner_scope', $scope ? json_encode($scope, JSON_UNESCAPED_UNICODE) : '',
+                         '專案負責人資格（部門×職稱）', $uname);
+    }
+    jout(['message' => '已儲存設定', 'owner_scope_rows' => prj_owner_scope_labeled($db),
+          'owner_people' => prj_owner_people($db)]);
 
 case 'asdoc_save':
     if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
