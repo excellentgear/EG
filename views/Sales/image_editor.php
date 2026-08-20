@@ -583,8 +583,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$catIds) throw new Exception('請至少選擇一個附件標籤（圖面／報價之後全靠它分類）');
             $catStr = implode(',', $catIds);
             if ($dId <= 0) throw new Exception('請先選擇料號');
-            // 發行章日期：自家出的圖必填（見 ai-rules/15-圖面變更判定依據.md）。
-            // 判定要在寫入這一筆之前算，否則會拿自己跟自己比。
+            // 發行章日期：只在「只存圖片（不建立工作檔）」這條路徑、且標籤是自家出的圖時必填
+            //（見 ai-rules/15-圖面變更判定依據.md）。判定要在寫入這一筆之前算，否則會拿自己跟自己比。
             // 版次（選填）：跟料號附件頁上傳跳窗同一個欄位 part_attachments.revision(varchar(50))。
             // 前端有 maxlength 與即時提示，這裡照樣再擋一次（貼上／直打 API 都繞不過）。
             $revision = trim($_POST['revision'] ?? '');
@@ -592,9 +592,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($revision === '') $revision = null;
             $issueDate = trim($_POST['issue_stamp_date'] ?? '');
             if ($issueDate !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $issueDate)) throw new Exception('發行章日期格式錯誤（需 YYYY-MM-DD）');
-            if (dwg_needs_issue_date($pdo, $catIds) && $issueDate === '') throw new Exception('此標籤屬於「自家出的圖」，請填發行章日期');
-            if ($issueDate === '') $issueDate = null;
-            $dwgVerdict = dwg_classify_upload($pdo, $dId, $catIds, $issueDate);
+            if (!$noWorkfile) {
+                // 有建立工作檔＝這次存的是「還在編、隨時會被下一版蓋掉」的暫存檔（使用者拍板 2026-08-20）：
+                // 工作檔在料號附件／圖面檢視都看不到，不該當成正式發行的圖面，
+                // 故一律不掛發行章日期、也不做圖面變更判定（要正式發行請勾「只存圖片，不建立工作檔」）。
+                $issueDate = null;
+                $dwgVerdict = ['kind' => 'none'];
+            } else {
+                if (dwg_needs_issue_date($pdo, $catIds) && $issueDate === '') throw new Exception('此標籤屬於「自家出的圖」，請填發行章日期');
+                if ($issueDate === '') $issueDate = null;
+                $dwgVerdict = dwg_classify_upload($pdo, $dId, $catIds, $issueDate);
+            }
             if (strpos($png, 'data:image/png;base64,') !== 0) throw new Exception('圖檔資料異常');
             if (!$noWorkfile && json_decode($work) === null) throw new Exception('工作檔資料異常');
             $pb = imgedit_part_base($pdo);
@@ -1598,7 +1606,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 </div>
             </div>
             <div id="pf-save-hint" style="font-size:11.5px;color:#8b949e;margin-bottom:10px;">
-                會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印，上面選的<b>附件標籤掛在它身上</b>）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔不是圖面、只有這個編輯器打得開，所以<b>不會出現在圖面檢視跳窗</b>裡，也不需要標籤。工作檔沒有「全公司共用」，避免所有人都能改到；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。
+                會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印，上面選的<b>附件標籤掛在它身上</b>）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔不是圖面、只有這個編輯器打得開，所以<b>不會出現在圖面檢視跳窗</b>裡，也不需要標籤。工作檔沒有「全公司共用」，避免所有人都能改到；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。<b>有建立工作檔＝視為暫存</b>，不填發行章日期、也不做圖面變更判定；要正式出圖請勾「只存圖片，不建立工作檔」。
             </div>
             <hr style="border-color:#3c4046;margin:10px 0;">
             <div style="font-weight:700;color:#6fc3ff;font-size:12.5px;margin-bottom:6px;"><i class="fa fa-folder-open-o"></i> 開啟此料號的批圖工作檔</div>
@@ -1795,7 +1803,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>匯出/列印：整個畫布或只匯出選取；PNG/JPG、解析度倍率（列印建議2×）；列印會自動依畫面長寬決定直/橫版並縮成一頁</li>
                 <li><b>縮放至框架</b>（頂列「畫布」旁）：先選 A4/A3＋橫式/直式（預設 A4 橫式），按「縮放至框架」把整張圖面等比例縮放＋置中成該標準尺寸（點選才套用，不會自動觸發，可 Ctrl+Z 復原）。因為每張圖面原始解析度不同，蓋章工具的「大小」是用畫布 px 輸入，同樣的數字在不同圖上印出來實際大小會不一樣——先套這個框架再蓋章，蓋出來的章大小才會一致</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
-                <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）</li>
+                <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）。<b>有建立工作檔的儲存一律當暫存</b>：不必填發行章日期，也不會觸發圖面變更判定；要當正式出圖存進去，請勾「只存圖片，不建立工作檔」，那時標籤若屬「自家出的圖」就要填發行章日期並會比對是否為圖面變更</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
                 <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋</li>
                 <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編；<b>標籤（含快速標籤/自組標籤）內改字同樣適用</b></li>
@@ -6021,11 +6029,14 @@ function pfTodayStr() {
     const d = new Date();
     return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
 }
-/** 勾到「自家出的圖」才要發行章日期；回傳是否通過驗證。只在標籤勾選變動（欄位剛顯示）時預設今天，
+/** 勾「只存圖片（不建立工作檔）」＋標籤有「自家出的圖」才要發行章日期；回傳是否通過驗證。
+ *  有建立工作檔＝暫存檔（工作檔在料號附件看不到、下次存檔就被取代），不填發行章日期也不判定圖面變更。
+ *  只在標籤勾選變動（欄位剛顯示）時預設今天，
  *  不要掛在日期欄自己的 onchange 上——不然打字打到一半、瀏覽器對未完成日期觸發 change 給空字串，
  *  會被這裡的「空值補今天」蓋掉使用者正在打的內容，變成畫面上的日期一直跳掉。 */
 function pfSyncIssueRow() {
-    const need = Array.from(document.querySelectorAll('.pf-cat:checked')).some(c => c.dataset.own === '1');
+    const noWf = document.getElementById('pf-no-workfile').checked;
+    const need = noWf && Array.from(document.querySelectorAll('.pf-cat:checked')).some(c => c.dataset.own === '1');
     const row = document.getElementById('pf-issue-row'), inp = document.getElementById('pf-issue-date');
     row.style.display = need ? '' : 'none';
     if (!need) return true;
@@ -6071,9 +6082,10 @@ function pfOnScopeChange() {
 function pfOnNoWorkfileChange() {
     const noWf = document.getElementById('pf-no-workfile').checked;
     document.getElementById('pf-scope-box').style.display = noWf ? 'none' : '';
+    pfSyncIssueRow();   // 切到「只存圖片」＝正式成品圖才要發行章日期；切回建工作檔要把欄位收掉
     document.getElementById('pf-save-hint').innerHTML = noWf
-        ? '只存<b>壓平 PNG</b> 到料號附件（上面選的<b>附件標籤掛在它身上</b>），不產生 .egwork.json 工作檔，之後不能再用批圖編輯器打開重改。'
-        : '會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印，上面選的<b>附件標籤掛在它身上</b>）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔不是圖面、只有這個編輯器打得開，所以<b>不會出現在圖面檢視跳窗</b>裡，也不需要標籤。工作檔沒有「全公司共用」，避免所有人都能改到；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。';
+        ? '只存<b>壓平 PNG</b> 到料號附件（上面選的<b>附件標籤掛在它身上</b>），不產生 .egwork.json 工作檔，之後不能再用批圖編輯器打開重改。<b>這條路徑才是「正式出圖」</b>：標籤屬於自家出的圖時要填發行章日期，並會做圖面變更判定。'
+        : '會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印，上面選的<b>附件標籤掛在它身上</b>）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔不是圖面、只有這個編輯器打得開，所以<b>不會出現在圖面檢視跳窗</b>裡，也不需要標籤。工作檔沒有「全公司共用」，避免所有人都能改到；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。<b>有建立工作檔＝視為暫存</b>，不填發行章日期、也不做圖面變更判定；要正式出圖請勾「只存圖片，不建立工作檔」。';
 }
 async function loadPfShareUsers() {
     document.getElementById('pf-share-list').innerHTML = '載入中…';
