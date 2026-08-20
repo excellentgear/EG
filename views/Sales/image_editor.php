@@ -1224,7 +1224,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <label id="wrap-stamp-holder" style="display:none;" title="被登記者：變數{部門}{職稱}{姓名}帶入此對象的資料（來自圖章清冊「使用中」登記）">對象
                     <select id="p-stamp-holder" style="background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:3px 5px;font-size:12px;max-width:150px;"></select>
                 </label>
-                <label>大小 <input type="number" class="ni" id="p-stamp-size" value="110" min="40" max="600"></label>
+                <label>大小 <input type="number" class="ni" id="p-stamp-size" value="110" min="40" max="600" oninput="refreshStampSizeHint()"></label>
+                <!-- 套過「縮放至框架」後在這裡標明目前就是建議大小，避免使用者以為還要自己調（2026-08-20 使用者要求） -->
+                <span id="stamp-size-hint" style="display:none;font-size:11px;white-space:nowrap;"></span>
                 <label id="wrap-stamp-date" title="圖章上印的日期：預設今天；管理者可調整（例如依單據業務日期補蓋章），一般使用者固定今天不可改">日期 <input type="date" id="p-stamp-date"></label>
                 <button class="pb-btn" id="btn-stamp-perm" style="display:none;" onclick="openStampPermModal()" title="設定哪些人員可使用技術課章/發行章（管理者限定）"><i class="fa fa-cog"></i> 用章人員</button>
                 <span style="color:#8b949e;font-size:11px;">點圖面蓋章（透明背景、日期自動帶今天）；Esc 結束</span>
@@ -1801,7 +1803,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>滾輪縮放；<b>按住滾輪中鍵拖移</b>或空白鍵＋拖曳平移；「縮放至選取」放大局部細修</li>
                 <li>「開新視窗」再開一個編輯器（可拖到另一個螢幕）；兩窗互貼＝選取後 <b>Ctrl+C</b>，到另一窗按 <b>Ctrl+Shift+V</b>（他窗貼上）</li>
                 <li>匯出/列印：整個畫布或只匯出選取；PNG/JPG、解析度倍率（列印建議2×）；列印會自動依畫面長寬決定直/橫版並縮成一頁</li>
-                <li><b>縮放至框架</b>（頂列「畫布」旁）：先選 A4/A3＋橫式/直式（預設 A4 橫式），按「縮放至框架」把整張圖面等比例縮放＋置中成該標準尺寸（點選才套用，不會自動觸發，可 Ctrl+Z 復原）。因為每張圖面原始解析度不同，蓋章工具的「大小」是用畫布 px 輸入，同樣的數字在不同圖上印出來實際大小會不一樣——先套這個框架再蓋章，蓋出來的章大小才會一致</li>
+                <li><b>縮放至框架</b>（頂列「畫布」旁）：先選 A4/A3＋橫式/直式（預設 A4 橫式），按「縮放至框架」把整張圖面等比例縮放＋置中成該標準尺寸（點選才套用，不會自動觸發，可 Ctrl+Z 復原）。因為每張圖面原始解析度不同，蓋章工具的「大小」是用畫布 px 輸入，同樣的數字在不同圖上印出來實際大小會不一樣——先套這個框架再蓋章，蓋出來的章大小才會一致。<b>套用框架後會自動把蓋章工具的「大小」帶成建議值 200</b>（＝1 英吋、印出來約 25mm），大小欄旁邊會標示「已帶入建議大小」——這個數字不用再自己調；真要改也可以，改了旁邊會變成「已自行調整（建議 200，點此改回）」，點一下就回到建議值</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
                 <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）。<b>有建立工作檔的儲存一律當暫存</b>：不必填發行章日期，也不會觸發圖面變更判定；要當正式出圖存進去，請勾「只存圖片，不建立工作檔」，那時標籤若屬「自家出的圖」就要填發行章日期並會比對是否為圖面變更</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
@@ -2116,6 +2118,38 @@ function quickResize() {
    點選按鈕才觸發，不會自動套用。 */
 const FRAME_DPI = 200;
 const FRAME_MM = { A4: [210, 297], A3: [297, 420] };
+/* 套用框架後的建議蓋章大小＝1 英吋（印出約 25mm）。用 FRAME_DPI 推導而不是寫死 200，
+   日後調整框架解析度時建議值會自己跟著走，不會變成兩處對不起來的數字。
+   A4/A3 用同一個 FRAME_DPI，所以同一個 px 值在兩種紙上印出來的實體大小相同，不必分開設。 */
+const STAMP_SUGGEST_PX = FRAME_DPI;
+let stampSuggestLabel = '';   // 目前建議值是哪一個框架給的（空＝還沒套過框架，不顯示提示）
+/* 依「目前輸入值是不是等於建議值」切換提示文字：等於＝告訴他這已經是建議大小不用改；
+   不等於＝提醒建議值多少並可一鍵改回去。 */
+function refreshStampSizeHint() {
+    const el = document.getElementById('stamp-size-hint'), inp = document.getElementById('p-stamp-size');
+    if (!el || !inp) return;
+    if (!stampSuggestLabel) { el.style.display = 'none'; return; }
+    const cur = parseInt(inp.value, 10) || 0;
+    el.style.display = '';
+    el.title = '「' + stampSuggestLabel + '」框架下，' + STAMP_SUGGEST_PX + 'px 印出來約 25mm；'
+             + '同一個框架都用這個大小，各張圖面蓋出來的章才會一樣大。';
+    if (cur === STAMP_SUGGEST_PX) {
+        el.style.color = '#F0A24B'; el.style.cursor = 'default'; el.onclick = null;
+        el.innerHTML = '✓ 已帶入建議大小（' + stampSuggestLabel + '，約 25mm），不需再調';
+    } else {
+        el.style.color = '#F7E0BD'; el.style.cursor = 'pointer';
+        el.onclick = function () { inp.value = STAMP_SUGGEST_PX; inp.dispatchEvent(new Event('change')); refreshStampSizeHint(); };
+        el.innerHTML = '已自行調整（建議 ' + STAMP_SUGGEST_PX + '，點此改回）';
+    }
+}
+/* 套用框架的當下就把蓋章大小帶成建議值（使用者要求：不要讓人再自己去改）。
+   dispatchEvent('change') 是為了讓它進個人偏好一起存起來（見 PREF_FIELDS）。 */
+function applyStampSizeSuggestion(label) {
+    stampSuggestLabel = label || '';
+    const inp = document.getElementById('p-stamp-size');
+    if (inp) { inp.value = STAMP_SUGGEST_PX; inp.dispatchEvent(new Event('change')); }
+    refreshStampSizeHint();
+}
 function frameSizePx(code) {
     const paper = code.slice(0, 2), land = code.slice(2) === 'L';
     const [mmShort, mmLong] = FRAME_MM[paper];
@@ -2143,7 +2177,9 @@ function applyFrameFit(frameW, frameH, label) {
     canvas.requestRenderAll();
     zoomFit();
     pushState();
-    toast('已縮放置中為' + (label ? '「' + label + '」' : '') + ' ' + frameW + '×' + frameH);
+    applyStampSizeSuggestion(label);
+    toast('已縮放置中為' + (label ? '「' + label + '」' : '') + ' ' + frameW + '×' + frameH
+        + '；蓋章大小已帶入建議值 ' + STAMP_SUGGEST_PX + '（約 25mm）');
 }
 function applyFrameFitFromSelect() {
     const code = document.getElementById('frame-size').value;
