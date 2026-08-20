@@ -557,6 +557,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $like = '%' . $q . '%';
             $st->execute([$like, $like]);
             echo json_encode(['success' => true, 'parts' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+        } elseif ($act === 'process_candidates') {
+            // 製程標籤候選（此料號訂單有過的加工項目＋此料號附件已經打過的），唯一實作在 dwg_change_lib
+            $dId = (int)($_POST['d_id'] ?? 0);
+            if ($dId <= 0) throw new Exception('請先選擇料號');
+            echo json_encode(['success' => true, 'items' => dwg_process_candidates($pdo, $dId)], JSON_UNESCAPED_UNICODE);
         } elseif ($act === 'save_workfile') {
             // 存成料號附件：壓平 PNG（附件系統可見）＋ .egwork.json 工作檔（批圖編輯器可重開繼續編輯）
             // no_workfile=1：只存壓平 PNG，不產生 .egwork.json（單純留一張成品圖，不需要之後回編輯器改）
@@ -592,16 +597,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($revision === '') $revision = null;
             $issueDate = trim($_POST['issue_stamp_date'] ?? '');
             if ($issueDate !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $issueDate)) throw new Exception('發行章日期格式錯誤（需 YYYY-MM-DD）');
+            // 製程標籤（選填）：同一料號不同加工項目各自一組新舊版，留空＝共用圖。
+            // 前端是下拉，後端照樣自己擋長度（直打 API 繞不過去＝鐵律8 不做半套）。
+            $procTag = trim($_POST['process_tag'] ?? '');
+            if (mb_strlen($procTag, 'UTF-8') > 100) throw new Exception('製程標籤最多 100 個字');
             if (!$noWorkfile) {
                 // 有建立工作檔＝這次存的是「還在編、隨時會被下一版蓋掉」的暫存檔（使用者拍板 2026-08-20）：
                 // 工作檔在料號附件／圖面檢視都看不到，不該當成正式發行的圖面，
                 // 故一律不掛發行章日期、也不做圖面變更判定（要正式發行請勾「只存圖片，不建立工作檔」）。
                 $issueDate = null;
+                $procTag = '';
                 $dwgVerdict = ['kind' => 'none'];
             } else {
                 if (dwg_needs_issue_date($pdo, $catIds) && $issueDate === '') throw new Exception('此標籤屬於「自家出的圖」，請填發行章日期');
                 if ($issueDate === '') $issueDate = null;
-                $dwgVerdict = dwg_classify_upload($pdo, $dId, $catIds, $issueDate);
+                $dwgVerdict = dwg_classify_upload($pdo, $dId, $catIds, $issueDate, $procTag);
             }
             if (strpos($png, 'data:image/png;base64,') !== 0) throw new Exception('圖檔資料異常');
             if (!$noWorkfile && json_decode($work) === null) throw new Exception('工作檔資料異常');
@@ -626,16 +636,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (@file_put_contents($dir . DIRECTORY_SEPARATOR . $workFile, json_encode($workArr, JSON_UNESCAPED_UNICODE)) === false) throw new Exception('工作檔寫入失敗');
             }
             $pdo->beginTransaction();
-            $ins = $pdo->prepare("INSERT INTO part_attachments (d_id, filename, original_name, category_ids, revision, issue_stamp_date, note, uploaded_by, uploaded_by_id, uploaded_at)
-                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+            $ins = $pdo->prepare("INSERT INTO part_attachments (d_id, filename, original_name, category_ids, revision, issue_stamp_date, process_tag, note, uploaded_by, uploaded_by_id, uploaded_at)
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
             // 輸出 PNG 帶使用者選的標籤與發行章日期；工作檔兩者都不給
             //（它不是圖面，檢視端一律不列，見 imgedit_strip_workfiles，也不該參與圖面變更判定）
-            $ins->execute([$dId, $pngFile, $name . '.png', $catStr, $revision, $issueDate, '批圖編輯器輸出圖', $userName, $uid]);
+            $ins->execute([$dId, $pngFile, $name . '.png', $catStr, $revision, $issueDate, ($procTag !== '' ? $procTag : null), '批圖編輯器輸出圖', $userName, $uid]);
             $pngId = $pdo->lastInsertId();
             $workId = null;
             $removed = 0;
             if (!$noWorkfile) {
-                $ins->execute([$dId, $workFile, $name . '.egwork.json', null, null, null, '批圖工作檔（可用批圖編輯器重新開啟，標籤仍可編輯）', $userName, $uid]);
+                $ins->execute([$dId, $workFile, $name . '.egwork.json', null, null, null, null, '批圖工作檔（可用批圖編輯器重新開啟，標籤仍可編輯）', $userName, $uid]);
                 $workId = $pdo->lastInsertId();
                 $pdo->prepare("INSERT INTO imgedit_workfile_meta (attachment_id, owner_type, owner_dept_id) VALUES (?, ?, ?)")
                     ->execute([$workId, $scope, ($scope === 'dept' && $deptId) ? $deptId : null]);
@@ -1540,7 +1550,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <button class="tb-btn" onclick="pfSearch()"><i class="fa fa-search"></i> 搜尋</button>
             </div>
             <div class="frm-row"><label>選擇料號</label>
-                <select id="pf-part" style="flex:1;" onchange="pfApplyPartToName(); pfLoadWorkfiles()"><option value="">— 請先搜尋 —</option></select>
+                <select id="pf-part" style="flex:1;" onchange="pfApplyPartToName(); pfLoadWorkfiles(); pfLoadProcTags()"><option value="">— 請先搜尋 —</option></select>
             </div>
             <hr style="border-color:#3c4046;margin:10px 0;">
             <div style="font-weight:700;color:#6fc3ff;font-size:12.5px;margin-bottom:6px;"><i class="fa fa-save"></i> 儲存目前畫布到此料號</div>
@@ -1554,6 +1564,16 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <div style="flex:1;">
                     <input type="text" id="pf-revision" maxlength="50" style="width:210px;" placeholder="選填，例：C" oninput="pfRenderRevHint()">
                     <div id="pf-rev-hint" style="font-size:11.5px;color:#8b949e;margin-top:3px;">選填。填了會掛在壓平 PNG 上（工作檔不掛），附件清單會顯示 Rev. 標籤。</div>
+                </div>
+            </div>
+            <!-- 製程標籤：同一個料號常常有多個加工項目各自一張圖，新舊版要分開判定（2026-08-20 使用者要求）。
+                 候選只列「此料號訂單有過的加工項目」＋「此料號已經打過的」，不列全公司製程主檔。 -->
+            <div class="frm-row"><label>製程標籤</label>
+                <div style="flex:1;">
+                    <select id="pf-proc" style="width:260px;" onchange="pfRenderProcHint()">
+                        <option value="">（共用，不分製程）</option>
+                    </select>
+                    <div id="pf-proc-hint" style="font-size:11.5px;color:#8b949e;margin-top:3px;">選填。同一料號不同加工項目的圖請各自選製程，新舊版才不會互相誤判。</div>
                 </div>
             </div>
             <!-- 解析度倍率：跟「匯出／列印」跳窗同一個概念，預設 2×＝跟「另存圖片後再上傳」印出來一樣清晰 -->
@@ -1805,7 +1825,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>匯出/列印：整個畫布或只匯出選取；PNG/JPG、解析度倍率（列印建議2×）；列印會自動依畫面長寬決定直/橫版並縮成一頁</li>
                 <li><b>縮放至框架</b>（頂列「畫布」旁）：先選 A4/A3＋橫式/直式（預設 A4 橫式），按「縮放至框架」把整張圖面等比例縮放＋置中成該標準尺寸（點選才套用，不會自動觸發，可 Ctrl+Z 復原）。因為每張圖面原始解析度不同，蓋章工具的「大小」是用畫布 px 輸入，同樣的數字在不同圖上印出來實際大小會不一樣——先套這個框架再蓋章，蓋出來的章大小才會一致。<b>套用框架後會自動把蓋章工具的「大小」帶成建議值 200</b>（＝1 英吋、印出來約 25mm），大小欄旁邊會標示「已帶入建議大小」——這個數字不用再自己調；真要改也可以，改了旁邊會變成「已自行調整（建議 200，點此改回）」，點一下就回到建議值</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
-                <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）。<b>有建立工作檔的儲存一律當暫存</b>：不必填發行章日期，也不會觸發圖面變更判定；要當正式出圖存進去，請勾「只存圖片，不建立工作檔」，那時標籤若屬「自家出的圖」就要填發行章日期並會比對是否為圖面變更</li>
+                <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）。<b>有建立工作檔的儲存一律當暫存</b>：不必填發行章日期，也不會觸發圖面變更判定；要當正式出圖存進去，請勾「只存圖片，不建立工作檔」，那時標籤若屬「自家出的圖」就要填發行章日期並會比對是否為圖面變更。<b>製程標籤</b>選填：同一個料號常常有好幾個加工項目各自一張圖，選了製程之後<b>只會跟同料號、同標籤、同製程的圖比新舊版</b>，不會把別的加工項目的圖誤判成前一版；留空＝共用圖，會跟該標籤下所有製程一起比。候選只列「這個料號的訂單有過的加工項目」與「這個料號已經打過的製程標籤」（打過一次就記在這個料號裡，下次直接選）。另外<b>新舊版是同一個標籤各自比</b>——BOSS圖只跟BOSS圖比、++圖只跟++圖比、單製++圖再自成一組；掛「作廢」標籤的附件一律不參與新舊版判定</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
                 <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋</li>
                 <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編；<b>標籤（含快速標籤/自組標籤）內改字同樣適用</b></li>
@@ -6177,6 +6197,49 @@ function pfApplyPartToName() {
     const partNo = pfPartsMap[document.getElementById('pf-part').value];
     if (partNo) document.getElementById('pf-name').value = partNo;
 }
+/* 製程標籤候選：換料號就重載。分兩組——「此料號用過的」放前面（＝使用者要的每料號自動記憶），
+   「此料號訂單的加工項目」放後面。選項一多就靠共用檔的 data-eg-filter 打字篩選。 */
+async function pfLoadProcTags() {
+    const sel = document.getElementById('pf-proc');
+    if (!sel) return;
+    const keep = sel.value;
+    const d = document.getElementById('pf-part').value;
+    sel.innerHTML = '<option value="">（共用，不分製程）</option>';
+    if (!d) { pfRenderProcHint(); return; }
+    try {
+        const fd = new FormData();
+        fd.append('action', 'process_candidates'); fd.append('d_id', d);
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success) throw new Error(res.message || '');
+        const used = (res.items || []).filter(i => i.source === 'used');
+        const ord  = (res.items || []).filter(i => i.source !== 'used');
+        const addGroup = (label, arr) => {
+            if (!arr.length) return;
+            const g = document.createElement('optgroup');
+            g.label = label;
+            arr.forEach(i => { const o = document.createElement('option'); o.value = i.value; o.textContent = i.value; g.appendChild(o); });
+            sel.appendChild(g);
+        };
+        addGroup('此料號已經用過', used);
+        addGroup('此料號的訂單加工項目', ord);
+        if (keep) { for (const o of sel.options) { if (o.value === keep) { sel.value = keep; break; } } }
+    } catch (e) { /* 候選載不到不擋存檔，留「共用」即可 */ }
+    pfRenderProcHint();
+}
+function pfRenderProcHint() {
+    const sel = document.getElementById('pf-proc'), hint = document.getElementById('pf-proc-hint');
+    if (!sel || !hint) return;
+    const n = sel.querySelectorAll('option').length - 1;   // 扣掉「共用」
+    if (sel.value) {
+        hint.style.color = '#7ed957';
+        hint.textContent = '這張圖屬於「' + sel.value + '」；只會跟同料號、同標籤、同製程（或未指定製程的共用圖）比新舊版。';
+    } else {
+        hint.style.color = '#8b949e';
+        hint.textContent = n > 0
+            ? '選填。留空＝共用圖，會跟這個料號同標籤的所有製程一起比新舊版；不同加工項目各自一張圖時請選製程。'
+            : '此料號的訂單還沒有加工項目可選，留空＝共用圖。';
+    }
+}
 const PF_SCOPE_LABEL = { private: '私人', dept: '部門共用', custom: '指定人員', company: '公司共用（舊資料）' };
 async function pfLoadWorkfiles() {
     const d = document.getElementById('pf-part').value;
@@ -6292,6 +6355,7 @@ async function pfSave() {
         fd.append('category_ids', cats.join(','));
         fd.append('issue_stamp_date', issueDate);
         fd.append('revision', document.getElementById('pf-revision').value.trim());
+        fd.append('process_tag', document.getElementById('pf-proc').value || '');
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
         if (!res.success) throw new Error(res.message || '');
         const savedAt = nowTimeStr();

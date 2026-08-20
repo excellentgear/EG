@@ -31,6 +31,69 @@ function dwg_ensure_schema(PDO $pdo): void {
         $pdo->exec("UPDATE quotation_file_categories SET is_own_drawing=1 WHERE category_name IN ('BOSS圖','++圖','單製 ++圖')");
     } catch (Throwable $e) {}
     try { $pdo->exec("ALTER TABLE qc_drawing_change ADD COLUMN trigger_attachment_id INT NULL COMMENT '觸發此變更的料號附件 part_attachments.id（由附件上傳自動判定產生時才有）'"); } catch (Throwable $e) {}
+    // 製程標籤（2026-08-20 使用者要求）：同一個料號常常有多個加工項目各自一張圖
+    // （實例：MHGC0300191-FW080-2 同時有 -1、-2 兩組 BOSS圖＋++圖），
+    // 沒有這一欄的話 -2 改版重出會被判成 -1 的圖面變更。留空＝共用圖，見 dwg_classify_upload()。
+    try { $pdo->exec("ALTER TABLE part_attachments ADD COLUMN process_tag VARCHAR(100) NULL COMMENT '製程標籤（此圖對應哪個加工項目；空=共用圖，與所有製程一起比對新舊版）'"); } catch (Throwable $e) {}
+    try { $pdo->exec("ALTER TABLE part_attachments ADD INDEX idx_proc_tag (d_id, process_tag)"); } catch (Throwable $e) {}
+    try {
+        $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN is_obsolete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=此標籤代表「已作廢」，掛上的附件不參與新舊版判定'");
+        // 只有「剛加上這欄」時才預設勾名稱叫「作廢」的那一個；之後由使用者在標籤設定自行調整，
+        // 不再被覆寫（比照 is_own_drawing 的既有作法，避免使用者改過的設定被下次執行洗掉）
+        $pdo->exec("UPDATE quotation_file_categories SET is_obsolete_mark=1 WHERE category_name='作廢'");
+    } catch (Throwable $e) {}
+}
+
+/** 「已作廢」標籤 id 清單（掛到這些標籤的附件一律不參與新舊版判定） */
+function dwg_obsolete_cat_ids(PDO $pdo): array {
+    dwg_ensure_schema($pdo);
+    try {
+        $r = $pdo->query("SELECT id FROM quotation_file_categories WHERE is_obsolete_mark=1")->fetchAll(PDO::FETCH_COLUMN);
+        return array_map('intval', $r);
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 此料號的製程標籤候選清單（2026-08-20 使用者拍板：只列「訂單內此料號有過的製程」，
+ * 不列 process_no 全表 205 筆——那份主檔是全公司的製程，跟這個料號有沒有這道加工無關）。
+ *
+ * 另外把「此料號的附件已經打過的製程標籤」也一起列出來＝使用者要的「每個料號分開記憶」：
+ * 打過一次之後同一個料號再上傳就選得到，不必重打，也不會因為舊訂單被刪掉就選不到既有的值。
+ *
+ * 比對範圍是整組同料號的 d_setting（同 dwg_sibling_d_ids），不然多客戶的同一個料號會各記各的。
+ *
+ * @return array<int,array{value:string,source:string}> value=製程字串，source=used/order
+ */
+function dwg_process_candidates(PDO $pdo, int $dId): array {
+    dwg_ensure_schema($pdo);
+    $dIds = dwg_sibling_d_ids($pdo, $dId);
+    $ph   = implode(',', array_fill(0, count($dIds), '?'));
+    $out  = [];
+    // ① 此料號的附件已經用過的（使用者要的「自動記憶在此料號內」）
+    try {
+        $st = $pdo->prepare("SELECT process_tag, MAX(uploaded_at) AS last_at
+                               FROM part_attachments
+                              WHERE d_id IN ($ph) AND deleted_at IS NULL
+                                AND process_tag IS NOT NULL AND process_tag <> ''
+                              GROUP BY process_tag ORDER BY last_at DESC");
+        $st->execute($dIds);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[$r['process_tag']] = ['value' => $r['process_tag'], 'source' => 'used'];
+        }
+    } catch (Throwable $e) {}
+    // ② 此料號的訂單加工項目（order_track.Processing_items，例：「全製 (齒研)」「代料到齒研」「拉串」）
+    try {
+        $st = $pdo->prepare("SELECT Processing_items AS p, MAX(Order_date) AS last_od
+                               FROM order_track
+                              WHERE d_id_ID IN ($ph) AND Processing_items IS NOT NULL AND Processing_items <> ''
+                              GROUP BY Processing_items ORDER BY last_od DESC");
+        $st->execute($dIds);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $v = trim((string)$r['p']);
+            if ($v !== '' && !isset($out[$v])) $out[$v] = ['value' => $v, 'source' => 'order'];
+        }
+    } catch (Throwable $e) {}
+    return array_values($out);
 }
 
 /** 「自家出的圖」標籤 id 清單 */
@@ -73,23 +136,59 @@ function dwg_needs_issue_date(PDO $pdo, array $catIds): bool {
 }
 
 /**
+ * 把這次的比對範圍講成人話（「BOSS圖／製程：拉串」），用在判定訊息上。
+ * 沒有這一段的話，使用者看到「首次發行」但畫面上明明有別張圖，會以為系統壞了——
+ * 其實只是不同標籤或不同加工項目、本來就各自算各自的。
+ */
+function dwg_scope_desc(PDO $pdo, array $catIds, string $proc): string {
+    $names = [];
+    if ($catIds) {
+        try {
+            $ph = implode(',', array_fill(0, count($catIds), '?'));
+            $st = $pdo->prepare("SELECT category_name FROM quotation_file_categories WHERE id IN ($ph) ORDER BY sort_order, id");
+            $st->execute($catIds);
+            $names = $st->fetchAll(PDO::FETCH_COLUMN);
+        } catch (Throwable $e) {}
+    }
+    $s = $names ? implode('／', $names) : '自家出的圖';
+    return $s . '／製程：' . ($proc !== '' ? $proc : '（共用，未指定製程）');
+}
+
+/**
  * 判定這次上傳是「首次發行」還是「圖面變更」。
  *
- * 比對範圍＝同一料號、標籤同樣是「自家出的圖」的既有附件（不分是哪一種圖，
- * 因為 BOSS圖與 ++圖 是同一次出圖的不同呈現，分開比會把一次變更算成兩次）。
+ * 比對範圍（2026-08-20 使用者拍板重新定義，取代原本「所有自家圖標籤合併成一組」的作法）：
+ *   ① 同一個料號（含同料號的其他 d_setting，見 dwg_sibling_d_ids）
+ *   ② **同一個標籤**——BOSS圖 只跟 BOSS圖 比、++圖 只跟 ++圖 比、單製 ++圖 再自成一組。
+ *      舊版是把三個標籤合併成一組（理由是「BOSS圖與++圖是同一次出圖的兩種呈現」），
+ *      使用者明確要求改成分開：那三種圖本來就各自有自己的新舊版脈絡。
+ *      同一批上傳 BOSS圖＋++圖 仍然只會跳一次變更登錄，因為上傳端本來就對整批取第一個判定
+ *      （見 master_data_management.php 的 changeHit），不會因為分開比就變成兩筆。
+ *   ③ **製程標籤相同**——同一個料號的不同加工項目各自有自己的圖，不可互相判新舊。
+ *      任一方留空＝共用圖，共用圖跟所有製程一起比（使用者拍板）。
+ *   ④ 掛「已作廢」標籤的附件不參與判定（不會被當成前一版，也不會把別人擠成舊版）。
+ *      註：ai-rules/15 講的是「作廢」不可以拿來當**判準**（舊版不一定會被標作廢），
+ *      這裡是反過來用——有標作廢的一定不是現行版，方向不同不牴觸。
  *
+ * @param string|null $processTag 這次上傳的製程標籤；null/'' ＝共用圖
  * @return array{kind:string, prev_date:?string, prev_name:?string, message:string, needs_date:bool}
  *   kind: none=不是自家出圖標籤不判定／first=首次發行／change=變更／same=補件或重掃／older=補登舊版
  */
-function dwg_classify_upload(PDO $pdo, int $dId, array $catIds, ?string $issueDate): array {
+function dwg_classify_upload(PDO $pdo, int $dId, array $catIds, ?string $issueDate, ?string $processTag = null): array {
     $out = ['kind' => 'none', 'prev_date' => null, 'prev_name' => null, 'message' => '',
             'needs_date' => false, 'issue_date' => $issueDate,
-            'prev_other_d_id' => null, 'prev_other_note' => ''];
+            'prev_other_d_id' => null, 'prev_other_note' => '',
+            'process_tag' => (string)$processTag, 'prev_process_tag' => ''];
     if (!dwg_needs_issue_date($pdo, $catIds)) return $out;
     $out['needs_date'] = true;
     if (!$issueDate) { $out['message'] = '此標籤屬於「自家出的圖」，必須填發行章日期'; return $out; }
 
-    $own = dwg_own_drawing_cat_ids($pdo);
+    // 只比「這次上傳自己帶的那幾個自家圖標籤」，不再把全部自家圖標籤混在一起（②）
+    $own     = dwg_own_drawing_cat_ids($pdo);
+    $sameTag = array_values(array_intersect(array_map('intval', $catIds), $own));
+    if (!$sameTag) return $out;   // 理論上不會發生（前面 dwg_needs_issue_date 已經確認有交集）
+    $obsolete = dwg_obsolete_cat_ids($pdo);
+    $proc     = trim((string)$processTag);
     $prev = null;
     try {
         // 比對範圍要涵蓋「同一個料號的所有 d_setting 列」，不能只看傳進來的 d_id。
@@ -99,21 +198,37 @@ function dwg_classify_upload(PDO $pdo, int $dId, array $catIds, ?string $issueDa
         // 判定跟著一致才不會出現「畫面看得到舊圖、系統卻說這是首次發行」。
         $dIds = dwg_sibling_d_ids($pdo, $dId);
         $dPh  = implode(',', array_fill(0, count($dIds), '?'));
-        // FIND_IN_SET 逐一比對（category_ids 是逗號字串），取發行章日期最新的一筆
-        $ors = implode(' OR ', array_fill(0, count($own), 'FIND_IN_SET(?, pa.category_ids)'));
-        $st = $pdo->prepare("SELECT pa.id, pa.d_id, pa.original_name, pa.issue_stamp_date
-                             FROM part_attachments pa
-                             WHERE pa.d_id IN ($dPh) AND pa.deleted_at IS NULL
-                               AND pa.issue_stamp_date IS NOT NULL AND ($ors)
-                             ORDER BY pa.issue_stamp_date DESC, pa.id DESC LIMIT 1");
-        $st->execute(array_merge($dIds, $own));
+        $args = $dIds;
+        // ② 標籤：FIND_IN_SET 逐一比對（category_ids 是逗號字串），只找同標籤的
+        $ors  = implode(' OR ', array_fill(0, count($sameTag), 'FIND_IN_SET(?, pa.category_ids)'));
+        $args = array_merge($args, $sameTag);
+        $sql  = "SELECT pa.id, pa.d_id, pa.original_name, pa.issue_stamp_date, pa.process_tag
+                   FROM part_attachments pa
+                  WHERE pa.d_id IN ($dPh) AND pa.deleted_at IS NULL
+                    AND pa.issue_stamp_date IS NOT NULL AND ($ors)";
+        // ④ 已作廢的不參與
+        if ($obsolete) {
+            $sql .= ' AND NOT (' . implode(' OR ', array_fill(0, count($obsolete), 'FIND_IN_SET(?, pa.category_ids)')) . ')';
+            $args = array_merge($args, $obsolete);
+        }
+        // ③ 製程：本次有填→只比同製程或對方留空（共用圖）；本次留空→共用圖跟全部一起比，不加條件
+        if ($proc !== '') {
+            $sql .= " AND (pa.process_tag = ? OR pa.process_tag IS NULL OR pa.process_tag = '')";
+            $args[] = $proc;
+        }
+        $sql .= ' ORDER BY pa.issue_stamp_date DESC, pa.id DESC LIMIT 1';
+        $st = $pdo->prepare($sql);
+        $st->execute($args);
         $prev = $st->fetch(PDO::FETCH_ASSOC) ?: null;
-        if ($prev && (int)$prev['d_id'] !== $dId) $out['prev_other_d_id'] = (int)$prev['d_id'];
+        if ($prev) {
+            $out['prev_process_tag'] = (string)($prev['process_tag'] ?? '');
+            if ((int)$prev['d_id'] !== $dId) $out['prev_other_d_id'] = (int)$prev['d_id'];
+        }
     } catch (Throwable $e) { return $out; }
 
     if (!$prev) {
         $out['kind'] = 'first';
-        $out['message'] = '此料號第一次有帶發行章日期的自家圖面＝首次發行，不需要登錄圖面變更。';
+        $out['message'] = '此料號在「' . dwg_scope_desc($pdo, $sameTag, $proc) . '」底下第一次有帶發行章日期的圖面＝首次發行，不需要登錄圖面變更。';
         return $out;
     }
     $out['prev_date'] = (string)$prev['issue_stamp_date'];
@@ -130,7 +245,13 @@ function dwg_classify_upload(PDO $pdo, int $dId, array $catIds, ?string $issueDa
     }
     // 比大小用原始 Y-m-d，顯示才轉 YYYY.MM.DD（ai-rules/20：只管顯示，不動查詢與儲存）
     $cmp  = strcmp($issueDate, $out['prev_date']);
-    $prevShow = eg_fmt_date($out['prev_date']) . $out['prev_other_note'];
+    // 前一版如果是別的製程（＝其中一方是共用圖），一定要講出來，否則使用者無從判斷是不是選錯製程標籤
+    $procNote = '';
+    if ($out['prev_process_tag'] !== $proc) {
+        $procNote = '（前一版製程：' . ($out['prev_process_tag'] !== '' ? $out['prev_process_tag'] : '共用')
+                  . '，本次：' . ($proc !== '' ? $proc : '共用') . '）';
+    }
+    $prevShow = eg_fmt_date($out['prev_date']) . $out['prev_other_note'] . $procNote;
     if ($cmp > 0) {
         $out['kind'] = 'change';
         $out['message'] = '發行章日期比前一版（' . $prevShow . '）新＝這是一次圖面變更，請填寫變更內容。';

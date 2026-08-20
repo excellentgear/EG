@@ -123,8 +123,12 @@ switch ($action) {
             echo json_encode(['success'=>false,'message'=>'此標籤屬於「自家出的圖」，請填發行章日期（預設帶今天，可改成圖上實際的蓋章日）']); exit;
         }
         if ($upIssue === '') $upIssue = null;
+        // 製程標籤（選填）：同一料號不同加工項目各自一組新舊版，留空＝共用圖。
+        // 前端是下拉，這裡照樣自己擋長度（直打 API 繞不過去＝鐵律8 不做半套）。
+        $upProc = trim((string)($_POST['process_tag'] ?? ''));
+        if (mb_strlen($upProc, 'UTF-8') > 100) { echo json_encode(['success'=>false,'message'=>'製程標籤最多 100 個字']); exit; }
         // 判定要在寫入這一筆之前算，否則會拿自己跟自己比
-        $dwgVerdict = dwg_classify_upload($pdo, $dId, $upCatIds, $upIssue);
+        $dwgVerdict = dwg_classify_upload($pdo, $dId, $upCatIds, $upIssue, $upProc);
         if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
             echo json_encode(['success'=>false,'message'=>'上傳失敗（'.(isset($_FILES['file']) ? $_FILES['file']['error'] : 'no file').')']); exit;
         }
@@ -150,8 +154,8 @@ switch ($action) {
         $revision = (trim($_POST['revision'] ?? '') !== '') ? trim($_POST['revision']) : null;
         $sz       = fmtSzPa((int)$_FILES['file']['size']);
         try {
-            $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,uploaded_by,uploaded_by_id) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-                ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $upIssue, $uploadedByName, $uploadedById]);
+            $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,process_tag,uploaded_by,uploaded_by_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+                ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $upIssue, ($upProc !== '' ? $upProc : null), $uploadedByName, $uploadedById]);
             $newAttachId = (int)$pdo->lastInsertId();
             // dwg_verdict.kind='change' 時前端要跳出「填變更內容」表單，再呼叫 create_dwg_change
             echo json_encode(['success'=>true,'id'=>$newAttachId,'filename'=>$fname,'original_name'=>$orig,
@@ -186,7 +190,7 @@ switch ($action) {
         } catch(Exception $_e) {}
 
         // 1. 直接上傳的料號附件（JOIN user 取中文名稱）
-        $partStmt = $pdo->prepare("SELECT pa.id,'part' AS source,pa.filename,pa.original_name,pa.category_ids,pa.tag_var_values,pa.file_size,pa.note,pa.revision,pa.issue_stamp_date,
+        $partStmt = $pdo->prepare("SELECT pa.id,'part' AS source,pa.filename,pa.original_name,pa.category_ids,pa.tag_var_values,pa.file_size,pa.note,pa.revision,pa.issue_stamp_date,pa.process_tag,
             COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by, pa.uploaded_at, '' AS quote_no
             FROM part_attachments pa
             LEFT JOIN user u ON u.id = pa.uploaded_by_id
@@ -205,7 +209,7 @@ switch ($action) {
             if ($dSettingId && _paQuotCanView($pdo)) {
                 $qStmt = $pdo->prepare("
                     SELECT a.id,'quote' AS source,a.filename,a.original_name,a.category_ids,
-                           NULL AS tag_var_values,a.file_size,NULL AS note,NULL AS revision,NULL AS issue_stamp_date,
+                           NULL AS tag_var_values,a.file_size,NULL AS note,NULL AS revision,NULL AS issue_stamp_date,NULL AS process_tag,
                            COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by,
                            a.uploaded_at, a.quote_no
                     FROM quotation_attachments a
@@ -623,6 +627,10 @@ switch ($action) {
         // 同上：版次 "0" 是合法值，禁用 ?: null
         $note    = (trim($_POST['note']     ?? '') !== '') ? trim($_POST['note'])     : null;
         $revision = (trim($_POST['revision'] ?? '') !== '') ? trim($_POST['revision']) : null;
+        // 製程標籤：比照 issue_stamp_date，沒送這個欄位＝這次不動它
+        $hasProc = array_key_exists('process_tag', $_POST);
+        $mProc   = $hasProc ? trim((string)$_POST['process_tag']) : '';
+        if ($hasProc && mb_strlen($mProc, 'UTF-8') > 100) { echo json_encode(['success'=>false,'message'=>'製程標籤最多 100 個字']); exit; }
         if (!$id) { echo json_encode(['success'=>false,'message'=>'缺少 ID']); exit; }
         // 沒送 issue_stamp_date 這個欄位＝這次不動它（前端在欄位隱藏時就不送）。
         // 不可把「沒送」當成「清空」，否則使用者只是改個標籤，就把發行章日期洗掉而不自知。
@@ -642,13 +650,12 @@ switch ($action) {
             }
             if ($cur === '') { echo json_encode(['success'=>false,'message'=>'此標籤屬於「自家出的圖」，請填發行章日期']); exit; }
         }
-        if ($hasIssue) {
-            $pdo->prepare("UPDATE part_attachments SET category_ids=?,tag_var_values=?,note=?,revision=?,issue_stamp_date=? WHERE id=?")
-                ->execute([$catIds, $tagVals, $note, $revision, ($mIssue !== '' ? $mIssue : null), $id]);
-        } else {
-            $pdo->prepare("UPDATE part_attachments SET category_ids=?,tag_var_values=?,note=?,revision=? WHERE id=?")
-                ->execute([$catIds, $tagVals, $note, $revision, $id]);
-        }
+        $sets = ['category_ids=?','tag_var_values=?','note=?','revision=?'];
+        $vals = [$catIds, $tagVals, $note, $revision];
+        if ($hasIssue) { $sets[] = 'issue_stamp_date=?'; $vals[] = ($mIssue !== '' ? $mIssue : null); }
+        if ($hasProc)  { $sets[] = 'process_tag=?';      $vals[] = ($mProc  !== '' ? $mProc  : null); }
+        $vals[] = $id;
+        $pdo->prepare("UPDATE part_attachments SET " . implode(',', $sets) . " WHERE id=?")->execute($vals);
         echo json_encode(['success'=>true]);
         break;
 
