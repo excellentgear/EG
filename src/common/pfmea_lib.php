@@ -359,15 +359,44 @@ function pfmea_perms(PDO $db, ?array $u): array {
     return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canEdit'=>$canEdit,'canView'=>$canView];
 }
 
-/** 產生本表文件編號：YYYYMMDD + 3位流水號（以 DB 日期為準） */
-function pfmea_next_doc_no(PDO $db): string {
-    $today = $db->query("SELECT DATE_FORMAT(CURDATE(),'%Y%m%d')")->fetchColumn();
-    $like = $today . '%';
+/**
+ * 產生本表文件編號：YYYYMMDD + 3位流水號。
+ * 2026-08-20 使用者要求改為「依業務日期」產生，不是建檔當天——由建議清單轉入/補歷史資料時，
+ * 建檔日跟這份分析表真正的業務日期常常差很多，編號前八碼會跟表單上的日期對不起來。
+ * $bizDate 沒帶或格式不對才退回 DB 當天日期（PHP date() 是 UTC，一律取 DB 的 CURDATE()）。
+ * 流水號掃該日期已存在的最大值＋1（含已刪除的，doc_no 是 UNIQUE，跳號比撞號安全）。
+ */
+function pfmea_next_doc_no(PDO $db, ?string $bizDate = null): string {
+    $ymd = pfmea_doc_no_ymd($bizDate);
+    if ($ymd === null) $ymd = (string)$db->query("SELECT DATE_FORMAT(CURDATE(),'%Y%m%d')")->fetchColumn();
     $st = $db->prepare("SELECT doc_no FROM pfmea_doc WHERE doc_no LIKE ? ORDER BY doc_no DESC LIMIT 1");
-    $st->execute([$like]);
+    $st->execute([$ymd . '%']);
     $last = $st->fetchColumn();
     $seq = $last ? ((int)substr((string)$last, 8, 3) + 1) : 1;
-    return $today . str_pad((string)$seq, 3, '0', STR_PAD_LEFT);
+    return $ymd . str_pad((string)$seq, 3, '0', STR_PAD_LEFT);
+}
+
+/** 日期字串(YYYY-MM-DD…) → 編號前八碼 YYYYMMDD；不是合法日期回 null */
+function pfmea_doc_no_ymd(?string $date): ?string {
+    $date = trim((string)$date);
+    if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})/', $date, $m)) return null;
+    return $m[1] . $m[2] . $m[3];
+}
+
+/**
+ * 業務日期被改動後，把表單編號重編成新日期的編號（使用者 2026-08-20 拍板：編號跟著日期走）。
+ * 日期沒變（前八碼相同）或日期不合法時不動。回傳新編號；沒有變更回 null。
+ */
+function pfmea_sync_doc_no(PDO $db, int $id, ?string $bizDate): ?string {
+    $ymd = pfmea_doc_no_ymd($bizDate);
+    if (!$id || $ymd === null) return null;
+    $st = $db->prepare("SELECT doc_no FROM pfmea_doc WHERE id=?");
+    $st->execute([$id]);
+    $cur = (string)$st->fetchColumn();
+    if ($cur === '' || substr($cur, 0, 8) === $ymd) return null;
+    $newNo = pfmea_next_doc_no($db, $bizDate);
+    $db->prepare("UPDATE pfmea_doc SET doc_no=? WHERE id=?")->execute([$newNo, $id]);
+    return $newNo;
 }
 
 /** 「相關部門」預設勾選值（管理員設定，存 system_parameters，新建文件時自動帶入） */

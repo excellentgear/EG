@@ -323,7 +323,7 @@ function td_dev_eval_suggest_bulk_create(PDO $db, array $rows, int $uid, string 
         $fillDate = trim((string)($row['fill_date'] ?? ''));
         if ($custName === '' || $fillDate === '') { $errors[] = ($partText ?: '(無料號)').'：缺客戶或填表日期'; continue; }
         try {
-            $docNo = td_dev_eval_next_doc_no($db);
+            $docNo = td_dev_eval_next_doc_no($db, $fillDate); // 編號依填表日期(2026-08-20)
             // 建立當下就試算預估需求量（使用者明確要求：批次建立這種「建立評估表」的路徑一樣要自動算好填入）
             $estQty = $partDId ? td_dev_eval_estimate_qty($db, $partDId, $fillDate) : null;
             $db->prepare("INSERT INTO td_dev_eval (doc_no, customer_name, part_d_id, part_no_text, product_name, est_qty, fill_date, status, created_by, created_by_name)

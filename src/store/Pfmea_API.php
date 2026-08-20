@@ -161,8 +161,10 @@ case 'save':
             $st = $db->prepare("UPDATE pfmea_doc SET part_d_id=?, part_no_text=?, item_type=?, spec_desc=?, product_name=?, related_depts=?, biz_date=?,
                                  updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=?");
             $st->execute([$partDId ?: null, $partNoText ?: null, $itemType, $specDesc ?: null, $productName ?: null, $relatedDepts ?: null, $bizDate ?: null, $uid, $uname, $id]);
+            // 業務日期改了，表單編號跟著重編（使用者 2026-08-20 拍板）
+            pfmea_sync_doc_no($db, $id, $bizDate);
         } else {
-            $docNo = pfmea_next_doc_no($db);
+            $docNo = pfmea_next_doc_no($db, $bizDate); // 編號依業務日期(2026-08-20)
             $st = $db->prepare("INSERT INTO pfmea_doc (doc_no, part_d_id, part_no_text, item_type, spec_desc, product_name, related_depts, biz_date, created_by, created_by_name)
                                  VALUES (?,?,?,?,?,?,?,?,?,?)");
             $st->execute([$docNo, $partDId ?: null, $partNoText ?: null, $itemType, $specDesc ?: null, $productName ?: null, $relatedDepts ?: null, $bizDate ?: null, $uid, $uname]);

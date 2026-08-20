@@ -249,15 +249,45 @@ function td_dev_eval_perms(PDO $db, ?array $u): array {
     return ['isAdmin'=>$isAdmin,'canAdmin'=>$canAdmin,'canEdit'=>$canEdit,'canView'=>$canView];
 }
 
-/** 產生本表文件編號：YYYYMMDD + 3位流水號（以 DB 日期為準） */
-function td_dev_eval_next_doc_no(PDO $db): string {
-    $today = $db->query("SELECT DATE_FORMAT(CURDATE(),'%Y%m%d')")->fetchColumn();
-    $like = $today . '%';
+/**
+ * 產生本表文件編號：YYYYMMDD + 3位流水號。
+ * 2026-08-20 使用者要求改為「依填表日期」產生，不是建檔當天——補歷史紙本時建檔日跟表單上的填表
+ * 日期常常差好幾個月，編號前八碼跟表單上印的填表日期對不起來。$fillDate 沒帶或格式不對才退回
+ * DB 當天日期（PHP date() 是 UTC，一律取 DB 的 CURDATE()）。流水號一律掃該日期已存在的最大值＋1
+ * （含已刪除的單據，doc_no 是 UNIQUE，跳號比撞號安全）。
+ */
+function td_dev_eval_next_doc_no(PDO $db, ?string $fillDate = null): string {
+    $ymd = td_dev_eval_doc_no_ymd($fillDate);
+    if ($ymd === null) $ymd = (string)$db->query("SELECT DATE_FORMAT(CURDATE(),'%Y%m%d')")->fetchColumn();
     $st = $db->prepare("SELECT doc_no FROM td_dev_eval WHERE doc_no LIKE ? ORDER BY doc_no DESC LIMIT 1");
-    $st->execute([$like]);
+    $st->execute([$ymd . '%']);
     $last = $st->fetchColumn();
     $seq = $last ? ((int)substr((string)$last, 8, 3) + 1) : 1;
-    return $today . str_pad((string)$seq, 3, '0', STR_PAD_LEFT);
+    return $ymd . str_pad((string)$seq, 3, '0', STR_PAD_LEFT);
+}
+
+/** 日期字串(YYYY-MM-DD…) → 編號前八碼 YYYYMMDD；不是合法日期回 null */
+function td_dev_eval_doc_no_ymd(?string $date): ?string {
+    $date = trim((string)$date);
+    if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})/', $date, $m)) return null;
+    return $m[1] . $m[2] . $m[3];
+}
+
+/**
+ * 填表日期被改動後，把表單編號重編成新日期的編號（使用者 2026-08-20 拍板：編號跟著日期走，
+ * 保證編號前八碼永遠等於表單上的填表日期）。日期沒變（前八碼相同）或日期不合法時不動。
+ * 回傳新編號；沒有變更回 null。
+ */
+function td_dev_eval_sync_doc_no(PDO $db, int $id, ?string $fillDate): ?string {
+    $ymd = td_dev_eval_doc_no_ymd($fillDate);
+    if (!$id || $ymd === null) return null;
+    $st = $db->prepare("SELECT doc_no FROM td_dev_eval WHERE id=?");
+    $st->execute([$id]);
+    $cur = (string)$st->fetchColumn();
+    if ($cur === '' || substr($cur, 0, 8) === $ymd) return null;
+    $newNo = td_dev_eval_next_doc_no($db, $fillDate);
+    $db->prepare("UPDATE td_dev_eval SET doc_no=? WHERE id=?")->execute([$newNo, $id]);
+    return $newNo;
 }
 
 /**
@@ -575,6 +605,7 @@ function td_dev_eval_admin_auto_sign_all(PDO $db, int $docId, string $bizDate, i
         }
         // 填表日期＝簽核業務日期（見函式說明）
         $db->prepare("UPDATE td_dev_eval SET decision=?, fill_date=? WHERE id=?")->execute([$decision, $bizDate, $docId]);
+        td_dev_eval_sync_doc_no($db, $docId, $bizDate); // 填表日期改了編號跟著重編(2026-08-20)
         if ($applyDefaults) {
             $defaults = td_dev_eval_answer_defaults_get($db);
             if ($defaults) {

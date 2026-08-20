@@ -169,8 +169,10 @@ case 'save':
                                  est_qty=?, fill_date=?, sample_time=?, updated_at=NOW(), updated_by=?, updated_by_name=? WHERE id=?");
             $st->execute([$customerName ?: null, $partDId ?: null, $partNoText ?: null, $productName ?: null,
                           $estQty !== '' ? (int)$estQty : null, $fillDate ?: null, $sampleTime ?: null, $uid, $uname, $id]);
+            // 填表日期改了，表單編號跟著重編（使用者 2026-08-20 拍板：編號前八碼永遠＝填表日期）
+            td_dev_eval_sync_doc_no($db, $id, $fillDate);
         } else {
-            $docNo = td_dev_eval_next_doc_no($db);
+            $docNo = td_dev_eval_next_doc_no($db, $fillDate); // 編號依填表日期(2026-08-20)
             // 建立當下若前端沒帶預估需求量，後端自動試算補上（使用者明確要求「建立評估表時就要自動計算並填入」，
             // 不只是前端互動觸發才算，伺服端在建立這個動作本身就做一次保底）
             $estQtyToSave = $estQty !== '' ? (int)$estQty : null;

@@ -222,7 +222,7 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
                 <input type="text" id="fSampleTime" placeholder="例：2週內">
             </div>
         </div>
-        <div style="margin-top:6px;font-size:12px;color:#8a6d45;">表單編號：<b id="fDocNo">存檔後自動產生</b>
+        <div style="margin-top:6px;font-size:12px;color:#8a6d45;">表單編號：<b id="fDocNo">存檔後依填表日期自動產生</b>
             ｜ 建立：<span id="fCreatedInfo">—</span></div>
 
         <div class="te-sec-title">確認項目及結果</div>
@@ -372,6 +372,7 @@ $defaultProductName = td_dev_eval_default_product_name_get($db);
         <p>APQP 產品開發階段的評估表（2-TD-02-01），固定 32 項確認項目（人/機/料/法/發展/產品安全/仿冒零件的防制/其他），逐項是／否／N-A，由技術/業務/管理/生產/品保/資材課六個單位分別填寫自己負責的項目結果並簽認意見，最後由生產課決行（可行自製／可行委外／再評估／中止）並送總經理決行。</p>
         <h4>操作步驟</h4>
         <ul>
+            <li><b>表單編號</b>：存檔時<b>依「填表日期」自動產生</b>（YYYYMMDD＋3位流水號，2026-08-20 起；先前是用建檔當天日期，補歷史紙本時編號會跟表單上的填表日期對不起來，既有資料已一次全部重編）。之後若修改填表日期（含管理員「全部自動簽核」會把填表日期改成簽核業務日期），表單編號會跟著重新產生，永遠保持編號前八碼＝填表日期。</li>
             <li>按「新增」→ 填客戶名稱、產品件號（打部分字元搜尋，選定後自動帶出客戶名稱；查無此料號時可直接手動輸入新產品件號，不強制要求已存在的料號）、產品名稱、預估需求量、填表日期、送樣時間。此階段（草稿）僅能編輯表頭；32 項確認結果任何人都還不能點選填寫（含評估表管理員），要等送出後由各部門在自己的簽核關卡才能填自己負責的項次——確認項目及結果的填寫/簽核權限只看「本人是否在該部門目前的簽核池內」，跟評估表登錄／管理員這種頁面操作角色無關。</li>
             <li>填好後按「送出」：表頭與 32 項確認結果隨即鎖定（僅系統管理員可再整批修改），系統會通知六部門（技術/業務/管理/生產/品保/資材課）的合格簽核人開始填寫。</li>
             <li>APQP 小組簽認：輪到自己部門簽核時，「確認項目及結果」表格中屬於本部門的項次列會醒目標示且可編輯，填完後在「APQP 小組簽認」該部門列填意見（非必填）按「我要簽核」即完成並蓋章；六部門不限順序、任一位主管都可以簽，不限定特定一人。</li>
@@ -677,7 +678,7 @@ function resetEditForm(){
     CUR_ID = 0; CUR_STATUS = 'draft'; CUR_SLOTS = {}; FULL_EDIT_MODE = false;
     $('#fCustomerName').val(''); $('#fPartNo').val(''); $('#fPartDId').val('0');
     $('#fProductName').val(DEFAULT_PRODUCT_NAME || ''); $('#fEstQty').val(''); $('#fFillDate').val(''); $('#fSampleTime').val('');
-    $('#fDocNo').text('存檔後自動產生'); $('#fCreatedInfo').text('—');
+    $('#fDocNo').text('存檔後依填表日期自動產生'); $('#fCreatedInfo').text('—');
     updateEditHdrInfo();
     renderChecklist({});
     renderDecisionGrp('', null);
