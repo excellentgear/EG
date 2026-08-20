@@ -1646,6 +1646,7 @@ body { background:var(--bg); }
 <script src="../../resource/js/jquery-ui-1.10.2.custom.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_stamp.js'); ?>"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?php echo @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js'); ?>"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <script>
@@ -4896,8 +4897,8 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         return parts.join('・');
     })() : '';
 
-    // 日期轉民國年顯示
-    const toRoc = d => { if (!d) return ''; const dt = new Date(d); const y = dt.getFullYear()-1911; return `${y}/${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')}`; };
+    // 日期顯示（ai-rules/20：西元年一律 YYYY.MM.DD，唯一實作 egFmtDate()，勿自寫）
+    const dispDate = d => egFmtDate(d);
 
     // 明細列：不做任何 JS 分頁計算，全部明細放進單一連續表格，交給瀏覽器列印引擎自動分頁——
     // 只有引擎自己知道每張紙真正能印多少（字型渲染、列印縮放、各印表機可印範圍的差異它都會算進去），
@@ -5081,7 +5082,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
       <div style="text-align:center;margin:8px 0;"><h3 class="title">客戶報價單</h3></div>
       <div class="meta-grid">
         <div><span class="label">客戶名稱：</span>${esc(custName)}</div>
-        <div><span class="label">報價日期：</span>${esc(toRoc(q.quote_date))}</div>
+        <div><span class="label">報價日期：</span>${esc(dispDate(q.quote_date))}</div>
         <div><span class="label">聯絡電話：</span>${esc(custTel)}</div>
         <div><span class="label">單　　號：</span>${esc(q.quote_no)}</div>
         <div><span class="label">傳真號碼：</span>${esc(custFax)}</div>
@@ -5089,7 +5090,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         ${contactName ? `<div><span class="label">聯絡人　：</span>${esc(contactName)}</div>` : '<div></div>'}
         <div><span class="label">幣　　別：</span>${esc(q.currency==='TWD'?'NTD':(q.currency||'NTD'))}</div>
         ${q.inquiry_no ? `<div><span class="label">詢價編號：</span>${esc(q.inquiry_no)}</div>` : '<div></div>'}
-        <div><span class="label">有效日期：</span>${esc(toRoc(q.valid_until))}</div>
+        <div><span class="label">有效日期：</span>${esc(dispDate(q.valid_until))}</div>
       </div>`;
 
     // 「以下空白」列：接在最後一筆明細後
