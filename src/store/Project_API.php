@@ -127,6 +127,12 @@ case 'meta':
     $depts = $db->query("SELECT id, name FROM department ORDER BY sort_order DESC, name")->fetchAll(PDO::FETCH_ASSOC);
     $custs = $db->query("SELECT customer_id, customer FROM customer_list
                          WHERE COALESCE(is_inactive,0)=0 ORDER BY customer")->fetchAll(PDO::FETCH_ASSOC);
+    $tpls = [];
+    try {
+        $tpls = $db->query("SELECT id, tpl_name FROM stamp_template WHERE is_active=1 ORDER BY tpl_name")
+                   ->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+    }
     jout([
         'types'      => PRJ_TYPES,
         'phases'     => PRJ_PHASES,
@@ -136,7 +142,9 @@ case 'meta':
         'people'     => $people,
         'depts'      => $depts,
         'customers'  => $custs,
+        'stamp_tpls' => $tpls,
         'today'      => $NOW['date'],
+        'default_cosign_depts' => prj_setting_get($db, 'default_cosign_depts', ''),
         'asdoc'      => [
             'plan' => prj_print_meta($db, PRJ_ASDOC_PLAN, null),
             'card' => prj_print_meta($db, PRJ_ASDOC_CARD, null),
