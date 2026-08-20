@@ -155,9 +155,13 @@ case 'meta':
         'stamp_tpls' => $tpls,
         'today'      => $NOW['date'],
         'default_cosign_depts' => prj_setting_get($db, 'default_cosign_depts', ''),
+        // 挑選器要的完整 AS 文件清單（eg_asdoc_picker 的 opt.docs；沒有它跳窗會是空的、打字永遠「符合 0 筆」）
+        'as_docs'    => eg_asdoc_list($db),
         'asdoc'      => [
             'plan' => prj_print_meta($db, PRJ_ASDOC_PLAN, null),
             'card' => prj_print_meta($db, PRJ_ASDOC_CARD, null),
+            'plan_id' => eg_asdoc_id($db, PRJ_ASDOC_PLAN),
+            'card_id' => eg_asdoc_id($db, PRJ_ASDOC_CARD),
         ],
     ]);
 

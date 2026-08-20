@@ -1424,15 +1424,23 @@ $(document).on('click', '#btnSetSave', function () {
         closeMask('setMask');
     });
 });
-/* AS 文件綁定一律走共用挑選器（禁純下拉、禁各頁自刻＝ai-rules/16 第一之三節） */
+/* AS 文件綁定一律走共用挑選器（禁純下拉、禁各頁自刻＝ai-rules/16 第一之三節）
+   兩件事一定要給對，少一個跳窗就是廢的：
+   ・docs＝完整 AS 文件清單（來自 meta 的 as_docs）。沒傳的話清單是空的，打字永遠「符合 0 筆」。
+   ・回呼名叫 onSave(id, doc)，不是 onPick——名字錯的話按「儲存綁定」不會有任何反應。 */
 function pickAsDoc(module, txtSel) {
     if (typeof EGAsDoc === 'undefined') { alert('AS 文件挑選器未載入'); return; }
+    var isCard = (module === 'project_card');
     EGAsDoc.open({
-        onPick: function (doc) {
-            api('asdoc_save', { module: module, doc_id: doc.id }, 'POST').done(function (res) {
+        docs: META.as_docs || [],
+        current: (META.asdoc || {})[isCard ? 'card_id' : 'plan_id'] || 0,
+        title: (isCard ? '專案管理卡' : '專案執行規劃表') + ' — AS 文件編號綁定',
+        onSave: function (id) {
+            api('asdoc_save', { module: module, doc_id: id || 0 }, 'POST').done(function (res) {
                 alert(res.message);
                 META.asdoc = META.asdoc || {};
-                META.asdoc[module === 'project_card' ? 'card' : 'plan'] = res.meta;
+                META.asdoc[isCard ? 'card' : 'plan'] = res.meta;
+                META.asdoc[isCard ? 'card_id' : 'plan_id'] = id || 0;
                 $(txtSel).val(res.meta.bound ? (res.meta.doc_no + '　' + res.meta.doc_name) : '（未綁定）');
             });
         }
