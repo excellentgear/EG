@@ -124,11 +124,13 @@ case 'meta':
     // 人員清單一律走 people_lib（只列未離職、標長期請假、依職稱排序並顯示職稱＝ai-rules/08 第五節）
     $people = [];
     try { $people = eg_people_list($db, []); } catch (Throwable $e) {}
-    // 專案負責人候選：管理員可限定「哪些部門的哪些職稱」（模組設定 → 專案負責人資格）。
+    // 專案負責人候選＝兩層限制疊起來（見 prj_owner_people 的註解）：
+    //   ① 模組設定的「專案負責人資格」（部門×職稱），未設定＝不限制
+    //   ② 非專案管理員只能挑自己所屬部門（含兼任與子部門）內的人，管理員不受限
     // 這裡刻意不額外保留目前登入者——下拉列得出來、後端 prj_owner_allowed() 卻擋下來會很難理解。
     // 既有專案原本的負責人由前端 renderBase() 自己補回下拉（後端存檔時亦放行未變更的負責人）。
     $ownerPeople = [];
-    try { $ownerPeople = prj_owner_people($db); } catch (Throwable $e) { $ownerPeople = $people; }
+    try { $ownerPeople = prj_owner_people($db, [], $uid, (bool)$P['canAdmin']); } catch (Throwable $e) { $ownerPeople = $people; }
     $depts = $db->query("SELECT id, name FROM department ORDER BY sort_order DESC, name")->fetchAll(PDO::FETCH_ASSOC);
     $positions = [];
     try { $positions = $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
@@ -149,6 +151,9 @@ case 'meta':
         'people'     => $people,
         'owner_people' => $ownerPeople,
         'owner_scope'  => prj_owner_scope_labeled($db),
+        'owner_default'    => $uid,                    // 新專案／訂單轉專案的負責人預設＝目前使用者
+        'owner_restricted' => !$P['canAdmin'],         // 非管理員：只能挑自己部門（含兼任）的人
+        'owner_scope_all'  => prj_owner_scope_labeled($db) ? prj_owner_people($db) : null,
         'depts'      => $depts,
         'positions'  => $positions,
         'customers'  => $custs,
@@ -215,7 +220,7 @@ case 'save':
     $err = prj_validate($data);
     // 專案負責人資格（模組設定 → 專案負責人資格）：前端下拉已只列合格的人，後端同規則再擋一次（鐵律8）。
     // 既有專案的負責人維持原值時一律放行——設定改嚴不該讓舊專案變成存不了檔。
-    if (!$err && $data['owner_id'] > 0 && !prj_owner_allowed($db, $data['owner_id'])) {
+    if (!$err && $data['owner_id'] > 0 && !prj_owner_allowed($db, $data['owner_id'], $uid, (bool)$P['canAdmin'])) {
         $oldOwner = 0;
         if ($pid > 0) {
             $st = $db->prepare("SELECT owner_id FROM project WHERE project_id=?");
@@ -223,7 +228,9 @@ case 'save':
             $oldOwner = (int)$st->fetchColumn();
         }
         if ($data['owner_id'] !== $oldOwner) {
-            $err['owner_id'] = '這個人不符合專案負責人資格（部門／職稱不在管理員設定的範圍內）';
+            $err['owner_id'] = $P['canAdmin']
+                ? '這個人不符合專案負責人資格（部門／職稱不在管理員設定的範圍內）'
+                : '只能指派自己所屬部門（含兼任）內、且符合負責人資格的人員；要指派其他部門的人請洽專案管理員';
         }
     }
     if ($err) jerr('資料未填齊', 400, ['fields' => $err]);
@@ -351,8 +358,10 @@ case 'order_to_project':
             $ownerId = (int)($_POST['owner_id'] ?? 0) ?: $uid;
             // 負責人資格後端再驗一次（前端下拉已只列合格的人）；沒指定而退回建立者本人時不擋，
             // 否則不合資格的人連轉專案都做不了，只是專案會留一個要事後改的負責人。
-            if ((int)($_POST['owner_id'] ?? 0) > 0 && !prj_owner_allowed($db, $ownerId)) {
-                throw new RuntimeException('這個人不符合專案負責人資格（部門／職稱不在管理員設定的範圍內）');
+            if ((int)($_POST['owner_id'] ?? 0) > 0 && !prj_owner_allowed($db, $ownerId, $uid, (bool)$P['canAdmin'])) {
+                throw new RuntimeException($P['canAdmin']
+                    ? '這個人不符合專案負責人資格（部門／職稱不在管理員設定的範圍內）'
+                    : '只能指派自己所屬部門（含兼任）內、且符合負責人資格的人員；要指派其他部門的人請洽專案管理員');
             }
             $st = $db->prepare("SELECT user_cname FROM user WHERE id=?");
             $st->execute([$ownerId]);
@@ -971,8 +980,10 @@ case 'setting_save':
         prj_setting_save($db, 'owner_scope', $scope ? json_encode($scope, JSON_UNESCAPED_UNICODE) : '',
                          '專案負責人資格（部門×職稱）', $uname);
     }
+    // 回傳兩份：owner_people＝目前這位管理員實際可挑的人；owner_scope_all＝純「資格」命中的全公司名單（設定畫面預覽用）
     jout(['message' => '已儲存設定', 'owner_scope_rows' => prj_owner_scope_labeled($db),
-          'owner_people' => prj_owner_people($db)]);
+          'owner_people'    => prj_owner_people($db, [], $uid, (bool)$P['canAdmin']),
+          'owner_scope_all' => prj_owner_scope_labeled($db) ? prj_owner_people($db) : null]);
 
 case 'asdoc_save':
     if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);

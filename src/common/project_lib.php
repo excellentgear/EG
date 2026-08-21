@@ -462,27 +462,90 @@ function prj_owner_scope_user_ids(PDO $db): ?array
 }
 
 /**
- * 可被指派為專案負責人的人員清單（人員本身一律走 people_lib＝ai-rules/08 第五節）。
- * $keepIds：即使不合資格也要保留的人（例如既有專案目前的負責人、目前登入者），
- * 否則設定改嚴之後，既有專案一打開負責人就變空白、一存檔就被洗掉。
+ * 某人所屬的部門（含兼任），並展開到各部門的子部門。
+ * 組織是樹狀的，「資材部的人」在挑人時理應看得到生管／採購／倉管組——
+ * 只比單一 id 會把子部門的人判成「不是同部門」（CLAUDE.md 組織綁定那條）。
  */
-function prj_owner_people(PDO $db, array $keepIds = []): array
+function prj_user_dept_ids_tree(PDO $db, int $userId): array
 {
-    $ids = prj_owner_scope_user_ids($db);
-    if ($ids === null) return eg_people_list($db, []);
-    $keep = array_values(array_filter(array_map('intval', $keepIds)));
-    $all  = array_values(array_unique(array_merge($ids, $keep)));
-    if (!$all) return [];
-    return eg_people_list($db, ['user_ids' => $all]);
+    if ($userId <= 0) return [];
+    try {
+        $st = $db->prepare("SELECT DISTINCT department_id FROM user_department_position_map WHERE user_id=?");
+        $st->execute([$userId]);
+        $own = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) { return []; }
+    $out = [];
+    foreach ($own as $d) {
+        foreach (prj_dept_tree_ids($db, $d) as $x) $out[$x] = true;
+    }
+    return array_keys($out);
 }
 
-/** 這個人現在合不合資格當專案負責人（後端存檔時再驗一次） */
-function prj_owner_allowed(PDO $db, int $userId): bool
+/**
+ * 可被指派為專案負責人的人員清單（人員本身一律走 people_lib＝ai-rules/08 第五節）。
+ *
+ * 兩層限制疊起來：
+ *  ① 管理員設定的「專案負責人資格」（部門×職稱），未設定＝不限制。
+ *  ② 非專案管理員只能挑**自己所屬部門（含兼任，並含各該部門的子部門）內的人**
+ *     （2026-08-21 使用者要求）；專案管理員／管理者不受此限，可指派任何人。
+ *
+ * @param array    $keepIds 即使不合資格也要保留的人（既有專案目前的負責人），
+ *                          否則設定改嚴之後，既有專案一打開負責人就變空白、一存檔就被洗掉。
+ * @param int|null $actorId 目前操作者；null＝不套用第②層（純粹問「資格」是誰）
+ * @param bool     $isAdmin 目前操作者是不是專案管理員
+ */
+function prj_owner_people(PDO $db, array $keepIds = [], ?int $actorId = null, bool $isAdmin = false): array
+{
+    $ids  = prj_owner_scope_user_ids($db);                       // null＝資格不限制
+    $keep = array_values(array_filter(array_map('intval', $keepIds)));
+
+    if ($actorId !== null && !$isAdmin) {
+        $depts = prj_user_dept_ids_tree($db, $actorId);
+        if (!$depts) {
+            // 沒掛任何部門的人（多半是組織資料未維護）：至少讓他把專案掛在自己名下，不要整個卡死。
+            // 「資格」那一層仍然要過，否則這裡列得出來、後端 prj_owner_allowed() 卻擋下來。
+            $mine = [$actorId];
+            if ($ids !== null && !in_array($actorId, $ids, true)) $mine = [];
+            $mine = array_values(array_unique(array_merge($mine, $keep)));
+            return $mine ? eg_people_list($db, ['user_ids' => $mine]) : [];
+        }
+        $rows = eg_people_list($db, ['dept_ids' => $depts]);
+        if ($ids !== null) {
+            $allow = array_flip(array_merge($ids, $keep));
+            $rows = array_values(array_filter($rows, static fn($r) => isset($allow[(int)$r['id']])));
+        }
+        // 既有專案的負責人若不在自己部門，仍要保留在清單裡（不然一存檔就被洗掉）
+        $have = array_flip(array_map(static fn($r) => (int)$r['id'], $rows));
+        $add  = array_values(array_filter($keep, static fn($k) => !isset($have[$k])));
+        if ($add) $rows = array_merge($rows, eg_people_list($db, ['user_ids' => $add]));
+        return $rows;
+    }
+
+    if ($ids === null) return eg_people_list($db, []);
+    $all = array_values(array_unique(array_merge($ids, $keep)));
+    return $all ? eg_people_list($db, ['user_ids' => $all]) : [];
+}
+
+/**
+ * 這個人現在合不合資格當專案負責人（後端存檔時再驗一次＝鐵律8）。
+ * $actorId/$isAdmin 傳進來時會一併檢查「非管理員只能挑自己部門的人」那一層。
+ */
+function prj_owner_allowed(PDO $db, int $userId, ?int $actorId = null, bool $isAdmin = false): bool
 {
     if ($userId <= 0) return false;
     $ids = prj_owner_scope_user_ids($db);
-    if ($ids === null) return true;
-    return in_array($userId, $ids, true);
+    if ($ids !== null && !in_array($userId, $ids, true)) return false;
+    if ($actorId === null || $isAdmin) return true;
+    if ($userId === $actorId) return true;                       // 一定可以把專案掛在自己名下
+    $depts = prj_user_dept_ids_tree($db, $actorId);
+    if (!$depts) return false;
+    try {
+        $in = implode(',', array_fill(0, count($depts), '?'));
+        $st = $db->prepare("SELECT 1 FROM user_department_position_map
+                            WHERE user_id=? AND department_id IN ($in) LIMIT 1");
+        $st->execute(array_merge([$userId], $depts));
+        return (bool)$st->fetchColumn();
+    } catch (Throwable $e) { return false; }
 }
 
 /** 設定畫面用：把組合清單轉成看得懂的字（部門名／職稱名） */

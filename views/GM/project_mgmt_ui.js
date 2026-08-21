@@ -271,7 +271,9 @@ function renderBase(res) {
     var typeOpt = '', phaseOpt = '', ownerOpt = '<option value="">（請選擇）</option>', custOpt = '<option value="">（無）</option>', deptOpt = '<option value="">（無）</option>';
     $.each(META.types || {}, function (k, v) { typeOpt += '<option value="' + k + '"' + (p.project_type === k ? ' selected' : '') + '>' + esc(v + '型（' + k + '）') + '</option>'; });
     $.each(META.phases || {}, function (k, v) { phaseOpt += '<option value="' + k + '"' + (p.phase === k ? ' selected' : '') + '>' + esc(v) + '</option>'; });
-    /* 只列合格的人；本專案目前的負責人即使事後不合資格也一定保留，否則一打開就變空白、一存檔就被洗掉 */
+    /* 只列合格的人；本專案目前的負責人即使事後不合資格也一定保留，否則一打開就變空白、一存檔就被洗掉。
+       新專案（還沒有 owner_id）預設帶「目前使用者」——非管理員本來就只能挑自己部門的人。 */
+    if (!num(p.owner_id) && !num(p.project_id)) p.owner_id = META.owner_default || PERM.uid;
     var ownerCands = ownerPeople().slice(), ownerHas = false;
     $.each(ownerCands, function (i, x) { if (num(p.owner_id) === num(x.id)) ownerHas = true; });
     if (!ownerHas && num(p.owner_id) > 0) {
@@ -291,7 +293,9 @@ function renderBase(res) {
       + '<div style="grid-column:1 / -1;" id="fldName"><label>專案名稱 <span style="color:#DD5138;">*</span></label>'
       + '<input type="text" id="eName" value="' + esc(p.project_name || '') + '"' + ro + '><div class="pj-err"></div></div>'
       + '<div><label>客戶</label><select id="eCust" data-eg-filter="輸入客戶名稱篩選…"' + ro + '>' + custOpt + '</select></div>'
-      + '<div id="fldOwner"><label>專案負責人 <span style="color:#DD5138;">*</span></label>'
+      + '<div id="fldOwner"><label>專案負責人 <span style="color:#DD5138;">*</span>'
+      + (META.owner_restricted ? '<span class="pj-hint" style="margin-left:6px;">（只能挑自己部門，含兼任）</span>' : '')
+      + '</label>'
       + '<select id="eOwner" data-eg-filter="輸入姓名篩選…"' + ro + '>' + ownerOpt + '</select><div class="pj-err"></div></div>'
       + '<div><label>主辦部門</label><select id="eDept"' + ro + '>' + deptOpt + '</select></div>'
       + '<div><label>專案起日</label><input type="date" id="eStart" value="' + esc(p.start_date || '') + '"' + ro + '></div>'
@@ -1374,7 +1378,8 @@ function renderOwnScope() {
    設定技術部之後他也會出現卻顯示成董事長——只看部門×職稱清單看不出來，所以把名單直接列出來。 */
 function ownScopeWhoText() {
     if (!(META.owner_scope && META.owner_scope.length)) return '';
-    var ps = META.owner_people || [];
+    /* 這裡要看的是「資格」命中誰（全公司），不是目前這位管理員自己能挑誰 */
+    var ps = META.owner_scope_all || META.owner_people || [];
     if (!ps.length) return '<br><span style="color:#DD5138;">目前沒有任何人符合已儲存的設定，負責人會選不到人。</span>';
     var names = $.map(ps, function (x) { return (x.dept_name ? x.dept_name + ' ' : '') + (x.position_name ? x.position_name + ' ' : '') + x.user_cname; });
     return '<br>目前符合資格（依已儲存的設定）共 ' + ps.length + ' 人：' + esc(names.join('、'))
@@ -1418,8 +1423,9 @@ $(document).on('click', '#btnSetSave', function () {
         alert(r.message);
         META.default_cosign_depts = cos.join(',');
         /* 資格改完馬上生效：負責人下拉的候選名單同步換掉，不必重新整理頁面 */
-        META.owner_scope  = r.owner_scope_rows || [];
-        META.owner_people = r.owner_people || [];
+        META.owner_scope     = r.owner_scope_rows || [];
+        META.owner_people    = r.owner_people || [];
+        META.owner_scope_all = r.owner_scope_all || null;
         renderOwnScope();
         closeMask('setMask');
     });
