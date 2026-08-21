@@ -766,7 +766,10 @@ function dwg_submit_change(PDO $pdo, int $id, int $uid): array {
     try {
         $a = $pdo->prepare("SELECT user_id FROM qc_drawing_change_ack WHERE change_id=? AND acked_at IS NULL");
         $a->execute([$id]);
-        $ackIds = array_map('intval', $a->fetchAll(PDO::FETCH_COLUMN));
+        // 送出者自己不會收到通知（dwg_notify 會把 actor 過濾掉），回報人數也要跟著扣掉，
+        // 否則畫面會說「已通知 1 位」但其實一封都沒發出去
+        $ackIds = array_values(array_filter(array_map('intval', $a->fetchAll(PDO::FETCH_COLUMN)),
+                    function ($u) use ($uid) { return $u > 0 && $u !== $uid; }));
     } catch (Throwable $e) {}
     if ($ackIds) {
         $partNo = dwg_part_info($pdo, (int)$c['d_id'])['part_no'];
