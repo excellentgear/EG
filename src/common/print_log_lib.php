@@ -697,8 +697,35 @@ if (!function_exists('eg_signlog_query')) {
      * $f: module / user_id（比對簽核人；還沒簽的列改比對送出者）/ date_from / date_to / kw / page / per
      * 日期區間：送件日期或簽核日期任一落在區間內都算（使用者要看的是這段期間發生的事）。
      */
+    /**
+     * 「原始單據已經被刪掉」的簽核紀錄要排除的 WHERE 片段（使用者要求 2026-08-21：那幾列不要顯示）。
+     *
+     * 為什麼在 SQL 做而不是撈回來再濾：**筆數與分頁**。在 PHP 端濾掉的話，第 1 頁會只剩七、八筆，
+     * 總筆數也跟實際列出的對不起來。
+     *
+     * 表名與主鍵取自 eg_sign_modules() 這份**程式自己的登錄表**（不是使用者輸入），
+     * 仍然過一次字元白名單，免得日後有人在登錄表裡貼進奇怪的字串；module 代碼走 PDO::quote。
+     * 沒登錄主檔的模組（以年度為 entity_id 的那種）不在此列——那種查不到主檔是正常的，不算已刪除。
+     */
+    function eg_signlog_orphan_sql(PDO $db): string {
+        $parts = [];
+        foreach (eg_sign_modules() as $code => $cfg) {
+            if (empty($cfg['table']) || empty($cfg['pk'])) continue;
+            if (!preg_match('/^[A-Za-z0-9_]+$/', (string)$cfg['table'])) continue;
+            if (!preg_match('/^[A-Za-z0-9_]+$/', (string)$cfg['pk'])) continue;
+            $parts[] = '(a.module = ' . $db->quote((string)$code) . ' AND NOT EXISTS ('
+                     . "SELECT 1 FROM `{$cfg['table']}` t WHERE t.`{$cfg['pk']}` = a.entity_id))";
+        }
+        return $parts ? ('NOT (' . implode(' OR ', $parts) . ')') : '';
+    }
+
     function eg_signlog_query(PDO $db, array $f): array {
         $where = []; $args = [];
+        // 原始單據已刪除的紀錄預設不列出；要查的人自己勾「含已刪除單據」
+        if (empty($f['include_deleted'])) {
+            $orphan = eg_signlog_orphan_sql($db);
+            if ($orphan !== '') $where[] = $orphan;
+        }
         if (!empty($f['module']))  { $where[] = 'a.module = ?'; $args[] = $f['module']; }
         if (!empty($f['user_id'])) {
             $where[] = '(a.approver_id = ? OR (a.approver_id IS NULL AND a.submitted_by = ?))';

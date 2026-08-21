@@ -166,6 +166,10 @@ try {
                 <button id="btnReset"><i class="fa fa-refresh"></i> 本月</button>
                 <button class="btn-warm" id="btnPrintAll"><i class="fa fa-print"></i> 列印全部篩選結果</button>
                 <button id="btnRevealNote" style="display:none;" title="系統內部註記預設不顯示，要看必須輸入操作確認密碼"><i class="fa fa-lock"></i> 顯示內部註記</button>
+                <label id="lblIncDel" style="display:none;margin:0 0 0 6px;font-weight:normal;white-space:nowrap;cursor:pointer;"
+                       title="原始單據已經被刪掉的簽核紀錄，預設不列出（文件名稱只剩編號，看不出印的是什麼）。要查歷史才勾。">
+                    <input type="checkbox" id="fIncDel" style="vertical-align:-1px;"> 含已刪除單據
+                </label>
             </div>
         </div>
 
@@ -233,6 +237,8 @@ try {
                 不會憑空消失把你的篩選條件默默改掉。</li>
             <li>下拉選項多時可直接在篩選框打字過濾，不必用眼睛找。</li>
             <li><b>列印全部篩選結果</b>：印的是目前篩選條件下的<b>全部</b>資料，不是只有畫面這一頁。</li>
+            <li><b>含已刪除單據</b>（簽核分頁）：原始單據已經被刪掉的簽核紀錄<b>預設不列出</b>——文件名稱只剩一個編號，
+                看不出是什麼文件，留在清單上只是雜訊。紀錄本身沒有刪，要查歷史時把這個勾起來就會一起列出（並標示「單據已刪除」）。</li>
             <li><b>顯示內部註記</b>（僅管理員，簽核分頁）：部分簽核意見是系統寫的<b>內部註記</b>，平常一律不顯示，
                 意見欄會是「—」。要查的話按這顆按鈕並輸入<b>操作確認密碼</b>，本次登入可在畫面上看 10 分鐘。</li>
             <li>清單分頁在表格右上角，預設每頁 10 筆（可改 5／20／50）；改成每頁超過 10 筆時，右下角會出現「回到頂端」按鈕。</li>
@@ -326,6 +332,8 @@ function filters(extra){
         per      : $('#fPer').val() || 10,
         page     : PAGE
     };
+    // 原始單據已刪除的簽核紀錄預設不列出（使用者要求），勾了才含進來
+    if (TAB === 'sign' && $('#fIncDel').prop('checked')) f.include_deleted = 1;
     // 來源欄位在兩個分頁是不同的東西：列印分頁篩頁面來源、簽核分頁篩單據種類
     if (TAB === 'print') f.source = $('#fSource').val() || '';
     else                 f.module = $('#fSource').val() || '';
@@ -634,6 +642,7 @@ $('.ps-tab').on('click', function(){
     $('.ps-tab').removeClass('active'); $(this).addClass('active');
     fillSourceSel();
     fillPeopleSel();   // 列印人與簽核人不是同一批人，切分頁要跟著換
+    $('#lblIncDel').toggle(TAB === 'sign');
     loadList();
     refreshOtherCount();
 });
@@ -645,6 +654,7 @@ function liveSearch(delay){
     _kwTimer = setTimeout(function(){ PAGE = 1; loadList(); refreshOtherCount(); }, delay || 0);
 }
 $('#fSource, #fUser').on('change', function(){ liveSearch(0); });
+$('#fIncDel').on('change', function(){ liveSearch(0); });
 $('#fFrom, #fTo').on('change', function(){ reloadMeta(function(){ liveSearch(0); }); });
 $('#fKw').on('input', function(){ liveSearch(350); });
 $('#btnReset').on('click', function(){
@@ -704,6 +714,7 @@ $.get(API, { action: 'meta', date_from: $('#fFrom').val() || '', date_to: $('#fT
     fillSourceSel();
     fillPeopleSel();
     if (!META.perms.canViewAll) $('#roleName').text('僅本人紀錄');
+    $('#lblIncDel').toggle(TAB === 'sign');
     syncTopBtn();
     loadList();
     refreshOtherCount();

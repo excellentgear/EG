@@ -50,6 +50,8 @@ function pslFilters(array $perms, int $uid): array {
         'date_from' => trim((string)($_POST['date_from'] ?? $_GET['date_from'] ?? '')),
         'date_to'   => trim((string)($_POST['date_to']   ?? $_GET['date_to']   ?? '')),
         'kw'        => trim((string)($_POST['kw']        ?? $_GET['kw']        ?? '')),
+        // 原始單據已刪除的簽核紀錄預設不列出（使用者要求）；勾了才含進來
+        'include_deleted' => !empty($_POST['include_deleted'] ?? $_GET['include_deleted'] ?? ''),
         'page'      => max(1, (int)($_POST['page'] ?? $_GET['page'] ?? 1)),
         'per'       => (int)($_POST['per'] ?? $_GET['per'] ?? 20),
     ];
@@ -119,6 +121,10 @@ case 'meta': {
         if ($dFrom !== '') { $w[] = '(a.submitted_at >= ? OR a.decided_at >= ?)'; $ar[] = $dFrom . ' 00:00:00'; $ar[] = $dFrom . ' 00:00:00'; }
         if ($dTo   !== '') { $w[] = '(a.submitted_at <= ? OR a.decided_at <= ?)'; $ar[] = $dTo . ' 23:59:59';  $ar[] = $dTo . ' 23:59:59'; }
         if ($onlyUid)      { $w[] = '(a.approver_id = ? OR (a.approver_id IS NULL AND a.submitted_by = ?))'; $ar[] = $onlyUid; $ar[] = $onlyUid; }
+        // 清單預設不列出「原始單據已刪除」的紀錄，選項也要跟著排除，
+        // 否則會出現選下去是 0 筆的模組／人員
+        $orphan = eg_signlog_orphan_sql($db);
+        if ($orphan !== '') $w[] = $orphan;
         $sql = 'SELECT DISTINCT a.module, a.approver_id, a.submitted_by FROM approval_record a'
              . ($w ? ' WHERE ' . implode(' AND ', $w) : '');
         $st = $db->prepare($sql); $st->execute($ar);
