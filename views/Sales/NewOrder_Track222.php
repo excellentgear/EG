@@ -2433,6 +2433,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     $paRows = $pa6->fetchAll(PDO::FETCH_ASSOC);
                     require_once __DIR__ . '/../../src/common/imgedit_visibility.php';
                     $paRows = imgedit_filter_attachment_rows($pdo, $paRows, intval($_SESSION['id'] ?? 0));
+                    // 工作檔不是圖面：只有它存在時不該把「有附件」旗標點亮（看不到的檔案不算有附件）
+                    $paRows = imgedit_strip_workfiles($paRows);
                     foreach ($paRows as $r6) {
                         $pn6 = $did_of_part[(int)$r6['d_id']] ?? null;
                         if ($pn6 !== null) $has_att_map[$pn6] = true;

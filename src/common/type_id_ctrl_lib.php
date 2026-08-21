@@ -252,7 +252,9 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
             FROM part_attachments pa
             WHERE pa.d_id=? AND pa.deleted_at IS NULL AND " . $catCond('pa.category_ids');
     $st = $db->prepare($sql); $st->execute([$dsPk]);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) { $r['source'] = 'part'; $rows[] = $r; }
+    // 批圖工作檔(.egwork.json)不是文件，一律不入管制表（同 ExternalDoc_API 的保險）
+    require_once __DIR__ . '/imgedit_visibility.php';
+    foreach (imgedit_strip_workfiles($st->fetchAll(PDO::FETCH_ASSOC)) as $r) { $r['source'] = 'part'; $rows[] = $r; }
 
     $st = $db->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
     $st->execute([$dsPk]);

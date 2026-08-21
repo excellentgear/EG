@@ -5,8 +5,14 @@
 //   egdraw_<stamp>.png（輸出圖）＋ egdraw_<stamp>.egwork.json（工作檔），
 // 工作檔的分享範圍存在 imgedit_workfile_meta（private=私人／dept=部門共用／custom=指定人員；
 // 無 meta＝改版前舊資料，視為全員可見）。
-// 本函式讓任何列出 part_attachments 的端點，依同一套規則過濾掉目前使用者無權看的批圖檔
-// （成對的 PNG 跟隨其工作檔的範圍）。管理者（user_status 9/90 或系統 admin 角色）全可見。
+// 本函式讓任何列出 part_attachments 的端點，依同一套規則過濾掉目前使用者無權看的批圖檔。
+// 管理者（user_status 9/90 或系統 admin 角色）全可見。
+//
+// ★2026-08-21 重要變更（使用者明確要求）：**分享範圍只管工作檔（.egwork.json），不管壓平輸出的 PNG**。
+//   原本成對的 PNG 會跟隨工作檔的範圍一起被藏起來，導致「存成私人」時別人連那張圖都看不到；
+//   使用者要的是「圖大家都要看得到，只有可再編輯的工作檔才私人」，故改為 PNG 一律不過濾。
+//   實務意義：私人保護的是「編輯中的半成品與可改的原始檔」，不是成品圖面——成品圖存進料號附件
+//   本來就是要給大家看的（外來文件清單、型態識別文件管制表等也才不會因人而異）。
 // 濾掉 Fabric.js 工作檔（*.egwork.json）——給「唯讀檢視」端點用。
 // 工作檔只有批圖編輯器打得開，在圖面檢視跳窗裡既不能看也不能印，列出來只是干擾；
 // 批圖編輯器自己的工作檔清單走 image_editor.php 的獨立查詢，不經過這裡，故不受影響。
@@ -72,9 +78,10 @@ function imgedit_filter_attachment_rows(PDO $pdo, array $rows, int $uid, int $dI
     $out = [];
     foreach ($rows as $r) {
         $fn = (string)($r['filename'] ?? '');
-        if (strpos($fn, 'egdraw_') !== 0) { $out[] = $r; continue; }
+        // 只有批圖「工作檔」受分享範圍限制；壓平輸出的 PNG 與其他附件一律放行（見檔頭 2026-08-21 變更）
+        if (!preg_match('/^egdraw_.+\.egwork\.json$/i', $fn)) { $out[] = $r; continue; }
         $dId = (int)($r['d_id'] ?? $dIdFallback);
-        $stem = preg_replace('/\.(egwork\.json|png)$/', '', $fn);
+        $stem = preg_replace('/\.egwork\.json$/i', '', $fn);
         $w = $metaByKey[$dId . '|' . $stem] ?? null;
         if (!$w) { $out[] = $r; continue; }   // 無 meta＝改版前舊資料，維持可見
         $type = $w['owner_type'] ?: 'company';
