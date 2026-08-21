@@ -9375,6 +9375,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_ack_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ack_picker.js') ?>"></script>
 <script src="../../resource/js/o3dv.min.js"></script>
@@ -18633,6 +18634,24 @@ function _pavShrinkForPrint(url, cb) {
     img.onerror = function () { cb(url); };
     img.src = url;
 }
+// ── 列印紀錄（ai-rules/23：會列印的頁面一律留紀錄，共用 eg_print_log.js）──────
+// 記的是「按下列印」這個動作；瀏覽器不會回報使用者最後有沒有真的送印，故取消也算一筆。
+function _pavLogPrint(f, isObs) {
+    try {
+        if (!window.EGPrintLog || !f) return;
+        EGPrintLog.record({
+            source   : 'md_part_attach',
+            doc_name : f.original_name || f.filename || '',
+            doc_kind : 'attachment',
+            ref_table: f.source === 'quote' ? 'quotation_attachments'
+                     : (f.source === 'order' ? 'order_attachments' : 'part_attachments'),
+            ref_id   : (f.id || f.id === 0) ? f.id : '',
+            part_no  : _pav.partNo || '',
+            note     : isObs ? '作廢附件' : ''
+        });
+    } catch (e) {}
+}
+
 function pavPrint() {
     var frame = document.getElementById('pav-preview-frame');
     var img   = document.getElementById('pav-preview-img');
@@ -18641,12 +18660,14 @@ function pavPrint() {
         if (_pavIsObsolete(_pav.currentFile)) {
             if (!confirm('此為「作廢」附件，確定要列印？')) return;
         }
+        _pavLogPrint(_pav.currentFile, _pavIsObsolete(_pav.currentFile));
         frame.contentWindow.print();
         return;
     }
     if (img && _pav.currentFile) {
         var isObs = _pavIsObsolete(_pav.currentFile);
         if (isObs && !confirm('此為「作廢」附件，確定要列印？')) return;
+        _pavLogPrint(_pav.currentFile, isObs);
         var fname = escHtml(_pav.currentFile.original_name || _pav.currentFile.filename || '');
         var _pc = '@page{margin:0;}html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;}body{display:flex;align-items:center;justify-content:center;}img{display:block;max-width:100%;max-height:100%;object-fit:contain;}';
         var wmCss = isObs
@@ -18674,7 +18695,10 @@ function pavPrint() {
         });
         return;
     }
-    if (_pav.currentFile) window.open(_pav.currentFile.url, '_blank');
+    if (_pav.currentFile) {
+        _pavLogPrint(_pav.currentFile, _pavIsObsolete(_pav.currentFile));
+        window.open(_pav.currentFile.url, '_blank');
+    }
 }
 
 function pavDeleteCurrent() {

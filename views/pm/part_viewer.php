@@ -414,6 +414,7 @@ $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
 
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script>
 var _bom        = <?= json_encode($bom) ?>;    // 指定的單一 BOM 名稱
 var _mode       = 'did';
@@ -493,8 +494,32 @@ $('#btn-zoom-out').on('click',   function() { _sc = Math.max(0.1, _sc - 0.2); ap
 $('#btn-zoom-reset').on('click', resetTransform);
 
 // ── 列印 ──────────────────────────────────────────────────────────────────
+
+// ── 列印紀錄（ai-rules/23：會列印的頁面一律留紀錄，共用 eg_print_log.js）──────
+// 記的是「按下列印」這個動作；瀏覽器不會回報使用者最後有沒有真的送印，故取消也算一筆。
+function _logPrintCurrent(isObs) {
+    try {
+        if (!window.EGPrintLog || !_currentName) return;
+        // 附件的 id 藏在 API 網址（…?action=download&id=123），沒有就不填
+        var m = String(_currentPath || '').match(/[?&]id=(\d+)/);
+        var refTable = '';
+        if (String(_currentPath || '').indexOf('Part_Attachment_API') >= 0)     refTable = 'part_attachments';
+        else if (String(_currentPath || '').indexOf('Order_Attachment_API') >= 0) refTable = 'order_attachments';
+        else if (String(_currentPath || '').indexOf('Quotation_File_API') >= 0)   refTable = 'quotation_attachments';
+        EGPrintLog.record({
+            source   : 'part_viewer',
+            doc_name : _currentName,
+            doc_kind : 'attachment',
+            ref_table: refTable,
+            ref_id   : m ? m[1] : '',
+            part_no  : (typeof _d_id !== 'undefined' && _d_id) ? _d_id : '',
+            note     : isObs ? '作廢附件' : ''
+        });
+    } catch (e) {}
+}
 $('#btn-print').on('click', function() {
     var isObs = $('.bom-file-item.active').data('obsolete') === '1' || $('.bom-file-item.active').data('obsolete') === 1;
+    _logPrintCurrent(isObs);
     if (_currentType === 'pdf') {
         if (isObs && !confirm('此為「作廢」附件，確定要列印？')) return;
         var frame = document.getElementById('bom-pdf-frame');

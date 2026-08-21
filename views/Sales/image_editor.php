@@ -1885,6 +1885,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_stamp_tpl.js') ?>"></script><!-- 圖章模板渲染器（蓋章工具「模板章」用，與圖章管理頁共用） -->
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_date_fmt.js') ?>"></script><!-- 日期顯示一律 YYYY.MM.DD（ai-rules/20） -->
 <script src="../../resource/js/pdfmake.min.js"></script><!-- 列印走 PDF 管線用（已含字型 vfs）：把畫布高解析影像包成 PDF 再列印，畫質最接近「存檔後本機列印」 -->
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__ . '/../../resource/js/eg_print_log.js') ?>"></script><!-- 列印紀錄（ai-rules/23） -->
 <script>
 'use strict';
 /* Fabric 5.3.0 已知 bug 修補（本地 fabric.min.js 已修字，這裡是多層保險）：
@@ -5855,6 +5856,18 @@ function doPrint() {
    後直接列印。相較瀏覽器 HTML/SVG 列印會多墊一層自家低解析光柵化，PDF 由瀏覽器的 PDF 引擎以印表機
    解析度輸出，畫質最接近「另存圖片後用看圖程式/本機列印」。pdfmake 未載入或產圖失敗時退回向量(SVG)列印。 */
 function doPrintPDF() {
+    // 列印紀錄（ai-rules/23）：只在這個「使用者按下列印」的入口記一次；
+    // 底下 doPrintVector()/printFallback() 是同一次列印的退路，不可各記一次否則一次列印變三筆。
+    try {
+        if (window.EGPrintLog) {
+            EGPrintLog.record({
+                source  : 'image_editor',
+                doc_name: (lastExportName || (typeof PRELOAD_PART_NO !== 'undefined' && PRELOAD_PART_NO) || defaultFileName()),
+                doc_kind: 'attachment',
+                part_no : (typeof PRELOAD_PART_NO !== 'undefined' ? PRELOAD_PART_NO : '')
+            });
+        }
+    } catch (e) {}
     if (typeof pdfMake === 'undefined') { toast('PDF 元件未載入，改用向量列印'); doPrintVector(); return; }
     const range = document.getElementById('ex-range').value;
     let x = artboard.left || 0, y = artboard.top || 0, w = artW, h = artH, sel = null;

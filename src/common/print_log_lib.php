@@ -101,6 +101,12 @@ if (!function_exists('eg_resolve_netbios_name')) {
      */
     function eg_resolve_netbios_name(string $ip): ?string {
         if (stripos(PHP_OS_FAMILY, 'Windows') === false) return null;
+        // 伺服器自己這台：nbtstat 問自己會回「找不到主機」（NetBIOS 查詢不繞回本機），
+        // 所以直接用本機主機名，不要留白。
+        if ($ip === '127.0.0.1' || $ip === (string)($_SERVER['SERVER_ADDR'] ?? '')) {
+            $h = @gethostname();
+            return $h ? strtoupper($h) : null;
+        }
         if (!function_exists('exec')) return null;
         $out = []; $rc = -1;
         @exec('nbtstat -A ' . escapeshellarg($ip) . ' 2>&1', $out, $rc);
