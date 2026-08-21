@@ -197,8 +197,12 @@ switch ($action) {
             WHERE pa.d_id=? AND pa.deleted_at IS NULL");
         $partStmt->execute([$dId]);
         $data = $partStmt->fetchAll(PDO::FETCH_ASSOC);
-        // 批圖編輯器檔案依分享範圍過濾（私人/部門/指定人員，成對 PNG 跟隨工作檔）
+        // 批圖工作檔依分享範圍過濾（私人/部門/指定人員）；輸出圖 PNG 不受限制，一律列出
         $data = imgedit_filter_attachment_rows($pdo, $data, $uploadedById, $dId);
+        // ★2026-08-21（使用者明確要求）：工作檔(.egwork.json)**只在批圖編輯器裡看得到**，
+        //   附件清單一律不列。它不是圖面、在這裡既不能看也不能編輯，列出來只會被誤認成一份文件；
+        //   工作檔的檢視/開啟/刪除都在批圖編輯器的「料號附件」跳窗內完成（該處自帶同一套範圍檢查）。
+        $data = imgedit_strip_workfiles($data);
 
         // 2. 報價單附件（明確 linked 或 linked_parts IS NULL 的「全部料號」附件）
         try {

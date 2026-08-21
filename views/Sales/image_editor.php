@@ -653,21 +653,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $shareIns = $pdo->prepare("INSERT IGNORE INTO imgedit_workfile_share (attachment_id, user_id) VALUES (?, ?)");
                     foreach ($shareIds as $sid) { if ($sid > 0) $shareIns->execute([$workId, $sid]); }
                 }
-                // 保留上限：同一料號工作檔數量超過上限時，砍掉最舊的（絕不會刪到剛存好的這份）
-                // 輸出圖 PNG 與工作檔成對（同 egdraw_ 檔名主幹），工作檔被清理時 PNG 一併軟刪除，
-                // 避免歷次儲存的過程圖永遠堆在附件列表
+                // 保留上限：同一料號工作檔數量超過上限時，砍掉最舊的（絕不會刪到剛存好的這份）。
+                // ★2026-08-21（使用者明確要求）：**只清工作檔，不動配對的輸出圖 PNG**。
+                //   原本 PNG 會跟著工作檔一起軟刪除（理由是避免歷次存檔的過程圖堆積），但輸出圖是
+                //   給全公司看的成品圖面，「存進料號附件的圖要永久保留，只有人工選擇刪除才會消失」，
+                //   不能因為工作檔輪替就自己不見。要清圖請到料號附件頁手動刪。
                 $allIds = $pdo->prepare("SELECT id, filename FROM part_attachments
                                          WHERE d_id = ? AND deleted_at IS NULL AND filename LIKE '%.egwork.json'
                                          ORDER BY id DESC");
                 $allIds->execute([$dId]);
                 $existing = $allIds->fetchAll(PDO::FETCH_ASSOC);
                 if (count($existing) > $workfileMaxCount) {
-                    $delSt  = $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE id = ?");
-                    $delPng = $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE d_id = ? AND filename = ? AND deleted_at IS NULL");
+                    $delSt = $pdo->prepare("UPDATE part_attachments SET deleted_at = NOW(), deleted_by = ? WHERE id = ?");
                     foreach (array_slice($existing, $workfileMaxCount) as $old) {
                         $delSt->execute([$userName . '（系統自動：超過保留上限 ' . $workfileMaxCount . ' 份）', $old['id']]);
-                        $delPng->execute([$userName . '（系統自動：隨工作檔清理）', $dId,
-                                          preg_replace('/\.egwork\.json$/', '.png', $old['filename'])]);
                         $removed++;
                     }
                 }
@@ -1629,7 +1628,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 </div>
             </div>
             <div id="pf-save-hint" style="font-size:11.5px;color:#8b949e;margin-bottom:10px;">
-                會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印，上面選的<b>附件標籤掛在它身上</b>）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔不是圖面、只有這個編輯器打得開，所以<b>不會出現在圖面檢視跳窗</b>裡，也不需要標籤。工作檔沒有「全公司共用」，避免所有人都能改到（<b>分享範圍只影響工作檔，不影響壓平 PNG</b>）；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。<b>有建立工作檔＝視為暫存</b>，不填發行章日期、也不做圖面變更判定；要正式出圖請勾「只存圖片，不建立工作檔」。
+                會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印，上面選的<b>附件標籤掛在它身上</b>）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔不是圖面、只有這個編輯器打得開，所以<b>不會出現在圖面檢視跳窗</b>裡，也不需要標籤。工作檔沒有「全公司共用」，避免所有人都能改到（<b>分享範圍只影響工作檔，不影響壓平 PNG</b>）；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。<b>自動清理只會清工作檔，壓平 PNG 永久保留</b>，要刪圖請到料號附件頁手動刪。<b>有建立工作檔＝視為暫存</b>，不填發行章日期、也不做圖面變更判定；要正式出圖請勾「只存圖片，不建立工作檔」。
             </div>
             <hr style="border-color:#3c4046;margin:10px 0;">
             <div style="font-weight:700;color:#6fc3ff;font-size:12.5px;margin-bottom:6px;"><i class="fa fa-folder-open-o"></i> 開啟此料號的批圖工作檔</div>
@@ -6142,7 +6141,7 @@ function pfOnNoWorkfileChange() {
     pfSyncIssueRow();   // 切到「只存圖片」＝正式成品圖才要發行章日期；切回建工作檔要把欄位收掉
     document.getElementById('pf-save-hint').innerHTML = noWf
         ? '只存<b>壓平 PNG</b> 到料號附件（上面選的<b>附件標籤掛在它身上</b>），不產生 .egwork.json 工作檔，之後不能再用批圖編輯器打開重改。<b>這條路徑才是「正式出圖」</b>：標籤屬於自家出的圖時要填發行章日期，並會做圖面變更判定。'
-        : '會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印，上面選的<b>附件標籤掛在它身上</b>）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔不是圖面、只有這個編輯器打得開，所以<b>不會出現在圖面檢視跳窗</b>裡，也不需要標籤。工作檔沒有「全公司共用」，避免所有人都能改到（<b>分享範圍只影響工作檔，不影響壓平 PNG</b>）；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。<b>有建立工作檔＝視為暫存</b>，不填發行章日期、也不做圖面變更判定；要正式出圖請勾「只存圖片，不建立工作檔」。';
+        : '會存兩個附件：<b>壓平 PNG</b>（附件系統直接看/印，上面選的<b>附件標籤掛在它身上</b>）＋<b>工作檔 .egwork.json</b>（用下方「開啟」重新載入後，標籤/文字/球標全部仍可編輯）。工作檔不是圖面、只有這個編輯器打得開，所以<b>不會出現在圖面檢視跳窗</b>裡，也不需要標籤。工作檔沒有「全公司共用」，避免所有人都能改到（<b>分享範圍只影響工作檔，不影響壓平 PNG</b>）；同一料號最多保留 <?= (int)$workfileMaxCount ?> 份，超過會自動刪掉最舊的一份（不影響剛存好的這份）。<b>自動清理只會清工作檔，壓平 PNG 永久保留</b>，要刪圖請到料號附件頁手動刪。<b>有建立工作檔＝視為暫存</b>，不填發行章日期、也不做圖面變更判定；要正式出圖請勾「只存圖片，不建立工作檔」。';
 }
 async function loadPfShareUsers() {
     document.getElementById('pf-share-list').innerHTML = '載入中…';

@@ -16,7 +16,8 @@
 // 濾掉 Fabric.js 工作檔（*.egwork.json）——給「唯讀檢視」端點用。
 // 工作檔只有批圖編輯器打得開，在圖面檢視跳窗裡既不能看也不能印，列出來只是干擾；
 // 批圖編輯器自己的工作檔清單走 image_editor.php 的獨立查詢，不經過這裡，故不受影響。
-// 附件的 CRUD 清單（master_data_management 的附件跳窗）刻意不套用，才有地方管理／刪除工作檔。
+// ★2026-08-21 起連附件的 CRUD 清單（master_data_management 的附件跳窗）也套用：工作檔只在批圖編輯器
+// 裡看得到，管理／刪除也在編輯器的「料號附件」跳窗內完成（delete_workfile 自帶同一套範圍檢查）。
 function imgedit_strip_workfiles(array $rows): array {
     $out = [];
     foreach ($rows as $r) {
