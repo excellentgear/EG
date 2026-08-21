@@ -131,7 +131,9 @@ case 'meta':
     // 既有專案原本的負責人由前端 renderBase() 自己補回下拉（後端存檔時亦放行未變更的負責人）。
     $ownerPeople = [];
     try { $ownerPeople = prj_owner_people($db, [], $uid, (bool)$P['canAdmin']); } catch (Throwable $e) { $ownerPeople = $people; }
-    $depts = $db->query("SELECT id, name FROM department ORDER BY sort_order DESC, name")->fetchAll(PDO::FETCH_ASSOC);
+    // 部門一律依 sort_order 由小到大（＝組織由上而下：董事長室→總經理室→生產部…→文管中心）。
+    // 原本寫 DESC，畫面上的部門下拉會從文管中心倒著列，跟 ai-rules/08 鐵則6 的排序方向相反。
+    $depts = $db->query("SELECT id, name FROM department ORDER BY COALESCE(sort_order,999), name")->fetchAll(PDO::FETCH_ASSOC);
     $positions = [];
     try { $positions = $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
     $custs = $db->query("SELECT customer_id, customer FROM customer_list

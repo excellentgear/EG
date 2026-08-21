@@ -389,16 +389,24 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <h5>專案負責人資格</h5>
             <p class="pj-hint">指定<b>哪些部門的哪些職稱</b>可以被指派為專案負責人（「訂單轉專案」與「專案基本資料」的負責人下拉只會列出這些人）。
                 職稱選「全部職稱」＝該部門全員皆可。<b>一列都沒設＝不限制</b>（全體在職員工都可以）。
-                兼任多個部門／職稱的人只要任一組合命中就算合格；<b>既有專案原本的負責人不受影響</b>，設定改嚴也不會讓舊專案存不了檔。</p>
-            <div class="grid3" style="margin-bottom:8px;">
-                <div><label>部門</label><select id="setOwnDept" data-eg-filter="輸入部門名稱篩選…"></select></div>
-                <div><label>職稱</label><select id="setOwnPos" data-eg-filter="輸入職稱篩選…"></select></div>
-                <div style="display:flex;align-items:flex-end;">
-                    <button id="btnOwnScopeAdd" style="height:30px;padding:0 14px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;">新增</button></div>
+                兼任多個部門／職稱的人只要任一組合命中就算合格；<b>既有專案原本的負責人不受影響</b>，設定改嚴也不會讓舊專案存不了檔。<br>
+                操作：選部門 → 右邊點選要開放的職稱（可複選）→ 按「加入」。<b>同一個部門會整組取代</b>，要調整就按該列的「修改」把它讀回來改。
+                <b>這裡的部門是精確比對、不含子部門</b>（例如選「資材部」不會自動包含生管／採購／倉管組，要開放請各自加一列）。</p>
+            <div style="border:1px solid #EADFC8;border-radius:6px;padding:10px;background:#FFFDF8;margin-bottom:10px;">
+                <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:6px;">
+                    <div style="min-width:200px;"><label>部門</label>
+                        <select id="setOwnDept" data-eg-filter="輸入部門名稱篩選…"></select></div>
+                    <div style="flex:1;min-width:260px;"><label>職稱（可複選，點一下切換）</label>
+                        <div class="pj-tagbar" id="setOwnPosBar" style="margin:0;"></div></div>
+                    <div style="display:flex;gap:6px;">
+                        <button id="btnOwnScopeAdd" style="height:30px;padding:0 14px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;white-space:nowrap;">加入</button>
+                        <button id="btnOwnScopeCancel" style="height:30px;padding:0 12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;color:#5b3a1e;cursor:pointer;display:none;white-space:nowrap;">取消修改</button>
+                    </div>
+                </div>
+                <div class="pj-err" id="setOwnErr"></div>
             </div>
-            <div class="pj-err" id="setOwnErr"></div>
             <table class="sub-tbl" id="ownScopeTable">
-                <thead><tr><th style="width:180px;">部門</th><th>職稱</th><th style="width:70px;">操作</th></tr></thead>
+                <thead><tr><th style="width:130px;">部門</th><th>可擔任負責人的職稱</th><th style="width:104px;">操作</th></tr></thead>
                 <tbody id="ownScopeBody"></tbody>
             </table>
             <p class="pj-hint" id="ownScopeCount" style="margin-top:6px;"></p>

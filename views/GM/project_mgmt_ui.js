@@ -1344,10 +1344,8 @@ function openSetting() {
         var odOpt = '<option value="">（請選擇部門）</option>';
         $.each(META.depts || [], function (i, x) { odOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
         $('#setOwnDept').html(odOpt).val('');
-        var opOpt = '<option value="0">全部職稱</option>';
-        $.each(META.positions || [], function (i, x) { opOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
-        $('#setOwnPos').html(opOpt).val('0');
         OWN_SCOPE = (res.owner_scope_rows || []).slice();
+        ownScopeReset();
         renderOwnScope();
 
         var plan = (META.asdoc || {}).plan || {}, card = (META.asdoc || {}).card || {};
@@ -1357,55 +1355,130 @@ function openSetting() {
     });
 }
 /* ── 專案負責人資格（部門×職稱）───────────────────────────────
-   前端即時擋重複／未選部門並在欄位旁寫出原因；存檔時後端用同一支 parse 再驗一次（鐵律8）。*/
-var OWN_SCOPE = [];
-function renderOwnScope() {
-    if (!OWN_SCOPE.length) {
-        $('#ownScopeBody').html('<tr><td colspan="3" style="padding:10px;color:#8a6d45;">（未設定＝不限制，全體在職員工都可以當專案負責人）</td></tr>');
-        $('#ownScopeCount').text('');
-        return;
-    }
-    var h = '';
-    $.each(OWN_SCOPE, function (i, r) {
-        h += '<tr><td>' + esc(r.dept_name) + '</td><td>' + esc(r.pos_name) + '</td>'
-           + '<td><button class="own-scope-del" data-i="' + i + '" style="height:24px;padding:0 8px;border:1px solid #DD5138;border-radius:4px;background:#fff;color:#DD5138;cursor:pointer;">刪除</button></td></tr>';
+   操作方式：選一個部門 → 在右邊點選要開放的職稱（可複選，「全部職稱」與個別職稱互斥）→ 按「加入」一次寫進去。
+   清單以**部門為一列**顯示，右邊直接列出該部門選定的職稱，每列有「修改」（把該部門讀回上面繼續改）與「刪除」。
+   存進去的資料仍是 {d:部門id, p:職稱id} 的組合（p=0＝全部職稱），存檔時後端會再 parse 正規化一次。 */
+var OWN_SCOPE = [];       // [{d,p,dept_name,pos_name}, …]
+var OWN_EDIT  = 0;        // 目前正在「修改」哪個部門（0＝新增模式）
+
+function ownPosName(pid) {
+    if (num(pid) === 0) return '全部職稱';
+    var hit = $.grep(META.positions || [], function (x) { return num(x.id) === num(pid); });
+    return hit.length ? hit[0].name : ('（已刪除的職稱 #' + pid + '）');
+}
+function ownDeptName(did) {
+    var hit = $.grep(META.depts || [], function (x) { return num(x.id) === num(did); });
+    return hit.length ? hit[0].name : ('（已刪除的部門 #' + did + '）');
+}
+/* 職稱膠囊列：全部職稱擺第一顆，其餘依 position.sort_order（META.positions 已排好） */
+function renderOwnPosBar(selected) {
+    selected = selected || [];
+    var on = function (pid) { return $.inArray(num(pid), $.map(selected, num)) >= 0; };
+    var h = '<span class="pj-tag' + (on(0) ? ' on' : '') + '" data-ownpos="0">全部職稱</span>';
+    $.each(META.positions || [], function (i, x) {
+        h += '<span class="pj-tag' + (on(x.id) ? ' on' : '') + '" data-ownpos="' + x.id + '">' + esc(x.name) + '</span>';
     });
+    $('#setOwnPosBar').html(h);
+}
+function ownPickedPos() {
+    var out = [];
+    $('#setOwnPosBar .pj-tag.on').each(function () { out.push(num($(this).data('ownpos'))); });
+    return out;
+}
+/* 「全部職稱」和個別職稱互斥：點哪個就清掉另一邊，避免存進去一堆被蓋掉的多餘列 */
+$(document).on('click', '#setOwnPosBar .pj-tag', function () {
+    var pid = num($(this).data('ownpos'));
+    if (pid === 0) {
+        var turnOn = !$(this).hasClass('on');
+        $('#setOwnPosBar .pj-tag').removeClass('on');
+        if (turnOn) $(this).addClass('on');
+    } else {
+        $('#setOwnPosBar .pj-tag[data-ownpos="0"]').removeClass('on');
+        $(this).toggleClass('on');
+    }
+    $('#setOwnErr').text('');
+});
+
+/* 把部門下拉選到指定部門。
+   共用檔的下拉篩選（data-eg-filter）在使用者打過字時只會保留符合的選項，
+   直接 .val() 可能因為那個選項已被篩掉而落空——所以先把篩選框清空還原完整清單再選。 */
+function ownSelectDept(d) {
+    var $sel = $('#setOwnDept'), $box = $sel.prev('.eg-filter-box');
+    if ($box.length && $box.val() !== '') { $box.val(''); $box[0].dispatchEvent(new Event('input')); }
+    $sel.val(d ? String(d) : '');
+}
+
+function ownScopeReset() {
+    OWN_EDIT = 0;
+    ownSelectDept(0);
+    renderOwnPosBar([]);
+    $('#btnOwnScopeAdd').text('加入');
+    $('#btnOwnScopeCancel').hide();
+    $('#setOwnErr').text('');
+}
+
+function renderOwnScope() {
+    /* 依部門分組，部門順序沿用 META.depts（後端已依 sort_order 由小到大） */
+    var byDept = {};
+    $.each(OWN_SCOPE, function (i, r) { (byDept[num(r.d)] = byDept[num(r.d)] || []).push(num(r.p)); });
+    var order = $.map(META.depts || [], function (x) { return num(x.id); });
+    $.each(byDept, function (k) { if ($.inArray(num(k), order) < 0) order.push(num(k)); });  // 已刪除的部門排最後
+
+    var h = '', n = 0;
+    $.each(order, function (i, did) {
+        if (!byDept[did]) return;
+        n++;
+        var names = $.map(byDept[did], function (pid) { return ownPosName(pid); });
+        h += '<tr><td style="white-space:nowrap;">' + esc(ownDeptName(did)) + '</td>'
+           + '<td style="text-align:left;">' + esc(names.join('、')) + '</td>'
+           + '<td style="white-space:nowrap;">'
+           + '<button class="own-scope-edit" data-d="' + did + '" style="height:24px;padding:0 8px;border:1px solid #d98a33;border-radius:4px;background:#fff;color:#b5762a;cursor:pointer;margin-right:4px;">修改</button>'
+           + '<button class="own-scope-del" data-d="' + did + '" style="height:24px;padding:0 8px;border:1px solid #DD5138;border-radius:4px;background:#fff;color:#DD5138;cursor:pointer;">刪除</button>'
+           + '</td></tr>';
+    });
+    if (!n) h = '<tr><td colspan="3" style="padding:10px;color:#8a6d45;">（未設定＝不限制，全體在職員工都可以當專案負責人）</td></tr>';
     $('#ownScopeBody').html(h);
-    $('#ownScopeCount').html('目前設定 ' + OWN_SCOPE.length + ' 組；儲存後負責人下拉只會列出符合的人員。' + ownScopeWhoText());
+    $('#ownScopeCount').html(n ? ('目前設定 ' + n + ' 個部門；儲存後負責人下拉只會列出符合的人員。' + ownScopeWhoText()) : '');
 }
 /* 目前（已儲存的設定下）符合資格的是誰。
-   兼任的人在下拉上顯示的是「主要職務」，例如主職董事長、兼任技術部課長的人，
-   設定技術部之後他也會出現卻顯示成董事長——只看部門×職稱清單看不出來，所以把名單直接列出來。 */
+   兼任的人在下拉上顯示的是「職級最高的那個職務」，只看部門×職稱清單看不出來到底誰會出現，所以把名單直接列出來。 */
 function ownScopeWhoText() {
     if (!(META.owner_scope && META.owner_scope.length)) return '';
     /* 這裡要看的是「資格」命中誰（全公司），不是目前這位管理員自己能挑誰 */
     var ps = META.owner_scope_all || META.owner_people || [];
     if (!ps.length) return '<br><span style="color:#DD5138;">目前沒有任何人符合已儲存的設定，負責人會選不到人。</span>';
     var names = $.map(ps, function (x) { return (x.dept_name ? x.dept_name + ' ' : '') + (x.position_name ? x.position_name + ' ' : '') + x.user_cname; });
-    return '<br>目前符合資格（依已儲存的設定）共 ' + ps.length + ' 人：' + esc(names.join('、'))
-         + '<br><span style="color:#8a6d45;">※ 兼任者以<b>主要職務</b>顯示，所以名單上的部門/職稱可能跟你設的那一組不同（例：主職董事長、兼任技術部課長，設技術部後他也會出現）。</span>';
+    return '<br>目前符合資格（依<b>已儲存</b>的設定）共 ' + ps.length + ' 人：' + esc(names.join('、'))
+         + '<br><span style="color:#8a6d45;">※ 兼任者以<b>職級最高的職務</b>顯示，所以名單上的部門/職稱可能跟你設的那一組不同（例：兼任技術部課長的董事長，設技術部後也會出現）。</span>';
 }
+
 $(document).on('click', '#btnOwnScopeAdd', function () {
-    var d = num($('#setOwnDept').val()), pp = num($('#setOwnPos').val());
-    var $e = $('#setOwnErr');
-    if (!d) { $e.text('請先選擇部門'); return; }
-    var dup = false, covered = false;
-    $.each(OWN_SCOPE, function (i, r) {
-        if (num(r.d) === d && num(r.p) === pp) dup = true;
-        if (num(r.d) === d && num(r.p) === 0)  covered = true;   // 該部門已設「全部職稱」＝再加個別職稱是多餘的
+    var d = num($('#setOwnDept').val()), picked = ownPickedPos(), $e = $('#setOwnErr');
+    if (!d)              { $e.text('請先選擇部門'); return; }
+    if (!picked.length)  { $e.text('請至少點選一個職稱（或選「全部職稱」）'); return; }
+    if ($.inArray(0, picked) >= 0) picked = [0];          // 全部職稱＝該部門只留這一列
+    /* 同一個部門一律整組取代（新增與修改行為一致，不會殘留舊職稱） */
+    OWN_SCOPE = $.grep(OWN_SCOPE, function (r) { return num(r.d) !== d; });
+    $.each(picked, function (i, pid) {
+        OWN_SCOPE.push({ d: d, p: pid, dept_name: ownDeptName(d), pos_name: ownPosName(pid) });
     });
-    if (dup)     { $e.text('這一組已經在清單裡了'); return; }
-    if (covered) { $e.text('這個部門已設定「全部職稱」，不需要再加個別職稱'); return; }
-    if (pp === 0) OWN_SCOPE = $.grep(OWN_SCOPE, function (r) { return num(r.d) !== d; });  // 改成全部職稱＝收掉該部門的個別列
-    $e.text('');
-    OWN_SCOPE.push({ d: d, p: pp,
-        dept_name: $('#setOwnDept option:selected').text(),
-        pos_name:  pp === 0 ? '全部職稱' : $('#setOwnPos option:selected').text() });
+    ownScopeReset();
     renderOwnScope();
 });
-$(document).on('click', '.own-scope-del', function () {
-    OWN_SCOPE.splice(num($(this).data('i')), 1);
+$(document).on('click', '#btnOwnScopeCancel', function () { ownScopeReset(); });
+$(document).on('click', '.own-scope-edit', function () {
+    var d = num($(this).data('d'));
+    OWN_EDIT = d;
+    ownSelectDept(d);
+    renderOwnPosBar($.map($.grep(OWN_SCOPE, function (r) { return num(r.d) === d; }), function (r) { return num(r.p); }));
+    $('#btnOwnScopeAdd').text('更新此部門');
+    $('#btnOwnScopeCancel').show();
     $('#setOwnErr').text('');
+});
+$(document).on('click', '.own-scope-del', function () {
+    var d = num($(this).data('d'));
+    OWN_SCOPE = $.grep(OWN_SCOPE, function (r) { return num(r.d) !== d; });
+    if (OWN_EDIT === d) ownScopeReset();
     renderOwnScope();
 });
 
