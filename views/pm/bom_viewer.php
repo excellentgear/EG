@@ -149,6 +149,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
         // 附件清單（支援多筆 d_id）
         $ph = implode(',', array_fill(0, count($dids), '?'));
         $stmt = $pdo2->prepare("SELECT pa.id, pa.d_id, pa.filename, pa.original_name, pa.category_ids, pa.file_size, pa.note,
+            pa.revision, pa.issue_stamp_date,
             COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by, pa.uploaded_at
             FROM part_attachments pa
             LEFT JOIN user u ON u.id = pa.uploaded_by_id
@@ -160,20 +161,26 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
         require_once __DIR__ . '/../../src/common/imgedit_visibility.php';
         $rows = imgedit_filter_attachment_rows($pdo2, $rows, intval($_SESSION['id'] ?? 0));
         $rows = imgedit_strip_workfiles($rows);   // 工作檔只有批圖編輯器打得開，檢視端不列
-        // 類別名稱對照
+        // 類別名稱對照（順便取 is_own_drawing：自家出的圖才需要發行章日期，沒填要標紅提醒）
         $cats = [];
+        $ownDrawCats = [];
         try {
-            $cStmt = $pdo2->query("SELECT id, category_name FROM quotation_file_categories WHERE is_active = 1");
-            foreach ($cStmt->fetchAll(PDO::FETCH_ASSOC) as $c) $cats[(int)$c['id']] = $c['category_name'];
+            $cStmt = $pdo2->query("SELECT id, category_name, is_own_drawing FROM quotation_file_categories WHERE is_active = 1");
+            foreach ($cStmt->fetchAll(PDO::FETCH_ASSOC) as $c) {
+                $cats[(int)$c['id']] = $c['category_name'];
+                if (!empty($c['is_own_drawing'])) $ownDrawCats[(int)$c['id']] = true;
+            }
         } catch (Exception $_e) {}
         $result = [];
         foreach ($rows as $r) {
             $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
             $catNames = [];
+            $isOwnDraw = false;
             if ($r['category_ids']) {
                 foreach (explode(',', $r['category_ids']) as $cid) {
                     $cid = (int)trim($cid);
                     if (isset($cats[$cid])) $catNames[] = $cats[$cid];
+                    if (isset($ownDrawCats[$cid])) $isOwnDraw = true;
                 }
             }
             $type = in_array($ext, ['jpg','jpeg','png','gif','webp','bmp']) ? 'image'
@@ -194,6 +201,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 'uploaded_by'    => $r['uploaded_by'] ?: '',
                 'uploaded_at'    => substr($r['uploaded_at'] ?: '', 0, 16),
                 'category_names' => $catNames,
+                // 版次／發行章日期：只有料號附件（part_attachments）有這兩欄；
+                // 發行章日期是圖面變更的新舊判定依據（ai-rules/15），檢視端也要看得到。
+                'revision'         => ($r['revision'] === null ? '' : (string)$r['revision']),
+                'issue_stamp_date' => $r['issue_stamp_date'] ?: '',
+                'is_own_drawing'   => $isOwnDraw ? 1 : 0,
                 'bind_from'      => $bindLabelByDid[(int)$r['d_id']] ?? null,
                 'source'         => 'other',
             ];
@@ -747,6 +759,7 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
 
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script>
 var _bom        = <?= json_encode($bom) ?>;
 var _mode       = <?= json_encode($mode) ?>;   // 'bom' | 'did'
@@ -762,6 +775,9 @@ var _currentPath = '';
 var _currentName = '';
 
 // ── 工具函數 ──────────────────────────────────────────────────────────────
+// 顯示用日期格式化（ai-rules/20：一律 YYYY.MM.DD，唯一實作在 eg_date_fmt.js）。
+// 注意：排序／比對用的日期字串仍要用原始 Y-m-d，不要經過這層。
+function dispDate(d, withTime) { return egFmtDate(d, withTime); }
 function escapeHtml(s) {
     return String(s)
         .replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -1088,7 +1104,19 @@ function makeAttItem(att, showSource) {
         var src = att.source || 'other';
         srcBadge = '<span style="font-size:9px;font-weight:700;color:#fff;background:'+(_bomSourceColor[src]||'#999')+';border-radius:3px;padding:0 4px;margin-right:4px;">'+(_bomSourceLabel[src]||src)+'</span>';
     }
-    var info = [att.uploaded_at, att.uploaded_by, att.file_size, att.note].filter(Boolean).join(' · ');
+    var info = [dispDate(att.uploaded_at, true), att.uploaded_by, att.file_size, att.note].filter(Boolean).join(' · ');
+    // 版次／發行章日期（只有料號附件有這兩欄；報價/訂單附件不顯示）
+    // 版次 0 也要顯示：不可用 if(att.revision) 判斷（0 / "0" 會被當成沒填）
+    var revBadge = '';
+    if (att.revision !== null && att.revision !== undefined && String(att.revision) !== '')
+        revBadge = '<span style="background:#eef4fb;color:#1a5276;font-size:10px;font-weight:600;padding:0 5px;border-radius:3px;margin-right:4px;" title="版次">Rev.'+escapeHtml(att.revision)+'</span>';
+    // 發行章日期是圖面變更的新舊判定依據（ai-rules/15）：自家出的圖沒填就偵測不到變更，
+    // 所以留白不夠，要紅字明講（跟 master_data_management 的附件清單同一套判斷）。
+    var issBadge = '';
+    if (att.issue_stamp_date)
+        issBadge = '<span style="background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;font-size:10px;font-weight:600;padding:0 5px;border-radius:3px;margin-right:4px;" title="發行章日期（圖面變更的新舊依據）">發行 '+escapeHtml(dispDate(att.issue_stamp_date))+'</span>';
+    else if (att.is_own_drawing == 1)
+        issBadge = '<span style="background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;font-size:10px;font-weight:600;padding:0 5px;border-radius:3px;margin-right:4px;" title="自家出的圖但沒有發行章日期，無法偵測圖面變更——請到料號主檔的附件編輯補上">未設發行日</span>';
     var isObs = (att.category_names || []).indexOf('作廢') >= 0;
     var st = isObs ? 'background:#fff0f0;border-left:3px solid #e74c3c;' : '';
     var bindTag = att.bind_from ? '<br><span style="font-size:10px;color:#1ABB9C;"><i class="fa fa-link"></i> 來自綁定料號 '+escapeHtml(att.bind_from)+'</span>' : '';
@@ -1100,7 +1128,7 @@ function makeAttItem(att, showSource) {
         + ' style="'+st+'">'
         + (isObs ? '<div style="display:inline-block;background:#e74c3c;color:#fff;font-size:10px;font-weight:700;padding:0 7px;border-radius:3px;letter-spacing:1px;margin-bottom:3px;">⊘ 作廢</div><br>' : '')
         + '<p class="list-group-item-text" style="'+(isObs?'color:#c0392b;text-decoration:line-through;':'')+'">'
-        + srcBadge + extBadge + catBadges + escapeHtml(att.display_name)
+        + srcBadge + extBadge + catBadges + revBadge + issBadge + escapeHtml(att.display_name)
         + (info ? '<br><small style="color:#aaa;font-size:10px;">'+escapeHtml(info)+'</small>' : '')
         + bindTag
         + '</p></a>';
@@ -1234,7 +1262,7 @@ function quoteHeadHtml(qno, qs, nested) {
     }
     if (qs) {
         html += '<div style="font-size:11px;color:#666;margin-top:2px;display:flex;gap:8px;flex-wrap:wrap;">';
-        if (qs.quote_date)  html += '<span><i class="fa fa-calendar" style="color:#bbb;margin-right:2px;"></i>' + escapeHtml(qs.quote_date) + '</span>';
+        if (qs.quote_date)  html += '<span><i class="fa fa-calendar" style="color:#bbb;margin-right:2px;"></i>' + escapeHtml(dispDate(qs.quote_date)) + '</span>';
         if (qs.client_name) html += '<span><i class="fa fa-building-o" style="color:#bbb;margin-right:2px;"></i>' + escapeHtml(qs.client_name) + '</span>';
         html += '</div>';
     }
@@ -1248,10 +1276,10 @@ function orderGroupHtml(og, quoteGroups, summaries) {
     html += '<span style="font-size:12px;font-weight:700;color:#0e8c73;font-family:Consolas,monospace;"><i class="fa fa-truck"></i> '
         + escapeHtml(og.order_oo === '__unknown__' ? '（未知訂單）' : og.order_oo) + '</span>';
     var info = [];
-    if (og.order_date) info.push(og.order_date);
+    if (og.order_date) info.push(dispDate(og.order_date));
     if (og.client_name) info.push(og.client_name);
     if (og.qty) info.push('數量 ' + og.qty);
-    if (og.delivery_date) info.push('交期 ' + og.delivery_date);
+    if (og.delivery_date) info.push('交期 ' + dispDate(og.delivery_date));
     if (info.length) html += '<div style="font-size:11px;color:#666;margin-top:2px;">' + info.map(escapeHtml).join('　') + '</div>';
     html += '</div>';
     og.files.forEach(function(f) { html += makeAttItem(f); });
@@ -1341,7 +1369,7 @@ function showQuoteDetail(qno) {
         html += '<div style="color:#aaa;font-size:12px;">此報價單無明細資料（可能僅有附件）。</div>';
     } else {
         html += '<table style="font-size:12px;width:100%;max-width:480px;margin-bottom:16px;border-collapse:collapse;">';
-        var rows = [['報價日期', qs.quote_date], ['客戶名稱', qs.client_name], ['有效日期', qs.valid_date], ['負責人員', qs.handler_name], ['總金額', qs.total_amount ? '$' + Number(qs.total_amount).toLocaleString() : '']];
+        var rows = [['報價日期', dispDate(qs.quote_date)], ['客戶名稱', qs.client_name], ['有效日期', dispDate(qs.valid_date)], ['負責人員', qs.handler_name], ['總金額', qs.total_amount ? '$' + Number(qs.total_amount).toLocaleString() : '']];
         rows.forEach(function(r) { if (!r[1]) return; html += '<tr><td style="color:#888;padding:3px 8px 3px 0;white-space:nowrap;">' + escapeHtml(r[0]) + '</td><td style="padding:3px 0;font-weight:600;color:#2c3e50;">' + escapeHtml(String(r[1])) + '</td></tr>'; });
         if (qs.quote_note) html += '<tr><td style="color:#888;padding:3px 8px 3px 0;white-space:nowrap;">報價單備註</td><td style="padding:3px 0;color:#7d3c98;">' + escapeHtml(qs.quote_note) + '</td></tr>';
         html += '</table>';
@@ -1372,8 +1400,8 @@ function showQuoteDetail(qno) {
                     html += '<td colspan="4" style="padding:5px 6px;">';
                     html += '<div style="font-size:11px;color:#1ABB9C;font-weight:700;"><i class="fa fa-exchange"></i> 訂單 ' + escapeHtml(it.order_oo) + '</div>';
                     var oInfo = [];
-                    if (it.order_date)     oInfo.push('訂單日期：' + it.order_date);
-                    if (it.order_delivery) oInfo.push('交期：' + it.order_delivery);
+                    if (it.order_date)     oInfo.push('訂單日期：' + dispDate(it.order_date));
+                    if (it.order_delivery) oInfo.push('交期：' + dispDate(it.order_delivery));
                     if (it.order_qty)      oInfo.push('數量：' + it.order_qty);
                     if (it.order_unit_price) oInfo.push('單價：$' + Number(it.order_unit_price).toLocaleString());
                     if (oInfo.length) html += '<div style="font-size:10px;color:#555;margin-top:2px;">' + oInfo.map(escapeHtml).join('　') + '</div>';
