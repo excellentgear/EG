@@ -68,8 +68,12 @@ try {
         .cov-yes { color:#5b7a2b; font-weight:bold; }
         .cov-no  { color:#C0563A; font-weight:bold; }
         .cov-note { font-size:12px; color:#8a6d45; }
-        .ps-toolbar { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; clear:both;
-            border:1.5px solid #E8D5B5; border-radius:8px; padding:8px 10px; margin-bottom:10px; background:#FDF8EF; }
+        .ps-toolbar { clear:both; border:1.5px solid #E8D5B5; border-radius:8px; padding:8px 10px;
+            margin-bottom:10px; background:#FDF8EF; }
+        /* 每一列各自 flex：日期區間才不會被自動換行拆成「起日在上一列、迄日在下一列」 */
+        .ps-row { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; }
+        .ps-row + .ps-row { margin-top:8px; padding-top:8px; border-top:1px dashed #E8D5B5; }
+        .ps-date { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
         .ps-toolbar label { margin:0; font-size:13px; color:#5b3a1e; }
         .ps-toolbar select, .ps-toolbar button, .ps-toolbar input[type=date], .ps-toolbar input[type=text] {
             height:30px; font-size:13px; line-height:1; padding:0 8px; border:1px solid #D8BE93;
@@ -142,28 +146,32 @@ try {
         </div>
 
         <div class="ps-toolbar">
-            <label>資料來源</label>
-            <select id="fSource" data-eg-filter="輸入來源名稱篩選…" style="min-width:190px;"><option value="">全部</option></select>
+            <!-- 第一列：下拉篩選（選了就即時查，不必按查詢） -->
+            <div class="ps-row">
+                <label>資料來源</label>
+                <select id="fSource" data-eg-filter="輸入來源名稱篩選…" style="min-width:190px;"><option value="">全部</option></select>
 
-            <label id="lblPerson">列印人</label>
-            <select id="fUser" data-eg-filter="輸入姓名篩選…" style="min-width:190px;"><option value="">全部</option></select>
+                <label id="lblPerson">列印人</label>
+                <select id="fUser" data-eg-filter="輸入姓名篩選…" style="min-width:190px;"><option value="">全部</option></select>
 
-            <label>日期</label>
-            <input type="date" id="fFrom"> ～ <input type="date" id="fTo">
+                <span class="ps-role-badge">目前身分：<b id="roleName"><?= htmlspecialchars($roleLabel) ?></b><i class="fa fa-question-circle" id="btnRoleHelp" title="各角色權限說明"></i></span>
+            </div>
 
-            <input type="text" id="fKw" placeholder="文件名稱／料號／姓名…" style="min-width:190px;">
+            <!-- 第二列：日期區間整組不拆行＋關鍵字＋動作鈕 -->
+            <div class="ps-row">
+                <span class="ps-date"><label>日期</label><input type="date" id="fFrom"> ～ <input type="date" id="fTo"></span>
 
-            <button class="btn-warm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
-            <button id="btnReset"><i class="fa fa-refresh"></i> 本月</button>
-            <button id="btnPrintAll"><i class="fa fa-print"></i> 列印全部篩選結果</button>
+                <input type="text" id="fKw" placeholder="文件名稱／料號／姓名…（邊打邊查）" style="min-width:220px;">
 
-            <span class="ps-role-badge">目前身分：<b id="roleName"><?= htmlspecialchars($roleLabel) ?></b><i class="fa fa-question-circle" id="btnRoleHelp" title="各角色權限說明"></i></span>
+                <button id="btnReset"><i class="fa fa-refresh"></i> 本月</button>
+                <button class="btn-warm" id="btnPrintAll"><i class="fa fa-print"></i> 列印全部篩選結果</button>
+            </div>
         </div>
 
         <div class="ps-pagebar">
             <span id="pgInfo"></span>
             <label style="margin:0 2px 0 8px;">每頁</label>
-            <select id="fPer"><option>5</option><option>10</option><option selected>20</option><option>50</option></select>
+            <select id="fPer"><option>5</option><option selected>10</option><option>20</option><option>50</option></select>
             <span id="pgBtns"></span>
         </div>
 
@@ -195,9 +203,10 @@ try {
         <ul>
             <li>上方分頁切換「列印紀錄／簽核紀錄」，兩個分頁共用同一組篩選條件。</li>
             <li>篩選：<b>資料來源</b>（列印分頁是頁面／模組，簽核分頁是單據種類）、<b>列印人／簽核人</b>、<b>日期區間</b>，另可用關鍵字查文件名稱、料號、姓名。</li>
+            <li><b>全部篩選都是即時的</b>：下拉一選、日期一改、關鍵字邊打就邊查，不需要按任何查詢按鈕。</li>
             <li>下拉選項多時可直接在篩選框打字過濾，不必用眼睛找。</li>
             <li><b>列印全部篩選結果</b>：印的是目前篩選條件下的<b>全部</b>資料，不是只有畫面這一頁。</li>
-            <li>清單分頁在表格右上角，預設每頁 20 筆（可改 5／10／50）。</li>
+            <li>清單分頁在表格右上角，預設每頁 10 筆（可改 5／20／50）；改成每頁超過 10 筆時，右下角會出現「回到頂端」按鈕。</li>
         </ul>
 
         <h4>重要行為／常見疑問</h4>
@@ -280,7 +289,7 @@ function filters(extra){
         date_from: $('#fFrom').val() || '',
         date_to  : $('#fTo').val() || '',
         kw       : $.trim($('#fKw').val() || ''),
-        per      : $('#fPer').val() || 20,
+        per      : $('#fPer').val() || 10,
         page     : PAGE
     };
     // 來源欄位在兩個分頁是不同的東西：列印分頁篩頁面來源、簽核分頁篩單據種類
@@ -379,7 +388,7 @@ function loadList(){
         var f = (TAB === 'print') ? rowHtmlPrint : rowHtmlSign;
         $('#tBody').html(LAST.rows.map(f).join(''));
         $('#emptyBox').toggle(LAST.rows.length === 0);
-        renderPager(LAST.total, parseInt(res.per, 10) || 20, PAGE);
+        renderPager(LAST.total, parseInt(res.per, 10) || 10, PAGE);
         var $c = $(TAB === 'print' ? '#cntPrint' : '#cntSign');
         $c.text(LAST.total).toggleClass('zero', LAST.total === 0);
     }, 'json').fail(function(){
@@ -536,13 +545,22 @@ $('.ps-tab').on('click', function(){
     loadList();
     refreshOtherCount();
 });
-$('#btnSearch').on('click', function(){ PAGE = 1; loadList(); refreshOtherCount(); });
+// 即時搜尋：任何篩選一改就查，不必按查詢鈕（使用者要求）。
+// 關鍵字要 debounce——每打一個字就發一次請求，慢的那次回來會覆蓋掉快的那次，畫面會跳成舊結果。
+var _kwTimer = null;
+function liveSearch(delay){
+    clearTimeout(_kwTimer);
+    _kwTimer = setTimeout(function(){ PAGE = 1; loadList(); refreshOtherCount(); }, delay || 0);
+}
+$('#fSource, #fUser').on('change', function(){ liveSearch(0); });
+$('#fFrom, #fTo').on('change', function(){ liveSearch(0); });
+$('#fKw').on('input', function(){ liveSearch(350); });
 $('#btnReset').on('click', function(){
     resetRange(); $('#fSource').val(''); $('#fKw').val('');
     if (META.perms.canViewAll) $('#fUser').val('');
-    PAGE = 1; loadList(); refreshOtherCount();
+    liveSearch(0);
 });
-$('#fPer').on('change', function(){ PAGE = 1; loadList(); });
+$('#fPer').on('change', function(){ PAGE = 1; syncTopBtn(); loadList(); });
 $('#pgBtns').on('click', 'button', function(){
     var p = parseInt($(this).data('p'), 10);
     if (!p || p === PAGE) return;
@@ -553,7 +571,8 @@ $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); loadCoverage(
 $('#btnRoleHelp').on('click', function(){ loadRoleHelp(); openMask('roleHelpMask'); });
 $('.ps-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });
 
-$(window).on('scroll', function(){ $('#btnTop').toggle($(window).scrollTop() > 300); });
+// 回頂端鈕：每頁 10 筆時整頁看得完、不需要，改成「每頁超過 10 筆才出現」（使用者要求）
+function syncTopBtn(){ $('#btnTop').toggle((parseInt($('#fPer').val(), 10) || 10) > 10); }
 $('#btnTop').on('click', function(){ $('html,body').animate({ scrollTop: 0 }, 200); });
 
 // ── 起始 ────────────────────────────────────────────────────────────────
@@ -564,6 +583,7 @@ $.get(API, { action: 'meta' }, function(res){
     fillSourceSel();
     fillPeopleSel();
     if (!META.perms.canViewAll) $('#roleName').text('僅本人紀錄');
+    syncTopBtn();
     loadList();
     refreshOtherCount();
 }, 'json');
