@@ -55,7 +55,11 @@
             people: [],
             depts: [],
             pickedUsers: [],
-            pickedDepts: []
+            pickedDepts: [],
+            // 鎖定（預設）對象：一定會在名單裡，chip 不給 ×，也不會被 clear() 清掉。
+            // 用在「系統預設的通知對象，開單者可以再加人但不可移除」這種場景。
+            lockedUsers: {},
+            lockedDepts: {}
         };
         registry[id] = api;
 
@@ -125,15 +129,19 @@
                 h += '<span style="display:inline-flex;align-items:center;gap:4px;background:#FFF3E2;color:#8a5a12;'
                    + 'border:1px solid #E4D3BC;border-radius:11px;padding:1px 8px;font-size:12px;">'
                    + '<i class="fa fa-sitemap"></i>' + esc(d.path || d.name) + '（' + (d.count || 0) + '人）'
-                   + '<a href="javascript:void(0)" onclick="EGAckPicker._delDept(\'' + id + '\',' + d.id + ')" '
-                   + 'style="color:#c0392b;text-decoration:none;font-weight:700;">&times;</a></span>';
+                   + (api.lockedDepts[d.id]
+                        ? '<i class="fa fa-lock" title="系統預設的通知對象，不可移除"></i></span>'
+                        : '<a href="javascript:void(0)" onclick="EGAckPicker._delDept(\'' + id + '\',' + d.id + ')" '
+                          + 'style="color:#c0392b;text-decoration:none;font-weight:700;">&times;</a></span>');
             });
             api.pickedUsers.forEach(function (p) {
                 h += '<span style="display:inline-flex;align-items:center;gap:4px;background:#f0f8ff;color:#1a5276;'
                    + 'border:1px solid #aed6f1;border-radius:11px;padding:1px 8px;font-size:12px;">'
                    + esc((p.dept_name ? p.dept_name + ' ' : '') + (p.position ? p.position + ' ' : '') + p.name)
-                   + '<a href="javascript:void(0)" onclick="EGAckPicker._delUser(\'' + id + '\',' + p.id + ')" '
-                   + 'style="color:#c0392b;text-decoration:none;font-weight:700;">&times;</a></span>';
+                   + (api.lockedUsers[p.id]
+                        ? '<i class="fa fa-lock" title="系統預設的通知對象，不可移除"></i></span>'
+                        : '<a href="javascript:void(0)" onclick="EGAckPicker._delUser(\'' + id + '\',' + p.id + ')" '
+                          + 'style="color:#c0392b;text-decoration:none;font-weight:700;">&times;</a></span>');
             });
             el.chips.innerHTML = h
                 || '<span style="color:#bbb;font-size:12px;padding:2px 4px;">尚未選擇（下方輸入姓名或部門名稱來加入）</span>';
@@ -175,11 +183,28 @@
             });
             renderChips();
         };
+        /**
+         * 設定「不可移除的預設對象」：直接併進目前選取，chip 改成鎖頭、不給 ×。
+         * 真正的守門在後端（送出時一律再併回去一次），這裡只是讓畫面說得通。
+         * 必須在 setData() 之後呼叫（要先有 people/depts 才對得到人）。
+         */
+        api.setLocked = function (sel) {
+            api.lockedUsers = {}; api.lockedDepts = {};
+            ((sel && sel.users) || []).forEach(function (u) { api.lockedUsers[Number(u)] = 1; });
+            ((sel && sel.depts) || []).forEach(function (d) { api.lockedDepts[Number(d)] = 1; });
+            var cur = api.getSelection();
+            api.setSelection({
+                users: cur.users.concat(Object.keys(api.lockedUsers).map(Number)),
+                depts: cur.depts.concat(Object.keys(api.lockedDepts).map(Number))
+            });
+        };
         api.clear = function () {
+            // clear 是「清掉使用者自己加的」，不是「連系統預設對象都清掉」
             api.pickedUsers = []; api.pickedDepts = [];
             el.input.value = '';
             el.dropdown.style.display = 'none';
-            renderChips();
+            api.setSelection({ users: Object.keys(api.lockedUsers).map(Number),
+                               depts: Object.keys(api.lockedDepts).map(Number) });
         };
         api.getSelection = function () {
             return {
@@ -222,11 +247,13 @@
         },
         _delDept: function (id, deptId) {
             var a = registry[id]; if (!a) return;
+            if (a.lockedDepts[Number(deptId)]) { alert('這是系統預設的通知對象，不可移除'); return; }
             a.pickedDepts = a.pickedDepts.filter(function (d) { return Number(d.id) !== Number(deptId); });
             a._renderChips(); a._renderList();
         },
         _delUser: function (id, userId) {
             var a = registry[id]; if (!a) return;
+            if (a.lockedUsers[Number(userId)]) { alert('這是系統預設的通知對象，不可移除'); return; }
             a.pickedUsers = a.pickedUsers.filter(function (p) { return Number(p.id) !== Number(userId); });
             a._renderChips(); a._renderList();
         }
