@@ -15,6 +15,8 @@ include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
 include_once $document_root . '/EGsystem/src/common/form_signer_lib.php';
 include_once $document_root . '/EGsystem/src/common/attach_lib.php';
 include_once $document_root . '/EGsystem/src/common/date_fmt_lib.php';
+// 文件備註（富文字）：存檔前一律過共用清洗器，禁止各頁自刻白名單
+include_once $document_root . '/EGsystem/src/common/richtext_lib.php';
 
 $db_connection = new DBConnection();
 $db = $db_connection->getPDO();
@@ -175,6 +177,23 @@ function asTreeExcludeExpand(PDO $db, array $ids): array {
  * 那時的 AS 負責人不一定是現任（例：2026-07-13 交接），一律蓋現任＝簽章不實。
  * 故以任期表（誰、從哪天到哪天）依日期回推當時的負責人；任期內就算數（不再檢查在職／請假，
  * 使用者拍板：那天他本來就是負責人，事後離職不該讓舊表印不出章）。 */
+/**
+ * 文件備註欄（remark_html）ensure：舊環境還原資料庫後可能沒有這欄。
+ * ⚠ 這是 DDL，在 transaction 裡執行會隱式 commit 導致外層 commit() 爆掉，
+ *    所以呼叫端一律要在 beginTransaction() **之前** 呼叫（2026-08-21 已在別處踩過）。
+ */
+function asRemarkEnsure(PDO $db): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        if (!$db->query("SHOW COLUMNS FROM as_document LIKE 'remark_html'")->fetch()) {
+            $db->exec("ALTER TABLE as_document ADD COLUMN remark_html TEXT NULL
+                       COMMENT '文件備註（富文字HTML，管理員維護，僅畫面顯示不列印）' AFTER doc_name");
+        }
+    } catch (Exception $e) { /* 無權限改結構時不擋主流程，備註功能自然不出現 */ }
+}
+
 function asEditorTermEnsure(PDO $db): void {
     static $done = false;
     if ($done) return;
@@ -452,6 +471,7 @@ $asGate = [
     'set_linked_module'=>'settings',
     'phrase_add'=>'update', 'phrase_delete'=>'update',
     'version_attach_file'=>'update', 'docs_add_tags'=>'update',
+    // save_doc_remark 於 case 內另行檢查（僅限管理員）
     // add_versions_batch 於 case 內另行檢查（僅限管理員）
     // form_record_download 於 case 內依 inline 分流（預覽=view / 原檔=download）
 ];
@@ -517,6 +537,7 @@ case 'meta':
 
 // ══════════════ 文件清單（搜尋 / 篩選） ══════════════
 case 'list_documents':
+    asRemarkEnsure($db);              // remark_html 由下方 d.* 一併帶出
     $kw    = trim($_GET['keyword'] ?? '');
     $level = trim($_GET['level'] ?? '');
     $dept  = trim($_GET['department_id'] ?? '');
@@ -591,6 +612,7 @@ case 'list_documents':
 
 // ══════════════ 單一文件明細（含版本 / 標籤 / 權限） ══════════════
 case 'get_document':
+    asRemarkEnsure($db);
     $id = (int)($_GET['id'] ?? 0);
     if ($id<=0) jout(['status'=>'error','message'=>'無效 ID']);
     $st = $db->prepare("SELECT d.*, dep.name AS dept_name, pd.doc_no AS parent_doc_no, pd.doc_name AS parent_doc_name
@@ -878,6 +900,24 @@ case 'update_document_meta':
         $db->commit();
         jout(['status'=>'success','cascade_renumbered'=>$cascadeCnt]);
     } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
+
+// ══════════════ 文件備註（富文字；管理員維護，清單顯示在文件名稱下方） ══════════════
+// 備註的唯一寫入點——刻意不併進 update_document_meta，兩個寫入點規則遲早走鐘，
+// 而且一般使用者存編輯資料時會把管理員寫的備註整段洗掉。
+case 'save_doc_remark':
+    if (!asIsAdmin()) jout(['status'=>'error','message'=>'僅管理員可維護文件備註']);
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id<=0) jout(['status'=>'error','message'=>'無效 ID']);
+    $exists = $db->prepare("SELECT COUNT(*) FROM as_document WHERE id=?");
+    $exists->execute([$id]);
+    if (!$exists->fetchColumn()) jout(['status'=>'error','message'=>'查無此文件']);
+    asRemarkEnsure($db);
+    // 鐵律8：前端已清洗過，這裡一定要再清一次——不然略過前端直打 API 就能塞 <script>，
+    // 而備註是原樣輸出到清單上的，等於一個存起來的 XSS。
+    $remark = eg_richtext_sanitize((string)($_POST['remark_html'] ?? ''), 20000);
+    $db->prepare("UPDATE as_document SET remark_html=?, updated_at=NOW() WHERE id=?")
+       ->execute([$remark === '' ? null : $remark, $id]);
+    jout(['status'=>'success','remark_html'=>$remark]);
 
 // ══════════════ 刪除文件（主檔軟刪除；版本與檔案仍留存可查） ══════════════
 case 'delete_document':

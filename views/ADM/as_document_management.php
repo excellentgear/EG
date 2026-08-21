@@ -537,6 +537,18 @@ if ($deptPerm === 'R') {
 tr.doc-obsolete > td { background:#FBE4E8 !important; }
 .tree-row.tree-obsolete { background:#FBE4E8; }
 .ob-tag { background:#DD5138; color:#fff; }
+/* 文件備註（管理員維護，接在文件名稱下方）：暖色系淡底＋左側粗邊，跟文件名稱明顯分層。
+   內容是使用者自訂格式，所以底色/文字色一律讓內文的 inline style 自己決定，
+   這裡只給容器樣式，不要下 color 蓋掉使用者選的字色。 */
+.doc-remark{
+  margin-top:4px; padding:4px 7px; font-size:12px; line-height:1.65;
+  background:#faf6f0; border-left:3px solid #E8C07A; border-radius:0 3px 3px 0;
+  white-space:normal; word-break:break-word; max-width:420px;
+}
+.doc-remark ul,.doc-remark ol{ margin:0; padding-left:17px; }
+.doc-remark p{ margin:0; }
+/* 使用者拍板：備註只在畫面上看，列印版（文件管制總覽表等）一律不帶 */
+@media print { .doc-remark{ display:none !important; } }
 </style>
 <!-- ═════════ 批次補建版本 Modal（管理員；既有文件一次補多版） ═════════ -->
 <div class="modal fade" id="verBatchModal" tabindex="-1" role="dialog">
@@ -870,6 +882,31 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
   </div>
 </div>
 
+<!-- ═════════ 文件備註 Modal（管理員；存好後顯示在清單文件名稱下方） ═════════ -->
+<div class="modal fade" id="remarkModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:94%;max-width:720px;" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title">文件備註 － <span id="rmk_doc_title"></span></h4>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size:12px;margin-bottom:6px;">
+          可像 Word 一樣選取部份文字後套<b>粗體</b>／<i>斜體</i>／<u>底線</u>／刪除線，或換文字顏色與底色、做條列。
+          存檔後直接顯示在清單的<strong>文件名稱下方</strong>；<strong>列印版（文件管制總覽表等）不會帶這段備註</strong>。
+        </p>
+        <input type="hidden" id="rmk_doc_id">
+        <div id="docRemarkEditor"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-link" id="btnRemarkClear" style="color:#DD5138;float:left;">清空備註</button>
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="btnRemarkSave">儲存備註</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════ 權限設定 Modal ═════════ -->
 <div class="modal fade" id="permModal" tabindex="-1" role="dialog">
   <div class="modal-dialog modal-lg" role="document">
@@ -1032,6 +1069,7 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
+<script src="../../resource/js/eg_richtext.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_richtext.js') ?>"></script>
 <script>
 window.asPerm = <?php echo json_encode($asCaps); ?>;
 $(function(){
@@ -1189,6 +1227,16 @@ $(function(){
     loadDocs();
   });
 
+  // 清單上的文件備註：接在文件名稱下方一整塊。內容是管理員存的 HTML，
+  // 後端存檔時已清洗過，這裡再過一次 EGRichText.render() 當第二道防線（鐵律8）。
+  function docRemarkCell(d){
+    const raw = d.remark_html || '';
+    if(!raw) return '';
+    const html = (window.EGRichText ? EGRichText.render(raw) : '');
+    if(!html) return '';
+    return `<div class="doc-remark egrt-view">${html}</div>`;
+  }
+
   function renderDocs(){
     const size = parseInt($('#pageSize').val())||10;
     const total = DOCS.length;
@@ -1246,6 +1294,8 @@ $(function(){
       let mgmt = '';
       if(canU) mgmt += `<li><a href="javascript:void(0)" class="op-edit" data-id="${d.id}"><i class="fa fa-pencil-square-o"></i> 編輯資料 / 修正版本資訊</a></li>`;
       if(canS) mgmt += `<li><a href="javascript:void(0)" class="op-perm" data-id="${d.id}" data-name="${esc(d.doc_name)}"><i class="fa fa-lock"></i> 文件開啟權限</a></li>`;
+      // 文件備註（管理員）：存好後直接顯示在清單的文件名稱下方
+      if(window.asPerm.admin) mgmt += `<li><a href="javascript:void(0)" class="op-remark" data-id="${d.id}" data-name="${esc(d.doc_name)}" data-no="${esc(d.doc_no)}"><i class="fa fa-sticky-note-o"></i> 文件備註${(d.remark_html||'')?'（已填）':''}</a></li>`;
       if(canD){
         if(mgmt) mgmt += '<li class="divider"></li>';
         mgmt += d.is_deleted==1
@@ -1267,7 +1317,7 @@ $(function(){
       tb.append(`<tr class="${isOb?'doc-obsolete':''}">
         ${canU?`<td><input type="checkbox" class="doc-chk" value="${d.id}"></td>`:''}
         <td>${esc(d.doc_no)}${delMark}</td>
-        <td>${nameCell}</td>
+        <td>${nameCell}${docRemarkCell(d)}</td>
         <td>${esc(d.doc_type)||'-'}</td>
         <td>${esc(d.doc_level)||'-'}</td>
         <td>${esc(d.dept_name)||'<span class="text-muted">跨部門</span>'}</td>
@@ -2747,6 +2797,44 @@ $(function(){
       <td class="text-center"><button class="btn btn-xs btn-danger perm-remove"><i class="fa fa-trash"></i></button></td>
     </tr>`;
   }
+  // ── 文件備註（⚙ → 文件備註）：走共用富文字編輯器 eg_richtext.js ──
+  // 編輯器只建立一次（attach 會重寫容器內容，重複 attach 會把工具列疊上去）
+  function remarkEditor(){
+    return EGRichText.of('#docRemarkEditor')
+        || EGRichText.attach('#docRemarkEditor', {
+             maxLen: 2000,
+             placeholder: '例如：本文件自 2026-08-21 起停用，請改用 2-QC-01-05'
+           });
+  }
+  $('#docTableBody').on('click','.op-remark', function(){
+    const id = $(this).data('id');
+    $('#rmk_doc_id').val(id);
+    $('#rmk_doc_title').text($(this).data('no') + '　' + $(this).data('name'));
+    // 點開即刷新（ai-rules/08 第六節）：不要拿清單快取的舊備註給人接著改，
+    // 否則兩個管理員同時開著，後存的會把先存的整段蓋掉。
+    $.getJSON(API+'?action=get_document', {id:id}, r=>{
+      if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
+      remarkEditor().set(r.data.remark_html || '');
+      $('#remarkModal').modal('show');
+    });
+  });
+  $('#btnRemarkClear').on('click', function(){
+    if(!confirm('確定清空這份文件的備註？')) return;
+    remarkEditor().set('');
+    remarkEditor().focus();
+  });
+  $('#btnRemarkSave').on('click', function(){
+    const api = remarkEditor();
+    if(api.over()){ alert('備註超過 '+api.maxLen+' 字，請精簡後再存檔。'); return; }
+    NProgress.start();
+    $.post(API+'?action=save_doc_remark', {id:$('#rmk_doc_id').val(), remark_html:api.get()}, null, 'json')
+     .done(r=>{
+        if(r.status==='success'){ $('#remarkModal').modal('hide'); showToast('備註已儲存'); loadDocs(); }
+        else alert(r.message||'儲存失敗');
+     })
+     .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
+  });
+
   $('#docTableBody').on('click','.op-perm', function(){
     const id=$(this).data('id'); $('#perm_doc_id').val(id); $('#perm_doc_name').text($(this).data('name'));
     $.getJSON(API+'?action=get_perms',{doc_id:id}, r=>{
