@@ -30,6 +30,17 @@ $uid   = (int)$u['id'];
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
+/**
+ * 內部註記（補簽核／自動簽核）是否要解除遮蔽。
+ * 兩個條件都要成立：① 目前是管理員 ② 這個 session 在 PSL_NOTE_REVEAL_TTL 秒內驗過操作確認密碼。
+ * 權限每次重查，不吃 session 裡的舊值——角色被拔掉之後就該立刻看不到。
+ */
+const PSL_NOTE_REVEAL_TTL = 600;   // 10 分鐘，過期要重新輸入密碼
+function pslNoteRevealed(array $perms): bool {
+    if (empty($perms['canAdmin']) && empty($perms['isAdmin'])) return false;
+    return (int)($_SESSION['psl_note_reveal_until'] ?? 0) > time();
+}
+
 /** 篩選條件：沒有「看全部」權限的人一律被綁死成只能查自己（後端擋，不靠前端） */
 function pslFilters(array $perms, int $uid): array {
     $f = [
@@ -106,8 +117,9 @@ case 'list_print': {
 case 'list_sign': {
     $f = pslFilters($perms, $uid);
     $r = eg_signlog_query($db, $f);
+    $reveal = pslNoteRevealed($perms);
     // 輸出刻意不帶任何自動簽核旗標：畫面上不可出現「自動簽核」字樣（使用者明確要求）
-    $rows = array_map(function ($x) {
+    $rows = array_map(function ($x) use ($reveal) {   // $reveal 一定要 use 進來，否則永遠是 null＝永遠遮蔽
         return [
             'module'        => $x['module'],
             'module_label'  => $x['module_label'],
@@ -120,10 +132,32 @@ case 'list_sign': {
             'decided_at'    => $x['decided_at'],
             'result_label'  => $x['result_label'],
             'status'        => $x['status'],
-            'note'          => $x['note'],
+            // 「（超級管理員補簽核）」這類內部註記絕對不直接輸出（使用者明確要求）。
+            // 只有管理員按下「顯示內部註記」並驗過操作確認密碼，這個 session 才會在 10 分鐘內拿到原文。
+            'note'          => $reveal ? (string)$x['note'] : eg_sign_note_public($x['note']),
+            'note_hidden'   => eg_sign_note_is_internal($x['note']),
         ];
     }, $r['rows']);
-    pslOut(['rows' => $rows, 'total' => $r['total'], 'page' => $f['page'], 'per' => $f['per']]);
+    pslOut(['rows' => $rows, 'total' => $r['total'], 'page' => $f['page'], 'per' => $f['per'],
+            'note_revealed' => $reveal, 'can_reveal' => (!empty($perms['canAdmin']) || !empty($perms['isAdmin']))]);
+}
+
+/* ── 內部註記解除遮蔽（管理員＋操作確認密碼）───────────────────────────────
+   使用者明確要求：「補簽核」這種字樣不可以在前端直接顯示，要按按鈕、輸入操作密碼才看得到。
+   解除只在這個 session 有效 10 分鐘，且列印/匯出一律仍然遮蔽。 */
+case 'reveal_note': {
+    if (empty($perms['canAdmin']) && empty($perms['isAdmin'])) pslErr('只有管理員可以檢視內部註記', 403);
+    include_once $document_root . '/EGsystem/src/common/confirm_password_lib.php';
+    $pw = (string)($_POST['password'] ?? '');
+    if ($pw === '') pslErr('請輸入操作確認密碼');
+    $vr = eg_confirm_password_verify_scoped($db, $uid, $pw, 'psl_reveal_note');
+    if (empty($vr['ok'])) pslErr((string)$vr['msg'], 403);
+    $_SESSION['psl_note_reveal_until'] = time() + PSL_NOTE_REVEAL_TTL;
+    pslOut(['revealed' => true, 'ttl' => PSL_NOTE_REVEAL_TTL]);
+}
+case 'hide_note': {
+    unset($_SESSION['psl_note_reveal_until']);
+    pslOut(['revealed' => false]);
 }
 
 /* ── 涵蓋範圍（使用說明用；一律即時掃描，不放寫死清單）──────────────────── */

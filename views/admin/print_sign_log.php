@@ -165,6 +165,7 @@ try {
 
                 <button id="btnReset"><i class="fa fa-refresh"></i> 本月</button>
                 <button class="btn-warm" id="btnPrintAll"><i class="fa fa-print"></i> 列印全部篩選結果</button>
+                <button id="btnRevealNote" style="display:none;" title="系統內部註記預設不顯示，要看必須輸入操作確認密碼"><i class="fa fa-lock"></i> 顯示內部註記</button>
             </div>
         </div>
 
@@ -189,6 +190,29 @@ try {
 
 <button class="ps-scroll-top" id="btnTop" title="回到頂端"><i class="fa fa-arrow-up"></i></button>
 
+<?php /* 內部註記解除遮蔽：管理員＋操作確認密碼。規則見 ai-rules/23「自動簽核／補簽核字樣一律不得外露」。
+         這段刻意用 PHP 註解不用 HTML 註解——HTML 註解會原樣送到瀏覽器，view-source 就讀得到。 */ ?>
+<div class="modal fade" id="revealMask" tabindex="-1" role="dialog">
+  <div class="modal-dialog modal-sm"><div class="modal-content">
+    <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
+      <button type="button" class="close" data-dismiss="modal">&times;</button>
+      <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-lock"></i> 顯示內部註記</h4>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;">
+        系統寫入的內部註記平常一律不顯示。輸入您的<b>操作確認密碼</b>後，
+        本次登入可在畫面上看到 10 分鐘；<b>列印與匯出一律仍然遮蔽</b>。
+      </div>
+      <input type="password" class="form-control input-sm" id="revealPw" autocomplete="off" placeholder="操作確認密碼">
+      <div id="revealErr" style="color:#DD5138;font-size:12px;margin-top:5px;display:none;"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
+      <button class="btn btn-warning btn-sm" id="revealOk">確認</button>
+    </div>
+  </div></div>
+</div>
+
 <!-- 使用說明 -->
 <div class="ps-mask" id="helpUseMask"><div class="ps-modal">
     <div class="m-head"><span><i class="fa fa-question-circle"></i> 列印與簽核紀錄 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
@@ -206,6 +230,8 @@ try {
             <li><b>全部篩選都是即時的</b>：下拉一選、日期一改、關鍵字邊打就邊查，不需要按任何查詢按鈕。</li>
             <li>下拉選項多時可直接在篩選框打字過濾，不必用眼睛找。</li>
             <li><b>列印全部篩選結果</b>：印的是目前篩選條件下的<b>全部</b>資料，不是只有畫面這一頁。</li>
+            <li><b>顯示內部註記</b>（僅管理員，簽核分頁）：部分簽核意見是系統寫的<b>內部註記</b>，平常一律不顯示，
+                意見欄會是「—」。要查的話按這顆按鈕並輸入<b>操作確認密碼</b>，本次登入可在畫面上看 10 分鐘。</li>
             <li>清單分頁在表格右上角，預設每頁 10 筆（可改 5／20／50）；改成每頁超過 10 筆時，右下角會出現「回到頂端」按鈕。</li>
         </ul>
 
@@ -213,6 +239,11 @@ try {
         <div class="tip">
             <b>「按下列印」就會留紀錄</b>：瀏覽器不會告訴系統使用者在列印對話框最後是按了確定還是取消，
             所以按取消也一樣留一筆。這是刻意的——否則按取消就能規避紀錄。
+        </div>
+        <div class="tip">
+            <b>簽核意見顯示「—」不是壞掉</b>：那一筆的意見是系統寫的<b>內部註記</b>，
+            <b>一律不顯示在畫面上，列印與匯出也永遠不會印出來</b>。
+            紀錄本身有留（可追溯性），只是不對外顯示；管理員要查請用工具列的「顯示內部註記」。
         </div>
         <ul>
             <li><b>登入電腦</b>：顯示電腦名稱與 IP。電腦名稱由 IP 反查而來（內網 NetBIOS），查不到時只顯示 IP。</li>
@@ -322,6 +353,9 @@ function fillPeopleSel(){
     });
 }
 
+// 內部註記目前是不是已解除遮蔽（由 list_sign 回傳，權限與時效都在後端判定，前端只是照著顯示）
+var NOTE_REVEALED = false;
+
 // ── 清單 ────────────────────────────────────────────────────────────────
 var HEAD_PRINT = ['列印時間','資料來源','文件名稱','相關料號','列印人','登入電腦','備註'];
 var HEAD_SIGN  = ['文件名稱','單據種類','送件日期','送件人','簽核關卡','簽核人','簽核日期時間','結果','回覆意見'];
@@ -356,8 +390,14 @@ function rowHtmlSign(r){
         + '<td>' + esc(r.approver_name || '—') + '</td>'
         + '<td style="white-space:nowrap;">' + (r.decided_at ? esc(dispDateTime(r.decided_at)) : '—') + '</td>'
         + '<td><span class="res-pill ' + cls + '">' + esc(r.result_label) + '</span></td>'
-        + '<td class="t-left">' + esc(r.note || '') + '</td>'
+        + '<td class="t-left">' + signNoteCell(r) + '</td>'
         + '</tr>';
+}
+
+/** 簽核意見欄：系統內部註記預設遮蔽，只留一個看不出內容的灰字提示（規則見 ai-rules/23） */
+function signNoteCell(r){
+    if (r.note_hidden && !NOTE_REVEALED) return '<span style="color:#c9bda9;">—</span>';
+    return esc(r.note || '');
 }
 
 function renderPager(total, per, page){
@@ -384,6 +424,11 @@ function loadList(){
         if (!res || !res.ok) { $('#tBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc((res&&res.error)||'查詢失敗')+'</td></tr>'); return; }
         LAST = { rows: res.rows || [], total: res.total || 0 };
         PAGE = res.page || 1;
+        // 內部註記的解除狀態一律以後端為準（權限＋10 分鐘時效都在後端判定）
+        NOTE_REVEALED = !!res.note_revealed;
+        $('#btnRevealNote').toggle(TAB === 'sign' && !!res.can_reveal)
+            .html(NOTE_REVEALED ? '<i class="fa fa-eye-slash"></i> 隱藏內部註記'
+                                : '<i class="fa fa-lock"></i> 顯示內部註記');
         renderHead();
         var f = (TAB === 'print') ? rowHtmlPrint : rowHtmlSign;
         $('#tBody').html(LAST.rows.map(f).join(''));
@@ -455,7 +500,8 @@ function printAll(){
                      + '<td>' + esc(r.approver_name || '—') + '</td>'
                      + '<td>' + (r.decided_at ? esc(dispDateTime(r.decided_at)) : '—') + '</td>'
                      + '<td>' + esc(r.result_label) + '</td>'
-                     + '<td class="tl">' + esc(r.note || '') + '</td></tr>';
+                     // 列印一律遮蔽內部註記，即使畫面上已經解除——文件會離開系統，沒有「已驗證過」這回事
+                     + '<td class="tl">' + (r.note_hidden ? '' : esc(r.note || '')) + '</td></tr>';
             }
         });
         body += '</tbody></table>';
@@ -567,6 +613,34 @@ $('#pgBtns').on('click', 'button', function(){
     PAGE = p; loadList();
 });
 $('#btnPrintAll').on('click', printAll);
+
+// ── 內部註記解除遮蔽 ────────────────────────────────────────────────────
+$('#btnRevealNote').on('click', function(){
+    if (NOTE_REVEALED) {
+        $.post(API, { action:'hide_note' }, function(){ NOTE_REVEALED = false; load(); }, 'json');
+        return;
+    }
+    $('#revealPw').val(''); $('#revealErr').hide();
+    $('#revealMask').modal('show');
+    setTimeout(function(){ $('#revealPw').focus(); }, 350);
+});
+$('#revealOk').on('click', function(){
+    var pw = $('#revealPw').val();
+    if (!pw) { $('#revealErr').text('請輸入操作確認密碼').show(); return; }
+    var $b = $(this).prop('disabled', true);
+    $.post(API, { action:'reveal_note', password:pw }, function(r){
+        $b.prop('disabled', false);
+        if (!r || !r.ok) { $('#revealErr').text((r && r.error) || '驗證失敗').show(); return; }
+        $('#revealMask').modal('hide');
+        NOTE_REVEALED = true;
+        load();
+    }, 'json').fail(function(x){
+        $b.prop('disabled', false);
+        var m = '驗證失敗';
+        try { m = JSON.parse(x.responseText).error || m; } catch(e){}
+        $('#revealErr').text(m).show();
+    });
+});
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); loadCoverage(); });
 $('#btnRoleHelp').on('click', function(){ loadRoleHelp(); openMask('roleHelpMask'); });
 $('.ps-mask').on('click', function(e){ if (e.target === this) this.style.display='none'; });

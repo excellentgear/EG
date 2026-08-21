@@ -305,6 +305,17 @@ if (!function_exists('eg_sign_modules')) {
      * 沒補的模組不會漏掉，只是文件名稱會退成「模組代碼 #id」（見 eg_sign_resolve_names）。
      */
     function eg_sign_modules(): array {
+        // 人事表單的 form_type 存的是代碼（job_desc/skill_assess/competency），直接印出來
+        // 使用者根本看不出是哪一張表單。中文名的**唯一來源**是 hr_form_lib.php 的 HRF_FORM_TYPES，
+        // 這裡用它現場組出 SQL 的 CASE，不在本檔另外寫一份對照表——寫死的那份會在人家改名後
+        // 繼續顯示舊名稱而且不會報錯（鐵律4）。require 放在函式內，沒用到簽核解析的頁面不必付這個成本。
+        require_once __DIR__ . '/hr_form_lib.php';
+        $hrfCase = 'CASE t.form_type';
+        foreach (HRF_FORM_TYPES as $code => $label) {
+            $hrfCase .= " WHEN " . var_export((string)$code, true) . " THEN " . var_export((string)$label, true);
+        }
+        $hrfCase .= ' ELSE t.form_type END';
+
         return [
             'quotation' => ['label' => '報價單', 'page' => 'views/Sales/quotation_list_NEW.php',
                 'table' => 'quotation_list', 'pk' => 'quote_id',
@@ -324,7 +335,19 @@ if (!function_exists('eg_sign_modules')) {
                 'date_sql' => 't.business_date'],
             'hr_form' => ['label' => '人事表單（職務說明書／技能鑑定／職能鑑定）', 'page' => 'views/ADM/hr_position_forms.php',
                 'table' => 'hr_form_instance', 'pk' => 'id',
-                'name_sql' => "CONCAT(t.form_type, ' ', COALESCE(t.user_cname, ''), IFNULL(CONCAT('（', t.dept_name, '）'), ''))",
+                // 「專業技能鑑定考核表　黃文德（生產1廠 作業員）－ CNC車床」這種程度才看得出印的是什麼。
+                // 職務說明書掛在「職稱」上沒有對應的人（user_cname 是 NULL），這時主體改用職稱，
+                // 括號裡就只留部門，不要把職稱印兩次。技能鑑定是一人一機型一張，機型/項目一定要帶出來，
+                // 否則同一個人的好幾張表單看起來一模一樣。
+                'name_sql' => "CONCAT(
+                        {$hrfCase}, ' ',
+                        COALESCE(NULLIF(t.user_cname,''), NULLIF(t.position_name,''), CONCAT('#', t.id)),
+                        CASE WHEN NULLIF(t.user_cname,'') IS NOT NULL
+                             THEN IFNULL(CONCAT('（', NULLIF(CONCAT_WS(' ', NULLIF(t.dept_name,''), NULLIF(t.position_name,'')), ''), '）'), '')
+                             ELSE IFNULL(CONCAT('（', NULLIF(t.dept_name,''), '）'), '')
+                        END,
+                        IFNULL(CONCAT(' － ', NULLIF(COALESCE(NULLIF(t.machine_display_name,''), NULLIF(t.item_name,'')), '')), '')
+                    )",
                 'date_sql' => 't.business_date'],
             'form_signer' => ['label' => '表單簽核案件', 'page' => 'views/ADM/form_signer.php',
                 'table' => 'fsd_case', 'pk' => 'id',
@@ -373,6 +396,36 @@ if (!function_exists('eg_sign_level_label')) {
     }
 }
 
+if (!function_exists('eg_sign_note_is_internal')) {
+    /**
+     * 這則簽核意見是不是「內部註記」（補簽核／自動簽核／免審之類）。
+     *
+     * 使用者明確要求（2026-08-21）：**「（超級管理員補簽核）」這種字樣絕對禁止在前端直接顯示**，
+     * 也不可以出現在列印與匯出。原因是那等於在文件上自曝這一關不是本人當場簽的。
+     * 要看的話得走「顯示內部註記」按鈕＋管理員的操作確認密碼（見 PrintSignLog_API 的 reveal_note）。
+     *
+     * 判定用關鍵字比對而不是旗標，因為 approval_record 沒有 is_auto 欄位，這些字串是各模組
+     * 寫死在程式裡的（hr_form_lib 的「（超級管理員補簽核）」、form_signer_lib／review_form_lib 的
+     * 「（系統自動簽核）」、VendorAudit_API 的「系統自動核可/送審人即簽核人免審」）。
+     * 這裡刻意抓寬一點——**誤遮一則正常意見，遠比漏出一則補簽註記安全**。
+     */
+    function eg_sign_note_is_internal(?string $note): bool {
+        $n = trim((string)$note);
+        if ($n === '') return false;
+        foreach (['補簽', '自動簽核', '自動核可', '系統自動', '免審'] as $kw) {
+            if (mb_strpos($n, $kw) !== false) return true;
+        }
+        return false;
+    }
+}
+
+if (!function_exists('eg_sign_note_public')) {
+    /** 對外（畫面／列印／匯出）要顯示的簽核意見：內部註記一律吃掉，不留任何暗示性文字。 */
+    function eg_sign_note_public(?string $note): string {
+        return eg_sign_note_is_internal($note) ? '' : trim((string)$note);
+    }
+}
+
 if (!function_exists('eg_sign_result_label')) {
     /** 簽核結果；pending 一律顯示「待簽核」（不用「未處理」以免跟退回混淆） */
     function eg_sign_result_label(string $status): string {
@@ -417,8 +470,13 @@ if (!function_exists('eg_sign_resolve_names')) {
                 if ($name === null && $cfg && !empty($cfg['name_fmt'])) {
                     $name = strpos($cfg['name_fmt'], '%s') !== false ? sprintf($cfg['name_fmt'], $eid) : $cfg['name_fmt'];
                 }
-                // 沒登錄在 eg_sign_modules() 的模組不會漏掉，只是名稱退成代碼＋編號
-                if ($name === null || $name === '') $name = ($cfg['label'] ?? $mod) . ' #' . $eid;
+                // 兩種退回情形要講清楚，不要一律只丟「代碼 #編號」讓使用者自己猜：
+                //   ① 有登錄主檔但查不到那一列＝單據已被刪除（簽核紀錄本身要保留可追溯性，所以不會跟著消失）
+                //   ② 根本沒登錄在 eg_sign_modules()＝新模組還沒補進登錄表
+                if ($name === null || $name === '') {
+                    $name = ($cfg['label'] ?? $mod) . ' #' . $eid
+                          . (($cfg && !empty($cfg['table'])) ? '（單據已刪除）' : '');
+                }
                 $rows[$i]['doc_name']     = $name;
                 $rows[$i]['doc_date']     = $dateById[$eid] ?? null;
                 $rows[$i]['module_label'] = $cfg['label'] ?? $mod;
