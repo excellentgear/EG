@@ -724,6 +724,70 @@ function dwg_create_change(PDO $pdo, array $p): array {
             'old_version_id' => $ver['old'], 'status' => $status];
 }
 
+/**
+ * 「自動換圖記錄」：把偵測到的換圖自動帶入資料，建成一筆**草稿**變更單。
+ *
+ * 使用者要求的兩條入口共用這一支（禁止各頁自己 INSERT）：
+ *   ① 上傳／批圖編輯器存檔當下判定是換圖 → 跳提示問要不要建立
+ *   ② 當下按「否」也沒關係：之後到料號附件頁按「自動換圖記錄」一樣建得出來
+ *
+ * 自動帶入：料號、客戶（顯示用，存在 d_setting 上不重複存）、廠內版次的新舊發行日、
+ *           變更日期＝新圖發行日、客戶變更前版次＝料號主檔目前的版次。
+ * 摘要留空由使用者補（只有填表的人知道這次改了什麼），所以一律建成**草稿**：
+ * 不通知任何人、也不換檢驗標準版次，等使用者在另開的分頁補完按送出才正式成立。
+ *
+ * 同一張附件只會建一次：已經有以它為觸發來源的紀錄就直接回傳那一筆（避免按兩次長出兩張單）。
+ *
+ * @param int|null $attachId 指定以哪張附件當「變更後」那一版；null＝自動取最新的一版
+ * @return array{ok:bool, id:int, change_no:string, existed:bool, message:string}
+ */
+function dwg_auto_draft_from_part(PDO $pdo, int $dId, int $uid, ?int $attachId = null): array {
+    dwg_ensure_schema($pdo);
+    $fail = function ($msg) { return ['ok' => false, 'id' => 0, 'change_no' => '', 'existed' => false, 'message' => $msg]; };
+    if ($dId <= 0) return $fail('請先選擇料號');
+
+    $pair = dwg_internal_rev_pair($pdo, $dId, [], null, $attachId);
+    if (!$pair['new_date']) {
+        return $fail('這個料號目前沒有任何「自家出的圖」帶發行章日期，無法判定換圖。'
+                   . '請先在附件上填發行章日期（標籤要屬於自家出的圖）。');
+    }
+    if (!$pair['old_date']) {
+        return $fail('這個料號只有一個發行章日期（' . eg_fmt_date($pair['new_date']) . '）＝首次發行，沒有「換圖」可登錄。');
+    }
+
+    // 已經登錄過就不重複建（點兩次不該長出兩張單）
+    try {
+        $q = $pdo->prepare("SELECT id, change_no FROM qc_drawing_change WHERE trigger_attachment_id=? LIMIT 1");
+        $q->execute([$pair['new_id']]);
+        if ($old = $q->fetch(PDO::FETCH_ASSOC)) {
+            return ['ok' => true, 'id' => (int)$old['id'], 'change_no' => (string)$old['change_no'],
+                    'existed' => true, 'message' => '這張圖已經登錄過變更紀錄 ' . $old['change_no'] . '，直接開啟該筆。'];
+        }
+    } catch (Throwable $e) {}
+
+    $info = dwg_part_info($pdo, $dId);
+    $r = dwg_create_change($pdo, [
+        'd_id'                  => $dId,
+        'summary'               => '',                    // 由使用者在另開的分頁補
+        'status'                => 'DRAFT',
+        'rev_scope'             => 'customer',            // 預設客戶改圖；不是的話使用者改成「僅廠內版次」
+        'old_revision'          => $info['revision'],     // 料號主檔目前的客戶版次＝變更前
+        'new_revision'          => '',
+        'int_old_revision'      => $pair['old_date'],
+        'int_new_revision'      => $pair['new_date'],
+        'change_date'           => $pair['new_date'],     // 變更日＝新圖發行章日期
+        'source'                => '客戶',
+        'detail'                => '（系統自動偵測換圖）新圖：' . (string)$pair['new_name']
+                                 . '　舊圖：' . (string)$pair['old_name'],
+        'trigger_attachment_id' => $pair['new_id'],
+        'create_source'         => 'attach',
+        'created_by'            => $uid,
+    ]);
+    return ['ok' => true, 'id' => (int)$r['id'], 'change_no' => (string)$r['change_no'], 'existed' => false,
+            'message' => '已建立草稿 ' . $r['change_no'] . '（廠內版次 ' . eg_fmt_date($pair['old_date'])
+                       . ' → ' . eg_fmt_date($pair['new_date']) . '），請在另開的分頁補完變更內容後送出。'];
+}
+
 /** 使用者中文姓名（找不到就回工號字串，不讓紀錄留空） */
 function dwg_user_name(PDO $pdo, int $uid): string {
     if ($uid <= 0) return '';

@@ -692,12 +692,18 @@ switch ($action) {
             $st->execute([$aId]);
             $att = $st->fetch(PDO::FETCH_ASSOC);
             if (!$att) throw new Exception('找不到這筆附件，可能已被刪除');
+            // 廠內版次（＝發行章日期）：這次上傳的那張圖是「變更後」，往前找同範圍的前一版當「變更前」
+            $pair = dwg_internal_rev_pair($pdo, (int)$att['d_id'], [], null, (int)$att['id']);
             $r = dwg_create_change($pdo, [
                 'd_id'                  => (int)$att['d_id'],
                 'summary'               => ($_POST['summary'] ?? ''),
                 'detail'                => ($_POST['detail'] ?? ''),
+                'rev_scope'             => ((($_POST['rev_scope'] ?? '') === 'internal') ? 'internal' : 'customer'),
                 'old_revision'          => ($_POST['old_revision'] ?? ''),
                 'new_revision'          => ($_POST['new_revision'] ?? ''),
+                'int_old_revision'      => ($_POST['int_old_revision'] ?? ($pair['old_date'] ?? '')),
+                'int_new_revision'      => ($_POST['int_new_revision'] ?? ($att['issue_stamp_date'] ?: '')),
+                'create_source'         => 'attach',
                 'change_date'           => ($att['issue_stamp_date'] ?: ''),   // 變更日＝發行章日期
                 'source'                => ($_POST['source'] ?? ''),
                 'customer_doc_no'       => ($_POST['customer_doc_no'] ?? ''),
@@ -710,6 +716,37 @@ switch ($action) {
             echo json_encode(['success'=>true,'id'=>$r['id'],'change_no'=>$r['change_no'],
                               'new_version_id'=>$r['new_version_id']], JSON_UNESCAPED_UNICODE);
         } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        break;
+
+    // ── 圖面變更：「自動換圖記錄」（使用者要求）─────────────────────
+    // 上傳當下按「否」也沒關係，之後隨時可以在料號附件頁按這顆按鈕：
+    // 系統自動判定新舊圖、把料號/客戶/新舊發行日帶好建成**草稿**，前端再另開分頁讓使用者補完送出。
+    // 判定與建立的唯一實作在 dwg_change_lib.php（禁止各頁自己 INSERT）。
+    case 'auto_dwg_change':
+        try {
+            $aDid = intval($_POST['d_id'] ?? 0);
+            $aAtt = intval($_POST['attachment_id'] ?? 0) ?: null;
+            if ($aAtt) {
+                $st = $pdo->prepare("SELECT d_id FROM part_attachments WHERE id=? AND deleted_at IS NULL");
+                $st->execute([$aAtt]);
+                $ad = $st->fetchColumn();
+                if (!$ad) throw new Exception('找不到這筆附件，可能已被刪除');
+                if (!$aDid) $aDid = (int)$ad;
+            }
+            $r = dwg_auto_draft_from_part($pdo, $aDid, $uploadedById, $aAtt);
+            echo json_encode(['success'=>$r['ok'], 'id'=>$r['id'], 'change_no'=>$r['change_no'],
+                              'existed'=>$r['existed'], 'message'=>$r['message']], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()], JSON_UNESCAPED_UNICODE); }
+        break;
+
+    // ── 料號版次異動紀錄（主檔「版次」旁邊那顆按鈕）────────────────
+    case 'revision_log':
+        try {
+            $rDid = intval($_POST['d_id'] ?? 0);
+            if ($rDid <= 0) throw new Exception('缺少料號');
+            echo json_encode(['success'=>true, 'rows'=>dwg_revision_log_list($pdo, $rDid),
+                              'part'=>dwg_part_info($pdo, $rDid)], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()], JSON_UNESCAPED_UNICODE); }
         break;
 
     // ── 刪除附件 ─────────────────────────────────────────────────

@@ -2155,6 +2155,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if ($ck->fetch()) throw new Exception("料號「$D_Setting_Id」已存在（同客戶、同規格、同版次）");
                 $pdo->prepare("UPDATE d_setting SET D_Setting_Id=?,Spec_No=?,Revision=?,Issue_Date=?,Type=?,Is_Assembly=?,workpiece_sub_type_id=?,Customer_Id=?,Remark=?,Weight_Kg=?,weight_source=?,weight_calc_json=?,Modified_By=?,Modified_At=NOW() WHERE d_id=?")
                     ->execute([$D_Setting_Id,$Spec_No,$Revision,$Issue_Date,$Type,$Is_Assembly,$sub_type_id,$Customer_Id,$Remark,$Weight_Kg,$weight_source,$weight_calc_json,$uid,$d_id]);
+                // 版次異動要留紀錄（使用者要求：主檔「版次」旁邊的紀錄清單要看得到誰改的）。
+                // 只有真的改到版次才寫，寫失敗也不影響存檔（紀錄是附加價值，不該擋住主流程）。
+                if (trim((string)($old_part_row['Revision'] ?? '')) !== trim((string)$Revision)) {
+                    try {
+                        require_once __DIR__ . '/../../src/common/dwg_change_lib.php';
+                        dwg_log_revision($pdo, (int)$d_id, (string)($old_part_row['Revision'] ?? ''), (string)$Revision,
+                                         null, null, 'manual', null, (int)$uid, dwg_user_name($pdo, (int)$uid),
+                                         '於料號主檔直接修改版次');
+                    } catch (Throwable $_re) {}
+                }
             } else {
                 if (!$can_create) throw new Exception('無新增權限');
                 $ck = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND (Customer_Id <=> ?) AND (Spec_No <=> ?) AND (Revision <=> ?)");
@@ -7213,7 +7223,12 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <div class="row">
     <div class="col-md-4">
         <div class="form-group">
-            <label>版次 (Revision)</label>
+            <label>版次 (Revision)
+                <button type="button" id="pf-rev-log-btn" onclick="openRevisionLog()" title="查看版次異動紀錄（誰改的、什麼時候改的、對應的廠內版次）"
+                    style="float:right;font-size:11px;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;border-radius:5px;padding:1px 8px;cursor:pointer;">
+                    <i class="fa fa-history"></i> 版次紀錄
+                </button>
+            </label>
             <input type="text" class="form-control" id="pf-Revision" name="Revision" placeholder="例：A、01、Rev1" maxlength="30">
         </div>
     </div>
@@ -8901,6 +8916,28 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 </div>
 </div></div></div>
 
+<!-- ═══ MODAL: 版次異動紀錄 ═══════════════════════════════════════════
+     使用者要求：版次 (Revision) 右側要看得到「誰改的、什麼時候改的」，
+     以及對應的廠內版次（發行日）。來源有兩種：主檔手動修改／圖面變更單回寫。 -->
+<div class="modal fade" id="revisionLogModal" tabindex="-1">
+<div class="modal-dialog" style="width:860px;max-width:96vw;"><div class="modal-content">
+    <div class="modal-header" style="background:linear-gradient(135deg,#8a5a12,#C77C1A);padding:8px 14px;">
+        <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.85;">&times;</button>
+        <h4 class="modal-title" style="color:#fff;font-size:14px;margin:0;">
+            <i class="fa fa-history"></i> 版次異動紀錄 — <span id="rvl-part-no" style="font-family:Consolas,monospace;"></span>
+        </h4>
+    </div>
+    <div class="modal-body" style="max-height:65vh;overflow:auto;">
+        <div style="font-size:12px;color:#8a6a45;background:#FFF8EE;border:1px solid #E4D3BC;border-radius:5px;padding:7px 10px;margin-bottom:8px;">
+            <b>客戶版次</b>＝客戶圖自己的版次；<b>廠內版次</b>＝我們自己出的圖，一律用<b>發行章日期</b>當版次。
+            由圖面變更單回寫的紀錄會帶變更單號，點得進去看細節。
+        </div>
+        <div id="rvl-list"><div style="text-align:center;padding:20px;color:#aaa;"><i class="fa fa-spinner fa-spin"></i></div></div>
+    </div>
+    <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+</div></div>
+</div>
+
 <!-- ═══ MODAL: 料號附件瀏覽器 ══════════════════════════════════════════ -->
 <div class="modal fade" id="partAttachViewModal" tabindex="-1">
 <div class="modal-dialog" style="width:1000px;max-width:97vw;margin:20px auto;"><div class="modal-content" style="height:82vh;display:flex;flex-direction:column;">
@@ -8910,6 +8947,13 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
     <div id="pav-cat-tabs" style="display:none;flex:1;gap:4px;flex-wrap:wrap;align-items:center;min-width:0;"></div>
     <div style="flex:1;"></div>
     <?php if ($can_part_attach): ?>
+    <!-- 自動換圖記錄：上傳當下按「稍後再填」也沒關係，之後隨時可以在這裡補建。
+         系統會自動判定新舊圖（發行章日期）、把料號/客戶/新舊發行日帶好建成草稿，再另開分頁讓使用者補完。 -->
+    <button type="button" id="pav-btn-dwg-auto" onclick="pavAutoDwgChange()"
+        title="依發行章日期自動判定換圖，帶好資料建立圖面變更紀錄（草稿），並另開分頁填寫"
+        style="font-size:11px;background:#F0A24B;color:#4A3524;border:1px solid #C77C1A;border-radius:6px;padding:2px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;font-weight:700;">
+        <i class="fa fa-exchange"></i> 自動換圖記錄
+    </button>
     <button type="button" id="pav-btn-del-log" onclick="pavOpenDeleteLog()" title="查看已刪除的附件紀錄"
         style="font-size:11px;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:6px;padding:2px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;">
         <i class="fa fa-history"></i> 刪除紀錄
@@ -18718,6 +18762,80 @@ function pavDeleteCurrent() {
                 _pavRenderList();
             });
         } else showToast(r.message||'刪除失敗','error');
+    });
+}
+
+/**
+ * 自動換圖記錄（使用者要求）：依發行章日期自動判定新舊圖，把料號、客戶、新舊發行日
+ * 自動帶好建成一筆**草稿**變更單，再另開分頁讓使用者補完內容後送出。
+ * 判定與建立都在後端 dwg_change_lib.php（禁止前端自己拼），這裡只負責問與開分頁。
+ */
+function pavAutoDwgChange() {
+    var dId = _pav.dId;
+    if (!dId) { alert('請先開啟某個料號的附件'); return; }
+    var btn = document.getElementById('pav-btn-dwg-auto');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 判定中…'; }
+    $.post(PART_ATTACH_API_URL, { action:'auto_dwg_change', d_id:dId }, function(r) {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-exchange"></i> 自動換圖記錄'; }
+        if (!r.success) { alert(r.message || '無法自動建立換圖記錄'); return; }
+        alert(r.message);
+        window.open('../QC/drawing_change_log.php?id=' + r.id, '_blank');
+    }, 'json').fail(function(x) {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-exchange"></i> 自動換圖記錄'; }
+        alert('自動換圖記錄失敗：' + (x.responseText || '連線錯誤'));
+    });
+}
+
+/** 版次異動紀錄（主檔「版次」右側按鈕）：誰改的、何時改的、對應的廠內版次是哪一天 */
+function openRevisionLog() {
+    var dId = parseInt(document.getElementById('pf-d_id') ? document.getElementById('pf-d_id').value : 0, 10) || _palCurrentDId || 0;
+    if (!dId) { alert('請先存檔或選擇一個既有料號，才有版次異動紀錄可看'); return; }
+    document.getElementById('rvl-part-no').textContent =
+        (document.getElementById('pf-D_Setting_Id') || {}).value || _palCurrentPartNo || '';
+    document.getElementById('rvl-list').innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;"><i class="fa fa-spinner fa-spin"></i></div>';
+    $('#revisionLogModal').modal('show');
+    $.post(PART_ATTACH_API_URL, { action:'revision_log', d_id:dId }, function(r) {
+        var el = document.getElementById('rvl-list');
+        if (!el) return;
+        if (!r.success) { el.innerHTML = '<div style="color:red;padding:10px;">' + escHtml(r.message || '載入失敗') + '</div>'; return; }
+        var rows = r.rows || [];
+        if (!rows.length) {
+            el.innerHTML = '<div style="text-align:center;color:#aaa;padding:20px;font-size:12px;">'
+                         + '尚無版次異動紀錄（從現在起，主檔改版次或圖面變更單回寫版次都會記在這裡）</div>';
+            return;
+        }
+        var h = '<table style="width:100%;font-size:12px;border-collapse:collapse;">'
+              + '<thead><tr style="background:#FFF3E2;border-bottom:2px solid #C77C1A;">'
+              + '<th style="padding:5px 8px;text-align:left;white-space:nowrap;">異動時間</th>'
+              + '<th style="padding:5px 8px;text-align:left;white-space:nowrap;">異動人員</th>'
+              + '<th style="padding:5px 8px;text-align:left;white-space:nowrap;">客戶版次</th>'
+              + '<th style="padding:5px 8px;text-align:left;white-space:nowrap;">廠內版次(發行日)</th>'
+              + '<th style="padding:5px 8px;text-align:left;white-space:nowrap;">來源</th>'
+              + '<th style="padding:5px 8px;text-align:left;">說明</th></tr></thead><tbody>';
+        rows.forEach(function(x) {
+            var cust = (x.old_revision || x.new_revision)
+                     ? (escHtml(x.old_revision || '—') + ' → <b>' + escHtml(x.new_revision || '—') + '</b>')
+                     : '<span style="color:#aaa;">未變更</span>';
+            var intr = (x.int_old_revision || x.int_new_revision)
+                     ? ((x.int_old_revision ? egFmtDate(x.int_old_revision) : '（首次）') + ' → <b>'
+                        + (x.int_new_revision ? egFmtDate(x.int_new_revision) : '—') + '</b>')
+                     : '<span style="color:#aaa;">未變更</span>';
+            var src = x.change_no
+                    ? ('<a href="../QC/drawing_change_log.php?id=' + x.change_id + '" target="_blank">圖面變更單 '
+                       + escHtml(x.change_no) + '</a>')
+                    : '主檔修改';
+            h += '<tr style="border-bottom:1px solid #eee;">'
+               + '<td style="padding:5px 8px;white-space:nowrap;">' + String(x.changed_at || '').substring(0, 16) + '</td>'
+               + '<td style="padding:5px 8px;white-space:nowrap;">' + escHtml(x.changed_by_name || '') + '</td>'
+               + '<td style="padding:5px 8px;white-space:nowrap;">' + cust + '</td>'
+               + '<td style="padding:5px 8px;white-space:nowrap;">' + intr + '</td>'
+               + '<td style="padding:5px 8px;white-space:nowrap;">' + src + '</td>'
+               + '<td style="padding:5px 8px;">' + escHtml(x.note || '') + '</td></tr>';
+        });
+        el.innerHTML = h + '</tbody></table>';
+    }, 'json').fail(function(x) {
+        document.getElementById('rvl-list').innerHTML =
+            '<div style="color:red;padding:10px;">載入失敗：' + escHtml(x.responseText || '連線錯誤') + '</div>';
     });
 }
 
