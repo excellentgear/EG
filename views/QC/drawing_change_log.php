@@ -787,7 +787,7 @@ $(function(){
     $('#btn-new').on('click', function(){ openEdit(null); });
     function openEdit(row, acks){
         $('#f-id').val(row?row.id:'');
-        pickedPart = row ? {d_id:parseInt(row.d_id,10), part_no:String(row.part_no||'')} : null;
+        pickedPart = row ? {d_id:parseInt(row.d_id,10), part_no:String(row.part_no||''), customer:String(row.customer_name||'')} : null;
         $('#part-results').hide().empty(); partRows=[]; partActive=-1;
         $('#f-part-kw').val(pickedPart ? pickedPart.part_no : '');
         renderPicked();
