@@ -9118,74 +9118,6 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 </div>
 </div></div></div>
 
-<!-- ═══ MODAL: 圖面變更登錄（附件上傳判定為「變更」時自動跳出）════════════
-     判準：發行章日期比同料號既有的自家圖新＝變更。詳見 ai-rules/15-圖面變更判定依據.md
-     建立動作走 Part_Attachment_API 的 create_dwg_change → src/common/dwg_change_lib.php，
-     與「圖面變更紀錄」頁手動登錄同一套（會複製檢驗標準新版次並通知簽收）。 -->
-<div class="modal fade" id="dwgChangeModal" tabindex="-1" data-backdrop="static">
-<div class="modal-dialog" style="width:620px;max-width:96vw;"><div class="modal-content">
-<div class="modal-header" style="background:linear-gradient(135deg,#C77C1A,#F0A24B);">
-    <button type="button" class="close" data-dismiss="modal" style="color:#fff;">&times;</button>
-    <h4 class="modal-title" style="color:#4A3524;font-size:15px;"><i class="fa fa-exchange"></i> 偵測到圖面變更 — 請填寫變更內容</h4>
-</div>
-<div class="modal-body" style="padding:12px 16px;">
-    <input type="hidden" id="dwg-attach-id">
-    <div id="dwg-why" style="font-size:12px;background:#FFF3E2;border:1px solid #E4D3BC;color:#6B4423;border-radius:4px;padding:8px;margin-bottom:10px;"></div>
-    <div class="form-group">
-        <label style="font-size:12px;font-weight:700;color:#555;">變更摘要 <span style="color:#e74c3c;">*</span>
-            <small style="color:#aaa;font-weight:normal;">（會直接出現在檢驗人員的提醒上）</small></label>
-        <input type="text" id="dwg-summary" class="form-control input-sm" maxlength="200"
-               placeholder="例：外徑由 Ø25±0.1 改為 Ø24.8±0.05，並新增同心度 0.02">
-        <div id="dwg-summary-err" style="font-size:11px;color:#e74c3c;margin-top:3px;display:none;">請填寫變更摘要——只有你知道這次改了什麼</div>
-    </div>
-    <div style="display:flex;gap:8px;">
-        <div class="form-group" style="flex:1;">
-            <label style="font-size:12px;font-weight:700;color:#555;">從哪個製程開始受影響</label>
-            <select id="dwg-fromproc" class="form-control input-sm"></select>
-            <small style="color:#aaa;font-size:11px;">留白＝該料號所有製程都提醒</small>
-        </div>
-        <div class="form-group" style="width:110px;flex-shrink:0;">
-            <label style="font-size:12px;font-weight:700;color:#555;">變更前版次</label>
-            <input type="text" id="dwg-oldrev" class="form-control input-sm" maxlength="50" placeholder="選填">
-        </div>
-        <div class="form-group" style="width:110px;flex-shrink:0;">
-            <label style="font-size:12px;font-weight:700;color:#555;">變更後版次</label>
-            <input type="text" id="dwg-newrev" class="form-control input-sm" maxlength="50" placeholder="選填">
-        </div>
-    </div>
-    <div style="display:flex;gap:8px;">
-        <div class="form-group" style="width:130px;flex-shrink:0;">
-            <label style="font-size:12px;font-weight:700;color:#555;">變更來源</label>
-            <select id="dwg-source" class="form-control input-sm"><option>客戶</option><option>內部</option></select>
-        </div>
-        <div class="form-group" style="flex:1;">
-            <label style="font-size:12px;font-weight:700;color:#555;">工程變更單號 / 客戶文件編號</label>
-            <input type="text" id="dwg-cdoc" class="form-control input-sm" maxlength="100" placeholder="選填，沒開單就留白">
-        </div>
-    </div>
-    <div class="form-group">
-        <label style="font-size:12px;font-weight:700;color:#555;">變更內容明細</label>
-        <textarea id="dwg-detail" class="form-control input-sm" rows="2" placeholder="選填"></textarea>
-    </div>
-    <div class="form-group" style="margin-bottom:0;">
-        <label style="font-size:12px;font-weight:700;color:#555;">需簽收對象
-            <small style="color:#aaa;font-weight:normal;">（可混合指定部門與個人；未簽收會一直留在置頂未讀）</small></label>
-        <div id="dwg-chips" style="display:flex;flex-wrap:wrap;gap:4px;padding:5px;background:#fafbfc;border:1px solid #e4e8ed;border-radius:4px;min-height:32px;margin-bottom:4px;"></div>
-        <div style="position:relative;">
-            <input type="text" id="dwg-people-q" class="form-control input-sm" autocomplete="off"
-                   placeholder="輸入姓名或部門名稱篩選，點選加入（選部門＝該部門含子部門的在職人員全收到）">
-            <div id="dwg-picker" style="display:none;position:absolute;z-index:1060;left:0;right:0;top:100%;background:#fff;
-                 border:1px solid #e4e8ed;border-radius:0 0 4px 4px;max-height:210px;overflow:auto;box-shadow:0 6px 14px rgba(0,0,0,.12);"></div>
-        </div>
-        <div id="dwg-ack-summary" style="font-size:11px;color:#7f8c8d;margin-top:4px;">尚未指定簽收對象——不指定就不會有人收到通知</div>
-    </div>
-</div>
-<div class="modal-footer" style="padding:8px 16px;">
-    <button type="button" class="btn btn-default" onclick="dwgSkipChange()" title="附件已存好，之後可到「圖面變更紀錄」頁補登">稍後再填</button>
-    <button type="button" class="btn btn-warning" id="dwg-save-btn" onclick="submitDwgChange()"><i class="fa fa-check"></i> 建立變更紀錄並通知簽收</button>
-</div>
-</div></div></div>
-
 <!-- ═══ MODAL: 附件刪除紀錄 ══════════════════════════════════════════ -->
 <div class="modal fade" id="partAttachDeleteLogModal" tabindex="-1">
 <div class="modal-dialog" style="width:700px;max-width:96vw;"><div class="modal-content">
@@ -19260,7 +19192,7 @@ function submitPartAttachUpload() {
             if (done > 0) {
                 $('#partAttachUploadModal').modal('hide');
                 _refreshPartAttachCell(dId);
-                if (changeHit) { openDwgChangeModal(changeHit); return; }   // 先讓設計填變更，填完再回附件檢視
+                if (changeHit) { askAutoDwgChange(changeHit); return; }   // 問要不要自動建立變更紀錄
                 setTimeout(function(){ openAttachAllView(dId, _pav.partNo||''); }, 200);
             }
             return;
@@ -19293,81 +19225,34 @@ function submitPartAttachUpload() {
     uploadNext(0);
 }
 
-/* ── 圖面變更登錄跳窗（附件上傳判定為「變更」時自動跳出）────────────────── */
-var _dwgCtx = null;
-function openDwgChangeModal(ctx) {
-    _dwgCtx = ctx;
-    document.getElementById('dwg-attach-id').value = ctx.attachId;
-    document.getElementById('dwg-why').innerHTML =
-        '<b>' + escHtml(ctx.fileName) + '</b> 的發行章日期是 <b>' + escHtml(egFmtDate(ctx.verdict.issue_date)) + '</b>，'
-        + '比這個料號現有最新的自家圖面（' + escHtml(ctx.verdict.prev_name||'') + '，'
-        + escHtml(egFmtDate(ctx.verdict.prev_date)) + '）新，所以判定為<b>圖面變更</b>。<br>'
-        + '只有你知道這次改了什麼、哪些製程受影響，請填一下；送出後會自動把檢驗標準複製成新版次並通知簽收。';
-    document.getElementById('dwg-summary').value = '';
-    document.getElementById('dwg-detail').value  = '';
-    document.getElementById('dwg-oldrev').value  = '';
-    document.getElementById('dwg-newrev').value  = '';
-    document.getElementById('dwg-cdoc').value    = '';
-    document.getElementById('dwg-source').value  = '客戶';
-    document.getElementById('dwg-summary-err').style.display = 'none';
-    document.getElementById('dwg-summary').style.borderColor = '';
-    _dwgEnsurePicker().clear();
-    $.post(PART_ATTACH_API_URL, { action:'dwg_lookups' }, function(r) {
-        if (!r || !r.success) return;
-        document.getElementById('dwg-fromproc').innerHTML = '<option value="">（全部製程都提醒）</option>'
-            + (r.processes||[]).map(function(p){ return '<option value="'+p.ProcessNo+'">'+escHtml(p.ProcessName)+'</option>'; }).join('');
-        _dwgEnsurePicker().setData(r);
-    }, 'json');
-    $('#dwgChangeModal').modal('show');
-}
-/* 簽收對象挑選器：走共用檔 resource/js/eg_ack_picker.js（部門＋人員混合、已選反灰、
-   人員被部門涵蓋也反灰）。圖面變更紀錄頁也用同一支，所以不在各頁自刻。 */
-var _dwgPicker = null;
-function _dwgEnsurePicker() {
-    if (!_dwgPicker) {
-        _dwgPicker = EGAckPicker.create({
-            chips:'#dwg-chips', input:'#dwg-people-q', dropdown:'#dwg-picker', summary:'#dwg-ack-summary'
-        });
-    }
-    return _dwgPicker;
-}
-function submitDwgChange() {
-    var summary = (document.getElementById('dwg-summary').value||'').trim();
-    if (!summary) {
-        document.getElementById('dwg-summary-err').style.display = '';
-        document.getElementById('dwg-summary').style.borderColor = '#e74c3c';
-        document.getElementById('dwg-summary').focus();
+/* ── 上傳判定為「圖面變更」時：問要不要自動建立變更紀錄 ──────────────────
+   判準：發行章日期比同料號既有的自家圖新＝變更（見 ai-rules/15-圖面變更判定依據.md）。
+   按「是」＝後端自動把料號／客戶／新舊發行日帶好建成**草稿**（不通知、不換檢驗標準版次），
+   再另開分頁到「圖面變更紀錄」頁補完內容後送出。
+   按「否」也沒關係：之後隨時可以在附件跳窗按「自動換圖記錄」補建，資料一樣會自動帶入。
+   建立動作一律走 Part_Attachment_API 的 auto_dwg_change → src/common/dwg_change_lib.php，
+   填寫介面只有「圖面變更紀錄」頁一套，避免兩邊欄位走鐘。 */
+function askAutoDwgChange(ctx) {
+    var v = (ctx && ctx.verdict) || {};
+    var msg = '偵測到這是一次「圖面變更」\n\n'
+            + '檔案：' + (ctx.fileName || '') + '\n'
+            + (v.message || '') + '\n\n'
+            + '要不要現在自動建立圖面變更紀錄？\n'
+            + '（按「確定」會自動帶好料號、客戶、新舊發行日建成草稿，並另開分頁讓你補寫變更內容；\n'
+            + '　按「取消」也沒關係，之後在附件跳窗按「自動換圖記錄」一樣建得出來）';
+    if (!confirm(msg)) {
+        showToast('已略過。之後可在附件跳窗按「自動換圖記錄」補建', 'warning');
+        setTimeout(function(){ openAttachAllView(ctx.dId, _pav.partNo || ''); }, 200);
         return;
     }
-    var sel = _dwgEnsurePicker().getSelection();
-    var acks = sel.users, adepts = sel.depts;
-    var btn = document.getElementById('dwg-save-btn');
-    btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 建立中…';
-    $.post(PART_ATTACH_API_URL, {
-        action:'create_dwg_change',
-        attachment_id: document.getElementById('dwg-attach-id').value,
-        summary: summary,
-        detail:  (document.getElementById('dwg-detail').value||'').trim(),
-        old_revision: (document.getElementById('dwg-oldrev').value||'').trim(),
-        new_revision: (document.getElementById('dwg-newrev').value||'').trim(),
-        source: document.getElementById('dwg-source').value,
-        customer_doc_no: (document.getElementById('dwg-cdoc').value||'').trim(),
-        from_process_no: document.getElementById('dwg-fromproc').value,
-        ack_users: acks,
-        ack_depts: adepts
-    }, function(r) {
-        btn.disabled = false; btn.innerHTML = '<i class="fa fa-check"></i> 建立變更紀錄並通知簽收';
-        if (!r || !r.success) { showToast((r && r.message) || '建立失敗','error'); return; }
-        showToast('已建立圖面變更 ' + r.change_no + (r.new_version_id ? '，檢驗標準已複製成新版次' : ''), 'success');
-        $('#dwgChangeModal').modal('hide');
-        if (_dwgCtx) setTimeout(function(){ openAttachAllView(_dwgCtx.dId, _pav.partNo||''); }, 200);
-    }, 'json');
-}
-function dwgSkipChange() {
-    // 附件已經存好了，跳過只是沒建變更紀錄；到「圖面變更紀錄」頁仍可手動補登
-    if (!confirm('附件已上傳完成。跳過的話這次改圖不會有變更紀錄，檢驗人員也不會收到提醒。\n\n之後可到「圖面變更紀錄」頁手動補登。確定跳過？')) return;
-    $('#dwgChangeModal').modal('hide');
-    if (_dwgCtx) setTimeout(function(){ openAttachAllView(_dwgCtx.dId, _pav.partNo||''); }, 200);
+    $.post(PART_ATTACH_API_URL, { action:'auto_dwg_change', d_id:ctx.dId, attachment_id:ctx.attachId }, function(r) {
+        if (!r || !r.success) { showToast((r && r.message) || '建立失敗', 'error'); }
+        else { showToast(r.message, 'success'); window.open('../QC/drawing_change_log.php?id=' + r.id, '_blank'); }
+        setTimeout(function(){ openAttachAllView(ctx.dId, _pav.partNo || ''); }, 200);
+    }, 'json').fail(function() {
+        showToast('建立失敗（連線錯誤）', 'error');
+        setTimeout(function(){ openAttachAllView(ctx.dId, _pav.partNo || ''); }, 200);
+    });
 }
 
 /* ── 製程標籤候選：每個料號各自一份，切料號就重載 ────────────────────────

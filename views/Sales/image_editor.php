@@ -674,6 +674,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->commit();
             echo json_encode(['success' => true, 'png_id' => $pngId, 'work_id' => $workId, 'extracted' => $n,
                               'auto_removed' => $removed, 'dwg_verdict' => $dwgVerdict]);
+        } elseif ($act === 'auto_dwg_change') {
+            // 「自動換圖記錄」：自動帶入料號/客戶/新舊發行日建成草稿，前端再另開分頁補完送出。
+            // 與料號附件頁那顆按鈕共用 dwg_auto_draft_from_part()（唯一實作點）。
+            $aDid = (int)($_POST['d_id'] ?? 0);
+            $aAtt = (int)($_POST['attachment_id'] ?? 0) ?: null;
+            if ($aAtt) {
+                $st = $pdo->prepare("SELECT d_id FROM part_attachments WHERE id=? AND deleted_at IS NULL");
+                $st->execute([$aAtt]);
+                $ad = $st->fetchColumn();
+                if (!$ad) throw new Exception('找不到這筆附件，可能已被刪除');
+                if (!$aDid) $aDid = (int)$ad;
+            }
+            $r = dwg_auto_draft_from_part($pdo, $aDid, $uid, $aAtt);
+            echo json_encode(['success' => $r['ok'], 'id' => $r['id'], 'change_no' => $r['change_no'],
+                              'existed' => $r['existed'], 'message' => $r['message']], JSON_UNESCAPED_UNICODE);
         } elseif ($act === 'list_workfiles') {
             $dId = (int)($_POST['d_id'] ?? 0);
             if ($dId <= 0) throw new Exception('缺少料號');
@@ -6378,13 +6393,26 @@ async function pfSave() {
               (res.auto_removed ? '，並自動清掉 ' + res.auto_removed + ' 份超過保留上限的舊工作檔' : ''));
         status.style.color = '#7ed957';
         status.innerHTML = '<i class="fa fa-check-circle"></i> 已於 ' + savedAt + ' 儲存成功' + (noWorkfile ? '（僅圖片）' : '（圖片＋工作檔）');
-        // 圖面變更判定：本頁不做登錄表單（欄位多、跳窗會蓋住畫布），改提示到料號附件頁登錄
+        // 圖面變更判定：本頁不做登錄表單（欄位多、跳窗會蓋住畫布），
+        // 改成問要不要自動建立→建成草稿→另開分頁到「圖面變更紀錄」頁補完（與料號附件上傳同一條路）
         const v = res.dwg_verdict || {};
         if (v.kind === 'change') {
-            alert('偵測到圖面變更\n\n這張圖的發行章日期（' + egFmtDate(v.issue_date) + '）比此料號現有最新的自家圖面（'
+            const ok = confirm('偵測到圖面變更\n\n這張圖的發行章日期（' + egFmtDate(v.issue_date) + '）比此料號現有最新的自家圖面（'
                 + (v.prev_name||'') + '，' + egFmtDate(v.prev_date) + '）新。\n\n'
-                + '請到「圖面變更紀錄」頁登錄這次改了什麼、從哪個製程開始受影響，\n'
-                + '系統才會複製檢驗標準新版次並通知相關人員簽收。');
+                + '要不要現在自動建立圖面變更紀錄？\n'
+                + '（按「確定」會自動帶好料號、客戶、新舊發行日建成草稿，並另開分頁讓你補寫變更內容；\n'
+                + '　按「取消」也沒關係，之後到料號附件跳窗按「自動換圖記錄」一樣建得出來）');
+            if (ok) {
+                const fd2 = new FormData();
+                fd2.append('action', 'auto_dwg_change');
+                fd2.append('d_id', d);   // d = pfSave() 開頭取的 pf-part 值（已確認非空）
+                if (res.png_id) fd2.append('attachment_id', res.png_id);
+                try {
+                    const r2 = await fetch('image_editor.php', { method: 'POST', body: fd2 }).then(x => x.json());
+                    if (r2 && r2.success) { toast(r2.message); window.open('../QC/drawing_change_log.php?id=' + r2.id, '_blank'); }
+                    else { alert((r2 && r2.message) || '建立失敗'); }
+                } catch (e2) { alert('建立失敗：' + (e2.message || '連線錯誤')); }
+            }
         } else if (v.kind === 'first') {
             toast('已記錄為首次發行（此料號第一張帶發行章日期的自家圖面）');
         }
