@@ -24,6 +24,27 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+// === session 被垃圾回收誤刪的防護（2026-08-21）===
+// 症狀：使用者表單填到一半按儲存，跳「連線憑證失效，請重新整理頁面後再試 (CSRF)」。
+// 根因不是 CSRF 寫錯，是 session 檔已經被 PHP 的 GC 刪掉＝人其實已經被登出：
+//   ① Apache 的 php.ini 是 session.gc_maxlifetime=1440（24 分）。本檔雖然 ini_set 成 12 小時，
+//      但站上有二十幾支 API（Part_Attachment_API、Quotation_API、Roles_API…）是自己
+//      session_start() 而沒有載入本檔的，那些請求跑的就是 24 分鐘。
+//   ② PHP files handler 預設 lazy_write：session 內容沒變就不重寫檔案，檔案 mtime 會停在
+//      「最後一次資料有變」的時間。所以一直在翻頁的人，session 檔的 mtime 也可能是 30 分鐘前。
+// ①＋② 一起發生時，GC（1/1000 機率）會把「還在使用中」的 session 檔一併刪除。
+// 解法：每次請求把 session 檔的 mtime 推到現在（只動時間、不重寫內容，620KB 的大 session 也不會有寫入成本）。
+if (session_status() === PHP_SESSION_ACTIVE) {
+    $__sp = (string)session_save_path();
+    // save_path 可能是 "N;/path" 或 "N;MODE;/path" 的分層格式，取最後一段才是真正的目錄
+    if ($__sp !== '' && ($__pos = strrpos($__sp, ';')) !== false) $__sp = substr($__sp, $__pos + 1);
+    if ($__sp !== '') {
+        $__sf = rtrim($__sp, "\/") . DIRECTORY_SEPARATOR . 'sess_' . session_id();
+        if (is_file($__sf)) @touch($__sf);
+    }
+    unset($__sp, $__sf, $__pos);
+}
+
 
 
 // === MySQL 設定 ===

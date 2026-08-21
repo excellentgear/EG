@@ -39,14 +39,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $act = $_POST['action'];
 
     try {
-        $WRITE = ['save_change', 'ack_change', 'close_change', 'delete_change'];
+        $WRITE = ['save_change', 'ack_change', 'close_change', 'delete_change', 'submit_change',
+                  'save_default_ack', 'auto_from_attach'];
         if (in_array($act, $WRITE, true)) {
+            // 先確認人還在。session 檔被 PHP 的 GC 掃掉時（見 src/common/_config.php 的防護說明），
+            // 這一行上面的 $_SESSION['qc_csrf'] 會在同一個請求裡重新產生，token 比對必定不過——
+            // 但那其實是「已經被登出」不是「CSRF 攻擊」。訊息講錯的話使用者只會一直重整、卻永遠存不進去。
+            if ($uid === '') throw new Exception('登入已逾時，請重新登入後再儲存（您填的內容還在，重新登入後再按一次儲存即可）', 1002);
             $tok = $_POST['csrf'] ?? '';
             if (!is_string($tok) || $tok === '' || !hash_equals((string)($_SESSION['qc_csrf'] ?? ''), $tok)) {
-                throw new Exception('連線憑證失效，請重新整理頁面後再試 (CSRF)');
+                throw new Exception('連線憑證失效，請重新整理頁面後再試 (CSRF)', 1001);
             }
         }
         if (!$canView) throw new Exception('您沒有檢閱權限，請洽管理員於 品管檢驗 → 設定 → 權限設定 開通');
+
+        // 目前的 CSRF token（唯讀，同源才讀得到；供前端「憑證失效自動換 token 重送一次」用，
+        // 使用者才不必把填好的表單重打一遍）
+        if ($act === 'csrf_token') {
+            echo json_encode(['success' => true, 'csrf' => (string)$_SESSION['qc_csrf']], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
 
         // ---- 清單 ----
         if ($act === 'list') {
@@ -212,7 +224,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         throw new Exception('未知的 action: ' . $act);
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
-        echo json_encode(['success' => false, 'message' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+        $code = $e->getCode() === 1001 ? 'CSRF' : ($e->getCode() === 1002 ? 'LOGIN' : '');
+        echo json_encode(['success' => false, 'message' => $e->getMessage(), 'code' => $code], JSON_UNESCAPED_UNICODE);
         exit;
     }
 }
@@ -399,6 +412,21 @@ $(function(){
     });
     function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c];}); }
 
+    // 統一的送出：憑證失效（session 被 GC 掃掉、或 token 換過）時自動跟後端要一次目前的 token 再重送，
+    // 使用者不必把填好的表單重打一遍。真的被登出（code=LOGIN）就照實說，不再誤報成 CSRF。
+    function post(data, cb){
+        return $.post(API, data, function(r){
+            if (r && r.success === false && r.code === 'CSRF'){
+                $.post(API, {action:'csrf_token'}, function(t){
+                    if (t && t.success && t.csrf){ CSRF = t.csrf; data.csrf = t.csrf; $.post(API, data, cb, 'json'); }
+                    else { cb(r); }
+                }, 'json').fail(function(){ cb(r); });
+                return;
+            }
+            cb(r);
+        }, 'json');
+    }
+
     var LOOK={processes:[],people:[],departments:[]}, CAN_MANAGE=false, pickedPart=null, curId=null, ME=0;
     var PENDING_ACK = null;   // lookups 尚未回來就開窗時，先記著等資料到了再套用
     var partTimer=null, partSeq=0, partRows=[], partActive=-1;   // 料號即時搜尋用
@@ -408,7 +436,7 @@ $(function(){
     var ACK = EGAckPicker.create({
         chips:'#f-ack-chips', input:'#f-ack-q', dropdown:'#f-ack-dd', summary:'#f-ack-sum'
     });
-    $.post(API,{action:'lookups'},function(r){
+    post({action:'lookups'}, function(r){
         if(!r.success) return;
         LOOK=r; CAN_MANAGE=!!r.can_manage;
         $('#btn-new').toggle(CAN_MANAGE);
@@ -416,11 +444,11 @@ $(function(){
             (r.processes||[]).map(function(p){ return '<option value="'+p.ProcessNo+'">'+esc(p.ProcessName)+'</option>'; }).join(''));
         ACK.setData(r);
         if (PENDING_ACK) { ACK.setSelection(PENDING_ACK); PENDING_ACK = null; }   // lookups 還沒回來就開窗的情況
-    },'json');
+    });
 
     function load(){
         $('#dc-list').html('<tr><td colspan="8" class="text-center muted-help">載入中…</td></tr>');
-        $.post(API,{action:'list', keyword:$('#kw').val()},function(r){
+        post({action:'list', keyword:$('#kw').val()}, function(r){
             if(!r.success){ $('#dc-list').html('<tr><td colspan="8" class="text-danger">'+esc(r.message)+'</td></tr>'); return; }
             var rows=r.rows||[];
             $('#dc-list').html(rows.length ? rows.map(function(c){
@@ -437,7 +465,7 @@ $(function(){
                     '<td><span class="badge '+(c.status==='CLOSED'?'badge-closed':'badge-open')+'">'+(c.status==='CLOSED'?'已結案':'進行中')+'</span></td>'+
                     '<td class="muted-help">'+esc(c.created_by||'')+'<br>'+String(c.created_at||'').substring(0,16)+'</td></tr>';
             }).join('') : '<tr><td colspan="8" class="text-center muted-help">尚無圖面變更紀錄</td></tr>');
-        },'json');
+        });
     }
     load();
     $('#btn-search').on('click', load);
@@ -500,12 +528,12 @@ $(function(){
         if(kw===''){ $('#part-results').hide().empty(); partRows=[]; partActive=-1; return; }
         var seq = ++partSeq;
         $('#part-results').show().html('<div class="search-result-item muted-help">搜尋中…</div>');
-        $.post(API,{action:'part_search', keyword:kw},function(r){
+        post({action:'part_search', keyword:kw}, function(r){
             if(seq!==partSeq) return;        // 打字快時舊請求可能晚回來，丟棄免蓋掉新結果
             if(!r.success){ $('#part-results').html('<div class="search-result-item text-danger">'+esc(r.message)+'</div>'); return; }
             partRows = r.rows||[]; partActive = partRows.length ? 0 : -1;
             renderPartResults();
-        },'json');
+        });
     }
     function pickPart(i){
         var p = partRows[i]; if(!p) return;
@@ -547,7 +575,7 @@ $(function(){
         if(!$('#f-summary').val().trim()){ alert('請填寫變更摘要'); $('#f-summary').focus(); return; }
         var ackSel=ACK.getSelection();
         var $b=$(this).prop('disabled',true);
-        $.post(API,{ action:'save_change', id:$('#f-id').val(), d_id:pickedPart.d_id,
+        post({ action:'save_change', id:$('#f-id').val(), d_id:pickedPart.d_id,
             old_revision:$('#f-oldrev').val(), new_revision:$('#f-newrev').val(), change_date:$('#f-date').val(),
             source:$('#f-source').val(), customer_doc_no:$('#f-cdoc').val(), from_process_no:$('#f-fromproc').val(),
             summary:$('#f-summary').val(), detail:$('#f-detail').val(),
@@ -558,7 +586,7 @@ $(function(){
             $('#editModal').modal('hide'); load();
             var n=ACK.count();
             alert('已儲存'+(n?('，並已通知 '+n+' 位人員簽收'):''));
-        },'json').fail(function(x){ $b.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
+        }).fail(function(x){ $b.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
     });
 
     // ---- 明細 / 簽收 ----
@@ -567,7 +595,7 @@ $(function(){
         curId=id;
         $('#detail-body').html('載入中…'); $('#btn-ack,#btn-edit,#btn-close-chg,#btn-del').hide();
         $('#detailModal').modal('show');
-        $.post(API,{action:'detail', id:id}, function(r){
+        post({action:'detail', id:id}, function(r){
             if(!r.success){ $('#detail-body').html('<div class="text-danger">'+esc(r.message)+'</div>'); return; }
             var c=r.row, acks=r.acks||[], cfs=r.confirms||[]; ME=r.me;
             var myAck=null; acks.forEach(function(a){ if(parseInt(a.user_id)===parseInt(ME)) myAck=a; });
@@ -597,25 +625,25 @@ $(function(){
             if(r.can_manage){
                 $('#btn-edit').show().off('click').on('click', function(){ openEdit(c, acks); });
                 $('#btn-close-chg').show().text(c.status==='CLOSED'?'重新開啟':'標記為已結案').off('click').on('click', function(){
-                    $.post(API,{action:'close_change', id:c.id, reopen:(c.status==='CLOSED'?'1':'0')}, function(){ $('#detailModal').modal('hide'); load(); },'json');
+                    post({action:'close_change', id:c.id, reopen:(c.status==='CLOSED'?'1':'0')}, function(){ $('#detailModal').modal('hide'); load(); });
                 });
             }
             $('#btn-del').toggle(!!r.can_manage).off('click').on('click', function(){
                 if(!confirm('確定刪除變更紀錄 '+c.change_no+'？（不會還原已建立的檢驗標準新版本）')) return;
-                $.post(API,{action:'delete_change', id:c.id}, function(res){
+                post({action:'delete_change', id:c.id}, function(res){
                     if(!res.success){ alert(res.message); return; }
                     $('#detailModal').modal('hide'); load();
-                },'json');
+                });
             });
-        },'json');
+        });
     }
     $('#btn-ack').on('click', function(){
         var note=prompt('簽收備註（選填）：','');
         if(note===null) return;
-        $.post(API,{action:'ack_change', id:curId, note:note}, function(r){
+        post({action:'ack_change', id:curId, note:note}, function(r){
             if(!r.success){ alert(r.message); return; }
             alert('已簽收'); openDetail(curId); load();
-        },'json');
+        });
     });
 
     // 由通知點入：?ack=<id> 直接開明細
