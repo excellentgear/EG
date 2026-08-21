@@ -2156,15 +2156,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $pdo->prepare("UPDATE d_setting SET D_Setting_Id=?,Spec_No=?,Revision=?,Issue_Date=?,Type=?,Is_Assembly=?,workpiece_sub_type_id=?,Customer_Id=?,Remark=?,Weight_Kg=?,weight_source=?,weight_calc_json=?,Modified_By=?,Modified_At=NOW() WHERE d_id=?")
                     ->execute([$D_Setting_Id,$Spec_No,$Revision,$Issue_Date,$Type,$Is_Assembly,$sub_type_id,$Customer_Id,$Remark,$Weight_Kg,$weight_source,$weight_calc_json,$uid,$d_id]);
                 // 版次異動要留紀錄（使用者要求：主檔「版次」旁邊的紀錄清單要看得到誰改的）。
-                // 只有真的改到版次才寫，寫失敗也不影響存檔（紀錄是附加價值，不該擋住主流程）。
-                if (trim((string)($old_part_row['Revision'] ?? '')) !== trim((string)$Revision)) {
-                    try {
-                        require_once __DIR__ . '/../../src/common/dwg_change_lib.php';
-                        dwg_log_revision($pdo, (int)$d_id, (string)($old_part_row['Revision'] ?? ''), (string)$Revision,
-                                         null, null, 'manual', null, (int)$uid, dwg_user_name($pdo, (int)$uid),
-                                         '於料號主檔直接修改版次');
-                    } catch (Throwable $_re) {}
-                }
+                // 這裡只記旗標，實際寫入放到 commit() 之後——dwg_log_revision() 內部會跑
+                // dwg_ensure_schema() 的 ALTER TABLE，DDL 在 transaction 中會造成**隱式 commit**，
+                // 外層的 $pdo->commit() 就會炸「There is no active transaction」
+                //（本專案在 eg_org_save() 踩過同一個坑）。
+                $rev_changed = (trim((string)($old_part_row['Revision'] ?? '')) !== trim((string)$Revision));
             } else {
                 if (!$can_create) throw new Exception('無新增權限');
                 $ck = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND (Customer_Id <=> ?) AND (Spec_No <=> ?) AND (Revision <=> ?)");
@@ -2409,6 +2405,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             $pdo->commit();
+            // ── 版次異動紀錄（交易外寫入，理由見上面 $rev_changed 那段的說明）──
+            if (!empty($rev_changed)) {
+                try {
+                    require_once __DIR__ . '/../../src/common/dwg_change_lib.php';
+                    dwg_log_revision($pdo, (int)$d_id, (string)($old_part_row['Revision'] ?? ''), (string)$Revision,
+                                     null, null, 'manual', null, (int)$uid, dwg_user_name($pdo, (int)$uid),
+                                     '於料號主檔直接修改版次');
+                } catch (Throwable $_re) {}
+            }
             // ── 重新計算差異標籤 ──
             _recalc_diff_labels($pdo, $d_id);
             // ── audit log ──
