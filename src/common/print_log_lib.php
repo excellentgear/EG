@@ -265,15 +265,50 @@ if (!function_exists('eg_print_legacy_sources')) {
             ],
             'form_signer' => [
                 'label' => '表單簽核案件', 'page' => 'views/ADM/form_signer.php', 'table' => 'fsd_case_print_log',
+                // 綁定的 AS 文件編號/名稱要帶出來（使用者要求）：標題常常只有「1-GM-01 2.0」看不出是什麼文件。
+                // 綁定欄位是 link_as_doc_id（逐案挑選的補案件用 as_doc_id），兩個都吃。
                 'sql' => "SELECT 'form_signer' AS source, 'form' AS doc_kind, l.printed_at,
                                  l.printed_by, COALESCE(l.printed_by_name, u.user_cname) AS printed_by_name,
-                                 COALESCE(NULLIF(c.title,''), CONCAT('簽核案件 #', l.case_id)) AS doc_name,
+                                 " . eg_asdoc_title_sql("COALESCE(NULLIF(c.title,''), CONCAT('簽核案件 #', l.case_id))") . " AS doc_name,
                                  NULL AS part_no, NULL AS client_ip, NULL AS client_host, NULL AS note
                           FROM fsd_case_print_log l
                           LEFT JOIN user u ON u.id = l.printed_by
-                          LEFT JOIN fsd_case c ON c.id = l.case_id",
+                          LEFT JOIN fsd_case c ON c.id = l.case_id
+                          LEFT JOIN as_document d ON d.id = COALESCE(c.as_doc_id, c.link_as_doc_id)",
             ],
         ];
+    }
+}
+
+if (!function_exists('eg_asdoc_title_sql')) {
+    /**
+     * 「案件標題 ＋ 綁定的 AS 文件編號/名稱」怎麼組成一行看得懂的文件名稱（使用者要求 2026-08-21）。
+     *
+     * 表單簽核案件的標題常常只有「1-GM-01 2.0」這種編號＋版次，看不出是哪一份文件。
+     * 綁定的 AS 文件本來就有名稱，帶出來就好。使用者指定的口徑：
+     *   **名稱裡已經有 AS 編號就不要重複印編號，但要把該編號的文件名稱顯示出來。**
+     *
+     * 四種情形（順序有意義）：
+     *   ① 沒綁 AS 文件（或編號/名稱是空的）→ 原樣，不動它
+     *   ② 標題裡已經有文件名稱 → 原樣（像補案件的「3-GM-01-01-利害關係者溝通記錄表 …」本來就看得懂）
+     *   ③ 標題「以編號開頭」→ 把名稱插在編號後面：「1-GM-01 2.0」→「1-GM-01 航太品質手冊 2.0」
+     *      比對刻意用「編號＋空白」開頭，不是單純 LOCATE——不然 doc_no `2-DC-01` 會命中
+     *      `2-DC-01-02` 這種更長的編號，插進去會把字串弄壞。
+     *   ④ 編號出現在標題中間 → 只補名稱在後面，**不重複印編號**（使用者明確要求）
+     *   ⑤ 其他 → 前面補上「編號 名稱」
+     *
+     * @param string $title 標題運算式（已處理過空值退回）
+     * @param string $d     as_document 的資料表別名
+     */
+    function eg_asdoc_title_sql(string $title, string $d = 'd'): string {
+        return "CASE
+            WHEN $d.doc_no IS NULL OR $d.doc_no = '' OR $d.doc_name IS NULL OR $d.doc_name = '' THEN $title
+            WHEN LOCATE($d.doc_name, $title) > 0 THEN $title
+            WHEN $title = $d.doc_no OR $title LIKE CONCAT($d.doc_no, ' %')
+                 THEN CONCAT($d.doc_no, ' ', $d.doc_name, SUBSTRING($title, CHAR_LENGTH($d.doc_no) + 1))
+            WHEN LOCATE($d.doc_no, $title) > 0 THEN CONCAT($title, ' ', $d.doc_name)
+            ELSE CONCAT($d.doc_no, ' ', $d.doc_name, ' ', $title)
+        END";
     }
 }
 
@@ -351,7 +386,9 @@ if (!function_exists('eg_sign_modules')) {
                 'date_sql' => 't.business_date'],
             'form_signer' => ['label' => '表單簽核案件', 'page' => 'views/ADM/form_signer.php',
                 'table' => 'fsd_case', 'pk' => 'id',
-                'name_sql' => "COALESCE(NULLIF(t.title,''), NULLIF(t.file_name,''), CONCAT('簽核案件 #', t.id))",
+                // 與列印紀錄用同一支 eg_asdoc_title_sql()，兩邊顯示才一致
+                'name_sql' => eg_asdoc_title_sql("COALESCE(NULLIF(t.title,''), NULLIF(t.file_name,''), CONCAT('簽核案件 #', t.id))"),
+                'join_sql' => "LEFT JOIN as_document d ON d.id = COALESCE(t.as_doc_id, t.link_as_doc_id)",
                 'date_sql' => 't.business_date'],
             'business_trip' => ['label' => '公出單', 'page' => 'views/ADM/business_trip.php',
                 'table' => 'business_trip', 'pk' => 'trip_id',
