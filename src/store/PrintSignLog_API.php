@@ -82,25 +82,93 @@ case 'log_print': {
     pslOut(['id' => $id]);
 }
 
-/* ── 篩選用的下拉選項 ────────────────────────────────────────────────────── */
+/* ── 篩選用的下拉選項 ──────────────────────────────────────────────────────
+   使用者要求（2026-08-21）：**目前日期區間內沒有資料的來源／人員就不要出現在下拉裡**。
+   選 2026/08 卻列出十個來源、選下去是 0 筆，那個下拉等於在騙人。
+   所以這裡先撈出「這段區間內實際出現過」的來源與人員 id，再拿去過濾完整清單
+   （人員仍走 eg_printlog_people() 取部門/職稱/在職狀態，維持人員列表鐵則的欄位與排序）。
+   沒有「看全部」權限的人一律只算自己的紀錄，跟清單的限制一致。 */
 case 'meta': {
-    $srcs = [];
-    foreach (eg_print_all_sources() as $code => $v) $srcs[] = ['code' => $code, 'label' => $v['label']];
-    $mods = [];
-    foreach (eg_sign_modules() as $code => $v) $mods[] = ['code' => $code, 'label' => $v['label']];
-    // 有資料但沒登錄在 eg_sign_modules() 的模組也要能篩（不然那些紀錄查不到）
+    $dFrom = trim((string)($_POST['date_from'] ?? $_GET['date_from'] ?? ''));
+    $dTo   = trim((string)($_POST['date_to']   ?? $_GET['date_to']   ?? ''));
+    if ($dFrom !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dFrom)) $dFrom = '';
+    if ($dTo   !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dTo))   $dTo   = '';
+    $onlyUid = $perms['canViewAll'] ? 0 : $uid;
+
+    // ── 列印分頁：這段區間內出現過的 source 與列印人 ──
+    $usedSrc = []; $usedPrintUsers = [];
     try {
-        $known = array_column($mods, 'code');
-        foreach ($db->query("SELECT DISTINCT module FROM approval_record")->fetchAll(PDO::FETCH_COLUMN) as $m) {
-            if (!in_array($m, $known, true)) $mods[] = ['code' => $m, 'label' => $m];
+        $w = []; $ar = [];
+        if ($dFrom !== '') { $w[] = 'x.printed_at >= ?'; $ar[] = $dFrom . ' 00:00:00'; }
+        if ($dTo   !== '') { $w[] = 'x.printed_at <= ?'; $ar[] = $dTo . ' 23:59:59'; }
+        if ($onlyUid)      { $w[] = 'x.printed_by = ?';  $ar[] = $onlyUid; }
+        $sql = 'SELECT DISTINCT x.source, x.printed_by FROM ' . eg_printlog_union_sql('') . ' x'
+             . ($w ? ' WHERE ' . implode(' AND ', $w) : '');
+        $st = $db->prepare($sql); $st->execute($ar);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if ($r['source'] !== null && $r['source'] !== '') $usedSrc[(string)$r['source']] = true;
+            if ((int)$r['printed_by'] > 0) $usedPrintUsers[(int)$r['printed_by']] = true;
         }
     } catch (Throwable $e) {}
+
+    // ── 簽核分頁：這段區間內出現過的 module 與簽核人 ──
+    //   日期條件與 eg_signlog_query() 一致（送件日或決行日任一落在區間內就算）
+    $usedMod = []; $usedSignUsers = [];
+    try {
+        $w = []; $ar = [];
+        if ($dFrom !== '') { $w[] = '(a.submitted_at >= ? OR a.decided_at >= ?)'; $ar[] = $dFrom . ' 00:00:00'; $ar[] = $dFrom . ' 00:00:00'; }
+        if ($dTo   !== '') { $w[] = '(a.submitted_at <= ? OR a.decided_at <= ?)'; $ar[] = $dTo . ' 23:59:59';  $ar[] = $dTo . ' 23:59:59'; }
+        if ($onlyUid)      { $w[] = '(a.approver_id = ? OR (a.approver_id IS NULL AND a.submitted_by = ?))'; $ar[] = $onlyUid; $ar[] = $onlyUid; }
+        $sql = 'SELECT DISTINCT a.module, a.approver_id, a.submitted_by FROM approval_record a'
+             . ($w ? ' WHERE ' . implode(' AND ', $w) : '');
+        $st = $db->prepare($sql); $st->execute($ar);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if ($r['module'] !== null && $r['module'] !== '') $usedMod[(string)$r['module']] = true;
+            // 簽核人欄位的篩選條件是「approver_id，沒有才退回 submitted_by」，這裡跟著同一套
+            $pid = (int)($r['approver_id'] ?: $r['submitted_by']);
+            if ($pid > 0) $usedSignUsers[$pid] = true;
+        }
+    } catch (Throwable $e) {}
+
+    $srcs = [];
+    foreach (eg_print_all_sources() as $code => $v) {
+        if (isset($usedSrc[$code])) $srcs[] = ['code' => $code, 'label' => $v['label']];
+    }
+    $mods = [];
+    $regMod = eg_sign_modules();
+    foreach ($usedMod as $code => $_) {
+        // 沒登錄在 eg_sign_modules() 的模組也要能篩（不然那些紀錄查不到），名稱退成代碼
+        $mods[] = ['code' => $code, 'label' => $regMod[$code]['label'] ?? $code];
+    }
     usort($mods, fn($a, $b) => strcmp($a['label'], $b['label']));
+
+    $people = [];
+    if ($perms['canViewAll']) {
+        $usedUsers = $usedPrintUsers + $usedSignUsers;   // 兩個分頁共用同一份，切分頁不必再打一次
+        foreach (eg_printlog_people($db) as $pp) {
+            if (isset($usedUsers[(int)$pp['id']])) {
+                $pp['in_print'] = isset($usedPrintUsers[(int)$pp['id']]) ? 1 : 0;
+                $pp['in_sign']  = isset($usedSignUsers[(int)$pp['id']])  ? 1 : 0;
+                $people[] = $pp;
+            }
+        }
+    }
+
+    // 完整登錄表只在頁面第一次載入時給：用來把「已選中、但這個區間沒資料」那一筆的
+    // 名稱顯示出來（不然選項只剩一個看不懂的代碼）。之後每次換區間都不必再傳一次。
+    $allSrc = []; $allMod = [];
+    if (!empty($_POST['with_all']) || !empty($_GET['with_all'])) {
+        foreach (eg_print_all_sources() as $code => $v) $allSrc[] = ['code' => $code, 'label' => $v['label']];
+        foreach ($regMod as $code => $v)                $allMod[] = ['code' => $code, 'label' => $v['label']];
+    }
 
     pslOut([
         'sources' => $srcs,
         'modules' => $mods,
-        'people'  => $perms['canViewAll'] ? eg_printlog_people($db) : [],
+        'people'  => $people,
+        'all_sources' => $allSrc,
+        'all_modules' => $allMod,
+        'range'   => ['from' => $dFrom, 'to' => $dTo],
         'perms'   => ['canViewAll' => $perms['canViewAll'], 'canAdmin' => $perms['canAdmin'], 'uid' => $uid],
         'me'      => ['id' => $uid, 'name' => (string)$u['user_cname']],
     ]);

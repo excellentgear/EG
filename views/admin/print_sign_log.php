@@ -228,6 +228,9 @@ try {
             <li>上方分頁切換「列印紀錄／簽核紀錄」，兩個分頁共用同一組篩選條件。</li>
             <li>篩選：<b>資料來源</b>（列印分頁是頁面／模組，簽核分頁是單據種類）、<b>列印人／簽核人</b>、<b>日期區間</b>，另可用關鍵字查文件名稱、料號、姓名。</li>
             <li><b>全部篩選都是即時的</b>：下拉一選、日期一改、關鍵字邊打就邊查，不需要按任何查詢按鈕。</li>
+            <li><b>資料來源與列印人／簽核人的下拉，只列這個日期區間內真的有紀錄的項目</b>——選下去是 0 筆的選項不會出現。
+                改日期或切分頁時選項會跟著重算。若你已經選了某一項、換區間後它沒資料，它仍會留在清單裡並標示「（此區間無資料）」，
+                不會憑空消失把你的篩選條件默默改掉。</li>
             <li>下拉選項多時可直接在篩選框打字過濾，不必用眼睛找。</li>
             <li><b>列印全部篩選結果</b>：印的是目前篩選條件下的<b>全部</b>資料，不是只有畫面這一頁。</li>
             <li><b>顯示內部註記</b>（僅管理員，簽核分頁）：部分簽核意見是系統寫的<b>內部註記</b>，平常一律不顯示，
@@ -330,14 +333,32 @@ function filters(extra){
 }
 
 // ── 來源下拉依分頁重建 ──────────────────────────────────────────────────
+// 選項只列「目前日期區間內真的有紀錄」的（使用者要求）：選了 8 月卻列出一堆選下去是 0 筆的來源，
+// 那個下拉等於在騙人。**目前選中的值例外**——就算它在新區間裡沒資料也要留著，
+// 否則選項一消失，select 會掉回「全部」，篩選條件被默默改掉、畫面上的筆數也跟著變。
 function fillSourceSel(){
     var list = (TAB === 'print') ? (META.sources || []) : (META.modules || []);
+    var cur  = $('#fSource').val() || '';
     var $s = $('#fSource').html('<option value="">全部</option>');
-    list.forEach(function(x){ $s.append('<option value="'+esc(x.code)+'">'+esc(x.label)+'</option>'); });
+    var seen = false;
+    list.forEach(function(x){
+        if (String(x.code) === String(cur)) seen = true;
+        $s.append('<option value="'+esc(x.code)+'">'+esc(x.label)+'</option>');
+    });
+    if (cur && !seen) $s.append('<option value="'+esc(cur)+'">'+esc(curSourceLabel(cur))+'（此區間無資料）</option>');
+    $s.val(cur);
     $('#lblPerson').text(TAB === 'print' ? '列印人' : '簽核人');
 }
 
+/** 已選但這個區間沒資料的來源，名稱要從完整登錄表拿，不然只剩一個看不懂的代碼 */
+function curSourceLabel(code){
+    var all = (TAB === 'print') ? (META.all_sources || []) : (META.all_modules || []);
+    for (var i = 0; i < all.length; i++) if (String(all[i].code) === String(code)) return all[i].label;
+    return code;
+}
+
 function fillPeopleSel(){
+    var cur = $('#fUser').val() || '';
     var $s = $('#fUser').html('<option value="">全部</option>');
     if (!META.perms.canViewAll) {
         // 只能看自己的人不給選別人（後端也擋），下拉直接鎖成本人
@@ -345,12 +366,36 @@ function fillPeopleSel(){
         $s.prop('disabled', true);
         return;
     }
+    var seen = false;
     (META.people || []).forEach(function(p){
+        // 這一頁的人只列該分頁真的有紀錄的（列印分頁看列印人、簽核分頁看簽核人）
+        if (TAB === 'print' ? !Number(p.in_print) : !Number(p.in_sign)) return;
+        if (String(p.id) === String(cur)) seen = true;
         // 欄位順序固定「部門／職稱／姓名」（人員列表鐵則）
         var t = [p.dept_name || '－', p.position_name || '－', p.user_cname].join('　');
         if (String(p.state) === '0') t += '（已離職）';
         $s.append('<option value="'+p.id+'">'+esc(t)+'</option>');
     });
+    if (cur && !seen) {
+        var nm = cur;
+        (META.people || []).forEach(function(p){ if (String(p.id) === String(cur)) nm = p.user_cname; });
+        $s.append('<option value="'+esc(cur)+'">'+esc(nm)+'（此區間無資料）</option>');
+    }
+    $s.val(cur);
+}
+
+/** 日期區間改變／切分頁時重載下拉選項（選項是跟著區間走的，不能只載一次） */
+function reloadMeta(cb){
+    $.get(API, { action:'meta', date_from: $('#fFrom').val() || '', date_to: $('#fTo').val() || '' }, function(res){
+        if (res && res.ok) {
+            // 完整登錄表只在第一次拿（用來把「已選但無資料」那一筆的名稱顯示出來）
+            if (META && META.all_sources) { res.all_sources = META.all_sources; res.all_modules = META.all_modules; }
+            META = res;
+            fillSourceSel();
+            fillPeopleSel();
+        }
+        if (cb) cb();
+    }, 'json').fail(function(){ if (cb) cb(); });
 }
 
 // 內部註記目前是不是已解除遮蔽（由 list_sign 回傳，權限與時效都在後端判定，前端只是照著顯示）
@@ -588,6 +633,7 @@ $('.ps-tab').on('click', function(){
     TAB = t; PAGE = 1;
     $('.ps-tab').removeClass('active'); $(this).addClass('active');
     fillSourceSel();
+    fillPeopleSel();   // 列印人與簽核人不是同一批人，切分頁要跟著換
     loadList();
     refreshOtherCount();
 });
@@ -599,12 +645,12 @@ function liveSearch(delay){
     _kwTimer = setTimeout(function(){ PAGE = 1; loadList(); refreshOtherCount(); }, delay || 0);
 }
 $('#fSource, #fUser').on('change', function(){ liveSearch(0); });
-$('#fFrom, #fTo').on('change', function(){ liveSearch(0); });
+$('#fFrom, #fTo').on('change', function(){ reloadMeta(function(){ liveSearch(0); }); });
 $('#fKw').on('input', function(){ liveSearch(350); });
 $('#btnReset').on('click', function(){
     resetRange(); $('#fSource').val(''); $('#fKw').val('');
     if (META.perms.canViewAll) $('#fUser').val('');
-    liveSearch(0);
+    reloadMeta(function(){ liveSearch(0); });   // 區間變了，下拉選項要跟著重算
 });
 $('#fPer').on('change', function(){ PAGE = 1; syncTopBtn(); loadList(); });
 $('#pgBtns').on('click', 'button', function(){
@@ -651,7 +697,8 @@ $('#btnTop').on('click', function(){ $('html,body').animate({ scrollTop: 0 }, 20
 
 // ── 起始 ────────────────────────────────────────────────────────────────
 resetRange();
-$.get(API, { action: 'meta' }, function(res){
+$.get(API, { action: 'meta', date_from: $('#fFrom').val() || '', date_to: $('#fTo').val() || '',
+             with_all: 1 }, function(res){
     if (!res || !res.ok) { $('#tBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">載入失敗</td></tr>'); return; }
     META = res;
     fillSourceSel();
