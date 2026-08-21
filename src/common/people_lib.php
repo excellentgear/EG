@@ -90,10 +90,19 @@ if (!function_exists('eg_people_list')) {
                  ? array_values(array_filter(array_map('intval', $opt['user_ids']))) : [];
         $deptIn  = $deptIds ? implode(',', $deptIds) : '';
 
-        // 一人可能掛多個部門/職稱：優先取「符合部門篩選的」→ 主要職務(is_main) → 最小 id
-        $pick = "SELECT m2.id FROM user_department_position_map m2 WHERE m2.user_id = u.id ORDER BY "
+        // 一人可能掛多個部門/職稱（兼任）：這裡挑出「顯示＋排序要用哪一筆」。
+        // 優先序：符合部門篩選的 → **職級最高的那筆** → 主要職務(is_main) → 最小 id。
+        //
+        // 為什麼職級要排在 is_main 前面（2026-08-21 使用者要求「務必要把兼任放進去排序」）：
+        // 例如某人主職是「技術部 工程師」、兼任「生管組 組長」，只看 is_main 會把他顯示成工程師
+        // 並排到工程師那一群裡，但他在簽核/名單上的身分其實是組長——兼任常常才是真正的職務身分
+        // （同 ai-rules/22「兼任常才是簽核身分，取職級最高那筆而非主職」）。
+        // 有指定 dept_ids 時仍以「該部門的那筆」優先，因為那份名單本來就是在講那個部門。
+        $pick = "SELECT m2.id FROM user_department_position_map m2
+                 LEFT JOIN position p2 ON p2.id = m2.position_id
+                 WHERE m2.user_id = u.id ORDER BY "
               . ($deptIn ? "(m2.department_id IN ({$deptIn})) DESC, " : "")
-              . "m2.is_main DESC, m2.id ASC LIMIT 1";
+              . "COALESCE(p2.sort_order, 999) ASC, m2.is_main DESC, m2.id ASC LIMIT 1";
 
         $where = ["u.state IN (" . implode(',', $states) . ")"];
         $params = [];
@@ -115,7 +124,7 @@ if (!function_exists('eg_people_list')) {
                 LEFT JOIN department d ON d.id = m.department_id
                 LEFT JOIN position p ON p.id = m.position_id
                 WHERE " . implode(' AND ', $where) . "
-                ORDER BY position_sort, dept_sort, u.id";
+                ORDER BY dept_sort, position_sort, CONVERT(u.user_cname USING utf8mb4), u.id";
         $st = $db->prepare($sql);
         $st->execute($params);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
