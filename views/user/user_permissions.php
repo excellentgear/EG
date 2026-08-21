@@ -368,6 +368,7 @@ $_fsdRoles      = [];  $_userFsdRoles    = [];
 $_eqmRoles      = [];  $_userEqmRoles    = [];
 $_btrpRoles     = [];  $_userBtrpRoles   = [];
 $_dapRoles      = [];  $_userDapRoles    = [];
+$_pslRoles      = [];  $_userPslRoles    = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -414,6 +415,7 @@ try {
     $st->execute(['equip_machine']); $_eqmRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['business_trip']); $_btrpRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['doc_apply']); $_dapRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['print_sign_log']); $_pslRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -581,6 +583,10 @@ try {
     $st->execute(['doc_apply']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userDapRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['print_sign_log']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userPslRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -813,6 +819,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'eqm-role-section'       => '機台設備一覽表',
                                         'btrp-role-section'      => '公出單',
                                         'dap-role-section'       => '文件制修申請單',
+                                        'psl-role-section'       => '列印與簽核紀錄',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -1293,6 +1300,16 @@ $_quotDepts = array_keys($_deptSet);
                          <span style="color:#b06f27;">沒有任何角色的人</span>，若被指派為某張單的<strong>會簽單位簽核人</strong>（含代理人），仍可從通知開啟該單完成會簽。
                          核准／管理代表／單位主管的實際人員一律即時查<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定</a>，不寫死人名。管理者固定擁有全部權限。',
                         $_dapRoles, $_userDapRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('psl', 'print_sign_log', '列印與簽核紀錄', 'fa-history', '#b06f27',
+                        '為每位使用者指派「<a href="../admin/print_sign_log.php" target="_blank" style="color:#b5762a;">列印與簽核紀錄</a>」頁的角色。
+                         <strong>所有登入者不需要指派任何角色</strong>，就能查看<span style="color:#b06f27;">自己</span>的列印與簽核紀錄（這是本人自己的足跡，不是別人的）。
+                         此處只指派兩種加值角色：<strong>紀錄檢閱</strong>＝可查看<strong>全部人員</strong>的列印與簽核紀錄（唯讀）；
+                         <strong>紀錄管理</strong>＝查全部＋列印匯出全部篩選結果。<br>
+                         列印紀錄會留下<strong>列印時間／列印人／登入電腦（電腦名稱＋IP）／文件名稱</strong>；
+                         簽核紀錄取自全站共用的簽核資料，含<strong>文件名稱／送件日期／簽核人／簽核日期時間／結果與回覆意見</strong>。
+                         目前涵蓋哪些表單、哪些還沒涵蓋，該頁「使用說明」會即時掃描列出。管理者固定擁有全部權限。',
+                        $_pslRoles, $_userPslRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('leave', 'leave', '請假系統', 'fa-calendar-minus-o', '#d99a4e',
                         '<strong>所有登入者都能申請請假、查看與撤回／銷假自己的單</strong>，不需要在這裡指派角色。此處只指派 <strong>人事（可看全部請假單）</strong>＝可檢視全公司請假單（不含代為簽核的權力）。<br>

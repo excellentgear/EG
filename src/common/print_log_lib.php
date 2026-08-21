@@ -42,12 +42,14 @@ if (!function_exists('eg_print_log_ensure_schema')) {
                 KEY idx_pl_src (source, printed_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='列印紀錄（全站共用，見 ai-rules/23）'");
         } catch (Throwable $e) {}
+        // IP→電腦名稱的快取沿用既有的 ip_hostname_cache（audit_log_report.php 在用同一張），
+        // 不另建第二張（鐵律4：同一件事只能有一個資料來源）。這裡只確保它存在。
         try {
-            $pdo->exec("CREATE TABLE IF NOT EXISTS client_host_cache (
+            $pdo->exec("CREATE TABLE IF NOT EXISTS ip_hostname_cache (
                 ip VARCHAR(45) NOT NULL PRIMARY KEY,
-                host_name VARCHAR(100) NULL COMMENT 'NULL=查過但查不到，避免每次都重查',
-                resolved_at DATETIME NOT NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='IP→電腦名稱快取（nbtstat 結果）'");
+                hostname VARCHAR(100) NULL COMMENT '反查到的電腦名稱；查不到存NULL',
+                resolved_at DATETIME NOT NULL COMMENT '反查時間'
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         } catch (Throwable $e) {}
     }
 }
@@ -73,19 +75,19 @@ if (!function_exists('eg_client_host')) {
         if ($ip === '' || !filter_var($ip, FILTER_VALIDATE_IP)) return null;
         eg_print_log_ensure_schema($pdo);
         try {
-            $st = $pdo->prepare("SELECT host_name, resolved_at FROM client_host_cache WHERE ip=?");
+            $st = $pdo->prepare("SELECT hostname, resolved_at FROM ip_hostname_cache WHERE ip=?");
             $st->execute([$ip]);
             $row = $st->fetch(PDO::FETCH_ASSOC);
             if ($row) {
-                $ttl = $row['host_name'] ? 30 * 86400 : 86400;
-                if (time() - strtotime($row['resolved_at']) < $ttl) return $row['host_name'] ?: null;
+                $ttl = $row['hostname'] ? 30 * 86400 : 86400;
+                if (time() - strtotime($row['resolved_at']) < $ttl) return $row['hostname'] ?: null;
             }
         } catch (Throwable $e) { return null; }
 
         $host = eg_resolve_netbios_name($ip);
         try {
-            $pdo->prepare("INSERT INTO client_host_cache (ip, host_name, resolved_at) VALUES (?,?,NOW())
-                           ON DUPLICATE KEY UPDATE host_name=VALUES(host_name), resolved_at=NOW()")
+            $pdo->prepare("INSERT INTO ip_hostname_cache (ip, hostname, resolved_at) VALUES (?,?,NOW())
+                           ON DUPLICATE KEY UPDATE hostname=VALUES(hostname), resolved_at=NOW()")
                 ->execute([$ip, $host]);
         } catch (Throwable $e) {}
         return $host;
@@ -100,17 +102,24 @@ if (!function_exists('eg_resolve_netbios_name')) {
      * （第一個 <00> 是電腦名稱，後面的 <00> 才是 WORKGROUP 這類群組名）。
      */
     function eg_resolve_netbios_name(string $ip): ?string {
-        if (stripos(PHP_OS_FAMILY, 'Windows') === false) return null;
+        if (stripos(PHP_OS_FAMILY, 'Windows') === false) return eg_dns_host_fallback($ip);
         // 伺服器自己這台：nbtstat 問自己會回「找不到主機」（NetBIOS 查詢不繞回本機），
         // 所以直接用本機主機名，不要留白。
-        if ($ip === '127.0.0.1' || $ip === (string)($_SERVER['SERVER_ADDR'] ?? '')) {
-            $h = @gethostname();
-            return $h ? strtoupper($h) : null;
+        // 一定要連「本機的區網 IP」一起比對：只比 SERVER_ADDR 會漏掉（Apache 可能繫在別的位址），
+        // 一漏掉就會退到 DNS 反查、撿到 hosts 檔裡的 host.docker.internal 這種假名字。
+        $localName = @gethostname();
+        $selfIps = ['127.0.0.1'];
+        if (!empty($_SERVER['SERVER_ADDR'])) $selfIps[] = (string)$_SERVER['SERVER_ADDR'];
+        if ($localName) {
+            $lan = @gethostbynamel($localName);
+            if (is_array($lan)) $selfIps = array_merge($selfIps, $lan);
         }
-        if (!function_exists('exec')) return null;
+        if (in_array($ip, $selfIps, true)) return $localName ? strtoupper($localName) : null;
+
+        if (!function_exists('exec')) return eg_dns_host_fallback($ip);
         $out = []; $rc = -1;
         @exec('nbtstat -A ' . escapeshellarg($ip) . ' 2>&1', $out, $rc);
-        if ($rc !== 0 || !$out) return null;
+        if ($rc !== 0 || !$out) return eg_dns_host_fallback($ip);
         $first00 = null;
         foreach ($out as $line) {
             if (preg_match('/^\s+([A-Za-z0-9_.\-\$]{1,15})\s*<(00|20)>/', $line, $m)) {
@@ -118,7 +127,22 @@ if (!function_exists('eg_resolve_netbios_name')) {
                 if ($first00 === null) $first00 = strtoupper($m[1]);
             }
         }
-        return $first00;
+        // NetBIOS 關掉的機器（純 DNS 環境）再試一次 DNS 反查
+        return $first00 !== null ? $first00 : eg_dns_host_fallback($ip);
+    }
+}
+
+if (!function_exists('eg_dns_host_fallback')) {
+    /**
+     * NetBIOS 查不到時的 DNS 反查。
+     * 會過濾掉 hosts 檔常見的假名字（host.docker.internal、localhost…）——那不是使用者的電腦名稱，
+     * 印在紀錄上會誤導查核的人，寧可只顯示 IP。
+     */
+    function eg_dns_host_fallback(string $ip): ?string {
+        $r = @gethostbyaddr($ip);
+        if (!is_string($r) || $r === '' || $r === $ip) return null;
+        if (preg_match('/^(localhost|host\.docker\.internal)$/i', $r)) return null;
+        return mb_substr($r, 0, 100);
     }
 }
 
