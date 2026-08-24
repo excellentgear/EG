@@ -167,6 +167,32 @@ try {
 
 // ── 關鍵欄位補充：版本鎖外，每次載入都嘗試（已存在則靜默跳過）────────────
 try { $pdo->exec("ALTER TABLE process_no ADD COLUMN is_exclude_qc TINYINT(1) NOT NULL DEFAULT 0 COMMENT '排除QC檢驗 1=是 0=否'"); } catch(Exception $_e){}
+// ── 刀具規格專屬表（2026-08-24 由料號標籤移轉而來，比照 d_setting_gear）─────────
+try { $pdo->exec("CREATE TABLE IF NOT EXISTS d_setting_tool (
+  tool_id INT NOT NULL AUTO_INCREMENT COMMENT '刀具專屬表主鍵',
+  d_setting_id INT NOT NULL COMMENT '對應母表 d_setting.d_id',
+  tool_kind VARCHAR(10) NULL COMMENT '刀具種類：hob=滾齒刀 shaper=插齒刀',
+  module_input_type VARCHAR(10) NULL COMMENT '模數輸入單位 M/CP/DP/8YU/其他',
+  module_value DECIMAL(10,4) NULL COMMENT '模數數值',
+  module_display VARCHAR(30) NULL COMMENT '模數顯示值，含前綴：M2.5/CP8/DP12',
+  pressure_angle VARCHAR(50) NULL COMMENT '壓力角',
+  starts_rh TINYINT NULL COMMENT '牙口數-RH',
+  starts_lh TINYINT NULL COMMENT '牙口數-LH',
+  od_length VARCHAR(50) NULL COMMENT '外徑-長度，如 80-120',
+  d_plus_f DECIMAL(10,4) NULL COMMENT 'D+F',
+  bore_dia DECIMAL(10,4) NULL COMMENT '內徑（刀孔）',
+  has_six_spline TINYINT NOT NULL DEFAULT 0 COMMENT '六栓槽 1=有',
+  tool_type VARCHAR(30) NULL COMMENT '類型 PGS/PGSP/PS/TOP/S-TOP/HP5',
+  teeth SMALLINT NULL COMMENT '齒數（插齒刀）',
+  outer_dia DECIMAL(10,4) NULL COMMENT '外徑（插齒刀）',
+  shaper_tag VARCHAR(50) NULL COMMENT '插齒刀標籤',
+  material VARCHAR(30) NULL COMMENT '刀具材質',
+  coating VARCHAR(30) NULL COMMENT '塗層',
+  remark TEXT NULL COMMENT '刀具備註',
+  Created_By CHAR(11) NULL, Created_At TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+  Modified_By CHAR(11) NULL, Modified_At TIMESTAMP NULL,
+  PRIMARY KEY (tool_id), KEY idx_dsetting (d_setting_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='刀具規格專屬表'"); } catch(Exception $e){}
 try { $pdo->exec("ALTER TABLE d_setting_gear ADD COLUMN gear_quality_std VARCHAR(10) NULL COMMENT '齒輪等級標準 JIS/ISO/DIN/AGMA'"); } catch(Exception $_e){}
 try { $pdo->exec("ALTER TABLE d_setting_gear ADD COLUMN gear_quality_grade TINYINT NULL COMMENT '齒輪等級值'"); } catch(Exception $_e){}
 // ── 稀疏欄位：鏈輪 / 皮帶輪 / 蝸桿 / 花鍵 ───────────────────────────────
