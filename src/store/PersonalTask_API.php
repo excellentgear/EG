@@ -6,6 +6,7 @@
 //       附件圖片(存NAS只記檔名，路徑由管理員在 system_settings ptask_nas_dir/ptask_url_dir 統一設定)。
 // 前端：views/user/personal_task.php ｜ 提醒發送：src/common/personal_task_notify.php(順路觸發)
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/../common/DBConnection.php';

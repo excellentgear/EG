@@ -6,6 +6,7 @@ error_reporting(E_ALL);
 ini_set('session.gc_maxlifetime', 43200);
 session_set_cookie_params(43200);
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 
 header('Content-Type: application/json; charset=utf-8');
 

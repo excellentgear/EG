@@ -14,6 +14,7 @@
  * 任何人知道網址就能看到別人的工作紀錄附圖。
  */
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 if (!isset($_SESSION['userName'])) { http_response_code(403); exit; }
 
 require_once __DIR__ . '/../common/DBConnection.php';

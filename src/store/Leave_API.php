@@ -10,6 +10,7 @@
 //   - 檢視範圍（2026-07-28 定案）：自己；主管看部門(含下轄)；管理員/人事(leave_view_all)看全部
 // 寫入動作一律 CSRF 驗證（fail-closed）。
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/../common/DBConnection.php';

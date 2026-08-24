@@ -1,6 +1,7 @@
 <?php
 // Quotation_File_API.php — 報價單附件管理 API（含類別標籤 + 料號連結）
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 if (!isset($_SESSION['userName'])) {
     http_response_code(403);
     echo json_encode(['success' => false, 'message' => '未登入']);

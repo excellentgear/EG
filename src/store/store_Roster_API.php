@@ -8,6 +8,7 @@ ini_set('display_errors', 0);
 error_reporting(E_ALL);
 session_set_cookie_params(43200);
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 
 require_once __DIR__ . '/../common/DBConnection.php';
 require_once __DIR__ . '/../common/rbac.php';

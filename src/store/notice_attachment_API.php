@@ -12,6 +12,7 @@
 //   att_set_meta→ 修改「既有」公告附件（live_event_file）的標籤/說明（寫異動 log、重建檢視快取版）
 // =============================================================================
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 if (!isset($_SESSION['userName'])) {
     http_response_code(401);
     echo json_encode(['success' => false, 'message' => '未登入']);

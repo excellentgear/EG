@@ -3,6 +3,7 @@
 // 類別標籤共用報價單既有的 quotation_file_categories（使用者明確要求，不另建類別表）
 // 儲存路徑走全站共用 attach_lib.php（設定鍵 order_attach_dir，預設 根目錄\訂單\，扁平資料夾不分子目錄）
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 if (!isset($_SESSION['userName'])) {
     http_response_code(403);
     echo json_encode(['success' => false, 'message' => '未登入']);

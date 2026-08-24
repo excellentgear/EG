@@ -12,6 +12,7 @@
  * 角色 CRUD/指派沿用 Roles_API.php（前端另呼叫），本檔只處理備份專屬動作。
  */
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 header('Content-Type: application/json; charset=utf-8');
 mb_internal_encoding('UTF-8');
 

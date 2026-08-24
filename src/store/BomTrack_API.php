@@ -2,6 +2,7 @@
 // BomTrack_API.php — BOM 追蹤功能後端 API
 // 群組/規則/通知範圍/訂閱者/分享 的 CRUD，以及依規則計算匹配BOM清單、進度時間軸查詢。
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/../common/DBConnection.php';

@@ -2,6 +2,7 @@
 // Roles_API.php — 全域角色權限管理 API
 // 供所有頁面共用，負責角色 CRUD、功能設定、使用者指派角色
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 header('Content-Type: application/json');
 
 include '../common/DBConnection.php';

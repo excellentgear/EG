@@ -5,6 +5,7 @@
 //   save_dept  → 參數 department_id, home_page（空字串=清除）
 //   save_user  → 參數 user_id, home_page（空字串=清除）
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/../common/DBConnection.php';

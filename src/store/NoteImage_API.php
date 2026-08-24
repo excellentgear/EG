@@ -13,6 +13,7 @@
  * 避免被拿來當成任意檔案讀取的跳板（原本的直連 URL 反而是誰都能抓）。
  */
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 if (!isset($_SESSION['userName'])) { http_response_code(403); exit; }
 
 require_once __DIR__ . '/../common/DBConnection.php';

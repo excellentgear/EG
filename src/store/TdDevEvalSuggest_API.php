@@ -7,6 +7,7 @@ header('Content-Type: application/json; charset=utf-8');
 
 $document_root = $_SERVER['DOCUMENT_ROOT'];
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/td_dev_eval_lib.php';
