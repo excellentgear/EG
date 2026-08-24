@@ -1354,6 +1354,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <option value="A3P">A3 直式</option>
             </select>
             <button class="tb-btn" onclick="applyFrameFitFromSelect()" title="把整張圖面等比例縮放＋置中到左側選擇的框架尺寸（點選才會縮放，不會自動觸發）；可 Ctrl+Z 復原。用來讓每張圖面蓋章大小一致，不受原始圖片解析度不同影響"><i class="fa fa-object-group"></i> 縮放至框架</button>
+            <label title="Figma 式圖框：物件中心在圖框（白色畫布）內＝屬於圖框，超出圖框的部分會被切齊邊界不顯示也不會印出來；中心在圖框外的物件＝不屬於圖框，維持整個顯示。關掉＝全部照原樣顯示（舊行為）。" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+                <input type="checkbox" id="frame-clip" checked onchange="onFrameClipToggle()"> 圖框裁切
+            </label>
             <span style="margin-left:auto;">Ctrl+V 貼圖｜拖檔案進來開圖｜滾輪縮放｜空白鍵拖曳平移｜Delete 刪除｜Ctrl+Z 復原</span>
         </div>
     </div>
@@ -1839,6 +1842,8 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>「開新視窗」再開一個編輯器（可拖到另一個螢幕）；兩窗互貼＝選取後 <b>Ctrl+C</b>，到另一窗按 <b>Ctrl+Shift+V</b>（他窗貼上）</li>
                 <li>匯出/列印：整個畫布或只匯出選取；PNG/JPG、解析度倍率（列印建議2×）；列印會自動依畫面長寬決定直/橫版並縮成一頁</li>
                 <li><b>縮放至框架</b>（頂列「畫布」旁）：先選 A4/A3＋橫式/直式（預設 A4 橫式），按「縮放至框架」把整張圖面等比例縮放＋置中成該標準尺寸（點選才套用，不會自動觸發，可 Ctrl+Z 復原）。因為每張圖面原始解析度不同，蓋章工具的「大小」是用畫布 px 輸入，同樣的數字在不同圖上印出來實際大小會不一樣——先套這個框架再蓋章，蓋出來的章大小才會一致。<b>套用框架後會自動把蓋章工具的「大小」帶成建議值 200</b>（＝1 英吋、印出來約 25mm），大小欄旁邊會標示「已帶入建議大小」——這個數字不用再自己調；真要改也可以，改了旁邊會變成「已自行調整（建議 200，點此改回）」，點一下就回到建議值</li>
+                <li><b>圖框裁切</b>（底部狀態列，預設開啟）：白色畫布就是 Figma 的「圖框(Frame)」。物件<b>中心點</b>落在圖框內＝屬於這個圖框，超出圖框邊界的部分會被切齊不顯示，匯出與列印也一樣切齊；中心點在圖框外的物件＝不屬於圖框，維持完整顯示不受影響。被切掉的部分只是不顯示，物件本身還在——照樣選得到、拖回圖框內就完整出現。要看到全部原樣就把這個勾選取消</li>
+                <li><b>直線／箭頭的拉伸</b>：選取一條線（含帶箭頭的線）只會出現<b>頭尾兩個圓點</b>，各自拖曳就是改長度與方向，不是整個外框等比例放大縮小；箭頭大小固定不會被拉扯變形。需要真的整體縮放（例如連箭頭一起放大）請改用屬性列的「粗細」或雙擊進入「編輯端點」</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
                 <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>分享範圍（私人／部門／指定人員）只限制工作檔能被誰開啟重改，壓平 PNG 一律所有人都看得到</b>。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）。<b>有建立工作檔的儲存一律當暫存</b>：不必填發行章日期，也不會觸發圖面變更判定；要當正式出圖存進去，請勾「只存圖片，不建立工作檔」，那時標籤若屬「自家出的圖」就要填發行章日期並會比對是否為圖面變更。<b>製程標籤</b>選填：同一個料號常常有好幾個加工項目各自一張圖，選了製程之後<b>只會跟同料號、同標籤、同製程的圖比新舊版</b>，不會把別的加工項目的圖誤判成前一版；留空＝共用圖，會跟該標籤下所有製程一起比。候選只列「這個料號的訂單有過的加工項目」與「這個料號已經打過的製程標籤」（打過一次就記在這個料號裡，下次直接選）。另外<b>新舊版是同一個標籤各自比</b>——BOSS圖只跟BOSS圖比、++圖只跟++圖比、單製++圖再自成一組；掛「作廢」標籤的附件一律不參與新舊版判定</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
@@ -2033,6 +2038,54 @@ let artboard = new fabric.Rect({
 });
 canvas.add(artboard);
 
+/* ── Figma 式「圖框」裁切（使用者要求 2026-08-24）─────────────────────────────
+   白色畫布(artboard)＝Figma 的 Frame。判定與 Figma 一致：以物件「中心點」是否落在圖框內
+   決定它屬不屬於這個圖框——屬於圖框的物件超出邊界的部分被切掉不顯示（畫面、匯出、列印一致），
+   中心在圖框外的物件則完全不受影響照樣整個顯示。
+   做法是包住 fabric.Object.prototype.render 在場景座標下 ctx.clip()，**不動物件本身的 clipPath**：
+   clipPath 會被 canvas.toJSON() 序列化進 undo 快照與工作檔，換一張圖/改框架尺寸後就會留著一份
+   對不上的舊裁切框，且每個物件都多存一份矩形。渲染層攔截則零序列化成本、關掉就完全恢復原狀。
+   ‧群組(Group)的子物件跳過（整個群組會被當成一個物件裁切，才不會每個子件各自判定）；
+     多重選取(activeSelection)的子物件仍各自判定，否則一選取就整批不裁切、畫面會跳動。
+   ‧選取外框與控制點不走這條路徑，所以被裁掉的部分仍選得到、拖得回來。 */
+let frameClipOn = true;
+function onFrameClipToggle() {
+    frameClipOn = !!document.getElementById('frame-clip').checked;
+    canvas.getObjects().forEach(o => { o.dirty = true; });   // 有開物件快取的（文字/群組）不標記就不會重畫
+    canvas.requestRenderAll();
+    saveUserPrefsDebounced();
+    toast(frameClipOn ? '已開啟圖框裁切：超出白色畫布的部分不顯示也不會印出來' : '已關閉圖框裁切：所有物件完整顯示');
+}
+(function installFrameClip() {
+    const orig = fabric.Object.prototype.render;
+    fabric.Object.prototype.render = function (ctx) {
+        if (!frameClipOn || this.id === '__artboard' || !this.canvas
+            || (this.group && this.group.type !== 'activeSelection')) return orig.call(this, ctx);
+        const ab = artboard;
+        if (!ab || !ab.canvas) return orig.call(this, ctx);
+        const w = ab.width * (ab.scaleX || 1), h = ab.height * (ab.scaleY || 1);
+        if (!(w > 0) || !(h > 0)) return orig.call(this, ctx);
+        // 絕對中心＝變換矩陣的平移量。⚠ 不可用 getBoundingRect(true,true)：物件被多重選取
+        // (activeSelection) 收編時，那支回的是「群組座標系」的框，一選取就會判定錯、畫面跟著跳動
+        let cx, cy;
+        try { const m = this.calcTransformMatrix(); cx = m[4]; cy = m[5]; }
+        catch (e) { return orig.call(this, ctx); }
+        // 中心在圖框外＝不屬於這個圖框（Figma 裡就是畫布上的獨立物件），完整顯示不裁切
+        if (cx < ab.left || cx > ab.left + w || cy < ab.top || cy > ab.top + h) return orig.call(this, ctx);
+        // 完全在圖框內＝不用裁，省下每個物件一次 save/clip/restore（沒被群組時 bounding rect 才是絕對座標）
+        if (!this.group) {
+            const br = this.getBoundingRect(true, true);
+            if (br.left >= ab.left && br.top >= ab.top
+                && br.left + br.width <= ab.left + w && br.top + br.height <= ab.top + h) return orig.call(this, ctx);
+        }
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(ab.left, ab.top, w, h);   // 此處 ctx 已套用 viewportTransform＝場景座標
+        ctx.clip();
+        orig.call(this, ctx);
+        ctx.restore();
+    };
+})();
 function findArtboard() {
     const o = canvas.getObjects().find(o => o.id === '__artboard');
     if (o) { artboard = o; artboard.selectable = false; artboard.evented = false; }
@@ -2722,12 +2775,33 @@ function makeArrow(x1, y1, x2, y2, color, width, ends, dash) {
     g.merged = true;   // 箭頭視為單一物件，雙擊不拆
     return g;
 }
-/* 直線端點的絕對座標（含物件自身/所屬群組的位移旋轉縮放） */
+/* 直線端點的絕對座標（含物件自身/所屬群組的位移旋轉縮放）
+   ⚠ 必須扣掉 fabric 自己的偏差：fabric.Line 的端點是用 width 算的（calcLinePoints），
+   但物件中心是用 width+strokeWidth 算的（_getTransformedDimensions），於是回傳的端點
+   一律往右下多出 strokeWidth/2。這個偏差平常看不出來，可是「讀端點→寫回端點」的地方
+   （拖端點、重建箭頭）每呼叫一次就累加一次，而拖曳中每個 mousemove 都會呼叫——
+   結果就是「拉一端，另一端自己跑掉」，粗線更明顯。修在這裡，所有呼叫端一次到位。 */
 function lineAbsEndpoints(line) {
     const m = line.calcTransformMatrix();
     const lp = line.calcLinePoints();   // 相對線中心的區域座標
-    return [fabric.util.transformPoint({ x: lp.x1, y: lp.y1 }, m),
-            fabric.util.transformPoint({ x: lp.x2, y: lp.y2 }, m)];
+    const pts = [fabric.util.transformPoint({ x: lp.x1, y: lp.y1 }, m),
+                 fabric.util.transformPoint({ x: lp.x2, y: lp.y2 }, m)];
+    const sw = line.strokeWidth || 0;
+    if (sw) {
+        // 偏差量在「線自己的父座標系」，會跟著自身角度轉，再套上所屬群組矩陣的旋轉/縮放（不含平移）
+        const bx = (line.strokeUniform ? sw : sw * Math.abs(line.scaleX || 1)) / 2;
+        const by = (line.strokeUniform ? sw : sw * Math.abs(line.scaleY || 1)) / 2;
+        const r = fabric.util.degreesToRadians(line.angle || 0);
+        let dx = bx * Math.cos(r) - by * Math.sin(r), dy = bx * Math.sin(r) + by * Math.cos(r);
+        if (line.group) {
+            const g = line.group.calcTransformMatrix();
+            const nx = g[0] * dx + g[2] * dy, ny = g[1] * dx + g[3] * dy;
+            dx = nx; dy = ny;
+        }
+        pts[0].x -= dx; pts[0].y -= dy;
+        pts[1].x -= dx; pts[1].y -= dy;
+    }
+    return pts;
 }
 /* 箭頭群組的「真實」頭尾＝箭頭尖端（群組裡的線段有被縮短，不能拿線段端點當頭尾）。
    三角形尖端＝其區域座標 (0, -高/2) 經自身+群組矩陣轉換。makeArrow 的順序固定：先 end(x2) 再 start(x1)。 */
@@ -2740,6 +2814,26 @@ function trueArrowEndpoints(obj) {
     if (tris.length >= 2) return [apex(tris[1]), apex(tris[0])];
     if (tris.length === 1) return [pts[0], apex(tris[0])];   // 單箭頭：箭頭固定在第二端
     return pts;
+}
+/* 就地「改頭尾座標」重畫箭頭群組：不換物件（拖曳中 transform.target 必須一直是同一個），
+   只把內部的線段＋三角形換成新座標算出來的那一組，並把群組本身的外框/縮放/角度歸位。
+   有了這支，箭頭（端點≠無）選取時就跟一般直線一樣只出現頭尾兩個圓點可各自拉，
+   不再是整個外框等比例縮放（使用者要求 2026-08-24：要像 Figma 真的是一條線可以拉伸）。 */
+function reshapeArrowGroup(g, a, b) {
+    const line = g.getObjects().find(c => c.type === 'line');
+    const tris = g.getObjects().filter(c => c.type === 'triangle');
+    if (!line) return false;
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 1) return false;   // 兩端重疊＝方向算不出來（atan2 會亂跳）
+    const ends = (tris.length >= 2) ? 'both' : (tris.length === 1 ? 'end' : 'none');
+    const tmp = makeArrow(a.x, a.y, b.x, b.y, line.stroke, line.strokeWidth || 3, ends, line.strokeDashArray || null);
+    g._objects.forEach(c => { c.group = null; });
+    g._objects = tmp._objects;
+    g._objects.forEach(c => { c.group = g; });
+    g.set({ left: tmp.left, top: tmp.top, width: tmp.width, height: tmp.height,
+            scaleX: 1, scaleY: 1, angle: 0, flipX: false, flipY: false });
+    g.dirty = true;
+    g.setCoords();
+    return true;
 }
 /* 就地重建箭頭群組（改粗細/端點模式時用整支重畫，避免只放大三角形造成尖端跑位、跟線沒對齊） */
 function rebuildArrowGroup(g, opts) {
@@ -2986,20 +3080,23 @@ function buildPolyEditControls(poly) {
 /* ── 直線選取＝直接出現頭尾兩個端點圓點，拖曳即改線段長短/方向（不再是一般物件的整體縮放）──
    拖端點時把線攤平回 angle=0/scale=1 再用絕對座標重設 x1..y2（fabric.Line 的 _set 會自動重算外框），
    不改物件型別，端點箭頭下拉/角度欄等 isLineLike 相關功能全部不受影響。 */
+/* 頭尾座標：一般直線取線段兩端，箭頭群組取「箭頭尖端」（群組內線段有被縮短，不能拿線段端點當頭尾） */
+function anyLineEndpoints(o) { return (o.type === 'line') ? lineAbsEndpoints(o) : trueArrowEndpoints(o); }
 function lineEndPositionHandler(which) {
     return function (dim, finalMatrix, o) {
         if (!o.canvas) return new fabric.Point(-99999, -99999);   // 已被移出畫布的殘留選取
-        const p = lineAbsEndpoints(o)[which];
+        const p = anyLineEndpoints(o)[which];
         return fabric.util.transformPoint(new fabric.Point(p.x, p.y), o.canvas.viewportTransform);
     };
 }
 function lineEndActionHandler(which) {
     return function (eventData, transform, x, y) {
         const o = transform.target;
-        const other = lineAbsEndpoints(o)[which === 0 ? 1 : 0];
+        const other = anyLineEndpoints(o)[which === 0 ? 1 : 0];
         const a = (which === 0) ? { x, y } : other;
         const b = (which === 0) ? other : { x, y };
         if (!isFinite(a.x) || !isFinite(a.y) || !isFinite(b.x) || !isFinite(b.y)) return false;   // 防 NaN 毒化
+        if (o.type !== 'line') return reshapeArrowGroup(o, a, b);   // 箭頭群組：整支依新頭尾重畫（尖端才不會跑位）
         o.set({ angle: 0, scaleX: 1, scaleY: 1, flipX: false, flipY: false });
         o.set({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
         o.setCoords();
@@ -3027,7 +3124,9 @@ function buildLineEndControls() {
 function refreshLineEndControls(e) {
     ((e && e.deselected) || []).forEach(o => { if (o.__lineEndCtrls) { delete o.controls; delete o.__lineEndCtrls; } });
     const obj = canvas.getActiveObject();
-    if (obj && obj.type === 'line' && !obj.isDimGuide && !obj.__pointEditing && !obj.locked && !obj.__lineEndCtrls) {
+    // 直線與箭頭群組（isArrowGroup）一律改成「只有頭尾兩個圓點」的線段編輯，不用一般物件的外框縮放；
+    // 標註（dimKind：尺寸線/直徑）自成一組畫法，維持原本的整體縮放不動
+    if (obj && isLineLike(obj) && !obj.dimKind && !obj.isDimGuide && !obj.__pointEditing && !obj.locked && !obj.__lineEndCtrls) {
         obj.controls = buildLineEndControls();
         obj.__lineEndCtrls = true;
     }
@@ -5478,6 +5577,7 @@ function doCropMove(x, y, w, h) {
     canvas.requestRenderAll();
     const bgObjs = backgroundImagesInRect(x, y, w, h);
     const moved = contentObjectsInRect(x, y, w, h);   // 完整落在框內：烙進切塊並從原處移除
+    const carried = contentObjectsTouchingRect(x, y, w, h).filter(o => moved.indexOf(o) === -1);   // 只壓到一部分：原封不動一起帶走
     const others = canvas.getObjects().filter(o => o.id !== '__artboard' && bgObjs.indexOf(o) === -1 && moved.indexOf(o) === -1);
     const prevVis = others.map(o => o.visible !== false);
     others.forEach(o => { o.visible = false; });   // 只藏「部分壓框」與框外的物件；框內物件留著＝跟複製一樣烙進圖
@@ -5502,13 +5602,14 @@ function doCropMove(x, y, w, h) {
         img.set({ left: x, top: y });
         img.transparentBg = document.getElementById('p-crop-transparent').checked;   // 透明切塊之後挖空用擦除
         canvas.add(img);
-        canvas.setActiveObject(img);
+        selectSliceWithCarried(img, carried);
         canvas.requestRenderAll();
         pushState();
         toast((skipped
             ? '已切下框選範圍；部分底圖因旋轉/已裁切無法真正挖空，改用底色覆蓋，直接拖到新位置'
             : '已切下框選範圍（原底圖已真正挖空），直接拖到新位置；不滿意可 Ctrl+Z 復原')
-            + (moved.length ? '；框內 ' + moved.length + ' 個物件已一起切進圖塊' : ''));
+            + (moved.length ? '；框內 ' + moved.length + ' 個物件已一起切進圖塊' : '')
+            + (carried.length ? '；壓到框線的 ' + carried.length + ' 個物件（文字/形狀）保持原樣一起選取，拖曳會跟著移動' : ''));
     });
 }
 
@@ -5652,6 +5753,25 @@ function contentObjectsInRect(x, y, w, h) {
         return br.left >= x - 2 && br.top >= y - 2 && br.left + br.width <= x + w + 2 && br.top + br.height <= y + h + 2;
     });
 }
+/* 只壓到框線一部分的物件（Figma 框選＝碰到就算）：不能烙進切塊（會被切一半），
+   改成「原封不動一起帶走」——切塊圖與這些物件一起變成多重選取，拖曳時整組跟著移動。
+   使用者回報 2026-08-24：框住文字時只要文字外框有一點點超出框線，切下來就是一塊純白、
+   文字還留在原地被白塊蓋住，看起來像「框選搬移壞掉」。 */
+function contentObjectsTouchingRect(x, y, w, h) {
+    return canvas.getObjects().filter(o => {
+        if (o.id === '__artboard' || o.locked || o.visible === false || o.isDimGuide) return false;
+        if (o.type === 'image' && !o.labelSpec && !o.labelKind) return false;   // 底圖另外走挖空流程
+        const br = o.getBoundingRect(true, true);
+        return !(br.left + br.width <= x || br.left >= x + w || br.top + br.height <= y || br.top >= y + h);
+    });
+}
+/* 切塊圖與「一起帶走的物件」組成多重選取，放開滑鼠就能整組拖到新位置 */
+function selectSliceWithCarried(img, carried) {
+    if (!carried || !carried.length) { canvas.setActiveObject(img); return; }
+    carried.forEach(o => canvas.bringToFront(o));   // 保證浮在切塊圖之上，不會被白底蓋住
+    const sel = new fabric.ActiveSelection([img].concat(carried), { canvas: canvas });
+    canvas.setActiveObject(sel);
+}
 function pointInPoly(px, py, pts) {
     let inside = false;
     for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -5749,6 +5869,8 @@ function doCropMoveLasso(points) {
         return pointInPoly(br.left, br.top, points) && pointInPoly(br.left + br.width, br.top, points)
             && pointInPoly(br.left, br.top + br.height, points) && pointInPoly(br.left + br.width, br.top + br.height, points);
     });
+    // 只壓到套索一部分的物件：跟矩形版一樣原封不動一起帶走，不要藏起來變成一塊空白
+    const carried = contentObjectsTouchingRect(b.x, b.y, b.w, b.h).filter(o => moved.indexOf(o) === -1);
     const others = canvas.getObjects().filter(o => o.id !== '__artboard' && bgObjs.indexOf(o) === -1 && moved.indexOf(o) === -1);
     const prevVis = others.map(o => o.visible !== false);
     others.forEach(o => { o.visible = false; });
@@ -5767,13 +5889,14 @@ function doCropMoveLasso(points) {
         img.set({ left: b.x, top: b.y });
         img.transparentBg = true;   // 套索切塊範圍外一定是透明像素，之後挖空一律用擦除
         canvas.add(img);
-        canvas.setActiveObject(img);
+        selectSliceWithCarried(img, carried);
         canvas.requestRenderAll();
         pushState();
         toast((anySkipped
             ? '已切下不規則框選範圍；部分底圖因旋轉/已裁切無法真正挖空，改用色塊覆蓋，直接拖到新位置'
             : '已切下不規則框選範圍（原底圖已真正挖空），直接拖到新位置；不滿意可 Ctrl+Z 復原')
-            + (moved.length ? '；框內 ' + moved.length + ' 個物件已一起切進圖塊' : ''));
+            + (moved.length ? '；框內 ' + moved.length + ' 個物件已一起切進圖塊' : '')
+            + (carried.length ? '；壓到範圍邊緣的 ' + carried.length + ' 個物件保持原樣一起選取，拖曳會跟著移動' : ''));
     });
 }
 
@@ -7462,6 +7585,7 @@ const PREF_FIELDS = [
     ['p-textbg', 'textBg'], ['p-textbg-on', 'textBgOn', true],
     ['p-balloon-size', 'balloonSize'], ['p-dc-shape', 'dcShape'], ['p-dc-size', 'dcSize'],
     ['p-stamp-size', 'stampSize'], ['p-maskcolor', 'maskColor'], ['p-crop-transparent', 'cropTransparent', true],
+    ['frame-clip', 'frameClip', true],
     ['p-connect-kind', 'connectKind'], ['p-dim-style', 'dimStyle']
 ];
 function applyUserPrefs() {
@@ -7472,6 +7596,8 @@ function applyUserPrefs() {
         if (isCheckbox) el.checked = !!v; else el.value = v;
     });
     document.getElementById('p-width-v').textContent = document.getElementById('p-width').value;
+    frameClipOn = !!document.getElementById('frame-clip').checked;   // 勾選狀態是直接寫 .checked（不觸發 change），旗標要自己同步
+    canvas.requestRenderAll();
     // 各繪圖工具自己的線條設定（見 captureToolStyle/applyToolStyle）
     if (USER_PREFS.toolStyles && typeof USER_PREFS.toolStyles === 'object') toolStyles = USER_PREFS.toolStyles;
 }
