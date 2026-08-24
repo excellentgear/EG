@@ -4,7 +4,7 @@ session_start();
 require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 header('Content-Type: application/json');
 
-include '../common/DBConnection.php';
+require_once __DIR__ . '/../common/DBConnection.php';   // 2026-08-24 改 require_once＋__DIR__：api_guard 已先載入過，用 include 會二次宣告 class 直接 500
 require_once '../common/quotation_approval.php';
 require_once '../common/asdoc_lib.php';
 

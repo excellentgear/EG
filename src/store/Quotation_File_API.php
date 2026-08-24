@@ -14,7 +14,7 @@ if ($action !== 'download') {
     header('Content-Type: application/json; charset=utf-8');
 }
 
-include '../common/DBConnection.php';
+require_once __DIR__ . '/../common/DBConnection.php';   // 2026-08-24 改 require_once＋__DIR__：api_guard 已先載入過，用 include 會二次宣告 class 直接 500
 $db  = new DBConnection();
 $pdo = $db->getPDO();
 
