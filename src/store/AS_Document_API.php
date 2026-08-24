@@ -462,6 +462,7 @@ $asGate = [
     'get_perms'=>'settings', 'save_perms'=>'settings',
     'get_settings'=>'settings', 'save_settings'=>'settings', 'upload_template'=>'settings',
     'tree_print_meta'=>'view', 'save_tree_as_doc'=>'settings', 'tree_signers'=>'view',
+    'tree_web_pages'=>'view',   // 結構總覽「網頁」欄：哪些文件已經做成頁面（權限逐筆判定，見 case 內說明）
     'save_tree_exclude'=>'settings',   // 列印排除項目＝文管設定權限才能改（會影響正式文件內容）
     'save_tree_auto'=>'settings', 'tree_submit_approval'=>'update',
     'tree_editor_terms'=>'view', 'save_tree_editor_terms'=>'settings',
@@ -1304,6 +1305,26 @@ case 'tree_print_meta':
           'approved'=>json_decode(asGetSetting($db,'as_doc_tree_approved') ?: 'null', true),
           'pending'=>$pending,
           'as_docs'=>$db->query("SELECT id, doc_no, doc_name FROM as_document WHERE is_deleted=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC)]);
+
+// ══════════════ 結構總覽「網頁」欄：哪一份文件已經網頁化，以及這個人有沒有權限開 ══════════════
+// 判定一律走共用庫 asdoc_page_lib.php（與 as_flow_guide.php 同一份來源，鐵律4 不各自刻一份）。
+// 使用者拍板：**表單簽核設計器（form_signer）只是紙本簽好再補送掃描檔的流程，不算電子化**，這裡排除。
+// 權限：有登記進選單的頁面＝比照左側選單的判定（沒權限的人只看到灰字「無權限」，拿不到網址）；
+//       沒登記的帶參數子頁（線上表單填寫頁、總覽表列印版）屬本模組自己的子頁，用本頁的檢視權限。
+// 本欄只在畫面上看，**列印版（文件管制總覽表）不帶**——列印是另一套 treePrintBody() 自己組的表格。
+case 'tree_web_pages':
+    require_once __DIR__ . '/../common/asdoc_page_lib.php';
+    require_once __DIR__ . '/../common/role_features_helper.php';
+    $pmap = eg_asdoc_page_map($db, ['skip_sources' => ['form_signer']]);
+    $outp = [];
+    foreach ($pmap as $did => $m) {
+        $can = eg_asdoc_page_registered($db, $m['url'])
+             ? eg_asdoc_page_can_open($db, $currentUserId, $m['url'])
+             : asCan('view');
+        $outp[(string)$did] = ['name' => $m['name'], 'can' => $can ? 1 : 0]
+                            + ($can ? ['url' => $m['url']] : []);
+    }
+    jout(['status'=>'success','pages'=>$outp]);
 
 case 'save_tree_auto':
     asSetSetting($db, 'as_doc_tree_auto_approve', ($_POST['auto'] ?? '0')==='1' ? '1' : '0');

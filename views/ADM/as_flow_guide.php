@@ -132,82 +132,11 @@ if (isset($_GET['scan'])) {
 //   (b) 尚未遷移到統一庫的舊模組（vendor_audit 存在 system_settings、EXTERNAL_DOC/QUOTATION 存在各自的 param_group）——
 //       這些沒有共同的 group 可以整批掃，只能繼續手動登記；**新增此類舊式綁定時才需要回來補一列**。
 $PGBIND = [];   // as_document.id => ['name'=>用途, 'url'=>頁面]
-
-// (a) 統一綁定庫：動態掃描，永遠不漏
-$ASDOC_MODULE_LABELS = [
-    // 模組代碼(=eg_asdoc_save的第二參數) => [顯示用途, 頁面網址（相對本頁）]
-    'meeting_signsheet'   => ['會議管理 · 簽到表',       '../ADM/meeting_record.php'],
-    'meeting_record'      => ['會議管理 · 會議紀錄表',   '../ADM/meeting_record.php'],
-    'part_process_report' => ['零件製程報告',            '../Sales/part_process_report.php'],
-    'order_change'        => ['訂單變更 · 變更單',       '../Sales/NewOrder_Track.php'],
-    'order_change_history'=> ['訂單變更 · 歷史清單',     '../Sales/NewOrder_Track.php'],
-    'hr_form_job_desc'     => ['職務說明書',             '../ADM/hr_position_forms.php'],
-    'hr_form_skill_assess' => ['專業技能鑑定考核表',     '../ADM/hr_position_forms.php'],
-    'hr_form_competency'   => ['職能鑑定表',         '../ADM/hr_position_forms.php'],
-];
-// 「每個模板一組編號」的通用引擎（審核表單/表單簽核設計器）：module code 是動態組出來的
-// 'review_form_tpl_<id>'／'fsd_tpl_<id>'，不可能事先窮舉進上面的固定表，改由對應模板表現查名稱。
-$RVF_TPL_NAMES = [];
-try {
-    foreach ($conn->query("SELECT id, name FROM rf_template") as $r) { $RVF_TPL_NAMES[(int)$r['id']] = (string)$r['name']; }
-} catch (Exception $e) { /* 表不存在時忽略 */ }
-$FSD_TPL_NAMES = [];
-try {
-    foreach ($conn->query("SELECT id, name FROM fsd_template") as $r) { $FSD_TPL_NAMES[(int)$r['id']] = (string)$r['name']; }
-} catch (Exception $e) { /* 表不存在時忽略 */ }
-try {
-    foreach ($conn->query("SELECT param_key, param_value FROM system_parameters WHERE param_group='AS_DOC_BIND'") as $r) {
-        $did = (int)(json_decode((string)$r['param_value'], true) ?? $r['param_value']);
-        if ($did <= 0) { continue; }
-        $key = (string)$r['param_key'];
-        if (preg_match('/^review_form_tpl_(\d+)$/', $key, $mm) && isset($RVF_TPL_NAMES[(int)$mm[1]])) {
-            $PGBIND[$did] = ['name' => '審核表單 · ' . $RVF_TPL_NAMES[(int)$mm[1]], 'url' => '../ADM/review_form.php'];
-            continue;
-        }
-        if (preg_match('/^fsd_tpl_(\d+)$/', $key, $mm) && isset($FSD_TPL_NAMES[(int)$mm[1]])) {
-            $PGBIND[$did] = ['name' => '表單簽核設計器 · ' . $FSD_TPL_NAMES[(int)$mm[1]], 'url' => '../ADM/form_signer.php'];
-            continue;
-        }
-        $lbl = $ASDOC_MODULE_LABELS[$key] ?? [$key, ''];
-        $PGBIND[$did] = ['name' => $lbl[0], 'url' => $lbl[1]];
-    }
-} catch (Exception $e) { error_log('as_flow_guide pagebind(asdoc_lib): ' . $e->getMessage()); }
-
-// (b) 舊式各自存放（尚未遷移到 AS_DOC_BIND，需手動登記）
-$PAGE_BINDS = [
-    // [來源, 鍵（sp 用 群組|鍵）, 該頁對此文件的用途, 頁面網址（相對本頁）]
-    ['ss', 'vendor_audit_as_doc_id',  '供應商稽核管理 · 稽核查檢表',        '../pm/vendor_audit.php'],
-    ['ss', 'vendor_record_as_doc_id', '供應商稽核管理 · 品質系統評鑑記錄表', '../pm/vendor_audit.php'],
-    ['ss', 'vendor_roster_as_doc_id', '供應商稽核管理 · 合格供應商清冊',    '../pm/vendor_audit.php'],
-    ['ss', 'vendor_eval_as_doc_id',   '供應商稽核管理 · 定期評核表',        '../pm/vendor_audit.php'],
-    ['ss', 'vendor_plan_as_doc_id',   '供應商稽核管理 · 供應商稽核計劃',    '../pm/vendor_audit.php'],
-    ['ss', 'as_doc_tree_print_as_doc_id', 'AS文件審核樹 · 列印版',          '../ADM/as_tree_approval_view.php'],
-    ['ss', 'qc_inspection_as_doc_id', '線上檢驗記錄表',                     '../QC/inspection_entry_v2.php'],
-    ['ss', 'training_as_doc_plan',    '教育訓練 · 訓練計劃表',              '../ADM/training_record.php'],
-    ['ss', 'training_as_doc_result',  '教育訓練 · 訓練成果表',              '../ADM/training_record.php'],
-    ['ss', 'training_as_doc_target',  '教育訓練 · 訓練目標表',              '../ADM/training_record.php'],
-    ['ss', 'training_as_doc_request', '教育訓練 · 需求申請單',              '../ADM/training_record.php'],
-    ['ss', 'training_as_doc_signsheet', '教育訓練 · 簽到表',                '../ADM/training_record.php'],
-    ['sp', 'EXTERNAL_DOC|as_doc_id',  '外來文件清單',                       '../Sales/external_doc_list.php'],
-    ['sp', 'QUOTATION|as_doc_id',     '報價單',                             '../Sales/quotation_list_NEW.php'],
-];
-foreach ($PAGE_BINDS as $b) {
-    try {
-        if ($b[0] === 'ss') {
-            $q = $conn->prepare("SELECT setting_value FROM system_settings WHERE setting_key=? LIMIT 1");
-            $q->execute([$b[1]]);
-            $val = (string)$q->fetchColumn();
-        } else {
-            [$grp, $key] = explode('|', $b[1]);
-            $q = $conn->prepare("SELECT param_value FROM system_parameters WHERE param_group=? AND param_key=? LIMIT 1");
-            $q->execute([$grp, $key]);
-            $raw = (string)$q->fetchColumn();
-            $val = (string)(json_decode($raw, true) ?? $raw);   // system_parameters 存的是 JSON
-        }
-        $did = (int)$val;
-        if ($did > 0) { $PGBIND[$did] = ['name' => $b[2], 'url' => $b[3]]; }
-    } catch (Exception $e) { error_log('as_flow_guide pagebind: ' . $e->getMessage()); }
-}
+// 判定一律走共用庫（2026-08-24 抽出）：AS 文件管理的「結構總覽」也要用同一份資料，
+// 兩邊各刻一份必定走鐘（鐵律4）。四種來源、舊式手動登記的對照表都在 asdoc_page_lib.php 內，
+// 要新增／修正對照請改那一支，本頁不再自己維護一份。
+require_once __DIR__ . '/../../src/common/asdoc_page_lib.php';
+$PGBIND = eg_asdoc_page_map($conn);   // 本頁列全部來源（含表單簽核設計器）
 
 $DOCMAP = [];
 try {
@@ -932,7 +861,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       ① AS 線上表單設計器已建立並綁定此文件（<code>as_form_template.form_doc_id</code>）；
       ② 已連結既有電子化模組（<code>as_document.linked_module</code>，如 CAR／品質異常單）；
       ③ <strong>此表單已由某個既有頁面實作並做了 AS 文件綁定</strong>（如供應商稽核管理的「AS文件綁定設定」、外來文件清單、報價單；
-      新模組一律走統一庫 <code>system_parameters(AS_DOC_BIND)</code> 自動掃描，少數尚未遷移的舊模組登記在本頁原始碼 <code>$PAGE_BINDS</code>）。
+      新模組一律走統一庫 <code>system_parameters(AS_DOC_BIND)</code> 自動掃描，少數尚未遷移的舊模組登記在共用庫 <code>src/common/asdoc_page_lib.php</code>）。
       <strong>預覽</strong>＝開啟系統內該文件現行版檔案（Office 自動轉 PDF）；右側按鈕＝另開分頁進入該線上表單／頁面。</p>
 
     <table class="of-table" id="onTable">
@@ -1046,7 +975,7 @@ a.doclink i { font-size:10px; margin-left:3px; opacity:.65; }
       ③ <b>此表單已由既有頁面實作並做了 AS 文件綁定</b>（如供應商稽核管理、外來文件清單、報價單）。
       第③類綁定值存在 <code>system_settings</code> / <code>system_parameters</code>：2026-08-03後新模組一律走統一庫
       <code>system_parameters(param_group='AS_DOC_BIND')</code>，本頁<b>動態掃描該群組，不需要手動登記</b>；
-      少數尚未遷移的舊模組（供應商稽核管理／外來文件清單／報價單…）仍手動登記於本頁原始碼 <code>$PAGE_BINDS</code>，
+      少數尚未遷移的舊模組（供應商稽核管理／外來文件清單／報價單…）仍手動登記於共用庫 <code>src/common/asdoc_page_lib.php</code>（AS 文件管理的結構總覽「網頁」欄也讀同一份），
       這類舊式綁定若日後有新頁面才需要回來補一列。</div>
 
     <h4>「系統掃描比對」是怎麼運作的（沒有 AI，純文字比對）</h4>

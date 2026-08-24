@@ -342,6 +342,7 @@ if ($deptPerm === 'R') {
           📕手冊　📘程序書　📗標準書　📄表單｜點文件名稱＝跳至該文件；▸/▾ 可收合展開。
           <label style="font-weight:normal;margin-left:10px;" title="勾選＝連已廢止的文件一起列出，備註欄顯示廢止日期（已刪除的文件一律不列）"><input type="checkbox" id="treeShowObsolete"> 含已廢止</label>
           <span style="margin-left:10px;">AS 文件編號：<b id="treeAsDocNo">尚未綁定</b></span>
+          <span style="margin-left:10px;">｜<b>網頁</b>欄＝這份文件已經做成系統頁面，點<b>「網頁」</b>另開新分頁（依各模組已綁定的 AS 文件編號自動判定；沒有該頁權限者顯示灰字「無權限」；<b>列印版不會出現這一欄</b>）。</span>
           <span id="treeExclHint" style="display:none;color:#8A5A2B;">｜每列左側的勾選框＝<b>列印排除</b>：勾了這份文件，它<b>底下所有表單也一起不印</b>（之後新增到它底下的表單同樣不印）。變更會立即儲存，並使已核准的總覽表失效需重新送審。</span>
         </p>
         <div id="treeBody" style="font-size:13px;line-height:1.9;"></div>
@@ -536,6 +537,14 @@ if ($deptPerm === 'R') {
 /* 已廢止文件：粉紅底（ai-rules/10 暖色系；顏色不是唯一資訊，旁邊另有「已廢止」文字標籤） */
 tr.doc-obsolete > td { background:#FBE4E8 !important; }
 .tree-row.tree-obsolete { background:#FBE4E8; }
+/* 結構總覽「網頁」欄：已做成系統頁面者可點開新分頁（暖色系；文字本身就是資訊，顏色只是輔助）。
+   使用者明確要求：**這一欄只在畫面上看，列印一律不出現**——列印版是 treePrintBody() 另外組的表格，
+   本來就不含這欄；這裡的 @media print 是第二道保險（避免有人直接列印跳窗畫面）。 */
+.tree-web { font-size:10px; text-decoration:none !important; }
+.tree-web-on { color:#8A5A2B; background:#F7E0BD; border:1px solid #E8C07A; border-radius:3px; padding:0 4px; display:inline-block; }
+.tree-web-on:hover { background:#F0A24B; color:#fff; }
+.tree-web-no { color:#aaa; }
+@media print { .tree-web, .tree-web-col { display:none !important; } }
 .ob-tag { background:#DD5138; color:#fff; }
 /* 文件備註（管理員維護，接在文件名稱下方）：暖色系淡底＋左側粗邊，跟文件名稱明顯分層。
    內容是使用者自訂格式，所以底色/文字色一律讓內文的 inline style 自己決定，
@@ -1573,6 +1582,24 @@ $(function(){
 
   // ══ 結構總覽（樹狀圖：依部門代碼分組＋表格式欄位對齊） ══
   const TYPE_ICON = {'手冊':'📕','程序':'📘','標準書':'📗','表單':'📄'};
+  /* 「網頁」欄：這份文件有沒有已經做成系統頁面（後端 tree_web_pages 逐筆判定，
+     來源＝各模組已綁定的 AS 文件編號，共用 src/common/asdoc_page_lib.php，不在這裡另猜一份）。
+     沒權限開那一頁的人只拿得到 can=0（後端連網址都不回），畫面顯示灰字「無權限」。 */
+  let TREE_WEB = {};
+  function treeWebHtml(d){
+    const w = TREE_WEB[String(d.id)];
+    if(!w) return '';
+    if(!w.can) return `<span class="tree-web tree-web-no" title="${esc(w.name)}｜您沒有開啟這個頁面的權限，請洽管理員">無權限</span>`;
+    return `<a class="tree-web tree-web-on" href="${esc(w.url)}" target="_blank" rel="noopener"`
+         + ` title="已網頁化：${esc(w.name)}｜點擊另開新分頁">網頁 <i class="fa fa-external-link"></i></a>`;
+  }
+  function loadTreeWebPages(){
+    $.getJSON(API+'?action=tree_web_pages', r=>{
+      if(r.status!=='success') return;
+      TREE_WEB = r.pages||{};
+      if(TREE_DOCS.length) renderTree(TREE_DOCS);   // 樹先畫好也要補上這一欄
+    });
+  }
   function treeNodeHtml(d, depth, hasKids, exSelf, exByParent){
     const icon = TYPE_ICON[d.doc_type] || '📄';
     // 列印排除：勾了這一份，底下所有子文件（表單）自動跟著不印；子文件顯示為唯讀勾選
@@ -1593,6 +1620,7 @@ $(function(){
       </div>
       <div style="flex:0 0 56px;text-align:center;">${d.current_version?`<span class="label label-info" style="font-size:10px;">${esc(d.current_version)}</span>`:''}</div>
       <div style="flex:0 0 72px;text-align:center;">${recBadge}</div>
+      <div class="tree-web-col" style="flex:0 0 84px;text-align:center;">${treeWebHtml(d)}</div>
       <div style="flex:0 0 110px;font-size:11px;color:#888;white-space:nowrap;overflow:hidden;">${esc(d.dept_name)||'-'}</div>
       <div style="flex:0 0 30px;text-align:center;">${del}</div>
     </div>`;
@@ -1642,6 +1670,7 @@ $(function(){
       <div style="flex:1;">文件</div>
       <div style="flex:0 0 56px;text-align:center;">版本</div>
       <div style="flex:0 0 72px;text-align:center;">紀錄/附件</div>
+      <div class="tree-web-col" style="flex:0 0 84px;text-align:center;">網頁</div>
       <div style="flex:0 0 110px;">部門</div>
       <div style="flex:0 0 30px;"></div>
     </div>`;
@@ -1685,6 +1714,7 @@ $(function(){
       renderTree(TREE_DOCS);
       loadTreeSigners();
     });
+    loadTreeWebPages();
   }
   /** 簽章人員：核准＝最高核准人員；修改＝依「任期」回推該階簽章日期當時的 AS 負責人，
    *  任期沒涵蓋的日期才用下拉手選（手選者仍須該日在職且未請假） */
