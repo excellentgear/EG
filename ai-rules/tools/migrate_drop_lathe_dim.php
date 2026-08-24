@@ -45,7 +45,10 @@ foreach ($ids as $L) {
 if (!$DRY) $db->exec("UPDATE dict_label_sub SET has_draw_lathe=0 WHERE has_draw_lathe=1");
 
 // ── ② 熱處理「範圍」旗標開回來（只開有資料的那幾個）────────────
-$hs = $db->query("SELECT s.sub_id, s.sub_name, COUNT(m.sub_map_id) n
+// 2026-08-24 追加：使用者實測後決定熱處理「不需要輸入範圍，只要能篩選到子標籤就好」，
+// 已自行關閉範圍旗標並改回純標籤。這一步保留紀錄但停用，避免重跑時蓋掉使用者的決定。
+$hs = [];
+$__superseded = $db->query("SELECT s.sub_id, s.sub_name, COUNT(m.sub_map_id) n
                   FROM dict_label_sub s JOIN item_sub_label_map m ON m.sub_id=s.sub_id
                   WHERE s.label_id=13 AND s.is_range=0 AND m.value_min IS NOT NULL
                   GROUP BY s.sub_id")->fetchAll();

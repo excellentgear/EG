@@ -10613,7 +10613,8 @@ function buildLabelFilterRow(typeCode) {
             var hasDlDepth = (ldef.has_draw_lathe_depth=='1'||ldef.has_draw_lathe_depth===1);
             var isRng = (ldef.is_range=='1'||ldef.is_range===1);
             var isDim = (ldef.is_dimension=='1'||ldef.is_dimension===1);
-            var needsInput = hasDl || hasDlDepth || it !== 'none' || isRng || isDim;
+            var isQtyDim = (ldef.is_qty_dim=='1'||ldef.is_qty_dim===1);
+            var needsInput = hasDl || hasDlDepth || it !== 'none' || isRng || isDim || isQtyDim;
 
             var wrap = document.createElement('div');
             wrap.className = 'lbl-filter-group';
