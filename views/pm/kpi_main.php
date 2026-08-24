@@ -262,6 +262,9 @@ function kpiCalcFormula(array $formulaDef, int $dsId, array $labelValMap, array 
             $baseKey  = $dsId.'_'.$labelId.($subId ? '_'.$subId : '');
             if ($dimField === 'qty') {
                 $val = floatval($labelValMap[$baseKey.'_qty'] ?? 0);
+            } elseif ($dimField === 'spec') {
+                // 2026-08-24 孔類子標籤取消深度後，公式可直接取「規格」本身（value_min），例：螺孔 M6 → 6
+                $val = floatval($labelValMap[$baseKey.'_min'] ?? 0);
             } elseif ($dimField === 'dim' || $dimField === 'dim_div') {
                 $minVal = floatval($labelValMap[$baseKey.'_min'] ?? 0);
                 $maxVal = floatval($labelValMap[$baseKey.'_max'] ?? 0);
@@ -5361,10 +5364,11 @@ function renderFormulaVars(){
             // Dimension picker: show if is_dimension or is_qty_dim
             var flags=_dimFlags(v,labels);
             if(flags.isDim||flags.isQtyDim){
-                var isDimSel=(v.dim_field==='dim'||v.dim_field==='dim_div'||(!v.dim_field&&!flags.isQtyDim));
+                var isDimSel=(v.dim_field==='dim'||v.dim_field==='dim_div'||(!v.dim_field&&!flags.isQtyDim&&v.dim_field!=='spec'));
                 if(flags.isQtyDim){
                     // is_qty_dim: dropdown 數量 | 長×寬(圓×深)
                     var dimOpts='<option value="qty"'+(v.dim_field==='qty'?' selected':'')+'>數量</option>';
+                    dimOpts+='<option value="spec"'+(v.dim_field==='spec'?' selected':'')+'>規格(第一數值)</option>';
                     dimOpts+='<option value="dim"'+(isDimSel?' selected':'')+'>長×寬(圓×深)</option>';
                     valCell+='<select class="form-control input-sm" style="height:26px;padding:1px 4px;margin-top:2px;" onchange="setFormulaVarDimField('+i+',this.value)">'+dimOpts+'</select>';
                 } else {
@@ -5556,6 +5560,7 @@ function updateFormulaPreview(){
             if(v.dim_field==='qty') name+=' [數量]';
             else if(v.dim_field==='dim') name+=' [長×寬]';
             else if(v.dim_field==='dim_div') name+=' [寬÷長]';
+            else if(v.dim_field==='spec') name+=' [規格]';
             if(v.fallback_gear){var fg=GEAR_FIELDS.filter(function(f){return f.key===v.fallback_gear;})[0];name+=' (備援齒輪:'+(fg?fg.name:v.fallback_gear)+')';}
             else if(v.fallback_label_id){var fl=(allLabels||[]).filter(function(l){return l.label_id==v.fallback_label_id;})[0];name+=' (備援標籤:'+(fl?fl.label_name:'label#'+v.fallback_label_id)+')';}
         } else if(v.type==='param'){

@@ -382,7 +382,7 @@ function erpCalcFormula(array $formulaDef, int $dsId, array $labelValMap, array 
     $vars = $formulaDef['vars'] ?? [];
     $replacements = [];
     $kpiParamNames = ['coeff'=>'難易係數','base_price'=>'基準金額(元/秒)','base_time'=>'基礎工時(秒)','base_amount'=>'基準金額(元)'];
-    $dimLabels = ['qty'=>'(數量)','min'=>'(最小值)','max'=>'(最大值)'];
+    $dimLabels = ['qty'=>'(數量)','spec'=>'(規格)','min'=>'(最小值)','max'=>'(最大值)'];
     foreach ($vars as $vc) {
         $varName = $vc['var'] ?? ''; if (!$varName) continue;
         if ($vc['type'] === 'label') {
@@ -391,6 +391,10 @@ function erpCalcFormula(array $formulaDef, int $dsId, array $labelValMap, array 
             $dim = $vc['dim_field'] ?? '';
             if ($dim === 'qty') {
                 $val = floatval($labelValMap[$baseKey.'_qty'] ?? 0);
+            } elseif ($dim === 'spec') {
+                // 2026-08-24 孔類子標籤取消深度後，公式可直接取「規格」本身（value_min），
+                // 例：螺孔 M6 → 6。原本只有 dim/dim_div 兩種，深度一沒了 dim_div 就會歸零。
+                $val = floatval($labelValMap[$baseKey.'_min'] ?? 0);
             } elseif ($dim === 'dim' || $dim === 'dim_div') {
                 $minVal = floatval($labelValMap[$baseKey.'_min'] ?? 0);
                 $maxVal = floatval($labelValMap[$baseKey.'_max'] ?? 0);
