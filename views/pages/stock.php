@@ -6295,9 +6295,9 @@ function buildLabelsHtml(labelsStr){
                     sDisp=siQtyNumSp+siSpecSp+(siDepthSp?' x'+siDepthSp+sSfxSp:'');
                 } else if(sIsQtyDimSp&&(svn||svx)){
                     var sQtyNumSp=(sQtySp&&parseFloat(sQtySp)>1)?_tf2(sQtySp)+'-':'';
-                    sDisp=sQtyNumSp+sPfxSp+svn+'×'+svx+sSfxSp;
+                    sDisp=sQtyNumSp+sPfxSp+svn+(svx!==''?'×'+svx+sSfxSp:'');
                 } else if(sIsDimSp&&(svn||svx)){
-                    sDisp=sPfxSp+svn+'×'+svx+sSfxSp;
+                    sDisp=sPfxSp+svn+(svx!==''?'×'+svx+sSfxSp:'');
                 } else if(sIsRng){
                     sDisp=(!svn&&!svx)?'':(svn||'')+'~'+(svx||'');
                 } else if(sHasTol&&siv!==''){

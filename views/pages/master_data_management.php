@@ -745,6 +745,9 @@ try {
     try { $pdo->exec("ALTER TABLE dict_label_sub ADD COLUMN is_qty_triple_dim TINYINT NOT NULL DEFAULT 0 COMMENT '數量-長x寬x高（數量+三維） 1=是 0=否'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_label_sub ADD COLUMN is_enum TINYINT NOT NULL DEFAULT 0 COMMENT '列舉選項 1=是 0=否'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_label_sub ADD COLUMN hide_name_in_display TINYINT NOT NULL DEFAULT 0 COMMENT '前端省略子標籤名稱 1=省略 0=顯示'"); } catch(Exception $e){}
+    // 2026-08-24 使用者要求：孔類子標籤取消「深度」輸入（螺孔/孔/英制/中心牙孔/沉頭孔），
+    // 改用旗標控制而非在渲染端寫死 sub_id，日後其他子標籤要省略深度也能在字典勾選。
+    try { $pdo->exec("ALTER TABLE dict_label_sub ADD COLUMN no_depth TINYINT NOT NULL DEFAULT 0 COMMENT '不使用深度(第二數值) 1=是 0=否'"); } catch(Exception $e){}
     try { $pdo->exec("CREATE TABLE IF NOT EXISTS dict_label_sub_option (option_id INT NOT NULL AUTO_INCREMENT, sub_id INT NOT NULL, option_value VARCHAR(100) NOT NULL, sort_order INT NOT NULL DEFAULT 0, is_active TINYINT NOT NULL DEFAULT 1, PRIMARY KEY (option_id), KEY idx_sub_id (sub_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='子標籤列舉選項'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_label_sub ADD COLUMN prefix_char VARCHAR(20) NULL COMMENT '前綴字元'"); } catch(Exception $e){}
     try { $pdo->exec("ALTER TABLE dict_label_sub ADD COLUMN suffix_char VARCHAR(20) NULL COMMENT '後綴字元'"); } catch(Exception $e){}
@@ -1480,6 +1483,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                                     . "  WHERE ilm{$fi}.d_id=d.d_id AND ilm{$fi}.label_id=:{$op_key}lid AND islm{$fi}.sub_id=:{$op_key}sid"
                                     . "  AND islm{$fi}.input_value LIKE :{$op_key}val)";
                             $params[":{$op_key}val"] = "%{$fval}%";
+                        } elseif ($val_op === 'dim_eq' && $fval !== '') {
+                            // is_qty_dim / is_dimension 子標籤：規格值存在 value_min（例：螺孔 M6 → value_min=6）。
+                            // 原本這裡沒有 dim_eq 分支，會掉進 range 去 CAST(input_value)（該欄恆為 NULL）＝篩選永遠 0 筆。
+                            $where .= " AND EXISTS (SELECT 1 FROM item_label_map ilm{$fi}"
+                                    . "  JOIN item_sub_label_map islm{$fi} ON islm{$fi}.parent_map_id=ilm{$fi}.map_id"
+                                    . "  WHERE ilm{$fi}.d_id=d.d_id AND ilm{$fi}.label_id=:{$op_key}lid AND islm{$fi}.sub_id=:{$op_key}sid"
+                                    . "  AND CAST(islm{$fi}.value_min AS DECIMAL(20,6)) = :{$op_key}val)";
+                            $params[":{$op_key}val"] = floatval($fval);
                         } else {
                             $where .= " AND EXISTS (SELECT 1 FROM item_label_map ilm{$fi}"
                                     . "  JOIN item_sub_label_map islm{$fi} ON islm{$fi}.parent_map_id=ilm{$fi}.map_id"
@@ -4374,7 +4385,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'list_subs') {
                 $label_id = intval($_POST['label_id'] ?? 0);
-                $stmt = $pdo->prepare("SELECT sub_id, sub_name, input_type, is_repeatable, has_draw_lathe, is_range, sort_order, has_tolerance, COALESCE(is_dimension,0) AS is_dimension, COALESCE(is_qty_dim,0) AS is_qty_dim, COALESCE(is_imperial_dim,0) AS is_imperial_dim, COALESCE(is_countersink,0) AS is_countersink, COALESCE(has_draw_lathe_depth,0) AS has_draw_lathe_depth, COALESCE(is_triple_dim,0) AS is_triple_dim, COALESCE(is_enum,0) AS is_enum, COALESCE(hide_name_in_display,0) AS hide_name_in_display, COALESCE(prefix_char,'') AS prefix_char, COALESCE(suffix_char,'') AS suffix_char FROM dict_label_sub WHERE label_id=? AND is_active=1 ORDER BY sort_order, sub_id");
+                $stmt = $pdo->prepare("SELECT sub_id, sub_name, input_type, is_repeatable, has_draw_lathe, is_range, sort_order, has_tolerance, COALESCE(is_dimension,0) AS is_dimension, COALESCE(is_qty_dim,0) AS is_qty_dim, COALESCE(is_imperial_dim,0) AS is_imperial_dim, COALESCE(is_countersink,0) AS is_countersink, COALESCE(has_draw_lathe_depth,0) AS has_draw_lathe_depth, COALESCE(is_triple_dim,0) AS is_triple_dim, COALESCE(is_enum,0) AS is_enum, COALESCE(hide_name_in_display,0) AS hide_name_in_display, COALESCE(no_depth,0) AS no_depth, COALESCE(prefix_char,'') AS prefix_char, COALESCE(suffix_char,'') AS suffix_char FROM dict_label_sub WHERE label_id=? AND is_active=1 ORDER BY sort_order, sub_id");
                 $stmt->execute([$label_id]);
                 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 $opts_q = $pdo->prepare("SELECT option_id, option_value, sort_order FROM dict_label_sub_option WHERE sub_id=? AND is_active=1 ORDER BY sort_order, option_id");
@@ -4428,6 +4439,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $is_range_sv    = intval($_POST['is_range'] ?? 0);
                 $has_tol_sv     = intval($_POST['has_tolerance'] ?? 0);
                 $is_dim_sv      = intval($_POST['is_dimension'] ?? 0);
+                $no_depth_sv       = intval($_POST['no_depth'] ?? 0);
                 $is_qty_dim_sv     = intval($_POST['is_qty_dim'] ?? 0);
                 $is_qty_triple_dim_sv = intval($_POST['is_qty_triple_dim'] ?? 0);
                 $is_imperial_dim_sv= intval($_POST['is_imperial_dim'] ?? 0);
@@ -4453,14 +4465,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
                 if ($sub_id) {
                     $old_ls = $pdo->prepare("SELECT sub_name,input_type,is_repeatable,has_draw_lathe,is_range,has_tolerance,COALESCE(is_dimension,0) AS is_dimension,COALESCE(is_qty_dim,0) AS is_qty_dim,COALESCE(is_imperial_dim,0) AS is_imperial_dim,COALESCE(is_countersink,0) AS is_countersink,COALESCE(has_draw_lathe_depth,0) AS has_draw_lathe_depth,COALESCE(is_enum,0) AS is_enum,COALESCE(hide_name_in_display,0) AS hide_name_in_display,COALESCE(prefix_char,'') AS prefix_char,COALESCE(suffix_char,'') AS suffix_char FROM dict_label_sub WHERE sub_id=?"); $old_ls->execute([$sub_id]); $old_ls_row = $old_ls->fetch(PDO::FETCH_ASSOC);
-                    $pdo->prepare("UPDATE dict_label_sub SET sub_name=?, input_type=?, is_repeatable=?, has_draw_lathe=?, is_range=?, has_tolerance=?, is_dimension=?, is_qty_dim=?, is_qty_triple_dim=?, is_imperial_dim=?, is_countersink=?, has_draw_lathe_depth=?, is_triple_dim=?, is_enum=?, hide_name_in_display=?, prefix_char=?, suffix_char=? WHERE sub_id=?")
-                        ->execute([$sub_name, $input_type, $is_rep, $has_draw_lathe, $is_range_sv, $has_tol_sv, $is_dim_sv, $is_qty_dim_sv, $is_qty_triple_dim_sv, $is_imperial_dim_sv, $is_countersink_sv, $has_draw_lathe_depth_sv, $is_triple_dim_sv2, $is_enum_sv, $hide_name_sv, $prefix_char_sv ?: null, $suffix_char_sv ?: null, $sub_id]);
+                    $pdo->prepare("UPDATE dict_label_sub SET sub_name=?, input_type=?, is_repeatable=?, has_draw_lathe=?, is_range=?, has_tolerance=?, is_dimension=?, is_qty_dim=?, is_qty_triple_dim=?, is_imperial_dim=?, is_countersink=?, has_draw_lathe_depth=?, is_triple_dim=?, is_enum=?, hide_name_in_display=?, no_depth=?, prefix_char=?, suffix_char=? WHERE sub_id=?")
+                        ->execute([$sub_name, $input_type, $is_rep, $has_draw_lathe, $is_range_sv, $has_tol_sv, $is_dim_sv, $is_qty_dim_sv, $is_qty_triple_dim_sv, $is_imperial_dim_sv, $is_countersink_sv, $has_draw_lathe_depth_sv, $is_triple_dim_sv2, $is_enum_sv, $hide_name_sv, $no_depth_sv, $prefix_char_sv ?: null, $suffix_char_sv ?: null, $sub_id]);
                     $ch=_diff_rows($old_ls_row??[],['sub_name'=>$sub_name,'input_type'=>$input_type,'is_repeatable'=>(string)$is_rep,'has_draw_lathe'=>(string)$has_draw_lathe,'is_range'=>(string)$is_range_sv,'has_tolerance'=>(string)$has_tol_sv,'is_dimension'=>(string)$is_dim_sv,'is_qty_dim'=>(string)$is_qty_dim_sv,'is_imperial_dim'=>(string)$is_imperial_dim_sv,'is_countersink'=>(string)$is_countersink_sv,'is_enum'=>(string)$is_enum_sv,'hide_name_in_display'=>(string)$hide_name_sv,'prefix_char'=>$prefix_char_sv,'suffix_char'=>$suffix_char_sv],array_keys($old_ls_row??[])); if(!empty($ch)) _log_audit($pdo,'update','dict','label-sub:'.$sub_id,$sub_name,$ch,$uid,$op_name);
                 } else {
                     $max = $pdo->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM dict_label_sub WHERE label_id=?");
                     $max->execute([$label_id]);
-                    $pdo->prepare("INSERT INTO dict_label_sub (label_id, sub_name, input_type, is_repeatable, has_draw_lathe, is_range, has_tolerance, is_dimension, is_qty_dim, is_qty_triple_dim, is_imperial_dim, is_countersink, has_draw_lathe_depth, is_triple_dim, is_enum, hide_name_in_display, prefix_char, suffix_char, sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-                        ->execute([$label_id, $sub_name, $input_type, $is_rep, $has_draw_lathe, $is_range_sv, $has_tol_sv, $is_dim_sv, $is_qty_dim_sv, $is_qty_triple_dim_sv, $is_imperial_dim_sv, $is_countersink_sv, $has_draw_lathe_depth_sv, $is_triple_dim_sv2, $is_enum_sv, $hide_name_sv, $prefix_char_sv ?: null, $suffix_char_sv ?: null, (int)$max->fetchColumn()]);
+                    $pdo->prepare("INSERT INTO dict_label_sub (label_id, sub_name, input_type, is_repeatable, has_draw_lathe, is_range, has_tolerance, is_dimension, is_qty_dim, is_qty_triple_dim, is_imperial_dim, is_countersink, has_draw_lathe_depth, is_triple_dim, is_enum, hide_name_in_display, no_depth, prefix_char, suffix_char, sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                        ->execute([$label_id, $sub_name, $input_type, $is_rep, $has_draw_lathe, $is_range_sv, $has_tol_sv, $is_dim_sv, $is_qty_dim_sv, $is_qty_triple_dim_sv, $is_imperial_dim_sv, $is_countersink_sv, $has_draw_lathe_depth_sv, $is_triple_dim_sv2, $is_enum_sv, $hide_name_sv, $no_depth_sv, $prefix_char_sv ?: null, $suffix_char_sv ?: null, (int)$max->fetchColumn()]);
                     _log_audit($pdo,'insert','dict','label-sub:new',$sub_name,null,$uid,$op_name);
                 }
                 echo json_encode(['success'=>true]);
@@ -8745,6 +8757,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                         </div>
                         <div style="display:flex;align-items:center;gap:6px;padding-top:3px;">
                             <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#555;"><input type="checkbox" id="dict-f-sub-hide-name" style="margin-right:2px;"> 省略名稱顯示</label>
+                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#a0522d;" title="勾選後新增此子標籤時不再詢問深度（第二數值），顯示也不印深度"><input type="checkbox" id="dict-f-sub-no-depth" style="margin-right:2px;"> 不使用深度</label>
                         </div>
                     </div>
                     <div style="display:flex;align-items:flex-end;gap:6px;padding-top:5px;">
@@ -10698,8 +10711,10 @@ function setCustIndustrySub(val, el) {
 }
 
 // ── 標籤篩選行建構 ────────────────────────────────────────
-function _makeLblValWrap(key, it, hasDl, isRng, small, isDim) {
+function _makeLblValWrap(key, it, hasDl, isRng, small, isDim, isQtyDim) {
     var w = parseInt(small ? 54 : 66);
+    // is_qty_dim（數量×規格）的規格值存在 value_min，與 is_dimension 同欄，篩選共用同一個輸入框
+    isDim = isDim || isQtyDim;
     if (it === 'none' && !isRng && !hasDl && !isDim) return null;
     var vw = document.createElement('span');
     vw.style.cssText = 'display:none;align-items:center;gap:2px;';
@@ -10708,7 +10723,7 @@ function _makeLblValWrap(key, it, hasDl, isRng, small, isDim) {
             + '<span style="font-size:10px;color:#aaa;">~</span>'
             + '<input type="number" placeholder="圖面max" style="width:'+w+'px;" class="form-control input-sm lbl-filter-val" data-role="dl-max" data-lid="'+key+'" oninput="syncLabelFilter()">';
     } else if (isDim) {
-        vw.innerHTML = '<input type="number" placeholder="第一數字" style="width:'+(small?60:70)+'px;" class="form-control input-sm lbl-filter-val" data-role="dim-main" data-lid="'+key+'" oninput="syncLabelFilter()">';
+        vw.innerHTML = '<input type="number" placeholder="'+(isQtyDim?'規格':'第一數字')+'" style="width:'+(small?60:70)+'px;" class="form-control input-sm lbl-filter-val" data-role="dim-main" data-lid="'+key+'" oninput="syncLabelFilter()">';
     } else if (it === 'number' || isRng) {
         vw.innerHTML = '<input type="number" placeholder="min" style="width:'+w+'px;" class="form-control input-sm lbl-filter-val" data-role="min" data-lid="'+key+'" oninput="syncLabelFilter()">'
             + '<span style="font-size:10px;color:#aaa;">~</span>'
@@ -10810,12 +10825,13 @@ function buildLabelFilterRow(typeCode) {
             chip.dataset.hasDlDepth   = hasDlDepth ? '1' : '0';
             chip.dataset.isRange      = isRng ? '1' : '0';
             chip.dataset.isDimension  = isDim ? '1' : '0';
+            chip.dataset.isQtyDim     = isQtyDim ? '1' : '0';
             chip.dataset.active       = '0';
             chip.textContent         = _stripLabelHint(ldef.label_name||'');
             chip.style.cssText = 'background:#f0faf8;color:#1ABB9C;border:1.5px solid #a8dfd4;cursor:pointer;';
             wrap.appendChild(chip);
 
-            var valWrap = _makeLblValWrap(lid, it, hasDl, isRng, false, isDim);
+            var valWrap = _makeLblValWrap(lid, it, hasDl, isRng, false, isDim, isQtyDim);
             if (valWrap) wrap.appendChild(valWrap);
 
             // Sub-labels container (shown when parent active)
@@ -10847,9 +10863,11 @@ function buildLabelFilterRow(typeCode) {
                     var sHasDl = (sdef.has_draw_lathe=='1'||sdef.has_draw_lathe===1);
                     var sHasDlDepth = (sdef.has_draw_lathe_depth=='1'||sdef.has_draw_lathe_depth===1);
                     var sIsRng = (sdef.is_range=='1'||sdef.is_range===1);
+                    var sIsQtyDimF = (sdef.is_qty_dim=='1'||sdef.is_qty_dim===1);
+                    var sIsDimF    = (sdef.is_dimension=='1'||sdef.is_dimension===1);
                     var sIsEnumF = (sdef.is_enum=='1'||sdef.is_enum===1);
                     var sEnumOptsF = sdef.options || [];
-                    var sNeedsInput = sHasDl || sHasDlDepth || sit !== 'none' || sIsRng || (sIsEnumF && sEnumOptsF.length);
+                    var sNeedsInput = sHasDl || sHasDlDepth || sit !== 'none' || sIsRng || sIsQtyDimF || sIsDimF || (sIsEnumF && sEnumOptsF.length);
                     var sKey   = lid + '_s_' + sid;
 
                     var sWrap = document.createElement('span');
@@ -10864,6 +10882,8 @@ function buildLabelFilterRow(typeCode) {
                     sChip.dataset.hasDlDepth   = sHasDlDepth ? '1' : '0';
                     sChip.dataset.isRange     = sIsRng ? '1' : '0';
                     sChip.dataset.isEnum      = sIsEnumF ? '1' : '0';
+                    sChip.dataset.isQtyDim    = sIsQtyDimF ? '1' : '0';
+                    sChip.dataset.isDimension = sIsDimF ? '1' : '0';
                     sChip.dataset.active      = '0';
                     sChip.textContent         = sdef.sub_name;
                     sChip.style.cssText = 'background:#e8f8f5;color:#1c7068;border:1px solid #85cec4;font-size:10px;cursor:pointer;padding:1px 7px;';
@@ -10895,7 +10915,7 @@ function buildLabelFilterRow(typeCode) {
                             sValWrap.appendChild(oChip);
                         });
                     } else {
-                        sValWrap = _makeLblValWrap(sKey, sit, sHasDl, sIsRng, true);
+                        sValWrap = _makeLblValWrap(sKey, sit, sHasDl, sIsRng, true, sIsDimF, sIsQtyDimF);
                     }
                     if (sValWrap) sWrap.appendChild(sValWrap);
 
@@ -10918,8 +10938,9 @@ function buildLabelFilterRow(typeCode) {
     });
 }
 
-function _readLblVals(container, key, it, hasDl, isRng, isDim) {
+function _readLblVals(container, key, it, hasDl, isRng, isDim, isQtyDim) {
     var item = { value_op:'any', vmin:null, vmax:null, value:'' };
+    isDim = isDim || isQtyDim;
     if (hasDl) {
         var mn = container.querySelector('.lbl-filter-val[data-role="dl-min"][data-lid="'+key+'"]');
         var mx = container.querySelector('.lbl-filter-val[data-role="dl-max"][data-lid="'+key+'"]');
@@ -10956,8 +10977,9 @@ function syncLabelFilter() {
         var hasDlDepth = chip.dataset.hasDlDepth === '1';
         var isRng = chip.dataset.isRange === '1';
         var isDim = chip.dataset.isDimension === '1';
-        var vals  = _readLblVals(lRow, lid, it, hasDl, isRng, isDim);
-        labels.push({ label_id:lid, value_op:vals.value_op, value:vals.value, vmin:vals.vmin, vmax:vals.vmax, has_draw_lathe:hasDl?1:0, has_draw_lathe_depth:hasDlDepth?1:0, is_range:isRng?1:0, is_dimension:isDim?1:0 });
+        var isQtyDimF2 = chip.dataset.isQtyDim === '1';
+        var vals  = _readLblVals(lRow, lid, it, hasDl, isRng, isDim, isQtyDimF2);
+        labels.push({ label_id:lid, value_op:vals.value_op, value:vals.value, vmin:vals.vmin, vmax:vals.vmax, has_draw_lathe:hasDl?1:0, has_draw_lathe_depth:hasDlDepth?1:0, is_range:isRng?1:0, is_dimension:(isDim||isQtyDimF2)?1:0 });
 
         // Sub-label filters
         var subSec = chip.parentElement ? chip.parentElement.querySelector('.lbl-sub-section') : null;
@@ -10983,7 +11005,9 @@ function syncLabelFilter() {
                     return;
                 }
                 var sKey   = lid + '_s_' + sid;
-                var sVals  = _readLblVals(lRow, sKey, sit, sHasDl, sIsRng);
+                var sIsQtyDimS = sc.dataset.isQtyDim === '1';
+                var sIsDimS    = sc.dataset.isDimension === '1';
+                var sVals  = _readLblVals(lRow, sKey, sit, sHasDl, sIsRng, sIsDimS, sIsQtyDimS);
                 labels.push({ label_id:lid, sub_id:sid, value_op:sVals.value_op, value:sVals.value, vmin:sVals.vmin, vmax:sVals.vmax, has_draw_lathe:sHasDl?1:0, has_draw_lathe_depth:sHasDlDepth?1:0, is_range:sIsRng?1:0 });
             });
         }
@@ -11619,7 +11643,8 @@ function renderPartsTable(rows, total, pg, pages) {
                         if (dd !== '') chip += '<em style="font-style:normal;font-weight:normal;opacity:.85;"> '+dd+(ld!==''?' 車'+ld:'')+'</em>';
                     } else if (isQtyDimF && (vmin||vmax)) {
                         var qtyNumF = (qtyF && parseFloat(qtyF) > 1) ? escHtml(_tf2(qtyF))+'-' : '';
-                        chip += '<em style="font-style:normal;font-weight:normal;opacity:.85;"> '+qtyNumF+escHtml(pfxF)+escHtml(_tf2(vmin))+'×'+escHtml(_tf2(vmax))+escHtml(sfxF)+'</em>';
+                        var qBF = _tf2(vmax);
+                        chip += '<em style="font-style:normal;font-weight:normal;opacity:.85;"> '+qtyNumF+escHtml(pfxF)+escHtml(_tf2(vmin))+(qBF!==''?'×'+escHtml(qBF)+escHtml(sfxF):'')+'</em>';
                     } else if (isDimF && (vmin||vmax)) {
                         chip += '<em style="font-style:normal;font-weight:normal;opacity:.85;"> '+escHtml(pfxF)+escHtml(_tf2(vmin))+'×'+escHtml(_tf2(vmax))+escHtml(sfxF)+'</em>';
                     } else if (isRng && (vmin||vmax)) {
@@ -11693,9 +11718,9 @@ function renderPartsTable(rows, total, pg, pages) {
                                 sDisp = siQtyNumSp + siSpecSp + (siDepthSp ? ' x'+siDepthSp+sSfxSp : '');
                             } else if (sIsQtyDimSp && (svn||svx)) {
                                 var sQtyNumSp = (sQtySp && parseFloat(sQtySp) > 1) ? _tf2(sQtySp)+'-' : '';
-                                sDisp = sQtyNumSp + sPfxSp + svn + '×' + svx + sSfxSp;
+                                sDisp = sQtyNumSp + sPfxSp + svn + (svx!=='' ? '×' + svx + sSfxSp : '');
                             } else if (sIsDimSp && (svn||svx)) {
-                                sDisp = sPfxSp + svn + '×' + svx + sSfxSp;
+                                sDisp = sPfxSp + svn + (svx!=='' ? '×' + svx + sSfxSp : '');
                             } else if (sIsRng) {
                                 sDisp = (!svn && !svx) ? '' : (svn||'')+'~'+(svx||'');
                             } else if (sHasTol && siv !== '') {
@@ -12104,14 +12129,14 @@ function _makeLabelGrp(ldef, ei, canEdit, onChange) {
         var qA   = _tf2(ei.value_min);
         var qB   = _tf2(ei.value_max);
         if (qA !== '' || qB !== '') {
-            var qAB = escHtml(pfxChar)+escHtml(qA)+'×'+escHtml(qB)+escHtml(sfxChar);
+            var qAB = escHtml(pfxChar)+escHtml(qA)+(qB!==''?'×'+escHtml(qB)+escHtml(sfxChar):'');
             var qNum = (qQty !== '' && parseFloat(qQty) > 1) ? escHtml(qQty)+'-' : '';
             labelText += '<em style="font-style:normal;font-weight:normal;opacity:.85;"> '+qNum+qAB+'</em>';
         }
     } else if (isDim) {
         var va = _tf2(ei.value_min);
         var vb = _tf2(ei.value_max);
-        if (va !== '' || vb !== '') labelText += '<em style="font-style:normal;font-weight:normal;opacity:.85;"> '+escHtml(pfxChar)+escHtml(va)+'×'+escHtml(vb)+escHtml(sfxChar)+'</em>';
+        if (va !== '' || vb !== '') labelText += '<em style="font-style:normal;font-weight:normal;opacity:.85;"> '+escHtml(pfxChar)+escHtml(va)+(vb!==''?'×'+escHtml(vb)+escHtml(sfxChar):'')+'</em>';
     } else if (isRng) {
         var vmin = _tf2(ei.value_min);
         var vmax = _tf2(ei.value_max);
@@ -12204,6 +12229,8 @@ function _renderSubLabelSection(grpEl, parentLdef, existingSubs, subDefs, canAdd
     var _subPromptInputs = function(sdefC, sHasDlC, inpTypeC, sIsRngC, sHasTolC, sIsDimC, sIsQtyDimC, sIsImperialDimC, sIsCountersinkC, sHasDlDepthC, sIsTripleDimC, parentLdefC) {
         var es = { input_value:'', draw_dim:'', lathe_dim:'', value_min:'', value_max:'', tol_upper:'', tol_lower:'', qty:'' };
         var sIsQtyTripleDimC = (sdefC.is_qty_triple_dim=='1'||sdefC.is_qty_triple_dim===1);
+        // 2026-08-24 使用者要求：勾選「不使用深度」的子標籤不再詢問深度（螺孔/孔/英制/中心牙孔/沉頭孔）
+        var sNoDepthC = (sdefC.no_depth=='1'||sdefC.no_depth===1);
         if (sIsQtyTripleDimC) {
             var qtq = prompt('請輸入「'+sdefC.sub_name+'」數量（可省略，省略=1）','');
             if (qtq===null) return null; qtq=qtq.trim();
@@ -12274,9 +12301,12 @@ function _renderSubLabelSection(grpEl, parentLdef, existingSubs, subDefs, canAdd
             var sqA = prompt('請輸入「'+sdefC.sub_name+'」A數值（長/圓）','');
             if (sqA===null) return null; sqA=sqA.trim();
             if (!sqA||isNaN(parseFloat(sqA))){ showToast('請輸入有效數字','error'); return null; }
-            var sqB = prompt('請輸入「'+sdefC.sub_name+'」B數值（寬/深）','');
-            if (sqB===null) return null; sqB=sqB.trim();
-            if (!sqB||isNaN(parseFloat(sqB))){ showToast('請輸入有效數字','error'); return null; }
+            var sqB = '';
+            if (!sNoDepthC) {
+                sqB = prompt('請輸入「'+sdefC.sub_name+'」B數值（寬/深）','');
+                if (sqB===null) return null; sqB=sqB.trim();
+                if (!sqB||isNaN(parseFloat(sqB))){ showToast('請輸入有效數字','error'); return null; }
+            }
             es.qty=sqty; es.value_min=sqA; es.value_max=sqB;
         } else if (sIsImperialDimC) {
             var siqty = prompt('請輸入「'+sdefC.sub_name+'」數量（可省略，省略=1）','');
@@ -12291,34 +12321,46 @@ function _renderSubLabelSection(grpEl, parentLdef, existingSubs, subDefs, canAdd
             var siUnc = prompt('請輸入「'+sdefC.sub_name+'」UNC牙數（可省略）','');
             if (siUnc===null) return null; siUnc=siUnc.trim();
             if (siUnc && isNaN(parseFloat(siUnc))){ showToast('請輸入有效數字','error'); return null; }
-            var siDepth = prompt('請輸入「'+sdefC.sub_name+'」深度（數字）','');
-            if (siDepth===null) return null; siDepth=siDepth.trim();
-            if (!siDepth||isNaN(parseFloat(siDepth))){ showToast('請輸入有效數字','error'); return null; }
+            var siDepth = '';
+            if (!sNoDepthC) {
+                siDepth = prompt('請輸入「'+sdefC.sub_name+'」深度（數字）','');
+                if (siDepth===null) return null; siDepth=siDepth.trim();
+                if (!siDepth||isNaN(parseFloat(siDepth))){ showToast('請輸入有效數字','error'); return null; }
+            }
             es.qty=siqty; es.input_value=siFrac; es.tol_upper=siUnc; es.value_min=String(siFracDec); es.value_max=siDepth;
         } else if (sIsCountersinkC) {
             var csqty = prompt('請輸入「'+sdefC.sub_name+'」數量（可省略）','');
             if (csqty===null) return null; csqty=csqty.trim();
             if (csqty && isNaN(parseFloat(csqty))){ showToast('請輸入有效數字','error'); return null; }
-            var csHead = prompt('請輸入沉頭孔徑（數字，可省略）','');
-            if (csHead===null) return null; csHead=csHead.trim();
-            if (csHead && isNaN(parseFloat(csHead))){ showToast('請輸入有效數字','error'); return null; }
-            var csHd = prompt('請輸入沉頭深度（數字，可省略）','');
-            if (csHd===null) return null; csHd=csHd.trim();
-            if (csHd && isNaN(parseFloat(csHd))){ showToast('請輸入有效數字','error'); return null; }
-            var csSmall = prompt('請輸入小孔孔徑（數字，可省略）','');
+            // no_depth：使用者要求沉頭孔只需輸入「數量＋小孔規格」，大小孔深度都取消
+            var csHead='', csHd='', csSd='';
+            if (!sNoDepthC) {
+                csHead = prompt('請輸入沉頭孔徑（數字，可省略）','');
+                if (csHead===null) return null; csHead=csHead.trim();
+                if (csHead && isNaN(parseFloat(csHead))){ showToast('請輸入有效數字','error'); return null; }
+                csHd = prompt('請輸入沉頭深度（數字，可省略）','');
+                if (csHd===null) return null; csHd=csHd.trim();
+                if (csHd && isNaN(parseFloat(csHd))){ showToast('請輸入有效數字','error'); return null; }
+            }
+            var csSmall = prompt('請輸入'+(sNoDepthC?'小孔規格':'小孔孔徑')+'（數字，可省略）','');
             if (csSmall===null) return null; csSmall=csSmall.trim();
             if (csSmall && isNaN(parseFloat(csSmall))){ showToast('請輸入有效數字','error'); return null; }
-            var csSd = prompt('請輸入小孔深度（數字，可省略）','');
-            if (csSd===null) return null; csSd=csSd.trim();
-            if (csSd && isNaN(parseFloat(csSd))){ showToast('請輸入有效數字','error'); return null; }
+            if (!sNoDepthC) {
+                csSd = prompt('請輸入小孔深度（數字，可省略）','');
+                if (csSd===null) return null; csSd=csSd.trim();
+                if (csSd && isNaN(parseFloat(csSd))){ showToast('請輸入有效數字','error'); return null; }
+            }
             es.qty=csqty; es.value_min=csHead; es.value_max=csHd; es.tol_upper=csSmall; es.tol_lower=csSd;
         } else if (sIsDimC) {
             var sdA = prompt('請輸入「'+sdefC.sub_name+'」A數值（長/圓）','');
             if (sdA===null) return null; sdA=sdA.trim();
             if (!sdA||isNaN(parseFloat(sdA))){ showToast('請輸入有效數字','error'); return null; }
-            var sdB = prompt('請輸入「'+sdefC.sub_name+'」B數值（寬/深）','');
-            if (sdB===null) return null; sdB=sdB.trim();
-            if (!sdB||isNaN(parseFloat(sdB))){ showToast('請輸入有效數字','error'); return null; }
+            var sdB = '';
+            if (!sNoDepthC) {
+                sdB = prompt('請輸入「'+sdefC.sub_name+'」B數值（寬/深）','');
+                if (sdB===null) return null; sdB=sdB.trim();
+                if (!sdB||isNaN(parseFloat(sdB))){ showToast('請輸入有效數字','error'); return null; }
+            }
             es.value_min=sdA; es.value_max=sdB;
         } else if (inpTypeC!=='none') {
             var v = prompt('請輸入「'+sdefC.sub_name+'」的值'+(inpTypeC==='number'?'（數字）':'（文字）'),'');
@@ -12517,7 +12559,7 @@ function _makeSubChip(sdef, es, canEdit, onChange) {
         var qtyA = _tf3(es.value_min);
         var qtyB = _tf3(es.value_max);
         if (qtyA !== '' || qtyB !== '') {
-            var qtyAB = escHtml(sPfx) + escHtml(qtyA) + '×' + escHtml(qtyB) + escHtml(sSfx);
+            var qtyAB = escHtml(sPfx) + escHtml(qtyA) + (qtyB!=='' ? '×' + escHtml(qtyB) + escHtml(sSfx) : '');
             var qtyNum = (qtyV !== '' && parseFloat(qtyV) > 1) ? escHtml(qtyV)+'-' : '';
             txt += '<em style="font-style:normal;font-weight:normal;opacity:.85;"> '+qtyNum+qtyAB+'</em>';
         }
@@ -12535,7 +12577,7 @@ function _makeSubChip(sdef, es, canEdit, onChange) {
         var va = _tf3(es.value_min);
         var vb = _tf3(es.value_max);
         if (va !== '' || vb !== '') {
-            txt += '<em style="font-style:normal;font-weight:normal;opacity:.85;"> '+escHtml(sPfx)+escHtml(va)+'×'+escHtml(vb)+escHtml(sSfx)+'</em>';
+            txt += '<em style="font-style:normal;font-weight:normal;opacity:.85;"> '+escHtml(sPfx)+escHtml(va)+(vb!==''?'×'+escHtml(vb)+escHtml(sSfx):'')+'</em>';
         }
     } else if (sIsRng && (es.value_min!=null&&es.value_min!=='' || es.value_max!=null&&es.value_max!=='')) {
         var vmin = _tf3(es.value_min);
@@ -20522,6 +20564,7 @@ function editLabelSub(idx) {
     $('#dict-f-sub-countersink').prop('checked', isCountersink).prop('disabled', hasDl || isDlDepth || isRng || hasTol || isDim || isQtyDim || isQtyTriple || isImperialDim || isEnum);
     $('#dict-f-sub-enum').prop('checked', isEnum).prop('disabled', hasDl || isDlDepth || isRng || hasTol || isDim || isQtyDim || isQtyTriple || isImperialDim || isCountersink);
     $('#dict-f-sub-hide-name').prop('checked', hideNm);
+    $('#dict-f-sub-no-depth').prop('checked', (s.no_depth=='1'||s.no_depth===1));
     $('#dict-f-sub-input').val(anySpecial ? ((isImperialDim||isCountersink||isDlDepth||isTripleDimS||isEnum)?'none':'number') : (s.input_type||'none')).prop('disabled', anySpecial);
     var enumArea = document.getElementById('dict-sub-enum-opts-area');
     if (enumArea) { enumArea.style.display = isEnum ? 'block' : 'none'; if (isEnum) loadSubOptions(s.sub_id); }
@@ -20551,7 +20594,8 @@ function saveLabelSub() {
     var pfxChar  = ($('#dict-f-sub-prefix').val()||'').trim();
     var sfxChar  = ($('#dict-f-sub-suffix').val()||'').trim();
     if (!subName) { showToast('請輸入子標籤名稱','error'); return; }
-    api({ action:'manage_labels', op:'save_sub', label_id:labelId, sub_id:subId, sub_name:subName, input_type:inpType, is_repeatable:isRep, has_draw_lathe:hasDl, is_range:isRng, has_tolerance:hasTol, is_dimension:isDim, is_qty_dim:isQtyDim, is_qty_triple_dim:isQtyTriple, is_imperial_dim:isImperialDim, is_countersink:isCountersink, has_draw_lathe_depth:isDlDepth, is_triple_dim:isTripleDimSv, is_enum:isEnum, hide_name_in_display:hideNm, prefix_char:pfxChar, suffix_char:sfxChar }).done(function(r) {
+    var noDepthSv = $('#dict-f-sub-no-depth').is(':checked') ? 1 : 0;
+    api({ action:'manage_labels', op:'save_sub', label_id:labelId, sub_id:subId, sub_name:subName, input_type:inpType, is_repeatable:isRep, has_draw_lathe:hasDl, is_range:isRng, has_tolerance:hasTol, is_dimension:isDim, is_qty_dim:isQtyDim, is_qty_triple_dim:isQtyTriple, is_imperial_dim:isImperialDim, is_countersink:isCountersink, has_draw_lathe_depth:isDlDepth, is_triple_dim:isTripleDimSv, is_enum:isEnum, hide_name_in_display:hideNm, no_depth:noDepthSv, prefix_char:pfxChar, suffix_char:sfxChar }).done(function(r) {
         if (!r.success) { showToast(r.message||'儲存失敗','error'); return; }
         showToast('已儲存','success');
         $('#dict-f-sub-id').val(''); $('#dict-f-sub-name').val('');
