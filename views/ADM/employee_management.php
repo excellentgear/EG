@@ -125,6 +125,31 @@ if ($hrUserPerm === 'R') {
     <!-- Custom Theme Style -->
     <link href="../../resource/css/custom.css" rel="stylesheet">
     <style>
+        /* ── 使用說明（全站統一，照抄 views/pm/vendor_audit.php）────────────── */
+        .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
+            background:#F0A24B; color:#fff; cursor:pointer; margin-left:auto; }
+        .page-help-btn:hover { background:#d98a33; }
+        @media print { .page-help-btn { display:none !important; } }
+        .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
+        .help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
+        .help-doc h4:first-child { margin-top:0; }
+        .help-doc b { color:#8A5A2B; }
+        .help-doc ul { margin:4px 0 8px; padding-left:20px; }
+        .help-doc li { margin:2px 0; }
+        .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
+
+        /* ── 連線狀態欄（暖色系，見 ai-rules/10）───────────────────────────── */
+        .conn-on  { display:inline-block; background:#F7E0BD; color:#7A4A18; border:1px solid #E0BE8A;
+                    border-radius:10px; padding:1px 9px; font-size:12px; white-space:nowrap; }
+        .conn-off { color:#a5988c; font-size:12px; }
+        .conn-time { display:block; font-size:11px; color:#9b8f83; margin-top:2px; }
+        .btn-kick { height:24px; line-height:1; font-size:12px; padding:0 9px; margin-top:4px;
+                    border:1px solid #b8442a; border-radius:4px; background:#DD5138; color:#fff; cursor:pointer; }
+        .btn-kick:hover { background:#b8442a; }
+        .btn-kick[disabled] { background:#d8cfc6; border-color:#c3b8ad; color:#fff; cursor:not-allowed; }
+        .btn-kick-all { background:#DD5138; color:#fff; border:1px solid #b8442a; }
+        .btn-kick-all:hover { background:#b8442a; color:#fff; }
+
         .concurrent-group {
             padding: 10px;
             border: 1px solid #e6e9ed;
@@ -201,10 +226,11 @@ if ($hrUserPerm === 'R') {
         <!-- page content -->
         <div class="right_col" role="main">
             <div class="">
-                <div class="page-title">
+                <div class="page-title" style="display:flex; align-items:center;">
                     <div class="title_left">
                         <h3>員工資料管理 <small>(權限：<?php echo htmlspecialchars($hrUserPerm); ?>)</small></h3>
                     </div>
+                    <button type="button" class="page-help-btn" id="btnPageHelp">使用說明</button>
                 </div>
 
                 <div class="clearfix"></div>
@@ -242,6 +268,15 @@ if ($hrUserPerm === 'R') {
                                     <div class="col-md-1 col-sm-12 col-xs-12" style="margin-bottom: 8px;">
                                         <button type="button" class="btn btn-default btn-block" id="btn-clear-filter" title="清除部門／搜索條件">清除</button>
                                     </div>
+                                    <div class="col-xs-12" style="margin-bottom:8px;">
+                                        <button type="button" class="btn btn-default btn-sm" id="btn-refresh-online"
+                                                title="重新讀取目前有誰登入中">重新整理連線狀態</button>
+                                        <?php if (strpos((string)$hrUserPerm, 'A') !== false): ?>
+                                        <button type="button" class="btn btn-sm btn-kick-all" id="btn-kick-all"
+                                                title="切斷所有人的登入連線（保留你自己），供系統維護或還原資料庫前清場">一鍵登出所有人</button>
+                                        <?php endif; ?>
+                                        <small class="text-muted" id="online-summary" style="margin-left:8px;"></small>
+                                    </div>
                                     <div class="col-xs-12">
                                         <small class="text-muted" id="filter-result-count"></small>
                                     </div>
@@ -261,6 +296,7 @@ if ($hrUserPerm === 'R') {
                                             <th>兼任職務</th>
                                             <th>狀態</th>
                                             <th>備註</th>
+                                            <th title="目前是否有登入中的連線；可強制切斷">連線</th>
                                         </tr>
                                     </thead>
                                     <tbody id="employee-table-body">
@@ -632,6 +668,65 @@ if ($hrUserPerm === 'R') {
             </div>
         </div>
 
+        <!-- 使用說明（鐵律7：每頁必附）-->
+        <div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog" aria-labelledby="helpUseLabel">
+            <div class="modal-dialog modal-lg" role="document">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                        <h4 class="modal-title" id="helpUseLabel">員工資料管理 — 使用說明</h4>
+                    </div>
+                    <div class="modal-body help-doc">
+                        <h4>這頁在做什麼</h4>
+                        <p>維護全公司員工的基本資料、部門職稱（含兼任）、在職狀態與到職／離職日，並管理登入連線。</p>
+
+                        <h4>基本操作</h4>
+                        <ul>
+                            <li><b>新增員工</b>：左上「新增員工」。員工編號即系統內部識別碼，一旦被單據引用就不該隨意更動；真要改請找系統管理員用專用工具（會同步全庫參照）。</li>
+                            <li><b>編輯</b>：在該員工那一列<b>連點兩下</b>開啟編輯視窗。</li>
+                            <li><b>篩選</b>：部門下拉會同時比對主職務與兼任職務；搜尋框比對整列文字。兩個欄位<b>連點兩下</b>可清除該條件。</li>
+                        </ul>
+
+                        <h4>在職狀態與離職</h4>
+                        <ul>
+                            <li><b>預定離職日</b>可先填未來日期，當天仍能正常使用系統（方便交接結案），<b>隔天 0 點起自動失效</b>。</li>
+                            <li>系統會在有人使用時順路檢查並自動把狀態改為離職——所以<b>主機關機期間到期也不會漏掉</b>，開機後第一次有人開頁面就會補做。</li>
+                            <li>離職／留職停薪／育嬰留停者一律不能登入，且原有權限即時失效。</li>
+                            <li><b>權限設定不會自動刪除</b>（常有誤設或回鍋復職）。要清乾淨請在編輯視窗按「清除權限設定」；復職可按「還原離職前權限」。</li>
+                        </ul>
+
+                        <h4>連線狀態與強制登出</h4>
+                        <ul>
+                            <li><b>連線欄</b>顯示該員工目前是否有登入中的連線，以及大約的最後活動時間。</li>
+                            <li><b>強制登出</b>：立刻切斷該員工的登入連線。他下次點任何頁面都會被導回登入頁。</li>
+                            <li>在職人員被強制登出後<b>可以馬上重新登入</b>——這個功能是「切斷目前這條連線」，不是停用帳號。要讓人登不進來請改在職狀態。</li>
+                            <li><b>一鍵登出所有人</b>：系統維護或還原資料庫前清場用，會保留你自己的連線。需要本頁完整權限（A）。</li>
+                            <li>離職者的連線由系統自動切斷，不必手動處理。</li>
+                        </ul>
+                        <div class="tip">連線時間是近似值（取自伺服器端 session 檔的更新時間），用來判斷「該不該踢」沒問題，但<b>不可以拿來當出勤或工時紀錄</b>。</div>
+
+                        <h4>異動紀錄</h4>
+                        <ul>
+                            <li>編輯視窗的「異動紀錄」可查該員工的職務調動與在職狀態變化。</li>
+                            <li>過去沒登記的異動可以<b>補登</b>（生效日可填過去日期）。系統自動寫入的紀錄不可刪除，只有手動補登的才能刪。</li>
+                        </ul>
+
+                        <h4>權限</h4>
+                        <ul>
+                            <li>本頁權限沿用系統的頁面權限設定（頁面標題旁會顯示你目前的權限代碼）。</li>
+                            <li><b>R</b>＝唯讀，看得到但不能新增修改，也不能強制登出。</li>
+                            <li><b>A</b>＝完整權限，含「一鍵登出所有人」。</li>
+                            <li>設定入口：系統管理 → 使用者權限設定。</li>
+                        </ul>
+                        <div class="tip">強制登出與一鍵登出都會寫入<b>稽核日誌</b>（誰、何時、踢了誰、原因），可事後查核。</div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- footer content -->
         <?php include '../partPage/footer.html' ?>
         <!-- /footer content -->
@@ -813,16 +908,102 @@ $(document).ready(function() {
                         </td>
                         <td>${statusLabel}</td>
                         <td>${escapeHtml(remarkText)}</td>
+                        <td class="conn-cell" data-uid="${escapeHtml(emp.id)}"><span class="conn-off">—</span></td>
                     </tr>`;
                     tableBody.append(row);
                 });
                 // 資料載入後，重新應用篩選
                 filterTable();
+                refreshOnlineStatus();   // 連線狀態是另一支 API，列表畫完才去補
             } else {
                 alert('讀取員工資料失敗: ' + response.message);
             }
         });
     }
+
+    /* ==============================================================
+     * 連線狀態與強制登出（2026-08-24 新增）
+     *
+     * 「在線」判定＝伺服器端還留著這個人的 session 檔。
+     * 顯示的時間取自 session 檔的 mtime：_config.php 每次請求都會 touch 它，
+     * 所以約等於最後活動時間；但有部分入口沒載入 _config.php，那些請求只有在
+     * session 內容有變時才更新，故此時間是「不早於」實際活動時間的近似值，
+     * 僅供判斷該不該踢，不可拿來當出勤紀錄。
+     * ============================================================== */
+    const ME_ID    = <?php echo (int)$currentUser['id']; ?>;
+    const CAN_KICK = <?php echo ($hrUserPerm !== 'R') ? 'true' : 'false'; ?>;   // 唯讀者不給踢人
+
+    function refreshOnlineStatus() {
+        callApi('get_online_status', 'GET', {}, function(res) {
+            if (!res || res.status !== 'success') { $('#online-summary').text(''); return; }
+            const online = res.online || {};
+            let count = 0;
+
+            $('#employee-table-body .conn-cell').each(function() {
+                const cell = $(this);
+                const uid  = String(cell.data('uid'));
+                const ts   = online[uid];
+
+                if (!ts) { cell.html('<span class="conn-off">離線</span>'); return; }
+                count++;
+
+                let html = '<span class="conn-on">在線</span>'
+                         + '<span class="conn-time">' + escapeHtml(dispDateTime(ts)) + '</span>';
+                if (CAN_KICK) {
+                    html += (String(uid) === String(ME_ID))
+                        ? '<button type="button" class="btn-kick" disabled title="不能對自己執行；要登出自己請用右上角的登出">本人</button>'
+                        : '<button type="button" class="btn-kick" data-kick="' + escapeHtml(uid) + '">強制登出</button>';
+                }
+                cell.html(html);
+            });
+
+            $('#online-summary').text('目前線上 ' + count + ' 人（' + escapeHtml(dispDateTime(res.now)) + ' 更新）');
+        });
+    }
+
+    /** 顯示用日期時間：日期部分依 ai-rules/20 一律 YYYY.MM.DD，時間保留 HH:MM */
+    function dispDateTime(s) {
+        if (!s) return '';
+        const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+        return m ? `${m[1]}.${m[2]}.${m[3]} ${m[4]}:${m[5]}` : String(s);
+    }
+
+    // 逐列強制登出（按鈕在 tr 內，必須擋掉冒泡，否則會觸發整列的「連點兩下編輯」）
+    $('#employee-table-body').on('click', '.btn-kick', function(e) {
+        e.stopPropagation();
+        const btn  = $(this);
+        const uid  = btn.data('kick');
+        const row  = btn.closest('tr');
+        const name = row.find('td').eq(2).text().trim();
+
+        const reason = prompt(`確定要強制登出「${name}」？\n\n他目前的登入連線會立刻失效，下次點任何頁面都會被導回登入頁。\n（在職人員可以馬上重新登入；離職者本來就登不進來）\n\n可填寫原因（選填，會記入稽核日誌）：`, '');
+        if (reason === null) return;   // 按取消
+
+        btn.prop('disabled', true).text('處理中…');
+        callApi('force_logout', 'POST', { id: uid, reason: reason }, function(res) {
+            alert(res && res.message ? res.message : '操作完成');
+            refreshOnlineStatus();
+        });
+    });
+
+    // 一鍵登出所有人
+    $('#btn-kick-all').on('click', function() {
+        const reason = prompt('確定要登出「所有人」？\n\n除了你自己以外，所有登入中的使用者都會被切斷連線。\n通常用於系統維護或還原資料庫前清場。\n\n可填寫原因（選填，會記入稽核日誌）：', '');
+        if (reason === null) return;
+        if (!confirm('再確認一次：這會中斷全公司目前所有人的作業，未存檔的內容可能遺失。確定執行？')) return;
+
+        const btn = $(this).prop('disabled', true).text('處理中…');
+        callApi('force_logout_all', 'POST', { reason: reason }, function(res) {
+            alert(res && res.message ? res.message : '操作完成');
+            btn.prop('disabled', false).text('一鍵登出所有人');
+            refreshOnlineStatus();
+        });
+    });
+
+    $('#btn-refresh-online').on('click', refreshOnlineStatus);
+
+    // 使用說明
+    $('#btnPageHelp').on('click', function() { $('#helpUseMask').modal('show'); });
 
     // --- Modal 相關 ---
 

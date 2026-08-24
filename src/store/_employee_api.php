@@ -4,6 +4,7 @@ header('Content-Type: application/json; charset=utf-8');
 // 引入設定與資料庫連線
 $document_root = $_SERVER['DOCUMENT_ROOT'];
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 // 特休天數算法已抽為共用庫（請假系統額度也用同一套，避免兩邊數字不一致）
@@ -57,6 +58,15 @@ switch ($action) {
         break;
     case 'restore_permissions':      // 一鍵還原離職前的權限設定（只補目前沒有的，不覆蓋）
         restorePermissionsAction();
+        break;
+    case 'get_online_status':        // 查目前有誰還連著線（列表顯示在線/離線用）
+        getOnlineStatus();
+        break;
+    case 'force_logout':             // 強制登出某人（刪掉他伺服器端的 session 檔）
+        forceLogout();
+        break;
+    case 'force_logout_all':         // 一鍵登出所有人（系統維護／還原資料庫前清場）
+        forceLogoutAll();
         break;
     case 'get_change_history':       // 異動紀錄（職務調動＋在職狀態）
         getChangeHistory();
@@ -526,6 +536,145 @@ function getPermissionSummary() {
 }
 
 /** 一鍵清除權限設定（清除前把原設定完整寫進 audit_log 備查） */
+/* ==================================================================
+ * 強制登出（2026-08-24 新增）
+ *
+ * 為什麼要有：離職封鎖 eg_user_blocked_state() 只保證「之後進不來」，
+ * 已經連上線的那條連線要等他下次翻頁才會被 eg_guard_active_session 踢掉。
+ * 帳號卡住、主機維護、還原資料庫前清場等情況也需要當下就切斷。
+ * 做法是刪掉伺服器端的 session 檔——檔案沒了，頁面與 API 一律失效。
+ * ================================================================== */
+
+/**
+ * 解析目前登入者對「員工資料管理」頁的權限字串。
+ * 沿用頁面本身那套 user_module_permissions（page scope 優先、退回 group scope），
+ * 不另外發明一套角色，也不寫死頁面 id——用 page_url 反查，日後搬檔案不會失效。
+ * 註：本 API 其他動作的權限檢查在原作者手上是註解掉的「未來實作」，
+ *     這裡不擅自替既有動作加檢查（會影響現行使用者），只守住本次新增的三個動作。
+ */
+function empPagePerm() {
+    global $db;
+    static $cache = null;
+    if ($cache !== null) return $cache;
+
+    $uid = (int)($_SESSION['id'] ?? 0);
+    if ($uid <= 0) return $cache = '';
+
+    try {
+        $st = $db->prepare(
+            "SELECT page_id, group_id FROM system_module_pages
+              WHERE page_url LIKE '%employee_management.php' LIMIT 1");
+        $st->execute();
+        $pg = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$pg) return $cache = '';
+
+        $st = $db->prepare("SELECT permission FROM user_module_permissions
+                             WHERE user_id=? AND scope='page' AND module_code=?");
+        $st->execute([$uid, $pg['page_id']]);
+        $found = $st->fetchAll(PDO::FETCH_COLUMN);
+
+        if (!$found && !empty($pg['group_id'])) {
+            $st = $db->prepare("SELECT module_code FROM system_modules WHERE group_id=? LIMIT 1");
+            $st->execute([$pg['group_id']]);
+            $gm = $st->fetchColumn();
+            if ($gm) {
+                $st = $db->prepare("SELECT permission FROM user_module_permissions
+                                     WHERE user_id=? AND scope='group' AND module_code=?");
+                $st->execute([$uid, $gm]);
+                $found = $st->fetchAll(PDO::FETCH_COLUMN);
+            }
+        }
+        $chars = [];
+        foreach ($found as $p) $chars = array_merge($chars, str_split((string)$p));
+        $chars = array_unique($chars);
+        sort($chars);
+        return $cache = implode('', $chars);
+    } catch (Throwable $e) {
+        error_log('[force_logout] perm resolve failed: ' . $e->getMessage());
+        return $cache = '';
+    }
+}
+
+/**
+ * 守門。$needAdmin=true 時只有 'A'（本頁完整權限）可執行。
+ * fail-closed：查不到權限一律擋下。
+ */
+function empRequirePerm($needAdmin = false) {
+    $perm = empPagePerm();
+    $ok = $needAdmin ? (strpos($perm, 'A') !== false)
+                     : ($perm !== '' && $perm !== 'R');   // 唯讀者不得執行寫入型動作
+    if (!$ok) {
+        http_response_code(403);
+        echo json_encode(['status' => 'error',
+                          'message' => $needAdmin ? '此操作需要「員工資料管理」的完整權限。'
+                                                  : '您沒有權限執行此操作。'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
+/** 目前線上狀態：[user_id => 最後活動時間戳]（給列表顯示在線/離線） */
+function getOnlineStatus() {
+    require_once $_SERVER['DOCUMENT_ROOT'] . '/EGsystem/src/common/session_kill_lib.php';
+    empRequirePerm(false);
+    $map = eg_session_online_map();
+    $out = [];
+    foreach ($map as $uid => $ts) $out[(string)$uid] = date('Y-m-d H:i:s', $ts);
+    echo json_encode(['status' => 'success', 'online' => $out, 'now' => date('Y-m-d H:i:s')],
+                     JSON_UNESCAPED_UNICODE);
+}
+
+/** 強制登出某人 */
+function forceLogout() {
+    global $db;
+    require_once $_SERVER['DOCUMENT_ROOT'] . '/EGsystem/src/common/session_kill_lib.php';
+    empRequirePerm(false);
+
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。'], JSON_UNESCAPED_UNICODE); return; }
+
+    // 踢自己沒有意義（按下去就把自己登出，看不到結果），明確擋掉並說明原因
+    if ($id === (int)($_SESSION['id'] ?? 0)) {
+        echo json_encode(['status' => 'error', 'message' => '不能對自己執行強制登出；要登出自己請用右上角的登出。'],
+                         JSON_UNESCAPED_UNICODE);
+        return;
+    }
+
+    $res = eg_session_kill_user($db, $id, [
+        'reason'      => trim((string)($_POST['reason'] ?? '')),
+        'operator_id' => $_SESSION['id'] ?? null,
+        'operator'    => $_SESSION['user_cname'] ?? '',
+    ]);
+    $who = $res['name'] !== '' ? $res['name'] : ('員工編號 ' . $id);   // 查無此人時不要印出空白
+    echo json_encode([
+        'status'  => 'success',
+        'killed'  => $res['killed'],
+        'message' => $res['killed'] > 0
+            ? "已強制登出 {$who}（切斷 {$res['killed']} 個連線）。"
+            : "{$who} 目前沒有登入中的連線，無需動作。",
+    ], JSON_UNESCAPED_UNICODE);
+}
+
+/** 一鍵登出所有人（預設保留操作者自己，否則按下去的人自己也被踢出） */
+function forceLogoutAll() {
+    global $db;
+    require_once $_SERVER['DOCUMENT_ROOT'] . '/EGsystem/src/common/session_kill_lib.php';
+    empRequirePerm(true);
+
+    $res = eg_session_kill_all($db, [
+        'reason'       => trim((string)($_POST['reason'] ?? '')),
+        'operator_id'  => $_SESSION['id'] ?? null,
+        'operator'     => $_SESSION['user_cname'] ?? '',
+        'keep_sid'     => session_id(),
+        'include_self' => !empty($_POST['include_self']),
+    ]);
+    echo json_encode([
+        'status'  => 'success',
+        'killed'  => $res['killed'],
+        'users'   => $res['users'],
+        'message' => "已登出 {$res['users']} 位使用者（切斷 {$res['killed']} 個連線）。",
+    ], JSON_UNESCAPED_UNICODE);
+}
+
 function revokePermissions() {
     global $db;
     $id = (int)($_POST['id'] ?? 0);
