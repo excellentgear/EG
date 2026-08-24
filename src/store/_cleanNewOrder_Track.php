@@ -21,6 +21,8 @@
                 unset($_SESSION['jig']);
                 unset($_SESSION['Order_ps']);
                 unset($_SESSION['ateNote']);
-        header("Location: ../../views/Sales/NewOrder_List.php");
+        // 2026-08-24 NewOrder_List.php（未交訂單，讀舊表 order_list、欄位早已不存在故長期 500）已移除，
+        // 這裡改導向仍在使用的訂單追蹤頁，避免本檔變成指向 404 的死連結。
+        header("Location: ../../views/Sales/NewOrder_Track.php");
         exit;
 ?>
