@@ -1554,14 +1554,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     if ($fvar_key !== '' && $fvar_val !== '') {
                         // 有變數值：JSON 模糊比對 tag_var_values
                         $where .= " AND EXISTS (SELECT 1 FROM part_attachments pa{$fati} WHERE pa{$fati}.d_id=d.d_id"
-                                . "  AND FIND_IN_SET(:${fat_key}catid, pa{$fati}.category_ids)"
+                                . "  AND FIND_IN_SET(:{$fat_key}catid, pa{$fati}.category_ids)"
                                 . "  AND pa{$fati}.tag_var_values LIKE :{$fat_key}varval)";
                         $params[":{$fat_key}catid"] = $fcat_id;
                         $params[":{$fat_key}varval"] = '%'.str_replace(['%','_'], ['\\%','\\_'], $fvar_val).'%';
                     } else {
                         // 只要有這個類別的附件
                         $where .= " AND EXISTS (SELECT 1 FROM part_attachments pa{$fati} WHERE pa{$fati}.d_id=d.d_id"
-                                . "  AND FIND_IN_SET(:${fat_key}catid, pa{$fati}.category_ids))";
+                                . "  AND FIND_IN_SET(:{$fat_key}catid, pa{$fati}.category_ids))";
                         $params[":{$fat_key}catid"] = $fcat_id;
                     }
                 }
