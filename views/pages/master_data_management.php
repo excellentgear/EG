@@ -4125,6 +4125,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if ($is_calc_diff)        { $has_tolerance = 0; }
                 if ($is_dim)              { $input_type = 'number'; $is_range_v = 0; $has_tolerance = 0; $has_draw_lathe = 0; $has_draw_lathe_depth = 0; $is_triple_dim_sv = 0; $is_calc_diff = 0; $is_qty_dim = 0; }
                 if ($is_qty_dim)          { $input_type = 'number'; $is_range_v = 0; $has_tolerance = 0; $has_draw_lathe = 0; $has_draw_lathe_depth = 0; $is_triple_dim_sv = 0; $is_calc_diff = 0; $is_dim = 0; }
+                // 2026-08-24 使用者要求：全站一律不可設定深度。前端已把這些選項藏起來，
+                // 後端同規則再擋一次，避免直打 API 繞過（鐵律8）。
+                $is_dim = 0; $is_qty_dim = 0; $has_draw_lathe_depth = 0; $is_triple_dim_sv = 0;
+                if ($input_type !== 'text') $input_type = ($has_draw_lathe || $is_range_v || $has_tolerance || $is_calc_diff) ? 'number' : $input_type;
                 if (empty($name))      throw new Exception('標籤名稱不可為空');
                 if (empty($type_code)) throw new Exception('請選擇所屬料號種類');
                 if ($is_calc_diff && (!$calc_base_name_sv || !$calc_sub_name_sv)) throw new Exception('計算差異標籤必須填寫基準項名稱與減項名稱');
@@ -4275,6 +4279,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if ($is_imperial_dim_sv){ $input_type = 'none';   $is_range_sv = 0; $has_tol_sv = 0; $has_draw_lathe = 0; $has_draw_lathe_depth_sv = 0; $is_dim_sv = 0; $is_qty_dim_sv = 0; $is_countersink_sv = 0; $is_enum_sv = 0; $is_qty_triple_dim_sv = 0; }
                 if ($is_countersink_sv) { $input_type = 'none';   $is_range_sv = 0; $has_tol_sv = 0; $has_draw_lathe = 0; $has_draw_lathe_depth_sv = 0; $is_dim_sv = 0; $is_qty_dim_sv = 0; $is_imperial_dim_sv = 0; $is_enum_sv = 0; $is_qty_triple_dim_sv = 0; }
                 if ($is_enum_sv)        { $input_type = 'none';   $is_range_sv = 0; $has_tol_sv = 0; $has_draw_lathe = 0; $has_draw_lathe_depth_sv = 0; $is_dim_sv = 0; $is_qty_dim_sv = 0; $is_imperial_dim_sv = 0; $is_countersink_sv = 0; $is_qty_triple_dim_sv = 0; }
+                // 2026-08-24 使用者要求：全站一律不可設定深度（鐵律8，後端同規則再擋一次）。
+                // 「長×寬」「三維」「圖+車×深度」整個取消；數量＋規格／英制／沉頭孔保留但恆不帶深度。
+                $is_dim_sv = 0; $is_qty_triple_dim_sv = 0; $has_draw_lathe_depth_sv = 0; $is_triple_dim_sv2 = 0;
+                $no_depth_sv = 1;
                 if (empty($sub_name))  throw new Exception('子標籤名稱不可為空');
                 if (!$label_id)        throw new Exception('缺少父標籤ID');
                 $uid = $_SESSION['user_id']??null; $op_name = _get_operator($pdo,$uid);
@@ -8534,20 +8542,20 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                         <div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:6px;padding-bottom:1px;">
                             <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;"><input type="checkbox" id="dict-f-sub-rep" style="margin-right:2px;"> 多次</label>
                             <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;"><input type="checkbox" id="dict-f-sub-dl" style="margin-right:2px;" onchange="onSubDlChange(this.checked)"> 圖+車</label>
-                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#00695c;"><input type="checkbox" id="dict-f-sub-dl-depth" style="margin-right:2px;" onchange="onSubDlDepthChange(this.checked)"> 圖+車×深度</label>
-                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#5d4037;"><input type="checkbox" id="dict-f-sub-triple-dim" style="margin-right:2px;" onchange="onSubTripleDimChange(this.checked)"> 前綴小圓x前綴大圓x深度後綴</label>
+                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#00695c;;display:none;"><input type="checkbox" id="dict-f-sub-dl-depth" style="margin-right:2px;" onchange="onSubDlDepthChange(this.checked)"> 圖+車×深度</label>
+                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#5d4037;;display:none;"><input type="checkbox" id="dict-f-sub-triple-dim" style="margin-right:2px;" onchange="onSubTripleDimChange(this.checked)"> 前綴小圓x前綴大圓x深度後綴</label>
                             <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;"><input type="checkbox" id="dict-f-sub-range" style="margin-right:2px;" onchange="onSubRangeChange(this.checked)"> 範圍</label>
                             <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#f57f17;"><input type="checkbox" id="dict-f-sub-tol" style="margin-right:2px;" onchange="onSubTolChange(this.checked)"> 公差</label>
-                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#1565C0;"><input type="checkbox" id="dict-f-sub-dim" style="margin-right:2px;" onchange="onSubDimChange(this.checked)"> 長×寬</label>
-                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#6a1a9a;"><input type="checkbox" id="dict-f-sub-qty-dim" style="margin-right:2px;" onchange="onSubQtyDimChange(this.checked)"> 數量-長×寬</label>
-                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#6a1a9a;"><input type="checkbox" id="dict-f-sub-qty-triple-dim" style="margin-right:2px;" onchange="onSubQtyTripleDimChange(this.checked)"> 數量-長×寬×高</label>
-                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#00695c;"><input type="checkbox" id="dict-f-sub-imperial-dim" style="margin-right:2px;" onchange="onSubImperialDimChange(this.checked)"> 數量-英制圓×深</label>
-                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#bf360c;"><input type="checkbox" id="dict-f-sub-countersink" style="margin-right:2px;" onchange="onSubCountersinkChange(this.checked)"> 沉頭孔</label>
+                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#1565C0;;display:none;"><input type="checkbox" id="dict-f-sub-dim" style="margin-right:2px;" onchange="onSubDimChange(this.checked)"> 長×寬</label>
+                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#6a1a9a;"><input type="checkbox" id="dict-f-sub-qty-dim" style="margin-right:2px;" onchange="onSubQtyDimChange(this.checked)"> 數量＋規格</label>
+                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#6a1a9a;;display:none;"><input type="checkbox" id="dict-f-sub-qty-triple-dim" style="margin-right:2px;" onchange="onSubQtyTripleDimChange(this.checked)"> 數量-長×寬×高</label>
+                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#00695c;"><input type="checkbox" id="dict-f-sub-imperial-dim" style="margin-right:2px;" onchange="onSubImperialDimChange(this.checked)"> 數量＋英制規格</label>
+                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#bf360c;"><input type="checkbox" id="dict-f-sub-countersink" style="margin-right:2px;" onchange="onSubCountersinkChange(this.checked)"> 沉頭孔（數量＋小孔規格）</label>
                             <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#1565C0;"><input type="checkbox" id="dict-f-sub-enum" style="margin-right:2px;" onchange="onSubEnumChange(this.checked)"> 列舉選項</label>
                         </div>
                         <div style="display:flex;align-items:center;gap:6px;padding-top:3px;">
                             <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#555;"><input type="checkbox" id="dict-f-sub-hide-name" style="margin-right:2px;"> 省略名稱顯示</label>
-                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#a0522d;" title="勾選後新增此子標籤時不再詢問深度（第二數值），顯示也不印深度"><input type="checkbox" id="dict-f-sub-no-depth" style="margin-right:2px;"> 不使用深度</label>
+                            <label style="font-weight:normal;cursor:pointer;font-size:11px;white-space:nowrap;margin:0;color:#a0522d;;display:none;" title="勾選後新增此子標籤時不再詢問深度（第二數值），顯示也不印深度"><input type="checkbox" id="dict-f-sub-no-depth" style="margin-right:2px;"> 不使用深度</label>
                         </div>
                     </div>
                     <div style="display:flex;align-items:flex-end;gap:6px;padding-top:5px;">
@@ -11774,21 +11782,13 @@ function renderPartLabelChips(labelDefs, existing) {
                         if (pqA === null) return;
                         pqA = pqA.trim();
                         if (!pqA || isNaN(parseFloat(pqA))) { showToast('請輸入有效數字','error'); return; }
-                        var pqB = prompt('請輸入「'+ldefC.label_name+'」B數值（寬/深）', '');
-                        if (pqB === null) return;
-                        pqB = pqB.trim();
-                        if (!pqB || isNaN(parseFloat(pqB))) { showToast('請輸入有效數字','error'); return; }
-                        ei.qty = pq; ei.value_min = pqA; ei.value_max = pqB;
+                        ei.qty = pq; ei.value_min = pqA; ei.value_max = '';
                     } else if (isDimC) {
                         var va = prompt('請輸入「'+ldefC.label_name+'」A數值（長/圓）', '');
                         if (va === null) return;
                         va = va.trim();
                         if (!va || isNaN(parseFloat(va))) { showToast('請輸入有效數字','error'); return; }
-                        var vb = prompt('請輸入「'+ldefC.label_name+'」B數值（寬/深）', '');
-                        if (vb === null) return;
-                        vb = vb.trim();
-                        if (!vb || isNaN(parseFloat(vb))) { showToast('請輸入有效數字','error'); return; }
-                        ei.value_min = va; ei.value_max = vb;
+                        ei.value_min = va; ei.value_max = '';
                     } else if (isRngC) {
                         var vmin = prompt('請輸入「'+ldefC.label_name+'」最小值（數字）', '');
                         if (vmin === null) return;
@@ -12020,7 +12020,7 @@ function _renderSubLabelSection(grpEl, parentLdef, existingSubs, subDefs, canAdd
         var es = { input_value:'', draw_dim:'', lathe_dim:'', value_min:'', value_max:'', tol_upper:'', tol_lower:'', qty:'' };
         var sIsQtyTripleDimC = (sdefC.is_qty_triple_dim=='1'||sdefC.is_qty_triple_dim===1);
         // 2026-08-24 使用者要求：勾選「不使用深度」的子標籤不再詢問深度（螺孔/孔/英制/中心牙孔/沉頭孔）
-        var sNoDepthC = (sdefC.no_depth=='1'||sdefC.no_depth===1);
+        var sNoDepthC = true;   // 2026-08-24 使用者要求：全站一律不可設定深度，不再看旗標
         if (sIsQtyTripleDimC) {
             var qtq = prompt('請輸入「'+sdefC.sub_name+'」數量（可省略，省略=1）','');
             if (qtq===null) return null; qtq=qtq.trim();
@@ -16443,14 +16443,14 @@ var dictConfig = {
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;"><input type="checkbox" id="dict-f-lbl-rep" style="margin-right:3px;"> 可多次</label>';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;"><input type="checkbox" id="dict-f-lbl-dl" style="margin-right:3px;" onchange="onLblDlChange(this.checked)"> 圖面+車床</label>';
             html += '<label id="dict-f-lbl-lathe-opt-lbl" style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#5856d6;display:none;"><input type="checkbox" id="dict-f-lbl-lathe-opt" style="margin-right:3px;"> 車可省略</label>';
-            html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#00695c;"><input type="checkbox" id="dict-f-lbl-dl-depth" style="margin-right:3px;" onchange="onLblDlDepthChange(this.checked)"> 圖面+車床×深度</label>';
-            html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#5d4037;"><input type="checkbox" id="dict-f-lbl-triple-dim" style="margin-right:3px;" onchange="onLblTripleDimChange(this.checked)"> 前綴小圓x前綴大圓x深度後綴</label>';
+            html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#00695c;;display:none;"><input type="checkbox" id="dict-f-lbl-dl-depth" style="margin-right:3px;" onchange="onLblDlDepthChange(this.checked)"> 圖面+車床×深度</label>';
+            html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#5d4037;;display:none;"><input type="checkbox" id="dict-f-lbl-triple-dim" style="margin-right:3px;" onchange="onLblTripleDimChange(this.checked)"> 前綴小圓x前綴大圓x深度後綴</label>';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;"><input type="checkbox" id="dict-f-lbl-range" style="margin-right:3px;" onchange="onLblRangeChange(this.checked)"> 範圍</label>';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#f57f17;"><input type="checkbox" id="dict-f-lbl-tol" style="margin-right:3px;" onchange="onLblTolChange(this.checked)"> 公差</label>';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#7b1fa2;"><input type="checkbox" id="dict-f-lbl-calc" style="margin-right:3px;" onchange="onLblCalcChange(this.checked)"> 計算差異</label>';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#bf360c;"><input type="checkbox" id="dict-f-lbl-excl-calc" style="margin-right:3px;"> 不列入計算用</label>';
-            html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#1565C0;"><input type="checkbox" id="dict-f-lbl-dim" style="margin-right:3px;" onchange="onLblDimChange(this.checked)"> 長×寬(圓×深)</label>';
-            html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#6a1a9a;"><input type="checkbox" id="dict-f-lbl-qty-dim" style="margin-right:3px;" onchange="onLblQtyDimChange(this.checked)"> 數量-長×寬</label>';
+            html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#1565C0;;display:none;"><input type="checkbox" id="dict-f-lbl-dim" style="margin-right:3px;" onchange="onLblDimChange(this.checked)"> 長×寬(圓×深)</label>';
+            html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#6a1a9a;;display:none;"><input type="checkbox" id="dict-f-lbl-qty-dim" style="margin-right:3px;" onchange="onLblQtyDimChange(this.checked)"> 數量-長×寬</label>';
             html += '<label style="font-weight:normal;cursor:pointer;font-size:12px;white-space:nowrap;margin:0;color:#546e7a;"><input type="checkbox" id="dict-f-lbl-hidden-fe" style="margin-right:3px;"> 不顯示於前端</label>';
             html += '</div>';
             html += '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:flex-end;margin-bottom:4px;">';
