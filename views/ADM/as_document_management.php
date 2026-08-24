@@ -205,7 +205,9 @@ if ($deptPerm === 'R') {
                       <?php if ($asCaps['update']): ?><th style="width:24px;"><input type="checkbox" id="chkAllDocs" title="全選本頁（批次加標籤用）"></th><?php endif; ?>
                       <th>文件編號</th><th>文件名稱</th><th>類別</th><th>階級</th><th>部門</th>
                       <th>母文件 / 表單</th>
-                      <th>目前版本</th><th>修訂日期</th><th>標籤</th><th style="min-width:245px;">操作</th>
+                      <th>目前版本</th><th>修訂日期</th><th>標籤</th>
+                      <th class="doc-web-col" style="width:64px;" title="已經做成系統頁面的文件，可直接點開">網頁</th>
+                      <th style="min-width:245px;">操作</th>
                     </tr>
                   </thead>
                   <tbody id="docTableBody"></tbody>
@@ -537,14 +539,15 @@ if ($deptPerm === 'R') {
 /* 已廢止文件：粉紅底（ai-rules/10 暖色系；顏色不是唯一資訊，旁邊另有「已廢止」文字標籤） */
 tr.doc-obsolete > td { background:#FBE4E8 !important; }
 .tree-row.tree-obsolete { background:#FBE4E8; }
-/* 結構總覽「網頁」欄：已做成系統頁面者可點開新分頁（暖色系；文字本身就是資訊，顏色只是輔助）。
-   使用者明確要求：**這一欄只在畫面上看，列印一律不出現**——列印版是 treePrintBody() 另外組的表格，
-   本來就不含這欄；這裡的 @media print 是第二道保險（避免有人直接列印跳窗畫面）。 */
-.tree-web { font-size:10px; text-decoration:none !important; }
-.tree-web-on { color:#8A5A2B; background:#F7E0BD; border:1px solid #E8C07A; border-radius:3px; padding:0 4px; display:inline-block; }
-.tree-web-on:hover { background:#F0A24B; color:#fff; }
-.tree-web-no { color:#aaa; }
-@media print { .tree-web, .tree-web-col { display:none !important; } }
+/* 「網頁」欄（文件清單與結構總覽共用同一套樣式與資料）：已做成系統頁面者可點開新分頁
+   （暖色系；文字本身就是資訊，顏色只是輔助）。
+   使用者明確要求：**這一欄只在畫面上看，列印一律不出現**——列印版（文件管制總覽表／品質記錄一覽表）
+   都是另外組出來的表格本來就不含這欄；這裡的 @media print 是第二道保險（避免有人直接列印畫面）。 */
+.doc-web { font-size:10px; text-decoration:none !important; }
+.doc-web-on { color:#8A5A2B; background:#F7E0BD; border:1px solid #E8C07A; border-radius:3px; padding:0 4px; display:inline-block; }
+.doc-web-on:hover { background:#F0A24B; color:#fff; }
+.doc-web-no { color:#aaa; }
+@media print { .doc-web, .doc-web-col { display:none !important; } }
 .ob-tag { background:#DD5138; color:#fff; }
 /* 文件備註（管理員維護，接在文件名稱下方）：暖色系淡底＋左側粗邊，跟文件名稱明顯分層。
    內容是使用者自訂格式，所以底色/文字色一律讓內文的 inline style 自己決定，
@@ -1255,7 +1258,7 @@ $(function(){
     const start = (curPage-1)*size;
     const rows = DOCS.slice(start, start+size);
     const tb = $('#docTableBody').empty();
-    if(rows.length===0){ tb.append(`<tr><td colspan="${canU?11:10}" class="text-center text-muted">無資料</td></tr>`); }
+    if(rows.length===0){ tb.append(`<tr><td colspan="${canU?12:11}" class="text-center text-muted">無資料</td></tr>`); }
     rows.forEach(d=>{
       const tags = (d.tags||[]).map(t=>`<span class="tag-chip" style="background:${esc(t.color)};">${esc(t.name)}</span>`).join(' ');
       let ops = '';
@@ -1334,6 +1337,7 @@ $(function(){
         <td><span class="label label-info">${esc(d.current_version)||'-'}</span></td>
         <td>${esc(d.revised_date)||'-'}</td>
         <td>${tags||'-'}</td>
+        <td class="doc-web-col text-center">${docWebHtml(d)}</td>
         <td class="text-nowrap">${ops}</td>
       </tr>`);
       // 搜尋命中此文件的附件/紀錄 → 直接掛在文件列下方顯示（免點開跳窗）
@@ -1344,7 +1348,7 @@ $(function(){
         tb.append(`<tr style="background:#fffbe6;">
           ${canU?'<td></td>':''}
           <td></td>
-          <td colspan="8" style="padding-left:30px;">
+          <td colspan="9" style="padding-left:30px;">
             <i class="fa fa-paperclip text-warning"></i> <strong>${esc(mr.title)}</strong>
             <span class="text-muted" style="font-size:11px;">${esc(mr.record_date)||''}</span>
             ${mnote?'<span style="font-size:11px;margin-left:6px;">'+mnote+'</span>':''}
@@ -1582,22 +1586,24 @@ $(function(){
 
   // ══ 結構總覽（樹狀圖：依部門代碼分組＋表格式欄位對齊） ══
   const TYPE_ICON = {'手冊':'📕','程序':'📘','標準書':'📗','表單':'📄'};
-  /* 「網頁」欄：這份文件有沒有已經做成系統頁面（後端 tree_web_pages 逐筆判定，
-     來源＝各模組已綁定的 AS 文件編號，共用 src/common/asdoc_page_lib.php，不在這裡另猜一份）。
-     沒權限開那一頁的人只拿得到 can=0（後端連網址都不回），畫面顯示灰字「無權限」。 */
-  let TREE_WEB = {};
-  function treeWebHtml(d){
-    const w = TREE_WEB[String(d.id)];
+  /* 「網頁」欄（文件清單與結構總覽共用）：這份文件有沒有已經做成系統頁面。
+     判定在後端 tree_web_pages，來源＝各模組已綁定的 AS 文件編號（共用 src/common/asdoc_page_lib.php），
+     不在這裡另猜一份；沒權限開那一頁的人只拿得到 can=0（後端連網址都不回），畫面顯示灰字「無權限」。 */
+  let WEB_PAGES = {};
+  function docWebHtml(d){
+    const w = WEB_PAGES[String(d.id)];
     if(!w) return '';
-    if(!w.can) return `<span class="tree-web tree-web-no" title="${esc(w.name)}｜您沒有開啟這個頁面的權限，請洽管理員">無權限</span>`;
-    return `<a class="tree-web tree-web-on" href="${esc(w.url)}" target="_blank" rel="noopener"`
+    if(!w.can) return `<span class="doc-web doc-web-no" title="${esc(w.name)}｜您沒有開啟這個頁面的權限，請洽管理員">無權限</span>`;
+    return `<a class="doc-web doc-web-on" href="${esc(w.url)}" target="_blank" rel="noopener"`
          + ` title="已網頁化：${esc(w.name)}｜點擊另開新分頁">網頁 <i class="fa fa-external-link"></i></a>`;
   }
-  function loadTreeWebPages(){
+  /** 一份資料兩處用：頁面載入就抓（清單要用），結構總覽打開時不必再抓一次 */
+  function loadWebPages(){
     $.getJSON(API+'?action=tree_web_pages', r=>{
       if(r.status!=='success') return;
-      TREE_WEB = r.pages||{};
-      if(TREE_DOCS.length) renderTree(TREE_DOCS);   // 樹先畫好也要補上這一欄
+      WEB_PAGES = r.pages||{};
+      if(typeof DOCS!=='undefined' && DOCS.length) renderDocs();      // 清單先畫好也要補上這一欄
+      if(TREE_DOCS.length) renderTree(TREE_DOCS);
     });
   }
   function treeNodeHtml(d, depth, hasKids, exSelf, exByParent){
@@ -1620,7 +1626,7 @@ $(function(){
       </div>
       <div style="flex:0 0 56px;text-align:center;">${d.current_version?`<span class="label label-info" style="font-size:10px;">${esc(d.current_version)}</span>`:''}</div>
       <div style="flex:0 0 72px;text-align:center;">${recBadge}</div>
-      <div class="tree-web-col" style="flex:0 0 84px;text-align:center;">${treeWebHtml(d)}</div>
+      <div class="doc-web-col" style="flex:0 0 84px;text-align:center;">${docWebHtml(d)}</div>
       <div style="flex:0 0 110px;font-size:11px;color:#888;white-space:nowrap;overflow:hidden;">${esc(d.dept_name)||'-'}</div>
       <div style="flex:0 0 30px;text-align:center;">${del}</div>
     </div>`;
@@ -1670,7 +1676,7 @@ $(function(){
       <div style="flex:1;">文件</div>
       <div style="flex:0 0 56px;text-align:center;">版本</div>
       <div style="flex:0 0 72px;text-align:center;">紀錄/附件</div>
-      <div class="tree-web-col" style="flex:0 0 84px;text-align:center;">網頁</div>
+      <div class="doc-web-col" style="flex:0 0 84px;text-align:center;">網頁</div>
       <div style="flex:0 0 110px;">部門</div>
       <div style="flex:0 0 30px;"></div>
     </div>`;
@@ -1714,7 +1720,7 @@ $(function(){
       renderTree(TREE_DOCS);
       loadTreeSigners();
     });
-    loadTreeWebPages();
+    if($.isEmptyObject(WEB_PAGES)) loadWebPages();
   }
   /** 簽章人員：核准＝最高核准人員；修改＝依「任期」回推該階簽章日期當時的 AS 負責人，
    *  任期沒涵蓋的日期才用下拉手選（手選者仍須該日在職且未請假） */
@@ -3413,6 +3419,7 @@ $(function(){
   // 外部帶入定位：?kw=文件編號（AS流程說明手冊的「到文件管理」鈕用；也可直接複製網址分享單一文件）
   (function(){ var kw = new URLSearchParams(location.search).get('kw'); if (kw) { $('#searchKw').val(kw); } })();
   loadMeta(loadDocs);
+  loadWebPages();   // 「網頁」欄（清單與結構總覽共用一份，載入完會自己補畫）
 });
 </script>
 </body>
