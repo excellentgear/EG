@@ -1407,6 +1407,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 $where .= " AND EXISTS (SELECT 1 FROM d_setting_gear gha WHERE gha.d_setting_id=d.d_id $ha_cond)";
             }
+            // ── 刀具規格篩選（d_setting_tool）2026-08-24 ────────────────────────
+            $ftKind = trim($_POST['filter_tool_kind'] ?? '');
+            $ftMod  = trim($_POST['filter_tool_module'] ?? '');
+            $ftType = trim($_POST['filter_tool_type'] ?? '');
+            $ftMat  = trim($_POST['filter_tool_material'] ?? '');
+            $ftCoat = trim($_POST['filter_tool_coating'] ?? '');
+            $ftPa   = trim($_POST['filter_tool_pa'] ?? '');
+            $ftBmin = trim($_POST['filter_tool_bore_min'] ?? '');
+            $ftBmax = trim($_POST['filter_tool_bore_max'] ?? '');
+            $tCond = []; $tPrm = [];
+            if ($ftKind !== '') { $tCond[] = "t.tool_kind = :ftkind";      $tPrm[':ftkind'] = $ftKind; }
+            if ($ftMod  !== '') { $tCond[] = "t.module_display = :ftmod";  $tPrm[':ftmod']  = $ftMod; }
+            if ($ftType !== '') { $tCond[] = "t.tool_type = :fttype";      $tPrm[':fttype'] = $ftType; }
+            if ($ftMat  !== '') { $tCond[] = "t.material = :ftmat";        $tPrm[':ftmat']  = $ftMat; }
+            if ($ftCoat !== '') { $tCond[] = "t.coating = :ftcoat";        $tPrm[':ftcoat'] = $ftCoat; }
+            if ($ftPa   !== '') { $tCond[] = "t.pressure_angle = :ftpa";   $tPrm[':ftpa']   = $ftPa; }
+            if (is_numeric($ftBmin)) { $tCond[] = "t.bore_dia >= :ftbmin"; $tPrm[':ftbmin'] = $ftBmin; }
+            if (is_numeric($ftBmax)) { $tCond[] = "t.bore_dia <= :ftbmax"; $tPrm[':ftbmax'] = $ftBmax; }
+            if ($tCond) {
+                $where .= " AND EXISTS (SELECT 1 FROM d_setting_tool t WHERE t.d_setting_id=d.d_id AND ".implode(' AND ', $tCond).")";
+                foreach ($tPrm as $k=>$v) $params[$k] = $v;
+            }
+
             // 標籤篩選：每個選中標籤都必須存在（AND 邏輯）
             if ($flabels_raw !== '' && $flabels_raw !== '[]') {
                 $flabels = json_decode($flabels_raw, true) ?: [];
@@ -1830,6 +1853,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 unset($g);
             }
             $row['gears'] = $gears;
+            // 刀具規格（2026-08-24 起改存專屬表 d_setting_tool）
+            $st_tool = $pdo->prepare("SELECT * FROM d_setting_tool WHERE d_setting_id=? LIMIT 1");
+            $st_tool->execute([$d_id]);
+            $row['tool'] = $st_tool->fetch(PDO::FETCH_ASSOC) ?: null;
             // BOM 子件資料
             $bom_children = [];
             if ($row['Is_Assembly'] == 1) {
@@ -2021,6 +2048,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $pdo->prepare("INSERT INTO d_setting (D_Setting_Id,Spec_No,Revision,Issue_Date,Type,Is_Assembly,workpiece_sub_type_id,Customer_Id,Remark,Weight_Kg,weight_source,weight_calc_json,Created_By,Created_At) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
                     ->execute([$D_Setting_Id,$Spec_No,$Revision,$Issue_Date,$Type,$Is_Assembly,$sub_type_id,$Customer_Id,$Remark,$Weight_Kg,$weight_source,$weight_calc_json,$uid]);
                 $d_id = (int)$pdo->lastInsertId();
+            }
+
+            // ── 刀具規格（d_setting_tool，Type=H/OH）──────────────────────────
+            $tool_in = json_decode($_POST['tool_spec'] ?? '{}', true);
+            if (!is_array($tool_in)) $tool_in = [];
+            $pdo->prepare("DELETE FROM d_setting_tool WHERE d_setting_id=?")->execute([$d_id]);
+            if (in_array($Type, ['H','OH'], true)) {
+                $tTxt = function($k) use ($tool_in) { $v = trim((string)($tool_in[$k] ?? '')); return $v === '' ? null : $v; };
+                $tNum = function($k) use ($tool_in) {
+                    $v = trim((string)($tool_in[$k] ?? ''));
+                    return ($v === '' || !is_numeric($v)) ? null : $v;
+                };
+                $kind = $tTxt('tool_kind');
+                if (!in_array($kind, ['hob','shaper'], true)) $kind = null;   // 後端同規則再擋一次（鐵律8）
+                $mType = $tTxt('module_input_type');
+                $mVal  = $tNum('module_value');
+                $mDisp = null;
+                if ($mType !== null || $mVal !== null) {
+                    $mDisp = in_array($mType, ['M','CP','DP'], true)
+                           ? $mType . ($mVal !== null ? rtrim(rtrim(number_format((float)$mVal,4,'.',''),'0'),'.') : '')
+                           : ($mType === '8YU' ? '8YU' : (string)($tool_in['module_value'] ?? ''));
+                    if (trim((string)$mDisp) === '') $mDisp = null;
+                }
+                // 全部欄位都是空的就不建立空白列
+                $anyVal = $kind !== null || $mDisp !== null;
+                foreach (['pressure_angle','od_length','tool_type','shaper_tag','material','coating','remark'] as $k) if ($tTxt($k) !== null) $anyVal = true;
+                foreach (['starts_rh','starts_lh','d_plus_f','bore_dia','teeth','outer_dia'] as $k)                if ($tNum($k) !== null) $anyVal = true;
+                if (!empty($tool_in['has_six_spline'])) $anyVal = true;
+                if ($anyVal) {
+                    $pdo->prepare("INSERT INTO d_setting_tool
+                        (d_setting_id, tool_kind, module_input_type, module_value, module_display, pressure_angle,
+                         starts_rh, starts_lh, od_length, d_plus_f, bore_dia, has_six_spline, tool_type,
+                         teeth, outer_dia, shaper_tag, material, coating, remark, Created_By, Created_At, Modified_By, Modified_At)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,NOW())")
+                        ->execute([$d_id, $kind, $mType, $mVal, $mDisp, $tTxt('pressure_angle'),
+                                   $tNum('starts_rh'), $tNum('starts_lh'), $tTxt('od_length'), $tNum('d_plus_f'),
+                                   $tNum('bore_dia'), empty($tool_in['has_six_spline']) ? 0 : 1, $tTxt('tool_type'),
+                                   $tNum('teeth'), $tNum('outer_dia'), $tTxt('shaper_tag'), $tTxt('material'),
+                                   $tTxt('coating'), $tTxt('remark'), $uid, $uid]);
+                }
             }
 
             // ── 齒輪資料（先取舊資料供審計用）──
@@ -4022,6 +4089,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 規格建議：同客戶＋料號開頭相近的既有規格 ─────────────────────────
     // 使用者要求（2026-08-24）：新增/編輯料號時自動帶出可選的規格，點了還能自己改。
     // 前綴由長到短逐步放寬，找到有結果就停，避免「只打兩碼就撈到一堆不相干的」。
+    // 刀具規格欄位的候選值：一律取自現有資料，不在程式裡寫死一份對照表（鐵律4）
+    if ($_POST['action'] === 'tool_filter_options') {
+        try {
+            $out = [];
+            foreach (['module_display','tool_type','material','coating'] as $col) {
+                $out[$col] = $pdo->query("SELECT DISTINCT `{$col}` v FROM d_setting_tool
+                                          WHERE `{$col}` IS NOT NULL AND `{$col}` <> '' ORDER BY v")->fetchAll(PDO::FETCH_COLUMN);
+            }
+            echo json_encode(['success'=>true,'data'=>$out], JSON_UNESCAPED_UNICODE);
+        } catch(Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    if ($_POST['action'] === 'tool_spec_options') {
+        try {
+            $out = [];
+            foreach (['tool_type','material','coating','shaper_tag'] as $col) {
+                $rows = $pdo->query("SELECT DISTINCT `{$col}` v FROM d_setting_tool
+                                     WHERE `{$col}` IS NOT NULL AND `{$col}` <> '' ORDER BY v")->fetchAll(PDO::FETCH_COLUMN);
+                $out[$col] = $rows;
+            }
+            echo json_encode(['success'=>true,'data'=>$out], JSON_UNESCAPED_UNICODE);
+        } catch(Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
     if ($_POST['action'] === 'spec_suggest') {
         try {
             $partNo = trim($_POST['part_no'] ?? '');
@@ -6829,6 +6922,31 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                     <span class="filter-group-label" style="margin-top:4px;">標籤篩選</span>
                     <!-- dynamic label filter chips injected by JS -->
                 </div>
+                <!-- 刀具規格篩選（選 H/OH 刀具種類時出現）2026-08-24 -->
+                <div class="filter-sub-row" id="parts-tool-filter" style="align-items:center;flex-wrap:wrap;gap:6px;display:none;">
+                    <span class="filter-group-label" style="margin-top:2px;color:#a0522d;"><i class="fa fa-wrench"></i> 刀具規格</span>
+                    <select class="form-control input-sm" id="ftool-kind" style="width:96px;" onchange="syncToolFilter()">
+                        <option value="">刀具種類</option><option value="hob">滾齒刀</option><option value="shaper">插齒刀</option>
+                    </select>
+                    <select class="form-control input-sm" id="ftool-module" style="width:110px;" data-eg-filter="輸入模數篩選…" onchange="syncToolFilter()">
+                        <option value="">模數</option>
+                    </select>
+                    <select class="form-control input-sm" id="ftool-type" style="width:110px;" onchange="syncToolFilter()">
+                        <option value="">類型</option>
+                    </select>
+                    <select class="form-control input-sm" id="ftool-material" style="width:110px;" onchange="syncToolFilter()">
+                        <option value="">材質</option>
+                    </select>
+                    <select class="form-control input-sm" id="ftool-coating" style="width:110px;" onchange="syncToolFilter()">
+                        <option value="">塗層</option>
+                    </select>
+                    <span style="font-size:11px;color:#8a6d3b;">壓力角</span>
+                    <input type="text" class="form-control input-sm no-spin-input" id="ftool-pa" style="width:64px;" placeholder="例 20" oninput="syncToolFilterDebounced()">
+                    <span style="font-size:11px;color:#8a6d3b;">內徑</span>
+                    <input type="number" class="form-control input-sm no-spin-input" id="ftool-bore-min" style="width:66px;" placeholder="min" oninput="syncToolFilterDebounced()">
+                    <span style="font-size:10px;color:#aaa;">~</span>
+                    <input type="number" class="form-control input-sm no-spin-input" id="ftool-bore-max" style="width:66px;" placeholder="max" oninput="syncToolFilterDebounced()">
+                </div>
                 <!-- 附件標籤篩選 -->
                 <div class="filter-sub-row" id="parts-attach-filter" style="align-items:flex-start;flex-wrap:wrap;gap:6px;display:none;">
                     <span class="filter-group-label" style="margin-top:4px;color:#1a5276;"><i class="fa fa-paperclip"></i> 附件篩選</span>
@@ -7326,6 +7444,68 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
     </button>
     <?php endif; ?>
     <div class="id-hint" style="margin-top:4px;">一個料號可記錄多組齒型（如雙聯齒輪）</div>
+</div>
+
+<!-- ─ 刀具規格（Type=H/OH 時顯示）─ 2026-08-24 由料號標籤改為專屬表 d_setting_tool -->
+<div id="tool-section" style="display:none;">
+    <div class="form-section-title" style="color:#a0522d;"><i class="fa fa-wrench"></i> 刀具規格設定</div>
+    <div style="background:#FFF9F0;border:1px solid #E4D3BC;border-radius:6px;padding:10px 12px;">
+        <div class="row">
+            <div class="col-md-3"><div class="form-group"><label>刀具種類</label>
+                <select class="form-control" id="pt-tool_kind" onchange="onToolKindChange(this.value)">
+                    <option value="">—</option><option value="hob">滾齒刀</option><option value="shaper">插齒刀</option>
+                </select></div></div>
+            <div class="col-md-3"><div class="form-group"><label>模數</label>
+                <div style="display:flex;gap:4px;">
+                    <select class="form-control" id="pt-module_input_type" style="width:82px;flex:none;">
+                        <option value="">—</option><option value="M">M</option><option value="CP">CP</option>
+                        <option value="DP">DP</option><option value="8YU">8YU</option><option value="其他">其他</option>
+                    </select>
+                    <input type="text" class="form-control no-spin-input" id="pt-module_value" placeholder="數值">
+                </div></div></div>
+            <div class="col-md-3"><div class="form-group"><label>壓力角</label>
+                <input type="text" class="form-control" id="pt-pressure_angle" placeholder="例：20"></div></div>
+            <div class="col-md-3"><div class="form-group"><label>材質</label>
+                <input type="text" class="form-control" id="pt-material" list="pt-material-list" placeholder="例：HSS">
+                <datalist id="pt-material-list"></datalist></div></div>
+        </div>
+        <div class="row tool-hob-only">
+            <div class="col-md-3"><div class="form-group"><label>牙口數 RH</label>
+                <input type="number" class="form-control no-spin-input" id="pt-starts_rh" min="0" step="1"></div></div>
+            <div class="col-md-3"><div class="form-group"><label>牙口數 LH</label>
+                <input type="number" class="form-control no-spin-input" id="pt-starts_lh" min="0" step="1"></div></div>
+            <div class="col-md-3"><div class="form-group"><label>外徑-長度</label>
+                <input type="text" class="form-control" id="pt-od_length" placeholder="例：80-120"></div></div>
+            <div class="col-md-3"><div class="form-group"><label>D+F</label>
+                <input type="text" class="form-control no-spin-input" id="pt-d_plus_f"></div></div>
+        </div>
+        <div class="row tool-hob-only">
+            <div class="col-md-3"><div class="form-group"><label>內徑（刀孔）</label>
+                <input type="text" class="form-control no-spin-input" id="pt-bore_dia"></div></div>
+            <div class="col-md-3"><div class="form-group"><label>類型</label>
+                <input type="text" class="form-control" id="pt-tool_type" list="pt-tool_type-list" placeholder="例：PGSP">
+                <datalist id="pt-tool_type-list"></datalist></div></div>
+            <div class="col-md-3"><div class="form-group"><label>塗層</label>
+                <input type="text" class="form-control" id="pt-coating" list="pt-coating-list" placeholder="例：TIN">
+                <datalist id="pt-coating-list"></datalist></div></div>
+            <div class="col-md-3"><div class="form-group"><label style="display:block;">&nbsp;</label>
+                <label style="font-weight:normal;cursor:pointer;"><input type="checkbox" id="pt-has_six_spline" style="margin-right:4px;">六栓槽</label></div></div>
+        </div>
+        <div class="row tool-shaper-only">
+            <div class="col-md-3"><div class="form-group"><label>齒數</label>
+                <input type="number" class="form-control no-spin-input" id="pt-teeth" min="0" step="1"></div></div>
+            <div class="col-md-3"><div class="form-group"><label>外徑 ⌀</label>
+                <input type="text" class="form-control no-spin-input" id="pt-outer_dia"></div></div>
+            <div class="col-md-3"><div class="form-group"><label>插齒刀標籤</label>
+                <input type="text" class="form-control" id="pt-shaper_tag" list="pt-shaper_tag-list">
+                <datalist id="pt-shaper_tag-list"></datalist></div></div>
+        </div>
+        <div class="row">
+            <div class="col-md-12"><div class="form-group"><label>刀具備註</label>
+                <textarea class="form-control" id="pt-remark" rows="2"></textarea></div></div>
+        </div>
+    </div>
+    <div class="id-hint" style="margin-top:4px;">刀具規格已改為專屬欄位（比照齒輪規格），可在上方清單直接篩選</div>
 </div>
 
 <!-- ─ 組合件子件（Is_Assembly=1 時顯示）─ -->
@@ -9633,7 +9813,8 @@ function deleteGearRow(gearId, dSettingDbId) {
 // ──────────── 料號 ─────────────────────────────────
 // ═══════════════════════════════════════════════════
 // ── Filter state ──────────────────────────────────────────
-var _partsFilter  = { types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
+var _toolFilterInit = function(){ return { kind:'', module:'', type:'', material:'', coating:'', pa:'', boreMin:'', boreMax:'' }; };
+var _partsFilter  = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
 var _custFilter   = { grades:[], industries:[], industrySubs:[], keywords:[], pinnedCustIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null };
 var _makersFilter = { main_cats:[], sub_cats:[], keywords:[], pinnedMakerIds:[], quickKws:[], payment_method:'', settlement_mode:'', settlement_day: null, proc_labels:[] };
 
@@ -10161,7 +10342,7 @@ function updatePartsClearBtn() {
 }
 
 function clearPartsFilter() {
-    _partsFilter = { types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
+    _partsFilter = { tool:_toolFilterInit(), types:[], gear:0, sub:0, labels:[], customerIds:[], grades:[], industries:[], industrySubs:[], keywords:[], pinnedPartIds:[], quickKws:[], gearDaMin:null, gearDaMax:null, shipSort:'', attachTags:[], gearModules:[], gearHelixDir:'', gearPressureAngles:[], gearTeethMin:null, gearTeethMax:null, gearFwMin:null, gearFwMax:null, gearHaMin:null, gearHaMax:null };
     ['fg-teeth-min','fg-teeth-max','fg-fw-min','fg-fw-max','fg-ha-min','fg-ha-max'].forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
     document.querySelectorAll('#parts-ship-sort-row [data-shipsort]').forEach(function(c) {
         var isDefault = c.dataset.shipsort === '';
@@ -10597,6 +10778,53 @@ function setCustIndustrySub(val, el) {
     updateCustClearBtn(); loadCustomers(1);
 }
 
+// ── 刀具規格篩選 ──────────────────────────────────────────
+var _toolFilterTimer = null;
+var _toolFilterLoaded = false;
+
+/** 下拉選項一律取自現有刀具資料（不寫死＝鐵律4） */
+function buildToolFilterRow(typeCode) {
+    var row = document.getElementById('parts-tool-filter');
+    if (!row) return;
+    var show = (typeCode === 'H' || typeCode === 'OH');
+    row.style.display = show ? 'flex' : 'none';
+    if (!show) {
+        _partsFilter.tool = _toolFilterInit();
+        ['ftool-kind','ftool-module','ftool-type','ftool-material','ftool-coating','ftool-pa','ftool-bore-min','ftool-bore-max']
+            .forEach(function(id){ var el=document.getElementById(id); if(el) el.value=''; });
+        return;
+    }
+    if (_toolFilterLoaded) return;
+    _toolFilterLoaded = true;
+    api({ action:'tool_filter_options' }).done(function(r) {
+        if (!r || !r.success) return;
+        [['ftool-module','module_display','模數'],['ftool-type','tool_type','類型'],
+         ['ftool-material','material','材質'],['ftool-coating','coating','塗層']].forEach(function(m) {
+            var sel = document.getElementById(m[0]);
+            if (!sel) return;
+            var cur = sel.value;
+            sel.innerHTML = '<option value="">'+m[2]+'</option>' +
+                (r.data[m[1]]||[]).map(function(v){ return '<option value="'+escHtml(v)+'">'+escHtml(v)+'</option>'; }).join('');
+            sel.value = cur;
+        });
+    });
+}
+
+function syncToolFilter() {
+    var g = function(id){ var el=document.getElementById(id); return el ? el.value.trim() : ''; };
+    _partsFilter.tool = {
+        kind:     g('ftool-kind'),   module:  g('ftool-module'), type:    g('ftool-type'),
+        material: g('ftool-material'), coating: g('ftool-coating'), pa:    g('ftool-pa'),
+        boreMin:  g('ftool-bore-min'), boreMax: g('ftool-bore-max')
+    };
+    updatePartsClearBtn();
+    loadParts(1);
+}
+function syncToolFilterDebounced() {
+    clearTimeout(_toolFilterTimer);
+    _toolFilterTimer = setTimeout(syncToolFilter, 300);
+}
+
 // ── 標籤篩選行建構 ────────────────────────────────────────
 function _makeLblValWrap(key, it, hasDl, isRng, small, isDim, isQtyDim) {
     var w = parseInt(small ? 54 : 66);
@@ -10633,6 +10861,7 @@ function syncGearDaFilter() {
 }
 
 function buildLabelFilterRow(typeCode) {
+    buildToolFilterRow(typeCode);          // 刀具規格篩選列跟著種類一起切換
     var lRow = document.getElementById('parts-label-filter');
     if (!lRow) return;
     lRow.classList.remove('visible');
@@ -11333,6 +11562,14 @@ function loadParts(pg) {
           filter_gear:             _partsFilter.gear,
           filter_sub:              _partsFilter.sub,
           filter_labels:           JSON.stringify(_partsFilter.labels||[]),
+          filter_tool_kind:        _partsFilter.tool.kind,
+          filter_tool_module:      _partsFilter.tool.module,
+          filter_tool_type:        _partsFilter.tool.type,
+          filter_tool_material:    _partsFilter.tool.material,
+          filter_tool_coating:     _partsFilter.tool.coating,
+          filter_tool_pa:          _partsFilter.tool.pa,
+          filter_tool_bore_min:    _partsFilter.tool.boreMin,
+          filter_tool_bore_max:    _partsFilter.tool.boreMax,
           filter_gear_da_min:      _partsFilter.gearDaMin !== null ? _partsFilter.gearDaMin : '',
           filter_gear_da_max:      _partsFilter.gearDaMax !== null ? _partsFilter.gearDaMax : '',
           filter_gear_modules:     JSON.stringify(_partsFilter.gearModules||[]),
@@ -12544,6 +12781,55 @@ function syncPartLabelsJson() {
 }
 
 // ── Gear data ─────────────────────────────────────────
+// ── 刀具規格（d_setting_tool）─────────────────────────────────────────
+var TOOL_FIELDS = ['tool_kind','module_input_type','module_value','pressure_angle','starts_rh','starts_lh',
+                   'od_length','d_plus_f','bore_dia','tool_type','teeth','outer_dia','shaper_tag',
+                   'material','coating','remark'];
+var _toolOptsLoaded = false;
+
+/** 下拉候選值一律取自現有資料（禁止在此寫死一份對照表＝鐵律4） */
+function loadToolSpecOptions(force) {
+    if (_toolOptsLoaded && !force) return;
+    _toolOptsLoaded = true;
+    api({ action:'tool_spec_options' }).done(function(r) {
+        if (!r || !r.success) return;
+        ['tool_type','material','coating','shaper_tag'].forEach(function(k) {
+            var dl = document.getElementById('pt-'+k+'-list');
+            if (!dl) return;
+            dl.innerHTML = (r.data[k]||[]).map(function(v){ return '<option value="'+escHtml(v)+'">'; }).join('');
+        });
+    });
+}
+
+function onToolKindChange(kind) {
+    document.querySelectorAll('.tool-hob-only').forEach(function(el){ el.style.display = (kind==='shaper') ? 'none' : ''; });
+    document.querySelectorAll('.tool-shaper-only').forEach(function(el){ el.style.display = (kind==='shaper') ? '' : 'none'; });
+}
+
+function clearToolSpecForm() {
+    TOOL_FIELDS.forEach(function(k){ var el=document.getElementById('pt-'+k); if(el) el.value=''; });
+    var cb=document.getElementById('pt-has_six_spline'); if(cb) cb.checked=false;
+    onToolKindChange('');
+}
+
+function fillToolSpecForm(t) {
+    clearToolSpecForm();
+    if (!t) { onToolKindChange(''); return; }
+    TOOL_FIELDS.forEach(function(k){
+        var el=document.getElementById('pt-'+k);
+        if (el && t[k] !== null && t[k] !== undefined) el.value = t[k];
+    });
+    var cb=document.getElementById('pt-has_six_spline'); if(cb) cb.checked = (t.has_six_spline=='1'||t.has_six_spline===1);
+    onToolKindChange(t.tool_kind||'');
+}
+
+function collectToolSpec() {
+    var o = {};
+    TOOL_FIELDS.forEach(function(k){ var el=document.getElementById('pt-'+k); o[k] = el ? el.value.trim() : ''; });
+    var cb=document.getElementById('pt-has_six_spline'); o.has_six_spline = (cb && cb.checked) ? 1 : 0;
+    return o;
+}
+
 var gearRows = [];
 var bomRows  = [];
 var gearTypeOptions = [];  // loaded from DB via reloadGearTypeOptions()
@@ -12568,6 +12854,12 @@ function onTypeChange(val, opts) {
     } else {
         $(gs).slideUp(200);
         gearRows = [];
+    }
+    // 刀具規格區塊（H=刀具、OH=其他刀具）
+    var ts = document.getElementById('tool-section');
+    if (ts) {
+        if (val === 'H' || val === 'OH') { $(ts).slideDown(200); loadToolSpecOptions(); }
+        else { $(ts).slideUp(200); if (!opts.keepTool) clearToolSpecForm(); }
     }
     // 依工件種類字典設定，顯示/隱藏 廠商 / 專用料號 / 專用機台 / 價格 欄位
     applyPartExtraFieldVisibility(val);
@@ -14002,7 +14294,9 @@ function openPartModal(d_id) {
             setIssueDateFields(d.Issue_Date||'');
             _loadPartTypeOptions(d.Type||'N', function(){
                 // skipSubType/skipLabels：避免 onTypeChange 先以空值載入，造成與下面帶值請求競態（小類選取被清掉）
-                onTypeChange(d.Type||'N', {skipSubType:true, skipLabels:true});
+                onTypeChange(d.Type||'N', {skipSubType:true, skipLabels:true, keepTool:true});
+                loadToolSpecOptions();
+                fillToolSpecForm(d.tool || null);
                 loadPartSubTypes(d.Type||'N', parseInt(d.workpiece_sub_type_id||0));
                 loadPartLabels(d.Type||'N', d.labels||[]);
                 // 載入此料號既有的 廠商 / 專用料號 / 專用機台 / 價格
@@ -14055,6 +14349,7 @@ function openPartModal(d_id) {
         document.getElementById('pf-Customer_Id').value = '';
         _specSuggestLast = '';
         (function(){ var _sr=document.getElementById('spec-suggest-row'); if(_sr) _sr.style.display='none'; })();
+        clearToolSpecForm();
         document.getElementById('pf-customer-display').value = '';
         document.getElementById('pf-cust-hint').textContent = '';
         document.getElementById('gear-section').style.display = 'none';
@@ -14117,7 +14412,8 @@ function submitPartForm() {
         aliases:      JSON.stringify(syncAliasesHidden()),
         vendor_map:         (document.getElementById('pf-vendor-map')||{value:'[]'}).value,
         dedicated_part_map: (document.getElementById('pf-dedicated-part-map')||{value:'[]'}).value,
-        machine_map:        (document.getElementById('pf-machine-map')||{value:'[]'}).value
+        machine_map:        (document.getElementById('pf-machine-map')||{value:'[]'}).value,
+        tool_spec:          JSON.stringify(collectToolSpec())
     };
     if (!data.D_Setting_Id) { showToast('料號不可為空','error'); return; }
     if (!data.Customer_Id) { showToast('客戶為必填欄位','error'); var _ce=document.getElementById('pf-customer-display'); if(_ce){_ce.focus();_ce.select();} return; }
@@ -14326,6 +14622,7 @@ document.getElementById('pf-customer-display').addEventListener('input', functio
         document.getElementById('pf-Customer_Id').value = '';
         _specSuggestLast = '';
         (function(){ var _sr=document.getElementById('spec-suggest-row'); if(_sr) _sr.style.display='none'; })();
+        clearToolSpecForm();
         document.getElementById('pf-cust-hint').textContent = '';
         return;
     }
