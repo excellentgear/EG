@@ -36,9 +36,10 @@ define('EG_ASDOC_PAGE_BASE', '/EGsystem/views/');
 function eg_asdoc_page_map(PDO $db, array $opt = []): array {
     $skip = array_flip((array)($opt['skip_sources'] ?? []));
     $out  = [];
-    $put  = function (int $docId, string $name, string $url, string $src, string $mod = '') use (&$out, $skip) {
+    // $permUrl＝「權限要照哪一頁算」，只有在連結目標本身沒登記進選單時才需要（見 order_change）
+    $put  = function (int $docId, string $name, string $url, string $src, string $mod = '', string $permUrl = '') use (&$out, $skip) {
         if ($docId <= 0 || $url === '' || isset($skip[$src])) { return; }
-        $out[$docId] = ['name' => $name, 'url' => $url, 'source' => $src, 'module' => $mod];
+        $out[$docId] = ['name' => $name, 'url' => $url, 'source' => $src, 'module' => $mod, 'perm_url' => $permUrl];
     };
     // 'ADM/xxx.php' => /EGsystem/views/ADM/xxx.php；'../src/store/xxx.php' => /EGsystem/src/store/xxx.php
     $U = function (string $rel) {
@@ -79,7 +80,9 @@ function eg_asdoc_page_map(PDO $db, array $opt = []): array {
         ['ss', 'vendor_roster_as_doc_id',     '供應商稽核管理 · 合格供應商清冊',     'pm/vendor_audit.php'],
         ['ss', 'vendor_eval_as_doc_id',       '供應商稽核管理 · 定期評核表',         'pm/vendor_audit.php'],
         ['ss', 'vendor_plan_as_doc_id',       '供應商稽核管理 · 供應商稽核計劃',     'pm/vendor_audit.php'],
-        ['ss', 'as_doc_tree_print_as_doc_id', 'AS文件審核樹 · 列印版',               'ADM/as_tree_approval_view.php'],
+        // 文件管制總覽表＝AS 文件管理「結構總覽」跳窗印出來的，故連到本頁並自動開啟該跳窗。
+        // （不可連 as_tree_approval_view.php——那是送審通知點進去的核准檢視頁，沒帶 approval_id 會顯示「找不到這筆送審內容」）
+        ['ss', 'as_doc_tree_print_as_doc_id', 'AS 文件管理 · 結構總覽（文件管制總覽表）', 'ADM/as_document_management.php?tree=1'],
         ['ss', 'qc_inspection_as_doc_id',     '線上檢驗記錄表',                      'QC/inspection_entry_v2.php'],
         ['ss', 'training_as_doc_plan',        '教育訓練 · 訓練計劃表',               'ADM/training_record.php'],
         ['ss', 'training_as_doc_result',      '教育訓練 · 訓練成果表',               'ADM/training_record.php'],
@@ -107,6 +110,7 @@ function eg_asdoc_page_map(PDO $db, array $opt = []): array {
     }
 
     // ④ 統一綁定庫 AS_DOC_BIND：整個 group 動態掃描，新模組綁定後自動出現。
+    //    格式：模組代碼 => [用途, 頁面, (選填)權限參考頁]。
     //    這裡只維護「模組代碼 → 用途／頁面」的名稱對照；忘了補也不會漏判「已綁定」，
     //    只是查不到對應頁面時不給連結（寧可不連，也不要連到錯的頁面）。
     $LABELS = [
@@ -114,10 +118,10 @@ function eg_asdoc_page_map(PDO $db, array $opt = []): array {
         'meeting_record'        => ['會議管理 · 會議紀錄表',         'ADM/meeting_record.php'],
         'part_process_report'   => ['零件製程報告',                  'Sales/part_process_report.php'],
         'process_report_query'  => ['製程報告查詢',                  'pm/process_report_query.php'],
-        // 訂單變更做在 views/Sales/NewOrder_Track.php 裡面，但那支要帶訂單才進得去、也沒登記進選單，
-        // 故一律指向選單上的入口「未交訂單」（＝與使用者從選單點進去完全一樣的路徑）
-        'order_change'          => ['訂單變更 · 變更單（未交訂單內）',   '../src/store/_cleanNewOrder_Track.php'],
-        'order_change_history'  => ['訂單變更 · 歷史清單（未交訂單內）', '../src/store/_cleanNewOrder_Track.php'],
+        // 訂單變更做在 views/Sales/NewOrder_Track.php（裸開得起來），但那支沒登記進選單，
+        // 所以權限改照選單上的入口「未交訂單」算＝第三個元素（不然沒有依據，會變成人人看得到連結）。
+        'order_change'          => ['訂單變更 · 變更單',   'Sales/NewOrder_Track.php', '../src/store/_cleanNewOrder_Track.php'],
+        'order_change_history'  => ['訂單變更 · 歷史清單', 'Sales/NewOrder_Track.php', '../src/store/_cleanNewOrder_Track.php'],
         'hr_form_job_desc'      => ['職務說明書',                    'ADM/hr_position_forms.php'],
         'hr_form_skill_assess'  => ['專業技能鑑定考核表',            'ADM/hr_position_forms.php'],
         'hr_form_competency'    => ['職能鑑定表',                    'ADM/hr_position_forms.php'],
@@ -160,7 +164,7 @@ function eg_asdoc_page_map(PDO $db, array $opt = []): array {
                 continue;
             }
             $lb = $LABELS[$key] ?? null;
-            if ($lb) { $put($did, $lb[0], $U($lb[1]), 'bind', $key); }
+            if ($lb) { $put($did, $lb[0], $U($lb[1]), 'bind', $key, isset($lb[2]) ? $U($lb[2]) : ''); }
             else     { $put($did, $key, '', 'bind', $key); }   // 沒登記名稱對照＝不知道是哪一頁，不給連結
         }
     } catch (Throwable $e) { error_log('asdoc_page_map bind: ' . $e->getMessage()); }

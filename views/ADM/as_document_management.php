@@ -3418,6 +3418,9 @@ $(function(){
   // init
   // 外部帶入定位：?kw=文件編號（AS流程說明手冊的「到文件管理」鈕用；也可直接複製網址分享單一文件）
   (function(){ var kw = new URLSearchParams(location.search).get('kw'); if (kw) { $('#searchKw').val(kw); } })();
+  // ?tree=1＝直接開「結構總覽」（文件管制總覽表就是這個跳窗印出來的，
+  //   清單/流程說明手冊的「網頁」連結會帶這個參數進來）
+  if (new URLSearchParams(location.search).get('tree') === '1') { setTimeout(function(){ $('#btnTree').click(); }, 300); }
   loadMeta(loadDocs);
   loadWebPages();   // 「網頁」欄（清單與結構總覽共用一份，載入完會自己補畫）
 });

@@ -8,6 +8,7 @@ header('Content-Type: application/json; charset=utf-8');
 
 $document_root = $_SERVER['DOCUMENT_ROOT'];
 session_start();
+require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離職/留停者一律 403）
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
@@ -1318,8 +1319,10 @@ case 'tree_web_pages':
     $pmap = eg_asdoc_page_map($db, ['skip_sources' => ['form_signer']]);
     $outp = [];
     foreach ($pmap as $did => $m) {
-        $can = eg_asdoc_page_registered($db, $m['url'])
-             ? eg_asdoc_page_can_open($db, $currentUserId, $m['url'])
+        // 權限看 perm_url（連結目標沒登記進選單時才會有），否則看連結本身
+        $ptarget = ($m['perm_url'] ?? '') !== '' ? $m['perm_url'] : $m['url'];
+        $can = eg_asdoc_page_registered($db, $ptarget)
+             ? eg_asdoc_page_can_open($db, $currentUserId, $ptarget)
              : asCan('view');
         $outp[(string)$did] = ['name' => $m['name'], 'can' => $can ? 1 : 0]
                             + ($can ? ['url' => $m['url']] : []);
