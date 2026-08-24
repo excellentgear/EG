@@ -1,0 +1,4 @@
+# hook 腳本一律保持 LF 換行。
+# 本專案 core.autocrlf=true，若讓 .sh 被轉成 CRLF，bash 會因為行尾的 \r 執行失敗，
+# 而失敗的 PreToolUse hook 是「放行」不是「擋下」——防線會默默失效。
+*.sh text eol=lf
