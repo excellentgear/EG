@@ -3993,6 +3993,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
 
+    // ── 規格建議：同客戶＋料號開頭相近的既有規格 ─────────────────────────
+    // 使用者要求（2026-08-24）：新增/編輯料號時自動帶出可選的規格，點了還能自己改。
+    // 前綴由長到短逐步放寬，找到有結果就停，避免「只打兩碼就撈到一堆不相干的」。
+    if ($_POST['action'] === 'spec_suggest') {
+        try {
+            $partNo = trim($_POST['part_no'] ?? '');
+            $custId = trim($_POST['customer_id'] ?? '');
+            $selfId = intval($_POST['d_id'] ?? 0);
+            $out    = ['success'=>true, 'data'=>[], 'prefix'=>'', 'scope'=>''];
+            $partNo = preg_replace('/\s+/u', '', $partNo);
+            if ($partNo === '' && $custId === '') { echo json_encode($out); exit; }
+
+            $run = function($prefix, $useCust) use ($pdo, $custId, $selfId) {
+                $sql = "SELECT Spec_No, COUNT(*) AS n FROM d_setting
+                        WHERE Spec_No IS NOT NULL AND Spec_No <> ''";
+                $prm = [];
+                if ($prefix !== '') { $sql .= " AND D_Setting_Id LIKE ?"; $prm[] = $prefix.'%'; }
+                if ($useCust && $custId !== '') { $sql .= " AND Customer_Id = ?"; $prm[] = $custId; }
+                if ($selfId > 0) { $sql .= " AND d_id <> ?"; $prm[] = $selfId; }
+                $sql .= " GROUP BY Spec_No ORDER BY n DESC, Spec_No ASC LIMIT 8";
+                $st = $pdo->prepare($sql); $st->execute($prm);
+                return $st->fetchAll(PDO::FETCH_ASSOC);
+            };
+
+            // ① 同客戶 ＋ 料號前綴（由長到短，最短 3 碼）
+            if ($custId !== '' && mb_strlen($partNo) >= 3) {
+                for ($len = mb_strlen($partNo); $len >= 3; $len--) {
+                    $pfx  = mb_substr($partNo, 0, $len);
+                    $rows = $run($pfx, true);
+                    if ($rows) { $out['data']=$rows; $out['prefix']=$pfx; $out['scope']='同客戶．料號 '.$pfx.'*'; break; }
+                }
+            }
+            // ② 退而求其次：同客戶（不看料號）
+            if (!$out['data'] && $custId !== '') {
+                $rows = $run('', true);
+                if ($rows) { $out['data']=$rows; $out['scope']='同客戶'; }
+            }
+            // ③ 再退：只看料號前綴（沒選客戶時也走這條）
+            if (!$out['data'] && mb_strlen($partNo) >= 3) {
+                for ($len = mb_strlen($partNo); $len >= 3; $len--) {
+                    $pfx  = mb_substr($partNo, 0, $len);
+                    $rows = $run($pfx, false);
+                    if ($rows) { $out['data']=$rows; $out['prefix']=$pfx; $out['scope']='料號 '.$pfx.'*'; break; }
+                }
+            }
+            echo json_encode($out, JSON_UNESCAPED_UNICODE);
+        } catch(Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
     if ($_POST['action'] === 'manage_gear_types') {
         try {
             $op = $_POST['op'];
@@ -7060,6 +7110,10 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <div class="row">
     <div class="col-md-12">
         <div id="spec-quick-btns-row" style="display:none;flex-wrap:wrap;gap:4px;padding-top:2px;"></div>
+        <!-- 規格建議：同客戶＋料號開頭相近的既有規格，點了直接帶入仍可自行修改 -->
+        <div id="spec-suggest-row" style="display:none;align-items:center;flex-wrap:wrap;gap:4px;padding-top:4px;">
+            <span id="spec-suggest-hint" style="font-size:11px;color:#8a6d3b;"></span>
+        </div>
     </div>
 </div>
 <div class="row">
@@ -9173,6 +9227,11 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<!-- 2026-08-24 使用者要求「輸入框內按 Enter 要自動跳下一個輸入框」。
+     本頁原本只對料號 modal 的 6 個欄位自刻了 Enter 跳欄，其餘欄位按 Enter 沒反應。
+     依 CLAUDE.md UI 規則改載共用檔（禁止各頁自刻）；共用檔有 e.defaultPrevented 防護，
+     與本頁既有的 keydown 處理可並存不會跳兩欄。 -->
+<script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_ack_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ack_picker.js') ?>"></script>
 <script src="../../resource/js/o3dv.min.js"></script>
 
@@ -13930,6 +13989,7 @@ function openPartModal(d_id) {
             if (cpBtn)   cpBtn.style.display   = '';
             fillAliasRows(d.aliases || []);
             document.getElementById('pf-Customer_Id').value    = d.Customer_Id||'';
+            _specSuggestLast = ''; scheduleSpecSuggest();
             document.getElementById('pf-customer-display').value = d.client_name ? (d.client_name+' ('+d.Customer_Id+')') : (d.Customer_Id||'');
             document.getElementById('pf-cust-hint').textContent = d.Customer_Id ? ('目前綁定：'+d.Customer_Id) : '';
             // Gear
@@ -13967,6 +14027,8 @@ function openPartModal(d_id) {
         pfAcReset();   // 清空 廠商 / 專用料號 / 專用機台 / 價格
         _loadPartTypeOptions('N', function(){ onTypeChange('N'); });
         document.getElementById('pf-Customer_Id').value = '';
+        _specSuggestLast = '';
+        (function(){ var _sr=document.getElementById('spec-suggest-row'); if(_sr) _sr.style.display='none'; })();
         document.getElementById('pf-customer-display').value = '';
         document.getElementById('pf-cust-hint').textContent = '';
         document.getElementById('gear-section').style.display = 'none';
@@ -14236,6 +14298,8 @@ document.getElementById('pf-customer-display').addEventListener('input', functio
     if (!kw) {
         dd.style.display='none';
         document.getElementById('pf-Customer_Id').value = '';
+        _specSuggestLast = '';
+        (function(){ var _sr=document.getElementById('spec-suggest-row'); if(_sr) _sr.style.display='none'; })();
         document.getElementById('pf-cust-hint').textContent = '';
         return;
     }
@@ -14259,6 +14323,7 @@ document.addEventListener('click', function(e) {
 });
 function selectCust(id, name) {
     document.getElementById('pf-Customer_Id').value = id;
+    scheduleSpecSuggest();
     document.getElementById('pf-customer-display').value = name + ' (' + id + ')';
     document.getElementById('pf-cust-hint').textContent = '已選擇：' + id;
     document.getElementById('pf-customer-dropdown').style.display='none';
@@ -23058,6 +23123,10 @@ $(function() {
         if (next) { next.focus(); if (next.select) next.select(); }
     });
 
+    // ── 規格建議：料號打字時重算（250ms 去抖）───────────────────────
+    var _pfPartNoEl = document.getElementById('pf-D_Setting_Id');
+    if (_pfPartNoEl) _pfPartNoEl.addEventListener('input', scheduleSpecSuggest);
+
     // ── 規格快速按鈕初始化 ───────────────────────────────────────────
     loadSpecBtns();
 
@@ -23145,6 +23214,53 @@ function renderSpecBtns() {
         row.appendChild(btn);
     });
     row.style.display = hasAny ? 'flex' : 'none';
+}
+
+var _specSuggestTimer = null;
+var _specSuggestLast   = '';
+
+/** 依「目前料號＋已選客戶」抓既有規格當建議；點了帶入，之後仍可自行修改 */
+function loadSpecSuggest() {
+    var row = document.getElementById('spec-suggest-row');
+    if (!row) return;
+    var partNo = (document.getElementById('pf-D_Setting_Id')||{value:''}).value.trim();
+    var custId = (document.getElementById('pf-Customer_Id')||{value:''}).value.trim();
+    var selfId = parseInt((document.getElementById('pf-d_id')||{value:'0'}).value || '0', 10);
+    var key = partNo + '' + custId;
+    if (key === _specSuggestLast) return;      // 條件沒變就不重打 API
+    _specSuggestLast = key;
+    if (partNo.length < 3 && !custId) { row.style.display = 'none'; return; }
+
+    api({ action:'spec_suggest', part_no:partNo, customer_id:custId, d_id:selfId }).done(function(r) {
+        var hint = document.getElementById('spec-suggest-hint');
+        row.innerHTML = '';
+        row.appendChild(hint);
+        if (!r || !r.success || !r.data || !r.data.length) { row.style.display = 'none'; return; }
+        hint.textContent = '建議規格（' + (r.scope||'') + '）：';
+        r.data.forEach(function(it) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = it.Spec_No + (parseInt(it.n,10) > 1 ? ' ×' + it.n : '');
+            btn.title = '點選帶入「' + it.Spec_No + '」，帶入後仍可自行修改';
+            btn.style.cssText = 'padding:2px 10px;font-size:12px;background:#FFF3E2;border:1px solid #E4D3BC;color:#8a5a12;border-radius:3px;cursor:pointer;';
+            btn.addEventListener('mouseover', function(){ this.style.background='#F0A24B'; this.style.color='#fff'; });
+            btn.addEventListener('mouseout',  function(){ this.style.background='#FFF3E2'; this.style.color='#8a5a12'; });
+            btn.addEventListener('click', function(){
+                var el = document.getElementById('pf-Spec_No');
+                if (!el) return;
+                el.value = it.Spec_No;      // 帶入＝取代，使用者仍可直接在欄位裡改
+                el.focus();
+                try { el.select(); } catch(err) {}
+            });
+            row.appendChild(btn);
+        });
+        row.style.display = 'flex';
+    });
+}
+
+function scheduleSpecSuggest() {
+    clearTimeout(_specSuggestTimer);
+    _specSuggestTimer = setTimeout(loadSpecSuggest, 250);
 }
 
 function appendSpecQuickBtn(text) {

@@ -48,7 +48,6 @@ views/news/KPI_setting.php
 views/pages/TGok.php
 views/pages/calendar.php
 views/pages/change_log.php
-views/pages/master_data_management.php
 views/pages/purchase_request.php
 views/pages/roster.php
 views/pages/stock.php
