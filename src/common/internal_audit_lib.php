@@ -1073,3 +1073,18 @@ function ia_attach_dir(PDO $db): string
     require_once __DIR__ . '/attach_lib.php';
     return eg_attach_dir($db, 'ia_attach_dir', '內部稽核');
 }
+
+/** 列印用的圖章模板（含 schema，前端 eg_stamp.js 要吃它才畫得出模板章） */
+function ia_stamp_template(PDO $db): ?array
+{
+    $id = (int)(ia_settings($db)['ia_stamp_tpl_id'] ?? 0);
+    if (!$id) return null;
+    try {
+        $st = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
+        $st->execute([$id]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return null;
+        return ['id' => (int)$r['id'], 'tpl_name' => $r['tpl_name'],
+                'schema' => json_decode((string)$r['schema_json'], true)];
+    } catch (Throwable $e) { return null; }
+}

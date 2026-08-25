@@ -1818,8 +1818,15 @@ var URL_SIGN_ID = (function(){
     var m = String(location.search||'').match(/[?&]sign=(\d+)/);
     return m ? parseInt(m[1], 10) : 0;
 })();
+/* ?id=meeting_id：由別的模組（目前是內部稽核的「建立事前／結束會議」）自動建好草稿後
+   新分頁直接開到那一筆。找不到就照常顯示清單，不要卡在空白畫面。 */
+var URL_OPEN_ID = (function(){
+    var m = String(location.search||'').match(/[?&]id=(\d+)/);
+    return m ? parseInt(m[1], 10) : 0;
+})();
 loadMeta(function(){
     loadList();
+    if (!URL_SIGN_ID && URL_OPEN_ID) { openEdit(URL_OPEN_ID); return; }
     if (URL_SIGN_ID) {
         openView(URL_SIGN_ID);
         setTimeout(function(){

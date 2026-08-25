@@ -1185,14 +1185,7 @@ case 'print_meta': {
     $docNo = $docId ? eg_asdoc_no_asof_id($db, $docId, $biz) : $mod['fallback'];
 
     $set = ia_settings($db);
-    $tpl = null;
-    if ((string)$set['ia_stamp_tpl_id'] !== '') {
-        try {
-            $q = $db->prepare("SELECT id, tpl_name FROM stamp_template WHERE id=? AND is_active=1");
-            $q->execute([(int)$set['ia_stamp_tpl_id']]);
-            $tpl = $q->fetch(PDO::FETCH_ASSOC) ?: null;
-        } catch (Throwable $e) {}
-    }
+    $tpl = ia_stamp_template($db);          // 含 schema，前端 eg_stamp.js 要吃它才畫得出模板章
     $ctx = ['leader_id' => iaInt($_GET['leader_id'] ?? ''), 'leader_name' => (string)($_GET['leader_name'] ?? ''),
             'maker_id'  => iaInt($_GET['maker_id'] ?? ''),  'maker_name'  => (string)($_GET['maker_name'] ?? ''),
             'biz_date'  => $biz ?: $today];
@@ -1206,22 +1199,9 @@ case 'print_meta': {
     ]);
 }
 
-case 'print_log': {
-    // 列印紀錄（ai-rules/23 鐵則：會列印的頁面一律留下紀錄，且一次列印只記一筆）
-    $name = trim((string)($_POST['doc_name'] ?? ''));
-    if ($name === '') jerr('缺少文件名稱');
-    $id = eg_print_log_add($db, [
-        'source'    => 'internal_audit',
-        'doc_kind'  => 'form',
-        'ref_table' => (string)($_POST['ref_table'] ?? 'ia_case'),
-        'ref_id'    => (string)($_POST['ref_id'] ?? ''),
-        'doc_name'  => $name,
-        'note'      => (string)($_POST['note'] ?? ''),
-        'user_id'   => $uid,
-        'user_name' => $uname,
-    ]);
-    jout(['log_id' => $id]);
-}
+/* 列印紀錄不在這裡自己寫一支：一律走共用的 EGPrintLog.record() → PrintSignLog_API，
+   來源代碼 'internal_audit' 已登錄在 print_log_lib.php 的 eg_print_sources()（ai-rules/23）。
+   兩條寫入路徑＝同一次列印可能記兩筆，故刻意不留。 */
 
 /* ============================ 儀表板（首頁分頁用） ============================ */
 case 'dashboard': {

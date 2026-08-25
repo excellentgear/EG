@@ -208,6 +208,7 @@ if (!function_exists('eg_print_sources')) {
             'bom_viewer'     => ['label' => 'BOM 檢視器－附件',   'page' => 'views/pm/bom_viewer.php',              'kind' => 'attachment'],
             'part_viewer'    => ['label' => '料號檢視器－附件',   'page' => 'views/pm/part_viewer.php',             'kind' => 'attachment'],
             'image_editor'   => ['label' => '批圖編輯器',         'page' => 'views/Sales/image_editor.php',         'kind' => 'attachment'],
+            'internal_audit' => ['label' => '內部稽核－各式表單', 'page' => 'views/ADM/internal_audit.php',         'kind' => 'form'],
         ];
     }
 }
