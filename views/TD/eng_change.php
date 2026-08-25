@@ -283,10 +283,14 @@ $openId = (int)($_GET['id'] ?? 0);
             <div class="fld" style="margin-top:6px;"><label>1. 庫存舊料</label><div id="e_oldstock"></div><div class="err"></div></div>
             <div class="fld" style="margin-top:6px;"><label>設計分析補充</label>
                 <textarea id="e_design_note" class="form-control" rows="2"></textarea></div>
-            <div id="e_review_pick" style="margin-top:8px;display:none;">
-                <label style="font-size:12px;color:#7A4A12;font-weight:600;">需要哪些單位會審
-                    <small style="font-weight:normal;color:#aaa;">（選「需修改圖面與會審」時才要勾）</small></label>
+            <div id="e_review_pick" style="margin-top:10px;display:none;border:1px solid #E8D5B5;
+                 border-radius:6px;padding:8px 10px;background:#FFF7E8;">
+                <label style="font-size:12px;color:#7A4A12;font-weight:600;margin-bottom:2px;">
+                    需要哪些單位會審　<small style="font-weight:normal;color:#8a6d45;">（由技術課決定，可複選）</small></label>
+                <div id="e_review_hint" style="font-size:11px;color:#8a6d45;margin-bottom:4px;"></div>
                 <div id="e_review_units"></div>
+                <div id="e_review_err" style="font-size:11px;color:#DD5138;margin-top:3px;display:none;">
+                    選了「需修改圖面與會審」就要勾選至少一個會審單位</div>
             </div>
         </div></div>
 
@@ -514,7 +518,7 @@ var API   = '../../src/store/EngChange_API.php';
 var CSRF  = '';
 var DICT  = null, PERMS = null, ME = null, SETTINGS = null, AS_DOC = null;
 var ROWS = [], PAGE = 1, PER = 20;
-var CUR = null, CUR_REVIEWS = [], CUR_UNIT = '';
+var CUR = null, CUR_REVIEWS = [], CUR_UNIT = '', CUR_CAN_TD = false;
 var PART_CACHE = {};
 
 function esc(s){ return $('<div>').text(s == null ? '' : s).html(); }
@@ -704,7 +708,11 @@ function applyStageUI(d, signers){
     $('#e_stock_qty,#e_wip_qty').prop('disabled', !canWH);
     $('input[name=design],input[name=oldstock],.rv-need').prop('disabled', !canTD);
     $('#e_design_note').prop('disabled', !canTD);
-    $('#e_review_pick').toggle(canTD || d.design_result === 'need_review');
+    // 這一區一律顯示給「填得了技術課那一段」的人，不隨 radio 開開關關——
+    // 整區消失會讓人以為系統沒有這個功能（使用者實際回報過）。
+    CUR_CAN_TD = canTD;
+    $('#e_review_pick').toggle(canTD || d.design_result === 'need_review' || hasNeeded());
+    syncReviewPick();
     $('input[name=verdict]').prop('disabled', !canAP);
     $('#e_verdict_other,#e_verdict_note').prop('disabled', !canAP);
     $('#e_ctrl_drawing,#e_ctrl_bom,#e_ctrl_manual').prop('disabled', !canCT);
@@ -905,8 +913,32 @@ $('input[name=verdict]').on('change', function(){
 $(document).on('change', 'input[name=verdict]', function(){
     $('#e_verdict_other_wrap').toggle($('input[name=verdict]:checked').val() === 'other');
 });
-$(document).on('change', 'input[name=design]', function(){
-    $('#e_review_pick').toggle($('input[name=design]:checked').val() === 'need_review');
+$(document).on('change', 'input[name=design]', function(){ syncReviewPick(); });
+/** 目前這張單有沒有已經被勾為「需會審」的單位 */
+function hasNeeded(){ return (CUR_REVIEWS || []).some(function(x){ return x.needed; }); }
+/**
+ * 會簽單位區塊的狀態（使用者回報「技術課人員開立單據但無法選擇需會簽單位」後改）：
+ *   選「需修改圖面與會審」→ 可勾選
+ *   選「僅修改圖面（修改後結案）」→ 反灰＋說明為什麼不用勾（不是整區消失）
+ *   還沒選 → 反灰＋提示先選上面的設計分析結果
+ */
+function syncReviewPick(){
+    var canEdit = CUR_CAN_TD;
+    var v = $('input[name=design]:checked').val() || '';
+    var on = canEdit && v === 'need_review';
+    $('.rv-need').prop('disabled', !on);
+    $('#e_review_pick').css('opacity', on ? '1' : '.6');
+    $('#e_review_hint').text(
+        !canEdit ? '（只有技術課的人員可以決定要找哪些單位會審）'
+        : v === 'need_review' ? '請勾選這次要通知哪些單位會審——只有被勾的單位會收到通知並需要簽，沒勾的不必簽也不會卡住流程。'
+        : v === 'drawing_only' ? '目前選的是「僅修改圖面（修改後結案）」，不需要任何單位會審。要會審請改選上面的「需修改圖面與會審」。'
+        : '請先在上面選擇設計分析結果；選「需修改圖面與會審」才需要勾選會審單位。');
+    // 改選「僅修改圖面」時把已勾的清掉，免得存下去變成「不需會審卻留著一堆勾選」
+    if (v !== 'need_review') $('.rv-need').prop('checked', false);
+    $('#e_review_err').toggle(on && $('.rv-need:checked').length === 0);
+}
+$(document).on('change', '.rv-need', function(){
+    $('#e_review_err').toggle($('.rv-need:checked').length === 0);
 });
 
 /* ── 前端即時驗證（後端 ec_validate 會用同一套規則再擋一次＝鐵律8） ── */
