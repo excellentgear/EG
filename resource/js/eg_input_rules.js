@@ -101,8 +101,15 @@
         if (!isTexty(el) || skipped(el)) return;
         if (el.tagName.toLowerCase() === 'select') return;
         if (el.value === '' || el.value == null) return;
-        // number/date 等型別部分瀏覽器不支援 select()，包 try 即可
-        setTimeout(function () { try { el.select(); } catch (err) {} }, 0);
+        // number/date 等型別部分瀏覽器不支援 select()，包 try 即可。
+        // ※ 一定要再確認焦點還在這個欄位上：這支 select() 是延後執行的，
+        //   若這段空檔裡焦點已經被移到別的欄位（例如規則 6 按 ↓ 自動加一列後把游標移到新列），
+        //   在 Chrome 對「沒有焦點的 input」呼叫 select() 會把焦點搶回來，
+        //   使用者看到的症狀是「按了 ↓ 有加列、游標卻彈回原本那一列」。
+        setTimeout(function () {
+            if (document.activeElement !== el) return;
+            try { el.select(); } catch (err) {}
+        }, 0);
     });
 
     /* ── 規則 3/4：Enter 跳欄、表格內 ↑↓ 換列 ─────────────────────────── */
