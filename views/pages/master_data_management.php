@@ -18717,8 +18717,15 @@ function _pavRenderList() {
     var cats = _attachCatsCache || [];
     var catMap = {};
     cats.forEach(function(c){ catMap[String(c.id)] = c.category_name; });
-    var html = '';
+    // ── 相簿列（2026-08-25 使用者回報：停在「全部」分頁看不到相簿）──────────
+    // 相簿標籤（產品照片等）的照片在這裡也收成相簿資料夾排在最上面，
+    // 不再一列一個檔名混在其他附件裡；其餘附件照舊逐列顯示。
+    var albumBuilt = { head:'', rows:'' };
+    var hasAlbumFile = files.some(_pavIsAlbumFile);
+    if (hasAlbumFile) albumBuilt = _pavAlbumRowsHtml(_pavAlbumGroups(), { skipEmpty:true, noCreateBtn:true });
+    var html = albumBuilt.rows;
     files.forEach(function(f, idx) {
+        if (hasAlbumFile && _pavIsAlbumFile(f)) return;   // 已經收進上面的相簿列，不重複列一次
         var ext  = (f.filename||'').split('.').pop().toLowerCase();
         var icon = _fileIcon(ext);
         var name = escHtml(f.original_name || f.filename || '');
@@ -18766,8 +18773,18 @@ function _pavRenderList() {
         html += '</div>';
     });
     wrap.innerHTML = html;
-    // Auto-select first
-    if (files.length) pavSelectFile(0);
+    // 自動選第一筆：跳過已收進相簿的照片（那些要點相簿看九宮格，不是單張預覽）；
+    // 整批都是照片時就直接打開第一本相簿，不要停在「點擊左側檔案預覽」。
+    var firstPlain = -1;
+    for (var i = 0; i < files.length; i++) {
+        if (hasAlbumFile && _pavIsAlbumFile(files[i])) continue;
+        firstPlain = i; break;
+    }
+    if (firstPlain >= 0) pavSelectFile(firstPlain);
+    else if (albumBuilt.rows) {
+        var firstAlb = wrap.querySelector('.pav-album-item');
+        if (firstAlb) pavOpenAlbum(firstAlb.dataset.key);
+    }
 }
 
 /* ══ 附件相簿（2026-08-25 使用者要求）═══════════════════════════════════════
@@ -18780,16 +18797,29 @@ function _pavIsAlbumTab() {
         && String(_pav.catId).indexOf('__') !== 0
         && (_pav.albumCatIds||[]).indexOf(String(_pav.catId)) >= 0;
 }
-/** 目前這個標籤下的分組：{ key: {album:相簿或null, photos:[]} }，key='__none__' 是未分相簿 */
+/** 這個附件屬不屬於「以相簿檢視」的標籤（全部分頁要靠它把照片挑出來收成相簿） */
+function _pavIsAlbumFile(f) {
+    if (!f || f.source === 'quote' || !f.category_ids) return false;
+    var alb = _pav.albumCatIds || [];
+    if (!alb.length) return false;
+    return String(f.category_ids).split(',').some(function(c){ return alb.indexOf(c.trim()) >= 0; });
+}
+/**
+ * 目前分頁下的相簿分組：{ key: {album:相簿或null, photos:[]} }，key='__none__' 是未分相簿。
+ * 在相簿標籤的分頁＝該標籤的全部附件都算照片；在「全部」等其他分頁＝只挑出相簿標籤的附件
+ * （其餘附件照舊逐列顯示，不會被收進相簿）。
+ */
 function _pavAlbumGroups() {
     var groups = {}, order = [];
+    var onAlbumTab = _pavIsAlbumTab();
     (_pav.albums||[]).forEach(function(a) {
-        // 相簿掛在哪個標籤下就顯示在那個標籤（沒指定標籤的相簿一律顯示，免得建了卻找不到）
-        if (a.category_id && String(a.category_id) !== String(_pav.catId)) return;
+        // 相簿標籤的分頁只列該標籤的相簿；「全部」分頁一律全列（否則使用者在全部分頁看不到自己建的相簿）
+        if (onAlbumTab && a.category_id && String(a.category_id) !== String(_pav.catId)) return;
         groups[String(a.id)] = { album:a, photos:[] };
         order.push(String(a.id));
     });
     (_pav.filteredFiles||[]).forEach(function(f) {
+        if (!onAlbumTab && !_pavIsAlbumFile(f)) return;      // 全部分頁：只有相簿標籤的附件才收進相簿
         var k = f.album_id ? String(f.album_id) : '__none__';
         if (!groups[k]) { groups[k] = { album:null, photos:[] }; order.push(k); }   // 別的標籤建的相簿也照樣看得到
         groups[k].photos.push(f);
@@ -18812,24 +18842,26 @@ function _pavPhotoObjs(files) {
     });
 }
 
-function _pavRenderAlbumList() {
-    var wrap = document.getElementById('pav-file-list');
-    var g = _pavAlbumGroups();
+/** 相簿列（資料夾）的 HTML；相簿分頁與「全部」分頁共用同一份，避免兩邊長得不一樣 */
+function _pavAlbumRowsHtml(g, opt) {
+    opt = opt || {};
     var html = '';
-    if (_pav.canAlbumEdit) {
+    if (_pav.canAlbumEdit && !opt.noCreateBtn) {
         html += '<div style="padding:6px;border-bottom:1px solid #eee;background:#FFF9F0;">'
              +  '<button type="button" class="btn btn-xs btn-block" onclick="pavAlbumNew()" '
              +  'style="background:#F0A24B;color:#4A3524;border:1px solid #C77C1A;font-weight:700;">'
              +  '<i class="fa fa-plus"></i> 建立相簿</button></div>';
     }
+    var rows = '';
     g.order.forEach(function(k) {
         var grp = g.groups[k];
         var isNone = (k === '__none__');
         if (isNone && !grp.photos.length) return;      // 沒有零散照片就不用列這一列
-        var name  = isNone ? '未分相簿' : (grp.album ? grp.album.album_name : ('相簿 #' + k));
+        if (opt.skipEmpty && !grp.photos.length) return;
+        var name  = isNone ? (opt.noneLabel || '未分相簿') : (grp.album ? grp.album.album_name : ('相簿 #' + k));
         var cover = grp.photos.length ? EGAlbum.thumb(grp.photos[0].url, 120) : '';
         var on    = (String(_pav.albumKey) === k);
-        html += '<div class="pav-album-item" data-key="'+escHtml(k)+'" onclick="pavOpenAlbum(\'' + escHtml(k) + '\')" '
+        rows += '<div class="pav-album-item" data-key="'+escHtml(k)+'" onclick="pavOpenAlbum(\'' + escHtml(k) + '\')" '
              +  'style="display:flex;gap:7px;align-items:center;padding:6px 8px;cursor:pointer;border-bottom:1px solid #f0f0f0;'
              +  (on ? 'background:#FFF3E2;border-left:3px solid #F0A24B;' : '') + '">'
              +  (cover
@@ -18843,7 +18875,15 @@ function _pavRenderAlbumList() {
              +      (grp.album && grp.album.created_by ? ' · ' + escHtml(grp.album.created_by) : '') + '</div>'
              +  '</div></div>';
     });
-    if (!html) html = '<div style="color:#aaa;font-size:12px;text-align:center;padding:24px;"><i class="fa fa-picture-o"></i><br>此標籤還沒有照片</div>';
+    return { head:html, rows:rows };
+}
+
+function _pavRenderAlbumList() {
+    var wrap = document.getElementById('pav-file-list');
+    var g = _pavAlbumGroups();
+    var built = _pavAlbumRowsHtml(g);
+    var html = built.head + built.rows;
+    if (!built.rows) html = '<div style="color:#aaa;font-size:12px;text-align:center;padding:24px;"><i class="fa fa-picture-o"></i><br>此標籤還沒有照片</div>';
     wrap.innerHTML = html;
     // 預設開第一本（沿用清單「自動選第一筆」的既有習慣）
     var keys = g.order.filter(function(k){ return k !== '__none__' || g.groups[k].photos.length; });
@@ -19088,6 +19128,9 @@ function pavSelectFile(idx) {
     });
     var sel = document.querySelector('.pav-file-item[data-idx="'+idx+'"]');
     if (sel) sel.style.background = isObsFile ? '#ffd5d5' : '#e8f4fd';
+    // 相簿列的反白要收掉，否則會變成「檔案跟相簿同時看起來是選中的」
+    document.querySelectorAll('.pav-album-item').forEach(function(el){ el.style.background=''; el.style.borderLeft=''; });
+    _pav.albumKey = null;
     // Action bar
     var actions = document.getElementById('pav-actions');
     if (actions) actions.style.display = '';
