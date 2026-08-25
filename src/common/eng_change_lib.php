@@ -1434,7 +1434,11 @@ function ec_print_meta(PDO $db, array $row): array
         if ($key === '') continue;                       // REVIEW 沒有單一簽章格
         $uid = (int)($row['sign_' . $key . '_id'] ?? 0);
         if (!$uid) { $signs[$key] = null; continue; }
-        $idt = ec_user_identity_asof($db, $uid, $date);
+        // 申請人那一格的部門要用**這張單填的申請單位**，不能讓它自己去挑職級最高的那個職務——
+        // 兼任的人（例：技術部工程師＋生管組組長）會被挑成生管組，印出來就跟表頭的申請單位對不起來
+        //（使用者實測回報：申請單位技術部、章卻印生管組）。
+        $prefer = ($key === 'applicant') ? (int)($row['apply_dept_id'] ?? 0) : 0;
+        $idt = ec_user_identity_asof($db, $uid, $date, $prefer);
         $signs[$key] = [
             'label'    => $label,
             'user_id'  => $uid,

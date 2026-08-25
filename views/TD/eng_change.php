@@ -259,7 +259,7 @@ $openId = (int)($_GET['id'] ?? 0);
         </div></div>
 
         <!-- 倉管：確認庫存 -->
-        <div class="sec"><div class="sh">確認庫存（倉管組）</div><div class="sb">
+        <div class="sec" data-stage="WH"><div class="sh">確認庫存（倉管組）</div><div class="sb">
             <div class="fgrid">
                 <div class="fld half"><label>庫存數量</label>
                     <input type="text" id="e_stock_qty" class="form-control">
@@ -278,7 +278,7 @@ $openId = (int)($_GET['id'] ?? 0);
         </div></div>
 
         <!-- 技術：設計分析 -->
-        <div class="sec"><div class="sh">設計分析（技術課）</div><div class="sb">
+        <div class="sec" data-stage="TD"><div class="sh">設計分析（技術課）</div><div class="sb">
             <div class="fld"><label>更新圖面需附上</label><div id="e_design"></div><div class="err"></div></div>
             <div class="fld" style="margin-top:6px;"><label>1. 庫存舊料</label><div id="e_oldstock"></div><div class="err"></div></div>
             <div class="fld" style="margin-top:6px;"><label>設計分析補充</label>
@@ -295,7 +295,7 @@ $openId = (int)($_GET['id'] ?? 0);
         </div></div>
 
         <!-- 核示 -->
-        <div class="sec"><div class="sh">核示</div><div class="sb">
+        <div class="sec" data-stage="APPROVE"><div class="sh">核示</div><div class="sb">
             <div class="fld"><label>核示結果</label><div id="e_verdict"></div><div class="err"></div></div>
             <div class="fld" style="margin-top:6px;display:none;" id="e_verdict_other_wrap"><label>其他（請說明）</label>
                 <input type="text" id="e_verdict_other" class="form-control"><div class="err"></div></div>
@@ -304,10 +304,10 @@ $openId = (int)($_GET['id'] ?? 0);
         </div></div>
 
         <!-- 會審 -->
-        <div class="sec" id="reviewSec"><div class="sh">相關單位會審</div><div class="sb" id="reviewBody"></div></div>
+        <div class="sec" id="reviewSec" data-stage="REVIEW"><div class="sh">相關單位會審</div><div class="sb" id="reviewBody"></div></div>
 
         <!-- 管制 -->
-        <div class="sec"><div class="sh">管制（技術課）</div><div class="sb">
+        <div class="sec" data-stage="CTRL"><div class="sh">管制（技術課）</div><div class="sb">
             <div class="fld"><label>需修改文件資料</label>
                 <label class="chk"><input type="checkbox" id="e_ctrl_drawing"> 圖面</label>
                 <label class="chk"><input type="checkbox" id="e_ctrl_bom"> BOM</label>
@@ -505,6 +505,10 @@ $openId = (int)($_GET['id'] ?? 0);
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
+<!-- ★eg_stamp_tpl.js 一定要跟著載：EGStamp.stamp() 內部是
+     `if (tplSchema && global.EGStampTpl) 用模板 else 用預設回墨印(圓章)`，
+     漏載它的話設定選了長方章、列印出來仍然是圓章，而且完全不報錯（實際踩過） -->
+<script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script>
@@ -566,7 +570,8 @@ $.getJSON(API, {action:'bootstrap'}, function(r){
     if (SETTINGS) buildSettings();
     loadList(function(){
         var openId = <?= (int)$openId ?>;
-        if (openId) openEc(openId);
+        // 帶 ?id= 進來（多半是從通知點進來的）就自動開啟並捲到目前這一關
+        if (openId) openEc(openId, true);
     });
 });
 
@@ -631,13 +636,27 @@ $('#f-kw').on('keydown', function(e){ if (e.which === 13) loadList(); });
 $('#f-status, #f-mine, #f-todo').on('change', function(){ loadList(); });
 
 /* ══════════════════ 明細 ══════════════════ */
-function openEc(id){
+function openEc(id, scrollToStage){
     $.getJSON(API, {action:'get', id:id}, function(r){
         if (!r.ok) return;
         CUR = r.row; CUR_REVIEWS = r.reviews || [];
         fillEc(r);
         openMask('ecMask');
+        // 從通知點進來時直接捲到「目前輪到的那一關」，不要讓人自己從頭找到底
+        //（使用者要求：點開通知要自動出現在核示位置）
+        if (scrollToStage) scrollToStageSec(r.row.status);
     });
+}
+function scrollToStageSec(stage){
+    var $sec = $('#ecMask .sec[data-stage="' + stage + '"]');
+    if (!$sec.length || $sec.is(':hidden')) return;
+    var $body = $('#ecMask .m-body');
+    setTimeout(function(){
+        $body.animate({ scrollTop: $body.scrollTop() + $sec.position().top - 8 }, 250);
+        // 閃一下讓人知道要看哪裡
+        $sec.css('box-shadow', '0 0 0 3px #F0A24B');
+        setTimeout(function(){ $sec.css('box-shadow', ''); }, 1600);
+    }, 250);
 }
 function fillEc(r){
     var d = r.row;
@@ -851,11 +870,15 @@ function setCustomer(row){
 function loadPeople(date, pickId, pickDept){
     var isAdmin = !!(PERMS && PERMS.canAdmin);
     if (!isAdmin) {
-        // 一般使用者：人固定是自己，只顯示不給選（後端 create/save 也會強制綁回本人）
+        // ★顯示的一律是「這張單的申請人」，不是正在看單的人。
+        //   之前寫成 ME.name，導致單位主管開別人的單要簽核時，申請人整格跳成他自己（使用者回報）。
+        //   只有「新開的單／自己的草稿」才會等於自己——那是後端強制綁定的結果，不是畫面猜的。
+        var who = pickId || ME.uid, whoName = (pickId && CUR && +CUR.applicant_id === +pickId)
+                ? (CUR.applicant_name || '') : ME.name;
         $('#e_applicant').hide();
-        $('#e_applicant_ro').show().val(ME.name);
-        $('#e_applicant_hint').text('（固定為你本人，不可更改）');
-        loadPosts(ME.uid, date, pickDept);
+        $('#e_applicant_ro').show().val(whoName);
+        $('#e_applicant_hint').text(+who === +ME.uid ? '（固定為你本人，不可更改）' : '（這張單的申請人）');
+        loadPosts(who, date, pickDept);
         return;
     }
     $('#e_applicant_ro').hide();
@@ -880,6 +903,13 @@ function loadPosts(userId, date, pickDept){
     $.getJSON(API, {action:'my_posts', user_id:userId, date:date}, function(r){
         if (!r.ok) return;
         var rows = r.rows || [];
+        // 一般使用者不能查別人的職務（後端會擋回自己）→ 看別人的單時直接顯示單上存的部門，不要顯示成自己的
+        if (+r.user_id !== +userId) {
+            s.append('<option value="' + (CUR ? (CUR.apply_dept_id || 0) : 0) + '">'
+                   + esc((CUR && CUR.apply_dept_name) || '（申請單位）') + '</option>');
+            s.prop('disabled', true);
+            return;
+        }
         if (!rows.length) {
             s.append('<option value="">（這個日期查不到職務紀錄）</option>');
             markErr('#e_post', '這個人在該日期沒有職務紀錄，請確認日期或到員工管理補登異動');
@@ -1311,6 +1341,8 @@ function printQueue(ids, i){
     if (i >= ids.length) return;
     $.getJSON(API, {action:'print_meta', id:ids[i]}, function(res){
         if (!res.ok) { printQueue(ids, i+1); return; }
+        // 圖章模板的 {公司} token 取自這個全域值，蓋章前要先設好
+        window.__ownCompany = (res.meta && res.meta.company) || window.__ownCompany || '';
         // 掃描實體章對照表是非同步載入的，沒等它的話有實體章的人會印成預設 SVG 章
         var go = function(){
             var w = window.open('', '_blank');
@@ -1366,22 +1398,35 @@ function printHtml(res){
         + 'html,body{margin:0;padding:0;}'
         + 'body{width:210mm;font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
         +   'padding:6mm 6mm 5mm;box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
-        + '.co{font-size:11pt;font-weight:bold;text-align:center;letter-spacing:2px;}'
+        + '.co{font-size:14pt;font-weight:bold;text-align:center;letter-spacing:3px;}'
         + '.co small{display:block;font-size:8pt;font-weight:normal;letter-spacing:0;}'
-        + '.tt{font-size:13.5pt;font-weight:bold;text-align:center;letter-spacing:6px;margin:1mm 0 0.5mm;}'
-        + '.ymd{text-align:right;font-size:9pt;margin-bottom:1mm;}'
+        + '.tt{font-size:19pt;font-weight:bold;text-align:center;letter-spacing:8px;margin:0.8mm 0 0.4mm;}'
+        + '.ymd{text-align:right;font-size:9pt;margin-bottom:0.6mm;}'
         + 'table{border-collapse:collapse;width:194mm;table-layout:fixed;}'
         + 'td,th{border:0.4mm solid #000;padding:0.6mm 1.2mm;font-size:9.5pt;vertical-align:middle;word-break:break-all;}'
         + '.lb{background:#F2F2F2;text-align:center;font-weight:bold;white-space:nowrap;}'
-        + '.lbs{background:#F2F2F2;text-align:center;font-weight:bold;font-size:8.5pt;line-height:1.2;}'
+        + '.lbs{background:#F2F2F2;text-align:center;font-weight:bold;font-size:8.5pt;line-height:1.25;'
+        /* 標籤只在我們自己放的 <br> 斷行，不讓瀏覽器把「(更新圖面需附上)」攔腰折成「…需附／上)」 */
+        +   'white-space:nowrap;word-break:keep-all;padding:0.6mm 0.4mm;}'
+        + '.lbs .sub{display:block;font-size:6.5pt;font-weight:normal;line-height:1.15;'
+        /* 附註是括號說明，允許自然折行；主標題那幾個字才維持 nowrap 不被攔腰折斷 */
+        +   'white-space:normal;word-break:break-all;margin-bottom:0.4mm;}'
         + '.sig{height:18mm;text-align:center;vertical-align:middle;padding:0.5mm;}'
         + '.opt{font-size:9pt;line-height:1.35;text-align:left;}'
-        + '.rvbody{font-size:7.5pt;line-height:1.3;text-align:left;height:10mm;vertical-align:top;padding:0.6mm 1.2mm;}'
+        + '.rvbody{font-size:7.5pt;line-height:1.28;text-align:left;height:9mm;vertical-align:top;padding:0.5mm 1.2mm;}'
         + '.rvname{width:22mm;text-align:center;font-size:9pt;background:#F2F2F2;font-weight:bold;}'
-        + '.rvsig{width:34mm;height:10mm;text-align:center;padding:0.5mm;}'
+        + '.rvsig{width:34mm;height:9mm;text-align:center;padding:0.5mm;}'
         + '.op{display:block;margin-top:0.6mm;}'
-        + '.flow{font-size:8pt;text-align:left;line-height:1.3;}'
-        + '.ft{display:flex;justify-content:space-between;font-size:8pt;margin-top:1.5mm;}'
+        + '.flow{font-size:7.5pt;line-height:1.3;letter-spacing:1px;'
+        /* 直書（紙本就是靠右直式標註）：vertical-rl＝文字由上往下、欄由右往左。
+           ★這裡絕對不能加 white-space:nowrap——垂直模式下它代表「整串不換欄」，
+             會把整列撐成一頁高（實測踩過）。用 max-height 限制欄高讓它自然折欄。 */
+        +   'writing-mode:vertical-rl;text-orientation:upright;'
+        +   'max-height:15mm;display:inline-block;}'
+        + '.flowcell{text-align:right;vertical-align:middle;padding:1mm 1.5mm 1mm 0.5mm;}'
+        + '.ft{font-size:8pt;margin-top:1.5mm;}'
+        /* AS 文件編號固定在頁面實際右下角（ai-rules/16 第三節：不可用 inline，內容短時會離右下角很遠） */
+        + '.as-doc-fixed{position:fixed;right:6mm;bottom:5mm;font-size:8pt;}'
         + '.divider{text-align:center;font-size:8.5pt;font-weight:bold;margin:0.8mm 0 0.4mm;}'
         /* 一列會審不要被切成兩半跨頁（內容特別多時的保險） */
         + 'tr{page-break-inside:avoid;}';
@@ -1409,21 +1454,21 @@ function printHtml(res){
         +       box(ct === 'other') + ' 其他變更(請於設變事由說明內詳述)</td>'
         +     '<td class="lbs">申請人</td><td class="sig">' + sg('applicant') + '</td></tr>'
         + '<tr><td class="lbs">單位主管</td><td class="sig">' + sg('sup') + '</td></tr>'
-        + '<tr><td class="lbs">(僅其他變更須填寫)<br>設變事由說明</td>'
+        + '<tr><td class="lbs"><span class="sub">(僅其他變更須填寫)</span>設變事由說明</td>'
         +     '<td class="opt" style="height:12mm;vertical-align:top;">' + esc(d.change_reason || '').replace(/\n/g, '<br>') + '</td>'
-        +     '<td class="lbs" colspan="2"><span class="flow">流程：<br>申請單位↓倉管↓技術<br>↓其他單位(僅需會審者)↓技術</span></td></tr>'
+        +     '<td class="flowcell" colspan="2"><span class="flow">流程：申請單位↓倉管↓技術↓其他單位(僅需會審者)↓技術</span></td></tr>'
         + '</table>'
 
         // 確認庫存（倉管組）
         + '<table><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
-        + '<tr><td class="lbs">確認<br>庫存</td>'
+        + '<tr><td class="lbs">確認庫存</td>'
         +     '<td class="opt">庫存數量：' + esc(d.stock_qty || '') + '<br>已完工待入庫數量：' + esc(d.wip_qty || '') + '</td>'
         +     '<td class="lbs">倉管組</td><td class="sig">' + sg('wh') + '</td></tr>'
         + '</table>'
 
         // 設計分析（技術課）＋ 庫存舊料
         + '<table><colgroup><col style="width:22mm"><col style="width:116mm"><col style="width:22mm"><col style="width:34mm"></colgroup>'
-        + '<tr><td class="lbs">(更新圖面需附上)<br>設計分析</td>'
+        + '<tr><td class="lbs"><span class="sub">(更新圖面需附上)</span>設計分析</td>'
         +     '<td class="opt">' + box(dr === 'drawing_only') + ' 僅修改圖面(修改後結案)<br>'
         +       box(dr === 'need_review') + ' 需修改圖面與會審(單據續跑，下方需勾選)'
         +       (d.design_note ? '<br>' + esc(d.design_note) : '') + '</td>'
@@ -1457,8 +1502,8 @@ function printHtml(res){
         +     '<td class="lbs">管制員</td><td class="sig">' + sg('ctrl') + '</td></tr>'
         + '</table>'
 
-        + '<div class="ft"><span>※此表單底稿由技術課存查　※文件編號以西元年月日加流水號，例如：20220101001</span>'
-        +   '<span>' + esc(m.as_doc_no || '') + '</span></div>'
+        + '<div class="ft">※此表單底稿由技術課存查　※文件編號以西元年月日加流水號，例如：20220101001</div>'
+        + (m.as_doc_no ? '<div class="as-doc-fixed">' + esc(m.as_doc_no) + '</div>' : '')
         // 頁碼左下角、且「多頁才顯示」（ai-rules/16）：CSS 無法依 counter(pages) 條件顯示，
         // 改由列印視窗自己量高度，真的超過一頁才注入 @bottom-left。
         + '<script>window.onload=function(){'
