@@ -149,7 +149,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
         // 附件清單（支援多筆 d_id）
         $ph = implode(',', array_fill(0, count($dids), '?'));
         $stmt = $pdo2->prepare("SELECT pa.id, pa.d_id, pa.filename, pa.original_name, pa.category_ids, pa.file_size, pa.note,
-            pa.revision, pa.issue_stamp_date,
+            pa.revision, pa.issue_stamp_date, pa.album_id,
             COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by, pa.uploaded_at
             FROM part_attachments pa
             LEFT JOIN user u ON u.id = pa.uploaded_by_id
@@ -171,6 +171,13 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 if (!empty($c['is_own_drawing'])) $ownDrawCats[(int)$c['id']] = true;
             }
         } catch (Exception $_e) {}
+        // 相簿（產品照片這類標籤）：判定與相簿清單一律走共用庫 photo_album_lib，
+        // 不在本頁再掃一次綁定（兩邊各刻一份必定走鐘＝鐵律4）
+        require_once __DIR__ . '/../../src/common/photo_album_lib.php';
+        $albumCatIds = pa_album_cat_ids($pdo2);
+        $albums      = pa_album_list($pdo2, $dids);
+        $albumNameOf = [];
+        foreach ($albums as $a) $albumNameOf[(int)$a['id']] = $a['album_name'];
         $result = [];
         foreach ($rows as $r) {
             $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
@@ -206,6 +213,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 'revision'         => ($r['revision'] === null ? '' : (string)$r['revision']),
                 'issue_stamp_date' => $r['issue_stamp_date'] ?: '',
                 'is_own_drawing'   => $isOwnDraw ? 1 : 0,
+                // is_album＝此附件屬於「以相簿檢視」的標籤（標籤設定勾的，不寫死標籤名稱）
+                'is_album'         => pa_album_cat_of($r['category_ids'], $albumCatIds) > 0,
+                'album_id'         => $r['album_id'] ? (int)$r['album_id'] : 0,
+                'album_name'       => ($r['album_id'] && isset($albumNameOf[(int)$r['album_id']])) ? $albumNameOf[(int)$r['album_id']] : '',
                 'bind_from'      => $bindLabelByDid[(int)$r['d_id']] ?? null,
                 'source'         => 'other',
             ];
@@ -276,7 +287,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 }
             }
         } catch (Exception $_e) {}
-        echo json_encode(['success' => true, 'attachments' => $result]);
+        echo json_encode(['success' => true, 'attachments' => $result, 'albums' => $albums], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
@@ -702,6 +713,8 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
             <div id="img-zoom-wrap"><img id="bom-zoom-img" src="" alt=""></div>
             <iframe id="bom-pdf-frame" src="" allowfullscreen></iframe>
             <div id="bom-quote-detail" style="display:none;position:absolute;inset:0;overflow:auto;background:#fff;"></div>
+            <!-- 照片相簿的九宮格（點縮圖可放大；元件為三頁共用的 eg_photo_album.js）-->
+            <div id="album-grid-wrap" style="display:none;position:absolute;inset:0;overflow:auto;background:#fff;"></div>
             <div id="viewer-placeholder"><i class="fa fa-arrow-left"></i> 從左側選擇檔案</div>
         </div>
     </div>
@@ -761,6 +774,8 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<!-- 照片相簿：九宮格＋點開放大（三頁共用同一份，禁止各頁自刻）-->
+<script src="../../resource/js/eg_photo_album.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_photo_album.js') ?>"></script>
 <script>
 var _bom        = <?= json_encode($bom) ?>;
 var _mode       = <?= json_encode($mode) ?>;   // 'bom' | 'did'
@@ -806,7 +821,7 @@ function showFile(path, type, name) {
         : path;
 
     $('#viewer-title').text(_currentName);
-    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder, #bom-quote-detail').hide();
+    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder, #bom-quote-detail, #album-grid-wrap').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
     resetTransform();
 
@@ -1061,7 +1076,7 @@ $(document).on('click', '.bom-file-item', function(e) {
 // 訂單附件與報價資料自 2026-08 起合併為單一「訂單／報價」分頁：以訂單為主要分組，
 // 若訂單來源是報價單（order_track.quote_no）則該報價單巢狀顯示在該訂單底下；
 // 尚未轉單的報價單仍獨立列出。詳見 buildOrderQuoteGroups()/renderOrderQuoteTab()。
-var _tabData    = { drawing: null, other: [], quote: [], quoteSummaries: {}, order_attach: [] };
+var _tabData    = { drawing: null, other: [], quote: [], quoteSummaries: {}, order_attach: [], albums: [] };
 var _tabEnabled = { drawing: true, other: (_mode === 'did' && _canOther), order_attach: (_mode === 'did' && (_canOrder || _canQuote)) };
 var _activeTab  = 'drawing';
 var _tabMeta = {
@@ -1112,6 +1127,61 @@ function makeItem(f, active) {
         +'<p class="list-group-item-text">'+label+escapeHtml(displayName)+bindTag+'</p></a>';
 }
 
+/* ── 照片相簿（2026-08-25 使用者要求）─────────────────────────────────────
+   產品照片這種一次好幾十張的附件，清單一列一個檔名根本看不出誰是誰：
+   改成左側列相簿（資料夾）、右側九宮格，點任何一張都能放大並左右換張。
+   九宮格與放大檢視走共用元件 eg_photo_album.js（與料號主檔附件跳窗同一份）。 */
+var _albumPhotos = {};      // key(相簿id或'__none__') -> {name, photos:[]}
+
+/** 把附件陣列中屬於相簿標籤的挑出來分組，回傳相簿列的 HTML（其餘附件照舊逐列顯示） */
+function buildAlbumRows(atts) {
+    _albumPhotos = {};
+    var order = [];
+    (_tabData.albums || []).forEach(function(a) {
+        _albumPhotos[String(a.id)] = { name: a.album_name, photos: [] };
+        order.push(String(a.id));
+    });
+    atts.forEach(function(att) {
+        if (!att.is_album) return;
+        var k = att.album_id ? String(att.album_id) : '__none__';
+        if (!_albumPhotos[k]) { _albumPhotos[k] = { name: (att.album_name || '相簿'), photos: [] }; order.push(k); }
+        _albumPhotos[k].photos.push({ id: att.id, url: att.url, name: att.display_name,
+                                      uploaded_at: dispDate(att.uploaded_at, true), uploaded_by: att.uploaded_by });
+    });
+    order = order.filter(function(k){ return k !== '__none__'; }).concat(['__none__']);
+    var html = '';
+    order.forEach(function(k) {
+        var g = _albumPhotos[k];
+        if (!g || !g.photos.length) return;      // 空相簿在唯讀檢視頁不用列
+        html += '<a href="#" class="list-group-item att-album-item" data-album="' + escapeHtml(k) + '">'
+             +  '<p class="list-group-item-text" style="margin:0;display:flex;align-items:center;gap:7px;">'
+             +  '<img src="' + escapeHtml(EGAlbum.thumb(g.photos[0].url, 120)) + '" style="width:38px;height:38px;object-fit:cover;border-radius:4px;border:1px solid #E4D3BC;background:#f4f5f7;">'
+             +  '<span style="flex:1;min-width:0;">'
+             +    '<span style="display:block;font-weight:600;color:#5B4526;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+             +      '<i class="fa fa-' + (k === '__none__' ? 'inbox' : 'folder') + '" style="color:#F0A24B;margin-right:3px;"></i>'
+             +      escapeHtml(k === '__none__' ? '未分相簿' : g.name) + '</span>'
+             +    '<small style="color:#aaa;font-size:10px;">' + g.photos.length + ' 張照片 · 點開看九宮格</small>'
+             +  '</span></p></a>';
+    });
+    return html;
+}
+$(document).on('click', '.att-album-item', function(e) {
+    e.preventDefault();
+    $('.bom-file-item, .att-album-item').removeClass('active');
+    $(this).addClass('active');
+    showAlbumGrid($(this).data('album'));
+});
+function showAlbumGrid(key) {
+    var g = _albumPhotos[String(key)];
+    if (!g) return;
+    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder, #bom-quote-detail').hide();
+    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
+    $('#viewer-content .bom-obsolete-overlay').remove();
+    $('#viewer-title').text((key === '__none__' ? '未分相簿' : g.name) + '（' + g.photos.length + ' 張）');
+    $('#album-grid-wrap').show();
+    EGAlbum.grid('album-grid-wrap', g.photos, { onOpen: function(i) { EGAlbum.viewer(g.photos, i); } });
+}
+
 // 附件（報價/其他）項目
 // showSource=true 時前面加上來源徽章（訂單/報價/其他）：跨分頁全域標籤篩選結果用，
 // 平常各分頁自己顯示時不需要（同分頁內來源已經很清楚）
@@ -1160,7 +1230,7 @@ function makeAttItem(att, showSource) {
 }
 
 function showEmpty(msg) {
-    $('#img-zoom-wrap, #bom-pdf-frame, #bom-quote-detail').hide();
+    $('#img-zoom-wrap, #bom-pdf-frame, #bom-quote-detail, #album-grid-wrap').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
     $('#viewer-content .bom-obsolete-overlay').remove();
     $('#viewer-title').text('');
@@ -1209,13 +1279,22 @@ function renderAttList(tab) {
         $('#bom-file-list').html('<div class="alert alert-warning" style="margin:10px;">'+msg+'</div>');
         showEmpty(msg); return;
     }
-    var html = '';
-    arr.forEach(function(att) { html += makeAttItem(att); });
+    // 相簿標籤（產品照片等）的照片收成相簿列排在最上面，其餘附件照舊逐列顯示
+    var html = buildAlbumRows(arr);
+    var plain = arr.filter(function(att){ return !att.is_album; });
+    plain.forEach(function(att) { html += makeAttItem(att); });
     $('#bom-file-list').html(html);
-    var f0 = arr[0];
-    $('#bom-file-list .bom-file-item').first().addClass('active');
-    showFile(f0.url, f0.ext, f0.display_name);
-    applyObsoleteOverlay((f0.category_names || []).indexOf('作廢') >= 0);
+    if (plain.length) {
+        var f0 = plain[0];
+        $('#bom-file-list .bom-file-item').first().addClass('active');
+        showFile(f0.url, f0.ext, f0.display_name);
+        applyObsoleteOverlay((f0.category_names || []).indexOf('作廢') >= 0);
+    } else {
+        // 整個分頁都是照片時，直接打開第一本相簿（不要停在「從左側選擇檔案」）
+        var first = $('#bom-file-list .att-album-item').first();
+        if (first.length) { first.addClass('active'); showAlbumGrid(first.data('album')); }
+        else showEmpty('無其他附件');
+    }
 }
 
 // ── 訂單／報價分頁：以訂單為主分組，訂單來源報價單(order_track.quote_no)巢狀顯示於該訂單底下；
@@ -1535,7 +1614,8 @@ function loadDidMode() {
     // 其他附件
     if (_tabEnabled.other) {
         $.post('', { action: 'get_attachments_by_did', d_id: _d_id }, function(res) {
-            _tabData.other = (res && res.success && res.attachments) ? res.attachments : [];
+            _tabData.other   = (res && res.success && res.attachments) ? res.attachments : [];
+            _tabData.albums  = (res && res.albums) ? res.albums : [];   // 相簿清單（產品照片等標籤用）
         }, 'json').always(function() { renderTabbar(); done(); });
     }
     // 訂單／報價合併分頁：訂單附件（_canOrder）＋報價附件/明細（_canQuote，get_quote_summaries 以文字料號跨客戶查）

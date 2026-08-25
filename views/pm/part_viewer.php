@@ -172,7 +172,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
         // 附件連結改走 Part_Attachment_API 的 download（見下方），不再需要 part_attach_url_dir 前綴
         // 附件清單（支援多筆 d_id）
         $ph = implode(',', array_fill(0, count($dids), '?'));
-        $stmt = $pdo2->prepare("SELECT pa.id, pa.d_id, pa.filename, pa.original_name, pa.category_ids, pa.file_size, pa.note,
+        $stmt = $pdo2->prepare("SELECT pa.id, pa.d_id, pa.filename, pa.original_name, pa.category_ids, pa.file_size, pa.note, pa.album_id,
             COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by, pa.uploaded_at
             FROM part_attachments pa
             LEFT JOIN user u ON u.id = pa.uploaded_by_id
@@ -190,6 +190,13 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
             $cStmt = $pdo2->query("SELECT id, category_name FROM quotation_file_categories WHERE is_active = 1");
             foreach ($cStmt->fetchAll(PDO::FETCH_ASSOC) as $c) $cats[(int)$c['id']] = $c['category_name'];
         } catch (Exception $_e) {}
+        // 相簿（產品照片這類標籤）：哪些標籤走相簿、這些料號有哪些相簿，
+        // 判定走共用庫 photo_album_lib（三頁同一份來源，禁止各頁再掃一次）
+        require_once __DIR__ . '/../../src/common/photo_album_lib.php';
+        $albumCatIds = pa_album_cat_ids($pdo2);
+        $albums      = pa_album_list($pdo2, $dids);
+        $albumNameOf = [];
+        foreach ($albums as $a) $albumNameOf[(int)$a['id']] = $a['album_name'];
         $result = [];
         foreach ($rows as $r) {
             $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
@@ -209,6 +216,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
             $result[] = [
                 'id'             => (int)$r['id'],
                 'filename'       => $r['filename'],
+                // is_album＝這張附件屬於「以相簿檢視」的標籤（由標籤設定勾選，不寫死標籤名稱）
+                'is_album'       => pa_album_cat_of($r['category_ids'], $albumCatIds) > 0,
+                'album_id'       => $r['album_id'] ? (int)$r['album_id'] : 0,
+                'album_name'     => ($r['album_id'] && isset($albumNameOf[(int)$r['album_id']])) ? $albumNameOf[(int)$r['album_id']] : '',
                 'display_name'   => $r['original_name'] ?: $r['filename'],
                 'url'            => $fileUrl,
                 'ext'            => $ext,
@@ -220,7 +231,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 'category_names' => $catNames,
             ];
         }
-        echo json_encode(['success' => true, 'attachments' => $result]);
+        echo json_encode(['success' => true, 'attachments' => $result, 'albums' => $albums], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
@@ -358,6 +369,8 @@ $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
             <div id="img-zoom-wrap"><img id="bom-zoom-img" src="" alt=""></div>
             <iframe id="bom-pdf-frame" src="" allowfullscreen></iframe>
             <div id="viewer-placeholder"><i class="fa fa-arrow-left"></i> 從左側選擇檔案</div>
+            <!-- 照片相簿的九宮格（點縮圖可放大；元件為三頁共用的 eg_photo_album.js）-->
+            <div id="album-grid-wrap" style="display:none;position:absolute;inset:0;overflow:auto;background:#fff;"></div>
         </div>
     </div>
 </div>
@@ -415,6 +428,8 @@ $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
 <script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
+<!-- 照片相簿：九宮格＋點開放大（三頁共用同一份，禁止各頁自刻）-->
+<script src="../../resource/js/eg_photo_album.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_photo_album.js') ?>"></script>
 <script>
 var _bom        = <?= json_encode($bom) ?>;    // 指定的單一 BOM 名稱
 var _mode       = 'did';
@@ -444,7 +459,7 @@ function showFile(path, type, name) {
     var _isImg = ['jpg','jpeg','png','gif','bmp'].indexOf(_currentType) !== -1;
 
     $('#viewer-title').text(_currentName);
-    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder').hide();
+    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder, #album-grid-wrap').hide();
     $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
     resetTransform();
 
@@ -466,6 +481,26 @@ function showFile(path, type, name) {
         $('#btn-save').show();
     }
     if (_isPaintable) { $('#btn-paint').show(); }
+}
+
+/* ── 照片相簿（2026-08-25）：左側點相簿 → 右側九宮格 → 點縮圖放大 ─────────
+   九宮格與放大檢視走共用元件 eg_photo_album.js，與料號主檔附件跳窗同一份 */
+var _albumPhotos = {};
+$(document).on('click', '.att-album-item', function(e) {
+    e.preventDefault();
+    $('.bom-file-item, .att-album-item').removeClass('active');
+    $(this).addClass('active');
+    showAlbumGrid($(this).data('album'));
+});
+function showAlbumGrid(key) {
+    var g = _albumPhotos[String(key)];
+    if (!g) return;
+    _currentPath = ''; _currentName = '';
+    $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder').hide();
+    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
+    $('#viewer-title').text((key === '__none__' ? '未分相簿' : g.name) + '（' + g.photos.length + ' 張）');
+    $('#album-grid-wrap').show();
+    EGAlbum.grid('album-grid-wrap', g.photos, { onOpen: function(i) { EGAlbum.viewer(g.photos, i); } });
 }
 
 // ── 圖片縮放與拖曳 ────────────────────────────────────────────────────────
@@ -685,7 +720,36 @@ $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res)
                 + '<strong><i class="fa fa-paperclip"></i> 料號附件</strong>'
                 + '<small style="float:right;font-weight:normal;color:#5d6d7e;">' + attRes.attachments.length + ' 個</small>'
                 + '</li>';
+            // 相簿（產品照片等）：一張一列看不出誰是誰，改列成相簿資料夾，點開右側九宮格
+            _albumPhotos = {};
+            var albumOrder = [];
+            (attRes.albums || []).forEach(function(a) {
+                _albumPhotos[String(a.id)] = { name: a.album_name, photos: [] };
+                albumOrder.push(String(a.id));
+            });
             attRes.attachments.forEach(function(att) {
+                if (!att.is_album) return;
+                var k = att.album_id ? String(att.album_id) : '__none__';
+                if (!_albumPhotos[k]) { _albumPhotos[k] = { name: (k === '__none__' ? '未分相簿' : (att.album_name || '相簿')), photos: [] }; albumOrder.push(k); }
+                _albumPhotos[k].photos.push({ id: att.id, url: att.url, name: att.display_name,
+                                              uploaded_at: att.uploaded_at, uploaded_by: att.uploaded_by });
+            });
+            albumOrder = albumOrder.filter(function(k){ return k !== '__none__'; }).concat(['__none__']);
+            albumOrder.forEach(function(k) {
+                var g = _albumPhotos[k];
+                if (!g || !g.photos.length) return;          // 空相簿在唯讀頁不用列
+                attHtml += '<a href="#" class="list-group-item att-album-item" data-album="' + escapeHtml(k) + '">'
+                    + '<p class="list-group-item-text" style="margin:0;display:flex;align-items:center;gap:7px;">'
+                    + '<img src="' + escapeHtml(EGAlbum.thumb(g.photos[0].url, 120)) + '" style="width:38px;height:38px;object-fit:cover;border-radius:4px;border:1px solid #E4D3BC;background:#f4f5f7;">'
+                    + '<span style="flex:1;min-width:0;">'
+                    +   '<span style="display:block;font-weight:600;color:#5B4526;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+                    +     '<i class="fa fa-' + (k === '__none__' ? 'inbox' : 'folder') + '" style="color:#F0A24B;margin-right:3px;"></i>'
+                    +     escapeHtml(k === '__none__' ? '未分相簿' : g.name) + '</span>'
+                    +   '<small style="color:#aaa;font-size:10px;">' + g.photos.length + ' 張照片 · 點開看九宮格</small>'
+                    + '</span></p></a>';
+            });
+            attRes.attachments.forEach(function(att) {
+                if (att.is_album) return;                    // 已經歸到相簿列了，不重複列一次
                 var catBadges = '';
                 (att.category_names || []).forEach(function(cn) {
                     if (cn === '作廢') return; // 已由紅色 badge 顯示，不重複
