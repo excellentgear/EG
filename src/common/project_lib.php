@@ -152,6 +152,7 @@ function prj_ensure_schema(PDO $db): void
         plan_start   DATE NULL, plan_end DATE NULL COMMENT '預計（列印表的「預計」列）',
         act_start    DATE NULL, act_end  DATE NULL COMMENT '實際（列印表的「實際」列）',
         owner_id     INT NULL, owner_name VARCHAR(60) NULL COMMENT '負責人',
+        owner_dept_id INT NULL COMMENT '負責人是以「哪個部門的身分」被指派（先選部門再選人；兼任者靠這欄決定顯示哪個職稱）',
         progress     TINYINT NOT NULL DEFAULT 0 COMMENT '完成百分比 0~100',
         is_milestone TINYINT NOT NULL DEFAULT 0 COMMENT '1=里程碑（甘特上畫菱形）',
         tag_ids      VARCHAR(255) NULL,
@@ -284,6 +285,9 @@ function prj_ensure_schema(PDO $db): void
         created_by  VARCHAR(60) NULL, created_at DATETIME NULL,
         UNIQUE KEY uq_item (target, ds_pk)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='「有專案但未建立」的待建項目（供四頁偵測合併使用）'");
+
+    // 既有資料庫補欄位（可重複執行）
+    prj_ensure_col($db, 'project_task', 'owner_dept_id', "INT NULL COMMENT '負責人所屬部門（先選部門再選人）' AFTER owner_name");
 
     // 角色（比照 pfmea_lib 慣例自動建立；名稱之後可在角色管理改，這裡只保證存在）
     foreach ([['project_view', '專案檢閱'], ['project_edit', '專案登錄'], ['project_admin', '專案管理員']] as $r) {
@@ -609,6 +613,99 @@ function prj_tags_all(PDO $db, ?string $kind = null, bool $activeOnly = true): a
 }
 
 /** 逗號串 → id 陣列（唯一解析點，避免各處自己 explode 出錯） */
+/** 補欄位（欄位已存在就跳過；DDL 會隱式 commit，故一律在 transaction 之外呼叫） */
+function prj_ensure_col(PDO $db, string $table, string $col, string $ddl): void
+{
+    try {
+        $st = $db->prepare("SHOW COLUMNS FROM `$table` LIKE ?");
+        $st->execute([$col]);
+        if (!$st->fetchColumn()) $db->exec("ALTER TABLE `$table` ADD COLUMN `$col` $ddl");
+    } catch (Throwable $e) { /* 表還不存在時交給 CREATE TABLE 處理 */ }
+}
+
+/**
+ * 執行規劃表「負責人」可挑選的部門（模組設定，複選；空陣列＝不限制）。
+ * 只存管理員實際勾選的那幾個 id，子部門在使用時才展開（部門樹會變動，展開結果不存檔）。
+ */
+function prj_task_owner_depts(PDO $db): array
+{
+    $raw = prj_setting_get($db, 'task_owner_depts', '');
+    $out = [];
+    foreach (explode(',', $raw) as $v) { $v = (int)trim($v); if ($v > 0) $out[] = $v; }
+    return array_values(array_unique($out));
+}
+
+/** 部門 id 陣列 → 含所有子孫部門的 id 陣列（組織是樹狀的，只比單一 id 會漏掉底下的組） */
+function prj_dept_subtree(PDO $db, array $ids): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    if (!$ids) return [];
+    static $childMap = null;
+    if ($childMap === null) {
+        $childMap = [];
+        try {
+            foreach ($db->query("SELECT id, parent_id FROM department")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $childMap[(int)$r['parent_id']][] = (int)$r['id'];
+            }
+        } catch (Throwable $e) { $childMap = []; }
+    }
+    $out = [];
+    $queue = $ids;
+    $guard = 0;
+    while ($queue && $guard++ < 5000) {
+        $cur = array_shift($queue);
+        if (isset($out[$cur])) continue;
+        $out[$cur] = true;
+        foreach ($childMap[$cur] ?? [] as $c) $queue[] = $c;
+    }
+    return array_map('intval', array_keys($out));
+}
+
+/**
+ * 每個人「所有」的部門×職稱（兼任者會有多列）。
+ * eg_people_list() 一人只回一列（職級最高那筆），所以兼任的另一個職務在下拉裡看不到；
+ * 「先選部門再選人」要靠這份才能把人列在正確的部門底下、並顯示該部門的職稱。
+ * $userIds 一律傳 eg_people_list() 回來的 id（在職判定、離職排除都以那支為準，不在這裡另寫一套）。
+ */
+function prj_people_posts(PDO $db, array $userIds): array
+{
+    $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
+    if (!$userIds) return [];
+    $in = implode(',', $userIds);
+    $sql = "SELECT m.user_id, m.department_id AS dept_id, d.name AS dept_name,
+                   COALESCE(d.sort_order, 999) AS dept_sort,
+                   m.position_id, p.name AS position_name, COALESCE(p.sort_order, 999) AS position_sort,
+                   m.is_main
+            FROM user_department_position_map m
+            LEFT JOIN department d ON d.id = m.department_id
+            LEFT JOIN position   p ON p.id = m.position_id
+            WHERE m.user_id IN ($in)
+            ORDER BY dept_sort, position_sort, m.user_id";
+    $rows = [];
+    try { $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) { return []; }
+    foreach ($rows as &$r) {
+        $r['user_id']       = (int)$r['user_id'];
+        $r['dept_id']       = (int)$r['dept_id'];
+        $r['dept_sort']     = (int)$r['dept_sort'];
+        $r['position_id']   = $r['position_id'] === null ? null : (int)$r['position_id'];
+        $r['position_sort'] = (int)$r['position_sort'];
+        $r['is_main']       = (int)$r['is_main'];
+        $r['dept_name']     = $r['dept_name'] ?: '';
+        $r['position_name'] = $r['position_name'] ?: '';
+    }
+    unset($r);
+    return $rows;
+}
+
+/**
+ * 「實際開始／實際完成」現在可不可以填＝專案立案核准之後才可以（使用者拍板 2026-08-25）。
+ * 還在草稿／送簽中／被退回的專案只排預計日程，實際日期留到核准後執行時才填。
+ */
+function prj_act_dates_open(?array $prj): bool
+{
+    return in_array((string)($prj['status'] ?? ''), ['approved', 'closed'], true);
+}
+
 /** 常用語句清單（field 為 null＝全部欄位一起回） */
 function prj_phrases_all(PDO $db, ?string $field = null): array
 {

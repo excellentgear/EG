@@ -134,7 +134,9 @@ case 'meta':
     try { $ownerPeople = prj_owner_people($db, [], $uid, (bool)$P['canAdmin']); } catch (Throwable $e) { $ownerPeople = $people; }
     // 部門一律依 sort_order 由小到大（＝組織由上而下：董事長室→總經理室→生產部…→文管中心）。
     // 原本寫 DESC，畫面上的部門下拉會從文管中心倒著列，跟 ai-rules/08 鐵則6 的排序方向相反。
-    $depts = $db->query("SELECT id, name FROM department ORDER BY COALESCE(sort_order,999), name")->fetchAll(PDO::FETCH_ASSOC);
+    // parent_id／level 是給「先選部門再選人」展開子部門用的（組織是樹狀的，只比單一 id 會漏掉底下的組）
+    $depts = $db->query("SELECT id, name, parent_id, COALESCE(level,0) AS level, COALESCE(sort_order,999) AS sort_order
+                         FROM department ORDER BY COALESCE(sort_order,999), name")->fetchAll(PDO::FETCH_ASSOC);
     $positions = [];
     try { $positions = $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
     $custs = $db->query("SELECT customer_id, customer FROM customer_list
@@ -153,6 +155,10 @@ case 'meta':
         'doc_checks' => PRJ_DOC_CHECKS,
         'tags'       => prj_tags_all($db),
         'people'     => $people,
+        // 每人「所有」的部門×職稱：eg_people_list 一人只回一列（職級最高那筆），
+        // 兼任的另一個職務在下拉裡會看不到，執行規劃表的「先選部門再選人」要靠這份。
+        'people_posts'     => prj_people_posts($db, array_column($people, 'id')),
+        'task_owner_depts' => prj_task_owner_depts($db),
         'owner_people' => $ownerPeople,
         'owner_scope'  => prj_owner_scope_labeled($db),
         'owner_default'    => $uid,                    // 新專案／訂單轉專案的負責人預設＝目前使用者
@@ -196,6 +202,8 @@ case 'get':
         'alerts'    => prj_bom_alerts($db, $pid),
         'doc_check' => prj_doc_check($db, $pid),
         'can_edit'  => prj_can_edit_project($P, $prj),
+        // 實際開始／實際完成＝立案核准後才可填（使用者拍板）；前端反灰，後端 plan_save 同規則再擋一次
+        'act_open'  => prj_act_dates_open($prj),
         'can_approve' => prj_can_approve($db, $prj, $P),
     ]);
 
@@ -458,7 +466,17 @@ case 'part_search':
 /* ══════════════════════════ 目標與任務（執行規劃表） ══════════════════════════ */
 case 'plan_save':
     $pid = (int)($_POST['project_id'] ?? 0);
-    prj_need($db, $P, $pid, true);
+    $prjPlan = prj_need($db, $P, $pid, true);
+    // 立案核准前不接受「實際開始／實際完成」（前端已反灰，後端同規則再擋一次＝鐵律8）。
+    // 注意是「忽略送上來的值、保留資料庫原本的值」而不是寫成空白——
+    // 舊資料在這個規則之前就填過的實際日期不該因為存一次規劃表就被清掉。
+    $actOpen = prj_act_dates_open($prjPlan);
+    $actOld  = [];
+    if (!$actOpen) {
+        $stA = $db->prepare("SELECT task_id, act_start, act_end FROM project_task WHERE project_id=?");
+        $stA->execute([$pid]);
+        foreach ($stA->fetchAll(PDO::FETCH_ASSOC) as $rA) $actOld[(int)$rA['task_id']] = $rA;
+    }
     $goals = json_decode((string)($_POST['goals'] ?? '[]'), true) ?: [];
     $tasks = json_decode((string)($_POST['tasks'] ?? '[]'), true) ?: [];
     $err = prj_validate(['project_name' => 'x', 'project_type' => 'C', 'owner_id' => 1], $tasks);
@@ -522,11 +540,18 @@ case 'plan_save':
                 $st->execute([$ownerId]);
                 $ownerName = (string)$st->fetchColumn();
             }
+            $ownerDept = $ownerId ? ((int)($t['owner_dept_id'] ?? 0) ?: null) : null;
+            $actS = trim((string)($t['act_start'] ?? '')) ?: null;
+            $actE = trim((string)($t['act_end'] ?? '')) ?: null;
+            if (!$actOpen) {   // 核准前一律沿用資料庫原值（新任務＝空白）
+                $actS = $actOld[$tid]['act_start'] ?? null;
+                $actE = $actOld[$tid]['act_end'] ?? null;
+            }
             $args = [
                 (int)($t['goal_id'] ?? 0) ?: null, $name,
                 trim((string)($t['plan_start'] ?? '')) ?: null, trim((string)($t['plan_end'] ?? '')) ?: null,
-                trim((string)($t['act_start'] ?? '')) ?: null, trim((string)($t['act_end'] ?? '')) ?: null,
-                $ownerId, $ownerName,
+                $actS, $actE,
+                $ownerId, $ownerName, $ownerDept,
                 max(0, min(100, (int)($t['progress'] ?? 0))),
                 !empty($t['is_milestone']) ? 1 : 0,
                 prj_tag_csv(prj_tag_ids((string)($t['tag_ids'] ?? ''))),
@@ -534,14 +559,15 @@ case 'plan_save':
             ];
             if ($tid) {
                 $db->prepare("UPDATE project_task SET goal_id=?, task_name=?, plan_start=?, plan_end=?, act_start=?,
-                                    act_end=?, owner_id=?, owner_name=?, progress=?, is_milestone=?, tag_ids=?,
-                                    note=?, sort_order=?
+                                    act_end=?, owner_id=?, owner_name=?, owner_dept_id=?, progress=?, is_milestone=?,
+                                    tag_ids=?, note=?, sort_order=?
                               WHERE task_id=? AND project_id=?")
                    ->execute(array_merge($args, [$tid, $pid]));
             } else {
                 $db->prepare("INSERT INTO project_task (goal_id, task_name, plan_start, plan_end, act_start, act_end,
-                                    owner_id, owner_name, progress, is_milestone, tag_ids, note, sort_order, project_id)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                                    owner_id, owner_name, owner_dept_id, progress, is_milestone, tag_ids, note,
+                                    sort_order, project_id)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                    ->execute(array_merge($args, [$pid]));
                 $tid = (int)$db->lastInsertId();
             }
@@ -1010,6 +1036,7 @@ case 'setting_get':
         'plan_stamp_tpl_id'      => prj_setting_get($db, 'plan_stamp_tpl_id', '0'),
         'card_stamp_tpl_id'      => prj_setting_get($db, 'card_stamp_tpl_id', '0'),
         'owner_scope'            => prj_setting_get($db, 'owner_scope', ''),
+        'task_owner_depts'       => implode(',', prj_task_owner_depts($db)),
     ], 'owner_scope_rows' => prj_owner_scope_labeled($db)]);
 
 case 'setting_save':
@@ -1020,6 +1047,21 @@ case 'setting_save':
         if (!array_key_exists($k, $_POST)) continue;
         prj_setting_save($db, $k, trim((string)$_POST[$k]), $desc, $uname);
     }
+    // 執行規劃表負責人可挑選的部門（複選）：後端自己再正規化一次，不直接採信前端送來的字串
+    if (array_key_exists('task_owner_depts', $_POST)) {
+        $ids = [];
+        foreach (explode(',', (string)$_POST['task_owner_depts']) as $v) { $v = (int)trim($v); if ($v > 0) $ids[] = $v; }
+        $ids = array_values(array_unique($ids));
+        if ($ids) {
+            $in = implode(',', array_fill(0, count($ids), '?'));
+            $st = $db->prepare("SELECT id FROM department WHERE id IN ($in)");
+            $st->execute($ids);
+            // 已刪除的部門直接濾掉；順序以使用者送上來的為準（SELECT 回來的是資料表順序）
+            $exists = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+            $ids = array_values(array_filter($ids, static fn($x) => in_array($x, $exists, true)));
+        }
+        prj_setting_save($db, 'task_owner_depts', implode(',', $ids), '執行規劃表負責人可挑選的部門', $uname);
+    }
     // 專案負責人資格（部門×職稱）：後端自己再解析驗證一次，不直接採信前端送來的字串
     if (array_key_exists('owner_scope', $_POST)) {
         $scope = prj_owner_scope_parse((string)$_POST['owner_scope']);
@@ -1028,6 +1070,7 @@ case 'setting_save':
     }
     // 回傳兩份：owner_people＝目前這位管理員實際可挑的人；owner_scope_all＝純「資格」命中的全公司名單（設定畫面預覽用）
     jout(['message' => '已儲存設定', 'owner_scope_rows' => prj_owner_scope_labeled($db),
+          'task_owner_depts' => prj_task_owner_depts($db),
           'owner_people'    => prj_owner_people($db, [], $uid, (bool)$P['canAdmin']),
           'owner_scope_all' => prj_owner_scope_labeled($db) ? prj_owner_people($db) : null]);
 

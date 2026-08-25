@@ -625,17 +625,131 @@ function ganttRange(p, tasks) {
 }
 function dayDiff(a, b) { return (b - a) / 86400000; }
 
+/* ══ 執行規劃表的「負責人」：先選部門、再選人 ══════════════════════════
+   為什麼要兩層：eg_people_list() 一人只回一列（職級最高那筆），兼任的人在單一下拉裡
+   只會以其中一個職務出現＝「多職務者沒有完整呈現」；而且全公司的人擠在一個下拉裡也找不到人。
+   改成先選部門後，兼任者會在他掛的每個部門底下各自以「該部門的職稱」出現。
+   哪些部門會出現在部門下拉＝模組設定「執行規劃表負責人部門」（複選；一個都沒設＝全部部門）。 */
+function deptById(id) {
+    var hit = $.grep(META.depts || [], function (d) { return num(d.id) === num(id); });
+    return hit.length ? hit[0] : null;
+}
+function peopleById(id) {
+    var hit = $.grep(META.people || [], function (x) { return num(x.id) === num(id); });
+    return hit.length ? hit[0] : null;
+}
+/* 該部門＋所有子孫部門（組織是樹狀的，只比單一 id 會漏掉底下的組） */
+function deptSubtreeIds(deptId) {
+    var out = [num(deptId)], i = 0;
+    while (i < out.length && i < 500) {
+        var cur = out[i++];
+        $.each(META.depts || [], function (k, d) {
+            if (num(d.parent_id) === cur && $.inArray(num(d.id), out) < 0) out.push(num(d.id));
+        });
+    }
+    return out;
+}
+function taskDeptAllow() { return $.map(META.task_owner_depts || [], num); }
+/* 某個部門實際會出現在下拉裡的哪一列（子部門要換成被允許的上層部門） */
+function taskDeptPickable(deptId) {
+    var allow = taskDeptAllow();
+    if (!allow.length || $.inArray(num(deptId), allow) >= 0) return num(deptId);
+    for (var i = 0; i < allow.length; i++) {
+        if ($.inArray(num(deptId), deptSubtreeIds(allow[i])) >= 0) return allow[i];
+    }
+    return num(deptId);   // 不在允許範圍內（多半是舊資料）：taskDeptOptions 會把它額外列出來
+}
+function taskDeptOptions(curDeptId) {
+    var allow = taskDeptAllow();
+    var list = allow.length
+        ? $.grep(META.depts || [], function (d) { return $.inArray(num(d.id), allow) >= 0; })
+        : (META.depts || []).slice();
+    /* 舊資料的部門即使已不在允許清單內也要列出來，否則一打開就看不到原本設定的負責人 */
+    if (num(curDeptId) && !$.grep(list, function (d) { return num(d.id) === num(curDeptId); }).length) {
+        var d0 = deptById(curDeptId);
+        if (d0) list = [d0].concat(list);
+    }
+    var h = '<option value="">（請選部門）</option>';
+    $.each(list, function (i, d) {
+        h += '<option value="' + d.id + '"' + (num(curDeptId) === num(d.id) ? ' selected' : '') + '>' + esc(d.name) + '</option>';
+    });
+    return h;
+}
+/* 該部門（含子部門）底下的人；兼任者以「他在這個部門的職稱」呈現，同部門樹下有多個職務時取職級最高的 */
+function taskOwnerOptions(deptId, curOwnerId) {
+    var ids = deptSubtreeIds(deptId), byUser = {}, list = [];
+    if (num(deptId)) {
+        $.each(META.people_posts || [], function (i, ps) {
+            if ($.inArray(num(ps.dept_id), ids) < 0) return;
+            if (!peopleById(ps.user_id)) return;         // 在職判定一律以 people_lib 的清單為準
+            var cur = byUser[ps.user_id];
+            if (!cur || num(ps.position_sort) < num(cur.position_sort)) byUser[ps.user_id] = ps;
+        });
+        $.each(byUser, function (uid, ps) { list.push(ps); });
+        /* 欄位順序與排序鍵固定 部門/職稱/姓名（ai-rules/08 第五節鐵則6） */
+        list.sort(function (a, b) {
+            if (num(a.dept_sort) !== num(b.dept_sort)) return num(a.dept_sort) - num(b.dept_sort);
+            if (num(a.position_sort) !== num(b.position_sort)) return num(a.position_sort) - num(b.position_sort);
+            var an = (peopleById(a.user_id) || {}).user_cname || '', bn = (peopleById(b.user_id) || {}).user_cname || '';
+            return an < bn ? -1 : (an > bn ? 1 : 0);
+        });
+    }
+    var h = '<option value="">（未指定）</option>', has = false;
+    $.each(list, function (i, ps) {
+        var per = peopleById(ps.user_id) || {};
+        /* 部門下拉已經寫著部門，所以只有「其實在子部門」時才另外標出部門名稱 */
+        var label = (num(ps.dept_id) === num(deptId) ? '' : (ps.dept_name ? ps.dept_name + ' ' : ''))
+                  + (ps.position_name ? ps.position_name + ' ' : '') + (per.user_cname || '')
+                  + (per.leave_note ? '（' + per.leave_note + '）' : '');
+        if (num(ps.user_id) === num(curOwnerId)) has = true;
+        h += '<option value="' + ps.user_id + '"' + (num(ps.user_id) === num(curOwnerId) ? ' selected' : '') + '>'
+           + esc(label) + '</option>';
+    });
+    /* 目前這一列已指派的人若不在這個部門底下（改過部門、或人員異動），仍要保留，不可默默清空 */
+    if (num(curOwnerId) && !has) {
+        var cp = peopleById(curOwnerId);
+        h += '<option value="' + num(curOwnerId) + '" selected>'
+           + esc(cp ? peopleLabel(cp) : ('（已離職或已移除的人員 #' + num(curOwnerId) + '）')) + '</option>';
+    }
+    return h;
+}
+/* 舊任務沒存部門時，從這個人的職務推回一個部門（優先挑落在允許清單內的） */
+function guessOwnerDept(uid) {
+    if (!num(uid)) return 0;
+    var allow = taskDeptAllow(), allowAll = [];
+    $.each(allow, function (i, d) { allowAll = allowAll.concat(deptSubtreeIds(d)); });
+    var best = null, any = null;
+    $.each(META.people_posts || [], function (i, ps) {
+        if (num(ps.user_id) !== num(uid)) return;
+        if (!any || num(ps.position_sort) < num(any.position_sort)) any = ps;
+        if (allow.length && $.inArray(num(ps.dept_id), allowAll) < 0) return;
+        if (!best || num(ps.position_sort) < num(best.position_sort)) best = ps;
+    });
+    var pick = best || any;
+    return pick ? taskDeptPickable(pick.dept_id) : 0;
+}
+/* 長清單才長篩選框：兩個下拉都在表格儲存格裡，短清單再加篩選框只會讓每一列變高 */
+function filterAttr(optHtml, ph) {
+    return (optHtml.split('<option').length - 1) > 12 ? ' data-eg-filter="' + ph + '"' : '';
+}
+
 /* ── 規劃表編輯器（可增列表格：末列↓加列、空白末列↑移除＝共用檔規則） ── */
+var PLAN_ACT_OPEN = false;   // 實際開始／完成現在可不可以填（＝專案是否已立案核准）
+
 function drawPlanEditor(res) {
     var grouped = groupTasks(res.goals || [], res.tasks || []);
-    var ownerOpt = '<option value="">（未指定）</option>';
-    $.each(META.people || [], function (i, x) { ownerOpt += '<option value="' + x.id + '">' + esc(peopleLabel(x)) + '</option>'; });
+    PLAN_ACT_OPEN = !!res.act_open;
     var deptOpt = '<option value="">（無）</option>';
     $.each(META.depts || [], function (i, x) { deptOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
 
     var h = '<div class="sec"><h5>編排目標與主要任務</h5>'
       + '<p class="pj-hint">末列按 <b>↓</b> 自動加一列、沒填東西的末列按 <b>↑</b> 自動移除；'
-      + '任務改了日期，時間軸與管理卡的「目前應達成基準」都會跟著重算。</p>';
+      + '任務改了日期，時間軸與管理卡的「目前應達成基準」都會跟著重算。<br>'
+      + '負責人<b>先選部門、再選人</b>（兼任多個部門的人會在各部門底下分別以該部門的職稱出現）；'
+      + '部門清單由管理員在「模組設定 → 執行規劃表負責人部門」設定。</p>'
+      + (PLAN_ACT_OPEN ? ''
+          : '<p class="pj-hint" style="color:#C4442D;">「實際開始／實際完成」要等<b>立案核准</b>之後才能填'
+            + '（目前狀態：' + esc(STATUS_LABEL[res.project.status] || res.project.status) + '），此階段只排預計日程。</p>');
     if (!grouped.length) h += '<div class="pj-hint">還沒有目標，請按上方「新增目標」。</div>';
     $.each(grouped, function (gi, g) {
         h += '<div class="sec" data-goal="' + g.goal_id + '" data-gkey="g' + gi + '" style="background:#fff;">'
@@ -649,51 +763,85 @@ function drawPlanEditor(res) {
           + '<table class="sub-tbl"><thead><tr>'
           + '<th style="width:30px;">#</th><th>主要任務</th><th style="width:126px;">預計開始</th><th style="width:126px;">預計完成</th>'
           + '<th style="width:126px;">實際開始</th><th style="width:126px;">實際完成</th>'
-          + '<th style="width:150px;">負責人</th><th style="width:66px;">進度%</th>'
+          + '<th style="width:186px;">負責人（先選部門）</th><th style="width:66px;">進度%</th>'
           + '<th style="width:46px;">里程碑</th><th style="width:34px;"></th></tr></thead>'
           + '<tbody class="t-body" data-eg-row-add="planRowAdd" data-eg-row-del="planRowDel">';
         var list = g.tasks.length ? g.tasks : [{}];
-        $.each(list, function (ti, t) { h += planRowHtml(t, ti, ownerOpt); });
+        $.each(list, function (ti, t) { h += planRowHtml(t, ti); });
         h += '</tbody></table></div>';
     });
     h += '</div>';
     $('#planEditBox').html(h);
-    /* 部門/負責人下拉的選中值用 .val() 設，避免字串比對出錯 */
+    /* 目標的主辦單位下拉用 .val() 設，避免字串比對出錯（負責人兩個下拉已在建 option 時標好 selected） */
     $('#planEditBox .sec[data-goal]').each(function (gi) {
         var g = grouped[gi];
         if (!g) return;
         var $s = $(this).find('.g-dept');
         $s.find('option').each(function () { if ($(this).text() === g.dept_name) $s.val($(this).val()); });
-        $(this).find('.t-body tr').each(function (ti) {
-            var t = g.tasks[ti];
-            if (t) $(this).find('.t-owner').val(t.owner_id || '');
-        });
     });
 }
 
-function planRowHtml(t, i, ownerOpt) {
+function planRowHtml(t, i) {
     t = t || {};
+    var did = num(t.owner_dept_id) || guessOwnerDept(num(t.owner_id));
+    var dOpt = taskDeptOptions(did), pOpt = taskOwnerOptions(did, num(t.owner_id));
+    /* 實際日期在核准前反灰（後端 plan_save 也會忽略，不是只擋 UI＝鐵律8）。
+       ※ class 要併進同一個 class 屬性——寫成兩個 class="" 的話後面那個會被 HTML 解析器丟掉（灰底就不會出現）。 */
+    var actCls = PLAN_ACT_OPEN ? '' : ' ro-auto';
+    var actRo  = PLAN_ACT_OPEN ? '' : ' disabled title="立案核准後才能填實際日期"';
     return '<tr data-task="' + num(t.task_id) + '">'
       + '<td>' + (i + 1) + '</td>'
       + '<td><input type="text" class="t-name" value="' + esc(t.task_name || '') + '"></td>'
       + '<td><input type="date" class="t-ps" value="' + esc(t.plan_start || '') + '"></td>'
       + '<td><input type="date" class="t-pe" value="' + esc(t.plan_end || '') + '"></td>'
-      + '<td><input type="date" class="t-as" value="' + esc(t.act_start || '') + '"></td>'
-      + '<td><input type="date" class="t-ae" value="' + esc(t.act_end || '') + '"></td>'
-      + '<td><select class="t-owner" data-eg-filter="輸入姓名篩選…">' + ownerOpt + '</select></td>'
+      + '<td><input type="date" class="t-as' + actCls + '"' + actRo + ' value="' + esc(t.act_start || '') + '"></td>'
+      + '<td><input type="date" class="t-ae' + actCls + '"' + actRo + ' value="' + esc(t.act_end || '') + '"></td>'
+      + '<td><select class="t-odept"' + filterAttr(dOpt, '輸入部門名稱篩選…') + '>' + dOpt + '</select>'
+      + '<select class="t-owner" style="margin-top:3px;"' + filterAttr(pOpt, '輸入姓名篩選…') + '>' + pOpt + '</select></td>'
       + '<td><input type="number" class="t-pg" min="0" max="100" value="' + num(t.progress) + '"></td>'
       + '<td><input type="checkbox" class="t-ms" data-eg-skip="1"' + (num(t.is_milestone) ? ' checked' : '') + '></td>'
       + '<td><span class="pj-op t-del" title="刪除這一列">✕</span></td></tr>';
 }
 
-/* 共用檔 eg_input_rules.js 的可增列表格掛勾（禁各頁自刻增刪列邏輯） */
-function planRowAdd($tbody) {
-    var ownerOpt = $tbody.find('.t-owner').first().html() || '';
-    $tbody.append(planRowHtml({}, $tbody.find('tr').length, ownerOpt));
-    renumberPlan($tbody);
-    return $tbody.find('tr').last();
+/* 換部門就重建人員下拉（推導欄位鐵則：來源一改就重算；原本那個人若在新部門底下仍在就保留） */
+$(document).on('change', '#planEditBox .t-odept', function () {
+    var $td = $(this).closest('td'), $own = $td.find('.t-owner');
+    var el = $own[0];
+    if (!el) return;
+    var pOpt = taskOwnerOptions(num($(this).val()), num($own.val()));
+    el.innerHTML = pOpt;
+    /* 換掉整批選項後一定要讓共用檔的篩選框重新快照，否則它會拿舊清單把新選項洗掉
+       （eg_input_rules 規則7 提供的 egFilterResnap 就是給這種情況用的，不要自己動它的內部狀態） */
+    if (el.egFiltered) { if (el.egFilterResnap) el.egFilterResnap(); return; }
+    if ((pOpt.split('<option').length - 1) > 12) {
+        el.setAttribute('data-eg-filter', '輸入姓名篩選…');
+        if (window.egSelectFilterScan) window.egSelectFilterScan($td[0]);
+    }
+});
+
+/* 共用檔 eg_input_rules.js 的可增列表格掛勾（禁各頁自刻增刪列邏輯）
+   ※ 共用檔呼叫這兩支時「不帶參數」，所以要自己找出游標所在的那個 tbody
+     （本頁一個目標一張表，畫面上會有很多個 tbody）。
+     以前寫成 planRowAdd($tbody) 需要參數 → 呼叫時丟例外被共用檔的 try/catch 吃掉
+     ＝按 ↓↑ 完全沒有反應也不報錯。 */
+function planActiveTbody() {
+    var el = document.activeElement;
+    var tb = (el && el.closest) ? el.closest('#planEditBox tbody.t-body') : null;
+    return tb ? $(tb) : $('#planEditBox tbody.t-body').last();
 }
-function planRowDel($tr) {
+function planRowAdd() {
+    var $tbody = planActiveTbody();
+    if (!$tbody.length) return false;
+    $tbody.append(planRowHtml({}, $tbody.find('tr').length));
+    renumberPlan($tbody);
+    return true;
+}
+function planRowDel() {
+    var $tbody = planActiveTbody();
+    if (!$tbody.length) return false;
+    return planRowRemove($tbody.find('tr').last());
+}
+function planRowRemove($tr) {
     var $tbody = $tr.closest('tbody');
     if ($tbody.find('tr').length <= 1) return false;   // 只剩一列時不刪
     $tr.remove();
@@ -702,7 +850,7 @@ function planRowDel($tr) {
 }
 function renumberPlan($tbody) { $tbody.find('tr').each(function (i) { $(this).find('td').first().text(i + 1); }); }
 
-$(document).on('click', '#planEditBox .t-del', function () { planRowDel($(this).closest('tr')); });
+$(document).on('click', '#planEditBox .t-del', function () { planRowRemove($(this).closest('tr')); });
 $(document).on('click', '#planEditBox .g-del', function () {
     if (!confirm('刪除這個目標？底下的任務會一起移除（要按「儲存規劃表」才會真的寫入）。')) return;
     $(this).closest('.sec[data-goal]').remove();
@@ -732,7 +880,9 @@ $(document).on('click', '#btnPlanSave', function () {
             tasks.push({
                 goal_key: gkey, task_id: num($(this).data('task')), task_name: tn,
                 plan_start: ps, plan_end: pe, act_start: as, act_end: ae,
-                owner_id: $(this).find('.t-owner').val(), progress: $(this).find('.t-pg').val(),
+                owner_id: $(this).find('.t-owner').val(),
+                owner_dept_id: $(this).find('.t-odept').val(),
+                progress: $(this).find('.t-pg').val(),
                 is_milestone: $(this).find('.t-ms').is(':checked') ? 1 : 0
             });
         });
@@ -1452,6 +1602,20 @@ function openSetting() {
         $('#setApDept').html(dOpt).val(s.approver_dept_id || '0');
         $('#setBlockClose').prop('checked', String(s.block_close_on_missing) === '1');
 
+        /* 執行規劃表負責人部門（複選；勾了就連子部門一起帶出來）。
+           部門是樹狀的，縮排顯示才看得出來勾的是上層還是某一個組。 */
+        var tsel = $.map(String(s.task_owner_depts || '').split(','), num);
+        var th = '';
+        $.each(META.depts || [], function (i, d) {
+            var on = $.inArray(num(d.id), tsel) >= 0;
+            var lv = Math.max(0, num(d.level) - 1);
+            th += '<span class="pj-tag' + (on ? ' on' : '') + '" data-settaskdept="' + d.id + '"'
+                + (lv ? ' style="margin-left:' + (lv * 14) + 'px;"' : '') + '>'
+                + (lv ? '└ ' : '') + esc(d.name) + '</span>';
+        });
+        $('#setTaskDeptBox').html(th);
+        renderTaskDeptCount();
+
         var def = String(s.default_cosign_depts || '').split(',');
         var hh = '';
         $.each(META.depts || [], function (i, d) {
@@ -1609,6 +1773,23 @@ $(document).on('click', '.own-scope-del', function () {
 });
 
 $(document).on('click', '#setCosignBox .pj-tag', function () { $(this).toggleClass('on'); });
+$(document).on('click', '#setTaskDeptBox .pj-tag', function () { $(this).toggleClass('on'); renderTaskDeptCount(); });
+function pickedTaskDepts() {
+    var out = [];
+    $('#setTaskDeptBox .pj-tag.on').each(function () { out.push(num($(this).data('settaskdept'))); });
+    return out;
+}
+/* 勾了幾個、實際會涵蓋哪些部門（含子部門）——只勾上層時很容易以為子部門沒被帶到 */
+function renderTaskDeptCount() {
+    var picked = pickedTaskDepts();
+    if (!picked.length) { $('#setTaskDeptCount').text('目前未勾選任何部門＝不限制，負責人的部門下拉會列出全部部門。'); return; }
+    var all = [];
+    $.each(picked, function (i, d) {
+        $.each(deptSubtreeIds(d), function (k, x) { if ($.inArray(x, all) < 0) all.push(x); });
+    });
+    var names = $.map(all, function (x) { var d = deptById(x); return d ? d.name : null; });
+    $('#setTaskDeptCount').text('已勾選 ' + picked.length + ' 個部門，含子部門實際涵蓋 ' + all.length + ' 個：' + names.join('、'));
+}
 $(document).on('click', '#btnSetSave', function () {
     var cos = [];
     $('#setCosignBox .pj-tag.on').each(function () { cos.push(num($(this).data('setcos'))); });
@@ -1617,10 +1798,14 @@ $(document).on('click', '#btnSetSave', function () {
         default_cosign_depts: cos.join(','),
         block_close_on_missing: $('#setBlockClose').is(':checked') ? '1' : '0',
         plan_stamp_tpl_id: $('#setPlanTpl').val() || '0', card_stamp_tpl_id: $('#setCardTpl').val() || '0',
+        task_owner_depts: pickedTaskDepts().join(','),
         owner_scope: JSON.stringify($.map(OWN_SCOPE, function (r) { return { d: num(r.d), p: num(r.p) }; }))
     }, 'POST').done(function (r) {
         alert(r.message);
         META.default_cosign_depts = cos.join(',');
+        /* 部門設定改完馬上生效：規劃表的負責人部門下拉同步換掉，不必重新整理頁面 */
+        META.task_owner_depts = r.task_owner_depts || [];
+        if (CUR && num(CUR.project.project_id) && CUR.can_edit) drawPlanEditor(CUR);
         /* 資格改完馬上生效：負責人下拉的候選名單同步換掉，不必重新整理頁面 */
         META.owner_scope     = r.owner_scope_rows || [];
         META.owner_people    = r.owner_people || [];
