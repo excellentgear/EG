@@ -116,6 +116,14 @@ if (!$canUse) {
 // ── 管理者判定（status 9/90 或系統 admin 角色，前面已計算進 $roleLabel）──
 $isMgr = ($isAdmin || $roleLabel === '管理者');
 
+// ── 齒輪／花鍵計算工具（底部狀態列那顆「齒輪計算」）────────────────────────────
+// 與訂單追蹤頁（NewOrder_Track.php）共用同一個工具視窗與同一份預留量／花鍵公差資料，
+// 唯一實作在 src/common/gear_tool_lib.php ＋ views/Sales/_gear_tool_ui.php，本頁不自刻。
+// 權限沿用該工具原本的規則（系統管理員或持有 ot_gear_calc 功能碼的角色）。
+require_once __DIR__ . '/../../src/common/gear_tool_lib.php';
+$show_gear_tool = (isset($pdo) && $pdo) ? gear_tool_can_use($pdo, $uid) : false;
+$is_gear_admin  = gear_tool_is_admin();
+
 // ── 標籤實體檔 NAS 儲存 ─────────────────────────────────────────────────
 // 路徑可於 使用者權限管理頁 設定（system_settings: imgedit_label_nas_dir）。
 // 子資料夾前綴避免使用者ID與部門ID衝突：U<使用者ID>＝私人、D<部門ID>＝部門、company＝公司共用。
@@ -1387,6 +1395,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <label title="Figma 式圖框：物件中心在圖框（白色畫布）內＝屬於圖框，超出圖框的部分會被切齊邊界不顯示也不會印出來；中心在圖框外的物件＝不屬於圖框，維持整個顯示。關掉＝全部照原樣顯示（舊行為）。" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
                 <input type="checkbox" id="frame-clip" checked onchange="onFrameClipToggle()"> 圖框裁切
             </label>
+<?php if ($show_gear_tool): ?>
+            <button class="tb-btn" onclick="openGearTool()" title="開啟齒輪計算工具（與訂單追蹤頁同一個工具、同一份預留量與花鍵公差資料）：基本齒輪計算、跨齒⇄跨珠、建議滾齒、回推轉位係數、內外花鍵與配合、栓槽、出尾計算"><i class="fa fa-cog"></i> 齒輪計算</button>
+<?php endif; ?>
             <span style="margin-left:auto;">Ctrl+V 貼圖｜拖檔案進來開圖｜滾輪縮放｜空白鍵拖曳平移｜Delete 刪除｜Ctrl+Z 復原</span>
         </div>
     </div>
@@ -7756,5 +7767,11 @@ setTool('select');
     addImageFromURL(preload, 0);
 })();
 </script>
+
+<?php
+// 齒輪／花鍵計算工具視窗（CSS＋HTML＋JS）：與訂單追蹤頁共用同一份，禁止在本頁複製一套（鐵律4）
+$GEAR_TOOL_PDO = $pdo ?? null;
+include __DIR__ . '/_gear_tool_ui.php';
+?>
 </body>
 </html>
