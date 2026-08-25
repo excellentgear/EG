@@ -81,6 +81,37 @@ function dwg_ensure_schema(PDO $pdo): void {
             KEY idx_did (d_id, changed_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='料號版次異動紀錄（客戶版次＋對應廠內版次）'");
     } catch (Throwable $e) {}
+    // 批圖編輯器設變標示（◇/△）左上角列表的說明文字：存檔當下把「號碼最大＝這次新加的那一組」
+    // 抄一份下來，建立圖面變更紀錄時直接當「變更摘要」帶入（使用者要求 2026-08-25）。
+    // 為什麼要存起來而不是存檔時直接開單：存檔後使用者可能按「取消」不建變更單，
+    // 隔天才從料號附件頁按「自動換圖記錄」補建——那時已經沒有畫布可讀，只剩這張表抓得到。
+    // 表建在這裡而不是 image_editor.php：讀的人是本檔（兩條建單入口都會經過本檔），
+    // 建在編輯器那邊的話「還沒有人開過批圖編輯器」的環境就沒有這張表。
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS imgedit_dc_note (
+            attachment_id INT NOT NULL PRIMARY KEY COMMENT '批圖編輯器輸出的那張料號附件 part_attachments.id',
+            dc_number     INT NULL COMMENT '設變號碼（圖面左上角設變列表的那個號）',
+            summary       VARCHAR(500) NOT NULL DEFAULT '' COMMENT '設變說明（日期前綴已在前端去掉）',
+            created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='批圖編輯器設變標示說明（供圖面變更紀錄自動帶入摘要）'");
+    } catch (Throwable $e) {}
+
+    // ── 2026-08-25 使用者要求：標籤「分組」與「是否觸動圖面變更」可在附件標籤設定自行調整 ──
+    // 起因：BOSS圖 與 ++圖 是同一張圖的兩個檔案，兩個都上傳時會各自跳一次「偵測到圖面變更」，
+    //       使用者只想要一張變更單。同組的標籤視為同一張圖：新舊版一起比、變更單只開一張。
+    // dwg_group 留空＝自成一組（＝改版前的既有行為，所以沒設定的標籤完全不受影響）。
+    // dwg_trigger 與 is_own_drawing 拆開：有些自家圖要填發行章日期存檔留底，但不該觸發變更流程
+    //（例：一次性圖）。預設 1＝維持既有行為，由使用者自己去關。
+    try {
+        $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN dwg_group VARCHAR(30) NOT NULL DEFAULT '' COMMENT '圖面變更群組：同名的標籤視為同一張圖，只會產生一張變更單；空=自成一組'");
+        // 只有「剛加上這欄」時才把 BOSS圖／++圖 預設分成同一組（使用者指定的實例）；
+        // 之後由使用者在標籤設定自行調整，不再被覆寫（比照 is_own_drawing 的既有作法）
+        $pdo->exec("UPDATE quotation_file_categories SET dwg_group='主圖' WHERE category_name IN ('BOSS圖','++圖')");
+    } catch (Throwable $e) {}
+    try {
+        $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN dwg_trigger TINYINT(1) NOT NULL DEFAULT 1 COMMENT '1=此標籤會觸動圖面變更判定（需搭配 is_own_drawing=1 才有意義）'");
+    } catch (Throwable $e) {}
+
     try {
         $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN is_obsolete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=此標籤代表「已作廢」，掛上的附件不參與新舊版判定'");
         // 只有「剛加上這欄」時才預設勾名稱叫「作廢」的那一個；之後由使用者在標籤設定自行調整，
@@ -148,6 +179,64 @@ function dwg_own_drawing_cat_ids(PDO $pdo): array {
         $r = $pdo->query("SELECT id FROM quotation_file_categories WHERE is_own_drawing=1 AND is_active=1")->fetchAll(PDO::FETCH_COLUMN);
         return array_map('intval', $r);
     } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 會「觸動圖面變更」的標籤 id（自家出的圖 ∩ 有開觸動旗標 ∩ 啟用中）。
+ *
+ * 與 dwg_own_drawing_cat_ids() 的差別：那支管「上傳時要不要填發行章日期」，
+ * 這支管「填了之後要不要跑變更判定」。使用者要能把某個自家圖標籤設成
+ * 「要留發行日、但不要每次上傳都跳變更單」，所以兩件事必須分開。
+ */
+function dwg_trigger_cat_ids(PDO $pdo): array {
+    dwg_ensure_schema($pdo);
+    try {
+        $r = $pdo->query("SELECT id FROM quotation_file_categories
+                           WHERE is_own_drawing=1 AND is_active=1 AND COALESCE(dwg_trigger,1)=1")
+                 ->fetchAll(PDO::FETCH_COLUMN);
+        return array_map('intval', $r);
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 標籤 → 群組鍵 的對照（只含自家出的圖）。
+ * dwg_group 有填＝該組名；留空＝自成一組（用 'id:<id>' 當鍵，永遠不會跟別人撞）。
+ */
+function dwg_cat_group_map(PDO $pdo): array {
+    dwg_ensure_schema($pdo);
+    $out = [];
+    try {
+        $rows = $pdo->query("SELECT id, COALESCE(dwg_group,'') AS g FROM quotation_file_categories
+                              WHERE is_own_drawing=1 AND is_active=1")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) {
+            $g = trim((string)$r['g']);
+            $out[(int)$r['id']] = ($g !== '' ? 'g:' . $g : 'id:' . (int)$r['id']);
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/**
+ * 把一組標籤展開成「同群組的所有自家圖標籤」。
+ *
+ * 這是 BOSS圖／++圖 只開一張變更單的關鍵：兩個標籤同組時，上傳 ++圖 要拿
+ * 「BOSS圖 或 ++圖」的舊圖來比新舊版，而不是只比 ++圖 自己——否則兩個檔案
+ * 各自都會覺得「我這一版是新的」而各跳一次變更。
+ * 沒設群組的標籤展開後就是它自己，行為與改版前完全相同。
+ *
+ * @param int[] $catIds 本次上傳掛的標籤
+ * @return int[] 展開後的標籤 id（已去重；傳入沒有任何自家圖標籤時回空陣列）
+ */
+function dwg_expand_group_cats(PDO $pdo, array $catIds): array {
+    $map = dwg_cat_group_map($pdo);
+    $keys = [];
+    foreach (array_map('intval', $catIds) as $cid) {
+        if (isset($map[$cid])) $keys[$map[$cid]] = true;
+    }
+    if (!$keys) return [];
+    $out = [];
+    foreach ($map as $cid => $key) { if (isset($keys[$key])) $out[] = (int)$cid; }
+    return array_values(array_unique($out));
 }
 
 /**
@@ -223,14 +312,20 @@ function dwg_classify_upload(PDO $pdo, int $dId, array $catIds, ?string $issueDa
     $out = ['kind' => 'none', 'prev_date' => null, 'prev_name' => null, 'message' => '',
             'needs_date' => false, 'issue_date' => $issueDate,
             'prev_other_d_id' => null, 'prev_other_note' => '',
-            'process_tag' => (string)$processTag, 'prev_process_tag' => ''];
+            'process_tag' => (string)$processTag, 'prev_process_tag' => '',
+            'existing_id' => 0, 'existing_no' => ''];
     if (!dwg_needs_issue_date($pdo, $catIds)) return $out;
     $out['needs_date'] = true;
     if (!$issueDate) { $out['message'] = '此標籤屬於「自家出的圖」，必須填發行章日期'; return $out; }
 
-    // 只比「這次上傳自己帶的那幾個自家圖標籤」，不再把全部自家圖標籤混在一起（②）
-    $own     = dwg_own_drawing_cat_ids($pdo);
-    $sameTag = array_values(array_intersect(array_map('intval', $catIds), $own));
+    // 觸動旗標（2026-08-25）：標籤要填發行章日期，不代表每次上傳都要跑變更流程。
+    // 使用者可在附件標籤設定逐標籤關掉，關掉的只留發行日、不做判定。
+    if (!array_intersect(array_map('intval', $catIds), dwg_trigger_cat_ids($pdo))) return $out;
+
+    // 比對範圍＝本次標籤「所屬群組」的全部自家圖標籤（②）。
+    // 沒設群組的標籤展開後就是它自己＝改版前的既有行為；BOSS圖／++圖 設同一組時，
+    // 兩者互為新舊版一起比，所以第二個檔案上傳時會判成「同一天＝補件」而不再跳一次變更。
+    $sameTag = dwg_expand_group_cats($pdo, $catIds);
     if (!$sameTag) return $out;   // 理論上不會發生（前面 dwg_needs_issue_date 已經確認有交集）
     $obsolete = dwg_obsolete_cat_ids($pdo);
     $proc     = trim((string)$processTag);
@@ -300,6 +395,16 @@ function dwg_classify_upload(PDO $pdo, int $dId, array $catIds, ?string $issueDa
     if ($cmp > 0) {
         $out['kind'] = 'change';
         $out['message'] = '發行章日期比前一版（' . $prevShow . '）新＝這是一次圖面變更，請填寫變更內容。';
+        // 同一次換圖已經登錄過就不要再問一次（使用者要求 2026-08-25）：
+        // 同組標籤即使一起比新舊版，兩個檔案仍可能是「先傳 BOSS圖、隔幾分鐘再傳 ++圖」，
+        // 後者發行日一樣比更早的舊圖新，還是會判成 change。用「已存在同料號同發行日的變更單」擋掉。
+        if ($ex = dwg_existing_change_by_date($pdo, $dId, $issueDate)) {
+            $out['kind'] = 'change_logged';
+            $out['existing_id'] = (int)$ex['id'];
+            $out['existing_no'] = (string)$ex['change_no'];
+            $out['message'] = '這一次換圖（' . eg_fmt_date($issueDate) . '）已經登錄過變更紀錄 '
+                            . $ex['change_no'] . '，不需要再建一張。';
+        }
     } elseif ($cmp === 0) {
         $out['kind'] = 'same';
         $out['message'] = '發行章日期與前一版相同（' . $prevShow . '）＝視為補件／重掃，不另開變更紀錄。';
@@ -391,6 +496,33 @@ function dwg_part_info(PDO $pdo, int $dId): array {
 }
 
 /**
+ * 這一次換圖（同料號＋同一個發行章日期）是不是已經登錄過變更紀錄了？
+ *
+ * 使用者要求（2026-08-25）：BOSS圖 與 ++圖 是同一張圖的兩個檔案，先後上傳時
+ * 只該產生一張變更單——「其中一個有自動建立圖面變更後，另一個就不用建，判斷標準為發行章日期」。
+ * 廠內版次存的就是發行章日期字串（int_new_revision），所以直接拿它當比對鍵。
+ * 範圍涵蓋同料號的所有 d_setting（與新舊版判定同一套 sibling 規則），草稿也算數
+ * （草稿就是還沒補完內容的那一張，再開一張只會變成兩張都沒填完）。
+ *
+ * @return array{id:int,change_no:string}|null
+ */
+function dwg_existing_change_by_date(PDO $pdo, int $dId, ?string $issueDate): ?array {
+    $issueDate = trim((string)$issueDate);
+    if ($issueDate === '') return null;
+    dwg_ensure_schema($pdo);
+    try {
+        $dIds = dwg_sibling_d_ids($pdo, $dId);
+        $ph   = implode(',', array_fill(0, count($dIds), '?'));
+        $st = $pdo->prepare("SELECT id, change_no FROM qc_drawing_change
+                              WHERE d_id IN ($ph) AND int_new_revision = ?
+                              ORDER BY id ASC LIMIT 1");
+        $st->execute(array_merge($dIds, [$issueDate]));
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $r ? ['id' => (int)$r['id'], 'change_no' => (string)$r['change_no']] : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/**
  * 廠內版次（＝發行章日期）的「變更前／變更後」自動帶值。
  *
  * 使用者要求：廠內版次若有舊圖，自動顯示**舊圖的發行日**為變更前版次、**新圖的發行日**為變更後版次。
@@ -410,8 +542,9 @@ function dwg_internal_rev_pair(PDO $pdo, int $dId, array $catIds = [], ?string $
             'old_date' => null, 'old_name' => null, 'old_id' => null];
     $own = dwg_own_drawing_cat_ids($pdo);
     if (!$own) return $out;
-    // 沒指定標籤＝比全部自家圖標籤（手動登錄時使用者只選了料號，還沒有標籤脈絡）
-    $tags = array_values(array_intersect(array_map('intval', $catIds), $own)) ?: $own;
+    // 有指定標籤＝連同「同群組」的標籤一起比（BOSS圖／++圖 同組＝同一張圖，見 dwg_expand_group_cats）；
+    // 沒指定＝比全部自家圖標籤（手動登錄時使用者只選了料號，還沒有標籤脈絡）
+    $tags = dwg_expand_group_cats($pdo, $catIds) ?: $own;
     $obsolete = dwg_obsolete_cat_ids($pdo);
     $proc = trim((string)$processTag);
     try {
@@ -732,11 +865,14 @@ function dwg_create_change(PDO $pdo, array $p): array {
  *   ② 當下按「否」也沒關係：之後到料號附件頁按「自動換圖記錄」一樣建得出來
  *
  * 自動帶入：料號、客戶（顯示用，存在 d_setting 上不重複存）、廠內版次的新舊發行日、
- *           變更日期＝新圖發行日、客戶變更前版次＝料號主檔目前的版次。
- * 摘要留空由使用者補（只有填表的人知道這次改了什麼），所以一律建成**草稿**：
- * 不通知任何人、也不換檢驗標準版次，等使用者在另開的分頁補完按送出才正式成立。
+ *           變更日期＝新圖發行日、客戶變更前版次＝料號主檔目前的版次、
+ *           客戶變更後版次＝觸發附件上填的版次欄、
+ *           變更摘要＝批圖編輯器設變標示的說明文字（imgedit_dc_note，抓不到就留空）。
+ * 帶得再齊也一律建成**草稿**：不通知任何人、也不換檢驗標準版次，
+ * 等使用者在另開的分頁確認／補完按送出才正式成立（摘要是自動抄來的，要有人看過才算數）。
  *
- * 同一張附件只會建一次：已經有以它為觸發來源的紀錄就直接回傳那一筆（避免按兩次長出兩張單）。
+ * 不重複建的兩道判斷：①已經有以這張附件為觸發來源的紀錄（按兩次）
+ *                     ②同料號已經有同一個發行章日期的紀錄（BOSS圖／++圖 兩個檔案各自觸發）。
  *
  * @param int|null $attachId 指定以哪張附件當「變更後」那一版；null＝自動取最新的一版
  * @return array{ok:bool, id:int, change_no:string, existed:bool, message:string}
@@ -764,15 +900,36 @@ function dwg_auto_draft_from_part(PDO $pdo, int $dId, int $uid, ?int $attachId =
                     'existed' => true, 'message' => '這張圖已經登錄過變更紀錄 ' . $old['change_no'] . '，直接開啟該筆。'];
         }
     } catch (Throwable $e) {}
+    // 同一次換圖（同料號＋同發行章日期）已經有單就直接回那一張（使用者要求 2026-08-25）：
+    // BOSS圖／++圖 是同一張圖的兩個檔案，各自觸發時不該變成兩張變更單。
+    if ($ex = dwg_existing_change_by_date($pdo, $dId, $pair['new_date'])) {
+        return ['ok' => true, 'id' => $ex['id'], 'change_no' => $ex['change_no'], 'existed' => true,
+                'message' => '這一次換圖（' . eg_fmt_date($pair['new_date']) . '）已經登錄過變更紀錄 '
+                           . $ex['change_no'] . '，直接開啟該筆。'];
+    }
 
     $info = dwg_part_info($pdo, $dId);
+    // 變更摘要：批圖編輯器存檔時把「號碼最大＝這次新加的那一組」設變說明抄進 imgedit_dc_note，
+    // 這裡直接拿來當摘要（使用者要求 2026-08-25）。沒有就留空由使用者自己補。
+    // 變更後客戶版次：觸發這次變更的那張附件上使用者填的版次欄；沒填就留空。
+    $autoSummary = ''; $newRev = '';
+    try {
+        $n = $pdo->prepare("SELECT summary FROM imgedit_dc_note WHERE attachment_id=?");
+        $n->execute([$pair['new_id']]);
+        $autoSummary = mb_substr(trim((string)$n->fetchColumn()), 0, 255, 'UTF-8');
+    } catch (Throwable $e) {}   // 表還沒建（沒用過批圖編輯器）＝摘要留空，不影響建單
+    try {
+        $n = $pdo->prepare("SELECT revision FROM part_attachments WHERE id=?");
+        $n->execute([$pair['new_id']]);
+        $newRev = trim((string)$n->fetchColumn());
+    } catch (Throwable $e) {}
     $r = dwg_create_change($pdo, [
         'd_id'                  => $dId,
-        'summary'               => '',                    // 由使用者在另開的分頁補
+        'summary'               => $autoSummary,          // 抓不到時留空，由使用者在另開的分頁補
         'status'                => 'DRAFT',
         'rev_scope'             => 'customer',            // 預設客戶改圖；不是的話使用者改成「僅廠內版次」
         'old_revision'          => $info['revision'],     // 料號主檔目前的客戶版次＝變更前
-        'new_revision'          => '',
+        'new_revision'          => $newRev,
         'int_old_revision'      => $pair['old_date'],
         'int_new_revision'      => $pair['new_date'],
         'change_date'           => $pair['new_date'],     // 變更日＝新圖發行章日期

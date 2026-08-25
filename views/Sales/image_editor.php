@@ -617,6 +617,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 前端是下拉，後端照樣自己擋長度（直打 API 繞不過去＝鐵律8 不做半套）。
             $procTag = trim($_POST['process_tag'] ?? '');
             if (mb_strlen($procTag, 'UTF-8') > 100) throw new Exception('製程標籤最多 100 個字');
+            // 設變說明（選填）：前端從畫布上「號碼最大」那一組設變列表抄過來的文字，日期前綴已在前端去掉。
+            // 只是帶值用、不參與任何判定，故超長直接截斷而不報錯（不能因為說明太長就讓整張圖存不進去）。
+            $dcSummary = trim(preg_replace('/\s+/u', ' ', (string)($_POST['dc_summary'] ?? '')));
+            if (mb_strlen($dcSummary, 'UTF-8') > 500) $dcSummary = mb_substr($dcSummary, 0, 500, 'UTF-8');
+            $dcNumber  = (int)($_POST['dc_number'] ?? 0);
             if (!$noWorkfile) {
                 // 有建立工作檔＝這次存的是「還在編、隨時會被下一版蓋掉」的暫存檔（使用者拍板 2026-08-20）：
                 // 工作檔在料號附件／圖面檢視都看不到，不該當成正式發行的圖面，
@@ -658,6 +663,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             //（它不是圖面，檢視端一律不列，見 imgedit_strip_workfiles，也不該參與圖面變更判定）
             $ins->execute([$dId, $pngFile, $name . '.png', $catStr, $revision, $issueDate, ($procTag !== '' ? $procTag : null), '批圖編輯器輸出圖', $userName, $uid]);
             $pngId = $pdo->lastInsertId();
+            if ($dcSummary !== '') {
+                $pdo->prepare("INSERT INTO imgedit_dc_note (attachment_id, dc_number, summary) VALUES (?,?,?)
+                               ON DUPLICATE KEY UPDATE dc_number=VALUES(dc_number), summary=VALUES(summary)")
+                    ->execute([$pngId, ($dcNumber > 0 ? $dcNumber : null), $dcSummary]);
+            }
             $workId = null;
             $removed = 0;
             if (!$noWorkfile) {
@@ -4028,6 +4038,21 @@ function updateBalloonSummary() {
 function dcMarkObjects() {
     return canvas.getObjects().filter(o => o.dcNumber && o.dcRole === 'mark');
 }
+/* 存檔時抄一份「這次的設變說明」給圖面變更紀錄當變更摘要（使用者要求 2026-08-25）。
+   取號碼**最大**那一組＝這次新加的；號碼小的是歷次設變的歷史紀錄，不該重複帶進這次的單。
+   列表文字的格式是「日期  說明」（placeDcMark 建立時就填好日期），日期另有欄位故這裡去掉前綴。
+   還沒雙擊填說明的（只有日期）會回傳空字串，讓摘要留白由使用者自己補，不硬塞一個日期進去。 */
+function dcLatestNote() {
+    const ts = canvas.getObjects().filter(o => o.dcRole === 'legendText' && o.dcNumber);
+    if (!ts.length) return { num: 0, text: '' };
+    const num = Math.max(...ts.map(o => o.dcNumber));
+    const text = ts.filter(o => o.dcNumber === num)
+        .map(o => String(o.text || '')
+            .replace(/^\s*\d{4}[.\-\/]\d{1,2}[.\-\/]\d{1,2}\s*/, '')   // 去掉開頭的日期
+            .replace(/\s+/g, ' ').trim())
+        .filter(Boolean).join('　');
+    return { num: num, text: text };
+}
 function makeDcSymbol(num, shape, size) {
     let s;
     if (shape === 'triangle') {
@@ -6582,6 +6607,8 @@ async function pfSave() {
         fd.append('issue_stamp_date', issueDate);
         fd.append('revision', document.getElementById('pf-revision').value.trim());
         fd.append('process_tag', document.getElementById('pf-proc').value || '');
+        const dcNote = dcLatestNote();
+        if (dcNote.text) { fd.append('dc_summary', dcNote.text); fd.append('dc_number', String(dcNote.num)); }
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
         if (!res.success) throw new Error(res.message || '');
         const savedAt = nowTimeStr();
@@ -6611,6 +6638,10 @@ async function pfSave() {
                     else { alert((r2 && r2.message) || '建立失敗'); }
                 } catch (e2) { alert('建立失敗：' + (e2.message || '連線錯誤')); }
             }
+        } else if (v.kind === 'change_logged') {
+            // 同一次換圖已經有變更單（例：BOSS圖 先傳過了，這次傳的是同一張圖的 ++圖）→
+            // 不再問一次，只告訴使用者去哪裡看，避免同一次換圖開出兩張單
+            toast(v.message || '這一次換圖已經登錄過變更紀錄');
         } else if (v.kind === 'first') {
             toast('已記錄為首次發行（此料號第一張帶發行章日期的自家圖面）');
         }

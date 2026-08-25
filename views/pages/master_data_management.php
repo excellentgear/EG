@@ -6154,7 +6154,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN is_external_doc TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否列入外來文件清單'"); } catch(PDOException $e){}
                 try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN external_doc_name VARCHAR(100) NULL COMMENT '外來文件類別名稱(空=用標籤名)'"); } catch(PDOException $e){}
                 try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN show_in_other_attach TINYINT(1) NOT NULL DEFAULT 0 COMMENT '此類別的附件是否也併入 bom_viewer 其他附件分頁顯示(不影響原上傳位置的分頁)'"); } catch(PDOException $e){}
-                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark, COALESCE(dwg_group,'') AS dwg_group, COALESCE(dwg_trigger,1) AS dwg_trigger FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'data'=>$rows]);
             } elseif ($op_code === 'save') {
                 if (!$can_attach_cat_edit) throw new Exception('無編輯附件類別標籤權限（需 A/CDR/CDRU）');
@@ -6169,6 +6169,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $show_other   = intval($_POST['show_in_other_attach'] ?? 0) ? 1 : 0;
                 // 「已作廢」標籤：掛上的附件不參與圖面新舊版判定（欄位由 dwg_change_lib 的 ensure_schema 建）
                 $obsolete     = intval($_POST['is_obsolete_mark'] ?? 0) ? 1 : 0;
+                // 圖面變更群組／觸動旗標（2026-08-25）：只有「自家出的圖」才有意義，
+                // 沒勾自家圖時一律歸零，否則之後把標籤改回自家圖會冒出一組使用者早就忘記的舊設定。
+                // 前端已隱藏該區塊，這裡後端再擋一次（直打 API 繞不過去＝鐵律8）。
+                $dwg_group    = $own_drawing ? mb_substr(trim($_POST['dwg_group'] ?? ''), 0, 30, 'UTF-8') : '';
+                $dwg_trigger  = $own_drawing ? (intval($_POST['dwg_trigger'] ?? 0) ? 1 : 0) : 1;
                 $reactivate   = intval($_POST['reactivate'] ?? 0);
                 $op_name      = _get_operator($pdo, $uid);
                 if ($cat_id && $reactivate) {
@@ -6176,14 +6181,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['success'=>true,'message'=>'已重新啟用','cat_id'=>$cat_id]);
                 } elseif ($cat_id) {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=? WHERE id=?")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $cat_id]);
+                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=?,dwg_group=?,dwg_trigger=? WHERE id=?")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $cat_id]);
                     _log_audit($pdo,'update','dict','attach-cat:'.$cat_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已更新','cat_id'=>$cat_id]);
                 } else {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark) VALUES (?,?,?,?,?,?,?,?,?)")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete]);
+                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark,dwg_group,dwg_trigger) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger]);
                     $new_id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','attach-cat:'.$new_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已新增','cat_id'=>$new_id]);
@@ -8663,15 +8668,34 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                         </div>
                         <div class="form-group" style="margin-bottom:8px;">
                             <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
-                                <input type="checkbox" id="acat-own-drawing"> 這是「自家出的圖」
+                                <input type="checkbox" id="acat-own-drawing" onchange="acatToggleDwg()"> 這是「自家出的圖」
                             </label>
                             <div style="font-size:10px;color:#aaa;margin-top:2px;">
-                                勾選後：上傳此類別的附件時<b>必須填發行章日期</b>，系統會拿它跟同料號既有的圖面比對，
-                                比較新就判定為<b>圖面變更</b>並請設計填變更內容。<br>
-                                比對範圍是<b>同料號＋同一個這個標籤＋同製程標籤</b>——不同標籤各自算各自的
-                                （BOSS圖只跟BOSS圖比、++圖只跟++圖比），同料號不同加工項目也各自算
-                                （上傳時選製程標籤；留空＝共用圖，會跟該標籤下所有製程一起比）。<br>
+                                勾選後：上傳此類別的附件時<b>必須填發行章日期</b>。<br>
+                                比對範圍是<b>同料號＋同一組標籤＋同製程標籤</b>——沒有設群組的標籤各自算各自的，
+                                同料號不同加工項目也各自算（上傳時選製程標籤；留空＝共用圖，會跟該標籤下所有製程一起比）。<br>
                                 客戶原圖、報價圖不要勾（原圖更新常常只是報價階段，還沒接單）。
+                            </div>
+                            <!-- 圖面變更群組／觸動旗標（2026-08-25 使用者要求）：只有「自家出的圖」才有意義，故收在裡面 -->
+                            <div id="acat-dwg-wrap" style="display:none;margin-top:8px;padding:8px;border:1px solid #eee;border-radius:4px;background:#fffaf3;">
+                                <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+                                    <input type="checkbox" id="acat-dwg-trigger"> 這個標籤會<b>觸動圖面變更</b>
+                                </label>
+                                <div style="font-size:10px;color:#aaa;margin-top:2px;margin-bottom:8px;">
+                                    勾選後：上傳的發行章日期比同組既有圖面新時，會跳出「偵測到圖面變更」並可自動建立變更紀錄。<br>
+                                    <b>不勾＝只留發行章日期存底，不跑變更流程</b>（適合一次性圖這種不需要走設變的圖面）。
+                                </div>
+                                <label style="font-size:11px;color:#888;">圖面變更群組
+                                    <small style="color:#aaa;">（留空＝自成一組）</small></label>
+                                <input type="text" id="acat-dwg-group" class="form-control input-sm" maxlength="30"
+                                       list="acat-dwg-group-list" placeholder="例：主圖">
+                                <datalist id="acat-dwg-group-list"></datalist>
+                                <div style="font-size:10px;color:#aaa;margin-top:2px;">
+                                    <b>填一樣名字的標籤＝視為同一張圖</b>：新舊版一起比對，而且<b>同一次換圖只會產生一張變更紀錄</b>
+                                    （判斷標準是<b>發行章日期</b>——同料號、同一天發行的圖，第一個檔案建過單之後，
+                                    後面同組的檔案再上傳就只會提示「已登錄過」，不會再問一次）。<br>
+                                    例：BOSS圖 與 ++圖 是同一張圖的兩個檔案，兩個都填「主圖」即可。
+                                </div>
                             </div>
                         </div>
                         <div class="form-group" style="margin-bottom:8px;">
@@ -18031,11 +18055,17 @@ function loadAttachCatTable() {
             html += '<td style="cursor:grab;color:#bbb;text-align:center;" class="acat-drag-handle">&#9776;</td>';
             var odBadge = (c.is_own_drawing=='1'||c.is_own_drawing===1)
                 ? '<span style="font-size:9px;background:#FFF3E2;color:#C77C1A;border:1px solid #E4D3BC;border-radius:3px;padding:1px 4px;margin-left:3px;" title="自家出的圖：上傳需填發行章日期，並參與圖面變更判定">自家圖</span>' : '';
+            // 群組／不觸發 兩個徽章：分組與否在清單上要一眼看得出來，否則使用者不會知道
+            // 「為什麼傳了 ++圖 卻沒跳變更」（配色走 ai-rules/10 的暖色系）
+            var grpBadge = (c.is_own_drawing=='1'||c.is_own_drawing===1) && (c.dwg_group||'').trim()
+                ? '<span style="font-size:9px;background:#F7E0BD;color:#7A4A12;border:1px solid #E4D3BC;border-radius:3px;padding:1px 4px;margin-left:3px;" title="圖面變更群組：同名標籤視為同一張圖，同一次換圖只產生一張變更紀錄">同組：'+escHtml((c.dwg_group||'').trim())+'</span>' : '';
+            var trgBadge = (c.is_own_drawing=='1'||c.is_own_drawing===1) && (c.dwg_trigger=='0'||c.dwg_trigger===0)
+                ? '<span style="font-size:9px;background:#EFE7DC;color:#8A6A45;border:1px solid #E4D3BC;border-radius:3px;padding:1px 4px;margin-left:3px;" title="此標籤只留發行章日期，不會觸動圖面變更判定">不觸發變更</span>' : '';
             var extBadge = (c.is_external_doc=='1'||c.is_external_doc===1)
                 ? '<span style="font-size:9px;background:#F0A24B;color:#fff;border-radius:3px;padding:1px 4px;margin-left:3px;" title="列入外來文件清單'+(c.external_doc_name?'：'+escHtml(c.external_doc_name):'')+'">外來文件</span>' : '';
             var otherBadge = (c.show_in_other_attach=='1'||c.show_in_other_attach===1)
                 ? '<span style="font-size:9px;background:#e3f2fd;color:#1565c0;border-radius:3px;padding:1px 4px;margin-left:3px;" title="此類別的附件也會併入圖面查閱頁「其他附件」分頁顯示（不影響原本上傳位置的分頁）">併入其他附件</span>' : '';
-            html += '<td>'+escHtml(c.category_name)+varBadge+odBadge+extBadge+otherBadge+'&nbsp;'+badge+'</td>';
+            html += '<td>'+escHtml(c.category_name)+varBadge+odBadge+grpBadge+trgBadge+extBadge+otherBadge+'&nbsp;'+badge+'</td>';
             html += '<td style="text-align:center;">'+showBadge+'</td>';
             html += '<td style="text-align:right;">'+badge+'</td>';
             if (CAN_ATTACH_CAT_EDIT) {
@@ -18085,6 +18115,23 @@ function saveAttachCatPath() {
     });
 }
 
+/* 「自家出的圖」勾了才顯示圖面變更群組設定；同時把目前已用過的群組名餵進 datalist，
+   讓使用者用選的而不是重打一次（打錯一個字就不同組，這種錯誤畫面上看不出來） */
+function acatToggleDwg() {
+    var on = (document.getElementById('acat-own-drawing')||{}).checked;
+    var wrap = document.getElementById('acat-dwg-wrap');
+    if (wrap) wrap.style.display = on ? '' : 'none';
+    var dl = document.getElementById('acat-dwg-group-list');
+    if (dl) {
+        var seen = {}, html = '';
+        (_attachCats||[]).forEach(function(c) {
+            var g = (c.dwg_group||'').trim();
+            if (g && !seen[g]) { seen[g] = 1; html += '<option value="'+escHtml(g)+'">'; }
+        });
+        dl.innerHTML = html;
+    }
+}
+
 function editAttachCat(id) {
     var c = _attachCats.find(function(x){ return x.id==id; });
     if (!c) return;
@@ -18106,6 +18153,12 @@ function editAttachCat(id) {
     if (otherChk) otherChk.checked = (c.show_in_other_attach=='1'||c.show_in_other_attach===1);
     var obsChk = document.getElementById('acat-obsolete-mark');
     if (obsChk) obsChk.checked = (c.is_obsolete_mark=='1'||c.is_obsolete_mark===1);
+    var dgIn = document.getElementById('acat-dwg-group');
+    if (dgIn) dgIn.value = c.dwg_group || '';
+    var dtChk = document.getElementById('acat-dwg-trigger');
+    // 舊資料沒有這欄時視為 1（＝維持改版前「自家圖一律會觸發」的行為）
+    if (dtChk) dtChk.checked = (c.dwg_trigger === undefined || c.dwg_trigger === null || c.dwg_trigger=='1' || c.dwg_trigger===1);
+    acatToggleDwg();
     document.getElementById('acat-form-title').textContent = '修改類別';
     // Render vars
     var varsList = document.getElementById('acat-vars-list');
@@ -18134,6 +18187,11 @@ function resetAttachCatForm() {
     if (otherChk) otherChk.checked = false;
     var obsChk = document.getElementById('acat-obsolete-mark');
     if (obsChk) obsChk.checked = false;
+    var dgIn = document.getElementById('acat-dwg-group');
+    if (dgIn) dgIn.value = '';
+    var dtChk = document.getElementById('acat-dwg-trigger');
+    if (dtChk) dtChk.checked = true;   // 新標籤預設會觸發（＝改版前的既有行為）
+    acatToggleDwg();
     document.getElementById('acat-form-title').textContent = '新增類別';
     var varsList = document.getElementById('acat-vars-list');
     if (varsList) varsList.innerHTML = '';
@@ -18185,7 +18243,9 @@ function saveAttachCategory() {
     var vars = getAttachCatVars();
     var tagVarsJson = vars.length ? JSON.stringify(vars) : '';
     api({ action:'manage_attach_categories', op:'save', cat_id:id, category_name:name, sort_order:0, show_in_list:showInList, is_own_drawing:ownDrawing, is_external_doc:isExtDoc, external_doc_name:extDocName, show_in_other_attach:showOtherAttach, tag_variables:tagVarsJson,
-            is_obsolete_mark:(document.getElementById('acat-obsolete-mark')||{}).checked ? 1 : 0 }).done(function(r) {
+            is_obsolete_mark:(document.getElementById('acat-obsolete-mark')||{}).checked ? 1 : 0,
+            dwg_group:((document.getElementById('acat-dwg-group')||{}).value||'').trim(),
+            dwg_trigger:(document.getElementById('acat-dwg-trigger')||{}).checked ? 1 : 0 }).done(function(r) {
         if (r.success) { _attachCatsCache = null; showToast(r.message||'已儲存'); resetAttachCatForm(); loadAttachCatTable(); }
         else showToast(r.message||'儲存失敗','error');
     });
@@ -19430,6 +19490,9 @@ function submitPartAttachUpload() {
                 var v = r.dwg_verdict || {};
                 if (!changeHit && v.kind === 'change') {
                     changeHit = { attachId:r.id, dId:dId, fileName:r.original_name||'', verdict:v };
+                } else if (v.kind === 'change_logged') {
+                    // 同一次換圖已經有變更單（例：同組的 BOSS圖 先傳過了）→ 不再問一次
+                    showToast(v.message || '這一次換圖已經登錄過變更紀錄', 'success');
                 } else if (total === 1 && v.kind === 'first') {
                     showToast('已記錄為首次發行（此料號第一張帶發行章日期的自家圖面），不需登錄圖面變更','success');
                 } else if (total === 1 && (v.kind === 'same' || v.kind === 'older')) {
