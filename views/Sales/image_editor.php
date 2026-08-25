@@ -379,6 +379,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             PRIMARY KEY (user_id, label_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
+        /* #標示解析（唯一實作，save_label 與 set_label_tags 共用，避免兩邊規則走鐘）：
+           空白/逗號/井號分隔，# 可省略，去重後統一存成「無#、空格分隔」。
+           超過上限一律丟例外講原因，**不可默默截掉**——使用者打了 6 個只存進 3 個又不報錯，
+           會以為系統壞了（2026-08-24 使用者反映要能同一個標籤設定多組#，上限由 3 放寬到 10）。*/
+        $ALLOW_TAGS_MAX = 10;
+        $parseLabelTags = function ($raw) use ($ALLOW_TAGS_MAX) {
+            $arr = array_values(array_unique(array_filter(preg_split('/[\s,，#]+/u', trim((string)$raw)))));
+            if (count($arr) > $ALLOW_TAGS_MAX) {
+                throw new Exception('#標示最多 ' . $ALLOW_TAGS_MAX . ' 個，目前有 ' . count($arr) . ' 個，請刪掉幾個再存');
+            }
+            foreach ($arr as $t) {
+                if (mb_strlen($t) > 12) throw new Exception('單一個 #標示最多 12 個字，「' . mb_substr($t, 0, 12) . '…」太長了');
+            }
+            $tags = implode(' ', $arr);
+            if (mb_strlen($tags) > 100) throw new Exception('#標示總長度最多 100 個字（目前 ' . mb_strlen($tags) . '），請縮短或減少個數');
+            return $tags;
+        };
+
         $act = $_POST['action'];
         if ($act === 'list_labels') {
             // 可見範圍：公司共用 + 自己部門的部門標籤 + 自己的私人標籤
@@ -413,9 +431,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         } elseif ($act === 'save_label') {
             $name  = trim($_POST['name'] ?? '');
             $cat   = trim($_POST['category'] ?? '');
-            // #標示：空白/逗號分隔多個，#可省略；統一存成「無#、空格分隔」，最多 3 個
-            $tags  = implode(' ', array_slice(array_values(array_unique(array_filter(preg_split('/[\s,，#]+/u', trim($_POST['tags'] ?? ''))))), 0, 3));
-            if (mb_strlen($tags) > 100) $tags = mb_substr($tags, 0, 100);
+            $tags  = $parseLabelTags($_POST['tags'] ?? '');   // 見上方 $parseLabelTags（最多 10 個）
             $scope = $_POST['scope'] ?? 'private';
             $deptId = (int)($_POST['dept_id'] ?? 0);
             $spec  = $_POST['spec'] ?? '';
@@ -881,11 +897,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $pdo->commit();
             echo json_encode(['success' => true, 'count' => $done]);
         } elseif ($act === 'set_label_tags') {
-            // 批次設定 #標示（空白/逗號分隔多個，#可省略；空字串＝清除；最多 3 個）
+            // 批次設定 #標示（空字串＝清除；規則見上方 $parseLabelTags，最多 10 個）
             $ids = json_decode($_POST['label_ids'] ?? '[]', true);
-            $tags = implode(' ', array_slice(array_values(array_unique(array_filter(preg_split('/[\s,，#]+/u', trim($_POST['tags'] ?? ''))))), 0, 3));
+            $tags = $parseLabelTags($_POST['tags'] ?? '');
             if (!is_array($ids) || !$ids) throw new Exception('未選擇標籤');
-            if (mb_strlen($tags) > 100) $tags = mb_substr($tags, 0, 100);
             $ids = array_values(array_unique(array_map('intval', $ids)));
             $pdo->beginTransaction();
             $sel = $pdo->prepare("SELECT owner_type, owner_user_id, owner_dept_id FROM imgedit_labels WHERE label_id = ?");
@@ -1053,6 +1068,11 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     .lib-item:hover .lib-del { display: block; }
     /* #標示：固定在縮圖左上角的有底色小徽章（標籤庫面板與管理跳窗共用） */
     .lib-tags { position: absolute; top: 3px; left: 4px; display: flex; flex-wrap: wrap; gap: 3px; max-width: 90%; overflow: hidden; pointer-events: none; z-index: 2; }
+    /* #標示的即時錯誤提示（超過個數/字數時紅字寫原因，不要等按下存檔才報） */
+    .tag-hint { font-size: 11px; color: #dd5138; margin-top: 3px; min-height: 0; }
+    .tag-hint:empty { display: none; }
+    .tag-hint.okmsg { color: #8b949e; }
+    .lib-tags .lib-tag.more { background: #4a5560; }
     .lib-tags .lib-tag { font-size: 9.5px; line-height: 15px; font-weight: 700; background: #2779bd; color: #fff; border-radius: 3px; padding: 0 4px; white-space: nowrap; }
     #label-lib .lib-foot { padding: 8px; border-top: 1px solid #3c4046; }
 
@@ -1492,7 +1512,10 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <div class="modal-body">
             <div class="frm-row"><label>標籤名稱</label><input type="text" id="sl-name" style="flex:1;" placeholder="例如：熱處理HRC50"></div>
             <div class="frm-row"><label>分類</label><input type="text" id="sl-cat" list="lib-cat-datalist" style="flex:1;" placeholder="可留空（未分類）；輸入新名稱即新增分類"></div>
-            <div class="frm-row"><label>#標示</label><input type="text" id="sl-tags" list="lib-tag-datalist" style="flex:1;" placeholder="選填；空格分隔多個，例如：出貨 急件（#可省略）"></div>
+            <div class="frm-row"><label>#標示</label><div style="flex:1;min-width:0;">
+                <input type="text" id="sl-tags" list="lib-tag-datalist" style="width:100%;" placeholder="選填；空格分隔，最多 10 個，例如：出貨 急件 治具（#可省略）">
+                <div class="tag-hint" id="sl-tags-hint"></div>
+            </div></div>
             <div class="frm-row"><label>背景</label>
                 <select id="sl-bg" onchange="document.getElementById('sl-bg-color').style.display=(this.value==='custom')?'':'none'"
                     title="插入圖面時標籤墊的底色；透明＝不遮住圖線。插入前勾標籤庫的「以透明背景插入」一樣可臨時改為透明">
@@ -1687,7 +1710,10 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             </div>
             <div class="frm-row"><label>名稱</label><input type="text" id="nl-name" style="flex:1;" placeholder="留空＝以標籤文字第一行當名稱"></div>
             <div class="frm-row"><label>分類</label><input type="text" id="nl-cat" list="lib-cat-datalist" style="flex:1;" placeholder="可留空"></div>
-            <div class="frm-row"><label>#標示</label><input type="text" id="nl-tags" list="lib-tag-datalist" style="flex:1;" placeholder="選填；空格分隔多個（#可省略）"></div>
+            <div class="frm-row"><label>#標示</label><div style="flex:1;min-width:0;">
+                <input type="text" id="nl-tags" list="lib-tag-datalist" style="width:100%;" placeholder="選填；空格分隔，最多 10 個（#可省略）">
+                <div class="tag-hint" id="nl-tags-hint"></div>
+            </div></div>
             <div class="frm-row"><label>範圍</label>
                 <select id="nl-scope" onchange="document.getElementById('nl-dept').style.display=(this.value==='dept')?'':'none'">
                     <option value="private" selected>私人</option>
@@ -1748,10 +1774,11 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
         <h3><i class="fa fa-hashtag"></i> 設定#標示</h3>
         <div class="modal-body">
             <div class="frm-row"><label>#標示</label>
-                <input type="text" id="st-tags" list="lib-tag-datalist" style="flex:1;" placeholder="空格分隔，最多 3 個（#可省略）；留空＝清除標示"
+                <input type="text" id="st-tags" list="lib-tag-datalist" style="flex:1;" placeholder="空格分隔，同一個標籤最多 10 個（#可省略）；留空＝清除標示"
                     onkeydown="if(event.key==='Enter'){event.preventDefault();confirmSetTags();}">
             </div>
-            <div style="font-size:11.5px;color:#8b949e;">套用到目前選取的標籤（只能改自己的標籤，管理者不限）。#標示會以藍底小徽章固定顯示在標籤縮圖左上角，標籤庫搜尋框輸入「#關鍵字」可只搜尋標示。</div>
+            <div class="tag-hint" id="st-tags-hint" style="margin:0 0 6px 0;"></div>
+            <div style="font-size:11.5px;color:#8b949e;">套用到目前選取的標籤（只能改自己的標籤，管理者不限）。<b>同一個標籤可以設定多組 #</b>（空格分隔，最多 10 個），縮圖左上角固定顯示前 3 個藍底小徽章、其餘收成「+N」，全部都能用標籤庫搜尋框的「#關鍵字」搜到。</div>
         </div>
         <div class="modal-foot">
             <button class="tb-btn" onclick="hideModal('settags-modal')">取消</button>
@@ -1847,7 +1874,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
                 <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>分享範圍（私人／部門／指定人員）只限制工作檔能被誰開啟重改，壓平 PNG 一律所有人都看得到</b>。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）。<b>有建立工作檔的儲存一律當暫存</b>：不必填發行章日期，也不會觸發圖面變更判定；要當正式出圖存進去，請勾「只存圖片，不建立工作檔」，那時標籤若屬「自家出的圖」就要填發行章日期並會比對是否為圖面變更。<b>製程標籤</b>選填：同一個料號常常有好幾個加工項目各自一張圖，選了製程之後<b>只會跟同料號、同標籤、同製程的圖比新舊版</b>，不會把別的加工項目的圖誤判成前一版；留空＝共用圖，會跟該標籤下所有製程一起比。候選只列「這個料號的訂單有過的加工項目」與「這個料號已經打過的製程標籤」（打過一次就記在這個料號裡，下次直接選）。另外<b>新舊版是同一個標籤各自比</b>——BOSS圖只跟BOSS圖比、++圖只跟++圖比、單製++圖再自成一組；掛「作廢」標籤的附件一律不參與新舊版判定</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
-                <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋</li>
+                <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋。<b>同一個標籤可以設定多組 #</b>（空格分隔，最多 10 個、每個最多 12 字），縮圖上固定顯示前 3 個、其餘收成灰底「+N」（滑鼠移上去看全部），但<b>收起來的一樣搜得到</b>。個數或字數超過時欄位下方會即時紅字說明原因</li>
                 <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編；<b>標籤（含快速標籤/自組標籤）內改字同樣適用</b></li>
                 <li>研磨/粗糙度記號：標籤庫「<b>加工符號</b>」分類（技術部部門標籤）有「研磨記號 G＋▽▽▽」與「粗糙度記號 0.8＋G」，點一下放到圖上（預設透明底、可移動縮放旋轉），<b>雙擊 G 或 0.8 即可改字</b></li>
             </ul>
@@ -4445,10 +4472,55 @@ function labelThumbHTML(dataURL, name, delId) {
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 /* #標示：縮圖左上角有底色小徽章（面板與管理跳窗共用） */
 function tagChipsHTML(tags) {
-    const arr = String(tags || '').trim().split(/\s+/).filter(Boolean).slice(0, 3);   // 最多顯示 3 個徽章
-    if (!arr.length) return '';
-    return '<span class="lib-tags">' + arr.map(t => '<span class="lib-tag">#' + escHtml(t) + '</span>').join('') + '</span>';
+    // 一個標籤可以有多組 #（上限 TAGS_MAX）。縮圖只有 104px 寬，全部攤開會蓋掉圖，
+    // 所以固定顯示前 3 個、其餘收成灰底「+N」；搜尋比對的是完整字串，收起來的一樣搜得到。
+    const all = String(tags || '').trim().split(/\s+/).filter(Boolean);
+    if (!all.length) return '';
+    const shown = all.slice(0, 3), rest = all.length - shown.length;
+    return '<span class="lib-tags" title="#' + escHtml(all.join(' #')) + '">'
+        + shown.map(t => '<span class="lib-tag">#' + escHtml(t) + '</span>').join('')
+        + (rest > 0 ? '<span class="lib-tag more">+' + rest + '</span>' : '')
+        + '</span>';
 }
+/* #標示輸入的共用檢查（唯一實作，三個輸入欄共用；規則與後端 $parseLabelTags 完全一致＝鐵律8
+   前端即時擋一次、後端同規則再擋一次，兩邊都會把「為什麼錯」講出來） */
+const TAGS_MAX = 10, TAG_LEN_MAX = 12, TAGS_TOTAL_MAX = 100;
+function parseTagsInput(raw) {
+    const arr = [];
+    String(raw || '').split(/[\s,，#]+/).forEach(t => { if (t && arr.indexOf(t) < 0) arr.push(t); });
+    const joined = arr.join(' ');
+    let err = '';
+    if (arr.length > TAGS_MAX) err = '#標示最多 ' + TAGS_MAX + ' 個，目前有 ' + arr.length + ' 個，請刪掉 ' + (arr.length - TAGS_MAX) + ' 個';
+    else {
+        const long = arr.find(t => t.length > TAG_LEN_MAX);
+        if (long) err = '單一個 #標示最多 ' + TAG_LEN_MAX + ' 個字，「' + long + '」太長了';
+        else if (joined.length > TAGS_TOTAL_MAX) err = '#標示總長度最多 ' + TAGS_TOTAL_MAX + ' 個字（目前 ' + joined.length + '），請縮短或減少個數';
+    }
+    return { list: arr, value: joined, err: err };
+}
+function bindTagsInput(inputId, hintId) {
+    const el = document.getElementById(inputId), hint = document.getElementById(hintId);
+    if (!el || !hint) return;
+    const run = () => {
+        const r = parseTagsInput(el.value);
+        el.style.borderColor = r.err ? '#dd5138' : '';
+        hint.className = 'tag-hint' + (r.err ? '' : ' okmsg');
+        hint.textContent = r.err ? r.err : (r.list.length ? '已輸入 ' + r.list.length + ' 個：#' + r.list.join(' #') : '');
+    };
+    el.addEventListener('input', run);
+    el.addEventListener('change', run);
+    el._egTagsCheck = run;
+}
+/* 送出前再擋一次：回傳 true＝有錯（已把原因顯示在欄位下方並聚焦） */
+function tagsInputBlocked(inputId) {
+    const el = document.getElementById(inputId);
+    if (!el) return false;
+    const r = parseTagsInput(el.value);
+    if (el._egTagsCheck) el._egTagsCheck();
+    if (r.err) { el.focus(); toast(r.err); return true; }
+    return false;
+}
+['sl-tags', 'nl-tags', 'st-tags'].forEach(id => bindTagsInput(id, id + '-hint'));
 function allTags() {
     const set = new Set();
     customLabels.forEach(r => String(r.tags || '').trim().split(/\s+/).filter(Boolean).forEach(t => set.add(t)));
@@ -4776,6 +4848,7 @@ function lmOpenSetTags() {
     document.getElementById('st-tags').focus();
 }
 async function confirmSetTags() {
+    if (tagsInputBlocked('st-tags')) return;
     const tags = document.getElementById('st-tags').value.trim();
     try {
         const fd = new FormData();
@@ -4949,6 +5022,7 @@ async function confirmSaveLabel() {
     const name = document.getElementById('sl-name').value.trim();
     const cat = document.getElementById('sl-cat').value.trim();
     if (!name) { toast('請輸入標籤名稱'); return; }
+    if (tagsInputBlocked('sl-tags')) return;
     if (!pendingLabelSpec) { hideModal('savelabel-modal'); return; }
     if (pendingLabelSpec.kind !== 'image') {
         const bgSel = document.getElementById('sl-bg').value;
@@ -5002,6 +5076,7 @@ function openNewLabelModal() {
 async function confirmNewLabel() {
     const text = document.getElementById('nl-text').value.replace(/\s+$/, '');
     if (!text.trim()) { toast('請輸入標籤文字'); return; }
+    if (tagsInputBlocked('nl-tags')) return;
     const spec = {
         kind: document.getElementById('nl-kind').value,
         text: text,
