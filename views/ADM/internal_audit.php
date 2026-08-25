@@ -2190,13 +2190,14 @@ function printNc(id){
               + '<td class="l" colspan="3">稽核組長: <span class="stamp-inline">'
               + stampHtml(m, {name:n.leader_name}, n.leader_date)+'</span></td></tr>'
               + '<tr><td class="pre" colspan="6" style="min-height:58px;height:58px;">'
-              + '<b>管理代表意見:</b>\n'+esc(n.mgr_note||'')
-              + (n.mgr_name ? ('\n簽名: ') : '')+'</td></tr>'
+              /* 紙本這一格是「管理代表意見」＋下方「簽名」，簽名就是圖章本身，
+                 所以不要再多印一行空的「簽名:」文字（會變成一行沒有內容的標籤）。 */
+              + '<b>管理代表意見:</b>\n'+esc(n.mgr_note||'')+'</td></tr>'
+              + (n.mgr_name
+                 ? ('<tr><td class="l" colspan="6">簽名: <span class="stamp-inline">'
+                    + stampHtml(m, {name:n.mgr_name}, n.mgr_date)+'</span></td></tr>')
+                 : '')
               + '</table>';
-            if (n.mgr_name) {
-                h += '<div style="margin-top:6px;font-size:12px;text-align:right;">管理代表: <span class="stamp-inline">'
-                   + stampHtml(m, {name:n.mgr_name}, n.mgr_date)+'</span></div>';
-            }
             logPrint('內稽不符合通知單 '+(n.nc_no||('#'+id)), 'ia_nc', id);
             iaPrintWindow('內稽不符合通知單 '+(n.nc_no||''), h, '', m.doc_no, false);
         });

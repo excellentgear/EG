@@ -369,6 +369,7 @@ $_eqmRoles      = [];  $_userEqmRoles    = [];
 $_btrpRoles     = [];  $_userBtrpRoles   = [];
 $_dapRoles      = [];  $_userDapRoles    = [];
 $_pslRoles      = [];  $_userPslRoles    = [];
+$_iaRoles       = [];  $_userIaRoles     = [];
 $_asdocPositions = []; $_asdocPosRoles   = [];
 $_quotDepts     = [];
 
@@ -417,6 +418,7 @@ try {
     $st->execute(['doc_apply']); $_dapRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['eng_change']); $_engRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['print_sign_log']); $_pslRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['internal_audit']); $_iaRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
 // 使用者已指派角色（依模組過濾）
@@ -592,6 +594,10 @@ try {
     $st->execute(['print_sign_log']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userPslRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['internal_audit']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userIaRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
 } catch(Exception $_e) {}
 
@@ -826,6 +832,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'dap-role-section'       => '文件制修申請單',
                                         'eng-role-section'       => '工程變更申請單',
                                         'psl-role-section'       => '列印與簽核紀錄',
+                                        'ia-role-section'        => '內部稽核',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
                                         'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
@@ -1326,6 +1333,16 @@ $_quotDepts = array_keys($_deptSet);
                          簽核紀錄取自全站共用的簽核資料，含<strong>文件名稱／送件日期／簽核人／簽核日期時間／結果與回覆意見</strong>。
                          目前涵蓋哪些表單、哪些還沒涵蓋，該頁「使用說明」會即時掃描列出。管理者固定擁有全部權限。',
                         $_pslRoles, $_userPslRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('ia', 'internal_audit', '內部稽核', 'fa-search-plus', '#b06f27',
+                        '為每位使用者指派「<a href="../ADM/internal_audit.php" target="_blank" style="color:#b5762a;">內部稽核</a>」頁（2-GM-06）的角色。
+                         <strong>所有在職員工不需要指派任何角色</strong>，就能收到<span style="color:#b06f27;">自己單位</span>的內稽不符合通知單（IA 單）並填寫「原因分析／糾正措施／預防措施／單位主管核示」，也看得到自己單位的 IA 單。<br>
+                         此處指派三種角色：<strong>內稽檢閱</strong>＝唯讀查看全部年度計畫、稽核通知單、查檢表、IA 單與稽核報告表；
+                         <strong>稽核員</strong>＝檢閱＋建立與填寫三種查檢表、開立 IA 單、<strong>代受稽單位填寫回覆（會留下代填紀錄）</strong>、稽核組長驗證、重發通知；
+                         <strong>內稽管理員（管理代表）</strong>＝全部＋年度計畫表建立/排定/送審/核准、稽核通知單新增編輯刪除、自動建立事前與結束會議紀錄、
+                         AS 條文題庫維護、IA 單管理代表意見與<strong>結案</strong>、稽核報告表儲存與核准、模組設定（七份表單的 AS 文件綁定／簽章圖章／核准審查格來源／到期提醒天數）。<br>
+                         <span style="color:#b06f27;">IA 單四段分工由系統依角色鎖定</span>：稽核員段／受稽單位段／驗證段／管理代表段，各段只有該身分能填。管理者固定擁有全部權限。',
+                        $_iaRoles, $_userIaRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('leave', 'leave', '請假系統', 'fa-calendar-minus-o', '#d99a4e',
                         '<strong>所有登入者都能申請請假、查看與撤回／銷假自己的單</strong>，不需要在這裡指派角色。此處只指派 <strong>人事（可看全部請假單）</strong>＝可檢視全公司請假單（不含代為簽核的權力）。<br>

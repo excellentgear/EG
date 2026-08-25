@@ -523,12 +523,15 @@ case 'check_create': {
         $q->execute([$caseId]);
         if (!$q->fetchColumn()) jerr('稽核案件不存在');
     }
+    // 注意：ia_check_build_items() 把「空的 pick」當成不篩選＝整份題庫全帶。
+    // 所以空陣列一定要在這裡先擋掉，否則直打 API 送 pick=[] 會安靜地建出一張 71 題的全表（前端擋得住、後端也要擋＝鐵律8）。
     $pick = json_decode((string)($_POST['pick'] ?? '[]'), true);
     $pick = is_array($pick) ? array_values(array_filter(array_map('intval', $pick))) : [];
+    if (!$pick) jerr('請至少勾選一個要查核的項目');
     $items = ia_check_build_items($db, $kind, $year, $pick);
-    // 只剩章節標題列＝一題都沒勾到，擋下（否則會建出一張空表）
+    // 只勾到章節標題列也算沒勾（會建出一張只有標題沒有題目的空表）
     $real = 0; foreach ($items as $it) { if (!$it['is_header']) $real++; }
-    if ($real === 0) jerr('請至少勾選一個要查核的項目');
+    if ($real === 0) jerr('請至少勾選一個要查核的項目（目前只勾到章節標題列）');
 
     $auditorId = iaInt($_POST['auditor_id'] ?? '') ?: $uid;
     $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$auditorId]);
