@@ -638,6 +638,19 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 nmMarkRead(nmRemoveFromList);
                 return;
             }
+            if (refType === 'ENG_CHANGE_APPROVAL' || refType === 'ENG_CHANGE_REVIEW') {
+                // 工程變更申請單待簽核／待會審：開該單明細（refid = eng_change.ec_id），
+                // 頁面會依目前關卡自動顯示可簽的欄位與「簽核／退回」按鈕；簽完之前不移除(mode=sign)。
+                window.open('../TD/eng_change.php?id=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                if (parseInt($(this).data('needmode'), 10) <= 1) { nmMarkRead(nmRemoveFromList); }
+                return;
+            }
+            if (refType === 'ENG_CHANGE_RESULT') {
+                // 結案／退回結果通知（給申請人）：純資訊型，開該張申請單後標記已讀移除
+                window.open('../TD/eng_change.php?id=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
             if (refType === 'VENDOR_AUDIT_PLAN_RESULT') {
                 // 核准/退回結果通知（給送出人）：純資訊型，開對應年度分頁後標記已讀移除
                 window.open('../pm/vendor_audit.php?plan_year=' + ($(this).data('refid') || 0) + '&event=' + nmId);

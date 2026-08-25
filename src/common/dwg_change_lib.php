@@ -996,7 +996,24 @@ function dwg_submit_change(PDO $pdo, int $id, int $uid): array {
         $partNo = dwg_part_info($pdo, (int)$c['d_id'])['part_no'];
         dwg_notify($pdo, $id, '【圖面變更】料號 ' . $partNo . '　請簽收確認', dwg_notify_body($c), $ackIds, $uid, 'reply');
     }
-    return ['id' => $id, 'change_no' => (string)$c['change_no'], 'new_version_id' => $ver['new'], 'notified' => count($ackIds)];
+
+    // 變更來源＝客戶 → 自動產生一張工程變更申請單草稿（2-TD-01-01，使用者要求 2026-08-25）。
+    // 判定「這次變更是不是已經開過單」的標準由使用者拍板：客戶版次或客戶圖面日期相同就不重複開；
+    // 兩者都沒有（客戶圖多半沒版次）時由建立者認定有變更＝照開，但一律是草稿等人確認。
+    // 建單失敗不影響已經成立的圖面變更紀錄（包 try），只是不會有那張草稿。
+    $engChange = null;
+    try {
+        if (trim((string)$c['source']) === '客戶') {
+            require_once __DIR__ . '/eng_change_lib.php';
+            if ((int)(ec_settings($pdo)['ec_auto_from_dwg'] ?? 1) === 1) {
+                $r = ec_auto_from_dwg_change($pdo, $id, $uid, dwg_user_name($pdo, $uid));
+                if ($r['ok']) $engChange = $r;
+            }
+        }
+    } catch (Throwable $e) {}
+
+    return ['id' => $id, 'change_no' => (string)$c['change_no'], 'new_version_id' => $ver['new'],
+            'notified' => count($ackIds), 'eng_change' => $engChange];
 }
 
 /**

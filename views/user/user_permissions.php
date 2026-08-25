@@ -415,6 +415,7 @@ try {
     $st->execute(['equip_machine']); $_eqmRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['business_trip']); $_btrpRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['doc_apply']); $_dapRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $st->execute(['eng_change']); $_engRoles = $st->fetchAll(PDO::FETCH_ASSOC);
     $st->execute(['print_sign_log']); $_pslRoles = $st->fetchAll(PDO::FETCH_ASSOC);
 } catch(Exception $_e) {}
 
@@ -583,6 +584,10 @@ try {
     $st->execute(['doc_apply']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
         $_userDapRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+    }
+    $st->execute(['eng_change']);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_userEngRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
     }
     $st->execute(['print_sign_log']);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
@@ -819,6 +824,7 @@ $_quotDepts = array_keys($_deptSet);
                                         'eqm-role-section'       => '機台設備一覽表',
                                         'btrp-role-section'      => '公出單',
                                         'dap-role-section'       => '文件制修申請單',
+                                        'eng-role-section'       => '工程變更申請單',
                                         'psl-role-section'       => '列印與簽核紀錄',
                                         'asdoc-pos-role-section' => 'AS文件·職稱權限',
                                         'imgedit-label-dir-section' => '批圖標籤路徑',
@@ -1300,6 +1306,16 @@ $_quotDepts = array_keys($_deptSet);
                          <span style="color:#b06f27;">沒有任何角色的人</span>，若被指派為某張單的<strong>會簽單位簽核人</strong>（含代理人），仍可從通知開啟該單完成會簽。
                          核准／管理代表／單位主管的實際人員一律即時查<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定</a>，不寫死人名。管理者固定擁有全部權限。',
                         $_dapRoles, $_userDapRoles, $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('eng', 'eng_change', '工程變更申請單', 'fa-exchange', '#d99a4e',
+                        '為每位使用者指派「<a href="../TD/eng_change.php" target="_blank" style="color:#b5762a;">工程變更申請單</a>」頁（2-TD-01-01）的角色。
+                         角色功能：<strong>工程變更檢閱</strong>＝唯讀查看全部申請單與列印；
+                         <strong>工程變更申請</strong>＝檢閱＋開立／編輯／送出<span style="color:#b06f27;">自己的</span>申請單（文件編號＝西元年月日＋3 位流水，依表單上的日期自動產生）；
+                         <strong>工程變更管理員</strong>＝全部＋代他人開單、改他人的單、刪除、<strong>代簽任何一關</strong>、模組設定（AS 文件綁定／各關卡簽章人來源／圖章模板／是否由圖面變更自動產生）。<br>
+                         <span style="color:#b06f27;">簽核權不看角色</span>：流程各關卡（單位主管→倉管組→技術課→核准→相關單位會審→管制員）由系統依<strong>本單日期當時的職務</strong>解析出該簽的人，
+                         是那個人才簽得下去（本人不在時自動換代理人，圖章加「代」字）。沒有任何角色的人，仍看得到「輪到自己簽」的那幾張單，否則收到通知點進來會是空白頁。<br>
+                         各關卡與六個會審單位對應的部門一律即時查<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定</a>，不寫死部門 id 或人名。管理者固定擁有全部權限。',
+                        $_engRoles, $_userEngRoles, $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('psl', 'print_sign_log', '列印與簽核紀錄', 'fa-history', '#b06f27',
                         '為每位使用者指派「<a href="../admin/print_sign_log.php" target="_blank" style="color:#b5762a;">列印與簽核紀錄</a>」頁的角色。

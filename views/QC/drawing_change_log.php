@@ -960,7 +960,7 @@ $(function(){
             if(!keepDraft && r.status==='DRAFT' && r.id){
                 post({action:'submit_change', id:r.id, confirm_password:(confirmPw||'')}, function(s2){
                     $('#editModal').modal('hide'); load();
-                    alert(s2.success ? ('已送出'+(s2.notified?('，並已通知 '+s2.notified+' 位人員簽收'):'')) : ('送出失敗：'+s2.message));
+                    if(s2.success) afterSubmit(s2); else alert('送出失敗：'+s2.message);
                 });
                 return;
             }
@@ -969,6 +969,24 @@ $(function(){
             alert(keepDraft ? '已存成草稿（尚未通知任何人，也還沒換檢驗標準版次）'
                             : ('已儲存'+(n?('，並已通知 '+n+' 位人員簽收'):'')));
         }).fail(function(x){ $b.prop('disabled',false); alert('儲存錯誤：'+x.responseText); });
+    }
+    /* 送出成功後的提示。變更來源＝客戶時後端會自動建一張工程變更申請單草稿（2-TD-01-01），
+       這裡要把它講出來並讓使用者直接點過去——只丟一句「已送出」的話，那張草稿會沒人知道。 */
+    function afterSubmit(res){
+        var msg = '已送出' + (res.notified ? ('，並已通知 ' + res.notified + ' 位人員簽收') : '');
+        var ec = res.eng_change;
+        if(ec && ec.ec_id){
+            msg += '
+
+' + (ec.message || '');
+            if(confirm(msg + '
+
+要現在開啟工程變更申請單嗎？')){
+                window.open('../TD/eng_change.php?id=' + ec.ec_id, '_blank');
+            }
+            return;
+        }
+        alert(msg);
     }
     $('#btn-save').on('click', function(){
         if(EDIT_PERM && EDIT_PERM.need_password){ askPassword(EDIT_PERM.reason, function(pw){ doSave(false, pw); }); return; }
@@ -1047,8 +1065,8 @@ $(function(){
                         var go = function(pw){
                             post({action:'submit_change', id:c.id, confirm_password:(pw||'')}, function(res){
                                 if(!res.success){ alert(res.message); return; }
-                                alert('已送出'+(res.notified?('，並已通知 '+res.notified+' 位人員簽收'):''));
                                 $('#detailModal').modal('hide'); load();
+                                afterSubmit(res);
                             });
                         };
                         if(perm.need_password) askPassword(perm.reason, go); else go('');
