@@ -63,7 +63,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
         $stmt = $pdo2->prepare("SELECT bom, sqty, d_id FROM bom WHERE d_id IN ($phBom) ORDER BY Created_At DESC");
         $stmt->execute($partNos);
         $bom_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        $scan_dir = 'Z:/BOM/'; $url_dir = '/nas/';
+        // BOM 圖檔資料夾一律走設定鍵 bom_scan_dir（唯一實作 src/common/bom_dir_lib.php）。
+        // 2026-08-25 起預設值改成 UNC `\\excellentnas\生產課\BOM\`：原本寫死的 Z: 是使用者
+        // session 層級的持續連線，實測 `net use` 會變成「無法使用」，造成圖面時好時壞。
+        require_once __DIR__ . '/../../src/common/bom_dir_lib.php';
+        $scan_dir = eg_bom_fs_path(eg_bom_scan_dir($pdo2)); $url_dir = '/nas/';
         $files = [];
         // 載入 tags_config（自動檔名標籤設定）
         $tagsConfig = [];
@@ -86,7 +90,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
         };
 
         if (is_dir($scan_dir) && !empty($bom_rows)) {
-            $allF = scandir($scan_dir);
+            // 檔名一律經 bom_dir_lib 轉回 UTF-8（UNC 中文路徑在 Windows 可能是 Big5，
+            // 漏轉不會報錯、只會整批比對不到＝畫面變成「沒有圖面」）；
+            // withMtime=false：這個資料夾有 1.9 萬個檔又在網路磁碟上，逐檔 stat 會慢到分鐘級
+            $allF = array_column(eg_bom_scan($scan_dir, [], '', false), 'name');
             foreach ($bom_rows as $row) {
                 $bname = $row['bom']; $sqty = $row['sqty'];
                 $bindFrom = $bindLabelByPartNo[$row['d_id']] ?? null;
@@ -664,6 +671,23 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
             font-size: 10px; line-height: 15px; border-radius: 8px; background: #e6c9a0; color: #6b4a1f;
         }
         .bom-tab.active .tab-count { background: #d4761a; color: #fff; }
+
+        /* ── 使用說明（鐵律7；本頁是滿版工具頁沒有 .page-title，按鈕改放工具列最右）── */
+        .page-help-btn { height:24px; font-size:12px; padding:0 10px; border:1px solid #d98a33; border-radius:12px;
+            background:#F0A24B; color:#fff; cursor:pointer; white-space:nowrap; }
+        .page-help-btn:hover { background:#d98a33; }
+        @media print { .page-help-btn { display:none !important; } }
+        #helpUseMask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9500;
+            align-items:center; justify-content:center; }
+        #helpUseMask .help-box { background:#fff; border-radius:8px; width:92%; max-width:780px; max-height:86vh;
+            overflow:auto; padding:18px 22px; box-shadow:0 6px 28px rgba(0,0,0,.35); }
+        .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
+        .help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
+        .help-doc h4:first-child { margin-top:0; }
+        .help-doc b { color:#8A5A2B; }
+        .help-doc ul { margin:4px 0 8px; padding-left:20px; }
+        .help-doc li { margin:2px 0; }
+        .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
     </style>
 </head>
 <body>
@@ -688,6 +712,9 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
             <button id="btn-zoom-in"    class="btn btn-default btn-xs" style="display:none;" title="放大"><i class="fa fa-search-plus"></i></button>
             <button id="btn-zoom-out"   class="btn btn-default btn-xs" style="display:none;" title="縮小"><i class="fa fa-search-minus"></i></button>
             <button id="btn-zoom-reset" class="btn btn-default btn-xs" style="display:none;" title="重置縮放"><i class="fa fa-refresh"></i></button>
+            <!-- 旋轉：直接覆蓋原檔（使用者 2026-08-25 拍板），所以每個看得到這張圖的人看到的都是轉正後的 -->
+            <button id="btn-rot-ccw"    class="btn btn-warning btn-xs" style="display:none;" title="向左轉 90°（會直接覆蓋原檔，所有人看到的都是轉正後的圖）"><i class="fa fa-undo"></i> 左轉</button>
+            <button id="btn-rot-cw"     class="btn btn-warning btn-xs" style="display:none;" title="向右轉 90°（會直接覆蓋原檔，所有人看到的都是轉正後的圖）"><i class="fa fa-repeat"></i> 右轉</button>
             <button id="btn-paint"      class="btn btn-info    btn-xs" style="display:none;" title="用小畫家開啟（需一次性安裝）"><i class="fa fa-paint-brush"></i> 小畫家</button>
             <button id="btn-save"       class="btn btn-success btn-xs" style="display:none;" title="儲存檔案"><i class="fa fa-floppy-o"></i> 儲存</button>
             <button id="btn-print"      class="btn btn-default btn-xs" style="display:none;" title="列印"><i class="fa fa-print"></i> 列印</button>
@@ -699,6 +726,7 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
                 title="批圖編輯器（貼上/拖入圖面、遮蓋客戶資料、加標籤文字、球標與設變標示、多圖合併、列印/另存）——開啟時自動帶入目前預覽的圖檔；PDF 會自動轉成圖檔開啟，多頁會問要開哪一頁"
                 class="btn btn-xs" style="background:linear-gradient(135deg,#6a1b9a,#ab47bc);color:#fff;border:none;font-weight:600;"><i class="fa fa-paint-brush"></i> 批圖編輯器</button>
             <?php endif; ?>
+            <button id="btnPageHelp" class="page-help-btn" type="button"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
         <!-- 小畫家提示列（每次點擊都顯示，讓使用者可視需要重新安裝） -->
         <div id="paint-install-hint" style="display:none; background:#fff3cd; color:#856404; padding:7px 12px; font-size:12px; border-bottom:2px solid #ffc107; flex-shrink:0;">
@@ -737,6 +765,55 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
             <button id="save-confirm" class="btn btn-success btn-sm"><i class="fa fa-download"></i> 下載</button>
         </div>
     </div>
+</div>
+
+<!-- 使用說明（鐵律7） -->
+<div id="helpUseMask">
+  <div class="help-box">
+    <div style="display:flex;align-items:center;margin-bottom:10px;">
+      <h4 style="margin:0;color:#8A5A2B;"><i class="fa fa-question-circle"></i> 圖面查閱 使用說明</h4>
+      <button type="button" class="btn btn-default btn-xs" style="margin-left:auto;" onclick="document.getElementById('helpUseMask').style.display='none';">關閉</button>
+    </div>
+    <div class="help-doc">
+      <h4>這一頁在做什麼</h4>
+      <ul>
+        <li>把同一個料號相關的檔案集中在一個地方看：<b>圖面</b>（BOM 圖檔）、<b>訂單／報價</b>附件、<b>其他附件</b>（料號附件，含照片相簿）。</li>
+        <li>左側點檔案、右側預覽；圖片可縮放拖曳，PDF 直接內嵌顯示。</li>
+      </ul>
+
+      <h4>工具列各按鈕</h4>
+      <ul>
+        <li><b>放大／縮小／重置</b>：只影響畫面顯示，不會動到檔案。也可用滑鼠滾輪縮放、按住拖曳平移。</li>
+        <li><b>左轉／右轉</b>：把圖轉 90°，<b>轉完直接覆蓋原檔</b>——所以之後<u>每個人</u>看到的、列印出來的都是轉正後的圖（這正是設計目的：掃描歪掉的圖轉一次就好）。圖片與 PDF 都可以轉。</li>
+        <li><b>小畫家</b>：用 Windows 小畫家開啟目前這張圖（第一次使用要先照提示列下載安裝程式，一次性安裝）。PDF 不會出現這顆——小畫家開不了 PDF，請改用批圖編輯器。</li>
+        <li><b>儲存</b>：下載到自己電腦，可自訂檔名（不會動到伺服器上的原檔）。</li>
+        <li><b>列印</b>：列印當下會另外產生一張縮小版餵給印表機，避免超大圖卡在「準備列印時出現錯誤」。</li>
+        <li><b>設定標籤</b>：設定 ERP／資材報告的檔名後綴要顯示成什麼標籤。</li>
+        <li><b>批圖編輯器</b>：遮蓋客戶資料、加註標示、多圖合併等（需「批圖使用者」角色才看得到這顆）。</li>
+      </ul>
+
+      <h4>重要行為／常見疑問</h4>
+      <div class="tip">
+        <b>旋轉是永久的，而且是給所有人看的。</b>它不是只改自己畫面上的角度——原檔會被覆蓋。
+        轉錯了就往回轉（右轉三次或左轉一次即可轉回原角度），但 JPG 每轉一次會重新編碼一次，
+        <b>不要反覆亂轉</b>，畫質會一次比一次差一點點。
+      </div>
+      <ul>
+        <li><b>轉完別人怎麼還是舊的？</b>瀏覽器會暫存圖檔約一分鐘，等一下重新整理就會是新的。</li>
+        <li><b>轉不動、跳「記憶體不足」</b>：那張圖的畫素太大（超過約 1.5GB 記憶體需求），請改用批圖編輯器或小畫家處理後重新上傳。</li>
+        <li><b>小畫家按了沒反應</b>：多半是還沒安裝那支一次性的開啟程式，點提示列裡的「下載安裝程式」雙擊執行即可。附件分頁的檔案會先向伺服器換一張三分鐘、用過即失效的臨時連結，不會把附件公開出去。</li>
+        <li><b>檔案位置</b>：圖面在生產課 BOM 資料夾、附件在各自的 NAS 資料夾，位置都由系統設定值決定，本頁不寫死路徑。</li>
+      </ul>
+
+      <h4>權限</h4>
+      <ul>
+        <li><b>圖面分頁</b>：所有登入者都看得到。</li>
+        <li><b>訂單／報價分頁</b>：報價區塊需「報價檢視（quotation_view）」。</li>
+        <li><b>其他附件分頁</b>：過渡期開放；已被指派料號主檔（master_data）角色者需「附件檢視（md_attach_view）」。</li>
+        <li><b>旋轉</b>：看得到那個檔案的人就能轉（後端會再驗一次權限，不是只擋畫面）。</li>
+      </ul>
+    </div>
+  </div>
 </div>
 
 
@@ -789,6 +866,7 @@ var _sc         = 1, _tx = 0, _ty = 0;
 var _currentType = '';
 var _currentPath = '';
 var _currentName = '';
+var _rotBust     = {};   // 剛旋轉過的檔案 → 新的 mtime（重新載入時當破快取參數用）
 
 // ── 工具函數 ──────────────────────────────────────────────────────────────
 // 顯示用日期格式化（ai-rules/20：一律 YYYY.MM.DD，唯一實作在 eg_date_fmt.js）。
@@ -819,23 +897,26 @@ function showFile(path, type, name) {
     var viewPath = (path && path.indexOf('/nas/') === 0)
         ? 'bom_download.php?path=' + encodeURIComponent(path) + '&filename=' + encodeURIComponent(name || '') + '&inline=1'
         : path;
+    // 剛按過旋轉的檔案要破快取，否則瀏覽器會拿舊圖（附件 API／bom_download 都允許短期快取）
+    if (_rotBust[path]) viewPath += (viewPath.indexOf('?') >= 0 ? '&' : '?') + '_r=' + _rotBust[path];
 
     $('#viewer-title').text(_currentName);
     $('#img-zoom-wrap, #bom-pdf-frame, #viewer-placeholder, #bom-quote-detail, #album-grid-wrap').hide();
-    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint').hide();
+    $('#btn-print, #btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-paint, #btn-rot-ccw, #btn-rot-cw').hide();
     resetTransform();
 
-    // 批圖編輯器可處理的格式（pdf 由編輯器端用 pdf.js 轉成圖檔再開，多頁會問要開哪幾頁）
-    var _paintFormats = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tif', 'tiff', 'pdf'];
+    // 小畫家吃得下的格式（**不含 pdf**：mspaint 開不了 PDF，按了只會下載一個開不起來的檔；
+    // PDF 要改圖請按「批圖編輯器」，那邊會用 pdf.js 轉成圖檔再開）
+    var _paintFormats = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tif', 'tiff'];
     var _isPaintable   = _paintFormats.indexOf(_currentType) !== -1;
 
     if (_currentType === 'pdf') {
         $('#bom-pdf-frame').attr('src', viewPath).show();
-        $('#btn-save, #btn-print').show();
+        $('#btn-save, #btn-print, #btn-rot-ccw, #btn-rot-cw').show();
     } else if (_isImg) {
         $('#bom-zoom-img').attr('src', viewPath);
         $('#img-zoom-wrap').css('display', 'flex');
-        $('#btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-print').show();
+        $('#btn-zoom-in, #btn-zoom-out, #btn-zoom-reset, #btn-save, #btn-print, #btn-rot-ccw, #btn-rot-cw').show();
     } else {
         $('#viewer-placeholder')
             .html('<i class="fa fa-download"></i> 不支援預覽，<a href="'+escapeHtml(viewPath)+'" target="_blank">點此下載</a>')
@@ -995,13 +1076,58 @@ $('#btn-print').on('click', function() {
 });
 
 // ── 小畫家：呼叫自訂協議，同時顯示提示列（讓使用者可視需要重新安裝）────
+// 兩條路徑（2026-08-25 修正，原本只有第一條、附件分頁一按就跳「呼叫 open 方法後，才能
+// 呼叫此方法」——那是把相對路徑 ../../src/store/… 直接接在 host 後面組出非法網址，
+// VBScript 的 oHTTP.Open 失敗後才跑到 setOption 的錯）：
+//   圖面(/nas/)   → Apache 別名直接給檔，維持原本作法
+//   附件(API 網址) → 先換一張一次性權杖再打 bom_open.php；**VBScript 用
+//                    MSXML2.ServerXMLHTTP 抓檔不會帶登入 cookie**，直接打附件 API 一定 403
 $('#btn-paint').on('click', function() {
-    // 只傳 host + path，避免嵌套 :// 造成 URL 解析錯誤
-    // VBScript 端會自動補回 http://
-    window.location.href = 'open-paint://' + window.location.host + _currentPath;
-    // 每次點擊都顯示提示，成功開啟者可直接按 × 關閉；未安裝或需重裝者可點連結
-    document.getElementById('paint-install-hint').style.display = 'block';
+    var hint = document.getElementById('paint-install-hint');
+    var host = window.location.host;
+    if (!_currentPath) return;
+    if (_currentPath.indexOf('/nas/') === 0) {
+        // 只傳 host + path，避免嵌套 :// 造成 URL 解析錯誤；VBScript 端會自動補回 http://
+        window.location.href = 'open-paint://' + host + _currentPath;
+        hint.style.display = 'block';
+        return;
+    }
+    var $btn = $(this).prop('disabled', true);
+    $.post('bom_open_token.php', { url: _currentPath }, function(res) {
+        $btn.prop('disabled', false);
+        if (!res || !res.success) { alert((res && res.message) || '無法用小畫家開啟這個檔案'); return; }
+        // 網址結尾一定要帶副檔名：VBScript 是用「最後一個點」決定暫存檔要存成什麼副檔名，
+        // 沒帶就會存成 .php，小畫家開不起來
+        var dir = window.location.pathname.replace(/[^/]*$/, '');   // /EGsystem/views/pm/
+        var ext = (res.ext || _currentType || 'jpg');
+        window.location.href = 'open-paint://' + host + dir + 'bom_open.php?t=' + res.token + '&x=.' + ext;
+        hint.style.display = 'block';
+    }, 'json').fail(function() {
+        $btn.prop('disabled', false);
+        alert('無法用小畫家開啟：與伺服器連線失敗');
+    });
 });
+
+// ── 旋轉：就地覆蓋原檔（使用者 2026-08-25 拍板；權限＝看得到就轉得動，後端再驗一次）──
+function doRotate(deg) {
+    if (!_currentPath) return;
+    var $btns = $('#btn-rot-ccw, #btn-rot-cw').prop('disabled', true);
+    $.post('bom_rotate.php', { url: _currentPath, deg: deg }, function(res) {
+        $btns.prop('disabled', false);
+        if (!res || !res.success) { alert((res && res.message) || '旋轉失敗'); return; }
+        _rotBust[_currentPath] = res.mtime || Date.now();
+        showFile(_currentPath, _currentType, _currentName);   // 重新載入（帶破快取參數）
+    }, 'json').fail(function() {
+        $btns.prop('disabled', false);
+        alert('旋轉失敗：與伺服器連線失敗');
+    });
+}
+$('#btn-rot-ccw').on('click', function() { doRotate(270); });   // 向左轉＝順時針 270°
+$('#btn-rot-cw').on('click',  function() { doRotate(90);  });
+
+// ── 使用說明（鐵律7）──
+$('#btnPageHelp').on('click', function() { $('#helpUseMask').css('display', 'flex'); });
+$('#helpUseMask').on('click', function(e) { if (e.target === this) this.style.display = 'none'; });
 
 // ── 儲存：開啟頁內對話框 ──────────────────────────────────────────────────
 $('#btn-save').on('click', function() {
@@ -1046,8 +1172,17 @@ $('#save-confirm').on('click', function() {
 // 若瀏覽器設定「每次詢問儲存位置」，會顯示另存新檔對話框；否則存至下載資料夾。
 function doDownload(url, filename) {
     var a = document.createElement('a');
-    a.href = 'bom_download.php?path=' + encodeURIComponent(url)
-           + '&filename=' + encodeURIComponent(filename);
+    if (url && url.indexOf('/nas/') === 0) {
+        a.href = 'bom_download.php?path=' + encodeURIComponent(url)
+               + '&filename=' + encodeURIComponent(filename);
+    } else {
+        // 附件分頁（其他附件／訂單／報價）的 path 本來就是附件 API 網址，再包一層
+        // bom_download.php 只會得到 400（那支只收 /nas/ 開頭）＝2026-08-25 使用者回報的
+        // 「無法存取網站」。改直接打 API 並帶 dl=1&dl_name：**Chrome 會讓伺服器的
+        // Content-Disposition 檔名蓋掉 <a download>**，檔名一定要由後端指定才會生效。
+        a.href = url + (url.indexOf('?') >= 0 ? '&' : '?')
+               + 'dl=1&dl_name=' + encodeURIComponent(filename);
+    }
     a.download = filename;
     document.body.appendChild(a);
     a.click();

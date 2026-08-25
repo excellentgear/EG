@@ -322,9 +322,9 @@ switch ($action) {
         };
         $dispName = $row['original_name'] ?: $row['filename'];
         header('Content-Type: ' . $mime);
-        header("Content-Disposition: inline; filename*=UTF-8''" . rawurlencode($dispName));
+        // inline 預覽／?dl=1 另存新檔（可用 dl_name 指定檔名）＋快取標頭，共用實作見 attach_lib
+        eg_attach_send_disposition($dispName);
         header('Content-Length: ' . filesize($fp));
-        header('Cache-Control: private, max-age=3600');
         readfile($fp);
         exit;
     }

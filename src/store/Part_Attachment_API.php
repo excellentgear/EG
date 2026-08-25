@@ -925,9 +925,10 @@ switch ($action) {
             default => 'application/octet-stream',
         };
         header('Content-Type: '.$mime);
-        header('Content-Disposition: inline; filename="'.rawurlencode($rec['original_name'] ?: $rec['filename']).'"');
+        // inline 預覽／?dl=1 另存新檔（可用 dl_name 指定檔名）＋快取標頭，共用實作見 attach_lib
+        require_once __DIR__ . '/../common/attach_lib.php';
+        eg_attach_send_disposition($rec['original_name'] ?: $rec['filename']);
         header('Content-Length: '.filesize($fp));
-        header('Cache-Control: private, max-age=3600');
         readfile($fp);
         exit;
 

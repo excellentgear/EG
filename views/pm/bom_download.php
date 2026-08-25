@@ -26,30 +26,26 @@ if (empty($filename)) { $filename = 'download'; }
 $filename = preg_replace('/[\\\\\/:\*\?"<>\|]/', '_', $filename);
 
 // ── 網頁路徑 → 實體路徑 ──
-// /nas/xxx          → \\excellentnas\生產課\BOM\xxx
-// /nas/ERP/xxx      → \\excellentnas\生產課\BOM\ERP\xxx
-$relativePath = substr($path, strlen('/nas/')); // 去掉 /nas/ 前綴
-// 注意：不能用 urldecode()——它會把檔名裡「原本就是字面上的 +」（如 B-xxx++.jpg 這種
-// 加工圖變體命名）誤當成空白解碼掉，變成 B-xxx  .jpg 而 404（此 bug 存在已久，另存新檔
-// 就踩過；rawurldecode() 只解 %XX，不動字面 + 字元，ERP 子路徑的中文 %E8...仍能正常解出）
-$relativePath = rawurldecode($relativePath);    // 解 URL 編碼（中文），保留字面 + 不誤轉空白
+// /nas/xxx      → <bom_scan_dir>\xxx
+// /nas/ERP/xxx  → <bom_scan_dir>\ERP\xxx
+// 實際位置一律走設定鍵 bom_scan_dir（2026-08-25 起預設 UNC `\\excellentnas\生產課\BOM\`），
+// 不再寫死在這支裡；解析（含 rawurldecode 不誤轉字面 +、防路徑穿越、Big5 退路）的唯一實作
+// 在 src/common/bom_view_file_lib.php，小畫家權杖與旋轉存檔共用同一份，換 NAS 只要改設定值。
+require_once __DIR__ . '/../../src/common/DBConnection.php';
+require_once __DIR__ . '/../../src/common/bom_view_file_lib.php';
+try {
+    $pdoDl = (new DBConnection())->getPDO();
+    $resolved = eg_bvf_resolve($pdoDl, ['src' => 'nas', 'ref' => ['path' => $path]]);
+} catch (Throwable $e) { $resolved = null; }
 
-// 實體讀取一律走 UNC 路徑，不用 Z: 磁碟機代號——Z: 是使用者session層級的持續連線，
-// 曾實測 `net use` 顯示狀態「無法使用」（連線失效/需重新協商），造成圖面查閱時好時壞的慢；
-// UNC 路徑（Z: 實際指向的位置）不吃這個持續連線，跟料號附件走的 part_attach_nas_dir 是同一種穩定做法。
-$physPath_utf8 = '\\\\excellentnas\\生產課\\BOM\\' . $relativePath;
-
-// 注意：UNC 路徑不能轉 Big5——實測 Z: 磁碟機代號轉不轉 Big5 都讀得到（新舊都可），
-// 但 UNC 路徑轉 Big5 後中文檔名（如「作廢」）file_exists 一律失敗，維持 UTF-8 才對。
-$physPath = $physPath_utf8;
-
-if (!file_exists($physPath) || is_dir($physPath)) {
+if (!$resolved) {
     header('HTTP/1.1 404 Not Found');
     exit('File not found');
 }
+$physPath = $resolved['fs'];
 
 // ── MIME 類型 ──
-$ext = strtolower(pathinfo($physPath_utf8, PATHINFO_EXTENSION));
+$ext = $resolved['ext'];
 $mimes = [
     'jpg'  => 'image/jpeg',  'jpeg' => 'image/jpeg',
     'png'  => 'image/png',   'gif'  => 'image/gif',
@@ -64,8 +60,10 @@ header('Content-Length: ' . filesize($physPath));
 if ($inline) {
     // 圖面查閱預覽/列印用：inline 讓瀏覽器直接顯示，並允許快取
     // （切換圖面、按列印重讀同一張圖時不必再打一次 NAS）
+    // 快取 60 秒（原本 3600）：圖面可以就地旋轉存檔之後，一小時的快取會讓其他人一直
+    // 看到轉之前的舊圖；60 秒足夠讓切換／列印不必重打 NAS，又不會卡著舊圖太久。
     header('Content-Disposition: inline; filename="' . rawurlencode($filename) . '"');
-    header('Cache-Control: private, max-age=3600');
+    header('Cache-Control: private, max-age=60');
 } else {
     // 另存新檔：維持原行為，強制不快取確保拿到最新檔案
     header('Content-Disposition: attachment; filename="' . rawurlencode($filename) . '"');

@@ -49,3 +49,31 @@ function eg_attach_ensure_dir(string $dir): bool {
     @mkdir($dir, 0777, true);
     return is_dir($dir);
 }
+
+/**
+ * 附件輸出用的 Content-Disposition ＋ 快取標頭（各附件 API 的 download 共用，2026-08-25）。
+ *
+ *   預設（沒帶 dl）＝ inline：瀏覽器直接顯示，給預覽／列印用。
+ *   帶 ?dl=1        ＝ attachment：觸發「另存新檔」；再帶 dl_name 可指定要存成什麼檔名。
+ *
+ * 為什麼要有 dl_name：頁面上的「儲存」讓使用者自己輸入檔名，但 **Chrome 會讓伺服器的
+ * Content-Disposition 檔名蓋掉 <a download> 屬性**，不從後端指定就永遠存成原始檔名。
+ *
+ * 快取只給 60 秒（原本 3600）：圖檔可以就地旋轉存檔之後，一小時的快取會讓其他人
+ * continue 看到轉之前的舊圖；60 秒足夠讓切換圖面／列印不必重打 NAS，又不會卡著舊圖太久。
+ */
+function eg_attach_send_disposition(string $defaultName): void {
+    $isDl = !empty($_GET['dl']) || !empty($_POST['dl']);
+    $name = trim((string)($_GET['dl_name'] ?? ''));
+    if ($name === '') $name = $defaultName;
+    $name = preg_replace('/[\\\\\/:\*\?"<>\|]/', '_', $name);
+    if ($name === '') $name = 'download';
+    if ($isDl) {
+        header("Content-Disposition: attachment; filename*=UTF-8''" . rawurlencode($name));
+        header('Cache-Control: no-cache, no-store, must-revalidate');
+        header('Pragma: no-cache');
+    } else {
+        header("Content-Disposition: inline; filename*=UTF-8''" . rawurlencode($name));
+        header('Cache-Control: private, max-age=60');
+    }
+}
