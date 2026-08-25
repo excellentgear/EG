@@ -228,6 +228,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <button id="btnNew"<?= $perms['canEdit'] ? '' : ' style="display:none;"' ?>><i class="fa fa-plus"></i> 手動建立</button>
             <button id="btnCsv"><i class="fa fa-file-excel-o"></i> CSV</button>
             <button id="btnOverview"><i class="fa fa-th-list"></i> 跨專案總覽</button>
+            <button id="btnPhrase"<?= $perms['canEdit'] ? '' : ' style="display:none;"' ?>><i class="fa fa-commenting-o"></i> 常用語句</button>
             <button id="btnTags"<?= $perms['canAdmin'] ? '' : ' style="display:none;"' ?>><i class="fa fa-tags"></i> 標籤設定</button>
             <button id="btnSetting"<?= $perms['canAdmin'] ? '' : ' style="display:none;"' ?>><i class="fa fa-cog"></i> 模組設定</button>
             <span class="pj-role-badge">角色：<?= htmlspecialchars($roleLabel) ?></span>
@@ -360,6 +361,35 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
     <div class="m-foot"><button onclick="closeMask('tagMask')">關閉</button></div>
 </div></div>
 
+<!-- ══════════ 常用語句（專案目的／專案目標） ══════════ -->
+<div class="pj-mask" id="phMask"><div class="pj-modal mid">
+    <div class="m-head"><span><i class="fa fa-commenting-o"></i> 常用語句 － <span id="phTitle"></span></span>
+        <span class="m-close" onclick="closeMask('phMask')">✕</span></div>
+    <div class="m-body">
+        <p class="pj-hint">事先把常寫的句子建好，填「專案目的／專案目標」時按<b>帶入</b>直接填進欄位（帶入後仍可自行修改）。
+            欄位裡已經有字時會先問要<b>取代</b>還是<b>另起一行接在後面</b>。
+            帶入的是<b>文字複本</b>，所以語句事後被修改或刪除，都不會影響已經填好的專案內容。</p>
+        <div class="grid2" style="margin-bottom:10px;">
+            <div><label>語句用於</label><select id="phField"></select>
+                <div class="pj-hint" id="phFieldHint" style="display:none;">（由欄位旁的「常用語句」進來，已鎖定為該欄位）</div></div>
+        </div>
+        <table class="sub-tbl" id="phTable">
+            <thead><tr><th>語句</th><th style="width:170px;">操作</th></tr></thead>
+            <tbody id="phBody"></tbody>
+        </table>
+        <div class="sec" id="phEditBox" style="margin-top:12px;">
+            <h5 id="phFormTitle">新增語句</h5>
+            <textarea id="phText" rows="3" placeholder="輸入常用語句…（最多 500 字）"></textarea>
+            <div class="pj-err" id="phErr"></div>
+            <div style="margin-top:8px;text-align:right;">
+                <button id="phCancel" style="display:none;height:30px;padding:0 14px;border:1px solid #D8BE93;border-radius:4px;background:#fff;color:#5b3a1e;cursor:pointer;">取消編輯</button>
+                <button id="phSave" style="height:30px;padding:0 14px;margin-left:6px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;">新增</button>
+            </div>
+        </div>
+    </div>
+    <div class="m-foot"><button onclick="closeMask('phMask')">關閉</button></div>
+</div></div>
+
 <!-- ══════════ 模組設定 ══════════ -->
 <div class="pj-mask" id="setMask"><div class="pj-modal mid">
     <div class="m-head"><span><i class="fa fa-cog"></i> 模組設定</span><span class="m-close" onclick="closeMask('setMask')">✕</span></div>
@@ -471,6 +501,17 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <li><b>一張訂單只能屬於一個專案</b>；重複綁定會被擋下並告訴你它已經在哪個專案。</li>
         </ul>
 
+        <h4>二之二、專案內容與「常用語句」</h4>
+        <ul>
+            <li>「專案基本資料」分頁的<b>專案內容</b>（程序書 §6.8 籌備階段的提案內容）只需填兩項：
+                <b>專案目的</b>與<b>專案目標</b>（專案目標會印在執行規劃表的表頭）。</li>
+            <li>兩個欄位右邊都有 <b>常用語句</b>：點開挑一句<b>帶入</b>就填進欄位，帶入後仍可自行修改。
+                欄位裡已經有字時會先問要<b>取代</b>、還是<b>另起一行接在後面</b>（按「取消」＝接在後面）。</li>
+            <li>語句本身可<b>新增／修改／刪除</b>：在同一個跳窗下方維護，或用工具列的
+                <b>「常用語句」</b>先把句子建好再開專案。</li>
+            <li>帶入的是<b>文字複本</b>，所以語句事後被改掉或刪掉，<b>都不會動到已經填好的專案內容</b>。</li>
+        </ul>
+
         <h4>三、專案代號怎麼來的</h4>
         <p>依程序書 §6.13 自動產生 <b>7 碼</b>＝類型 1 碼（開發 <b>D</b>／客製 <b>C</b>／生產 <b>P</b>／服務 <b>S</b>）
             ＋西元年後 2 碼＋月 2 碼＋流水 2 碼。例：<code>C260801</code>＝2026 年 8 月第 1 個客製型專案。
@@ -538,6 +579,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <li><b>專案檢閱</b>：看清單、明細、列印。</li>
             <li><b>專案登錄</b>：檢閱＋建立/編輯專案、訂單轉專案、編執行規劃表、開管理卡、同步 BOM。</li>
             <li><b>專案管理員</b>：登錄＋刪除、標籤維護、模組設定（含專案負責人資格）、AS 文件綁定、批次自動簽核。</li>
+            <li><b>常用語句</b>的新增／修改／刪除＝<b>專案登錄</b>即可（只有檢閱角色看得到語句但不能維護，也不會出現「帶入」）。</li>
             <li><b>專案負責人</b>（資料層，非角色）：即使只有「檢閱」角色，也能編輯<b>自己負責的專案</b>。</li>
             <li><b>會簽人</b>：不需要任何角色，被指派會簽就進得來處理自己那一列。</li>
             <li>管理者固定擁有全部權限。設定入口：<b>權限設定 → 專案管理</b>。</li>
@@ -549,6 +591,8 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 A：該訂單還沒開立 BOM，或 BOM 的訂單欄沒有對應到這張訂單。備庫單（B）與重製單（R）不會自動歸入專案。</li>
             <li><b>Q：管理卡的「目前應達成基準」可以自己寫嗎？</b><br>
                 A：可以，直接改該欄即可；改過的列會停止自動更新（想恢復自動就把該列的「自動」勾回來）。</li>
+            <li><b>Q：原本的「專案時空背景／對本公司貢獻／備註」不見了？</b><br>
+                A：依使用者要求，專案內容只保留<b>專案目的</b>與<b>專案目標</b>兩項。舊資料仍留在資料庫內沒有被刪除。</li>
             <li><b>Q：專案代號可以改嗎？</b><br>
                 A：自動產生後不提供修改，避免號碼撞號。要補歷史專案請用管理員的批次自動簽核並指定業務日期。</li>
         </ul>

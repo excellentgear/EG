@@ -51,6 +51,9 @@ const PRJ_PHASES = [
 /** 標籤種類（自訂標籤，可按標籤篩選；名稱/顏色全部由使用者維護，不在別處寫死對照表＝鐵律4） */
 const PRJ_TAG_KINDS = ['project' => '專案分類', 'goal' => '目標分類', 'task' => '任務分類'];
 
+/** 專案內容欄位（§6.8 籌備階段的提案內容；每個欄位各有一組可自訂的常用語句） */
+const PRJ_PHRASE_FIELDS = ['purpose' => '專案目的', 'goal_desc' => '專案目標'];
+
 /** 文件檢核的四個項目（key => [顯示名稱, 頁面路徑]） */
 const PRJ_DOC_CHECKS = [
     'dev_eval' => ['產品開發評估表',     '/EGsystem/views/TD/td_dev_eval.php'],
@@ -250,6 +253,27 @@ function prj_ensure_schema(PDO $db): void
         is_active  TINYINT NOT NULL DEFAULT 1,
         UNIQUE KEY uq_kind_name (tag_kind, tag_name)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='專案自訂標籤'");
+
+    // 常用語句（專案目的／專案目標）：使用者可自行新增、修改、刪除，填表時一鍵帶入。
+    // 帶入的是「文字」不是 id，所以語句事後被改名或刪掉不影響任何既有專案（故可直接刪、不必比照標籤停用）。
+    $phraseExisted = false;
+    try { $phraseExisted = (bool)$db->query("SHOW TABLES LIKE 'project_phrase'")->fetchColumn(); } catch (Throwable $e) {}
+    $db->exec("CREATE TABLE IF NOT EXISTS project_phrase (
+        phrase_id   INT AUTO_INCREMENT PRIMARY KEY,
+        field_key   VARCHAR(20) NOT NULL COMMENT 'purpose=專案目的 / goal_desc=專案目標',
+        phrase_text VARCHAR(500) NOT NULL COMMENT '語句內容（帶入時直接複製文字）',
+        sort_order  INT NOT NULL DEFAULT 0,
+        created_by  VARCHAR(60) NULL, created_at DATETIME NULL,
+        modified_by VARCHAR(60) NULL, modified_at DATETIME NULL,
+        KEY idx_field (field_key, sort_order)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='專案內容常用語句（可自訂，填表時帶入）'");
+    // 預設語句只在「這張表是這次才建出來」時寫入；使用者事後刪掉不可以自己長回來
+    if (!$phraseExisted) {
+        $ins = $db->prepare("INSERT INTO project_phrase (field_key, phrase_text, sort_order, created_by, created_at)
+                             VALUES (?,?,?, '系統預設', NOW())");
+        $ins->execute(['purpose',   '因應客戶新產品開發需求，針對特定齒輪進行製程之試作與可行性驗證。', 10]);
+        $ins->execute(['goal_desc', '順利完成該開發件之齒面精度、尺寸公差驗證。', 10]);
+    }
 
     $db->exec("CREATE TABLE IF NOT EXISTS project_doc_pending (
         id          INT AUTO_INCREMENT PRIMARY KEY,
@@ -585,6 +609,19 @@ function prj_tags_all(PDO $db, ?string $kind = null, bool $activeOnly = true): a
 }
 
 /** 逗號串 → id 陣列（唯一解析點，避免各處自己 explode 出錯） */
+/** 常用語句清單（field 為 null＝全部欄位一起回） */
+function prj_phrases_all(PDO $db, ?string $field = null): array
+{
+    if ($field !== null && !isset(PRJ_PHRASE_FIELDS[$field])) return [];
+    $sql = "SELECT phrase_id, field_key, phrase_text, sort_order FROM project_phrase";
+    $arg = [];
+    if ($field !== null) { $sql .= " WHERE field_key=?"; $arg[] = $field; }
+    $sql .= " ORDER BY field_key, sort_order, phrase_id";
+    $st = $db->prepare($sql);
+    $st->execute($arg);
+    return $st->fetchAll(PDO::FETCH_ASSOC);
+}
+
 function prj_tag_ids(?string $csv): array
 {
     if (!$csv) return [];

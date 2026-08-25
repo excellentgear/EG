@@ -149,6 +149,7 @@ case 'meta':
         'types'      => PRJ_TYPES,
         'phases'     => PRJ_PHASES,
         'tag_kinds'  => PRJ_TAG_KINDS,
+        'phrase_fields' => PRJ_PHRASE_FIELDS,
         'doc_checks' => PRJ_DOC_CHECKS,
         'tags'       => prj_tags_all($db),
         'people'     => $people,
@@ -208,16 +209,15 @@ case 'save':
         'owner_id'     => (int)($_POST['owner_id'] ?? 0),
         'dept_id'      => (int)($_POST['dept_id'] ?? 0) ?: null,
         'phase'        => (string)($_POST['phase'] ?? 'initiating'),
+        // 專案內容只留「專案目的／專案目標」兩項（使用者要求，2026-08-25）；
+        // background／contribution／note 三欄保留在資料表但不再由畫面寫入，UPDATE 也刻意不碰，既有值不會被洗掉。
         'purpose'      => trim((string)($_POST['purpose'] ?? '')),
-        'background'   => trim((string)($_POST['background'] ?? '')),
-        'contribution' => trim((string)($_POST['contribution'] ?? '')),
         'goal_desc'    => trim((string)($_POST['goal_desc'] ?? '')),
         'plan_date'    => trim((string)($_POST['plan_date'] ?? '')) ?: null,
         'start_date'   => trim((string)($_POST['start_date'] ?? '')) ?: null,
         'end_date'     => trim((string)($_POST['end_date'] ?? '')) ?: null,
         'budget'       => trim((string)($_POST['budget'] ?? '')) === '' ? null : (float)$_POST['budget'],
         'tag_ids'      => prj_tag_csv(prj_tag_ids((string)($_POST['tag_ids'] ?? ''))),
-        'note'         => trim((string)($_POST['note'] ?? '')),
     ];
     if (!isset(PRJ_PHASES[$data['phase']])) $data['phase'] = 'initiating';
     $err = prj_validate($data);
@@ -267,28 +267,28 @@ case 'save':
                 throw new RuntimeException('已送簽／已核准的專案只有管理員可以改內容');
             }
             $st = $db->prepare("UPDATE project SET project_type=?, project_name=?, customer_id=?, customer_name=?,
-                                    owner_id=?, owner_name=?, dept_id=?, dept_name=?, phase=?, purpose=?, background=?,
-                                    contribution=?, goal_desc=?, plan_date=?, start_date=?, end_date=?, budget=?,
-                                    tag_ids=?, note=?, modified_by=?, modified_at=?
+                                    owner_id=?, owner_name=?, dept_id=?, dept_name=?, phase=?, purpose=?,
+                                    goal_desc=?, plan_date=?, start_date=?, end_date=?, budget=?,
+                                    tag_ids=?, modified_by=?, modified_at=?
                                 WHERE project_id=?");
             $st->execute([$data['project_type'], $data['project_name'], $data['customer_id'], $custName,
                           $data['owner_id'], $ownerName, $data['dept_id'], $deptName, $data['phase'],
-                          $data['purpose'], $data['background'], $data['contribution'], $data['goal_desc'],
+                          $data['purpose'], $data['goal_desc'],
                           $data['plan_date'], $data['start_date'], $data['end_date'], $data['budget'],
-                          $data['tag_ids'], $data['note'], $uid, $NOW['dt'], $pid]);
+                          $data['tag_ids'], $uid, $NOW['dt'], $pid]);
         } else {
             if (!$P['canEdit']) throw new RuntimeException('無新增權限（需「專案登錄」角色）');
             $no = prj_next_no($db, $data['project_type'], $data['start_date'] ?: $NOW['date']);
             $st = $db->prepare("INSERT INTO project (project_no, project_type, project_name, customer_id, customer_name,
-                                    owner_id, owner_name, dept_id, dept_name, phase, purpose, background, contribution,
-                                    goal_desc, plan_date, start_date, end_date, budget, tag_ids, note,
+                                    owner_id, owner_name, dept_id, dept_name, phase, purpose,
+                                    goal_desc, plan_date, start_date, end_date, budget, tag_ids,
                                     source, created_by, created_by_name, created_at)
-                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'manual',?,?,?)");
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'manual',?,?,?)");
             $st->execute([$no, $data['project_type'], $data['project_name'], $data['customer_id'], $custName,
                           $data['owner_id'], $ownerName, $data['dept_id'], $deptName, $data['phase'],
-                          $data['purpose'], $data['background'], $data['contribution'], $data['goal_desc'],
+                          $data['purpose'], $data['goal_desc'],
                           $data['plan_date'], $data['start_date'], $data['end_date'], $data['budget'],
-                          $data['tag_ids'], $data['note'], $uid, $uname, $NOW['dt']]);
+                          $data['tag_ids'], $uid, $uname, $NOW['dt']]);
             $pid = (int)$db->lastInsertId();
         }
         $db->commit();
@@ -956,6 +956,49 @@ case 'tag_delete':
     }
     $db->prepare("DELETE FROM project_tag WHERE tag_id=?")->execute([$tid]);
     jout(['message' => '已刪除', 'rows' => prj_tags_all($db, null, false)]);
+
+/* ── 常用語句（專案目的／專案目標，可自訂後一鍵帶入） ──
+   帶入的是文字複本，刪掉語句不影響任何既有專案，所以維護權限比照「專案登錄」即可，不必到管理員。 */
+case 'phrase_list':
+    if (!$P['canView']) jerr('無權限', 403);
+    $fk = (string)($_GET['field_key'] ?? '');
+    jout(['rows' => prj_phrases_all($db, isset(PRJ_PHRASE_FIELDS[$fk]) ? $fk : null)]);
+
+case 'phrase_save':
+    if (!$P['canEdit']) jerr('無權限（需「專案登錄」角色）', 403);
+    $phId = (int)($_POST['phrase_id'] ?? 0);
+    $fk   = (string)($_POST['field_key'] ?? '');
+    if (!isset(PRJ_PHRASE_FIELDS[$fk])) jerr('語句欄位不合法');
+    $text = trim((string)($_POST['phrase_text'] ?? ''));
+    // 前端已即時擋一次，後端同規則再擋一次（鐵律8）
+    if ($text === '') jerr('請填語句內容', 400, ['fields' => ['phrase_text' => '請填語句內容']]);
+    if (mb_strlen($text) > 500) {
+        $msg = '語句最多 500 字（目前 ' . mb_strlen($text) . ' 字）';
+        jerr($msg, 400, ['fields' => ['phrase_text' => $msg]]);
+    }
+    $sort = (int)($_POST['sort_order'] ?? 0);
+    if ($phId) {
+        $st = $db->prepare("SELECT field_key FROM project_phrase WHERE phrase_id=?");
+        $st->execute([$phId]);
+        if (!$st->fetchColumn()) jerr('這筆語句已不存在（可能已被其他人刪除）', 404);
+        $db->prepare("UPDATE project_phrase SET field_key=?, phrase_text=?, sort_order=?, modified_by=?, modified_at=?
+                      WHERE phrase_id=?")->execute([$fk, $text, $sort, $uname, $NOW['dt'], $phId]);
+    } else {
+        $db->prepare("INSERT INTO project_phrase (field_key, phrase_text, sort_order, created_by, created_at)
+                      VALUES (?,?,?,?,?)")->execute([$fk, $text, $sort, $uname, $NOW['dt']]);
+        $phId = (int)$db->lastInsertId();
+    }
+    jout(['phrase_id' => $phId, 'message' => '已儲存', 'rows' => prj_phrases_all($db, $fk)]);
+
+case 'phrase_delete':
+    if (!$P['canEdit']) jerr('無權限（需「專案登錄」角色）', 403);
+    $phId = (int)($_POST['phrase_id'] ?? 0);
+    $st = $db->prepare("SELECT field_key FROM project_phrase WHERE phrase_id=?");
+    $st->execute([$phId]);
+    $fk = (string)$st->fetchColumn();
+    if ($fk === '') jerr('這筆語句已不存在', 404);
+    $db->prepare("DELETE FROM project_phrase WHERE phrase_id=?")->execute([$phId]);
+    jout(['message' => '已刪除', 'rows' => prj_phrases_all($db, $fk)]);
 
 case 'setting_get':
     if (!$P['canView']) jerr('無權限', 403);

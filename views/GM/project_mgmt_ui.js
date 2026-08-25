@@ -35,6 +35,7 @@ function pjInit() {
     $('#btnCsv').on('click', function () { window.location = API + '?' + $.param(listQuery()) + '&action=export_csv'; });
     $('#btnNew').on('click', function () { openProject(0); });
     $('#btnOrderToPrj').on('click', openO2P);
+    $('#btnPhrase').on('click', function () { openPhrase('purpose', ''); });
     $('#btnTags').on('click', openTagSetting);
     $('#btnSetting').on('click', openSetting);
     $('#btnOverview').on('click', openOverview);
@@ -303,12 +304,11 @@ function renderBase(res) {
       + '<div><label>核定預算</label><input type="number" step="0.01" id="eBudget" value="' + esc(p.budget || '') + '"' + ro + '></div>'
       + '<div style="grid-column:1 / -1;"><label>專案分類標籤</label><div class="pj-tagbar" id="eTagBar"></div></div>'
       + '</div></div>'
+      /* 專案內容只留「專案目的／專案目標」兩項（使用者要求，2026-08-25）；
+         每欄右上角有「常用語句」可挑事先編好的句子帶入（語句本身在同一個跳窗裡新增/修改/刪除）。 */
       + '<div class="sec"><h5>專案內容（程序書 §6.8 籌備階段的提案內容）</h5>'
-      + '<label>專案目標（列印在執行規劃表表頭）</label><textarea id="eGoalDesc" rows="2"' + ro + '>' + esc(p.goal_desc || '') + '</textarea>'
-      + '<label style="margin-top:8px;">專案目的</label><textarea id="ePurpose" rows="2"' + ro + '>' + esc(p.purpose || '') + '</textarea>'
-      + '<label style="margin-top:8px;">專案時空背景</label><textarea id="eBackground" rows="2"' + ro + '>' + esc(p.background || '') + '</textarea>'
-      + '<label style="margin-top:8px;">對本公司貢獻</label><textarea id="eContribution" rows="2"' + ro + '>' + esc(p.contribution || '') + '</textarea>'
-      + '<label style="margin-top:8px;">備註</label><textarea id="eNote" rows="2"' + ro + '>' + esc(p.note || '') + '</textarea>'
+      + phraseField('ePurpose', 'purpose', '專案目的', p.purpose, ro, res.can_edit)
+      + phraseField('eGoalDesc', 'goal_desc', '專案目標（列印在執行規劃表表頭）', p.goal_desc, ro, res.can_edit)
       + '</div>';
 
     if (num(p.project_id) && p.status === 'closed') {
@@ -318,6 +318,19 @@ function renderBase(res) {
     }
     $('#paneBase').html(h);
     renderTagPick('eTagBar', 'project', (p.tag_ids || '').split(',').map(num), res.can_edit);
+}
+
+/* 專案內容欄位＋「常用語句」入口（只有可編輯時才出現按鈕；唯讀檢視不給帶入） */
+function phraseField(id, fieldKey, label, val, ro, editable) {
+    return '<div style="margin-bottom:10px;">'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:3px;">'
+      + '<label style="margin:0;">' + esc(label) + '</label>'
+      + (editable && PERM.canEdit
+          ? '<span class="pj-op" data-phrase="' + fieldKey + '" data-phtarget="' + id + '">'
+            + '<i class="fa fa-commenting-o"></i> 常用語句</span>'
+          : '')
+      + '</div>'
+      + '<textarea id="' + id + '" rows="3"' + ro + '>' + esc(val || '') + '</textarea></div>';
 }
 
 /* 標籤挑選（可自訂標籤，按標籤選擇＝使用者要求） */
@@ -370,8 +383,7 @@ function collectBase() {
         customer_id: $('#eCust').val(), owner_id: $('#eOwner').val(), dept_id: $('#eDept').val(),
         phase: $('#ePhase').val(), start_date: $('#eStart').val(), end_date: $('#eEnd').val(),
         budget: $('#eBudget').val(), tag_ids: pickedTags('eTagBar'),
-        goal_desc: $('#eGoalDesc').val(), purpose: $('#ePurpose').val(),
-        background: $('#eBackground').val(), contribution: $('#eContribution').val(), note: $('#eNote').val()
+        goal_desc: $('#eGoalDesc').val(), purpose: $('#ePurpose').val()
     };
 }
 
@@ -1258,6 +1270,120 @@ $(document).on('click', '#btnO2pGo', function () {
         loadList();
         openProject(num(res.project_id));
     });
+});
+
+/* ══════════════════════════ 常用語句（專案目的／專案目標） ══════════════════════════ */
+/* PH.target＝要帶入的 textarea id；由工具列打開時為空＝只做維護、不顯示「帶入」 */
+var PH = { field: 'purpose', target: '', editId: 0, rows: [] };
+
+function phraseLabel(fk) { return (META.phrase_fields || {})[fk] || fk; }
+
+function openPhrase(fieldKey, targetId) {
+    PH.field = (META.phrase_fields || {})[fieldKey] ? fieldKey : 'purpose';
+    PH.target = targetId || '';
+    var opt = '';
+    $.each(META.phrase_fields || {}, function (k, v) {
+        opt += '<option value="' + k + '"' + (k === PH.field ? ' selected' : '') + '>' + esc(v) + '</option>';
+    });
+    $('#phField').html(opt).prop('disabled', !!PH.target);   /* 從欄位點進來就鎖定該欄位，避免帶錯欄 */
+    $('#phFieldHint').toggle(!!PH.target);
+    $('#phEditBox').toggle(!!PERM.canEdit);
+    phraseResetForm();
+    loadPhrase();
+    openMask('phMask');
+}
+
+function loadPhrase() {
+    api('phrase_list', { field_key: PH.field }).done(function (res) { renderPhrase(res.rows || []); });
+}
+
+function renderPhrase(rows) {
+    PH.rows = rows || [];
+    var h = '';
+    if (!PH.rows.length) {
+        h = '<tr><td colspan="2" style="padding:12px;color:#8a6d45;">'
+          + '尚未建立「' + esc(phraseLabel(PH.field)) + '」的常用語句'
+          + (PERM.canEdit ? '（可在下方新增）' : '') + '</td></tr>';
+    }
+    $.each(PH.rows, function (i, r) {
+        h += '<tr><td class="l" style="text-align:left;white-space:pre-wrap;">' + esc(r.phrase_text) + '</td><td>'
+          + (PH.target ? '<span class="pj-op" data-phuse="' + r.phrase_id + '"><i class="fa fa-check"></i> 帶入</span>' : '')
+          + (PERM.canEdit
+              ? '<span class="pj-op" data-phedit="' + r.phrase_id + '">修改</span>'
+                + '<span class="pj-op" data-phdel="' + r.phrase_id + '" style="color:#DD5138;">刪除</span>'
+              : '')
+          + '</td></tr>';
+    });
+    $('#phTitle').text(phraseLabel(PH.field));
+    $('#phBody').html(h);
+}
+
+function phraseResetForm() {
+    PH.editId = 0;
+    $('#phText').val('');
+    $('#phFormTitle').text('新增語句');
+    $('#phSave').text('新增');
+    $('#phCancel').hide();
+    $('#phErr').hide().text('');
+    $('#phText').removeClass('fld-bad');
+}
+
+/* 前端即時驗證（表單三總則③；後端 phrase_save 同規則再擋一次＝鐵律8） */
+function phraseCheck(silent) {
+    var t = $.trim($('#phText').val()), msg = '';
+    if (!t) msg = '請填語句內容';
+    else if (t.length > 500) msg = '語句最多 500 字（目前 ' + t.length + ' 字）';
+    if (msg && !(silent && !$('#phText').val())) {
+        $('#phErr').text(msg).show(); $('#phText').addClass('fld-bad');
+    } else { $('#phErr').hide().text(''); $('#phText').removeClass('fld-bad'); }
+    return msg ? '' : t;
+}
+$(document).on('input', '#phText', function () { phraseCheck(true); });
+
+$(document).on('click', '[data-phrase]', function () {
+    openPhrase($(this).data('phrase'), $(this).data('phtarget'));
+});
+$(document).on('change', '#phField', function () {
+    PH.field = $(this).val(); phraseResetForm(); loadPhrase();
+});
+$(document).on('click', '[data-phuse]', function () {
+    var id = num($(this).data('phuse')), row = null;
+    $.each(PH.rows, function (i, r) { if (num(r.phrase_id) === id) row = r; });
+    if (!row || !PH.target) return;
+    var $t = $('#' + PH.target);
+    if (!$t.length) return;
+    var cur = $.trim($t.val());
+    if (cur && cur !== row.phrase_text && !confirm('這個欄位已經有內容，要用選取的語句取代嗎？\n（按「取消」則改為接在原內容後面另起一行）')) {
+        $t.val($t.val().replace(/\s+$/, '') + '\n' + row.phrase_text);
+    } else {
+        $t.val(row.phrase_text);
+    }
+    closeMask('phMask');
+    $t.focus();
+});
+$(document).on('click', '[data-phedit]', function () {
+    var id = num($(this).data('phedit')), row = null;
+    $.each(PH.rows, function (i, r) { if (num(r.phrase_id) === id) row = r; });
+    if (!row) return;
+    PH.editId = id;
+    $('#phText').val(row.phrase_text);
+    $('#phFormTitle').text('修改語句');
+    $('#phSave').text('儲存');
+    $('#phCancel').show();
+    $('#phErr').hide().text('');
+    $('#phText').focus();
+});
+$(document).on('click', '#phCancel', function () { phraseResetForm(); });
+$(document).on('click', '#phSave', function () {
+    var t = phraseCheck(false);
+    if (!t) { $('#phText').focus(); return; }
+    api('phrase_save', { phrase_id: PH.editId, field_key: PH.field, phrase_text: t }, 'POST')
+        .done(function (res) { phraseResetForm(); renderPhrase(res.rows || []); });
+});
+$(document).on('click', '[data-phdel]', function () {
+    if (!confirm('刪除這句常用語句？（已經填進專案的文字不受影響）')) return;
+    api('phrase_delete', { phrase_id: num($(this).data('phdel')) }, 'POST')
+        .done(function (res) { phraseResetForm(); renderPhrase(res.rows || []); });
 });
 
 /* ══════════════════════════ 標籤設定 ══════════════════════════ */
