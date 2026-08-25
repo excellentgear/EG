@@ -89,6 +89,9 @@ const EC_SIGN_SOURCES = [
     'sales_dept_mgr'  => '業務部門主管（組織角色綁定）',
     'mgmt_rep'        => '管理代表（組織角色綁定）',
     'top'             => '最高核准人員（組織角色綁定）',
+    // 使用者要求 2026-08-25：管制員要能指定某個課室底下的特定幾個人（複選）。
+    // 這個來源做成全關卡通用，不是只給管制員——其他關卡有同樣需求時直接選就好。
+    'users'           => '指定人員（複選，其中任一人都可簽）',
 ];
 
 /**
@@ -121,6 +124,12 @@ const EC_REVIEW_UNITS = [
 
 const EC_SETTING_KEYS = ['ec_stamp_tpl_id', 'ec_review_stamp_tpl_id',
                          'ec_sign_sup', 'ec_sign_wh', 'ec_sign_td', 'ec_sign_appr', 'ec_sign_ctrl',
+                         // 來源選「指定人員」時用的：_users＝勾選的 user.id（逗號字串）、
+                         // _dept＝挑人跳窗當時篩的課室（只是記住上次選哪一課，判定不看它）
+                         'ec_sign_sup_users', 'ec_sign_wh_users', 'ec_sign_td_users',
+                         'ec_sign_appr_users', 'ec_sign_ctrl_users',
+                         'ec_sign_sup_dept', 'ec_sign_wh_dept', 'ec_sign_td_dept',
+                         'ec_sign_appr_dept', 'ec_sign_ctrl_dept',
                          'ec_auto_from_dwg'];
 
 /* ============================ Schema ============================ */
@@ -275,7 +284,10 @@ function ec_settings(PDO $db): array
 {
     $out = ['ec_stamp_tpl_id' => null, 'ec_review_stamp_tpl_id' => null, 'ec_auto_from_dwg' => 1];
     foreach (EC_STAGES as $st) {
-        if ($st['setting'] !== '') $out[$st['setting']] = $st['default_src'];
+        if ($st['setting'] === '') continue;
+        $out[$st['setting']]            = $st['default_src'];
+        $out[$st['setting'] . '_users'] = '';
+        $out[$st['setting'] . '_dept']  = '';
     }
     try {
         $in = implode(',', array_fill(0, count(EC_SETTING_KEYS), '?'));
@@ -285,7 +297,7 @@ function ec_settings(PDO $db): array
             $k = (string)$r['setting_key']; $v = $r['setting_value'];
             if (substr($k, -7) === '_tpl_id')      $out[$k] = ($v === '' || $v === null) ? null : (int)$v;
             elseif ($k === 'ec_auto_from_dwg')     $out[$k] = (int)$v;
-            else                                   $out[$k] = (string)$v;
+            else                                   $out[$k] = (string)$v;   // _users / _dept 都是字串
         }
     } catch (Throwable $e) {}
     return $out;
@@ -294,8 +306,16 @@ function ec_settings(PDO $db): array
 function ec_save_setting(PDO $db, string $key, $val): void
 {
     if (!in_array($key, EC_SETTING_KEYS, true)) return;
-    // 簽章來源只收清單內的值（直打 API 繞不過去＝鐵律8）
-    if (strpos($key, 'ec_sign_') === 0 && !array_key_exists((string)$val, EC_SIGN_SOURCES)) return;
+    // 簽章來源只收清單內的值（直打 API 繞不過去＝鐵律8）。
+    // _users（勾選的人員 id）與 _dept（挑人時的課室）不是來源代碼，走各自的清洗。
+    if (substr($key, -6) === '_users') {
+        $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)$val)), fn($i) => $i > 0)));
+        $val = implode(',', array_slice($ids, 0, 50));   // 上限 50 人，避免一次通知全公司
+    } elseif (substr($key, -5) === '_dept') {
+        $val = (string)((int)$val ?: '');
+    } elseif (strpos($key, 'ec_sign_') === 0 && !array_key_exists((string)$val, EC_SIGN_SOURCES)) {
+        return;
+    }
     $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?)
                   ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)")->execute([$key, (string)$val]);
 }
@@ -575,17 +595,49 @@ function ec_resolve_src(PDO $db, string $src, array $row): array
 }
 
 /**
- * 某一關該由誰簽（已套用代理解析＝ai-rules/11，禁各頁自己猜人）。
- * 回 ['id'=>實際要簽的人, 'name'=>, 'for_id'=>被代理人(0=非代簽), 'for_name'=>]
+ * 某一關的**合格簽核人名單**（OR-gate：其中任何一個人簽了就算過這一關）。
+ *
+ * 來源＝'users' 時是使用者在設定裡勾選的那幾個人（例：管制員指定技術課底下的三個人）；
+ * 其他來源都只會解析出一個人，回傳一人的陣列。每一位都各自跑過代理解析
+ * （ai-rules/11：本人不在時換成代理人，並記下「本來該誰簽」供圖章加「代」字）。
+ *
+ * @return array<int,array{id:int,name:string,for_id:int,for_name:string}>
+ */
+function ec_stage_signer_pool(PDO $db, array $row, string $stage): array
+{
+    $def = EC_STAGES[$stage] ?? null;
+    if (!$def || $def['setting'] === '') return [];
+    $cfg = ec_settings($db);
+    $src = (string)($cfg[$def['setting']] ?? $def['default_src']);
+
+    if ($src === 'users') {
+        $ids = array_values(array_filter(array_map('intval', explode(',', (string)($cfg[$def['setting'] . '_users'] ?? ''))), fn($i) => $i > 0));
+        if (!$ids) return [];
+        $date = (string)($row['apply_date'] ?? '');
+        $out = [];
+        foreach ($ids as $uid) {
+            // 姓名一律以本單日期回推當時的稱呼（ai-rules/22）；查不到就退回 user 表的姓名
+            $idt = ec_user_identity_asof($db, $uid, $date);
+            $nm  = $idt['user_name'];
+            if ($nm === '') continue;                    // 帳號已被刪掉就跳過，不要留一個空白的簽核人
+            $out[] = ec_apply_delegate($db, $uid, $nm);
+        }
+        return $out;
+    }
+
+    $p = ec_resolve_src($db, $src, $row);
+    if (!$p['id']) return [];
+    return [ec_apply_delegate($db, (int)$p['id'], (string)$p['name'])];
+}
+
+/**
+ * 某一關「代表性」的簽核人＝名單第一位（畫面顯示「目前等待：○○○」、
+ * 以及沒有人在名單裡時要蓋誰的章時用）。多人名單請改用 ec_stage_signer_pool()。
  */
 function ec_stage_signer(PDO $db, array $row, string $stage): array
 {
-    $def = EC_STAGES[$stage] ?? null;
-    if (!$def || $def['setting'] === '') return ['id' => 0, 'name' => '', 'for_id' => 0, 'for_name' => ''];
-    $src = (string)(ec_settings($db)[$def['setting']] ?? $def['default_src']);
-    $p = ec_resolve_src($db, $src, $row);
-    if (!$p['id']) return ['id' => 0, 'name' => '', 'for_id' => 0, 'for_name' => ''];
-    return ec_apply_delegate($db, (int)$p['id'], (string)$p['name']);
+    $pool = ec_stage_signer_pool($db, $row, $stage);
+    return $pool ? $pool[0] : ['id' => 0, 'name' => '', 'for_id' => 0, 'for_name' => ''];
 }
 
 /** 代理解析：本人不在時換成代理人，並記下「本來該誰簽」供圖章加「代」字 */
@@ -627,8 +679,10 @@ function ec_can_sign_stage(PDO $db, array $row, string $stage, int $uid, bool $i
 {
     if ($uid <= 0) return false;
     if ($isAdmin) return true;
-    $s = ec_stage_signer($db, $row, $stage);
-    return $s['id'] > 0 && (int)$s['id'] === $uid;
+    foreach (ec_stage_signer_pool($db, $row, $stage) as $p) {
+        if ((int)$p['id'] === $uid) return true;         // OR-gate：名單裡任一人都可以簽
+    }
+    return false;
 }
 
 function ec_can_sign_review(PDO $db, array $row, string $unitKey, int $uid, bool $isAdmin): bool
@@ -637,6 +691,58 @@ function ec_can_sign_review(PDO $db, array $row, string $unitKey, int $uid, bool
     if ($isAdmin) return true;
     $s = ec_review_signer($db, $row, $unitKey);
     return $s['id'] > 0 && (int)$s['id'] === $uid;
+}
+
+/* ============================ 確認庫存：系統自動帶入 ============================ */
+
+/**
+ * 這個料號目前的「庫存數量」與「已完工待入庫數量」（使用者要求 2026-08-25：
+ * 倉管那一關要自動帶入讓倉管**確認是否相同**，數字仍可手動修改）。
+ *
+ * ★ stock_items 的欄位命名是**反的**（很容易寫錯）：
+ *     stock_items.d_id        = 料號**字串**（varchar，例 447-000C-820-18）
+ *     stock_items.d_setting_id= d_setting.d_id（數字）
+ *   跟 d_setting 表剛好相反，所以兩邊都比對才不會漏。
+ *
+ * 已完工待入庫的定義：**BOM 還沒結案（closed_at IS NULL）、但最後一道製程已經完工
+ * （bom_ing.qc_completed=1 且 processing_sequence 是該 BOM 的最大值）**＝東西做完了、還沒進倉。
+ * 不能用「所有製程都完工」判定——現場只在最後一道打完工勾，全庫這樣算只有 4 個 BOM 符合，
+ * 帶出來永遠是 0 就失去意義了（實測：本定義 247 批 / 23482 件，全部完工定義 4 批）。
+ *
+ * @return array{stock_qty:int, stock_rows:int, wip_qty:int, wip_boms:int, as_of:string}
+ */
+function ec_stock_snapshot(PDO $db, int $dId, string $partNo): array
+{
+    $out = ['stock_qty' => 0, 'stock_rows' => 0, 'wip_qty' => 0, 'wip_boms' => 0,
+            'as_of' => ec_db_now($db)['dt']];
+    if ($dId <= 0 && trim($partNo) === '') return $out;
+    try {
+        $st = $db->prepare("SELECT COALESCE(SUM(si.qty),0) qty, COUNT(*) n
+                              FROM stock_items si
+                             WHERE si.is_active=1 AND (si.group_id IS NULL OR si.group_id=0)
+                               AND (si.d_setting_id = ? OR si.d_id = ?)");
+        $st->execute([$dId, $partNo]);
+        if ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+            $out['stock_qty']  = (int)$r['qty'];
+            $out['stock_rows'] = (int)$r['n'];
+        }
+    } catch (Throwable $e) {}
+    try {
+        $st = $db->prepare("SELECT COALESCE(SUM(b.sqty),0) qty, COUNT(*) n
+                              FROM bom b
+                             WHERE b.closed_at IS NULL
+                               AND (b.d_setting_id = ? OR b.d_id = ?)
+                               AND EXISTS (SELECT 1 FROM bom_ing bi
+                                            WHERE bi.bom = b.bom AND bi.qc_completed = 1
+                                              AND bi.processing_sequence =
+                                                  (SELECT MAX(bi2.processing_sequence) FROM bom_ing bi2 WHERE bi2.bom = b.bom))");
+        $st->execute([$dId, $partNo]);
+        if ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+            $out['wip_qty']  = (int)$r['qty'];
+            $out['wip_boms'] = (int)$r['n'];
+        }
+    } catch (Throwable $e) {}
+    return $out;
 }
 
 /* ============================ 流程 ============================ */
@@ -868,11 +974,16 @@ function ec_route_to_stage(PDO $db, array $row, string $stage, int $fromUid, str
     if ($stage === 'REVIEW') { ec_route_to_review($db, $row, $fromUid, $fromName); return; }
     if (!isset(EC_STAGES[$stage])) return;
 
-    $s = ec_stage_signer($db, $row, $stage);
+    // 一筆待簽核紀錄對應這一關；名單有多人時每個人都發通知（誰先簽就算誰的，OR-gate）
+    $pool = ec_stage_signer_pool($db, $row, $stage);
     try {
         $aid = eg_approval_submit($db, EC_APPROVAL_MODULE, $ecId, $stage, $fromUid, $fromName);
-        $eid = ec_notify_stage($db, $row, $stage, (int)$s['id'], $fromUid);
-        if ($eid) eg_approval_set_live_event($db, $aid, $eid);
+        $firstEid = 0;
+        foreach ($pool as $p) {
+            $eid = ec_notify_stage($db, $row, $stage, (int)$p['id'], $fromUid);
+            if ($eid && !$firstEid) $firstEid = $eid;
+        }
+        if ($firstEid) eg_approval_set_live_event($db, $aid, $firstEid);
     } catch (Throwable $e) {}
 }
 
@@ -911,8 +1022,14 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
     $err = ec_validate_stage($row, $stage);
     if ($err) throw new Exception(implode('、', array_values($err)));
 
-    $signer = ec_stage_signer($db, ec_row($db, $ecId), $stage);
-    // 管理員代簽時，章仍蓋「這一關本來該簽的人」；解析不到才退回操作者本人
+    // 蓋誰的章：
+    //   ① 操作者本人就在合格名單裡 → 蓋他自己的（管制員指定多人時，誰簽就蓋誰）
+    //   ② 不在名單裡（管理員代簽補歷史紙本）→ 蓋「這一關本來該簽的人」
+    //   ③ 名單是空的（組織角色沒綁好）→ 退回操作者本人，至少留得下紀錄
+    $pool   = ec_stage_signer_pool($db, ec_row($db, $ecId), $stage);
+    $signer = null;
+    foreach ($pool as $p) { if ((int)$p['id'] === $uid) { $signer = $p; break; } }
+    $signer = $signer ?: ($pool[0] ?? ['id' => 0, 'name' => '', 'for_id' => 0]);
     $signId   = $signer['id'] ?: $uid;
     $signName = $signer['name'] !== '' ? $signer['name'] : $uname;
     $forId    = (int)$signer['for_id'];

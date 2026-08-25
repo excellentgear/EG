@@ -387,6 +387,36 @@ try {
         jout(['rows' => $st->fetchAll(PDO::FETCH_ASSOC)]);
     }
 
+    /** 確認庫存自動帶入：這個料號目前的庫存數量與已完工待入庫數量（倉管那一關用） */
+    if ($action === 'stock_snapshot') {
+        $ecId = (int)($_GET['id'] ?? 0);
+        $r = ec_row($db, $ecId);
+        if (!$r) jerr('查無此申請單', 404);
+        if (!ec_can_see($db, $r, $P, $uid)) jerr('沒有這張申請單的檢視權限', 403);
+        jout(['snap' => ec_stock_snapshot($db, (int)$r['d_id'], (string)$r['part_no'])]);
+    }
+
+    /** 部門清單（設定裡挑「指定人員」時先選課室用） */
+    if ($action === 'departments') {
+        if (!$P['canAdmin']) jerr('只有管理員可以變更設定', 403);
+        $rows = [];
+        try {
+            $rows = $db->query("SELECT id, name FROM department ORDER BY COALESCE(sort_order,999), id")
+                       ->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {}
+        jout(['rows' => $rows]);
+    }
+
+    /** 某課室（含子部門）底下的人員；設定裡「指定人員（複選）」的候選清單。
+     *  一律走 people_lib 的 eg_people_list()（人員列表鐵則：只列未離職、標長期請假、依職稱排序）。 */
+    if ($action === 'dept_people') {
+        if (!$P['canAdmin']) jerr('只有管理員可以變更設定', 403);
+        $deptId = (int)($_GET['dept_id'] ?? 0);
+        $ids = $deptId > 0 ? eg_dept_subtree_ids($db, $deptId) : [];
+        $rows = eg_people_list($db, $ids ? ['dept_ids' => $ids] : []);
+        jout(['rows' => $rows, 'dept_ids' => $ids]);
+    }
+
     /** 申請人候選：依申請日期回推當時在職的人與當時的部門職稱（ai-rules/22） */
     if ($action === 'people') {
         $date = trim((string)($_GET['date'] ?? ''));

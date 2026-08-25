@@ -27,8 +27,27 @@ $db = (new DBConnection())->getPDO();
 ec_ensure_schema($db);
 $ecUser = ec_current_user($db);
 $P = ec_perms($db, $ecUser);
-$roleLabel = $P['isAdmin'] ? '管理者' : ($P['canAdmin'] ? '工程變更管理員'
-           : ($P['canEdit'] ? '申請人員' : ($P['canView'] ? '檢閱人員' : '無角色')));
+/* 角色說明一律**即時查現況**組出來（鐵律4）：管理員把角色改名或刪掉之後，
+   寫死的說明文字會繼續顯示舊內容而且不會報錯，只能靠事後才發現。 */
+$roleRows = [];
+try {
+    $roleRows = $db->query("SELECT role_id, role_code, role_name, note, is_system FROM roles
+                             WHERE module='eng_change' OR (role_code='admin' AND is_system=1)
+                             ORDER BY is_system DESC, role_id")->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {}
+/* 本人實際被指派到的角色名稱（可能不只一個）；用實際指派而不是拿權限高低猜一個字，
+   這樣即使角色被改名，這裡顯示的永遠是真的存在的名稱。 */
+$myRoleNames = [];
+if ($ecUser) {
+    try {
+        $st = $db->prepare("SELECT DISTINCT r.role_name FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                             WHERE ur.user_id=? AND (r.module='eng_change' OR (r.role_code='admin' AND r.is_system=1))");
+        $st->execute([(int)$ecUser['id']]);
+        $myRoleNames = $st->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) {}
+}
+$roleLabel = $myRoleNames ? implode('、', $myRoleNames)
+           : ($P['isAdmin'] ? '管理者' : ($P['canView'] ? '（無本模組角色，權限來自其他來源）' : '無角色'));
 $openId = (int)($_GET['id'] ?? 0);
 ?>
 <!DOCTYPE html>
@@ -128,7 +147,13 @@ $openId = (int)($_GET['id'] ?? 0);
     <div class="right_col" role="main">
         <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
             <h2 style="margin:6px 0;">工程變更申請單
-                <small style="color:#8a6d45;">2-TD-01-01　申請／審查／通知　目前角色：<?= htmlspecialchars($roleLabel) ?></small></h2>
+                <small style="color:#8a6d45;">2-TD-01-01　申請／審查／通知</small></h2>
+            <span style="margin-left:12px;font-size:12px;color:#7A4A12;background:#F7E0BD;border:1px solid #E4D3BC;
+                         border-radius:12px;padding:2px 10px;">
+                目前角色：<?= htmlspecialchars($roleLabel) ?>
+                <a href="javascript:;" id="btnRoleHelp" title="各角色權限說明"
+                   style="color:#8A5A2B;margin-left:4px;"><i class="fa fa-question-circle"></i></a>
+            </span>
             <button id="btnPageHelp" class="page-help-btn" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
         </div>
         <div class="clearfix"></div>
@@ -231,9 +256,18 @@ $openId = (int)($_GET['id'] ?? 0);
         <div class="sec"><div class="sh">確認庫存（倉管組）</div><div class="sb">
             <div class="fgrid">
                 <div class="fld half"><label>庫存數量</label>
-                    <input type="text" id="e_stock_qty" class="form-control"><div class="err"></div></div>
+                    <input type="text" id="e_stock_qty" class="form-control">
+                    <div id="e_stock_sys" style="font-size:11px;color:#8a6d45;margin-top:2px;"></div>
+                    <div class="err"></div></div>
                 <div class="fld half"><label>已完工待入庫數量</label>
-                    <input type="text" id="e_wip_qty" class="form-control"><div class="err"></div></div>
+                    <input type="text" id="e_wip_qty" class="form-control">
+                    <div id="e_wip_sys" style="font-size:11px;color:#8a6d45;margin-top:2px;"></div>
+                    <div class="err"></div></div>
+                <div class="fld full" style="margin-top:-4px;">
+                    <button class="ec-btn ghost" id="btnStockReload" style="height:24px;padding:0 10px;font-size:12px;display:none;">
+                        <i class="fa fa-refresh"></i> 重新帶入系統數量</button>
+                    <span style="font-size:11px;color:#aaa;margin-left:6px;">系統數量僅供比對，實際以倉管清點為準，可直接改上面的欄位。</span>
+                </div>
             </div>
         </div></div>
 
@@ -349,6 +383,36 @@ $openId = (int)($_GET['id'] ?? 0);
 </div></div>
 <?php endif; ?>
 
+<!-- ══════════ 各角色權限說明（RBAC：標頭 ? 圖示點開；內容即時查現況，不寫死） ══════════ -->
+<div class="ec-mask" id="roleMask"><div class="ec-modal">
+    <div class="m-head"><span><i class="fa fa-users"></i> 工程變更申請單　各角色權限說明</span>
+        <span class="m-close" onclick="closeMask('roleMask')">✕</span></div>
+    <div class="m-body help-doc">
+        <p>你目前的角色：<b><?= htmlspecialchars($roleLabel) ?></b></p>
+        <table class="hist" style="margin-bottom:10px;">
+            <thead><tr><th style="width:140px;">角色</th><th>可以做什麼</th></tr></thead>
+            <tbody>
+<?php if (!$roleRows): ?>
+            <tr><td colspan="2" style="color:#aaa;">尚未建立任何角色，請至「使用者權限設定」建立。</td></tr>
+<?php else: foreach ($roleRows as $rr): ?>
+            <tr><td><b><?= htmlspecialchars($rr['role_name']) ?></b></td>
+                <td><?= (int)$rr['is_system'] === 1
+                        ? '系統角色，固定擁有全部權限（不可修改）'
+                        : htmlspecialchars((string)($rr['note'] ?: '（尚未填寫說明）')) ?></td></tr>
+<?php endforeach; endif; ?>
+            </tbody>
+        </table>
+        <div class="tip"><b>簽核權不看角色</b>：流程各關卡由系統依「本單日期<b>當時</b>的職務」解析出該簽的人，
+            是那個人才簽得下去（本人不在時自動換代理人）。<b>管制員這一關可以指定某個課室底下的特定幾個人（複選）</b>，
+            其中任何一位簽了就算過這一關。沒有任何角色的人，仍看得到「輪到自己簽」的那幾張單。</div>
+        <div class="tip">角色與人員的對應請到
+            <a href="../user/user_permissions.php#eng-role-section" target="_blank" style="color:#b5762a;">
+                使用者權限設定 → 工程變更申請單 角色指派</a> 設定；
+            各關卡要找誰簽則在本頁右上「設定」→「各關卡簽章人來源」。</div>
+    </div>
+    <div class="m-foot"><button class="b-ok" onclick="closeMask('roleMask')">我知道了</button></div>
+</div></div>
+
 <!-- ══════════ 使用說明（鐵律7） ══════════ -->
 <div class="ec-mask" id="helpUseMask"><div class="ec-modal xwide">
     <div class="m-head"><span><i class="fa fa-question-circle"></i> 工程變更申請單 使用說明</span>
@@ -364,13 +428,17 @@ $openId = (int)($_GET['id'] ?? 0);
         <ul>
             <li><b>申請人</b>：填客戶、料號、變更方式與設變事由，按「送出」正式成立。</li>
             <li><b>單位主管</b>：申請部門的主管簽核。</li>
-            <li><b>倉管組</b>：填「庫存數量」「已完工待入庫數量」後簽核。</li>
+            <li><b>倉管組</b>：填「庫存數量」「已完工待入庫數量」後簽核。這兩個數字系統會<b>自動帶入讓你確認是否相同</b>——
+                庫存數量取自庫存管理、已完工待入庫取自「未結案 BOM 中最後一道製程已完工」的批次；
+                <b>實際以清點為準，可直接改</b>，也可以按「重新帶入系統數量」還原。</li>
             <li><b>技術課</b>：做設計分析——勾<b>「僅修改圖面（修改後結案）」</b>就不跑會審；
                 勾<b>「需修改圖面與會審」</b>要一併勾選需要哪些單位會審。同時判定庫存舊料可否修改。</li>
             <li><b>核准</b>：核示「准予變更／暫緩變更／其他」，可填補充意見。</li>
-            <li><b>相關單位會審</b>（只有技術課判定需會審才會出現）：生產課／品保課／倉管組／生管組／採購組／業務課，
-                <b>各自獨立、不分先後</b>，全部簽完才會往下一關。</li>
-            <li><b>管制員</b>：勾選需修改的文件資料（圖面／BOM／操作手冊），簽完即<b>結案</b>。</li>
+            <li><b>相關單位會審</b>：<b>由技術課那一關的填寫人員決定哪些單位需要會審</b>，不是六個單位一律都會簽——
+                沒有被勾選的單位不會收到通知、也不必簽。被勾選的單位<b>各自獨立、不分先後</b>，
+                全部簽完才會往下一關（管制員）。</li>
+            <li><b>管制員</b>：勾選需修改的文件資料（圖面／BOM／操作手冊），簽完即<b>結案</b>。
+                管制員可以在<b>設定</b>裡指定某個課室底下的<b>特定幾個人（複選）</b>，其中任何一位簽了就算過這一關。</li>
         </ul>
         <div class="tip">任何一關都可以<b>退回</b>，退回<b>必須填原因</b>，系統會通知申請人；
             申請人修正後按「重新送出」會從第一關重跑。</div>
@@ -605,6 +673,7 @@ function fillEc(r){
     CUR_REVIEWS.forEach(function(rv){ if (rv.needed) $('.rv-need[value="'+rv.unit_key+'"]').prop('checked', true); });
 
     loadPeople(String(d.apply_date||'').substring(0,10), d.applicant_id);
+    loadStockSnap(d);
     renderReviews(r);
     renderHist(r.approvals || []);
     applyStageUI(d, r.signers || {});
@@ -681,6 +750,40 @@ function renderHist(rows){
     });
     $('#histBody').html(h || '<tr><td colspan="6" style="color:#aaa;text-align:center;">尚無簽核紀錄</td></tr>');
 }
+
+/* ── 確認庫存：系統自動帶入讓倉管比對（使用者要求 2026-08-25）──────────────
+   ① 每次開單都去算一次目前的庫存數量與已完工待入庫數量，顯示在欄位下方供比對
+   ② 欄位還空著時（倉管還沒填過）就直接帶進去，倉管確認一下就好
+   ③ 已經填過的不覆蓋——那是倉管實際清點的結果，不可以被系統值洗掉 */
+var STOCK_SNAP = null;
+function loadStockSnap(d){
+    STOCK_SNAP = null;
+    $('#e_stock_sys,#e_wip_sys').text('');
+    $('#btnStockReload').hide();
+    if (!d || !d.ec_id) return;
+    $.getJSON(API, {action:'stock_snapshot', id:d.ec_id}, function(r){
+        if (!r.ok) return;
+        STOCK_SNAP = r.snap;
+        showStockSnap();
+        var canWH = (d.status === 'WH' && +d.can_sign === 1);
+        $('#btnStockReload').toggle(canWH);
+        if (canWH) {
+            if (!$('#e_stock_qty').val().trim()) $('#e_stock_qty').val(String(r.snap.stock_qty));
+            if (!$('#e_wip_qty').val().trim())   $('#e_wip_qty').val(String(r.snap.wip_qty));
+        }
+    });
+}
+function showStockSnap(){
+    if (!STOCK_SNAP) return;
+    $('#e_stock_sys').html('系統目前：<b>' + STOCK_SNAP.stock_qty + '</b>（庫存 ' + STOCK_SNAP.stock_rows + ' 筆）');
+    $('#e_wip_sys').html('系統目前：<b>' + STOCK_SNAP.wip_qty + '</b>（未結案 BOM 中最後一道製程已完工 '
+                       + STOCK_SNAP.wip_boms + ' 批）');
+}
+$('#btnStockReload').on('click', function(){
+    if (!STOCK_SNAP) return;
+    $('#e_stock_qty').val(String(STOCK_SNAP.stock_qty));
+    $('#e_wip_qty').val(String(STOCK_SNAP.wip_qty));
+});
 
 /* ── 料號打字帶客戶 ── */
 $('#e_part_kw').on('input', function(){
@@ -895,18 +998,46 @@ $('#btnRvOk').on('click', function(){
 
 /* ══════════════════ 設定 ══════════════════ */
 <?php if ($P['canAdmin']): ?>
+var STAGE_KEY = {SUP:'ec_sign_sup', WH:'ec_sign_wh', TD:'ec_sign_td', APPROVE:'ec_sign_appr', CTRL:'ec_sign_ctrl'};
+var SET_DEPTS = null;
 function buildSettings(){
     var h = '';
     $.each(DICT.stages, function(k, label){
-        var key = ({SUP:'ec_sign_sup', WH:'ec_sign_wh', TD:'ec_sign_td', APPROVE:'ec_sign_appr', CTRL:'ec_sign_ctrl'})[k];
+        var key = STAGE_KEY[k];
         if (!key) return;
         h += '<div class="fld half"><label>' + esc(label) + '</label><select class="form-control set-sign" data-k="'+key+'">';
         $.each(DICT.sign_sources, function(v, t){
             h += '<option value="'+esc(v)+'"'+(SETTINGS[key] === v ? ' selected' : '')+'>'+esc(t)+'</option>';
         });
-        h += '</select></div>';
+        h += '</select>'
+          // 選「指定人員」才展開：先選課室、再從該課室（含子部門）勾人，可複選
+          +  '<div class="pick-wrap" data-k="'+key+'" style="display:none;margin-top:4px;border:1px solid #E8D5B5;'
+          +    'border-radius:4px;padding:6px;background:#FFF7E8;">'
+          +    '<select class="form-control input-sm pick-dept" data-k="'+key+'" data-eg-filter="輸入課室名稱篩選…">'
+          +      '<option value="">— 先選課室 —</option></select>'
+          +    '<div class="pick-list" data-k="'+key+'" style="max-height:150px;overflow:auto;margin-top:4px;'
+          +      'background:#fff;border:1px solid #EFE3D0;border-radius:3px;padding:4px;font-size:12px;">'
+          +      '<span style="color:#aaa;">請先選課室</span></div>'
+          +    '<div class="pick-sel" data-k="'+key+'" style="font-size:11px;color:#7A4A12;margin-top:3px;"></div>'
+          +  '</div>'
+          + '</div>';
     });
     $('#setSigns').html(h);
+    // 記住每一關已勾選的人員（跨課室切換也不會掉）
+    $('.pick-wrap').each(function(){
+        var k = $(this).data('k');
+        $(this).data('picked', String(SETTINGS[k + '_users'] || '').split(',').filter(Boolean));
+    });
+    withSetDepts(function(depts){
+        $('.pick-dept').each(function(){
+            var k = $(this).data('k'), $d = $(this);
+            depts.forEach(function(d){ $d.append('<option value="'+d.id+'">'+esc(d.name)+'</option>'); });
+            var cur = String(SETTINGS[k + '_dept'] || '');
+            if (cur) { $d.val(cur); loadPickPeople(k, cur); }
+            renderPickSel(k);
+        });
+    });
+    $('.set-sign').each(function(){ togglePick($(this).data('k'), this.value); });
     $('#set_auto').prop('checked', +SETTINGS.ec_auto_from_dwg === 1);
     showAsDoc();
     loadStampTemplates();
@@ -927,6 +1058,51 @@ function loadStampTemplates(){
             });
         });
     }).fail(function(){ /* 圖章管理沒開放時就只留預設選項，不影響其他設定 */ });
+}
+function withSetDepts(cb){
+    if (SET_DEPTS) return cb(SET_DEPTS);
+    $.getJSON(API, {action:'departments'}, function(r){ if (r.ok) { SET_DEPTS = r.rows || []; cb(SET_DEPTS); } });
+}
+function togglePick(key, src){ $('.pick-wrap[data-k="'+key+'"]').toggle(src === 'users'); }
+$(document).on('change', '.set-sign', function(){ togglePick($(this).data('k'), this.value); });
+$(document).on('change', '.pick-dept', function(){ loadPickPeople($(this).data('k'), this.value); });
+function loadPickPeople(key, deptId){
+    var $box = $('.pick-list[data-k="'+key+'"]');
+    if (!deptId) { $box.html('<span style="color:#aaa;">請先選課室</span>'); return; }
+    $box.html('<span style="color:#aaa;">載入中…</span>');
+    $.getJSON(API, {action:'dept_people', dept_id:deptId}, function(r){
+        if (!r.ok) return;
+        var picked = $('.pick-wrap[data-k="'+key+'"]').data('picked') || [];
+        var h = '';
+        (r.rows || []).forEach(function(u){
+            var on = picked.indexOf(String(u.id)) >= 0;
+            // 欄位順序固定「部門/職稱/姓名」（人員列表鐵則第 5 條）
+            h += '<label class="chk" style="margin:1px 0;"><input type="checkbox" class="pick-u" data-k="'+key+'" value="'+u.id+'"'
+              +  (on ? ' checked' : '') + '> '
+              +  esc([u.dept_name || '', u.position_name || '', u.user_cname || ''].filter(Boolean).join('　'))
+              +  (u.leave_note ? '<span style="color:#DD5138;">（'+esc(u.leave_note)+'）</span>' : '')
+              +  '</label>';
+        });
+        $box.html(h || '<span style="color:#aaa;">這個課室底下沒有在職人員</span>');
+    });
+}
+$(document).on('change', '.pick-u', function(){
+    var key = $(this).data('k'), $w = $('.pick-wrap[data-k="'+key+'"]');
+    var picked = ($w.data('picked') || []).slice();
+    var v = String(this.value), i = picked.indexOf(v);
+    if (this.checked) { if (i < 0) picked.push(v); } else if (i >= 0) picked.splice(i, 1);
+    $w.data('picked', picked);
+    renderPickSel(key);
+});
+function renderPickSel(key){
+    var picked = $('.pick-wrap[data-k="'+key+'"]').data('picked') || [];
+    var names = [];
+    $('.pick-u[data-k="'+key+'"]').each(function(){
+        if (picked.indexOf(String(this.value)) >= 0) names.push($(this).parent().text().trim());
+    });
+    $('.pick-sel[data-k="'+key+'"]').html(picked.length
+        ? ('已選 ' + picked.length + ' 人：' + esc(names.join('、')) + '（其中任一人簽了就算過這一關）')
+        : '<span style="color:#DD5138;">尚未勾選任何人——這一關會沒有人可以簽</span>');
 }
 $('#btnSetting').on('click', function(){ openMask('setMask'); });
 var ASDOCS = null;
@@ -955,6 +1131,15 @@ $('#btnSetSave').on('click', function(){
     var p = {action:'save_setting', ec_auto_from_dwg: $('#set_auto').is(':checked') ? 1 : 0,
              ec_stamp_tpl_id: $('#set_stamp').val() || '', ec_review_stamp_tpl_id: $('#set_rv_stamp').val() || ''};
     $('.set-sign').each(function(){ p[$(this).data('k')] = this.value; });
+    var bad = '';
+    $('.pick-wrap').each(function(){
+        var k = $(this).data('k'), picked = $(this).data('picked') || [];
+        p[k + '_users'] = picked.join(',');
+        p[k + '_dept']  = $('.pick-dept[data-k="'+k+'"]').val() || '';
+        // 選了「指定人員」卻一個都沒勾＝那一關永遠沒人簽得下去，先擋下來
+        if ($('.set-sign[data-k="'+k+'"]').val() === 'users' && !picked.length) bad = k;
+    });
+    if (bad) { alert('有關卡選了「指定人員」卻沒有勾選任何人，那一關會沒有人可以簽。請先勾選人員。'); return; }
     post(p, function(r){ if (!r.ok) return; SETTINGS = r.settings; alert('已儲存設定'); closeMask('setMask'); });
 });
 <?php else: ?>
@@ -1151,6 +1336,7 @@ function printHtml(res){
 }
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
+$('#btnRoleHelp').on('click', function(){ openMask('roleMask'); });
 </script>
 </body>
 </html>
