@@ -183,7 +183,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
         // 批圖編輯器檔案依分享範圍過濾（私人/部門/指定人員）
         require_once __DIR__ . '/../../src/common/imgedit_visibility.php';
         $rows = imgedit_filter_attachment_rows($pdo2, $rows, intval($_SESSION['id'] ?? 0));
-        $rows = imgedit_strip_workfiles($rows);   // 工作檔只有批圖編輯器打得開，檢視端不列
+        $rows = imgedit_strip_workfiles($rows, $pdo2);   // 工作檔與它配對的暫存輸出圖只在批圖編輯器裡看得到，檢視端不列
         // 類別名稱對照
         $cats = [];
         try {

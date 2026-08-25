@@ -1185,8 +1185,11 @@ function prj_doc_have_map(PDO $db, array $dsPks): array
         if ($catIds) {
             $cond = [];
             foreach ($catIds as $cid) $cond[] = "FIND_IN_SET($cid, REPLACE(COALESCE(pa.category_ids,''),' ',''))";
+            // 批圖暫存檔（工作檔與其輸出圖）不算外來文件，否則旗標亮著、外來文件清單卻查無此檔
+            require_once __DIR__ . '/imgedit_visibility.php';
             $st = $db->prepare("SELECT DISTINCT pa.d_id FROM part_attachments pa
                                 WHERE pa.d_id IN ($in) AND pa.deleted_at IS NULL
+                                  AND " . imgedit_sql_not_draft('pa') . "
                                   AND (" . implode(' OR ', $cond) . ")");
             $st->execute($dsPks);
             foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $pk) $have['ext_doc'][(int)$pk] = true;

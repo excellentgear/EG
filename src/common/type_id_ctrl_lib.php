@@ -245,16 +245,17 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
     $rows = [];
 
     // 料號附件：無製程資訊(本來就與特定製程無關的共用文件，如原圖)，origin_process 一律 NULL
-    $sql = "SELECT pa.id AS attach_id, pa.d_id AS ds_pk,
+    $sql = "SELECT pa.id AS attach_id, pa.d_id AS ds_pk, pa.filename,
                    COALESCE(NULLIF(pa.original_name,''), pa.filename) AS doc_name,
                    DATE(pa.uploaded_at) AS doc_date, pa.category_ids, '' AS category_id_single,
                    NULL AS origin_process
             FROM part_attachments pa
             WHERE pa.d_id=? AND pa.deleted_at IS NULL AND " . $catCond('pa.category_ids');
     $st = $db->prepare($sql); $st->execute([$dsPk]);
-    // 批圖工作檔(.egwork.json)不是文件，一律不入管制表（同 ExternalDoc_API 的保險）
+    // 批圖工作檔(.egwork.json)與「有工作檔的暫存輸出圖」都不是正式文件，一律不入管制表
+    // （見 imgedit_visibility.php 檔頭 2026-08-25；SELECT 必須帶 pa.filename，過濾是靠檔名判定的）
     require_once __DIR__ . '/imgedit_visibility.php';
-    foreach (imgedit_strip_workfiles($st->fetchAll(PDO::FETCH_ASSOC)) as $r) { $r['source'] = 'part'; $rows[] = $r; }
+    foreach (imgedit_strip_workfiles($st->fetchAll(PDO::FETCH_ASSOC), $db) as $r) { $r['source'] = 'part'; $rows[] = $r; }
 
     $st = $db->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
     $st->execute([$dsPk]);
@@ -574,8 +575,11 @@ function type_id_ctrl_find_missing_parts(PDO $db): array {
             return '(' . implode(' OR ', $parts) . ')';
         };
 
+        // 批圖暫存檔（工作檔與其輸出圖）不是正式文件，不列入可用份數（要與實際列出的清單一致）
+        require_once __DIR__ . '/imgedit_visibility.php';
         $add($db->query("SELECT pa.d_id, COUNT(*) c FROM part_attachments pa
-                          WHERE pa.deleted_at IS NULL AND " . $catCond('pa.category_ids') . " GROUP BY pa.d_id")->fetchAll(PDO::FETCH_ASSOC));
+                          WHERE pa.deleted_at IS NULL AND " . imgedit_sql_not_draft('pa') . "
+                            AND " . $catCond('pa.category_ids') . " GROUP BY pa.d_id")->fetchAll(PDO::FETCH_ASSOC));
 
         $add($db->query("SELECT qi.d_setting_d_id AS d_id, COUNT(*) c
                           FROM quotation_attachments a

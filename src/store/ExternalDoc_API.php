@@ -238,7 +238,7 @@ function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
     // 批圖工作檔(.egwork.json)不是文件、也打不開，一律不入管制清單。
     // 目前它們沒有標籤所以本來就不會被 $catCond 撈到，但附件跳窗可以編輯標籤，加一道保險。
     require_once __DIR__ . '/../common/imgedit_visibility.php';
-    foreach (imgedit_strip_workfiles($st->fetchAll(PDO::FETCH_ASSOC)) as $r) { $r['source'] = 'part'; $rows[] = $r; }
+    foreach (imgedit_strip_workfiles($st->fetchAll(PDO::FETCH_ASSOC), $db) as $r) { $r['source'] = 'part'; $rows[] = $r; }
 
     // ② 報價附件（linked_parts NULL＝整張報價單的料號都適用；以 quotation_item 展開，d_setting_d_id 為整數 PK）
     $where = ["a.status='active'", "a.linked_parts IS NULL", $catCond('a.category_ids', 'a.category_id')];

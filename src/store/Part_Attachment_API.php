@@ -198,12 +198,13 @@ switch ($action) {
             WHERE pa.d_id=? AND pa.deleted_at IS NULL");
         $partStmt->execute([$dId]);
         $data = $partStmt->fetchAll(PDO::FETCH_ASSOC);
-        // 批圖工作檔依分享範圍過濾（私人/部門/指定人員）；輸出圖 PNG 不受限制，一律列出
+        // 批圖工作檔依分享範圍過濾（私人/部門/指定人員）
         $data = imgedit_filter_attachment_rows($pdo, $data, $uploadedById, $dId);
-        // ★2026-08-21（使用者明確要求）：工作檔(.egwork.json)**只在批圖編輯器裡看得到**，
-        //   附件清單一律不列。它不是圖面、在這裡既不能看也不能編輯，列出來只會被誤認成一份文件；
-        //   工作檔的檢視/開啟/刪除都在批圖編輯器的「料號附件」跳窗內完成（該處自帶同一套範圍檢查）。
-        $data = imgedit_strip_workfiles($data);
+        // ★2026-08-25（使用者明確要求）：工作檔(.egwork.json)**與它配對的輸出圖**只在批圖編輯器裡
+        //   看得到，附件清單一律不列（不分登入者）。那是「還在編、會被下一版蓋掉」的暫存圖，
+        //   列在這裡會被誤認成正式圖面；工作檔的檢視/開啟/刪除都在批圖編輯器內完成。
+        //   要存正式圖面請在編輯器勾「只存圖片，不建立工作檔」，那條路徑存出來的圖不受過濾。
+        $data = imgedit_strip_workfiles($data, $pdo);
 
         // 2. 報價單附件（明確 linked 或 linked_parts IS NULL 的「全部料號」附件）
         try {
@@ -270,8 +271,8 @@ switch ($action) {
         $allRows = $pStmt->fetchAll(PDO::FETCH_ASSOC);
         // 批圖編輯器檔案依分享範圍過濾（避免私人檔成為列表顯示的「最新附件」）
         $allRows = imgedit_filter_attachment_rows($pdo, $allRows, $uploadedById);
-        // 工作檔（.egwork.json）不是圖面、無法預覽，不可成為列表縮圖的「最新附件」
-        $allRows = imgedit_strip_workfiles($allRows);
+        // 工作檔（.egwork.json）與它配對的暫存輸出圖不是正式圖面，不可成為列表縮圖的「最新附件」
+        $allRows = imgedit_strip_workfiles($allRows, $pdo);
 
         // 報價單附件：先取各 d_id 對應的 D_Setting_Id
         try {
@@ -362,7 +363,10 @@ switch ($action) {
         foreach ($allRows as $row) { $grouped[$row['d_id']][] = $row; }
 
         // 計算總數（分兩表查）
-        $cntPStmt = $pdo->prepare("SELECT d_id, COUNT(*) AS cnt FROM part_attachments WHERE d_id IN ($ph) AND deleted_at IS NULL GROUP BY d_id");
+        // 數量要跟上面過濾後的清單一致：批圖工作檔與它配對的暫存輸出圖都不算（見 imgedit_visibility.php）
+        $cntPStmt = $pdo->prepare("SELECT d_id, COUNT(*) AS cnt FROM part_attachments pa
+                                   WHERE pa.d_id IN ($ph) AND pa.deleted_at IS NULL AND " . imgedit_sql_not_draft('pa') . "
+                                   GROUP BY pa.d_id");
         $cntPStmt->execute($dIds);
         $counts = [];
         foreach ($cntPStmt->fetchAll(PDO::FETCH_ASSOC) as $c) { $counts[$c['d_id']] = (int)$c['cnt']; }

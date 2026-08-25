@@ -1,32 +1,78 @@
 <?php
 // imgedit_visibility.php — 批圖編輯器檔案在「附件清單」的可見性過濾（共用）
 //
-// 批圖編輯器（views/Sales/image_editor.php）每次儲存會在 part_attachments 寫入成對兩筆：
-//   egdraw_<stamp>.png（輸出圖）＋ egdraw_<stamp>.egwork.json（工作檔），
-// 工作檔的分享範圍存在 imgedit_workfile_meta（private=私人／dept=部門共用／custom=指定人員；
-// 無 meta＝改版前舊資料，視為全員可見）。
-// 本函式讓任何列出 part_attachments 的端點，依同一套規則過濾掉目前使用者無權看的批圖檔。
-// 管理者（user_status 9/90 或系統 admin 角色）全可見。
+// 批圖編輯器（views/Sales/image_editor.php）存檔有兩條路徑：
+//   ①「只存圖片，不建立工作檔」＝正式成品圖：只寫一筆 egdraw_<stamp>.png，全公司都看得到、
+//      要填發行章日期、會參與圖面變更判定 —— 這條路徑產生的圖**不受本檔任何過濾**。
+//   ② 一般存檔＝成對兩筆：egdraw_<stamp>.png（輸出圖）＋ egdraw_<stamp>.egwork.json（工作檔），
+//      工作檔的分享範圍存在 imgedit_workfile_meta（private=私人／dept=部門共用／custom=指定人員）。
 //
-// ★2026-08-21 重要變更（使用者明確要求）：**分享範圍只管工作檔（.egwork.json），不管壓平輸出的 PNG**。
-//   原本成對的 PNG 會跟隨工作檔的範圍一起被藏起來，導致「存成私人」時別人連那張圖都看不到；
-//   使用者要的是「圖大家都要看得到，只有可再編輯的工作檔才私人」，故改為 PNG 一律不過濾。
-//   實務意義：私人保護的是「編輯中的半成品與可改的原始檔」，不是成品圖面——成品圖存進料號附件
-//   本來就是要給大家看的（外來文件清單、型態識別文件管制表等也才不會因人而異）。
-// 濾掉 Fabric.js 工作檔（*.egwork.json）——給「唯讀檢視」端點用。
-// 工作檔只有批圖編輯器打得開，在圖面檢視跳窗裡既不能看也不能印，列出來只是干擾；
-// 批圖編輯器自己的工作檔清單走 image_editor.php 的獨立查詢，不經過這裡，故不受影響。
-// ★2026-08-21 起連附件的 CRUD 清單（master_data_management 的附件跳窗）也套用：工作檔只在批圖編輯器
-// 裡看得到，管理／刪除也在編輯器的「料號附件」跳窗內完成（delete_workfile 自帶同一套範圍檢查）。
-function imgedit_strip_workfiles(array $rows): array {
+// ★2026-08-25 重要變更（使用者明確要求，推翻 2026-08-21 的「PNG 一律不過濾」）：
+//   **②「有建立工作檔」的存檔，連同它產生的輸出 PNG 一律只在批圖編輯器裡看得到，其他頁面一概不列。**
+//   原因：那是「還在編、隨時會被下一版蓋掉」的暫存圖（見 image_editor.php save_workfile 註解），
+//   卻帶著 BOSS圖／原圖等附件標籤混在圖面查閱清單裡，會被當成正式圖面＝造成誤會。
+//   **判定與登入者無關**（使用者明確要求）：不是「私人的別人看不到」，而是「有工作檔的大家都看不到」，
+//   否則外來文件清單、型態識別文件管制表這種 AS9100 管制清單會因登入者不同而內容不同。
+//   要正式發行請在存檔跳窗勾「只存圖片，不建立工作檔」（＝路徑①）。
+//   工作檔本身的分享範圍（私人／部門／指定人員）仍然有效，那是在批圖編輯器的工作檔清單裡判定的
+//   （image_editor.php 的 list_workfiles／load_workfile／delete_workfile 各自檢查，不經過本檔）。
+
+// ── 找出「工作檔存檔產生的輸出 PNG」 ───────────────────────────────────
+// 回傳 [小寫png檔名 => true]。配對鍵只用檔名不用 d_id：檔名是 egdraw_<時間>_<6碼亂數>，
+// 同一次存檔的 PNG 與工作檔必然同 stem，跨料號撞名機率為零，少一個 d_id 就能涵蓋
+// 「呼叫端 SELECT 沒帶 d_id」的清單（例如外來文件清單只 SELECT 了 ds.d_id 別名）。
+// **刻意不濾 deleted_at**：工作檔被「保留上限」輪替軟刪除後，那張圖仍然是暫存圖，
+// 不該因為工作檔被輪替掉就突然變成全公司看得到。
+function imgedit_draft_png_names(PDO $pdo, array $rows): array {
+    $want = [];
+    foreach ($rows as $r) {
+        $fn = (string)($r['filename'] ?? '');
+        if (preg_match('/^(egdraw_.+)\.png$/i', $fn, $m)) $want[$m[1] . '.egwork.json'] = true;
+    }
+    if (!$want) return [];
+    $out = [];
+    foreach (array_chunk(array_keys($want), 500) as $chunk) {
+        $ph = implode(',', array_fill(0, count($chunk), '?'));
+        try {
+            $st = $pdo->prepare("SELECT filename FROM part_attachments WHERE filename IN ($ph)");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $f) {
+                $out[strtolower(preg_replace('/\.egwork\.json$/i', '.png', (string)$f))] = true;
+            }
+        } catch (Exception $_e) { return []; }   // 表/欄位異常＝不過濾，寧可多列也不要整張清單掛掉
+    }
+    return $out;
+}
+
+// ── SQL 版：給「不是把整批列出來、而是在 SQL 裡算數量／存在旗標」的呼叫端用 ──
+// 回傳可直接串進 WHERE 的條件字串（不需綁定參數），語意同 imgedit_strip_workfiles()。
+function imgedit_sql_not_draft(string $alias = 'pa'): string {
+    $a = preg_replace('/[^A-Za-z0-9_]/', '', $alias) ?: 'pa';
+    return "($a.filename NOT LIKE 'egdraw\_%.egwork.json'"
+         . " AND NOT ($a.filename LIKE 'egdraw\_%.png' AND EXISTS ("
+         . "   SELECT 1 FROM part_attachments w2"
+         . "   WHERE w2.filename = CONCAT(LEFT($a.filename, CHAR_LENGTH($a.filename) - 4), '.egwork.json')"
+         . " )))";
+}
+
+// ── 主要過濾：濾掉工作檔（*.egwork.json）與它配對的輸出 PNG ───────────────
+// 給所有「唯讀檢視」與「附件 CRUD 清單」端點用（管理／刪除都在批圖編輯器的工作檔清單裡完成）。
+// $pdo 省略＝只濾工作檔本身（舊行為，保留給沒有 PDO 可用的呼叫端；新呼叫端請一律傳）。
+function imgedit_strip_workfiles(array $rows, ?PDO $pdo = null): array {
+    $draft = $pdo ? imgedit_draft_png_names($pdo, $rows) : [];
     $out = [];
     foreach ($rows as $r) {
-        if (preg_match('/\.egwork\.json$/i', (string)($r['filename'] ?? ''))) continue;
+        $fn = (string)($r['filename'] ?? '');
+        if (preg_match('/\.egwork\.json$/i', $fn)) continue;
+        if ($draft && isset($draft[strtolower($fn)])) continue;
         $out[] = $r;
     }
     return $out;
 }
 
+// ── 工作檔的分享範圍過濾（私人／部門／指定人員）─────────────────────────
+// 2026-08-25 起 imgedit_strip_workfiles() 已經把工作檔與其輸出圖一併濾掉，故各檢視端點在
+// 兩者併用時本函式等同第二道保險；獨立使用（只想依範圍過濾、仍要列出工作檔）時仍然有效。
 function imgedit_filter_attachment_rows(PDO $pdo, array $rows, int $uid, int $dIdFallback = 0): array {
     $dIds = [];
     foreach ($rows as $r) {
@@ -43,7 +89,7 @@ function imgedit_filter_attachment_rows(PDO $pdo, array $rows, int $uid, int $dI
         $st = $pdo->prepare("SELECT wf.id, wf.d_id, wf.filename, wf.uploaded_by_id, m.owner_type, m.owner_dept_id
                              FROM part_attachments wf
                              JOIN imgedit_workfile_meta m ON m.attachment_id = wf.id
-                             WHERE wf.d_id IN ($ph) AND wf.filename LIKE 'egdraw\\_%.egwork.json'");
+                             WHERE wf.d_id IN ($ph) AND wf.filename LIKE 'egdraw\_%.egwork.json'");
         $st->execute($dIds);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $w) {
             $stem = preg_replace('/\.egwork\.json$/', '', $w['filename']);
@@ -79,7 +125,7 @@ function imgedit_filter_attachment_rows(PDO $pdo, array $rows, int $uid, int $dI
     $out = [];
     foreach ($rows as $r) {
         $fn = (string)($r['filename'] ?? '');
-        // 只有批圖「工作檔」受分享範圍限制；壓平輸出的 PNG 與其他附件一律放行（見檔頭 2026-08-21 變更）
+        // 只有批圖「工作檔」受分享範圍限制；輸出 PNG 由 imgedit_strip_workfiles() 一律濾掉（見檔頭 2026-08-25）
         if (!preg_match('/^egdraw_.+\.egwork\.json$/i', $fn)) { $out[] = $r; continue; }
         $dId = (int)($r['d_id'] ?? $dIdFallback);
         $stem = preg_replace('/\.egwork\.json$/i', '', $fn);
