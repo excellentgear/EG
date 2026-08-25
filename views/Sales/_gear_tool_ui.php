@@ -20,6 +20,15 @@ if (!isset($show_gear_tool)) {
 }
 if (!isset($is_gear_admin)) $is_gear_admin = gear_tool_is_admin();
 
+// 停靠模式（Figma 式「頁面內側邊面板」）：呼叫端設 $gear_tool_dock = '#canvas-wrap'（CSS 選擇器＝
+// 面板要貼在哪個容器的右緣）才會出現「停靠／浮出」切換鈕；沒設定的頁面維持原本的浮動視窗、行為完全不變。
+// $gear_tool_dock_default = 第一次開啟時預設停靠還是浮動（之後記住使用者自己的選擇）。
+if (!isset($gear_tool_dock)) $gear_tool_dock = '';
+if (!isset($gear_tool_dock_default)) $gear_tool_dock_default = ($gear_tool_dock !== '');
+// $gear_tool_dock_offset = 同容器內另一個也貼右緣的面板（例：批圖編輯器的標籤庫）。
+// 設了之後那個面板一打開，本面板會自動往左讓開，兩個面板並排而不是互相蓋住。
+if (!isset($gear_tool_dock_offset)) $gear_tool_dock_offset = '';
+
 // API 網址：由本檔自身位置推導成網站絕對路徑，這樣不管是哪個目錄的頁面 include 都指得到
 $__gear_api_url = 'gear_tool_api.php';
 $__droot = rtrim(str_replace(chr(92), '/', $_SERVER['DOCUMENT_ROOT'] ?? ''), '/');
@@ -29,7 +38,12 @@ if ($__droot !== '' && strpos($__here, $__droot) === 0) {
 }
 ?>
 <?php if ($show_gear_tool): ?>
-<script>window.GEAR_TOOL_API_URL = <?= json_encode($__gear_api_url) ?>;</script>
+<script>
+window.GEAR_TOOL_API_URL      = <?= json_encode($__gear_api_url) ?>;
+window.GEAR_TOOL_DOCK_SEL     = <?= json_encode($gear_tool_dock) ?>;
+window.GEAR_TOOL_DOCK_DEFAULT = <?= $gear_tool_dock_default ? 'true' : 'false' ?>;
+window.GEAR_TOOL_DOCK_OFFSET_SEL = <?= json_encode($gear_tool_dock_offset) ?>;
+</script>
 <style>
         /* ── 齒輪計算工具 ───────────────────────────────────────────── */
         #gear-tool-window {
@@ -212,15 +226,49 @@ if ($__droot !== '' && strpos($__here, $__droot) === 0) {
         #gear-tool-window *, #gear-tool-window *::before, #gear-tool-window *::after { box-sizing: border-box; }
         #gear-tool-window input, #gear-tool-window select, #gear-tool-window textarea, #gear-tool-window button { font-family: inherit; }
         #gear-tool-container { height: 0; flex: 0 0 auto; }
+
+        /* ── 停靠模式：Figma 式「頁面內側邊面板」（貼在呼叫端指定容器的右緣，不蓋住整個畫面）──
+           只在 .gear-docked 之下改版面，浮動視窗的既有外觀完全不受影響。 */
+        #gear-tool-window.gear-docked {
+            position: absolute; top: 0; right: 0; bottom: 0; left: auto;
+            transform: none; width: 430px; max-width: 100%;
+            border-radius: 0; border: none; border-left: 1px solid #9fb3bf;
+            box-shadow: -6px 0 18px rgba(0,0,0,.30);
+            flex-direction: column; z-index: 620; overflow: visible;
+        }
+        .gear-docked #gear-tool-hdr { border-radius: 0; padding: 7px 10px; cursor: default; flex: 0 0 auto; }
+        .gear-docked #gear-tool-hdr .gear-hdr-title { font-size: 13px; }
+        /* 分頁列在窄面板會排成兩列：一定要 flex:0 0 auto。
+           它有 overflow-x（＝捲動容器）＝自動最小尺寸失效，不釘住的話會被 flex 壓成一列高，
+           第二列的「花鍵內／栓槽／出尾／預留量管理」就被切掉看不見也點不到。 */
+        .gear-docked .gear-tabs { flex: 0 0 auto; flex-wrap: wrap; overflow: visible; align-content: flex-start; }
+        .gear-docked .gear-tab-btn { padding: 4px 7px; font-size: 10.5px; border-bottom-width: 2px; }
+        .gear-docked .sp-tab-sep { display: none; }
+        .gear-docked #gear-tool-body { max-height: none; flex: 1 1 auto; overflow-y: auto; }
+        .gear-docked .gear-tab-pane { padding: 10px; }
+        /* 窄面板：兩欄改上下排（輸入在上、結果在下），內層寫死的 min-width 一併鬆綁 */
+        .gear-docked .gear-two-col { flex-direction: column; gap: 10px; }
+        .gear-docked .gear-two-col > div { flex: none !important; width: 100%; min-width: 0 !important; }
+        .gear-docked .gear-out-grid { grid-template-columns: 1fr 1fr; }
+        .gear-docked .gear-allow-tbl-wrap, .gear-docked .sp-tol-tbl-wrap { overflow-x: auto; }
+        .gear-docked .gear-inline-form input { width: 68px; }
+        /* 左緣拖曳調整面板寬度（比照批圖編輯器標籤庫的做法） */
+        #gear-dock-resizer { display: none; position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 5; }
+        .gear-docked #gear-dock-resizer { display: block; }
+        #gear-dock-resizer:hover, #gear-dock-resizer.active { background: rgba(41,128,185,.45); }
 </style>
 <!-- ═══ 齒輪計算工具視窗（點擊開啟後動態載入 DOM）════════════════════════════ -->
 <template id="gear-tool-tpl"><div id="gear-tool-window">
+    <div id="gear-dock-resizer" title="拖曳調整面板寬度"></div>
     <!-- Header / 拖曳把手 -->
     <div id="gear-tool-hdr">
         <span class="gear-hdr-title"><i class="fa fa-cog fa-spin" id="gear-hdr-icon"></i> 齒輪計算工具</span>
         <div class="gear-hdr-btns">
             <?php if ($is_gear_admin): ?>
             <button id="gear-settings-toggle" onclick="toggleGearSettings(event)" title="可使用本工具的部門（於組織角色綁定設定維護）"><i class="fa fa-sliders"></i> 設定</button>
+            <?php endif; ?>
+            <?php if ($gear_tool_dock !== ''): ?>
+            <button id="gear-dock-toggle" onclick="toggleGearDock()" title="切換：停靠成頁面內的側邊面板／浮出成可拖曳的獨立視窗"><i class="fa fa-columns"></i> 停靠</button>
             <?php endif; ?>
             <button onclick="closeGearTool()" title="關閉">✕ 關閉</button>
         </div>
@@ -2595,7 +2643,107 @@ if ($__droot !== '' && strpos($__here, $__droot) === 0) {
         initEnterTab();
         initAnBtnHighlight();
         initDrag();
+        initDockResize();
+        initDockOffsetWatch();
         initGearSelectOnFocus();
+        // 停靠／浮出：只有呼叫端指定了停靠容器的頁面才有這個模式
+        if (GEAR_DOCK_SEL) {
+            var pref = null;
+            try { pref = localStorage.getItem('eg_gear_dock'); } catch (e) {}
+            setGearDock(pref === null ? (window.GEAR_TOOL_DOCK_DEFAULT !== false) : pref === '1', false);
+        }
+    }
+
+    // ══ 停靠（頁面內側邊面板）↔ 浮出（可拖曳視窗）════════════════
+    var GEAR_DOCK_SEL = (window.GEAR_TOOL_DOCK_SEL || '');
+    var _gearDocked = false;
+    var GEAR_DOCK_OFFSET_SEL = (window.GEAR_TOOL_DOCK_OFFSET_SEL || '');
+    function gearDockHost() { return GEAR_DOCK_SEL ? document.querySelector(GEAR_DOCK_SEL) : null; }
+    // 同容器內另一個也貼右緣的面板（批圖編輯器的標籤庫）打開時往左讓開，不要互相蓋住
+    function gearDockOffset() {
+        if (!GEAR_DOCK_OFFSET_SEL) return 0;
+        var el = document.querySelector(GEAR_DOCK_OFFSET_SEL);
+        if (!el || el.offsetParent === null) return 0;
+        return Math.round(el.getBoundingClientRect().width);
+    }
+    function gearApplyDockOffset() {
+        var win = document.getElementById('gear-tool-window');
+        if (!win || !_gearDocked) return;
+        win.style.right = gearDockOffset() + 'px';
+    }
+    function initDockOffsetWatch() {
+        if (!GEAR_DOCK_OFFSET_SEL) return;
+        var el = document.querySelector(GEAR_DOCK_OFFSET_SEL);
+        if (!el) return;
+        // 那個面板的開關與寬度都是改 class／style，用 MutationObserver 跟著調整
+        new MutationObserver(gearApplyDockOffset).observe(el, { attributes: true, attributeFilter: ['class', 'style'] });
+        window.addEventListener('resize', gearApplyDockOffset);
+    }
+    function gearDockWidth() {
+        var w = 0;
+        try { w = parseInt(localStorage.getItem('eg_gear_dock_w') || '0', 10); } catch (e) {}
+        return (!w || w < 320) ? 430 : w;
+    }
+    window.setGearDock = function(on, remember) {
+        var win = document.getElementById('gear-tool-window');
+        if (!win) return;
+        var host = gearDockHost();
+        if (on && !host) on = false;                       // 沒有停靠容器＝只能浮動
+        _gearDocked = !!on;
+        var shown = win.style.display && win.style.display !== 'none';
+        if (on) {
+            if (window.getComputedStyle(host).position === 'static') host.style.position = 'relative';
+            if (win.parentNode !== host) host.appendChild(win);
+            win.classList.add('gear-docked');
+            win.style.left = ''; win.style.top = ''; win.style.transform = '';
+            win.style.width = Math.min(gearDockWidth(), Math.max(320, host.clientWidth - gearDockOffset() - 40)) + 'px';
+            gearApplyDockOffset();
+            if (shown) win.style.display = 'flex';
+        } else {
+            var cont = document.getElementById('gear-tool-container') || document.body;
+            if (win.parentNode !== cont) cont.appendChild(win);
+            win.classList.remove('gear-docked');
+            win.style.width = ''; win.style.right = '';
+            win.style.left = '50%'; win.style.top = '55px'; win.style.transform = 'translateX(-50%)';
+            if (shown) win.style.display = 'block';
+        }
+        var btn = document.getElementById('gear-dock-toggle');
+        if (btn) {
+            btn.innerHTML = on ? '<i class="fa fa-external-link"></i> 浮出' : '<i class="fa fa-columns"></i> 停靠';
+            btn.title = on ? '浮出成可拖曳的獨立視窗（可自由拖到畫面任何位置）'
+                           : '停靠成頁面內的側邊面板（貼在右緣，不蓋住整個畫面）';
+        }
+        var sp = document.getElementById('gear-settings-panel');
+        if (sp) sp.style.display = 'none';
+        if (remember) { try { localStorage.setItem('eg_gear_dock', on ? '1' : '0'); } catch (e) {} }
+    };
+    window.toggleGearDock = function() { window.setGearDock(!_gearDocked, true); };
+
+    // 停靠時左緣可拖曳調整寬度（記住使用者調過的寬度）
+    function initDockResize() {
+        var rz  = document.getElementById('gear-dock-resizer');
+        var win = document.getElementById('gear-tool-window');
+        if (!rz || !win) return;
+        var startX = 0, startW = 0;
+        rz.addEventListener('mousedown', function(e) {
+            if (!_gearDocked) return;
+            startX = e.clientX; startW = win.getBoundingClientRect().width;
+            rz.classList.add('active');
+            document.addEventListener('mousemove', onRz);
+            document.addEventListener('mouseup',   offRz);
+            e.preventDefault();
+        });
+        function onRz(e) {
+            var host = gearDockHost();
+            var max  = host ? Math.max(360, host.clientWidth - gearDockOffset() - 40) : 900;
+            win.style.width = Math.min(Math.max(320, startW + (startX - e.clientX)), max) + 'px';
+        }
+        function offRz() {
+            rz.classList.remove('active');
+            document.removeEventListener('mousemove', onRz);
+            document.removeEventListener('mouseup',   offRz);
+            try { localStorage.setItem('eg_gear_dock_w', String(Math.round(win.getBoundingClientRect().width))); } catch (e) {}
+        }
     }
 
     // ── 聚焦已有資料的欄位自動全選（齒輪工具視窗全部輸入欄一體適用）──────────
@@ -2620,7 +2768,7 @@ if ($__droot !== '' && strpos($__here, $__droot) === 0) {
         ensureGearDom();
         var w = document.getElementById('gear-tool-window');
         if (!w) return;
-        w.style.display = 'block';
+        w.style.display = _gearDocked ? 'flex' : 'block';
         // 初始化載入資料（首次開啟）
         if (_mnTable.length === 0 && _daTable.length === 0) {
             gearAjax.post({action:'gear_init'}, function(res){
@@ -2655,6 +2803,7 @@ if ($__droot !== '' && strpos($__here, $__droot) === 0) {
         if (!hdr || !win) return;
         var startX, startY, startL, startT;
         hdr.addEventListener('mousedown', function(e) {
+            if (_gearDocked) return;                       // 停靠成側邊面板時標題列不拖曳
             if (e.target.tagName === 'BUTTON' || e.target.tagName === 'I') return;
             startX = e.clientX; startY = e.clientY;
             startL = parseInt(win.style.left) || (win.getBoundingClientRect().left);
