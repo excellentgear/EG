@@ -16,6 +16,7 @@ if ($action !== 'download') {
 require_once __DIR__ . '/../common/DBConnection.php';   // 2026-08-24 改 require_once＋__DIR__：api_guard 已先載入過，用 include 會二次宣告 class 直接 500
 require_once __DIR__ . '/../common/imgedit_visibility.php';
 require_once __DIR__ . '/../common/dwg_change_lib.php';   // 發行章日期判定／建立圖面變更（唯一實作點）
+require_once __DIR__ . '/../common/photo_album_lib.php';  // 照片相簿分組＋縮圖（唯一實作點）
 $db  = new DBConnection();
 $pdo = $db->getPDO();
 
@@ -82,6 +83,15 @@ function initPartAttachTables(PDO $pdo): void {
 
 initPartAttachTables($pdo);
 dwg_ensure_schema($pdo);   // issue_stamp_date / is_own_drawing / trigger_attachment_id 欄位補建
+pa_album_ensure_schema($pdo);   // 相簿表／album_id／is_photo_album 欄位補建
+
+/** 相簿寫入動作的守門：料號主檔頁的 C/U/A（前端有擋，後端同規則再擋一次＝鐵律8） */
+function _paRequireAlbumEdit(PDO $pdo, int $uid): void {
+    if (!pa_album_can_edit($pdo, $uid)) {
+        echo json_encode(['success'=>false,'message'=>'沒有權限編輯此料號的附件相簿']);
+        exit;
+    }
+}
 
 
 switch ($action) {
@@ -154,9 +164,16 @@ switch ($action) {
         $note     = (trim($_POST['note']     ?? '') !== '') ? trim($_POST['note'])     : null;
         $revision = (trim($_POST['revision'] ?? '') !== '') ? trim($_POST['revision']) : null;
         $sz       = fmtSzPa((int)$_FILES['file']['size']);
+        // 相簿：同一次上傳的照片可自動成為一本相簿（前端先建好相簿再逐檔帶 album_id 上傳）。
+        // 相簿必須是同一個料號底下的，否則照片會掛到別的料號的相簿裡去。
+        $upAlbum = intval($_POST['album_id'] ?? 0);
+        if ($upAlbum > 0) {
+            $alRow = pa_album_get($pdo, $upAlbum);
+            if (!$alRow || (int)$alRow['d_id'] !== $dId) { $upAlbum = 0; }
+        }
         try {
-            $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,process_tag,uploaded_by,uploaded_by_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-                ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $upIssue, ($upProc !== '' ? $upProc : null), $uploadedByName, $uploadedById]);
+            $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,process_tag,album_id,uploaded_by,uploaded_by_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $upIssue, ($upProc !== '' ? $upProc : null), ($upAlbum ?: null), $uploadedByName, $uploadedById]);
             $newAttachId = (int)$pdo->lastInsertId();
             // dwg_verdict.kind='change' 時前端要跳出「填變更內容」表單，再呼叫 create_dwg_change
             echo json_encode(['success'=>true,'id'=>$newAttachId,'filename'=>$fname,'original_name'=>$orig,
@@ -191,7 +208,7 @@ switch ($action) {
         } catch(Exception $_e) {}
 
         // 1. 直接上傳的料號附件（JOIN user 取中文名稱）
-        $partStmt = $pdo->prepare("SELECT pa.id,'part' AS source,pa.filename,pa.original_name,pa.category_ids,pa.tag_var_values,pa.file_size,pa.note,pa.revision,pa.issue_stamp_date,pa.process_tag,
+        $partStmt = $pdo->prepare("SELECT pa.id,'part' AS source,pa.filename,pa.original_name,pa.category_ids,pa.tag_var_values,pa.file_size,pa.note,pa.revision,pa.issue_stamp_date,pa.process_tag,pa.album_id,
             COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by, pa.uploaded_at, '' AS quote_no
             FROM part_attachments pa
             LEFT JOIN user u ON u.id = pa.uploaded_by_id
@@ -215,7 +232,7 @@ switch ($action) {
             if ($dSettingId && _paQuotCanView($pdo)) {
                 $qStmt = $pdo->prepare("
                     SELECT a.id,'quote' AS source,a.filename,a.original_name,a.category_ids,
-                           NULL AS tag_var_values,a.file_size,NULL AS note,NULL AS revision,NULL AS issue_stamp_date,NULL AS process_tag,
+                           NULL AS tag_var_values,a.file_size,NULL AS note,NULL AS revision,NULL AS issue_stamp_date,NULL AS process_tag,NULL AS album_id,
                            COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by,
                            a.uploaded_at, a.quote_no
                     FROM quotation_attachments a
@@ -251,7 +268,64 @@ switch ($action) {
                 $row['url'] = $qDlBase . '?action=download&quote_no=' . urlencode($row['quote_no']) . '&filename=' . urlencode($row['filename']);
             }
         }
-        echo json_encode(['success'=>true,'data'=>$data]);
+        unset($row);
+        // 相簿：哪些標籤要用九宮格檢視（逐標籤勾選，不寫死標籤名稱）＋這個料號目前有哪些相簿
+        echo json_encode(['success'=>true,'data'=>$data,
+                          'albums'=>pa_album_list($pdo, [$dId]),
+                          'album_cat_ids'=>pa_album_cat_ids($pdo),
+                          'can_album_edit'=>pa_album_can_edit($pdo, $uploadedById)]);
+        break;
+
+    // ── 相簿：清單 ────────────────────────────────────────────────
+    // 相簿只做系統內分組（NAS 不開子資料夾），詳見 src/common/photo_album_lib.php 開頭說明
+    case 'album_list':
+        $alDid = intval($_GET['d_id'] ?? $_POST['d_id'] ?? 0);
+        if (!$alDid) { echo json_encode(['success'=>false,'message'=>'缺少料號 ID']); exit; }
+        echo json_encode(['success'=>true,'albums'=>pa_album_list($pdo, [$alDid]),
+                          'album_cat_ids'=>pa_album_cat_ids($pdo),
+                          'can_album_edit'=>pa_album_can_edit($pdo, $uploadedById)], JSON_UNESCAPED_UNICODE);
+        break;
+
+    // ── 相簿：建立（可順便把已選的照片一起收進去）──────────────────
+    case 'album_create':
+        _paRequireAlbumEdit($pdo, $uploadedById);
+        try {
+            $acDid = intval($_POST['d_id'] ?? 0);
+            $acCat = intval($_POST['category_id'] ?? 0);
+            $newId = pa_album_create($pdo, $acDid, (string)($_POST['album_name'] ?? ''), ($acCat ?: null), $uploadedById, $uploadedByName);
+            $ids   = json_decode((string)($_POST['attach_ids'] ?? '[]'), true);
+            if (is_array($ids) && $ids) pa_album_assign($pdo, $newId, $ids);
+            echo json_encode(['success'=>true,'id'=>$newId]);
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        break;
+
+    // ── 相簿：改名 ────────────────────────────────────────────────
+    case 'album_rename':
+        _paRequireAlbumEdit($pdo, $uploadedById);
+        try {
+            pa_album_rename($pdo, intval($_POST['album_id'] ?? 0), (string)($_POST['album_name'] ?? ''));
+            echo json_encode(['success'=>true]);
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        break;
+
+    // ── 相簿：刪除（只解散分組，照片退回「未分相簿」，不刪檔）──────
+    case 'album_delete':
+        _paRequireAlbumEdit($pdo, $uploadedById);
+        try {
+            $moved = pa_album_delete($pdo, intval($_POST['album_id'] ?? 0));
+            echo json_encode(['success'=>true,'moved'=>$moved]);
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        break;
+
+    // ── 相簿：把照片加入相簿／移出相簿（album_id 傳 0＝移出）────────
+    case 'album_assign':
+        _paRequireAlbumEdit($pdo, $uploadedById);
+        try {
+            $ids = json_decode((string)($_POST['attach_ids'] ?? '[]'), true);
+            if (!is_array($ids)) $ids = [];
+            $n = pa_album_assign($pdo, intval($_POST['album_id'] ?? 0), $ids);
+            echo json_encode(['success'=>true,'moved'=>$n]);
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         break;
 
     // ── 取得多個料號的最新附件（供列表顯示）─────────────────────
@@ -828,6 +902,20 @@ switch ($action) {
         $fp   = rtrim($base,'/\\') . DIRECTORY_SEPARATOR . $rec['d_id'] . DIRECTORY_SEPARATOR . $rec['filename'];
         if (!file_exists($fp)) { http_response_code(404); exit; }
         $ext2 = strtolower(pathinfo($fp, PATHINFO_EXTENSION));
+        // 縮圖（相簿九宮格用）：一張手機照片動輒數 MB，九張原圖一次載會卡住整個跳窗。
+        // 產不出縮圖（非圖片檔／GD 讀不動）時直接落回原圖，不讓格子破圖。
+        if (!empty($_GET['thumb'])) {
+            $tw = intval($_GET['w'] ?? 400);
+            $th = pa_thumb_make($fp, $tw ?: 400);
+            if ($th) {
+                header('Content-Type: ' . $th[1]);
+                header('Content-Disposition: inline; filename="thumb.jpg"');
+                header('Content-Length: ' . filesize($th[0]));
+                header('Cache-Control: private, max-age=86400');
+                readfile($th[0]);
+                exit;
+            }
+        }
         $mime = match($ext2) {
             'pdf'  => 'application/pdf',
             'jpg','jpeg' => 'image/jpeg',

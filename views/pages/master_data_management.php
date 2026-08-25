@@ -6154,7 +6154,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN is_external_doc TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否列入外來文件清單'"); } catch(PDOException $e){}
                 try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN external_doc_name VARCHAR(100) NULL COMMENT '外來文件類別名稱(空=用標籤名)'"); } catch(PDOException $e){}
                 try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN show_in_other_attach TINYINT(1) NOT NULL DEFAULT 0 COMMENT '此類別的附件是否也併入 bom_viewer 其他附件分頁顯示(不影響原上傳位置的分頁)'"); } catch(PDOException $e){}
-                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark, COALESCE(dwg_group,'') AS dwg_group, COALESCE(dwg_trigger,1) AS dwg_trigger FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+                // is_photo_album＝這個標籤的附件以九宮格相簿檢視（唯一實作 photo_album_lib）
+                require_once __DIR__ . '/../../src/common/photo_album_lib.php';
+                pa_album_ensure_schema($pdo);
+                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark, COALESCE(dwg_group,'') AS dwg_group, COALESCE(dwg_trigger,1) AS dwg_trigger, COALESCE(is_photo_album,0) AS is_photo_album FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'data'=>$rows]);
             } elseif ($op_code === 'save') {
                 if (!$can_attach_cat_edit) throw new Exception('無編輯附件類別標籤權限（需 A/CDR/CDRU）');
@@ -6174,6 +6177,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 // 前端已隱藏該區塊，這裡後端再擋一次（直打 API 繞不過去＝鐵律8）。
                 $dwg_group    = $own_drawing ? mb_substr(trim($_POST['dwg_group'] ?? ''), 0, 30, 'UTF-8') : '';
                 $dwg_trigger  = $own_drawing ? (intval($_POST['dwg_trigger'] ?? 0) ? 1 : 0) : 1;
+                // 以相簿（九宮格）檢視：產品照片這種一次好幾十張的附件用的
+                $photo_album  = intval($_POST['is_photo_album'] ?? 0) ? 1 : 0;
                 $reactivate   = intval($_POST['reactivate'] ?? 0);
                 $op_name      = _get_operator($pdo, $uid);
                 if ($cat_id && $reactivate) {
@@ -6181,14 +6186,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['success'=>true,'message'=>'已重新啟用','cat_id'=>$cat_id]);
                 } elseif ($cat_id) {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=?,dwg_group=?,dwg_trigger=? WHERE id=?")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $cat_id]);
+                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=?,dwg_group=?,dwg_trigger=?,is_photo_album=? WHERE id=?")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $cat_id]);
                     _log_audit($pdo,'update','dict','attach-cat:'.$cat_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已更新','cat_id'=>$cat_id]);
                 } else {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark,dwg_group,dwg_trigger) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger]);
+                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark,dwg_group,dwg_trigger,is_photo_album) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album]);
                     $new_id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','attach-cat:'.$new_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已新增','cat_id'=>$new_id]);
@@ -8707,6 +8712,19 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                                 檔案本身仍然保留、照樣看得到。預設只有「作廢」這個標籤是勾的。
                             </div>
                         </div>
+                        <!-- 相簿檢視（2026-08-25 使用者要求）：產品照片這種一次好幾十張的附件，
+                             用清單一列一列看很難用，改成九宮格縮圖、點開放大 -->
+                        <div class="form-group" style="margin-bottom:8px;">
+                            <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+                                <input type="checkbox" id="acat-photo-album"> 以<b>相簿（九宮格）</b>檢視
+                            </label>
+                            <div style="font-size:10px;color:#aaa;margin-top:2px;">
+                                勾選後：此標籤的附件在附件跳窗、BOM檢視器、料號檢視器都會<b>以相簿呈現</b>——
+                                左側列出相簿（資料夾），右側九宮格縮圖，點任何一張都能放大、左右換張。<br>
+                                上傳時可勾「這批照片建成一本相簿」<b>把同一次上傳的照片自動歸成一本</b>；
+                                事後也能在相簿列建立相簿再多選照片加入。<b>相簿只是系統裡的分組，NAS 上不會多開資料夾。</b>
+                            </div>
+                        </div>
                         <div class="form-group" style="margin-bottom:8px;">
                             <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
                                 <input type="checkbox" id="acat-external-doc" onchange="document.getElementById('acat-extdoc-name-wrap').style.display=this.checked?'':'none'"> 列入外來文件清單（AS9100）
@@ -9215,10 +9233,59 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
         <input type="date" id="pau-issue-date" class="form-control input-sm" style="max-width:200px;">
         <div id="pau-issue-hint" style="font-size:11px;margin-top:4px;"></div>
     </div>
+    <!-- 相簿（2026-08-25 使用者要求）：勾到「以相簿檢視」的標籤（如產品照片）時才出現。
+         同一次上傳的照片自動歸成一本相簿；不想分相簿就把勾勾拿掉，照片一樣傳得上去（進「未分相簿」）。
+         放在單檔區塊之外＝多檔一起上傳時共用同一本相簿（本來就是同一次拍的）。 -->
+    <div id="pau-album-wrap" class="form-group" style="display:none;margin-top:8px;margin-bottom:0;padding:8px;background:#FFF9F0;border:1px solid #F1E3CE;border-radius:4px;">
+        <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;margin-bottom:4px;">
+            <input type="checkbox" id="pau-album-on" checked onchange="refreshPauAlbumRow()">
+            <b>把這批照片建成一本相簿</b>
+            <small style="color:#aaa;font-weight:normal;">（不勾＝照片照樣上傳，只是不分相簿）</small>
+        </label>
+        <div id="pau-album-detail" style="display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap;">
+            <select id="pau-album-target" class="form-control input-sm" style="width:220px;" onchange="onPauAlbumTargetChange()">
+                <option value="__new__">＋ 建立新相簿</option>
+            </select>
+            <div style="flex:1;min-width:200px;">
+                <input type="text" id="pau-album-name" class="form-control input-sm" maxlength="50" placeholder="相簿名稱（例：外觀檢查 2026.08.25）">
+                <div id="pau-album-err" style="font-size:11px;color:#e74c3c;margin-top:3px;display:none;"></div>
+            </div>
+        </div>
+    </div>
 </div>
 <div class="modal-footer" style="padding:8px 16px;">
     <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
     <button type="button" class="btn btn-primary" id="pau-submit-btn" onclick="submitPartAttachUpload()"><i class="fa fa-upload"></i> 上傳</button>
+</div>
+</div></div></div>
+
+<!-- ═══ MODAL: 相簿名稱／加入相簿（建立·改名·搬移共用一個）═══════════════
+     z-index 要高於附件瀏覽器跳窗（1050），否則會被蓋在底下按不到 -->
+<div class="modal fade" id="pavAlbumModal" tabindex="-1" style="z-index:1080;">
+<div class="modal-dialog" style="width:420px;max-width:96vw;"><div class="modal-content">
+<div class="modal-header" style="background:linear-gradient(135deg,#C77C1A,#F0A24B);">
+    <button type="button" class="close" data-dismiss="modal" style="color:#fff;">&times;</button>
+    <h4 class="modal-title" style="color:#fff;font-size:15px;"><i class="fa fa-folder"></i> <span id="pavalb-title">相簿</span></h4>
+</div>
+<div class="modal-body" style="padding:14px 16px;">
+    <div id="pavalb-note" style="font-size:12px;color:#8A6A45;margin-bottom:8px;display:none;"></div>
+    <div class="form-group" id="pavalb-target-wrap" style="display:none;">
+        <label style="font-size:12px;font-weight:700;color:#555;">要放進哪一本相簿</label>
+        <select id="pavalb-target" class="form-control input-sm" onchange="onPavAlbTargetChange()"></select>
+    </div>
+    <div class="form-group" id="pavalb-name-wrap" style="margin-bottom:0;">
+        <label style="font-size:12px;font-weight:700;color:#555;">相簿名稱 <span style="color:#e74c3c;">*</span>
+            <small style="color:#aaa;font-weight:normal;">（最多 50 字）</small></label>
+        <input type="text" id="pavalb-name" class="form-control input-sm" maxlength="50" placeholder="例：外觀檢查 2026.08.25">
+        <div id="pavalb-err" style="font-size:11px;color:#e74c3c;margin-top:3px;display:none;"></div>
+        <div style="font-size:10px;color:#aaa;margin-top:4px;">
+            相簿只是系統裡的分組（NAS 上不會多開資料夾），改名或搬照片都不會動到檔案本身。
+        </div>
+    </div>
+</div>
+<div class="modal-footer" style="padding:8px 16px;">
+    <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+    <button type="button" class="btn btn-primary" id="pavalb-ok" onclick="pavAlbumPromptOk()"><i class="fa fa-check"></i> 確定</button>
 </div>
 </div></div></div>
 
@@ -9463,6 +9530,8 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
      與本頁既有的 keydown 處理可並存不會跳兩欄。 -->
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script src="../../resource/js/eg_ack_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ack_picker.js') ?>"></script>
+<!-- 照片相簿：九宮格＋點開放大（三頁共用同一份，禁止各頁自刻） -->
+<script src="../../resource/js/eg_photo_album.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_photo_album.js') ?>"></script>
 <script src="../../resource/js/o3dv.min.js"></script>
 
 <script>
@@ -18063,9 +18132,11 @@ function loadAttachCatTable() {
                 ? '<span style="font-size:9px;background:#EFE7DC;color:#8A6A45;border:1px solid #E4D3BC;border-radius:3px;padding:1px 4px;margin-left:3px;" title="此標籤只留發行章日期，不會觸動圖面變更判定">不觸發變更</span>' : '';
             var extBadge = (c.is_external_doc=='1'||c.is_external_doc===1)
                 ? '<span style="font-size:9px;background:#F0A24B;color:#fff;border-radius:3px;padding:1px 4px;margin-left:3px;" title="列入外來文件清單'+(c.external_doc_name?'：'+escHtml(c.external_doc_name):'')+'">外來文件</span>' : '';
+            var albBadge = (c.is_photo_album=='1'||c.is_photo_album===1)
+                ? '<span style="font-size:9px;background:#F0A24B;color:#4A3524;border:1px solid #C77C1A;border-radius:3px;padding:1px 4px;margin-left:3px;" title="此標籤的附件以九宮格相簿檢視，可分相簿、點開放大">相簿</span>' : '';
             var otherBadge = (c.show_in_other_attach=='1'||c.show_in_other_attach===1)
                 ? '<span style="font-size:9px;background:#e3f2fd;color:#1565c0;border-radius:3px;padding:1px 4px;margin-left:3px;" title="此類別的附件也會併入圖面查閱頁「其他附件」分頁顯示（不影響原本上傳位置的分頁）">併入其他附件</span>' : '';
-            html += '<td>'+escHtml(c.category_name)+varBadge+odBadge+grpBadge+trgBadge+extBadge+otherBadge+'&nbsp;'+badge+'</td>';
+            html += '<td>'+escHtml(c.category_name)+varBadge+odBadge+grpBadge+trgBadge+albBadge+extBadge+otherBadge+'&nbsp;'+badge+'</td>';
             html += '<td style="text-align:center;">'+showBadge+'</td>';
             html += '<td style="text-align:right;">'+badge+'</td>';
             if (CAN_ATTACH_CAT_EDIT) {
@@ -18151,6 +18222,8 @@ function editAttachCat(id) {
     }
     var otherChk = document.getElementById('acat-show-other-attach');
     if (otherChk) otherChk.checked = (c.show_in_other_attach=='1'||c.show_in_other_attach===1);
+    var albChk = document.getElementById('acat-photo-album');
+    if (albChk) albChk.checked = (c.is_photo_album=='1'||c.is_photo_album===1);
     var obsChk = document.getElementById('acat-obsolete-mark');
     if (obsChk) obsChk.checked = (c.is_obsolete_mark=='1'||c.is_obsolete_mark===1);
     var dgIn = document.getElementById('acat-dwg-group');
@@ -18185,6 +18258,8 @@ function resetAttachCatForm() {
     if (extName) extName.value = '';
     var otherChk = document.getElementById('acat-show-other-attach');
     if (otherChk) otherChk.checked = false;
+    var albChk = document.getElementById('acat-photo-album');
+    if (albChk) albChk.checked = false;
     var obsChk = document.getElementById('acat-obsolete-mark');
     if (obsChk) obsChk.checked = false;
     var dgIn = document.getElementById('acat-dwg-group');
@@ -18245,7 +18320,8 @@ function saveAttachCategory() {
     api({ action:'manage_attach_categories', op:'save', cat_id:id, category_name:name, sort_order:0, show_in_list:showInList, is_own_drawing:ownDrawing, is_external_doc:isExtDoc, external_doc_name:extDocName, show_in_other_attach:showOtherAttach, tag_variables:tagVarsJson,
             is_obsolete_mark:(document.getElementById('acat-obsolete-mark')||{}).checked ? 1 : 0,
             dwg_group:((document.getElementById('acat-dwg-group')||{}).value||'').trim(),
-            dwg_trigger:(document.getElementById('acat-dwg-trigger')||{}).checked ? 1 : 0 }).done(function(r) {
+            dwg_trigger:(document.getElementById('acat-dwg-trigger')||{}).checked ? 1 : 0,
+            is_photo_album:(document.getElementById('acat-photo-album')||{}).checked ? 1 : 0 }).done(function(r) {
         if (r.success) { _attachCatsCache = null; showToast(r.message||'已儲存'); resetAttachCatForm(); loadAttachCatTable(); }
         else showToast(r.message||'儲存失敗','error');
     });
@@ -18283,7 +18359,8 @@ function loadActiveCatsForUpload(cb) {
 }
 
 // ── 附件瀏覽器 Modal ───────────────────────────────────────────────────────
-var _pav = { dId:0, partNo:'', mode:'all', catId:0, allFiles:[], filteredFiles:[], currentFile:null, quoteSummaries:{} };
+var _pav = { dId:0, partNo:'', mode:'all', catId:0, allFiles:[], filteredFiles:[], currentFile:null, quoteSummaries:{},
+             albums:[], albumCatIds:[], canAlbumEdit:false, albumKey:null, albumSelMode:false };
 var _pav3dViewer = null;
 
 function _pavShowUploadBtn(show) {
@@ -18342,9 +18419,19 @@ function openAttachQuoteView(dId, partNo) {
     });
 }
 
+/** 預覽區版面還原（相簿的九宮格是上下排版，單檔預覽是置中） */
+function _pavPreviewResetLayout(pv) {
+    pv = pv || document.getElementById('pav-preview');
+    if (!pv) return;
+    pv.style.flexDirection  = '';
+    pv.style.alignItems     = 'center';
+    pv.style.justifyContent = 'center';
+}
+
 function _pavOpen() {
     document.getElementById('pav-file-list').innerHTML = '<div style="text-align:center;color:#aaa;padding:20px;font-size:12px;"><i class="fa fa-spinner fa-spin"></i></div>';
     document.getElementById('pav-preview').innerHTML   = '<div style="color:#aaa;font-size:13px;">← 點擊左側檔案預覽</div>';
+    _pavPreviewResetLayout();
     document.getElementById('pav-actions').style.display = 'none';
     _pav.currentFile = null;
     $('#partAttachViewModal').modal('show');
@@ -18353,8 +18440,12 @@ function _pavOpen() {
 function _pavLoadFiles(cb) {
     $.get(PART_ATTACH_API_URL, { action:'list', d_id:_pav.dId }, function(r) {
         _pav.allFiles = (r.success && r.data) ? r.data : [];
+        // 相簿：哪些標籤用相簿檢視、這個料號有哪些相簿、這個人能不能改（後端也會再擋一次）
+        _pav.albums       = (r && r.albums) ? r.albums : [];
+        _pav.albumCatIds  = ((r && r.album_cat_ids) ? r.album_cat_ids : []).map(String);
+        _pav.canAlbumEdit = !!(r && r.can_album_edit);
         cb(_pav.allFiles);
-    }).fail(function(){ _pav.allFiles=[]; cb([]); });
+    }).fail(function(){ _pav.allFiles=[]; _pav.albums=[]; _pav.albumCatIds=[]; cb([]); });
 }
 
 function _pavBuildCatTabs(files) {
@@ -18384,6 +18475,8 @@ function pavSwitchTab(btn, catId) {
         b.style.background = 'rgba(255,255,255,.2)'; b.style.color='#fff'; b.classList.remove('active');
     });
     btn.style.background='#fff'; btn.style.color='#1a5276'; btn.classList.add('active');
+    _pav.catId = catId;            // 相簿檢視要靠它判斷目前這個標籤是不是相簿標籤
+    _pav.albumKey = null; _pav.albumSelMode = false;
     if (catId === '__all__') {
         _pav.filteredFiles = _pav.allFiles.filter(function(f){ return f.source !== 'quote'; });
     } else if (catId === '__none__') {
@@ -18615,6 +18708,8 @@ function _pavRenderList() {
         _pavRenderQuoteGroupList(files, wrap);
         return;
     }
+    // ── 相簿標籤（如產品照片）：左側列相簿（資料夾），右側九宮格 ──────
+    if (_pavIsAlbumTab()) { _pavRenderAlbumList(); return; }
     if (!files.length) {
         wrap.innerHTML = '<div style="color:#aaa;font-size:12px;text-align:center;padding:24px;"><i class="fa fa-inbox"></i><br>無附件</div>';
         return;
@@ -18675,6 +18770,313 @@ function _pavRenderList() {
     if (files.length) pavSelectFile(0);
 }
 
+/* ══ 附件相簿（2026-08-25 使用者要求）═══════════════════════════════════════
+   產品照片這種一次好幾十張的附件，用「一列一個檔名」的清單根本看不出誰是誰。
+   勾了「以相簿檢視」的標籤改成：左側列相簿（資料夾）＋未分相簿，右側九宮格縮圖，
+   點任何一張都能放大並左右換張（九宮格與放大檢視走共用元件 eg_photo_album.js，三頁共用）。
+   相簿只是系統內的分組，NAS 上不會多開資料夾（使用者拍板；也才不會動到既有的路徑組法）。 */
+function _pavIsAlbumTab() {
+    return _pav.mode === 'all' && _pav.catId
+        && String(_pav.catId).indexOf('__') !== 0
+        && (_pav.albumCatIds||[]).indexOf(String(_pav.catId)) >= 0;
+}
+/** 目前這個標籤下的分組：{ key: {album:相簿或null, photos:[]} }，key='__none__' 是未分相簿 */
+function _pavAlbumGroups() {
+    var groups = {}, order = [];
+    (_pav.albums||[]).forEach(function(a) {
+        // 相簿掛在哪個標籤下就顯示在那個標籤（沒指定標籤的相簿一律顯示，免得建了卻找不到）
+        if (a.category_id && String(a.category_id) !== String(_pav.catId)) return;
+        groups[String(a.id)] = { album:a, photos:[] };
+        order.push(String(a.id));
+    });
+    (_pav.filteredFiles||[]).forEach(function(f) {
+        var k = f.album_id ? String(f.album_id) : '__none__';
+        if (!groups[k]) { groups[k] = { album:null, photos:[] }; order.push(k); }   // 別的標籤建的相簿也照樣看得到
+        groups[k].photos.push(f);
+    });
+    if (!groups['__none__']) { groups['__none__'] = { album:null, photos:[] }; order.push('__none__'); }
+    // 未分相簿固定排最後
+    order = order.filter(function(k){ return k !== '__none__'; }).concat(['__none__']);
+    return { groups:groups, order:order };
+}
+/** 把附件列轉成共用相簿元件吃的格式 */
+function _pavPhotoObjs(files) {
+    return (files||[]).map(function(f) {
+        var badges = [];
+        if (_pavIsObsolete(f)) badges.push({ text:'作廢', bg:'#DD5138', color:'#fff' });
+        if (f.revision !== null && f.revision !== undefined && String(f.revision) !== '')
+            badges.push({ text:'Rev.'+f.revision, bg:'#F7E0BD', color:'#7A4A12' });
+        return { id:f.id, url:f.url, name:(f.original_name||f.filename||''),
+                 uploaded_at:egFmtDate((f.uploaded_at||'').substring(0,10)),
+                 uploaded_by:f.uploaded_by||'', note:f.note||'', badges:badges, _f:f };
+    });
+}
+
+function _pavRenderAlbumList() {
+    var wrap = document.getElementById('pav-file-list');
+    var g = _pavAlbumGroups();
+    var html = '';
+    if (_pav.canAlbumEdit) {
+        html += '<div style="padding:6px;border-bottom:1px solid #eee;background:#FFF9F0;">'
+             +  '<button type="button" class="btn btn-xs btn-block" onclick="pavAlbumNew()" '
+             +  'style="background:#F0A24B;color:#4A3524;border:1px solid #C77C1A;font-weight:700;">'
+             +  '<i class="fa fa-plus"></i> 建立相簿</button></div>';
+    }
+    g.order.forEach(function(k) {
+        var grp = g.groups[k];
+        var isNone = (k === '__none__');
+        if (isNone && !grp.photos.length) return;      // 沒有零散照片就不用列這一列
+        var name  = isNone ? '未分相簿' : (grp.album ? grp.album.album_name : ('相簿 #' + k));
+        var cover = grp.photos.length ? EGAlbum.thumb(grp.photos[0].url, 120) : '';
+        var on    = (String(_pav.albumKey) === k);
+        html += '<div class="pav-album-item" data-key="'+escHtml(k)+'" onclick="pavOpenAlbum(\'' + escHtml(k) + '\')" '
+             +  'style="display:flex;gap:7px;align-items:center;padding:6px 8px;cursor:pointer;border-bottom:1px solid #f0f0f0;'
+             +  (on ? 'background:#FFF3E2;border-left:3px solid #F0A24B;' : '') + '">'
+             +  (cover
+                 ? '<img src="'+escHtml(cover)+'" style="width:42px;height:42px;object-fit:cover;border-radius:4px;border:1px solid #E4D3BC;flex-shrink:0;background:#f4f5f7;">'
+                 : '<div style="width:42px;height:42px;border-radius:4px;border:1px dashed #E4D3BC;display:flex;align-items:center;justify-content:center;color:#C9B18C;flex-shrink:0;"><i class="fa fa-folder-o"></i></div>')
+             +  '<div style="flex:1;min-width:0;">'
+             +    '<div style="font-size:12px;font-weight:600;color:'+(isNone?'#8A6A45':'#5B4526')+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+             +      (isNone ? '<i class="fa fa-inbox" style="margin-right:3px;"></i>' : '<i class="fa fa-folder" style="margin-right:3px;color:#F0A24B;"></i>')
+             +      escHtml(name) + '</div>'
+             +    '<div style="font-size:10px;color:#aaa;">' + grp.photos.length + ' 張'
+             +      (grp.album && grp.album.created_by ? ' · ' + escHtml(grp.album.created_by) : '') + '</div>'
+             +  '</div></div>';
+    });
+    if (!html) html = '<div style="color:#aaa;font-size:12px;text-align:center;padding:24px;"><i class="fa fa-picture-o"></i><br>此標籤還沒有照片</div>';
+    wrap.innerHTML = html;
+    // 預設開第一本（沿用清單「自動選第一筆」的既有習慣）
+    var keys = g.order.filter(function(k){ return k !== '__none__' || g.groups[k].photos.length; });
+    if (!_pav.albumKey || !g.groups[_pav.albumKey]) _pav.albumKey = keys[0] || null;
+    if (_pav.albumKey) pavOpenAlbum(_pav.albumKey, true);
+    else _pavAlbumEmptyStage();
+}
+
+function _pavAlbumEmptyStage() {
+    var act = document.getElementById('pav-actions'); if (act) act.style.display = 'none';
+    var pv  = document.getElementById('pav-preview');
+    _pavPreviewResetLayout(pv);
+    if (pv) pv.innerHTML = '<div style="color:#aaa;font-size:13px;">← 左側可建立相簿</div>';
+}
+
+function pavOpenAlbum(key, keepHighlight) {
+    _pav.albumKey = String(key);
+    if (!keepHighlight) _pav.albumSelMode = false;
+    document.querySelectorAll('.pav-album-item').forEach(function(el) {
+        var on = (el.dataset.key === String(key));
+        el.style.background = on ? '#FFF3E2' : '';
+        el.style.borderLeft = on ? '3px solid #F0A24B' : '';
+    });
+    _pavRenderAlbumGrid();
+}
+
+function _pavRenderAlbumGrid() {
+    var g = _pavAlbumGroups();
+    var grp = g.groups[_pav.albumKey];
+    if (!grp) { _pavAlbumEmptyStage(); return; }
+    var isNone = (_pav.albumKey === '__none__');
+    var name   = isNone ? '未分相簿' : (grp.album ? grp.album.album_name : ('相簿 #' + _pav.albumKey));
+    var photos = _pavPhotoObjs(grp.photos);
+    _pav.currentFile = null;
+    var act = document.getElementById('pav-actions'); if (act) act.style.display = 'none';   // 單檔動作列改由放大檢視內提供
+
+    var canEdit = _pav.canAlbumEdit;
+    var bar = '<div style="flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:6px 10px;background:#FFF9F0;border-bottom:1px solid #F1E3CE;flex-wrap:wrap;">'
+        + '<span style="font-size:13px;font-weight:700;color:#5B4526;">'
+        + (isNone ? '<i class="fa fa-inbox"></i> ' : '<i class="fa fa-folder" style="color:#F0A24B;"></i> ') + escHtml(name) + '</span>'
+        + '<span style="font-size:11px;color:#8A6A45;">' + photos.length + ' 張</span>'
+        + '<span style="flex:1;"></span>';
+    if (canEdit) {
+        if (!_pav.albumSelMode) {
+            if (photos.length) bar += '<button type="button" class="btn btn-xs btn-default" onclick="pavAlbumSelMode(true)"><i class="fa fa-check-square-o"></i> 選取照片</button> ';
+            if (!isNone) {
+                bar += '<button type="button" class="btn btn-xs btn-default" onclick="pavAlbumRename()"><i class="fa fa-pencil"></i> 改名</button> ';
+                bar += '<button type="button" class="btn btn-xs btn-default" onclick="pavAlbumDelete()" title="只解散分組，照片會退回「未分相簿」，檔案不會被刪除"><i class="fa fa-folder-open-o"></i> 解散相簿</button>';
+            }
+        } else {
+            bar += '<span id="pav-alb-selcnt" style="font-size:11px;color:#8A6A45;">已選 0 張</span> '
+                +  '<button type="button" class="btn btn-xs btn-default" onclick="pavAlbumSelectAll(true)">全選</button> '
+                +  '<button type="button" class="btn btn-xs" onclick="pavAlbumMove()" style="background:#F0A24B;color:#4A3524;border:1px solid #C77C1A;font-weight:700;"><i class="fa fa-folder"></i> 加入相簿…</button> ';
+            if (!isNone) bar += '<button type="button" class="btn btn-xs btn-default" onclick="pavAlbumMoveOut()"><i class="fa fa-sign-out"></i> 移出相簿</button> ';
+            bar += '<button type="button" class="btn btn-xs btn-default" onclick="pavAlbumSelMode(false)">取消</button>';
+        }
+    }
+    bar += '</div>';
+
+    var pv = document.getElementById('pav-preview');
+    pv.style.display = 'flex';
+    pv.style.flexDirection = 'column';
+    pv.style.alignItems = 'stretch';
+    pv.style.justifyContent = 'flex-start';
+    pv.innerHTML = bar + '<div id="pav-album-grid" style="flex:1;min-height:0;overflow:auto;"></div>';
+    EGAlbum.grid('pav-album-grid', photos, {
+        selectable: canEdit && _pav.albumSelMode,
+        emptyText: isNone ? '沒有零散照片' : '這本相簿還沒有照片——可用「選取照片」從未分相簿搬進來，或上傳時直接選這本',
+        onSelect: function(ids) {
+            var c = document.getElementById('pav-alb-selcnt');
+            if (c) c.textContent = '已選 ' + ids.length + ' 張';
+        },
+        onOpen: function(i) {
+            if (_pav.albumSelMode) return;      // 選取模式下點格子＝勾選，不開放大
+            EGAlbum.viewer(photos, i);
+        }
+    });
+}
+
+function pavAlbumSelMode(on) { _pav.albumSelMode = !!on; _pavRenderAlbumGrid(); }
+function pavAlbumSelectAll(on) {
+    var ids = EGAlbum.selectAll('pav-album-grid', on);
+    var c = document.getElementById('pav-alb-selcnt');
+    if (c) c.textContent = '已選 ' + ids.length + ' 張';
+}
+
+/* ── 相簿的建立／改名／解散／搬移：一律走 API，後端同規則再擋一次（鐵律8）── */
+function _pavAlbumReload(cb) {
+    _pavLoadFiles(function(files) {
+        var keepCat = _pav.catId;
+        _pavBuildCatTabs(files);
+        // 重建分頁鈕之後要把 active 樣式移回原本那一顆（否則會跳回「全部」）
+        var btn = document.querySelector('#pav-cat-tabs .pav-tab[data-cat="'+keepCat+'"]');
+        var keepKey = _pav.albumKey;
+        if (btn) { pavSwitchTab(btn, String(keepCat)); }
+        else {
+            _pav.filteredFiles = files.filter(function(f){ return f.source !== 'quote'; });
+            _pavRenderList();
+        }
+        if (keepKey) { _pav.albumKey = keepKey; }
+        if (cb) cb();
+    });
+}
+function pavAlbumNew() {
+    pavAlbumPrompt({ title:'建立相簿', value:_pavAlbumDefaultName(), onOk:function(name, done) {
+        $.post(PART_ATTACH_API_URL, { action:'album_create', d_id:_pav.dId, album_name:name, category_id:_pav.catId },
+        function(r) {
+            if (!r || !r.success) { done((r&&r.message)||'建立失敗'); return; }
+            done(null);
+            showToast('已建立相簿');
+            _pav.albumKey = String(r.id);
+            _pavAlbumReload();
+        }).fail(function(){ done('建立失敗，請重試'); });
+    }});
+}
+function _pavAlbumDefaultName() {
+    var cats = _attachCatsCache || [];
+    var c = cats.filter(function(x){ return String(x.id) === String(_pav.catId); })[0];
+    var d = new Date();
+    var ds = d.getFullYear() + '.' + ('0'+(d.getMonth()+1)).slice(-2) + '.' + ('0'+d.getDate()).slice(-2);
+    return (c ? c.category_name : '相簿') + ' ' + ds;
+}
+function pavAlbumRename() {
+    var g = _pavAlbumGroups(), grp = g.groups[_pav.albumKey];
+    if (!grp || !grp.album) return;
+    pavAlbumPrompt({ title:'相簿改名', value:grp.album.album_name, onOk:function(name, done) {
+        $.post(PART_ATTACH_API_URL, { action:'album_rename', album_id:grp.album.id, album_name:name }, function(r) {
+            if (!r || !r.success) { done((r&&r.message)||'改名失敗'); return; }
+            done(null); showToast('已改名'); _pavAlbumReload();
+        }).fail(function(){ done('改名失敗，請重試'); });
+    }});
+}
+function pavAlbumDelete() {
+    var g = _pavAlbumGroups(), grp = g.groups[_pav.albumKey];
+    if (!grp || !grp.album) return;
+    if (!confirm('解散相簿「'+grp.album.album_name+'」？\n\n裡面的 '+grp.photos.length+' 張照片會退回「未分相簿」，檔案不會被刪除。')) return;
+    $.post(PART_ATTACH_API_URL, { action:'album_delete', album_id:grp.album.id }, function(r) {
+        if (!r || !r.success) { showToast((r&&r.message)||'解散失敗','error'); return; }
+        showToast('已解散相簿，'+(r.moved||0)+' 張照片退回未分相簿');
+        _pav.albumKey = '__none__';
+        _pavAlbumReload();
+    });
+}
+function pavAlbumMove() {
+    var ids = EGAlbum.selectedIds('pav-album-grid');
+    if (!ids.length) { showToast('請先勾選要搬移的照片','error'); return; }
+    var albums = (_pav.albums||[]).filter(function(a){ return !a.category_id || String(a.category_id)===String(_pav.catId); });
+    pavAlbumPrompt({ title:'加入相簿', value:_pavAlbumDefaultName(), albums:albums,
+        note:'已選 '+ids.length+' 張照片', onOk:function(name, done, albumId) {
+        if (albumId) {
+            $.post(PART_ATTACH_API_URL, { action:'album_assign', album_id:albumId, attach_ids:JSON.stringify(ids) }, function(r) {
+                if (!r || !r.success) { done((r&&r.message)||'搬移失敗'); return; }
+                done(null); showToast('已加入相簿（'+(r.moved||0)+' 張）');
+                _pav.albumKey = String(albumId); _pav.albumSelMode = false; _pavAlbumReload();
+            }).fail(function(){ done('搬移失敗，請重試'); });
+        } else {
+            $.post(PART_ATTACH_API_URL, { action:'album_create', d_id:_pav.dId, album_name:name,
+                    category_id:_pav.catId, attach_ids:JSON.stringify(ids) }, function(r) {
+                if (!r || !r.success) { done((r&&r.message)||'建立失敗'); return; }
+                done(null); showToast('已建立相簿並加入 '+ids.length+' 張');
+                _pav.albumKey = String(r.id); _pav.albumSelMode = false; _pavAlbumReload();
+            }).fail(function(){ done('建立失敗，請重試'); });
+        }
+    }});
+}
+function pavAlbumMoveOut() {
+    var ids = EGAlbum.selectedIds('pav-album-grid');
+    if (!ids.length) { showToast('請先勾選要移出的照片','error'); return; }
+    $.post(PART_ATTACH_API_URL, { action:'album_assign', album_id:0, attach_ids:JSON.stringify(ids) }, function(r) {
+        if (!r || !r.success) { showToast((r&&r.message)||'移出失敗','error'); return; }
+        showToast('已移出相簿（'+(r.moved||0)+' 張），照片仍在「未分相簿」');
+        _pav.albumSelMode = false; _pavAlbumReload();
+    });
+}
+
+/* 相簿名稱輸入跳窗：建立／改名／加入相簿共用一個（三處各刻一份必定走鐘＝鐵律4） */
+var _pavAlbPrompt = null;
+function pavAlbumPrompt(opt) {
+    _pavAlbPrompt = opt;
+    document.getElementById('pavalb-title').textContent = opt.title || '相簿';
+    var noteEl = document.getElementById('pavalb-note');
+    noteEl.textContent = opt.note || '';
+    noteEl.style.display = opt.note ? '' : 'none';
+    var selWrap = document.getElementById('pavalb-target-wrap');
+    var sel = document.getElementById('pavalb-target');
+    if (opt.albums) {
+        var html = '<option value="0">＋ 建立新相簿</option>';
+        opt.albums.forEach(function(a) { html += '<option value="'+a.id+'">'+escHtml(a.album_name)+'（'+a.photo_count+' 張）</option>'; });
+        sel.innerHTML = html; sel.value = '0';
+        selWrap.style.display = '';
+    } else { selWrap.style.display = 'none'; sel.innerHTML = ''; }
+    var inp = document.getElementById('pavalb-name');
+    inp.value = opt.value || '';
+    inp.style.borderColor = '';
+    document.getElementById('pavalb-err').style.display = 'none';
+    onPavAlbTargetChange();
+    $('#pavAlbumModal').modal('show');
+    setTimeout(function(){ inp.focus(); inp.select(); }, 250);
+}
+function onPavAlbTargetChange() {
+    var sel = document.getElementById('pavalb-target');
+    var wrap = document.getElementById('pavalb-name-wrap');
+    var useNew = (document.getElementById('pavalb-target-wrap').style.display === 'none') || sel.value === '0';
+    wrap.style.display = useNew ? '' : 'none';
+    validatePavAlbName();
+}
+/** 前端即時驗證；後端 pa_album_check_name() 用同一套規則再驗一次 */
+function validatePavAlbName() {
+    var inp = document.getElementById('pavalb-name');
+    var err = document.getElementById('pavalb-err');
+    if (document.getElementById('pavalb-name-wrap').style.display === 'none') { err.style.display='none'; return true; }
+    var v = (inp.value||'').trim(), msg = '';
+    if (!v) msg = '請輸入相簿名稱';
+    else if (v.length > 50) msg = '相簿名稱最多 50 個字（目前 ' + v.length + ' 個）';
+    if (msg) { inp.style.borderColor = '#e74c3c'; err.textContent = msg; err.style.display = ''; return false; }
+    inp.style.borderColor = ''; err.style.display = 'none'; return true;
+}
+function pavAlbumPromptOk() {
+    if (!_pavAlbPrompt) return;
+    if (!validatePavAlbName()) { document.getElementById('pavalb-name').focus(); return; }
+    var selWrap = document.getElementById('pavalb-target-wrap');
+    var albumId = (selWrap.style.display !== 'none') ? (parseInt(document.getElementById('pavalb-target').value,10)||0) : 0;
+    var name = (document.getElementById('pavalb-name').value||'').trim();
+    var btn = document.getElementById('pavalb-ok');
+    btn.disabled = true;
+    _pavAlbPrompt.onOk(name, function(errMsg) {
+        btn.disabled = false;
+        if (errMsg) { var e = document.getElementById('pavalb-err'); e.textContent = errMsg; e.style.display = ''; return; }
+        $('#pavAlbumModal').modal('hide');
+    }, albumId);
+}
+$(document).on('input', '#pavalb-name', validatePavAlbName);
+
 function pavSelectFile(idx) {
     var file = _pav.filteredFiles[idx];
     if (!file) return;
@@ -18715,6 +19117,7 @@ function pavSelectFile(idx) {
     preview.style.display = 'flex';
     preview.style.position = '';
     preview.style.overflow = '';
+    _pavPreviewResetLayout(preview);   // 相簿模式把版面改成上下排，切回單檔預覽要還原成置中
     // 隱藏縮放工具列（圖片時才顯示）
     _pavCleanupImgZoom();
     var _zc = document.getElementById('pav-zoom-controls');
@@ -19159,7 +19562,7 @@ function _pauBuildFileCatChips(fileIdx, cats, checkedIds) {
     cats.forEach(function(c) {
         var ck = (checkedIds||[]).indexOf(String(c.id)) >= 0 ? 'checked' : '';
         html += '<label style="display:inline-flex;align-items:center;gap:3px;background:#f0f8ff;color:#1a5276;border:1px solid #aed6f1;border-radius:8px;padding:1px 8px;cursor:pointer;font-weight:normal;font-size:11px;margin-bottom:2px;">'
-              + '<input type="checkbox" value="'+c.id+'" class="pau-row-cat" data-fidx="'+fileIdx+'" '+ck+' onchange="refreshPauIssueRow();validatePauCat();" style="cursor:pointer;">'
+              + '<input type="checkbox" value="'+c.id+'" class="pau-row-cat" data-fidx="'+fileIdx+'" '+ck+' onchange="refreshPauIssueRow();refreshPauAlbumRow();validatePauCat();" style="cursor:pointer;">'
               + escHtml(c.category_name)+'</label>';
     });
     html += '</div>';
@@ -19249,6 +19652,12 @@ function _openPartAttachUploadModal(dId, partNo, preselectedFiles) {
     var _pauRev = document.getElementById('pau-revision'); if (_pauRev) _pauRev.value = '';
     var _pauIss = document.getElementById('pau-issue-date'); if (_pauIss) _pauIss.value = '';
     var _pauIw  = document.getElementById('pau-issue-wrap'); if (_pauIw) _pauIw.style.display = 'none';
+    var _pauAw  = document.getElementById('pau-album-wrap'); if (_pauAw) _pauAw.style.display = 'none';
+    var _pauAn  = document.getElementById('pau-album-name'); if (_pauAn) { _pauAn.value = ''; _pauAn.style.borderColor = ''; }
+    var _pauAo  = document.getElementById('pau-album-on');   if (_pauAo) _pauAo.checked = true;
+    var _pauAe  = document.getElementById('pau-album-err');  if (_pauAe) _pauAe.style.display = 'none';
+    _pauAlbums = [];
+    _pauLoadAlbums(dId, function(){ refreshPauAlbumRow(); });   // 相簿清單先備好，勾到相簿標籤時才有東西可選
     document.getElementById('pau-vars-section').style.display = 'none';
     document.getElementById('pau-vars-inputs').innerHTML = '';
     document.getElementById('pau-file-rows').style.display = 'none';
@@ -19308,6 +19717,8 @@ function onPauFileChange(input) {
             var _pp2 = document.getElementById('pau-proc');
             if (_pp2) _pp2.innerHTML = _pauProcOptionsHtml('');
         }
+        refreshPauIssueRow();
+        refreshPauAlbumRow();
     });
 }
 
@@ -19369,6 +19780,82 @@ function validatePauIssue() {
     return true;
 }
 
+/* ── 相簿（2026-08-25 使用者要求）───────────────────────────────────────
+   哪些標籤要用相簿，由 quotation_file_categories.is_photo_album 決定（標籤設定可勾），
+   不寫死「產品照片」這個名字＝鐵律4。相簿只是系統內分組，NAS 不開子資料夾。 */
+var _pauAlbums = [];        // 這個料號目前已有的相簿（開跳窗時抓一次）
+
+function _pauAlbumCatIds() {
+    return (_attachCatsCache||[]).filter(function(c){ return c.is_photo_album==1||c.is_photo_album==='1'; })
+                                 .map(function(c){ return String(c.id); });
+}
+/** 目前勾選的標籤中，第一個「相簿標籤」（決定新相簿掛在哪個標籤下、以及預設名稱） */
+function _pauFirstAlbumCat() {
+    var alb = _pauAlbumCatIds();
+    if (!alb.length) return null;
+    var hit = _pauSelectedCatIds().filter(function(id){ return alb.indexOf(String(id))>=0; })[0];
+    if (!hit) return null;
+    return (_attachCatsCache||[]).filter(function(c){ return String(c.id)===String(hit); })[0] || null;
+}
+/** 讀這個料號現有的相簿（給「加入既有相簿」用；補傳照片時很常用到） */
+function _pauLoadAlbums(dId, cb) {
+    $.get(PART_ATTACH_API_URL, { action:'album_list', d_id:dId }, function(r) {
+        _pauAlbums = (r && r.success && r.albums) ? r.albums : [];
+        if (cb) cb(_pauAlbums);
+    }).fail(function(){ _pauAlbums = []; if (cb) cb([]); });
+}
+function refreshPauAlbumRow() {
+    var wrap = document.getElementById('pau-album-wrap');
+    if (!wrap) return;
+    var cat = _pauFirstAlbumCat();
+    wrap.style.display = cat ? '' : 'none';
+    if (!cat) return;
+    var sel = document.getElementById('pau-album-target');
+    if (sel) {
+        var keep = sel.value;
+        var html = '<option value="__new__">＋ 建立新相簿</option>';
+        // 同標籤的相簿排前面（多半就是要加進去的那本），其餘照樣列出不藏起來
+        var mine = _pauAlbums.filter(function(a){ return String(a.category_id||'')===String(cat.id); });
+        var rest = _pauAlbums.filter(function(a){ return String(a.category_id||'')!==String(cat.id); });
+        mine.concat(rest).forEach(function(a) {
+            html += '<option value="'+a.id+'">'+escHtml(a.album_name)+'（'+a.photo_count+' 張）</option>';
+        });
+        sel.innerHTML = html;
+        if (keep && sel.querySelector('option[value="'+keep+'"]')) sel.value = keep;
+    }
+    var nameIn = document.getElementById('pau-album-name');
+    if (nameIn && !nameIn.value) nameIn.value = cat.category_name + ' ' + _todayStr().replace(/-/g,'.');
+    onPauAlbumTargetChange();
+}
+function onPauAlbumTargetChange() {
+    var on   = (document.getElementById('pau-album-on')||{}).checked;
+    var sel  = document.getElementById('pau-album-target');
+    var name = document.getElementById('pau-album-name');
+    var det  = document.getElementById('pau-album-detail');
+    if (det) det.style.display = on ? '' : 'none';
+    if (name) name.style.display = (sel && sel.value !== '__new__') ? 'none' : '';
+    validatePauAlbum();
+}
+/** 錯誤即時偵測並顯示原因（表單三總則③；後端 pa_album_check_name 同規則再擋一次＝鐵律8） */
+function validatePauAlbum() {
+    var wrap = document.getElementById('pau-album-wrap');
+    var err  = document.getElementById('pau-album-err');
+    var name = document.getElementById('pau-album-name');
+    var sel  = document.getElementById('pau-album-target');
+    if (!wrap || wrap.style.display === 'none') return true;
+    if (!(document.getElementById('pau-album-on')||{}).checked) { if (err) err.style.display='none'; if(name) name.style.borderColor=''; return true; }
+    if (sel && sel.value !== '__new__') { if (err) err.style.display='none'; if(name) name.style.borderColor=''; return true; }
+    var v = (name ? name.value : '').trim();
+    var msg = '';
+    if (!v) msg = '請輸入相簿名稱，或改選一本既有的相簿';
+    else if (v.length > 50) msg = '相簿名稱最多 50 個字（目前 ' + v.length + ' 個）';
+    if (msg) { if (name) name.style.borderColor='#e74c3c'; if (err) { err.textContent = msg; err.style.display=''; } return false; }
+    if (name) name.style.borderColor = '';
+    if (err) err.style.display = 'none';
+    return true;
+}
+$(document).on('input', '#pau-album-name', validatePauAlbum);
+
 /* 每個附件都要選標籤，不給空著存檔（CLAUDE.md 鐵律：附件標籤必填） */
 function validatePauCat() {
     var isMulti = document.getElementById('pau-file-rows').style.display !== 'none';
@@ -19391,6 +19878,7 @@ function validatePauCat() {
 function onPauCatChange() {
     validatePauCat();
     refreshPauIssueRow();
+    refreshPauAlbumRow();
     var selectedIds = [];
     document.querySelectorAll('.pau-cat-chk:checked').forEach(function(cb){ selectedIds.push(cb.value); });
     var varSec = document.getElementById('pau-vars-section');
@@ -19429,6 +19917,7 @@ function submitPartAttachUpload() {
     if (!files.length) { showToast('請選擇檔案','error'); return; }
     if (!validatePauCat()) { showToast('請至少為每個檔案選擇一個附件類別標籤','error'); return; }
     if (!validatePauIssue()) { document.getElementById('pau-issue-date').focus(); showToast('請先填寫發行章日期','error'); return; }
+    if (!validatePauAlbum()) { var _an=document.getElementById('pau-album-name'); if (_an) _an.focus(); showToast('請確認相簿名稱','error'); return; }
     var issueDate = (document.getElementById('pau-issue-wrap').style.display !== 'none')
                   ? (document.getElementById('pau-issue-date').value||'') : '';
     var isMulti = files.length > 1;
@@ -19458,6 +19947,7 @@ function submitPartAttachUpload() {
     });
     var btn = document.getElementById('pau-submit-btn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 上傳中…'; }
+    var albumId = 0;            // 這批照片要歸進哪一本相簿（0＝不分相簿）
     var total = files.length, done = 0, failed = 0, lastErr = '';
     // 一批只會有一次「圖面變更」——同一次出圖的 BOSS圖/++圖 是同一件事，記第一個判定為變更的附件即可
     var changeHit = null;
@@ -19484,6 +19974,7 @@ function submitPartAttachUpload() {
         fd.append('revision', s.revision||'');
         fd.append('process_tag', s.procTag||'');
         fd.append('issue_stamp_date', issueDate);
+        fd.append('album_id', albumId || 0);
         $.ajax({ url:PART_ATTACH_API_URL, type:'POST', data:fd, processData:false, contentType:false, success:function(r) {
             if (r.success) {
                 done++;
@@ -19502,7 +19993,25 @@ function submitPartAttachUpload() {
             uploadNext(idx + 1);
         }, error:function(){ failed++; uploadNext(idx + 1); }});
     }
-    uploadNext(0);
+
+    // 相簿：先把相簿確定下來（新建或選既有），再逐檔上傳並帶 album_id。
+    // 先建相簿再傳檔的原因：上傳是一個檔一個請求，若邊傳邊建會建出好幾本同名相簿。
+    var albWrap = document.getElementById('pau-album-wrap');
+    var albOn   = albWrap && albWrap.style.display !== 'none' && (document.getElementById('pau-album-on')||{}).checked;
+    if (!albOn) { uploadNext(0); return; }
+    var tgt = (document.getElementById('pau-album-target')||{}).value || '__new__';
+    if (tgt !== '__new__') { albumId = parseInt(tgt,10)||0; uploadNext(0); return; }
+    var albCat = _pauFirstAlbumCat();
+    $.post(PART_ATTACH_API_URL, { action:'album_create', d_id:dId,
+            album_name:(document.getElementById('pau-album-name')||{}).value||'',
+            category_id: albCat ? albCat.id : 0 }, function(r) {
+        if (r && r.success) { albumId = parseInt(r.id,10)||0; }
+        else { showToast('相簿建立失敗：'+((r&&r.message)||'')+'，照片仍會上傳（未分相簿）','warning'); }
+        uploadNext(0);
+    }).fail(function(){
+        showToast('相簿建立失敗，照片仍會上傳（未分相簿）','warning');
+        uploadNext(0);
+    });
 }
 
 /* ── 上傳判定為「圖面變更」時：問要不要自動建立變更紀錄 ──────────────────
