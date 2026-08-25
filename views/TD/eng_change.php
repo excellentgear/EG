@@ -222,6 +222,8 @@ $openId = (int)($_GET['id'] ?? 0);
     <div class="m-head"><span id="ecTitle">工程變更申請單</span><span class="m-close" onclick="closeMask('ecMask')">✕</span></div>
     <div class="m-body">
         <div class="stage-flow" id="stageFlow"></div>
+        <div id="preHint" style="display:none;border:1px solid #E8D5B5;background:#FFF7E8;border-radius:6px;
+             padding:6px 10px;margin-bottom:8px;color:#7A4A12;font-size:12px;"></div>
         <div id="rejBox" style="display:none;border:1px solid #DD5138;background:#FFF3F0;border-radius:6px;padding:8px 10px;margin-bottom:8px;color:#8a2b1a;font-size:13px;"></div>
 
         <!-- 表頭 -->
@@ -235,14 +237,18 @@ $openId = (int)($_GET['id'] ?? 0);
                         <small style="font-weight:normal;color:#aaa;">（選了自動帶客戶）</small></label>
                     <input type="text" id="e_part_kw" class="form-control" placeholder="輸入料號或客戶關鍵字後選擇…" list="partList">
                     <datalist id="partList"></datalist><div class="err"></div></div>
-                <div class="fld half"><label>客戶名稱 <span style="color:#DD5138">*</span></label>
-                    <input type="text" id="e_customer" class="form-control"><div class="err"></div></div>
-                <div class="fld half"><label>申請人 <span style="color:#DD5138">*</span>
-                        <small style="font-weight:normal;color:#aaa;">（依日期列出當時在職者）</small></label>
-                    <select id="e_applicant" class="form-control" data-eg-filter="輸入姓名或部門篩選…"></select>
+                <div class="fld half"><label>客戶名稱 <span style="color:#DD5138">*</span>
+                        <small style="font-weight:normal;color:#aaa;">（由料號綁定產生，不可修改）</small></label>
+                    <input type="text" id="e_customer" class="form-control ro-auto" readonly data-eg-skip>
                     <div class="err"></div></div>
-                <div class="fld half"><label>申請單位</label>
-                    <input type="text" id="e_dept" class="form-control ro-auto" readonly data-eg-skip>
+                <div class="fld half"><label>申請人 <span style="color:#DD5138">*</span>
+                        <small style="font-weight:normal;color:#aaa;" id="e_applicant_hint"></small></label>
+                    <select id="e_applicant" class="form-control" data-eg-filter="輸入姓名或部門篩選…"></select>
+                    <input type="text" id="e_applicant_ro" class="form-control ro-auto" readonly data-eg-skip style="display:none;">
+                    <div class="err"></div></div>
+                <div class="fld half"><label>申請職務（部門／職稱） <span style="color:#DD5138">*</span>
+                        <small style="font-weight:normal;color:#aaa;">（有兼任時請選要用哪個身分申請）</small></label>
+                    <select id="e_post" class="form-control" data-eg-filter="輸入部門或職稱篩選…"></select>
                     <div class="err"></div></div>
                 <div class="fld full"><label>變更方式 <span style="color:#DD5138">*</span></label>
                     <div id="e_ctype"></div><div class="err"></div></div>
@@ -654,7 +660,7 @@ function fillEc(r){
     $('#e_apply_date').val(String(d.apply_date || '').substring(0,10));
     $('#e_part_kw').val(d.part_no || '').data('did', d.d_id || 0);
     $('#e_customer').val(d.customer_name || '').data('cid', d.customer_id || 0);
-    $('#e_dept').val(d.apply_dept_name || '').data('did', d.apply_dept_id || 0);
+
     $('input[name=ctype]').prop('checked', false).filter('[value="'+(d.change_type||'')+'"]').prop('checked', true);
     $('#e_reason').val(d.change_reason || '');
     $('#e_stock_qty').val(d.stock_qty || '');
@@ -672,7 +678,7 @@ function fillEc(r){
     $('.rv-need').prop('checked', false);
     CUR_REVIEWS.forEach(function(rv){ if (rv.needed) $('.rv-need[value="'+rv.unit_key+'"]').prop('checked', true); });
 
-    loadPeople(String(d.apply_date||'').substring(0,10), d.applicant_id);
+    loadPeople(String(d.apply_date||'').substring(0,10), d.applicant_id, d.apply_dept_id);
     loadStockSnap(d);
     renderReviews(r);
     renderHist(r.approvals || []);
@@ -682,12 +688,19 @@ function fillEc(r){
 /** 依關卡決定「哪一段可以填、哪些按鈕出現」——不是這一關的人一律唯讀（後端也會再擋一次） */
 function applyStageUI(d, signers){
     var editHead = +d.can_edit === 1;
-    $('#e_apply_date,#e_part_kw,#e_customer,#e_applicant,#e_reason').prop('disabled', !editHead);
+    $('#e_apply_date,#e_part_kw,#e_reason').prop('disabled', !editHead);
+    $('#e_applicant,#e_post').prop('disabled', !editHead);
+    if (!editHead) $('#e_post').prop('disabled', true);
     $('input[name=ctype]').prop('disabled', !editHead);
 
     var st = d.status, mine = +d.can_sign === 1;
-    var canWH   = mine && st === 'WH',   canTD = mine && st === 'TD';
-    var canAP   = mine && st === 'APPROVE', canCT = mine && st === 'CTRL';
+    // 「提早填寫」：本身就在該課室的人可以先把自己那一段填好（填但不簽，使用者要求 2026-08-25）。
+    // 輪到自己那一關時當然也能填，所以兩者取聯集。
+    var pre = d.prefill || [];
+    var may = function(stage){ return pre.indexOf(stage) >= 0 || (mine && st === stage); };
+    var canWH = may('WH'), canTD = may('TD'), canCT = may('CTRL');
+    var canAP = mine && st === 'APPROVE';      // 核示沒有「本身部門」的概念，仍只有核准人能填
+
     $('#e_stock_qty,#e_wip_qty').prop('disabled', !canWH);
     $('input[name=design],input[name=oldstock],.rv-need').prop('disabled', !canTD);
     $('#e_design_note').prop('disabled', !canTD);
@@ -695,8 +708,14 @@ function applyStageUI(d, signers){
     $('input[name=verdict]').prop('disabled', !canAP);
     $('#e_verdict_other,#e_verdict_note').prop('disabled', !canAP);
     $('#e_ctrl_drawing,#e_ctrl_bom,#e_ctrl_manual').prop('disabled', !canCT);
+    // 提早填的區塊給個提示，免得使用者以為自己已經簽了
+    $('#preHint').toggle(pre.length > 0 && st !== 'CLOSED').html(
+        pre.length ? ('<i class="fa fa-pencil"></i> 你是「'
+            + pre.map(function(x){ return DICT.stages[x] || x; }).join('、')
+            + '」的人員，可以先把那幾段填好按「儲存」；<b>真正的簽核仍要等單子走到那一關</b>。') : '');
 
-    $('#btnEcSave').toggle(editHead);
+    $('#btnEcSave').toggle(editHead || pre.length > 0)
+                   .html('<i class="fa fa-save"></i> ' + (editHead ? '儲存草稿' : '儲存填寫內容'));
     $('#btnEcSubmit').toggle(editHead).text(st === 'REJECTED' ? '重新送出' : '送出');
     $('#btnEcSign').toggle(mine && st !== 'REVIEW').text('簽核（' + (DICT.stages[st] || '') + '）');
     $('#btnEcReject').toggle((mine && st !== 'REVIEW') || (st === 'REVIEW' && (d.my_review_units||[]).length > 0));
@@ -785,47 +804,100 @@ $('#btnStockReload').on('click', function(){
     $('#e_wip_qty').val(String(STOCK_SNAP.wip_qty));
 });
 
-/* ── 料號打字帶客戶 ── */
+/* ── 料號 → 客戶（客戶欄由綁定產生、反灰不可改）─────────────────────────
+   ★不可以靠關鍵字查詢的前端快取來帶客戶：從清單選料號時 input 事件會先把快取清空
+     再發非同步查詢，緊接著的 change 事件查到的必定是空的——這就是「綁了料號客戶沒出現」
+     的原因。改成選定後向後端做一次**精確查詢**，拿到什麼就是什麼。 */
 $('#e_part_kw').on('input', function(){
     var kw = $(this).val().trim();
     if (kw.length < 2) return;
     $.getJSON(API, {action:'parts', kw:kw}, function(r){
         if (!r.ok) return;
         var dl = $('#partList').empty();
-        PART_CACHE = {};
         (r.rows || []).forEach(function(p){
-            PART_CACHE[p.part_no] = p;
+            PART_CACHE[p.part_no] = p;                 // 只累加不清空
             dl.append('<option value="'+esc(p.part_no)+'">'+esc(p.customer_name)+'</option>');
         });
     });
 }).on('change blur', function(){
-    var p = PART_CACHE[$(this).val().trim()];
-    // 選到料號就把客戶帶出來（使用者要求）；沒對到就不動客戶欄，避免把手打的客戶洗掉
-    if (p) { $(this).data('did', p.d_id); $('#e_customer').val(p.customer_name || '').data('cid', p.customer_id || 0); }
+    pullPartCustomer($(this).val().trim());
 });
+function pullPartCustomer(pn){
+    if (!pn) { setCustomer(null); return; }
+    $.getJSON(API, {action:'part_one', part_no:pn}, function(r){
+        if (!r.ok) return;
+        setCustomer(r.row);
+        markErr('#e_part_kw', r.row ? '' : '查無這個料號，請重新選擇');
+    });
+}
+function setCustomer(row){
+    // 客戶一律由料號綁定產生（使用者要求）：查不到就清空，不留上一個料號的客戶
+    $('#e_part_kw').data('did', row ? row.d_id : 0);
+    $('#e_customer').val(row ? (row.customer_name || '') : '').data('cid', row ? (row.customer_id || '') : '');
+    if (row && !row.customer_name) markErr('#e_customer', '這個料號在主檔沒有綁定客戶，請先到料號主檔設定');
+    else markErr('#e_customer', '');
+}
 
-/* ── 申請人：依日期列出當時在職者，選了自動帶當時的部門 ── */
-function loadPeople(date, pickId){
+/* ── 申請人：**除管理員外一律固定是開單的人**，不可更改（使用者要求 2026-08-25）。
+      有兼任職務時，可以選要用哪一個部門／職稱的身分來申請（另一個下拉）。 ── */
+function loadPeople(date, pickId, pickDept){
+    var isAdmin = !!(PERMS && PERMS.canAdmin);
+    if (!isAdmin) {
+        // 一般使用者：人固定是自己，只顯示不給選（後端 create/save 也會強制綁回本人）
+        $('#e_applicant').hide();
+        $('#e_applicant_ro').show().val(ME.name);
+        $('#e_applicant_hint').text('（固定為你本人，不可更改）');
+        loadPosts(ME.uid, date, pickDept);
+        return;
+    }
+    $('#e_applicant_ro').hide();
+    $('#e_applicant').show();
+    $('#e_applicant_hint').text('（管理員可代其他人開單；依日期列出當時在職者）');
     $.getJSON(API, {action:'people', date:date}, function(r){
         if (!r.ok) return;
-        var s = $('#e_applicant').empty().append('<option value="">請選擇…</option>');
+        var seen = {}, s = $('#e_applicant').empty().append('<option value="">請選擇…</option>');
         (r.rows || []).forEach(function(p){
-            s.append('<option value="'+p.id+'" data-dept="'+(p.dept_id||0)+'" data-deptname="'+esc(p.dept_name)+'">'
-                   + esc(p.display) + '</option>');
+            if (seen[p.id]) return;                    // 一人多職只列一次，職務在另一個下拉選
+            seen[p.id] = 1;
+            s.append('<option value="'+p.id+'">'+esc(p.display)+'</option>');
         });
-        if (pickId) s.val(String(pickId));
+        s.val(String(pickId || ME.uid));
+        loadPosts(s.val(), date, pickDept);
+    });
+}
+/** 該申請人在該日期當時的所有職務（含兼任）；只有一個就自動選起來 */
+function loadPosts(userId, date, pickDept){
+    var s = $('#e_post').empty();
+    if (!userId) { s.append('<option value="">（請先選申請人）</option>'); return; }
+    $.getJSON(API, {action:'my_posts', user_id:userId, date:date}, function(r){
+        if (!r.ok) return;
+        var rows = r.rows || [];
+        if (!rows.length) {
+            s.append('<option value="">（這個日期查不到職務紀錄）</option>');
+            markErr('#e_post', '這個人在該日期沒有職務紀錄，請確認日期或到員工管理補登異動');
+            return;
+        }
+        markErr('#e_post', '');
+        rows.forEach(function(p){
+            s.append('<option value="'+p.dept_id+'" data-deptname="'+esc(p.dept_name)+'">'+esc(p.label)+'</option>');
+        });
+        var want = String(pickDept || '');
+        if (want && s.find('option[value="'+want+'"]').length) s.val(want);
+        // 沒指定就取主職（後端 ec_fix_applicant_post 也是同一套規則）
+        else { var main = rows.filter(function(x){ return x.is_main; })[0] || rows[0]; s.val(String(main.dept_id)); }
+        s.prop('disabled', rows.length <= 1);
         syncDept();
     });
 }
 function syncDept(){
-    var o = $('#e_applicant').find('option:selected');
-    if (!o.length || !o.val()) return;
-    $('#e_dept').val(o.data('deptname') || '').data('did', o.data('dept') || 0);
+    var o = $('#e_post').find('option:selected');
+    $('#e_post').data('did', o.val() || 0).data('deptname', o.data('deptname') || '');
 }
-$('#e_applicant').on('change', syncDept);
+$('#e_applicant').on('change', function(){ loadPosts(this.value, $('#e_apply_date').val(), ''); });
+$('#e_post').on('change', syncDept);
 $('#e_apply_date').on('change', function(){
-    // 日期一改，「當時在職的人」就換了一批（ai-rules/22）；原本選的人可能當時還沒到職
-    loadPeople($(this).val(), $('#e_applicant').val());
+    // 日期一改，「當時的職務」就可能不一樣了（ai-rules/22）
+    loadPeople($(this).val(), $('#e_applicant').val() || ME.uid, $('#e_post').val());
 });
 $('input[name=verdict]').on('change', function(){
     $('#e_verdict_other_wrap').toggle($('input[name=verdict]:checked').val() === 'other');
@@ -848,7 +920,7 @@ function validateHead(){
     ok &= markErr('#e_apply_date', $('#e_apply_date').val() ? '' : '請填寫日期');
     ok &= markErr('#e_part_kw',    $('#e_part_kw').val().trim() ? '' : '請填寫料號');
     ok &= markErr('#e_customer',   $('#e_customer').val().trim() ? '' : '請填寫客戶名稱');
-    ok &= markErr('#e_applicant',  $('#e_applicant').val() ? '' : '請選擇申請人');
+    ok &= markErr('#e_post', $('#e_post').val() ? '' : '請選擇申請職務（部門／職稱）');
     var ct = $('input[name=ctype]:checked').val() || '';
     ok &= markErr('#e_ctype',      ct ? '' : '請選擇變更方式');
     ok &= markErr('#e_reason', (ct === 'other' && !$('#e_reason').val().trim())
@@ -861,34 +933,67 @@ function headPayload(){
         apply_date: $('#e_apply_date').val(),
         part_no: $('#e_part_kw').val().trim(), d_id: $('#e_part_kw').data('did') || 0,
         customer_name: $('#e_customer').val().trim(), customer_id: $('#e_customer').data('cid') || 0,
-        applicant_id: $('#e_applicant').val() || 0,
-        applicant_name: ($('#e_applicant').find('option:selected').text() || '').split('　').pop(),
-        apply_dept_id: $('#e_dept').data('did') || 0, apply_dept_name: $('#e_dept').val(),
+        applicant_id: (PERMS && PERMS.canAdmin) ? ($('#e_applicant').val() || 0) : ME.uid,
+        applicant_name: (PERMS && PERMS.canAdmin)
+            ? (($('#e_applicant').find('option:selected').text() || '').split('　').pop()) : ME.name,
+        apply_dept_id: $('#e_post').val() || 0,
+        apply_dept_name: $('#e_post').find('option:selected').data('deptname') || '',
         change_type: $('input[name=ctype]:checked').val() || '',
         change_reason: $('#e_reason').val()
     };
 }
 
 $('#btnNew').on('click', function(){
-    if (!validateNewDefaults()) return;
     post($.extend({action:'create'}, {
         apply_date: new Date().toISOString().substring(0,10),
         applicant_id: ME.uid, applicant_name: ME.name
+        // 申請部門留空 → 後端 ec_fix_applicant_post() 會自動補成本人的主職
     }), function(r){
         if (!r.ok) return;
         loadList(function(){ openEc(r.ec_id); });
     });
 });
-function validateNewDefaults(){ return true; }
 
+/** 目前畫面上「這一關的欄位」值 */
+function stageFields(stage){
+    if (stage === 'WH')   return {stock_qty:$('#e_stock_qty').val(), wip_qty:$('#e_wip_qty').val()};
+    if (stage === 'TD')   return {design_result:$('input[name=design]:checked').val()||'',
+                                  old_stock:$('input[name=oldstock]:checked').val()||'',
+                                  design_note:$('#e_design_note').val()};
+    if (stage === 'CTRL') return {ctrl_drawing:$('#e_ctrl_drawing').is(':checked')?1:0,
+                                  ctrl_bom:$('#e_ctrl_bom').is(':checked')?1:0,
+                                  ctrl_manual:$('#e_ctrl_manual').is(':checked')?1:0};
+    return {};
+}
 $('#btnEcSave').on('click', function(){
     if (!CUR) return;
-    post($.extend({action:'save'}, headPayload()), function(r){
-        if (!r.ok) return;
-        $('#e_doc_no').val(r.doc_no || '');
-        alert('已儲存草稿');
-        loadList();
-    });
+    var pre = (CUR.prefill || []).slice();
+    var doPrefill = function(i, done){
+        if (i >= pre.length) { done(); return; }
+        var st = pre[i];
+        post($.extend({action:'save_stage_fields', ec_id:CUR.ec_id, stage:st}, stageFields(st)),
+             function(){ doPrefill(i + 1, done); });
+    };
+    var finish = function(){
+        // 技術課先勾好的會審單位也一起存（會審單位一律由技術課決定）
+        if (pre.indexOf('TD') >= 0 && $('input[name=design]:checked').val() === 'need_review') {
+            var units = $('.rv-need:checked').map(function(){ return this.value; }).get();
+            post({action:'set_review_units', ec_id:CUR.ec_id, units:JSON.stringify(units)}, function(){
+                alert('已儲存'); openEc(CUR.ec_id); loadList();
+            });
+            return;
+        }
+        alert('已儲存'); openEc(CUR.ec_id); loadList();
+    };
+    if (+CUR.can_edit === 1) {
+        post($.extend({action:'save'}, headPayload()), function(r){
+            if (!r.ok) return;
+            $('#e_doc_no').val(r.doc_no || '');
+            doPrefill(0, finish);
+        });
+    } else {
+        doPrefill(0, finish);
+    }
 });
 
 $('#btnEcSubmit').on('click', function(){

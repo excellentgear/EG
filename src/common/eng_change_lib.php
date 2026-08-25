@@ -122,6 +122,14 @@ const EC_REVIEW_UNITS = [
                 'extras' => []],
 ];
 
+/**
+ * 哪一關是哪個課室在填（使用者要求 2026-08-25：申請人本身部門可以填的欄位要能直接填，
+ * 例如技術課的人開單就可以順手把「設計分析」填掉、倉管開單可以直接確認庫存）。
+ * 值是組織角色綁定的 key，實際是哪個部門一律即時查綁定，不寫死部門 id（鐵律4）。
+ * SUP／APPROVE 沒有欄位可填，故不列入。
+ */
+const EC_STAGE_DEPT = ['WH' => 'wh_dept', 'TD' => 'rd_dept', 'CTRL' => 'rd_dept'];
+
 const EC_SETTING_KEYS = ['ec_stamp_tpl_id', 'ec_review_stamp_tpl_id',
                          'ec_sign_sup', 'ec_sign_wh', 'ec_sign_td', 'ec_sign_appr', 'ec_sign_ctrl',
                          // 來源選「指定人員」時用的：_users＝勾選的 user.id（逗號字串）、
@@ -685,6 +693,85 @@ function ec_can_sign_stage(PDO $db, array $row, string $stage, int $uid, bool $i
     return false;
 }
 
+/**
+ * 這個人能不能「提早填寫」某一關的欄位（填但**不簽**，使用者要求 2026-08-25）。
+ *
+ * 成立條件（任一）：管理員／是那一關的合格簽核人／本身就在那一關負責的課室底下。
+ * 但一律不能回頭改**已經簽過**的關卡——那些內容已經蓋章生效，改掉等於偽造。
+ * 提早填只是把資料先備好，真正的簽核仍要等單子走到那一關（ec_sign_stage 會擋）。
+ */
+function ec_can_prefill_stage(PDO $db, array $row, string $stage, int $uid, bool $isAdmin): bool
+{
+    if ($uid <= 0) return false;
+    if (!isset(EC_STAGES[$stage]) || !ec_stage_editable_fields($stage)) return false;
+    // 單子已經走過這一關（或已結案／退回）就不能再改
+    $order = array_keys(EC_STAGES);
+    $cur = array_search((string)$row['status'], $order, true);
+    $tgt = array_search($stage, $order, true);
+    if ((string)$row['status'] === 'CLOSED') return false;
+    if ($cur !== false && $tgt !== false && $tgt < $cur) return false;
+    if ((string)$row['status'] === 'REJECTED') return false;
+
+    if ($isAdmin) return true;
+    if (ec_can_sign_stage($db, $row, $stage, $uid, false)) return true;
+    $key = EC_STAGE_DEPT[$stage] ?? '';
+    if ($key === '') return false;
+    $deptIds = eg_org_dept_ids($db, $key);
+    if (!$deptIds) return false;
+    return ec_user_in_depts($db, $uid, $deptIds);
+}
+
+/** 這個人（含兼任）是不是掛在這幾個部門底下的任一個 */
+function ec_user_in_depts(PDO $db, int $uid, array $deptIds): bool
+{
+    $deptIds = array_values(array_filter(array_map('intval', $deptIds)));
+    if ($uid <= 0 || !$deptIds) return false;
+    try {
+        $in = implode(',', $deptIds);
+        $st = $db->prepare("SELECT 1 FROM user_department_position_map
+                             WHERE user_id=? AND department_id IN ($in) LIMIT 1");
+        $st->execute([$uid]);
+        return (bool)$st->fetchColumn();
+    } catch (Throwable $e) { return false; }
+}
+
+/**
+ * 某人在指定日期「當時」的所有職務（含兼任），供申請人選擇要用哪一個身分申請
+ * （使用者要求 2026-08-25：有兼任職務時要能選用哪個部門與職稱申請）。
+ *
+ * @return array<int,array{dept_id:int,dept_name:string,position_name:string,is_main:int,label:string}>
+ */
+function ec_applicant_posts(PDO $db, int $uid, string $date): array
+{
+    $out = [];
+    foreach (ec_people_posts_asof($db, $date) as $p) {
+        if ((int)$p['id'] !== $uid) continue;
+        $out[] = [
+            'dept_id'       => (int)($p['dept_id'] ?? 0),
+            'dept_name'     => (string)$p['dept_name'],
+            'position_name' => (string)$p['position_name'],
+            'is_main'       => (int)$p['is_main'],
+            'label'         => trim((string)$p['dept_name'] . '　' . (string)$p['position_name'])
+                             . ((int)$p['is_main'] ? '' : '（兼任）'),
+        ];
+    }
+    return $out;
+}
+
+/**
+ * 申請人＋申請部門這一組是不是成立（申請人在該日期真的掛在那個部門底下）。
+ * 前端已經只列得出合法的組合，後端照樣再驗一次（直打 API 繞不過去＝鐵律8）。
+ */
+function ec_valid_applicant_post(PDO $db, int $uid, int $deptId, string $date): bool
+{
+    if ($uid <= 0) return false;
+    $posts = ec_applicant_posts($db, $uid, $date);
+    if (!$posts) return $deptId === 0;        // 完全沒有職務紀錄的人，就不強制部門
+    if ($deptId === 0) return false;
+    foreach ($posts as $p) if ($p['dept_id'] === $deptId) return true;
+    return false;
+}
+
 function ec_can_sign_review(PDO $db, array $row, string $unitKey, int $uid, bool $isAdmin): bool
 {
     if ($uid <= 0) return false;
@@ -783,6 +870,9 @@ function ec_validate(PDO $db, array $r): array
     if (trim((string)($r['customer_name'] ?? '')) === '')    $e['customer_name'] = '請填寫客戶名稱（綁定料號後會自動帶出）';
     if (!(int)($r['apply_dept_id'] ?? 0))                    $e['apply_dept_id'] = '請選擇申請單位';
     if (!(int)($r['applicant_id'] ?? 0))                     $e['applicant_id'] = '請選擇申請人';
+    elseif (!ec_valid_applicant_post($db, (int)$r['applicant_id'], (int)($r['apply_dept_id'] ?? 0),
+                                     (string)($r['apply_date'] ?? '')))
+        $e['apply_dept_id'] = '申請人在這個日期並沒有掛在所選的申請單位底下，請重新選擇職務';
     $ct = (string)($r['change_type'] ?? '');
     if (!array_key_exists($ct, EC_CHANGE_TYPES))             $e['change_type'] = '請選擇變更方式';
     // 紙本明文：「(僅其他變更須填寫) 設變事由說明」
@@ -1082,6 +1172,30 @@ function ec_sign_stage(PDO $db, int $ecId, string $stage, int $uid, string $unam
         ec_route_to_stage($db, $row2, $next, $uid, $uname);
     }
     return ['ec_id' => $ecId, 'status' => $next];
+}
+
+/**
+ * 提早填寫：只把該關卡白名單內的欄位寫進去，**不簽核、不推進狀態、不蓋章**。
+ * 權限由呼叫端先用 ec_can_prefill_stage() 判過。
+ */
+function ec_save_stage_fields(PDO $db, int $ecId, string $stage, array $fields, int $uid): array
+{
+    ec_ensure_schema($db);
+    $allow = ec_stage_editable_fields($stage);
+    if (!$allow) throw new Exception('這一關沒有可以填寫的欄位');
+    $sets = []; $args = [];
+    foreach ($allow as $f) {
+        if (!array_key_exists($f, $fields)) continue;
+        $sets[] = "`$f`=?";
+        $args[] = in_array($f, ['ctrl_drawing', 'ctrl_bom', 'ctrl_manual'], true)
+                ? ((int)$fields[$f] ? 1 : 0) : (string)$fields[$f];
+    }
+    if (!$sets) return ['saved' => 0];
+    $sets[] = "updated_by=?"; $args[] = $uid ?: null;
+    $sets[] = "updated_at=NOW()";
+    $args[] = $ecId;
+    $db->prepare("UPDATE eng_change SET " . implode(',', $sets) . " WHERE ec_id=?")->execute($args);
+    return ['saved' => count($sets) - 2];
 }
 
 /** 各關卡可以編輯的欄位（其他欄位就算前端硬送也不會被寫入＝鐵律8） */

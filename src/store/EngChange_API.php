@@ -46,7 +46,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 // 重新產生、比對必定不過，但那其實是「已經被登出」不是 CSRF 攻擊，訊息講錯使用者只會一直重整
 // 卻永遠存不進去（見 src/common/_config.php 的防護說明）。
 $WRITE = ['create', 'save', 'submit', 'resubmit', 'sign_stage', 'reject', 'set_review_units',
-          'sign_review', 'delete', 'save_setting', 'save_asdoc', 'log_print'];
+          'sign_review', 'save_stage_fields', 'delete', 'save_setting', 'save_asdoc', 'log_print'];
 if (in_array($action, $WRITE, true)) {
     if ($uid <= 0) jerr('登入已逾時，請重新登入後再儲存（您填的內容還在，重新登入後再按一次即可）', 401, ['code' => 'LOGIN']);
     $tok = $_POST['csrf'] ?? '';
@@ -92,6 +92,10 @@ function ec_decorate(PDO $db, array $r, array $P, int $uid): array
     $r['can_edit']     = ec_can_edit_row($r, $P, $uid) ? 1 : 0;
     $r['can_sign']     = ($stage !== '' && $stage !== 'REVIEW'
                           && ec_can_sign_stage($db, $r, $stage, $uid, (bool)$P['canAdmin'])) ? 1 : 0;
+    // 使用者本身就在該課室時，可以提早把自己那一段填好（填但不簽）
+    $r['prefill'] = [];
+    foreach (array_keys(EC_STAGE_DEPT) as $st)
+        if (ec_can_prefill_stage($db, $r, $st, $uid, (bool)$P['canAdmin'])) $r['prefill'][] = $st;
     $r['my_review_units'] = [];
     if ($stage === 'REVIEW') {
         foreach (ec_review_rows($db, (int)$r['ec_id']) as $rv) {
@@ -199,11 +203,13 @@ try {
     if ($action === 'create') {
         if (!$P['canEdit']) jerr('沒有開立申請單的權限', 403);
         $p = ec_input_row();
-        // 一般使用者只能以自己的名義開單；管理員可代開（補歷史紙本）
+        // 一般使用者只能以自己的名義開單（使用者要求 2026-08-25：申請人固定是開單的人、
+        // 除管理員外不可更改）；管理員可代開（補歷史紙本）
         if (!$P['canAdmin']) {
             $p['applicant_id'] = $uid;
             $p['applicant_name'] = $uname;
         }
+        $p = ec_fix_applicant_post($db, $p);
         $ecId = ec_create($db, $p, $uid, $uname);
         $r = ec_row($db, $ecId);
         jout(['ec_id' => $ecId, 'doc_no' => (string)$r['doc_no']]);
@@ -216,7 +222,9 @@ try {
         if (!ec_can_edit_row($r, $P, $uid))
             jerr('這張申請單已經送出，或不是你開立的，不能修改', 403);
         $p = ec_input_row();
-        if (!$P['canAdmin']) { $p['applicant_id'] = (int)$r['applicant_id']; $p['applicant_name'] = (string)$r['applicant_name']; }
+        // 非管理員不可改申請人（連自己開的單也不行改成別人）
+        if (!$P['canAdmin']) { $p['applicant_id'] = $uid; $p['applicant_name'] = $uname; }
+        $p = ec_fix_applicant_post($db, $p);
         $db->prepare("UPDATE eng_change SET apply_date=?, customer_id=?, customer_name=?, d_id=?, part_no=?,
                         apply_dept_id=?, apply_dept_name=?, applicant_id=?, applicant_name=?,
                         change_type=?, change_reason=?, updated_by=?, updated_at=NOW() WHERE ec_id=?")
@@ -249,12 +257,28 @@ try {
         $ecId  = (int)($_POST['ec_id'] ?? 0);
         $r = ec_row($db, $ecId);
         if (!$r) jerr('查無此申請單', 404);
-        // 由技術課那一關決定要找哪些單位會審（紙本：↓以下僅技術課判定需會審才填寫↓）
-        if (!ec_can_sign_stage($db, $r, 'TD', $uid, (bool)$P['canAdmin'])) jerr('只有技術課那一關可以勾選會審單位', 403);
-        if ((string)$r['status'] !== 'TD') jerr('這張單目前不在技術課關卡', 400);
+        // 由技術課決定要找哪些單位會審（紙本：↓以下僅技術課判定需會審才填寫↓）。
+        // 技術課可以在單子走到自己這一關之前就先勾好（跟設計分析一起提早填），
+        // 但「會審單位自己要填的內容」仍要等進入會審關卡才開放（見 sign_review）。
+        if (!ec_can_prefill_stage($db, $r, 'TD', $uid, (bool)$P['canAdmin']))
+            jerr('只有技術課可以勾選會審單位', 403);
         $units = json_decode((string)($_POST['units'] ?? '[]'), true);
         ec_set_review_units($db, $ecId, is_array($units) ? $units : []);
         jout(['reviews' => ec_review_rows($db, $ecId)]);
+    }
+
+    /** 提早填寫自己那一段（填但不簽）：例如技術課的人開單時順手把「設計分析」填好 */
+    if ($action === 'save_stage_fields') {
+        $ecId  = (int)($_POST['ec_id'] ?? 0);
+        $stage = trim((string)($_POST['stage'] ?? ''));
+        $r = ec_row($db, $ecId);
+        if (!$r) jerr('查無此申請單', 404);
+        if (!ec_can_prefill_stage($db, $r, $stage, $uid, (bool)$P['canAdmin']))
+            jerr('你不是這一段的填寫人員，或這一關已經簽過了', 403);
+        $fields = [];
+        foreach (ec_stage_editable_fields($stage) as $f)
+            if (isset($_POST[$f])) $fields[$f] = $_POST[$f];
+        jout(ec_save_stage_fields($db, $ecId, $stage, $fields, $uid));
     }
 
     if ($action === 'sign_stage') {
@@ -417,6 +441,30 @@ try {
         jout(['rows' => $rows, 'dept_ids' => $ids]);
     }
 
+    /** 單一料號精確查詢：選定料號後用它把客戶帶出來。
+     *  不能靠前端的關鍵字快取——從清單選取時 input 事件會先把快取清掉再發非同步查詢，
+     *  緊接著的 change 事件查到的必定是空的（實測就是這個原因導致客戶沒帶出來）。 */
+    if ($action === 'part_one') {
+        $pn = trim((string)($_GET['part_no'] ?? ''));
+        if ($pn === '') jout(['row' => null]);
+        $st = $db->prepare("SELECT s.d_id, s.D_Setting_Id AS part_no, s.Customer_Id AS customer_id,
+                                   COALESCE(c.customer,'') AS customer_name
+                              FROM d_setting s LEFT JOIN customer_list c ON c.customer_id=s.Customer_Id
+                             WHERE s.D_Setting_Id = ? ORDER BY s.d_id LIMIT 1");
+        $st->execute([$pn]);
+        jout(['row' => $st->fetch(PDO::FETCH_ASSOC) ?: null]);
+    }
+
+    /** 某人在指定日期當時的所有職務（含兼任）；申請人有兼任時要選用哪個身分申請 */
+    if ($action === 'my_posts') {
+        $date = trim((string)($_GET['date'] ?? ''));
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) $date = ec_db_now($db)['d'];
+        $who = (int)($_GET['user_id'] ?? 0) ?: $uid;
+        // 只有管理員可以查別人的職務（一般人查別人＝準備冒名開單）
+        if ($who !== $uid && !$P['canAdmin']) $who = $uid;
+        jout(['rows' => ec_applicant_posts($db, $who, $date), 'user_id' => $who, 'date' => $date]);
+    }
+
     /** 申請人候選：依申請日期回推當時在職的人與當時的部門職稱（ai-rules/22） */
     if ($action === 'people') {
         $date = trim((string)($_GET['date'] ?? ''));
@@ -449,6 +497,25 @@ function ec_input_row(): array
         'change_type'     => $cut($_POST['change_type'] ?? '', 20),
         'change_reason'   => $cut($_POST['change_reason'] ?? '', 2000),
     ];
+}
+
+/**
+ * 申請人＋申請部門對不起來時，自動補成該人在該日期的主職（沒有主職就取第一個）。
+ * 前端只列得出合法組合，這裡是防「直打 API 硬送別的部門」（鐵律8）。
+ */
+function ec_fix_applicant_post(PDO $db, array $p): array
+{
+    $uidA = (int)($p['applicant_id'] ?? 0);
+    $date = (string)($p['apply_date'] ?? '');
+    if ($uidA <= 0) return $p;
+    if (ec_valid_applicant_post($db, $uidA, (int)($p['apply_dept_id'] ?? 0), $date)) return $p;
+    $posts = ec_applicant_posts($db, $uidA, $date);
+    if (!$posts) { $p['apply_dept_id'] = 0; $p['apply_dept_name'] = ''; return $p; }
+    $pick = $posts[0];
+    foreach ($posts as $x) if ($x['is_main']) { $pick = $x; break; }
+    $p['apply_dept_id']   = $pick['dept_id'];
+    $p['apply_dept_name'] = $pick['dept_name'];
+    return $p;
 }
 
 /** 簽核歷程（讀全站共用的 approval_record；意見一律過遮蔽再輸出＝ai-rules/23） */
