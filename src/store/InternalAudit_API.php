@@ -118,9 +118,10 @@ case 'meta': {
         'people'    => $people,
         // 受稽單位＝群組（如 生產部＋生產1/2/3廠）＋沒被群組收編的單一部門
         'units'     => ia_audit_units($db),
-        // 稽核員／陪檢員只列有資格的人；名單沒設定時回全體在職員工
-        'auditors'  => ia_qualified_people($db, 'auditor'),
-        'escorts'   => ia_qualified_people($db, 'escort'),
+        // 稽核員／陪檢員只列有資格的人；名單沒設定時回全體在職員工。
+        // 補上 posts 讓下拉標籤能顯示兼任的其他職務（一個人仍只有一個選項，值是 user_id）
+        'auditors'  => ia_qualified_posts($db, 'auditor'),
+        'escorts'   => ia_qualified_posts($db, 'escort'),
         'qualify_kinds' => IA_QUALIFY_KINDS,
         'stamp_tpls'=> $stampTpls,
         'years'     => $years,
@@ -381,12 +382,21 @@ case 'case_save': {
     if ($ems && $eme && $eme < $ems) jerr('結束會議的結束時間不可早於開始時間');
 
     $year   = (int)substr($nd, 0, 4);
-    $leader = iaInt($_POST['leader_id'] ?? '');
-    $leaderName = '';
-    if ($leader) {
-        $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$leader]);
+    // 稽核組長／稽核員／陪檢員都是挑「職務」（uid:deptId:posId），資格認到人員＋部門＋職稱。
+    // 後端一定要再驗一次資格，不能只擋前端下拉（鐵律8）。
+    $leader = null; $leaderName = null; $leaderDept = null; $leaderPos = null;
+    $leaderKey = trim((string)($_POST['leader_key'] ?? ''));
+    if ($leaderKey !== '') {
+        $lp = ia_resolve_post($db, $leaderKey, 'auditor');
+        if (!$lp) jerr('稽核組長的職務不存在或沒有稽核員資格');
+        $leader = $lp['user_id']; $leaderName = $lp['user_name'];
+        $leaderDept = $lp['dept_id']; $leaderPos = $lp['position_id'];
+    } elseif (($lid = iaInt($_POST['leader_id'] ?? '')) !== null) {
+        // 舊版前端／既有資料只送 user_id 時仍收得下
+        $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$lid]);
         $leaderName = (string)($q->fetchColumn() ?: '');
         if ($leaderName === '') jerr('稽核組長不存在');
+        $leader = $lid;
     }
     $depts = json_decode((string)($_POST['depts'] ?? '[]'), true);
     if (!is_array($depts)) $depts = [];
@@ -399,9 +409,10 @@ case 'case_save': {
             $old = $q->fetch(PDO::FETCH_ASSOC);
             if (!$old) { $db->rollBack(); jerr('找不到這張稽核通知單', 404); }
             $db->prepare("UPDATE ia_case SET year=?, notify_date=?, audit_from=?, audit_to=?,
-                              leader_id=?, leader_name=?, end_meet_date=?, end_meet_start=?, end_meet_end=?,
+                              leader_id=?, leader_name=?, leader_dept_id=?, leader_position_id=?,
+                              end_meet_date=?, end_meet_start=?, end_meet_end=?,
                               end_meet_place=?, remark=?, updated_at=NOW() WHERE case_id=?")
-               ->execute([$year, $nd, $af, $at, $leader, $leaderName ?: null,
+               ->execute([$year, $nd, $af, $at, $leader, $leaderName ?: null, $leaderDept, $leaderPos,
                           iaDate($_POST['end_meet_date'] ?? ''), $ems, $eme,
                           mb_substr(trim((string)($_POST['end_meet_place'] ?? '')), 0, 150) ?: null,
                           trim((string)($_POST['remark'] ?? '')) ?: null, $cid]);
@@ -411,11 +422,12 @@ case 'case_save': {
             $seq = (int)$q->fetchColumn();
             $caseNo = ia_next_case_no($db, $nd);
             $db->prepare("INSERT INTO ia_case (year, seq_no, case_no, notify_date, audit_from, audit_to,
-                              leader_id, leader_name, end_meet_date, end_meet_start, end_meet_end, end_meet_place,
+                              leader_id, leader_name, leader_dept_id, leader_position_id,
+                              end_meet_date, end_meet_start, end_meet_end, end_meet_place,
                               remark, status, maker_id, maker_name, maker_date, created_by, created_by_name,
                               created_at, updated_at)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft', ?,?,?,?,?, NOW(), NOW())")
-               ->execute([$year, $seq, $caseNo, $nd, $af, $at, $leader, $leaderName ?: null,
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft', ?,?,?,?,?, NOW(), NOW())")
+               ->execute([$year, $seq, $caseNo, $nd, $af, $at, $leader, $leaderName ?: null, $leaderDept, $leaderPos,
                           iaDate($_POST['end_meet_date'] ?? ''), $ems, $eme,
                           mb_substr(trim((string)($_POST['end_meet_place'] ?? '')), 0, 150) ?: null,
                           trim((string)($_POST['remark'] ?? '')) ?: null,
@@ -425,8 +437,10 @@ case 'case_save': {
 
         $db->prepare("DELETE FROM ia_case_dept WHERE case_id=?")->execute([$cid]);
         $ins = $db->prepare("INSERT INTO ia_case_dept (case_id, sort_order, start_process, dept_id, dept_name,
-                                 auditor_id, auditor_name, escort_id, escort_name, audited_date, audited_time, improve_due)
-                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+                                 auditor_id, auditor_name, auditor_dept_id, auditor_position_id,
+                                 escort_id, escort_name, escort_dept_id, escort_position_id,
+                                 audited_date, audited_time, improve_due)
+                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
         $nameSt = $db->prepare("SELECT name FROM department WHERE id=?");
         $userSt = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
         $i = 0;
@@ -435,12 +449,26 @@ case 'case_save': {
             $dn  = trim((string)($d['dept_name'] ?? ''));
             if ($did) { $nameSt->execute([$did]); $dn = (string)($nameSt->fetchColumn() ?: $dn); }
             if (!$did && $dn === '' && trim((string)($d['start_process'] ?? '')) === '') continue;
-            $aid = iaInt($d['auditor_id'] ?? ''); $an = '';
-            if ($aid) { $userSt->execute([$aid]); $an = (string)($userSt->fetchColumn() ?: ''); }
-            $eid = iaInt($d['escort_id'] ?? '');  $en = '';
-            if ($eid) { $userSt->execute([$eid]); $en = (string)($userSt->fetchColumn() ?: ''); }
+            // 稽核員／陪檢員挑的是職務，後端再驗一次資格。
+            // 只送 user_id 的舊呼叫端（與既有資料）仍收得下，只是不會有部門／職稱。
+            $ap = ia_resolve_post($db, (string)($d['auditor_key'] ?? ''), 'auditor');
+            if ((string)($d['auditor_key'] ?? '') !== '' && !$ap) jerr('第 ' . ($i + 1) . ' 列的稽核員沒有該職務的稽核員資格');
+            if (!$ap && ($aid = iaInt($d['auditor_id'] ?? '')) !== null) {
+                $userSt->execute([$aid]);
+                $an = (string)($userSt->fetchColumn() ?: '');
+                if ($an !== '') $ap = ['user_id' => $aid, 'user_name' => $an, 'dept_id' => null, 'position_id' => null];
+            }
+            $ep = ia_resolve_post($db, (string)($d['escort_key'] ?? ''), 'escort');
+            if ((string)($d['escort_key'] ?? '') !== '' && !$ep) jerr('第 ' . ($i + 1) . ' 列的陪檢員沒有該職務的陪檢員資格');
+            if (!$ep && ($eid = iaInt($d['escort_id'] ?? '')) !== null) {
+                $userSt->execute([$eid]);
+                $en = (string)($userSt->fetchColumn() ?: '');
+                if ($en !== '') $ep = ['user_id' => $eid, 'user_name' => $en, 'dept_id' => null, 'position_id' => null];
+            }
             $ins->execute([$cid, ++$i * 10, mb_substr(trim((string)($d['start_process'] ?? '')), 0, 150) ?: null,
-                           $did, $dn ?: null, $aid, $an ?: null, $eid, $en ?: null,
+                           $did, $dn ?: null,
+                           $ap['user_id'] ?? null, $ap['user_name'] ?? null, $ap['dept_id'] ?? null, $ap['position_id'] ?? null,
+                           $ep['user_id'] ?? null, $ep['user_name'] ?? null, $ep['dept_id'] ?? null, $ep['position_id'] ?? null,
                            iaDate($d['audited_date'] ?? ''), iaTime($d['audited_time'] ?? ''),
                            iaDate($d['improve_due'] ?? '')]);
         }
@@ -544,18 +572,29 @@ case 'check_create': {
     $real = 0; foreach ($items as $it) { if (!$it['is_header']) $real++; }
     if ($real === 0) jerr('請至少勾選一個要查核的項目（目前只勾到章節標題列）');
 
-    $auditorId = iaInt($_POST['auditor_id'] ?? '') ?: $uid;
-    $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$auditorId]);
-    $auditorName = (string)($q->fetchColumn() ?: $uname);
+    // 稽核人挑的是職務（uid:deptId:posId），後端再驗一次稽核員資格
+    $auditorKey = trim((string)($_POST['auditor_key'] ?? ''));
+    $auditorDept = null; $auditorPos = null;
+    if ($auditorKey !== '') {
+        $ap = ia_resolve_post($db, $auditorKey, 'auditor');
+        if (!$ap) jerr('稽核人沒有該職務的稽核員資格');
+        $auditorId = $ap['user_id']; $auditorName = $ap['user_name'];
+        $auditorDept = $ap['dept_id']; $auditorPos = $ap['position_id'];
+    } else {
+        $auditorId = iaInt($_POST['auditor_id'] ?? '') ?: $uid;
+        $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$auditorId]);
+        $auditorName = (string)($q->fetchColumn() ?: $uname);
+    }
 
     $db->beginTransaction();
     try {
         $db->prepare("INSERT INTO ia_check (case_id, year, kind, half, title, auditor_id, auditor_name,
+                          auditor_dept_id, auditor_position_id,
                           check_date, status, created_by, created_by_name, created_at, updated_at)
-                      VALUES (?,?,?,?,?,?,?,?, 'draft', ?,?, NOW(), NOW())")
+                      VALUES (?,?,?,?,?,?,?,?,?,?, 'draft', ?,?, NOW(), NOW())")
            ->execute([$caseId, $year, $kind, $kind === 'kpi' ? $half : null,
                       mb_substr(trim((string)($_POST['title'] ?? '')), 0, 150) ?: null,
-                      $auditorId, $auditorName, $cd, $uid, $uname]);
+                      $auditorId, $auditorName, $auditorDept, $auditorPos, $cd, $uid, $uname]);
         $kid = (int)$db->lastInsertId();
         $ins = $db->prepare("INSERT INTO ia_check_item (check_id, sort_order, is_header, col_a, col_b, col_c, col_d,
                                  ref_kind, ref_id) VALUES (?,?,?,?,?,?,?,?,?)");
@@ -1329,15 +1368,18 @@ case 'unit_delete': {
 /* ============================ 稽核員／陪檢員資格名單 ============================ */
 case 'qualify_get': {
     iaReqView($perms);
-    jout(['kinds' => IA_QUALIFY_KINDS, 'map' => ia_qualify_map($db),
-          'people' => eg_people_list($db, [])]);
+    // posts＝一個職務一列（跨部門兼任的人會出現多列），使用者要求多職務要全部列出來
+    $posts = eg_people_posts($db, []);
+    foreach ($posts as &$p) $p['post_key3'] = ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id']);
+    unset($p);
+    jout(['kinds' => IA_QUALIFY_KINDS, 'map' => ia_qualify_map($db), 'posts' => $posts]);
 }
 
 case 'qualify_save': {
     iaReqAdmin($perms);
     $kind = (string)($_POST['kind'] ?? '');
     if (!isset(IA_QUALIFY_KINDS[$kind])) jerr('身分別不正確');
-    $ids = json_decode((string)($_POST['user_ids'] ?? '[]'), true);
+    $ids = json_decode((string)($_POST['post_keys'] ?? $_POST['user_ids'] ?? '[]'), true);
     if (!is_array($ids)) jerr('格式錯誤');
     $db->beginTransaction();
     try {

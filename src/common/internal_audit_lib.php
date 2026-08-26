@@ -321,15 +321,68 @@ function ia_ensure_schema(PDO $db): void
 
         /* ---- 稽核員／陪檢員資格名單（使用者要求：管理員指定哪些部門的哪些人有資格）----
            名單是空的時候一律回退成「全體在職員工」，否則剛裝好會一個人都選不到。 */
+        /* 資格認到「人員＋部門＋職稱」＝一個職務一筆（使用者要求）。
+           理由：兼任的人，主職可能沒有稽核員資格、兼任職才有（或反過來），
+           所以不能只認到「人」。挑選稽核員時也是挑「職務」，才知道他是以哪個身分執行稽核。 */
         $db->exec("CREATE TABLE IF NOT EXISTS ia_qualified_person (
-            qp_id      INT AUTO_INCREMENT PRIMARY KEY,
-            kind       VARCHAR(10) NOT NULL COMMENT 'auditor=稽核員 / escort=陪檢員',
-            user_id    INT NOT NULL,
-            dept_id    INT NULL COMMENT '設定當下所屬部門（僅供分組顯示，判定不靠它）',
-            sort_order INT NOT NULL DEFAULT 0,
-            updated_at DATETIME NULL, updated_by VARCHAR(60) NULL,
-            UNIQUE KEY uk_kind_user (kind, user_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='稽核員／陪檢員資格名單'");
+            qp_id       INT AUTO_INCREMENT PRIMARY KEY,
+            kind        VARCHAR(10) NOT NULL COMMENT 'auditor=稽核員 / escort=陪檢員',
+            user_id     INT NOT NULL,
+            dept_id     INT NOT NULL DEFAULT 0 COMMENT '該職務的部門（判定的一部分）',
+            position_id INT NOT NULL DEFAULT 0 COMMENT '該職務的職稱（判定的一部分）',
+            sort_order  INT NOT NULL DEFAULT 0,
+            updated_at  DATETIME NULL, updated_by VARCHAR(60) NULL,
+            UNIQUE KEY uk_kind_post (kind, user_id, dept_id, position_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='稽核員／陪檢員資格名單（認到人員＋部門＋職稱）'");
+        // 舊版是 UNIQUE(kind,user_id)、沒有 position_id；就地升級（可重複執行）
+        try {
+            $cols = $db->query("SHOW COLUMNS FROM ia_qualified_person LIKE 'position_id'")->fetchAll();
+            if (!$cols) {
+                $db->exec("ALTER TABLE ia_qualified_person
+                             ADD COLUMN position_id INT NOT NULL DEFAULT 0 COMMENT '該職務的職稱' AFTER dept_id");
+                $db->exec("ALTER TABLE ia_qualified_person MODIFY dept_id INT NOT NULL DEFAULT 0");
+                try { $db->exec("ALTER TABLE ia_qualified_person DROP INDEX uk_kind_user"); } catch (Throwable $e) {}
+                try { $db->exec("ALTER TABLE ia_qualified_person
+                                 ADD UNIQUE KEY uk_kind_post (kind, user_id, dept_id, position_id)"); } catch (Throwable $e) {}
+            }
+            // 舊制是「認到人」，升級後那些列的 position_id 會是 0，比對不到任何職務＝誰都選不到。
+            // 語意上「以前這個人有資格」＝他的每一個職務都有資格，所以就地展開成該員的所有職務。
+            // 可重複執行：只處理 position_id=0 的殘留列。
+            $old = $db->query("SELECT qp_id, kind, user_id FROM ia_qualified_person WHERE position_id=0")
+                      ->fetchAll(PDO::FETCH_ASSOC);
+            if ($old) {
+                $posts = [];
+                foreach (eg_people_posts($db, []) as $p) $posts[(int)$p['id']][] = $p;
+                $ins = $db->prepare("INSERT IGNORE INTO ia_qualified_person
+                                        (kind, user_id, dept_id, position_id, sort_order, updated_at, updated_by)
+                                     VALUES (?,?,?,?,0,NOW(),'schema-upgrade')");
+                $del = $db->prepare("DELETE FROM ia_qualified_person WHERE qp_id=?");
+                foreach ($old as $o) {
+                    foreach ($posts[(int)$o['user_id']] ?? [] as $p) {
+                        $ins->execute([$o['kind'], (int)$o['user_id'], (int)$p['dept_id'], (int)$p['position_id']]);
+                    }
+                    $del->execute([(int)$o['qp_id']]);
+                }
+            }
+        } catch (Throwable $e) {}
+
+        /* 稽核員／陪檢員／稽核組長是「以哪個職務」執行稽核——存到職務層級，
+           圖章的部門職稱才印得對，也才能對得上資格名單。舊資料只有 user_id，這些欄位留空不影響。 */
+        foreach ([
+            ['ia_case_dept', 'auditor_dept_id',     "INT NULL COMMENT '稽核員的部門'"],
+            ['ia_case_dept', 'auditor_position_id', "INT NULL COMMENT '稽核員的職稱'"],
+            ['ia_case_dept', 'escort_dept_id',      "INT NULL COMMENT '陪檢員的部門'"],
+            ['ia_case_dept', 'escort_position_id',  "INT NULL COMMENT '陪檢員的職稱'"],
+            ['ia_case',      'leader_dept_id',      "INT NULL COMMENT '稽核組長的部門'"],
+            ['ia_case',      'leader_position_id',  "INT NULL COMMENT '稽核組長的職稱'"],
+            ['ia_check',     'auditor_dept_id',     "INT NULL COMMENT '稽核人的部門'"],
+            ['ia_check',     'auditor_position_id', "INT NULL COMMENT '稽核人的職稱'"],
+        ] as $c) {
+            try {
+                $has = $db->query("SHOW COLUMNS FROM `{$c[0]}` LIKE '{$c[1]}'")->fetchAll();
+                if (!$has) $db->exec("ALTER TABLE `{$c[0]}` ADD COLUMN `{$c[1]}` {$c[2]}");
+            } catch (Throwable $e) {}
+        }
         /* ---- 角色（module='internal_audit'） ---- */
         foreach ([
             ['ia_admin',   '內稽管理員（管理代表）'],
@@ -1263,62 +1316,141 @@ function ia_unit_validate(PDO $db, int $unitId, string $name, int $mainDeptId, a
 const IA_QUALIFY_KINDS = ['auditor' => '稽核員', 'escort' => '陪檢員'];
 
 /**
- * 某身分的合格人員清單。
- * **名單沒設定時一律回全體在職員工**——否則模組剛上線一個人都挑不到，
- * 使用者會以為壞掉（而且這種「空名單＝什麼都不能選」的設計每次都要被回報一次）。
- * 回傳格式與 eg_people_list() 相同，畫面上的下拉可以直接用。
+ * 資格認到「人員＋部門＋職稱」＝一個職務一筆（使用者要求 2026-08-26）。
+ * 兼任的人可能主職沒有稽核員資格、兼任職才有（或反過來），所以不能只認到「人」。
+ * 職務鍵格式一律 'uid:deptId:positionId'，前後端共用同一個字串。
+ */
+function ia_post_key(int $uid, ?int $deptId, ?int $posId): string
+{
+    return $uid . ':' . (int)$deptId . ':' . (int)$posId;
+}
+
+/** 'uid:deptId:posId' → [uid, deptId, posId]；格式不對回 [0,0,0] */
+function ia_post_parse(string $key): array
+{
+    $p = explode(':', trim($key));
+    if (count($p) !== 3) return [0, 0, 0];
+    return [(int)$p[0], (int)$p[1], (int)$p[2]];
+}
+
+/**
+ * 某身分的合格「職務」清單（一個職務一列，跨部門兼任的人會出現多列）。
+ * **名單沒設定時一律回全體在職員工的所有職務**——否則模組剛上線一個人都挑不到，
+ * 使用者會以為壞掉。已離職者不會出現在 eg_people_posts()，所以名單裡的離職者自然失效。
+ * 每列在 eg_people_posts() 的欄位之外多帶 post_key3。
+ */
+function ia_qualified_posts(PDO $db, string $kind): array
+{
+    $all = [];
+    try { $all = eg_people_posts($db, []); } catch (Throwable $e) { $all = []; }
+    foreach ($all as &$p) {
+        $p['post_key3'] = ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id']);
+    }
+    unset($p);
+    if (!isset(IA_QUALIFY_KINDS[$kind])) return $all;
+
+    $keys = [];
+    try {
+        $st = $db->prepare("SELECT user_id, dept_id, position_id FROM ia_qualified_person WHERE kind=?");
+        $st->execute([$kind]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $keys[ia_post_key((int)$r['user_id'], (int)$r['dept_id'], (int)$r['position_id'])] = 1;
+        }
+    } catch (Throwable $e) {}
+    if (!$keys) return $all;                      // 沒設定＝不限制
+    return array_values(array_filter($all, function ($p) use ($keys) { return isset($keys[$p['post_key3']]); }));
+}
+
+/**
+ * 相容用：某身分的合格「人員」清單（去重）。
+ * 有些地方只需要知道「這個人有沒有資格」（例如判斷既有單據上的人還算不算數）。
  */
 function ia_qualified_people(PDO $db, string $kind): array
 {
-    $all = [];
-    try { $all = eg_people_list($db, []); } catch (Throwable $e) { $all = []; }
-    if (!isset(IA_QUALIFY_KINDS[$kind])) return $all;
-    $ids = [];
-    try {
-        $st = $db->prepare("SELECT user_id FROM ia_qualified_person WHERE kind=?");
-        $st->execute([$kind]);
-        $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
-    } catch (Throwable $e) {}
-    if (!$ids) return $all;                       // 沒設定＝不限制
-    $set = array_flip($ids);
-    // 已離職的人不會出現在 eg_people_list，所以名單裡的離職者自然被濾掉（正確行為）
-    return array_values(array_filter($all, function ($p) use ($set) { return isset($set[(int)$p['id']]); }));
+    $seen = []; $out = [];
+    foreach (ia_qualified_posts($db, $kind) as $p) {
+        $id = (int)$p['id'];
+        if (isset($seen[$id])) continue;
+        $seen[$id] = 1; $out[] = $p;
+    }
+    return $out;
 }
 
-/** 目前設定的名單（管理畫面用），回 kind => [user_id,...] */
+/** 目前設定的名單（管理畫面用），回 kind => ['uid:deptId:posId', ...] */
 function ia_qualify_map(PDO $db): array
 {
     $out = array_fill_keys(array_keys(IA_QUALIFY_KINDS), []);
     try {
-        foreach ($db->query("SELECT kind, user_id FROM ia_qualified_person ORDER BY sort_order, qp_id")
-                    ->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            if (isset($out[$r['kind']])) $out[$r['kind']][] = (int)$r['user_id'];
+        foreach ($db->query("SELECT kind, user_id, dept_id, position_id FROM ia_qualified_person
+                             ORDER BY sort_order, qp_id")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (isset($out[$r['kind']])) {
+                $out[$r['kind']][] = ia_post_key((int)$r['user_id'], (int)$r['dept_id'], (int)$r['position_id']);
+            }
         }
     } catch (Throwable $e) {}
     return $out;
 }
 
-/** 整批覆寫某身分的名單（空陣列＝不限制，全體在職員工都可選） */
-function ia_qualify_save(PDO $db, string $kind, array $userIds, string $byName): void
+/**
+ * 整批覆寫某身分的名單。傳入的是職務鍵 'uid:deptId:posId'。
+ * 空陣列＝不限制（全體在職員工的所有職務都可指派）。
+ * 只接受「真的存在的職務」——直接打 API 塞一個不存在的組合就會被擋（鐵律8）。
+ */
+function ia_qualify_save(PDO $db, string $kind, array $postKeys, string $byName): void
 {
     if (!isset(IA_QUALIFY_KINDS[$kind])) throw new RuntimeException('身分別不正確');
-    $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
-    if ($userIds) {
-        $in = implode(',', array_fill(0, count($userIds), '?'));
-        $st = $db->prepare("SELECT COUNT(*) FROM `user` WHERE id IN ($in)");
-        $st->execute($userIds);
-        if ((int)$st->fetchColumn() !== count($userIds)) throw new RuntimeException('有人員不存在');
+
+    $valid = [];
+    try {
+        foreach (eg_people_posts($db, []) as $p) {
+            $valid[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = $p;
+        }
+    } catch (Throwable $e) {}
+
+    $keys = [];
+    foreach ($postKeys as $k) {
+        $k = trim((string)$k);
+        if ($k === '' || isset($keys[$k])) continue;
+        if (!isset($valid[$k])) throw new RuntimeException('有職務不存在或已異動，請重新整理後再設定');
+        $keys[$k] = 1;
     }
+
     $db->prepare("DELETE FROM ia_qualified_person WHERE kind=?")->execute([$kind]);
-    if (!$userIds) return;
-    $ins = $db->prepare("INSERT INTO ia_qualified_person (kind, user_id, dept_id, sort_order, updated_at, updated_by)
-                         VALUES (?,?,?,?,NOW(),?)");
-    $dept = $db->prepare("SELECT department_id FROM user_department_position_map WHERE user_id=? LIMIT 1");
+    if (!$keys) return;
+    $ins = $db->prepare("INSERT INTO ia_qualified_person
+                            (kind, user_id, dept_id, position_id, sort_order, updated_at, updated_by)
+                         VALUES (?,?,?,?,?,NOW(),?)");
     $i = 0;
-    foreach ($userIds as $uid) {
-        $dept->execute([$uid]);
-        $ins->execute([$kind, $uid, ($dept->fetchColumn() ?: null), ++$i * 10, $byName]);
+    foreach (array_keys($keys) as $k) {
+        list($uid, $dept, $pos) = ia_post_parse($k);
+        $ins->execute([$kind, $uid, $dept, $pos, ++$i * 10, $byName]);
     }
+}
+
+/**
+ * 某個職務鍵解析成可存檔的欄位（存單據時用）。
+ * 回 ['user_id','user_name','dept_id','dept_name','position_id','position_name'] 或 null。
+ * $kind 有給就順便驗資格——前端擋一次、後端同規則再擋一次（鐵律8）。
+ */
+function ia_resolve_post(PDO $db, string $key, ?string $kind = null): ?array
+{
+    if (trim($key) === '') return null;
+    $posts = ($kind !== null && isset(IA_QUALIFY_KINDS[$kind]))
+           ? ia_qualified_posts($db, $kind)
+           : (function () use ($db) {
+                 $all = [];
+                 try { $all = eg_people_posts($db, []); } catch (Throwable $e) {}
+                 foreach ($all as &$p) $p['post_key3'] = ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id']);
+                 unset($p);
+                 return $all;
+             })();
+    foreach ($posts as $p) {
+        if ($p['post_key3'] !== trim($key)) continue;
+        return ['user_id' => (int)$p['id'], 'user_name' => (string)$p['user_cname'],
+                'dept_id' => $p['dept_id'], 'dept_name' => (string)$p['dept_name'],
+                'position_id' => $p['position_id'], 'position_name' => (string)$p['position_name']];
+    }
+    return null;
 }
 
 /** 年度下拉的選項：已有資料的年度 ＋ 近十年到明年（管理員要補舊年度資料，選單裡就得選得到） */
@@ -1339,4 +1471,35 @@ function ia_year_options(PDO $db): array
     $years = array_values(array_unique(array_filter($years)));
     rsort($years);
     return $years;
+}
+
+/**
+ * 幫人員清單補上「這個人所有的職務」。
+ * 一個人可能跨部門兼任（例：品管部課長 兼 品管組組長），只顯示主職會看不出來，
+ * 使用者要求要全部列出來。走共用的 eg_people_posts()（一個職務一列），不自己拼 SQL。
+ * 回傳每人多一個 posts 陣列與 posts_text（「品管部 課長／品管組 組長」）。
+ */
+function ia_annotate_posts(PDO $db, array $people): array
+{
+    if (!$people) return $people;
+    $byUser = [];
+    try {
+        foreach (eg_people_posts($db, []) as $p) {
+            $byUser[(int)$p['id']][] = [
+                'dept_id'       => $p['dept_id'],
+                'dept_name'     => $p['dept_name'],
+                'position_name' => $p['position_name'],
+                'is_main'       => (int)$p['is_main'],
+            ];
+        }
+    } catch (Throwable $e) {}
+    foreach ($people as &$u) {
+        $ps = $byUser[(int)$u['id']] ?? [];
+        $u['posts'] = $ps;
+        $u['posts_text'] = implode('／', array_map(function ($x) {
+            return trim($x['dept_name'] . ' ' . $x['position_name']) . ($x['is_main'] ? '' : '(兼)');
+        }, $ps));
+    }
+    unset($u);
+    return $people;
 }
