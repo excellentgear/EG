@@ -903,9 +903,13 @@ $(document).on('click','.pgBtn', function(){ var k=$(this).data('key'); PAGE[k]=
 function renderTab(k){ if(k==='case') renderCases(); else if(k==='check') renderChecks(); else if(k==='nc') renderNcs(); }
 
 /* ---------- 分頁切換：切過去一律重抓該分頁資料（點開即刷新鐵則） ---------- */
-$('.ia-tab').on('click', function(){
+/* 只處理主頁六個分頁。跳窗裡的分頁（例：資格名單的稽核員／陪檢員）沿用同一套外觀所以也有 .ia-tab，
+   沒有 data-pane 就直接跳過——否則按跳窗裡的分頁會把主頁六個分頁全部取消選取、
+   六個 .ia-pane 也全被藏起來（關掉跳窗後畫面一片空白）。 */
+$('.ia-tab[data-pane]').on('click', function(){
     var p = $(this).data('pane');
-    $('.ia-tab').removeClass('on'); $(this).addClass('on');
+    if (!p) return;
+    $('.ia-tab[data-pane]').removeClass('on'); $(this).addClass('on');
     $('.ia-pane').removeClass('on'); $('#pane-'+p).addClass('on');
     loadPane(p);
 });
@@ -2497,8 +2501,10 @@ $('#btnQualify').on('click', function(){
     });
 });
 $(document).on('click', '.q-tab', function(){
-    // 切分頁前先把目前這一頁的勾選記回 QMAP，不然切回來會發現剛剛勾的不見了
-    QMAP[QKIND] = $('#qPick .qChk:checked').map(function(){ return +$(this).val(); }).get();
+    // 切分頁前先把目前這一頁的勾選記回 QMAP，不然切回來會發現剛剛勾的不見了。
+    // 一定要走 qCheckedIds()：值是「uid:deptId:posId」字串，用 +val() 轉數字會全部變成 NaN，
+    // 存進 QMAP 之後切回來就整份名單都沒勾（2026-08-26 使用者回報的症狀）。
+    QMAP[QKIND] = qCheckedIds();
     $('.q-tab').removeClass('on'); $(this).addClass('on');
     QKIND = $(this).data('kind');
     renderQualify();
