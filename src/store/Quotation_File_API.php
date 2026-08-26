@@ -462,41 +462,19 @@ switch ($action) {
         if (!$realPath || !$expectedDir || strpos($realPath, $expectedDir) !== 0 || !is_file($realPath)) {
             echo json_encode(['success'=>false,'message'=>'檔案不存在']); break;
         }
+        // 旋轉本體走全站共用檔（2026-08-26 起，鐵律4：原本這裡自己刻了一份，
+        // 圖面查閱又刻了第二份，兩份的品質、EXIF 方向、大圖記憶體處理各走各的）。
+        // 換過來之後這一頁順便修好三件原本會出錯的事：
+        //   ① 手機拍的 JPG 依 EXIF 方向先轉正（原本沒處理，轉出來角度會是錯的）
+        //   ② 大圖先動態拉高 memory_limit（原本超過 memory_limit 就是白畫面 fatal）
+        //   ③ 先寫暫存檔、驗證成功才覆蓋正本（原本直接寫回原檔，中途失敗會弄壞正本）
+        require_once __DIR__ . '/../common/image_rotate_lib.php';
         $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
         if (!in_array($ext, ['png','jpg','jpeg','gif','bmp','webp'], true)) {
+            // 本頁維持只給圖片轉（共用檔本身支援 PDF，但報價附件的檢視器只對圖片開）
             echo json_encode(['success'=>false,'message'=>'只有圖片檔可旋轉；PDF／Office 檔請用原軟體轉正後重新上傳']); break;
         }
-        if (!function_exists('imagerotate')) { echo json_encode(['success'=>false,'message'=>'伺服器未啟用 GD imagerotate']); break; }
-        try {
-            $src = match ($ext) {
-                'png'  => imagecreatefrompng($realPath),
-                'gif'  => imagecreatefromgif($realPath),
-                'bmp'  => (function_exists('imagecreatefrombmp')  ? imagecreatefrombmp($realPath)  : false),
-                'webp' => (function_exists('imagecreatefromwebp') ? imagecreatefromwebp($realPath) : false),
-                default => imagecreatefromjpeg($realPath),   // jpg / jpeg
-            };
-            if (!$src) { echo json_encode(['success'=>false,'message'=>'無法讀取圖片(格式不支援或檔案毀損)']); break; }
-            // imagerotate 角度為「逆時針」；使用者送順時針度數 → 取負值。90/180/270 為直角旋轉，不會露出背景三角。
-            imagealphablending($src, false);
-            imagesavealpha($src, true);
-            $bg  = imagecolorallocatealpha($src, 0, 0, 0, 127);
-            $rot = imagerotate($src, -$deg, $bg);
-            imagealphablending($rot, false);
-            imagesavealpha($rot, true);
-            $ok = match ($ext) {
-                'png'  => imagepng($rot, $realPath),
-                'gif'  => imagegif($rot, $realPath),
-                'webp' => (function_exists('imagewebp') ? imagewebp($rot, $realPath) : false),
-                'bmp'  => (function_exists('imagebmp')  ? imagebmp($rot, $realPath)  : false),
-                default => imagejpeg($rot, $realPath, 92),
-            };
-            imagedestroy($src); imagedestroy($rot);
-            if (!$ok) { echo json_encode(['success'=>false,'message'=>'旋轉後寫入失敗']); break; }
-            @touch($realPath);   // 更新 mtime 供前端破快取
-            echo json_encode(['success'=>true, 'message'=>'已旋轉並存檔']);
-        } catch (Throwable $e) {
-            echo json_encode(['success'=>false,'message'=>'旋轉失敗：'.$e->getMessage()]);
-        }
+        echo json_encode(eg_rotate_file($realPath, $deg));
         break;
     }
 
