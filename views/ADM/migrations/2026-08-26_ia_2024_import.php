@@ -7,6 +7,7 @@
  *   php 2026-08-26_ia_2024_import.php --dry        只列出將要建立什麼，不寫入（預設）
  *   php 2026-08-26_ia_2024_import.php --qualify    依 2024 紙本還原稽核員／陪檢員資格名單
  *   php 2026-08-26_ia_2024_import.php --import     匯入 2024 年度紀錄
+ *   php 2026-08-26_ia_2024_import.php --tpl        依 2024 通知單自動建立稽核範本
  *   php 2026-08-26_ia_2024_import.php --verify     驗證已匯入的內容
  *   php 2026-08-26_ia_2024_import.php --rollback   只刪除本工具建立的資料
  *
@@ -187,6 +188,27 @@ const NCS_2024 = [
     ],
 ];
 
+/**
+ * 稽核範本（起始主過程＋受稽單位＋陪檢員候選部門）
+ * 來源就是 2024 兩張稽核通知單上「稽核起始主過程 × 受稽單位」那一列——不是另外一份檔案。
+ * 第 1 張 5 個過程對 5 個單位剛好 1:1，直接建；第 2 張 5 個過程對 4 個單位不是 1:1，
+ * 只建對得起來的三個（客戶需求檢討/業務課、開發/技術課、生產/生產課），
+ * 其餘（訂單合約審查、客戶回饋、品保課）**不猜**，由 --tpl 列出來請使用者自己補。
+ * [起始主過程, 受稽單位, 2024 實際陪檢員（用來推陪檢員候選部門）]
+ */
+const TEMPLATES_2024 = [
+    ['教育訓練資料',   '管理課',   '葉卿雅'],
+    ['文件留存',       '文管中心', '葉卿雅'],
+    ['生產流程',       '生管組',   '何沐桐'],
+    ['倉儲出貨',       '倉管組',   '陳彦驊'],
+    ['採購流程',       '採購組',   '林國棟'],
+    ['客戶需求檢討',   '業務課',   '吳仁隆'],
+    ['開發',           '技術課',   '何沐桐'],
+    ['生產',           '生產課',   '林鴻銘'],
+];
+/** 紙本上有、但對不到唯一受稽單位的過程（--tpl 只列出來提醒，不建） */
+const TEMPLATES_UNMAPPED = ['訂單/合約審查', '客戶回饋'];
+
 /** 系統稽核紀錄表（2-GM-06-06，2024-12-16）：[序, 表單編號, 表單名稱, 受稽人, ok/ng, 備註] */
 const SYSTEM_CHECK_2024 = [
     'case_no'    => '1131216001',
@@ -222,7 +244,7 @@ const SYSTEM_CHECK_2024 = [
 $DB   = (new DBConnection())->getPDO();
 $args = array_slice($argv, 1);
 $MODE = 'dry';
-foreach (['qualify', 'import', 'verify', 'rollback', 'dry'] as $m) {
+foreach (['qualify', 'import', 'tpl', 'verify', 'rollback', 'dry'] as $m) {
     if (in_array('--' . $m, $args, true)) { $MODE = $m; break; }
 }
 
@@ -498,6 +520,68 @@ function do_import(PDO $db, bool $write): void
     }
 }
 
+/** 依 2024 稽核通知單自動建立稽核範本 */
+function do_tpl(PDO $db, bool $write): void
+{
+    require_once dirname(__DIR__, 3) . '/src/common/internal_audit_lib.php';
+    head('稽核範本（來源＝2024 稽核通知單的「起始主過程 × 受稽單位」）');
+
+    // 稽核員候選部門＝資格名單上稽核員實際所屬部門（沒有名單時不設限）
+    $auditorDepts = [];
+    foreach (QUALIFY_2024['auditor'] as $n) {
+        $p = person_asof($db, $n, '2024-12-16');
+        if ($p) $auditorDepts[(int)$p['dept_id']] = $p['dept_name'];
+    }
+    if (!$auditorDepts) { say('  ! 稽核員資格名單是空的，請先跑 --qualify'); return; }
+
+    $units = [];
+    foreach (ia_audit_units($db) as $u) $units[(int)$u['key']] = $u['name'];
+
+    $plan = [];
+    foreach (TEMPLATES_2024 as [$proc, $paperDept, $escortName]) {
+        $did = dept_id($db, $paperDept);
+        if ($did === null || !isset($units[$did])) {
+            say("  ! {$proc} / {$paperDept}：受稽單位對不到（可能被併進其他受稽單位群組），略過");
+            continue;
+        }
+        // 陪檢員候選部門＝受稽單位本身＋2024 實際陪檢員所屬部門（2024 有跨部門陪檢的情形）
+        $eDepts = [$did => $units[$did]];
+        $ep = person_asof($db, $escortName, '2024-12-16');
+        if ($ep) $eDepts[(int)$ep['dept_id']] = $ep['dept_name'];
+        $plan[] = ['proc'=>$proc, 'unit_id'=>$did, 'unit'=>$units[$did], 'edepts'=>$eDepts];
+        say(sprintf('  %-14s → 受稽單位 %-8s 陪檢員候選：%s', $proc, $units[$did], implode('、', $eDepts)));
+    }
+    say('  稽核員候選部門（所有範本共用）：' . implode('、', $auditorDepts));
+    if (TEMPLATES_UNMAPPED) {
+        say('  未建立（紙本過程數與單位數不是 1:1，無法確定對應，請自行補）：'
+            . implode('、', TEMPLATES_UNMAPPED));
+    }
+    if (!$write) { say('  （--dry：未寫入）'); return; }
+
+    $db->beginTransaction();
+    try {
+        $skip = 0; $made = 0;
+        foreach ($plan as $t) {
+            // 同一個「起始主過程＋受稽單位」已存在就不重建（本工具可重複執行）
+            $q = $db->prepare("SELECT tpl_id FROM ia_process_template WHERE process_name=? AND unit_dept_id=?");
+            $q->execute([$t['proc'], $t['unit_id']]);
+            if ($q->fetchColumn() !== false) { $skip++; continue; }
+            $db->prepare("INSERT INTO ia_process_template (process_name,unit_dept_id,note,sort_order,
+                              is_active,updated_at,updated_by)
+                          VALUES (?,?,?,(SELECT COALESCE(MAX(s.sort_order),0)+10
+                                         FROM (SELECT sort_order FROM ia_process_template) s),1,NOW(),?)")
+               ->execute([$t['proc'], $t['unit_id'], '依 2024 稽核通知單自動建立', IA2024_MARK]);
+            $tplId = (int)$db->lastInsertId();
+            $ins = $db->prepare("INSERT INTO ia_process_tpl_dept (tpl_id,kind,dept_id) VALUES (?,?,?)");
+            foreach (array_keys($auditorDepts) as $d) $ins->execute([$tplId, 'auditor', $d]);
+            foreach (array_keys($t['edepts'])    as $d) $ins->execute([$tplId, 'escort',  $d]);
+            $made++;
+        }
+        $db->commit();
+        say("  已建立 {$made} 個範本" . ($skip ? "（{$skip} 個已存在，略過）" : ''));
+    } catch (Throwable $e) { $db->rollBack(); say('  建立失敗：' . $e->getMessage()); }
+}
+
 function do_verify(PDO $db): void
 {
     head('驗證');
@@ -511,6 +595,7 @@ function do_verify(PDO $db): void
     say('  系統稽核紀錄表：' . $q("SELECT COUNT(*) FROM ia_check WHERE created_by_name=$m") . ' 張（應 1）');
     say('  紀錄表項目：'   . $q("SELECT COUNT(*) FROM ia_check_item i JOIN ia_check k ON k.check_id=i.check_id WHERE k.created_by_name=$m") . '（應 19）');
     say('  資格名單：'     . $q("SELECT COUNT(*) FROM ia_qualified_person WHERE updated_by=$m") . ' 筆（應 9）');
+    say('  稽核範本：'     . $q("SELECT COUNT(*) FROM ia_process_template WHERE updated_by=$m") . ' 個（應 8）');
 
     head('紙本上有、但目前 schema 存不下的（等「稽核員多位」改完再重跑本工具）');
     $any = false;
@@ -566,6 +651,10 @@ function do_rollback(PDO $db): void
             $db->prepare("DELETE FROM ia_plan_dept WHERE plan_id=?")->execute([$pid]);
         }
         $st = $db->prepare("DELETE FROM ia_plan WHERE created_by_name=?");  $st->execute([$m]); $n['年度計畫表'] = $st->rowCount();
+        $q = $db->prepare("SELECT tpl_id FROM ia_process_template WHERE updated_by=?"); $q->execute([$m]);
+        foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $tid)
+            $db->prepare("DELETE FROM ia_process_tpl_dept WHERE tpl_id=?")->execute([$tid]);
+        $st = $db->prepare("DELETE FROM ia_process_template WHERE updated_by=?"); $st->execute([$m]); $n['稽核範本'] = $st->rowCount();
         $st = $db->prepare("DELETE FROM ia_qualified_person WHERE updated_by=?"); $st->execute([$m]); $n['資格名單'] = $st->rowCount();
         $db->commit();
         foreach ($n as $k => $v) say("  已刪 {$k}：{$v} 筆");
@@ -578,11 +667,13 @@ say('2024（民國113）年度內部稽核紙本匯入工具　模式：--' . $M
 switch ($MODE) {
     case 'qualify':  do_qualify($DB, true);  break;
     case 'import':   do_import($DB, true);   break;
+    case 'tpl':      do_tpl($DB, true);      break;
     case 'verify':   do_verify($DB);         break;
     case 'rollback': do_rollback($DB);       break;
     default:
         do_qualify($DB, false);
         do_import($DB, false);
+        do_tpl($DB, false);
         say('');
         say('（以上為預覽。--qualify 還原資格名單、--import 匯入紀錄、--verify 驗證、--rollback 回滾）');
 }
