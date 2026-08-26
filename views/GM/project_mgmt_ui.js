@@ -211,9 +211,37 @@ $(document).on('click', '[data-print]', function () {
 });
 
 /* ══════════════════════════ 專案詳情 ══════════════════════════ */
+/**
+ * 開啟／重新載入專案明細。
+ *
+ * ※ 穩定度重點（使用者回報「規劃表填的東西有時候存不起來，有時候又可以」）：
+ *   這支被 18 個地方呼叫——加料號、移出訂單、同步 BOM、製程備註、開管理卡、知悉 BOM 變更…
+ *   全部都會把整個跳窗重繪一次。原本重繪是拿「伺服器剛回來的資料」重畫，
+ *   所以只要使用者在「執行規劃表」填到一半、中途去別的分頁做了任何一個動作，
+ *   填的東西就被無聲換掉；他再按儲存，存進去的其實是伺服器原本的內容＝看起來像「沒存到」。
+ *   （中途沒碰別的分頁時就正常，這正是「有時候好、有時候不好」的原因。）
+ *
+ *   現在的作法：
+ *     同一個專案重新載入 → 把畫面上還沒存的目標／任務接回去，並保留「未儲存」狀態與所在分頁；
+ *     切換到別的專案 → 先問清楚要不要放棄（不會默默丟掉）。
+ */
 function openProject(id) {
+    var keep = null, keepTab = '';
+    if (CUR && num(CUR.project.project_id) && (PLAN_DIRTY || CARD_DIRTY)) {
+        if (num(id) === num(CUR.project.project_id)) {
+            if (PLAN_DIRTY && planSyncToCur()) keep = { goals: CUR.goals, tasks: CUR.tasks };
+        } else {
+            if (!planLeaveOk(num(id) ? '切換到別的專案' : '離開')) return;
+            PLAN_DIRTY = false; CARD_DIRTY = false;
+        }
+    }
+    /* 重新載入後回到原本看的分頁，不要每次都被丟回「專案基本資料」 */
+    if (num(id) && CUR && num(id) === num(CUR.project.project_id)) {
+        keepTab = $('.pj-tab.active').data('pane') || '';
+    }
     if (!id) { CUR = null; renderDetail(newProjectShell()); openMask('prjMask'); return; }
     api('get', { project_id: id }).done(function (res) {
+        if (keep) { res.goals = keep.goals; res.tasks = keep.tasks; }
         CUR = res;
         /* 順路把缺件數帶回清單那一列（避免清單為了算檢核去掃全部專案） */
         var miss = 0;
@@ -221,6 +249,10 @@ function openProject(id) {
         $.each(LIST, function (i, r) { if (num(r.project_id) === id) r._miss = miss; });
         renderList();
         renderDetail(res);
+        if (keepTab && $('.pj-tab[data-pane="' + keepTab + '"]').length) {
+            $('.pj-tab[data-pane="' + keepTab + '"]').click();
+        }
+        if (keep) PLAN_DIRTY = true;   // 接回去的內容仍然是「還沒儲存」
         openMask('prjMask');
     });
 }
@@ -1177,6 +1209,15 @@ function savePlan(pid, cb) {
         });
     });
     if (bad) { alert(bad); if (cb) cb(false); return; }
+    /* 送出空的目標清單＝把伺服器上的目標與任務全部刪掉。正常刪除是這樣沒錯，
+       但萬一畫面因為某種原因沒畫出來就按到儲存，會整份被清空，所以一定要問一次。 */
+    if (!goals.length) {
+        var had = ((CUR && CUR.goals) || []).length;
+        if (had && !confirm('這樣會刪掉這個專案的全部 ' + had + ' 個目標與底下的任務。\n\n確定要清空執行規劃表嗎？')) {
+            if (cb) cb(false);
+            return;
+        }
+    }
     api('plan_save', { project_id: num(pid), goals: JSON.stringify(goals), tasks: JSON.stringify(tasks) }, 'POST')
         .done(function (res) { PLAN_DIRTY = false; if (cb) cb(true, res); })
         .fail(function () { if (cb) cb(false); });
