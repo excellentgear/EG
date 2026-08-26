@@ -213,7 +213,9 @@ case 'service_list': {
 }
 case 'service_save': {
     if (!$perms['canEdit']) jerr('無登錄權限', 403);
-    $row = $_POST; $row['equip_type'] = EQ;
+    // 前端送的是 machine_id，lib 收的是共用的 equip_ref_id——2026-08-26 之前這裡漏了這一行對應，
+    // 於是機台這邊的履歴表「儲存」一律回「設備與日期為必填」，一筆都存不進去（qc_tool 那支 API 有做對）。
+    $row = $_POST; $row['equip_type'] = EQ; $row['equip_ref_id'] = (int)($_POST['machine_id'] ?? 0);
     try { $saved = equip_service_log_save($db, $row, $uid, $uname); }
     catch (Throwable $e) { jerr($e->getMessage()); }
     jout(['row' => $saved]);
@@ -234,6 +236,29 @@ case 'service_approve': {
     equip_service_log_approve($db, $logId, $uid, $uname, $approvedDate, $isDeputy);
     jout([]);
 }
+/* ---- 履歴表「問題／解決方式」預存片語（常用語庫） ---- */
+case 'service_phrases': {
+    // 填表用只要啟用中的；管理跳窗要連停用的一起列（才改得回來）
+    $withOff = !empty($_REQUEST['include_inactive']) && $perms['canEdit'];
+    jout(['rows' => equip_service_phrase_list($db, EQ, null, $withOff), 'kinds' => equip_service_phrase_kinds()]);
+}
+case 'service_phrase_save': {
+    if (!$perms['canEdit']) jerr('無登錄權限', 403);
+    $row = $_POST; $row['equip_type'] = EQ;
+    try { $saved = equip_service_phrase_save($db, $row, $uid, $uname); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['row' => $saved]);
+}
+case 'service_phrase_delete': {
+    // 刪掉常用語不會動到已經填進履歴表的文字（那是各自存下來的字串），但仍限管理員，
+    // 比照本頁其他刪除動作；有登錄權限者可以改成「停用」達到同樣效果。
+    if (!$perms['canAdmin']) jerr('僅設備管理員可刪除常用語', 403);
+    $pid = (int)($_POST['phrase_id'] ?? 0);
+    if (!$pid) jerr('缺少常用語');
+    equip_service_phrase_delete($db, EQ, $pid);
+    jout([]);
+}
+
 case 'service_print_list': {
     // 履歴表批次列印用：依目前篩選出的機台清單各自帶出履歴表資料
     $ids = array_filter(array_map('intval', explode(',', (string)($_REQUEST['machine_ids'] ?? ''))));

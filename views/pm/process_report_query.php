@@ -30,6 +30,8 @@ $db = new DBConnection();
 $pdo = $db->getPDO();
 // AS 文件編號綁定：後端一律走共用庫，禁止各頁自寫綁定讀寫 SQL（ai-rules/16 第一之三節）
 require_once '../../src/common/asdoc_lib.php';
+// 機台顯示名稱（現場編號／機型／多欄位複合…）：唯一實作在共用庫，設定只存一份，禁止本頁自己拼欄位（鐵律4）
+require_once '../../src/common/machine_label_lib.php';
 define('PRQ_ASDOC_MODULE', 'process_report_query');
 // 料號建議清單上限：料號數以百計，全部塞進 datalist 只會拖慢且沒人捲得完；超過的仍可自行打字查（LIKE 模糊比對不受此限）
 define('PRQ_PART_FACET_LIMIT', 500);
@@ -126,6 +128,7 @@ function prq_time_range($start, $end) {
 
 $PRQ_FROM = "FROM pm_process_daily_report pdr
     LEFT JOIN machine_list m ON pdr.machine_id = m.machine_id
+    LEFT JOIN process_type mpt ON mpt.process_type_id = m.machine_type_id
     LEFT JOIN user u1 ON pdr.setup_user_id = u1.id
     LEFT JOIN user u2 ON pdr.production_user_id = u2.id
     LEFT JOIN process_no pn ON pdr.process_no = pn.ProcessNo
@@ -135,8 +138,11 @@ $PRQ_FROM = "FROM pm_process_daily_report pdr
 $PRQ_COLS = "pdr.report_id, pdr.report_date, pdr.report_source, pdr.remark, pdr.produced_qty, pdr.is_finished,
     pdr.process_face, pdr.source_reason,
     pdr.setup_start_time, pdr.setup_end_time, pdr.production_start_time, pdr.production_end_time,
-    m.machine, u1.user_cname AS setup_user, u2.user_cname AS prod_user, pn.ProcessName,
+    " . eg_machine_label_sql('m', 'mpt') . ",
+    u1.user_cname AS setup_user, u2.user_cname AS prod_user, pn.ProcessName,
     bi.bom, b.d_id, b.Client_Name";
+
+$PRQ_MLBL = eg_machine_label_cfg($pdo);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
@@ -158,7 +164,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 fputcsv($out, [
                     $r['report_date'],
                     $r['ProcessName'],
-                    $r['machine'],
+                    eg_machine_label($r, $PRQ_MLBL),
                     $isTemp ? '臨時加工' : $r['bom'],
                     $isTemp ? '' : $r['d_id'],
                     $isTemp ? ($r['source_reason'] ?: '') : $r['Client_Name'],
@@ -196,7 +202,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sql = "SELECT $PRQ_COLS $PRQ_FROM $whereSql ORDER BY pdr.report_date DESC, pdr.report_id DESC LIMIT $page_size OFFSET $offset";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $rows = eg_machine_label_apply($stmt->fetchAll(PDO::FETCH_ASSOC), $PRQ_MLBL);
 
             echo json_encode(['success' => true, 'total' => $total, 'page' => $page, 'page_size' => $page_size, 'rows' => $rows]);
         } elseif ($action === 'get_print') {
@@ -204,7 +210,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sql = "SELECT $PRQ_COLS $PRQ_FROM $whereSql ORDER BY pdr.report_date DESC, pdr.report_id DESC";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $rows = eg_machine_label_apply($stmt->fetchAll(PDO::FETCH_ASSOC), $PRQ_MLBL);
 
             $company = '';
             $cr = $pdo->query("SELECT customer_full FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
@@ -226,9 +232,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $processes = $stmtP->fetchAll(PDO::FETCH_ASSOC);
 
             list($whereM, $paramsM) = prq_build_filter($_POST, ['machine_id']);
-            $stmtM = $pdo->prepare("SELECT pdr.machine_id, m.machine, COUNT(*) cnt $PRQ_FROM $whereM GROUP BY pdr.machine_id, m.machine ORDER BY m.position");
+            // 機台下拉的文字＝管理員設定的顯示格式（可能是現場編號或多欄位複合），
+            // 所以要把所有可當顯示欄位的欄位一起 GROUP BY 帶出來，再由共用庫組字串
+            $mlblCols = eg_machine_label_sql('m', 'mpt');
+            $mlblGroup = eg_machine_label_group_sql('m', 'mpt');
+            $stmtM = $pdo->prepare("SELECT pdr.machine_id, $mlblCols, COUNT(*) cnt $PRQ_FROM $whereM
+                GROUP BY pdr.machine_id, $mlblGroup, m.position ORDER BY m.position");
             $stmtM->execute($paramsM);
-            $machines = $stmtM->fetchAll(PDO::FETCH_ASSOC);
+            $machines = eg_machine_label_apply($stmtM->fetchAll(PDO::FETCH_ASSOC), $PRQ_MLBL);
 
             // 料號候選：只列目前其餘條件下真的有報工紀錄的料號（給前端 datalist 當建議清單用）
             list($whereD, $paramsD) = prq_build_filter($_POST, ['d_id']);
@@ -246,6 +257,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             echo json_encode(['success' => true, 'processes' => $processes, 'machines' => $machines,
                 'parts' => $parts, 'people' => $people]);
+        } elseif ($action === 'machine_fmt_meta') {
+            // 顯示格式設定：欄位白名單、目前設定、以及一筆「填得最完整」的機台當即時預覽樣本
+            $fields = [];
+            foreach (eg_machine_label_fields() as $k => $def) $fields[] = ['key' => $k, 'label' => $def[0]];
+            $sampleSql = "SELECT " . eg_machine_label_sql('m', 'mpt') . "
+                          FROM machine_list m LEFT JOIN process_type mpt ON mpt.process_type_id = m.machine_type_id
+                          WHERE (m.state IS NULL OR m.state<>1)
+                          ORDER BY (COALESCE(m.field_no,'')<>'') + (COALESCE(m.asset_no,'')<>'')
+                                 + (COALESCE(m.machine_model,'')<>'') + (COALESCE(m.manufacturer,'')<>'')
+                                 + (COALESCE(m.spec,'')<>'') DESC, m.position LIMIT 1";
+            $sample = $pdo->query($sampleSql)->fetch(PDO::FETCH_ASSOC) ?: null;
+            echo json_encode(['success' => true, 'fields' => $fields, 'cfg' => $PRQ_MLBL,
+                'sample' => $sample, 'can_edit' => $prq_can_bind]);
+        } elseif ($action === 'machine_fmt_save') {
+            // 只擋前端＝等於沒擋：後端一律再驗一次權限與欄位白名單（鐵律8）
+            if (!$prq_can_bind) {
+                echo json_encode(['success' => false, 'message' => '需要修改(U)或全權(A)權限才能變更機台顯示設定']);
+            } else {
+                $flds = json_decode((string)($_POST['fields'] ?? '[]'), true);
+                $cfg = eg_machine_label_cfg_save($pdo, ['fields' => is_array($flds) ? $flds : [], 'sep' => (string)($_POST['sep'] ?? '_')]);
+                echo json_encode(['success' => true, 'cfg' => $cfg]);
+            }
         } elseif ($action === 'asdoc_meta') {
             // 給 eg_asdoc_picker.js 用：可綁定文件清單＋目前綁定；can_bind 決定前端要不要顯示「變更綁定」鈕
             echo json_encode(['success' => true, 'docs' => eg_asdoc_list($pdo),
@@ -388,6 +421,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         title="列印時：表頭顯示這份 AS 文件的表單名稱、頁尾右下角印文件編號（四階文件自動附加版次）。由綁定推導，不可手填。"
                         style="width:270px;background:#F3ECDF;color:#8a6d45;cursor:default;">
                     <button id="btnAsDocBind" style="display:none;"><i class="fa fa-link"></i> 變更綁定</button>
+                    <button id="btnMachineFmt" title="設定「機台」欄要顯示機台主檔的哪些欄位（可多欄位複合，例：現場編號_機台名稱）"><i class="fa fa-sliders"></i> 機台顯示設定</button>
                 </span>
             </div>
         </div>
@@ -418,6 +452,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 </div>
 </div>
 
+<!-- ══ 機台顯示設定 Modal ══ -->
+<div class="prq-mask" id="mfMask"><div class="prq-modal">
+    <div class="m-head"><span><i class="fa fa-sliders"></i> 機台顯示設定</span><span class="m-close" onclick="document.getElementById('mfMask').style.display='none'">✕</span></div>
+    <div class="m-body">
+        <p style="font-size:13px;color:#5b3a1e;margin:0 0 10px;">
+            設定本頁「機台」欄（含篩選下拉、列印版、匯出CSV）要顯示<b>機台設備一覽表</b>裡的哪些欄位。
+            勾選多個欄位就會用下方的分隔字元串起來，例如勾「現場編號」＋「機台名稱」＝<code>EG-049_CNC內外徑複合磨床</code>。
+            該機台若某個欄位是空的會自動略過，全部都空時退回顯示機台名稱。<b>設定是全站共用的一份</b>，不分使用者。
+        </p>
+        <div style="font-size:13px;color:#5b3a1e;margin-bottom:4px;">顯示欄位與順序（勾選＝顯示，用 ↑↓ 調整先後）</div>
+        <div id="mfList" style="border:1px solid #E8D5B5;border-radius:6px;background:#FDF8EF;padding:4px 8px;"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+            <label style="font-size:13px;color:#5b3a1e;margin:0;">分隔字元</label>
+            <input type="text" id="mfSep" maxlength="5" style="width:70px;height:28px;border:1px solid #D8BE93;border-radius:4px;padding:0 8px;text-align:center;">
+            <span style="font-size:12px;color:#8a6d45;">最多 5 個字元（可用 _ 、-、空白…）</span>
+        </div>
+        <div style="margin-top:10px;padding:8px 10px;border:1px dashed #D8BE93;border-radius:6px;background:#fff;">
+            <span style="font-size:12px;color:#8a6d45;">即時預覽（以現有機台資料為例）：</span>
+            <b id="mfPreview" style="color:#8A5A2B;">—</b>
+        </div>
+        <div id="mfErr" style="color:#DD5138;font-size:12px;min-height:16px;margin-top:6px;"></div>
+    </div>
+    <div class="m-foot">
+        <button id="mfSaveBtn" onclick="saveMachineFmt()"><i class="fa fa-save"></i> 儲存</button>
+    </div>
+</div></div>
+
 <div class="prq-mask" id="helpUseMask"><div class="prq-modal">
     <div class="m-head"><span><i class="fa fa-question-circle"></i> 報工紀錄查詢列印 使用說明</span><span class="m-close" onclick="document.getElementById('helpUseMask').style.display='none'">✕</span></div>
     <div class="m-body help-doc">
@@ -432,6 +493,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <li>列表分頁顯示（避免一次載入全部拖慢速度），可調整每頁筆數。</li>
             <li>「列印」「匯出CSV」皆依目前篩選條件抓「全部」符合筆數（不受分頁限制）。</li>
             <li>列印前可先確認右側「列印AS文件」顯示的綁定文件；具修改權限者按「變更綁定」即可用文件編號或名稱關鍵字搜尋、改綁其他 AS 文件。</li>
+            <li><b>機台顯示設定</b>（工具列右下）：可決定「機台」欄要顯示<b>機台設備一覽表</b>裡的哪些欄位——機台名稱／現場編號／財產編號／機型／機台種類／製造商／規格，
+                可勾多個並用 ↑↓ 排先後、自訂分隔字元，跳窗內有即時預覽。例如勾「現場編號」＋「機台名稱」就會顯示成 <code>EG-049_CNC內外徑複合磨床</code>。</li>
         </ul>
         <h4>重要行為/常見疑問</h4>
         <div class="tip">若篩選結果筆數較多（超過3000筆），列印/匯出前會先跳出確認提示，避免不小心產生過大的列印工作。</div>
@@ -441,11 +504,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <li><b>列印版的 AS 文件編號</b>：綁定後，列印時大標題下方那一行會自動改印該 AS 文件的<b>表單名稱</b>，頁尾<b>右下角每一頁</b>都會印出<b>文件編號</b>（四階文件會自動附加版次，例 2-PM-01-01A）。未綁定時表頭退回顯示「報工紀錄查詢列印」、右下角不印編號。</li>
             <li>本頁列印屬「多筆彙總的清單型列印」，印的是<b>當下現況</b>，所以文件版次一律取目前最新版，不會依報工日期回推舊版次。</li>
             <li>編號與表單名稱都直接取自 AS 文件管理主檔，日後該文件改名或改版，本頁列印會自動跟著變，不需回來改設定。</li>
+            <li>機台顯示設定是<b>全站共用的一份</b>（不是每個人各自一份），改完所有人看到的都一樣；列表、機台篩選下拉、列印版、匯出CSV 四處會同時套用。
+                若某台機器的設定欄位是空的會自動略過該欄，全部都空時退回顯示機台名稱，不會出現空白或一串分隔符號。</li>
+            <li>機台的現場編號、財產編號等欄位本身在<b>「機台設備一覽表」</b>維護，本頁只負責顯示，不會也不能在這裡修改機台資料。</li>
         </ul>
         <h4>設定入口</h4>
-        <p>報工資料無需另外設定，即時取自報工系統。列印用的 AS 文件編號綁定在本頁工具列右側「列印AS文件 → 變更綁定」；文件本身（名稱、編號、版次）於「AS 文件管理」維護。</p>
+        <p>報工資料無需另外設定，即時取自報工系統。列印用的 AS 文件編號綁定在本頁工具列右側「列印AS文件 → 變更綁定」；文件本身（名稱、編號、版次）於「AS 文件管理」維護。
+           機台顯示格式在本頁工具列右側「機台顯示設定」；機台主檔欄位（現場編號、財產編號、機型、製造商…）於「機台設備一覽表」維護。</p>
         <h4>權限角色</h4>
-        <p>凡對「加工排程看板」（測試功能）具有任一權限（檢視/新增/修改/刪除）者即可使用本頁查詢與列印。<b>變更 AS 文件綁定</b>則另需<b>修改(U)或全權(A)</b>權限，其餘人只看得到目前綁定內容、不能更動。</p>
+        <p>凡對「加工排程看板」（測試功能）具有任一權限（檢視/新增/修改/刪除）者即可使用本頁查詢與列印。<b>變更 AS 文件綁定</b>與<b>機台顯示設定</b>則另需<b>修改(U)或全權(A)</b>權限，其餘人只看得到目前設定內容、不能更動（後端也會再擋一次，不是只擋畫面）。</p>
     </div>
     <div class="m-foot"><button onclick="document.getElementById('helpUseMask').style.display='none'">我知道了</button></div>
 </div></div>
@@ -508,7 +575,7 @@ function rowToTr(r){
     return '<tr>'
         + '<td>' + esc(egFmtDate(r.report_date)) + '</td>'
         + '<td>' + esc(r.ProcessName) + '</td>'
-        + '<td>' + esc(r.machine) + '</td>'
+        + '<td>' + esc(r.machine_label || r.machine) + '</td>'
         + '<td class="t-left">' + bomTxt + '</td>'
         + '<td class="t-left">' + didTxt + '</td>'
         + '<td>' + custTxt + '</td>'
@@ -588,7 +655,7 @@ function renderMachineOptions(list){
     list.forEach(function(m){
         var id = String(m.machine_id);
         if (id === cur) stillValid = true;
-        html += '<option value="' + id + '">' + esc(m.machine) + '（' + m.cnt + '）</option>';
+        html += '<option value="' + id + '">' + esc(m.machine_label || m.machine) + '（' + m.cnt + '）</option>';
     });
     $sel[0].innerHTML = html;
     $sel.val(stillValid ? cur : '');
@@ -666,7 +733,7 @@ $('#btnPrint').on('click', function(){
             var bomTxt = isTemp ? '臨時加工' : esc(r.bom);
             var didTxt = isTemp ? '' : esc(r.d_id);
             var custTxt = isTemp ? esc(r.source_reason||'') : esc(r.Client_Name);
-            body += '<tr><td>'+esc(egFmtDate(r.report_date))+'</td><td>'+esc(r.ProcessName)+'</td><td>'+esc(r.machine)+'</td>'
+            body += '<tr><td>'+esc(egFmtDate(r.report_date))+'</td><td>'+esc(r.ProcessName)+'</td><td>'+esc(r.machine_label||r.machine)+'</td>'
                   + '<td class="tl">'+bomTxt+'</td><td class="tl">'+didTxt+'</td><td>'+custTxt+'</td>'
                   + '<td>'+esc(r.setup_user)+'</td><td>'+esc(timeRange(r.setup_start_time, r.setup_end_time))+'</td>'
                   + '<td>'+esc(r.prod_user)+'</td><td>'+esc(timeRange(r.production_start_time, r.production_end_time))+'</td>'
@@ -743,6 +810,82 @@ $('#btnAsDocBind').on('click', function(){
         }
     });
 });
+
+/* ── 機台顯示設定（管理員設定「機台」欄要顯示機台主檔的哪些欄位、可多欄位複合） ── */
+var MF_ORDER = [], MF_ON = {}, MF_LABEL = {}, MF_SAMPLE = null, MF_CANEDIT = false;
+
+$('#btnMachineFmt').on('click', function(){
+    $.post('', {action: 'machine_fmt_meta'}, function(res){
+        if (!res || !res.success) { alert((res && res.message) || '讀取設定失敗'); return; }
+        MF_CANEDIT = !!res.can_edit;
+        MF_SAMPLE = res.sample;
+        MF_LABEL = {};
+        var all = (res.fields || []).map(function(f){ MF_LABEL[f.key] = f.label; return f.key; });
+        var on = (res.cfg && res.cfg.fields) || ['machine'];
+        MF_ON = {};
+        on.forEach(function(k){ MF_ON[k] = true; });
+        // 已選的排前面（保持設定的先後），其餘依白名單原順序接在後面
+        MF_ORDER = on.slice().concat(all.filter(function(k){ return on.indexOf(k) < 0; }));
+        $('#mfSep').val((res.cfg && res.cfg.sep) || '_');
+        $('#mfErr').text(MF_CANEDIT ? '' : '你沒有修改權限，以下設定僅供檢視。');
+        $('#mfSaveBtn').prop('disabled', !MF_CANEDIT).css('opacity', MF_CANEDIT ? 1 : .5);
+        $('#mfSep').prop('disabled', !MF_CANEDIT);
+        renderMachineFmt();
+        document.getElementById('mfMask').style.display = 'block';
+    }, 'json');
+});
+
+function renderMachineFmt(){
+    var h = '';
+    MF_ORDER.forEach(function(k, i){
+        h += '<div style="display:flex;align-items:center;gap:8px;padding:5px 2px;border-bottom:1px solid #F3E9D6;">'
+           + '<label style="margin:0;display:flex;align-items:center;gap:6px;font-size:13px;color:#5b3a1e;flex:1;cursor:pointer;">'
+           + '<input type="checkbox" class="mf-ck" data-k="' + k + '"' + (MF_ON[k] ? ' checked' : '')
+           + (MF_CANEDIT ? '' : ' disabled') + '> ' + esc(MF_LABEL[k] || k) + '</label>'
+           + '<button type="button" class="mf-up" data-i="' + i + '"' + ((i === 0 || !MF_CANEDIT) ? ' disabled' : '')
+           + ' style="width:26px;height:24px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;">↑</button>'
+           + '<button type="button" class="mf-dn" data-i="' + i + '"' + ((i === MF_ORDER.length - 1 || !MF_CANEDIT) ? ' disabled' : '')
+           + ' style="width:26px;height:24px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;">↓</button>'
+           + '</div>';
+    });
+    $('#mfList').html(h);
+    updateMachineFmtPreview();
+}
+function mfSelected(){ return MF_ORDER.filter(function(k){ return MF_ON[k]; }); }
+function updateMachineFmtPreview(){
+    var sep = $('#mfSep').val() || '_';
+    var parts = [];
+    mfSelected().forEach(function(k){
+        var v = MF_SAMPLE ? (MF_SAMPLE[k] || '') : '';
+        if (String(v).trim() !== '') parts.push(String(v).trim());
+    });
+    var txt = parts.length ? parts.join(sep) : ((MF_SAMPLE && MF_SAMPLE.machine) || '（沒有機台資料可預覽）');
+    $('#mfPreview').text(txt);
+}
+$(document).on('change', '.mf-ck', function(){
+    MF_ON[$(this).data('k')] = this.checked;
+    $('#mfErr').text(mfSelected().length ? '' : '至少要勾選一個欄位，否則機台欄會沒有東西可顯示。');
+    updateMachineFmtPreview();
+});
+$(document).on('click', '.mf-up, .mf-dn', function(){
+    var i = parseInt($(this).data('i'), 10);
+    var j = $(this).hasClass('mf-up') ? i - 1 : i + 1;
+    if (j < 0 || j >= MF_ORDER.length) return;
+    var t = MF_ORDER[i]; MF_ORDER[i] = MF_ORDER[j]; MF_ORDER[j] = t;
+    renderMachineFmt();
+});
+$(document).on('input', '#mfSep', updateMachineFmtPreview);
+
+function saveMachineFmt(){
+    var sel = mfSelected();
+    if (!sel.length){ $('#mfErr').text('至少要勾選一個欄位，否則機台欄會沒有東西可顯示。'); return; }
+    $.post('', {action: 'machine_fmt_save', fields: JSON.stringify(sel), sep: $('#mfSep').val() || '_'}, function(res){
+        if (!res || !res.success){ $('#mfErr').text((res && res.message) || '儲存失敗'); return; }
+        document.getElementById('mfMask').style.display = 'none';
+        // 設定會影響清單、機台下拉、列印與CSV，故存完直接重查一次讓畫面立刻一致
+        applyFilters();
+    }, 'json');
+}
 
 $('#btnPageHelp').on('click', function(){ $('#helpUseMask').css('display','block'); });
 

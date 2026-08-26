@@ -67,6 +67,31 @@ function equip_list_ensure_schema(PDO $db): void {
         KEY idx_equip (equip_type, equip_ref_id, service_date)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='機台/檢驗設備履歴表(故障維修紀錄)'");
 
+    // 2026-08-26 追加：廠商／執行者改為可從主檔挑選（廠商＝maker_list、廠內人員＝user），
+    // 但顯示用的名稱仍存在原本的 vendor_name/executor_name——歷史維修紀錄要留下「當時寫的是哪一家」，
+    // 主檔事後改名或停用都不該讓舊紀錄變空白；id 欄位只是額外的可追溯線索，不是顯示來源。
+    foreach ([
+        "ALTER TABLE equip_service_log ADD COLUMN vendor_id VARCHAR(11) NULL COMMENT '對應 maker_list.maker_id_no，自由輸入時為 NULL'",
+        "ALTER TABLE equip_service_log ADD COLUMN executor_kind VARCHAR(10) NULL COMMENT 'user=廠內人員 / vendor=廠商 / NULL=自由輸入'",
+        "ALTER TABLE equip_service_log ADD COLUMN executor_vendor_id VARCHAR(11) NULL COMMENT '執行者是廠商時對應 maker_list.maker_id_no'",
+    ] as $ddl) { try { $db->exec($ddl); } catch (Throwable $e) {} }
+
+    // 預存片語：問題／解決方式在現場其實高度重複（「主軸異音」「更換皮帶」…），每次重打既慢又寫法不一致，
+    // 統計時同一件事會被當成好幾種。故做成可新增/修改/刪除的常用語庫，填表時直接帶出。
+    $db->exec("CREATE TABLE IF NOT EXISTS equip_service_phrase (
+        phrase_id INT AUTO_INCREMENT PRIMARY KEY,
+        equip_type VARCHAR(10) NOT NULL COMMENT 'machine / qc_tool',
+        kind VARCHAR(10) NOT NULL COMMENT 'problem=問題 / solution=解決方式',
+        content VARCHAR(500) NOT NULL,
+        sort_order INT NOT NULL DEFAULT 0,
+        is_active TINYINT NOT NULL DEFAULT 1,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        updated_at TIMESTAMP NULL, updated_by INT NULL, updated_by_name VARCHAR(50) NULL,
+        UNIQUE KEY uk_phrase (equip_type, kind, content(190)),
+        KEY idx_kind (equip_type, kind, is_active, sort_order)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='機台/檢驗設備履歴表 問題與解決方式預存片語'");
+
     $db->exec("CREATE TABLE IF NOT EXISTS equip_list_plan_lock (
         equip_type VARCHAR(10) NOT NULL,
         year INT NOT NULL,
@@ -279,21 +304,57 @@ function equip_service_log_save(PDO $db, array $row, int $byUid, string $byName)
     if (!$refId || !$serviceDate) throw new RuntimeException('設備與日期為必填');
     $logId = (int)($row['log_id'] ?? 0);
     $vendor = trim((string)($row['vendor_name'] ?? ''));
+    $vendorId = trim((string)($row['vendor_id'] ?? ''));
     $problem = trim((string)($row['problem_desc'] ?? ''));
     $solution = trim((string)($row['solution_desc'] ?? ''));
-    $executor = trim((string)($row['executor_name'] ?? ''));
-    $executorUid = !empty($row['executor_user_id']) ? (int)$row['executor_user_id'] : null;
     $note = trim((string)($row['note'] ?? ''));
+    // 執行者三種來源：廠內人員(user)／廠商(vendor)／自由輸入。後端一律依 kind 自行重算顯示名稱與 id，
+    // 不採信前端送來的組合（鐵律8：前端擋一次、後端同規則再擋一次），否則會留下「掛著某人的 user_id、
+    // 名字卻是別人」這種事後查不出來的紀錄。
+    $execKind = trim((string)($row['executor_kind'] ?? ''));
+    if (!in_array($execKind, ['user', 'vendor'], true)) $execKind = '';
+    $executor = trim((string)($row['executor_name'] ?? ''));
+    $executorUid = null;
+    $executorVendorId = null;
+    if ($execKind === 'user') {
+        $execUid = (int)($row['executor_user_id'] ?? 0);
+        if (!$execUid) throw new RuntimeException('執行者選了「廠內人員」，請從名單挑選人員');
+        $st = $db->prepare("SELECT user_cname FROM user WHERE id=? LIMIT 1");
+        $st->execute([$execUid]);
+        $nm = $st->fetchColumn();
+        if ($nm === false) throw new RuntimeException('找不到該人員，請重新挑選');
+        $executorUid = $execUid;
+        $executor = (string)$nm;
+    } elseif ($execKind === 'vendor') {
+        $execVid = trim((string)($row['executor_vendor_id'] ?? ''));
+        if ($execVid !== '') {
+            $st = $db->prepare("SELECT maker_id_no FROM maker_list WHERE maker_id_no=? LIMIT 1");
+            $st->execute([$execVid]);
+            if ($st->fetchColumn() === false) throw new RuntimeException('找不到該廠商，請重新挑選');
+            $executorVendorId = $execVid;
+        }
+        if ($executor === '') throw new RuntimeException('執行者選了「廠商」，請填廠商名稱');
+    }
+    // 廠商代號同理：對不上主檔就只留文字，不留一個查不到的假 id
+    if ($vendorId !== '') {
+        $st = $db->prepare("SELECT maker_id_no FROM maker_list WHERE maker_id_no=? LIMIT 1");
+        $st->execute([$vendorId]);
+        if ($st->fetchColumn() === false) $vendorId = '';
+    }
+    if ($vendor === '') $vendorId = '';
     if ($logId) {
-        $db->prepare("UPDATE equip_service_log SET service_date=?, vendor_name=?, problem_desc=?, solution_desc=?,
-                        executor_name=?, executor_user_id=?, note=?, updated_at=NOW(), updated_by=?, updated_by_name=?
+        $db->prepare("UPDATE equip_service_log SET service_date=?, vendor_name=?, vendor_id=?, problem_desc=?, solution_desc=?,
+                        executor_name=?, executor_user_id=?, executor_kind=?, executor_vendor_id=?, note=?,
+                        updated_at=NOW(), updated_by=?, updated_by_name=?
                       WHERE log_id=?")
-           ->execute([$serviceDate, $vendor, $problem, $solution, $executor, $executorUid, $note, $byUid, $byName, $logId]);
+           ->execute([$serviceDate, $vendor, $vendorId ?: null, $problem, $solution, $executor, $executorUid,
+                      $execKind ?: null, $executorVendorId, $note, $byUid, $byName, $logId]);
     } else {
-        $db->prepare("INSERT INTO equip_service_log (equip_type, equip_ref_id, service_date, vendor_name, problem_desc, solution_desc,
-                        executor_name, executor_user_id, note, created_by, created_by_name)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-           ->execute([$equipType, $refId, $serviceDate, $vendor, $problem, $solution, $executor, $executorUid, $note, $byUid, $byName]);
+        $db->prepare("INSERT INTO equip_service_log (equip_type, equip_ref_id, service_date, vendor_name, vendor_id, problem_desc, solution_desc,
+                        executor_name, executor_user_id, executor_kind, executor_vendor_id, note, created_by, created_by_name)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$equipType, $refId, $serviceDate, $vendor, $vendorId ?: null, $problem, $solution, $executor,
+                      $executorUid, $execKind ?: null, $executorVendorId, $note, $byUid, $byName]);
         $logId = (int)$db->lastInsertId();
     }
     $st = $db->prepare("SELECT * FROM equip_service_log WHERE log_id=?");
@@ -309,6 +370,71 @@ function equip_service_log_delete(PDO $db, int $logId): void {
 function equip_service_log_approve(PDO $db, int $logId, int $uid, string $name, string $approvedDate, bool $isDeputy): void {
     $db->prepare("UPDATE equip_service_log SET approved_by_name=?, approved_by_uid=?, approved_at=NOW(), approved_date=?, approved_is_deputy=? WHERE log_id=?")
        ->execute([$name, $uid, $approvedDate, $isDeputy ? 1 : 0, $logId]);
+}
+
+/* ============================================================
+ * 履歴表「問題／解決方式」預存片語（常用語庫）
+ * ============================================================ */
+/** 兩種片語類別；要加類別請改這裡一處，禁止在別處再寫一份對照表（鐵律4） */
+function equip_service_phrase_kinds(): array {
+    return ['problem' => '問題', 'solution' => '解決方式'];
+}
+
+function equip_service_phrase_list(PDO $db, string $equipType, ?string $kind = null, bool $includeInactive = false): array {
+    $sql = "SELECT * FROM equip_service_phrase WHERE equip_type=?";
+    $params = [$equipType];
+    if ($kind !== null && $kind !== '') {
+        if (!array_key_exists($kind, equip_service_phrase_kinds())) throw new RuntimeException('片語類別不正確');
+        $sql .= " AND kind=?"; $params[] = $kind;
+    }
+    if (!$includeInactive) $sql .= " AND is_active=1";
+    $sql .= " ORDER BY kind, sort_order, phrase_id";
+    $st = $db->prepare($sql);
+    $st->execute($params);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as &$r) {
+        $r['phrase_id'] = (int)$r['phrase_id'];
+        $r['is_active'] = (int)$r['is_active'];
+        $r['sort_order'] = (int)$r['sort_order'];
+    }
+    unset($r);
+    return $rows;
+}
+
+function equip_service_phrase_save(PDO $db, array $row, int $byUid, string $byName): array {
+    $equipType = (string)($row['equip_type'] ?? '');
+    $kind = (string)($row['kind'] ?? '');
+    if (!array_key_exists($kind, equip_service_phrase_kinds())) throw new RuntimeException('片語類別不正確');
+    $content = trim((string)($row['content'] ?? ''));
+    if ($content === '') throw new RuntimeException('內容不可空白');
+    if (mb_strlen($content) > 500) throw new RuntimeException('內容不可超過 500 字（目前 ' . mb_strlen($content) . ' 字）');
+    $sort = (int)($row['sort_order'] ?? 0);
+    $active = array_key_exists('is_active', $row) ? (!empty($row['is_active']) ? 1 : 0) : 1;
+    $phraseId = (int)($row['phrase_id'] ?? 0);
+
+    // 同一類別內不可重複：重複的常用語會讓下拉出現兩筆一模一樣的選項，使用者只會覺得系統壞了
+    $st = $db->prepare("SELECT phrase_id FROM equip_service_phrase WHERE equip_type=? AND kind=? AND content=? LIMIT 1");
+    $st->execute([$equipType, $kind, $content]);
+    $dup = $st->fetchColumn();
+    if ($dup !== false && (int)$dup !== $phraseId) throw new RuntimeException('這句常用語已經存在，不必重複新增');
+
+    if ($phraseId) {
+        $db->prepare("UPDATE equip_service_phrase SET kind=?, content=?, sort_order=?, is_active=?,
+                        updated_at=NOW(), updated_by=?, updated_by_name=? WHERE phrase_id=? AND equip_type=?")
+           ->execute([$kind, $content, $sort, $active, $byUid, $byName, $phraseId, $equipType]);
+    } else {
+        $db->prepare("INSERT INTO equip_service_phrase (equip_type, kind, content, sort_order, is_active, created_by, created_by_name)
+                      VALUES (?,?,?,?,?,?,?)")
+           ->execute([$equipType, $kind, $content, $sort, $active, $byUid, $byName]);
+        $phraseId = (int)$db->lastInsertId();
+    }
+    $st = $db->prepare("SELECT * FROM equip_service_phrase WHERE phrase_id=?");
+    $st->execute([$phraseId]);
+    return $st->fetch(PDO::FETCH_ASSOC);
+}
+
+function equip_service_phrase_delete(PDO $db, string $equipType, int $phraseId): void {
+    $db->prepare("DELETE FROM equip_service_phrase WHERE phrase_id=? AND equip_type=?")->execute([$phraseId, $equipType]);
 }
 
 /* ============================================================

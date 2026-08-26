@@ -88,6 +88,16 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         .eq-modal .m-foot .b-cancel { background:#fff; color:#5b3a1e; border-color:#D8BE93; margin-right:6px; }
         .eq-modal .m-foot .b-danger { background:#fff; color:#DD5138; border-color:#DD5138; float:left; }
         .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+        .eq-mask.top { z-index:1060; }   /* 常用語管理疊在履歴表跳窗之上 */
+        .svc-ph-tools { float:right; font-weight:normal; display:flex; align-items:center; gap:6px; }
+        .eq-modal .m-body select.svc-ph-sel { width:auto !important; max-width:230px; height:24px; padding:1px 4px !important;
+            font-size:12px; color:#8a6d45; }
+        .svc-kind { display:flex; flex-wrap:wrap; gap:14px; margin:3px 0 5px; }
+        .eq-modal .m-body .svc-kind label { display:inline-flex !important; align-items:center; gap:4px; margin:0 !important; }
+        .svc-hint { font-size:12px; color:#8a6d45; min-height:15px; margin-top:2px; }
+        .svc-err { font-size:12px; color:#DD5138; min-height:15px; margin-top:2px; }
+        .eq-modal .m-body input.err, .eq-modal .m-body select.err { border-color:#DD5138; background:#FFF6F3; }
+        .ph-off { color:#b0a390; }
         table.hist { width:100%; border-collapse:collapse; font-size:12px; }
         table.hist th, table.hist td { border:1px solid #EADFC8; padding:4px 6px; text-align:center; }
         table.hist thead th { background:#F7E0BD; color:#5b3a1e; }
@@ -223,12 +233,39 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
             <input type="hidden" id="svc-log-id">
             <div class="grid2">
                 <div><label>日期 <span class="text-danger">*</span></label><input type="date" id="svc-date"></div>
-                <div><label>廠商</label><input type="text" id="svc-vendor"></div>
+                <div>
+                    <label>廠商</label>
+                    <input type="text" id="svc-vendor" placeholder="輸入廠商代號、簡稱或全名的部分字元，下方會列出可選清單">
+                    <input type="hidden" id="svc-vendor-id">
+                    <div class="svc-hint" id="svc-vendor-hint"></div>
+                </div>
             </div>
-            <label>問題</label><input type="text" id="svc-problem">
-            <label>解決方式</label><input type="text" id="svc-solution">
+            <label>問題
+                <span class="svc-ph-tools">
+                    <select id="svc-ph-problem" class="svc-ph-sel" data-eg-skip="1"></select>
+                    <span class="eq-op" onclick="openPhraseModal('problem')"><i class="fa fa-cog"></i> 常用語</span>
+                </span></label>
+            <input type="text" id="svc-problem">
+            <label>解決方式
+                <span class="svc-ph-tools">
+                    <select id="svc-ph-solution" class="svc-ph-sel" data-eg-skip="1"></select>
+                    <span class="eq-op" onclick="openPhraseModal('solution')"><i class="fa fa-cog"></i> 常用語</span>
+                </span></label>
+            <input type="text" id="svc-solution">
             <div class="grid2">
-                <div><label>執行者</label><input type="text" id="svc-executor"></div>
+                <div>
+                    <label>執行者</label>
+                    <div class="svc-kind">
+                        <label><input type="radio" name="svcExecKind" value="user" checked> 廠內人員</label>
+                        <label><input type="radio" name="svcExecKind" value="vendor"> 廠商</label>
+                        <label><input type="radio" name="svcExecKind" value=""> 其他（自行輸入）</label>
+                    </div>
+                    <div id="svc-exec-user-wrap"><select id="svc-exec-user" data-eg-filter="輸入姓名篩選人員…"></select></div>
+                    <input type="text" id="svc-exec-vendor" placeholder="輸入廠商代號、簡稱或全名的部分字元，下方會列出可選清單" style="display:none;">
+                    <input type="hidden" id="svc-exec-vendor-id">
+                    <input type="text" id="svc-executor" placeholder="執行者姓名" style="display:none;">
+                    <div class="svc-err" id="svc-exec-err"></div>
+                </div>
                 <div><label>備註</label><input type="text" id="svc-note"></div>
             </div>
             <div style="margin-top:8px;">
@@ -244,6 +281,36 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <tbody id="svcBody"></tbody></table>
     </div>
     <div class="m-foot"><button class="b-cancel" onclick="closeMask('svcMask')">關閉</button></div>
+</div></div>
+
+<!-- ══ 常用語管理 Modal（履歴表「問題／解決方式」預存片語） ══ -->
+<div class="eq-mask top" id="phMask"><div class="eq-modal">
+    <div class="m-head"><span><i class="fa fa-commenting-o"></i> 常用語管理</span><span class="m-close" onclick="closePhraseModal()">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a6d45;margin-bottom:8px;">
+            把現場常寫的問題與解決方式先存起來，填履歴表時直接從欄位右上的下拉帶出，不必每次重打；
+            寫法一致，事後統計同一種故障才不會被拆成好幾種。停用的常用語不會出現在填表下拉，但已經填進紀錄的文字不受影響。
+        </div>
+        <div id="phFormBox" style="border:1px dashed #E8D5B5;border-radius:6px;padding:10px;margin-bottom:12px;">
+            <input type="hidden" id="ph-id">
+            <div class="grid2">
+                <div><label>類別 <span class="text-danger">*</span></label><select id="ph-kind"></select></div>
+                <div><label>排序（數字小的排前面）</label><input type="number" id="ph-sort" value="0"></div>
+            </div>
+            <label>內容 <span class="text-danger">*</span></label>
+            <input type="text" id="ph-content" maxlength="500" placeholder="例：主軸異音／更換皮帶並校正張力">
+            <div class="svc-err" id="ph-err"></div>
+            <label style="display:inline-flex !important;align-items:center;gap:5px;">
+                <input type="checkbox" id="ph-active" checked style="width:auto;"> 啟用（取消勾選＝停用，填表下拉不再出現）</label>
+            <div style="margin-top:8px;">
+                <button class="b-ok" onclick="savePhrase()"><i class="fa fa-save"></i> 儲存</button>
+                <button class="b-cancel" onclick="resetPhraseForm()">清除</button>
+            </div>
+        </div>
+        <table class="hist"><thead><tr><th width="80">類別</th><th>內容</th><th width="50">排序</th><th width="60">狀態</th><th width="90">操作</th></tr></thead>
+        <tbody id="phBody"></tbody></table>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closePhraseModal()">關閉</button></div>
 </div></div>
 
 <!-- ══ 年度整份送簽 Modal ══ -->
@@ -292,7 +359,15 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
         <ul>
             <li>「新增機台」／點列表「機台資料」：編輯機器名稱、編號、機型、製造商、購入日期、規格、位置(廠別)、停用狀態等基本資料。位置(廠別)是<b>廠區下拉</b>（一廠/二廠/三廠，取自庫存區域設定），不是自由輸入。</li>
             <li>「保養人」：指派保養人並記錄日期區間；保養人異動時系統自動把前一位的生效區間結束、接續新一位。若目前指派中的保養人已離職，會以紅字警示提醒改派。</li>
-            <li>「履歴」：登錄設備故障/維修紀錄（日期／廠商／問題／解決方式／執行者），可逐筆核准並列印。</li>
+            <li>「履歴」：登錄設備故障/維修紀錄（日期／廠商／問題／解決方式／執行者），可逐筆核准並列印。填寫時：
+                <ul>
+                    <li><b>廠商</b>：直接在欄位打廠商代號、簡稱或全名的部分字元，下方即時列出符合的廠商供點選（也可用方向鍵＋Enter）。
+                        主檔沒有的臨時廠商可自行輸入文字，不會擋住存檔。</li>
+                    <li><b>問題／解決方式</b>：欄位右上角的下拉可帶入預存的常用語（多選幾句會用「；」接在後面）；
+                        按旁邊的「常用語」可新增／修改／停用／刪除常用語庫。想整段換掉時，照全站規則在欄位上<b>雙擊即可清空</b>。</li>
+                    <li><b>執行者</b>：先選來源——<b>廠內人員</b>從在職名單挑（可打字篩選）、<b>廠商</b>比照廠商欄位打字挑選、
+                        <b>其他</b>則自行輸入文字。選了來源卻沒挑到人/廠商會當場出現紅字提醒。</li>
+                </ul></li>
             <li>「年度整份送簽」：每年將目前機台清單整份送出核准（比照供應商稽核計劃模式），核准後產生該年度快照，之後清單異動不影響已核准的快照內容。</li>
             <li>「批次列印履歴表」：依目前篩選結果，逐一列印每台機台的履歴表（筆數多時會提醒允許瀏覽器彈出視窗）。</li>
         </ul>
@@ -321,6 +396,7 @@ $roleLabel = $perms['isAdmin'] ? '管理者'
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
+<script src="../../resource/js/eg_vendor_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_vendor_picker.js') ?>"></script>
 <script>
 $(document).ready(function(){
     var $am = $('#sidebar-menu .nav.side-menu > li.active');
@@ -508,17 +584,132 @@ function deleteAssigneeHist(histId){
 }
 
 /* ── 履歴表 ── */
+var VENDOR_API = '../../src/store/VendorPicker_API.php';
+var PHRASES = [], PHRASE_KINDS = {problem:'問題', solution:'解決方式'}, CUR_PH_KIND = 'problem';
+
 function openServiceModal(mid, name){
     CUR_SVC_MID = mid; CUR_SVC_NAME = name;
     $('#svcMachineName').text(name);
     $('#svcFormBox').toggle(!!PERMS.canEdit);
+    loadExecutorCandidates();
+    loadPhrases();
     resetServiceForm();
     loadServiceLog();
     openMask('svcMask');
 }
+/* 執行者的廠內人員名單：走共用 eg_people_list（只列在職、依職稱排序、跨部門顯示部門），與保養人指派同一份來源 */
+function loadExecutorCandidates(){
+    if (window.__execCands){ fillExecutorSelect(); return; }
+    post('assignee_candidates', {}, function(res){ window.__execCands = res.rows || []; fillExecutorSelect(); });
+}
+function fillExecutorSelect(){
+    var $s = $('#svc-exec-user'), keep = $s.val();
+    $s.empty().append('<option value="">-- 請選擇人員 --</option>');
+    (window.__execCands||[]).forEach(function(p){ $s.append('<option value="'+p.id+'">'+esc(p.display)+'</option>'); });
+    if (keep) $s.val(keep);
+}
+function svcExecKind(){ return $('input[name=svcExecKind]:checked').val() || ''; }
+function applyExecKind(){
+    var k = svcExecKind();
+    $('#svc-exec-user-wrap').toggle(k === 'user');   // 連 eg_input_rules 長出來的篩選框一起收合，所以是切換外層容器
+    $('#svc-exec-vendor').toggle(k === 'vendor');
+    $('#svc-executor').toggle(k === '');
+    validateExec();
+}
+/* 錯誤即時偵測：選了來源卻沒挑到人/廠商就當場標紅字，不要等按儲存才報（UI 規則表單三總則） */
+function validateExec(){
+    var k = svcExecKind(), msg = '';
+    if (k === 'user' && !$('#svc-exec-user').val()) msg = '請從名單挑選廠內人員；若執行者不是公司同仁請改選「廠商」或「其他」';
+    if (k === 'vendor' && !$('#svc-exec-vendor').val().trim()) msg = '請輸入或從清單挑選廠商';
+    $('#svc-exec-err').text(msg);
+    $('#svc-exec-user').toggleClass('err', k === 'user' && !!msg);
+    $('#svc-exec-vendor').toggleClass('err', k === 'vendor' && !!msg);
+    return !msg;
+}
 function resetServiceForm(){
     $('#svc-log-id').val(''); $('#svc-date').val(META.today);
-    $('#svc-vendor,#svc-problem,#svc-solution,#svc-executor,#svc-note').val('');
+    $('#svc-vendor,#svc-vendor-id,#svc-problem,#svc-solution,#svc-executor,#svc-exec-vendor,#svc-exec-vendor-id,#svc-note').val('');
+    $('#svc-vendor-hint').text('');
+    $('#svc-exec-user').val('');
+    $('input[name=svcExecKind][value="user"]').prop('checked', true);
+    applyExecKind();
+    $('#svc-exec-err').text('');
+    $('#svc-exec-user,#svc-exec-vendor').removeClass('err');
+}
+
+/* ── 常用語（預存片語） ── */
+function loadPhrases(cb){
+    post('service_phrases', {include_inactive: (PERMS && PERMS.canEdit) ? 1 : 0}, function(res){
+        PHRASES = res.rows || [];
+        if (res.kinds) PHRASE_KINDS = res.kinds;
+        renderPhraseSelects();
+        if (cb) cb();
+    });
+}
+function renderPhraseSelects(){
+    Object.keys(PHRASE_KINDS).forEach(function(k){
+        var $s = $('#svc-ph-'+k);
+        if (!$s.length) return;
+        $s.empty().append('<option value="">帶入常用'+esc(PHRASE_KINDS[k])+'…</option>');
+        PHRASES.forEach(function(ph){
+            if (ph.kind !== k || !ph.is_active) return;
+            $s.append('<option value="'+esc(ph.content)+'">'+esc(ph.content)+'</option>');
+        });
+    });
+}
+function openPhraseModal(kind){
+    CUR_PH_KIND = kind || 'problem';
+    $('#phFormBox').toggle(!!PERMS.canEdit);
+    var $k = $('#ph-kind').empty();
+    Object.keys(PHRASE_KINDS).forEach(function(k){ $k.append('<option value="'+k+'">'+esc(PHRASE_KINDS[k])+'</option>'); });
+    resetPhraseForm();
+    renderPhraseList();
+    openMask('phMask');
+}
+function closePhraseModal(){
+    closeMask('phMask');
+    renderPhraseSelects();   // 管理完直接反映到填表下拉，不必關掉履歴表再開一次
+}
+function resetPhraseForm(){
+    $('#ph-id').val(''); $('#ph-content').val('').removeClass('err'); $('#ph-sort').val(0);
+    $('#ph-active').prop('checked', true); $('#ph-kind').val(CUR_PH_KIND); $('#ph-err').text('');
+}
+function renderPhraseList(){
+    var h = '';
+    PHRASES.forEach(function(ph){
+        h += '<tr class="'+(ph.is_active?'':'ph-off')+'"><td>'+esc(PHRASE_KINDS[ph.kind]||ph.kind)+'</td>'
+           + '<td style="text-align:left;white-space:normal;">'+esc(ph.content)+'</td>'
+           + '<td>'+ph.sort_order+'</td>'
+           + '<td>'+(ph.is_active?'啟用':'停用')+'</td>'
+           + '<td>'
+           + (PERMS.canEdit ? '<span class="eq-op" onclick="editPhrase('+ph.phrase_id+')">編輯</span>' : '')
+           + (PERMS.canAdmin ? '<span class="eq-op" onclick="deletePhrase('+ph.phrase_id+')">刪除</span>' : '')
+           + '</td></tr>';
+    });
+    $('#phBody').html(h || '<tr><td colspan="5" style="color:#8a6d45;">尚無常用語</td></tr>');
+}
+function editPhrase(pid){
+    var ph = PHRASES.find(function(x){ return x.phrase_id == pid; });
+    if (!ph) return;
+    $('#ph-id').val(ph.phrase_id); $('#ph-kind').val(ph.kind); $('#ph-content').val(ph.content).removeClass('err');
+    $('#ph-sort').val(ph.sort_order); $('#ph-active').prop('checked', !!ph.is_active); $('#ph-err').text('');
+}
+function savePhrase(){
+    var content = $('#ph-content').val().trim();
+    if (!content){ $('#ph-err').text('內容不可空白'); $('#ph-content').addClass('err').focus(); return; }
+    if (content.length > 500){ $('#ph-err').text('內容不可超過 500 字（目前 '+content.length+' 字）'); $('#ph-content').addClass('err').focus(); return; }
+    post('service_phrase_save', {
+        phrase_id: $('#ph-id').val(), kind: $('#ph-kind').val(), content: content,
+        sort_order: $('#ph-sort').val() || 0, is_active: $('#ph-active').is(':checked') ? 1 : 0
+    }, function(){
+        loadPhrases(function(){ resetPhraseForm(); renderPhraseList(); });
+    });
+}
+function deletePhrase(pid){
+    if (!confirm('確定刪除此常用語？（已經填進履歴表的文字不受影響）')) return;
+    post('service_phrase_delete', {phrase_id: pid}, function(){
+        loadPhrases(function(){ resetPhraseForm(); renderPhraseList(); });
+    });
 }
 function loadServiceLog(){
     post('service_list', {machine_id: CUR_SVC_MID}, function(res){
@@ -526,7 +717,7 @@ function loadServiceLog(){
         res.rows.forEach(function(r){
             h += '<tr><td>'+dispDate(r.service_date)+'</td><td>'+esc(r.vendor_name||'')+'</td>'
                + '<td style="white-space:normal;">'+esc(r.problem_desc||'')+'</td><td style="white-space:normal;">'+esc(r.solution_desc||'')+'</td>'
-               + '<td>'+esc(r.executor_name||'')+'</td>'
+               + '<td>'+esc(r.executor_name||'')+(r.executor_kind==='vendor' ? ' <span style="font-size:11px;color:#8a6d45;">(廠商)</span>' : '')+'</td>'
                + '<td>'+(r.approved_by_name ? esc(r.approved_by_name)+' '+dispDate(r.approved_date) : (PERMS.canEdit ? '<span class="eq-op" onclick="approveServiceLog('+r.log_id+')">核准</span>' : '（未核准）'))+'</td>'
                + '<td>'
                + (PERMS.canEdit ? '<span class="eq-op" onclick="editServiceLog('+r.log_id+')">編輯</span>' : '')
@@ -540,16 +731,33 @@ function loadServiceLog(){
 function editServiceLog(logId){
     var r = (window.__svcRows||[]).find(function(x){ return x.log_id==logId; });
     if (!r) return;
-    $('#svc-log-id').val(r.log_id); $('#svc-date').val(r.service_date); $('#svc-vendor').val(r.vendor_name||'');
-    $('#svc-problem').val(r.problem_desc||''); $('#svc-solution').val(r.solution_desc||''); $('#svc-executor').val(r.executor_name||'');
+    resetServiceForm();
+    $('#svc-log-id').val(r.log_id); $('#svc-date').val(r.service_date);
+    $('#svc-vendor').val(r.vendor_name||''); $('#svc-vendor-id').val(r.vendor_id||'');
+    $('#svc-vendor-hint').text(r.vendor_id ? ('已對應廠商主檔：'+r.vendor_id) : '');
+    $('#svc-problem').val(r.problem_desc||''); $('#svc-solution').val(r.solution_desc||'');
     $('#svc-note').val(r.note||'');
+    // 舊紀錄沒有 executor_kind（那時候執行者是純文字欄）＝一律當「其他（自行輸入）」還原，不猜
+    var k = r.executor_kind || '';
+    $('input[name=svcExecKind][value="'+k+'"]').prop('checked', true);
+    if (k === 'user') $('#svc-exec-user').val(r.executor_user_id||'');
+    else if (k === 'vendor'){ $('#svc-exec-vendor').val(r.executor_name||''); $('#svc-exec-vendor-id').val(r.executor_vendor_id||''); }
+    else $('#svc-executor').val(r.executor_name||'');
+    applyExecKind();
 }
 function saveServiceLog(){
-    if (!$('#svc-date').val()){ alert('請填日期'); return; }
+    if (!$('#svc-date').val()){ alert('請填日期'); $('#svc-date').focus(); return; }
+    if (!validateExec()){ (svcExecKind()==='user' ? $('#svc-exec-user') : $('#svc-exec-vendor')).focus(); return; }
+    var k = svcExecKind();
     post('service_save', {
         log_id: $('#svc-log-id').val(), machine_id: CUR_SVC_MID, service_date: $('#svc-date').val(),
-        vendor_name: $('#svc-vendor').val(), problem_desc: $('#svc-problem').val(), solution_desc: $('#svc-solution').val(),
-        executor_name: $('#svc-executor').val(), note: $('#svc-note').val()
+        vendor_name: $('#svc-vendor').val(), vendor_id: $('#svc-vendor-id').val(),
+        problem_desc: $('#svc-problem').val(), solution_desc: $('#svc-solution').val(),
+        executor_kind: k,
+        executor_user_id: k === 'user' ? $('#svc-exec-user').val() : '',
+        executor_vendor_id: k === 'vendor' ? $('#svc-exec-vendor-id').val() : '',
+        executor_name: k === 'vendor' ? $('#svc-exec-vendor').val() : (k === 'user' ? '' : $('#svc-executor').val()),
+        note: $('#svc-note').val()
     }, function(){ resetServiceForm(); loadServiceLog(); });
 }
 function deleteServiceLog(logId){
@@ -742,6 +950,38 @@ function printPlanSnapshot(){
                         listDocName(doc)+'（'+CUR_PLAN_YEAR+' 年度核准清單）', body, listDocNo(doc));
     });
 }
+
+/* ── 履歴表欄位的事件綁定（一次綁好，跳窗開關不重綁） ── */
+$(document).on('change', 'input[name=svcExecKind]', applyExecKind);
+$(document).on('change', '#svc-exec-user', validateExec);
+$(document).on('input', '#svc-exec-vendor', validateExec);
+// 常用語帶入：欄位已有內容時用「；」接在後面（可疊好幾句），要整段換掉就照全站規則雙擊欄位清空再選
+$(document).on('change', '.svc-ph-sel', function(){
+    var val = this.value;
+    if (!val) return;
+    var target = (this.id === 'svc-ph-problem') ? '#svc-problem' : '#svc-solution';
+    var cur = $(target).val().trim();
+    $(target).val(cur ? (cur.replace(/[；;]$/, '') + '；' + val) : val).focus();
+    this.value = '';
+});
+
+$(document).ready(function(){
+    if (!window.EGVendorPicker) return;
+    EGVendorPicker.attach(document.getElementById('svc-vendor'), {
+        apiUrl: VENDOR_API,
+        onSelect: function(row){
+            $('#svc-vendor-id').val(row.maker_id_no);
+            $('#svc-vendor-hint').text('已對應廠商主檔：'+row.maker_id_no+(row.maker_id ? ('　'+row.maker_id) : ''));
+        },
+        // 使用者自行改字＝不再對應主檔那一筆，代號要跟著清掉，否則會留下名稱與代號兜不起來的紀錄
+        onInput: function(){ $('#svc-vendor-id').val(''); $('#svc-vendor-hint').text(''); }
+    });
+    EGVendorPicker.attach(document.getElementById('svc-exec-vendor'), {
+        apiUrl: VENDOR_API,
+        onSelect: function(row){ $('#svc-exec-vendor-id').val(row.maker_id_no); validateExec(); },
+        onInput: function(){ $('#svc-exec-vendor-id').val(''); validateExec(); }
+    });
+});
 
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 
