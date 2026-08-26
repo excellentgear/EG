@@ -163,6 +163,15 @@ $roleLabel = ia_role_label($perms);
         .pick-wrap label { display:block; padding:4px 10px; margin:0; font-size:13px; color:#5b3a1e; cursor:pointer; border-bottom:1px solid #F3EADA; }
         .pick-wrap label:hover { background:#FDF3E2; }
         .pick-wrap label.hdr { background:#F3E4C9; font-weight:bold; color:#6b4a20; }
+        /* 勾選清單一律對齊：勾選框固定欄寬、名稱固定欄寬、右側說明自己一欄，
+           不用全形空白做縮排（那會讓每一列的文字起點都不一樣，看起來歪七扭八） */
+        .pick-wrap label.pick-row { display:flex; align-items:center; gap:8px; }
+        .pick-wrap label.pick-row > input[type=checkbox] { flex:0 0 14px; margin:0; }
+        .pick-wrap label.pick-row .pk-name { flex:0 0 150px; }
+        .pick-wrap label.pick-row .pk-sub { flex:1 1 auto; color:#a08356; font-size:12px;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .pick-wrap label.pick-row .pk-tag { flex:0 0 auto; font-size:11px; color:#8A5A2B;
+            background:#F7E0BD; border-radius:8px; padding:0 7px; }
         .ia-top { position:fixed; right:24px; bottom:24px; width:40px; height:40px; border-radius:20px; background:#F0A24B;
             color:#fff; border:none; cursor:pointer; display:none; z-index:100; }
         .ia-noperm { border:1.5px solid #E4A897; background:#FBEAE4; border-radius:8px; padding:16px; color:#8A3A28; }
@@ -192,6 +201,8 @@ $roleLabel = ia_role_label($perms);
             <button id="btnReload"><i class="fa fa-refresh"></i> 重新整理</button>
             <?php if ($perms['canAdmin']): ?>
             <button id="btnSetting"><i class="fa fa-cog"></i> 設定</button>
+            <button id="btnUnitSetting"><i class="fa fa-sitemap"></i> 受稽單位</button>
+            <button id="btnQualify"><i class="fa fa-user-plus"></i> 稽核員資格</button>
             <button id="btnClauseBank"><i class="fa fa-list-ol"></i> AS條文題庫</button>
             <?php endif; ?>
             <span class="ia-role-badge">目前身分：<?= htmlspecialchars($roleLabel) ?>
@@ -365,6 +376,10 @@ $roleLabel = ia_role_label($perms);
         <h4>重要行為／常見疑問</h4>
         <ul>
             <li><b>年度計畫表的 ◎ 不用手動點</b>：把稽核通知單的狀態改成「執行中」或「已結案」，該單位那個月就會自動變 ◎。沒排 ○ 卻做了也會出現 ◎。</li>
+            <li><b>好幾個部門是同一個受稽單位</b>（例：生產部＋生產1廠＋生產2廠＋生產3廠）：到工具列「受稽單位」綁成一個群組。
+                綁定後計畫表上是<b>一欄</b>、報告表上是<b>一列</b>，稽核其中任何一個廠都算這個單位已執行；這個單位底下所有部門的人都看得到並可回覆該單位的不符合通知單。一個部門只能屬於一個受稽單位。</li>
+            <li><b>誰可以當稽核員／陪檢員</b>：工具列「稽核員資格」可指定名單，指定後相關下拉只會列出名單內的人。<b>名單留空＝不限制</b>（全體在職員工都可指派）。離職者會自動失效。</li>
+            <li><b>要補以前年度的資料</b>：左上角年度下拉本來就含近十年，直接切到那一年再建立即可，不必先有當年的資料。</li>
             <li><b>受審查單位主管是誰，依稽核日期回推當時的職務</b>（不是現在的職務），所以補去年的舊單不會蓋到今年才上任的人。查不到當時的主管時寧可留白，不會亂帶人。</li>
             <li><b>IA 編號依稽核日期產生</b>（IA+西元後兩碼+月日+流水，例 IA24121601），補歷史紙本時編號會跟表單上的日期對得起來。</li>
             <li><b>到期提醒</b>：期限前 N 天（預設 7 天，可在「設定」改）與逾期後，每天最多發一則通知給受稽單位主管與受審核人。提醒是有人用到這個模組時順便檢查，不是背景排程。</li>
@@ -376,8 +391,10 @@ $roleLabel = ia_role_label($perms);
         <h4>設定入口</h4>
         <ul>
             <li><b>設定</b>（右上工具列，限內稽管理員）：七份表單各自的 AS 文件編號綁定、簽章圖章模板、核准／審查格的簽章人來源、到期提醒天數、會議主旨預設文字。</li>
+            <li><b>受稽單位</b>（右上工具列，限內稽管理員）：把多個部門綁成同一個受稽單位。</li>
+            <li><b>稽核員資格</b>（右上工具列，限內稽管理員）：稽核員／陪檢員的合格人員名單。</li>
             <li><b>AS條文題庫</b>（右上工具列，限內稽管理員）：AS稽核查檢表的題目來源，建一次每年沿用。</li>
-            <li>受稽單位清單來自組織架構（部門管理），簽章人來源與管理代表來自「組織角色綁定設定」，這裡不另存一份。</li>
+            <li>部門清單來自組織架構（部門管理），簽章人來源與管理代表來自「組織角色綁定設定」，人員清單來自員工管理，這裡都不另存一份。</li>
         </ul>
 
         <h4>權限角色</h4>
@@ -674,6 +691,70 @@ $roleLabel = ia_role_label($perms);
     <div class="ia-mfoot"><button data-close>取消</button><button id="btnNcCreate" class="btn-warm">開立並通知</button></div>
 </div></div>
 
+
+<!-- ============================ 受稽單位群組 ============================ -->
+<div class="ia-mask" id="unitMask"><div class="ia-modal">
+    <div class="ia-mhead"><h4><i class="fa fa-sitemap"></i> 受稽單位設定</h4>
+        <button id="btnUnitNew" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增群組</button>
+        <span class="x" data-close style="margin-left:10px;">&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">組織上是好幾個部門、稽核時卻是同一個單位的（例：<b>生產部＋生產1廠＋生產2廠＋生產3廠</b>），
+        在這裡綁成一個<b>受稽單位</b>。綁定後：年度計畫表上是<b>一欄</b>、稽核報告表上是<b>一列</b>，
+        稽核其中任何一個廠都會算成這個單位已執行（◎）；這個單位底下所有部門的人都算受稽單位的人，看得到並可回覆該單位的不符合通知單。
+        <br>一個部門只能屬於一個受稽單位。沒有被綁進群組的部門，各自就是一個獨立的受稽單位。</div>
+        <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
+            <th style="width:150px;">受稽單位名稱</th><th>涵蓋部門</th>
+            <th style="width:110px;">代表部門</th><th style="width:110px;">操作</th>
+        </tr></thead><tbody id="unitBody"></tbody></table></div>
+    </div>
+    <div class="ia-mfoot"><button data-close>關閉</button></div>
+</div></div>
+
+<!-- 群組編輯 -->
+<div class="ia-mask" id="unitEditMask"><div class="ia-modal narrow">
+    <div class="ia-mhead"><h4 id="unitEditTitle">受稽單位群組</h4><span class="x" data-close>&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-form" style="grid-template-columns:100px 1fr;">
+            <label>單位名稱<span style="color:#DD5138;">*</span></label>
+            <div><input type="text" id="ueName" placeholder="例：生產部">
+                 <div class="err-msg" id="errUeName"></div></div>
+            <label>代表部門<span style="color:#DD5138;">*</span></label>
+            <div><select id="ueMain"></select>
+                 <div style="font-size:12px;color:#8a6d45;">資料一律掛在代表部門上，通常選最上層那個部門。</div>
+                 <div class="err-msg" id="errUeMain"></div></div>
+        </div>
+        <div style="margin-top:10px;">
+            <b style="color:#8A5A2B;font-size:14px;">涵蓋哪些部門</b>
+            <span style="font-size:12px;color:#8a6d45;">（至少兩個；已被其他群組收編的部門會標示出來且不能選）</span>
+            <div class="pick-wrap" id="uePick" style="max-height:300px;margin-top:5px;"></div>
+            <div class="err-msg" id="errUePick"></div>
+        </div>
+    </div>
+    <div class="ia-mfoot"><button data-close>取消</button><button id="btnUnitSave" class="btn-warm">儲存</button></div>
+</div></div>
+
+<!-- ============================ 稽核員／陪檢員資格名單 ============================ -->
+<div class="ia-mask" id="qualifyMask"><div class="ia-modal">
+    <div class="ia-mhead"><h4><i class="fa fa-user-plus"></i> 稽核員／陪檢員資格名單</h4><span class="x" data-close>&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">設定哪些人可以被指派為<b>稽核員</b>或<b>陪檢員</b>。設定後，稽核通知單與查檢表的對應下拉<b>只會列出名單內的人</b>。
+        <br><b>名單留空＝不限制</b>（全體在職員工都可指派）。離職者會自動從名單失效，不必手動移除。</div>
+        <div class="ia-tabs" style="margin-top:4px;">
+            <div class="ia-tab on q-tab" data-kind="auditor">稽核員</div>
+            <div class="ia-tab q-tab" data-kind="escort">陪檢員</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <input type="text" id="qFilter" placeholder="輸入部門或姓名篩選…"
+                   style="border:1px solid #D8BE93;border-radius:4px;padding:4px 8px;font-size:13px;width:230px;">
+            <button id="qAll" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全選</button>
+            <button id="qNone" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全部清空</button>
+            <span id="qCount" style="font-size:12px;color:#8a6d45;"></span>
+        </div>
+        <div class="pick-wrap" id="qPick" style="max-height:340px;"></div>
+    </div>
+    <div class="ia-mfoot"><button data-close>關閉</button><button id="btnQualifySave" class="btn-warm">儲存這一分頁的名單</button></div>
+</div></div>
+
 <!-- ============================ 通用：輸入業務日期後確認 ============================ -->
 <div class="ia-mask" id="dateMask"><div class="ia-modal narrow">
     <div class="ia-mhead"><h4 id="dateTitle">確認</h4><span class="x" data-close>&times;</span></div>
@@ -708,6 +789,13 @@ var PAGE = {case:1, check:1, nc:1}, PER = 20;
 var LIST = {case:[], check:[], nc:[]};
 
 function esc(s){ return $('<div>').text(s==null?'':s).html(); }
+/* PHP 的空關聯陣列 json_encode 出來是 []（陣列）不是 {}，直接拿來當 map 用會出事——一律先正規化 */
+function toPlainMap(v){
+    var out = {};
+    if (!v) return out;
+    Object.keys(v).forEach(function(k){ out[k] = v[k]; });
+    return out;
+}
 /* 顯示用日期一律 YYYY.MM.DD（ai-rules/20，唯一實作 egFmtDate，不自寫） */
 function dispDate(d){ return (window.egFmtDate ? egFmtDate(d) : (d||'')) || ''; }
 /* <input type=date> 要的是 Y-m-d，不能吃 YYYY.MM.DD */
@@ -733,20 +821,24 @@ function fieldErr($el, id, msg){
 function clearErrs($scope){ $scope.find('.err').removeClass('err'); $scope.find('.err-msg').removeClass('on').text(''); }
 
 /* ---------- 人員／部門下拉（一律用 meta 帶回來的清單，不各頁自己查） ---------- */
-function peopleOptions(sel, cur, blank){
+/* 人員下拉。list 可傳 META.auditors／META.escorts（只列有資格的人），
+   不傳就是全體在職員工。欄位順序固定「部門/職稱/姓名」（ai-rules/08 第五節）。 */
+function peopleOptions(list, cur, blank){
     var h = '<option value="">'+(blank||'（未指定）')+'</option>';
-    (META.people||[]).forEach(function(p){
+    (list && list.length ? list : (META.people||[])).forEach(function(p){
         var label = (p.dept_name?p.dept_name+'　':'') + (p.position_name?p.position_name+'　':'') + p.user_cname
                   + (p.leave_note ? '（'+p.leave_note+'）' : '');
         h += '<option value="'+p.id+'"'+(String(cur)===String(p.id)?' selected':'')+'>'+esc(label)+'</option>';
     });
     return h;
 }
+/* 受稽單位下拉：列「受稽單位」不是「部門」——已設群組的（如 生產部＋生產1/2/3廠）合併成一列，
+   值一律是代表部門 id。群組會在名稱後面標出涵蓋哪些部門，避免看不出來合併了什麼。 */
 function deptOptions(cur, blank){
     var h = '<option value="">'+(blank||'（未指定）')+'</option>';
-    (META.depts||[]).forEach(function(d){
-        var pad = new Array(Math.max(1,(+d.level||1))).join('　');
-        h += '<option value="'+d.id+'"'+(String(cur)===String(d.id)?' selected':'')+'>'+esc(pad+d.name)+'</option>';
+    (META.units||[]).forEach(function(u){
+        var label = u.name + (u.is_group ? ('（' + (u.members||[]).join('、') + '）') : '');
+        h += '<option value="'+u.key+'"'+(String(cur)===String(u.key)?' selected':'')+'>'+esc(label)+'</option>';
     });
     return h;
 }
@@ -864,6 +956,9 @@ function loadPlan(){
     $.getJSON(API, {action:'plan_get', year:YEAR}, function(res){
         if (!res.ok) return;
         PLAN = res.plan;
+        // 後端已經改成回物件，這裡再保一層：cells／actual 一律正規化成純物件。
+        // 若是陣列（PHP 空關聯陣列會變成 []），在上面加字串鍵之後走訪不到，存檔就會送出空清單。
+        if (PLAN) { PLAN.cells = toPlainMap(PLAN.cells); PLAN.actual = toPlainMap(PLAN.actual); }
         if (!PLAN) {
             $('#planGrid').html('<div class="ia-empty">'+YEAR+' 年度還沒有稽核計劃表'
                 + '<?= $perms['canAdmin'] ? "，請按上方「建立本年度計畫表」" : "，請洽內稽管理員建立" ?></div>');
@@ -915,15 +1010,20 @@ $(document).on('click','.plan-grid td.cell:not(.ro)', function(){
 });
 $('#btnPlanCreate').on('click', function(){ openPlanDeptPick(true); });
 $('#btnPlanDepts').on('click', function(){ openPlanDeptPick(false); });
+/* 列「受稽單位」不是「部門」：已設群組的合併成一列，值＝代表部門 id。
+   版面用固定欄寬（勾選框／名稱／涵蓋部門）讓每一列對齊，不再用全形空白做階層縮排。 */
 function openPlanDeptPick(isCreate){
     var cur = {};
     if (!isCreate && PLAN) PLAN.depts.forEach(function(d){ cur[d.dept_id]=1; });
     var h = '';
-    (META.depts||[]).forEach(function(d){
-        var pad = new Array(Math.max(1,(+d.level||1))).join('　');
-        h += '<label><input type="checkbox" class="pdChk" value="'+d.id+'"'+(cur[d.id]?' checked':'')+'> '+esc(pad+d.name)+'</label>';
+    (META.units||[]).forEach(function(u){
+        h += '<label class="pick-row"><input type="checkbox" class="pdChk" value="'+u.key+'"'
+           + (cur[u.key]?' checked':'')+'>'
+           + '<span class="pk-name">'+esc(u.name)+'</span>'
+           + '<span class="pk-sub">'+(u.is_group ? esc((u.members||[]).join('、')) : '')+'</span>'
+           + '</label>';
     });
-    $('#planDeptPick').html(h);
+    $('#planDeptPick').html(h || '<div class="ia-empty">沒有可選的受稽單位</div>');
     $('#btnPlanDeptSave').data('create', isCreate?1:0);
     openMask('planDeptMask');
 }
@@ -946,7 +1046,8 @@ $('#btnPlanDeptSave').on('click', function(){
 $('#btnPlanSave').on('click', function(){
     if (!PLAN) return;
     var cells = [];
-    $.each(PLAN.cells, function(k){ var p=k.split('-'); cells.push({dept_id:+p[0], month:+p[1]}); });
+    // 用 Object.keys 不用 $.each：$.each 遇到「像陣列」的東西只會跑數字索引，字串鍵會被整批跳過
+    Object.keys(PLAN.cells).forEach(function(k){ var p=k.split('-'); cells.push({dept_id:+p[0], month:+p[1]}); });
     $.post(API, {action:'plan_save_cells', plan_id:PLAN.plan_id, cells:JSON.stringify(cells),
                  remark:$('#planRemark').val()}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
@@ -1040,7 +1141,7 @@ function openCase(id){
         $('#cNo,#cSeq').val(''); $('#cNotify').val(META.today);
         $('#cFrom,#cTo,#cMeetDate,#cMeetStart,#cMeetEnd,#cMeetPlace').val('');
         $('#cRemark').val(defaultCaseRemark());
-        $('#cLeader').html(peopleOptions('', '', '（未指定）'));
+        $('#cLeader').html(peopleOptions(META.auditors, '', '（未指定）'));
         CASE_ROWS = [{},{},{}];
         renderCaseRows(); $('#cMeetingSec').hide();
         clearErrs($('#caseMask')); openMask('caseMask');
@@ -1056,7 +1157,7 @@ function openCase(id){
         $('#cTo').val(inputDate(c.audit_to)); $('#cMeetDate').val(inputDate(c.end_meet_date));
         $('#cMeetStart').val(c.end_meet_start||''); $('#cMeetEnd').val(c.end_meet_end||'');
         $('#cMeetPlace').val(c.end_meet_place||''); $('#cRemark').val(c.remark||'');
-        $('#cLeader').html(peopleOptions('', c.leader_id, '（未指定）'));
+        $('#cLeader').html(peopleOptions(META.auditors, c.leader_id, '（未指定）'));
         CASE_ROWS = (c.depts||[]).map(function(d){ return {
             start_process:d.start_process||'', dept_id:d.dept_id||'', auditor_id:d.auditor_id||'',
             escort_id:d.escort_id||'', audited_date:inputDate(d.audited_date), audited_time:d.audited_time||'',
@@ -1082,8 +1183,8 @@ function renderCaseRows(){
         h += '<tr data-i="'+i+'">'
           + '<td><input type="text" class="cr" data-f="start_process" value="'+esc(r.start_process||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 5px;font-size:12px;"></td>'
           + '<td><select class="cr" data-f="dept_id" '+(ro?'disabled':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+deptOptions(r.dept_id,'（請選）')+'</select></td>'
-          + '<td><select class="cr" data-f="auditor_id" '+(ro?'disabled':'')+' data-eg-filter="輸入姓名篩選…" style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+peopleOptions('', r.auditor_id, '（未指定）')+'</select></td>'
-          + '<td><select class="cr" data-f="escort_id" '+(ro?'disabled':'')+' data-eg-filter="輸入姓名篩選…" style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+peopleOptions('', r.escort_id, '（未指定）')+'</select></td>'
+          + '<td><select class="cr" data-f="auditor_id" '+(ro?'disabled':'')+' data-eg-filter="輸入姓名篩選…" style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+peopleOptions(META.auditors, r.auditor_id, '（未指定）')+'</select></td>'
+          + '<td><select class="cr" data-f="escort_id" '+(ro?'disabled':'')+' data-eg-filter="輸入姓名篩選…" style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+peopleOptions(META.escorts, r.escort_id, '（未指定）')+'</select></td>'
           + '<td><input type="date" class="cr" data-f="audited_date" value="'+esc(r.audited_date||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
           + '<td><input type="text" class="cr" data-f="audited_time" value="'+esc(r.audited_time||'')+'" placeholder="13:15" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;"></td>'
           + '<td><input type="date" class="cr" data-f="improve_due" value="'+esc(r.improve_due||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
@@ -1227,7 +1328,7 @@ $('#btnCheckNew').on('click', function(){
     $.each(META.check_kinds||{}, function(k,v){ kh += '<option value="'+k+'">'+esc(v.label)+'</option>'; });
     $('#nkKind').html(kh);
     $('#nkDate').val(META.today);
-    $('#nkAuditor').html(peopleOptions('', META.me.id, '（未指定）'));
+    $('#nkAuditor').html(peopleOptions(META.auditors, META.me.id, '（未指定）'));
     $('#nkCase').html(caseOptions(''));
     $('#nkTitle').val(''); $('#nkFilter').val(''); $('#nkHalf').val('');
     clearErrs($('#checkNewMask'));
@@ -1782,12 +1883,21 @@ $('#btnSetting').on('click', function(){
 });
 function pickAsDoc(key){
     if (!window.EGAsDoc) { alert('AS 文件挑選器未載入'); return; }
-    EGAsDoc.open({ onPick: function(doc){
-        $.post(API, {action:'save_asdoc', key:key, doc_id:doc.id}, function(res){
-            if (!res.ok) { alert(res.error||'儲存失敗'); return; }
-            loadMeta(function(){ $('#btnSetting').click(); });
-        }, 'json');
-    }});
+    var docs = META.as_doc_list || [];
+    if (!docs.length) { alert('讀不到 AS 文件清單，請重新整理頁面再試（需要內稽管理員權限）'); return; }
+    var info = (META.as_docs||{})[key] || {};
+    // 共用挑選器的參數是 docs/current/title/onSave（不是 onPick），docs 沒傳就會是空清單
+    EGAsDoc.open({
+        docs   : docs,
+        current: info.doc_id || 0,
+        title  : 'AS 文件編號綁定　—　' + (info.label || ''),
+        onSave : function(id){
+            $.post(API, {action:'save_asdoc', key:key, doc_id:id}, function(res){
+                if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+                loadMeta(function(){ $('#btnSetting').click(); });
+            }, 'json');
+        }
+    });
 }
 function clearAsDoc(key){
     if (!confirm('清除綁定後，該表單列印時會用預設編號、表頭用內建名稱。確定？')) return;
@@ -2248,5 +2358,171 @@ $('#btnReportPrint').on('click', function(){
     });
 });
 </script>
+<script>
+/* ============================ 受稽單位群組 ============================ */
+var UNITS = [];
+$('#btnUnitSetting').on('click', loadUnits);
+function loadUnits(){
+    $.getJSON(API, {action:'unit_list'}, function(res){
+        if (!res.ok) { alert(res.error||'載入失敗'); return; }
+        UNITS = res.units||[];
+        var h = '';
+        UNITS.forEach(function(u){
+            if (!u.is_group) return;                       // 表格只列群組；沒綁群組的部門本來就各自獨立
+            h += '<tr><td class="l"><b>'+esc(u.name)+'</b></td>'
+              + '<td class="l">'+esc((u.members||[]).join('、'))+'</td>'
+              + '<td>'+esc(unitDeptName(u.key))+'</td>'
+              + '<td><span class="ia-op" onclick="openUnitEdit('+u.unit_id+')"><i class="fa fa-edit"></i> 編輯</span>'
+              + '<span class="ia-op danger" onclick="delUnit('+u.unit_id+',\''+esc(u.name).replace(/'/g,"\\'")+'\')"><i class="fa fa-times"></i> 解散</span>'
+              + '</td></tr>';
+        });
+        $('#unitBody').html(h || '<tr><td colspan="4" class="ia-empty">還沒有設定群組，目前每個部門各自是一個受稽單位</td></tr>');
+        openMask('unitMask');
+    });
+}
+function unitDeptName(id){
+    var n = '';
+    (META.depts||[]).forEach(function(d){ if (+d.id === +id) n = d.name; });
+    return n;
+}
+$('#btnUnitNew').on('click', function(){ openUnitEdit(0); });
+function openUnitEdit(unitId){
+    // 只有 unit_id>0 才是群組；沒綁群組的單一部門 unit_id 也是 0，
+    // 不加這個條件的話「新增群組」會誤抓到清單裡最後一個單一部門，把它預先勾起來（實測踩過）
+    var u = null;
+    if (+unitId > 0) UNITS.forEach(function(x){ if (+x.unit_id === +unitId) u = x; });
+    $('#unitEditTitle').text(unitId ? ('編輯受稽單位　'+(u?u.name:'')) : '新增受稽單位群組');
+    $('#ueName').val(u ? u.name : '');
+    $('#btnUnitSave').data('unit-id', unitId);
+    // 已被「其他」群組收編的部門不能再選（一個部門只能屬於一個受稽單位）
+    var takenBy = {};
+    UNITS.forEach(function(x){
+        if (!x.is_group || +x.unit_id === +unitId) return;
+        (x.dept_ids||[]).forEach(function(d){ takenBy[d] = x.name; });
+    });
+    var mine = {};
+    if (u) (u.dept_ids||[]).forEach(function(d){ mine[d] = 1; });
+    var h = '';
+    (META.depts||[]).forEach(function(d){
+        var lock = takenBy[d.id];
+        h += '<label class="pick-row"'+(lock?' style="opacity:.55;"':'')+'>'
+           + '<input type="checkbox" class="ueChk" value="'+d.id+'"'
+           + (mine[d.id]?' checked':'') + (lock?' disabled':'') + '>'
+           + '<span class="pk-name">'+esc(d.name)+'</span>'
+           + '<span class="pk-sub">'+(lock ? ('已屬於「'+esc(lock)+'」') : '')+'</span>'
+           + '</label>';
+    });
+    $('#uePick').html(h);
+    clearErrs($('#unitEditMask'));
+    renderUeMain();
+    openMask('unitEditMask');
+}
+/* 代表部門的候選＝目前勾選的那些部門（不是全部部門，否則會選到不在群組裡的） */
+function renderUeMain(){
+    var cur = $('#ueMain').val();
+    var ids = $('.ueChk:checked').map(function(){ return +$(this).val(); }).get();
+    var h = '<option value="">（請選擇）</option>';
+    ids.forEach(function(id){
+        h += '<option value="'+id+'"'+(String(cur)===String(id)?' selected':'')+'>'+esc(unitDeptName(id))+'</option>';
+    });
+    $('#ueMain').html(h);
+    if (!$('#ueMain').val() && ids.length) $('#ueMain').val(ids[0]);   // 預設第一個（通常是最上層部門）
+}
+$(document).on('change', '.ueChk', renderUeMain);
+$('#btnUnitSave').on('click', function(){
+    clearErrs($('#unitEditMask'));
+    var unitId = +$(this).data('unit-id') || 0;
+    var ids = $('.ueChk:checked').map(function(){ return +$(this).val(); }).get();
+    var ok = true;
+    ok = fieldErr($('#ueName'), 'errUeName', $('#ueName').val().trim() ? '' : '請填單位名稱') && ok;
+    if (ids.length < 2) { $('#errUePick').addClass('on').text('群組至少要有兩個部門（只有一個部門不需要設群組）'); ok = false; }
+    ok = fieldErr($('#ueMain'), 'errUeMain', $('#ueMain').val() ? '' : '請選代表部門') && ok;
+    if (!ok) return;
+    $.post(API, {action:'unit_save', unit_id:unitId, unit_name:$('#ueName').val(),
+                 main_dept_id:$('#ueMain').val(), dept_ids:JSON.stringify(ids)}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        closeMask('unitEditMask');
+        loadMeta(function(){ loadUnits(); loadPane(currentPane()); });
+    }, 'json');
+});
+function delUnit(unitId, name){
+    if (!confirm('解散「'+name+'」這個受稽單位群組？\n解散後底下各部門會各自變回獨立的受稽單位，既有的計畫表、通知單、不符合單資料不會被刪除。')) return;
+    $.post(API, {action:'unit_delete', unit_id:unitId}, function(res){
+        if (!res.ok) { alert(res.error||'解散失敗'); return; }
+        loadMeta(function(){ loadUnits(); loadPane(currentPane()); });
+    }, 'json');
+}
+
+/* ============================ 稽核員／陪檢員資格名單 ============================ */
+var QMAP = {}, QKIND = 'auditor', QPEOPLE = [];
+$('#btnQualify').on('click', function(){
+    $.getJSON(API, {action:'qualify_get'}, function(res){
+        if (!res.ok) { alert(res.error||'載入失敗'); return; }
+        QMAP = res.map||{}; QPEOPLE = res.people||[];
+        QKIND = 'auditor';
+        $('.q-tab').removeClass('on'); $('.q-tab[data-kind=auditor]').addClass('on');
+        $('#qFilter').val('');
+        renderQualify();
+        openMask('qualifyMask');
+    });
+});
+$(document).on('click', '.q-tab', function(){
+    // 切分頁前先把目前這一頁的勾選記回 QMAP，不然切回來會發現剛剛勾的不見了
+    QMAP[QKIND] = $('#qPick .qChk:checked').map(function(){ return +$(this).val(); }).get();
+    $('.q-tab').removeClass('on'); $(this).addClass('on');
+    QKIND = $(this).data('kind');
+    renderQualify();
+});
+function renderQualify(){
+    var picked = {};
+    (QMAP[QKIND]||[]).forEach(function(id){ picked[id] = 1; });
+    var kw = $('#qFilter').val().trim().toLowerCase();
+    var h = '', shown = 0;
+    QPEOPLE.forEach(function(p){
+        var hay = ((p.dept_name||'')+' '+(p.position_name||'')+' '+(p.user_cname||'')).toLowerCase();
+        if (kw && hay.indexOf(kw) < 0) return;
+        shown++;
+        // 欄位順序固定「部門/職稱/姓名」（ai-rules/08 第五節鐵則6）
+        h += '<label class="pick-row"><input type="checkbox" class="qChk" value="'+p.id+'"'
+           + (picked[p.id]?' checked':'')+'>'
+           + '<span class="pk-name">'+esc(p.dept_name||'')+'</span>'
+           + '<span class="pk-name" style="flex:0 0 90px;">'+esc(p.position_name||'')+'</span>'
+           + '<span class="pk-sub" style="color:#5b3a1e;">'+esc(p.user_cname||'')
+           + (p.leave_note ? ('　<span style="color:#C4442D;">'+esc(p.leave_note)+'</span>') : '')+'</span>'
+           + '</label>';
+    });
+    $('#qPick').html(h || '<div class="ia-empty">沒有符合的人員</div>');
+    updateQCount(shown);
+}
+function updateQCount(shown){
+    var n = $('#qPick .qChk:checked').length;
+    var kindLab = (META.qualify_kinds||{})[QKIND] || QKIND;
+    $('#qCount').text(kindLab + '：已勾 ' + n + ' 人'
+        + (shown != null ? ('／顯示 ' + shown + ' 人') : '')
+        + (n === 0 ? '（不限制，全體在職員工都可指派）' : ''));
+}
+$(document).on('change', '.qChk', function(){ updateQCount(); });
+$('#qFilter').on('input', function(){
+    QMAP[QKIND] = $('#qPick .qChk:checked').map(function(){ return +$(this).val(); }).get();
+    renderQualify();
+});
+$('#qAll').on('click', function(){ $('#qPick .qChk').prop('checked', true); updateQCount(); return false; });
+$('#qNone').on('click', function(){ $('#qPick .qChk').prop('checked', false); updateQCount(); return false; });
+$('#btnQualifySave').on('click', function(){
+    // 篩選中被藏起來的人也要一起送，否則打了關鍵字再存會把沒顯示的人全部刷掉
+    var visible = $('#qPick .qChk').map(function(){ return +$(this).val(); }).get();
+    var checked = $('#qPick .qChk:checked').map(function(){ return +$(this).val(); }).get();
+    var keep = (QMAP[QKIND]||[]).filter(function(id){ return visible.indexOf(id) < 0; });
+    var ids = keep.concat(checked);
+    $.post(API, {action:'qualify_save', kind:QKIND, user_ids:JSON.stringify(ids)}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        QMAP[QKIND] = ids;
+        alert((META.qualify_kinds||{})[QKIND] + ' 名單已儲存（' + res.count + ' 人'
+              + (res.count === 0 ? '＝不限制' : '') + '）');
+        loadMeta();
+    }, 'json');
+});
+</script>
+
 </body>
 </html>

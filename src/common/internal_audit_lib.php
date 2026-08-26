@@ -297,6 +297,39 @@ function ia_ensure_schema(PDO $db): void
             KEY idx_ref (ref_type, ref_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='內稽附件'");
 
+        /* ---- 受稽單位群組（使用者要求：生產部＋生產1/2/3廠 要當成同一個受稽單位）----
+           組織樹上是四個部門，但稽核時是一個單位、計畫表上是一欄、報告表上是一列。
+           不改動 dept_id 當主鍵的既有結構：群組挑一個「代表部門」(main_dept_id)，
+           ia_plan_dept / ia_case_dept / ia_nc 一律存代表部門的 id，顯示名稱走群組名稱；
+           成員部門只影響 ①挑選清單合併成一列 ②◎實際實施歸戶 ③誰算「受稽單位的人」。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_audit_unit (
+            unit_id      INT AUTO_INCREMENT PRIMARY KEY,
+            unit_name    VARCHAR(100) NOT NULL COMMENT '受稽單位名稱（計畫表欄位、報告表列名都用它）',
+            main_dept_id INT NOT NULL COMMENT '代表部門，資料一律以它為鍵',
+            sort_order   INT NOT NULL DEFAULT 0,
+            is_active    TINYINT NOT NULL DEFAULT 1,
+            updated_at   DATETIME NULL, updated_by VARCHAR(60) NULL,
+            UNIQUE KEY uk_main (main_dept_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='受稽單位群組（多個部門併成一個受稽單位）'");
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_audit_unit_dept (
+            ud_id   INT AUTO_INCREMENT PRIMARY KEY,
+            unit_id INT NOT NULL,
+            dept_id INT NOT NULL,
+            UNIQUE KEY uk_ud (unit_id, dept_id),
+            KEY idx_dept (dept_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='受稽單位群組的成員部門'");
+
+        /* ---- 稽核員／陪檢員資格名單（使用者要求：管理員指定哪些部門的哪些人有資格）----
+           名單是空的時候一律回退成「全體在職員工」，否則剛裝好會一個人都選不到。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_qualified_person (
+            qp_id      INT AUTO_INCREMENT PRIMARY KEY,
+            kind       VARCHAR(10) NOT NULL COMMENT 'auditor=稽核員 / escort=陪檢員',
+            user_id    INT NOT NULL,
+            dept_id    INT NULL COMMENT '設定當下所屬部門（僅供分組顯示，判定不靠它）',
+            sort_order INT NOT NULL DEFAULT 0,
+            updated_at DATETIME NULL, updated_by VARCHAR(60) NULL,
+            UNIQUE KEY uk_kind_user (kind, user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='稽核員／陪檢員資格名單'");
         /* ---- 角色（module='internal_audit'） ---- */
         foreach ([
             ['ia_admin',   '內稽管理員（管理代表）'],
@@ -381,6 +414,24 @@ function ia_role_label(array $p): string
 
 /* ============================ 模組設定 ============================ */
 
+/**
+ * 【重要，全站通用】`system_parameters.param_value` 是 **JSON NOT NULL** 欄位，不是文字欄位。
+ * 直接塞 `top` 這種裸字串，MySQL 會回 3140 Invalid JSON text 把整筆寫入擋下來；
+ * 而 `7`／`9` 剛好是合法的 JSON 數字所以存得進去——於是會出現「有些設定存得起來、有些按了說成功卻是空的」
+ * 這種極難查的症狀（2026-08-25 使用者回報「核准格跟審查格存完又變回預設」就是這個）。
+ * 所以：**寫入一律 json_encode，讀取一律用本函式解**（既有資料有裸值與 JSON 兩種，都要吃得下）。
+ */
+function ia_setting_decode($raw): string
+{
+    if ($raw === null) return '';
+    $s = (string)$raw;
+    $d = json_decode($s, true);
+    if ($d === null && strtolower(trim($s)) !== 'null') return $s;   // 不是合法 JSON＝舊的裸值，原樣回
+    if (is_bool($d)) return $d ? '1' : '';
+    if (is_scalar($d)) return (string)$d;
+    return $s;                                                        // 陣列/物件的呼叫端自己 decode
+}
+
 function ia_settings(PDO $db): array
 {
     $out = array_fill_keys(IA_SETTING_KEYS, '');
@@ -388,28 +439,34 @@ function ia_settings(PDO $db): array
         $st = $db->prepare("SELECT param_key, param_value FROM system_parameters WHERE param_group=?");
         $st->execute([IA_SETTING_GROUP]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            if (array_key_exists($r['param_key'], $out)) $out[$r['param_key']] = (string)$r['param_value'];
+            if (array_key_exists($r['param_key'], $out)) $out[$r['param_key']] = ia_setting_decode($r['param_value']);
         }
     } catch (Throwable $e) {}
     if ($out['ia_remind_days'] === '') $out['ia_remind_days'] = '7';
     return $out;
 }
 
+/**
+ * 存一筆設定。**寫入前一定要 json_encode**（param_value 是 JSON 欄位，見 ia_setting_decode 的說明）。
+ * 這裡刻意**不吞例外**：存不進去卻回報成功，使用者只會一直重存卻永遠是空的（本模組已踩過一次）。
+ */
 function ia_setting_save(PDO $db, string $key, string $val, string $byName): void
 {
-    if (!in_array($key, IA_SETTING_KEYS, true)) return;
-    try {
-        $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group=? AND param_key=? LIMIT 1");
-        $st->execute([IA_SETTING_GROUP, $key]);
-        $id = (int)($st->fetchColumn() ?: 0);
-        if ($id) {
-            $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=?, updated_at=NOW() WHERE id=?")
-               ->execute([$val, $byName, $id]);
-        } else {
-            $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, updated_by, updated_at)
-                          VALUES (?,?,?,?,NOW())")->execute([IA_SETTING_GROUP, $key, $val, $byName]);
-        }
-    } catch (Throwable $e) {}
+    if (!in_array($key, IA_SETTING_KEYS, true)) {
+        throw new RuntimeException('不支援的設定項目：' . $key);
+    }
+    $json = json_encode($val, JSON_UNESCAPED_UNICODE);
+    $st = $db->prepare("SELECT id FROM system_parameters WHERE param_group=? AND param_key=? LIMIT 1");
+    $st->execute([IA_SETTING_GROUP, $key]);
+    $id = (int)($st->fetchColumn() ?: 0);
+    if ($id) {
+        $db->prepare("UPDATE system_parameters SET param_value=?, updated_by=?, updated_at=NOW() WHERE id=?")
+           ->execute([$json, $byName, $id]);
+    } else {
+        $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description, updated_by, updated_at)
+                      VALUES (?,?,?,?,?,NOW())")
+           ->execute([IA_SETTING_GROUP, $key, $json, '內部稽核模組設定', $byName]);
+    }
 }
 
 /** DB 當天（PHP date() 是 UTC、MySQL 是本地時間，混用會差一天） */
@@ -473,7 +530,9 @@ function ia_plan_actual_map(PDO $db, int $year): array
         $st->execute([$year]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $m = (int)$r['m'];
-            if ($m >= 1 && $m <= 12) $out[(int)$r['dept_id'] . '-' . $m] = 1;
+            if ($m < 1 || $m > 12) continue;
+            // 受稽單位群組：稽核「生產2廠」也要算成「生產部」那一欄的 ◎（歸戶到代表部門）
+            $out[ia_unit_key_of_dept($db, (int)$r['dept_id']) . '-' . $m] = 1;
         }
     } catch (Throwable $e) {}
     return $out;
@@ -500,6 +559,8 @@ function ia_plan_get(PDO $db, int $year): ?array
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $cells[(int)$r['dept_id'] . '-' . (int)$r['month']] = $r['note'] ?: '1';
 
     $plan['depts']  = $depts;
+    // 這裡一律維持 PHP 陣列（dashboard 會對它 count()／foreach）。
+    // 送給前端之前才轉成物件——理由見 API 的 plan_get。
     $plan['cells']  = $cells;
     $plan['actual'] = ia_plan_actual_map($db, $year);
     return $plan;
@@ -632,8 +693,9 @@ function ia_dept_head_asof(PDO $db, ?int $deptId, ?string $bizDate): ?array
     $date  = ($bizDate && preg_match('/^\d{4}-\d{2}-\d{2}$/', $bizDate)) ? $bizDate : $today;
     $isPast = ($date < $today);
 
-    $deptIds = eg_dept_subtree_ids($db, $deptId);
-    if (!$deptIds) $deptIds = [$deptId];
+    // 受稽單位若是群組，主管要在整個群組（含各成員部門的子部門）裡找
+    $deptIds = ia_unit_dept_scope($db, $deptId);
+    if (!$deptIds) $deptIds = eg_dept_subtree_ids($db, $deptId) ?: [$deptId];
 
     if (!$isPast) {
         // 今日／未來：用現況解析（原鏈），回不到再往下試歷史
@@ -775,7 +837,8 @@ function ia_nc_stage_perm(PDO $db, array $nc, array $perms, int $uid): array
     $deptId = (int)($nc['dept_id'] ?? 0);
     if ($deptId) {
         try {
-            $ids = eg_dept_subtree_ids($db, $deptId) ?: [$deptId];
+            // 受稽單位若是群組（例：生產部＋生產1/2/3廠），四個部門的人都算受稽單位的人
+            $ids = ia_unit_dept_scope($db, $deptId) ?: [$deptId];
             $in  = implode(',', array_fill(0, count($ids), '?'));
             $st  = $db->prepare("SELECT 1 FROM user_department_position_map
                                  WHERE user_id=? AND department_id IN ($in) LIMIT 1");
@@ -1087,4 +1150,193 @@ function ia_stamp_template(PDO $db): ?array
         return ['id' => (int)$r['id'], 'tpl_name' => $r['tpl_name'],
                 'schema' => json_decode((string)$r['schema_json'], true)];
     } catch (Throwable $e) { return null; }
+}
+
+/* ============================ 受稽單位（含群組） ============================ */
+
+/**
+ * 全站的「受稽單位」清單＝已設定的群組 ＋ 沒被任何群組收編的單一部門。
+ * 使用者要求：生產部、生產1廠、生產2廠、生產3廠 這種要能綁成同一個受稽單位。
+ * 回傳每列：
+ *   key       代表部門 id（ia_plan_dept / ia_case_dept / ia_nc 一律存這個）
+ *   name      顯示名稱（群組用群組名稱，單一部門用部門名稱）
+ *   unit_id   群組 id（單一部門為 0）
+ *   dept_ids  這個受稽單位涵蓋的所有部門 id（單一部門就是自己一個）
+ *   is_group  1=群組
+ */
+function ia_audit_units(PDO $db): array
+{
+    $depts = [];
+    try {
+        foreach ($db->query("SELECT id, name, parent_id, level, sort_order FROM department ORDER BY sort_order, id")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $d) $depts[(int)$d['id']] = $d;
+    } catch (Throwable $e) { return []; }
+
+    $units = []; $taken = [];
+    try {
+        $rows = $db->query("SELECT * FROM ia_audit_unit WHERE is_active=1 ORDER BY sort_order, unit_id")
+                   ->fetchAll(PDO::FETCH_ASSOC);
+        $mem = [];
+        foreach ($db->query("SELECT unit_id, dept_id FROM ia_audit_unit_dept")->fetchAll(PDO::FETCH_ASSOC) as $m) {
+            $mem[(int)$m['unit_id']][] = (int)$m['dept_id'];
+        }
+        foreach ($rows as $u) {
+            $uid  = (int)$u['unit_id'];
+            $main = (int)$u['main_dept_id'];
+            $ids  = $mem[$uid] ?? [];
+            if (!in_array($main, $ids, true)) $ids[] = $main;          // 代表部門一定算成員
+            $ids = array_values(array_filter($ids, function ($i) use ($depts) { return isset($depts[$i]); }));
+            if (!$ids || !isset($depts[$main])) continue;              // 部門被刪掉的群組直接跳過
+            foreach ($ids as $i) $taken[$i] = 1;
+            $units[] = ['key' => $main, 'name' => (string)$u['unit_name'], 'unit_id' => $uid,
+                        'dept_ids' => $ids, 'is_group' => 1,
+                        'members' => array_map(function ($i) use ($depts) { return $depts[$i]['name']; }, $ids),
+                        'sort_order' => (int)$u['sort_order']];
+        }
+    } catch (Throwable $e) {}
+
+    foreach ($depts as $id => $d) {
+        if (isset($taken[$id])) continue;
+        $units[] = ['key' => $id, 'name' => (string)$d['name'], 'unit_id' => 0,
+                    'dept_ids' => [$id], 'is_group' => 0, 'members' => [(string)$d['name']],
+                    'sort_order' => (int)$d['sort_order']];
+    }
+    usort($units, function ($a, $b) {
+        if ($a['sort_order'] !== $b['sort_order']) return $a['sort_order'] <=> $b['sort_order'];
+        return $a['key'] <=> $b['key'];
+    });
+    return $units;
+}
+
+/** 部門 id → 它所屬受稽單位的代表部門 id（沒被群組收編就是自己） */
+function ia_unit_key_of_dept(PDO $db, int $deptId): int
+{
+    static $map = null;
+    if ($map === null) {
+        $map = [];
+        foreach (ia_audit_units($db) as $u) foreach ($u['dept_ids'] as $d) $map[$d] = $u['key'];
+    }
+    return $map[$deptId] ?? $deptId;
+}
+
+/** 某受稽單位涵蓋的所有部門 id（含各自子部門），用於判定「這個人是不是受稽單位的人」 */
+function ia_unit_dept_scope(PDO $db, int $unitKey): array
+{
+    $out = [];
+    foreach (ia_audit_units($db) as $u) {
+        if ($u['key'] !== $unitKey) continue;
+        foreach ($u['dept_ids'] as $d) {
+            foreach (eg_dept_subtree_ids($db, $d) ?: [$d] as $x) $out[(int)$x] = 1;
+        }
+        break;
+    }
+    if (!$out) foreach (eg_dept_subtree_ids($db, $unitKey) ?: [$unitKey] as $x) $out[(int)$x] = 1;
+    return array_keys($out);
+}
+
+/** 檢查群組設定是否合法（成員不可被別的群組佔走、代表部門必須是成員之一） */
+function ia_unit_validate(PDO $db, int $unitId, string $name, int $mainDeptId, array $deptIds): string
+{
+    $name = trim($name);
+    if ($name === '') return '請填受稽單位名稱';
+    if (mb_strlen($name) > 50) return '受稽單位名稱過長（上限 50 字）';
+    $deptIds = array_values(array_unique(array_filter(array_map('intval', $deptIds))));
+    if (count($deptIds) < 2) return '群組至少要有兩個部門（只有一個部門不需要設群組）';
+    if (!$mainDeptId || !in_array($mainDeptId, $deptIds, true)) return '代表部門必須是成員之一';
+    try {
+        $in = implode(',', array_fill(0, count($deptIds), '?'));
+        $st = $db->prepare("SELECT COUNT(*) FROM department WHERE id IN ($in)");
+        $st->execute($deptIds);
+        if ((int)$st->fetchColumn() !== count($deptIds)) return '有部門不存在';
+        $st = $db->prepare("SELECT u.unit_name FROM ia_audit_unit_dept ud
+                            JOIN ia_audit_unit u ON u.unit_id=ud.unit_id AND u.is_active=1
+                            WHERE ud.dept_id IN ($in) AND ud.unit_id<>? LIMIT 1");
+        $st->execute(array_merge($deptIds, [$unitId]));
+        $dup = $st->fetchColumn();
+        if ($dup) return '有部門已經被「' . $dup . '」收編了，一個部門只能屬於一個受稽單位';
+    } catch (Throwable $e) { return '檢查失敗：' . $e->getMessage(); }
+    return '';
+}
+
+/* ============================ 稽核員／陪檢員資格名單 ============================ */
+
+const IA_QUALIFY_KINDS = ['auditor' => '稽核員', 'escort' => '陪檢員'];
+
+/**
+ * 某身分的合格人員清單。
+ * **名單沒設定時一律回全體在職員工**——否則模組剛上線一個人都挑不到，
+ * 使用者會以為壞掉（而且這種「空名單＝什麼都不能選」的設計每次都要被回報一次）。
+ * 回傳格式與 eg_people_list() 相同，畫面上的下拉可以直接用。
+ */
+function ia_qualified_people(PDO $db, string $kind): array
+{
+    $all = [];
+    try { $all = eg_people_list($db, []); } catch (Throwable $e) { $all = []; }
+    if (!isset(IA_QUALIFY_KINDS[$kind])) return $all;
+    $ids = [];
+    try {
+        $st = $db->prepare("SELECT user_id FROM ia_qualified_person WHERE kind=?");
+        $st->execute([$kind]);
+        $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) {}
+    if (!$ids) return $all;                       // 沒設定＝不限制
+    $set = array_flip($ids);
+    // 已離職的人不會出現在 eg_people_list，所以名單裡的離職者自然被濾掉（正確行為）
+    return array_values(array_filter($all, function ($p) use ($set) { return isset($set[(int)$p['id']]); }));
+}
+
+/** 目前設定的名單（管理畫面用），回 kind => [user_id,...] */
+function ia_qualify_map(PDO $db): array
+{
+    $out = array_fill_keys(array_keys(IA_QUALIFY_KINDS), []);
+    try {
+        foreach ($db->query("SELECT kind, user_id FROM ia_qualified_person ORDER BY sort_order, qp_id")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (isset($out[$r['kind']])) $out[$r['kind']][] = (int)$r['user_id'];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 整批覆寫某身分的名單（空陣列＝不限制，全體在職員工都可選） */
+function ia_qualify_save(PDO $db, string $kind, array $userIds, string $byName): void
+{
+    if (!isset(IA_QUALIFY_KINDS[$kind])) throw new RuntimeException('身分別不正確');
+    $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
+    if ($userIds) {
+        $in = implode(',', array_fill(0, count($userIds), '?'));
+        $st = $db->prepare("SELECT COUNT(*) FROM `user` WHERE id IN ($in)");
+        $st->execute($userIds);
+        if ((int)$st->fetchColumn() !== count($userIds)) throw new RuntimeException('有人員不存在');
+    }
+    $db->prepare("DELETE FROM ia_qualified_person WHERE kind=?")->execute([$kind]);
+    if (!$userIds) return;
+    $ins = $db->prepare("INSERT INTO ia_qualified_person (kind, user_id, dept_id, sort_order, updated_at, updated_by)
+                         VALUES (?,?,?,?,NOW(),?)");
+    $dept = $db->prepare("SELECT department_id FROM user_department_position_map WHERE user_id=? LIMIT 1");
+    $i = 0;
+    foreach ($userIds as $uid) {
+        $dept->execute([$uid]);
+        $ins->execute([$kind, $uid, ($dept->fetchColumn() ?: null), ++$i * 10, $byName]);
+    }
+}
+
+/** 年度下拉的選項：已有資料的年度 ＋ 近十年到明年（管理員要補舊年度資料，選單裡就得選得到） */
+function ia_year_options(PDO $db): array
+{
+    $years = [];
+    try {
+        $years = array_map('intval', $db->query(
+            "SELECT DISTINCT year FROM (
+                SELECT year FROM ia_plan  WHERE COALESCE(is_deleted,0)=0
+                UNION SELECT year FROM ia_case WHERE COALESCE(is_deleted,0)=0
+                UNION SELECT year FROM ia_nc   WHERE COALESCE(is_deleted,0)=0
+                UNION SELECT year FROM ia_check WHERE COALESCE(is_deleted,0)=0
+                UNION SELECT year FROM ia_report) x")->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) {}
+    $cy = (int)substr(ia_today($db), 0, 4);
+    for ($y = $cy + 1; $y >= $cy - 10; $y--) $years[] = $y;
+    $years = array_values(array_unique(array_filter($years)));
+    rsort($years);
+    return $years;
 }

@@ -98,17 +98,9 @@ case 'meta': {
                                      WHERE p.is_active=1 ORDER BY p.tpl_name")->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable $e) {}
     }
-    $years = [];
-    try {
-        $years = $db->query("SELECT DISTINCT year FROM (
-                                SELECT year FROM ia_plan WHERE COALESCE(is_deleted,0)=0
-                                UNION SELECT year FROM ia_case WHERE COALESCE(is_deleted,0)=0
-                                UNION SELECT year FROM ia_nc  WHERE COALESCE(is_deleted,0)=0) x
-                             ORDER BY year DESC")->fetchAll(PDO::FETCH_COLUMN);
-    } catch (Throwable $e) {}
-    $years = array_map('intval', $years);
-    $cy = (int)substr($today, 0, 4);
-    if (!in_array($cy, $years, true)) array_unshift($years, $cy);
+    // 年度選單含近十年（管理員要補以前年度的資料，選單裡就得選得到）
+    $years = ia_year_options($db);
+    $cy    = (int)substr($today, 0, 4);
 
     jout([
         'me'        => ['id' => $uid, 'name' => $uname] + ia_identity_asof($db, $uid, $today),
@@ -124,8 +116,15 @@ case 'meta': {
         'company'   => eg_company_full_name($db),
         'depts'     => $depts,
         'people'    => $people,
+        // 受稽單位＝群組（如 生產部＋生產1/2/3廠）＋沒被群組收編的單一部門
+        'units'     => ia_audit_units($db),
+        // 稽核員／陪檢員只列有資格的人；名單沒設定時回全體在職員工
+        'auditors'  => ia_qualified_people($db, 'auditor'),
+        'escorts'   => ia_qualified_people($db, 'escort'),
+        'qualify_kinds' => IA_QUALIFY_KINDS,
         'stamp_tpls'=> $stampTpls,
         'years'     => $years,
+        'this_year' => $cy,
         'today'     => $today,
     ]);
 }
@@ -147,8 +146,13 @@ case 'save_setting': {
         $st->execute([(int)$v]);
         if (!$st->fetchColumn()) jerr('圖章模板不存在或已停用');
     }
-    ia_setting_save($db, $k, $v, $uname);
-    jout(['saved' => true]);
+    // 存不進去一定要讓使用者看到；回報成功卻沒存＝使用者會一直重存卻永遠是空的
+    try { ia_setting_save($db, $k, $v, $uname); }
+    catch (Throwable $e) { jerr('設定儲存失敗：' . $e->getMessage(), 500); }
+    // 立刻讀回來確認真的寫進去了（寫入成功但值被資料庫改寫的情況也擋得住）
+    $back = ia_settings($db);
+    if (($back[$k] ?? null) !== $v) jerr('設定寫入後讀回的值不一致，請回報系統管理者', 500);
+    jout(['saved' => true, 'value' => $back[$k]]);
 }
 
 case 'save_asdoc': {
@@ -171,6 +175,13 @@ case 'plan_get': {
     $year = (int)($_GET['year'] ?? substr($today, 0, 4));
     $plan = ia_plan_get($db, $year);
     if (!$plan) jout(['plan' => null, 'year' => $year]);
+    // ★ cells／actual 一定要轉成物件再送出去：PHP 的**空**關聯陣列 json_encode 出來是 `[]`（JS 的陣列）
+    //   不是 `{}`；前端在陣列上加字串鍵（'6-11'）之後，用 $.each 之類的走訪拿不到那些鍵，
+    //   結果就是「點了格子、按了儲存，送出的卻是空清單」——存進去是空的而且完全不報錯
+    //   （2026-08-25 使用者回報「很多儲存按鈕按了沒真的存」的根因之一）。
+    //   轉型只在輸出這一步做，內部（dashboard 會 count()／foreach）仍是陣列。
+    $plan['cells']  = (object)$plan['cells'];
+    $plan['actual'] = (object)$plan['actual'];
     jout(['plan' => $plan, 'year' => $year]);
 }
 
@@ -1248,6 +1259,94 @@ case 'dashboard': {
         $out['plan_extra']   = max(0, count($plan['actual']) - $actual);   // 沒排卻做了的
     }
     jout($out);
+}
+
+
+/* ============================ 受稽單位群組 ============================ */
+case 'unit_list': {
+    iaReqView($perms);
+    jout(['units' => ia_audit_units($db), 'kinds' => IA_QUALIFY_KINDS]);
+}
+
+case 'unit_save': {
+    iaReqAdmin($perms);
+    $unitId  = (int)($_POST['unit_id'] ?? 0);
+    $name    = trim((string)($_POST['unit_name'] ?? ''));
+    $mainId  = (int)($_POST['main_dept_id'] ?? 0);
+    $deptIds = json_decode((string)($_POST['dept_ids'] ?? '[]'), true);
+    if (!is_array($deptIds)) $deptIds = [];
+    $deptIds = array_values(array_unique(array_filter(array_map('intval', $deptIds))));
+    if (!$mainId && $deptIds) $mainId = $deptIds[0];
+    // 前端擋一次、後端同規則再擋一次（鐵律8）
+    $err = ia_unit_validate($db, $unitId, $name, $mainId, $deptIds);
+    if ($err !== '') jerr($err);
+
+    $db->beginTransaction();
+    try {
+        if ($unitId) {
+            $db->prepare("UPDATE ia_audit_unit SET unit_name=?, main_dept_id=?, is_active=1,
+                              updated_at=NOW(), updated_by=? WHERE unit_id=?")
+               ->execute([$name, $mainId, $uname, $unitId]);
+        } else {
+            $db->prepare("INSERT INTO ia_audit_unit (unit_name, main_dept_id, sort_order, is_active, updated_at, updated_by)
+                          VALUES (?,?,(SELECT COALESCE(MAX(s.sort_order),0)+10 FROM (SELECT sort_order FROM ia_audit_unit) s),1,NOW(),?)")
+               ->execute([$name, $mainId, $uname]);
+            $unitId = (int)$db->lastInsertId();
+        }
+        $db->prepare("DELETE FROM ia_audit_unit_dept WHERE unit_id=?")->execute([$unitId]);
+        $ins = $db->prepare("INSERT INTO ia_audit_unit_dept (unit_id, dept_id) VALUES (?,?)");
+        foreach ($deptIds as $d) $ins->execute([$unitId, $d]);
+        // 已建立的計畫表／通知單上，原本各自成欄的成員部門要併回代表部門，否則畫面會出現重複的欄
+        $db->prepare("UPDATE ia_plan_dept SET dept_id=?, dept_name=? WHERE dept_id IN
+                      (SELECT dept_id FROM ia_audit_unit_dept WHERE unit_id=?) AND dept_id<>?")
+           ->execute([$mainId, $name, $unitId, $mainId]);
+        $db->prepare("UPDATE ia_plan_dept SET dept_name=? WHERE dept_id=?")->execute([$name, $mainId]);
+        $db->commit();
+        jout(['unit_id' => $unitId]);
+    } catch (Throwable $e) {
+        $db->rollBack();
+        // 同一個計畫表裡兩個成員部門都被列成欄時，併欄會撞 UNIQUE(plan_id,dept_id)
+        if (strpos($e->getMessage(), '1062') !== false || stripos($e->getMessage(), 'Duplicate') !== false) {
+            jerr('有年度計畫表同時列了這個群組裡的兩個以上部門當欄位，請先到該年度計畫表的「受稽單位」把多餘的欄取消勾選，再建立群組');
+        }
+        jerr('儲存失敗：' . $e->getMessage(), 500);
+    }
+}
+
+case 'unit_delete': {
+    iaReqAdmin($perms);
+    $unitId = (int)($_POST['unit_id'] ?? 0);
+    $db->beginTransaction();
+    try {
+        // 解散群組：成員部門各自變回獨立的受稽單位，既有資料仍掛在代表部門上不動
+        $db->prepare("DELETE FROM ia_audit_unit_dept WHERE unit_id=?")->execute([$unitId]);
+        $db->prepare("DELETE FROM ia_audit_unit WHERE unit_id=?")->execute([$unitId]);
+        $db->commit();
+        jout(['deleted' => true]);
+    } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：' . $e->getMessage(), 500); }
+}
+
+/* ============================ 稽核員／陪檢員資格名單 ============================ */
+case 'qualify_get': {
+    iaReqView($perms);
+    jout(['kinds' => IA_QUALIFY_KINDS, 'map' => ia_qualify_map($db),
+          'people' => eg_people_list($db, [])]);
+}
+
+case 'qualify_save': {
+    iaReqAdmin($perms);
+    $kind = (string)($_POST['kind'] ?? '');
+    if (!isset(IA_QUALIFY_KINDS[$kind])) jerr('身分別不正確');
+    $ids = json_decode((string)($_POST['user_ids'] ?? '[]'), true);
+    if (!is_array($ids)) jerr('格式錯誤');
+    $db->beginTransaction();
+    try {
+        ia_qualify_save($db, $kind, $ids, $uname);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
+    // 存完讀回來確認（存不進去卻回成功，使用者只會一直重存）
+    $back = ia_qualify_map($db);
+    jout(['saved' => true, 'count' => count($back[$kind] ?? [])]);
 }
 
 default:
