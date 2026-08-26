@@ -82,6 +82,15 @@ if (!function_exists('eg_people_list')) {
         $exclude = array_map('intval', explode(',', EG_PEOPLE_EXCLUDE_STATES));
         $states  = isset($opt['states']) && is_array($opt['states']) ? array_map('intval', $opt['states']) : [1,2,3];
         $states  = array_values(array_diff($states, $exclude));
+
+        // asof_date：以「某個日期當時」為準判斷在不在職（ai-rules/22 的同一套精神）。
+        // 有帶日期時：①該日之後才入職的人不列 ②該日已離職的人不列 ③該日還在職、之後才離職的人「要列」
+        // （補歷史單據時才選得到當時的人）。離職日沒登錄的離職者一律不列——不知道他哪天走的，
+        // 列出來會把早就離職的人混進近期名單（2026-08-26 使用者拍板）。
+        $asof = isset($opt['asof_date']) ? trim((string)$opt['asof_date']) : '';
+        if ($asof !== '' && !preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $asof)) $asof = '';
+        if ($asof !== '') $states[] = 0;   // 只有帶 asof 時才把離職者納入候選，下面再依離職日逐一過濾
+        $states = array_values(array_unique($states));
         if (!$states) return [];
 
         $deptIds = isset($opt['dept_ids']) && is_array($opt['dept_ids'])
@@ -109,6 +118,12 @@ if (!function_exists('eg_people_list')) {
         if ($deptIn) $where[] = "EXISTS(SELECT 1 FROM user_department_position_map m3
                                         WHERE m3.user_id = u.id AND m3.department_id IN ({$deptIn}))";
         if ($userIds) $where[] = "u.id IN (" . implode(',', $userIds) . ")";
+        if ($asof !== '') {
+            $where[] = "(u.hire_date IS NULL OR u.hire_date <= ?)";                          // 該日之前已入職
+            $params[] = $asof;
+            $where[] = "(u.state <> 0 OR (u.leave_date IS NOT NULL AND u.leave_date >= ?))";  // 該日還沒離職
+            $params[] = $asof;
+        }
         if (!empty($opt['keyword'])) {
             // user 表為 utf8mb3，中文比對一律 CONVERT 成 utf8mb4（見 ai-rules/00 陷阱表）
             $where[] = "(CONVERT(u.user_cname USING utf8mb4) LIKE ? OR CONVERT(u.user_uname USING utf8mb4) LIKE ?)";
@@ -180,6 +195,80 @@ if (!function_exists('eg_people_list')) {
                           . ($r['on_leave'] ? '［' . $r['leave_note'] . '］' : '');
         }
         return $rows;
+    }
+}
+
+if (!function_exists('eg_people_list_asof')) {
+    /**
+     * 「某個日期當時」的人員列表（ai-rules/22：表單一律以業務日期當時的在職狀態與職務為準）
+     *
+     * 與 eg_people_list() 的三點差異：
+     *   1. 在職判定改看該日期——該日之後才入職的不列、該日之前已離職的不列、
+     *      該日還在職但之後才離職的**要列**（補歷史單據時選得到當時的人）。
+     *   2. 部門／職稱改用 user_position_history 回推**當時**的職務（沒補登過異動的人＝現況）。
+     *   3. 因此 dept_ids 的篩選也是比對「當時」的部門，不是現在的部門——
+     *      當時在業務部、現在調到管理部的人，補當時的單據時要在業務部底下找得到。
+     *
+     * @param string $date Y-m-d；格式不合法時退回 eg_people_list()（現況），不擋流程
+     */
+    function eg_people_list_asof(PDO $db, array $opt, string $date): array {
+        $date = trim($date);
+        if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $date)) return eg_people_list($db, $opt);
+        require_once __DIR__ . '/position_history_lib.php';
+
+        // 部門篩選改由「當時的職務快照」比對，所以先從 opt 拿掉不讓 SQL 用現況篩
+        $deptIds = isset($opt['dept_ids']) && is_array($opt['dept_ids'])
+                 ? array_values(array_filter(array_map('intval', $opt['dept_ids']))) : [];
+        unset($opt['dept_ids']);
+        $opt['asof_date'] = $date;
+        $rows = eg_people_list($db, $opt);
+        if (!$rows) return [];
+
+        $snapAll = eg_position_snapshot_at_bulk($db, $date);
+        // sort_order 一律取目前設定值（快照只存 id 與當時名稱，沒有排序值）
+        $posSort = $deptSort = [];
+        foreach ($db->query("SELECT id, COALESCE(sort_order,999) s FROM position")->fetchAll(PDO::FETCH_ASSOC) as $x)
+            $posSort[(int)$x['id']] = (int)$x['s'];
+        foreach ($db->query("SELECT id, COALESCE(sort_order,999) s FROM department")->fetchAll(PDO::FETCH_ASSOC) as $x)
+            $deptSort[(int)$x['id']] = (int)$x['s'];
+
+        $out = [];
+        foreach ($rows as $r) {
+            $snap = $snapAll[$r['id']] ?? [];
+            if ($snap) {
+                // 顯示用挑哪一筆：優先符合部門篩選的 → 職級最高 → 主要職務
+                // （與 eg_people_list 同一套優先序；兼任常才是真正的職務身分，見 ai-rules/22）
+                $best = null;
+                foreach ($snap as $sp) {
+                    $sp['_hit']  = ($deptIds && in_array((int)$sp['department_id'], $deptIds, true)) ? 1 : 0;
+                    $sp['_psrt'] = $posSort[(int)$sp['position_id']] ?? 999;
+                    if ($best === null
+                        || $sp['_hit'] > $best['_hit']
+                        || ($sp['_hit'] === $best['_hit'] && $sp['_psrt'] < $best['_psrt'])
+                        || ($sp['_hit'] === $best['_hit'] && $sp['_psrt'] === $best['_psrt']
+                            && (int)$sp['is_main'] > (int)$best['is_main'])) $best = $sp;
+                }
+                $r['dept_ids']      = array_values(array_unique(array_map(fn($x) => (int)$x['department_id'], $snap)));
+                $r['dept_id']       = (int)$best['department_id'];
+                $r['dept_name']     = (string)($best['department_name'] ?? '');
+                $r['dept_sort']     = $deptSort[(int)$best['department_id']] ?? 999;
+                $r['position_id']   = (int)$best['position_id'];
+                $r['position_name'] = (string)($best['position_name'] ?? '');
+                $r['position_sort'] = (int)$best['_psrt'];
+                $r['display']       = $r['user_cname']
+                                    . ($r['position_name'] !== '' ? '（' . $r['position_name'] . '）' : '')
+                                    . ($r['on_leave'] ? '［' . $r['leave_note'] . '］' : '');
+            }
+            if ($deptIds && !array_intersect($deptIds, $r['dept_ids'])) continue;
+            $r['asof_date'] = $date;
+            $out[] = $r;
+        }
+        // 鐵則 5：排序依部門/職稱 sort_order，不是姓名筆畫
+        usort($out, function ($a, $b) {
+            return [$a['dept_sort'], $a['position_sort'], $a['user_cname'], $a['id']]
+               <=> [$b['dept_sort'], $b['position_sort'], $b['user_cname'], $b['id']];
+        });
+        return $out;
     }
 }
 

@@ -110,10 +110,20 @@ foreach ($roleRows as $rr) {
         .mt-hint b { color:#8A5A2B; }
         .mt-sec { border-top:1px dashed #EADFC8; margin-top:10px; padding-top:6px; }
         .mt-sec-title { font-weight:bold; color:#5b3a1e; margin:6px 0 4px; }
-        .att-people { max-height:130px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; padding:6px 8px;
-            display:flex; flex-wrap:wrap; gap:4px 14px; margin-bottom:6px; min-height:20px; }
-        .att-people label { font-size:12px; color:#5b3a1e; margin:0; font-weight:normal; cursor:pointer; }
+        /* 2026-08-26：名字右方要接「當天行程」，改為一人一列的直式清單（橫排會被長字串擠爆） */
+        .att-people { max-height:200px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; padding:6px 8px;
+            display:flex; flex-direction:column; gap:3px; margin-bottom:6px; min-height:20px; }
+        .att-people label { font-size:12px; color:#5b3a1e; margin:0; font-weight:normal; cursor:pointer;
+            display:flex; align-items:baseline; gap:5px; line-height:1.5; }
+        .att-people label.blocked { color:#b0a390; cursor:not-allowed; }
         .att-people .empty { color:#b0a390; font-size:12px; }
+        /* 當天行程提示：一般行程暖棕字，與會議時段重疊改用急件紅(ai-rules/10 固定三色的 E)，不可勾選者加刪節線提示 */
+        .att-sched { font-size:11px; color:#8a6d45; }
+        .att-sched.ov { color:#DD5138; font-weight:bold; }
+        .att-sched.blk { color:#DD5138; }
+        .att-pos { color:#8a6d45; }
+        .sched-src { font-size:12px; color:#5b3a1e; display:block; margin:3px 0; font-weight:normal; }
+        .sched-src small { color:#8a6d45; }
         button.b-att { height:28px; font-size:12px; border:1px solid #d98a33; background:#F0A24B; color:#fff; border-radius:4px; cursor:pointer; padding:0 10px; }
         button.b-att.wt { background:#fff; color:#8A5A2B; }
         .att-list-wrap { max-height:190px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; }
@@ -397,6 +407,17 @@ foreach ($roleRows as $rr) {
                 </label>
                 <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">出席人員全部簽到、負責部門／指定人員全部回簽、且已指定主席——三個條件都到齊的那一刻，系統直接送交主席確認簽章，記錄人不必再手動按一次「送出」（簽核紀錄上的送出人仍記記錄人本人，跟手動送出完全一樣，並會發一則通知告知記錄人）。關掉＝維持原本要手動按送出。</p>
             </div>
+            <div style="border:1px solid #E8D5B5;border-radius:6px;background:#FFF7E8;padding:8px 10px;margin-bottom:14px;">
+                <label style="margin:0 0 2px;">挑選出席人員時，要提示哪些「當天行程」</label>
+                <p class="text-muted" style="font-size:11.5px;margin:0 0 6px;">
+                    勾選的來源會顯示在人員名稱右方（例：<b>陳俊宏（總經理）10:00~11:00 會議</b>），
+                    並自動判定與會議的開始～結束時間有沒有重疊。<b>「請假」與會議時段重疊者一律不可勾選</b>，
+                    其餘來源只提示、仍可加入名單。<br>
+                    這是<b>全站共用</b>的設定，日後其他要挑人的頁面也會吃同一份。
+                </p>
+                <div id="schedSrcBox"></div>
+                <button type="button" class="b-att" style="margin-top:6px;" onclick="submitSchedSrc()">儲存行程來源</button>
+            </div>
             <label>附件儲存路徑（留空＝用全站預設根目錄＋「會議紀錄」子資料夾）</label>
             <input type="text" id="setNasDir" style="width:100%;" placeholder="\\excellentnas\...\會議紀錄">
             <button type="button" class="b-att" style="margin-top:6px;" onclick="submitNasDir()">儲存路徑</button>
@@ -458,6 +479,10 @@ foreach ($roleRows as $rr) {
         主席與總經理雙層簽核、產銷會議可自動插入本月出貨目標達成率佐證。
         <h4>操作步驟</h4>
         <b>①新增</b>：填主題/日期/時間/地點（主題、地點可打字自由輸入，也可從曾用過的建議清單挑；有設定「常用設定」時可一鍵套用主題+地點+時間，套用後仍可自行修改），加入出席人員（依部門挑選，或套用已存的<b>公開/私人群組</b>——把常開會的一批人存成群組，下次直接套用，也可另存新群組），指定主席。日期時間存檔前後端都會檢查合理性（結束不可早於或等於開始）。「記錄」欄固定為目前登入者，不可修改。<br>
+        　－<b>人員名單依「會議日期當天」的狀態產生</b>：那天之後才入職、或那天之前就已離職的人一律不出現；那天還在職、之後才離職的人<b>仍會出現</b>（所以補打舊會議紀錄時選得到當時的人）。部門與職稱也是回推<b>當時</b>的（有登錄職務異動紀錄者），不是現在的。<br>
+        　－<b>名字右方會顯示他當天的行程</b>（例：<b>陳俊宏（總經理）10:00~11:00 會議</b>），來源包含請假、公出單、教育訓練/外訓、已排定的其他會議；系統會自動比對會議的開始～結束時間，<b>有重疊會標紅並註明「（時間重疊）」</b>。<br>
+        　－<b>只有「請假且與會議時段重疊」（含全天假）不可勾選</b>，會以灰字標示；公出／外訓／其他會議只是提示，仍可加入名單（現場常有人開完前一場再過來）。套用群組與從行事曆帶入時套用同一套規則，會直接告訴你誰沒被加入、誰的時間重疊。<br>
+        　－要顯示哪些行程來源，管理員可在<b>模組設定 → 附件與簽到表AS文件綁定</b>調整（此為全站共用設定）。<br>
         <b>②建立要項</b>：分「上級指示要項」與「會議要項」兩張表，每項可填應完成日期、負責部門（可多選）、備註。<br>
         <b>③現場簽到</b>：開啟「檢視」，出席人員名單旁各自輸入<b>本人密碼</b>簽到（共用一台裝置輪流簽，用選人不用密碼反查身分，不會有密碼重複無法辨識的問題）。<br>
         <b>④存草稿或送出</b>：草稿只有記錄人自己看得到，可隨時修改。<b>出席人員全部簽到、且負責部門/指定人員也全部確認回簽後</b>才能真正<b>送簽核</b>，鎖定內容並通知主席確認簽章 → 主席簽章後自動通知總經理確認簽章（總經理可逐筆或整體回覆意見）→ 完成。
@@ -671,11 +696,27 @@ $('#edCalPick').on('change', function(){
     $('#edStart').val(String(ev.start).substr(11,5));
     $('#edEnd').val(String(ev.end).substr(11,5));
     edTimeValidate();
-    (ev.actors||[]).forEach(function(a){
-        if (!ATT.some(function(x){ return x.user_id===a.user_id; }))
-            ATT.push({user_id:a.user_id, user_name:a.user_name, dept_name:a.dept_name, position_name:a.position_name, signed:0});
+    // 2026-08-26：行事曆帶進來的人也要走同一套判定（當日在職＋行程衝突），不能繞過去，
+    // 否則存檔當下才被後端擋下，使用者已經填完整張表了。
+    var ids = (ev.actors||[]).map(function(a){ return a.user_id; }).filter(Boolean);
+    if (!ids.length){ renderAtt(); renderChairSel(); return; }
+    $.getJSON(API, {action:'resolve_people', user_ids:ids.join(','), meeting_date:$('#edDate').val(),
+                    start_time:$('#edStart').val(), end_time:$('#edEnd').val(), meeting_id:(EDIT_ID||0)}, function(r){
+        var blocked = [], warn = [];
+        if (r && r.ok) (r.people||[]).forEach(function(p){
+            if (+p.blocked === 1){ blocked.push(p.user_cname + '（' + (p.block_reason||'請假') + '）'); return; }
+            if (+p.has_overlap === 1) warn.push(p.user_cname + '：' + p.sched_text);
+            if (!ATT.some(function(x){ return x.user_id===p.id; }))
+                ATT.push({user_id:p.id, user_name:p.user_cname, dept_name:p.dept_name, position_name:p.position_name, signed:0});
+        });
+        renderAtt(); renderChairSel();
+        var msg = [];
+        var gone = ids.length - ((r && r.people) ? r.people.length : 0);
+        if (gone > 0) msg.push('其中 ' + gone + ' 位在會議當天不在職（尚未入職／已離職），未加入名單。');
+        if (blocked.length) msg.push('下列人員在會議時段內請假，未加入名單：\n　' + blocked.join('\n　'));
+        if (warn.length)    msg.push('下列人員當天另有行程與會議時段重疊，已加入但請確認：\n　' + warn.join('\n　'));
+        if (msg.length) alert(msg.join('\n\n'));
     });
-    renderAtt(); renderChairSel();
 });
 function openEdit(id){
     $.getJSON(API, {action:'get_detail', meeting_id:id}, function(res){
@@ -717,24 +758,45 @@ function deleteMeeting(id){
     }, 'json');
 }
 
-/* 出席人員：部門挑選 → 勾選加入（同 training 模組模式）。2026-08-06使用者明確要求：不列會議當天時段有請假
-   的人員，一律帶目前表單上的日期/時間查詢(由後端 meeting_filter_available_people 過濾)；日期/時間改變時
-   若已選了部門，重新載入該部門名單，避免名單跟已改過的日期時間對不上。 */
+/* 出席人員：部門挑選 → 勾選加入（同 training 模組模式）。
+   2026-08-26 使用者明確要求（取代 2026-08-06「請假者一律不出現」的舊口徑）：
+     ①名單一律抓「會議日期當日」的在職狀態——該日之後才入職、該日之前已離職者都不出現，
+       該日還在職、之後才離職的則要出現（補舊會議紀錄時才選得到當時的人）；部門也是回推當時的部門。
+     ②當天的請假／公出／外訓／其他會議顯示在人員名稱右方，並自動判定與會議時段有無重疊。
+     ③只有「請假且與會議時段重疊（含全天假）」不可勾選，其餘只提示。
+   判定全部在後端做（person_schedule_lib.php），前端只負責畫；日期/時間改變時重新載入。 */
+function attSchedHtml(u){
+    if (!u.sched || !u.sched.length) return '';
+    var parts = u.sched.map(function(it){
+        var cls = it.blocks ? 'blk' : (it.overlap ? 'ov' : '');
+        return '<span class="att-sched '+cls+'">'+esc(it.text)+(it.overlap?'（時間重疊）':'')+'</span>';
+    });
+    return parts.join('<span class="att-sched">、</span>');
+}
 function attDeptReload(){
     var did = $('#attDept').val();
     if (!did){ $('#attPeopleBox').html('<span class="empty">選部門載入人員</span>'); return; }
-    if (!$('#edDate').val()){ $('#attPeopleBox').html('<span class="empty">請先填會議日期，才能排除當天請假人員</span>'); return; }
+    if (!$('#edDate').val()){ $('#attPeopleBox').html('<span class="empty">請先填會議日期，才能依當日在職狀態列出人員</span>'); return; }
     $('#attPeopleBox').html('<span class="empty">載入中…</span>');
-    $.getJSON(API, {action:'people', dept_id:did, meeting_date:$('#edDate').val(), start_time:$('#edStart').val(), end_time:$('#edEnd').val()}, function(res){
+    $.getJSON(API, {action:'people', dept_id:did, meeting_date:$('#edDate').val(), start_time:$('#edStart').val(),
+                    end_time:$('#edEnd').val(), meeting_id:(EDIT_ID||0)}, function(res){
         if (!res.ok){ $('#attPeopleBox').html('<span class="empty">載入失敗</span>'); return; }
-        var h = '';
+        var h = '', blocked = 0;
         res.people.forEach(function(u){
             var inList = ATT.some(function(a){ return a.user_id===+u.id; });
-            h += '<label><input type="checkbox" class="att-ck" value="'+u.id+'" data-name="'+esc(u.user_cname)+'"'
-               + ' data-dept="'+esc($('#attDept option:selected').text())+'" data-pos="'+esc(u.position_name||'')+'"'+(inList?' checked disabled':'')+'> '
-               + esc(u.user_cname)+(u.position_name?'<span style="color:#8a6d45;">（'+esc(u.position_name)+'）</span>':'')+(inList?'(已加)':'')+'</label>';
+            var block  = +u.blocked === 1 && !inList;      // 已在名單上的人不因事後補請假單而被鎖掉
+            if (block) blocked++;
+            h += '<label class="'+(block?'blocked':'')+'"'+(block?' title="'+esc(u.block_reason||'')+'"':'')+'>'
+               + '<input type="checkbox" class="att-ck" value="'+u.id+'" data-name="'+esc(u.user_cname)+'"'
+               + ' data-dept="'+esc(u.dept_name||$('#attDept option:selected').text())+'" data-pos="'+esc(u.position_name||'')+'"'
+               + ((inList||block)?' disabled':'')+(inList?' checked':'')+'>'
+               + '<span>'+esc(u.user_cname)+(u.position_name?'<span class="att-pos">（'+esc(u.position_name)+'）</span>':'')
+               + (inList?'<span class="att-pos">(已加)</span>':'')+'</span>'
+               + (attSchedHtml(u) ? '<span>'+attSchedHtml(u)+'</span>' : '')
+               + (block?'<span class="att-sched blk">← 不可選</span>':'')+'</label>';
         });
-        $('#attPeopleBox').html(h || '<span class="empty">此部門無可選人員(可能全數請假或僅剩超級管理員)</span>');
+        if (h && blocked) h += '<span class="empty" style="margin-top:3px;">灰色者於會議時段內請假，不可列入出席人員。</span>';
+        $('#attPeopleBox').html(h || '<span class="empty">此部門在會議當日無可選人員（可能當日皆未在職，或僅剩超級管理員）</span>');
         $('#attPickAll').prop('checked', false);
     });
 }
@@ -839,19 +901,32 @@ function loadGroups(){
 function groupApply(){
     var id = $('#attGroupSel').val();
     if (!id){ alert('請先選擇群組'); return; }
-    if (!$('#edDate').val()){ alert('請先填會議日期，套用群組時才能排除當天請假的人員'); return; }
+    if (!$('#edDate').val()){ alert('請先填會議日期，套用群組時才能依當日在職狀態判斷'); return; }
     $.getJSON(GROUP_API, {action:'get', id:id}, function(res){
         if (!res.ok){ alert(res.msg||'載入群組失敗'); return; }
         var ids = (res.editors||[]).map(function(e){ return String(e.code||'').replace(/^u/,''); }).filter(function(x){ return x && !isNaN(x); });
         if (!ids.length){ alert('此群組沒有可用的人員'); return; }
-        $.getJSON(API, {action:'resolve_people', user_ids:ids.join(','), meeting_date:$('#edDate').val(), start_time:$('#edStart').val(), end_time:$('#edEnd').val()}, function(r2){
+        $.getJSON(API, {action:'resolve_people', user_ids:ids.join(','), meeting_date:$('#edDate').val(),
+                        start_time:$('#edStart').val(), end_time:$('#edEnd').val(), meeting_id:(EDIT_ID||0)}, function(r2){
             if (!r2.ok) return;
+            // 2026-08-26：群組套用與部門挑選同一套規則——會議時段內請假者不加入（後端也會再擋一次），
+            // 其餘有行程的人照樣加入，只在下面把行程列給使用者看
+            var added = 0, blocked = [], warn = [];
             (r2.people||[]).forEach(function(p){
-                if (!ATT.some(function(a){ return a.user_id===p.id; }))
+                if (+p.blocked === 1){ blocked.push(p.user_cname + '（' + (p.block_reason||'請假') + '）'); return; }
+                if (+p.has_overlap === 1) warn.push(p.user_cname + '：' + p.sched_text);
+                if (!ATT.some(function(a){ return a.user_id===p.id; })){
                     ATT.push({user_id:p.id, user_name:p.user_cname, dept_name:p.dept_name, position_name:p.position_name, signed:0});
+                    added++;
+                }
             });
             renderAtt(); renderChairSel();
-            if (r2.people.length < ids.length) alert('已套用群組（其中 '+(ids.length-r2.people.length)+' 位因會議當天請假、超級管理員或已離職，未加入名單）。');
+            var msg = [];
+            var gone = ids.length - (r2.people||[]).length;
+            if (gone > 0) msg.push('其中 ' + gone + ' 位在會議當天不在職（尚未入職／已離職）或為超級管理員，未加入名單。');
+            if (blocked.length) msg.push('下列人員在會議時段內請假，未加入名單：\n　' + blocked.join('\n　'));
+            if (warn.length)    msg.push('下列人員當天另有行程與會議時段重疊，已加入但請確認：\n　' + warn.join('\n　'));
+            if (msg.length) alert('已套用群組。\n\n' + msg.join('\n\n'));
         });
     });
 }
@@ -1672,7 +1747,7 @@ function printKpiOnly(){
 }
 
 /* ---------- 模組設定：角色設定(仿 training_record.php) + 附件路徑/簽到表AS綁定 ---------- */
-$('#btnMtSetting').on('click', function(){ setTabSwitch('role'); loadRoles(); $('#setNasDir').val(META.attach_nas_dir||''); $('#setAutoSubmit').prop('checked', !!META.auto_submit); renderSignsheetLabel(); loadStampTplOptions(); loadKpiTargetUI(); openMask('mtSetMask'); });
+$('#btnMtSetting').on('click', function(){ setTabSwitch('role'); loadRoles(); $('#setNasDir').val(META.attach_nas_dir||''); $('#setAutoSubmit').prop('checked', !!META.auto_submit); renderSignsheetLabel(); loadStampTplOptions(); loadKpiTargetUI(); renderSchedSrc(); openMask('mtSetMask'); });
 function setTabSwitch(tab){
     $('.set-tab').removeClass('active'); $('.set-tab[data-tab="'+tab+'"]').addClass('active');
     $('#setPaneRole').toggle(tab==='role'); $('#setPaneAttach').toggle(tab==='attach');
@@ -1752,6 +1827,28 @@ function submitAutoSubmit(){
         if (!res.ok){ alert(res.error||'儲存失敗'); $('#setAutoSubmit').prop('checked', !!META.auto_submit); return; }
         META.auto_submit = res.auto_submit;
     }, 'json').fail(function(){ alert('儲存失敗'); $('#setAutoSubmit').prop('checked', !!META.auto_submit); });
+}
+/* 挑人時要提示哪些「當天行程」來源（2026-08-26 使用者明確要求：不可寫死，要能改設定）。
+   來源清單由後端 eg_psched_sources() 給，這裡只負責畫；新增來源時本函式不必改（鐵律4）。 */
+function renderSchedSrc(){
+    var srcs = META.sched_sources || {}, on = META.sched_on || {}, h = '';
+    Object.keys(srcs).forEach(function(k){
+        var d = srcs[k];
+        h += '<label class="sched-src"><input type="checkbox" class="sched-ck" value="'+esc(k)+'" data-eg-skip'
+           + (+on[k]===1 ? ' checked' : '') + ' style="margin-right:5px;">'
+           + esc(d.label) + ' <small>— ' + esc(d.desc) + (+d.blocks===1 ? '；<b>重疊時不可勾選</b>' : '') + '</small></label>';
+    });
+    $('#schedSrcBox').html(h || '<span class="text-muted" style="font-size:12px;">（無可設定的行程來源）</span>');
+}
+function submitSchedSrc(){
+    var on = {};
+    $('#schedSrcBox .sched-ck').each(function(){ on[this.value] = this.checked ? 1 : 0; });
+    $.post(API, {action:'sched_setting_save', on:JSON.stringify(on)}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        META.sched_on = res.on;
+        if ($('#attDept').val()) attDeptReload();      // 設定改了，挑人清單立刻照新設定重畫
+        alert('已儲存');
+    }, 'json').fail(function(){ alert('儲存失敗'); });
 }
 function submitNasDir(){
     $.post(API, {action:'attach_setting_save', nas_dir:$('#setNasDir').val()}, function(res){

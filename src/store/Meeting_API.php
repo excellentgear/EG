@@ -12,6 +12,7 @@ include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/meeting_lib.php';
 include_once $document_root . '/EGsystem/src/common/people_lib.php';
+include_once $document_root . '/EGsystem/src/common/person_schedule_lib.php';
 
 function jout($a){ echo json_encode(array_merge(['ok'=>true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function jerr($msg, $code=400){ http_response_code($code); echo json_encode(['ok'=>false,'error'=>$msg], JSON_UNESCAPED_UNICODE); exit; }
@@ -28,6 +29,36 @@ $uname = (string)$u['user_cname'];
 $perms = meeting_perms($db, $u);
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
 if (!$perms['canView']) jerr('無會議記錄檢閱權限', 403);
+
+/**
+ * 人員清單 → 前端要的欄位，並附上「當天的行程」（2026-08-26 使用者明確要求）
+ * 每個人多帶：sched(行程陣列)、sched_text(名字右方要顯示的字)、blocked(1=不可勾選)、block_reason
+ * 阻擋規則收在 person_schedule_lib.php（目前只有請假會擋），這裡不自己判定，避免兩邊走鐘。
+ */
+function meeting_people_with_schedule(PDO $db, array $rows, string $mDate, string $st, string $et, int $excludeMeetingId = 0): array {
+    $sched = ($mDate !== '')
+           ? eg_psched_for_users($db, array_column($rows, 'id'), $mDate, $st, $et,
+                                 ['exclude_meeting_id'=>$excludeMeetingId])
+           : [];
+    return array_map(function ($r) use ($sched) {
+        $items   = $sched[(int)$r['id']] ?? [];
+        $blocked = eg_psched_blocked($items);
+        $reason  = '';
+        foreach ($items as $it) if (!empty($it['blocks'])) { $reason = $it['label'] . '：' . $it['text']; break; }
+        return [
+            'id'            => $r['id'],
+            'user_cname'    => $r['user_cname'],
+            'position_name' => $r['position_name'] ?? '',
+            'dept_name'     => $r['dept_name'] ?? '',
+            'state'         => (int)($r['state'] ?? 1),
+            'sched'         => $items,
+            'sched_text'    => implode('、', array_map(fn($x) => $x['text'], $items)),
+            'has_overlap'   => (int)(bool)array_filter($items, fn($x) => !empty($x['overlap'])),
+            'blocked'       => $blocked ? 1 : 0,
+            'block_reason'  => $reason,
+        ];
+    }, $rows);
+}
 
 /** 讀出一筆會議記錄表頭，查無則直接 404 */
 function meeting_load(PDO $db, int $id): array {
@@ -81,7 +112,9 @@ case 'meta': {
           'auto_submit'=>meeting_auto_submit_enabled($db),
           'as_doc_signsheet'=>($asSign = eg_asdoc_get($db, 'meeting_signsheet')), 'as_doc_signsheet_no'=>eg_asdoc_no($asSign),
           'as_doc_record'=>($asRec = eg_asdoc_get($db, 'meeting_record')), 'as_doc_record_no'=>eg_asdoc_no($asRec),
-          'stamp_template'=>$stTpl]);
+          'stamp_template'=>$stTpl,
+          // 挑出席人員時要提示哪些行程來源（全站共用設定，定義與現值都由共用庫給，前端不寫死＝鐵律4）
+          'sched_sources'=>eg_psched_sources(), 'sched_on'=>eg_psched_setting_get($db)]);
 }
 
 /* 常用設定（主題綁地點綁時間）：管理員維護 */
@@ -116,11 +149,12 @@ case 'preset_delete': {
 case 'resolve_people': {
     $ids = array_values(array_filter(array_map('intval', explode(',', (string)($_GET['user_ids'] ?? '')))));
     if (!$ids) jout(['people'=>[]]);
-    $rows = eg_people_list($db, ['user_ids'=>$ids, 'states'=>[1,2,3]]);
     $mDate = trim((string)($_GET['meeting_date'] ?? ''));
-    if ($mDate !== '') $rows = meeting_filter_available_people($db, $rows, $mDate, $_GET['start_time'] ?? null, $_GET['end_time'] ?? null);
-    jout(['people'=>array_map(fn($r) => ['id'=>$r['id'], 'user_cname'=>$r['user_cname'],
-        'position_name'=>$r['position_name'] ?? '', 'dept_name'=>$r['dept_name'] ?? ''], $rows)]);
+    $rows = ($mDate !== '') ? eg_people_list_asof($db, ['user_ids'=>$ids, 'states'=>[1,2,3]], $mDate)
+                            : eg_people_list($db, ['user_ids'=>$ids, 'states'=>[1,2,3]]);
+    jout(['people'=>meeting_people_with_schedule($db, $rows, $mDate,
+        (string)($_GET['start_time'] ?? ''), (string)($_GET['end_time'] ?? ''),
+        (int)($_GET['meeting_id'] ?? 0))]);
 }
 
 /* 會議記錄列表：只回傳目前使用者有權看到的（草稿僅本人／管理員；其餘依 meeting_can_view 逐筆判斷） */
@@ -327,6 +361,39 @@ case 'save': {
     $items = json_decode((string)($_POST['items'] ?? '[]'), true);
     if (!is_array($items)) $items = [];
 
+    /* 出席人員後端把關（鐵律8：前端擋一次，後端用同一份規則再擋一次，不留只擋 UI 的漏洞）
+       只驗「這次新加進來的人」——已經在這場會議名單上的人不重驗，否則舊紀錄事後被補了一張請假單，
+       之後連改個地點都會存不進去。判定一律呼叫共用庫，不在這裡自己寫一套。 */
+    $newUids = [];
+    foreach ($attendees as $a) if ((int)($a['user_id'] ?? 0) > 0) $newUids[] = (int)$a['user_id'];
+    $newUids = array_values(array_unique($newUids));
+    if ($id > 0 && $newUids) {
+        $q = $db->prepare("SELECT user_id FROM meeting_attendee WHERE meeting_id=?");
+        $q->execute([$id]);
+        $already = array_map('intval', $q->fetchAll(PDO::FETCH_COLUMN));
+        $newUids = array_values(array_diff($newUids, $already));
+    }
+    if ($newUids) {
+        // ①會議日期當天不在職（還沒入職／已離職）者不可加入
+        $okRows = eg_people_list_asof($db, ['user_ids'=>$newUids, 'states'=>[1,2,3]], $date);
+        $okIds  = array_map('intval', array_column($okRows, 'id'));
+        $bad    = array_values(array_diff($newUids, $okIds));
+        if ($bad) {
+            $nm = [];
+            foreach ($attendees as $a) if (in_array((int)($a['user_id'] ?? 0), $bad, true)) $nm[] = (string)($a['user_name'] ?? ('#'.$a['user_id']));
+            jerr('下列人員在 ' . $date . ' 當天不在職（尚未入職或已離職），不可列入出席人員：' . implode('、', array_unique($nm)));
+        }
+        // ②與會議時段重疊且屬「不可勾選」的行程（目前＝請假）者不可加入
+        $sc = eg_psched_for_users($db, $newUids, $date, (string)$start, (string)$end, ['exclude_meeting_id'=>$id]);
+        $blk = [];
+        foreach ($okRows as $r) {
+            $items2 = $sc[(int)$r['id']] ?? [];
+            if (!eg_psched_blocked($items2)) continue;
+            foreach ($items2 as $it) if (!empty($it['blocks'])) { $blk[] = $r['user_cname'] . '（' . $it['text'] . '）'; break; }
+        }
+        if ($blk) jerr('下列人員在會議時段內請假，不可列入出席人員：' . implode('、', $blk));
+    }
+
     try {
         $db->beginTransaction();
         if ($id > 0) {
@@ -459,11 +526,14 @@ case 'delete': {
 case 'people': {
     $deptId = (int)($_GET['dept_id'] ?? 0);
     if ($deptId <= 0) jout(['people'=>[]]);
-    $rows = eg_people_list($db, ['dept_ids'=>[$deptId], 'states'=>[1,2,3]]);
     $mDate = trim((string)($_GET['meeting_date'] ?? ''));
-    if ($mDate !== '') $rows = meeting_filter_available_people($db, $rows, $mDate, $_GET['start_time'] ?? null, $_GET['end_time'] ?? null);
-    jout(['people'=>array_map(fn($r) => ['id'=>$r['id'], 'user_cname'=>$r['user_cname'],
-        'position_name'=>$r['position_name'] ?? '', 'dept_name'=>$r['dept_name'] ?? ''], $rows)]);
+    // 2026-08-26 使用者明確要求：人員選單一律抓「會議日期當日」的在職狀態
+    // （該日之後才入職、該日之前已離職者都不可出現；當日還在職、之後才離職的要出現，補舊紀錄才選得到人）
+    $opt  = ['dept_ids'=>[$deptId], 'states'=>[1,2,3]];
+    $rows = ($mDate !== '') ? eg_people_list_asof($db, $opt, $mDate) : eg_people_list($db, $opt);
+    jout(['people'=>meeting_people_with_schedule($db, $rows, $mDate,
+        (string)($_GET['start_time'] ?? ''), (string)($_GET['end_time'] ?? ''),
+        (int)($_GET['meeting_id'] ?? 0))]);
 }
 
 /* 全員人員清單（負責人「指定人員」模式搜尋選擇器用；2026-08-05使用者明確要求）：比照鐵則走 eg_people_list，不自己拼SQL。
@@ -837,6 +907,18 @@ case 'stamp_tpl_options': {
     jout(['templates'=>$db->query("SELECT p.id, p.tpl_name, t.type_name
                                     FROM stamp_template p LEFT JOIN stamp_type t ON t.id=p.type_id
                                     WHERE p.is_active=1 ORDER BY p.tpl_name")->fetchAll(PDO::FETCH_ASSOC)]);
+}
+/* 挑人時要提示哪些「當天行程」來源（2026-08-26 使用者明確要求做成設定、不可寫死）。
+   這是全站共用設定（system_settings.person_schedule_sources），日後教育訓練／公出單挑人也吃同一份，
+   設定入口暫掛在本模組的模組設定；讀取不卡管理員（一般人挑人也要看得到提示），只有寫入限管理員。 */
+case 'sched_setting_get': {
+    jout(['sources'=>eg_psched_sources(), 'on'=>eg_psched_setting_get($db)]);
+}
+case 'sched_setting_save': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
+    $on = json_decode((string)($_POST['on'] ?? '{}'), true);
+    if (!is_array($on)) jerr('設定格式不正確');
+    jout(['on'=>eg_psched_setting_save($db, $on)]);
 }
 case 'stamp_tpl_save': {
     if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
