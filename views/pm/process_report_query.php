@@ -4,9 +4,9 @@
  * 逐筆列出 pm_process_daily_report 每一筆報工紀錄（含臨時加工），供查找/列印用；
  * 與 process_schedule.php 的「查詢已報工工單」跳窗不同——那支是依工單(bom_ing_fid)彙總、
  * 用來恢復任務/改綁BOM等操作，這支是純瀏覽/列印每一筆報工紀錄，兩者並存不互相取代。
- * 篩選：日期區間(預設近30天，清空=不限日期查全部)、製程、機台、人員(架機/生產人員合併比對)、備註。
+ * 篩選：日期區間(預設近30天，清空=不限日期查全部)、製程、機台、料號、人員(架機/生產人員合併比對)、備註。
  * 分頁走後端(不一次撈全部)；列印/CSV匯出走後端依目前篩選條件抓「全部」符合筆數(不受分頁限制)。
- * 製程/機台/人員三個篩選皆為「動態連動清單」（get_facets action）：只列目前其餘篩選條件下仍有資料的選項，
+ * 製程/機台/料號/人員四個篩選皆為「動態連動清單」（get_facets action）：只列目前其餘篩選條件下仍有資料的選項，
  * 選了製程會連動縮小機台/人員清單，反之亦然，比照 pivot table 的 facet filter 做法，避免選出兜不出資料的組合。
  */
 include_once '../../src/common/_config.php';
@@ -31,6 +31,8 @@ $pdo = $db->getPDO();
 // AS 文件編號綁定：後端一律走共用庫，禁止各頁自寫綁定讀寫 SQL（ai-rules/16 第一之三節）
 require_once '../../src/common/asdoc_lib.php';
 define('PRQ_ASDOC_MODULE', 'process_report_query');
+// 料號建議清單上限：料號數以百計，全部塞進 datalist 只會拖慢且沒人捲得完；超過的仍可自行打字查（LIKE 模糊比對不受此限）
+define('PRQ_PART_FACET_LIMIT', 500);
 
 // --- 權限檢查（比照 process_schedule.php 既有 user_module_permissions 機制，唯讀工具只需「有任一權限」即可檢視） ---
 $id = intval($_SESSION['id'] ?? 0);
@@ -102,6 +104,8 @@ function prq_build_filter($p, $exclude = []) {
     }
     if (!in_array('process_type_id', $exclude, true) && !empty($p['process_type_id'])) { $where[] = 'pn.process_type_id = ?'; $params[] = intval($p['process_type_id']); }
     if (!in_array('machine_id', $exclude, true) && !empty($p['machine_id'])) { $where[] = 'pdr.machine_id = ?'; $params[] = intval($p['machine_id']); }
+    // 料號＝工單所屬 BOM 的料號；臨時加工(無綁工單)沒有料號，故一旦指定料號就不會出現在結果中
+    if (!in_array('d_id', $exclude, true) && !empty($p['d_id'])) { $where[] = 'b.d_id LIKE ?'; $params[] = '%' . $p['d_id'] . '%'; }
     if (!in_array('person', $exclude, true) && !empty($p['person'])) {
         $where[] = '(CONVERT(u1.user_cname USING utf8mb4) LIKE ? OR CONVERT(u2.user_cname USING utf8mb4) LIKE ?)';
         $like = '%' . $p['person'] . '%';
@@ -226,6 +230,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmtM->execute($paramsM);
             $machines = $stmtM->fetchAll(PDO::FETCH_ASSOC);
 
+            // 料號候選：只列目前其餘條件下真的有報工紀錄的料號（給前端 datalist 當建議清單用）
+            list($whereD, $paramsD) = prq_build_filter($_POST, ['d_id']);
+            $whereD = prq_append_where($whereD, "b.d_id IS NOT NULL AND b.d_id<>''");
+            $stmtD = $pdo->prepare("SELECT DISTINCT b.d_id $PRQ_FROM $whereD ORDER BY b.d_id LIMIT " . PRQ_PART_FACET_LIMIT);
+            $stmtD->execute($paramsD);
+            $parts = $stmtD->fetchAll(PDO::FETCH_COLUMN);
+
             list($whereU, $paramsU) = prq_build_filter($_POST, ['person']);
             $whereU1 = prq_append_where($whereU, "u1.user_cname IS NOT NULL AND u1.user_cname<>''");
             $whereU2 = prq_append_where($whereU, "u2.user_cname IS NOT NULL AND u2.user_cname<>''");
@@ -233,7 +244,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmtU->execute(array_merge($paramsU, $paramsU));
             $people = $stmtU->fetchAll(PDO::FETCH_COLUMN);
 
-            echo json_encode(['success' => true, 'processes' => $processes, 'machines' => $machines, 'people' => $people]);
+            echo json_encode(['success' => true, 'processes' => $processes, 'machines' => $machines,
+                'parts' => $parts, 'people' => $people]);
         } elseif ($action === 'asdoc_meta') {
             // 給 eg_asdoc_picker.js 用：可綁定文件清單＋目前綁定；can_bind 決定前端要不要顯示「變更綁定」鈕
             echo json_encode(['success' => true, 'docs' => eg_asdoc_list($pdo),
@@ -363,7 +375,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <button id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;margin-top:6px;padding-top:6px;border-top:1px dashed #EADFC8;">
-                <label style="margin-left:0;">人員</label>
+                <label style="margin-left:0;">料號</label>
+                <input type="text" id="fPartNo" list="prqPartList" placeholder="料號關鍵字（可輸入部分字元）" style="width:180px;">
+                <datalist id="prqPartList"></datalist>
+                <label>人員</label>
                 <input type="text" id="fPerson" list="prqPeopleList" placeholder="架機或生產人員姓名（目前篩選結果內才會出現在建議清單）" style="width:280px;">
                 <datalist id="prqPeopleList"></datalist>
                 <span style="margin-left:auto;display:flex;align-items:center;gap:6px;">
@@ -410,8 +425,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <p>逐筆列出「加工排程看板」每一筆報工紀錄（含臨時加工），供查找特定日期/人員/製程/機台的報工內容並列印或匯出，與看板上「查詢已報工工單」跳窗（依工單彙總、用於恢復任務/改綁BOM）用途不同、互不影響。</p>
         <h4>操作步驟</h4>
         <ul>
-            <li>上方篩選可組合使用：製程大類（頁籤按鈕，比照排程看板「查詢已報工工單」的分類方式）、日期區間、機台、人員（同時比對架機/生產人員）、備註關鍵字。</li>
-            <li>製程大類、機台、人員的可選清單會依「目前其餘篩選條件」動態連動——只列真的有資料的選項，選了製程大類會連動縮小機台/人員清單，反之亦然。</li>
+            <li>上方篩選可組合使用：製程大類（頁籤按鈕，比照排程看板「查詢已報工工單」的分類方式）、日期區間、機台、料號、人員（同時比對架機/生產人員）、備註關鍵字。</li>
+            <li>製程大類、機台、料號、人員的可選清單會依「目前其餘篩選條件」動態連動——只列真的有資料的選項，選了製程大類會連動縮小機台/料號/人員清單，反之亦然。</li>
+            <li><b>料號</b>可直接打字（部分字元即可，例如打 <code>RC016</code> 就找得到 <code>RC016011-02</code>），也可從輸入框的建議清單挑選；建議清單只列目前篩選條件下真的有報工紀錄的料號、最多 500 筆，超過的部分仍可自行打字查得到。</li>
             <li>日期區間預設近30天；按「清除篩選(查全部)」可清空所有條件、改查全部歷史資料。</li>
             <li>列表分頁顯示（避免一次載入全部拖慢速度），可調整每頁筆數。</li>
             <li>「列印」「匯出CSV」皆依目前篩選條件抓「全部」符合筆數（不受分頁限制）。</li>
@@ -420,7 +436,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <h4>重要行為/常見疑問</h4>
         <div class="tip">若篩選結果筆數較多（超過3000筆），列印/匯出前會先跳出確認提示，避免不小心產生過大的列印工作。</div>
         <ul>
-            <li>臨時加工（無綁定工單）的「工單」欄會顯示「臨時加工」、「料號」欄留空，客戶欄改顯示加工原因。</li>
+            <li>臨時加工（無綁定工單）的「工單」欄會顯示「臨時加工」、「料號」欄留空，客戶欄改顯示加工原因；<b>因為沒有料號，只要有指定料號篩選，臨時加工的紀錄就不會出現在結果中</b>。</li>
             <li>「架機人員」＝原「設置人員」正名；架機/生產時間欄留空代表該筆報工未填該項時間。</li>
             <li><b>列印版的 AS 文件編號</b>：綁定後，列印時大標題下方那一行會自動改印該 AS 文件的<b>表單名稱</b>，頁尾<b>右下角每一頁</b>都會印出<b>文件編號</b>（四階文件會自動附加版次，例 2-PM-01-01A）。未綁定時表頭退回顯示「報工紀錄查詢列印」、右下角不印編號。</li>
             <li>本頁列印屬「多筆彙總的清單型列印」，印的是<b>當下現況</b>，所以文件版次一律取目前最新版，不會依報工日期回推舊版次。</li>
@@ -478,6 +494,7 @@ function curFilters(){
         date_to: $('#fDateTo').val(),
         process_type_id: curProcess,
         machine_id: $('#fMachine').val(),
+        d_id: $.trim($('#fPartNo').val()),
         person: $.trim($('#fPerson').val()),
         remark: $.trim($('#fRemark').val())
     };
@@ -577,6 +594,9 @@ function renderMachineOptions(list){
     $sel.val(stillValid ? cur : '');
     if ($sel[0].egFilterResnap) $sel[0].egFilterResnap();
 }
+function renderPartDatalist(list){
+    $('#prqPartList').html(list.map(function(d){ return '<option value="' + esc(d) + '">'; }).join(''));
+}
 function renderPeopleDatalist(list){
     $('#prqPeopleList').html(list.map(function(nm){ return '<option value="' + esc(nm) + '">'; }).join(''));
 }
@@ -588,6 +608,7 @@ function refreshFacets(cb){
         if (res.success){
             renderProcessTabs(res.processes || []);
             renderMachineOptions(res.machines || []);
+            renderPartDatalist(res.parts || []);
             renderPeopleDatalist(res.people || []);
         }
         if (cb) cb();
@@ -600,13 +621,13 @@ $('#btnSearch').on('click', applyFilters);
 ['#fDateFrom','#fDateTo','#fMachine'].forEach(function(sel){
     $(sel).on('change', applyFilters);
 });
-['#fPerson','#fRemark'].forEach(function(sel){
+['#fPartNo','#fPerson','#fRemark'].forEach(function(sel){
     $(sel).on('keyup', function(e){ if (e.key==='Enter') applyFilters(); });
 });
 $('#pageSizeSel').on('change', function(){ loadList(1); });
 
 $('#btnClear').on('click', function(){
-    $('#fDateFrom, #fDateTo, #fPerson, #fRemark').val('');
+    $('#fDateFrom, #fDateTo, #fPartNo, #fPerson, #fRemark').val('');
     curProcess = '';
     var sel = document.getElementById('fMachine');
     var box = sel.previousElementSibling;
