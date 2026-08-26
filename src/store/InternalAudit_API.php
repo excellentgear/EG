@@ -123,6 +123,8 @@ case 'meta': {
         'auditors'  => ia_qualified_posts($db, 'auditor'),
         'escorts'   => ia_qualified_posts($db, 'escort'),
         'qualify_kinds' => IA_QUALIFY_KINDS,
+        // 稽核範本：填通知單時一列一列帶入（含已算好的候選人員）
+        'templates' => ia_process_templates($db),
         'stamp_tpls'=> $stampTpls,
         'years'     => $years,
         'this_year' => $cy,
@@ -400,6 +402,33 @@ case 'case_save': {
     }
     $depts = json_decode((string)($_POST['depts'] ?? '[]'), true);
     if (!is_array($depts)) $depts = [];
+
+    // 使用者指定的兩條規則，前端擋一次、後端同規則再擋一次（鐵律8）
+    $seenProc = [];
+    foreach ($depts as $ri => $d) {
+        $proc = trim((string)($d['start_process'] ?? ''));
+        $ak   = trim((string)($d['auditor_key'] ?? ''));
+        $ek   = trim((string)($d['escort_key'] ?? ''));
+        // 整列全空的（末列常常是按 ↓ 加出來還沒填的）不參與驗證
+        $any = false;
+        foreach ((array)$d as $v) { if (trim((string)$v) !== '') { $any = true; break; } }
+        if (!$any) continue;
+
+        // ①同一張通知單裡，相同的稽核起始主過程不可重複
+        if ($proc !== '') {
+            $k = mb_strtolower($proc);
+            if (isset($seenProc[$k])) {
+                jerr('「' . $proc . '」在同一次稽核裡重複了（第 ' . ($seenProc[$k] + 1) . ' 列與第 ' . ($ri + 1) . ' 列）');
+            }
+            $seenProc[$k] = $ri;
+        }
+        // ②陪檢員不可與稽核員是同一個人（不同職務也不行，因為是同一個人）
+        if ($ak !== '' && $ek !== '') {
+            list($au) = ia_post_parse($ak);
+            list($eu) = ia_post_parse($ek);
+            if ($au && $au === $eu) jerr('第 ' . ($ri + 1) . ' 列的陪檢員不可與稽核員是同一個人');
+        }
+    }
 
     $db->beginTransaction();
     try {
@@ -1389,6 +1418,63 @@ case 'qualify_save': {
     // 存完讀回來確認（存不進去卻回成功，使用者只會一直重存）
     $back = ia_qualify_map($db);
     jout(['saved' => true, 'count' => count($back[$kind] ?? [])]);
+}
+
+
+/* ============================ 稽核範本 ============================ */
+case 'tpl_list': {
+    iaReqView($perms);
+    jout(['rows' => ia_process_templates($db, false), 'units' => ia_audit_units($db)]);
+}
+
+case 'tpl_save': {
+    iaReqAdmin($perms);
+    $tplId  = (int)($_POST['tpl_id'] ?? 0);
+    $name   = trim((string)($_POST['process_name'] ?? ''));
+    $unitId = (int)($_POST['unit_dept_id'] ?? 0);
+    $aDepts = json_decode((string)($_POST['auditor_dept_ids'] ?? '[]'), true);
+    $eDepts = json_decode((string)($_POST['escort_dept_ids'] ?? '[]'), true);
+    $aDepts = is_array($aDepts) ? array_values(array_unique(array_filter(array_map('intval', $aDepts)))) : [];
+    $eDepts = is_array($eDepts) ? array_values(array_unique(array_filter(array_map('intval', $eDepts)))) : [];
+
+    $err = ia_tpl_validate($db, $tplId, $name, $unitId, $aDepts, $eDepts);
+    if ($err !== '') jerr($err);
+
+    $db->beginTransaction();
+    try {
+        if ($tplId) {
+            $db->prepare("UPDATE ia_process_template SET process_name=?, unit_dept_id=?, note=?,
+                              is_active=?, updated_at=NOW(), updated_by=? WHERE tpl_id=?")
+               ->execute([$name, $unitId, mb_substr(trim((string)($_POST['note'] ?? '')), 0, 255) ?: null,
+                          empty($_POST['is_active']) ? 0 : 1, $uname, $tplId]);
+        } else {
+            $db->prepare("INSERT INTO ia_process_template (process_name, unit_dept_id, note, sort_order,
+                              is_active, updated_at, updated_by)
+                          VALUES (?,?,?,(SELECT COALESCE(MAX(s.sort_order),0)+10
+                                         FROM (SELECT sort_order FROM ia_process_template) s),1,NOW(),?)")
+               ->execute([$name, $unitId, mb_substr(trim((string)($_POST['note'] ?? '')), 0, 255) ?: null, $uname]);
+            $tplId = (int)$db->lastInsertId();
+        }
+        $db->prepare("DELETE FROM ia_process_tpl_dept WHERE tpl_id=?")->execute([$tplId]);
+        $ins = $db->prepare("INSERT INTO ia_process_tpl_dept (tpl_id, kind, dept_id) VALUES (?,?,?)");
+        foreach ($aDepts as $d) $ins->execute([$tplId, 'auditor', $d]);
+        foreach ($eDepts as $d) $ins->execute([$tplId, 'escort',  $d]);
+        $db->commit();
+        jout(['tpl_id' => $tplId]);
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
+}
+
+case 'tpl_delete': {
+    iaReqAdmin($perms);
+    $tplId = (int)($_POST['tpl_id'] ?? 0);
+    $db->beginTransaction();
+    try {
+        // 範本只是「填表時的帶入來源」，已經填進通知單的內容是快照、不受影響，所以可以真的刪
+        $db->prepare("DELETE FROM ia_process_tpl_dept WHERE tpl_id=?")->execute([$tplId]);
+        $db->prepare("DELETE FROM ia_process_template WHERE tpl_id=?")->execute([$tplId]);
+        $db->commit();
+        jout(['deleted' => true]);
+    } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：' . $e->getMessage(), 500); }
 }
 
 default:

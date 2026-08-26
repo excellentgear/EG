@@ -383,6 +383,27 @@ function ia_ensure_schema(PDO $db): void
                 if (!$has) $db->exec("ALTER TABLE `{$c[0]}` ADD COLUMN `{$c[1]}` {$c[2]}");
             } catch (Throwable $e) {}
         }
+        /* ---- 稽核範本：稽核起始主過程 ＋ 受稽單位 ＋ 稽核員／陪檢員候選部門 ----
+           管理員預先設定好，填稽核通知單時一列一列帶入。
+           候選部門是「多選」，實際人員仍由填表人挑；候選範圍內只有一位有資格時自動帶入。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_process_template (
+            tpl_id       INT AUTO_INCREMENT PRIMARY KEY,
+            process_name VARCHAR(150) NOT NULL COMMENT '稽核起始主過程',
+            unit_dept_id INT NOT NULL COMMENT '受稽單位（受稽單位群組的代表部門）',
+            note         VARCHAR(255) NULL,
+            sort_order   INT NOT NULL DEFAULT 0,
+            is_active    TINYINT NOT NULL DEFAULT 1,
+            updated_at   DATETIME NULL, updated_by VARCHAR(60) NULL,
+            KEY idx_active (is_active, sort_order)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='稽核範本（起始主過程＋受稽單位＋稽核員/陪檢員候選部門）'");
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_process_tpl_dept (
+            td_id   INT AUTO_INCREMENT PRIMARY KEY,
+            tpl_id  INT NOT NULL,
+            kind    VARCHAR(10) NOT NULL COMMENT 'auditor=稽核員候選部門 / escort=陪檢員候選部門',
+            dept_id INT NOT NULL,
+            UNIQUE KEY uk_td (tpl_id, kind, dept_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='稽核範本的候選部門（多選）'");
+
         /* ---- 角色（module='internal_audit'） ---- */
         foreach ([
             ['ia_admin',   '內稽管理員（管理代表）'],
@@ -1502,4 +1523,129 @@ function ia_annotate_posts(PDO $db, array $people): array
     }
     unset($u);
     return $people;
+}
+
+/* ============================ 稽核範本 ============================ */
+
+/**
+ * 某些部門（含子部門）底下、具備某身分資格的職務。
+ * 候選部門是多選，這裡把每個部門展開成子樹再取聯集。
+ */
+function ia_posts_in_depts(PDO $db, string $kind, array $deptIds): array
+{
+    $scope = [];
+    foreach ($deptIds as $d) {
+        $d = (int)$d; if (!$d) continue;
+        foreach (eg_dept_subtree_ids($db, $d) ?: [$d] as $x) $scope[(int)$x] = 1;
+    }
+    if (!$scope) return [];
+    return array_values(array_filter(ia_qualified_posts($db, $kind), function ($p) use ($scope) {
+        return isset($scope[(int)$p['dept_id']]);
+    }));
+}
+
+/**
+ * 稽核範本清單，每筆都把候選人員一併算好給前端用。
+ * 規則（使用者 2026-08-26 指定）：
+ *   ①候選部門多選，實際人員仍由填表人挑
+ *   ②候選範圍內只有一位有資格 → 自動帶入
+ *   ③**先決定稽核員**，陪檢員候選再把稽核員那個人排除掉（同一人不可兼任兩邊）
+ *   ④陪檢員可不填
+ * 回傳每筆：tpl_id/process_name/unit_dept_id/unit_name/note/
+ *           auditor_dept_ids[]/escort_dept_ids[]/auditor_cands[]/escort_cands[]/
+ *           auditor_auto（只有一位時的職務鍵，否則空）
+ */
+function ia_process_templates(PDO $db, bool $activeOnly = true): array
+{
+    $rows = [];
+    try {
+        $sql = "SELECT * FROM ia_process_template" . ($activeOnly ? " WHERE is_active=1" : "")
+             . " ORDER BY sort_order, tpl_id";
+        $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    if (!$rows) return [];
+
+    $deptsOf = [];
+    try {
+        foreach ($db->query("SELECT tpl_id, kind, dept_id FROM ia_process_tpl_dept")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $deptsOf[(int)$r['tpl_id']][$r['kind']][] = (int)$r['dept_id'];
+        }
+    } catch (Throwable $e) {}
+
+    $unitName = [];
+    foreach (ia_audit_units($db) as $u) $unitName[(int)$u['key']] = $u['name'];
+    $deptName = [];
+    try {
+        foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) {
+            $deptName[(int)$d['id']] = (string)$d['name'];
+        }
+    } catch (Throwable $e) {}
+
+    $out = [];
+    foreach ($rows as $r) {
+        $id = (int)$r['tpl_id'];
+        $aDepts = $deptsOf[$id]['auditor'] ?? [];
+        $eDepts = $deptsOf[$id]['escort']  ?? [];
+        $aCands = ia_posts_in_depts($db, 'auditor', $aDepts);
+        $eCands = ia_posts_in_depts($db, 'escort',  $eDepts);
+
+        // ③先決定稽核員：只有一位候選就自動帶入，陪檢員候選再把那個人排掉
+        $auto = (count($aCands) === 1) ? $aCands[0]['post_key3'] : '';
+        $autoUid = (count($aCands) === 1) ? (int)$aCands[0]['id'] : 0;
+        $eForAuto = $autoUid
+            ? array_values(array_filter($eCands, function ($p) use ($autoUid) { return (int)$p['id'] !== $autoUid; }))
+            : $eCands;
+        $eAuto = (count($eForAuto) === 1) ? $eForAuto[0]['post_key3'] : '';
+
+        $out[] = [
+            'tpl_id'          => $id,
+            'process_name'    => (string)$r['process_name'],
+            'unit_dept_id'    => (int)$r['unit_dept_id'],
+            'unit_name'       => $unitName[(int)$r['unit_dept_id']] ?? ($deptName[(int)$r['unit_dept_id']] ?? ''),
+            'note'            => (string)($r['note'] ?? ''),
+            'is_active'       => (int)$r['is_active'],
+            'sort_order'      => (int)$r['sort_order'],
+            'auditor_dept_ids'=> $aDepts,
+            'escort_dept_ids' => $eDepts,
+            'auditor_dept_names' => array_values(array_map(function ($d) use ($deptName) { return $deptName[$d] ?? ''; }, $aDepts)),
+            'escort_dept_names'  => array_values(array_map(function ($d) use ($deptName) { return $deptName[$d] ?? ''; }, $eDepts)),
+            'auditor_cands'   => $aCands,
+            'escort_cands'    => $eCands,
+            'auditor_auto'    => $auto,
+            'escort_auto'     => $eAuto,
+        ];
+    }
+    return $out;
+}
+
+/** 範本設定驗證（前端擋一次、後端同規則再擋一次＝鐵律8） */
+function ia_tpl_validate(PDO $db, int $tplId, string $name, int $unitDeptId, array $aDepts, array $eDepts): string
+{
+    $name = trim($name);
+    if ($name === '') return '請填稽核起始主過程';
+    if (mb_strlen($name) > 150) return '稽核起始主過程過長（上限 150 字）';
+    if (!$unitDeptId) return '請選擇受稽單位';
+
+    $units = [];
+    foreach (ia_audit_units($db) as $u) $units[(int)$u['key']] = 1;
+    if (!isset($units[$unitDeptId])) return '受稽單位不存在（可能已被併入其他受稽單位群組）';
+
+    $all = array_values(array_unique(array_merge(array_map('intval', $aDepts), array_map('intval', $eDepts))));
+    $all = array_values(array_filter($all));
+    if ($all) {
+        $in = implode(',', array_fill(0, count($all), '?'));
+        $st = $db->prepare("SELECT COUNT(*) FROM department WHERE id IN ($in)");
+        $st->execute($all);
+        if ((int)$st->fetchColumn() !== count($all)) return '有部門不存在';
+    }
+    if (!$aDepts) return '請至少選一個稽核員候選部門';
+
+    // 同一個「起始主過程＋受稽單位」不要建兩個範本，否則帶入時會分不清該用哪一個
+    try {
+        $st = $db->prepare("SELECT COUNT(*) FROM ia_process_template
+                            WHERE process_name=? AND unit_dept_id=? AND tpl_id<>? AND is_active=1");
+        $st->execute([$name, $unitDeptId, $tplId]);
+        if ((int)$st->fetchColumn() > 0) return '已經有相同「起始主過程＋受稽單位」的範本了';
+    } catch (Throwable $e) {}
+    return '';
 }
