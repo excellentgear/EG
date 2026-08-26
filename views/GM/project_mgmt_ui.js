@@ -399,10 +399,13 @@ function saveBase(after) {
     $('.fld-bad').removeClass('fld-bad'); $('.pj-err').hide();
 
     api('save', d, 'POST').done(function (res) {
+        /* 有 after 就交給呼叫端收尾。
+           這裡不可以自己 openProject()——重繪會把使用者在「執行規劃表」分頁填到一半、
+           還沒送出的內容整個洗掉（使用者回報「儲存後重新整理沒有資料」就是這樣來的）。 */
+        if (after) { after(num(res.project_id)); return; }
         alert(res.message);
         loadList();
         openProject(num(res.project_id));
-        if (after) after(num(res.project_id));
     }).fail(function (xhr) {
         try { showFieldErrors((JSON.parse(xhr.responseText) || {}).fields); } catch (e) { /* ajaxError 已提示 */ }
     });
@@ -410,7 +413,7 @@ function saveBase(after) {
 
 /* ── 底部按鈕 ── */
 function renderFoot(res) {
-    var p = res.project, h = '<button onclick="closeMask(\'prjMask\')">關閉</button>';
+    var p = res.project, h = '<button onclick="closeProject()">關閉</button>';
     if (num(p.project_id)) {
         h += '<button id="btnPrintPlan"><i class="fa fa-print"></i> 列印執行規劃表</button>';
         if (res.can_edit && (p.status === 'draft' || p.status === 'rejected')) {
@@ -427,7 +430,36 @@ function renderFoot(res) {
     if (res.can_edit) h += '<button class="b-ok" id="btnSaveBase"><i class="fa fa-save"></i> 儲存</button>';
     $('#prjFoot').html(h);
 }
-$(document).on('click', '#btnSaveBase', function () { saveBase(); });
+/* 底部「儲存」＝把這個跳窗裡填的東西一次存完（基本資料＋執行規劃表）。
+   原本它只存基本資料，存完又重繪整個跳窗，於是使用者在規劃表填的目標與任務會被無聲清掉，
+   看起來就是「按了儲存、重新整理卻什麼都沒有」。 */
+$(document).on('click', '#btnSaveBase', function () {
+    saveBase(function (pid) {
+        var done = [];
+        var finish = function () {
+            saveCardIfDirty(function (cardSaved) {
+                if (cardSaved) done.push('專案管理卡');
+                savedAndReload(pid, done.length ? ('已儲存專案與' + done.join('、')) : '已儲存');
+            });
+        };
+        if (!planHasContent()) { finish(); return; }
+        savePlan(pid, function (ok) { if (!ok) return; done.push('執行規劃表'); finish(); });
+    });
+});
+/** 管理卡編輯區有開著、而且被動過才一起存（沒開就什麼都不做） */
+function saveCardIfDirty(cb) {
+    var cid = num($('#cardEditBox .sec').data('card'));
+    if (!CARD_DIRTY || !cid || !$('#btnCardSave').length) { cb(false); return; }
+    api('card_save', { card_id: cid, review_date: $('#ciDate').val(), items: JSON.stringify(collectCardItems()) }, 'POST')
+        .done(function () { CARD_DIRTY = false; cb(true); })
+        .fail(function () { cb(false); });
+}
+function savedAndReload(pid, msg) {
+    PLAN_DIRTY = false; CARD_DIRTY = false;
+    alert(msg);
+    loadList();
+    openProject(num(pid));
+}
 $(document).on('click', '#btnPrintPlan', function () { printPlan(CUR); });
 
 /* ══════════════════════════ 執行規劃表（2-GM-02-02） ══════════════════════════ */
@@ -786,6 +818,26 @@ function filterAttr(optHtml, ph) {
 
 /* ── 規劃表編輯器（可增列表格：末列↓加列、空白末列↑移除＝共用檔規則） ── */
 var PLAN_ACT_OPEN = false;   // 實際開始／完成現在可不可以填（＝專案是否已立案核准）
+var PLAN_DIRTY    = false;   // 規劃表有沒有還沒存進去的變更（避免整桌資料被無聲丟掉）
+var CARD_DIRTY    = false;   // 專案管理卡編輯區同上
+
+/* 規劃表裡任何一格被動過就標記為未儲存；重繪與存檔成功時清掉 */
+$(document).on('input change', '#planEditBox input, #planEditBox select', function () { PLAN_DIRTY = true; });
+$(document).on('input change', '#cardEditBox input, #cardEditBox select, #cardEditBox textarea', function () { CARD_DIRTY = true; });
+/** 有未儲存變更時先問一聲；回 false＝使用者選擇留下來 */
+/* 關閉專案跳窗前先確認規劃表有沒有沒存到的東西（✕ 與「關閉」都走這裡） */
+function closeProject() {
+    if (!planLeaveOk('關閉')) return;
+    PLAN_DIRTY = false; CARD_DIRTY = false;
+    closeMask('prjMask');
+}
+function planLeaveOk(what) {
+    var box = [];
+    if (PLAN_DIRTY) box.push('執行規劃表');
+    if (CARD_DIRTY) box.push('專案管理卡');
+    if (!box.length) return true;
+    return confirm(box.join('與') + '還有沒有儲存的變更，' + (what || '離開') + '之後就會不見。\n\n要繼續嗎？（要保留請按取消，再按「儲存」）');
+}
 
 function drawPlanEditor(res) {
     var grouped = groupTasks(res.goals || [], res.tasks || []);
@@ -829,6 +881,7 @@ function drawPlanEditor(res) {
     });
     h += '</div>';
     $('#planEditBox').html(h);
+    PLAN_DIRTY = false;
     /* 目標的主辦單位下拉用 .val() 設，避免字串比對出錯（負責人兩個下拉已在建 option 時標好 selected） */
     $('#planEditBox .sec[data-goal]').each(function (gi) {
         var g = grouped[gi];
@@ -979,7 +1032,18 @@ $(document).on('click', '#btnGoalAdd', function () {
     CUR.goals = res.goals;
     drawPlanEditor(CUR);
 });
-$(document).on('click', '#btnPlanSave', function () {
+/** 規劃表上有沒有東西要存（一個有名稱的目標都沒有＝沒東西可存） */
+function planHasContent() {
+    if (!$('#planEditBox .sec[data-goal]').length) return false;
+    var has = false;
+    $('#planEditBox .g-name').each(function () { if ($.trim($(this).val())) has = true; });
+    return has;
+}
+/**
+ * 存執行規劃表。cb(true) ＝存好了；cb(false) ＝驗證沒過或存檔失敗（已經提示過原因）。
+ * 底部「儲存」與工具列「儲存規劃表」共用這一份，兩邊規則不會走鐘。
+ */
+function savePlan(pid, cb) {
     var goals = [], tasks = [], bad = '';
     $('#planEditBox .sec[data-goal]').each(function (gi) {
         var gkey = 'g' + gi;
@@ -1003,9 +1067,18 @@ $(document).on('click', '#btnPlanSave', function () {
             });
         });
     });
-    if (bad) { alert(bad); return; }
-    api('plan_save', { project_id: CUR.project.project_id, goals: JSON.stringify(goals), tasks: JSON.stringify(tasks) }, 'POST')
-        .done(function (res) { alert(res.message); openProject(num(CUR.project.project_id)); loadList(); });
+    if (bad) { alert(bad); if (cb) cb(false); return; }
+    api('plan_save', { project_id: num(pid), goals: JSON.stringify(goals), tasks: JSON.stringify(tasks) }, 'POST')
+        .done(function (res) { PLAN_DIRTY = false; if (cb) cb(true, res); })
+        .fail(function () { if (cb) cb(false); });
+}
+$(document).on('click', '#btnPlanSave', function () {
+    savePlan(num(CUR.project.project_id), function (ok, res) {
+        if (!ok) return;
+        alert((res && res.message) || '已儲存執行規劃表');
+        openProject(num(CUR.project.project_id));
+        loadList();
+    });
 });
 
 /* ══════════════════════════ 專案管理卡（2-GM-02-03） ══════════════════════════ */
@@ -1100,6 +1173,7 @@ function openCard(cardId) {
         }
         h += '</div>';
         $('#cardEditBox').html(h).data('card', res);
+        CARD_DIRTY = false;
     });
 }
 
@@ -1121,7 +1195,7 @@ function collectCardItems() {
 $(document).on('click', '#btnCardSave', function () {
     var cid = num($('#cardEditBox .sec').data('card'));
     api('card_save', { card_id: cid, review_date: $('#ciDate').val(), items: JSON.stringify(collectCardItems()) }, 'POST')
-        .done(function (r) { alert(r.message); openCard(cid); });
+        .done(function (r) { CARD_DIRTY = false; alert(r.message); openCard(cid); });
 });
 $(document).on('click', '#btnCardSubmit', function () {
     var cid = num($('#cardEditBox .sec').data('card'));
@@ -1366,6 +1440,7 @@ function renderSign(res) {
 $(document).on('click', '#cosignPick .pj-tag', function () { $(this).toggleClass('on'); });
 
 $(document).on('click', '#btnSubmit', function () {
+    if (!planLeaveOk('送簽')) return;
     var depts = [];
     $('#cosignPick .pj-tag.on').each(function () { depts.push(num($(this).data('cos'))); });
     if (!depts.length && !confirm('沒有選擇任何會簽單位，確定直接送簽？')) return;
@@ -1395,6 +1470,7 @@ $(document).on('click', '[data-cosign]', function () {
 $(document).on('change', 'input[name=cosRes]', function () { $('#cosOpinion').prop('disabled', false).attr('placeholder', ''); });
 
 $(document).on('click', '#btnApprove', function () {
+    if (!planLeaveOk('核准')) return;
     var h = '<div class="sec"><label>核准日期</label><input type="date" id="apDate" value="' + esc(META.today) + '">'
           + '<label style="margin-top:8px;">備註（非必填）</label><textarea id="apNote" rows="3"></textarea></div>';
     showDialog('核准專案', h, function () {
@@ -1403,6 +1479,7 @@ $(document).on('click', '#btnApprove', function () {
     });
 });
 $(document).on('click', '#btnReject', function () {
+    if (!planLeaveOk('退回')) return;
     var h = '<div class="sec"><label>退回原因 <span style="color:#DD5138;">*</span></label>'
           + '<textarea id="apNote" rows="4" placeholder="請說明退回原因"></textarea><div class="pj-err" id="apErr"></div></div>';
     showDialog('退回專案', h, function () {
@@ -1422,6 +1499,7 @@ function doDecide(dec, date, note, force) {
 }
 
 $(document).on('click', '#btnClose', function () {
+    if (!planLeaveOk('結案')) return;
     var h = '<div class="sec"><label>結案日期</label><input type="date" id="clDate" value="' + esc(META.today) + '">'
           + '<label style="margin-top:8px;">專案總結報告 <span style="color:#DD5138;">*</span></label>'
           + '<textarea id="clSummary" rows="6" placeholder="程序書 §6.11.1 A：專案小組彙整專案總結報告呈總經理，並在管理審查會議上提報"></textarea>'

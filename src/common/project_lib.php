@@ -1100,19 +1100,40 @@ function prj_gantt_range(array $prj, array $tasks): ?array
  */
 function prj_bom_rows(PDO $db, int $projectId): array
 {
-    $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, bi.maker_id_no,
-                               bi.sqty, bi.processing_state, bi.QC_check,
-                               DATE(bi.outsource_date) AS outsource_date, DATE(bi.return_date) AS return_date,
-                               b.d_setting_id AS ds_pk, b.d_id AS part_no,
-                               pn.ProcessName AS process_name, m.maker_id AS maker_name
-                        FROM project_order po
-                        JOIN bom b ON b.o_order_id = CAST(po.order_id AS CHAR)
-                        JOIN bom_ing bi ON bi.bom = b.bom
-                        LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
-                        LEFT JOIN maker_list m ON m.maker_id_no = bi.maker_id_no
-                        WHERE po.project_id=? AND bi.is_consumed=0
-                        ORDER BY b.bom, bi.bom_sn, bi.bom_ing_fid");
-    $st->execute([$projectId]);
+    /* 訂單 → 製令(bom) 的對應有三種寫法，全站都是「三個都要看」（比照 part_cost_lib 的 ppc_bom_order()
+       與 shipping_lib 的 A/B 兩路），只認其中一種一定會漏：
+         ①bom_order_process_map.order_id ── 真正的對應表，優先
+         ②bom.o_order_id ＝ order_track.Order_id（數字，BomTrack_API 的用法）
+         ③bom.o_order_id ＝ order_track.Order_oo（訂單單號字串，shipping_lib 的用法）
+       實測：全庫 11810 張製令裡有 10213 張（86%）的 o_order_id 是空的，只靠 ②就會「同步 BOM 抓不到任何資料」，
+       使用者回報的正是這一種（製令已出貨結案、o_order_id 從頭到尾沒填，但 bom_order_process_map 有對應）。
+       另：**刻意不濾 bom.closed_at／state** ── 已結案（出貨完）的製令，它的製程履歷仍然是這個專案的實績，
+       要看得到；只濾掉 bi.is_consumed=1（被合併掉的製程列）。 */
+    $sql = "SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, bi.maker_id_no,
+                   bi.sqty, bi.processing_state, bi.QC_check,
+                   DATE(bi.outsource_date) AS outsource_date, DATE(bi.return_date) AS return_date,
+                   b.d_setting_id AS ds_pk, b.d_id AS part_no, b.closed_at AS bom_closed_at,
+                   pn.ProcessName AS process_name, m.maker_id AS maker_name
+            FROM (
+                    SELECT m1.bom AS bom
+                      FROM bom_order_process_map m1
+                      JOIN project_order po1 ON po1.order_id = m1.order_id AND po1.project_id = ?
+                    UNION
+                    SELECT b2.bom
+                      FROM bom b2
+                      JOIN project_order po2 ON po2.project_id = ?
+                      JOIN order_track ot2 ON ot2.Order_id = po2.order_id
+                     WHERE b2.o_order_id IS NOT NULL AND b2.o_order_id <> ''
+                       AND (b2.o_order_id = CAST(po2.order_id AS CHAR) OR b2.o_order_id = ot2.Order_oo)
+                 ) src
+            JOIN bom b      ON b.bom  = src.bom
+            JOIN bom_ing bi ON bi.bom = b.bom
+            LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+            LEFT JOIN maker_list m  ON m.maker_id_no = bi.maker_id_no
+            WHERE bi.is_consumed = 0
+            ORDER BY b.bom, bi.bom_sn, bi.bom_ing_fid";
+    $st = $db->prepare($sql);
+    $st->execute([$projectId, $projectId]);
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
