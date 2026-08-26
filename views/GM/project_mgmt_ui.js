@@ -625,6 +625,57 @@ function ganttRange(p, tasks) {
 }
 function dayDiff(a, b) { return (b - a) / 86400000; }
 
+/* ══ 預計日程的「工作天數」 ══════════════════════════════════════════
+   定義（與後端 prj_plan_end_by_days()／prj_plan_days() 同一套）：
+     預計開始當天算第 1 天，之後只算工作日；週六日與休假日不算、補班日算。
+     所以「工作天數 1」＝當天來回，預計完成日就等於預計開始日。
+   行事曆由 meta 的 workday 帶下來（來源是行事曆的 evenement，不是 calendar_workday）。 */
+function wdSets() {
+    var w = META.workday || {};
+    if (!w.__map) {
+        w.__map = { h: {}, m: {} };
+        $.each(w.holidays || [], function (i, d) { w.__map.h[d] = 1; });
+        $.each(w.makeups || [], function (i, d) { w.__map.m[d] = 1; });
+        META.workday = w;
+    }
+    return w.__map;
+}
+function ymd(dt) {
+    var m = dt.getMonth() + 1, d = dt.getDate();
+    return dt.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (d < 10 ? '0' : '') + d;
+}
+function parseYmd(str) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec($.trim(str || ''));
+    return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+}
+function isWorkday(dt) {
+    var map = wdSets(), key = ymd(dt), dow = dt.getDay();
+    if (map.m[key]) return true;                       // 補班日優先於週末
+    return dow !== 0 && dow !== 6 && !map.h[key];
+}
+/** 預計開始 + 工作天數 → 預計完成日 */
+function planEndByDays(start, days) {
+    var dt = parseYmd(start);
+    if (!dt) return '';
+    var left = (days || 0) - 1, guard = 0;             // 開始日已經算第 1 天
+    while (left > 0 && guard++ < 4000) {
+        dt.setDate(dt.getDate() + 1);
+        if (isWorkday(dt)) left--;
+    }
+    return ymd(dt);
+}
+/** 預計開始～預計完成 → 工作天數（同一天＝1；完成早於開始＝0，代表算不出來） */
+function planDaysBetween(start, end) {
+    var a = parseYmd(start), b = parseYmd(end);
+    if (!a || !b || ymd(b) < ymd(a)) return 0;
+    var n = 1, guard = 0;                              // 開始日本身算 1 天
+    while (ymd(a) < ymd(b) && guard++ < 4000) {
+        a.setDate(a.getDate() + 1);
+        if (isWorkday(a)) n++;
+    }
+    return n;
+}
+
 /* ══ 執行規劃表的「負責人」：先選部門、再選人 ══════════════════════════
    為什麼要兩層：eg_people_list() 一人只回一列（職級最高那筆），兼任的人在單一下拉裡
    只會以其中一個職務出現＝「多職務者沒有完整呈現」；而且全公司的人擠在一個下拉裡也找不到人。
@@ -746,7 +797,10 @@ function drawPlanEditor(res) {
       + '<p class="pj-hint">末列按 <b>↓</b> 自動加一列、沒填東西的末列按 <b>↑</b> 自動移除；'
       + '任務改了日期，時間軸與管理卡的「目前應達成基準」都會跟著重算。<br>'
       + '負責人<b>先選部門、再選人</b>（兼任多個部門的人會在各部門底下分別以該部門的職稱出現）；'
-      + '部門清單由管理員在「模組設定 → 執行規劃表負責人部門」設定。</p>'
+      + '部門清單由管理員在「模組設定 → 執行規劃表負責人部門」設定。<br>'
+      + '<b>工作天數</b>與<b>預計完成</b>兩邊同動：填了開始日就自動帶出當天完成（＝1 天），'
+      + '改天數會重算完成日、直接改完成日也會反算天數。天數只算工作日（週末與行事曆上的休假日不算、補班日要算）。'
+      + '<b>上一列的預計完成日會自動變成下一列的預計開始日</b>——你自己改過的開始日不會被蓋掉。</p>'
       + (PLAN_ACT_OPEN ? ''
           : '<p class="pj-hint" style="color:#C4442D;">「實際開始／實際完成」要等<b>立案核准</b>之後才能填'
             + '（目前狀態：' + esc(STATUS_LABEL[res.project.status] || res.project.status) + '），此階段只排預計日程。</p>');
@@ -761,10 +815,13 @@ function drawPlanEditor(res) {
           + '<button class="g-del" style="height:30px;padding:0 12px;border:1px solid #C4442D;border-radius:4px;background:#DD5138;color:#fff;cursor:pointer;">刪除此目標</button></div>'
           + '</div>'
           + '<table class="sub-tbl"><thead><tr>'
-          + '<th style="width:30px;">#</th><th>主要任務</th><th style="width:126px;">預計開始</th><th style="width:126px;">預計完成</th>'
-          + '<th style="width:126px;">實際開始</th><th style="width:126px;">實際完成</th>'
-          + '<th style="width:186px;">負責人（先選部門）</th><th style="width:66px;">進度%</th>'
-          + '<th style="width:46px;">里程碑</th><th style="width:34px;"></th></tr></thead>'
+          + '<th style="width:28px;">#</th><th>主要任務</th>'
+          + '<th style="width:114px;">預計開始</th>'
+          + '<th style="width:62px;" title="預計開始當天算第 1 天，只算工作日">工作天數</th>'
+          + '<th style="width:114px;">預計完成</th>'
+          + '<th style="width:114px;">實際開始</th><th style="width:114px;">實際完成</th>'
+          + '<th style="width:180px;">負責人（先選部門）</th><th style="width:60px;">進度%</th>'
+          + '<th style="width:44px;">里程碑</th><th style="width:30px;"></th></tr></thead>'
           + '<tbody class="t-body" data-eg-row-add="planRowAdd" data-eg-row-del="planRowDel">';
         var list = g.tasks.length ? g.tasks : [{}];
         $.each(list, function (ti, t) { h += planRowHtml(t, ti); });
@@ -789,10 +846,14 @@ function planRowHtml(t, i) {
        ※ class 要併進同一個 class 屬性——寫成兩個 class="" 的話後面那個會被 HTML 解析器丟掉（灰底就不會出現）。 */
     var actCls = PLAN_ACT_OPEN ? '' : ' ro-auto';
     var actRo  = PLAN_ACT_OPEN ? '' : ' disabled title="立案核准後才能填實際日期"';
-    return '<tr data-task="' + num(t.task_id) + '">'
+    /* data-pe0＝這一列目前的預計完成日。串接時用它判斷「下一列的開始日還跟著上一列」
+       還是「使用者自己改過了」，改過的就不覆蓋。 */
+    var days = (t.plan_start && t.plan_end) ? planDaysBetween(t.plan_start, t.plan_end) : 0;
+    return '<tr data-task="' + num(t.task_id) + '" data-pe0="' + esc(t.plan_end || '') + '">'
       + '<td>' + (i + 1) + '</td>'
       + '<td><input type="text" class="t-name" value="' + esc(t.task_name || '') + '"></td>'
       + '<td><input type="date" class="t-ps" value="' + esc(t.plan_start || '') + '"></td>'
+      + '<td><input type="number" class="t-days" min="1" max="999" value="' + (days > 0 ? days : '') + '"></td>'
       + '<td><input type="date" class="t-pe" value="' + esc(t.plan_end || '') + '"></td>'
       + '<td><input type="date" class="t-as' + actCls + '"' + actRo + ' value="' + esc(t.act_start || '') + '"></td>'
       + '<td><input type="date" class="t-ae' + actCls + '"' + actRo + ' value="' + esc(t.act_end || '') + '"></td>'
@@ -802,6 +863,56 @@ function planRowHtml(t, i) {
       + '<td><input type="checkbox" class="t-ms" data-eg-skip="1"' + (num(t.is_milestone) ? ' checked' : '') + '></td>'
       + '<td><span class="pj-op t-del" title="刪除這一列">✕</span></td></tr>';
 }
+
+/* ── 預計開始／工作天數／預計完成 三欄連動 ──────────────────────────
+   規則（推導欄位鐵則：來源一改就重算，算不出來就清空，不留改之前的舊值）：
+     改開始日 → 有天數就用天數算完成日；沒天數就當天來回（完成＝開始）
+     改天數   → 由開始日算完成日
+     改完成日 → 反算天數；完成早於開始就標紅並清掉天數
+   每次完成日有變動，就往下把「還跟著上一列」的後續列一起帶著走。 */
+function planRowRecalc($tr, from) {
+    var $ps = $tr.find('.t-ps'), $dy = $tr.find('.t-days'), $pe = $tr.find('.t-pe');
+    var ps = $.trim($ps.val()), pe = $.trim($pe.val()), dy = num($dy.val());
+    if (from === 'ps') {
+        if (!ps) { $dy.val(''); }
+        else if (dy > 0) { pe = planEndByDays(ps, dy); $pe.val(pe); }
+        else { if (!pe || pe < ps) { pe = ps; $pe.val(pe); } $dy.val(planDaysBetween(ps, pe) || ''); }
+    } else if (from === 'days') {
+        if (dy > 999) { dy = 999; $dy.val(999); }
+        if (dy < 1) { $dy.val(''); }                 // 清掉天數不動完成日（改由完成日那邊決定）
+        else if (ps) { pe = planEndByDays(ps, dy); $pe.val(pe); }
+    } else {                                          // from === 'pe'
+        $dy.val(ps && pe ? (planDaysBetween(ps, pe) || '') : '');
+    }
+    /* 完成早於開始：當場標紅講原因（表單三總則③；存檔時後端 prj_validate 會再擋一次） */
+    var bad = !!(ps && pe && pe < ps);
+    $pe.toggleClass('fld-bad', bad).attr('title', bad ? '預計完成日不可早於預計開始日' : '');
+    planChainFrom($tr);
+}
+/** 把後續「還跟著上一列」的列一起往後推（使用者自己改過的開始日不覆蓋，遇到就停） */
+function planChainFrom($tr) {
+    var guard = 0;
+    while (guard++ < 500) {
+        var pe = $.trim($tr.find('.t-pe').val());
+        var old = String($tr.attr('data-pe0') || '');
+        $tr.attr('data-pe0', pe);
+        var $next = $tr.next('tr');
+        if (!$next.length || !pe) return;
+        var $nps = $next.find('.t-ps');
+        var cur = $.trim($nps.val());
+        if (cur !== '' && cur !== old) return;        // 下一列的開始日是使用者自己填的，不動它
+        if (cur === pe) { $tr = $next; continue; }    // 已經一致，往後檢查下一列
+        $nps.val(pe);
+        var ndy = num($next.find('.t-days').val());
+        var npe = ndy > 0 ? planEndByDays(pe, ndy) : pe;
+        $next.find('.t-pe').val(npe).removeClass('fld-bad').attr('title', '');
+        if (!(ndy > 0)) $next.find('.t-days').val(planDaysBetween(pe, npe) || '');
+        $tr = $next;
+    }
+}
+$(document).on('change', '#planEditBox .t-ps', function () { planRowRecalc($(this).closest('tr'), 'ps'); });
+$(document).on('change', '#planEditBox .t-pe', function () { planRowRecalc($(this).closest('tr'), 'pe'); });
+$(document).on('input change', '#planEditBox .t-days', function () { planRowRecalc($(this).closest('tr'), 'days'); });
 
 /* 換部門就重建人員下拉（推導欄位鐵則：來源一改就重算；原本那個人若在新部門底下仍在就保留） */
 $(document).on('change', '#planEditBox .t-odept', function () {
@@ -834,6 +945,11 @@ function planRowAdd() {
     if (!$tbody.length) return false;
     $tbody.append(planRowHtml({}, $tbody.find('tr').length));
     renumberPlan($tbody);
+    /* 新列的預計開始＝上一列的預計完成（使用者要求的接續），天數留空＝當天來回。
+       這裡只寫值不發事件，所以共用檔仍然認得「這列是剛加出來、還沒動過」，按 ↑ 一樣收得回去。 */
+    var $new = $tbody.find('tr').last(), $prev = $new.prev('tr');
+    var prevEnd = $prev.length ? $.trim($prev.find('.t-pe').val()) : '';
+    if (prevEnd) { $new.find('.t-ps').val(prevEnd); planRowRecalc($new, 'ps'); }
     return true;
 }
 function planRowDel() {

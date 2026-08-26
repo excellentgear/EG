@@ -159,6 +159,8 @@ case 'meta':
         // 兼任的另一個職務在下拉裡會看不到，執行規劃表的「先選部門再選人」要靠這份。
         'people_posts'     => prj_people_posts($db, array_column($people, 'id')),
         'task_owner_depts' => prj_task_owner_depts($db),
+        // 工作日行事曆（休假日／補班日）：規劃表的「工作天數」要在畫面上即時算，帶下去給前端用
+        'workday'          => prj_workday_sets($db),
         'owner_people' => $ownerPeople,
         'owner_scope'  => prj_owner_scope_labeled($db),
         'owner_default'    => $uid,                    // 新專案／訂單轉專案的負責人預設＝目前使用者

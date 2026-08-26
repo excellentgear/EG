@@ -31,6 +31,7 @@ require_once __DIR__ . '/asdoc_lib.php';
 require_once __DIR__ . '/people_lib.php';
 require_once __DIR__ . '/date_fmt_lib.php';
 require_once __DIR__ . '/position_history_lib.php';
+require_once __DIR__ . '/car_lib.php';   // 工作日行事曆唯一來源：car_holiday_sets()／car_working_days_between()
 
 /** AS 文件綁定模組代碼（一表一碼，值只存 id，見 ai-rules/16 第一之三節） */
 const PRJ_ASDOC_PLAN = 'project_plan';   // 2-GM-02-02 專案執行規劃表
@@ -695,6 +696,52 @@ function prj_people_posts(PDO $db, array $userIds): array
     }
     unset($r);
     return $rows;
+}
+
+/* ══════════════════════ 預計日程的「工作天數」 ══════════════════════
+   定義（執行規劃表專用，兩個方向都以這裡為準）：
+     預計開始當天算第 1 天，之後只算工作日；週六日與休假日(s)不算、補班日(m)算。
+     所以「工作天數 1」＝當天來回，預計完成日就等於預計開始日。
+   行事曆一律走 car_holiday_sets()（＝views/pages/calendar.php 的 evenement＋event_category.day_type），
+   不可改用 calendar_workday（該表有誤）。前端有一份同規則的即時計算，判定資料由 meta 的 workday 帶下去，
+   避免兩邊各自維護一份行事曆。 */
+
+/** 預計開始 + 工作天數 → 預計完成日（days<=1 時回傳開始日本身） */
+function prj_plan_end_by_days(PDO $db, string $start, int $days): string
+{
+    $cur = strtotime(substr($start, 0, 10));
+    if ($cur === false) return substr($start, 0, 10);
+    $left = $days - 1;                       // 開始日已經算第 1 天
+    if ($left <= 0) return date('Y-m-d', $cur);
+    $sets = car_holiday_sets($db);
+    $guard = 0;
+    while ($left > 0 && $guard++ < 4000) {
+        $cur = strtotime('+1 day', $cur);
+        $key = date('Y-m-d', $cur);
+        $dow = (int)date('w', $cur);
+        $isWeekend = ($dow === 0 || $dow === 6);
+        if (isset($sets['makeups'][$key]) || (!$isWeekend && !isset($sets['holidays'][$key]))) $left--;
+    }
+    return date('Y-m-d', $cur);
+}
+
+/** 預計開始～預計完成 → 工作天數（同一天＝1；完成早於開始＝0，代表算不出來） */
+function prj_plan_days(PDO $db, string $start, string $end): int
+{
+    $s = substr($start, 0, 10);
+    $e = substr($end, 0, 10);
+    if ($s === '' || $e === '' || $e < $s) return 0;
+    return car_working_days_between($db, $s, $e) + 1;   // 開始日本身算 1 天
+}
+
+/** 給前端即時計算用的行事曆（休假日／補班日；資料量只有幾十筆，隨 meta 帶下去即可） */
+function prj_workday_sets(PDO $db): array
+{
+    $sets = car_holiday_sets($db);
+    return [
+        'holidays' => array_keys($sets['holidays']),
+        'makeups'  => array_keys($sets['makeups']),
+    ];
 }
 
 /**
