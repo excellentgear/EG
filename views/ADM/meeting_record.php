@@ -390,6 +390,13 @@ foreach ($roleRows as $rr) {
             </div>
         </div>
         <div id="setPaneAttach" style="display:none;">
+            <div style="border:1px solid #E8D5B5;border-radius:6px;background:#FFF7E8;padding:8px 10px;margin-bottom:14px;">
+                <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer;">
+                    <input type="checkbox" id="setAutoSubmit" data-eg-skip onchange="submitAutoSubmit()" style="margin:0;">
+                    <span>回簽全部完成時，自動送出主席簽核</span>
+                </label>
+                <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">出席人員全部簽到、負責部門／指定人員全部回簽、且已指定主席——三個條件都到齊的那一刻，系統直接送交主席確認簽章，記錄人不必再手動按一次「送出」（簽核紀錄上的送出人仍記記錄人本人，跟手動送出完全一樣，並會發一則通知告知記錄人）。關掉＝維持原本要手動按送出。</p>
+            </div>
             <label>附件儲存路徑（留空＝用全站預設根目錄＋「會議紀錄」子資料夾）</label>
             <input type="text" id="setNasDir" style="width:100%;" placeholder="\\excellentnas\...\會議紀錄">
             <button type="button" class="b-att" style="margin-top:6px;" onclick="submitNasDir()">儲存路徑</button>
@@ -455,6 +462,7 @@ foreach ($roleRows as $rr) {
         <b>③現場簽到</b>：開啟「檢視」，出席人員名單旁各自輸入<b>本人密碼</b>簽到（共用一台裝置輪流簽，用選人不用密碼反查身分，不會有密碼重複無法辨識的問題）。<br>
         <b>④存草稿或送出</b>：草稿只有記錄人自己看得到，可隨時修改。<b>出席人員全部簽到、且負責部門/指定人員也全部確認回簽後</b>才能真正<b>送簽核</b>，鎖定內容並通知主席確認簽章 → 主席簽章後自動通知總經理確認簽章（總經理可逐筆或整體回覆意見）→ 完成。
         負責人尚未全部確認回簽時，按鈕會改標<b>「存檔並通知」</b>：只發通知請對方回覆確認，<b>不會</b>送交主席簽核；全部確認完成後按鈕才會變回「送簽核」。任一階段可退回，退回後記錄人可修改並重新送出。<br>
+        <b>自動送簽核</b>：預設開啟——<b>出席全部簽到＋負責部門/指定人員全部回簽＋已指定主席</b>三個條件到齊的那一刻（不論最後補齊的是哪一項、由誰完成），系統會<b>直接送交主席簽核</b>，記錄人不必再手動按一次；簽核紀錄上的送出人仍記<b>記錄人本人</b>，跟手動送出完全相同，並會發一則通知告知記錄人已自動送出。若想改回手動，管理員可到「模組設定 → 附件與簽到表AS文件綁定」把這個勾選拿掉。<br>
         按下「存檔並通知」後，狀態會變成<b>「回簽中」</b>，內容<b>鎖定不可編輯</b>（避免對方回覆的是已經被改掉的舊內容）；待負責人全部回覆確認後自動解鎖可送簽核，或記錄人可按「撤回」提前解除鎖定改回可編輯草稿（已完成的簽到/確認簽名不會被清除；之後若真的改了某項目的內容或負責部門/指定人員，只有<b>該項目</b>的舊確認會被清空要求重新確認，其餘項目不受影響）。<br>
         <b>⑤負責人/部門項目確認</b>：要項的「負責人/部門」欄可點連結<b>切換兩種模式（二擇一，切換會清空另一種的選擇）</b>：<br>
         　－<b>選部門</b>（可多選）：<b>每個負責部門各要一位代表簽名</b>，系統依序自動算出誰要簽（現場只有算出的那位本人能輸入密碼簽這格）：①該部門本次以<b>主要角色</b>出席的主管優先（有設職級的職稱，如經理/副理/課長/組長等）②該部門沒有主要角色主管出席，才由<b>兼任</b>該部門主管的出席者代簽 ③連兼任主管都沒有，才由該部門出席人員中職稱排序最高者代簽（②③兩種情況章旁都標示「(代)」，不特別區分是否兼任）。<br>
@@ -1162,6 +1170,9 @@ function saveDraft(thenSubmit){
     $.post(API, gatherPayload(), function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         EDIT_ID = res.meeting_id;
+        // 這次存檔剛好把最後一個條件補齊(通常是指定主席)，後端已自動送出主席簽核——
+        // 就不要再走 submitMeeting，否則會被擋「此會議記錄已送出過」
+        if (res.auto_submitted){ alert('已儲存。出席簽到與負責部門回簽都已完成，系統已自動送出主席簽核。'); closeMask('edMask'); loadList(); return; }
         if (!thenSubmit){ alert('已儲存草稿。'); closeMask('edMask'); loadList(); return; }
         var rdy = mtReadiness();
         var doIt = (rdy.allSigned && rdy.pending>0) ? notifyPendingItems : submitMeeting;
@@ -1346,6 +1357,7 @@ function signAttendee(mid, uidv){
         $('tr[data-uid="'+uidv+'"] td:last-child').html('<span class="sign-ok">'+stampHtml+' <span style="font-size:11px;">'+esc(nowStr)+'</span></span>');
         var next = (VIEW.attendees||[]).filter(function(a){ return !(+a.signed); })[0];
         if (next) setTimeout(function(){ $('#pw-'+next.user_id).focus(); }, 30);
+        else if (res.auto_submitted){ alert('全員已簽到，負責部門回簽也都完成，系統已自動送出主席簽核。'); closeMask('viewMask'); loadList(); }
         else alert('全員已簽到');
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '簽到失敗'); $('#pw-'+uidv).val('').select(); });
 }
@@ -1439,6 +1451,7 @@ function confirmItemWithPassword(itemId, uidv){
     if (!pw){ alert('請輸入密碼'); return; }
     $.post(API, {action:'item_confirm', item_id:itemId, user_id:uidv, password:pw}, function(res){
         if (!res.ok){ alert(res.error||'確認失敗'); return; }
+        if (res.auto_submitted){ alert('全部負責部門都已回簽、出席也全部簽到，系統已自動送出主席簽核。'); closeMask('viewMask'); loadList(); return; }
         openView(VIEW.meeting.meeting_id);
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '確認失敗'); $('#pwConfirm'+itemId+'_'+uidv).val('').select(); });
 }
@@ -1659,7 +1672,7 @@ function printKpiOnly(){
 }
 
 /* ---------- 模組設定：角色設定(仿 training_record.php) + 附件路徑/簽到表AS綁定 ---------- */
-$('#btnMtSetting').on('click', function(){ setTabSwitch('role'); loadRoles(); $('#setNasDir').val(META.attach_nas_dir||''); renderSignsheetLabel(); loadStampTplOptions(); loadKpiTargetUI(); openMask('mtSetMask'); });
+$('#btnMtSetting').on('click', function(){ setTabSwitch('role'); loadRoles(); $('#setNasDir').val(META.attach_nas_dir||''); $('#setAutoSubmit').prop('checked', !!META.auto_submit); renderSignsheetLabel(); loadStampTplOptions(); loadKpiTargetUI(); openMask('mtSetMask'); });
 function setTabSwitch(tab){
     $('.set-tab').removeClass('active'); $('.set-tab[data-tab="'+tab+'"]').addClass('active');
     $('#setPaneRole').toggle(tab==='role'); $('#setPaneAttach').toggle(tab==='attach');
@@ -1732,6 +1745,14 @@ $('#btnRoleFeatSave').on('click', function(){
         alert(r.success ? '已儲存。受影響的人重新整理頁面後生效。' : r.message);
     }, 'json');
 });
+/* 回簽全部完成時自動送出主席簽核（模組設定，2026-08-26使用者拍板：可開關、預設開啟） */
+function submitAutoSubmit(){
+    var on = $('#setAutoSubmit').is(':checked') ? 1 : 0;
+    $.post(API, {action:'auto_submit_save', enabled:on}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); $('#setAutoSubmit').prop('checked', !!META.auto_submit); return; }
+        META.auto_submit = res.auto_submit;
+    }, 'json').fail(function(){ alert('儲存失敗'); $('#setAutoSubmit').prop('checked', !!META.auto_submit); });
+}
 function submitNasDir(){
     $.post(API, {action:'attach_setting_save', nas_dir:$('#setNasDir').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }

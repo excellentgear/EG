@@ -583,7 +583,7 @@ function meeting_item_required_signers_for(PDO $db, int $meetingId, array $item)
  *  當初系統挑出的那位現場必簽代表，因此改存 dept_id(而非只有 dept_name 文字)，讓畫面能用 dept_id 判定「這個
  *  部門的簽名槽是否已經由任何一位代表回覆」；$replyContent 有值時(reply動作)存回覆內容，供項目下方顯示。 */
 function meeting_item_confirm_via_notify(PDO $db, int $itemId, int $uid, string $uname, ?string $replyContent = null): void {
-    $st = $db->prepare("SELECT owner_depts, owner_users FROM meeting_item WHERE item_id=?");
+    $st = $db->prepare("SELECT meeting_id, owner_depts, owner_users FROM meeting_item WHERE item_id=?");
     $st->execute([$itemId]);
     $item = $st->fetch(PDO::FETCH_ASSOC);
     if (!$item) return;
@@ -611,6 +611,8 @@ function meeting_item_confirm_via_notify(PDO $db, int $itemId, int $uid, string 
     // 還是看得到完整的回覆表單，容易讓人誤會「這樣回覆會不會蓋掉別人」。此項目所有負責部門(或所有指定人員)
     // 都已有人確認時，關閉這則通知，其餘人之後開啟只會看到已讀/已處理，不再能送出回覆。
     meeting_close_item_notice_if_done($db, $itemId);
+    // 這一筆回簽可能就是最後一項——全部到齊就直接送主席簽核，不必記錄人再手動按一次（2026-08-26使用者要求）
+    meeting_try_auto_submit($db, (int)$item['meeting_id']);
 }
 
 /** 這個項目的「所有負責部門/所有指定人員」是否都已確認(不論現場密碼簽名或通知回覆皆算)。
@@ -699,6 +701,81 @@ function meeting_approval_status(PDO $db, int $meetingId): array {
     if ($gm) $status = $gm['status'] === 'pending' ? 'chair_done'
                      : ($gm['status'] === 'rejected' ? 'rejected' : 'done');
     return ['status'=>$status, 'chair'=>$chair, 'gm'=>$gm];
+}
+
+/* ============================================================
+ * 送出主席簽核（手動按鈕與「回簽完成自動送出」共用同一份實作）
+ * 2026-08-26 使用者拍板三項：①模組設定可開關、預設開啟 ②三個條件（全部回簽完成／出席全部簽到／
+ * 已指定主席）都滿足的那一刻就自動送 ③簽核紀錄上的送出人一律記「記錄人」，跟手動按送出完全一致。
+ * ============================================================ */
+
+/** 自動送簽核開關（模組設定；未設定＝開啟）。 */
+function meeting_auto_submit_enabled(PDO $db): bool {
+    return meeting_setting_get($db, 'meeting_auto_submit', '1') === '1';
+}
+
+/** 可不可以送主席簽核：回傳擋下的原因（空字串＝三個條件都到齊、可以送）。
+ *  手動送出用它產生錯誤訊息，自動送出用它判斷時機，兩邊規則保證一致（不要各寫一份）。 */
+function meeting_submit_blocker(PDO $db, array $m): string {
+    $id = (int)$m['meeting_id'];
+    if (!in_array((string)$m['status'], ['draft', 'rejected'], true)) return '此會議記錄已送出過';
+    if (!$m['chair_user_id']) return '請先指定本次會議主席';
+    $ac = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=?"); $ac->execute([$id]);
+    if ((int)$ac->fetchColumn() === 0) return '請先加入出席人員名單';
+    $itq = $db->prepare("SELECT * FROM meeting_item WHERE meeting_id=? ORDER BY kind, sort_order, item_id");
+    $itq->execute([$id]);
+    $items = $itq->fetchAll(PDO::FETCH_ASSOC);
+    if (!$items) return '請至少建立一項會議要項或上級指示要項';
+    $un = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=? AND signed=0"); $un->execute([$id]);
+    if ((int)$un->fetchColumn() > 0) return '尚有出席人員未完成現場簽到，請先完成全部出席人員簽到再送出';
+    foreach ($items as $it) {
+        if (!meeting_item_is_confirmed($db, $it)) {
+            return '項目「' . mb_substr((string)$it['content'], 0, 20) . '…」尚有負責部門/指定人員未確認回簽，請先「存檔並通知」，待對方回覆確認後再送出';
+        }
+    }
+    return '';
+}
+
+/** 真正執行送出：建立主席簽核紀錄＋發通知＋狀態改 submitted。呼叫前請先自行跑過 meeting_submit_blocker()。
+ *  $byUid/$byName＝送出人（自動送出時一律傳記錄人，讓主席收到的通知與簽核紀錄跟手動送出長得一樣）。
+ *  回傳空字串＝成功，否則為錯誤訊息。 */
+function meeting_submit_to_chair(PDO $db, array $m, int $byUid, string $byName): string {
+    $id = (int)$m['meeting_id'];
+    $chair = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
+    if (!$chair['id']) return '找不到主席簽核人';
+    $apId = eg_approval_submit($db, 'meeting', $id, 'chair', $byUid, $byName);
+    $ev = meeting_notify($db, $id, $chair['id'],
+        '「' . $m['subject'] . '」會議記錄待主席確認簽章',
+        $byName . ' 送出「' . $m['subject'] . '」（' . $m['meeting_date'] . '）會議記錄，請確認內容並簽章（點入可看完整會議要項，並直接確認或退回）。'
+        . ($chair['is_delegated'] ? '（原主席今日行程忙碌，已轉由代理人處理）' : ''), $byUid);
+    if ($ev) eg_approval_set_live_event($db, $apId, $ev);
+    $db->prepare("UPDATE meeting_record SET status='submitted', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+    return '';
+}
+
+/** 三個條件都到齊時自動送出主席簽核，並回報記錄人一聲（使用者要求：不必再手動按一次送簽核）。
+ *  凡是「可能讓最後一個條件成立」的動作做完後都呼叫這支：項目確認（現場密碼簽名／通知回覆）、出席簽到、存檔（指定主席）。
+ *  刻意不在超管「補齊簽章日期」時呼叫——那是補歷史紙本用的救濟工具，scope=all 本來就會自己把整條簽核鏈補完，
+ *  在那裡自動送出只會多發一則主席通知。回傳 true＝這次真的送出去了。 */
+function meeting_try_auto_submit(PDO $db, int $meetingId): bool {
+    try {
+        if (!meeting_auto_submit_enabled($db)) return false;
+        $st = $db->prepare("SELECT * FROM meeting_record WHERE meeting_id=?");
+        $st->execute([$meetingId]);
+        $m = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$m) return false;
+        if (meeting_submit_blocker($db, $m) !== '') return false;
+        $byUid = (int)$m['recorder_user_id'];
+        $byName = (string)$m['recorder_name'];
+        if (!$byUid) return false;
+        if (meeting_submit_to_chair($db, $m, $byUid, $byName) !== '') return false;
+        // 記錄人不一定是觸發的人（多半是別人回簽補上最後一項），一定要讓他知道已經送出去了
+        meeting_notify_result($db, $meetingId, $byUid,
+            '「' . $m['subject'] . '」會議記錄已自動送出主席簽核',
+            '「' . $m['subject'] . '」（' . $m['meeting_date'] . '）的出席簽到與負責部門回簽都已全部完成，系統已自動送交主席確認簽章，不需要再手動送出。',
+            $byUid);
+        return true;
+    } catch (Throwable $e) { return false; }
 }
 
 /* ============================================================

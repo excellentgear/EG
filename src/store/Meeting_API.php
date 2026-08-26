@@ -78,6 +78,7 @@ case 'meta': {
           'gm_name'=>$gm ? $gm['user_cname'] : null, 'gm_id'=>$gm ? (int)$gm['id'] : null, 'presets'=>$presets,
           'company_name'=>eg_company_full_name($db), 'features'=>MEETING_FEATURES,
           'attach_nas_dir'=>$perms['canAdmin'] ? meeting_setting_get($db, 'meeting_nas_dir', '') : null,
+          'auto_submit'=>meeting_auto_submit_enabled($db),
           'as_doc_signsheet'=>($asSign = eg_asdoc_get($db, 'meeting_signsheet')), 'as_doc_signsheet_no'=>eg_asdoc_no($asSign),
           'as_doc_record'=>($asRec = eg_asdoc_get($db, 'meeting_record')), 'as_doc_record_no'=>eg_asdoc_no($asRec),
           'stamp_template'=>$stTpl]);
@@ -419,7 +420,9 @@ case 'save': {
         }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：'.$e->getMessage(), 500); }
-    jout(['meeting_id'=>$id]);
+    // 存檔本身也可能讓最後一個條件成立（最常見的是這次才指定主席）；交易外才做，避免自動送出的通知
+    // 被存檔失敗的 rollback 一起回捲（通知已經推播出去就收不回來了）
+    jout(['meeting_id'=>$id, 'auto_submitted'=>meeting_try_auto_submit($db, $id)]);
 }
 
 case 'delete': {
@@ -484,7 +487,7 @@ case 'sign': {
     $v = meeting_verify_own_password($db, $forUid, $password);
     if (!$v['ok']) jerr($v['msg']);
     $db->prepare("UPDATE meeting_attendee SET signed=1, signed_at=NOW() WHERE att_id=?")->execute([$attId]);
-    jout(['att_id'=>$attId]);
+    jout(['att_id'=>$attId, 'auto_submitted'=>meeting_try_auto_submit($db, $id)]);
 }
 
 /* 送出：draft/rejected → submitted，建立主席簽核並通知（含代理解析） */
@@ -492,35 +495,13 @@ case 'submit': {
     $id = (int)($_POST['meeting_id'] ?? 0);
     $m = meeting_load($db, $id);
     if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可送出', 403);
-    if (!in_array($m['status'], ['draft','rejected'], true)) jerr('此會議記錄已送出過');
-    if (!$m['chair_user_id']) jerr('請先指定本次會議主席');
-    $ac = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=?"); $ac->execute([$id]);
-    if ((int)$ac->fetchColumn() === 0) jerr('請先加入出席人員名單');
-    $itc = $db->prepare("SELECT COUNT(*) FROM meeting_item WHERE meeting_id=?"); $itc->execute([$id]);
-    if ((int)$itc->fetchColumn() === 0) jerr('請至少建立一項會議要項或上級指示要項');
-
-    // 送出前置檢查：①出席人員全部簽到 ②負責部門/指定人員全部確認回簽(2026-08-10使用者明確要求恢復此擋卡：
-    // 負責單位/人員還沒確認與回覆前不應送主席簽核；還沒確認完的請先用「存檔並通知」action=notify_pending_items
-    // 通知對方回覆，待全部確認完成後才能送出)。
-    $unsigned = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=? AND signed=0");
-    $unsigned->execute([$id]);
-    if ((int)$unsigned->fetchColumn() > 0) jerr('尚有出席人員未完成現場簽到，請先完成全部出席人員簽到再送出');
-    foreach (meeting_items($db, $id) as $it) {
-        if (!meeting_item_is_confirmed($db, $it)) {
-            jerr('項目「'.mb_substr((string)$it['content'], 0, 20).'…」尚有負責部門/指定人員未確認回簽，請先「存檔並通知」，待對方回覆確認後再送出');
-        }
-    }
-
-    $chair = meeting_chair_signer_effective($db, (int)$m['chair_user_id'], (string)$m['chair_name']);
-    if (!$chair['id']) jerr('找不到主席簽核人');
-    $id2 = eg_approval_submit($db, 'meeting', $id, 'chair', $uid, $uname);
-    $ev = meeting_notify($db, $id, $chair['id'],
-        '「'.$m['subject'].'」會議記錄待主席確認簽章',
-        $uname.' 送出「'.$m['subject'].'」（'.$m['meeting_date'].'）會議記錄，請確認內容並簽章（點入可看完整會議要項，並直接確認或退回）。'
-        .($chair['is_delegated'] ? '（原主席今日行程忙碌，已轉由代理人處理）' : ''), $uid);
-    if ($ev) eg_approval_set_live_event($db, $id2, $ev);
-
-    $db->prepare("UPDATE meeting_record SET status='submitted', updated_at=NOW() WHERE meeting_id=?")->execute([$id]);
+    // 送出前置檢查（①已指定主席②出席人員全部簽到③負責部門/指定人員全部確認回簽）與實際送出動作，
+    // 都收斂在 meeting_lib 的 meeting_submit_blocker()／meeting_submit_to_chair()，
+    // 與「回簽完成自動送出」共用同一份規則，兩邊不會走鐘（2026-08-26改）。
+    $blk = meeting_submit_blocker($db, $m);
+    if ($blk !== '') jerr($blk);
+    $err = meeting_submit_to_chair($db, $m, $uid, $uname);
+    if ($err !== '') jerr($err);
     jout(['status'=>'submitted']);
 }
 
@@ -686,7 +667,8 @@ case 'item_confirm': {
     // 2026-08-26使用者實測回報：現場簽名完成後也要關掉當初「存檔並通知」發出的那則回簽通知，
     // 否則同部門其他被通知的人會一直收到「需要回簽」，整筆記錄也會永遠停在「回簽中」送不出簽核。
     meeting_close_item_notice_if_done($db, $itemId);
-    jout([]);
+    // 這一格可能就是最後一項回簽，全部到齊直接送主席簽核（使用者要求：不必再手動按一次）
+    jout(['auto_submitted'=>meeting_try_auto_submit($db, (int)$item['meeting_id'])]);
 }
 
 /* 出貨目標達成率：資料新鮮度檢查（GET，供插入前的提示） */
@@ -832,6 +814,12 @@ case 'attach_setting_save': {
     if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
     meeting_setting_save($db, 'meeting_nas_dir', trim((string)($_POST['nas_dir'] ?? '')));
     jout(['attach_nas_dir'=>meeting_setting_get($db, 'meeting_nas_dir', '')]);
+}
+/* 回簽全部完成時要不要自動送出主席簽核（2026-08-26使用者拍板：可開關、預設開啟） */
+case 'auto_submit_save': {
+    if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
+    meeting_setting_save($db, 'meeting_auto_submit', !empty($_POST['enabled']) && $_POST['enabled'] !== '0' ? '1' : '0');
+    jout(['auto_submit'=>meeting_auto_submit_enabled($db)]);
 }
 case 'as_doc_signsheet_save': {
     if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
