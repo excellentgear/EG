@@ -485,6 +485,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .ocq-fillable { cursor: pointer; border-bottom: 1px dashed #D8BE93; }
         .ocq-fillable:hover { background: #FFF3E2; }
         .ocq-nowrap { white-space: nowrap; }
+        /* 料號點一下開圖面查閱（bom_viewer）；整格仍可雙擊帶入篩選 */
+        .ocq-part-link { cursor: pointer; color: #8a5a00; text-decoration: underline dotted; }
+        .ocq-part-link:hover { color: #DD5138; }
     </style>
 </head>
 <body class="nav-sm">
@@ -546,7 +549,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         <div class="ocq-stat">
             <span>共 <b id="statTotal">0</b> 筆</span>
-            <small style="color:#a06a1f;"><i class="fa fa-hand-pointer-o"></i> 雙擊表格中的客戶／BOM／料號可快速帶入篩選</small>
+            <small style="color:#a06a1f;"><i class="fa fa-hand-pointer-o"></i> 點料號可開啟圖面查閱；雙擊表格中的客戶／BOM／料號可快速帶入篩選</small>
             <label style="margin-left:auto;">每頁</label>
             <select id="pageSizeSel" style="height:28px;">
                 <option value="5">5</option>
@@ -579,7 +582,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <ul>
             <li>上方篩選可組合使用：製程大類（頁籤按鈕）、結案日期區間、客戶、業務、優先權燈號、BOM/料號、廠商、發單數量、交期、全域關鍵字，<b>輸入時即時篩選</b>（不需按Enter或查詢鈕）。</li>
             <li>客戶／廠商欄位可輸入名稱或代號（部分字串模糊比對皆可）。</li>
-            <li>表格內的<b>客戶／BOM／料號用滑鼠雙擊</b>可直接帶入對應篩選框並立即查詢，方便快速鎖定同客戶或同BOM的其他資料。</li>
+            <li>表格內的<b>料號點一下</b>即開啟「圖面查閱」視窗（bom_viewer），可直接看該料號的圖面與附件；同一料號重複點會沿用同一個視窗，不會開一堆。</li>
+            <li>表格內的<b>客戶／BOM／料號用滑鼠雙擊</b>可直接帶入對應篩選框並立即查詢，方便快速鎖定同客戶或同BOM的其他資料（料號欄請雙擊文字以外的空白處，文字本身是開圖面用的）。</li>
             <li>篩選框有內容時雙擊可清空（全站共用規則），清空後會自動連帶重新查詢。</li>
             <li>製程大類的可選清單會依「目前其餘篩選條件」動態連動，只列真的有資料的選項。</li>
             <li>結案日期區間預設近30天；按「清除篩選(查全部)」可清空所有條件、改查全部歷史已結案資料。</li>
@@ -681,7 +685,11 @@ function rowToTr(item, maxProc, priceMap){
     // 避免客戶名稱等內容含特殊字元時打斷HTML屬性字串。
     var custTd = '<td class="ocq-fillable" data-field="customer" data-val="'+encodeURIComponent(item.client_name_display||'')+'" title="雙擊帶入客戶篩選">'+esc(item.client_name_display||'')+'</td>';
     var bomTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.bom||'')+'" title="雙擊帶入BOM/料號篩選"><figure class="'+cc+'"></figure><span class="ocq-nowrap">'+esc(item.bom)+'</span>'+closedInfo+'</td>';
-    var didTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.d_id||'')+'" title="雙擊帶入BOM/料號篩選">'+esc(item.d_id||'')+priceHtml+'</td>';
+    // 料號文字本身＝點一下開圖面查閱（bom_viewer）；文字以外的空白處維持雙擊帶入篩選
+    var didText = item.d_id
+        ? '<span class="ocq-part-link" data-part="'+encodeURIComponent(item.d_id)+'" title="點擊開啟圖面查閱">'+esc(item.d_id)+'</span>'
+        : '';
+    var didTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.d_id||'')+'" title="雙擊帶入BOM/料號篩選">'+didText+priceHtml+'</td>';
     var tds = custTd + bomTd + didTd
         + '<td>'+esc(item.Qty||'')+'</td>'
         + '<td>'+esc(item.Delivery_date ? egFmtDate(item.Delivery_date) : '')+'</td>'
@@ -802,6 +810,28 @@ $('#ocqTbody').on('dblclick', '.ocq-fillable', function(){
     else if (field === 'bom') $('#fBom').val(val);
     applyFilters();
 });
+
+// 點料號 → 開啟圖面查閱（bom_viewer.php?d_id=…）
+$('#ocqTbody').on('click', '.ocq-part-link', function(e){
+    e.stopPropagation();
+    openPartDrawing(decodeURIComponent($(this).attr('data-part') || ''));
+});
+// 料號文字上的雙擊不再連帶觸發「帶入篩選」（避免同時開窗又改篩選條件）
+$('#ocqTbody').on('dblclick', '.ocq-part-link', function(e){ e.stopPropagation(); });
+
+// 開啟圖面查閱視窗（同一料號重複點沿用同一個視窗，不會開一堆）
+function openPartDrawing(pid){
+    if (!pid) return;
+    var w = screen.availWidth, h = screen.availHeight;
+    var pw = Math.min(1400, Math.round(w * 0.85));
+    var ph = Math.min(900,  Math.round(h * 0.88));
+    var pl = Math.round((w - pw) / 2);
+    var pt = Math.round((h - ph) / 2);
+    window.open('bom_viewer.php?d_id=' + encodeURIComponent(pid),
+        'bom_dv_' + pid,
+        'width='+pw+',height='+ph+',left='+pl+',top='+pt
+            + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
+}
 
 $('#btnClear').on('click', function(){
     $('#fCustomer, #fSales, #fBom, #fVendor, #fQty, #fDelivery, #fKeyword').val('');
