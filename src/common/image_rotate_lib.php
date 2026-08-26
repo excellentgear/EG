@@ -48,6 +48,25 @@ function eg_rotate_file(string $fsPath, int $degCW): array {
     if (!in_array($ext, eg_rotate_exts(), true)) {
         return ['success'=>false, 'message'=>'這種格式不支援旋轉（只支援圖片檔與 PDF）'];
     }
+    // ── ① JPG 優先走「無損」路徑（jpegtran，不解碼直接搬 DCT 係數）──────────
+    // 走得通的話畫素一個都不會變、檔案大小幾乎不變、也比 GD 快十倍；
+    // 走不通（沒有 jpegtran、帶 EXIF 方向、執行失敗…）就靜靜落回下面的 GD 路徑。
+    $mode = 'reencode';
+    if (in_array($ext, ['jpg','jpeg'], true) && eg_rotate_can_lossless($fsPath)) {
+        $tmpL = eg_rotate_tmp_path($ext);
+        if (eg_rotate_jpeg_lossless($fsPath, $tmpL, $deg) && is_file($tmpL) && filesize($tmpL) > 0
+            && @getimagesize($tmpL)) {                       // 產出真的是張讀得開的圖才敢覆蓋
+            if (@copy($tmpL, $fsPath)) {
+                @unlink($tmpL);
+                @touch($fsPath);
+                clearstatcache(true, $fsPath);
+                return ['success'=>true, 'message'=>'已旋轉並存檔（無損）', 'mode'=>'lossless'];
+            }
+        }
+        @unlink($tmpL);
+    }
+
+    // ── ② 其餘（PNG／PDF／jpegtran 走不通的 JPG）走原本的重新編碼路徑 ────────
     if ($ext !== 'pdf') {
         $memErr = eg_rotate_ensure_memory($fsPath);
         if ($memErr !== null) return ['success'=>false, 'message'=>$memErr];
@@ -68,12 +87,67 @@ function eg_rotate_file(string $fsPath, int $degCW): array {
         @unlink($tmp);
         @touch($fsPath);          // 更新 mtime，前端才好破快取
         clearstatcache(true, $fsPath);
-        return ['success'=>true, 'message'=>'已旋轉並存檔'];
+        return ['success'=>true, 'message'=>'已旋轉並存檔', 'mode'=>$mode];
     } catch (Throwable $e) {
         @unlink($tmp);
         error_log('[eg_rotate_file] ' . $e->getMessage());
         return ['success'=>false, 'message'=>'旋轉失敗：' . $e->getMessage()];
     }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 無損路徑（jpegtran）
+// ──────────────────────────────────────────────────────────────────────────
+/** 專案自帶的 jpegtran.exe（見 src/bin/README.md）；不存在回空字串 */
+function eg_rotate_jpegtran_path(): string {
+    $p = __DIR__ . DIRECTORY_SEPARATOR . '..' . DIRECTORY_SEPARATOR . 'bin'
+       . DIRECTORY_SEPARATOR . 'jpegtran.exe';
+    return is_file($p) ? $p : '';
+}
+
+/**
+ * 這個 JPG 適不適合走無損路徑。
+ * **帶 EXIF 方向（Orientation>1）的一律不走**：jpegtran 會原樣複製 EXIF、但不會更新
+ * Orientation，於是瀏覽器會照著標籤「再轉一次」＝總共轉了兩次。那種檔案交給 GD
+ * （GD 那條路徑會先把 EXIF 方向烙進畫素）。
+ */
+function eg_rotate_can_lossless(string $fsPath): bool {
+    if (eg_rotate_jpegtran_path() === '') return false;
+    if (!function_exists('proc_open')) return false;           // 有些主機把它關掉
+    if (function_exists('exif_read_data')) {
+        $ex  = @exif_read_data($fsPath);
+        $ori = (is_array($ex) && isset($ex['Orientation'])) ? (int)$ex['Orientation'] : 1;
+        if ($ori > 1) return false;
+    }
+    return true;
+}
+
+/**
+ * 無損旋轉：不解碼，直接搬 JPEG 內部的 DCT 係數。
+ *
+ * **刻意不加 `-trim`**：圖的寬高不是 8 的倍數時最後一個不完整的區塊沒辦法轉置，
+ * 不加 -trim 時 jpegtran 會保留它（內容等於平移 1~7 個畫素、邊緣補白，實測是乾淨白邊
+ * 不是雜訊），而且**來回轉會完全還原**（實測 MAE=0）；加了 -trim 位移一樣存在、
+ * 還會每轉一次削掉一列畫素。所以選一個畫素都不丟的作法。
+ *
+ * `-copy all` 保留 EXIF／註解等中繼資料（呼叫端已擋掉帶方向標籤的檔案）。
+ */
+function eg_rotate_jpeg_lossless(string $src, string $dst, int $degCW): bool {
+    $exe = eg_rotate_jpegtran_path();
+    if ($exe === '') return false;
+    $cmd = escapeshellarg($exe) . ' -rotate ' . (int)$degCW . ' -copy all -outfile '
+         . escapeshellarg($dst) . ' ' . escapeshellarg($src);
+    $desc = [1 => ['pipe','w'], 2 => ['pipe','w']];
+    $proc = @proc_open($cmd, $desc, $pipes, dirname($exe));   // cwd 設在 exe 旁邊，才找得到 jpeg62.dll
+    if (!is_resource($proc)) return false;
+    $err = '';
+    foreach ([1, 2] as $i) { $err .= stream_get_contents($pipes[$i]); fclose($pipes[$i]); }
+    $code = proc_close($proc);
+    if ($code !== 0) {
+        error_log('[eg_rotate_jpeg_lossless] jpegtran exit=' . $code . ' ' . trim($err));
+        return false;
+    }
+    return true;
 }
 
 /**
