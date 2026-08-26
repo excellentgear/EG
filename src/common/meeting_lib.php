@@ -388,6 +388,7 @@ function meeting_close_item_notices(PDO $db, int $meetingId): void {
  * 避免記錄人在別人還在看/回覆這份內容時又把內容改掉，讓對方回覆的是舊版內容。
  */
 function meeting_has_active_item_notices(PDO $db, int $meetingId): bool {
+    meeting_sync_item_notices($db, $meetingId); // 已完成卻漏關的先補關掉，否則會永遠卡在「回簽中」
     try {
         $st = $db->prepare("SELECT 1 FROM live_event le JOIN meeting_item mi ON mi.item_id=le.ref_id
                              WHERE le.ref_type='MEETING_ITEM_CONFIRM' AND mi.meeting_id=?
@@ -609,7 +610,7 @@ function meeting_item_confirm_via_notify(PDO $db, int $itemId, int $uid, string 
     // 2026-08-10使用者實測回報：一部門/一指定人員只要任一人回覆就完成，但其餘被通知的人開啟同一則通知時
     // 還是看得到完整的回覆表單，容易讓人誤會「這樣回覆會不會蓋掉別人」。此項目所有負責部門(或所有指定人員)
     // 都已有人確認時，關閉這則通知，其餘人之後開啟只會看到已讀/已處理，不再能送出回覆。
-    if (meeting_item_is_confirmed($db, $item + ['item_id'=>$itemId])) meeting_close_single_item_notice($db, $itemId);
+    meeting_close_item_notice_if_done($db, $itemId);
 }
 
 /** 這個項目的「所有負責部門/所有指定人員」是否都已確認(不論現場密碼簽名或通知回覆皆算)。
@@ -636,6 +637,36 @@ function meeting_close_single_item_notice(PDO $db, int $itemId): void {
         $db->prepare("UPDATE live_event SET enddate=DATE_SUB(CURDATE(), INTERVAL 1 DAY)
                       WHERE ref_type='MEETING_ITEM_CONFIRM' AND ref_id=? AND (enddate IS NULL OR enddate>=CURDATE())")
            ->execute([$itemId]);
+    } catch (Throwable $e) {}
+}
+
+/** 這個項目只要已經確認完成，就把它還在生效中的「待確認回簽」通知關掉（2026-08-26 使用者實測回報修正）。
+ *  原本只有「透過通知回覆」那條路徑會關通知，**現場密碼簽名(item_confirm)與超管補齊(admin_backfill)都只寫了
+ *  meeting_item_confirm 卻沒關通知**，造成兩個症狀：①同部門其他被通知的人一直收到「需要回簽」的通知，開進去
+ *  還能再回覆一次（明明畫面上已經蓋好章）②meeting_has_active_item_notices() 永遠為真，整筆會議記錄卡在「回簽中」
+ *  不能編輯也送不出簽核。**凡是新增 meeting_item_confirm 的路徑一律呼叫這支**，不要各自再寫一次判定。 */
+function meeting_close_item_notice_if_done(PDO $db, int $itemId): void {
+    try {
+        $st = $db->prepare("SELECT item_id, owner_depts, owner_users FROM meeting_item WHERE item_id=?");
+        $st->execute([$itemId]);
+        $item = $st->fetch(PDO::FETCH_ASSOC);
+        if ($item && meeting_item_is_confirmed($db, $item)) meeting_close_single_item_notice($db, $itemId);
+    } catch (Throwable $e) {}
+}
+
+/** 補關漏關的通知：把這筆會議記錄「已經確認完成、通知卻還開著」的項目一次關掉。
+ *  用意是讓修正前留下來的舊資料（以及日後任何漏呼叫的新路徑）不必人工處理就會自動解除「回簽中」鎖定。
+ *  沒有生效中的通知時只花一句查詢，成本可忽略。 */
+function meeting_sync_item_notices(PDO $db, int $meetingId): void {
+    try {
+        $st = $db->prepare("SELECT DISTINCT mi.item_id, mi.owner_depts, mi.owner_users
+                             FROM live_event le JOIN meeting_item mi ON mi.item_id=le.ref_id
+                             WHERE le.ref_type='MEETING_ITEM_CONFIRM' AND mi.meeting_id=?
+                               AND (le.enddate IS NULL OR le.enddate>=CURDATE())");
+        $st->execute([$meetingId]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $it) {
+            if (meeting_item_is_confirmed($db, $it)) meeting_close_single_item_notice($db, (int)$it['item_id']);
+        }
     } catch (Throwable $e) {}
 }
 

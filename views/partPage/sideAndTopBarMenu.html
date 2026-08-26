@@ -741,7 +741,12 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             h += '<div class="eg-nm-mystatus">' + nmStatusLine(st) + '</div>';
 
             var done = st && ((mode === 'read' && st.read_at) || (mode === 'sign' && st.signed_at) || (mode === 'reply' && (st.replied_at || st.signed_at)));
-            if (res.deadline_passed && (mode === 'sign' || mode === 'reply')) {
+            // 已結束的通知(2026-08-26新增)：發起的模組已把這件事結案／撤回（例：會議記錄同一項目已由其他人
+            // 回簽完成＝任一人回覆即完成）。不再顯示回覆表單，避免使用者以為系統還在等他回覆；仍可確認已閱。
+            if (res.closed && !done && (mode === 'sign' || mode === 'reply')) {
+                h += '<div class="eg-nm-expired"><i class="fa fa-check-circle"></i> 此通知已結束（該事項已由其他人完成，或發布者已撤回），不需要再回覆</div>';
+                if (!(st && st.read_at)) h += '<button class="eg-btn eg-btn-primary nm-do" data-act="read">確認已閱</button>';
+            } else if (res.deadline_passed && (mode === 'sign' || mode === 'reply')) {
                 h += '<div class="eg-nm-expired"><i class="fa fa-clock-o"></i> 已超過回覆/回簽期限</div>';
                 if (!(st && st.read_at)) h += '<button class="eg-btn eg-btn-primary nm-do" data-act="read">確認已閱</button>';
             } else if (mode === 'read') {

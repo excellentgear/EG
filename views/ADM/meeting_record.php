@@ -1381,9 +1381,13 @@ function itemConfirmCellHtml(it){
     // 否則同一個人的「OK」回覆內容會重複出現兩次，看起來像資料重複、造成混淆。
     var signedUserIds = slots.filter(function(s){ return s.signed; }).map(function(s){ return String(s.user_id); });
     var nt = (it.notify_targets || []).filter(function(t){ return signedUserIds.indexOf(String(t.user_id)) === -1; });
+    // 2026-08-26修正：一部門/一指定人員只要任一人回覆或現場簽名就算完成，此時其餘被通知的人已不需要回覆
+    // （後端也已關閉那則通知）；再顯示「未讀」會讓人以為還在等他，故改標示為已完成免回覆。
+    var allSlotsDone = slots.length > 0 && slots.every(function(s){ return s.signed; });
     if (nt.length) {
         h += '<div class="item-notify-status">' + nt.map(function(t){
-            var st = t.replied_at ? ('已回覆 '+dispDate(t.replied_at)) : (t.read_at ? '已閱未回覆' : '未讀');
+            var st = t.replied_at ? ('已回覆 '+dispDate(t.replied_at))
+                   : (allSlotsDone ? '已由他人完成（免回覆）' : (t.read_at ? '已閱未回覆' : '未讀'));
             var filesHtml = (t.files||[]).map(function(f){
                 return '<a href="../../src/store/_eventFile.php?t=r&id='+f.id+'" target="_blank" style="margin-left:4px;">📎'+esc(f.file_name)+'</a>';
             }).join('');

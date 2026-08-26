@@ -683,6 +683,9 @@ case 'item_confirm': {
     if (!$v['ok']) jerr($v['msg']);
     $db->prepare("INSERT IGNORE INTO meeting_item_confirm (item_id, user_id, user_name, dept_name, dept_id, confirmed_at) VALUES (?,?,?,?,?,NOW())")
        ->execute([$itemId, $forUid, $signer['user_name'], $signer['dept_name'], $signer['dept_id']]);
+    // 2026-08-26使用者實測回報：現場簽名完成後也要關掉當初「存檔並通知」發出的那則回簽通知，
+    // 否則同部門其他被通知的人會一直收到「需要回簽」，整筆記錄也會永遠停在「回簽中」送不出簽核。
+    meeting_close_item_notice_if_done($db, $itemId);
     jout([]);
 }
 
@@ -949,6 +952,7 @@ case 'admin_backfill': {
                 foreach (meeting_item_required_signers_for($db, $id, $it) as $signer) {
                     $upsertC->execute([(int)$it['item_id'], $signer['user_id'], $signer['user_name'], $signer['dept_name'], $signer['dept_id'], $dt]);
                 }
+                meeting_close_item_notice_if_done($db, (int)$it['item_id']); // 補齊後同樣要關掉還開著的回簽通知
             }
         }
 

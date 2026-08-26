@@ -32,6 +32,12 @@ try {
         echo json_encode(['ok' => false, 'msg' => '已超過回覆/回簽期限（' . $event['reply_deadline'] . '），無法再' . ($action === 'reply' ? '回覆' : '回簽')]);
         exit();
     }
+    // 已結束的通知不再接受回簽/回覆(2026-08-26新增，比照 deadline)：enddate 被設成過去＝發起的模組已經
+    // 把這件事結案或撤回（例：會議記錄同一項目已由其他人回簽完成）。仍允許「確認已閱」留痕。
+    if (!empty($event['enddate']) && $event['enddate'] < date('Y-m-d') && ($action === 'sign' || $action === 'reply')) {
+        echo json_encode(['ok' => false, 'msg' => '此通知已結束（該事項已由其他人完成，或發布者已撤回），不需要再回覆']);
+        exit();
+    }
     if ($action === 'reply' && trim($_POST['reply_content'] ?? '') === '') {
         echo json_encode(['ok' => false, 'msg' => '請輸入回覆內容']);
         exit();

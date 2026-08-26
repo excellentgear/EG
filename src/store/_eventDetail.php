@@ -74,6 +74,11 @@ try {
     }
 
     $deadlinePassed = !empty($event['reply_deadline']) && $event['reply_deadline'] < date('Y-m-d');
+    // 通知已結束(2026-08-26新增)：各模組在「事情已經辦完/已撤回」時會把 enddate 設成昨天把通知關掉
+    // （會議記錄項目任一人回簽完成、簽核已核准、送審已撤回…全站 14 個模組都是同一種寫法）。
+    // 置頂鈴鐺本來就會濾掉這種通知，但從「我的通知」進來的人仍看得到完整回覆表單、
+    // 以為系統還在等他回覆——所以這裡把狀態一併回給前端，讓畫面直接標示「已結束、不需再回覆」。
+    $closed = !empty($event['enddate']) && $event['enddate'] < date('Y-m-d');
 
     // 他人狀態（僅在 show_status_to_others 開啟時）
     $others = [];
@@ -109,6 +114,7 @@ try {
             'reply_content' => $mine['reply_content'], 'replied_at' => $mine['replied_at'], 'files' => $myFiles,
         ] : null,
         'deadline_passed' => $deadlinePassed,
+        'closed' => $closed,
         'show_status' => !empty($event['show_status_to_others']),
         'others' => $others,
         // 回覆附件刪除權限（2026-07-07）：本人附件（期限內）可刪；管理者可刪任何人的且不受期限限制
