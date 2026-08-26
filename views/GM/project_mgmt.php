@@ -132,6 +132,24 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         .ro-auto { background:#F3EADB; color:#7a6446; }
         .pj-hint { font-size:12px; color:#8a6d45; line-height:1.7; }
         .pj-err { color:#DD5138; font-size:12px; margin-top:2px; display:none; }
+
+        /* ── 錯誤提示條（使用者要求：改成粉紅底、不要用瀏覽器 alert，因為 alert 根本不會被看）──
+           黏在跳窗內容最上方，捲到哪裡都看得到；出現時會連帶把出錯的欄位標紅並捲進畫面。 */
+        .pj-msg { display:none; position:sticky; top:0; z-index:30; margin:0 0 10px;
+            padding:10px 40px 10px 14px; border:2px solid #DD5138; border-radius:6px;
+            background:#FCE4E4; color:#A32E1A; font-size:14px; font-weight:bold; line-height:1.7;
+            box-shadow:0 3px 10px rgba(221,81,56,.25); }
+        .pj-msg .x { position:absolute; right:10px; top:6px; cursor:pointer; font-weight:normal;
+            font-size:16px; color:#A32E1A; }
+        .pj-msg .sub { display:block; font-weight:normal; font-size:12.5px; color:#8a4030; margin-top:3px; }
+        .pj-msg.ok { border-color:#2F7D4F; background:#E7F4EC; color:#1F5D39; box-shadow:none; }
+        .pj-msg.ok .x, .pj-msg.ok .sub { color:#1F5D39; }
+        @keyframes pjMsgIn { from { transform:translateY(-6px); opacity:0; } to { transform:none; opacity:1; } }
+        .pj-msg.show { display:block; animation:pjMsgIn .18s ease-out; }
+        /* 出錯的欄位再明顯一點（原本只有淡紅底，日期欄看不太出來） */
+        .fld-bad input, .fld-bad select, .fld-bad textarea,
+        input.fld-bad, select.fld-bad, textarea.fld-bad {
+            border:2px solid #DD5138 !important; background:#FDECEA !important; }
         .fld-bad input, .fld-bad select, .fld-bad textarea { border-color:#DD5138 !important; background:#FDF1EE; }
         .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
         .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
@@ -271,6 +289,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
 <div class="pj-mask" id="prjMask"><div class="pj-modal">
     <div class="m-head"><span id="prjTitle">專案</span><span class="m-close" onclick="closeProject()">✕</span></div>
     <div class="m-body">
+        <div class="pj-msg" id="prjMsg"></div>
         <div id="prjAlertBar"></div>
         <div class="pj-tabs">
             <button class="pj-tab active" data-pane="paneBase"><i class="fa fa-info-circle"></i> 基本資料</button>
@@ -698,7 +717,10 @@ $(document).ajaxError(function(e, xhr){
     if (xhr.status === 0) return;
     var m = '';
     try { m = (JSON.parse(xhr.responseText) || {}).error || ''; } catch(_) { m = ''; }
-    alert(m || ('操作失敗（HTTP ' + xhr.status + '）'));
+    m = m || ('操作失敗（HTTP ' + xhr.status + '）');
+    /* 跳窗開著就用粉紅提示條（alert 使用者不會看），沒開才退回 alert */
+    if (window.pjMsg && $('#prjMask').is(':visible')) pjMsg(m);
+    else alert(m);
 });
 
 function api(action, data, method){

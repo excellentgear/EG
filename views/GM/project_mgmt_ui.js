@@ -225,7 +225,7 @@ $(document).on('click', '[data-print]', function () {
  *     同一個專案重新載入 → 把畫面上還沒存的目標／任務接回去，並保留「未儲存」狀態與所在分頁；
  *     切換到別的專案 → 先問清楚要不要放棄（不會默默丟掉）。
  */
-function openProject(id) {
+function openProject(id, after) {
     var keep = null, keepTab = '';
     if (CUR && num(CUR.project.project_id) && (PLAN_DIRTY || CARD_DIRTY)) {
         if (num(id) === num(CUR.project.project_id)) {
@@ -239,7 +239,7 @@ function openProject(id) {
     if (num(id) && CUR && num(id) === num(CUR.project.project_id)) {
         keepTab = $('.pj-tab.active').data('pane') || '';
     }
-    if (!id) { CUR = null; renderDetail(newProjectShell()); openMask('prjMask'); return; }
+    if (!id) { CUR = null; renderDetail(newProjectShell()); openMask('prjMask'); if (after) after(); return; }
     api('get', { project_id: id }).done(function (res) {
         if (keep) { res.goals = keep.goals; res.tasks = keep.tasks; }
         CUR = res;
@@ -254,6 +254,7 @@ function openProject(id) {
         }
         if (keep) PLAN_DIRTY = true;   // 接回去的內容仍然是「還沒儲存」
         openMask('prjMask');
+        if (after) after();
     });
 }
 
@@ -266,6 +267,7 @@ function newProjectShell() {
 }
 
 function renderDetail(res) {
+    pjMsgClear();
     var p = res.project;
     $('#prjTitle').html('<i class="fa fa-folder-open-o"></i> ' +
         (p.project_id ? esc(p.project_no + '　' + p.project_name) : '新增專案'));
@@ -398,14 +400,19 @@ function showFieldErrors(fields) {
     $('.fld-bad').removeClass('fld-bad');
     $('.pj-err').hide().text('');
     var map = { project_name: '#fldName', project_type: '#fldType', owner_id: '#fldOwner', end_date: '#fldEnd' };
-    var first = null;
+    var all = [], firstSel = '';
     $.each(fields || {}, function (k, msg) {
+        all.push(msg);
         var sel = map[k];
-        if (!sel || !$(sel).length) { if (!first) first = msg; return; }
+        if (!sel || !$(sel).length) return;
         $(sel).addClass('fld-bad').find('.pj-err').text(msg).show();
-        if (!first) first = null;
+        if (!firstSel) firstSel = sel + ' input, ' + sel + ' select';
     });
-    if (first) alert(first);
+    /* 欄位旁的小紅字很容易被忽略（使用者明講「根本不會認真看」），所以一律再跳一次粉紅提示條 */
+    if (all.length) {
+        $('.pj-tab[data-pane="paneBase"]').click();
+        pjMsg(all.join('；'), { sub: '（標紅的欄位請補齊後再儲存）', focus: firstSel || null });
+    }
 }
 
 function collectBase() {
@@ -488,9 +495,8 @@ function saveCardIfDirty(cb) {
 }
 function savedAndReload(pid, msg) {
     PLAN_DIRTY = false; CARD_DIRTY = false;
-    alert(msg);
     loadList();
-    openProject(num(pid));
+    openProject(num(pid), function () { pjMsg(msg, { ok: true }); });
 }
 $(document).on('click', '#btnPrintPlan', function () { printPlan(CUR); });
 
@@ -941,7 +947,7 @@ function planRowHtml(t, i) {
     return '<tr data-task="' + num(t.task_id) + '" data-pe0="' + esc(t.plan_end || '') + '">'
       + '<td>' + (i + 1) + '</td>'
       + '<td><input type="text" class="t-name" value="' + esc(t.task_name || '') + '"></td>'
-      + '<td><input type="date" class="t-ps" value="' + esc(t.plan_start || '') + '"></td>'
+      + '<td><input type="date" class="t-ps"' + planMinAttr() + ' value="' + esc(t.plan_start || '') + '"></td>'
       + '<td><input type="number" class="t-days" min="1" max="999" value="' + (days > 0 ? days : '') + '"></td>'
       + '<td><input type="date" class="t-pe" value="' + esc(t.plan_end || '') + '"></td>'
       + '<td><input type="date" class="t-as' + actCls + '"' + actRo + ' value="' + esc(t.act_start || '') + '"></td>'
@@ -978,6 +984,12 @@ function planRowRecalc($tr, from) {
     planRowCheck($tr);
     planChainFrom($tr);
 }
+/** 預計開始日的下限＝專案起日（瀏覽器原生也會擋一層，打錯年份時馬上看得出來） */
+function planMinAttr() {
+    var d = $.trim((CUR && CUR.project ? CUR.project.start_date : '') || '');
+    return d ? ' min="' + esc(d) + '"' : '';
+}
+
 /**
  * 任務進度自動計算（與後端 prj_task_progress_auto() 同一套規則）：
  * 勾著「自動」時，填了實際完成日＝100%，否則 0%。
@@ -1010,6 +1022,9 @@ function planRowCheck($tr) {
     if (ps && pStart && ps < pStart) {
         badPs = true;
         msg = '任務「' + name + '」的預計開始日（' + dispDate(ps) + '）不可早於專案起日（' + dispDate(pStart) + '）';
+        /* 最常見的其實是年份打錯（2025 打成 2026 之類）——直接把答案講出來，不要讓人自己找 */
+        var fixed = String(pStart).slice(0, 4) + String(ps).slice(4);
+        if (fixed !== ps && fixed >= pStart) msg += '　←　年份是不是打錯了？應該是 ' + dispDate(fixed) + ' 吧';
     }
     if (ps && pe && pe < ps) {
         badPe = true;
@@ -1208,7 +1223,19 @@ function savePlan(pid, cb) {
             });
         });
     });
-    if (bad) { alert(bad); if (cb) cb(false); return; }
+    if (bad) {
+        /* 第一個出錯的欄位：捲進畫面＋標紅＋聚焦，使用者一眼就知道要改哪裡 */
+        var $first = $('#planEditBox .fld-bad').first();
+        $('.pj-tab[data-pane="panePlan"]').click();
+        pjMsg(bad, { sub: '（請修正後再按儲存；上面標紅的就是要改的欄位）',
+                     focus: $first.length ? $first : null });
+        if ($first.length) {
+            var el = $first[0];
+            if (el.scrollIntoView) setTimeout(function () { el.scrollIntoView({ block: 'center' }); }, 260);
+        }
+        if (cb) cb(false);
+        return;
+    }
     /* 送出空的目標清單＝把伺服器上的目標與任務全部刪掉。正常刪除是這樣沒錯，
        但萬一畫面因為某種原因沒畫出來就按到儲存，會整份被清空，所以一定要問一次。 */
     if (!goals.length) {
@@ -1225,9 +1252,9 @@ function savePlan(pid, cb) {
 $(document).on('click', '#btnPlanSave', function () {
     savePlan(num(CUR.project.project_id), function (ok, res) {
         if (!ok) return;
-        alert((res && res.message) || '已儲存執行規劃表');
-        openProject(num(CUR.project.project_id));
+        var m = (res && res.message) || '已儲存執行規劃表';
         loadList();
+        openProject(num(CUR.project.project_id), function () { pjMsg(m, { ok: true }); });
     });
 });
 
@@ -1765,6 +1792,31 @@ $(document).on('click', '#btnO2pGo', function () {
         openProject(num(res.project_id));
     });
 });
+
+/* ══════════════════════════ 錯誤提示條 ══════════════════════════
+   使用者明確要求：錯誤不要再用瀏覽器 alert（「根本不會認真看提示內容」），
+   改成跳窗內粉紅底、捲到哪都看得到的提示條，並且自動把出錯的欄位捲進畫面、標紅、聚焦。 */
+function pjMsg(msg, opt) {
+    opt = opt || {};
+    var $m = $('#prjMsg');
+    if (!$m.length) { alert(msg); return; }
+    $m.removeClass('ok').toggleClass('ok', !!opt.ok)
+      .html('<span class="x" title="關閉">✕</span>' + esc(msg)
+            + (opt.sub ? '<span class="sub">' + esc(opt.sub) + '</span>' : ''))
+      .addClass('show').show();
+    /* 捲到最上面才看得到提示條 */
+    var $body = $m.closest('.m-body');
+    if ($body.length) $body.animate({ scrollTop: 0 }, 150);
+    if (opt.focus && $(opt.focus).length) {
+        var $f = $(opt.focus).first();
+        $f.addClass('fld-bad');
+        setTimeout(function () { try { $f[0].focus(); $f[0].select && $f[0].select(); } catch (e) {} }, 200);
+    }
+    if (opt.ok) setTimeout(function () { pjMsgClear(); }, 4000);
+}
+function pjMsgClear() { $('#prjMsg').removeClass('show').hide().empty(); }
+$(document).on('click', '#prjMsg .x', function () { pjMsgClear(); });
+window.pjMsg = pjMsg;
 
 /* ══════════════════════════ 常用語句（專案目的／專案目標） ══════════════════════════ */
 /* PH.target＝要帶入的 textarea id；由工具列打開時為空＝只做維護、不顯示「帶入」 */
