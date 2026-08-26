@@ -1210,7 +1210,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_bom_files') {
         }
     }
 
-    $scan_dir = 'Z:/BOM/'; // 實體路徑
+    require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+    $scan_dir = eg_bom_scan_dir_auto(); // 實體路徑
     $url_dir = '/nas/';    // 網頁讀取路徑
 
     if (is_dir($scan_dir)) {
@@ -1244,7 +1245,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_bom_files') {
 
     // --- Scan ERP Directory ---
     $erp_files = [];
-    $erp_path_utf8 = 'Z:/BOM/ERP/資材(生管and業務)/BOM/';
+    require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+    $erp_path_utf8 = eg_bom_erp_scan_dir_auto();
     $os = PHP_OS;
     $erp_scan_path = $erp_path_utf8;
     

@@ -21,7 +21,8 @@ if (isset($_GET['drawing'])) {
     $pid = trim($_GET['drawing'] ?? '');
     $db2 = new DBConnection(); $pdo2 = $db2->getPDO();
     $files = [];
-    $scan_dir = 'Z:/BOM/'; $url_dir = '/nas/';
+    require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+    $scan_dir = eg_bom_scan_dir_auto(); $url_dir = '/nas/';
     if ($pid) {
         $s2 = $pdo2->prepare("SELECT bom, sqty FROM bom WHERE d_id = ? ORDER BY Created_At DESC");
         $s2->execute([$pid]);
@@ -2845,7 +2846,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmt->execute([$pid]);
             $bom_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             $files = [];
-            $scan_dir = 'Z:/BOM/';
+            require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+            $scan_dir = eg_bom_scan_dir_auto();
             $url_dir  = '/nas/';
             if (is_dir($scan_dir)) {
                 $allFiles = scandir($scan_dir);
@@ -8626,7 +8628,7 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                          所以「URL 前綴」已無作用（留著使用者會以為改它有效）。位置只由這一欄決定。 -->
                     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                         <label style="font-size:12px;color:#555;margin:0;white-space:nowrap;">存放位置</label>
-                        <input type="text" id="acat-nas-path" class="form-control input-sm" style="flex:1;min-width:320px;font-family:monospace;" placeholder="例：\\excellentnas\生產課\BOM\ERP\業務\料號資料" <?php if($permission_code!=='A'):?>readonly style="background:#f5f5f5;"<?php endif;?>>
+                        <input type="text" id="acat-nas-path" class="form-control input-sm" style="flex:1;min-width:320px;font-family:monospace;" placeholder="例：\\excellentnas\AS9100維護\ERP AS9100文件(勿刪)\料號附件" <?php if($permission_code!=='A'):?>readonly style="background:#f5f5f5;"<?php endif;?>>
                         <?php if ($permission_code==='A'): ?>
                         <button type="button" class="btn btn-xs btn-warning" onclick="saveAttachCatPath()"><i class="fa fa-save"></i> 儲存路徑</button>
                         <?php endif; ?>

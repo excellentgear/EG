@@ -37,6 +37,43 @@ function eg_bom_scan_dir(PDO $db): string     { return eg_bom_dir_get($db, 'bom_
 function eg_bom_erp_scan_dir(PDO $db): string { return eg_bom_dir_get($db, 'bom_erp_scan_dir', 'Z:/BOM/ERP/資材(生管and業務)/BOM/'); }
 
 /**
+ * ── 免傳 PDO 的版本（2026-08-25 新增）─────────────────────────────────────
+ * 全站有二十幾個頁面把 `'Z:/BOM/'` 直接寫死在掃描程式碼裡，多半在沒有 $pdo 在手的
+ * 區塊（或變數名稱各不相同）。要把它們一次換掉又不動到原本的邏輯，最不容易出錯的
+ * 作法就是「字面值換成一次函式呼叫」——所以這裡提供自己開連線（靜態快取，一個
+ * 請求只開一次）的版本，而且**回傳的已經是檔案系統吃得到的路徑**（已過
+ * eg_bom_fs_path），呼叫端原本怎麼 is_dir()／scandir() 就怎麼用，不必再改第二處。
+ */
+function eg_bom_dir_pdo(): ?PDO {
+    static $pdo = null, $tried = false;
+    if ($tried) return $pdo;
+    $tried = true;
+    try {
+        require_once __DIR__ . '/DBConnection.php';
+        $pdo = (new DBConnection())->getPDO();
+    } catch (Throwable $e) { $pdo = null; }
+    return $pdo;
+}
+/**
+ * BOM 圖檔資料夾（檔案系統路徑）；連不上 DB 時退回預設值，行為與改動前相同。
+ * **結果整個請求只算一次**：eg_bom_fs_path() 內含 is_dir()，對網路磁碟是一次網路往返，
+ * 萬一有呼叫端把它寫在迴圈裡就會變成每列一次。
+ */
+function eg_bom_scan_dir_auto(): string {
+    static $v = null;
+    if ($v !== null) return $v;
+    $db = eg_bom_dir_pdo();
+    return $v = eg_bom_fs_path($db ? eg_bom_scan_dir($db) : 'Z:/BOM/');
+}
+/** ERP 圖檔資料夾（檔案系統路徑）；同樣整個請求只算一次 */
+function eg_bom_erp_scan_dir_auto(): string {
+    static $v = null;
+    if ($v !== null) return $v;
+    $db = eg_bom_dir_pdo();
+    return $v = eg_bom_fs_path($db ? eg_bom_erp_scan_dir($db) : 'Z:/BOM/ERP/資材(生管and業務)/BOM/');
+}
+
+/**
  * 把 UTF-8 路徑轉成「這台機器的檔案系統實際吃得到」的字串。
  * 純 ASCII 路徑兩種編碼相同，不受影響；帶中文的路徑在 Windows 下才需要 Big5。
  * 兩種都試，回傳 is_dir() 成立的那個；都不成立則回原字串（讓呼叫端的 is_dir 自然失敗）。

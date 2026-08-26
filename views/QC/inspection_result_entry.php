@@ -463,7 +463,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // 1.6 獲取 BOM 圖檔
         if ($_POST['action'] === 'get_bom_files') {
             $bom = $_POST['bom'];
-            $scan_dir = 'Z:/BOM/'; // 實體路徑 (NAS 映射，供 PHP 掃描用)
+            require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+            $scan_dir = eg_bom_scan_dir_auto(); // 實體路徑 (NAS 映射，供 PHP 掃描用)
             $url_dir = '/nas/';    // 網頁讀取路徑 (Apache Alias，供前端顯示用)
             $files = [];
             if (is_dir($scan_dir)) {

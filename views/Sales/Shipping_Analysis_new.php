@@ -156,7 +156,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $bom_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         $files = [];
-        $scan_dir = 'Z:/BOM/'; // 實體路徑 (NAS 映射，供 PHP 掃描檔案用)
+        require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+        $scan_dir = eg_bom_scan_dir_auto(); // 實體路徑 (NAS 映射，供 PHP 掃描檔案用)
         $url_dir = '/nas/';    // 網頁讀取路徑 (Apache Alias，供前端顯示圖片用)
 
         if (is_dir($scan_dir)) {
@@ -1175,7 +1176,8 @@ $return_chart_values  = array_map(function($k) use($return_chart_stats){ return 
 
 // ── 批次預查哪些料號有圖檔，標記到每列 has_files ──
 try {
-    $_scan_dir = 'Z:/BOM/';
+    require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+    $_scan_dir = eg_bom_scan_dir_auto();
     $_pids_ok  = [];
     $_all_pids = array_values(array_unique(array_filter(
         array_column($rows, 'Product_id'),

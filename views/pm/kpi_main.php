@@ -817,7 +817,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // ── 圖面檔案 ──────────────────────────────────────────────
     if ($action === 'get_product_files') {
         $pid  = trim($_POST['product_id'] ?? '');
-        $scan_dir = 'Z:/BOM/';
+        require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+        $scan_dir = eg_bom_scan_dir_auto();
         $url_dir  = '/nas/';
         $files    = [];
         try {

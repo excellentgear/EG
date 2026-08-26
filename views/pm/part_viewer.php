@@ -73,7 +73,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
         } catch (Exception $_te) {}
 
         // ── 圖面：只抓「此 BOM 名稱」開頭的圖檔（jpg/png/pdf）──
-        $scan_dir = 'Z:/BOM/'; $url_dir = '/nas/';
+        require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+        $scan_dir = eg_bom_scan_dir_auto(); $url_dir = '/nas/';
         $files = [];
         if (is_dir($scan_dir)) {
             foreach (scandir($scan_dir) as $fn) {
@@ -101,7 +102,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
 
         // ── ERP/資材報告：只抓「此 BOM 名稱」開頭的檔，並套用後綴標籤 ──
         $erp_files = [];
-        $erp_path_utf8 = 'Z:/BOM/ERP/資材(生管and業務)/BOM/';
+        require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+        $erp_path_utf8 = eg_bom_erp_scan_dir_auto();
         $isWin = (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN');
         $erp_scan_path = $isWin ? mb_convert_encoding($erp_path_utf8, 'Big5', 'UTF-8') : $erp_path_utf8;
 

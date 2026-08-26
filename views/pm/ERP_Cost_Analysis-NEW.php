@@ -1700,7 +1700,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $st->execute([$pid]);
             $bom_rows = $st->fetchAll(PDO::FETCH_ASSOC);
             $files = [];
-            $scan_dir = 'Z:/BOM/';
+            require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+            $scan_dir = eg_bom_scan_dir_auto();
             $url_dir  = '/nas/';
             if (is_dir($scan_dir)) {
                 $allFiles = scandir($scan_dir);

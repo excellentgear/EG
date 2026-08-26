@@ -6,7 +6,8 @@
  */
 
 if (!defined('PPR_BOM_SCAN_DIR')) {
-    define('PPR_BOM_SCAN_DIR', 'Z:/BOM/');
+    require_once __DIR__ . '/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+    define('PPR_BOM_SCAN_DIR', eg_bom_scan_dir_auto());
     define('PPR_BOM_URL_DIR', '/nas/');
     define('PPR_MAX_BATCH_COUNT', 30);   // 批次一次最多產生筆數，超過需縮小期間或手動勾選子集合
 }

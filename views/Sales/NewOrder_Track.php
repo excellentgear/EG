@@ -1623,7 +1623,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $bom_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
             $files = [];
-            $scan_dir = 'Z:/BOM/'; 
+            require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+            $scan_dir = eg_bom_scan_dir_auto(); 
             $url_dir = '/nas/';    
 
             if (is_dir($scan_dir)) {
@@ -2137,7 +2138,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     $bom_by_did[$brow['d_id']][] = $brow['bom'];
                 }
                 if (!empty($bom_by_did)) {
-                    $nas_scan_dir = 'Z:/BOM/';
+                    require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+                    $nas_scan_dir = eg_bom_scan_dir_auto();
                     $draw_valid_ext = ['jpg','jpeg','png','pdf'];
                     if (is_dir($nas_scan_dir)) {
                         // NAS 可存取：掃目錄（結果快取 5 分鐘，避免每次篩選都掃 NAS）

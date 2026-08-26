@@ -388,7 +388,8 @@ function type_id_ctrl_bom_file_dir(PDO $db): string {
         $st->execute();
         $dir = trim((string)$st->fetchColumn());
     } catch (Throwable $e) {}
-    if ($dir === '') $dir = 'Z:/BOM/ERP/資材(生管and業務)/BOM/';
+    require_once __DIR__ . '/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
+    if ($dir === '') $dir = eg_bom_erp_scan_dir_auto();
     $dir = str_replace('\\', '/', $dir);
     if (substr($dir, -1) !== '/') $dir .= '/';
     return $dir;
