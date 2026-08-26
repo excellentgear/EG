@@ -1831,8 +1831,9 @@ $('#attDept').on('change', function(){
                 return;
             }
             var inList=ATT.some(function(a){return a.user_id===+u.id;});
-            h+='<label><input type="checkbox" class="att-ck" value="'+u.id+'" data-name="'+esc(u.user_cname)+'" data-dept="'+esc(deptName)+'" data-pos="'+esc(pos)+'"'+(inList?' checked disabled':'')+'> '
-              +esc(u.user_cname)+(pos?'<span style="color:#8a6d45;">（'+esc(pos)+'）</span>':'')
+            var dn=u.dept_name||deptName;      // 含子部門，部門名稱取該人實際所屬部門
+            h+='<label><input type="checkbox" class="att-ck" value="'+u.id+'" data-name="'+esc(u.user_cname)+'" data-dept="'+esc(dn)+'" data-pos="'+esc(pos)+'"'+(inList?' checked disabled':'')+'> '
+              +esc(u.user_cname)+'<span style="color:#8a6d45;">（'+esc(dn!==deptName?dn+(pos?'／'+pos:''):(pos||'—'))+'）</span>'
               +(+u.resigned?'<span style="color:#b0722a;">（已離職）</span>':'')+(inList?'(已加)':'')+'</label>';
         });
         $b.html(h||'<span class="empty">此部門無人員</span>');
@@ -3609,7 +3610,7 @@ function renderRequestList(){
 }
 function reqFind(id){ return (REQUESTS||[]).find(function(x){ return +x.request_id===+id; }); }
 
-/* ---------- 三、受訓人員：限申請單位底下人員，不排除申請人本人（比照確認開課的人員選擇器） ---------- */
+/* ---------- 三、受訓人員：限申請單位（含底下子部門）人員，不排除申請人本人（比照確認開課的人員選擇器） ---------- */
 var REQ_ATT = [];
 function reqDeptOptionsFill(){
     var h = '<option value="">請選擇</option>';
@@ -3631,18 +3632,23 @@ function reqAttLoadPeople(){
     var did = $('#reqDept').val();
     if (!did){ $('#reqAttPeopleBox').html('<span class="empty">請先選申請單位</span>'); $('#reqAttDeptHint').text('請先選申請單位'); return; }
     var atDate = $('#reqApplyDate').val() || META.today;
-    $('#reqAttDeptHint').text('僅列出「'+$('#reqDept option:selected').text()+'」部門人員（含申請人本人）');
+    $('#reqAttDeptHint').text('僅列出「'+$('#reqDept option:selected').text()+'」及其底下子部門人員（含申請人本人）');
     $('#reqAttPeopleBox').html('<span class="empty">載入中…</span>');
     $.getJSON(API, {action:'people', dept_id:did, at_date:atDate}, function(res){
         if (!res.ok){ $('#reqAttPeopleBox').html('<span class="empty">載入失敗</span>'); return; }
         var h='';
         if (res.at_date) h+='<div style="flex-basis:100%;color:#8a6d45;font-size:12px;">名單依 '+esc(res.at_date)+'（申請日期）當時職務顯示（依職務異動紀錄解析；已離職但當時在職者也會列出）</div>';
+        var reqDeptName = $('#reqDept option:selected').text();
         res.people.forEach(function(u){
             var inList = REQ_ATT.some(function(a){ return a.user_id===+u.id; });
             var pos = u.position_name||'';
+            // 部門是樹狀的，子部門的人也會列出 → 部門名稱一律用後端回傳的「該人實際所屬部門」，
+            // 不可再用下拉選到的那個部門名稱，否則生管組的人會被存成「資材部」
+            var dn = u.dept_name || reqDeptName;
             h += '<label><input type="checkbox" class="req-att-ck" value="'+u.id+'" data-name="'+esc(u.user_cname)+'" '
-               + 'data-dept="'+esc($('#reqDept option:selected').text())+'" data-pos="'+esc(pos)+'"'+(inList?' checked disabled':'')+'> '
-               + esc(u.user_cname)+(pos?'<span style="color:#8a6d45;">（'+esc(pos)+'）</span>':'')+(inList?'(已加)':'')+'</label>';
+               + 'data-dept="'+esc(dn)+'" data-pos="'+esc(pos)+'"'+(inList?' checked disabled':'')+'> '
+               + esc(u.user_cname)+'<span style="color:#8a6d45;">（'+esc(dn!==reqDeptName?dn+(pos?'／'+pos:''):(pos||'—'))+'）</span>'
+               + (inList?'(已加)':'')+'</label>';
         });
         $('#reqAttPeopleBox').html(h || '<span class="empty">此部門無人員</span>');
         $('#reqAttPickAll').prop('checked', false);

@@ -1053,7 +1053,7 @@ case 'request_save': {
     $planDays = $cleanDays ? count($cleanDays) : null;
     $hours = ($_POST['hours'] ?? '') === '' ? null : (float)$_POST['hours'];
 
-    // 受訓人員（結構化；限申請單位底下人員，不排除申請人本人，前端已用確認開課的同一套人員選擇器）
+    // 受訓人員（結構化；限申請單位含底下子部門的人員，不排除申請人本人，前端已用確認開課的同一套人員選擇器）
     $trainees = json_decode((string)($_POST['trainees'] ?? '[]'), true);
     if (!is_array($trainees)) $trainees = [];
     $traineeRows = []; $traineeNames = [];
@@ -1204,14 +1204,36 @@ case 'request_delete': {
     jout([]);
 }
 
-/* 部門人員（講師/參加人員選擇用）
+/* 部門人員（講師/參加人員/受訓人員選擇用）
    排除：離職(state=0)、共用帳號(is_shared_account=1)、系統/公用身分(user_status 9/90/9999)。
-   一併回傳該部門的職稱（同一人多職稱時取主要職務 is_main 優先）。
+   一併回傳該人所屬部門名稱與職稱（同一人在範圍內有多個職務時取主要職務 is_main 優先）。
+   **組織是樹狀的**（資材部→生管/採購/倉管組、品管部→品管組、生產部→生產1~3廠），選「資材部」時
+   底下子部門的人一律要一起列出，否則只列得到直接掛在部門本身的那兩三個人（2026-08-26 使用者回報）。
+   要只列該部門本身（不含子部門）可帶 include_sub=0。
    at_date（YYYY-MM-DD，選填）：補登舊訓練紀錄用——依 user_position_history 解析「當日」誰在此部門、
    當時職稱為何（ai-rules/14；沒補登紀錄的人回現況）。此模式下已離職者若當日仍在職也會列出（標 resigned）。 */
 case 'people': {
     $deptId = (int)($_GET['dept_id'] ?? 0);
     if ($deptId <= 0) jout(['people'=>[]]);
+    require_once $document_root . '/EGsystem/src/common/org_role_lib.php';
+    $incSub  = ((string)($_GET['include_sub'] ?? '1')) !== '0';
+    $deptIds = $incSub ? eg_dept_subtree_ids($db, $deptId) : [$deptId];
+    if (!$deptIds) $deptIds = [$deptId];
+    // 人員列表鐵則(ai-rules/08 第五節)：排序依部門/職稱 sort_order，不是姓名筆畫
+    $dOrd = []; $pOrd = [];
+    foreach ($db->query("SELECT id, COALESCE(sort_order,9999) AS o FROM department")->fetchAll(PDO::FETCH_ASSOC) as $r) $dOrd[(int)$r['id']] = (int)$r['o'];
+    foreach ($db->query("SELECT id, COALESCE(sort_order,9999) AS o FROM position")->fetchAll(PDO::FETCH_ASSOC) as $r)   $pOrd[(int)$r['id']] = (int)$r['o'];
+    $sortPeople = function (array $arr) use ($dOrd, $pOrd) {
+        usort($arr, function ($a, $b) use ($dOrd, $pOrd) {
+            $da = $dOrd[$a['dept_id']] ?? 9999; $db2 = $dOrd[$b['dept_id']] ?? 9999;
+            if ($da !== $db2) return $da <=> $db2;
+            if ($a['dept_id'] !== $b['dept_id']) return $a['dept_id'] <=> $b['dept_id'];
+            $pa = $pOrd[$a['position_id']] ?? 9999; $pb = $pOrd[$b['position_id']] ?? 9999;
+            if ($pa !== $pb) return $pa <=> $pb;
+            return strcmp($a['user_cname'], $b['user_cname']);
+        });
+        return $arr;
+    };
     $atDate = trim((string)($_GET['at_date'] ?? ''));
     if ($atDate !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $atDate) && $atDate < date('Y-m-d')) {
         require_once $document_root . '/EGsystem/src/common/position_history_lib.php';
@@ -1227,34 +1249,46 @@ case 'people': {
             if ((int)($u['state'] ?? 1) === 0 && !empty($u['leave_date']) && $u['leave_date'] < $atDate) continue;
             // 到職日晚於上課日＝當時尚未到職，不列
             if (!empty($u['hire_date']) && $u['hire_date'] > $atDate) continue;
-            $pos = '';
-            $hit = false;
+            // 一人可能在範圍內掛多個部門/職稱（兼任）→ 取主職優先、其次職級最高那筆來顯示部門與職稱
+            $pos = ''; $dn = ''; $did = 0; $pid = 0; $best = null;
             foreach (($snaps[$uid2] ?? []) as $s) {
-                if ((int)$s['department_id'] !== $deptId) continue;
-                $hit = true;
-                if ($pos === '' || $s['is_main']) $pos = $s['position_name'];   // 主職優先
-                if ($s['is_main']) break;
+                if (!in_array((int)$s['department_id'], $deptIds, true)) continue;   // 含子部門
+                $rank = [$s['is_main'] ? 0 : 1, $pOrd[(int)$s['position_id']] ?? 9999];
+                if ($best === null || $rank < $best) {
+                    $best = $rank;
+                    $pos = $s['position_name']; $dn = $s['department_name'];
+                    $did = (int)$s['department_id']; $pid = (int)$s['position_id'];
+                }
             }
-            if (!$hit) continue;
+            if ($best === null) continue;
             $people[] = ['id' => $uid2, 'user_cname' => $u['user_cname'], 'position_name' => $pos,
+                         'dept_id' => $did, 'dept_name' => $dn, 'position_id' => $pid,
                          'resigned' => (int)($u['state'] ?? 1) === 0 ? 1 : 0];
         }
-        usort($people, fn($a, $b) => strcmp($a['user_cname'], $b['user_cname']));
-        jout(['people' => $people, 'at_date' => $atDate]);
+        jout(['people' => $sortPeople($people), 'at_date' => $atDate, 'dept_ids' => $deptIds]);
     }
-    $st = $db->prepare("SELECT u.id, u.user_cname,
-                               SUBSTRING_INDEX(GROUP_CONCAT(p.name ORDER BY m.is_main DESC, p.sort_order, p.id SEPARATOR '|'), '|', 1) AS position_name
+    $inQ = implode(',', array_fill(0, count($deptIds), '?'));
+    $st = $db->prepare("SELECT u.id, u.user_cname, m.department_id, d.name AS dept_name, m.position_id, p.name AS position_name, m.is_main
                         FROM user_department_position_map m
                         JOIN user u ON u.id=m.user_id
+                        LEFT JOIN department d ON d.id=m.department_id
                         LEFT JOIN position p ON p.id=m.position_id
-                        WHERE m.department_id=? AND u.user_cname IS NOT NULL AND u.user_cname<>''
+                        WHERE m.department_id IN ($inQ) AND u.user_cname IS NOT NULL AND u.user_cname<>''
                           AND COALESCE(u.state,1) <> 0
                           AND COALESCE(u.is_shared_account,0) <> 1
-                          AND COALESCE(u.user_status,0) NOT IN (9,90,9999)
-                        GROUP BY u.id, u.user_cname
-                        ORDER BY u.user_cname");
-    $st->execute([$deptId]);
-    jout(['people'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+                          AND COALESCE(u.user_status,0) NOT IN (9,90,9999)");
+    $st->execute($deptIds);
+    $byU = []; $byRank = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {          // 兼任：取主職優先、其次職級最高那筆
+        $uid2 = (int)$r['id'];
+        $rank = [(int)$r['is_main'] === 1 ? 0 : 1, $pOrd[(int)$r['position_id']] ?? 9999];
+        if (isset($byRank[$uid2]) && $rank >= $byRank[$uid2]) continue;
+        $byRank[$uid2] = $rank;
+        $byU[$uid2] = ['id' => $uid2, 'user_cname' => $r['user_cname'],
+                       'position_name' => (string)($r['position_name'] ?? ''), 'position_id' => (int)$r['position_id'],
+                       'dept_id' => (int)$r['department_id'], 'dept_name' => (string)($r['dept_name'] ?? '')];
+    }
+    jout(['people' => $sortPeople(array_values($byU)), 'dept_ids' => $deptIds]);
 }
 
 /* 場次參加人員名單 */
