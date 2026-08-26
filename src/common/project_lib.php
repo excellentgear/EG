@@ -868,6 +868,10 @@ function prj_validate(array $d, array $tasks = []): array
         $ps = trim((string)($t['plan_start'] ?? ''));
         $pe = trim((string)($t['plan_end'] ?? ''));
         if ($ps !== '' && $pe !== '' && $ps > $pe) $err['task_' . $i] = '第 ' . $n . ' 項任務：預計完成日不可早於預計開始日';
+        // 任務排在專案開始之前是不合理的日程（使用者要求，2026-08-26）
+        if ($ps !== '' && $s !== '' && $ps < $s) {
+            $err['task_' . $i] = '第 ' . $n . ' 項任務：預計開始日（' . eg_fmt_date($ps) . '）不可早於專案起日（' . eg_fmt_date($s) . '）';
+        }
         $as = trim((string)($t['act_start'] ?? ''));
         $ae = trim((string)($t['act_end'] ?? ''));
         if ($as !== '' && $ae !== '' && $as > $ae) $err['task_' . $i] = '第 ' . $n . ' 項任務：實際完成日不可早於實際開始日';

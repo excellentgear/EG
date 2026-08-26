@@ -481,7 +481,9 @@ case 'plan_save':
     }
     $goals = json_decode((string)($_POST['goals'] ?? '[]'), true) ?: [];
     $tasks = json_decode((string)($_POST['tasks'] ?? '[]'), true) ?: [];
-    $err = prj_validate(['project_name' => 'x', 'project_type' => 'C', 'owner_id' => 1], $tasks);
+    // 帶入專案自己的起日，任務的「預計開始不可早於專案起日」才驗得到（前端已即時擋，這裡同規則再擋一次＝鐵律8）
+    $err = prj_validate(['project_name' => 'x', 'project_type' => 'C', 'owner_id' => 1,
+                         'start_date' => (string)($prjPlan['start_date'] ?? ''), 'end_date' => ''], $tasks);
     if ($err) jerr('日程有誤', 400, ['fields' => $err]);
 
     $db->beginTransaction();

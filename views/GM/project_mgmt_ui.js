@@ -881,6 +881,7 @@ function drawPlanEditor(res) {
     });
     h += '</div>';
     $('#planEditBox').html(h);
+    $('#planEditBox .t-body tr').each(function () { planRowCheck($(this)); });
     PLAN_DIRTY = false;
     /* 目標的主辦單位下拉用 .val() 設，避免字串比對出錯（負責人兩個下拉已在建 option 時標好 selected） */
     $('#planEditBox .sec[data-goal]').each(function (gi) {
@@ -937,11 +938,34 @@ function planRowRecalc($tr, from) {
     } else {                                          // from === 'pe'
         $dy.val(ps && pe ? (planDaysBetween(ps, pe) || '') : '');
     }
-    /* 完成早於開始：當場標紅講原因（表單三總則③；存檔時後端 prj_validate 會再擋一次） */
-    var bad = !!(ps && pe && pe < ps);
-    $pe.toggleClass('fld-bad', bad).attr('title', bad ? '預計完成日不可早於預計開始日' : '');
+    planRowCheck($tr);
     planChainFrom($tr);
 }
+/**
+ * 一列的日期檢查：當場標紅並寫原因（表單三總則③；存檔時後端 prj_validate 會同規則再擋一次）。
+ * 回傳錯誤訊息字串，沒問題回空字串——存檔前也用同一支，畫面提示與擋存檔的規則不會走鐘。
+ */
+function planRowCheck($tr) {
+    var ps = $.trim($tr.find('.t-ps').val()), pe = $.trim($tr.find('.t-pe').val());
+    var as = $.trim($tr.find('.t-as').val()), ae = $.trim($tr.find('.t-ae').val());
+    var pStart = $.trim((CUR && CUR.project ? CUR.project.start_date : '') || '');
+    var name = $.trim($tr.find('.t-name').val()) || '這一列';
+    var msg = '', badPs = false, badPe = false;
+    if (ps && pStart && ps < pStart) {
+        badPs = true;
+        msg = '任務「' + name + '」的預計開始日（' + dispDate(ps) + '）不可早於專案起日（' + dispDate(pStart) + '）';
+    }
+    if (ps && pe && pe < ps) {
+        badPe = true;
+        msg = msg || ('任務「' + name + '」的預計完成日不可早於預計開始日');
+    }
+    if (as && ae && ae < as) msg = msg || ('任務「' + name + '」的實際完成日不可早於實際開始日');
+    $tr.find('.t-ps').toggleClass('fld-bad', badPs)
+       .attr('title', badPs ? ('不可早於專案起日 ' + dispDate(pStart) + '（可在「專案基本資料」改專案起日）') : '');
+    $tr.find('.t-pe').toggleClass('fld-bad', badPe).attr('title', badPe ? '預計完成日不可早於預計開始日' : '');
+    return msg;
+}
+
 /** 把後續「還跟著上一列」的列一起往後推（使用者自己改過的開始日不覆蓋，遇到就停） */
 function planChainFrom($tr) {
     var guard = 0;
@@ -964,6 +988,11 @@ function planChainFrom($tr) {
     }
 }
 $(document).on('change', '#planEditBox .t-ps', function () { planRowRecalc($(this).closest('tr'), 'ps'); });
+/* 專案起日一改，規劃表上每一列都要重驗一次（本來合法的可能就變成早於專案起日了） */
+$(document).on('change', '#eStart', function () {
+    if (CUR && CUR.project) CUR.project.start_date = $(this).val();
+    $('#planEditBox .t-body tr').each(function () { planRowCheck($(this)); });
+});
 $(document).on('change', '#planEditBox .t-pe', function () { planRowRecalc($(this).closest('tr'), 'pe'); });
 $(document).on('input change', '#planEditBox .t-days', function () { planRowRecalc($(this).closest('tr'), 'days'); });
 
@@ -1027,11 +1056,56 @@ $(document).on('click', '#planEditBox .g-del', function () {
 $(document).on('change', '#gView', function () { GVIEW = $(this).val(); drawGantt(CUR); });
 $(document).on('change', '#gScale', function () { GSCALE = $(this).val(); drawGantt(CUR); });
 $(document).on('click', '#btnGoalAdd', function () {
-    var res = $.extend(true, {}, CUR);
-    res.goals = (res.goals || []).concat([{ goal_id: 0, goal_name: '', dept_name: '' }]);
-    CUR.goals = res.goals;
+    var dirty = PLAN_DIRTY;
+    planSyncToCur();                       // 先保住畫面上填到一半的內容（不然會被重繪洗掉）
+    CUR.goals = (CUR.goals || []).concat([{ goal_id: 0, goal_name: '', dept_name: '' }]);
     drawPlanEditor(CUR);
+    PLAN_DIRTY = dirty;                    // drawPlanEditor 會清掉未儲存標記，這裡還原回去
 });
+/**
+ * 把「畫面上填到一半、還沒存進資料庫」的規劃表內容收回 CUR。
+ * 任何會重繪規劃表的動作（新增目標、改完模組設定…）都要先呼叫這支，
+ * 否則 drawPlanEditor() 會拿伺服器載下來的舊資料重畫，使用者剛打的字就沒了
+ * （使用者回報「按新增目標會把還沒儲存的目標與主要任務都清掉」＝這個原因）。
+ */
+function planSyncToCur() {
+    if (!CUR || !$('#planEditBox .sec[data-goal]').length) return false;
+    var goals = [], tasks = [], tmpId = 0;
+    $('#planEditBox .sec[data-goal]').each(function (gi) {
+        var gid = num($(this).data('goal'));
+        /* 還沒存過的目標 goal_id 都是 0，直接照抄會讓多個新目標被 groupTasks 併成同一組，
+           所以各給一個暫時的負數 id；送存時再還原成 0（見 savePlan）。 */
+        if (gid <= 0) gid = --tmpId;
+        var $dept = $(this).find('.g-dept'), deptTxt = $.trim($dept.find('option:selected').text());
+        goals.push({
+            goal_id: gid,
+            goal_name: $(this).find('.g-name').val(),
+            dept_id: num($dept.val()) || null,
+            /* drawPlanEditor 是用「選項文字」比對回選部門的，所以這裡要存文字（「（無）」視同沒選） */
+            dept_name: (deptTxt === '（無）' ? '' : deptTxt),
+            sort_order: gi
+        });
+        $(this).find('.t-body tr').each(function (ti) {
+            var $r = $(this), per = peopleById(num($r.find('.t-owner').val()));
+            tasks.push({
+                task_id: num($r.data('task')), goal_id: gid,
+                task_name: $r.find('.t-name').val(),
+                plan_start: $r.find('.t-ps').val(), plan_end: $r.find('.t-pe').val(),
+                act_start: $r.find('.t-as').val(), act_end: $r.find('.t-ae').val(),
+                owner_id: num($r.find('.t-owner').val()) || null,
+                owner_dept_id: num($r.find('.t-odept').val()) || null,
+                owner_name: per ? per.user_cname : '',
+                progress: num($r.find('.t-pg').val()),
+                is_milestone: $r.find('.t-ms').is(':checked') ? 1 : 0,
+                sort_order: ti
+            });
+        });
+    });
+    CUR.goals = goals;
+    CUR.tasks = tasks;
+    return true;
+}
+
 /** 規劃表上有沒有東西要存（一個有名稱的目標都沒有＝沒東西可存） */
 function planHasContent() {
     if (!$('#planEditBox .sec[data-goal]').length) return false;
@@ -1048,15 +1122,24 @@ function savePlan(pid, cb) {
     $('#planEditBox .sec[data-goal]').each(function (gi) {
         var gkey = 'g' + gi;
         var name = $.trim($(this).find('.g-name').val());
-        if (!name) { bad = bad || '目標 ' + (gi + 1) + ' 沒有名稱'; return; }
-        goals.push({ goal_key: gkey, goal_id: num($(this).data('goal')), goal_name: name, dept_id: $(this).find('.g-dept').val() });
+        if (!name) {
+            /* 整個目標區塊都沒填（多半是按了「新增目標」又沒用到）＝直接略過，不是錯誤。
+               只有「有填任務、卻沒給目標名稱」才擋下來，否則使用者會被一個空白區塊卡住存不了檔。 */
+            var used = false;
+            $(this).find('.t-body tr').each(function () {
+                if ($.trim($(this).find('.t-name').val())) used = true;
+            });
+            if (used) bad = bad || ('目標 ' + (gi + 1) + ' 沒有名稱（底下已經有主要任務，請補上目標名稱，或把那些任務刪掉）');
+            return;
+        }
+        goals.push({ goal_key: gkey, goal_id: Math.max(0, num($(this).data('goal'))), goal_name: name,
+                     dept_id: $(this).find('.g-dept').val() });
         $(this).find('.t-body tr').each(function () {
             var tn = $.trim($(this).find('.t-name').val());
             if (!tn) return;   // 空白列直接略過（不是錯誤）
             var ps = $(this).find('.t-ps').val(), pe = $(this).find('.t-pe').val();
             var as = $(this).find('.t-as').val(), ae = $(this).find('.t-ae').val();
-            if (ps && pe && ps > pe) bad = bad || ('任務「' + tn + '」的預計完成日早於預計開始日');
-            if (as && ae && as > ae) bad = bad || ('任務「' + tn + '」的實際完成日早於實際開始日');
+            bad = bad || planRowCheck($(this));   // 畫面上的即時檢查與存檔前的檢查共用同一份規則
             tasks.push({
                 goal_key: gkey, task_id: num($(this).data('task')), task_name: tn,
                 plan_start: ps, plan_end: pe, act_start: as, act_end: ae,
@@ -1999,7 +2082,12 @@ $(document).on('click', '#btnSetSave', function () {
         META.default_cosign_depts = cos.join(',');
         /* 部門設定改完馬上生效：規劃表的負責人部門下拉同步換掉，不必重新整理頁面 */
         META.task_owner_depts = r.task_owner_depts || [];
-        if (CUR && num(CUR.project.project_id) && CUR.can_edit) drawPlanEditor(CUR);
+        if (CUR && num(CUR.project.project_id) && CUR.can_edit) {
+            var dirty = PLAN_DIRTY;
+            planSyncToCur();               // 同上：不可以把使用者填到一半的規劃表洗掉
+            drawPlanEditor(CUR);
+            PLAN_DIRTY = dirty;
+        }
         /* 資格改完馬上生效：負責人下拉的候選名單同步換掉，不必重新整理頁面 */
         META.owner_scope     = r.owner_scope_rows || [];
         META.owner_people    = r.owner_people || [];
