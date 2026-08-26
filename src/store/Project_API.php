@@ -551,27 +551,32 @@ case 'plan_save':
                 $actS = $actOld[$tid]['act_start'] ?? null;
                 $actE = $actOld[$tid]['act_end'] ?? null;
             }
+            /* 進度：還跟著自動的就由後端自己算（不採信前端送來的數字＝鐵律8），
+               使用者手動改過的（progress_auto=0）才用他填的值。 */
+            $pAuto = array_key_exists('progress_auto', $t) ? (!empty($t['progress_auto']) ? 1 : 0) : 1;
+            $pVal  = $pAuto ? prj_task_progress_auto(['act_end' => $actE])
+                            : max(0, min(100, (int)($t['progress'] ?? 0)));
             $args = [
                 (int)($t['goal_id'] ?? 0) ?: null, $name,
                 trim((string)($t['plan_start'] ?? '')) ?: null, trim((string)($t['plan_end'] ?? '')) ?: null,
                 $actS, $actE,
                 $ownerId, $ownerName, $ownerDept,
-                max(0, min(100, (int)($t['progress'] ?? 0))),
+                $pVal, $pAuto,
                 !empty($t['is_milestone']) ? 1 : 0,
                 prj_tag_csv(prj_tag_ids((string)($t['tag_ids'] ?? ''))),
                 trim((string)($t['note'] ?? '')), $j,
             ];
             if ($tid) {
                 $db->prepare("UPDATE project_task SET goal_id=?, task_name=?, plan_start=?, plan_end=?, act_start=?,
-                                    act_end=?, owner_id=?, owner_name=?, owner_dept_id=?, progress=?, is_milestone=?,
-                                    tag_ids=?, note=?, sort_order=?
+                                    act_end=?, owner_id=?, owner_name=?, owner_dept_id=?, progress=?, progress_auto=?,
+                                    is_milestone=?, tag_ids=?, note=?, sort_order=?
                               WHERE task_id=? AND project_id=?")
                    ->execute(array_merge($args, [$tid, $pid]));
             } else {
                 $db->prepare("INSERT INTO project_task (goal_id, task_name, plan_start, plan_end, act_start, act_end,
-                                    owner_id, owner_name, owner_dept_id, progress, is_milestone, tag_ids, note,
-                                    sort_order, project_id)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                                    owner_id, owner_name, owner_dept_id, progress, progress_auto, is_milestone,
+                                    tag_ids, note, sort_order, project_id)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                    ->execute(array_merge($args, [$pid]));
                 $tid = (int)$db->lastInsertId();
             }

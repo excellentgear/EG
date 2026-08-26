@@ -872,7 +872,8 @@ function drawPlanEditor(res) {
           + '<th style="width:62px;" title="預計開始當天算第 1 天，只算工作日">工作天數</th>'
           + '<th style="width:114px;">預計完成</th>'
           + '<th style="width:114px;">實際開始</th><th style="width:114px;">實際完成</th>'
-          + '<th style="width:180px;">負責人（先選部門）</th><th style="width:60px;">進度%</th>'
+          + '<th style="width:180px;">負責人（先選部門）</th>'
+          + '<th style="width:76px;" title="勾「自動」時：填了實際完成日就是 100%，否則 0%；自己改過就不再自動">進度%</th>'
           + '<th style="width:44px;">里程碑</th><th style="width:30px;"></th></tr></thead>'
           + '<tbody class="t-body" data-eg-row-add="planRowAdd" data-eg-row-del="planRowDel">';
         var list = g.tasks.length ? g.tasks : [{}];
@@ -881,7 +882,7 @@ function drawPlanEditor(res) {
     });
     h += '</div>';
     $('#planEditBox').html(h);
-    $('#planEditBox .t-body tr').each(function () { planRowCheck($(this)); });
+    $('#planEditBox .t-body tr').each(function () { planRowCheck($(this)); planRowProgress($(this)); });
     PLAN_DIRTY = false;
     /* 目標的主辦單位下拉用 .val() 設，避免字串比對出錯（負責人兩個下拉已在建 option 時標好 selected） */
     $('#planEditBox .sec[data-goal]').each(function (gi) {
@@ -903,6 +904,8 @@ function planRowHtml(t, i) {
     /* data-pe0＝這一列目前的預計完成日。串接時用它判斷「下一列的開始日還跟著上一列」
        還是「使用者自己改過了」，改過的就不覆蓋。 */
     var days = (t.plan_start && t.plan_end) ? planDaysBetween(t.plan_start, t.plan_end) : 0;
+    /* 新列預設跟著自動；既有列看資料庫存的（沒有這個欄位的舊資料視同自動） */
+    var pgAuto = (t.progress_auto === undefined || t.progress_auto === null) ? true : !!num(t.progress_auto);
     return '<tr data-task="' + num(t.task_id) + '" data-pe0="' + esc(t.plan_end || '') + '">'
       + '<td>' + (i + 1) + '</td>'
       + '<td><input type="text" class="t-name" value="' + esc(t.task_name || '') + '"></td>'
@@ -913,7 +916,9 @@ function planRowHtml(t, i) {
       + '<td><input type="date" class="t-ae' + actCls + '"' + actRo + ' value="' + esc(t.act_end || '') + '"></td>'
       + '<td><select class="t-odept"' + filterAttr(dOpt, '輸入部門名稱篩選…') + '>' + dOpt + '</select>'
       + '<select class="t-owner" style="margin-top:3px;"' + filterAttr(pOpt, '輸入姓名篩選…') + '>' + pOpt + '</select></td>'
-      + '<td><input type="number" class="t-pg" min="0" max="100" value="' + num(t.progress) + '"></td>'
+      + '<td><input type="number" class="t-pg" min="0" max="100" value="' + num(t.progress) + '">'
+      + '<label style="font-size:11px;display:block;margin-top:2px;white-space:nowrap;" title="填了實際完成日就自動變 100%；自己改過數字就不再自動">'
+      + '<input type="checkbox" class="t-pgauto" data-eg-skip="1"' + (pgAuto ? ' checked' : '') + '> 自動</label></td>'
       + '<td><input type="checkbox" class="t-ms" data-eg-skip="1"' + (num(t.is_milestone) ? ' checked' : '') + '></td>'
       + '<td><span class="pj-op t-del" title="刪除這一列">✕</span></td></tr>';
 }
@@ -941,6 +946,25 @@ function planRowRecalc($tr, from) {
     planRowCheck($tr);
     planChainFrom($tr);
 }
+/**
+ * 任務進度自動計算（與後端 prj_task_progress_auto() 同一套規則）：
+ * 勾著「自動」時，填了實際完成日＝100%，否則 0%。
+ */
+function planRowProgress($tr) {
+    if (!$tr.find('.t-pgauto').is(':checked')) return;      // 使用者改過就不再自動
+    $tr.find('.t-pg').val($.trim($tr.find('.t-ae').val()) ? 100 : 0);
+}
+/* 實際完成日一改，進度跟著重算（推導欄位鐵則：來源一改就重算） */
+$(document).on('change', '#planEditBox .t-ae', function () { planRowProgress($(this).closest('tr')); });
+/* 自己動手改進度＝不再自動（比照管理卡「目前應達成基準」的既有作法） */
+/* input 與 change 都要收：有些改法（貼上、程式寫入後補發事件、部分輸入法）只會發其中一種，
+   漏收就會出現「我明明填了 60%，重繪一次又變回 0」。 */
+$(document).on('input change', '#planEditBox .t-pg', function () {
+    $(this).closest('tr').find('.t-pgauto').prop('checked', false);
+});
+/* 把「自動」勾回來就立刻重算一次，不要等下一次改日期 */
+$(document).on('change', '#planEditBox .t-pgauto', function () { planRowProgress($(this).closest('tr')); });
+
 /**
  * 一列的日期檢查：當場標紅並寫原因（表單三總則③；存檔時後端 prj_validate 會同規則再擋一次）。
  * 回傳錯誤訊息字串，沒問題回空字串——存檔前也用同一支，畫面提示與擋存檔的規則不會走鐘。
@@ -1096,6 +1120,7 @@ function planSyncToCur() {
                 owner_dept_id: num($r.find('.t-odept').val()) || null,
                 owner_name: per ? per.user_cname : '',
                 progress: num($r.find('.t-pg').val()),
+                progress_auto: $r.find('.t-pgauto').is(':checked') ? 1 : 0,
                 is_milestone: $r.find('.t-ms').is(':checked') ? 1 : 0,
                 sort_order: ti
             });
@@ -1146,6 +1171,7 @@ function savePlan(pid, cb) {
                 owner_id: $(this).find('.t-owner').val(),
                 owner_dept_id: $(this).find('.t-odept').val(),
                 progress: $(this).find('.t-pg').val(),
+                progress_auto: $(this).find('.t-pgauto').is(':checked') ? 1 : 0,
                 is_milestone: $(this).find('.t-ms').is(':checked') ? 1 : 0
             });
         });

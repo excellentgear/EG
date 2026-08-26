@@ -155,6 +155,7 @@ function prj_ensure_schema(PDO $db): void
         owner_id     INT NULL, owner_name VARCHAR(60) NULL COMMENT '負責人',
         owner_dept_id INT NULL COMMENT '負責人是以「哪個部門的身分」被指派（先選部門再選人；兼任者靠這欄決定顯示哪個職稱）',
         progress     TINYINT NOT NULL DEFAULT 0 COMMENT '完成百分比 0~100',
+        progress_auto TINYINT NOT NULL DEFAULT 1 COMMENT '1=進度仍跟著實際完成日自動算，0=使用者手動改過就不再自動',
         is_milestone TINYINT NOT NULL DEFAULT 0 COMMENT '1=里程碑（甘特上畫菱形）',
         tag_ids      VARCHAR(255) NULL,
         note         VARCHAR(300) NULL,
@@ -289,6 +290,7 @@ function prj_ensure_schema(PDO $db): void
 
     // 既有資料庫補欄位（可重複執行）
     prj_ensure_col($db, 'project_task', 'owner_dept_id', "INT NULL COMMENT '負責人所屬部門（先選部門再選人）' AFTER owner_name");
+    prj_ensure_col($db, 'project_task', 'progress_auto', "TINYINT NOT NULL DEFAULT 1 COMMENT '1=進度跟著實際完成日自動算' AFTER progress");
 
     // 角色（比照 pfmea_lib 慣例自動建立；名稱之後可在角色管理改，這裡只保證存在）
     foreach ([['project_view', '專案檢閱'], ['project_edit', '專案登錄'], ['project_admin', '專案管理員']] as $r) {
@@ -745,6 +747,38 @@ function prj_workday_sets(PDO $db): array
 }
 
 /**
+ * 任務進度自動判定（使用者拍板 2026-08-26）：
+ *   還跟著自動（progress_auto=1）時 ── 填了實際完成日＝100%，否則 0%。
+ *   使用者一旦自己動手改過進度，progress_auto 就變 0、之後一律以他填的為準（比照管理卡的「目前應達成基準」）。
+ * 前端有一份同規則的即時計算，存檔時後端再算一次，不採信前端送來的數字（鐵律8）。
+ */
+function prj_task_progress_auto(array $t): int
+{
+    return trim((string)($t['act_end'] ?? '')) !== '' ? 100 : 0;
+}
+
+/**
+ * 專案整體進度＝各任務進度依「預計工作天數」加權平均（使用者拍板）。
+ * 用簡單平均的話，20 天的大任務跟 1 天的小任務權重一樣，做完大任務只前進 50% 不合現場認知。
+ * 沒填預計起迄日的任務權重算 1 天（否則整條會被沒排日程的任務洗掉）。
+ */
+function prj_progress(PDO $db, int $projectId): int
+{
+    $st = $db->prepare("SELECT progress, plan_start, plan_end FROM project_task WHERE project_id=?");
+    $st->execute([$projectId]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return 0;
+    $sum = 0.0; $w = 0.0;
+    foreach ($rows as $r) {
+        $d = prj_plan_days($db, (string)($r['plan_start'] ?? ''), (string)($r['plan_end'] ?? ''));
+        if ($d <= 0) $d = 1;
+        $sum += (float)$r['progress'] * $d;
+        $w   += $d;
+    }
+    return $w > 0 ? (int)round($sum / $w) : 0;
+}
+
+/**
  * 「實際開始／實際完成」現在可不可以填＝專案立案核准之後才可以（使用者拍板 2026-08-25）。
  * 還在草稿／送簽中／被退回的專案只排預計日程，實際日期留到核准後執行時才填。
  */
@@ -833,14 +867,6 @@ function prj_list(PDO $db, array $q): array
 }
 
 /** 專案整體進度％＝各任務進度的簡單平均（沒有任務時回 0，不猜） */
-function prj_progress(PDO $db, int $projectId): int
-{
-    $st = $db->prepare("SELECT AVG(progress) FROM project_task WHERE project_id=?");
-    $st->execute([$projectId]);
-    $v = $st->fetchColumn();
-    return ($v === null || $v === false) ? 0 : (int)round((float)$v);
-}
-
 function prj_get(PDO $db, int $projectId): ?array
 {
     $st = $db->prepare("SELECT * FROM project WHERE project_id=? AND is_deleted=0");
