@@ -49,7 +49,7 @@ try {
     
     if ($action === 'cancel') {
         // 清除轉生管日期
-        $sql = "UPDATE order_track SET pmGet = NULL WHERE Order_id = :order_id";
+        $sql = "UPDATE order_track SET pmGet = NULL, pmGet_auto = 0 WHERE Order_id = :order_id";
         $params = [':order_id' => $order_id];
         $result = $conn->execute($sql, $params);
         
@@ -63,7 +63,7 @@ try {
         $currentDate = date('Y-m-d H:i:s');
         
         // 構建 SQL 查詢
-        $sql = "UPDATE order_track SET pmGet = :pmGet";
+        $sql = "UPDATE order_track SET pmGet = :pmGet, pmGet_auto = 0";
         $params = [':pmGet' => $currentDate, ':order_id' => $order_id];
         
         // 添加其他欄位的更新

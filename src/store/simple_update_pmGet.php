@@ -53,7 +53,8 @@ try {
     
     if ($action === 'cancel') {
         // 清除轉生管日期
-        $stmt = $pdo->prepare("UPDATE order_track SET pmGet = NULL WHERE Order_id = ?");
+        // pmGet_auto 一併歸零：人工取消後，這筆就不再算「系統自動蓋的」（見 order_auto_pmget_lib.php）
+        $stmt = $pdo->prepare("UPDATE order_track SET pmGet = NULL, pmGet_auto = 0 WHERE Order_id = ?");
         $result = $stmt->execute([$order_id]);
         
         if ($result && $stmt->rowCount() > 0) {
@@ -73,7 +74,8 @@ try {
     } else {
         // 設置當前日期為轉生管日期
         // $currentDate = date('Y-m-d H:i:s'); // Using CURDATE() in SQL is better
-        $stmt = $pdo->prepare("UPDATE order_track SET pmGet = CURDATE() WHERE Order_id = ?");
+        // pmGet_auto=0 標記「這是人工按鈕蓋的」，之後改指派設計時不會被自動規則清掉
+        $stmt = $pdo->prepare("UPDATE order_track SET pmGet = CURDATE(), pmGet_auto = 0 WHERE Order_id = ?");
         $result = $stmt->execute([$order_id]);
         
         if ($result) {

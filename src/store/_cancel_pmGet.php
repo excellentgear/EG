@@ -35,7 +35,7 @@ try {
     $conn = new DBConnection();
     
     // 設置pmGet為NULL的SQL查詢
-    $sql = "UPDATE order_track SET pmGet = NULL WHERE Order_id = $orderId";
+    $sql = "UPDATE order_track SET pmGet = NULL, pmGet_auto = 0 WHERE Order_id = $orderId";
     
     // 執行更新
     $result = $conn->execute($sql);

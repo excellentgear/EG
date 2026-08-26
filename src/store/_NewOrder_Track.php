@@ -5,6 +5,7 @@ include '../../src/common/DBConnection.php';
 include '../../src/common/_config.php';
 require_once '../../src/common/part_alias_lib.php';
 require_once '../../src/common/order_track_perm_lib.php';
+require_once '../../src/common/order_auto_pmget_lib.php';  // 指定特定設計＝存檔自動轉生管（唯一實作）
 
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
@@ -264,7 +265,9 @@ try {
         }
         // 共用附件同步：這張新訂單若跟既有訂單共用同一個訂單編號，雙向補齊共用附件（見上方函式說明）
         eg_order_attach_sync_shared_by_orderno($db, $_POST['OrderNo']);
-        echo json_encode(['success' => true, 'new_order_id' => $newId, 'message' => isset($_POST['or_new_copy']) ? '新增並複製成功' : '新增成功']);
+        // 指定特定設計(技術)＝自動轉生管（設定在「指派設計」旁的齒輪；名單外不會有任何動作）
+        $autoPm = ot_auto_pmget_apply($db, (int)$newId);
+        echo json_encode(['success' => true, 'new_order_id' => $newId, 'auto_pmget' => $autoPm, 'message' => isset($_POST['or_new_copy']) ? '新增並複製成功' : '新增成功']);
         exit;
     }
 
@@ -350,7 +353,9 @@ try {
         }
         // 共用附件同步：這張訂單若跟其他料號訂單共用同一個訂單編號，雙向補齊共用附件（見上方函式說明）
         eg_order_attach_sync_shared_by_orderno($db, $_POST['OrderNo']);
-        echo json_encode(['success' => true, 'message' => '更新成功']);
+        // 指定特定設計(技術)＝自動轉生管；改成名單外的設計人員時，系統自動蓋的轉生管日會自動退回
+        $autoPm = ot_auto_pmget_apply($db, $editOrderId);
+        echo json_encode(['success' => true, 'auto_pmget' => $autoPm, 'message' => '更新成功']);
         exit;
     }
 
@@ -900,6 +905,9 @@ try {
                     }
                 } catch (PDOException $e) { /* order_attachments 尚未建表（該功能尚未使用過）：略過 */ }
             }
+
+            // 指定特定設計(技術)＝自動轉生管：每列各自帶的設計人員都要判定
+            foreach ($created as $c) { ot_auto_pmget_apply($db, (int)$c['order_id']); }
 
             $db->commit();
             echo json_encode(['success' => true, 'created' => $created, 'message' => '已建立 ' . count($created) . ' 筆訂單']);

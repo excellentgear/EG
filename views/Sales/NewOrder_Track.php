@@ -176,6 +176,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     if ($_POST['action'] === 'save_designer_config') {
         header('Content-Type: application/json');
+        // 前端只有管理員看得到「指派設計」旁的齒輪，後端同規則再擋一次（鐵律8：不可只擋 UI）
+        require_once __DIR__ . '/../../src/common/order_track_perm_lib.php';
+        if (!ot_is_admin($pdo, (int)($_SESSION['id'] ?? 0))) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => '您沒有修改此設定的權限。']);
+            exit;
+        }
         try {
             $config = $_POST['config']; // JSON string
             $user_id = $_SESSION['id'] ?? 0;
@@ -185,13 +192,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     ON DUPLICATE KEY UPDATE param_value = :val_upd, updated_by = :user_upd, updated_at = NOW()";
             $stmt = $pdo->prepare($sql);
             $stmt->execute([':val' => $config, ':user' => $user_id, ':val_upd' => $config, ':user_upd' => $user_id]);
-            
+
+            // 同一個跳窗內的「指定特定設計＝存檔自動轉生管」名單（唯一實作在 order_auto_pmget_lib.php）
+            if (isset($_POST['auto_pmget_ates'])) {
+                require_once __DIR__ . '/../../src/common/order_auto_pmget_lib.php';
+                ot_auto_pmget_save_ids($pdo, (json_decode($_POST['auto_pmget_ates'], true) ?: []), (int)$user_id);
+            }
+
             echo json_encode(['success' => true]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
         }
         exit;
     }
+    // ── 指定特定設計(技術)＝訂單存檔自動轉生管：既有訂單一次回填／退回 ──────
+    //    設定值本身由 save_designer_config 一併寫入；這裡只負責對既有資料套用。
+    if ($_POST['action'] === 'auto_pmget_backfill' || $_POST['action'] === 'save_auto_pmget') {
+        header('Content-Type: application/json');
+        require_once __DIR__ . '/../../src/common/order_track_perm_lib.php';
+        require_once __DIR__ . '/../../src/common/order_auto_pmget_lib.php';
+        $_apm_uid = (int)($_SESSION['id'] ?? 0);
+        if (!ot_is_admin($pdo, $_apm_uid)) {   // 鐵律8：前端擋一次，後端同規則再擋一次
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => '您沒有修改此設定的權限。']);
+            exit;
+        }
+        try {
+            if ($_POST['action'] === 'save_auto_pmget') {
+                $_apm_ids = ot_auto_pmget_save_ids($pdo, (json_decode($_POST['ates'] ?? '[]', true) ?: []), $_apm_uid);
+                echo json_encode(['success' => true, 'ates' => $_apm_ids]);
+            } else {
+                // dry=1 只試算筆數不寫入，讓使用者確認後才真的動既有資料
+                echo json_encode(['success' => true, 'result' => ot_auto_pmget_backfill($pdo, !empty($_POST['dry']))]);
+            }
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+
     if ($_POST['action'] === 'get_dept_data') {
         header('Content-Type: application/json');
         try {
@@ -220,8 +259,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $config_row = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group = 'DESIGNER_SETTING' AND param_key = 'designer_config'")->fetch(PDO::FETCH_ASSOC);
             // 主要設計部門＝全站「組織角色綁定設定」的設計／技術部門，本頁不可改（2026-08-03）
             require_once __DIR__ . '/../../src/common/org_role_lib.php';
+            require_once __DIR__ . '/../../src/common/order_auto_pmget_lib.php';
             echo json_encode(['success' => true, 'depts' => $depts, 'users' => $users,
                 'rd_dept_id' => eg_org_dept($pdo, 'rd_dept'),
+                'auto_pmget_ates' => ot_auto_pmget_ids($pdo, true),
                 'config' => $config_row ? json_decode($config_row['param_value'], true) : null]);
         } catch (Exception $e) { echo json_encode(['success' => false, 'message' => $e->getMessage()]); }
         exit;
@@ -2722,6 +2763,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                 echo '<button type="button" class="btn btn-xs btn-danger" style="padding: 1px 5px; font-size: 11px;" onclick="cancelPmGet(\'' . $order['Order_id'] . '\')">X</button> ';
                             }
                             echo '<span style="font-size: 12px;">' . $order['pmGet_formatted'] . '</span>';
+                            // 系統依「指定特定設計自動轉生管」設定蓋上的，標一個小圖示讓人知道改掉指派設計就會自動退回
+                            if (!empty($order['pmGet_auto'])) {
+                                echo ' <i class="fa fa-magic" style="color:#F0A24B;font-size:10px;" title="依「指定特定設計自動轉生管」設定自動標記；把指派設計改成名單外的對象即自動退回"></i>';
+                            }
                         }
                         if ($is_closed) {
                             echo '<div style="font-size:11px;color:#8e44ad;margin-top:2px;"><i class="fa fa-check-circle"></i> 已結案</div>';
@@ -3809,6 +3854,45 @@ foreach($dCounts as $c) {
                             <div class="panel-body">
                                 <div class="form-group"><label>選擇部門</label><select class="form-control" id="extra2_dept_select" onchange="loadDeptUsers(this.value, 'extra2_users_container', true)"></select></div>
                                 <div class="form-group"><label>選擇人員 (需填寫說明)</label><div id="extra2_users_container" style="max-height: 150px; overflow-y: auto; border: 1px solid #eee; padding: 5px;"></div></div>
+                            </div>
+                        </div>
+
+                        <!-- 指定特定設計(技術)＝訂單存檔即自動轉生管 -->
+                        <div class="panel" style="border-color:#E4D3BC;">
+                            <div class="panel-heading" style="background:#FFF3E2;color:#8a5a2b;border-color:#E4D3BC;font-weight:600;">
+                                <i class="fa fa-magic"></i> 指定這些設計對象時，存檔自動轉生管
+                            </div>
+                            <div class="panel-body">
+                                <div style="font-size:11px;color:#8a5a2b;background:#FFF9F0;border:1px solid #F0E2CC;border-radius:3px;padding:6px 8px;margin-bottom:8px;line-height:1.6;">
+                                    勾選的對象一旦被指派為「指派設計」，訂單一存檔就直接變成
+                                    <b>已轉生管</b>的狀態（不必再按「審圖」「轉生管」）。<br>
+                                    ・轉生管日取該筆訂單的<b>設計接收日</b>，沒填才用存檔當天。<br>
+                                    ・之後把指派設計改成<b>沒有勾選</b>的對象，系統會自動把它蓋上的轉生管日退回「未按任何按鈕」的狀態。<br>
+                                    ・<b>人工按過「轉生管」鈕的日期不會被動到</b>，也不會被自動覆蓋或清除。<br>
+                                    ・若手動按 X 取消了自動蓋上的日期，下次這張訂單存檔時會依設定再蓋回來（要停掉請改指派設計或取消勾選）。<br>
+                                    ・不勾任何一個＝關閉本功能（原本自動蓋上的會在下次存檔或按下方按鈕時退回）。
+                                </div>
+                                <div id="auto_pmget_container" style="max-height:170px;overflow-y:auto;border:1px solid #eee;padding:5px;">
+                                    <div class="checkbox" style="margin:3px 0;"><label style="font-weight:normal;">
+                                        <input type="checkbox" class="auto-pmget-check" value="2"> 無 (不經設計)
+                                    </label></div>
+<?php foreach($ate_list as $ate):
+    $dn = $ate['user_cname'];
+    if (!empty($ate['extra_desc'])) { $dn .= '（' . $ate['extra_desc'] . '）'; }
+?>
+                                    <div class="checkbox" style="margin:3px 0;"><label style="font-weight:normal;">
+                                        <input type="checkbox" class="auto-pmget-check" value="<?= intval($ate['id']) ?>"> <?= safe_html($dn) ?>
+                                    </label></div>
+<?php endforeach; ?>
+                                </div>
+                                <div style="margin-top:8px;">
+                                    <button type="button" class="btn btn-xs btn-default" onclick="runAutoPmgetBackfill()">
+                                        <i class="fa fa-refresh"></i> 存設定並套用到既有訂單
+                                    </button>
+                                    <span style="font-size:11px;color:#999;margin-left:4px;">
+                                        會先試算影響筆數再請你確認；只處理<b>未結案</b>的訂單。
+                                    </span>
+                                </div>
                             </div>
                         </div>
                     </form>
@@ -7228,11 +7312,16 @@ foreach($dCounts as $c) {
                         return;
                     }
 
+                    // 「指定特定設計＝存檔自動轉生管」的結果提示（後端回傳 set/clear/none）
+                    var autoPmMsg = '';
+                    if (data && data.auto_pmget === 'set')        autoPmMsg = '（已依「指定特定設計自動轉生管」設定標記為已轉生管）';
+                    else if (data && data.auto_pmget === 'clear') autoPmMsg = '（指派設計已改為不自動轉生管的對象，系統自動蓋的轉生管日已退回）';
+
                     // 儲存成功後：若料號為組合件且尚未展開過，先詢問是否自動展開子件訂單，再走原本收尾
                     var proceedAfterSave = function(promptShown) {
                         if (isCopy) {
                             if (orderId) {
-                                showToast('更新成功！已切換為新增模式，您可以繼續編輯下一筆。');
+                                showToast('更新成功！' + autoPmMsg + '已切換為新增模式，您可以繼續編輯下一筆。');
                                 $('#hidden_Order_id').val('');
                                 $('#btn-save-copy').text('新增並複製');
                                 $('#btn-save').text('確認新增');
@@ -7242,7 +7331,7 @@ foreach($dCounts as $c) {
                                 }
                                 $('.modal-title').html('<i class="fa fa-plus-circle"></i> 新增訂單');
                             } else {
-                                showToast('新增成功！您可以繼續編輯下一筆。');
+                                showToast('新增成功！' + autoPmMsg + '您可以繼續編輯下一筆。');
                             }
                             // 剛剛的附件已隨訂單存檔轉正，清空畫面上的暫存附件清單（batch_key 字串不變，下一筆仍可續用）
                             orderAttachRenderList([]);
@@ -7252,8 +7341,8 @@ foreach($dCounts as $c) {
                                 setTimeout(function() { $('#newOrderModal').modal('show'); }, 350);
                             }
                         } else {
-                            showToast('操作成功！頁面將重新整理...');
-                            setTimeout(function() { location.reload(); }, 800);
+                            showToast('操作成功！' + autoPmMsg + '頁面將重新整理...');
+                            setTimeout(function() { location.reload(); }, autoPmMsg ? 1800 : 800);
                         }
                     };
                     maybePromptAssemblyExpand(newOrderId || orderId || null, proceedAfterSave);
@@ -7983,6 +8072,11 @@ foreach($dCounts as $c) {
                             loadDeptUsers(res.config.extra_depts[1].dept_id, 'extra2_users_container', true, res.config.extra_depts[1].users);
                         }
                     }
+                    // 指定特定設計＝存檔自動轉生管：把已存的名單勾回來
+                    var autoIds = (res.auto_pmget_ates || []).map(String);
+                    $('#auto_pmget_container .auto-pmget-check').each(function() {
+                        $(this).prop('checked', autoIds.indexOf(String($(this).val())) !== -1);
+                    });
                     $('#designerSettingModal').modal('show');
                 }
             }, 'json');
@@ -8030,7 +8124,34 @@ foreach($dCounts as $c) {
             if (extra1Id) { var users = []; $('#extra1_users_container .user-check:checked').each(function() { users.push({ id: $(this).val(), desc: $(this).closest('.checkbox').find('.user-desc').val() }); }); config.extra_depts.push({ dept_id: extra1Id, users: users }); }
             var extra2Id = $('#extra2_dept_select').val();
             if (extra2Id) { var users = []; $('#extra2_users_container .user-check:checked').each(function() { users.push({ id: $(this).val(), desc: $(this).closest('.checkbox').find('.user-desc').val() }); }); config.extra_depts.push({ dept_id: extra2Id, users: users }); }
-            $.post('', { action: 'save_designer_config', config: JSON.stringify(config) }, function(res) { if (res.success) { alert('設定已儲存，頁面將重新整理'); location.reload(); } else { alert('儲存失敗: ' + res.message); } }, 'json');
+            $.post('', { action: 'save_designer_config', config: JSON.stringify(config), auto_pmget_ates: JSON.stringify(collectAutoPmgetIds()) }, function(res) { if (res.success) { alert('設定已儲存，頁面將重新整理'); location.reload(); } else { alert('儲存失敗: ' + res.message); } }, 'json');
+        }
+
+        // --- 指定特定設計(技術)＝訂單存檔自動轉生管 ---
+        function collectAutoPmgetIds() {
+            var ids = [];
+            $('#auto_pmget_container .auto-pmget-check:checked').each(function() { ids.push($(this).val()); });
+            return ids;
+        }
+
+        // 先存名單，再試算會影響幾筆既有訂單，使用者確認後才真的寫入
+        function runAutoPmgetBackfill() {
+            var NL = String.fromCharCode(10);
+            var ids = collectAutoPmgetIds();
+            $.post('', { action: 'save_auto_pmget', ates: JSON.stringify(ids) }, function(res) {
+                if (!res || !res.success) { alert('設定儲存失敗：' + ((res && res.message) || '未知錯誤')); return; }
+                $.post('', { action: 'auto_pmget_backfill', dry: 1 }, function(r2) {
+                    if (!r2 || !r2.success) { alert('試算失敗：' + ((r2 && r2.message) || '未知錯誤')); return; }
+                    var nSet = r2.result.set || 0, nClr = r2.result.clear || 0;
+                    if (nSet === 0 && nClr === 0) { alert('設定已儲存。既有的未結案訂單沒有需要異動的資料。'); return; }
+                    if (!confirm('設定已儲存。' + NL + NL + '即將對既有的未結案訂單套用：' + NL + '・自動補上轉生管日：' + nSet + ' 筆' + NL + '・退回（清除系統自動蓋的轉生管日）：' + nClr + ' 筆' + NL + NL + '人工按過「轉生管」鈕的訂單不受影響。要執行嗎？')) return;
+                    $.post('', { action: 'auto_pmget_backfill', dry: 0 }, function(r3) {
+                        if (!r3 || !r3.success) { alert('執行失敗：' + ((r3 && r3.message) || '未知錯誤')); return; }
+                        alert('已完成：補上 ' + (r3.result.set || 0) + ' 筆、退回 ' + (r3.result.clear || 0) + ' 筆，頁面將重新整理。');
+                        location.reload();
+                    }, 'json');
+                }, 'json');
+            }, 'json');
         }
 
         // --- Shared Modal Functions ---
@@ -10322,4 +10443,4 @@ window.otHasFeat = function(code) {
 </script>
 
 </body>
-</html>
+</html>
