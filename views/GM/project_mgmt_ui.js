@@ -797,7 +797,14 @@ function taskDeptOptions(curDeptId) {
     return h;
 }
 /* 該部門（含子部門）底下的人；兼任者以「他在這個部門的職稱」呈現，同部門樹下有多個職務時取職級最高的 */
-function taskOwnerOptions(deptId, curOwnerId) {
+/**
+ * 某部門（含子部門）底下可挑的人。
+ * keepOutsider＝true 時，會把「目前這一列已指派、但不屬於這個部門」的人保留為最後一個選項，
+ * 並清楚標成（原指派）——這只用在「載入既有資料」時，避免舊資料的負責人被默默清掉。
+ * 使用者**自己動手換部門**時一律 false：換了部門就該只看到那個部門的人
+ * （使用者回報「品管組怎麼跳出生產課的人員」＝原本兩種情境共用同一段邏輯造成的）。
+ */
+function taskOwnerOptions(deptId, curOwnerId, keepOutsider) {
     var ids = deptSubtreeIds(deptId), byUser = {}, list = [];
     if (num(deptId)) {
         $.each(META.people_posts || [], function (i, ps) {
@@ -826,11 +833,11 @@ function taskOwnerOptions(deptId, curOwnerId) {
         h += '<option value="' + ps.user_id + '"' + (num(ps.user_id) === num(curOwnerId) ? ' selected' : '') + '>'
            + esc(label) + '</option>';
     });
-    /* 目前這一列已指派的人若不在這個部門底下（改過部門、或人員異動），仍要保留，不可默默清空 */
-    if (num(curOwnerId) && !has) {
+    /* 載入既有資料時：已指派但不屬於這個部門的人仍要保留（不可默默清空），但要標明是原指派 */
+    if (keepOutsider && num(curOwnerId) && !has) {
         var cp = peopleById(curOwnerId);
-        h += '<option value="' + num(curOwnerId) + '" selected>'
-           + esc(cp ? peopleLabel(cp) : ('（已離職或已移除的人員 #' + num(curOwnerId) + '）')) + '</option>';
+        h += '<option value="' + num(curOwnerId) + '" selected>（原指派）'
+           + esc(cp ? peopleLabel(cp) : ('已離職或已移除的人員 #' + num(curOwnerId))) + '</option>';
     }
     return h;
 }
@@ -934,7 +941,7 @@ function drawPlanEditor(res) {
 function planRowHtml(t, i) {
     t = t || {};
     var did = num(t.owner_dept_id) || guessOwnerDept(num(t.owner_id));
-    var dOpt = taskDeptOptions(did), pOpt = taskOwnerOptions(did, num(t.owner_id));
+    var dOpt = taskDeptOptions(did), pOpt = taskOwnerOptions(did, num(t.owner_id), true);
     /* 實際日期在核准前反灰（後端 plan_save 也會忽略，不是只擋 UI＝鐵律8）。
        ※ class 要併進同一個 class 屬性——寫成兩個 class="" 的話後面那個會被 HTML 解析器丟掉（灰底就不會出現）。 */
     var actCls = PLAN_ACT_OPEN ? '' : ' ro-auto';
@@ -1072,7 +1079,8 @@ $(document).on('change', '#planEditBox .t-odept', function () {
     var $td = $(this).closest('td'), $own = $td.find('.t-owner');
     var el = $own[0];
     if (!el) return;
-    var pOpt = taskOwnerOptions(num($(this).val()), num($own.val()));
+    /* 使用者自己換部門 → 只列這個部門的人；原本指派的人若不在這裡就清掉（推導欄位鐵則） */
+    var pOpt = taskOwnerOptions(num($(this).val()), num($own.val()), false);
     el.innerHTML = pOpt;
     /* 換掉整批選項後一定要讓共用檔的篩選框重新快照，否則它會拿舊清單把新選項洗掉
        （eg_input_rules 規則7 提供的 egFilterResnap 就是給這種情況用的，不要自己動它的內部狀態） */
@@ -1484,6 +1492,39 @@ function renderRel(res) {
           + '<p class="pj-hint">本頁只讀 BOM，不會改動 BOM 任何資料；你在這裡加的註記與里程碑同步時不會被覆蓋。</p>';
     }
     h += '</div>';
+
+    /* 報工紀錄（使用者要求）：廠內每日報工＋委外轉出入，一律唯讀 */
+    h += '<div class="sec"><h5>報工紀錄（唯讀，來自生產現場）</h5>';
+    var wr = res.work_reports || [];
+    if (!wr.length) {
+        h += '<div class="pj-hint">這些製令目前還沒有報工紀錄。'
+           + '<b>廠內製程</b>的紀錄來自每日製程報工（機台、上機／生產人員、產出數）；'
+           + '<b>委外製程</b>沒有廠內報工，實績看的是轉出入紀錄（轉出入日期、數量、損耗）。</div>';
+    } else {
+        h += '<div style="overflow-x:auto;max-height:340px;overflow-y:auto;"><table class="sub-tbl"><thead><tr>'
+          + '<th style="width:88px;">日期</th><th style="width:56px;">類型</th>'
+          + '<th style="width:110px;">製令單</th><th style="width:46px;">順序</th><th>製程</th>'
+          + '<th style="width:110px;">機台／廠商</th><th style="width:150px;">人員／轉出入</th>'
+          + '<th style="width:64px;">數量</th><th style="width:56px;">狀態</th><th>備註</th></tr></thead><tbody>';
+        $.each(wr, function (i, r) {
+            var isIn = (r.kind === 'in');
+            h += '<tr><td>' + dispDate(r.rdate) + '</td>'
+              + '<td>' + (isIn ? '<span class="st st-approved">廠內</span>' : '<span class="st st-submitted">委外</span>') + '</td>'
+              + '<td>' + esc(r.bom || '') + '</td><td>' + num(r.bom_sn) + '</td>'
+              + '<td>' + esc(r.process_name || ('製程' + num(r.process_no))) + '</td>'
+              + '<td>' + esc(isIn ? (r.machine_name || '－') : (r.maker_to_name || r.maker_from_name || '－')) + '</td>'
+              + '<td>' + esc(isIn
+                    ? ((r.setup_user ? '上機 ' + r.setup_user + '　' : '') + (r.prod_user ? '生產 ' + r.prod_user : '') || '－')
+                    : ((r.maker_from_name || '?') + ' → ' + (r.maker_to_name || '?'))) + '</td>'
+              + '<td>' + num(r.qty) + (num(r.loss_qty) ? '<br><span class="pj-hint">損耗 ' + num(r.loss_qty) + '</span>' : '') + '</td>'
+              + '<td>' + (isIn ? (num(r.is_finished) ? '<span class="st st-approved">完工</span>' : '進行中') : '－') + '</td>'
+              + '<td>' + esc(r.note || '') + '</td></tr>';
+        });
+        h += '</tbody></table></div>'
+          + '<p class="pj-hint">共 ' + wr.length + ' 筆，依日期由新到舊。這些是生產現場登打的原始紀錄，本頁只顯示不修改。</p>';
+    }
+    h += '</div>';
+
     $('#paneRel').html(h);
 }
 

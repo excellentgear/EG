@@ -1167,6 +1167,75 @@ function prj_bom_rows(PDO $db, int $projectId): array
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
+/**
+ * 專案的報工紀錄（使用者要求顯示在「關聯資料」）。
+ * 兩種來源，一起列出來才完整：
+ *   ①廠內報工 pm_process_daily_report（每日製程報工：機台／上機人員／生產人員／產出數／是否完工）
+ *   ②委外轉出入 bom_ing_transfer_log（委外製程沒有廠內報工，實績是轉出入紀錄：轉出入日、數量、損耗）
+ * 製令的來源沿用 prj_bom_rows() 那三種訂單對應（不可只認 bom.o_order_id，86% 是空的）。
+ * 一律唯讀，本頁不會寫回任何生產資料。
+ */
+function prj_work_reports(PDO $db, int $projectId): array
+{
+    $src = "SELECT m1.bom AS bom FROM bom_order_process_map m1
+              JOIN project_order po1 ON po1.order_id = m1.order_id AND po1.project_id = ?
+            UNION
+            SELECT b2.bom FROM bom b2
+              JOIN project_order po2 ON po2.project_id = ?
+              JOIN order_track ot2 ON ot2.Order_id = po2.order_id
+             WHERE b2.o_order_id IS NOT NULL AND b2.o_order_id <> ''
+               AND (b2.o_order_id = CAST(po2.order_id AS CHAR) OR b2.o_order_id = ot2.Order_oo)";
+    $out = [];
+
+    // ① 廠內報工
+    try {
+        $sql = "SELECT 'in' AS kind, r.report_id AS id, bi.bom, bi.bom_sn, r.report_date AS rdate,
+                       pn.ProcessName AS process_name, r.process_no,
+                       ml.machine AS machine_name,
+                       us.user_cname AS setup_user, up.user_cname AS prod_user,
+                       r.produced_qty AS qty, r.is_finished, r.remark AS note,
+                       r.production_start_time AS t1, r.production_end_time AS t2
+                  FROM pm_process_daily_report r
+                  JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
+                  JOIN ($src) srcA ON srcA.bom = bi.bom
+                  LEFT JOIN process_no  pn ON pn.ProcessNo = r.process_no
+                  LEFT JOIN machine_list ml ON ml.machine_id = r.machine_id
+                  LEFT JOIN `user` us ON us.id = r.setup_user_id
+                  LEFT JOIN `user` up ON up.id = r.production_user_id
+                 ORDER BY r.report_date DESC, r.report_id DESC";
+        $st = $db->prepare($sql);
+        $st->execute([$projectId, $projectId]);
+        $out = array_merge($out, $st->fetchAll(PDO::FETCH_ASSOC));
+    } catch (Throwable $e) {}
+
+    // ② 委外轉出入
+    try {
+        $sql = "SELECT 'out' AS kind, tl.transfer_id AS id, tl.bom, tl.bom_sn,
+                       DATE(tl.transfer_date) AS rdate,
+                       pn.ProcessName AS process_name, bi.process_no,
+                       NULL AS machine_name, NULL AS setup_user, NULL AS prod_user,
+                       tl.transfer_qty AS qty, NULL AS is_finished, tl.note,
+                       mf.maker_id AS maker_from_name, mt.maker_id AS maker_to_name, tl.loss_qty
+                  FROM bom_ing_transfer_log tl
+                  JOIN ($src) srcB ON srcB.bom = tl.bom
+                  LEFT JOIN bom_ing bi ON bi.bom = tl.bom AND bi.bom_sn = tl.bom_sn
+                  LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                  LEFT JOIN maker_list mf ON mf.maker_id_no = tl.maker_from
+                  LEFT JOIN maker_list mt ON mt.maker_id_no = tl.maker_to
+                 ORDER BY tl.transfer_date DESC, tl.transfer_id DESC";
+        $st = $db->prepare($sql);
+        $st->execute([$projectId, $projectId]);
+        $out = array_merge($out, $st->fetchAll(PDO::FETCH_ASSOC));
+    } catch (Throwable $e) {}
+
+    // 依日期由新到舊排（兩種來源混在一起看時序才有意義）
+    usort($out, static function ($a, $b) {
+        $d = strcmp((string)($b['rdate'] ?? ''), (string)($a['rdate'] ?? ''));
+        return $d !== 0 ? $d : ((int)($b['id'] ?? 0) <=> (int)($a['id'] ?? 0));
+    });
+    return $out;
+}
+
 /** 同步比對指紋：這些欄位任一變動就算 BOM 製程被改過，要提示專案管理人 */
 function prj_bom_sig(array $r): string
 {

@@ -199,6 +199,7 @@ case 'get':
         'orders'    => prj_orders($db, $pid),
         'parts'     => prj_parts($db, $pid),
         'processes' => prj_processes($db, $pid),
+        'work_reports' => prj_work_reports($db, $pid),
         'cards'     => prj_cards($db, $pid),
         'cosigns'   => prj_cosigns($db, $pid),
         'alerts'    => prj_bom_alerts($db, $pid),
