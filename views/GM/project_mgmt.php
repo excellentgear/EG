@@ -9,6 +9,12 @@
  *       列印仍用紙本的格狀周期表，維持 AS 文件 1:1。
  */
 session_start();
+/* 這一頁的 HTML 一律不進瀏覽器快取。
+   原因：JS 是用 project_mgmt_ui.js?v=<檔案 mtime> 破快取的，但那個 v 是寫在 HTML 裡的；
+   HTML 本身若被瀏覽器快取住，重新整理拿到的還是舊的 v，於是**改好的 JS 永遠載不進來**，
+   使用者會遇到「明明修好了、我這邊還是壞的」。JS/CSS 檔本身仍照常快取，不影響速度。 */
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
 if (!isset($_SESSION['userName'])) {
     $_SESSION['lastpage'] = "../../views/GM/project_mgmt.php";
     header("Location:../../index.php");
@@ -648,7 +654,10 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 A：自動產生後不提供修改，避免號碼撞號。要補歷史專案請用管理員的批次自動簽核並指定業務日期。</li>
         </ul>
     </div>
-    <div class="m-foot"><button onclick="closeMask('helpUseMask')">關閉</button></div>
+    <div class="m-foot">
+        <span class="pj-hint" style="float:left;padding-top:6px;">程式版本：<?= date('Y.m.d H:i', (int)$av('views/GM/project_mgmt_ui.js')) ?></span>
+        <button onclick="closeMask('helpUseMask')">關閉</button>
+    </div>
 </div></div>
 
 <button class="pj-totop" id="btnTop"><i class="fa fa-arrow-up"></i></button>
