@@ -21,9 +21,12 @@
  *   php 2026-08-25_part_attach_to_as9100.php --copy     # 複製檔案（可重複執行，已存在且大小相同者跳過）
  *   php 2026-08-25_part_attach_to_as9100.php --verify   # 逐檔比對來源與目標（數量／大小）
  *   php 2026-08-25_part_attach_to_as9100.php --switch   # 驗證通過後才把設定值改成新位置
- *   php 2026-08-25_part_attach_to_as9100.php --rollback # 把設定值改回舊位置（檔案不刪，隨時可退）
+ *   php 2026-08-25_part_attach_to_as9100.php --rollback # 把設定值改回舊位置
  *
- * 舊資料夾**刻意不刪**：留著當備份，等使用者確認新位置一切正常再自行刪除。
+ * ★ 本次搬家**已完成**（2026-08-25 切換設定值；2026-08-26 依使用者指示刪除舊資料夾，
+ *   理由是「避免誤認以為還有在使用」）。刪除前做過全部 737 檔的 md5 逐一比對、
+ *   確認新位置一模一樣且切換後沒有任何程式再寫進舊位置。**所以現在跑本檔只會停在
+ *   「來源資料夾讀不到」**，那是正確行為，不是壞掉；檔案留著是給下一次搬家當範本用的。
  */
 
 require_once __DIR__ . '/../../../src/common/DBConnection.php';
@@ -65,7 +68,12 @@ function list_files(string $base): array {
 
 echo "來源：$OLD\n目標：$NEW\n目前設定值：", cur_setting($pdo), "\n\n";
 
-if (!is_dir($OLD)) { fwrite(STDERR, "來源資料夾讀不到，中止\n"); exit(1); }
+if (!is_dir($OLD)) {
+    fwrite(STDERR, "來源資料夾讀不到，中止。\n"
+                 . "（本次搬家已於 2026-08-25 完成，舊資料夾也已在 2026-08-26 依使用者指示刪除，\n"
+                 . "  所以看到這行是正常的；目前設定值＝" . cur_setting($pdo) . "）\n");
+    exit(1);
+}
 
 $src = list_files($OLD);
 $dst = is_dir($NEW) ? list_files($NEW) : [];
@@ -93,10 +101,10 @@ switch ($mode) {
         $miss = $diff = 0;
         foreach ($src as $rel => $size) {
             if (!isset($dst[$rel]))      { $miss++; echo "  目標缺少：$rel\n"; }
-            elseif ($dst[$rel] !== $size) { $diff++; echo "  大小不同：$rel（來源 $size / 目標 {$dst[$rel]}）\n"; }
+            elseif ($dst[$rel] !== $size) { $diff++; echo "  大小不同：{$rel}（來源 $size / 目標 {$dst[$rel]}）\n"; }
         }
         $extra = count(array_diff_key($dst, $src));
-        echo ($miss || $diff) ? "驗證未通過：缺少 $miss、大小不同 $diff\n"
+        echo ($miss || $diff) ? "驗證未通過：缺少 {$miss}、大小不同 $diff\n"
                               : "驗證通過：$OLD 的每一個檔案都在目標且大小相同（目標另有 $extra 個新檔）\n";
         exit(($miss || $diff) ? 1 : 0);
     }
@@ -104,7 +112,7 @@ switch ($mode) {
         // 沒驗證過不准切換：切下去所有頁面立刻改讀新位置，少一個檔就是一張圖打不開
         foreach ($src as $rel => $size) {
             if (!isset($dst[$rel]) || $dst[$rel] !== $size) {
-                fwrite(STDERR, "尚未複製完整（$rel），請先跑 --copy 與 --verify\n"); exit(1);
+                fwrite(STDERR, "尚未複製完整（{$rel}），請先跑 --copy 與 --verify\n"); exit(1);
             }
         }
         set_setting($pdo, $NEW);
@@ -113,6 +121,13 @@ switch ($mode) {
         break;
     }
     case '--rollback': {
+        // 2026-08-26：使用者確認資料都過去之後，舊資料夾已整個刪除（避免有人誤以為還在用），
+        // 所以這條退路已經失效——真的要退回去，得先把檔案從新位置複製回舊位置。
+        if (!is_dir($OLD)) {
+            fwrite(STDERR, "舊資料夾已不存在（2026-08-26 依使用者指示刪除），不能只改設定值退回去。\n"
+                         . "要退回請先把 $NEW 的內容複製回 $OLD，再重跑本指令。\n");
+            exit(1);
+        }
         set_setting($pdo, $OLD);
         echo "已改回 part_attach_nas_dir → ", cur_setting($pdo), "\n";
         break;
