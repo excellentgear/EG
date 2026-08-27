@@ -585,7 +585,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_transfer_log_raw">
                                                 更新加工單價 <b>ERP原始檔直接匯入</b><small>(只接受.xls/.xlsx)</small><br>
                                                 <span class="required">*</span>
-                                                <span class="text-muted" style="font-size:11px;">直接上傳 ERP 移轉紀錄原始檔<br>免 VBA 轉檔，民國年自動轉西元</span>
+                                                <span class="text-muted" style="font-size:11px;">資料來源＝ERP 的<b>製程移轉憑單</b><br>直接上傳 ERP 移轉紀錄原始檔<br>免 VBA 轉檔，民國年自動轉西元</span>
                                             </label>
                                             <div class="col-md-4 col-sm-4 col-xs-8">
                                                 <div class="input-group">
