@@ -940,6 +940,12 @@ if ($reply_id != "") {
                                                 </select>
                                             </td>
                                         </tr>
+                                        <tr>
+                                            <td style="vertical-align:middle;">容器</td>
+                                            <td>
+                                                <div id="custom-container-info" style="font-size:13px;color:#7A4A12;background:#FDF3E3;border:1px dashed #E0B77A;border-radius:3px;padding:4px 8px;">－</div>
+                                            </td>
+                                        </tr>
                                         <tr class="custom-modal-options" style="display:none;">
                                             <td style="vertical-align:middle;">操作</td>
                                             <td>
@@ -4131,6 +4137,7 @@ if ($reply_id != "") {
                 $modal.find('#select-bom-ing').html('<option value="">請先更新BOM</option>');
                 $('#btn-custom-qrcode').hide();
                 customBomData = null; // 清除暫存資料
+                $('#custom-container-info').text('－');
             });
 
             // 更新 BOM 資料
@@ -4193,6 +4200,7 @@ if ($reply_id != "") {
                         $modal.find('.custom-modal-options').hide();
                         $sel.trigger('change');
                     }
+                    refreshCustomContainer();
                 }).fail(function() {
                     $btn.prop('disabled', false).text('更新');
                     customBomData = null;
@@ -4200,9 +4208,39 @@ if ($reply_id != "") {
                 });
             });
 
+            // 容器顯示：直接顯示「此 BOM 最新容器資訊」（取 bom_sn 最大且有填容器的那一站）
+            function customContainerText(p1, p2) {
+                var names = { 'P': 'PP箱', 'E': '蝴蝶籠', 'T': '鐵桶', '板': '棧板' };
+                var out = [];
+                [p1, p2].forEach(function(v) {
+                    v = (v == null ? '' : String(v)).trim();
+                    if (!v) return;
+                    var m = v.match(/^(\d+)\s*(.+)$/);
+                    out.push(m ? (m[1] + ' ' + (names[m[2]] || m[2])) : v);
+                });
+                return out.join('、');
+            }
+            function refreshCustomContainer() {
+                var $box = $('#custom-container-info');
+                var procs = (customBomData && customBomData.processes) ? customBomData.processes : null;
+                if (!procs || !procs.length) { $box.text('－'); return; }
+                var latest = null;
+                procs.forEach(function(p) {
+                    if (!p.BIQC_ps && !p.BIQC_ps2) return;
+                    if (!latest || parseInt(p.bom_sn || 0, 10) >= parseInt(latest.bom_sn || 0, 10)) latest = p;
+                });
+                if (!latest) { $box.text('此 BOM 尚無容器紀錄'); return; }
+                var txt = customContainerText(latest.BIQC_ps, latest.BIQC_ps2);
+                var from = '[' + (latest.bom_sn || '') + '] ' + (latest.ProcessName || '');
+                $box.empty()
+                    .append($('<b>').text(txt || '－'))
+                    .append($('<span style="color:#8a6a3a;font-size:12px;">').text('　最新來自 ' + from));
+            }
+
             // 製程有選取才顯示 QR Code 按鈕
             $(document).on('change', '#select-bom-ing', function() {
                 $('#btn-custom-qrcode').toggle(!!$(this).val());
+                refreshCustomContainer();
             });
 
             // 新增報工 Modal 的 QR Code 按鈕（與列表上的 QR Code 同功能）

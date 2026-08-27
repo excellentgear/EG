@@ -378,6 +378,7 @@ $can_delete = ($permission_code && (strpos($permission_code, 'A') !== false || s
 
 // --- 角色功能碼（新機制，與上方舊 CRUD 規則並存：舊規則 OR 新功能碼，任一成立即可）---
 require_once '../../src/common/role_features_helper.php';
+require_once '../../src/common/qc_container_lib.php'; // 容器選項與權限判定唯一實作
 $_oready_features = rf_load_user_features($db, $id);
 $can_manual_close = $can_manual_close || rf_has_feature($_oready_features, 'oready_manual_close');
 $can_create       = $can_create       || rf_has_feature($_oready_features, 'oready_create');
@@ -741,6 +742,7 @@ foreach ($raw_ps_list as $_iam_item) {
         'QC_check'         => $_iam_item['QC_check'] ?? null,
         'QC_check_date'    => !empty($_iam_qcd) && $_iam_qcd !== '0000-00-00 00:00:00' ? $_iam_fmt($_iam_qcd) : null,
         'QC_ps'            => $_iam_item['QC_ps'] ?? null,
+        'QC_ps2'           => $_iam_item['QC_ps2'] ?? null,
         'qc_completed'     => (int)($_iam_item['qc_completed'] ?? 0),
         'qc_completed_at'  => $_iam_fmt($_iam_item['qc_completed_at'] ?? null),
         'maker_id'         => $_iam_item['maker_id'] ?? '',
@@ -1451,6 +1453,10 @@ echo "    window.featMarkReturned = " . json_encode((bool)$oready_feat_mark_retu
 echo "    window.featTransfer = " . json_encode((bool)$oready_feat_transfer) . "; // 功能碼 oready_transfer\n";
 echo "    window.featBatchOp = " . json_encode((bool)$oready_feat_batch) . "; // 功能碼 oready_batch_split_merge\n";
 echo "    window.featSeePrice = " . json_encode((bool)$oready_feat_view_price) . "; // 功能碼 oready_view_price\n";
+echo "    window.EG_QC_CONTAINERS = " . json_encode(eg_qc_container_options(), JSON_UNESCAPED_UNICODE) . "; // 容器選項（唯一來源 qc_container_lib.php）
+";
+echo "    window.canEditContainer = " . json_encode(eg_qc_container_can_edit($db, $id)) . "; // 可否回報容器
+";
 echo "    window.oreadyIsAdmin = " . json_encode($permission_code === 'A') . "; // 目前權限=A者可開啟角色功能設定\n";
 echo "    window.globalWorkdaysList = " . json_encode($js_workdays_list_php) . "; // Workday list for JS\n";
 echo "    window.initialLightSettings = " . json_encode($light_settings_php) . ";\n";
@@ -2270,6 +2276,28 @@ echo "</script>\n";
         /* Keep spacing from the previous button */
         /* Background color will be inherited from .all-filters button */
     }
+
+    /* ── 容器回報鈕（暖色系，ai-rules/10）── */
+    .oready-ctn-btn {
+        border: 1px solid #E0B77A;
+        background: #F7E0BD;
+        color: #7A4A12;
+        border-radius: 3px;
+        font-size: 10px;
+        line-height: 1;
+        padding: 2px 5px;
+        white-space: nowrap;
+        cursor: pointer;
+    }
+    .oready-ctn-btn.oready-ctn-empty {
+        background: #FFFDF8;
+        border-style: dashed;
+        color: #A8814A;
+    }
+    .oready-ctn-btn.oready-ctn-ro { cursor: not-allowed; opacity: .65; }
+    #qcContainerModal .qc-ctn-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    #qcContainerModal .qc-ctn-row label { margin-bottom: 0; white-space: nowrap; }
+    #qcContainerModal .qc-ctn-hint { font-size: 12px; color: #7A4A12; background: #FDF3E3; border: 1px dashed #E0B77A; border-radius: 3px; padding: 5px 8px; margin-bottom: 8px; }
 
     .btn-return-style {
         padding-left: 3px;
@@ -5480,6 +5508,27 @@ echo "</script>\n";
                             _btnRow.appendChild(_batchSpan);
                             _lightsAttached = true;
                         }
+                    }
+                    // ── 容器回報（QC待驗/待移轉才顯示；資料存 bom_ing.QC_ps/QC_ps2，QC待驗清單的「容器」欄直接讀這裡）──
+                    if (_effectiveSt === 'Q' || _effectiveSt === 'P') {
+                        var _ctnRow = document.createElement('div');
+                        _ctnRow.style.cssText = 'margin-top:2px;display:flex;align-items:center;justify-content:flex-end;';
+                        var _ctnBtn = document.createElement('button');
+                        _ctnBtn.type = 'button';
+                        _ctnBtn.className = 'oready-ctn-btn';
+                        _ctnBtn.setAttribute('data-fid', _fid);
+                        _ctnBtn.setAttribute('data-bom', String(row.bom || ''));
+                        _ctnBtn.setAttribute('data-proc', (_proc.batch_label ? '['+_proc.batch_label+'] ' : '') + (_proc.ProcessName || ''));
+                        renderContainerBtn(_ctnBtn, _proc.QC_ps, _proc.QC_ps2);
+                        if (window.canEditContainer) {
+                            _ctnBtn.onclick = function() { openContainerModal(this); };
+                        } else {
+                            _ctnBtn.classList.add('oready-ctn-ro');
+                            _ctnBtn.title = '無權限修改容器';
+                            _ctnBtn.onclick = function(e) { e.preventDefault(); return false; };
+                        }
+                        _ctnRow.appendChild(_ctnBtn);
+                        _pDiv.appendChild(_ctnRow);
                     }
                     tdOutsourceDate.appendChild(_pDiv);
                 });
@@ -15108,6 +15157,42 @@ echo "</script>\n";
             <!-- /footer content include -->
         </div>
     </div>
+    <!-- ── 容器回報跳窗（寫入 bom_ing.QC_ps/QC_ps2）── -->
+    <div class="modal fade" id="qcContainerModal" tabindex="-1" role="dialog" style="z-index:10060;">
+        <div class="modal-dialog modal-sm" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal">&times;</button>
+                    <h4 class="modal-title" style="font-size:15px;">回報容器</h4>
+                </div>
+                <div class="modal-body">
+                    <div id="qcCtnTarget" style="font-size:12px;color:#555;margin-bottom:8px;"></div>
+                    <div id="qcCtnPrevHint" class="qc-ctn-hint" style="display:none;"></div>
+                    <div class="qc-ctn-row">
+                        <label>容器:</label>
+                        <select class="form-control input-sm qc-ctn-code" style="width:100px;"></select>
+                        <label style="margin-left:6px;">箱數:</label>
+                        <input type="number" class="form-control input-sm qc-ctn-qty" min="0" max="99999" step="1" style="width:70px;">
+                    </div>
+                    <div class="qc-ctn-row">
+                        <label>容器:</label>
+                        <select class="form-control input-sm qc-ctn-code" style="width:100px;"></select>
+                        <label style="margin-left:6px;">箱數:</label>
+                        <input type="number" class="form-control input-sm qc-ctn-qty" min="0" max="99999" step="1" style="width:70px;">
+                    </div>
+                    <div id="qcCtnErr" style="color:#DD5138;font-size:12px;display:none;"></div>
+                </div>
+                <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;">
+                    <button type="button" class="btn btn-default btn-sm" id="qcCtnClear">清除並儲存</button>
+                    <span>
+                        <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+                        <button type="button" class="btn btn-primary btn-sm" id="qcCtnSave">儲存</button>
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Container for Modals (to be populated by JavaScript) -->
     <div id="modals-container"></div>
     
@@ -15266,6 +15351,131 @@ echo "</script>\n";
 
     <!-- jQuery UI JS (用於 Datepicker, 確保在 jQuery 之後載入) -->
     <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
+
+    <script>
+    /* 容器回報：顯示與存檔（資料在 bom_ing.QC_ps / QC_ps2） */
+    (function(){
+        function opts(){ return window.EG_QC_CONTAINERS || []; }
+        function nameOf(code){
+            var o = opts();
+            for (var i=0;i<o.length;i++) if (o[i].code === code) return o[i].name;
+            return code;
+        }
+        window.parseContainerVal = function(v){
+            v = (v == null ? '' : String(v)).trim();
+            if (!v) return null;
+            var m = v.match(/^(\d+)\s*(.+)$/);
+            if (!m) return { qty:'', code:'', name:v, raw:v };
+            return { qty:m[1], code:m[2], name:nameOf(m[2]), raw:v };
+        };
+        window.containerText = function(p1, p2){
+            var out = [];
+            [p1, p2].forEach(function(v){
+                var o = window.parseContainerVal(v);
+                if (o) out.push(o.qty === '' ? o.name : (o.qty + ' ' + o.name));
+            });
+            return out.join('、');
+        };
+        window.renderContainerBtn = function(btn, p1, p2){
+            var txt = window.containerText(p1, p2);
+            btn.setAttribute('data-p1', p1 == null ? '' : p1);
+            btn.setAttribute('data-p2', p2 == null ? '' : p2);
+            if (txt) {
+                btn.textContent = '容器 ' + txt;
+                btn.classList.remove('oready-ctn-empty');
+                btn.title = '容器：' + txt + '（點擊修改）';
+            } else {
+                btn.textContent = '+ 容器';
+                btn.classList.add('oready-ctn-empty');
+                btn.title = '尚未回報容器（點擊填寫）';
+            }
+        };
+        function prevContainer(bom, fid){
+            var procs = ((window.ingActiveMap || {})[String(bom || '').trim()]) || [];
+            var self = null, best = null;
+            procs.forEach(function(p){ if (String(p.bom_ing_fid) === String(fid)) self = p; });
+            var selfSn = self ? parseInt(self.bom_sn || 0, 10) : 999999;
+            procs.forEach(function(p){
+                if (String(p.bom_ing_fid) === String(fid)) return;
+                if (!p.QC_ps) return;
+                var sn = parseInt(p.bom_sn || 0, 10);
+                if (sn > selfSn) return;
+                if (!best || sn > parseInt(best.bom_sn || 0, 10)) best = p;
+            });
+            return best;
+        }
+        function fillRows($m, p1, p2){
+            var $rows = $m.find('.qc-ctn-row');
+            [p1, p2].forEach(function(v, i){
+                var o = window.parseContainerVal(v);
+                $rows.eq(i).find('.qc-ctn-code').val(o ? o.code : '');
+                $rows.eq(i).find('.qc-ctn-qty').val(o && o.qty !== '' ? o.qty : '');
+            });
+        }
+        window.openContainerModal = function(btn){
+            var $m = $('#qcContainerModal');
+            var fid = btn.getAttribute('data-fid');
+            var bom = btn.getAttribute('data-bom');
+            window._qcCtnBtn = btn;
+            $m.find('.qc-ctn-code').each(function(){
+                var $s = $(this).empty().append('<option value="">請選擇</option>');
+                opts().forEach(function(o){ $s.append($('<option>').val(o.code).text(o.name)); });
+            });
+            $m.find('#qcCtnErr').hide().text('');
+            var p1 = btn.getAttribute('data-p1') || '', p2 = btn.getAttribute('data-p2') || '';
+            fillRows($m, p1, p2);
+            $m.find('#qcCtnTarget').text(bom + '　' + (btn.getAttribute('data-proc') || ''));
+            var $hint = $m.find('#qcCtnPrevHint').hide().empty();
+            if (!p1 && !p2) {
+                var prev = prevContainer(bom, fid);
+                if (prev) {
+                    var ptxt = window.containerText(prev.QC_ps, prev.QC_ps2);
+                    $hint.show().html('上一站（' + $('<i>').text(prev.ProcessName || ('#' + prev.bom_sn)).html() +
+                        '）容器：<b>' + $('<i>').text(ptxt).html() + '</b> ');
+                    $('<button type="button" class="btn btn-xs btn-warning">套用</button>')
+                        .on('click', function(){ fillRows($m, prev.QC_ps, prev.QC_ps2); })
+                        .appendTo($hint);
+                }
+            }
+            $m.modal('show');
+        };
+        function submit($m, clear){
+            if (!window._qcCtnBtn) return;
+            var fid = window._qcCtnBtn.getAttribute('data-fid');
+            var codes = [], qtys = [];
+            if (!clear) {
+                $m.find('.qc-ctn-row').each(function(){
+                    codes.push($(this).find('.qc-ctn-code').val() || '');
+                    qtys.push($(this).find('.qc-ctn-qty').val() || '');
+                });
+            } else { codes = ['','']; qtys = ['','']; }
+            if (!clear && codes[0] && String(qtys[0]).trim() === '') {
+                $m.find('#qcCtnErr').show().text('請填寫第一列的箱數');
+                return;
+            }
+            var $btns = $m.find('#qcCtnSave, #qcCtnClear').prop('disabled', true);
+            $.post('../../src/store/_update_qcps.php',
+                   { bom_ing_fid: fid, container: codes, quantity: qtys },
+                   null, 'json')
+             .done(function(res){
+                $btns.prop('disabled', false);
+                if (!res || !res.success) { $m.find('#qcCtnErr').show().text((res && res.message) || '儲存失敗'); return; }
+                window.renderContainerBtn(window._qcCtnBtn, res.QC_ps, res.QC_ps2);
+                var procs = ((window.ingActiveMap || {})[String(res.bom || '').trim()]) || [];
+                procs.forEach(function(p){
+                    if (String(p.bom_ing_fid) === String(fid)) { p.QC_ps = res.QC_ps; p.QC_ps2 = res.QC_ps2; }
+                });
+                $m.modal('hide');
+             })
+             .fail(function(){
+                $btns.prop('disabled', false);
+                $m.find('#qcCtnErr').show().text('與伺服器通訊失敗，請稍後再試');
+             });
+        }
+        $(document).on('click', '#qcCtnSave',  function(){ submit($('#qcContainerModal'), false); });
+        $(document).on('click', '#qcCtnClear', function(){ submit($('#qcContainerModal'), true); });
+    })();
+    </script>
 
     <script>
         <?php if ($permission_code === 'A'): ?>
