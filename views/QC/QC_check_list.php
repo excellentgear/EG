@@ -1499,15 +1499,7 @@ if ($reply_id != "") {
             $targetRow.attr('data-qc-check', qcCheck || ''); // Update the raw QC_check status attribute on the TR for filtering
 
             // 2. 更新容器 Cell (第 10 個可見欄位，DataTables 索引為 9)
-            var containerHtml = '<div class="container-cell">';
-            // ⭐ 修正點 1: 從 bomIngDetails 中讀取容器資料
-            if (bomIngDetails.BIQC_ps && bomIngDetails.BIQC_ps.trim()) {
-                containerHtml += `<button type="button" class="container-btn">${he(bomIngDetails.BIQC_ps)}</button>`;
-            }
-            if (bomIngDetails.BIQC_ps2 && bomIngDetails.BIQC_ps2.trim()) {
-                containerHtml += `<button type="button" class="container-btn">${he(bomIngDetails.BIQC_ps2)}</button>`;
-            }
-            containerHtml += '</div>';
+            var containerHtml = qcContainerCellHtml(bomIngDetails);
             // ⭐ 修正點 2: 使用正確的索引 9 來更新「容器」欄位
             window.dataTableInstance.cell($targetRow.find('td:eq(8)')).data(containerHtml);
 
@@ -2212,14 +2204,7 @@ if ($reply_id != "") {
                     var makerIdHtml = he(item.maker_id);
                     var sqtyHtml = he(item.sqty);
 
-                    var containerHtml = '<div class="container-cell">';
-                    if (item.BIQC_ps && item.BIQC_ps.trim()) {
-                        containerHtml += `<button type="button" class="container-btn">${he(item.BIQC_ps)}</button>`;
-                    }
-                    if (item.BIQC_ps2 && item.BIQC_ps2.trim()) {
-                        containerHtml += `<button type="button" class="container-btn">${he(item.BIQC_ps2)}</button>`;
-                    }
-                    containerHtml += '</div>';
+                    var containerHtml = qcContainerCellHtml(item);
 
 
                     // 「備註」欄由 generatePsHtml 處理
@@ -4208,6 +4193,27 @@ if ($reply_id != "") {
                 });
             });
 
+            // 容器欄：品管填 BIQC_ps/BIQC_ps2，生管在 BOM 總覽填 BIPM_ps/BIPM_ps2
+            // 兩邊相同或只有一邊 → 照舊顯示；都有且不同 → 兩顆各自標示來源，生管那顆用警示色
+            function qcContainerCellHtml(o) {
+                var join = function(a, b) {
+                    var out = [];
+                    [a, b].forEach(function(v) { v = (v == null ? '' : String(v)).trim(); if (v) out.push(v); });
+                    return out.join('+');
+                };
+                var q = join(o && o.BIQC_ps, o && o.BIQC_ps2);
+                var p = join(o && o.BIPM_ps, o && o.BIPM_ps2);
+                var html = '<div class="container-cell">';
+                if (!q && !p) return html + '</div>';
+                if (!q || !p || q === p) {
+                    html += '<button type="button" class="container-btn" title="' + he(q ? (p ? 'QC 與生管回報相同' : 'QC 品管回報') : '生管回報') + '">' + he(q || p) + '</button>';
+                } else {
+                    html += '<button type="button" class="container-btn" title="QC 品管回報">QC：' + he(q) + '</button>';
+                    html += '<button type="button" class="container-btn" style="border-color:#DD5138;color:#DD5138;font-weight:bold;" title="生管回報（與 QC 不一致）">生管：' + he(p) + '</button>';
+                }
+                return html + '</div>';
+            }
+
             // 容器顯示：直接顯示「此 BOM 最新容器資訊」（取 bom_sn 最大且有填容器的那一站）
             function customContainerText(p1, p2) {
                 var names = { 'P': 'PP箱', 'E': '蝴蝶籠', 'T': '鐵桶', '板': '棧板' };
@@ -4226,11 +4232,11 @@ if ($reply_id != "") {
                 if (!procs || !procs.length) { $box.text('－'); return; }
                 var latest = null;
                 procs.forEach(function(p) {
-                    if (!p.BIQC_ps && !p.BIQC_ps2) return;
+                    if (!p.BIQC_ps && !p.BIQC_ps2 && !p.BIPM_ps && !p.BIPM_ps2) return;
                     if (!latest || parseInt(p.bom_sn || 0, 10) >= parseInt(latest.bom_sn || 0, 10)) latest = p;
                 });
                 if (!latest) { $box.text('此 BOM 尚無容器紀錄'); return; }
-                var txt = customContainerText(latest.BIQC_ps, latest.BIQC_ps2);
+                var txt = customContainerText(latest.BIQC_ps || latest.BIPM_ps, latest.BIQC_ps2 || latest.BIPM_ps2);
                 var from = '[' + (latest.bom_sn || '') + '] ' + (latest.ProcessName || '');
                 $box.empty()
                     .append($('<b>').text(txt || '－'))

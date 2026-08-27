@@ -143,6 +143,8 @@ SELECT SQL_CALC_FOUND_ROWS
     IF(YEAR(bi.QC_check_date) > 0, DATE_FORMAT(bi.QC_check_date,'%m/%d'), NULL) AS QC_check_date,
     bi.QC_ps    AS BIQC_ps,
     bi.QC_ps2   AS BIQC_ps2,
+    bi.pm_ps    AS BIPM_ps,
+    bi.pm_ps2   AS BIPM_ps2,
     bi.QC_ps2   AS QC_ps_ng,
     bi.QC_ps_aod AS QC_ps_aod_remark,
     bi.single_bet_ps,

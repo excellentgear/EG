@@ -316,7 +316,7 @@ $stmt_update_qcps->execute();
     $response['individual_qc_entries'] = $stmt_fetch_all_remarks->fetchAll(PDO::FETCH_ASSOC);
 
     // Fetch the final state from bom_ing for the response
-    $stmt_fetch_bom_ing = $db->prepare("SELECT QC_check, DATE_FORMAT(QC_check_date, '%m/%d') as QC_check_date_formatted, processing_state, QC_ps AS BIQC_ps, QC_ps2 AS BIQC_ps2, QC_ps_aod, sqty FROM bom_ing WHERE bom_ing_fid = :bom_ing_fid_fetch");
+    $stmt_fetch_bom_ing = $db->prepare("SELECT QC_check, DATE_FORMAT(QC_check_date, '%m/%d') as QC_check_date_formatted, processing_state, QC_ps AS BIQC_ps, QC_ps2 AS BIQC_ps2, pm_ps AS BIPM_ps, pm_ps2 AS BIPM_ps2, QC_ps_aod, sqty FROM bom_ing WHERE bom_ing_fid = :bom_ing_fid_fetch");
     $stmt_fetch_bom_ing->bindParam(':bom_ing_fid_fetch', $bom_ing_fid, PDO::PARAM_STR);
     $stmt_fetch_bom_ing->execute();
     $final_bom_ing_state = $stmt_fetch_bom_ing->fetch(PDO::FETCH_ASSOC);
@@ -341,6 +341,8 @@ $stmt_update_qcps->execute();
         if ($final_bom_ing_state) {
         $response['BIQC_ps'] = $final_bom_ing_state['BIQC_ps'] ?? '';
         $response['BIQC_ps2'] = $final_bom_ing_state['BIQC_ps2'] ?? '';
+        $response['BIPM_ps'] = $final_bom_ing_state['BIPM_ps'] ?? '';
+        $response['BIPM_ps2'] = $final_bom_ing_state['BIPM_ps2'] ?? '';
         $response['qc_check'] = $final_bom_ing_state['QC_check'] ?? '';
         $response['qc_check_date'] = $final_bom_ing_state['QC_check_date_formatted'] ?? '';
         $response['processing_state'] = $final_bom_ing_state['processing_state'] ?? '';

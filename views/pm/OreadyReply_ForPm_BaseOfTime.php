@@ -379,6 +379,7 @@ $can_delete = ($permission_code && (strpos($permission_code, 'A') !== false || s
 // --- 角色功能碼（新機制，與上方舊 CRUD 規則並存：舊規則 OR 新功能碼，任一成立即可）---
 require_once '../../src/common/role_features_helper.php';
 require_once '../../src/common/qc_container_lib.php'; // 容器選項與權限判定唯一實作
+eg_qc_container_ensure_schema($db); // bom_ing.pm_ps / pm_ps2（生管回報容器）
 $_oready_features = rf_load_user_features($db, $id);
 $can_manual_close = $can_manual_close || rf_has_feature($_oready_features, 'oready_manual_close');
 $can_create       = $can_create       || rf_has_feature($_oready_features, 'oready_create');
@@ -743,6 +744,8 @@ foreach ($raw_ps_list as $_iam_item) {
         'QC_check_date'    => !empty($_iam_qcd) && $_iam_qcd !== '0000-00-00 00:00:00' ? $_iam_fmt($_iam_qcd) : null,
         'QC_ps'            => $_iam_item['QC_ps'] ?? null,
         'QC_ps2'           => $_iam_item['QC_ps2'] ?? null,
+        'pm_ps'            => $_iam_item['pm_ps'] ?? null,
+        'pm_ps2'           => $_iam_item['pm_ps2'] ?? null,
         'qc_completed'     => (int)($_iam_item['qc_completed'] ?? 0),
         'qc_completed_at'  => $_iam_fmt($_iam_item['qc_completed_at'] ?? null),
         'maker_id'         => $_iam_item['maker_id'] ?? '',
@@ -5255,6 +5258,32 @@ echo "</script>\n";
                 }
             }
 
+            // ── 容器（料號欄右下角）：左側顯示容器資訊、右側回報鈕 ──
+            var _ctnProc = pickContainerProc(row.bom);
+            if (_ctnProc) {
+                var _ctnWrap = document.createElement('div');
+                _ctnWrap.style.cssText = 'margin-top:3px;display:flex;align-items:center;justify-content:flex-end;gap:5px;';
+                var _ctnTxt = document.createElement('span');
+                _ctnTxt.className = 'oready-ctn-txt';
+                _ctnWrap.appendChild(_ctnTxt);
+                var _ctnBtn = document.createElement('button');
+                _ctnBtn.type = 'button';
+                _ctnBtn.className = 'oready-ctn-btn';
+                _ctnBtn.setAttribute('data-fid', String(_ctnProc.bom_ing_fid || ''));
+                _ctnBtn.setAttribute('data-bom', String(row.bom || ''));
+                _ctnBtn.setAttribute('data-proc', (_ctnProc.batch_label ? '[' + _ctnProc.batch_label + '] ' : '') + (_ctnProc.ProcessName || ''));
+                renderContainerCell(_ctnTxt, _ctnBtn, _ctnProc);
+                if (window.canEditContainer) {
+                    _ctnBtn.onclick = function(e) { e.stopPropagation(); openContainerModal(this); };
+                } else {
+                    _ctnBtn.classList.add('oready-ctn-ro');
+                    _ctnBtn.title = '無權限回報容器';
+                    _ctnBtn.onclick = function(e) { e.preventDefault(); e.stopPropagation(); return false; };
+                }
+                _ctnWrap.appendChild(_ctnBtn);
+                tdDid.appendChild(_ctnWrap);
+            }
+
             // --- 新增：料號欄位雙擊事件監聽器 ---
             tdDid.addEventListener('dblclick', function() {
                 const partNumberFromCell = String(row.d_id || '').trim(); // Get d_id from row data for accuracy
@@ -5508,27 +5537,6 @@ echo "</script>\n";
                             _btnRow.appendChild(_batchSpan);
                             _lightsAttached = true;
                         }
-                    }
-                    // ── 容器回報（QC待驗/待移轉才顯示；資料存 bom_ing.QC_ps/QC_ps2，QC待驗清單的「容器」欄直接讀這裡）──
-                    if (_effectiveSt === 'Q' || _effectiveSt === 'P') {
-                        var _ctnRow = document.createElement('div');
-                        _ctnRow.style.cssText = 'margin-top:2px;display:flex;align-items:center;justify-content:flex-end;';
-                        var _ctnBtn = document.createElement('button');
-                        _ctnBtn.type = 'button';
-                        _ctnBtn.className = 'oready-ctn-btn';
-                        _ctnBtn.setAttribute('data-fid', _fid);
-                        _ctnBtn.setAttribute('data-bom', String(row.bom || ''));
-                        _ctnBtn.setAttribute('data-proc', (_proc.batch_label ? '['+_proc.batch_label+'] ' : '') + (_proc.ProcessName || ''));
-                        renderContainerBtn(_ctnBtn, _proc.QC_ps, _proc.QC_ps2);
-                        if (window.canEditContainer) {
-                            _ctnBtn.onclick = function() { openContainerModal(this); };
-                        } else {
-                            _ctnBtn.classList.add('oready-ctn-ro');
-                            _ctnBtn.title = '無權限修改容器';
-                            _ctnBtn.onclick = function(e) { e.preventDefault(); return false; };
-                        }
-                        _ctnRow.appendChild(_ctnBtn);
-                        _pDiv.appendChild(_ctnRow);
                     }
                     tdOutsourceDate.appendChild(_pDiv);
                 });
@@ -15353,7 +15361,11 @@ echo "</script>\n";
     <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
 
     <script>
-    /* 容器回報：顯示與存檔（資料在 bom_ing.QC_ps / QC_ps2） */
+    /* ── 容器回報：顯示與存檔 ──────────────────────────────────
+       QC 品管填在 bom_ing.QC_ps / QC_ps2（允收跳窗）
+       生管填在 bom_ing.pm_ps / pm_ps2（本頁料號欄右下角的回報鈕）
+       兩邊分開存，正常應該相同；不同時畫面同時顯示「QC：1P / 生管：2P」並標警示色
+    ------------------------------------------------------------ */
     (function(){
         function opts(){ return window.EG_QC_CONTAINERS || []; }
         function nameOf(code){
@@ -15361,53 +15373,93 @@ echo "</script>\n";
             for (var i=0;i<o.length;i++) if (o[i].code === code) return o[i].name;
             return code;
         }
-        window.parseContainerVal = function(v){
+        // "3P" → {qty:'3', code:'P', name:'PP箱'}
+        function parseVal(v){
             v = (v == null ? '' : String(v)).trim();
             if (!v) return null;
             var m = v.match(/^(\d+)\s*(.+)$/);
             if (!m) return { qty:'', code:'', name:v, raw:v };
             return { qty:m[1], code:m[2], name:nameOf(m[2]), raw:v };
-        };
-        window.containerText = function(p1, p2){
-            var out = [];
-            [p1, p2].forEach(function(v){
-                var o = window.parseContainerVal(v);
-                if (o) out.push(o.qty === '' ? o.name : (o.qty + ' ' + o.name));
-            });
-            return out.join('、');
-        };
-        window.renderContainerBtn = function(btn, p1, p2){
-            var txt = window.containerText(p1, p2);
-            btn.setAttribute('data-p1', p1 == null ? '' : p1);
-            btn.setAttribute('data-p2', p2 == null ? '' : p2);
-            if (txt) {
-                btn.textContent = '容器 ' + txt;
-                btn.classList.remove('oready-ctn-empty');
-                btn.title = '容器：' + txt + '（點擊修改）';
-            } else {
-                btn.textContent = '+ 容器';
-                btn.classList.add('oready-ctn-empty');
-                btn.title = '尚未回報容器（點擊填寫）';
-            }
-        };
-        function prevContainer(bom, fid){
-            var procs = ((window.ingActiveMap || {})[String(bom || '').trim()]) || [];
-            var self = null, best = null;
-            procs.forEach(function(p){ if (String(p.bom_ing_fid) === String(fid)) self = p; });
-            var selfSn = self ? parseInt(self.bom_sn || 0, 10) : 999999;
-            procs.forEach(function(p){
-                if (String(p.bom_ing_fid) === String(fid)) return;
-                if (!p.QC_ps) return;
-                var sn = parseInt(p.bom_sn || 0, 10);
-                if (sn > selfSn) return;
-                if (!best || sn > parseInt(best.bom_sn || 0, 10)) best = p;
-            });
-            return best;
         }
+        window.parseContainerVal = parseVal;
+        // 兩格合併成 "1P+2E" 這種原樣代碼字串（畫面上就是使用者說的 1P）
+        function joinRaw(a, b){
+            var o = [];
+            [a, b].forEach(function(v){ v = (v == null ? '' : String(v)).trim(); if (v) o.push(v); });
+            return o.join('+');
+        }
+        function longText(a, b){
+            var o = [];
+            [a, b].forEach(function(v){
+                var x = parseVal(v);
+                if (x) o.push(x.qty === '' ? x.name : (x.qty + ' ' + x.name));
+            });
+            return o.join('、');
+        }
+        // 顯示規則：兩邊相同或只有一邊→直接顯示；都有且不同→「QC：1P / 生管：2P」
+        window.containerDisplay = function(proc){
+            var q = joinRaw(proc.QC_ps, proc.QC_ps2);
+            var p = joinRaw(proc.pm_ps, proc.pm_ps2);
+            if (!q && !p) return { text:'', diff:false, title:'尚未回報容器' };
+            if (!q || !p) {
+                var only = q || p;
+                return { text: only, diff:false,
+                         title: (q ? 'QC 品管回報：' : '生管回報：') + longText(q ? proc.QC_ps : proc.pm_ps, q ? proc.QC_ps2 : proc.pm_ps2) };
+            }
+            if (q === p) return { text: q, diff:false, title:'QC 與生管回報相同：' + longText(proc.QC_ps, proc.QC_ps2) };
+            return { text: 'QC：' + q + ' / 生管：' + p, diff:true,
+                     title: 'QC 與生管回報不一致\nQC 品管：' + longText(proc.QC_ps, proc.QC_ps2) + '\n生管：' + longText(proc.pm_ps, proc.pm_ps2) };
+        };
+        // 這一列要對哪個製程回報：優先目前 QC待驗/待移轉，其次 bom_sn 最大的進行中製程
+        window.pickContainerProc = function(bom){
+            var procs = ((window.ingActiveMap || {})[String(bom || '').trim()]) || [];
+            if (!procs.length) return null;
+            var pick = null;
+            procs.forEach(function(p){
+                var st = String(p.processing_state || '');
+                var eff = (st === 'Q' && p.qc_completed == 1) ? 'P' : st;
+                if (eff !== 'Q' && eff !== 'P') return;
+                if (!pick || parseInt(p.bom_sn || 0, 10) >= parseInt(pick.bom_sn || 0, 10)) pick = p;
+            });
+            if (pick) return pick;
+            procs.forEach(function(p){
+                if (!pick || parseInt(p.bom_sn || 0, 10) >= parseInt(pick.bom_sn || 0, 10)) pick = p;
+            });
+            return pick;
+        };
+        // 此 BOM 上一次用過的容器種類（任何一站、bom_sn 最大者），供新回報自動帶入
+        window.lastContainerCodeOfBom = function(bom, exceptFid){
+            var procs = ((window.ingActiveMap || {})[String(bom || '').trim()]) || [];
+            var best = null;
+            procs.forEach(function(p){
+                var raw = p.pm_ps || p.QC_ps;
+                if (!raw) return;
+                if (exceptFid && String(p.bom_ing_fid) === String(exceptFid)) return;
+                if (!best || parseInt(p.bom_sn || 0, 10) >= parseInt(best.bom_sn || 0, 10)) best = p;
+            });
+            if (!best) return '';
+            var o = parseVal(best.pm_ps || best.QC_ps);
+            return o ? o.code : '';
+        };
+        window.renderContainerCell = function(txtEl, btn, proc){
+            var d = window.containerDisplay(proc);
+            txtEl.textContent = d.text;
+            txtEl.title = d.title;
+            txtEl.style.cssText = 'font-size:11px;line-height:1.2;white-space:nowrap;' +
+                (d.diff ? 'color:#DD5138;font-weight:bold;' : 'color:#7A4A12;');
+            btn.setAttribute('data-qc1', proc.QC_ps || '');
+            btn.setAttribute('data-qc2', proc.QC_ps2 || '');
+            btn.setAttribute('data-p1', proc.pm_ps || '');
+            btn.setAttribute('data-p2', proc.pm_ps2 || '');
+            btn.textContent = '容器';
+            btn.classList.toggle('oready-ctn-empty', !proc.pm_ps && !proc.pm_ps2);
+            btn.title = (proc.pm_ps || proc.pm_ps2) ? '修改生管回報的容器' : '回報容器';
+            btn._txtEl = txtEl;
+        };
         function fillRows($m, p1, p2){
             var $rows = $m.find('.qc-ctn-row');
             [p1, p2].forEach(function(v, i){
-                var o = window.parseContainerVal(v);
+                var o = parseVal(v);
                 $rows.eq(i).find('.qc-ctn-code').val(o ? o.code : '');
                 $rows.eq(i).find('.qc-ctn-qty').val(o && o.qty !== '' ? o.qty : '');
             });
@@ -15426,22 +15478,28 @@ echo "</script>\n";
             fillRows($m, p1, p2);
             $m.find('#qcCtnTarget').text(bom + '　' + (btn.getAttribute('data-proc') || ''));
             var $hint = $m.find('#qcCtnPrevHint').hide().empty();
+            var qc1 = btn.getAttribute('data-qc1') || '', qc2 = btn.getAttribute('data-qc2') || '';
+            if (qc1 || qc2) {
+                $hint.show().append($('<span>').text('QC 品管回報：' + longText(qc1, qc2) + '　'));
+                $('<button type="button" class="btn btn-xs btn-warning">帶入 QC 的</button>')
+                    .on('click', function(){ fillRows($m, qc1, qc2); }).appendTo($hint);
+            }
+            // 這一站還沒回報過 → 容器種類自動帶入此 BOM 上一次用的（數量留空給人填）
             if (!p1 && !p2) {
-                var prev = prevContainer(bom, fid);
-                if (prev) {
-                    var ptxt = window.containerText(prev.QC_ps, prev.QC_ps2);
-                    $hint.show().html('上一站（' + $('<i>').text(prev.ProcessName || ('#' + prev.bom_sn)).html() +
-                        '）容器：<b>' + $('<i>').text(ptxt).html() + '</b> ');
-                    $('<button type="button" class="btn btn-xs btn-warning">套用</button>')
-                        .on('click', function(){ fillRows($m, prev.QC_ps, prev.QC_ps2); })
-                        .appendTo($hint);
+                var code = window.lastContainerCodeOfBom(bom, fid);
+                if (code) {
+                    $m.find('.qc-ctn-row').eq(0).find('.qc-ctn-code').val(code);
+                    if (!$hint.children().length) $hint.show();
+                    $hint.append($('<div style="margin-top:3px;">').text('容器種類已自動帶入此 BOM 上一次用的「' + nameOf(code) + '」，可自行改。'));
                 }
             }
             $m.modal('show');
+            setTimeout(function(){ $m.find('.qc-ctn-qty').eq(0).focus().select(); }, 400);
         };
         function submit($m, clear){
             if (!window._qcCtnBtn) return;
-            var fid = window._qcCtnBtn.getAttribute('data-fid');
+            var btn = window._qcCtnBtn;
+            var fid = btn.getAttribute('data-fid');
             var codes = [], qtys = [];
             if (!clear) {
                 $m.find('.qc-ctn-row').each(function(){
@@ -15453,6 +15511,10 @@ echo "</script>\n";
                 $m.find('#qcCtnErr').show().text('請填寫第一列的箱數');
                 return;
             }
+            if (!clear && !codes[0] && codes[1]) {
+                $m.find('#qcCtnErr').show().text('請先填第一列的容器');
+                return;
+            }
             var $btns = $m.find('#qcCtnSave, #qcCtnClear').prop('disabled', true);
             $.post('../../src/store/_update_qcps.php',
                    { bom_ing_fid: fid, container: codes, quantity: qtys },
@@ -15460,10 +15522,17 @@ echo "</script>\n";
              .done(function(res){
                 $btns.prop('disabled', false);
                 if (!res || !res.success) { $m.find('#qcCtnErr').show().text((res && res.message) || '儲存失敗'); return; }
-                window.renderContainerBtn(window._qcCtnBtn, res.QC_ps, res.QC_ps2);
                 var procs = ((window.ingActiveMap || {})[String(res.bom || '').trim()]) || [];
+                var target = null;
                 procs.forEach(function(p){
-                    if (String(p.bom_ing_fid) === String(fid)) { p.QC_ps = res.QC_ps; p.QC_ps2 = res.QC_ps2; }
+                    if (String(p.bom_ing_fid) === String(fid)) {
+                        p.pm_ps = res.pm_ps; p.pm_ps2 = res.pm_ps2;
+                        p.QC_ps = res.QC_ps; p.QC_ps2 = res.QC_ps2;
+                        target = p;
+                    }
+                });
+                if (btn._txtEl) window.renderContainerCell(btn._txtEl, btn, target || {
+                    QC_ps: res.QC_ps, QC_ps2: res.QC_ps2, pm_ps: res.pm_ps, pm_ps2: res.pm_ps2
                 });
                 $m.modal('hide');
              })
@@ -15474,6 +15543,10 @@ echo "</script>\n";
         }
         $(document).on('click', '#qcCtnSave',  function(){ submit($('#qcContainerModal'), false); });
         $(document).on('click', '#qcCtnClear', function(){ submit($('#qcContainerModal'), true); });
+        // 數量欄按 Enter 直接存檔（快速回報）
+        $(document).on('keydown', '#qcContainerModal .qc-ctn-qty', function(e){
+            if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); submit($('#qcContainerModal'), false); }
+        });
     })();
     </script>
 

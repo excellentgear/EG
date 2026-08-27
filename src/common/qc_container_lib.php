@@ -121,3 +121,45 @@ function eg_qc_container_can_edit($db, $uid) {
     }
     return false;
 }
+
+/**
+ * 確保 bom_ing 有「生管回報容器」欄位（可重複執行）
+ * pm_ps / pm_ps2 ＝ 生管在 BOM總覽回報的容器；QC_ps / QC_ps2 ＝ 品管在允收跳窗填的容器
+ * 兩邊分開存，不一致時畫面才能同時顯示（使用者要求：QC：1P / 生管：2P）
+ */
+function eg_qc_container_ensure_schema($db) {
+    static $done = null;
+    if ($done !== null) return $done;
+    try {
+        $has = $db->query("SHOW COLUMNS FROM bom_ing LIKE 'pm_ps'")->fetch(PDO::FETCH_ASSOC);
+        if (!$has) {
+            $db->exec("ALTER TABLE bom_ing
+                ADD COLUMN pm_ps  VARCHAR(100) NULL COMMENT '生管回報容器',
+                ADD COLUMN pm_ps2 VARCHAR(100) NULL COMMENT '生管回報容器2'");
+        }
+        $done = true;
+    } catch (PDOException $e) {
+        error_log('[qc_container ensure_schema] ' . $e->getMessage());
+        $done = false;
+    }
+    return $done;
+}
+
+/**
+ * 組出畫面上的容器顯示文字
+ * 兩邊相同或只有一邊 → 直接顯示該值；兩邊都有且不同 → 「QC：1P / 生管：2P」
+ * 回傳 array(text, diff)；diff=true 代表兩邊對不起來，畫面要用警示色
+ */
+function eg_qc_container_display($qc1, $qc2, $pm1, $pm2) {
+    $join = function ($a, $b) {
+        $o = array();
+        foreach (array($a, $b) as $v) { $v = trim((string)$v); if ($v !== '') $o[] = $v; }
+        return implode('+', $o);
+    };
+    $q = $join($qc1, $qc2);
+    $p = $join($pm1, $pm2);
+    if ($q === '' && $p === '') return array('', false);
+    if ($q === '' || $p === '') return array($q !== '' ? $q : $p, false);
+    if ($q === $p) return array($q, false);
+    return array('QC：' . $q . ' / 生管：' . $p, true);
+}

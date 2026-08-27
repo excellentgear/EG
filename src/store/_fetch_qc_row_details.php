@@ -43,6 +43,8 @@ try {
             processing_state, ps,
             QC_ps  AS BIQC_ps,
             QC_ps2 AS BIQC_ps2,
+            pm_ps  AS BIPM_ps,
+            pm_ps2 AS BIPM_ps2,
             QC_ps_aod,
             sqty
         FROM bom_ing

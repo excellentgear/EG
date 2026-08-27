@@ -57,7 +57,8 @@ foreach ($containers as $i => $c) {
 list($qcPs, $qcPs2) = eg_qc_container_pack($containers, $quantities);
 
 try {
-    $chk = $db->prepare("SELECT bom, bom_sn FROM bom_ing WHERE bom_ing_fid = ? LIMIT 1");
+    eg_qc_container_ensure_schema($db);
+    $chk = $db->prepare("SELECT bom, bom_sn, IFNULL(QC_ps,'') qc1, IFNULL(QC_ps2,'') qc2 FROM bom_ing WHERE bom_ing_fid = ? LIMIT 1");
     $chk->execute(array($fid));
     $row = $chk->fetch(PDO::FETCH_ASSOC);
     if (!$row) {
@@ -65,16 +66,21 @@ try {
         exit;
     }
 
-    $st = $db->prepare("UPDATE bom_ing SET QC_ps = :p1, QC_ps2 = :p2, Modified_At = NOW(), Modified_By = :uid WHERE bom_ing_fid = :fid LIMIT 1");
+    $st = $db->prepare("UPDATE bom_ing SET pm_ps = :p1, pm_ps2 = :p2, Modified_At = NOW(), Modified_By = :uid WHERE bom_ing_fid = :fid LIMIT 1");
     $st->execute(array(':p1' => $qcPs, ':p2' => $qcPs2, ':uid' => $uid, ':fid' => $fid));
 
+    list($dispText, $dispDiff) = eg_qc_container_display($row['qc1'], $row['qc2'], $qcPs, $qcPs2);
     echo json_encode(array(
-        'success' => true,
-        'message' => ($qcPs === '' && $qcPs2 === '') ? '容器已清除' : '容器已更新',
-        'QC_ps'   => $qcPs,
-        'QC_ps2'  => $qcPs2,
-        'bom'     => $row['bom'],
-        'bom_sn'  => $row['bom_sn'],
+        'success'   => true,
+        'message'   => ($qcPs === '' && $qcPs2 === '') ? '容器已清除' : '容器已更新',
+        'pm_ps'     => $qcPs,
+        'pm_ps2'    => $qcPs2,
+        'QC_ps'     => $row['qc1'],
+        'QC_ps2'    => $row['qc2'],
+        'disp_text' => $dispText,
+        'disp_diff' => $dispDiff,
+        'bom'       => $row['bom'],
+        'bom_sn'    => $row['bom_sn'],
     ));
 } catch (PDOException $e) {
     error_log('[_update_qcps] ' . $e->getMessage());
