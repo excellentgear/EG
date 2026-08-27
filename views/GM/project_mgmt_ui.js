@@ -481,7 +481,9 @@ $(document).on('click', '#btnSaveBase', function () {
                 savedAndReload(pid, done.length ? ('已儲存專案與' + done.join('、')) : '已儲存');
             });
         };
-        if (!planHasContent()) { finish(); return; }
+        /* planHasContent()＝畫面上還有內容。目標被刪光時它是 false，
+           但那正是「要把伺服器上的目標刪掉」的情況，所以刪過東西就仍要送出。 */
+        if (!planHasContent() && !PLAN_HAS_DEL) { finish(); return; }
         savePlan(pid, function (ok) { if (!ok) return; done.push('執行規劃表'); finish(); });
     });
 });
@@ -1009,6 +1011,7 @@ $(document).on('change', '#planEditBox .t-ae', function () {
 /* ── 規劃表編輯器（可增列表格：末列↓加列、空白末列↑移除＝共用檔規則） ── */
 var PLAN_ACT_OPEN = false;   // 實際開始／完成現在可不可以填（＝專案是否已立案核准）
 var PLAN_DIRTY    = false;   // 規劃表有沒有還沒存進去的變更（避免整桌資料被無聲丟掉）
+var PLAN_HAS_DEL  = false;   // 這次有沒有刪掉目標（刪光時畫面上「沒有內容」，但還是要送出才刪得掉）
 var CARD_DIRTY    = false;   // 專案管理卡編輯區同上
 
 /* 規劃表裡任何一格被動過就標記為未儲存；重繪與存檔成功時清掉 */
@@ -1045,7 +1048,7 @@ function drawPlanEditor(res) {
       + '改天數會重算完成日、直接改完成日也會反算天數。天數只算工作日（週末與行事曆上的休假日不算、補班日要算）。'
       + '<b>上一列的預計完成日會自動變成下一列的預計開始日</b>——你自己改過的開始日不會被蓋掉。</p>'
       + (PLAN_ACT_OPEN ? ''
-          : '<p class="pj-hint" style="color:#C4442D;">「實際開始／實際完成」要等<b>立案核准</b>之後才能填'
+          : '<p class="pj-hint" style="color:#C4442D;">「實際開始／實際完成」兩欄要等<b>立案核准</b>之後才會出現'
             + '（目前狀態：' + esc(STATUS_LABEL[res.project.status] || res.project.status) + '），此階段只排預計日程。</p>');
     if (!grouped.length) h += '<div class="pj-hint">還沒有目標，請按上方「新增目標」。</div>';
     $.each(grouped, function (gi, g) {
@@ -1062,7 +1065,7 @@ function drawPlanEditor(res) {
           + '<th style="width:114px;">預計開始</th>'
           + '<th style="width:62px;" title="預計開始當天算第 1 天，只算工作日">工作天數</th>'
           + '<th style="width:114px;">預計完成</th>'
-          + '<th style="width:114px;">實際開始</th><th style="width:114px;">實際完成</th>'
+          + (PLAN_ACT_OPEN ? '<th style="width:114px;">實際開始</th><th style="width:114px;">實際完成</th>' : '')
           + '<th style="width:96px;" title="1~2 天完工的製程用狀態管理，不記時分秒">狀態</th>'
           + '<th style="width:180px;">負責人（先選部門）</th>'
           + '<th style="width:76px;" title="勾「自動」時：填了實際完成日就是 100%，否則 0%；自己改過就不再自動">進度%</th>'
@@ -1092,10 +1095,6 @@ function planRowHtml(t, i) {
     var isSys = (kind !== '');           // fai/rca/delta_fai 都是系統環節，名稱不可改、不可刪
     var did = num(t.owner_dept_id) || guessOwnerDept(num(t.owner_id));
     var dOpt = taskDeptOptions(did), pOpt = taskOwnerOptions(did, num(t.owner_id), true);
-    /* 實際日期在核准前反灰（後端 plan_save 也會忽略，不是只擋 UI＝鐵律8）。
-       ※ class 要併進同一個 class 屬性——寫成兩個 class="" 的話後面那個會被 HTML 解析器丟掉（灰底就不會出現）。 */
-    var actCls = PLAN_ACT_OPEN ? '' : ' ro-auto';
-    var actRo  = PLAN_ACT_OPEN ? '' : ' disabled title="立案核准後才能填實際日期"';
     /* data-pe0＝這一列目前的預計完成日。串接時用它判斷「下一列的開始日還跟著上一列」
        還是「使用者自己改過了」，改過的就不覆蓋。 */
     var days = (t.plan_start && t.plan_end) ? planDaysBetween(t.plan_start, t.plan_end) : 0;
@@ -1108,12 +1107,20 @@ function planRowHtml(t, i) {
       + (isFai ? '<div style="margin-top:3px;">' + faiBadgeHtml() + '</div>' : '')
       + (kind === 'rca' ? '<div style="margin-top:3px;">' + carLinkHtml() + '</div>' : '')
       + (kind === 'delta_fai' ? '<div class="pj-hint" style="margin-top:3px;">矯正後只驗有變動的特性</div>' : '')
+      /* 核准前不畫「實際開始／實際完成」兩欄（反正也不能填），版面讓給「主要任務」；
+         值改用 hidden 帶著走，所有 .t-as/.t-ae 的讀取端不必各自判斷有沒有這一欄。
+         ※ hidden 一定要放在 <td> 裡面——放在 <td> 與 <td> 之間會被 HTML 解析器搬到表格外面，
+           $tr.find('.t-as') 就找不到了。 */
+      + (PLAN_ACT_OPEN ? ''
+            : '<input type="hidden" class="t-as" value="' + esc(t.act_start || '') + '">'
+              + '<input type="hidden" class="t-ae" value="' + esc(t.act_end || '') + '">')
       + '</td>'
       + '<td><input type="date" class="t-ps"' + planMinAttr() + ' value="' + esc(t.plan_start || '') + '"></td>'
       + '<td><input type="number" class="t-days" min="1" max="999" value="' + (days > 0 ? days : '') + '"></td>'
       + '<td><input type="date" class="t-pe" value="' + esc(t.plan_end || '') + '"></td>'
-      + '<td><input type="date" class="t-as' + actCls + '"' + actRo + ' value="' + esc(t.act_start || '') + '"></td>'
-      + '<td><input type="date" class="t-ae' + actCls + '"' + actRo + ' value="' + esc(t.act_end || '') + '"></td>'
+      + (PLAN_ACT_OPEN
+            ? '<td><input type="date" class="t-as" value="' + esc(t.act_start || '') + '"></td>'
+              + '<td><input type="date" class="t-ae" value="' + esc(t.act_end || '') + '"></td>' : '')
       + '<td>' + taskStatusSelect(t) + '</td>'
       + '<td><select class="t-odept"' + filterAttr(dOpt, '輸入部門名稱篩選…') + '>' + dOpt + '</select>'
       + '<select class="t-owner" style="margin-top:3px;"' + filterAttr(pOpt, '輸入姓名篩選…') + '>' + pOpt + '</select></td>'
@@ -1289,6 +1296,13 @@ $(document).on('click', '#planEditBox .t-del', function () { planRowRemove($(thi
 $(document).on('click', '#planEditBox .g-del', function () {
     if (!confirm('刪除這個目標？底下的任務會一起移除（要按「儲存規劃表」才會真的寫入）。')) return;
     $(this).closest('.sec[data-goal]').remove();
+    /* 只從畫面上拿掉不夠：CUR 還留著那個目標，①上方時間軸不會跟著少一列
+       ②之後任何一次重繪（改模組設定、首件狀態變動）都會把它從舊資料接回來，
+       看起來就是「刪了又自己跑回來、儲存也沒被移除」。 */
+    if (!planSyncToCur()) { CUR.goals = []; CUR.tasks = []; }
+    drawPlanEditor(CUR);          // 順便把「目標 N」的編號重排
+    drawGantt(CUR);
+    PLAN_DIRTY = true; PLAN_HAS_DEL = true;
 });
 $(document).on('change', '#gView', function () { GVIEW = $(this).val(); drawGantt(CUR); });
 $(document).on('change', '#gScale', function () { GSCALE = $(this).val(); drawGantt(CUR); });
@@ -1427,7 +1441,7 @@ function savePlan(pid, cb) {
         }
     }
     api('plan_save', { project_id: num(pid), goals: JSON.stringify(goals), tasks: JSON.stringify(tasks) }, 'POST')
-        .done(function (res) { PLAN_DIRTY = false; if (cb) cb(true, res); })
+        .done(function (res) { PLAN_DIRTY = false; PLAN_HAS_DEL = false; if (cb) cb(true, res); })
         .fail(function () { if (cb) cb(false); });
 }
 $(document).on('click', '#btnPlanSave', function () {
