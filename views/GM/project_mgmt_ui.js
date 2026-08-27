@@ -2282,19 +2282,22 @@ function renderSeedTpl() {
     $.each(SEED_TPL, function (gi, g) {
         h += '<div class="sec" data-sg="' + gi + '" style="background:#fff;">'
           + '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:6px;">'
+          + '<span class="seed-h" data-sdrag="goal" draggable="true" title="拖曳調整階段順序" style="align-self:center;padding:6px 2px;">⠿</span>'
           + '<div style="flex:1;min-width:220px;"><label>階段 ' + (gi + 1) + ' 名稱 <span style="color:#DD5138;">*</span></label>'
           + '<input type="text" class="sg-name" value="' + esc(g.goal || '') + '"></div>'
           + '<div style="min-width:170px;"><label>主辦單位</label><select class="sg-dept"'
           + filterAttr(deptOpt, '輸入部門名稱篩選…') + '>' + deptOpt + '</select></div>'
           + '<button class="sg-del" style="height:30px;padding:0 12px;border:1px solid #C4442D;border-radius:4px;background:#DD5138;color:#fff;cursor:pointer;">刪除階段</button>'
           + '</div>'
-          + '<table class="sub-tbl"><thead><tr><th style="width:28px;">#</th><th>步驟</th>'
+          + '<table class="sub-tbl"><thead><tr><th style="width:34px;">#</th><th>步驟</th>'
           + '<th style="width:170px;">預設負責部門</th><th style="width:190px;">預設負責人</th>'
           + '<th style="width:56px;">操作</th></tr></thead><tbody>';
         $.each(g.tasks || [], function (ti, t) {
             var did = num(t.dept_id), dOpt = taskDeptOptions(did), pOpt = taskOwnerOptions(did, num(t.owner_id), true);
             var sys = String(t.kind || '');
-            h += '<tr data-st="' + ti + '"><td>' + (ti + 1) + '</td>'
+            h += '<tr data-st="' + ti + '">'
+              + '<td><span class="seed-h" data-sdrag="task" draggable="true" title="拖曳調整順序，也可以拖到別的階段">⠿</span>'
+              + '<div style="font-size:11px;color:#8a6d45;">' + (ti + 1) + '</div></td>'
               + '<td><input type="text" class="st-name" value="' + esc(t.name || '') + '">'
               + (sys ? '<span class="pj-hint" style="margin-left:6px;">🔒 '
                        + (sys === 'fai' ? '首件' : (sys === 'rca' ? 'RCA' : '差異首件')) + '（系統固定環節）</span>' : '')
@@ -2377,6 +2380,91 @@ $(document).on('click', '#setSeedBox .st-del', function () {
     if (!SEED_TPL[gi].tasks.length) SEED_TPL[gi].tasks = [{ name: '', kind: '', dept_id: 0, owner_id: 0 }];
     renderSeedTpl();
 });
+/* ── 拖曳排序 ─────────────────────────────────────────────────────────
+   使用者要求：首件檢驗是固定環節、又總是排在最後一列，沒有拖曳就無法在它之前插入新程序。
+   ※ 只把「把手」設成 draggable，不要整列 draggable——整列可拖時，欄位裡的文字會變成選不起來、
+     一按就開始拖整列（Chrome 的既有行為）。拖曳圖示再用 setDragImage 指回整列，看起來仍是拖整列。 */
+var SEED_DRAG = null;   // {type:'task'|'goal', gi, ti}
+
+function seedDragClear() {
+    $('#setSeedBox .seed-dz-before, #setSeedBox .seed-dz-after').removeClass('seed-dz-before seed-dz-after');
+}
+/** 滑鼠在這個元素的上半部還是下半部（決定插在它前面還是後面） */
+function seedDropAfter(el, ev) {
+    var r = el.getBoundingClientRect();
+    return (ev.clientY - r.top) > r.height / 2;
+}
+$(document).on('dragstart', '#setSeedBox .seed-h', function (e) {
+    var $h = $(this), isGoal = String($h.data('sdrag')) === 'goal';
+    var gi = num($h.closest('.sec[data-sg]').data('sg'));
+    SEED_DRAG = isGoal ? { type: 'goal', gi: gi }
+                       : { type: 'task', gi: gi, ti: num($h.closest('tr').data('st')) };
+    var el = (isGoal ? $h.closest('.sec[data-sg]') : $h.closest('tr'))[0];
+    var dt = e.originalEvent.dataTransfer;
+    if (dt) {
+        dt.effectAllowed = 'move';
+        dt.setData('text/plain', 'seed');           // Firefox 沒設資料就不會觸發 drop
+        if (dt.setDragImage) dt.setDragImage(el, 12, 12);
+    }
+    $(el).addClass('seed-dragging');
+});
+$(document).on('dragend', '#setSeedBox .seed-h', function () {
+    SEED_DRAG = null;
+    $('#setSeedBox .seed-dragging').removeClass('seed-dragging');
+    seedDragClear();
+});
+/* 拖步驟：目標是某一列，或某個階段的空白處（＝放到那一階段的最後） */
+$(document).on('dragover', '#setSeedBox tbody tr', function (e) {
+    if (!SEED_DRAG || SEED_DRAG.type !== 'task') return;
+    e.preventDefault(); e.stopPropagation();
+    seedDragClear();
+    $(this).addClass(seedDropAfter(this, e.originalEvent) ? 'seed-dz-after' : 'seed-dz-before');
+});
+$(document).on('drop', '#setSeedBox tbody tr', function (e) {
+    if (!SEED_DRAG || SEED_DRAG.type !== 'task') return;
+    e.preventDefault(); e.stopPropagation();
+    var gi = num($(this).closest('.sec[data-sg]').data('sg'));
+    var ti = num($(this).data('st')) + (seedDropAfter(this, e.originalEvent) ? 1 : 0);
+    seedMoveTask(SEED_DRAG, gi, ti);
+});
+$(document).on('dragover', '#setSeedBox .sec[data-sg]', function (e) {
+    if (!SEED_DRAG) return;
+    e.preventDefault();
+    if (SEED_DRAG.type !== 'goal') return;           // 拖步驟時交給上面那條處理，不畫階段的插入線
+    seedDragClear();
+    $(this).addClass(seedDropAfter(this, e.originalEvent) ? 'seed-dz-after' : 'seed-dz-before');
+});
+$(document).on('drop', '#setSeedBox .sec[data-sg]', function (e) {
+    if (!SEED_DRAG) return;
+    e.preventDefault();
+    var gi = num($(this).data('sg'));
+    if (SEED_DRAG.type === 'task') {                 // 放在階段的空白處＝排到該階段最後
+        seedSyncFromDom();
+        seedMoveTask(SEED_DRAG, gi, (SEED_TPL[gi].tasks || []).length);
+        return;
+    }
+    var to = gi + (seedDropAfter(this, e.originalEvent) ? 1 : 0);
+    seedSyncFromDom();
+    if (to === SEED_DRAG.gi || to === SEED_DRAG.gi + 1) { seedDragClear(); return; }
+    var g = SEED_TPL.splice(SEED_DRAG.gi, 1)[0];
+    SEED_TPL.splice(to > SEED_DRAG.gi ? to - 1 : to, 0, g);
+    SEED_DRAG = null;
+    renderSeedTpl();
+});
+/** 把 from 那一列搬到 gi 階段的第 ti 個位置（同一階段往後搬時要扣掉自己抽走的那一格） */
+function seedMoveTask(from, gi, ti) {
+    seedSyncFromDom();
+    var t = (SEED_TPL[from.gi].tasks || []).splice(from.ti, 1)[0];
+    if (!t) { SEED_DRAG = null; renderSeedTpl(); return; }
+    if (gi === from.gi && ti > from.ti) ti--;
+    SEED_TPL[gi].tasks = (SEED_TPL[gi].tasks || []);
+    SEED_TPL[gi].tasks.splice(Math.max(0, Math.min(ti, SEED_TPL[gi].tasks.length)), 0, t);
+    /* 來源階段被搬空時留一列空白，才有地方可以繼續打字（存檔時空白列本來就會濾掉） */
+    if (!SEED_TPL[from.gi].tasks.length) SEED_TPL[from.gi].tasks = [{ name: '', kind: '', dept_id: 0, owner_id: 0 }];
+    SEED_DRAG = null;
+    renderSeedTpl();
+}
+
 $(document).on('click', '#btnSeedReset', function () {
     if (!confirm('把自訂的標準流程範本清掉、還原成系統內建的 AS9100 版本？\n\n（要按「儲存設定」才會真的寫入）')) return;
     api('seed_default').done(function (r) { SEED_TPL = r.rows || []; SEED_CUSTOM = false; renderSeedTpl(); });

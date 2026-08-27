@@ -162,6 +162,12 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         table.sub-tbl input, table.sub-tbl select, table.sub-tbl textarea {
             width:100%; border:1px solid #E8D5B5; border-radius:3px; padding:3px 5px; font-size:13px; color:#5b3a1e; }
         table.sub-tbl textarea { resize:vertical; min-height:26px; }
+        /* 標準流程範本的拖曳排序：只有把手可以拖（整列 draggable 會害欄位裡的文字選不起來） */
+        .seed-h { cursor:grab; color:#b59b74; user-select:none; font-size:15px; line-height:1; }
+        .seed-h:active { cursor:grabbing; }
+        .seed-dragging { opacity:.45; }
+        .seed-dz-before { box-shadow: inset 0 3px 0 0 #F0A24B; }
+        .seed-dz-after  { box-shadow: inset 0 -3px 0 0 #F0A24B; }
 
         /* ── 分頁 ── */
         .pj-tabs { display:flex; gap:4px; flex-wrap:wrap; border-bottom:2px solid #E8D5B5; margin-bottom:10px; }
@@ -484,7 +490,9 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 <b>負責部門下拉的範圍</b>與規劃表一樣，由上面的「執行規劃表負責人部門」決定。<br>
                 <b>帶入時階段名稱一樣的不會重複建立</b>，所以改名等於多一個新階段。標「🔒 首件」的那一列是系統固定環節
                 （FAI／未通過時自動補的 RCA 與差異首件都認它），<b>整份範本只能有一列</b>，可以改名字與負責人、可以搬到別的階段。
-                沒有自訂過就是系統內建的 AS9100 版本；按「還原內建預設」會把自訂內容清掉。</p>
+                沒有自訂過就是系統內建的 AS9100 版本；按「還原內建預設」會把自訂內容清掉。<br>
+                <b>順序用拖的</b>：抓住每一列左邊的 <b>⠿</b> 把手上下拖曳即可換位置，<b>步驟也可以直接拖到別的階段底下</b>
+                （例如要在首件檢驗之前插一道新程序，就把新步驟拖到它上面）。階段本身也能拖曳調整先後。</p>
             <div id="setSeedBox"></div>
             <div style="display:flex;gap:6px;margin-top:8px;">
                 <button id="btnSeedGoalAdd" style="height:30px;padding:0 12px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;">＋ 新增階段</button>
@@ -580,6 +588,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
                 <b>新加的一列會自動把上一列的預計完成日當成預計開始日</b>，一路往下排很快。</li>
             <li><b>「帶入標準流程」帶的是可以自己改的範本</b>：管理員到<b>模組設定 → 執行規劃表標準流程範本</b>
                 增刪階段與步驟，並可替每個步驟先設好<b>預設負責部門／負責人</b>（帶入時直接填好，填表人仍可改）。
+                <b>順序用左邊的 ⠿ 把手拖曳調整</b>，步驟可以跨階段拖（要在首件檢驗之前加程序就這樣做）。
                 <b>階段名稱一樣的不會重複建立</b>，所以已經排過的階段不會被覆蓋。</li>
             <li><b>第一個目標的第一列「預計開始」會自動帶入專案開始日</b>（「專案基本資料」的專案起日），
                 空白時才帶、不會蓋掉你自己排好的日期；配合下面的「上一列完成→下一列開始」，整條日程會一路長出來。</li>
