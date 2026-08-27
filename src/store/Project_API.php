@@ -153,6 +153,8 @@ case 'meta':
         'tag_kinds'  => PRJ_TAG_KINDS,
         'phrase_fields' => PRJ_PHRASE_FIELDS,
         'doc_checks' => PRJ_DOC_CHECKS,
+        'doc_phase'  => PRJ_DOC_PHASE,
+        'fai_results'=> PRJ_FAI_RESULTS,
         'tags'       => prj_tags_all($db),
         'people'     => $people,
         // 每人「所有」的部門×職稱：eg_people_list 一人只回一列（職級最高那筆），
@@ -192,6 +194,8 @@ case 'get':
     $prj = prj_need($db, $P, $pid);
     // 開啟詳情時背景同步一次 BOM（silent＝第一次帶入不洗出一堆變更提示）
     try { prj_bom_sync($db, $pid, $uname, true); } catch (Throwable $e) {}
+    // 「送首件檢驗」是系統固定環節：只要專案已經有目標就要看得到那一列（不必等到存過規劃表）
+    try { prj_fai_ensure_task($db, $pid); } catch (Throwable $e) {}
     jout([
         'project'   => $prj,
         'goals'     => prj_goals($db, $pid),
@@ -200,6 +204,10 @@ case 'get':
         'parts'     => prj_parts($db, $pid),
         'processes' => prj_processes($db, $pid),
         'work_reports' => prj_work_reports($db, $pid),
+        'fai'          => prj_fai_list($db, $pid),
+        'fai_pass_date'=> prj_fai_pass_date($db, $pid),
+        'fai_results'  => PRJ_FAI_RESULTS,
+        'doc_phase'    => PRJ_DOC_PHASE,
         'cards'     => prj_cards($db, $pid),
         'cosigns'   => prj_cosigns($db, $pid),
         'alerts'    => prj_bom_alerts($db, $pid),
@@ -596,6 +604,9 @@ case 'plan_save':
         $db->rollBack();
         jerr('儲存失敗：' . $e->getMessage());
     }
+    // 「送首件檢驗」是系統固定環節：前端沒送它也不能被上面的刪除掃掉，補回來
+    try { prj_fai_ensure_task($db, $pid); } catch (Throwable $e) {}
+
     // 日程改了，仍為自動的管理卡基準要跟著重算（推導欄位鐵則）
     try {
         $st = $db->prepare("SELECT card_id FROM project_card WHERE project_id=? AND is_deleted=0 AND status='draft'");
@@ -603,6 +614,71 @@ case 'plan_save':
         foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $cid) prj_card_refresh_baseline($db, (int)$cid);
     } catch (Throwable $e) {}
     jout(['message' => '已儲存執行規劃表', 'goals' => prj_goals($db, $pid), 'tasks' => prj_tasks($db, $pid)]);
+
+/* ══════════════════════════ 首件檢驗（AS9102 FAI） ══════════════════════════ */
+case 'fai_save':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    $fid    = (int)($_POST['fai_id'] ?? 0);
+    $send   = trim((string)($_POST['send_date'] ?? '')) ?: null;
+    $result = (string)($_POST['result'] ?? '');
+    $rdate  = trim((string)($_POST['result_date'] ?? '')) ?: null;
+    $note   = trim((string)($_POST['note'] ?? ''));
+    if ($result !== '' && !isset(PRJ_FAI_RESULTS[$result])) jerr('檢驗結果不合法');
+    // 判定日沒填就用送件日（現場常是當天送當天判）
+    if ($result !== '' && !$rdate) $rdate = $send;
+    if ($send && $rdate && $rdate < $send) {
+        jerr('判定日不可早於送件日', 400, ['fields' => ['result_date' => '判定日不可早於送件日']]);
+    }
+    if ($result === 'fail' && $note === '') {
+        jerr('未通過一定要填原因', 400, ['fields' => ['note' => '未通過一定要填原因']]);
+    }
+    if ($fid) {
+        $st = $db->prepare("SELECT project_id FROM project_fai WHERE fai_id=?");
+        $st->execute([$fid]);
+        if ((int)$st->fetchColumn() !== $pid) jerr('這筆首件紀錄不屬於本專案', 404);
+        $db->prepare("UPDATE project_fai SET send_date=?, result=?, result_date=?, note=?, modified_by=?, modified_at=?
+                      WHERE fai_id=?")->execute([$send, $result, $rdate, $note, $uname, $NOW['dt'], $fid]);
+    } else {
+        // 重送：只有前一次「已經判定為未通過」才可以再開一次，否則會出現一堆空白的送件紀錄
+        $rows = prj_fai_list($db, $pid);
+        if ($rows) {
+            $last = end($rows);
+            if ((string)$last['result'] === '') jerr('上一次送件還沒有判定結果，請先填結果');
+            if (prj_fai_is_pass((string)$last['result'])) jerr('首件已經通過，不需要再送件');
+        }
+        $seq = count($rows) + 1;
+        $db->prepare("INSERT INTO project_fai (project_id, seq, send_date, result, result_date, note, created_by, created_at)
+                      VALUES (?,?,?,?,?,?,?,?)")
+           ->execute([$pid, $seq, $send, $result, $rdate, $note, $uname, $NOW['dt']]);
+        $fid = (int)$db->lastInsertId();
+    }
+    // 首件通過就把固定任務列標成完成（實際完成日＝通過日；進度仍走自動規則）
+    try {
+        $pass = prj_fai_pass_date($db, $pid);
+        $tid  = prj_fai_ensure_task($db, $pid);
+        if ($tid) {
+            $db->prepare("UPDATE project_task SET act_end=?, progress=CASE WHEN progress_auto=1 THEN ? ELSE progress END
+                          WHERE task_id=?")->execute([$pass, $pass ? 100 : 0, $tid]);
+        }
+    } catch (Throwable $e) {}
+    jout(['fai_id' => $fid, 'message' => '已儲存首件檢驗紀錄',
+          'fai' => prj_fai_list($db, $pid), 'fai_pass_date' => prj_fai_pass_date($db, $pid),
+          'doc_check' => prj_doc_check($db, $pid)]);
+
+case 'fai_delete':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    if (!$P['canAdmin']) jerr('只有專案管理員可以刪除首件紀錄（AS9102 要求可追溯）', 403);
+    $fid = (int)($_POST['fai_id'] ?? 0);
+    $db->prepare("DELETE FROM project_fai WHERE fai_id=? AND project_id=?")->execute([$fid, $pid]);
+    // 序號重排，避免出現第 1、3 次這種看不懂的編號
+    $i = 1;
+    foreach (prj_fai_list($db, $pid) as $r) {
+        $db->prepare("UPDATE project_fai SET seq=? WHERE fai_id=?")->execute([$i++, (int)$r['fai_id']]);
+    }
+    jout(['message' => '已刪除', 'fai' => prj_fai_list($db, $pid),
+          'fai_pass_date' => prj_fai_pass_date($db, $pid), 'doc_check' => prj_doc_check($db, $pid)]);
 
 /* ══════════════════════════ BOM 製程 ══════════════════════════ */
 case 'bom_sync':

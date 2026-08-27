@@ -202,6 +202,8 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
 
         /* ── 文件檢核 ── */
         .chk-y { color:#2F7D4F; font-weight:bold; }
+        .chk-before { color:#C4442D; font-size:11px; font-weight:bold; }
+        .chk-after  { color:#8A5A2B; font-size:11px; font-weight:bold; }
         .chk-n { color:#DD5138; font-weight:bold; cursor:pointer; text-decoration:underline; }
         .pj-alertbar { border:1.5px solid #F0A24B; background:#FDF3E4; border-radius:6px; padding:8px 12px;
             margin-bottom:10px; font-size:13px; color:#5b3a1e; }

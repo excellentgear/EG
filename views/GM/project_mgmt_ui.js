@@ -861,6 +861,115 @@ function filterAttr(optHtml, ph) {
     return (optHtml.split('<option').length - 1) > 12 ? ' data-eg-filter="' + ph + '"' : '';
 }
 
+/* ══ 首件檢驗（AS9102 FAI）══════════════════════════════════════════
+   使用者拍板：做成規劃表裡的固定任務列＋結果欄；未通過可重送，每一次都留紀錄。
+   時序依據 AS9145：PFMEA／SOP／SIP 屬製程開發（首件之前就要有），FAI 是產品與製程驗證。 */
+function faiLatest() {
+    var f = (CUR && CUR.fai) || [];
+    return f.length ? f[f.length - 1] : null;
+}
+function faiResultLabel(r) {
+    return ((CUR && CUR.fai_results) || META.fai_results || {})[r] || '';
+}
+function faiBadgeHtml() {
+    var last = faiLatest();
+    if (!last) return '<span class="pj-hint">尚未送件</span>';
+    var r = String(last.result || '');
+    if (!r) return '<span class="st st-submitted">第 ' + num(last.seq) + ' 次已送件・待判定</span>';
+    var cls = (r === 'fail') ? 'st-rejected' : 'st-approved';
+    return '<span class="st ' + cls + '">第 ' + num(last.seq) + ' 次 ' + esc(faiResultLabel(r)) + '</span>'
+         + (last.result_date ? '<span class="pj-hint"> ' + dispDate(last.result_date) + '</span>' : '');
+}
+/** 首件檢驗區塊：送件、結果、重送、歷程 */
+function faiBoxHtml(res) {
+    var list = res.fai || [], last = list.length ? list[list.length - 1] : null;
+    var ro = res.can_edit ? '' : ' disabled';
+    var passed = !!res.fai_pass_date;
+    var h = '<div class="sec" style="background:#FFFDF8;"><h5>首件檢驗（AS9102）'
+          + '<span class="pj-hint" style="font-weight:normal;margin-left:8px;">'
+          + 'PFMEA／SOP／SIP 要在送首件<b>之前</b>備妥；型態識別文件管制表在首件通過<b>之後</b>建立。</span></h5>';
+
+    /* 首件前應備文件的檢查：缺就在這裡直接講，不用等使用者自己去翻文件檢核 */
+    var lackBefore = 0, lackParts = [];
+    $.each(res.doc_check || [], function (i, r) {
+        if (num(r.missing_before)) { lackBefore += num(r.missing_before); lackParts.push(r.part_no); }
+    });
+    if (lackBefore) {
+        h += '<div style="border:2px solid #DD5138;background:#FCE4E4;color:#A32E1A;border-radius:6px;'
+          + 'padding:8px 12px;margin-bottom:10px;font-size:13px;">'
+          + '<b>送首件之前，這些料號還缺 ' + lackBefore + ' 份應備文件：</b>' + esc(lackParts.join('、'))
+          + '<br><span style="font-weight:normal;">首件檢驗驗證的就是「這套製程＋這份文件」，'
+          + '沒有 PFMEA／SOP／SIP 就沒有判定依據（AS9102／AS9145）。請到「文件檢核」分頁補齊。</span></div>';
+    }
+
+    var showNew = res.can_edit && (!last || (String(last.result || '') === 'fail'));
+    if (!list.length) {
+        h += '<div class="pj-hint" style="margin-bottom:8px;">還沒有送件紀錄。'
+          + (res.can_edit ? '填好下面的送件日按「新增送件」即可。' : '') + '</div>';
+    } else {
+        h += '<table class="sub-tbl" style="margin-bottom:8px;"><thead><tr>'
+          + '<th style="width:56px;">次數</th><th style="width:120px;">送件日</th>'
+          + '<th style="width:130px;">結果</th><th style="width:120px;">判定日</th><th>備註／未通過原因</th>'
+          + (res.can_edit ? '<th style="width:60px;"></th>' : '') + '</tr></thead><tbody>';
+        $.each(list, function (i, f) {
+            var isLast = (i === list.length - 1);
+            var rOpt = '<option value="">（待判定）</option>';
+            $.each((res.fai_results || {}), function (k, v) {
+                rOpt += '<option value="' + k + '"' + (String(f.result) === k ? ' selected' : '') + '>' + esc(v) + '</option>';
+            });
+            /* 已經判定過的舊次數一律唯讀——AS9102 要可追溯，不可以事後改掉歷程 */
+            var lock = (!res.can_edit || (!isLast && String(f.result || '') !== ''));
+            var d = lock ? ' disabled' : '';
+            h += '<tr data-fai="' + f.fai_id + '"><td>第 ' + num(f.seq) + ' 次</td>'
+              + '<td><input type="date" class="f-send" value="' + esc(f.send_date || '') + '"' + d + '></td>'
+              + '<td><select class="f-result"' + d + '>' + rOpt + '</select></td>'
+              + '<td><input type="date" class="f-rdate" value="' + esc(f.result_date || '') + '"' + d + '></td>'
+              + '<td><input type="text" class="f-note" value="' + esc(f.note || '') + '"' + d
+              + ' placeholder="未通過必填原因／特採條件"></td>'
+              + (res.can_edit ? '<td>' + (lock ? '<span class="pj-hint">已定案</span>'
+                    : '<span class="pj-op f-save">儲存</span>') + '</td>' : '')
+              + '</tr>';
+        });
+        h += '</tbody></table>';
+    }
+    if (showNew) {
+        h += '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">'
+          + '<div><label>送件日</label><input type="date" id="faiNewDate" style="width:150px;"' + ro + '></div>'
+          + '<button id="btnFaiNew" style="height:30px;padding:0 14px;border:1px solid #d98a33;border-radius:4px;'
+          + 'background:#F0A24B;color:#fff;cursor:pointer;">'
+          + (list.length ? '未通過，重送一次' : '新增送件') + '</button>'
+          + '<span class="pj-hint">' + (list.length ? '前一次未通過才可以重送；每一次都會留下紀錄。' : '') + '</span></div>';
+    } else if (passed) {
+        h += '<div class="pj-hint">首件已於 <b>' + dispDate(res.fai_pass_date) + '</b> 通過，'
+          + '型態識別文件管制表現在可以建立了。</div>';
+    }
+    return h + '</div>';
+}
+$(document).on('click', '#btnFaiNew', function () {
+    api('fai_save', { project_id: CUR.project.project_id, send_date: $('#faiNewDate').val() }, 'POST')
+        .done(function (r) { faiApply(r); });
+});
+$(document).on('click', '#planEditBox .f-save', function () {
+    var $tr = $(this).closest('tr');
+    api('fai_save', {
+        project_id: CUR.project.project_id, fai_id: num($tr.data('fai')),
+        send_date: $tr.find('.f-send').val(), result: $tr.find('.f-result').val(),
+        result_date: $tr.find('.f-rdate').val(), note: $tr.find('.f-note').val()
+    }, 'POST').done(function (r) { faiApply(r); pjMsg(r.message || '已儲存', { ok: true }); });
+});
+/* 首件狀態一變，文件檢核的閘門與規劃表的固定列都要跟著重畫 */
+function faiApply(r) {
+    if (!CUR) return;
+    CUR.fai = r.fai || [];
+    CUR.fai_pass_date = r.fai_pass_date || null;
+    if (r.doc_check) CUR.doc_check = r.doc_check;
+    var dirty = PLAN_DIRTY;
+    planSyncToCur();
+    drawPlanEditor(CUR);
+    renderCheck(CUR);
+    PLAN_DIRTY = dirty;
+}
+
 /* ── 規劃表編輯器（可增列表格：末列↓加列、空白末列↑移除＝共用檔規則） ── */
 var PLAN_ACT_OPEN = false;   // 實際開始／完成現在可不可以填（＝專案是否已立案核准）
 var PLAN_DIRTY    = false;   // 規劃表有沒有還沒存進去的變更（避免整桌資料被無聲丟掉）
@@ -890,7 +999,8 @@ function drawPlanEditor(res) {
     var deptOpt = '<option value="">（無）</option>';
     $.each(META.depts || [], function (i, x) { deptOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
 
-    var h = '<div class="sec"><h5>編排目標與主要任務</h5>'
+    var h = faiBoxHtml(res)
+      + '<div class="sec"><h5>編排目標與主要任務</h5>'
       + '<p class="pj-hint">末列按 <b>↓</b> 自動加一列、沒填東西的末列按 <b>↑</b> 自動移除；'
       + '任務改了日期，時間軸與管理卡的「目前應達成基準」都會跟著重算。<br>'
       + '負責人<b>先選部門、再選人</b>（兼任多個部門的人會在各部門底下分別以該部門的職稱出現）；'
@@ -940,6 +1050,7 @@ function drawPlanEditor(res) {
 
 function planRowHtml(t, i) {
     t = t || {};
+    var isFai = (String(t.task_kind || '') === 'fai');
     var did = num(t.owner_dept_id) || guessOwnerDept(num(t.owner_id));
     var dOpt = taskDeptOptions(did), pOpt = taskOwnerOptions(did, num(t.owner_id), true);
     /* 實際日期在核准前反灰（後端 plan_save 也會忽略，不是只擋 UI＝鐵律8）。
@@ -953,7 +1064,9 @@ function planRowHtml(t, i) {
     var pgAuto = (t.progress_auto === undefined || t.progress_auto === null) ? true : !!num(t.progress_auto);
     return '<tr data-task="' + num(t.task_id) + '" data-pe0="' + esc(t.plan_end || '') + '">'
       + '<td>' + (i + 1) + '</td>'
-      + '<td><input type="text" class="t-name" value="' + esc(t.task_name || '') + '"></td>'
+      + '<td><input type="text" class="t-name' + (isFai ? ' ro-auto' : '') + '" value="'
+      + esc(t.task_name || '') + '"' + (isFai ? ' readonly title="系統固定環節，名稱不可修改"' : '') + '>'
+      + (isFai ? '<div style="margin-top:3px;">' + faiBadgeHtml() + '</div>' : '') + '</td>'
       + '<td><input type="date" class="t-ps"' + planMinAttr() + ' value="' + esc(t.plan_start || '') + '"></td>'
       + '<td><input type="number" class="t-days" min="1" max="999" value="' + (days > 0 ? days : '') + '"></td>'
       + '<td><input type="date" class="t-pe" value="' + esc(t.plan_end || '') + '"></td>'
@@ -965,7 +1078,9 @@ function planRowHtml(t, i) {
       + '<label style="font-size:11px;display:block;margin-top:2px;white-space:nowrap;" title="填了實際完成日就自動變 100%；自己改過數字就不再自動">'
       + '<input type="checkbox" class="t-pgauto" data-eg-skip="1"' + (pgAuto ? ' checked' : '') + '> 自動</label></td>'
       + '<td><input type="checkbox" class="t-ms" data-eg-skip="1"' + (num(t.is_milestone) ? ' checked' : '') + '></td>'
-      + '<td><span class="pj-op t-del" title="刪除這一列">✕</span></td></tr>';
+      + '<td>' + (isFai
+            ? '<span title="系統固定環節，不可刪除" style="color:#b59b74;">🔒</span>'
+            : '<span class="pj-op t-del" title="刪除這一列">✕</span>') + '</td></tr>';
 }
 
 /* ── 預計開始／工作天數／預計完成 三欄連動 ──────────────────────────
@@ -1169,6 +1284,7 @@ function planSyncToCur() {
             tasks.push({
                 task_id: num($r.data('task')), goal_id: gid,
                 task_name: $r.find('.t-name').val(),
+                task_kind: $r.find('.t-name').prop('readonly') ? 'fai' : '',
                 plan_start: $r.find('.t-ps').val(), plan_end: $r.find('.t-pe').val(),
                 act_start: $r.find('.t-as').val(), act_end: $r.find('.t-ae').val(),
                 owner_id: num($r.find('.t-owner').val()) || null,
@@ -1222,6 +1338,7 @@ function savePlan(pid, cb) {
             bad = bad || planRowCheck($(this));   // 畫面上的即時檢查與存檔前的檢查共用同一份規則
             tasks.push({
                 goal_key: gkey, task_id: num($(this).data('task')), task_name: tn,
+                task_kind: $(this).find('.t-name').prop('readonly') ? 'fai' : '',
                 plan_start: ps, plan_end: pe, act_start: as, act_end: ae,
                 owner_id: $(this).find('.t-owner').val(),
                 owner_dept_id: $(this).find('.t-odept').val(),
@@ -1589,17 +1706,38 @@ function renderCheck(res) {
         $('#paneChk').html('<div class="pj-hint" style="padding:14px;">專案還沒有料號，無法檢核。請先綁定訂單或手動掛料號。</div>');
         return;
     }
-    var h = '<p class="pj-hint">每個料號都應該有這四份技術文件。<b>✗ 可以直接點下去開啟對應頁面並帶入該料號</b>；'
-          + '那四個頁面自己的「建議建立清單／缺件偵測」也會列出「有專案但未建立」的料號。</p>'
+    var phase = (CUR && CUR.doc_phase) || META.doc_phase || {};
+    var passed = !!(CUR && CUR.fai_pass_date);
+    var h = '<p class="pj-hint">每個料號都應該有這些技術文件，<b>括號內是版次／編號</b>。'
+          + '<b>✗ 可以直接點下去開啟對應頁面、自動開建立跳窗並帶入已有資料</b>。<br>'
+          + '欄名標 <b class="chk-before">［首件前］</b> 的（PFMEA／SOP／SIP）要在<b>送首件檢驗之前</b>備妥'
+          + '——首件驗證的就是這套製程與這份文件，沒有它們就沒有判定依據（AS9102／AS9145）；'
+          + '標 <b class="chk-after">［首件後］</b> 的（型態識別文件管制表）等首件<b>通過之後</b>再建立，'
+          + '它記錄的是這批文件的版本組合。'
+          + (passed ? '　目前狀態：<b>首件已通過（' + dispDate(CUR.fai_pass_date) + '）</b>。'
+                    : '　目前狀態：<b>首件尚未通過</b>，［首件後］的文件先不列入缺件。') + '</p>'
           + '<div class="pj-table-wrap"><table class="pj-table"><thead><tr><th>料號</th><th style="width:110px;">客戶</th>';
-    $.each(defs, function (k, d) { h += '<th style="width:130px;">' + esc(d[0]) + '</th>'; });
+    $.each(defs, function (k, d) {
+        var ph = phase[k] || 'any';
+        h += '<th style="width:150px;">' + esc(d[0])
+          + (ph === 'before' ? '<br><span class="chk-before">［首件前］</span>' : '')
+          + (ph === 'after' ? '<br><span class="chk-after">［首件後］</span>' : '') + '</th>';
+    });
     h += '<th style="width:64px;">缺件</th></tr></thead><tbody>';
     $.each(rows, function (i, r) {
         h += '<tr><td class="l"><b>' + esc(r.part_no) + '</b></td><td>' + esc(r.customer_name || '') + '</td>';
         $.each(defs, function (k, d) {
-            h += '<td>' + (num(r[k])
-                ? '<span class="chk-y">✓ 已建立</span>'
-                : '<span class="chk-n" data-go="' + esc(d[1]) + '" data-kw="' + esc(r.part_no) + '">✗ 未建立</span>') + '</td>';
+            var ph = phase[k] || 'any', rev = r[k + '_rev'] || '';
+            if (num(r[k])) {
+                h += '<td><span class="chk-y">✓ 已建立</span>'
+                  + (rev ? '<br><span class="pj-hint">' + esc(rev) + '</span>' : '') + '</td>';
+            } else if (ph === 'after' && !passed) {
+                h += '<td><span class="pj-hint" title="首件通過後才需要建立">－ 首件通過後</span></td>';
+            } else {
+                h += '<td><span class="chk-n" data-go="' + esc(d[1]) + '" data-kw="' + esc(r.part_no) + '"'
+                  + ' data-doc="' + esc(k) + '" data-ds="' + num(r.ds_pk) + '">✗ 未建立</span>'
+                  + (ph === 'before' ? '<br><span class="chk-before">送首件前應備</span>' : '') + '</td>';
+            }
         });
         h += '<td>' + (num(r.missing) ? '<span class="pj-miss-badge">' + num(r.missing) + '</span>' : '<span class="pj-ok-badge">齊全</span>') + '</td></tr>';
     });
@@ -1607,7 +1745,19 @@ function renderCheck(res) {
     $('#paneChk').html(h);
 }
 $(document).on('click', '.chk-n', function () {
-    window.open($(this).data('go') + '?kw=' + encodeURIComponent($(this).data('kw')), '_blank');
+    /* 除了帶料號過去搜尋，另外帶 prj_new=1 與專案資訊：
+       目標頁看到這組參數就自動開「建立」跳窗並把已知的資料預填進去（使用者要求）。 */
+    var p = CUR ? CUR.project : {};
+    var q = '?kw=' + encodeURIComponent($(this).data('kw'))
+          + '&prj_new=1'
+          + '&ds_pk=' + num($(this).data('ds'))
+          + '&doc=' + encodeURIComponent($(this).data('doc') || '')
+          + '&project_id=' + num(p.project_id)
+          + '&project_no=' + encodeURIComponent(p.project_no || '')
+          + '&project_name=' + encodeURIComponent(p.project_name || '')
+          + '&customer_id=' + encodeURIComponent(p.customer_id || '')
+          + '&fai_date=' + encodeURIComponent((CUR && CUR.fai_pass_date) || '');
+    window.open($(this).data('go') + q, '_blank');
 });
 
 /* ══════════════════════════ 會簽／核准 ══════════════════════════ */

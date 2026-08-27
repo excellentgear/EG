@@ -55,13 +55,38 @@ const PRJ_TAG_KINDS = ['project' => '專案分類', 'goal' => '目標分類', 't
 /** 專案內容欄位（§6.8 籌備階段的提案內容；每個欄位各有一組可自訂的常用語句） */
 const PRJ_PHRASE_FIELDS = ['purpose' => '專案目的', 'goal_desc' => '專案目標'];
 
-/** 文件檢核的四個項目（key => [顯示名稱, 頁面路徑]） */
+/** 文件檢核項目（key => [顯示名稱, 頁面路徑]） */
 const PRJ_DOC_CHECKS = [
     'dev_eval' => ['產品開發評估表',     '/EGsystem/views/TD/td_dev_eval.php'],
-    'type_id'  => ['型態識別文件管制表', '/EGsystem/views/TD/type_id_ctrl_doc.php'],
     'pfmea'    => ['PFMEA',              '/EGsystem/views/TD/pfmea.php'],
+    'sop'      => ['SOP 作業標準書',     '/EGsystem/views/pages/master_data_management.php'],
+    'sip'      => ['SIP 檢驗標準書',     '/EGsystem/views/pages/master_data_management.php'],
+    'type_id'  => ['型態識別文件管制表', '/EGsystem/views/TD/type_id_ctrl_doc.php'],
     'ext_doc'  => ['外來文件清單',       '/EGsystem/views/Sales/external_doc_list.php'],
 ];
+
+/**
+ * 每份文件相對於「送首件檢驗」的時序（使用者與 AS 標準確認後定案，2026-08-27）：
+ *   before ── 送首件之前就必須有。依據 AS9102／AS9145：首件檢驗(FAI)驗證的就是
+ *             「這套製程＋這份文件」能不能做出合格品，PFMEA→控制計畫→SOP／SIP 屬於
+ *             AS9145 Phase 3 製程開發，FAI 是 Phase 4；沒有 SIP，首件根本沒有判定依據。
+ *   after  ── 首件通過後才建立。型態識別文件管制表記錄的是「這批文件的版本組合」
+ *             （AS9100 8.1.2 型態識別），要等文件定下來才鎖得住。
+ *   any    ── 不限時點。
+ * 使用者決定：文件只做版次管控，不另外分「初版／定版」兩種狀態（單一製程幾乎初版即定案）。
+ */
+const PRJ_DOC_PHASE = [
+    'dev_eval' => 'any',
+    'pfmea'    => 'before',
+    'sop'      => 'before',
+    'sip'      => 'before',
+    'type_id'  => 'after',
+    'ext_doc'  => 'any',
+];
+
+/** 首件檢驗結果（含特採＝有條件通過，仍視為通過） */
+const PRJ_FAI_RESULTS = ['pass' => '通過', 'aod' => '特採通過', 'fail' => '未通過'];
+function prj_fai_is_pass(?string $r): bool { return $r === 'pass' || $r === 'aod'; }
 
 const PRJ_SETTING_GROUP = 'PROJECT_MGMT';
 
@@ -156,6 +181,7 @@ function prj_ensure_schema(PDO $db): void
         owner_dept_id INT NULL COMMENT '負責人是以「哪個部門的身分」被指派（先選部門再選人；兼任者靠這欄決定顯示哪個職稱）',
         progress     TINYINT NOT NULL DEFAULT 0 COMMENT '完成百分比 0~100',
         progress_auto TINYINT NOT NULL DEFAULT 1 COMMENT '1=進度仍跟著實際完成日自動算，0=使用者手動改過就不再自動',
+        task_kind    VARCHAR(20) NOT NULL DEFAULT '' COMMENT '空=一般任務；fai=系統固定的「送首件檢驗」環節（不可刪除、名稱不可改）',
         is_milestone TINYINT NOT NULL DEFAULT 0 COMMENT '1=里程碑（甘特上畫菱形）',
         tag_ids      VARCHAR(255) NULL,
         note         VARCHAR(300) NULL,
@@ -291,6 +317,25 @@ function prj_ensure_schema(PDO $db): void
     // 既有資料庫補欄位（可重複執行）
     prj_ensure_col($db, 'project_task', 'owner_dept_id', "INT NULL COMMENT '負責人所屬部門（先選部門再選人）' AFTER owner_name");
     prj_ensure_col($db, 'project_task', 'progress_auto', "TINYINT NOT NULL DEFAULT 1 COMMENT '1=進度跟著實際完成日自動算' AFTER progress");
+    prj_ensure_col($db, 'project_task', 'task_kind', "VARCHAR(20) NOT NULL DEFAULT '' COMMENT 'fai=送首件檢驗（固定環節）' AFTER is_milestone");
+    // 附件標籤要能勾「這個標籤算 SOP／SIP」——比照 is_external_doc／is_photo_album 的既有做法，
+    // 不在程式裡寫死標籤名稱（鐵律4：使用者改名或新增標籤時不可失效）
+    prj_ensure_col($db, 'quotation_file_categories', 'is_sop', "TINYINT NOT NULL DEFAULT 0 COMMENT '1=這個附件標籤算 SOP 作業標準書'");
+    prj_ensure_col($db, 'quotation_file_categories', 'is_sip', "TINYINT NOT NULL DEFAULT 0 COMMENT '1=這個附件標籤算 SIP 檢驗標準書'");
+
+    $db->exec("CREATE TABLE IF NOT EXISTS project_fai (
+        fai_id      INT AUTO_INCREMENT PRIMARY KEY,
+        project_id  INT NOT NULL,
+        seq         INT NOT NULL DEFAULT 1 COMMENT '第幾次送件（未通過可重送，每次留一筆＝AS9102 可追溯）',
+        send_date   DATE NULL COMMENT '送件日',
+        result      VARCHAR(10) NOT NULL DEFAULT '' COMMENT 'pass 通過／aod 特採通過／fail 未通過／空=尚未判定',
+        result_date DATE NULL COMMENT '判定日（通過日）',
+        note        VARCHAR(500) NULL COMMENT '未通過原因／特採條件',
+        created_by  VARCHAR(60) NULL, created_at DATETIME NULL,
+        modified_by VARCHAR(60) NULL, modified_at DATETIME NULL,
+        UNIQUE KEY uq_seq (project_id, seq),
+        KEY idx_prj (project_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='專案首件檢驗（AS9102 FAI）送件與結果，未通過可重送'");
 
     // 角色（比照 pfmea_lib 慣例自動建立；名稱之後可在角色管理改，這裡只保證存在）
     foreach ([['project_view', '專案檢閱'], ['project_edit', '專案登錄'], ['project_admin', '專案管理員']] as $r) {
@@ -785,6 +830,56 @@ function prj_progress(PDO $db, int $projectId): int
 function prj_act_dates_open(?array $prj): bool
 {
     return in_array((string)($prj['status'] ?? ''), ['approved', 'closed'], true);
+}
+
+/* ══════════════════════ 首件檢驗（AS9102 FAI） ══════════════════════ */
+
+/** 這個專案的所有送件紀錄（第 1 次、第 2 次…；未通過可重送，全部留著） */
+function prj_fai_list(PDO $db, int $projectId): array
+{
+    try {
+        $st = $db->prepare("SELECT * FROM project_fai WHERE project_id=? ORDER BY seq");
+        $st->execute([$projectId]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/** 首件通過日（最後一次判定為通過／特採通過的日期）；還沒通過回 null＝文件閘門用 */
+function prj_fai_pass_date(PDO $db, int $projectId): ?string
+{
+    foreach (array_reverse(prj_fai_list($db, $projectId)) as $r) {
+        if (prj_fai_is_pass((string)$r['result'])) {
+            return (string)($r['result_date'] ?: $r['send_date']) ?: null;
+        }
+    }
+    return null;
+}
+
+/**
+ * 確保這個專案有那一列固定的「送首件檢驗」任務（使用者拍板：做成規劃表裡的固定任務列）。
+ * 掛在第一個目標底下；沒有任何目標時不建立（規劃表都還沒開始編排，硬塞會出現孤兒列）。
+ */
+function prj_fai_ensure_task(PDO $db, int $projectId): int
+{
+    try {
+        $st = $db->prepare("SELECT task_id FROM project_task WHERE project_id=? AND task_kind='fai' LIMIT 1");
+        $st->execute([$projectId]);
+        $tid = (int)$st->fetchColumn();
+        if ($tid) return $tid;
+
+        $st = $db->prepare("SELECT goal_id FROM project_goal WHERE project_id=? ORDER BY sort_order, goal_id LIMIT 1");
+        $st->execute([$projectId]);
+        $gid = (int)$st->fetchColumn();
+        if (!$gid) return 0;
+
+        $st = $db->prepare("SELECT COALESCE(MAX(sort_order),0)+1 FROM project_task WHERE project_id=? AND goal_id=?");
+        $st->execute([$projectId, $gid]);
+        $sort = (int)$st->fetchColumn();
+
+        $db->prepare("INSERT INTO project_task (project_id, goal_id, task_name, task_kind, progress, progress_auto, sort_order)
+                      VALUES (?,?,'送首件檢驗','fai',0,1,?)")->execute([$projectId, $gid, $sort]);
+        return (int)$db->lastInsertId();
+    } catch (Throwable $e) { return 0; }
 }
 
 /** 常用語句清單（field 為 null＝全部欄位一起回） */
@@ -1406,26 +1501,66 @@ function prj_doc_check(PDO $db, int $projectId): array
     if (!$parts) return [];
     $ids = array_map(static fn($r) => (int)$r['ds_pk'], $parts);
     $have = prj_doc_have_map($db, $ids);
+    $passed = prj_fai_pass_date($db, $projectId) !== null;
     $out = [];
     foreach ($parts as $r) {
         $dsPk = (int)$r['ds_pk'];
         $row = ['ds_pk' => $dsPk, 'part_no' => $r['part_no'], 'source' => $r['source'],
-                'customer_name' => $r['customer_name'], 'missing' => 0];
+                'customer_name' => $r['customer_name'], 'missing' => 0, 'missing_before' => 0];
         foreach (array_keys(PRJ_DOC_CHECKS) as $k) {
-            $ok = !empty($have[$k][$dsPk]);
+            $v  = $have[$k][$dsPk] ?? null;
+            $ok = !empty($v);
             $row[$k] = $ok ? 1 : 0;
-            if (!$ok) $row['missing']++;
+            // 版次／編號：各表能給什麼就給什麼（使用者要的是版次管控，不分初版/定版）
+            $row[$k . '_rev'] = is_array($v) ? (string)($v['rev'] ?? '') : '';
+            if (!$ok) {
+                // 型態識別在首件通過前本來就還不該建立，這時不算缺件（免得一直亮紅字）
+                if ((PRJ_DOC_PHASE[$k] ?? 'any') === 'after' && !$passed) continue;
+                $row['missing']++;
+                if ((PRJ_DOC_PHASE[$k] ?? 'any') === 'before') $row['missing_before']++;
+            }
         }
         $out[] = $row;
     }
     return $out;
 }
 
-/** 一次查完四項文件的「哪些料號已有」，避免逐料號逐表 N+1 查詢 */
+/**
+ * SOP／SIP 的判定來源＝料號附件的標籤（使用者拍板，比照外來文件清單的既有做法）：
+ * 哪些標籤算 SOP／SIP 由 quotation_file_categories.is_sop / is_sip 逐標籤勾選，
+ * **不在程式裡寫死標籤名稱**（鐵律4）。版次取該標籤下最新一份附件的版次欄位（沒有就給檔名日期）。
+ */
+function prj_doc_attach_flag_map(PDO $db, array $dsPks, string $flagCol): array
+{
+    $out = [];
+    if (!$dsPks || !in_array($flagCol, ['is_sop', 'is_sip'], true)) return $out;
+    try {
+        $catIds = $db->query("SELECT id FROM quotation_file_categories WHERE $flagCol=1")->fetchAll(PDO::FETCH_COLUMN);
+        $catIds = array_values(array_filter(array_map('intval', $catIds)));
+        if (!$catIds) return $out;   // 一個標籤都沒勾＝這個模組尚未啟用，全部視為未建立
+        $in = implode(',', array_fill(0, count($dsPks), '?'));
+        $cond = [];
+        foreach ($catIds as $cid) $cond[] = "FIND_IN_SET($cid, REPLACE(COALESCE(pa.category_ids,''),' ',''))";
+        require_once __DIR__ . '/imgedit_visibility.php';
+        $st = $db->prepare("SELECT pa.d_id, MAX(DATE(pa.uploaded_at)) AS rev
+                            FROM part_attachments pa
+                            WHERE pa.d_id IN ($in) AND pa.deleted_at IS NULL
+                              AND " . imgedit_sql_not_draft('pa') . "
+                              AND (" . implode(' OR ', $cond) . ")
+                            GROUP BY pa.d_id");
+        $st->execute($dsPks);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[(int)$r['d_id']] = ['rev' => (string)($r['rev'] ?? '')];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 一次查完所有文件的「哪些料號已有」，避免逐料號逐表 N+1 查詢 */
 function prj_doc_have_map(PDO $db, array $dsPks): array
 {
     $dsPks = array_values(array_unique(array_filter(array_map('intval', $dsPks))));
-    $have = ['dev_eval' => [], 'type_id' => [], 'pfmea' => [], 'ext_doc' => []];
+    $have = ['dev_eval' => [], 'type_id' => [], 'pfmea' => [], 'ext_doc' => [], 'sop' => [], 'sip' => []];
     if (!$dsPks) return $have;
     $in = implode(',', array_fill(0, count($dsPks), '?'));
 
@@ -1437,18 +1572,21 @@ function prj_doc_have_map(PDO $db, array $dsPks): array
     $nos = array_values(array_filter($noOf));
     $inNo = $nos ? implode(',', array_fill(0, count($nos), '?')) : '';
 
+    /* 第三個參數帶回「版次／編號」給畫面顯示（使用者要求文件做版次管控）；
+       各表能提供的欄位不同，有什麼給什麼，抓不到就留空字串。 */
     $byNo = static function (array $rows, array $noOf, array &$bucket) {
         $rev = [];
         foreach ($noOf as $pk => $no) if ($no !== '') $rev[$no][] = $pk;
         foreach ($rows as $r) {
-            if (!empty($r['part_d_id'])) { $bucket[(int)$r['part_d_id']] = true; continue; }
+            $info = ['rev' => (string)($r['rev'] ?? '')];
+            if (!empty($r['part_d_id'])) { $bucket[(int)$r['part_d_id']] = $info; continue; }
             $t = (string)($r['part_no_text'] ?? '');
-            if ($t !== '' && isset($rev[$t])) foreach ($rev[$t] as $pk) $bucket[$pk] = true;
+            if ($t !== '' && isset($rev[$t])) foreach ($rev[$t] as $pk) $bucket[$pk] = $info;
         }
     };
 
     try {
-        $sql = "SELECT part_d_id, part_no_text FROM td_dev_eval WHERE is_deleted=0 AND (part_d_id IN ($in)"
+        $sql = "SELECT part_d_id, part_no_text, doc_no AS rev FROM td_dev_eval WHERE is_deleted=0 AND (part_d_id IN ($in)"
              . ($inNo ? " OR part_no_text IN ($inNo)" : '') . ")";
         $st = $db->prepare($sql);
         $st->execute($inNo ? array_merge($dsPks, $nos) : $dsPks);
@@ -1457,7 +1595,7 @@ function prj_doc_have_map(PDO $db, array $dsPks): array
     }
 
     try {
-        $sql = "SELECT part_d_id, part_no_text FROM pfmea_doc WHERE is_deleted=0 AND (part_d_id IN ($in)"
+        $sql = "SELECT part_d_id, part_no_text, doc_no AS rev FROM pfmea_doc WHERE is_deleted=0 AND (part_d_id IN ($in)"
              . ($inNo ? " OR part_no_text IN ($inNo)" : '') . ")";
         $st = $db->prepare($sql);
         $st->execute($inNo ? array_merge($dsPks, $nos) : $dsPks);
@@ -1472,9 +1610,12 @@ function prj_doc_have_map(PDO $db, array $dsPks): array
                             JOIN type_id_ctrl_doc d ON d.id=i.doc_id AND d.is_deleted=0
                             WHERE i.ref_ds_pk IN ($in) AND i.is_deleted=0 AND i.is_excluded=0");
         $st->execute($dsPks);
-        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $pk) $have['type_id'][(int)$pk] = true;
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $pk) $have['type_id'][(int)$pk] = ['rev' => ''];
     } catch (Throwable $e) {
     }
+
+    $have['sop'] = prj_doc_attach_flag_map($db, $dsPks, 'is_sop');
+    $have['sip'] = prj_doc_attach_flag_map($db, $dsPks, 'is_sip');
 
     // 外來文件：類別來源與外來文件清單同一處（quotation_file_categories.is_external_doc=1），
     // 附件的類別存成 CSV 欄位 category_ids，故用 FIND_IN_SET 比對（比照 type_id_ctrl_lib 既有寫法，
@@ -1493,7 +1634,7 @@ function prj_doc_have_map(PDO $db, array $dsPks): array
                                   AND " . imgedit_sql_not_draft('pa') . "
                                   AND (" . implode(' OR ', $cond) . ")");
             $st->execute($dsPks);
-            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $pk) $have['ext_doc'][(int)$pk] = true;
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $pk) $have['ext_doc'][(int)$pk] = ['rev' => ''];
 
             // 報價附件：linked_parts 為 NULL＝該報價單的料號共用，否則只認 JSON 陣列裡點名的料號
             $qcond = [];
