@@ -77,7 +77,7 @@ const REMARK_2024 =
 /** 兩張稽核通知單（2-GM-06-02） */
 const CASES_2024 = [
     [
-        'case_no'     => '1131105001',
+        'case_no'     => '241115001',
         'seq_no'      => 1,
         'notify_date' => '2024-11-05',
         'audit_from'  => '2024-11-15',
@@ -99,7 +99,7 @@ const CASES_2024 = [
         ],
     ],
     [
-        'case_no'     => '1131216001',
+        'case_no'     => '241216001',
         'seq_no'      => 2,
         'notify_date' => '2024-11-05',
         'audit_from'  => '2024-12-16',
@@ -110,16 +110,17 @@ const CASES_2024 = [
         'end_meet'    => ['2024-12-16', '16:00', '16:30', '二樓會議室'],
         'maker'       => ['葉卿雅', '2024-11-05'],
         // 本張紙本是 5 個過程對 4 個單位（客戶需求檢討／開發／訂單合約審查／生產／客戶回饋），
-        // **不是 1:1，無法確定哪個過程屬於哪個單位**，故起始主過程一律留白由使用者自行填，
-        // 完整字串保留在案件備註，--verify 會列出提醒。不猜。
+        // 不是 1:1。2026-08-27 使用者要求要有內容，故依過程性質對應到單位：
+        // 業務課＝客戶需求檢討＋訂單/合約審查（都是業務端）、技術課＝開發、生產課＝生產、品保課＝客戶回饋（客訴）。
+        // 完整字串仍保留在案件備註，畫面上可自行改。
         // 第 6 欄＝該單位的稽核員。本張有兩位稽核員，紙本只在「業務課」留下明確證據
         // （IA24121601／IA24121602 與稽核報告表都寫葉卿雅）；其餘三個單位紙本沒寫是誰稽核的，
         // **不猜**——留空時下面會存成「林國棟／葉卿雅」兩位並存，列印出來與通知單一致。
         'depts'       => [
-            ['業務課', '吳仁隆', '', '09:35', '2025-06-30', '葉卿雅'],
-            ['技術課', '何沐桐', '', '',      '',           ''],
-            ['生產課', '林鴻銘', '', '',      '',           ''],
-            ['品保課', '陳彦驊', '', '',      '',           ''],
+            ['業務課', '吳仁隆', '客戶需求檢討、訂單/合約審查', '09:35', '2025-06-30', '葉卿雅'],
+            ['技術課', '何沐桐', '開發',      '', '', ''],
+            ['生產課', '林鴻銘', '生產',      '', '', ''],
+            ['品保課', '陳彦驊', '客戶回饋',  '', '', ''],
         ],
     ],
 ];
@@ -128,7 +129,7 @@ const CASES_2024 = [
 const NCS_2024 = [
     [
         'nc_no'      => 'IA24111501',
-        'case_no'    => '1131105001',
+        'case_no'    => '241115001',
         'dept'       => '生管組',
         'auditee'    => '何沐桐',
         'audit_date' => '2024-11-15',
@@ -148,7 +149,7 @@ const NCS_2024 = [
     ],
     [
         'nc_no'      => 'IA24121601',
-        'case_no'    => '1131216001',
+        'case_no'    => '241216001',
         'dept'       => '業務課',
         'auditee'    => '吳仁隆',
         'audit_date' => '2024-12-16',
@@ -168,7 +169,7 @@ const NCS_2024 = [
     ],
     [
         'nc_no'      => 'IA24121602',
-        'case_no'    => '1131216001',
+        'case_no'    => '241216001',
         'dept'       => '業務課',
         'auditee'    => '吳仁隆',
         'audit_date' => '2024-12-16',
@@ -211,7 +212,7 @@ const TEMPLATES_UNMAPPED = ['訂單/合約審查', '客戶回饋'];
 
 /** 系統稽核紀錄表（2-GM-06-06，2024-12-16）：[序, 表單編號, 表單名稱, 受稽人, ok/ng, 備註] */
 const SYSTEM_CHECK_2024 = [
-    'case_no'    => '1131216001',
+    'case_no'    => '241216001',
     'check_date' => '2024-12-16',
     'auditor'    => '葉卿雅',
     'rows' => [
@@ -422,7 +423,7 @@ function do_import(PDO $db, bool $write): void
                             end_meet_date,end_meet_start,end_meet_end,end_meet_place,remark,
                             status,executed,executed_date,maker_id,maker_name,maker_date,
                             created_by,created_by_name,created_at,is_deleted)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'approved',1,?,?,?,?,0,?,NOW(),0)")
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'closed',1,?,?,?,?,0,?,NOW(),0)")
                ->execute([IA2024_YEAR, $c['seq_no'], $c['case_no'], $c['notify_date'],
                           $c['audit_from'], $c['audit_to'],
                           $leader ? (int)$leader['id'] : null, $c['leader'],
@@ -494,19 +495,30 @@ function do_import(PDO $db, bool $write): void
                         auditor_dept_id,auditor_position_id,check_date,status,
                         created_by,created_by_name,created_at,is_deleted)
                       VALUES (?,?,'system',?,?,?,?,?,?,'done',0,?,NOW(),0)")
-           ->execute([$caseIdByNo[$sc['case_no']] ?? null, IA2024_YEAR, '系統稽核紀錄表 ' . $sc['check_date'],
+           ->execute([$caseIdByNo[$sc['case_no']] ?? null, IA2024_YEAR, '系統稽核紀錄表',
                       $aud ? (int)$aud['id'] : null, $sc['auditor'],
                       $aud ? (int)$aud['dept_id'] : null, $aud ? (int)$aud['position_id'] : null,
                       $sc['check_date'], IA2024_MARK]);
         $checkId = (int)$db->lastInsertId();
+        // 備註欄寫的 IA 單號要真的「連」到那張不符合通知單（nc_id），不能只是一段文字——
+        // 2026-08-27 使用者回報：畫面上看起來像還沒開不符合通知單，就是因為 nc_id 是空的，
+        // 那一列才會一直顯示「＋開不符合單」。
+        $ncIdByNo = [];
+        $qn = $db->prepare("SELECT nc_id FROM ia_nc WHERE nc_no=? AND COALESCE(is_deleted,0)=0");
+        foreach (NCS_2024 as $n) {
+            $qn->execute([$n['nc_no']]);
+            $v = $qn->fetchColumn();
+            if ($v !== false) $ncIdByNo[$n['nc_no']] = (int)$v;
+        }
         $ciIns = $db->prepare("INSERT INTO ia_check_item
-                                 (check_id,sort_order,is_header,col_a,col_b,col_c,ref_kind,ref_id,result,remark)
-                               VALUES (?,?,0,?,?,?,?,?,?,?)");
+                                 (check_id,sort_order,is_header,col_a,col_b,col_c,ref_kind,ref_id,result,remark,nc_id)
+                               VALUES (?,?,0,?,?,?,?,?,?,?,?)");
         $i = 0;
         foreach ($sc['rows'] as [$docNo, $docName, $auditee, $result, $remark]) {
             $did = asdoc_id($db, $docNo);
+            $ncId = ($remark !== '' && isset($ncIdByNo[$remark])) ? $ncIdByNo[$remark] : null;
             $ciIns->execute([$checkId, ++$i, $docNo, $docName, $auditee,
-                             $did ? 'as_document' : null, $did, $result, $remark ?: null]);
+                             $did ? 'as_document' : null, $did, $result, $remark ?: null, $ncId]);
         }
 
         $db->commit();
@@ -596,6 +608,10 @@ function do_verify(PDO $db): void
     say('  紀錄表項目：'   . $q("SELECT COUNT(*) FROM ia_check_item i JOIN ia_check k ON k.check_id=i.check_id WHERE k.created_by_name=$m") . '（應 19）');
     say('  資格名單：'     . $q("SELECT COUNT(*) FROM ia_qualified_person WHERE updated_by=$m") . ' 筆（應 9）');
     say('  稽核範本：'     . $q("SELECT COUNT(*) FROM ia_process_template WHERE updated_by=$m") . ' 個（應 8）');
+    say('  紀錄表已連到 IA 單的列：' . $q("SELECT COUNT(*) FROM ia_check_item i JOIN ia_check k ON k.check_id=i.check_id
+                                            WHERE k.created_by_name=$m AND i.nc_id IS NOT NULL") . '（應 2）');
+    say('  起始主過程已填的受稽單位：' . $q("SELECT COUNT(*) FROM ia_case_dept d JOIN ia_case c ON c.case_id=d.case_id
+                                              WHERE c.created_by_name=$m AND COALESCE(d.start_process,'')<>''") . '（應 9）');
 
     head('紙本上有、但目前 schema 存不下的（等「稽核員多位」改完再重跑本工具）');
     $any = false;

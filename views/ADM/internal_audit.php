@@ -380,7 +380,7 @@ $roleLabel = ia_role_label($perms);
         <ul>
             <li><b>①年度計畫（2-GM-06-01）</b>：先按「建立本年度計畫表」，選要納入的受稽單位，再在格狀表點格子排定 ○。存檔後送審、核准。</li>
             <li><b>②稽核通知單（2-GM-06-02）</b>：新增一張，填通知日期、稽核期間、稽核組長，下方逐列填「稽核起始主過程／受稽單位／稽核員／陪檢員」。
-                稽核件號會依<b>通知日期</b>自動產生（民國年+月日+流水，例 1131105001）。存檔後可按「事前會議」建立會議紀錄草稿。</li>
+                稽核件號會依<b>通知日期</b>自動產生（西元年後兩碼+月日+流水，例 241216001）。存檔後可按「事前會議」建立會議紀錄草稿。</li>
             <li><b>③查檢表</b>：三種各自建立，建立時勾選這次要查的項目。現場逐列判定合格／不合格並填所見證據。判「不合格」的列可直接按「開不符合單」。</li>
             <li><b>④不符合通知單（2-GM-06-07）</b>：分四段填，各段只有該角色能填（見下）。系統會通知受稽單位主管，期限前與逾期會自動再提醒。</li>
             <li><b>⑤稽核報告表（2-GM-06-08）</b>：缺點數與缺點記錄自動彙總，只要調整「預定完成改善時間」與補充文字，然後核准、列印。</li>
@@ -1232,7 +1232,11 @@ $('#btnCaseSearch').on('click', function(){ PAGE.case=1; loadCases(); });
 $('#caseStatus').on('change', function(){ PAGE.case=1; loadCases(); });
 $('#caseKw').on('keydown', function(e){ if(e.which===13){ PAGE.case=1; loadCases(); } });
 
-var CASE_ST = {draft:'草稿', issued:'已發出', executing:'執行中', closed:'已結案'};
+/* 狀態一律顯示中文（2026-08-27 使用者回報畫面出現英文 approved）。
+   approved／submitted 不是稽核通知單的正式狀態，但舊資料可能存到，一併給中文避免又露出英文。 */
+var CASE_ST = {draft:'草稿', issued:'已發出', executing:'執行中', closed:'已結案',
+               approved:'已核准', submitted:'已送審', rejected:'已退回'};
+function stLabel(map, v){ return map[v] || (v ? String(v) : '') || '—'; }
 function renderCases(){
     $('#casePager').html(renderPager('case', LIST.case.length));
     var rows = pageSlice('case');
@@ -2408,6 +2412,11 @@ function printHead(meta, titleOverride){
 function stampHtml(meta, person, date){
     if (!person || !person.name) return '';
     var d = date ? dispDate(date) : '';
+    // 沒有明確給 dept/position 時，用 IDENT（該業務日期當時的職務）補上，圖章模板才畫得出部門那一列
+    if (person.id && (!person.dept && !person.position)) {
+        var idt = IDENT[identKey(person.id, person._d || date)] || IDENT[identKey(person.id, '')];
+        if (idt) { person = $.extend({}, person, {dept:idt.dept||'', position:idt.position||''}); }
+    }
     try {
         if (window.EGStamp && EGStamp.stamp) {
             return EGStamp.stamp(person.name, d, false,
@@ -2425,13 +2434,29 @@ function signCells(meta, cells){
     return h + '</div>';
 }
 /* 取列印中繼資料（AS 編號依業務日期回推版次），拿到才開列印視窗 */
-function withPrintMeta(key, bizDate, ctx, cb){
+/* 圖章要印的「部門／職稱」（2026-08-27 使用者回報：列印的章跟圖章模板設計的格式不同、部門不見了）
+   圖章模板 schema 是「{部門} {姓名}／{日期}」兩列，列印端多數呼叫只給姓名，模板取不到部門就空著。
+   解法：withPrintMeta 多收一個 people 清單（要蓋章的人＋該單據業務日期），一併向後端要回
+   「當時的部門／職稱」（ai-rules/22 由 ia_identity_asof 回推，前端不自己猜），存進 IDENT 供 stampHtml 用。 */
+var IDENT = {};
+function identKey(id, date){ return (id||0) + '@' + (date||''); }
+/** 組一個給 stampHtml 用的人物件；有 id 就會自動補上當時的部門/職稱 */
+function sp(id, name, date){ return {id:id||0, name:name||'', _d:date||''}; }
+function withPrintMeta(key, bizDate, ctx, cb, people){
     var q = $.extend({action:'print_meta', key:key, biz_date:bizDate||''}, ctx||{});
     $.getJSON(API, q, function(res){
         if (!res.ok) { alert(res.error||'列印資料載入失敗'); return; }
-        // 掃描實體章對照表是非同步載入的，沒等它有實體章的人會印成預設 SVG 章
-        if (window.EGStamp && EGStamp.whenReady) EGStamp.whenReady(function(){ cb(res); });
-        else cb(res);
+        var need = (people||[]).filter(function(x){ return x && +x.id > 0 && !IDENT[identKey(x.id, x.date)]; });
+        var go = function(){
+            // 掃描實體章對照表是非同步載入的，沒等它有實體章的人會印成預設 SVG 章
+            if (window.EGStamp && EGStamp.whenReady) EGStamp.whenReady(function(){ cb(res); });
+            else cb(res);
+        };
+        if (!need.length) { go(); return; }
+        $.getJSON(API, {action:'identity_asof', people:JSON.stringify(need)}, function(r2){
+            if (r2 && r2.ok) $.each(r2.map||{}, function(k, v){ IDENT[k] = v; });
+            go();
+        }).fail(go);          // 解析不到就照舊只印姓名，不擋列印
     });
 }
 function logPrint(name, refTable, refId){
@@ -2443,6 +2468,7 @@ function logPrint(name, refTable, refId){
 $('#btnPlanPrint').on('click', function(){
     if (!PLAN) { alert('本年度還沒有稽核計劃表'); return; }
     var biz = PLAN.approved_date || PLAN.submit_date || PLAN.maker_date || META.today;
+    var planD = PLAN.maker_date;
     withPrintMeta('plan', biz, {leader_id:'', maker_id:PLAN.maker_id||'', maker_name:PLAN.maker_name||''}, function(m){
         var h = printHead(m, (PLAN.title || (PLAN.year + ' 年內部稽核計畫表')));
         h += '<table class="ia-p"><thead><tr><th rowspan="2" style="width:70px;">稽核組別<br>月份</th>';
@@ -2460,16 +2486,18 @@ $('#btnPlanPrint').on('click', function(){
             h += '</tr>';
         }
         h += '</tbody></table>';
+        // 2026-08-27 使用者要求：核准／審查的日期不好判定，一律跟「製表日期」相同
+        var planDate = PLAN.maker_date;
         h += signCells(m, [
-            {label:'核准', html: stampHtml(m, PLAN.approver_id ? {name:PLAN.approver_name} : m.sign_approve, PLAN.approver_date)},
-            {label:'審查', html: stampHtml(m, PLAN.reviewer_id ? {name:PLAN.reviewer_name} : m.sign_review, PLAN.reviewer_date)},
-            {label:'製表', html: stampHtml(m, PLAN.maker_id ? {name:PLAN.maker_name} : null, PLAN.maker_date)}
+            {label:'核准', html: stampHtml(m, PLAN.approver_id ? sp(PLAN.approver_id, PLAN.approver_name, planDate) : m.sign_approve, planDate)},
+            {label:'審查', html: stampHtml(m, PLAN.reviewer_id ? sp(PLAN.reviewer_id, PLAN.reviewer_name, planDate) : m.sign_review, planDate)},
+            {label:'製表', html: stampHtml(m, PLAN.maker_id ? sp(PLAN.maker_id, PLAN.maker_name, planDate) : null, planDate)}
         ]);
         h += '<div class="ia-note">備註: ○計畫實施　◎實際實施'
            + (PLAN.remark ? ('\n'+PLAN.remark) : '') + '</div>';
         logPrint((PLAN.year+' 年內部稽核計畫表'), 'ia_plan', PLAN.plan_id);
         iaPrintWindow(PLAN.year+' 年內部稽核計畫表', h, '', m.doc_no, false);
-    });
+    }, [{id:PLAN.approver_id, date:planD}, {id:PLAN.reviewer_id, date:planD}, {id:PLAN.maker_id, date:planD}]);
 });
 
 /* ---------- ② 稽核通知單 2-GM-06-02 ---------- */
@@ -2478,6 +2506,7 @@ function printCase(id){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
         var c = res.row;
         var biz = c.notify_date || META.today;
+        var caseD = c.maker_date || c.notify_date;
         withPrintMeta('case', biz, {leader_id:c.leader_id||'', leader_name:c.leader_name||'',
                                     maker_id:c.maker_id||'', maker_name:c.maker_name||''}, function(m){
             var h = printHead(m);
@@ -2508,14 +2537,16 @@ function printCase(id){
               + (c.end_meet_date ? (dispDate(c.end_meet_date)+'　'+esc(c.end_meet_start||'')+' 至 '+esc(c.end_meet_end||'')) : '')
               + '　地點: '+esc(c.end_meet_place||'')+'</td></tr></table>';
 
+            // 2026-08-27 使用者要求：核准／審查日期一律跟「製表日期」相同
+            var caseDate = c.maker_date || c.notify_date;
             h += signCells(m, [
-                {label:'核准', html: stampHtml(m, c.approver_id ? {name:c.approver_name} : m.sign_approve, c.approver_date)},
-                {label:'審查', html: stampHtml(m, c.reviewer_id ? {name:c.reviewer_name} : m.sign_review, c.reviewer_date)},
-                {label:'製表', html: stampHtml(m, c.maker_id ? {name:c.maker_name} : null, c.maker_date || c.notify_date)}
+                {label:'核准', html: stampHtml(m, c.approver_id ? sp(c.approver_id, c.approver_name, caseDate) : m.sign_approve, caseDate)},
+                {label:'審查', html: stampHtml(m, c.reviewer_id ? sp(c.reviewer_id, c.reviewer_name, caseDate) : m.sign_review, caseDate)},
+                {label:'製表', html: stampHtml(m, c.maker_id ? sp(c.maker_id, c.maker_name, caseDate) : null, caseDate)}
             ]);
             logPrint('稽核通知單 '+(c.case_no||('#'+id)), 'ia_case', id);
             iaPrintWindow('稽核通知單 '+(c.case_no||''), h, '', m.doc_no, false);
-        });
+        }, [{id:c.approver_id, date:caseD}, {id:c.reviewer_id, date:caseD}, {id:c.maker_id, date:caseD}]);
     });
 }
 $('#btnCasePrint').on('click', function(){ if (CASE_ID) printCase(CASE_ID); else alert('請先儲存'); });
@@ -2570,10 +2601,15 @@ function printCheck(id){
             h += '<div class="ia-note">'
                + (k.kind==='as' ? '' : '確認項目及結果；以「V」表示之。') + '</div>';
             h += '<div style="margin-top:10px;font-size:12px;">稽核員: <span class="stamp-inline">'
-               + stampHtml(m, {name:k.auditor_name, dept:'', position:''}, k.check_date) + '</span></div>';
-            logPrint((k.title || m.doc_name) + ' ' + dispDate(k.check_date), 'ia_check', id);
-            iaPrintWindow(k.title || m.doc_name, h, '', m.doc_no, false);
-        });
+               + stampHtml(m, sp(k.auditor_id, k.auditor_name, k.check_date), k.check_date) + '</span></div>';
+            // 2026-08-27 使用者要求：右側已經印了稽核日期，標題就不要重複出現日期
+            // （標題常被存成「系統稽核紀錄表 2024-12-16」，這裡把結尾的日期去掉）
+            var ckTitle = String(k.title || m.doc_name || '')
+                          .replace(/[\s　]*\d{4}[-\/.]\d{1,2}[-\/.]\d{1,2}[\s　]*$/, '').trim()
+                          || (m.doc_name || '');
+            logPrint(ckTitle + ' ' + dispDate(k.check_date), 'ia_check', id);
+            iaPrintWindow(ckTitle, h, '', m.doc_no, false);
+        }, [{id:k.auditor_id, date:k.check_date}]);
     });
 }
 $('#btnCheckPrint').on('click', function(){ if (CHK) printCheck(CHK.check_id); });
@@ -2597,9 +2633,9 @@ function printNc(id){
               + '<tr><td class="l" colspan="3">不合格類型: '+esc(n.type_label||'')+'</td>'
               + '<td class="l" colspan="3">違反條文: '+esc(n.clause_ref||'')+'</td></tr>'
               + '<tr><td class="l" colspan="3">稽核員: <span class="stamp-inline">'
-              + stampHtml(m, {name:n.auditor_name}, n.auditor_date)+'</span></td>'
+              + stampHtml(m, sp(n.auditor_id, n.auditor_name, n.auditor_date), n.auditor_date)+'</span></td>'
               + '<td class="l" colspan="3">受審查單位主管: <span class="stamp-inline">'
-              + stampHtml(m, {name:n.head_name}, n.head_date)+'</span></td></tr>'
+              + stampHtml(m, sp(n.head_id, n.head_name, n.head_date), n.head_date)+'</span></td></tr>'
               /* 單位主管核示（使用者要求：主管簽核時要能填核示，列印一併印出） */
               + '<tr><td class="pre" colspan="6" style="min-height:52px;height:52px;">'
               + '<b>單位主管核示:</b>\n'+esc(n.head_note||'')+'</td></tr>'
@@ -2611,24 +2647,26 @@ function printNc(id){
               + '<tr><td class="pre" colspan="6" style="min-height:66px;height:66px;">'
               + '<b>預防措施及完成時間:</b>\n'+esc(n.preventive||'')+'</td></tr>'
               + '<tr><td class="l" colspan="6">責任主管: <span class="stamp-inline">'
-              + stampHtml(m, {name:n.resp_name}, n.resp_date)+'</span></td></tr>'
+              + stampHtml(m, sp(n.resp_id, n.resp_name, n.resp_date), n.resp_date)+'</span></td></tr>'
               + '<tr><td class="pre" colspan="6" style="min-height:66px;height:66px;">'
               + '<b>糾正和預防措施執行狀況驗證描述:</b>\n'+esc(n.verify_desc||'')+'</td></tr>'
               + '<tr><td class="l" colspan="3">結束: '+esc(n.close_note||'')+'</td>'
               + '<td class="l" colspan="3">稽核組長: <span class="stamp-inline">'
-              + stampHtml(m, {name:n.leader_name}, n.leader_date)+'</span></td></tr>'
+              + stampHtml(m, sp(n.leader_id, n.leader_name, n.leader_date), n.leader_date)+'</span></td></tr>'
               + '<tr><td class="pre" colspan="6" style="min-height:58px;height:58px;">'
               /* 紙本這一格是「管理代表意見」＋下方「簽名」，簽名就是圖章本身，
                  所以不要再多印一行空的「簽名:」文字（會變成一行沒有內容的標籤）。 */
               + '<b>管理代表意見:</b>\n'+esc(n.mgr_note||'')+'</td></tr>'
               + (n.mgr_name
                  ? ('<tr><td class="l" colspan="6">簽名: <span class="stamp-inline">'
-                    + stampHtml(m, {name:n.mgr_name}, n.mgr_date)+'</span></td></tr>')
+                    + stampHtml(m, sp(n.mgr_id, n.mgr_name, n.mgr_date), n.mgr_date)+'</span></td></tr>')
                  : '')
               + '</table>';
             logPrint('內稽不符合通知單 '+(n.nc_no||('#'+id)), 'ia_nc', id);
             iaPrintWindow('內稽不符合通知單 '+(n.nc_no||''), h, '', m.doc_no, false);
-        });
+        }, [{id:n.auditor_id, date:n.auditor_date}, {id:n.head_id, date:n.head_date},
+            {id:n.resp_id, date:n.resp_date}, {id:n.leader_id, date:n.leader_date},
+            {id:n.mgr_id, date:n.mgr_date}]);
     });
 }
 $('#btnNcPrint').on('click', function(){ if (NC) printNc(NC.nc_id); });
@@ -2666,11 +2704,7 @@ $('#btnReportPrint').on('click', function(){
         });
         if (r && r.extra_note) h += esc(r.extra_note);
         h += '</div>';
-        h += signCells(m, [
-            {label:'核准', html: stampHtml(m, (r&&r.approver_id) ? {name:r.approver_name} : m.sign_approve, r&&r.approver_date)},
-            {label:'審查', html: stampHtml(m, m.sign_review, r&&r.approver_date)},
-            {label:'製表', html: stampHtml(m, (r&&r.maker_id) ? {name:r.maker_name} : null, r&&r.maker_date)}
-        ]);
+        // 2026-08-27 使用者要求：稽核報告表不需要核准／審查／製表區塊與圖章（紙本本來就沒有）
         logPrint(YEAR+' 年度稽核報告表', 'ia_report', (r&&r.report_id)||'');
         iaPrintWindow(YEAR+' 年度稽核報告表', h, '', m.doc_no, false);
     });

@@ -136,7 +136,7 @@ function ia_ensure_schema(PDO $db): void
             case_id        INT AUTO_INCREMENT PRIMARY KEY,
             year           SMALLINT NOT NULL COMMENT '西元年度',
             seq_no         INT NOT NULL DEFAULT 1 COMMENT '該年度第幾次',
-            case_no        VARCHAR(30) NULL COMMENT '稽核件號（民國年3碼+MMDD+3位流水）',
+            case_no        VARCHAR(30) NULL COMMENT '稽核件號（西元年後兩碼+MMDD+3位流水）',
             notify_date    DATE NULL COMMENT '通知日期＝本單業務日期',
             audit_from     DATE NULL,
             audit_to       DATE NULL,
@@ -553,14 +553,16 @@ function ia_today(PDO $db): string
 /* ============================ 編號 ============================ */
 
 /**
- * 稽核件號：民國年(3碼) + MMDD + 3 位流水，例 1131105001（2024.11.05 第 1 件）
+ * 稽核件號：西元年後兩碼 + MMDD + 3 位流水，例 241216001（2024.12.16 第 1 件）
  * 依「通知日期」產生，不是建檔當天——補歷史單據時編號才跟表單上的日期對得起來。
  */
 function ia_next_case_no(PDO $db, string $notifyDate): string
 {
     $ts = strtotime($notifyDate ?: 'now');
     if (!$ts) $ts = time();
-    $prefix = sprintf('%03d%s', (int)date('Y', $ts) - 1911, date('md', $ts));
+    // 2026-08-27 使用者指定改用「西元年後兩碼＋MMDD＋3 位流水」（例 241216001），
+    // 與 IA 單號（IA+西元後兩碼+MMDD+2位）同一套年份寫法，不再混用民國年。
+    $prefix = date('ymd', $ts);
     try {
         $st = $db->prepare("SELECT case_no FROM ia_case WHERE case_no LIKE ? ORDER BY case_no DESC LIMIT 1");
         $st->execute([$prefix . '%']);

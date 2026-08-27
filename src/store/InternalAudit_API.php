@@ -727,6 +727,28 @@ case 'clause_list': {
 /* AS 文件挑選清單（2026-08-26 使用者要求：條文題庫的「建立的文件、表單」與 IA 單的「相關表單編號」
    都要能打編號或名稱模糊篩選後挑選，不要手打）。回全部未廢止的 AS 文件，前端自己過濾即可，
    資料量小（一百多筆）不必做伺服器端搜尋。 */
+/* 圖章要印的「部門／職稱」（2026-08-27 使用者回報：列印版的章跟圖章模板設計的格式不同、部門不見了）。
+   原因：圖章模板 schema 是「{部門} {姓名}／{日期}」兩列，但列印端多數呼叫只給了姓名，
+   模板取不到部門就整段空著。這裡一次把要蓋章的人解析成「該單據業務日期當時」的部門與職稱
+   （ai-rules/22：不是現況），前端拿到後再交給 eg_stamp.js。
+   收在後端做的理由：職務回推規則只有一份（ia_identity_asof），前端不該自己再猜一次。 */
+case 'identity_asof': {
+    iaReqView($perms);
+    $req = json_decode((string)($_GET['people'] ?? $_POST['people'] ?? '[]'), true);
+    if (!is_array($req)) $req = [];
+    $out = [];
+    foreach ($req as $r) {
+        if (!is_array($r)) continue;
+        $uid = (int)($r['id'] ?? 0);
+        if ($uid <= 0) continue;
+        $d = iaDate($r['date'] ?? '');
+        $key = $uid . '@' . ($d ?: '');
+        if (isset($out[$key])) continue;
+        $out[$key] = ia_identity_asof($db, $uid, $d ?: null);
+    }
+    jout(['map' => $out]);
+}
+
 case 'asdoc_pick_list': {
     iaReqView($perms);
     $rows = [];
