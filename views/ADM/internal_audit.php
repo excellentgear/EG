@@ -2598,7 +2598,7 @@ function printCase(id){
             var h = printHead(m);
             h += '<table class="ia-p" style="margin-bottom:6px;"><tr>'
               + '<td class="l" style="border:none;">通知日期: '+dispDate(c.notify_date)+'</td>'
-              + '<td style="border:none;width:110px;">'+((+String(c.year).substr(0,4))-1911)+' 年度</td>'
+              + '<td style="border:none;width:110px;">'+esc(c.year)+' 年度</td>'
               + '<td style="border:none;width:90px;">第 '+esc(c.seq_no)+' 次</td></tr></table>';
             h += '<table class="ia-p"><tr>'
               + '<th style="width:90px;">稽核時間</th><td class="l" colspan="3">'
@@ -2607,21 +2607,26 @@ function printCase(id){
               + '<th style="width:90px;">稽核組長</th><td>'+esc(c.leader_name||'')+'</td></tr></table>';
 
             var ds = c.depts||[];
-            h += '<table class="ia-p" style="margin-top:6px;"><tr><th style="width:90px;">稽核起始<br>主過程</th>';
-            ds.forEach(function(d){ h += '<td class="l">'+esc(d.start_process||'')+'</td>'; });
-            h += '</tr><tr><th>受稽單位</th>';
-            ds.forEach(function(d){ h += '<td>'+esc(d.dept_name||'')+'</td>'; });
             // 稽核員／陪檢員可多位，一位一行才看得清楚
             var nameLines = function(list, fallback){
                 var ns = (list||[]).map(function(x){ return String(x.user_name||''); }).filter(function(x){ return x!==''; });
                 if (!ns.length && fallback) ns = String(fallback).split(/[、／\/]/).filter(function(x){ return x!==''; });
                 return ns.map(esc).join('<br>');
             };
-            h += '</tr><tr><th>稽核員</th>';
-            ds.forEach(function(d){ h += '<td>'+nameLines(d.auditors, d.auditor_name)+'</td>'; });
-            h += '</tr><tr><th>陪檢員</th>';
-            ds.forEach(function(d){ h += '<td>'+nameLines(d.escorts, d.escort_name)+'</td>'; });
-            h += '</tr></table>';
+            // 2026-08-27 使用者要求：標題改在上面（與畫面上的受稽單位列表同一種讀法），
+            // 一個受稽單位一列；<thead> 讓表頭跨頁自然重複（列印分頁交給瀏覽器引擎）
+            h += '<table class="ia-p" style="margin-top:6px;"><thead><tr>'
+              + '<th>稽核起始主過程</th><th style="width:140px;">受稽單位</th>'
+              + '<th style="width:140px;">稽核員</th><th style="width:140px;">陪檢員</th>'
+              + '</tr></thead><tbody>';
+            ds.forEach(function(d){
+                h += '<tr><td class="l">'+esc(d.start_process||'')+'</td>'
+                   + '<td>'+esc(d.dept_name||'')+'</td>'
+                   + '<td>'+nameLines(d.auditors, d.auditor_name)+'</td>'
+                   + '<td>'+nameLines(d.escorts, d.escort_name)+'</td></tr>';
+            });
+            if (!ds.length) h += '<tr><td style="height:22px;">&nbsp;</td><td></td><td></td><td></td></tr>';
+            h += '</tbody></table>';
 
             h += '<table class="ia-p" style="margin-top:6px;"><tr><th style="width:90px;">備註</th>'
               + '<td class="pre">'+esc(c.remark||'')+'</td></tr>'
