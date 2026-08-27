@@ -5259,7 +5259,7 @@ echo "</script>\n";
             }
 
             // ── 容器（料號欄右下角）：左側顯示容器資訊、右側回報鈕 ──
-            var _ctnProc = pickContainerProc(row.bom);
+            var _ctnProc = pickContainerProc(row);
             if (_ctnProc) {
                 var _ctnWrap = document.createElement('div');
                 _ctnWrap.style.cssText = 'margin-top:3px;display:flex;align-items:center;justify-content:flex-end;gap:5px;';
@@ -15410,22 +15410,28 @@ echo "</script>\n";
             return { text: 'QC：' + q + ' / 生管：' + p, diff:true,
                      title: 'QC 與生管回報不一致\nQC 品管：' + longText(proc.QC_ps, proc.QC_ps2) + '\n生管：' + longText(proc.pm_ps, proc.pm_ps2) };
         };
-        // 這一列要對哪個製程回報：優先目前 QC待驗/待移轉，其次 bom_sn 最大的進行中製程
-        window.pickContainerProc = function(bom){
-            var procs = ((window.ingActiveMap || {})[String(bom || '').trim()]) || [];
-            if (!procs.length) return null;
-            var pick = null;
-            procs.forEach(function(p){
-                var st = String(p.processing_state || '');
-                var eff = (st === 'Q' && p.qc_completed == 1) ? 'P' : st;
-                if (eff !== 'Q' && eff !== 'P') return;
-                if (!pick || parseInt(p.bom_sn || 0, 10) >= parseInt(pick.bom_sn || 0, 10)) pick = p;
-            });
-            if (pick) return pick;
-            procs.forEach(function(p){
-                if (!pick || parseInt(p.bom_sn || 0, 10) >= parseInt(pick.bom_sn || 0, 10)) pick = p;
-            });
-            return pick;
+        // 這一列要對哪個製程回報：一律取「發單日欄現在顯示的那一組製程」（共用
+        // getCurrentDisplayProcs()，不自己另寫一套判定）。
+        // ⚠ 不可以只用「bom_sn 最大且狀態是 Q/P」——下游還沒發包的站（打毛邊/包裝…）
+        //   常年掛在 P 狀態且沒有 outsource_date，那樣會把容器記到最後一站去
+        //   （2026-08-27 使用者實測回報：填在粗滾卻記成 [90] 包裝）。
+        window.pickContainerProc = function(row){
+            var list = (typeof getCurrentDisplayProcs === 'function')
+                ? getCurrentDisplayProcs(row)
+                : [];
+            if (!list.length) return null;
+            var byState = function(want){
+                var best = null;
+                list.forEach(function(p){
+                    var st = String(p.processing_state || '');
+                    var eff = (st === 'Q' && p.qc_completed == 1) ? 'P' : st;
+                    if (eff !== want) return;
+                    if (!best || parseInt(p.bom_sn || 0, 10) >= parseInt(best.bom_sn || 0, 10)) best = p;
+                });
+                return best;
+            };
+            // 待驗中的最優先（容器就是這時候回報的），其次待移轉，都沒有才取最後一批
+            return byState('Q') || byState('P') || list[list.length - 1];
         };
         // 此 BOM 上一次用過的容器種類（任何一站、bom_sn 最大者），供新回報自動帶入
         window.lastContainerCodeOfBom = function(bom, exceptFid){
