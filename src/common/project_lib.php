@@ -84,6 +84,18 @@ const PRJ_DOC_PHASE = [
     'ext_doc'  => 'any',
 ];
 
+/**
+ * 任務狀態（使用者拍板：1~2 天完工的單一製程，不管理時分秒，改用狀態驅動）。
+ * 空字串＝未開始，才不會因為新增欄位就把既有資料全部標成某個狀態。
+ */
+const PRJ_TASK_STATUS = [
+    ''         => '未開始',
+    'doing'    => '進行中',
+    'wait_qc'  => '待檢驗',
+    'abnormal' => '異常',
+    'done'     => '已完成',
+];
+
 /** 首件檢驗結果（含特採＝有條件通過，仍視為通過） */
 const PRJ_FAI_RESULTS = ['pass' => '通過', 'aod' => '特採通過', 'fail' => '未通過'];
 function prj_fai_is_pass(?string $r): bool { return $r === 'pass' || $r === 'aod'; }
@@ -181,7 +193,8 @@ function prj_ensure_schema(PDO $db): void
         owner_dept_id INT NULL COMMENT '負責人是以「哪個部門的身分」被指派（先選部門再選人；兼任者靠這欄決定顯示哪個職稱）',
         progress     TINYINT NOT NULL DEFAULT 0 COMMENT '完成百分比 0~100',
         progress_auto TINYINT NOT NULL DEFAULT 1 COMMENT '1=進度仍跟著實際完成日自動算，0=使用者手動改過就不再自動',
-        task_kind    VARCHAR(20) NOT NULL DEFAULT '' COMMENT '空=一般任務；fai=系統固定的「送首件檢驗」環節（不可刪除、名稱不可改）',
+        task_kind    VARCHAR(20) NOT NULL DEFAULT '' COMMENT '空=一般任務；fai=送首件檢驗；rca=根本原因分析；delta_fai=差異首件檢驗',
+        status_code  VARCHAR(20) NOT NULL DEFAULT '' COMMENT '狀態驅動：空=未開始/doing/wait_qc/abnormal/done',
         is_milestone TINYINT NOT NULL DEFAULT 0 COMMENT '1=里程碑（甘特上畫菱形）',
         tag_ids      VARCHAR(255) NULL,
         note         VARCHAR(300) NULL,
@@ -317,7 +330,8 @@ function prj_ensure_schema(PDO $db): void
     // 既有資料庫補欄位（可重複執行）
     prj_ensure_col($db, 'project_task', 'owner_dept_id', "INT NULL COMMENT '負責人所屬部門（先選部門再選人）' AFTER owner_name");
     prj_ensure_col($db, 'project_task', 'progress_auto', "TINYINT NOT NULL DEFAULT 1 COMMENT '1=進度跟著實際完成日自動算' AFTER progress");
-    prj_ensure_col($db, 'project_task', 'task_kind', "VARCHAR(20) NOT NULL DEFAULT '' COMMENT 'fai=送首件檢驗（固定環節）' AFTER is_milestone");
+    prj_ensure_col($db, 'project_task', 'task_kind', "VARCHAR(20) NOT NULL DEFAULT '' COMMENT 'fai/rca/delta_fai' AFTER is_milestone");
+    prj_ensure_col($db, 'project_task', 'status_code', "VARCHAR(20) NOT NULL DEFAULT '' COMMENT '未開始/doing/wait_qc/abnormal/done' AFTER task_kind");
     // 附件標籤要能勾「這個標籤算 SOP／SIP」——比照 is_external_doc／is_photo_album 的既有做法，
     // 不在程式裡寫死標籤名稱（鐵律4：使用者改名或新增標籤時不可失效）
     prj_ensure_col($db, 'quotation_file_categories', 'is_sop', "TINYINT NOT NULL DEFAULT 0 COMMENT '1=這個附件標籤算 SOP 作業標準書'");
@@ -792,6 +806,25 @@ function prj_workday_sets(PDO $db): array
 }
 
 /**
+ * 狀態驅動的推導：狀態與「實際完成日」互相對齊，避免兩邊各說各話。
+ *   選了「已完成」→ 實際完成日沒填就補今天；
+ *   填了實際完成日 → 狀態自動變「已完成」；
+ *   狀態退回非完成 → 清掉實際完成日（否則進度會卡在 100%）。
+ * 回傳 [status_code, act_end]。
+ */
+function prj_task_status_sync(string $status, ?string $actEnd, string $today): array
+{
+    if (!isset(PRJ_TASK_STATUS[$status])) $status = '';
+    $actEnd = trim((string)$actEnd) ?: null;
+    if ($status === 'done') {
+        if (!$actEnd) $actEnd = $today;
+    } elseif ($actEnd) {
+        $status = 'done';
+    }
+    return [$status, $actEnd];
+}
+
+/**
  * 任務進度自動判定（使用者拍板 2026-08-26）：
  *   還跟著自動（progress_auto=1）時 ── 填了實際完成日＝100%，否則 0%。
  *   使用者一旦自己動手改過進度，progress_auto 就變 0、之後一律以他填的為準（比照管理卡的「目前應達成基準」）。
@@ -877,9 +910,116 @@ function prj_fai_ensure_task(PDO $db, int $projectId): int
         $sort = (int)$st->fetchColumn();
 
         $db->prepare("INSERT INTO project_task (project_id, goal_id, task_name, task_kind, progress, progress_auto, sort_order)
-                      VALUES (?,?,'送首件檢驗','fai',0,1,?)")->execute([$projectId, $gid, $sort]);
+                      VALUES (?,?,'試作與首件檢驗（FAI）','fai',0,1,?)")->execute([$projectId, $gid, $sort]);
         return (int)$db->lastInsertId();
     } catch (Throwable $e) { return 0; }
+}
+
+/**
+ * 首件未通過時，自動補上 AS9102 要求的兩個後續環節（使用者指定，不另做表單）：
+ *   rca       根本原因分析與矯正措施（畫面上提供連到既有「異常矯正單」的超連結）
+ *   delta_fai 差異首件檢驗（矯正後只驗有變動的特性）
+ * 掛在首件那一列的後面；已經存在就不重複建立。首件改回通過時不刪除
+ * ——那兩筆是實際發生過的事，AS9102 要求可追溯。
+ */
+function prj_fai_ensure_followup(PDO $db, int $projectId): int
+{
+    $n = 0;
+    try {
+        $st = $db->prepare("SELECT task_id, goal_id, sort_order FROM project_task
+                            WHERE project_id=? AND task_kind='fai' LIMIT 1");
+        $st->execute([$projectId]);
+        $fai = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$fai) return 0;
+
+        foreach ([['rca', '根本原因分析與矯正措施'], ['delta_fai', '差異首件檢驗（Delta FAI）']] as $i => $kv) {
+            $st = $db->prepare("SELECT 1 FROM project_task WHERE project_id=? AND task_kind=? LIMIT 1");
+            $st->execute([$projectId, $kv[0]]);
+            if ($st->fetchColumn()) continue;
+            $db->prepare("INSERT INTO project_task (project_id, goal_id, task_name, task_kind, status_code,
+                                progress, progress_auto, sort_order)
+                          VALUES (?,?,?,?,'',0,1,?)")
+               ->execute([$projectId, $fai['goal_id'], $kv[1], $kv[0], (int)$fai['sort_order'] + $i + 1]);
+            $n++;
+        }
+    } catch (Throwable $e) {}
+    return $n;
+}
+
+/**
+ * AS9100 標準流程範本（使用者提供：1~2 天完工的單一航太加工製程，100% 客供半成品，
+ * 防偽冒重點在防混料；工程文件多為沿用舊版）。
+ * 回傳 [目標名稱 => [任務…]]；任務給 kind 的會對應到系統固定環節。
+ */
+function prj_seed_template(): array
+{
+    return [
+        '階段 1：前置審查與準備' => [
+            ['name' => '確認是否有治具'],
+            ['name' => '確認可加工精度符合要求'],
+            ['name' => '製作加工圖面'],
+            // PFMEA／SOP／SIP 分三列：負責部門不同（使用者指定）
+            ['name' => '確認現行文件適用性：PFMEA'],
+            ['name' => '確認現行文件適用性：SOP'],
+            ['name' => '確認現行文件適用性：SIP'],
+            ['name' => '開立製令'],
+        ],
+        '階段 2：備料與首件驗證' => [
+            ['name' => '客供品點交與防混料確認：數量與料號核對'],
+            ['name' => '客供品點交與防混料確認：批號／流程卡綁定'],
+            ['name' => '架機與修砂'],
+            ['name' => '試作與首件檢驗（FAI）', 'kind' => 'fai'],
+        ],
+        '階段 3：批量生產與結案' => [
+            ['name' => '整批加工完成與最終檢驗結案'],
+        ],
+    ];
+}
+
+/**
+ * 把標準流程建進這個專案。已經有目標時不覆蓋，只補上「還沒有的目標」
+ * （使用者可能已經自己編排過，硬蓋會把人家排好的日程洗掉）。
+ * 回傳新增的目標數與任務數。
+ */
+function prj_seed_apply(PDO $db, int $projectId): array
+{
+    $addG = 0; $addT = 0;
+    $st = $db->prepare("SELECT goal_name FROM project_goal WHERE project_id=?");
+    $st->execute([$projectId]);
+    $exists = array_map(static fn($v) => (string)$v, $st->fetchAll(PDO::FETCH_COLUMN));
+
+    $st = $db->prepare("SELECT COALESCE(MAX(sort_order),-1)+1 FROM project_goal WHERE project_id=?");
+    $st->execute([$projectId]);
+    $gsort = (int)$st->fetchColumn();
+
+    foreach (prj_seed_template() as $goalName => $tasks) {
+        if (in_array($goalName, $exists, true)) continue;
+        $db->prepare("INSERT INTO project_goal (project_id, goal_name, sort_order) VALUES (?,?,?)")
+           ->execute([$projectId, $goalName, $gsort++]);
+        $gid = (int)$db->lastInsertId();
+        $addG++;
+        $tsort = 0;
+        foreach ($tasks as $t) {
+            $kind = (string)($t['kind'] ?? '');
+            if ($kind === 'fai') {
+                // 首件那一列是系統固定環節：已經存在就搬過來改名，不要變成兩列
+                $q = $db->prepare("SELECT task_id FROM project_task WHERE project_id=? AND task_kind='fai' LIMIT 1");
+                $q->execute([$projectId]);
+                $tid = (int)$q->fetchColumn();
+                if ($tid) {
+                    $db->prepare("UPDATE project_task SET goal_id=?, task_name=?, sort_order=? WHERE task_id=?")
+                       ->execute([$gid, $t['name'], $tsort++, $tid]);
+                    continue;
+                }
+            }
+            $db->prepare("INSERT INTO project_task (project_id, goal_id, task_name, task_kind, status_code,
+                                progress, progress_auto, sort_order)
+                          VALUES (?,?,?,?,'',0,1,?)")
+               ->execute([$projectId, $gid, $t['name'], $kind, $tsort++]);
+            $addT++;
+        }
+    }
+    return ['goals' => $addG, 'tasks' => $addT];
 }
 
 /** 常用語句清單（field 為 null＝全部欄位一起回） */

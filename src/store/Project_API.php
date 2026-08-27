@@ -155,6 +155,7 @@ case 'meta':
         'doc_checks' => PRJ_DOC_CHECKS,
         'doc_phase'  => PRJ_DOC_PHASE,
         'fai_results'=> PRJ_FAI_RESULTS,
+        'task_status'=> PRJ_TASK_STATUS,
         'tags'       => prj_tags_all($db),
         'people'     => $people,
         // 每人「所有」的部門×職稱：eg_people_list 一人只回一列（職級最高那筆），
@@ -554,11 +555,16 @@ case 'plan_save':
                 $ownerName = (string)$st->fetchColumn();
             }
             $ownerDept = $ownerId ? ((int)($t['owner_dept_id'] ?? 0) ?: null) : null;
+            // 狀態驅動：狀態與實際完成日互相對齊（唯一實作 prj_task_status_sync）
+            [$tStatus, $tActEndSync] = prj_task_status_sync((string)($t['status_code'] ?? ''),
+                                                            trim((string)($t['act_end'] ?? '')) ?: null, $NOW['date']);
             $actS = trim((string)($t['act_start'] ?? '')) ?: null;
             $actE = trim((string)($t['act_end'] ?? '')) ?: null;
+            $actE = $tActEndSync;   // 狀態驅動算出來的為準
             if (!$actOpen) {   // 核准前一律沿用資料庫原值（新任務＝空白）
                 $actS = $actOld[$tid]['act_start'] ?? null;
                 $actE = $actOld[$tid]['act_end'] ?? null;
+                [$tStatus, $actE] = prj_task_status_sync($tStatus, $actE, $NOW['date']);
             }
             /* 進度：還跟著自動的就由後端自己算（不採信前端送來的數字＝鐵律8），
                使用者手動改過的（progress_auto=0）才用他填的值。 */
@@ -572,20 +578,21 @@ case 'plan_save':
                 $ownerId, $ownerName, $ownerDept,
                 $pVal, $pAuto,
                 !empty($t['is_milestone']) ? 1 : 0,
+                $tStatus,
                 prj_tag_csv(prj_tag_ids((string)($t['tag_ids'] ?? ''))),
                 trim((string)($t['note'] ?? '')), $j,
             ];
             if ($tid) {
                 $db->prepare("UPDATE project_task SET goal_id=?, task_name=?, plan_start=?, plan_end=?, act_start=?,
                                     act_end=?, owner_id=?, owner_name=?, owner_dept_id=?, progress=?, progress_auto=?,
-                                    is_milestone=?, tag_ids=?, note=?, sort_order=?
+                                    is_milestone=?, status_code=?, tag_ids=?, note=?, sort_order=?
                               WHERE task_id=? AND project_id=?")
                    ->execute(array_merge($args, [$tid, $pid]));
             } else {
                 $db->prepare("INSERT INTO project_task (goal_id, task_name, plan_start, plan_end, act_start, act_end,
                                     owner_id, owner_name, owner_dept_id, progress, progress_auto, is_milestone,
-                                    tag_ids, note, sort_order, project_id)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                                    status_code, tag_ids, note, sort_order, project_id)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
                    ->execute(array_merge($args, [$pid]));
                 $tid = (int)$db->lastInsertId();
             }
@@ -662,7 +669,18 @@ case 'fai_save':
                           WHERE task_id=?")->execute([$pass, $pass ? 100 : 0, $tid]);
         }
     } catch (Throwable $e) {}
-    jout(['fai_id' => $fid, 'message' => '已儲存首件檢驗紀錄',
+    // 未通過 → 自動補上 RCA 與 Delta FAI 兩個後續環節（使用者指定，不另做表單）
+    $added = 0;
+    try {
+        $rows = prj_fai_list($db, $pid);
+        $last = $rows ? end($rows) : null;
+        if ($last && (string)$last['result'] === 'fail') $added = prj_fai_ensure_followup($db, $pid);
+    } catch (Throwable $e) {}
+
+    jout(['fai_id' => $fid, 'message' => '已儲存首件檢驗紀錄'
+              . ($added ? '；已自動加入 RCA 與差異首件檢驗兩個環節' : ''),
+          'followup_added' => $added,
+          'tasks' => prj_tasks($db, $pid), 'goals' => prj_goals($db, $pid),
           'fai' => prj_fai_list($db, $pid), 'fai_pass_date' => prj_fai_pass_date($db, $pid),
           'doc_check' => prj_doc_check($db, $pid)]);
 
@@ -679,6 +697,22 @@ case 'fai_delete':
     }
     jout(['message' => '已刪除', 'fai' => prj_fai_list($db, $pid),
           'fai_pass_date' => prj_fai_pass_date($db, $pid), 'doc_check' => prj_doc_check($db, $pid)]);
+
+case 'seed_template':
+    $pid = (int)($_POST['project_id'] ?? 0);
+    prj_need($db, $P, $pid, true);
+    $db->beginTransaction();
+    try {
+        $r = prj_seed_apply($db, $pid);
+        $db->commit();
+    } catch (Throwable $e) {
+        $db->rollBack();
+        jerr('帶入失敗：' . $e->getMessage());
+    }
+    jout(['message' => $r['goals']
+              ? ('已帶入標準流程：新增 ' . $r['goals'] . ' 個階段、' . $r['tasks'] . ' 個步驟')
+              : '標準流程的階段都已經存在，沒有重複建立',
+          'added' => $r, 'goals' => prj_goals($db, $pid), 'tasks' => prj_tasks($db, $pid)]);
 
 /* ══════════════════════════ BOM 製程 ══════════════════════════ */
 case 'bom_sync':

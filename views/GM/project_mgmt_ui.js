@@ -515,7 +515,8 @@ function renderPlan(res) {
       + '<option value="day"' + (GSCALE === 'day' ? ' selected' : '') + '>日</option>'
       + '<option value="week"' + (GSCALE === 'week' ? ' selected' : '') + '>週</option>'
       + '<option value="month"' + (GSCALE === 'month' ? ' selected' : '') + '>月</option></select>'
-      + (res.can_edit ? '<button id="btnGoalAdd"><i class="fa fa-plus"></i> 新增目標</button>'
+      + (res.can_edit ? '<button id="btnSeed" title="帶入 AS9100 標準流程（三個階段與各步驟）"><i class="fa fa-magic"></i> 帶入標準流程</button>'
+                      + '<button id="btnGoalAdd"><i class="fa fa-plus"></i> 新增目標</button>'
                       + '<button class="btn-warm" id="btnPlanSave"><i class="fa fa-save"></i> 儲存規劃表</button>' : '')
       + '</div>'
       + '<div id="ganttBox"></div>'
@@ -965,10 +966,45 @@ function faiApply(r) {
     if (r.doc_check) CUR.doc_check = r.doc_check;
     var dirty = PLAN_DIRTY;
     planSyncToCur();
+    /* 後端補了 RCA／差異首件檢驗時，要用後端回來的任務清單重畫（否則新環節不會出現） */
+    if (num(r.followup_added) && r.tasks) { CUR.tasks = r.tasks; CUR.goals = r.goals || CUR.goals; dirty = false; }
     drawPlanEditor(CUR);
     renderCheck(CUR);
     PLAN_DIRTY = dirty;
 }
+
+/* 任務狀態下拉（狀態驅動；1~2 天完工的製程不記時分秒＝使用者拍板） */
+function taskStatusSelect(t) {
+    var cur = String((t && t.status_code) || '');
+    var map = (CUR && CUR.task_status) || META.task_status || {};
+    var h = '<select class="t-status">';
+    $.each(map, function (k, v) {
+        h += '<option value="' + esc(k) + '"' + (cur === k ? ' selected' : '') + '>' + esc(v) + '</option>';
+    });
+    return h + '</select>';
+}
+/** 異常矯正單：只給連結跳過去，不在本頁另做表單（使用者明確要求） */
+function carLinkHtml() {
+    var p = (CUR && CUR.project) || {};
+    var q = '?prj_no=' + encodeURIComponent(p.project_no || '') + '&prj=' + num(p.project_id);
+    return '<a href="/EGsystem/views/QA/correction_order.php' + q + '" target="_blank" rel="noopener" '
+         + 'class="pj-op" style="text-decoration:underline;"><i class="fa fa-external-link"></i> 填寫異常矯正單</a>';
+}
+/* 狀態與實際完成日互相對齊（與後端 prj_task_status_sync() 同一套規則） */
+$(document).on('change', '#planEditBox .t-status', function () {
+    var $tr = $(this).closest('tr'), $ae = $tr.find('.t-ae');
+    if ($(this).val() === 'done') {
+        if (!$.trim($ae.val()) && !$ae.prop('disabled')) $ae.val(META.today || '');
+    } else if ($.trim($ae.val()) && !$ae.prop('disabled')) {
+        $ae.val('');
+    }
+    planRowRecalc($tr, 'pe');
+    planRowProgress($tr);
+});
+$(document).on('change', '#planEditBox .t-ae', function () {
+    var $tr = $(this).closest('tr');
+    if ($.trim($(this).val())) $tr.find('.t-status').val('done');
+});
 
 /* ── 規劃表編輯器（可增列表格：末列↓加列、空白末列↑移除＝共用檔規則） ── */
 var PLAN_ACT_OPEN = false;   // 實際開始／完成現在可不可以填（＝專案是否已立案核准）
@@ -1027,6 +1063,7 @@ function drawPlanEditor(res) {
           + '<th style="width:62px;" title="預計開始當天算第 1 天，只算工作日">工作天數</th>'
           + '<th style="width:114px;">預計完成</th>'
           + '<th style="width:114px;">實際開始</th><th style="width:114px;">實際完成</th>'
+          + '<th style="width:96px;" title="1~2 天完工的製程用狀態管理，不記時分秒">狀態</th>'
           + '<th style="width:180px;">負責人（先選部門）</th>'
           + '<th style="width:76px;" title="勾「自動」時：填了實際完成日就是 100%，否則 0%；自己改過就不再自動">進度%</th>'
           + '<th style="width:44px;">里程碑</th><th style="width:30px;"></th></tr></thead>'
@@ -1050,7 +1087,9 @@ function drawPlanEditor(res) {
 
 function planRowHtml(t, i) {
     t = t || {};
-    var isFai = (String(t.task_kind || '') === 'fai');
+    var kind  = String(t.task_kind || '');
+    var isFai = (kind === 'fai');
+    var isSys = (kind !== '');           // fai/rca/delta_fai 都是系統環節，名稱不可改、不可刪
     var did = num(t.owner_dept_id) || guessOwnerDept(num(t.owner_id));
     var dOpt = taskDeptOptions(did), pOpt = taskOwnerOptions(did, num(t.owner_id), true);
     /* 實際日期在核准前反灰（後端 plan_save 也會忽略，不是只擋 UI＝鐵律8）。
@@ -1062,24 +1101,28 @@ function planRowHtml(t, i) {
     var days = (t.plan_start && t.plan_end) ? planDaysBetween(t.plan_start, t.plan_end) : 0;
     /* 新列預設跟著自動；既有列看資料庫存的（沒有這個欄位的舊資料視同自動） */
     var pgAuto = (t.progress_auto === undefined || t.progress_auto === null) ? true : !!num(t.progress_auto);
-    return '<tr data-task="' + num(t.task_id) + '" data-pe0="' + esc(t.plan_end || '') + '">'
+    return '<tr data-task="' + num(t.task_id) + '" data-kind="' + esc(kind) + '" data-pe0="' + esc(t.plan_end || '') + '">'
       + '<td>' + (i + 1) + '</td>'
-      + '<td><input type="text" class="t-name' + (isFai ? ' ro-auto' : '') + '" value="'
-      + esc(t.task_name || '') + '"' + (isFai ? ' readonly title="系統固定環節，名稱不可修改"' : '') + '>'
-      + (isFai ? '<div style="margin-top:3px;">' + faiBadgeHtml() + '</div>' : '') + '</td>'
+      + '<td><input type="text" class="t-name' + (isSys ? ' ro-auto' : '') + '" value="'
+      + esc(t.task_name || '') + '"' + (isSys ? ' readonly title="系統環節，名稱不可修改"' : '') + '>'
+      + (isFai ? '<div style="margin-top:3px;">' + faiBadgeHtml() + '</div>' : '')
+      + (kind === 'rca' ? '<div style="margin-top:3px;">' + carLinkHtml() + '</div>' : '')
+      + (kind === 'delta_fai' ? '<div class="pj-hint" style="margin-top:3px;">矯正後只驗有變動的特性</div>' : '')
+      + '</td>'
       + '<td><input type="date" class="t-ps"' + planMinAttr() + ' value="' + esc(t.plan_start || '') + '"></td>'
       + '<td><input type="number" class="t-days" min="1" max="999" value="' + (days > 0 ? days : '') + '"></td>'
       + '<td><input type="date" class="t-pe" value="' + esc(t.plan_end || '') + '"></td>'
       + '<td><input type="date" class="t-as' + actCls + '"' + actRo + ' value="' + esc(t.act_start || '') + '"></td>'
       + '<td><input type="date" class="t-ae' + actCls + '"' + actRo + ' value="' + esc(t.act_end || '') + '"></td>'
+      + '<td>' + taskStatusSelect(t) + '</td>'
       + '<td><select class="t-odept"' + filterAttr(dOpt, '輸入部門名稱篩選…') + '>' + dOpt + '</select>'
       + '<select class="t-owner" style="margin-top:3px;"' + filterAttr(pOpt, '輸入姓名篩選…') + '>' + pOpt + '</select></td>'
       + '<td><input type="number" class="t-pg" min="0" max="100" value="' + num(t.progress) + '">'
       + '<label style="font-size:11px;display:block;margin-top:2px;white-space:nowrap;" title="填了實際完成日就自動變 100%；自己改過數字就不再自動">'
       + '<input type="checkbox" class="t-pgauto" data-eg-skip="1"' + (pgAuto ? ' checked' : '') + '> 自動</label></td>'
       + '<td><input type="checkbox" class="t-ms" data-eg-skip="1"' + (num(t.is_milestone) ? ' checked' : '') + '></td>'
-      + '<td>' + (isFai
-            ? '<span title="系統固定環節，不可刪除" style="color:#b59b74;">🔒</span>'
+      + '<td>' + (isSys
+            ? '<span title="系統環節，不可刪除" style="color:#b59b74;">🔒</span>'
             : '<span class="pj-op t-del" title="刪除這一列">✕</span>') + '</td></tr>';
 }
 
@@ -1249,6 +1292,17 @@ $(document).on('click', '#planEditBox .g-del', function () {
 });
 $(document).on('change', '#gView', function () { GVIEW = $(this).val(); drawGantt(CUR); });
 $(document).on('change', '#gScale', function () { GSCALE = $(this).val(); drawGantt(CUR); });
+$(document).on('click', '#btnSeed', function () {
+    if (!planLeaveOk('帶入標準流程')) return;
+    if (!confirm('帶入 AS9100 標準流程？\n\n會新增三個階段（前置審查與準備／備料與首件驗證／批量生產與結案）與底下的步驟。\n已經存在的階段不會重複建立，你自己排的內容也不會被覆蓋。')) return;
+    api('seed_template', { project_id: CUR.project.project_id }, 'POST').done(function (r) {
+        /* 範本是直接寫進資料庫的，重新載入時要用伺服器的新資料，
+           不可以再把畫面上那份舊的接回去（使用者已在上面的確認視窗同意放棄未存的變更）。 */
+        PLAN_DIRTY = false;
+        loadList();
+        openProject(num(CUR.project.project_id), function () { pjMsg(r.message, { ok: true }); });
+    });
+});
 $(document).on('click', '#btnGoalAdd', function () {
     var dirty = PLAN_DIRTY;
     planSyncToCur();                       // 先保住畫面上填到一半的內容（不然會被重繪洗掉）
@@ -1284,7 +1338,8 @@ function planSyncToCur() {
             tasks.push({
                 task_id: num($r.data('task')), goal_id: gid,
                 task_name: $r.find('.t-name').val(),
-                task_kind: $r.find('.t-name').prop('readonly') ? 'fai' : '',
+                task_kind: String($r.data('kind') || ''),
+                status_code: $r.find('.t-status').val() || '',
                 plan_start: $r.find('.t-ps').val(), plan_end: $r.find('.t-pe').val(),
                 act_start: $r.find('.t-as').val(), act_end: $r.find('.t-ae').val(),
                 owner_id: num($r.find('.t-owner').val()) || null,
@@ -1338,7 +1393,8 @@ function savePlan(pid, cb) {
             bad = bad || planRowCheck($(this));   // 畫面上的即時檢查與存檔前的檢查共用同一份規則
             tasks.push({
                 goal_key: gkey, task_id: num($(this).data('task')), task_name: tn,
-                task_kind: $(this).find('.t-name').prop('readonly') ? 'fai' : '',
+                task_kind: String($(this).data('kind') || ''),
+                status_code: $(this).find('.t-status').val() || '',
                 plan_start: ps, plan_end: pe, act_start: as, act_end: ae,
                 owner_id: $(this).find('.t-owner').val(),
                 owner_dept_id: $(this).find('.t-odept').val(),
