@@ -464,7 +464,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_is_list_erp">
                                                 出貨單 <b>ERP直接匯入</b><small>(只接受.xls/.xlsx)</small><br>
                                                 <span class="required">*</span>
-                                                <span class="text-muted" style="font-size:11px;">自動偵測民國/西元年<br>找最早日期起清空後重匯</span>
+                                                <span class="text-muted" style="font-size:11px;">自動偵測民國/西元年<br>只清空檔案涵蓋的日期區間後重匯</span>
                                             </label>
                                             <div class="col-md-4 col-sm-4 col-xs-8">
                                                 <div class="input-group">
@@ -504,7 +504,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file_ir_list_erp">
                                                 退貨單 <b>ERP直接匯入</b><small>(只接受.xls/.xlsx)</small><br>
                                                 <span class="required">*</span>
-                                                <span class="text-muted" style="font-size:11px;">確認「銷貨退回日報表」+「IR」開頭<br>找最早日期起清空後重匯</span>
+                                                <span class="text-muted" style="font-size:11px;">確認「銷貨退回日報表」+「IR」開頭<br>只清空檔案涵蓋的日期區間後重匯</span>
                                             </label>
                                             <div class="col-md-4 col-sm-4 col-xs-8">
                                                 <div class="input-group">
@@ -808,7 +808,7 @@ $(document).ready(function() {
 
                 html += '<tr><td>解析到的有效列數</td><td><strong>' + res.total_rows + ' 筆</strong></td></tr>';
                 html += '<tr><td>資料日期範圍</td><td>' + res.date_min + ' ～ ' + res.date_max + '</td></tr>';
-                html += '<tr class="danger"><td>將清除的舊資料</td><td><strong>' + res.existing_delete_count + ' 筆</strong>（' + res.date_min + ' 起含當日）</td></tr>';
+                html += '<tr class="danger"><td>將清除的舊資料</td><td><strong>' + res.existing_delete_count + ' 筆</strong>（' + res.date_min + ' ～ ' + res.date_max + ' 區間內，不影響此區間外的既有資料）</td></tr>';
                 html += '<tr><td>將新增的資料</td><td><strong>' + res.total_rows + ' 筆</strong></td></tr>';
                 html += '<tr><td>料號綁定</td><td>' + res.bound_count + ' / ' + res.total_rows + ' 筆成功綁定（含客戶驗證）</td></tr>';
                 if (res.auto_create_count > 0)
@@ -952,7 +952,7 @@ $(document).ready(function() {
                         : '<span class="label label-warning">⚠ 未找到標準欄位標題</span>') + '</td></tr>';
                 html += '<tr><td>解析到的有效列數</td><td><strong>' + res.total_rows + ' 筆</strong></td></tr>';
                 html += '<tr><td>資料日期範圍</td><td>' + res.date_min + ' ～ ' + res.date_max + '</td></tr>';
-                html += '<tr class="danger"><td>將清除的舊資料</td><td><strong>' + res.existing_delete_count + ' 筆</strong>（' + res.date_min + ' 起含當日）</td></tr>';
+                html += '<tr class="danger"><td>將清除的舊資料</td><td><strong>' + res.existing_delete_count + ' 筆</strong>（' + res.date_min + ' ～ ' + res.date_max + ' 區間內，不影響此區間外的既有資料）</td></tr>';
                 html += '<tr><td>將新增的資料</td><td><strong>' + res.total_rows + ' 筆</strong></td></tr>';
                 html += '<tr><td>料號綁定</td><td>' + res.bound_count + ' / ' + res.total_rows + ' 筆成功綁定（含客戶驗證）</td></tr>';
                 if (res.auto_create_count > 0)

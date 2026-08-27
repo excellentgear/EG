@@ -1377,11 +1377,20 @@ if (!function_exists('parseERPRowsFromSheet')) {
 }
 
 // 執行 DELETE + INSERT，回傳 ['deleted'=>N, 'inserted'=>M]
+// 清除範圍限定在檔案本身的日期區間（含 $latestDate 上限）——使用者實測回報：若不設上限，
+// 補匯一份只到舊年度的檔案（如僅 2022 年資料）會把 earliestDate 之後、檔案根本沒有涵蓋到的
+// 未來期間既有資料（如 2023~現在）也一併清空，是誤刪；只清「即將被這份檔案取代」的區間才正確。
 if (!function_exists('commitERPRows')) {
-    function commitERPRows($db, $validRows, $earliestDate, $userId) {
+    function commitERPRows($db, $validRows, $earliestDate, $latestDate, $userId) {
         $db->beginTransaction();
-        $del = $db->prepare("DELETE FROM is_list WHERE Order_date >= ?");
-        $del->execute([$earliestDate]);
+
+        // is_bom_map（出貨-BOM對應）無 FK 約束需手動清，避免留下指向已刪 is_list 的孤兒列；
+        // shipment_order_map 由 FK CASCADE 自動連鎖刪除、return_order_map.IS_id 由 FK SET NULL 自動處理。
+        $delMap = $db->prepare("DELETE FROM is_bom_map WHERE IS_id IN (SELECT IS_id FROM is_list WHERE Order_date BETWEEN ? AND ?)");
+        $delMap->execute([$earliestDate, $latestDate]);
+
+        $del = $db->prepare("DELETE FROM is_list WHERE Order_date BETWEEN ? AND ?");
+        $del->execute([$earliestDate, $latestDate]);
         $deletedRows = $del->rowCount();
 
         $ins = $db->prepare("INSERT INTO is_list
@@ -1495,8 +1504,9 @@ if (isset($_GET['but']) && $_GET['but'] === 'IS_List_ERP') {
             $dates = array_filter(array_column($validRows, 'order_date'));
             sort($dates);
             $earliestDate = $dates[0] ?? null;
+            $latestDate   = end($dates) ?: null;
             if (!$earliestDate) throw new Exception("無法解析日期，請確認格式（如 115/01/01）。");
-            $result = commitERPRows($db, $validRows, $earliestDate, $userId);
+            $result = commitERPRows($db, $validRows, $earliestDate, $latestDate, $userId);
             $_SESSION['upload_message'] =
                 "ERP出貨單直接匯入完成。\n" .
                 "最早出貨日期：{$earliestDate}\n" .
@@ -1578,9 +1588,9 @@ if (isset($_GET['but']) && $_GET['but'] === 'IS_List_ERP_Preview') {
         $earliestDate = $dates[0];
         $latestDate   = end($dates);
 
-        // 6. 查詢 DB 將被清除的筆數
-        $countStmt = $db->prepare("SELECT COUNT(*) FROM is_list WHERE Order_date >= ?");
-        $countStmt->execute([$earliestDate]);
+        // 6. 查詢 DB 將被清除的筆數（限定在檔案本身的日期區間內，不影響區間外的既有資料）
+        $countStmt = $db->prepare("SELECT COUNT(*) FROM is_list WHERE Order_date BETWEEN ? AND ?");
+        $countStmt->execute([$earliestDate, $latestDate]);
         $existingDeleteCount = (int)$countStmt->fetchColumn();
 
         // 7. 單價為0的比例
@@ -1613,6 +1623,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'IS_List_ERP_Preview') {
         // 11. 暫存至 Session
         $_SESSION['erp_import_rows']     = $validRows;
         $_SESSION['erp_import_earliest'] = $earliestDate;
+        $_SESSION['erp_import_latest']   = $latestDate;
         $_SESSION['erp_import_ts']       = time();
 
         echo json_encode([
@@ -1644,13 +1655,14 @@ if (isset($_GET['but']) && $_GET['but'] === 'IS_List_ERP_Commit') {
 
     $validRows    = $_SESSION['erp_import_rows'];
     $earliestDate = $_SESSION['erp_import_earliest'];
+    $latestDate   = $_SESSION['erp_import_latest'];
     $userId       = $_SESSION['id'] ?? 'excel_import';
-    unset($_SESSION['erp_import_rows'], $_SESSION['erp_import_earliest'], $_SESSION['erp_import_ts']);
+    unset($_SESSION['erp_import_rows'], $_SESSION['erp_import_earliest'], $_SESSION['erp_import_latest'], $_SESSION['erp_import_ts']);
 
     try {
         // 自動建立在 Preview 時未找到對應的料號
         $newDCount = autoCreateDSettings($db, $validRows, 'product_id', '匯入出貨單自動建立', $userId);
-        $result = commitERPRows($db, $validRows, $earliestDate, $userId);
+        $result = commitERPRows($db, $validRows, $earliestDate, $latestDate, $userId);
         $msg = "匯入完成！清除 {$result['deleted']} 筆舊資料，新增 {$result['inserted']} 筆";
         if ($newDCount > 0) $msg .= "，自動建立 {$newDCount} 筆新料號";
         recordUploadLog($db, 'upload_is_erp');
@@ -1807,21 +1819,22 @@ if (!function_exists('cascadeDeleteByIds')) {
 }
 
 // 執行退貨單 DELETE(cascade) + INSERT
+// 清除範圍限定在檔案本身的日期區間（含 $latestDate 上限），理由同 commitERPRows()。
 if (!function_exists('commitIRRows')) {
-    function commitIRRows($db, $validRows, $earliestDate, $userId) {
+    function commitIRRows($db, $validRows, $earliestDate, $latestDate, $userId) {
         $db->beginTransaction();
 
         // 找出將被清除的 IR_id，遞迴刪除所有子孫資料表記錄後再刪主表
-        $findIds = $db->prepare("SELECT IR_id FROM ir_track WHERE IR_date >= ?");
-        $findIds->execute([$earliestDate]);
+        $findIds = $db->prepare("SELECT IR_id FROM ir_track WHERE IR_date BETWEEN ? AND ?");
+        $findIds->execute([$earliestDate, $latestDate]);
         $idsToDelete = $findIds->fetchAll(PDO::FETCH_COLUMN);
 
         if (!empty($idsToDelete)) {
             cascadeDeleteByIds($db, 'ir_track', 'IR_id', $idsToDelete);
         }
 
-        $del = $db->prepare("DELETE FROM ir_track WHERE IR_date >= ?");
-        $del->execute([$earliestDate]);
+        $del = $db->prepare("DELETE FROM ir_track WHERE IR_date BETWEEN ? AND ?");
+        $del->execute([$earliestDate, $latestDate]);
         $deletedRows = $del->rowCount();
 
         // INSERT（需先在 phpMyAdmin 執行 ALTER TABLE 新增欄位）
@@ -1907,9 +1920,9 @@ if (isset($_GET['but']) && $_GET['but'] === 'IR_List_ERP_Preview') {
         $earliestDate = $dates[0];
         $latestDate   = end($dates);
 
-        // 6. 查詢 DB 將被清除的筆數
-        $countStmt = $db->prepare("SELECT COUNT(*) FROM ir_track WHERE IR_date >= ?");
-        $countStmt->execute([$earliestDate]);
+        // 6. 查詢 DB 將被清除的筆數（限定在檔案本身的日期區間內，不影響區間外的既有資料）
+        $countStmt = $db->prepare("SELECT COUNT(*) FROM ir_track WHERE IR_date BETWEEN ? AND ?");
+        $countStmt->execute([$earliestDate, $latestDate]);
         $existingDeleteCount = (int)$countStmt->fetchColumn();
 
         // 7. 彙整警告
@@ -1935,6 +1948,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'IR_List_ERP_Preview') {
         // 10. 暫存 Session
         $_SESSION['ir_import_rows']     = $validRows;
         $_SESSION['ir_import_earliest'] = $earliestDate;
+        $_SESSION['ir_import_latest']   = $latestDate;
         $_SESSION['ir_import_ts']       = time();
 
         echo json_encode([
@@ -1966,12 +1980,13 @@ if (isset($_GET['but']) && $_GET['but'] === 'IR_List_ERP_Commit') {
 
     $validRows    = $_SESSION['ir_import_rows'];
     $earliestDate = $_SESSION['ir_import_earliest'];
+    $latestDate   = $_SESSION['ir_import_latest'];
     $userId       = $_SESSION['id'] ?? 'excel_import';
-    unset($_SESSION['ir_import_rows'], $_SESSION['ir_import_earliest'], $_SESSION['ir_import_ts']);
+    unset($_SESSION['ir_import_rows'], $_SESSION['ir_import_earliest'], $_SESSION['ir_import_latest'], $_SESSION['ir_import_ts']);
 
     try {
         $newDCount = autoCreateDSettings($db, $validRows, 'd_id', '匯入退貨單自動建立', $userId);
-        $result = commitIRRows($db, $validRows, $earliestDate, $userId);
+        $result = commitIRRows($db, $validRows, $earliestDate, $latestDate, $userId);
         $msg = "匯入完成！清除 {$result['deleted']} 筆舊資料，新增 {$result['inserted']} 筆";
         if ($newDCount > 0) $msg .= "，自動建立 {$newDCount} 筆新料號";
         recordUploadLog($db, 'upload_ir_erp');
