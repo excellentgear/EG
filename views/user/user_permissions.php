@@ -328,6 +328,91 @@ try {
     if ($_aid) $conn_pdo->prepare("INSERT IGNORE INTO role_features (role_id,feature_code) VALUES (?,?)")->execute([$_aid,'all']);
 } catch(Exception $_e) {}
 
+// ── 模組對照表（唯一來源，2026-08-27）────────────────────────────────────
+//   本頁所有地方要顯示「模組名稱」時，一律查這張表，不要再各自寫死一份中文名——
+//   原本快速切換列、各區塊標題、角色下拉三個地方各寫各的，使用者看到的名稱就不一致
+//   （角色下拉直接秀出 accounting / as_doc 這種資料庫代碼）。
+//   label ＝ 使用者在畫面上看到的中文名（沿用原本快速切換列的用字）
+//   page  ＝ 這個模組對應的頁面檔名；用來即時查它在「子頁面設定」被歸到哪個主項目，
+//           所以在 views/admin/system_module_setting.php 改了主項目歸屬，這裡的分群會自動跟著變（鐵律4）
+$EG_ROLE_MODULES = [
+    'quotation'           => ['prefix'=>'quot',    'label'=>'報價單',              'page'=>'quotation_list_NEW.php'],
+    'notice'              => ['prefix'=>'notice',  'label'=>'公告/通知',           'page'=>'createEvent.php'],
+    'homepage'            => ['prefix'=>'home',    'label'=>'首頁設定',            'page'=>'home_page_setting.php'],
+    'qc'                  => ['prefix'=>'qc',      'label'=>'QC檢驗',              'page'=>'inspection_entry_v2.php'],
+    'car'                 => ['prefix'=>'car',     'label'=>'異常矯正單',          'page'=>'correction_order.php'],
+    'master_data'         => ['prefix'=>'mdata',   'label'=>'主檔管理',            'page'=>'master_data_management.php'],
+    'imgedit'             => ['prefix'=>'imgedit', 'label'=>'批圖編輯器',          'page'=>''],   // 未登記進選單（帶參數才進得去）
+    'review_form'         => ['prefix'=>'rvf',     'label'=>'審核表單',            'page'=>'review_form.php'],
+    'hr_form'             => ['prefix'=>'hrf',     'label'=>'人資職務表單',        'page'=>'hr_position_forms.php'],
+    'form_signer'         => ['prefix'=>'fsd',     'label'=>'表單簽核設計器',      'page'=>'form_signer.php'],
+    'drawing_rename'      => ['prefix'=>'drawren', 'label'=>'圖面改檔名',          'page'=>'drawing_rename.php'],
+    'bom_rename'          => ['prefix'=>'bomren',  'label'=>'叫料改檔名',          'page'=>'bom_rename.php'],
+    'oready'              => ['prefix'=>'oready',  'label'=>'生管BOM',             'page'=>'OreadyReply_ForPm_BaseOfTime.php'],
+    'bom_track'           => ['prefix'=>'bomtrk',  'label'=>'BOM追蹤',             'page'=>'bom_tracking.php'],
+    'order_profit'        => ['prefix'=>'profit',  'label'=>'訂單毛利分析',        'page'=>'Order_Profit_Analysis.php'],
+    'part_process_report' => ['prefix'=>'ppr',     'label'=>'料號製程履歷報告',    'page'=>'part_process_report.php'],
+    'stamp'               => ['prefix'=>'stamp',   'label'=>'圖章管理',            'page'=>'stamp_management.php'],
+    'kpi'                 => ['prefix'=>'kpi',     'label'=>'KPI績效指標',         'page'=>'kpi_main.php'],
+    'personal_task'       => ['prefix'=>'ptask',   'label'=>'個人工作紀錄',        'page'=>'personal_task.php'],
+    'roster'              => ['prefix'=>'roster',  'label'=>'輪值排班',            'page'=>'roster.php'],
+    'as_doc'              => ['prefix'=>'asdoc',   'label'=>'AS文件管理',          'page'=>'as_document_management.php'],
+    'db_backup'           => ['prefix'=>'dbbk',    'label'=>'資料庫備份',          'page'=>'db_backup.php'],
+    'data_console'        => ['prefix'=>'dc',      'label'=>'資料急救台',          'page'=>'data_console.php'],
+    'tool_calib'          => ['prefix'=>'tcal',    'label'=>'量測儀器校驗',        'page'=>'tool_calibration.php'],
+    'training'            => ['prefix'=>'train',   'label'=>'教育訓練',            'page'=>'training_record.php'],
+    'meeting'             => ['prefix'=>'meet',    'label'=>'會議紀錄',            'page'=>'meeting_record.php'],
+    'vendor_audit'        => ['prefix'=>'vaud',    'label'=>'供應商稽核',          'page'=>'vendor_audit.php'],
+    'equip_machine'       => ['prefix'=>'eqm',     'label'=>'機台設備一覽表',      'page'=>'equipment_machine_list.php'],
+    'business_trip'       => ['prefix'=>'btrp',    'label'=>'公出單',              'page'=>'business_trip.php'],
+    'doc_apply'           => ['prefix'=>'dap',     'label'=>'文件制修申請單',      'page'=>'doc_apply.php'],
+    'eng_change'          => ['prefix'=>'eng',     'label'=>'工程變更申請單',      'page'=>'eng_change.php'],
+    'print_sign_log'      => ['prefix'=>'psl',     'label'=>'列印與簽核紀錄',      'page'=>'print_sign_log.php'],
+    'internal_audit'      => ['prefix'=>'ia',      'label'=>'內部稽核',            'page'=>'internal_audit.php'],
+    'leave'               => ['prefix'=>'leave',   'label'=>'請假系統',            'page'=>'leave_request.php'],
+    'shipping'            => ['prefix'=>'ship',    'label'=>'快速出貨',            'page'=>'Shipping_Quick.php'],
+    'purchase'            => ['prefix'=>'purc',    'label'=>'申請採購',            'page'=>'purchase_request.php'],
+    'accounting'          => ['prefix'=>'acc',     'label'=>'會計',                'page'=>'recon_overview.php'],
+    'external_doc'        => ['prefix'=>'extdoc',  'label'=>'外來文件清單',        'page'=>'external_doc_list.php'],
+    'order_track'         => ['prefix'=>'otrk',    'label'=>'訂單追蹤',            'page'=>'_cleanOrder_Track_ate_only.php'],
+    'type_id_ctrl'        => ['prefix'=>'tidc',    'label'=>'型態識別文件管制表',  'page'=>'type_id_ctrl_doc.php'],
+    'td_dev_eval'         => ['prefix'=>'tdev',    'label'=>'產品開發評估表',      'page'=>'td_dev_eval.php'],
+    'pfmea'               => ['prefix'=>'pfmea',   'label'=>'PFMEA',               'page'=>'pfmea.php'],
+    'project'             => ['prefix'=>'prj',     'label'=>'專案管理',            'page'=>'project_mgmt.php'],
+];
+
+/** 模組代碼 → 中文名（查不到就回代碼本身，至少不會顯示空白） */
+if (!function_exists('eg_module_label')) {
+    function eg_module_label($module) {
+        global $EG_ROLE_MODULES;
+        return $EG_ROLE_MODULES[$module]['label'] ?? (string)$module;
+    }
+}
+
+// 每個模組屬於哪個「主項目」：即時查子頁面設定（system_module_pages.group_id），
+// 所以在「子頁面設定＋主項目綁定」改了歸屬，這裡的分群立刻跟著變，不必回來改程式。
+$EG_MODULE_GROUP = [];   // module => 主項目名稱
+try {
+    $_pgRows = $conn_pdo->query("
+        SELECT p.page_url, g.group_name, g.sort_order
+        FROM system_module_pages p
+        LEFT JOIN system_module_groups g ON g.group_id = p.group_id")->fetchAll(PDO::FETCH_ASSOC);
+    $_pgByFile = []; $_grpSort = [];
+    foreach ($_pgRows as $_pg) {
+        $_bn = basename((string)$_pg['page_url']);
+        if ($_bn === '' || isset($_pgByFile[$_bn])) continue;
+        $_pgByFile[$_bn] = $_pg['group_name'];
+        if ($_pg['group_name'] !== null) $_grpSort[$_pg['group_name']] = (int)$_pg['sort_order'];
+    }
+    foreach ($EG_ROLE_MODULES as $_mk => $_mv) {
+        $_g = ($_mv['page'] !== '' && isset($_pgByFile[$_mv['page']])) ? $_pgByFile[$_mv['page']] : null;
+        $EG_MODULE_GROUP[$_mk] = ($_g !== null && $_g !== '') ? $_g : '其他';
+    }
+} catch (Exception $_e) {
+    foreach ($EG_ROLE_MODULES as $_mk => $_mv) $EG_MODULE_GROUP[$_mk] = '其他';
+    $_grpSort = [];
+}
+
 // ── 角色指派資料（2026-08-27 改為自動生成）────────────────────────────────
 //   原本 44 個模組每個都要手寫 3 段（變數宣告、角色清單載入、已指派載入）＋1 個渲染呼叫，
 //   新模組只要漏掉其中一段就會靜靜地少一塊設定畫面。改成一次撈完、依 roles.module 分組：
@@ -621,58 +706,54 @@ $_quotDepts = array_keys($_deptSet);
                     <div class="row" id="quick-nav-block">
                         <div class="col-md-12">
                             <div class="x_panel" style="padding:8px 12px;margin-bottom:10px;">
-                                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                                    <strong style="margin-right:4px;"><i class="fa fa-compass"></i> 快速切換：</strong>
-                                    <?php
-                                    $_navItems = [
-                                        'perm-matrix-section'    => '人員權限設定',
-                                        'person-view-section'    => '★人員權限總覽',
-                                        'dp-role-section'        => '★部門×職稱角色',
-                                        'quot-role-section'      => '報價單',
-                                        'notice-role-section'    => '公告/通知',
-                                        'home-role-section'      => '首頁設定',
-                                        'qc-role-section'        => 'QC檢驗',
-                                        'car-role-section'       => '異常矯正單',
-                                        'mdata-role-section'     => '主檔管理',
-                                        'imgedit-role-section'   => '批圖編輯器',
-                                        'drawren-role-section'   => '圖面改檔名',
-                                        'bomren-role-section'    => '叫料改檔名',
-                                        'oready-role-section'    => '生管BOM',
-                                        'bomtrk-role-section'    => 'BOM追蹤',
-                                        'ptask-role-section'     => '個人工作紀錄',
-                                        'asdoc-role-section'     => 'AS文件管理',
-                                        'dbbk-role-section'      => '資料庫備份',
-                                        'stamp-role-section'     => '圖章管理',
-                                        'roster-role-section'    => '輪值排班',
-                                        'kpi-role-section'        => 'KPI績效指標',
-                                        'tcal-role-section'      => '量測儀器校驗',
-                                        'train-role-section'     => '教育訓練',
-                                        'meet-role-section'      => '會議紀錄',
-                                        'vaud-role-section'      => '供應商稽核',
-                                        'leave-role-section'     => '請假系統',
-                                        'ship-role-section'      => '快速出貨',
-                                        'purc-role-section'      => '申請採購',
-                                        'acc-role-section'       => '會計',
-                                        'extdoc-role-section'    => '外來文件清單',
-                                        'otrk-role-section'      => '訂單追蹤',
-                                        'rvf-role-section'       => '審核表單',
-                                        'hrf-role-section'       => '人資職務表單',
-                                        'fsd-role-section'       => '表單簽核設計器',
-                                        'tidc-role-section'      => '型態識別文件管制表',
-                                        'tdev-role-section'      => '產品開發評估表',
-                                        'pfmea-role-section'     => 'PFMEA',
-                                        'prj-role-section'       => '專案管理',
-                                        'eqm-role-section'       => '機台設備一覽表',
-                                        'btrp-role-section'      => '公出單',
-                                        'dap-role-section'       => '文件制修申請單',
-                                        'eng-role-section'       => '工程變更申請單',
-                                        'psl-role-section'       => '列印與簽核紀錄',
-                                        'ia-role-section'        => '內部稽核',
-                                        'asdoc-pos-role-section' => 'AS文件·職稱權限',
-                                        'imgedit-label-dir-section' => '批圖標籤路徑',
-                                        'asdoc-nas-dir-section'  => 'AS文件儲存路徑',
+                                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                                    <strong><i class="fa fa-compass"></i> 快速切換</strong>
+                                    <span class="text-muted" style="font-size:11px;">分類依「子頁面設定」的主項目歸屬，在該頁調整後這裡會自動跟著變</span>
+                                    <a href="#" id="qn-toggle" onclick="qnToggle();return false;" style="font-size:11px;margin-left:auto;"><i class="fa fa-angle-double-down"></i> 展開全部</a>
+                                </div>
+                                <?php
+                                // 常用／不屬於任何模組的區塊（固定放最前面）
+                                $_navFixed = [
+                                    'perm-matrix-section' => '人員權限設定',
+                                    'person-view-section' => '人員權限總覽',
+                                    'dp-role-section'     => '部門×職稱角色',
+                                ];
+                                // 模組區塊：依「主項目」分群，名稱與分群都取自唯一來源 $EG_ROLE_MODULES / $EG_MODULE_GROUP
+                                $_navGroups = [];
+                                foreach ($EG_ROLE_MODULES as $_mk => $_mv) {
+                                    $_navGroups[$EG_MODULE_GROUP[$_mk] ?? '其他'][] = [
+                                        'id'    => $_mv['prefix'] . '-role-section',
+                                        'label' => $_mv['label'],
                                     ];
-                                    foreach ($_navItems as $_nid => $_nlabel): ?>
+                                }
+                                // 主項目排序：照 system_module_groups 的 sort_order，「其他」永遠最後
+                                uksort($_navGroups, function($a, $b) use ($_grpSort) {
+                                    if ($a === '其他') return 1;
+                                    if ($b === '其他') return -1;
+                                    $sa = $_grpSort[$a] ?? 9999; $sb = $_grpSort[$b] ?? 9999;
+                                    return $sa === $sb ? strcmp($a, $b) : $sa - $sb;
+                                });
+                                // 其他非模組的設定區塊
+                                $_navTail = [
+                                    'asdoc-pos-role-section'    => 'AS文件·職稱權限',
+                                    'imgedit-label-dir-section' => '批圖標籤路徑',
+                                    'asdoc-nas-dir-section'     => 'AS文件儲存路徑',
+                                ];
+                                ?>
+                                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #eee;">
+                                    <?php foreach ($_navFixed as $_nid => $_nlabel): ?>
+                                        <a href="#<?= $_nid ?>" class="btn btn-xs btn-warning quick-nav-link" data-target="<?= $_nid ?>"><?= htmlspecialchars($_nlabel) ?></a>
+                                    <?php endforeach; ?>
+                                </div>
+                                <div id="qn-groups" style="display:flex;align-items:center;gap:4px 6px;flex-wrap:wrap;max-height:60px;overflow-y:auto;">
+                                    <?php foreach ($_navGroups as $_gname => $_items): ?>
+                                        <span style="display:inline-block;font-size:11px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:1px 6px;line-height:18px;white-space:nowrap;margin-left:2px;"><?= htmlspecialchars($_gname) ?></span>
+                                        <?php foreach ($_items as $_it): ?>
+                                            <a href="#<?= $_it['id'] ?>" class="btn btn-xs btn-default quick-nav-link" data-target="<?= $_it['id'] ?>"><?= htmlspecialchars($_it['label']) ?></a>
+                                        <?php endforeach; ?>
+                                    <?php endforeach; ?>
+                                    <span style="display:inline-block;font-size:11px;color:#999;background:#f5f5f5;border:1px solid #e5e5e5;border-radius:3px;padding:1px 6px;line-height:18px;white-space:nowrap;margin-left:2px;">其他設定</span>
+                                    <?php foreach ($_navTail as $_nid => $_nlabel): ?>
                                         <a href="#<?= $_nid ?>" class="btn btn-xs btn-default quick-nav-link" data-target="<?= $_nid ?>"><?= htmlspecialchars($_nlabel) ?></a>
                                     <?php endforeach; ?>
                                 </div>
@@ -1127,7 +1208,7 @@ $_quotDepts = array_keys($_deptSet);
                                     <span style="color:#ccc;font-size:12px;">—</span>
                                 <?php else: foreach ($r['_roles'] as $_ar): ?>
                                     <span class="label <?= empty($_ar['orphan']) ? 'label-primary' : 'label-default' ?>" style="margin:0 4px 3px 0;font-size:12px;padding:3px 7px;display:inline-block;" <?= empty($_ar['orphan']) ? '' : 'title="這筆設定指到一個已經不存在的角色，實際上不帶任何權限；此處刻意不提供移除"' ?>>
-                                        <?php if ($_ar['module'] !== ''): ?><span style="opacity:.7;font-size:11px;"><?= htmlspecialchars($_ar['module']) ?></span> <?php endif; ?>
+                                        <?php if ($_ar['module'] !== ''): ?><span style="opacity:.7;font-size:11px;"><?= htmlspecialchars(eg_module_label($_ar['module'])) ?></span> <?php endif; ?>
                                         <?= htmlspecialchars($_ar['role_name']) ?>
                                         <?php if ($canEdit && empty($_ar['orphan'])): ?>
                                             <a href="#" onclick="dpRoleRemove(<?= (int)$r['department_id'] ?>,<?= (int)$r['position_id'] ?>,<?= (int)$_ar['role_id'] ?>);return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除">&times;</a>
@@ -1254,9 +1335,9 @@ $_quotDepts = array_keys($_deptSet);
                             <select id="dp-bulk-role" class="form-control input-sm" style="width:280px;" data-eg-filter="輸入模組或角色名稱篩選…">
                                 <option value="">— 選擇角色 —</option>
                                 <?php foreach ($_rolesByModule as $_m => $_rs): ?>
-                                <optgroup label="<?= htmlspecialchars($_m) ?>">
+                                <optgroup label="<?= htmlspecialchars(eg_module_label($_m)) ?>">
                                     <?php foreach ($_rs as $_r2): ?>
-                                    <option value="<?= (int)$_r2['role_id'] ?>"><?= htmlspecialchars($_m . '｜' . $_r2['role_name']) ?></option>
+                                    <option value="<?= (int)$_r2['role_id'] ?>"><?= htmlspecialchars(eg_module_label($_m) . '｜' . $_r2['role_name']) ?></option>
                                     <?php endforeach; ?>
                                 </optgroup>
                                 <?php endforeach; ?>
@@ -2110,6 +2191,9 @@ $_quotDepts = array_keys($_deptSet);
 
         // ══ 角色指派（依模組通用：prefix=quot/notice，module=quotation/notice）══
         var ROLES_API = '../../src/store/Roles_API.php';
+        // 模組代碼 → 中文名（與 PHP 端 eg_module_label() 同一張表，畫面上不要出現 as_doc 這種代碼）
+        var EG_MODULE_LABEL = <?= json_encode(array_map(function($m){ return $m['label']; }, $EG_ROLE_MODULES), JSON_UNESCAPED_UNICODE) ?>;
+        function egModLabel(m) { return (m && EG_MODULE_LABEL[m]) ? EG_MODULE_LABEL[m] : (m || ''); }
 
         // 複製其他員工的權限設定（角色指派＋選單群組/頁面權限）
         $(document).on('click', '#btn-copy-perm', function() {
@@ -2181,6 +2265,14 @@ $_quotDepts = array_keys($_deptSet);
                     have[id] = 1;
                 });
             })();
+
+            // 快速切換列預設壓成兩行：它是黏在視窗頂端的，太高會把要看的內容擠出畫面
+            window.qnToggle = function() {
+                var $g = $('#qn-groups'), open = $g.data('open') ? false : true;
+                $g.data('open', open).css('max-height', open ? '300px' : '60px');
+                $('#qn-toggle').html(open ? '<i class="fa fa-angle-double-up"></i> 收合'
+                                          : '<i class="fa fa-angle-double-down"></i> 展開全部');
+            };
 
             $(document).on('click', '.quick-nav-link', function(e) {
                 e.preventDefault();
@@ -2284,7 +2376,7 @@ $_quotDepts = array_keys($_deptSet);
                     } else {
                         i.roles.forEach(function(r) {
                             h += '<span class="label label-success" style="margin-right:4px;padding:3px 7px;display:inline-block;">';
-                            h += '<span style="opacity:.75;font-size:11px;">' + pvEsc(r.module) + '</span> ' + pvEsc(r.role_name);
+                            h += '<span style="opacity:.75;font-size:11px;">' + pvEsc(egModLabel(r.module)) + '</span> ' + pvEsc(r.role_name);
                             if (r.scope === '全部門通用') h += ' <span style="opacity:.7;font-size:10px;">(通用)</span>';
                             h += '</span>';
                         });
@@ -2302,7 +2394,7 @@ $_quotDepts = array_keys($_deptSet);
                 h += '<table class="table table-bordered table-condensed" style="font-size:12px;"><thead style="background:#f8f9fa;">';
                 h += '<tr><th style="width:160px;">模組</th><th style="width:90px;">來源</th><th>生效角色</th></tr></thead><tbody>';
                 d.effective.forEach(function(e) {
-                    h += '<tr><td><code>' + pvEsc(e.module) + '</code></td>';
+                    h += '<tr><td>' + pvEsc(egModLabel(e.module)) + '</td>';
                     h += '<td>' + (e.source === 'personal'
                           ? '<span class="label label-primary" style="font-size:11px;">個人</span>'
                           : '<span class="label label-success" style="font-size:11px;">部門職稱</span>') + '</td>';
@@ -2323,7 +2415,7 @@ $_quotDepts = array_keys($_deptSet);
             } else {
                 d.personal.forEach(function(r) {
                     h += '<span class="label ' + (r.is_system == 1 ? 'label-danger' : 'label-primary') + '" style="margin:0 4px 4px 0;padding:3px 7px;display:inline-block;">';
-                    if (r.module) h += '<span style="opacity:.75;font-size:11px;">' + pvEsc(r.module) + '</span> ';
+                    if (r.module) h += '<span style="opacity:.75;font-size:11px;">' + pvEsc(egModLabel(r.module)) + '</span> ';
                     h += pvEsc(r.role_name) + '</span>';
                 });
             }
@@ -2378,7 +2470,7 @@ $_quotDepts = array_keys($_deptSet);
                 var html = '';
                 list.forEach(function(r) {
                     html += '<span class="label label-primary" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;">';
-                    if (r.module) html += '<span style="opacity:.75;font-size:11px;">' + r.module + '</span> ';
+                    if (r.module) html += '<span style="opacity:.75;font-size:11px;">' + egModLabel(r.module) + '</span> ';
                     html += r.role_name;
                     html += ' <a href="#" onclick="dpRoleRemove(' + deptId + ',' + positionId + ',' + r.role_id + ');return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除此角色">&times;</a>';
                     html += '</span>';
