@@ -678,6 +678,142 @@ switch ($action) {
         break;
     }
 
+    // ──────────────────────────────────────────────────────────────────────
+    // 部門×職稱角色：批次操作（一次套用到多組編制）
+    // POST action=bulk_position_roles
+    //   targets = JSON 陣列，元素為 "部門id_職稱id"（部門id=0 代表該職稱全部門通用）
+    //   op      = assign（批次指派單一角色）/ remove（批次移除單一角色）/ copy（從來源整組複製）
+    //   assign|remove： role_id
+    //   copy：           source_type=user|position
+    //                    source_user_id           （source_type=user）
+    //                    source_department_id, source_position_id（source_type=position）
+    //                    mode=merge|overwrite（overwrite 會先清空目標編制原有的角色）
+    // 為什麼要有這個：同一組角色常常要套到好幾個編制（三個生產廠的組長權限一樣），
+    // 一組一組點下去既慢又容易漏掉其中一組。
+    // ──────────────────────────────────────────────────────────────────────
+    case 'bulk_position_roles': {
+        if (!isAdmin($pdo, $user_id)) { $response = ['success'=>false,'message'=>'無管理員權限']; break; }
+        $op      = $_POST['op'] ?? '';
+        $rawTgts = json_decode($_POST['targets'] ?? '[]', true);
+        if (!is_array($rawTgts) || !$rawTgts) { $response = ['success'=>false,'message'=>'請先勾選要套用的部門×職稱']; break; }
+        if (!in_array($op, ['assign','remove','copy'], true)) { $response = ['success'=>false,'message'=>'無效的操作']; break; }
+
+        try {
+            // 目標解析與驗證：畫面上只列出「有在職人員的職稱」，後端用同一條規則再擋一次（鐵律8），
+            // 這同時也擋掉超級管理員那種沒有在職人員的職稱，不會被直接打 API 改到。
+            $posOk = $pdo->prepare("SELECT COUNT(*) FROM user_department_position_map m
+                                    JOIN `user` u ON u.id=m.user_id AND u.state=1
+                                    WHERE m.position_id=?");
+            $dpOk  = $pdo->prepare("SELECT COUNT(*) FROM user_department_position_map m
+                                    JOIN `user` u ON u.id=m.user_id AND u.state=1
+                                    WHERE m.department_id=? AND m.position_id=?");
+            $targets = [];
+            foreach ($rawTgts as $t) {
+                $parts = explode('_', (string)$t);
+                if (count($parts) !== 2) { $response = ['success'=>false,'message'=>'目標格式錯誤']; break 2; }
+                $did = intval($parts[0]); $pid = intval($parts[1]);
+                if ($pid <= 0) { $response = ['success'=>false,'message'=>'目標職稱錯誤']; break 2; }
+                if ($did === 0) { $posOk->execute([$pid]); $ok = (int)$posOk->fetchColumn() > 0; }
+                else            { $dpOk->execute([$did, $pid]); $ok = (int)$dpOk->fetchColumn() > 0; }
+                if (!$ok) { $response = ['success'=>false,'message'=>'目標編制不存在或沒有在職人員，不可設定']; break 2; }
+                $targets[] = [$did, $pid];
+            }
+
+            // 要寫入的角色清單
+            $roleIds = [];
+            $srcLabel = '';
+            if ($op === 'assign' || $op === 'remove') {
+                $rid = intval($_POST['role_id'] ?? 0);
+                if (!$rid) { $response = ['success'=>false,'message'=>'請選擇角色']; break; }
+                $chk = $pdo->prepare("SELECT is_system, role_name FROM roles WHERE role_id=? LIMIT 1");
+                $chk->execute([$rid]);
+                $r = $chk->fetch(PDO::FETCH_ASSOC);
+                if (!$r) { $response = ['success'=>false,'message'=>'角色不存在']; break; }
+                if ((int)$r['is_system'] === 1) { $response = ['success'=>false,'message'=>'系統角色（管理員）不可指派給職稱，請個別指派給使用者']; break; }
+                $roleIds = [$rid];
+                $srcLabel = $r['role_name'];
+            } else { // copy
+                $srcType = $_POST['source_type'] ?? '';
+                if ($srcType === 'user') {
+                    $suid = intval($_POST['source_user_id'] ?? 0);
+                    if (!$suid) { $response = ['success'=>false,'message'=>'請選擇來源人員']; break; }
+                    // 只複製「有歸模組的非系統角色」：系統角色（管理員）不可下放到職稱
+                    $st = $pdo->prepare("SELECT r.role_id FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                                         WHERE ur.user_id=? AND r.is_system=0 AND r.module IS NOT NULL AND r.module<>''");
+                    $st->execute([$suid]);
+                    $roleIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+                    $srcLabel = '人員「' . rbacUserName($pdo, $suid) . '」的個人指派角色';
+                } elseif ($srcType === 'position') {
+                    $sdid = intval($_POST['source_department_id'] ?? 0);
+                    $spid = intval($_POST['source_position_id'] ?? 0);
+                    if (!$spid) { $response = ['success'=>false,'message'=>'請選擇來源部門×職稱']; break; }
+                    // 來源要含「該部門專屬」與「全部門通用」兩層，跟實際生效的內容一致
+                    $st = $pdo->prepare("SELECT pr.role_id FROM position_roles pr JOIN roles r ON r.role_id=pr.role_id
+                                         WHERE pr.position_id=? AND (pr.department_id=0 OR pr.department_id=?)
+                                           AND r.is_system=0");
+                    $st->execute([$spid, $sdid]);
+                    $roleIds = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+                    $srcLabel = '編制「' . rbacDeptPosName($pdo, $sdid, $spid) . '」的角色';
+                } else {
+                    $response = ['success'=>false,'message'=>'請選擇複製來源']; break;
+                }
+                if (!$roleIds) { $response = ['success'=>false,'message'=>'來源沒有任何可複製的角色（系統角色不列入）']; break; }
+            }
+
+            $mode = (($_POST['mode'] ?? 'merge') === 'overwrite') ? 'overwrite' : 'merge';
+            $pdo->beginTransaction();
+
+            // 動作前先記錄各目標原本的內容，寫進稽核紀錄備查
+            $beforeQ = $pdo->prepare("SELECT role_id FROM position_roles WHERE department_id=? AND position_id=?");
+            $before  = [];
+            foreach ($targets as [$did, $pid]) {
+                $beforeQ->execute([$did, $pid]);
+                $before[$did . '_' . $pid] = array_map('intval', $beforeQ->fetchAll(PDO::FETCH_COLUMN));
+            }
+
+            $ins = $pdo->prepare("INSERT IGNORE INTO position_roles (department_id,position_id,role_id) VALUES (?,?,?)");
+            $del = $pdo->prepare("DELETE FROM position_roles WHERE department_id=? AND position_id=? AND role_id=?");
+            $clr = $pdo->prepare("DELETE FROM position_roles WHERE department_id=? AND position_id=?");
+            $added = 0; $removed = 0;
+            foreach ($targets as [$did, $pid]) {
+                if ($op === 'remove') {
+                    $del->execute([$did, $pid, $roleIds[0]]);
+                    $removed += $del->rowCount();
+                    continue;
+                }
+                if ($op === 'copy' && $mode === 'overwrite') {
+                    $clr->execute([$did, $pid]);
+                    $removed += $clr->rowCount();
+                }
+                foreach ($roleIds as $rid) {
+                    $ins->execute([$did, $pid, $rid]);
+                    $added += $ins->rowCount();
+                }
+            }
+
+            rbacAudit($pdo, $user_id, 'BULK_POSITION_ROLE', 'rbac_position', 0,
+                      count($targets) . ' 組部門×職稱', [
+                'op' => $op, 'mode' => $mode, 'source' => $srcLabel,
+                'targets' => array_map(function($t) use ($pdo) { return rbacDeptPosName($pdo, $t[0], $t[1]); }, $targets),
+                'role_ids' => $roleIds, 'added' => $added, 'removed' => $removed,
+                'before' => $before,
+            ]);
+            $pdo->commit();
+
+            $msg = ($op === 'remove')
+                ? "已從 " . count($targets) . " 組編制移除「{$srcLabel}」（實際移除 {$removed} 筆）"
+                : (($op === 'assign')
+                    ? "已指派「{$srcLabel}」給 " . count($targets) . " 組編制（新增 {$added} 筆，原本已有的不重複）"
+                    : "已把{$srcLabel}複製到 " . count($targets) . " 組編制（新增 {$added} 筆"
+                      . ($mode === 'overwrite' ? "、清除原有 {$removed} 筆" : "，保留原有設定") . "）");
+            $response = ['success'=>true, 'message'=>$msg, 'added'=>$added, 'removed'=>$removed];
+        } catch(Exception $_e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $response = ['success'=>false,'message'=>$_e->getMessage()];
+        }
+        break;
+    }
+
     default:
         $response = ['success'=>false,'message'=>"未知的 action: {$action}"];
 }
