@@ -493,11 +493,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $f->execute([$fid, $batch_no, $round_no, $user_id]);
             $draftId = (int)$f->fetchColumn();
             if ($draftId) {
-                $pdo->prepare("UPDATE qc_check_form SET incoming_qty=?, sample_qty=?, main_remark=?, process_name=?, draft_json=?, last_edited_at=NOW() WHERE qc_form_id=?")
-                    ->execute([$incoming_qty, $sample_qty, $main_remark, $process, $draftJson, $draftId]);
+                // last_edited_by 一定要跟著寫：只寫時間會變成「有修改時間、查不到修改人」
+                $pdo->prepare("UPDATE qc_check_form SET incoming_qty=?, sample_qty=?, main_remark=?, process_name=?, draft_json=?, last_edited_by=?, last_edited_at=NOW() WHERE qc_form_id=?")
+                    ->execute([$incoming_qty, $sample_qty, $main_remark, $process, $draftJson, $user_id, $draftId]);
             } else {
-                $pdo->prepare("INSERT INTO qc_check_form (bom_ing_fid, d_id, version_id, form_type_id, process_name, batch_no, round_no, incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, draft_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'DRAFT', ?, ?, ?, NOW())")
-                    ->execute([$fid, $d_id, $version_id, (string)$form_type_id, $process, $batch_no, $round_no, $incoming_qty, $sample_qty, $main_remark, $draftJson, $user_id]);
+                $pdo->prepare("INSERT INTO qc_check_form (bom_ing_fid, d_id, version_id, form_type_id, process_name, batch_no, round_no, incoming_qty, sample_qty, ng_qty, check_result, status, main_remark, draft_json, created_by, created_at, last_edited_by, last_edited_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'OK', 'DRAFT', ?, ?, ?, NOW(), ?, NOW())")
+                    ->execute([$fid, $d_id, $version_id, (string)$form_type_id, $process, $batch_no, $round_no, $incoming_qty, $sample_qty, $main_remark, $draftJson, $user_id, $user_id]);
                 $draftId = (int)$pdo->lastInsertId();
             }
             echo json_encode(['success'=>true, 'draft_form_id'=>$draftId], JSON_UNESCAPED_UNICODE);
