@@ -814,9 +814,12 @@ if (!function_exists('eg_printlog_people')) {
      * 濾掉在職狀態會讓歷史資料變成查不到人（人員列表鐵則規範的是「要指派誰」的名單，不是查歷史）。
      * 排序仍依鐵則：部門 sort_order → 職稱 sort_order → 姓名。
      */
-    function eg_printlog_people(PDO $db): array {
+    function eg_printlog_people(PDO $db, array $extraIds = []): array {
         eg_print_log_ensure_schema($db);
         $ids = [];
+        // $extraIds：其他分頁（如檢驗作業）出現過、但沒有列印／簽核紀錄的人，
+        // 不帶進來的話那些人不會出現在人員下拉裡（純新增參數，既有呼叫端不受影響）
+        foreach ($extraIds as $x) { if ((int)$x > 0) $ids[(int)$x] = true; }
         $collect = function (string $sql) use ($db, &$ids) {
             try {
                 foreach ($db->query($sql)->fetchAll(PDO::FETCH_COLUMN) as $x) $ids[(int)$x] = true;

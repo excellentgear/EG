@@ -103,6 +103,14 @@ try {
         table.ps-table tbody tr:nth-child(even) { background:#FBF6EC; }
         table.ps-table tbody tr:hover { background:#FBF0DD; }
         table.ps-table td.t-left { text-align:left; word-break:break-all; }
+        /* 月統計矩陣：列＝展開維度、欄＝1~12 月，最後一列與最後一欄是合計 */
+        table.ps-table td.t-dim { text-align:left; font-weight:bold; white-space:nowrap; }
+        table.ps-table td.st-zero { color:#CFC3AE; }
+        table.ps-table td.st-sum, table.ps-table th.st-sum { background:#FBF0DD; font-weight:bold; }
+        table.ps-table tr.st-foot td { background:#F7E0BD; font-weight:bold; }
+        table.ps-table .st-rate { display:block; font-size:11px; color:#8a6d45; }
+        table.ps-table .st-rate.bad { color:#DD5138; font-weight:bold; }
+        .ps-stat-hint { font-size:12px; color:#8a6d45; margin:0 0 6px; }
         .src-pill { display:inline-block; font-size:11px; border-radius:10px; padding:1px 8px; background:#F7E0BD; color:#7a5217; white-space:nowrap; }
         .src-pill.legacy { background:#FFF3E2; color:#C77C1A; border:1px solid #E4D3BC; }
         .res-pill { display:inline-block; font-size:11px; border-radius:10px; padding:1px 10px; white-space:nowrap; font-weight:bold; }
@@ -143,13 +151,25 @@ try {
         <div class="ps-tabs">
             <div class="ps-tab active" data-tab="print"><i class="fa fa-print"></i> 列印紀錄<span class="ps-cnt zero" id="cntPrint">0</span></div>
             <div class="ps-tab" data-tab="sign"><i class="fa fa-check-square-o"></i> 簽核紀錄<span class="ps-cnt zero" id="cntSign">0</span></div>
+            <div class="ps-tab" data-tab="qcop"><i class="fa fa-flask"></i> 檢驗作業<span class="ps-cnt zero" id="cntQcop">0</span></div>
+            <div class="ps-tab" data-tab="qcstat"><i class="fa fa-bar-chart"></i> 月統計</div>
         </div>
 
         <div class="ps-toolbar">
             <!-- 第一列：下拉篩選（選了就即時查，不必按查詢） -->
             <div class="ps-row">
-                <label>資料來源</label>
-                <select id="fSource" data-eg-filter="輸入來源名稱篩選…" style="min-width:190px;"><option value="">全部</option></select>
+                <span id="wrapSource"><label>資料來源</label>
+                <select id="fSource" data-eg-filter="輸入來源名稱篩選…" style="min-width:190px;"><option value="">全部</option></select></span>
+
+                <span id="wrapKind" style="display:none;"><label>事件種類</label>
+                <select id="fKind" style="min-width:150px;"><option value="">全部</option></select></span>
+
+                <span id="wrapStat" style="display:none;"><label>年度</label>
+                <select id="fYear" style="min-width:90px;"></select>
+                <label>統計指標</label>
+                <select id="fMetric" style="min-width:160px;"></select>
+                <label>展開</label>
+                <select id="fDim" style="min-width:150px;"></select></span>
 
                 <label id="lblPerson">列印人</label>
                 <select id="fUser" data-eg-filter="輸入姓名篩選…" style="min-width:190px;"><option value="">全部</option></select>
@@ -159,7 +179,13 @@ try {
 
             <!-- 第二列：日期區間整組不拆行＋關鍵字＋動作鈕 -->
             <div class="ps-row">
-                <span class="ps-date"><label>日期</label><input type="date" id="fFrom"> ～ <input type="date" id="fTo"></span>
+                <span class="ps-date" id="wrapDate"><label>日期</label><input type="date" id="fFrom"> ～ <input type="date" id="fTo"></span>
+
+                <span id="wrapProc" style="display:none;"><label>製程</label>
+                <select id="fProc" data-eg-filter="輸入製程名稱篩選…" style="min-width:150px;"><option value="">全部</option></select></span>
+
+                <span id="wrapMaker" style="display:none;"><label>廠商</label>
+                <select id="fMaker" data-eg-filter="輸入廠商名稱篩選…" style="min-width:150px;"><option value="">全部</option></select></span>
 
                 <input type="text" id="fKw" placeholder="文件名稱／料號／姓名…（邊打邊查）" style="min-width:220px;">
 
@@ -179,6 +205,8 @@ try {
             <select id="fPer"><option>5</option><option selected>10</option><option>20</option><option>50</option></select>
             <span id="pgBtns"></span>
         </div>
+
+        <div class="ps-stat-hint" id="statHint" style="display:none;"></div>
 
         <div class="ps-table-wrap">
             <table class="ps-table">
@@ -219,17 +247,41 @@ try {
 
 <!-- 使用說明 -->
 <div class="ps-mask" id="helpUseMask"><div class="ps-modal">
-    <div class="m-head"><span><i class="fa fa-question-circle"></i> 列印與簽核紀錄 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
+    <div class="m-head"><span><i class="fa fa-question-circle"></i> 作業紀錄（列印／簽核／檢驗） 使用說明</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
     <div class="m-body help-doc">
         <h4>這個頁面在做什麼</h4>
         <ul>
             <li><b>列印紀錄</b>：誰、什麼時候、在哪一台電腦、印了哪一份文件。附件列印會一併記下相關料號。</li>
             <li><b>簽核紀錄</b>：文件名稱、送件日期、簽核人、簽核日期時間、結果（許可／不許可／待簽核）與簽核意見。</li>
+            <li><b>檢驗作業</b>：線上檢驗相關的四種動作——<b>按下完成</b>（QC 待驗清單按「完成」）、<b>送出檢驗單</b>、
+                <b>修改檢驗單</b>（已送出的事後被改）、<b>未送出草稿</b>（填到一半自動保存、一直沒送出的）。
+                每一列都看得到時間、製令(BOM)、料號、客戶、製程、廠商、判定與操作人。</li>
+            <li><b>月統計</b>：把檢驗作業依<b>年度</b>攤成「一列一個對象、一欄一個月份」的統計表，
+                可選統計<b>完工筆數／檢驗單送出筆數／檢驗合格率／未送出草稿筆數</b>，並依<b>人員／製程／廠商</b>展開。</li>
+        </ul>
+
+        <h4>檢驗作業與月統計（2026-08-27 新增）</h4>
+        <ul>
+            <li><b>資料是本來就存在的，這裡只是讓它看得到</b>：完工的人與時間存在製令的製程資料上，
+                檢驗單與草稿的建立人／最後修改人存在檢驗表單上。本頁只讀取與彙總，<b>不會另外再記一份</b>
+                （依 ai-rules/23：禁止各模組各自再開一張紀錄表）。</li>
+            <li><b>檢驗作業</b>分頁的篩選：<b>事件種類</b>（四種動作）、<b>製程</b>、<b>廠商</b>、<b>操作人</b>、<b>日期區間</b>、關鍵字
+                （製令／料號／客戶／製程／廠商／姓名都會掃）。製程與廠商的下拉一樣只列這個區間內真的有資料的。</li>
+            <li><b>月統計</b>分頁改用<b>年度</b>而不是日期區間（整年才看得出月份趨勢），所以切到這個分頁時日期欄會收起來；
+                操作人／製程／廠商／關鍵字這幾個條件仍然有效。</li>
+            <li><b>合格率</b>那個指標，每一格顯示「<b>合格數／總數</b>」與百分比，未滿 100% 會用紅字標出來。</li>
+            <li>統計表的列會依<b>全年合計由多到少</b>排序，一眼看得出哪個人／哪個製程／哪家廠商量最大；
+                最後一列與最後一欄是合計。</li>
+            <li><b>未送出草稿</b>要特別看：草稿是每個人各自一份、只有本人載得回，
+                量一多通常代表有人填到一半就離開、該批檢驗其實沒有完成。</li>
+            <li><b>列印全部篩選結果</b>在這兩個分頁一樣可用：檢驗作業印的是全部符合條件的資料（不是只有這一頁），
+                月統計印的是目前這張矩陣。</li>
         </ul>
 
         <h4>操作步驟</h4>
         <ul>
-            <li>上方分頁切換「列印紀錄／簽核紀錄」，兩個分頁共用同一組篩選條件。</li>
+            <li>上方分頁切換「列印紀錄／簽核紀錄／檢驗作業／月統計」，共用同一組篩選條件；
+                各分頁專屬的欄位（資料來源、事件種類、製程、廠商、年度與統計指標）會依分頁自動出現或收起。</li>
             <li>篩選：<b>資料來源</b>（列印分頁是頁面／模組，簽核分頁是單據種類）、<b>列印人／簽核人</b>、<b>日期區間</b>，另可用關鍵字查文件名稱、料號、姓名。</li>
             <li><b>全部篩選都是即時的</b>：下拉一選、日期一改、關鍵字邊打就邊查，不需要按任何查詢按鈕。</li>
             <li><b>資料來源與列印人／簽核人的下拉，只列這個日期區間內真的有紀錄的項目</b>——選下去是 0 筆的選項不會出現。
@@ -301,6 +353,8 @@ $(document).ready(function(){
 var API = '../../src/store/PrintSignLog_API.php';
 var COMPANY = <?= json_encode($companyName, JSON_UNESCAPED_UNICODE) ?>;
 var META = null;
+var META_QC = null;          // 檢驗作業／月統計分頁的篩選選項（跟著日期區間走）
+var LASTSTAT = null;         // 月統計最後一次的結果（列印用）
 var TAB  = 'print';
 var PAGE = 1;
 var LAST = { rows: [], total: 0 };
@@ -323,7 +377,9 @@ function resetRange(){
     $('#fFrom').val(r.from); $('#fTo').val(r.to);
 }
 
-function filters(extra){
+/** $tab 省略＝目前分頁。算「別的分頁有幾筆」時要用別的分頁的條件，所以要能指定。 */
+function filters(extra, tab){
+    tab = tab || TAB;
     var f = {
         user_id  : $('#fUser').val() || '',
         date_from: $('#fFrom').val() || '',
@@ -333,10 +389,21 @@ function filters(extra){
         page     : PAGE
     };
     // 原始單據已刪除的簽核紀錄預設不列出（使用者要求），勾了才含進來
-    if (TAB === 'sign' && $('#fIncDel').prop('checked')) f.include_deleted = 1;
-    // 來源欄位在兩個分頁是不同的東西：列印分頁篩頁面來源、簽核分頁篩單據種類
-    if (TAB === 'print') f.source = $('#fSource').val() || '';
-    else                 f.module = $('#fSource').val() || '';
+    if (tab === 'sign' && $('#fIncDel').prop('checked')) f.include_deleted = 1;
+    // 「來源」欄位在每個分頁是不同的東西，各自帶各自的參數
+    if (tab === 'print') f.source = $('#fSource').val() || '';
+    else if (tab === 'sign') f.module = $('#fSource').val() || '';
+    else {                                   // qcop / qcstat
+        f.kind    = (tab === 'qcop') ? ($('#fKind').val() || '') : '';
+        f.process = $('#fProc').val()  || '';
+        f.maker   = $('#fMaker').val() || '';
+        if (tab === 'qcstat') {
+            f.year   = $('#fYear').val()   || '';
+            f.metric = $('#fMetric').val() || '';
+            f.dim    = $('#fDim').val()    || '';
+            delete f.date_from; delete f.date_to;   // 月統計以整年為單位，日期區間不適用
+        }
+    }
     return $.extend(f, extra || {});
 }
 
@@ -355,7 +422,7 @@ function fillSourceSel(){
     });
     if (cur && !seen) $s.append('<option value="'+esc(cur)+'">'+esc(curSourceLabel(cur))+'（此區間無資料）</option>');
     $s.val(cur);
-    $('#lblPerson').text(TAB === 'print' ? '列印人' : '簽核人');
+    // 人員欄的標題統一由 syncToolbar() 決定（分頁已經不只兩個，寫在這裡會蓋掉它算好的結果）
 }
 
 /** 已選但這個區間沒資料的來源，名稱要從完整登錄表拿，不然只剩一個看不懂的代碼 */
@@ -412,9 +479,11 @@ var NOTE_REVEALED = false;
 // ── 清單 ────────────────────────────────────────────────────────────────
 var HEAD_PRINT = ['列印時間','資料來源','文件名稱','相關料號','列印人','登入電腦','備註'];
 var HEAD_SIGN  = ['文件名稱','單據種類','送件日期','送件人','簽核關卡','簽核人','簽核日期時間','結果','回覆意見'];
+var HEAD_QCOP  = ['時間','動作','製令(BOM)','料號','客戶','製程','廠商','判定','操作人'];
+var HEADS      = { print: HEAD_PRINT, sign: HEAD_SIGN, qcop: HEAD_QCOP };
 
 function renderHead(){
-    var cols = (TAB === 'print') ? HEAD_PRINT : HEAD_SIGN;
+    var cols = HEADS[TAB] || HEAD_PRINT;
     $('#tHead').html('<tr>' + cols.map(function(c){ return '<th>'+esc(c)+'</th>'; }).join('') + '</tr>');
 }
 
@@ -447,6 +516,24 @@ function rowHtmlSign(r){
         + '</tr>';
 }
 
+/** 檢驗作業一列：時間／做了什麼／哪一張製令與製程／誰做的 */
+function rowHtmlQcop(r){
+    var res = r.result === 'OK' ? '<span class="res-pill res-ok">合格</span>'
+            : r.result === 'NG' ? '<span class="res-pill res-no">不合格</span>'
+            : (r.result ? esc(r.result) : '—');
+    return '<tr>'
+        + '<td style="white-space:nowrap;">' + esc(dispDateTime(r.ev_at)) + '</td>'
+        + '<td><span class="src-pill' + (r.kind === 'draft' ? ' legacy' : '') + '">' + esc(r.kind_label) + '</span></td>'
+        + '<td>' + esc(r.bom || '—') + '</td>'
+        + '<td>' + esc(r.part_no || '—') + '</td>'
+        + '<td>' + esc(r.client || '—') + '</td>'
+        + '<td>' + esc(r.process || '—') + '</td>'
+        + '<td>' + esc(r.maker || '—') + '</td>'
+        + '<td>' + res + '</td>'
+        + '<td>' + esc(r.ev_user_name || ('（帳號 ' + r.ev_uid + '）')) + '</td>'
+        + '</tr>';
+}
+
 /** 簽核意見欄：系統內部註記預設遮蔽，只留一個看不出內容的灰字提示（規則見 ai-rules/23） */
 function signNoteCell(r){
     if (r.note_hidden && !NOTE_REVEALED) return '<span style="color:#c9bda9;">—</span>';
@@ -471,7 +558,8 @@ function renderPager(total, per, page){
 }
 
 function loadList(){
-    var act = (TAB === 'print') ? 'list_print' : 'list_sign';
+    if (TAB === 'qcstat') { loadStat(); return; }
+    var act = (TAB === 'print') ? 'list_print' : (TAB === 'sign' ? 'list_sign' : 'list_qcop');
     $('#tBody').html('<tr><td colspan="9" style="padding:20px;color:#8a6d45;">載入中…</td></tr>');
     $.post(API, $.extend({ action: act }, filters()), function(res){
         if (!res || !res.ok) { $('#tBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">'+esc((res&&res.error)||'查詢失敗')+'</td></tr>'); return; }
@@ -483,33 +571,138 @@ function loadList(){
             .html(NOTE_REVEALED ? '<i class="fa fa-eye-slash"></i> 隱藏內部註記'
                                 : '<i class="fa fa-lock"></i> 顯示內部註記');
         renderHead();
-        var f = (TAB === 'print') ? rowHtmlPrint : rowHtmlSign;
+        var f = (TAB === 'print') ? rowHtmlPrint : (TAB === 'sign' ? rowHtmlSign : rowHtmlQcop);
         $('#tBody').html(LAST.rows.map(f).join(''));
         $('#emptyBox').toggle(LAST.rows.length === 0);
         renderPager(LAST.total, parseInt(res.per, 10) || 10, PAGE);
-        var $c = $(TAB === 'print' ? '#cntPrint' : '#cntSign');
+        var $c = $({ print:'#cntPrint', sign:'#cntSign', qcop:'#cntQcop' }[TAB]);
         $c.text(LAST.total).toggleClass('zero', LAST.total === 0);
     }, 'json').fail(function(){
         $('#tBody').html('<tr><td colspan="9" style="padding:20px;color:#DD5138;">查詢失敗（連線異常）</td></tr>');
     });
 }
 
-// 兩個分頁的筆數徽章都要即時（點開即刷新鐵則：切分頁連帶刷新另一邊的計數）
+// 每個分頁的筆數徽章都要即時（點開即刷新鐵則：切分頁連帶刷新其他分頁的計數）
+var COUNT_TABS = [['print','list_print','#cntPrint'], ['sign','list_sign','#cntSign'], ['qcop','list_qcop','#cntQcop']];
 function refreshOtherCount(){
-    var act = (TAB === 'print') ? 'list_sign' : 'list_print';
-    var f = filters({ per: 5, page: 1 });
-    // 另一個分頁的來源條件不通用，計數時不套來源篩選
-    delete f.source; delete f.module;
-    $.post(API, $.extend({ action: act }, f), function(res){
-        if (!res || !res.ok) return;
-        var $c = $(TAB === 'print' ? '#cntSign' : '#cntPrint');
-        $c.text(res.total || 0).toggleClass('zero', (res.total || 0) === 0);
-    }, 'json');
+    COUNT_TABS.forEach(function(t){
+        if (t[0] === TAB) return;                       // 目前分頁的數字由 loadList 自己更新
+        var f = filters({ per: 5, page: 1 }, t[0]);
+        // 各分頁自己的「來源」條件不通用，計數時一律不套
+        delete f.source; delete f.module; delete f.kind; delete f.process; delete f.maker;
+        $.post(API, $.extend({ action: t[1] }, f), function(res){
+            if (!res || !res.ok) return;
+            $(t[2]).text(res.total || 0).toggleClass('zero', (res.total || 0) === 0);
+        }, 'json');
+    });
+}
+
+// ── 月統計：列＝展開維度、欄＝1~12 月（像統計資料表那樣一列一個對象）──────
+function statCell(c, isRate, cls){
+    cls = cls || '';
+    if (!c || !c.n) return '<td class="st-zero ' + cls + '">—</td>';
+    if (!isRate) return '<td class="' + cls + '">' + c.n + '</td>';
+    var pct = Math.round(c.ok / c.n * 1000) / 10;
+    return '<td class="' + cls + '">' + c.ok + '／' + c.n
+         + '<span class="st-rate' + (pct < 100 ? ' bad' : '') + '">' + pct + '%</span></td>';
+}
+function renderStat(res){
+    LASTSTAT = res;
+    var isRate = !!res.is_rate;
+    var dimLabel = '對象';
+    (res.dims || []).forEach(function(d){ if (d.code === res.dim) dimLabel = d.label.replace(/^依/, ''); });
+    if (res.dim === 'none') dimLabel = '項目';
+
+    var h = '<tr><th style="text-align:left;">' + esc(dimLabel) + '</th>';
+    for (var m = 1; m <= 12; m++) h += '<th>' + m + '月</th>';
+    h += '<th class="st-sum">全年合計</th></tr>';
+    $('#tHead').html(h);
+
+    var rows = res.rows || [];
+    var b = '';
+    rows.forEach(function(r){
+        b += '<tr><td class="t-dim">' + esc(r.dim) + '</td>';
+        for (var m = 1; m <= 12; m++) b += statCell(r.months[m], isRate);
+        b += statCell({ n: r.sum_n, ok: r.sum_ok }, isRate, 'st-sum') + '</tr>';
+    });
+    if (rows.length) {
+        b += '<tr class="st-foot"><td class="t-dim">合計</td>';
+        for (var m2 = 1; m2 <= 12; m2++) b += statCell({ n: res.foot.n[m2], ok: res.foot.ok[m2] }, isRate);
+        b += statCell({ n: res.foot.sum_n, ok: res.foot.sum_ok }, isRate, 'st-sum') + '</tr>';
+    }
+    $('#tBody').html(b);
+    $('#emptyBox').toggle(rows.length === 0);
+
+    var hint = '';
+    (res.metrics || []).forEach(function(x){ if (x.code === res.metric) hint = x.hint; });
+    $('#statHint').html('<i class="fa fa-info-circle"></i> ' + esc(res.year) + ' 年　'
+        + esc(hint) + (isRate ? '（格內為「合格數／總數」與百分比）' : '') ).show();
+}
+function loadStat(){
+    $('#tBody').html('<tr><td colspan="14" style="padding:20px;color:#8a6d45;">統計中…</td></tr>');
+    $.post(API, $.extend({ action:'stat_qcop' }, filters()), function(res){
+        if (!res || !res.ok) { $('#tBody').html('<tr><td colspan="14" style="padding:20px;color:#DD5138;">'+esc((res&&res.error)||'統計失敗')+'</td></tr>'); return; }
+        renderStat(res);
+    }, 'json').fail(function(){
+        $('#tBody').html('<tr><td colspan="14" style="padding:20px;color:#DD5138;">統計失敗（連線異常）</td></tr>');
+    });
+}
+
+// ── 檢驗作業／月統計分頁的篩選選項（跟著目前日期區間走）──────────────────
+function fillQcSel(){
+    if (!META_QC) return;
+    var fill = function (sel, list, valOf, txtOf) {
+        var $s = $(sel), cur = $s.val() || '';
+        var seen = false;
+        $s.html('<option value="">全部</option>');
+        list.forEach(function(x){
+            var v = valOf(x);
+            if (String(v) === String(cur)) seen = true;
+            $s.append('<option value="'+esc(v)+'">'+esc(txtOf(x))+'</option>');
+        });
+        // 已選但這個區間沒資料的，仍要留著；不然選項一消失篩選條件會被默默改掉
+        if (cur && !seen) $s.append('<option value="'+esc(cur)+'">'+esc(cur)+'（此區間無資料）</option>');
+        $s.val(cur);
+    };
+    fill('#fKind',  META_QC.kinds || [],     function(x){ return x.code; }, function(x){ return x.label; });
+    fill('#fProc',  META_QC.processes || [], function(x){ return x; },      function(x){ return x; });
+    fill('#fMaker', META_QC.makers || [],    function(x){ return x; },      function(x){ return x; });
+
+    var $y = $('#fYear'), cy = $y.val() || '';
+    $y.html((META_QC.years || []).map(function(y){ return '<option value="'+y+'">'+y+'</option>'; }).join(''));
+    if (cy && $y.find('option[value="'+cy+'"]').length) $y.val(cy);
+    var $m = $('#fMetric'), cm = $m.val() || '';
+    $m.html((META_QC.metrics || []).map(function(x){ return '<option value="'+esc(x.code)+'">'+esc(x.label)+'</option>'; }).join(''));
+    if (cm) $m.val(cm);
+    var $d = $('#fDim'), cd = $d.val() || '';
+    $d.html((META_QC.dims || []).map(function(x){ return '<option value="'+esc(x.code)+'">'+esc(x.label)+'</option>'; }).join(''));
+    $d.val(cd || 'user');
+}
+function reloadMetaQc(cb){
+    $.get(API, { action:'meta_qcop', date_from: $('#fFrom').val() || '', date_to: $('#fTo').val() || '' }, function(res){
+        if (res && res.ok) { META_QC = res; fillQcSel(); }
+        if (cb) cb();
+    }, 'json').fail(function(){ if (cb) cb(); });
+}
+
+/** 依目前分頁決定工具列哪些欄位要出現（欄位不通用，硬留著只會讓人以為篩得到） */
+function syncToolbar(){
+    var isQc = (TAB === 'qcop' || TAB === 'qcstat');
+    $('#wrapSource').toggle(!isQc);
+    $('#wrapKind').toggle(TAB === 'qcop');
+    $('#wrapProc, #wrapMaker').toggle(isQc);
+    $('#wrapStat').toggle(TAB === 'qcstat');
+    $('#wrapDate').toggle(TAB !== 'qcstat');          // 月統計以整年為單位
+    $('#lblIncDel').toggle(TAB === 'sign');
+    $('.ps-pagebar').toggle(TAB !== 'qcstat');
+    $('#statHint').toggle(TAB === 'qcstat');
+    $('#lblPerson').text(TAB === 'print' ? '列印人' : (TAB === 'sign' ? '簽核人' : '操作人'));
 }
 
 // ── 列印全部篩選結果（ai-rules/16：大標題本公司名、頁碼左下、只有多頁才印頁碼）──
 function printAll(){
-    var act = (TAB === 'print') ? 'list_print' : 'list_sign';
+    if (TAB === 'qcstat') { printStat(); return; }
+    var act = (TAB === 'print') ? 'list_print' : (TAB === 'sign' ? 'list_sign' : 'list_qcop');
     var $b = $('#btnPrintAll').prop('disabled', true).text('整理中…');
     $.post(API, $.extend({ action: act }, filters({ per: 0, page: 1 })), function(res){
         $b.prop('disabled', false).html('<i class="fa fa-print"></i> 列印全部篩選結果');
@@ -517,12 +710,17 @@ function printAll(){
         var rows = res.rows || [];
         if (!rows.length) { alert('目前篩選條件下沒有資料可列印'); return; }
 
-        var cols = (TAB === 'print') ? HEAD_PRINT : HEAD_SIGN;
-        var title = (TAB === 'print') ? '列印紀錄' : '簽核紀錄';
+        var cols = HEADS[TAB] || HEAD_PRINT;
+        var title = { print:'列印紀錄', sign:'簽核紀錄', qcop:'檢驗作業紀錄' }[TAB] || '紀錄';
         var cond = [];
         var srcTxt = $('#fSource option:selected').text();
-        if ($('#fSource').val()) cond.push('資料來源：' + srcTxt);
-        if ($('#fUser').val())   cond.push((TAB === 'print' ? '列印人：' : '簽核人：') + $.trim($('#fUser option:selected').text()));
+        if (TAB !== 'qcop' && $('#fSource').val()) cond.push('資料來源：' + srcTxt);
+        if (TAB === 'qcop') {
+            if ($('#fKind').val())  cond.push('事件種類：' + $.trim($('#fKind option:selected').text()));
+            if ($('#fProc').val())  cond.push('製程：' + $('#fProc').val());
+            if ($('#fMaker').val()) cond.push('廠商：' + $('#fMaker').val());
+        }
+        if ($('#fUser').val())   cond.push($('#lblPerson').text() + '：' + $.trim($('#fUser option:selected').text()));
         if ($('#fFrom').val() || $('#fTo').val())
             cond.push('日期：' + (dispDate($('#fFrom').val()) || '不限') + ' ～ ' + (dispDate($('#fTo').val()) || '不限'));
         if ($.trim($('#fKw').val())) cond.push('關鍵字：' + $.trim($('#fKw').val()));
@@ -543,6 +741,17 @@ function printAll(){
                      + '<td>' + esc(r.printed_by_name || '—') + '</td>'
                      + '<td>' + esc(host) + '</td>'
                      + '<td class="tl">' + esc(r.note || '') + '</td></tr>';
+            } else if (TAB === 'qcop') {
+                body += '<tr>'
+                     + '<td>' + esc(dispDateTime(r.ev_at)) + '</td>'
+                     + '<td>' + esc(r.kind_label) + '</td>'
+                     + '<td>' + esc(r.bom || '—') + '</td>'
+                     + '<td>' + esc(r.part_no || '—') + '</td>'
+                     + '<td>' + esc(r.client || '—') + '</td>'
+                     + '<td>' + esc(r.process || '—') + '</td>'
+                     + '<td>' + esc(r.maker || '—') + '</td>'
+                     + '<td>' + esc(r.result === 'OK' ? '合格' : (r.result === 'NG' ? '不合格' : '—')) + '</td>'
+                     + '<td>' + esc(r.ev_user_name || '—') + '</td></tr>';
             } else {
                 body += '<tr>'
                      + '<td class="tl">' + esc(r.doc_name) + '</td>'
@@ -559,6 +768,16 @@ function printAll(){
         });
         body += '</tbody></table>';
 
+        psPrintWindow(title, body);
+    }, 'json').fail(function(){
+        $b.prop('disabled', false).html('<i class="fa fa-print"></i> 列印全部篩選結果');
+        alert('取得資料失敗');
+    });
+}
+
+/** 開列印視窗（ai-rules/16：大標題本公司名、頁碼左下、只有多頁才印頁碼）。
+ *  清單與月統計共用同一份版面規則，不要各印各的。 */
+function psPrintWindow(title, body){
         var css = 'body{font-family:"Microsoft JhengHei",sans-serif;color:#222;margin:0;}'
             + '.p-title{text-align:center;font-size:16pt;font-weight:bold;margin-bottom:2mm;}'
             + '.p-sub{text-align:center;font-size:13pt;margin-bottom:2mm;}'
@@ -582,10 +801,45 @@ function printAll(){
             + 'document.head.appendChild(st);}'
             + 'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
         w.document.close();
-    }, 'json').fail(function(){
-        $b.prop('disabled', false).html('<i class="fa fa-print"></i> 列印全部篩選結果');
-        alert('取得資料失敗');
+}
+
+/** 月統計列印：印的是目前畫面上這張矩陣（列＝展開維度、欄＝1~12 月） */
+function printStat(){
+    if (!LASTSTAT || !(LASTSTAT.rows || []).length) { alert('目前沒有統計資料可列印'); return; }
+    var res = LASTSTAT, isRate = !!res.is_rate;
+    var mLabel = '', dLabel = '';
+    (res.metrics || []).forEach(function(x){ if (x.code === res.metric) mLabel = x.label; });
+    (res.dims || []).forEach(function(x){ if (x.code === res.dim) dLabel = x.label; });
+
+    var cond = [res.year + ' 年', mLabel, dLabel];
+    if ($('#fUser').val())  cond.push('操作人：' + $.trim($('#fUser option:selected').text()));
+    if ($('#fProc').val())  cond.push('製程：' + $('#fProc').val());
+    if ($('#fMaker').val()) cond.push('廠商：' + $('#fMaker').val());
+    if ($.trim($('#fKw').val())) cond.push('關鍵字：' + $.trim($('#fKw').val()));
+
+    var cell = function(c){
+        if (!c || !c.n) return '<td>—</td>';
+        if (!isRate) return '<td>' + c.n + '</td>';
+        return '<td>' + c.ok + '／' + c.n + '<br>' + (Math.round(c.ok / c.n * 1000) / 10) + '%</td>';
+    };
+    var body = '';
+    body += '<div class="p-title">' + esc(COMPANY || '') + '</div>';
+    body += '<div class="p-sub">檢驗作業月統計</div>';
+    body += '<div class="p-cond">' + esc(cond.join('　｜　')) + '　｜　列印日期：'
+          + esc(dispDate(new Date().toISOString().substring(0,10))) + '</div>';
+    body += '<table class="p-tb"><thead><tr><th>' + esc(dLabel.replace(/^依/, '') || '項目') + '</th>';
+    for (var m = 1; m <= 12; m++) body += '<th>' + m + '月</th>';
+    body += '<th>全年合計</th></tr></thead><tbody>';
+    (res.rows || []).forEach(function(r){
+        body += '<tr><td class="tl">' + esc(r.dim) + '</td>';
+        for (var m = 1; m <= 12; m++) body += cell(r.months[m]);
+        body += cell({ n: r.sum_n, ok: r.sum_ok }) + '</tr>';
     });
+    body += '<tr><td class="tl"><b>合計</b></td>';
+    for (var m2 = 1; m2 <= 12; m2++) body += cell({ n: res.foot.n[m2], ok: res.foot.ok[m2] });
+    body += cell({ n: res.foot.sum_n, ok: res.foot.sum_ok }) + '</tr>';
+    body += '</tbody></table>';
+    psPrintWindow('檢驗作業月統計', body);
 }
 
 // ── 使用說明的「涵蓋範圍」：一律即時掃描 ────────────────────────────────
@@ -640,10 +894,12 @@ $('.ps-tab').on('click', function(){
     if (t === TAB) return;
     TAB = t; PAGE = 1;
     $('.ps-tab').removeClass('active'); $(this).addClass('active');
+    syncToolbar();
     fillSourceSel();
-    fillPeopleSel();   // 列印人與簽核人不是同一批人，切分頁要跟著換
-    $('#lblIncDel').toggle(TAB === 'sign');
-    loadList();
+    fillPeopleSel();   // 列印人／簽核人／檢驗操作人不是同一批人，切分頁要跟著換
+    // 檢驗作業的選項第一次進去才載（沒人點就不必多打一次 API）
+    if ((TAB === 'qcop' || TAB === 'qcstat') && !META_QC) { reloadMetaQc(function(){ loadList(); }); }
+    else { fillQcSel(); loadList(); }
     refreshOtherCount();
 });
 // 即時搜尋：任何篩選一改就查，不必按查詢鈕（使用者要求）。
@@ -654,13 +910,23 @@ function liveSearch(delay){
     _kwTimer = setTimeout(function(){ PAGE = 1; loadList(); refreshOtherCount(); }, delay || 0);
 }
 $('#fSource, #fUser').on('change', function(){ liveSearch(0); });
+$('#fKind, #fProc, #fMaker, #fYear, #fMetric, #fDim').on('change', function(){ liveSearch(0); });
 $('#fIncDel').on('change', function(){ liveSearch(0); });
-$('#fFrom, #fTo').on('change', function(){ reloadMeta(function(){ liveSearch(0); }); });
+$('#fFrom, #fTo').on('change', function(){
+    reloadMeta(function(){
+        if (META_QC) reloadMetaQc(function(){ liveSearch(0); });
+        else liveSearch(0);
+    });
+});
 $('#fKw').on('input', function(){ liveSearch(350); });
 $('#btnReset').on('click', function(){
     resetRange(); $('#fSource').val(''); $('#fKw').val('');
+    $('#fKind').val(''); $('#fProc').val(''); $('#fMaker').val('');
     if (META.perms.canViewAll) $('#fUser').val('');
-    reloadMeta(function(){ liveSearch(0); });   // 區間變了，下拉選項要跟著重算
+    reloadMeta(function(){                       // 區間變了，下拉選項要跟著重算
+        if (META_QC) reloadMetaQc(function(){ liveSearch(0); });
+        else liveSearch(0);
+    });
 });
 $('#fPer').on('change', function(){ PAGE = 1; syncTopBtn(); loadList(); });
 $('#pgBtns').on('click', 'button', function(){
@@ -714,7 +980,7 @@ $.get(API, { action: 'meta', date_from: $('#fFrom').val() || '', date_to: $('#fT
     fillSourceSel();
     fillPeopleSel();
     if (!META.perms.canViewAll) $('#roleName').text('僅本人紀錄');
-    $('#lblIncDel').toggle(TAB === 'sign');
+    syncToolbar();
     syncTopBtn();
     loadList();
     refreshOtherCount();

@@ -16,6 +16,7 @@ require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離
 header('Content-Type: application/json; charset=utf-8');
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/print_log_lib.php';
+include_once $document_root . '/EGsystem/src/common/qc_op_log_lib.php';
 
 function pslOut(array $a) { echo json_encode(array_merge(['ok' => true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function pslErr(string $m, int $code = 400) { http_response_code($code); echo json_encode(['ok' => false, 'error' => $m], JSON_UNESCAPED_UNICODE); exit; }
@@ -60,6 +61,33 @@ function pslFilters(array $perms, int $uid): array {
         if ($f[$k] !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $f[$k])) $f[$k] = '';
     }
     if (!in_array($f['per'], [5, 10, 20, 50, 0], true)) $f['per'] = 20;
+    if (!$perms['canViewAll']) $f['user_id'] = $uid;   // 只能看自己
+    return $f;
+}
+
+/** 檢驗作業分頁的篩選：共用日期／人員／關鍵字／分頁，另加事件種類、製程、廠商、年度。
+ *  沒有「看全部」權限的人一樣被後端綁死成只能查自己（不靠前端擋）。 */
+function pslQcFilters(array $perms, int $uid): array {
+    $g = fn(string $k) => trim((string)($_POST[$k] ?? $_GET[$k] ?? ''));
+    $f = [
+        'kind'      => $g('kind'),
+        'process'   => $g('process'),
+        'maker'     => $g('maker'),
+        'metric'    => $g('metric'),
+        'dim'       => $g('dim'),
+        'year'      => (int)($_POST['year'] ?? $_GET['year'] ?? 0),
+        'user_id'   => (int)($_POST['user_id'] ?? $_GET['user_id'] ?? 0),
+        'date_from' => $g('date_from'),
+        'date_to'   => $g('date_to'),
+        'kw'        => $g('kw'),
+        'page'      => max(1, (int)($_POST['page'] ?? $_GET['page'] ?? 1)),
+        'per'       => (int)($_POST['per'] ?? $_GET['per'] ?? 20),
+    ];
+    foreach (['date_from', 'date_to'] as $k) {
+        if ($f[$k] !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $f[$k])) $f[$k] = '';
+    }
+    if (!in_array($f['per'], [5, 10, 20, 50, 0], true)) $f['per'] = 20;
+    if ($f['year'] < 1990 || $f['year'] > 2999) $f['year'] = 0;
     if (!$perms['canViewAll']) $f['user_id'] = $uid;   // 只能看自己
     return $f;
 }
@@ -233,6 +261,51 @@ case 'reveal_note': {
 case 'hide_note': {
     unset($_SESSION['psl_note_reveal_until']);
     pslOut(['revealed' => false]);
+}
+
+/* ── 檢驗作業紀錄清單 ───────────────────────────────────────────────────── */
+case 'list_qcop': {
+    $f = pslQcFilters($perms, $uid);
+    $r = eg_qcop_query($db, $f);
+    pslOut(['rows' => $r['rows'], 'total' => $r['total'], 'page' => $f['page'], 'per' => $f['per'],
+            'kinds' => array_map(fn($k, $v) => ['code' => $k, 'label' => $v['label'], 'desc' => $v['desc']],
+                                 array_keys(eg_qcop_kinds()), eg_qcop_kinds())]);
+}
+
+/* ── 檢驗作業月統計（列＝展開維度、欄＝1~12 月）────────────────────────── */
+case 'stat_qcop': {
+    $f = pslQcFilters($perms, $uid);
+    if (!$f['year']) $f['year'] = (int)date('Y');
+    pslOut(eg_qcop_stat($db, $f));
+}
+
+/* ── 檢驗作業分頁的篩選選項（跟著目前區間走，選了才不會是 0 筆）────────── */
+case 'meta_qcop': {
+    $f = pslQcFilters($perms, $uid);
+    $fx = ['date_from' => $f['date_from'], 'date_to' => $f['date_to'], 'kind' => $f['kind']];
+    if (!$perms['canViewAll']) $fx['only_uid'] = $uid;
+    $fa = eg_qcop_facets($db, $fx);
+    // 年度清單不受日期區間影響（月統計是以整年為單位挑年度的）
+    $yrAll = eg_qcop_facets($db, $perms['canViewAll'] ? [] : ['only_uid' => $uid])['years'];
+    $people = [];
+    if ($perms['canViewAll']) {
+        $want = array_flip(array_map('intval', $fa['users']));
+        foreach (eg_printlog_people($db, $fa['users']) as $pp) {
+            if (isset($want[(int)$pp['id']])) $people[] = $pp;
+        }
+    }
+    pslOut([
+        'kinds'     => array_map(fn($k, $v) => ['code' => $k, 'label' => $v['label'], 'desc' => $v['desc']],
+                                 array_keys(eg_qcop_kinds()), eg_qcop_kinds()),
+        'metrics'   => array_map(fn($k, $v) => ['code' => $k, 'label' => $v['label'], 'hint' => $v['hint'], 'rate' => $v['rate']],
+                                 array_keys(eg_qcop_metrics()), eg_qcop_metrics()),
+        'dims'      => array_map(fn($k, $v) => ['code' => $k, 'label' => $v['label']],
+                                 array_keys(eg_qcop_dims()), eg_qcop_dims()),
+        'people'    => $people,
+        'processes' => $fa['processes'],
+        'makers'    => $fa['makers'],
+        'years'     => $yrAll ?: [(int)date('Y')],
+    ]);
 }
 
 /* ── 涵蓋範圍（使用說明用；一律即時掃描，不放寫死清單）──────────────────── */
