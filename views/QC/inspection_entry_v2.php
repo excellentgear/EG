@@ -771,6 +771,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .tpick-grid button small { display:block; font-weight:normal; font-size:11px; color:#8a6a45; }
     .tpick-scope { background:var(--cream); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-top:12px; font-size:13px; }
     .tpick-scope label { font-weight:normal; display:block; margin:2px 0; cursor:pointer; }
+    /* 公差表管理：數字欄不出現上下增減鈕（↑↓ 改成切換上下列，比照全站輸入規則） */
+    #tol-mg-editor input[type=number]::-webkit-outer-spin-button,
+    #tol-mg-editor input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
+    #tol-mg-editor input[type=number] { -moz-appearance:textfield; }
+    #tol-ed-bands tr.tol-row-new input { background:#FFFDF7; }
     /* 量具批次綁定（步驟③）：挑好一支量具後，一次勾選所有要用它的檢驗項目。
        支援 點一列／Shift 連選／Ctrl 加選／空白處拖曳框選，避免一欄一欄點（2026-08-27 現場回饋：太慢） */
     .tp-pick-bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px; }
@@ -4294,6 +4299,7 @@ $(function(){
           + (t.id? '<button class="btn btn-default" id="btn-tol-ed-del" style="color:#DD5138;margin-right:8px;"><i class="fa fa-trash"></i> 刪除此公差表</button>' : '')
           + '<button class="btn btn-warm" id="btn-tol-ed-save">儲存</button></div>';
         $('#tol-mg-editor').html(html).data('id', t.id||0);
+        tolAutoRow = null;
         loadTolCustomerOptions(function(rows){
             var $sel=$('#tol-ed-cust');
             rows.forEach(function(r){ $sel.append($('<option>').val(r.customer_id).text(r.customer)); });
@@ -4314,12 +4320,91 @@ $(function(){
         renderTolMgEditor(t);
     });
     $(document).on('click', '#btn-tol-mg-new', function(){ renderTolMgEditor(null); });
-    $(document).on('click', '#btn-tol-ed-addrow', function(){ $('#tol-ed-bands').append(tolBandRowHtml()); });
+    $(document).on('click', '#btn-tol-ed-addrow', function(){ $('#tol-ed-bands').append(tolBandRowHtml()); tolAutoRow=null; });
     $(document).on('click', '.tb-del', function(e){
         e.preventDefault();
         var $tb=$('#tol-ed-bands');
+        tolAutoRow=null;
         if($tb.find('tr').length<=1){ $(this).closest('tr').find('input').val(''); return; }
         $(this).closest('tr').remove();
+    });
+
+    // ============ 公差表管理：欄位鍵盤操作 ============
+    // 為什麼不是掛全站共用的 eg_input_rules.js：本頁列在 ai-rules/tools/input_rules_baseline.txt
+    // 基準線內、刻意沒有載入它——本頁的量測格（NAV_SEL）自己有一整套 Enter／方向鍵導航，
+    // 而共用檔是在 script 解析當下就掛上 document 監聽、會比頁面 $(function(){}) 內的 handler 先跑，
+    // 兩邊都動作＝按一次 Enter 跳兩格。故此處只在公差表管理跳窗內，做與共用檔規則 3／4／6 同語意的實作。
+    var tolAutoRow = null;   // 剛用 ↓ 自動長出來、使用者還一個字都沒動過的那一列（列索引）
+
+    // Enter 的跳格順序＝公差表名稱 → 客戶篩選 → 客戶下拉 → 各區間由左到右、由上到下
+    function tolFields(){
+        return $('#tol-mg-editor').find('#tol-ed-name, #tol-ed-cust-filter, #tol-ed-cust, #tol-ed-bands input')
+                 .filter(':visible').filter(function(){ return !this.disabled && !this.readOnly; });
+    }
+    function tolRowIsBlank($tr){
+        var blank = true;
+        $tr.find('input').each(function(){ if(String(this.value==null?'':this.value).trim()!==''){ blank=false; return false; } });
+        return blank;
+    }
+    function tolFocusCell(ri, ci){
+        var $tr = $('#tol-ed-bands tr').eq(ri);
+        if(!$tr.length) return false;
+        var f = $tr.children().eq(ci).find('input')[0] || $tr.find('input')[0];
+        if(!f) return false;
+        f.focus(); try{ f.select(); }catch(_){ }
+        return true;
+    }
+    $(document).on('keydown', '#tol-mg-editor input, #tol-mg-editor select', function(e){
+        var k=e.key||'', code=e.keyCode||0;
+        var isEnter=(k==='Enter'||code===13), isDown=(k==='ArrowDown'||code===40), isUp=(k==='ArrowUp'||code===38);
+        if(!isEnter && !isDown && !isUp) return;
+
+        if(isEnter){
+            e.preventDefault();
+            var $all=tolFields(), i=$all.index(this);
+            if(i>=0 && i<$all.length-1){ var n=$all[i+1]; n.focus(); try{ n.select(); }catch(_){ } }
+            else $('#btn-tol-ed-save').trigger('click');      // 最後一欄按 Enter＝觸發主要動作鈕（儲存）
+            return;
+        }
+        // ↑↓ 只作用在公差區間表格內；名稱／客戶欄不攔（下拉的 ↑↓ 本來就是換選項）
+        var $tr=$(this).closest('#tol-ed-bands tr');
+        if(!$tr.length) return;
+        var $rows=$('#tol-ed-bands tr'), ri=$rows.index($tr[0]), ci=$(this).closest('td').index();
+        var isLast=(ri===$rows.length-1);
+        e.preventDefault();
+
+        if(isDown){
+            if(!isLast){ tolFocusCell(ri+1, ci); return; }
+            // 最後一列按 ↓：自動新增一列並跳過去
+            $('#tol-ed-bands').append(tolBandRowHtml());
+            tolAutoRow = ri+1;
+            $('#tol-ed-bands tr').eq(ri+1).addClass('tol-row-new');
+            tolFocusCell(ri+1, ci);
+            return;
+        }
+        // ↑：在「沒填東西的最後一列」＝自動移除該列並跳回上一列
+        //    「沒填東西」＝整列皆空，或這一列是剛用 ↓ 加出來、使用者一個字都沒動過
+        if(isLast && ri>0 && (tolRowIsBlank($tr) || tolAutoRow===ri)){
+            tolAutoRow = null;
+            $tr.remove();
+            tolFocusCell(ri-1, ci);
+            return;
+        }
+        if(ri>0) tolFocusCell(ri-1, ci);
+    });
+    // 一動過就不再算「剛加出來沒動過」
+    $(document).on('input', '#tol-ed-bands input', function(){
+        var ri=$('#tol-ed-bands tr').index($(this).closest('tr')[0]);
+        if(tolAutoRow===ri){ tolAutoRow=null; $(this).closest('tr').removeClass('tol-row-new'); }
+    });
+    // 比照全站輸入規則：聚焦已有資料的欄位自動全選、有值時雙擊清空
+    $(document).on('focus', '#tol-mg-editor input', function(){
+        var el=this;
+        setTimeout(function(){ try{ if(String(el.value==null?'':el.value)!=='') el.select(); }catch(_){ } }, 0);
+    });
+    $(document).on('dblclick', '#tol-mg-editor input', function(){
+        if(String(this.value==null?'':this.value)===''){ return; }
+        $(this).val('').trigger('input');
     });
     // 客戶下拉打字篩選：此頁未載入全站共用 eg_input_rules.js（已有大量現有鍵盤/Enter流程，
     // 硬套可能改變既有輸入行為），這裡僅針對本篩選框做最小範圍的本地實作，符合「長清單可打字篩選」的精神
