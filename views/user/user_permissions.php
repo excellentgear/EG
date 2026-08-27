@@ -388,6 +388,41 @@ if (!function_exists('rs_of')) {
 // 相容：AS9100「職稱權限」區塊仍直接引用 $_asdocRoles
 $_asdocRoles = rs_of('as_doc');
 
+// ── 部門 × 職稱 角色設定（2026-08-27 新增）────────────────────────────────
+//   使用者的困擾：同部門同職稱的人（例如生管組 7 個組員）每一位都要手動指派一次角色。
+//   這裡以「部門＋職稱」為單位設定一次，該編制底下的在職人員自動取得，新人到職掛上職務就有。
+//   解析優先序（見 src/common/role_features_helper.php）：個人指派 →（同模組沒有個人指派時）部門職稱。
+//   department_id=0 代表「該職稱所有部門通用」（本表原本的語意，網管設定的超級管理員那筆就在這一層）。
+$_dpRows = [];      // 實際有在職人員的「部門×職稱」編制
+$_dpRoles = [];     // ["{did}_{pid}" => [已指派角色]]
+$_rolesByModule = []; // 指派用的角色下拉（依模組分組）
+try {
+    $_dpRows = $conn_pdo->query("
+        SELECT m.department_id, d.name AS department_name, m.position_id, p.name AS position_name,
+               COUNT(DISTINCT m.user_id) AS people,
+               GROUP_CONCAT(DISTINCT u.user_cname ORDER BY u.user_cname SEPARATOR '、') AS people_names
+        FROM user_department_position_map m
+        JOIN department d ON d.id = m.department_id
+        JOIN position  p ON p.id = m.position_id
+        JOIN `user` u ON u.id = m.user_id AND u.state = 1
+        GROUP BY m.department_id, d.name, m.position_id, p.name, d.sort_order, p.sort_order
+        ORDER BY d.sort_order, d.id, p.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($conn_pdo->query("
+        SELECT pr.department_id, pr.position_id, r.role_id, r.role_name, r.module
+        FROM position_roles pr JOIN roles r ON r.role_id = pr.role_id
+        ORDER BY r.module, r.role_id")->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_dpRoles[(int)$_r['department_id'] . '_' . (int)$_r['position_id']][] = $_r;
+    }
+    // 可指派的角色：系統角色（管理員）刻意排除——整個職稱變全域管理員風險太大，
+    // 與既有 assign_position_role 的後端規則一致（鐵律8：前端不列、後端也擋）
+    foreach ($conn_pdo->query("
+        SELECT role_id, role_name, module FROM roles
+        WHERE is_system=0 AND module IS NOT NULL AND module<>'' ORDER BY module, role_id")->fetchAll(PDO::FETCH_ASSOC) as $_r) {
+        $_rolesByModule[$_r['module']][] = $_r;
+    }
+} catch(Exception $_e) {}
+
 // ── 職稱角色指派資料（position_roles，AS9100 文件管理用）──────────────────
 try {
     $_asdocPositions = $conn_pdo->query("
@@ -1368,6 +1403,120 @@ $_quotDepts = array_keys($_deptSet);
                     </div>
                     <!-- ／AS 文件儲存路徑 ══ -->
 
+                    <!-- ══ 部門 × 職稱 角色設定 ══════════════════════════════════════ -->
+                    <div class="row" style="margin-top:20px;" id="dp-role-section">
+                        <div class="col-md-12">
+                            <div class="x_panel">
+                                <div class="x_title">
+                                    <h2><i class="fa fa-sitemap" style="color:#B5762A;margin-right:7px;"></i>部門 × 職稱 角色設定 <small>設定一次，該編制的人自動具備</small></h2>
+                                    <ul class="nav navbar-right panel_toolbox"><li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li></ul>
+                                    <div class="clearfix"></div>
+                                </div>
+                                <div class="x_content">
+                                    <div style="font-size:12px;color:#8a5a2b;background:#FFF9F0;border:1px solid #F0E2CC;border-radius:3px;padding:8px 10px;margin-bottom:12px;line-height:1.7;">
+                                        <i class="fa fa-info-circle"></i>
+                                        以「<strong>部門＋職稱</strong>」為單位設定角色，該編制底下的<strong>在職人員自動取得</strong>，新人到職掛上職務就有，不必逐人再設一次。<br>
+                                        ・<strong>優先序：個人指派 &gt; 部門職稱</strong>，而且是<strong>逐模組</strong>判斷——某人自己被指派了報價單角色，不會因此失去這裡帶來的訂單追蹤角色。<br>
+                                        ・所以某個人要「例外處理」時，只要在上面各模組區塊單獨指派他該模組的角色即可，這裡的設定就不套用到他的那個模組。<br>
+                                        ・<strong>職稱一定要連部門一起看</strong>：「組員」橫跨 7 個部門、「組長」橫跨 7 個部門、「課長」橫跨 5 個部門，只綁職稱會讓品管組員拿到業務組員的權限。<br>
+                                        ・<strong>系統角色「管理員」不出現在這裡</strong>（整個職稱變全域管理員風險太大），請到上面各區塊個別指派。<br>
+                                        ・離職／留停者一律不套用；請假「完整承接權限」的代理人會另外借到被代理職稱的角色。
+                                    </div>
+
+                                    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+                                        <div class="input-group input-group-sm" style="width:220px;">
+                                            <span class="input-group-addon"><i class="fa fa-search"></i></span>
+                                            <input type="text" id="dp-search" class="form-control" placeholder="搜尋部門 / 職稱 / 人名" oninput="dpFilter()">
+                                        </div>
+                                        <label style="font-weight:normal;line-height:30px;font-size:12px;margin:0;">
+                                            <input type="checkbox" id="dp-only-set" onchange="dpFilter()"> 只看已設定的
+                                        </label>
+                                        <span id="dp-filter-count" class="text-muted" style="line-height:30px;font-size:12px;"></span>
+                                    </div>
+
+                                    <table class="table table-striped table-bordered table-condensed" id="dp-role-table" style="font-size:13px;">
+                                        <thead style="background:#f8f9fa;">
+                                            <tr>
+                                                <th style="width:120px;">部門</th>
+                                                <th style="width:100px;">職稱</th>
+                                                <th style="width:60px;" class="text-center">人數</th>
+                                                <th>已設定角色</th>
+                                                <?php if ($canEdit): ?><th style="width:300px;">新增角色</th><?php endif; ?>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="dp-role-tbody">
+<?php
+// 「全部門通用」列排最前面：department_id=0，套用到所有部門的該職稱（網管的超級管理員設定在這一層）
+$_dpList = [];
+foreach ($_dpRoles as $_k => $_v) {
+    [$_kd, $_kp] = array_map('intval', explode('_', $_k));
+    if ($_kd === 0) {
+        $_pn = '';
+        foreach ($_dpRows as $_r) { if ((int)$_r['position_id'] === $_kp) { $_pn = $_r['position_name']; break; } }
+        if ($_pn === '') {
+            try { $_q = $conn_pdo->prepare("SELECT name FROM position WHERE id=?"); $_q->execute([$_kp]); $_pn = (string)$_q->fetchColumn(); } catch (Exception $_e) {}
+        }
+        $_dpList[] = ['department_id'=>0, 'department_name'=>'（全部門通用）', 'position_id'=>$_kp,
+                      'position_name'=>$_pn !== '' ? $_pn : ('#'.$_kp), 'people'=>'—', 'people_names'=>'該職稱在所有部門的人員'];
+    }
+}
+foreach ($_dpRows as $_r) $_dpList[] = $_r;
+
+foreach ($_dpList as $_row):
+    $_did = (int)$_row['department_id']; $_pid = (int)$_row['position_id'];
+    $_key = $_did . '_' . $_pid;
+    $_assigned = $_dpRoles[$_key] ?? [];
+    $_uid_attr = 'dp-' . $_key;
+?>
+                                            <tr data-search="<?= htmlspecialchars(mb_strtolower($_row['department_name'].$_row['position_name'].($_row['people_names'] ?? ''), 'UTF-8')) ?>"
+                                                data-hasrole="<?= empty($_assigned) ? 0 : 1 ?>"
+                                                <?= $_did === 0 ? 'style="background:#FFF9F0;"' : '' ?>>
+                                                <td style="font-weight:600;"><?= htmlspecialchars($_row['department_name']) ?></td>
+                                                <td><?= htmlspecialchars($_row['position_name']) ?></td>
+                                                <td class="text-center" title="<?= htmlspecialchars($_row['people_names'] ?? '') ?>" style="cursor:help;">
+                                                    <?= htmlspecialchars((string)$_row['people']) ?>
+                                                </td>
+                                                <td id="<?= $_uid_attr ?>-tags">
+                                                    <?php if (empty($_assigned)): ?>
+                                                        <span class="text-muted" style="font-size:12px;">（未設定）</span>
+                                                    <?php else: foreach ($_assigned as $_ar): ?>
+                                                        <span class="label label-primary" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;">
+                                                            <span style="opacity:.75;font-size:11px;"><?= htmlspecialchars($_ar['module']) ?></span>
+                                                            <?= htmlspecialchars($_ar['role_name']) ?>
+                                                            <?php if ($canEdit): ?>
+                                                                <a href="#" onclick="dpRoleRemove(<?= $_did ?>,<?= $_pid ?>,<?= (int)$_ar['role_id'] ?>);return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除">&times;</a>
+                                                            <?php endif; ?>
+                                                        </span>
+                                                    <?php endforeach; endif; ?>
+                                                </td>
+                                                <?php if ($canEdit): ?>
+                                                <td>
+                                                    <div class="input-group input-group-sm">
+                                                        <select class="form-control" id="<?= $_uid_attr ?>-sel" data-eg-filter="輸入模組或角色名稱篩選…">
+                                                            <option value="">— 選擇角色 —</option>
+                                                            <?php foreach ($_rolesByModule as $_m => $_rs): ?>
+                                                            <optgroup label="<?= htmlspecialchars($_m) ?>">
+                                                                <?php foreach ($_rs as $_r2): ?>
+                                                                <option value="<?= (int)$_r2['role_id'] ?>"><?= htmlspecialchars($_m . '｜' . $_r2['role_name']) ?></option>
+                                                                <?php endforeach; ?>
+                                                            </optgroup>
+                                                            <?php endforeach; ?>
+                                                        </select>
+                                                        <span class="input-group-btn">
+                                                            <button class="btn btn-primary btn-sm" type="button" onclick="dpRoleAssign(<?= $_did ?>,<?= $_pid ?>)"><i class="fa fa-plus"></i> 指派</button>
+                                                        </span>
+                                                    </div>
+                                                </td>
+                                                <?php endif; ?>
+                                            </tr>
+<?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- ══ ／部門 × 職稱 角色設定 ══ -->
                     <!-- ／角色指派 ══ -->
 
                 </div>
@@ -1885,6 +2034,81 @@ $_quotDepts = array_keys($_deptSet);
                 qnUpdate();
             }
         });
+
+        // ══ 部門 × 職稱 角色設定 ══
+        // 設定一次，該編制底下的在職人員自動具備（個人指派在同一個模組會覆蓋這裡）
+        function dpRoleAssign(deptId, positionId) {
+            var key = 'dp-' + deptId + '_' + positionId;
+            var roleId = $('#' + key + '-sel').val();
+            if (!roleId) { alert('請先選擇角色'); return; }
+            var $btn = $('#' + key + '-sel').closest('.input-group').find('button');
+            $btn.prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i>');
+            $.post(ROLES_API, { action:'assign_position_role', department_id:deptId, position_id:positionId, role_id:roleId })
+            .done(function(res) {
+                if (!res.success) { alert('指派失敗：' + (res.message || '未知錯誤')); return; }
+                dpRoleReloadRow(deptId, positionId);
+                $('#' + key + '-sel').val('');
+            })
+            .fail(function(xhr) { alert('連線失敗（' + xhr.status + '）：' + xhr.responseText.substring(0, 200)); })
+            .always(function() { $btn.prop('disabled', false).html('<i class="fa fa-plus"></i> 指派'); });
+        }
+
+        function dpRoleRemove(deptId, positionId, roleId) {
+            var NL = String.fromCharCode(10);
+            var who = (deptId === 0) ? '所有部門的這個職稱' : '這個部門的這個職稱';
+            if (!confirm('確認移除？' + NL + who + '底下的在職人員將同時失去此角色的功能。' + NL + '（在上面各模組區塊「個別指派」過這個模組角色的人不受影響。）')) return;
+            $.post(ROLES_API, { action:'remove_position_role', department_id:deptId, position_id:positionId, role_id:roleId })
+            .done(function(res) {
+                if (!res.success) { alert('移除失敗：' + (res.message || '未知錯誤')); return; }
+                dpRoleReloadRow(deptId, positionId);
+            })
+            .fail(function(xhr) { alert('連線失敗（' + xhr.status + '）：' + xhr.responseText.substring(0, 200)); });
+        }
+
+        function dpRoleReloadRow(deptId, positionId) {
+            $.get(ROLES_API, { action:'get_positions' })
+            .done(function(res) {
+                if (!res.success) return;
+                var list = (deptId === 0)
+                    ? ((res.data || []).filter(function(p){ return p.id == positionId; })[0] || {}).roles
+                    : (((res.dept_positions || []).filter(function(dp){ return dp.department_id == deptId && dp.position_id == positionId; })[0] || {}).roles);
+                var $cell = $('#dp-' + deptId + '_' + positionId + '-tags');
+                var $tr   = $cell.closest('tr');
+                if (!list || !list.length) {
+                    $cell.html('<span class="text-muted" style="font-size:12px;">（未設定）</span>');
+                    $tr.attr('data-hasrole', '0');
+                    dpFilter();
+                    return;
+                }
+                var html = '';
+                list.forEach(function(r) {
+                    html += '<span class="label label-primary" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;">';
+                    if (r.module) html += '<span style="opacity:.75;font-size:11px;">' + r.module + '</span> ';
+                    html += r.role_name;
+                    html += ' <a href="#" onclick="dpRoleRemove(' + deptId + ',' + positionId + ',' + r.role_id + ');return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除此角色">&times;</a>';
+                    html += '</span>';
+                });
+                $cell.html(html);
+                $tr.attr('data-hasrole', '1');
+                dpFilter();
+            })
+            .fail(function(xhr) { console.error('dpRoleReloadRow failed:', xhr.responseText); });
+        }
+
+        function dpFilter() {
+            var kw = ($('#dp-search').val() || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+            var onlySet = $('#dp-only-set').is(':checked');
+            var shown = 0, total = 0;
+            $('#dp-role-tbody tr').each(function() {
+                var $tr = $(this), hay = $tr.attr('data-search') || '';
+                total++;
+                var ok = kw.every(function(k){ return hay.indexOf(k) !== -1; });
+                if (ok && onlySet && $tr.attr('data-hasrole') !== '1') ok = false;
+                $tr.toggle(ok);
+                if (ok) shown++;
+            });
+            $('#dp-filter-count').text('顯示 ' + shown + ' / ' + total + ' 組');
+        }
 
         // ══ AS9100 文件管理：職稱角色指派 ══
         function posRoleAssign(positionId) {
