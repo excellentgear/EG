@@ -482,6 +482,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                     <?php if ($canClearIsList): ?>
                                     <!-- 出貨單清除資料（危險操作）：僅系統管理員或「資料急救台」管理員(data_console_edit)可見，需操作確認密碼 -->
                                     <div style="background:#fdecea;border:2px solid #DD5138;border-radius:6px;padding:8px 12px;margin-bottom:10px">
+                                    <form class="form-horizontal form-label-left" novalidate onsubmit="return false">
                                         <div class="item form-group" style="margin-bottom:0">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12">
                                                 出貨單 <b style="color:#DD5138">清除資料</b><small>(危險操作)</small><br>
@@ -492,6 +493,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                                 <button type="button" id="btn_clear_is_list_new" class="btn btn-danger">清除…</button>
                                             </div>
                                         </div>
+                                    </form>
                                     </div><!-- /淺紅底 -->
                                     <?php endif; ?>
 
@@ -688,6 +690,7 @@ document.addEventListener('DOMContentLoaded', function() {
         for (let y = curY; y >= curY - 8; y--) $isClearYear.append('<option value="'+y+'">'+y+'年</option>');
         for (let m = 1; m <= 12; m++) $isClearMonth.append('<option value="'+m+'">'+m+'月</option>');
 
+        let clearIsListPreviewSeq = 0;
         function updateClearIsListMsg() {
             const mode = $('input[name=isClearMode]:checked').val();
             const year = $isClearYear.val(), month = $isClearMonth.val();
@@ -697,6 +700,17 @@ document.addEventListener('DOMContentLoaded', function() {
             else if (mode === 'year') desc = '「' + year + '年1月1日」之後的所有';
             else desc = '「' + year + '年' + month + '月1日」之後的所有';
             $('#clearIsListMsg').text('確定要清除 ' + desc + ' 出貨單資料（含綁定的出貨-BOM對應、出貨-訂單對應）嗎？此操作無法復原，請輸入操作確認密碼：');
+
+            // 即時查詢目前符合此條件的實際筆數，避免選到沒有資料的範圍卻誤以為清除失敗（見鐵律6「點開即刷新」）
+            const seq = ++clearIsListPreviewSeq;
+            $('#clearIsListCount').text('查詢符合筆數中…');
+            $.getJSON('../../src/store/_clear_is_list.php', {action: 'preview', mode: mode, year: year, month: month}, function(res) {
+                if (seq !== clearIsListPreviewSeq) return; // 使用者已切換其他條件，這筆回應過期不採用
+                $('#clearIsListCount').text(res.success ? ('目前符合此條件的資料共 ' + res.count + ' 筆') : (res.message || '查詢筆數失敗'));
+            }).fail(function() {
+                if (seq !== clearIsListPreviewSeq) return;
+                $('#clearIsListCount').text('查詢筆數失敗');
+            });
         }
         $('input[name=isClearMode], #isClearYear, #isClearMonth').on('change', updateClearIsListMsg);
 
@@ -1495,6 +1509,7 @@ $(document).ready(function() {
                     <select id="isClearMonth" class="form-control" style="width:90px;display:inline-block;margin-left:6px"></select>
                 </div>
                 <p id="clearIsListMsg" style="color:#5b3a1e"></p>
+                <p id="clearIsListCount" style="font-weight:bold"></p>
                 <input type="password" id="clearIsListPwd" autocomplete="new-password" placeholder="請輸入操作確認密碼" class="form-control">
                 <div id="clearIsListErr" style="color:#DD5138;margin-top:6px;font-size:12px;"></div>
             </div>

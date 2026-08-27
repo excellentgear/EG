@@ -23,35 +23,51 @@ if (!rf_has_feature($features, 'all') && !rf_has_feature($features, 'data_consol
     exit;
 }
 
+/**
+ * 依 mode/year/month 算出刪除範圍。回傳 [startDate, endDate(可為null=不設上限), errorMsg(可為null)]。
+ * mode=month：該年月起之後全部清除；mode=year：該年度起之後全部清除（無上限）；
+ * mode=year_only：只清該單一年度區間（有上限，不影響其他年度）。
+ */
+function is_list_clear_range(array $src): array {
+    $mode = $src['mode'] ?? 'month';
+    $year = filter_var($src['year'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 2000, 'max_range' => 2100]]);
+    if ($year === false || $year === null) return [null, null, '無效的年度參數。'];
+
+    if ($mode === 'year') {
+        return [sprintf('%04d-01-01', $year), null, null];
+    }
+    if ($mode === 'year_only') {
+        return [sprintf('%04d-01-01', $year), sprintf('%04d-12-31', $year), null];
+    }
+    if ($mode === 'month') {
+        $month = filter_var($src['month'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 12]]);
+        if ($month === false || $month === null) return [null, null, '無效的月份參數。'];
+        return [sprintf('%04d-%02d-01', $year, $month), null, null];
+    }
+    return [null, null, '無效的清除方式。'];
+}
+
+// 預覽模式（GET，不刪除也不用密碼）：讓使用者選範圍時先看到目前符合條件的筆數，避免誤會/誤刪
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($_GET['action'] ?? '') === 'preview') {
+    [$startDate, $endDate, $err] = is_list_clear_range($_GET);
+    if ($err !== null) { echo json_encode(['success' => false, 'message' => $err]); exit; }
+    $where = $endDate !== null ? "Order_date BETWEEN :start_date AND :end_date" : "Order_date >= :start_date";
+    $st = $db->prepare("SELECT COUNT(*) FROM is_list WHERE $where");
+    $st->bindParam(':start_date', $startDate, PDO::PARAM_STR);
+    if ($endDate !== null) $st->bindParam(':end_date', $endDate, PDO::PARAM_STR);
+    $st->execute();
+    echo json_encode(['success' => true, 'count' => (int)$st->fetchColumn()]);
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     echo json_encode(['success' => false, 'message' => '無效的請求方法。']);
     exit;
 }
 
-$mode = $_POST['mode'] ?? 'month';
-$year = filter_input(INPUT_POST, 'year', FILTER_VALIDATE_INT, ['options' => ['min_range' => 2000, 'max_range' => 2100]]);
-
-if ($year === false || $year === null) {
-    echo json_encode(['success' => false, 'message' => '無效的年度參數。']);
-    exit;
-}
-
-$endDate = null; // null=不設上限（該日期起之後全部清除）；有值=只清該區間（目前僅 year_only 用到）
-if ($mode === 'year') {
-    $startDate = sprintf('%04d-01-01', $year);
-} elseif ($mode === 'year_only') {
-    // 只清該單一年度，不影響其他年度（跟「依年度清除」的差別：後者不設上限，這個有上限）
-    $startDate = sprintf('%04d-01-01', $year);
-    $endDate   = sprintf('%04d-12-31', $year);
-} elseif ($mode === 'month') {
-    $month = filter_input(INPUT_POST, 'month', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 12]]);
-    if ($month === false || $month === null) {
-        echo json_encode(['success' => false, 'message' => '無效的月份參數。']);
-        exit;
-    }
-    $startDate = sprintf('%04d-%02d-01', $year, $month);
-} else {
-    echo json_encode(['success' => false, 'message' => '無效的清除方式。']);
+[$startDate, $endDate, $err] = is_list_clear_range($_POST);
+if ($err !== null) {
+    echo json_encode(['success' => false, 'message' => $err]);
     exit;
 }
 
