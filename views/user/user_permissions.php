@@ -1061,186 +1061,238 @@ $_quotDepts = array_keys($_deptSet);
                     </div>
                     <!-- ══ ／人員權限總覽 ══ -->
                     <!-- ══ 部門 × 職稱 角色設定 ══════════════════════════════════════ -->
+                    <?php
+                    // 版面（2026-08-27 重做，使用者回報「不夠直觀、很不一目了然」）：
+                    //   ① 依部門分組，部門標題列可摺疊，一眼看得出哪個部門設好了、哪個還沒
+                    //   ② 「全部門通用」是進階用法，移到最後獨立收合，不再霸佔畫面最上方
+                    //   ③ 每列不再各放一個 114 選項的下拉（46 個下拉＝5000 多個 option，是本頁肥大的主因之一），
+                    //      改成「＋」按鈕勾選該列，角色一律在底部操作列挑，互動只有一種
+                    //   ④ 批次操作列改成「勾了才浮出」的固定底部列，平常完全不佔版面
+                    // 「全部門通用」列（department_id=0）：套用到所有部門的該職稱。
+                    //   每個「目前有人在用的職稱」都給一列，否則這一層只看得到、沒辦法新增。
+                    // 只列出「目前有在職人員」的職稱。沒有在職人員的職稱一律不列——
+                    //   超級管理員（IT 最高權限、由網管固定持有，帳號 state=99 不算在職）因此不會出現在這張表，
+                    //   使用者明確要求不要列入；其 position_roles 設定保持不動，只是不從這裡顯示與操作。
+                    $_dpList = []; $_seenPos = [];
+                    foreach ($_dpRows as $_r) {
+                        $_pid = (int)$_r['position_id'];
+                        if (isset($_seenPos[$_pid])) continue;
+                        $_seenPos[$_pid] = true;
+                        $_cnt = 0;
+                        foreach ($_dpRows as $_r2) { if ((int)$_r2['position_id'] === $_pid) $_cnt += (int)$_r2['people']; }
+                        $_dpList[] = ['department_id'=>0, 'department_name'=>'（全部門通用）', 'position_id'=>$_pid,
+                                      'position_name'=>$_r['position_name'], 'people'=>$_cnt,
+                                      'people_names'=>'所有部門的「'.$_r['position_name'].'」共 '.$_cnt.' 人'];
+                    }
+                    foreach ($_dpRows as $_r) $_dpList[] = $_r;
+
+                    $_dpGroups = [];   // [部門名 => ['id'=>, 'rows'=>[], 'people'=>, 'set'=>]]
+                    $_dpAnyDept = [];  // 全部門通用（department_id = 0）
+                    $_dpSetCnt = 0;
+                    foreach ($_dpList as $_row) {
+                        $_k = (int)$_row['department_id'] . '_' . (int)$_row['position_id'];
+                        $_row['_key'] = $_k;
+                        $_row['_roles'] = $_dpRoles[$_k] ?? [];
+                        if (!empty($_row['_roles'])) $_dpSetCnt++;
+                        if ((int)$_row['department_id'] === 0) { $_dpAnyDept[] = $_row; continue; }
+                        $_dn = $_row['department_name'];
+                        if (!isset($_dpGroups[$_dn])) $_dpGroups[$_dn] = ['id'=>(int)$_row['department_id'], 'rows'=>[], 'people'=>0, 'set'=>0];
+                        $_dpGroups[$_dn]['rows'][] = $_row;
+                        $_dpGroups[$_dn]['people'] += (int)$_row['people'];
+                        if (!empty($_row['_roles'])) $_dpGroups[$_dn]['set']++;
+                    }
+                    $_dpTotal = count($_dpList);
+
+                    // 一列（部門×職稱 或 全部門通用）共用的渲染
+                    $_dpRenderRow = function($r, $canEdit, $isAny = false) {
+                        $k = $r['_key'];
+                    ?>
+                        <tr class="dp-row" data-key="<?= $k ?>"
+                            data-search="<?= htmlspecialchars(mb_strtolower($r['department_name'].$r['position_name'].($r['people_names'] ?? ''), 'UTF-8')) ?>"
+                            data-hasrole="<?= empty($r['_roles']) ? 0 : 1 ?>">
+                            <?php if ($canEdit): ?>
+                            <td class="text-center" style="width:34px;"><input type="checkbox" class="dp-chk" value="<?= $k ?>" onclick="dpUpdateCount()"></td>
+                            <?php endif; ?>
+                            <td style="width:150px;<?= $isAny ? '' : 'padding-left:26px;' ?>">
+                                <?php if ($isAny): ?>
+                                    <span style="color:#8a5a2b;"><i class="fa fa-globe"></i> 所有部門的</span>
+                                <?php endif; ?>
+                                <strong><?= htmlspecialchars($r['position_name']) ?></strong>
+                            </td>
+                            <td style="width:70px;" class="text-center" title="<?= htmlspecialchars($r['people_names'] ?? '') ?>">
+                                <span style="color:#888;font-size:12px;"><?= (int)$r['people'] ?> 人</span>
+                            </td>
+                            <td id="dp-<?= $k ?>-tags">
+                                <?php if (empty($r['_roles'])): ?>
+                                    <span style="color:#ccc;font-size:12px;">—</span>
+                                <?php else: foreach ($r['_roles'] as $_ar): ?>
+                                    <span class="label <?= empty($_ar['orphan']) ? 'label-primary' : 'label-default' ?>" style="margin:0 4px 3px 0;font-size:12px;padding:3px 7px;display:inline-block;" <?= empty($_ar['orphan']) ? '' : 'title="這筆設定指到一個已經不存在的角色，實際上不帶任何權限；此處刻意不提供移除"' ?>>
+                                        <?php if ($_ar['module'] !== ''): ?><span style="opacity:.7;font-size:11px;"><?= htmlspecialchars($_ar['module']) ?></span> <?php endif; ?>
+                                        <?= htmlspecialchars($_ar['role_name']) ?>
+                                        <?php if ($canEdit && empty($_ar['orphan'])): ?>
+                                            <a href="#" onclick="dpRoleRemove(<?= (int)$r['department_id'] ?>,<?= (int)$r['position_id'] ?>,<?= (int)$_ar['role_id'] ?>);return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除">&times;</a>
+                                        <?php endif; ?>
+                                    </span>
+                                <?php endforeach; endif; ?>
+                            </td>
+                            <?php if ($canEdit): ?>
+                            <td style="width:90px;" class="text-right">
+                                <button type="button" class="btn btn-xs btn-default" onclick="dpQuickAdd('<?= $k ?>')" title="勾選這一列，到下方操作列選角色"><i class="fa fa-plus"></i> 加角色</button>
+                            </td>
+                            <?php endif; ?>
+                        </tr>
+                    <?php };
+                    ?>
                     <div class="row" style="margin-top:20px;" id="dp-role-section">
                         <div class="col-md-12">
                             <div class="x_panel">
                                 <div class="x_title">
-                                    <h2><i class="fa fa-sitemap" style="color:#B5762A;margin-right:7px;"></i>部門 × 職稱 角色設定 <small>設定一次，該編制的人自動具備</small></h2>
+                                    <h2><i class="fa fa-sitemap" style="color:#B5762A;margin-right:7px;"></i>部門 × 職稱 角色設定
+                                        <small>設定一次，該編制的人自動具備</small></h2>
                                     <ul class="nav navbar-right panel_toolbox"><li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li></ul>
                                     <div class="clearfix"></div>
                                 </div>
                                 <div class="x_content">
-                                    <div style="font-size:12px;color:#8a5a2b;background:#FFF9F0;border:1px solid #F0E2CC;border-radius:3px;padding:8px 10px;margin-bottom:12px;line-height:1.7;">
-                                        <i class="fa fa-info-circle"></i>
+
+                                    <!-- 一行摘要＋說明收合（說明預設收起，不再一開始就塞六行字） -->
+                                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+                                        <span style="font-size:13px;">
+                                            <strong style="color:#B5762A;font-size:16px;"><?= $_dpSetCnt ?></strong>
+                                            <span style="color:#888;">/ <?= $_dpTotal ?> 組編制已設定角色</span>
+                                        </span>
+                                        <a href="#" onclick="$('#dp-help').slideToggle();return false;" style="font-size:12px;">
+                                            <i class="fa fa-question-circle"></i> 這是什麼？優先序怎麼算？
+                                        </a>
+                                    </div>
+                                    <div id="dp-help" style="display:none;font-size:12px;color:#8a5a2b;background:#FFF9F0;border:1px solid #F0E2CC;border-radius:3px;padding:8px 10px;margin-bottom:12px;line-height:1.8;">
                                         以「<strong>部門＋職稱</strong>」為單位設定角色，該編制底下的<strong>在職人員自動取得</strong>，新人到職掛上職務就有，不必逐人再設一次。<br>
                                         ・<strong>優先序：個人指派 &gt; 部門職稱</strong>，而且是<strong>逐模組</strong>判斷——某人自己被指派了報價單角色，不會因此失去這裡帶來的訂單追蹤角色。<br>
-                                        ・所以某個人要「例外處理」時，只要在上面各模組區塊單獨指派他該模組的角色即可，這裡的設定就不套用到他的那個模組。<br>
-                                        ・<strong>職稱一定要連部門一起看</strong>：「組員」橫跨 7 個部門、「組長」橫跨 7 個部門、「課長」橫跨 5 個部門，只綁職稱會讓品管組員拿到業務組員的權限。<br>
-                                        ・<strong>系統角色「管理員」不出現在這裡</strong>（整個職稱變全域管理員風險太大），請到上面各區塊個別指派。<br>
+                                        ・所以某個人要「例外處理」時，只要在下面各模組區塊單獨指派他該模組的角色即可。<br>
+                                        ・<strong>職稱一定要連部門一起看</strong>：「組員」橫跨 7 個部門、「組長」橫跨 7 個部門，只綁職稱會讓品管組員拿到業務組員的權限。<br>
+                                        ・<strong>系統角色「管理員」不出現在這裡</strong>（整個職稱變全域管理員風險太大），請到下面各區塊個別指派。<br>
                                         ・離職／留停者一律不套用；請假「完整承接權限」的代理人會另外借到被代理職稱的角色。
                                     </div>
 
-                                    <?php if ($canEdit): ?>
-                                    <!-- 批次工具列：一次套用到勾選的多組編制 -->
-                                    <div style="background:#FFF9F0;border:1px solid #F0E2CC;border-radius:4px;padding:10px 12px;margin-bottom:12px;">
-                                        <div style="font-weight:600;font-size:13px;color:#8a5a2b;margin-bottom:8px;">
-                                            <i class="fa fa-object-group"></i> 批次設定
-                                            <span id="dp-sel-count" class="text-muted" style="font-weight:normal;font-size:12px;margin-left:6px;">（尚未勾選）</span>
-                                            <span class="text-muted" style="font-weight:normal;font-size:11px;margin-left:6px;">先在下方表格勾選要一起設定的編制，再選一種操作</span>
-                                        </div>
-
-                                        <!-- ① 批次指派／移除單一角色 -->
-                                        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
-                                            <span style="font-size:12px;width:82px;">單一角色：</span>
-                                            <select id="dp-bulk-role" class="form-control input-sm" style="width:300px;" data-eg-filter="輸入模組或角色名稱篩選…">
-                                                <option value="">— 選擇角色 —</option>
-                                                <?php foreach ($_rolesByModule as $_m => $_rs): ?>
-                                                <optgroup label="<?= htmlspecialchars($_m) ?>">
-                                                    <?php foreach ($_rs as $_r2): ?>
-                                                    <option value="<?= (int)$_r2['role_id'] ?>"><?= htmlspecialchars($_m . '｜' . $_r2['role_name']) ?></option>
-                                                    <?php endforeach; ?>
-                                                </optgroup>
-                                                <?php endforeach; ?>
-                                            </select>
-                                            <button class="btn btn-primary btn-sm" type="button" onclick="dpBulk('assign')"><i class="fa fa-plus"></i> 指派給勾選的編制</button>
-                                            <button class="btn btn-default btn-sm" type="button" onclick="dpBulk('remove')"><i class="fa fa-minus"></i> 從勾選的編制移除</button>
-                                        </div>
-
-                                        <!-- ② 從人員或別的編制整組複製 -->
-                                        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-                                            <span style="font-size:12px;width:82px;">整組複製：</span>
-                                            <select id="dp-copy-type" class="form-control input-sm" style="width:130px;" onchange="dpCopyTypeChange()">
-                                                <option value="user">從人員複製</option>
-                                                <option value="position">從編制複製</option>
-                                            </select>
-                                            <select id="dp-copy-user" class="form-control input-sm" style="width:280px;" data-eg-filter="輸入姓名或帳號篩選…">
-                                                <option value="">— 選擇來源人員 —</option>
-                                                <?php foreach ($admins as $_a):
-                                                    $_dp2 = [];
-                                                    foreach ($_a['roles'] as $_r3) { if (!empty($_r3['department_name'])) $_dp2[] = $_r3['department_name'].' '.$_r3['position_title']; }
-                                                ?>
-                                                <option value="<?= (int)$_a['id'] ?>"><?= htmlspecialchars($_a['user_cname'].'（'.$_a['user_uname'].'）'.($_dp2 ? ' － '.implode('／', $_dp2) : '')) ?></option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                            <select id="dp-copy-pos" class="form-control input-sm" style="width:280px;display:none;" data-eg-filter="輸入部門或職稱篩選…">
-                                                <option value="">— 選擇來源編制 —</option>
-                                                <?php foreach ($_dpList as $_row2): ?>
-                                                <option value="<?= (int)$_row2['department_id'] . '_' . (int)$_row2['position_id'] ?>"><?= htmlspecialchars($_row2['department_name'] . ' ' . $_row2['position_name']) ?></option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                            <select id="dp-copy-mode" class="form-control input-sm" style="width:190px;">
-                                                <option value="merge">合併（保留原有設定）</option>
-                                                <option value="overwrite">覆蓋（先清空目標原設定）</option>
-                                            </select>
-                                            <button class="btn btn-warning btn-sm" type="button" onclick="dpBulk('copy')"><i class="fa fa-clone"></i> 複製到勾選的編制</button>
-                                        </div>
-                                        <div style="font-size:11px;color:#999;margin-top:6px;line-height:1.6;">
-                                            ※ <strong>從人員複製</strong>＝把那個人「個人指派」的角色搬成編制設定（例如：生管組長就照張三目前的設定）。
-                                            <strong>從編制複製</strong>＝把另一組部門×職稱的設定整組搬過來（含它套到的「全部門通用」角色）。
-                                            兩者都<strong>不會複製系統角色「管理員」</strong>。
-                                        </div>
-                                    </div>
-                                    <?php endif; ?>
-                                    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
-                                        <div class="input-group input-group-sm" style="width:220px;">
+                                    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center;">
+                                        <div class="input-group input-group-sm" style="width:230px;">
                                             <span class="input-group-addon"><i class="fa fa-search"></i></span>
                                             <input type="text" id="dp-search" class="form-control" placeholder="搜尋部門 / 職稱 / 人名" oninput="dpFilter()">
                                         </div>
                                         <label style="font-weight:normal;line-height:30px;font-size:12px;margin:0;">
                                             <input type="checkbox" id="dp-only-set" onchange="dpFilter()"> 只看已設定的
                                         </label>
+                                        <button type="button" class="btn btn-xs btn-default" onclick="dpExpandAll(true)"><i class="fa fa-angle-double-down"></i> 全部展開</button>
+                                        <button type="button" class="btn btn-xs btn-default" onclick="dpExpandAll(false)"><i class="fa fa-angle-double-up"></i> 全部收合</button>
                                         <span id="dp-filter-count" class="text-muted" style="line-height:30px;font-size:12px;"></span>
                                     </div>
 
-                                    <table class="table table-striped table-bordered table-condensed" id="dp-role-table" style="font-size:13px;">
-                                        <thead style="background:#f8f9fa;">
-                                            <tr>
-                                                <?php if ($canEdit): ?><th style="width:34px;" class="text-center"><input type="checkbox" id="dp-chk-all" onclick="dpToggleAll(this)" title="全選／取消（只作用於目前顯示的列）"></th><?php endif; ?>
-                                                <th style="width:120px;">部門</th>
-                                                <th style="width:100px;">職稱</th>
-                                                <th style="width:60px;" class="text-center">人數</th>
-                                                <th>已設定角色</th>
-                                                <?php if ($canEdit): ?><th style="width:300px;">新增角色</th><?php endif; ?>
-                                            </tr>
-                                        </thead>
+                                    <table class="table table-condensed" id="dp-role-table" style="font-size:13px;margin-bottom:6px;">
                                         <tbody id="dp-role-tbody">
-<?php
-// 「全部門通用」列（department_id=0）排最前面：套用到所有部門的該職稱。
-//   每個「目前有人在用的職稱」都給一列，否則這一層只看得到、沒辦法新增。
-//   網管在超級管理員職稱設的那一筆就落在這一層。
-$_dpList = []; $_seenPos = [];
-foreach ($_dpRows as $_r) {
-    $_pid = (int)$_r['position_id'];
-    if (isset($_seenPos[$_pid])) continue;
-    $_seenPos[$_pid] = true;
-    $_cnt = 0;
-    foreach ($_dpRows as $_r2) { if ((int)$_r2['position_id'] === $_pid) $_cnt += (int)$_r2['people']; }
-    $_dpList[] = ['department_id'=>0, 'department_name'=>'（全部門通用）', 'position_id'=>$_pid,
-                  'position_name'=>$_r['position_name'], 'people'=>$_cnt,
-                  'people_names'=>'所有部門的「'.$_r['position_name'].'」共 '.$_cnt.' 人'];
-}
-// 只列出「目前有在職人員」的職稱。沒有在職人員的職稱一律不列——
-// 超級管理員（IT 最高權限、由網管固定持有，帳號 state=99 不算在職）因此不會出現在這張表裡，
-// 使用者明確要求不要列入；其 position_roles 設定保持不動，只是不在這裡顯示、也不從這裡操作。
-foreach ($_dpRows as $_r) $_dpList[] = $_r;
-
-foreach ($_dpList as $_row):
-    $_did = (int)$_row['department_id']; $_pid = (int)$_row['position_id'];
-    $_key = $_did . '_' . $_pid;
-    $_assigned = $_dpRoles[$_key] ?? [];
-    $_uid_attr = 'dp-' . $_key;
+<?php foreach ($_dpGroups as $_dn => $_g):
+    $_gid = 'dpg-' . $_g['id'];
 ?>
-                                            <tr data-search="<?= htmlspecialchars(mb_strtolower($_row['department_name'].$_row['position_name'].($_row['people_names'] ?? ''), 'UTF-8')) ?>"
-                                                data-hasrole="<?= empty($_assigned) ? 0 : 1 ?>"
-                                                <?= $_did === 0 ? 'style="background:#FFF9F0;"' : '' ?>>
+                                            <tr class="dp-group" data-group="<?= $_gid ?>" style="background:#F5EFE6;cursor:pointer;" onclick="dpToggleGroup('<?= $_gid ?>')">
                                                 <?php if ($canEdit): ?>
-                                                <td class="text-center"><input type="checkbox" class="dp-chk" value="<?= $_key ?>" onclick="dpUpdateCount()"></td>
+                                                <td class="text-center" style="width:34px;" onclick="event.stopPropagation();">
+                                                    <input type="checkbox" class="dp-group-chk" data-group="<?= $_gid ?>" onclick="dpToggleGroupChk(this)" title="勾選此部門全部職稱">
+                                                </td>
                                                 <?php endif; ?>
-                                                <td style="font-weight:600;"><?= htmlspecialchars($_row['department_name']) ?></td>
-                                                <td><?= htmlspecialchars($_row['position_name']) ?></td>
-                                                <td class="text-center" title="<?= htmlspecialchars($_row['people_names'] ?? '') ?>" style="cursor:help;">
-                                                    <?= htmlspecialchars((string)$_row['people']) ?>
-                                                </td>
-                                                <td id="<?= $_uid_attr ?>-tags">
-                                                    <?php if (empty($_assigned)): ?>
-                                                        <span class="text-muted" style="font-size:12px;">（未設定）</span>
-                                                    <?php else: foreach ($_assigned as $_ar): ?>
-                                                        <span class="label <?= empty($_ar['orphan']) ? 'label-primary' : 'label-default' ?>" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;" <?= empty($_ar['orphan']) ? '' : 'title="這筆設定指到一個已經不存在的角色，實際上不帶任何權限；此處刻意不提供移除"' ?>>
-                                                            <span style="opacity:.75;font-size:11px;"><?= htmlspecialchars($_ar['module']) ?></span>
-                                                            <?= htmlspecialchars($_ar['role_name']) ?>
-                                                            <?php if ($canEdit && empty($_ar['orphan'])): ?>
-                                                                <a href="#" onclick="dpRoleRemove(<?= $_did ?>,<?= $_pid ?>,<?= (int)$_ar['role_id'] ?>);return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除">&times;</a>
-                                                            <?php endif; ?>
-                                                        </span>
-                                                    <?php endforeach; endif; ?>
+                                                <td colspan="<?= $canEdit ? 3 : 3 ?>" style="font-weight:600;color:#5a4326;">
+                                                    <i class="fa fa-caret-down dp-caret" data-group="<?= $_gid ?>" style="width:12px;"></i>
+                                                    <?= htmlspecialchars($_dn) ?>
+                                                    <span style="font-weight:normal;color:#999;font-size:12px;margin-left:6px;">
+                                                        <?= count($_g['rows']) ?> 個職稱・<?= $_g['people'] ?> 人
+                                                    </span>
                                                 </td>
                                                 <?php if ($canEdit): ?>
-                                                <td>
-                                                    <div class="input-group input-group-sm">
-                                                        <select class="form-control" id="<?= $_uid_attr ?>-sel" data-eg-filter="輸入模組或角色名稱篩選…">
-                                                            <option value="">— 選擇角色 —</option>
-                                                            <?php foreach ($_rolesByModule as $_m => $_rs): ?>
-                                                            <optgroup label="<?= htmlspecialchars($_m) ?>">
-                                                                <?php foreach ($_rs as $_r2): ?>
-                                                                <option value="<?= (int)$_r2['role_id'] ?>"><?= htmlspecialchars($_m . '｜' . $_r2['role_name']) ?></option>
-                                                                <?php endforeach; ?>
-                                                            </optgroup>
-                                                            <?php endforeach; ?>
-                                                        </select>
-                                                        <span class="input-group-btn">
-                                                            <button class="btn btn-primary btn-sm" type="button" onclick="dpRoleAssign(<?= $_did ?>,<?= $_pid ?>)"><i class="fa fa-plus"></i> 指派</button>
-                                                        </span>
-                                                    </div>
+                                                <td class="text-right" style="width:90px;">
+                                                    <?php if ($_g['set'] > 0): ?>
+                                                        <span class="label label-success" style="font-size:11px;"><?= $_g['set'] ?>/<?= count($_g['rows']) ?> 已設定</span>
+                                                    <?php else: ?>
+                                                        <span style="color:#bbb;font-size:11px;">未設定</span>
+                                                    <?php endif; ?>
                                                 </td>
                                                 <?php endif; ?>
                                             </tr>
+                                            <?php foreach ($_g['rows'] as $_row): $_row['_grp'] = $_gid; ?>
+                                                <?php ob_start(); $_dpRenderRow($_row, $canEdit, false); $_h = ob_get_clean();
+                                                      echo str_replace('class="dp-row"', 'class="dp-row" data-group="'.$_gid.'"', $_h); ?>
+                                            <?php endforeach; ?>
 <?php endforeach; ?>
                                         </tbody>
                                     </table>
+
+                                    <!-- 進階：不分部門的職稱設定（預設收合，因為多數情況用不到） -->
+                                    <div style="border-top:1px dashed #ddd;padding-top:8px;">
+                                        <a href="#" onclick="$('#dp-anydept-wrap').slideToggle();$(this).find('.fa-caret-right,.fa-caret-down').toggleClass('fa-caret-right fa-caret-down');return false;" style="font-size:12px;color:#8a5a2b;">
+                                            <i class="fa fa-caret-right"></i> 進階：不分部門的職稱設定（<?= count($_dpAnyDept) ?>）
+                                        </a>
+                                        <span class="text-muted" style="font-size:11px;margin-left:6px;">套用到<strong>所有部門</strong>的同名職稱，例如「所有部門的課長」。一般情況請用上面的部門分組設定。</span>
+                                        <div id="dp-anydept-wrap" style="display:none;margin-top:8px;">
+                                            <table class="table table-condensed" style="font-size:13px;">
+                                                <tbody id="dp-anydept-tbody">
+                                                <?php foreach ($_dpAnyDept as $_row) { $_dpRenderRow($_row, $canEdit, true); } ?>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     </div>
+
+                    <?php if ($canEdit): ?>
+                    <!-- 勾選後才浮出的底部操作列：平常完全不佔版面 -->
+                    <div id="dp-actionbar" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:1040;background:#2A3F54;color:#fff;box-shadow:0 -2px 10px rgba(0,0,0,.25);padding:10px 16px;">
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <span style="font-weight:600;white-space:nowrap;">
+                                <i class="fa fa-check-square-o"></i> 已選 <span id="dp-sel-count">0</span> 組編制
+                            </span>
+                            <button class="btn btn-xs btn-default" type="button" onclick="dpClearSel()">取消選取</button>
+                            <span style="opacity:.4;">｜</span>
+
+                            <select id="dp-bulk-role" class="form-control input-sm" style="width:280px;" data-eg-filter="輸入模組或角色名稱篩選…">
+                                <option value="">— 選擇角色 —</option>
+                                <?php foreach ($_rolesByModule as $_m => $_rs): ?>
+                                <optgroup label="<?= htmlspecialchars($_m) ?>">
+                                    <?php foreach ($_rs as $_r2): ?>
+                                    <option value="<?= (int)$_r2['role_id'] ?>"><?= htmlspecialchars($_m . '｜' . $_r2['role_name']) ?></option>
+                                    <?php endforeach; ?>
+                                </optgroup>
+                                <?php endforeach; ?>
+                            </select>
+                            <button class="btn btn-sm btn-success" type="button" onclick="dpBulk('assign')"><i class="fa fa-plus"></i> 指派</button>
+                            <button class="btn btn-sm btn-default" type="button" onclick="dpBulk('remove')"><i class="fa fa-minus"></i> 移除</button>
+
+                            <span style="opacity:.4;">｜</span>
+                            <span style="white-space:nowrap;">複製自</span>
+                            <select id="dp-copy-type" class="form-control input-sm" style="width:100px;" onchange="dpCopyTypeChange()">
+                                <option value="user">人員</option>
+                                <option value="position">編制</option>
+                            </select>
+                            <select id="dp-copy-user" class="form-control input-sm" style="width:230px;" data-eg-filter="輸入姓名或帳號篩選…">
+                                <option value="">— 來源人員 —</option>
+                                <?php foreach ($admins as $_a):
+                                    $_dp2 = [];
+                                    foreach ($_a['roles'] as $_r3) { if (!empty($_r3['department_name'])) $_dp2[] = $_r3['department_name'].' '.$_r3['position_title']; }
+                                ?>
+                                <option value="<?= (int)$_a['id'] ?>"><?= htmlspecialchars($_a['user_cname'].($_dp2 ? '（'.implode('／', $_dp2).'）' : '')) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <select id="dp-copy-pos" class="form-control input-sm" style="width:230px;display:none;" data-eg-filter="輸入部門或職稱篩選…">
+                                <option value="">— 來源編制 —</option>
+                                <?php foreach ($_dpList as $_row2): ?>
+                                <option value="<?= (int)$_row2['department_id'] . '_' . (int)$_row2['position_id'] ?>"><?= htmlspecialchars($_row2['department_name'] . ' ' . $_row2['position_name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <select id="dp-copy-mode" class="form-control input-sm" style="width:150px;">
+                                <option value="merge">合併保留原有</option>
+                                <option value="overwrite">覆蓋清空原有</option>
+                            </select>
+                            <button class="btn btn-sm btn-warning" type="button" onclick="dpBulk('copy')"><i class="fa fa-clone"></i> 複製過去</button>
+                        </div>
+                    </div>
+                    <?php endif; ?>
                     <!-- ══ ／部門 × 職稱 角色設定 ══ -->
                     <!-- ══ 角色指派（依模組分開）══ -->
                     <?php
@@ -2338,11 +2390,16 @@ foreach ($_dpList as $_row):
             .fail(function(xhr) { console.error('dpRoleReloadRow failed:', xhr.responseText); });
         }
 
-        // ── 部門×職稱：批次設定（勾選多組編制一起套用）──────────────────────
+        // ── 部門×職稱：分組摺疊、勾選與批次設定 ────────────────────────────────
+        function dpRows()  { return $('#dp-role-tbody tr.dp-row, #dp-anydept-tbody tr.dp-row'); }
+        function dpVisible($tr) { return $tr.css('display') !== 'none'; }
+
         function dpSelected() {
             var out = [];
-            $('#dp-role-tbody .dp-chk:checked').each(function() {
-                if ($(this).closest('tr').css('display') === 'none') return;   // 被篩選掉的不算
+            $('.dp-chk:checked').each(function() {
+                var $tr = $(this).closest('tr');
+                if (!dpVisible($tr)) return;                       // 被篩選掉的不算
+                if ($tr.hasClass('dp-collapsed')) return;          // 被收合起來的也不算
                 out.push($(this).val());
             });
             return out;
@@ -2350,15 +2407,76 @@ foreach ($_dpList as $_row):
 
         function dpUpdateCount() {
             var n = dpSelected().length;
-            $('#dp-sel-count').text(n ? ('（已勾選 ' + n + ' 組）') : '（尚未勾選）')
-                              .css('color', n ? '#8a5a2b' : '');
+            $('#dp-sel-count').text(n);
+            $('#dp-actionbar').toggle(n > 0);                      // 勾了才浮出操作列
+            $('body').css('padding-bottom', n > 0 ? '70px' : '');  // 不要蓋住頁尾內容
         }
 
-        function dpToggleAll(el) {
-            $('#dp-role-tbody tr').each(function() {
-                if ($(this).css('display') === 'none') return;   // 只作用於目前顯示的列
+        function dpClearSel() {
+            $('.dp-chk, .dp-group-chk').prop('checked', false);
+            dpUpdateCount();
+        }
+
+        // 部門標題列的勾選：連動該部門底下所有職稱
+        function dpToggleGroupChk(el) {
+            var g = $(el).data('group');
+            $('#dp-role-tbody tr.dp-row[data-group="' + g + '"]').each(function() {
+                if (!dpVisible($(this))) return;
                 $(this).find('.dp-chk').prop('checked', el.checked);
             });
+            dpUpdateCount();
+        }
+
+        // 部門分組摺疊
+        function dpToggleGroup(g) {
+            var $rows = $('#dp-role-tbody tr.dp-row[data-group="' + g + '"]');
+            var hide = !$rows.first().hasClass('dp-collapsed');
+            $rows.toggleClass('dp-collapsed', hide);
+            $('.dp-caret[data-group="' + g + '"]').toggleClass('fa-caret-down', !hide).toggleClass('fa-caret-right', hide);
+            dpFilter();
+        }
+
+        function dpExpandAll(open) {
+            $('#dp-role-tbody tr.dp-row').toggleClass('dp-collapsed', !open);
+            $('.dp-caret').toggleClass('fa-caret-down', open).toggleClass('fa-caret-right', !open);
+            dpFilter();
+        }
+
+        // 列上的「＋ 加角色」：勾起該列並把焦點帶到底部操作列的角色下拉
+        function dpQuickAdd(key) {
+            $('.dp-chk[value="' + key + '"]').prop('checked', true);
+            dpUpdateCount();
+            var $sel = $('#dp-bulk-role');
+            var $filter = $sel.prev('input');                      // eg_input_rules 產生的篩選框
+            ($filter.length ? $filter : $sel).focus();
+        }
+
+        function dpFilter() {
+            var kw = ($('#dp-search').val() || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+            var onlySet = $('#dp-only-set').is(':checked');
+            var shown = 0, total = 0;
+            dpRows().each(function() {
+                var $tr = $(this), hay = $tr.attr('data-search') || '';
+                total++;
+                var ok = kw.every(function(k){ return hay.indexOf(k) !== -1; });
+                if (ok && onlySet && $tr.attr('data-hasrole') !== '1') ok = false;
+                // 有輸入搜尋字時，收合中的分組自動展開，否則會「搜尋不到明明存在的列」
+                if (ok && $tr.hasClass('dp-collapsed')) {
+                    if (kw.length) $tr.removeClass('dp-collapsed');
+                    else ok = false;
+                }
+                $tr.toggle(ok);
+                if (ok) shown++;
+            });
+            // 部門標題列：底下一列都沒顯示、又不是收合狀態，就把標題也藏起來
+            $('#dp-role-tbody tr.dp-group').each(function() {
+                var g = $(this).data('group');
+                var $kids = $('#dp-role-tbody tr.dp-row[data-group="' + g + '"]');
+                var any = $kids.filter(function(){ return dpVisible($(this)); }).length;
+                var collapsed = $kids.first().hasClass('dp-collapsed');
+                $(this).toggle(any > 0 || collapsed);
+            });
+            $('#dp-filter-count').text('顯示 ' + shown + ' / ' + total + ' 組');
             dpUpdateCount();
         }
 
@@ -2366,7 +2484,6 @@ foreach ($_dpList as $_row):
             var t = $('#dp-copy-type').val();
             $('#dp-copy-user').toggle(t === 'user');
             $('#dp-copy-pos').toggle(t === 'position');
-            // eg_input_rules 產生的篩選框跟著一起顯示/隱藏（它插在 select 前面）
             $('#dp-copy-user, #dp-copy-pos').each(function() {
                 var $f = $(this).prev('input');
                 if ($f.length) $f.toggle($(this).is(':visible'));
@@ -2376,7 +2493,7 @@ foreach ($_dpList as $_row):
         function dpBulk(op) {
             var NL = String.fromCharCode(10);
             var targets = dpSelected();
-            if (!targets.length) { alert('請先在下方表格勾選要一起設定的部門×職稱'); return; }
+            if (!targets.length) { alert('請先勾選要一起設定的部門×職稱'); return; }
 
             var data = { action:'bulk_position_roles', op:op, targets: JSON.stringify(targets) };
             var confirmMsg = '';
@@ -2410,10 +2527,10 @@ foreach ($_dpList as $_row):
                               ? '※ 覆蓋模式：目標編制原本的角色會先全部清除。'
                               : '※ 合併模式：保留目標原有設定，只補上缺少的。');
             }
-            confirmMsg += NL + NL + '提醒：在上面各模組區塊「個別指派」過該模組角色的人，仍以個人設定為準，不受影響。';
+            confirmMsg += NL + NL + '提醒：在下面各模組區塊「個別指派」過該模組角色的人，仍以個人設定為準，不受影響。';
             if (!confirm(confirmMsg)) return;
 
-            var $btns = $('#dp-role-section button').prop('disabled', true);
+            var $btns = $('#dp-actionbar button').prop('disabled', true);
             $.post(ROLES_API, data)
             .done(function(res) {
                 if (!res || !res.success) { alert('操作失敗：' + ((res && res.message) || '未知錯誤')); return; }
@@ -2422,22 +2539,6 @@ foreach ($_dpList as $_row):
             })
             .fail(function(xhr) { alert('連線失敗（' + xhr.status + '）：' + xhr.responseText.substring(0, 200)); })
             .always(function() { $btns.prop('disabled', false); });
-        }
-
-        function dpFilter() {
-            var kw = ($('#dp-search').val() || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
-            var onlySet = $('#dp-only-set').is(':checked');
-            var shown = 0, total = 0;
-            $('#dp-role-tbody tr').each(function() {
-                var $tr = $(this), hay = $tr.attr('data-search') || '';
-                total++;
-                var ok = kw.every(function(k){ return hay.indexOf(k) !== -1; });
-                if (ok && onlySet && $tr.attr('data-hasrole') !== '1') ok = false;
-                $tr.toggle(ok);
-                if (ok) shown++;
-            });
-            $('#dp-filter-count').text('顯示 ' + shown + ' / ' + total + ' 組');
-            if (typeof dpUpdateCount === 'function') dpUpdateCount();   // 被篩掉的列不列入已勾選數
         }
 
         // ══ AS9100 文件管理：職稱角色指派 ══
