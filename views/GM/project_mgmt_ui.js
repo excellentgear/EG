@@ -2267,6 +2267,121 @@ $(document).on('click', '[data-tgdel]', function () {
 });
 
 /* ══════════════════════════ 模組設定 ══════════════════════════ */
+
+/* ── 執行規劃表標準流程範本（工具列「帶入標準流程」帶的就是這一份） ──
+   資料形狀與後端 prj_seed_template() 完全一樣：
+     [{goal:'階段名稱', dept_id:主辦單位, tasks:[{name:'步驟', kind:'', dept_id:預設負責部門, owner_id:預設負責人}]}]
+   ※ 每次改動都先把畫面收回 SEED_TPL 再整段重畫，畫面與資料只有一份、不會走鐘。 */
+var SEED_TPL = [], SEED_CUSTOM = false;
+
+function renderSeedTpl() {
+    var deptOpt = '<option value="0">（未指定）</option>';
+    $.each(META.depts || [], function (i, x) { deptOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
+    var h = '';
+    if (!SEED_TPL.length) h = '<div class="pj-hint">目前是空的，按「＋ 新增階段」開始編排，或按「還原內建預設」拿回系統內建那一份。</div>';
+    $.each(SEED_TPL, function (gi, g) {
+        h += '<div class="sec" data-sg="' + gi + '" style="background:#fff;">'
+          + '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:6px;">'
+          + '<div style="flex:1;min-width:220px;"><label>階段 ' + (gi + 1) + ' 名稱 <span style="color:#DD5138;">*</span></label>'
+          + '<input type="text" class="sg-name" value="' + esc(g.goal || '') + '"></div>'
+          + '<div style="min-width:170px;"><label>主辦單位</label><select class="sg-dept"'
+          + filterAttr(deptOpt, '輸入部門名稱篩選…') + '>' + deptOpt + '</select></div>'
+          + '<button class="sg-del" style="height:30px;padding:0 12px;border:1px solid #C4442D;border-radius:4px;background:#DD5138;color:#fff;cursor:pointer;">刪除階段</button>'
+          + '</div>'
+          + '<table class="sub-tbl"><thead><tr><th style="width:28px;">#</th><th>步驟</th>'
+          + '<th style="width:170px;">預設負責部門</th><th style="width:190px;">預設負責人</th>'
+          + '<th style="width:56px;">操作</th></tr></thead><tbody>';
+        $.each(g.tasks || [], function (ti, t) {
+            var did = num(t.dept_id), dOpt = taskDeptOptions(did), pOpt = taskOwnerOptions(did, num(t.owner_id), true);
+            var sys = String(t.kind || '');
+            h += '<tr data-st="' + ti + '"><td>' + (ti + 1) + '</td>'
+              + '<td><input type="text" class="st-name" value="' + esc(t.name || '') + '">'
+              + (sys ? '<span class="pj-hint" style="margin-left:6px;">🔒 '
+                       + (sys === 'fai' ? '首件' : (sys === 'rca' ? 'RCA' : '差異首件')) + '（系統固定環節）</span>' : '')
+              + '</td>'
+              + '<td><select class="st-dept"' + filterAttr(dOpt, '輸入部門名稱篩選…') + '>' + dOpt + '</select></td>'
+              + '<td><select class="st-owner"' + filterAttr(pOpt, '輸入姓名篩選…') + '>' + pOpt + '</select></td>'
+              + '<td>' + (sys ? '<span style="color:#b59b74;" title="系統固定環節，不可刪除">🔒</span>'
+                              : '<span class="pj-op st-del" title="刪除這一列">✕</span>') + '</td></tr>';
+        });
+        h += '</tbody></table>'
+          + '<button class="st-add" style="margin-top:6px;height:28px;padding:0 12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;color:#5b3a1e;cursor:pointer;">＋ 新增步驟</button>'
+          + '</div>';
+    });
+    $('#setSeedBox').html(h);
+    /* 下拉一律用 .val() 設回去（選項是共用函式產的，不保證帶 selected） */
+    $('#setSeedBox .sec[data-sg]').each(function () {
+        var g = SEED_TPL[num($(this).data('sg'))] || {};
+        $(this).find('.sg-dept').val(String(num(g.dept_id) || 0));
+    });
+    $('#setSeedState').text(SEED_CUSTOM ? '（目前使用自訂範本）' : '（目前使用系統內建預設）');
+}
+
+/** 把畫面上填的收回 SEED_TPL；任何會重畫的動作之前都要先呼叫，否則剛打的字會被洗掉 */
+function seedSyncFromDom() {
+    if (!$('#setSeedBox .sec[data-sg]').length) return;
+    var out = [];
+    $('#setSeedBox .sec[data-sg]').each(function () {
+        var old = SEED_TPL[num($(this).data('sg'))] || { tasks: [] };
+        var tasks = [];
+        $(this).find('tbody tr').each(function () {
+            var ot = (old.tasks || [])[num($(this).data('st'))] || {};
+            tasks.push({ name: $.trim($(this).find('.st-name').val()), kind: String(ot.kind || ''),
+                         dept_id: num($(this).find('.st-dept').val()),
+                         owner_id: num($(this).find('.st-owner').val()) });
+        });
+        out.push({ goal: $.trim($(this).find('.sg-name').val()),
+                   dept_id: num($(this).find('.sg-dept').val()), tasks: tasks });
+    });
+    SEED_TPL = out;
+}
+/** 送給後端的內容（空白的階段／步驟直接濾掉；後端 normalize 會用同一套規則再驗一次） */
+function collectSeedTpl() {
+    seedSyncFromDom();
+    var out = [];
+    $.each(SEED_TPL, function (i, g) {
+        if (!g.goal) return;
+        var ts = $.grep(g.tasks || [], function (t) { return !!t.name; });
+        if (ts.length) out.push({ goal: g.goal, dept_id: num(g.dept_id), tasks: ts });
+    });
+    return out;
+}
+/* 負責部門一換，負責人清單跟著換（與規劃表同一套：先選部門、再選人） */
+$(document).on('change', '#setSeedBox .st-dept', function () {
+    var pOpt = taskOwnerOptions(num($(this).val()), 0, true);
+    $(this).closest('tr').find('.st-owner')
+        .replaceWith('<select class="st-owner"' + filterAttr(pOpt, '輸入姓名篩選…') + '>' + pOpt + '</select>');
+});
+$(document).on('click', '#btnSeedGoalAdd', function () {
+    seedSyncFromDom();
+    SEED_TPL.push({ goal: '', dept_id: 0, tasks: [{ name: '', kind: '', dept_id: 0, owner_id: 0 }] });
+    renderSeedTpl();
+});
+$(document).on('click', '#setSeedBox .sg-del', function () {
+    if (!confirm('刪除這個階段？底下的步驟會一起移除（要按「儲存設定」才會真的寫入）。')) return;
+    var gi = num($(this).closest('.sec[data-sg]').data('sg'));
+    seedSyncFromDom();
+    SEED_TPL.splice(gi, 1);
+    renderSeedTpl();
+});
+$(document).on('click', '#setSeedBox .st-add', function () {
+    var gi = num($(this).closest('.sec[data-sg]').data('sg'));
+    seedSyncFromDom();
+    SEED_TPL[gi].tasks = (SEED_TPL[gi].tasks || []).concat([{ name: '', kind: '', dept_id: 0, owner_id: 0 }]);
+    renderSeedTpl();
+});
+$(document).on('click', '#setSeedBox .st-del', function () {
+    var gi = num($(this).closest('.sec[data-sg]').data('sg')), ti = num($(this).closest('tr').data('st'));
+    seedSyncFromDom();
+    SEED_TPL[gi].tasks.splice(ti, 1);
+    if (!SEED_TPL[gi].tasks.length) SEED_TPL[gi].tasks = [{ name: '', kind: '', dept_id: 0, owner_id: 0 }];
+    renderSeedTpl();
+});
+$(document).on('click', '#btnSeedReset', function () {
+    if (!confirm('把自訂的標準流程範本清掉、還原成系統內建的 AS9100 版本？\n\n（要按「儲存設定」才會真的寫入）')) return;
+    api('seed_default').done(function (r) { SEED_TPL = r.rows || []; SEED_CUSTOM = false; renderSeedTpl(); });
+});
+
 function openSetting() {
     api('setting_get').done(function (res) {
         var s = res.setting || {};
@@ -2277,6 +2392,10 @@ function openSetting() {
         $.each(META.depts || [], function (i, x) { dOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
         $('#setApDept').html(dOpt).val(s.approver_dept_id || '0');
         $('#setBlockClose').prop('checked', String(s.block_close_on_missing) === '1');
+
+        SEED_TPL = res.seed_template || [];
+        SEED_CUSTOM = !!num(res.seed_is_custom);
+        renderSeedTpl();
 
         /* 執行規劃表負責人部門（複選；勾了就連子部門一起帶出來）。
            部門是樹狀的，縮排顯示才看得出來勾的是上層還是某一個組。 */
@@ -2475,6 +2594,7 @@ $(document).on('click', '#btnSetSave', function () {
         block_close_on_missing: $('#setBlockClose').is(':checked') ? '1' : '0',
         plan_stamp_tpl_id: $('#setPlanTpl').val() || '0', card_stamp_tpl_id: $('#setCardTpl').val() || '0',
         task_owner_depts: pickedTaskDepts().join(','),
+        seed_template: JSON.stringify(collectSeedTpl()),
         owner_scope: JSON.stringify($.map(OWN_SCOPE, function (r) { return { d: num(r.d), p: num(r.p) }; }))
     }, 'POST').done(function (r) {
         alert(r.message);
@@ -2492,6 +2612,8 @@ $(document).on('click', '#btnSetSave', function () {
         META.owner_people    = r.owner_people || [];
         META.owner_scope_all = r.owner_scope_all || null;
         renderOwnScope();
+        SEED_TPL = r.seed_template || SEED_TPL;
+        SEED_CUSTOM = !!num(r.seed_is_custom);
         closeMask('setMask');
     });
 });

@@ -1152,6 +1152,11 @@ case 'phrase_delete':
     $db->prepare("DELETE FROM project_phrase WHERE phrase_id=?")->execute([$phId]);
     jout(['message' => '已刪除', 'rows' => prj_phrases_all($db, $fk)]);
 
+// 設定畫面的「還原內建預設」：把系統內建那一份回給前端（按了還要按儲存才會寫入）
+case 'seed_default':
+    if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
+    jout(['rows' => prj_seed_template()]);
+
 case 'setting_get':
     if (!$P['canView']) jerr('無權限', 403);
     jout(['setting' => [
@@ -1163,7 +1168,10 @@ case 'setting_get':
         'card_stamp_tpl_id'      => prj_setting_get($db, 'card_stamp_tpl_id', '0'),
         'owner_scope'            => prj_setting_get($db, 'owner_scope', ''),
         'task_owner_depts'       => implode(',', prj_task_owner_depts($db)),
-    ], 'owner_scope_rows' => prj_owner_scope_labeled($db)]);
+    ], 'owner_scope_rows' => prj_owner_scope_labeled($db),
+     // 標準流程範本：目前實際生效的那一份（沒自訂過就是內建預設），設定畫面直接編輯它
+     'seed_template' => prj_seed_template($db),
+     'seed_is_custom' => prj_seed_template_rows($db) ? 1 : 0]);
 
 case 'setting_save':
     if (!$P['canAdmin']) jerr('無權限（需「專案管理員」角色）', 403);
@@ -1188,6 +1196,16 @@ case 'setting_save':
         }
         prj_setting_save($db, 'task_owner_depts', implode(',', $ids), '執行規劃表負責人可挑選的部門', $uname);
     }
+    // 標準流程範本：後端用同一支 normalize 再驗一次（階段／步驟名稱必填、首件只能有一列）
+    if (array_key_exists('seed_template', $_POST)) {
+        $raw = trim((string)$_POST['seed_template']);
+        $rows = $raw === '' ? [] : prj_seed_template_normalize(json_decode($raw, true) ?: []);
+        if ($raw !== '' && !$rows) jerr('標準流程範本至少要有一個階段、而且每個階段底下至少一個步驟', 400);
+        if (count($rows) > 30) jerr('標準流程範本最多 30 個階段', 400);
+        prj_setting_save($db, 'seed_template',
+                         $rows ? json_encode($rows, JSON_UNESCAPED_UNICODE) : '',
+                         '執行規劃表標準流程範本（空＝用內建預設）', $uname);
+    }
     // 專案負責人資格（部門×職稱）：後端自己再解析驗證一次，不直接採信前端送來的字串
     if (array_key_exists('owner_scope', $_POST)) {
         $scope = prj_owner_scope_parse((string)$_POST['owner_scope']);
@@ -1196,6 +1214,7 @@ case 'setting_save':
     }
     // 回傳兩份：owner_people＝目前這位管理員實際可挑的人；owner_scope_all＝純「資格」命中的全公司名單（設定畫面預覽用）
     jout(['message' => '已儲存設定', 'owner_scope_rows' => prj_owner_scope_labeled($db),
+          'seed_template' => prj_seed_template($db), 'seed_is_custom' => prj_seed_template_rows($db) ? 1 : 0,
           'task_owner_depts' => prj_task_owner_depts($db),
           'owner_people'    => prj_owner_people($db, [], $uid, (bool)$P['canAdmin']),
           'owner_scope_all' => prj_owner_scope_labeled($db) ? prj_owner_people($db) : null]);

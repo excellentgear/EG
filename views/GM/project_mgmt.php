@@ -478,6 +478,21 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <p class="pj-hint" id="setTaskDeptCount" style="margin-top:6px;"></p>
         </div>
         <div class="sec">
+            <h5>執行規劃表標準流程範本</h5>
+            <p class="pj-hint">執行規劃表工具列的「<b>帶入標準流程</b>」就是帶入這一份。可自行增刪<b>階段</b>與底下的<b>步驟</b>，
+                並替每個步驟先設好<b>預設負責部門／負責人</b>（帶入時會直接填好，填表人仍可改）。
+                <b>負責部門下拉的範圍</b>與規劃表一樣，由上面的「執行規劃表負責人部門」決定。<br>
+                <b>帶入時階段名稱一樣的不會重複建立</b>，所以改名等於多一個新階段。標「🔒 首件」的那一列是系統固定環節
+                （FAI／未通過時自動補的 RCA 與差異首件都認它），<b>整份範本只能有一列</b>，可以改名字與負責人、可以搬到別的階段。
+                沒有自訂過就是系統內建的 AS9100 版本；按「還原內建預設」會把自訂內容清掉。</p>
+            <div id="setSeedBox"></div>
+            <div style="display:flex;gap:6px;margin-top:8px;">
+                <button id="btnSeedGoalAdd" style="height:30px;padding:0 12px;border:1px solid #d98a33;border-radius:4px;background:#F0A24B;color:#fff;cursor:pointer;">＋ 新增階段</button>
+                <button id="btnSeedReset" style="height:30px;padding:0 12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;color:#5b3a1e;cursor:pointer;">還原內建預設</button>
+                <span class="pj-hint" id="setSeedState" style="align-self:center;"></span>
+            </div>
+        </div>
+        <div class="sec">
             <h5>預設會簽單位</h5>
             <p class="pj-hint">送簽時預設勾選這些單位（仍可逐次調整）。會簽人＝該部門主管，並自動經代理人解析。</p>
             <div id="setCosignBox" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
@@ -563,6 +578,9 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
             <li><b>列印版仍是紙本的格狀周期表</b>（預計／實際兩列），維持 AS 文件 1:1。</li>
             <li>末列按 <b>↓</b> 自動加一列、空白末列按 <b>↑</b> 自動移除（全站共用規則）。
                 <b>新加的一列會自動把上一列的預計完成日當成預計開始日</b>，一路往下排很快。</li>
+            <li><b>「帶入標準流程」帶的是可以自己改的範本</b>：管理員到<b>模組設定 → 執行規劃表標準流程範本</b>
+                增刪階段與步驟，並可替每個步驟先設好<b>預設負責部門／負責人</b>（帶入時直接填好，填表人仍可改）。
+                <b>階段名稱一樣的不會重複建立</b>，所以已經排過的階段不會被覆蓋。</li>
             <li><b>第一個目標的第一列「預計開始」會自動帶入專案開始日</b>（「專案基本資料」的專案起日），
                 空白時才帶、不會蓋掉你自己排好的日期；配合下面的「上一列完成→下一列開始」，整條日程會一路長出來。</li>
             <li><b>任務「狀態」要送簽之後才會出現</b>：草稿／已退回的專案還沒正式成案，工作不可能已經在跑，
@@ -660,7 +678,7 @@ $av = static fn(string $p): string => (string)@filemtime(__DIR__ . '/../../' . $
         <ul>
             <li><b>專案檢閱</b>：看清單、明細、列印。</li>
             <li><b>專案登錄</b>：檢閱＋建立/編輯專案、訂單轉專案、編執行規劃表、開管理卡、同步 BOM。</li>
-            <li><b>專案管理員</b>：登錄＋刪除、標籤維護、模組設定（含專案負責人資格、執行規劃表負責人部門）、AS 文件綁定、批次自動簽核。</li>
+            <li><b>專案管理員</b>：登錄＋刪除、標籤維護、模組設定（含專案負責人資格、執行規劃表負責人部門、標準流程範本）、AS 文件綁定、批次自動簽核。</li>
             <li><b>常用語句</b>的新增／修改／刪除＝<b>專案登錄</b>即可（只有檢閱角色看得到語句但不能維護，也不會出現「帶入」）。</li>
             <li><b>專案負責人</b>（資料層，非角色）：即使只有「檢閱」角色，也能編輯<b>自己負責的專案</b>。</li>
             <li><b>會簽人</b>：不需要任何角色，被指派會簽就進得來處理自己那一列。</li>

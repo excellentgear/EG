@@ -961,7 +961,7 @@ function prj_fai_ensure_followup(PDO $db, int $projectId): int
  * 防偽冒重點在防混料；工程文件多為沿用舊版）。
  * 回傳 [目標名稱 => [任務…]]；任務給 kind 的會對應到系統固定環節。
  */
-function prj_seed_template(): array
+function prj_seed_template_default(): array
 {
     return [
         '階段 1：前置審查與準備' => [
@@ -987,10 +987,99 @@ function prj_seed_template(): array
 }
 
 /**
+ * 目前實際要帶入的標準流程（管理員可在「模組設定 → 執行規劃表標準流程範本」改）。
+ * 沒設定過就用上面那份內建預設；管理員按「還原預設」就是把設定值清空、回到內建那份
+ * （＝內建這份是預設值不是第二份對照表，改設定不會有兩邊走鐘的問題＝鐵律4）。
+ *
+ * 資料形狀（存成 JSON）：
+ *   [ ['goal'=>階段名稱, 'dept_id'=>主辦單位, 'tasks'=>[ ['name'=>步驟, 'kind'=>'', 'dept_id'=>預設負責部門, 'owner_id'=>預設負責人] … ] ] … ]
+ * 內建預設也一律轉成同一種形狀，呼叫端只要認得這一種。
+ */
+function prj_seed_template(?PDO $db = null): array
+{
+    if ($db) {
+        $rows = prj_seed_template_rows($db);
+        if ($rows) return $rows;
+    }
+    $out = [];
+    foreach (prj_seed_template_default() as $goal => $tasks) {
+        $ts = [];
+        foreach ($tasks as $t) {
+            $ts[] = ['name' => $t['name'], 'kind' => (string)($t['kind'] ?? ''), 'dept_id' => 0, 'owner_id' => 0];
+        }
+        $out[] = ['goal' => $goal, 'dept_id' => 0, 'tasks' => $ts];
+    }
+    return $out;
+}
+
+/** 設定裡存的範本（沒設定過回空陣列）；壞掉的 JSON 一律當成沒設定，不讓帶入功能整個掛掉 */
+function prj_seed_template_rows(PDO $db): array
+{
+    $raw = trim((string)prj_setting_get($db, 'seed_template', ''));
+    if ($raw === '') return [];
+    $arr = json_decode($raw, true);
+    return is_array($arr) ? prj_seed_template_normalize($arr) : [];
+}
+
+/**
+ * 範本正規化（存檔與讀取共用同一份規則，兩邊不會走鐘）：
+ * 階段名稱與步驟名稱都必填才留下來；kind 只認得 fai/rca/delta_fai，
+ * 而且 fai（試作與首件檢驗）**最多只能有一列**——它是系統固定環節，兩列會變成兩張首件。
+ */
+function prj_seed_template_normalize(array $arr): array
+{
+    $out = []; $faiUsed = false;
+    foreach ($arr as $g) {
+        if (!is_array($g)) continue;
+        $gname = trim((string)($g['goal'] ?? ''));
+        if ($gname === '') continue;
+        $tasks = [];
+        foreach ((array)($g['tasks'] ?? []) as $t) {
+            if (!is_array($t)) continue;
+            $tname = trim((string)($t['name'] ?? ''));
+            if ($tname === '') continue;
+            $kind = (string)($t['kind'] ?? '');
+            if (!in_array($kind, ['fai', 'rca', 'delta_fai'], true)) $kind = '';
+            if ($kind === 'fai') { if ($faiUsed) $kind = ''; else $faiUsed = true; }
+            $tasks[] = ['name' => mb_substr($tname, 0, 120), 'kind' => $kind,
+                        'dept_id' => (int)($t['dept_id'] ?? 0), 'owner_id' => (int)($t['owner_id'] ?? 0)];
+        }
+        if (!$tasks) continue;
+        $out[] = ['goal' => mb_substr($gname, 0, 120), 'dept_id' => (int)($g['dept_id'] ?? 0), 'tasks' => $tasks];
+    }
+    return $out;
+}
+
+/**
  * 把標準流程建進這個專案。已經有目標時不覆蓋，只補上「還沒有的目標」
  * （使用者可能已經自己編排過，硬蓋會把人家排好的日程洗掉）。
  * 回傳新增的目標數與任務數。
  */
+/** 部門 id → [id, 名稱]；查不到（已刪除）就當成沒設定 */
+function prj_seed_dept(PDO $db, int $deptId): array
+{
+    if ($deptId <= 0) return [null, ''];
+    $st = $db->prepare("SELECT name FROM department WHERE id=?");
+    $st->execute([$deptId]);
+    $n = $st->fetchColumn();
+    return $n === false ? [null, ''] : [$deptId, (string)$n];
+}
+
+/** 範本上的預設負責部門／負責人 → 寫進任務用的四個值（人已離職或查不到就只留部門） */
+function prj_seed_owner(PDO $db, int $deptId, int $userId): array
+{
+    [$dId, $dName] = prj_seed_dept($db, $deptId);
+    $uId = null; $uName = '';
+    if ($userId > 0) {
+        $st = $db->prepare("SELECT user_cname FROM user WHERE id=? AND state<>0 AND state<>90");
+        $st->execute([$userId]);
+        $n = $st->fetchColumn();
+        if ($n !== false) { $uId = $userId; $uName = (string)$n; }
+    }
+    if (!$uId) $dId = $dId ?: null;
+    return [$dId, $dName, $uId, $uName];
+}
+
 function prj_seed_apply(PDO $db, int $projectId): array
 {
     $addG = 0; $addT = 0;
@@ -1002,10 +1091,13 @@ function prj_seed_apply(PDO $db, int $projectId): array
     $st->execute([$projectId]);
     $gsort = (int)$st->fetchColumn();
 
-    foreach (prj_seed_template() as $goalName => $tasks) {
+    foreach (prj_seed_template($db) as $g) {
+        $goalName = (string)$g['goal'];
+        $tasks    = $g['tasks'];
         if (in_array($goalName, $exists, true)) continue;
-        $db->prepare("INSERT INTO project_goal (project_id, goal_name, sort_order) VALUES (?,?,?)")
-           ->execute([$projectId, $goalName, $gsort++]);
+        [$gDeptId, $gDeptName] = prj_seed_dept($db, (int)($g['dept_id'] ?? 0));
+        $db->prepare("INSERT INTO project_goal (project_id, goal_name, dept_id, dept_name, sort_order) VALUES (?,?,?,?,?)")
+           ->execute([$projectId, $goalName, $gDeptId, $gDeptName, $gsort++]);
         $gid = (int)$db->lastInsertId();
         $addG++;
         $tsort = 0;
@@ -1017,15 +1109,23 @@ function prj_seed_apply(PDO $db, int $projectId): array
                 $q->execute([$projectId]);
                 $tid = (int)$q->fetchColumn();
                 if ($tid) {
-                    $db->prepare("UPDATE project_task SET goal_id=?, task_name=?, sort_order=? WHERE task_id=?")
-                       ->execute([$gid, $t['name'], $tsort++, $tid]);
+                    // 順便補上範本指定的預設負責人（只補空的，不覆蓋已經指派好的人）
+                    [$fD, , $fU, $fN] = prj_seed_owner($db, (int)($t['dept_id'] ?? 0), (int)($t['owner_id'] ?? 0));
+                    $db->prepare("UPDATE project_task SET goal_id=?, task_name=?, sort_order=?,
+                                        owner_dept_id=COALESCE(owner_dept_id,?),
+                                        owner_id=COALESCE(owner_id,?),
+                                        owner_name=CASE WHEN owner_id IS NULL THEN ? ELSE owner_name END
+                                  WHERE task_id=?")
+                       ->execute([$gid, $t['name'], $tsort++, $fD, $fU, $fN, $tid]);
                     continue;
                 }
             }
+            // 預設負責部門／負責人（管理員在模組設定的範本裡指定；沒指定就留空給填表人選）
+            [$oDeptId, , $oUserId, $oUserName] = prj_seed_owner($db, (int)($t['dept_id'] ?? 0), (int)($t['owner_id'] ?? 0));
             $db->prepare("INSERT INTO project_task (project_id, goal_id, task_name, task_kind, status_code,
-                                progress, progress_auto, sort_order)
-                          VALUES (?,?,?,?,'',0,1,?)")
-               ->execute([$projectId, $gid, $t['name'], $kind, $tsort++]);
+                                owner_id, owner_name, owner_dept_id, progress, progress_auto, sort_order)
+                          VALUES (?,?,?,?,'',?,?,?,0,1,?)")
+               ->execute([$projectId, $gid, $t['name'], $kind, $oUserId, $oUserName, $oDeptId, $tsort++]);
             $addT++;
         }
     }
