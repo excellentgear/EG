@@ -201,6 +201,48 @@ $chart_dates = array_keys($chart_stats);
 $chart_values = array_values($chart_stats);
 $transfer_data_json = json_encode($rows);
 
+/* ── 頁首資訊列 ───────────────────────────────────────────────
+ * 1) 最新資料日期＝整張 bom_ing_transfer_log 的 MAX(transfer_date)（不受畫面日期區間影響）
+ * 2) 最近一次更新加工單價＝Upload_List.php「更新加工單價 ERP原始檔直接匯入」(but=transfer_log_raw)
+ *    的匯入紀錄，存放於 system_settings.setting_key='upload_transfer_log_raw'
+ *    （欄位語意與姓名解析方式比照 Upload_List.php 的 lastUpdateBadge()：
+ *      updated_by 實際存的是登入帳號，故優先用 updated_by_id 查 user.user_cname） */
+require_once __DIR__ . '/../../src/common/date_fmt_lib.php';
+
+$latest_data_date = null;
+$total_log_rows   = 0;
+try {
+    $r = $conn->getPDO()->query("SELECT MAX(transfer_date) AS mx, COUNT(*) AS cnt FROM bom_ing_transfer_log");
+    if ($row = $r->fetch(PDO::FETCH_ASSOC)) {
+        $latest_data_date = $row['mx'];
+        $total_log_rows   = (int)$row['cnt'];
+    }
+} catch (Exception $e) {}
+
+$price_import = null;   // ['ts'=>..,'name'=>..]
+try {
+    $st = $conn->getPDO()->prepare("SELECT updated_at, updated_by, updated_by_id
+                                    FROM system_settings WHERE setting_key = 'upload_transfer_log_raw' LIMIT 1");
+    $st->execute();
+    if ($pi = $st->fetch(PDO::FETCH_ASSOC)) {
+        $who = trim((string)($pi['updated_by'] ?? ''));
+        $uid = (string)($pi['updated_by_id'] ?? '');
+        if ($uid !== '') {
+            $su = $conn->getPDO()->prepare("SELECT user_cname FROM user WHERE id = ? LIMIT 1");
+            $su->execute([$uid]);
+            $cn = $su->fetchColumn();
+            if ($cn) $who = $cn;
+        }
+        if ($who === '' && $pi['updated_by']) {   // 退回用登入帳號比對
+            $su = $conn->getPDO()->prepare("SELECT user_cname FROM user WHERE user_uname = ? LIMIT 1");
+            $su->execute([$pi['updated_by']]);
+            $cn = $su->fetchColumn();
+            if ($cn) $who = $cn;
+        }
+        $price_import = ['ts' => $pi['updated_at'], 'name' => ($who !== '' ? $who : '—')];
+    }
+} catch (Exception $e) {}
+
 ?>
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -208,7 +250,7 @@ $transfer_data_json = json_encode($rows);
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>加工成本分析</title>
+    <title>製程移轉一覽表</title>
 
     <!-- Bootstrap -->
     <link href="../../resource/css/bootstrap.css" rel="stylesheet">
@@ -279,6 +321,31 @@ $transfer_data_json = json_encode($rows);
             color: #d9534f;
             font-weight: bold;
         }
+        /* 頁首資訊列（最新資料日期／最近一次更新加工單價） */
+        .tl-infobar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; clear:both; margin-bottom:10px; }
+        .tl-info { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:#5b3a1e;
+            background:#FDF8EF; border:1.5px solid #E8D5B5; border-radius:8px; padding:6px 12px; }
+        .tl-info b { color:#8A5A2B; font-size:14px; }
+        .tl-info .tl-sub { color:#9b8676; }
+        .tl-info small { color:#8a7a68; }
+        /* 使用說明鈕（全站統一樣式） */
+        .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
+            background:#F0A24B; color:#fff; cursor:pointer; }
+        .page-help-btn:hover { background:#d98a33; }
+        @media print { .page-help-btn { display:none !important; } }
+        .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
+        .help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
+        .help-doc h4:first-child { margin-top:0; }
+        .help-doc b { color:#8A5A2B; }
+        .help-doc ul { margin:4px 0 8px; padding-left:20px; }
+        .help-doc li { margin:2px 0; }
+        .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
+        /* 頁內分頁（明細／統計分析） */
+        .tl-tabs { border-bottom:2px solid #E8D5B5; margin-bottom:12px; }
+        .tl-tabs > li > a { color:#8A5A2B; font-size:14px; font-weight:bold; border:none; }
+        .tl-tabs > li > a:hover { background:#FDF8EF; border:none; }
+        .tl-tabs > li.active > a, .tl-tabs > li.active > a:hover, .tl-tabs > li.active > a:focus {
+            color:#fff; background:#F0A24B; border:none; }
     </style>
 </head>
 
@@ -292,12 +359,33 @@ $transfer_data_json = json_encode($rows);
             <div class="right_col" role="main">
                 <div class="">
                     <div class="page-title">
-                        <div class="title_left">
-                            <h3>加工成本分析 <small>Processing Cost Analysis</small></h3>
+                        <div class="title_left" style="display:flex;align-items:center;width:100%;">
+                            <h3 style="margin:0;">製程移轉一覽表 <small>Process Transfer List</small></h3>
+                            <button id="btnPageHelp" class="page-help-btn" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
                         </div>
                     </div>
 
                     <div class="clearfix"></div>
+
+                    <!-- 資料狀態列：最新資料日期＋最近一次更新加工單價 -->
+                    <div class="tl-infobar">
+                        <span class="tl-info">
+                            <i class="fa fa-calendar"></i> 最新資料日期：
+                            <b><?= $latest_data_date ? eg_fmt_date($latest_data_date) : '尚無資料' ?></b>
+                            <span class="tl-sub">（全表 <?= number_format($total_log_rows) ?> 筆）</span>
+                        </span>
+                        <span class="tl-info">
+                            <i class="fa fa-upload"></i> 最近一次更新加工單價：
+                            <?php if ($price_import): ?>
+                                <b><?= eg_fmt_date($price_import['ts'], true) ?></b>
+                                <span class="tl-sub">│</span>
+                                <b><?= htmlspecialchars($price_import['name']) ?></b>
+                            <?php else: ?>
+                                <b>尚無記錄</b>
+                            <?php endif; ?>
+                            <small>（<a href="Upload_List.php" style="color:#8A5A2B;text-decoration:underline;">上傳頁匯入</a>）</small>
+                        </span>
+                    </div>
 
                     <!-- 篩選區塊 -->
                     <div class="row">
@@ -337,6 +425,14 @@ $transfer_data_json = json_encode($rows);
                         </div>
                     </div>
 
+                    <!-- 頁內分頁：移轉明細／統計分析（資料太多時分開看） -->
+                    <ul class="nav nav-tabs tl-tabs" role="tablist">
+                        <li role="presentation" class="active"><a href="#tab-detail" data-toggle="tab" role="tab"><i class="fa fa-list"></i> 移轉明細</a></li>
+                        <li role="presentation"><a href="#tab-stats" data-toggle="tab" role="tab"><i class="fa fa-bar-chart"></i> 統計分析</a></li>
+                    </ul>
+                    <div class="tab-content">
+                    <div role="tabpanel" class="tab-pane fade in active" id="tab-detail">
+
                     <!-- 統計數據磚 -->
                     <div class="row tile_count">
                         <div class="col-md-3 col-sm-4 col-xs-6 tile_stats_count">
@@ -370,6 +466,68 @@ $transfer_data_json = json_encode($rows);
                             <span class="count_bottom">家</span>
                         </div>
                     </div>
+
+                    <!-- 詳細資料表格 -->
+                    <div class="row">
+                        <div class="col-md-12 col-sm-12 col-xs-12">
+                            <div class="x_panel">
+                                <div class="x_title">
+                                    <h2><i class="fa fa-list"></i> 移轉明細列表</h2>
+                                    <div id="buttons-container" style="display: inline-block; margin-left: 20px;"></div>
+                                    <ul class="nav navbar-right panel_toolbox">
+                                        <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
+                                    </ul>
+                                    <div class="clearfix"></div>
+                                </div>
+                                <div class="x_content">
+                                    <div class="table-responsive">
+                                        <!-- 外部篩選容器 -->
+                                        <div id="external-filter-container">
+                                            <input type="text" id="filter-date" class="form-control input-sm" placeholder="日期">
+                                            <input type="text" id="filter-transfer-no" class="form-control input-sm" placeholder="單號">
+                                            <input type="text" id="filter-bom" class="form-control input-sm" placeholder="BOM">
+                                            <input type="text" id="filter-product" class="form-control input-sm" placeholder="料號">
+                                            <select id="filter-maker" class="form-control input-sm" multiple="multiple">
+                                                <!-- JS Populated -->
+                                            </select>
+                                            <input type="text" id="filter-note" class="form-control input-sm" placeholder="備註">
+                                            <input type="text" id="global-search" class="form-control input-sm" placeholder="全域搜索">
+                                            <button type="button" class="btn btn-default btn-sm" id="clear-filters" style="margin-bottom: 0;">取消</button>
+                                        </div>
+
+                                        <table id="transferTable" class="table table-striped table-bordered dt-responsive nowrap" cellspacing="0" width="100%">
+                                            <thead>
+                                                <tr>
+                                                    <th style="display:none;">ID</th>
+                                                    <th>日期</th>
+                                                    <th>單號</th>
+                                                    <th>BOM</th>
+                                                    <th>料號</th>
+                                                    <th>製程</th>
+                                                    <th>廠商 (From)</th>
+                                                    <th>發包數量</th>
+                                                    <th>報工數量</th>
+                                                    <th>NG</th>
+                                                    <th>單價</th>
+                                                    <th>金額</th>
+                                                    <th>付款數量</th>
+                                                    <th>發票日期</th>
+                                                    <th>發票年月</th>
+                                                    <th>備註</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    </div><!-- /#tab-detail -->
+
+                    <div role="tabpanel" class="tab-pane fade" id="tab-stats">
 
                     <!-- 圖表分析 -->
                     <div class="row">
@@ -456,63 +614,8 @@ $transfer_data_json = json_encode($rows);
                         </div>
                     </div>
 
-                    <!-- 詳細資料表格 -->
-                    <div class="row">
-                        <div class="col-md-12 col-sm-12 col-xs-12">
-                            <div class="x_panel">
-                                <div class="x_title">
-                                    <h2><i class="fa fa-list"></i> 移轉明細列表</h2>
-                                    <div id="buttons-container" style="display: inline-block; margin-left: 20px;"></div>
-                                    <ul class="nav navbar-right panel_toolbox">
-                                        <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
-                                    </ul>
-                                    <div class="clearfix"></div>
-                                </div>
-                                <div class="x_content">
-                                    <div class="table-responsive">
-                                        <!-- 外部篩選容器 -->
-                                        <div id="external-filter-container">
-                                            <input type="text" id="filter-date" class="form-control input-sm" placeholder="日期">
-                                            <input type="text" id="filter-transfer-no" class="form-control input-sm" placeholder="單號">
-                                            <input type="text" id="filter-bom" class="form-control input-sm" placeholder="BOM">
-                                            <input type="text" id="filter-product" class="form-control input-sm" placeholder="料號">
-                                            <select id="filter-maker" class="form-control input-sm" multiple="multiple">
-                                                <!-- JS Populated -->
-                                            </select>
-                                            <input type="text" id="filter-note" class="form-control input-sm" placeholder="備註">
-                                            <input type="text" id="global-search" class="form-control input-sm" placeholder="全域搜索">
-                                            <button type="button" class="btn btn-default btn-sm" id="clear-filters" style="margin-bottom: 0;">取消</button>
-                                        </div>
-
-                                        <table id="transferTable" class="table table-striped table-bordered dt-responsive nowrap" cellspacing="0" width="100%">
-                                            <thead>
-                                                <tr>
-                                                    <th style="display:none;">ID</th>
-                                                    <th>日期</th>
-                                                    <th>單號</th>
-                                                    <th>BOM</th>
-                                                    <th>料號</th>
-                                                    <th>製程</th>
-                                                    <th>廠商 (From)</th>
-                                                    <th>發包數量</th>
-                                                    <th>報工數量</th>
-                                                    <th>NG</th>
-                                                    <th>單價</th>
-                                                    <th>金額</th>
-                                                    <th>付款數量</th>
-                                                    <th>發票日期</th>
-                                                    <th>發票年月</th>
-                                                    <th>備註</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                    </div><!-- /#tab-stats -->
+                    </div><!-- /.tab-content -->
 
                 </div>
             </div>
@@ -554,6 +657,63 @@ $transfer_data_json = json_encode($rows);
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 使用說明 Modal（鐵律7） -->
+    <div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+                    <h4 class="modal-title"><i class="fa fa-question-circle"></i> 製程移轉一覽表 使用說明</h4>
+                </div>
+                <div class="modal-body help-doc" style="max-height:70vh;overflow-y:auto;">
+                    <h4>這一頁在看什麼</h4>
+                    <p>本頁列出 ERP 的<b>製程移轉憑單</b>匯入後的所有移轉紀錄（資料表 <code>bom_ing_transfer_log</code>），
+                       並自動帶出每一筆對應的 BOM 資料：客戶、規格、製程名稱、加工廠商，以及<b>加工單價與金額</b>。</p>
+                    <div class="tip">
+                        資料來源＝<b>Upload_List.php</b>（上傳頁）的「更新加工單價 <b>ERP原始檔直接匯入</b>」。
+                        本頁只讀不寫，要更新資料請到上傳頁匯入新的 ERP 原始檔。
+                    </div>
+
+                    <h4>頁首兩個日期怎麼看</h4>
+                    <ul>
+                        <li><b>最新資料日期</b>：整張表最新一筆的<b>移轉日期</b>（不受下方日期區間影響），用來判斷「資料已經匯到哪一天」。</li>
+                        <li><b>最近一次更新加工單價</b>：上一次在上傳頁執行匯入的<b>時間與人員</b>。
+                            若這個時間很舊、而現場已經有新的移轉單，代表該重新匯入了。</li>
+                    </ul>
+
+                    <h4>操作步驟</h4>
+                    <ul>
+                        <li><b>選日期區間</b>：頁面上方「查詢條件」選起訖日期（或按 本月／上月／今年／Q1~Q4 快速鈕），送出後重新查詢。
+                            預設是<b>今年 1/1 至今</b>，要看更早的資料請自行往前調。</li>
+                        <li><b>移轉明細分頁</b>：上方四格是<b>目前篩選結果</b>的合計（筆數／數量／金額／廠商數），會隨篩選即時變動；
+                            下方列表可用逐欄篩選（日期／單號／BOM／料號／備註）、廠商多選、以及最右的<b>全域搜索</b>；
+                            欄位有值時<b>雙擊即可清空該欄篩選</b>，或按「取消」清掉全部條件。</li>
+                        <li><b>匯出</b>：列表標題右側有 複製／CSV／Excel／列印 四顆鈕，匯出的是<b>目前篩選後</b>的內容。</li>
+                        <li><b>統計分析分頁</b>：加工金額趨勢圖（依區間長短自動切日／週／月）、前五大加工廠商、十大高加工成本料號。
+                            <b>點趨勢圖的柱子</b>會把明細列表篩成該區間；料號可點開查看對應的 BOM 圖檔。</li>
+                        <li><b>異常偵測</b>：在「查詢條件」右上角，會針對目前資料檢查單價異常等狀況並列出報告。</li>
+                    </ul>
+
+                    <h4>重要行為</h4>
+                    <ul>
+                        <li>金額若 ERP 沒帶（process_amount＝0）但有單價與數量時，系統會自動以<b>數量×單價</b>補算，避免統計短少。</li>
+                        <li>統計磚、趨勢圖、前五大廠商都是跟著<b>篩選後</b>的資料重算；十大料號為進頁當下的區間統計。</li>
+                        <li>全表目前共 <?= number_format($total_log_rows) ?> 筆，最早可追溯到 2018 年，一次查太大區間會比較慢。</li>
+                    </ul>
+
+                    <h4>權限</h4>
+                    <ul>
+                        <li>本頁目前<b>只要能登入且左側選單看得到就能檢視</b>（登記於「測試功能」群組），尚未設定獨立的角色權限。</li>
+                        <li>請注意本頁會顯示<b>加工單價與金額</b>，若需限制觀看對象，請告知管理者加設角色控管。</li>
+                    </ul>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">我知道了</button>
                 </div>
             </div>
         </div>
@@ -801,6 +961,21 @@ $transfer_data_json = json_encode($rows);
 
             // 更新統計
             table.on('draw', updateStatistics);
+
+            /* 切換到「統計分析」分頁時要 reflow：
+             * Highcharts 在 display:none 的容器內初始化會量到寬度 0，畫出來只有一條線；
+             * DataTables 的欄寬同理，切回明細分頁要重算一次。 */
+            $('a[data-toggle="tab"]').on('shown.bs.tab', function(e) {
+                var target = $(e.target).attr('href');
+                if (target === '#tab-stats') {
+                    Highcharts.charts.forEach(function(c) { if (c) c.reflow(); });
+                } else if (target === '#tab-detail') {
+                    table.columns.adjust();
+                }
+            });
+
+            // 使用說明
+            $('#btnPageHelp').on('click', function() { $('#helpUseMask').modal('show'); });
         });
 
         function getDateKey(dateStr) {
