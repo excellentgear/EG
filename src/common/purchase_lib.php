@@ -305,7 +305,7 @@ function purchase_has_role(PDO $db, int $uid, array $codes): bool
     $st->execute(array_merge([$uid], $codes));
     if ($st->fetchColumn()) return true;
     $st = $db->prepare("SELECT 1 FROM user_department_position_map m
-                        JOIN position_roles pr ON pr.position_id=m.position_id
+                        JOIN position_roles pr ON pr.position_id=m.position_id AND (pr.department_id=0 OR pr.department_id=m.department_id)
                         JOIN roles r ON r.role_id=pr.role_id
                         WHERE m.user_id=? AND r.module='purchase' AND r.role_code IN ($in) LIMIT 1");
     $st->execute(array_merge([$uid], $codes));
@@ -322,7 +322,7 @@ function purchase_role_users(PDO $db, string $code): array
         $st->execute([$code]);
         $out = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
         $st = $db->prepare("SELECT DISTINCT m.user_id FROM user_department_position_map m
-                            JOIN position_roles pr ON pr.position_id=m.position_id
+                            JOIN position_roles pr ON pr.position_id=m.position_id AND (pr.department_id=0 OR pr.department_id=m.department_id)
                             JOIN roles r ON r.role_id=pr.role_id
                             WHERE r.module='purchase' AND r.role_code=?");
         $st->execute([$code]);
@@ -360,7 +360,7 @@ function purchase_perms(PDO $db, ?array $u): array
                             WHERE ur.user_id=? AND r.module='purchase'
                             UNION
                             SELECT DISTINCT r.role_code FROM user_department_position_map m
-                            JOIN position_roles pr ON pr.position_id=m.position_id
+                            JOIN position_roles pr ON pr.position_id=m.position_id AND (pr.department_id=0 OR pr.department_id=m.department_id)
                             JOIN roles r ON r.role_id=pr.role_id
                             WHERE m.user_id=? AND r.module='purchase'");
         $st->execute([$uid, $uid]);
@@ -403,7 +403,7 @@ function purchase_role_names(PDO $db, int $uid, array $p): string
                             WHERE ur.user_id=? AND r.module='purchase'
                             UNION
                             SELECT DISTINCT r.role_name FROM user_department_position_map m
-                            JOIN position_roles pr ON pr.position_id=m.position_id
+                            JOIN position_roles pr ON pr.position_id=m.position_id AND (pr.department_id=0 OR pr.department_id=m.department_id)
                             JOIN roles r ON r.role_id=pr.role_id
                             WHERE m.user_id=? AND r.module='purchase'");
         $st->execute([$uid, $uid]);

@@ -210,7 +210,7 @@ function tool_calib_has_role(PDO $db, int $uid, array $codes): bool {
     $st->execute(array_merge([$uid], $codes));
     if ($st->fetchColumn()) return true;
     $st = $db->prepare("SELECT 1 FROM user_department_position_map m
-                        JOIN position_roles pr ON pr.position_id=m.position_id
+                        JOIN position_roles pr ON pr.position_id=m.position_id AND (pr.department_id=0 OR pr.department_id=m.department_id)
                         JOIN roles r ON r.role_id=pr.role_id
                         WHERE m.user_id=? AND r.module='tool_calib' AND r.role_code IN ($in) LIMIT 1");
     $st->execute(array_merge([$uid], $codes));
@@ -974,7 +974,7 @@ function tool_calib_can_see_spec_code(PDO $db, ?array $u, array $perms): bool {
                             WHERE ur.user_id=? AND r.module='purchase' AND r.role_code IN ('purchase_admin','purchase_buy')
                             UNION
                             SELECT 1 FROM user_department_position_map m
-                            JOIN position_roles pr ON pr.position_id=m.position_id
+                            JOIN position_roles pr ON pr.position_id=m.position_id AND (pr.department_id=0 OR pr.department_id=m.department_id)
                             JOIN roles r ON r.role_id=pr.role_id
                             WHERE m.user_id=? AND r.module='purchase' AND r.role_code IN ('purchase_admin','purchase_buy')
                             LIMIT 1");

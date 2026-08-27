@@ -1475,7 +1475,7 @@ case 'tree_signers':
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $personal[(int)$r['user_id']][] = $r['role_code'];
     $byPos = [];
     $st = $db->query("SELECT m.user_id, r.role_code FROM user_department_position_map m
-                      JOIN position_roles pr ON pr.position_id=m.position_id
+                      JOIN position_roles pr ON pr.position_id=m.position_id AND (pr.department_id=0 OR pr.department_id=m.department_id)
                       JOIN roles r ON r.role_id=pr.role_id AND r.module='as_doc'");
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $byPos[(int)$r['user_id']][] = $r['role_code'];
 
