@@ -485,20 +485,11 @@ function lastUpdateBadge($info, $color = '#555') {
                                         <div class="item form-group" style="margin-bottom:0">
                                             <label class="control-label col-md-3 col-sm-3 col-xs-12">
                                                 出貨單 <b style="color:#DD5138">清除資料</b><small>(危險操作)</small><br>
+                                                <span class="required">*</span>
                                                 <span class="text-muted" style="font-size:11px;">ERP匯出資料有誤時，清除後可重新匯入<br>需操作確認密碼，僅資料急救台管理員可用</span>
                                             </label>
-                                            <div class="col-md-9 col-sm-9 col-xs-12">
-                                                <div style="margin-bottom:6px">
-                                                    <label style="margin-right:16px;font-weight:normal">
-                                                        <input type="radio" name="isClearMode" value="month" checked> 依月份清除（該年月起之後全部清除）
-                                                    </label>
-                                                    <label style="font-weight:normal">
-                                                        <input type="radio" name="isClearMode" value="year"> 依年度清除（該年度起之後全部清除）
-                                                    </label>
-                                                </div>
-                                                <select id="isClearYear" class="form-control short-input" style="width:100px;display:inline-block"></select>
-                                                <select id="isClearMonth" class="form-control short-input" style="width:80px;display:inline-block;margin-left:6px"></select>
-                                                <button type="button" id="btn_clear_is_list_new" class="btn btn-danger" style="margin-left:10px">清除</button>
+                                            <div class="col-md-4 col-sm-4 col-xs-8">
+                                                <button type="button" id="btn_clear_is_list_new" class="btn btn-danger">清除…</button>
                                             </div>
                                         </div>
                                     </div><!-- /淺紅底 -->
@@ -690,26 +681,33 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // 出貨單清除資料（危險操作，僅資料急救台管理員/系統管理員可見此區塊；需操作確認密碼）
+    // 出貨單清除資料（危險操作，僅資料急救台管理員/系統管理員可見此按鈕；按下後才在跳窗內選年度/月份＋輸入操作確認密碼）
     const $isClearYear = $('#isClearYear'), $isClearMonth = $('#isClearMonth');
     if ($isClearYear.length) {
         const curY = new Date().getFullYear();
         for (let y = curY; y >= curY - 8; y--) $isClearYear.append('<option value="'+y+'">'+y+'年</option>');
         for (let m = 1; m <= 12; m++) $isClearMonth.append('<option value="'+m+'">'+m+'月</option>');
-        $isClearMonth.val(new Date().getMonth() + 1);
 
-        $('input[name=isClearMode]').on('change', function() {
-            $isClearMonth.prop('disabled', $('input[name=isClearMode]:checked').val() === 'year');
-        });
-
-        $('#btn_clear_is_list_new').on('click', function() {
+        function updateClearIsListMsg() {
             const mode = $('input[name=isClearMode]:checked').val();
             const year = $isClearYear.val(), month = $isClearMonth.val();
-            const label = mode === 'year' ? (year + '年1月1日') : (year + '年' + month + '月1日');
-            $('#clearIsListMsg').text('確定要清除「' + label + '」之後的所有出貨單資料（含綁定的出貨-BOM對應、出貨-訂單對應）嗎？此操作無法復原，請輸入操作確認密碼：');
+            $isClearMonth.prop('disabled', mode !== 'month');
+            let desc;
+            if (mode === 'year_only') desc = '「' + year + '年」整個年度（僅該年，不影響其他年度）';
+            else if (mode === 'year') desc = '「' + year + '年1月1日」之後的所有';
+            else desc = '「' + year + '年' + month + '月1日」之後的所有';
+            $('#clearIsListMsg').text('確定要清除 ' + desc + ' 出貨單資料（含綁定的出貨-BOM對應、出貨-訂單對應）嗎？此操作無法復原，請輸入操作確認密碼：');
+        }
+        $('input[name=isClearMode], #isClearYear, #isClearMonth').on('change', updateClearIsListMsg);
+
+        $('#btn_clear_is_list_new').on('click', function() {
+            $('input[name=isClearMode][value=month]').prop('checked', true);
+            $isClearYear.val(curY);
+            $isClearMonth.val(new Date().getMonth() + 1);
             $('#clearIsListPwd').val('');
             $('#clearIsListErr').text('');
-            $('#clearIsListModal').data({mode: mode, year: year, month: month}).modal('show');
+            updateClearIsListMsg();
+            $('#clearIsListModal').modal('show');
             setTimeout(function() { $('#clearIsListPwd').trigger('focus'); }, 300);
         });
 
@@ -720,12 +718,12 @@ document.addEventListener('DOMContentLoaded', function() {
         $('#btnClearIsListConfirm').on('click', function() {
             const pwd = $('#clearIsListPwd').val();
             if (!pwd) { $('#clearIsListErr').text('請輸入密碼'); return; }
-            const $m = $('#clearIsListModal');
             $.post('../../src/store/_clear_is_list.php', {
-                mode: $m.data('mode'), year: $m.data('year'), month: $m.data('month'), confirm_password: pwd
+                mode: $('input[name=isClearMode]:checked').val(),
+                year: $isClearYear.val(), month: $isClearMonth.val(), confirm_password: pwd
             }, function(res) {
                 if (res.success) {
-                    $m.modal('hide');
+                    $('#clearIsListModal').modal('hide');
                     alert('成功清除 ' + res.deleted_rows + ' 筆記錄。');
                     window.location.reload();
                 } else {
@@ -1481,6 +1479,21 @@ $(document).ready(function() {
                 <h4 class="modal-title"><strong>清除出貨單資料確認</strong></h4>
             </div>
             <div class="modal-body" style="padding:15px">
+                <div style="margin-bottom:10px">
+                    <label style="display:block;font-weight:normal;margin-bottom:4px">
+                        <input type="radio" name="isClearMode" value="month" checked> 依月份清除（該年月起之後全部清除）
+                    </label>
+                    <label style="display:block;font-weight:normal;margin-bottom:4px">
+                        <input type="radio" name="isClearMode" value="year"> 依年度清除（該年度起之後全部清除）
+                    </label>
+                    <label style="display:block;font-weight:normal">
+                        <input type="radio" name="isClearMode" value="year_only"> 清除整個年度（僅該年度，不影響其他年度）
+                    </label>
+                </div>
+                <div style="margin-bottom:10px">
+                    <select id="isClearYear" class="form-control" style="width:110px;display:inline-block"></select>
+                    <select id="isClearMonth" class="form-control" style="width:90px;display:inline-block;margin-left:6px"></select>
+                </div>
                 <p id="clearIsListMsg" style="color:#5b3a1e"></p>
                 <input type="password" id="clearIsListPwd" autocomplete="new-password" placeholder="請輸入操作確認密碼" class="form-control">
                 <div id="clearIsListErr" style="color:#DD5138;margin-top:6px;font-size:12px;"></div>

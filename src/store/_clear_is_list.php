@@ -36,8 +36,13 @@ if ($year === false || $year === null) {
     exit;
 }
 
+$endDate = null; // null=不設上限（該日期起之後全部清除）；有值=只清該區間（目前僅 year_only 用到）
 if ($mode === 'year') {
     $startDate = sprintf('%04d-01-01', $year);
+} elseif ($mode === 'year_only') {
+    // 只清該單一年度，不影響其他年度（跟「依年度清除」的差別：後者不設上限，這個有上限）
+    $startDate = sprintf('%04d-01-01', $year);
+    $endDate   = sprintf('%04d-12-31', $year);
 } elseif ($mode === 'month') {
     $month = filter_input(INPUT_POST, 'month', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 12]]);
     if ($month === false || $month === null) {
@@ -60,15 +65,22 @@ if (!$pwChk['ok']) {
 try {
     $db->beginTransaction();
 
-    // 出貨單刪除範圍：Order_date >= 起始日期（不設上限，比照原邏輯「該日期起之後全部清除」）
+    // 出貨單刪除範圍：預設 Order_date >= 起始日期（不設上限，該日期起之後全部清除）；
+    // year_only 模式有 $endDate，只清該單一年度區間。
     // is_bom_map（出貨-BOM對應）無 FK 約束需手動清；shipment_order_map 由 FK CASCADE 自動連鎖刪除，
     // return_order_map.IS_id 由 FK SET NULL 自動處理，兩者都不用在這裡另外寫。
-    $delMap = $db->prepare("DELETE FROM is_bom_map WHERE IS_id IN (SELECT IS_id FROM is_list WHERE Order_date >= :start_date)");
-    $delMap->bindParam(':start_date', $startDate, PDO::PARAM_STR);
+    $where  = $endDate !== null ? "Order_date BETWEEN :start_date AND :end_date" : "Order_date >= :start_date";
+    $bindFn = function(PDOStatement $st) use ($startDate, $endDate) {
+        $st->bindParam(':start_date', $startDate, PDO::PARAM_STR);
+        if ($endDate !== null) $st->bindParam(':end_date', $endDate, PDO::PARAM_STR);
+    };
+
+    $delMap = $db->prepare("DELETE FROM is_bom_map WHERE IS_id IN (SELECT IS_id FROM is_list WHERE $where)");
+    $bindFn($delMap);
     $delMap->execute();
 
-    $delList = $db->prepare("DELETE FROM is_list WHERE Order_date >= :start_date");
-    $delList->bindParam(':start_date', $startDate, PDO::PARAM_STR);
+    $delList = $db->prepare("DELETE FROM is_list WHERE $where");
+    $bindFn($delList);
     $delList->execute();
     $deletedRows = $delList->rowCount();
 
