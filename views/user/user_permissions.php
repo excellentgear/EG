@@ -1077,16 +1077,9 @@ foreach ($_dpRows as $_r) {
                   'position_name'=>$_r['position_name'], 'people'=>$_cnt,
                   'people_names'=>'所有部門的「'.$_r['position_name'].'」共 '.$_cnt.' 人'];
 }
-// 名單外還有設定的（例如職稱已經沒人在用但設定還在），也要列出來才刪得掉
-foreach ($_dpRoles as $_k => $_v) {
-    [$_kd, $_kp] = array_map('intval', explode('_', $_k));
-    if ($_kd !== 0 || isset($_seenPos[$_kp])) continue;
-    $_seenPos[$_kp] = true;
-    $_pn = '';
-    try { $_q = $conn_pdo->prepare("SELECT name FROM position WHERE id=?"); $_q->execute([$_kp]); $_pn = (string)$_q->fetchColumn(); } catch (Exception $_e) {}
-    $_dpList[] = ['department_id'=>0, 'department_name'=>'（全部門通用）', 'position_id'=>$_kp,
-                  'position_name'=>($_pn !== '' ? $_pn : ('#'.$_kp)), 'people'=>0, 'people_names'=>'目前沒有在職人員掛此職稱'];
-}
+// 只列出「目前有在職人員」的職稱。沒有在職人員的職稱一律不列——
+// 超級管理員（IT 最高權限、由網管固定持有，帳號 state=99 不算在職）因此不會出現在這張表裡，
+// 使用者明確要求不要列入；其 position_roles 設定保持不動，只是不在這裡顯示、也不從這裡操作。
 foreach ($_dpRows as $_r) $_dpList[] = $_r;
 
 foreach ($_dpList as $_row):
