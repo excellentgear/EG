@@ -1920,7 +1920,6 @@ if ($reply_id != "") {
                 <div class="form-group qrcode-display-area" style="text-align: center; margin-top: 15px; display: none;">
                     <!-- This area will no longer be used for preview -->
                     <div id="qrcode_image_container_${bomIngFidEsc}" style="margin-bottom: 10px;"></div>
-                    </div>
                 </div>
             </div>
             <div class="modal-footer">
