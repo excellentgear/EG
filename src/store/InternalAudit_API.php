@@ -724,6 +724,45 @@ case 'clause_list': {
     iaReqView($perms);
     jout(['rows' => ia_as_clauses($db, false)]);
 }
+/* AS 文件挑選清單（2026-08-26 使用者要求：條文題庫的「建立的文件、表單」與 IA 單的「相關表單編號」
+   都要能打編號或名稱模糊篩選後挑選，不要手打）。回全部未廢止的 AS 文件，前端自己過濾即可，
+   資料量小（一百多筆）不必做伺服器端搜尋。 */
+case 'asdoc_pick_list': {
+    iaReqView($perms);
+    $rows = [];
+    try {
+        $rows = $db->query("SELECT id, doc_no, doc_name, doc_type FROM as_document
+                             WHERE COALESCE(is_obsolete,0)=0 ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        try { $rows = $db->query("SELECT id, doc_no, doc_name, doc_type FROM as_document
+                                   ORDER BY doc_no")->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e2) {}
+    }
+    jout(['rows' => $rows]);
+}
+
+/* 條文題庫拖曳排序（2026-08-26 使用者要求：拖移後自動更新順序，不要手動輸入）。
+   一律重新編號成 10,20,30…（留間隔，日後單筆插入才不用整批重排）。 */
+case 'clause_reorder': {
+    iaReqAdmin($perms);
+    $ids = json_decode((string)($_POST['ids'] ?? '[]'), true);
+    if (!is_array($ids) || !$ids) jerr('沒有收到排序內容');
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+    if (!$ids) jerr('沒有收到排序內容');
+    // 只接受真的存在的條文 id（鐵律8：不能只信前端送什麼就寫什麼）
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $st = $db->prepare("SELECT COUNT(*) FROM ia_as_clause WHERE clause_id IN ($in)");
+    $st->execute($ids);
+    if ((int)$st->fetchColumn() !== count($ids)) jerr('有條文已被刪除，請重新整理題庫後再排序');
+    $db->beginTransaction();
+    try {
+        $up = $db->prepare("UPDATE ia_as_clause SET sort_order=?, updated_at=NOW(), updated_by=? WHERE clause_id=?");
+        $n = 0;
+        foreach ($ids as $id) $up->execute([($n += 10), $uname, $id]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('排序儲存失敗：' . $e->getMessage(), 500); }
+    jout(['count' => count($ids)]);
+}
+
 case 'clause_save': {
     iaReqAdmin($perms);
     $id   = iaInt($_POST['clause_id'] ?? '');

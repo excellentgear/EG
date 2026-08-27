@@ -82,6 +82,27 @@ $roleLabel = ia_role_label($perms);
         .ia-op:hover { color:#8A5A2B; text-decoration:underline; }
         .ia-op.danger { color:#C4442D; }
         .ia-pager { display:flex; justify-content:flex-end; align-items:center; gap:6px; margin:6px 0; font-size:13px; color:#5b3a1e; }
+        /* 條文題庫拖曳排序（2026-08-26 使用者要求：拖移後自動更新順序） */
+        .cl-drag { cursor:grab; color:#b5762a; text-align:center; white-space:nowrap; user-select:none; }
+        .cl-drag:active { cursor:grabbing; }
+        .cl-seq { color:#8a6d45; font-size:12px; }
+        tr.cl-dragging { opacity:.45; background:#FDF3E3; }
+        #clauseBody tr[draggable="true"]:hover .cl-drag { color:#8A5A2B; }
+        /* 打字模糊篩選的建議清單（相關表單編號／違反條文共用） */
+        .ia-sug-wrap { position:relative; }
+        .ia-sug { position:absolute; z-index:60; left:0; right:0; top:100%; max-height:230px; overflow-y:auto;
+            background:#fff; border:1px solid #D8BE93; border-radius:0 0 5px 5px; box-shadow:0 6px 14px rgba(90,60,20,.18); }
+        .ia-sug div { padding:5px 8px; font-size:12px; color:#5b3a1e; cursor:pointer; border-bottom:1px solid #F3E7D2; }
+        .ia-sug div:last-child { border-bottom:0; }
+        .ia-sug div:hover, .ia-sug div.on { background:#FDF3E3; }
+        .ia-sug .no { color:#b5762a; font-weight:bold; margin-right:6px; }
+        .ia-sug .empty { color:#b0a390; cursor:default; }
+        /* AS 文件挑選跳窗 */
+        #docPickBox { max-height:340px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; padding:6px 8px; }
+        #docPickBox label { display:flex; gap:6px; align-items:baseline; font-size:12px; color:#5b3a1e;
+            font-weight:normal; margin:0 0 3px; cursor:pointer; line-height:1.5; }
+        #docPickBox .dp-no { color:#b5762a; font-weight:bold; min-width:88px; }
+        #docPickBox .dp-type { color:#8a6d45; font-size:11px; }
         .ia-pager button { height:26px; padding:0 9px; border:1px solid #D8BE93; background:#fff; border-radius:4px; cursor:pointer; }
         .ia-pager button.on { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .ia-empty { padding:18px; color:#8a6d45; text-align:center; }
@@ -453,6 +474,20 @@ $roleLabel = ia_role_label($perms);
     <div class="ia-mfoot"><button data-close>關閉</button><button id="btnSettingSave" class="btn-warm">儲存設定</button></div>
 </div></div>
 
+<!-- ============ AS 文件挑選（條文題庫的「建立的文件、表單」用；打編號或名稱模糊篩選後多選） ============ -->
+<div class="ia-mask" id="docPickMask"><div class="ia-modal">
+    <div class="ia-mhead"><h4><i class="fa fa-files-o"></i> 選擇文件、表單</h4>
+        <span class="x" data-close style="margin-left:auto;">&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">資料來源就是<b>AS 文件管理</b>的文件清單，打<b>文件編號或名稱</b>都可以篩選（空白分隔可多個關鍵字），勾選後按「加入」。</div>
+        <input type="text" id="docPickKw" placeholder="輸入文件編號或名稱篩選…　例：2-SM　或　客戶基本資料"
+               data-eg-skip autocomplete="off" style="width:100%;margin-bottom:6px;">
+        <div id="docPickBox"></div>
+        <div style="font-size:12px;color:#8a6d45;margin-top:5px;" id="docPickCnt"></div>
+    </div>
+    <div class="ia-mfoot"><button data-close>取消</button><button id="btnDocPickOk" class="btn-warm">加入</button></div>
+</div></div>
+
 <!-- ============================ AS 條文題庫 ============================ -->
 <div class="ia-mask" id="clauseMask"><div class="ia-modal wide">
     <div class="ia-mhead"><h4><i class="fa fa-list-ol"></i> AS 稽核查檢表　條文題庫</h4>
@@ -460,10 +495,12 @@ $roleLabel = ia_role_label($perms);
         <span class="x" data-close style="margin-left:10px;">&times;</span></div>
     <div class="ia-mbody">
         <div class="ia-hint">這是<b>AS稽核查檢表</b>的題目來源，建一次每年沿用。勾「章節標題」的列在查檢表上只當分隔標題、不判定合格與否。
-        已被既有查檢表引用的條文按刪除會自動改成停用（不再出現在新表），舊表內容不受影響。</div>
+        已被既有查檢表引用的條文按刪除會自動改成停用（不再出現在新表），舊表內容不受影響。<br>
+        <b>順序用拖的</b>：抓住左邊的 <i class="fa fa-bars"></i> 上下拖曳，放開就自動重新編號並存檔，不必手動輸入數字。
+        「建立的文件、表單」按<b>＋選文件</b>可以打編號或名稱模糊篩選後多選。</div>
         <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
-            <th style="width:70px;">順序</th><th style="width:70px;">標題列</th><th>品質管理系統要求</th>
-            <th style="width:230px;">建立的文件、表單</th><th style="width:70px;">啟用</th><th style="width:110px;">操作</th>
+            <th style="width:64px;">順序</th><th style="width:70px;">標題列</th><th>品質管理系統要求</th>
+            <th style="width:260px;">建立的文件、表單</th><th style="width:70px;">啟用</th><th style="width:110px;">操作</th>
         </tr></thead><tbody id="clauseBody"></tbody></table></div>
     </div>
     <div class="ia-mfoot"><button data-close>關閉</button></div>
@@ -2041,6 +2078,143 @@ $('#btnSettingSave').on('click', function(){
     });
 });
 
+/* ======== AS 文件挑選 ＋ 打字模糊篩選建議（2026-08-26 使用者要求） ========
+   ①條文題庫的「建立的文件、表單」：按「＋選文件」開跳窗，打編號或名稱篩選後多選
+   ②IA 不符合通知單的「相關表單編號」：輸入後即時列出 AS 文件供選
+   ③IA 不符合通知單的「違反條文」：從 AS 條文題庫（品質管理系統要求）自動建議
+   三處共用同一份資料，各只抓一次就快取起來，不重複打 API。 */
+var ASDOCS = null, CLAUSE_BANK = null, DOCPICK_TR = null;
+
+function loadAsDocs(cb){
+    if (ASDOCS) { cb(ASDOCS); return; }
+    $.getJSON(API, {action:'asdoc_pick_list'}, function(res){
+        ASDOCS = (res && res.ok) ? (res.rows||[]) : [];
+        cb(ASDOCS);
+    }).fail(function(){ ASDOCS = []; cb(ASDOCS); });
+}
+function loadClauseBank(cb){
+    if (CLAUSE_BANK) { cb(CLAUSE_BANK); return; }
+    $.getJSON(API, {action:'clause_list'}, function(res){
+        // 章節標題列（4.組織背景…）不是條文本身，不拿來當「違反條文」的建議
+        CLAUSE_BANK = (res && res.ok) ? (res.rows||[]).filter(function(c){ return +c.is_header !== 1; }) : [];
+        cb(CLAUSE_BANK);
+    }).fail(function(){ CLAUSE_BANK = []; cb(CLAUSE_BANK); });
+}
+/**
+ * 中文正規化（NFC）——**這一步不能省**。
+ * AS 條文題庫是從 2024 的 .xls 匯進來的，裡面有 60 個欄位夾帶 Unicode「CJK 相容表意文字」
+ * （例：8.2.4 的「變更」，那個「更」是 U+F901 而不是一般的 U+66F4）。兩者**畫面上長得一模一樣**，
+ * 但字碼不同 → 使用者打「變更」永遠搜不到那一條，而且完全不會報錯。
+ * String.normalize('NFC') 會把相容字換回一般字，比對前兩邊都要過一次。
+ */
+function nfc(v){
+    v = String(v||'');
+    try { return v.normalize('NFC'); } catch(e) { return v; }   // 極舊瀏覽器沒有 normalize 就照原樣比
+}
+/** 多關鍵字（空白分隔）全部命中才算，比對整串文字 */
+function kwHit(hay, kw){
+    hay = nfc(hay).toLowerCase();
+    var ws = nfc(kw).toLowerCase().split(/\s+/).filter(Boolean);
+    if (!ws.length) return true;
+    for (var i=0;i<ws.length;i++) if (hay.indexOf(ws[i]) < 0) return false;
+    return true;
+}
+
+/* ---- ①「＋選文件」跳窗 ---- */
+function openDocPick(el){
+    DOCPICK_TR = $(el).closest('tr');
+    $('#docPickKw').val('');
+    loadAsDocs(function(){ renderDocPick(); openMask('docPickMask'); $('#docPickKw').focus(); });
+}
+function renderDocPick(){
+    var kw = $('#docPickKw').val(), h = '', n = 0;
+    (ASDOCS||[]).forEach(function(d){
+        if (!kwHit(d.doc_no + ' ' + d.doc_name, kw)) return;
+        n++;
+        h += '<label><input type="checkbox" class="dpck" data-eg-skip value="'+esc(d.doc_no)+'" data-name="'+esc(d.doc_name)+'">'
+           + '<span class="dp-no">'+esc(d.doc_no)+'</span><span>'+esc(d.doc_name)+'</span>'
+           + (d.doc_type?'<span class="dp-type">'+esc(d.doc_type)+'</span>':'')+'</label>';
+    });
+    $('#docPickBox').html(h || '<div style="color:#b0a390;font-size:12px;padding:6px;">查無符合的文件</div>');
+    $('#docPickCnt').text('符合 '+n+' 筆'+((ASDOCS||[]).length?('／共 '+ASDOCS.length+' 筆'):''));
+}
+$('#docPickKw').on('input', renderDocPick);
+$('#btnDocPickOk').on('click', function(){
+    if (!DOCPICK_TR) { closeMask('docPickMask'); return; }
+    var add = [];
+    $('#docPickBox .dpck:checked').each(function(){
+        add.push($(this).data('name') + '(' + $(this).val() + ')');   // 沿用題庫既有的「名稱(編號)」寫法
+    });
+    if (!add.length) { alert('請先勾選要加入的文件'); return; }
+    var $ta = DOCPICK_TR.find('textarea[data-f="doc_ref"]');
+    var cur = String($ta.val()||'').trim();
+    // 已經有的不重複加
+    add = add.filter(function(x){ return cur.indexOf(x) < 0; });
+    $ta.val((cur ? cur + ' ' : '') + add.join(' '));
+    closeMask('docPickMask');
+    if (add.length) alert('已加入 '+add.length+' 份文件，記得按該列的「存」才會寫入。');
+});
+
+/* ---- ②③ 打字即時建議（附掛在既有 input 上，不改欄位本身） ---- */
+function attachSuggest($inp, getList){
+    if (!$inp.length || $inp.data('sugOn')) return;
+    $inp.data('sugOn', 1);
+    $inp.wrap('<span class="ia-sug-wrap" style="display:block;"></span>');
+    var $wrap = $inp.parent(), $box = $('<div class="ia-sug" style="display:none;"></div>').appendTo($wrap);
+    function close(){ $box.hide().empty(); }
+    function open(){
+        getList(function(list){
+            var kw = $inp.val(), h = '', n = 0;
+            list.forEach(function(o){
+                if (n >= 30) return;
+                if (!kwHit(o.search, kw)) return;
+                n++;
+                h += '<div data-v="'+esc(o.value)+'">'+(o.no?'<span class="no">'+esc(o.no)+'</span>':'')+esc(o.label)+'</div>';
+            });
+            $box.html(h || '<div class="empty">查無符合項目</div>').show();
+        });
+    }
+    $inp.on('focus input', open);
+    $inp.on('keydown', function(e){
+        if (e.key === 'Escape') { close(); return; }
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
+        var $items = $box.find('div[data-v]');
+        if (!$items.length) return;
+        var i = $items.index($box.find('div.on'));
+        if (e.key === 'Enter') { if (i >= 0) { e.preventDefault(); $items.eq(i).trigger('mousedown'); } return; }
+        e.preventDefault();
+        i = (e.key === 'ArrowDown') ? Math.min(i+1, $items.length-1) : Math.max(i-1, 0);
+        $items.removeClass('on').eq(i).addClass('on');
+        var el = $items.get(i); if (el && el.scrollIntoView) el.scrollIntoView({block:'nearest'});
+    });
+    $box.on('mousedown', 'div[data-v]', function(e){ e.preventDefault(); $inp.val($(this).data('v')); close(); });
+    $inp.on('blur', function(){ setTimeout(close, 150); });
+}
+/** 相關表單編號：選了就填編號本身（單據上要印的是編號） */
+function sugAsDocs(cb){
+    loadAsDocs(function(rows){
+        cb(rows.map(function(d){
+            return {value:d.doc_no, no:d.doc_no, label:d.doc_name, search:d.doc_no+' '+d.doc_name};
+        }));
+    });
+}
+/** 違反條文：直接取「品質管理系統要求」全文（紙本就是照抄這一段） */
+function sugClauses(cb){
+    loadClauseBank(function(rows){
+        cb(rows.map(function(c){
+            // 一併正規化，避免相容字被原封不動存進 ia_nc.clause_ref，之後查詢一樣找不到
+            var t = nfc(c.clause_text).replace(/\s+/g,' ').trim();
+            return {value:t, no:'', label:t, search:t + ' ' + (c.doc_ref||'')};
+        }));
+    });
+}
+$(function(){
+    attachSuggest($('#nFormNo'),  sugAsDocs);
+    attachSuggest($('#nnFormNo'), sugAsDocs);
+    attachSuggest($('#nClause'),  sugClauses);
+    attachSuggest($('#nnClause'), sugClauses);
+});
+
 /* ============================ AS 條文題庫 ============================ */
 $('#btnClauseBank').on('click', loadClauses);
 function loadClauses(){
@@ -2048,18 +2222,54 @@ function loadClauses(){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
         var h = '';
         (res.rows||[]).forEach(function(c){
-            h += '<tr data-id="'+c.clause_id+'">'
-              + '<td><input type="text" class="clF" data-f="sort_order" value="'+esc(c.sort_order)+'" style="width:56px;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;text-align:center;"></td>'
-              + '<td><input type="checkbox" class="clF" data-f="is_header"'+(+c.is_header?' checked':'')+'></td>'
-              + '<td class="l"><textarea class="clF" data-f="clause_text" style="width:100%;min-height:38px;border:1px solid #D8BE93;border-radius:3px;padding:3px 5px;font-size:12px;">'+esc(c.clause_text)+'</textarea></td>'
-              + '<td class="l"><textarea class="clF" data-f="doc_ref" style="width:100%;min-height:38px;border:1px solid #D8BE93;border-radius:3px;padding:3px 5px;font-size:12px;">'+esc(c.doc_ref||'')+'</textarea></td>'
-              + '<td><input type="checkbox" class="clF" data-f="is_active"'+(+c.is_active?' checked':'')+'></td>'
-              + '<td><span class="ia-op" onclick="saveClause(this)"><i class="fa fa-save"></i> 存</span>'
-              + '<span class="ia-op danger" onclick="delClause(this)"><i class="fa fa-trash"></i></span></td></tr>';
+            h += clauseRowHtml(c);
         });
         $('#clauseBody').html(h || '<tr><td colspan="6" class="ia-empty">題庫是空的</td></tr>');
+        clauseRenumber();
         openMask('clauseMask');
     });
+}
+/* 一列的 HTML（新增列與載入共用同一份，避免兩邊欄位走鐘＝鐵律4） */
+function clauseRowHtml(c){
+    c = c || {};
+    return '<tr data-id="'+(c.clause_id||'')+'" draggable="true">'
+      + '<td class="cl-drag" title="拖曳調整順序"><i class="fa fa-bars"></i> <span class="cl-seq"></span></td>'
+      + '<td><input type="checkbox" class="clF" data-f="is_header"'+(+c.is_header?' checked':'')+'></td>'
+      + '<td class="l"><textarea class="clF" data-f="clause_text" style="width:100%;min-height:38px;border:1px solid #D8BE93;border-radius:3px;padding:3px 5px;font-size:12px;">'+esc(c.clause_text||'')+'</textarea></td>'
+      + '<td class="l"><textarea class="clF" data-f="doc_ref" style="width:100%;min-height:34px;border:1px solid #D8BE93;border-radius:3px;padding:3px 5px;font-size:12px;">'+esc(c.doc_ref||'')+'</textarea>'
+      + '<span class="ia-op" style="margin-top:2px;" onclick="openDocPick(this)"><i class="fa fa-plus"></i> 選文件</span></td>'
+      + '<td><input type="checkbox" class="clF" data-f="is_active"'+(c.clause_id===undefined||+c.is_active?' checked':'')+'></td>'
+      + '<td><span class="ia-op" onclick="saveClause(this)"><i class="fa fa-save"></i> 存</span>'
+      + '<span class="ia-op danger" onclick="delClause(this)"><i class="fa fa-trash"></i></span></td></tr>';
+}
+/* 畫面上的序號只是顯示（1,2,3…）；真正的 sort_order 由後端重新編成 10,20,30… */
+function clauseRenumber(){
+    $('#clauseBody tr[data-id]').each(function(i){ $(this).find('.cl-seq').text(i+1); });
+}
+/* 拖曳排序：放開就送後端重新編號（使用者要求不要手動輸入順序） */
+var CL_DRAG = null;
+$('#clauseBody').on('dragstart', 'tr', function(e){
+    CL_DRAG = this; $(this).addClass('cl-dragging');
+    try { e.originalEvent.dataTransfer.effectAllowed = 'move';
+          e.originalEvent.dataTransfer.setData('text/plain', ''); } catch(err){}
+});
+$('#clauseBody').on('dragend', 'tr', function(){ $(this).removeClass('cl-dragging'); CL_DRAG = null; });
+$('#clauseBody').on('dragover', 'tr', function(e){
+    if (!CL_DRAG || CL_DRAG === this) return;
+    e.preventDefault();
+    var r = this.getBoundingClientRect();
+    var after = (e.originalEvent.clientY - r.top) > r.height / 2;
+    $(this)[after ? 'after' : 'before'](CL_DRAG);
+});
+$('#clauseBody').on('drop', 'tr', function(e){ e.preventDefault(); clauseSaveOrder(); });
+function clauseSaveOrder(){
+    clauseRenumber();
+    var ids = $('#clauseBody tr[data-id]').map(function(){ return $(this).data('id'); }).get()
+              .filter(function(x){ return x !== '' && x !== undefined; });
+    if (!ids.length) return;
+    $.post(API, {action:'clause_reorder', ids:JSON.stringify(ids)}, function(res){
+        if (!res.ok) { alert(res.error||'排序儲存失敗'); loadClauses(); }
+    }, 'json').fail(function(){ alert('排序儲存失敗'); loadClauses(); });
 }
 function rowClause($tr){
     var o = {clause_id: $tr.data('id')||''};
@@ -2076,6 +2286,7 @@ function saveClause(el){
     $.post(API, $.extend({action:'clause_save'}, o), function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         $tr.attr('data-id', res.clause_id).data('id', res.clause_id);
+        clauseSaveOrder();          // 新列存完才有 id，順帶把整份順序寫回去
         alert('已儲存');
     }, 'json');
 }
@@ -2091,13 +2302,9 @@ function delClause(el){
     }, 'json');
 }
 $('#btnClauseAdd').on('click', function(){
-    $('#clauseBody').append('<tr data-id=""><td><input type="text" class="clF" data-f="sort_order" value="" style="width:56px;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;text-align:center;"></td>'
-      + '<td><input type="checkbox" class="clF" data-f="is_header"></td>'
-      + '<td class="l"><textarea class="clF" data-f="clause_text" style="width:100%;min-height:38px;border:1px solid #D8BE93;border-radius:3px;padding:3px 5px;font-size:12px;"></textarea></td>'
-      + '<td class="l"><textarea class="clF" data-f="doc_ref" style="width:100%;min-height:38px;border:1px solid #D8BE93;border-radius:3px;padding:3px 5px;font-size:12px;"></textarea></td>'
-      + '<td><input type="checkbox" class="clF" data-f="is_active" checked></td>'
-      + '<td><span class="ia-op" onclick="saveClause(this)"><i class="fa fa-save"></i> 存</span>'
-      + '<span class="ia-op danger" onclick="delClause(this)"><i class="fa fa-trash"></i></span></td></tr>');
+    $('#clauseBody').find('.ia-empty').closest('tr').remove();
+    $('#clauseBody').append(clauseRowHtml());
+    clauseRenumber();
 });
 
 /* ============================ 角色說明（即時查現況，不寫死角色清單＝鐵律4） ============================ */
@@ -2194,17 +2401,21 @@ function printHead(meta, titleOverride){
          + '<div class="en">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>'
          + '<div class="tt">'+esc(titleOverride || meta.doc_name || '')+'</div></div>';
 }
-/* 簽章：一律用 eg_stamp.js 產生帶日期的印章，禁止只印姓名或底線 */
+/* 簽章：一律用 eg_stamp.js 產生帶日期的印章，禁止只印姓名或底線
+   **日期一定要先過 dispDate()**（ai-rules/20）：eg_stamp.js 是把傳進去的字串原樣畫在章上、
+   不會自己格式化，直接把 DB 的 Y-m-d 丟進去，章上就會印成 2024-11-22 而不是 2024.11.22。
+   收斂在這一個函式，14 個呼叫點（計畫表/通知單/查檢表/IA單/報告表）一次全部正確。 */
 function stampHtml(meta, person, date){
     if (!person || !person.name) return '';
+    var d = date ? dispDate(date) : '';
     try {
         if (window.EGStamp && EGStamp.stamp) {
-            return EGStamp.stamp(person.name, date||'', false,
+            return EGStamp.stamp(person.name, d, false,
                                  meta.stamp_tpl ? meta.stamp_tpl.schema : null,
                                  person.dept||'', person.position||'');
         }
     } catch(e){}
-    return esc(person.name) + (date ? ('　'+dispDate(date)) : '');
+    return esc(person.name) + (d ? ('　'+d) : '');
 }
 function signCells(meta, cells){
     var h = '<div class="ia-sign">';
