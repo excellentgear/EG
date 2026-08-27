@@ -206,6 +206,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit;
 }
 
+// ── AJAX: 批次修改出貨帳款月份 (需權限 A 或含 U) ──
+// 單筆修改與批次修改共用這一支，前端一律送 ids 陣列
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'batch_update_billing_month') {
+    header('Content-Type: application/json');
+    $_bm_pdo = null;
+    try {
+        if (!$perm_can_update) throw new Exception('您沒有修改權限，無法變更帳款月份');
+
+        $ids = $_POST['ids'] ?? [];
+        if (!is_array($ids)) { $ids = json_decode($ids, true) ?: []; }
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids), function ($v) { return $v > 0; })));
+        if (empty($ids)) throw new Exception('請先勾選要修改的出貨資料');
+        if (count($ids) > 5000) throw new Exception('一次最多只能修改 5000 筆，請分批處理');
+
+        // 帳款月份：空字串＝清除手動設定，恢復依出貨日期自動計算
+        $bm = trim((string)($_POST['billing_month'] ?? ''));
+        if ($bm !== '') {
+            if (!preg_match('/^(\d{4})-(0[1-9]|1[0-2])$/', $bm, $_bmm)) {
+                throw new Exception('帳款月份格式錯誤，應為 YYYY-MM');
+            }
+            $_maxY = (int)date('Y') + 5;
+            if ((int)$_bmm[1] < 2000 || (int)$_bmm[1] > $_maxY) {
+                throw new Exception('帳款月份年份需介於 2000 ~ ' . $_maxY);
+            }
+        }
+
+        $_bm_pdo = $conn->getPDO();
+        $_bm_pdo->beginTransaction();
+        $ph   = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $_bm_pdo->prepare("UPDATE is_list SET billing_month_override = ? WHERE IS_id IN ($ph)");
+        $stmt->execute(array_merge([$bm === '' ? null : $bm], $ids));
+        $changed = $stmt->rowCount();
+        $_bm_pdo->commit();
+
+        echo json_encode([
+            'success'       => true,
+            'billing_month' => $bm,
+            'target'        => count($ids),
+            'changed'       => $changed,
+            'message'       => $bm === ''
+                ? ('已清除 ' . count($ids) . ' 筆的手動帳款月份，恢復依出貨日期自動計算')
+                : ('已將 ' . count($ids) . ' 筆出貨資料的帳款月份改為 ' . $bm)
+        ]);
+    } catch (Exception $e) {
+        if ($_bm_pdo instanceof PDO && $_bm_pdo->inTransaction()) { $_bm_pdo->rollBack(); }
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // ── AJAX: 取得本筆出貨單資訊 + 同料號 BOM 列表 ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_bom_list_for_is') {
     header('Content-Type: application/json');
@@ -1714,6 +1764,8 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
         }
 
         /* ── 批次面板 ── */
+        .batch-sep { display:inline-block; width:1px; height:18px; background:#d9c6ab; margin:0 8px; vertical-align:middle; }
+        .batch-err { color:#DD5138; margin-left:6px; font-size:12px; }
         #batch-update-panel {
             background:#e8f4f8; border-left:4px solid #3498db;
             border-radius:0 6px 6px 0; padding:8px 12px; margin-bottom:8px;
@@ -2160,6 +2212,14 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                                         <?php endforeach; ?>
                                     </select>
                                     <button type="button" class="btn btn-primary btn-sm" onclick="submitMainBatchUpdate()">執行</button>
+                                    <?php if ($perm_can_update): ?>
+                                    <span class="batch-sep"></span>
+                                    <label style="margin:0;">改帳款月份為：</label>
+                                    <input type="month" class="form-control input-sm" id="main_batch_bm_value" style="max-width:150px; display:inline-block;" data-eg-skip>
+                                    <button type="button" class="btn btn-primary btn-sm" onclick="submitBatchBillingMonth(false)"><i class="fa fa-calendar-check-o"></i> 執行</button>
+                                    <button type="button" class="btn btn-warning btn-sm" onclick="submitBatchBillingMonth(true)" title="清除手動設定，恢復依出貨日期自動計算"><i class="fa fa-undo"></i> 恢復自動</button>
+                                    <span id="main_batch_bm_err" class="batch-err" style="display:none;"></span>
+                                    <?php endif; ?>
                                     <?php if ($perm_can_delete): ?>
                                     <button type="button" class="btn btn-danger btn-sm" onclick="submitBatchDelete()"><i class="fa fa-trash"></i> 刪除</button>
                                     <?php endif; ?>
@@ -2387,6 +2447,36 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
                     <button type="button" class="btn btn-primary" onclick="saveIrBillingMonth()">儲存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 出貨帳款月份編輯 Modal（單筆） -->
+    <div class="modal fade" id="isBillingMonthModal" tabindex="-1" role="dialog">
+        <div class="modal-dialog modal-sm" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+                    <h4 class="modal-title">修改出貨帳款月份</h4>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="is_bm_is_id">
+                    <div id="is_bm_info" style="font-size:12px; color:#7a6a55; margin-bottom:10px; line-height:1.6;"></div>
+                    <div class="form-group">
+                        <label>帳款月份 <small class="text-muted">（留空則依出貨日期自動計算）</small></label>
+                        <div class="input-group">
+                            <input type="month" class="form-control" id="is_bm_value" data-eg-skip>
+                            <span class="input-group-btn">
+                                <button type="button" class="btn btn-default" onclick="$('#is_bm_value').val('').trigger('change')" title="清除（恢復自動計算）"><i class="fa fa-times"></i></button>
+                            </span>
+                        </div>
+                        <span id="is_bm_err" class="batch-err" style="display:none; margin-left:0;"></span>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="saveIsBillingMonth()">儲存</button>
                 </div>
             </div>
         </div>
@@ -2776,17 +2866,24 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                 var qty = parseFloat(row.Qty) || 0, price = parseFloat(row.Unit_price) || 0;
                 var amt = qty * price;
 
-                // 有手動覆蓋的資料 → 只計入「已調整」按鈕，不建立月份卡片
-                if (row.billing_month_override && row.billing_month_override !== '') {
-                    ovCount++;
-                    if (price > 0) ovAmt += amt;
-                    return;
-                }
+                // 有手動覆蓋的資料 → 不建立月份卡片（筆數統一在下方由 shippingData 算）
+                if (row.billing_month_override && row.billing_month_override !== '') return;
 
                 // 未調整的資料 → 依自然帳款月份分組到月份卡片
                 if (!bmStats[bm]) bmStats[bm] = { amount: 0, count: 0 };
                 bmStats[bm].amount += amt;
                 bmStats[bm].count++;
+            });
+
+            // 「已調整」筆數一律以本次載入的全部資料計算，不能用傳進來的 data：
+            // 平常檢視時 override 列被 ext.search 濾掉了，用 data 算會恆為 0 →
+            // 按鈕跟著隱藏，使用者就再也找不到自己剛調整的資料（改前的既有問題）。
+            (Array.isArray(shippingData) ? shippingData : []).forEach(function(row) {
+                if (row.is_count == 0) return;
+                if (!row.billing_month_override || row.billing_month_override === '') return;
+                var price = parseFloat(row.Unit_price) || 0;
+                ovCount++;
+                if (price > 0) ovAmt += (parseFloat(row.Qty) || 0) * price;
             });
 
             // 更新「已調整」按鈕
@@ -2888,6 +2985,18 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             if (m.length < 2) m = '0'+m;
             if (dy.length < 2) dy = '0'+dy;
             return [d.getFullYear(), m, dy].join('-');
+        }
+
+        // 由出貨日期推算「自然」帳款月份 YYYY-MM（與後端 compute_billing_month_global 同規則）
+        function bmFromDate(dateStr) {
+            if (!dateStr) return '';
+            var p = String(dateStr).substring(0, 10).split('-');
+            var y = parseInt(p[0], 10), m = parseInt(p[1], 10), d = parseInt(p[2], 10);
+            if (!y || !m || !d) return '';
+            if (globalCutoffDay > 0 && d > globalCutoffDay) {
+                if (m === 12) { y++; m = 1; } else { m++; }
+            }
+            return y + '-' + (m < 10 ? '0' + m : m);
         }
 
         // 快速日期設定（依帳款截止日計算帳款月份）
@@ -3367,9 +3476,13 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                         render: function(data, type, row) {
                             if (type !== 'display') return data || '';
                             var hasOverride = row.billing_month_override && row.billing_month_override !== '';
-                            return hasOverride
+                            var inner = hasOverride
                                 ? '<span style="color:#8e44ad;font-weight:600;" title="手動設定">' + (data||'') + ' <i class="fa fa-pencil" style="font-size:9px;"></i></span>'
                                 : (data || '');
+                            if (!canUpdate) return inner;
+                            return '<a href="javascript:void(0);" class="btn-bm-edit" title="點擊修改此筆帳款月份"'
+                                 + ' style="color:inherit; text-decoration:none; border-bottom:1px dashed #c9b79f;">'
+                                 + (inner || '<span style="color:#a08d76;">—</span>') + '</a>';
                         }
                     },
                     { data: 'Order_date' },
@@ -3491,6 +3604,13 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                 var tr = $(this).closest('tr');
                 var row = table.row(tr).data();
                 openEditModal(row);
+            });
+
+            // 帳款月份欄點擊 → 開啟單筆帳款月份修改 Modal
+            $('#shippingTable tbody').on('click', '.btn-bm-edit', function() {
+                var tr  = $(this).closest('tr');
+                var row = table.row(tr).data();
+                if (row) openIsBillingMonthModal(row);
             });
 
             // 出貨單號點擊 → 開啟 BOM Modal
@@ -4726,6 +4846,108 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             );
         }
 
+        // ── 出貨帳款月份修改（單筆／批次共用同一支後端，寫入 is_list.billing_month_override）──
+
+        // 前端驗證（後端 batch_update_billing_month 會用同一套規則再擋一次）
+        function bmValidate(bm) {
+            if (bm === '') return '';
+            if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(bm)) return '帳款月份格式錯誤，應為 YYYY-MM';
+            var y = parseInt(bm.substring(0, 4), 10), maxY = new Date().getFullYear() + 5;
+            if (y < 2000 || y > maxY) return '帳款月份年份需介於 2000 ~ ' + maxY;
+            return '';
+        }
+
+        function bmShowErr($input, $err, msg) {
+            if (msg) { $err.text(msg).show(); $input.css('border-color', '#DD5138'); }
+            else { $err.hide().text(''); $input.css('border-color', ''); }
+        }
+
+        // ids：IS_id 陣列；bm：'YYYY-MM'，傳空字串＝清除手動設定恢復自動計算
+        function applyBillingMonth(ids, bm, done) {
+            // ids 以 JSON 字串送出（避免筆數多時被 PHP max_input_vars 預設 1000 靜默截斷）
+            $.post('', { action: 'batch_update_billing_month', ids: JSON.stringify(ids), billing_month: bm }, function(res) {
+                var d;
+                try { d = (typeof res === 'object') ? res : JSON.parse(res); }
+                catch (e) { showToast('修改失敗：回應格式錯誤', 'danger'); return; }
+                if (!d.success) { showToast('修改失敗：' + (d.message || '未知錯誤'), 'danger'); return; }
+
+                // 同步前端資料（shippingData 與 DataTable 是同一批物件參考）
+                var idSet = {};
+                ids.forEach(function(id) { idSet[String(id)] = true; });
+                var table = $('#shippingTable').DataTable();
+                table.rows().every(function() {
+                    var r = this.data();
+                    if (idSet[String(r.IS_id)]) {
+                        r.billing_month_override = bm || '';
+                        r.billing_month = bm || bmFromDate(r.Order_date);
+                        this.data(r).invalidate();
+                    }
+                });
+                table.draw(false); // draw 會連帶重算統計與帳款月份概覽卡片
+
+                var tip = bm ? '（已調整的資料改由上方「已調整」按鈕檢視）' : '';
+                showToast((d.message || '修改成功') + tip, 'success');
+                if (typeof done === 'function') done(d);
+            }).fail(function() {
+                showToast('修改失敗：連線異常，請重新整理後再試', 'danger');
+            });
+        }
+
+        // 單筆：帳款月份欄點擊後開窗
+        function openIsBillingMonthModal(row) {
+            $('#is_bm_is_id').val(row.IS_id);
+            $('#is_bm_value').val(row.billing_month_override || '');
+            bmShowErr($('#is_bm_value'), $('#is_bm_err'), '');
+            var safeNo = $('<span>').text(row.IS_number || '').html();
+            var safeCli = $('<span>').text(row.Client_name || '').html();
+            $('#is_bm_info').html(
+                '出貨單號 <b>' + safeNo + '</b>　' + safeCli + '<br>' +
+                '出貨日期 ' + (row.Order_date || '') + '　自動計算為 <b>' + bmFromDate(row.Order_date) + '</b>'
+            );
+            $('#isBillingMonthModal').modal('show');
+        }
+
+        function saveIsBillingMonth() {
+            if (!canUpdate) { alert('您沒有修改權限'); return; }
+            var id = $('#is_bm_is_id').val();
+            var bm = ($('#is_bm_value').val() || '').trim();
+            var err = bmValidate(bm);
+            if (err) { bmShowErr($('#is_bm_value'), $('#is_bm_err'), err); return; }
+            bmShowErr($('#is_bm_value'), $('#is_bm_err'), '');
+            applyBillingMonth([id], bm, function() { $('#isBillingMonthModal').modal('hide'); });
+        }
+
+        // 批次：改為指定月份（isClear=true 則清除手動設定）
+        function submitBatchBillingMonth(isClear) {
+            if (!canUpdate) { alert('您沒有修改權限'); return; }
+            var ids = Array.from(selectedISIds);
+            if (ids.length === 0) { showToast('請先勾選要修改的出貨資料', 'danger'); return; }
+
+            var $inp = $('#main_batch_bm_value'), $err = $('#main_batch_bm_err');
+            var bm = isClear ? '' : (($inp.val() || '').trim());
+            if (!isClear) {
+                if (bm === '') { bmShowErr($inp, $err, '請先選擇帳款月份'); return; }
+                var e = bmValidate(bm);
+                if (e) { bmShowErr($inp, $err, e); return; }
+            }
+            bmShowErr($inp, $err, '');
+
+            var msg = isClear
+                ? '確定要清除選取的 ' + ids.length + ' 筆資料的手動帳款月份，恢復依出貨日期自動計算嗎？'
+                : '確定要將選取的 ' + ids.length + ' 筆資料的帳款月份改為「' + bm + '」嗎？';
+            if (!confirm(msg)) return;
+
+            applyBillingMonth(ids, bm, function() { clearSelection(); });
+        }
+
+        // 即時驗證（輸入當下就顯示原因，不等按下執行）
+        $(document).on('change input', '#main_batch_bm_value', function() {
+            bmShowErr($(this), $('#main_batch_bm_err'), bmValidate(($(this).val() || '').trim()));
+        });
+        $(document).on('change input', '#is_bm_value', function() {
+            bmShowErr($(this), $('#is_bm_err'), bmValidate(($(this).val() || '').trim()));
+        });
+
         // --- 出貨性質管理相關 JS ---
         function openSaleTypeModal() {
             loadSaleTypes();
@@ -4906,6 +5128,13 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             if (selectedISIds.size > 0) {
                 $('#batch-update-panel').slideDown();
                 $('#selected-count').text(selectedISIds.size);
+                // 預帶目前檢視中的帳款月份（使用者仍可自行改）
+                var $bmInp = $('#main_batch_bm_value');
+                if ($bmInp.length && !$bmInp.val()) {
+                    var cur = currentBmFilter;
+                    if (!cur) { var c = currentBillingYM(); cur = c.y + '-' + (c.m + 1 < 10 ? '0' : '') + (c.m + 1); }
+                    $bmInp.val(cur);
+                }
             } else {
                 $('#batch-update-panel').slideUp();
                 $('#check-all').prop('checked', false);
