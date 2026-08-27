@@ -923,7 +923,12 @@ if ($reply_id != "") {
                                         </tr>
                                         <tr>
                                             <td style="vertical-align:middle;">料號</td>
-                                            <td><input name="dId" type="text" class="form-control input-sm" readonly></td>
+                                            <td>
+                                                <div style="display:flex;gap:6px;align-items:center;">
+                                                    <input name="dId" type="text" class="form-control input-sm" style="width:66%;" readonly>
+                                                    <button type="button" id="btn-custom-qrcode" class="btn btn-default btn-sm" style="display:none;padding:1px 8px;" title="顯示QR Code"><i class="fa fa-qrcode" style="font-size:1.2em;"></i></button>
+                                                </div>
+                                            </td>
                                         </tr>
                                         <tr>
                                             <td style="vertical-align:middle;">製程</td>
@@ -2183,7 +2188,7 @@ if ($reply_id != "") {
 
                     // QR code and BOM/button functionality
                     var qrCodeButtonHtml = `
-            <button type="button" class="btn btn-xs btn-default qr-code-btn-tooltip" style="margin-right: 3px; padding: 1px 5px; display: inline-flex; align-items: center; justify-content: center;" data-toggle="modal" data-target="#myModal_qrcode_${he(item.bom_ing_fid)}" title="顯示QR Code">
+            <button type="button" class="btn btn-xs btn-default qr-code-btn-tooltip" style="margin-right: 3px; padding: 1px 5px; display: inline-flex; align-items: center; justify-content: center;" onclick="openQCModal('qrcode','${he(item.bom_ing_fid)}')" title="顯示QR Code">
                 <i class="fa fa-qrcode" style="font-size: 1.2em;"></i>
             </button>`;
                     var bomHtml = `
@@ -4125,6 +4130,7 @@ if ($reply_id != "") {
                 $modal.find('#input-bom-query').val('');
                 $modal.find('[name=clientName], [name=dId], [name=sqty], [name=ps]').val('');
                 $modal.find('#select-bom-ing').html('<option value="">請先更新BOM</option>');
+                $('#btn-custom-qrcode').hide();
                 customBomData = null; // 清除暫存資料
             });
 
@@ -4182,15 +4188,52 @@ if ($reply_id != "") {
                         });
                         // 顯示操作列
                         $modal.find('.custom-modal-options').show();
+                        $sel.trigger('change');
                     } else {
                         $sel.append('<option value="">此BOM無製程資料</option>');
                         $modal.find('.custom-modal-options').hide();
+                        $sel.trigger('change');
                     }
                 }).fail(function() {
                     $btn.prop('disabled', false).text('更新');
                     customBomData = null;
                     alert('伺服器錯誤，無法取得BOM資料。');
                 });
+            });
+
+            // 製程有選取才顯示 QR Code 按鈕
+            $(document).on('change', '#select-bom-ing', function() {
+                $('#btn-custom-qrcode').toggle(!!$(this).val());
+            });
+
+            // 新增報工 Modal 的 QR Code 按鈕（與列表上的 QR Code 同功能）
+            $(document).on('click', '#btn-custom-qrcode', function() {
+                var selectedFid = $('#select-bom-ing').val();
+                if (!selectedFid) { alert('請先選擇製程'); return; }
+
+                var existing = (window.allRawData || []).find(function(d) {
+                    return String(d.bom_ing_fid) === String(selectedFid);
+                });
+                if (existing) {
+                    $('#myModal_reply_custom').modal('hide');
+                    openQCModal('qrcode', selectedFid);
+                    return;
+                }
+                if (!customBomData || !customBomData.success) {
+                    alert('無法建立彈窗，請先點擊「更新」');
+                    return;
+                }
+                var selectedProcess = customBomData.processes.find(function(p) {
+                    return String(p.bom_ing_fid) === String(selectedFid);
+                });
+                if (!selectedProcess) { alert('找不到所選製程的資料'); return; }
+
+                var targetModalId = '#myModal_qrcode_' + selectedFid;
+                if (!$(targetModalId).length) {
+                    $('#modals-container').append(generateModalsForItem(selectedProcess));
+                }
+                $('#myModal_reply_custom').modal('hide');
+                $(targetModalId).modal('show');
             });
 
             // 在 myModal_reply_custom 中，異常/允收 按鈕觸發 lazy modal
