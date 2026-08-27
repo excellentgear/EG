@@ -626,6 +626,7 @@ $_quotDepts = array_keys($_deptSet);
                                     <?php
                                     $_navItems = [
                                         'perm-matrix-section'    => '人員權限設定',
+                                        'person-view-section'    => '★人員權限總覽',
                                         'dp-role-section'        => '★部門×職稱角色',
                                         'quot-role-section'      => '報價單',
                                         'notice-role-section'    => '公告/通知',
@@ -1020,6 +1021,45 @@ $_quotDepts = array_keys($_deptSet);
                         </div>
                     </div>
 
+                    <!-- ══ 人員權限總覽（依人員查看）══════════════════════════════════ -->
+                    <div class="row" style="margin-top:20px;" id="person-view-section">
+                        <div class="col-md-12">
+                            <div class="x_panel">
+                                <div class="x_title">
+                                    <h2><i class="fa fa-user-circle-o" style="color:#B5762A;margin-right:7px;"></i>人員權限總覽 <small>選一個人，看他的權限從哪裡來</small></h2>
+                                    <ul class="nav navbar-right panel_toolbox"><li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li></ul>
+                                    <div class="clearfix"></div>
+                                </div>
+                                <div class="x_content">
+                                    <div style="font-size:12px;color:#8a5a2b;background:#FFF9F0;border:1px solid #F0E2CC;border-radius:3px;padding:8px 10px;margin-bottom:12px;line-height:1.7;">
+                                        <i class="fa fa-info-circle"></i>
+                                        上面的區塊是「一個模組一張表」，要看<strong>某一個人到底有哪些權限、又是哪裡來的</strong>就得一張張翻。這裡反過來以人為單位查。<br>
+                                        ・一個人可能有<strong>多個「部門＋職稱」身分</strong>（主要職務＋兼任），每個身分各自帶到不同的角色，所以下面是依身分分開列。<br>
+                                        ・<strong>代理是掛在職稱身分上的</strong>：請假設定的代理人若走「完整承接權限」的假別，會在生效期間借到被代理職稱的角色，這裡也一併顯示。<br>
+                                        ・「生效權限」欄的<span class="label label-primary" style="font-size:11px;padding:2px 5px;">個人</span>表示該模組有個人指派、覆蓋掉部門職稱設定；<span class="label label-success" style="font-size:11px;padding:2px 5px;">部門職稱</span>表示由編制自動帶入。
+                                    </div>
+
+                                    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+                                        <label style="margin:0;font-weight:600;font-size:13px;">選擇人員：</label>
+                                        <select id="pv-user" class="form-control input-sm" style="width:280px;" onchange="pvLoad()" data-eg-filter="輸入姓名或帳號篩選…">
+                                            <option value="">— 請選擇 —</option>
+                                            <?php foreach ($admins as $_a):
+                                                $_dp = [];
+                                                foreach ($_a['roles'] as $_r) { if (!empty($_r['department_name'])) $_dp[] = $_r['department_name'].' '.$_r['position_title']; }
+                                            ?>
+                                            <option value="<?= (int)$_a['id'] ?>"><?= htmlspecialchars($_a['user_cname'].'（'.$_a['user_uname'].'）'.($_dp ? ' － '.implode('／', $_dp) : '')) ?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <span id="pv-loading" style="display:none;font-size:12px;color:#888;"><i class="fa fa-spinner fa-spin"></i> 載入中…</span>
+                                    </div>
+
+                                    <div id="pv-result" style="display:none;"></div>
+                                    <div id="pv-empty" class="text-muted" style="font-size:12px;padding:10px;">尚未選擇人員。</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- ══ ／人員權限總覽 ══ -->
                     <!-- ══ 部門 × 職稱 角色設定 ══════════════════════════════════════ -->
                     <div class="row" style="margin-top:20px;" id="dp-role-section">
                         <div class="col-md-12">
@@ -2064,6 +2104,114 @@ foreach ($_dpList as $_row):
                 qnUpdate();
             }
         });
+
+        // ══ 人員權限總覽（依人員查看）══
+        function pvEsc(t) { return $('<div>').text(t == null ? '' : t).html(); }
+
+        function pvLoad() {
+            var uid = $('#pv-user').val();
+            if (!uid) { $('#pv-result').hide(); $('#pv-empty').show(); return; }
+            $('#pv-loading').show(); $('#pv-empty').hide();
+            $.get(ROLES_API, { action:'get_user_profile', user_id:uid })
+            .done(function(res) {
+                if (!res || !res.success) { alert('載入失敗：' + ((res && res.message) || '未知錯誤')); return; }
+                $('#pv-result').html(pvRender(res)).show();
+            })
+            .fail(function(xhr) { alert('連線失敗（' + xhr.status + '）：' + xhr.responseText.substring(0, 200)); })
+            .always(function() { $('#pv-loading').hide(); });
+        }
+
+        function pvRender(d) {
+            var h = '';
+            // 標頭
+            h += '<div style="margin-bottom:10px;font-size:14px;">';
+            h += '<strong style="font-size:16px;">' + pvEsc(d.user.user_cname) + '</strong> ';
+            h += '<span style="color:#888;">' + pvEsc(d.user.user_uname) + '</span> ';
+            h += d.user.active == 1
+                 ? '<span class="label label-success" style="font-size:11px;">在職</span>'
+                 : '<span class="label label-danger" style="font-size:11px;">非在職（一律無任何權限）</span>';
+            h += ' <span class="text-muted" style="font-size:12px;margin-left:8px;">目前生效功能碼 ' + (d.features || []).length + ' 個</span>';
+            h += '</div>';
+
+            // 代理狀態
+            if ((d.delegate_in && d.delegate_in.length) || (d.delegate_out && d.delegate_out.length)) {
+                h += '<div style="background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:8px 10px;margin-bottom:10px;font-size:12px;line-height:1.7;">';
+                h += '<strong><i class="fa fa-exchange"></i> 目前的代理狀態</strong><br>';
+                (d.delegate_in || []).forEach(function(x) {
+                    h += '・代理 <strong>' + pvEsc(x.employee_name) + '</strong> 的「' + pvEsc(x.scope_label || ((x.scope_department||'') + ' ' + (x.scope_position||'')) || '全部職務') + '」';
+                    h += '（' + pvEsc(x.type_name) + '　' + pvEsc(String(x.start_datetime).substring(0,10)) + ' ~ ' + pvEsc(String(x.end_datetime).substring(0,10)) + '）';
+                    h += x.full_inherit_permission == 1
+                         ? ' <span class="label label-warning" style="font-size:10px;">完整承接權限：期間內借用該職稱的角色</span>'
+                         : ' <span class="label label-default" style="font-size:10px;">僅代理簽核，不承接頁面權限</span>';
+                    h += '<br>';
+                });
+                (d.delegate_out || []).forEach(function(x) {
+                    h += '・本人請假中，由 <strong>' + pvEsc(x.agent_name) + '</strong> 代理「' + pvEsc(x.scope_label || ((x.scope_department||'') + ' ' + (x.scope_position||'')) || '全部職務') + '」';
+                    h += '（' + pvEsc(x.type_name) + '　' + pvEsc(String(x.start_datetime).substring(0,10)) + ' ~ ' + pvEsc(String(x.end_datetime).substring(0,10)) + '）<br>';
+                });
+                h += '</div>';
+            }
+
+            // 身分（部門＋職稱）
+            h += '<div style="font-weight:600;font-size:13px;margin:12px 0 6px;"><i class="fa fa-sitemap"></i> 職務身分與各身分帶到的角色</div>';
+            if (!d.identities || !d.identities.length) {
+                h += '<div class="text-muted" style="font-size:12px;">（未掛任何部門職稱）</div>';
+            } else {
+                h += '<table class="table table-bordered table-condensed" style="font-size:12px;"><thead style="background:#f8f9fa;">';
+                h += '<tr><th style="width:130px;">部門</th><th style="width:110px;">職稱</th><th style="width:70px;">身分</th><th>此身分帶到的角色（來自部門×職稱設定）</th></tr></thead><tbody>';
+                d.identities.forEach(function(i) {
+                    h += '<tr><td>' + pvEsc(i.department_name) + '</td><td>' + pvEsc(i.position_name) + '</td>';
+                    h += '<td>' + (i.is_main == 1 ? '主要' : '<span style="color:#e67e22;">兼任</span>') + '</td><td>';
+                    if (!i.roles || !i.roles.length) {
+                        h += '<span class="text-muted">（此編制尚未設定角色）</span>';
+                    } else {
+                        i.roles.forEach(function(r) {
+                            h += '<span class="label label-success" style="margin-right:4px;padding:3px 7px;display:inline-block;">';
+                            h += '<span style="opacity:.75;font-size:11px;">' + pvEsc(r.module) + '</span> ' + pvEsc(r.role_name);
+                            if (r.scope === '全部門通用') h += ' <span style="opacity:.7;font-size:10px;">(通用)</span>';
+                            h += '</span>';
+                        });
+                    }
+                    h += '</td></tr>';
+                });
+                h += '</tbody></table>';
+            }
+
+            // 逐模組生效結果
+            h += '<div style="font-weight:600;font-size:13px;margin:14px 0 6px;"><i class="fa fa-check-square-o"></i> 逐模組生效權限與來源</div>';
+            if (!d.effective || !d.effective.length) {
+                h += '<div class="text-muted" style="font-size:12px;">（目前沒有任何模組角色）</div>';
+            } else {
+                h += '<table class="table table-bordered table-condensed" style="font-size:12px;"><thead style="background:#f8f9fa;">';
+                h += '<tr><th style="width:160px;">模組</th><th style="width:90px;">來源</th><th>生效角色</th></tr></thead><tbody>';
+                d.effective.forEach(function(e) {
+                    h += '<tr><td><code>' + pvEsc(e.module) + '</code></td>';
+                    h += '<td>' + (e.source === 'personal'
+                          ? '<span class="label label-primary" style="font-size:11px;">個人</span>'
+                          : '<span class="label label-success" style="font-size:11px;">部門職稱</span>') + '</td>';
+                    h += '<td>' + e.roles.map(pvEsc).join('、');
+                    if (e.shadowed && e.shadowed.length) {
+                        h += '<div style="font-size:11px;color:#999;margin-top:2px;"><i class="fa fa-level-down"></i> 因個人指派而不套用：'
+                             + e.shadowed.map(pvEsc).join('、') + '</div>';
+                    }
+                    h += '</td></tr>';
+                });
+                h += '</tbody></table>';
+            }
+
+            // 個人指派原始清單
+            h += '<div style="font-weight:600;font-size:13px;margin:14px 0 6px;"><i class="fa fa-user"></i> 個人指派的角色（在上面各模組區塊設定）</div>';
+            if (!d.personal || !d.personal.length) {
+                h += '<div class="text-muted" style="font-size:12px;">（無，完全依部門×職稱設定）</div>';
+            } else {
+                d.personal.forEach(function(r) {
+                    h += '<span class="label ' + (r.is_system == 1 ? 'label-danger' : 'label-primary') + '" style="margin:0 4px 4px 0;padding:3px 7px;display:inline-block;">';
+                    if (r.module) h += '<span style="opacity:.75;font-size:11px;">' + pvEsc(r.module) + '</span> ';
+                    h += pvEsc(r.role_name) + '</span>';
+                });
+            }
+            return h;
+        }
 
         // ══ 部門 × 職稱 角色設定 ══
         // 設定一次，該編制底下的在職人員自動具備（個人指派在同一個模組會覆蓋這裡）

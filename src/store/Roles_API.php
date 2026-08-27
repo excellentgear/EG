@@ -557,6 +557,127 @@ switch ($action) {
         break;
     }
 
+    // ──────────────────────────────────────────────────────────────────────
+    // 單一人員的權限總覽（人員導向檢視）
+    // GET ?action=get_user_profile&user_id=N
+    // 回傳這個人的：①每個「部門＋職稱」身分各自帶到的角色 ②個人指派的角色
+    //              ③逐模組的最終生效結果與來源 ④代理狀態（他代理誰／誰代理他）
+    // 為什麼要一次帶這些：一個人可能同時有主要職務與兼任職務，而代理是掛在「某個職稱身分」上的，
+    // 只看「這個人有哪些角色」看不出權限是哪來的、也看不出承接中的代理。
+    // ──────────────────────────────────────────────────────────────────────
+    case 'get_user_profile': {
+        $uid = intval($_GET['user_id'] ?? $_POST['user_id'] ?? 0);
+        if (!$uid) { $response = ['success'=>false,'message'=>'缺少 user_id']; break; }
+        try {
+            require_once __DIR__ . '/../common/role_features_helper.php';
+
+            $st = $pdo->prepare("SELECT id, user_cname, user_uname, state FROM `user` WHERE id=?");
+            $st->execute([$uid]);
+            $u = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$u) { $response = ['success'=>false,'message'=>'找不到此人員']; break; }
+            $u['active'] = eg_user_is_active($pdo, $uid) ? 1 : 0;
+
+            // ① 身分（部門＋職稱，含兼任）與各身分帶到的角色
+            $st = $pdo->prepare("
+                SELECT m.department_id, d.name AS department_name, m.position_id, p.name AS position_name, m.is_main
+                FROM user_department_position_map m
+                JOIN department d ON d.id = m.department_id
+                JOIN position  p ON p.id = m.position_id
+                WHERE m.user_id = ?
+                ORDER BY m.is_main DESC, d.sort_order, p.sort_order");
+            $st->execute([$uid]);
+            $identities = $st->fetchAll(PDO::FETCH_ASSOC);
+
+            $prq = $pdo->prepare("
+                SELECT r.role_id, r.role_name, r.module, pr.department_id
+                FROM position_roles pr
+                JOIN roles r ON r.role_id = pr.role_id
+                WHERE pr.position_id = ? AND (pr.department_id = 0 OR pr.department_id = ?)
+                ORDER BY r.module, r.role_id");
+            foreach ($identities as &$_id) {
+                $prq->execute([$_id['position_id'], $_id['department_id']]);
+                $_id['roles'] = array_map(function($r) {
+                    $r['scope'] = ((int)$r['department_id'] === 0) ? '全部門通用' : '此部門';
+                    unset($r['department_id']);
+                    return $r;
+                }, $prq->fetchAll(PDO::FETCH_ASSOC));
+            }
+            unset($_id);
+
+            // ② 個人指派
+            $st = $pdo->prepare("
+                SELECT r.role_id, r.role_name, r.module, r.is_system
+                FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
+                WHERE ur.user_id = ? ORDER BY r.is_system DESC, r.module, r.role_id");
+            $st->execute([$uid]);
+            $personal = $st->fetchAll(PDO::FETCH_ASSOC);
+
+            // ③ 逐模組最終生效（個人優先，逐模組判斷）
+            $byModule = [];
+            foreach ($personal as $r) {
+                if ((int)$r['is_system'] === 1 || $r['module'] === null || $r['module'] === '') continue;
+                $byModule[$r['module']]['personal'][] = $r['role_name'];
+            }
+            foreach ($identities as $_id) {
+                foreach ($_id['roles'] as $r) {
+                    $label = $r['role_name'] . '（' . $_id['department_name'] . ' ' . $_id['position_name'] . '）';
+                    $byModule[$r['module']]['position'][] = $label;
+                }
+            }
+            $effective = [];
+            foreach ($byModule as $m => $srcs) {
+                $use = !empty($srcs['personal']) ? 'personal' : (!empty($srcs['position']) ? 'position' : null);
+                if (!$use) continue;
+                $effective[] = [
+                    'module'   => $m,
+                    'source'   => $use,
+                    'roles'    => array_values(array_unique($srcs[$use])),
+                    'shadowed' => ($use === 'personal' && !empty($srcs['position']))
+                                  ? array_values(array_unique($srcs['position'])) : [],   // 被個人指派蓋掉的部門職稱角色
+                ];
+            }
+            usort($effective, function($a, $b) { return strcmp($a['module'], $b['module']); });
+
+            // ④ 代理：他目前代理誰（承接中）／誰代理他
+            $st = $pdo->prepare("
+                SELECT lr.id, eu.user_cname AS employee_name, ra.scope_label,
+                       d.name AS scope_department, p.name AS scope_position,
+                       lt.leave_name AS type_name, lt.full_inherit_permission,
+                       lr.start_datetime, lr.end_datetime
+                FROM leave_request_agent ra
+                JOIN leave_request lr ON lr.id = ra.leave_request_id
+                JOIN leave_type lt ON lt.id = lr.leave_type_id
+                LEFT JOIN `user` eu ON eu.id = lr.employee_id
+                LEFT JOIN department d ON d.id = ra.scope_department_id
+                LEFT JOIN `position` p ON p.id = ra.scope_position_id
+                WHERE ra.agent_user_id = ? AND lr.status='approved'
+                  AND NOW() BETWEEN lr.start_datetime AND lr.end_datetime");
+            $st->execute([$uid]);
+            $delegateIn = $st->fetchAll(PDO::FETCH_ASSOC);
+
+            $st = $pdo->prepare("
+                SELECT lr.id, au.user_cname AS agent_name, ra.scope_label,
+                       d.name AS scope_department, p.name AS scope_position,
+                       lt.leave_name AS type_name, lt.full_inherit_permission,
+                       lr.start_datetime, lr.end_datetime
+                FROM leave_request_agent ra
+                JOIN leave_request lr ON lr.id = ra.leave_request_id
+                JOIN leave_type lt ON lt.id = lr.leave_type_id
+                LEFT JOIN `user` au ON au.id = ra.agent_user_id
+                LEFT JOIN department d ON d.id = ra.scope_department_id
+                LEFT JOIN `position` p ON p.id = ra.scope_position_id
+                WHERE lr.employee_id = ? AND lr.status='approved'
+                  AND NOW() BETWEEN lr.start_datetime AND lr.end_datetime");
+            $st->execute([$uid]);
+            $delegateOut = $st->fetchAll(PDO::FETCH_ASSOC);
+
+            $response = ['success'=>true, 'user'=>$u, 'identities'=>$identities, 'personal'=>$personal,
+                         'effective'=>$effective, 'delegate_in'=>$delegateIn, 'delegate_out'=>$delegateOut,
+                         'features'=>rf_load_user_features_all($pdo, $uid)];
+        } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
+        break;
+    }
+
     default:
         $response = ['success'=>false,'message'=>"未知的 action: {$action}"];
 }
