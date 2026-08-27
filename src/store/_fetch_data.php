@@ -64,27 +64,55 @@ $baseSql = "
     LEFT JOIN user u_sales_primary ON u_sales_primary.id = cs_primary.user_id
     LEFT JOIN customer_sales cs_deputy ON cs_deputy.customer_id = COALESCE(cl_ds.customer_id, cl.customer_id) AND cs_deputy.is_active = 1 AND cs_deputy.role = 'deputy'
     LEFT JOIN user u_sales_deputy ON u_sales_deputy.id = cs_deputy.user_id
+    -- ⚠「目前製程」的認定必須與 OreadyReply_ForPm_BaseOfTime.php 首次載入的 bi 子查詢完全一致，
+    --    否則 30 秒自動更新後畫面上的製程／廠商／進度／燈號會跟剛載入時不一樣（2026-08-27 修正）。
+    --    兩條規則缺一不可：
+    --    (1) 以「移轉日(outsource_date)最新的那一天」為準，未發單(NULL)的製程不列入比較
+    --        ——舊版用 ROW_NUMBER 把 NULL 排在後面但仍會選中，導致只有客供料(未發包)的 BOM
+    --          首次載入是空白、自動更新後卻冒出「客供料」並讓進度由 0% 跳成 33%。
+    --    (2) 同一天有多個製程時要「全部合併」顯示（GROUP_CONCAT 以 / 分隔），不可只取其中一筆
+    --        ——舊版只取一筆，導致「客供料/齒研」自動更新後被砍成「齒研」。
     LEFT JOIN (
-        SELECT *
-        FROM (
-            SELECT
-                bi2.*,
-                pn2.ProcessName,
-                pn2.process_type_id AS pti,
-                ml2.maker_id AS maker_name,
-                ROW_NUMBER() OVER(PARTITION BY bi2.bom ORDER BY
-                    (bi2.outsource_date IS NULL) ASC,
-                    bi2.outsource_date DESC,
-                    bi2.bom_sn DESC
-                ) AS rn
-            FROM bom_ing bi2
-            LEFT JOIN process_no pn2 ON pn2.ProcessNo = bi2.process_no
-            LEFT JOIN maker_list ml2 ON ml2.maker_id_no = bi2.maker_id_no
-            WHERE bi2.processing_state IN ('Q', 'P', 'ing', 'E') AND bi2.is_schedule_split = 0
-        ) ranked
-        WHERE rn = 1
+        SELECT
+            bi_grouped.bom,
+            GROUP_CONCAT(DISTINCT bi_grouped.bom_ing_id ORDER BY bi_grouped.bom_sn) AS bom_ing_id,
+            GROUP_CONCAT(DISTINCT bi_grouped.bom_sn ORDER BY bi_grouped.bom_sn) AS bom_sn,
+            GROUP_CONCAT(DISTINCT pn2.process_type_id ORDER BY bi_grouped.bom_sn) AS pti,
+            GROUP_CONCAT(DISTINCT pn2.ProcessName ORDER BY bi_grouped.bom_sn SEPARATOR '/') AS ProcessName,
+            GROUP_CONCAT(DISTINCT ml2.maker_id ORDER BY bi_grouped.bom_sn SEPARATOR '/') AS maker_name,
+            GROUP_CONCAT(DISTINCT bi_grouped.process_no ORDER BY bi_grouped.bom_sn) AS process_no,
+            GROUP_CONCAT(DISTINCT bi_grouped.bom_ing_fid ORDER BY bi_grouped.bom_sn) AS bom_ing_fid,
+            GROUP_CONCAT(DISTINCT bi_grouped.ps ORDER BY bi_grouped.bom_sn) AS ps,
+            GROUP_CONCAT(DISTINCT bi_grouped.sqty ORDER BY bi_grouped.bom_sn) AS sqty,
+            GROUP_CONCAT(DISTINCT bi_grouped.QC_check ORDER BY bi_grouped.bom_sn) AS QC_check,
+            GROUP_CONCAT(DISTINCT bi_grouped.QC_ps ORDER BY bi_grouped.bom_sn) AS QC_ps,
+            GROUP_CONCAT(DISTINCT bi_grouped.single_bet_ps ORDER BY bi_grouped.bom_sn) AS single_bet_ps,
+            MAX(bi_grouped.outsource_date)  AS outsource_date,
+            MAX(bi_grouped.return_date)     AS return_date,
+            MAX(bi_grouped.QC_check_date)   AS QC_check_date,
+            MAX(bi_grouped.maker_id_no)     AS maker_id_no,
+            MAX(bi_grouped.Created_At)      AS Created_At,
+            MAX(bi_grouped.qc_completed)    AS qc_completed,
+            MAX(bi_grouped.qc_completed_at) AS qc_completed_at,
+            SUBSTRING_INDEX(GROUP_CONCAT(bi_grouped.processing_state ORDER BY bi_grouped.bom_sn), ',', 1) AS processing_state
+        FROM bom_ing bi_grouped
+        INNER JOIN ( -- 每個 bom 最新的一個「有發單日」的日期
+            SELECT bom, MAX(DATE(outsource_date)) AS max_effective_date
+            FROM bom_ing
+            WHERE processing_state IN ('Q', 'P', 'ing', 'E')
+              AND outsource_date IS NOT NULL
+              AND is_schedule_split = 0
+            GROUP BY bom
+        ) bi_latest ON bi_grouped.bom = bi_latest.bom
+                   AND bi_grouped.outsource_date IS NOT NULL
+                   AND DATE(bi_grouped.outsource_date) = bi_latest.max_effective_date
+        LEFT JOIN process_no pn2 ON pn2.ProcessNo = bi_grouped.process_no
+        LEFT JOIN maker_list ml2 ON ml2.maker_id_no = bi_grouped.maker_id_no
+        WHERE bi_grouped.processing_state IN ('Q', 'P', 'ing', 'E') AND bi_grouped.is_schedule_split = 0
+        GROUP BY bi_grouped.bom
     ) bi ON bi.bom = b.bom
-    LEFT JOIN vw_vw_oreadyreply_forpm vw ON vw.bom_ing_id = bi.bom_ing_fid
+    -- bom_ing_fid 現在可能是「多個製程的清單」，故比照首次載入改用 FIND_IN_SET
+    LEFT JOIN vw_vw_oreadyreply_forpm vw ON FIND_IN_SET(vw.bom_ing_id, bi.bom_ing_fid)
     LEFT JOIN maker_list ml ON bi.maker_id_no = ml.maker_id_no
     LEFT JOIN (
         SELECT d_id, SUM(Open_Qty) AS total_open_qty
@@ -131,6 +159,7 @@ try { // ✅ 建議：使用 try-catch 捕捉所有資料庫操作的錯誤
         COALESCE(cl_ds.customer_id, cl.customer_id, '')   AS d_customer_id,
         bi.process_no,
         bi.bom_ing_fid,
+        bi.ps,
         bi.single_bet_ps        AS bom_bom_ps,
         bi.ProcessName,
         bi.pti,
@@ -692,6 +721,7 @@ if (!empty($current_page_boms)) {
             SELECT bi.bom, COUNT(DISTINCT bi.bom_sn) AS bom_ing_count
             FROM bom_ing bi
             WHERE bi.bom IN ($ph_boms)
+              AND bi.is_schedule_split = 0 -- 與首次載入一致：拆批列不另算一欄，否則刷新後製程欄數會多出來
             GROUP BY bi.bom
         ) AS sub
     ");
