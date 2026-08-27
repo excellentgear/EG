@@ -170,6 +170,17 @@ $roleLabel = ia_role_label($perms);
         .ia-sec > h5 { margin:0 0 8px; font-size:14px; color:#8A5A2B; border-bottom:1px solid #F0E0C4; padding-bottom:5px; }
         .ia-sec.locked { background:#F6F1E7; }
         .ia-sec .lock-note { float:right; font-size:12px; font-weight:normal; color:#a08356; }
+        /* 稽核員／陪檢員可多位：已選的人做成標籤，下方下拉再加人（2026-08-27） */
+        .ia-ppl { display:flex; flex-wrap:wrap; gap:3px; }
+        .ia-ppl .ppl-chip { display:inline-flex; align-items:center; gap:4px; max-width:100%;
+            background:#F7E0BD; border:1px solid #E0BE86; border-radius:10px;
+            padding:1px 5px; font-size:12px; color:#6B4423; line-height:1.5; }
+        .ia-ppl .ppl-chip .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .ia-ppl .ppl-chip .x { color:#C4442D; cursor:pointer; font-weight:bold; }
+        .ia-ppl .ppl-chip.bad { background:#FBEAE4; border-color:#DD5138; }
+        .ia-ppl .ppl-add { width:100%; border:1px dashed #D8BE93; border-radius:3px; font-size:12px;
+            color:#8a6d45; background:#FFFDF9; }
+        .ia-ppl .ppl-none { font-size:12px; color:#a08356; }
         .err-msg { color:#C4442D; font-size:12px; display:none; margin-top:2px; }
         .err-msg.on { display:block; }
         input.err, textarea.err, select.err { border-color:#DD5138 !important; background:#FDF1EE !important; }
@@ -379,7 +390,7 @@ $roleLabel = ia_role_label($perms);
         <h4>操作步驟</h4>
         <ul>
             <li><b>①年度計畫（2-GM-06-01）</b>：先按「建立本年度計畫表」，選要納入的受稽單位，再在格狀表點格子排定 ○。存檔後送審、核准。</li>
-            <li><b>②稽核通知單（2-GM-06-02）</b>：新增一張，填通知日期、稽核期間、稽核組長，下方逐列填「稽核起始主過程／受稽單位／稽核員／陪檢員」。
+            <li><b>②稽核通知單（2-GM-06-02）</b>：新增一張，填通知日期、稽核期間、稽核組長，下方逐列填「稽核起始主過程／受稽單位／稽核員／陪檢員」（稽核員與陪檢員都可以指定多位）。
                 稽核件號會依<b>通知日期</b>自動產生（西元年後兩碼+月日+流水，例 241216001）。存檔後可按「事前會議」建立會議紀錄草稿。</li>
             <li><b>③查檢表</b>：三種各自建立，建立時勾選這次要查的項目。現場逐列判定合格／不合格並填所見證據。判「不合格」的列可直接按「開不符合單」。</li>
             <li><b>④不符合通知單（2-GM-06-07）</b>：分四段填，各段只有該角色能填（見下）。系統會通知受稽單位主管，期限前與逾期會自動再提醒。</li>
@@ -404,6 +415,7 @@ $roleLabel = ia_role_label($perms);
             <li><b>要補以前年度的資料</b>：左上角年度下拉本來就含近十年，直接切到那一年再建立即可，不必先有當年的資料。</li>
             <li><b>稽核起始主過程要填什麼</b>：這次稽核從哪一段流程切入，稽核員由這裡開始循序把相關過程查完。紙本備註列了三類可填：<b>主過程</b>（客戶需求檢討→開發→訂單/合約審查→生產→倉儲出貨→客戶回饋）、<b>管理過程</b>（文件/記錄管理、人力資源訓練、不符合管理、資料分析、內部稽核、矯正/預防措施管理、持續改善、管理責任…）、<b>支援過程</b>（採購、供應商管理、IQC/FAI/IPQC/FQC、儀器/量具、機器/治具、生管、型態(鑑別追溯)、特殊特性…）。起點<b>不必等於該單位的日常業務</b>——紙本備註第 1 條要求「跳過自己的直接職務」，讓稽核員從別人的角度切入。<b>同一次稽核裡不可以有兩列填相同的起始主過程</b>，重複會即時標紅、也存不進去。</li>
             <li><b>稽核員與陪檢員怎麼帶</b>：選了範本之後，該列的稽核員／陪檢員下拉會縮到範本指定的部門範圍內、且只列有資格的職務；<b>候選只有一位就自動帶入</b>。系統<b>先決定稽核員</b>，陪檢員的候選會自動排除稽核員本人（同一人不可兩邊都當，即使是不同職務）。<b>陪檢員可以不填</b>。</li>
+            <li><b>稽核員／陪檢員都可以有多位</b>（2026-08-27 起）：已選的人會變成一個個標籤，按標籤上的 <b>×</b> 移除、用下方的「＋加入稽核員／＋加入陪檢員」再加人，<b>每一種最多 <?= IA_CD_PERSON_MAX ?> 位</b>。已經被選走的人（不管在哪一邊）不會再出現在候選裡，所以不會不小心把同一個人排成兩種身分。列印版的稽核員／陪檢員欄會一位一行印出來；自動建會議紀錄時，<b>全部</b>稽核員與陪檢員都會被帶進與會人員。</li>
             <li><b>受審查單位主管是誰，依稽核日期回推當時的職務</b>（不是現在的職務），所以補去年的舊單不會蓋到今年才上任的人。查不到當時的主管時寧可留白，不會亂帶人。</li>
             <li><b>IA 編號依稽核日期產生</b>（IA+西元後兩碼+月日+流水，例 IA24121601），補歷史紙本時編號會跟表單上的日期對得起來。</li>
             <li><b>到期提醒</b>：期限前 N 天（預設 7 天，可在「設定」改）與逾期後，每天最多發一則通知給受稽單位主管與受審核人。提醒是有人用到這個模組時順便檢查，不是背景排程。</li>
@@ -544,7 +556,7 @@ $roleLabel = ia_role_label($perms);
             <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
                 <th style="width:170px;">帶入範本</th>
                 <th style="width:170px;">稽核起始主過程</th><th style="width:140px;">受稽單位</th>
-                <th style="width:140px;">稽核員</th><th style="width:140px;">陪檢員</th>
+                <th style="width:165px;">稽核員</th><th style="width:165px;">陪檢員</th>
                 <th style="width:130px;">受稽日期</th><th style="width:80px;">時間</th>
                 <th style="width:130px;">預定完成改善</th><th style="width:44px;"></th>
             </tr></thead><tbody id="cDeptBody" data-eg-row-add="caseRowAdd" data-eg-row-del="caseRowDel"></tbody></table></div>
@@ -811,7 +823,8 @@ $roleLabel = ia_role_label($perms);
         <div class="ia-hint">預先把「<b>稽核起始主過程 → 受稽單位 → 稽核員／陪檢員從哪些部門挑</b>」設定好，
         填稽核通知單時每一列選一個範本就自動帶入，不必每年重打。<br>
         候選部門是<b>多選</b>，實際人員仍由填表人挑；<b>候選範圍內只有一位有資格時會自動帶入</b>。
-        <b>先決定稽核員</b>，陪檢員的候選會自動把稽核員本人排除掉（同一人不可兩邊都當）。陪檢員可以不填。</div>
+        <b>先決定稽核員</b>，陪檢員的候選會自動把稽核員本人排除掉（同一人不可兩邊都當）。陪檢員可以不填。
+        候選部門只是<b>縮小挑選範圍</b>，實際要派幾位、派誰仍由填表人在通知單上決定（稽核員與陪檢員都可以多位）。</div>
         <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
             <th style="width:150px;">稽核起始主過程</th><th style="width:120px;">受稽單位</th>
             <th>稽核員候選部門</th><th>陪檢員候選部門</th>
@@ -1276,7 +1289,7 @@ function openCase(id){
         $('#cFrom,#cTo,#cMeetDate,#cMeetStart,#cMeetEnd,#cMeetPlace').val('');
         $('#cRemark').val(defaultCaseRemark());
         $('#cLeader').html(postOptions(META.auditors, '', '', '（未指定）'));
-        CASE_ROWS = [{},{},{}];
+        CASE_ROWS = [newCaseRow(),newCaseRow(),newCaseRow()];
         renderCaseRows(); $('#cMeetingSec').hide();
         clearErrs($('#caseMask')); openMask('caseMask');
         return;
@@ -1295,8 +1308,9 @@ function openCase(id){
         CASE_ROWS = (c.depts||[]).map(function(d){ return {
             start_process:d.start_process||'', dept_id:d.dept_id||'',
             tpl_id:'',
-            auditor_id:d.auditor_id||'', auditor_key:postKeyOf(d.auditor_id, d.auditor_dept_id, d.auditor_position_id),
-            escort_id:d.escort_id||'',  escort_key:postKeyOf(d.escort_id, d.escort_dept_id, d.escort_position_id),
+            // 稽核員／陪檢員都可多位，帶的是「職務」清單（uid:deptId:posId）
+            auditor_keys: peopleToKeys(d.auditors), auditor_people: d.auditors||[],
+            escort_keys:  peopleToKeys(d.escorts),  escort_people:  d.escorts||[],
             audited_date:inputDate(d.audited_date), audited_time:d.audited_time||'',
             improve_due:inputDate(d.improve_due)
         }; });
@@ -1313,6 +1327,25 @@ function defaultCaseRemark(){
          + '　管理過程:包含但不限文件/記錄管理、人力資源訓練、不符合管理、資料分析、內部稽核、矯正/預防措施管理、持續改善、管理責任…等。\n'
          + '　支援過程:包含但不限採購、供應商管理、IQC/FAI/IPQC/FQC、儀器/量具、機器/治具、生管、型態(鑑別追溯)、特殊特性…等。';
 }
+/* 稽核員／陪檢員可多位（2026-08-27）：CASE_ROWS 上存的是職務鍵陣列 auditor_keys／escort_keys */
+function newCaseRow(){ return {auditor_keys:[], escort_keys:[]}; }
+function peopleToKeys(list){
+    return (list||[]).map(function(x){ return x.post_key3 || postKeyOf(x.user_id, x.dept_id, x.position_id); })
+                     .filter(function(k){ return k && k.split(':')[0] !== '0'; });
+}
+function rowKeys(r, kind){ return (r && r[kind+'_keys']) || (r[kind+'_keys'] = []); }
+/** 職務鍵 → 顯示用的人（先查候選清單，查不到再退回開檔時帶進來的名單，最後只剩姓名） */
+function postByKey(key, cands, fallback){
+    var hit = null;
+    (cands||[]).forEach(function(p){ if (String(p.post_key3||postKeyOf(p.id,p.dept_id,p.position_id))===String(key)) hit = p; });
+    if (hit) return {name:hit.user_cname, label:(hit.dept_name?hit.dept_name+' ':'')+(hit.position_name?hit.position_name+' ':'')+hit.user_cname
+                     + (+hit.is_main===0?'（兼任）':'')};
+    var uid = String(key).split(':')[0];
+    var f = null;
+    (fallback||[]).forEach(function(x){ if (String(x.user_id)===uid) f = x; });
+    if (f) return {name:f.user_name, label:f.user_name};
+    return {name:'#'+uid, label:'#'+uid};
+}
 function renderCaseRows(){
     var ro = !<?= $perms['canAdmin'] ? 'true' : 'false' ?>;
     var h = '';
@@ -1320,15 +1353,12 @@ function renderCaseRows(){
         // 有選範本就把候選縮到範本指定的部門範圍，沒選就是全部合格職務
         var aList = (r.auditor_cands && r.auditor_cands.length) ? r.auditor_cands : (META.auditors||[]);
         var eList = (r.escort_cands  && r.escort_cands.length)  ? r.escort_cands  : (META.escorts||[]);
-        // 陪檢員不可與稽核員同一人：把稽核員本人的所有職務從候選裡拿掉（優先權在稽核員）
-        var aUid = String(r.auditor_key||'').split(':')[0];
-        if (aUid) eList = eList.filter(function(p){ return String(p.id) !== aUid; });
         h += '<tr data-i="'+i+'">'
           + '<td><select class="cr" data-f="tpl_id" '+(ro?'disabled':'')+' data-eg-filter="輸入主過程或單位篩選…" style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+tplOptions(r.tpl_id)+'</select></td>'
           + '<td><input type="text" class="cr" data-f="start_process" value="'+esc(r.start_process||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 5px;font-size:12px;"></td>'
           + '<td><select class="cr" data-f="dept_id" '+(ro?'disabled':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+deptOptions(r.dept_id,'（請選）')+'</select></td>'
-          + '<td><select class="cr" data-f="auditor_key" '+(ro?'disabled':'')+' data-eg-filter="輸入姓名篩選…" style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+postOptions(aList, r.auditor_key, r.auditor_id, '（未指定）')+'</select></td>'
-          + '<td><select class="cr" data-f="escort_key" '+(ro?'disabled':'')+' data-eg-filter="輸入姓名篩選…" style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+postOptions(eList, r.escort_key, r.escort_id, '（未指定，可不填）')+'</select></td>'
+          + '<td>'+peopleCell(i, r, 'auditor', aList, ro)+'</td>'
+          + '<td>'+peopleCell(i, r, 'escort',  eList, ro)+'</td>'
           + '<td><input type="date" class="cr" data-f="audited_date" value="'+esc(r.audited_date||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
           + '<td><input type="text" class="cr" data-f="audited_time" value="'+esc(r.audited_time||'')+'" placeholder="13:15" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;"></td>'
           + '<td><input type="date" class="cr" data-f="improve_due" value="'+esc(r.improve_due||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
@@ -1338,8 +1368,59 @@ function renderCaseRows(){
     $('#cDeptBody').html(h);
     if (typeof checkDupProcess === 'function') { checkDupProcess(); checkEscortConflict(); }
 }
+/**
+ * 稽核員／陪檢員的欄位：已選的人做成標籤（可按 × 移除），下方下拉再加人。
+ * 兩邊互相排除（同一個人不可同時當稽核員與陪檢員），所以候選清單會即時把對面已選的人拿掉。
+ */
+var IA_PPL_MAX = <?= IA_CD_PERSON_MAX ?>;
+function peopleCell(i, r, kind, cands, ro){
+    var label = (kind==='auditor') ? '稽核員' : '陪檢員';
+    var mine  = rowKeys(r, kind), other = rowKeys(r, kind==='auditor'?'escort':'auditor');
+    var fb    = r[kind+'_people'] || [];
+    var usedU = {};
+    mine.concat(other).forEach(function(k){ usedU[String(k).split(':')[0]] = 1; });
+
+    var h = '<div class="ia-ppl">';
+    mine.forEach(function(k){
+        var p = postByKey(k, cands, fb);
+        h += '<span class="ppl-chip" title="'+esc(p.label)+'"><span class="nm">'+esc(p.name)+'</span>'
+           + (ro?'':'<span class="x" onclick="caseDelPerson('+i+',\''+kind+'\',\''+esc(k)+'\')">×</span>')+'</span>';
+    });
+    if (!mine.length && ro) h += '<span class="ppl-none">'+(kind==='escort'?'（未指定）':'（未指定）')+'</span>';
+    if (!ro && mine.length < IA_PPL_MAX) {
+        var opts = '<option value="">＋加入'+label+(mine.length?'':(kind==='escort'?'（可不填）':''))+'</option>';
+        (cands||[]).forEach(function(p){
+            var key = p.post_key3 || postKeyOf(p.id, p.dept_id, p.position_id);
+            if (usedU[String(p.id)]) return;                 // 已在任一邊選過的人不再出現
+            opts += '<option value="'+esc(key)+'">'
+                  + esc((p.dept_name?p.dept_name+'　':'')+(p.position_name?p.position_name+'　':'')+p.user_cname
+                        + (+p.is_main===0?'（兼任）':'') + (p.leave_note?'（'+p.leave_note+'）':''))
+                  + '</option>';
+        });
+        h += '<select class="ppl-add" data-i="'+i+'" data-kind="'+kind+'" data-eg-filter="輸入姓名篩選…">'+opts+'</select>';
+    }
+    return h + '</div>';
+}
+function caseAddPerson(i, kind, key){
+    if (!key) return;
+    var r = CASE_ROWS[i] || (CASE_ROWS[i] = newCaseRow());
+    var mine = rowKeys(r, kind), other = rowKeys(r, kind==='auditor'?'escort':'auditor');
+    var uid = String(key).split(':')[0];
+    var dup = mine.concat(other).some(function(k){ return String(k).split(':')[0] === uid; });
+    if (dup || mine.length >= IA_PPL_MAX) { renderCaseRows(); return; }
+    mine.push(key);
+    renderCaseRows(); checkEscortConflict();
+}
+function caseDelPerson(i, kind, key){
+    var r = CASE_ROWS[i]; if (!r) return;
+    r[kind+'_keys'] = rowKeys(r, kind).filter(function(k){ return String(k) !== String(key); });
+    renderCaseRows(); checkEscortConflict();
+}
+$(document).on('change', '#cDeptBody .ppl-add', function(){
+    caseAddPerson(+$(this).data('i'), $(this).data('kind'), $(this).val());
+});
 /* 可增列表格鐵則：末列按 ↓ 自動加列、空白末列按 ↑ 自動移除，由 eg_input_rules.js 呼叫這兩支 */
-function caseRowAdd(i){ CASE_ROWS.splice((i==null?CASE_ROWS.length:i+1), 0, {}); renderCaseRows(); }
+function caseRowAdd(i){ CASE_ROWS.splice((i==null?CASE_ROWS.length:i+1), 0, newCaseRow()); renderCaseRows(); }
 function caseRowDel(i){ if (CASE_ROWS.length<=1) return; CASE_ROWS.splice(i,1); renderCaseRows(); }
 $(document).on('change','.cr', function(){
     var i = +$(this).closest('tr').data('i'), f = $(this).data('f');
@@ -1349,11 +1430,16 @@ $(document).on('change','.cr', function(){
 function collectCaseRows(){
     var out = [];
     $('#cDeptBody tr').each(function(){
+        var i = +$(this).data('i'), src = CASE_ROWS[i] || {};
         var r = {};
         $(this).find('.cr').each(function(){ r[$(this).data('f')] = $(this).val(); });
         // 整列全空的不送（末列常常是按 ↓ 加出來還沒填的）
         var any = false;
         $.each(r, function(_k,v){ if (String(v||'').trim()!=='') any = true; });
+        // 稽核員／陪檢員是標籤不是輸入框，直接取 CASE_ROWS 上的職務鍵陣列
+        r.auditor_keys = (src.auditor_keys||[]).slice();
+        r.escort_keys  = (src.escort_keys||[]).slice();
+        if (r.auditor_keys.length || r.escort_keys.length) any = true;
         if (any) out.push(r);
     });
     return out;
@@ -2525,10 +2611,16 @@ function printCase(id){
             ds.forEach(function(d){ h += '<td class="l">'+esc(d.start_process||'')+'</td>'; });
             h += '</tr><tr><th>受稽單位</th>';
             ds.forEach(function(d){ h += '<td>'+esc(d.dept_name||'')+'</td>'; });
+            // 稽核員／陪檢員可多位，一位一行才看得清楚
+            var nameLines = function(list, fallback){
+                var ns = (list||[]).map(function(x){ return String(x.user_name||''); }).filter(function(x){ return x!==''; });
+                if (!ns.length && fallback) ns = String(fallback).split(/[、／\/]/).filter(function(x){ return x!==''; });
+                return ns.map(esc).join('<br>');
+            };
             h += '</tr><tr><th>稽核員</th>';
-            ds.forEach(function(d){ h += '<td>'+esc(d.auditor_name||'')+'</td>'; });
+            ds.forEach(function(d){ h += '<td>'+nameLines(d.auditors, d.auditor_name)+'</td>'; });
             h += '</tr><tr><th>陪檢員</th>';
-            ds.forEach(function(d){ h += '<td>'+esc(d.escort_name||'')+'</td>'; });
+            ds.forEach(function(d){ h += '<td>'+nameLines(d.escorts, d.escort_name)+'</td>'; });
             h += '</tr></table>';
 
             h += '<table class="ia-p" style="margin-top:6px;"><tr><th style="width:90px;">備註</th>'
@@ -3035,6 +3127,7 @@ function applyTpl(rowIdx, tplId){
     var r = CASE_ROWS[rowIdx] || (CASE_ROWS[rowIdx] = {});
     r.tpl_id = tplId || '';
     if (!tplId) { r.auditor_cands = null; r.escort_cands = null; renderCaseRows(); return; }
+    // 換範本＝候選範圍換了，原本選的人若不在新範圍內留著也沒關係（後端仍會驗資格）
     var t = null;
     (META.templates||[]).forEach(function(x){ if (+x.tpl_id === +tplId) t = x; });
     if (!t) return;
@@ -3042,11 +3135,12 @@ function applyTpl(rowIdx, tplId){
     r.dept_id       = t.unit_dept_id;
     r.auditor_cands = t.auditor_cands || [];
     r.escort_cands  = t.escort_cands  || [];
-    // 只有一位候選就自動帶入；先決定稽核員，陪檢員再排除他本人
-    r.auditor_key = t.auditor_auto || '';
-    r.escort_key  = t.escort_auto  || '';
+    // 只有一位候選就自動帶入；先決定稽核員，陪檢員再排除他本人。
+    // 使用者已經自己挑過人的那一列不覆蓋掉（範本只是帶入預設）。
+    if (!rowKeys(r,'auditor').length && t.auditor_auto) r.auditor_keys = [t.auditor_auto];
+    if (!rowKeys(r,'escort').length  && t.escort_auto)  r.escort_keys  = [t.escort_auto];
     renderCaseRows();
-    checkDupProcess();
+    checkDupProcess(); checkEscortConflict();
 }
 /** 同一次稽核裡相同的稽核起始主過程不可重複——輸入當下就標紅，不要等送出（表單三總則③） */
 function checkDupProcess(){
@@ -3065,14 +3159,16 @@ function checkDupProcess(){
     $('#cDupWarn').toggle(n > 0).text(n ? '有 ' + n + ' 列的「稽核起始主過程」重複了，同一次稽核裡不可以重複' : '');
     return n === 0;
 }
-/** 陪檢員不可與稽核員同一人（不同職務也不行，因為是同一個人） */
+/** 陪檢員不可與稽核員同一人（不同職務也不行，因為是同一個人）。
+ *  新資料在挑人時就互相排除挑不到，這裡是防舊資料與程式化塞入（後端 case_save 也會再擋一次）。 */
 function checkEscortConflict(){
     var bad = 0;
     $('#cDeptBody tr').each(function(){
-        var a = String($(this).find('[data-f=auditor_key]').val()||'').split(':')[0];
-        var e = String($(this).find('[data-f=escort_key]').val()||'').split(':')[0];
-        var clash = (a && e && a === e);
-        $(this).find('[data-f=escort_key]').toggleClass('err', clash);
+        var i = +$(this).data('i'), r = CASE_ROWS[i] || {};
+        var au = {}, clash = false;
+        (r.auditor_keys||[]).forEach(function(k){ au[String(k).split(':')[0]] = 1; });
+        (r.escort_keys||[]).forEach(function(k){ if (au[String(k).split(':')[0]]) clash = true; });
+        $(this).find('td').eq(4).find('.ppl-chip').toggleClass('bad', clash);
         if (clash) bad++;
     });
     $('#cEscWarn').toggle(bad > 0).text(bad ? '有 ' + bad + ' 列的陪檢員與稽核員是同一個人，請改選' : '');
@@ -3080,11 +3176,6 @@ function checkEscortConflict(){
 }
 $(document).on('change', '#cDeptBody [data-f=start_process]', checkDupProcess);
 $(document).on('input',  '#cDeptBody [data-f=start_process]', checkDupProcess);
-$(document).on('change', '#cDeptBody [data-f=auditor_key], #cDeptBody [data-f=escort_key]', function(){
-    // 稽核員一改，陪檢員若變成同一人就要立刻看得到
-    renderCaseRows();
-    checkEscortConflict();
-});
 $(document).on('change', '#cDeptBody [data-f=tpl_id]', function(){
     applyTpl(+$(this).closest('tr').data('i'), $(this).val());
 });

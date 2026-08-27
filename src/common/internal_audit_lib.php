@@ -173,6 +173,26 @@ function ia_ensure_schema(PDO $db): void
             KEY idx_case (case_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='稽核通知單的受稽單位列'");
 
+        /* 2026-08-27 使用者要求：一個受稽單位的稽核員／陪檢員都可能不只一位。
+           人員一律存在這張子表（唯一來源）；ia_case_dept 上的
+           auditor_id/auditor_name/escort_id/escort_name 降級為「顯示用快取」
+           （name＝全部姓名以、串接、id/dept/position＝第一位），
+           只由 ia_cd_people_set() 一處寫入，不可在別處各自更新。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_case_dept_person (
+            cdp_id      INT AUTO_INCREMENT PRIMARY KEY,
+            cd_id       INT NOT NULL COMMENT 'ia_case_dept.cd_id',
+            case_id     INT NOT NULL COMMENT '冗餘，權限判定要直接依案件查',
+            kind        VARCHAR(10) NOT NULL COMMENT 'auditor 稽核員／escort 陪檢員',
+            sort_order  INT NOT NULL DEFAULT 0,
+            user_id     INT NULL COMMENT '解析不到人的舊紙本資料留 NULL，只保姓名',
+            user_name   VARCHAR(60) NULL,
+            dept_id     INT NULL COMMENT '以哪個部門的職務執行（圖章／資格用）',
+            position_id INT NULL,
+            KEY idx_cd (cd_id, kind, sort_order),
+            KEY idx_case (case_id, kind),
+            KEY idx_user (user_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='受稽單位的稽核員／陪檢員（可多位）'");
+
         /* ---- 查檢表（三種共用一組表） ---- */
         $db->exec("CREATE TABLE IF NOT EXISTS ia_check (
             check_id    INT AUTO_INCREMENT PRIMARY KEY,
@@ -905,7 +925,12 @@ function ia_nc_stage_perm(PDO $db, array $nc, array $perms, int $uid): array
 {
     $stage  = (string)($nc['stage'] ?? 'issued');
     $closed = ($stage === 'closed');
-    $isAuditor = $perms['canAudit'] || (int)($nc['auditor_id'] ?? 0) === $uid;
+    // 稽核員身分：有稽核員角色／本單開立者／**這張案件裡被指派的稽核員**（可多位，2026-08-27）
+    $isAuditor = $perms['canAudit'] || (int)($nc['auditor_id'] ?? 0) === $uid
+                 || (int)($nc['leader_id'] ?? 0) === $uid;
+    if (!$isAuditor && $uid > 0 && (int)($nc['case_id'] ?? 0)) {
+        $isAuditor = in_array($uid, ia_case_person_ids($db, (int)$nc['case_id'], 'auditor'), true);
+    }
     $isAdmin   = $perms['canAdmin'];
 
     // 受稽單位：本人是受審核人／該單位主管／該單位的人
@@ -1525,6 +1550,150 @@ function ia_annotate_posts(PDO $db, array $people): array
     }
     unset($u);
     return $people;
+}
+
+/* ================= 受稽單位的稽核員／陪檢員（可多位，2026-08-27） =================
+ * 使用者要求：一個受稽單位的稽核員與陪檢員都可能不只一位（2024 紙本就有兩位稽核員）。
+ * 人員的唯一來源是 ia_case_dept_person；ia_case_dept 上的
+ * auditor_id/auditor_name/escort_id/escort_name 只是顯示用快取
+ * （name＝全部姓名以「、」串接、id/dept/position＝第一位），只由 ia_cd_people_set() 寫。
+ * 讀取一律走 ia_cd_people_map()，它對「還沒搬過的舊資料」會即時由快取欄位回推，
+ * 所以就算 migration 還沒跑，畫面與列印也不會空白。
+ */
+
+/** 一列最多幾位（前端擋一次、後端同規則再擋一次＝鐵律8） */
+const IA_CD_PERSON_MAX = 10;
+
+/** 名單→顯示字串（列印、清單、搜尋快取都用這個，不要各處自己 implode） */
+function ia_cd_names(array $people): string
+{
+    $ns = [];
+    foreach ($people as $p) {
+        $n = trim((string)($p['user_name'] ?? ''));
+        if ($n !== '') $ns[] = $n;
+    }
+    return implode('、', $ns);
+}
+
+/**
+ * 寫入某個受稽單位列的某一種人員名單（唯一寫入點）。
+ * $people 每筆：['user_id','user_name','dept_id','position_id']
+ */
+function ia_cd_people_set(PDO $db, int $cdId, int $caseId, string $kind, array $people): void
+{
+    if (!in_array($kind, ['auditor', 'escort'], true)) return;
+    $db->prepare("DELETE FROM ia_case_dept_person WHERE cd_id=? AND kind=?")->execute([$cdId, $kind]);
+    $ins = $db->prepare("INSERT INTO ia_case_dept_person
+                            (cd_id, case_id, kind, sort_order, user_id, user_name, dept_id, position_id)
+                         VALUES (?,?,?,?,?,?,?,?)");
+    $i = 0; $kept = [];
+    foreach ($people as $p) {
+        $uid  = (int)($p['user_id'] ?? 0) ?: null;
+        $name = mb_substr(trim((string)($p['user_name'] ?? '')), 0, 60);
+        if (!$uid && $name === '') continue;
+        $ins->execute([$cdId, $caseId, $kind, ++$i * 10, $uid, $name ?: null,
+                       ($p['dept_id'] ?? null) ?: null, ($p['position_id'] ?? null) ?: null]);
+        $kept[] = ['user_id' => $uid, 'user_name' => $name,
+                   'dept_id' => $p['dept_id'] ?? null, 'position_id' => $p['position_id'] ?? null];
+    }
+    // 顯示用快取（第一位的 id／部門／職稱＋全部姓名）
+    $f = $kept[0] ?? [];
+    $db->prepare("UPDATE ia_case_dept SET {$kind}_id=?, {$kind}_name=?, {$kind}_dept_id=?, {$kind}_position_id=?
+                   WHERE cd_id=?")
+       ->execute([($f['user_id'] ?? null) ?: null, ia_cd_names($kept) ?: null,
+                  ($f['dept_id'] ?? null) ?: null, ($f['position_id'] ?? null) ?: null, $cdId]);
+}
+
+/**
+ * 讀取受稽單位列的人員。回 cd_id => ['auditor'=>[...], 'escort'=>[...]]，
+ * 每筆含 user_id/user_name/dept_id/position_id/post_key3。
+ * $cdRows 給得出來時（case_get 已經撈過 ia_case_dept）就順便當舊資料的回退來源。
+ */
+function ia_cd_people_map(PDO $db, array $cdIds, array $cdRows = []): array
+{
+    $out = [];
+    foreach ($cdIds as $id) $out[(int)$id] = ['auditor' => [], 'escort' => []];
+    if (!$out) return $out;
+    $in = implode(',', array_fill(0, count($out), '?'));
+    try {
+        $st = $db->prepare("SELECT * FROM ia_case_dept_person WHERE cd_id IN ($in)
+                            ORDER BY kind, sort_order, cdp_id");
+        $st->execute(array_keys($out));
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $k = (string)$r['kind'];
+            if (!isset($out[(int)$r['cd_id']][$k])) continue;
+            $out[(int)$r['cd_id']][$k][] = [
+                'user_id'     => (int)$r['user_id'],
+                'user_name'   => (string)($r['user_name'] ?? ''),
+                'dept_id'     => $r['dept_id'] !== null ? (int)$r['dept_id'] : null,
+                'position_id' => $r['position_id'] !== null ? (int)$r['position_id'] : null,
+                'post_key3'   => ia_post_key((int)$r['user_id'], $r['dept_id'], $r['position_id']),
+            ];
+        }
+    } catch (Throwable $e) {}
+
+    // 還沒搬過的舊資料：由 ia_case_dept 的快取欄位即時回推一位，畫面不會空白
+    $need = [];
+    foreach ($out as $cd => $v) { if (!$v['auditor'] || !$v['escort']) $need[] = $cd; }
+    if ($need) {
+        $legacy = [];
+        foreach ($cdRows as $r) { if (isset($r['cd_id'])) $legacy[(int)$r['cd_id']] = $r; }
+        $miss = array_values(array_filter($need, function ($c) use ($legacy) { return !isset($legacy[$c]); }));
+        if ($miss) {
+            try {
+                $in2 = implode(',', array_fill(0, count($miss), '?'));
+                $st = $db->prepare("SELECT * FROM ia_case_dept WHERE cd_id IN ($in2)");
+                $st->execute($miss);
+                foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $legacy[(int)$r['cd_id']] = $r;
+            } catch (Throwable $e) {}
+        }
+        foreach ($need as $cd) {
+            $r = $legacy[$cd] ?? null;
+            if (!$r) continue;
+            foreach (['auditor', 'escort'] as $k) {
+                if ($out[$cd][$k]) continue;
+                $uid = (int)($r[$k . '_id'] ?? 0);
+                $nm  = trim((string)($r[$k . '_name'] ?? ''));
+                if (!$uid && $nm === '') continue;
+                $out[$cd][$k][] = [
+                    'user_id'     => $uid,
+                    'user_name'   => $nm,
+                    'dept_id'     => ($r[$k . '_dept_id'] ?? null) !== null ? (int)$r[$k . '_dept_id'] : null,
+                    'position_id' => ($r[$k . '_position_id'] ?? null) !== null ? (int)$r[$k . '_position_id'] : null,
+                    'post_key3'   => ia_post_key($uid, $r[$k . '_dept_id'] ?? null, $r[$k . '_position_id'] ?? null),
+                ];
+            }
+        }
+    }
+    return $out;
+}
+
+/**
+ * 某個稽核案件的稽核員（或陪檢員）有哪些人——IA 單的權限判定要用。
+ * $deptId 有給就只看該受稽單位那幾列（受稽單位群組會歸戶到代表部門）。
+ * 舊資料只有 ia_case_dept 的單一欄位，這裡一併 UNION 進來。
+ */
+function ia_case_person_ids(PDO $db, int $caseId, string $kind = 'auditor', ?int $deptId = null): array
+{
+    if (!$caseId || !in_array($kind, ['auditor', 'escort'], true)) return [];
+    $ids = [];
+    $w = 'cd.case_id=?'; $p = [$caseId];
+    if ($deptId) { $w .= ' AND cd.dept_id=?'; $p[] = $deptId; }
+    try {
+        $st = $db->prepare("SELECT DISTINCT pr.user_id FROM ia_case_dept_person pr
+                            JOIN ia_case_dept cd ON cd.cd_id=pr.cd_id
+                            WHERE pr.kind=? AND pr.user_id IS NOT NULL AND $w");
+        $st->execute(array_merge([$kind], $p));
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $x) $ids[(int)$x] = 1;
+    } catch (Throwable $e) {}
+    try {
+        $st = $db->prepare("SELECT DISTINCT cd.{$kind}_id FROM ia_case_dept cd
+                            WHERE cd.{$kind}_id IS NOT NULL AND $w");
+        $st->execute($p);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $x) $ids[(int)$x] = 1;
+    } catch (Throwable $e) {}
+    unset($ids[0]);
+    return array_map('intval', array_keys($ids));
 }
 
 /* ============================ 稽核範本 ============================ */

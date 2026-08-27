@@ -66,6 +66,29 @@ function iaTime($v): ?string
 }
 function iaInt($v): ?int { $v = trim((string)$v); return ($v === '' || !ctype_digit(ltrim($v, '-'))) ? null : (int)$v; }
 
+/**
+ * 受稽單位那一列的稽核員／陪檢員職務鍵清單（2026-08-27 起可多位）。
+ * 新前端送 auditor_keys / escort_keys（陣列或 JSON 字串），
+ * 舊呼叫端只送單一 auditor_key / escort_key 時也收得下。
+ */
+function iaRowPostKeys(array $d, string $kind): array
+{
+    $ks = $d[$kind . '_keys'] ?? null;
+    if (is_string($ks)) { $j = json_decode($ks, true); $ks = is_array($j) ? $j : null; }
+    if (!is_array($ks)) {
+        $ks = [];
+        $one = trim((string)($d[$kind . '_key'] ?? ''));
+        if ($one !== '') $ks[] = $one;
+    }
+    $out = []; $seen = [];
+    foreach ($ks as $k) {
+        $k = trim((string)$k);
+        if ($k === '' || isset($seen[$k])) continue;
+        $seen[$k] = 1; $out[] = $k;
+    }
+    return $out;
+}
+
 switch ($action) {
 
 /* ============================ meta ============================ */
@@ -324,8 +347,9 @@ case 'case_list': {
             if ($k === '') continue;
             $w[] = "(c.case_no LIKE ? OR c.leader_name LIKE ? OR c.remark LIKE ? OR c.end_meet_place LIKE ?
                      OR EXISTS (SELECT 1 FROM ia_case_dept x WHERE x.case_id=c.case_id
-                        AND (x.dept_name LIKE ? OR x.auditor_name LIKE ? OR x.escort_name LIKE ? OR x.start_process LIKE ?)))";
-            for ($i = 0; $i < 8; $i++) $p[] = '%' . $k . '%';
+                        AND (x.dept_name LIKE ? OR x.auditor_name LIKE ? OR x.escort_name LIKE ? OR x.start_process LIKE ?))
+                     OR EXISTS (SELECT 1 FROM ia_case_dept_person pr WHERE pr.case_id=c.case_id AND pr.user_name LIKE ?))";
+            for ($i = 0; $i < 9; $i++) $p[] = '%' . $k . '%';
         }
     }
     $sql = "SELECT c.*,
@@ -348,6 +372,16 @@ case 'case_get': {
     $st = $db->prepare("SELECT * FROM ia_case_dept WHERE case_id=? ORDER BY sort_order, cd_id");
     $st->execute([$cid]);
     $c['depts'] = $st->fetchAll(PDO::FETCH_ASSOC);
+    // 稽核員／陪檢員可多位，人員一律由 ia_case_dept_person 帶出（舊資料會自動回退）
+    $pmap = ia_cd_people_map($db, array_map(function ($d) { return (int)$d['cd_id']; }, $c['depts']), $c['depts']);
+    foreach ($c['depts'] as &$_d) {
+        $pp = $pmap[(int)$_d['cd_id']] ?? ['auditor' => [], 'escort' => []];
+        $_d['auditors']     = $pp['auditor'];
+        $_d['escorts']      = $pp['escort'];
+        $_d['auditor_name'] = ia_cd_names($pp['auditor']);
+        $_d['escort_name']  = ia_cd_names($pp['escort']);
+    }
+    unset($_d);
     $st = $db->prepare("SELECT check_id, kind, half, title, auditor_name, check_date, status
                           FROM ia_check WHERE case_id=? AND COALESCE(is_deleted,0)=0 ORDER BY check_id");
     $st->execute([$cid]);
@@ -403,15 +437,16 @@ case 'case_save': {
     $depts = json_decode((string)($_POST['depts'] ?? '[]'), true);
     if (!is_array($depts)) $depts = [];
 
-    // 使用者指定的兩條規則，前端擋一次、後端同規則再擋一次（鐵律8）
+    // 使用者指定的規則，前端擋一次、後端同規則再擋一次（鐵律8）
+    // 2026-08-27 起稽核員／陪檢員都可以多位，驗證改成對整份名單做。
     $seenProc = [];
     foreach ($depts as $ri => $d) {
         $proc = trim((string)($d['start_process'] ?? ''));
-        $ak   = trim((string)($d['auditor_key'] ?? ''));
-        $ek   = trim((string)($d['escort_key'] ?? ''));
+        $aks  = iaRowPostKeys($d, 'auditor');
+        $eks  = iaRowPostKeys($d, 'escort');
         // 整列全空的（末列常常是按 ↓ 加出來還沒填的）不參與驗證
-        $any = false;
-        foreach ((array)$d as $v) { if (trim((string)$v) !== '') { $any = true; break; } }
+        $any = ($aks || $eks);
+        if (!$any) foreach ((array)$d as $v) { if (!is_array($v) && trim((string)$v) !== '') { $any = true; break; } }
         if (!$any) continue;
 
         // ①同一張通知單裡，相同的稽核起始主過程不可重複
@@ -422,11 +457,25 @@ case 'case_save': {
             }
             $seenProc[$k] = $ri;
         }
-        // ②陪檢員不可與稽核員是同一個人（不同職務也不行，因為是同一個人）
-        if ($ak !== '' && $ek !== '') {
-            list($au) = ia_post_parse($ak);
-            list($eu) = ia_post_parse($ek);
-            if ($au && $au === $eu) jerr('第 ' . ($ri + 1) . ' 列的陪檢員不可與稽核員是同一個人');
+        // ②每一種名單裡不可有重複的人（同一人的不同職務也算重複）
+        foreach ([['auditor', $aks, '稽核員'], ['escort', $eks, '陪檢員']] as $kk) {
+            if (count($kk[1]) > IA_CD_PERSON_MAX) {
+                jerr('第 ' . ($ri + 1) . ' 列的' . $kk[2] . '最多 ' . IA_CD_PERSON_MAX . ' 位');
+            }
+            $seenU = [];
+            foreach ($kk[1] as $key) {
+                list($u) = ia_post_parse($key);
+                if (!$u) continue;
+                if (isset($seenU[$u])) jerr('第 ' . ($ri + 1) . ' 列的' . $kk[2] . '有同一個人被選了兩次');
+                $seenU[$u] = 1;
+            }
+        }
+        // ③陪檢員不可與稽核員是同一個人（不同職務也不行，因為是同一個人）
+        $au = [];
+        foreach ($aks as $key) { list($u) = ia_post_parse($key); if ($u) $au[$u] = 1; }
+        foreach ($eks as $key) {
+            list($u) = ia_post_parse($key);
+            if ($u && isset($au[$u])) jerr('第 ' . ($ri + 1) . ' 列的陪檢員不可與稽核員是同一個人');
         }
     }
 
@@ -464,12 +513,26 @@ case 'case_save': {
             $cid = (int)$db->lastInsertId();
         }
 
+        // 這張通知單原本已經掛著的人：離職者（例：2024 的稽核員林國棟）不會出現在合格職務清單裡，
+        // 但補歷史紀錄時只是改個地點就被擋住存不了檔，所以「原本就在上面的人」一律放行。
+        $wasOn = [];
+        try {
+            $q = $db->prepare("SELECT kind, user_id FROM ia_case_dept_person WHERE case_id=? AND user_id IS NOT NULL");
+            $q->execute([$cid]);
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) $wasOn[$r['kind'] . '-' . (int)$r['user_id']] = 1;
+            $q = $db->prepare("SELECT auditor_id, escort_id FROM ia_case_dept WHERE case_id=?");
+            $q->execute([$cid]);
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                if ((int)$r['auditor_id']) $wasOn['auditor-' . (int)$r['auditor_id']] = 1;
+                if ((int)$r['escort_id'])  $wasOn['escort-'  . (int)$r['escort_id']]  = 1;
+            }
+        } catch (Throwable $e) {}
+
+        $db->prepare("DELETE FROM ia_case_dept_person WHERE case_id=?")->execute([$cid]);
         $db->prepare("DELETE FROM ia_case_dept WHERE case_id=?")->execute([$cid]);
         $ins = $db->prepare("INSERT INTO ia_case_dept (case_id, sort_order, start_process, dept_id, dept_name,
-                                 auditor_id, auditor_name, auditor_dept_id, auditor_position_id,
-                                 escort_id, escort_name, escort_dept_id, escort_position_id,
                                  audited_date, audited_time, improve_due)
-                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                             VALUES (?,?,?,?,?,?,?,?)");
         $nameSt = $db->prepare("SELECT name FROM department WHERE id=?");
         $userSt = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
         $i = 0;
@@ -478,28 +541,45 @@ case 'case_save': {
             $dn  = trim((string)($d['dept_name'] ?? ''));
             if ($did) { $nameSt->execute([$did]); $dn = (string)($nameSt->fetchColumn() ?: $dn); }
             if (!$did && $dn === '' && trim((string)($d['start_process'] ?? '')) === '') continue;
-            // 稽核員／陪檢員挑的是職務，後端再驗一次資格。
-            // 只送 user_id 的舊呼叫端（與既有資料）仍收得下，只是不會有部門／職稱。
-            $ap = ia_resolve_post($db, (string)($d['auditor_key'] ?? ''), 'auditor');
-            if ((string)($d['auditor_key'] ?? '') !== '' && !$ap) jerr('第 ' . ($i + 1) . ' 列的稽核員沒有該職務的稽核員資格');
-            if (!$ap && ($aid = iaInt($d['auditor_id'] ?? '')) !== null) {
-                $userSt->execute([$aid]);
-                $an = (string)($userSt->fetchColumn() ?: '');
-                if ($an !== '') $ap = ['user_id' => $aid, 'user_name' => $an, 'dept_id' => null, 'position_id' => null];
+            $i++;
+            // 稽核員／陪檢員挑的是職務且可多位，後端逐一再驗一次資格（鐵律8）。
+            // 只送單一 auditor_key／auditor_id 的舊呼叫端（與既有資料）仍收得下。
+            $people = [];
+            foreach ([['auditor', '稽核員'], ['escort', '陪檢員']] as $kk) {
+                list($kind, $label) = $kk;
+                $list = [];
+                foreach (iaRowPostKeys($d, $kind) as $key) {
+                    $rp = ia_resolve_post($db, $key, $kind);
+                    if (!$rp) {
+                        list($ku, $kd, $kp) = ia_post_parse($key);
+                        if (!$ku || !isset($wasOn[$kind . '-' . $ku])) {
+                            jerr('第 ' . $i . ' 列的' . $label . '沒有該職務的' . $label . '資格');
+                        }
+                        $userSt->execute([$ku]);
+                        $kn = (string)($userSt->fetchColumn() ?: '');
+                        if ($kn === '') jerr('第 ' . $i . ' 列的' . $label . '不存在');
+                        $rp = ['user_id' => $ku, 'user_name' => $kn,
+                               'dept_id' => $kd ?: null, 'position_id' => $kp ?: null];
+                    }
+                    $list[] = ['user_id' => $rp['user_id'], 'user_name' => $rp['user_name'],
+                               'dept_id' => $rp['dept_id'], 'position_id' => $rp['position_id']];
+                }
+                if (!$list && ($legacy = iaInt($d[$kind . '_id'] ?? '')) !== null) {
+                    $userSt->execute([$legacy]);
+                    $ln = (string)($userSt->fetchColumn() ?: '');
+                    if ($ln !== '') $list[] = ['user_id' => $legacy, 'user_name' => $ln,
+                                               'dept_id' => null, 'position_id' => null];
+                }
+                $people[$kind] = $list;
             }
-            $ep = ia_resolve_post($db, (string)($d['escort_key'] ?? ''), 'escort');
-            if ((string)($d['escort_key'] ?? '') !== '' && !$ep) jerr('第 ' . ($i + 1) . ' 列的陪檢員沒有該職務的陪檢員資格');
-            if (!$ep && ($eid = iaInt($d['escort_id'] ?? '')) !== null) {
-                $userSt->execute([$eid]);
-                $en = (string)($userSt->fetchColumn() ?: '');
-                if ($en !== '') $ep = ['user_id' => $eid, 'user_name' => $en, 'dept_id' => null, 'position_id' => null];
-            }
-            $ins->execute([$cid, ++$i * 10, mb_substr(trim((string)($d['start_process'] ?? '')), 0, 150) ?: null,
+            $ins->execute([$cid, $i * 10, mb_substr(trim((string)($d['start_process'] ?? '')), 0, 150) ?: null,
                            $did, $dn ?: null,
-                           $ap['user_id'] ?? null, $ap['user_name'] ?? null, $ap['dept_id'] ?? null, $ap['position_id'] ?? null,
-                           $ep['user_id'] ?? null, $ep['user_name'] ?? null, $ep['dept_id'] ?? null, $ep['position_id'] ?? null,
                            iaDate($d['audited_date'] ?? ''), iaTime($d['audited_time'] ?? ''),
                            iaDate($d['improve_due'] ?? '')]);
+            $cdId = (int)$db->lastInsertId();
+            // 人員的唯一寫入點（順便同步 ia_case_dept 上的顯示快取）
+            ia_cd_people_set($db, $cdId, $cid, 'auditor', $people['auditor']);
+            ia_cd_people_set($db, $cdId, $cid, 'escort',  $people['escort']);
         }
         $db->commit();
         jout(['case_id' => $cid]);
@@ -847,12 +927,16 @@ case 'nc_list': {
         $deptIds = array_values(array_unique($deptIds));
         if ($deptIds) {
             $in = implode(',', array_fill(0, count($deptIds), '?'));
-            $w[] = "(n.auditee_id=? OR n.head_id=? OR n.resp_id=? OR n.auditor_id=? OR n.dept_id IN ($in))";
-            array_push($p, $uid, $uid, $uid, $uid);
+            $w[] = "(n.auditee_id=? OR n.head_id=? OR n.resp_id=? OR n.auditor_id=? OR n.leader_id=?
+                      OR n.case_id IN (SELECT pr.case_id FROM ia_case_dept_person pr
+                                        WHERE pr.user_id=? AND pr.kind='auditor') OR n.dept_id IN ($in))";
+            array_push($p, $uid, $uid, $uid, $uid, $uid, $uid);
             foreach ($deptIds as $d) $p[] = $d;
         } else {
-            $w[] = "(n.auditee_id=? OR n.head_id=? OR n.resp_id=? OR n.auditor_id=?)";
-            array_push($p, $uid, $uid, $uid, $uid);
+            $w[] = "(n.auditee_id=? OR n.head_id=? OR n.resp_id=? OR n.auditor_id=? OR n.leader_id=?
+                      OR n.case_id IN (SELECT pr.case_id FROM ia_case_dept_person pr
+                                        WHERE pr.user_id=? AND pr.kind='auditor'))";
+            array_push($p, $uid, $uid, $uid, $uid, $uid, $uid);
         }
     }
     $kw = trim((string)($_GET['kw'] ?? ''));
@@ -1260,9 +1344,10 @@ case 'meeting_create': {
         $mid = (int)$db->lastInsertId();
 
         // 與會人員：稽核組長＋各受稽單位的稽核員與陪檢員（去重）
-        $q = $db->prepare("SELECT auditor_id, auditor_name, escort_id, escort_name, dept_name
-                             FROM ia_case_dept WHERE case_id=? ORDER BY sort_order");
+        $q = $db->prepare("SELECT * FROM ia_case_dept WHERE case_id=? ORDER BY sort_order");
         $q->execute([$cid]);
+        $cdRows = $q->fetchAll(PDO::FETCH_ASSOC);
+        $pmap = ia_cd_people_map($db, array_map(function ($r) { return (int)$r['cd_id']; }, $cdRows), $cdRows);
         $seen = []; $att = [];
         $push = function ($id, $name) use (&$seen, &$att) {
             $id = (int)$id;
@@ -1271,9 +1356,9 @@ case 'meeting_create': {
             $att[] = ['id' => $id, 'name' => (string)$name];
         };
         $push($chairId, $chairName);
-        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $push($r['auditor_id'], $r['auditor_name']);
-            $push($r['escort_id'],  $r['escort_name']);
+        foreach ($cdRows as $r) {
+            $pp = $pmap[(int)$r['cd_id']] ?? ['auditor' => [], 'escort' => []];
+            foreach (array_merge($pp['auditor'], $pp['escort']) as $x) $push($x['user_id'], $x['user_name']);
         }
         $ins = $db->prepare("INSERT INTO meeting_attendee (meeting_id, user_id, user_name, dept_name,
                                  position_name, is_chair, signed) VALUES (?,?,?,?,?,?,0)");

@@ -21,11 +21,10 @@
  *    即時推導（ia_plan_actual_map），寫進去反而會跟推導結果打架。只寫 ○（計畫實施）。
  *  ⑹稽核報告表（2-GM-06-08）**不匯入**——它是全自動彙總，案件與 IA 單建好就會自己長出來。
  *
- * 已知限制（等另一個 session 的「稽核員多位」改完再重跑本工具即可補上）：
- *   2024 第 2 次稽核通知單的稽核員是**林國棟／葉卿雅兩位**，但目前 ia_case_dept 每個受稽單位
- *   只有單一 auditor_id 欄位。處理方式：紙本有明確證據的單位（業務課＝葉卿雅，見 IA24121601/02
- *   與稽核報告表）存本人；沒有證據的單位存「林國棟／葉卿雅」文字、auditor_id 留空——
- *   **不亂指定其中一位**。改成多位之後重跑本工具即可正規化。
+ * 稽核員多位（2026-08-27 已支援）：
+ *   2024 第 2 次稽核通知單的稽核員是**林國棟／葉卿雅兩位**。紙本有明確證據的單位
+ *   （業務課＝葉卿雅，見 IA24121601/02 與稽核報告表）只掛本人；沒有證據的單位兩位都掛上。
+ *   人員存進 ia_case_dept_person（唯一來源），不再併成一個字串塞在備註裡。
  */
 
 if (PHP_SAPI !== 'cli') { http_response_code(403); exit("僅限 CLI 執行\n"); }
@@ -33,6 +32,7 @@ if (PHP_SAPI !== 'cli') { http_response_code(403); exit("僅限 CLI 執行\n"); 
 $ROOT = dirname(__DIR__, 3);                      // …/EGsystem
 require_once $ROOT . '/src/common/DBConnection.php';
 require_once $ROOT . '/src/common/people_lib.php';
+require_once $ROOT . '/src/common/internal_audit_lib.php';   // ia_cd_people_set（稽核員／陪檢員可多位）
 
 const IA2024_MARK = 'IA2024匯入';                  // 本工具建立的資料一律蓋這個記號
 const IA2024_YEAR = 2024;
@@ -414,10 +414,6 @@ function do_import(PDO $db, bool $write): void
             $maker  = person_asof($db, $c['maker'][0], $c['maker'][1]);
             $note   = REMARK_2024 . "
 【稽核起始主過程】" . $c['process'];
-            if (count($c['auditors']) > 1) {
-                // schema 目前一個受稽單位只有一位稽核員；第二位以後先記在備註不遺失
-                $note .= "\n【紙本稽核員】" . implode('／', $c['auditors']);
-            }
             $db->prepare("INSERT INTO ia_case (year,seq_no,case_no,notify_date,audit_from,audit_to,
                             leader_id,leader_name,leader_dept_id,leader_position_id,
                             end_meet_date,end_meet_start,end_meet_end,end_meet_place,remark,
@@ -434,28 +430,26 @@ function do_import(PDO $db, bool $write): void
             $caseId = (int)$db->lastInsertId();
             $caseIdByNo[$c['case_no']] = $caseId;
 
-            $allAuditors = implode('／', $c['auditors']);
+            // 2026-08-27 起一個受稽單位的稽核員／陪檢員都可以有多位，人員存 ia_case_dept_person
+            // （唯一寫入點 ia_cd_people_set，它會順便同步 ia_case_dept 上的顯示快取）。
             $cdIns = $db->prepare("INSERT INTO ia_case_dept (case_id,sort_order,start_process,dept_id,dept_name,
-                                     auditor_id,auditor_name,auditor_dept_id,auditor_position_id,
-                                     escort_id,escort_name,escort_dept_id,escort_position_id,
                                      audited_date,audited_time,improve_due)
-                                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                                   VALUES (?,?,?,?,?,?,?,?)");
             $ord = 0;
             foreach ($c['depts'] as [$paperDept, $escortName, $proc, $time, $due, $auditorName]) {
-                $es = person_asof($db, $escortName, $c['audit_from']);
-                // 該單位的稽核員：紙本有明確證據就用它；只有一位稽核員時就是那一位；
-                // 有多位又沒有證據時，兩位並存成文字（auditor_id 留 null），不亂指定其中一位。
-                $an = $auditorName !== '' ? $auditorName
-                    : (count($c['auditors']) === 1 ? $c['auditors'][0] : $allAuditors);
-                $ap = ($an === $allAuditors && count($c['auditors']) > 1)
-                    ? null : person_asof($db, $an, $c['audit_from']);
                 $cdIns->execute([$caseId, ++$ord, $proc ?: null,
                     $depts[$paperDept], DEPT_MAP[$paperDept] ?? $paperDept,
-                    $ap ? (int)$ap['id'] : null, $an,
-                    $ap ? (int)$ap['dept_id'] : null, $ap ? (int)$ap['position_id'] : null,
-                    $es ? (int)$es['id'] : null, $escortName,
-                    $es ? (int)$es['dept_id'] : null, $es ? (int)$es['position_id'] : null,
                     $c['audit_from'], $time ?: null, $due ?: null]);
+                $cdId = (int)$db->lastInsertId();
+                // 該單位的稽核員：紙本有明確證據就用那一位，沒有證據就是整張通知單的全部稽核員
+                $names = $auditorName !== '' ? [$auditorName] : $c['auditors'];
+                $mk = function (string $nm) use ($db, $c) {
+                    $p = person_asof($db, $nm, $c['audit_from']);
+                    return ['user_id' => $p ? (int)$p['id'] : 0, 'user_name' => $nm,
+                            'dept_id' => $p['dept_id'] ?? null, 'position_id' => $p['position_id'] ?? null];
+                };
+                ia_cd_people_set($db, $cdId, $caseId, 'auditor', array_map($mk, $names));
+                ia_cd_people_set($db, $cdId, $caseId, 'escort',  [$mk($escortName)]);
             }
         }
 
@@ -613,17 +607,21 @@ function do_verify(PDO $db): void
     say('  起始主過程已填的受稽單位：' . $q("SELECT COUNT(*) FROM ia_case_dept d JOIN ia_case c ON c.case_id=d.case_id
                                               WHERE c.created_by_name=$m AND COALESCE(d.start_process,'')<>''") . '（應 9）');
 
-    head('紙本上有、但目前 schema 存不下的（等「稽核員多位」改完再重跑本工具）');
+    head('多位稽核員的受稽單位（2026-08-27 起存 ia_case_dept_person）');
     $any = false;
     foreach (CASES_2024 as $c) {
-        if (count($c['auditors']) > 1) {
-            $any = true;
-            say("  {$c['case_no']}：稽核員 " . implode('／', $c['auditors']) . ' 共 ' . count($c['auditors']) . ' 位');
-            say('    目前 ia_case_dept 每個受稽單位只有單一 auditor_id，處理方式：');
-            say('    ・紙本有明確證據的單位 → 存該位本人（可帶出職稱與圖章）');
-            say('    ・紙本沒寫是誰稽核的單位 → auditor_name 存「' . implode('／', $c['auditors'])
-                . '」兩位並存、auditor_id 留空（列印與通知單一致，不亂指定其中一位）');
-            say('    改成多位後重跑本工具即可正規化。');
+        if (count($c['auditors']) <= 1) continue;
+        $any = true;
+        say("  {$c['case_no']}：紙本稽核員 " . implode('／', $c['auditors']) . ' 共 ' . count($c['auditors']) . ' 位');
+        $st = $db->prepare("SELECT d.dept_name, COUNT(pr.cdp_id) AS n,
+                                   GROUP_CONCAT(pr.user_name ORDER BY pr.sort_order SEPARATOR '、') AS who
+                              FROM ia_case_dept d
+                              JOIN ia_case c ON c.case_id=d.case_id
+                              LEFT JOIN ia_case_dept_person pr ON pr.cd_id=d.cd_id AND pr.kind='auditor'
+                             WHERE c.case_no=? GROUP BY d.cd_id ORDER BY d.sort_order");
+        $st->execute([$c['case_no']]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            say('    ・' . $r['dept_name'] . '：' . (int)$r['n'] . ' 位（' . ($r['who'] ?: '無') . '）');
         }
     }
     if (!$any) say('  （無）');
@@ -658,8 +656,10 @@ function do_rollback(PDO $db): void
         $st = $db->prepare("DELETE FROM ia_check WHERE created_by_name=?"); $st->execute([$m]); $n['系統稽核紀錄表'] = $st->rowCount();
         $st = $db->prepare("DELETE FROM ia_nc WHERE created_by_name=?");    $st->execute([$m]); $n['不符合通知單'] = $st->rowCount();
         $q = $db->prepare("SELECT case_id FROM ia_case WHERE created_by_name=?"); $q->execute([$m]);
-        foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $cid)
+        foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $cid) {
+            $db->prepare("DELETE FROM ia_case_dept_person WHERE case_id=?")->execute([$cid]);
             $db->prepare("DELETE FROM ia_case_dept WHERE case_id=?")->execute([$cid]);
+        }
         $st = $db->prepare("DELETE FROM ia_case WHERE created_by_name=?");  $st->execute([$m]); $n['稽核通知單'] = $st->rowCount();
         $q = $db->prepare("SELECT plan_id FROM ia_plan WHERE created_by_name=?"); $q->execute([$m]);
         foreach ($q->fetchAll(PDO::FETCH_COLUMN) as $pid) {
