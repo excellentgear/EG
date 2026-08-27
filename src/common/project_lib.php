@@ -865,6 +865,16 @@ function prj_act_dates_open(?array $prj): bool
     return in_array((string)($prj['status'] ?? ''), ['approved', 'closed'], true);
 }
 
+/**
+ * 任務「狀態」欄什麼時候才開放（使用者拍板 2026-08-27）：
+ * 送簽之前（草稿／已退回）專案還沒正式成案，工作不可能已經在跑，
+ * 所以狀態一律是「未開始」且不可修改——前端整欄不顯示，這裡是後端的同一道規則（鐵律8）。
+ */
+function prj_task_status_open(?array $prj): bool
+{
+    return in_array((string)($prj['status'] ?? ''), ['submitted', 'approved', 'closed', 'terminated'], true);
+}
+
 /* ══════════════════════ 首件檢驗（AS9102 FAI） ══════════════════════ */
 
 /** 這個專案的所有送件紀錄（第 1 次、第 2 次…；未通過可重送，全部留著） */

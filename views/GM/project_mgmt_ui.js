@@ -1010,6 +1010,7 @@ $(document).on('change', '#planEditBox .t-ae', function () {
 
 /* ── 規劃表編輯器（可增列表格：末列↓加列、空白末列↑移除＝共用檔規則） ── */
 var PLAN_ACT_OPEN = false;   // 實際開始／完成現在可不可以填（＝專案是否已立案核准）
+var PLAN_ST_OPEN  = false;   // 任務狀態現在可不可以改（＝專案是否已送簽；送簽前一律「未開始」）
 var PLAN_DIRTY    = false;   // 規劃表有沒有還沒存進去的變更（避免整桌資料被無聲丟掉）
 var PLAN_HAS_DEL  = false;   // 這次有沒有刪掉目標（刪光時畫面上「沒有內容」，但還是要送出才刪得掉）
 var CARD_DIRTY    = false;   // 專案管理卡編輯區同上
@@ -1035,6 +1036,7 @@ function planLeaveOk(what) {
 function drawPlanEditor(res) {
     var grouped = groupTasks(res.goals || [], res.tasks || []);
     PLAN_ACT_OPEN = !!res.act_open;
+    PLAN_ST_OPEN  = !!res.status_open;
     var deptOpt = '<option value="">（無）</option>';
     $.each(META.depts || [], function (i, x) { deptOpt += '<option value="' + x.id + '">' + esc(x.name) + '</option>'; });
 
@@ -1049,7 +1051,8 @@ function drawPlanEditor(res) {
       + '<b>上一列的預計完成日會自動變成下一列的預計開始日</b>——你自己改過的開始日不會被蓋掉。</p>'
       + (PLAN_ACT_OPEN ? ''
           : '<p class="pj-hint" style="color:#C4442D;">「實際開始／實際完成」兩欄要等<b>立案核准</b>之後才會出現'
-            + '（目前狀態：' + esc(STATUS_LABEL[res.project.status] || res.project.status) + '），此階段只排預計日程。</p>');
+            + '（目前狀態：' + esc(STATUS_LABEL[res.project.status] || res.project.status) + '），此階段只排預計日程。'
+            + (PLAN_ST_OPEN ? '' : '任務「狀態」在<b>送簽</b>之前一律是「未開始」，所以也先不顯示。') + '</p>');
     if (!grouped.length) h += '<div class="pj-hint">還沒有目標，請按上方「新增目標」。</div>';
     $.each(grouped, function (gi, g) {
         h += '<div class="sec" data-goal="' + g.goal_id + '" data-gkey="g' + gi + '" style="background:#fff;">'
@@ -1066,7 +1069,7 @@ function drawPlanEditor(res) {
           + '<th style="width:62px;" title="預計開始當天算第 1 天，只算工作日">工作天數</th>'
           + '<th style="width:114px;">預計完成</th>'
           + (PLAN_ACT_OPEN ? '<th style="width:114px;">實際開始</th><th style="width:114px;">實際完成</th>' : '')
-          + '<th style="width:96px;" title="1~2 天完工的製程用狀態管理，不記時分秒">狀態</th>'
+          + (PLAN_ST_OPEN ? '<th style="width:96px;" title="1~2 天完工的製程用狀態管理，不記時分秒">狀態</th>' : '')
           + '<th style="width:180px;">負責人（先選部門）</th>'
           + '<th style="width:76px;" title="勾「自動」時：填了實際完成日就是 100%，否則 0%；自己改過就不再自動">進度%</th>'
           + '<th style="width:44px;">里程碑</th><th style="width:30px;"></th></tr></thead>'
@@ -1078,6 +1081,7 @@ function drawPlanEditor(res) {
     h += '</div>';
     $('#planEditBox').html(h);
     $('#planEditBox .t-body tr').each(function () { planRowCheck($(this)); planRowProgress($(this)); });
+    planSeedFirstStart();
     PLAN_DIRTY = false;
     /* 目標的主辦單位下拉用 .val() 設，避免字串比對出錯（負責人兩個下拉已在建 option 時標好 selected） */
     $('#planEditBox .sec[data-goal]').each(function (gi) {
@@ -1086,6 +1090,20 @@ function drawPlanEditor(res) {
         var $s = $(this).find('.g-dept');
         $s.find('option').each(function () { if ($(this).text() === g.dept_name) $s.val($(this).val()); });
     });
+}
+
+/**
+ * 第一個目標的第一列「預計開始」沒填時，自動帶入專案開始日（使用者要求 2026-08-27）。
+ * 只在空白時帶，不覆蓋已經排好的日期；後面的列本來就會由
+ * 「上一列預計完成 → 下一列預計開始」自動串下去，所以整條日程會一起長出來。
+ */
+function planSeedFirstStart() {
+    var $tr = $('#planEditBox .sec[data-goal]').first().find('.t-body tr').first();
+    if (!$tr.length || $.trim($tr.find('.t-ps').val())) return;
+    var sd = $.trim((CUR && CUR.project ? CUR.project.start_date : '') || '');
+    if (!sd) return;
+    $tr.find('.t-ps').val(sd);
+    planRowRecalc($tr, 'ps');
 }
 
 function planRowHtml(t, i) {
@@ -1114,6 +1132,7 @@ function planRowHtml(t, i) {
       + (PLAN_ACT_OPEN ? ''
             : '<input type="hidden" class="t-as" value="' + esc(t.act_start || '') + '">'
               + '<input type="hidden" class="t-ae" value="' + esc(t.act_end || '') + '">')
+      + (PLAN_ST_OPEN ? '' : '<input type="hidden" class="t-status" value="">')
       + '</td>'
       + '<td><input type="date" class="t-ps"' + planMinAttr() + ' value="' + esc(t.plan_start || '') + '"></td>'
       + '<td><input type="number" class="t-days" min="1" max="999" value="' + (days > 0 ? days : '') + '"></td>'
@@ -1121,7 +1140,7 @@ function planRowHtml(t, i) {
       + (PLAN_ACT_OPEN
             ? '<td><input type="date" class="t-as" value="' + esc(t.act_start || '') + '"></td>'
               + '<td><input type="date" class="t-ae" value="' + esc(t.act_end || '') + '"></td>' : '')
-      + '<td>' + taskStatusSelect(t) + '</td>'
+      + (PLAN_ST_OPEN ? '<td>' + taskStatusSelect(t) + '</td>' : '')
       + '<td><select class="t-odept"' + filterAttr(dOpt, '輸入部門名稱篩選…') + '>' + dOpt + '</select>'
       + '<select class="t-owner" style="margin-top:3px;"' + filterAttr(pOpt, '輸入姓名篩選…') + '>' + pOpt + '</select></td>'
       + '<td><input type="number" class="t-pg" min="0" max="100" value="' + num(t.progress) + '">'

@@ -216,6 +216,8 @@ case 'get':
         'can_edit'  => prj_can_edit_project($P, $prj),
         // 實際開始／實際完成＝立案核准後才可填（使用者拍板）；前端反灰，後端 plan_save 同規則再擋一次
         'act_open'  => prj_act_dates_open($prj),
+        // 任務狀態＝送簽之後才開放（送簽前一律「未開始」，前端整欄不顯示）
+        'status_open' => prj_task_status_open($prj),
         'can_approve' => prj_can_approve($db, $prj, $P),
     ]);
 
@@ -483,6 +485,8 @@ case 'plan_save':
     // 注意是「忽略送上來的值、保留資料庫原本的值」而不是寫成空白——
     // 舊資料在這個規則之前就填過的實際日期不該因為存一次規劃表就被清掉。
     $actOpen = prj_act_dates_open($prjPlan);
+    // 送簽前的專案：任務狀態一律「未開始」，不採信前端送上來的值（前端整欄不顯示＝鐵律8）
+    $statusOpen = prj_task_status_open($prjPlan);
     $actOld  = [];
     if (!$actOpen) {
         $stA = $db->prepare("SELECT task_id, act_start, act_end FROM project_task WHERE project_id=?");
@@ -566,6 +570,8 @@ case 'plan_save':
                 $actE = $actOld[$tid]['act_end'] ?? null;
                 [$tStatus, $actE] = prj_task_status_sync($tStatus, $actE, $NOW['date']);
             }
+            // 送簽前一律「未開始」（有實際完成日的舊資料除外，那要維持與日期一致）
+            if (!$statusOpen && !$actE) $tStatus = '';
             /* 進度：還跟著自動的就由後端自己算（不採信前端送來的數字＝鐵律8），
                使用者手動改過的（progress_auto=0）才用他填的值。 */
             $pAuto = array_key_exists('progress_auto', $t) ? (!empty($t['progress_auto']) ? 1 : 0) : 1;
