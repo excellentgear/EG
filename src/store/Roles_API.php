@@ -39,12 +39,24 @@ try {
         PRIMARY KEY (user_id, role_id),
         INDEX idx_ur_user (user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    // department_id：0＝該職稱所有部門通用（本表原始語意）／>0＝僅該部門的該職稱
+    // 職稱跨部門共用（「組員」橫跨 7 個部門），不帶部門就是跨部門越權，見 role_features_helper.php
     $pdo->exec("CREATE TABLE IF NOT EXISTS position_roles (
+        department_id INT NOT NULL DEFAULT 0,
         position_id INT NOT NULL,
         role_id INT NOT NULL,
-        PRIMARY KEY (position_id, role_id),
-        INDEX idx_pr_role (role_id)
+        PRIMARY KEY (department_id, position_id, role_id),
+        INDEX idx_pr_role (role_id),
+        INDEX idx_pr_pos (position_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    // 既有安裝補欄（與 views/user/migrations/2026-08-27_dept_position_roles.php 同一件事，可重複執行）
+    try {
+        if (!$pdo->query("SHOW COLUMNS FROM position_roles LIKE 'department_id'")->fetch()) {
+            $pdo->exec("ALTER TABLE position_roles ADD COLUMN department_id INT NOT NULL DEFAULT 0 FIRST");
+            $pdo->exec("ALTER TABLE position_roles DROP PRIMARY KEY, ADD PRIMARY KEY (department_id, position_id, role_id)");
+            $pdo->exec("ALTER TABLE position_roles ADD KEY idx_pr_pos (position_id)");
+        }
+    } catch(Exception $_e2) {}
     // 植入管理員角色（若不存在）
     $pdo->exec("INSERT IGNORE INTO roles (role_code,role_name,is_system) VALUES ('admin','管理員',1)");
     $_aid = $pdo->query("SELECT role_id FROM roles WHERE role_code='admin' LIMIT 1")->fetchColumn();
@@ -102,6 +114,16 @@ function rbacUserName(PDO $pdo, int $uid): string {
 }
 function rbacPositionName(PDO $pdo, int $pid): string {
     try { $s = $pdo->prepare("SELECT name FROM position WHERE id=?"); $s->execute([$pid]); $n = $s->fetchColumn(); return $n !== false ? (string)$n : ('#'.$pid); } catch (Exception $_e) { return '#'.$pid; }
+}
+// 稽核紀錄用的顯示名稱：帶部門的寫成「品管組 組長」，department_id=0 寫成「（全部門）組長」
+function rbacDeptPosName(PDO $pdo, int $did, int $pid): string {
+    $pos = rbacPositionName($pdo, $pid);
+    if ($did <= 0) return '（全部門）' . $pos;
+    try {
+        $s = $pdo->prepare("SELECT name FROM department WHERE id=?"); $s->execute([$did]);
+        $d = $s->fetchColumn();
+        return ($d !== false ? (string)$d : ('#'.$did)) . ' ' . $pos;
+    } catch (Exception $_e) { return '#'.$did.' '.$pos; }
 }
 
 switch ($action) {
@@ -366,7 +388,7 @@ switch ($action) {
             $module = $_GET['module'] ?? $_POST['module'] ?? '';
             if ($module !== '') {
                 $prStmt = $pdo->prepare("
-                    SELECT pr.position_id, r.role_id, r.role_name
+                    SELECT pr.department_id, pr.position_id, r.role_id, r.role_name
                     FROM position_roles pr
                     JOIN roles r ON r.role_id = pr.role_id
                     WHERE r.module = ?");
@@ -374,19 +396,37 @@ switch ($action) {
                 $prRows = $prStmt->fetchAll(PDO::FETCH_ASSOC);
             } else {
                 $prRows = $pdo->query("
-                    SELECT pr.position_id, r.role_id, r.role_name
+                    SELECT pr.department_id, pr.position_id, r.role_id, r.role_name
                     FROM position_roles pr
                     JOIN roles r ON r.role_id = pr.role_id
                 ")->fetchAll(PDO::FETCH_ASSOC);
             }
             $prMap = [];
             foreach ($prRows as $row) {
-                $prMap[$row['position_id']][] = ['role_id'=>$row['role_id'],'role_name'=>$row['role_name']];
+                $prMap[(int)$row['department_id'] . '_' . $row['position_id']][] =
+                    ['role_id'=>$row['role_id'],'role_name'=>$row['role_name']];
             }
-            foreach ($positions as &$p) $p['roles'] = $prMap[$p['id']] ?? [];
+            // roles＝該職稱「全部門通用(0)」的角色；相容舊呼叫端（本欄位語意未變）
+            foreach ($positions as &$p) $p['roles'] = $prMap['0_' . $p['id']] ?? [];
             unset($p);
 
-            $response = ['success'=>true, 'data'=>$positions];
+            // dept_positions：實際有人在的「部門×職稱」編制，各自帶已指派的角色與在職人數
+            $dpRows = $pdo->query("
+                SELECT m.department_id, d.name AS department_name, m.position_id, p.name AS position_name,
+                       COUNT(DISTINCT m.user_id) AS people
+                FROM user_department_position_map m
+                JOIN department d ON d.id = m.department_id
+                JOIN position  p ON p.id = m.position_id
+                JOIN `user` u ON u.id = m.user_id AND u.state = 1
+                GROUP BY m.department_id, d.name, m.position_id, p.name, d.sort_order, p.sort_order
+                ORDER BY d.sort_order, d.id, p.sort_order, p.id")->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($dpRows as &$dp) {
+                $dp['roles']        = $prMap[(int)$dp['department_id'] . '_' . $dp['position_id']] ?? [];
+                $dp['roles_anydept'] = $prMap['0_' . $dp['position_id']] ?? [];   // 全部門通用那一層
+            }
+            unset($dp);
+
+            $response = ['success'=>true, 'data'=>$positions, 'dept_positions'=>$dpRows];
         } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
         break;
     }
@@ -399,16 +439,23 @@ switch ($action) {
         if (!isAdmin($pdo, $user_id)) { $response = ['success'=>false,'message'=>'無管理員權限']; break; }
         $pid = intval($_POST['position_id'] ?? 0);
         $rid = intval($_POST['role_id'] ?? 0);
+        $did = intval($_POST['department_id'] ?? 0);   // 0＝該職稱所有部門通用
         if (!$pid || !$rid) { $response = ['success'=>false,'message'=>'缺少參數']; break; }
         try {
             // 系統角色(admin)不可指派給職稱，避免整個職稱全變全域管理員
             $chk = $pdo->prepare("SELECT is_system FROM roles WHERE role_id=? LIMIT 1");
             $chk->execute([$rid]);
             if ((int)$chk->fetchColumn() === 1) { $response = ['success'=>false,'message'=>'系統角色（管理員）不可指派給職稱，請個別指派給使用者']; break; }
-            $st = $pdo->prepare("INSERT IGNORE INTO position_roles (position_id,role_id) VALUES (?,?)");
-            $st->execute([$pid,$rid]);
+            if ($did > 0) {   // 指定部門時，該部門必須真的存在（擋掉前端亂送）
+                $cd = $pdo->prepare("SELECT 1 FROM department WHERE id=? LIMIT 1");
+                $cd->execute([$did]);
+                if (!$cd->fetchColumn()) { $response = ['success'=>false,'message'=>'部門不存在']; break; }
+            }
+            $st = $pdo->prepare("INSERT IGNORE INTO position_roles (department_id,position_id,role_id) VALUES (?,?,?)");
+            $st->execute([$did,$pid,$rid]);
             if ($st->rowCount() > 0) {
-                rbacAudit($pdo, $user_id, 'assign', 'rbac_position', $pid, rbacPositionName($pdo, $pid),
+                rbacAudit($pdo, $user_id, 'assign', 'rbac_position', $pid,
+                          rbacDeptPosName($pdo, $did, $pid),
                           [['field'=>'role','old'=>null,'new'=>rbacRoleName($pdo, $rid)]]);
             }
             $response = ['success'=>true];
@@ -424,12 +471,14 @@ switch ($action) {
         if (!isAdmin($pdo, $user_id)) { $response = ['success'=>false,'message'=>'無管理員權限']; break; }
         $pid = intval($_POST['position_id'] ?? 0);
         $rid = intval($_POST['role_id'] ?? 0);
+        $did = intval($_POST['department_id'] ?? 0);   // 0＝全部門通用那一層
         if (!$pid || !$rid) { $response = ['success'=>false,'message'=>'缺少參數']; break; }
         try {
-            $st = $pdo->prepare("DELETE FROM position_roles WHERE position_id=? AND role_id=?");
-            $st->execute([$pid,$rid]);
+            $st = $pdo->prepare("DELETE FROM position_roles WHERE department_id=? AND position_id=? AND role_id=?");
+            $st->execute([$did,$pid,$rid]);
             if ($st->rowCount() > 0) {
-                rbacAudit($pdo, $user_id, 'remove', 'rbac_position', $pid, rbacPositionName($pdo, $pid),
+                rbacAudit($pdo, $user_id, 'remove', 'rbac_position', $pid,
+                          rbacDeptPosName($pdo, $did, $pid),
                           [['field'=>'role','old'=>rbacRoleName($pdo, $rid),'new'=>null]]);
             }
             $response = ['success'=>true];

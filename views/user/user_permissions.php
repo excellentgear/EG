@@ -328,278 +328,65 @@ try {
     if ($_aid) $conn_pdo->prepare("INSERT IGNORE INTO role_features (role_id,feature_code) VALUES (?,?)")->execute([$_aid,'all']);
 } catch(Exception $_e) {}
 
-// ── 角色指派資料（依模組分開：報價單 / 公告通知；系統角色 admin 兩者皆顯示）──────
-$_quotRoles     = [];  $_userQuotRoles   = [];
-$_noticeRoles   = [];  $_userNoticeRoles = [];
-$_homeRoles     = [];  $_userHomeRoles   = [];
-$_qcRoles       = [];  $_userQcRoles     = [];
-$_carRoles      = [];  $_userCarRoles    = [];
-$_imgRoles      = [];  $_userImgRoles    = [];
-$_drawRoles     = [];  $_userDrawRoles   = [];
-$_bomRenRoles   = [];  $_userBomRenRoles = [];
-$_oreadyRoles   = [];  $_userOreadyRoles = [];
-$_bomtrkRoles   = [];  $_userBomtrkRoles = [];
-$_ptaskRoles    = [];  $_userPtaskRoles  = [];
-$_profitRoles   = [];  $_userProfitRoles = [];
-$_asdocRoles    = [];  $_userAsdocRoles  = [];
-$_mdataRoles    = [];  $_userMdataRoles  = [];
-$_dbbkRoles     = [];  $_userDbbkRoles   = [];
-$_stampRoles    = [];  $_userStampRoles  = [];
-$_rosterRoles   = [];  $_userRosterRoles = [];
-$_dcRoles       = [];  $_userDcRoles     = [];
-$_tcalRoles     = [];  $_userTcalRoles   = [];
-$_trainRoles    = [];  $_userTrainRoles  = [];
-$_meetRoles     = [];  $_userMeetRoles   = [];
-$_vaudRoles     = [];  $_userVaudRoles   = [];
-$_leaveRoles    = [];  $_userLeaveRoles  = [];
-$_shipRoles     = [];  $_userShipRoles   = [];
-$_accRoles      = [];  $_userAccRoles    = [];
-$_purcRoles     = [];  $_userPurcRoles   = [];
-$_kpiRoles      = [];  $_userKpiRoles    = [];
-$_extdocRoles   = [];  $_userExtdocRoles = [];
-$_otrkRoles     = [];  $_userOtrkRoles   = [];
-$_rvfRoles      = [];  $_userRvfRoles    = [];
-$_tidcRoles     = [];  $_userTidcRoles   = [];
-$_tdevRoles     = [];  $_userTdevRoles   = [];
-$_pfmeaRoles    = [];  $_userPfmeaRoles  = [];
-$_prjRoles      = [];  $_userPrjRoles    = [];
-$_hrfRoles      = [];  $_userHrfRoles    = [];
-$_fsdRoles      = [];  $_userFsdRoles    = [];
-$_eqmRoles      = [];  $_userEqmRoles    = [];
-$_btrpRoles     = [];  $_userBtrpRoles   = [];
-$_dapRoles      = [];  $_userDapRoles    = [];
-$_pslRoles      = [];  $_userPslRoles    = [];
-$_iaRoles       = [];  $_userIaRoles     = [];
-$_asdocPositions = []; $_asdocPosRoles   = [];
-$_quotDepts     = [];
-
-// 各模組角色清單（含系統角色 admin）
+// ── 角色指派資料（2026-08-27 改為自動生成）────────────────────────────────
+//   原本 44 個模組每個都要手寫 3 段（變數宣告、角色清單載入、已指派載入）＋1 個渲染呼叫，
+//   新模組只要漏掉其中一段就會靜靜地少一塊設定畫面。改成一次撈完、依 roles.module 分組：
+//     $RS[module]  ＝ 該模組可指派的角色清單（含系統角色 admin）
+//     $RSU[module] ＝ [user_id => 已指派的角色]（個人指派 user_roles）
+//   下方 eg_render_role_section() 一律吃這兩個陣列；沒有手寫區塊的模組會由最後的
+//   「其他模組」迴圈自動補一塊出來（見該處說明），不會再有漏掉的情況。
+$RS = []; $RSU = []; $_quotDepts = [];
+$_asdocPositions = []; $_asdocPosRoles = [];
 try {
-    $st = $conn_pdo->prepare("SELECT role_id, role_name, is_system FROM roles WHERE module=? OR is_system=1 ORDER BY is_system DESC, role_id ASC");
-    $st->execute(['quotation']); $_quotRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['notice']);    $_noticeRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['homepage']);  $_homeRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['qc']);        $_qcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['car']);       $_carRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['imgedit']);   $_imgRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['drawing_rename']); $_drawRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['bom_rename']); $_bomRenRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['oready']);    $_oreadyRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['bom_track']); $_bomtrkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['personal_task']); $_ptaskRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['order_profit']); $_profitRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['part_process_report']); $_pprRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['as_doc']);    $_asdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['master_data']); $_mdataRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['db_backup']);   $_dbbkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['stamp']);       $_stampRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['kpi']);         $_kpiRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['roster']);      $_rosterRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['data_console']);$_dcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['tool_calib']);  $_tcalRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['training']);    $_trainRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['meeting']);     $_meetRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['vendor_audit']);$_vaudRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['leave']);       $_leaveRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['shipping']);    $_shipRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['purchase']);    $_purcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['accounting']);  $_accRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['external_doc']);$_extdocRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['order_track']); $_otrkRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['review_form']); $_rvfRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['type_id_ctrl']); $_tidcRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['td_dev_eval']); $_tdevRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['pfmea']); $_pfmeaRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['project']); $_prjRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['hr_form']); $_hrfRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['form_signer']); $_fsdRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['equip_machine']); $_eqmRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['business_trip']); $_btrpRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['doc_apply']); $_dapRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['eng_change']); $_engRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['print_sign_log']); $_pslRoles = $st->fetchAll(PDO::FETCH_ASSOC);
-    $st->execute(['internal_audit']); $_iaRoles = $st->fetchAll(PDO::FETCH_ASSOC);
+    $_sysRoles = $conn_pdo->query(
+        "SELECT role_id, role_name, is_system FROM roles WHERE is_system=1 ORDER BY role_id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    $_allRoles = $conn_pdo->query(
+        "SELECT role_id, role_name, is_system, module FROM roles WHERE is_system=0 AND module IS NOT NULL AND module<>'' ORDER BY role_id ASC")->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($_allRoles as $_r) {
+        $_m = $_r['module'];
+        if (!isset($RS[$_m])) $RS[$_m] = $_sysRoles;   // 系統角色 admin 每個模組都列（與原本行為一致）
+        unset($_r['module']);
+        $RS[$_m][] = $_r;
+    }
+    // 已指派（個人指派）：系統角色要出現在每一個模組的清單裡，與原本 `WHERE module=? OR is_system=1` 相同
+    $_urRows = $conn_pdo->query(
+        "SELECT ur.user_id, r.role_id, r.role_name, r.is_system, r.module
+         FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id")->fetchAll(PDO::FETCH_ASSOC);
+    $_sysRoleUsers = [];
+    foreach ($_urRows as $_r) {
+        $_entry = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+        if ((int)$_r['is_system'] === 1) {
+            $_sysRoleUsers[$_r['user_id']][] = $_entry;
+            foreach (array_keys($RS) as $_m) $RSU[$_m][$_r['user_id']][] = $_entry;   // 系統角色：每個模組都顯示
+        } elseif ($_r['module'] !== null && $_r['module'] !== '') {
+            $RSU[$_r['module']][$_r['user_id']][] = $_entry;
+        }
+    }
+    // 有自訂角色的模組，系統角色也要一起併進去（上面那圈只跑了當下已存在的 key，順序上可能漏掉後建的）
+    foreach (array_keys($RS) as $_m) {
+        foreach ($_sysRoleUsers as $_uid => $_es) {
+            foreach ($_es as $_e) {
+                $_has = false;
+                foreach (($RSU[$_m][$_uid] ?? []) as $_x) { if ($_x['role_id'] == $_e['role_id']) { $_has = true; break; } }
+                if (!$_has) $RSU[$_m][$_uid][] = $_e;
+            }
+        }
+    }
 } catch(Exception $_e) {}
 
-// 使用者已指派角色（依模組過濾）
-try {
-    $st = $conn_pdo->prepare("
-        SELECT ur.user_id, r.role_id, r.role_name
-        FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id
-        WHERE r.module=? OR r.is_system=1");
-    $st->execute(['quotation']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userQuotRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+// 取值一律走這兩支：某個模組還沒建任何自訂角色時（例如 homepage），仍要列出系統角色「管理員」，
+// 與舊寫法的 `WHERE module=? OR is_system=1` 完全等價——否則該區塊會整塊變成「尚未建立任何角色」。
+if (!function_exists('rs_of')) {
+    function rs_of($module) { global $RS, $_sysRoles; return $RS[$module] ?? ($_sysRoles ?: []); }
+    function rsu_of($module) {
+        global $RSU, $_sysRoleUsers;
+        if (isset($RSU[$module])) return $RSU[$module];
+        return $_sysRoleUsers ?: [];     // 只有系統角色的模組：仍要顯示誰是管理員
     }
-    $st->execute(['notice']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userNoticeRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['homepage']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userHomeRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['qc']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userQcRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['car']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userCarRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['imgedit']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userImgRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['drawing_rename']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userDrawRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['bom_rename']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userBomRenRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['oready']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userOreadyRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['bom_track']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userBomtrkRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['personal_task']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userPtaskRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['order_profit']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userProfitRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['part_process_report']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userPprRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['as_doc']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userAsdocRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['master_data']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userMdataRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['db_backup']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userDbbkRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['stamp']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userStampRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['kpi']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userKpiRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['roster']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userRosterRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['data_console']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userDcRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['tool_calib']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userTcalRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['training']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userTrainRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['meeting']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userMeetRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['vendor_audit']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userVaudRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['leave']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userLeaveRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['shipping']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userShipRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['purchase']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userPurcRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['accounting']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userAccRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['external_doc']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userExtdocRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['order_track']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userOtrkRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['review_form']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userRvfRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['type_id_ctrl']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userTidcRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['td_dev_eval']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userTdevRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['pfmea']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userPfmeaRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['project']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userPrjRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['hr_form']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userHrfRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['form_signer']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userFsdRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['equip_machine']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userEqmRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['business_trip']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userBtrpRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['doc_apply']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userDapRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['eng_change']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userEngRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['print_sign_log']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userPslRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-    $st->execute(['internal_audit']);
-    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $_r) {
-        $_userIaRoles[$_r['user_id']][] = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
-    }
-} catch(Exception $_e) {}
+}
+
+// 相容：AS9100「職稱權限」區塊仍直接引用 $_asdocRoles
+$_asdocRoles = rs_of('as_doc');
 
 // ── 職稱角色指派資料（position_roles，AS9100 文件管理用）──────────────────
 try {
@@ -624,6 +411,8 @@ try {
 // 角色指派區塊（依模組共用渲染）
 if (!function_exists('eg_render_role_section')) {
     function eg_render_role_section($prefix, $module, $title, $icon, $color, $hint, $roles, $userRoles, $admins, $depts, $canEdit) {
+        // 記錄已渲染的模組，供頁尾「其他模組」自動補區塊時排除（不必再維護一份手寫清單＝鐵律4）
+        $GLOBALS['_eg_rendered_role_modules'][] = $module;
         ?>
         <div class="row" style="margin-top:20px;" id="<?= $prefix ?>-role-section">
             <div class="col-md-12">
@@ -1190,119 +979,119 @@ $_quotDepts = array_keys($_deptSet);
                     <?php
                     eg_render_role_section('quot', 'quotation', '報價單管理', 'fa-file-text-o', '#3498db',
                         '為每位使用者指派報價單管理頁面的操作角色。角色與功能定義請至 <strong>報價單管理 → 報價單設定（齒輪圖示）→ 權限設定</strong>。',
-                        $_quotRoles, $_userQuotRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('quotation'), rsu_of('quotation'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('notice', 'notice', '公告 / 通知管理', 'fa-bullhorn', '#1ABB9C',
                         '為每位使用者指派公告/通知頁面的操作角色。角色與功能定義請至 <strong>公告 / 通知管理 → 權限設定</strong>。',
-                        $_noticeRoles, $_userNoticeRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('notice'), rsu_of('notice'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('home', 'homepage', '首頁設定', 'fa-home', '#e67e22',
                         '為每位使用者指派首頁設定頁面的操作角色。角色與功能定義請至 <strong>首頁設定 → 權限設定</strong>。',
-                        $_homeRoles, $_userHomeRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('homepage'), rsu_of('homepage'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('qc', 'qc', '品管檢驗（QC）', 'fa-check-square-o', '#9b59b6',
                         '為每位使用者指派品管檢驗頁面的操作角色（填寫檢驗表單、修改/開放檢驗歷程、回覆異常處置）。角色與功能定義請至 <strong>品管檢驗 → 設定（齒輪圖示）→ 權限設定</strong>。',
-                        $_qcRoles, $_userQcRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('qc'), rsu_of('qc'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('car', 'car', '異常矯正處理單', 'fa-wrench', '#16a085',
                         '為每位使用者指派異常矯正處理單頁面的操作角色（檢閱、開立、修改、刪除、管理設定）。角色與功能定義請至 <strong>異常矯正處理單 → 設定（齒輪圖示）→ 權限設定（角色）</strong>。',
-                        $_carRoles, $_userCarRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('car'), rsu_of('car'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('mdata', 'master_data', '主檔管理（附件 / 圖面查閱）', 'fa-database', '#d4761a',
                         '為每位使用者指派主檔管理頁「其他附件」分頁的操作角色（檢視、上傳、刪除、編輯標籤/浮水印）。「報價資料」分頁沿用報價單「檢視」權限（quotation_view）；「圖面查閱」對所有登入者開放。<strong>過渡期：尚未指派 master_data 角色前，暫時沿用主檔管理頁原有附件權限，不會鎖住任何人；一旦指派了第一位，未被指派者即改以角色為準。</strong>角色與功能定義請至 <strong>主檔管理頁 → 角色設定（僅管理員可見）</strong>。管理者固定可用。',
-                        $_mdataRoles, $_userMdataRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('master_data'), rsu_of('master_data'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('imgedit', 'imgedit', '批圖編輯器', 'fa-paint-brush', '#ab47bc',
                         '為每位使用者指派「批圖使用者」角色（批圖編輯器：訂單追蹤頁「批圖」按鈕開啟的圖面編輯跳窗）。<strong>尚未指派任何人之前，暫時開放所有登入者使用；一旦指派了第一位，未被指派者即無法開啟。</strong>管理者固定可用。',
-                        $_imgRoles, $_userImgRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('imgedit'), rsu_of('imgedit'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('rvf', 'review_form', '審核表單', 'fa-clipboard', '#c0782d',
                         '為每位使用者指派審核表單引擎的操作角色（檢閱、檢視全部人員表單、建立/填寫/送出、列印、模板管理）。模板管理僅供設定 AS 文件綁定/審核核准流程；項次內容維護權限則另在「審核表單模板管理」頁依維護部門/維護人員指派，不透過此處角色。角色與功能定義請至 <strong>審核表單模板管理 → 使用說明</strong>。',
-                        $_rvfRoles, $_userRvfRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('review_form'), rsu_of('review_form'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('hrf', 'hr_form', '人資職務表單', 'fa-id-card', '#a0662e',
                         '為每位使用者指派人資職務表單（職務說明書／專業技能鑑定考核表／職能鑑定表）的操作角色（檢閱、檢視全部人員表單、建立/批次建立/複製/編輯、列印、範本管理）。確認人（該員工直屬主管）／核准人（總經理）為固定角色，不透過此處角色指派，由系統依組織架構自動解析。角色與功能定義請至 <strong>人資職務表單設定 → 使用說明</strong>。',
-                        $_hrfRoles, $_userHrfRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('hr_form'), rsu_of('hr_form'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('fsd', 'form_signer', '表單簽核設計器', 'fa-object-group', '#7a5217',
                         '為每位使用者指派表單簽核設計器的操作角色（檢閱、檢視全部人員案件、建立/送出案件、列印、樣板管理）。各階段的簽核槽位（意見成員/決策者）由管理員在「樣板管理」逐樣板設定，不透過此處角色指派。角色與功能定義請至 <strong>表單簽核設計器 - 樣板管理 → 使用說明</strong>。',
-                        $_fsdRoles, $_userFsdRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('form_signer'), rsu_of('form_signer'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('drawren', 'drawing_rename', '圖面自動改檔名工具', 'fa-file-image-o', '#2c81ba',
                         '為每位使用者指派圖面自動改檔名工具的操作角色（檢閱、執行改檔名、管理資料夾與前後綴設定）。角色與功能定義請至 <strong>圖面自動改檔名工具</strong> 頁面內查看「權限說明」。',
-                        $_drawRoles, $_userDrawRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('drawing_rename'), rsu_of('drawing_rename'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('bomren', 'bom_rename', '叫料文件自動改檔名工具', 'fa-file-archive-o', '#8e44ad',
                         '為每位使用者指派叫料文件（BOM）自動改檔名工具的操作角色（檢閱/掃描、核對確認並產生檔案、管理資料夾與OCR設定）。角色與功能定義請至 <strong>叫料文件自動改檔名工具</strong> 頁面內查看「權限說明」。',
-                        $_bomRenRoles, $_userBomRenRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('bom_rename'), rsu_of('bom_rename'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('oready', 'oready', '生管 BOM 狀態管理', 'fa-industry', '#e67e22',
                         '為每位使用者指派 BOM 狀態頁（回廠標記、拆批/合併、移轉、人工結案等）的操作角色。角色與功能定義請至 <strong>生管 BOM 狀態頁右上角「角色功能設定」（僅管理員可見）</strong>。',
-                        $_oreadyRoles, $_userOreadyRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('oready'), rsu_of('oready'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('bomtrk', 'bom_track', 'BOM 追蹤', 'fa-crosshairs', '#8e44ad',
                         '為每位使用者指派 BOM 追蹤功能的使用權限。此功能不分細部操作，只要指派角色即可使用。',
-                        $_bomtrkRoles, $_userBomtrkRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('bom_track'), rsu_of('bom_track'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('profit', 'order_profit', '訂單毛利分析', 'fa-line-chart', '#c0392b',
                         '為每位使用者指派「訂單毛利分析」頁的檢視資格。<strong>毛利屬敏感資料</strong>，未被指派角色者無法開啟本頁；此功能不分細部操作。管理者固定可用。',
-                        $_profitRoles, $_userProfitRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('order_profit'), rsu_of('order_profit'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('ppr', 'part_process_report', '料號製程履歷報告', 'fa-file-text-o', '#c0392b',
                         '為每位使用者指派「料號製程履歷報告」頁的使用資格。<strong>整頁單一權限</strong>（含成本毛利，不分層），未被指派角色者無法開啟本頁。管理者固定可用。',
-                        $_pprRoles, $_userPprRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('part_process_report'), rsu_of('part_process_report'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('stamp', 'stamp', '圖章管理', 'fa-certificate', '#c0762c',
                         '圖章管理頁角色：「圖章檢閱」＝唯讀（檢閱清冊/匯出）；「圖章管理員」＝登記核發（個人章/部門章）、種類管理、掃描實體章上傳。<strong>未被指派任何角色者看不到清冊內容</strong>（避免圖章被瀏覽轉存惡意複製）；簽核單據上的印章顯示不受此限。管理者固定可管理。',
-                        $_stampRoles, $_userStampRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('stamp'), rsu_of('stamp'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('kpi', 'kpi', 'KPI 關鍵績效指標', 'fa-tachometer', '#c0762c',
                         'KPI 總覽頁角色：「KPI檢閱」＝檢視總覽/趨勢圖/附件；「KPI填報」＝檢閱＋重算自動指標、擔當者填寫本人負責的手動指標與上傳佐證；「KPI管理員」＝填報＋手動覆寫(需原因)、舊年度重算、KPI設定頁(指標/公式/目標/權限規則/NAS路徑)。此處指派與 KPI 設定頁的「部門×主管階級/指定人員」規則<strong>為聯集</strong>；管理者固定全權。',
-                        $_kpiRoles, $_userKpiRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('kpi'), rsu_of('kpi'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('ptask', 'personal_task', '個人工作紀錄', 'fa-sticky-note-o', '#27ae60',
                         '為每位使用者指派「個人工作紀錄」功能的使用資格。此功能不分細部操作；每人只看得到自己建立的紀錄（含管理者也看不到他人內容）。',
-                        $_ptaskRoles, $_userPtaskRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('personal_task'), rsu_of('personal_task'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('roster', 'roster', '輪值排班表', 'fa-calendar-check-o', '#c0762c',
                         '通用輪值排班（掃地/值日/現場班別皆共用）角色：「排班唯讀」＝只能檢閱自己建立或被設為公開對象的表；「排班一般使用者」＝可建立/編輯/刪除自己的排班表；「排班管理者」＝可檢視所有表、代他人補簽、對任何表調班。值勤本人可對自己的班別簽核；公開對象名單內的人才看得到該表。管理者固定全權。',
-                        $_rosterRoles, $_userRosterRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('roster'), rsu_of('roster'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('asdoc', 'as_doc', 'AS9100 文件管理（個人指派，優先於職稱）', 'fa-folder-open-o', '#c0392b',
                         '為使用者「個人」指派 AS 文件管理角色——<strong>個人有指派時以個人為準（覆蓋職稱）</strong>；未指派者自動套用下方「職稱權限」的設定。角色定義（名稱與功能勾選）請至 <strong>AS9100 文件管理頁 → 角色設定</strong>。<br><strong>本區角色同時套用到「AS流程說明手冊」頁</strong>（各課室流程/表單說明＋待處理問題清單，唯讀）：有 <code>asdoc_view</code>（或該頁 ACRUD 的 A／R）即可檢視，管理者固定可看。',
-                        $_asdocRoles, $_userAsdocRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('as_doc'), rsu_of('as_doc'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('dbbk', 'db_backup', '資料庫備份管理', 'fa-database', '#b06f27',
                         '為每位使用者指派「資料庫備份管理」頁的操作角色（檢視/下載、立即備份、整表還原）。<strong>未被指派角色者無法進入本頁</strong>；整庫還原、備份設定與還原密碼一律僅限管理員；整表/部分還原另需輸入管理員設定的還原密碼。角色與功能定義請至 <strong>資料庫備份管理頁 → 角色權限（僅管理員可見）</strong>。',
-                        $_dbbkRoles, $_userDbbkRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('db_backup'), rsu_of('db_backup'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('dc', 'data_console', '資料急救台', 'fa-medkit', '#b53c26',
                         '為每位使用者指派「資料急救台」頁的操作角色。此頁可直接查改後端資料庫，請謹慎授權。角色功能：<strong>data_console_view</strong>＝進入/瀏覽/搜尋/查詢；<strong>data_console_edit</strong>＝新增/修改（仍受各表「允許編輯」限制）；<strong>data_console_delete</strong>＝刪除（仍受各表「允許刪除」限制且需二次確認）。<strong>未被指派角色者無法進入本頁</strong>；表級開放設定與關聯地圖一律僅限管理員；管理員固定擁有全部權限。',
-                        $_dcRoles, $_userDcRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('data_console'), rsu_of('data_console'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('tcal', 'tool_calib', '量測儀器校驗管理', 'fa-thermometer-half', '#b06f27',
                         '為每位使用者指派「量測儀器校驗管理」頁的操作角色（KPI #18 量測儀器按時校驗率的來源頁）。角色功能：<strong>校驗唯讀</strong>＝檢視儀器清單/校驗歷史/統計與匯出；<strong>校驗登錄</strong>＝唯讀＋登錄各儀器校驗完成紀錄；<strong>校驗管理員</strong>＝登錄＋新增儀器、設定週期/納管/基準到期日、刪除誤登紀錄。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
-                        $_tcalRoles, $_userTcalRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('tool_calib'), rsu_of('tool_calib'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('train', 'training', '教育訓練管理', 'fa-graduation-cap', '#b06f27',
                         '為每位使用者指派「教育訓練管理」頁的操作角色（KPI #19 人員教育訓練達成率的來源頁）。角色功能：<strong>訓練檢閱</strong>＝檢視訓練計畫/紀錄、月達成率與匯出；<strong>訓練登錄</strong>＝檢閱＋新增/編輯訓練場次、登錄完成；<strong>訓練管理員</strong>＝登錄＋刪除場次。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
-                        $_trainRoles, $_userTrainRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('training'), rsu_of('training'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('meet', 'meeting', '會議紀錄管理', 'fa-users', '#8A5A2B',
                         '為每位使用者指派「會議紀錄管理」頁的操作角色（2-GM-05-01 會議記錄）。角色功能：<strong>會議記錄檢閱</strong>＝檢視會議記錄（草稿僅記錄人本人看得到，出席人員／主席／總經理對相關會議自動有唯讀權限，不受此角色限制）；<strong>會議記錄登錄</strong>＝檢閱＋新增/編輯/送出自己的會議記錄；<strong>會議記錄管理員</strong>＝登錄＋檢視全部人員記錄、刪除、修改他人已送出的記錄。<strong>未被指派角色者仍可看到自己的草稿與相關會議</strong>，但看不到其他人的記錄列表；管理者固定擁有全部權限。',
-                        $_meetRoles, $_userMeetRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('meeting'), rsu_of('meeting'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('vaud', 'vendor_audit', '供應商稽核管理', 'fa-clipboard', '#b06f27',
                         '為每位使用者指派「供應商稽核管理」頁的操作角色（KPI #6 廠商稽核按時執行率的來源頁）。角色功能：<strong>稽核檢閱</strong>＝檢視廠商清單/稽核歷史/半年統計與匯出；<strong>稽核登錄</strong>＝檢閱＋登錄各廠商稽核完成紀錄；<strong>稽核管理員</strong>＝登錄＋設定週期/納管/基準到期日、刪除誤登紀錄。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
-                        $_vaudRoles, $_userVaudRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('vendor_audit'), rsu_of('vendor_audit'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('eqm', 'equip_machine', '機台設備一覽表', 'fa-cogs', '#b06f27',
                         '為每位使用者指派「機台設備一覽表」頁的操作角色（主檔與 KPI「機台資產設定」共用同一張 machine_list）。角色功能：<strong>設備唯讀</strong>＝檢視機台清單/保養人歷程/機器設備履歴表；<strong>設備登錄</strong>＝唯讀＋新增/編輯機台、指派保養人、登錄履歴表、送出年度整份清單；<strong>設備管理員</strong>＝登錄＋停用機台、校正/刪除歷史紀錄、AS文件綁定、送簽設定、核准/退回年度清單。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
-                        $_eqmRoles, $_userEqmRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('equip_machine'), rsu_of('equip_machine'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('btrp', 'business_trip', '公出單', 'fa-sign-out', '#d99a4e',
                         '為每位使用者指派「公出單」頁（2-MM-01-06）的角色。<strong>所有在職員工不需要指派任何角色</strong>，就能開立／檢視／列印<strong>自己的</strong>公出單，並核准指派給自己的單（核准人＝公出人的單位主管，主管本人公出時自動改為最高核准人員，主管請假時依代理設定轉給代理人）。此處只指派兩種加值角色：<strong>公出單檢閱</strong>＝可查看全部人員的公出單（唯讀）；<strong>公出單管理員</strong>＝查全部＋代其他人開單、刪除、模組設定（AS 文件綁定／外訓是否自動產生／核准圖章／列印簽章三格來源）、從外訓場次批次帶入。<span style="color:#b06f27;">「是否需要主管簽核（免簽核）」僅系統管理者可改</span>。管理者固定擁有全部權限。',
-                        $_btrpRoles, $_userBtrpRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('business_trip'), rsu_of('business_trip'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('dap', 'doc_apply', '文件制修申請單', 'fa-file-text-o', '#b06f27',
                         '為每位使用者指派「文件制、修申請單」頁（2-DC-01-01）的角色。角色功能：<strong>文件制修申請單檢閱</strong>＝唯讀查看全部申請單與列印；
@@ -1312,7 +1101,7 @@ $_quotDepts = array_keys($_deptSet);
                          批次列印／批次刪除、會簽預設（以部門分類設定，也可對單一 AS 文件個別覆寫）與模組設定（AS 文件綁定／四格簽章來源／三組圖章模板）。<br>
                          <span style="color:#b06f27;">沒有任何角色的人</span>，若被指派為某張單的<strong>會簽單位簽核人</strong>（含代理人），仍可從通知開啟該單完成會簽。
                          核准／管理代表／單位主管的實際人員一律即時查<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定</a>，不寫死人名。管理者固定擁有全部權限。',
-                        $_dapRoles, $_userDapRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('doc_apply'), rsu_of('doc_apply'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('eng', 'eng_change', '工程變更申請單', 'fa-exchange', '#d99a4e',
                         '為每位使用者指派「<a href="../TD/eng_change.php" target="_blank" style="color:#b5762a;">工程變更申請單</a>」頁（2-TD-01-01）的角色。
@@ -1322,7 +1111,7 @@ $_quotDepts = array_keys($_deptSet);
                          <span style="color:#b06f27;">簽核權不看角色</span>：流程各關卡（單位主管→倉管組→技術課→核准→相關單位會審→管制員）由系統依<strong>本單日期當時的職務</strong>解析出該簽的人，
                          是那個人才簽得下去（本人不在時自動換代理人，圖章加「代」字）。沒有任何角色的人，仍看得到「輪到自己簽」的那幾張單，否則收到通知點進來會是空白頁。<br>
                          各關卡與六個會審單位對應的部門一律即時查<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定</a>，不寫死部門 id 或人名。管理者固定擁有全部權限。',
-                        $_engRoles, $_userEngRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('eng_change'), rsu_of('eng_change'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('psl', 'print_sign_log', '列印與簽核紀錄', 'fa-history', '#b06f27',
                         '為每位使用者指派「<a href="../admin/print_sign_log.php" target="_blank" style="color:#b5762a;">列印與簽核紀錄</a>」頁的角色。
@@ -1332,7 +1121,7 @@ $_quotDepts = array_keys($_deptSet);
                          列印紀錄會留下<strong>列印時間／列印人／登入電腦（電腦名稱＋IP）／文件名稱</strong>；
                          簽核紀錄取自全站共用的簽核資料，含<strong>文件名稱／送件日期／簽核人／簽核日期時間／結果與回覆意見</strong>。
                          目前涵蓋哪些表單、哪些還沒涵蓋，該頁「使用說明」會即時掃描列出。管理者固定擁有全部權限。',
-                        $_pslRoles, $_userPslRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('print_sign_log'), rsu_of('print_sign_log'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('ia', 'internal_audit', '內部稽核', 'fa-search-plus', '#b06f27',
                         '為每位使用者指派「<a href="../ADM/internal_audit.php" target="_blank" style="color:#b5762a;">內部稽核</a>」頁（2-GM-06）的角色。
@@ -1342,23 +1131,23 @@ $_quotDepts = array_keys($_deptSet);
                          <strong>內稽管理員（管理代表）</strong>＝全部＋年度計畫表建立/排定/送審/核准、稽核通知單新增編輯刪除、自動建立事前與結束會議紀錄、
                          AS 條文題庫維護、IA 單管理代表意見與<strong>結案</strong>、稽核報告表儲存與核准、模組設定（七份表單的 AS 文件綁定／簽章圖章／核准審查格來源／到期提醒天數）。<br>
                          <span style="color:#b06f27;">IA 單四段分工由系統依角色鎖定</span>：稽核員段／受稽單位段／驗證段／管理代表段，各段只有該身分能填。管理者固定擁有全部權限。',
-                        $_iaRoles, $_userIaRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('internal_audit'), rsu_of('internal_audit'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('leave', 'leave', '請假系統', 'fa-calendar-minus-o', '#d99a4e',
                         '<strong>所有登入者都能申請請假、查看與撤回／銷假自己的單</strong>，不需要在這裡指派角色。此處只指派 <strong>人事（可看全部請假單）</strong>＝可檢視全公司請假單（不含代為簽核的權力）。<br>
                          <span style="color:#b06f27;">簽核權不由角色決定</span>：由申請人的部門／職稱階級推出主管鏈逐層簽核；主管當日有行程時改由其代理人簽，代理人若正好是申請人則自動直升上一級（權責分離）。<strong>代理人設定與最終裁決者請至「人事設定（hr_settings）」維護</strong>。主管（職稱有設定階級者）自動可檢視自己部門含下轄的請假單。管理者固定擁有全部權限。',
-                        $_leaveRoles, $_userLeaveRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('leave'), rsu_of('leave'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('ship', 'shipping', '快速出貨', 'fa-truck', '#F0A24B',
                         '為每位使用者指派「快速出貨」頁的操作角色。角色功能：<strong>出貨檢閱</strong>＝查詢待出貨清單、檢視近期出貨單與匯出，<span style="color:#b06f27;">不可建立出貨單</span>；<strong>出貨登錄</strong>＝檢閱＋建立出貨單（同客戶同日自動併為一張出貨單，並回填訂單編號與扣製令完工量）；<strong>出貨管理員</strong>＝登錄＋執行「舊資料訂單回填」（把 ERP 匯入、未帶訂單編號的歷史出貨資料比對回訂單）。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
-                        $_shipRoles, $_userShipRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('shipping'), rsu_of('shipping'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('purc', 'purchase', '申請採購', 'fa-shopping-cart', '#8A5A2B',
                         '<span style="color:#b06f27;">此模組的角色名稱與內容可自訂</span>：到「申請採購」頁 →「設定」分頁 →「角色權限設定」可新增／改名／刪除角色，並逐一勾選該角色的<strong>可視內容</strong>（檢閱全部單據、看得到金額、看得到廠商與發票付款）與<strong>可操作</strong>（申請、採購版申請單、到貨入庫、詢價下單、高階核准、採購設定）。此處只負責把角色指派給人。以下是預設角色的內容，若已被改過請以該頁「角色權限說明」為準。<br>
                          為每位使用者指派「申請採購」頁的操作角色（權限由上而下包含，指派上層即自動具備下層能力）。<strong>申請採購</strong>＝提出／修改自己的申請單、上傳附件、查看自己的單；<strong>到貨入庫</strong>＝申請＋登錄到貨（可選「入庫待領／直接交付請購人／不列管」）；<strong>採購作業</strong>＝到貨入庫＋詢價填實際金額、下單、記發票與付款、結案、維護採購品主檔；<strong>採購管理員</strong>＝採購作業＋標籤與規格屬性設定、簽核門檻與附件路徑設定、刪除任何單據；<strong>採購檢閱</strong>＝唯讀查看全部單據與統計；<strong>高階核准</strong>＝金額超過第二層門檻時的第二關簽核人；<strong>完整申請單</strong>＝看到「採購版」申請單。<br>
                          <span style="color:#b06f27;">申請單有兩種版型</span>：一般使用者看到<strong>精簡版</strong>（只填用途、希望到貨日、急件、品名／規格／數量／單位，標題自動產生），採購料號、預估單價、到貨處理、附件分類都由採購後續補；指派<strong>完整申請單</strong>角色的人（採購作業以上自動具備，不必另外指派）看到<strong>採購版</strong>，可直接綁採購料號、手填標題、填預估單價與到貨處理、分類附件。<br>
                          <span style="color:#b06f27;">簽核不在申請當下判定</span>：申請時金額可以留白，等採購詢完價、填入實際金額後才依含稅總額判定要不要簽核（門檻在該頁「設定」分頁調整，預設 5000／30000）。第一層簽核人＝申請人的部門主管，由系統依代理人設定自動解析（主管當日有行程改由代理人簽，代理人正好是申請人時自動直升上一級）。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
-                        $_purcRoles, $_userPurcRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('purchase'), rsu_of('purchase'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('acc', 'accounting', '會計（對帳／應收／發票／應付）', 'fa-calculator', '#b06f27',
                         '為每位使用者指派「會計模組」的角色，涵蓋客戶發票資料維護、對帳作業、對帳單總覽、應收對帳單、發票開立與轉出、收款沖帳、應付對帳（加工費＋採購）、付款與沖帳等頁。<br>
@@ -1369,32 +1158,47 @@ $_quotDepts = array_keys($_deptSet);
                          <span style="color:#b06f27;">對帳分工（實務）</span>：應收由<strong>業務</strong>對完帳給會計、應付由<strong>生管</strong>對完帳給會計，所以另有兩個只做對帳的角色——<strong>應收對帳(業務)</strong> 只能對應收（客戶／出貨退貨），<strong>應付對帳(生管)</strong> 只能對應付（廠商／加工費），<span style="color:#b06f27;">兩者互不相通</span>（業務不能碰應付、生管不能碰應收），且都<strong>不能</strong>開發票或做收款付款。這兩個角色可以修改單據數量/單價/金額/備註與帳款月份，但<strong>每次修改都必填原因並寫入稽核紀錄</strong>。<br>
                          <span style="color:#b06f27;">鎖帳規則</span>：對帳人員按「確認正確」即鎖帳，之後不可改單也不可再暫存，<strong>僅會計管理員可退回重對</strong>（須填原因）。已開立發票的憑證另有更硬的鎖——不提供解鎖，只能作廢／折讓／補開，因為帳面必須與國稅局申報一致。<br>
                          <span style="color:#b06f27;">為什麼要先維護客戶發票資料</span>：開立電子發票必須有買方統一編號與買方名稱，目前 925 家有效客戶只有 12 家資料完整、近一年有出貨的 175 家中有 171 家缺資料，補齊前發票轉出會被擋下。<strong>未被指派角色者無法進入這些頁面</strong>；管理者固定擁有全部權限。',
-                        $_accRoles, $_userAccRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('accounting'), rsu_of('accounting'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('extdoc', 'external_doc', '外來文件清單', 'fa-file-text-o', '#b06f27',
                         '為每位使用者指派「外來文件清單」頁（業務 &gt; 外來文件清單，AS9100 外來文件管制）的操作角色。角色功能：<strong>外來文件檢閱</strong>＝檢視清單（依訂單綁定/客戶/年度篩選）、匯出 CSV、依客戶分組列印；<strong>外來文件管理</strong>＝檢閱＋綁定列印頁尾的 AS 文件編號。清單內容來自附件標籤有勾「列入外來文件清單」的料號附件與報價附件（標籤設定在報價單頁或主檔管理）。<strong>未被指派角色者無法檢視本頁</strong>；管理者固定擁有全部權限。',
-                        $_extdocRoles, $_userExtdocRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('external_doc'), rsu_of('external_doc'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('otrk', 'order_track', '訂單追蹤', 'fa-list-alt', '#c0762c',
                         '為每位使用者指派「訂單追蹤」頁（業務 &gt; 訂單追蹤）的操作角色。角色與各功能的對應在<strong>訂單追蹤頁右上「角色設定」</strong>（僅管理員）依功能群組勾選：訂單基本操作（檢視/新建編輯/刪除/顯示金額）、訂單流程（批圖/轉生管/結案/取消訂單/OP轉訂單）、訂單變更、設計與批圖（設計備註/批圖編輯器/前往料號主檔）、計算工具（齒輪/鍵槽計算）。<strong>注意：訂單追蹤頁目前權限檢查尚未切換為角色制</strong>，此處指派先建立人員對照，切換後才會生效；管理者固定擁有全部權限。',
-                        $_otrkRoles, $_userOtrkRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('order_track'), rsu_of('order_track'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('tidc', 'type_id_ctrl', '型態識別文件管制表', 'fa-sitemap', '#b06f27',
                         '為每位使用者指派「型態識別文件管制表」頁（技術部 &gt; 型態識別文件管制表）的操作角色。角色功能：<strong>型態文件檢閱</strong>＝檢視清單、開啟查看、列印；<strong>型態文件登錄</strong>＝檢閱＋新增/編輯、「掃描待建立料號」與自動產生/同步、確認清單（含排除項目）；<strong>型態文件管理員</strong>＝登錄＋刪除、AS 文件編號綁定。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
-                        $_tidcRoles, $_userTidcRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('type_id_ctrl'), rsu_of('type_id_ctrl'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('tdev', 'td_dev_eval', '產品開發評估表', 'fa-flask', '#c0762c',
                         '為每位使用者指派「產品開發評估表」頁（技術部 &gt; 產品開發評估表，AS 2-TD-02-01）的操作角色。角色功能：<strong>評估表檢閱</strong>＝檢視清單、開啟查看、列印；<strong>評估表登錄</strong>＝檢閱＋新增/編輯、逐項填寫、依部門身分簽核；<strong>評估表管理員</strong>＝登錄＋刪除、AS 文件編號綁定、取消他人簽核。<strong>APQP 小組簽認各部門欄位由該部門任一主管簽核</strong>，部門綁定在「組織角色綁定設定」頁（重用技術/業務/管理/生產/品保部門既有綁定，另有資材部門角色），與本頁的檢閱/登錄/管理角色是兩件事——這裡只決定誰能進本頁操作，能不能簽某部門的欄位另外看是否為該部門主管。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
-                        $_tdevRoles, $_userTdevRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('td_dev_eval'), rsu_of('td_dev_eval'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('pfmea', 'pfmea', 'PFMEA潛在失效模式及效應分析', 'fa-exclamation-triangle', '#8A5A2B',
                         '為每位使用者指派「PFMEA潛在失效模式及效應分析」頁（技術部 &gt; PFMEA，AS 3-TD-01-02）的操作角色。角色功能：<strong>PFMEA檢閱</strong>＝檢視清單、開啟查看、列印；<strong>PFMEA登錄</strong>＝檢閱＋新增/編輯分析列；<strong>PFMEA管理員</strong>＝登錄＋刪除、AS 文件編號綁定。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
-                        $_pfmeaRoles, $_userPfmeaRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('pfmea'), rsu_of('pfmea'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('prj', 'project', '專案管理', 'fa-folder-open-o', '#B5762A',
                         '為每位使用者指派「專案管理」頁（總經理室 &gt; 專案管理，AS 2-GM-02 專案管理程序）的操作角色。角色功能：<strong>專案檢閱</strong>＝檢視清單、明細、列印執行規劃表(2-GM-02-02)與專案管理卡(2-GM-02-03)；<strong>專案登錄</strong>＝檢閱＋建立/編輯專案、訂單轉專案、編排執行規劃表、開立管理卡、同步 BOM 製程；<strong>專案管理員</strong>＝登錄＋刪除專案與管理卡、自訂標籤維護、模組設定（立案核准人、預設會簽單位、結案前文件檢核開關、圖章模板）、AS 文件編號綁定、批次自動簽核。'
                         . '<br><strong>另有兩種不看角色的身分</strong>：①<strong>專案負責人</strong>（每個專案自己指定的人）即使只有「專案檢閱」角色，也能編輯自己負責的那些專案；②被指派為某一列<strong>會簽人</strong>者不需要任何角色就能處理自己那一列會簽。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
-                        $_prjRoles, $_userPrjRoles, $admins, $_quotDepts, $canEdit);
+                        rs_of('project'), rsu_of('project'), $admins, $_quotDepts, $canEdit);
+
+                    // ── 其他模組：有建角色、但上面還沒有手寫區塊的，自動補一塊 ──────────────
+                    //   以前新模組要回到本頁手寫 4 段（宣告/載入/載入/呼叫），漏掉就整塊設定畫面消失、
+                    //   而且不會報錯。現在只要在該模組頁面建好角色就會自動長出來，不必再回來改這裡；
+                    //   要自訂標題與說明文字時，再補一個 eg_render_role_section() 呼叫即可（上面的優先）。
+                    $_renderedModules = [];
+                    foreach ($GLOBALS['_eg_rendered_role_modules'] ?? [] as $_m) $_renderedModules[$_m] = true;
+                    foreach (array_keys($RS) as $_m) {
+                        if (isset($_renderedModules[$_m])) continue;
+                        $_prefix = 'auto' . preg_replace('/[^a-z0-9]/', '', $_m);
+                        eg_render_role_section($_prefix, $_m, $_m, 'fa-cube', '#8A5A2B',
+                            '此模組尚未在本頁設定專屬的標題與說明，內容由系統依 <code>roles.module = ' . htmlspecialchars($_m) . '</code> 自動列出。'
+                            . '角色與功能定義請至該模組頁面的「權限設定 / 角色設定」。',
+                            rs_of($_m), rsu_of($_m), $admins, $_quotDepts, $canEdit);
+                    }
                     ?>
 
                     <!-- ══ AS9100 文件管理：職稱權限指派 ══ -->
