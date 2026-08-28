@@ -4144,7 +4144,10 @@ function acc_recon_line_ref(PDO $db, string $srcType, int $srcId): array
                        'spec' => $r['process_name'] ?: $r['bom'], 'qty' => (int)$r['transfer_qty'],
                        'unit_price' => $up, 'amount' => (float)$r['process_amount'],
                        'bom' => $r['bom'], 'order_no' => $r['order_no'], 'note' => $r['note'],
-                       'kind' => 'process'];
+                       'kind' => 'process',
+                       'erp_price' => (float)$r['price'],
+                       'price_overridden' => ($r['modified_unit_price'] !== null
+                                              && abs((float)$r['modified_unit_price'] - (float)$r['price']) > 0.0001)];
         if ($r['modified_unit_price'] !== null && (float)$r['modified_unit_price'] > 0
             && abs((float)$r['modified_unit_price'] - (float)$r['price']) > 0.0001) {
             $out['checks'][] = ['label' => '加工單價', 'status' => 'warn',

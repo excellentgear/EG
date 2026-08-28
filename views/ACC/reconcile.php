@@ -287,6 +287,35 @@ table.ref-t th{background:var(--a-bg2);color:var(--a-ink2);white-space:nowrap;wi
 .cand th{background:var(--a-ok);position:sticky;top:0;}
 .cand tr.now{background:var(--a-hit);}
 
+/* ── 單價對照大字帶：面板一打開最上面就看得到要核對的單價，不用整片讀 ────── */
+.pcmp{border-radius:6px;padding:9px 10px 8px;margin-bottom:11px;border:2px solid;}
+.pcmp .pc-hd{font-size:12px;font-weight:bold;display:flex;align-items:center;gap:7px;margin-bottom:6px;}
+.pcmp .pc-tag{font-size:11.5px;padding:1px 9px;border-radius:10px;color:#fff;}
+.pcmp .pc-row{display:flex;align-items:flex-end;gap:6px;}
+.pcmp .pc-cell{flex:1 1 0;min-width:0;text-align:center;background:rgba(255,255,255,.72);
+  border-radius:5px;padding:4px 3px 5px;}
+.pcmp .pc-l{display:block;font-size:11px;color:#7d6242;white-space:nowrap;}
+.pcmp .pc-v{display:block;font-size:22px;font-weight:bold;line-height:1.2;
+  word-break:break-all;letter-spacing:-.3px;}
+.pcmp .pc-v.na{font-size:13px;color:#a08a6a;font-weight:normal;padding:5px 0;}
+.pcmp .pc-op{font-size:12px;color:#a08a6a;padding-bottom:9px;}
+.pcmp .pc-note{font-size:12px;margin-top:6px;line-height:1.55;}
+.pcmp-ok{border-color:#5C7A2E;background:#EEF4E2;}
+.pcmp-ok .pc-hd,.pcmp-ok .pc-note{color:#3F5520;} .pcmp-ok .pc-tag{background:#5C7A2E;}
+.pcmp-ok .pc-v{color:#3F5520;}
+.pcmp-warn{border-color:var(--a-acc);background:#FFF3DF;}
+.pcmp-warn .pc-hd,.pcmp-warn .pc-note{color:#7a5320;} .pcmp-warn .pc-tag{background:var(--a-acc);}
+.pcmp-warn .pc-v{color:#8a5320;}
+.pcmp-bad{border-color:var(--a-bad);background:#FBE3DC;}
+.pcmp-bad .pc-hd,.pcmp-bad .pc-note{color:#7a2c17;} .pcmp-bad .pc-tag{background:var(--a-bad);}
+.pcmp-bad .pc-v{color:var(--a-bad);}
+.pcmp-na{border-color:#C9B69F;background:#F3ECE0;}
+.pcmp-na .pc-hd,.pcmp-na .pc-note{color:#7d6242;} .pcmp-na .pc-tag{background:#C9B69F;}
+.pcmp-na .pc-v{color:#5b3a1e;}
+/* 面板標題列也把出貨單價帶上，捲到下面時仍看得到 */
+.ref-dock .r-head .hd-price{margin-left:auto;font-size:15px;font-weight:bold;white-space:nowrap;}
+.ref-dock .r-head .x{margin-left:10px;}
+
 /* 跨月找單／設定跳窗內的表格 */
 table.ot{width:100%;border-collapse:collapse;font-size:12.5px;}
 table.ot th,table.ot td{border:1px solid #EADFC8;padding:3px 6px;text-align:center;white-space:nowrap;}
@@ -338,9 +367,8 @@ table.ot tr.lock{color:#a08a6a;}
     </div>
 
     <div class="a-bar">
-      <label>帳款月份</label>
+      <label id="bmLbl" style="cursor:help;">帳款月份 <i class="fa fa-info-circle" style="color:#b5762a;"></i></label>
       <input type="month" id="bm" style="width:145px;">
-      <span class="a-hint" id="bmWhy" style="margin:0 4px 0 0;max-width:330px;"></span>
       <label id="partyLbl">客戶</label>
       <select id="partySel" data-eg-filter="輸入客戶編號或名稱篩選…"><option value="">請先選帳款月份</option></select>
       <button id="btnLoad" class="btn-warm"><i class="fa fa-folder-open-o"></i> 載入對帳單</button>
@@ -514,7 +542,8 @@ table.ot tr.lock{color:#a08a6a;}
 
 <!-- 這一列的報價／訂單對照（拖移關閉時點列開啟） -->
 <div class="ref-dock" id="refDock">
-  <div class="r-head"><i class="fa fa-link"></i>&nbsp;<span id="refTitle">報價／訂單對照</span><span class="x" id="refX">✕</span></div>
+  <div class="r-head"><i class="fa fa-link"></i>&nbsp;<span id="refTitle">報價／訂單對照</span>
+    <span class="hd-price" id="refHeadPrice"></span><span class="x" id="refX">✕</span></div>
   <div class="r-body" id="refBody"></div>
 </div>
 
@@ -796,9 +825,11 @@ function applyDefaultBm(){
   var d = BM_DEF[SIDE] || null;
   if(!d || !d.billing_month) return;
   $('#bm').val(d.billing_month);
-  $('#bmWhy').html(esc(d.reason||''));
+  bmWhy(d.reason||'');
 }
-$('#bm').on('change', function(){ bmTouched = true; $('#bmWhy').html('（已手動指定月份）'); });
+/* 為什麼預設是這個月：只掛成 tooltip，不要佔工具列版面（使用者 2026-08-28 要求） */
+function bmWhy(txt){ $('#bm,#bmLbl').attr('title', txt || ''); }
+$('#bm').on('change', function(){ bmTouched = true; bmWhy('已手動指定月份（不再依結帳日自動切換）'); });
 $.getJSON(API,{action:'meta'},function(r){
   if(!r.ok){ toast(esc(r.error||'初始化失敗'), true); return; }
   CSRF=r.csrf; ME=r.user||null;
@@ -808,7 +839,7 @@ $.getJSON(API,{action:'meta'},function(r){
     // 由總覽頁指定了要開哪一份：設好月份與側別，對象清單載完會自動接著載入
     $('#bm').val(DEEP.bm);
     bmTouched = true;
-    $('#bmWhy').html('（由對帳單總覽指定的月份）');
+    bmWhy('由對帳單總覽指定的月份');
     pendingParty = DEEP.party_id;
     setSide(DEEP.side);
     return;
@@ -1408,7 +1439,7 @@ $(document).on('click','#btnUseSetlBm',function(){
   if(!SETL || !SETL.billing_month) return;
   bmTouched = true;
   $('#bm').val(SETL.billing_month);
-  $('#bmWhy').html('（依此對象自訂結帳日）');
+  bmWhy('依此對象自訂結帳日');
   var keep = $('#partySel').val();
   loadParties();
   setTimeout(function(){ if($('#partySel').val()!==keep) $('#partySel').val(keep);
@@ -1511,7 +1542,7 @@ function openRef(l){
   if(!l) return;
   if(l.split_parent_key || !l.src_id || l.src_type==='SPLIT'){
     refSrc=null;
-    $('#refTitle').text('報價／訂單對照');
+    $('#refTitle').text('報價／訂單對照'); $('#refHeadPrice').text('');
     $('#refBody').html('<div class="chk chk-na"><span class="cl">無法對照</span>'
       +'<span>這是拆分出來的子列（或手動加列），沒有對應的來源單據。請點<b>原始那一列</b>查看。</span></div>');
     $('#refDock').addClass('ref-on'); $('body').addClass('ref-open');
@@ -1519,6 +1550,7 @@ function openRef(l){
   }
   refSrc={src_type:l.src_type, src_id:l.src_id};
   $('#refTitle').text((l.doc_no||'') + '　' + (l.product_id||''));
+  $('#refHeadPrice').text('');
   $('#refBody').html('<div style="padding:14px;color:#8a6d45;"><i class="fa fa-spinner fa-spin"></i> 查詢中…</div>');
   $('#refDock').addClass('ref-on'); $('body').addClass('ref-open');
   $.post(API+'?action=recon_line_ref',{src_type:l.src_type, src_id:l.src_id},function(r){
@@ -1529,10 +1561,72 @@ function openRef(l){
     $('#refBody').html('<div class="chk chk-bad"><span>'+esc(m)+'</span></div>');
   });
 }
+/* 單價對照大字帶：使用者要求「要核對的單價要明顯，不用整片讀才找得到」。
+   三段單價（出貨／訂單／報價）並排放大，狀態一眼可辨；
+   退貨比對的是「同料號近期出貨單價」，加工費比對的是「ERP 原始單價」。 */
+function priceBand(f){
+  var d=f.doc||{}, cell=function(label,val,na){
+    return '<div class="pc-cell"><span class="pc-l">'+esc(label)+'</span>'
+         + (na ? '<span class="pc-v na">'+esc(val)+'</span>'
+               : '<b class="pc-v">'+esc(val)+'</b>')+'</div>';
+  };
+  var op='<div class="pc-op">vs</div>';
+  var cls='pcmp-na', tag='無法比對', note='', row='';
+
+  if(d.kind==='process'){
+    var up=Number(d.unit_price)||0, erp=Number(d.erp_price)||0;
+    row = cell('本單加工單價', pnum(up))
+        + op + cell('ERP 原始單價', erp?pnum(erp):'—', !erp);
+    var amt=Number(d.amount)||0, calc=Math.round((Number(d.qty)||0)*up*100)/100;
+    if(d.price_overridden){ cls='pcmp-warn'; tag='單價被覆寫';
+      note='本系統把 ERP 原始單價改成 '+pnum(up)+'，差 '+pnum(up-erp)+'／件。'; }
+    else { cls='pcmp-ok'; tag='與 ERP 相同'; note='加工單價未被覆寫。'; }
+    if(Math.abs(calc-amt)>=0.51){ cls='pcmp-bad'; tag='金額不符';
+      note='數量 × 單價 = '+nf(calc)+'，與加工金額 '+nf(amt)+' 差 '+nf(calc-amt)+'。'; }
+  }
+  else if(d.kind==='return'){
+    var rp=Number(d.unit_price)||0;
+    var ship=(f.returns_of&&f.returns_of.length)?Number(f.returns_of[0].Unit_price):null;
+    row = cell('退回單價', pnum(rp))
+        + op + cell('近期出貨單價', ship===null?'查無':pnum(ship), ship===null);
+    if(ship===null){ cls='pcmp-na'; tag='無出貨可比'; note='這個料號查不到同客戶的出貨紀錄。'; }
+    else if(Math.abs(ship-rp)<0.005){ cls='pcmp-ok'; tag='相符'; note='退回單價與當初出貨單價一致。'; }
+    else { cls='pcmp-warn'; tag='不同';
+      note='退回單價與近期出貨單價差 '+pnum(rp-ship)+'／件，請確認是否為折讓價。'; }
+  }
+  else {
+    var sp=Number(d.unit_price)||0;
+    var op1=(f.order && f.order.unit_price!==null && f.order.unit_price!=='') ? Number(f.order.unit_price) : null;
+    var qp=(f.quote && Number(f.quote.eff_unit_price)>0) ? Number(f.quote.eff_unit_price) : null;
+    row = cell('出貨單價', pnum(sp))
+        + op + cell('訂單單價', op1===null ? (f.order?'訂單未填':'未綁訂單') : pnum(op1), op1===null)
+        + op + cell('報價單價', qp===null ? (f.order? (f.quote?'報價未填':'未綁報價') : '—') : pnum(qp), qp===null);
+    var bad = (op1!==null && Math.abs(op1-sp)>=0.005);
+    var warn= (qp!==null && Math.abs(qp-sp)>=0.005);
+    var qty = Number(d.qty)||0;
+    if(bad){ cls='pcmp-bad'; tag='與訂單不符';
+      note='出貨比訂單 '+(sp>op1?'高':'低')+' '+pnum(Math.abs(sp-op1))+'／件，本列金額差 '
+          + nf((sp-op1)*qty)+'。'; }
+    else if(warn){ cls='pcmp-warn'; tag='與報價不符';
+      note='出貨與訂單單價相符，但與報價 '+(sp>qp?'高':'低')+' '+pnum(Math.abs(sp-qp))+'／件'
+          + (f.quote&&f.quote.quote_no ? ('（報價單 '+esc(f.quote.quote_no)+'）') : '')+'。'; }
+    else if(op1!==null && qp!==null){ cls='pcmp-ok'; tag='三段相符'; note='報價、訂單、出貨單價完全一致。'; }
+    else if(op1!==null){ cls='pcmp-ok'; tag='與訂單相符';
+      note='訂單單價一致；' + (f.order&&f.order.quote_no ? '報價單價無法取得。' : '此訂單沒有綁報價，報價單價請人工核對。'); }
+    else { cls='pcmp-na'; tag='需人工核對';
+      note=(f.order?'這張訂單沒有填單價。':'這張出貨單沒有綁訂單。')+'請人工核對單價，或在下方綁定。'; }
+  }
+  return '<div class="pcmp '+cls+'"><div class="pc-hd">單價對照'
+       + '<span class="pc-tag">'+esc(tag)+'</span></div>'
+       + '<div class="pc-row">'+row+'</div>'
+       + (note?'<div class="pc-note">'+note+'</div>':'')+'</div>';
+}
 function refRow(k,v){ return '<tr><th>'+esc(k)+'</th><td>'+(v==null?'':v)+'</td></tr>'; }
 function renderRef(f){
   var d=f.doc||{}, h='';
+  $('#refHeadPrice').text(d.unit_price==null?'':('單價 '+pnum(d.unit_price)));
 
+  h+=priceBand(f);
   h+='<div class="ref-sec"><h5>本列單據</h5><table class="ref-t">'
     + refRow('單號', esc(d.no||''))
     + refRow('日期', esc(dispDate(d.date)))

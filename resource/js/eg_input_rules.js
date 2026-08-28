@@ -365,6 +365,24 @@
                 if (ok && o.v !== '') hit.push(o.v);
                 html += '<option value="' + o.v.replace(/"/g, '&quot;') + '">' + o.t + '</option>';
             });
+            /* 一筆都沒篩到時不可以「看起來像有」（2026-08-28 使用者要求）：
+               原本的寫法會把「目前選中的那一筆」留下來（值不能掉），畫面上看起來就像篩到了一筆。
+               改成明確顯示「查無符合」，目前選取的那筆另外標示，篩選框也標紅。 */
+            var noHit = kw.length && hit.length === 0;
+            if (noHit) {
+                html = '';
+                if (cur !== '') {
+                    for (var ci = 0; ci < all.length; ci++) {
+                        if (all[ci].v !== cur) continue;
+                        html += '<option value="' + all[ci].v.replace(/"/g, '&quot;') + '">'
+                             +  '（目前選取）' + all[ci].t + '</option>';
+                        break;
+                    }
+                }
+                html += '<option value="" disabled>查無符合「'
+                     +  box.value.trim().replace(/[&<>"]/g, '') + '」的項目</option>';
+            }
+            box.classList.toggle('eg-filter-nohit', !!noHit);
             sel.innerHTML = html;
             if (kw.length && hit.length === 1) sel.value = hit[0];   // 只剩一個就直接選起來
             else sel.value = cur;
@@ -405,6 +423,7 @@
             '.eg-filter-box{display:block;width:100%;max-width:280px;margin:0 0 3px;padding:3px 6px;'
             + 'font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#FFFDF8;color:#5b3a1e;}'
             + '.eg-filter-box::placeholder{color:#b59b74;}'
+            + '.eg-filter-box.eg-filter-nohit{border-color:#DD5138;background:#FBE3DC;color:#7a2c17;}'
             + '@media print{.eg-filter-box{display:none;}}'));
         (document.head || document.documentElement).appendChild(st);
     })();
