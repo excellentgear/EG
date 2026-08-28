@@ -1761,14 +1761,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         WHERE m.d_id=d.d_id AND l.is_active=1) AS labels_str,
                        (SELECT EXISTS(SELECT 1 FROM bom WHERE d_id=d.D_Setting_Id)) AS has_drawing,
                        (SELECT EXISTS(SELECT 1 FROM part_attachments WHERE d_id=d.d_id)) AS has_attach,
+                       /* pending_review=1 ＝「報價單快速轉移」頁尚待確認補件的匯入舊資料，還不是正式
+                          報價單。兩個分支都要擋：linked_parts 指名的那批也可能屬於尚待確認的單，
+                          少擋一邊就會出現「清單顯示有報價、點開卻是空的」 */
                        (SELECT EXISTS(
                            SELECT 1 FROM quotation_attachments qa
+                           JOIN quotation_list qal ON qal.quote_no = qa.quote_no AND qal.pending_review = 0
                            WHERE qa.status='active' AND (
                                  (qa.linked_parts IS NOT NULL AND JSON_CONTAINS(qa.linked_parts, JSON_QUOTE(d.D_Setting_Id)))
                               OR (qa.linked_parts IS NULL AND qa.quote_no IN (
                                    SELECT ql.quote_no FROM quotation_item qi
                                    JOIN quotation_list ql ON ql.quote_id=qi.quote_id
-                                   WHERE qi.d_setting_d_id=d.d_id)))
+                                   WHERE qi.d_setting_d_id=d.d_id AND ql.pending_review = 0)))
                        )) AS has_quote,
                        COALESCE(ss.ship_cy_count,0) AS ship_cy_count,
                        COALESCE(ss.ship_cy_qty,0)   AS ship_cy_qty,
@@ -11704,16 +11708,19 @@ function ensureTypeLabel(callback) {
 }
 
 // ── 圖面開啟（獨立跳窗，使用 bom_viewer.php d_id 模式：BOM圖＋料號附件＋自動標籤）
-function openPartDrawing(pid) {
-    if (!pid) return;
+// pk＝d_setting.d_id（整數 PK）。同一個料號文字可能對到多筆主檔（不同客戶／版次），
+// 只傳文字會讓檢視器把別家的圖面／附件混進來（使用者 2026-08-28 回報），故一律指名 PK。
+function openPartDrawing(pid, pk) {
+    if (!pid && !pk) return;
     var w = screen.availWidth, h = screen.availHeight;
     var pw = Math.min(1400, Math.round(w * 0.85));
     var ph = Math.min(900,  Math.round(h * 0.88));
     var pl = Math.round((w - pw) / 2);
     var pt = Math.round((h - ph) / 2);
+    var q = pk ? ('?pk=' + encodeURIComponent(pk)) : ('?d_id=' + encodeURIComponent(pid));
     window.open(
-        '../pm/bom_viewer.php?d_id=' + encodeURIComponent(pid),
-        'bom_dv_' + pid,
+        '../pm/bom_viewer.php' + q,
+        'bom_dv_' + (pk || pid),
         'width=' + pw + ',height=' + ph + ',left=' + pl + ',top=' + pt
             + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no'
     );
@@ -11767,7 +11774,7 @@ function renderPartsTable(rows, total, pg, pages) {
                 });
             }
             if (r.has_drawing || (MD_CAN_OTHER && r.has_attach) || (MD_CAN_QUOTE && r.has_quote)) {
-                html += '<td style="max-width:160px;line-height:1.3;"><strong class="part-drawing-link" onclick="openPartDrawing(\''+escHtml(r.D_Setting_Id)+'\')" title="點擊開啟圖面 / 附件">'+escHtml(r.D_Setting_Id)+'</strong>'+dIdBadge+drawingBadge+gearSpec+'</td>';
+                html += '<td style="max-width:160px;line-height:1.3;"><strong class="part-drawing-link" onclick="openPartDrawing(\''+escHtml(r.D_Setting_Id)+'\','+(parseInt(r.d_id,10)||0)+')" title="點擊開啟圖面 / 附件">'+escHtml(r.D_Setting_Id)+'</strong>'+dIdBadge+drawingBadge+gearSpec+'</td>';
             } else {
                 html += '<td style="max-width:160px;line-height:1.3;"><strong style="font-family:Consolas,monospace;">'+escHtml(r.D_Setting_Id)+'</strong>'+dIdBadge+drawingBadge+gearSpec+'</td>';
             }

@@ -402,7 +402,7 @@ switch ($action) {
                             JOIN quotation_list ql ON ql.quote_no = a.quote_no
                             JOIN quotation_item qi ON qi.quote_id = ql.quote_id
                                 AND qi.d_setting_d_id IN ($phDids)
-                            WHERE a.status = 'active' AND a.linked_parts IS NULL";
+                            WHERE a.status = 'active' AND a.linked_parts IS NULL AND ql.pending_review = 0";
                 $nullRes = $pdo->prepare($nullSql);
                 $nullRes->execute($dIds);
                 // 去除重複（同一附件對應多個料號時已用 joined d_setting_d_id 區分）
@@ -453,7 +453,13 @@ switch ($action) {
         // 查各料號是否有報價單（不論有無附件，用 d_setting_d_id 比對）
         $quoteCounts = [];
         try {
-            $qiCntStmt = $pdo->prepare("SELECT d_setting_d_id, COUNT(DISTINCT quote_id) AS cnt FROM quotation_item WHERE d_setting_d_id IN ($ph) GROUP BY d_setting_d_id");
+            // pending_review=1 ＝「報價單快速轉移」頁尚待確認補件的匯入舊資料，還不是正式報價單，
+            // 不排除的話畫面會出現「報價」按鈕、點開卻是空的（使用者回報）
+            $qiCntStmt = $pdo->prepare("SELECT qi.d_setting_d_id, COUNT(DISTINCT qi.quote_id) AS cnt
+                                        FROM quotation_item qi
+                                        JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                                        WHERE qi.d_setting_d_id IN ($ph) AND ql.pending_review = 0
+                                        GROUP BY qi.d_setting_d_id");
             $qiCntStmt->execute($dIds);
             foreach ($qiCntStmt->fetchAll(PDO::FETCH_ASSOC) as $qc) { $quoteCounts[(int)$qc['d_setting_d_id']] = (int)$qc['cnt']; }
         } catch (Exception $_e) {}
