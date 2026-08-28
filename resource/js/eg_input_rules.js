@@ -61,6 +61,16 @@
         if (el.disabled || el.readOnly) return true;
         return !!(el.closest && el.closest('[data-eg-skip]'));
     }
+    /* 規則7 自己長出來的篩選框帶著 data-eg-skip，那是為了不要套「Enter 跳下一欄／↑↓ 換列」
+       （在篩選框裡按 Enter 應該是選起來、不是跳走）。但使用者 2026-08-28 明確要求
+       **「有值雙擊清空」與「聚焦自動全選」這兩條篩選框也要有**——它本來就是一個要反覆重打的欄位。
+       所以規則 1、2 改用這支：data-eg-skip 照樣擋別的元素，只放行篩選框本身。 */
+    function skippedSoft(el) {
+        if (el && el.classList && el.classList.contains('eg-filter-box')) {
+            return !!(el.disabled || el.readOnly);
+        }
+        return skipped(el);
+    }
     function fire(el, name) {
         var ev;
         try { ev = new Event(name, {bubbles: true}); }
@@ -75,7 +85,7 @@
     /* ── 規則 1：有值雙擊清空 ─────────────────────────────────────────── */
     document.addEventListener('dblclick', function (e) {
         var el = e.target;
-        if (!isTexty(el) || skipped(el)) return;
+        if (!isTexty(el) || skippedSoft(el)) return;
         var tag = el.tagName.toLowerCase();
 
         if (tag === 'select') {
@@ -98,7 +108,7 @@
     /* ── 規則 2：聚焦已有資料自動全選 ─────────────────────────────────── */
     document.addEventListener('focusin', function (e) {
         var el = e.target;
-        if (!isTexty(el) || skipped(el)) return;
+        if (!isTexty(el) || skippedSoft(el)) return;
         if (el.tagName.toLowerCase() === 'select') return;
         if (el.value === '' || el.value == null) return;
         // number/date 等型別部分瀏覽器不支援 select()，包 try 即可。

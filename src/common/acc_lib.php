@@ -4456,3 +4456,97 @@ function acc_recon_bind_quote(PDO $db, int $orderId, int $itemId, ?array $user):
         return ['success' => false, 'message' => '綁定失敗：' . $e->getMessage()];
     }
 }
+
+/* ── 「現在應該預設對哪一個月的帳」───────────────────────────────────────
+ * 使用者 2026-08-28 交辦：開啟對帳頁時預設的帳款月份要依**結帳日**自動切換，
+ * 而不是一律「上個月」。
+ *
+ * 判準（與「某張單屬於哪個帳款月份」是兩回事，別混用）：
+ *   **結帳日還沒到 → 這個月的帳還沒結完，現在在對的是上個月；結帳日當天起 → 對本月。**
+ *   例：廠商結帳日 20 → 8/20 進應付＝8 月帳（當天就到了）；8/19 進去＝7 月帳。
+ *       客戶結帳日 25 → 8/20 進應收＝7 月帳；8/25 進去＝8 月帳。
+ *
+ * 結帳條件來源（與主檔管理→類別字典設定→基本設定同一份，不另存一份＝鐵律4）：
+ *   對象自己設的優先（customer_list / maker_list 的 settlement_mode+settlement_day），
+ *   沒設才用全域預設（system_settings 的 cust_default_* / vendor_default_*）。
+ *
+ * 模式：
+ *   FIXED    固定日 → 如上。結帳日大於當月天數時視同當月最後一天（例 31 遇到 2 月）。
+ *   EOM      月底結帳 → 要到月底才結得完，所以月底當天起才算本月，其餘時間都在對上個月。
+ *   WEEKLY   每週結帳 → 帳是連續在結的，預設就對本月（目前主檔還沒有這個選項，先接著等）。
+ *   VARIABLE 不固定 → 推不出結帳日，維持原本的「上個月」（最保守，也與改動前的行為一致）。
+ */
+function acc_settlement_for(PDO $db, string $side, ?string $partyId = null): array
+{
+    $side = ($side === 'ap') ? 'ap' : 'ar';
+    $pre  = ($side === 'ap') ? 'vendor_default_' : 'cust_default_';
+    $mode = 'FIXED';
+    $day  = ($side === 'ap') ? 20 : 25;
+    try {
+        $st = $db->prepare("SELECT setting_key, setting_value FROM system_settings
+                            WHERE setting_key IN (?, ?)");
+        $st->execute([$pre . 'settlement_mode', $pre . 'settlement_day']);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $v = trim((string)$r['setting_value']);
+            if ($v === '') continue;
+            if ($r['setting_key'] === $pre . 'settlement_mode') $mode = strtoupper($v);
+            else                                               $day  = (int)$v;
+        }
+    } catch (Throwable $e) {}
+    if ($day < 1 || $day > 31) $day = ($side === 'ap') ? 20 : 25;
+    $out = ['mode' => $mode, 'day' => $day, 'source' => 'default', 'party_id' => $partyId];
+
+    $partyId = trim((string)$partyId);
+    if ($partyId === '') return $out;
+    try {
+        $st = ($side === 'ap')
+            ? $db->prepare("SELECT settlement_mode, settlement_day FROM maker_list WHERE maker_id_no=? LIMIT 1")
+            : $db->prepare("SELECT settlement_mode, settlement_day FROM customer_list WHERE customer=? LIMIT 1");
+        $st->execute([$partyId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return $out;
+        $m = strtoupper(trim((string)$r['settlement_mode']));
+        $d = ($r['settlement_day'] === null || $r['settlement_day'] === '') ? null : (int)$r['settlement_day'];
+        if ($m === '' && $d === null) return $out;                 // 主檔沒設＝用全域預設
+        if ($m !== '') $out['mode'] = $m;
+        if ($d !== null && $d >= 1 && $d <= 31) $out['day'] = $d;
+        $out['source'] = 'party';
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 依結帳日算出「今天應該預設對哪一個帳款月份」；回傳含說明文字，畫面要顯示給人看。 */
+function acc_default_billing_month(PDO $db, string $side, ?string $partyId = null, ?string $today = null): array
+{
+    $s   = acc_settlement_for($db, $side, $partyId);
+    $ts  = $today ? strtotime($today) : time();
+    if (!$ts) $ts = time();
+    $y = (int)date('Y', $ts); $m = (int)date('n', $ts); $d = (int)date('j', $ts);
+    $lastDay = (int)date('t', $ts);
+    $cur  = sprintf('%04d-%02d', $y, $m);
+    $prev = date('Y-m', strtotime(sprintf('%04d-%02d-01', $y, $m) . ' -1 month'));
+    $mode = strtoupper($s['mode']);
+
+    if ($mode === 'WEEKLY') {
+        return $s + ['billing_month' => $cur, 'cut_day' => null,
+                     'reason' => '每週結帳，帳是連續在結的，預設對本月（' . $cur . '）'];
+    }
+    if ($mode === 'VARIABLE') {
+        return $s + ['billing_month' => $prev, 'cut_day' => null,
+                     'reason' => '結帳日不固定，推不出結帳時點，預設對上個月（' . $prev . '）'];
+    }
+    if ($mode === 'EOM') {
+        $bm = ($d >= $lastDay) ? $cur : $prev;
+        return $s + ['billing_month' => $bm, 'cut_day' => $lastDay,
+                     'reason' => '月底結帳：' . ($d >= $lastDay
+                        ? ('今天已是月底，本月帳可以對了（' . $cur . '）')
+                        : ('本月要到 ' . $lastDay . " 日才結帳，現在還在對上個月（{$prev}）"))];
+    }
+    $cut = min((int)$s['day'], $lastDay);          // 結帳日超過當月天數 → 視同當月最後一天
+    $bm  = ($d >= $cut) ? $cur : $prev;
+    $who = ($s['source'] === 'party') ? '此對象自訂' : (($side === 'ap') ? '廠商預設' : '客戶預設');
+    return $s + ['billing_month' => $bm, 'cut_day' => $cut,
+                 'reason' => $who . '結帳日 ' . $cut . ' 日：' . ($d >= $cut
+                    ? ("今天 {$m}/{$d} 已過結帳日，預設對本月（{$cur}）")
+                    : ("今天 {$m}/{$d} 還沒到結帳日，本月帳還沒結完，預設對上個月（{$prev}）"))];
+}

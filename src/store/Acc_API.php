@@ -1282,6 +1282,7 @@ case 'sheet_load': {
         acc_out(['from' => 'draft', 'sheet' => $sheet, 'can_edit' => $canEdit,
                  'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db),
                  'opt' => acc_recon_party_opt($db, $side, $pid),
+                 'settlement' => acc_default_billing_month($db, $side, $pid),
                  'missing' => $missing, 'stale' => $stale]);
     }
     $built = acc_sheet_build($db, $side, $pid, $bm);
@@ -1295,6 +1296,7 @@ case 'sheet_load': {
              'head' => $built['head'], 'can_edit' => $canEdit,
              'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db),
              'opt' => acc_recon_party_opt($db, $side, $pid),
+             'settlement' => acc_default_billing_month($db, $side, $pid),
              'missing' => [], 'stale' => []]);
 }
 
@@ -1446,6 +1448,8 @@ case 'recon_pref': {
     $pid  = acc_u8(trim((string)($s['party_id'] ?? '')));
     acc_out(['pref' => acc_recon_pref($db),
              'opt'  => $pid !== '' ? acc_recon_party_opt($db, $side, $pid) : null,
+             'default_bm' => ['ar' => acc_default_billing_month($db, 'ar'),
+                              'ap' => acc_default_billing_month($db, 'ap')],
              'can_set_default' => (bool)$perms['canAdmin']]);
 }
 

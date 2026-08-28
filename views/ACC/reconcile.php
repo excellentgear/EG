@@ -43,6 +43,10 @@ $taxRate = acc_tax_rate($db);
 include_once '../../src/common/org_role_lib.php';
 $ownCompany = eg_company_full_name($db);      // 列印大標題＝本公司全名，動態取（ai-rules/16 第一節）
 $reconPref  = acc_recon_pref($db);            // 拖移排序／依勾選順序排序的全站預設值
+/* 開頁預設的帳款月份要依結帳日自動切換（使用者 2026-08-28 交辦）：
+   結帳日還沒到＝這個月的帳還沒結完，現在對的是上個月。兩側結帳日不同，各算一份。 */
+$bmDefault  = ['ar' => acc_default_billing_month($db, 'ar'),
+               'ap' => acc_default_billing_month($db, 'ap')];
 
 /* 由對帳單總覽（recon_overview.php）帶參數直接開某一份：
    ?side=ap&party_id=RZ002A&bm=2026-05。沒帶參數就照原本的下拉流程走。 */
@@ -254,9 +258,12 @@ table.a-t tbody tr.flash td{animation:egflash 1.8s ease-out 1;}
 .k-split{background:#C9B69F;color:#fff;}
 
 /* ── 右側參考面板：這一列的報價與訂單（拖移關閉時點列開啟）─────────── */
-.ref-dock{position:fixed;top:0;right:0;bottom:0;width:430px;z-index:880;background:#fff;
+.ref-dock{position:fixed;top:0;right:0;bottom:56px;width:430px;z-index:880;background:#fff;
   border-left:3px solid var(--a-acc);box-shadow:-3px 0 16px rgba(0,0,0,.2);display:none;flex-direction:column;}
-.ref-dock.show{display:flex;}
+/* class 名稱刻意不叫 .show：Bootstrap 版型自帶 .show{display:block !important}，
+   會把這裡的 display:flex 蓋掉，.r-body 的 flex:1 就失效、面板永遠捲不動（2026-08-28 使用者回報） */
+.ref-dock.ref-on{display:flex !important;}
+.ref-dock .r-body{min-height:0;}
 body.ref-open .right_col{padding-right:442px;}
 .ref-dock .r-head{background:var(--a-acc);color:#fff;padding:8px 12px;font-weight:bold;font-size:14px;
   display:flex;align-items:center;gap:8px;flex:0 0 auto;}
@@ -333,6 +340,7 @@ table.ot tr.lock{color:#a08a6a;}
     <div class="a-bar">
       <label>帳款月份</label>
       <input type="month" id="bm" style="width:145px;">
+      <span class="a-hint" id="bmWhy" style="margin:0 4px 0 0;max-width:330px;"></span>
       <label id="partyLbl">客戶</label>
       <select id="partySel" data-eg-filter="輸入客戶編號或名稱篩選…"><option value="">請先選帳款月份</option></select>
       <button id="btnLoad" class="btn-warm"><i class="fa fa-folder-open-o"></i> 載入對帳單</button>
@@ -698,6 +706,7 @@ var CSRF = '', SIDE = 'ar', sheet = null, lines = [], selIdx = -1, keySeq = 0, c
 var PREF = <?= json_encode($reconPref) ?>;
 var dragOn = false, autoOn = false, checkSeq = 0;
 var OPT = {no_statement:0, note:null};        // 這個對象的選項（是否提供對帳單）
+var SETL = null;                              // 這個對象實際適用的結帳條件
 var refSrc = null;                            // 目前在右側面板顯示的來源憑證
 function prefKey(k){ return 'acc_recon_' + k; }
 function loadSwitches(){
@@ -723,7 +732,15 @@ var ST_LABEL = {'new':'尚未建立', draft:'暫存中', confirmed:'已確認鎖
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function nf(n){ return Math.round(Number(n)||0).toLocaleString('en-US'); }
-function n2(n){ var v=Number(n)||0; return String(parseFloat(v.toFixed(4))); }
+/* 價格顯示：小數點後全是 0 就整個不顯示（40.000000→40），有值就保留到有意義的那一位（40.0250000→40.025）。
+   DB 的單價欄位最多到 6 位小數（quotation_item_tier.unit_price），所以取 6 位再去尾端 0。 */
+function pnum(v){
+  if(v===null || v===undefined || v==='') return '';
+  var n=Number(v);
+  if(isNaN(n)) return String(v);
+  return String(parseFloat(n.toFixed(6)));
+}
+function n2(n){ return pnum(Number(n)||0); }
 function toast(m,bad){
   var $m=$('#msg').removeClass('ok bad').addClass(bad?'bad':'ok').html(m).stop(true,true).fadeIn(150);
   clearTimeout($m.data('t')); $m.data('t',setTimeout(function(){ $m.fadeOut(400); },bad?7000:3600));
@@ -757,6 +774,7 @@ function setSide(s){
   $('#partyLbl').text(SIDE==='ap'?'廠商':'客戶');
   $('.ap-only').toggle(SIDE==='ap');
   sheet=null; lines=[]; $('#sheetBox').hide(); $('#emptyBox').show(); $('#dock').hide();
+  applyDefaultBm();
   loadParties();
 }
 $('#btnSideAr').on('click',function(){
@@ -769,10 +787,18 @@ $('#btnSideAp').on('click',function(){
 });
 
 /* ══ 初始化 ══ */
-(function(){
-  var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-1);
-  $('#bm').val(d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2));
-})();
+/* 預設帳款月份＝依結帳日回推（廠商 20 日、客戶 25 日之類），不是一律上個月。
+   使用者自己動過月份之後就不再自動改，否則切個側別就把他選的月份蓋掉。 */
+var BM_DEF = <?= json_encode($bmDefault, JSON_UNESCAPED_UNICODE) ?>;
+var bmTouched = false;
+function applyDefaultBm(){
+  if(bmTouched) return;                 // 已手動指定（或由總覽帶入）就整個不動，連提示都不要蓋掉
+  var d = BM_DEF[SIDE] || null;
+  if(!d || !d.billing_month) return;
+  $('#bm').val(d.billing_month);
+  $('#bmWhy').html(esc(d.reason||''));
+}
+$('#bm').on('change', function(){ bmTouched = true; $('#bmWhy').html('（已手動指定月份）'); });
 $.getJSON(API,{action:'meta'},function(r){
   if(!r.ok){ toast(esc(r.error||'初始化失敗'), true); return; }
   CSRF=r.csrf; ME=r.user||null;
@@ -781,6 +807,8 @@ $.getJSON(API,{action:'meta'},function(r){
   if(DEEP.party_id){
     // 由總覽頁指定了要開哪一份：設好月份與側別，對象清單載完會自動接著載入
     $('#bm').val(DEEP.bm);
+    bmTouched = true;
+    $('#bmWhy').html('（由對帳單總覽指定的月份）');
     pendingParty = DEEP.party_id;
     setSide(DEEP.side);
     return;
@@ -847,6 +875,7 @@ function loadSheet(){
       l.split_parent_key = (l.split_parent && idMap[l.split_parent]) ? idMap[l.split_parent] : null;
     });
     OPT = r.opt || {no_statement:0, note:null};
+    SETL = r.settlement || null;
     // 勾選順序：底稿存回來時只剩 sort_order，用它重建一組序號，之後再勾的就接在後面
     checkSeq = 0;
     lines.slice().sort(function(a,b){ return (a.sort_order||0)-(b.sort_order||0); })
@@ -1358,6 +1387,13 @@ function renderSync(missing, stale){
       +'<button class="btn-mini" id="btnAddMissing" style="margin-left:auto;">加入這 '+syncMissing.length+' 筆</button>'
       +'<button class="btn-mini" id="btnShowMissing">看看是哪幾筆</button></div>';
   }
+  if(SETL && SETL.source==='party' && SETL.billing_month && sheet
+     && SETL.billing_month!==sheet.billing_month){
+    h+='<div class="info">這個對象自訂結帳日為 <b>'+esc(String(SETL.cut_day||SETL.day))
+      +'</b> 日（與'+(SIDE==='ap'?'廠商':'客戶')+'預設不同）：'+esc(SETL.reason||'')
+      +'　目前開的是 <b>'+esc(sheet.billing_month)+'</b>。'
+      +'<button class="btn-mini" id="btnUseSetlBm" style="margin-left:8px;">改對 '+esc(SETL.billing_month)+'</button></div>';
+  }
   if(stale && stale.length){
     h+='<div class="warn">有 <b>'+stale.length+'</b> 筆底稿上的單據<b>已不屬於本月份</b>（可能被改到別的月份）：'
       + stale.map(function(x){ return esc(x.doc_no||'')+'／'+esc(x.product_id||''); }).join('、')
@@ -1368,6 +1404,16 @@ function renderSync(missing, stale){
   staleIds = (stale||[]).map(function(x){ return Number(x.line_id); });
 }
 var staleIds=[];
+$(document).on('click','#btnUseSetlBm',function(){
+  if(!SETL || !SETL.billing_month) return;
+  bmTouched = true;
+  $('#bm').val(SETL.billing_month);
+  $('#bmWhy').html('（依此對象自訂結帳日）');
+  var keep = $('#partySel').val();
+  loadParties();
+  setTimeout(function(){ if($('#partySel').val()!==keep) $('#partySel').val(keep);
+                         if($('#partySel').val()) loadSheet(); }, 700);
+});
 $(document).on('click','#btnAddMissing',function(){
   var max=0; lines.forEach(function(l){ max=Math.max(max, Number(l.sort_order)||0); });
   syncMissing.forEach(function(l,n){
@@ -1459,7 +1505,7 @@ function gotoLine(i){
 }
 
 /* ── 右側面板：這一列的報價與訂單對照 ───────────────────────────────── */
-function closeRef(){ $('#refDock').removeClass('show'); $('body').removeClass('ref-open'); refSrc=null; }
+function closeRef(){ $('#refDock').removeClass('ref-on'); $('body').removeClass('ref-open'); refSrc=null; }
 $('#refX').on('click', closeRef);
 function openRef(l){
   if(!l) return;
@@ -1468,13 +1514,13 @@ function openRef(l){
     $('#refTitle').text('報價／訂單對照');
     $('#refBody').html('<div class="chk chk-na"><span class="cl">無法對照</span>'
       +'<span>這是拆分出來的子列（或手動加列），沒有對應的來源單據。請點<b>原始那一列</b>查看。</span></div>');
-    $('#refDock').addClass('show'); $('body').addClass('ref-open');
+    $('#refDock').addClass('ref-on'); $('body').addClass('ref-open');
     return;
   }
   refSrc={src_type:l.src_type, src_id:l.src_id};
   $('#refTitle').text((l.doc_no||'') + '　' + (l.product_id||''));
   $('#refBody').html('<div style="padding:14px;color:#8a6d45;"><i class="fa fa-spinner fa-spin"></i> 查詢中…</div>');
-  $('#refDock').addClass('show'); $('body').addClass('ref-open');
+  $('#refDock').addClass('ref-on'); $('body').addClass('ref-open');
   $.post(API+'?action=recon_line_ref',{src_type:l.src_type, src_id:l.src_id},function(r){
     if(!r.ok){ $('#refBody').html('<div class="chk chk-bad"><span>'+esc(r.error||'查詢失敗')+'</span></div>'); return; }
     renderRef(r.ref);
@@ -1494,7 +1540,7 @@ function renderRef(f){
                     :(d.kind==='process'?'<span class="pill k-proc">加工費</span>':'<span class="pill k-ship">出貨</span>'))
     + refRow('料號', esc(d.product_id||''))
     + refRow('品名／製程', esc(d.spec||''))
-    + refRow('數量 × 單價', nf(d.qty)+' × '+esc(String(d.unit_price==null?'':d.unit_price)))
+    + refRow('數量 × 單價', nf(d.qty)+' × '+esc(pnum(d.unit_price)))
     + refRow('金額', '<b>'+nf(d.amount)+'</b>')
     + (d.note ? refRow('備註', esc(d.note)) : '')
     + '</table></div>';
@@ -1513,7 +1559,7 @@ function renderRef(f){
       + refRow('客戶單號', esc(o.C_order||''))
       + refRow('接單／交期', esc(dispDate(o.odate))+' ／ '+esc(dispDate(o.ddate)))
       + refRow('訂單數量', nf(o.Qty)+'（累計已出 '+nf(o.shipped_qty)+'）')
-      + refRow('訂單單價', esc(String(o.unit_price==null?'（未填）':o.unit_price)))
+      + refRow('訂單單價', esc(o.unit_price==null?'（未填）':pnum(o.unit_price)))
       + refRow('綁定報價', esc(o.quote_no||'（未綁定）'))
       + '</table></div>';
   }
@@ -1524,8 +1570,8 @@ function renderRef(f){
       + refRow('報價日期', esc(dispDate(q.quote_date)))
       + refRow('報價客戶', esc(q.client_name||''))
       + refRow('報價數量', nf(q.quantity)+' '+esc(q.unit||''))
-      + refRow('報價單價', Number(q.is_tiered)===1 ? ('階梯價，適用 <b>'+esc(String(q.eff_unit_price))+'</b>')
-                                                  : ('<b>'+esc(String(q.unit_price))+'</b>'))
+      + refRow('報價單價', Number(q.is_tiered)===1 ? ('階梯價，適用 <b>'+esc(pnum(q.eff_unit_price))+'</b>')
+                                                  : ('<b>'+esc(pnum(q.unit_price))+'</b>'))
       + '</table>';
     if(q.tiers && q.tiers.length){
       h+='<div class="cand" style="margin-top:5px;"><table><thead><tr><th>數量下限</th><th>上限</th><th>單價</th><th>容差</th></tr></thead><tbody>';
@@ -1533,8 +1579,8 @@ function renderRef(f){
         var on = q.matched_tier && Number(q.matched_tier.tier_id)===Number(t.tier_id);
         h+='<tr'+(on?' class="now"':'')+'><td>'+nf(t.qty_min)+'</td>'
           +'<td>'+(t.qty_max==null?'以上':nf(t.qty_max))+'</td>'
-          +'<td>'+esc(String(t.unit_price))+'</td>'
-          +'<td>'+(t.tolerance_value==null?'—':(esc(String(t.tolerance_value))+esc(t.tolerance_unit||'')))+'</td></tr>';
+          +'<td>'+esc(pnum(t.unit_price))+'</td>'
+          +'<td>'+(t.tolerance_value==null?'—':(esc(pnum(t.tolerance_value))+esc(t.tolerance_unit||'')))+'</td></tr>';
       });
       h+='</tbody></table></div>';
     }
@@ -1546,7 +1592,7 @@ function renderRef(f){
       +'<thead><tr><th>出貨單號</th><th>日期</th><th>數量</th><th>單價</th></tr></thead><tbody>';
     f.returns_of.forEach(function(x){
       h+='<tr><td>'+esc(x.IS_number)+'</td><td>'+esc(dispDate(x.d))+'</td><td>'+nf(x.Qty)+'</td>'
-        +'<td>'+esc(String(x.Unit_price))+'</td></tr>';
+        +'<td>'+esc(pnum(x.Unit_price))+'</td></tr>';
     });
     h+='</tbody></table></div></div>';
   }
@@ -1561,7 +1607,7 @@ function renderRef(f){
       f.order_candidates.forEach(function(o){
         var now = f.order && Number(f.order.Order_id)===Number(o.Order_id);
         h+='<tr'+(now?' class="now"':'')+'><td>'+esc(o.Order_oo)+'</td><td>'+esc(dispDate(o.odate))+'</td>'
-          +'<td>'+nf(o.Qty)+'</td><td>'+nf(o.shipped)+'</td><td>'+esc(String(o.unit_price==null?'—':o.unit_price))+'</td>'
+          +'<td>'+nf(o.Qty)+'</td><td>'+nf(o.shipped)+'</td><td>'+esc(o.unit_price==null?'—':pnum(o.unit_price))+'</td>'
           +'<td>'+(now?'<span class="pill p-s">目前</span>'
                      :(editable?'<button class="btn-mini bd-o" data-oid="'+o.Order_id+'">綁定</button>':'—'))+'</td></tr>';
       });
@@ -1579,7 +1625,7 @@ function renderRef(f){
         var now = f.quote && Number(f.quote.item_id)===Number(q.item_id);
         h+='<tr'+(now?' class="now"':'')+'><td>'+esc(q.quote_no)+'</td><td>'+esc(dispDate(q.quote_date))+'</td>'
           +'<td>'+nf(q.quantity)+'</td>'
-          +'<td>'+(Number(q.is_tiered)===1?'階梯價':esc(String(q.unit_price)))+'</td>'
+          +'<td>'+(Number(q.is_tiered)===1?'階梯價':esc(pnum(q.unit_price)))+'</td>'
           +'<td>'+(now?'<span class="pill p-s">目前</span>'
                      :(editable?'<button class="btn-mini bd-q" data-iid="'+q.item_id+'" data-oid="'+f.order.Order_id+'">綁定</button>':'—'))+'</td></tr>';
       });
@@ -1651,7 +1697,7 @@ function paintOt(){
       +'<td>'+(r.kind==='return'?'<span class="pill k-ret">退貨</span>'
               :(r.kind==='process'?'<span class="pill k-proc">加工</span>':'<span class="pill k-ship">出貨</span>'))+'</td>'
       +'<td class="l">'+esc(r.product_id||'')+'</td><td class="l">'+esc((r.spec||'').substr(0,20))+'</td>'
-      +'<td class="r">'+nf(r.qty)+'</td><td class="r">'+esc(String(r.unit_price))+'</td>'
+      +'<td class="r">'+nf(r.qty)+'</td><td class="r">'+esc(pnum(r.unit_price))+'</td>'
       +'<td class="r"><b>'+nf(r.amount)+'</b></td>'
       +'<td>'+esc(r.cur_month||'')+(r.is_override?' <span class="pill p-g">已指定</span>':'')+'</td>'
       +'<td>'+(lock?('已開票 '+esc(r.locked)):'可調整')+'</td></tr>';
@@ -1815,7 +1861,7 @@ function doPrint(m){
       +'<td class="tl">'+esc(l.product_id||'')+'</td>'
       +'<td class="tl">'+esc(l.spec||'')+'</td>'
       +'<td class="tr">'+(q===null||q===''?'':nf(q))+'</td>'
-      +'<td class="tr">'+(p===null||p===''?'':esc(String(p)))+'</td>'
+      +'<td class="tr">'+esc(pnum(p))+'</td>'
       +'<td class="tr"><b>'+nf(a)+'</b></td>'
       +'<td class="tl">'+esc(memo.join('；'))+'</td></tr>';
     if(l.group_no){
