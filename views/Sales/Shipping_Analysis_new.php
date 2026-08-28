@@ -1431,6 +1431,24 @@ try {
     unset($_r);
 }
 
+// 每列標記「這個客戶名稱在客戶主檔查不查得到」。
+// 用 PHP 端的名稱對照表判斷，不用 SQL JOIN——customer_list 有 6 個重複名稱，JOIN 會把出貨列複製成多筆。
+try {
+    $_cl_name_map = [];
+    foreach ($conn->getPDO()->query("SELECT customer_id, customer FROM customer_list") as $_c) {
+        $_n = trim((string)$_c['customer']);
+        if ($_n !== '' && !isset($_cl_name_map[$_n])) $_cl_name_map[$_n] = $_c['customer_id'];
+    }
+    foreach ($rows as &$_r) {
+        $_n = trim((string)($_r['Client_name'] ?? ''));
+        $_r['name_in_master'] = ($_n !== '' && isset($_cl_name_map[$_n])) ? 1 : 0;
+    }
+    unset($_r);
+} catch (Exception $_ce) {
+    foreach ($rows as &$_r) { $_r['name_in_master'] = 1; } // 查不到對照表時一律不標，避免整頁誤報
+    unset($_r);
+}
+
 $shipping_data_json = json_encode($rows);
 
 // ── 查詢退貨單列表（ir_track）──
@@ -2334,6 +2352,9 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                                     <button type="button" class="btn btn-warning btn-sm" id="btn-filter-noclient" onclick="toggleNoClientFilter(this)" style="height:26px; padding:2px 8px; font-size:12px; flex-shrink:0; background:#F0A24B; border-color:#d98a34; color:#fff;" title="快速篩選：已綁定料號、但客戶沒有客戶編號的出貨資料">
                                         <i class="fa fa-user-times"></i> 客戶未綁定
                                     </button>
+                                    <button type="button" class="btn btn-warning btn-sm" id="btn-filter-nameoff" onclick="toggleNameOffFilter(this)" style="height:26px; padding:2px 8px; font-size:12px; flex-shrink:0; background:#DD5138; border-color:#c2452f; color:#fff;" title="快速篩選：出貨資料上的客戶名稱，在客戶主檔裡查不到這個名稱（不管有沒有綁客戶編號）">
+                                        <i class="fa fa-exclamation-triangle"></i> 名稱對不上主檔
+                                    </button>
                                     <?php if ($perm_can_update): ?>
                                     <button type="button" class="btn btn-primary btn-sm" id="btn-client-batch-bind" style="height:26px; padding:2px 8px; font-size:12px; flex-shrink:0;" title="把顯示名稱相同的客戶，一次全部綁定同一個客戶編號">
                                         <i class="fa fa-users"></i> 客戶批次綁定
@@ -2874,6 +2895,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                             <div class="form-group" style="margin-bottom:6px;">
                                 <span class="text-muted" style="font-size:12px;">目前客戶：</span>
                                 <span id="bind_current_c" class="bind-current-badge" style="background:#ecf0f1; color:#555;">未設定</span>
+                                <div id="bind_c_name_warn" class="edit-lock-hint" style="display:none; margin-top:6px;"></div>
                             </div>
                             <div class="input-group input-group-sm" style="margin-bottom:6px;">
                                 <input type="text" class="form-control" id="bind_c_kw" placeholder="輸入客戶名稱關鍵字...">
@@ -4029,8 +4051,10 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                 $('#btn-filter-zero-price').removeClass('active').css('opacity', '1');
                 _noClientFilterActive = false;
                 $('#btn-filter-noclient').removeClass('active').css('box-shadow', '');
+                _nameOffFilterActive = false;
+                $('#btn-filter-nameoff').removeClass('active').css('box-shadow', '');
                 $.fn.dataTable.ext.search = $.fn.dataTable.ext.search.filter(function(fn) {
-                    return fn._zeroPriceFilter !== true && fn._noClientFilter !== true;
+                    return fn._zeroPriceFilter !== true && fn._noClientFilter !== true && fn._nameOffFilter !== true;
                 });
                 table.search('').columns().search('').draw();
                 updateFilterStatusBar();
@@ -4079,8 +4103,37 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                     $.fn.dataTable.ext.search = $.fn.dataTable.ext.search.filter(function(fn) { return fn._noClientFilter !== true; });
                 }
                 table.draw();
-                var n = table.rows({ search: 'applied' }).count();
-                if (_noClientFilterActive) showToast('客戶未綁定：' + n + ' 筆', n ? 'info' : 'success');
+                if (_noClientFilterActive) {
+                    var n = table.rows({ search: 'applied' }).count();
+                    showToast(n ? ('客戶未綁定：' + n + ' 筆')
+                                : '目前條件下每一筆都已經有客戶編號了（本篩選看的是有沒有客戶編號，不是客戶名稱對不對得上主檔）',
+                              n ? 'info' : 'success');
+                }
+            };
+
+            // 快速篩選：客戶名稱在客戶主檔查不到（跟「有沒有客戶編號」是兩回事）
+            var _nameOffFilterActive = false;
+            function nameOffFilterFn(settings, data, dataIndex) {
+                if (settings.sTableId !== 'shippingTable') return true;
+                var row = settings.aoData[dataIndex]._aData;
+                return row.name_in_master == 0;
+            }
+            nameOffFilterFn._nameOffFilter = true;
+
+            window.toggleNameOffFilter = function(btn) {
+                _nameOffFilterActive = !_nameOffFilterActive;
+                if (_nameOffFilterActive) {
+                    $(btn).addClass('active').css('box-shadow', 'inset 0 2px 4px rgba(0,0,0,.2)');
+                    $.fn.dataTable.ext.search.push(nameOffFilterFn);
+                } else {
+                    $(btn).removeClass('active').css('box-shadow', '');
+                    $.fn.dataTable.ext.search = $.fn.dataTable.ext.search.filter(function(fn) { return fn._nameOffFilter !== true; });
+                }
+                table.draw();
+                if (_nameOffFilterActive) {
+                    var n = table.rows({ search: 'applied' }).count();
+                    showToast(n ? ('名稱對不上主檔：' + n + ' 筆') : '目前條件下沒有名稱對不上主檔的資料', n ? 'info' : 'success');
+                }
             };
 
             // 新增：雙擊熱銷產品料號以篩選主列表
@@ -5622,16 +5675,30 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                 $('#bind_d_preview').text('（未選取）');
             }
 
-            // 顯示目前客戶
+            // 顯示目前客戶：一定要看得出「有沒有客戶編號」。
+            // 只顯示名稱的話，沒綁客戶編號的資料看起來會跟已綁定的一模一樣（使用者實際踩過這個誤判）。
             var cName = row.Client_name || '';
-            if (cName) {
-                $('#bind_current_c').text(cName).css({ background: '#d6eaf8', color: '#1a5276' });
+            var cId   = row.Client_id ? String(row.Client_id).trim() : '';
+            if (cId) {
+                $('#bind_current_c').html('<strong>' + $('<span>').text(cId).html() + '</strong> ' + $('<span>').text(cName).html())
+                    .css({ background: '#d5f5e3', color: '#1e8449' });
+            } else if (cName) {
+                $('#bind_current_c').html('未綁定　<span style="font-weight:normal;">目前只有名稱文字：' + $('<span>').text(cName).html() + '</span>')
+                    .css({ background: '#ecf0f1', color: '#555' });
             } else {
                 $('#bind_current_c').text('未設定').css({ background: '#ecf0f1', color: '#555' });
             }
-            $('#bind_c_id').val(row.Client_id || '');
+            // 名稱在客戶主檔查不到時明講，否則使用者會以為「搜不到＝沒綁定」
+            if (row.name_in_master == 0 && cName) {
+                $('#bind_c_name_warn').show().html('<i class="fa fa-exclamation-triangle"></i> 「'
+                    + $('<span>').text(cName).html() + '」在客戶主檔裡查不到這個名稱，所以下方用它當關鍵字會搜不到；'
+                    + '請改用正式名稱或客戶編號搜尋。');
+            } else {
+                $('#bind_c_name_warn').hide().empty();
+            }
+            $('#bind_c_id').val(cId);
             $('#bind_c_name').val(cName);
-            $('#bind_c_preview').text(cName || '（未選取）');
+            $('#bind_c_preview').text(cId ? (cId + ' ' + cName) : (cName ? cName + '（沒有客戶編號）' : '（未選取）'));
 
             // 自動帶入本筆料號搜尋
             $('#bind_c_kw').val('');
@@ -5733,7 +5800,8 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             if (cName) {
                 $('#bind_c_id').val(cId);
                 $('#bind_c_name').val(cName);
-                $('#bind_c_preview').text(cName);
+                $('#bind_c_preview').text((cId ? cId + ' ' : '') + cName);
+                $('#bind_c_name_warn').hide().empty();
             }
         });
 
@@ -5773,9 +5841,10 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             var cName= $(this).data('cname');
             $('#bind_c_id').val(cId);
             $('#bind_c_name').val(cName);
-            $('#bind_c_preview').text(cName);
+            $('#bind_c_preview').text(cId + ' ' + cName);
             $('#bind_c_results').hide();
             $('#bind_c_kw').val('');
+            $('#bind_c_name_warn').hide().empty();
         });
 
         // ══════════════════════════════════════
