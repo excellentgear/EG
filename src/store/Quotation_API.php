@@ -1457,6 +1457,78 @@ try {
             break;
         }
 
+        // 整張報價單一鍵「自動建立料號並綁定」（快速轉移頁卡片上的按鈕）。
+        // 等同於在「快速綁定料號ID」跳窗逐筆按「找不到？新增此料號（綁此客戶）」，只是一次做完整張單：
+        // 依料號文字先找既有料號（先找本單客戶的，再找沒綁客戶的），都找不到才以本單客戶新建一筆再綁上。
+        // 刻意不去撿「同料號但屬於別的客戶」那一筆——那是跨客戶的判斷，自動撿會把別家的圖面/檢驗標準接到這張單上。
+        case 'quick_autobind_quote': {
+            $quote_id = intval($_POST['quote_id'] ?? 0);
+            if (!$quote_id) throw new Exception('缺少報價單');
+
+            // 權限：本動作會建立料號主檔，比照本頁編輯權限再擋一次（鐵律8）；
+            // 尚無任何權限記錄時視為全員開放，與本頁 $canEdit 的既有慣例一致
+            $permTotal = (int)$pdo->query("SELECT COUNT(*) FROM user_module_permissions WHERE module_code='quotation_list'")->fetchColumn();
+            if ($permTotal > 0) {
+                $pck = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='quotation_list' LIMIT 1");
+                $pck->execute([$user_id]);
+                $pv = (string)$pck->fetchColumn();
+                if (strpos($pv, 'A') === false && strpos($pv, 'U') === false) throw new Exception('您沒有修改報價單的權限');
+            }
+
+            $qq = $pdo->prepare("SELECT quote_no, client_id, pending_review FROM quotation_list WHERE quote_id=?");
+            $qq->execute([$quote_id]);
+            $q = $qq->fetch(PDO::FETCH_ASSOC);
+            if (!$q) throw new Exception('找不到報價單');
+            if (!$q['pending_review']) throw new Exception('此報價單已是正式資料，請至報價單管理頁編輯');
+            $clientId = trim((string)$q['client_id']);
+            if ($clientId === '') throw new Exception('這張報價單還沒有設定客戶，無法自動建立料號（新建的料號要綁到客戶）。請先用卡片上的「切換」設定客戶後再試。');
+
+            $iq = $pdo->prepare("SELECT item_id, product_id FROM quotation_item WHERE quote_id=? AND d_setting_d_id IS NULL ORDER BY item_id");
+            $iq->execute([$quote_id]);
+            $items = $iq->fetchAll(PDO::FETCH_ASSOC);
+            if (!$items) throw new Exception('這張報價單的料號ID已經全部綁定完成，不需要再自動建立');
+            // 料號欄本身是空的就沒有名稱可以拿來建料號；全部都空的話直接講清楚，
+            // 不要回一句「已綁定 0 筆」讓人以為按了沒作用
+            $hasText = false;
+            foreach ($items as $it) { if (trim((string)$it['product_id']) !== '') { $hasText = true; break; } }
+            if (!$hasText) throw new Exception('這張報價單還沒綁定的 ' . count($items) . ' 筆項目「料號」欄都是空的，沒有名稱可以用來建立料號。請先到報價單管理頁補上料號。');
+
+            $findCust = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND Customer_Id=? ORDER BY d_id LIMIT 1");
+            $findNull = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND Customer_Id IS NULL ORDER BY d_id LIMIT 1");
+            $insPart  = $pdo->prepare("INSERT INTO d_setting (D_Setting_Id,Type,Customer_Id,Created_By,Created_At) VALUES (?,'N',?,?,NOW())");
+            $bind     = $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=?, product_id=?, updated_at=NOW() WHERE item_id=?");
+
+            $cache = []; $bound = 0; $created = 0; $reused = 0; $skipped = 0; $createdNos = []; $reusedNos = [];
+            $pdo->beginTransaction();
+            try {
+                foreach ($items as $it) {
+                    $no = trim((string)$it['product_id']);
+                    if ($no === '') { $skipped++; continue; }   // 連料號文字都是空的，沒有東西可以建立
+                    if (!isset($cache[$no])) {
+                        $findCust->execute([$no, $clientId]);
+                        $dId = $findCust->fetchColumn();
+                        if ($dId === false) { $findNull->execute([$no]); $dId = $findNull->fetchColumn(); }
+                        if ($dId === false) {
+                            $insPart->execute([$no, $clientId, $user_id]);
+                            $dId = (int)$pdo->lastInsertId();
+                            $created++; $createdNos[] = $no;
+                        } else {
+                            $reused++; $reusedNos[] = $no;
+                        }
+                        $cache[$no] = (int)$dId;
+                    }
+                    $bind->execute([$cache[$no], $no, $it['item_id']]);
+                    $bound++;
+                }
+                $pdo->commit();
+            } catch (Exception $e) { $pdo->rollBack(); throw $e; }
+
+            $response = ['success' => true, 'quote_no' => $q['quote_no'], 'bound' => $bound,
+                         'created' => $created, 'reused' => $reused, 'skipped' => $skipped,
+                         'created_nos' => $createdNos, 'reused_nos' => $reusedNos];
+            break;
+        }
+
         case 'quick_set_item_process': {
             $item_id = intval($_POST['item_id'] ?? 0);
             if (!$item_id) throw new Exception('缺少項目');
@@ -1488,6 +1560,24 @@ try {
             if (!is_array($ids) || empty($ids)) throw new Exception('未選擇任何報價單');
             $ids = array_values(array_unique(array_map('intval', $ids)));
             $ph  = implode(',', array_fill(0, count($ids), '?'));
+            // 料號ID(d_setting_d_id)未完全綁定的報價單一律不可轉正式：前端已把按鈕/勾選框反灰，
+            // 這裡以同一規則再擋一次（鐵律8，防止略過畫面直打 API）。
+            // 為什麼要擋：料號ID是全站把報價歸戶到料號的唯一依據（見出貨統計以 d_setting_id 歸戶的規則），
+            // 沒綁就轉正之後這張單不再出現在快速轉移頁，也無法再從那裡補綁，等於永久漏掉。
+            $missChk = $pdo->prepare("
+                SELECT ql.quote_no, COUNT(*) AS miss
+                FROM quotation_item qi
+                JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                WHERE qi.quote_id IN ($ph) AND ql.pending_review = 1 AND qi.d_setting_d_id IS NULL
+                GROUP BY qi.quote_id, ql.quote_no
+                ORDER BY ql.quote_no
+            ");
+            $missChk->execute($ids);
+            $missRows = $missChk->fetchAll(PDO::FETCH_ASSOC);
+            if ($missRows) {
+                $names = array_map(fn($r) => $r['quote_no'] . '（缺 ' . $r['miss'] . ' 筆）', $missRows);
+                throw new Exception('以下報價單的料號ID尚未完全綁定，不可轉入正式報價單：' . implode('、', $names) . '。請先於報價單快速轉移頁完成料號ID綁定。');
+            }
             // 填表人：ERP直接匯入的資料本身沒有真實填表人資訊（created_by 目前記的是執行匯入的管理員），
             // 轉正式時一併改標成業務公用帳號(id=99993)，避免誤植成管理員本人「製表」；
             // 若該筆已被其他方式改過 note（代表非本次匯入的原樣資料），視為已有填表人資訊，不覆蓋。
