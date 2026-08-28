@@ -1030,6 +1030,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                             <ul class="dropdown-menu dropdown-menu-right">
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-tool-setting"><i class="fa fa-wrench"></i> 量具設定</a></li>
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-special-setting"><i class="fa fa-cog"></i> 幾何公差管理</a></li>
+                                <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-tol-setting"><i class="fa fa-arrows-h"></i> 公差表管理（依標準值帶公差）</a></li>
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-template-setting"><i class="fa fa-list-alt"></i> 通用樣板管理</a></li>
                                 <li class="setting-menu-item" style="display:none;"><a href="#" id="btn-std-manage"><i class="fa fa-sliders"></i> 檢驗標準管理（改／刪）</a></li>
                                 <li><a href="drawing_change_log.php" target="_blank"><i class="fa fa-exchange"></i> 圖面變更紀錄（AS 2-PD-01-07）</a></li>
@@ -4298,9 +4299,21 @@ $(function(){
 
     function openTolManage(){
         $('#tolManageModal').modal('show');
-        renderTolMgList();
-        renderTolMgEditor(null);
+        $('#tol-mg-list').html('<div class="text-muted" style="padding:8px;">載入中…</div>');
+        $('#tol-mg-editor').html('<div class="text-muted">請於左側選擇一個公差表，或新增一個。</div>');
+        // 清單一律當下重抓：別人新增/改名過就會即時反映，也避免從設定選單直接進來時是空的
+        refreshTolTables(function(){
+            if(!TOL_CAN_MANAGE){
+                $('#tol-mg-list').html('<div class="text-danger" style="padding:8px;">您沒有「管理檢驗設定」權限，無法維護公差表。</div>');
+                $('#btn-tol-mg-new').hide();
+                return;
+            }
+            $('#btn-tol-mg-new').show();
+            renderTolMgList();
+            renderTolMgEditor(null);
+        });
     }
+    $(document).on('click', '#btn-tol-setting', function(e){ e.preventDefault(); openTolManage(); });
     function renderTolMgList(){
         $('#tol-mg-list').html(TOL_TABLES.map(function(t){
             return '<a href="#" class="list-group-item tol-mg-pick" data-id="'+t.id+'">'+esc(t.name)
