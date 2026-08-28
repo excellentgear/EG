@@ -8,6 +8,7 @@ require_once __DIR__ . '/../common/DBConnection.php';   // 2026-08-24 改 requir
 require_once '../common/quotation_approval.php';
 require_once '../common/asdoc_lib.php';
 require_once __DIR__ . '/../common/quote_customer_lib.php';   // 整張報價單變更客戶（唯一實作）
+require_once __DIR__ . '/../common/quote_kw_rule_lib.php';    // 依規格關鍵字自動建議製程標籤（唯一實作）
 
 $db  = new DBConnection();
 $pdo = $db->getPDO();
@@ -71,6 +72,24 @@ function fetchItemsWithTiers(PDO $pdo, int $quote_id): array
         unset($item);
     }
     return $items;
+}
+
+// ──────────────────────────────────────────────────────────────
+// 快速轉移頁的編輯權限：與頁面上的 $canEdit 同一套判定（module_code='quotation_list' 的 A 或 U，
+// 完全沒有任何權限記錄時視為全員開放＝本模組既有慣例）。頁面會隱藏按鈕，後端一定要再擋一次（鐵律8）。
+// ──────────────────────────────────────────────────────────────
+function eg_quick_can_edit(PDO $pdo, $user_id): bool
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    try {
+        $total = (int)$pdo->query("SELECT COUNT(*) FROM user_module_permissions WHERE module_code='quotation_list'")->fetchColumn();
+        if ($total === 0) return $cache = true;
+        $st = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='quotation_list' LIMIT 1");
+        $st->execute([$user_id]);
+        $perm = (string)$st->fetchColumn();
+        return $cache = (strpos($perm, 'A') !== false || strpos($perm, 'U') !== false);
+    } catch (Exception $e) { return $cache = true; }
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1376,7 +1395,8 @@ try {
                        -- 本來就沒有綁定 process_no，只看 map 會把「已經點好標籤」的項目判成尚未設定，
                        -- 畫面顯示「製程缺 N 筆」而且永遠轉不進正式報價單。
                        SUM(NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)
-                           AND (qi.process_notes IS NULL OR qi.process_notes = '')) AS items_no_process
+                           AND (qi.process_notes IS NULL OR qi.process_notes = '')
+                           AND qi.note_only = 0) AS items_no_process
                 FROM quotation_list ql
                 LEFT JOIN quotation_item qi ON qi.quote_id = ql.quote_id
                 WHERE ql.pending_review = 1
@@ -1668,7 +1688,7 @@ try {
                         WHERE qi.quote_id IN ($qph) AND ql.pending_review = 1";
                 // 判定同 get_pending_transfer_list：沒有 process_no 也沒有 process_notes 才算「還沒設定製程」
                 if ($onlyUnset) $sql .= " AND NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)
-                                         AND (qi.process_notes IS NULL OR qi.process_notes = '')";
+                                         AND (qi.process_notes IS NULL OR qi.process_notes = '') AND qi.note_only = 0";
                 $st = $pdo->prepare($sql);
                 $st->execute($qids);
                 $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
@@ -1728,6 +1748,72 @@ try {
             break;
         }
 
+        // ── 關鍵字自動偵測製程（規則設定／掃描／套用／單筆帶入備註）──
+        // 實作全部收在 src/common/quote_kw_rule_lib.php，本區塊只做守門與參數轉接。
+        case 'qkw_rule_list': {
+            $response = ['success' => true, 'data' => qkw_rule_list($pdo),
+                         'tags' => qkw_sub_tag_names($pdo)];
+            break;
+        }
+
+        case 'qkw_rule_save': {
+            if (!eg_quick_can_edit($pdo, $user_id)) throw new Exception('您沒有修改報價單的權限');
+            $in = [
+                'rule_id'      => $_POST['rule_id']      ?? 0,
+                'rule_name'    => $_POST['rule_name']    ?? '',
+                'include_kw'   => $_POST['include_kw']   ?? '',
+                'exclude_kw'   => $_POST['exclude_kw']   ?? '',
+                'customer_ids' => $_POST['customer_ids'] ?? '',
+                'sub_tag_ids'  => $_POST['sub_tag_ids']  ?? '',
+                'to_note'      => !empty($_POST['to_note']) ? 1 : 0,
+                'priority'     => $_POST['priority']     ?? 0,
+                'is_active'    => isset($_POST['is_active']) ? (int)$_POST['is_active'] : 1,
+            ];
+            $response = ['success' => true, 'rule_id' => qkw_rule_save($pdo, $in, (string)$user_id)];
+            break;
+        }
+
+        case 'qkw_rule_delete': {
+            if (!eg_quick_can_edit($pdo, $user_id)) throw new Exception('您沒有修改報價單的權限');
+            $rid = intval($_POST['rule_id'] ?? 0);
+            if (!$rid) throw new Exception('缺少規則');
+            qkw_rule_delete($pdo, $rid);
+            $response = ['success' => true];
+            break;
+        }
+
+        case 'qkw_rule_seed': {
+            if (!eg_quick_can_edit($pdo, $user_id)) throw new Exception('您沒有修改報價單的權限');
+            $response = ['success' => true, 'added' => qkw_seed_apply($pdo, (string)$user_id)];
+            break;
+        }
+
+        case 'qkw_scan': {
+            $qids = json_decode($_POST['quote_ids'] ?? '[]', true);
+            if (!is_array($qids)) $qids = [];
+            if (count($qids) > 5000) throw new Exception('一次最多掃描 5000 張報價單，請先用年份或客戶縮小範圍');
+            $onlyUnset = ($_POST['only_unset'] ?? '1') === '1';
+            $response = ['success' => true, 'data' => qkw_scan($pdo, $qids, $onlyUnset)];
+            break;
+        }
+
+        case 'qkw_apply': {
+            if (!eg_quick_can_edit($pdo, $user_id)) throw new Exception('您沒有修改報價單的權限');
+            $batches = json_decode($_POST['batches'] ?? '[]', true);
+            if (!is_array($batches) || !$batches) throw new Exception('沒有勾選任何要套用的項目');
+            $response = ['success' => true, 'data' => qkw_apply($pdo, $batches, (string)$user_id)];
+            break;
+        }
+
+        case 'quick_set_item_note_only': {
+            if (!eg_quick_can_edit($pdo, $user_id)) throw new Exception('您沒有修改報價單的權限');
+            $itemId = intval($_POST['item_id'] ?? 0);
+            if (!$itemId) throw new Exception('缺少項目');
+            $on = ($_POST['on'] ?? '1') === '1';
+            $response = ['success' => true, 'data' => qkw_set_note_only($pdo, $itemId, $on)];
+            break;
+        }
+
         case 'quick_confirm_transfer': {
             $ids = json_decode($_POST['quote_ids'] ?? '[]', true);
             if (!is_array($ids) || empty($ids)) throw new Exception('未選擇任何報價單');
@@ -1742,7 +1828,8 @@ try {
                 SELECT ql.quote_no,
                        SUM(qi.d_setting_d_id IS NULL) AS miss_ds,
                        SUM(NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)
-                           AND (qi.process_notes IS NULL OR qi.process_notes = '')) AS miss_pc
+                           AND (qi.process_notes IS NULL OR qi.process_notes = '')
+                           AND qi.note_only = 0) AS miss_pc
                 FROM quotation_item qi
                 JOIN quotation_list ql ON ql.quote_id = qi.quote_id
                 WHERE qi.quote_id IN ($ph) AND ql.pending_review = 1
@@ -1767,7 +1854,10 @@ try {
             $stmt = $pdo->prepare("
                 UPDATE quotation_list
                 SET pending_review = 0,
-                    created_by = IF(note = 'ERP直接匯入補建歷史資料', '99993', created_by),
+                    -- 用前綴比對而不是 =：本頁的「帶入備註」會在這行底下追加【規格備註】區塊，
+                    -- 用等號比對會變成「加了備註的單就抓不到填表人」而且完全不會報錯
+                    -- （刻意不用 LEFT(note,N)——中文字數很容易數錯，實測就先寫成 14 而漏掉，LIKE 前綴沒有這個風險）
+                    created_by = IF(note LIKE 'ERP直接匯入補建歷史資料%', '99993', created_by),
                     updated_by = ?, updated_at = NOW()
                 WHERE quote_id IN ($ph) AND pending_review = 1
             ");

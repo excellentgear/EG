@@ -62,6 +62,21 @@ try {
         .qt-badge { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; margin-right:3px; }
         .qt-badge.ok   { background:#E4F3E4; color:#2e7d32; }
         .qt-badge.warn { background:#FDEBD3; color:#a2703a; }
+        .qt-badge.note { background:#8a5a2b; color:#fff; }
+        .qt-note-only { background:#FBF3E6; border:1px dashed #E4C293; border-radius:6px; padding:4px 8px; color:#5b3a1e; }
+
+        /* 關鍵字自動偵測：依建議標籤組合分組確認 */
+        .kw-group { border:1px solid #EADFC8; border-radius:6px; margin-bottom:8px; background:#fff; }
+        .kw-group-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:6px 10px; background:#FBF6EC; cursor:pointer; }
+        .kw-group-head .kw-label { font-weight:700; color:#5b3a1e; }
+        .kw-group-head .kw-rules { font-size:11px; color:#a2703a; }
+        .kw-group-body { display:none; max-height:280px; overflow:auto; padding:4px 10px 8px; }
+        .kw-group.open .kw-group-body { display:block; }
+        table.kw-item-table { width:100%; border-collapse:collapse; font-size:12px; }
+        table.kw-item-table td { padding:3px 5px; border-bottom:1px dashed #eee; }
+        .kw-rule-row td { padding:4px 6px; border-bottom:1px solid #f0e6d6; font-size:12px; vertical-align:top; }
+        .kw-cust-box { max-height:150px; overflow:auto; border:1px solid #E4C293; border-radius:4px; padding:4px 6px; font-size:12px; }
+        .kw-err { color:#DD5138; font-size:11px; }
         .qt-row-chk:disabled { opacity:.35; cursor:not-allowed; }
 
         .qt-card { background:#fff; border:1px solid #EADFC8; border-radius:8px; margin-bottom:12px; overflow:hidden; }
@@ -136,6 +151,17 @@ try {
                         title="把同一組製程一次套用到目前篩選範圍內的項目">
                     <i class="fa fa-tags"></i> 批次設定製程
                 </button>
+                <button class="btn btn-warning btn-sm" id="btnKwScan" style="margin-left:6px;"
+                        title="依規格文字的關鍵字規則，一次建議整批項目的製程標籤，再由您分組確認">
+                    <i class="fa fa-search"></i> 關鍵字自動偵測製程
+                </button>
+                <button class="btn btn-default btn-sm" id="btnKwRules" style="margin-left:4px;" title="設定關鍵字規則">
+                    <i class="fa fa-cog"></i> 規則設定
+                </button>
+                <button class="btn btn-success btn-sm" id="btnTransferReady" style="margin-left:6px;"
+                        title="把目前篩選範圍內「料號ID與製程都已補齊」的報價單全部轉入正式報價單">
+                    <i class="fa fa-check-square-o"></i> 一鍵轉入已補齊 <span id="qtReadyCnt">(0)</span>
+                </button>
                 <?php endif; ?>
                 <?php if (!$canEdit): ?>
                     <span style="font-size:12px;color:#c0392b;margin-left:8px;">您沒有編輯權限，僅供檢視</span>
@@ -166,6 +192,10 @@ try {
             <li>清單右上角可篩選<b>年份</b>（<b>預設顯示最新年份</b>，可切到其他年份或「全部」）與<b>客戶</b>（下拉可直接打字，客戶編號或名稱都找得到，選項後面是該客戶還有幾張待確認）；報價單依日期新到舊排序。</li>
             <li><b>只看未綁定料號ID的項目</b>：勾起來之後清單只留還沒綁完料號的報價單，而且卡片裡也只列出還沒綁的那幾列，可以直接一列一列按「快速綁定」，不用在整張單裡找。</li>
             <li><b>批次設定製程</b>：先用上面的客戶／年份篩到一批（同一個客戶的單製程多半相同），再按「批次設定製程」選好標籤一次套用。套用範圍可選<b>目前篩選的全部報價單</b>（預設，會跨頁）或<b>只有目前這一頁</b>（想先套一頁確認結果再放大範圍時用）；套用對象可選<b>只套用到還沒設定製程的項目</b>（預設）或<b>全部項目</b>（會覆蓋原本設定）。跳窗上的「預計影響 N 筆」會依這兩個選擇即時重算。</li>
+            <li><b>關鍵字自動偵測製程</b>（最快的補法）：先按「規則設定」訂好規則——規則只比對<b>規格</b>文字，「包含」用逗號連接＝這些字<b>全部都要有</b>（想表達「這個或那個」請在同一個關鍵字裡用 <code>|</code>，例 <code>冶具|治具</code>）、「不包含」用逗號連接＝<b>任何一個出現就不算命中</b>；可指定<b>只適用某幾個客戶</b>（多選，任一符合即可），不指定＝通用規則。第一次可按「載入建議規則範本」一次建好一組常見規則再自行增修。設好後按「關鍵字自動偵測製程」，系統把命中的項目<b>依建議的標籤組合分組</b>（顯示筆數與命中的規則），整組一次確認、也可以展開逐筆取消個別項目，按「套用已勾選的項目」才會真的寫進去——<b>系統只建議，絕不自動套用</b>。</li>
+            <li><b>帶入備註</b>：有些規格（例如「半月型六角口模 線割對半」）根本沒有對應的製程標籤，這時按製程欄的「帶入備註」，規格文字會帶進<b>整張報價單的備註欄</b>（自動維護的【規格備註】區塊，您自己寫的備註不會被動到），該列直接顯示為「備註」，<b>也算補齊了製程</b>可以轉入正式報價單；按「取消，改設定製程」即還原，備註那一行會自動消失。規則裡也可以勾「帶入備註」，讓某類關鍵字整批走這條路。</li>
+            <li><b>一鍵轉入已補齊</b>：依標籤分組確認之後，您不會知道哪幾張整張都補完了——按鈕上的數字就是目前篩選範圍內<b>料號ID與製程都補齊</b>的張數，按下去一次全部轉入正式報價單。</li>
+            <li><b>分頁</b>可直接跳到<b>第一頁／最後一頁</b>；清單只要重畫（轉入、套用、換頁、改篩選），「全選本頁」的勾一律清空，避免誤以為還有選著的報價單。</li>
             <li><b>轉入正式之後不會跳回第一頁</b>：轉走的那幾張直接從清單移除，畫面停在原本的頁次與捲動位置，右下角以小提示告知結果，方便連續作業。</li>
             <li>上方統計列的「<b>最新資料日期</b>」是把目前尚待確認的所有報價單<b>由 OP 單號本身解析</b>出來的日期（OP＋民國年3碼＋月日4碼，例：OP1071228004 → 2018.12.28）取最新的一天，可用來看舊資料補到哪一天；括號內是該日期取自哪一張單號。此欄不受年份篩選影響，一律以全部尚待確認的報價單計算。</li>
         </ul>
@@ -212,6 +242,89 @@ try {
     <div class="m-foot">
         <button class="btn btn-default" onclick="closeMask('bulkProcMask')">取消</button>
         <button class="btn btn-warning" id="bpSubmitBtn" onclick="submitBulkProc()"><i class="fa fa-check"></i> 套用</button>
+    </div>
+</div></div>
+
+<!-- 關鍵字自動偵測結果：依建議的標籤組合分組確認 -->
+<div class="va-mask" id="kwScanMask"><div class="va-modal wide">
+    <div class="m-head"><span><i class="fa fa-search"></i> 關鍵字自動偵測製程</span><span class="m-close" onclick="closeMask('kwScanMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a5a2b;margin-bottom:6px;" id="kwScanScope"></div>
+        <div style="margin-bottom:6px;font-size:12px;">
+            <label style="margin-right:14px;"><input type="radio" name="kwScope" value="filtered" checked> 掃描<b>目前篩選的全部報價單</b>（<span id="kwScopeAllCnt">0</span> 張）</label>
+            <label style="margin-right:14px;"><input type="radio" name="kwScope" value="page"> 只掃描<b>目前這一頁</b>（<span id="kwScopePageCnt">0</span> 張）</label>
+            <button class="btn btn-default btn-xs" onclick="runKwScan()"><i class="fa fa-refresh"></i> 重新偵測</button>
+        </div>
+        <div style="font-size:12px;margin-bottom:8px;" id="kwScanSummary"></div>
+        <div style="margin-bottom:6px;font-size:12px;">
+            <button class="btn btn-default btn-xs" onclick="kwSelectAll(true)">全部勾選</button>
+            <button class="btn btn-default btn-xs" onclick="kwSelectAll(false)">全部取消</button>
+            <span style="margin-left:10px;color:#8a5a2b;">已勾選 <b id="kwSelCount">0</b> 筆</span>
+            <span style="margin-left:10px;color:#888;">點分組列可展開逐筆核對／取消個別項目</span>
+        </div>
+        <div id="kwGroups"></div>
+    </div>
+    <div class="m-foot">
+        <button class="btn btn-default" onclick="closeMask('kwScanMask')">關閉</button>
+        <button class="btn btn-warning" id="kwApplyBtn" onclick="submitKwApply()"><i class="fa fa-check"></i> 套用已勾選的項目</button>
+    </div>
+</div></div>
+
+<!-- 關鍵字規則設定 -->
+<div class="va-mask" id="kwRuleMask"><div class="va-modal wide">
+    <div class="m-head"><span><i class="fa fa-cog"></i> 關鍵字規則設定</span><span class="m-close" onclick="closeMask('kwRuleMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a5a2b;margin-bottom:8px;">
+            規則只比對項目的<b>規格</b>文字，不分大小寫。<br>
+            <b>「包含」用逗號連接＝這些字<u>全部都要有</u></b>（例 <code>齒研,冶具|治具</code> ＝ 要同時含「齒研」而且含「冶具」或「治具」）；
+            想表達「這個<u>或</u>那個」請在<b>同一個關鍵字裡用 <code>|</code></b>（例 <code>冶具|治具</code>）。<br>
+            <b>「不包含」用逗號連接＝其中<u>任何一個</u>出現就不算命中</b>（例 <code>冶具,治具,刀</code>）。<br>
+            客戶不勾＝通用規則；勾了多個＝<u>任一</u>符合即成立。多條規則同時命中時，建議的標籤取<b>聯集</b>。
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead><tr style="color:#8a5a2b;border-bottom:1px solid #E4C293;">
+                <th style="text-align:left;padding:4px 6px;">規則名稱</th><th style="text-align:left;">包含</th>
+                <th style="text-align:left;">不包含</th><th style="text-align:left;">客戶</th>
+                <th style="text-align:left;">帶入</th><th style="text-align:left;width:110px;">操作</th>
+            </tr></thead>
+            <tbody id="kwRuleRows"></tbody>
+        </table>
+        <hr style="margin:10px 0;">
+        <div id="kwRuleForm">
+            <input type="hidden" id="krRuleId" value="0">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                <div style="flex:1;min-width:180px;"><label style="font-size:12px;">規則名稱 *</label>
+                    <input type="text" class="form-control input-sm" id="krName" maxlength="60" placeholder="例：齒研">
+                    <div class="kw-err" id="krNameErr"></div></div>
+                <div style="flex:1;min-width:180px;"><label style="font-size:12px;">規格「包含」 * <span style="color:#888;font-weight:400;">逗號＝全部都要含</span></label>
+                    <input type="text" class="form-control input-sm" id="krInc" placeholder="齒研,冶具|治具　＝ 要同時含「齒研」且含「冶具或治具」">
+                    <div class="kw-err" id="krIncErr"></div></div>
+                <div style="flex:1;min-width:180px;"><label style="font-size:12px;">規格「不包含」 <span style="color:#888;font-weight:400;">逗號＝任一中就排除</span></label>
+                    <input type="text" class="form-control input-sm" id="krExc" placeholder="冶具,治具,刀　＝ 含其中任一個就不算"></div>
+                <div style="width:90px;"><label style="font-size:12px;">排序</label>
+                    <input type="number" class="form-control input-sm" id="krPriority" value="0"></div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
+                <div style="flex:1;min-width:260px;">
+                    <label style="font-size:12px;">命中時帶入的製程標籤 <span style="color:#888;">（不選＝改勾下方「帶入備註」）</span></label>
+                    <div id="krTagArea"></div>
+                    <div style="margin-top:4px;"><label style="font-size:12px;"><input type="checkbox" id="krToNote"> 帶入備註（把規格文字帶進整張報價單的備註欄，不設製程標籤）</label></div>
+                    <div class="kw-err" id="krTagErr"></div>
+                </div>
+                <div style="flex:1;min-width:260px;">
+                    <label style="font-size:12px;">只適用這些客戶（可多選，任一符合即可；不勾＝通用規則）</label>
+                    <input type="text" class="form-control input-sm" id="krCustFilter" placeholder="輸入客戶編號或名稱篩選…" style="margin-bottom:4px;">
+                    <div class="kw-cust-box" id="krCustBox"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="btn btn-default" onclick="closeMask('kwRuleMask')">關閉</button>
+        <button class="btn btn-default" onclick="krSeed()" title="一次建立一組常見的製程關鍵字規則（同名的不會重複建立），建立後可自行增修或刪除">
+            <i class="fa fa-magic"></i> 載入建議規則範本</button>
+        <button class="btn btn-default" onclick="krResetForm()">清空表單</button>
+        <button class="btn btn-warning" id="krSaveBtn" onclick="krSave()"><i class="fa fa-save"></i> 儲存規則</button>
     </div>
 </div></div>
 
@@ -408,6 +521,7 @@ function populateCustFilter() {
 // （磨銳／鍍TIN／熱處理／刀具類…）本來就沒有綁定 process_no，只看 processes 會變成
 // 「明明點了標籤，系統卻說還沒設定製程」，而且那張報價單永遠轉不進正式報價單。
 function itemHasProcess(it) {
+    if (Number(it.note_only) === 1) return true;          // 以備註代替製程（規格文字已帶進報價單備註欄）
     if (it.processes && String(it.processes) !== '') return true;
     return String(it.process_notes || '').trim() !== '';
 }
@@ -486,13 +600,19 @@ function renderCards() {
     $('#qtCards').html(html);
 
     let pg = '';
+    pg += '<button class="btn btn-default btn-xs" ' + (qtPage<=1?'disabled':'') + ' onclick="qtGoPage(1)" title="第一頁"><i class="fa fa-angle-double-left"></i> 第一頁</button> ';
     pg += '<button class="btn btn-default btn-xs" ' + (qtPage<=1?'disabled':'') + ' onclick="qtGoPage(' + (qtPage-1) + ')">上一頁</button>';
     pg += ' 第 ' + qtPage + ' / ' + totalPages + ' 頁（共 ' + filtered.length + ' 張） ';
-    pg += '<button class="btn btn-default btn-xs" ' + (qtPage>=totalPages?'disabled':'') + ' onclick="qtGoPage(' + (qtPage+1) + ')">下一頁</button>';
+    pg += '<button class="btn btn-default btn-xs" ' + (qtPage>=totalPages?'disabled':'') + ' onclick="qtGoPage(' + (qtPage+1) + ')">下一頁</button> ';
+    pg += '<button class="btn btn-default btn-xs" ' + (qtPage>=totalPages?'disabled':'') + ' onclick="qtGoPage(' + totalPages + ')" title="最後一頁">最後一頁 <i class="fa fa-angle-double-right"></i></button>';
     $('#qtPagination').html(pg);
 
     pageRows.forEach(function(r) { renderItemBody(r.quote_id); });
+    // 重畫清單＝勾選狀態一律歸零：轉入正式後那幾張已從清單移除，
+    // 「全選本頁」若還留著勾，會讓人以為目前仍有選取的報價單
+    $('#qtCheckAll').prop('checked', false);
     updateSelCount();
+    updateReadyCount();
 }
 
 function qtGoPage(p) { qtPage = p; renderCards(); }
@@ -609,8 +729,25 @@ function renderPartBindWidget(it, row) {
         '<i class="fa fa-link"></i> ' + (it.d_setting_d_id ? '重新綁定' : '快速綁定') + '</button>';
 }
 
+function findItemById(itemId) {
+    let found = null;
+    Object.keys(qtItemsCache).forEach(function(k) {
+        (qtItemsCache[k] || []).forEach(function(it) { if (String(it.item_id) === String(itemId)) found = it; });
+    });
+    return found;
+}
+
 function renderProcWidget(itemId, prevItemId, totalInQuote) {
     const state = qtProcState[itemId];
+    const item  = findItemById(itemId);
+
+    // 以備註代替製程：整格直接顯示為備註（規格文字已帶進整張報價單的備註欄），不再顯示標籤選擇器
+    if (item && Number(item.note_only) === 1) {
+        return '<div class="qt-note-only">' +
+               '<span class="qt-badge note">備註</span> ' + escapeQt(item.specification || '') +
+               '<div style="font-size:10px;margin-top:2px;">已帶入本張報價單的備註欄　' +
+               '<a href="javascript:void(0)" onclick="setItemNoteOnly(' + itemId + ',false)">取消，改設定製程</a></div></div>';
+    }
 
     let toolbar = '';
     if (prevItemId || (totalInQuote && totalInQuote > 1)) {
@@ -619,6 +756,11 @@ function renderProcWidget(itemId, prevItemId, totalInQuote) {
         if (totalInQuote && totalInQuote > 1) toolbar += (prevItemId ? '　' : '') + '<a href="javascript:void(0)" onclick="applyProcessToAllInQuote(' + itemId + ')"><i class="fa fa-copy"></i> 套用到本單全部</a>';
         toolbar += '</div>';
     }
+    // 沒有對應製程標籤的項目（例如「半月型六角口模 線割對半」）走這顆：規格文字帶進報價單備註欄，
+    // 該列改以備註表示，也算補齊了製程、可以轉入正式報價單
+    toolbar += '<div style="font-size:10px;margin-bottom:2px;"><a href="javascript:void(0)" ' +
+               'title="把這一筆的規格文字帶進整張報價單的備註欄，本列改以備註表示" ' +
+               'onclick="setItemNoteOnly(' + itemId + ',true)"><i class="fa fa-comment-o"></i> 帶入備註</a></div>';
 
     let l1 = '<div class="qt-proc-l1">';
     processTagTree.forEach(function(g) {
@@ -724,6 +866,26 @@ function saveItemProcess(itemId) {
         // 只更新完成度統計不必整頁重載
         refreshStatsOnly(itemId);
     });
+}
+
+// 帶入備註／取消：後端會重建該報價單備註欄的【規格備註】區塊（使用者自己寫的備註不動）
+function setItemNoteOnly(itemId, on) {
+    const it = findItemById(itemId);
+    if (on && !String(it && it.specification || '').trim()) { alert('這一筆沒有規格文字，沒有內容可以帶入備註。'); return; }
+    $.post(API_URL, { action: 'quick_set_item_note_only', item_id: itemId, on: on ? '1' : '0' }, function(res) {
+        if (!res.success) { alert('設定失敗：' + res.message); return; }
+        if (it) { it.note_only = on ? 1 : 0; if (on) { it.processes = ''; it.process_notes = ''; } }
+        if (on) delete qtProcState[itemId];
+        const qid = findQuoteIdByItemId(itemId);
+        if (qid) drawItems(qid, qtItemsCache[qid]);
+        refreshStatsOnly(itemId);
+        showQtToast(on ? '已帶入報價單備註' : '已取消備註，請設定製程');
+    });
+}
+
+function escapeQt(t) {
+    return String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // 局部更新該項目所屬報價單卡片的完成度徽章與頂端統計（避免重載整頁打斷正在操作的畫面）
@@ -1189,6 +1351,321 @@ $('#btnBatchConfirm').on('click', function() {
     }
     if (!confirm('確定要將這 ' + ids.length + ' 張報價單轉入正式報價單清單嗎？轉入後將從本頁移除。')) return;
     doConfirmTransfer(ids);
+});
+
+// ══════════════════════════════════════════════════════════════════
+// 關鍵字自動偵測製程：依規格文字的規則建議標籤 → 依「建議的標籤組合」分組 → 人工確認後套用
+// 系統只建議、絕不自動套用（「泓創綠能」與「泓創綠能科技」那種同理：像不代表是）。
+// ══════════════════════════════════════════════════════════════════
+let kwGroups = [];          // 後端回來的分組結果
+let kwChecked = {};         // item_id => true（勾選狀態，跨分組共用一份）
+
+$('#btnKwScan').on('click', function() {
+    const rows = getFilteredData();
+    if (!rows.length) { alert('目前篩選範圍內沒有報價單。'); return; }
+    $('#kwScopeAllCnt').text(rows.length);
+    $('#kwScopePageCnt').text(qtPageRows.length);
+    $('input[name="kwScope"][value="filtered"]').prop('checked', true);
+    $('#kwGroups').html('');
+    $('#kwScanSummary').html('');
+    openMask('kwScanMask');
+    runKwScan();
+});
+
+function kwScanRows() {
+    return $('input[name="kwScope"]:checked').val() === 'page' ? qtPageRows : getFilteredData();
+}
+
+function runKwScan() {
+    const rows = kwScanRows();
+    const cust = $('#qtCustFilter').val();
+    const custName = cust ? ($('#qtCustFilter option:selected').text().split('—')[0].trim()) : '全部客戶';
+    $('#kwScanScope').text('年份：' + ($('#qtYearFilter').val() || '全部') + '　客戶：' + custName + '　掃描 ' + rows.length + ' 張報價單');
+    $('#kwGroups').html('<div style="color:#999;padding:14px;"><i class="fa fa-spinner fa-spin"></i> 偵測中…</div>');
+    $.post(API_URL, { action: 'qkw_scan', quote_ids: JSON.stringify(rows.map(function(r){ return Number(r.quote_id); })), only_unset: '1' }, function(res) {
+        if (!res.success) { $('#kwGroups').html('偵測失敗：' + (res.message || '')); return; }
+        kwGroups = res.data.groups || [];
+        kwChecked = {};
+        // 預設全部勾選（使用者要的是「快速確認」，逐筆取消比逐筆勾選省力得多）
+        kwGroups.forEach(function(g){ g.items.forEach(function(it){ kwChecked[it.item_id] = true; }); });
+        $('#kwScanSummary').html(res.data.rules === 0
+            ? '<span style="color:#DD5138;">尚未設定任何關鍵字規則，請先按工具列的「規則設定」新增。</span>'
+            : ('掃描 ' + res.data.scanned + ' 筆未設定製程的項目，命中 <b>' + res.data.matched + '</b> 筆，共 ' + kwGroups.length + ' 種建議組合（使用 ' + res.data.rules + ' 條規則）'));
+        renderKwGroups();
+    });
+}
+
+function renderKwGroups() {
+    if (!kwGroups.length) { $('#kwGroups').html('<div style="color:#999;padding:14px;">沒有任何項目命中規則。</div>'); updateKwSel(); return; }
+    let html = '';
+    kwGroups.forEach(function(g, gi) {
+        const checkedN = g.items.filter(function(it){ return kwChecked[it.item_id]; }).length;
+        html += '<div class="kw-group" id="kwG' + gi + '">' +
+            '<div class="kw-group-head" onclick="kwToggleOpen(' + gi + ')">' +
+                '<input type="checkbox" onclick="event.stopPropagation();kwToggleGroup(' + gi + ',this.checked)" ' +
+                    (checkedN === g.items.length ? 'checked' : '') + ' id="kwGChk' + gi + '">' +
+                '<span class="kw-label">' + (g.kind === 'note' ? '<span class="qt-badge note">備註</span> ' : '') + escapeQt(g.label) + '</span>' +
+                '<span style="color:#8a5a2b;">' + g.count + ' 筆</span>' +
+                '<span class="kw-rules">命中規則：' + escapeQt((g.rules || []).join('、')) + '</span>' +
+                '<span style="margin-left:auto;font-size:11px;color:#a2703a;" id="kwGSel' + gi + '">已勾 ' + checkedN + '</span>' +
+                '<i class="fa fa-caret-down"></i>' +
+            '</div>' +
+            '<div class="kw-group-body" id="kwGBody' + gi + '"></div>' +
+        '</div>';
+    });
+    $('#kwGroups').html(html);
+    updateKwSel();
+}
+
+// 逐筆清單很大（單一組可能三千筆），展開時才畫，避免一次塞進 DOM 卡住整個跳窗
+function kwToggleOpen(gi) {
+    const $g = $('#kwG' + gi);
+    const open = $g.hasClass('open');
+    if (!open && !$g.data('drawn')) { kwDrawItems(gi); $g.data('drawn', 1); }
+    $g.toggleClass('open', !open);
+}
+
+function kwDrawItems(gi) {
+    const g = kwGroups[gi];
+    let h = '<table class="kw-item-table">';
+    g.items.forEach(function(it) {
+        h += '<tr><td style="width:22px;"><input type="checkbox" class="kw-item-chk" data-gi="' + gi + '" value="' + it.item_id + '"' +
+             (kwChecked[it.item_id] ? ' checked' : '') + '></td>' +
+             '<td style="width:120px;color:#8a5a2b;">' + escapeQt(it.quote_no) + '</td>' +
+             '<td style="width:110px;">' + escapeQt(it.client_name || '') + '</td>' +
+             '<td style="width:150px;">' + escapeQt(it.product_id || '') + '</td>' +
+             '<td>' + escapeQt(it.spec || '') + '</td></tr>';
+    });
+    $('#kwGBody' + gi).html(h + '</table>');
+}
+
+$(document).on('change', '.kw-item-chk', function() {
+    kwChecked[this.value] = this.checked;
+    const gi = Number($(this).data('gi'));
+    kwSyncGroupHead(gi);
+    updateKwSel();
+});
+
+function kwSyncGroupHead(gi) {
+    const g = kwGroups[gi];
+    const n = g.items.filter(function(it){ return kwChecked[it.item_id]; }).length;
+    $('#kwGChk' + gi).prop('checked', n === g.items.length).prop('indeterminate', n > 0 && n < g.items.length);
+    $('#kwGSel' + gi).text('已勾 ' + n);
+}
+
+function kwToggleGroup(gi, on) {
+    kwGroups[gi].items.forEach(function(it){ kwChecked[it.item_id] = !!on; });
+    $('#kwGBody' + gi).find('.kw-item-chk').prop('checked', !!on);
+    kwSyncGroupHead(gi);
+    updateKwSel();
+}
+
+function kwSelectAll(on) {
+    kwGroups.forEach(function(g, gi){ kwToggleGroup(gi, on); });
+}
+
+function updateKwSel() {
+    let n = 0;
+    Object.keys(kwChecked).forEach(function(k){ if (kwChecked[k]) n++; });
+    $('#kwSelCount').text(n);
+    $('#kwApplyBtn').prop('disabled', n === 0);
+}
+
+function submitKwApply() {
+    const batches = [];
+    let total = 0;
+    kwGroups.forEach(function(g) {
+        const ids = g.items.filter(function(it){ return kwChecked[it.item_id]; }).map(function(it){ return it.item_id; });
+        if (!ids.length) return;
+        total += ids.length;
+        batches.push(g.kind === 'note' ? { to_note: 1, item_ids: ids } : { sub_tag_ids: g.sub_tag_ids, item_ids: ids });
+    });
+    if (!total) { alert('沒有勾選任何項目。'); return; }
+    if (!confirm('將把確認過的建議套用到 ' + total + ' 筆項目（' + batches.length + ' 種組合）。\n\n確定要執行嗎？')) return;
+    const $btn = $('#kwApplyBtn').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 套用中…');
+    $.post(API_URL, { action: 'qkw_apply', batches: JSON.stringify(batches) }, function(res) {
+        $btn.prop('disabled', false).html('<i class="fa fa-check"></i> 套用已勾選的項目');
+        if (!res.success) { alert('套用失敗：' + res.message); return; }
+        closeMask('kwScanMask');
+        showQtToast('已套用 ' + res.data.items + ' 筆項目' + (res.data.note_quotes ? ('，' + res.data.note_quotes + ' 張報價單已更新備註') : ''));
+        qtItemsCache = {}; qtProcState = {};
+        const keepPage = qtPage, keepScroll = window.scrollY;
+        loadPendingList(function(){ qtPage = keepPage; renderCards(); window.scrollTo(0, keepScroll); });
+    });
+}
+
+// ── 關鍵字規則設定 ─────────────────────────────────────────
+let krRules = [], krTagSel = [], krCustSel = {};
+
+$('#btnKwRules').on('click', function() { openMask('kwRuleMask'); krLoad(); });
+
+function krLoad() {
+    $.get(API_URL, { action: 'qkw_rule_list' }, function(res) {
+        if (!res.success) { alert('讀取規則失敗：' + (res.message || '')); return; }
+        krRules = res.data || [];
+        krRenderRows(res.tags || {});
+        krResetForm();
+    });
+}
+
+function krRenderRows(tagNames) {
+    if (!krRules.length) { $('#kwRuleRows').html('<tr><td colspan="6" style="color:#999;padding:8px;">尚未設定任何規則</td></tr>'); return; }
+    let h = '';
+    krRules.forEach(function(r) {
+        const tags = String(r.sub_tag_ids || '').split(',').filter(Boolean)
+            .map(function(id){ return tagNames[id] || ('#' + id); }).join('、');
+        h += '<tr class="kw-rule-row">' +
+            '<td>' + escapeQt(r.rule_name) + (Number(r.is_active) ? '' : ' <span class="qt-badge warn">停用</span>') + '</td>' +
+            '<td>' + escapeQt(r.include_kw) + '</td>' +
+            '<td>' + escapeQt(r.exclude_kw) + '</td>' +
+            '<td>' + (r.customer_ids ? escapeQt(r.customer_ids) : '<span style="color:#888;">通用</span>') + '</td>' +
+            '<td>' + (Number(r.to_note) ? '<span class="qt-badge note">備註</span>' : escapeQt(tags)) + '</td>' +
+            '<td><a href="javascript:void(0)" onclick="krEdit(' + r.rule_id + ')">編輯</a>　' +
+                '<a href="javascript:void(0)" style="color:#DD5138;" onclick="krDelete(' + r.rule_id + ')">刪除</a></td>' +
+        '</tr>';
+    });
+    $('#kwRuleRows').html(h);
+}
+
+function krRenderTagPicker() {
+    let h = '<div class="qt-proc-l2">';
+    processTagTree.forEach(function(g) {
+        (g.sub_tags || []).forEach(function(st) {
+            const on = krTagSel.indexOf(st.sub_tag_id) !== -1;
+            h += '<button type="button" class="' + (on ? 'active' : '') + '" onclick="krToggleTag(' + st.sub_tag_id + ')" ' +
+                 'title="' + escapeQt(g.group_name) + '">' + escapeQt(st.sub_tag_name) + '</button>';
+        });
+    });
+    $('#krTagArea').html(h + '</div>');
+}
+
+function krToggleTag(sid) {
+    const i = krTagSel.indexOf(sid);
+    if (i === -1) krTagSel.push(sid); else krTagSel.splice(i, 1);
+    if (krTagSel.length) $('#krToNote').prop('checked', false);
+    krRenderTagPicker();
+    krValidate();
+}
+
+// 客戶候選＝目前尚待確認的報價單實際出現過的客戶（與工具列下拉同一份來源）
+function krRenderCustBox(filter) {
+    const map = {};
+    qtData.forEach(function(r) {
+        const id = String(r.client_id || '');
+        if (!id) return;
+        if (!map[id]) map[id] = { id: id, name: r.client_name || '' };
+    });
+    const kw = String(filter || '').trim().toLowerCase();
+    let h = '';
+    Object.keys(map).sort().forEach(function(id) {
+        const txt = map[id].name + '（' + id + '）';
+        if (kw && txt.toLowerCase().indexOf(kw) === -1 && !krCustSel[id]) return;
+        h += '<label style="display:block;"><input type="checkbox" class="kr-cust" value="' + id + '"' +
+             (krCustSel[id] ? ' checked' : '') + '> ' + escapeQt(txt) + '</label>';
+    });
+    $('#krCustBox').html(h || '<span style="color:#999;">沒有符合的客戶</span>');
+}
+$(document).on('input', '#krCustFilter', function(){ krRenderCustBox(this.value); });
+$(document).on('change', '.kr-cust', function(){ if (this.checked) krCustSel[this.value] = true; else delete krCustSel[this.value]; });
+$(document).on('change', '#krToNote', function(){ if (this.checked) { krTagSel = []; krRenderTagPicker(); } krValidate(); });
+$(document).on('input', '#krName,#krInc', krValidate);
+
+// 前端即時驗證，後端 qkw_rule_validate() 同一套規則再擋一次（鐵律8）
+function krValidate() {
+    let ok = true;
+    const name = $('#krName').val().trim(), inc = $('#krInc').val().trim();
+    $('#krNameErr').text(name ? '' : '請填規則名稱'); if (!name) ok = false;
+    $('#krIncErr').text(inc ? '' : '請至少填一個「包含」關鍵字'); if (!inc) ok = false;
+    const toNote = $('#krToNote').is(':checked');
+    let tagErr = '';
+    if (!toNote && !krTagSel.length) tagErr = '請選擇要帶入的製程標籤，或改勾「帶入備註」';
+    if (toNote && krTagSel.length) tagErr = '「帶入備註」與製程標籤只能擇一';
+    $('#krTagErr').text(tagErr); if (tagErr) ok = false;
+    $('#krSaveBtn').prop('disabled', !ok);
+    return ok;
+}
+
+function krResetForm() {
+    $('#krRuleId').val(0); $('#krName').val(''); $('#krInc').val(''); $('#krExc').val('');
+    $('#krPriority').val(0); $('#krToNote').prop('checked', false);
+    krTagSel = []; krCustSel = {}; $('#krCustFilter').val('');
+    krRenderTagPicker(); krRenderCustBox(''); krValidate();
+}
+
+function krEdit(ruleId) {
+    const r = krRules.find(function(x){ return Number(x.rule_id) === Number(ruleId); });
+    if (!r) return;
+    $('#krRuleId').val(r.rule_id); $('#krName').val(r.rule_name); $('#krInc').val(r.include_kw);
+    $('#krExc').val(r.exclude_kw); $('#krPriority').val(r.priority);
+    $('#krToNote').prop('checked', Number(r.to_note) === 1);
+    krTagSel = String(r.sub_tag_ids || '').split(',').filter(Boolean).map(Number);
+    krCustSel = {}; String(r.customer_ids || '').split(',').filter(Boolean).forEach(function(c){ krCustSel[c] = true; });
+    $('#krCustFilter').val('');
+    krRenderTagPicker(); krRenderCustBox(''); krValidate();
+}
+
+function krSave() {
+    if (!krValidate()) return;
+    $.post(API_URL, {
+        action: 'qkw_rule_save', rule_id: $('#krRuleId').val(), rule_name: $('#krName').val().trim(),
+        include_kw: $('#krInc').val().trim(), exclude_kw: $('#krExc').val().trim(),
+        customer_ids: Object.keys(krCustSel).join(','), sub_tag_ids: krTagSel.join(','),
+        to_note: $('#krToNote').is(':checked') ? 1 : 0, priority: $('#krPriority').val() || 0, is_active: 1
+    }, function(res) {
+        if (!res.success) { alert('儲存失敗：' + res.message); return; }
+        showQtToast('規則已儲存');
+        krLoad();
+    });
+}
+
+// 建議規則範本：常見的製程字對到對應標籤（例：規格含「齒研」但不含「冶具/治具/刀/全製」→ 齒研）。
+// 只是起手式，建立後照樣可以改關鍵字、換標籤、指定客戶或停用。
+function krSeed() {
+    if (!confirm('將建立一組常見的製程關鍵字規則（同名的不會重複建立）。' + '\n' +
+                 '建立後可自行增修或刪除，且一律仍要人工確認才會套用。' + '\n\n' +
+                 '確定要載入嗎？')) return;
+    $.post(API_URL, { action: 'qkw_rule_seed' }, function(res) {
+        if (!res.success) { alert('載入失敗：' + res.message); return; }
+        showQtToast(res.added ? ('已新增 ' + res.added + ' 條規則') : '沒有新增（範本規則都已存在）');
+        krLoad();
+    });
+}
+
+function krDelete(ruleId) {
+    if (!confirm('確定要刪除這條規則嗎？（不影響已經套用出去的製程設定）')) return;
+    $.post(API_URL, { action: 'qkw_rule_delete', rule_id: ruleId }, function(res) {
+        if (!res.success) { alert('刪除失敗：' + res.message); return; }
+        showQtToast('規則已刪除');
+        krLoad();
+    });
+}
+
+// ── 一鍵轉入「已補齊」的報價單 ──────────────────────────
+// 依標籤分組確認完之後，使用者不會知道哪幾張整張都補齊了，所以由系統直接算給他。
+function readyQuotes() {
+    return getFilteredData().filter(function(r) {
+        return Number(r.items_no_dsetting) === 0 && Number(r.items_no_process) === 0 && Number(r.item_count) > 0;
+    });
+}
+
+function updateReadyCount() {
+    $('#qtReadyCnt').text('(' + readyQuotes().length + ')');
+}
+
+$('#btnTransferReady').on('click', function() {
+    const rows = readyQuotes();
+    if (!rows.length) { alert('目前篩選範圍內沒有「料號ID與製程都已補齊」的報價單。'); return; }
+    const items = rows.reduce(function(a, r){ return a + Number(r.item_count); }, 0);
+    if (!confirm('將把目前篩選範圍內已補齊的 ' + rows.length + ' 張報價單（共 ' + items + ' 筆項目）轉入正式報價單。\n\n轉入後這些單就不會再出現在本頁，確定要執行嗎？')) return;
+    const $btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 轉入中…');
+    $.post(API_URL, { action: 'quick_confirm_transfer', quote_ids: JSON.stringify(rows.map(function(r){ return Number(r.quote_id); })) }, function(res) {
+        $btn.prop('disabled', false).html('<i class="fa fa-check-square-o"></i> 一鍵轉入已補齊 <span id="qtReadyCnt">(0)</span>');
+        if (!res.success) { alert('轉入失敗：' + res.message); return; }
+        showQtToast('已轉入 ' + res.updated + ' 張報價單');
+        qtItemsCache = {}; qtProcState = {};
+        const keepPage = qtPage;
+        loadPendingList(function(){ qtPage = keepPage; renderCards(); });
+    });
 });
 
 // 點外部關閉搜尋結果下拉
