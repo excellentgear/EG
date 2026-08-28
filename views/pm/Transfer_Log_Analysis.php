@@ -81,6 +81,16 @@ if ($start_date_param === '' && $end_date_param === '') {
     $end_date = $end_date_param ?: date('Y-m-d');
 }
 
+/* ── 帳款月份（2026-08-27 新增）────────────────────────────────────────────
+ * 計算規則、權限與批次修改的唯一實作都在 src/common/billing_month_lib.php。
+ * 這裡只做三件事：確保欄位存在、解析目前使用者權限、把值帶進畫面。 */
+require_once __DIR__ . '/../../src/common/billing_month_lib.php';
+eg_bm_ensure_schema($conn->getPDO());
+$bm_user  = eg_bm_current_user($conn->getPDO());
+$bm_perms = eg_bm_perms($conn->getPDO(), $bm_user);
+$bm_csrf  = eg_bm_csrf_token();
+$bm_set   = eg_bm_default_settlement($conn->getPDO());
+
 // 查詢資料：bom_ing_transfer_log 結合 bom 取得客戶與規格資訊
 $sql = "SELECT
         t.transfer_id,
@@ -102,6 +112,10 @@ $sql = "SELECT
         t.invoice_ym,
         t.note,
         t.note2,
+        t.bill_ym,
+        t.bill_ym_manual,
+        t.bill_ym_at,
+        bu.user_cname AS bill_ym_by_name,
         t.changed_by,
         t.created_at,
         t.modified_at,
@@ -115,12 +129,27 @@ $sql = "SELECT
     LEFT JOIN maker_list m ON t.maker_from = m.maker_id_no
     LEFT JOIN bom_ing bi ON t.bom = bi.bom AND t.bom_sn = bi.bom_sn
     LEFT JOIN process_no pn ON bi.process_no = pn.ProcessNo
+    LEFT JOIN `user` bu ON bu.id = t.bill_ym_by
     WHERE t.transfer_date BETWEEN :start_date AND :end_date
     ORDER BY t.transfer_date DESC, t.transfer_id DESC";
 
 $stmt = $conn->getPDO()->prepare($sql);
 $stmt->execute([':start_date' => $start_date, ':end_date' => $end_date]);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+/* 帳款月份：DB 有值就用 DB 的；還沒回填的列即時算給畫面看（不寫 DB，避免每次開頁都在寫入）。
+   bill_ym_src：db＝已寫入、auto＝畫面即時算、''＝連日期都解析不出來 */
+foreach ($rows as &$__r) {
+    if ($__r['bill_ym'] !== null && $__r['bill_ym'] !== '') {
+        $__r['bill_ym_src'] = 'db';
+    } else {
+        $__r['bill_ym']     = eg_bm_calc_row($conn->getPDO(), $__r);
+        $__r['bill_ym_src'] = $__r['bill_ym'] === null ? '' : 'auto';
+    }
+    $__r['bill_ym_label'] = eg_bm_ym_label($__r['bill_ym']);
+    $__r['bill_ym_manual'] = (int)($__r['bill_ym_manual'] ?? 0);
+}
+unset($__r);
 
 // 判斷圖表顯示單位 (日/週/月)
 $date_diff = (strtotime($end_date) - strtotime($start_date)) / 86400;
@@ -340,6 +369,21 @@ try {
         .help-doc ul { margin:4px 0 8px; padding-left:20px; }
         .help-doc li { margin:2px 0; }
         .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
+        /* 帳款月份 */
+        .bm-pick-col { width:34px; text-align:center; }
+        #transferTable td.bm-pick-col input { margin:0; }
+        .bm-ym { font-weight:bold; color:#8A5A2B; }
+        .bm-manual { display:inline-block; margin-left:4px; padding:0 5px; border-radius:8px;
+            font-size:11px; background:#F0A24B; color:#fff; }
+        .bm-none { color:#bbb; }
+        .bm-sel-badge { display:inline-block; padding:3px 8px; border-radius:10px; background:#F7E0BD;
+            color:#5b3a1e; font-size:12px; margin-right:6px; }
+        /* 批次修改跳窗 */
+        .bm-form-row { display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+        .bm-form-row label { margin:0; font-size:13px; color:#5b3a1e; min-width:80px; }
+        .bm-err { color:#DD5138; font-size:12px; margin-left:4px; }
+        .bm-hint { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px;
+            font-size:12px; color:#5b3a1e; margin-bottom:10px; }
         /* 頁內分頁（明細／統計分析） */
         .tl-tabs { border-bottom:2px solid #E8D5B5; margin-bottom:12px; }
         .tl-tabs > li > a { color:#8A5A2B; font-size:14px; font-weight:bold; border:none; }
@@ -474,6 +518,16 @@ try {
                                 <div class="x_title">
                                     <h2><i class="fa fa-list"></i> 移轉明細列表</h2>
                                     <div id="buttons-container" style="display: inline-block; margin-left: 20px;"></div>
+<?php if ($bm_perms['canEdit']): ?>
+                                    <div style="display:inline-block;margin-left:12px;">
+                                        <span id="bm-sel-count" class="bm-sel-badge">已勾選 0 筆</span>
+                                        <button type="button" class="btn btn-warning btn-sm" id="btnBmBatch" style="margin-bottom:0;"><i class="fa fa-calendar-o"></i> 批次修改帳款月份</button>
+                                        <button type="button" class="btn btn-default btn-sm" id="btnBmReset" style="margin-bottom:0;"><i class="fa fa-undo"></i> 還原為自動</button>
+<?php if ($bm_perms['canAdmin']): ?>
+                                        <button type="button" class="btn btn-default btn-sm" id="btnBmRecalc" style="margin-bottom:0;" title="依 J- 單號日期與各廠商結帳日重新計算（手動指定過的不會被蓋掉）"><i class="fa fa-refresh"></i> 重算</button>
+<?php endif; ?>
+                                    </div>
+<?php endif; ?>
                                     <ul class="nav navbar-right panel_toolbox">
                                         <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
                                     </ul>
@@ -491,6 +545,12 @@ try {
                                                 <!-- JS Populated -->
                                             </select>
                                             <input type="text" id="filter-note" class="form-control input-sm" placeholder="備註">
+                                            <input type="text" id="filter-billym" class="form-control input-sm" placeholder="帳款月份 202608">
+                                            <select id="filter-billym-manual" class="form-control input-sm" style="width:110px;">
+                                                <option value="">帳款月份全部</option>
+                                                <option value="1">只看手動</option>
+                                                <option value="0">只看自動</option>
+                                            </select>
                                             <input type="text" id="global-search" class="form-control input-sm" placeholder="全域搜索">
                                             <button type="button" class="btn btn-default btn-sm" id="clear-filters" style="margin-bottom: 0;">取消</button>
                                         </div>
@@ -499,6 +559,7 @@ try {
                                             <thead>
                                                 <tr>
                                                     <th style="display:none;">ID</th>
+                                                    <th class="bm-pick-col"><input type="checkbox" id="bm-check-all" title="全選/取消（目前篩選出來的全部）"></th>
                                                     <th>日期</th>
                                                     <th>單號</th>
                                                     <th>BOM</th>
@@ -513,6 +574,7 @@ try {
                                                     <th>付款數量</th>
                                                     <th>發票日期</th>
                                                     <th>發票年月</th>
+                                                    <th>帳款月份</th>
                                                     <th>備註</th>
                                                 </tr>
                                             </thead>
@@ -662,6 +724,52 @@ try {
         </div>
     </div>
 
+<?php if ($bm_perms['canEdit']): ?>
+    <!-- 批次修改帳款月份 Modal -->
+    <div class="modal fade" id="bmBatchModal" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+                    <h4 class="modal-title"><i class="fa fa-calendar-o"></i> 批次修改帳款月份</h4>
+                </div>
+                <div class="modal-body">
+                    <div class="bm-hint">
+                        將修改勾選的 <b id="bm-batch-count">0</b> 筆。改過的資料列會標記為<b>「手動」</b>，
+                        之後<b>重新匯入 ERP 或按重算都不會被蓋掉</b>；要恢復自動計算請用「還原為自動」。
+                    </div>
+                    <div class="bm-form-row">
+                        <label><input type="radio" name="bm-mode" value="set" checked> 指定月份</label>
+                        <label style="min-width:auto;"><input type="radio" name="bm-mode" value="shift"> 整批平移</label>
+                    </div>
+                    <div class="bm-form-row" id="bm-set-row">
+                        <label>帳款月份</label>
+                        <input type="text" id="bm-year" class="form-control input-sm" style="width:90px;"
+                               value="<?= date('Y') ?>" maxlength="4" placeholder="西元年">
+                        <span>年</span>
+                        <select id="bm-month" class="form-control input-sm" style="width:80px;">
+                            <?php for ($i = 1; $i <= 12; $i++): $mm = sprintf('%02d', $i); ?>
+                            <option value="<?= $mm ?>"<?= $i == (int)date('n') ? ' selected' : '' ?>><?= $mm ?></option>
+                            <?php endfor; ?>
+                        </select>
+                        <span>月</span>
+                    </div>
+                    <div class="bm-form-row" id="bm-shift-row" style="display:none;">
+                        <label>平移月數</label>
+                        <input type="number" id="bm-shift" class="form-control input-sm" style="width:90px;" value="1" step="1">
+                        <span style="font-size:12px;color:#8a7a68;">正數＝往後（12 月 +1 會變成隔年 1 月）、負數＝往前</span>
+                    </div>
+                    <div class="bm-form-row"><span id="bm-err" class="bm-err"></span></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-warning" id="bmBatchSubmit"><i class="fa fa-check"></i> 確定修改</button>
+                </div>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
+
     <!-- 使用說明 Modal（鐵律7） -->
     <div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog">
         <div class="modal-dialog modal-lg" role="document">
@@ -686,6 +794,30 @@ try {
                             若這個時間很舊、而現場已經有新的移轉單，代表該重新匯入了。</li>
                     </ul>
 
+                    <h4>帳款月份怎麼算出來的</h4>
+                    <ul>
+                        <li><b>日期</b>：一律從 <b>J- 單號</b>解析。例：<code>J-1150819055</code> → 民國 115/08/19 →
+                            115+1911＝<b>2026.08.19</b>。單號不是 J- 格式時才改用資料表上的日期欄。</li>
+                        <li><b>結帳日</b>：<b>該廠商主檔自己設的優先</b>，沒設才用「主檔管理 → 類別字典設定 → 基本設定」的
+                            <b>廠商預設結帳日</b>（目前是 <?= (int)$bm_set['day'] ?> 號）。</li>
+                        <li><b>區間</b>：結帳日 D ⇒ 上月 D+1 ～ 本月 D 都算本月帳。
+                            以 20 號為例，<b>7/21～8/20 都是 8 月帳</b>，8/21 起就變成 9 月帳；
+                            <b>12 月會自動跨到隔年 1 月</b>。結帳日大於當月天數時（例如 31 號遇到 2 月）自動視為該月最後一天。</li>
+                        <li>ERP 匯入檔<b>沒有帳款月份這一欄</b>，所以一律由系統依上述規則自動算；
+                            每次在上傳頁匯入加工單價時，新進來的資料會自動補上。</li>
+                    </ul>
+
+                    <h4>手動修改帳款月份</h4>
+                    <ul>
+                        <li>在「移轉明細」勾選要改的列（<b>全選</b>＝目前篩選出來的全部，不只這一頁），
+                            按<b>「批次修改帳款月份」</b>：可<b>指定某年某月</b>，或<b>整批平移 N 個月</b>（正數往後、負數往前，會自動跨年）。</li>
+                        <li>改過的列會標上橘色<b>「手動」</b>標記（滑鼠移上去看得到是誰、什麼時候改的）。
+                            <b>手動指定過的列，之後重新匯入 ERP 或按重算都不會被蓋掉。</b></li>
+                        <li>要恢復系統自動算的值，勾選後按<b>「還原為自動」</b>（清掉手動標記並立刻重算）。</li>
+                        <li>篩選列可用<b>帳款月份</b>關鍵字（打 202608、2026.08、2026-08 或只打 08 都可以），
+                            以及<b>只看手動／只看自動</b>。</li>
+                    </ul>
+
                     <h4>操作步驟</h4>
                     <ul>
                         <li><b>選日期區間</b>：頁面上方「查詢條件」選起訖日期（或按 本月／上月／今年／Q1~Q4 快速鈕），送出後重新查詢。
@@ -708,8 +840,13 @@ try {
 
                     <h4>權限</h4>
                     <ul>
-                        <li>本頁目前<b>只要能登入且左側選單看得到就能檢視</b>（登記於「測試功能」群組），尚未設定獨立的角色權限。</li>
-                        <li>請注意本頁會顯示<b>加工單價與金額</b>，若需限制觀看對象，請告知管理者加設角色控管。</li>
+                        <li><b>檢視</b>：只要能登入且左側選單看得到就能看（登記於「測試功能」群組）。
+                            請注意本頁會顯示<b>加工單價與金額</b>。</li>
+                        <li><b>帳款月份維護</b>（ptl_bill_edit）：可批次修改帳款月份、還原為自動。</li>
+                        <li><b>製程移轉管理員</b>（ptl_admin）：以上全部＋<b>重算</b>（整批依規則重新計算，手動指定過的一律不動）。</li>
+                        <li>角色在<a href="../user/user_permissions.php" target="_blank" style="color:#b5762a;">使用者權限設定</a>指派；
+                            管理者固定擁有全部權限。沒有權限的人看不到勾選欄與批次按鈕，
+                            直接打 API 也會被後端擋下。</li>
                     </ul>
                 </div>
                 <div class="modal-footer">
@@ -748,6 +885,16 @@ try {
         var chartGroupBy = '<?= $chart_group_by ?>';
         var currentChartFilter = null;
 
+        /* ── 帳款月份 ─────────────────────────────────────────────
+         * 權限由後端算好帶進來；沒有維護權限時勾選欄整欄不顯示、工具列也不輸出，
+         * 後端 API 仍會用同一套規則再擋一次（鐵律8）。 */
+        var BM_CAN_EDIT  = <?= $bm_perms['canEdit']  ? 'true' : 'false' ?>;
+        var BM_CAN_ADMIN = <?= $bm_perms['canAdmin'] ? 'true' : 'false' ?>;
+        var BM_CSRF      = <?= json_encode($bm_csrf) ?>;
+        var BM_API       = '../../src/store/TransferBilling_API.php';
+        var BM_DEF_DAY   = <?= (int)$bm_set['day'] ?>;
+        var bmSelected   = {};   // transfer_id => true（跨分頁保留勾選）
+
         $(document).ready(function() {
             // 填充廠商篩選下拉選單
             var uniqueMakers = [...new Set(transferData.map(item => item.maker_from_name || item.maker_from || ''))].filter(x => x).sort();
@@ -771,6 +918,14 @@ try {
                 deferRender: true,
                 columns: [
                     { data: 'transfer_id', visible: false },
+                    {   // 勾選欄（沒有維護權限時整欄不顯示）
+                        data: 'transfer_id', orderable: false, searchable: false,
+                        className: 'bm-pick-col', visible: BM_CAN_EDIT,
+                        render: function(data) {
+                            return '<input type="checkbox" class="bm-pick" value="' + data + '"'
+                                 + (bmSelected[data] ? ' checked' : '') + '>';
+                        }
+                    },
                     { data: 'transfer_date' },
                     { data: 'transfer_no', render: $.fn.dataTable.render.text() },
                     { data: 'bom', render: $.fn.dataTable.render.text() },
@@ -821,6 +976,21 @@ try {
                     { data: 'paid_qty', className: 'text-right', render: $.fn.dataTable.render.number(',', '.', 0) },
                     { data: 'invoice_date', visible: false },
                     { data: 'invoice_ym', visible: false },
+                    {   // 帳款月份：DB 已寫入或畫面即時算出的值；人工指定過會加「手動」標記
+                        data: 'bill_ym_label',
+                        render: function(data, type, row) {
+                            if (type !== 'display') return row.bill_ym || '';
+                            if (!data) return '<span class="bm-none">—</span>';
+                            var html = '<span class="bm-ym">' + data + '</span>';
+                            if (parseInt(row.bill_ym_manual, 10) === 1) {
+                                var t = '手動指定';
+                                if (row.bill_ym_by_name) t += '：' + row.bill_ym_by_name;
+                                if (row.bill_ym_at) t += ' ' + row.bill_ym_at;
+                                html += '<span class="bm-manual" title="' + t + '">手動</span>';
+                            }
+                            return html;
+                        }
+                    },
                     { 
                         data: 'note', 
                         render: function(data, type, row) {
@@ -843,7 +1013,7 @@ try {
                 ],
                 pageLength: 20,
                 orderCellsTop: true,
-                order: [[1, 'desc']],
+                order: [[2, 'desc']],
                 language: {
                     "url": "//cdn.datatables.net/plug-ins/1.10.20/i18n/Chinese-traditional.json"
                 }
@@ -854,21 +1024,35 @@ try {
             // 綁定外部篩選
             $('#global-search').on('keyup change', function() { table.search(this.value).draw(); });
             $('#filter-date').on('keyup change', function() { table.draw(); });
-            $('#filter-transfer-no').on('keyup change', function() { table.column(2).search(this.value).draw(); });
-            $('#filter-bom').on('keyup change', function() { table.column(3).search(this.value).draw(); });
-            $('#filter-product').on('keyup change', function() { table.column(4).search(this.value).draw(); });
-            $('#filter-note').on('keyup change', function() { table.column(15).search(this.value).draw(); });
+            $('#filter-transfer-no').on('keyup change', function() { table.column(3).search(this.value).draw(); });
+            $('#filter-bom').on('keyup change', function() { table.column(4).search(this.value).draw(); });
+            $('#filter-product').on('keyup change', function() { table.column(5).search(this.value).draw(); });
+            $('#filter-note').on('keyup change', function() { table.column(17).search(this.value).draw(); });
 
             // 雙擊清除
             $('#external-filter-container input').on('dblclick', function() {
                 $(this).val('').trigger('change');
             });
 
+            $('#filter-billym').on('keyup change', function() { table.draw(); });
+            $('#filter-billym-manual').on('change', function() { table.draw(); });
+
             $('#clear-filters').click(function() {
                 $('#external-filter-container input[type="text"]').val('');
                 $('#filter-maker').val(null).trigger('change');
+                $('#filter-billym-manual').val('');
                 currentChartFilter = null;
                 table.search('').columns().search('').draw();
+            });
+
+            // 帳款月份篩選（可打 202608、2026.08、2026-08、或只打 08）
+            $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
+                var kw = ($('#filter-billym').val() || '').replace(/[.\-\/\s]/g, '');
+                var mn = $('#filter-billym-manual').val();
+                var row = settings.aoData[dataIndex]._aData;
+                if (mn !== '' && String(parseInt(row.bill_ym_manual, 10) || 0) !== mn) return false;
+                if (!kw) return true;
+                return String(row.bill_ym || '').indexOf(kw) >= 0;
             });
 
             // 廠商篩選邏輯
@@ -902,7 +1086,7 @@ try {
                 var filterDate = new Date(year, month - 1, day);
                 filterDate.setHours(0,0,0,0);
 
-                var rowDateStr = data[1]; // 日期欄位
+                var rowDateStr = data[2]; // 日期欄位（勾選欄插在 index 1，所以日期是 2）
                 var rowDate = new Date(rowDateStr);
                 rowDate.setHours(0,0,0,0);
 
@@ -974,9 +1158,104 @@ try {
                 }
             });
 
+            /* ── 帳款月份：勾選與批次動作 ───────────────────────── */
+            if (BM_CAN_EDIT) {
+                // 單列勾選（DataTables 重繪後 checkbox 會重畫，所以用事件委派）
+                $('#transferTable tbody').on('change', '.bm-pick', function() {
+                    var id = this.value;
+                    if (this.checked) bmSelected[id] = true; else delete bmSelected[id];
+                    bmUpdateCount();
+                });
+                // 全選＝目前篩選出來的全部（不是只有這一頁）
+                $('#bm-check-all').on('change', function() {
+                    var on = this.checked;
+                    table.rows({ search: 'applied' }).every(function() {
+                        var id = this.data().transfer_id;
+                        if (on) bmSelected[id] = true; else delete bmSelected[id];
+                    });
+                    $('#transferTable tbody .bm-pick').prop('checked', on);
+                    bmUpdateCount();
+                });
+                // 換頁/篩選後把勾選狀態畫回來
+                table.on('draw', function() {
+                    $('#transferTable tbody .bm-pick').each(function() {
+                        this.checked = !!bmSelected[this.value];
+                    });
+                    $('#bm-check-all').prop('checked', false);
+                });
+
+                $('#btnBmBatch').on('click', function() {
+                    if (!bmSelectedIds().length) { alert('請先勾選要修改的資料列。'); return; }
+                    $('#bm-batch-count').text(bmSelectedIds().length);
+                    $('#bm-err').text('');
+                    $('#bmBatchModal').modal('show');
+                });
+                $('#btnBmReset').on('click', function() {
+                    var ids = bmSelectedIds();
+                    if (!ids.length) { alert('請先勾選要還原的資料列。'); return; }
+                    if (!confirm('要把勾選的 ' + ids.length + ' 筆還原為自動計算嗎？\n（會清掉「手動」註記，改用 J- 單號日期＋該廠商結帳日重算）')) return;
+                    bmPost({ action: 'reset_auto', ids: ids.join(',') });
+                });
+                $('#btnBmRecalc').on('click', function() {
+                    if (!BM_CAN_ADMIN) return;
+                    var onlyEmpty = confirm('要「只補還沒有帳款月份的資料」嗎？\n\n按「確定」＝只補空的（快）\n按「取消」＝整批重算（會把自動計算的全部重新算一次，手動指定過的一律不動）');
+                    bmPost({ action: 'recalc', only_empty: onlyEmpty ? 1 : 0 });
+                });
+
+                // 送出批次修改（前端先驗一次，後端 API 會用同一套規則再驗）
+                $('#bmBatchSubmit').on('click', function() {
+                    var ids = bmSelectedIds();
+                    if (!ids.length) { $('#bm-err').text('沒有勾選任何資料列'); return; }
+                    var mode = $('input[name="bm-mode"]:checked').val();
+                    var p = { action: 'set_month', ids: ids.join(','), mode: mode };
+                    if (mode === 'set') {
+                        var y = ($('#bm-year').val() || '').trim(), m = $('#bm-month').val();
+                        if (!/^\d{4}$/.test(y) || +y < 1990 || +y > 2200) { $('#bm-err').text('年份要是 4 位西元年（1990~2200）'); return; }
+                        p.ym = y + m;
+                    } else {
+                        var n = parseInt($('#bm-shift').val(), 10);
+                        if (!n || isNaN(n)) { $('#bm-err').text('平移月數不可為 0 或空白'); return; }
+                        if (n < -60 || n > 60) { $('#bm-err').text('平移月數要在 -60 ~ 60 之間'); return; }
+                        p.shift = n;
+                    }
+                    $('#bm-err').text('');
+                    bmPost(p, function() { $('#bmBatchModal').modal('hide'); });
+                });
+                $('input[name="bm-mode"]').on('change', function() {
+                    var isSet = $('input[name="bm-mode"]:checked').val() === 'set';
+                    $('#bm-set-row').toggle(isSet);
+                    $('#bm-shift-row').toggle(!isSet);
+                });
+            }
+
             // 使用說明
             $('#btnPageHelp').on('click', function() { $('#helpUseMask').modal('show'); });
         });
+
+        /* ── 帳款月份共用函式 ─────────────────────────────────── */
+        function bmSelectedIds() { return Object.keys(bmSelected); }
+
+        function bmUpdateCount() {
+            $('#bm-sel-count').text('已勾選 ' + bmSelectedIds().length + ' 筆');
+        }
+
+        function bmPost(payload, onOk) {
+            payload.csrf = BM_CSRF;
+            var $btns = $('#btnBmBatch, #btnBmReset, #btnBmRecalc, #bmBatchSubmit').prop('disabled', true);
+            $.post(BM_API, payload, null, 'json')
+                .done(function(res) {
+                    if (!res || !res.ok) { alert((res && res.error) || '處理失敗'); return; }
+                    alert(res.msg || '完成');
+                    if (onOk) onOk();
+                    location.reload();   // 重新查一次，帳款月份與「手動」標記才會是最新的
+                })
+                .fail(function(xhr) {
+                    var m = '處理失敗';
+                    try { m = JSON.parse(xhr.responseText).error || m; } catch (e) {}
+                    alert(m);
+                })
+                .always(function() { $btns.prop('disabled', false); });
+        }
 
         function getDateKey(dateStr) {
             var parts = dateStr.split('-');

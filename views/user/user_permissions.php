@@ -378,6 +378,7 @@ $EG_ROLE_MODULES = [
     'type_id_ctrl'        => ['prefix'=>'tidc',    'label'=>'型態識別文件管制表',  'page'=>'type_id_ctrl_doc.php'],
     'td_dev_eval'         => ['prefix'=>'tdev',    'label'=>'產品開發評估表',      'page'=>'td_dev_eval.php'],
     'pfmea'               => ['prefix'=>'pfmea',   'label'=>'PFMEA',               'page'=>'pfmea.php'],
+    'proc_transfer'       => ['prefix'=>'ptl',     'label'=>'製程移轉一覽表',      'page'=>'Transfer_Log_Analysis.php'],
     'project'             => ['prefix'=>'prj',     'label'=>'專案管理',            'page'=>'project_mgmt.php'],
 ];
 
@@ -1522,6 +1523,20 @@ $_quotDepts = array_keys($_deptSet);
                          簽核紀錄取自全站共用的簽核資料，含<strong>文件名稱／送件日期／簽核人／簽核日期時間／結果與回覆意見</strong>。
                          目前涵蓋哪些表單、哪些還沒涵蓋，該頁「使用說明」會即時掃描列出。管理者固定擁有全部權限。',
                         rs_of('print_sign_log'), rsu_of('print_sign_log'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('ptl', 'proc_transfer', '製程移轉一覽表', 'fa-calendar-o', '#b06f27',
+                        '為每位使用者指派「<a href="../pm/Transfer_Log_Analysis.php" target="_blank" style="color:#b5762a;">製程移轉一覽表</a>」頁的角色。
+                         <strong>檢視不需要指派任何角色</strong>——只要左側選單看得到（「測試功能」群組）就能查看移轉明細與統計分析；
+                         <span style="color:#b06f27;">請注意本頁會顯示加工單價與金額</span>。<br>
+                         此處指派兩種角色，都只跟<strong>帳款月份</strong>有關：
+                         <strong>帳款月份維護</strong>＝勾選資料列後<strong>批次修改帳款月份</strong>（可指定某年某月，或整批平移 N 個月，會自動跨年）與<strong>還原為自動</strong>；
+                         <strong>製程移轉管理員</strong>＝以上全部＋<strong>重算</strong>（整批依規則重新計算）。<br>
+                         帳款月份平常是<strong>系統自動算的</strong>：日期取自 <strong>J- 單號</strong>（J-1150819055＝民國115/08/19＝2026.08.19），
+                         結帳日<strong>優先用該廠商主檔自己設的</strong>、沒設才用<a href="../pages/master_data_management.php" target="_blank" style="color:#b5762a;">主檔管理</a>
+                         「類別字典設定→基本設定」的廠商預設結帳日（例：20 號 ⇒ 7/21～8/20 都算 8 月帳）。
+                         <strong>人工改過的資料列會標記「手動」，之後重新匯入 ERP 或重算都不會被蓋掉。</strong>
+                         沒有角色的人看不到勾選欄與批次按鈕，直接呼叫 API 也會被後端擋下。管理者固定擁有全部權限。',
+                        rs_of('proc_transfer'), rsu_of('proc_transfer'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('ia', 'internal_audit', '內部稽核', 'fa-search-plus', '#b06f27',
                         '為每位使用者指派「<a href="../ADM/internal_audit.php" target="_blank" style="color:#b5762a;">內部稽核</a>」頁（2-GM-06）的角色。

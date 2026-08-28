@@ -2569,6 +2569,10 @@ if ($_GET['but'] == 'transfer_log_raw') {
         }
         if (empty($rows)) throw new Exception("沒有可匯入的資料列" . ($skippedZeroPrice > 0 ? "（單價為 0 跳過 {$skippedZeroPrice} 列）" : ""));
 
+        // 帳款月份欄位先確認（ALTER TABLE 會隱式 commit，一定要在 beginTransaction 之前做）
+        require_once '../../src/common/billing_month_lib.php';
+        eg_bm_ensure_schema($db);
+
         // ── 第二階段：寫入 DB（單一 transaction，全部成功才生效） ──
         $db->beginTransaction();
 
@@ -2649,10 +2653,17 @@ if ($_GET['but'] == 'transfer_log_raw') {
             $stT->execute($chunk);
         }
 
+        // 帳款月份：依「J- 單號日期 + 該廠商結帳日」自動計算（唯一實作 billing_month_lib.php）。
+        // 只算本次匯入的單號；**人工指定過（bill_ym_manual=1）的列一律不動**。
+        $bmStat = eg_bm_fill($db, ['transfer_nos' => array_unique($allNos)]);
+
         recordUploadLog($db, 'upload_transfer_log_raw');
         $db->commit();
 
         $msg = "加工單價原始檔匯入完成：新增 {$insertCount} 筆，更新 {$updateCount} 筆。";
+        $msg .= "
+帳款月份自動計算 {$bmStat['updated']} 筆"
+              . ($bmStat['no_date'] > 0 ? "（{$bmStat['no_date']} 筆無法解析日期未計算）" : "") . "。";
         if ($skippedZeroPrice > 0) $msg .= "\n單價為 0（尚未計價）跳過 {$skippedZeroPrice} 列未寫入。";
         if ($skippedNoTransferNo > 0) $msg .= "\n單號空白跳過 {$skippedNoTransferNo} 列。";
         if (!empty($skippedNoBomSn)) {
