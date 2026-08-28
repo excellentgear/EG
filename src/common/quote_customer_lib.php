@@ -734,6 +734,7 @@ if (!function_exists('qcc_sync_order_from_quote')) {
                 'changed'  => true,
                 'from'     => (string)($o['Client_name'] ?? ''),
                 'to'       => (string)$q['client_name'],
+                'to_id'    => (string)($q['client_id'] ?? ''),   // 前端就地更新綁定圖示用
                 'boms'     => $boms,
                 'quote_no' => $qno,
                 'message'  => '已將訂單客戶由「' . (string)($o['Client_name'] ?? '') . '」同步為來源 ' . $qno . ' 的「' . (string)$q['client_name'] . '」',

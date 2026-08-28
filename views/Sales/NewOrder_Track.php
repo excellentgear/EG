@@ -2558,8 +2558,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <?php if (!empty($order['Created_At_formatted'])): ?><div style="font-size:9px;color:#bbb;">(<?= $order['creator_name'] ? mb_substr($order['creator_name'], -2, 2, 'UTF-8') : '' ?> <?= $order['Created_At_formatted'] ?>)</div><?php endif; ?>
                     </div>
                 </td>
-                <td class="col-client" title="<?= safe_html(!empty($order['cl_customer_name']) ? $order['cl_customer_name'] : $order['Client_name']) ?>">
-                    <?= safe_html(!empty($order['cl_customer_name']) ? $order['cl_customer_name'] : $order['Client_name']) ?>
+                <td class="col-client" data-has-part="<?= !empty($order['has_part_id']) ? 1 : 0 ?>" title="<?= safe_html(!empty($order['cl_customer_name']) ? $order['cl_customer_name'] : $order['Client_name']) ?>">
+                    <?php // 客戶名稱包一層 span：同步來源OP客戶時只換這裡的文字，不必整頁重新載入 ?>
+                    <span class="oc-client-name"><?= safe_html(!empty($order['cl_customer_name']) ? $order['cl_customer_name'] : $order['Client_name']) ?></span>
+                    <span class="oc-bind-icon">
                     <?php if (!empty($order['has_client_id']) && !empty($order['has_part_id'])): ?>
                         <i class="fa fa-link" title="客戶與料號均已綁定ID" style="color:#1ABB9C; font-size:10px; margin-left:3px;"></i>
                     <?php elseif (!empty($order['has_client_id']) || !empty($order['has_part_id'])): ?>
@@ -2567,6 +2569,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     <?php else: ?>
                         <i class="fa fa-unlink" title="尚未綁定ID，點此快速綁定" style="color:#ccc; font-size:10px; margin-left:3px; cursor:pointer;" onclick="openQuickBind('<?= $order['Order_id'] ?>','<?= safe_html($order['Client_name']) ?>','<?= safe_html($order['d_id']) ?>')"></i>
                     <?php endif; ?>
+                    </span>
                     <?php
                     // ── 與來源OP單的客戶不一致（2026-08-28）────────────────────────────
                     // 常見情境：用 A 客戶報價，接單後客戶要求改成 B 客戶名稱，報價單那邊改了、
@@ -5717,11 +5720,18 @@ foreach($dCounts as $c) {
                     // 即時更新客戶欄文字：有綁定客戶且回傳中文名稱，則更新顯示
                     if (qbSelectedCustomer && res.display_client_name) {
                         var $clientTd = $row.find('td.col-client');
-                        // 保留 td 內的圖示 <i>，只替換文字節點
-                        var $icon = $clientTd.find('i').detach();
-                        $clientTd.text(res.display_client_name);
+                        var $nameSpan = $clientTd.find('.oc-client-name');
+                        if ($nameSpan.length) {
+                            // 客戶名稱已包在 .oc-client-name 內：只換這個 span 的文字，
+                            // 才不會把綁定圖示與「與來源OP客戶不一致」提示徽章一起清掉
+                            $nameSpan.text(res.display_client_name);
+                        } else {
+                            // 舊版結構備援：保留 td 內的圖示 <i>，只替換文字節點
+                            var $icon = $clientTd.find('i').detach();
+                            $clientTd.text(res.display_client_name);
+                            $clientTd.append($icon);
+                        }
                         $clientTd.attr('title', res.display_client_name);
-                        $clientTd.append($icon);
                     }
                     // 齒輪按鈕：料號綁定後將 ⚙! 橘色按鈕換成綠色主檔連結
                     if (qbSelectedPart && qbSelectedPart.d_id) {
@@ -8084,9 +8094,40 @@ foreach($dCounts as $c) {
             if (!confirm('要把這張訂單的客戶同步成來源報價單(OP)目前的客戶嗎？\n\n只會修改客戶欄位（及該訂單底下 BOM 的客戶名稱），不會動到料號、金額與任何日期。')) return;
             $.post('', { action: 'sync_quote_customer', order_id: orderId }, function (res) {
                 if (!res || !res.success) { showOrderAlert((res && res.message) || '同步失敗，請稍後再試'); return; }
-                showToast(res.data && res.data.message ? res.data.message : '已同步');
-                setTimeout(function () { location.reload(); }, 900);
+                var d = res.data || {};
+                // 這個動作只會改到「客戶名稱」與「客戶ID」兩個值，所以就地更新那一列即可，
+                // 不要 location.reload()——整頁重載會把篩選、捲動位置、展開中的子批列全部弄丟。
+                applySyncedCustomerToRow(orderId, d);
+                showToast(d.message || '已同步');
             }, 'json').fail(function () { showOrderAlert('連線失敗，請稍後再試'); });
+        }
+
+        // 就地把某一列（與開啟中的編輯跳窗）換成同步後的客戶
+        function applySyncedCustomerToRow(orderId, d) {
+            if (!d || !d.changed) return;
+            var name = d.to || '', cid = d.to_id || '';
+            var $tr  = $('#orderTable tbody tr[data-orderid="' + orderId + '"]');
+            var $td  = $tr.find('td.col-client');
+            if ($td.length) {
+                $td.find('.oc-client-name').text(name);
+                $td.attr('title', name);
+                $td.find('.op-cust-diff').remove();          // 已一致，提示徽章拿掉
+                // 綁定圖示：同步一定會寫入 Client_name_ID，所以客戶那一邊必為已綁定
+                var hasPart = String($td.attr('data-has-part')) === '1';
+                $td.find('.oc-bind-icon').html(hasPart
+                    ? '<i class="fa fa-link" title="客戶與料號均已綁定ID" style="color:#1ABB9C;font-size:10px;margin-left:3px;"></i>'
+                    : '<i class="fa fa-chain-broken" title="部分綁定（客戶:✓ / 料號:✗）" style="color:#F39C12;font-size:10px;margin-left:3px;"></i>');
+                // 淡黃底閃一下，讓使用者看得到剛剛改的是哪一列（純 CSS，不依賴 jQuery UI 的顏色動畫）
+                $td.css('transition', 'background-color .4s').css('background-color', '#FFF3E2');
+                setTimeout(function () { $td.css('background-color', ''); }, 1400);
+            }
+            // 編輯跳窗正開著同一張訂單時，一併更新欄位與提示（避免畫面上兩邊不一致）
+            if (String($('#hidden_Order_id').val() || '') === String(orderId)) {
+                $('#newOrderForm').find('input[name="Client_Name"]').val(name);
+                if (cid) $('#selected_customer_pk').val(cid);
+                $('#op-cust-diff-hint').hide().empty();
+                if (typeof updateIdBadges === 'function') updateIdBadges();
+            }
         }
 
         function showOrderAlert(msg) {
