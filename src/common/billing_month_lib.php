@@ -20,11 +20,32 @@
  *  bill_ym_manual=1 的列代表人工指定過，**自動重算一律不動它**（重新匯入 ERP 也不會被蓋掉）。
  *  要讓它回到自動值，走「還原為自動」（eg_bm_reset_auto）。
  *
- * ── 權限（module='proc_transfer'）───────────────────────────────────────────
- *  ptl_bill_edit 帳款月份維護：批次修改／還原為自動
- *  ptl_admin     製程移轉管理員：以上＋重算（含尚未產生帳款月份的整批回填）
- *  檢視不需要角色（維持本頁原本「側邊選單進得來就看得到」的行為，不因本次改動變嚴）。
+ * ── 權限（module='proc_transfer'，2026-08-28 改為功能碼制）──────────────────
+ *  角色由管理員自行建立、自行勾選功能（roles + role_features，走共用 Roles_API），
+ *  **禁止在程式裡寫死角色名稱或 role_code 判斷**（見記憶 rbac_custom_roles）。
+ *  四個功能碼定義在 PROC_TRANSFER_FEATURES：
+ *    ptl_view      檢視（唯讀）：看得到移轉明細與統計分析（含加工單價與金額）
+ *    ptl_print     列印／匯出：複製·CSV·Excel·列印四顆鈕
+ *    ptl_bill_edit 帳款月份維護：批次修改／還原為自動
+ *    ptl_admin     模組管理：以上全部＋整批重算＋角色設定
+ *  預設角色（ptl_view/ptl_print/ptl_bill_edit/ptl_admin）只是「開箱即用」的樣板，
+ *  管理員可以改名、改勾選、刪掉或另外建新的；解析一律看功能碼。
  */
+
+/* 本模組的功能碼（唯一定義處；角色設定 UI 與權限解析都讀這裡） */
+const PROC_TRANSFER_FEATURES = [
+    ['code'=>'ptl_view',      'group'=>'view', 'label'=>'檢視（唯讀）：移轉明細列表與統計分析（含加工單價與金額）'],
+    ['code'=>'ptl_print',     'group'=>'op',   'label'=>'列印／匯出：複製、CSV、Excel、列印'],
+    ['code'=>'ptl_bill_edit', 'group'=>'op',   'label'=>'帳款月份維護：批次修改帳款月份、還原為自動'],
+    ['code'=>'ptl_admin',     'group'=>'op',   'label'=>'模組管理：以上全部＋整批重算＋角色設定'],
+];
+/* 預設角色一開始勾哪些功能（只在角色「第一次建立」時寫入，之後管理員怎麼改都不會被蓋回來） */
+const PROC_TRANSFER_DEFAULT_ROLE_FEATURES = [
+    'ptl_view'      => ['ptl_view'],
+    'ptl_print'     => ['ptl_view', 'ptl_print'],
+    'ptl_bill_edit' => ['ptl_view', 'ptl_print', 'ptl_bill_edit'],
+    'ptl_admin'     => ['ptl_view', 'ptl_print', 'ptl_bill_edit', 'ptl_admin'],
+];
 
 if (!function_exists('eg_bm_ensure_schema')) {
 /** 建立/補齊欄位（可重複執行）。 */
@@ -46,19 +67,36 @@ function eg_bm_ensure_schema(PDO $db): void
 }}
 
 if (!function_exists('eg_bm_ensure_roles')) {
-/** 角色（module='proc_transfer'），可重複執行。 */
+/**
+ * 預設角色（module='proc_transfer'），可重複執行。
+ * **只在角色不存在時建立並寫入預設功能**——管理員事後改名、改勾選、刪掉都不會被還原。
+ */
 function eg_bm_ensure_roles(PDO $db): void
 {
     try {
         foreach ([
-            ['ptl_admin',     '製程移轉管理員'],
+            ['ptl_view',      '製程移轉檢閱'],
+            ['ptl_print',     '製程移轉列印'],
             ['ptl_bill_edit', '帳款月份維護'],
+            ['ptl_admin',     '製程移轉管理員'],
         ] as $r) {
-            $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='proc_transfer' LIMIT 1");
+            $st = $db->prepare("SELECT role_id FROM roles WHERE role_code=? LIMIT 1");
             $st->execute([$r[0]]);
-            if (!$st->fetchColumn()) {
+            $rid = $st->fetchColumn();
+            if (!$rid) {
                 $db->prepare("INSERT INTO roles (role_code, role_name, module) VALUES (?,?, 'proc_transfer')")
                    ->execute([$r[0], $r[1]]);
+                $rid = (int)$db->lastInsertId();
+                $ins = $db->prepare("INSERT IGNORE INTO role_features (role_id, feature_code) VALUES (?,?)");
+                foreach (PROC_TRANSFER_DEFAULT_ROLE_FEATURES[$r[0]] ?? [] as $fc) $ins->execute([$rid, $fc]);
+            } else {
+                // 舊版建立的角色沒有功能碼（2026-08-27 那版是用 role_code 判權限），補一次預設值
+                $c = $db->prepare("SELECT COUNT(*) FROM role_features WHERE role_id=?");
+                $c->execute([$rid]);
+                if ((int)$c->fetchColumn() === 0) {
+                    $ins = $db->prepare("INSERT IGNORE INTO role_features (role_id, feature_code) VALUES (?,?)");
+                    foreach (PROC_TRANSFER_DEFAULT_ROLE_FEATURES[$r[0]] ?? [] as $fc) $ins->execute([$rid, $fc]);
+                }
             }
         }
     } catch (Throwable $e) {}
@@ -334,14 +372,19 @@ function eg_bm_current_user(PDO $db): ?array
 
 if (!function_exists('eg_bm_perms')) {
 /**
- * isAdmin  系統管理者（固定全權）
- * canAdmin 製程移轉管理員：批次修改＋還原＋重算
- * canEdit  帳款月份維護：批次修改＋還原
- * 檢視不需要角色（維持本頁原本行為）。
+ * 權限一律解析「功能碼」，不看角色名稱／role_code（記憶 rbac_custom_roles）：
+ *   isAdmin   系統管理者（固定全權，另可設定角色）
+ *   canView   檢視（唯讀）  ptl_view
+ *   canPrint  列印／匯出    ptl_print
+ *   canEdit   帳款月份維護  ptl_bill_edit
+ *   canAdmin  模組管理      ptl_admin（含重算與角色設定）
+ * 上位功能自動涵蓋下位：有 ptl_admin 就等於全部有。
+ * 角色來源含「個人指派」與「部門＋職稱指派」（rf_load_user_features_all）。
  */
 function eg_bm_perms(PDO $db, ?array $u): array
 {
-    $none = ['isAdmin'=>false, 'canAdmin'=>false, 'canEdit'=>false, 'uid'=>0, 'name'=>''];
+    $none = ['isAdmin'=>false, 'canAdmin'=>false, 'canEdit'=>false, 'canPrint'=>false,
+             'canView'=>false, 'uid'=>0, 'name'=>''];
     if (!$u) return $none;
     $uid   = (int)$u['id'];
     $state = (int)($u['state'] ?? 0);
@@ -350,26 +393,40 @@ function eg_bm_perms(PDO $db, ?array $u): array
 
     $isAdmin = false;
     try {
-        $st = $db->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
-                            WHERE ur.user_id=? AND r.role_code IN ('admin','superadmin') LIMIT 1");
+        $st = $db->prepare("SELECT 1 FROM user_roles ur
+                            JOIN role_features rf ON rf.role_id = ur.role_id
+                            WHERE ur.user_id = ? AND rf.feature_code = 'all' LIMIT 1");
         $st->execute([$uid]);
         $isAdmin = (bool)$st->fetchColumn();
     } catch (Throwable $e) {}
     if (!$isAdmin && $uid === 1) $isAdmin = true;         // 超級管理員固定 id=1
 
-    $has = function (array $codes) use ($db, $uid) {
-        $in = implode(',', array_fill(0, count($codes), '?'));
-        try {
-            $st = $db->prepare("SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
-                                WHERE ur.user_id=? AND r.module='proc_transfer' AND r.role_code IN ($in) LIMIT 1");
-            $st->execute(array_merge([$uid], $codes));
-            return (bool)$st->fetchColumn();
-        } catch (Throwable $e) { return false; }
+    require_once __DIR__ . '/role_features_helper.php';
+    $feat  = rf_load_user_features_all($db, $uid);
+    $codes = array_values(array_intersect($feat, array_column(PROC_TRANSFER_FEATURES, 'code')));
+    $has = function (string $code) use ($isAdmin, $feat, $codes) {
+        return $isAdmin || in_array('all', $feat, true) || in_array($code, $codes, true);
     };
-    $canAdmin = $isAdmin || $has(['ptl_admin']);
-    $canEdit  = $canAdmin || $has(['ptl_bill_edit']);
+
+    $canAdmin = $has('ptl_admin');
+    $canEdit  = $canAdmin || $has('ptl_bill_edit');
+    $canPrint = $canEdit  || $has('ptl_print');
+    $canView  = $canPrint || $has('ptl_view');
     return ['isAdmin'=>$isAdmin, 'canAdmin'=>$canAdmin, 'canEdit'=>$canEdit,
+            'canPrint'=>$canPrint, 'canView'=>$canView,
             'uid'=>$uid, 'name'=>(string)($u['user_cname'] ?? '')];
+}}
+
+if (!function_exists('eg_bm_role_label')) {
+/** 畫面右上角顯示「你目前是什麼身分」用的文字。 */
+function eg_bm_role_label(array $p): string
+{
+    if ($p['isAdmin'])  return '系統管理者';
+    if ($p['canAdmin']) return '模組管理';
+    if ($p['canEdit'])  return '帳款月份維護';
+    if ($p['canPrint']) return '檢視＋列印';
+    if ($p['canView'])  return '檢視（唯讀）';
+    return '無權限';
 }}
 
 /* ══════════════════════ CSRF ══════════════════════ */

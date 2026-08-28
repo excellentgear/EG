@@ -47,13 +47,16 @@ if ($action === 'perms') {
         'isAdmin'  => $pm['isAdmin'],
         'canAdmin' => $pm['canAdmin'],
         'canEdit'  => $pm['canEdit'],
+        'canPrint' => $pm['canPrint'],
+        'canView'  => $pm['canView'],
         'name'     => $pm['name'],
-    ], 'csrf' => eg_bm_csrf_token()]);
+        'label'    => eg_bm_role_label($pm),
+    ], 'features' => PROC_TRANSFER_FEATURES, 'csrf' => eg_bm_csrf_token()]);
 }
 
 /* ── 以下都會改資料：CSRF ＋ 權限 ───────────────────────── */
 if (!eg_bm_csrf_ok($_POST['csrf'] ?? null)) bmErr('連線憑證失效，請重新整理頁面後再試 (CSRF)');
-if (!$pm['canEdit']) bmErr('沒有「帳款月份維護」權限，請洽管理者指派角色', 403);
+if (!$pm['canEdit']) bmErr('沒有「帳款月份維護」功能權限，請洽管理者在角色設定勾選後指派', 403);
 
 /** POST 進來的 ids：可能是陣列，也可能是逗號字串 */
 function bmIds(): array {
@@ -107,7 +110,7 @@ try {
     }
 
     if ($action === 'recalc') {
-        if (!$pm['canAdmin']) bmErr('只有製程移轉管理員可以執行重算', 403);
+        if (!$pm['canAdmin']) bmErr('重算需要「模組管理」功能權限', 403);
         $onlyEmpty = !empty($_POST['only_empty']);
 
         $r = eg_bm_fill($db, $onlyEmpty ? ['only_empty' => true] : []);   // 內含 DDL 檢查，故不包在 transaction 內

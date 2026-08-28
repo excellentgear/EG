@@ -1526,16 +1526,17 @@ $_quotDepts = array_keys($_deptSet);
 
                     eg_render_role_section('ptl', 'proc_transfer', '製程移轉一覽表', 'fa-calendar-o', '#b06f27',
                         '為每位使用者指派「<a href="../pm/Transfer_Log_Analysis.php" target="_blank" style="color:#b5762a;">製程移轉一覽表</a>」頁的角色。
-                         <strong>檢視不需要指派任何角色</strong>——只要左側選單看得到（「測試功能」群組）就能查看移轉明細與統計分析；
-                         <span style="color:#b06f27;">請注意本頁會顯示加工單價與金額</span>。<br>
-                         此處指派兩種角色，都只跟<strong>帳款月份</strong>有關：
-                         <strong>帳款月份維護</strong>＝勾選資料列後<strong>批次修改帳款月份</strong>（可指定某年某月，或整批平移 N 個月，會自動跨年）與<strong>還原為自動</strong>；
-                         <strong>製程移轉管理員</strong>＝以上全部＋<strong>重算</strong>（整批依規則重新計算）。<br>
-                         帳款月份平常是<strong>系統自動算的</strong>：日期取自 <strong>J- 單號</strong>（J-1150819055＝民國115/08/19＝2026.08.19），
-                         結帳日<strong>優先用該廠商主檔自己設的</strong>、沒設才用<a href="../pages/master_data_management.php" target="_blank" style="color:#b5762a;">主檔管理</a>
-                         「類別字典設定→基本設定」的廠商預設結帳日（例：20 號 ⇒ 7/21～8/20 都算 8 月帳）。
-                         <strong>人工改過的資料列會標記「手動」，之後重新匯入 ERP 或重算都不會被蓋掉。</strong>
-                         沒有角色的人看不到勾選欄與批次按鈕，直接呼叫 API 也會被後端擋下。管理者固定擁有全部權限。',
+                         <strong>角色名稱與內容都可以自訂</strong>：到該頁右上角的「<strong>角色設定</strong>」新增角色、改名、刪除，並逐項勾選功能，
+                         這裡只負責把角色指派給人（也可用下方「部門×職稱角色」整批套用）。<br>
+                         四個功能可<strong>各別</strong>開關：<strong>檢視（唯讀）</strong>＝看得到移轉明細與統計分析
+                         （<span style="color:#b06f27;">沒有這項整頁看不到內容，本頁會顯示加工單價與金額</span>）；
+                         <strong>列印／匯出</strong>＝複製·CSV·Excel·列印四顆鈕；
+                         <strong>帳款月份維護</strong>＝勾選後批次修改帳款月份、還原為自動；
+                         <strong>模組管理</strong>＝以上全部＋整批重算＋角色設定。<br>
+                         預設已建好「製程移轉檢閱／製程移轉列印／帳款月份維護／製程移轉管理員」四個角色當樣板，
+                         <strong>可以直接改名或改勾選，系統不會把它們還原</strong>。
+                         帳款月份平常由系統自動算（J- 單號日期＋該廠商結帳日，人工改過的會標記「手動」且不會被匯入或重算蓋掉）。
+                         管理者固定擁有全部權限。',
                         rs_of('proc_transfer'), rsu_of('proc_transfer'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('ia', 'internal_audit', '內部稽核', 'fa-search-plus', '#b06f27',

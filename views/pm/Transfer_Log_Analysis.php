@@ -133,9 +133,12 @@ $sql = "SELECT
     WHERE t.transfer_date BETWEEN :start_date AND :end_date
     ORDER BY t.transfer_date DESC, t.transfer_id DESC";
 
-$stmt = $conn->getPDO()->prepare($sql);
-$stmt->execute([':start_date' => $start_date, ':end_date' => $end_date]);
-$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$rows = [];
+if ($bm_perms['canView']) {          // 沒有檢視權限就不查，單價與金額不會出現在 HTML 裡
+    $stmt = $conn->getPDO()->prepare($sql);
+    $stmt->execute([':start_date' => $start_date, ':end_date' => $end_date]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
 
 /* 帳款月份：DB 有值就用 DB 的；還沒回填的列即時算給畫面看（不寫 DB，避免每次開頁都在寫入）。
    bill_ym_src：db＝已寫入、auto＝畫面即時算、''＝連日期都解析不出來 */
@@ -384,6 +387,13 @@ try {
         .bm-err { color:#DD5138; font-size:12px; margin-left:4px; }
         .bm-hint { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px;
             font-size:12px; color:#5b3a1e; margin-bottom:10px; }
+        /* 角色設定 */
+        .tl-role { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:#5b3a1e;
+            background:#F7E0BD; border-radius:12px; padding:3px 10px; }
+        .ptl-role-item { padding:6px 10px; border-bottom:1px solid #F1E4D0; cursor:pointer; font-size:13px; color:#5b3a1e; }
+        .ptl-role-item:hover { background:#FDF8EF; }
+        .ptl-role-item.on { background:#F0A24B; color:#fff; }
+        .ptl-role-item.sys { cursor:not-allowed; color:#999; }
         /* 頁內分頁（明細／統計分析） */
         .tl-tabs { border-bottom:2px solid #E8D5B5; margin-bottom:12px; }
         .tl-tabs > li > a { color:#8A5A2B; font-size:14px; font-weight:bold; border:none; }
@@ -405,12 +415,26 @@ try {
                     <div class="page-title">
                         <div class="title_left" style="display:flex;align-items:center;width:100%;">
                             <h3 style="margin:0;">製程移轉一覽表 <small>Process Transfer List</small></h3>
-                            <button id="btnPageHelp" class="page-help-btn" style="margin-left:auto;"><i class="fa fa-question-circle"></i> 使用說明</button>
+                            <span class="tl-role" style="margin-left:auto;" title="你目前在本頁的身分（由管理員在角色設定指派）">
+                                <i class="fa fa-user"></i> <?= htmlspecialchars(eg_bm_role_label($bm_perms)) ?>
+                            </span>
+<?php if ($bm_perms['isAdmin'] || $bm_perms['canAdmin']): ?>
+                            <button id="btnRoleSetting" class="page-help-btn" style="margin-left:6px;background:#8A5A2B;border-color:#6d4622;"><i class="fa fa-users"></i> 角色設定</button>
+<?php endif; ?>
+                            <button id="btnPageHelp" class="page-help-btn" style="margin-left:6px;"><i class="fa fa-question-circle"></i> 使用說明</button>
                         </div>
                     </div>
 
                     <div class="clearfix"></div>
 
+<?php if (!$bm_perms['canView']): ?>
+                    <div class="alert alert-warning" style="clear:both;">
+                        <h4 style="margin-top:0;"><i class="fa fa-lock"></i> 沒有製程移轉一覽表的檢視權限</h4>
+                        <p style="margin-bottom:0;">本頁會顯示加工單價與金額，需由管理者在
+                            <a href="../user/user_permissions.php" target="_blank">使用者權限設定</a>
+                            指派含「檢視」功能的角色後才看得到內容。</p>
+                    </div>
+<?php else: ?>
                     <!-- 資料狀態列：最新資料日期＋最近一次更新加工單價 -->
                     <div class="tl-infobar">
                         <span class="tl-info">
@@ -678,6 +702,7 @@ try {
 
                     </div><!-- /#tab-stats -->
                     </div><!-- /.tab-content -->
+<?php endif; /* canView */ ?>
 
                 </div>
             </div>
@@ -770,6 +795,59 @@ try {
     </div>
 <?php endif; ?>
 
+<?php if ($bm_perms['isAdmin'] || $bm_perms['canAdmin']): ?>
+    <!-- 角色設定 Modal：管理員自行建立角色、自行勾選功能（走全站共用 Roles_API，不另建一套） -->
+    <div class="modal fade" id="roleSettingModal" tabindex="-1" role="dialog">
+        <div class="modal-dialog modal-lg" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+                    <h4 class="modal-title"><i class="fa fa-users"></i> 製程移轉一覽表 角色設定</h4>
+                </div>
+                <div class="modal-body">
+                    <div class="bm-hint">
+                        角色<b>名稱與內容都由您自訂</b>：左邊建立／選一個角色，右邊勾選它能用哪些功能。
+                        改完到 <a href="../user/user_permissions.php" target="_blank" style="color:#8A5A2B;text-decoration:underline;">使用者權限設定</a> 指派給人員即可。
+                        <b>「管理員」是系統角色，固定擁有全部權限，不可修改。</b>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div style="display:flex;gap:6px;margin-bottom:6px;">
+                                <button class="btn btn-warning btn-sm" id="btnPtlRoleAdd" style="margin:0;"><i class="fa fa-plus"></i> 新增角色</button>
+                            </div>
+                            <div id="ptlRoleList" style="border:1px solid #E8D5B5;border-radius:6px;max-height:320px;overflow-y:auto;"></div>
+                        </div>
+                        <div class="col-md-8">
+                            <div id="ptlRoleEditHint" class="text-muted" style="padding:20px;font-size:13px;">← 請先在左邊選一個角色，或按「新增角色」。</div>
+                            <div id="ptlRoleEdit" style="display:none;">
+                                <div class="bm-form-row">
+                                    <label>角色名稱</label>
+                                    <input type="text" id="ptlRoleName" class="form-control input-sm" style="width:200px;" maxlength="50">
+                                    <button class="btn btn-default btn-sm" id="btnPtlRoleRename" style="margin:0;">改名</button>
+                                    <button class="btn btn-danger btn-sm" id="btnPtlRoleDel" style="margin:0;">刪除角色</button>
+                                </div>
+                                <div style="border-top:1px solid #eee;padding-top:8px;">
+                                    <div style="font-size:13px;font-weight:bold;color:#8A5A2B;margin-bottom:4px;">檢視</div>
+                                    <div id="ptlFeatView" style="padding-left:6px;"></div>
+                                    <div style="font-size:13px;font-weight:bold;color:#8A5A2B;margin:8px 0 4px;">操作</div>
+                                    <div id="ptlFeatOp" style="padding-left:6px;"></div>
+                                </div>
+                                <div style="margin-top:10px;">
+                                    <button class="btn btn-warning btn-sm" id="btnPtlFeatSave"><i class="fa fa-check"></i> 儲存功能設定</button>
+                                    <span id="ptlRoleMsg" style="margin-left:8px;font-size:12px;"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+                </div>
+            </div>
+        </div>
+    </div>
+<?php endif; ?>
+
     <!-- 使用說明 Modal（鐵律7） -->
     <div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog">
         <div class="modal-dialog modal-lg" role="document">
@@ -838,16 +916,21 @@ try {
                         <li>全表目前共 <?= number_format($total_log_rows) ?> 筆，最早可追溯到 2018 年，一次查太大區間會比較慢。</li>
                     </ul>
 
-                    <h4>權限</h4>
+                    <h4>權限（角色可由管理員自訂）</h4>
+                    <p>本頁的角色<b>名稱與內容都由管理員自己設定</b>：頁首「<b>角色設定</b>」可新增角色、改名、刪除，
+                       並逐項勾選它能用哪些功能。四個功能可以<b>各別</b>開關：</p>
                     <ul>
-                        <li><b>檢視</b>：只要能登入且左側選單看得到就能看（登記於「測試功能」群組）。
-                            請注意本頁會顯示<b>加工單價與金額</b>。</li>
-                        <li><b>帳款月份維護</b>（ptl_bill_edit）：可批次修改帳款月份、還原為自動。</li>
-                        <li><b>製程移轉管理員</b>（ptl_admin）：以上全部＋<b>重算</b>（整批依規則重新計算，手動指定過的一律不動）。</li>
-                        <li>角色在<a href="../user/user_permissions.php" target="_blank" style="color:#b5762a;">使用者權限設定</a>指派；
-                            管理者固定擁有全部權限。沒有權限的人看不到勾選欄與批次按鈕，
-                            直接打 API 也會被後端擋下。</li>
+                        <li><b>檢視（唯讀）</b>：看得到移轉明細與統計分析。
+                            <span style="color:#b06f27;">沒有這項就整頁看不到內容</span>（本頁會顯示加工單價與金額）。</li>
+                        <li><b>列印／匯出</b>：複製、CSV、Excel、列印四顆鈕；沒勾就不會出現。</li>
+                        <li><b>帳款月份維護</b>：勾選欄與「批次修改帳款月份」「還原為自動」。</li>
+                        <li><b>模組管理</b>：以上全部＋「重算」＋角色設定。</li>
                     </ul>
+                    <div class="tip">
+                        設好角色後，到<a href="../user/user_permissions.php" target="_blank" style="color:#8A5A2B;">使用者權限設定</a>
+                        指派給人員（可指派給個人，也可用「部門×職稱」整批套用）。
+                        管理者固定擁有全部權限。<b>沒有權限的人不只看不到按鈕，直接呼叫 API 也會被後端擋下。</b>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-default" data-dismiss="modal">我知道了</button>
@@ -888,6 +971,8 @@ try {
         /* ── 帳款月份 ─────────────────────────────────────────────
          * 權限由後端算好帶進來；沒有維護權限時勾選欄整欄不顯示、工具列也不輸出，
          * 後端 API 仍會用同一套規則再擋一次（鐵律8）。 */
+        var BM_CAN_VIEW  = <?= $bm_perms['canView']  ? 'true' : 'false' ?>;
+        var BM_CAN_PRINT = <?= $bm_perms['canPrint'] ? 'true' : 'false' ?>;
         var BM_CAN_EDIT  = <?= $bm_perms['canEdit']  ? 'true' : 'false' ?>;
         var BM_CAN_ADMIN = <?= $bm_perms['canAdmin'] ? 'true' : 'false' ?>;
         var BM_CSRF      = <?= json_encode($bm_csrf) ?>;
@@ -896,6 +981,11 @@ try {
         var bmSelected   = {};   // transfer_id => true（跨分頁保留勾選）
 
         $(document).ready(function() {
+            // 使用說明與角色設定：沒有檢視權限也要能開（管理員可能就是進來設定權限的）
+            $('#btnPageHelp').on('click', function() { $('#helpUseMask').modal('show'); });
+            $('#btnRoleSetting').on('click', function() { $('#roleSettingModal').modal('show'); ptlLoadRoles(); });
+            if (!BM_CAN_VIEW) return;   // 以下都要有明細表格才跑得動
+
             // 填充廠商篩選下拉選單
             var uniqueMakers = [...new Set(transferData.map(item => item.maker_from_name || item.maker_from || ''))].filter(x => x).sort();
             var makerSelect = $('#filter-maker');
@@ -1005,12 +1095,13 @@ try {
                         }
                     }
                 ],
-                buttons: [
+                // 列印／匯出四顆鈕要有 ptl_print 功能才出現（後端已算好 BM_CAN_PRINT）
+                buttons: BM_CAN_PRINT ? [
                     { extend: 'copy', className: 'btn btn-default btn-sm' },
                     { extend: 'csv', className: 'btn btn-default btn-sm' },
-                    { extend: 'excel', className: 'btn btn-default btn-sm', title: '加工成本紀錄' },
+                    { extend: 'excel', className: 'btn btn-default btn-sm', title: '製程移轉紀錄' },
                     { extend: 'print', className: 'btn btn-default btn-sm' }
-                ],
+                ] : [],
                 pageLength: 20,
                 orderCellsTop: true,
                 order: [[2, 'desc']],
@@ -1228,8 +1319,91 @@ try {
                 });
             }
 
-            // 使用說明
-            $('#btnPageHelp').on('click', function() { $('#helpUseMask').modal('show'); });
+        });
+
+        /* ── 角色設定（走全站共用 Roles_API，功能碼由後端 PROC_TRANSFER_FEATURES 帶進來） ── */
+        var PTL_FEATURES = <?= json_encode(PROC_TRANSFER_FEATURES, JSON_UNESCAPED_UNICODE) ?>;
+        var PTL_RAPI = '../../src/store/Roles_API.php';
+        var PTL_ROLES = [], PTL_CUR = 0;
+
+        function ptlEsc(t) { return $('<div>').text(t == null ? '' : t).html(); }
+
+        function ptlLoadRoles(then) {
+            $.getJSON(PTL_RAPI, { action: 'get_roles', module: 'proc_transfer' }, function(res) {
+                PTL_ROLES = (res && res.data) || [];
+                var h = '';
+                PTL_ROLES.forEach(function(r) {
+                    var sys = String(r.is_system) === '1';
+                    h += '<div class="ptl-role-item' + (sys ? ' sys' : '') + '" data-id="' + r.role_id + '">'
+                       + ptlEsc(r.role_name) + (sys ? '<span style="color:#999;font-size:11px;">（系統．固定全權）</span>' : '')
+                       + '</div>';
+                });
+                $('#ptlRoleList').html(h || '<div style="padding:10px;color:#8a6d45;font-size:13px;">尚無角色</div>');
+                if (PTL_CUR) $('.ptl-role-item[data-id="' + PTL_CUR + '"]').addClass('on');
+                if (typeof then === 'function') then();
+            });
+        }
+
+        function ptlSelRole(id) {
+            var r = PTL_ROLES.filter(function(x) { return String(x.role_id) === String(id); })[0];
+            if (!r) return;
+            if (String(r.is_system) === '1') { alert('系統角色「' + r.role_name + '」固定擁有全部權限，不可修改。'); return; }
+            PTL_CUR = id;
+            $('.ptl-role-item').removeClass('on');
+            $('.ptl-role-item[data-id="' + id + '"]').addClass('on');
+            $('#ptlRoleEditHint').hide(); $('#ptlRoleEdit').show();
+            $('#ptlRoleName').val(r.role_name);
+            $('#ptlRoleMsg').text('');
+            var vh = '', oh = '';
+            PTL_FEATURES.forEach(function(f) {
+                var row = '<label style="display:block;font-weight:normal;padding:2px 0;font-size:13px;">'
+                        + '<input type="checkbox" class="ptl-featcb" value="' + ptlEsc(f.code) + '"> ' + ptlEsc(f.label) + '</label>';
+                if (f.group === 'view') vh += row; else oh += row;
+            });
+            $('#ptlFeatView').html(vh); $('#ptlFeatOp').html(oh);
+            $.getJSON(PTL_RAPI, { action: 'get_role_features', role_id: id }, function(res) {
+                var has = (res && res.data) || [];
+                $('.ptl-featcb').each(function() {
+                    this.checked = has.indexOf(this.value) > -1 || has.indexOf('all') > -1;
+                });
+            });
+        }
+
+        $(document).on('click', '#ptlRoleList .ptl-role-item', function() { ptlSelRole($(this).data('id')); });
+        $(document).on('click', '#btnPtlRoleAdd', function() {
+            var n = prompt('新角色名稱：');
+            if (!n || !$.trim(n)) return;
+            $.post(PTL_RAPI, { action: 'save_role', role_name: $.trim(n), module: 'proc_transfer' }, function(r) {
+                if (!r.success) { alert(r.message || '建立失敗'); return; }
+                ptlLoadRoles(function() { ptlSelRole(r.role_id); });
+            }, 'json');
+        });
+        $(document).on('click', '#btnPtlRoleRename', function() {
+            if (!PTL_CUR) return;
+            var n = $.trim($('#ptlRoleName').val() || '');
+            if (!n) { $('#ptlRoleMsg').css('color', '#DD5138').text('請輸入角色名稱'); return; }
+            $.post(PTL_RAPI, { action: 'save_role', role_id: PTL_CUR, role_name: n }, function(r) {
+                if (!r.success) { alert(r.message || '改名失敗'); return; }
+                $('#ptlRoleMsg').css('color', '#5b8c3a').text('已改名');
+                ptlLoadRoles();
+            }, 'json');
+        });
+        $(document).on('click', '#btnPtlRoleDel', function() {
+            if (!PTL_CUR) return;
+            if (!confirm('確定要刪除這個角色嗎？\n已指派給人員的資料也會一併移除。')) return;
+            $.post(PTL_RAPI, { action: 'delete_role', role_id: PTL_CUR }, function(r) {
+                if (!r.success) { alert(r.message || '刪除失敗'); return; }
+                PTL_CUR = 0; $('#ptlRoleEdit').hide(); $('#ptlRoleEditHint').show();
+                ptlLoadRoles();
+            }, 'json');
+        });
+        $(document).on('click', '#btnPtlFeatSave', function() {
+            if (!PTL_CUR) return;
+            var feats = $('.ptl-featcb:checked').map(function() { return this.value; }).get();
+            $.post(PTL_RAPI, { action: 'save_role_features', role_id: PTL_CUR, features: JSON.stringify(feats) }, function(r) {
+                if (!r.success) { alert(r.message || '儲存失敗'); return; }
+                $('#ptlRoleMsg').css('color', '#5b8c3a').text('已儲存（被指派這個角色的人重新整理頁面後生效）');
+            }, 'json');
         });
 
         /* ── 帳款月份共用函式 ─────────────────────────────────── */
