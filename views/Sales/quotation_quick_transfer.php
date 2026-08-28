@@ -128,6 +128,15 @@ try {
                 <label style="font-size:12px;margin-left:10px;"><input type="checkbox" id="qtCheckAll"> 全選本頁</label>
                 <span id="qtSelCount" style="font-size:12px;color:#888;margin-left:8px;"></span>
                 <label style="font-size:12px;margin-left:14px;">年份：<select id="qtYearFilter" class="form-control input-sm" style="display:inline-block;width:90px;"><option value="">全部</option></select></label>
+                <label style="font-size:12px;margin-left:10px;">客戶：<select id="qtCustFilter" class="form-control input-sm" style="display:inline-block;width:230px;"
+                        data-eg-filter="輸入客戶編號或名稱篩選…"><option value="">全部客戶</option></select></label>
+                <label style="font-size:12px;margin-left:10px;"><input type="checkbox" id="qtOnlyUnbound"> 只看未綁定料號ID的項目</label>
+                <?php if ($canEdit): ?>
+                <button class="btn btn-default btn-sm" id="btnBulkProc" style="margin-left:10px;"
+                        title="把同一組製程一次套用到目前篩選範圍內的項目">
+                    <i class="fa fa-tags"></i> 批次設定製程
+                </button>
+                <?php endif; ?>
                 <?php if (!$canEdit): ?>
                     <span style="font-size:12px;color:#c0392b;margin-left:8px;">您沒有編輯權限，僅供檢視</span>
                 <?php endif; ?>
@@ -154,7 +163,10 @@ try {
             <li><b>綁定料號ID</b>：在「料號ID綁定」欄搜尋料號關鍵字，點選正確的項目即可綁定；<b>找不到就直接在搜尋結果下方按「＋新增料號」</b>快速建立並自動綁定。</li>
             <li><b>切換客戶</b>：點客戶欄位旁的「切換」，搜尋並選擇正確的客戶；找不到一樣可以「＋新建客戶」；跳窗內按 <b>Enter</b> 等同直接送出（唯一符合的搜尋結果或已填妥的新建表單）。</li>
             <li>補齊後，可以用每張報價單右上角的「轉正式報價單」單張轉入，或勾選多張後用上方「批次轉入正式報價單」一次轉入。<b>料號ID或製程沒有全部補齊的報價單，按鈕與勾選框會是反灰的</b>，滑鼠移上去會說明還缺什麼、缺幾筆。</li>
-            <li>清單右上角可篩選<b>年份</b>，<b>預設顯示最新年份</b>（可自行切到其他年份或「全部」）；報價單依日期新到舊排序。</li>
+            <li>清單右上角可篩選<b>年份</b>（<b>預設顯示最新年份</b>，可切到其他年份或「全部」）與<b>客戶</b>（下拉可直接打字，客戶編號或名稱都找得到，選項後面是該客戶還有幾張待確認）；報價單依日期新到舊排序。</li>
+            <li><b>只看未綁定料號ID的項目</b>：勾起來之後清單只留還沒綁完料號的報價單，而且卡片裡也只列出還沒綁的那幾列，可以直接一列一列按「快速綁定」，不用在整張單裡找。</li>
+            <li><b>批次設定製程</b>：先用上面的客戶／年份篩到一批（同一個客戶的單製程多半相同），再按「批次設定製程」選好標籤一次套用。可選擇<b>只套用到還沒設定製程的項目</b>（預設）或<b>全部項目</b>（會覆蓋原本設定）；影響筆數是以<b>全部符合篩選條件</b>的項目計算，不是只有目前這一頁。</li>
+            <li><b>轉入正式之後不會跳回第一頁</b>：轉走的那幾張直接從清單移除，畫面停在原本的頁次與捲動位置，右下角以小提示告知結果，方便連續作業。</li>
             <li>上方統計列的「<b>最新資料日期</b>」是把目前尚待確認的所有報價單<b>由 OP 單號本身解析</b>出來的日期（OP＋民國年3碼＋月日4碼，例：OP1071228004 → 2018.12.28）取最新的一天，可用來看舊資料補到哪一天；括號內是該日期取自哪一張單號。此欄不受年份篩選影響，一律以全部尚待確認的報價單計算。</li>
         </ul>
         <div class="tip"><b>料號ID與製程都補齊的報價單才可以轉入正式報價單</b>——該張報價單每一筆項目都綁好料號ID、也都設好製程之後，「轉正式報價單」按鈕與勾選框才會自動解鎖（不必重新整理頁面），「全選本頁」也只會勾到可以轉入的那幾張。卡片上的兩個徽章就是這兩項的完成度。</div>
@@ -178,6 +190,25 @@ try {
         <p>沿用報價單管理頁權限（module: quotation_list），需要 U（修改）或 A（管理）權限才能編輯，僅檢閱者唯讀。</p>
     </div>
     <div class="m-foot"><button class="btn btn-warning" onclick="closeMask('helpUseMask')">我知道了</button></div>
+</div></div>
+
+<!-- 批次設定製程 -->
+<div class="va-mask" id="bulkProcMask"><div class="va-modal wide">
+    <div class="m-head"><span><i class="fa fa-tags"></i> 批次設定製程</span><span class="m-close" onclick="closeMask('bulkProcMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a5a2b;margin-bottom:8px;">套用範圍　<span id="bpScopeText"></span></div>
+        <div style="margin-bottom:8px;font-size:12px;">
+            <label style="margin-right:14px;"><input type="radio" name="bpTarget" value="unset" checked> 只套用到<b>還沒設定製程</b>的項目</label>
+            <label><input type="radio" name="bpTarget" value="all"> 套用到<b>全部</b>項目（會覆蓋原本設定）</label>
+        </div>
+        <div style="font-size:12px;margin-bottom:10px;">預計影響 <b id="bpCount">0</b> 筆項目
+            <span id="bpNeedLoad" style="color:#a2703a;"></span></div>
+        <div id="bpTagArea"></div>
+    </div>
+    <div class="m-foot">
+        <button class="btn btn-default" onclick="closeMask('bulkProcMask')">取消</button>
+        <button class="btn btn-warning" id="bpSubmitBtn" onclick="submitBulkProc()"><i class="fa fa-check"></i> 套用</button>
+    </div>
 </div></div>
 
 <!-- 切換客戶 -->
@@ -260,18 +291,22 @@ function loadProcessTagTree(cb) {
     });
 }
 
-function loadPendingList() {
+function loadPendingList(done) {
     $('#qtCards').html('<div style="text-align:center;color:#999;padding:20px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>');
     $.get(API_URL, { action: 'get_pending_transfer_list' }, function(res) {
         if (!res.success) { $('#qtCards').html('載入失敗：' + (res.message||'')); return; }
         qtData = res.data;
         qtPage = 1;
         populateYearFilter();
+        populateCustFilter();
         renderStats();
         renderCards();
+        if (typeof done === 'function') done();
     });
 }
 $('#qtYearFilter').on('change', function(){ qtPage = 1; renderCards(); });
+$('#qtCustFilter').on('change', function(){ qtPage = 1; renderCards(); });
+$('#qtOnlyUnbound').on('change', function(){ qtPage = 1; renderCards(); });
 
 function renderStats() {
     const total = qtData.length;
@@ -333,8 +368,34 @@ function populateYearFilter() {
 
 function getFilteredData() {
     const y = $('#qtYearFilter').val();
-    if (!y) return qtData;
-    return qtData.filter(r => yearOf(r.quote_date) === y);
+    const c = $('#qtCustFilter').val();
+    const onlyUnbound = $('#qtOnlyUnbound').is(':checked');
+    return qtData.filter(function(r) {
+        if (y && yearOf(r.quote_date) !== y) return false;
+        if (c && String(r.client_id || '') !== c) return false;
+        if (onlyUnbound && Number(r.items_no_dsetting) === 0) return false;
+        return true;
+    });
+}
+
+// 客戶下拉：只列出目前尚待確認的報價單實際出現過的客戶（附張數），
+// 打字篩選走共用檔 eg_input_rules.js 的 data-eg-filter（比對選項文字＝名稱＋編號，兩種都找得到）
+function populateCustFilter() {
+    const map = {};
+    qtData.forEach(function(r) {
+        const id = String(r.client_id || '');
+        if (!id) return;
+        if (!map[id]) map[id] = { id: id, name: r.client_name || '', n: 0 };
+        map[id].n++;
+    });
+    const list = Object.keys(map).map(function(k){ return map[k]; })
+        .sort(function(a, b){ return b.n - a.n || a.id.localeCompare(b.id); });
+    const $sel = $('#qtCustFilter');
+    const cur = $sel.val();
+    $sel.html('<option value="">全部客戶</option>' + list.map(function(c) {
+        return '<option value="' + c.id + '">' + c.name + '（' + c.id + '）— ' + c.n + ' 張</option>';
+    }).join(''));
+    if (cur && list.some(function(c){ return c.id === cur; })) $sel.val(cur);
 }
 
 // 料號ID與製程都補齊的報價單才可以轉入正式報價單
@@ -486,8 +547,13 @@ function findQuoteIdByItemId(itemId) {
     return qid;
 }
 
-function drawItems(qid, items) {
+function drawItems(qid, allItems) {
     const row = qtData.find(function(r){ return String(r.quote_id) === String(qid); });
+    // 勾了「只看未綁定料號ID的項目」時，卡片裡也只列還沒綁的那幾列，
+    // 直接對著清單一列一列按「快速綁定」，不用在整張單裡找
+    const onlyUnbound = $('#qtOnlyUnbound').is(':checked');
+    const items = onlyUnbound ? allItems.filter(function(it){ return !it.d_setting_d_id; }) : allItems;
+    if (!items.length) { $('#qtCardBody' + qid).html('<div style="color:#999;font-size:12px;">（此篩選條件下沒有要顯示的項目）</div>'); return; }
     let html = '<table class="qt-item-table"><thead><tr><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th style="width:170px;">料號ID綁定</th><th style="min-width:260px;">製程</th></tr></thead><tbody>';
     items.forEach(function(it, idx) {
         const boundText = it.d_setting_d_id ? ('<span class="qt-badge ok">已綁定 #' + it.d_setting_d_id + '</span>') : '<span class="qt-badge warn">未綁定</span>';
@@ -926,11 +992,34 @@ $(document).on('change', '.qt-row-chk, #qtCheckAll', function() {
 });
 
 function doConfirmTransfer(ids, doneMsg) {
+    // 轉入成功後刻意「不」整頁重載：原本 loadPendingList() 會把頁碼歸零跳回第一頁，
+    // 在第 8 頁處理到一半的人每轉一張就被丟回開頭。改成就地把轉走的那幾張從清單移除，
+    // 停在原本的頁次與捲動位置繼續做（最後一張被移走造成頁數變少時才往前退一頁）。
+    const keepPage   = qtPage;
+    const keepScroll = window.scrollY;
     $.post(API_URL, { action: 'quick_confirm_transfer', quote_ids: JSON.stringify(ids) }, function(res) {
         if (!res.success) { alert('轉入失敗：' + res.message); return; }
-        alert(doneMsg || ('已轉入 ' + res.updated + ' 張報價單'));
-        loadPendingList();
+        const gone = ids.map(String);
+        qtData = qtData.filter(function(r){ return gone.indexOf(String(r.quote_id)) === -1; });
+        gone.forEach(function(id){ delete qtItemsCache[id]; });
+        populateYearFilter();
+        populateCustFilter();
+        renderStats();
+        qtPage = keepPage;
+        renderCards();                       // renderCards 內會把超出範圍的頁碼夾回最後一頁
+        window.scrollTo(0, keepScroll);
+        showQtToast(doneMsg || ('已轉入 ' + res.updated + ' 張報價單'));
     });
+}
+
+// 轉入成功用小提示帶過就好，不要用 alert 打斷連續作業（失敗才跳 alert）
+function showQtToast(msg) {
+    let $t = $('#qtToast');
+    if (!$t.length) {
+        $t = $('<div id="qtToast" style="position:fixed;right:20px;bottom:80px;z-index:2000;background:#8A5A2B;color:#fff;' +
+               'padding:10px 16px;border-radius:6px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.3);display:none;"></div>').appendTo('body');
+    }
+    $t.text(msg).stop(true, true).fadeIn(120).delay(2200).fadeOut(400);
 }
 
 function confirmTransferOne(quoteId, quoteNo) {
@@ -940,6 +1029,93 @@ function confirmTransferOne(quoteId, quoteNo) {
     if (!confirm('確定要將報價單 ' + quoteNo + ' 轉入正式報價單嗎？轉入後將從本頁移除。')) return;
     doConfirmTransfer([quoteId]);
 }
+
+// ── 批次設定製程：把同一組製程一次套用到目前篩選範圍內的項目 ──
+// 典型用法＝先用客戶下拉篩到某一家，該客戶的單製程多半相同，一次設完。
+let bpState = { activeGid: null, selected: [] };
+
+$('#btnBulkProc').on('click', function() {
+    const rows = getFilteredData();
+    if (!rows.length) { alert('目前篩選範圍內沒有報價單。'); return; }
+    bpState = { activeGid: processTagTree.length ? processTagTree[0].group_id : null, selected: [] };
+    const cust = $('#qtCustFilter').val();
+    const custName = cust ? ($('#qtCustFilter option:selected').text().split('—')[0].trim()) : '全部客戶';
+    $('#bpScopeText').text('年份：' + ($('#qtYearFilter').val() || '全部') + '　客戶：' + custName + '　報價單：' + rows.length + ' 張');
+    $('input[name="bpTarget"][value="unset"]').prop('checked', true);
+    renderBpTags();
+    updateBpCount();
+    openMask('bulkProcMask');
+});
+
+function renderBpTags() {
+    let l1 = '<div class="qt-proc-l1">';
+    processTagTree.forEach(function(g) {
+        l1 += '<button type="button" class="' + (g.group_id === bpState.activeGid ? 'active' : '') + '" onclick="bpSetGroup(' + g.group_id + ')">' + g.group_name + '</button>';
+    });
+    l1 += '</div>';
+    let l2 = '<div class="qt-proc-l2" style="margin-top:4px;">';
+    const g = processTagTree.find(function(x){ return x.group_id === bpState.activeGid; });
+    if (g) (g.sub_tags || []).forEach(function(st) {
+        l2 += '<button type="button" class="' + (bpState.selected.indexOf(st.sub_tag_id) !== -1 ? 'active' : '') + '" onclick="bpToggle(' + st.sub_tag_id + ')">' + st.sub_tag_name + '</button>';
+    });
+    l2 += '</div>';
+    let chips = '<div class="qt-proc-chips">';
+    bpState.selected.forEach(function(sid) {
+        let nm = '';
+        processTagTree.forEach(function(g2){ (g2.sub_tags||[]).forEach(function(st){ if (st.sub_tag_id === sid) nm = st.sub_tag_name; }); });
+        chips += '<span class="qt-proc-chip">' + nm + '<span class="x" onclick="bpToggle(' + sid + ')">×</span></span>';
+    });
+    chips += '</div>';
+    $('#bpTagArea').html(l1 + l2 + chips);
+}
+function bpSetGroup(gid) { bpState.activeGid = gid; renderBpTags(); }
+function bpToggle(sid) {
+    const i = bpState.selected.indexOf(sid);
+    if (i === -1) bpState.selected.push(sid); else bpState.selected.splice(i, 1);
+    renderBpTags();
+}
+
+// 影響筆數＝全部符合篩選條件的項目（不是只有目前這一頁），用清單上的統計數字加總，
+// 不必把每張報價單的明細都抓回來；實際要動哪些項目由後端自己挑（見 quick_set_process_bulk）
+function updateBpCount() {
+    const onlyUnset = $('input[name="bpTarget"]:checked').val() === 'unset';
+    const n = getFilteredData().reduce(function(a, r) {
+        return a + Number(onlyUnset ? r.items_no_process : r.item_count);
+    }, 0);
+    $('#bpCount').text(n);
+}
+$(document).on('change', 'input[name="bpTarget"]', updateBpCount);
+
+function submitBulkProc() {
+    if (!bpState.selected.length) { alert('請先選擇要套用的製程標籤。'); return; }
+    const onlyUnset = $('input[name="bpTarget"]:checked').val() === 'unset';
+    const rows = getFilteredData();
+    if (!rows.length) { alert('目前篩選範圍內沒有報價單。'); return; }
+    const est = $('#bpCount').text();
+    if (!confirm('將把選定的製程套用到 ' + rows.length + ' 張報價單、約 ' + est + ' 筆項目' +
+                 (onlyUnset ? '（只有還沒設定製程的）' : '（會覆蓋原本已設定的）') + '。\n\n確定要執行嗎？')) return;
+
+    const $btn = $('#bpSubmitBtn').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 處理中…');
+    const qids = rows.map(function(r){ return Number(r.quote_id); });
+    $.post(API_URL, { action: 'quick_set_process_bulk', quote_ids: JSON.stringify(qids),
+                      only_unset: onlyUnset ? '1' : '0', sub_tag_ids: bpState.selected.join(',') }, function(res) {
+        $btn.prop('disabled', false).html('<i class="fa fa-check"></i> 套用');
+        if (!res.success) { alert('批次設定製程失敗：' + res.message); return; }
+        closeMask('bulkProcMask');
+        showQtToast('已設定 ' + res.updated + ' 筆項目的製程');
+        // 動到的範圍可能很大，快取一律作廢重抓，避免畫面與資料庫不一致
+        qtItemsCache = {};
+        qtProcState  = {};
+        const keepPage = qtPage, keepScroll = window.scrollY;
+        loadPendingList(function(){ qtPage = keepPage; renderCards(); window.scrollTo(0, keepScroll); });
+    });
+}
+
+// 這些項目的製程狀態變了，清掉舊的畫面狀態讓它依新的 process_notes 重畫
+function clearProcStateForQuote(qid) {
+    (qtItemsCache[qid] || []).forEach(function(it){ delete qtProcState[it.item_id]; });
+}
+
 
 // 頁面最上方的一鍵：把目前年份篩選範圍內所有還沒綁完料號的報價單一次做完。
 // 刻意不做成「一進頁面自動跑」——這個動作會在料號主檔建立新料號，是改不回來的，

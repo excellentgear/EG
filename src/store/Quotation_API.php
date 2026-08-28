@@ -1635,6 +1635,86 @@ try {
             break;
         }
 
+        // 批次設定製程（快速轉移頁「批次設定製程」）：把同一組製程一次套到多筆項目。
+        // 範圍由前端算好後送 item_ids 進來（例如「篩到某個客戶之後、該範圍內所有還沒設製程的項目」）。
+        // 寫入規則與單筆的 quick_set_item_process 完全一致——一定要連 process_notes（子標籤 id 清單）
+        // 一起寫，只寫 quotation_item_process_map 的話報價單管理頁會顯示錯誤的製程。
+        case 'quick_set_process_bulk': {
+            // 範圍有兩種給法：
+            //   item_ids  — 指定到項目（單張卡片內的操作）
+            //   quote_ids — 指定到報價單，由後端自己挑出項目（畫面上的篩選範圍可能上千張，
+            //               讓前端先把每張明細抓回來＝上千個 AJAX，會把伺服器打爆）
+            $ids = [];
+            if (isset($_POST['quote_ids'])) {
+                $qids = json_decode($_POST['quote_ids'], true);
+                if (!is_array($qids) || !$qids) throw new Exception('未選擇任何報價單');
+                $qids = array_values(array_unique(array_filter(array_map('intval', $qids))));
+                if (count($qids) > 5000) throw new Exception('一次最多處理 5000 張報價單');
+                $onlyUnset = ($_POST['only_unset'] ?? '1') === '1';
+                $qph = implode(',', array_fill(0, count($qids), '?'));
+                $sql = "SELECT qi.item_id FROM quotation_item qi
+                        JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                        WHERE qi.quote_id IN ($qph) AND ql.pending_review = 1";
+                if ($onlyUnset) $sql .= " AND NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)";
+                $st = $pdo->prepare($sql);
+                $st->execute($qids);
+                $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+                if (!$ids) throw new Exception($onlyUnset ? '這個範圍內沒有「還沒設定製程」的項目' : '這個範圍內沒有可設定的項目');
+            } else {
+                $ids = json_decode($_POST['item_ids'] ?? '[]', true);
+                if (!is_array($ids) || !$ids) throw new Exception('未選擇任何項目');
+                $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+            }
+            if (count($ids) > 20000) throw new Exception('一次最多處理 20000 筆項目，請縮小篩選範圍');
+
+            $subIds = array_values(array_unique(array_filter(
+                array_map('intval', explode(',', (string)($_POST['sub_tag_ids'] ?? ''))),
+                fn($v) => $v > 0
+            )));
+            if (!$subIds) throw new Exception('請先選擇要套用的製程標籤');
+            $sph  = implode(',', array_fill(0, count($subIds), '?'));
+            $vchk = $pdo->prepare("SELECT sub_tag_id FROM quotation_process_sub_tag WHERE sub_tag_id IN ($sph) AND is_active=1");
+            $vchk->execute($subIds);
+            $subIds = array_values(array_intersect($subIds, array_map('intval', $vchk->fetchAll(PDO::FETCH_COLUMN))));
+            if (!$subIds) throw new Exception('選到的製程標籤不存在或已停用');
+
+            // process_no 一律由子標籤即時展開，不採信前端送來的清單（鐵律8：後端同規則再算一次）
+            $sph2 = implode(',', array_fill(0, count($subIds), '?'));
+            $pq = $pdo->prepare("SELECT DISTINCT process_no FROM quotation_process_tag_map WHERE sub_tag_id IN ($sph2)");
+            $pq->execute($subIds);
+            $pnos = array_map('intval', $pq->fetchAll(PDO::FETCH_COLUMN));
+
+            // 群組型別以「第一個子標籤所屬群組」為準，與單筆設定同一套判定
+            $gq = $pdo->prepare("SELECT g.group_type FROM quotation_process_sub_tag s JOIN quotation_process_tag_group g ON g.group_id=s.group_id WHERE s.sub_tag_id=? LIMIT 1");
+            $gq->execute([$subIds[0]]);
+            $groupType = $gq->fetchColumn() ?: 'single_process';
+
+            // 只作用在尚待確認的報價單，與其他 quick_* 動作一致
+            $iph = implode(',', array_fill(0, count($ids), '?'));
+            $chk = $pdo->prepare("SELECT qi.item_id FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id WHERE qi.item_id IN ($iph) AND ql.pending_review=1");
+            $chk->execute($ids);
+            $valid = array_map('intval', $chk->fetchAll(PDO::FETCH_COLUMN));
+            if (!$valid) throw new Exception('沒有可設定的項目（可能都已轉為正式資料）');
+
+            $procNotes = implode(',', $subIds);
+            $pdo->beginTransaction();
+            try {
+                $vph = implode(',', array_fill(0, count($valid), '?'));
+                $pdo->prepare("DELETE FROM quotation_item_process_map WHERE quotation_item_id IN ($vph)")->execute($valid);
+                if ($pnos) {
+                    $insMap = $pdo->prepare("INSERT INTO quotation_item_process_map (quotation_item_id,process_no) VALUES (?,?)");
+                    foreach ($valid as $iid) foreach ($pnos as $pn) $insMap->execute([$iid, $pn]);
+                }
+                $pdo->prepare("UPDATE quotation_item SET process_group_type=?, process_notes=?, updated_at=NOW() WHERE item_id IN ($vph)")
+                    ->execute(array_merge([$groupType, $procNotes], $valid));
+                $pdo->commit();
+            } catch (Exception $e) { $pdo->rollBack(); throw $e; }
+
+            $response = ['success' => true, 'updated' => count($valid), 'skipped' => count($ids) - count($valid),
+                         'process_notes' => $procNotes, 'process_nos' => implode(',', $pnos), 'group_type' => $groupType];
+            break;
+        }
+
         case 'quick_confirm_transfer': {
             $ids = json_decode($_POST['quote_ids'] ?? '[]', true);
             if (!is_array($ids) || empty($ids)) throw new Exception('未選擇任何報價單');
