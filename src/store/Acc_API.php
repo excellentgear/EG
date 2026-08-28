@@ -1583,6 +1583,15 @@ case 'recon_print_meta': {
     ]);
 }
 
+/* AS 文件清單＋目前綁定（供 eg_asdoc_picker 使用；僅會計管理員需要） */
+case 'recon_asdoc_meta': {
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可設定 AS 文件綁定', 403);
+    include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
+    $doc = eg_asdoc_get($db, ACC_RECON_ASDOC_MODULE);
+    acc_out(['docs' => eg_asdoc_list($db), 'current' => $doc ? (int)$doc['id'] : 0,
+             'label' => $doc ? (($doc['doc_no'] ?? '') . '（' . ($doc['doc_name'] ?? '') . '）') : '尚未綁定']);
+}
+
 /* 對帳單綁定哪一份 AS 文件（僅會計管理員；走全站共用的 asdoc_lib） */
 case 'recon_asdoc_save': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);

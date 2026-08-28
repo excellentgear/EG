@@ -1548,8 +1548,9 @@ function acc_ar_summary(PDO $db, array $f): array
                COALESCE(ist.exclude_when_nonzero, 0) AS excl_nonzero
         FROM is_list il
         LEFT JOIN is_sale_type ist ON ist.sale_type_id = il.sale_type
-        WHERE il.Order_date BETWEEN ? AND ?");
-    $st->execute([$scanFrom, $scanTo]);
+        WHERE il.Order_date BETWEEN ? AND ?
+           OR (il.billing_month_override IS NOT NULL AND il.billing_month_override BETWEEN ? AND ?)");
+    $st->execute([$scanFrom, $scanTo, $bmFrom, $bmTo]);
 
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
@@ -1577,8 +1578,9 @@ function acc_ar_summary(PDO $db, array $f): array
                it.billing_month_override, COALESCE(rt.is_note, 0) AS is_note
         FROM ir_track it
         LEFT JOIN ir_return_type rt ON rt.type_id = it.return_type_id
-        WHERE it.IR_date BETWEEN ? AND ?");
-    $st2->execute([$scanFrom, $scanTo]);
+        WHERE it.IR_date BETWEEN ? AND ?
+           OR (it.billing_month_override IS NOT NULL AND it.billing_month_override BETWEEN ? AND ?)");
+    $st2->execute([$scanFrom, $scanTo, $bmFrom, $bmTo]);
 
     foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ((int)$r['is_note'] === 1) continue;
@@ -1693,9 +1695,10 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
         FROM is_list il
         LEFT JOIN order_track  ot  ON ot.Order_id = il.Order_id
         LEFT JOIN is_sale_type ist ON ist.sale_type_id = il.sale_type
-        WHERE il.Client_name = ? AND il.Order_date BETWEEN ? AND ?
+        WHERE il.Client_name = ?
+          AND (il.Order_date BETWEEN ? AND ? OR il.billing_month_override = ?)
         ORDER BY il.Order_date, il.IS_number, il.IS_id");
-    $st->execute([$clientName, $scanFrom, $scanTo]);
+    $st->execute([$clientName, $scanFrom, $scanTo, $billingMonth]);
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (abs($amt) < 0.0001) continue;
@@ -1716,9 +1719,10 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
                COALESCE(rt.is_note,0) AS is_note
         FROM ir_track it
         LEFT JOIN ir_return_type rt ON rt.type_id = it.return_type_id
-        WHERE it.Client_name = ? AND it.IR_date BETWEEN ? AND ?
+        WHERE it.Client_name = ?
+          AND (it.IR_date BETWEEN ? AND ? OR it.billing_month_override = ?)
         ORDER BY it.IR_date, it.IR_no");
-    $st2->execute([$clientName, $scanFrom, $scanTo]);
+    $st2->execute([$clientName, $scanFrom, $scanTo, $billingMonth]);
     foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
         if ((int)$r['is_note'] === 1) continue;
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];

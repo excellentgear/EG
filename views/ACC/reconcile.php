@@ -40,6 +40,9 @@ $roleLbl = $perms['isAdmin'] ? '管理者'
          : ($perms['reconAp'] ? '應付對帳(生管)'
          : ($perms['canView'] ? '會計檢閱' : '無權限'))))));
 $taxRate = acc_tax_rate($db);
+include_once '../../src/common/org_role_lib.php';
+$ownCompany = eg_company_full_name($db);      // 列印大標題＝本公司全名，動態取（ai-rules/16 第一節）
+$reconPref  = acc_recon_pref($db);            // 拖移排序／依勾選順序排序的全站預設值
 
 /* 由對帳單總覽（recon_overview.php）帶參數直接開某一份：
    ?side=ap&party_id=RZ002A&bm=2026-05。沒帶參數就照原本的下拉流程走。 */
@@ -223,6 +226,76 @@ table.a-t tbody tr.dragging{opacity:.4;}
 kbd{background:#f4e6ce;border:1px solid var(--a-line2);border-bottom-width:2px;border-radius:3px;
   padding:0 5px;font-size:11px;color:var(--a-ink);font-family:inherit;}
 
+/* ── 料號即時搜尋（打字→出清單→點選→跳到那一列並打亮）─────────────── */
+.find-wrap{position:relative;display:inline-block;}
+.find-pop{position:absolute;top:34px;left:0;z-index:1200;width:440px;max-height:300px;overflow:auto;
+  background:#fff;border:1.5px solid var(--a-acc);border-radius:6px;
+  box-shadow:0 5px 18px rgba(0,0,0,.22);display:none;}
+.find-pop.show{display:block;}
+.find-pop .fi{padding:5px 9px;border-bottom:1px solid #F1E6D2;cursor:pointer;font-size:12.5px;color:var(--a-ink);}
+.find-pop .fi:hover,.find-pop .fi.on{background:var(--a-ok);}
+.find-pop .fi b{color:var(--a-brand);}
+.find-pop .fi .sub{color:var(--a-ink2);font-size:11px;}
+.find-pop .fi-none{padding:10px;color:var(--a-ink2);font-size:12.5px;}
+table.a-t tbody tr.flash td{animation:egflash 1.8s ease-out 1;}
+@keyframes egflash{0%{background:#F0A24B;}100%{background:transparent;}}
+
+/* ── 開關（拖移排序／依勾選順序排序，都預設關閉，管理員可改預設）───── */
+.sw{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 11px;cursor:pointer;
+  border:1px solid var(--a-line2);border-radius:16px;background:#fff;font-size:12.5px;color:var(--a-ink2);}
+.sw .dot{width:11px;height:11px;border-radius:50%;background:#CFC3AE;}
+.sw.on{background:var(--a-acc);color:#fff;border-color:var(--a-acc-d);font-weight:bold;}
+.sw.on .dot{background:#fff;}
+
+/* 單據類別徽章（出貨／退貨／加工費／採購） */
+.k-ship{background:#F7E0BD;color:#5b3a1e;}
+.k-ret{background:#DD5138;color:#fff;}
+.k-proc{background:#A2703A;color:#fff;}
+.k-split{background:#C9B69F;color:#fff;}
+
+/* ── 右側參考面板：這一列的報價與訂單（拖移關閉時點列開啟）─────────── */
+.ref-dock{position:fixed;top:0;right:0;bottom:0;width:430px;z-index:880;background:#fff;
+  border-left:3px solid var(--a-acc);box-shadow:-3px 0 16px rgba(0,0,0,.2);display:none;flex-direction:column;}
+.ref-dock.show{display:flex;}
+body.ref-open .right_col{padding-right:442px;}
+.ref-dock .r-head{background:var(--a-acc);color:#fff;padding:8px 12px;font-weight:bold;font-size:14px;
+  display:flex;align-items:center;gap:8px;flex:0 0 auto;}
+.ref-dock .r-head .x{margin-left:auto;cursor:pointer;font-size:17px;}
+.ref-dock .r-body{flex:1 1 auto;overflow:auto;padding:10px 12px;font-size:12.5px;color:var(--a-ink);}
+.ref-sec{margin-bottom:11px;}
+.ref-sec h5{margin:0 0 5px;font-size:13px;color:var(--a-brand);font-weight:bold;
+  border-bottom:1px solid var(--a-line);padding-bottom:3px;}
+table.ref-t{width:100%;border-collapse:collapse;font-size:12px;}
+table.ref-t th,table.ref-t td{border:1px solid #EADFC8;padding:2px 5px;}
+table.ref-t th{background:var(--a-bg2);color:var(--a-ink2);white-space:nowrap;width:78px;text-align:left;}
+.chk{display:flex;gap:6px;align-items:flex-start;padding:5px 7px;border-radius:4px;margin-bottom:4px;line-height:1.55;}
+.chk .cl{font-weight:bold;white-space:nowrap;}
+.chk-ok{background:#EEF4E2;color:#3F5520;border-left:4px solid #5C7A2E;}
+.chk-warn{background:#FFF3DF;color:#7a5320;border-left:4px solid var(--a-acc);}
+.chk-bad{background:#FBE3DC;color:#7a2c17;border-left:4px solid var(--a-bad);}
+.chk-na{background:#F3ECE0;color:#7d6242;border-left:4px solid #C9B69F;}
+.cand{max-height:210px;overflow:auto;border:1px solid var(--a-line);border-radius:4px;}
+.cand table{width:100%;border-collapse:collapse;font-size:11.5px;}
+.cand th,.cand td{border-bottom:1px solid #F1E6D2;padding:3px 5px;text-align:center;white-space:nowrap;}
+.cand th{background:var(--a-ok);position:sticky;top:0;}
+.cand tr.now{background:var(--a-hit);}
+
+/* 跨月找單／設定跳窗內的表格 */
+table.ot{width:100%;border-collapse:collapse;font-size:12.5px;}
+table.ot th,table.ot td{border:1px solid #EADFC8;padding:3px 6px;text-align:center;white-space:nowrap;}
+table.ot th{background:var(--a-ok);color:var(--a-ink);position:sticky;top:0;}
+table.ot td.l{text-align:left;}
+table.ot td.r{text-align:right;}
+table.ot tr.pick{background:var(--a-hit);}
+table.ot tr.lock{color:#a08a6a;}
+.page-help-btn{margin-left:auto;height:32px;padding:0 14px;border:1px solid var(--a-line2);border-radius:16px;
+  background:#fff;color:var(--a-ink);cursor:pointer;font-size:13px;}
+.page-help-btn:hover{background:var(--a-ok);}
+.help-doc{font-size:13.5px;color:#5b3a1e;line-height:1.9;}
+.help-doc h4{font-size:15px;color:var(--a-brand);margin:14px 0 5px;font-weight:bold;}
+.help-doc h4:first-child{margin-top:0;}
+.help-doc ul{padding-left:20px;margin:0 0 6px;}
+
 @media print{
   .a-bar,.dock,.calc,.a-mask,.side-band .sb-sw,.nav_menu,.left_col,footer{display:none !important;}
   .right_col{margin:0 !important;padding:0 !important;}
@@ -237,7 +310,8 @@ kbd{background:#f4e6ce;border:1px solid var(--a-line2);border-bottom-width:2px;b
   <div class="right_col" role="main">
     <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
       <h2 style="margin:6px 0;"><i class="fa fa-check-square-o" style="color:#F0A24B;"></i> 對帳作業
-        <small style="color:#8a6d45;">點列即勾選、可拖移排序對照紙本、可加總／拆分、可暫存續對；確認正確即鎖帳交會計</small></h2>
+        <small style="color:#8a6d45;">點列即勾選、可查報價／訂單、可跨月帶單、可加總／拆分、可暫存續對；確認正確即鎖帳交會計</small></h2>
+      <button class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
     </div>
     <div class="clearfix"></div>
 
@@ -260,7 +334,7 @@ kbd{background:#f4e6ce;border:1px solid var(--a-line2);border-bottom-width:2px;b
       <label>帳款月份</label>
       <input type="month" id="bm" style="width:145px;">
       <label id="partyLbl">客戶</label>
-      <select id="partySel"><option value="">請先選帳款月份</option></select>
+      <select id="partySel" data-eg-filter="輸入客戶編號或名稱篩選…"><option value="">請先選帳款月份</option></select>
       <button id="btnLoad" class="btn-warm"><i class="fa fa-folder-open-o"></i> 載入對帳單</button>
       <button id="btnCalc"><i class="fa fa-calculator"></i> 計算機</button>
       <span class="a-role">目前角色：<b><?= htmlspecialchars($roleLbl) ?></b>
@@ -285,8 +359,16 @@ kbd{background:#f4e6ce;border:1px solid var(--a-line2);border-bottom-width:2px;b
         <div><span class="n" id="stTotal">—</span> <span class="l">含稅</span></div>
       </div>
       <div id="noteBox"></div>
+      <div id="syncBox"></div>
 
       <div class="a-bar" style="background:var(--a-bg2);">
+        <span class="find-wrap">
+          <input type="text" id="findKw" style="width:200px;" autocomplete="off"
+                 placeholder="搜尋料號／單號（即時）" title="打字即時模糊比對料號或單號，點清單那一筆會跳到對帳單上的該列並打亮">
+          <div class="find-pop" id="findPop"></div>
+        </span>
+        <button id="btnOutside" title="交接日期前後的單，對方常做在前一個或後一個月份的帳裡"><i class="fa fa-calendar-o"></i> 跨月找單／帶入本月</button>
+        <span style="width:1px;height:22px;background:var(--a-line);margin:0 4px;"></span>
         <button id="btnGroup"><i class="fa fa-object-group"></i> 合併為一組（多項加總）</button>
         <button id="btnUngroup"><i class="fa fa-object-ungroup"></i> 取消分組</button>
         <button id="btnSplit"><i class="fa fa-cut"></i> 拆分此列</button>
@@ -295,11 +377,16 @@ kbd{background:#f4e6ce;border:1px solid var(--a-line2);border-bottom-width:2px;b
         <button id="btnUncheckAll"><i class="fa fa-square-o"></i> 全部取消</button>
         <span style="width:1px;height:22px;background:var(--a-line);margin:0 4px;"></span>
         <button id="btnExport"><i class="fa fa-file-text-o"></i> 匯出底稿</button>
-        <button id="btnPrint"><i class="fa fa-print"></i> 列印</button>
-        <span class="a-hint" style="margin-left:6px;">
-          點任一列＝標記已對到（轉<span style="background:var(--a-hit);padding:1px 6px;border-radius:3px;">暖淺綠</span>）；
-          拖左側 <i class="fa fa-bars"></i> 可調順序對照紙本
-        </span>
+        <button id="btnPrint"><i class="fa fa-print"></i> 列印對帳單</button>
+      </div>
+
+      <div class="a-bar" style="background:var(--a-bg);">
+        <span class="sw" id="swDrag" title="開啟後才能拖曳左側把手調整順序；關閉時點列＝查看該列的報價與訂單"><span class="dot"></span> 拖移排序</span>
+        <span class="sw" id="swAuto" title="開啟後每勾選一列就把它排到已勾選那一區的最後，順序＝你勾選的順序，方便照著對方紙本一路對下來"><span class="dot"></span> 依勾選順序排序</span>
+        <span style="width:1px;height:22px;background:var(--a-line);margin:0 4px;"></span>
+        <button id="btnPartyOpt"><i class="fa fa-address-card-o"></i> 對象設定</button>
+        <button id="btnReconSet" style="display:none;"><i class="fa fa-cog"></i> 模組設定</button>
+        <span class="a-hint" style="margin-left:6px;" id="modeHint"></span>
       </div>
 
       <div class="a-wrap">
@@ -307,7 +394,7 @@ kbd{background:#f4e6ce;border:1px solid var(--a-line2);border-bottom-width:2px;b
           <thead><tr>
             <th style="width:26px;"></th>
             <th style="width:30px;">✓</th>
-            <th>單號</th><th>日期</th>
+            <th>單號</th><th>日期</th><th style="width:52px;">類別</th>
             <th class="ap-only">製令</th>
             <th>料號</th><th>說明</th>
             <th>原始數量</th><th>原始單價</th><th>原始金額</th>
@@ -417,6 +504,160 @@ kbd{background:#f4e6ce;border:1px solid var(--a-line2);border-bottom-width:2px;b
   </div>
 </div></div>
 
+<!-- 這一列的報價／訂單對照（拖移關閉時點列開啟） -->
+<div class="ref-dock" id="refDock">
+  <div class="r-head"><i class="fa fa-link"></i>&nbsp;<span id="refTitle">報價／訂單對照</span><span class="x" id="refX">✕</span></div>
+  <div class="r-body" id="refBody"></div>
+</div>
+
+<!-- 跨月找單：交接日期前後的單常被做到前一個或後一個月份 -->
+<div class="a-mask" id="mkOutside"><div class="a-modal" style="width:960px;">
+  <div class="m-head"><i class="fa fa-calendar-o"></i>&nbsp;跨月找單／帶入本月<span class="m-close" data-close="mkOutside">✕</span></div>
+  <div class="m-body">
+    <div class="info">
+      對帳常遇到<b>交接日期前後的單</b>：對方把它算在前一個或後一個月份。這裡列出<b>這個對象在本月份以外</b>的出貨／退貨（應付則是加工移轉），
+      勾選後按下方按鈕即可<b>改成目前這份對帳單的月份</b>並帶進來。<br>
+      改的是該單據的「帳款月份指定值」，<b>不會動到出貨日期或金額</b>；<b>已開立發票的單據不可調整</b>（會與國稅局申報對不起來），清單上會標示。
+    </div>
+    <div class="a-bar">
+      <label>料號／單號</label>
+      <input type="text" id="otKw" style="width:190px;" placeholder="模糊比對，可留空">
+      <label>搜尋範圍</label>
+      <select id="otSpan" style="width:150px;">
+        <option value="1">前後 1 個月</option>
+        <option value="2">前後 2 個月</option>
+        <option value="3" selected>前後 3 個月</option>
+        <option value="6">前後 6 個月</option>
+        <option value="12">前後 12 個月</option>
+      </select>
+      <button id="otGo" class="btn-warm"><i class="fa fa-search"></i> 搜尋</button>
+      <button id="otAll"><i class="fa fa-check-square-o"></i> 全選／全不選</button>
+      <span class="a-hint" id="otRange" style="margin-left:6px;"></span>
+    </div>
+    <div style="max-height:46vh;overflow:auto;border:1px solid var(--a-line);border-radius:4px;">
+      <table class="ot" id="otTbl"><thead><tr>
+        <th style="width:34px;">選</th><th>單號</th><th>日期</th><th>類別</th><th>料號</th><th>品名／製令</th>
+        <th>數量</th><th>單價</th><th>金額</th><th>目前帳款月份</th><th>狀態</th>
+      </tr></thead><tbody id="otBody"><tr><td colspan="11" style="padding:16px;color:#8a6d45;">按「搜尋」開始</td></tr></tbody></table>
+    </div>
+  </div>
+  <div class="m-foot">
+    <span id="otTally" style="float:left;font-size:13px;color:var(--a-ink);line-height:32px;"></span>
+    <button data-close="mkOutside">關閉</button>
+    <button class="go" id="otApply"><i class="fa fa-arrow-down"></i> 改成本月份並帶入</button>
+  </div>
+</div></div>
+
+<!-- 對象設定：部分客戶不提供對帳單 -->
+<div class="a-mask" id="mkParty"><div class="a-modal narrow">
+  <div class="m-head"><i class="fa fa-address-card-o"></i>&nbsp;對象設定<span class="m-close" data-close="mkParty">✕</span></div>
+  <div class="m-body">
+    <div class="info">
+      有些客戶<b>不提供對帳單</b>，我方直接用開立的出貨單認列待收金額。
+      勾選後這份對帳單就<b>不會再要求輸入對方紙本合計、也不顯示差額</b>，確認鎖帳時也不會提醒「尚未輸入對方紙本合計」。
+    </div>
+    <div style="font-size:13px;color:var(--a-ink);margin-bottom:8px;">對象：<b id="poName">—</b></div>
+    <label style="font-size:13.5px;color:var(--a-ink);display:flex;align-items:center;gap:7px;font-weight:normal;">
+      <input type="checkbox" id="poNo" style="width:16px;height:16px;">
+      這個對象<b>不提供對帳單</b>（以我方出貨單認列待收金額）
+    </label>
+    <div style="margin-top:9px;">
+      <label style="font-size:13px;color:var(--a-ink);">備註（選填）</label>
+      <input type="text" id="poNote" maxlength="200" style="width:100%;height:32px;border:1px solid var(--a-line2);
+        border-radius:4px;padding:0 8px;color:var(--a-ink);" placeholder="例：客戶只認我方出貨單，月底寄對帳明細即可">
+    </div>
+    <div class="a-hint" id="poWho"></div>
+  </div>
+  <div class="m-foot">
+    <button data-close="mkParty">取消</button>
+    <button class="go" id="poOk"><i class="fa fa-save"></i> 儲存</button>
+  </div>
+</div></div>
+
+<!-- 模組設定（僅會計管理員）：預設開關與 AS 文件綁定 -->
+<div class="a-mask" id="mkSet"><div class="a-modal narrow">
+  <div class="m-head"><i class="fa fa-cog"></i>&nbsp;對帳作業模組設定<span class="m-close" data-close="mkSet">✕</span></div>
+  <div class="m-body">
+    <div class="info">這裡設的是<b>全站預設值</b>；每位使用者仍可在畫面上自行切換，切換結果只記在自己的瀏覽器。</div>
+    <label style="font-size:13.5px;color:var(--a-ink);display:flex;align-items:center;gap:7px;font-weight:normal;">
+      <input type="checkbox" id="stDrag" style="width:16px;height:16px;"> 預設開啟「拖移排序」
+    </label>
+    <label style="font-size:13.5px;color:var(--a-ink);display:flex;align-items:center;gap:7px;font-weight:normal;margin-top:6px;">
+      <input type="checkbox" id="stAuto" style="width:16px;height:16px;"> 預設開啟「依勾選順序排序」
+    </label>
+    <hr style="border-color:var(--a-line);">
+    <div style="font-size:13px;color:var(--a-ink);">列印用的 AS 文件編號綁定（頁尾右下角）</div>
+    <div style="margin:6px 0;">
+      <span id="asdocShow" style="font-size:13.5px;color:var(--a-brand);font-weight:bold;">未綁定</span>
+      <button class="btn-mini" id="btnAsPick" style="margin-left:8px;">選擇文件</button>
+      <button class="btn-mini" id="btnAsClear">清除綁定</button>
+    </div>
+    <div class="a-hint">綁定後列印的對帳單表頭會用該文件名稱、頁尾右下角印出文件編號（四階文件自動附版次，並依帳款月份回推當時版次）。</div>
+  </div>
+  <div class="m-foot">
+    <button data-close="mkSet">取消</button>
+    <button class="go" id="setOk"><i class="fa fa-save"></i> 儲存預設值</button>
+  </div>
+</div></div>
+
+<!-- 使用說明（鐵律7） -->
+<div class="a-mask" id="helpUseMask"><div class="a-modal">
+  <div class="m-head"><i class="fa fa-question-circle"></i>&nbsp;對帳作業　使用說明<span class="m-close" data-close="helpUseMask">✕</span></div>
+  <div class="m-body help-doc">
+    <h4>這一頁在做什麼</h4>
+    把某個客戶（應收）或廠商（應付）某個帳款月份的單據排成一份<b>對帳底稿</b>，跟對方拿來的紙本一列一列對。
+    對完按「確認正確」即<b>鎖帳</b>交會計開票／付款。加總、拆分、排序、勾選<b>只影響這份底稿</b>，永遠不會改到原始出貨／加工紀錄。
+
+    <h4>操作步驟</h4>
+    <ul>
+      <li>選<b>帳款月份</b>與<b>對象</b>（對象下拉可直接打客戶編號或名稱篩選）→ 按「載入對帳單」。之前有暫存會自動接續。</li>
+      <li><b>點任一列</b>＝標記「已對到」（轉暖淺綠）；同時右側會開出<b>這一列的報價與訂單對照</b>。</li>
+      <li>對方把我方多筆併成一列請款 → 勾選那幾列按<b>合併為一組</b>，表尾會顯示該組小計。</li>
+      <li>對方把我方一筆拆開請款（甚至拆到不同月份）→ 選那一列按<b>拆分此列</b>，各段合計必須等於原列金額。</li>
+      <li>對方紙本上的單在別的月份 → 按<b>跨月找單／帶入本月</b>，勾選後一鍵改成目前月份。</li>
+      <li>把對方紙本合計填進上方欄位，差額自動算；對完按<b>確認正確（鎖帳）</b>。</li>
+    </ul>
+
+    <h4>兩個開關（預設都關閉）</h4>
+    <ul>
+      <li><b>拖移排序</b>：開啟後可拖左側 <i class="fa fa-bars"></i> 把手，把順序排成跟對方紙本一樣。<b>關閉時點列＝查看報價／訂單對照</b>。</li>
+      <li><b>依勾選順序排序</b>：開啟後每勾選一列就自動排到已勾選那一區的最後，等於「照著對方紙本一路勾下來，順序就跟紙本一樣」。</li>
+      <li>兩個開關的<b>預設值由會計管理員在「模組設定」設定</b>；個人切換結果記在自己的瀏覽器，不影響別人。</li>
+    </ul>
+
+    <h4>報價／訂單對照（點列後看右側）</h4>
+    <ul>
+      <li>單價鏈是<b>報價單 → 訂單 → 出貨單</b>，三段任一段對不上都會列出來（綠＝相符、橘＝要注意、紅＝不符）。</li>
+      <li>出貨單沒綁訂單、或訂單沒綁報價時，下方會列出<b>同客戶同料號的候選</b>，可直接綁定；不綁也可以，就人工判斷單價。</li>
+      <li><b>報價數量的比對是粗略的</b>：階梯報價用階梯區間（含該階容差）判定，非階梯報價用 ±10% 判定，僅供提醒，實際仍以業務判斷為準。</li>
+      <li>應付（加工費）沒有報價單與客戶訂單可對照，只會檢查「數量×單價＝加工金額」與 ERP 原始單價是否被覆寫過。</li>
+    </ul>
+
+    <h4>退貨（出貨退回）</h4>
+    應收的對帳單<b>本來就含退貨</b>，在「類別」欄標為<span class="pill k-ret">退貨</span>，數量與金額都是<b>負數</b>，直接扣減本月應收。
+    備註性質的退貨（<code>ir_return_type.is_note=1</code>）不計金額，所以不會出現。
+
+    <h4>不提供對帳單的客戶</h4>
+    有些客戶不寄對帳單回來，我方直接用出貨單認列待收金額。按<b>對象設定</b>勾起來後，這個對象就不再顯示「對方紙本合計／差額」，
+    確認鎖帳時也不會再提醒沒填紙本金額。
+
+    <h4>常見疑問</h4>
+    <ul>
+      <li><b>載入時說「有 N 筆本月單據不在底稿中」？</b> 表示暫存之後又有新單據歸到這個月（常見於剛用跨月找單改過月份），按提示的按鈕即可加入。</li>
+      <li><b>說「有 N 筆已不屬於本月份」？</b> 表示底稿裡的單被改到別的月份了，可一鍵移除，避免同一筆錢對兩次。</li>
+      <li><b>鎖帳後要改？</b> 只有會計管理員能「退回重對」且必須填原因；已開發票的憑證另有更硬的鎖，只能作廢／折讓／補開。</li>
+      <li><b>列印出來跟畫面不一樣？</b> 列印走的是正式對帳單版面（A4、公司全名、頁碼、AS 文件編號），不是把網頁直接印下來。</li>
+    </ul>
+
+    <h4>設定入口與權限</h4>
+    <ul>
+      <li><b>對象設定</b>（是否提供對帳單）：有該側對帳權限者即可設定。</li>
+      <li><b>模組設定</b>（預設開關、AS 文件綁定）：僅<b>會計管理員</b>看得到。</li>
+      <li>角色於「使用者權限設定」頁指派（模組 accounting）：應收對帳(業務)只能碰應收、應付對帳(生管)只能碰應付、會計檢閱只能看。</li>
+    </ul>
+  </div>
+</div></div>
+
 <div class="a-msg" id="msg"></div>
 
 <script src="../../resource/js/jquery.min.js"></script>
@@ -425,6 +666,11 @@ kbd{background:#f4e6ce;border:1px solid var(--a-line2);border-bottom-width:2px;b
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?: time() ?>"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?: time() ?>"></script>
+<script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?: time() ?>"></script>
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?: time() ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?: time() ?>"></script>
+<script>window.__ownCompany = <?= json_encode($ownCompany, JSON_UNESCAPED_UNICODE) ?>;</script>
 <script>
 /* 版型的 #sidebar-menu 預設 visibility:hidden，必須在此恢復，否則整個左側欄不會出現 */
 $(document).ready(function () {
@@ -446,7 +692,29 @@ var P = {
   canAdmin:   <?= $perms['canAdmin']   ? 'true' : 'false' ?>
 };
 
+var ME = null;
 var CSRF = '', SIDE = 'ar', sheet = null, lines = [], selIdx = -1, keySeq = 0, canEdit = false;
+/* 兩個開關：全站預設值由會計管理員設定，個人切換記在自己的 localStorage（不影響別人） */
+var PREF = <?= json_encode($reconPref) ?>;
+var dragOn = false, autoOn = false, checkSeq = 0;
+var OPT = {no_statement:0, note:null};        // 這個對象的選項（是否提供對帳單）
+var refSrc = null;                            // 目前在右側面板顯示的來源憑證
+function prefKey(k){ return 'acc_recon_' + k; }
+function loadSwitches(){
+  var d = localStorage.getItem(prefKey('drag'));
+  var a = localStorage.getItem(prefKey('auto'));
+  dragOn = (d===null) ? !!PREF.drag_default     : (d==='1');
+  autoOn = (a===null) ? !!PREF.autosort_default : (a==='1');
+  paintSwitches();
+}
+function paintSwitches(){
+  $('#swDrag').toggleClass('on', dragOn);
+  $('#swAuto').toggleClass('on', autoOn);
+  $('#modeHint').html(dragOn
+    ? '拖移排序<b>開啟中</b>：拖左側 <i class="fa fa-bars"></i> 把手可調順序；此時點列只會標記已對到。'
+    : '拖移排序關閉中：<b>點任一列＝標記已對到，同時右側顯示該列的報價／訂單對照</b>。');
+}
+function dispDate(d){ return (typeof egFmtDate==='function') ? egFmtDate(d) : (d||''); }
 /* 從總覽頁帶進來的目標（沒帶就是空字串），對象清單載完後自動選起來並載入 */
 var DEEP = <?= json_encode($deep, JSON_UNESCAPED_UNICODE) ?>;
 var pendingParty = '';
@@ -507,7 +775,9 @@ $('#btnSideAp').on('click',function(){
 })();
 $.getJSON(API,{action:'meta'},function(r){
   if(!r.ok){ toast(esc(r.error||'初始化失敗'), true); return; }
-  CSRF=r.csrf;
+  CSRF=r.csrf; ME=r.user||null;
+  loadSwitches();
+  $('#btnReconSet').toggle(!!P.canAdmin);
   if(DEEP.party_id){
     // 由總覽頁指定了要開哪一份：設好月份與側別，對象清單載完會自動接著載入
     $('#bm').val(DEEP.bm);
@@ -530,8 +800,12 @@ function loadParties(){
       var tag='';
       if(p.sheet) tag = ' ['+(ST_LABEL[p.sheet.status]||p.sheet.status)
         + (p.sheet.status==='draft' ? ' '+p.sheet.checked_cnt+'/'+p.sheet.line_cnt : '') + ']';
-      h+='<option value="'+esc(p.party_id)+'">'+esc(p.party_name)
-        +'（'+p.cnt+' 筆 / '+nf(p.amount)+'）'+esc(tag)+'</option>';
+      // 選項文字要含「編號」，打字篩選（data-eg-filter）比對的就是這串顯示文字
+      var pid = (p.customer_id || p.party_id || '');
+      var idTxt = (pid && pid !== p.party_name) ? (' ' + pid) : '';
+      h+='<option value="'+esc(p.party_id)+'">'+esc(p.party_name)+esc(idTxt)
+        +'（'+p.cnt+' 筆 / '+nf(p.amount)+'）'+esc(tag)
+        +(p.no_statement ? ' ［不提供對帳單］' : '')+'</option>';
     });
     $('#partySel').html(h);
     if(pendingParty){
@@ -572,10 +846,17 @@ function loadSheet(){
     lines.forEach(function(l){
       l.split_parent_key = (l.split_parent && idMap[l.split_parent]) ? idMap[l.split_parent] : null;
     });
+    OPT = r.opt || {no_statement:0, note:null};
+    // 勾選順序：底稿存回來時只剩 sort_order，用它重建一組序號，之後再勾的就接在後面
+    checkSeq = 0;
+    lines.slice().sort(function(a,b){ return (a.sort_order||0)-(b.sort_order||0); })
+         .forEach(function(l){ if(l.checked) l.check_seq = ++checkSeq; });
+    closeRef();
     $('#theirTotal').val(sheet.their_total===null||sheet.their_total===undefined ? '' : sheet.their_total);
     $('#emptyBox').hide(); $('#sheetBox').show();
     $('#btnReopen').toggle(P.canAdmin && sheet.status==='confirmed');
     render();
+    renderSync(r.missing||[], r.stale||[]);
     toast(r.from==='draft'
       ? '已接續上次暫存的進度（'+esc(sheet.party_name)+' '+esc(sheet.billing_month)+'）'
       : '已依該月份的單據組出新的對帳單（尚未暫存）');
@@ -592,8 +873,7 @@ function render(){
   var pk = parentKeys();
 
   // 依 sort_order 排；拆分子列緊跟在父列後面
-  var top = lines.filter(function(l){ return !l.split_parent_key; })
-                 .sort(function(a,b){ return (a.sort_order||0)-(b.sort_order||0); });
+  var top = orderedTops();
   var ordered = [];
   top.forEach(function(l){
     ordered.push(l);
@@ -615,11 +895,13 @@ function render(){
     if(isParent) cls.push('parent');
     var ro = editable ? '' : ' readonly';
 
-    h+='<tr data-i="'+i+'" class="'+cls.join(' ')+'"'+(editable&&!isChild?' draggable="true"':'')+'>'
-      +'<td>'+(editable&&!isChild?'<span class="drag-h"><i class="fa fa-bars"></i></span>':'')+'</td>'
+    var canDrag = editable && dragOn && !isChild;
+    h+='<tr data-i="'+i+'" class="'+cls.join(' ')+'"'+(canDrag?' draggable="true"':'')+'>'
+      +'<td>'+(canDrag?'<span class="drag-h"><i class="fa fa-bars"></i></span>':'')+'</td>'
       +'<td>'+(l.checked?'<i class="fa fa-check" style="color:#5C7A2E;"></i>':'')+'</td>'
       +'<td class="l">'+esc(l.doc_no||'')+'</td>'
-      +'<td>'+esc(l.doc_date||'')+'</td>'
+      +'<td>'+esc(dispDate(l.doc_date))+'</td>'
+      +'<td>'+kindPill(l)+'</td>'
       +(SIDE==='ap'?'<td>'+esc(l.bom||'')+'</td>':'')
       +'<td class="l">'+esc(l.product_id||'')+'</td>'
       +'<td class="l">'+esc((l.spec||'').substr(0,18))+'</td>'
@@ -651,7 +933,7 @@ function renderFoot(pk){
     g[l.group_no] = (g[l.group_no]||0) + amtOf(l);
   });
   Object.keys(g).forEach(function(k){
-    h+='<tr><td colspan="'+(SIDE==='ap'?10:9)+'" class="r"><b>加總組 '+esc(k)+' 小計</b></td>'
+    h+='<tr><td colspan="'+(SIDE==='ap'?11:10)+'" class="r"><b>加總組 '+esc(k)+' 小計</b></td>'
       +'<td colspan="3" class="r"><b style="color:var(--a-brand);font-size:15px;">'+nf(g[k])+'</b></td>'
       +'<td colspan="4"></td></tr>';
   });
@@ -671,8 +953,12 @@ function totals(){
 }
 function updateStat(){
   var t=totals();
-  var their = $('#theirTotal').val()==='' ? null : Number($('#theirTotal').val());
+  var noStmt = !!(OPT && OPT.no_statement);
+  var their = (noStmt || $('#theirTotal').val()==='') ? null : Number($('#theirTotal').val());
   var diff  = (their===null) ? null : Math.round((their - t.net)*100)/100;
+  // 不提供對帳單的對象：沒有「對方紙本」這回事，欄位收起來免得看的人以為漏填
+  $('#theirTotal').closest('div').toggle(!noStmt);
+  $('#stDiff').closest('div').toggle(!noStmt);
 
   $('#stStatus').attr('class','st-pill stp-'+(sheet.status||'new')).text(ST_LABEL[sheet.status]||sheet.status);
   $('#stLines').text(nf(t.count));
@@ -712,11 +998,25 @@ $(document).on('click','#tbody td',function(e){
   if($(e.target).is('input,button,.drag-h,i')) return;
   var $tr=$(this).closest('tr'), i=parseInt($tr.data('i'),10);
   selIdx=i;
-  if(canEdit && sheet.status!=='confirmed') lines[i].checked = lines[i].checked ? 0 : 1;
+  var l=lines[i];
+  if(canEdit && sheet.status!=='confirmed'){
+    l.checked = l.checked ? 0 : 1;
+    l.check_seq = l.checked ? (++checkSeq) : 0;
+    applyAutoOrder();
+  }
   render();
+  // 拖移關閉時，點列同時把這一列的報價／訂單對照叫出來（使用者要求）
+  if(!dragOn) openRef(l);
 });
-$('#btnCheckAll').on('click',function(){ lines.forEach(function(l){ l.checked=1; }); render(); });
-$('#btnUncheckAll').on('click',function(){ lines.forEach(function(l){ l.checked=0; }); render(); });
+$('#btnCheckAll').on('click',function(){
+  orderedTops().forEach(function(l){ if(!l.checked){ l.checked=1; l.check_seq=++checkSeq; } });
+  lines.forEach(function(l){ if(l.split_parent_key && !l.checked){ l.checked=1; l.check_seq=++checkSeq; } });
+  applyAutoOrder(); render();
+});
+$('#btnUncheckAll').on('click',function(){
+  lines.forEach(function(l){ l.checked=0; l.check_seq=0; }); checkSeq=0;
+  applyAutoOrder(); render();
+});
 
 /* ══ 就地編輯調整值 ══ */
 $(document).on('change','#tbody .cell-in',function(){
@@ -832,6 +1132,7 @@ $(document).on('click','.rm-child',function(e){
 /* ══ 拖移排序 ══ */
 var dragIdx=-1;
 $(document).on('dragstart','#tbody tr',function(e){
+  if(!dragOn){ e.preventDefault(); return; }
   dragIdx=parseInt($(this).data('i'),10);
   $(this).addClass('dragging');
   try{ e.originalEvent.dataTransfer.effectAllowed='move';
@@ -871,7 +1172,7 @@ function payload(){
     sheet: JSON.stringify({
       side:SIDE, party_id:sheet.party_id, party_name:sheet.party_name,
       billing_month:sheet.billing_month,
-      their_total: $('#theirTotal').val()==='' ? null : $('#theirTotal').val(),
+      their_total: ((OPT&&OPT.no_statement)||$('#theirTotal').val()==='') ? null : $('#theirTotal').val(),
       memo: sheet.memo||null
     }),
     lines: JSON.stringify(lines.map(function(l){
@@ -902,12 +1203,13 @@ $('#btnSave').on('click',function(){
 });
 $('#btnConfirm').on('click',function(){
   var t=totals();
-  var their=$('#theirTotal').val()===''?null:Number($('#theirTotal').val());
+  var their=((OPT&&OPT.no_statement)||$('#theirTotal').val()==='')?null:Number($('#theirTotal').val());
   var diff = their===null?null:Math.round((their-t.net)*100)/100;
   var warn='';
+  var noStmt = !!(OPT && OPT.no_statement);
   if(t.checked<t.count) warn+='\n・還有 '+(t.count-t.checked)+' 列沒有標記「已對到」';
-  if(diff!==null && Math.abs(diff)>=0.01) warn+='\n・與對方紙本仍有差額 '+nf(diff)+' 元';
-  if(their===null) warn+='\n・尚未輸入對方紙本合計（無法比對）';
+  if(!noStmt && diff!==null && Math.abs(diff)>=0.01) warn+='\n・與對方紙本仍有差額 '+nf(diff)+' 元';
+  if(!noStmt && their===null) warn+='\n・尚未輸入對方紙本合計（無法比對）';
   if(!confirm('確認這份對帳單正確並鎖帳？'+(warn?'\n\n請注意：'+warn:'')
     +'\n\n鎖帳後不可再修改，僅會計管理員可退回重對。')) return;
 
@@ -943,7 +1245,7 @@ $('#btnExport').on('click',function(){
     +'&party_id='+encodeURIComponent(sheet.party_id)
     +'&billing_month='+encodeURIComponent(sheet.billing_month);
 });
-$('#btnPrint').on('click',function(){ window.print(); });
+$('#btnPrint').on('click', printSheet);
 
 /* ══ 計算機 ══ */
 var cExp='', cVal='0';
@@ -985,6 +1287,651 @@ $(document).on('click','.c-pad button',function(){
     $('#calc').css({left:(e.pageX-dx)+'px', top:(e.pageY-dy)+'px', right:'auto', bottom:'auto'});
   }).on('mouseup',function(){ drag=false; });
 })();
+
+/* ══════════════════════════════════════════════════════════════════════
+ * 以下為 2026-08-28 依使用者要求新增的對帳輔助功能
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 類別徽章：退貨要一眼看得出來（金額是負的，會直接扣減本月應收）───── */
+function kindPill(l){
+  if(l.split_parent_key) return '<span class="pill k-split">拆分</span>';
+  var t=(l.src_type||'').toUpperCase();
+  if(t==='IR')   return '<span class="pill k-ret">退貨</span>';
+  if(t==='TLOG') return '<span class="pill k-proc">加工</span>';
+  if(t==='PURC') return '<span class="pill k-proc">採購</span>';
+  if(t==='IS')   return '<span class="pill k-ship">出貨</span>';
+  return '';
+}
+function kindText(l){
+  if(l.split_parent_key) return '拆分';
+  var t=(l.src_type||'').toUpperCase();
+  return t==='IR'?'退貨':(t==='TLOG'?'加工':(t==='PURC'?'採購':(t==='IS'?'出貨':'')));
+}
+
+/* ── 排序：預設照 sort_order；「依勾選順序排序」開啟時已勾選的排在前面 ── */
+function orderedTops(){
+  var tops = lines.filter(function(l){ return !l.split_parent_key; });
+  tops.sort(function(a,b){
+    if(autoOn){
+      var ac=a.checked?0:1, bc=b.checked?0:1;
+      if(ac!==bc) return ac-bc;
+      if(a.checked) return (a.check_seq||0)-(b.check_seq||0);
+    }
+    return (a.sort_order||0)-(b.sort_order||0);
+  });
+  return tops;
+}
+/* 把目前顯示順序寫回 sort_order，這樣「依勾選順序」排出來的結果暫存後也留得住 */
+function applyAutoOrder(){
+  if(!autoOn) return;
+  orderedTops().forEach(function(l,n){ l.sort_order=(n+1)*10; });
+  lines.filter(function(l){ return l.split_parent_key; }).forEach(function(c){
+    var p=lines.filter(function(x){ return x.client_key===c.split_parent_key; })[0];
+    if(p) c.sort_order=(p.sort_order||0)+(c.split_seq||1)/100;
+  });
+}
+
+/* ── 兩個開關 ───────────────────────────────────────────────────────── */
+$('#swDrag').on('click',function(){
+  dragOn=!dragOn; localStorage.setItem(prefKey('drag'), dragOn?'1':'0');
+  if(dragOn) closeRef();
+  paintSwitches(); if(sheet) render();
+});
+$('#swAuto').on('click',function(){
+  autoOn=!autoOn; localStorage.setItem(prefKey('auto'), autoOn?'1':'0');
+  paintSwitches();
+  if(sheet){ applyAutoOrder(); render();
+    toast(autoOn ? '已開啟：之後每勾選一列就會排到已勾選那一區的最後（＝你勾選的順序）'
+                 : '已關閉依勾選順序排序，恢復原本的排列順序'); }
+});
+
+/* ── 底稿與來源不一致的提醒（跨月改過月份、或暫存後又有新單）─────────── */
+var syncMissing=[];
+function renderSync(missing, stale){
+  syncMissing = missing||[];
+  var h='';
+  if(syncMissing.length){
+    var sum=0; syncMissing.forEach(function(l){ sum+=Number(l.orig_amount)||0; });
+    h+='<div class="warn" style="display:flex;align-items:center;gap:10px;">'
+      +'<span>有 <b>'+syncMissing.length+'</b> 筆本月份的單據不在這份底稿裡（合計 '+nf(sum)
+      +'）——通常是暫存之後才把它們改成本月份，或又有新的出貨。</span>'
+      +'<button class="btn-mini" id="btnAddMissing" style="margin-left:auto;">加入這 '+syncMissing.length+' 筆</button>'
+      +'<button class="btn-mini" id="btnShowMissing">看看是哪幾筆</button></div>';
+  }
+  if(stale && stale.length){
+    h+='<div class="warn">有 <b>'+stale.length+'</b> 筆底稿上的單據<b>已不屬於本月份</b>（可能被改到別的月份）：'
+      + stale.map(function(x){ return esc(x.doc_no||'')+'／'+esc(x.product_id||''); }).join('、')
+      +'　<button class="btn-mini" id="btnDropStale">從底稿移除這 '+stale.length+' 筆</button>'
+      +'<div class="a-hint">不移除的話同一筆錢可能被兩個月份各對一次。</div></div>';
+  }
+  $('#syncBox').html(h);
+  staleIds = (stale||[]).map(function(x){ return Number(x.line_id); });
+}
+var staleIds=[];
+$(document).on('click','#btnAddMissing',function(){
+  var max=0; lines.forEach(function(l){ max=Math.max(max, Number(l.sort_order)||0); });
+  syncMissing.forEach(function(l,n){
+    lines.push($.extend({}, l, {client_key:nk(), split_parent_key:null,
+      sort_order:max+(n+1)*10, checked:0, check_seq:0}));
+  });
+  toast('已加入 '+syncMissing.length+' 筆，記得按「暫存進度」存起來');
+  syncMissing=[]; $('#syncBox').html(''); render();
+});
+$(document).on('click','#btnShowMissing',function(){
+  var h='<table class="ot"><thead><tr><th>單號</th><th>日期</th><th>類別</th><th>料號</th><th>數量</th><th>金額</th></tr></thead><tbody>';
+  syncMissing.forEach(function(l){
+    h+='<tr><td class="l">'+esc(l.doc_no||'')+'</td><td>'+esc(dispDate(l.doc_date))+'</td>'
+      +'<td>'+kindPill(l)+'</td><td class="l">'+esc(l.product_id||'')+'</td>'
+      +'<td class="r">'+nf(l.orig_qty)+'</td><td class="r">'+nf(l.orig_amount)+'</td></tr>';
+  });
+  $('#otTbl').length;
+  alertBox('這些單據屬於本月份但不在底稿裡', h+'</tbody></table>');
+});
+$(document).on('click','#btnDropStale',function(){
+  if(!staleIds.length) return;
+  var before=lines.length;
+  lines = lines.filter(function(l){ return staleIds.indexOf(Number(l.line_id))<0; });
+  toast('已移除 '+(before-lines.length)+' 筆，記得按「暫存進度」存起來');
+  staleIds=[]; render(); renderSync(syncMissing, []);
+});
+
+/* 簡易資訊跳窗（借用既有 mkSplit 之外另開一個，避免蓋掉正在填的內容） */
+function alertBox(title, html){
+  if(!$('#mkInfo').length){
+    $('body').append('<div class="a-mask" id="mkInfo"><div class="a-modal">'
+      +'<div class="m-head"><span id="ibTitle"></span><span class="m-close" data-close="mkInfo">✕</span></div>'
+      +'<div class="m-body" id="ibBody"></div>'
+      +'<div class="m-foot"><button data-close="mkInfo">關閉</button></div></div></div>');
+  }
+  $('#ibTitle').text(title); $('#ibBody').html(html); openMask('mkInfo');
+}
+
+/* ── 料號／單號即時搜尋：打字出清單，點選跳到那一列並打亮 ───────────── */
+function findMatch(kw){
+  var ws=$.trim(kw).toLowerCase().split(/\s+/).filter(function(x){ return x!==''; });
+  if(!ws.length) return [];
+  return orderedTops().concat(lines.filter(function(l){ return l.split_parent_key; }))
+    .filter(function(l){
+      var hay=((l.product_id||'')+' '+(l.doc_no||'')+' '+(l.spec||'')+' '+(l.bom||'')+' '+(l.memo||'')).toLowerCase();
+      for(var i=0;i<ws.length;i++) if(hay.indexOf(ws[i])<0) return false;
+      return true;
+    }).slice(0,30);
+}
+function paintFind(){
+  var kw=$('#findKw').val();
+  if(!$.trim(kw)){ $('#findPop').removeClass('show').empty(); return; }
+  var hit=findMatch(kw);
+  if(!hit.length){ $('#findPop').addClass('show').html('<div class="fi-none">找不到符合的列（只在目前這份對帳單裡找）</div>'); return; }
+  var h='';
+  hit.forEach(function(l){
+    var i=lines.indexOf(l);
+    h+='<div class="fi" data-i="'+i+'"><b>'+esc(l.product_id||'（無料號）')+'</b>　'+esc(l.doc_no||'')
+      +'　'+kindPill(l)+'<span class="sub">　'+esc(dispDate(l.doc_date))+'　數量 '+nf(l.orig_qty)
+      +'　金額 '+nf(amtOf(l))+(l.checked?'　✔已對到':'')+'</span></div>';
+  });
+  $('#findPop').addClass('show').html(h);
+}
+$('#findKw').on('input', paintFind).on('focus', function(){ if($.trim(this.value)) paintFind(); });
+$('#findKw').on('keydown', function(e){
+  if(e.key==='Escape'){ $('#findPop').removeClass('show'); return; }
+  if(e.key!=='Enter') return;
+  e.preventDefault();                       // 不要觸發共用檔的「Enter＝按主要動作鈕」
+  var $f=$('#findPop .fi').first();
+  if($f.length) $f.trigger('click');
+});
+$(document).on('click','#findPop .fi',function(){
+  gotoLine(parseInt($(this).data('i'),10));
+  $('#findPop').removeClass('show');
+});
+$(document).on('click',function(e){
+  if(!$(e.target).closest('.find-wrap').length) $('#findPop').removeClass('show');
+});
+function gotoLine(i){
+  if(isNaN(i) || !lines[i]) return;
+  selIdx=i; render();
+  var $tr=$('#tbody tr[data-i="'+i+'"]');
+  if(!$tr.length) return;
+  $tr.addClass('flash');
+  var top=$tr.offset().top - $(window).height()/2;
+  $('html,body').animate({scrollTop: Math.max(0, top)}, 220);
+  setTimeout(function(){ $tr.removeClass('flash'); }, 1900);
+  if(!dragOn) openRef(lines[i]);
+}
+
+/* ── 右側面板：這一列的報價與訂單對照 ───────────────────────────────── */
+function closeRef(){ $('#refDock').removeClass('show'); $('body').removeClass('ref-open'); refSrc=null; }
+$('#refX').on('click', closeRef);
+function openRef(l){
+  if(!l) return;
+  if(l.split_parent_key || !l.src_id || l.src_type==='SPLIT'){
+    refSrc=null;
+    $('#refTitle').text('報價／訂單對照');
+    $('#refBody').html('<div class="chk chk-na"><span class="cl">無法對照</span>'
+      +'<span>這是拆分出來的子列（或手動加列），沒有對應的來源單據。請點<b>原始那一列</b>查看。</span></div>');
+    $('#refDock').addClass('show'); $('body').addClass('ref-open');
+    return;
+  }
+  refSrc={src_type:l.src_type, src_id:l.src_id};
+  $('#refTitle').text((l.doc_no||'') + '　' + (l.product_id||''));
+  $('#refBody').html('<div style="padding:14px;color:#8a6d45;"><i class="fa fa-spinner fa-spin"></i> 查詢中…</div>');
+  $('#refDock').addClass('show'); $('body').addClass('ref-open');
+  $.post(API+'?action=recon_line_ref',{src_type:l.src_type, src_id:l.src_id},function(r){
+    if(!r.ok){ $('#refBody').html('<div class="chk chk-bad"><span>'+esc(r.error||'查詢失敗')+'</span></div>'); return; }
+    renderRef(r.ref);
+  },'json').fail(function(x){
+    var m='查詢失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){}
+    $('#refBody').html('<div class="chk chk-bad"><span>'+esc(m)+'</span></div>');
+  });
+}
+function refRow(k,v){ return '<tr><th>'+esc(k)+'</th><td>'+(v==null?'':v)+'</td></tr>'; }
+function renderRef(f){
+  var d=f.doc||{}, h='';
+
+  h+='<div class="ref-sec"><h5>本列單據</h5><table class="ref-t">'
+    + refRow('單號', esc(d.no||''))
+    + refRow('日期', esc(dispDate(d.date)))
+    + refRow('類別', d.kind==='return'?'<span class="pill k-ret">退貨</span>'
+                    :(d.kind==='process'?'<span class="pill k-proc">加工費</span>':'<span class="pill k-ship">出貨</span>'))
+    + refRow('料號', esc(d.product_id||''))
+    + refRow('品名／製程', esc(d.spec||''))
+    + refRow('數量 × 單價', nf(d.qty)+' × '+esc(String(d.unit_price==null?'':d.unit_price)))
+    + refRow('金額', '<b>'+nf(d.amount)+'</b>')
+    + (d.note ? refRow('備註', esc(d.note)) : '')
+    + '</table></div>';
+
+  h+='<div class="ref-sec"><h5>自動比對結果</h5>';
+  if(!f.checks || !f.checks.length) h+='<div class="chk chk-na"><span>沒有可比對的項目</span></div>';
+  (f.checks||[]).forEach(function(c){
+    h+='<div class="chk chk-'+esc(c.status)+'"><span class="cl">'+esc(c.label)+'</span><span>'+esc(c.text)+'</span></div>';
+  });
+  h+='</div>';
+
+  if(f.order){
+    var o=f.order;
+    h+='<div class="ref-sec"><h5>已綁定的訂單</h5><table class="ref-t">'
+      + refRow('訂單編號', esc(o.Order_oo||''))
+      + refRow('客戶單號', esc(o.C_order||''))
+      + refRow('接單／交期', esc(dispDate(o.odate))+' ／ '+esc(dispDate(o.ddate)))
+      + refRow('訂單數量', nf(o.Qty)+'（累計已出 '+nf(o.shipped_qty)+'）')
+      + refRow('訂單單價', esc(String(o.unit_price==null?'（未填）':o.unit_price)))
+      + refRow('綁定報價', esc(o.quote_no||'（未綁定）'))
+      + '</table></div>';
+  }
+  if(f.quote){
+    var q=f.quote;
+    h+='<div class="ref-sec"><h5>已綁定的報價</h5><table class="ref-t">'
+      + refRow('報價單號', esc(q.quote_no||''))
+      + refRow('報價日期', esc(dispDate(q.quote_date)))
+      + refRow('報價客戶', esc(q.client_name||''))
+      + refRow('報價數量', nf(q.quantity)+' '+esc(q.unit||''))
+      + refRow('報價單價', Number(q.is_tiered)===1 ? ('階梯價，適用 <b>'+esc(String(q.eff_unit_price))+'</b>')
+                                                  : ('<b>'+esc(String(q.unit_price))+'</b>'))
+      + '</table>';
+    if(q.tiers && q.tiers.length){
+      h+='<div class="cand" style="margin-top:5px;"><table><thead><tr><th>數量下限</th><th>上限</th><th>單價</th><th>容差</th></tr></thead><tbody>';
+      q.tiers.forEach(function(t){
+        var on = q.matched_tier && Number(q.matched_tier.tier_id)===Number(t.tier_id);
+        h+='<tr'+(on?' class="now"':'')+'><td>'+nf(t.qty_min)+'</td>'
+          +'<td>'+(t.qty_max==null?'以上':nf(t.qty_max))+'</td>'
+          +'<td>'+esc(String(t.unit_price))+'</td>'
+          +'<td>'+(t.tolerance_value==null?'—':(esc(String(t.tolerance_value))+esc(t.tolerance_unit||'')))+'</td></tr>';
+      });
+      h+='</tbody></table></div>';
+    }
+    h+='</div>';
+  }
+
+  if(f.returns_of && f.returns_of.length){
+    h+='<div class="ref-sec"><h5>同料號近期出貨（供比對退回單價）</h5><div class="cand"><table>'
+      +'<thead><tr><th>出貨單號</th><th>日期</th><th>數量</th><th>單價</th></tr></thead><tbody>';
+    f.returns_of.forEach(function(x){
+      h+='<tr><td>'+esc(x.IS_number)+'</td><td>'+esc(dispDate(x.d))+'</td><td>'+nf(x.Qty)+'</td>'
+        +'<td>'+esc(String(x.Unit_price))+'</td></tr>';
+    });
+    h+='</tbody></table></div></div>';
+  }
+
+  // 綁定區（只有出貨列才有，且要有該側對帳權限、底稿未鎖帳）
+  var editable = canEdit && sheet && sheet.status!=='confirmed';
+  if(f.supports_bind){
+    h+='<div class="ref-sec"><h5>綁定訂單'+(editable?'':'（唯讀）')+'</h5>';
+    if(!f.order_candidates.length) h+='<div class="chk chk-na"><span>找不到同客戶同料號的訂單</span></div>';
+    else{
+      h+='<div class="cand"><table><thead><tr><th>訂單編號</th><th>接單日</th><th>數量</th><th>已出</th><th>單價</th><th>操作</th></tr></thead><tbody>';
+      f.order_candidates.forEach(function(o){
+        var now = f.order && Number(f.order.Order_id)===Number(o.Order_id);
+        h+='<tr'+(now?' class="now"':'')+'><td>'+esc(o.Order_oo)+'</td><td>'+esc(dispDate(o.odate))+'</td>'
+          +'<td>'+nf(o.Qty)+'</td><td>'+nf(o.shipped)+'</td><td>'+esc(String(o.unit_price==null?'—':o.unit_price))+'</td>'
+          +'<td>'+(now?'<span class="pill p-s">目前</span>'
+                     :(editable?'<button class="btn-mini bd-o" data-oid="'+o.Order_id+'">綁定</button>':'—'))+'</td></tr>';
+      });
+      h+='</tbody></table></div>';
+      if(editable && f.order) h+='<div style="margin-top:5px;"><button class="btn-mini bd-o" data-oid="0">解除訂單綁定</button></div>';
+    }
+    h+='</div>';
+
+    h+='<div class="ref-sec"><h5>綁定報價'+(editable?'':'（唯讀）')+'</h5>';
+    if(!f.order) h+='<div class="chk chk-na"><span>要先綁訂單，報價是掛在訂單上的</span></div>';
+    else if(!f.quote_candidates.length) h+='<div class="chk chk-na"><span>找不到同客戶同料號的報價明細</span></div>';
+    else{
+      h+='<div class="cand"><table><thead><tr><th>報價單號</th><th>日期</th><th>數量</th><th>單價</th><th>操作</th></tr></thead><tbody>';
+      f.quote_candidates.forEach(function(q){
+        var now = f.quote && Number(f.quote.item_id)===Number(q.item_id);
+        h+='<tr'+(now?' class="now"':'')+'><td>'+esc(q.quote_no)+'</td><td>'+esc(dispDate(q.quote_date))+'</td>'
+          +'<td>'+nf(q.quantity)+'</td>'
+          +'<td>'+(Number(q.is_tiered)===1?'階梯價':esc(String(q.unit_price)))+'</td>'
+          +'<td>'+(now?'<span class="pill p-s">目前</span>'
+                     :(editable?'<button class="btn-mini bd-q" data-iid="'+q.item_id+'" data-oid="'+f.order.Order_id+'">綁定</button>':'—'))+'</td></tr>';
+      });
+      h+='</tbody></table></div>';
+      if(editable && f.quote) h+='<div style="margin-top:5px;"><button class="btn-mini bd-q" data-iid="0" data-oid="'+f.order.Order_id+'">解除報價綁定</button></div>';
+      h+='<div class="a-hint">綁定會寫回訂單的報價欄位（全站共用），並留下稽核紀錄。</div>';
+    }
+    h+='</div>';
+  }
+  $('#refBody').html(h);
+}
+$(document).on('click','.bd-o',function(){
+  if(!refSrc) return;
+  var oid=Number($(this).data('oid'))||0;
+  if(!confirm(oid? '確定把這張出貨單綁定到選取的訂單？' : '確定解除這張出貨單的訂單綁定？')) return;
+  $.post(API+'?action=recon_bind_order',{csrf:CSRF, is_id:refSrc.src_id, order_id:oid},function(r){
+    if(!r.ok){ toast(esc(r.error||'綁定失敗'), true); return; }
+    toast(esc(r.message));
+    openRef({src_type:refSrc.src_type, src_id:refSrc.src_id, doc_no:$('#refTitle').text()});
+  },'json').fail(function(x){
+    var m='綁定失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true);
+  });
+});
+$(document).on('click','.bd-q',function(){
+  if(!refSrc) return;
+  var iid=Number($(this).data('iid'))||0, oid=Number($(this).data('oid'))||0;
+  if(!confirm(iid? '確定把這張訂單綁定到選取的報價明細？' : '確定解除這張訂單的報價綁定？')) return;
+  $.post(API+'?action=recon_bind_quote',{csrf:CSRF, order_id:oid, item_id:iid},function(r){
+    if(!r.ok){ toast(esc(r.error||'綁定失敗'), true); return; }
+    toast(esc(r.message));
+    openRef({src_type:refSrc.src_type, src_id:refSrc.src_id});
+  },'json').fail(function(x){
+    var m='綁定失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true);
+  });
+});
+
+/* ── 跨月找單：把別的月份的單改成本月份並帶入 ───────────────────────── */
+var otRows=[];
+$('#btnOutside').on('click',function(){
+  if(!sheet){ toast('請先載入對帳單', true); return; }
+  $('#otKw').val(''); $('#otBody').html('<tr><td colspan="11" style="padding:16px;color:#8a6d45;">按「搜尋」開始</td></tr>');
+  $('#otTally').text(''); $('#otRange').text('');
+  openMask('mkOutside');
+  $('#otGo').click();
+});
+$('#otGo').on('click',function(){
+  if(!sheet) return;
+  $('#otBody').html('<tr><td colspan="11" style="padding:16px;"><i class="fa fa-spinner fa-spin"></i> 搜尋中…</td></tr>');
+  $.post(API+'?action=recon_outside',{side:SIDE, party_id:sheet.party_id, billing_month:sheet.billing_month,
+                                      kw:$('#otKw').val(), months:$('#otSpan').val()},function(r){
+    if(!r.ok){ toast(esc(r.error||'搜尋失敗'), true); return; }
+    otRows=r.rows||[];
+    $('#otRange').text('搜尋範圍 '+dispDate(r.range[0])+' ~ '+dispDate(r.range[1])+'，本月份＝'+r.billing_month);
+    paintOt();
+  },'json').fail(function(){ toast('搜尋失敗', true); });
+});
+function paintOt(){
+  if(!otRows.length){
+    $('#otBody').html('<tr><td colspan="11" style="padding:16px;color:#8a6d45;">這個範圍內沒有「本月份以外」的單據</td></tr>');
+    $('#otTally').text(''); return;
+  }
+  var h='';
+  otRows.forEach(function(r,i){
+    var lock = !!r.locked;
+    h+='<tr class="'+(r._pick?'pick ':'')+(lock?'lock':'')+'" data-i="'+i+'">'
+      +'<td>'+(lock?'<i class="fa fa-lock" title="已開發票，不可調整"></i>'
+                   :'<input type="checkbox" class="ot-ck"'+(r._pick?' checked':'')+'>')+'</td>'
+      +'<td class="l">'+esc(r.no||'')+'</td><td>'+esc(dispDate(r.date))+'</td>'
+      +'<td>'+(r.kind==='return'?'<span class="pill k-ret">退貨</span>'
+              :(r.kind==='process'?'<span class="pill k-proc">加工</span>':'<span class="pill k-ship">出貨</span>'))+'</td>'
+      +'<td class="l">'+esc(r.product_id||'')+'</td><td class="l">'+esc((r.spec||'').substr(0,20))+'</td>'
+      +'<td class="r">'+nf(r.qty)+'</td><td class="r">'+esc(String(r.unit_price))+'</td>'
+      +'<td class="r"><b>'+nf(r.amount)+'</b></td>'
+      +'<td>'+esc(r.cur_month||'')+(r.is_override?' <span class="pill p-g">已指定</span>':'')+'</td>'
+      +'<td>'+(lock?('已開票 '+esc(r.locked)):'可調整')+'</td></tr>';
+  });
+  $('#otBody').html(h);
+  otTally();
+}
+function otTally(){
+  var n=0,s=0;
+  otRows.forEach(function(r){ if(r._pick && !r.locked){ n++; s+=Number(r.amount)||0; } });
+  $('#otTally').html('已選 <b>'+n+'</b> 筆／合計 <b>'+nf(s)+'</b>');
+  $('#otApply').prop('disabled', n===0);
+}
+$(document).on('change','#otBody .ot-ck',function(){
+  var i=parseInt($(this).closest('tr').data('i'),10);
+  otRows[i]._pick=this.checked;
+  $(this).closest('tr').toggleClass('pick', this.checked);
+  otTally();
+});
+$(document).on('click','#otBody td',function(e){
+  if($(e.target).is('input')) return;
+  var $ck=$(this).closest('tr').find('.ot-ck');
+  if($ck.length) $ck.prop('checked', !$ck.prop('checked')).trigger('change');
+});
+$('#otAll').on('click',function(){
+  var any=otRows.some(function(r){ return r._pick && !r.locked; });
+  otRows.forEach(function(r){ r._pick = any?false:!r.locked; });
+  paintOt();
+});
+$('#otApply').on('click',function(){
+  var items=[];
+  otRows.forEach(function(r){ if(r._pick && !r.locked) items.push({src_type:r.src_type, id:r.src_id, no:r.no}); });
+  if(!items.length){ toast('請先勾選要帶入的單據', true); return; }
+  if(!confirm('確定把這 '+items.length+' 筆的帳款月份改成 '+sheet.billing_month+'？\n\n只會改「帳款月份指定值」，不會動到出貨日期與金額。')) return;
+  var $b=$(this).prop('disabled',true).html('<i class="fa fa-spinner fa-spin"></i> 調整中…');
+  $.post(API+'?action=recon_move_month',{csrf:CSRF, billing_month:sheet.billing_month, items:JSON.stringify(items)},function(r){
+    $b.prop('disabled',false).html('<i class="fa fa-arrow-down"></i> 改成本月份並帶入');
+    if(!r.ok){ toast(esc(r.error||'調整失敗'), true); return; }
+    toast(esc(r.message)+(r.errors&&r.errors.length?('<br>'+r.errors.map(esc).join('<br>')):''), (r.failed>0));
+    closeMask('mkOutside');
+    loadSheet();          // 重新載入：底稿會列出「本月份有、底稿沒有」的差異讓使用者加入
+  },'json').fail(function(x){
+    $b.prop('disabled',false).html('<i class="fa fa-arrow-down"></i> 改成本月份並帶入');
+    var m='調整失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true);
+  });
+});
+
+/* ── 對象設定：不提供對帳單 ─────────────────────────────────────────── */
+$('#btnPartyOpt').on('click',function(){
+  if(!sheet){ toast('請先載入對帳單', true); return; }
+  $('#poName').text(sheet.party_name+'（'+sheet.party_id+'）');
+  $('#poNo').prop('checked', !!(OPT&&OPT.no_statement));
+  $('#poNote').val((OPT&&OPT.note)||'');
+  $('#poWho').html(OPT&&OPT.updated_at ? ('最後修改：'+esc(OPT.updated_by_name||'')+'　'+esc(dispDate(OPT.updated_at))) : '');
+  openMask('mkParty');
+});
+$('#poOk').on('click',function(){
+  $.post(API+'?action=recon_party_opt_save',{csrf:CSRF, side:SIDE, party_id:sheet.party_id,
+        no_statement: $('#poNo').prop('checked')?1:0, note:$('#poNote').val()},function(r){
+    if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
+    OPT=r.opt||OPT; closeMask('mkParty'); toast(esc(r.message)); updateStat(); loadParties();
+  },'json').fail(function(x){
+    var m='儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true);
+  });
+});
+
+/* ── 模組設定（僅會計管理員）：預設開關＋AS 文件綁定 ────────────────── */
+var AS_DOCS=[], AS_CUR=0;
+$('#btnReconSet').on('click',function(){
+  $('#stDrag').prop('checked', !!PREF.drag_default);
+  $('#stAuto').prop('checked', !!PREF.autosort_default);
+  $.getJSON(API,{action:'recon_asdoc_meta'},function(r){
+    if(!r.ok) return;
+    AS_DOCS=r.docs||[]; AS_CUR=r.current||0;
+    $('#asdocShow').text(r.label||'尚未綁定');
+  });
+  openMask('mkSet');
+});
+$('#btnAsPick').on('click',function(){
+  if(!window.EGAsDoc){ toast('AS 文件選擇器未載入', true); return; }
+  EGAsDoc.open({docs:AS_DOCS, current:AS_CUR, title:'對帳單的 AS 文件編號綁定', onSave:function(id, doc){
+    $.post(API+'?action=recon_asdoc_save',{csrf:CSRF, as_doc_id:id},function(r){
+      if(!r.ok){ toast(esc(r.error||'設定失敗'), true); return; }
+      AS_CUR=id;
+      $('#asdocShow').text(id? (EGAsDoc.label? EGAsDoc.label(doc) : ((doc&&doc.doc_no)||'')) : '尚未綁定');
+      toast(esc(r.message));
+    },'json').fail(function(){ toast('設定失敗', true); });
+  }});
+});
+$('#btnAsClear').on('click',function(){
+  if(!confirm('確定清除 AS 文件綁定？列印時頁尾將不再印文件編號。')) return;
+  $.post(API+'?action=recon_asdoc_save',{csrf:CSRF, as_doc_id:0},function(r){
+    if(!r.ok){ toast(esc(r.error||'設定失敗'), true); return; }
+    AS_CUR=0; $('#asdocShow').text('尚未綁定'); toast(esc(r.message));
+  },'json').fail(function(){ toast('設定失敗', true); });
+});
+$('#setOk').on('click',function(){
+  $.post(API+'?action=recon_pref_save',{csrf:CSRF,
+        drag_default: $('#stDrag').prop('checked')?1:0,
+        autosort_default: $('#stAuto').prop('checked')?1:0},function(r){
+    if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
+    PREF=r.pref||PREF; closeMask('mkSet'); toast(esc(r.message));
+  },'json').fail(function(x){
+    var m='儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true);
+  });
+});
+
+/* ── 使用說明（鐵律7）────────────────────────────────────────────────── */
+$('#btnPageHelp').on('click',function(){ openMask('helpUseMask'); });
+
+/* ── 列印：正式對帳單版面（ai-rules/16），不是把網頁直接印下來 ───────── */
+function printSheet(){
+  if(!sheet || !lines.length){ toast('請先載入對帳單', true); return; }
+  $.getJSON(API,{action:'recon_print_meta', side:SIDE, party_id:sheet.party_id,
+                 billing_month:sheet.billing_month},function(m){
+    if(!m.ok){ toast(esc(m.error||'取得列印資訊失敗'), true); return; }
+    if(window.EGStamp && EGStamp.whenReady) EGStamp.whenReady(function(){ doPrint(m); });
+    else doPrint(m);
+  }).fail(function(){ toast('取得列印資訊失敗', true); });
+}
+function doPrint(m){
+  var isAp = (SIDE==='ap');
+  var title = m.as_doc_name || (isAp ? '應付帳款對帳單' : '應收帳款對帳單');
+  var pk = parentKeys();
+  var t  = totals();
+  var noStmt = !!(OPT && OPT.no_statement);
+  // 以畫面上輸入的金額為準：剛組出來還沒暫存的底稿 sheet.their_total 是 null，
+  // 拿它一起判斷會變成「打了紙本金額卻印不出來」
+  var their  = (noStmt || $('#theirTotal').val()==='') ? null : Number($('#theirTotal').val());
+  var diff   = (their===null) ? null : Math.round((their - t.net)*100)/100;
+
+  // 顯示順序與畫面一致；拆分父列只是容器不印（金額由子列代表）
+  var ord=[];
+  orderedTops().forEach(function(l){
+    ord.push(l);
+    lines.filter(function(c){ return c.split_parent_key===l.client_key; })
+         .sort(function(a,b){ return (a.split_seq||0)-(b.split_seq||0); })
+         .forEach(function(c){ ord.push(c); });
+  });
+  ord = ord.filter(function(l){ return !pk[l.client_key]; });
+
+  var cols = isAp
+    ? ['項次','日期','單號','製令','料號','製程','數量','單價','金額','備註']
+    : ['項次','日期','單號','類別','料號','品名規格','數量','單價','金額','備註'];
+  var wid  = isAp ? [4,8,12,11,13,15,7,7,9,14] : [4,8,12,6,13,17,7,7,9,17];
+
+  var body='', n=0, gSum={}, seen={};
+  ord.forEach(function(l,idx){
+    n++;
+    var q = (l.adj_qty!==null&&l.adj_qty!=='') ? l.adj_qty : l.orig_qty;
+    var p = (l.adj_price!==null&&l.adj_price!=='') ? l.adj_price : l.orig_price;
+    var a = amtOf(l);
+    var memo=[];
+    if(l.memo) memo.push(l.memo);
+    if(l.adj_month && l.adj_month!==sheet.billing_month) memo.push('列入 '+l.adj_month);
+    if(l.group_no) memo.push('併計組'+l.group_no);
+    if(l.split_parent_key) memo.push('分段'+(l.split_seq||''));
+    body+='<tr>'
+      +'<td>'+n+'</td><td>'+esc(dispDate(l.doc_date))+'</td><td class="tl">'+esc(l.doc_no||'')+'</td>'
+      +(isAp ? '<td class="tl">'+esc(l.bom||'')+'</td>' : '<td>'+esc(kindText(l))+'</td>')
+      +'<td class="tl">'+esc(l.product_id||'')+'</td>'
+      +'<td class="tl">'+esc(l.spec||'')+'</td>'
+      +'<td class="tr">'+(q===null||q===''?'':nf(q))+'</td>'
+      +'<td class="tr">'+(p===null||p===''?'':esc(String(p)))+'</td>'
+      +'<td class="tr"><b>'+nf(a)+'</b></td>'
+      +'<td class="tl">'+esc(memo.join('；'))+'</td></tr>';
+    if(l.group_no){
+      gSum[l.group_no]=(gSum[l.group_no]||0)+a;
+      var next=ord[idx+1];
+      if(!next || next.group_no!==l.group_no){
+        body+='<tr class="gsum"><td colspan="8" class="tr">併計組 '+esc(l.group_no)+' 小計</td>'
+             +'<td class="tr"><b>'+nf(gSum[l.group_no])+'</b></td><td></td></tr>';
+      }
+    }
+  });
+
+  var stampDate = (sheet.status==='confirmed' && sheet.confirmed_at)
+                  ? String(sheet.confirmed_at).substr(0,10) : new Date().toISOString().substr(0,10);
+  var stampHtml = (window.EGStamp)
+      ? EGStamp.stamp((sheet.confirmed_by_name || (ME&&ME.name) || ''), dispDate(stampDate), false) : '';
+
+  var head =
+     '<div class="pt-co">'+esc(m.company||'')+'</div>'
+    +'<div class="pt-ti">'+esc(title)+'</div>'
+    +'<table class="p-meta"><colgroup><col style="width:11%"><col style="width:28%"><col style="width:11%">'
+    +'<col style="width:17%"><col style="width:11%"><col style="width:22%"></colgroup><tbody>'
+    +'<tr><th>'+(isAp?'廠商':'客戶')+'</th><td>'+esc((m.party&&(m.party.full_name||m.party.name))||sheet.party_name)+'</td>'
+    +'<th>統一編號</th><td>'+esc((m.party&&m.party.tax_id)||'')+'</td>'
+    +'<th>帳款月份</th><td><b>'+esc(sheet.billing_month)+'</b></td></tr>'
+    +'<tr><th>地址</th><td>'+esc((m.party&&m.party.address)||'')+'</td>'
+    +'<th>列印日期</th><td>'+esc(dispDate(new Date().toISOString().substr(0,10)))+'</td>'
+    +'<th>狀態</th><td>'+esc(ST_LABEL[sheet.status]||sheet.status)+'</td></tr>'
+    +'</tbody></table>';
+
+  var sumRows =
+     '<tr><th>未稅合計</th><td class="tr">'+nf(t.net)+'</td></tr>'
+    +'<tr><th>營業稅</th><td class="tr">'+nf(t.tax)+'</td></tr>'
+    +'<tr><th>含稅總計</th><td class="tr"><b>'+nf(t.total)+'</b></td></tr>'
+    + (noStmt
+        ? '<tr><th>對帳方式</th><td class="tr">本'+(isAp?'廠商':'客戶')+'不提供對帳單，以我方出貨單認列</td></tr>'
+        : (their===null ? ''
+           : '<tr><th>對方合計</th><td class="tr">'+nf(their)+'</td></tr>'
+            +'<tr><th>差額</th><td class="tr"><b>'+nf(diff)+'</b></td></tr>'));
+
+  var foot =
+     '<div class="p-bot">'
+    +'<table class="p-sum"><colgroup><col style="width:52%"><col style="width:48%"></colgroup><tbody>'+sumRows+'</tbody></table>'
+    +'<table class="p-sign"><colgroup><col style="width:33.33%"><col style="width:33.33%"><col style="width:33.34%"></colgroup>'
+    +'<thead><tr><th>'+(isAp?'廠商':'客戶')+'確認</th><th>覆核</th><th>製表</th></tr></thead>'
+    +'<tbody><tr><td class="sg"></td><td class="sg"></td><td class="sg">'+stampHtml+'</td></tr></tbody></table>'
+    +'</div>'
+    +'<div class="p-note">本對帳單金額為未稅，如與貴公司帳載不符，請於收到後七日內聯繫本公司會計，逾期視同無誤。</div>';
+
+  var colg='<colgroup>'+wid.map(function(w){ return '<col style="width:'+w+'%">'; }).join('')+'</colgroup>';
+  var tbl='<table class="p-tb">'+colg+'<thead><tr>'+cols.map(function(c){ return '<th>'+c+'</th>'; }).join('')
+        +'</tr></thead><tbody>'+body+'</tbody></table>';
+
+  var asTxt = String(m.as_doc_no||'').replace(/['\\]/g,'');
+  var css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;margin:0;color:#222;'
+      + '-webkit-print-color-adjust:exact;print-color-adjust:exact;padding:0;}'
+      + '*{box-sizing:border-box;}'
+      + '.pt-co{text-align:center;font-size:22px;font-weight:bold;letter-spacing:2px;}'
+      + '.pt-ti{text-align:center;font-size:16px;font-weight:bold;margin:2px 0 8px;}'
+      + 'table{width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;}'
+      + 'table.p-meta{font-size:11px;margin-bottom:6px;}'
+      + 'table.p-meta th,table.p-meta td{border:1px solid #666;padding:3px 6px;text-align:left;'
+      + 'overflow-wrap:break-word;word-break:break-word;}'
+      + 'table.p-meta th{background:#f3ead6;white-space:nowrap;}'
+      + 'table.p-tb{font-size:11px;}'
+      + 'table.p-tb thead{display:table-header-group;}'
+      + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 5px;text-align:center;'
+      + 'overflow-wrap:break-word;word-break:break-word;}'
+      + 'table.p-tb thead th{background:#f3ead6;}'
+      + 'table.p-tb td.tl{text-align:left;} table.p-tb td.tr{text-align:right;}'
+      + 'table.p-tb tr{break-inside:avoid;page-break-inside:avoid;}'
+      + 'table.p-tb tr.gsum td{background:#faf1e2;font-style:italic;}'
+      + '.p-bot{display:flex;gap:10px;margin-top:8px;break-inside:avoid;page-break-inside:avoid;}'
+      + 'table.p-sum{font-size:12px;width:42%;}'
+      + 'table.p-sum th,table.p-sum td{border:1px solid #666;padding:3px 7px;}'
+      + 'table.p-sum th{background:#f3ead6;text-align:left;white-space:nowrap;}'
+      + 'table.p-sum td.tr{text-align:right;}'
+      + 'table.p-sign{font-size:12px;width:58%;}'
+      + 'table.p-sign th,table.p-sign td{border:1px solid #666;padding:3px;text-align:center;}'
+      + 'table.p-sign th{background:#f3ead6;}'
+      + 'table.p-sign td.sg{height:26mm;vertical-align:middle;}'
+      + '.p-note{font-size:10px;color:#555;margin-top:5px;line-height:1.6;overflow-wrap:break-word;}'
+      // 圖章（列印視窗拿不到 eg_stamp.js 注入的樣式，必須自己寫齊；ai-rules/18 鐵則6）
+      + '.stamp-wrap{display:inline-block;text-align:center;margin:2px 0;}'
+      + '.stamp-wrap .stamp-title{display:block;font-size:11px;color:#999;}'
+      + '.stamp-wrap svg{-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + '.stamp-wrap svg.car-stamp{width:91px;height:91px;}'
+      + '.stamp-wrap.stamp-fill{height:auto !important;display:inline-block;}'
+      + '@page{size:A4 landscape;margin:12mm 8mm 16mm;'
+      + (asTxt ? " @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
+      + '}';
+
+  var w=window.open('','_blank');
+  if(!w){ toast('請允許彈出視窗以列印', true); return; }
+  // <!DOCTYPE html> 不可省：漏了會落入 Quirks Mode，scrollHeight 量不準、單頁也會誤印頁碼（ai-rules/16 三之二）
+  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'
+    + esc(title)+' '+esc(sheet.party_name)+' '+esc(sheet.billing_month)+'</title>'
+    + '<style>'+css+'</style></head><body>'+head+tbl+foot
+    + '<scr'+'ipt>window.onload=function(){'
+    + 'var onePage=(210-28)*96/25.4;'
+    + 'if(document.body.scrollHeight>onePage*0.92){'
+    + 'var st=document.createElement(\'style\');'
+    + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
+    + 'document.head.appendChild(st);}'
+    + 'setTimeout(function(){window.print();},250);};</scr'+'ipt></body></html>');
+  w.document.close(); w.focus();
+
+  // 列印紀錄（ai-rules/23 鐵則：會列印的頁面一律留下紀錄）
+  if(window.EGPrintLog){
+    EGPrintLog.record({source:'acc_recon', doc_kind:'form',
+      doc_name: title+' '+sheet.party_name+' '+sheet.billing_month,
+      ref_table:'acc_recon_sheet', ref_id: sheet.sheet_id||0,
+      note:(isAp?'應付':'應收')+'／'+ord.length+' 列／未稅 '+Math.round(t.net)});
+  }
+}
+
 })(jQuery);
 </script>
 </body>
