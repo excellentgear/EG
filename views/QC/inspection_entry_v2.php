@@ -593,7 +593,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             $tid = (int)($_POST['table_id'] ?? 0);
             $s = $pdo->prepare("SELECT id, min_value, max_value, plus_tolerance, minus_tolerance FROM qc_tolerance_band WHERE tolerance_table_id=? ORDER BY min_value ASC");
             $s->execute([$tid]);
-            echo json_encode(['success'=>true, 'rows'=>$s->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+            // DECIMAL 欄位回來會補成 10.0000，直接顯示就變成「0.0000 ＜ X ≦ 10.0000」，
+            // 一律先把小數尾零去掉（與檢驗標準項目同一套寫法）
+            $trim = function ($v) {
+                if ($v === null || $v === '') return $v;
+                $x = rtrim(rtrim((string)$v, '0'), '.');
+                return ($x === '' || $x === '-') ? '0' : $x;
+            };
+            $rows = $s->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$r) {
+                foreach (['min_value', 'max_value', 'plus_tolerance', 'minus_tolerance'] as $k) $r[$k] = $trim($r[$k]);
+            }
+            unset($r);
+            echo json_encode(['success'=>true, 'rows'=>$rows], JSON_UNESCAPED_UNICODE);
             exit;
         }
         if ($act === 'tol_customer_options') {
@@ -610,18 +622,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             if ($name === '') throw new Exception('請輸入公差表名稱');
             $bands = json_decode($_POST['bands'] ?? '[]', true);
             if (!is_array($bands) || !count($bands)) throw new Exception('請至少新增一個公差區間');
-            $clean = [];
-            foreach ($bands as $b) {
-                $mn = $b['min_value'] ?? null; $mx = $b['max_value'] ?? null;
+            // 區間是一條接龍：下一段的起點＝上一段的終點（判定為 起點＜標準值≦終點）。
+            // 起點屬於「推導欄位」，一律由上一段重算，**不採信前端送過來的值**——
+            // 前端算好了也一樣要重算，不然直打 API 就能塞出重疊或有缺口的區間。
+            $tmp = [];
+            foreach ($bands as $i => $b) {
+                $mx = $b['max_value'] ?? null;
                 $pu = $b['plus_tolerance'] ?? null; $mi = $b['minus_tolerance'] ?? null;
-                if ($mn === '' || $mn === null || $mx === '' || $mx === null || $pu === '' || $pu === null || $mi === '' || $mi === null) {
-                    throw new Exception('公差區間欄位不可空白');
+                if ($mx === '' || $mx === null || $pu === '' || $pu === null || $mi === '' || $mi === null) {
+                    throw new Exception('公差區間欄位不可空白（第 ' . ($i + 1) . ' 段）');
                 }
-                if (!is_numeric($mn) || !is_numeric($mx) || !is_numeric($pu) || !is_numeric($mi)) throw new Exception('公差區間必須是數字');
-                if ((float)$mn > (float)$mx) throw new Exception('區間下限不可大於上限（' . $mn . ' ~ ' . $mx . '）');
-                $clean[] = [(float)$mn, (float)$mx, (float)$pu, (float)$mi];
+                if (!is_numeric($mx) || !is_numeric($pu) || !is_numeric($mi)) {
+                    throw new Exception('公差區間必須是數字（第 ' . ($i + 1) . ' 段）');
+                }
+                $tmp[] = [(float)$mx, (float)$pu, (float)$mi];
             }
-            usort($clean, function ($a, $b) { return $a[0] <=> $b[0]; });
+            $start = $bands[0]['min_value'] ?? '';
+            if ($start === '' || $start === null) $start = 0;
+            if (!is_numeric($start)) throw new Exception('第一段的起點必須是數字');
+            usort($tmp, function ($a, $b) { return $a[0] <=> $b[0]; });
+            $clean = [];
+            $prev = (float)$start;
+            foreach ($tmp as $t) {
+                if ($t[0] <= $prev) {
+                    throw new Exception('每一段的終點必須大於前一段的終點（' . $prev . ' → ' . $t[0] . '），區間不可重疊或倒退');
+                }
+                $clean[] = [$prev, $t[0], $t[1], $t[2]];
+                $prev = $t[0];
+            }
             $pdo->beginTransaction();
             if ($id) {
                 $pdo->prepare("UPDATE qc_tolerance_table SET name=?, customer_id=?, updated_by=?, updated_at=NOW() WHERE id=?")
@@ -771,6 +799,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .tpick-grid button small { display:block; font-weight:normal; font-size:11px; color:#8a6a45; }
     .tpick-scope { background:var(--cream); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-top:12px; font-size:13px; }
     .tpick-scope label { font-weight:normal; display:block; margin:2px 0; cursor:pointer; }
+    /* 公差表管理：由上一段推導出來的「大於」欄＝唯讀灰底（推導欄位鐵則） */
+    #tol-ed-bands input.ro-auto { background:#F1EADF; color:#8a6a45; cursor:not-allowed; }
+    #tol-ed-bands td.tb-range { white-space:nowrap; font-weight:bold; color:var(--ink); }
+    #tol-ed-bands td.tb-range .x { color:#8a6a45; font-weight:normal; }
+    #tol-ed-err { color:#DD5138; font-size:13px; margin:4px 0 0; }
+    #tol-ed-bands input.err { border-color:#DD5138; background:#FDF0EC; }
     /* 公差表管理：數字欄不出現上下增減鈕（↑↓ 改成切換上下列，比照全站輸入規則） */
     #tol-mg-editor input[type=number]::-webkit-outer-spin-button,
     #tol-mg-editor input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
@@ -1410,7 +1444,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             <h4>五、其他常見疑問</h4>
             <ul>
                 <li><b>編號 A,B,C ⇄ 1,2,3</b>：工具列可切換檢驗項目的編號顯示方式，只影響顯示。</li>
-                <li><b>自動套用公差</b>：依標準值帶入上下公差，只會套用在上下限<b>都還沒填</b>的欄位，不會覆蓋你填過的。</li>
+                <li><b>自動套用公差</b>：依標準值帶入上下公差，只會套用在上下限<b>都還沒填</b>的欄位，不會覆蓋你填過的。
+                    公差表的區間是一條<b>接龍</b>——下一段的起點自動等於上一段的終點，所以建表時只要填「到（含）」；
+                    判定規則是<b>起點＜標準值≦終點</b>（起點不含、終點含），例如 <b>0＜X≦10</b>、<b>10＜X≦20</b>，
+                    標準值剛好是 10 時算在第一段，不會同時符合兩段。標準值不在任何一段內的項目會列出來請你自己填。</li>
                 <li><b>判定結果</b>：該件任一項 NG 即自動 NG；點一下可手動改判，<b>雙擊恢復自動</b>。</li>
                 <li><b>抽驗數變更</b>要填理由，理由會隨這張檢驗單一起留存。</li>
                 <li>在最後一列的欄位按 <b>↓</b> 會自動新增一列；在全空的最後一列按 <b>↑</b> 會自動移除該列。</li>
@@ -4239,7 +4276,8 @@ $(function(){
                 if(String(it.up).trim()!=='' || String(it.lo).trim()!=='') return; // 已填不覆蓋
                 var v = parseFloat(it.std);
                 if(isNaN(v)) return;
-                var b = bands.find(function(x){ return v>=x.lo && v<=x.hi; });
+                // 起點不含、終點含：邊界值（例如剛好 10）只會落在「…≦10」那一段，不會同時符合兩段
+                var b = bands.find(function(x){ return v>x.lo && v<=x.hi; });
                 if(!b){ outOfRange++; return; }
                 it.up=trimNum(String(b.up)); it.lo=trimNum(String(b.mi));
                 applied++;
@@ -4276,13 +4314,48 @@ $(function(){
             cb(tolMgCustOptions);
         }, 'json');
     }
+    // 公差區間是一條「接龍」：下一段的起點＝上一段的終點，判定為 起點＜標準值≦終點
+    //（起點不含、終點含）。這是唯一不會讓邊界值同時落在兩段的分法，也與 ISO 2768
+    //「over … up to and including …」的寫法一致。所以「大於」欄只有第一列可以填，
+    // 其餘一律由上一列的終點推導、唯讀（推導欄位鐵則）。
     function tolBandRowHtml(b){
         b=b||{};
-        return '<tr><td><input type="number" step="any" class="form-control input-sm tb-min" value="'+esc(b.min_value!=null?b.min_value:'')+'"></td>'
+        return '<tr><td class="tb-range">—</td>'
+             + '<td><input type="number" step="any" class="form-control input-sm tb-min" value="'+esc(b.min_value!=null?b.min_value:'')+'"></td>'
              + '<td><input type="number" step="any" class="form-control input-sm tb-max" value="'+esc(b.max_value!=null?b.max_value:'')+'"></td>'
              + '<td><input type="number" step="any" class="form-control input-sm tb-plus" value="'+esc(b.plus_tolerance!=null?b.plus_tolerance:'')+'"></td>'
              + '<td><input type="number" step="any" class="form-control input-sm tb-minus" value="'+esc(b.minus_tolerance!=null?b.minus_tolerance:'')+'"></td>'
              + '<td><a href="#" class="tb-del text-danger"><i class="fa fa-trash"></i></a></td></tr>';
+    }
+    function tolRangeText(lo, hi){
+        if(lo==='' && hi==='') return '—';
+        if(hi==='') return '＞ '+esc(lo);
+        if(lo==='') return '≦ '+esc(hi);
+        return esc(lo)+' <span class="x">＜ X ≦</span> '+esc(hi);
+    }
+    /** 接龍：把每一列的起點改成上一列的終點，並重畫區間文字與紅框提示 */
+    function tolSyncBands(){
+        var prevMax = null, err = '';
+        $('#tol-ed-bands tr').each(function(i){
+            var $tr=$(this), $min=$tr.find('.tb-min'), $max=$tr.find('.tb-max');
+            if(i>0){
+                $min.val(prevMax===null ? '' : prevMax)
+                    .prop('readonly', true).attr('data-eg-skip','1').addClass('ro-auto')
+                    .attr('title','起點自動＝上一段的終點，不需要也不能手動填');
+            }else{
+                $min.prop('readonly', false).removeAttr('data-eg-skip').removeClass('ro-auto')
+                    .attr('title','第一段從哪裡開始（不含這個數字本身）');
+            }
+            var lo=trimNum($.trim($min.val())), hi=trimNum($.trim($max.val()));
+            if($min.val()!==lo) $min.val(lo);
+            $tr.find('.tb-range').html(tolRangeText(lo, hi));
+            // 終點一定要比起點大，否則這一段是空的、永遠比對不到
+            var bad = (lo!=='' && hi!=='' && parseFloat(hi) <= parseFloat(lo));
+            $max.toggleClass('err', bad);
+            if(bad && !err) err = '第 '+(i+1)+' 段的終點（'+hi+'）必須大於起點（'+lo+'）。';
+            prevMax = (hi==='') ? null : hi;
+        });
+        $('#tol-ed-err').text(err).toggle(!!err);
     }
     function renderTolEditorShell(t, bands){
         t=t||{id:0,name:'',customer_id:''};
@@ -4292,14 +4365,20 @@ $(function(){
           + '<input type="text" class="form-control input-sm" id="tol-ed-cust-filter" placeholder="輸入客戶名稱篩選…" style="max-width:220px;">'
           + '<select class="form-control input-sm" id="tol-ed-cust" style="flex:1;"><option value="">（通用標準，不指定客戶）</option></select>'
           + '</div></div>'
-          + '<table class="table table-condensed"><thead><tr><th>標準值下限</th><th>標準值上限</th><th>上公差</th><th>下公差</th><th></th></tr></thead>'
+          + '<table class="table table-condensed"><thead><tr>'
+          +   '<th>區間（標準值）</th><th title="這一段從哪裡開始，不含這個數字">大於（＞）</th>'
+          +   '<th title="這一段到哪裡結束，含這個數字">到（含，≦）</th><th>上公差</th><th>下公差</th><th></th></tr></thead>'
           + '<tbody id="tol-ed-bands">'+(bands&&bands.length? bands.map(tolBandRowHtml).join('') : tolBandRowHtml())+'</tbody></table>'
+          + '<div id="tol-ed-err" style="display:none;"></div>'
+          + '<div class="muted-help" style="margin:2px 0 6px;">下一段的起點自動＝上一段的終點，只要填「到（含）」即可；判定為<b>起點＜標準值≦終點</b>。</div>'
           + '<button class="btn btn-default btn-sm" id="btn-tol-ed-addrow"><i class="fa fa-plus"></i> 新增區間</button>'
           + '<div style="margin-top:12px;text-align:right;">'
           + (t.id? '<button class="btn btn-default" id="btn-tol-ed-del" style="color:#DD5138;margin-right:8px;"><i class="fa fa-trash"></i> 刪除此公差表</button>' : '')
           + '<button class="btn btn-warm" id="btn-tol-ed-save">儲存</button></div>';
         $('#tol-mg-editor').html(html).data('id', t.id||0);
         tolAutoRow = null;
+        if($.trim($('#tol-ed-bands tr').eq(0).find('.tb-min').val())==='') $('#tol-ed-bands tr').eq(0).find('.tb-min').val('0');
+        tolSyncBands();
         loadTolCustomerOptions(function(rows){
             var $sel=$('#tol-ed-cust');
             rows.forEach(function(r){ $sel.append($('<option>').val(r.customer_id).text(r.customer)); });
@@ -4320,14 +4399,16 @@ $(function(){
         renderTolMgEditor(t);
     });
     $(document).on('click', '#btn-tol-mg-new', function(){ renderTolMgEditor(null); });
-    $(document).on('click', '#btn-tol-ed-addrow', function(){ $('#tol-ed-bands').append(tolBandRowHtml()); tolAutoRow=null; });
+    $(document).on('click', '#btn-tol-ed-addrow', function(){ $('#tol-ed-bands').append(tolBandRowHtml()); tolAutoRow=null; tolSyncBands(); });
     $(document).on('click', '.tb-del', function(e){
         e.preventDefault();
         var $tb=$('#tol-ed-bands');
         tolAutoRow=null;
-        if($tb.find('tr').length<=1){ $(this).closest('tr').find('input').val(''); return; }
+        if($tb.find('tr').length<=1){ $(this).closest('tr').find('input').val(''); tolSyncBands(); return; }
         $(this).closest('tr').remove();
+        tolSyncBands();      // 中間刪掉一段，後面的起點要整串往前接上
     });
+    $(document).on('input', '#tol-ed-bands .tb-min, #tol-ed-bands .tb-max', function(){ tolSyncBands(); });
 
     // ============ 公差表管理：欄位鍵盤操作 ============
     // 為什麼不是掛全站共用的 eg_input_rules.js：本頁列在 ai-rules/tools/input_rules_baseline.txt
@@ -4341,15 +4422,25 @@ $(function(){
         return $('#tol-mg-editor').find('#tol-ed-name, #tol-ed-cust-filter, #tol-ed-cust, #tol-ed-bands input')
                  .filter(':visible').filter(function(){ return !this.disabled && !this.readOnly; });
     }
+    // 「沒填東西」只看使用者真的要填的欄位——自動由上一段推導出來的起點不算數，
+    // 否則新加出來的列一定帶著起點，永遠判不成空列、↑ 也就收不回去
     function tolRowIsBlank($tr){
         var blank = true;
-        $tr.find('input').each(function(){ if(String(this.value==null?'':this.value).trim()!==''){ blank=false; return false; } });
+        $tr.find('input').each(function(){
+            if(this.readOnly) return;
+            if(String(this.value==null?'':this.value).trim()!==''){ blank=false; return false; }
+        });
         return blank;
     }
     function tolFocusCell(ri, ci){
         var $tr = $('#tol-ed-bands tr').eq(ri);
         if(!$tr.length) return false;
-        var f = $tr.children().eq(ci).find('input')[0] || $tr.find('input')[0];
+        var f = $tr.children().eq(ci).find('input')[0];
+        // 唯讀（自動推導）的欄位不停留，往右挪到第一個填得動的
+        if(f && f.readOnly){
+            f = $tr.find('input').filter(function(){ return !this.readOnly; })[0] || f;
+        }
+        if(!f) f = $tr.find('input')[0];
         if(!f) return false;
         f.focus(); try{ f.select(); }catch(_){ }
         return true;
@@ -4377,6 +4468,7 @@ $(function(){
             if(!isLast){ tolFocusCell(ri+1, ci); return; }
             // 最後一列按 ↓：自動新增一列並跳過去
             $('#tol-ed-bands').append(tolBandRowHtml());
+            tolSyncBands();
             tolAutoRow = ri+1;
             $('#tol-ed-bands tr').eq(ri+1).addClass('tol-row-new');
             tolFocusCell(ri+1, ci);
@@ -4421,13 +4513,20 @@ $(function(){
         var name=$('#tol-ed-name').val().trim();
         if(!name){ alert('請輸入公差表名稱'); return; }
         var custId=$('#tol-ed-cust').val()||'';
-        var bands=[];
-        $('#tol-ed-bands tr').each(function(){
+        var bands=[], bad='';
+        $('#tol-ed-bands tr').each(function(i){
             var $tr=$(this);
-            var mn=$tr.find('.tb-min').val(), mx=$tr.find('.tb-max').val(), pu=$tr.find('.tb-plus').val(), mi=$tr.find('.tb-minus').val();
-            if(mn===''&&mx===''&&pu===''&&mi==='') return; // 整列空白略過
+            var mn=$.trim($tr.find('.tb-min').val()), mx=$.trim($tr.find('.tb-max').val()),
+                pu=$.trim($tr.find('.tb-plus').val()), mi=$.trim($tr.find('.tb-minus').val());
+            // 起點是自動帶出來的，判斷「這一列還沒填」只看終點與上下公差
+            if(mx===''&&pu===''&&mi==='') return;
+            if(!bad){
+                if(mx===''||pu===''||mi==='') bad='第 '+(i+1)+' 段還有欄位沒填（終點、上公差、下公差都要填）。';
+                else if(mn!=='' && parseFloat(mx)<=parseFloat(mn)) bad='第 '+(i+1)+' 段的終點必須大於起點。';
+            }
             bands.push({min_value:mn, max_value:mx, plus_tolerance:pu, minus_tolerance:mi});
         });
+        if(bad){ $('#tol-ed-err').text(bad).show(); alert(bad); return; }
         if(!bands.length){ alert('請至少填寫一個公差區間'); return; }
         $.post(V2API, { v2action:'tol_table_save', id:id, name:name, customer_id:custId, bands:JSON.stringify(bands) }, function(res){
             if(!res.success){ alert('儲存失敗：'+(res.message||'')); return; }
