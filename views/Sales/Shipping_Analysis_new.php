@@ -1103,6 +1103,18 @@ $stmt = $conn->getPDO()->prepare($sql);
 $stmt->execute([':start_date' => $start_date, ':end_date' => $end_date]);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// ── 顯示用的客戶名稱一律以「綁定的客戶編號」為準（＝客戶主檔的正式名稱）──
+// 在這裡換掉，下游的列表／前五大客戶／圖表／客戶統計／CSV／列印全部一次到位，
+// 不必逐個呼叫端各改一次（改漏一處就會出現「列表跟統計對不起來」）。
+// 出貨資料上的原始文字保留在 Client_name_raw，只用於：綁定跳窗回寫、批次綁定分組、關鍵字比對；
+// 資料庫的 is_list.Client_name 一個字都沒有動。
+foreach ($rows as &$_r) {
+    $_r['Client_name_raw'] = $_r['Client_name'];
+    $_r['Client_name']     = ($_r['Client_name_display'] !== null && $_r['Client_name_display'] !== '')
+                             ? $_r['Client_name_display'] : $_r['Client_name'];
+}
+unset($_r);
+
 // 判斷圖表顯示單位 (日/週/月)
 $date_diff = (strtotime($end_date) - strtotime($start_date)) / 86400;
 $chart_group_by = 'day';
@@ -1440,7 +1452,7 @@ try {
         if ($_n !== '' && !isset($_cl_name_map[$_n])) $_cl_name_map[$_n] = $_c['customer_id'];
     }
     foreach ($rows as &$_r) {
-        $_n = trim((string)($_r['Client_name'] ?? ''));
+        $_n = trim((string)($_r['Client_name_raw'] ?? $_r['Client_name'] ?? ''));
         $_r['name_in_master'] = ($_n !== '' && isset($_cl_name_map[$_n])) ? 1 : 0;
     }
     unset($_r);
@@ -2921,6 +2933,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                                 <strong id="bind_c_preview" style="color:#27ae60;">（未選取）</strong>
                                 <input type="hidden" id="bind_c_id">
                                 <input type="hidden" id="bind_c_name">
+                                <input type="hidden" id="bind_c_official">
                             </div>
                         </div>
                     </div>
@@ -3063,6 +3076,12 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
     <script src="../../code/modules/accessibility.js"></script>
 
     <script>
+        // 客戶關鍵字比對：畫面顯示的是綁定客戶的正式名稱，但使用者也可能用出貨資料上的
+        // 原始文字（例如「閎駿(中閎)」）或客戶編號來找，三者都要比得到。
+        function egClientText(r) {
+            return ((r.Client_name || '') + ' ' + (r.Client_name_raw || '') + ' ' + (r.Client_id || '')).toLowerCase();
+        }
+
         var shippingData = <?= $shipping_data_json ?>;
         var irData       = <?= $ir_data_json ?>;
         var orderData    = <?= $order_data_json ?>;
@@ -3547,7 +3566,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             var returnTotal = 0, returnQty = 0, returnCount = 0;
             irData.forEach(function(r) {
                 if (currentBmFilter && r.billing_month !== currentBmFilter) return;
-                if (_ckw && (r.Client_name || '').toLowerCase().indexOf(_ckw) === -1) return;
+                if (_ckw && egClientText(r).indexOf(_ckw) === -1) return;
                 if (_pkw && (r.Product_id  || '').toLowerCase().indexOf(_pkw) === -1) return;
                 if (_gkw) {
                     var _m = (r.IR_no      || '').toLowerCase().indexOf(_gkw) !== -1 ||
@@ -3563,7 +3582,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             var orderTotal = 0, orderQty = 0, orderCount = 0;
             orderData.forEach(function(r) {
                 if (currentBmFilter && r.billing_month !== currentBmFilter) return;
-                if (_ckw && (r.Client_name || '').toLowerCase().indexOf(_ckw) === -1) return;
+                if (_ckw && egClientText(r).indexOf(_ckw) === -1) return;
                 if (_pkw && (r.Product_id  || '').toLowerCase().indexOf(_pkw) === -1) return;
                 if (_gkw) {
                     var _m = (r.Order_oo   || '').toLowerCase().indexOf(_gkw) !== -1 ||
@@ -3646,7 +3665,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             var irChartStats = {}, orderChartStats = {};
             irData.forEach(function(r) {
                 if (currentBmFilter && r.billing_month !== currentBmFilter) return;
-                if (_ckw && (r.Client_name || '').toLowerCase().indexOf(_ckw) === -1) return;
+                if (_ckw && egClientText(r).indexOf(_ckw) === -1) return;
                 if (_pkw && (r.Product_id  || '').toLowerCase().indexOf(_pkw) === -1) return;
                 if (_gkw) {
                     var _gm = (r.IR_no||'').toLowerCase().indexOf(_gkw) !== -1 ||
@@ -3659,7 +3678,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             });
             orderData.forEach(function(r) {
                 if (currentBmFilter && r.billing_month !== currentBmFilter) return;
-                if (_ckw && (r.Client_name || '').toLowerCase().indexOf(_ckw) === -1) return;
+                if (_ckw && egClientText(r).indexOf(_ckw) === -1) return;
                 if (_pkw && (r.Product_id  || '').toLowerCase().indexOf(_pkw) === -1) return;
                 if (_gkw) {
                     var _gm2 = (r.Order_oo||'').toLowerCase().indexOf(_gkw) !== -1 ||
@@ -4184,9 +4203,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                 var kw = ($('#filter-client').val() || '').trim().toLowerCase();
                 if (!kw) return true;
                 var rowData = settings.aoData[dataIndex]._aData;
-                var clientName = (rowData.Client_name || '').toLowerCase();
-                var clientId   = (rowData.Client_id   || '').toLowerCase();
-                return clientName.indexOf(kw) !== -1 || clientId.indexOf(kw) !== -1;
+                return egClientText(rowData).indexOf(kw) !== -1;
             });
 
             // 全域搜尋（依表格搜尋對應欄位）
@@ -5086,8 +5103,10 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             }
 
             // 客戶
+            // 已綁定時用 disabled 而不是 readonly：欄位顯示的是「所綁客戶的正式名稱」，
+            // 跟 DB 裡的原始文字不一定一樣，若隨表單送出會被後端守門判成「想改客戶名稱」而擋下。
             var $cn = $('#edit_client_name');
-            $cn.prop('readonly', cLocked).toggleClass('edit-locked', cLocked);
+            $cn.prop('readonly', cLocked).prop('disabled', cLocked).toggleClass('edit-locked', cLocked);
             $('#edit_client_dd').hide().empty();
             $('#edit_client_id').prop('disabled', true).val('');
             if (cLocked) {
@@ -5677,28 +5696,33 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
 
             // 顯示目前客戶：一定要看得出「有沒有客戶編號」。
             // 只顯示名稱的話，沒綁客戶編號的資料看起來會跟已綁定的一模一樣（使用者實際踩過這個誤判）。
-            var cName = row.Client_name || '';
+            var cName = row.Client_name || '';                     // 顯示用（綁定客戶的正式名稱）
+            var cRaw  = (row.Client_name_raw !== undefined && row.Client_name_raw !== null && row.Client_name_raw !== '')
+                        ? row.Client_name_raw : cName;             // 出貨資料上的原始文字
             var cId   = row.Client_id ? String(row.Client_id).trim() : '';
             if (cId) {
                 $('#bind_current_c').html('<strong>' + $('<span>').text(cId).html() + '</strong> ' + $('<span>').text(cName).html())
                     .css({ background: '#d5f5e3', color: '#1e8449' });
-            } else if (cName) {
-                $('#bind_current_c').html('未綁定　<span style="font-weight:normal;">目前只有名稱文字：' + $('<span>').text(cName).html() + '</span>')
+            } else if (cRaw) {
+                $('#bind_current_c').html('未綁定　<span style="font-weight:normal;">目前只有名稱文字：' + $('<span>').text(cRaw).html() + '</span>')
                     .css({ background: '#ecf0f1', color: '#555' });
             } else {
                 $('#bind_current_c').text('未設定').css({ background: '#ecf0f1', color: '#555' });
             }
-            // 名稱在客戶主檔查不到時明講，否則使用者會以為「搜不到＝沒綁定」
-            if (row.name_in_master == 0 && cName) {
-                $('#bind_c_name_warn').show().html('<i class="fa fa-exclamation-triangle"></i> 「'
-                    + $('<span>').text(cName).html() + '」在客戶主檔裡查不到這個名稱，所以下方用它當關鍵字會搜不到；'
-                    + '請改用正式名稱或客戶編號搜尋。');
+            // 出貨資料上的原始文字跟客戶主檔對不起來時明講——畫面顯示的已經是主檔正式名稱，
+            // 不講的話使用者不會知道原始資料其實寫的是別的字
+            if (row.name_in_master == 0 && cRaw) {
+                $('#bind_c_name_warn').show().html('<i class="fa fa-exclamation-triangle"></i> 出貨資料上的原始客戶名稱是「'
+                    + $('<span>').text(cRaw).html() + '」，客戶主檔查不到這個名稱'
+                    + (cId ? ('；畫面顯示的是所綁客戶 <strong>' + $('<span>').text(cId).html() + '</strong> 的正式名稱。')
+                           : '；請改用正式名稱或客戶編號搜尋。'));
             } else {
                 $('#bind_c_name_warn').hide().empty();
             }
             $('#bind_c_id').val(cId);
-            $('#bind_c_name').val(cName);
-            $('#bind_c_preview').text(cId ? (cId + ' ' + cName) : (cName ? cName + '（沒有客戶編號）' : '（未選取）'));
+            $('#bind_c_name').val(cRaw);          // 回寫用原始文字＝沒改客戶就不會動到 DB 的名稱
+            $('#bind_c_official').val(cId ? cName : '');
+            $('#bind_c_preview').text(cId ? (cId + ' ' + cName) : (cRaw ? cRaw + '（沒有客戶編號）' : '（未選取）'));
 
             // 自動帶入本筆料號搜尋
             $('#bind_c_kw').val('');
@@ -5724,6 +5748,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
         $('#btn_clear_c').on('click', function() {
             $('#bind_c_id').val('');
             $('#bind_c_name').val('');
+            $('#bind_c_official').val('');
             $('#bind_c_preview').text('（清除）');
             $('#bind_c_kw').val('');
             $('#bind_c_results').hide();
@@ -5800,6 +5825,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             if (cName) {
                 $('#bind_c_id').val(cId);
                 $('#bind_c_name').val(cName);
+                $('#bind_c_official').val(cName);
                 $('#bind_c_preview').text((cId ? cId + ' ' : '') + cName);
                 $('#bind_c_name_warn').hide().empty();
             }
@@ -5841,6 +5867,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             var cName= $(this).data('cname');
             $('#bind_c_id').val(cId);
             $('#bind_c_name').val(cName);
+            $('#bind_c_official').val(cName);
             $('#bind_c_preview').text(cId + ' ' + cName);
             $('#bind_c_results').hide();
             $('#bind_c_kw').val('');
@@ -6101,10 +6128,13 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                 var syncName = $('#cbind_sync_name').is(':checked');
                 t.rows().every(function() {
                     var d = this.data();
-                    var hit = map[d.Client_name];
+                    var hit = map[d.Client_name_raw !== undefined ? d.Client_name_raw : d.Client_name];
                     if (hit && !(d.Client_id && String(d.Client_id).trim() !== '') && d.d_setting_id) {
                         d.Client_id = hit.id;
-                        if (syncName) { d.Client_name = hit.name; d.Client_name_display = hit.name; }
+                        // 綁定後顯示名稱一律換成所綁客戶的正式名稱；原始文字只有勾了同步才改
+                        d.Client_name = hit.name || d.Client_name;
+                        d.Client_name_display = d.Client_name;
+                        if (syncName) d.Client_name_raw = hit.name;
                         this.data(d);
                     }
                 });
@@ -6138,7 +6168,10 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                         rd.d_setting_id      = $('#bind_d_id').val() || null;
                         rd.d_setting_display = $('#bind_d_display').val() || null;
                         rd.Client_id         = $('#bind_c_id').val() || null;
-                        rd.Client_name       = $('#bind_c_name').val() || rd.Client_name;
+                        rd.Client_name_raw   = $('#bind_c_name').val() || rd.Client_name_raw;
+                        // 有綁客戶編號時，顯示名稱以所綁客戶的正式名稱為準
+                        rd.Client_name       = $('#bind_c_official').val() || rd.Client_name_raw || rd.Client_name;
+                        rd.Client_name_display = rd.Client_name;
                         table.row(idxArr[0]).data(rd).draw(false);
                     }
                     $('#bindModal').modal('hide');
@@ -6853,7 +6886,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             // 過濾函式
             function passFilter(r, bm, gFields) {
                 if (bm && r.billing_month !== bm) return false;
-                if (ckw && (r.Client_name||'').toLowerCase().indexOf(ckw) === -1) return false;
+                if (ckw && egClientText(r).indexOf(ckw) === -1) return false;
                 if (pkw && (r.Product_id ||'').toLowerCase().indexOf(pkw) === -1) return false;
                 if (gkw && !gFields.some(function(f){ return (f||'').toLowerCase().indexOf(gkw) !== -1; })) return false;
                 return true;
