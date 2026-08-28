@@ -637,6 +637,118 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit;
 }
 
+// ── AJAX: 掃描「已綁定料號但客戶沒有客戶編號」的出貨列，依客戶名稱分組並給建議 ──
+// 建議來源兩種：①客戶主檔同名 ②該列綁定的料號主檔 d_setting.Customer_Id
+// 兩者不一致時刻意不給建議（標成需人工確認），寧可少建議也不要把整批資料綁錯客戶
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'client_bind_scan') {
+    header('Content-Type: application/json');
+    try {
+        if (!$perm_can_update) throw new Exception('沒有修改權限');
+        $pdo   = $conn->getPDO();
+        $scope = ($_POST['scope'] ?? 'range') === 'all' ? 'all' : 'range';
+        $prm   = [];
+        $where = "(i.Client_id IS NULL OR i.Client_id = '') AND i.d_setting_id IS NOT NULL";
+        if ($scope === 'range') {
+            $where .= " AND i.Order_date BETWEEN ? AND ?";
+            $prm[] = $_POST['start_date'] ?? '1900-01-01';
+            $prm[] = $_POST['end_date']   ?? '2999-12-31';
+        }
+        $st = $pdo->prepare(
+            "SELECT i.Client_name, COUNT(*) AS cnt,
+                    COUNT(DISTINCT ds.Customer_Id) AS ds_kinds,
+                    MIN(ds.Customer_Id) AS ds_cid
+               FROM is_list i
+               LEFT JOIN d_setting ds ON i.d_setting_id = ds.d_id
+              WHERE $where
+              GROUP BY i.Client_name
+              ORDER BY cnt DESC"
+        );
+        $st->execute($prm);
+        $groups = $st->fetchAll(PDO::FETCH_ASSOC);
+
+        $qName = $pdo->prepare("SELECT customer_id, customer FROM customer_list WHERE customer = ? AND is_inactive = 0 LIMIT 1");
+        $qId   = $pdo->prepare("SELECT customer_id, customer FROM customer_list WHERE customer_id = ? AND is_inactive = 0 LIMIT 1");
+
+        $out = [];
+        foreach ($groups as $g) {
+            $byName = null; $byPart = null;
+            $qName->execute([$g['Client_name']]);
+            $r = $qName->fetch(PDO::FETCH_ASSOC); if ($r) $byName = $r;
+            if ((int)$g['ds_kinds'] === 1 && $g['ds_cid'] !== null && $g['ds_cid'] !== '') {
+                $qId->execute([$g['ds_cid']]);
+                $r2 = $qId->fetch(PDO::FETCH_ASSOC); if ($r2) $byPart = $r2;
+            }
+            $sug = null; $src = 'none';
+            if ($byName && $byPart) {
+                if ($byName['customer_id'] === $byPart['customer_id']) { $sug = $byName; $src = 'both'; }
+                else { $src = 'conflict'; }
+            } elseif ($byName) { $sug = $byName; $src = 'name'; }
+            elseif ($byPart) { $sug = $byPart; $src = 'part'; }
+
+            $out[] = [
+                'client_name'   => $g['Client_name'],
+                'cnt'           => (int)$g['cnt'],
+                'suggest_id'    => $sug ? $sug['customer_id'] : '',
+                'suggest_name'  => $sug ? $sug['customer'] : '',
+                'source'        => $src,
+                'conflict_name' => $src === 'conflict' ? ($byName['customer_id'] . ' ' . $byName['customer']) : '',
+                'conflict_part' => $src === 'conflict' ? ($byPart['customer_id'] . ' ' . $byPart['customer']) : '',
+            ];
+        }
+        echo json_encode(['success' => true, 'data' => $out,
+                          'total_rows' => array_sum(array_column($out, 'cnt'))]);
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── AJAX: 把「同一個客戶名稱」的未綁定出貨列一次綁到同一個客戶編號 ──
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'client_bind_apply') {
+    header('Content-Type: application/json');
+    try {
+        if (!$perm_can_update) throw new Exception('沒有修改權限');
+        $pdo   = $conn->getPDO();
+        $items = json_decode($_POST['items'] ?? '[]', true);
+        if (!is_array($items) || !count($items)) throw new Exception('沒有要套用的項目');
+        if (count($items) > 500) throw new Exception('一次最多套用 500 個客戶名稱');
+        $scope     = ($_POST['scope'] ?? 'range') === 'all' ? 'all' : 'range';
+        $syncName  = ($_POST['sync_name'] ?? '0') === '1';
+        $start     = $_POST['start_date'] ?? '1900-01-01';
+        $end       = $_POST['end_date']   ?? '2999-12-31';
+
+        $qId = $pdo->prepare("SELECT customer_id, customer FROM customer_list WHERE customer_id = ? AND is_inactive = 0 LIMIT 1");
+        $pdo->beginTransaction();
+        $doneNames = 0; $doneRows = 0; $skipped = [];
+        foreach ($items as $it) {
+            $name = trim((string)($it['client_name'] ?? ''));
+            $cid  = trim((string)($it['customer_id'] ?? ''));
+            if ($name === '' || $cid === '') { $skipped[] = $name . '（沒有指定客戶）'; continue; }
+            // 後端一定要再驗一次客戶存在（前端可被繞過＝鐵律8）
+            $qId->execute([$cid]);
+            $cust = $qId->fetch(PDO::FETCH_ASSOC);
+            if (!$cust) { $skipped[] = $name . '（客戶編號不存在或已停用：' . $cid . '）'; continue; }
+
+            $sql = "UPDATE is_list SET Client_id = ?" . ($syncName ? ", Client_name = ?" : "")
+                 . " WHERE (Client_id IS NULL OR Client_id = '') AND d_setting_id IS NOT NULL AND Client_name = ?";
+            $prm = [$cust['customer_id']];
+            if ($syncName) $prm[] = $cust['customer'];
+            $prm[] = $name;
+            if ($scope === 'range') { $sql .= " AND Order_date BETWEEN ? AND ?"; $prm[] = $start; $prm[] = $end; }
+            $up = $pdo->prepare($sql);
+            $up->execute($prm);
+            $n = $up->rowCount();
+            if ($n > 0) { $doneNames++; $doneRows += $n; }
+        }
+        $pdo->commit();
+        echo json_encode(['success' => true, 'names' => $doneNames, 'rows' => $doneRows, 'skipped' => $skipped]);
+    } catch (Exception $e) {
+        if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // ── AJAX: 切換異常確認狀態 ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggle_anomaly_confirmed') {
     header('Content-Type: application/json');
@@ -1778,6 +1890,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
         }
         .bind-result-table { margin:0; }
         .bind-result-table td { font-size:12px; padding:4px 6px !important; }
+        .bind-result-table tbody tr.kb-active > td { background:#fdf0dd !important; box-shadow:inset 3px 0 0 #F0A24B; }
         .bind-current-badge {
             display:inline-block; padding:3px 10px;
             border-radius:4px; font-size:12px; font-weight:600;
@@ -1800,6 +1913,31 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             border-left:3px solid #F0A24B; border-radius:0 3px 3px 0;
             padding:3px 8px; margin-top:4px; line-height:1.6;
         }
+        /* ── 客戶批次綁定 ── */
+        .cbind-bar { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:8px; }
+        .cbind-radio { font-weight:normal; font-size:12px; margin:0; cursor:pointer; }
+        .cbind-summary {
+            font-size:12px; color:#8a6d3b; background:#fcf3e3;
+            border-left:3px solid #F0A24B; border-radius:0 3px 3px 0;
+            padding:5px 10px; margin-bottom:8px;
+        }
+        .cbind-table td, .cbind-table th { font-size:12px; padding:5px 8px !important; vertical-align:middle !important; }
+        .cbind-table tr.cbind-none > td { background:#fdf6f4; }
+        .cbind-src { display:inline-block; padding:1px 7px; border-radius:3px; font-size:11px; white-space:nowrap; }
+        .cbind-src-both { background:#e7f3ea; color:#1e6b3a; }
+        .cbind-src-name, .cbind-src-part { background:#fdf0dd; color:#8a5a17; }
+        .cbind-src-conflict { background:#fbe4de; color:#a2331c; }
+        .cbind-src-none { background:#ececec; color:#777; }
+        .cbind-src-manual { background:#e8eef7; color:#28527a; }
+        .cbind-pick { position:relative; }
+        .cbind-pick .cbind-dd {
+            position:absolute; left:0; right:0; top:100%; z-index:20; background:#fff;
+            border:1px solid #ddd; border-top:0; border-radius:0 0 4px 4px;
+            box-shadow:0 4px 10px rgba(0,0,0,.12); max-height:180px; overflow-y:auto;
+        }
+        .cbind-pick .cbind-dd .ac-item { padding:4px 8px; font-size:12px; cursor:pointer; border-bottom:1px solid #f4f2ef; }
+        .cbind-pick .cbind-dd .ac-item:hover { background:#fdf0dd; }
+        .cbind-pick .cbind-dd .ac-cid { display:inline-block; min-width:72px; color:#b06a1e; font-weight:600; }
         .x_panel { border-radius:8px; box-shadow:0 1px 6px rgba(0,0,0,.07); }
         .x_title { border-bottom:1px solid #eee; background:#fafbfc; border-radius:8px 8px 0 0; }
     </style>
@@ -2193,6 +2331,14 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                                     <button type="button" class="btn btn-warning btn-sm" id="btn-filter-zero-price" onclick="toggleZeroPriceFilter(this)" style="height:26px; padding:2px 8px; font-size:12px; flex-shrink:0;" title="快速篩選：單價=0 且 出貨性質為「納入統計」的資料">
                                         <i class="fa fa-exclamation-circle"></i> 單價=0（統計中）
                                     </button>
+                                    <button type="button" class="btn btn-warning btn-sm" id="btn-filter-noclient" onclick="toggleNoClientFilter(this)" style="height:26px; padding:2px 8px; font-size:12px; flex-shrink:0; background:#F0A24B; border-color:#d98a34; color:#fff;" title="快速篩選：已綁定料號、但客戶沒有客戶編號的出貨資料">
+                                        <i class="fa fa-user-times"></i> 客戶未綁定
+                                    </button>
+                                    <?php if ($perm_can_update): ?>
+                                    <button type="button" class="btn btn-primary btn-sm" id="btn-client-batch-bind" style="height:26px; padding:2px 8px; font-size:12px; flex-shrink:0;" title="把顯示名稱相同的客戶，一次全部綁定同一個客戶編號">
+                                        <i class="fa fa-users"></i> 客戶批次綁定
+                                    </button>
+                                    <?php endif; ?>
                                     <button type="button" class="btn btn-default btn-sm" id="clear-filters" style="margin-left:auto; height:26px; padding:2px 10px; font-size:12px; flex-shrink:0;">
                                         <i class="fa fa-times"></i> 清除
                                     </button>
@@ -2762,6 +2908,58 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                     <button type="button" class="btn btn-primary" onclick="saveBindRecord()">
                         <i class="fa fa-save"></i> 儲存
                     </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 客戶批次綁定 Modal -->
+    <div class="modal fade" id="cbindModal" tabindex="-1" role="dialog">
+        <div class="modal-dialog modal-lg" role="document" style="width:92%; max-width:1100px;">
+            <div class="modal-content">
+                <div class="modal-header" style="background:#2c3e50; color:#fff; border-radius:4px 4px 0 0;">
+                    <button type="button" class="close" data-dismiss="modal" style="color:#fff; opacity:.8;"><span>&times;</span></button>
+                    <h4 class="modal-title">
+                        <i class="fa fa-users"></i> 客戶批次綁定
+                        <small style="color:#bdc3c7; font-size:12px; margin-left:8px;">
+                            已綁定料號、但客戶沒有客戶編號的出貨資料，依客戶名稱分組一次綁定
+                        </small>
+                    </h4>
+                </div>
+                <div class="modal-body" style="padding:14px 18px;">
+                    <div class="cbind-bar">
+                        <span class="text-muted" style="font-size:12px;">範圍：</span>
+                        <label class="cbind-radio"><input type="radio" name="cbind_scope" value="range" checked> 目前查詢區間 <span id="cbind_range_txt" class="text-muted"></span></label>
+                        <label class="cbind-radio"><input type="radio" name="cbind_scope" value="all"> 全部資料</label>
+                        <span class="ef-sep">│</span>
+                        <input type="text" class="form-control input-sm" id="cbind_kw" placeholder="篩選客戶名稱…" style="width:150px; display:inline-block;">
+                        <span style="margin-left:auto;"></span>
+                        <label class="cbind-radio" title="勾了會把出貨資料上的客戶名稱一併換成客戶主檔的正式名稱；不勾則只補上客戶編號、保留原始文字">
+                            <input type="checkbox" id="cbind_sync_name"> 同時改成客戶主檔的正式名稱
+                        </label>
+                    </div>
+                    <div id="cbind_summary" class="cbind-summary"><i class="fa fa-spinner fa-spin"></i> 掃描中…</div>
+                    <div style="max-height:52vh; overflow-y:auto; border:1px solid #e5e5e5; border-radius:4px;">
+                        <table class="table table-condensed table-hover cbind-table" style="margin:0;">
+                            <thead style="background:#f5f5f5; position:sticky; top:0; z-index:2;">
+                                <tr>
+                                    <th style="width:34px;"><input type="checkbox" id="cbind_all" title="全選（只勾得動有指定客戶的）"></th>
+                                    <th>客戶名稱（出貨資料上的文字）</th>
+                                    <th style="width:70px;" class="text-right">筆數</th>
+                                    <th style="width:300px;">要綁定的客戶</th>
+                                    <th style="width:110px;">建議來源</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cbind_tbody">
+                                <tr><td colspan="5" class="text-center text-muted" style="padding:20px;"><i class="fa fa-spinner fa-spin"></i></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <span id="cbind_sel_info" class="text-muted" style="float:left; font-size:12px; line-height:32px;"></span>
+                    <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+                    <button type="button" class="btn btn-primary" id="cbind_apply"><i class="fa fa-check"></i> 套用勾選項目</button>
                 </div>
             </div>
         </div>
@@ -3829,7 +4027,11 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                 currentChartFilter = null;
                 _zeroPriceFilterActive = false;
                 $('#btn-filter-zero-price').removeClass('active').css('opacity', '1');
-                $.fn.dataTable.ext.search = $.fn.dataTable.ext.search.filter(function(fn) { return fn._zeroPriceFilter !== true; });
+                _noClientFilterActive = false;
+                $('#btn-filter-noclient').removeClass('active').css('box-shadow', '');
+                $.fn.dataTable.ext.search = $.fn.dataTable.ext.search.filter(function(fn) {
+                    return fn._zeroPriceFilter !== true && fn._noClientFilter !== true;
+                });
                 table.search('').columns().search('').draw();
                 updateFilterStatusBar();
             });
@@ -3854,6 +4056,31 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                     $.fn.dataTable.ext.search = $.fn.dataTable.ext.search.filter(function(fn) { return fn._zeroPriceFilter !== true; });
                 }
                 table.draw();
+            };
+
+            // 快速篩選：已綁定料號、但客戶沒有客戶編號
+            var _noClientFilterActive = false;
+            function noClientFilterFn(settings, data, dataIndex) {
+                if (settings.sTableId !== 'shippingTable') return true;
+                var row = settings.aoData[dataIndex]._aData;
+                var hasD = row.d_setting_id !== null && row.d_setting_id !== '' && row.d_setting_id != 0;
+                var hasC = row.Client_id !== null && String(row.Client_id || '').trim() !== '';
+                return hasD && !hasC;
+            }
+            noClientFilterFn._noClientFilter = true;
+
+            window.toggleNoClientFilter = function(btn) {
+                _noClientFilterActive = !_noClientFilterActive;
+                if (_noClientFilterActive) {
+                    $(btn).addClass('active').css('box-shadow', 'inset 0 2px 4px rgba(0,0,0,.2)');
+                    $.fn.dataTable.ext.search.push(noClientFilterFn);
+                } else {
+                    $(btn).removeClass('active').css('box-shadow', '');
+                    $.fn.dataTable.ext.search = $.fn.dataTable.ext.search.filter(function(fn) { return fn._noClientFilter !== true; });
+                }
+                table.draw();
+                var n = table.rows({ search: 'applied' }).count();
+                if (_noClientFilterActive) showToast('客戶未綁定：' + n + ' 筆', n ? 'info' : 'success');
             };
 
             // 新增：雙擊熱銷產品料號以篩選主列表
@@ -4862,6 +5089,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
 
         // 鍵盤操作：↑↓ 移動、Enter 選取、Esc 關閉
         $('#edit_client_name').on('keydown', function(e) {
+            if (bindKbIsComposing(e)) return; // 中文輸入法選字的 Enter 不算數
             var $dd = $('#edit_client_dd');
             if (!$dd.is(':visible')) return;
             var $items = $dd.find('.ac-item');
@@ -5548,6 +5776,274 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             $('#bind_c_preview').text(cName);
             $('#bind_c_results').hide();
             $('#bind_c_kw').val('');
+        });
+
+        // ══════════════════════════════════════
+        // 綁定跳窗鍵盤操作
+        //   清單開著且只有一筆 → Enter＝選它並直接儲存
+        //   清單開著有多筆     → ↑↓ 移動、Enter 選取反白那筆（不儲存），再按一次 Enter 才儲存
+        //   清單沒開（已選好） → Enter＝儲存
+        // ══════════════════════════════════════
+        function bindKbIsComposing(e) {
+            // 中文輸入法選字確認也會送出 Enter，必須擋掉，否則打到一半就被存檔
+            var oe = e.originalEvent || e;
+            return !!oe.isComposing || e.which === 229 || oe.keyCode === 229;
+        }
+
+        function bindKbSelectableRows($results) {
+            return $results.find('tbody tr').filter(function() { return $(this).find('button').length > 0; });
+        }
+
+        function bindKbSetup(kwSel, resultsSel) {
+            $(document).on('keydown', kwSel, function(e) {
+                if (bindKbIsComposing(e)) return;
+                var $res  = $(resultsSel);
+                var open  = $res.is(':visible');
+                var $rows = open ? bindKbSelectableRows($res) : $();
+
+                if (open && $rows.length) {
+                    if (e.which === 27) { e.preventDefault(); $res.hide(); return; }
+                    if (e.which === 40 || e.which === 38) {
+                        e.preventDefault();
+                        var i = $rows.index($rows.filter('.kb-active'));
+                        i = (e.which === 40) ? (i + 1) % $rows.length : (i <= 0 ? $rows.length : i) - 1;
+                        $rows.removeClass('kb-active').eq(i).addClass('kb-active');
+                        var el = $rows.eq(i)[0]; if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+                        return;
+                    }
+                    if (e.which === 13) {
+                        e.preventDefault();
+                        if ($rows.length === 1) {
+                            // 只有單一選項：選它，並直接等同按下儲存
+                            $rows.first().find('button').trigger('click');
+                            saveBindRecord();
+                            return;
+                        }
+                        // 多選項：先選取（沒反白過就取第一筆），選完再按 Enter 才儲存
+                        var $act = $rows.filter('.kb-active');
+                        if (!$act.length) $act = $rows.first();
+                        $act.find('button').trigger('click');
+                        return;
+                    }
+                    return;
+                }
+                // 清單沒開＝已經選好了 → Enter 等同按下儲存
+                if (e.which === 13) { e.preventDefault(); saveBindRecord(); }
+            });
+        }
+        bindKbSetup('#bind_d_kw', '#bind_d_results');
+        bindKbSetup('#bind_c_kw', '#bind_c_results');
+
+        // 跳窗內其他地方按 Enter 也等同按下儲存（兩個搜尋框已各自處理）
+        $(document).on('keydown', '#bindModal', function(e) {
+            if (e.which !== 13 || bindKbIsComposing(e) || e.isDefaultPrevented()) return;
+            if ($(e.target).is('#bind_d_kw, #bind_c_kw, textarea')) return;
+            e.preventDefault();
+            saveBindRecord();
+        });
+
+
+        // ══════════════════════════════════════
+        // 客戶批次綁定
+        //   把「已綁定料號、但客戶沒有客戶編號」的出貨列依客戶名稱分組，
+        //   同一個名稱一次綁到同一個客戶編號。
+        //   建議來源：客戶主檔同名／該列綁定的料號主檔客戶；兩者不一致時不給建議，要人工挑。
+        // ══════════════════════════════════════
+        var _cbindRows = [];   // 掃描結果
+        var _cbindTimers = {}; // 每列的搜尋 debounce
+
+        function cbindScope() { return $('input[name=cbind_scope]:checked').val() || 'range'; }
+
+        function openClientBatchBind() {
+            $('#cbind_range_txt').text('（' + $('#start_date').val() + ' ~ ' + $('#end_date').val() + '）');
+            $('#cbind_kw').val('');
+            $('#cbind_sync_name').prop('checked', false);
+            $('#cbindModal').modal('show');
+            cbindScan();
+        }
+
+        function cbindScan() {
+            _cbindRows = [];
+            $('#cbind_summary').html('<i class="fa fa-spinner fa-spin"></i> 掃描中…');
+            $('#cbind_tbody').html('<tr><td colspan="5" class="text-center text-muted" style="padding:20px;"><i class="fa fa-spinner fa-spin"></i></td></tr>');
+            $.post('', {
+                action: 'client_bind_scan', scope: cbindScope(),
+                start_date: $('#start_date').val(), end_date: $('#end_date').val()
+            }, function(res) {
+                var data = (typeof res === 'object') ? res : JSON.parse(res);
+                if (!data.success) {
+                    $('#cbind_summary').html('掃描失敗：' + $('<span>').text(data.message || '').html());
+                    $('#cbind_tbody').html('<tr><td colspan="5" class="text-center text-muted" style="padding:20px;">—</td></tr>');
+                    return;
+                }
+                _cbindRows = (data.data || []).map(function(r, i) {
+                    r._i = i;
+                    r.pick_id   = r.suggest_id || '';
+                    r.pick_name = r.suggest_name || '';
+                    r.checked   = !!r.suggest_id;   // 有建議的預設勾起來
+                    return r;
+                });
+                var withSug = _cbindRows.filter(function(r) { return !!r.suggest_id; }).length;
+                var need    = _cbindRows.length - withSug;
+                $('#cbind_summary').html(
+                    '共 <strong>' + _cbindRows.length + '</strong> 個客戶名稱、<strong>' + (data.total_rows || 0) + '</strong> 筆出貨資料沒有客戶編號；'
+                    + '其中 <strong>' + withSug + '</strong> 個已自動對應好（預設勾起來），<strong>' + need + '</strong> 個要自己指定。'
+                    + '<br>套用只會補上客戶編號，<u>不會動到料號、數量、金額</u>；已經有客戶編號的資料一律不碰。'
+                );
+                cbindRender();
+            }, 'json').fail(function() { $('#cbind_summary').html('連線失敗'); });
+        }
+
+        function cbindRender() {
+            var kw = ($('#cbind_kw').val() || '').trim().toLowerCase();
+            var list = _cbindRows.filter(function(r) {
+                if (!kw) return true;
+                return (r.client_name || '').toLowerCase().indexOf(kw) >= 0
+                    || (r.pick_name || '').toLowerCase().indexOf(kw) >= 0
+                    || (r.pick_id || '').toLowerCase().indexOf(kw) >= 0;
+            });
+            if (!list.length) {
+                $('#cbind_tbody').html('<tr><td colspan="5" class="text-center text-muted" style="padding:20px;">'
+                    + (kw ? '查無符合「' + $('<span>').text(kw).html() + '」的客戶名稱' : '沒有需要處理的資料，全部都已經有客戶編號了')
+                    + '</td></tr>');
+                cbindUpdateSelInfo();
+                return;
+            }
+            var srcTxt = { both:'名稱＋料號', name:'客戶主檔同名', part:'料號主檔客戶', conflict:'兩來源不一致', none:'查無對應', manual:'手動指定' };
+            var html = '';
+            list.forEach(function(r) {
+                var src = r.pick_id ? (r.pick_id === r.suggest_id ? r.source : 'manual') : (r.source === 'conflict' ? 'conflict' : 'none');
+                var esc = function(t) { return $('<span>').text(t == null ? '' : t).html(); };
+                html += '<tr class="' + (r.pick_id ? '' : 'cbind-none') + '" data-i="' + r._i + '">'
+                    + '<td><input type="checkbox" class="cbind-chk" ' + (r.checked && r.pick_id ? 'checked' : '') + (r.pick_id ? '' : ' disabled') + '></td>'
+                    + '<td><strong>' + esc(r.client_name) + '</strong>'
+                    + (src === 'conflict' ? '<br><small style="color:#a2331c;">名稱比對到 ' + esc(r.conflict_name) + '、料號主檔是 ' + esc(r.conflict_part) + '，請自己確認要哪一個</small>' : '')
+                    + '</td>'
+                    + '<td class="text-right">' + r.cnt + '</td>'
+                    + '<td class="cbind-pick">'
+                    + '<input type="text" class="form-control input-sm cbind-kw" placeholder="輸入客戶編號或名稱…" value="'
+                    + esc(r.pick_id ? (r.pick_id + ' ' + r.pick_name) : '') + '">'
+                    + '<div class="cbind-dd" style="display:none;"></div>'
+                    + '</td>'
+                    + '<td><span class="cbind-src cbind-src-' + src + '">' + srcTxt[src] + '</span></td>'
+                    + '</tr>';
+            });
+            $('#cbind_tbody').html(html);
+            cbindUpdateSelInfo();
+        }
+
+        function cbindUpdateSelInfo() {
+            var sel = _cbindRows.filter(function(r) { return r.checked && r.pick_id; });
+            var rows = sel.reduce(function(a, r) { return a + r.cnt; }, 0);
+            $('#cbind_sel_info').text('已勾選 ' + sel.length + ' 個客戶名稱，共 ' + rows + ' 筆出貨資料');
+            $('#cbind_apply').prop('disabled', sel.length === 0);
+        }
+
+        function cbindRowOf($el) { return _cbindRows[parseInt($el.closest('tr').data('i'), 10)]; }
+
+        $(document).on('click', '#btn-client-batch-bind', openClientBatchBind);
+        $(document).on('change', 'input[name=cbind_scope]', cbindScan);
+        $(document).on('input', '#cbind_kw', cbindRender);
+
+        $(document).on('change', '#cbind_all', function() {
+            var on = $(this).is(':checked');
+            $('#cbind_tbody .cbind-chk:not(:disabled)').prop('checked', on).each(function() {
+                var r = cbindRowOf($(this)); if (r) r.checked = on;
+            });
+            cbindUpdateSelInfo();
+        });
+        $(document).on('change', '.cbind-chk', function() {
+            var r = cbindRowOf($(this)); if (r) r.checked = $(this).is(':checked');
+            cbindUpdateSelInfo();
+        });
+
+        // 逐列手動指定客戶（同樣是編號與名稱都可篩）
+        $(document).on('input', '.cbind-kw', function() {
+            var $inp = $(this), $tr = $inp.closest('tr'), $dd = $tr.find('.cbind-dd');
+            var r = cbindRowOf($inp);
+            if (r) { r.pick_id = ''; r.pick_name = ''; r.checked = false; }
+            $tr.find('.cbind-chk').prop('checked', false).prop('disabled', true);
+            cbindUpdateSelInfo();
+            var kw = $inp.val().trim();
+            var key = $tr.data('i');
+            clearTimeout(_cbindTimers[key]);
+            if (!kw) { $dd.hide().empty(); return; }
+            _cbindTimers[key] = setTimeout(function() {
+                $.post('', { action: 'search_customer_bind', keyword: kw }, function(res) {
+                    var data = (typeof res === 'object') ? res : JSON.parse(res);
+                    if (!data.success || !data.data.length) { $dd.hide().empty(); return; }
+                    var h = '';
+                    data.data.forEach(function(c) {
+                        h += '<div class="ac-item" data-cid="' + $('<span>').text(c.customer_id).html() + '"'
+                          + ' data-cname="' + $('<span>').text(c.customer || '').html().replace(/"/g, '&quot;') + '">'
+                          + '<span class="ac-cid">' + $('<span>').text(c.customer_id).html() + '</span>'
+                          + $('<span>').text(c.customer || '').html() + '</div>';
+                    });
+                    $dd.html(h).show();
+                }, 'json');
+            }, 300);
+        });
+        $(document).on('click', '.cbind-dd .ac-item', function() {
+            var $tr = $(this).closest('tr');
+            var r = cbindRowOf($(this));
+            if (r) { r.pick_id = String($(this).data('cid')); r.pick_name = String($(this).data('cname')); r.checked = true; }
+            $tr.find('.cbind-kw').val(r.pick_id + ' ' + r.pick_name);
+            $tr.find('.cbind-chk').prop('disabled', false).prop('checked', true);
+            $tr.removeClass('cbind-none').find('.cbind-src')
+               .attr('class', 'cbind-src cbind-src-' + (r.pick_id === r.suggest_id ? (r.source || 'manual') : 'manual'))
+               .text(r.pick_id === r.suggest_id ? '已還原建議' : '手動指定');
+            $tr.find('.cbind-dd').hide().empty();
+            cbindUpdateSelInfo();
+        });
+        $(document).on('mousedown', function(e) {
+            if (!$(e.target).closest('.cbind-pick').length) $('#cbind_tbody .cbind-dd').hide();
+        });
+
+        // 套用
+        $(document).on('click', '#cbind_apply', function() {
+            var sel = _cbindRows.filter(function(r) { return r.checked && r.pick_id; });
+            if (!sel.length) { showToast('沒有勾選任何項目', 'info'); return; }
+            var rows  = sel.reduce(function(a, r) { return a + r.cnt; }, 0);
+            var scope = cbindScope();
+            var msg = '即將把 ' + sel.length + ' 個客戶名稱、共 ' + rows + ' 筆出貨資料綁定客戶編號。\n\n'
+                    + '範圍：' + (scope === 'all' ? '全部資料' : ($('#start_date').val() + ' ~ ' + $('#end_date').val()))
+                    + '\n' + ($('#cbind_sync_name').is(':checked') ? '客戶名稱會一併換成客戶主檔的正式名稱。' : '只補客戶編號，客戶名稱維持原樣。')
+                    + '\n\n確定要套用嗎？';
+            if (!confirm(msg)) return;
+            var $btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 套用中…');
+            $.post('', {
+                action: 'client_bind_apply', scope: scope,
+                start_date: $('#start_date').val(), end_date: $('#end_date').val(),
+                sync_name: $('#cbind_sync_name').is(':checked') ? '1' : '0',
+                items: JSON.stringify(sel.map(function(r) { return { client_name: r.client_name, customer_id: r.pick_id }; }))
+            }, function(res) {
+                var data = (typeof res === 'object') ? res : JSON.parse(res);
+                $btn.prop('disabled', false).html('<i class="fa fa-check"></i> 套用勾選項目');
+                if (!data.success) { showToast('套用失敗：' + (data.message || ''), 'danger'); return; }
+                showToast('已綁定 ' + data.names + ' 個客戶名稱、共 ' + data.rows + ' 筆', 'success');
+                if (data.skipped && data.skipped.length) {
+                    alert('下列項目沒有套用：\n' + data.skipped.join('\n'));
+                }
+                cbindScan();
+                // 畫面上這一批也要跟著變成「已綁定」，否則清單還顯示未綁定
+                var t = $('#shippingTable').DataTable();
+                var map = {};
+                sel.forEach(function(r) { map[r.client_name] = { id: r.pick_id, name: r.pick_name }; });
+                var syncName = $('#cbind_sync_name').is(':checked');
+                t.rows().every(function() {
+                    var d = this.data();
+                    var hit = map[d.Client_name];
+                    if (hit && !(d.Client_id && String(d.Client_id).trim() !== '') && d.d_setting_id) {
+                        d.Client_id = hit.id;
+                        if (syncName) { d.Client_name = hit.name; d.Client_name_display = hit.name; }
+                        this.data(d);
+                    }
+                });
+                t.draw(false);
+            }, 'json').fail(function() {
+                $btn.prop('disabled', false).html('<i class="fa fa-check"></i> 套用勾選項目');
+                showToast('連線失敗', 'danger');
+            });
         });
 
         function saveBindRecord() {
