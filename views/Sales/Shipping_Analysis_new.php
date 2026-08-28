@@ -1782,6 +1782,24 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             display:inline-block; padding:3px 10px;
             border-radius:4px; font-size:12px; font-weight:600;
         }
+        /* ── 修改出貨資料：客戶模糊篩選 + 已綁定欄位鎖定 ── */
+        .edit-ac-wrap { position:relative; }
+        .edit-ac-dd {
+            position:absolute; left:0; right:0; top:100%; z-index:1060;
+            background:#fff; border:1px solid #ddd; border-top:0; border-radius:0 0 4px 4px;
+            box-shadow:0 4px 10px rgba(0,0,0,.12); max-height:210px; overflow-y:auto;
+        }
+        .edit-ac-dd .ac-item { padding:5px 10px; font-size:12px; cursor:pointer; border-bottom:1px solid #f4f2ef; }
+        .edit-ac-dd .ac-item:last-child { border-bottom:0; }
+        .edit-ac-dd .ac-item:hover, .edit-ac-dd .ac-item.active { background:#fdf0dd; }
+        .edit-ac-dd .ac-cid { display:inline-block; min-width:76px; color:#b06a1e; font-weight:600; }
+        .edit-ac-dd .ac-empty, .edit-ac-dd .ac-loading { padding:8px 10px; font-size:12px; color:#999; text-align:center; }
+        .edit-locked { background:#ececec !important; color:#777 !important; cursor:not-allowed; }
+        .edit-lock-hint {
+            font-size:11px; color:#8a6d3b; background:#fcf3e3;
+            border-left:3px solid #F0A24B; border-radius:0 3px 3px 0;
+            padding:3px 8px; margin-top:4px; line-height:1.6;
+        }
         .x_panel { border-radius:8px; box-shadow:0 1px 6px rgba(0,0,0,.07); }
         .x_title { border-bottom:1px solid #eee; background:#fafbfc; border-radius:8px 8px 0 0; }
     </style>
@@ -2377,8 +2395,13 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                                 <input type="text" class="form-control" id="edit_is_number" name="IS_number">
                             </div>
                             <div class="col-md-6 form-group">
-                                <label>客戶名稱</label>
-                                <input type="text" class="form-control" id="edit_client_name" name="Client_name">
+                                <label>客戶名稱 <small class="text-muted">（可輸入客戶編號或名稱篩選）</small></label>
+                                <div class="edit-ac-wrap">
+                                    <input type="text" class="form-control" id="edit_client_name" name="Client_name" autocomplete="off" placeholder="輸入客戶編號或名稱…">
+                                    <input type="hidden" id="edit_client_id" name="Client_id" disabled>
+                                    <div class="edit-ac-dd" id="edit_client_dd" style="display:none;"></div>
+                                </div>
+                                <div class="edit-lock-hint" id="edit_client_lock" style="display:none;"></div>
                             </div>
                             <div class="col-md-6 form-group">
                                 <label>出貨性質</label>
@@ -2392,6 +2415,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                             <div class="col-md-6 form-group">
                                 <label>料號</label>
                                 <input type="text" class="form-control" id="edit_product_id" name="Product_id">
+                                <div class="edit-lock-hint" id="edit_pid_lock" style="display:none;"></div>
                             </div>
                             <div class="col-md-6 form-group">
                                 <label>規格</label>
@@ -3492,9 +3516,14 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                             if (type !== 'display') return data || '';
                             var safe = $('<span>').text(data || '').html();
                             var hasBom = row.bom_list && row.bom_list !== '';
-                            var bomIcon = hasBom
-                                ? ' <i class="fa fa-chain" style="color:#28a745;" title="已關聯BOM"></i>'
-                                : ' <i class="fa fa-chain-broken" style="color:#dc3545;" title="無BOM關聯"></i>';
+                            // 圖示本身可點＝直接開 BOM 設定跳窗做快速綁定（不必先點單號）
+                            var bomTitle = hasBom
+                                ? ('已關聯BOM：' + row.bom_list + '（點擊檢視／調整綁定）')
+                                : '無BOM關聯，點擊可快速綁定 BOM 與訂單';
+                            var bomIcon = ' <i class="fa ' + (hasBom ? 'fa-chain' : 'fa-chain-broken') + ' btn-open-bom"'
+                                + ' style="color:' + (hasBom ? '#28a745' : '#dc3545') + '; cursor:pointer;"'
+                                + ' data-is-id="' + row.IS_id + '"'
+                                + ' title="' + $('<span>').text(bomTitle).html().replace(/"/g, '&quot;') + '"></i>';
                             return '<a class="btn-open-bom" href="javascript:void(0);" data-is-id="' + row.IS_id + '" style="color:#2980b9; font-weight:500;">'
                                 + safe + '</a>' + bomIcon;
                         }
@@ -4731,6 +4760,7 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
 
         // 開啟編輯 Modal
         function openEditModal(row) {
+            _editRow = row;
             $('#edit_is_id').val(row.IS_id);
             $('#edit_order_date').val(row.Order_date);
             $('#edit_billing_month').val(row.billing_month_override || '');
@@ -4747,8 +4777,117 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             var saleType = row.sale_type === null ? 'NULL' : row.sale_type;
             $('#edit_sale_type').val(saleType);
 
+            applyEditLocks(row);
             $('#editModal').modal('show');
         }
+
+        // ══════════════════════════════════════
+        // 修改出貨資料：已綁定的料號／客戶一律反灰（後端 update_is_record.php 同規則再擋一次）
+        // ══════════════════════════════════════
+        var _editRow      = null;
+        var _editCTimer   = null;
+        var _editCReqSeq  = 0;
+
+        function applyEditLocks(row) {
+            var dLocked = !!(row.d_setting_id && String(row.d_setting_id) !== '' && String(row.d_setting_id) !== '0');
+            var cLocked = !!(row.Client_id && String(row.Client_id).trim() !== '');
+
+            // 料號
+            var $pid = $('#edit_product_id');
+            $pid.prop('readonly', dLocked).toggleClass('edit-locked', dLocked);
+            if (dLocked) {
+                var dDisp = row.d_setting_display || row.d_setting_id;
+                $('#edit_pid_lock').show().html(
+                    '<i class="fa fa-lock"></i> 已綁定料號主檔：<strong>' + $('<span>').text(dDisp).html() + '</strong>'
+                    + '　如需變更請用 <a href="javascript:void(0);" onclick="openBindFromEdit();">綁定料號 &amp; 客戶</a>'
+                );
+            } else {
+                $('#edit_pid_lock').hide().empty();
+            }
+
+            // 客戶
+            var $cn = $('#edit_client_name');
+            $cn.prop('readonly', cLocked).toggleClass('edit-locked', cLocked);
+            $('#edit_client_dd').hide().empty();
+            $('#edit_client_id').prop('disabled', true).val('');
+            if (cLocked) {
+                $('#edit_client_lock').show().html(
+                    '<i class="fa fa-lock"></i> 已綁定客戶：<strong>' + $('<span>').text(row.Client_id).html() + '</strong>'
+                    + ' ' + $('<span>').text(row.Client_name || '').html()
+                    + '　如需變更請用 <a href="javascript:void(0);" onclick="openBindFromEdit();">綁定料號 &amp; 客戶</a>'
+                );
+            } else {
+                $('#edit_client_lock').hide().empty();
+            }
+        }
+
+        // 由「修改出貨資料」直接跳到「綁定料號 & 客戶」
+        function openBindFromEdit() {
+            if (!_editRow) return;
+            var row = _editRow;
+            $('#editModal').modal('hide');
+            setTimeout(function() { openBindModal(row); }, 350);
+        }
+
+        // 客戶模糊篩選（客戶編號＋客戶名稱，沿用 search_customer_bind）
+        $('#edit_client_name').on('input', function() {
+            if ($(this).prop('readonly')) return;
+            clearTimeout(_editCTimer);
+            var kw = $(this).val().trim();
+            // 手打過就視同尚未指定客戶編號，等使用者從清單挑
+            $('#edit_client_id').prop('disabled', true).val('');
+            if (kw.length < 1) { $('#edit_client_dd').hide().empty(); return; }
+            var seq = ++_editCReqSeq;
+            $('#edit_client_dd').show().html('<div class="ac-loading"><i class="fa fa-spinner fa-spin"></i> 搜尋中…</div>');
+            _editCTimer = setTimeout(function() {
+                $.post('', { action: 'search_customer_bind', keyword: kw }, function(res) {
+                    if (seq !== _editCReqSeq) return; // 舊的回應丟掉
+                    var data = (typeof res === 'object') ? res : JSON.parse(res);
+                    if (!data.success || !data.data.length) {
+                        $('#edit_client_dd').show().html('<div class="ac-empty">查無符合的客戶</div>');
+                        return;
+                    }
+                    var html = '';
+                    data.data.forEach(function(r) {
+                        var cid = String(r.customer_id || ''), cname = r.customer || '';
+                        html += '<div class="ac-item" data-cid="' + $('<span>').text(cid).html() + '"'
+                             + ' data-cname="' + $('<span>').text(cname).html().replace(/"/g, '&quot;') + '">'
+                             + '<span class="ac-cid">' + $('<span>').text(cid).html() + '</span>'
+                             + $('<span>').text(cname).html() + '</div>';
+                    });
+                    $('#edit_client_dd').show().html(html);
+                }, 'json').fail(function() { $('#edit_client_dd').hide().empty(); });
+            }, 300);
+        });
+
+        // 鍵盤操作：↑↓ 移動、Enter 選取、Esc 關閉
+        $('#edit_client_name').on('keydown', function(e) {
+            var $dd = $('#edit_client_dd');
+            if (!$dd.is(':visible')) return;
+            var $items = $dd.find('.ac-item');
+            if (!$items.length) { if (e.which === 27) $dd.hide(); return; }
+            var idx = $items.index($items.filter('.active'));
+            if (e.which === 40) { e.preventDefault(); idx = (idx + 1) % $items.length; }
+            else if (e.which === 38) { e.preventDefault(); idx = (idx <= 0 ? $items.length : idx) - 1; }
+            else if (e.which === 13) { e.preventDefault(); if (idx >= 0) $items.eq(idx).trigger('click'); return; }
+            else if (e.which === 27) { $dd.hide(); return; }
+            else return;
+            $items.removeClass('active').eq(idx).addClass('active');
+            var el = $items.eq(idx)[0]; if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+        });
+
+        $(document).on('click', '#edit_client_dd .ac-item', function() {
+            $('#edit_client_name').val($(this).data('cname'));
+            $('#edit_client_id').prop('disabled', false).val($(this).data('cid'));
+            $('#edit_client_dd').hide().empty();
+        });
+
+        // 點到別處收起清單
+        $(document).on('mousedown', function(e) {
+            if (!$(e.target).closest('#edit_client_name, #edit_client_dd').length) {
+                $('#edit_client_dd').hide();
+            }
+        });
 
         // 儲存修改
         function saveEdit() {
@@ -4782,6 +4921,10 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                         })();
                         rowData.IS_number = $('#edit_is_number').val();
                         rowData.Client_name = $('#edit_client_name').val();
+                        if (!$('#edit_client_id').prop('disabled') && $('#edit_client_id').val()) {
+                            rowData.Client_id = $('#edit_client_id').val();
+                        }
+                        rowData.Client_name_display = rowData.Client_name;
                         rowData.sale_type = $('#edit_sale_type').val();
                         var selectedOption = $('#edit_sale_type option:selected');
                         rowData.sale_type_name = selectedOption.text();
