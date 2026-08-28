@@ -410,6 +410,11 @@ function loadProcessTagTree(cb) {
 }
 
 function loadPendingList(done) {
+    // 清單重抓＝畫面上所有明細一律視為過期：批次綁定／批次設定製程之後，
+    // 標頭徽章是由重抓的統計算出來的、項目列卻是吃 qtItemsCache，不清就會出現
+    // 「標頭說料號ID已綁定、底下的列還是未綁定」這種兩邊對不起來的畫面
+    qtItemsCache = {};
+    qtProcState  = {};
     $('#qtCards').html('<div style="text-align:center;color:#999;padding:20px;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>');
     $.get(API_URL, { action: 'get_pending_transfer_list' }, function(res) {
         if (!res.success) { $('#qtCards').html('載入失敗：' + (res.message||'')); return; }
@@ -423,7 +428,7 @@ function loadPendingList(done) {
     });
 }
 $('#qtYearFilter').on('change', function(){ qtPage = 1; renderCards(); });
-$('#qtCustFilter').on('change', function(){ qtPage = 1; renderCards(); });
+$('#qtCustFilter').on('change', function(){ qtPage = 1; populateYearFilter(); renderCards(); });
 $('#qtOnlyUnbound').on('change', function(){ qtPage = 1; renderCards(); });
 
 function renderStats() {
@@ -470,10 +475,20 @@ function yearOf(d) { return d ? String(d).substring(0, 4) : ''; }
 
 let qtYearInit = false;   // 只有第一次載入才自動選最新年份，之後一律尊重使用者當下選的
 function populateYearFilter() {
-    const years = Array.from(new Set(qtData.map(r => yearOf(r.quote_date)).filter(Boolean))).sort().reverse();
+    // 只算目前選定客戶的資料：客戶篩掉之後沒有單的年份一律不列出來
+    const cust = $('#qtCustFilter').val();
+    const cnt = {};
+    qtData.forEach(function(r) {
+        if (cust && String(r.client_id || '') !== cust) return;
+        const y = yearOf(r.quote_date);
+        if (y) cnt[y] = (cnt[y] || 0) + 1;
+    });
+    const years = Object.keys(cnt).sort().reverse();
     const $sel = $('#qtYearFilter');
     const cur = $sel.val();
-    $sel.html('<option value="">全部</option>' + years.map(y => '<option value="' + y + '">' + y + '</option>').join(''));
+    const totalN = Object.keys(cnt).reduce(function(a, y){ return a + cnt[y]; }, 0);
+    $sel.html('<option value="">全部（' + totalN + '）</option>' +
+              years.map(y => '<option value="' + y + '">' + y + '（' + cnt[y] + '）</option>').join(''));
     if (!qtYearInit) {
         qtYearInit = true;
         if (years.length) $sel.val(years[0]);              // 預設＝最新年份
@@ -622,19 +637,18 @@ function qtGoPage(p) { qtPage = p; renderCards(); }
 function autoBindQuote(quoteId, quoteNo) {
     const row = qtData.find(function(r){ return String(r.quote_id) === String(quoteId); });
     const noDs = row ? Number(row.items_no_dsetting) : 0;
-    if (!noDs) { alert('報價單 ' + quoteNo + ' 的料號ID已經全部綁定完成。'); return; }
-    if (!row.client_id) { alert('報價單 ' + quoteNo + ' 還沒有設定客戶，無法自動建立料號（新建的料號要綁到客戶）。\n請先按客戶欄旁的「切換」設定客戶後再試。'); return; }
-    if (!confirm('報價單 ' + quoteNo + ' 有 ' + noDs + ' 筆項目還沒綁定料號ID。\n\n將依每一筆的料號文字自動處理：\n・已經有這個料號 → 直接綁上\n・還沒有 → 以本單客戶「' + (row.client_name || '') + '」新建料號後綁上\n\n確定要執行嗎？')) return;
+    if (!noDs) { qtNotify('報價單 ' + quoteNo + ' 的料號ID已經全部綁定完成。', 'warn'); return; }
+    if (!row.client_id) { qtNotify('報價單 ' + quoteNo + ' 還沒有設定客戶，無法自動建立料號（新建的料號要綁到客戶）。\n請先按客戶欄旁的「切換」設定客戶後再試。', 'warn'); return; }
     const $b = $('#qtBtnAuto' + quoteId).prop('disabled', true);
     $.post(API_URL, { action: 'quick_autobind_quote', quote_id: quoteId }, function(res) {
         $b.prop('disabled', false);
-        if (!res.success) { alert('自動建立並綁定失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('自動建立並綁定失敗：' + res.message, 'err'); return; }
         let msg = '報價單 ' + quoteNo + ' 已綁定 ' + res.bound + ' 筆';
         if (res.created) msg += '\n新建料號 ' + res.created + ' 筆：' + res.created_nos.join('、');
         if (res.reused)  msg += '\n沿用既有料號 ' + res.reused + ' 筆：' + res.reused_nos.join('、');
         if (res.skipped) msg += '\n略過 ' + res.skipped + ' 筆（料號欄是空的，無法建立）';
         if (res.ambiguous) msg += '\n\n以下 ' + res.ambiguous + ' 個料號在主檔裡有多筆完全同名的登錄，系統無法判斷該用哪一筆，\n已保持未綁定，請用該列的「快速綁定」自行挑選：\n' + res.ambiguous_nos.join('、');
-        alert(msg);
+        qtNotify(msg, 'ok');
         reloadQuoteItems(quoteId);
     });
 }
@@ -857,7 +871,7 @@ function saveItemProcess(itemId) {
     // 只送攤平後的 process_no 會讓那邊的檢視畫面空白、編輯畫面點亮一堆不相干的標籤
     const subIdsStr = state.selected.join(',');
     $.post(API_URL, { action: 'quick_set_item_process', item_id: itemId, process_nos: [...procIds].join(','), group_type: groupType, sub_tag_ids: subIdsStr }, function(res) {
-        if (!res.success) { alert('設定製程失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('設定製程失敗：' + res.message, 'err'); return; }
         Object.keys(qtItemsCache).forEach(function(qid) {
             qtItemsCache[qid].forEach(function(it) {
                 if (String(it.item_id) === String(itemId)) { it.processes = [...procIds].join(','); it.process_notes = subIdsStr; }
@@ -871,9 +885,9 @@ function saveItemProcess(itemId) {
 // 帶入備註／取消：後端會重建該報價單備註欄的【規格備註】區塊（使用者自己寫的備註不動）
 function setItemNoteOnly(itemId, on) {
     const it = findItemById(itemId);
-    if (on && !String(it && it.specification || '').trim()) { alert('這一筆沒有規格文字，沒有內容可以帶入備註。'); return; }
+    if (on && !String(it && it.specification || '').trim()) { qtNotify('這一筆沒有規格文字，沒有內容可以帶入備註。', 'warn'); return; }
     $.post(API_URL, { action: 'quick_set_item_note_only', item_id: itemId, on: on ? '1' : '0' }, function(res) {
-        if (!res.success) { alert('設定失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('設定失敗：' + res.message, 'err'); return; }
         if (it) { it.note_only = on ? 1 : 0; if (on) { it.processes = ''; it.process_notes = ''; } }
         if (on) delete qtProcState[itemId];
         const qid = findQuoteIdByItemId(itemId);
@@ -998,7 +1012,7 @@ function saveQuickBindPart() {
     if (!qbpSelectedPart) return;
     const boundItemId = qbpItemId, boundDId = qbpSelectedPart.d_id, boundProductText = qbpOrigProductText, boundClientId = qbpClientId;
     $.post(API_URL, { action: 'quick_bind_item_dsetting', item_id: boundItemId, d_id: boundDId }, function(res) {
-        if (!res.success) { alert('綁定失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('綁定失敗：' + res.message, 'err'); return; }
         const dSettingId = res.product_id || qbpSelectedPart.D_Setting_Id;
         Object.keys(qtItemsCache).forEach(function(qid) {
             qtItemsCache[qid].forEach(function(it) { if (String(it.item_id) === String(boundItemId)) { it.d_setting_d_id = boundDId; it.product_id = dSettingId; } });
@@ -1041,7 +1055,7 @@ function confirmBatchBind() {
     $('.bb-chk:checked').each(function() { ids.push(bbCandidates[$(this).data('i')].item_id); });
     if (!ids.length) { closeMask('batchBindMask'); return; }
     $.post(API_URL, { action: 'batch_bind_items_dsetting', item_ids: JSON.stringify(ids), d_id: bbDId }, function(res) {
-        if (!res.success) { alert('批次綁定失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('批次綁定失敗：' + res.message, 'err'); return; }
         const idSet = ids.map(String);
         const boundCandidates = bbCandidates.filter(function(c) { return idSet.indexOf(String(c.item_id)) !== -1; });
 
@@ -1153,7 +1167,7 @@ function submitNewCustomer() {
 
 function switchCustomer(customerId, customerName) {
     $.post(API_URL, { action: 'quick_switch_quote_customer', quote_id: custSwitchQuoteId, customer_id: customerId }, function(res) {
-        if (!res.success) { alert('切換失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('切換失敗：' + res.message, 'err'); return; }
         closeMask('custSwitchMask');
         loadPendingList();
     });
@@ -1175,7 +1189,7 @@ function doConfirmTransfer(ids, doneMsg) {
     const keepPage   = qtPage;
     const keepScroll = window.scrollY;
     $.post(API_URL, { action: 'quick_confirm_transfer', quote_ids: JSON.stringify(ids) }, function(res) {
-        if (!res.success) { alert('轉入失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('轉入失敗：' + res.message, 'err'); return; }
         const gone = ids.map(String);
         qtData = qtData.filter(function(r){ return gone.indexOf(String(r.quote_id)) === -1; });
         gone.forEach(function(id){ delete qtItemsCache[id]; });
@@ -1190,19 +1204,36 @@ function doConfirmTransfer(ids, doneMsg) {
 }
 
 // 轉入成功用小提示帶過就好，不要用 alert 打斷連續作業（失敗才跳 alert）
-function showQtToast(msg) {
-    let $t = $('#qtToast');
-    if (!$t.length) {
-        $t = $('<div id="qtToast" style="position:fixed;right:20px;bottom:80px;z-index:2000;background:#8A5A2B;color:#fff;' +
-               'padding:10px 16px;border-radius:6px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.3);display:none;"></div>').appendTo('body');
+// 全頁的訊息一律走右下角浮動提示，不用 alert（使用者要求：不要一直按 Enter 確認）。
+// 三種語意：ok＝綠底（做完了）、warn＝橘底（擋下來的原因）、err＝紅底（失敗）。
+// 多則會往上堆疊不互相覆蓋；預設 5 秒自動消失，內容長的自動延長，滑鼠移上去不會消失。
+function qtNotify(msg, type) {
+    let $wrap = $('#qtToastWrap');
+    if (!$wrap.length) {
+        $wrap = $('<div id="qtToastWrap" style="position:fixed;right:20px;bottom:24px;z-index:2000;' +
+                  'display:flex;flex-direction:column-reverse;gap:8px;max-width:420px;"></div>').appendTo('body');
     }
-    $t.text(msg).stop(true, true).fadeIn(120).delay(2200).fadeOut(400);
+    const c = { ok:   { bg:'#2e7d32', fg:'#fff' },
+                warn: { bg:'#F0A24B', fg:'#4E2C0B' },
+                err:  { bg:'#DD5138', fg:'#fff' } }[type || 'ok'] || { bg:'#2e7d32', fg:'#fff' };
+    const $t = $('<div></div>').css({
+        background: c.bg, color: c.fg, padding: '10px 16px', borderRadius: '6px', fontSize: '13px',
+        boxShadow: '0 4px 12px rgba(0,0,0,.3)', whiteSpace: 'pre-line', lineHeight: '1.5', display: 'none'
+    }).text(String(msg == null ? '' : msg)).appendTo($wrap);
+    // 內容長的多留一點時間看（每 40 個字多 1 秒，最多 15 秒）
+    const ms = Math.min(15000, 5000 + Math.floor(String(msg || '').length / 40) * 1000);
+    let timer = setTimeout(function(){ $t.fadeOut(300, function(){ $t.remove(); }); }, ms);
+    $t.on('mouseenter', function(){ clearTimeout(timer); })
+      .on('mouseleave', function(){ timer = setTimeout(function(){ $t.fadeOut(300, function(){ $t.remove(); }); }, 2000); })
+      .on('click', function(){ clearTimeout(timer); $t.fadeOut(150, function(){ $t.remove(); }); })
+      .fadeIn(120);
 }
+function showQtToast(msg) { qtNotify(msg, 'ok'); }
 
 function confirmTransferOne(quoteId, quoteNo) {
     const row = qtData.find(function(r){ return String(r.quote_id) === String(quoteId); });
     const gate = transferGate(row ? row.items_no_dsetting : 0, row ? row.item_count : 0, row ? row.items_no_process : 0);
-    if (!gate.ok) { alert('報價單 ' + quoteNo + ' 無法轉入正式報價單：\n' + gate.reason); return; }
+    if (!gate.ok) { qtNotify('報價單 ' + quoteNo + ' 無法轉入正式報價單：\n' + gate.reason, 'warn'); return; }
     if (!confirm('確定要將報價單 ' + quoteNo + ' 轉入正式報價單嗎？轉入後將從本頁移除。')) return;
     doConfirmTransfer([quoteId]);
 }
@@ -1213,7 +1244,7 @@ let bpState = { activeGid: null, selected: [] };
 
 $('#btnBulkProc').on('click', function() {
     const rows = getFilteredData();
-    if (!rows.length) { alert('目前篩選範圍內沒有報價單。'); return; }
+    if (!rows.length) { qtNotify('目前篩選範圍內沒有報價單。', 'warn'); return; }
     bpState = { activeGid: processTagTree.length ? processTagTree[0].group_id : null, selected: [] };
     const cust = $('#qtCustFilter').val();
     const custName = cust ? ($('#qtCustFilter option:selected').text().split('—')[0].trim()) : '全部客戶';
@@ -1273,11 +1304,11 @@ function updateBpCount() {
 $(document).on('change', 'input[name="bpTarget"],input[name="bpScope"]', updateBpCount);
 
 function submitBulkProc() {
-    if (!bpState.selected.length) { alert('請先選擇要套用的製程標籤。'); return; }
+    if (!bpState.selected.length) { qtNotify('請先選擇要套用的製程標籤。', 'warn'); return; }
     const onlyUnset = $('input[name="bpTarget"]:checked').val() === 'unset';
     const onlyPage  = $('input[name="bpScope"]:checked').val() === 'page';
     const rows = getBpRows();
-    if (!rows.length) { alert(onlyPage ? '目前這一頁沒有報價單。' : '目前篩選範圍內沒有報價單。'); return; }
+    if (!rows.length) { qtNotify(onlyPage ? '目前這一頁沒有報價單。' : '目前篩選範圍內沒有報價單。', 'warn'); return; }
     const est = $('#bpCount').text();
     if (!confirm('將把選定的製程套用到' + (onlyPage ? '目前這一頁的 ' : '') + rows.length + ' 張報價單、約 ' + est + ' 筆項目' +
                  (onlyUnset ? '（只有還沒設定製程的）' : '（會覆蓋原本已設定的）') + '。\n\n確定要執行嗎？')) return;
@@ -1287,7 +1318,7 @@ function submitBulkProc() {
     $.post(API_URL, { action: 'quick_set_process_bulk', quote_ids: JSON.stringify(qids),
                       only_unset: onlyUnset ? '1' : '0', sub_tag_ids: bpState.selected.join(',') }, function(res) {
         $btn.prop('disabled', false).html('<i class="fa fa-check"></i> 套用');
-        if (!res.success) { alert('批次設定製程失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('批次設定製程失敗：' + res.message, 'err'); return; }
         closeMask('bulkProcMask');
         showQtToast('已設定 ' + res.updated + ' 筆項目的製程');
         // 動到的範圍可能很大，快取一律作廢重抓，避免畫面與資料庫不一致
@@ -1309,7 +1340,7 @@ function clearProcStateForQuote(qid) {
 // 每次開頁就自動建立料號太危險（例如某張單的客戶設錯，會一口氣建出一批掛錯客戶的料號）。
 $('#btnBatchAutoBind').on('click', function() {
     const rows = getFilteredData().filter(function(r){ return Number(r.items_no_dsetting) > 0; });
-    if (!rows.length) { alert('目前篩選範圍內沒有需要綁定料號的報價單。'); return; }
+    if (!rows.length) { qtNotify('目前篩選範圍內沒有需要綁定料號的報價單。', 'warn'); return; }
     const noCust = rows.filter(function(r){ return !r.client_id; });
     const items  = rows.reduce(function(a, r){ return a + Number(r.items_no_dsetting); }, 0);
     const scope  = $('#qtYearFilter').val() ? ($('#qtYearFilter').val() + ' 年') : '全部年份';
@@ -1323,21 +1354,21 @@ $('#btnBatchAutoBind').on('click', function() {
     const ids = rows.map(function(r){ return Number(r.quote_id); });
     $.post(API_URL, { action: 'quick_autobind_quote', quote_ids: JSON.stringify(ids) }, function(res) {
         $b.prop('disabled', false).html('<i class="fa fa-magic"></i> 一鍵建立並綁定料號（全部）');
-        if (!res.success) { alert('自動建立並綁定失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('自動建立並綁定失敗：' + res.message, 'err'); return; }
         let m = '已處理 ' + res.quotes + ' 張報價單，綁定 ' + res.bound + ' 筆項目。';
         if (res.created)   m += '\n新建料號 ' + res.created + ' 筆';
         if (res.reused)    m += '\n沿用既有料號 ' + res.reused + ' 筆';
         if (res.skipped)   m += '\n略過 ' + res.skipped + ' 筆（料號欄是空的）';
         if (res.ambiguous) m += '\n\n有 ' + res.ambiguous + ' 筆因為主檔裡存在多筆完全同名的料號而沒有自動綁定，\n請用該列的「快速綁定」自行挑選：\n' + res.ambiguous_nos.join('、');
         if (res.issue_count) m += '\n\n以下 ' + res.issue_count + ' 張沒有處理：\n' + res.issues.map(function(i){ return '・' + i.quote_no + '：' + i.reason; }).join('\n');
-        alert(m);
+        qtNotify(m, 'ok');
         loadPendingList();
     });
 });
 
 $('#btnBatchConfirm').on('click', function() {
     const ids = $('.qt-row-chk:checked').map(function(){ return Number($(this).val()); }).get();
-    if (!ids.length) { alert('請先勾選要轉入正式報價單的項目'); return; }
+    if (!ids.length) { qtNotify('請先勾選要轉入正式報價單的項目', 'warn'); return; }
     const blocked = [];
     ids.forEach(function(id) {
         const row = qtData.find(function(r){ return Number(r.quote_id) === Number(id); });
@@ -1346,7 +1377,7 @@ $('#btnBatchConfirm').on('click', function() {
         if (!g.ok) blocked.push('・' + row.quote_no + '：' + g.reason.replace('，補齊後才能轉入正式報價單', ''));
     });
     if (blocked.length) {
-        alert('以下 ' + blocked.length + ' 張報價單還沒補齊，不可轉入正式報價單：\n' + blocked.join('\n') + '\n\n請先補齊料號ID與製程後再轉入。');
+        qtNotify('以下 ' + blocked.length + ' 張報價單還沒補齊，不可轉入正式報價單：\n' + blocked.join('\n') + '\n\n請先補齊料號ID與製程後再轉入。', 'warn');
         return;
     }
     if (!confirm('確定要將這 ' + ids.length + ' 張報價單轉入正式報價單清單嗎？轉入後將從本頁移除。')) return;
@@ -1362,7 +1393,7 @@ let kwChecked = {};         // item_id => true（勾選狀態，跨分組共用�
 
 $('#btnKwScan').on('click', function() {
     const rows = getFilteredData();
-    if (!rows.length) { alert('目前篩選範圍內沒有報價單。'); return; }
+    if (!rows.length) { qtNotify('目前篩選範圍內沒有報價單。', 'warn'); return; }
     $('#kwScopeAllCnt').text(rows.length);
     $('#kwScopePageCnt').text(qtPageRows.length);
     $('input[name="kwScope"][value="filtered"]').prop('checked', true);
@@ -1480,12 +1511,12 @@ function submitKwApply() {
         total += ids.length;
         batches.push(g.kind === 'note' ? { to_note: 1, item_ids: ids } : { sub_tag_ids: g.sub_tag_ids, item_ids: ids });
     });
-    if (!total) { alert('沒有勾選任何項目。'); return; }
+    if (!total) { qtNotify('沒有勾選任何項目。', 'warn'); return; }
     if (!confirm('將把確認過的建議套用到 ' + total + ' 筆項目（' + batches.length + ' 種組合）。\n\n確定要執行嗎？')) return;
     const $btn = $('#kwApplyBtn').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 套用中…');
     $.post(API_URL, { action: 'qkw_apply', batches: JSON.stringify(batches) }, function(res) {
         $btn.prop('disabled', false).html('<i class="fa fa-check"></i> 套用已勾選的項目');
-        if (!res.success) { alert('套用失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('套用失敗：' + res.message, 'err'); return; }
         closeMask('kwScanMask');
         showQtToast('已套用 ' + res.data.items + ' 筆項目' + (res.data.note_quotes ? ('，' + res.data.note_quotes + ' 張報價單已更新備註') : ''));
         qtItemsCache = {}; qtProcState = {};
@@ -1501,7 +1532,7 @@ $('#btnKwRules').on('click', function() { openMask('kwRuleMask'); krLoad(); });
 
 function krLoad() {
     $.get(API_URL, { action: 'qkw_rule_list' }, function(res) {
-        if (!res.success) { alert('讀取規則失敗：' + (res.message || '')); return; }
+        if (!res.success) { qtNotify('讀取規則失敗：' + (res.message || ''), 'err'); return; }
         krRules = res.data || [];
         krRenderRows(res.tags || {});
         krResetForm();
@@ -1612,7 +1643,7 @@ function krSave() {
         customer_ids: Object.keys(krCustSel).join(','), sub_tag_ids: krTagSel.join(','),
         to_note: $('#krToNote').is(':checked') ? 1 : 0, priority: $('#krPriority').val() || 0, is_active: 1
     }, function(res) {
-        if (!res.success) { alert('儲存失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('儲存失敗：' + res.message, 'err'); return; }
         showQtToast('規則已儲存');
         krLoad();
     });
@@ -1625,7 +1656,7 @@ function krSeed() {
                  '建立後可自行增修或刪除，且一律仍要人工確認才會套用。' + '\n\n' +
                  '確定要載入嗎？')) return;
     $.post(API_URL, { action: 'qkw_rule_seed' }, function(res) {
-        if (!res.success) { alert('載入失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('載入失敗：' + res.message, 'err'); return; }
         showQtToast(res.added ? ('已新增 ' + res.added + ' 條規則') : '沒有新增（範本規則都已存在）');
         krLoad();
     });
@@ -1634,7 +1665,7 @@ function krSeed() {
 function krDelete(ruleId) {
     if (!confirm('確定要刪除這條規則嗎？（不影響已經套用出去的製程設定）')) return;
     $.post(API_URL, { action: 'qkw_rule_delete', rule_id: ruleId }, function(res) {
-        if (!res.success) { alert('刪除失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('刪除失敗：' + res.message, 'err'); return; }
         showQtToast('規則已刪除');
         krLoad();
     });
@@ -1654,13 +1685,13 @@ function updateReadyCount() {
 
 $('#btnTransferReady').on('click', function() {
     const rows = readyQuotes();
-    if (!rows.length) { alert('目前篩選範圍內沒有「料號ID與製程都已補齊」的報價單。'); return; }
+    if (!rows.length) { qtNotify('目前篩選範圍內沒有「料號ID與製程都已補齊」的報價單。', 'warn'); return; }
     const items = rows.reduce(function(a, r){ return a + Number(r.item_count); }, 0);
     if (!confirm('將把目前篩選範圍內已補齊的 ' + rows.length + ' 張報價單（共 ' + items + ' 筆項目）轉入正式報價單。\n\n轉入後這些單就不會再出現在本頁，確定要執行嗎？')) return;
     const $btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 轉入中…');
     $.post(API_URL, { action: 'quick_confirm_transfer', quote_ids: JSON.stringify(rows.map(function(r){ return Number(r.quote_id); })) }, function(res) {
         $btn.prop('disabled', false).html('<i class="fa fa-check-square-o"></i> 一鍵轉入已補齊 <span id="qtReadyCnt">(0)</span>');
-        if (!res.success) { alert('轉入失敗：' + res.message); return; }
+        if (!res.success) { qtNotify('轉入失敗：' + res.message, 'err'); return; }
         showQtToast('已轉入 ' + res.updated + ' 張報價單');
         qtItemsCache = {}; qtProcState = {};
         const keepPage = qtPage;
