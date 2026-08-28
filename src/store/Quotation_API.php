@@ -7,6 +7,7 @@ header('Content-Type: application/json');
 require_once __DIR__ . '/../common/DBConnection.php';   // 2026-08-24 改 require_once＋__DIR__：api_guard 已先載入過，用 include 會二次宣告 class 直接 500
 require_once '../common/quotation_approval.php';
 require_once '../common/asdoc_lib.php';
+require_once __DIR__ . '/../common/quote_customer_lib.php';   // 整張報價單變更客戶（唯一實作）
 
 $db  = new DBConnection();
 $pdo = $db->getPDO();
@@ -265,7 +266,9 @@ try {
                 FROM quotation_list ql
                 LEFT JOIN user u ON ql.created_by = u.id
                 LEFT JOIN quotation_list src ON ql.source_quote_id = src.quote_id
-                WHERE YEAR(ql.quote_date) = ?
+                -- pending_review=1 是「報價單快速轉移」頁尚待確認補件的匯入舊資料，
+                -- 還不是正式報價單，任何對外呈現的清單/查詢一律排除（確認轉正後才會出現）
+                WHERE YEAR(ql.quote_date) = ? AND ql.pending_review = 0
                 ORDER BY ql.quote_date DESC, ql.quote_no DESC
             ");
             $stmt->execute([$year]);
@@ -287,6 +290,9 @@ try {
                 FROM quotation_list ql
                 LEFT JOIN user u ON ql.created_by = u.id
                 LEFT JOIN quotation_list src ON ql.source_quote_id = src.quote_id
+                -- pending_review=1 是「報價單快速轉移」頁尚待確認補件的匯入舊資料，
+                -- 還不是正式報價單，任何對外呈現的清單/查詢一律排除（確認轉正後才會出現）
+                WHERE ql.pending_review = 0
                 ORDER BY ql.quote_date DESC, ql.quote_no DESC
             ");
             $stmt->execute();
@@ -1765,6 +1771,41 @@ try {
             break;
         }
 
+        // ══════════════════════════════════════════════════════════════════
+        // 整張報價單變更客戶（2026-08-28）
+        //   實作全部收在 src/common/quote_customer_lib.php，本區塊只做守門與參數轉接。
+        //   權限：功能碼 quotation_change_customer（或系統管理員 all）。頁面上會隱藏按鈕，
+        //   但**後端一定要再擋一次**（鐵律8）——這三個動作會一次改動料號主檔、訂單與 BOM。
+        // ══════════════════════════════════════════════════════════════════
+        case 'qcc_scan': {
+            if (!qcc_can_change_customer($pdo, (int)$user_id)) throw new Exception('您沒有「整張報價單變更客戶」的權限');
+            $quote_id    = intval($_POST['quote_id'] ?? $_GET['quote_id'] ?? 0);
+            $customer_id = trim($_POST['customer_id'] ?? $_GET['customer_id'] ?? '');
+            if (!$quote_id) throw new Exception('缺少報價單ID');
+            $response = ['success' => true, 'data' => qcc_scan_quote($pdo, $quote_id, $customer_id)];
+            break;
+        }
+
+        case 'qcc_apply': {
+            if (!qcc_can_change_customer($pdo, (int)$user_id)) throw new Exception('您沒有「整張報價單變更客戶」的權限');
+            $quote_id    = intval($_POST['quote_id'] ?? 0);
+            $customer_id = trim($_POST['customer_id'] ?? '');
+            $confirmed   = !empty($_POST['confirmed']) && $_POST['confirmed'] !== '0';
+            $withParts   = !isset($_POST['with_parts']) || ($_POST['with_parts'] !== '0' && $_POST['with_parts'] !== 'false');
+            if (!$quote_id || $customer_id === '') throw new Exception('缺少報價單或客戶代碼');
+            $response = ['success' => true, 'data' => qcc_apply_customer($pdo, $quote_id, $customer_id, (int)$user_id, $confirmed, $withParts)];
+            break;
+        }
+
+        case 'qcc_clone_parts': {
+            if (!qcc_can_change_customer($pdo, (int)$user_id)) throw new Exception('您沒有「整張報價單變更客戶」的權限');
+            $quote_id    = intval($_POST['quote_id'] ?? 0);
+            $customer_id = trim($_POST['customer_id'] ?? '');
+            if (!$quote_id || $customer_id === '') throw new Exception('缺少報價單或客戶代碼');
+            $response = ['success' => true, 'data' => qcc_clone_parts_for_customer($pdo, $quote_id, $customer_id, (int)$user_id)];
+            break;
+        }
+
         case 'save_customer':
             $id      = $_POST['customer_id_modal'] ?? '';
             $name    = $_POST['customer_name_modal'] ?? '';
@@ -2082,7 +2123,9 @@ try {
                 FROM quotation_list ql
                 JOIN quotation_item qi ON ql.quote_id = qi.quote_id
                 LEFT JOIN quotation_item_process_map qipm ON qi.item_id = qipm.quotation_item_id
-                WHERE qi.product_id LIKE :term
+                -- pending_review=1 是「報價單快速轉移」頁尚待確認補件的匯入舊資料，
+                -- 還不是正式報價單，任何對外呈現的清單/查詢一律排除（確認轉正後才會出現）
+                WHERE ql.pending_review = 0 AND qi.product_id LIKE :term
                 GROUP BY qi.item_id
                 ORDER BY ql.quote_date DESC, ql.quote_id DESC
                 LIMIT 30
@@ -2149,7 +2192,9 @@ try {
             $stmt = $pdo->prepare("
                 SELECT quote_no, client_name, quote_date
                 FROM quotation_list
-                WHERE quote_no LIKE ?
+                -- pending_review=1 是「報價單快速轉移」頁尚待確認補件的匯入舊資料，
+                -- 還不是正式報價單，任何對外呈現的清單/查詢一律排除（確認轉正後才會出現）
+                WHERE pending_review = 0 AND quote_no LIKE ?
                 ORDER BY quote_date DESC, quote_no DESC
                 LIMIT 10
             ");

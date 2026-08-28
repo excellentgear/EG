@@ -527,7 +527,9 @@ switch ($action) {
         if (empty($quoteNos) && !empty($dIds)) {
             try {
                 $phD = implode(',', array_fill(0, count($dIds), '?'));
-                $qnStmt = $pdo->prepare("SELECT DISTINCT ql.quote_no FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id = qi.quote_id WHERE qi.d_setting_d_id IN ($phD)");
+                // pending_review=1 是「報價單快速轉移」頁尚待確認補件的匯入舊資料，還不是正式報價單，
+                // 確認轉正之後才該出現在料號的報價紀錄裡
+                $qnStmt = $pdo->prepare("SELECT DISTINCT ql.quote_no FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id = qi.quote_id WHERE qi.d_setting_d_id IN ($phD) AND ql.pending_review = 0");
                 $qnStmt->execute($dIds);
                 $quoteNos = $qnStmt->fetchAll(PDO::FETCH_COLUMN);
             } catch(Throwable $e) {}
@@ -542,7 +544,8 @@ switch ($action) {
                     ql.note AS quote_note
                 FROM quotation_list ql
                 LEFT JOIN user u ON u.id = ql.updated_by
-                WHERE ql.quote_no IN ($phQ) ORDER BY ql.quote_date DESC, ql.quote_no DESC");
+                WHERE ql.quote_no IN ($phQ) AND ql.pending_review = 0
+                ORDER BY ql.quote_date DESC, ql.quote_no DESC");
             $qlStmt->execute($quoteNos);
             $headers = [];
             foreach ($qlStmt->fetchAll(PDO::FETCH_ASSOC) as $h) { $headers[$h['quote_no']] = $h; }
