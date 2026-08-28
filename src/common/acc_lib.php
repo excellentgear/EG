@@ -256,6 +256,21 @@ function acc_ensure_schema(PDO $db): void
             KEY idx_line_split (split_parent)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-對帳底稿明細（加總/拆分/排序/勾選都存這裡，不動來源憑證）'");
 
+        /* 對帳對象選項：部分客戶不提供對帳單（我方直接以出貨單認列待收金額），
+           這種對象不會有「對方紙本合計」，畫面上不該一直顯示差額與未輸入提醒。
+           刻意不加欄位到 customer_list / maker_list——那兩張是全系統重度使用的主檔，
+           而這是「會計對帳」單一模組的設定，收在自己的表即可（同 acc_recon 的理由）。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_recon_party_opt (
+            side            VARCHAR(2)  NOT NULL COMMENT 'ar=應收 ap=應付',
+            party_id        VARCHAR(20) NOT NULL COMMENT '客戶簡稱／廠商 maker_id_no',
+            no_statement    TINYINT(1)  NOT NULL DEFAULT 0 COMMENT '1=對方不提供對帳單，直接以我方出貨單認列',
+            note            VARCHAR(200) DEFAULT NULL,
+            updated_by      INT          DEFAULT NULL,
+            updated_by_name VARCHAR(50)  DEFAULT NULL,
+            updated_at      DATETIME     DEFAULT NULL,
+            PRIMARY KEY (side, party_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-對帳對象選項（是否提供對帳單）'");
+
         $done = true;
     } catch (Throwable $e) {
         error_log('acc_ensure_schema 失敗: ' . $e->getMessage());
@@ -3851,4 +3866,589 @@ function acc_parse_csv(string $raw): array
     $data = [];
     foreach ($lines as $l) $data[] = str_getcsv($l);
     return [$head, $data];
+}
+
+/* ============================================================
+ * 對帳作業（reconcile.php）的延伸功能
+ *
+ * 這一段全部是「對帳當下要用的參考資料」，共同原則：
+ *  - 只讀來源憑證與報價／訂單，不改它們（唯一例外是使用者明確按下「綁定」）。
+ *  - 交接日期前後的帳常被對方做到前一個或後一個月份，所以要能跨月找單並改帳款月份，
+ *    改的是既有的 billing_month_override（acc_set_billing_month），不另開一套機制。
+ * ============================================================ */
+
+/** 對帳單綁定 AS 文件時用的模組代碼（system_parameters AS_DOC_BIND 的 key） */
+if (!defined('ACC_RECON_ASDOC_MODULE')) define('ACC_RECON_ASDOC_MODULE', 'acc_recon');
+
+/** 對帳頁的全站預設值（管理員可改）：勾選順序自動排序、拖移排序功能 */
+function acc_recon_pref(PDO $db): array
+{
+    $out = ['autosort_default' => 0, 'drag_default' => 0];
+    try {
+        $st = $db->query("SELECT setting_key, setting_value FROM system_settings
+                          WHERE setting_key IN ('acc_recon_autosort_default','acc_recon_drag_default')");
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if ($r['setting_key'] === 'acc_recon_autosort_default') $out['autosort_default'] = (int)$r['setting_value'] ? 1 : 0;
+            if ($r['setting_key'] === 'acc_recon_drag_default')     $out['drag_default']     = (int)$r['setting_value'] ? 1 : 0;
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 儲存對帳頁預設值（呼叫端須先確認是會計管理員） */
+function acc_recon_pref_save(PDO $db, array $d): array
+{
+    try {
+        $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?)
+                            ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)");
+        $st->execute(['acc_recon_autosort_default', !empty($d['autosort_default']) ? '1' : '0']);
+        $st->execute(['acc_recon_drag_default',     !empty($d['drag_default'])     ? '1' : '0']);
+        return ['success' => true, 'message' => '已儲存對帳頁預設值', 'pref' => acc_recon_pref($db)];
+    } catch (Throwable $e) {
+        return ['success' => false, 'message' => '儲存失敗：' . $e->getMessage()];
+    }
+}
+
+/** 某對象的對帳選項（是否提供對帳單） */
+function acc_recon_party_opt(PDO $db, string $side, string $partyId): array
+{
+    acc_ensure_schema($db);
+    $def = ['side' => $side, 'party_id' => $partyId, 'no_statement' => 0, 'note' => null,
+            'updated_by_name' => null, 'updated_at' => null];
+    try {
+        $st = $db->prepare("SELECT * FROM acc_recon_party_opt WHERE side=? AND party_id=? LIMIT 1");
+        $st->execute([$side, $partyId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return $def;
+        $r['no_statement'] = (int)$r['no_statement'];
+        return $r;
+    } catch (Throwable $e) { return $def; }
+}
+
+/** 一次取多個對象的選項（對象清單要標示「不提供對帳單」用） */
+function acc_recon_party_opt_map(PDO $db, string $side): array
+{
+    acc_ensure_schema($db);
+    $m = [];
+    try {
+        $st = $db->prepare("SELECT party_id, no_statement, note FROM acc_recon_party_opt WHERE side=?");
+        $st->execute([$side]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $m[(string)$r['party_id']] = ['no_statement' => (int)$r['no_statement'], 'note' => $r['note']];
+        }
+    } catch (Throwable $e) {}
+    return $m;
+}
+
+/** 存某對象的對帳選項 */
+function acc_recon_party_opt_save(PDO $db, string $side, string $partyId, array $d, ?array $user): array
+{
+    acc_ensure_schema($db);
+    $side = ($side === 'ap') ? 'ap' : 'ar';
+    $partyId = trim($partyId);
+    if ($partyId === '') return ['success' => false, 'message' => '缺少對象'];
+    $no = !empty($d['no_statement']) ? 1 : 0;
+    $note = mb_substr(trim((string)($d['note'] ?? '')), 0, 200);
+    try {
+        $st = $db->prepare("INSERT INTO acc_recon_party_opt
+                            (side, party_id, no_statement, note, updated_by, updated_by_name, updated_at)
+                            VALUES (?,?,?,?,?,?,NOW())
+                            ON DUPLICATE KEY UPDATE no_statement=VALUES(no_statement), note=VALUES(note),
+                              updated_by=VALUES(updated_by), updated_by_name=VALUES(updated_by_name),
+                              updated_at=NOW()");
+        $st->execute([$side, $partyId, $no, $note !== '' ? $note : null,
+                      $user ? (int)$user['id'] : null, $user ? (string)$user['user_cname'] : null]);
+        acc_audit($db, 'ACC_RECON', 'party_opt', $side . '-' . $partyId, $partyId,
+                  ['no_statement' => $no, 'note' => $note], null, $user);
+        return ['success' => true, 'message' => $no ? '已設為「不提供對帳單」' : '已設為「有提供對帳單」',
+                'opt' => acc_recon_party_opt($db, $side, $partyId)];
+    } catch (Throwable $e) {
+        return ['success' => false, 'message' => '儲存失敗：' . $e->getMessage()];
+    }
+}
+
+/**
+ * 找「這個對象、但不屬於本帳款月份」的單據。
+ * 用途：交接日期前後的單子，對方常做在前一個或後一個月份的帳裡，
+ * 對帳時要能立刻找出來並改成目前這個月份（改的是 billing_month_override）。
+ *
+ * @param array $f kw(料號/單號模糊)、months(往前後各幾個月，預設3)
+ */
+function acc_recon_outside(PDO $db, string $side, string $partyId, string $bm, array $f = []): array
+{
+    if (!preg_match('/^\d{4}-\d{2}$/', $bm)) return ['rows' => [], 'message' => '帳款月份格式錯誤'];
+    $kw   = trim((string)($f['kw'] ?? ''));
+    $span = (int)($f['months'] ?? 3);
+    if ($span < 1) $span = 1;
+    if ($span > 12) $span = 12;
+    $from = date('Y-m-01', strtotime($bm . '-01 -' . $span . ' month'));
+    $to   = date('Y-m-t',  strtotime($bm . '-01 +' . $span . ' month'));
+    $rows = [];
+
+    if ($side === 'ap') {
+        $w = ["t.maker_from = ?", "COALESCE(t.process_amount,0) <> 0", "t.transfer_date BETWEEN ? AND ?"];
+        $p = [$partyId, $from, $to];
+        if ($kw !== '') {
+            $w[] = "(t.product_id LIKE ? OR t.transfer_no LIKE ? OR t.bom LIKE ?)";
+            $p = array_merge($p, ["%$kw%", "%$kw%", "%$kw%"]);
+        }
+        $st = $db->prepare("SELECT t.transfer_id, t.transfer_no, DATE_FORMAT(t.transfer_date,'%Y-%m-%d') AS d,
+                                   t.bom, t.product_id, t.transfer_qty, t.price, t.modified_unit_price,
+                                   t.process_amount, t.invoice_ym, t.note
+                            FROM bom_ing_transfer_log t
+                            WHERE " . implode(' AND ', $w) . "
+                            ORDER BY t.transfer_date DESC, t.transfer_id DESC LIMIT 400");
+        $st->execute($p);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $ovr = trim((string)$r['invoice_ym']);
+            $cur = (strlen($ovr) >= 6) ? substr($ovr, 0, 4) . '-' . substr($ovr, 4, 2)
+                                       : substr((string)$r['d'], 0, 7);
+            if ($cur === $bm) continue;                       // 已經在本月份的不用列
+            $rows[] = ['src_type' => 'TLOG', 'src_id' => (int)$r['transfer_id'], 'no' => $r['transfer_no'],
+                       'date' => $r['d'], 'product_id' => $r['product_id'], 'spec' => $r['bom'],
+                       'qty' => (int)$r['transfer_qty'],
+                       'unit_price' => (float)($r['modified_unit_price'] ?: $r['price']),
+                       'amount' => (float)$r['process_amount'], 'cur_month' => $cur,
+                       'is_override' => $ovr !== '', 'kind' => 'process',
+                       'locked' => null, 'note' => $r['note']];
+        }
+        return ['rows' => $rows, 'range' => [$from, $to], 'billing_month' => $bm];
+    }
+
+    // 應收：出貨與退貨都要（退貨也是對帳單上的一列，只是金額為負）
+    $stc = $db->prepare("SELECT settlement_mode, settlement_day FROM customer_list WHERE customer=? LIMIT 1");
+    $stc->execute([$partyId]);
+    $cut  = acc_cutoff_for($stc->fetch(PDO::FETCH_ASSOC) ?: null, acc_global_cutoff($db));
+    $used = acc_invoiced_src_map($db);
+
+    $w = ["il.Client_name = ?", "il.Order_date BETWEEN ? AND ?"];
+    $p = [$partyId, $from, $to];
+    if ($kw !== '') { $w[] = "(il.Product_id LIKE ? OR il.IS_number LIKE ? OR il.Specification LIKE ?)";
+                      $p = array_merge($p, ["%$kw%", "%$kw%", "%$kw%"]); }
+    $st = $db->prepare("SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') AS d,
+                               il.Product_id, il.Specification, il.Qty, il.Unit_price, il.Note,
+                               il.billing_month_override
+                        FROM is_list il WHERE " . implode(' AND ', $w) . "
+                        ORDER BY il.Order_date DESC, il.IS_id DESC LIMIT 400");
+    $st->execute($p);
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
+        if (abs($amt) < 0.0001) continue;
+        $ovr = trim((string)$r['billing_month_override']);
+        $cur = preg_match('/^\d{4}-\d{2}$/', $ovr) ? $ovr : acc_billing_month($r['d'], $cut);
+        if ($cur === $bm) continue;
+        $lk = $used['IS-' . (int)$r['IS_id']] ?? null;
+        $rows[] = ['src_type' => 'IS', 'src_id' => (int)$r['IS_id'], 'no' => $r['IS_number'],
+                   'date' => $r['d'], 'product_id' => $r['Product_id'], 'spec' => $r['Specification'],
+                   'qty' => (int)$r['Qty'], 'unit_price' => (float)$r['Unit_price'], 'amount' => $amt,
+                   'cur_month' => $cur, 'is_override' => $ovr !== '', 'kind' => 'ship',
+                   'locked' => $lk ? ($lk['invoice_no'] ?: ('#' . $lk['invoice_id'])) : null,
+                   'note' => $r['Note']];
+    }
+
+    $w2 = ["it.Client_name = ?", "it.IR_date BETWEEN ? AND ?"];
+    $p2 = [$partyId, $from, $to];
+    if ($kw !== '') { $w2[] = "(it.d_id LIKE ? OR it.IR_no LIKE ? OR it.Specification LIKE ?)";
+                      $p2 = array_merge($p2, ["%$kw%", "%$kw%", "%$kw%"]); }
+    $st2 = $db->prepare("SELECT it.IR_id, it.IR_no, DATE_FORMAT(it.IR_date,'%Y-%m-%d') AS d, it.d_id,
+                                it.Specification, it.Qty, it.Unit_price, it.IR_ps, it.billing_month_override,
+                                COALESCE(rt.is_note,0) AS is_note
+                         FROM ir_track it
+                         LEFT JOIN ir_return_type rt ON rt.type_id = it.return_type_id
+                         WHERE " . implode(' AND ', $w2) . "
+                         ORDER BY it.IR_date DESC, it.IR_id DESC LIMIT 200");
+    $st2->execute($p2);
+    foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        if ((int)$r['is_note'] === 1) continue;
+        $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
+        if (abs($amt) < 0.0001) continue;
+        $ovr = trim((string)$r['billing_month_override']);
+        $cur = preg_match('/^\d{4}-\d{2}$/', $ovr) ? $ovr : acc_billing_month($r['d'], $cut);
+        if ($cur === $bm) continue;
+        $lk = $used['IR-' . (int)$r['IR_id']] ?? null;
+        $rows[] = ['src_type' => 'IR', 'src_id' => (int)$r['IR_id'], 'no' => $r['IR_no'],
+                   'date' => $r['d'], 'product_id' => $r['d_id'], 'spec' => $r['Specification'],
+                   'qty' => -(int)$r['Qty'], 'unit_price' => (float)$r['Unit_price'], 'amount' => -$amt,
+                   'cur_month' => $cur, 'is_override' => $ovr !== '', 'kind' => 'return',
+                   'locked' => $lk ? ($lk['invoice_no'] ?: ('#' . $lk['invoice_id'])) : null,
+                   'note' => $r['IR_ps']];
+    }
+
+    usort($rows, fn($a, $b) => strcmp((string)$b['date'], (string)$a['date'])
+                            ?: strcmp((string)$a['no'], (string)$b['no']));
+    return ['rows' => $rows, 'range' => [$from, $to], 'billing_month' => $bm];
+}
+
+/* ── 出貨列的報價／訂單對照 ────────────────────────────────────────────
+ * 對帳時最常被問的是「這個單價對不對」。單價的來源鏈是：
+ *   報價單(quotation_item，可能是階梯價) → 訂單(order_track.unit_price) → 出貨(is_list.Unit_price)
+ * 三段只要有一段沒接上（沒綁訂單、訂單沒綁報價），就只能人工判斷，
+ * 所以這裡同時提供「目前綁到誰」與「可以綁誰」的候選清單。
+ *
+ * 數量比對刻意做得寬鬆（使用者指定先粗略）：報價數量與實際出貨/訂單數量本來就會有誤差，
+ * 有階梯報價時用階梯區間（含該階自帶的容差）判定，沒有階梯時用 ±QUOTE_QTY_TOL 百分比。
+ */
+
+if (!defined('ACC_QUOTE_QTY_TOL')) define('ACC_QUOTE_QTY_TOL', 0.10);   // 非階梯報價的數量寬容度 ±10%
+
+/** 依數量挑出報價階梯（含該階容差）；回傳 [tier|null, 是否落在容差內] */
+function acc_quote_tier_for_qty(array $tiers, float $qty): array
+{
+    foreach ($tiers as $t) {
+        $min = (float)$t['qty_min'];
+        $max = ($t['qty_max'] === null || $t['qty_max'] === '') ? null : (float)$t['qty_max'];
+        if ($qty >= $min && ($max === null || $qty <= $max)) return [$t, true];
+    }
+    // 沒有正好落在區間內：看看加上容差後是否勉強算得上（現場常見差幾顆）
+    foreach ($tiers as $t) {
+        $tol = (float)($t['tolerance_value'] ?? 0);
+        if ($tol <= 0) continue;
+        $min = (float)$t['qty_min'];
+        $max = ($t['qty_max'] === null || $t['qty_max'] === '') ? null : (float)$t['qty_max'];
+        $lo  = ($t['tolerance_unit'] === '%') ? $min * (1 - $tol / 100) : $min - $tol;
+        $hi  = ($max === null) ? null : (($t['tolerance_unit'] === '%') ? $max * (1 + $tol / 100) : $max + $tol);
+        if ($qty >= $lo && ($hi === null || $qty <= $hi)) return [$t, false];
+    }
+    return [null, false];
+}
+
+/**
+ * 取某一列來源憑證的「報價／訂單對照」。
+ * @return array doc/order/quote/checks/候選清單
+ */
+function acc_recon_line_ref(PDO $db, string $srcType, int $srcId): array
+{
+    $srcType = strtoupper(trim($srcType));
+    $out = ['src_type' => $srcType, 'src_id' => $srcId, 'doc' => null, 'order' => null,
+            'quote' => null, 'checks' => [], 'order_candidates' => [], 'quote_candidates' => [],
+            'supports_bind' => false];
+
+    if ($srcType === 'TLOG') {
+        $st = $db->prepare("SELECT t.transfer_id, t.transfer_no, DATE_FORMAT(t.transfer_date,'%Y-%m-%d') AS d,
+                                   t.bom, t.bom_sn, t.product_id, t.transfer_qty, t.price,
+                                   t.modified_unit_price, t.process_amount, t.order_no, t.note,
+                                   COALESCE(MAX(pn.ProcessName),'') AS process_name
+                            FROM bom_ing_transfer_log t
+                            LEFT JOIN bom_ing bi ON bi.bom = t.bom AND bi.bom_sn = t.bom_sn
+                            LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                            WHERE t.transfer_id = ? GROUP BY t.transfer_id LIMIT 1");
+        $st->execute([$srcId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) { $out['checks'][] = ['label' => '來源單據', 'status' => 'bad', 'text' => '找不到這筆加工移轉紀錄']; return $out; }
+        $up = (float)($r['modified_unit_price'] ?: $r['price']);
+        $out['doc'] = ['no' => $r['transfer_no'], 'date' => $r['d'], 'product_id' => $r['product_id'],
+                       'spec' => $r['process_name'] ?: $r['bom'], 'qty' => (int)$r['transfer_qty'],
+                       'unit_price' => $up, 'amount' => (float)$r['process_amount'],
+                       'bom' => $r['bom'], 'order_no' => $r['order_no'], 'note' => $r['note'],
+                       'kind' => 'process'];
+        if ($r['modified_unit_price'] !== null && (float)$r['modified_unit_price'] > 0
+            && abs((float)$r['modified_unit_price'] - (float)$r['price']) > 0.0001) {
+            $out['checks'][] = ['label' => '加工單價', 'status' => 'warn',
+                'text' => 'ERP 原始單價 ' . rtrim(rtrim(number_format((float)$r['price'], 4, '.', ''), '0'), '.')
+                        . '，本系統覆寫為 ' . rtrim(rtrim(number_format($up, 4, '.', ''), '0'), '.')];
+        }
+        $calc = round((float)$r['transfer_qty'] * $up, 2);
+        $out['checks'][] = (abs($calc - (float)$r['process_amount']) < 0.51)
+            ? ['label' => '金額', 'status' => 'ok', 'text' => '數量 × 單價 與加工金額相符']
+            : ['label' => '金額', 'status' => 'bad',
+               'text' => '數量 × 單價 = ' . number_format($calc, 2) . '，與加工金額 '
+                       . number_format((float)$r['process_amount'], 2) . ' 不符'];
+        $out['checks'][] = ['label' => '報價／訂單', 'status' => 'na',
+                            'text' => '應付（加工費）沒有報價單與客戶訂單可對照，請以加工單價表核對'];
+        return $out;
+    }
+
+    if ($srcType === 'IR') {
+        $st = $db->prepare("SELECT IR_id, IR_no, DATE_FORMAT(IR_date,'%Y-%m-%d') AS d, Client_name,
+                                   d_id, Specification, Qty, Unit_price, IR_ps, C_IR, Processing_items
+                            FROM ir_track WHERE IR_id = ? LIMIT 1");
+        $st->execute([$srcId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) { $out['checks'][] = ['label' => '來源單據', 'status' => 'bad', 'text' => '找不到這筆退貨單']; return $out; }
+        $out['doc'] = ['no' => $r['IR_no'], 'date' => $r['d'], 'product_id' => $r['d_id'],
+                       'spec' => $r['Specification'], 'qty' => -(int)$r['Qty'],
+                       'unit_price' => (float)$r['Unit_price'],
+                       'amount' => -((float)$r['Qty'] * (float)$r['Unit_price']),
+                       'client' => $r['Client_name'], 'note' => $r['IR_ps'],
+                       'their_no' => $r['C_IR'], 'kind' => 'return'];
+        // 退貨要對的是「當初那張出貨單的單價」——退回價不同的話金額一定對不起來
+        $s2 = $db->prepare("SELECT IS_number, DATE_FORMAT(Order_date,'%Y-%m-%d') AS d, Qty, Unit_price
+                            FROM is_list WHERE Client_name = ? AND Product_id = ?
+                            ORDER BY Order_date DESC LIMIT 5");
+        $s2->execute([$r['Client_name'], $r['d_id']]);
+        $ships = $s2->fetchAll(PDO::FETCH_ASSOC);
+        $out['returns_of'] = $ships;
+        if ($ships) {
+            $same = false;
+            foreach ($ships as $s) if (abs((float)$s['Unit_price'] - (float)$r['Unit_price']) < 0.005) $same = true;
+            $out['checks'][] = $same
+                ? ['label' => '退貨單價', 'status' => 'ok', 'text' => '與同料號近期出貨單價一致']
+                : ['label' => '退貨單價', 'status' => 'warn',
+                   'text' => '退回單價 ' . number_format((float)$r['Unit_price'], 2)
+                           . ' 與同料號近期出貨單價不同（近期為 '
+                           . number_format((float)$ships[0]['Unit_price'], 2) . '），請確認是否為折讓價'];
+        }
+        $out['checks'][] = ['label' => '對帳影響', 'status' => 'na',
+                            'text' => '退貨在對帳單上以負數計入，會直接扣減本月應收'];
+        return $out;
+    }
+
+    /* 出貨（IS）：訂單 → 報價 三段對照 */
+    $st = $db->prepare("SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') AS d,
+                               il.Client_name, il.Client_id, il.Product_id, il.Specification,
+                               il.Qty, il.Unit_price, il.Note, il.Order_id, il.Content
+                        FROM is_list il WHERE il.IS_id = ? LIMIT 1");
+    $st->execute([$srcId]);
+    $r = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$r) { $out['checks'][] = ['label' => '來源單據', 'status' => 'bad', 'text' => '找不到這筆出貨單']; return $out; }
+
+    $shipQty = (int)$r['Qty'];
+    $shipUp  = (float)$r['Unit_price'];
+    $out['supports_bind'] = true;
+    $out['doc'] = ['no' => $r['IS_number'], 'date' => $r['d'], 'product_id' => $r['Product_id'],
+                   'spec' => $r['Specification'] ?: $r['Content'], 'qty' => $shipQty,
+                   'unit_price' => $shipUp, 'amount' => $shipQty * $shipUp,
+                   'client' => $r['Client_name'], 'note' => $r['Note'], 'kind' => 'ship'];
+
+    $order = null;
+    if ((int)$r['Order_id'] > 0) {
+        $so = $db->prepare("SELECT Order_id, Order_oo, d_id, Specification, Client_name, Qty, Open_Qty,
+                                   unit_price, DATE_FORMAT(Order_date,'%Y-%m-%d') AS odate,
+                                   DATE_FORMAT(Delivery_date,'%Y-%m-%d') AS ddate, C_order,
+                                   quote_no, quote_item_id, Order_status, qty_over_range
+                            FROM order_track WHERE Order_id = ? LIMIT 1");
+        $so->execute([(int)$r['Order_id']]);
+        $order = $so->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+
+    if (!$order) {
+        $out['checks'][] = ['label' => '訂單', 'status' => 'warn',
+                            'text' => '這張出貨單沒有綁定訂單，無法自動比對訂單單價；請人工核對或在下方綁定'];
+    } else {
+        $ss = $db->prepare("SELECT COALESCE(SUM(Qty),0) FROM is_list WHERE Order_id = ?");
+        $ss->execute([(int)$order['Order_id']]);
+        $order['shipped_qty'] = (int)$ss->fetchColumn();
+        $out['order'] = $order;
+
+        $oup = ($order['unit_price'] === null) ? null : (float)$order['unit_price'];
+        if ($oup === null || $oup <= 0) {
+            $out['checks'][] = ['label' => '訂單單價', 'status' => 'warn',
+                                'text' => '訂單 ' . $order['Order_oo'] . ' 沒有填單價，無法比對'];
+        } elseif (abs($oup - $shipUp) < 0.005) {
+            $out['checks'][] = ['label' => '訂單單價', 'status' => 'ok',
+                                'text' => '出貨單價與訂單單價相符（' . acc_num($shipUp) . '）'];
+        } else {
+            $out['checks'][] = ['label' => '訂單單價', 'status' => 'bad',
+                                'text' => '出貨單價 ' . acc_num($shipUp) . ' ≠ 訂單單價 ' . acc_num($oup)
+                                        . '，差 ' . acc_num($shipUp - $oup) . '／件，本列金額差 '
+                                        . number_format(($shipUp - $oup) * $shipQty, 0)];
+        }
+        if (strcasecmp(trim((string)$order['d_id']), trim((string)$r['Product_id'])) !== 0) {
+            $out['checks'][] = ['label' => '料號', 'status' => 'bad',
+                                'text' => '出貨料號 ' . $r['Product_id'] . ' 與訂單料號 ' . $order['d_id'] . ' 不同'];
+        }
+        $ordQty = (int)$order['Qty'];
+        if ($ordQty > 0) {
+            $over = $order['shipped_qty'] - $ordQty;
+            $out['checks'][] = ($over > 0)
+                ? ['label' => '訂單數量', 'status' => 'warn',
+                   'text' => '此訂單累計已出 ' . number_format($order['shipped_qty']) . ' 件，超出訂單量 '
+                           . number_format($ordQty) . ' 件（超 ' . number_format($over) . '）']
+                : ['label' => '訂單數量', 'status' => 'ok',
+                   'text' => '此訂單累計已出 ' . number_format($order['shipped_qty']) . ' / '
+                           . number_format($ordQty) . ' 件，尚餘 ' . number_format(-$over)];
+        }
+    }
+
+    // 報價：由訂單帶出（order_track.quote_no + quote_item_id）
+    $quote = null;
+    if ($order && (int)$order['quote_item_id'] > 0) {
+        $sq = $db->prepare("SELECT qi.item_id, qi.quote_id, qi.product_id, qi.specification, qi.quantity,
+                                   qi.unit, qi.unit_price, qi.amount, qi.is_tiered, qi.process_notes,
+                                   ql.quote_no, DATE_FORMAT(ql.quote_date,'%Y-%m-%d') AS quote_date,
+                                   ql.client_name, ql.currency, ql.approval_status,
+                                   DATE_FORMAT(ql.valid_until,'%Y-%m-%d') AS valid_until
+                            FROM quotation_item qi
+                            JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                            WHERE qi.item_id = ? LIMIT 1");
+        $sq->execute([(int)$order['quote_item_id']]);
+        $quote = $sq->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+
+    if (!$order) {
+        // 沒訂單就沒報價鏈，訊息已在上面給了
+    } elseif (!$quote) {
+        $out['checks'][] = ['label' => '報價', 'status' => 'warn',
+                            'text' => '訂單 ' . $order['Order_oo'] . ' 沒有綁定報價單項次，單價無法回溯到報價；可在下方綁定'];
+    } else {
+        $tiers = [];
+        if ((int)$quote['is_tiered'] === 1) {
+            $stt = $db->prepare("SELECT tier_id, qty_min, qty_max, unit_price, tolerance_value,
+                                        tolerance_unit, tolerance_note
+                                 FROM quotation_item_tier WHERE item_id = ? ORDER BY sort_order, qty_min");
+            $stt->execute([(int)$quote['item_id']]);
+            $tiers = $stt->fetchAll(PDO::FETCH_ASSOC);
+        }
+        $quote['tiers'] = $tiers;
+
+        $baseQty = (int)$order['Qty'] > 0 ? (int)$order['Qty'] : $shipQty;
+        $qup = (float)$quote['unit_price'];
+        if ($tiers) {
+            [$tier, $exact] = acc_quote_tier_for_qty($tiers, (float)$baseQty);
+            $quote['matched_tier'] = $tier;
+            $quote['tier_exact']   = $exact;
+            if ($tier) {
+                $qup = (float)$tier['unit_price'];
+                $out['checks'][] = ['label' => '報價數量（粗略）', 'status' => $exact ? 'ok' : 'warn',
+                    'text' => '訂單數量 ' . number_format($baseQty) . ' 落在階梯 '
+                            . acc_num((float)$tier['qty_min']) . '~'
+                            . ($tier['qty_max'] === null ? '以上' : acc_num((float)$tier['qty_max']))
+                            . '（單價 ' . acc_num($qup) . '）'
+                            . ($exact ? '' : '，是靠容差才勉強落入，請確認單價')];
+            } else {
+                $out['checks'][] = ['label' => '報價數量（粗略）', 'status' => 'bad',
+                    'text' => '訂單數量 ' . number_format($baseQty) . ' 不在任何報價階梯區間內，單價需人工確認'];
+            }
+        } else {
+            $qq = (float)$quote['quantity'];
+            if ($qq > 0) {
+                $diff = abs($baseQty - $qq) / $qq;
+                $out['checks'][] = ($diff <= ACC_QUOTE_QTY_TOL)
+                    ? ['label' => '報價數量（粗略）', 'status' => 'ok',
+                       'text' => '報價數量 ' . number_format($qq) . '、訂單數量 ' . number_format($baseQty)
+                               . '，差異在 ' . (int)(ACC_QUOTE_QTY_TOL * 100) . '% 內']
+                    : ['label' => '報價數量（粗略）', 'status' => 'warn',
+                       'text' => '報價數量 ' . number_format($qq) . '、訂單數量 ' . number_format($baseQty)
+                               . '，差異 ' . round($diff * 100) . '%（超過 ' . (int)(ACC_QUOTE_QTY_TOL * 100)
+                               . '%），單價可能不該直接沿用'];
+            }
+        }
+        $quote['eff_unit_price'] = $qup;
+        $out['quote'] = $quote;
+
+        if ($qup > 0) {
+            $out['checks'][] = (abs($qup - $shipUp) < 0.005)
+                ? ['label' => '報價單價', 'status' => 'ok',
+                   'text' => '出貨單價與報價單價相符（' . acc_num($qup) . '）']
+                : ['label' => '報價單價', 'status' => 'warn',
+                   'text' => '出貨單價 ' . acc_num($shipUp) . ' ≠ 報價單價 ' . acc_num($qup)
+                           . '（報價單 ' . $quote['quote_no'] . '），差 ' . acc_num($shipUp - $qup) . '／件'];
+        }
+        if (strcasecmp(trim((string)$quote['client_name']), trim((string)$r['Client_name'])) !== 0) {
+            $out['checks'][] = ['label' => '報價客戶', 'status' => 'warn',
+                'text' => '報價單客戶為 ' . $quote['client_name'] . '，與出貨客戶 ' . $r['Client_name'] . ' 不同'];
+        }
+    }
+
+    // 候選清單（同客戶同料號），未綁定時給人選，已綁定也可換綁
+    $oc = $db->prepare("SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.Qty, ot.unit_price, ot.C_order,
+                               DATE_FORMAT(ot.Order_date,'%Y-%m-%d') AS odate,
+                               DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') AS ddate, ot.Order_status,
+                               ot.quote_no, ot.quote_item_id,
+                               (SELECT COALESCE(SUM(x.Qty),0) FROM is_list x WHERE x.Order_id = ot.Order_id) AS shipped
+                        FROM order_track ot
+                        WHERE ot.Client_name = ? AND ot.d_id = ?
+                        ORDER BY ot.Order_date DESC, ot.Order_id DESC LIMIT 20");
+    $oc->execute([$r['Client_name'], $r['Product_id']]);
+    $out['order_candidates'] = $oc->fetchAll(PDO::FETCH_ASSOC);
+
+    $qc = $db->prepare("SELECT qi.item_id, qi.quote_id, qi.product_id, qi.specification, qi.quantity,
+                               qi.unit_price, qi.is_tiered, ql.quote_no, ql.client_name,
+                               DATE_FORMAT(ql.quote_date,'%Y-%m-%d') AS quote_date, ql.approval_status
+                        FROM quotation_item qi
+                        JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                        WHERE qi.product_id = ? AND (ql.client_name = ? OR ql.client_name IS NULL)
+                        ORDER BY ql.quote_date DESC, qi.item_id DESC LIMIT 20");
+    $qc->execute([$r['Product_id'], $r['Client_name']]);
+    $out['quote_candidates'] = $qc->fetchAll(PDO::FETCH_ASSOC);
+
+    return $out;
+}
+
+/** 顯示用數字：小數尾 0 省略（3.50→3.5、3.00→3），符合全站輸入規則的呈現方式 */
+function acc_num($v): string
+{
+    $s = number_format((float)$v, 4, '.', ',');
+    if (strpos($s, '.') !== false) $s = rtrim(rtrim($s, '0'), '.');
+    return $s === '' || $s === '-' ? '0' : $s;
+}
+
+/** 出貨單綁定訂單（is_list.Order_id）。$orderId=0 代表解除綁定。 */
+function acc_recon_bind_order(PDO $db, int $isId, int $orderId, ?array $user): array
+{
+    if ($isId <= 0) return ['success' => false, 'message' => '缺少出貨單'];
+    $lock = acc_sheet_locked_src($db, 'IS', $isId);
+    if ($lock) return ['success' => false,
+        'message' => '此出貨單已在「' . $lock['party_name'] . ' ' . $lock['billing_month']
+                   . '」的對帳單鎖帳，請先請會計管理員退回重對'];
+
+    $st = $db->prepare("SELECT IS_id, IS_number, Client_name, Product_id, Order_id FROM is_list WHERE IS_id=? LIMIT 1");
+    $st->execute([$isId]);
+    $is = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$is) return ['success' => false, 'message' => '找不到這筆出貨單'];
+
+    $note = '';
+    if ($orderId > 0) {
+        $so = $db->prepare("SELECT Order_id, Order_oo, Client_name, d_id FROM order_track WHERE Order_id=? LIMIT 1");
+        $so->execute([$orderId]);
+        $ot = $so->fetch(PDO::FETCH_ASSOC);
+        if (!$ot) return ['success' => false, 'message' => '找不到這張訂單'];
+        if (strcasecmp(trim((string)$ot['Client_name']), trim((string)$is['Client_name'])) !== 0) {
+            return ['success' => false, 'message' => '訂單客戶（' . $ot['Client_name'] . '）與出貨客戶（'
+                   . $is['Client_name'] . '）不同，不可綁定'];
+        }
+        if (strcasecmp(trim((string)$ot['d_id']), trim((string)$is['Product_id'])) !== 0) {
+            $note = '（注意：訂單料號 ' . $ot['d_id'] . ' 與出貨料號 ' . $is['Product_id'] . ' 不同）';
+        }
+    }
+    try {
+        $up = $db->prepare("UPDATE is_list SET Order_id = ? WHERE IS_id = ?");
+        $up->execute([$orderId > 0 ? $orderId : null, $isId]);
+        acc_audit($db, 'ACC_RECON', 'IS', $isId, $is['IS_number'],
+                  ['Order_id' => ['from' => $is['Order_id'], 'to' => $orderId ?: null]],
+                  '對帳頁綁定訂單', $user);
+        return ['success' => true,
+                'message' => ($orderId > 0 ? '已綁定訂單' : '已解除訂單綁定') . $note];
+    } catch (Throwable $e) {
+        return ['success' => false, 'message' => '綁定失敗：' . $e->getMessage()];
+    }
+}
+
+/** 訂單綁定報價單項次（order_track.quote_no / quote_item_id）。$itemId=0 代表解除。 */
+function acc_recon_bind_quote(PDO $db, int $orderId, int $itemId, ?array $user): array
+{
+    if ($orderId <= 0) return ['success' => false, 'message' => '這張出貨單還沒有綁定訂單，請先綁訂單再綁報價'];
+    $so = $db->prepare("SELECT Order_id, Order_oo, Client_name, d_id, quote_no, quote_item_id
+                        FROM order_track WHERE Order_id=? LIMIT 1");
+    $so->execute([$orderId]);
+    $ot = $so->fetch(PDO::FETCH_ASSOC);
+    if (!$ot) return ['success' => false, 'message' => '找不到這張訂單'];
+
+    $quoteNo = null;
+    if ($itemId > 0) {
+        $sq = $db->prepare("SELECT qi.item_id, qi.product_id, ql.quote_no, ql.client_name
+                            FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                            WHERE qi.item_id = ? LIMIT 1");
+        $sq->execute([$itemId]);
+        $qi = $sq->fetch(PDO::FETCH_ASSOC);
+        if (!$qi) return ['success' => false, 'message' => '找不到這筆報價明細'];
+        if (strcasecmp(trim((string)$qi['product_id']), trim((string)$ot['d_id'])) !== 0) {
+            return ['success' => false, 'message' => '報價料號（' . $qi['product_id'] . '）與訂單料號（'
+                   . $ot['d_id'] . '）不同，不可綁定'];
+        }
+        $quoteNo = $qi['quote_no'];
+    }
+    try {
+        $up = $db->prepare("UPDATE order_track SET quote_no = ?, quote_item_id = ?,
+                            Modified_By = ?, Modified_At = NOW() WHERE Order_id = ?");
+        $up->execute([$quoteNo, $itemId > 0 ? $itemId : null,
+                      $user ? (string)($user['user_id'] ?? $user['id']) : null, $orderId]);
+        acc_audit($db, 'ACC_RECON', 'ORDER', $orderId, $ot['Order_oo'],
+                  ['quote_no' => ['from' => $ot['quote_no'], 'to' => $quoteNo],
+                   'quote_item_id' => ['from' => $ot['quote_item_id'], 'to' => $itemId ?: null]],
+                  '對帳頁綁定報價', $user);
+        return ['success' => true, 'message' => $itemId > 0 ? ('已綁定報價單 ' . $quoteNo) : '已解除報價綁定'];
+    } catch (Throwable $e) {
+        return ['success' => false, 'message' => '綁定失敗：' . $e->getMessage()];
+    }
 }

@@ -1227,7 +1227,12 @@ case 'recon_parties': {
                                                         'checked_cnt' => $x['checked_cnt'],
                                                         'line_cnt' => $x['line_cnt'],
                                                         'sheet_id' => (int)$x['sheet_id']];
-    foreach ($out as &$o) $o['sheet'] = $map[$o['party_id']] ?? null;
+    // 「不提供對帳單」的對象要在清單上就看得出來（不會有對方紙本金額可比）
+    $optMap = acc_recon_party_opt_map($db, $side);
+    foreach ($out as &$o) {
+        $o['sheet'] = $map[$o['party_id']] ?? null;
+        $o['no_statement'] = (int)($optMap[$o['party_id']]['no_statement'] ?? 0);
+    }
     unset($o);
 
     acc_out(['side' => $side, 'billing_month' => $bm, 'parties' => $out,
@@ -1246,8 +1251,38 @@ case 'sheet_load': {
     $sheet = acc_sheet_get($db, $side, $pid, $bm);
 
     if ($sheet) {
+        /* 底稿存起來之後，來源憑證還會變動——最常見的就是「把別的月份的單改成這個月」
+           （交接日期前後的帳），改完若不告訴使用者，底稿永遠少那幾筆而且完全沒有徵兆。
+           所以每次載入都跟來源即時對一次：missing＝來源有、底稿沒有；stale＝底稿有、來源已不屬於本月。
+           兩者都只回報不自動改，因為底稿上的加總／拆分是人對出來的，不可以被自動覆蓋。 */
+        $missing = []; $stale = [];
+        try {
+            $src  = acc_sheet_build($db, $side, $pid, $bm);
+            $have = [];
+            foreach ($sheet['lines'] as $l) {
+                if (($l['src_type'] ?? '') !== 'SPLIT') $have[$l['src_type'] . '-' . (int)$l['src_id']] = true;
+            }
+            $srcKeys = [];
+            foreach ($src['lines'] as $l) {
+                $k = $l['src_type'] . '-' . (int)$l['src_id'];
+                $srcKeys[$k] = true;
+                if (!isset($have[$k])) $missing[] = $l;
+            }
+            foreach ($sheet['lines'] as $l) {
+                if (($l['src_type'] ?? '') === 'SPLIT' || (int)$l['src_id'] <= 0) continue;
+                $k = $l['src_type'] . '-' . (int)$l['src_id'];
+                if (!isset($srcKeys[$k])) {
+                    $stale[] = ['line_id' => (int)$l['line_id'], 'doc_no' => $l['doc_no'],
+                                'doc_date' => $l['doc_date'], 'product_id' => $l['product_id'],
+                                'amount' => (float)$l['orig_amount']];
+                }
+            }
+        } catch (Throwable $e) { $missing = []; $stale = []; }
+
         acc_out(['from' => 'draft', 'sheet' => $sheet, 'can_edit' => $canEdit,
-                 'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db)]);
+                 'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db),
+                 'opt' => acc_recon_party_opt($db, $side, $pid),
+                 'missing' => $missing, 'stale' => $stale]);
     }
     $built = acc_sheet_build($db, $side, $pid, $bm);
     $t = acc_sheet_totals($db, $built['lines']);
@@ -1258,7 +1293,9 @@ case 'sheet_load': {
                          'our_total' => $t['our_total'], 'tax_amount' => $t['tax_amount'],
                          'total_amount' => $t['total_amount'], 'lines' => $built['lines']],
              'head' => $built['head'], 'can_edit' => $canEdit,
-             'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db)]);
+             'can_reopen' => (bool)$perms['canAdmin'], 'tax_rate' => acc_tax_rate($db),
+             'opt' => acc_recon_party_opt($db, $side, $pid),
+             'missing' => [], 'stale' => []]);
 }
 
 /* 暫存底稿 */
@@ -1398,6 +1435,162 @@ case 'sheet_export': {
     }
     fclose($o);
     exit;
+}
+
+/* ══ 對帳作業的延伸功能（跨月找單／報價訂單對照／對象選項）═══════════ */
+
+/* 對帳頁預設值＋某對象的選項（載入頁面與載入底稿時各取一次） */
+case 'recon_pref': {
+    $s    = $_POST ?: $_GET;
+    $side = (($s['side'] ?? 'ar') === 'ap') ? 'ap' : 'ar';
+    $pid  = acc_u8(trim((string)($s['party_id'] ?? '')));
+    acc_out(['pref' => acc_recon_pref($db),
+             'opt'  => $pid !== '' ? acc_recon_party_opt($db, $side, $pid) : null,
+             'can_set_default' => (bool)$perms['canAdmin']]);
+}
+
+/* 存全站預設值（僅會計管理員） */
+case 'recon_pref_save': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可修改對帳頁預設值', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_recon_pref_save($db, [
+        'autosort_default' => !empty($_POST['autosort_default']) && $_POST['autosort_default'] !== '0',
+        'drag_default'     => !empty($_POST['drag_default'])     && $_POST['drag_default']     !== '0',
+    ]);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* 設定某對象是否提供對帳單（會影響差額欄與確認時的提醒） */
+case 'recon_party_opt_save': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $side = (($_POST['side'] ?? 'ar') === 'ap') ? 'ap' : 'ar';
+    acc_recon_guard($perms, $side === 'ap' ? 'TLOG' : 'IS');
+    $pid = acc_u8(trim((string)($_POST['party_id'] ?? '')));
+    if ($pid === '') acc_err('缺少對象');
+    $r = acc_recon_party_opt_save($db, $side, $pid, [
+        'no_statement' => !empty($_POST['no_statement']) && $_POST['no_statement'] !== '0',
+        'note'         => acc_u8((string)($_POST['note'] ?? '')),
+    ], $u);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* 找這個對象「本月份以外」的單據（交接日期前後常被做到前後月份） */
+case 'recon_outside': {
+    $s    = $_POST ?: $_GET;
+    $side = (($s['side'] ?? 'ar') === 'ap') ? 'ap' : 'ar';
+    $pid  = acc_u8(trim((string)($s['party_id'] ?? '')));
+    $bm   = trim((string)($s['billing_month'] ?? ''));
+    if ($pid === '' || !preg_match('/^\d{4}-\d{2}$/', $bm)) acc_err('缺少對象或帳款月份');
+    acc_out(acc_recon_outside($db, $side, $pid, $bm, [
+        'kw'     => acc_u8(trim((string)($s['kw'] ?? ''))),
+        'months' => (int)($s['months'] ?? 3),
+    ]));
+}
+
+/* 把選到的單據改成指定帳款月份（走既有的 billing_month_override，已開票的會被擋下） */
+case 'recon_move_month': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $ym = trim((string)($_POST['billing_month'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}$/', $ym)) acc_err('帳款月份格式須為 YYYY-MM');
+    $items = json_decode($_POST['items'] ?? '[]', true);
+    if (!is_array($items) || !$items) acc_err('請先勾選要調整的單據');
+    if (count($items) > 300) acc_err('一次最多調整 300 筆');
+    foreach ($items as $it) acc_recon_guard($perms, (string)($it['src_type'] ?? 'IS'));
+    $r = acc_set_billing_month_bulk($db, $items, $ym, (string)$uid);
+    foreach ($items as $it) {
+        acc_audit($db, 'ACC_MONTH', (string)($it['src_type'] ?? ''), (int)($it['id'] ?? 0),
+                  (string)($it['no'] ?? ''), ['billing_month' => $ym], '對帳頁跨月帶入', $u);
+    }
+    acc_out($r);
+}
+
+/* 某一列的報價／訂單對照（拖移關閉時點列會叫這支） */
+case 'recon_line_ref': {
+    $s   = $_POST ?: $_GET;
+    $st  = strtoupper(trim((string)($s['src_type'] ?? '')));
+    $sid = (int)($s['src_id'] ?? 0);
+    if (!in_array($st, ['IS', 'IR', 'TLOG'], true) || $sid <= 0) acc_err('這一列沒有可對照的來源單據（例如拆分出來的子列）');
+    acc_out(['ref' => acc_recon_line_ref($db, $st, $sid)]);
+}
+
+/* 出貨單綁定／解除綁定訂單 */
+case 'recon_bind_order': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    acc_recon_guard($perms, 'IS');
+    $r = acc_recon_bind_order($db, (int)($_POST['is_id'] ?? 0), (int)($_POST['order_id'] ?? 0), $u);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* 訂單綁定／解除綁定報價單項次 */
+case 'recon_bind_quote': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    acc_recon_guard($perms, 'IS');
+    $r = acc_recon_bind_quote($db, (int)($_POST['order_id'] ?? 0), (int)($_POST['item_id'] ?? 0), $u);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* 列印表頭需要的資料：公司全名（禁寫死）＋綁定的 AS 文件編號（依業務日期回推版次） */
+case 'recon_print_meta': {
+    $s    = $_POST ?: $_GET;
+    $side = (($s['side'] ?? 'ar') === 'ap') ? 'ap' : 'ar';
+    $pid  = acc_u8(trim((string)($s['party_id'] ?? '')));
+    $bm   = trim((string)($s['billing_month'] ?? ''));
+    $asOf = preg_match('/^\d{4}-\d{2}$/', $bm) ? date('Y-m-t', strtotime($bm . '-01')) : date('Y-m-d');
+
+    include_once $document_root . '/EGsystem/src/common/org_role_lib.php';
+    include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
+
+    $doc = null; $docNo = ''; $docName = '';
+    try {
+        $doc = eg_asdoc_get($db, ACC_RECON_ASDOC_MODULE);
+        if ($doc) {
+            $docNo   = eg_asdoc_no_asof_id($db, (int)$doc['id'], $asOf);
+            $docName = (string)($doc['doc_name'] ?? '');
+        }
+    } catch (Throwable $e) { $doc = null; }
+
+    $party = null;
+    if ($pid !== '') {
+        if ($side === 'ap') {
+            $sp = $db->prepare("SELECT maker_id AS name, maker_id_all AS full_name, tax_id,
+                                       billing_address AS address, invoice_address
+                                FROM maker_list WHERE maker_id_no = ? LIMIT 1");
+        } else {
+            $sp = $db->prepare("SELECT customer AS name, customer_full AS full_name, tax_id,
+                                       customer_address AS address, billing_contact
+                                FROM customer_list WHERE customer = ? LIMIT 1");
+        }
+        $sp->execute([$pid]);
+        $party = $sp->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+
+    acc_out([
+        'company'   => eg_company_full_name($db),
+        'as_doc_no' => $docNo,
+        'as_doc_name' => $docName,
+        'party'     => $party,
+        'opt'       => $pid !== '' ? acc_recon_party_opt($db, $side, $pid) : null,
+        'tax_rate'  => acc_tax_rate($db),
+    ]);
+}
+
+/* 對帳單綁定哪一份 AS 文件（僅會計管理員；走全站共用的 asdoc_lib） */
+case 'recon_asdoc_save': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可設定 AS 文件綁定', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
+    eg_asdoc_save($db, ACC_RECON_ASDOC_MODULE, (int)($_POST['as_doc_id'] ?? 0), (string)$u['user_cname']);
+    acc_out(['message' => '已更新 AS 文件綁定']);
 }
 
 /* ── 匯入範本下載（告訴使用者 ERP 要匯出成什麼格式）─────────────────── */
