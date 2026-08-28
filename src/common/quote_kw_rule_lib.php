@@ -44,6 +44,12 @@ function qkw_ensure_schema(PDO $pdo): void
             KEY idx_active (is_active, priority)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='報價單快速轉移頁：依規格關鍵字自動建議製程標籤的規則'");
     } catch (PDOException $e) { /* 已存在 */ }
+    // include_mode：「包含」的多個關鍵字要 全部都要含(all) 還是 任一即可(any)
+    try { $pdo->query("SELECT include_mode FROM quotation_kw_rule LIMIT 1"); }
+    catch (PDOException $e) {
+        try { $pdo->exec("ALTER TABLE quotation_kw_rule ADD COLUMN include_mode ENUM('all','any') NOT NULL DEFAULT 'all' COMMENT '包含關鍵字的比對方式：all=全部都要含、any=任一即可' AFTER include_kw"); }
+        catch (PDOException $e2) {}
+    }
     try { $pdo->query("SELECT note_only FROM quotation_item LIMIT 1"); }
     catch (PDOException $e) {
         try { $pdo->exec("ALTER TABLE quotation_item ADD COLUMN note_only TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=這一筆以備註代替製程（規格文字已帶進整張報價單的備註欄）' AFTER process_notes"); }
@@ -93,6 +99,7 @@ function qkw_rule_save(PDO $pdo, array $in, string $userId): int
     $row = [
         trim((string)$in['rule_name']),
         qkw_norm_kw((string)($in['include_kw'] ?? '')),
+        (($in['include_mode'] ?? 'all') === 'any' ? 'any' : 'all'),
         qkw_norm_kw((string)($in['exclude_kw'] ?? '')),
         implode(',', $custs),
         implode(',', $tags),
@@ -102,11 +109,11 @@ function qkw_rule_save(PDO $pdo, array $in, string $userId): int
     ];
     $ruleId = (int)($in['rule_id'] ?? 0);
     if ($ruleId > 0) {
-        $st = $pdo->prepare("UPDATE quotation_kw_rule SET rule_name=?, include_kw=?, exclude_kw=?, customer_ids=?, sub_tag_ids=?, to_note=?, priority=?, is_active=?, updated_by=? WHERE rule_id=?");
+        $st = $pdo->prepare("UPDATE quotation_kw_rule SET rule_name=?, include_kw=?, include_mode=?, exclude_kw=?, customer_ids=?, sub_tag_ids=?, to_note=?, priority=?, is_active=?, updated_by=? WHERE rule_id=?");
         $st->execute(array_merge($row, [$userId, $ruleId]));
         return $ruleId;
     }
-    $st = $pdo->prepare("INSERT INTO quotation_kw_rule (rule_name, include_kw, exclude_kw, customer_ids, sub_tag_ids, to_note, priority, is_active, created_by) VALUES (?,?,?,?,?,?,?,?,?)");
+    $st = $pdo->prepare("INSERT INTO quotation_kw_rule (rule_name, include_kw, include_mode, exclude_kw, customer_ids, sub_tag_ids, to_note, priority, is_active, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)");
     $st->execute(array_merge($row, [$userId]));
     return (int)$pdo->lastInsertId();
 }
@@ -120,7 +127,11 @@ function qkw_rule_delete(PDO $pdo, int $ruleId): void
 // ── 關鍵字比對 ─────────────────────────────────────────────
 function qkw_split_kw(string $s): array
 {
-    return array_values(array_filter(array_map('trim', preg_split('/[,，]/u', $s)), fn($v) => $v !== ''));
+    // preg_split 帶 /u 遇到非 UTF-8 的輸入會回 false（不是空陣列），直接丟給 array_map 會是 TypeError 500。
+    // 正常前端不會送出這種內容，但擋一下比較保險。
+    $parts = preg_split('/[,，]/u', $s);
+    if ($parts === false) $parts = explode(',', $s);
+    return array_values(array_filter(array_map('trim', $parts), fn($v) => $v !== ''));
 }
 function qkw_norm_kw(string $s): string { return implode(',', qkw_split_kw($s)); }
 function qkw_split_ids(string $s): array
@@ -146,9 +157,50 @@ function qkw_rule_hit(array $rule, string $spec, string $clientId): bool
     }
     $inc = qkw_split_kw((string)$rule['include_kw']);
     if (!$inc) return false;
-    foreach ($inc as $kw) if (!qkw_hit_one($spec, $kw)) return false;                    // 包含＝全部都要中
+    // 包含：預設「全部都要中」(all)；設成 any 則任一個中就算命中
+    // （這是最容易誤會的地方——使用者常以為逗號＝「或」，所以規則表單上是兩顆並排的選項）
+    if (($rule['include_mode'] ?? 'all') === 'any') {
+        $anyHit = false;
+        foreach ($inc as $kw) if (qkw_hit_one($spec, $kw)) { $anyHit = true; break; }
+        if (!$anyHit) return false;
+    } else {
+        foreach ($inc as $kw) if (!qkw_hit_one($spec, $kw)) return false;
+    }
     foreach (qkw_split_kw((string)$rule['exclude_kw']) as $kw) if (qkw_hit_one($spec, $kw)) return false;  // 排除＝任一中就出局
     return true;
+}
+
+// 規則試算：把「還沒存檔的規則」直接拿去比對目前尚待確認的項目，回命中筆數與幾個範例。
+// 為什麼要有：逗號的語意（全部都要含／任一即可）最容易誤會，存完才發現一筆都沒中很浪費時間。
+function qkw_rule_preview(PDO $pdo, array $rule, array $quoteIds = []): array
+{
+    qkw_ensure_schema($pdo);
+    $sql = "SELECT qi.specification, qi.note_only, ql.client_id,
+                   EXISTS(SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id=qi.item_id) AS has_map,
+                   qi.process_notes
+            FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id
+            WHERE ql.pending_review = 1";
+    $args = [];
+    if ($quoteIds) {
+        $quoteIds = array_values(array_unique(array_filter(array_map('intval', $quoteIds))));
+        if ($quoteIds) {
+            $sql .= " AND qi.quote_id IN (" . implode(',', array_fill(0, count($quoteIds), '?')) . ")";
+            $args = $quoteIds;
+        }
+    }
+    $st = $pdo->prepare($sql);
+    $st->execute($args);
+    $all = 0; $unset = 0; $samples = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $spec = (string)($r['specification'] ?? '');
+        if (trim($spec) === '') continue;
+        if (!qkw_rule_hit($rule, $spec, (string)($r['client_id'] ?? ''))) continue;
+        $all++;
+        $isUnset = !((int)$r['has_map']) && trim((string)$r['process_notes']) === '' && !((int)$r['note_only']);
+        if ($isUnset) $unset++;
+        if (count($samples) < 5) $samples[] = $spec;
+    }
+    return ['matched' => $all, 'unset' => $unset, 'samples' => $samples];
 }
 
 // ── 掃描：回傳「依建議標籤組合分組」的結果 ───────────────
@@ -367,8 +419,9 @@ function qkw_seed_apply(PDO $pdo, string $userId): int
         if (isset($exist[$r[0]])) continue;
         // 標籤已被停用或刪掉的範本就跳過（不硬塞進去，否則掃描時會建議一個不存在的標籤）
         try {
-            qkw_rule_save($pdo, ['rule_name' => $r[0], 'include_kw' => $r[1], 'exclude_kw' => $r[2],
-                                 'sub_tag_ids' => $r[3], 'priority' => $r[4], 'is_active' => 1], $userId);
+            qkw_rule_save($pdo, ['rule_name' => $r[0], 'include_kw' => $r[1], 'include_mode' => 'all',
+                                 'exclude_kw' => $r[2], 'sub_tag_ids' => $r[3], 'priority' => $r[4],
+                                 'is_active' => 1], $userId);
             $n++;
         } catch (Exception $e) { /* 該標籤不存在就略過這條 */ }
     }

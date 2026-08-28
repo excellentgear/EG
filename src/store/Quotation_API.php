@@ -1762,6 +1762,7 @@ try {
                 'rule_id'      => $_POST['rule_id']      ?? 0,
                 'rule_name'    => $_POST['rule_name']    ?? '',
                 'include_kw'   => $_POST['include_kw']   ?? '',
+                'include_mode' => $_POST['include_mode'] ?? 'all',
                 'exclude_kw'   => $_POST['exclude_kw']   ?? '',
                 'customer_ids' => $_POST['customer_ids'] ?? '',
                 'sub_tag_ids'  => $_POST['sub_tag_ids']  ?? '',
@@ -1785,6 +1786,19 @@ try {
         case 'qkw_rule_seed': {
             if (!eg_quick_can_edit($pdo, $user_id)) throw new Exception('您沒有修改報價單的權限');
             $response = ['success' => true, 'added' => qkw_seed_apply($pdo, (string)$user_id)];
+            break;
+        }
+
+        // 規則試算：還沒存檔就先看這條規則會命中幾筆（逗號的語意最容易誤會）
+        case 'qkw_rule_preview': {
+            $rule = [
+                'include_kw'   => $_POST['include_kw']   ?? '',
+                'include_mode' => $_POST['include_mode'] ?? 'all',
+                'exclude_kw'   => $_POST['exclude_kw']   ?? '',
+                'customer_ids' => $_POST['customer_ids'] ?? '',
+            ];
+            $qids = json_decode($_POST['quote_ids'] ?? '[]', true);
+            $response = ['success' => true, 'data' => qkw_rule_preview($pdo, $rule, is_array($qids) ? $qids : [])];
             break;
         }
 

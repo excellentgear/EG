@@ -63,6 +63,10 @@ try {
         .qt-badge.ok   { background:#E4F3E4; color:#2e7d32; }
         .qt-badge.warn { background:#FDEBD3; color:#a2703a; }
         .qt-badge.note { background:#8a5a2b; color:#fff; }
+        .qt-bar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:12px; margin-bottom:8px; }
+        .qt-bar label { margin:0; font-weight:400; display:inline-flex; align-items:center; gap:4px; }
+        .qt-bar-label { display:inline-block; min-width:34px; color:#8a5a2b; font-weight:700; }
+        .qt-bar-sep { display:inline-block; width:1px; height:20px; background:#EADFC8; }
         .qt-note-only { background:#FBF3E6; border:1px dashed #E4C293; border-radius:6px; padding:4px 8px; color:#5b3a1e; }
 
         /* 關鍵字自動偵測：依建議標籤組合分組確認 */
@@ -130,41 +134,50 @@ try {
             <div class="clearfix"></div>
 
             <div class="qt-stats" id="qtStats"></div>
-            <div style="margin-bottom:10px;">
+            <!-- 上排＝篩選條件、下排＝動作按鈕：兩種東西混在一排時很難找（使用者回報排得很亂） -->
+            <div class="qt-bar">
+                <span class="qt-bar-label">篩選</span>
+                <label>年份
+                    <select id="qtYearFilter" class="form-control input-sm" style="display:inline-block;width:150px;"><option value="">全部</option></select>
+                </label>
+                <label>客戶
+                    <select id="qtCustFilter" class="form-control input-sm" style="display:inline-block;width:240px;"
+                            data-eg-filter="輸入客戶編號或名稱篩選…"><option value="">全部客戶</option></select>
+                </label>
+                <label><input type="checkbox" id="qtOnlyUnbound"> 只看未綁定料號ID的項目</label>
+                <span class="qt-bar-sep"></span>
+                <label><input type="checkbox" id="qtCheckAll"> 全選本頁</label>
+                <span id="qtSelCount" style="color:#888;"></span>
+            </div>
+            <div class="qt-bar">
+                <span class="qt-bar-label">動作</span>
                 <button class="btn btn-warning btn-sm" id="btnBatchConfirm" <?= $canEdit ? '' : 'disabled' ?>>
                     <i class="fa fa-check"></i> 批次轉入正式報價單
                 </button>
                 <?php if ($canEdit): ?>
-                <button class="btn btn-success btn-sm" id="btnBatchAutoBind" style="margin-left:6px;"
-                        title="把目前年份篩選範圍內、所有還沒綁完料號ID的報價單一次處理完">
-                    <i class="fa fa-magic"></i> 一鍵建立並綁定料號（全部）
-                </button>
-                <?php endif; ?>
-                <label style="font-size:12px;margin-left:10px;"><input type="checkbox" id="qtCheckAll"> 全選本頁</label>
-                <span id="qtSelCount" style="font-size:12px;color:#888;margin-left:8px;"></span>
-                <label style="font-size:12px;margin-left:14px;">年份：<select id="qtYearFilter" class="form-control input-sm" style="display:inline-block;width:90px;"><option value="">全部</option></select></label>
-                <label style="font-size:12px;margin-left:10px;">客戶：<select id="qtCustFilter" class="form-control input-sm" style="display:inline-block;width:230px;"
-                        data-eg-filter="輸入客戶編號或名稱篩選…"><option value="">全部客戶</option></select></label>
-                <label style="font-size:12px;margin-left:10px;"><input type="checkbox" id="qtOnlyUnbound"> 只看未綁定料號ID的項目</label>
-                <?php if ($canEdit): ?>
-                <button class="btn btn-default btn-sm" id="btnBulkProc" style="margin-left:10px;"
-                        title="把同一組製程一次套用到目前篩選範圍內的項目">
-                    <i class="fa fa-tags"></i> 批次設定製程
-                </button>
-                <button class="btn btn-warning btn-sm" id="btnKwScan" style="margin-left:6px;"
-                        title="依規格文字的關鍵字規則，一次建議整批項目的製程標籤，再由您分組確認">
-                    <i class="fa fa-search"></i> 關鍵字自動偵測製程
-                </button>
-                <button class="btn btn-default btn-sm" id="btnKwRules" style="margin-left:4px;" title="設定關鍵字規則">
-                    <i class="fa fa-cog"></i> 規則設定
-                </button>
-                <button class="btn btn-success btn-sm" id="btnTransferReady" style="margin-left:6px;"
+                <button class="btn btn-success btn-sm" id="btnTransferReady"
                         title="把目前篩選範圍內「料號ID與製程都已補齊」的報價單全部轉入正式報價單">
                     <i class="fa fa-check-square-o"></i> 一鍵轉入已補齊 <span id="qtReadyCnt">(0)</span>
                 </button>
+                <span class="qt-bar-sep"></span>
+                <button class="btn btn-success btn-sm" id="btnBatchAutoBind"
+                        title="把目前年份篩選範圍內、所有還沒綁完料號ID的報價單一次處理完">
+                    <i class="fa fa-magic"></i> 一鍵建立並綁定料號（全部）
+                </button>
+                <button class="btn btn-default btn-sm" id="btnBulkProc"
+                        title="把同一組製程一次套用到目前篩選範圍內的項目">
+                    <i class="fa fa-tags"></i> 批次設定製程
+                </button>
+                <button class="btn btn-warning btn-sm" id="btnKwScan"
+                        title="依規格文字的關鍵字規則，一次建議整批項目的製程標籤，再由您分組確認">
+                    <i class="fa fa-search"></i> 關鍵字自動偵測製程
+                </button>
+                <button class="btn btn-default btn-sm" id="btnKwRules" title="設定關鍵字規則">
+                    <i class="fa fa-cog"></i> 規則設定
+                </button>
                 <?php endif; ?>
                 <?php if (!$canEdit): ?>
-                    <span style="font-size:12px;color:#c0392b;margin-left:8px;">您沒有編輯權限，僅供檢視</span>
+                    <span style="color:#c0392b;">您沒有編輯權限，僅供檢視</span>
                 <?php endif; ?>
             </div>
 
@@ -254,6 +267,7 @@ try {
             <label style="margin-right:14px;"><input type="radio" name="kwScope" value="filtered" checked> 掃描<b>目前篩選的全部報價單</b>（<span id="kwScopeAllCnt">0</span> 張）</label>
             <label style="margin-right:14px;"><input type="radio" name="kwScope" value="page"> 只掃描<b>目前這一頁</b>（<span id="kwScopePageCnt">0</span> 張）</label>
             <button class="btn btn-default btn-xs" onclick="runKwScan()"><i class="fa fa-refresh"></i> 重新偵測</button>
+            <label style="margin-left:12px;"><input type="checkbox" id="kwIncludeSet"> 連<b>已經設定過製程</b>的項目也一起偵測（套用會覆蓋原設定）</label>
         </div>
         <div style="font-size:12px;margin-bottom:8px;" id="kwScanSummary"></div>
         <div style="margin-bottom:6px;font-size:12px;">
@@ -296,14 +310,19 @@ try {
                 <div style="flex:1;min-width:180px;"><label style="font-size:12px;">規則名稱 *</label>
                     <input type="text" class="form-control input-sm" id="krName" maxlength="60" placeholder="例：齒研">
                     <div class="kw-err" id="krNameErr"></div></div>
-                <div style="flex:1;min-width:180px;"><label style="font-size:12px;">規格「包含」 * <span style="color:#888;font-weight:400;">逗號＝全部都要含</span></label>
-                    <input type="text" class="form-control input-sm" id="krInc" placeholder="齒研,冶具|治具　＝ 要同時含「齒研」且含「冶具或治具」">
+                <div style="flex:1;min-width:230px;"><label style="font-size:12px;">規格「包含」 *</label>
+                    <input type="text" class="form-control input-sm" id="krInc" placeholder="例：整修,修整,修改">
+                    <div style="font-size:11px;margin-top:2px;">
+                        <label style="margin-right:10px;"><input type="radio" name="krIncMode" value="any" checked> <b>任一即可</b>（逗號＝或）</label>
+                        <label><input type="radio" name="krIncMode" value="all"> <b>全部都要含</b>（逗號＝且）</label>
+                    </div>
                     <div class="kw-err" id="krIncErr"></div></div>
                 <div style="flex:1;min-width:180px;"><label style="font-size:12px;">規格「不包含」 <span style="color:#888;font-weight:400;">逗號＝任一中就排除</span></label>
                     <input type="text" class="form-control input-sm" id="krExc" placeholder="冶具,治具,刀　＝ 含其中任一個就不算"></div>
                 <div style="width:90px;"><label style="font-size:12px;">排序</label>
                     <input type="number" class="form-control input-sm" id="krPriority" value="0"></div>
             </div>
+            <div id="krPreview" style="font-size:12px;margin-top:6px;color:#8a5a2b;min-height:20px;"></div>
             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;">
                 <div style="flex:1;min-width:260px;">
                     <label style="font-size:12px;">命中時帶入的製程標籤 <span style="color:#888;">（不選＝改勾下方「帶入備註」）</span></label>
@@ -1302,6 +1321,7 @@ function updateBpCount() {
     $('#bpCount').text(n);
 }
 $(document).on('change', 'input[name="bpTarget"],input[name="bpScope"]', updateBpCount);
+$(document).on('change', '#kwIncludeSet', runKwScan);
 
 function submitBulkProc() {
     if (!bpState.selected.length) { qtNotify('請先選擇要套用的製程標籤。', 'warn'); return; }
@@ -1413,7 +1433,9 @@ function runKwScan() {
     const custName = cust ? ($('#qtCustFilter option:selected').text().split('—')[0].trim()) : '全部客戶';
     $('#kwScanScope').text('年份：' + ($('#qtYearFilter').val() || '全部') + '　客戶：' + custName + '　掃描 ' + rows.length + ' 張報價單');
     $('#kwGroups').html('<div style="color:#999;padding:14px;"><i class="fa fa-spinner fa-spin"></i> 偵測中…</div>');
-    $.post(API_URL, { action: 'qkw_scan', quote_ids: JSON.stringify(rows.map(function(r){ return Number(r.quote_id); })), only_unset: '1' }, function(res) {
+    const onlyUnset = !$('#kwIncludeSet').is(':checked');
+    $.post(API_URL, { action: 'qkw_scan', quote_ids: JSON.stringify(rows.map(function(r){ return Number(r.quote_id); })),
+                      only_unset: onlyUnset ? '1' : '0' }, function(res) {
         if (!res.success) { $('#kwGroups').html('偵測失敗：' + (res.message || '')); return; }
         kwGroups = res.data.groups || [];
         kwChecked = {};
@@ -1431,12 +1453,14 @@ function renderKwGroups() {
     let html = '';
     kwGroups.forEach(function(g, gi) {
         const checkedN = g.items.filter(function(it){ return kwChecked[it.item_id]; }).length;
+        const hadN = g.items.filter(function(it){ return Number(it.had); }).length;
         html += '<div class="kw-group" id="kwG' + gi + '">' +
             '<div class="kw-group-head" onclick="kwToggleOpen(' + gi + ')">' +
                 '<input type="checkbox" onclick="event.stopPropagation();kwToggleGroup(' + gi + ',this.checked)" ' +
                     (checkedN === g.items.length ? 'checked' : '') + ' id="kwGChk' + gi + '">' +
                 '<span class="kw-label">' + (g.kind === 'note' ? '<span class="qt-badge note">備註</span> ' : '') + escapeQt(g.label) + '</span>' +
                 '<span style="color:#8a5a2b;">' + g.count + ' 筆</span>' +
+                (hadN ? '<span class="qt-badge warn">其中 ' + hadN + ' 筆原本已有設定，套用會覆蓋</span>' : '') +
                 '<span class="kw-rules">命中規則：' + escapeQt((g.rules || []).join('、')) + '</span>' +
                 '<span style="margin-left:auto;font-size:11px;color:#a2703a;" id="kwGSel' + gi + '">已勾 ' + checkedN + '</span>' +
                 '<i class="fa fa-caret-down"></i>' +
@@ -1462,6 +1486,7 @@ function kwDrawItems(gi) {
     g.items.forEach(function(it) {
         h += '<tr><td style="width:22px;"><input type="checkbox" class="kw-item-chk" data-gi="' + gi + '" value="' + it.item_id + '"' +
              (kwChecked[it.item_id] ? ' checked' : '') + '></td>' +
+             '<td style="width:66px;">' + (Number(it.had) ? '<span class="qt-badge warn">會覆蓋</span>' : '') + '</td>' +
              '<td style="width:120px;color:#8a5a2b;">' + escapeQt(it.quote_no) + '</td>' +
              '<td style="width:110px;">' + escapeQt(it.client_name || '') + '</td>' +
              '<td style="width:150px;">' + escapeQt(it.product_id || '') + '</td>' +
@@ -1547,7 +1572,10 @@ function krRenderRows(tagNames) {
             .map(function(id){ return tagNames[id] || ('#' + id); }).join('、');
         h += '<tr class="kw-rule-row">' +
             '<td>' + escapeQt(r.rule_name) + (Number(r.is_active) ? '' : ' <span class="qt-badge warn">停用</span>') + '</td>' +
-            '<td>' + escapeQt(r.include_kw) + '</td>' +
+            '<td>' + escapeQt(r.include_kw) +
+                (String(r.include_kw).indexOf(',') >= 0
+                    ? ' <span class="qt-badge ' + (r.include_mode === 'any' ? 'ok' : 'warn') + '">' +
+                      (r.include_mode === 'any' ? '任一即可' : '全部都要含') + '</span>' : '') + '</td>' +
             '<td>' + escapeQt(r.exclude_kw) + '</td>' +
             '<td>' + (r.customer_ids ? escapeQt(r.customer_ids) : '<span style="color:#888;">通用</span>') + '</td>' +
             '<td>' + (Number(r.to_note) ? '<span class="qt-badge note">備註</span>' : escapeQt(tags)) + '</td>' +
@@ -1558,17 +1586,65 @@ function krRenderRows(tagNames) {
     $('#kwRuleRows').html(h);
 }
 
+// 與項目列上的製程選擇器同一種操作方式：先點大類、再點子標籤，已選的顯示在下方（可按 × 移除）
+let krActiveGid = null;
 function krRenderTagPicker() {
-    let h = '<div class="qt-proc-l2">';
+    if (krActiveGid === null && processTagTree.length) krActiveGid = processTagTree[0].group_id;
+    let l1 = '<div class="qt-proc-l1">';
     processTagTree.forEach(function(g) {
-        (g.sub_tags || []).forEach(function(st) {
-            const on = krTagSel.indexOf(st.sub_tag_id) !== -1;
-            h += '<button type="button" class="' + (on ? 'active' : '') + '" onclick="krToggleTag(' + st.sub_tag_id + ')" ' +
-                 'title="' + escapeQt(g.group_name) + '">' + escapeQt(st.sub_tag_name) + '</button>';
-        });
+        l1 += '<button type="button" class="' + (g.group_id === krActiveGid ? 'active' : '') +
+              '" onclick="krSetGroup(' + g.group_id + ')">' + escapeQt(g.group_name) + '</button>';
     });
-    $('#krTagArea').html(h + '</div>');
+    l1 += '</div>';
+    let l2 = '<div class="qt-proc-l2" style="margin-top:3px;">';
+    const g = processTagTree.find(function(x){ return x.group_id === krActiveGid; });
+    if (g) (g.sub_tags || []).forEach(function(st) {
+        l2 += '<button type="button" class="' + (krTagSel.indexOf(st.sub_tag_id) !== -1 ? 'active' : '') +
+              '" onclick="krToggleTag(' + st.sub_tag_id + ')">' + escapeQt(st.sub_tag_name) + '</button>';
+    });
+    l2 += '</div>';
+    let chips = '<div class="qt-proc-chips" style="margin-top:4px;">';
+    if (!krTagSel.length) {
+        chips += '<span style="color:#888;">尚未選擇任何製程標籤</span>';
+    } else {
+        chips += '<span style="color:#8a5a2b;margin-right:4px;">已選：</span>';
+        krTagSel.forEach(function(sid) {
+            let nm = String(sid);
+            processTagTree.forEach(function(g2){ (g2.sub_tags||[]).forEach(function(st){ if (st.sub_tag_id === sid) nm = st.sub_tag_name; }); });
+            chips += '<span class="qt-proc-chip">' + escapeQt(nm) + '<span class="x" onclick="krToggleTag(' + sid + ')">&times;</span></span>';
+        });
+    }
+    chips += '</div>';
+    $('#krTagArea').html(l1 + l2 + chips);
 }
+function krSetGroup(gid) { krActiveGid = gid; krRenderTagPicker(); }
+
+// 即時試算：邊打邊算「這條規則會命中幾筆」，避免存完才發現逗號語意搞錯、一筆都沒中
+let krPvTimer = null;
+function krPreview() {
+    clearTimeout(krPvTimer);
+    krPvTimer = setTimeout(function() {
+        const inc = $('#krInc').val().trim();
+        if (!inc) { $('#krPreview').text(''); return; }
+        $('#krPreview').text('試算中…');
+        $.post(API_URL, { action: 'qkw_rule_preview', include_kw: inc,
+                          include_mode: $('input[name="krIncMode"]:checked').val(),
+                          exclude_kw: $('#krExc').val().trim(),
+                          customer_ids: Object.keys(krCustSel).join(',') }, function(res) {
+            if (!res.success) { $('#krPreview').text(''); return; }
+            const d = res.data;
+            if (!d.matched) {
+                $('#krPreview').html('<span style="color:#DD5138;">目前尚待確認的資料裡<b>一筆都沒有命中</b>' +
+                    '——如果你要表達的是「這些字其中一個」，請把上面切成「任一即可」。</span>');
+                return;
+            }
+            $('#krPreview').html('這條規則會命中 <b>' + d.matched + '</b> 筆（其中 <b>' + d.unset +
+                '</b> 筆還沒設定製程）　例：' + d.samples.map(escapeQt).join(' ｜ '));
+        });
+    }, 350);
+}
+$(document).on('input', '#krInc,#krExc', krPreview);
+$(document).on('change', 'input[name="krIncMode"]', krPreview);
 
 function krToggleTag(sid) {
     const i = krTagSel.indexOf(sid);
@@ -1597,7 +1673,7 @@ function krRenderCustBox(filter) {
     $('#krCustBox').html(h || '<span style="color:#999;">沒有符合的客戶</span>');
 }
 $(document).on('input', '#krCustFilter', function(){ krRenderCustBox(this.value); });
-$(document).on('change', '.kr-cust', function(){ if (this.checked) krCustSel[this.value] = true; else delete krCustSel[this.value]; });
+$(document).on('change', '.kr-cust', function(){ if (this.checked) krCustSel[this.value] = true; else delete krCustSel[this.value]; krPreview(); });
 $(document).on('change', '#krToNote', function(){ if (this.checked) { krTagSel = []; krRenderTagPicker(); } krValidate(); });
 $(document).on('input', '#krName,#krInc', krValidate);
 
@@ -1619,6 +1695,7 @@ function krValidate() {
 function krResetForm() {
     $('#krRuleId').val(0); $('#krName').val(''); $('#krInc').val(''); $('#krExc').val('');
     $('#krPriority').val(0); $('#krToNote').prop('checked', false);
+    $('input[name="krIncMode"][value="any"]').prop('checked', true); $('#krPreview').text('');
     krTagSel = []; krCustSel = {}; $('#krCustFilter').val('');
     krRenderTagPicker(); krRenderCustBox(''); krValidate();
 }
@@ -1628,6 +1705,8 @@ function krEdit(ruleId) {
     if (!r) return;
     $('#krRuleId').val(r.rule_id); $('#krName').val(r.rule_name); $('#krInc').val(r.include_kw);
     $('#krExc').val(r.exclude_kw); $('#krPriority').val(r.priority);
+    $('input[name="krIncMode"][value="' + (r.include_mode === 'any' ? 'any' : 'all') + '"]').prop('checked', true);
+    krPreview();
     $('#krToNote').prop('checked', Number(r.to_note) === 1);
     krTagSel = String(r.sub_tag_ids || '').split(',').filter(Boolean).map(Number);
     krCustSel = {}; String(r.customer_ids || '').split(',').filter(Boolean).forEach(function(c){ krCustSel[c] = true; });
@@ -1639,7 +1718,8 @@ function krSave() {
     if (!krValidate()) return;
     $.post(API_URL, {
         action: 'qkw_rule_save', rule_id: $('#krRuleId').val(), rule_name: $('#krName').val().trim(),
-        include_kw: $('#krInc').val().trim(), exclude_kw: $('#krExc').val().trim(),
+        include_kw: $('#krInc').val().trim(), include_mode: $('input[name="krIncMode"]:checked').val(),
+        exclude_kw: $('#krExc').val().trim(),
         customer_ids: Object.keys(krCustSel).join(','), sub_tag_ids: krTagSel.join(','),
         to_note: $('#krToNote').is(':checked') ? 1 : 0, priority: $('#krPriority').val() || 0, is_active: 1
     }, function(res) {
