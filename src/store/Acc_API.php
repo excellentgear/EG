@@ -1229,14 +1229,20 @@ case 'recon_parties': {
                                                         'sheet_id' => (int)$x['sheet_id']];
     // 「不提供對帳單」的對象要在清單上就看得出來（不會有對方紙本金額可比）
     $optMap = acc_recon_party_opt_map($db, $side);
+    $noMaster = 0;
     foreach ($out as &$o) {
         $o['sheet'] = $map[$o['party_id']] ?? null;
         $o['no_statement'] = (int)($optMap[$o['party_id']]['no_statement'] ?? 0);
+        // 應收：出貨簡稱對不到客戶主檔（也對不到別名）的要標出來
+        $o['in_master'] = ($side === 'ap') ? true : !empty($o['customer_id']);
+        if (!$o['in_master']) $noMaster++;
     }
     unset($o);
 
     acc_out(['side' => $side, 'billing_month' => $bm, 'parties' => $out,
-             'summary' => ['count' => count($out), 'with_sheet' => count($map)]]);
+             'summary' => ['count' => count($out), 'with_sheet' => count($map),
+                           'no_master' => $noMaster],
+             'can_bind' => (bool)$perms['canAdmin']]);
 }
 
 /* 載入底稿：有暫存就回暫存，否則從來源憑證即時組出（尚未寫入） */
@@ -1480,6 +1486,96 @@ case 'recon_party_opt_save': {
     ], $u);
     if (!$r['success']) acc_err($r['message']);
     acc_out($r);
+}
+
+/* ── 沒有客戶主檔的出貨對象（應收專用）──────────────────────────────
+   出貨單上的簡稱對不到 customer_list.customer 就會被當成一家新客戶，
+   統編／發票資料／結帳日／臨時結帳日全部套不上，所以要在對帳頁點出來。 */
+case 'recon_unbound': {
+    $s  = $_POST ?: $_GET;
+    $bm = trim((string)($s['bm'] ?? ''));
+    $r  = acc_ar_unbound($db, ['bm' => $bm, 'months' => (int)($s['months'] ?? 12)]);
+    acc_out($r + ['customers'  => acc_customer_options($db),
+                  'aliases'    => acc_customer_alias_list($db),
+                  'can_bind'   => (bool)$perms['canAdmin']]);
+}
+
+/* 把出貨簡稱對應到某家客戶主檔（僅會計管理員；會一併回填 is_list.Client_id） */
+case 'recon_alias_bind': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可綁定客戶主檔', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $items = json_decode((string)($_POST['items'] ?? ''), true);
+    if (!is_array($items) || !$items) {
+        $items = [['alias' => (string)($_POST['alias'] ?? ''), 'customer_id' => (string)($_POST['customer_id'] ?? '')]];
+    }
+    if (count($items) > 100) acc_err('一次最多綁定 100 筆');
+    $done = []; $errs = []; $filled = 0;
+    foreach ($items as $it) {
+        $alias = acc_u8(trim((string)($it['alias'] ?? '')));
+        $cid   = strtoupper(trim((string)($it['customer_id'] ?? '')));
+        if ($alias === '' || $cid === '') continue;          // 沒選對象的那幾列直接略過
+        $r = acc_customer_alias_bind($db, $alias, $cid, $u);
+        if ($r['success']) { $done[] = $r['message']; $filled += (int)$r['filled']; }
+        else               { $errs[] = $alias . '：' . $r['message']; }
+    }
+    if (!$done && !$errs) acc_err('沒有選到要對應的客戶');
+    acc_out(['bound' => count($done), 'filled' => $filled, 'errors' => $errs,
+             'message' => '已對應 ' . count($done) . ' 家'
+                          . ($filled ? "，回填 {$filled} 列出貨的客戶編號" : '')
+                          . ($errs ? '；' . count($errs) . ' 筆未完成' : '')]);
+}
+
+/* 解除對應（連同回填的 Client_id 一起還原） */
+case 'recon_alias_unbind': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可解除對應', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_customer_alias_unbind($db, acc_u8(trim((string)($_POST['alias'] ?? ''))), $u);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
+/* ── 臨時變動結帳日（節慶／盤點；只有應收有這張表）───────────────── */
+case 'settle_ex_list': {
+    $s   = $_POST ?: $_GET;
+    $cid = strtoupper(trim((string)($s['customer_id'] ?? '')));
+    if ($cid === '') {
+        // 對帳頁那邊手上只有出貨簡稱，這裡替它解析成客戶編號（含別名）
+        $pc  = acc_customer_of_name($db, acc_u8(trim((string)($s['party_id'] ?? ''))));
+        $cid = (string)($pc['customer_id'] ?? '');
+    }
+    if ($cid === '') acc_out(['customer_id' => null, 'rows' => [], 'can_edit' => (bool)$perms['canAdmin'],
+                              'no_master' => true]);
+    acc_out(['customer_id' => $cid, 'rows' => acc_settle_ex_list($db, $cid),
+             'can_edit' => (bool)$perms['canAdmin'], 'no_master' => false]);
+}
+
+case 'settle_ex_save': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可設定臨時結帳日', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $cid = strtoupper(trim((string)($_POST['customer_id'] ?? '')));
+    if ($cid === '') {
+        $pc  = acc_customer_of_name($db, acc_u8(trim((string)($_POST['party_id'] ?? ''))));
+        $cid = (string)($pc['customer_id'] ?? '');
+    }
+    $r = acc_settle_ex_save($db, $cid,
+                            trim((string)($_POST['target_year_month'] ?? '')),
+                            trim((string)($_POST['adjusted_date'] ?? '')),
+                            acc_u8((string)($_POST['reason'] ?? '')), $u);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r + ['rows' => acc_settle_ex_list($db, $cid)]);
+}
+
+case 'settle_ex_delete': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可刪除臨時結帳日', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $r = acc_settle_ex_delete($db, (int)($_POST['exception_id'] ?? 0), $u);
+    if (!$r['success']) acc_err($r['message']);
+    $cid = strtoupper(trim((string)($_POST['customer_id'] ?? '')));
+    acc_out($r + ['rows' => $cid !== '' ? acc_settle_ex_list($db, $cid) : []]);
 }
 
 /* 找這個對象「本月份以外」的單據（交接日期前後常被做到前後月份） */

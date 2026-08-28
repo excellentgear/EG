@@ -22,6 +22,7 @@ include_once '../../src/common/DBConnection.php';
 include_once '../../src/common/acc_lib.php';
 
 $db      = (new DBConnection())->getPDO();
+acc_ensure_schema($db);
 $accUser = acc_current_user($db);
 $perms   = acc_perms($db, $accUser);
 $roleLbl = $perms['isAdmin'] ? '管理者'

@@ -221,6 +221,18 @@ table.a-t tbody tr.dragging{opacity:.4;}
 .okbox{background:#EEF4E2;color:#3F5520;border-left:5px solid #5C7A2E;
   padding:8px 12px;border-radius:4px;font-size:13px;margin-bottom:8px;}
 
+/* 出貨簡稱對不到客戶主檔的提示條與設定表 */
+.unb-bar{display:flex;align-items:center;gap:9px;clear:both;margin:0 0 8px;
+  background:#FBE3DC;color:#7a2c17;border-left:5px solid var(--a-bad);
+  padding:7px 12px;border-radius:4px;font-size:13px;}
+.unb-bar .btn-mini{margin-left:auto;background:#fff;}
+table.se{width:100%;border-collapse:collapse;font-size:12.5px;color:var(--a-ink);}
+table.se th,table.se td{border:1px solid #EADFC8;padding:3px 6px;text-align:center;}
+table.se th{background:var(--a-ok);}
+table.se td.l{text-align:left;}
+.se-in{height:28px;border:1px solid var(--a-line2);border-radius:4px;padding:0 7px;
+  color:var(--a-ink);background:#fff;font-size:12.5px;}
+
 .a-msg{position:fixed;top:64px;right:18px;z-index:12000;min-width:250px;max-width:440px;
   padding:11px 15px;border-radius:6px;display:none;font-size:14px;box-shadow:0 3px 12px rgba(0,0,0,.2);}
 .a-msg.ok{background:#F7E0BD;color:#5b3a1e;border-left:5px solid var(--a-acc);}
@@ -375,6 +387,12 @@ table.ot tr.lock{color:#a08a6a;}
       <button id="btnCalc"><i class="fa fa-calculator"></i> 計算機</button>
       <span class="a-role">目前角色：<b><?= htmlspecialchars($roleLbl) ?></b>
         <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
+    </div>
+
+    <!-- 出貨單上的簡稱對不到客戶主檔：統編／發票資料／結帳日／臨時結帳日全部套不上，一定要看得見 -->
+    <div class="unb-bar" id="unbBar" style="display:none;">
+      <i class="fa fa-exclamation-triangle"></i><span id="unbTxt"></span>
+      <button class="btn-mini" id="btnUnbind"><i class="fa fa-link"></i> 對應到客戶主檔</button>
     </div>
 
     <div id="sheetBox" style="display:none;">
@@ -586,6 +604,48 @@ table.ot tr.lock{color:#a08a6a;}
 </div></div>
 
 <!-- 對象設定：部分客戶不提供對帳單 -->
+<!-- 未建主檔的出貨對象 → 對應到客戶主檔（僅會計管理員可存） -->
+<div class="a-mask" id="mkBind"><div class="a-modal" style="width:1000px;">
+  <div class="m-head"><i class="fa fa-link"></i>&nbsp;未建主檔的出貨對象<span class="m-close" data-close="mkBind">✕</span></div>
+  <div class="m-body">
+    <div class="info">
+      這些名稱出現在出貨／退貨單上，但<b>對不到任何一家客戶主檔的簡稱</b>。多半只是寫法長短不同
+      （出貨寫「高鋒工業」、主檔是「高鋒」），對不到就會被當成一家全新的客戶——
+      <b>統編、發票資料、結帳日、臨時結帳日通通套不上去</b>。
+      在右邊選出它其實是哪一家，對應之後<b>歷史與往後匯入的出貨都會自動歸到那一家</b>，
+      也會把出貨單上空白的客戶編號補回去。
+      <br><b>名字相近不代表同一家</b>（「泓創綠能」與「泓創綠能科技」有可能是兩家公司），
+      所以系統只給建議、絕不自動對應，一律要人確認。
+    </div>
+    <div class="a-bar" style="background:var(--a-bg2);">
+      <label>掃描期間</label>
+      <select id="ubSpan" style="width:150px;">
+        <option value="0">目前這個帳款月份</option>
+        <option value="12" selected>近 12 個月</option>
+        <option value="36">近 3 年</option>
+      </select>
+      <button id="ubGo" class="btn-warm"><i class="fa fa-refresh"></i> 重新掃描</button>
+      <button id="ubSuggest"><i class="fa fa-magic"></i> 全部套用建議</button>
+      <button id="ubClear"><i class="fa fa-eraser"></i> 全部清空</button>
+      <span class="a-hint" id="ubRange" style="margin-left:6px;"></span>
+    </div>
+    <div style="max-height:42vh;overflow:auto;border:1px solid var(--a-line);border-radius:4px;">
+      <table class="ot" id="ubTbl"><thead><tr>
+        <th>出貨單上的名稱</th><th>筆數</th><th>金額</th><th>起</th><th>迄</th>
+        <th style="min-width:280px;">對應到哪一家客戶</th><th>系統建議的理由</th>
+      </tr></thead><tbody id="ubBody">
+        <tr><td colspan="7" style="padding:16px;color:#8a6d45;">載入中…</td></tr>
+      </tbody></table>
+    </div>
+    <div id="ubAliasBox"></div>
+  </div>
+  <div class="m-foot">
+    <span id="ubTally" style="float:left;font-size:13px;color:var(--a-ink);line-height:32px;"></span>
+    <button data-close="mkBind">關閉</button>
+    <button class="go" id="ubOk"><i class="fa fa-link"></i> 建立對應</button>
+  </div>
+</div></div>
+
 <div class="a-mask" id="mkParty"><div class="a-modal narrow">
   <div class="m-head"><i class="fa fa-address-card-o"></i>&nbsp;對象設定<span class="m-close" data-close="mkParty">✕</span></div>
   <div class="m-body">
@@ -604,9 +664,34 @@ table.ot tr.lock{color:#a08a6a;}
         border-radius:4px;padding:0 8px;color:var(--a-ink);" placeholder="例：客戶只認我方出貨單，月底寄對帳明細即可">
     </div>
     <div class="a-hint" id="poWho"></div>
+
+    <!-- 臨時變動結帳日（只有應收有這張表；資料與主檔管理→客戶編輯是同一份） -->
+    <div id="poSetl" style="display:none;margin-top:13px;border-top:1px dashed var(--a-line2);padding-top:10px;">
+      <div style="font-size:13.5px;color:var(--a-brand);font-weight:bold;margin-bottom:4px;">
+        <i class="fa fa-calendar-check-o"></i> 臨時變動結帳日
+      </div>
+      <div class="a-hint" style="margin:0 0 7px;">
+        節慶或盤點讓某個月的結帳日跟平常不一樣時填在這裡。例：<b>2026-07</b> 提前到 <b>7/20</b> 結，
+        7/21 之後出的貨就改算 <b>8 月</b>的帳；填 <b>8/2</b> 則是延後結，8/1~8/2 出的貨仍算 <b>7 月</b>的帳。
+        <b>只影響填的那一個月</b>，其他月份照常用主檔的結帳日。
+        這裡與<b>主檔管理→客戶編輯→結帳例外</b>是同一份資料，改哪邊都一樣。
+      </div>
+      <table class="se" id="poSetlTbl">
+        <thead><tr><th style="width:100px;">適用年月</th><th style="width:120px;">調整後結帳日</th><th>原因</th><th style="width:46px;"></th></tr></thead>
+        <tbody id="poSetlBody"></tbody>
+      </table>
+      <div id="poSetlAdd" style="display:none;gap:6px;flex-wrap:wrap;align-items:center;margin-top:7px;">
+        <input type="month" id="seYm" class="se-in" style="width:132px;">
+        <input type="date"  id="seDate" class="se-in" style="width:150px;">
+        <input type="text"  id="seReason" class="se-in" maxlength="100"
+               style="flex:1;min-width:170px;" placeholder="原因（例：中秋連假提前結帳）">
+        <button class="btn-mini" id="seAdd"><i class="fa fa-plus"></i> 新增／更新</button>
+      </div>
+      <div class="a-hint" id="seMsg"></div>
+    </div>
   </div>
   <div class="m-foot">
-    <button data-close="mkParty">取消</button>
+    <button data-close="mkParty">關閉</button>
     <button class="go" id="poOk"><i class="fa fa-save"></i> 儲存</button>
   </div>
 </div></div>
@@ -674,6 +759,27 @@ table.ot tr.lock{color:#a08a6a;}
     應收的對帳單<b>本來就含退貨</b>，在「類別」欄標為<span class="pill k-ret">退貨</span>，數量與金額都是<b>負數</b>，直接扣減本月應收。
     備註性質的退貨（<code>ir_return_type.is_note=1</code>）不計金額，所以不會出現。
 
+    <h4>對象前面有「⚠ 未建主檔」是什麼意思</h4>
+    <ul>
+      <li>出貨單上的客戶簡稱<b>對不到客戶主檔</b>（常見於 ERP 寫「高鋒工業」、主檔卻是「高鋒」）。
+          對不到就等於沒有主檔，<b>統編、發票資料、結帳日、臨時結帳日全部套不上去</b>。</li>
+      <li>工具列下方會出現紅色提示條，會計管理員按<b>對應到客戶主檔</b>，
+          在跳窗裡選出它其實是哪一家即可；對應後<b>歷史與往後匯入的出貨都會自動歸戶</b>，
+          並回填出貨單上空白的客戶編號。</li>
+      <li>系統只提供<b>建議</b>不會自動對應——「泓創綠能」與「泓創綠能科技」有可能是兩家公司。
+          對錯了可以在同一個跳窗<b>解除</b>，回填的客戶編號也會一起還原。</li>
+    </ul>
+
+    <h4>臨時變動結帳日（節慶、盤點）</h4>
+    <ul>
+      <li>在<b>對象設定</b>跳窗下半部設定：填「適用年月」與「調整後結帳日」，<b>只影響那一個月</b>。</li>
+      <li>提前結：<b>2026-07</b> 填 <b>7/20</b> → 7/21 之後出的貨改算 8 月的帳。</li>
+      <li>延後結：<b>2026-07</b> 填 <b>8/2</b> → 8/1~8/2 出的貨仍算 7 月的帳（可以填到次月月底為止）。</li>
+      <li>設定後<b>帳款月份的預設值、對帳單內容、發票開立候選</b>都會跟著改；
+          正在對的那份底稿要<b>重新載入</b>才會重算。</li>
+      <li>這份設定與<b>主檔管理→客戶編輯→結帳例外</b>是同一份資料，改哪一邊都一樣（只有會計管理員能改）。</li>
+    </ul>
+
     <h4>不提供對帳單的客戶</h4>
     有些客戶不寄對帳單回來，我方直接用出貨單認列待收金額。按<b>對象設定</b>勾起來後，這個對象就不再顯示「對方紙本合計／差額」，
     確認鎖帳時也不會再提醒沒填紙本金額。
@@ -688,7 +794,9 @@ table.ot tr.lock{color:#a08a6a;}
 
     <h4>設定入口與權限</h4>
     <ul>
-      <li><b>對象設定</b>（是否提供對帳單）：有該側對帳權限者即可設定。</li>
+      <li><b>對象設定</b>（是否提供對帳單）：有該側對帳權限者即可設定；
+          同一個跳窗裡的<b>臨時變動結帳日</b>只有會計管理員能改。</li>
+      <li><b>對應到客戶主檔</b>：僅<b>會計管理員</b>（會回填出貨單上的客戶編號並留稽核紀錄）。</li>
       <li><b>模組設定</b>（預設開關、AS 文件綁定）：僅<b>會計管理員</b>看得到。</li>
       <li>角色於「使用者權限設定」頁指派（模組 accounting）：應收對帳(業務)只能碰應收、應付對帳(生管)只能碰應付、會計檢閱只能看。</li>
     </ul>
@@ -862,11 +970,14 @@ function loadParties(){
       // 選項文字要含「編號」，打字篩選（data-eg-filter）比對的就是這串顯示文字
       var pid = (p.customer_id || p.party_id || '');
       var idTxt = (pid && pid !== p.party_name) ? (' ' + pid) : '';
-      h+='<option value="'+esc(p.party_id)+'">'+esc(p.party_name)+esc(idTxt)
+      h+='<option value="'+esc(p.party_id)+'">'
+        +(p.in_master===false ? '⚠ ' : '')+esc(p.party_name)+esc(idTxt)
         +'（'+p.cnt+' 筆 / '+nf(p.amount)+'）'+esc(tag)
+        +(p.in_master===false ? ' ［未建主檔］' : '')
         +(p.no_statement ? ' ［不提供對帳單］' : '')+'</option>';
     });
     $('#partySel').html(h);
+    paintUnbBar((r.summary && r.summary.no_master) || 0, !!r.can_bind);
     if(pendingParty){
       var want=pendingParty; pendingParty='';
       // 該對象若該月已無來源憑證（例如全數拆到別的月份）就不會在清單裡，
@@ -1839,14 +1950,237 @@ $('#otApply').on('click',function(){
   });
 });
 
-/* ── 對象設定：不提供對帳單 ─────────────────────────────────────────── */
+/* ══ 未建主檔的出貨對象 ═════════════════════════════════════════════
+   出貨單上的簡稱（is_list.Client_name）對不到 customer_list.customer 就等於
+   沒有主檔：統編、發票資料、結帳日、臨時結帳日全部套不上，而且畫面上完全看不出來。
+   對應之後歷史與往後匯入的出貨都會自動歸戶，不必逐列去改出貨單。 */
+var UNB={rows:[],customers:[],aliases:[],canBind:false};
+
+function paintUnbBar(n, canBind){
+  if(SIDE!=='ar' || !n){ $('#unbBar').hide(); return; }
+  $('#unbTxt').html('本月有 <b>'+n+'</b> 個對象在客戶主檔裡找不到，'
+    + '統編／發票資料／結帳日都套不上去'
+    + (canBind ? '' : '（請會計管理員處理）'));
+  $('#btnUnbind').toggle(!!canBind);
+  $('#unbBar').show();
+}
+
+$('#btnUnbind').on('click',function(){ openMask('mkBind'); ubLoad(); });
+$('#ubGo').on('click', function(){ ubLoad(); });
+
+function ubLoad(){
+  var d={}, span=$('#ubSpan').val();
+  if(span==='0') d.bm=$('#bm').val(); else d.months=span;
+  $('#ubBody').html('<tr><td colspan="7" style="padding:16px;color:#8a6d45;">掃描中…</td></tr>');
+  $.post(API+'?action=recon_unbound', d, function(r){
+    if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
+    UNB.rows=r.rows||[]; UNB.customers=r.customers||[];
+    UNB.aliases=r.aliases||[]; UNB.canBind=!!r.can_bind;
+    $('#ubRange').text('掃描區間：'+dispDate(r.range[0])+' ~ '+dispDate(r.range[1]));
+    $('#ubOk,#ubSuggest,#ubClear').prop('disabled', !UNB.canBind);
+    paintUnb();
+  },'json').fail(function(x){
+    var m='查詢失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){}
+    $('#ubBody').html('<tr><td colspan="7" style="padding:16px;color:#7a2c17;">'+esc(m)+'</td></tr>');
+  });
+}
+
+function paintUnb(){
+  if(!UNB.rows.length){
+    $('#ubBody').html('<tr><td colspan="7" style="padding:16px;color:#3F5520;">'
+      +'這段期間內每一個出貨對象都對得到客戶主檔，沒有要處理的。</td></tr>');
+  } else {
+    var h='';
+    UNB.rows.forEach(function(r,i){
+      var opts='<option value="">（先不對應）</option>';
+      (r.suggest||[]).forEach(function(sg){
+        opts+='<option value="'+esc(sg.customer_id)+'">'+esc(sg.customer)+'（'+esc(sg.customer_id)+'）</option>';
+      });
+      opts+='<option value="__more__">其他客戶…（打字搜尋全部主檔）</option>';
+      h+='<tr data-i="'+i+'">'
+        +'<td class="l"><b>'+esc(r.name)+'</b></td>'
+        +'<td>'+r.cnt+'</td>'
+        +'<td class="r">'+nf(r.amount)+'</td>'
+        +'<td>'+esc(dispDate(r.first_date))+'</td>'
+        +'<td>'+esc(dispDate(r.last_date))+'</td>'
+        +'<td class="l"><select class="ub-sel" data-i="'+i+'" style="width:262px;height:28px;"'
+        + (UNB.canBind?'':' disabled')+'>'+opts+'</select></td>'
+        +'<td class="l" style="font-size:11.5px;color:var(--a-ink2);">'
+        + (r.suggest&&r.suggest.length ? esc(r.suggest[0].why) : '（沒有名稱相近的主檔，要自己挑）')
+        +'</td></tr>';
+    });
+    $('#ubBody').html(h);
+  }
+  // 已建立的對應：可以解除（會連同回填的客戶編號一起還原）
+  var a='';
+  if(UNB.aliases.length){
+    a='<div class="okbox" style="margin-top:9px;"><b>已建立的對應（'+UNB.aliases.length+' 筆）</b><br>';
+    UNB.aliases.forEach(function(x){
+      a+='<span style="display:inline-block;margin:3px 10px 0 0;">'
+        +esc(x.alias_name)+' → <b>'+esc(x.customer||'（主檔已不存在）')+'</b>'
+        +'（'+esc(x.customer_id)+'，'+(x.cnt||0)+' 筆）'
+        +(UNB.canBind?' <a href="#" class="ub-unbind" data-a="'+esc(x.alias_name)+'" style="color:#7a2c17;">解除</a>':'')
+        +'</span>';
+    });
+    a+='</div>';
+  }
+  $('#ubAliasBox').html(a);
+  ubTally();
+}
+
+function ubTally(){
+  var n=0;
+  $('.ub-sel').each(function(){ if(this.value && this.value!=='__more__') n++; });
+  $('#ubTally').html(n ? ('已選好 <b>'+n+'</b> 家要對應') : '尚未選擇要對應的客戶');
+}
+
+/* 「其他客戶…」＝把整份主檔塞進這一個下拉，並交給共用檔長出打字篩選框
+   （不預先每列都塞 900 個選項，那會讓跳窗開得很慢） */
+$(document).on('change','.ub-sel',function(){
+  var $s=$(this);
+  if($s.val()==='__more__'){
+    if(!$s.data('full')){
+      $s.data('full',1);
+      var h='<option value="">（先不對應）</option>';
+      UNB.customers.forEach(function(c){
+        h+='<option value="'+esc(c.customer_id)+'">'+esc(c.customer)+' '+esc(c.customer_id)
+          +(c.customer_full?('　'+esc(c.customer_full)):'')+'</option>';
+      });
+      $s.html(h).attr('data-eg-filter','輸入客戶編號或名稱篩選…');
+      if(window.egSelectFilterScan) window.egSelectFilterScan($s.closest('td')[0]);
+    } else { $s.val(''); }
+  }
+  ubTally();
+});
+
+$('#ubSuggest').on('click',function(){
+  var n=0;
+  $('.ub-sel').each(function(){
+    var i=+$(this).data('i'), r=UNB.rows[i];
+    if(r && r.suggest && r.suggest.length && !$(this).data('full')){ $(this).val(r.suggest[0].customer_id); n++; }
+  });
+  ubTally();
+  toast(n ? ('已帶入 '+n+' 筆建議，請逐一確認後再按「建立對應」') : '沒有可套用的建議', !n);
+});
+$('#ubClear').on('click',function(){ $('.ub-sel').val(''); ubTally(); });
+
+$('#ubOk').on('click',function(){
+  var items=[];
+  $('.ub-sel').each(function(){
+    var v=$(this).val(), i=+$(this).data('i');
+    if(v && v!=='__more__' && UNB.rows[i]) items.push({alias:UNB.rows[i].name, customer_id:v});
+  });
+  if(!items.length){ toast('請先選擇要對應到哪一家客戶', true); return; }
+  var txt=items.slice(0,10).map(function(x){
+    var c=null;
+    UNB.customers.forEach(function(y){ if(y.customer_id===x.customer_id) c=y; });
+    return '　' + x.alias + ' → ' + (c?c.customer:x.customer_id);
+  }).join('\n') + (items.length>10 ? ('\n　…等 '+items.length+' 家') : '');
+  if(!confirm('確定建立以下對應？\n\n'+txt
+      +'\n\n之後這些名稱的出貨都會歸到該客戶，並回填出貨單上空白的客戶編號。\n'
+      +'（可以再解除，解除時回填的客戶編號也會一起還原）')) return;
+  var $b=$(this).prop('disabled',true).html('<i class="fa fa-spinner fa-spin"></i> 處理中…');
+  $.post(API+'?action=recon_alias_bind',{csrf:CSRF, items:JSON.stringify(items)},function(r){
+    $b.prop('disabled',false).html('<i class="fa fa-link"></i> 建立對應');
+    if(!r.ok){ toast(esc(r.error||'對應失敗'), true); return; }
+    toast(esc(r.message)+((r.errors&&r.errors.length)?('<br>'+r.errors.map(esc).join('<br>')):''), !!(r.errors&&r.errors.length));
+    ubLoad(); loadParties();
+  },'json').fail(function(x){
+    $b.prop('disabled',false).html('<i class="fa fa-link"></i> 建立對應');
+    var m='對應失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true);
+  });
+});
+
+$(document).on('click','.ub-unbind',function(e){
+  e.preventDefault();
+  var a=$(this).data('a');
+  if(!confirm('解除「'+a+'」的對應？\n\n之後這個名稱的出貨會再度變成「未建主檔」，\n當初回填的客戶編號也會一併清掉。')) return;
+  $.post(API+'?action=recon_alias_unbind',{csrf:CSRF, alias:a},function(r){
+    if(!r.ok){ toast(esc(r.error||'解除失敗'), true); return; }
+    toast(esc(r.message)); ubLoad(); loadParties();
+  },'json').fail(function(){ toast('解除失敗', true); });
+});
+
+/* ── 對象設定：不提供對帳單＋臨時變動結帳日 ────────────────────────── */
 $('#btnPartyOpt').on('click',function(){
   if(!sheet){ toast('請先載入對帳單', true); return; }
   $('#poName').text(sheet.party_name+'（'+sheet.party_id+'）');
   $('#poNo').prop('checked', !!(OPT&&OPT.no_statement));
   $('#poNote').val((OPT&&OPT.note)||'');
   $('#poWho').html(OPT&&OPT.updated_at ? ('最後修改：'+esc(OPT.updated_by_name||'')+'　'+esc(dispDate(OPT.updated_at))) : '');
+  seLoad();
   openMask('mkParty');
+});
+
+/* 臨時變動結帳日（只有應收有；與主檔管理的客戶編輯是同一份資料、同一個寫入點） */
+var SE_CID='', SE_EDIT=false;
+function seLoad(){
+  SE_CID=''; SE_EDIT=false;
+  $('#poSetl').hide(); $('#poSetlBody').html(''); $('#poSetlAdd').hide(); $('#seMsg').text('');
+  if(SIDE!=='ar' || !sheet) return;
+  $.post(API+'?action=settle_ex_list',{party_id:sheet.party_id},function(r){
+    if(!r.ok) return;
+    $('#poSetl').show();
+    SE_EDIT=!!r.can_edit; SE_CID=r.customer_id||'';
+    if(r.no_master){
+      $('#poSetlBody').html('<tr><td colspan="4" class="l" style="color:#7a2c17;">'
+        +'這個對象還沒有對應到客戶主檔，沒辦法設定臨時結帳日。'
+        +'請先用工具列上方的「對應到客戶主檔」處理。</td></tr>');
+      return;
+    }
+    sePaint(r.rows||[]);
+  },'json');
+}
+function sePaint(rows){
+  var h='';
+  if(!rows.length){
+    h='<tr><td colspan="4" class="l" style="color:var(--a-ink2);">尚未設定（照主檔的結帳日計算）</td></tr>';
+  } else {
+    rows.forEach(function(x){
+      h+='<tr><td>'+esc(x.target_year_month)+'</td>'
+        +'<td><b>'+esc(dispDate(x.adjusted_date))+'</b></td>'
+        +'<td class="l">'+esc(x.reason||'')+'</td>'
+        +'<td>'+(SE_EDIT?('<a href="#" class="se-del" data-id="'+x.exception_id+'" style="color:#7a2c17;">刪除</a>'):'')+'</td></tr>';
+    });
+  }
+  $('#poSetlBody').html(h);
+  $('#poSetlAdd').css('display', SE_EDIT?'flex':'none');
+  if(!$('#seYm').val()) $('#seYm').val(sheet ? sheet.billing_month : '');
+}
+function seCheck(){
+  var ym=$('#seYm').val(), d=$('#seDate').val();
+  if(!ym || !d){ $('#seMsg').html('<span style="color:#DD5138;">適用年月與調整後結帳日都要填</span>'); return null; }
+  var lo=ym+'-01', hiD=new Date(+ym.slice(0,4), +ym.slice(5,7)+1, 0);
+  var hi=hiD.getFullYear()+'-'+('0'+(hiD.getMonth()+1)).slice(-2)+'-'+('0'+hiD.getDate()).slice(-2);
+  if(d<lo || d>hi){
+    $('#seMsg').html('<span style="color:#DD5138;">調整後結帳日要落在 '+esc(dispDate(lo))+' ~ '+esc(dispDate(hi))
+      +' 之間（可以延後到次月，但不能更遠）</span>');
+    return null;
+  }
+  $('#seMsg').text('');
+  return {ym:ym, d:d};
+}
+$('#seYm,#seDate').on('change', function(){ if($('#seYm').val() && $('#seDate').val()) seCheck(); });
+$('#seAdd').on('click',function(){
+  var v=seCheck(); if(!v) return;
+  $.post(API+'?action=settle_ex_save',{csrf:CSRF, party_id:sheet.party_id, customer_id:SE_CID,
+        target_year_month:v.ym, adjusted_date:v.d, reason:$('#seReason').val()},function(r){
+    if(!r.ok){ $('#seMsg').html('<span style="color:#DD5138;">'+esc(r.error||'儲存失敗')+'</span>'); return; }
+    $('#seDate').val(''); $('#seReason').val('');
+    sePaint(r.rows||[]);
+    toast(esc(r.message)+'；重新載入對帳單後才會依新的結帳日重算歸屬');
+  },'json').fail(function(x){
+    var m='儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){}
+    $('#seMsg').html('<span style="color:#DD5138;">'+esc(m)+'</span>');
+  });
+});
+$(document).on('click','.se-del',function(e){
+  e.preventDefault();
+  if(!confirm('刪除這一筆臨時結帳日？該月份會恢復用主檔的結帳日計算。')) return;
+  $.post(API+'?action=settle_ex_delete',{csrf:CSRF, exception_id:$(this).data('id'), customer_id:SE_CID},function(r){
+    if(!r.ok){ toast(esc(r.error||'刪除失敗'), true); return; }
+    sePaint(r.rows||[]); toast(esc(r.message));
+  },'json').fail(function(){ toast('刪除失敗', true); });
 });
 $('#poOk').on('click',function(){
   $.post(API+'?action=recon_party_opt_save',{csrf:CSRF, side:SIDE, party_id:sheet.party_id,

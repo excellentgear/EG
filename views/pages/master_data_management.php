@@ -2790,22 +2790,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'save_settlement_exception') {
         try {
             if (!($can_create||$can_update)) throw new Exception('無權限');
-            $cid  = trim($_POST['customer_id']);
-            $ym   = trim($_POST['target_year_month']); // YYYY-MM
-            $date = trim($_POST['adjusted_date']);
-            $reason = trim($_POST['reason'] ?? '');
-            if (!preg_match('/^\d{4}-\d{2}$/', $ym)) throw new Exception('年月格式錯誤');
-            if (!$date) throw new Exception('調整日期不可為空');
-            // upsert
-            $chk = $pdo->prepare("SELECT exception_id FROM customer_settlement_exceptions WHERE customer_id=? AND target_year_month=?");
-            $chk->execute([$cid, $ym]);
-            if ($row = $chk->fetch()) {
-                $pdo->prepare("UPDATE customer_settlement_exceptions SET adjusted_date=?,reason=? WHERE exception_id=?")
-                    ->execute([$date,$reason,$row['exception_id']]);
-            } else {
-                $pdo->prepare("INSERT INTO customer_settlement_exceptions (customer_id,target_year_month,adjusted_date,reason) VALUES (?,?,?,?)")
-                    ->execute([$cid,$ym,$date,$reason]);
-            }
+            // 唯一實作在 acc_lib：這裡與對帳頁的「對象設定」共用同一支，
+            // 兩邊各寫一份驗證規則必定走鐘（鐵律4）。填的值會直接影響帳款月份歸屬。
+            require_once __DIR__ . '/../../src/common/acc_lib.php';
+            $r = acc_settle_ex_save($pdo, trim($_POST['customer_id'] ?? ''),
+                                    trim($_POST['target_year_month'] ?? ''),
+                                    trim($_POST['adjusted_date'] ?? ''),
+                                    trim($_POST['reason'] ?? ''),
+                                    acc_current_user($pdo));
+            if (!$r['success']) throw new Exception($r['message']);
             echo json_encode(['success'=>true,'message'=>'已儲存結帳例外']);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
@@ -2815,8 +2808,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'delete_settlement_exception') {
         try {
             if (!$can_delete) throw new Exception('無刪除權限');
-            $eid = intval($_POST['exception_id']);
-            $pdo->prepare("DELETE FROM customer_settlement_exceptions WHERE exception_id=?")->execute([$eid]);
+            require_once __DIR__ . '/../../src/common/acc_lib.php';   // 唯一實作（同上）
+            $r = acc_settle_ex_delete($pdo, intval($_POST['exception_id'] ?? 0), acc_current_user($pdo));
+            if (!$r['success']) throw new Exception($r['message']);
             echo json_encode(['success'=>true,'message'=>'已刪除']);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;

@@ -271,6 +271,18 @@ function acc_ensure_schema(PDO $db): void
             PRIMARY KEY (side, party_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-對帳對象選項（是否提供對帳單）'");
 
+        /* 出貨單上的客戶簡稱 ↔ 客戶主檔（ERP 寫「高鋒工業」、主檔是「高鋒」這種）。
+           一筆別名同時涵蓋歷史與往後匯入的新資料，比逐列改 is_list 安全得多。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS acc_customer_alias (
+            alias_name      VARCHAR(100) NOT NULL COMMENT '出貨/退貨單上的客戶簡稱（is_list.Client_name）',
+            customer_id     CHAR(11)     NOT NULL COMMENT 'customer_list.customer_id',
+            created_by      INT          DEFAULT NULL,
+            created_by_name VARCHAR(50)  DEFAULT NULL,
+            created_at      DATETIME     DEFAULT NULL,
+            PRIMARY KEY (alias_name),
+            KEY idx_alias_cust (customer_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='會計-客戶簡稱別名（出貨單簡稱對不到主檔時的對照）'");
+
         $done = true;
     } catch (Throwable $e) {
         error_log('acc_ensure_schema 失敗: ' . $e->getMessage());
@@ -1169,14 +1181,18 @@ function acc_customer_invoice_list(PDO $db, array $f): array
                s.last_date
         FROM customer_list c
         LEFT JOIN (
-            SELECT il.Client_name,
+            -- 歸戶要走「簡稱或別名 → customer_id」，只比 c.customer 的話，
+            -- ERP 寫「高鋒工業」而主檔是「高鋒」的那些客戶會顯示 0 筆出貨。
+            SELECT COALESCE(a.customer_id, c2.customer_id) AS cid,
                    COUNT(*)                       AS cnt,
                    SUM(il.Qty * il.Unit_price)    AS amt,
                    DATE_FORMAT(MAX(il.Order_date), '%Y-%m-%d') AS last_date
             FROM is_list il
+            LEFT JOIN acc_customer_alias a ON a.alias_name  = TRIM(il.Client_name)
+            LEFT JOIN customer_list      c2 ON TRIM(c2.customer) = TRIM(il.Client_name)
             WHERE il.Order_date >= :since
-            GROUP BY il.Client_name
-        ) s ON s.Client_name = c.customer
+            GROUP BY COALESCE(a.customer_id, c2.customer_id)
+        ) s ON s.cid = c.customer_id
         WHERE " . implode(' AND ', $where);
 
     $st = $db->prepare($sql);
@@ -1479,9 +1495,470 @@ function acc_billing_month(string $date, int $cutoff): string
 function acc_scan_range(string $bmFrom, string $bmTo): array
 {
     $from = date('Y-m-d', strtotime($bmFrom . '-01 -1 month'));
-    $to   = date('Y-m-t', strtotime($bmTo . '-01'));
+    // 尾端也放寬一個月：臨時結帳日（customer_settlement_exceptions）可能把結帳日
+    // 往後挪到下個月初，那幾天的單仍屬本月的帳，只掃到本月底會整批漏掉。
+    $to   = date('Y-m-t', strtotime($bmTo . '-01 +1 month'));
     return [$from, $to];
 }
+
+/* ============================================================
+ * 客戶簡稱別名（ERP 出貨單上的簡稱 ↔ 客戶主檔）
+ *
+ * 為什麼需要：is_list.Client_id 全表都是空的，應收一路是拿
+ * Client_name（出貨單上的客戶簡稱）去對 customer_list.customer 歸戶。
+ * 但 ERP 那邊常寫得比主檔簡稱長——「高鋒工業」對主檔的「高鋒」、
+ * 「如陽科技」對「如陽」、「榮田精機」對「榮田」——對不到就被當成
+ * 一家沒有主檔的新客戶，統編／發票資料／結帳日／臨時結帳日全部套不上。
+ *
+ * 一筆別名同時涵蓋歷史與往後 ERP 匯入的新資料，所以修的是「對照」，
+ * 不是把 is_list 上的字串改掉（那等於改出貨單本身）。
+ * 別名一律不覆蓋真正的主檔簡稱，避免把兩家不同的客戶對在一起。
+ * ============================================================ */
+
+/** 別名對照：alias_name => customer_id */
+function acc_customer_alias_map(PDO $db, bool $reload = false): array
+{
+    static $m = null;
+    if ($m !== null && !$reload) return $m;
+    $m = [];
+    try {
+        foreach ($db->query("SELECT alias_name, customer_id FROM acc_customer_alias")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $a = trim((string)$r['alias_name']);
+            if ($a !== '') $m[$a] = trim((string)$r['customer_id']);
+        }
+    } catch (Throwable $e) { $m = []; }
+    return $m;
+}
+
+/**
+ * 「出貨單上的客戶簡稱 → 客戶主檔列」對照（含別名）。
+ * 應收歸戶只准用這一支，不要各處再自己 SELECT customer_list 拼一份，
+ * 否則別名只會在其中幾個畫面生效（鐵律4）。
+ */
+function acc_customer_by_name(PDO $db, bool $reload = false): array
+{
+    static $map = null;
+    if ($map !== null && !$reload) return $map;
+    $map = [];
+    try {
+        $byId = [];
+        foreach ($db->query("SELECT customer_id, customer, customer_full, tax_id, invoice_email,
+                                    customer_address, billing_contact, settlement_mode, settlement_day,
+                                    payment_method, net_days
+                             FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            $c['alias_of'] = null;
+            $byId[trim((string)$c['customer_id'])] = $c;
+            $n = trim((string)$c['customer']);
+            if ($n !== '' && !isset($map[$n])) $map[$n] = $c;
+        }
+        foreach (acc_customer_alias_map($db, $reload) as $alias => $cid) {
+            if (isset($map[$alias]) || !isset($byId[$cid])) continue;   // 真正的簡稱優先
+            $c = $byId[$cid];
+            $c['alias_of'] = $alias;
+            $map[$alias] = $c;
+        }
+    } catch (Throwable $e) {}
+    return $map;
+}
+
+/** 單一簡稱（或別名）對應的客戶主檔列；查不到回 null */
+function acc_customer_of_name(PDO $db, string $name): ?array
+{
+    $map = acc_customer_by_name($db);
+    return $map[trim($name)] ?? null;
+}
+
+/* ============================================================
+ * 臨時結帳日（customer_settlement_exceptions）
+ *
+ * 這張表與設定 UI（主檔管理→客戶編輯→結帳例外）早就存在，但在 2026-08-28
+ * 之前沒有任何程式讀它：填了完全不影響帳款月份，也不會報錯。這一節把它接進來，
+ * acc_ar_summary／acc_ar_detail／acc_invoice_candidates／acc_default_billing_month
+ * 全部自動吃到（唯一實作，不准在對帳頁自己再算一份）。
+ *
+ * 口徑：target_year_month = 被調整的那個「日曆月」，
+ *       adjusted_date     = 該月實際的結帳日期（允許落到下個月初）。
+ *   例 2026-07 / 2026-07-20 → 7/21~7/31 的單改算 2026-08 的帳（提前結）。
+ *      2026-07 / 2026-08-02 → 8/1~8/2  的單仍算 2026-07 的帳（延後結）。
+ * ============================================================ */
+
+/** 全部臨時結帳日：[customer_id][YYYY-MM] => YYYY-MM-DD */
+function acc_settle_ex_map(PDO $db, bool $reload = false): array
+{
+    static $m = null;
+    if ($m !== null && !$reload) return $m;
+    $m = [];
+    try {
+        foreach ($db->query("SELECT customer_id, target_year_month, adjusted_date
+                             FROM customer_settlement_exceptions
+                             WHERE adjusted_date IS NOT NULL AND target_year_month IS NOT NULL")
+                    ->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $cid = trim((string)$r['customer_id']);
+            $ym  = trim((string)$r['target_year_month']);
+            if ($cid === '' || !preg_match('/^\d{4}-\d{2}$/', $ym)) continue;
+            $m[$cid][$ym] = substr((string)$r['adjusted_date'], 0, 10);
+        }
+    } catch (Throwable $e) { $m = []; }
+    return $m;
+}
+
+/** 某客戶的臨時結帳日 [YYYY-MM => YYYY-MM-DD] */
+function acc_settle_ex_of(PDO $db, ?array $cust): array
+{
+    if (!$cust) return [];
+    $cid = trim((string)($cust['customer_id'] ?? ''));
+    if ($cid === '') return [];
+    $m = acc_settle_ex_map($db);
+    return $m[$cid] ?? [];
+}
+
+/**
+ * 依出貨/退貨日期算帳款月份，但先看有沒有臨時結帳日。
+ * 沒有例外時行為與 acc_billing_month() 完全相同（既有資料不受影響）。
+ */
+function acc_billing_month_ex(string $date, int $cutoff, array $ex): string
+{
+    $ts = strtotime($date);
+    if ($ts === false) return '';
+    if ($ex) {
+        $d    = date('Y-m-d', $ts);
+        $ym   = date('Y-m', $ts);
+        $prev = date('Y-m', strtotime($ym . '-01 -1 month'));
+        // 上個月的結帳日被延到這個月 → 這幾天的單還算上個月的帳
+        if (isset($ex[$prev]) && $ex[$prev] >= ($ym . '-01') && $d <= $ex[$prev]) return $prev;
+        if (isset($ex[$ym])) {
+            return ($d > $ex[$ym]) ? date('Y-m', strtotime($ym . '-01 +1 month')) : $ym;
+        }
+    }
+    return acc_billing_month($date, $cutoff);
+}
+
+/** 應收歸屬帳款月份的唯一入口（結帳日 + 臨時結帳日） */
+function acc_bm_for(PDO $db, string $date, ?array $cust, int $global): string
+{
+    return acc_billing_month_ex($date, acc_cutoff_for($cust, $global), acc_settle_ex_of($db, $cust));
+}
+
+/** 某客戶的臨時結帳日清單（新到舊） */
+function acc_settle_ex_list(PDO $db, string $customerId, int $limit = 24): array
+{
+    $customerId = trim($customerId);
+    if ($customerId === '') return [];
+    try {
+        $limit = ($limit > 0 && $limit <= 200) ? $limit : 24;
+        $st = $db->prepare("SELECT exception_id, customer_id, target_year_month, adjusted_date, reason,
+                                   created_at
+                            FROM customer_settlement_exceptions
+                            WHERE customer_id = ?
+                            ORDER BY target_year_month DESC LIMIT {$limit}");
+        $st->execute([$customerId]);
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 新增／修改臨時結帳日（一個客戶一個年月只有一筆＝upsert）。
+ * 這是全站唯一寫入點：主檔管理的客戶編輯與對帳頁的對象設定都呼叫這一支，
+ * 兩邊各寫一份規則必定走鐘（鐵律4）。
+ */
+function acc_settle_ex_save(PDO $db, string $customerId, string $ym, string $adjusted,
+                            string $reason, ?array $user): array
+{
+    $customerId = trim($customerId);
+    $ym         = trim($ym);
+    $adjusted   = trim($adjusted);
+    $reason     = mb_substr(trim($reason), 0, 100);
+
+    if ($customerId === '')                  return ['success' => false, 'message' => '缺少客戶'];
+    if (!preg_match('/^\d{4}-\d{2}$/', $ym)) return ['success' => false, 'message' => '適用年月格式錯誤（要 YYYY-MM）'];
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $adjusted))
+        return ['success' => false, 'message' => '調整後結帳日格式錯誤（要 YYYY-MM-DD）'];
+    $t = strtotime($adjusted);
+    if ($t === false || date('Y-m-d', $t) !== $adjusted)
+        return ['success' => false, 'message' => '調整後結帳日不是有效日期'];
+
+    // 只允許落在「該月 1 日」到「次月月底」之間：再遠就不是同一期的帳，
+    // 放行只會讓兩個月的單互相跑進對方的帳款月份。
+    $lo = $ym . '-01';
+    $hi = date('Y-m-t', strtotime($ym . '-01 +1 month'));
+    if ($adjusted < $lo || $adjusted > $hi)
+        return ['success' => false, 'message' => "調整後結帳日要落在 {$lo} ~ {$hi} 之間"];
+
+    try {
+        $st = $db->prepare("SELECT customer FROM customer_list WHERE customer_id = ? LIMIT 1");
+        $st->execute([$customerId]);
+        $cname = $st->fetchColumn();
+        if ($cname === false) return ['success' => false, 'message' => '找不到這家客戶'];
+
+        $chk = $db->prepare("SELECT exception_id, adjusted_date, reason
+                             FROM customer_settlement_exceptions
+                             WHERE customer_id = ? AND target_year_month = ? LIMIT 1");
+        $chk->execute([$customerId, $ym]);
+        $old = $chk->fetch(PDO::FETCH_ASSOC);
+        if ($old) {
+            $db->prepare("UPDATE customer_settlement_exceptions
+                          SET adjusted_date = ?, reason = ? WHERE exception_id = ?")
+               ->execute([$adjusted, $reason, $old['exception_id']]);
+            $eid = (int)$old['exception_id'];
+            $chg = ['adjusted_date' => [substr((string)$old['adjusted_date'], 0, 10), $adjusted],
+                    'reason'        => [(string)$old['reason'], $reason]];
+        } else {
+            $db->prepare("INSERT INTO customer_settlement_exceptions
+                          (customer_id, target_year_month, adjusted_date, reason)
+                          VALUES (?,?,?,?)")->execute([$customerId, $ym, $adjusted, $reason]);
+            $eid = (int)$db->lastInsertId();
+            $chg = ['target_year_month' => [null, $ym], 'adjusted_date' => [null, $adjusted],
+                    'reason' => [null, $reason]];
+        }
+        acc_audit($db, 'ACC_MONTH', 'settlement_exception', $eid,
+                  $cname . ' ' . $ym, $chg, $reason, $user);
+        acc_settle_ex_map($db, true);                       // 立刻重算，同一請求內就要生效
+        return ['success' => true, 'message' => '已儲存臨時結帳日', 'exception_id' => $eid];
+    } catch (Throwable $e) {
+        return ['success' => false, 'message' => '儲存失敗：' . $e->getMessage()];
+    }
+}
+
+/** 刪除臨時結帳日 */
+function acc_settle_ex_delete(PDO $db, int $exceptionId, ?array $user): array
+{
+    if ($exceptionId <= 0) return ['success' => false, 'message' => '缺少項目'];
+    try {
+        $st = $db->prepare("SELECT * FROM customer_settlement_exceptions WHERE exception_id = ? LIMIT 1");
+        $st->execute([$exceptionId]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$r) return ['success' => false, 'message' => '找不到這一筆'];
+        $db->prepare("DELETE FROM customer_settlement_exceptions WHERE exception_id = ?")
+           ->execute([$exceptionId]);
+        acc_audit($db, 'ACC_MONTH', 'settlement_exception', $exceptionId,
+                  (string)$r['customer_id'] . ' ' . (string)$r['target_year_month'],
+                  ['deleted' => [substr((string)$r['adjusted_date'], 0, 10), null]], null, $user);
+        acc_settle_ex_map($db, true);
+        return ['success' => true, 'message' => '已刪除臨時結帳日'];
+    } catch (Throwable $e) {
+        return ['success' => false, 'message' => '刪除失敗：' . $e->getMessage()];
+    }
+}
+
+/* ============================================================
+ * 沒有客戶主檔的出貨對象（應收）
+ * ============================================================ */
+
+/**
+ * 找出這段期間內「Client_name 對不到客戶主檔也對不到別名」的出貨對象，
+ * 並替每一個猜出可能對應的主檔客戶（簡稱互為前綴／包含關係）。
+ *
+ * @param array $f bm（只看某個帳款月份的日期區間）或 months（預設近 12 個月）
+ */
+function acc_ar_unbound(PDO $db, array $f = []): array
+{
+    $bm = trim((string)($f['bm'] ?? ''));
+    if (preg_match('/^\d{4}-\d{2}$/', $bm)) {
+        [$from, $to] = acc_scan_range($bm, $bm);
+    } else {
+        $months = (int)($f['months'] ?? 12);
+        if ($months <= 0 || $months > 60) $months = 12;
+        $from = date('Y-m-d', strtotime("-{$months} months"));
+        $to   = date('Y-m-d');
+    }
+
+    $known = acc_customer_by_name($db);          // 含別名
+    $rows  = [];
+
+    $add = function (string $name, int $cnt, float $amt, ?string $d1, ?string $d2) use (&$rows) {
+        $name = trim($name);
+        if ($name === '') return;
+        if (!isset($rows[$name])) {
+            $rows[$name] = ['name' => $name, 'cnt' => 0, 'amount' => 0.0,
+                            'first_date' => $d1, 'last_date' => $d2];
+        }
+        $rows[$name]['cnt']    += $cnt;
+        $rows[$name]['amount'] += $amt;
+        if ($d1 && (!$rows[$name]['first_date'] || $d1 < $rows[$name]['first_date'])) $rows[$name]['first_date'] = $d1;
+        if ($d2 && (!$rows[$name]['last_date']  || $d2 > $rows[$name]['last_date']))  $rows[$name]['last_date']  = $d2;
+    };
+
+    try {
+        $st = $db->prepare("SELECT TRIM(Client_name) AS nm, COUNT(*) AS cnt,
+                                   SUM(Qty * Unit_price) AS amt,
+                                   MIN(Order_date) AS d1, MAX(Order_date) AS d2
+                            FROM is_list
+                            WHERE Order_date BETWEEN ? AND ? AND TRIM(IFNULL(Client_name,'')) <> ''
+                            GROUP BY TRIM(Client_name)");
+        $st->execute([$from, $to]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (isset($known[trim((string)$r['nm'])])) continue;
+            $add((string)$r['nm'], (int)$r['cnt'], (float)$r['amt'],
+                 substr((string)$r['d1'], 0, 10), substr((string)$r['d2'], 0, 10));
+        }
+        $st2 = $db->prepare("SELECT TRIM(Client_name) AS nm, COUNT(*) AS cnt,
+                                    SUM(Qty * Unit_price) AS amt,
+                                    MIN(IR_date) AS d1, MAX(IR_date) AS d2
+                             FROM ir_track
+                             WHERE IR_date BETWEEN ? AND ? AND TRIM(IFNULL(Client_name,'')) <> ''
+                             GROUP BY TRIM(Client_name)");
+        $st2->execute([$from, $to]);
+        foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (isset($known[trim((string)$r['nm'])])) continue;
+            $add((string)$r['nm'], (int)$r['cnt'], -(float)$r['amt'],
+                 substr((string)$r['d1'], 0, 10), substr((string)$r['d2'], 0, 10));
+        }
+    } catch (Throwable $e) {
+        return ['rows' => [], 'total' => 0, 'range' => [$from, $to], 'error' => $e->getMessage()];
+    }
+
+    foreach ($rows as $k => $r) $rows[$k]['suggest'] = acc_customer_guess($db, $r['name']);
+
+    $rows = array_values($rows);
+    usort($rows, fn($a, $b) => $b['cnt'] <=> $a['cnt']);
+    return ['rows' => $rows, 'total' => count($rows), 'range' => [$from, $to]];
+}
+
+/**
+ * 猜這個出貨簡稱可能是哪一家主檔客戶。
+ * 只做「互為前綴／互相包含」這種看得懂的比對並附上理由，
+ * 絕不自動綁——「泓創綠能」與「泓創綠能科技」有可能是兩家。
+ */
+function acc_customer_guess(PDO $db, string $name, int $limit = 5): array
+{
+    $name = trim($name);
+    if ($name === '') return [];
+    $out = [];
+    foreach (acc_customer_by_name($db) as $n => $c) {
+        if (!empty($c['alias_of'])) continue;                     // 只比真正的主檔簡稱
+        $full  = trim((string)($c['customer_full'] ?? ''));
+        $score = 0; $why = '';
+        if ($n !== '' && mb_strpos($name, $n) === 0)     { $score = 100 + mb_strlen($n);    $why = '主檔簡稱是它的開頭'; }
+        elseif ($n !== '' && mb_strpos($n, $name) === 0) { $score = 90  + mb_strlen($name); $why = '它是主檔簡稱的開頭'; }
+        elseif ($n !== '' && mb_strlen($n) >= 2 && mb_strpos($name, $n) !== false)
+                                                         { $score = 70  + mb_strlen($n);    $why = '主檔簡稱包含在裡面'; }
+        elseif ($full !== '' && mb_strpos($full, $name) !== false)
+                                                         { $score = 60;                     $why = '發票全名含這個名稱'; }
+        if ($score <= 0) continue;
+        $out[] = ['customer_id' => $c['customer_id'], 'customer' => $c['customer'],
+                  'customer_full' => $c['customer_full'], 'score' => $score, 'why' => $why];
+    }
+    usort($out, fn($a, $b) => $b['score'] <=> $a['score']);
+    return array_slice($out, 0, $limit);
+}
+
+/**
+ * 建立別名並回填歷史出貨的 is_list.Client_id（使用者 2026-08-28 指定：一律回填）。
+ * 回填只補「原本是空的」那些列，不動金額、不動帳款月份，全程留稽核。
+ */
+function acc_customer_alias_bind(PDO $db, string $alias, string $customerId, ?array $user): array
+{
+    $alias      = trim($alias);
+    $customerId = trim($customerId);
+    if ($alias === '')      return ['success' => false, 'message' => '缺少出貨簡稱'];
+    if ($customerId === '') return ['success' => false, 'message' => '請選擇要對應的客戶'];
+    if (mb_strlen($alias) > 100) return ['success' => false, 'message' => '出貨簡稱過長'];
+
+    try {
+        $st = $db->prepare("SELECT customer_id, customer FROM customer_list WHERE customer_id = ? LIMIT 1");
+        $st->execute([$customerId]);
+        $c = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$c) return ['success' => false, 'message' => '找不到這家客戶主檔'];
+
+        /* 這個名稱本身就是某家客戶的主檔簡稱 → 一律不收。
+           指到別家＝把兩家客戶對在一起；指到同一家＝這筆別名永遠不會被用到
+           （acc_customer_by_name 一律以真正的主檔簡稱優先），只會留一列垃圾資料。 */
+        $st = $db->prepare("SELECT customer_id FROM customer_list WHERE TRIM(customer) = ? LIMIT 1");
+        $st->execute([$alias]);
+        $exist = $st->fetchColumn();
+        if ($exist !== false)
+            return ['success' => false,
+                    'message' => ((string)$exist === $customerId)
+                        ? "「{$alias}」本身就是這家客戶的主檔簡稱，本來就對得起來，不需要設對應"
+                        : "「{$alias}」本身就是客戶 {$exist} 的主檔簡稱，不可再指到別家"];
+
+        $db->beginTransaction();
+        $db->prepare("INSERT INTO acc_customer_alias
+                      (alias_name, customer_id, created_by, created_by_name, created_at)
+                      VALUES (?,?,?,?,NOW())
+                      ON DUPLICATE KEY UPDATE customer_id = VALUES(customer_id),
+                                              created_by = VALUES(created_by),
+                                              created_by_name = VALUES(created_by_name),
+                                              created_at = NOW()")
+           ->execute([$alias, $customerId, $user ? (int)$user['id'] : null,
+                      $user ? (string)$user['user_cname'] : null]);
+
+        $up = $db->prepare("UPDATE is_list SET Client_id = ?
+                            WHERE TRIM(Client_name) = ?
+                              AND (Client_id IS NULL OR TRIM(Client_id) = '')");
+        $up->execute([$customerId, $alias]);
+        $filled = $up->rowCount();
+        $db->commit();
+
+        acc_audit($db, 'ACC_EDIT', 'customer_alias', $alias, $alias . ' → ' . $c['customer'],
+                  ['customer_id' => [null, $customerId], 'is_list_client_id_filled' => [0, $filled]],
+                  '對帳頁綁定未建主檔的出貨對象', $user);
+        acc_customer_by_name($db, true);
+        return ['success' => true, 'filled' => $filled, 'customer' => $c['customer'],
+                'message' => "已將「{$alias}」對應到 {$c['customer']}（{$customerId}）"
+                             . ($filled ? "，回填 {$filled} 列出貨的客戶編號" : '')];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '綁定失敗：' . $e->getMessage()];
+    }
+}
+
+/** 解除別名（連同當初回填的 is_list.Client_id 一起還原，不留下對不上的殘值） */
+function acc_customer_alias_unbind(PDO $db, string $alias, ?array $user): array
+{
+    $alias = trim($alias);
+    if ($alias === '') return ['success' => false, 'message' => '缺少出貨簡稱'];
+    try {
+        $st = $db->prepare("SELECT customer_id FROM acc_customer_alias WHERE alias_name = ? LIMIT 1");
+        $st->execute([$alias]);
+        $cid = $st->fetchColumn();
+        if ($cid === false) return ['success' => false, 'message' => '這個簡稱沒有綁定紀錄'];
+
+        $db->beginTransaction();
+        $db->prepare("DELETE FROM acc_customer_alias WHERE alias_name = ?")->execute([$alias]);
+        $up = $db->prepare("UPDATE is_list SET Client_id = NULL
+                            WHERE TRIM(Client_name) = ? AND Client_id = ?");
+        $up->execute([$alias, $cid]);
+        $cleared = $up->rowCount();
+        $db->commit();
+
+        acc_audit($db, 'ACC_EDIT', 'customer_alias', $alias, $alias,
+                  ['customer_id' => [$cid, null], 'is_list_client_id_cleared' => [$cleared, 0]],
+                  '解除未建主檔對象的綁定', $user);
+        acc_customer_by_name($db, true);
+        return ['success' => true, 'cleared' => $cleared, 'message' => '已解除綁定'];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '解除失敗：' . $e->getMessage()];
+    }
+}
+
+/** 已建立的別名清單（含客戶名稱與影響筆數） */
+function acc_customer_alias_list(PDO $db): array
+{
+    try {
+        $st = $db->query("SELECT a.alias_name, a.customer_id, a.created_by_name, a.created_at,
+                                 c.customer, c.customer_full,
+                                 (SELECT COUNT(*) FROM is_list il WHERE TRIM(il.Client_name) = a.alias_name) AS cnt
+                          FROM acc_customer_alias a
+                          LEFT JOIN customer_list c ON c.customer_id = a.customer_id
+                          ORDER BY a.created_at DESC, a.alias_name");
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/** 客戶主檔精簡清單（給「要對應到哪一家」的下拉用） */
+function acc_customer_options(PDO $db): array
+{
+    try {
+        return $db->query("SELECT customer_id, customer, customer_full
+                           FROM customer_list
+                           WHERE (is_inactive = 0 OR is_inactive IS NULL)
+                           ORDER BY customer")->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
 
 /* ============================================================
  * 應收對帳（客戶 × 帳款月份）
@@ -1508,13 +1985,9 @@ function acc_ar_summary(PDO $db, array $f): array
     $global = acc_global_cutoff($db);
     $rate   = acc_tax_rate($db);
 
-    // 客戶主檔（用簡稱歸戶：近期 is_list.Client_id 幾乎為 NULL）
-    $cust = [];
-    foreach ($db->query("SELECT customer_id, customer, customer_full, tax_id, invoice_email,
-                                settlement_mode, settlement_day, payment_method, net_days
-                         FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
-        if (trim((string)$c['customer']) !== '') $cust[trim($c['customer'])] = $c;
-    }
+    // 客戶主檔（用簡稱歸戶：is_list.Client_id 全表都是空的）
+    // 含別名對照，ERP 寫「高鋒工業」而主檔是「高鋒」時也對得起來。
+    $cust = acc_customer_by_name($db);
 
     $bucket = [];   // key = customer_key|billing_month
     $anomaly = [];
@@ -1560,7 +2033,7 @@ function acc_ar_summary(PDO $db, array $f): array
 
         $bm = trim((string)$r['billing_month_override']);
         if (!preg_match('/^\d{4}-\d{2}$/', $bm)) {
-            $bm = acc_billing_month($r['Order_date'], acc_cutoff_for($cust[$name] ?? null, $global));
+            $bm = acc_bm_for($db, $r['Order_date'], $cust[$name] ?? null, $global);
         }
         if ($bm < $bmFrom || $bm > $bmTo) continue;
 
@@ -1591,7 +2064,7 @@ function acc_ar_summary(PDO $db, array $f): array
 
         $bm = trim((string)$r['billing_month_override']);
         if (!preg_match('/^\d{4}-\d{2}$/', $bm)) {
-            $bm = acc_billing_month($r['IR_date'], acc_cutoff_for($cust[$name] ?? null, $global));
+            $bm = acc_bm_for($db, $r['IR_date'], $cust[$name] ?? null, $global);
         }
         if ($bm < $bmFrom || $bm > $bmTo) continue;
 
@@ -1677,13 +2150,9 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
     $global = acc_global_cutoff($db);
     $rate   = acc_tax_rate($db);
 
-    $stc = $db->prepare("SELECT customer_id, customer, customer_full, tax_id, invoice_email,
-                                customer_address, billing_contact, settlement_mode, settlement_day,
-                                payment_method, net_days
-                         FROM customer_list WHERE customer = ? LIMIT 1");
-    $stc->execute([$clientName]);
-    $c = $stc->fetch(PDO::FETCH_ASSOC) ?: null;
+    $c   = acc_customer_of_name($db, $clientName);      // 含別名
     $cut = acc_cutoff_for($c, $global);
+    $ex  = acc_settle_ex_of($db, $c);                   // 臨時結帳日
 
     $items = [];
 
@@ -1703,7 +2172,7 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (abs($amt) < 0.0001) continue;
         $bm = trim((string)$r['billing_month_override']);
-        if (!preg_match('/^\d{4}-\d{2}$/', $bm)) $bm = acc_billing_month($r['d'], $cut);
+        if (!preg_match('/^\d{4}-\d{2}$/', $bm)) $bm = acc_billing_month_ex($r['d'], $cut, $ex);
         if ($bm !== $billingMonth) continue;
         $items[] = ['kind' => 'ship', 'src_type' => 'IS', 'src_id' => (int)$r['IS_id'],
                     'no' => $r['IS_number'], 'date' => $r['d'],
@@ -1728,7 +2197,7 @@ function acc_ar_detail(PDO $db, string $clientName, string $billingMonth): array
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (abs($amt) < 0.0001) continue;
         $bm = trim((string)$r['billing_month_override']);
-        if (!preg_match('/^\d{4}-\d{2}$/', $bm)) $bm = acc_billing_month($r['d'], $cut);
+        if (!preg_match('/^\d{4}-\d{2}$/', $bm)) $bm = acc_billing_month_ex($r['d'], $cut, $ex);
         if ($bm !== $billingMonth) continue;
         $items[] = ['kind' => 'return', 'src_type' => 'IR', 'src_id' => (int)$r['IR_id'],
                     'no' => $r['IR_no'], 'date' => $r['d'],
@@ -1809,12 +2278,7 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
     $rate   = acc_tax_rate($db);
     $used   = acc_invoiced_src_map($db);
 
-    $cust = [];
-    foreach ($db->query("SELECT customer_id, customer, customer_full, tax_id, invoice_email,
-                                settlement_mode, settlement_day
-                         FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
-        if (trim((string)$c['customer']) !== '') $cust[trim($c['customer'])] = $c;
-    }
+    $cust = acc_customer_by_name($db);                  // 含別名
 
     $groups = [];
     $touch = function (string $name) use (&$groups, $cust, $bm) {
@@ -1850,7 +2314,7 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
         if ($name === '') continue;
         $b = trim((string)$r['billing_month_override']);
         if (!preg_match('/^\d{4}-\d{2}$/', $b)) {
-            $b = acc_billing_month($r['d'], acc_cutoff_for($cust[$name] ?? null, $global));
+            $b = acc_bm_for($db, $r['d'], $cust[$name] ?? null, $global);
         }
         if ($b !== $bm) continue;
         if (isset($used['IS-' . (int)$r['IS_id']])) continue;      // 已開過發票
@@ -1883,7 +2347,7 @@ function acc_invoice_candidates(PDO $db, string $bm, array $f = []): array
         if ($name === '') continue;
         $b = trim((string)$r['billing_month_override']);
         if (!preg_match('/^\d{4}-\d{2}$/', $b)) {
-            $b = acc_billing_month($r['d'], acc_cutoff_for($cust[$name] ?? null, $global));
+            $b = acc_bm_for($db, $r['d'], $cust[$name] ?? null, $global);
         }
         if ($b !== $bm) continue;
         if (isset($used['IR-' . (int)$r['IR_id']])) continue;
@@ -2392,9 +2856,8 @@ function acc_receipt_save(PDO $db, array $d, string $userId): array
 
     $cid = trim((string)($d['customer_id'] ?? ''));
     if ($cid === '') {
-        $stc = $db->prepare("SELECT customer_id FROM customer_list WHERE customer = ? LIMIT 1");
-        $stc->execute([$name]);
-        $cid = (string)($stc->fetchColumn() ?: '');
+        $pc  = acc_customer_of_name($db, $name);        // 含別名
+        $cid = (string)($pc['customer_id'] ?? '');
     }
 
     $method  = trim((string)($d['method'] ?? '匯款'));
@@ -3464,12 +3927,8 @@ function acc_doc_lookup(PDO $db, string $kw, array $opt = []): array
     $limit   = (int)($opt['limit'] ?? 60);
     $global  = acc_global_cutoff($db);
 
-    // 客戶結帳日（算帳款月份要用）
-    $cust = [];
-    foreach ($db->query("SELECT customer_id, customer, settlement_mode, settlement_day
-                         FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
-        if (trim((string)$c['customer']) !== '') $cust[trim($c['customer'])] = $c;
-    }
+    // 客戶結帳日（算帳款月份要用；含別名與臨時結帳日）
+    $cust = acc_customer_by_name($db);
     // 已開發票的憑證 → 讓結果能顯示「已開在哪張發票上」
     $used = acc_invoiced_src_map($db);
 
@@ -3491,7 +3950,7 @@ function acc_doc_lookup(PDO $db, string $kw, array $opt = []): array
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $name = trim((string)$r['Client_name']);
         $bm   = trim((string)$r['billing_month_override']);
-        $auto = acc_billing_month($r['d'], acc_cutoff_for($cust[$name] ?? null, $global));
+        $auto = acc_bm_for($db, $r['d'], $cust[$name] ?? null, $global);
         $u    = $used['IS-' . (int)$r['IS_id']] ?? null;
         $groups['ship'][] = [
             'kind' => 'ship', 'id' => (int)$r['IS_id'], 'no' => $r['IS_number'], 'date' => $r['d'],
@@ -3522,7 +3981,7 @@ function acc_doc_lookup(PDO $db, string $kw, array $opt = []): array
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $name = trim((string)$r['Client_name']);
         $bm   = trim((string)$r['billing_month_override']);
-        $auto = acc_billing_month($r['d'], acc_cutoff_for($cust[$name] ?? null, $global));
+        $auto = acc_bm_for($db, $r['d'], $cust[$name] ?? null, $global);
         $u    = $used['IR-' . (int)$r['IR_id']] ?? null;
         $groups['return'][] = [
             'kind' => 'return', 'id' => (int)$r['IR_id'], 'no' => $r['IR_no'], 'date' => $r['d'],
@@ -3680,11 +4139,7 @@ function acc_billing_search(PDO $db, array $f): array
     $rows = [];
 
     if ($side === 'ar') {
-        $cust = [];
-        foreach ($db->query("SELECT customer, settlement_mode, settlement_day
-                             FROM customer_list")->fetchAll(PDO::FETCH_ASSOC) as $c) {
-            if (trim((string)$c['customer']) !== '') $cust[trim($c['customer'])] = $c;
-        }
+        $cust = acc_customer_by_name($db);              // 含別名
         $used = acc_invoiced_src_map($db);
 
         foreach ([['is', 'is_list'], ['ir', 'ir_track']] as [$t, $tbl]) {
@@ -3716,7 +4171,7 @@ function acc_billing_search(PDO $db, array $f): array
                 if (abs($amt) < 0.0001) continue;
                 $name = trim((string)$r['party']);
                 $o    = trim((string)$r['ovr']);
-                $auto = acc_billing_month($r['d'], acc_cutoff_for($cust[$name] ?? null, $global));
+                $auto = acc_bm_for($db, $r['d'], $cust[$name] ?? null, $global);
                 $cur  = ($o !== '' ? $o : $auto);
                 if ($bm !== '' && $cur !== $bm) continue;
                 if ($onlyOvr && $o === '') continue;
@@ -4020,9 +4475,9 @@ function acc_recon_outside(PDO $db, string $side, string $partyId, string $bm, a
     }
 
     // 應收：出貨與退貨都要（退貨也是對帳單上的一列，只是金額為負）
-    $stc = $db->prepare("SELECT settlement_mode, settlement_day FROM customer_list WHERE customer=? LIMIT 1");
-    $stc->execute([$partyId]);
-    $cut  = acc_cutoff_for($stc->fetch(PDO::FETCH_ASSOC) ?: null, acc_global_cutoff($db));
+    $pc   = acc_customer_of_name($db, $partyId);        // 含別名
+    $cut  = acc_cutoff_for($pc, acc_global_cutoff($db));
+    $pex  = acc_settle_ex_of($db, $pc);                 // 臨時結帳日
     $used = acc_invoiced_src_map($db);
 
     $w = ["il.Client_name = ?", "il.Order_date BETWEEN ? AND ?"];
@@ -4039,7 +4494,7 @@ function acc_recon_outside(PDO $db, string $side, string $partyId, string $bm, a
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (abs($amt) < 0.0001) continue;
         $ovr = trim((string)$r['billing_month_override']);
-        $cur = preg_match('/^\d{4}-\d{2}$/', $ovr) ? $ovr : acc_billing_month($r['d'], $cut);
+        $cur = preg_match('/^\d{4}-\d{2}$/', $ovr) ? $ovr : acc_billing_month_ex($r['d'], $cut, $pex);
         if ($cur === $bm) continue;
         $lk = $used['IS-' . (int)$r['IS_id']] ?? null;
         $rows[] = ['src_type' => 'IS', 'src_id' => (int)$r['IS_id'], 'no' => $r['IS_number'],
@@ -4067,7 +4522,7 @@ function acc_recon_outside(PDO $db, string $side, string $partyId, string $bm, a
         $amt = (float)$r['Qty'] * (float)$r['Unit_price'];
         if (abs($amt) < 0.0001) continue;
         $ovr = trim((string)$r['billing_month_override']);
-        $cur = preg_match('/^\d{4}-\d{2}$/', $ovr) ? $ovr : acc_billing_month($r['d'], $cut);
+        $cur = preg_match('/^\d{4}-\d{2}$/', $ovr) ? $ovr : acc_billing_month_ex($r['d'], $cut, $pex);
         if ($cur === $bm) continue;
         $lk = $used['IR-' . (int)$r['IR_id']] ?? null;
         $rows[] = ['src_type' => 'IR', 'src_id' => (int)$r['IR_id'], 'no' => $r['IR_no'],
@@ -4502,11 +4957,14 @@ function acc_settlement_for(PDO $db, string $side, ?string $partyId = null): arr
     $partyId = trim((string)$partyId);
     if ($partyId === '') return $out;
     try {
-        $st = ($side === 'ap')
-            ? $db->prepare("SELECT settlement_mode, settlement_day FROM maker_list WHERE maker_id_no=? LIMIT 1")
-            : $db->prepare("SELECT settlement_mode, settlement_day FROM customer_list WHERE customer=? LIMIT 1");
-        $st->execute([$partyId]);
-        $r = $st->fetch(PDO::FETCH_ASSOC);
+        if ($side === 'ap') {
+            $st = $db->prepare("SELECT settlement_mode, settlement_day FROM maker_list WHERE maker_id_no=? LIMIT 1");
+            $st->execute([$partyId]);
+            $r = $st->fetch(PDO::FETCH_ASSOC);
+        } else {
+            $r = acc_customer_of_name($db, $partyId);   // 含別名
+            if ($r) $out['customer_id'] = $r['customer_id'];
+        }
         if (!$r) return $out;
         $m = strtoupper(trim((string)$r['settlement_mode']));
         $d = ($r['settlement_day'] === null || $r['settlement_day'] === '') ? null : (int)$r['settlement_day'];
@@ -4529,6 +4987,27 @@ function acc_default_billing_month(PDO $db, string $side, ?string $partyId = nul
     $cur  = sprintf('%04d-%02d', $y, $m);
     $prev = date('Y-m', strtotime(sprintf('%04d-%02d-01', $y, $m) . ' -1 month'));
     $mode = strtoupper($s['mode']);
+
+    /* 臨時結帳日：這個月被人工調過（節慶、盤點）就一律以它為準。
+       不看的話畫面會說「還沒到結帳日、現在對上個月」，但帳其實已經結了。 */
+    if ($side === 'ar') {
+        $cid = trim((string)($s['customer_id'] ?? ''));
+        if ($cid === '' && trim((string)$partyId) !== '') {
+            $pc  = acc_customer_of_name($db, (string)$partyId);
+            $cid = trim((string)($pc['customer_id'] ?? ''));
+        }
+        $exDate = ($cid !== '') ? (acc_settle_ex_map($db)[$cid][$cur] ?? null) : null;
+        if ($exDate) {
+            $today = date('Y-m-d', $ts);
+            $bm    = ($today >= $exDate) ? $cur : $prev;
+            return $s + ['billing_month' => $bm, 'cut_day' => (int)date('j', strtotime($exDate)),
+                         'exception_date' => $exDate,
+                         'reason' => '此對象 ' . $cur . ' 有臨時結帳日 ' . $exDate . '：'
+                             . ($today >= $exDate
+                                ? ('已過結帳日，預設對本月（' . $cur . '）')
+                                : ('還沒到結帳日，現在還在對上個月（' . $prev . '）'))];
+        }
+    }
 
     if ($mode === 'WEEKLY') {
         return $s + ['billing_month' => $cur, 'cut_day' => null,
