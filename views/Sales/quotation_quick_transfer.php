@@ -148,6 +148,7 @@ try {
             <li><b>切換客戶</b>：點客戶欄位旁的「切換」，搜尋並選擇正確的客戶；找不到一樣可以「＋新建客戶」；跳窗內按 <b>Enter</b> 等同直接送出（唯一符合的搜尋結果或已填妥的新建表單）。</li>
             <li>補齊後，可以用每張報價單右上角的「轉正式報價單」單張轉入，或勾選多張後用上方「批次轉入正式報價單」一次轉入。</li>
             <li>清單右上角可篩選<b>年份</b>；報價單依日期新到舊排序。</li>
+            <li>上方統計列的「<b>最新資料日期</b>」是把目前尚待確認的所有報價單<b>由 OP 單號本身解析</b>出來的日期（OP＋民國年3碼＋月日4碼，例：OP1071228004 → 2018.12.28）取最新的一天，可用來看舊資料補到哪一天；括號內是該日期取自哪一張單號。此欄不受年份篩選影響，一律以全部尚待確認的報價單計算。</li>
         </ul>
         <div class="tip">即使料號ID或製程還沒補齊也可以轉入正式，完成度只是提示、不會強制擋下轉入。</div>
         <h4>加快補件速度</h4>
@@ -223,6 +224,7 @@ try {
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script>
 $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); });
 $(window).on('scroll', function(){ $('#qtScrollTop').toggle($(window).scrollTop() > 200); });
@@ -263,13 +265,43 @@ $('#qtYearFilter').on('change', function(){ qtPage = 1; renderCards(); });
 function renderStats() {
     const total = qtData.length;
     const ready = qtData.filter(r => Number(r.items_no_dsetting) === 0 && Number(r.items_no_process) === 0).length;
+    const latest = latestOpDate(qtData);
     $('#qtStats').html(
         '<div class="qt-stat-chip">尚待確認 <b>' + total + '</b> 張</div>' +
-        '<div class="qt-stat-chip">已補齊(料號ID+製程) <b>' + ready + '</b> 張</div>'
+        '<div class="qt-stat-chip">已補齊(料號ID+製程) <b>' + ready + '</b> 張</div>' +
+        (latest
+            ? '<div class="qt-stat-chip" title="由 OP 單號本身解析出來的日期（OP＋民國年3碼＋月日4碼），不是資料表上的報價日期欄位">' +
+                  '最新資料日期 <b>' + fmtDate(latest.date) + '</b> <small style="color:#a1834f;">(' + latest.quote_no + ')</small>' +
+              '</div>'
+            : '<div class="qt-stat-chip" title="OP 單號格式為 OP＋民國年3碼＋月日4碼">最新資料日期 <b>—</b> <small style="color:#a1834f;">(單號無法解析日期)</small></div>')
     );
 }
 
-function fmtDate(d) { return d || ''; }
+// 由 OP 單號解析日期：OP + 民國年3碼 + MMDD + 流水號3碼（例：OP1071228004 → 2018-12-28）
+function opDateOf(quoteNo) {
+    const m = String(quoteNo || '').match(/^OP(\d{3})(\d{2})(\d{2})/);
+    if (!m) return '';
+    const y = parseInt(m[1], 10) + 1911, mo = parseInt(m[2], 10), d = parseInt(m[3], 10);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return '';
+    const dt = new Date(y, mo - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return '';   // 擋 02/31 這種不存在的日期
+    return m[1] === '000' ? '' : (y + '-' + m[2] + '-' + m[3]);
+}
+
+// 取整份清單中「由 OP 單號解析出來」最新的一天（解析不到的單號略過）
+function latestOpDate(rows) {
+    let best = null;
+    (rows || []).forEach(function(r) {
+        const d = opDateOf(r.quote_no);
+        if (!d) return;
+        if (!best || d > best.date || (d === best.date && String(r.quote_no) > String(best.quote_no))) {
+            best = { date: d, quote_no: r.quote_no };
+        }
+    });
+    return best;
+}
+
+function fmtDate(d) { return egFmtDate(d); }
 function yearOf(d) { return d ? String(d).substring(0, 4) : ''; }
 
 function populateYearFilter() {
