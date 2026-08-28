@@ -493,7 +493,13 @@ function drawItems(qid, items) {
         const boundText = it.d_setting_d_id ? ('<span class="qt-badge ok">已綁定 #' + it.d_setting_d_id + '</span>') : '<span class="qt-badge warn">未綁定</span>';
         const procIds = (it.processes || '').split(',').filter(function(v){return v!=='';});
         if (!qtProcState[it.item_id]) {
-            const selected = inferSubTagsFromProcessIds(procIds);
+            // process_notes 就是當初實際點選的子標籤 id 清單，有存就以它為準；
+            // 沒有（舊資料）才退回由 process_no 反推——但那是多對多、推不準的，
+            // 會把所有含該 process_no 的子標籤全部點亮，只能當沒有更好資訊時的猜測。
+            const savedSubIds = String(it.process_notes || '').split(',')
+                .map(function(v){ return parseInt(v, 10); })
+                .filter(function(v){ return !isNaN(v) && v > 0; });
+            const selected = savedSubIds.length ? savedSubIds : inferSubTagsFromProcessIds(procIds);
             let activeGid = processTagTree.length ? processTagTree[0].group_id : null;
             for (const g of processTagTree) {
                 if ((g.sub_tags || []).some(st => selected.includes(st.sub_tag_id))) { activeGid = g.group_id; break; }
@@ -624,10 +630,15 @@ function saveItemProcess(itemId) {
         const g = processTagTree.find(function(x){ return x.group_id === state.activeGid; });
         if (g) groupType = g.group_type || 'single_process';
     }
-    $.post(API_URL, { action: 'quick_set_item_process', item_id: itemId, process_nos: [...procIds].join(','), group_type: groupType }, function(res) {
+    // sub_tag_ids 一定要送：報價單管理頁是靠 process_notes（子標籤 id 清單）決定顯示哪些製程標籤的，
+    // 只送攤平後的 process_no 會讓那邊的檢視畫面空白、編輯畫面點亮一堆不相干的標籤
+    const subIdsStr = state.selected.join(',');
+    $.post(API_URL, { action: 'quick_set_item_process', item_id: itemId, process_nos: [...procIds].join(','), group_type: groupType, sub_tag_ids: subIdsStr }, function(res) {
         if (!res.success) { alert('設定製程失敗：' + res.message); return; }
         Object.keys(qtItemsCache).forEach(function(qid) {
-            qtItemsCache[qid].forEach(function(it) { if (String(it.item_id) === String(itemId)) it.processes = [...procIds].join(','); });
+            qtItemsCache[qid].forEach(function(it) {
+                if (String(it.item_id) === String(itemId)) { it.processes = [...procIds].join(','); it.process_notes = subIdsStr; }
+            });
         });
         // 只更新完成度統計不必整頁重載
         refreshStatsOnly(itemId);

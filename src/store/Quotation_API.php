@@ -1596,6 +1596,24 @@ try {
             if ($pr === false) throw new Exception('找不到報價項目');
             if (!$pr) throw new Exception('此報價單已是正式資料，請至報價單管理頁編輯');
             $pnos = array_filter(array_map('trim', explode(',', $_POST['process_nos'] ?? '')), fn($v) => $v !== '' && is_numeric($v));
+
+            // process_notes 存的是「使用者實際點選的子標籤 id 清單」（逗號分隔），這是報價單管理頁
+            // 判定要顯示哪些製程標籤的唯一依據；quotation_item_process_map 只是攤平後的 process_no。
+            // 一定要一起寫：同一個 process_no 會同時屬於好幾個子標籤（例如 202 同時在
+            // 全製／齒研治具／滾齒治具／線割治具／插齒治具底下），光靠 process_no 反推不出點的是哪一個，
+            // 沒寫的話報價單管理頁檢視畫面會空白、編輯畫面則會把所有含該 process_no 的子標籤全部點亮。
+            $subIds = array_values(array_unique(array_filter(
+                array_map('intval', explode(',', (string)($_POST['sub_tag_ids'] ?? ''))),
+                fn($v) => $v > 0
+            )));
+            if ($subIds) {
+                $sph  = implode(',', array_fill(0, count($subIds), '?'));
+                $vchk = $pdo->prepare("SELECT sub_tag_id FROM quotation_process_sub_tag WHERE sub_tag_id IN ($sph) AND is_active=1");
+                $vchk->execute($subIds);
+                $valid = array_map('intval', $vchk->fetchAll(PDO::FETCH_COLUMN));
+                $subIds = array_values(array_intersect($subIds, $valid));
+            }
+            $procNotes = $subIds ? implode(',', $subIds) : null;
             // 比照 quotation_list_NEW.php 的製程標籤導覽：groupType 由前端依「最後點選的標籤所屬群組」帶入
             $groupType = in_array($_POST['group_type'] ?? '', ['full_process','full_process_split','single_process'], true)
                 ? $_POST['group_type'] : (empty($pnos) ? 'single_process' : null);
@@ -1606,10 +1624,14 @@ try {
                 foreach ($pnos as $pno) $ins->execute([$item_id, $pno]);
             }
             if ($groupType !== null) {
-                $pdo->prepare("UPDATE quotation_item SET process_group_type=?, updated_at=NOW() WHERE item_id=?")->execute([$groupType, $item_id]);
+                $pdo->prepare("UPDATE quotation_item SET process_group_type=?, process_notes=?, updated_at=NOW() WHERE item_id=?")
+                    ->execute([$groupType, $procNotes, $item_id]);
+            } else {
+                $pdo->prepare("UPDATE quotation_item SET process_notes=?, updated_at=NOW() WHERE item_id=?")
+                    ->execute([$procNotes, $item_id]);
             }
             $pdo->commit();
-            $response = ['success' => true];
+            $response = ['success' => true, 'process_notes' => $procNotes];
             break;
         }
 
