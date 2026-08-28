@@ -1493,29 +1493,39 @@ try {
             foreach ($items as $it) { if (trim((string)$it['product_id']) !== '') { $hasText = true; break; } }
             if (!$hasText) throw new Exception('這張報價單還沒綁定的 ' . count($items) . ' 筆項目「料號」欄都是空的，沒有名稱可以用來建立料號。請先到報價單管理頁補上料號。');
 
-            $findCust = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND Customer_Id=? ORDER BY d_id LIMIT 1");
-            $findNull = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND Customer_Id IS NULL ORDER BY d_id LIMIT 1");
+            // 一律「完全同名」比對（不是 LIKE 模糊比對），所以不會撿到相似料號；
+            // 但 d_setting 裡實際存在同料號同客戶重複登錄的舊資料，撈 2 筆就能判斷有沒有超過一個候選——
+            // 超過一個就不自動綁（系統無從得知該用哪一筆），留給使用者用「快速綁定」自己挑。
+            $findCust = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND Customer_Id=? ORDER BY d_id LIMIT 2");
+            $findNull = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND Customer_Id IS NULL ORDER BY d_id LIMIT 2");
             $insPart  = $pdo->prepare("INSERT INTO d_setting (D_Setting_Id,Type,Customer_Id,Created_By,Created_At) VALUES (?,'N',?,?,NOW())");
             $bind     = $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=?, product_id=?, updated_at=NOW() WHERE item_id=?");
 
-            $cache = []; $bound = 0; $created = 0; $reused = 0; $skipped = 0; $createdNos = []; $reusedNos = [];
+            $cache = []; $bound = 0; $created = 0; $reused = 0; $skipped = 0; $ambiguous = 0;
+            $createdNos = []; $reusedNos = []; $ambiguousNos = [];
             $pdo->beginTransaction();
             try {
                 foreach ($items as $it) {
                     $no = trim((string)$it['product_id']);
                     if ($no === '') { $skipped++; continue; }   // 連料號文字都是空的，沒有東西可以建立
+                    if (array_key_exists($no, $cache) && $cache[$no] === null) { continue; }   // 這個料號先前已判定為多筆候選
                     if (!isset($cache[$no])) {
                         $findCust->execute([$no, $clientId]);
-                        $dId = $findCust->fetchColumn();
-                        if ($dId === false) { $findNull->execute([$no]); $dId = $findNull->fetchColumn(); }
-                        if ($dId === false) {
+                        $hit = $findCust->fetchAll(PDO::FETCH_COLUMN);
+                        if (!$hit) { $findNull->execute([$no]); $hit = $findNull->fetchAll(PDO::FETCH_COLUMN); }
+                        if (count($hit) > 1) {
+                            // 完全同名的既有料號不只一筆 → 不自動綁，這一筆維持未綁定
+                            $cache[$no] = null; $ambiguous++; $ambiguousNos[] = $no;
+                            continue;
+                        }
+                        if (!$hit) {
                             $insPart->execute([$no, $clientId, $user_id]);
-                            $dId = (int)$pdo->lastInsertId();
+                            $cache[$no] = (int)$pdo->lastInsertId();
                             $created++; $createdNos[] = $no;
                         } else {
+                            $cache[$no] = (int)$hit[0];
                             $reused++; $reusedNos[] = $no;
                         }
-                        $cache[$no] = (int)$dId;
                     }
                     $bind->execute([$cache[$no], $no, $it['item_id']]);
                     $bound++;
@@ -1525,7 +1535,8 @@ try {
 
             $response = ['success' => true, 'quote_no' => $q['quote_no'], 'bound' => $bound,
                          'created' => $created, 'reused' => $reused, 'skipped' => $skipped,
-                         'created_nos' => $createdNos, 'reused_nos' => $reusedNos];
+                         'ambiguous' => $ambiguous, 'created_nos' => $createdNos,
+                         'reused_nos' => $reusedNos, 'ambiguous_nos' => $ambiguousNos];
             break;
         }
 
@@ -1560,23 +1571,32 @@ try {
             if (!is_array($ids) || empty($ids)) throw new Exception('未選擇任何報價單');
             $ids = array_values(array_unique(array_map('intval', $ids)));
             $ph  = implode(',', array_fill(0, count($ids), '?'));
-            // 料號ID(d_setting_d_id)未完全綁定的報價單一律不可轉正式：前端已把按鈕/勾選框反灰，
+            // 料號ID(d_setting_d_id)或製程未完全補齊的報價單一律不可轉正式：前端已把按鈕/勾選框反灰，
             // 這裡以同一規則再擋一次（鐵律8，防止略過畫面直打 API）。
             // 為什麼要擋：料號ID是全站把報價歸戶到料號的唯一依據（見出貨統計以 d_setting_id 歸戶的規則），
-            // 沒綁就轉正之後這張單不再出現在快速轉移頁，也無法再從那裡補綁，等於永久漏掉。
+            // 製程決定這筆報價的加工內容；沒補齊就轉正之後這張單不再出現在快速轉移頁，
+            // 也無法再從那裡補，等於永久漏掉。
             $missChk = $pdo->prepare("
-                SELECT ql.quote_no, COUNT(*) AS miss
+                SELECT ql.quote_no,
+                       SUM(qi.d_setting_d_id IS NULL) AS miss_ds,
+                       SUM(NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)) AS miss_pc
                 FROM quotation_item qi
                 JOIN quotation_list ql ON ql.quote_id = qi.quote_id
-                WHERE qi.quote_id IN ($ph) AND ql.pending_review = 1 AND qi.d_setting_d_id IS NULL
+                WHERE qi.quote_id IN ($ph) AND ql.pending_review = 1
                 GROUP BY qi.quote_id, ql.quote_no
+                HAVING miss_ds > 0 OR miss_pc > 0
                 ORDER BY ql.quote_no
             ");
             $missChk->execute($ids);
             $missRows = $missChk->fetchAll(PDO::FETCH_ASSOC);
             if ($missRows) {
-                $names = array_map(fn($r) => $r['quote_no'] . '（缺 ' . $r['miss'] . ' 筆）', $missRows);
-                throw new Exception('以下報價單的料號ID尚未完全綁定，不可轉入正式報價單：' . implode('、', $names) . '。請先於報價單快速轉移頁完成料號ID綁定。');
+                $names = array_map(function ($r) {
+                    $m = [];
+                    if ($r['miss_ds'] > 0) $m[] = '料號ID缺 ' . $r['miss_ds'] . ' 筆';
+                    if ($r['miss_pc'] > 0) $m[] = '製程缺 ' . $r['miss_pc'] . ' 筆';
+                    return $r['quote_no'] . '（' . implode('、', $m) . '）';
+                }, $missRows);
+                throw new Exception('以下報價單尚未補齊，不可轉入正式報價單：' . implode('、', $names) . '。請先於報價單快速轉移頁補齊料號ID與製程。');
             }
             // 填表人：ERP直接匯入的資料本身沒有真實填表人資訊（created_by 目前記的是執行匯入的管理員），
             // 轉正式時一併改標成業務公用帳號(id=99993)，避免誤植成管理員本人「製表」；

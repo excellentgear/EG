@@ -147,23 +147,23 @@ try {
             <li><b>設定製程</b>：跟報價單管理頁一樣的製程標籤（先選大類再選子標籤，可複選），點一下即存檔。</li>
             <li><b>綁定料號ID</b>：在「料號ID綁定」欄搜尋料號關鍵字，點選正確的項目即可綁定；<b>找不到就直接在搜尋結果下方按「＋新增料號」</b>快速建立並自動綁定。</li>
             <li><b>切換客戶</b>：點客戶欄位旁的「切換」，搜尋並選擇正確的客戶；找不到一樣可以「＋新建客戶」；跳窗內按 <b>Enter</b> 等同直接送出（唯一符合的搜尋結果或已填妥的新建表單）。</li>
-            <li>補齊後，可以用每張報價單右上角的「轉正式報價單」單張轉入，或勾選多張後用上方「批次轉入正式報價單」一次轉入。<b>料號ID沒有全部綁定完的報價單，按鈕與勾選框會是反灰的</b>，滑鼠移上去會說明還缺幾筆。</li>
+            <li>補齊後，可以用每張報價單右上角的「轉正式報價單」單張轉入，或勾選多張後用上方「批次轉入正式報價單」一次轉入。<b>料號ID或製程沒有全部補齊的報價單，按鈕與勾選框會是反灰的</b>，滑鼠移上去會說明還缺什麼、缺幾筆。</li>
             <li>清單右上角可篩選<b>年份</b>，<b>預設顯示最新年份</b>（可自行切到其他年份或「全部」）；報價單依日期新到舊排序。</li>
             <li>上方統計列的「<b>最新資料日期</b>」是把目前尚待確認的所有報價單<b>由 OP 單號本身解析</b>出來的日期（OP＋民國年3碼＋月日4碼，例：OP1071228004 → 2018.12.28）取最新的一天，可用來看舊資料補到哪一天；括號內是該日期取自哪一張單號。此欄不受年份篩選影響，一律以全部尚待確認的報價單計算。</li>
         </ul>
-        <div class="tip"><b>料號ID未完全綁定的報價單不可轉入正式報價單</b>——該張報價單每一筆項目都綁好料號ID之後，「轉正式報價單」按鈕與勾選框會自動解鎖（不必重新整理頁面），「全選本頁」也只會勾到可以轉入的那幾張。<b>製程</b>不擋，沒設定一樣可以轉入，完成度只是提示。</div>
+        <div class="tip"><b>料號ID與製程都補齊的報價單才可以轉入正式報價單</b>——該張報價單每一筆項目都綁好料號ID、也都設好製程之後，「轉正式報價單」按鈕與勾選框才會自動解鎖（不必重新整理頁面），「全選本頁」也只會勾到可以轉入的那幾張。卡片上的兩個徽章就是這兩項的完成度。</div>
         <h4>加快補件速度</h4>
         <ul>
             <li><b>製程「複製上一筆」</b>：一鍵複製同報價單中前一項的製程設定。</li>
             <li><b>製程「套用到本單全部」</b>：把目前這筆的製程設定一次套用到同報價單其餘所有項目（會覆蓋原設定，套用前會再次確認）。</li>
             <li><b>只找到一筆完全相同的料號時直接綁定</b>：按「快速綁定」後，如果搜尋結果只有一筆、而且料號名稱與這一列的料號文字完全一樣，系統直接綁上、不再開跳窗要您按一次確認。唯一的例外是「本客戶底下找不到、退而求其次全範圍找到，而且那一筆已經綁在別的客戶底下」——那會照常開跳窗讓您確認，因為跨客戶綁定會把別家的圖面與檢驗標準一起接過來。</li>
-            <li><b>整張單一鍵建立並綁定料號</b>：料號ID還沒綁完的報價單，卡片右上角有「一鍵建立並綁定料號」。按下去會把這張單<b>所有</b>未綁定的項目一次處理完：依每一筆的料號文字先找既有料號（先找本單客戶的，再找沒有綁客戶的），<b>都找不到才以本單客戶新建一筆</b>再綁上——跟跳窗裡「找不到？新增此料號（綁此客戶）」同一條規則。同一張單裡重複出現的料號只會建立一筆；做完會列出新建了哪些、沿用了哪些。<b>這張單必須先設定客戶</b>（新建的料號要綁到客戶），還沒設定會擋下並提示先用「切換」設定。</li>
+            <li><b>整張單一鍵建立並綁定料號</b>：料號ID還沒綁完的報價單，卡片右上角有「一鍵建立並綁定料號」。按下去會把這張單<b>所有</b>未綁定的項目一次處理完：依每一筆的料號文字先找既有料號（先找本單客戶的，再找沒有綁客戶的），<b>都找不到才以本單客戶新建一筆</b>再綁上——跟跳窗裡「找不到？新增此料號（綁此客戶）」同一條規則。同一張單裡重複出現的料號只會建立一筆；做完會列出新建了哪些、沿用了哪些。<b>比對用的是「完全同名」而不是模糊比對，所以不會撿到相似料號</b>；萬一料號主檔裡有多筆完全同名的登錄（舊資料有這種重複），系統無法判斷該用哪一筆，會<b>保持該筆未綁定並列出來</b>，請改用那一列的「快速綁定」自己挑。<b>這張單必須先設定客戶</b>（新建的料號要綁到客戶），還沒設定會擋下並提示先用「切換」設定。</li>
             <li><b>綁定料號後自動偵測同料號</b>：綁定或新增料號時，系統會找出「尚待確認」報價單中同料號文字、同客戶、還沒綁定的其他項目（常見於同一張報價單內同料號不同數量級距），跳窗列出讓您勾選是否一併綁定，不用逐筆重複搜尋。</li>
         </ul>
         <h4>重要行為</h4>
         <ul>
             <li>本頁的修改只作用在「尚待確認」的報價單，一旦轉入正式，請回報價單管理頁編輯（本頁會拒絕再次修改已正式的資料）。</li>
-            <li><b>為什麼料號ID一定要綁完才能轉正</b>：料號ID(d_setting)是全系統判定「這筆報價屬於哪個料號」的唯一依據，沒綁定的話出貨統計、歷史單價、毛利分析都認不到這張報價單；而且轉正之後這張單就不再出現在本頁，也無法再從這裡補綁，等於永久漏掉。因此這是<b>強制擋下</b>，不是提示——後端同樣會擋，不能繞過畫面直接送出。</li>
+            <li><b>為什麼料號ID與製程一定要補齊才能轉正</b>：料號ID(d_setting)是全系統判定「這筆報價屬於哪個料號」的唯一依據，沒綁定的話出貨統計、歷史單價、毛利分析都認不到這張報價單；製程則決定這筆報價的加工內容，沒設定的話報價單列印與後續轉訂單都看不出要做什麼。而且轉正之後這張單就不再出現在本頁，也無法再從這裡補，等於永久漏掉。因此兩項都是<b>強制擋下</b>，不是提示——後端同樣會擋，不能繞過畫面直接送出。</li>
             <li>綁定料號ID／設定製程／切換客戶都是<b>單張報價單/單筆項目</b>的修正，不會像料號管理頁的「移轉綁定」一樣影響全系統其他歷史資料。</li>
             <li>轉入正式時：若這張報價單本身沒有真實填表人資訊（ERP匯入本來就沒有這項資料），系統會自動標記為「業務公用」帳號製表；<b>核准欄位刻意留空不自動核准</b>——系統無法確認幾年前當時真正的業務主管是誰，與其虛構一筆假的核准紀錄，不如留白讓有需要的人自行判斷；也因此<b>不會</b>發送「待核准」通知給現在的主管。</li>
         </ul>
@@ -330,22 +330,25 @@ function getFilteredData() {
     return qtData.filter(r => yearOf(r.quote_date) === y);
 }
 
-// 料號ID未完全綁定的報價單不可轉入正式報價單（後端 quick_confirm_transfer 會以同一規則再擋一次＝鐵律8）。
-// 製程沒設定不擋，只是完成度提示。
-function transferGate(noDs, cnt) {
-    noDs = Number(noDs) || 0;
-    if (noDs > 0) return { ok:false, reason:'料號ID尚未完全綁定（缺 ' + noDs + '/' + (Number(cnt)||0) + ' 筆），補齊後才能轉入正式報價單' };
+// 料號ID與製程都補齊的報價單才可以轉入正式報價單
+//（後端 quick_confirm_transfer 會以同一規則再擋一次＝鐵律8）
+function transferGate(noDs, cnt, noPc) {
+    noDs = Number(noDs) || 0; noPc = Number(noPc) || 0; cnt = Number(cnt) || 0;
+    const miss = [];
+    if (noDs > 0) miss.push('料號ID尚未完全綁定（缺 ' + noDs + '/' + cnt + ' 筆）');
+    if (noPc > 0) miss.push('製程尚未完全設定（缺 ' + noPc + '/' + cnt + ' 筆）');
+    if (miss.length) return { ok:false, reason:miss.join('、') + '，補齊後才能轉入正式報價單' };
     return { ok:true, reason:'' };
 }
 
 // 綁定料號後即時解鎖／再度鎖上該張卡片的轉入入口，不必重新整理整頁
-function applyTransferGate(qid, noDs, cnt) {
-    const gate = transferGate(noDs, cnt);
+function applyTransferGate(qid, noDs, cnt, noPc) {
+    const gate = transferGate(noDs, cnt, noPc);
     const $chk = $('#qtChk' + qid), $btn = $('#qtBtnTx' + qid);
     if (!gate.ok) $chk.prop('checked', false);
     $chk.prop('disabled', !gate.ok).attr('title', gate.ok ? null : gate.reason);
     $btn.prop('disabled', !gate.ok).attr('title', gate.ok ? null : gate.reason);
-    $('#qtBtnAuto' + qid).toggle(!gate.ok);
+    $('#qtBtnAuto' + qid).toggle((Number(noDs) || 0) > 0);   // 這顆只管料號，與製程完成度無關
     updateSelCount();
 }
 
@@ -372,7 +375,7 @@ function renderCards() {
         let badge = '';
         badge += (noDs === 0) ? '<span class="qt-badge ok">料號ID已綁定</span>' : '<span class="qt-badge warn">料號ID缺 ' + noDs + '/' + cnt + '</span>';
         badge += (noPc === 0) ? '<span class="qt-badge ok">製程已設定</span>' : '<span class="qt-badge warn">製程缺 ' + noPc + '/' + cnt + '</span>';
-        const gate = transferGate(noDs, cnt);
+        const gate = transferGate(noDs, cnt, noPc);
         html += '<div class="qt-card" data-qid="' + r.quote_id + '">' +
             '<div class="qt-card-head">' +
                 '<input type="checkbox" class="qt-row-chk" id="qtChk' + r.quote_id + '" value="' + r.quote_id + '"' +
@@ -427,6 +430,7 @@ function autoBindQuote(quoteId, quoteNo) {
         if (res.created) msg += '\n新建料號 ' + res.created + ' 筆：' + res.created_nos.join('、');
         if (res.reused)  msg += '\n沿用既有料號 ' + res.reused + ' 筆：' + res.reused_nos.join('、');
         if (res.skipped) msg += '\n略過 ' + res.skipped + ' 筆（料號欄是空的，無法建立）';
+        if (res.ambiguous) msg += '\n\n以下 ' + res.ambiguous + ' 個料號在主檔裡有多筆完全同名的登錄，系統無法判斷該用哪一筆，\n已保持未綁定，請用該列的「快速綁定」自行挑選：\n' + res.ambiguous_nos.join('、');
         alert(msg);
         reloadQuoteItems(quoteId);
     });
@@ -641,7 +645,7 @@ function refreshStatsOnly(itemId) {
         (noDs === 0 ? '<span class="qt-badge ok">料號ID已綁定</span>' : '<span class="qt-badge warn">料號ID缺 ' + noDs + '/' + cnt + '</span>') +
         (noPc === 0 ? '<span class="qt-badge ok">製程已設定</span>' : '<span class="qt-badge warn">製程缺 ' + noPc + '/' + cnt + '</span>');
     $('.qt-card[data-qid="' + qid + '"] .qt-badge-cell').html(badgeHtml);
-    applyTransferGate(qid, noDs, cnt);
+    applyTransferGate(qid, noDs, cnt, noPc);
 }
 
 // ── 快速綁定料號ID：比照 NewOrder_Track.php 快速綁定 Modal，自動判斷客戶與料號 ──
@@ -913,7 +917,7 @@ function doConfirmTransfer(ids, doneMsg) {
 
 function confirmTransferOne(quoteId, quoteNo) {
     const row = qtData.find(function(r){ return String(r.quote_id) === String(quoteId); });
-    const gate = transferGate(row ? row.items_no_dsetting : 0, row ? row.item_count : 0);
+    const gate = transferGate(row ? row.items_no_dsetting : 0, row ? row.item_count : 0, row ? row.items_no_process : 0);
     if (!gate.ok) { alert('報價單 ' + quoteNo + ' 無法轉入正式報價單：\n' + gate.reason); return; }
     if (!confirm('確定要將報價單 ' + quoteNo + ' 轉入正式報價單嗎？轉入後將從本頁移除。')) return;
     doConfirmTransfer([quoteId]);
@@ -925,10 +929,12 @@ $('#btnBatchConfirm').on('click', function() {
     const blocked = [];
     ids.forEach(function(id) {
         const row = qtData.find(function(r){ return Number(r.quote_id) === Number(id); });
-        if (row && !transferGate(row.items_no_dsetting, row.item_count).ok) blocked.push(row.quote_no + '（缺 ' + (Number(row.items_no_dsetting)||0) + ' 筆）');
+        if (!row) return;
+        const g = transferGate(row.items_no_dsetting, row.item_count, row.items_no_process);
+        if (!g.ok) blocked.push('・' + row.quote_no + '：' + g.reason.replace('，補齊後才能轉入正式報價單', ''));
     });
     if (blocked.length) {
-        alert('以下 ' + blocked.length + ' 張報價單的料號ID尚未完全綁定，不可轉入正式報價單：\n' + blocked.join('、') + '\n\n請先補齊料號ID綁定後再轉入。');
+        alert('以下 ' + blocked.length + ' 張報價單還沒補齊，不可轉入正式報價單：\n' + blocked.join('\n') + '\n\n請先補齊料號ID與製程後再轉入。');
         return;
     }
     if (!confirm('確定要將這 ' + ids.length + ' 張報價單轉入正式報價單清單嗎？轉入後將從本頁移除。')) return;
