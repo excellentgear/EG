@@ -127,6 +127,7 @@ $CAN_RESTORE      = _hasF('quotation_restore');
 $CAN_VIEW_HISTORY = _hasF('quotation_view_history');
 $CAN_SETTINGS     = _hasF('quotation_settings');
 $CAN_SORT_RULE    = _hasF('quotation_sort_rule');
+$CAN_CHG_CUSTOMER = _hasF('quotation_change_customer');   // 整張單變更客戶（含料號綁定的客戶）
 $IS_ADMIN         = _hasF('all');
 $_perm            = $IS_ADMIN ? 'A（管理員）' : (empty($_my_roles) ? '（未指派角色）' : implode('、',$_my_roles));
 
@@ -148,6 +149,7 @@ $PAGE_FEATURES = [
     ['group'=>'進階功能', 'code'=>'quotation_view_history', 'label'=>'查看修改紀錄'],
     ['group'=>'進階功能', 'code'=>'quotation_settings',     'label'=>'報價單設定'],
     ['group'=>'進階功能', 'code'=>'quotation_sort_rule',    'label'=>'調整項目自動排序規則（全體適用）'],
+    ['group'=>'進階功能', 'code'=>'quotation_change_customer', 'label'=>'整張單變更客戶（含料號綁定的客戶、連動OP轉出的訂單/BOM）'],
 ];
 ?>
 <!DOCTYPE html>
@@ -604,6 +606,13 @@ body { background:var(--bg); }
                             <?php if ($CAN_VIEW_HISTORY): ?>
                             <button class="btn btn-default btn-sm" id="viewChangeLogBtn" onclick="openChangeLog()" title="修改紀錄">
                                 <i class="fa fa-history"></i>
+                            </button>
+                            <?php endif; ?>
+                            <?php if ($CAN_CHG_CUSTOMER): ?>
+                            <button class="btn btn-sm" id="chgCustomerBtn" onclick="openChgCustomer()"
+                                style="background:#F0A24B;color:#fff;font-weight:600;"
+                                title="一次把整張單（含各料號綁定的客戶）改成另一家客戶，並連動由本張OP轉出的訂單與BOM">
+                                <i class="fa fa-exchange"></i> 變更客戶
                             </button>
                             <?php endif; ?>
                             <?php if ($CAN_EDIT): ?>
@@ -1642,6 +1651,72 @@ body { background:var(--bg); }
   </div></div>
 </div>
 
+<?php if ($CAN_CHG_CUSTOMER): ?>
+<!-- ══ 整張報價單變更客戶（2026-08-28）══════════════════════════════════════
+     用 A 客戶報價、接單後客戶要求改掛 B 客戶名稱時使用。改的範圍：報價單表頭 ＋ 各項目
+     綁定料號的客戶 ＋ 由本張OP轉出的訂單與其 BOM。料號主檔是全站共用的，所以會先掃描
+     「這個料號ID現在還被誰用著」再決定可不可以直接改（說明見跳窗內的灰色說明列）。 -->
+<div class="modal fade" id="chgCustomerModal" tabindex="-1" role="dialog" data-backdrop="static">
+  <div class="modal-dialog" style="width:940px;max-width:97vw;" role="document"><div class="modal-content">
+    <div class="modal-header" style="background:#8a5a2b;color:#fff;padding:12px 18px;">
+      <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.8;"><span>&times;</span></button>
+      <h4 class="modal-title" style="font-size:15px;">
+        <i class="fa fa-exchange" style="margin-right:7px;"></i>整張報價單變更客戶
+        <span id="chgCustQuoteNo" style="font-weight:400;opacity:.9;margin-left:8px;"></span>
+      </h4>
+    </div>
+    <div class="modal-body" style="padding:0;max-height:72vh;overflow-y:auto;">
+
+      <!-- 使用說明 -->
+      <div style="padding:9px 18px;background:#FFF8ED;border-bottom:1px solid #E4D3BC;font-size:12px;color:#6b4a22;line-height:1.7;">
+        <strong>這個功能會一次改動下列資料：</strong>
+        ①報價單表頭的客戶　②本張單各項目<strong>綁定料號主檔</strong>的客戶　③由本張 OP 轉出／綁定的<strong>訂單</strong>與其 <strong>BOM</strong> 的客戶。<br>
+        料號主檔是全站共用的，所以每個料號都會先掃描「這個<strong>料號ID</strong>目前還被哪些單據用著」：
+        <span style="color:#1e8449;font-weight:700;">只有本張單在用</span>＝可直接改；
+        <span style="color:#a06a1f;font-weight:700;">另有本張OP的訂單／BOM在用</span>＝需二次確認；
+        <span style="color:#DD5138;font-weight:700;">被本張OP以外的單據用到</span>（別張報價單／別的訂單／別的BOM／已出貨／已退貨）＝
+        <strong>禁止直接改</strong>，請改用下方的「建立新料號」。
+      </div>
+
+      <!-- 目標客戶 -->
+      <div style="padding:12px 18px;border-bottom:1px solid #eee;">
+        <div class="row">
+          <div class="col-sm-5">
+            <label style="font-size:12px;color:#888;margin-bottom:3px;">目前客戶</label>
+            <div id="chgCustFrom" style="font-size:14px;font-weight:700;color:#555;padding:6px 0;">—</div>
+          </div>
+          <div class="col-sm-7">
+            <label style="font-size:12px;color:#888;margin-bottom:3px;">變更為　<span style="color:#DD5138;">*</span></label>
+            <input type="text" class="form-control" id="chgCustSearch" autocomplete="off"
+                   placeholder="輸入客戶代碼或名稱篩選…" ondblclick="this.value='';$('#chgCustId').val('');chgCustRenderPick();">
+            <input type="hidden" id="chgCustId">
+            <div id="chgCustPick" style="max-height:170px;overflow-y:auto;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 4px 4px;font-size:13px;display:none;"></div>
+            <div id="chgCustPicked" style="margin-top:6px;font-size:13px;display:none;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 掃描結果 -->
+      <div id="chgCustScanWrap" style="padding:12px 18px;">
+        <div class="text-muted text-center" style="padding:24px;">請先選擇要變更成哪一家客戶</div>
+      </div>
+    </div>
+    <div class="modal-footer" style="padding:8px 14px;">
+      <span id="chgCustHint" style="float:left;font-size:12px;color:#888;padding-top:6px;"></span>
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
+      <button type="button" class="btn btn-sm" id="chgCustCloneBtn" style="display:none;background:#3498db;color:#fff;"
+              onclick="chgCustDoClone()" title="本張OP單所有料號各建一筆掛新客戶的新料號，原料號完全不動">
+        <i class="fa fa-files-o"></i> 建立新料號並改綁
+      </button>
+      <button type="button" class="btn btn-sm" id="chgCustApplyBtn" style="display:none;background:#F0A24B;color:#fff;font-weight:600;"
+              onclick="chgCustDoApply()">
+        <i class="fa fa-check"></i> 確認變更
+      </button>
+    </div>
+  </div></div>
+</div>
+<?php endif; ?>
+
 <script src="../../resource/js/jquery.min.js"></script>
 <script src="../../resource/js/jquery-ui-1.10.2.custom.min.js"></script>
 <script src="../../resource/js/bootstrap.min.js"></script>
@@ -1663,6 +1738,7 @@ const CAN_BATCH_ADD    = <?= json_encode($CAN_BATCH_ADD) ?>;
 const CAN_VIEW_DELETED = <?= json_encode($CAN_VIEW_DELETED) ?>;
 const CAN_RESTORE      = <?= json_encode($CAN_RESTORE) ?>;
 const CAN_VIEW_HISTORY = <?= json_encode($CAN_VIEW_HISTORY) ?>;
+const CAN_CHG_CUSTOMER = <?= json_encode($CAN_CHG_CUSTOMER) ?>;
 const CURRENT_UID      = <?= json_encode((int)($_SESSION['id'] ?? 0)) ?>;
 const IS_ADMIN         = <?= json_encode($IS_ADMIN) ?>;
 const PERM_CODE        = <?= json_encode($_perm) ?>;
@@ -3562,7 +3638,7 @@ function renderViewPanel(q, contact, detail) {
             it.tiers.forEach((t, ti) => {
                 itemsHtml += `<tr>
                     ${ti===0 ? `<td rowspan="${it.tiers.length}" style="vertical-align:middle;text-align:center;">${i+1}</td>
-                        <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:12px;">${qlDrawingSpan(it.product_id)}</td>
+                        <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:12px;">${qlDrawingSpan(it.product_id, it.d_setting_d_id)}</td>
                         <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:11px;">${descHtml}<div style="font-size:10px;color:#888;">（階梯報價，單價依訂購數量區間）</div></td>` : ''}
                     <td class="text-right" style="white-space:nowrap;">${rangeTxt(t)}${tolTxt(t)}</td>
                     <td class="text-center">${esc(it.unit||'PCS')}</td>
@@ -3574,7 +3650,7 @@ function renderViewPanel(q, contact, detail) {
             const amt = parseFloat(it.amount || 0);
             itemsHtml += `<tr>
                 <td class="text-center">${i+1}</td>
-                <td style="font-size:12px;">${qlDrawingSpan(it.product_id)}</td>
+                <td style="font-size:12px;">${qlDrawingSpan(it.product_id, it.d_setting_d_id)}</td>
                 <td style="font-size:11px;">${descHtml}</td>
                 <td class="text-right">${fmtNum(it.quantity)}</td>
                 <td class="text-center">${esc(it.unit||'PCS')}</td>
@@ -4501,10 +4577,12 @@ function tempSaveQuote() {
 // ★ 列印功能
 // ══════════════════════════════════════════════════════
 // 料號查閱圖面（頁內用；比照 NewOrder_Track.php，圖面對所有登入者開放）
-function qlDrawingSpan(pid) {
+// pk＝quotation_item.d_setting_d_id（＝d_setting.d_id）：同名料號可能有多筆主檔，不指名會混在一起
+function qlDrawingSpan(pid, pk) {
     if (pid === undefined || pid === null || pid === '') return '';
     const arg = encodeURIComponent(String(pid));
-    return `<span style="cursor:pointer;color:#8a5a00;text-decoration:underline dotted;" title="點擊查閱圖面" onclick="window.open('../pm/bom_viewer.php?d_id=${arg}','drawing_${arg}','width=1100,height=800,resizable=yes,scrollbars=yes')">${escapeHtml(pid)}</span>`;
+    const q   = (parseInt(pk,10)||0) ? ('?pk=' + (parseInt(pk,10)||0)) : ('?d_id=' + arg);
+    return `<span style="cursor:pointer;color:#8a5a00;text-decoration:underline dotted;" title="點擊查閱圖面" onclick="window.open('../pm/bom_viewer.php${q}','drawing_${arg}','width=1100,height=800,resizable=yes,scrollbars=yes')">${escapeHtml(pid)}</span>`;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -4871,10 +4949,12 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
     // 料號可點擊查閱圖面（比照 NewOrder_Track.php）。此為獨立 about:blank 列印視窗，需用絕對網址，
     // 圖面查閱對所有登入者開放故不設權限閘門（bom_viewer 自帶登入驗證）。
     const _bomViewerUrl = new URL('../pm/bom_viewer.php', location.href).href;
-    const pnCell = pid => {
+    // pk＝d_setting.d_id：同名料號可能有多筆主檔（不同客戶／版次），不指名會混在一起
+    const pnCell = (pid, pk) => {
         if (pid === undefined || pid === null || pid === '') return '';
         const arg = encodeURIComponent(String(pid));
-        return `<span class="pn-link" title="點擊查閱圖面" onclick="window.open('${_bomViewerUrl}?d_id=${arg}','drawing_${arg}','width=1100,height=800,resizable=yes,scrollbars=yes')">${esc(pid)}</span>`;
+        const q   = (parseInt(pk,10)||0) ? ('?pk=' + (parseInt(pk,10)||0)) : ('?d_id=' + arg);
+        return `<span class="pn-link" title="點擊查閱圖面" onclick="window.open('${_bomViewerUrl}${q}','drawing_${arg}','width=1100,height=800,resizable=yes,scrollbars=yes')">${esc(pid)}</span>`;
     };
 
     // 公司資料
@@ -4971,7 +5051,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
                 rowHtml += '<tr>'
                     + (ti === 0 ? `
                     <td class="center" rowspan="${n}">${idx + 1}</td>
-                    <td rowspan="${n}">${pnCell(it.product_id)}</td>
+                    <td rowspan="${n}">${pnCell(it.product_id, it.d_setting_d_id)}</td>
                     <td rowspan="${n}">${esc(desc)}<div style="font-size:8.5pt;color:#333;">（階梯報價，單價依訂購數量區間）</div>${kidChunks[0] || ''}</td>` : '')
                     + `
                     <td class="right">${rangeTxt(t)}${uniformTol ? '' : tolTxt(t)}</td>
@@ -4984,7 +5064,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
             const divStyle = isGroupDivider ? ' style="border-top:4px double #000;"' : '';
             rowHtml = `<tr>
             <td class="center"${divStyle}>${idx+1}</td>
-            <td${divStyle}>${pnCell(it.product_id)}</td>
+            <td${divStyle}>${pnCell(it.product_id, it.d_setting_d_id)}</td>
             <td${divStyle}>${esc(desc)}${kidChunks[0] || ''}</td>
             <td class="right"${divStyle}>${fmtNum(qty)}</td>
             <td class="center"${divStyle}>${esc(unit)}</td>
@@ -4995,7 +5075,7 @@ function buildPrintHtml(q, cust, contact, co, formNo) {
         kidChunks.slice(1).forEach(chunk => {
             rowHtml += `<tr>
                 <td></td>
-                <td>${pnCell(it.product_id)}（續）</td>
+                <td>${pnCell(it.product_id, it.d_setting_d_id)}（續）</td>
                 <td>${chunk}</td>
                 <td></td><td></td><td></td><td></td>
             </tr>`;
@@ -6531,7 +6611,7 @@ function showSnapshot(logId, quoteNo) {
         (snap.items || []).forEach((it, i) => {
             html += `<tr>
                 <td>${i+1}</td>
-                <td>${qlDrawingSpan(it.product_id)}</td>
+                <td>${qlDrawingSpan(it.product_id, it.d_setting_d_id)}</td>
                 <td>${escapeHtml(it.specification||'')}</td>
                 <td style="text-align:right;">${formatNumber(it.quantity)}</td>
                 <td>${escapeHtml(it.unit||'')}</td>
@@ -7897,6 +7977,244 @@ function addPartGearRow(data = {}) {
         const s = (helixStr.split("'")[1] || '').split('"')[0];
         $lr.find('.dms-d').val(d); $lr.find('.dms-m').val(m); $lr.find('.dms-s').val(s);
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 整張報價單變更客戶（2026-08-28）
+//   後端唯一實作在 src/common/quote_customer_lib.php；本區只負責畫面與確認流程。
+//   前端擋一次、後端同規則再擋一次（鐵律8）——這裡按不到的東西，直接打 API 一樣會被擋。
+// ══════════════════════════════════════════════════════════════════════════
+let _chgCustScan = null;   // 最近一次掃描結果
+
+function openChgCustomer() {
+    if (!CAN_CHG_CUSTOMER) { Swal.fire('權限不足', '您沒有「整張單變更客戶」的權限', 'error'); return; }
+    if (!currentEditId)    { Swal.fire('提示', '請先開啟一張報價單', 'info'); return; }
+    _chgCustScan = null;
+    $('#chgCustId').val('');
+    $('#chgCustSearch').val('');
+    $('#chgCustPick').hide().empty();
+    $('#chgCustPicked').hide().empty();
+    $('#chgCustApplyBtn, #chgCustCloneBtn').hide();
+    $('#chgCustHint').text('');
+    $('#chgCustScanWrap').html('<div class="text-muted text-center" style="padding:24px;">請先選擇要變更成哪一家客戶</div>');
+    const q = window._lastPrintGateQuote || {};
+    $('#chgCustQuoteNo').text(q.quote_no ? ('（' + q.quote_no + '）') : '');
+    $('#chgCustFrom').text(q.client_name || '（未設定）');
+    $('#chgCustomerModal').modal('show');
+    setTimeout(() => $('#chgCustSearch').focus(), 300);
+}
+
+// 客戶挑選（沿用本頁既有的 search_data type=customer，不另外做一份客戶清單）
+let _chgCustTimer = null;
+$(document).on('input', '#chgCustSearch', function () {
+    $('#chgCustId').val('');
+    $('#chgCustPicked').hide().empty();
+    $('#chgCustApplyBtn, #chgCustCloneBtn').hide();
+    clearTimeout(_chgCustTimer);
+    const term = $(this).val().trim();
+    if (!term) { $('#chgCustPick').hide().empty(); return; }
+    _chgCustTimer = setTimeout(() => chgCustRenderPick(term), 200);
+});
+function chgCustRenderPick(term) {
+    term = (term !== undefined) ? term : $('#chgCustSearch').val().trim();
+    if (!term) { $('#chgCustPick').hide().empty(); return; }
+    $.get(API_URL, { action: 'search_data', type: 'customer', term }, res => {
+        if (!res.success || !res.data.length) {
+            $('#chgCustPick').html('<div class="text-muted" style="padding:8px 12px;">查無客戶</div>').show();
+            return;
+        }
+        $('#chgCustPick').html(res.data.map(c =>
+            `<div class="suggestion-item chg-cust-opt" data-id="${escapeHtml(c.customer_id)}" data-name="${escapeHtml(c.customer)}"
+                  style="padding:6px 12px;cursor:pointer;border-bottom:1px solid #f2f2f2;">
+                <strong>${escapeHtml(c.customer)}</strong> <span style="color:#999;">（${escapeHtml(c.customer_id)}）</span>
+             </div>`).join('')).show();
+    });
+}
+$(document).on('click', '.chg-cust-opt', function () {
+    const id = String($(this).data('id')), name = String($(this).data('name'));
+    $('#chgCustId').val(id);
+    $('#chgCustSearch').val(name);
+    $('#chgCustPick').hide().empty();
+    $('#chgCustPicked').html(`<i class="fa fa-check-circle" style="color:#1e8449;"></i> 已選：<strong>${escapeHtml(name)}</strong>（${escapeHtml(id)}）`).show();
+    chgCustScan();
+});
+
+function chgCustScan() {
+    const cid = $('#chgCustId').val().trim();
+    if (!currentEditId || !cid) return;
+    $('#chgCustScanWrap').html('<div class="text-center" style="padding:24px;"><i class="fa fa-spinner fa-spin fa-2x" style="color:#8a5a2b;"></i><div style="margin-top:8px;color:#888;font-size:12px;">正在掃描每個料號目前被哪些單據使用…</div></div>');
+    $.get(API_URL, { action: 'qcc_scan', quote_id: currentEditId, customer_id: cid }, res => {
+        if (!res.success) { Swal.fire('錯誤', res.message || '掃描失敗', 'error'); return; }
+        _chgCustScan = res.data;
+        chgCustRenderScan(res.data);
+    }).fail(() => Swal.fire('錯誤', '與伺服器通訊失敗', 'error'));
+}
+
+function chgCustVerdictBadge(v) {
+    if (v === 'block')    return '<span style="display:inline-block;font-size:10px;padding:1px 7px;border-radius:10px;background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;font-weight:700;">禁止直接改</span>';
+    if (v === 'confirm')  return '<span style="display:inline-block;font-size:10px;padding:1px 7px;border-radius:10px;background:#FFF3E2;color:#a06a1f;border:1px solid #E4D3BC;font-weight:700;">需二次確認</span>';
+    if (v === 'unbound')  return '<span style="display:inline-block;font-size:10px;padding:1px 7px;border-radius:10px;background:#f2f2f2;color:#888;border:1px solid #ddd;">未綁料號ID</span>';
+    return '<span style="display:inline-block;font-size:10px;padding:1px 7px;border-radius:10px;background:#e8f8f0;color:#1e8449;border:1px solid #a9dfbf;font-weight:700;">可直接改</span>';
+}
+const _chgCustKindName = { quote:'報價單', order:'訂單', bom:'BOM', shipment:'出貨', return:'退貨' };
+
+function chgCustRenderScan(d) {
+    const orders = d.orders || [];
+    let html = '';
+
+    html += `<div style="font-size:12px;color:#666;margin-bottom:8px;">
+        本張OP轉出／綁定的訂單：<strong>${orders.length}</strong> 筆
+        ${orders.length ? '（' + orders.map(o => escapeHtml(o.Order_oo || '')).filter((v,i,a) => a.indexOf(v)===i).join('、') + '）' : ''}
+        ${d.unbound ? `　<span style="color:#a06a1f;">另有 ${d.unbound} 個項目尚未綁定料號ID（不會被變更）</span>` : ''}
+    </div>`;
+
+    html += `<table class="table table-condensed table-bordered" style="font-size:12px;margin-bottom:6px;">
+        <thead><tr style="background:#f7f7f7;">
+            <th style="width:22%;">料號</th><th style="width:14%;">目前料號客戶</th>
+            <th style="width:16%;">判定</th><th>目前還被誰用著</th>
+        </tr></thead><tbody>`;
+    const seen = {};
+    (d.items || []).forEach(it => {
+        if (it.d_id > 0 && seen[it.d_id]) return;      // 同一料號在同張單出現多列（不同數量級距）只列一次
+        if (it.d_id > 0) seen[it.d_id] = 1;
+        const u = it.usage || {};
+        let use = '';
+        if (it.already_target) {
+            use = '<span style="color:#1e8449;">此料號已經是目標客戶，不需變更</span>';
+        } else if (it.verdict === 'unbound') {
+            use = '<span style="color:#888;">此項目沒有綁料號ID，只會改報價單表頭</span>';
+        } else {
+            const out = (u.outside || []);
+            if (out.length) {
+                const shown = out.slice(0, 6).map(o =>
+                    `<div><span style="color:#c0392b;font-weight:600;">${_chgCustKindName[o.kind] || o.kind}</span> ${escapeHtml(o.label)}
+                     <span style="color:#999;">${escapeHtml(o.detail || '')}</span></div>`).join('');
+                use = shown + (out.length > 6 ? `<div style="color:#999;">…等共 ${out.length} 筆</div>` : '');
+            } else {
+                const ins = u.inside || {};
+                const bits = [];
+                if ((ins.orders || []).length) bits.push(`本張OP的訂單 ${ins.orders.length} 筆`);
+                if ((ins.boms   || []).length) bits.push(`該訂單的 BOM ${ins.boms.length} 筆`);
+                use = bits.length ? `<span style="color:#a06a1f;">${bits.join('、')}</span>`
+                                  : '<span style="color:#1e8449;">只有本張報價單在用</span>';
+            }
+            (u.info || []).forEach(t => { use += `<div style="color:#999;font-size:11px;">${escapeHtml(t)}</div>`; });
+        }
+        html += `<tr>
+            <td><strong>${escapeHtml(it.part_no || it.product_id || '')}</strong>
+                ${it.d_id ? `<span style="color:#bbb;font-size:10px;"> ID ${it.d_id}</span>` : ''}</td>
+            <td>${escapeHtml(it.part_customer_name || '—')}</td>
+            <td>${it.already_target ? chgCustVerdictBadge('ok') : chgCustVerdictBadge(it.verdict)}</td>
+            <td>${use}</td></tr>`;
+    });
+    html += '</tbody></table>';
+
+    if (d.verdict === 'block') {
+        html += `<div style="padding:10px 12px;background:#fdecea;border:1px solid #f5b7b1;border-radius:4px;font-size:12px;color:#8e2b20;line-height:1.7;">
+            <strong><i class="fa fa-ban"></i> 有料號已經被本張OP以外的單據使用，不可直接變更料號客戶。</strong><br>
+            直接改會把<strong>別張報價單／別的訂單／已出貨紀錄</strong>底下的料號一起換掉客戶。
+            請改按下方「<strong>建立新料號並改綁</strong>」：系統會把本張單的每個料號各建一筆<strong>同料號、掛新客戶</strong>的新料號
+            （新客戶底下已經有同料號時直接沿用那一筆），把本張報價單與本張OP轉出的訂單改綁到新料號，
+            <strong>原本的料號完全不動</strong>。新料號會自動複製齒輪規格／組合件結構／料號標籤，並登記舊料號為別名；
+            <strong>圖面等實體附件不會複製</strong>，請另行至主檔管理上傳或搬移。
+        </div>`;
+    } else if (d.verdict === 'confirm') {
+        html += `<div style="padding:10px 12px;background:#FFF8ED;border:1px solid #E4D3BC;border-radius:4px;font-size:12px;color:#6b4a22;line-height:1.7;">
+            <strong><i class="fa fa-exclamation-triangle"></i> 這些料號已經有本張OP轉出的訂單／BOM在使用。</strong>
+            按「確認變更」會一併把那些訂單與 BOM 的客戶改成新客戶（這正是接單後客戶改名要的效果）。
+            若您其實想保留原客戶的那批單據，請改用「建立新料號並改綁」。
+        </div>`;
+    } else {
+        html += `<div style="padding:10px 12px;background:#e8f8f0;border:1px solid #a9dfbf;border-radius:4px;font-size:12px;color:#1e6b42;line-height:1.7;">
+            <i class="fa fa-check-circle"></i> 這些料號目前只有本張報價單在用，可以直接變更。
+        </div>`;
+    }
+
+    $('#chgCustScanWrap').html(html);
+    $('#chgCustApplyBtn').toggle(d.verdict !== 'block');
+    $('#chgCustCloneBtn').toggle(d.verdict !== 'ok');
+    $('#chgCustHint').text(d.verdict === 'block' ? '禁止直接變更，請改用「建立新料號並改綁」' : '');
+}
+
+// 變更完成後重新載入左側清單並重開檢視畫面（沿用本頁既有的清單重載寫法，含跨年度快取失效）
+function chgCustReloadList() {
+    allYearsData = null;
+    if (isAllYearsMode) loadAllYears(); else loadQuoteList(<?= $selectedYear ?>);
+    if (currentEditId) openViewMode(currentEditId);
+}
+
+function chgCustSummaryHtml(r) {
+    const li = [];
+    li.push(`報價單表頭客戶：<strong>${escapeHtml(r.from_client || '（無）')}</strong> → <strong>${escapeHtml(r.to_client)}</strong>`);
+    if ((r.parts_created  || []).length) li.push(`新建料號 <strong>${r.parts_created.length}</strong> 筆`);
+    if ((r.parts_reused   || []).length) li.push(`沿用新客戶既有料號 <strong>${r.parts_reused.length}</strong> 筆`);
+    if (r.items_rebound)                 li.push(`報價項目改綁 <strong>${r.items_rebound}</strong> 列`);
+    if ((r.parts_updated  || []).length) li.push(`料號主檔改客戶 <strong>${r.parts_updated.length}</strong> 筆`);
+    if ((r.parts_skipped  || []).length) li.push(`已是該客戶而略過 <strong>${r.parts_skipped.length}</strong> 筆`);
+    if (r.orders_updated)                li.push(`連動訂單 <strong>${r.orders_updated}</strong> 筆`);
+    if (r.orders_repointed)              li.push(`訂單改綁新料號 <strong>${r.orders_repointed}</strong> 筆`);
+    if (r.boms_updated)                  li.push(`連動 BOM <strong>${r.boms_updated}</strong> 筆`);
+    return '<div style="text-align:left;font-size:13px;line-height:1.9;">' + li.map(t => '・' + t).join('<br>') + '</div>';
+}
+
+function chgCustDoApply() {
+    const cid = $('#chgCustId').val().trim();
+    if (!_chgCustScan || !cid) return;
+    if (_chgCustScan.verdict === 'block') { Swal.fire('不可直接變更', '請改用「建立新料號並改綁」', 'error'); return; }
+    const to = $('#chgCustSearch').val().trim();
+    const needConfirm = _chgCustScan.verdict === 'confirm';
+    Swal.fire({
+        icon: needConfirm ? 'warning' : 'question',
+        title: needConfirm ? '再確認一次' : '確認變更客戶？',
+        html: `即將把 <strong>${escapeHtml(_chgCustScan.quote.quote_no)}</strong> 整張單的客戶改為 <strong>${escapeHtml(to)}</strong>。<br>`
+            + (needConfirm
+                ? `<span style="color:#c0392b;">本張OP轉出的 ${(_chgCustScan.orders || []).length} 筆訂單與其 BOM 的客戶也會一起改掉。</span>`
+                : '報價單表頭與各料號主檔的客戶都會改。'),
+        showCancelButton: true, confirmButtonText: '確定變更', cancelButtonText: '取消',
+        confirmButtonColor: '#F0A24B'
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $('#chgCustApplyBtn, #chgCustCloneBtn').prop('disabled', true);
+        $.post(API_URL, { action: 'qcc_apply', quote_id: currentEditId, customer_id: cid, confirmed: needConfirm ? 1 : 0 }, res => {
+            $('#chgCustApplyBtn, #chgCustCloneBtn').prop('disabled', false);
+            if (!res.success) { Swal.fire('變更失敗', res.message || '請稍後再試', 'error'); return; }
+            $('#chgCustomerModal').modal('hide');
+            Swal.fire({ icon: 'success', title: '已完成變更', html: chgCustSummaryHtml(res.data) });
+            chgCustReloadList();
+        }, 'json').fail(() => {
+            $('#chgCustApplyBtn, #chgCustCloneBtn').prop('disabled', false);
+            Swal.fire('錯誤', '與伺服器通訊失敗', 'error');
+        });
+    });
+}
+
+function chgCustDoClone() {
+    const cid = $('#chgCustId').val().trim();
+    if (!_chgCustScan || !cid) return;
+    const to = $('#chgCustSearch').val().trim();
+    Swal.fire({
+        icon: 'warning', title: '建立新料號並改綁？',
+        html: `會把 <strong>${escapeHtml(_chgCustScan.quote.quote_no)}</strong> 內每一個已綁定的料號，`
+            + `各建一筆<strong>同料號、客戶為 ${escapeHtml(to)}</strong> 的新料號`
+            + `（該客戶底下已有同料號時直接沿用），並把本張報價單與本張OP轉出的訂單改綁過去。<br>`
+            + `<span style="color:#1e8449;">原本的料號完全不動。</span><br>`
+            + `<span style="color:#c0392b;">圖面等實體附件不會一起複製，需另行處理。</span>`,
+        showCancelButton: true, confirmButtonText: '建立並改綁', cancelButtonText: '取消',
+        confirmButtonColor: '#3498db'
+    }).then(r => {
+        if (!r.isConfirmed) return;
+        $('#chgCustApplyBtn, #chgCustCloneBtn').prop('disabled', true);
+        $.post(API_URL, { action: 'qcc_clone_parts', quote_id: currentEditId, customer_id: cid }, res => {
+            $('#chgCustApplyBtn, #chgCustCloneBtn').prop('disabled', false);
+            if (!res.success) { Swal.fire('建立失敗', res.message || '請稍後再試', 'error'); return; }
+            $('#chgCustomerModal').modal('hide');
+            Swal.fire({ icon: 'success', title: '已建立新料號並改綁', html: chgCustSummaryHtml(res.data) });
+            chgCustReloadList();
+        }, 'json').fail(() => {
+            $('#chgCustApplyBtn, #chgCustCloneBtn').prop('disabled', false);
+            Swal.fire('錯誤', '與伺服器通訊失敗', 'error');
+        });
+    });
 }
 </script>
 </body>

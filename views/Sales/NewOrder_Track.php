@@ -59,6 +59,7 @@ include '../../src/common/DBConnection.php';
 include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
 require_once '../../src/common/part_alias_lib.php';
+require_once '../../src/common/quote_customer_lib.php';   // 訂單 ↔ 來源OP單客戶連動（唯一實作）
 
 $conn = new DBConnection();
 
@@ -143,9 +144,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 } catch (Exception $eIgnore) {}
             }
 
+            // 來源OP單目前的客戶（2026-08-28）：純供畫面提示用，不覆蓋任何欄位值
+            $op_client_id = ''; $op_client_name = ''; $op_mismatch = false;
+            if (!empty($row['quote_no'])) {
+                try {
+                    $sqc = $pdo->prepare("SELECT quote_no, client_id, client_name FROM quotation_list WHERE quote_no=? LIMIT 1");
+                    $sqc->execute([$row['quote_no']]);
+                    if ($qrow0 = $sqc->fetch(PDO::FETCH_ASSOC)) {
+                        $op_client_id   = (string)($qrow0['client_id'] ?? '');
+                        $op_client_name = (string)($qrow0['client_name'] ?? '');
+                        $op_mismatch    = qcc_customer_differs($row, $qrow0);
+                    }
+                } catch (Exception $eOpc2) {}
+            }
+
             echo json_encode(['success' => true, 'data' => [
                 'Order_id'           => $row['Order_id'],
                 'OrderNo'            => $row['Order_oo'] ?? '',
+                'op_client_id'       => $op_client_id,
+                'op_client_name'     => $op_client_name,
+                'op_mismatch'        => $op_mismatch,
                 'Client_Name'        => $row['Client_name'] ?? '',
                 'Client_Name_Display'=> $client_name_display,
                 'Client_name_ID'     => $row['Client_name_ID'] ?? '',
@@ -874,6 +892,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 unset($r);
             }
             echo json_encode(['success' => true, 'quote' => $quote, 'data' => $rows]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // ── 來源OP單客戶連動（2026-08-28）──────────────────────────────────────
+    //    用 A 客戶報價、接單後客戶要求改掛 B 客戶的情況：報價單那邊改了客戶之後，
+    //    由該 OP 轉出的訂單原本不會跟著動（客戶是轉單當下寫進去的快照）。列表上會用
+    //    橘色徽章標出「與來源OP的客戶已不一致」，按下去就走這支同步（只改客戶欄位，
+    //    不動料號、金額與任何日期）。判定與寫入的唯一實作都在 quote_customer_lib.php。
+    if ($_POST['action'] === 'sync_quote_customer') {
+        header('Content-Type: application/json');
+        try {
+            $uid = intval($_SESSION['id'] ?? 0);
+            // 後端同規則再擋一次（鐵律8）：畫面上沒有編輯權的人看得到徽章但按不到，直打 API 一樣擋下
+            require_once __DIR__ . '/../../src/common/order_track_perm_lib.php';
+            if (!ot_has_feature($pdo, $uid, 'ot_edit')) {
+                echo json_encode(['success' => false, 'message' => '您沒有修改訂單的權限']); exit;
+            }
+            $oid = intval($_POST['order_id'] ?? 0);
+            if (!$oid) throw new Exception('未指定訂單ID');
+            echo json_encode(['success' => true, 'data' => qcc_sync_order_from_quote($pdo, $oid, $uid)]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
         }
@@ -2059,6 +2100,13 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $stock_map       = [];   // d_id string => ['qty_single'=>N,'qty_combo'=>N,'locs'=>'…']
     $gear_map        = [];   // d_id_ID int  => gear_spec_str
     $drawing_no_map  = [];   // d_id_ID int  => Drawing_No string
+    // 來源OP單目前的客戶（2026-08-28）：Order_id => ['quote_no','op_client_id','op_client_name','mismatch']
+    // 整頁一次查完（一支 IN 查詢），不要每列各打一次；判定實作在 quote_customer_lib.php
+    $op_cust_map     = [];
+
+    if (!empty($order_list)) {
+        try { $op_cust_map = qcc_orders_op_customer_map($pdo, $order_list); } catch (Throwable $eOpc) { $op_cust_map = []; }
+    }
 
     if (!empty($order_list)) {
         $all_d_ids   = array_values(array_filter(array_unique(array_column($order_list, 'd_id'))));
@@ -2519,6 +2567,20 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     <?php else: ?>
                         <i class="fa fa-unlink" title="尚未綁定ID，點此快速綁定" style="color:#ccc; font-size:10px; margin-left:3px; cursor:pointer;" onclick="openQuickBind('<?= $order['Order_id'] ?>','<?= safe_html($order['Client_name']) ?>','<?= safe_html($order['d_id']) ?>')"></i>
                     <?php endif; ?>
+                    <?php
+                    // ── 與來源OP單的客戶不一致（2026-08-28）────────────────────────────
+                    // 常見情境：用 A 客戶報價，接單後客戶要求改成 B 客戶名稱，報價單那邊改了、
+                    // 這張訂單卻還停在轉單當下的舊客戶。純提示，不自動改資料；有編輯權的人
+                    // 可以點一下同步過來（只動客戶欄位）。沒有來源OP或兩邊一致時什麼都不顯示。
+                    $__opc = $op_cust_map[(int)$order['Order_id']] ?? null;
+                    if ($__opc && !empty($__opc['mismatch'])):
+                    ?>
+                        <div class="op-cust-diff" style="margin-top:2px;font-size:10px;line-height:1.4;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:1px 4px;<?= $can_update ? 'cursor:pointer;' : '' ?>"
+                             title="來源報價單 <?= safe_html($__opc['quote_no']) ?> 目前的客戶是「<?= safe_html($__opc['op_client_name']) ?>」，與本訂單不一致<?= $can_update ? '，點此同步（只改客戶，不動料號/金額/日期）' : '' ?>"
+                             <?= $can_update ? 'onclick="syncQuoteCustomer(' . (int)$order['Order_id'] . ')"' : '' ?>>
+                            <i class="fa fa-exclamation-triangle"></i> OP客戶：<?= safe_html($__opc['op_client_name']) ?><?= $can_update ? ' <i class="fa fa-refresh"></i>' : '' ?>
+                        </div>
+                    <?php endif; ?>
                 </td>
                 <td class="col-part">
                     <?php
@@ -2556,7 +2618,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     <div style="display:flex;align-items:center;gap:3px;flex-wrap:nowrap;min-width:0;">
                         <i class="fa fa-copy copy-icon" title="複製" onclick="copyToClipboard('<?= safe_html($order['d_id']) ?>', this)" style="flex-shrink:0;"></i>
                         <?php if ($_has_files): ?>
-                        <span class="part-link" style="cursor:pointer;" title="<?= safe_html($_file_tip) ?>" onclick="openPartDrawing('<?= safe_html($order['d_id']) ?>')"><?= safe_html($order['d_id']) ?></span>
+                        <span class="part-link" style="cursor:pointer;" title="<?= safe_html($_file_tip) ?>" onclick="openPartDrawing('<?= safe_html($order['d_id']) ?>', <?= (int)($order['d_id_ID'] ?? 0) ?>)"><?= safe_html($order['d_id']) ?></span>
                         <?php else: ?>
                         <span style="color:#555;cursor:default;" onclick="showNoDrawingToast()" title="無圖面／報價／訂單附件／其他附件資料"><?= safe_html($order['d_id']) ?></span>
                         <?php endif; ?>
@@ -3601,6 +3663,8 @@ foreach($dCounts as $c) {
                                             </span>
                                         </div>
                                         <div id="client-suggestions" class="autocomplete-suggestions"></div>
+                                        <!-- 來源OP單客戶不一致提示（2026-08-28）：純提示，不自動改欄位值 -->
+                                        <div id="op-cust-diff-hint" style="display:none;margin-top:3px;font-size:10px;line-height:1.5;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:2px 5px;"></div>
                                     </div>
                                     <div class="col-xs-6 form-group" style="padding:0 5px;position:relative;">
                                         <label class="ctrl-label">料號 <span class="text-danger">*</span>
@@ -6610,17 +6674,19 @@ foreach($dCounts as $c) {
         // --- File Viewing ---
 
         // 開啟圖面（有圖面資料）→ 在新分頁/彈窗中開啟 bom_viewer.php
-        function openProductFiles(pid) { openPartDrawing(pid); }  // 舊名相容
-        function openPartDrawing(pid) {
-            if (!pid) return;
+        function openProductFiles(pid, pk) { openPartDrawing(pid, pk); }  // 舊名相容
+        // pk＝d_setting.d_id（整數 PK）：同名料號可能有多筆主檔（不同客戶／版次），不指名會混在一起
+        function openPartDrawing(pid, pk) {
+            if (!pid && !pk) return;
             var w = screen.availWidth, h = screen.availHeight;
             var pw = Math.min(1400, Math.round(w * 0.85));
             var ph = Math.min(900,  Math.round(h * 0.88));
             var pl = Math.round((w - pw) / 2);
             var pt = Math.round((h - ph) / 2);
+            var q = pk ? ('?pk=' + encodeURIComponent(pk)) : ('?d_id=' + encodeURIComponent(pid));
             window.open(
-                '../../views/pm/bom_viewer.php?d_id=' + encodeURIComponent(pid),
-                'drawing_' + pid,
+                '../../views/pm/bom_viewer.php' + q,
+                'drawing_' + (pk || pid),
                 'width=' + pw + ',height=' + ph + ',left=' + pl + ',top=' + pt
                     + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no'
             );
@@ -6719,9 +6785,24 @@ foreach($dCounts as $c) {
             $('#bom-preview-image').css('transform', `translate(${imgState.x}px, ${imgState.y}px) scale(${imgState.scale})`);
         }
 
+        // 編輯訂單跳窗：客戶欄下方的「與來源OP單客戶不一致」提示（2026-08-28）
+        // 純提示，**不會**自動把欄位改成 OP 的客戶——要不要改由使用者按下同步決定。
+        function renderOpCustDiffHint(data) {
+            var $h = $('#op-cust-diff-hint');
+            if (!$h.length) return;
+            if (!data || !data.op_mismatch) { $h.hide().empty(); return; }
+            var oid  = parseInt(data.Order_id) || 0;
+            var canU = <?= json_encode((bool)$can_update) ?>;   // 與列表徽章用同一個 PHP 權限判定
+            $h.html('<i class="fa fa-exclamation-triangle"></i> 來源 ' + escapeHtml(data.quote_no || 'OP')
+                  + ' 目前的客戶是「<strong>' + escapeHtml(data.op_client_name || '') + '</strong>」，與本訂單不一致'
+                  + (canU && oid ? ' <a href="javascript:void(0)" onclick="syncQuoteCustomer(' + oid + ')" style="color:#DD5138;font-weight:600;">［同步過來］</a>' : ''))
+              .show();
+        }
+
         // --- New Order Modal Functions ---
         function openNewOrderModal() {
             $('#newOrderForm')[0].reset();
+            $('#op-cust-diff-hint').hide().empty();
             $('#hidden_Order_id').val('');
             $('#selected_customer_pk').val('');
             $('#selected_part_pk').val('');
@@ -6783,6 +6864,7 @@ foreach($dCounts as $c) {
 
                 form.find('input[name="OrderNo"]').val(data.OrderNo || '');
                 form.find('input[name="Client_Name"]').val(data.Client_Name_Display || data.Client_Name || '');
+                renderOpCustDiffHint(data);
                 form.find('input[name="Client_OrderNo"]').val(data.Client_OrderNo || '');
                 form.find('input[name="d_id"]').val(data.d_id || '');
                 form.find('input[name="Process"]').val(data.Process || '');
@@ -7123,6 +7205,7 @@ foreach($dCounts as $c) {
 
                 form.find('input[name="OrderNo"]').val(data.OrderNo || '');
                 form.find('input[name="Client_Name"]').val(data.Client_Name_Display || data.Client_Name || '');
+                renderOpCustDiffHint(data);
                 form.find('input[name="Client_OrderNo"]').val(data.Client_OrderNo || '');
                 form.find('input[name="d_id"]').val(data.d_id || '');
                 form.find('input[name="Process"]').val(data.Process || '');
@@ -7991,6 +8074,19 @@ foreach($dCounts as $c) {
             maybePromptAssemblyExpand(orderId, function() {
                 opProcessAssemblyQueue(orderIds, done);
             });
+        }
+
+        // ── 同步來源OP單的客戶（2026-08-28）────────────────────────────────────
+        //    只有「客戶與來源報價單已不一致」的訂單才會出現那顆橘色徽章；按下去把訂單客戶
+        //    改成報價單目前的客戶（只改客戶欄位，不動料號／金額／任何日期），並連動該訂單
+        //    底下的 BOM 客戶名稱。判定與寫入都在後端 quote_customer_lib.php，前端不自己算。
+        function syncQuoteCustomer(orderId) {
+            if (!confirm('要把這張訂單的客戶同步成來源報價單(OP)目前的客戶嗎？\n\n只會修改客戶欄位（及該訂單底下 BOM 的客戶名稱），不會動到料號、金額與任何日期。')) return;
+            $.post('', { action: 'sync_quote_customer', order_id: orderId }, function (res) {
+                if (!res || !res.success) { showOrderAlert((res && res.message) || '同步失敗，請稍後再試'); return; }
+                showToast(res.data && res.data.message ? res.data.message : '已同步');
+                setTimeout(function () { location.reload(); }, 900);
+            }, 'json').fail(function () { showOrderAlert('連線失敗，請稍後再試'); });
         }
 
         function showOrderAlert(msg) {
