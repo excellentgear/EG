@@ -119,6 +119,12 @@ try {
                 <button class="btn btn-warning btn-sm" id="btnBatchConfirm" <?= $canEdit ? '' : 'disabled' ?>>
                     <i class="fa fa-check"></i> 批次轉入正式報價單
                 </button>
+                <?php if ($canEdit): ?>
+                <button class="btn btn-success btn-sm" id="btnBatchAutoBind" style="margin-left:6px;"
+                        title="把目前年份篩選範圍內、所有還沒綁完料號ID的報價單一次處理完">
+                    <i class="fa fa-magic"></i> 一鍵建立並綁定料號（全部）
+                </button>
+                <?php endif; ?>
                 <label style="font-size:12px;margin-left:10px;"><input type="checkbox" id="qtCheckAll"> 全選本頁</label>
                 <span id="qtSelCount" style="font-size:12px;color:#888;margin-left:8px;"></span>
                 <label style="font-size:12px;margin-left:14px;">年份：<select id="qtYearFilter" class="form-control input-sm" style="display:inline-block;width:90px;"><option value="">全部</option></select></label>
@@ -157,6 +163,7 @@ try {
             <li><b>製程「複製上一筆」</b>：一鍵複製同報價單中前一項的製程設定。</li>
             <li><b>製程「套用到本單全部」</b>：把目前這筆的製程設定一次套用到同報價單其餘所有項目（會覆蓋原設定，套用前會再次確認）。</li>
             <li><b>只找到一筆完全相同的料號時直接綁定</b>：按「快速綁定」後，如果搜尋結果只有一筆、而且料號名稱與這一列的料號文字完全一樣，系統直接綁上、不再開跳窗要您按一次確認。唯一的例外是「本客戶底下找不到、退而求其次全範圍找到，而且那一筆已經綁在別的客戶底下」——那會照常開跳窗讓您確認，因為跨客戶綁定會把別家的圖面與檢驗標準一起接過來。</li>
+            <li><b>整批一鍵建立並綁定料號</b>：頁面最上方的「一鍵建立並綁定料號（全部）」會把<b>目前年份篩選範圍內</b>所有還沒綁完料號的報價單一次處理完（規則與下方單張的完全相同），做完會列出處理了幾張、新建與沿用各幾筆、哪些因為多筆同名沒綁、哪些整張跳過（例如還沒設定客戶）。<b>刻意不做成一進頁面就自動執行</b>——這個動作會在料號主檔建立新料號、建立後不會自動刪除，每次開頁自動跑太危險（例如某張單客戶設錯，會一口氣建出一批掛錯客戶的料號），所以固定要按一次並確認。</li>
             <li><b>整張單一鍵建立並綁定料號</b>：料號ID還沒綁完的報價單，卡片右上角有「一鍵建立並綁定料號」。按下去會把這張單<b>所有</b>未綁定的項目一次處理完：依每一筆的料號文字先找既有料號（先找本單客戶的，再找沒有綁客戶的），<b>都找不到才以本單客戶新建一筆</b>再綁上——跟跳窗裡「找不到？新增此料號（綁此客戶）」同一條規則。同一張單裡重複出現的料號只會建立一筆；做完會列出新建了哪些、沿用了哪些。<b>比對用的是「完全同名」而不是模糊比對，所以不會撿到相似料號</b>；萬一料號主檔裡有多筆完全同名的登錄（舊資料有這種重複），系統無法判斷該用哪一筆，會<b>保持該筆未綁定並列出來</b>，請改用那一列的「快速綁定」自己挑。<b>這張單必須先設定客戶</b>（新建的料號要綁到客戶），還沒設定會擋下並提示先用「切換」設定。</li>
             <li><b>綁定料號後自動偵測同料號</b>：綁定或新增料號時，系統會找出「尚待確認」報價單中同料號文字、同客戶、還沒綁定的其他項目（常見於同一張報價單內同料號不同數量級距），跳窗列出讓您勾選是否一併綁定，不用逐筆重複搜尋。</li>
         </ul>
@@ -922,6 +929,37 @@ function confirmTransferOne(quoteId, quoteNo) {
     if (!confirm('確定要將報價單 ' + quoteNo + ' 轉入正式報價單嗎？轉入後將從本頁移除。')) return;
     doConfirmTransfer([quoteId]);
 }
+
+// 頁面最上方的一鍵：把目前年份篩選範圍內所有還沒綁完料號的報價單一次做完。
+// 刻意不做成「一進頁面自動跑」——這個動作會在料號主檔建立新料號，是改不回來的，
+// 每次開頁就自動建立料號太危險（例如某張單的客戶設錯，會一口氣建出一批掛錯客戶的料號）。
+$('#btnBatchAutoBind').on('click', function() {
+    const rows = getFilteredData().filter(function(r){ return Number(r.items_no_dsetting) > 0; });
+    if (!rows.length) { alert('目前篩選範圍內沒有需要綁定料號的報價單。'); return; }
+    const noCust = rows.filter(function(r){ return !r.client_id; });
+    const items  = rows.reduce(function(a, r){ return a + Number(r.items_no_dsetting); }, 0);
+    const scope  = $('#qtYearFilter').val() ? ($('#qtYearFilter').val() + ' 年') : '全部年份';
+    let msg = '將對「' + scope + '」範圍內的 ' + rows.length + ' 張報價單、共 ' + items + ' 筆未綁定項目自動建立並綁定料號。\n\n';
+    msg += '處理規則：\n・依料號文字先找既有料號（先找該單客戶的，再找沒綁客戶的）\n・都找不到才以該單客戶新建一筆\n・完全同名的既有料號超過一筆時不自動綁，會列出來\n';
+    if (noCust.length) msg += '\n其中 ' + noCust.length + ' 張還沒設定客戶，會跳過不處理。\n';
+    msg += '\n這會在料號主檔建立新料號（建立後不會自動刪除），確定要執行嗎？';
+    if (!confirm(msg)) return;
+
+    const $b = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 處理中，請稍候…');
+    const ids = rows.map(function(r){ return Number(r.quote_id); });
+    $.post(API_URL, { action: 'quick_autobind_quote', quote_ids: JSON.stringify(ids) }, function(res) {
+        $b.prop('disabled', false).html('<i class="fa fa-magic"></i> 一鍵建立並綁定料號（全部）');
+        if (!res.success) { alert('自動建立並綁定失敗：' + res.message); return; }
+        let m = '已處理 ' + res.quotes + ' 張報價單，綁定 ' + res.bound + ' 筆項目。';
+        if (res.created)   m += '\n新建料號 ' + res.created + ' 筆';
+        if (res.reused)    m += '\n沿用既有料號 ' + res.reused + ' 筆';
+        if (res.skipped)   m += '\n略過 ' + res.skipped + ' 筆（料號欄是空的）';
+        if (res.ambiguous) m += '\n\n有 ' + res.ambiguous + ' 筆因為主檔裡存在多筆完全同名的料號而沒有自動綁定，\n請用該列的「快速綁定」自行挑選：\n' + res.ambiguous_nos.join('、');
+        if (res.issue_count) m += '\n\n以下 ' + res.issue_count + ' 張沒有處理：\n' + res.issues.map(function(i){ return '・' + i.quote_no + '：' + i.reason; }).join('\n');
+        alert(m);
+        loadPendingList();
+    });
+});
 
 $('#btnBatchConfirm').on('click', function() {
     const ids = $('.qt-row-chk:checked').map(function(){ return Number($(this).val()); }).get();

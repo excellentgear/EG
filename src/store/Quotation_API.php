@@ -1461,9 +1461,19 @@ try {
         // 等同於在「快速綁定料號ID」跳窗逐筆按「找不到？新增此料號（綁此客戶）」，只是一次做完整張單：
         // 依料號文字先找既有料號（先找本單客戶的，再找沒綁客戶的），都找不到才以本單客戶新建一筆再綁上。
         // 刻意不去撿「同料號但屬於別的客戶」那一筆——那是跨客戶的判斷，自動撿會把別家的圖面/檢驗標準接到這張單上。
+        // 可以只做一張（quote_id）或一次做多張（quote_ids，JSON 陣列＝頁面最上方那顆一鍵按鈕）。
+        // 多張模式下，個別報價單不能處理（沒設客戶、料號欄全空…）時只記錄原因繼續做下一張，
+        // 不整批中斷——不然一張沒設客戶就會讓其餘兩百多張都白跑。
         case 'quick_autobind_quote': {
-            $quote_id = intval($_POST['quote_id'] ?? 0);
-            if (!$quote_id) throw new Exception('缺少報價單');
+            $multi = isset($_POST['quote_ids']);
+            if ($multi) {
+                $decoded = json_decode($_POST['quote_ids'], true);
+                $quoteIds = is_array($decoded) ? array_values(array_unique(array_map('intval', $decoded))) : [];
+                $quoteIds = array_values(array_filter($quoteIds));
+            } else {
+                $quoteIds = array_filter([intval($_POST['quote_id'] ?? 0)]);
+            }
+            if (!$quoteIds) throw new Exception('缺少報價單');
 
             // 權限：本動作會建立料號主檔，比照本頁編輯權限再擋一次（鐵律8）；
             // 尚無任何權限記錄時視為全員開放，與本頁 $canEdit 的既有慣例一致
@@ -1476,22 +1486,7 @@ try {
             }
 
             $qq = $pdo->prepare("SELECT quote_no, client_id, pending_review FROM quotation_list WHERE quote_id=?");
-            $qq->execute([$quote_id]);
-            $q = $qq->fetch(PDO::FETCH_ASSOC);
-            if (!$q) throw new Exception('找不到報價單');
-            if (!$q['pending_review']) throw new Exception('此報價單已是正式資料，請至報價單管理頁編輯');
-            $clientId = trim((string)$q['client_id']);
-            if ($clientId === '') throw new Exception('這張報價單還沒有設定客戶，無法自動建立料號（新建的料號要綁到客戶）。請先用卡片上的「切換」設定客戶後再試。');
-
             $iq = $pdo->prepare("SELECT item_id, product_id FROM quotation_item WHERE quote_id=? AND d_setting_d_id IS NULL ORDER BY item_id");
-            $iq->execute([$quote_id]);
-            $items = $iq->fetchAll(PDO::FETCH_ASSOC);
-            if (!$items) throw new Exception('這張報價單的料號ID已經全部綁定完成，不需要再自動建立');
-            // 料號欄本身是空的就沒有名稱可以拿來建料號；全部都空的話直接講清楚，
-            // 不要回一句「已綁定 0 筆」讓人以為按了沒作用
-            $hasText = false;
-            foreach ($items as $it) { if (trim((string)$it['product_id']) !== '') { $hasText = true; break; } }
-            if (!$hasText) throw new Exception('這張報價單還沒綁定的 ' . count($items) . ' 筆項目「料號」欄都是空的，沒有名稱可以用來建立料號。請先到報價單管理頁補上料號。');
 
             // 一律「完全同名」比對（不是 LIKE 模糊比對），所以不會撿到相似料號；
             // 但 d_setting 裡實際存在同料號同客戶重複登錄的舊資料，撈 2 筆就能判斷有沒有超過一個候選——
@@ -1501,42 +1496,94 @@ try {
             $insPart  = $pdo->prepare("INSERT INTO d_setting (D_Setting_Id,Type,Customer_Id,Created_By,Created_At) VALUES (?,'N',?,?,NOW())");
             $bind     = $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=?, product_id=?, updated_at=NOW() WHERE item_id=?");
 
-            $cache = []; $bound = 0; $created = 0; $reused = 0; $skipped = 0; $ambiguous = 0;
+            $bound = 0; $created = 0; $reused = 0; $skipped = 0; $ambiguous = 0;
             $createdNos = []; $reusedNos = []; $ambiguousNos = [];
-            $pdo->beginTransaction();
-            try {
-                foreach ($items as $it) {
-                    $no = trim((string)$it['product_id']);
-                    if ($no === '') { $skipped++; continue; }   // 連料號文字都是空的，沒有東西可以建立
-                    if (array_key_exists($no, $cache) && $cache[$no] === null) { continue; }   // 這個料號先前已判定為多筆候選
-                    if (!isset($cache[$no])) {
-                        $findCust->execute([$no, $clientId]);
-                        $hit = $findCust->fetchAll(PDO::FETCH_COLUMN);
-                        if (!$hit) { $findNull->execute([$no]); $hit = $findNull->fetchAll(PDO::FETCH_COLUMN); }
-                        if (count($hit) > 1) {
-                            // 完全同名的既有料號不只一筆 → 不自動綁，這一筆維持未綁定
-                            $cache[$no] = null; $ambiguous++; $ambiguousNos[] = $no;
-                            continue;
-                        }
-                        if (!$hit) {
-                            $insPart->execute([$no, $clientId, $user_id]);
-                            $cache[$no] = (int)$pdo->lastInsertId();
-                            $created++; $createdNos[] = $no;
-                        } else {
-                            $cache[$no] = (int)$hit[0];
-                            $reused++; $reusedNos[] = $no;
-                        }
-                    }
-                    $bind->execute([$cache[$no], $no, $it['item_id']]);
-                    $bound++;
-                }
-                $pdo->commit();
-            } catch (Exception $e) { $pdo->rollBack(); throw $e; }
+            $doneQuotes = 0; $issues = []; $firstQuoteNo = '';
 
-            $response = ['success' => true, 'quote_no' => $q['quote_no'], 'bound' => $bound,
+            foreach ($quoteIds as $quote_id) {
+                $qq->execute([$quote_id]);
+                $q = $qq->fetch(PDO::FETCH_ASSOC);
+                if (!$q) {
+                    if (!$multi) throw new Exception('找不到報價單');
+                    $issues[] = ['quote_no' => '#' . $quote_id, 'reason' => '找不到報價單'];
+                    continue;
+                }
+                if ($firstQuoteNo === '') $firstQuoteNo = $q['quote_no'];
+                if (!$q['pending_review']) {
+                    if (!$multi) throw new Exception('此報價單已是正式資料，請至報價單管理頁編輯');
+                    $issues[] = ['quote_no' => $q['quote_no'], 'reason' => '已是正式資料'];
+                    continue;
+                }
+                $clientId = trim((string)$q['client_id']);
+                if ($clientId === '') {
+                    if (!$multi) throw new Exception('這張報價單還沒有設定客戶，無法自動建立料號（新建的料號要綁到客戶）。請先用卡片上的「切換」設定客戶後再試。');
+                    $issues[] = ['quote_no' => $q['quote_no'], 'reason' => '尚未設定客戶'];
+                    continue;
+                }
+
+                $iq->execute([$quote_id]);
+                $items = $iq->fetchAll(PDO::FETCH_ASSOC);
+                if (!$items) {
+                    if (!$multi) throw new Exception('這張報價單的料號ID已經全部綁定完成，不需要再自動建立');
+                    continue;   // 多張模式下這不是問題，只是這張本來就綁完了
+                }
+                // 料號欄本身是空的就沒有名稱可以拿來建料號；全部都空的話直接講清楚，
+                // 不要回一句「已綁定 0 筆」讓人以為按了沒作用
+                $hasText = false;
+                foreach ($items as $it) { if (trim((string)$it['product_id']) !== '') { $hasText = true; break; } }
+                if (!$hasText) {
+                    if (!$multi) throw new Exception('這張報價單還沒綁定的 ' . count($items) . ' 筆項目「料號」欄都是空的，沒有名稱可以用來建立料號。請先到報價單管理頁補上料號。');
+                    $issues[] = ['quote_no' => $q['quote_no'], 'reason' => '未綁定項目的料號欄都是空的'];
+                    continue;
+                }
+
+                // 每一張各自一個 transaction：一張出錯不會把已經處理好的前面幾張一起回滾
+                $cache = [];
+                $pdo->beginTransaction();
+                try {
+                    foreach ($items as $it) {
+                        $no = trim((string)$it['product_id']);
+                        if ($no === '') { $skipped++; continue; }   // 連料號文字都是空的，沒有東西可以建立
+                        if (array_key_exists($no, $cache) && $cache[$no] === null) { continue; }   // 這個料號先前已判定為多筆候選
+                        if (!isset($cache[$no])) {
+                            $findCust->execute([$no, $clientId]);
+                            $hit = $findCust->fetchAll(PDO::FETCH_COLUMN);
+                            if (!$hit) { $findNull->execute([$no]); $hit = $findNull->fetchAll(PDO::FETCH_COLUMN); }
+                            if (count($hit) > 1) {
+                                // 完全同名的既有料號不只一筆 → 不自動綁，這一筆維持未綁定
+                                $cache[$no] = null; $ambiguous++;
+                                if (!in_array($no, $ambiguousNos, true)) $ambiguousNos[] = $no;
+                                continue;
+                            }
+                            if (!$hit) {
+                                $insPart->execute([$no, $clientId, $user_id]);
+                                $cache[$no] = (int)$pdo->lastInsertId();
+                                $created++; $createdNos[] = $no;
+                            } else {
+                                $cache[$no] = (int)$hit[0];
+                                $reused++; $reusedNos[] = $no;
+                            }
+                        }
+                        $bind->execute([$cache[$no], $no, $it['item_id']]);
+                        $bound++;
+                    }
+                    $pdo->commit();
+                    $doneQuotes++;
+                } catch (Exception $e) {
+                    $pdo->rollBack();
+                    if (!$multi) throw $e;
+                    $issues[] = ['quote_no' => $q['quote_no'], 'reason' => $e->getMessage()];
+                }
+            }
+
+            // 名稱清單只回前 50 個，兩百多張一次做完時不要把整包塞進提示訊息
+            $cut = fn($a) => array_slice($a, 0, 50);
+            $response = ['success' => true, 'multi' => $multi, 'quote_no' => $firstQuoteNo,
+                         'quotes' => $doneQuotes, 'bound' => $bound,
                          'created' => $created, 'reused' => $reused, 'skipped' => $skipped,
-                         'ambiguous' => $ambiguous, 'created_nos' => $createdNos,
-                         'reused_nos' => $reusedNos, 'ambiguous_nos' => $ambiguousNos];
+                         'ambiguous' => $ambiguous, 'created_nos' => $cut($createdNos),
+                         'reused_nos' => $cut($reusedNos), 'ambiguous_nos' => $cut($ambiguousNos),
+                         'issues' => array_slice($issues, 0, 50), 'issue_count' => count($issues)];
             break;
         }
 
