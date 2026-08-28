@@ -1371,7 +1371,12 @@ try {
                        ql.total_amount,
                        COUNT(qi.item_id) AS item_count,
                        SUM(qi.d_setting_d_id IS NULL) AS items_no_dsetting,
-                       SUM(NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)) AS items_no_process
+                       -- 「沒設製程」＝既沒有攤平的 process_no、也沒有點選過的子標籤(process_notes)。
+                       -- 一定要一起看 process_notes：有 31 個啟用中的子標籤（磨銳／鍍TIN／熱處理／刀具類…）
+                       -- 本來就沒有綁定 process_no，只看 map 會把「已經點好標籤」的項目判成尚未設定，
+                       -- 畫面顯示「製程缺 N 筆」而且永遠轉不進正式報價單。
+                       SUM(NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)
+                           AND (qi.process_notes IS NULL OR qi.process_notes = '')) AS items_no_process
                 FROM quotation_list ql
                 LEFT JOIN quotation_item qi ON qi.quote_id = ql.quote_id
                 WHERE ql.pending_review = 1
@@ -1661,7 +1666,9 @@ try {
                 $sql = "SELECT qi.item_id FROM quotation_item qi
                         JOIN quotation_list ql ON ql.quote_id = qi.quote_id
                         WHERE qi.quote_id IN ($qph) AND ql.pending_review = 1";
-                if ($onlyUnset) $sql .= " AND NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)";
+                // 判定同 get_pending_transfer_list：沒有 process_no 也沒有 process_notes 才算「還沒設定製程」
+                if ($onlyUnset) $sql .= " AND NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)
+                                         AND (qi.process_notes IS NULL OR qi.process_notes = '')";
                 $st = $pdo->prepare($sql);
                 $st->execute($qids);
                 $ids = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
@@ -1734,7 +1741,8 @@ try {
             $missChk = $pdo->prepare("
                 SELECT ql.quote_no,
                        SUM(qi.d_setting_d_id IS NULL) AS miss_ds,
-                       SUM(NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)) AS miss_pc
+                       SUM(NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)
+                           AND (qi.process_notes IS NULL OR qi.process_notes = '')) AS miss_pc
                 FROM quotation_item qi
                 JOIN quotation_list ql ON ql.quote_id = qi.quote_id
                 WHERE qi.quote_id IN ($ph) AND ql.pending_review = 1
