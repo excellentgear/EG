@@ -673,7 +673,9 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
         }
 
         case 'quote_to_order': {
-            $cond = "DATE_FORMAT(q.quote_date,'%Y-%m')=?";
+            // pending_review=1 ＝「報價單快速轉移」頁尚待確認補件的匯入舊資料，還不是正式報價單；
+            // 算進分母會憑空把報價轉訂單率壓下來
+            $cond = "DATE_FORMAT(q.quote_date,'%Y-%m')=? AND q.pending_review=0";
             if ((int)kpi_as_pv($params, 'exclude_draft', 1) === 1) $cond .= " AND q.is_draft=0";
             $st = $db->prepare("SELECT COUNT(*) FROM quotation_list q WHERE $cond");
             $st->execute([$ym]);

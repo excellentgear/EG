@@ -1892,9 +1892,12 @@ function prj_doc_have_map(PDO $db, array $dsPks): array
             $qcond[] = 'a.category_id IN (' . implode(',', $catIds) . ')';
             foreach ($dsPks as $pk) {
                 if (!empty($have['ext_doc'][$pk])) continue;
+                // 尚待確認的匯入報價單（pending_review=1）還不是正式報價單，其附件不算外來文件
                 $st = $db->prepare("SELECT 1 FROM quotation_attachments a
                                     JOIN quotation_item qi ON qi.quote_id=(SELECT quote_id FROM quotation_list WHERE quote_no=a.quote_no)
-                                    WHERE a.status='active' AND (" . implode(' OR ', $qcond) . ")
+                                    WHERE a.status='active'
+                                      AND EXISTS (SELECT 1 FROM quotation_list qlp WHERE qlp.quote_no=a.quote_no AND qlp.pending_review=0)
+                                      AND (" . implode(' OR ', $qcond) . ")
                                       AND ((a.linked_parts IS NULL AND qi.d_setting_d_id=?)
                                            OR (a.linked_parts IS NOT NULL AND JSON_CONTAINS(a.linked_parts, JSON_QUOTE(?))))
                                     LIMIT 1");

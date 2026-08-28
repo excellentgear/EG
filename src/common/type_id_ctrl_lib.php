@@ -281,7 +281,10 @@ function type_id_ctrl_fetch_ext_docs_for_part(PDO $db, int $dsPk): array {
                        ) AS origin_process
                 FROM quotation_attachments a
                 JOIN quotation_item qi ON qi.quote_id = (SELECT quote_id FROM quotation_list WHERE quote_no=a.quote_no)
-                WHERE a.status='active' AND " . $catCond('a.category_ids', 'a.category_id') . "
+                /* 尚待確認的匯入報價單（pending_review=1）還不是正式報價單，其附件不列入外來文件 */
+                WHERE a.status='active'
+                  AND EXISTS (SELECT 1 FROM quotation_list qlp WHERE qlp.quote_no=a.quote_no AND qlp.pending_review=0)
+                  AND " . $catCond('a.category_ids', 'a.category_id') . "
                   AND ((a.linked_parts IS NULL AND qi.d_setting_d_id = ?)
                        OR (a.linked_parts IS NOT NULL AND JSON_CONTAINS(a.linked_parts, JSON_QUOTE(?))))";
         $st = $db->prepare($sql); $st->execute([$dsPk, $dsPk, $dsPk, $partNo]);
@@ -585,13 +588,17 @@ function type_id_ctrl_find_missing_parts(PDO $db): array {
         $add($db->query("SELECT qi.d_setting_d_id AS d_id, COUNT(*) c
                           FROM quotation_attachments a
                           JOIN quotation_item qi ON qi.quote_id=(SELECT quote_id FROM quotation_list WHERE quote_no=a.quote_no)
-                          WHERE a.status='active' AND a.linked_parts IS NULL AND " . $catCond('a.category_ids', 'a.category_id') . "
+                          WHERE a.status='active' AND a.linked_parts IS NULL
+                            AND EXISTS (SELECT 1 FROM quotation_list qlp WHERE qlp.quote_no=a.quote_no AND qlp.pending_review=0)
+                            AND " . $catCond('a.category_ids', 'a.category_id') . "
                           GROUP BY qi.d_setting_d_id")->fetchAll(PDO::FETCH_ASSOC));
 
         $add($db->query("SELECT ds.d_id AS d_id, COUNT(*) c
                           FROM quotation_attachments a
                           JOIN d_setting ds ON JSON_CONTAINS(a.linked_parts, JSON_QUOTE(ds.D_Setting_Id))
-                          WHERE a.status='active' AND a.linked_parts IS NOT NULL AND " . $catCond('a.category_ids', 'a.category_id') . "
+                          WHERE a.status='active' AND a.linked_parts IS NOT NULL
+                            AND EXISTS (SELECT 1 FROM quotation_list qlp WHERE qlp.quote_no=a.quote_no AND qlp.pending_review=0)
+                            AND " . $catCond('a.category_ids', 'a.category_id') . "
                           GROUP BY ds.d_id")->fetchAll(PDO::FETCH_ASSOC));
     }
 

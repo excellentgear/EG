@@ -254,7 +254,8 @@ function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
                    ANY_VALUE(COALESCE(u.user_cname, a.uploaded_by, '')) AS uploaded_by, a.quote_no,
                    ANY_VALUE(ql.client_id) AS quote_client
             FROM quotation_attachments a
-            JOIN quotation_list ql ON ql.quote_no = a.quote_no
+            /* 尚待確認的匯入報價單（pending_review=1）還不是正式報價單，其附件不進 AS9100 外來文件清單 */
+            JOIN quotation_list ql ON ql.quote_no = a.quote_no AND ql.pending_review = 0
             JOIN quotation_item qi ON qi.quote_id = ql.quote_id
             JOIN d_setting ds ON ds.d_id = qi.d_setting_d_id
             LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
@@ -275,7 +276,8 @@ function extdoc_fetch_rows_raw(PDO $db, array $opt): array {
                    a.category_ids, COALESCE(a.category_id,'') AS category_id_single, a.uploaded_at,
                    COALESCE(u.user_cname, a.uploaded_by, '') AS uploaded_by, a.quote_no, ql.client_id AS quote_client
             FROM quotation_attachments a
-            JOIN quotation_list ql ON ql.quote_no = a.quote_no
+            /* 同上：尚待確認的匯入報價單不列入 */
+            JOIN quotation_list ql ON ql.quote_no = a.quote_no AND ql.pending_review = 0
             LEFT JOIN user u ON u.id = CAST(a.uploaded_by AS UNSIGNED)
             WHERE a.status='active' AND a.linked_parts IS NOT NULL AND " . $catCond('a.category_ids', 'a.category_id');
     $args = [];
