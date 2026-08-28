@@ -1072,7 +1072,7 @@ function renderListRows(rows){
             html += '<tr>'
                 + '<td><input type="checkbox" class="row-ck" data-eg-skip="1" data-id="'+r.id+'" '+(SEL_IDS[r.id]?'checked':'')+'></td>'
                 + '<td>'+esc(r.doc_no)+'</td>'
-                + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):'')+'</td>'
+                + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL, null, r.part_d_id):'')+'</td>'
                 // 規格描述空白時明顯標出來，一眼看得出哪幾筆還沒建立（2026-08-18 使用者要求）
                 + '<td class="t-left">'+(r.spec_desc
                     ? (r.spec_from_master
@@ -2007,7 +2007,7 @@ window.openPartMaster = function(){
 function openPartDrawing(){
     // part_viewer/bom_viewer 用「料號字串」(D_Setting_Id)查表，不是 d_setting.d_id 數字主鍵
     var partNo = $('#fPartNo').val();
-    if (partNo) EGPartPicker.openViewer(partNo, VIEWER_URL);
+    if (partNo) EGPartPicker.openViewer(partNo, VIEWER_URL, $('#fPartDId').val());
 }
 window.saveDeptDefaults = function(){
     var depts = $('#fDeptChecks .dept-ck:checked').map(function(){ return $(this).val(); }).get();
@@ -2400,7 +2400,7 @@ function buildPrintDoc(res){
             + '@page{margin:8mm 5mm 14mm;size:A4 landscape;'
             + (res.as_doc_no ? " @bottom-right{ content:'"+String(res.as_doc_no).replace(/['\\]/g,'')+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
             + '}';
-    return {css:css, body:body, partNo:d.part_no||''};
+    return {css:css, body:body, partNo:d.part_no||'', partDId:d.part_d_id||0};
 }
 /* 列印前完整性檢查（2026-08-18 使用者要求）：列印出去就是要歸檔的正式品質紀錄，缺欄位比版面難看
    更嚴重。逐一列出「哪一項次的哪個欄位」還沒填，讓人直接回去補；但不強制擋死——舊資料／特殊情況
@@ -2484,11 +2484,13 @@ function doPrintDoc(res){
 /* ---------- 檢視（唯讀，2026-08-13使用者要求第8段）：跟列印版面完全一樣，塞進本頁iframe跳窗顯示
    （不觸發列印動作），另外提供「評級對照表說明」（沿用既有ratingInfoMask）跟「開圖」按鈕 ---------- */
 var VIEW_PART_NO = '';
+var VIEW_PART_PK = 0;   // d_setting.d_id：同名料號有多筆主檔時要指名是哪一筆
 function viewDoc(id){
     $.getJSON(API, {action:'print_get', id:id}, function(res){
         if (!res.success){ alert(res.message||'載入失敗'); return; }
         var pd = buildPrintDoc(res);
         VIEW_PART_NO = pd.partNo;
+        VIEW_PART_PK = pd.partDId || 0;
         $('#btnViewDrawing').toggle(!!VIEW_PART_NO);
         openMask('viewMask');
         var doc = document.getElementById('viewFrame').contentWindow.document;
@@ -2497,7 +2499,7 @@ function viewDoc(id){
         doc.close();
     });
 }
-window.openViewDrawing = function(){ if (VIEW_PART_NO) EGPartPicker.openViewer(VIEW_PART_NO, VIEWER_URL); };
+window.openViewDrawing = function(){ if (VIEW_PART_NO || VIEW_PART_PK) EGPartPicker.openViewer(VIEW_PART_NO, VIEWER_URL, VIEW_PART_PK); };
 
 /* ---------- AS 文件綁定 ---------- */
 function renderAsDocLabel(){

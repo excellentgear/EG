@@ -687,7 +687,7 @@ function rowToTr(item, maxProc, priceMap){
     var bomTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.bom||'')+'" title="雙擊帶入BOM/料號篩選"><figure class="'+cc+'"></figure><span class="ocq-nowrap">'+esc(item.bom)+'</span>'+closedInfo+'</td>';
     // 料號文字本身＝點一下開圖面查閱（bom_viewer）；文字以外的空白處維持雙擊帶入篩選
     var didText = item.d_id
-        ? '<span class="ocq-part-link" data-part="'+encodeURIComponent(item.d_id)+'" title="點擊開啟圖面查閱">'+esc(item.d_id)+'</span>'
+        ? '<span class="ocq-part-link" data-part="'+encodeURIComponent(item.d_id)+'" data-pk="'+(parseInt(item.d_setting_id,10)||0)+'" title="點擊開啟圖面查閱">'+esc(item.d_id)+'</span>'
         : '';
     var didTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.d_id||'')+'" title="雙擊帶入BOM/料號篩選">'+didText+priceHtml+'</td>';
     var tds = custTd + bomTd + didTd
@@ -814,21 +814,23 @@ $('#ocqTbody').on('dblclick', '.ocq-fillable', function(){
 // 點料號 → 開啟圖面查閱（bom_viewer.php?d_id=…）
 $('#ocqTbody').on('click', '.ocq-part-link', function(e){
     e.stopPropagation();
-    openPartDrawing(decodeURIComponent($(this).attr('data-part') || ''));
+    openPartDrawing(decodeURIComponent($(this).attr('data-part') || ''), $(this).attr('data-pk') || 0);
 });
 // 料號文字上的雙擊不再連帶觸發「帶入篩選」（避免同時開窗又改篩選條件）
 $('#ocqTbody').on('dblclick', '.ocq-part-link', function(e){ e.stopPropagation(); });
 
 // 開啟圖面查閱視窗（同一料號重複點沿用同一個視窗，不會開一堆）
-function openPartDrawing(pid){
-    if (!pid) return;
+// pk＝d_setting.d_id（整數 PK）：同名料號可能有多筆主檔（不同客戶／版次），不指名會混在一起
+function openPartDrawing(pid, pk){
+    if (!pid && !pk) return;
     var w = screen.availWidth, h = screen.availHeight;
     var pw = Math.min(1400, Math.round(w * 0.85));
     var ph = Math.min(900,  Math.round(h * 0.88));
     var pl = Math.round((w - pw) / 2);
     var pt = Math.round((h - ph) / 2);
-    window.open('bom_viewer.php?d_id=' + encodeURIComponent(pid),
-        'bom_dv_' + pid,
+    var q = pk ? ('?pk=' + encodeURIComponent(pk)) : ('?d_id=' + encodeURIComponent(pid));
+    window.open('bom_viewer.php' + q,
+        'bom_dv_' + (pk || pid),
         'width='+pw+',height='+ph+',left='+pl+',top='+pt
             + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
 }

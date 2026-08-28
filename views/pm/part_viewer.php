@@ -158,15 +158,17 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
 if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
     header('Content-Type: application/json');
     try {
-        // 傳入的是文字料號（order_track.d_id），需先查 d_setting 取整數 PK
+        // 歸戶鍵＝d_setting.d_id（整數 PK）。用料號文字會把同名的別家主檔（不同客戶／版次）
+        // 一起撈進來＝附件混在一起，這是使用者 2026-08-28 回報的問題。
+        // 舊呼叫端只有文字時由 part_scope_lib 挑最新一筆，其餘由畫面頂端的切換器提供。
         $partNo = trim($_POST['d_id'] ?? '');
-        if (!$partNo) throw new Exception('缺少料號');
+        $pk     = (int)($_POST['pk'] ?? 0);
+        if (!$partNo && $pk <= 0) throw new Exception('缺少料號');
         include_once '../../src/common/DBConnection.php';
-        $pdo2 = (new DBConnection())->getPDO();
-        // 找出所有符合此料號的 d_setting.d_id（可能有多筆，不同客戶）
-        $dsStmt = $pdo2->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
-        $dsStmt->execute([$partNo]);
-        $dids = $dsStmt->fetchAll(PDO::FETCH_COLUMN);
+        require_once __DIR__ . '/../../src/common/part_scope_lib.php';
+        $pdo2  = (new DBConnection())->getPDO();
+        $scope = eg_part_scope_resolve($pdo2, $pk, $partNo);
+        $dids  = $scope['dids'];
         if (empty($dids)) {
             echo json_encode(['success' => true, 'attachments' => []]);
             exit;
@@ -243,9 +245,20 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
 // ── 參數：?d_id=…（必要）＆ ?bom=…（指定的單一 BOM 名稱）─────────────────
 $d_id = trim($_GET['d_id'] ?? '');
 $bom  = trim($_GET['bom']  ?? '');
-if ($d_id === '') {
+$pk   = (int)($_GET['pk'] ?? 0);   // d_setting.d_id（整數 PK）＝精確指名要看哪一筆料號主檔
+if ($d_id === '' && $pk <= 0) {
     die('缺少 d_id 參數');
 }
+// 料號主檔歸戶（唯一實作 src/common/part_scope_lib.php）：同一個料號文字可能對到多筆主檔
+// （不同客戶／版次），一律鎖定其中一筆，其餘由畫面頂端的切換器提供。
+$partScope = ['pk'=>0, 'part_no'=>$d_id, 'exact'=>false, 'candidates'=>[]];
+try {
+    include_once __DIR__ . '/../../src/common/DBConnection.php';
+    require_once __DIR__ . '/../../src/common/part_scope_lib.php';
+    $pdoScope  = (new DBConnection())->getPDO();
+    $partScope = eg_part_scope_resolve($pdoScope, $pk, $d_id);
+    if ($partScope['part_no'] !== '') $d_id = $partScope['part_no'];
+} catch (Exception $e) { /* 解析失敗就退回文字模式，不要整頁死掉 */ }
 $mode = 'did';
 $did_safe = htmlspecialchars($d_id, ENT_QUOTES, 'UTF-8');
 $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
@@ -268,6 +281,11 @@ $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
             width: 280px; min-width: 180px; overflow-y: auto; height: 100vh;
             background: #fff; border-right: 1px solid #ddd; flex-shrink: 0;
         }
+        /* 料號主檔切換器（同名料號有多筆不同客戶／版次時才出現）；配色走 ai-rules/10 暖色系 */
+        #part-scope-bar { padding:6px 8px; background:#FFF3E2; border-bottom:1px solid #E4D3BC; font-size:11px; color:#7a4b12; }
+        #part-scope-bar .psb-title { font-weight:bold; margin-bottom:4px; display:block; }
+        #part-scope-bar select { width:100%; font-size:11px; height:26px; padding:2px 4px;
+                                 border:1px solid #E4D3BC; border-radius:3px; background:#fff; color:#5a3a10; }
         #file-panel-heading {
             padding: 9px 12px; font-weight: bold; font-size: 13px; color: #555;
             background: #f7f7f7; border-bottom: 1px solid #e0e0e0; word-break: break-all;
@@ -339,6 +357,8 @@ $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
     <!-- 左側：檔案清單 -->
     <div id="file-panel">
         <div id="file-panel-heading"><i class="fa fa-folder-open-o"></i> 料號 <?= $did_safe ?><?php if ($bom_safe !== ''): ?> <span style="color:#999; font-weight:normal;">/ BOM <?= $bom_safe ?></span><?php endif; ?></div>
+        <!-- 同一個料號文字對到多筆主檔（不同客戶／版次）時讓使用者自己選；禁止混在一起顯示 -->
+        <div id="part-scope-bar" style="display:none;"></div>
         <div id="bom-file-list">
             <p class="text-center" style="margin-top:24px; color:#999;">
                 <i class="fa fa-spinner fa-spin"></i> 載入中...
@@ -435,7 +455,20 @@ $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
 <script>
 var _bom        = <?= json_encode($bom) ?>;    // 指定的單一 BOM 名稱
 var _mode       = 'did';
-var _d_id       = <?= json_encode($d_id) ?>;
+var _d_id       = <?= json_encode($d_id) ?>;   // 料號文字（僅供顯示）
+// 料號主檔歸戶：_pk 才是真正的歸戶鍵（d_setting.d_id）；_partCands 是同名料號的其他主檔
+var _pk         = <?= (int)($partScope['pk'] ?? 0) ?>;
+var _partCands  = <?php
+    $__cands = $partScope['candidates'] ?? [];
+    $__cnt   = [];
+    if (count($__cands) > 1 && isset($pdoScope)) {
+        try { $__cnt = eg_part_scope_counts($pdoScope, $__cands); } catch (Exception $e) { $__cnt = []; }
+    }
+    echo json_encode(array_map(function($c) use ($__cnt) {
+        return ['d_id'  => $c['d_id'],
+                'label' => eg_part_scope_label($c, $__cnt[$c['d_id']] ?? null)];
+    }, $__cands), JSON_UNESCAPED_UNICODE);
+?>;
 var _sc         = 1, _tx = 0, _ty = 0;
 var _currentType = '';
 var _currentPath = '';
@@ -670,6 +703,34 @@ $(document).on('click', '.bom-file-item', function(e) {
 });
 
 // ── 載入檔案清單（料號：圖面 + ERP/資材，皆只抓此 BOM 名稱）─────────────
+// ── 料號主檔切換器 ─────────────────────────────────────────────────────
+// 同一個料號文字可能對到多筆 d_setting（不同客戶／版次）。過去把全部混在一起顯示，
+// 造成「相同料號但不同客戶的附件混在同一個畫面」。現在一次只看一筆，其餘由這裡換過去
+// （換頁重載，讓圖面與附件一起換掉，不會有半新半舊）。
+function renderPartScopeBar() {
+    if (!_partCands || _partCands.length <= 1) return;
+    var opts = '';
+    for (var i = 0; i < _partCands.length; i++) {
+        var c = _partCands[i];
+        opts += '<option value="' + c.d_id + '"' + (c.d_id === _pk ? ' selected' : '') + '>'
+              + escapeHtml(c.label) + '</option>';
+    }
+    $('#part-scope-bar').html(
+        '<span class="psb-title"><i class="fa fa-exclamation-triangle"></i> '
+      + '此料號在主檔有 ' + _partCands.length + ' 筆（不同客戶／版次），目前只顯示其中一筆：</span>'
+      + '<select id="partScopeSel" title="切換要查閱哪一筆料號主檔">' + opts + '</select>'
+    ).show();
+    $('#partScopeSel').on('change', function () {
+        var v = parseInt($(this).val(), 10) || 0;
+        if (!v || v === _pk) return;
+        var u = new URL(location.href);
+        u.searchParams.set('pk', v);
+        u.searchParams.delete('d_id');   // 一律以 pk 為準，避免兩個參數互相打架
+        location.href = u.toString();
+    });
+}
+renderPartScopeBar();
+
 $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res) {
     var listHtml = '';
     var hasFiles = false;
@@ -716,7 +777,7 @@ $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res)
 
     // ── 料號附件區塊（依料號上傳，與 BOM 無關）─────────────────────────────
     if (_d_id) {
-        $.post('', { action: 'get_attachments_by_did', d_id: _d_id }, function(attRes) {
+        $.post('', { action: 'get_attachments_by_did', d_id: _d_id, pk: _pk }, function(attRes) {
             if (!attRes.success || !attRes.attachments || attRes.attachments.length === 0) return;
             var attHtml = '<li class="list-group-item att-section-header">'
                 + '<strong><i class="fa fa-paperclip"></i> 料號附件</strong>'

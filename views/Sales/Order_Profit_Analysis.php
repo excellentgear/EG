@@ -626,6 +626,7 @@ function opa_build_dataset(PDO $pdo, array $f): array {
             'order_date'  => $o['Order_date'],
             'client'      => $o['Client_name'],
             'd_id'        => $o['d_id'],
+            'd_pk'        => (int)($o['d_id_ID'] ?? 0),   // d_setting.d_id：同名料號有多筆主檔時要指名是哪一筆
             'spec'        => $o['Specification'],
             'gear'        => $gearMap[intval($o['d_id_ID'] ?? 0)] ?? '',
             'category'    => $category,
@@ -1774,10 +1775,10 @@ if ($has_access) {
         return h;
     }
 
-    function partCell(d_id, spec, gear){
+    function partCell(d_id, spec, gear, d_pk){
         // 料號：點擊開圖面跳窗（bom_viewer）；下方顯示齒輪規格
         return '<td title="' + esc(spec || '') + '" style="max-width:230px;">'
-             + '<span class="part-link" data-did="' + esc(d_id) + '" title="點擊開啟圖面">' + esc(d_id) + '</span>'
+             + '<span class="part-link" data-did="' + esc(d_id) + '" data-dpk="' + (parseInt(d_pk,10)||0) + '" title="點擊開啟圖面">' + esc(d_id) + '</span>'
              + (gear ? '<div class="gear-line" title="' + esc(gear) + '"><i class="fa fa-gear" style="font-size:9px;"></i> ' + esc(gear) + '</div>' : '')
              + '</td>';
     }
@@ -1806,7 +1807,7 @@ if ($has_access) {
                   + '<td>' + esc(r.order_date) + '</td>'
                   + '<td>' + esc(r.order_oo) + '</td>'
                   + '<td>' + esc(r.client) + '</td>'
-                  + partCell(r.d_id, r.spec, r.gear)
+                  + partCell(r.d_id, r.spec, r.gear, r.d_pk)
                   + '<td>' + catCell + '</td>'
                   + '<td class="num">' + nfmt(r.qty, 0) + '</td>'
                   + '<td class="num">' + nfmt(r.unit_price) + (r.currency ? ' <small style="color:#aaa;">' + esc(r.currency) + '</small>' : '') + '</td>'
@@ -1824,7 +1825,7 @@ if ($has_access) {
                 h += '<tr>'
                   + '<td class="num">' + p.rank + '</td>'
                   + '<td><span class="abc-badge abc-' + p.abc + '">' + p.abc + '</span></td>'
-                  + partCell(p.d_id, p.spec, p.gear)
+                  + partCell(p.d_id, p.spec, p.gear, p.d_pk)
                   + '<td>' + catBadge(p.category) + '</td>'
                   + '<td style="font-size:12px;">' + esc(p.clients) + '</td>'
                   + '<td class="num">' + nfmt(p.orders, 0) + '</td>'
@@ -1874,16 +1875,18 @@ if ($has_access) {
     }
 
     /* ── 圖面跳窗（同 NewOrder_Track.php 的 openPartDrawing）── */
-    function openPartDrawing(pid){
+    // pk＝d_setting.d_id（order_track.d_id_ID）；同名料號有多筆主檔時要指名是哪一筆
+    function openPartDrawing(pid, pk){
         if (!pid) return;
         var w = screen.availWidth, h = screen.availHeight;
         var pw = Math.min(1400, Math.round(w * 0.85));
         var ph = Math.min(900,  Math.round(h * 0.88));
         var pl = Math.round((w - pw) / 2);
         var pt = Math.round((h - ph) / 2);
+        var q = pk ? ('?pk=' + encodeURIComponent(pk)) : ('?d_id=' + encodeURIComponent(pid));
         window.open(
-            '../../views/pm/bom_viewer.php?d_id=' + encodeURIComponent(pid),
-            'drawing_' + pid,
+            '../../views/pm/bom_viewer.php' + q,
+            'drawing_' + (pk || pid),
             'width=' + pw + ',height=' + ph + ',left=' + pl + ',top=' + pt
                 + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no'
         );
@@ -2124,7 +2127,7 @@ if ($has_access) {
     /* ── 事件 ── */
     $('#btnSearch').on('click', function(){ state.page = 1; load(); });
 
-    $('#opaTbody').on('click', '.part-link', function(){ openPartDrawing($(this).data('did')); });
+    $('#opaTbody').on('click', '.part-link', function(){ openPartDrawing($(this).data('did'), $(this).data('dpk')); });
     $(document).on('click', '.cost-link', function(){   // 主表與滑窗內都可點
         openCostDetail($(this).data('oid'), $(this).data('oo'), $(this).data('did'),
                        String($(this).data('boms') || ''), $(this).data('auto') == 1);

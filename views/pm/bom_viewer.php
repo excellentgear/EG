@@ -47,22 +47,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
     header('Content-Type: application/json');
     try {
         $did = trim($_POST['d_id'] ?? '');
-        if (empty($did)) throw new Exception('缺少 d_id');
+        $pk  = (int)($_POST['pk'] ?? 0);
+        if (empty($did) && $pk <= 0) throw new Exception('缺少 d_id');
         include_once '../../src/common/DBConnection.php';
-        require_once '../../src/common/part_alias_lib.php';
+        require_once '../../src/common/part_scope_lib.php';
         $pdo2 = (new DBConnection())->getPDO();
-        // 客戶代號／等同料號綁定的其他料號圖檔也一併撈出（合併顯示，標明來源）
-        $bindLabelByPartNo = [];
-        $partNos = [$did];
-        foreach (eg_part_alias_linked_part_nos($pdo2, $did) as $lp) {
-            $bindLabelByPartNo[$lp['part_no']] = $lp['part_no'] . ($lp['customer_name'] ? '／' . $lp['customer_name'] : '');
-            $partNos[] = $lp['part_no'];
-        }
-        $partNos = array_values(array_unique($partNos));
-        $phBom = implode(',', array_fill(0, count($partNos), '?'));
-        $stmt = $pdo2->prepare("SELECT bom, sqty, d_id FROM bom WHERE d_id IN ($phBom) ORDER BY Created_At DESC");
-        $stmt->execute($partNos);
-        $bom_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        // 歸戶一律走 d_setting.d_id（整數 PK），不可再用料號文字把同名的別家主檔一起撈進來。
+        // 圖面是唯一例外：bom.d_setting_id 有 82% 是空的，沒綁的仍列出但標示（見 part_scope_lib 說明）。
+        $scope = eg_part_scope_resolve($pdo2, $pk, $did);
+        $bom_rows = eg_part_scope_bom_rows($pdo2, $scope);
         // BOM 圖檔資料夾一律走設定鍵 bom_scan_dir（唯一實作 src/common/bom_dir_lib.php）。
         // 2026-08-25 起預設值改成 UNC `\\excellentnas\生產課\BOM\`：原本寫死的 Z: 是使用者
         // session 層級的持續連線，實測 `net use` 會變成「無法使用」，造成圖面時好時壞。
@@ -96,7 +89,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
             $allF = array_column(eg_bom_scan($scan_dir, [], '', false), 'name');
             foreach ($bom_rows as $row) {
                 $bname = $row['bom']; $sqty = $row['sqty'];
-                $bindFrom = $bindLabelByPartNo[$row['d_id']] ?? null;
+                $bindFrom = $row['bind_from'] ?? null;
+                $unbound  = !empty($row['unbound']);
                 foreach ($allF as $fn) {
                     if ($fn==='.'||$fn==='..') continue;
                     if (strpos($fn, $bname) === 0) {
@@ -105,7 +99,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
                             $label = $bname . ($sqty !== null ? ' (Qty:'.$sqty.')' : '');
                             $files[] = ['path'=>$url_dir.$fn, 'type'=>$ext, 'name'=>$fn,
                                         'label'=>$label, 'tags'=>$applyTags($fn), 'is_plus'=>false,
-                                        'bom'=>$bname, 'bind_from'=>$bindFrom];
+                                        'bom'=>$bname, 'bind_from'=>$bindFrom,
+                                        'unbound'=>$unbound ? 1 : 0,
+                                        'bom_client'=>$row['Client_Name'] ?? ''];
                         }
                     }
                 }
@@ -131,23 +127,17 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
 if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
     header('Content-Type: application/json');
     try {
-        // bom_viewer 傳入的是文字料號（order_track.d_id），需先查 d_setting 取整數 PK
+        // 歸戶鍵＝d_setting.d_id（整數 PK）。舊呼叫端只有文字料號時由 part_scope_lib 挑最新一筆，
+        // 其餘同名主檔（不同客戶／版次）由畫面頂端的切換器提供，不再全部混在一起。
         $partNo = trim($_POST['d_id'] ?? '');
-        if (!$partNo) throw new Exception('缺少料號');
+        $pk     = (int)($_POST['pk'] ?? 0);
+        if (!$partNo && $pk <= 0) throw new Exception('缺少料號');
         include_once '../../src/common/DBConnection.php';
-        require_once '../../src/common/part_alias_lib.php';
+        require_once '../../src/common/part_scope_lib.php';
         $pdo2 = (new DBConnection())->getPDO();
-        // 找出所有符合此料號的 d_setting.d_id（可能有多筆，不同客戶）
-        $dsStmt = $pdo2->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
-        $dsStmt->execute([$partNo]);
-        $dids = array_map('intval', $dsStmt->fetchAll(PDO::FETCH_COLUMN));
-        // 客戶代號／等同料號綁定的其他料號附件也一併撈出（合併顯示，標明來源）
-        $bindLabelByDid = [];
-        foreach (eg_part_alias_linked_part_nos($pdo2, $partNo) as $lp) {
-            $bindLabelByDid[$lp['d_id']] = $lp['part_no'] . ($lp['customer_name'] ? '／' . $lp['customer_name'] : '');
-            $dids[] = $lp['d_id'];
-        }
-        $dids = array_values(array_unique($dids));
+        $scope          = eg_part_scope_resolve($pdo2, $pk, $partNo);
+        $dids           = $scope['dids'];
+        $bindLabelByDid = $scope['bind_label_by_did'];
         if (empty($dids)) {
             echo json_encode(['success' => true, 'attachments' => []]);
             exit;
@@ -306,10 +296,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
     header('Content-Type: application/json');
     try {
         $partNo = trim($_POST['d_id'] ?? '');
-        if (!$partNo) throw new Exception('缺少料號');
+        $pk     = (int)($_POST['pk'] ?? 0);
+        if (!$partNo && $pk <= 0) throw new Exception('缺少料號');
         include_once '../../src/common/DBConnection.php';
         require_once __DIR__ . '/../../src/common/rbac.php';
-        require_once __DIR__ . '/../../src/common/part_alias_lib.php';
+        require_once __DIR__ . '/../../src/common/part_scope_lib.php';
         $pdo2 = (new DBConnection())->getPDO();
         // 權限守門：報價資料查閱沿用報價單「檢視」權限（quotation_view）；無權限一律回空
         $feats = rbac_user_features($pdo2, (int)($_SESSION['id'] ?? 0));
@@ -317,22 +308,16 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
             echo json_encode(['success' => true, 'attachments' => [], 'no_perm' => true]);
             exit;
         }
-        // 找出所有符合此料號的 d_setting.d_id（可能多筆，不同客戶）
-        $dsStmt = $pdo2->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
-        $dsStmt->execute([$partNo]);
-        $ownDids = array_map('intval', $dsStmt->fetchAll(PDO::FETCH_COLUMN));
+        // 歸戶鍵＝d_setting.d_id（整數 PK），不再用文字把同名的別家主檔一起撈進來
+        $scope   = eg_part_scope_resolve($pdo2, $pk, $partNo);
+        $partNo  = $scope['part_no'];
+        $ownDids = $scope['pk'] > 0 ? [$scope['pk']] : [];
         if (empty($ownDids)) { echo json_encode(['success' => true, 'attachments' => []]); exit; }
-        // 客戶代號／等同料號綁定的其他料號報價也一併撈出（合併顯示，標明來源）
-        $linkedParts = eg_part_alias_linked_part_nos($pdo2, $partNo);
-        $bindLabelByPartNo = []; $bindLabelByDid = []; $allPartNos = [$partNo]; $dids = $ownDids;
-        foreach ($linkedParts as $lp) {
-            $label = $lp['part_no'] . ($lp['customer_name'] ? '／' . $lp['customer_name'] : '');
-            $bindLabelByPartNo[$lp['part_no']] = $label;
-            $bindLabelByDid[$lp['d_id']] = $label;
-            $allPartNos[] = $lp['part_no'];
-            $dids[] = $lp['d_id'];
-        }
-        $dids = array_values(array_unique($dids));
+        $linkedParts       = $scope['bind_label_by_did'];
+        $bindLabelByPartNo = $scope['bind_label_by_part_no'];
+        $bindLabelByDid    = $scope['bind_label_by_did'];
+        $allPartNos        = $scope['part_nos'];
+        $dids              = $scope['dids'];
         $ph = implode(',', array_fill(0, count($dids), '?'));
         $jsonConds = implode(' OR ', array_fill(0, count($allPartNos), 'JSON_CONTAINS(a.linked_parts, ?)'));
         // 報價附件：linked_parts JSON 含此料號（或綁定料號），或 linked_parts NULL 且該報價單包含此料號（或綁定料號）
@@ -427,23 +412,17 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
     header('Content-Type: application/json');
     try {
         $partNo = trim($_POST['d_id'] ?? '');
-        if (!$partNo) throw new Exception('缺少料號');
+        $pk     = (int)($_POST['pk'] ?? 0);
+        if (!$partNo && $pk <= 0) throw new Exception('缺少料號');
         include_once '../../src/common/DBConnection.php';
-        require_once __DIR__ . '/../../src/common/part_alias_lib.php';
+        require_once __DIR__ . '/../../src/common/part_scope_lib.php';
         $pdo2 = (new DBConnection())->getPDO();
 
-        $dsStmt = $pdo2->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
-        $dsStmt->execute([$partNo]);
-        $ownDids = array_map('intval', $dsStmt->fetchAll(PDO::FETCH_COLUMN));
-        if (empty($ownDids)) { echo json_encode(['success' => true, 'attachments' => []]); exit; }
-
-        // 客戶代號／等同料號綁定的其他料號訂單也一併撈出（合併顯示，標明來源）
-        $bindLabelByDid = []; $dids = $ownDids;
-        foreach (eg_part_alias_linked_part_nos($pdo2, $partNo) as $lp) {
-            $bindLabelByDid[$lp['d_id']] = $lp['part_no'] . ($lp['customer_name'] ? '／' . $lp['customer_name'] : '');
-            $dids[] = $lp['d_id'];
-        }
-        $dids = array_values(array_unique($dids));
+        // 歸戶鍵＝d_setting.d_id（整數 PK），不再用文字把同名的別家主檔一起撈進來
+        $scope = eg_part_scope_resolve($pdo2, $pk, $partNo);
+        if ($scope['pk'] <= 0) { echo json_encode(['success' => true, 'attachments' => []]); exit; }
+        $bindLabelByDid = $scope['bind_label_by_did'];
+        $dids           = $scope['dids'];
         $ph = implode(',', array_fill(0, count($dids), '?'));
 
         // order_attachments 建單當下就已把料號歸屬解析為真實 order_id（見 _NewOrder_Track222.php 的
@@ -517,15 +496,30 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_order_attachments_by_di
 // ── 模式判斷：?bom=… 或 ?d_id=… ─────────────────────────────────────────
 $bom  = trim($_GET['bom']  ?? '');
 $d_id = trim($_GET['d_id'] ?? '');
+$pk   = (int)($_GET['pk'] ?? 0);   // d_setting.d_id（整數 PK）＝精確指名要看哪一筆料號主檔
 $mode = '';   // 'bom' | 'did'
 
 if (!empty($bom)) {
     $mode = 'bom';
-} elseif (!empty($d_id)) {
+} elseif (!empty($d_id) || $pk > 0) {
     $mode = 'did';
-    $bom  = $d_id;   // 用作標題顯示
 } else {
     die('缺少 BOM 或 d_id 參數');
+}
+
+// ── 料號主檔歸戶（唯一實作 src/common/part_scope_lib.php）─────────────────
+// 同一個料號文字可能對到多筆主檔（不同客戶／版次）；一律鎖定其中一筆，
+// 其餘由畫面頂端的切換器提供，不再把別家的圖面／附件混進來。
+$partScope  = ['pk'=>0, 'part_no'=>$d_id, 'exact'=>false, 'candidates'=>[]];
+if ($mode === 'did') {
+    try {
+        include_once __DIR__ . '/../../src/common/DBConnection.php';
+        require_once __DIR__ . '/../../src/common/part_scope_lib.php';
+        $pdoScope  = (new DBConnection())->getPDO();
+        $partScope = eg_part_scope_resolve($pdoScope, $pk, $d_id);
+        if ($partScope['part_no'] !== '') $d_id = $partScope['part_no'];
+    } catch (Exception $e) { /* 解析失敗就退回文字模式，不要整頁死掉 */ }
+    $bom = $d_id;   // 用作標題顯示
 }
 $bom_safe = htmlspecialchars($bom, ENT_QUOTES, 'UTF-8');
 
@@ -595,6 +589,11 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
             width: 280px; min-width: 180px; overflow-y: auto; height: 100vh;
             background: #fff; border-right: 1px solid #ddd; flex-shrink: 0;
         }
+        /* 料號主檔切換器（同名料號有多筆不同客戶／版次時才出現）；配色走 ai-rules/10 暖色系 */
+        #part-scope-bar { padding:6px 8px; background:#FFF3E2; border-bottom:1px solid #E4D3BC; font-size:11px; color:#7a4b12; }
+        #part-scope-bar .psb-title { font-weight:bold; margin-bottom:4px; display:block; }
+        #part-scope-bar select { width:100%; font-size:11px; height:26px; padding:2px 4px;
+                                 border:1px solid #E4D3BC; border-radius:3px; background:#fff; color:#5a3a10; }
         #file-panel-heading {
             padding: 9px 12px; font-weight: bold; font-size: 13px; color: #555;
             background: #f7f7f7; border-bottom: 1px solid #e0e0e0; word-break: break-all;
@@ -697,6 +696,9 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
     <div id="file-panel">
         <div id="bom-tag-filter-bar" style="display:none;padding:5px 8px;background:#fbf7ef;border-bottom:1px solid #e6c9a0;font-size:11px;"></div>
         <div id="file-panel-heading"><i class="fa fa-folder-open-o"></i> <?= $bom_safe ?></div>
+        <!-- 同一個料號文字對到多筆主檔（不同客戶／版次）時，讓使用者自己選要看哪一筆；
+             不選＝預設最新建立的那一筆。禁止把多筆的資料混在一起顯示。 -->
+        <div id="part-scope-bar" style="display:none;"></div>
         <div id="bom-tabbar" style="display:none;"></div>
         <div id="bom-file-list">
             <p class="text-center" style="margin-top:24px; color:#999;">
@@ -794,6 +796,20 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
 
       <h4>重要行為／常見疑問</h4>
       <div class="tip">
+        <b>同一個料號在主檔可能不只一筆（不同客戶／版次）。</b>
+        遇到這種情況，左上角會出現一條橘色提示與下拉，寫著「此料號在主檔有 N 筆」，
+        <b>畫面一次只顯示其中一筆的資料</b>——這是刻意的：以前是把全部混在一起，
+        結果甲客戶的圖面和乙客戶的附件會出現在同一份清單裡，看不出來誰是誰。
+        下拉裡每一筆都標了客戶、版次與各自有多少資料（例「東展/東峰（BOM 2、附件 1）」），
+        要看別家的直接切過去即可。從料號主檔、庫存、報價單等頁面點進來時已經指名是哪一筆，
+        通常不會看到這條提示。
+      </div>
+      <div class="tip">
+        <b>圖面清單上標「未綁主檔」是什麼意思。</b>
+        那張 BOM 沒有登記屬於哪一筆料號主檔（舊資料多半如此），所以系統無法判斷它是哪個客戶的，
+        <b>一律仍然列出來</b>（寧可多看到也不要憑空少一張圖），並把 BOM 上寫的客戶名附在後面供參考。
+      </div>
+      <div class="tip">
         <b>旋轉是永久的，而且是給所有人看的。</b>它不是只改自己畫面上的角度——原檔會被覆蓋。
         轉錯了就往回轉（右轉三次或左轉一次即可轉回原角度）。
         <b>JPG 圖面是「無損旋轉」</b>：直接搬 JPEG 內部的資料、不重新編碼，所以轉幾次都不會掉畫質、
@@ -859,7 +875,22 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
 <script>
 var _bom        = <?= json_encode($bom) ?>;
 var _mode       = <?= json_encode($mode) ?>;   // 'bom' | 'did'
-var _d_id       = <?= json_encode($d_id) ?>;   // only in did mode
+var _d_id       = <?= json_encode($d_id) ?>;   // only in did mode（料號文字，僅供顯示與文字比對）
+// 料號主檔歸戶：_pk 才是真正的歸戶鍵（d_setting.d_id）；_partCands 是同名料號的其他主檔（不同客戶／版次）
+var _pk         = <?= (int)($partScope['pk'] ?? 0) ?>;
+var _partCands  = <?php
+    // 標上每一筆各有多少資料：預設選的是「最新建立」那筆，而它常常是空的
+    // （例：插齒刀 6 筆主檔、附件掛在最舊的兩筆上），不標的話使用者會以為壞了
+    $__cands = $partScope['candidates'] ?? [];
+    $__cnt   = [];
+    if (count($__cands) > 1 && isset($pdoScope)) {
+        try { $__cnt = eg_part_scope_counts($pdoScope, $__cands); } catch (Exception $e) { $__cnt = []; }
+    }
+    echo json_encode(array_map(function($c) use ($__cnt) {
+        return ['d_id'  => $c['d_id'],
+                'label' => eg_part_scope_label($c, $__cnt[$c['d_id']] ?? null)];
+    }, $__cands), JSON_UNESCAPED_UNICODE);
+?>;
 var _canQuote   = <?= $canQuoteView ? 'true' : 'false' ?>;   // 報價資料權限（quotation_view，併入訂單／報價分頁）
 var _canOther   = <?= $canOtherView ? 'true' : 'false' ?>;   // 其他附件分頁權限（md_attach_view，過渡期開放）
 var _canOrder   = <?= $canOtherView ? 'true' : 'false' ?>;   // 訂單附件權限（沿用其他附件同一組權限，不新增角色碼）
@@ -1258,6 +1289,14 @@ function makeItem(f, active) {
     }
     var displayName = (f.label && _mode === 'did') ? f.label + ' / ' + f.name : f.name;
     var bindTag = f.bind_from ? '<br><span style="font-size:10px;color:#1ABB9C;"><i class="fa fa-link"></i> 來自綁定料號 '+escapeHtml(f.bind_from)+'</span>' : '';
+    // 未綁料號主檔的舊 BOM（bom.d_setting_id 全庫有 82% 是空的）無法判定屬於哪一個客戶，
+    // 依使用者 2026-08-28 拍板：仍然列出但標示清楚，不可以直接藏起來讓圖面憑空消失。
+    if (f.unbound) {
+        bindTag += '<br><span style="font-size:10px;color:#8a5a2b;" title="這張 BOM 沒有綁定料號主檔，無法判定屬於哪一個客戶">'
+                 + '<i class="fa fa-question-circle"></i> 未綁主檔'
+                 + (f.bom_client ? '（BOM 上的客戶：' + escapeHtml(f.bom_client) + '）' : '')
+                 + '</span>';
+    }
     return '<a href="#" class="list-group-item bom-file-item'+(active?' active':'')+'"'
         +' data-path="'+escapeHtml(f.path)+'"'
         +' data-type="'+escapeHtml(f.type)+'"'
@@ -1726,6 +1765,33 @@ $(document).on('click', '#bom-tag-clear', function() {
     switchTab(_activeTab);
 });
 
+// ── 料號主檔切換器 ─────────────────────────────────────────────────────
+// 同一個料號文字可能對到多筆 d_setting（不同客戶／版次）。過去是把全部混在一起顯示，
+// 造成「相同料號但不同客戶的圖面／附件混在同一個畫面」。現在一次只看一筆，
+// 其餘由這個切換器換過去（換頁重載，讓四個分頁的資料一起換掉，不會有半新半舊）。
+function renderPartScopeBar() {
+    if (_mode !== 'did' || !_partCands || _partCands.length <= 1) return;
+    var opts = '';
+    for (var i = 0; i < _partCands.length; i++) {
+        var c = _partCands[i];
+        opts += '<option value="' + c.d_id + '"' + (c.d_id === _pk ? ' selected' : '') + '>'
+              + escapeHtml(c.label) + '</option>';
+    }
+    $('#part-scope-bar').html(
+        '<span class="psb-title"><i class="fa fa-exclamation-triangle"></i> '
+      + '此料號在主檔有 ' + _partCands.length + ' 筆（不同客戶／版次），目前只顯示其中一筆：</span>'
+      + '<select id="partScopeSel" title="切換要查閱哪一筆料號主檔">' + opts + '</select>'
+    ).show();
+    $('#partScopeSel').on('change', function () {
+        var v = parseInt($(this).val(), 10) || 0;
+        if (!v || v === _pk) return;
+        var u = new URL(location.href);
+        u.searchParams.set('pk', v);
+        u.searchParams.delete('d_id');   // 一律以 pk 為準，避免兩個參數互相打架
+        location.href = u.toString();
+    });
+}
+
 // ── 載入 ───────────────────────────────────────────────────────────────
 function loadBomMode() {
     $.post('OreadyReply_ForPm_BaseOfTime.php', { action: 'get_bom_files', bom: _bom }, function(res) {
@@ -1743,7 +1809,7 @@ function loadDidMode() {
     var pending = 1 + (_tabEnabled.other ? 1 : 0) + (_tabEnabled.order_attach ? 1 : 0);
     var done = function() { if (--pending <= 0) finishDidLoad(); };
     // 圖面（一律載入）
-    $.post('', { action: 'get_files_by_did', d_id: _d_id }, function(res) {
+    $.post('', { action: 'get_files_by_did', d_id: _d_id, pk: _pk }, function(res) {
         _tabData.drawing = {
             files:     (res && res.success && res.files)     ? res.files     : [],
             erp_files: (res && res.success && res.erp_files) ? res.erp_files : []
@@ -1751,7 +1817,7 @@ function loadDidMode() {
     }, 'json').always(function() { renderTabbar(); done(); });
     // 其他附件
     if (_tabEnabled.other) {
-        $.post('', { action: 'get_attachments_by_did', d_id: _d_id }, function(res) {
+        $.post('', { action: 'get_attachments_by_did', d_id: _d_id, pk: _pk }, function(res) {
             _tabData.other   = (res && res.success && res.attachments) ? res.attachments : [];
             _tabData.albums  = (res && res.albums) ? res.albums : [];   // 相簿清單（產品照片等標籤用）
         }, 'json').always(function() { renderTabbar(); done(); });
@@ -1760,15 +1826,15 @@ function loadDidMode() {
     if (_tabEnabled.order_attach) {
         var reqs = [];
         if (_canOrder) {
-            reqs.push($.post('', { action: 'get_order_attachments_by_did', d_id: _d_id }, function(res) {
+            reqs.push($.post('', { action: 'get_order_attachments_by_did', d_id: _d_id, pk: _pk }, function(res) {
                 _tabData.order_attach = (res && res.success && res.attachments) ? res.attachments : [];
             }, 'json'));
         }
         if (_canQuote) {
-            reqs.push($.post('', { action: 'get_quote_attachments_by_did', d_id: _d_id }, function(res) {
+            reqs.push($.post('', { action: 'get_quote_attachments_by_did', d_id: _d_id, pk: _pk }, function(res) {
                 _tabData.quote = (res && res.success && res.attachments) ? res.attachments : [];
             }, 'json'));
-            reqs.push($.post('../../src/store/Part_Attachment_API.php', { action: 'get_quote_summaries', part_no: _d_id }, function(res) {
+            reqs.push($.post('../../src/store/Part_Attachment_API.php', { action: 'get_quote_summaries', part_no: _d_id, pk: _pk }, function(res) {
                 _tabData.quoteSummaries = (res && res.success && res.data && typeof res.data === 'object' && !Array.isArray(res.data)) ? res.data : {};
             }, 'json'));
         }
@@ -1780,6 +1846,7 @@ function loadDidMode() {
 function finishDidLoad() {
     renderTabbar();
     renderTagFilterBar();
+    renderPartScopeBar();
     // 預選：指定 tab 優先；否則第一個「啟用且有資料」的分頁；再否則圖面
     var order = ['drawing','order_attach','other'], pick = '';
     if (_initTab && _tabEnabled[_initTab]) pick = _initTab;

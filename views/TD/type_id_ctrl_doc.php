@@ -548,7 +548,7 @@ function rowHtml(r){
         + '<td style="'+(CAN_ADMIN?'':'display:none;')+'"><input type="checkbox" class="ck-row" data-id="'+r.id+'" data-eg-skip="1"></td>'
         + '<td>'+esc(r.doc_no)+'</td>'
         + '<td>'+esc(r.customer_name||r.customer_id||'')+'</td>'
-        + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):esc(r.part_no))+'</td>'
+        + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL, null, r.part_d_id):esc(r.part_no))+'</td>'
         + '<td>'+itemCountCell(r)+'</td>'
         + '<td>'+pfmeaBadge(r)+'</td>'
         + '<td>'+statusBadge(r.review_status, r.review_status_label)+'</td>'

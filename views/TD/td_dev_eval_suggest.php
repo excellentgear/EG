@@ -282,7 +282,7 @@ function rowHtml(r, idx){
     var dateVal = effectiveFillDate(r);
     var readonly = hasOrderDate && !manuallySet;
     var disabled = !dateVal;
-    var partCell = r.part_no_text ? EGPartPicker.viewerLink(r.part_no_text, VIEWER_URL) : '(無料號)';
+    var partCell = r.part_no_text ? EGPartPicker.viewerLink(r.part_no_text, VIEWER_URL, null, r.part_d_id) : '(無料號)';
     // 「更早訂單」提醒不論訂單日期欄是否已自動帶入，都要能點選套用（原本只有無訂單日期時才有按鈕，使用者實測抓到）
     var earlierBtn = r.earliest_order_date_all_time
         ? ' <button type="button" class="sg-quick-btn" style="display:inline-block;" onclick="applyQuick('+idx+',\'order_all\')">套用</button>' : '';

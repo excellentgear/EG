@@ -462,7 +462,7 @@ function loadList(){
             html += '<tr>'
                 + '<td>'+esc(r.doc_no)+'</td>'
                 + '<td>'+esc(r.customer_name||'')+'</td>'
-                + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL):'')+'</td>'
+                + '<td class="t-left">'+(r.part_no?EGPartPicker.viewerLink(r.part_no, VIEWER_URL, null, r.part_d_id):'')+'</td>'
                 + '<td class="t-left">'+esc(r.product_name||'')+'</td>'
                 + '<td>'+fmtDate(r.fill_date)+'</td>'
                 + '<td'+(r.last_signed_at?' title="最後簽核時間 '+esc(r.last_signed_at)+'"':'')+'>'+dateCell(r.last_signed_at)+'</td>'

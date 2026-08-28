@@ -510,24 +510,20 @@ switch ($action) {
         $quoteNos = array_values(array_unique(array_filter(array_map('trim', $quoteNos))));
         // 解析要過濾的整數 d_id 清單：優先 part_no（可多筆，跨客戶），否則單一 d_id
         $dIds = []; $ownDids = []; $bindLabelByDid = [];
-        if ($partNo !== '') {
+        // 歸戶一律走 part_scope_lib（唯一實作）：用料號文字會把同名的別家主檔
+        // （不同客戶／版次）一起撈進來＝報價混在一起，這是使用者 2026-08-28 回報的問題。
+        // 呼叫端有 pk（d_setting.d_id）就傳 pk；只有文字時由 lib 挑最新一筆。
+        $pkIn = intval($_POST['pk'] ?? 0) ?: $dId;
+        if ($partNo !== '' || $pkIn > 0) {
             try {
-                $dsP = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id = ?");
-                $dsP->execute([$partNo]);
-                $ownDids = array_map('intval', $dsP->fetchAll(PDO::FETCH_COLUMN));
-            } catch(Throwable $_e) {}
-            $dIds = $ownDids;
-            // 客戶代號／等同料號綁定的其他料號報價也一併撈出（合併顯示，標明來源）
-            try {
-                require_once __DIR__ . '/../common/part_alias_lib.php';
-                foreach (eg_part_alias_linked_part_nos($pdo, $partNo) as $lp) {
-                    $bindLabelByDid[$lp['d_id']] = $lp['part_no'] . ($lp['customer_name'] ? '／' . $lp['customer_name'] : '');
-                    $dIds[] = $lp['d_id'];
-                }
-            } catch(Throwable $_e) {}
-            $dIds = array_values(array_unique($dIds));
-        } elseif ($dId > 0) {
-            $dIds = [$dId]; $ownDids = [$dId];
+                require_once __DIR__ . '/../common/part_scope_lib.php';
+                $scope          = eg_part_scope_resolve($pdo, $pkIn, $partNo);
+                $ownDids        = $scope['pk'] > 0 ? [$scope['pk']] : [];
+                $dIds           = $scope['dids'];
+                $bindLabelByDid = $scope['bind_label_by_did'];
+            } catch(Throwable $_e) {
+                if ($pkIn > 0) { $dIds = [$pkIn]; $ownDids = [$pkIn]; }
+            }
         }
         // quote_nos 為空但有 d_id → 直接撈此料號所有報價單號
         if (empty($quoteNos) && !empty($dIds)) {

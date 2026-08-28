@@ -6157,15 +6157,17 @@ function _updateFilterDropdowns(r){
 }
 
 // ── 點擊料號開啟圖資跳窗（與 master_data 料號分頁相同：開啟 bom_viewer.php 可拖移視窗）──
-function openPartDrawing(pid){
-    if(!pid) return;
+// pk＝d_setting.d_id（整數 PK）：同名料號可能有多筆主檔（不同客戶／版次），不指名會混在一起
+function openPartDrawing(pid, pk){
+    if(!pid && !pk) return;
     var w=screen.availWidth, h=screen.availHeight;
     var pw=Math.min(1400, Math.round(w*0.85));
     var ph=Math.min(900,  Math.round(h*0.88));
     var pl=Math.round((w-pw)/2);
     var pt=Math.round((h-ph)/2);
-    window.open('../pm/bom_viewer.php?d_id='+encodeURIComponent(pid),
-        'bom_dv_'+pid,
+    var q = pk ? ('?pk='+encodeURIComponent(pk)) : ('?d_id='+encodeURIComponent(pid));
+    window.open('../pm/bom_viewer.php'+q,
+        'bom_dv_'+(pk||pid),
         'width='+pw+',height='+ph+',left='+pl+',top='+pt+',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
 }
 // ── 料號標籤顯示 helper（移植自 master_data 料號分頁）──
@@ -6420,7 +6422,7 @@ function renderTable(rows, page, ps){
         // 料號：有圖資(BOM圖面/附件)才顯示可點擊跳窗連結，否則純文字（參照 master_data 料號分頁邏輯）
         var _hasImg=(parseInt(r.has_drawing)||parseInt(r.has_attach));
         var didCell=_hasImg
-            ? '<strong class="part-drawing-link" onclick="openPartDrawing(\''+esc(r.d_id)+'\')" title="點擊開啟圖資">'+esc(r.d_id)+'</strong>'
+            ? '<strong class="part-drawing-link" onclick="openPartDrawing(\''+esc(r.d_id)+'\','+(parseInt(r.d_setting_id,10)||0)+')" title="點擊開啟圖資">'+esc(r.d_id)+'</strong>'
             : '<strong>'+esc(r.d_id)+'</strong>';
         var specLine=(parseInt(r.show_spec)&&r.spec_no)?'<div style="font-size:11px;color:#666;margin-top:2px;">規格：'+esc(r.spec_no)+'</div>':'';
         var labelLine='';

@@ -16,8 +16,14 @@
  *     viewerUrl 建議用 '../pm/bom_viewer.php'（三分頁合併：圖面/報價/其他，唯讀檢視，比照報價單頁做法；
  *     依頁面深度調整相對路徑）。part_viewer.php 是較舊的窄範圍版本(只認 part_attachments 的圖面類)，
  *     來源是報價附件時會查無圖檔，2026-08-12 已確認 bom_viewer.php 才是全站標準，除非有特殊理由否則統一用它。
- *     【注意】兩者 ?d_id= 參數都吃「料號字串」(d_setting.D_Setting_Id，如 SP-NME-GE-G5)，
- *     不是 d_setting.d_id 數字主鍵——這裡務必傳 part_no，傳數字主鍵會查無資料。
+ *     【2026-08-28 起】檢視器的歸戶鍵改成 ?pk=（d_setting.d_id 數字主鍵）。
+ *     原因：同一個料號字串可能對到多筆主檔（不同客戶／版次），只傳字串會把別家的
+ *     圖面／附件一起撈進來混在同一個畫面（使用者回報的問題）。
+ *     所以呼叫端**手上有 d_setting.d_id 就一定要傳進來**：
+ *         EGPartPicker.viewerLink(partNo, viewerUrl, label, pk)
+ *         EGPartPicker.openViewer(partNo, viewerUrl, pk)
+ *     沒有 pk 時仍可只傳 part_no（相容舊呼叫端）：檢視器會挑最新建立的那一筆，
+ *     並在畫面頂端長出切換器讓使用者自己換，不會靜靜地只顯示一筆。
  */
 (function () {
     'use strict';
@@ -62,20 +68,25 @@
     }
 
     var API = {
-        /** 顯示用連結：點擊開新視窗看料號圖面（比照 inspection_entry_v2.php 既有作法）
-         *  partNo 務必傳「料號字串」(D_Setting_Id)，不是 d_setting.d_id 數字主鍵——part_viewer.php 用字串查表。 */
-        viewerLink: function (partNo, viewerUrl, label) {
-            if (!partNo) return esc(label || '');
+        /** 顯示用連結：點擊開新視窗看料號圖面。
+         *  pk（d_setting.d_id 數字主鍵）手上有就一定要傳——只傳料號字串時，同名不同客戶的
+         *  主檔會由檢視器挑最新一筆並顯示切換器，不如直接指名精準。 */
+        viewerLink: function (partNo, viewerUrl, label, pk) {
+            if (!partNo && !pk) return esc(label || '');
             return '<a href="javascript:void(0)" class="eg-pp-viewer-lnk" data-d-id="' + esc(partNo)
+                 + '" data-pk="' + esc(pk || '')
                  + '" data-viewer="' + esc(viewerUrl) + '" style="color:#b5762a;text-decoration:underline;">'
                  + esc(label || partNo) + '</a>';
         },
 
-        openViewer: function (partNo, viewerUrl) {
-            if (!partNo) return;
+        openViewer: function (partNo, viewerUrl, pk) {
+            pk = parseInt(pk, 10) || 0;
+            if (!partNo && !pk) return;
             var w = screen.availWidth, h = screen.availHeight;
             var pw = Math.min(1400, Math.round(w * 0.85)), ph = Math.min(900, Math.round(h * 0.88));
-            window.open(viewerUrl + '?d_id=' + encodeURIComponent(partNo), 'part_dv_' + partNo,
+            // pk 優先：兩個參數都送會讓檢視器以 pk 為準，但送兩個沒有意義且容易誤解，故擇一
+            var q = pk ? ('?pk=' + pk) : ('?d_id=' + encodeURIComponent(partNo));
+            window.open(viewerUrl + q, 'part_dv_' + (pk || partNo),
                 'width=' + pw + ',height=' + ph + ',left=' + Math.round((w - pw) / 2) + ',top=' + Math.round((h - ph) / 2) + ',resizable=yes,scrollbars=yes');
         },
 
@@ -264,7 +275,7 @@
         var a = e.target.closest && e.target.closest('.eg-pp-viewer-lnk');
         if (!a) return;
         e.preventDefault();
-        API.openViewer(a.getAttribute('data-d-id'), a.getAttribute('data-viewer'));
+        API.openViewer(a.getAttribute('data-d-id'), a.getAttribute('data-viewer'), a.getAttribute('data-pk'));
     });
 
     window.EGPartPicker = API;
