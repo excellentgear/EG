@@ -125,6 +125,55 @@ function eg_bom_scan(string $utf8Dir, array $exts = [], string $prefix = '', boo
 }
 
 /**
+ * ── ERP/資材報告「檔名後綴標籤」比對（唯一實作）──────────────────────────
+ * 這段規則原本被複製在 5 支檔案共 10 處（part_viewer、兩支 OreadyReply ajax、
+ * type_id_ctrl_lib），改一處等於漏改九處，故收斂於此。
+ *
+ * 命中條件＝檔名的 `$head`（＝BOM名稱＋後綴，或 [料號]＋後綴）後面：
+ *   ① 沒東西了，或接非英數字（副檔名的點、空白、底線…）  → 第 1 份
+ *   ② 接**純數字**（後面不可再有英數字）                    → 第 N 份
+ *      `-H2` ＝「-H 的第二個」（使用者 2026-09-01 指定），`-H23` ＝第 23 份
+ *   ③ 接英文字母 → **不算命中**。這條不能拿掉，否則 `-M` 會誤中 `-MR`、
+ *      `-T` 誤中 `-TR`、`-C` 誤中 `-CRT`（現有 18 個後綴裡就有這些成對的）。
+ *      `-T2A` 這種「數字後面又接字母」的一併排除，寧可不上標籤也不要上錯。
+ *
+ * @param string $name     UTF-8 檔名
+ * @param string $head     要比對的前置字
+ * @param bool   $anywhere false＝只比對檔名開頭；true＝出現在任何位置皆可（[料號] 那種）
+ * @return int|null        null＝不命中；否則回「第幾份」（無編號＝1）
+ */
+function eg_bom_tag_seq(string $name, string $head, bool $anywhere = false): ?int {
+    if ($head === '') return null;
+    if ($anywhere) {
+        $pos = stripos($name, $head);
+        if ($pos === false) return null;
+    } else {
+        if (stripos($name, $head) !== 0) return null;
+        $pos = 0;
+    }
+    $after = substr($name, $pos + strlen($head));
+    if ($after === '') return 1;
+    if (preg_match('/^([0-9]+)(?![a-zA-Z0-9])/', $after, $m)) return max(1, (int)$m[1]);
+    if (preg_match('/^[^a-zA-Z0-9]/', $after)) return 1;
+    return null;
+}
+
+/**
+ * 把「後綴＋份數」的存放鍵拆回 [後綴, 第幾份]（'-H2'→['-H',2]、'-H'→['-H',1]）。
+ * 供 type_id_ctrl 這種「把鍵存進 DB、事後要回頭對照標籤設定」的呼叫端使用；
+ * 呼叫端要先確認整個鍵本身不是一個已設定的後綴，再用這支拆（後綴本身就以數字結尾時才不會誤拆）。
+ */
+function eg_bom_tag_key_parse(string $key): array {
+    if (preg_match('/^(.*?)([0-9]+)$/', $key, $m) && $m[1] !== '') return [$m[1], max(1, (int)$m[2])];
+    return [$key, 1];
+}
+
+/** 標籤顯示文字：第 2 份以後在標籤後面帶出份數（-H2→「熱處理2」）；第 1 份維持原樣不變 */
+function eg_bom_tag_label(string $label, int $seq): string {
+    return $seq > 1 ? $label . $seq : $label;
+}
+
+/**
  * 設定頁用的連線測試：回報這個路徑讀不讀得到、有幾個檔、實際用了哪種編碼。
  * 「先確認讀得到才替換」就是靠這支——不要等使用者發現圖面消失才知道設錯。
  * 只做一次目錄列舉、不對檔案做 stat（那個資料夾有上萬個檔）。

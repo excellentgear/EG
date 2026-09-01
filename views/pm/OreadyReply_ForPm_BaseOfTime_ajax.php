@@ -1271,30 +1271,15 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_bom_files') {
                     foreach ($tags_config as $config) {
                         $suffix = $config['suffix'] ?? '';
                         if ($suffix !== '') {
-                            $isTag = false;
-                            // 1. Check BOM + Suffix (Starts with)
-                            $searchBOM = $bom . $suffix;
-                            if (stripos($f_utf8, $searchBOM) === 0) {
-                                $after = substr($f_utf8, strlen($searchBOM));
-                                if ($after === '' || preg_match('/^[^a-zA-Z0-9]/', $after)) {
-                                    $isTag = true;
-                                }
+                            // 命中判定唯一實作在 bom_dir_lib（-H2＝-H 的第二份，見該函式說明）
+                            // 1. BOM + 後綴（開頭）  2. [料號] + 後綴（檔名任一位置）
+                            $seq = eg_bom_tag_seq($f_utf8, $bom . $suffix);
+                            if ($seq === null && $d_id) {
+                                $seq = eg_bom_tag_seq($f_utf8, "[$d_id]" . $suffix, true);
                             }
-                            // 2. Check [d_id] + Suffix (Contains)
-                            if (!$isTag && $d_id) {
-                                $searchDid = "[$d_id]" . $suffix;
-                                $pos = stripos($f_utf8, $searchDid);
-                                if ($pos !== false) {
-                                    $after = substr($f_utf8, $pos + strlen($searchDid));
-                                    if ($after === '' || preg_match('/^[^a-zA-Z0-9]/', $after)) {
-                                        $isTag = true;
-                                    }
-                                }
-                            }
-
-                            if ($isTag) {
+                            if ($seq !== null) {
                                 $file_tags[] = [
-                                    'label' => $config['label'] ?? '',
+                                    'label' => eg_bom_tag_label($config['label'] ?? '', $seq),
                                     'color' => $config['color'] ?? 'default'
                                 ];
                             }
@@ -1302,31 +1287,13 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_bom_files') {
                     }
                 } else {
                     // Legacy fallback if no config
-                    $isTag = false;
                     $suffix = '-T';
-                    
-                    // 1. Check BOM + Suffix
-                    $searchBOM = $bom . $suffix;
-                    if (stripos($f_utf8, $searchBOM) === 0) {
-                        $after = substr($f_utf8, strlen($searchBOM));
-                        if ($after === '' || preg_match('/^[^a-zA-Z0-9]/', $after)) {
-                            $isTag = true;
-                        }
+                    $seq = eg_bom_tag_seq($f_utf8, $bom . $suffix);
+                    if ($seq === null && $d_id) {
+                        $seq = eg_bom_tag_seq($f_utf8, "[$d_id]" . $suffix, true);
                     }
-                    // 2. Check [d_id] + Suffix
-                    if (!$isTag && $d_id) {
-                        $searchDid = "[$d_id]" . $suffix;
-                        $pos = stripos($f_utf8, $searchDid);
-                        if ($pos !== false) {
-                            $after = substr($f_utf8, $pos + strlen($searchDid));
-                            if ($after === '' || preg_match('/^[^a-zA-Z0-9]/', $after)) {
-                                $isTag = true;
-                            }
-                        }
-                    }
-
-                    if ($isTag) {
-                        $file_tags[] = ['label' => '齒研報告', 'color' => 'success'];
+                    if ($seq !== null) {
+                        $file_tags[] = ['label' => eg_bom_tag_label('齒研報告', $seq), 'color' => 'success'];
                     }
                 }
                 

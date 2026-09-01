@@ -120,15 +120,13 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
                     foreach ($tagsConfig as $config) {
                         $suffix = $config['suffix'] ?? '';
                         if ($suffix === '') continue;
-                        $searchBOM = $bom . $suffix;
-                        if (stripos($f_utf8, $searchBOM) === 0) {
-                            $after = substr($f_utf8, strlen($searchBOM));
-                            if ($after === '' || preg_match('/^[^a-zA-Z0-9]/', $after)) {
-                                $file_tags[] = [
-                                    'label' => $config['label'] ?? '',
-                                    'color' => $config['color'] ?? 'default',
-                                ];
-                            }
+                        // 命中判定唯一實作在 bom_dir_lib（-H2＝-H 的第二份，見該函式說明）
+                        $seq = eg_bom_tag_seq($f_utf8, $bom . $suffix);
+                        if ($seq !== null) {
+                            $file_tags[] = [
+                                'label' => eg_bom_tag_label($config['label'] ?? '', $seq),
+                                'color' => $config['color'] ?? 'default',
+                            ];
                         }
                     }
                 }
@@ -445,6 +443,11 @@ $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
                 <h4 class="modal-title">設定 ERP/資材報告 檔名標籤</h4>
             </div>
             <div class="modal-body">
+                <div class="alert alert-info" style="padding:8px 12px;font-size:12px;margin-bottom:10px;">
+                    <b>同一種報告有第二份時不必再加一列</b>：後綴後面接數字自動視為「第 N 份」，
+                    例如設了 <code>-H</code>＝熱處理，<code>B-xxx-H2.jpg</code> 會自動標成「熱處理2」、<code>-H3</code>＝「熱處理3」。<br>
+                    後綴後面接<b>英文字母</b>則不算命中（<code>-M</code> 不會誤中 <code>-MR</code>），要用請各自新增一列。
+                </div>
                 <table class="table table-bordered table-condensed" id="tagsSettingTable">
                     <thead>
                         <tr>

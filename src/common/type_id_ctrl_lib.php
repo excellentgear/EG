@@ -11,6 +11,10 @@
  * 權限：roles module='type_id_ctrl'（admin ⊃ edit ⊃ view），比照 vendor_audit_lib.php 慣例。
  */
 
+// BOM/ERP 資料夾路徑、檔名編碼、檔名後綴標籤命中判定的唯一實作（本檔多處使用，
+// 放在檔案層級載入，不再散在各函式內 require——漏一處就是那支函式突然找不到函式）
+require_once __DIR__ . '/bom_dir_lib.php';
+
 function type_id_ctrl_ensure_schema(PDO $db): void {
     $db->exec("CREATE TABLE IF NOT EXISTS type_id_ctrl_doc (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -391,7 +395,6 @@ function type_id_ctrl_bom_file_dir(PDO $db): string {
         $st->execute();
         $dir = trim((string)$st->fetchColumn());
     } catch (Throwable $e) {}
-    require_once __DIR__ . '/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
     if ($dir === '') $dir = eg_bom_erp_scan_dir_auto();
     $dir = str_replace('\\', '/', $dir);
     if (substr($dir, -1) !== '/') $dir .= '/';
@@ -511,12 +514,13 @@ function type_id_ctrl_fetch_bom_files_for_part(PDO $db, int $dsPk): array {
     } catch (Throwable $e) { return []; }
     if (!$boms) return [];
 
-    require_once __DIR__ . '/bom_dir_lib.php';   // eg_bom_name_utf8()：檔名編碼由共用庫判斷
     $dirUtf8 = type_id_ctrl_bom_file_dir($db);
     $dirFs   = type_id_ctrl_fs_path($dirUtf8);
     if (!is_dir($dirFs)) return [];
 
-    $best = [];   // suffix => 該標籤目前最新的一份
+    // 鍵＝「後綴＋份數」：-H 與 -H2 是兩份不同的熱處理報告，各自一列。
+    // 併成同一個鍵的話，比較新的那份會把另一份擠掉＝畫面上安靜少一列。
+    $best = [];   // 後綴(+份數) => 該份目前最新的檔案
     foreach ($boms as $bom) {
         $bom = trim((string)$bom);
         if ($bom === '') continue;
@@ -524,21 +528,20 @@ function type_id_ctrl_fetch_bom_files_for_part(PDO $db, int $dsPk): array {
             if (!is_file($full)) continue;
             $nameUtf8 = eg_bom_name_utf8(basename($full));
             foreach ($map as $suffix => $cfg) {
-                // 比照 part_viewer：BOM名稱+後綴 開頭，且後綴後面不可再接英數字（-T 不可誤中 -TR）
-                $head = $bom . $suffix;
-                if (stripos($nameUtf8, $head) !== 0) continue;
-                $after = substr($nameUtf8, strlen($head));
-                if ($after !== '' && !preg_match('/^[^a-zA-Z0-9]/', $after)) continue;
+                // 命中判定唯一實作在 bom_dir_lib（-H2＝-H 的第二份，見該函式說明）
+                $n = eg_bom_tag_seq($nameUtf8, $bom . $suffix);
+                if ($n === null) continue;
+                $key   = $suffix . ($n > 1 ? $n : '');
                 $mtime = (int)filemtime($full);
-                if (!isset($best[$suffix]) || $mtime > $best[$suffix]['mtime']) {
-                    $best[$suffix] = ['mtime'=>$mtime, 'name'=>$nameUtf8, 'cfg'=>$cfg];
+                if (!isset($best[$key]) || $mtime > $best[$key]['mtime']) {
+                    $best[$key] = ['mtime'=>$mtime, 'name'=>$nameUtf8, 'cfg'=>$cfg, 'seq'=>$n];
                 }
             }
         }
     }
 
     $out = [];
-    foreach ($best as $suffix => $b) {
+    foreach ($best as $tagKey => $b) {
         $out[] = [
             'source'      => 'bomfile',
             'attach_id'   => 0,
@@ -546,11 +549,11 @@ function type_id_ctrl_fetch_bom_files_for_part(PDO $db, int $dsPk): array {
             'file_name'   => $b['name'],
             'doc_name'    => $b['name'],
             'doc_date'    => date('Y-m-d', $b['mtime']),
-            'categories'  => [$b['cfg']['item_name']],
+            'categories'  => [eg_bom_tag_label($b['cfg']['item_name'], $b['seq'])],
             'need_process'=> false,
             'origin_process' => null,
             'force_type'  => $b['cfg']['item_type'],
-            'bom_tag'     => $suffix,
+            'bom_tag'     => $tagKey,
         ];
     }
     return $out;
@@ -815,10 +818,19 @@ function type_id_ctrl_refresh_synced_item_names(PDO $db): array {
         } elseif ($it['ref_source'] === 'bomfile') {
             // ERP/資材報告：名稱與型態類別跟著本模組的標籤設定走（該標籤被取消列入就維持原樣不動）
             $tag = (string)($it['ref_bom_tag'] ?? '');
+            // ref_bom_tag 可能是「後綴＋份數」（-H2＝-H 的第二份），要拆回 -H 才對得到標籤設定，
+            // 否則改了標籤名稱時第二份以後的那幾列會安靜地同步不到。整個鍵本身就是已設定的
+            // 後綴時優先照用（後綴本身以數字結尾的情況）。
+            $tagSeq = 1;
+            if ($tag !== '' && !isset($bomTagMap[$tag])) {
+                [$tagBase, $tagSeq] = eg_bom_tag_key_parse($tag);
+                if (isset($bomTagMap[$tagBase])) $tag = $tagBase; else $tagSeq = 1;
+            }
             if ($tag === '' || !isset($bomTagMap[$tag])) continue;
             $cfg = $bomTagMap[$tag];
-            if ($cfg['item_name'] === $it['item_name'] && $cfg['item_type'] === $it['item_type']) continue;
-            $updBomSt->execute([$cfg['item_name'], $cfg['item_type'], $it['id']]);
+            $cfgName = eg_bom_tag_label($cfg['item_name'], $tagSeq);
+            if ($cfgName === $it['item_name'] && $cfg['item_type'] === $it['item_type']) continue;
+            $updBomSt->execute([$cfgName, $cfg['item_type'], $it['id']]);
             $updated++;
             $affectedDocs[(int)$it['doc_id']] = true;
             continue;
