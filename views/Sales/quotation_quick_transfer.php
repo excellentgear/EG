@@ -173,6 +173,13 @@ try {
                         title="把目前篩選範圍內「料號ID與製程都已補齊」的報價單全部轉入正式報價單">
                     <i class="fa fa-check-square-o"></i> 一鍵轉入已補齊 <span id="qtReadyCnt">(0)</span>
                 </button>
+                <!-- 只有「篩選範圍外還有可轉的」時才出現：兩顆數字一樣的按鈕並排會被當成重複功能。
+                     為什麼需要它：年份預設是最新一年，其他年份剩下的零星幾張補齊後在畫面上完全看不出來，
+                     按左邊那顆永遠轉不到，會被無聲留在這一頁。 -->
+                <button class="btn btn-default btn-sm" id="btnTransferReadyAll" style="display:none;border-color:#5cb85c;color:#3d8b3d;"
+                        title="不受年份／客戶篩選影響，把目前尚待確認的報價單中「料號ID與製程都已補齊」的全部一次轉入正式報價單">
+                    <i class="fa fa-check-square"></i> 轉入全部已補齊 <span class="cnt">(0)</span>
+                </button>
                 <span class="qt-bar-sep"></span>
                 <button class="btn btn-success btn-sm" id="btnBatchAutoBind"
                         title="把目前年份篩選範圍內、所有還沒綁完料號ID的報價單一次處理完">
@@ -224,7 +231,8 @@ try {
             <li><b>一筆規格同時命中多條規則時，由您選要帶哪一組</b>：例如規格「DP10T78PA14.5滾刀」會同時被「刀具-滾齒刀」（命中<b>滾刀</b>）和「粗滾」（包含關鍵字裡有單字<b>滾</b>）命中，兩條要帶的標籤不一樣。這種情況該組底下會列出<b>候選</b>（只用A／只用B／全部都要），每個候選都寫明「這條規則命中的是哪個字」，<b>選了哪一個就套用哪一個</b>。系統只把比較精確的那個<b>預選</b>起來並標「建議」——判斷方式是<b>短關鍵字被長關鍵字包住就讓位</b>（「滾」包在「滾刀」裡面）。若各條規則要帶的標籤本來就相同（例「代料成品」與「料到成品」都帶全製），就不算分歧、不會拿來打擾您。看到某條規則老是把不相干的項目撈進來，通常是它的「包含」關鍵字太短，到「規則設定」把該字拿掉、或在「不包含」補上排除字即可。</li>
             <li><b>帶入備註</b>：有些規格（例如「半月型六角口模 線割對半」）根本沒有對應的製程標籤，這時按製程欄的「帶入備註」，規格文字會帶進<b>整張報價單的備註欄</b>（自動維護的【規格備註】區塊，您自己寫的備註不會被動到），該列直接顯示為「備註」，<b>也算補齊了製程</b>可以轉入正式報價單；按「取消，改設定製程」即還原，備註那一行會自動消失。規則裡也可以勾「帶入備註」，讓某類關鍵字整批走這條路。</li>
             <li><b>已經設定好製程的列會反灰顯示「已確認」</b>，要按該列的「修改」才會變回可點選的標籤選擇器——避免把已經確認過的列誤當成還沒處理的又重新確認一次。套用自動偵測的建議之後，畫面是<b>就地更新</b>（跳窗留著、捲動位置不動），可以接著確認下一組。</li>
-            <li><b>一鍵轉入已補齊</b>：依標籤分組確認之後，您不會知道哪幾張整張都補完了——按鈕上的數字就是目前篩選範圍內<b>料號ID與製程都補齊</b>的張數，按下去一次全部轉入正式報價單。</li>
+            <li><b>一鍵轉入已補齊</b>：依標籤分組確認之後，您不會知道哪幾張整張都補完了——按鈕上的數字就是目前篩選範圍內<b>料號ID與製程都補齊</b>的張數，按下去一次全部轉入正式報價單（<b>是整個篩選範圍、會跨頁，不是只有本頁</b>；「全選本頁＋批次轉入」才是只作用在這一頁）。</li>
+            <li><b>轉入全部已補齊</b>：<b>不受年份／客戶篩選影響</b>，把目前尚待確認的報價單中所有已補齊的一次轉完。<b>只有在「篩選範圍外還有已補齊的單」時才會出現這顆</b>（兩顆數字一樣時沒有意義）——年份預設是最新一年，其他年份零星補齊的幾張在畫面上完全看不出來，只按左邊那顆會被無聲留在本頁。左邊那顆的確認視窗也會告訴您範圍外還剩幾張。</li>
             <li><b>分頁</b>可直接跳到<b>第一頁／最後一頁</b>；清單只要重畫（轉入、套用、換頁、改篩選），「全選本頁」的勾一律清空，避免誤以為還有選著的報價單。</li>
             <li><b>轉入正式之後不會跳回第一頁</b>：轉走的那幾張直接從清單移除，畫面停在原本的頁次與捲動位置，右下角以小提示告知結果，方便連續作業。</li>
             <li>上方統計列的「<b>最新資料日期</b>」是把目前尚待確認的所有報價單<b>由 OP 單號本身解析</b>出來的日期（OP＋民國年3碼＋月日4碼，例：OP1071228004 → 2018.12.28）取最新的一天，可用來看舊資料補到哪一天；括號內是該日期取自哪一張單號。此欄不受年份篩選影響，一律以全部尚待確認的報價單計算。</li>
@@ -1969,24 +1977,55 @@ function readyQuotes() {
     });
 }
 
-function updateReadyCount() {
-    $('#qtReadyCnt').text('(' + readyQuotes().length + ')');
+// 不受年份／客戶篩選影響的「全部可轉」——判定條件與 readyQuotes() 完全相同，只是不套篩選
+function readyQuotesAll() {
+    return qtData.filter(function(r) {
+        return Number(r.items_no_dsetting) === 0 && Number(r.items_no_process) === 0 && Number(r.item_count) > 0;
+    });
 }
 
-$('#btnTransferReady').on('click', function() {
-    const rows = readyQuotes();
-    if (!rows.length) { qtNotify('目前篩選範圍內沒有「料號ID與製程都已補齊」的報價單。', 'warn'); return; }
-    const items = rows.reduce(function(a, r){ return a + Number(r.item_count); }, 0);
-    if (!confirm('將把目前篩選範圍內已補齊的 ' + rows.length + ' 張報價單（共 ' + items + ' 筆項目）轉入正式報價單。\n\n轉入後這些單就不會再出現在本頁，確定要執行嗎？')) return;
-    const $btn = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 轉入中…');
+function updateReadyCount() {
+    const n = readyQuotes().length, all = readyQuotesAll().length;
+    $('#qtReadyCnt').text('(' + n + ')');
+    if (all > n) $('#btnTransferReadyAll').show().find('.cnt').text('(' + all + ')');
+    else         $('#btnTransferReadyAll').hide();
+}
+
+// 轉入的實際動作兩顆共用，差別只在「要送哪一批」與確認文字（規則走鐘的唯一防法是只有一份實作）
+function doTransferQuotes(rows, $btn, btnHtml) {
+    $btn.prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 轉入中…');
     $.post(API_URL, { action: 'quick_confirm_transfer', quote_ids: JSON.stringify(rows.map(function(r){ return Number(r.quote_id); })) }, function(res) {
-        $btn.prop('disabled', false).html('<i class="fa fa-check-square-o"></i> 一鍵轉入已補齊 <span id="qtReadyCnt">(0)</span>');
+        $btn.prop('disabled', false).html(btnHtml);
         if (!res.success) { qtNotify('轉入失敗：' + res.message, 'err'); return; }
         showQtToast('已轉入 ' + res.updated + ' 張報價單');
         qtItemsCache = {}; qtProcState = {};
         const keepPage = qtPage;
         loadPendingList(function(){ qtPage = keepPage; renderCards(); });
     });
+}
+
+$('#btnTransferReadyAll').on('click', function() {
+    const rows = readyQuotesAll();
+    if (!rows.length) { qtNotify('目前沒有「料號ID與製程都已補齊」的報價單。', 'warn'); return; }
+    const items = rows.reduce(function(a, r){ return a + Number(r.item_count); }, 0);
+    const years = rows.map(function(r){ return yearOf(r.quote_date); }).filter(Boolean).sort();
+    const span  = years.length ? (years[0] === years[years.length - 1] ? (years[0] + ' 年')
+                                                                      : (years[0] + '～' + years[years.length - 1] + ' 年')) : '';
+    if (!confirm('將把【全部】已補齊的 ' + rows.length + ' 張報價單（' + span + '，共 ' + items + ' 筆項目）轉入正式報價單。\n\n' +
+                 '※ 這一顆不受上面的年份／客戶篩選影響，範圍是目前尚待確認的所有報價單。\n' +
+                 '※ 轉入後這些單不會再出現在本頁，也無法從本頁改回來。\n\n確定要執行嗎？')) return;
+    doTransferQuotes(rows, $(this), '<i class="fa fa-check-square"></i> 轉入全部已補齊 <span class="cnt">(' + rows.length + ')</span>');
+});
+
+$('#btnTransferReady').on('click', function() {
+    const rows = readyQuotes();
+    if (!rows.length) { qtNotify('目前篩選範圍內沒有「料號ID與製程都已補齊」的報價單。', 'warn'); return; }
+    const items = rows.reduce(function(a, r){ return a + Number(r.item_count); }, 0);
+    const outside = readyQuotesAll().length - rows.length;
+    if (!confirm('將把目前篩選範圍內已補齊的 ' + rows.length + ' 張報價單（共 ' + items + ' 筆項目）轉入正式報價單。\n\n' +
+                 (outside > 0 ? ('※ 篩選範圍外還有 ' + outside + ' 張也已補齊、這次不會被轉入；要一次轉完請改按旁邊的「轉入全部已補齊」。\n\n') : '') +
+                 '轉入後這些單就不會再出現在本頁，確定要執行嗎？')) return;
+    doTransferQuotes(rows, $(this), '<i class="fa fa-check-square-o"></i> 一鍵轉入已補齊 <span id="qtReadyCnt">(' + rows.length + ')</span>');
 });
 
 // 點外部關閉搜尋結果下拉
