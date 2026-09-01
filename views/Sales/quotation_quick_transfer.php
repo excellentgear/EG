@@ -68,6 +68,8 @@ try {
         .qt-bar-label { display:inline-block; min-width:34px; color:#8a5a2b; font-weight:700; }
         .qt-bar-sep { display:inline-block; width:1px; height:20px; background:#EADFC8; }
         .qt-note-only { background:#FBF3E6; border:1px dashed #E4C293; border-radius:6px; padding:4px 8px; color:#5b3a1e; }
+        .qt-proc-done { background:#F7F4EE; border:1px solid #EADFC8; border-radius:6px; padding:4px 8px; }
+        .qt-proc-chip.done { background:#EDE4D4; color:#6B471A; }
 
         /* 關鍵字自動偵測：依建議標籤組合分組確認 */
         .kw-group { border:1px solid #EADFC8; border-radius:6px; margin-bottom:8px; background:#fff; }
@@ -207,6 +209,7 @@ try {
             <li><b>批次設定製程</b>：先用上面的客戶／年份篩到一批（同一個客戶的單製程多半相同），再按「批次設定製程」選好標籤一次套用。套用範圍可選<b>目前篩選的全部報價單</b>（預設，會跨頁）或<b>只有目前這一頁</b>（想先套一頁確認結果再放大範圍時用）；套用對象可選<b>只套用到還沒設定製程的項目</b>（預設）或<b>全部項目</b>（會覆蓋原本設定）。跳窗上的「預計影響 N 筆」會依這兩個選擇即時重算。</li>
             <li><b>關鍵字自動偵測製程</b>（最快的補法）：先按「規則設定」訂好規則——規則只比對<b>規格</b>文字，「包含」用逗號連接＝這些字<b>全部都要有</b>（想表達「這個或那個」請在同一個關鍵字裡用 <code>|</code>，例 <code>冶具|治具</code>）、「不包含」用逗號連接＝<b>任何一個出現就不算命中</b>；可指定<b>只適用某幾個客戶</b>（多選，任一符合即可），不指定＝通用規則。第一次可按「載入建議規則範本」一次建好一組常見規則再自行增修。設好後按「關鍵字自動偵測製程」，系統把命中的項目<b>依建議的標籤組合分組</b>（顯示筆數與命中的規則），整組一次確認、也可以展開逐筆取消個別項目，按「套用已勾選的項目」才會真的寫進去——<b>系統只建議，絕不自動套用</b>。</li>
             <li><b>帶入備註</b>：有些規格（例如「半月型六角口模 線割對半」）根本沒有對應的製程標籤，這時按製程欄的「帶入備註」，規格文字會帶進<b>整張報價單的備註欄</b>（自動維護的【規格備註】區塊，您自己寫的備註不會被動到），該列直接顯示為「備註」，<b>也算補齊了製程</b>可以轉入正式報價單；按「取消，改設定製程」即還原，備註那一行會自動消失。規則裡也可以勾「帶入備註」，讓某類關鍵字整批走這條路。</li>
+            <li><b>已經設定好製程的列會反灰顯示「已確認」</b>，要按該列的「修改」才會變回可點選的標籤選擇器——避免把已經確認過的列誤當成還沒處理的又重新確認一次。套用自動偵測的建議之後，畫面是<b>就地更新</b>（跳窗留著、捲動位置不動），可以接著確認下一組。</li>
             <li><b>一鍵轉入已補齊</b>：依標籤分組確認之後，您不會知道哪幾張整張都補完了——按鈕上的數字就是目前篩選範圍內<b>料號ID與製程都補齊</b>的張數，按下去一次全部轉入正式報價單。</li>
             <li><b>分頁</b>可直接跳到<b>第一頁／最後一頁</b>；清單只要重畫（轉入、套用、換頁、改篩選），「全選本頁」的勾一律清空，避免誤以為還有選著的報價單。</li>
             <li><b>轉入正式之後不會跳回第一頁</b>：轉走的那幾張直接從清單移除，畫面停在原本的頁次與捲動位置，右下角以小提示告知結果，方便連續作業。</li>
@@ -419,6 +422,7 @@ const QT_PAGE_SIZE = 10;
 let qtPageRows = [];        // 目前這一頁畫出來的報價單（批次設定製程的「只套用到目前這一頁」用）
 let qtItemsCache = {};      // quote_id => items[]
 let qtProcState  = {};      // item_id => { activeGid, selected:[sub_tag_id,...] }
+let qtProcUnlocked = {};    // item_id => true（已確認的列被按了「修改」才解鎖成可編輯）
 let custSwitchQuoteId = null;
 
 function loadProcessTagTree(cb) {
@@ -782,6 +786,22 @@ function renderProcWidget(itemId, prevItemId, totalInQuote) {
                '<a href="javascript:void(0)" onclick="setItemNoteOnly(' + itemId + ',false)">取消，改設定製程</a></div></div>';
     }
 
+    // 已確認（已經有製程設定）且沒有按過「修改」＝反灰唯讀，避免與尚未確認的列混在一起
+    if (item && itemHasProcess(item) && !qtProcUnlocked[itemId]) {
+        let names = '';
+        if (state && state.selected.length) {
+            names = state.selected.map(function(sid) {
+                let nm = String(sid);
+                processTagTree.forEach(function(g2){ (g2.sub_tags||[]).forEach(function(st){ if (st.sub_tag_id === sid) nm = st.sub_tag_name; }); });
+                return '<span class="qt-proc-chip done">' + escapeQt(nm) + '</span>';
+            }).join('');
+        } else {
+            names = '<span style="color:#888;">（已設定製程）</span>';
+        }
+        return '<div class="qt-proc-done"><span class="qt-badge ok">已確認</span> ' + names +
+               ' <a href="javascript:void(0)" style="margin-left:4px;" onclick="unlockProc(' + itemId + ')">修改</a></div>';
+    }
+
     let toolbar = '';
     if (prevItemId || (totalInQuote && totalInQuote > 1)) {
         toolbar = '<div style="font-size:10px;margin-bottom:2px;">';
@@ -845,6 +865,12 @@ function applyProcessToAllInQuote(itemId) {
     });
     drawItems(qid, items);
     others.forEach(function(it) { saveItemProcess(it.item_id); });
+}
+
+// 按「修改」才解鎖那一列（只在這次瀏覽有效，重新載入清單又會回到已確認的唯讀樣子）
+function unlockProc(itemId) {
+    qtProcUnlocked[itemId] = true;
+    redrawProcCell(itemId);
 }
 
 function procSetActiveGroup(itemId, gid) {
@@ -1542,12 +1568,58 @@ function submitKwApply() {
     $.post(API_URL, { action: 'qkw_apply', batches: JSON.stringify(batches) }, function(res) {
         $btn.prop('disabled', false).html('<i class="fa fa-check"></i> 套用已勾選的項目');
         if (!res.success) { qtNotify('套用失敗：' + res.message, 'err'); return; }
-        closeMask('kwScanMask');
+        // 刻意不重載整份清單（會把畫面捲回去、跳窗也關掉，沒辦法連續確認下一組）：
+        // 直接就地把套用掉的項目從分組裡移除，並更新受影響的那幾張卡片
+        const applied = [];
+        kwGroups.forEach(function(g) {
+            g.items.forEach(function(it){ if (kwChecked[it.item_id]) applied.push(it); });
+        });
+        kwApplyLocalUpdate(applied);
+        kwGroups.forEach(function(g) {
+            g.items = g.items.filter(function(it){ return !kwChecked[it.item_id]; });
+            g.count = g.items.length;
+        });
+        kwGroups = kwGroups.filter(function(g){ return g.count > 0; });
+        applied.forEach(function(it){ delete kwChecked[it.item_id]; });
+        renderKwGroups();
+        $('#kwScanSummary').html('已套用 <b>' + res.data.items + '</b> 筆；剩下 ' + kwGroups.length +
+            ' 種建議組合、' + kwGroups.reduce(function(a, g){ return a + g.count; }, 0) + ' 筆待確認');
         showQtToast('已套用 ' + res.data.items + ' 筆項目' + (res.data.note_quotes ? ('，' + res.data.note_quotes + ' 張報價單已更新備註') : ''));
-        qtItemsCache = {}; qtProcState = {};
-        const keepPage = qtPage, keepScroll = window.scrollY;
-        loadPendingList(function(){ qtPage = keepPage; renderCards(); window.scrollTo(0, keepScroll); });
     });
+}
+
+// 就地更新：把剛套用掉的項目反映到清單統計與卡片上，不重抓整份清單
+function kwApplyLocalUpdate(appliedItems) {
+    const dec = {};      // quote_id => 這次真的從「未設定」變成「已設定」的筆數
+    appliedItems.forEach(function(it) {
+        if (Number(it.had)) return;            // 原本就有設定的不影響完成度統計
+        dec[it.quote_id] = (dec[it.quote_id] || 0) + 1;
+    });
+    Object.keys(dec).forEach(function(qid) {
+        const row = qtData.find(function(r){ return String(r.quote_id) === String(qid); });
+        if (row) row.items_no_process = Math.max(0, Number(row.items_no_process) - dec[qid]);
+        // 這張單的明細快取一定過期了；卡片還在畫面上就重抓它一張，不在就等下次展開時自然重抓。
+        // 順序很重要：qtProcState 要在清掉 qtItemsCache **之前**依快取內容清除，
+        // 先 delete 快取的話這一圈永遠是空的＝舊的標籤選取狀態留著，
+        // 重抓回來的列會照舊狀態畫出來，看起來就像「套用了但畫面沒更新」
+        (qtItemsCache[qid] || []).forEach(function(it){ delete qtProcState[it.item_id]; });
+        delete qtItemsCache[qid];
+        if ($('.qt-card[data-qid="' + qid + '"]').length) renderItemBody(qid);
+        refreshCardBadges(qid);
+    });
+    renderStats();
+    updateReadyCount();
+}
+
+// 依 qtData 上的統計重畫某一張卡片的完成度徽章與轉入閘門（不動其他卡片、不重載清單）
+function refreshCardBadges(qid) {
+    const row = qtData.find(function(r){ return String(r.quote_id) === String(qid); });
+    if (!row) return;
+    const noDs = Number(row.items_no_dsetting), noPc = Number(row.items_no_process), cnt = Number(row.item_count);
+    $('.qt-card[data-qid="' + qid + '"] .qt-badge-cell').html(
+        (noDs === 0 ? '<span class="qt-badge ok">料號ID已綁定</span>' : '<span class="qt-badge warn">料號ID缺 ' + noDs + '/' + cnt + '</span>') +
+        (noPc === 0 ? '<span class="qt-badge ok">製程已設定</span>' : '<span class="qt-badge warn">製程缺 ' + noPc + '/' + cnt + '</span>'));
+    applyTransferGate(qid, noDs, cnt, noPc);
 }
 
 // ── 關鍵字規則設定 ─────────────────────────────────────────
