@@ -310,7 +310,7 @@ function qkw_scan(PDO $pdo, array $quoteIds = [], bool $onlyUnset = true): array
     $rules = qkw_rule_list($pdo, true);
     if (!$rules) return ['groups' => [], 'scanned' => 0, 'matched' => 0, 'rules' => 0];
 
-    $sql = "SELECT qi.item_id, qi.quote_id, qi.product_id, qi.specification, qi.note_only,
+    $sql = "SELECT qi.item_id, qi.quote_id, qi.product_id, qi.d_setting_d_id, qi.specification, qi.note_only,
                    ql.quote_no, ql.client_id, ql.client_name,
                    EXISTS(SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id=qi.item_id) AS has_map
             FROM quotation_item qi
@@ -362,7 +362,9 @@ function qkw_scan(PDO $pdo, array $quoteIds = [], bool $onlyUnset = true): array
         foreach ($opts['hits'] as $h) $groups[$key]['rules'][$h['name']] = true;
         $groups[$key]['items'][] = [
             'item_id' => (int)$r['item_id'], 'quote_id' => (int)$r['quote_id'], 'quote_no' => $r['quote_no'],
-            'client_name' => $r['client_name'], 'product_id' => $r['product_id'], 'spec' => $spec,
+            'client_name' => $r['client_name'], 'product_id' => $r['product_id'],
+            'd_setting_d_id' => (int)($r['d_setting_d_id'] ?? 0),   // 確認畫面點料號開圖面時用來精確鎖定主檔
+            'spec' => $spec,
             'had' => ((int)$r['has_map'] || (int)$r['note_only']) ? 1 : 0,
         ];
     }

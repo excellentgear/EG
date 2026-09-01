@@ -101,6 +101,10 @@ try {
         table.qt-item-table { width:100%; border-collapse:collapse; font-size:12px; }
         table.qt-item-table th { text-align:left; color:#8a5a2b; padding:4px 6px; border-bottom:1px solid #E4C293; }
         table.qt-item-table td { padding:5px 6px; border-bottom:1px dashed #e9dcc4; vertical-align:top; }
+        /* 料號＝可點開圖面查閱（views/pm/part_viewer.php）；用底線＋圖示標示，不要只靠顏色（ai-rules/10）*/
+        a.qt-part-link { color:#8a5a2b; text-decoration:underline; text-underline-offset:2px; cursor:pointer; }
+        a.qt-part-link:hover { color:#DD5138; background:#F7E0BD; }
+        a.qt-part-link i { font-size:11px; opacity:.65; }
 
         .qt-proc-l1 button, .qt-proc-l2 button { font-size:11px; padding:1px 8px; margin:1px 2px 1px 0; border-radius:10px;
             border:1px solid #E4C293; background:#fff; color:#8a5a2b; cursor:pointer; }
@@ -210,12 +214,14 @@ try {
             <li>清單只列出「尚待確認」的報價單，確認轉入後就會從本頁消失（不會刪除，只是不再顯示於此）。每張報價單的所有料號明細直接顯示，不需點開。</li>
             <li><b>設定製程</b>：跟報價單管理頁一樣的製程標籤（先選大類再選子標籤，可複選），點一下即存檔。<b>有些標籤（例如磨銳、鍍TIN、熱處理、刀具類）本身沒有對應到 ERP 的製程代號</b>，只要點了標籤就算已設定製程，一樣可以轉入正式報價單。</li>
             <li><b>綁定料號ID</b>：在「料號ID綁定」欄搜尋料號關鍵字，點選正確的項目即可綁定；<b>找不到就直接在搜尋結果下方按「＋新增料號」</b>快速建立並自動綁定。</li>
+            <li><b>點料號看圖面</b>：明細裡的<b>料號</b>本身是連結（有底線＋小圖示），點下去會另開<b>料號圖面查閱</b>視窗（與生管、線上檢驗、個人工作紀錄點料號開的是同一頁），可以看該料號的圖面、ERP／資材報告與料號附件——補製程時想確認「這到底是什麼東西」不必再切到別的頁面去查。已經綁好料號ID的會直接鎖定那一筆主檔；還沒綁定的只用料號文字去找，同名多筆時由該頁上方的切換器選。<b>關鍵字自動偵測</b>的確認清單裡點料號也一樣。</li>
             <li><b>切換客戶</b>：點客戶欄位旁的「切換」，搜尋並選擇正確的客戶；找不到一樣可以「＋新建客戶」；跳窗內按 <b>Enter</b> 等同直接送出（唯一符合的搜尋結果或已填妥的新建表單）。</li>
             <li>補齊後，可以用每張報價單右上角的「轉正式報價單」單張轉入，或勾選多張後用上方「批次轉入正式報價單」一次轉入。<b>料號ID或製程沒有全部補齊的報價單，按鈕與勾選框會是反灰的</b>，滑鼠移上去會說明還缺什麼、缺幾筆。</li>
             <li>清單右上角可篩選<b>年份</b>（<b>預設顯示最新年份</b>，可切到其他年份或「全部」）與<b>客戶</b>（下拉可直接打字，客戶編號或名稱都找得到，選項後面是該客戶還有幾張待確認）；報價單依日期新到舊排序。</li>
             <li><b>只看未綁定料號ID的項目</b>：勾起來之後清單只留還沒綁完料號的報價單，而且卡片裡也只列出還沒綁的那幾列，可以直接一列一列按「快速綁定」，不用在整張單裡找。</li>
             <li><b>批次設定製程</b>：先用上面的客戶／年份篩到一批（同一個客戶的單製程多半相同），再按「批次設定製程」選好標籤一次套用。套用範圍可選<b>目前篩選的全部報價單</b>（預設，會跨頁）或<b>只有目前這一頁</b>（想先套一頁確認結果再放大範圍時用）；套用對象可選<b>只套用到還沒設定製程的項目</b>（預設）或<b>全部項目</b>（會覆蓋原本設定）。跳窗上的「預計影響 N 筆」會依這兩個選擇即時重算。</li>
             <li><b>關鍵字自動偵測製程</b>（最快的補法）：先按「規則設定」訂好規則——規則只比對<b>規格</b>文字，「包含」用逗號連接＝這些字<b>全部都要有</b>（想表達「這個或那個」請在同一個關鍵字裡用 <code>|</code>，例 <code>冶具|治具</code>）、「不包含」用逗號連接＝<b>任何一個出現就不算命中</b>；可指定<b>只適用某幾個客戶</b>（多選，任一符合即可），不指定＝通用規則。第一次可按「載入建議規則範本」一次建好一組常見規則再自行增修。設好後按「關鍵字自動偵測製程」，系統把命中的項目<b>依建議的標籤組合分組</b>（顯示筆數與命中的規則），整組一次確認、也可以展開逐筆取消個別項目，按「套用已勾選的項目」才會真的寫進去——<b>系統只建議，絕不自動套用</b>。</li>
+            <li><b>一筆規格同時命中多條規則時，由您選要帶哪一組</b>：例如規格「DP10T78PA14.5滾刀」會同時被「刀具-滾齒刀」（命中<b>滾刀</b>）和「粗滾」（包含關鍵字裡有單字<b>滾</b>）命中，兩條要帶的標籤不一樣。這種情況該組底下會列出<b>候選</b>（只用A／只用B／全部都要），每個候選都寫明「這條規則命中的是哪個字」，<b>選了哪一個就套用哪一個</b>。系統只把比較精確的那個<b>預選</b>起來並標「建議」——判斷方式是<b>短關鍵字被長關鍵字包住就讓位</b>（「滾」包在「滾刀」裡面）。若各條規則要帶的標籤本來就相同（例「代料成品」與「料到成品」都帶全製），就不算分歧、不會拿來打擾您。看到某條規則老是把不相干的項目撈進來，通常是它的「包含」關鍵字太短，到「規則設定」把該字拿掉、或在「不包含」補上排除字即可。</li>
             <li><b>帶入備註</b>：有些規格（例如「半月型六角口模 線割對半」）根本沒有對應的製程標籤，這時按製程欄的「帶入備註」，規格文字會帶進<b>整張報價單的備註欄</b>（自動維護的【規格備註】區塊，您自己寫的備註不會被動到），該列直接顯示為「備註」，<b>也算補齊了製程</b>可以轉入正式報價單；按「取消，改設定製程」即還原，備註那一行會自動消失。規則裡也可以勾「帶入備註」，讓某類關鍵字整批走這條路。</li>
             <li><b>已經設定好製程的列會反灰顯示「已確認」</b>，要按該列的「修改」才會變回可點選的標籤選擇器——避免把已經確認過的列誤當成還沒處理的又重新確認一次。套用自動偵測的建議之後，畫面是<b>就地更新</b>（跳窗留著、捲動位置不動），可以接著確認下一組。</li>
             <li><b>一鍵轉入已補齊</b>：依標籤分組確認之後，您不會知道哪幾張整張都補完了——按鈕上的數字就是目前篩選範圍內<b>料號ID與製程都補齊</b>的張數，按下去一次全部轉入正式報價單。</li>
@@ -765,7 +771,7 @@ function drawItems(qid, allItems) {
         }
         const prevItemId = idx > 0 ? items[idx - 1].item_id : null;
         html += '<tr data-item="' + it.item_id + '">' +
-            '<td>' + it.product_id + '</td>' +
+            '<td>' + partLinkHtml(it.product_id, it.d_setting_d_id) + '</td>' +
             '<td>' + (it.specification || '') + '</td>' +
             '<td>' + it.quantity + '</td>' +
             '<td>' + it.unit_price + '</td>' +
@@ -775,6 +781,34 @@ function drawItems(qid, allItems) {
     });
     html += '</tbody></table>';
     $('#qtCardBody' + qid).html(html);
+}
+
+// 點料號開圖面：走既有的料號圖面查閱頁（views/pm/part_viewer.php），不在本頁另刻一套預覽。
+// 已綁定料號ID的話一併帶 pk＝d_setting.d_id，讓它精確鎖定那一筆主檔（同一個料號文字可能對到
+// 多筆不同客戶／版次的主檔，只給文字的話那邊只能列出候選讓人再選一次）。
+function partLinkHtml(productId, dSettingDId) {
+    const txt = String(productId == null ? '' : productId);
+    if (!txt.trim()) return escapeQt(txt);
+    // 走 data 屬性＋事件委派，不用 inline onclick：料號文字裡有引號時會把 onclick="…" 屬性切斷
+    // （實測 onclick 直接塞 JSON.stringify 的結果＝點下去噴 SyntaxError、完全沒反應）
+    return '<a href="javascript:void(0)" class="qt-part-link" title="點料號開啟圖面查閱（另開視窗）" ' +
+           'data-part="' + escapeQt(txt) + '" data-pk="' + (Number(dSettingDId) || 0) + '">' +
+           escapeQt(txt) + ' <i class="fa fa-picture-o"></i></a>';
+}
+$(document).on('click', '.qt-part-link', function(e) {
+    e.preventDefault(); e.stopPropagation();        // 不要連帶觸發所在列／分組的點擊行為
+    openPartDrawing($(this).attr('data-part'), $(this).attr('data-pk'));
+});
+
+// 視窗大小與命名比照站上既有作法（personal_task.php / bom_tracking.php 的 openBomFiles）
+function openPartDrawing(did, pk) {
+    if (!did) return;
+    const w = screen.availWidth, h = screen.availHeight;
+    const pw = Math.min(1400, Math.round(w * 0.85)), ph = Math.min(900, Math.round(h * 0.88));
+    const pl = Math.round((w - pw) / 2), pt = Math.round((h - ph) / 2);
+    const url = '../pm/part_viewer.php?d_id=' + encodeURIComponent(did) + (Number(pk) > 0 ? ('&pk=' + Number(pk)) : '');
+    window.open(url, 'part_dv_' + String(did).replace(/[^A-Za-z0-9_]/g, '_'),
+        'width=' + pw + ',height=' + ph + ',left=' + pl + ',top=' + pt + ',resizable=yes,scrollbars=yes,menubar=no,toolbar=no,location=no,status=no');
 }
 
 function renderPartBindWidget(it, row) {
@@ -1574,7 +1608,7 @@ function kwDrawItems(gi) {
              '<td style="width:66px;">' + (Number(it.had) ? '<span class="qt-badge warn">會覆蓋</span>' : '') + '</td>' +
              '<td style="width:120px;color:#8a5a2b;">' + escapeQt(it.quote_no) + '</td>' +
              '<td style="width:110px;">' + escapeQt(it.client_name || '') + '</td>' +
-             '<td style="width:150px;">' + escapeQt(it.product_id || '') + '</td>' +
+             '<td style="width:150px;">' + partLinkHtml(it.product_id, it.d_setting_d_id) + '</td>' +
              '<td>' + escapeQt(it.spec || '') + '</td></tr>';
     });
     $('#kwGBody' + gi).html(h + '</table>');
