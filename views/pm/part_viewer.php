@@ -170,9 +170,18 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
         $scope = eg_part_scope_resolve($pdo2, $pk, $partNo);
         $dids  = $scope['dids'];
         if (empty($dids)) {
-            echo json_encode(['success' => true, 'attachments' => []]);
+            echo json_encode(['success' => true, 'attachments' => [], 'pref_attachments' => []]);
             exit;
         }
+        /* ── 優選附件（2026-09-01 使用者要求）───────────────────────────────
+           標籤設定勾了「優選顯示在 BOM 總覽的料號查閱畫面」的類別，其附件要固定顯示在
+           最上方；三種來源（料號／報價／訂單）都撈，唯一實作 pref_attach_lib。
+           ★ 權限：只有在 BOM 總表看得到「加工單價」的人才給看，而且是**後端不回傳**——
+             只把畫面藏起來的話，直接打這支 API 就整包拿走了（鐵律8）。 */
+        require_once __DIR__ . '/../../src/common/pref_attach_lib.php';
+        $prefCatIds  = eg_pref_attach_cat_ids($pdo2);
+        $canPref     = $prefCatIds ? eg_pref_attach_can_view($pdo2, (int)($_SESSION['id'] ?? 0)) : false;
+        $prefAttach  = $canPref ? eg_pref_attach_fetch($pdo2, $dids, $prefCatIds, '../../') : [];
         // 附件連結改走 Part_Attachment_API 的 download（見下方），不再需要 part_attach_url_dir 前綴
         // 附件清單（支援多筆 d_id）
         $ph = implode(',', array_fill(0, count($dids), '?'));
@@ -203,6 +212,10 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
         foreach ($albums as $a) $albumNameOf[(int)$a['id']] = $a['album_name'];
         $result = [];
         foreach ($rows as $r) {
+            // 命中優選標籤的料號附件一律不在這份一般清單出現：
+            // 有權限者已經在上方「優選附件」區看得到（重複列一次只是雜訊），
+            // 沒權限者本來就不該看到（勾了優選＝同時上鎖，見標籤設定的說明）。
+            if (eg_pref_attach_hit($r['category_ids'], $prefCatIds)) continue;
             $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
             $catNames = [];
             if ($r['category_ids']) {
@@ -235,7 +248,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                 'category_names' => $catNames,
             ];
         }
-        echo json_encode(['success' => true, 'attachments' => $result, 'albums' => $albums], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['success' => true, 'attachments' => $result, 'albums' => $albums,
+                          'pref_attachments' => $prefAttach], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
@@ -330,6 +344,13 @@ $bom_safe = htmlspecialchars($bom,  ENT_QUOTES, 'UTF-8');
         .att-section-header { background:#e8f4fd !important; color:#1a5276 !important; border-top:2px solid #aed6f1 !important; margin-top:8px; cursor:default; }
         .att-file-item.active { background:#1a5276 !important; color:#fff !important; border-color:#154360 !important; }
         .att-file-item.active .list-group-item-text { color:#fff !important; }
+        /* ── 優選附件（標籤設定勾選；僅限看得到加工單價的人）──
+           擺在清單最上方、用暖色系標出來，讓生管一開頁就看得到，不必往下捲 */
+        .pref-section-header { background:#F7E0BD !important; color:#7A4A12 !important;
+                               border-top:2px solid #C77C1A !important; cursor:default; }
+        .pref-file-item { background:#FFF7E8 !important; border-left:3px solid #F0A24B !important; }
+        .pref-file-item.active { background:#C77C1A !important; color:#fff !important; border-color:#8A5A2B !important; }
+        .pref-file-item.active .list-group-item-text { color:#fff !important; }
 
         /* ── 儲存對話框遮罩 ── */
         #save-overlay {
@@ -731,6 +752,46 @@ function renderPartScopeBar() {
 }
 renderPartScopeBar();
 
+/* ── 優選附件（2026-09-01 使用者要求）────────────────────────────────────
+   在「附件類別標籤設定」勾了「優選顯示在 BOM 總覽的料號查閱畫面」的標籤，
+   其附件（料號／報價／訂單三種來源）固定釘在清單最上方，生管一開頁就看得到。
+   ★ 後端已依「查看加工單價」資格決定要不要回傳；沒有資格時 pref_attachments
+     一律是空陣列（不是前端藏起來），所以這裡不必也不可以自己再判一次權限。 */
+function renderPrefAttach(list) {
+    if (!list || !list.length) return;
+    var h = '<li class="list-group-item pref-section-header">'
+        + '<strong><i class="fa fa-star"></i> 優選附件</strong>'
+        + '<small style="float:right;font-weight:normal;">' + list.length + ' 個</small>'
+        + '<br><small style="font-weight:normal;font-size:10px;">依附件標籤設定釘選；僅限可查看加工單價者</small>'
+        + '</li>';
+    list.forEach(function(att) {
+        var catBadges = '';
+        (att.category_names || []).forEach(function(cn) {
+            catBadges += '<span class="label" style="background:#C77C1A;color:#fff;margin-right:2px;font-size:10px;">' + escapeHtml(cn) + '</span>';
+        });
+        var srcBadge = att.source_label
+            ? '<span class="label label-default" style="margin-right:3px;font-size:10px;">' + escapeHtml(att.source_label) + '</span>' : '';
+        var extBadge = '<span class="label label-default" style="margin-right:4px;font-size:10px;">' + escapeHtml((att.ext || '').toUpperCase()) + '</span>';
+        var info = [att.uploaded_at, att.uploaded_by, att.file_size, att.note].filter(Boolean).join(' · ');
+        h += '<a href="#" class="list-group-item bom-file-item pref-file-item"'
+            + ' data-path="' + escapeHtml(att.url) + '"'
+            + ' data-type="' + escapeHtml(att.ext) + '"'
+            + ' data-name="' + escapeHtml(att.display_name) + '"'
+            + ' data-obsolete="0">'
+            + '<p class="list-group-item-text">'
+            + extBadge + srcBadge + catBadges + escapeHtml(att.display_name)
+            + (info ? '<br><small style="color:#8a6d45;font-size:10px;">' + escapeHtml(info) + '</small>' : '')
+            + '</p></a>';
+    });
+    $('#bom-file-list').prepend(h);
+    // 這一頁的主角仍是圖面，所以只有在「完全沒有圖檔可選」時才自動開第一個優選附件
+    if (!$('.bom-file-item.active').length) {
+        var f = list[0];
+        $('.pref-file-item').first().addClass('active');
+        showFile(f.url, f.ext, f.display_name);
+    }
+}
+
 $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res) {
     var listHtml = '';
     var hasFiles = false;
@@ -778,7 +839,9 @@ $.post('', { action: 'get_files_by_did', d_id: _d_id, bom: _bom }, function(res)
     // ── 料號附件區塊（依料號上傳，與 BOM 無關）─────────────────────────────
     if (_d_id) {
         $.post('', { action: 'get_attachments_by_did', d_id: _d_id, pk: _pk }, function(attRes) {
-            if (!attRes.success || !attRes.attachments || attRes.attachments.length === 0) return;
+            if (!attRes.success) return;
+            renderPrefAttach(attRes.pref_attachments || []);
+            if (!attRes.attachments || attRes.attachments.length === 0) return;
             var attHtml = '<li class="list-group-item att-section-header">'
                 + '<strong><i class="fa fa-paperclip"></i> 料號附件</strong>'
                 + '<small style="float:right;font-weight:normal;color:#5d6d7e;">' + attRes.attachments.length + ' 個</small>'

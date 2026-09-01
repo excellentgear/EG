@@ -175,8 +175,16 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
         $albums      = pa_album_list($pdo2, $dids);
         $albumNameOf = [];
         foreach ($albums as $a) $albumNameOf[(int)$a['id']] = $a['album_name'];
+        /* 優選標籤（標籤設定的「優選顯示在 BOM 總覽的料號查閱畫面」）＝價格類文件，
+           只有在 BOM 總表看得到加工單價的人可以看（唯一實作 pref_attach_lib）。
+           這裡也要擋：同一批檔案在 part_viewer 鎖起來、在本頁卻照列，那道鎖等於沒有。
+           有資格的人不受影響，照舊出現在「其他附件」分頁。 */
+        require_once __DIR__ . '/../../src/common/pref_attach_lib.php';
+        $prefCatIds = eg_pref_attach_cat_ids($pdo2);
+        $hidePref   = $prefCatIds ? !eg_pref_attach_can_view($pdo2, (int)($_SESSION['id'] ?? 0)) : false;
         $result = [];
         foreach ($rows as $r) {
+            if ($hidePref && eg_pref_attach_hit($r['category_ids'], $prefCatIds)) continue;
             $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
             $catNames = [];
             $isOwnDraw = false;
@@ -235,6 +243,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                                          WHERE a.status='active' AND qi.d_setting_d_id IN ($phD2) AND ($catCond)");
                 $qStmt->execute(array_merge($dids, $showOtherIds));
                 foreach ($qStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    if ($hidePref && eg_pref_attach_hit($r['category_ids'], $prefCatIds)) continue;   // 價格類文件同樣要擋
                     $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
                     $catNames = [];
                     foreach (array_filter(explode(',', (string)$r['category_ids'])) as $cid) { if (isset($cats[(int)$cid])) $catNames[] = $cats[(int)$cid]; }
@@ -263,6 +272,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_attachments_by_did') {
                                          WHERE a.status='active' AND ot.d_id_ID IN ($phD2) AND ($catCond)");
                 $oStmt->execute(array_merge($dids, $showOtherIds));
                 foreach ($oStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    if ($hidePref && eg_pref_attach_hit($r['category_ids'], $prefCatIds)) continue;   // 價格類文件同樣要擋
                     $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
                     $catNames = [];
                     foreach (array_filter(explode(',', (string)$r['category_ids'])) as $cid) { if (isset($cats[(int)$cid])) $catNames[] = $cats[(int)$cid]; }

@@ -6157,7 +6157,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 // is_photo_album＝這個標籤的附件以九宮格相簿檢視（唯一實作 photo_album_lib）
                 require_once __DIR__ . '/../../src/common/photo_album_lib.php';
                 pa_album_ensure_schema($pdo);
-                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark, COALESCE(dwg_group,'') AS dwg_group, COALESCE(dwg_trigger,1) AS dwg_trigger, COALESCE(is_photo_album,0) AS is_photo_album FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+                // show_in_part_viewer＝優選顯示在 BOM 總覽的料號查閱畫面（唯一實作 pref_attach_lib）
+                require_once __DIR__ . '/../../src/common/pref_attach_lib.php';
+                eg_pref_attach_ensure_schema($pdo);
+                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark, COALESCE(dwg_group,'') AS dwg_group, COALESCE(dwg_trigger,1) AS dwg_trigger, COALESCE(is_photo_album,0) AS is_photo_album, COALESCE(show_in_part_viewer,0) AS show_in_part_viewer FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'data'=>$rows]);
             } elseif ($op_code === 'save') {
                 if (!$can_attach_cat_edit) throw new Exception('無編輯附件類別標籤權限（需 A/CDR/CDRU）');
@@ -6179,6 +6182,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $dwg_trigger  = $own_drawing ? (intval($_POST['dwg_trigger'] ?? 0) ? 1 : 0) : 1;
                 // 以相簿（九宮格）檢視：產品照片這種一次好幾十張的附件用的
                 $photo_album  = intval($_POST['is_photo_album'] ?? 0) ? 1 : 0;
+                // 優選顯示在 BOM 總覽的料號查閱畫面（part_viewer.php）：這一區只給看得到加工單價的人，
+                // 判定與撈取一律走共用庫 pref_attach_lib，不要在別處再寫一份標籤名稱對照（鐵律4）
+                require_once __DIR__ . '/../../src/common/pref_attach_lib.php';
+                eg_pref_attach_ensure_schema($pdo);
+                $part_viewer  = intval($_POST['show_in_part_viewer'] ?? 0) ? 1 : 0;
                 $reactivate   = intval($_POST['reactivate'] ?? 0);
                 $op_name      = _get_operator($pdo, $uid);
                 if ($cat_id && $reactivate) {
@@ -6186,14 +6194,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['success'=>true,'message'=>'已重新啟用','cat_id'=>$cat_id]);
                 } elseif ($cat_id) {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=?,dwg_group=?,dwg_trigger=?,is_photo_album=? WHERE id=?")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $cat_id]);
+                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=?,dwg_group=?,dwg_trigger=?,is_photo_album=?,show_in_part_viewer=? WHERE id=?")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer, $cat_id]);
                     _log_audit($pdo,'update','dict','attach-cat:'.$cat_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已更新','cat_id'=>$cat_id]);
                 } else {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark,dwg_group,dwg_trigger,is_photo_album) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album]);
+                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark,dwg_group,dwg_trigger,is_photo_album,show_in_part_viewer) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer]);
                     $new_id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','attach-cat:'.$new_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已新增','cat_id'=>$new_id]);
@@ -8740,6 +8748,22 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                                 <input type="checkbox" id="acat-show-other-attach"> 併入圖面查閱頁「其他附件」分頁顯示
                             </label>
                             <div style="font-size:10px;color:#aaa;margin-top:2px;">勾選後，此類別的附件（不論原本上傳在報價/訂單/其他哪個位置）會同時併入圖面查閱頁的「其他附件」分頁，方便統一查找；不影響附件原本上傳位置的分頁顯示</div>
+                        </div>
+                        <!-- 優選顯示在 BOM 總覽的料號查閱畫面（2026-09-01 使用者要求）：
+                             生管在 BOM 總表點料號開出來的查閱頁，要能直接看到 BOSS 批製程價格這類文件；
+                             但那是價格資料，所以綁「查看加工單價」權限，且由後端不回傳（不是只藏畫面）。 -->
+                        <div class="form-group" style="margin-bottom:8px;">
+                            <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+                                <input type="checkbox" id="acat-part-viewer"> 優選顯示在<b>BOM總覽的料號查閱畫面</b>內
+                            </label>
+                            <div style="font-size:10px;color:#aaa;margin-top:2px;">
+                                勾選後，此類別的附件（<b>料號附件／報價附件／訂單附件三種來源都會撈</b>）會固定顯示在
+                                <b>BOM 總表點料號開啟的「料號圖面查閱」頁最上方</b>的「優選附件」區塊，不必再去別頁翻。<br>
+                                <b style="color:#C77C1A;">⚠ 權限：只有在 BOM 總表「看得到加工單價」的人才看得到這一區</b>
+                                （＝BOM 總表權限 A／C+D+R，或角色勾了「查看加工單價 oready_view_price」）。
+                                沒有這個資格的人後端連檔名都不會回傳，<b>而且該附件也不會再出現在下方一般的「料號附件」清單裡</b>——
+                                所以價格類文件勾了這一項就等於同時上鎖。
+                            </div>
                         </div>
                         <div class="form-group" style="margin-bottom:8px;">
                             <label style="font-size:11px;color:#888;">變數定義 <small style="color:#aaa;">（上傳時填入附加資訊）</small></label>
@@ -18139,7 +18163,11 @@ function loadAttachCatTable() {
                 ? '<span style="font-size:9px;background:#F0A24B;color:#4A3524;border:1px solid #C77C1A;border-radius:3px;padding:1px 4px;margin-left:3px;" title="此標籤的附件以九宮格相簿檢視，可分相簿、點開放大">相簿</span>' : '';
             var otherBadge = (c.show_in_other_attach=='1'||c.show_in_other_attach===1)
                 ? '<span style="font-size:9px;background:#e3f2fd;color:#1565c0;border-radius:3px;padding:1px 4px;margin-left:3px;" title="此類別的附件也會併入圖面查閱頁「其他附件」分頁顯示（不影響原本上傳位置的分頁）">併入其他附件</span>' : '';
-            html += '<td>'+escHtml(c.category_name)+varBadge+odBadge+grpBadge+trgBadge+albBadge+extBadge+otherBadge+'&nbsp;'+badge+'</td>';
+            // 優選顯示在 BOM 總覽料號查閱畫面：這一區綁「查看加工單價」，清單上要一眼看得出來
+            // （否則使用者不會知道為什麼有些人看不到那份附件），配色走 ai-rules/10 暖色系
+            var pvBadge = (c.show_in_part_viewer=='1'||c.show_in_part_viewer===1)
+                ? '<span style="font-size:9px;background:#DD5138;color:#fff;border-radius:3px;padding:1px 4px;margin-left:3px;" title="優選顯示在 BOM 總覽的料號查閱畫面；僅限在 BOM 總表看得到加工單價的人">優選/限單價權限</span>' : '';
+            html += '<td>'+escHtml(c.category_name)+varBadge+odBadge+grpBadge+trgBadge+albBadge+extBadge+otherBadge+pvBadge+'&nbsp;'+badge+'</td>';
             html += '<td style="text-align:center;">'+showBadge+'</td>';
             html += '<td style="text-align:right;">'+badge+'</td>';
             if (CAN_ATTACH_CAT_EDIT) {
@@ -18227,6 +18255,8 @@ function editAttachCat(id) {
     if (otherChk) otherChk.checked = (c.show_in_other_attach=='1'||c.show_in_other_attach===1);
     var albChk = document.getElementById('acat-photo-album');
     if (albChk) albChk.checked = (c.is_photo_album=='1'||c.is_photo_album===1);
+    var pvChk = document.getElementById('acat-part-viewer');
+    if (pvChk) pvChk.checked = (c.show_in_part_viewer=='1'||c.show_in_part_viewer===1);
     var obsChk = document.getElementById('acat-obsolete-mark');
     if (obsChk) obsChk.checked = (c.is_obsolete_mark=='1'||c.is_obsolete_mark===1);
     var dgIn = document.getElementById('acat-dwg-group');
@@ -18263,6 +18293,8 @@ function resetAttachCatForm() {
     if (otherChk) otherChk.checked = false;
     var albChk = document.getElementById('acat-photo-album');
     if (albChk) albChk.checked = false;
+    var pvChk = document.getElementById('acat-part-viewer');
+    if (pvChk) pvChk.checked = false;
     var obsChk = document.getElementById('acat-obsolete-mark');
     if (obsChk) obsChk.checked = false;
     var dgIn = document.getElementById('acat-dwg-group');
@@ -18324,7 +18356,8 @@ function saveAttachCategory() {
             is_obsolete_mark:(document.getElementById('acat-obsolete-mark')||{}).checked ? 1 : 0,
             dwg_group:((document.getElementById('acat-dwg-group')||{}).value||'').trim(),
             dwg_trigger:(document.getElementById('acat-dwg-trigger')||{}).checked ? 1 : 0,
-            is_photo_album:(document.getElementById('acat-photo-album')||{}).checked ? 1 : 0 }).done(function(r) {
+            is_photo_album:(document.getElementById('acat-photo-album')||{}).checked ? 1 : 0,
+            show_in_part_viewer:(document.getElementById('acat-part-viewer')||{}).checked ? 1 : 0 }).done(function(r) {
         if (r.success) { _attachCatsCache = null; showToast(r.message||'已儲存'); resetAttachCatForm(); loadAttachCatTable(); }
         else showToast(r.message||'儲存失敗','error');
     });

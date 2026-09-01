@@ -43,6 +43,9 @@ $taxRate = acc_tax_rate($db);
 include_once '../../src/common/org_role_lib.php';
 $ownCompany = eg_company_full_name($db);      // 列印大標題＝本公司全名，動態取（ai-rules/16 第一節）
 $reconPref  = acc_recon_pref($db);            // 拖移排序／依勾選順序排序的全站預設值
+/* 對帳時直接點料號看附件（2026-09-01 使用者交辦）：要顯示哪些標籤由會計管理員設定，
+   一個都沒勾＝功能關閉，料號欄就不會變成連結（預設關著，不會一上線就攤開附件）。 */
+$partAttachOn = !empty(acc_recon_part_attach_cats($db));
 /* 開頁預設的帳款月份要依結帳日自動切換（使用者 2026-08-28 交辦）：
    結帳日還沒到＝這個月的帳還沒結完，現在對的是上個月。兩側結帳日不同，各算一份。 */
 $bmDefault  = ['ar' => acc_default_billing_month($db, 'ar'),
@@ -205,6 +208,33 @@ table.a-t tbody tr.dragging{opacity:.4;}
 .a-modal{background:#fff;border-radius:8px;width:820px;max-width:100%;margin:0 auto;
   box-shadow:0 6px 30px rgba(0,0,0,.3);}
 .a-modal.narrow{width:600px;}
+.a-modal.wide{width:1180px;}
+
+/* ── 料號附件跳窗（對帳時點料號直接看）──
+   左邊檔案清單、右邊預覽，跟料號查閱頁同一種操作感，但不離開對帳畫面 */
+.pa-link{color:var(--a-brand);border-bottom:1px dashed var(--a-line2);cursor:pointer;}
+.pa-link:hover{color:var(--a-acc-d);border-bottom-style:solid;}
+.pa-link .fa{font-size:11px;margin-left:3px;opacity:.75;}
+.pa-wrap{display:flex;gap:10px;height:66vh;min-height:340px;}
+.pa-list{width:290px;flex:0 0 290px;overflow:auto;border:1px solid var(--a-line);
+  border-radius:5px;background:var(--a-bg);}
+.pa-item{display:block;padding:7px 9px;border-bottom:1px solid var(--a-line);cursor:pointer;
+  font-size:12px;color:var(--a-ink);line-height:1.5;word-break:break-all;}
+.pa-item:hover{background:var(--a-bg2);}
+.pa-item.on{background:var(--a-acc);color:#fff;}
+.pa-item.on small{color:#FDF3E3 !important;}
+.pa-tag{display:inline-block;background:#C77C1A;color:#fff;border-radius:3px;
+  padding:0 5px;font-size:10px;margin-right:3px;}
+.pa-src{display:inline-block;background:var(--a-line);color:var(--a-ink);border-radius:3px;
+  padding:0 5px;font-size:10px;margin-right:3px;}
+.pa-view{flex:1;min-width:0;border:1px solid var(--a-line);border-radius:5px;background:#ddd;
+  position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;}
+.pa-view img{max-width:100%;max-height:100%;object-fit:contain;}
+.pa-view iframe{width:100%;height:100%;border:0;background:#fff;}
+.pa-empty{color:var(--a-ink2);font-size:13px;text-align:center;padding:16px;}
+.pa-cat{display:flex;align-items:center;gap:7px;padding:5px 7px;border-bottom:1px solid var(--a-line);
+  font-size:13px;color:var(--a-ink);cursor:pointer;}
+.pa-cat:hover{background:var(--a-bg2);}
 .a-modal .m-head{background:var(--a-ok);color:var(--a-ink);padding:9px 14px;font-weight:bold;
   border-radius:8px 8px 0 0;display:flex;align-items:center;}
 .a-modal .m-close{margin-left:auto;cursor:pointer;font-size:17px;}
@@ -715,10 +745,40 @@ table.ot tr.lock{color:#a08a6a;}
       <button class="btn-mini" id="btnAsClear">清除綁定</button>
     </div>
     <div class="a-hint">綁定後列印的對帳單表頭會用該文件名稱、頁尾右下角印出文件編號（四階文件自動附版次，並依帳款月份回推當時版次）。</div>
+    <hr style="border-color:var(--a-line);">
+    <div style="font-size:13px;color:var(--a-ink);">
+      對帳單上點<b>料號</b>時，要讓大家看到哪些標籤的附件
+    </div>
+    <div class="a-hint" style="margin:4px 0 6px;">
+      勾選後，對帳單的料號欄會變成可點的連結，點了直接在頁內跳窗看該料號的附件
+      （<b>料號附件／報價附件／訂單附件三種來源都會撈</b>），不必離開對帳畫面。<br>
+      <b>一個都不勾＝這個功能關閉</b>，料號欄維持純文字、後端也不會回傳任何檔案。
+    </div>
+    <div id="paCatList" style="max-height:210px;overflow:auto;border:1px solid var(--a-line);border-radius:5px;"></div>
   </div>
   <div class="m-foot">
     <button data-close="mkSet">取消</button>
     <button class="go" id="setOk"><i class="fa fa-save"></i> 儲存預設值</button>
+  </div>
+</div></div>
+
+<!-- 料號附件（點對帳單上的料號開啟）：左清單、右預覽，不離開對帳畫面 -->
+<div class="a-mask" id="mkPartAtt"><div class="a-modal wide">
+  <div class="m-head"><i class="fa fa-paperclip"></i>&nbsp;料號附件
+    <span id="paTitle" style="margin-left:8px;font-weight:normal;font-size:13px;"></span>
+    <span class="m-close" data-close="mkPartAtt">✕</span></div>
+  <div class="m-body">
+    <div id="paScope" style="display:none;margin-bottom:8px;"></div>
+    <div class="pa-wrap">
+      <div class="pa-list" id="paList"></div>
+      <div class="pa-view" id="paView"><div class="pa-empty">從左側選一個檔案</div></div>
+    </div>
+  </div>
+  <div class="m-foot">
+    <a id="paOpen" href="#" target="_blank" rel="noopener"
+       style="float:left;line-height:32px;font-size:12.5px;color:var(--a-brand);display:none;">
+       <i class="fa fa-external-link"></i> 另開分頁看大圖</a>
+    <button data-close="mkPartAtt">關閉</button>
   </div>
 </div></div>
 
@@ -753,6 +813,21 @@ table.ot tr.lock{color:#a08a6a;}
       <li>出貨單沒綁訂單、或訂單沒綁報價時，下方會列出<b>同客戶同料號的候選</b>，可直接綁定；不綁也可以，就人工判斷單價。</li>
       <li><b>報價數量的比對是粗略的</b>：階梯報價用階梯區間（含該階容差）判定，非階梯報價用 ±10% 判定，僅供提醒，實際仍以業務判斷為準。</li>
       <li>應付（加工費）沒有報價單與客戶訂單可對照，只會檢查「數量×單價＝加工金額」與 ERP 原始單價是否被覆寫過。</li>
+    </ul>
+
+    <h4>點料號看該料號的附件</h4>
+    <ul>
+      <li>對帳單上的<b>料號</b>若顯示成有底線、後面帶 <i class="fa fa-paperclip"></i> 的連結，
+          點下去就會在<b>頁內跳窗</b>顯示這個料號的附件（左邊清單、右邊預覽），<b>不會離開對帳畫面</b>，
+          也<b>不會</b>順便把那一列標成「已對到」。</li>
+      <li>來源含<b>料號附件、報價附件、訂單附件</b>三種；同一個料號在主檔有多筆（不同客戶／版次）時，
+          跳窗上方會出現切換下拉，一次只看一筆，不會把別家客戶的圖混進來。</li>
+      <li>要顯示<b>哪些標籤</b>的附件，由<b>會計管理員在「模組設定」勾選</b>；
+          <b>一個都不勾＝這個功能關閉</b>，料號就只是純文字。標籤本身在
+          「料號主檔 → 字典 → 附件類別標籤設定」維護。</li>
+      <li>標成<span class="pa-tag" style="background:#DD5138;">價格類</span>的標籤要特別留意：
+          那些附件在 BOM 總表的料號查閱頁是<b>只有可查看加工單價的人</b>才看得到的，
+          在這裡勾選就等於<b>所有能開對帳頁的人都看得到</b>。</li>
     </ul>
 
     <h4>退貨（出貨退回）</h4>
@@ -797,7 +872,7 @@ table.ot tr.lock{color:#a08a6a;}
       <li><b>對象設定</b>（是否提供對帳單）：有該側對帳權限者即可設定；
           同一個跳窗裡的<b>臨時變動結帳日</b>只有會計管理員能改。</li>
       <li><b>對應到客戶主檔</b>：僅<b>會計管理員</b>（會回填出貨單上的客戶編號並留稽核紀錄）。</li>
-      <li><b>模組設定</b>（預設開關、AS 文件綁定）：僅<b>會計管理員</b>看得到。</li>
+      <li><b>模組設定</b>（預設開關、AS 文件綁定、<b>料號附件可看的標籤</b>）：僅<b>會計管理員</b>看得到。</li>
       <li>角色於「使用者權限設定」頁指派（模組 accounting）：應收對帳(業務)只能碰應收、應付對帳(生管)只能碰應付、會計檢閱只能看。</li>
     </ul>
   </div>
@@ -841,6 +916,9 @@ var ME = null;
 var CSRF = '', SIDE = 'ar', sheet = null, lines = [], selIdx = -1, keySeq = 0, canEdit = false;
 /* 兩個開關：全站預設值由會計管理員設定，個人切換記在自己的 localStorage（不影響別人） */
 var PREF = <?= json_encode($reconPref) ?>;
+/* 料號附件功能有沒有啟用（＝會計管理員有沒有勾任何標籤）。關著時料號欄不變連結，
+   而且後端本來就不會回傳檔案，前端這個旗標只是省掉沒必要的請求與滑鼠提示。 */
+var PART_ATTACH_ON = <?= $partAttachOn ? 'true' : 'false' ?>;
 var dragOn = false, autoOn = false, checkSeq = 0;
 var OPT = {no_statement:0, note:null};        // 這個對象的選項（是否提供對帳單）
 var SETL = null;                              // 這個對象實際適用的結帳條件
@@ -1074,7 +1152,7 @@ function render(){
       +'<td>'+esc(dispDate(l.doc_date))+'</td>'
       +'<td>'+kindPill(l)+'</td>'
       +(SIDE==='ap'?'<td>'+esc(l.bom||'')+'</td>':'')
-      +'<td class="l">'+esc(l.product_id||'')+'</td>'
+      +'<td class="l">'+partCell(l)+'</td>'
       +'<td class="l">'+esc((l.spec||'').substr(0,18))+'</td>'
       +'<td class="r orig-v">'+(l.orig_qty===null?'':nf(l.orig_qty))+'</td>'
       +'<td class="r orig-v">'+(l.orig_price===null?'':n2(l.orig_price))+'</td>'
@@ -1093,6 +1171,86 @@ function render(){
   $('#tbody').html(h);
   renderFoot(pk);
   updateStat();
+}
+
+/* ── 料號附件（2026-09-01 使用者交辦）─────────────────────────────────────
+   對帳單那一列的「料號」本身就是開啟入口：
+     · 開在**頁內跳窗**而不是另開 part_viewer 分頁——對帳是一列一列比數字的工作，
+       跳出去換視窗很容易失焦，回來還要重新找到剛才那一列。
+     · 也刻意不塞進右側「報價／訂單對照」面板——那面板點列就會開、內容已經很長
+       （三段單價比對＋候選訂單／報價），再加附件會更難找；而且使用者要的就是「點料號」。
+     · 點料號要 stopPropagation，否則會連帶觸發「點列＝標記已對到」。
+   要看得到哪些標籤由會計管理員在模組設定勾選；沒勾＝這裡就只是純文字。 */
+function partCell(l){
+  var pn = l.product_id || '';
+  if (!PART_ATTACH_ON || !pn) return esc(pn);
+  return '<span class="pa-link" data-pn="' + esc(pn) + '" title="點此查看這個料號的附件">'
+       + esc(pn) + '<i class="fa fa-paperclip"></i></span>';
+}
+var paFiles = [], paPn = '';
+$(document).on('click', '.pa-link', function(e){
+  e.preventDefault(); e.stopPropagation();      // 不要順便把這一列標成已對到
+  openPartAttach($(this).data('pn'), 0);
+});
+function openPartAttach(pn, pk){
+  paPn = pn; paFiles = [];
+  $('#paTitle').text(pn);
+  $('#paScope').hide().empty();
+  $('#paList').html('<div class="pa-empty"><i class="fa fa-spinner fa-spin"></i> 查詢中…</div>');
+  $('#paView').html('<div class="pa-empty">從左側選一個檔案</div>');
+  $('#paOpen').hide();
+  openMask('mkPartAtt');
+  $.getJSON(API, {action:'recon_part_attach', part_no:pn, pk:pk||0}, function(r){
+    if(!r.ok){ $('#paList').html('<div class="pa-empty">'+esc(r.error||'查詢失敗')+'</div>'); return; }
+    if(!r.enabled){
+      $('#paList').html('<div class="pa-empty">尚未設定要顯示哪些附件標籤，請會計管理員到「模組設定」勾選。</div>');
+      return;
+    }
+    /* 同一個料號文字可能對到多筆主檔（不同客戶／版次）——不可以全部混在一起顯示，
+       一次只看一筆，其餘由這個下拉切換（與料號查閱頁同一個口徑，見 part_scope_lib） */
+    if((r.candidates||[]).length > 1){
+      var o = '';
+      r.candidates.forEach(function(c){
+        o += '<option value="'+c.d_id+'"'+(c.d_id===r.pk?' selected':'')+'>'+esc(c.label)+'</option>';
+      });
+      $('#paScope').html('<div class="info" style="margin:0;font-size:12px;">'
+        + '<i class="fa fa-exclamation-triangle"></i> 這個料號在主檔有 '+r.candidates.length
+        + ' 筆（不同客戶／版次），目前只顯示其中一筆：'
+        + '<select id="paScopeSel" style="margin-left:6px;height:26px;font-size:12px;max-width:100%;">'+o+'</select>'
+        + '</div>').show();
+    }
+    paFiles = r.attachments || [];
+    if(!paFiles.length){
+      $('#paList').html('<div class="pa-empty">這個料號在指定的附件標籤下沒有檔案。</div>');
+      return;
+    }
+    var h = '';
+    paFiles.forEach(function(f, i){
+      var tags = (f.category_names||[]).map(function(c){ return '<span class="pa-tag">'+esc(c)+'</span>'; }).join('');
+      var info = [f.uploaded_at, f.uploaded_by, f.file_size, f.note].filter(Boolean).join(' · ');
+      h += '<div class="pa-item" data-i="'+i+'">'
+         + '<span class="pa-src">'+esc((f.ext||'').toUpperCase())+'</span>'
+         + '<span class="pa-src">'+esc(f.source_label||'')+'</span>' + tags
+         + esc(f.display_name)
+         + (info ? '<br><small style="color:var(--a-ink2);font-size:10.5px;">'+esc(info)+'</small>' : '')
+         + '</div>';
+    });
+    $('#paList').html(h);
+    showPartAttach(0);
+  }).fail(function(){ $('#paList').html('<div class="pa-empty">查詢失敗</div>'); });
+}
+$(document).on('change', '#paScopeSel', function(){ openPartAttach(paPn, parseInt($(this).val(),10)||0); });
+$(document).on('click', '#paList .pa-item', function(){ showPartAttach(parseInt($(this).data('i'),10)); });
+function showPartAttach(i){
+  var f = paFiles[i];
+  if(!f) return;
+  $('#paList .pa-item').removeClass('on');
+  $('#paList .pa-item[data-i="'+i+'"]').addClass('on');
+  $('#paOpen').attr('href', f.url).show();
+  if(f.type === 'image')      $('#paView').html('<img src="'+esc(f.url)+'" alt="">');
+  else if(f.type === 'pdf')   $('#paView').html('<iframe src="'+esc(f.url)+'"></iframe>');
+  else $('#paView').html('<div class="pa-empty">這種檔案不支援預覽（'+esc((f.ext||'').toUpperCase())
+       +'）。<br><a href="'+esc(f.url)+'" target="_blank" rel="noopener">點此下載</a></div>');
 }
 
 function renderFoot(pk){
@@ -2202,6 +2360,22 @@ $('#btnReconSet').on('click',function(){
     AS_DOCS=r.docs||[]; AS_CUR=r.current||0;
     $('#asdocShow').text(r.label||'尚未綁定');
   });
+  // 料號附件可看的標籤：每次開設定都重抓現況（標籤本身會被別人新增／改名／停用）
+  $('#paCatList').html('<div class="pa-empty">載入中…</div>');
+  $.getJSON(API,{action:'recon_part_attach_cats'},function(r){
+    if(!r.ok){ $('#paCatList').html('<div class="pa-empty">'+esc(r.error||'載入失敗')+'</div>'); return; }
+    var h='';
+    (r.cats||[]).forEach(function(c){
+      // 標出價格類（優選）標籤：勾了等於把加工價格攤給所有能對帳的人看，要讓管理員知道
+      var warn = c.pref
+        ? '<span class="pa-tag" style="background:#DD5138;" title="這個標籤在料號查閱頁是限「可查看加工單價」者才看得到；在這裡勾選＝所有能開對帳頁的人都看得到">價格類</span>'
+        : '';
+      h += '<label class="pa-cat"><input type="checkbox" class="pa-cat-ck" value="'+c.id+'"'
+         + (c.checked?' checked':'') + ' style="width:15px;height:15px;">'
+         + warn + esc(c.name) + '</label>';
+    });
+    $('#paCatList').html(h || '<div class="pa-empty">目前沒有啟用中的附件類別標籤</div>');
+  }).fail(function(){ $('#paCatList').html('<div class="pa-empty">載入失敗</div>'); });
   openMask('mkSet');
 });
 $('#btnAsPick').on('click',function(){
@@ -2223,11 +2397,22 @@ $('#btnAsClear').on('click',function(){
   },'json').fail(function(){ toast('設定失敗', true); });
 });
 $('#setOk').on('click',function(){
+  var cats = $('#paCatList .pa-cat-ck:checked').map(function(){ return this.value; }).get().join(',');
   $.post(API+'?action=recon_pref_save',{csrf:CSRF,
         drag_default: $('#stDrag').prop('checked')?1:0,
         autosort_default: $('#stAuto').prop('checked')?1:0},function(r){
     if(!r.ok){ toast(esc(r.error||'儲存失敗'), true); return; }
-    PREF=r.pref||PREF; closeMask('mkSet'); toast(esc(r.message));
+    PREF=r.pref||PREF;
+    // 料號附件標籤是另一支 action（權限與驗證各自獨立），兩件一起在同一顆按鈕存完
+    $.post(API+'?action=recon_part_attach_cats_save',{csrf:CSRF, cat_ids:cats},function(r2){
+      if(!r2.ok){ toast(esc(r2.error||'附件標籤儲存失敗'), true); return; }
+      var was = PART_ATTACH_ON;
+      PART_ATTACH_ON = !!(r2.cats && r2.cats.length);
+      if(was !== PART_ATTACH_ON && lines.length) render();   // 料號欄要即時變成／不再是連結
+      closeMask('mkSet'); toast(esc(r.message) + '；' + esc(r2.message));
+    },'json').fail(function(x){
+      var m='附件標籤儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true);
+    });
   },'json').fail(function(x){
     var m='儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){} toast(esc(m), true);
   });

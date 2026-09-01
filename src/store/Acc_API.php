@@ -1692,6 +1692,34 @@ case 'recon_asdoc_meta': {
              'label' => $doc ? (($doc['doc_no'] ?? '') . '（' . ($doc['doc_name'] ?? '') . '）') : '尚未綁定']);
 }
 
+/* ── 對帳時直接看料號附件（2026-09-01）────────────────────────────────
+   對帳單上點料號就開跳窗；要看得到哪些標籤由會計管理員在模組設定勾選，
+   一個都沒勾＝功能關閉（後端回 enabled=false 且不帶任何檔案）。 */
+case 'recon_part_attach': {
+    $s  = $_POST ?: $_GET;
+    $pn = acc_u8(trim((string)($s['part_no'] ?? '')));
+    $pk = (int)($s['pk'] ?? 0);
+    if ($pn === '' && $pk <= 0) acc_err('缺少料號');
+    acc_out(acc_recon_part_attach($db, $pn, $pk));
+}
+
+/* 設定畫面：全部啟用中的附件類別＋目前勾選（僅會計管理員） */
+case 'recon_part_attach_cats': {
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可設定', 403);
+    acc_out(['cats' => acc_recon_part_attach_cat_options($db)]);
+}
+
+case 'recon_part_attach_cats_save': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) acc_err('僅會計管理員可設定', 403);
+    if (!acc_csrf_ok($_POST['csrf'] ?? '')) acc_err('CSRF 驗證失敗，請重新整理頁面');
+    $raw = (string)($_POST['cat_ids'] ?? '');
+    $ids = $raw === '' ? [] : explode(',', $raw);
+    $r   = acc_recon_part_attach_cats_save($db, $ids);
+    if (!$r['success']) acc_err($r['message']);
+    acc_out($r);
+}
+
 /* 對帳單綁定哪一份 AS 文件（僅會計管理員；走全站共用的 asdoc_lib） */
 case 'recon_asdoc_save': {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') acc_err('必須用 POST', 405);

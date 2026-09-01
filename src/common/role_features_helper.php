@@ -275,3 +275,71 @@ if (!function_exists('rf_has_module_role')) {
         }
     }
 }
+
+if (!function_exists('oready_resolve_can_view_price')) {
+    /**
+     * BOM 總表（OreadyReply_ForPm_BaseOfTime.php）的「查看加工單價」資格。
+     *
+     * 判斷規則必須與該頁開頭的權限判斷保持一致（任一邊改了另一邊要同步改）：
+     *   canSeePrice = displayPermissionCode==='A' || displayPermissionCode==='C+D+R' || featSeePrice
+     * 其中 featSeePrice ＝ 角色功能碼 oready_view_price（rf_has_feature 會把萬用碼 'all' 視為符合）。
+     *
+     * 注意「唯讀角色覆蓋」（oready_readonly）在該頁是把 display_permission_code 強制改成 'R'，
+     * 但 **不會** 清掉 $oready_feat_view_price——所以唯讀角色只要明確勾了 oready_view_price
+     * 仍然看得到單價，這裡照樣還原同一個行為（把 readonly 當成 display='R'，功能碼照舊生效）。
+     *
+     * 用途：把「只有看得到加工單價的人才能看」的資料（例：優選附件裡的 BOSS 批製程價格）
+     * 帶到 BOM 總表以外的頁面時，一律呼叫這一支，不要各頁自己拼一份判斷式。
+     *
+     * @param string $script_path 要比對 system_module_pages 的頁面路徑；
+     *                            預設 BOM 總表本身（權限來源就是那一頁）。
+     */
+    function oready_resolve_can_view_price($pdo, $user_id, $script_path = '/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php') {
+        $user_id = (int)$user_id;
+        if ($user_id <= 0 || !eg_user_is_active($pdo, $user_id)) return false;
+        try {
+            // 功能碼優先：勾了就是有（含管理員角色的萬用碼 'all'），與唯讀覆蓋無關
+            $features = rf_load_user_features($pdo, $user_id);
+            if (rf_has_feature($features, 'oready_view_price')) return true;
+            // 唯讀覆蓋：該頁會把 display code 壓成 'R'，等於下面兩種舊制權限都不成立
+            if (in_array('oready_readonly', $features, true)) return false;
+
+            $st = $pdo->prepare("
+                SELECT smp.page_id, smp.group_id
+                FROM system_module_pages smp
+                WHERE (:script LIKE CONCAT('%', smp.page_url) AND smp.page_url IS NOT NULL AND smp.page_url != '')
+                   OR (:script LIKE CONCAT('%', smp.page_url_readonly) AND smp.page_url_readonly IS NOT NULL AND smp.page_url_readonly != '')
+                LIMIT 1
+            ");
+            $st->execute([':script' => $script_path]);
+            $page = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$page) return false;
+
+            $group_module_code = null;
+            if (!empty($page['group_id'])) {
+                $st2 = $pdo->prepare("SELECT module_code FROM system_modules WHERE group_id = :gid LIMIT 1");
+                $st2->execute([':gid' => $page['group_id']]);
+                $group_module_code = $st2->fetchColumn();
+            }
+
+            // page scope 優先，沒有才退 group scope（與該頁 Step 3a/3b 相同）
+            $st3 = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=:uid AND scope='page' AND module_code=:pid");
+            $st3->execute([':uid' => $user_id, ':pid' => $page['page_id']]);
+            $perms = array_filter($st3->fetchAll(PDO::FETCH_COLUMN));
+            if (!$perms && !empty($group_module_code)) {
+                $st4 = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=:uid AND scope='group' AND module_code=:mc");
+                $st4->execute([':uid' => $user_id, ':mc' => $group_module_code]);
+                $perms = array_filter($st4->fetchAll(PDO::FETCH_COLUMN));
+            }
+            $chars = [];
+            foreach ($perms as $p) { $chars = array_merge($chars, str_split($p)); }
+            $chars = array_unique($chars);
+            if (!$chars) return false;
+            if (in_array('A', $chars, true)) return true;   // 管理者
+            sort($chars);
+            return implode('+', $chars) === 'C+D+R';        // 生管（含刪除）才看得到單價
+        } catch (Exception $e) {
+            return false;   // fail-closed：判不出來一律當作沒有權限（這是會外洩價格的資料）
+        }
+    }
+}

@@ -4368,6 +4368,113 @@ function acc_recon_pref_save(PDO $db, array $d): array
     }
 }
 
+/* ------------------------------------------------------------------
+ * 對帳時直接看料號附件（2026-09-01 使用者交辦）
+ *
+ * 應付對帳（生管對加工費）常常要回頭確認「這個料號當初講好的加工條件是什麼」，
+ * 原本得另開 BOM 總表→點料號→料號查閱頁，對到一半離開畫面很容易失焦。
+ * 現在直接在對帳單上點那一列的**料號**就開跳窗看。
+ *
+ * 要顯示哪些標籤的附件由**會計管理員**在「模組設定」勾（存 system_settings，CSV of 類別 id）：
+ *   - 預設一個都沒勾 ＝ 這個功能不啟用，料號欄不會變成連結，也不會回傳任何檔案
+ *     （寧可預設關著，也不要一上線就把整包附件攤在對帳頁上）。
+ *   - 不寫死標籤名稱，一律由設定推導（鐵律4）。
+ * ------------------------------------------------------------------ */
+
+/** 對帳頁可查看的料號附件標籤（類別 id 陣列；空陣列＝功能未啟用） */
+function acc_recon_part_attach_cats(PDO $db): array
+{
+    try {
+        $st = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ?");
+        $st->execute(['acc_recon_part_attach_cats']);
+        $v = (string)$st->fetchColumn();
+        if ($v === '') return [];
+        $ids = array_values(array_filter(array_map('intval', explode(',', $v))));
+        return array_values(array_unique($ids));
+    } catch (Throwable $e) { return []; }
+}
+
+/** 儲存可查看的標籤（呼叫端須先確認是會計管理員）；只收實際存在的類別 id */
+function acc_recon_part_attach_cats_save(PDO $db, array $ids): array
+{
+    try {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if ($ids) {
+            $ph = implode(',', array_fill(0, count($ids), '?'));
+            $st = $db->prepare("SELECT id FROM quotation_file_categories WHERE id IN ($ph)");
+            $st->execute($ids);
+            $ok  = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+            $ids = array_values(array_intersect($ids, $ok));   // 後端再驗一次，不採信前端送什麼就存什麼
+        }
+        $st = $db->prepare("INSERT INTO system_settings (setting_key, setting_value) VALUES (?,?)
+                            ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)");
+        $st->execute(['acc_recon_part_attach_cats', implode(',', $ids)]);
+        return ['success' => true, 'message' => $ids ? ('已儲存，共 ' . count($ids) . ' 個標籤') : '已清除設定（功能關閉）',
+                'cats' => $ids];
+    } catch (Throwable $e) {
+        return ['success' => false, 'message' => '儲存失敗：' . $e->getMessage()];
+    }
+}
+
+/** 設定畫面用：全部啟用中的附件類別＋目前勾選狀態（順便標出價格類的優選標籤） */
+function acc_recon_part_attach_cat_options(PDO $db): array
+{
+    require_once __DIR__ . '/pref_attach_lib.php';
+    eg_pref_attach_ensure_schema($db);
+    $cur = acc_recon_part_attach_cats($db);
+    $out = [];
+    try {
+        $rows = $db->query("SELECT id, category_name, COALESCE(show_in_part_viewer,0) AS pref
+                            FROM quotation_file_categories
+                            WHERE is_active = 1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) {
+            $out[] = ['id' => (int)$r['id'], 'name' => $r['category_name'],
+                      'pref' => (int)$r['pref'] ? 1 : 0,
+                      'checked' => in_array((int)$r['id'], $cur, true) ? 1 : 0];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/**
+ * 取某個料號（文字）的附件，只回管理員勾選的那些標籤。
+ *
+ * 對帳單上的料號是**文字**（來源憑證沒存 d_setting 的 PK），所以歸戶走
+ * part_scope_lib：同名料號有多筆主檔時預設鎖定最新一筆，其餘一併回傳讓畫面可切換
+ * （直接全部混在一起就會出現「別家客戶的圖」，見 part_scope_lib 開頭的說明）。
+ *
+ * @param string $partNo 料號文字
+ * @param int    $pk     指定的 d_setting.d_id（畫面上切換過才有；0＝自動挑）
+ */
+function acc_recon_part_attach(PDO $db, string $partNo, int $pk = 0): array
+{
+    require_once __DIR__ . '/part_scope_lib.php';
+    require_once __DIR__ . '/pref_attach_lib.php';
+
+    $cats = acc_recon_part_attach_cats($db);
+    $out  = ['enabled' => !empty($cats), 'part_no' => $partNo, 'pk' => 0,
+             'candidates' => [], 'attachments' => []];
+    if (!$cats) return $out;                       // 管理員還沒設定 ＝ 功能關閉
+    if ($partNo === '' && $pk <= 0) return $out;
+
+    $scope = eg_part_scope_resolve($db, $pk, $partNo);
+    $out['pk']      = (int)($scope['pk'] ?? 0);
+    $out['part_no'] = $scope['part_no'] !== '' ? $scope['part_no'] : $partNo;
+    if (count($scope['candidates'] ?? []) > 1) {
+        $cnt = [];
+        try { $cnt = eg_part_scope_counts($db, $scope['candidates']); } catch (Throwable $e) {}
+        foreach ($scope['candidates'] as $c) {
+            $out['candidates'][] = ['d_id' => (int)$c['d_id'],
+                                    'label' => eg_part_scope_label($c, $cnt[$c['d_id']] ?? null)];
+        }
+    }
+    if (empty($scope['dids'])) return $out;
+
+    // 三種來源（料號／報價／訂單）共用同一支撈取，不在這裡再寫一份 SQL
+    $out['attachments'] = eg_pref_attach_fetch($db, $scope['dids'], $cats, '../../');
+    return $out;
+}
+
 /** 某對象的對帳選項（是否提供對帳單） */
 function acc_recon_party_opt(PDO $db, string $side, string $partyId): array
 {
