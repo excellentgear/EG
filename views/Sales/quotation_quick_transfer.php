@@ -47,6 +47,9 @@ try {
         .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
 
         .va-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
+        /* 標籤挑選是「從另一個跳窗裡再開一層」的（快速套用／偵測結果改標籤），
+           跟其他跳窗同一個 z-index 就會被蓋在後面看不到 */
+        #tagPickMask { z-index:1080; }
         .va-modal { background:#fff; border-radius:8px; max-width:560px; margin:36px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
             max-height:88vh; display:flex; flex-direction:column; }
         .va-modal.wide { max-width:860px; }
