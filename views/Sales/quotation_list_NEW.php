@@ -1182,13 +1182,20 @@ body { background:var(--bg); }
                 <div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:6px;">
                   <i class="fa fa-tag"></i> 子標籤
                   <small id="pt-sub-group-label" style="color:#aaa;font-weight:400;"></small>
+                  <button type="button" id="pt-merge-btn" class="btn btn-xs" onclick="mergePtGroupTags()"
+                          style="display:none;float:right;font-size:10px;padding:1px 6px;background:#8a5a2b;color:#fff;border-color:#8a5a2b;"
+                          title="把這個群組底下標籤上的報價單項目，全部改用另一個標籤">
+                    <i class="fa fa-random"></i> 整組移轉
+                  </button>
                 </div>
                 <div id="pt-sub-list" style="min-height:80px;margin-bottom:8px;">
                   <div class="text-muted" style="font-size:11px;">← 先選擇群組</div>
                 </div>
                 <div style="font-size:10px;color:#8a5a2b;background:#FFF8ED;border:1px solid #E4D3BC;border-radius:3px;padding:4px 6px;margin-bottom:6px;line-height:1.6;">
                   標籤上的<span class="pt-used-badge">用 N</span>＝已被 N 筆報價單項目使用，<strong>不可刪除</strong>。
-                  要換群組請按 <i class="fa fa-share" style="color:#8a5a2b;"></i>「搬移」——標籤編號不變，報價單會跟著走、不會遺失。
+                  要換群組請按 <i class="fa fa-share" style="color:#8a5a2b;"></i>「搬移」——標籤編號不變，報價單會跟著走、不會遺失。<br>
+                  要把整組標籤<strong>合併成另一個標籤</strong>（報價單項目一起改）請按右上角
+                  <i class="fa fa-random" style="color:#8a5a2b;"></i>「整組移轉」，移轉後可選擇是否移除舊標籤。
                 </div>
                 <div class="input-group input-group-sm" id="pt-sub-form" style="display:none;">
                   <input type="text" id="pt-new-sub" class="form-control" placeholder="新子標籤">
@@ -3100,6 +3107,7 @@ function selectPtGroup(gid) {
     renderPtProcList();
 }
 function renderPtSubTagList() {
+    $('#pt-merge-btn').toggle(!!ptSelectedGroupId);
     if (!ptSelectedGroupId) {
         $('#pt-sub-list').html('<div class="text-muted" style="font-size:11px;">← 先選擇群組</div>');
         return;
@@ -3297,6 +3305,264 @@ function movePtSubTag(sid) {
                 title: `已搬移到「${res.group_name || ''}」${extra}`,
                 showConfirmButton:false, timer: res.changed ? 4200 : 2200 });
         });
+    });
+}
+
+// ══════════════════════════════════════════════════════
+// ── 整組移轉：把（勾選的）舊標籤上的報價單項目全部改用另一個標籤 ──
+// 與「搬移」的差別：搬移只是把標籤換到別的群組，標籤本身還在、項目上的標籤沒變；
+// 移轉是把「項目上的標籤」換掉，換完舊標籤就沒人使用（可選擇順手移除）。
+// 規則一律以後端 merge_process_tags_preview / _apply 為準（同一份 qtag_merge_plan，鐵律8 後端再算一次）。
+// ══════════════════════════════════════════════════════
+const ptTypeTxt = t => (t === 'full_process' ? '全製' : '單一');
+let ptMergeTargets = [];   // 目標候選（打字篩選用；本頁不載 eg_input_rules.js，故自帶一個小篩選框）
+
+function ptPost(data) {
+    return new Promise(resolve => {
+        $.post(API_URL, data)
+            .done(res => resolve(res && typeof res === 'object' ? res : { success: false, message: '回應格式錯誤' }))
+            .fail(() => resolve({ success: false, message: '連線失敗，請稍後再試' }));
+    });
+}
+
+// 移轉明細表（預覽與結果共用；後端一律只給前 30 筆，總筆數另外顯示）
+function ptMergeTable(res) {
+    if (!res.rows || !res.rows.length) return '';
+    let h = `<div style="max-height:270px;overflow:auto;border:1px solid #E4D3BC;border-radius:4px;margin-top:8px;">
+      <table class="table table-condensed" style="font-size:11.5px;margin:0;">
+        <thead><tr style="background:#FFF3E0;color:#6b4a22;">
+          <th>報價單號</th><th>日期</th><th>客戶</th><th>料號</th><th>原標籤 → 新標籤</th>
+        </tr></thead><tbody>`;
+    res.rows.forEach(r => {
+        h += `<tr>
+          <td style="white-space:nowrap;">${escapeHtml(r.quote_no || '(無單號)')}</td>
+          <td style="white-space:nowrap;">${r.quote_date ? egFmtDate(r.quote_date) : ''}</td>
+          <td>${escapeHtml((r.client_name || '').substring(0, 12))}</td>
+          <td>${escapeHtml(r.product_id || '')}</td>
+          <td>${escapeHtml(r.from_names || '')} <span style="color:#8a5a2b;">→</span>
+              <b style="color:#8a5a2b;">${escapeHtml(res.target.sub_tag_name)}</b>
+              ${r.type_change ? `<small style="color:#DD5138;">（類型改為 ${ptTypeTxt(r.type_change)}）</small>` : ''}</td>
+        </tr>`;
+    });
+    h += '</tbody></table></div>';
+    h += `<div style="font-size:11px;color:#8a5a2b;margin-top:4px;">共 <b>${res.total}</b> 筆`
+       + (res.total > res.shown ? `，以上只列出前 ${res.shown} 筆。` : '（已全部列出）。') + '</div>';
+    return h;
+}
+
+function ptFillTargetSel(kw) {
+    const cur  = parseInt($('#ptMergeTarget').val()) || 0;
+    const kws  = (kw || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const list = ptMergeTargets.filter(t => {
+        if (!kws.length) return true;
+        const txt = (t.name + ' ' + t.gname).toLowerCase();
+        return kws.every(k => txt.indexOf(k) >= 0);
+    });
+    // 目前選中的永遠保留，避免打字時把已選的洗掉（比照 eg_input_rules.js 規則7）
+    if (cur && !list.some(t => t.id === cur)) {
+        const c = ptMergeTargets.find(t => t.id === cur);
+        if (c) list.unshift(c);
+    }
+    let html = '', lastG = null;
+    list.forEach(t => {
+        if (t.gname !== lastG) {
+            if (lastG !== null) html += '</optgroup>';
+            html += `<optgroup label="${escapeHtml(t.gname)}（${ptTypeTxt(t.gtype)}）">`;
+            lastG = t.gname;
+        }
+        html += `<option value="${t.id}">${escapeHtml(t.name)}（${escapeHtml(t.gname)}）</option>`;
+    });
+    if (lastG !== null) html += '</optgroup>';
+    $('#ptMergeTarget').html(html || '<option value="">（沒有符合的標籤）</option>');
+    if (cur && list.some(t => t.id === cur)) $('#ptMergeTarget').val(cur);
+    if (list.length === 1) $('#ptMergeTarget').val(list[0].id);
+    $('#ptMergeTargetCnt').text(list.length + ' 個標籤');
+}
+
+function mergePtGroupTags() {
+    const g = processTagTree.find(x => x.group_id === ptSelectedGroupId);
+    if (!g) { Swal.fire('提示', '請先在左邊選一個標籤群組', 'info'); return; }
+    const subs = g.sub_tags || [];
+    if (!subs.length) { Swal.fire('提示', '這個群組底下還沒有子標籤', 'info'); return; }
+
+    ptMergeTargets = [];
+    processTagTree.forEach(gg => (gg.sub_tags || []).forEach(s => ptMergeTargets.push({
+        id: s.sub_tag_id, name: s.sub_tag_name, gname: gg.group_name, gtype: gg.group_type || 'single_process'
+    })));
+
+    const srcHtml = subs.map(s => {
+        const used = ptUsage[s.sub_tag_id] || 0;
+        return `<label style="display:block;margin:0;padding:3px 5px;font-weight:400;font-size:12px;border-bottom:1px solid #f0ece6;cursor:pointer;">
+            <input type="checkbox" class="ptMergeSrc" value="${s.sub_tag_id}" checked style="margin-right:5px;">
+            ${escapeHtml(s.sub_tag_name)}
+            <small style="color:${used ? '#8a5a2b' : '#bbb'};">${used ? '（用 ' + used + '）' : '（未使用）'}</small>
+        </label>`;
+    }).join('');
+
+    Swal.fire({
+        title: '整組移轉製程標籤',
+        width: 820,
+        html: `
+          <div style="text-align:left;font-size:13px;line-height:1.8;">
+            <div style="background:#FFF8ED;border:1px solid #E4D3BC;border-radius:4px;padding:7px 10px;color:#6b4a22;font-size:12px;margin-bottom:10px;">
+              把「<b>${escapeHtml(g.group_name)}</b>」底下勾選標籤上的<b>報價單項目</b>，全部改用另一個標籤。<br>
+              舊報價單（含已完成的）之後會顯示新的標籤名稱；移轉完舊標籤就沒人使用，最後會問要不要移除。
+            </div>
+            <div class="row" style="margin:0;">
+              <div class="col-sm-6" style="padding:0 6px 0 0;">
+                <div style="font-size:12px;font-weight:700;color:#8a5a2b;margin-bottom:4px;">
+                  要移轉的舊標籤
+                  <a href="javascript:void(0)" id="ptMergeAll"  style="font-size:11px;font-weight:400;margin-left:6px;">全選</a>
+                  <a href="javascript:void(0)" id="ptMergeNone" style="font-size:11px;font-weight:400;margin-left:4px;">全不選</a>
+                </div>
+                <div style="max-height:230px;overflow:auto;border:1px solid #E4D3BC;border-radius:4px;padding:2px 4px;">${srcHtml}</div>
+              </div>
+              <div class="col-sm-6" style="padding:0 0 0 6px;">
+                <div style="font-size:12px;font-weight:700;color:#8a5a2b;margin-bottom:4px;">
+                  移轉到這個標籤 <small id="ptMergeTargetCnt" style="color:#aaa;font-weight:400;"></small>
+                </div>
+                <input type="text" id="ptMergeKw" class="form-control input-sm" placeholder="輸入標籤或群組名稱篩選…" style="font-size:12px;margin-bottom:4px;">
+                <select id="ptMergeTarget" class="form-control" size="9" style="font-size:12px;height:auto;"></select>
+                <div style="font-size:11px;color:#8a5a2b;margin-top:4px;">目標若剛好也被勾選在左邊，會自動視為不移轉。</div>
+              </div>
+            </div>
+          </div>`,
+        showCancelButton: true,
+        confirmButtonText: '預覽移轉結果',
+        cancelButtonText: '取消',
+        confirmButtonColor: '#8a5a2b',
+        showLoaderOnConfirm: true,
+        allowOutsideClick: () => !Swal.isLoading(),
+        didOpen: () => {
+            $(document).off('focusin.modal');
+            ptFillTargetSel('');
+            $('#ptMergeKw').on('input', function () { ptFillTargetSel(this.value); });
+            $('#ptMergeAll').on('click',  () => $('.ptMergeSrc').prop('checked', true));
+            $('#ptMergeNone').on('click', () => $('.ptMergeSrc').prop('checked', false));
+        },
+        preConfirm: () => {
+            const tgt = parseInt($('#ptMergeTarget').val()) || 0;
+            if (!tgt) { Swal.showValidationMessage('請選擇要移轉到哪一個標籤'); return false; }
+            const src = $('.ptMergeSrc:checked').map(function () { return parseInt(this.value); }).get()
+                          .filter(v => v && v !== tgt);
+            if (!src.length) { Swal.showValidationMessage('請至少勾選一個要移轉的舊標籤（目標標籤本身不算）'); return false; }
+            return ptPost({ action: 'merge_process_tags_preview', sub_tag_ids: JSON.stringify(src), target_sub_tag_id: tgt })
+                .then(res => {
+                    if (!res.success) { Swal.showValidationMessage(res.message || '預覽失敗'); return false; }
+                    if (!res.total)   { Swal.showValidationMessage('勾選的標籤目前沒有任何報價單項目在使用，不需要移轉'); return false; }
+                    res._src = src; res._tgt = tgt;
+                    return res;
+                });
+        }
+    }).then(r => { if (r.isConfirmed && r.value) ptMergeConfirm(r.value); });
+}
+
+function ptMergeConfirm(res) {
+    const t     = res.target;
+    const names = res.sources.map(s => escapeHtml(s.sub_tag_name)).join('、');
+    Swal.fire({
+        title: '確定要移轉嗎？',
+        icon: 'warning',
+        width: 860,
+        html: `
+          <div style="text-align:left;font-size:13px;line-height:1.9;">
+            把 <b>${res.sources.length}</b> 個舊標籤（${names.length > 120 ? names.substring(0, 120) + '…' : names}）上的
+            <b style="color:#DD5138;">${res.total}</b> 筆報價單項目，全部改用
+            「<b style="color:#8a5a2b;">${escapeHtml(t.sub_tag_name)}</b>（${escapeHtml(t.group_name)}・${ptTypeTxt(t.group_type)}）」。
+            <div style="background:#FFF8ED;border:1px solid #E4D3BC;border-radius:4px;padding:8px 10px;color:#6b4a22;font-size:12px;margin-top:8px;">
+              ・<b>已完成的舊報價單也會跟著改</b>，之後列印/檢視顯示的是新標籤名稱。<br>
+              ・${res.merged_dup} 筆項目原本同時掛著多個舊標籤（或已經有新標籤），會自動合併成一個。<br>
+              ・${res.type_changed} 筆項目的製程類型會一併更新為「${ptTypeTxt(t.group_type)}」${res.type_skipped ? `；${res.type_skipped} 筆同時含兩種類型的標籤，維持原值不動` : ''}。<br>
+              ・移轉後舊標籤就沒人使用了，下一步會問要不要移除（<b>預設不移除</b>）。
+            </div>
+            ${ptMergeTable(res)}
+          </div>`,
+        showCancelButton: true,
+        confirmButtonText: `確定移轉 ${res.total} 筆`,
+        cancelButtonText: '取消',
+        confirmButtonColor: '#DD5138',
+        showLoaderOnConfirm: true,
+        allowOutsideClick: () => !Swal.isLoading(),
+        preConfirm: () => ptPost({ action: 'merge_process_tags_apply',
+                                   sub_tag_ids: JSON.stringify(res._src), target_sub_tag_id: res._tgt })
+            .then(r2 => {
+                if (!r2.success) { Swal.showValidationMessage(r2.message || '移轉失敗'); return false; }
+                return r2;
+            })
+    }).then(r => { if (r.isConfirmed && r.value) ptMergeDone(r.value); });
+}
+
+function ptMergeDone(res) {
+    const reload = () => loadPtUsage(() => loadProcessTagTree(() => {
+        renderPtGroupList(); renderPtSubTagList(); renderPtProcList();
+    }));
+    reload();
+    const t = res.target;
+    Swal.fire({
+        title: '移轉完成',
+        icon: 'success',
+        width: 860,
+        html: `
+          <div style="text-align:left;font-size:13px;line-height:1.9;">
+            已將 <b style="color:#DD5138;">${res.total}</b> 筆報價單項目移轉到
+            「<b style="color:#8a5a2b;">${escapeHtml(t.sub_tag_name)}</b>（${escapeHtml(t.group_name)}）」
+            ${res.type_changed ? `，其中 ${res.type_changed} 筆的製程類型一併更新為「${ptTypeTxt(t.group_type)}」` : ''}
+            ${res.type_skipped ? `（${res.type_skipped} 筆同時含兩種類型標籤，維持原值）` : ''}。
+            ${ptMergeTable(res)}
+          </div>`,
+        confirmButtonText: '下一步',
+        confirmButtonColor: '#8a5a2b'
+    }).then(() => ptAskRemoveOldTags(res, reload));
+}
+
+// 移轉完的舊標籤要不要移除（預設不移除；保留也不影響報價單，只是設定裡多幾個沒人用的標籤）
+function ptAskRemoveOldTags(res, reload) {
+    const rm = res.removable  || [];
+    const su = res.still_used || [];
+    if (!rm.length) {
+        if (su.length) Swal.fire('舊標籤還有人使用', '有 ' + su.length + ' 個舊標籤仍被其他報價單項目使用，未移除。', 'info');
+        return;
+    }
+    Swal.fire({
+        title: '要順便移除舊標籤嗎？',
+        icon: 'question',
+        width: 640,
+        html: `
+          <div style="text-align:left;font-size:13px;line-height:1.9;">
+            下列 <b>${rm.length}</b> 個舊標籤移轉後已經沒有任何報價單項目使用：
+            <div style="max-height:180px;overflow:auto;background:#FFF8ED;border:1px solid #E4D3BC;border-radius:4px;padding:8px 10px;color:#6b4a22;font-size:12px;margin:8px 0;">
+              ${rm.map(s => escapeHtml(s.sub_tag_name) + '（' + escapeHtml(s.group_name) + '）').join('、')}
+            </div>
+            <small style="color:#8a5a2b;">預設<b>不移除</b>。保留不會影響任何報價單，只是設定裡會留著沒人用的標籤；
+            要移除的話會連同它們的製程連結一起刪掉（仍在使用的標籤後端會再擋一次）。</small>
+            ${su.length ? `<div style="font-size:12px;color:#DD5138;margin-top:6px;">另有 ${su.length} 個舊標籤仍被其他項目使用，不會被移除。</div>` : ''}
+          </div>`,
+        showDenyButton: true,
+        confirmButtonText: '保留舊標籤（預設）',
+        denyButtonText: `移除這 ${rm.length} 個舊標籤`,
+        confirmButtonColor: '#8a5a2b',
+        denyButtonColor: '#DD5138',
+        focusConfirm: true
+    }).then(r => {
+        if (!r.isDenied) return;
+        // 逐一走既有的 delete_process_sub_tag（它本來就會擋「還在使用中」＋驗權限，不另寫一套規則）
+        const ids = rm.map(s => s.sub_tag_id);
+        let ok = 0; const fail = [];
+        const next = i => {
+            if (i >= ids.length) {
+                reload();
+                Swal.fire(fail.length ? '部分未移除' : '已移除',
+                    `已移除 ${ok} 個舊標籤` + (fail.length ? `，${fail.length} 個未移除：${fail.join('；')}` : '。'),
+                    fail.length ? 'warning' : 'success');
+                return;
+            }
+            ptPost({ action: 'delete_process_sub_tag', sub_tag_id: ids[i] }).then(r2 => {
+                if (r2.success) ok++; else fail.push((rm[i].sub_tag_name || ids[i]) + '：' + (r2.message || '失敗'));
+                next(i + 1);
+            });
+        };
+        Swal.fire({ title: '移除中…', didOpen: () => Swal.showLoading(), allowOutsideClick: false });
+        next(0);
     });
 }
 

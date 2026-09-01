@@ -268,6 +268,117 @@ function qtag_can_settings(PDO $pdo, $uid): bool
     } catch (Exception $e) { return false; }
 }
 
+// ──────────────────────────────────────────────────────────────
+// 製程標籤：整組移轉（把一批舊子標籤上的報價單項目全部改成同一個目標子標籤）
+// 唯一實作 —— 預覽（merge_process_tags_preview）與實際執行（merge_process_tags_apply）共用同一份規則，
+// 兩邊各算一次必定走鐘（鐵律4）。規則：
+//   ・process_notes 裡的舊 sub_tag_id 一律換成目標 sub_tag_id，順序保留、重複的只留一個
+//     （項目本來就有目標標籤、或同時掛著兩個舊標籤時會自動合併成一個）。
+//   ・quotation_item_process_map（攤平後的 process_no）一定要跟著重算——只改 process_notes 的話，
+//     下游（訂單追蹤、型態識別、料號製程候選）看到的還是舊製程。
+//   ・process_group_type 只在「換完之後整筆項目的標籤都是同一種類型」時才更新；
+//     同時掛著兩種類型標籤的項目維持原值不動（比照 move_process_sub_tag 的口徑）。
+function qtag_merge_plan(PDO $pdo, array $srcSids, int $tgtSid): array
+{
+    $srcSids = array_values(array_unique(array_filter(array_map('intval', $srcSids), fn($v) => $v > 0)));
+    if (!$srcSids)   throw new Exception('請至少選擇一個要移轉的舊標籤');
+    if ($tgtSid <= 0) throw new Exception('請選擇要移轉到哪一個標籤');
+    if (in_array($tgtSid, $srcSids, true)) throw new Exception('目標標籤不可以是要移轉的舊標籤之一');
+    if (count($srcSids) > 200) throw new Exception('一次最多移轉 200 個標籤');
+
+    $all = $pdo->query("SELECT s.sub_tag_id, s.sub_tag_name, s.group_id, s.is_active, g.group_name, g.group_type
+                        FROM quotation_process_sub_tag s
+                        JOIN quotation_process_tag_group g ON g.group_id = s.group_id")
+               ->fetchAll(PDO::FETCH_UNIQUE | PDO::FETCH_ASSOC);
+    if (!isset($all[$tgtSid]) || !(int)$all[$tgtSid]['is_active']) throw new Exception('目標標籤不存在或已停用');
+    foreach ($srcSids as $sid) if (!isset($all[$sid])) throw new Exception('要移轉的標籤（#' . $sid . '）不存在');
+
+    // 標籤 → 連結製程（攤平用）
+    $pmap = [];
+    foreach ($pdo->query("SELECT sub_tag_id, process_no FROM quotation_process_tag_map ORDER BY sub_tag_id, sort_order") as $r) {
+        $pmap[(int)$r['sub_tag_id']][] = (int)$r['process_no'];
+    }
+
+    // LEFT JOIN：報價單主檔萬一不見了，項目仍要被移轉，否則舊標籤永遠刪不掉又看不出原因
+    $conds = implode(' OR ', array_fill(0, count($srcSids), 'FIND_IN_SET(?, qi.process_notes)'));
+    $st = $pdo->prepare("SELECT qi.item_id, qi.quote_id, qi.product_id, qi.specification,
+                                qi.process_notes, qi.process_group_type,
+                                ql.quote_no, ql.quote_date, ql.client_name
+                         FROM quotation_item qi
+                         LEFT JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                         WHERE $conds
+                         ORDER BY ql.quote_date DESC, ql.quote_no DESC, qi.item_id ASC");
+    $st->execute($srcSids);
+
+    $srcSet = array_flip($srcSids);
+    $tgtType = $all[$tgtSid]['group_type'];
+    $items = []; $typeChanged = 0; $typeSkipped = 0; $mergedDup = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $old = array_values(array_filter(array_map('intval', explode(',', (string)$r['process_notes'])), fn($v) => $v > 0));
+        $new = []; $hit = [];
+        foreach ($old as $t) {
+            if (isset($srcSet[$t])) { $hit[] = $all[$t]['sub_tag_name'] ?? ('#' . $t); $t = $tgtSid; }
+            if (!in_array($t, $new, true)) $new[] = $t;
+        }
+        if ($new === $old) continue;                       // 保險：本來就沒有要改的
+        if (count($new) < count($old)) $mergedDup++;       // 併掉重複的標籤
+
+        $types = [];
+        foreach ($new as $t) if (isset($all[$t])) $types[$all[$t]['group_type']] = 1;
+        $newType = null;
+        if (count($types) === 1) {
+            $t0 = array_key_first($types);
+            if ($t0 !== $r['process_group_type']) { $newType = $t0; $typeChanged++; }
+        } elseif (count($types) > 1) { $typeSkipped++; }
+
+        $pnos = [];
+        foreach ($new as $t) foreach ($pmap[$t] ?? [] as $pn) if (!in_array($pn, $pnos, true)) $pnos[] = $pn;
+
+        $items[] = [
+            'item_id'     => (int)$r['item_id'],
+            'quote_id'    => (int)$r['quote_id'],
+            'quote_no'    => $r['quote_no'] ?? '',
+            'quote_date'  => $r['quote_date'] ?? '',
+            'client_name' => $r['client_name'] ?? '',
+            'product_id'  => $r['product_id'] ?? '',
+            'from_names'  => implode('、', array_values(array_unique($hit))),
+            'old_notes'   => implode(',', $old),
+            'new_notes'   => implode(',', $new),
+            'old_type'    => $r['process_group_type'],
+            'new_type'    => $newType,
+            'process_nos' => $pnos,
+        ];
+    }
+
+    $sources = [];
+    foreach ($srcSids as $sid) {
+        $sources[] = ['sub_tag_id' => $sid, 'sub_tag_name' => $all[$sid]['sub_tag_name'],
+                      'group_name' => $all[$sid]['group_name'], 'group_type' => $all[$sid]['group_type']];
+    }
+    return [
+        'items' => $items, 'total' => count($items),
+        'type_changed' => $typeChanged, 'type_skipped' => $typeSkipped, 'merged_dup' => $mergedDup,
+        'target' => ['sub_tag_id' => $tgtSid, 'sub_tag_name' => $all[$tgtSid]['sub_tag_name'],
+                     'group_name' => $all[$tgtSid]['group_name'], 'group_type' => $tgtType],
+        'sources' => $sources,
+    ];
+}
+
+// 回給前端的固定格式（明細一律只給前 $limit 筆，總筆數另外給）
+function qtag_merge_out(array $plan, int $limit = 30): array
+{
+    $rows = [];
+    foreach (array_slice($plan['items'], 0, $limit) as $it) {
+        $rows[] = ['quote_no' => $it['quote_no'], 'quote_date' => $it['quote_date'],
+                   'client_name' => $it['client_name'], 'product_id' => $it['product_id'],
+                   'from_names' => $it['from_names'], 'type_change' => $it['new_type']];
+    }
+    return ['total' => $plan['total'], 'shown' => count($rows), 'rows' => $rows,
+            'type_changed' => $plan['type_changed'], 'type_skipped' => $plan['type_skipped'],
+            'merged_dup' => $plan['merged_dup'],
+            'target' => $plan['target'], 'sources' => $plan['sources']];
+}
+
 try {
     switch ($action) {
 
@@ -2821,6 +2932,54 @@ try {
             $response = ['success' => true, 'message' => '已搬移',
                          'tag_name' => $tag['sub_tag_name'], 'group_name' => $target['group_name'],
                          'changed' => $changed, 'skipped' => $skipped];
+            break;
+        }
+
+        // 整組移轉：把一批舊子標籤上的報價單項目全部改成同一個目標子標籤（預覽，不寫任何東西）
+        case 'merge_process_tags_preview': {
+            if (!qtag_can_settings($pdo, $user_id)) throw new Exception('您沒有報價單設定權限，不可移轉製程標籤');
+            $plan = qtag_merge_plan($pdo,
+                json_decode($_POST['sub_tag_ids'] ?? '[]', true) ?: [],
+                intval($_POST['target_sub_tag_id'] ?? 0));
+            $response = ['success' => true] + qtag_merge_out($plan, 30);
+            break;
+        }
+
+        // 整組移轉：實際寫入（規則與預覽完全同一份 qtag_merge_plan）
+        case 'merge_process_tags_apply': {
+            if (!qtag_can_settings($pdo, $user_id)) throw new Exception('您沒有報價單設定權限，不可移轉製程標籤');
+            $srcSids = json_decode($_POST['sub_tag_ids'] ?? '[]', true) ?: [];
+            $tgtSid  = intval($_POST['target_sub_tag_id'] ?? 0);
+            $plan    = qtag_merge_plan($pdo, $srcSids, $tgtSid);
+            if (!$plan['total']) throw new Exception('這些標籤目前沒有任何報價單項目在使用，不需要移轉');
+            if ($plan['total'] > 20000) throw new Exception('一次最多移轉 20000 筆項目，請分批處理');
+
+            $pdo->beginTransaction();
+            try {
+                $updN = $pdo->prepare("UPDATE quotation_item SET process_notes=?, updated_at=NOW() WHERE item_id=?");
+                $updT = $pdo->prepare("UPDATE quotation_item SET process_notes=?, process_group_type=?, updated_at=NOW() WHERE item_id=?");
+                $delM = $pdo->prepare("DELETE FROM quotation_item_process_map WHERE quotation_item_id=?");
+                $insM = $pdo->prepare("INSERT INTO quotation_item_process_map (quotation_item_id, process_no) VALUES (?,?)");
+                foreach ($plan['items'] as $it) {
+                    if ($it['new_type'] !== null) $updT->execute([$it['new_notes'], $it['new_type'], $it['item_id']]);
+                    else                          $updN->execute([$it['new_notes'], $it['item_id']]);
+                    // 攤平的製程一定要跟著重算，否則下游看到的還是舊製程
+                    $delM->execute([$it['item_id']]);
+                    foreach ($it['process_nos'] as $pn) $insM->execute([$it['item_id'], $pn]);
+                }
+                $pdo->commit();
+            } catch (Exception $e) { $pdo->rollBack(); throw $e; }
+
+            // 移轉完舊標籤應該都變成沒人用了 → 回給前端問「要不要順手移除」（預設不移除）
+            $after = qtag_usage_of($pdo, array_column($plan['sources'], 'sub_tag_id'));
+            $removable = []; $stillUsed = [];
+            foreach ($plan['sources'] as $s) {
+                $n = (int)($after['per_tag'][$s['sub_tag_id']] ?? 0);
+                if ($n > 0) { $s['used'] = $n; $stillUsed[] = $s; } else $removable[] = $s;
+            }
+            $response = ['success' => true, 'message' => '已移轉']
+                      + qtag_merge_out($plan, 30)
+                      + ['removable' => $removable, 'still_used' => $stillUsed];
             break;
         }
 
