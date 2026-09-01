@@ -345,7 +345,14 @@ body { background:var(--bg); }
 .pt-group-item:hover, .pt-group-item.active { background:#e8f0ff; border-color:#aac; }
 .pt-group-item .pt-del  { color:#e74c3c; cursor:pointer; padding:0 3px; visibility:hidden; }
 .pt-group-item .pt-edit { color:#337ab7; cursor:pointer; padding:0 3px; visibility:hidden; }
-.pt-group-item:hover .pt-del, .pt-group-item:hover .pt-edit { visibility:visible; }
+.pt-group-item .pt-move { color:#8a5a2b; cursor:pointer; padding:0 3px; visibility:hidden; }
+.pt-group-item .pt-del.pt-locked { color:#c9c2b8; }
+.pt-group-item:hover .pt-del, .pt-group-item:hover .pt-edit, .pt-group-item:hover .pt-move { visibility:visible; }
+/* 已被報價單使用的標籤：刪除受保護（改用搬移） */
+.pt-used-badge {
+    color:#8a5a2b; background:#FFF3E0; border:1px solid #E4D3BC; border-radius:3px;
+    padding:0 4px; margin-left:3px; font-size:10px; white-space:nowrap;
+}
 .pt-drag-handle { color:#bbb; cursor:grab; padding:0 4px; font-size:13px; }
 .pt-drag-handle:active { cursor:grabbing; }
 .ui-sortable-helper { box-shadow:0 4px 12px rgba(0,0,0,.2); opacity:.95; }
@@ -1178,6 +1185,10 @@ body { background:var(--bg); }
                 </div>
                 <div id="pt-sub-list" style="min-height:80px;margin-bottom:8px;">
                   <div class="text-muted" style="font-size:11px;">← 先選擇群組</div>
+                </div>
+                <div style="font-size:10px;color:#8a5a2b;background:#FFF8ED;border:1px solid #E4D3BC;border-radius:3px;padding:4px 6px;margin-bottom:6px;line-height:1.6;">
+                  標籤上的<span class="pt-used-badge">用 N</span>＝已被 N 筆報價單項目使用，<strong>不可刪除</strong>。
+                  要換群組請按 <i class="fa fa-share" style="color:#8a5a2b;"></i>「搬移」——標籤編號不變，報價單會跟著走、不會遺失。
                 </div>
                 <div class="input-group input-group-sm" id="pt-sub-form" style="display:none;">
                   <input type="text" id="pt-new-sub" class="form-control" placeholder="新子標籤">
@@ -2753,8 +2764,8 @@ function openSettingsModal() {
     $('#qs-upload-path').val(currentUploadPath || '');
     // 載入附件類別
     loadSettingCategories();
-    // 載入製程標籤
-    loadProcessTagTree(() => renderPtGroupList());
+    // 載入製程標籤（先取使用量，子標籤列表要用它標示「用 N」與擋下刪除）
+    loadPtUsage(() => loadProcessTagTree(() => { renderPtGroupList(); renderPtSubTagList(); }));
     // 載入備註模板
     loadAllNoteTemplates();
     // 載入表單編號 + 有效天數 + 列印管制
@@ -2928,7 +2939,28 @@ function reactivateCategorySettings(id) {
 // ══════════════════════════════════════════════════════
 let ptSelectedGroupId  = null;
 let ptSelectedSubTagId = null;
+// 每個子標籤被多少筆報價單項目使用（{sub_tag_id: 筆數}）。
+// 報價單的製程是把 sub_tag_id 存在 quotation_item.process_notes，所以標籤一刪＝那些報價單的製程整欄空白，
+// 故刪除一律以此擋下（後端 delete_process_sub_tag / delete_process_tag_group 會再擋一次＝鐵律8）。
+let ptUsage = {};
 let ptCurrentChecked   = [];   // 獨立記錄已勾選製程 ID，不依賴 DOM 避免搜尋時丟失
+
+function loadPtUsage(cb) {
+    $.get(API_URL, { action: 'get_process_tag_usage' }, res => {
+        if (res && res.success) {
+            ptUsage = {};
+            const u = res.usage || {};
+            Object.keys(u).forEach(k => { ptUsage[parseInt(k)] = parseInt(u[k]) || 0; });
+        }
+        if (cb) cb();
+    });
+}
+// 該群組底下所有子標籤合計被用到幾筆
+function ptGroupUsedCount(gid) {
+    const g = processTagTree.find(x => x.group_id === gid);
+    if (!g) return 0;
+    return (g.sub_tags || []).reduce((n, st) => n + (ptUsage[st.sub_tag_id] || 0), 0);
+}
 
 function renderPtGroupList() {
     let html = '';
@@ -3024,6 +3056,26 @@ function addPtGroup() {
     });
 }
 function deletePtGroup(gid) {
+    // 刪群組＝連底下子標籤一起刪，所以只要有任何一個標籤在用就整組擋下（後端同規則再擋一次）
+    const gUsed = ptGroupUsedCount(gid);
+    if (gUsed > 0) {
+        const g = processTagTree.find(x => x.group_id === gid);
+        const usedNames = (g ? (g.sub_tags || []) : [])
+            .filter(st => (ptUsage[st.sub_tag_id] || 0) > 0)
+            .map(st => escapeHtml(st.sub_tag_name) + '（' + ptUsage[st.sub_tag_id] + '）');
+        Swal.fire({
+            icon: 'error',
+            title: '不可刪除',
+            html: `群組「<b>${escapeHtml(g ? g.group_name : gid)}</b>」底下的標籤合計已被 <b>${gUsed}</b> 筆報價單項目使用：<br>
+                   <div style="text-align:left;font-size:12px;line-height:1.8;color:#6b4a22;background:#FFF8ED;border:1px solid #E4D3BC;border-radius:4px;padding:8px 10px;margin-top:8px;">
+                     ${usedNames.slice(0, 12).join('、')}${usedNames.length > 12 ? ' …共 ' + usedNames.length + ' 個' : ''}<br><br>
+                     刪除群組會連同這些標籤一起刪掉，那些報價單的製程會整欄變空白。<br>
+                     請先把這些標籤「<i class="fa fa-share"></i> 搬移」到其他群組，或改用其他標籤。
+                   </div>`,
+            confirmButtonText: '知道了'
+        });
+        return;
+    }
     Swal.fire({ title:'刪除此群組及其所有子標籤？', icon:'warning', showCancelButton:true,
         confirmButtonColor:'#d33', confirmButtonText:'刪除', cancelButtonText:'取消'
     }).then(r => {
@@ -3031,7 +3083,7 @@ function deletePtGroup(gid) {
         $.post(API_URL, { action:'delete_process_tag_group', group_id:gid }, res => {
             if (res.success) {
                 if (ptSelectedGroupId === gid) { ptSelectedGroupId=null; ptSelectedSubTagId=null; }
-                loadProcessTagTree(() => { renderPtGroupList(); renderPtSubTagList(); renderPtProcList(); });
+                loadPtUsage(() => loadProcessTagTree(() => { renderPtGroupList(); renderPtSubTagList(); renderPtProcList(); }));
                 Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已刪除', showConfirmButton:false, timer:1500 });
             } else { Swal.fire('錯誤', res.message, 'error'); }
         });
@@ -3057,14 +3109,21 @@ function renderPtSubTagList() {
     let html = '';
     subs.forEach(st => {
         const active = ptSelectedSubTagId === st.sub_tag_id;
+        const used = ptUsage[st.sub_tag_id] || 0;
+        const usedTag = used
+            ? `<small class="pt-used-badge" title="已被 ${used} 筆報價單項目使用，不可刪除；要換群組請用搬移">用 ${used}</small>`
+            : '';
         html += `<div class="pt-group-item ${active?'active':''}" data-sid="${st.sub_tag_id}">
             <span class="pt-drag-handle" title="拖移排序">&#9776;</span>
-            <span style="flex:1;text-align:left;">${escapeHtml(st.sub_tag_name)} <small style="color:#aaa;">(${(st.process_nos||[]).length})</small></span>
+            <span style="flex:1;text-align:left;">${escapeHtml(st.sub_tag_name)} <small style="color:#aaa;">(${(st.process_nos||[]).length})</small>${usedTag}</span>
             <span style="display:flex;gap:2px;align-items:center;">
+                <span class="pt-move" data-sid="${st.sub_tag_id}" onclick="event.stopPropagation();movePtSubTag($(this).data('sid'))" title="搬移到其他群組">
+                    <i class="fa fa-share"></i>
+                </span>
                 <span class="pt-edit" data-sid="${st.sub_tag_id}" onclick="event.stopPropagation();renamePtSubTag($(this).data('sid'))" title="重新命名">
                     <i class="fa fa-pencil"></i>
                 </span>
-                <span class="pt-del" onclick="event.stopPropagation();deletePtSubTag(${st.sub_tag_id})" title="刪除">
+                <span class="pt-del ${used?'pt-locked':''}" onclick="event.stopPropagation();deletePtSubTag(${st.sub_tag_id})" title="${used?('已被 '+used+' 筆報價單項目使用，不可刪除'):'刪除'}">
                     <i class="fa fa-times"></i>
                 </span>
             </span>
@@ -3073,7 +3132,7 @@ function renderPtSubTagList() {
     $('#pt-sub-list').html(html || '<div class="text-muted" style="font-size:11px;">尚無子標籤</div>');
     // 事件委派取代 inline onclick
     $('#pt-sub-list').off('click.ptsub').on('click.ptsub', '.pt-group-item', function(e) {
-        if ($(e.target).closest('.pt-drag-handle, .pt-del, .pt-edit').length) return;
+        if ($(e.target).closest('.pt-drag-handle, .pt-del, .pt-edit, .pt-move').length) return;
         selectPtSubTag($(this).data('sid'));
     });
     if (subs.length > 1) {
@@ -3134,6 +3193,24 @@ function renamePtSubTag(sid) {
     });
 }
 function deletePtSubTag(sid) {
+    // 使用中一律擋下（後端 delete_process_sub_tag 會再擋一次，這裡只是先講清楚原因）
+    const used = ptUsage[sid] || 0;
+    if (used > 0) {
+        const g  = processTagTree.find(x => x.group_id === ptSelectedGroupId);
+        const st = g ? (g.sub_tags || []).find(x => x.sub_tag_id === sid) : null;
+        Swal.fire({
+            icon: 'error',
+            title: '不可刪除',
+            html: `子標籤「<b>${escapeHtml(st ? st.sub_tag_name : sid)}</b>」已被 <b>${used}</b> 筆報價單項目使用。<br><br>
+                   <div style="text-align:left;font-size:13px;line-height:1.8;color:#6b4a22;background:#FFF8ED;border:1px solid #E4D3BC;border-radius:4px;padding:8px 10px;">
+                     報價單的製程是把<b>這個標籤的編號</b>存在項目上，直接刪掉那些報價單的製程會整欄變空白（而且不會有任何錯誤訊息）。<br>
+                     ・只是想換群組 → 請用「<i class="fa fa-share"></i> 搬移」，報價單會跟著走。<br>
+                     ・真的要淘汰 → 請先把那 ${used} 筆項目改成其他標籤，再回來刪。
+                   </div>`,
+            confirmButtonText: '知道了'
+        });
+        return;
+    }
     Swal.fire({ title:'刪除此子標籤及其製程連結？', icon:'warning', showCancelButton:true,
         confirmButtonColor:'#d33', confirmButtonText:'刪除', cancelButtonText:'取消'
     }).then(r => {
@@ -3141,12 +3218,88 @@ function deletePtSubTag(sid) {
         $.post(API_URL, { action:'delete_process_sub_tag', sub_tag_id:sid }, res => {
             if (res.success) {
                 if (ptSelectedSubTagId === sid) ptSelectedSubTagId = null;
-                loadProcessTagTree(() => { renderPtGroupList(); renderPtSubTagList(); renderPtProcList(); });
+                loadPtUsage(() => loadProcessTagTree(() => { renderPtGroupList(); renderPtSubTagList(); renderPtProcList(); }));
                 Swal.fire({ toast:true, position:'top-end', icon:'success', title:'已刪除', showConfirmButton:false, timer:1500 });
             } else { Swal.fire('錯誤', res.message, 'error'); }
         });
     });
 }
+// 搬移子標籤到其他群組。
+// sub_tag_id 不變＝報價單項目的 process_notes 完全不用改，資料不會遺失；
+// 只有目標群組「類型不同」（全製 vs 單一）時，後端才會一併更新那些項目的 process_group_type。
+function movePtSubTag(sid) {
+    const cur = processTagTree.find(g => (g.sub_tags || []).some(st => st.sub_tag_id === sid));
+    const st  = cur ? cur.sub_tags.find(x => x.sub_tag_id === sid) : null;
+    if (!cur || !st) return;
+    const targets = processTagTree.filter(g => g.group_id !== cur.group_id);
+    if (!targets.length) { Swal.fire('提示', '目前只有一個群組，沒有其他群組可以搬移', 'info'); return; }
+
+    const used    = ptUsage[sid] || 0;
+    const typeTxt = t => (t === 'full_process' ? '全製' : '單一');
+    const opts    = targets.map(g =>
+        `<option value="${g.group_id}" data-type="${g.group_type || 'single_process'}">${escapeHtml(g.group_name)}（${typeTxt(g.group_type)}）</option>`
+    ).join('');
+
+    Swal.fire({
+        title: '搬移子標籤',
+        width: 560,
+        html: `
+          <div style="text-align:left;font-size:13px;line-height:1.9;">
+            <div style="margin-bottom:8px;">
+              把「<b style="color:#8a5a2b;">${escapeHtml(st.sub_tag_name)}</b>」從
+              「<b>${escapeHtml(cur.group_name)}</b>（${typeTxt(cur.group_type)}）」搬到：
+            </div>
+            <select id="ptMoveTarget" class="form-control" style="font-size:13px;">${opts}</select>
+            <div style="margin-top:10px;background:#FFF8ED;border:1px solid #E4D3BC;border-radius:4px;padding:8px 10px;color:#6b4a22;font-size:12px;">
+              標籤編號不變，<b>已使用此標籤的 ${used} 筆報價單項目會自動跟著走，不會遺失</b>。
+              <div id="ptMoveTypeHint" style="margin-top:6px;"></div>
+            </div>
+          </div>`,
+        showCancelButton: true,
+        confirmButtonText: '確定搬移',
+        cancelButtonText: '取消',
+        confirmButtonColor: '#8a5a2b',
+        didOpen: () => {
+            $(document).off('focusin.modal');
+            const $sel = $('#ptMoveTarget');
+            const paint = () => {
+                const t = $sel.find('option:selected').data('type') || 'single_process';
+                if (t === (cur.group_type || 'single_process')) {
+                    $('#ptMoveTypeHint').html('<span style="color:#1e8449;">兩個群組類型相同（' + typeTxt(t) + '），報價單項目完全不會被改動。</span>');
+                } else {
+                    $('#ptMoveTypeHint').html(
+                        '<span style="color:#DD5138;font-weight:700;">類型不同：' + typeTxt(cur.group_type) + ' → ' + typeTxt(t) + '</span>'
+                        + '<br>這些項目的<b>製程類型</b>會一併更新為「' + typeTxt(t) + '」；'
+                        + '同時掛著兩種類型標籤的項目維持原值不動。');
+                }
+            };
+            $sel.on('change', paint);
+            paint();
+        },
+        preConfirm: () => parseInt($('#ptMoveTarget').val()) || 0
+    }).then(r => {
+        if (!r.isConfirmed || !r.value) return;
+        $.post(API_URL, { action:'move_process_sub_tag', sub_tag_id:sid, target_group_id:r.value }, res => {
+            if (!res.success) { Swal.fire('無法搬移', res.message || '搬移失敗', 'error'); return; }
+            const tgtGid = r.value;
+            loadPtUsage(() => loadProcessTagTree(() => {
+                ptSelectedGroupId  = tgtGid;
+                ptSelectedSubTagId = sid;
+                const g2 = processTagTree.find(x => x.group_id === tgtGid);
+                $('#pt-sub-group-label').text(' — ' + (g2 ? g2.group_name : ''));
+                $('#pt-sub-form').show();
+                renderPtGroupList(); renderPtSubTagList(); renderPtProcList();
+            }));
+            const extra = res.changed
+                ? `，同步更新 ${res.changed} 筆報價單項目的製程類型` + (res.skipped ? `（${res.skipped} 筆同時含兩種類型標籤，維持原值）` : '')
+                : '';
+            Swal.fire({ toast:true, position:'top-end', icon:'success',
+                title: `已搬移到「${res.group_name || ''}」${extra}`,
+                showConfirmButton:false, timer: res.changed ? 4200 : 2200 });
+        });
+    });
+}
+
 function selectPtSubTag(sid) {
     ptSelectedSubTagId = sid;
     const g   = processTagTree.find(x => x.group_id === ptSelectedGroupId);

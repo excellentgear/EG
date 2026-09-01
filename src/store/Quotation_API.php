@@ -216,6 +216,58 @@ try { $pdo->exec("CREATE TABLE IF NOT EXISTS quotation_change_log (log_id BIGINT
 // 快速轉移頁（views/Sales/quotation_quick_transfer.php）用：1=尚待確認補件(製程/料號ID/客戶)，不影響本頁既有列表/查詢
 try { $pdo->exec("ALTER TABLE quotation_list ADD COLUMN pending_review TINYINT(1) NOT NULL DEFAULT 0 COMMENT '待審核(快速轉移頁用)：1=尚待確認補件, 0=正式'"); } catch(PDOException $e){}
 
+// ──────────────────────────────────────────────────────────────
+// 製程標籤：使用中檢查 / 設定權限（唯一實作，刪除與搬移共用）
+// 報價單項目的製程存在 quotation_item.process_notes（逗號分隔的 sub_tag_id，不是文字備註），
+// 所以刪掉標籤＝那些項目的製程變成查不到名字的孤兒 id，畫面整欄空白且不會報錯。
+// ──────────────────────────────────────────────────────────────
+function qtag_usage_of(PDO $pdo, array $sids): array
+{
+    $sids = array_values(array_unique(array_filter(array_map('intval', $sids))));
+    if (!$sids) return ['count' => 0, 'per_tag' => [], 'quote_nos' => []];
+    $per = []; $total = 0; $qnos = [];
+    $cs = $pdo->prepare("SELECT COUNT(*) FROM quotation_item WHERE FIND_IN_SET(?, process_notes)");
+    $qs = $pdo->prepare("SELECT DISTINCT ql.quote_no FROM quotation_item qi
+                         JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                         WHERE FIND_IN_SET(?, qi.process_notes)
+                         ORDER BY ql.quote_no DESC LIMIT 5");
+    foreach ($sids as $sid) {
+        $cs->execute([$sid]);
+        $n = (int)$cs->fetchColumn();
+        $per[$sid] = $n;
+        $total += $n;
+        if ($n > 0 && count($qnos) < 5) {
+            $qs->execute([$sid]);
+            foreach ($qs->fetchAll(PDO::FETCH_COLUMN) as $qn) {
+                if (!in_array($qn, $qnos, true) && count($qnos) < 5) $qnos[] = $qn;
+            }
+        }
+    }
+    return ['count' => $total, 'per_tag' => $per, 'quote_nos' => $qnos];
+}
+
+// 報價單設定權限（比照 views/Sales/quotation_list_NEW.php 的判定；鐵律8：不可只擋前端）
+function qtag_can_settings(PDO $pdo, $uid): bool
+{
+    try {
+        $chk = $pdo->prepare("SELECT 1 FROM user_roles WHERE user_id=? LIMIT 1");
+        $chk->execute([$uid]);
+        if ($chk->fetchColumn()) {
+            $f = $pdo->prepare("SELECT 1 FROM user_roles ur
+                                JOIN role_features rf ON rf.role_id = ur.role_id
+                                WHERE ur.user_id=? AND rf.feature_code IN ('all','quotation_settings') LIMIT 1");
+            $f->execute([$uid]);
+            return (bool)$f->fetchColumn();
+        }
+        // 完全未指派角色 → 退回舊系統的模組權限；連舊系統也沒有＝全權（與頁面同步，避免鎖死）
+        $p = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='quotation_list' LIMIT 1");
+        $p->execute([$uid]);
+        $perm = $p->fetchColumn();
+        if ($perm === false || $perm === null || $perm === '') return true;
+        return strpos((string)$perm, 'A') !== false;
+    } catch (Exception $e) { return false; }
+}
+
 try {
     switch ($action) {
 
@@ -2608,12 +2660,28 @@ try {
             break;
 
         case 'delete_process_tag_group':
+            if (!qtag_can_settings($pdo, $user_id)) throw new Exception('您沒有報價單設定權限，不可刪除製程標籤群組');
             $gid = intval($_POST['group_id'] ?? 0);
             if (!$gid) throw new Exception('缺少 group_id');
             // 取得子標籤 IDs
             $sids = $pdo->prepare("SELECT sub_tag_id FROM quotation_process_sub_tag WHERE group_id=?");
             $sids->execute([$gid]);
             $sidList = $sids->fetchAll(PDO::FETCH_COLUMN);
+            // 群組底下只要有任何一個子標籤被報價單用到就整組擋下（刪群組＝連子標籤一起刪）
+            if ($sidList) {
+                $gu = qtag_usage_of($pdo, $sidList);
+                if ($gu['count'] > 0) {
+                    $usedIds = array_keys(array_filter($gu['per_tag']));
+                    $nph = implode(',', array_fill(0, count($usedIds), '?'));
+                    $nq  = $pdo->prepare("SELECT sub_tag_name FROM quotation_process_sub_tag WHERE sub_tag_id IN ($nph) ORDER BY sort_order");
+                    $nq->execute($usedIds);
+                    $names = $nq->fetchAll(PDO::FETCH_COLUMN);
+                    throw new Exception('此群組底下的標籤「' . implode('」「', array_slice($names, 0, 6)) . '」'
+                        . (count($names) > 6 ? '…共 ' . count($names) . ' 個' : '')
+                        . '已被 ' . $gu['count'] . ' 筆報價單項目使用（例：' . implode('、', $gu['quote_nos'])
+                        . '），不可刪除。請先把這些標籤搬移到其他群組，或改用其他標籤。');
+                }
+            }
             if ($sidList) {
                 $pl = implode(',', array_map('intval', $sidList));
                 $pdo->exec("DELETE FROM quotation_process_tag_map WHERE sub_tag_id IN ($pl)");
@@ -2641,12 +2709,98 @@ try {
             break;
 
         case 'delete_process_sub_tag':
+            if (!qtag_can_settings($pdo, $user_id)) throw new Exception('您沒有報價單設定權限，不可刪除製程標籤');
             $sid = intval($_POST['sub_tag_id'] ?? 0);
             if (!$sid) throw new Exception('缺少 sub_tag_id');
+            // 使用中一律擋下（前端也擋一次，這裡是防止直打 API 繞過＝鐵律8）
+            $su = qtag_usage_of($pdo, [$sid]);
+            if ($su['count'] > 0) {
+                throw new Exception('此子標籤已被 ' . $su['count'] . ' 筆報價單項目使用（例：'
+                    . implode('、', $su['quote_nos']) . '），不可刪除。'
+                    . '若只是想換群組請用「搬移」，要淘汰請先把那些項目改成其他標籤。');
+            }
             $pdo->prepare("DELETE FROM quotation_process_tag_map WHERE sub_tag_id=?")->execute([$sid]);
             $pdo->prepare("DELETE FROM quotation_process_sub_tag WHERE sub_tag_id=?")->execute([$sid]);
             $response = ['success' => true, 'message' => '已刪除'];
             break;
+
+        case 'get_process_tag_usage': {
+            // 每個子標籤被多少筆報價單項目使用（一次撈完在 PHP 端統計，避免逐標籤 FIND_IN_SET 全表掃）
+            $cnt = [];
+            $st  = $pdo->query("SELECT process_notes FROM quotation_item WHERE process_notes IS NOT NULL AND process_notes <> ''");
+            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $pn) {
+                foreach (array_filter(array_map('intval', explode(',', (string)$pn))) as $sidU) {
+                    $cnt[$sidU] = ($cnt[$sidU] ?? 0) + 1;
+                }
+            }
+            $response = ['success' => true, 'usage' => (object)$cnt];
+            break;
+        }
+
+        case 'move_process_sub_tag': {
+            // 子標籤換群組：sub_tag_id 不變，所以 quotation_item.process_notes 完全不用動，
+            // 報價單指到的還是同一個標籤（不會有資料遺失）。唯一要跟著處理的是項目的 process_group_type。
+            if (!qtag_can_settings($pdo, $user_id)) throw new Exception('您沒有報價單設定權限，不可搬移製程標籤');
+            $sid = intval($_POST['sub_tag_id'] ?? 0);
+            $tgt = intval($_POST['target_group_id'] ?? 0);
+            if (!$sid || !$tgt) throw new Exception('缺少參數');
+
+            $ts = $pdo->prepare("SELECT s.sub_tag_id, s.sub_tag_name, s.group_id, g.group_type
+                                 FROM quotation_process_sub_tag s
+                                 JOIN quotation_process_tag_group g ON g.group_id = s.group_id
+                                 WHERE s.sub_tag_id=?");
+            $ts->execute([$sid]);
+            $tag = $ts->fetch(PDO::FETCH_ASSOC);
+            if (!$tag) throw new Exception('找不到此子標籤');
+            if ((int)$tag['group_id'] === $tgt) throw new Exception('此標籤已經在該群組裡');
+
+            $tg = $pdo->prepare("SELECT group_id, group_name, group_type FROM quotation_process_tag_group WHERE group_id=? AND is_active=1");
+            $tg->execute([$tgt]);
+            $target = $tg->fetch(PDO::FETCH_ASSOC);
+            if (!$target) throw new Exception('目標群組不存在或已停用');
+
+            $pdo->beginTransaction();
+            // 排到目標群組的最後一個
+            $mx = $pdo->prepare("SELECT COALESCE(MAX(sort_order),-1)+1 FROM quotation_process_sub_tag WHERE group_id=?");
+            $mx->execute([$tgt]);
+            $pdo->prepare("UPDATE quotation_process_sub_tag SET group_id=?, sort_order=? WHERE sub_tag_id=?")
+                ->execute([$tgt, (int)$mx->fetchColumn(), $sid]);
+
+            // 兩個群組類型不同（全製 vs 單一）才需要同步項目的 process_group_type。
+            // 只更新「搬完之後所有標籤都同一種類型」的項目；同時掛著兩種類型標籤的項目維持原值不動
+            // （那種項目的類型本來就是依最後點選的群組決定，自動改反而會改錯）。
+            $changed = 0; $skipped = 0;
+            if ($tag['group_type'] !== $target['group_type']) {
+                $it = $pdo->prepare("SELECT item_id, process_notes, process_group_type FROM quotation_item WHERE FIND_IN_SET(?, process_notes)");
+                $it->execute([$sid]);
+                $rows = $it->fetchAll(PDO::FETCH_ASSOC);
+                if ($rows) {
+                    // 此時已在同一個 transaction 內，撈到的就是搬移後的群組歸屬
+                    $map = $pdo->query("SELECT s.sub_tag_id, g.group_type
+                                        FROM quotation_process_sub_tag s
+                                        JOIN quotation_process_tag_group g ON g.group_id = s.group_id")
+                               ->fetchAll(PDO::FETCH_KEY_PAIR);
+                    $upd = $pdo->prepare("UPDATE quotation_item SET process_group_type=?, updated_at=NOW() WHERE item_id=?");
+                    foreach ($rows as $r) {
+                        $types = [];
+                        foreach (array_filter(array_map('intval', explode(',', (string)$r['process_notes']))) as $t) {
+                            if (isset($map[$t])) $types[$map[$t]] = 1;
+                        }
+                        if (count($types) === 1) {
+                            $newType = array_key_first($types);
+                            if ($newType !== $r['process_group_type']) { $upd->execute([$newType, $r['item_id']]); $changed++; }
+                        } else {
+                            $skipped++;
+                        }
+                    }
+                }
+            }
+            $pdo->commit();
+            $response = ['success' => true, 'message' => '已搬移',
+                         'tag_name' => $tag['sub_tag_name'], 'group_name' => $target['group_name'],
+                         'changed' => $changed, 'skipped' => $skipped];
+            break;
+        }
 
         case 'save_process_tag_processes':
             // 更新子標籤下的製程對應（全量替換）
