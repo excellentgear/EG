@@ -387,6 +387,143 @@ function qkw_sub_tag_names(PDO $pdo): array
     return $map;
 }
 
+// ── 快速套用（不存規則的臨時條件）───────────────────────────
+// 使用者要的是「臨時想到一組關鍵字，掃出來、框選幾筆、加上或拿掉某些標籤」，
+// 不必為了做一次而在規則表裡留一條垃圾規則。比對規則與正式規則完全相同（同一支 qkw_rule_hit）。
+// $filter：all＝全部命中／unset＝只要還沒設定製程的／set＝只要已經設定過的
+function qkw_quick_scan(PDO $pdo, array $rule, array $quoteIds = [], string $filter = 'all', int $limit = 5000): array
+{
+    qkw_ensure_schema($pdo);
+    $sql = "SELECT qi.item_id, qi.quote_id, qi.product_id, qi.d_setting_d_id, qi.specification, qi.note_only, qi.process_notes,
+                   ql.quote_no, ql.client_id, ql.client_name, ql.quote_date,
+                   EXISTS(SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id=qi.item_id) AS has_map
+            FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id
+            WHERE ql.pending_review = 1";
+    $args = [];
+    if ($quoteIds) {
+        $quoteIds = array_values(array_unique(array_filter(array_map('intval', $quoteIds))));
+        if (!$quoteIds) return ['items' => [], 'total' => 0, 'truncated' => 0];
+        $sql .= " AND qi.quote_id IN (" . implode(',', array_fill(0, count($quoteIds), '?')) . ")";
+        $args = $quoteIds;
+    }
+    $sql .= " ORDER BY ql.quote_date DESC, qi.quote_id DESC, qi.sort_order, qi.item_id";
+    $st = $pdo->prepare($sql);
+    $st->execute($args);
+    $tagName = qkw_sub_tag_names($pdo);
+    $items = []; $total = 0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $spec = (string)($r['specification'] ?? '');
+        if (trim($spec) === '') continue;
+        if (!qkw_rule_hit($rule, $spec, (string)($r['client_id'] ?? ''))) continue;
+        $isSet = ((int)$r['has_map']) || trim((string)$r['process_notes']) !== '' || (int)$r['note_only'];
+        if ($filter === 'unset' && $isSet) continue;
+        if ($filter === 'set'  && !$isSet) continue;
+        $total++;
+        if (count($items) >= $limit) continue;
+        $cur = qkw_split_ids((string)$r['process_notes']);
+        $items[] = ['item_id' => (int)$r['item_id'], 'quote_id' => (int)$r['quote_id'], 'quote_no' => $r['quote_no'],
+                    'client_name' => $r['client_name'], 'product_id' => $r['product_id'],
+                    'd_setting_d_id' => (int)($r['d_setting_d_id'] ?? 0), 'spec' => $spec,
+                    'note_only' => (int)$r['note_only'], 'cur_ids' => implode(',', $cur),
+                    'cur_names' => implode('、', array_map(fn($i) => $tagName[$i] ?? ('#' . $i), $cur)),
+                    'has_set' => $isSet ? 1 : 0];
+    }
+    return ['items' => $items, 'total' => $total, 'truncated' => $total > count($items) ? 1 : 0];
+}
+
+// 在既有標籤上「增加」或「移除」幾個標籤（既有的 qkw_apply 是整組取代，不能拿來加減）
+//   add    ：不刪既有的 process_no 對照，只補上新標籤帶來的——舊資料有「有 process_no 卻沒有
+//            process_notes」的情況，整組重建會把原本的製程默默清掉
+//   remove ：一定要重建，所以只作用在「真的有 process_notes」的項目，其餘略過並回報
+function qkw_adjust_tags(PDO $pdo, array $itemIds, array $tagIds, string $mode, string $userId): array
+{
+    qkw_ensure_schema($pdo);
+    $itemIds = array_values(array_unique(array_filter(array_map('intval', $itemIds))));
+    $tagIds  = qkw_split_ids(implode(',', $tagIds));
+    if (!$itemIds) throw new Exception('沒有選擇任何項目');
+    if (!$tagIds)  throw new Exception('沒有選擇任何製程標籤');
+    if (count($itemIds) > 20000) throw new Exception('一次最多處理 20000 筆項目，請分批');
+    if (!in_array($mode, ['add', 'remove'], true)) throw new Exception('動作不正確');
+
+    $tph = implode(',', array_fill(0, count($tagIds), '?'));
+    $vt = $pdo->prepare("SELECT sub_tag_id FROM quotation_process_sub_tag WHERE sub_tag_id IN ($tph) AND is_active=1");
+    $vt->execute($tagIds);
+    $tagIds = array_values(array_intersect($tagIds, array_map('intval', $vt->fetchAll(PDO::FETCH_COLUMN))));
+    if (!$tagIds) throw new Exception('選到的製程標籤不存在或已停用');
+
+    $ph = implode(',', array_fill(0, count($itemIds), '?'));
+    $st = $pdo->prepare("SELECT qi.item_id, qi.process_notes, qi.note_only
+                         FROM quotation_item qi JOIN quotation_list ql ON ql.quote_id=qi.quote_id
+                         WHERE qi.item_id IN ($ph) AND ql.pending_review=1");
+    $st->execute($itemIds);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) throw new Exception('選到的項目都不是尚待確認的報價單');
+
+    $byNew = []; $skipped = 0; $addOnly = [];
+    foreach ($rows as $r) {
+        $cur = qkw_split_ids((string)$r['process_notes']);
+        if ($mode === 'remove') {
+            if (!$cur) { $skipped++; continue; }                          // 沒有標籤可拿掉
+            $new = array_values(array_diff($cur, $tagIds));
+            if (count($new) === count($cur)) { $skipped++; continue; }    // 本來就沒有這些標籤
+        } else {
+            $new = array_values(array_unique(array_merge($cur, $tagIds)));
+            if (count($new) === count($cur)) { $skipped++; continue; }    // 全都已經有了
+            $addOnly[(int)$r['item_id']] = array_values(array_diff($tagIds, $cur));
+        }
+        sort($new);
+        $byNew[implode(',', $new)][] = (int)$r['item_id'];
+    }
+    if (!$byNew) return ['items' => 0, 'skipped' => $skipped];
+
+    $done = 0;
+    $pdo->beginTransaction();
+    try {
+        foreach ($byNew as $key => $ids) {
+            $new = qkw_split_ids((string)$key);
+            $vph = implode(',', array_fill(0, count($ids), '?'));
+            $pnos = []; $groupType = 'single_process';
+            if ($new) {
+                $npo = implode(',', array_fill(0, count($new), '?'));
+                $pq  = $pdo->prepare("SELECT DISTINCT process_no FROM quotation_process_tag_map WHERE sub_tag_id IN ($npo)");
+                $pq->execute($new);
+                $pnos = array_map('intval', $pq->fetchAll(PDO::FETCH_COLUMN));
+                $gq = $pdo->prepare("SELECT g.group_type FROM quotation_process_sub_tag s JOIN quotation_process_tag_group g ON g.group_id=s.group_id WHERE s.sub_tag_id=? LIMIT 1");
+                $gq->execute([$new[0]]);
+                $groupType = $gq->fetchColumn() ?: 'single_process';
+            }
+
+            if ($mode === 'remove') {
+                $pdo->prepare("DELETE FROM quotation_item_process_map WHERE quotation_item_id IN ($vph)")->execute($ids);
+                if ($pnos) {
+                    $ins = $pdo->prepare("INSERT INTO quotation_item_process_map (quotation_item_id,process_no) VALUES (?,?)");
+                    foreach ($ids as $iid) foreach ($pnos as $pn) $ins->execute([$iid, $pn]);
+                }
+            } else {
+                // 只補新增標籤帶來的 process_no，且先確認沒有才插入（該表沒有唯一索引）
+                $chk = $pdo->prepare("SELECT 1 FROM quotation_item_process_map WHERE quotation_item_id=? AND process_no=? LIMIT 1");
+                $ins = $pdo->prepare("INSERT INTO quotation_item_process_map (quotation_item_id,process_no) VALUES (?,?)");
+                foreach ($ids as $iid) {
+                    $addIds = $addOnly[$iid] ?? [];
+                    if (!$addIds) continue;
+                    $aph = implode(',', array_fill(0, count($addIds), '?'));
+                    $aq  = $pdo->prepare("SELECT DISTINCT process_no FROM quotation_process_tag_map WHERE sub_tag_id IN ($aph)");
+                    $aq->execute($addIds);
+                    foreach (array_map('intval', $aq->fetchAll(PDO::FETCH_COLUMN)) as $pn) {
+                        $chk->execute([$iid, $pn]);
+                        if (!$chk->fetchColumn()) $ins->execute([$iid, $pn]);
+                    }
+                }
+            }
+            $pdo->prepare("UPDATE quotation_item SET process_group_type=?, process_notes=?, note_only=0, updated_at=NOW() WHERE item_id IN ($vph)")
+                ->execute(array_merge([$groupType, $new ? implode(',', $new) : null], $ids));
+            $done += count($ids);
+        }
+        $pdo->commit();
+    } catch (Exception $e) { $pdo->rollBack(); throw $e; }
+    return ['items' => $done, 'skipped' => $skipped];
+}
+
 // ── 套用 ───────────────────────────────────────────────────
 // $batches = [ ['sub_tag_ids'=>'12,13','item_ids'=>[...]], ['to_note'=>1,'item_ids'=>[...]] ]
 // 寫入規則與 quick_set_process_bulk 完全一致（process_notes 一定要一起寫），只是來源改成確認過的建議。

@@ -1870,6 +1870,28 @@ try {
             break;
         }
 
+        // 快速套用：不存規則的臨時條件掃描 ＋ 對既有標籤做增加／移除
+        case 'qkw_quick_scan': {
+            $rule = ['include_kw'   => trim($_POST['include_kw'] ?? ''),
+                     'include_mode' => (($_POST['include_mode'] ?? 'any') === 'all' ? 'all' : 'any'),
+                     'exclude_kw'   => trim($_POST['exclude_kw'] ?? ''),
+                     'customer_ids' => trim($_POST['customer_ids'] ?? '')];
+            if (qkw_split_kw($rule['include_kw']) === []) throw new Exception('請至少填一個「包含」關鍵字');
+            $qids = json_decode($_POST['quote_ids'] ?? '[]', true);
+            $flt  = in_array($_POST['filter'] ?? 'all', ['all', 'unset', 'set'], true) ? $_POST['filter'] : 'all';
+            $response = ['success' => true, 'data' => qkw_quick_scan($pdo, $rule, is_array($qids) ? $qids : [], $flt)];
+            break;
+        }
+
+        case 'qkw_adjust_tags': {
+            $ids  = json_decode($_POST['item_ids'] ?? '[]', true);
+            $tags = json_decode($_POST['sub_tag_ids'] ?? '[]', true);
+            $mode = (string)($_POST['mode'] ?? '');
+            $response = ['success' => true,
+                         'data' => qkw_adjust_tags($pdo, is_array($ids) ? $ids : [], is_array($tags) ? $tags : [], $mode, (string)$user_id)];
+            break;
+        }
+
         case 'qkw_apply': {
             if (!eg_quick_can_edit($pdo, $user_id)) throw new Exception('您沒有修改報價單的權限');
             $batches = json_decode($_POST['batches'] ?? '[]', true);
