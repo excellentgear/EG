@@ -53,6 +53,12 @@ try {
         /* 「套用到這裡為止」的指定模式：滑到哪一組/哪一列就標出來，點下去＝以那裡為界 */
         .pick-mode .kw-group-head, #qaRows.pick-mode tr { cursor:crosshair; }
         .pick-mode .kw-group-head:hover { background:#F7E0BD; box-shadow:inset 0 -3px 0 #DD5138; }
+        /* 拖曳把手：從這裡拖到右側面板；拖列的其他地方＝框選勾選 */
+        .kw-grip { cursor:grab; color:#a2703a; margin-right:5px; user-select:none; font-size:13px; }
+        .kw-grip:active { cursor:grabbing; }
+        #kwSidePanel.drop-hint { outline:2px dashed #E4C293; outline-offset:-4px; }
+        #kwSidePanel.on-drop { outline:3px dashed #DD5138; outline-offset:-4px; background:#FFF7EC; }
+        table.kw-item-table tr.drag-on td, #qaRows tr.drag-on td { background:#F7E0BD; }
         .pick-mode table.kw-item-table tr { cursor:crosshair; }
         .pick-mode table.kw-item-table tr:hover td { background:#F7E0BD; box-shadow:inset 0 -3px 0 #DD5138; }
         #qaRows.pick-mode tr:hover td { background:#F7E0BD; box-shadow:inset 0 -3px 0 #DD5138; }
@@ -64,7 +70,12 @@ try {
         #kwSidePanel .sp-head { padding:8px 10px; background:#FBF6EC; border-bottom:1px solid #E4C293; font-weight:700; color:#5b3a1e;
             display:flex; align-items:center; gap:6px; }
         #kwSidePanel .sp-body { flex:1; overflow:auto; padding:8px 10px; }
-        #kwSidePanel .sp-foot { padding:8px 10px; border-top:1px solid #E4C293; background:#FBF6EC; }
+        #kwSidePanel .sp-slot { border:1px solid #E4C293; border-radius:6px; padding:6px 8px; margin-bottom:8px; background:#fff; }
+        #kwSidePanel .sp-slot.on-drop { border-color:#DD5138; border-style:dashed; background:#FFF7EC; }
+        #kwSidePanel .sp-slot h5 { margin:0 0 4px; font-size:12px; font-weight:700; color:#5b3a1e; }
+        #kwSidePanel .sp-list { max-height:150px; overflow:auto; border:1px dashed #EADFC8; border-radius:4px; padding:3px 5px; font-size:11px; margin:5px 0; }
+        #kwSidePanel .sp-list .x { color:#DD5138; cursor:pointer; margin-left:4px; }
+        #kwSidePanel .sp-empty { color:#999; }
         .va-modal { background:#fff; border-radius:8px; max-width:560px; margin:36px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
             max-height:88vh; display:flex; flex-direction:column; }
         .va-modal.wide { max-width:860px; }
@@ -262,7 +273,8 @@ try {
             <li><b>快速套用</b>（工具列，臨時關鍵字）：臨時想到一組關鍵字時用這裡，<b>不必取規則名稱、不會存進規則表</b>。填「包含」「不包含」、選好要套用的標籤、按<b>掃描</b>，命中的項目會逐筆列出來（含<b>每一筆目前的製程標籤</b>，料號一樣可以點開圖面），預設全部勾選，可以「全部取消／反向勾選」，也可以<b>按住 Shift 點第二個勾選框連續選取一整段</b>。最後決定是要把標籤<b>增加</b>上去（保留原有的）還是<b>移除</b>掉。「對象」可限定<b>只要還沒設定製程的</b>或<b>只要已經設定過的</b>。<br>兩種動作的差別：<b>增加</b>不會刪掉原本的製程對照（舊資料有「有製程卻沒有標籤紀錄」的情況，整組重建會把原本的製程默默清掉）；<b>移除</b>會依剩下的標籤重建，所以只作用在「真的有標籤紀錄」的項目，其餘會略過並在結果告訴您幾筆沒動到。</li>
             <li><b>偵測結果預設一筆都不勾</b>（避免誤按整批套用出去）：要整批確認請按「全部勾選」，或用下面的「套用到這裡為止」逐段推進。</li>
             <li><b>套用到這裡為止</b>（資料很多時用）：按下之後進入<b>指定模式</b>，點<b>分組列</b>＝套用到那一組的最後一筆為止、<b>展開後點裡面的某一列</b>＝套用到那一筆為止；只有該位置<b>以上而且有勾選</b>的項目會被套用，後面的原封不動。確認到哪裡就套用到哪裡，不必一次全部押上去。「快速套用」也有同一顆。</li>
-            <li><b>批次標籤面板</b>（偵測跳窗工具列）：開在畫面右緣的面板，可以跨組勾選項目後，<b>直接指定一組標籤套用到所有已勾選的項目</b>（不受各組自己的建議影響）。預設是「設定為」（取代原本的設定），勾「改用增加」則保留項目原有的標籤只把新的加上去。</li>
+            <li><b>批次標籤面板</b>（偵測跳窗工具列）：開在畫面右緣，<b>分成上下兩組</b>，可以一次擺好兩批不同的標籤再各自套用（現場常是「這幾筆齒研、那幾筆滾齒」）。把左邊每一列最右邊的 <b>&#9776;</b> 拖進任一組即可，<b>拖進來的項目會從左邊清單移走</b>（避免同一筆重複處理），按項目後面的 <b>×</b> 可原樣放回原本那一組。每一組各自選標籤（可連續多選）、各自有「改用增加」（保留原有標籤）與「套用這一組」。拖曳時面板會自動打開。</li>
+            <li><b>選取手勢</b>：<b>按著列往下拖</b>＝一次框選一整段（跟 Excel 一樣，從已勾選的列起拖就是反過來取消）；<b>Shift</b> 點第二個勾選框＝連續選取整段；勾選框在每一列<b>最右邊</b>。點料號連結與勾選框本身不會被框選攔走。</li>
             <li><b>勾選欄在每一列的最右邊</b>：判斷要不要選是看右邊的「目前製程標籤」，勾選框放右邊不用來回看。</li>
             <li><b>全部年份掃描</b>：「關鍵字自動偵測製程」與「快速套用」的範圍都可以選<b>全部年份</b>——<b>完全不套用上方的年份／客戶篩選</b>，一次掃過所有尚待確認的報價單（資料量大，會跑幾秒）。年份預設只顯示最新一年，不用這個選項的話舊年份零星幾筆很容易一直被漏掉。</li>
             <li><b>帶入備註</b>：有些規格（例如「半月型六角口模 線割對半」）根本沒有對應的製程標籤，這時按製程欄的「帶入備註」，規格文字會帶進<b>整張報價單的備註欄</b>（自動維護的【規格備註】區塊，您自己寫的備註不會被動到），該列直接顯示為「備註」，<b>也算補齊了製程</b>可以轉入正式報價單；按「取消，改設定製程」即還原，備註那一行會自動消失。規則裡也可以勾「帶入備註」，讓某類關鍵字整批走這條路。</li>
@@ -338,9 +350,9 @@ try {
             <span style="margin-left:10px;color:#8a5a2b;">已勾選 <b id="kwSelCount">0</b> 筆</span>
             <button class="btn btn-default btn-xs" id="btnKwUpto" onclick="kwTogglePick()" title="資料很多時可以分段套用：按下後點選要套用到哪一組為止">
                 <i class="fa fa-hand-o-up"></i> 套用到這裡為止…</button>
-            <button class="btn btn-default btn-xs" id="btnKwSide" onclick="kwSideToggle()" title="開啟右側面板，指定一組標籤直接套用到目前勾選的項目">
+            <button class="btn btn-default btn-xs" id="btnKwSide" onclick="kwSidePanelToggle()" title="開啟右側面板，指定一組標籤直接套用到目前勾選的項目">
                 <i class="fa fa-tags"></i> 批次標籤面板</button>
-            <span style="margin-left:10px;color:#888;">點分組列可展開逐筆核對／勾選個別項目</span>
+            <span style="margin-left:10px;color:#888;">展開後：<b>按著列往下拖</b>＝一次框選一段、<b>Shift</b> 點第二個勾選框＝連續選取、最右邊的 <b>&#9776;</b> 可拖到右側面板</span>
         </div>
         <div class="pick-hint" id="kwPickHint" style="display:none;">
             <i class="fa fa-hand-o-up"></i> <b>指定模式</b>：點<b>分組列</b>＝套用到那一組的最後一筆為止；<b>展開後點裡面的某一列</b>＝套用到那一筆為止。只有該位置<b>以上而且有勾選</b>的項目會被套用，後面的原封不動。再按一次「套用到這裡為止…」可取消。
@@ -430,21 +442,15 @@ try {
 
 <!-- 批次標籤面板：在偵測跳窗裡跨組勾選後，直接指定一組標籤套用到所有已勾選的項目 -->
 <div id="kwSidePanel">
-    <div class="sp-head"><i class="fa fa-tags"></i> 批次帶入標籤
-        <span style="margin-left:auto;cursor:pointer;" onclick="kwSideToggle()">✕</span></div>
+    <div class="sp-head"><i class="fa fa-tags"></i> 批次帶入標籤（可分兩組）
+        <span style="margin-left:auto;cursor:pointer;" onclick="kwSidePanelToggle()">✕</span></div>
     <div class="sp-body">
-        <div style="font-size:12px;color:#8a5a2b;margin-bottom:6px;">
-            在左邊各分組裡勾選要處理的項目（可跨組），在這裡選好標籤後按下方按鈕，
-            <b>一次套用到所有已勾選的項目</b>——不受各組自己的建議影響。
+        <div style="font-size:11px;color:#8a5a2b;margin-bottom:6px;">
+            從左邊每一列最右邊的 <b>&#9776;</b> 把項目拖進下面任一組（<b>拖進來的就從左邊清單移走</b>，避免重複處理）。
+            兩組可以各自設定不同標籤、各自套用。
         </div>
-        <div id="kwSideArea"></div>
-    </div>
-    <div class="sp-foot">
-        <label style="font-size:12px;font-weight:400;display:block;margin-bottom:4px;">
-            <input type="checkbox" id="kwSideAdd"> 改用「<b>增加</b>」：保留項目原有的標籤（不勾＝直接設成上面選的標籤）
-        </label>
-        <button class="btn btn-warning btn-block" id="kwSideBtn" onclick="kwSideApply()" disabled>
-            <i class="fa fa-check"></i> 套用到已勾選的 <span id="kwSideCnt">0</span> 筆</button>
+        <div class="sp-slot" data-slot="0" id="kwSlot0"></div>
+        <div class="sp-slot" data-slot="1" id="kwSlot1"></div>
     </div>
 </div>
 
@@ -507,7 +513,7 @@ try {
             <span style="margin-left:10px;color:#8a5a2b;">已勾選 <b id="qaSelCnt">0</b> 筆</span>
             <button class="btn btn-default btn-xs" id="btnQaUpto" onclick="qaTogglePick()" title="資料很多時可以分段套用：按下後點選要套用到哪一列為止">
                 <i class="fa fa-hand-o-up"></i> 套用到這裡為止…</button>
-            <span style="margin-left:10px;color:#888;">按住 Shift 點第二個勾選框＝連續選取整段</span>
+            <span style="margin-left:10px;color:#888;"><b>按著列往下拖</b>＝一次框選一段；按住 <b>Shift</b> 點第二個勾選框＝連續選取整段</span>
         </div>
         <div class="pick-hint" id="qaPickHint" style="display:none;">
             <i class="fa fa-hand-o-up"></i> <b>指定模式</b>：請點選要<b>套用到哪一列為止</b>（含該列）——只有那一列<b>以上而且有勾選</b>的項目會被套用。再按一次可取消。
@@ -1731,12 +1737,18 @@ function runKwScan() {
 }
 
 function renderKwGroups() {
+    // 重畫前先記住「哪幾組是展開的」與捲動位置：套用完之後如果整個收合、捲回最上面，
+    // 使用者會以為勾選被清掉了（實際上 kwChecked 還在），做到一半的確認等於被打斷
+    const openKeys = {};
+    $('#kwGroups .kw-group.open').each(function(){ openKeys[$(this).attr('data-key')] = true; });
+    const $sc = $('#kwScanMask .m-body');
+    const keepTop = $sc.scrollTop();
     if (!kwGroups.length) { $('#kwGroups').html('<div style="color:#999;padding:14px;">沒有任何項目命中規則。</div>'); updateKwSel(); return; }
     let html = '';
     kwGroups.forEach(function(g, gi) {
         const checkedN = g.items.filter(function(it){ return kwChecked[it.item_id]; }).length;
         const hadN = g.items.filter(function(it){ return Number(it.had); }).length;
-        html += '<div class="kw-group" id="kwG' + gi + '">' +
+        html += '<div class="kw-group" id="kwG' + gi + '" data-key="' + escapeQt(g.key) + '">' +
             '<div class="kw-group-head" onclick="kwToggleOpen(' + gi + ')">' +
                 '<input type="checkbox" onclick="event.stopPropagation();kwToggleGroup(' + gi + ',this.checked)" ' +
                     (checkedN === g.items.length ? 'checked' : '') + ' id="kwGChk' + gi + '">' +
@@ -1754,6 +1766,13 @@ function renderKwGroups() {
         '</div>';
     });
     $('#kwGroups').html(html);
+    // 還原展開狀態與捲動位置（逐筆清單是展開時才畫的，所以要一併補畫回來）
+    kwGroups.forEach(function(g, gi) {
+        if (!openKeys[g.key]) return;
+        kwDrawItems(gi);
+        $('#kwG' + gi).addClass('open').data('drawn', 1);
+    });
+    if (keepTop) $sc.scrollTop(keepTop);
     updateKwSel();
 }
 
@@ -1809,8 +1828,10 @@ function kwDrawItems(gi) {
              '<td style="width:110px;">' + escapeQt(it.client_name || '') + '</td>' +
              '<td style="width:150px;">' + partLinkHtml(it.product_id, it.d_setting_d_id) + '</td>' +
              '<td>' + escapeQt(it.spec || '') + '</td>' +
-             '<td style="width:34px;text-align:center;"><input type="checkbox" class="kw-item-chk" data-gi="' + gi + '" value="' + it.item_id + '"' +
-             (kwChecked[it.item_id] ? ' checked' : '') + '></td></tr>';
+             '<td style="width:56px;text-align:center;white-space:nowrap;">' +
+                 '<span class="kw-grip" draggable="true" data-id="' + it.item_id + '" title="拖到右側「批次標籤面板」">&#9776;</span>' +
+                 '<input type="checkbox" class="kw-item-chk" data-gi="' + gi + '" value="' + it.item_id + '"' +
+                 (kwChecked[it.item_id] ? ' checked' : '') + '></td></tr>';
     });
     $('#kwGBody' + gi).html(h + '</table>');
 }
@@ -2188,24 +2209,25 @@ function tagPickOpen(title, hint, ids, cb) {
 }
 
 // 兩層選擇器的 HTML 產生器：跳窗版與右側面板版共用同一份，只是把 onclick 指到不同的函式前綴
-function tagPickerHtml(sel, gid, fn) {
+function tagPickerHtml(sel, gid, fn, arg) {
+    const A = (arg === undefined || arg === null) ? '' : (arg + ', ');
     let h = '<div class="qt-proc-l1">';
     processTagTree.forEach(function(g) {
         h += '<button type="button" class="' + (g.group_id === gid ? 'active' : '') +
-             '" onclick="' + fn + 'Group(' + g.group_id + ')">' + escapeQt(g.group_name) + '</button>';
+             '" onclick="' + fn + 'Group(' + A + g.group_id + ')">' + escapeQt(g.group_name) + '</button>';
     });
     h += '</div><div class="qt-proc-l2" style="margin-top:3px;">';
     const g = processTagTree.find(function(x){ return x.group_id === gid; });
     if (g) (g.sub_tags || []).forEach(function(st) {
         h += '<button type="button" class="' + (sel.indexOf(st.sub_tag_id) !== -1 ? 'active' : '') +
-             '" onclick="' + fn + 'Toggle(' + st.sub_tag_id + ')">' + escapeQt(st.sub_tag_name) + '</button>';
+             '" onclick="' + fn + 'Toggle(' + A + st.sub_tag_id + ')">' + escapeQt(st.sub_tag_name) + '</button>';
     });
     h += '</div><div class="qt-proc-chips" style="margin-top:6px;">';
     if (!sel.length) h += '<span style="color:#888;">尚未選擇任何製程標籤</span>';
     else {
         h += '<span style="color:#8a5a2b;margin-right:4px;">已選：</span>';
         sel.forEach(function(sid) {
-            h += '<span class="qt-proc-chip">' + escapeQt(tagNamesOf([sid])) + '<span class="x" onclick="' + fn + 'Toggle(' + sid + ')">&times;</span></span>';
+            h += '<span class="qt-proc-chip">' + escapeQt(tagNamesOf([sid])) + '<span class="x" onclick="' + fn + 'Toggle(' + A + sid + ')">&times;</span></span>';
         });
     }
     return h + '</div>';
@@ -2256,79 +2278,231 @@ function kwEditGroupTags(gi) {
         });
 }
 
-// ── 右側「批次帶入標籤」面板 ────────────────────────────────
-// 跨組勾選之後，直接指定一組標籤套用到所有已勾選的項目（不受各組自己的建議影響）
-let kwSideSel = [], kwSideGid = null;
+// ── 右側「批次帶入標籤」面板（上下兩組，各自標籤與各自清單）──────
+// 為什麼要兩組：現場常常是「這幾筆是齒研、那幾筆是滾齒」，分兩組可以一次擺好再各自套用。
+// 拖進來的項目會**從左邊清單移走**（避免同一筆重複處理），移除時原樣放回原本那一組。
+let kwSlots = [{ tags: [], gid: null, items: [], add: false },
+               { tags: [], gid: null, items: [], add: false }];
 
-function kwSideToggle() {
+function kwSidePanelToggle() {
     const on = !$('#kwSidePanel').hasClass('on');
     $('#kwSidePanel').toggleClass('on', on);
     $('#btnKwSide').toggleClass('btn-warning', on).toggleClass('btn-default', !on);
-    if (on) { kwSideGid = tagDefaultGid(kwSideSel); kwSideRender(); }
+    if (on) { kwSlotRender(0); kwSlotRender(1); }
 }
-function kwSideRender() {
-    $('#kwSideArea').html(tagPickerHtml(kwSideSel, kwSideGid, 'kwSide'));
-    kwSideSync();
+
+function kwSlotRender(si) {
+    const sl = kwSlots[si];
+    if (sl.gid === null) sl.gid = tagDefaultGid(sl.tags);
+    let list = '';
+    if (!sl.items.length) list = '<span class="sp-empty">把左邊的項目拖進來…</span>';
+    else sl.items.forEach(function(it) {
+        list += '<div>' + escapeQt((it.product_id || '(無料號)') + '　' + (it.spec || '').substring(0, 24)) +
+                '<span class="x" onclick="kwSlotRemove(' + si + ',' + it.item_id + ')" title="放回左邊清單">&times;</span></div>';
+    });
+    $('#kwSlot' + si).html(
+        '<h5>第 ' + (si + 1) + ' 組　<span style="font-weight:400;color:#8a5a2b;">' + sl.items.length + ' 筆</span>' +
+        (sl.items.length ? ' <a href="javascript:void(0)" style="font-size:11px;font-weight:400;" onclick="kwSlotClear(' + si + ')">全部放回</a>' : '') + '</h5>' +
+        tagPickerHtml(sl.tags, sl.gid, 'kwSlot', si) +
+        '<div class="sp-list">' + list + '</div>' +
+        '<label style="font-size:11px;font-weight:400;display:block;margin-bottom:3px;">' +
+        '<input type="checkbox" ' + (sl.add ? 'checked' : '') + ' onchange="kwSlots[' + si + '].add=this.checked"> ' +
+        '改用「增加」：保留項目原有的標籤</label>' +
+        '<button class="btn btn-warning btn-sm btn-block" onclick="kwSlotApply(' + si + ')"' +
+        ((!sl.items.length || !sl.tags.length) ? ' disabled' : '') + '>' +
+        '<i class="fa fa-check"></i> 套用這一組（' + sl.items.length + ' 筆）</button>');
 }
-function kwSideGroup(gid) { kwSideGid = gid; kwSideRender(); }
-function kwSideToggleTag(sid) {
-    const i = kwSideSel.indexOf(sid);
-    if (i === -1) kwSideSel.push(sid); else kwSideSel.splice(i, 1);
-    kwSideRender();
+function kwSlotGroup(si, gid) { kwSlots[si].gid = gid; kwSlotRender(si); }
+function kwSlotToggle(si, sid) {
+    const t = kwSlots[si].tags, i = t.indexOf(sid);
+    if (i === -1) t.push(sid); else t.splice(i, 1);
+    kwSlotRender(si);                    // 只重畫這一組，面板不會關掉、可以連續多選
 }
-function kwSideSync() {
-    const n = kwCheckedIds().length;
-    $('#kwSideCnt').text(n);
-    $('#kwSideBtn').prop('disabled', n === 0 || !kwSideSel.length);
+function kwSlotClear(si) {
+    kwSlots[si].items.slice().forEach(function(it){ kwSlotRestore(si, it.item_id); });
+    kwSlotRender(si); renderKwGroups();
 }
+function kwSlotRemove(si, itemId) { kwSlotRestore(si, itemId); kwSlotRender(si); renderKwGroups(); }
+
+// 把項目放回原本那一組（原本那組若已經空掉被移除，就依存下來的組資訊重建）
+function kwSlotRestore(si, itemId) {
+    const sl = kwSlots[si];
+    const idx = sl.items.findIndex(function(it){ return it.item_id === itemId; });
+    if (idx === -1) return;
+    const it = sl.items.splice(idx, 1)[0];
+    let g = kwGroups.find(function(x){ return x.key === it._g.key; });
+    if (!g) { g = Object.assign({}, it._g, { items: [], count: 0 }); kwGroups.push(g); }
+    g.items.push(it); g.count = g.items.length;
+}
+
+// 把拖進來的項目從左邊清單搬到指定的組
+function kwMoveToSlot(si, ids) {
+    const set = {};
+    ids.forEach(function(id){ set[id] = true; });
+    let moved = 0;
+    kwGroups.forEach(function(g) {
+        g.items = g.items.filter(function(it) {
+            if (!set[it.item_id]) return true;
+            // 存下這一筆原本屬於哪一組，按 × 才放得回去
+            it._g = { key: g.key, kind: g.kind, label: g.label, sub_tag_ids: g.sub_tag_ids,
+                      rules: g.rules, conflict: g.conflict, options: g.options, rec: g.rec, custom: g.custom };
+            kwSlots[si].items.push(it);
+            delete kwChecked[it.item_id];
+            moved++;
+            return false;
+        });
+        g.count = g.items.length;
+    });
+    kwGroups = kwGroups.filter(function(g){ return g.count > 0; });
+    renderKwGroups(); kwSlotRender(si);
+    if (moved) showQtToast('已移入第 ' + (si + 1) + ' 組：' + moved + ' 筆');
+}
+
+function kwSlotApply(si) {
+    const sl = kwSlots[si];
+    const ids = sl.items.map(function(it){ return it.item_id; });
+    if (!ids.length) { qtNotify('第 ' + (si + 1) + ' 組還沒有項目。', 'warn'); return; }
+    if (!sl.tags.length) { qtNotify('第 ' + (si + 1) + ' 組還沒有選標籤。', 'warn'); return; }
+    if (!confirm('將把「' + tagNamesOf(sl.tags) + '」' + (sl.add ? '增加到' : '設定為') + '第 ' + (si + 1) +
+                 ' 組的 ' + ids.length + ' 筆項目。' + (sl.add ? '（原有標籤保留）' : '（會取代原本的設定）') + ' 確定嗎？')) return;
+    const done = function(res, msg) {
+        if (!res.success) { qtNotify('套用失敗：' + res.message, 'err'); return; }
+        showQtToast(msg(res));
+        kwApplyLocalUpdate(sl.items);      // 更新左邊卡片的完成度統計
+        sl.items = [];
+        kwSlotRender(si);
+        $('#kwScanSummary').html('剩下 ' + kwGroups.length + ' 種建議組合、' +
+            kwGroups.reduce(function(a, g){ return a + g.count; }, 0) + ' 筆待確認');
+    };
+    if (sl.add) {
+        $.post(API_URL, { action: 'qkw_adjust_tags', item_ids: JSON.stringify(ids),
+                          sub_tag_ids: JSON.stringify(sl.tags), mode: 'add' },
+               function(res){ done(res, function(r){ return '已增加標籤：' + r.data.items + ' 筆'; }); });
+    } else {
+        $.post(API_URL, { action: 'qkw_apply', batches: JSON.stringify([{ sub_tag_ids: sl.tags.join(','), item_ids: ids }]) },
+               function(res){ done(res, function(r){ return '已套用 ' + r.data.items + ' 筆項目'; }); });
+    }
+}
+
 function kwCheckedIds() {
     const ids = [];
     kwGroups.forEach(function(g){ g.items.forEach(function(it){ if (kwChecked[it.item_id]) ids.push(it.item_id); }); });
     return ids;
 }
+function kwSideSync() {}     // 兩組各自有自己的按鈕，這裡不再需要全域計數
 
-function kwSideApply() {
-    const ids = kwCheckedIds();
-    if (!ids.length) { qtNotify('左邊還沒有勾選任何項目。', 'warn'); return; }
-    if (!kwSideSel.length) { qtNotify('請先在面板裡選擇要帶入的製程標籤。', 'warn'); return; }
-    const add = $('#kwSideAdd').is(':checked');
-    if (!confirm('將把製程標籤「' + tagNamesOf(kwSideSel) + '」' + (add ? '增加到' : '設定為') +
-                 '已勾選的 ' + ids.length + ' 筆項目。' +
-                 (add ? '　（原有的標籤會保留）' : '　（會取代這些項目原本的設定）') + '\n\n確定要執行嗎？')) return;
-    const $btn = $('#kwSideBtn').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 套用中…');
-    const done = function(res, okMsg) {
-        $btn.prop('disabled', false).html('<i class="fa fa-check"></i> 套用到已勾選的 <span id="kwSideCnt">0</span> 筆');
-        if (!res.success) { qtNotify('套用失敗：' + res.message, 'err'); return; }
-        showQtToast(okMsg(res));
-        kwRemoveApplied(ids);
-    };
-    if (add) {
-        $.post(API_URL, { action: 'qkw_adjust_tags', item_ids: JSON.stringify(ids),
-                          sub_tag_ids: JSON.stringify(kwSideSel), mode: 'add' },
-               function(res){ done(res, function(r){ return '已增加標籤：' + r.data.items + ' 筆' + (r.data.skipped ? ('（' + r.data.skipped + ' 筆本來就有了）') : ''); }); });
-    } else {
-        $.post(API_URL, { action: 'qkw_apply', batches: JSON.stringify([{ sub_tag_ids: kwSideSel.join(','), item_ids: ids }]) },
-               function(res){ done(res, function(r){ return '已套用 ' + r.data.items + ' 筆項目'; }); });
+// ── 勾選操作：Shift 連續選取 ＋ 按著拖曳一次框選 ＋ 拖到右側面板 ──────
+// 一筆一筆點太慢，這三種是同一件事的三種手勢：
+//   Shift 點第二個勾選框＝那一段一次選起來
+//   在列上按著往下拖＝經過的列一次選起來（以起點那一列的相反狀態為準，跟 Excel 一樣）
+//   從最右邊的把手拖到右側面板＝把這些項目丟進批次標籤面板
+let kwLastIdx = {};          // 每一組各自記住上次點的列（Shift 連續選取用）
+let dragSel = null, dragIds = null;
+
+// 把勾選狀態寫回資料模型（兩張表格的模型不同，統一在這裡分流）
+function setRowChecked($chk, on) {
+    const v = $chk.val();
+    if ($chk.hasClass('kw-item-chk')) kwChecked[v] = on; else qaChecked[v] = on;
+    $chk.prop('checked', on);
+}
+function syncAfterSelect(isKw) {
+    if (isKw) { kwGroups.forEach(function(_, gi){ kwSyncGroupHead(gi); }); updateKwSel(); }
+    else qaSync();
+}
+
+// Shift 連續選取（偵測跳窗的逐筆清單；快速套用本來就有）
+$(document).on('click', '.kw-item-chk', function(e) {
+    const gi = Number($(this).data('gi'));
+    const $rows = $(this).closest('table').find('.kw-item-chk');
+    const i = $rows.index(this);
+    if (e.shiftKey && kwLastIdx[gi] !== undefined && kwLastIdx[gi] >= 0) {
+        const a = Math.min(i, kwLastIdx[gi]), b = Math.max(i, kwLastIdx[gi]), on = this.checked;
+        $rows.each(function(k){ if (k >= a && k <= b) setRowChecked($(this), on); });
+        syncAfterSelect(true);
     }
-}
+    kwLastIdx[gi] = i;
+});
 
-// 套用成功後就地把那些項目從分組裡移除並更新卡片統計（與 submitKwApply 同一套收尾）
-function kwRemoveApplied(ids) {
-    const set = {};
-    ids.forEach(function(id){ set[id] = true; });
-    const applied = [];
-    kwGroups.forEach(function(g){ g.items.forEach(function(it){ if (set[it.item_id]) applied.push(it); }); });
-    kwApplyLocalUpdate(applied);
-    kwGroups.forEach(function(g) {
-        g.items = g.items.filter(function(it){ return !set[it.item_id]; });
-        g.count = g.items.length;
-    });
-    kwGroups = kwGroups.filter(function(g){ return g.count > 0; });
-    applied.forEach(function(it){ delete kwChecked[it.item_id]; });
-    renderKwGroups();
-    $('#kwScanSummary').html('剩下 ' + kwGroups.length + ' 種建議組合、' +
-        kwGroups.reduce(function(a, g){ return a + g.count; }, 0) + ' 筆待確認');
+// 按著往下拖＝框選勾選（指定模式與拖曳把手除外）
+// 效能很重要：一組可能有七千列，每次 mousemove 都掃全部列會直接卡死瀏覽器，
+// 所以只處理「新舊範圍的差集」，離開範圍的還原成原狀、進入範圍的才改。
+$(document).on('mousedown', '#kwGroups table.kw-item-table tr, #qaRows tr', function(e) {
+    if (e.which !== 1) return;
+    if (kwPickMode || (typeof qaPickMode !== 'undefined' && qaPickMode)) return;   // 指定模式下點列是選界線
+    if ($(e.target).closest('a,button,.kw-grip,input').length) return;
+    const $chk = $(this).find('input[type=checkbox]');
+    if (!$chk.length) return;
+    const rowEls = $(this).closest('table').find('tr').filter(function(){ return $(this).find('input[type=checkbox]').length > 0; }).get();
+    const from = rowEls.indexOf(this);
+    dragSel = { rowEls: rowEls, from: from, to: from, want: !$chk.prop('checked'),
+                isKw: $chk.hasClass('kw-item-chk'), moved: false, orig: {} };
+    dragSel.orig[from] = $chk.prop('checked');
+    dragMark(from, dragSel.want, true);
+    e.preventDefault();      // 不要順便把整段文字反白選起來
+});
+function dragMark(k, on, inRange) {
+    const tr = dragSel.rowEls[k];
+    if (!tr) return;
+    const $chk = $(tr).find('input[type=checkbox]');
+    setRowChecked($chk, on);
+    tr.classList.toggle('drag-on', !!inRange);
 }
+$(document).on('mousemove', function(e) {
+    if (!dragSel) return;
+    const tr = $(e.target).closest('tr')[0];
+    if (!tr) return;
+    const to = dragSel.rowEls.indexOf(tr);
+    if (to < 0 || to === dragSel.to) return;
+    dragSel.moved = true;
+    const f = dragSel.from, prev = dragSel.to;
+    const a = Math.min(f, to),   b = Math.max(f, to);
+    const pa = Math.min(f, prev), pb = Math.max(f, prev);
+    for (let k = pa; k <= pb; k++) if (k < a || k > b) dragMark(k, dragSel.orig[k], false);   // 離開範圍＝還原
+    for (let k = a; k <= b; k++) if (k < pa || k > pb) {
+        if (dragSel.orig[k] === undefined) dragSel.orig[k] = $(dragSel.rowEls[k]).find('input[type=checkbox]').prop('checked');
+        dragMark(k, dragSel.want, true);
+    }
+    dragSel.to = to;
+});
+$(document).on('mouseup', function() {
+    if (!dragSel) return;
+    $('.drag-on').removeClass('drag-on');
+    syncAfterSelect(dragSel.isKw);       // 只在放開時才重算一次分組表頭與計數
+    dragSel = null;
+});
+
+// 從把手拖到右側「批次標籤面板」
+$(document).on('dragstart', '.kw-grip', function(e) {
+    const id = Number($(this).data('id'));
+    const checked = kwCheckedIds();
+    dragIds = checked.indexOf(id) !== -1 ? checked : [id];    // 拖已勾選的＝整批帶走；拖沒勾的＝只帶它自己
+    try {
+        e.originalEvent.dataTransfer.setData('text/plain', String(dragIds.length));
+        e.originalEvent.dataTransfer.effectAllowed = 'copy';
+    } catch (err) {}
+    if (!$('#kwSidePanel').hasClass('on')) kwSidePanelToggle();     // 沒開面板就自動開，不然沒地方放
+    $('#kwSidePanel').addClass('drop-hint');
+});
+$(document).on('dragend', '.kw-grip', function() {
+    $('#kwSidePanel').removeClass('drop-hint on-drop');
+    dragIds = null;
+});
+$(document).on('dragover', '.sp-slot', function(e) {
+    if (!dragIds) return;
+    e.preventDefault();
+    try { e.originalEvent.dataTransfer.dropEffect = 'copy'; } catch (err) {}
+    $('.sp-slot').removeClass('on-drop');
+    $(this).addClass('on-drop');
+});
+$(document).on('dragleave', '.sp-slot', function(){ $(this).removeClass('on-drop'); });
+$(document).on('drop', '.sp-slot', function(e) {
+    e.preventDefault();
+    $('.sp-slot').removeClass('on-drop');
+    $('#kwSidePanel').removeClass('drop-hint');
+    if (!dragIds || !dragIds.length) return;
+    kwMoveToSlot(Number($(this).data('slot')), dragIds);
+    dragIds = null;
+});
 
 // ── 「套用到這裡為止」：資料很多時分段推進 ────────────────
 // 為什麼需要：一次幾千筆全部套用出去，中間有一組看錯就整批寫壞；
