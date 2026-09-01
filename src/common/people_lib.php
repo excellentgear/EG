@@ -73,6 +73,8 @@ if (!function_exists('eg_people_list')) {
      *                    states    允許的 state（預設 [1,2,3]；EG_PEOPLE_EXCLUDE_STATES 永遠排除，
      *                    含 99 最高權限帳號——即使呼叫端明確傳 states 內含 99 也一樣會被濾掉）
      *                    keyword   姓名/帳號模糊搜尋
+     *                    prefer_main 兼任者的顯示職稱改取「主要職務(is_main)」而不是職級最高的那筆
+     *                                （預設 false＝維持職級優先）。只用在沒有部門情境的名單，見下方 $pick 註解。
      * @return array 每列：id, user_cname, user_uname, state, state_label, hire_date, gender(M/F/null), highest_education(代碼/null),
      *               position_id, position_name, position_sort, dept_id, dept_name, dept_sort, dept_ids(含兼任的所有部門id),
      *               on_leave(0/1), leave_label, leave_start, leave_end, leave_note, display
@@ -107,11 +109,20 @@ if (!function_exists('eg_people_list')) {
         // 並排到工程師那一群裡，但他在簽核/名單上的身分其實是組長——兼任常常才是真正的職務身分
         // （同 ai-rules/22「兼任常才是簽核身分，取職級最高那筆而非主職」）。
         // 有指定 dept_ids 時仍以「該部門的那筆」優先，因為那份名單本來就是在講那個部門。
+        //
+        // prefer_main（2026-09-01 使用者明確要求；預設關閉，不影響任何既有呼叫端）：把 is_main 排到職級前面，
+        // 也就是顯示這個人「原本的」部門職稱。用在**沒有部門情境**的名單——例如會議紀錄從群組／行事曆帶入
+        // 出席人員：那裡沒有人選過部門，套用職級優先會把「技術部 工程師」顯示成兼任的「生管組 組長」，跟
+        // calendar.php（一律 is_main=1）與群組原先設定的職稱對不起來。依部門挑選的名單**不要**開這個選項，
+        // 那種名單本來就是在講那個部門，顯示該部門的職稱才對。
+        $preferMain = !empty($opt['prefer_main']);
         $pick = "SELECT m2.id FROM user_department_position_map m2
                  LEFT JOIN position p2 ON p2.id = m2.position_id
                  WHERE m2.user_id = u.id ORDER BY "
               . ($deptIn ? "(m2.department_id IN ({$deptIn})) DESC, " : "")
-              . "COALESCE(p2.sort_order, 999) ASC, m2.is_main DESC, m2.id ASC LIMIT 1";
+              . ($preferMain ? "m2.is_main DESC, COALESCE(p2.sort_order, 999) ASC, "
+                             : "COALESCE(p2.sort_order, 999) ASC, m2.is_main DESC, ")
+              . "m2.id ASC LIMIT 1";
 
         $where = ["u.state IN (" . implode(',', $states) . ")"];
         $params = [];
@@ -221,6 +232,7 @@ if (!function_exists('eg_people_list_asof')) {
                  ? array_values(array_filter(array_map('intval', $opt['dept_ids']))) : [];
         unset($opt['dept_ids']);
         $opt['asof_date'] = $date;
+        $preferMain = !empty($opt['prefer_main']);
         $rows = eg_people_list($db, $opt);
         if (!$rows) return [];
 
@@ -238,15 +250,16 @@ if (!function_exists('eg_people_list_asof')) {
             if ($snap) {
                 // 顯示用挑哪一筆：優先符合部門篩選的 → 職級最高 → 主要職務
                 // （與 eg_people_list 同一套優先序；兼任常才是真正的職務身分，見 ai-rules/22）
-                $best = null;
+                // prefer_main 時把「主要職務」提到職級前面，與 eg_people_list 的 $pick 保持同一套規則
+                // （兩邊規則走鐘的話，同一份名單有沒有帶會議日期就會顯示出不同職稱）。
+                $best = null; $bestKey = null;
                 foreach ($snap as $sp) {
                     $sp['_hit']  = ($deptIds && in_array((int)$sp['department_id'], $deptIds, true)) ? 1 : 0;
                     $sp['_psrt'] = $posSort[(int)$sp['position_id']] ?? 999;
-                    if ($best === null
-                        || $sp['_hit'] > $best['_hit']
-                        || ($sp['_hit'] === $best['_hit'] && $sp['_psrt'] < $best['_psrt'])
-                        || ($sp['_hit'] === $best['_hit'] && $sp['_psrt'] === $best['_psrt']
-                            && (int)$sp['is_main'] > (int)$best['is_main'])) $best = $sp;
+                    $key = $preferMain
+                         ? [-$sp['_hit'], -(int)$sp['is_main'], $sp['_psrt']]
+                         : [-$sp['_hit'], $sp['_psrt'], -(int)$sp['is_main']];
+                    if ($best === null || $key < $bestKey) { $best = $sp; $bestKey = $key; }
                 }
                 $r['dept_ids']      = array_values(array_unique(array_map(fn($x) => (int)$x['department_id'], $snap)));
                 $r['dept_id']       = (int)$best['department_id'];

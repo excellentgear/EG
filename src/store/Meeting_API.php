@@ -150,8 +150,13 @@ case 'resolve_people': {
     $ids = array_values(array_filter(array_map('intval', explode(',', (string)($_GET['user_ids'] ?? '')))));
     if (!$ids) jout(['people'=>[]]);
     $mDate = trim((string)($_GET['meeting_date'] ?? ''));
-    $rows = ($mDate !== '') ? eg_people_list_asof($db, ['user_ids'=>$ids, 'states'=>[1,2,3]], $mDate)
-                            : eg_people_list($db, ['user_ids'=>$ids, 'states'=>[1,2,3]]);
+    // prefer_main（2026-09-01 使用者回報）：這支是「群組套用」與「從行事曆帶入」共用的解析器，兩者都**沒有部門情境**
+    // ——使用者選的是一群人，不是某個部門的人。不開 prefer_main 的話，共用庫會依職級挑兼任那筆，於是主職「技術部
+    // 工程師」的人被帶成「生管組 組長」，跟 calendar.php 上看到的職稱（該頁一律 is_main=1）與群組原先設定的職稱對不
+    // 起來。依部門挑選的 'people' action 不可比照辦理——那份名單本來就是在講那個部門。
+    $opt = ['user_ids'=>$ids, 'states'=>[1,2,3], 'prefer_main'=>true];
+    $rows = ($mDate !== '') ? eg_people_list_asof($db, $opt, $mDate)
+                            : eg_people_list($db, $opt);
     jout(['people'=>meeting_people_with_schedule($db, $rows, $mDate,
         (string)($_GET['start_time'] ?? ''), (string)($_GET['end_time'] ?? ''),
         (int)($_GET['meeting_id'] ?? 0))]);
@@ -539,9 +544,39 @@ case 'people': {
 /* 全員人員清單（負責人「指定人員」模式搜尋選擇器用；2026-08-05使用者明確要求）：比照鐵則走 eg_people_list，不自己拼SQL。
    這裡是指派任務負責人用，不是出席人員選取，不做請假時段過濾；但超級管理員一樣不列入選單(states排除99)。 */
 case 'people_all': {
-    $rows = eg_people_list($db, ['states'=>[1,2,3]]);
-    jout(['people'=>array_map(fn($r) => ['id'=>$r['id'], 'user_cname'=>$r['user_cname'],
-        'position_name'=>$r['position_name'] ?? '', 'dept_name'=>$r['dept_name'] ?? ''], $rows)]);
+    // 2026-09-01 使用者回報：這份清單原本每人只印一個部門，而共用庫挑的是「職級最高」那筆＝常常是兼任的那個，
+    // 於是主職「技術部 工程師」的人在清單上只看得到「生管組」，看起來像是系統只認得兼任、原職位不見了。
+    // 改成把該員**所有**職務（主職＋兼任）一起帶給前端：主職在前不加註記、兼任的加「（兼任）」，
+    // 例：何沐桐 → 「技術部 工程師／生管組 組長（兼任）」。人員清單一律走共用庫，不自己拼 SQL（鐵則見 ai-rules/08 第五節）。
+    // 這裡是指派任務負責人，選的是「人」不是「職務」，所以一人仍只有一列（owner_users 存的就是 user_id），
+    // 只是把職務全列出來讓人認得出是誰。
+    $rows  = eg_people_list($db, ['states'=>[1,2,3], 'prefer_main'=>true]);
+    $posts = eg_people_posts($db, ['states'=>[1,2,3], 'user_ids'=>array_column($rows, 'id')]);
+    $byUid = [];
+    foreach ($posts as $p) $byUid[(int)$p['id']][] = $p;
+    $fmt = function (array $ps): array {
+        // 主職優先，其次職級高的在前（同一人的多筆職務顯示順序要固定，不能隨 SQL 回傳順序跳動）
+        usort($ps, fn($a, $b) => [-(int)$a['is_main'], (int)$a['position_sort'], (int)$a['dept_sort']]
+                             <=> [-(int)$b['is_main'], (int)$b['position_sort'], (int)$b['dept_sort']]);
+        return array_map(fn($p) => [
+            'dept_id'       => $p['dept_id'],
+            'dept_name'     => (string)$p['dept_name'],
+            'position_name' => (string)$p['position_name'],
+            'is_main'       => (int)$p['is_main'],
+            'label'         => trim($p['dept_name'] . ' ' . $p['position_name']) . ($p['is_main'] ? '' : '（兼任）'),
+        ], $ps);
+    };
+    $out = [];
+    foreach ($rows as $r) {
+        $ps = $fmt($byUid[(int)$r['id']] ?? []);
+        $out[] = ['id'=>$r['id'], 'user_cname'=>$r['user_cname'],
+                  'position_name'=>$r['position_name'] ?? '', 'dept_name'=>$r['dept_name'] ?? '',
+                  'posts'=>$ps,
+                  // 沒掛任何職務的人（極少數）退回共用庫挑出來的那筆，不要顯示成空白
+                  'posts_text'=>$ps ? implode('／', array_column($ps, 'label'))
+                                    : trim((string)($r['dept_name'] ?? '') . ' ' . (string)($r['position_name'] ?? ''))];
+    }
+    jout(['people'=>$out]);
 }
 
 /* 與會者本人密碼簽到（共用裝置輪流簽）：身分＝選人，密碼只驗證是本人，不做密碼反查 */
@@ -599,25 +634,102 @@ case 'notify_pending_items': {
         $targets = meeting_item_pending_notify_targets($db, $id, $it);
         if (!$targets) continue;
         $notified++;
-        $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)$it['owner_depts']))));
-        if ($ownerIds) {
-            $inDept = implode(',', $ownerIds);
-            $ownerLabel = '負責部門：'.implode('、', $db->query("SELECT name FROM department WHERE id IN ($inDept)")->fetchAll(PDO::FETCH_COLUMN));
-        } else {
-            $ownerLabel = '負責人：'.implode('、', array_map(function($tid) use ($db) {
-                $st = $db->prepare("SELECT user_cname FROM user WHERE id=?"); $st->execute([$tid]);
-                return (string)($st->fetchColumn() ?: $tid);
-            }, $targets));
-        }
-        meeting_notify_item_owners($db, (int)$it['item_id'], $targets,
-            '「'.$m['subject'].'」會議記錄項目待確認：'.mb_substr((string)$it['content'], 0, 30),
-            '「'.$m['subject'].'」（'.$m['meeting_date'].'）會議記錄的以下負責項目請確認並回覆：'."\n".$it['content']
-            .($it['due_date'] ? ("\n應完成日期：".$it['due_date']) : '')
-            ."\n".$ownerLabel
-            .(count($targets) > 1 ? "\n（任一人回覆即完成，不需每人都回）" : ''),
-            $uid);
+        // 標題/內文一律走共用的 meeting_item_notice_text()，與「回簽中調整負責人」補發的通知用同一份措辭
+        $tx = meeting_item_notice_text($db, $m, $it, $targets);
+        meeting_notify_item_owners($db, (int)$it['item_id'], $targets, $tx['title'], $tx['content'], $uid);
     }
     jout(['notified_items'=>$notified]);
+}
+
+/* 回簽中調整負責人(2026-09-01 使用者明確要求)：「存檔並通知」之後整張記錄鎖定不可編輯，但常有
+   「這一項其實不歸他管／還要再找一個部門一起確認」的情況，原本只能整張撤回再重發一次通知，
+   其他已經回覆好的人會被連帶重來。這支只動**一個項目**的負責部門或指定人員，其餘內容一個字都不碰：
+     ・只能加/減，**不能換模式**（部門↔指定人員互換等於整項重定義，那種請走撤回改草稿）
+     ・**已經回簽的人/部門一律不可移除**（移除了他的簽名就會變成孤兒，畫面上的蓋章也會消失）
+     ・新加的人會被併進該項目**原本那則**通知的收件人（不另發第二則，見 meeting_item_notice_sync）
+     ・移除後若剩下的都已回簽，該項目的通知自動關閉；整張都完成時 meeting_try_auto_submit 會直接送主席
+   權限與可編輯階段比照 save（記錄人本人或管理員、draft/rejected），差別只在**不受回簽中鎖定限制**。 */
+case 'owner_adjust': {
+    if (!$perms['canEdit']) jerr('無編輯權限', 403);
+    $id     = (int)($_POST['meeting_id'] ?? 0);
+    $itemId = (int)($_POST['item_id'] ?? 0);
+    $mode   = (string)($_POST['mode'] ?? '');
+    $m = meeting_load($db, $id);
+    if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可調整負責人', 403);
+    if (!in_array($m['status'], ['draft','rejected'], true)) jerr('此會議記錄已送出，無法調整負責人（如需修改請先請主席/總經理退回）');
+    if (!in_array($mode, ['dept','user'], true)) jerr('模式參數不正確');
+
+    $st = $db->prepare("SELECT item_id, content, owner_depts, owner_users FROM meeting_item WHERE item_id=? AND meeting_id=?");
+    $st->execute([$itemId, $id]);
+    $item = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$item) jerr('找不到此會議項目');
+
+    $curUsers = array_values(array_filter(array_map('intval', explode(',', (string)$item['owner_users']))));
+    $curDepts = $curUsers ? [] : array_values(array_filter(array_map('intval', explode(',', (string)$item['owner_depts']))));
+    // 「空陣列」與「沒給」在後端是兩回事（ai-rules 記過的漏法）：這裡 ids 允許為空＝把負責人全部清掉，
+    // 但只有在沒有任何人回簽過的情況下才可能通過下面的移除檢查。
+    $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)($_POST['ids'] ?? ''))))));
+    if (count($ids) > 50) jerr('負責人數量過多（上限 50）');
+
+    // 模式不可切換：項目原本就有負責人時，只能沿用原本的那一種
+    if (($curUsers && $mode !== 'user') || ($curDepts && $mode !== 'dept')) {
+        jerr('回簽中不可切換「負責部門／指定人員」模式，只能在原本的模式下增減；要改模式請先按「撤回」解除鎖定');
+    }
+
+    // 已回簽者不可移除（指定人員比 user_id、部門比 dept_id，與 meeting_item_is_confirmed 同一套判定鍵）
+    $cq = $db->prepare("SELECT user_id, user_name, dept_id, dept_name FROM meeting_item_confirm WHERE item_id=?");
+    $cq->execute([$itemId]);
+    $confirmRows = $cq->fetchAll(PDO::FETCH_ASSOC);
+    $removed = array_values(array_diff($mode === 'user' ? $curUsers : $curDepts, $ids));
+    $blocked = [];
+    foreach ($confirmRows as $cr) {
+        if ($mode === 'user') {
+            if (in_array((int)$cr['user_id'], $removed, true)) $blocked[] = (string)($cr['user_name'] ?: $cr['user_id']);
+        } elseif ($cr['dept_id'] !== null && in_array((int)$cr['dept_id'], $removed, true)) {
+            $blocked[] = (string)($cr['dept_name'] ?: $cr['dept_id']);
+        }
+    }
+    if ($blocked) jerr('下列' . ($mode === 'user' ? '人員' : '部門') . '已經回簽完成，不可移除：' . implode('、', array_unique($blocked))
+                       . '（已完成的確認簽名會跟著失效，如確實要改請按「撤回」解除鎖定後修改）');
+
+    // 新加入的對象要真的存在且可用（前端只送 id，後端不能照單全收＝鐵律8）
+    $added = array_values(array_diff($ids, $mode === 'user' ? $curUsers : $curDepts));
+    if ($added) {
+        $in = implode(',', array_fill(0, count($added), '?'));
+        if ($mode === 'user') {
+            // 離職(0)與特殊帳號(90/99)不可指派——指派了也永遠不會有人回簽，整張記錄會卡在回簽中送不出去
+            $vq = $db->prepare("SELECT id FROM `user` WHERE id IN ($in) AND state NOT IN (0,90,99)");
+        } else {
+            $vq = $db->prepare("SELECT id FROM department WHERE id IN ($in)");
+        }
+        $vq->execute($added);
+        $okIds = array_map('intval', $vq->fetchAll(PDO::FETCH_COLUMN));
+        $badIds = array_values(array_diff($added, $okIds));
+        if ($badIds) jerr('下列' . ($mode === 'user' ? '人員（可能已離職）' : '部門') . '不存在或不可指派：' . implode('、', $badIds));
+    }
+
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE meeting_item SET owner_users=?, owner_depts=?, owner_dept_names=? WHERE item_id=?")
+           ->execute([
+               $mode === 'user' ? ($ids ? implode(',', $ids) : null) : null,
+               $mode === 'dept' ? ($ids ? implode(',', $ids) : null) : null,
+               ($mode === 'dept' && $ids)
+                   ? implode(',', $db->query("SELECT name FROM department WHERE id IN (" . implode(',', $ids) . ")")->fetchAll(PDO::FETCH_COLUMN))
+                   : null,
+               $itemId,
+           ]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('調整失敗：'.$e->getMessage(), 500); }
+
+    // 通知收件人的增刪與可能的自動送簽核都放在交易外：推播一旦送出就收不回來，不可被 rollback 連帶回捲
+    $sync = meeting_item_notice_sync($db, $m, $itemId, $uid);
+    $st->execute([$itemId, $id]);                      // 重讀調整後的這一列再判定，不要拿前面的舊值推算
+    $after = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+    jout(['added'=>count($added), 'removed'=>count($removed),
+          'notified'=>count($sync['added']), 'new_notice'=>$sync['new_notice'],
+          'item_done'=>$after ? meeting_item_is_confirmed($db, $after) : true,
+          'auto_submitted'=>meeting_try_auto_submit($db, $id)]);
 }
 
 /* 撤回已送出但「尚未任何人簽核」的會議記錄(2026-08-05 使用者明確要求)：

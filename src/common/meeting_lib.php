@@ -642,6 +642,108 @@ function meeting_close_single_item_notice(PDO $db, int $itemId): void {
     } catch (Throwable $e) {}
 }
 
+/**
+ * 項目待確認回簽通知的標題與內文（唯一實作）。
+ * 「存檔並通知」（notify_pending_items）與「回簽中調整負責人」（owner_adjust）共用同一份，
+ * 兩邊各寫一份的話，同一張單在不同時間點發出的通知會長得不一樣，收件人會以為是兩件不同的事。
+ * $m 需含 subject/meeting_date；$item 需含 item_id/content/due_date/owner_depts/owner_users。
+ */
+function meeting_item_notice_text(PDO $db, array $m, array $item, array $targets): array {
+    $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_depts'] ?? '')))));
+    if ($ownerIds) {
+        $inDept = implode(',', $ownerIds);
+        $ownerLabel = '負責部門：' . implode('、', $db->query("SELECT name FROM department WHERE id IN ($inDept)")->fetchAll(PDO::FETCH_COLUMN));
+    } else {
+        $ownerLabel = '負責人：' . implode('、', array_map(function ($tid) use ($db) {
+            $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $st->execute([$tid]);
+            return (string)($st->fetchColumn() ?: $tid);
+        }, $targets));
+    }
+    return [
+        'title'   => '「' . $m['subject'] . '」會議記錄項目待確認：' . mb_substr((string)$item['content'], 0, 30),
+        'content' => '「' . $m['subject'] . '」（' . $m['meeting_date'] . '）會議記錄的以下負責項目請確認並回覆：' . "\n" . $item['content']
+                   . ($item['due_date'] ? ("\n應完成日期：" . $item['due_date']) : '')
+                   . "\n" . $ownerLabel
+                   . (count($targets) > 1 ? "\n（任一人回覆即完成，不需每人都回）" : ''),
+    ];
+}
+
+/**
+ * 把某個項目「還在生效中的回簽通知」的收件人，重新對齊目前的負責部門／指定人員（2026-09-01 使用者明確要求）。
+ * 用於「回簽中」增減尚未回簽的負責人之後——不這樣做的話會有兩個看不出來的破口：
+ *   ①新加進來的人永遠收不到通知（他不在原本那則通知的收件人裡），畫面卻顯示「已通知」；
+ *   ②被移除的人手上那則通知還開著，點進去照樣回覆得了，等於移除了個寂寞。
+ * 作法：一個項目自始至終**只有一則**通知（ref_type=MEETING_ITEM_CONFIRM、ref_id=item_id，
+ * meeting_close_single_item_notice 也是靠這個唯一性關閉的），所以這裡不另發第二則，只增刪它的收件人；
+ * 只有在「原本那則已經關閉（該項目一度全部確認完成）」時才會補發一則新的。
+ * **已經回覆過的人一律不動**（有 live_event_response 就跳過），否則會把別人的回覆紀錄變成孤兒。
+ * 回傳 ['added'=>[user_id…], 'removed'=>[user_id…], 'new_notice'=>bool]。
+ */
+function meeting_item_notice_sync(PDO $db, array $m, int $itemId, int $fromUid): array {
+    $res = ['added'=>[], 'removed'=>[], 'new_notice'=>false];
+    $meetingId = (int)$m['meeting_id'];
+    $st = $db->prepare("SELECT item_id, content, due_date, owner_depts, owner_users FROM meeting_item WHERE item_id=? AND meeting_id=?");
+    $st->execute([$itemId, $meetingId]);
+    $item = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$item) return $res;
+
+    // 移除之後剩下的負責人剛好都已回簽（或整個項目已無負責人）＝這個項目完成了，關掉通知解除「回簽中」鎖定
+    if (meeting_item_is_confirmed($db, $item)) {
+        meeting_close_single_item_notice($db, $itemId);
+        return $res;
+    }
+    $pending = meeting_item_pending_notify_targets($db, $meetingId, $item);
+
+    $q = $db->prepare("SELECT id FROM live_event WHERE ref_type='MEETING_ITEM_CONFIRM' AND ref_id=?
+                        AND (enddate IS NULL OR enddate>=CURDATE()) ORDER BY id DESC LIMIT 1");
+    $q->execute([$itemId]);
+    $eid = (int)$q->fetchColumn();
+
+    if (!$eid) {
+        // 還沒發過通知（或先前已關閉）：有待回簽對象才補發一則，沿用與「存檔並通知」完全相同的措辭
+        if ($pending) {
+            $tx = meeting_item_notice_text($db, $m, $item, $pending);
+            if (meeting_notify_item_owners($db, $itemId, $pending, $tx['title'], $tx['content'], $fromUid)) {
+                $res['added'] = $pending; $res['new_notice'] = true;
+            }
+        }
+        return $res;
+    }
+
+    $cq = $db->prepare("SELECT target_id FROM live_event_target WHERE live_event_id=? AND target_type='user'");
+    $cq->execute([$eid]);
+    $cur = array_map('intval', $cq->fetchAll(PDO::FETCH_COLUMN));
+
+    $add = array_values(array_diff($pending, $cur));
+    $del = array_values(array_diff($cur, $pending));
+    if ($del) {
+        // 已讀/已回覆過的人不移除（live_event_response 會變成指不到收件人的孤兒；也保留他看過的軌跡）
+        $in  = implode(',', array_fill(0, count($del), '?'));
+        $rq  = $db->prepare("SELECT user_id FROM live_event_response WHERE live_event_id=? AND user_id IN ($in)");
+        $rq->execute(array_merge([$eid], $del));
+        $keep = array_map('intval', $rq->fetchAll(PDO::FETCH_COLUMN));
+        $del  = array_values(array_diff($del, $keep));
+    }
+    if ($del) {
+        $in = implode(',', array_fill(0, count($del), '?'));
+        $db->prepare("DELETE FROM live_event_target WHERE live_event_id=? AND target_type='user' AND target_id IN ($in)")
+           ->execute(array_merge([$eid], $del));
+        $res['removed'] = $del;
+    }
+    if ($add) {
+        $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode) VALUES (?, 'user', ?, 'reply')");
+        foreach ($add as $tuid) $ins->execute([$eid, $tuid]);
+        $res['added'] = $add;
+        // 推播只發給這次新加進來的人，不重發給原本就在收件人裡的人（否則每調整一次就轟炸全部人一次）
+        try {
+            require_once __DIR__ . '/../push/push_send.php';
+            $tx = meeting_item_notice_text($db, $m, $item, $pending);
+            eg_push_send_to_users($db, $add, ['title'=>$tx['title'], 'body'=>mb_substr($tx['content'], 0, 480)]);
+        } catch (Throwable $e) {}
+    }
+    return $res;
+}
+
 /** 這個項目只要已經確認完成，就把它還在生效中的「待確認回簽」通知關掉（2026-08-26 使用者實測回報修正）。
  *  原本只有「透過通知回覆」那條路徑會關通知，**現場密碼簽名(item_confirm)與超管補齊(admin_backfill)都只寫了
  *  meeting_item_confirm 卻沒關通知**，造成兩個症狀：①同部門其他被通知的人一直收到「需要回簽」的通知，開進去

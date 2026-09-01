@@ -470,6 +470,23 @@ foreach ($roleRows as $rr) {
         <button class="b-ok" onclick="groupSaveConfirm()">儲存</button></div>
 </div></div>
 
+<!-- 回簽中調整負責人（2026-09-01 使用者明確要求）：只動一個項目的負責部門／指定人員，不解除整張記錄的鎖定 -->
+<div class="mt-mask" id="ownerAdjMask"><div class="mt-modal" style="max-width:520px;">
+    <div class="m-head"><span>調整負責人（回簽中）</span><span class="m-close" onclick="closeMask('ownerAdjMask')">✕</span></div>
+    <div class="m-body">
+        <div id="oadjItem" style="font-size:12px;color:#5b3a1e;background:#FBF0DD;border:1px solid #E7D2AE;border-radius:4px;padding:6px 8px;margin-bottom:10px;"></div>
+        <div id="oadjBody"></div>
+        <div style="font-size:11.5px;color:#8a6d45;margin-top:10px;line-height:1.7;">
+            ・<b>已回簽的不可移除</b>（移除了他的確認簽名會跟著失效）；要改請先按「撤回」解除鎖定。<br>
+            ・新加入的人會併進<b>這一項原本那則通知</b>的收件人並收到推播，不會另發第二則、也不會重複打擾已收到的人。<br>
+            ・移除後若剩下的負責人都已回簽，這一項就算完成；整張都完成時會自動送交主席簽章。<br>
+            ・<b>不可切換「負責部門↔指定人員」</b>，那等於整項重新定義，請走撤回改草稿。
+        </div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('ownerAdjMask')">取消</button>
+        <button class="b-ok" onclick="ownerAdjustSave()">儲存並通知</button></div>
+</div></div>
+
 <!-- 使用說明 modal（鐵律7） -->
 <div class="mt-mask" id="helpUseMask"><div class="mt-modal wide">
     <div class="m-head"><span>使用說明 — 會議紀錄管理</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
@@ -482,16 +499,19 @@ foreach ($roleRows as $rr) {
         　－<b>人員名單依「會議日期當天」的狀態產生</b>：那天之後才入職、或那天之前就已離職的人一律不出現；那天還在職、之後才離職的人<b>仍會出現</b>（所以補打舊會議紀錄時選得到當時的人）。部門與職稱也是回推<b>當時</b>的（有登錄職務異動紀錄者），不是現在的。<br>
         　－<b>名字右方會顯示他當天的行程</b>（例：<b>陳俊宏（總經理）10:00~11:00 會議</b>），來源包含請假、公出單、教育訓練/外訓、已排定的其他會議；系統會自動比對會議的開始～結束時間，<b>有重疊會標紅並註明「（時間重疊）」</b>。<br>
         　－<b>只有「請假且與會議時段重疊」（含全天假）不可勾選</b>，會以灰字標示；公出／外訓／其他會議只是提示，仍可加入名單（現場常有人開完前一場再過來）。套用群組與從行事曆帶入時套用同一套規則，會直接告訴你誰沒被加入、誰的時間重疊。<br>
+　－<b>職稱顯示</b>：<b>依部門挑選</b>加入的人，顯示<b>該部門</b>的職稱（那份名單本來就是在講那個部門）；<b>套用群組</b>與<b>從行事曆帶入</b>沒有部門情境，一律顯示該員的<b>主要職務</b>，跟行事曆上看到的職稱一致。名單存檔後職稱就固定下來，日後職務異動不會回頭改動已存的舊紀錄。<br>
         　－要顯示哪些行程來源，管理員可在<b>模組設定 → 附件與簽到表AS文件綁定</b>調整（此為全站共用設定）。<br>
         <b>②建立要項</b>：分「上級指示要項」與「會議要項」兩張表，每項可填應完成日期、負責部門（可多選）、備註。<br>
         <b>③現場簽到</b>：開啟「檢視」，出席人員名單旁各自輸入<b>本人密碼</b>簽到（共用一台裝置輪流簽，用選人不用密碼反查身分，不會有密碼重複無法辨識的問題）。<br>
+        <b>刪除</b>：清單上的「刪除」會連同出席簽到、項目確認簽名與附件一併刪除且<b>無法復原</b>，因此需要<b>手動輸入大寫 Y</b> 才會執行。<br>
         <b>④存草稿或送出</b>：草稿只有記錄人自己看得到，可隨時修改。<b>出席人員全部簽到、且負責部門/指定人員也全部確認回簽後</b>才能真正<b>送簽核</b>，鎖定內容並通知主席確認簽章 → 主席簽章後自動通知總經理確認簽章（總經理可逐筆或整體回覆意見）→ 完成。
         負責人尚未全部確認回簽時，按鈕會改標<b>「存檔並通知」</b>：只發通知請對方回覆確認，<b>不會</b>送交主席簽核；全部確認完成後按鈕才會變回「送簽核」。任一階段可退回，退回後記錄人可修改並重新送出。<br>
         <b>自動送簽核</b>：預設開啟——<b>出席全部簽到＋負責部門/指定人員全部回簽＋已指定主席</b>三個條件到齊的那一刻（不論最後補齊的是哪一項、由誰完成），系統會<b>直接送交主席簽核</b>，記錄人不必再手動按一次；簽核紀錄上的送出人仍記<b>記錄人本人</b>，跟手動送出完全相同，並會發一則通知告知記錄人已自動送出。若想改回手動，管理員可到「模組設定 → 附件與簽到表AS文件綁定」把這個勾選拿掉。<br>
         按下「存檔並通知」後，狀態會變成<b>「回簽中」</b>，內容<b>鎖定不可編輯</b>（避免對方回覆的是已經被改掉的舊內容）；待負責人全部回覆確認後自動解鎖可送簽核，或記錄人可按「撤回」提前解除鎖定改回可編輯草稿（已完成的簽到/確認簽名不會被清除；之後若真的改了某項目的內容或負責部門/指定人員，只有<b>該項目</b>的舊確認會被清空要求重新確認，其餘項目不受影響）。<br>
+        　－<b>回簽中要增減負責人不必整張撤回</b>：檢視畫面每個項目的「負責人/部門」欄下方有<b>「調整負責人」</b>（記錄人本人或管理員），可單獨增減<b>這一項</b>尚未回簽的負責部門／指定人員，其餘內容與其他項目完全不動。<b>已經回簽的對象不可移除</b>（移除了他的確認簽名會跟著失效），<b>也不可切換「負責部門↔指定人員」模式</b>（那等於整項重新定義，請走撤回）。新加入的人會併進<b>這一項原本那則通知</b>的收件人並收到推播（不另發第二則、不重複打擾已收到的人），被移除且尚未回覆的人手上那則通知會同時失效；移除後若剩下的都已回簽，該項目即算完成，整張都完成時會自動送交主席簽章。<br>
         <b>⑤負責人/部門項目確認</b>：要項的「負責人/部門」欄可點連結<b>切換兩種模式（二擇一，切換會清空另一種的選擇）</b>：<br>
         　－<b>選部門</b>（可多選）：<b>每個負責部門各要一位代表簽名</b>，系統依序自動算出誰要簽（現場只有算出的那位本人能輸入密碼簽這格）：①該部門本次以<b>主要角色</b>出席的主管優先（有設職級的職稱，如經理/副理/課長/組長等）②該部門沒有主要角色主管出席，才由<b>兼任</b>該部門主管的出席者代簽 ③連兼任主管都沒有，才由該部門出席人員中職稱排序最高者代簽（②③兩種情況章旁都標示「(代)」，不特別區分是否兼任）。<br>
-        　－<b>指定人員</b>（可多選、可打字搜尋全公司人員）：直接指名的人只要本次有出席就是必簽者，不套用主管優先判定；沒指定到部門，不論那位人員屬於哪個部門都是他本人簽。<br>
+        　－<b>指定人員</b>（可多選、可打字搜尋全公司人員）：直接指名的人只要本次有出席就是必簽者，不套用主管優先判定；沒指定到部門，不論那位人員屬於哪個部門都是他本人簽。清單會把每個人的<b>所有職務都列出來</b>（主要職務在前，兼任的加註「（兼任）」，例：<i>何沐桐（技術部 工程師／生管組 組長（兼任）</i>），關鍵字也可以打<b>部門或職稱</b>搜尋。<br>
         兩種模式下，負責人（部門或指定人員）本次沒有人出席、或現場代表尚未來得及簽名時，「存檔並通知」都會改發通知（該部門本次所有出席人員＋部門主管，或指定人員本人）請對方回覆確認，任一人回覆即算完成，回覆內容會顯示在項目下方；同一份通知一旦有人完成回覆就會自動關閉，其他被通知的人之後開啟只會看到唯讀狀態，不會再重複送出回覆蓋掉別人。<br>
         <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。已完成核准的會議記錄在「檢視」畫面也能再插入/更新：一般人插入後會<b>清空目前簽核紀錄改回草稿</b>，需重新送出取得主席／總經理簽章；<b>超級管理員</b>插入後<b>維持已核准狀態</b>，不需重新送審。
         <h4>重要行為</h4>
@@ -750,8 +770,15 @@ function openEdit(id){
         openMask('edMask');
     });
 }
+/* 刪除二次確認(2026-09-01 使用者明確要求)：改成必須手動輸入大寫 Y 才真的刪除。
+   會議記錄一刪就連出席簽到、項目確認簽名、附件一起沒了且無法復原，confirm 一個 Enter 就過去太容易誤觸；
+   全站既有的高風險刪除都是這個做法(如 master_data_management/roster/training_record)，這裡照抄不自創另一套。 */
 function deleteMeeting(id){
-    if (!confirm('確定刪除此會議記錄？（無法復原）')) return;
+    var m = MEETINGS.filter(function(x){ return +x.meeting_id===+id; })[0];
+    var nm = m ? ('「'+m.subject+'」（'+dispDate(m.meeting_date)+'）') : '此會議記錄';
+    var ans = prompt('將永久刪除'+nm+'，連同出席簽到、項目確認簽名與附件一併刪除，且無法復原。\n\n確定要刪除請輸入大寫 Y：');
+    if (ans === null) return;                 // 按取消＝不做事，不要再跳一次錯誤訊息
+    if (ans !== 'Y'){ alert('輸入不正確，未刪除。（必須是大寫的 Y）'); return; }
     $.post(API, {action:'delete', meeting_id:id}, function(res){
         if (!res.ok){ alert(res.error||'刪除失敗'); return; }
         loadList();
@@ -1045,11 +1072,32 @@ function ownerDisplayText(it){
     }
     return (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
 }
+/* 人員的職務顯示(2026-09-01 使用者回報)：一個人可能同時掛主職與兼任(例：技術部 工程師＋生管組 組長)，
+   後端 people_all 已把**所有**職務都帶回來(posts_text，主職在前、兼任加註「（兼任）」)。
+   舊版只印共用庫挑出來的那一筆＝職級最高的那個，於是清單上只看得到兼任的部門，原職位整個不見。 */
+function personPostsText(p){
+    if (!p) return '';
+    if (p.posts_text) return p.posts_text;
+    return $.trim((p.dept_name||'') + ' ' + (p.position_name||''));   // 舊快取或沒掛職務的人退回單一職務
+}
+/* 已選取的標籤(chip)顯示「主要職務」就好，滑鼠移上去才看全部職務——標籤是塞在會議要項表格的儲存格裡，
+   兼三個職務的人(例：董事長室 董事長／總經理室 總經理／技術部 課長)整串印出來會把欄位撐爆。
+   要「看到所有兼任與原職位」的是下方的候選清單，那裡一律全列。 */
+function personMainPostText(p){
+    if (!p) return '';
+    if (p.posts && p.posts.length) return p.posts[0].label;   // posts 已由後端排成主職在前
+    return $.trim((p.dept_name||'') + ' ' + (p.position_name||''));
+}
 function userPickHtml(kind,i,ids){
     var tags = '';
-    ids.forEach(function(id){ var p=personById(id); if(p) tags += '<span class="tg">'+esc(p.user_cname)+(p.dept_name?'('+esc(p.dept_name)+')':'')+'<i class="fa fa-times" onclick="itmUserDel(\''+kind+'\','+i+',\''+id+'\')"></i></span>'; });
+    ids.forEach(function(id){
+        var p=personById(id); if(!p) return;
+        var mt = personMainPostText(p), pt = personPostsText(p);
+        tags += '<span class="tg" title="'+esc(pt)+'">'+esc(p.user_cname)+(mt?'('+esc(mt)+')':'')
+              + '<i class="fa fa-times" onclick="itmUserDel(\''+kind+'\','+i+',\''+id+'\')"></i></span>';
+    });
     return '<div class="dp-pick itm-up" data-kind="'+kind+'" data-i="'+i+'"><div class="dp-tags">'+tags+'</div>'
-         + '<input type="text" class="itm-up-kw" placeholder="搜尋人員姓名…" data-eg-skip autocomplete="off"><div class="dp-list"></div></div>';
+         + '<input type="text" class="itm-up-kw" placeholder="搜尋姓名／部門／職稱…" data-eg-skip autocomplete="off"><div class="dp-list"></div></div>';
 }
 function itmUserDel(kind,i,id){
     var a = itemsArr(kind)[i]; if (!a) return;
@@ -1062,9 +1110,12 @@ $(document).on('focus input', '.itm-up-kw', function(){
     var kw = $.trim($(this).val()).toLowerCase(), h = '', n = 0;
     ALL_PEOPLE.forEach(function(p){
         if (n >= 30) return; // 全員清單可能上百筆，篩選後只列前30筆避免卡頓，打更精確的關鍵字即可縮小範圍
-        if (kw && p.user_cname.toLowerCase().indexOf(kw)<0) return;
+        var pt = personPostsText(p);
+        // 職務全部列出來以後，關鍵字也要能打部門/職稱(例如打「生管」找兼任生管組的人)，否則畫面看得到卻搜不到
+        if (kw && p.user_cname.toLowerCase().indexOf(kw)<0 && pt.toLowerCase().indexOf(kw)<0) return;
         var on = (a.owner_users||[]).some(function(x){ return String(x)===String(p.id); });
-        h += '<div data-id="'+p.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(p.user_cname)+(p.dept_name?'（'+esc(p.dept_name)+'）':'')+'</div>';
+        h += '<div data-id="'+p.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(p.user_cname)
+           + (pt?'<span style="color:#8a6d45;">（'+esc(pt)+'）</span>':'')+'</div>';
         n++;
     });
     $pick.find('.dp-list').html(h || '<div style="color:#b0a390;">查無人員</div>').show();
@@ -1302,10 +1353,17 @@ function viewHtml(res){
         if (!rows.length) return '';
         var t = '<h5>'+title+'</h5><table><tr><th>序</th><th>報告要點及決議事項</th><th>應完成日期</th><th>負責人/部門</th><th>確認簽名／回簽狀態</th><th>備註</th>'
               + (m.approval_status==='chair_done'||m.approval_status==='done' ? '<th>總經理意見</th>' : '') + '</tr>';
+        // 回簽中可調整負責人(2026-09-01 使用者明確要求)：整張記錄雖然鎖定不可編輯，但這一項的負責部門／
+        // 指定人員還是能增減——常有「這項其實不歸他管」或「還要再找一個部門一起確認」的情況，
+        // 不必為了改一個人就整張撤回、讓已經回覆好的其他人重來一次。已回簽的一律不可移除(後端也擋)。
+        var canAdjOwner = (m.approval_status==='notifying') && (+m.recorder_user_id===META.uid || PERMS.canAdmin);
         rows.forEach(function(it, idx){
             var deptNames = ownerDisplayText(it);
             t += '<tr><td>'+(idx+1)+'</td><td>'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+dispDate(it.due_date)+'</td>'
-               + '<td>'+esc(deptNames||'—')+'</td>'
+               + '<td>'+esc(deptNames||'—')
+               + (canAdjOwner ? '<br><a href="javascript:void(0)" style="font-size:11px;" onclick="openOwnerAdjust('+it.item_id+')">'
+                                + '<i class="fa fa-pencil"></i> 調整負責人</a>' : '')
+               + '</td>'
                + '<td>'+itemConfirmCellHtml(it)+'</td>'
                + '<td>'+esc(it.remark||'')+'</td>'
                + (m.approval_status==='chair_done'||m.approval_status==='done' ? '<td>'+esc(it.gm_comment||'')+'</td>' : '') + '</tr>';
@@ -1441,6 +1499,103 @@ function signAttendee(mid, uidv){
    (比照簽到表密碼驗證，避免共用裝置分不清是誰簽的)。負責部門本次完全沒人出席時無簽名槽，改走送出會議記錄時自動發出的
    通知系統回簽，狀態一併顯示在同一格內。 */
 function slotTag(s){ return !s.is_manager ? '(代)' : ''; }
+/* ---------- 回簽中調整負責人（2026-09-01 使用者明確要求） ----------
+   只送出「這一項的負責人清單」，其餘欄位完全不碰，所以不必解除整張記錄的回簽中鎖定。
+   已回簽的對象前端就不給移除鈕（後端 owner_adjust 用同一套判定再擋一次＝鐵律8，防止直打 API 繞過）。 */
+var OADJ = null;
+function openOwnerAdjust(itemId){
+    if (!VIEW) return;
+    var it = (VIEW.items||[]).filter(function(x){ return +x.item_id===+itemId; })[0];
+    if (!it){ alert('找不到此項目，請重新整理後再試。'); return; }
+    var users = it.owner_users ? String(it.owner_users).split(',').filter(Boolean) : [];
+    var depts = users.length ? [] : (it.owner_depts ? String(it.owner_depts).split(',').filter(Boolean) : []);
+    // 沒有任何負責人的項目：預設用部門模式讓使用者開始指派（後端在無負責人時兩種模式都收）
+    var mode = users.length ? 'user' : 'dept';
+    // 已回簽＝不可移除。指定人員模式比 user_id、部門模式比 dept_id，與後端同一套判定鍵。
+    var locked = (it.confirm_slots||[]).filter(function(s){ return s.signed; })
+                   .map(function(s){ return String(mode==='user' ? s.user_id : s.dept_id); });
+    OADJ = {meeting_id:VIEW.meeting.meeting_id, item_id:+itemId, mode:mode,
+            ids:(mode==='user'?users:depts).map(String), locked:locked};
+    $('#oadjItem').html('<b>項目：</b>'+esc(String(it.content||'').substr(0,80))
+        + '<br><b>模式：</b>'+(mode==='user'?'指定人員':'負責部門'));
+    renderOwnerAdjust();
+    openMask('ownerAdjMask');
+}
+function renderOwnerAdjust(){
+    if (!OADJ) return;
+    var isUser = OADJ.mode==='user', tags = '';
+    OADJ.ids.forEach(function(id){
+        var lock = OADJ.locked.indexOf(String(id))>=0;
+        var nm;
+        if (isUser){ var p=personById(id); nm = p ? p.user_cname+(personMainPostText(p)?'（'+personMainPostText(p)+'）':'') : ('#'+id); }
+        else { var d=deptById(id); nm = d ? d.name : ('#'+id); }
+        tags += '<span class="tg"'+(lock?' style="background:#E7D2AE;" title="已回簽，不可移除"':'')+'>'
+              + (lock?'✔ ':'')+esc(nm)
+              + (lock?'':'<i class="fa fa-times" onclick="oadjDel(\''+id+'\')"></i>')+'</span>';
+    });
+    $('#oadjBody').html('<label style="font-size:12px;">'+(isUser?'指定人員':'負責部門')+'</label>'
+        + '<div class="dp-pick oadj-pick" style="min-height:30px;"><div class="dp-tags">'
+        + (tags || '<span style="font-size:11.5px;color:#b0a390;">尚未指定</span>') + '</div>'
+        + '<input type="text" class="oadj-kw" placeholder="'+(isUser?'搜尋姓名／部門／職稱…':'選部門…')+'" data-eg-skip autocomplete="off">'
+        + '<div class="dp-list"></div></div>');
+}
+function oadjDel(id){
+    if (!OADJ) return;
+    if (OADJ.locked.indexOf(String(id))>=0){ alert('此對象已經回簽完成，不可移除。\n\n若確實要改，請先按「撤回」解除鎖定後修改。'); return; }
+    OADJ.ids = OADJ.ids.filter(function(x){ return String(x)!==String(id); });
+    renderOwnerAdjust();
+}
+$(document).on('focus input', '.oadj-kw', function(){
+    if (!OADJ) return;
+    var kw = $.trim($(this).val()).toLowerCase(), h = '', n = 0;
+    if (OADJ.mode==='user'){
+        ALL_PEOPLE.forEach(function(p){
+            if (n>=30) return;
+            var pt = personPostsText(p);
+            if (kw && p.user_cname.toLowerCase().indexOf(kw)<0 && pt.toLowerCase().indexOf(kw)<0) return;
+            var on = OADJ.ids.some(function(x){ return String(x)===String(p.id); });
+            h += '<div data-id="'+p.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(p.user_cname)
+               + (pt?'<span style="color:#8a6d45;">（'+esc(pt)+'）</span>':'')+'</div>';
+            n++;
+        });
+    } else {
+        DEPTS.forEach(function(d){
+            if (kw && d.name.toLowerCase().indexOf(kw)<0) return;
+            var on = OADJ.ids.some(function(x){ return String(x)===String(d.id); });
+            h += '<div data-id="'+d.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(d.name)+'</div>';
+        });
+    }
+    $(this).closest('.oadj-pick').find('.dp-list').html(h || '<div style="color:#b0a390;">查無資料</div>').show();
+});
+$(document).on('click', '.oadj-pick .dp-list div[data-id]', function(){
+    if (!OADJ) return;
+    var id = String($(this).data('id'));
+    var i = OADJ.ids.findIndex(function(x){ return String(x)===id; });
+    if (i>=0){
+        if (OADJ.locked.indexOf(id)>=0){ alert('此對象已經回簽完成，不可移除。'); return; }
+        OADJ.ids.splice(i,1);
+    } else OADJ.ids.push(id);
+    renderOwnerAdjust();
+});
+$(document).on('click', function(e){ if (!$(e.target).closest('.oadj-pick').length) $('.oadj-pick .dp-list').hide(); });
+function ownerAdjustSave(){
+    if (!OADJ) return;
+    // 前端先擋一次（後端同規則再擋一次）：被移除的已回簽對象、以及「一個都沒留」的情況要問清楚
+    var lost = OADJ.locked.filter(function(x){ return !OADJ.ids.some(function(y){ return String(y)===String(x); }); });
+    if (lost.length){ alert('已回簽的對象不可移除，請重新加回後再儲存。'); return; }
+    if (!OADJ.ids.length && !confirm('這一項將變成「沒有指定負責人」，不再需要任何人回簽。確定嗎？')) return;
+    $.post(API, {action:'owner_adjust', meeting_id:OADJ.meeting_id, item_id:OADJ.item_id,
+                 mode:OADJ.mode, ids:OADJ.ids.join(',')}, function(res){
+        if (!res.ok){ alert(res.error||'調整失敗'); return; }
+        closeMask('ownerAdjMask');
+        var msg = '已更新負責人。';
+        if (res.notified) msg += '\n已通知 '+res.notified+' 位新加入的負責人回簽。';
+        if (res.auto_submitted) msg += '\n所有回簽與簽到都已完成，已自動送交主席確認簽章。';
+        alert(msg);
+        openView(OADJ.meeting_id); loadList();
+    }, 'json');
+}
+
 function itemConfirmCellHtml(it){
     var slots = it.confirm_slots || [];
     var h = slots.map(function(s){
