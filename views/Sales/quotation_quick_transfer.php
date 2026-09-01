@@ -308,8 +308,8 @@ try {
         <div style="font-size:12px;color:#8a5a2b;margin-bottom:8px;">
             規則只比對項目的<b>規格</b>文字，不分大小寫。<br>
             <b>「包含」用逗號連接＝這些字<u>全部都要有</u></b>（例 <code>齒研,冶具|治具</code> ＝ 要同時含「齒研」而且含「冶具」或「治具」）；
-            想表達「這個<u>或</u>那個」請在<b>同一個關鍵字裡用 <code>|</code></b>（例 <code>冶具|治具</code>）。<br>
-            <b>「不包含」用逗號連接＝其中<u>任何一個</u>出現就不算命中</b>（例 <code>冶具,治具,刀</code>）。<br>
+            想表達「這個<u>或</u>那個」請在<b>同一個關鍵字裡用 <code>|</code></b>（例 <code>冶具|治具</code>）；「任一即可／全部都要含」那顆選項<b>只管「包含」這一欄</b>。<br>
+            <b>「不包含」用逗號連接＝其中<u>任何一個</u>出現就不算命中</b>（例 <code>冶具,治具,刀</code>）——這一欄<b>固定是「或」</b>，不受上面那顆選項影響。兩欄之間一律是「而且」：要「包含」成立、<b>同時</b>「不包含」一個都沒中，才算命中。<br>
             客戶不勾＝通用規則；勾了多個＝<u>任一</u>符合即成立。<br>
             多條規則同時命中同一筆規格、而且要帶的標籤不一樣時，<b>偵測畫面會把候選列出來讓你選</b>（系統只把比較精確的那個預選起來，
             例：規格「滾刀」被「粗滾」命中的是單字「滾」、被「刀具-滾齒刀」命中的是「滾刀」，「滾」包在「滾刀」裡面所以建議讓位）。
@@ -341,11 +341,12 @@ try {
                 <div style="flex:1;min-width:230px;"><label style="font-size:12px;">規格「包含」 *</label>
                     <input type="text" class="form-control input-sm" id="krInc" placeholder="例：整修,修整,修改">
                     <div style="font-size:11px;margin-top:2px;">
+                        <span style="color:#8a5a2b;">上面這欄逗號的意思（只管「包含」）：</span>
                         <label style="margin-right:10px;"><input type="radio" name="krIncMode" value="any" checked> <b>任一即可</b>（逗號＝或）</label>
                         <label><input type="radio" name="krIncMode" value="all"> <b>全部都要含</b>（逗號＝且）</label>
                     </div>
                     <div class="kw-err" id="krIncErr"></div></div>
-                <div style="flex:1;min-width:180px;"><label style="font-size:12px;">規格「不包含」 <span style="color:#888;font-weight:400;">逗號＝任一中就排除</span></label>
+                <div style="flex:1;min-width:180px;"><label style="font-size:12px;">規格「不包含」 <span style="color:#888;font-weight:400;">逗號＝任一中就排除（固定，不受左邊選項影響）</span></label>
                     <input type="text" class="form-control input-sm" id="krExc" placeholder="冶具,治具,刀　＝ 含其中任一個就不算"></div>
                 <div style="width:90px;"><label style="font-size:12px;">排序</label>
                     <input type="number" class="form-control input-sm" id="krPriority" value="0"></div>
