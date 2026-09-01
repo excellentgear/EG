@@ -398,10 +398,19 @@ function type_id_ctrl_bom_file_dir(PDO $db): string {
     return $dir;
 }
 
-/** UTF-8 路徑 → 實際可用來讀檔的路徑（Windows 的 NAS 目錄含中文，PHP 檔案函式吃 Big5） */
+/**
+ * UTF-8 路徑 → 實際可用來讀檔的路徑（Windows 的 NAS 目錄含中文，PHP 檔案函式可能吃 Big5）。
+ * **不可以無條件轉 Big5**：來源有兩種——設定值（UTF-8）與 eg_bom_erp_scan_dir_auto()
+ * （已經是「檔案系統吃得到」的路徑），後者再轉一次就轉壞了，is_dir() 直接 false＝
+ * 整區安靜消失也不報錯。故比照 bom_dir_lib 的作法「兩種編碼都試，哪個存在就用哪個」。
+ */
 function type_id_ctrl_fs_path(string $utf8Path): string {
-    $isWin = (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN');
-    return $isWin ? mb_convert_encoding($utf8Path, 'Big5', 'UTF-8') : $utf8Path;
+    if (is_dir($utf8Path) || is_file($utf8Path)) return $utf8Path;
+    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+        $b5 = @mb_convert_encoding($utf8Path, 'Big5', 'UTF-8');
+        if ($b5 !== false && $b5 !== '' && (is_dir($b5) || is_file($b5))) return $b5;
+    }
+    return $utf8Path;
 }
 
 /**
@@ -502,10 +511,10 @@ function type_id_ctrl_fetch_bom_files_for_part(PDO $db, int $dsPk): array {
     } catch (Throwable $e) { return []; }
     if (!$boms) return [];
 
+    require_once __DIR__ . '/bom_dir_lib.php';   // eg_bom_name_utf8()：檔名編碼由共用庫判斷
     $dirUtf8 = type_id_ctrl_bom_file_dir($db);
     $dirFs   = type_id_ctrl_fs_path($dirUtf8);
     if (!is_dir($dirFs)) return [];
-    $isWin = (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN');
 
     $best = [];   // suffix => 該標籤目前最新的一份
     foreach ($boms as $bom) {
@@ -513,7 +522,7 @@ function type_id_ctrl_fetch_bom_files_for_part(PDO $db, int $dsPk): array {
         if ($bom === '') continue;
         foreach (glob($dirFs . $bom . '*') ?: [] as $full) {
             if (!is_file($full)) continue;
-            $nameUtf8 = $isWin ? mb_convert_encoding(basename($full), 'UTF-8', 'Big5') : basename($full);
+            $nameUtf8 = eg_bom_name_utf8(basename($full));
             foreach ($map as $suffix => $cfg) {
                 // 比照 part_viewer：BOM名稱+後綴 開頭，且後綴後面不可再接英數字（-T 不可誤中 -TR）
                 $head = $bom . $suffix;

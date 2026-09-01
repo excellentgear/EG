@@ -103,18 +103,16 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
         // ── ERP/資材報告：只抓「此 BOM 名稱」開頭的檔，並套用後綴標籤 ──
         $erp_files = [];
         require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
-        $erp_path_utf8 = eg_bom_erp_scan_dir_auto();
-        $isWin = (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN');
-        $erp_scan_path = $isWin ? mb_convert_encoding($erp_path_utf8, 'Big5', 'UTF-8') : $erp_path_utf8;
-
-        if (is_dir($erp_scan_path)) {
-            foreach (scandir($erp_scan_path) as $f) {
-                if ($f === '.' || $f === '..') continue;
-                $f_utf8 = $isWin ? mb_convert_encoding($f, 'UTF-8', 'Big5') : $f;
-
-                // 只比對「此 BOM 名稱」開頭（不再用 [料號] 條件）
-                if (strpos($f_utf8, $bom) !== 0) continue;
-                $ext = strtolower(pathinfo($f_utf8, PATHINFO_EXTENSION));
+        // 路徑編碼（UNC 中文路徑在 Windows 可能要 Big5）與檔名轉回 UTF-8 一律交給 bom_dir_lib，
+        // 呼叫端絕對不可以自己再 mb_convert_encoding 一次：
+        // eg_bom_erp_scan_dir_auto() 回傳的已經是「檔案系統吃得到」的路徑，再轉一次就轉壞了，
+        // is_dir() 直接 false→整個 ERP/資材區塊安靜消失（連同它的檔名標籤）且不會報錯。
+        // eg_bom_scan() 另已做好「先依檔名過濾再 stat」，這個資料夾有 6 千個檔且在網路磁碟上。
+        $erp_scan_files = eg_bom_scan(eg_bom_erp_scan_dir_auto(), [], $bom);
+        if ($erp_scan_files) {
+            foreach ($erp_scan_files as $ef) {
+                $f_utf8 = $ef['name'];
+                $ext    = $ef['ext'];
 
                 // 依後綴套標籤（僅「BOM 名稱 + 後綴」開頭比對）
                 $file_tags = [];
@@ -140,7 +138,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_files_by_did') {
                     'path'       => '/nas/ERP/' . rawurlencode('資材(生管and業務)') . '/BOM/' . rawurlencode($f_utf8),
                     'type'       => $ext,
                     'tags'       => $file_tags,
-                    'mtime'      => filemtime($erp_scan_path . $f),
+                    'mtime'      => $ef['mtime'],
                     'match_type' => 'bom',
                 ];
             }

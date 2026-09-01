@@ -1246,25 +1246,18 @@ else if (isset($_POST['action']) && $_POST['action'] === 'get_bom_files') {
     // --- Scan ERP Directory ---
     $erp_files = [];
     require_once __DIR__ . '/../../src/common/bom_dir_lib.php';   // 資料夾位置走設定鍵 bom_scan_dir，不再寫死 Z: 磁碟機代號
-    $erp_path_utf8 = eg_bom_erp_scan_dir_auto();
-    $os = PHP_OS;
-    $erp_scan_path = $erp_path_utf8;
-    
-    // Windows 路徑編碼處理
-    if (strtoupper(substr($os, 0, 3)) === 'WIN') {
-        $erp_scan_path = mb_convert_encoding($erp_scan_path, 'Big5', 'UTF-8');
-    }
+    // 路徑編碼與檔名轉回 UTF-8 一律交給 bom_dir_lib，呼叫端不可以自己再轉一次：
+    // eg_bom_erp_scan_dir_auto() 回傳的已經是「檔案系統吃得到」的路徑，
+    // 再 mb_convert_encoding 一次就轉壞了，is_dir() 直接 false＝整區安靜消失也不報錯。
+    $erp_scan_path = eg_bom_erp_scan_dir_auto();
 
     if (is_dir($erp_scan_path)) {
         $files = scandir($erp_scan_path);
         foreach ($files as $f) {
             if ($f === '.' || $f === '..') continue;
             
-            // 轉回 UTF-8 進行比對
-            $f_utf8 = $f;
-            if (strtoupper(substr($os, 0, 3)) === 'WIN') {
-                $f_utf8 = mb_convert_encoding($f, 'UTF-8', 'Big5');
-            }
+            // 轉回 UTF-8 進行比對（本來就是合法 UTF-8 就原樣回傳，不會二次轉換弄壞檔名）
+            $f_utf8 = eg_bom_name_utf8($f);
             
             // 篩選條件：開頭為 BOM 或 包含 [料號]
             $isMatchBOM = (strpos($f_utf8, $bom) === 0);
