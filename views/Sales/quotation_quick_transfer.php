@@ -278,7 +278,7 @@ try {
             <li><b>勾選欄在每一列的最右邊</b>：判斷要不要選是看右邊的「目前製程標籤」，勾選框放右邊不用來回看。</li>
             <li><b>全部年份掃描</b>：「關鍵字自動偵測製程」與「快速套用」的範圍都可以選<b>全部年份</b>——<b>完全不套用上方的年份／客戶篩選</b>，一次掃過所有尚待確認的報價單（資料量大，會跑幾秒）。年份預設只顯示最新一年，不用這個選項的話舊年份零星幾筆很容易一直被漏掉。</li>
             <li><b>帶入備註</b>：有些規格（例如「半月型六角口模 線割對半」）根本沒有對應的製程標籤，這時按製程欄的「帶入備註」，規格文字會帶進<b>整張報價單的備註欄</b>（自動維護的【規格備註】區塊，您自己寫的備註不會被動到），該列直接顯示為「備註」，<b>也算補齊了製程</b>可以轉入正式報價單；按「取消，改設定製程」即還原，備註那一行會自動消失。規則裡也可以勾「帶入備註」，讓某類關鍵字整批走這條路。</li>
-            <li><b>已經設定好製程的列會反灰顯示「已確認」</b>，要按該列的「修改」才會變回可點選的標籤選擇器——避免把已經確認過的列誤當成還沒處理的又重新確認一次。套用自動偵測的建議之後，畫面是<b>就地更新</b>（跳窗留著、捲動位置不動），可以接著確認下一組。</li>
+            <li><b>已經設定好製程的列會反灰顯示「已確認」</b>，要按該列的「修改」才會變回可點選的標籤選擇器——避免把已經確認過的列誤當成還沒處理的又重新確認一次。<b>正在編輯的那一列不會中途被鎖回去</b>：只要您動過（點標籤或移除標籤），它就保持可編輯到清單下次重新載入為止，可以連續點好幾個標籤、也可以把標籤一個一個拿掉。套用自動偵測的建議之後，畫面是<b>就地更新</b>（跳窗留著、捲動位置不動），可以接著確認下一組。</li>
             <li><b>一鍵轉入已補齊</b>：依標籤分組確認之後，您不會知道哪幾張整張都補完了——按鈕上的數字就是目前篩選範圍內<b>料號ID與製程都補齊</b>的張數，按下去一次全部轉入正式報價單（<b>是整個篩選範圍、會跨頁，不是只有本頁</b>；「全選本頁＋批次轉入」才是只作用在這一頁）。</li>
             <li><b>轉入全部已補齊</b>：<b>不受年份／客戶篩選影響</b>，把目前尚待確認的報價單中所有已補齊的一次轉完。<b>只有在「篩選範圍外還有已補齊的單」時才會出現這顆</b>（兩顆數字一樣時沒有意義）——年份預設是最新一年，其他年份零星補齊的幾張在畫面上完全看不出來，只按左邊那顆會被無聲留在本頁。左邊那顆的確認視窗也會告訴您範圍外還剩幾張。</li>
             <li><b>分頁</b>可直接跳到<b>第一頁／最後一頁</b>；清單只要重畫（轉入、套用、換頁、改篩選），「全選本頁」的勾一律清空，避免誤以為還有選著的報價單。</li>
@@ -1098,6 +1098,7 @@ function copyProcessFromItem(itemId, sourceItemId) {
     const src = qtProcState[sourceItemId];
     if (!src) return;
     qtProcState[itemId] = { activeGid: src.activeGid, selected: src.selected.slice() };
+    qtProcUnlocked[itemId] = true;      // 複製過來之後多半還要微調，不要馬上鎖起來
     saveItemProcess(itemId);
     redrawProcCell(itemId);
 }
@@ -1128,10 +1129,16 @@ function procSetActiveGroup(itemId, gid) {
     redrawProcCell(itemId);
 }
 
+// 只要使用者動手改過這一列，就讓它保持可編輯到清單下次重載為止。
+// 不這樣做的話會這樣壞：saveItemProcess 是非同步的，成功後才把 processes 寫回快取，
+// 於是「點第二個標籤」當下重畫時，這一列已經算「有製程」而且沒按過「修改」，
+// 整格就翻成反灰的『已確認』——使用者根本還沒點完就被踢出編輯狀態；
+// 逐一移除標籤時同理，會變成「已確認（已設定製程）」但其實一個標籤都不剩。
 function procToggleSubTag(itemId, subTagId) {
     const state = qtProcState[itemId];
     const idx = state.selected.indexOf(subTagId);
     if (idx === -1) state.selected.push(subTagId); else state.selected.splice(idx, 1);
+    qtProcUnlocked[itemId] = true;
     saveItemProcess(itemId);
     redrawProcCell(itemId);
 }
@@ -1139,6 +1146,7 @@ function procToggleSubTag(itemId, subTagId) {
 function procRemoveSubTag(itemId, subTagId) {
     const state = qtProcState[itemId];
     state.selected = state.selected.filter(function(x){ return x !== subTagId; });
+    qtProcUnlocked[itemId] = true;
     saveItemProcess(itemId);
     redrawProcCell(itemId);
 }
