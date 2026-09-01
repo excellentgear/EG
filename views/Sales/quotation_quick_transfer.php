@@ -50,6 +50,21 @@ try {
         /* 標籤挑選是「從另一個跳窗裡再開一層」的（快速套用／偵測結果改標籤），
            跟其他跳窗同一個 z-index 就會被蓋在後面看不到 */
         #tagPickMask { z-index:1080; }
+        /* 「套用到這裡為止」的指定模式：滑到哪一組/哪一列就標出來，點下去＝以那裡為界 */
+        .pick-mode .kw-group-head, #qaRows.pick-mode tr { cursor:crosshair; }
+        .pick-mode .kw-group-head:hover { background:#F7E0BD; box-shadow:inset 0 -3px 0 #DD5138; }
+        .pick-mode table.kw-item-table tr { cursor:crosshair; }
+        .pick-mode table.kw-item-table tr:hover td { background:#F7E0BD; box-shadow:inset 0 -3px 0 #DD5138; }
+        #qaRows.pick-mode tr:hover td { background:#F7E0BD; box-shadow:inset 0 -3px 0 #DD5138; }
+        .pick-hint { background:#DD5138; color:#fff; font-size:12px; padding:4px 8px; border-radius:4px; margin-bottom:6px; }
+        /* 批次標籤面板：貼在畫面右緣、蓋在跳窗之上但在標籤挑選跳窗之下 */
+        #kwSidePanel { position:fixed; top:0; right:0; bottom:0; width:330px; background:#fff; z-index:1070;
+            box-shadow:-4px 0 18px rgba(0,0,0,.25); display:none; flex-direction:column; }
+        #kwSidePanel.on { display:flex; }
+        #kwSidePanel .sp-head { padding:8px 10px; background:#FBF6EC; border-bottom:1px solid #E4C293; font-weight:700; color:#5b3a1e;
+            display:flex; align-items:center; gap:6px; }
+        #kwSidePanel .sp-body { flex:1; overflow:auto; padding:8px 10px; }
+        #kwSidePanel .sp-foot { padding:8px 10px; border-top:1px solid #E4C293; background:#FBF6EC; }
         .va-modal { background:#fff; border-radius:8px; max-width:560px; margin:36px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
             max-height:88vh; display:flex; flex-direction:column; }
         .va-modal.wide { max-width:860px; }
@@ -245,6 +260,10 @@ try {
             <li><b>一筆規格同時命中多條規則時，由您選要帶哪一組</b>：例如規格「DP10T78PA14.5滾刀」會同時被「刀具-滾齒刀」（命中<b>滾刀</b>）和「粗滾」（包含關鍵字裡有單字<b>滾</b>）命中，兩條要帶的標籤不一樣。這種情況該組底下會列出<b>候選</b>（只用A／只用B／全部都要），每個候選都寫明「這條規則命中的是哪個字」，<b>選了哪一個就套用哪一個</b>。系統只把比較精確的那個<b>預選</b>起來並標「建議」——判斷方式是<b>短關鍵字被長關鍵字包住就讓位</b>（「滾」包在「滾刀」裡面）。若各條規則要帶的標籤本來就相同（例「代料成品」與「料到成品」都帶全製），就不算分歧、不會拿來打擾您。看到某條規則老是把不相干的項目撈進來，通常是它的「包含」關鍵字太短，到「規則設定」把該字拿掉、或在「不包含」補上排除字即可。</li>
             <li><b>直接改這一組的標籤</b>：偵測結果每一組標題右邊有「<b>改標籤</b>」，可以直接挑要帶入的製程標籤，不必回去改規則再重新掃一次。改過的組會標<b>「自訂」</b>徽章，套用時就以您選的為準；<b>不會動到規則本身</b>，下次偵測仍照規則走。</li>
             <li><b>快速套用</b>（工具列，臨時關鍵字）：臨時想到一組關鍵字時用這裡，<b>不必取規則名稱、不會存進規則表</b>。填「包含」「不包含」、選好要套用的標籤、按<b>掃描</b>，命中的項目會逐筆列出來（含<b>每一筆目前的製程標籤</b>，料號一樣可以點開圖面），預設全部勾選，可以「全部取消／反向勾選」，也可以<b>按住 Shift 點第二個勾選框連續選取一整段</b>。最後決定是要把標籤<b>增加</b>上去（保留原有的）還是<b>移除</b>掉。「對象」可限定<b>只要還沒設定製程的</b>或<b>只要已經設定過的</b>。<br>兩種動作的差別：<b>增加</b>不會刪掉原本的製程對照（舊資料有「有製程卻沒有標籤紀錄」的情況，整組重建會把原本的製程默默清掉）；<b>移除</b>會依剩下的標籤重建，所以只作用在「真的有標籤紀錄」的項目，其餘會略過並在結果告訴您幾筆沒動到。</li>
+            <li><b>偵測結果預設一筆都不勾</b>（避免誤按整批套用出去）：要整批確認請按「全部勾選」，或用下面的「套用到這裡為止」逐段推進。</li>
+            <li><b>套用到這裡為止</b>（資料很多時用）：按下之後進入<b>指定模式</b>，點<b>分組列</b>＝套用到那一組的最後一筆為止、<b>展開後點裡面的某一列</b>＝套用到那一筆為止；只有該位置<b>以上而且有勾選</b>的項目會被套用，後面的原封不動。確認到哪裡就套用到哪裡，不必一次全部押上去。「快速套用」也有同一顆。</li>
+            <li><b>批次標籤面板</b>（偵測跳窗工具列）：開在畫面右緣的面板，可以跨組勾選項目後，<b>直接指定一組標籤套用到所有已勾選的項目</b>（不受各組自己的建議影響）。預設是「設定為」（取代原本的設定），勾「改用增加」則保留項目原有的標籤只把新的加上去。</li>
+            <li><b>勾選欄在每一列的最右邊</b>：判斷要不要選是看右邊的「目前製程標籤」，勾選框放右邊不用來回看。</li>
             <li><b>全部年份掃描</b>：「關鍵字自動偵測製程」與「快速套用」的範圍都可以選<b>全部年份</b>——<b>完全不套用上方的年份／客戶篩選</b>，一次掃過所有尚待確認的報價單（資料量大，會跑幾秒）。年份預設只顯示最新一年，不用這個選項的話舊年份零星幾筆很容易一直被漏掉。</li>
             <li><b>帶入備註</b>：有些規格（例如「半月型六角口模 線割對半」）根本沒有對應的製程標籤，這時按製程欄的「帶入備註」，規格文字會帶進<b>整張報價單的備註欄</b>（自動維護的【規格備註】區塊，您自己寫的備註不會被動到），該列直接顯示為「備註」，<b>也算補齊了製程</b>可以轉入正式報價單；按「取消，改設定製程」即還原，備註那一行會自動消失。規則裡也可以勾「帶入備註」，讓某類關鍵字整批走這條路。</li>
             <li><b>已經設定好製程的列會反灰顯示「已確認」</b>，要按該列的「修改」才會變回可點選的標籤選擇器——避免把已經確認過的列誤當成還沒處理的又重新確認一次。套用自動偵測的建議之後，畫面是<b>就地更新</b>（跳窗留著、捲動位置不動），可以接著確認下一組。</li>
@@ -317,7 +336,14 @@ try {
             <button class="btn btn-default btn-xs" onclick="kwSelectAll(true)">全部勾選</button>
             <button class="btn btn-default btn-xs" onclick="kwSelectAll(false)">全部取消</button>
             <span style="margin-left:10px;color:#8a5a2b;">已勾選 <b id="kwSelCount">0</b> 筆</span>
-            <span style="margin-left:10px;color:#888;">點分組列可展開逐筆核對／取消個別項目</span>
+            <button class="btn btn-default btn-xs" id="btnKwUpto" onclick="kwTogglePick()" title="資料很多時可以分段套用：按下後點選要套用到哪一組為止">
+                <i class="fa fa-hand-o-up"></i> 套用到這裡為止…</button>
+            <button class="btn btn-default btn-xs" id="btnKwSide" onclick="kwSideToggle()" title="開啟右側面板，指定一組標籤直接套用到目前勾選的項目">
+                <i class="fa fa-tags"></i> 批次標籤面板</button>
+            <span style="margin-left:10px;color:#888;">點分組列可展開逐筆核對／勾選個別項目</span>
+        </div>
+        <div class="pick-hint" id="kwPickHint" style="display:none;">
+            <i class="fa fa-hand-o-up"></i> <b>指定模式</b>：點<b>分組列</b>＝套用到那一組的最後一筆為止；<b>展開後點裡面的某一列</b>＝套用到那一筆為止。只有該位置<b>以上而且有勾選</b>的項目會被套用，後面的原封不動。再按一次「套用到這裡為止…」可取消。
         </div>
         <div id="kwGroups"></div>
     </div>
@@ -402,6 +428,26 @@ try {
     </div>
 </div></div>
 
+<!-- 批次標籤面板：在偵測跳窗裡跨組勾選後，直接指定一組標籤套用到所有已勾選的項目 -->
+<div id="kwSidePanel">
+    <div class="sp-head"><i class="fa fa-tags"></i> 批次帶入標籤
+        <span style="margin-left:auto;cursor:pointer;" onclick="kwSideToggle()">✕</span></div>
+    <div class="sp-body">
+        <div style="font-size:12px;color:#8a5a2b;margin-bottom:6px;">
+            在左邊各分組裡勾選要處理的項目（可跨組），在這裡選好標籤後按下方按鈕，
+            <b>一次套用到所有已勾選的項目</b>——不受各組自己的建議影響。
+        </div>
+        <div id="kwSideArea"></div>
+    </div>
+    <div class="sp-foot">
+        <label style="font-size:12px;font-weight:400;display:block;margin-bottom:4px;">
+            <input type="checkbox" id="kwSideAdd"> 改用「<b>增加</b>」：保留項目原有的標籤（不勾＝直接設成上面選的標籤）
+        </label>
+        <button class="btn btn-warning btn-block" id="kwSideBtn" onclick="kwSideApply()" disabled>
+            <i class="fa fa-check"></i> 套用到已勾選的 <span id="kwSideCnt">0</span> 筆</button>
+    </div>
+</div>
+
 <!-- 共用的製程標籤挑選跳窗：偵測結果改標籤、快速套用選標籤都走這一個，不各刻一份 -->
 <div class="va-mask" id="tagPickMask"><div class="va-modal" style="max-width:640px;">
     <div class="m-head"><span><i class="fa fa-tags"></i> <span id="tagPickTitle">選擇製程標籤</span></span><span class="m-close" onclick="closeMask('tagPickMask')">✕</span></div>
@@ -459,12 +505,18 @@ try {
             <button class="btn btn-default btn-xs" onclick="qaSelectAll(false)">全部取消</button>
             <button class="btn btn-default btn-xs" onclick="qaSelectInvert()">反向勾選</button>
             <span style="margin-left:10px;color:#8a5a2b;">已勾選 <b id="qaSelCnt">0</b> 筆</span>
+            <button class="btn btn-default btn-xs" id="btnQaUpto" onclick="qaTogglePick()" title="資料很多時可以分段套用：按下後點選要套用到哪一列為止">
+                <i class="fa fa-hand-o-up"></i> 套用到這裡為止…</button>
             <span style="margin-left:10px;color:#888;">按住 Shift 點第二個勾選框＝連續選取整段</span>
+        </div>
+        <div class="pick-hint" id="qaPickHint" style="display:none;">
+            <i class="fa fa-hand-o-up"></i> <b>指定模式</b>：請點選要<b>套用到哪一列為止</b>（含該列）——只有那一列<b>以上而且有勾選</b>的項目會被套用。再按一次可取消。
         </div>
         <div style="max-height:380px;overflow:auto;border:1px solid #EADFC8;border-radius:4px;">
             <table class="kw-item-table"><thead><tr style="background:#FBF6EC;position:sticky;top:0;z-index:1;box-shadow:0 1px 0 #E4C293;">
-                <th style="width:26px;padding:4px 6px;"></th><th style="width:120px;">報價單</th><th style="width:110px;">客戶</th>
+                <th style="width:120px;padding:4px 6px;">報價單</th><th style="width:110px;">客戶</th>
                 <th style="width:150px;">料號</th><th>規格</th><th style="width:170px;">目前的製程標籤</th>
+                <th style="width:34px;text-align:center;">選取</th>
             </tr></thead><tbody id="qaRows"></tbody></table>
         </div>
     </div>
@@ -1662,8 +1714,8 @@ function runKwScan() {
         if (!res.success) { $('#kwGroups').html('偵測失敗：' + (res.message || '')); return; }
         kwGroups = res.data.groups || [];
         kwChecked = {};
-        // 預設全部勾選（使用者要的是「快速確認」，逐筆取消比逐筆勾選省力得多）
-        kwGroups.forEach(function(g){ g.items.forEach(function(it){ kwChecked[it.item_id] = true; }); });
+        // 預設一個都不勾（使用者要求）：套用會直接寫進資料，全部先勾起來很容易一按就整批套用出去。
+        // 要整批確認請按「全部勾選」，或用「套用到這裡為止」逐段推進。
         $('#kwScanSummary').html(res.data.rules === 0
             ? '<span style="color:#DD5138;">尚未設定任何關鍵字規則，請先按工具列的「規則設定」新增。</span>'
             : ('掃描 ' + res.data.scanned + ' 筆未設定製程的項目，命中 <b>' + res.data.matched + '</b> 筆，共 ' + kwGroups.length + ' 種建議組合（使用 ' + res.data.rules + ' 條規則）' +
@@ -1740,6 +1792,7 @@ $(document).on('change', '.kw-opt-radio', function() {
 
 // 逐筆清單很大（單一組可能三千筆），展開時才畫，避免一次塞進 DOM 卡住整個跳窗
 function kwToggleOpen(gi) {
+    if (kwPickMode) { kwApplyUpto(gi); return; }   // 指定模式下點分組列＝以這一組為界，不是展開
     const $g = $('#kwG' + gi);
     const open = $g.hasClass('open');
     if (!open && !$g.data('drawn')) { kwDrawItems(gi); $g.data('drawn', 1); }
@@ -1750,13 +1803,14 @@ function kwDrawItems(gi) {
     const g = kwGroups[gi];
     let h = '<table class="kw-item-table">';
     g.items.forEach(function(it) {
-        h += '<tr><td style="width:22px;"><input type="checkbox" class="kw-item-chk" data-gi="' + gi + '" value="' + it.item_id + '"' +
-             (kwChecked[it.item_id] ? ' checked' : '') + '></td>' +
+        h += '<tr>' +
              '<td style="width:66px;">' + (Number(it.had) ? '<span class="qt-badge warn">會覆蓋</span>' : '') + '</td>' +
              '<td style="width:120px;color:#8a5a2b;">' + escapeQt(it.quote_no) + '</td>' +
              '<td style="width:110px;">' + escapeQt(it.client_name || '') + '</td>' +
              '<td style="width:150px;">' + partLinkHtml(it.product_id, it.d_setting_d_id) + '</td>' +
-             '<td>' + escapeQt(it.spec || '') + '</td></tr>';
+             '<td>' + escapeQt(it.spec || '') + '</td>' +
+             '<td style="width:34px;text-align:center;"><input type="checkbox" class="kw-item-chk" data-gi="' + gi + '" value="' + it.item_id + '"' +
+             (kwChecked[it.item_id] ? ' checked' : '') + '></td></tr>';
     });
     $('#kwGBody' + gi).html(h + '</table>');
 }
@@ -1791,14 +1845,19 @@ function updateKwSel() {
     Object.keys(kwChecked).forEach(function(k){ if (kwChecked[k]) n++; });
     $('#kwSelCount').text(n);
     $('#kwApplyBtn').prop('disabled', n === 0);
+    kwSideSync();
 }
 
-function submitKwApply() {
+function submitKwApply(okFn) {
     const batches = [];
+    const appliedSet = {};
     let total = 0;
-    kwGroups.forEach(function(g) {
-        const ids = g.items.filter(function(it){ return kwChecked[it.item_id]; }).map(function(it){ return it.item_id; });
+    kwGroups.forEach(function(g, gi) {
+        // okFn＝「套用到這裡為止」用的界線判斷；沒給就是全部已勾選的
+        const ids = g.items.filter(function(it){ return kwChecked[it.item_id] && (!okFn || okFn(it, gi)); })
+                           .map(function(it){ return it.item_id; });
         if (!ids.length) return;
+        ids.forEach(function(id){ appliedSet[id] = true; });
         total += ids.length;
         batches.push(g.kind === 'note' ? { to_note: 1, item_ids: ids } : { sub_tag_ids: g.sub_tag_ids, item_ids: ids });
     });
@@ -1812,11 +1871,11 @@ function submitKwApply() {
         // 直接就地把套用掉的項目從分組裡移除，並更新受影響的那幾張卡片
         const applied = [];
         kwGroups.forEach(function(g) {
-            g.items.forEach(function(it){ if (kwChecked[it.item_id]) applied.push(it); });
+            g.items.forEach(function(it){ if (appliedSet[it.item_id]) applied.push(it); });
         });
         kwApplyLocalUpdate(applied);
         kwGroups.forEach(function(g) {
-            g.items = g.items.filter(function(it){ return !kwChecked[it.item_id]; });
+            g.items = g.items.filter(function(it){ return !appliedSet[it.item_id]; });
             g.count = g.items.length;
         });
         kwGroups = kwGroups.filter(function(g){ return g.count > 0; });
@@ -2128,34 +2187,43 @@ function tagPickOpen(title, hint, ids, cb) {
     openMask('tagPickMask');
 }
 
-function tagPickRender() {
-    if (tagPickGid === null && processTagTree.length) {
-        // 已經選了標籤就先打開它所屬的大類，不要每次都停在第一個大類
-        const first = tagPickSel[0];
-        let gid = processTagTree[0].group_id;
-        if (first) processTagTree.forEach(function(g){ if ((g.sub_tags||[]).some(function(st){ return st.sub_tag_id === first; })) gid = g.group_id; });
-        tagPickGid = gid;
-    }
+// 兩層選擇器的 HTML 產生器：跳窗版與右側面板版共用同一份，只是把 onclick 指到不同的函式前綴
+function tagPickerHtml(sel, gid, fn) {
     let h = '<div class="qt-proc-l1">';
     processTagTree.forEach(function(g) {
-        h += '<button type="button" class="' + (g.group_id === tagPickGid ? 'active' : '') +
-             '" onclick="tagPickGroup(' + g.group_id + ')">' + escapeQt(g.group_name) + '</button>';
+        h += '<button type="button" class="' + (g.group_id === gid ? 'active' : '') +
+             '" onclick="' + fn + 'Group(' + g.group_id + ')">' + escapeQt(g.group_name) + '</button>';
     });
     h += '</div><div class="qt-proc-l2" style="margin-top:3px;">';
-    const g = processTagTree.find(function(x){ return x.group_id === tagPickGid; });
+    const g = processTagTree.find(function(x){ return x.group_id === gid; });
     if (g) (g.sub_tags || []).forEach(function(st) {
-        h += '<button type="button" class="' + (tagPickSel.indexOf(st.sub_tag_id) !== -1 ? 'active' : '') +
-             '" onclick="tagPickToggle(' + st.sub_tag_id + ')">' + escapeQt(st.sub_tag_name) + '</button>';
+        h += '<button type="button" class="' + (sel.indexOf(st.sub_tag_id) !== -1 ? 'active' : '') +
+             '" onclick="' + fn + 'Toggle(' + st.sub_tag_id + ')">' + escapeQt(st.sub_tag_name) + '</button>';
     });
     h += '</div><div class="qt-proc-chips" style="margin-top:6px;">';
-    if (!tagPickSel.length) h += '<span style="color:#888;">尚未選擇任何製程標籤</span>';
+    if (!sel.length) h += '<span style="color:#888;">尚未選擇任何製程標籤</span>';
     else {
         h += '<span style="color:#8a5a2b;margin-right:4px;">已選：</span>';
-        tagPickSel.forEach(function(sid) {
-            h += '<span class="qt-proc-chip">' + escapeQt(tagNamesOf([sid])) + '<span class="x" onclick="tagPickToggle(' + sid + ')">&times;</span></span>';
+        sel.forEach(function(sid) {
+            h += '<span class="qt-proc-chip">' + escapeQt(tagNamesOf([sid])) + '<span class="x" onclick="' + fn + 'Toggle(' + sid + ')">&times;</span></span>';
         });
     }
-    $('#tagPickArea').html(h + '</div>');
+    return h + '</div>';
+}
+
+// 已經選了標籤就先打開它所屬的大類，不要每次都停在第一個大類
+function tagDefaultGid(sel) {
+    if (!processTagTree.length) return null;
+    let gid = processTagTree[0].group_id;
+    if (sel && sel.length) processTagTree.forEach(function(g) {
+        if ((g.sub_tags || []).some(function(st){ return st.sub_tag_id === sel[0]; })) gid = g.group_id;
+    });
+    return gid;
+}
+
+function tagPickRender() {
+    if (tagPickGid === null) tagPickGid = tagDefaultGid(tagPickSel);
+    $('#tagPickArea').html(tagPickerHtml(tagPickSel, tagPickGid, 'tagPick'));
 }
 function tagPickGroup(gid) { tagPickGid = gid; tagPickRender(); }
 function tagPickToggle(sid) {
@@ -2187,6 +2255,119 @@ function kwEditGroupTags(gi) {
             showQtToast('這一組已改為自訂標籤：' + g.label);
         });
 }
+
+// ── 右側「批次帶入標籤」面板 ────────────────────────────────
+// 跨組勾選之後，直接指定一組標籤套用到所有已勾選的項目（不受各組自己的建議影響）
+let kwSideSel = [], kwSideGid = null;
+
+function kwSideToggle() {
+    const on = !$('#kwSidePanel').hasClass('on');
+    $('#kwSidePanel').toggleClass('on', on);
+    $('#btnKwSide').toggleClass('btn-warning', on).toggleClass('btn-default', !on);
+    if (on) { kwSideGid = tagDefaultGid(kwSideSel); kwSideRender(); }
+}
+function kwSideRender() {
+    $('#kwSideArea').html(tagPickerHtml(kwSideSel, kwSideGid, 'kwSide'));
+    kwSideSync();
+}
+function kwSideGroup(gid) { kwSideGid = gid; kwSideRender(); }
+function kwSideToggleTag(sid) {
+    const i = kwSideSel.indexOf(sid);
+    if (i === -1) kwSideSel.push(sid); else kwSideSel.splice(i, 1);
+    kwSideRender();
+}
+function kwSideSync() {
+    const n = kwCheckedIds().length;
+    $('#kwSideCnt').text(n);
+    $('#kwSideBtn').prop('disabled', n === 0 || !kwSideSel.length);
+}
+function kwCheckedIds() {
+    const ids = [];
+    kwGroups.forEach(function(g){ g.items.forEach(function(it){ if (kwChecked[it.item_id]) ids.push(it.item_id); }); });
+    return ids;
+}
+
+function kwSideApply() {
+    const ids = kwCheckedIds();
+    if (!ids.length) { qtNotify('左邊還沒有勾選任何項目。', 'warn'); return; }
+    if (!kwSideSel.length) { qtNotify('請先在面板裡選擇要帶入的製程標籤。', 'warn'); return; }
+    const add = $('#kwSideAdd').is(':checked');
+    if (!confirm('將把製程標籤「' + tagNamesOf(kwSideSel) + '」' + (add ? '增加到' : '設定為') +
+                 '已勾選的 ' + ids.length + ' 筆項目。' +
+                 (add ? '　（原有的標籤會保留）' : '　（會取代這些項目原本的設定）') + '\n\n確定要執行嗎？')) return;
+    const $btn = $('#kwSideBtn').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 套用中…');
+    const done = function(res, okMsg) {
+        $btn.prop('disabled', false).html('<i class="fa fa-check"></i> 套用到已勾選的 <span id="kwSideCnt">0</span> 筆');
+        if (!res.success) { qtNotify('套用失敗：' + res.message, 'err'); return; }
+        showQtToast(okMsg(res));
+        kwRemoveApplied(ids);
+    };
+    if (add) {
+        $.post(API_URL, { action: 'qkw_adjust_tags', item_ids: JSON.stringify(ids),
+                          sub_tag_ids: JSON.stringify(kwSideSel), mode: 'add' },
+               function(res){ done(res, function(r){ return '已增加標籤：' + r.data.items + ' 筆' + (r.data.skipped ? ('（' + r.data.skipped + ' 筆本來就有了）') : ''); }); });
+    } else {
+        $.post(API_URL, { action: 'qkw_apply', batches: JSON.stringify([{ sub_tag_ids: kwSideSel.join(','), item_ids: ids }]) },
+               function(res){ done(res, function(r){ return '已套用 ' + r.data.items + ' 筆項目'; }); });
+    }
+}
+
+// 套用成功後就地把那些項目從分組裡移除並更新卡片統計（與 submitKwApply 同一套收尾）
+function kwRemoveApplied(ids) {
+    const set = {};
+    ids.forEach(function(id){ set[id] = true; });
+    const applied = [];
+    kwGroups.forEach(function(g){ g.items.forEach(function(it){ if (set[it.item_id]) applied.push(it); }); });
+    kwApplyLocalUpdate(applied);
+    kwGroups.forEach(function(g) {
+        g.items = g.items.filter(function(it){ return !set[it.item_id]; });
+        g.count = g.items.length;
+    });
+    kwGroups = kwGroups.filter(function(g){ return g.count > 0; });
+    applied.forEach(function(it){ delete kwChecked[it.item_id]; });
+    renderKwGroups();
+    $('#kwScanSummary').html('剩下 ' + kwGroups.length + ' 種建議組合、' +
+        kwGroups.reduce(function(a, g){ return a + g.count; }, 0) + ' 筆待確認');
+}
+
+// ── 「套用到這裡為止」：資料很多時分段推進 ────────────────
+// 為什麼需要：一次幾千筆全部套用出去，中間有一組看錯就整批寫壞；
+// 逐組確認完就套用到那裡，前面的先落地、後面的原封不動。
+let kwPickMode = false;
+function kwTogglePick() {
+    kwPickMode = !kwPickMode;
+    $('#kwGroups').toggleClass('pick-mode', kwPickMode);
+    $('#kwPickHint').toggle(kwPickMode);
+    $('#btnKwUpto').toggleClass('btn-warning', kwPickMode).toggleClass('btn-default', !kwPickMode);
+}
+// 界線以「項目」計算（不是以組），這樣點分組列或點組內的某一列都能當界線
+function kwFlatOrder() {
+    const map = {}; let k = 0;
+    kwGroups.forEach(function(g){ g.items.forEach(function(it){ map[it.item_id] = k++; }); });
+    return map;
+}
+function kwApplyUptoFlat(boundary, label) {
+    const flat = kwFlatOrder();
+    let n = 0;
+    kwGroups.forEach(function(g){ g.items.forEach(function(it){ if (kwChecked[it.item_id] && flat[it.item_id] <= boundary) n++; }); });
+    if (!n) { qtNotify('這個位置以上沒有勾選任何項目。', 'warn'); return; }
+    if (!confirm('將只套用到「' + label + '」為止、已勾選的 ' + n + ' 筆項目。這個位置以後的完全不動，確定嗎？')) return;
+    kwTogglePick();
+    submitKwApply(function(it){ return flat[it.item_id] <= boundary; });
+}
+function kwApplyUpto(gi) {          // 點分組列＝到那一組的最後一筆為止
+    const g = kwGroups[gi];
+    if (!g || !g.items.length) { qtNotify('這一組沒有項目。', 'warn'); return; }
+    kwApplyUptoFlat(kwFlatOrder()[g.items[g.items.length - 1].item_id], '第 ' + (gi + 1) + ' 組的最後一筆');
+}
+// 展開後點組內的某一列＝到那一筆為止（勾選框與料號連結照常運作）
+$(document).on('click', '.pick-mode table.kw-item-table tr', function(e) {
+    if ($(e.target).is('input,a') || $(e.target).closest('a').length) return;
+    const iid = Number($(this).find('.kw-item-chk').val());
+    if (!iid) return;
+    const gi = Number($(this).find('.kw-item-chk').data('gi'));
+    kwApplyUptoFlat(kwFlatOrder()[iid], '第 ' + (gi + 1) + ' 組裡的這一筆');
+});
 
 // ── 快速套用（臨時關鍵字，不存規則）────────────────────────
 let qaTags = [], qaItems = [], qaChecked = {}, qaLastIdx = -1;
@@ -2235,14 +2416,15 @@ function qaRender() {
     if (!qaItems.length) { $('#qaRows').html('<tr><td colspan="6" style="padding:8px;color:#999;">沒有命中任何項目。</td></tr>'); qaSync(); return; }
     let h = '';
     qaItems.forEach(function(it, i) {
+        // 勾選欄放最右邊：使用者是對著右邊的「目前製程標籤」在判斷要不要選，勾選框在左邊要一直來回看
         h += '<tr>' +
-            '<td style="width:26px;"><input type="checkbox" class="qa-chk" data-i="' + i + '" value="' + it.item_id + '"' + (qaChecked[it.item_id] ? ' checked' : '') + '></td>' +
             '<td style="color:#8a5a2b;">' + escapeQt(it.quote_no) + '</td>' +
             '<td>' + escapeQt(it.client_name || '') + '</td>' +
             '<td>' + partLinkHtml(it.product_id, it.d_setting_d_id) + '</td>' +
             '<td>' + escapeQt(it.spec || '') + '</td>' +
             '<td>' + (Number(it.note_only) ? '<span class="qt-badge note">備註</span>'
                      : (it.cur_names ? escapeQt(it.cur_names) : '<span style="color:#DD5138;">未設定</span>')) + '</td>' +
+            '<td style="width:34px;text-align:center;"><input type="checkbox" class="qa-chk" data-i="' + i + '" value="' + it.item_id + '"' + (qaChecked[it.item_id] ? ' checked' : '') + '></td>' +
         '</tr>';
     });
     $('#qaRows').html(h);
@@ -2280,8 +2462,28 @@ function qaSync() {
     $('#qaApplyBtn').prop('disabled', n === 0 || !qaTags.length);
 }
 
-function qaApply() {
-    const ids = qaItems.filter(function(it){ return qaChecked[it.item_id]; }).map(function(it){ return it.item_id; });
+// 指定模式：點某一列＝只套用那一列以上（含）而且有勾選的
+let qaPickMode = false;
+function qaTogglePick() {
+    qaPickMode = !qaPickMode;
+    $('#qaRows').toggleClass('pick-mode', qaPickMode);
+    $('#qaPickHint').toggle(qaPickMode);
+    $('#btnQaUpto').toggleClass('btn-warning', qaPickMode).toggleClass('btn-default', !qaPickMode);
+}
+$(document).on('click', '#qaRows.pick-mode tr', function(e) {
+    if ($(e.target).is('input,a') || $(e.target).closest('a').length) return;   // 勾選框與料號連結照常
+    const i = Number($(this).find('.qa-chk').data('i'));
+    if (isNaN(i)) return;
+    const n = qaItems.slice(0, i + 1).filter(function(it){ return qaChecked[it.item_id]; }).length;
+    if (!n) { qtNotify('這一列以上沒有勾選任何項目。', 'warn'); return; }
+    if (!confirm('將只套用「第 1 列 ～ 第 ' + (i + 1) + ' 列」之間已勾選的 ' + n + ' 筆。第 ' + (i + 2) + ' 列以後完全不動，確定嗎？')) return;
+    qaTogglePick();
+    qaApply(i);
+});
+
+function qaApply(maxIdx) {
+    const upto = (maxIdx === undefined || maxIdx === null) ? qaItems.length - 1 : Number(maxIdx);
+    const ids = qaItems.slice(0, upto + 1).filter(function(it){ return qaChecked[it.item_id]; }).map(function(it){ return it.item_id; });
     if (!ids.length) { qtNotify('沒有勾選任何項目。', 'warn'); return; }
     if (!qaTags.length) { qtNotify('請先選擇要套用的製程標籤。', 'warn'); return; }
     const mode = $('input[name="qaMode"]:checked').val();
