@@ -1547,8 +1547,15 @@ try {
                 }
                 $clientId = trim((string)$q['client_id']);
                 if ($clientId === '') {
-                    if (!$multi) throw new Exception('這張報價單還沒有設定客戶，無法自動建立料號（新建的料號要綁到客戶）。請先用卡片上的「切換」設定客戶後再試。');
-                    $issues[] = ['quote_no' => $q['quote_no'], 'reason' => '尚未設定客戶'];
+                    // 講清楚是缺「客戶代碼」而不是缺客戶：畫面上明明看得到客戶名稱，
+                    // 只講「尚未設定客戶」使用者會以為系統壞了（實際回報過）
+                    $hasName = trim((string)($q['client_name'] ?? '')) !== '';
+                    $hint = $hasName
+                        ? '這張報價單只有客戶名稱「' . $q['client_name'] . '」、沒有客戶代碼（ERP 匯入的舊資料都是這樣），無法自動建立料號（新建的料號要綁到客戶）。請用工具列的「對應客戶主檔」一次對應，或用卡片上的「切換」逐張設定。'
+                        : '這張報價單還沒有設定客戶，無法自動建立料號（新建的料號要綁到客戶）。請先用卡片上的「切換」設定客戶後再試。';
+                    if (!$multi) throw new Exception($hint);
+                    $issues[] = ['quote_no' => $q['quote_no'],
+                                 'reason' => $hasName ? ('只有客戶名稱、沒有客戶代碼（' . $q['client_name'] . '）→ 請用工具列的「對應客戶主檔」') : '尚未設定客戶'];
                     continue;
                 }
 
@@ -1825,6 +1832,84 @@ try {
             if (!$itemId) throw new Exception('缺少項目');
             $on = ($_POST['on'] ?? '1') === '1';
             $response = ['success' => true, 'data' => qkw_set_note_only($pdo, $itemId, $on)];
+            break;
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // 補建舊報價單：把「只有客戶名稱、沒有客戶代碼」的單對應到客戶主檔
+        //   ERP 匯入的歷史報價單 client_id 是空的、只有 client_name（ERP 寫的是全名，
+        //   主檔存的是簡稱），畫面上看得到客戶名稱所以看起來正常，但「一鍵建立並綁定料號」
+        //   需要客戶代碼才能建料號，會整張跳過並回報「尚未設定客戶」——使用者看不出原因。
+        //   **在客戶主檔補建客戶也不會回頭補這一欄**，這正是使用者實際卡住的地方。
+        //   比照 acc_customer_alias 的口徑：系統只給建議與理由，**絕不自動對應**
+        //   （「泓創綠能」與「泓創綠能科技」有可能是兩家）。
+        // ══════════════════════════════════════════════════════════════════
+        case 'quick_client_map_scan': {
+            $rows = $pdo->query("
+                SELECT client_name, COUNT(*) AS cnt,
+                       GROUP_CONCAT(quote_no ORDER BY quote_no SEPARATOR '、') AS quote_nos
+                FROM quotation_list
+                WHERE pending_review = 1 AND (client_id IS NULL OR client_id = '')
+                      AND client_name IS NOT NULL AND client_name <> ''
+                GROUP BY client_name ORDER BY cnt DESC, client_name
+            ")->fetchAll(PDO::FETCH_ASSOC);
+            $custs = $pdo->query("SELECT customer_id, customer, customer_full, is_inactive FROM customer_list")->fetchAll(PDO::FETCH_ASSOC);
+            $out = [];
+            foreach ($rows as $r) {
+                $name = (string)$r['client_name'];
+                $cands = [];
+                foreach ($custs as $c) {
+                    $short = trim((string)$c['customer']);
+                    $full  = trim((string)$c['customer_full']);
+                    $score = 0; $why = '';
+                    if ($full !== '' && $full === $name)          { $score = 100; $why = '客戶全名完全相同'; }
+                    elseif ($short !== '' && $short === $name)    { $score = 90;  $why = '客戶簡稱完全相同'; }
+                    elseif ($short !== '' && mb_strlen($short) >= 2 && mb_strpos($name, $short) !== false)
+                                                                 { $score = 70;  $why = '報價單上的名稱含主檔簡稱「' . $short . '」'; }
+                    elseif ($full !== '' && mb_strpos($full, $name) !== false)
+                                                                 { $score = 60;  $why = '主檔全名含報價單上的名稱'; }
+                    if ($score) $cands[] = ['customer_id' => $c['customer_id'], 'customer' => $short,
+                                            'customer_full' => $full, 'score' => $score, 'why' => $why,
+                                            'inactive' => (int)!empty($c['is_inactive'])];
+                }
+                usort($cands, fn($a, $b) => $b['score'] <=> $a['score']);
+                // 最高分只有一家才預選；並列＝系統無法判斷，一律留空讓人自己挑
+                $top = $cands ? $cands[0]['score'] : 0;
+                $tied = count(array_filter($cands, fn($c) => $c['score'] === $top));
+                $out[] = ['client_name' => $name, 'cnt' => (int)$r['cnt'],
+                          'quote_nos' => mb_substr((string)$r['quote_nos'], 0, 200),
+                          'candidates' => array_slice($cands, 0, 8),
+                          'suggest' => ($cands && $tied === 1) ? $cands[0]['customer_id'] : '',
+                          'suggest_why' => ($cands && $tied === 1) ? $cands[0]['why']
+                                          : ($cands ? ('主檔有 ' . $tied . ' 家同樣像，請自行判斷') : '主檔裡沒有這家客戶，請先到主檔管理建立')];
+            }
+            $response = ['success' => true, 'data' => $out];
+            break;
+        }
+
+        case 'quick_client_map_apply': {
+            $pairs = json_decode($_POST['pairs'] ?? '[]', true);
+            if (!is_array($pairs) || !$pairs) throw new Exception('沒有要對應的項目');
+            $cq  = $pdo->prepare("SELECT customer FROM customer_list WHERE customer_id=? LIMIT 1");
+            // 只補「本來就沒有客戶代碼」的待確認報價單：已經設好的不覆蓋，避免整批誤改
+            $upd = $pdo->prepare("UPDATE quotation_list SET client_id=?, client_name=?, updated_by=?, updated_at=NOW()
+                                  WHERE pending_review=1 AND (client_id IS NULL OR client_id='') AND client_name=?");
+            $done = 0; $names = 0;
+            $pdo->beginTransaction();
+            try {
+                foreach ($pairs as $p) {
+                    $nm  = trim((string)($p['client_name'] ?? ''));
+                    $cid = trim((string)($p['customer_id'] ?? ''));
+                    if ($nm === '' || $cid === '') continue;
+                    $cq->execute([$cid]);
+                    $cname = $cq->fetchColumn();
+                    if ($cname === false) throw new Exception('找不到客戶代碼 ' . $cid);
+                    $upd->execute([$cid, $cname, $user_id, $nm]);
+                    $done += $upd->rowCount(); $names++;
+                }
+                $pdo->commit();
+            } catch (Exception $e) { $pdo->rollBack(); throw $e; }
+            $response = ['success' => true, 'quotes' => $done, 'names' => $names];
             break;
         }
 

@@ -181,6 +181,12 @@ try {
                     <i class="fa fa-check-square"></i> 轉入全部已補齊 <span class="cnt">(0)</span>
                 </button>
                 <span class="qt-bar-sep"></span>
+                <!-- 只有真的存在「有客戶名稱但沒有客戶代碼」的單時才出現。放在建立料號按鈕前面，
+                     因為它是那顆的前置條件：沒有客戶代碼就會被整張跳過並回報「尚未設定客戶」。 -->
+                <button class="btn btn-default btn-sm" id="btnClientMap" style="display:none;border-color:#DD5138;color:#DD5138;"
+                        title="ERP 匯入的舊報價單只有客戶名稱、沒有客戶代碼，會讓「一鍵建立並綁定料號」整張跳過；這裡可以一次對應到客戶主檔">
+                    <i class="fa fa-exclamation-triangle"></i> 對應客戶主檔 <span class="cnt">(0)</span>
+                </button>
                 <button class="btn btn-success btn-sm" id="btnBatchAutoBind"
                         title="把目前年份篩選範圍內、所有還沒綁完料號ID的報價單一次處理完">
                     <i class="fa fa-magic"></i> 一鍵建立並綁定料號（全部）
@@ -222,6 +228,7 @@ try {
             <li><b>設定製程</b>：跟報價單管理頁一樣的製程標籤（先選大類再選子標籤，可複選），點一下即存檔。<b>有些標籤（例如磨銳、鍍TIN、熱處理、刀具類）本身沒有對應到 ERP 的製程代號</b>，只要點了標籤就算已設定製程，一樣可以轉入正式報價單。</li>
             <li><b>綁定料號ID</b>：在「料號ID綁定」欄搜尋料號關鍵字，點選正確的項目即可綁定；<b>找不到就直接在搜尋結果下方按「＋新增料號」</b>快速建立並自動綁定。</li>
             <li><b>點料號看圖面</b>：明細裡的<b>料號</b>本身是連結（有底線＋小圖示），點下去會另開<b>料號圖面查閱</b>視窗（與生管、線上檢驗、個人工作紀錄點料號開的是同一頁），可以看該料號的圖面、ERP／資材報告與料號附件——補製程時想確認「這到底是什麼東西」不必再切到別的頁面去查。已經綁好料號ID的會直接鎖定那一筆主檔；還沒綁定的只用料號文字去找，同名多筆時由該頁上方的切換器選。<b>關鍵字自動偵測</b>的確認清單裡點料號也一樣。</li>
+            <li><b>對應客戶主檔</b>（工具列紅色按鈕，有需要時才出現）：ERP 匯入的舊報價單只寫了<b>客戶名稱（全名）</b>、沒有<b>客戶代碼</b>。畫面上看得到客戶所以看起來完全正常，但「一鍵建立並綁定料號」需要客戶代碼才能建料號，會<b>整張跳過並回報「只有客戶名稱、沒有客戶代碼」</b>。<b>特別注意：在客戶主檔補建客戶並不會回頭補這一欄</b>，一定要在這裡（或逐張用「切換」）對應一次。跳窗依<b>客戶名稱</b>分組（一個名稱一次對應，涵蓋該名稱底下所有待確認的單），系統會給建議與理由（全名完全相同／簡稱完全相同／名稱含主檔簡稱…），<b>只建議、絕不自動對應</b>——「泓創綠能」與「泓創綠能科技」有可能是兩家；主檔有兩家一樣像時一律留空讓您自己挑。主檔裡沒有的客戶會標紅字「主檔沒有這家」，請先到<b>主檔管理</b>建立，再回來按「重新偵測」。套用只會補「本來就沒有客戶代碼」的單，已設好的不會被改動。</li>
             <li><b>切換客戶</b>：點客戶欄位旁的「切換」，搜尋並選擇正確的客戶；找不到一樣可以「＋新建客戶」；跳窗內按 <b>Enter</b> 等同直接送出（唯一符合的搜尋結果或已填妥的新建表單）。</li>
             <li>補齊後，可以用每張報價單右上角的「轉正式報價單」單張轉入，或勾選多張後用上方「批次轉入正式報價單」一次轉入。<b>料號ID或製程沒有全部補齊的報價單，按鈕與勾選框會是反灰的</b>，滑鼠移上去會說明還缺什麼、缺幾筆。</li>
             <li>清單右上角可篩選<b>年份</b>（<b>預設顯示最新年份</b>，可切到其他年份或「全部」）與<b>客戶</b>（下拉可直接打字，客戶編號或名稱都找得到，選項後面是該客戶還有幾張待確認）；報價單依日期新到舊排序。</li>
@@ -381,6 +388,41 @@ try {
             <i class="fa fa-magic"></i> 載入建議規則範本</button>
         <button class="btn btn-default" onclick="krResetForm()">清空表單</button>
         <button class="btn btn-warning" id="krSaveBtn" onclick="krSave()"><i class="fa fa-save"></i> 儲存規則</button>
+    </div>
+</div></div>
+
+<!-- 對應客戶主檔（ERP 舊單只有客戶名稱、沒有客戶代碼）-->
+<div class="va-mask" id="clientMapMask"><div class="va-modal wide">
+    <div class="m-head"><span><i class="fa fa-exchange"></i> 把報價單上的客戶名稱對應到客戶主檔</span><span class="m-close" onclick="closeMask('clientMapMask')">✕</span></div>
+    <div class="m-body">
+        <div style="font-size:12px;color:#8a5a2b;margin-bottom:8px;">
+            ERP 匯入的舊報價單只寫了<b>客戶名稱（全名）</b>、沒有<b>客戶代碼</b>。畫面上看得到客戶所以看起來正常，
+            但「一鍵建立並綁定料號」需要客戶代碼才能建料號，會<b>整張跳過並回報「尚未設定客戶」</b>。<br>
+            <b>在客戶主檔補建客戶並不會回頭補這一欄</b>，要在這裡對應一次（一個名稱一次對應，涵蓋該名稱底下所有待確認的報價單）。<br>
+            <span style="color:#DD5138;">系統只給建議與理由、<b>絕不自動對應</b></span>——「泓創綠能」與「泓創綠能科技」有可能是兩家。
+            主檔裡沒有的客戶請先到<a href="../pages/master_data_management.php" target="_blank">主檔管理</a>建立，再回來按「重新偵測」。
+        </div>
+        <div style="margin-bottom:6px;">
+            <button class="btn btn-default btn-sm" onclick="cmLoad()"><i class="fa fa-refresh"></i> 重新偵測</button>
+            <button class="btn btn-default btn-sm" onclick="cmPickAll(1)">全部套用建議</button>
+            <button class="btn btn-default btn-sm" onclick="cmPickAll(0)">全部清空</button>
+            <span id="cmSummary" style="font-size:12px;color:#a2703a;margin-left:6px;"></span>
+        </div>
+        <div style="max-height:420px;overflow:auto;border:1px solid #EADFC8;border-radius:4px;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead><tr style="color:#8a5a2b;background:#FBF6EC;position:sticky;top:0;z-index:1;box-shadow:0 1px 0 #E4C293;">
+                    <th style="text-align:left;padding:4px 6px;">報價單上的客戶名稱</th>
+                    <th style="text-align:left;width:60px;">張數</th>
+                    <th style="text-align:left;width:260px;">要對應到主檔的哪一家</th>
+                    <th style="text-align:left;">建議理由</th>
+                </tr></thead>
+                <tbody id="cmRows"></tbody>
+            </table>
+        </div>
+    </div>
+    <div class="m-foot">
+        <button class="btn btn-default" onclick="closeMask('clientMapMask')">關閉</button>
+        <button class="btn btn-warning" id="cmApplyBtn" onclick="cmApply()"><i class="fa fa-check"></i> 套用已選的對應 <span id="cmSelCnt">(0)</span></button>
     </div>
 </div></div>
 
@@ -685,6 +727,7 @@ function renderCards() {
     $('#qtCheckAll').prop('checked', false);
     updateSelCount();
     updateReadyCount();
+    updateClientMapBtn();
 }
 
 function qtGoPage(p) { qtPage = p; renderCards(); }
@@ -695,7 +738,11 @@ function autoBindQuote(quoteId, quoteNo) {
     const row = qtData.find(function(r){ return String(r.quote_id) === String(quoteId); });
     const noDs = row ? Number(row.items_no_dsetting) : 0;
     if (!noDs) { qtNotify('報價單 ' + quoteNo + ' 的料號ID已經全部綁定完成。', 'warn'); return; }
-    if (!row.client_id) { qtNotify('報價單 ' + quoteNo + ' 還沒有設定客戶，無法自動建立料號（新建的料號要綁到客戶）。\n請先按客戶欄旁的「切換」設定客戶後再試。', 'warn'); return; }
+    if (!row.client_id) {
+        // 這裡最容易被誤會：卡片上明明顯示著客戶名稱，訊息卻說「還沒有設定客戶」
+        qtNotify('報價單 ' + quoteNo + ' 只有客戶名稱、沒有「客戶代碼」（ERP 匯入的舊資料都是這樣），無法自動建立料號（新建的料號要綁到客戶）。請用工具列紅色的「對應客戶主檔」一次對應，或按客戶欄旁的「切換」逐張設定。', 'warn');
+        return;
+    }
     const $b = $('#qtBtnAuto' + quoteId).prop('disabled', true);
     $.post(API_URL, { action: 'quick_autobind_quote', quote_id: quoteId }, function(res) {
         $b.prop('disabled', false);
@@ -1966,6 +2013,103 @@ function krDelete(ruleId) {
         if (!res.success) { qtNotify('刪除失敗：' + res.message, 'err'); return; }
         showQtToast('規則已刪除');
         krLoad();
+    });
+}
+
+// ── 把「只有客戶名稱、沒有客戶代碼」的舊報價單對應到客戶主檔 ──────────
+// 使用者實際踩到的狀況：在主檔管理補建了客戶，回來按「一鍵建立並綁定料號」還是被跳過，
+// 因為報價單上的 client_id 仍是空的——補建客戶不會回頭補這一欄，要在這裡對應一次。
+let cmRows = [], cmPick = {};
+
+function updateClientMapBtn() {
+    // 用清單本身的資料判斷要不要顯示按鈕，不必為了一顆按鈕多打一次 API
+    const n = qtData.filter(function(r){ return !r.client_id && String(r.client_name || '').trim() !== ''; }).length;
+    if (n > 0) $('#btnClientMap').show().find('.cnt').text('(' + n + ')');
+    else       $('#btnClientMap').hide();
+}
+
+$('#btnClientMap').on('click', function(){ openMask('clientMapMask'); cmLoad(); });
+
+function cmLoad() {
+    $('#cmRows').html('<tr><td colspan="4" style="padding:8px;color:#999;"><i class="fa fa-spinner fa-spin"></i> 偵測中…</td></tr>');
+    $.post(API_URL, { action: 'quick_client_map_scan' }, function(res) {
+        if (!res.success) { qtNotify('偵測失敗：' + (res.message || ''), 'err'); return; }
+        cmRows = res.data || []; cmPick = {};
+        cmRows.forEach(function(r){ if (r.suggest) cmPick[r.client_name] = r.suggest; });   // 預帶建議，但仍要按套用才生效
+        cmRender();
+    });
+}
+
+function cmRender() {
+    if (!cmRows.length) {
+        $('#cmRows').html('<tr><td colspan="4" style="padding:8px;color:#999;">目前沒有「有客戶名稱但沒有客戶代碼」的待確認報價單。</td></tr>');
+        $('#cmSummary').text(''); cmSyncCount(); return;
+    }
+    const withS = cmRows.filter(function(r){ return r.suggest; }).length;
+    const quotes = cmRows.reduce(function(a, r){ return a + Number(r.cnt); }, 0);
+    $('#cmSummary').html('共 <b>' + cmRows.length + '</b> 個客戶名稱、<b>' + quotes + '</b> 張報價單；其中 <b>' + withS +
+        '</b> 個系統找得到建議對象，<b>' + (cmRows.length - withS) + '</b> 個主檔裡沒有（要先建客戶）。');
+    let h = '';
+    cmRows.forEach(function(r, i) {
+        let sel;
+        if (!r.candidates.length) {
+            sel = '<span style="color:#DD5138;">主檔沒有這家</span>';
+        } else {
+            sel = '<select class="form-control input-sm cm-sel" data-i="' + i + '"' +
+                  (r.candidates.length > 8 ? ' data-eg-filter="輸入客戶編號或名稱篩選…"' : '') + '>' +
+                  '<option value="">— 不對應（略過）—</option>';
+            r.candidates.forEach(function(c) {
+                sel += '<option value="' + escapeQt(c.customer_id) + '"' + (cmPick[r.client_name] === c.customer_id ? ' selected' : '') + '>' +
+                       escapeQt(c.customer + '（' + c.customer_id + '）' + (c.inactive ? ' ⚠已停用' : '')) + '</option>';
+            });
+            sel += '</select>';
+        }
+        h += '<tr>' +
+            '<td style="padding:4px 6px;"><b>' + escapeQt(r.client_name) + '</b>' +
+                '<div style="color:#999;font-size:11px;">' + escapeQt(r.quote_nos) + '</div></td>' +
+            '<td>' + r.cnt + '</td>' +
+            '<td>' + sel + '</td>' +
+            '<td style="color:#8a5a2b;">' + escapeQt(r.suggest_why) + '</td>' +
+        '</tr>';
+    });
+    $('#cmRows').html(h);
+    cmSyncCount();
+}
+
+$(document).on('change', '.cm-sel', function() {
+    const r = cmRows[Number($(this).data('i'))];
+    if (!r) return;
+    if (this.value) cmPick[r.client_name] = this.value; else delete cmPick[r.client_name];
+    cmSyncCount();
+});
+
+function cmPickAll(on) {
+    cmPick = {};
+    if (on) cmRows.forEach(function(r){ if (r.suggest) cmPick[r.client_name] = r.suggest; });
+    cmRender();
+}
+
+function cmSyncCount() {
+    const n = Object.keys(cmPick).length;
+    $('#cmSelCnt').text('(' + n + ')');
+    $('#cmApplyBtn').prop('disabled', n === 0);
+}
+
+function cmApply() {
+    const pairs = Object.keys(cmPick).map(function(nm){ return { client_name: nm, customer_id: cmPick[nm] }; });
+    if (!pairs.length) { qtNotify('沒有選擇任何對應。', 'warn'); return; }
+    const quotes = cmRows.filter(function(r){ return cmPick[r.client_name]; }).reduce(function(a, r){ return a + Number(r.cnt); }, 0);
+    if (!confirm('將把 ' + pairs.length + ' 個客戶名稱對應到主檔，影響 ' + quotes + ' 張待確認報價單。\n\n' +
+                 '※ 只會補「本來就沒有客戶代碼」的單，已經設好客戶的不會被改動。\n' +
+                 '※ 報價單上的客戶名稱會一併換成主檔的簡稱（與逐張「切換」的行為相同）。\n\n確定要執行嗎？')) return;
+    const $btn = $('#cmApplyBtn').prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 對應中…');
+    $.post(API_URL, { action: 'quick_client_map_apply', pairs: JSON.stringify(pairs) }, function(res) {
+        $btn.prop('disabled', false).html('<i class="fa fa-check"></i> 套用已選的對應 <span id="cmSelCnt">(0)</span>');
+        if (!res.success) { qtNotify('對應失敗：' + res.message, 'err'); return; }
+        showQtToast('已對應 ' + res.names + ' 個客戶名稱、' + res.quotes + ' 張報價單');
+        qtItemsCache = {}; qtProcState = {};
+        const keepPage = qtPage;
+        loadPendingList(function(){ qtPage = keepPage; renderCards(); cmLoad(); });
     });
 }
 
