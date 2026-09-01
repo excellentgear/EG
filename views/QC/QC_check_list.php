@@ -14,6 +14,7 @@ if (!isset($_SESSION['userName'])) //若使用者未設定，則返回登入頁
 include '../../src/common/DBConnection.php';
 include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
+require_once '../../src/common/qc_container_lib.php'; // 容器選項唯一來源（設定入口：BOM總表 →「容器設定」）
 
 @$id = $_GET['id'];
 @$new = $_GET['new'];
@@ -1048,6 +1049,27 @@ if ($reply_id != "") {
         var currentUserStatus = <?php echo json_encode($user_status ?? null); ?>;
         console.log('[QC_check_list.php] JavaScript loaded and executing.');
         var initialNgTxtList = <?php echo json_encode($ng_txt_list ?? []); ?>;
+        // 容器選項：唯一來源 system_parameters(QC_CONTAINER/options)，在 BOM總表 →「容器設定」維護
+        window.EG_QC_CONTAINERS = <?php echo json_encode(eg_qc_container_options($db ?? null), JSON_UNESCAPED_UNICODE); ?>;
+        function qcCtnOptionsHtml(withBlank, selected) {
+            var h = withBlank ? '<option value="">請選擇</option>' : '';
+            (window.EG_QC_CONTAINERS || []).forEach(function (o) {
+                var sel = (selected != null && String(selected) === String(o.code)) ? ' selected' : '';
+                h += '<option value="' + qcCtnEsc(o.code) + '"' + sel + '>' + qcCtnEsc(o.name) + '</option>';
+            });
+            return h;
+        }
+        function qcCtnNamesHtml() { // 只有名稱、沒有 value 的下拉（箱數計算用）
+            return (window.EG_QC_CONTAINERS || []).map(function (o) {
+                return '<option>' + qcCtnEsc(o.name) + '</option>';
+            }).join('');
+        }
+        function qcCtnFirstName() { var a = window.EG_QC_CONTAINERS || []; return a.length ? a[0].name : ''; }
+        function qcCtnEsc(t) {
+            return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+            });
+        }
 
         // 分頁狀態
         var qcPagination = {
@@ -1898,10 +1920,7 @@ if ($reply_id != "") {
                         <label class="col-xs-2 control-label qr-modal-label">容器：</label>
                         <div class="col-xs-4 qr-modal-input-group">
                             <select class="form-control packaging-type" id="packaging-type-${bomIngFidEsc}">
-                                <option>PP箱</option>
-                                <option>蝴蝶籠</option>
-                                <option>鐵桶</option>
-                                <option>棧板</option>
+                                ${qcCtnNamesHtml()}
                             </select>
                         </div>
                         <label class="col-xs-2 control-label qr-modal-label">箱數：</label>
@@ -1912,7 +1931,7 @@ if ($reply_id != "") {
                 </div>                
                 <div class="form-group" style="margin-top: 0;">
                     <div class="row">
-                        <div class="col-xs-12 calculation-result" style="padding-top: 7px; font-weight: bold;">共 ? PP箱</div> <!-- Updated initial text -->
+                        <div class="col-xs-12 calculation-result" style="padding-top: 7px; font-weight: bold;">共 ? ${qcCtnEsc(qcCtnFirstName())}</div> <!-- 容器名稱由設定帶出 -->
                     </div>
                 </div>
                 <div class="form-group qrcode-display-area" style="text-align: center; margin-top: 15px; display: none;">
@@ -2058,22 +2077,14 @@ if ($reply_id != "") {
                                         <div class="form-group" style="display: flex; align-items: center; gap: 5px; margin-bottom: 5px;">
                                             <label style="white-space: nowrap; margin-bottom: 0;">容器:</label>
                                             <select class="form-control" name="container[]" style="width: 100px; height: 30px; padding: 2px 6px;">
-                                                <option value="">請選擇</option>
-                                                <option value="P">PP箱</option>
-                                                <option value="E">蝴蝶籠</option>
-                                                <option value="T">鐵桶</option>
-                                                <option value="板">棧板</option>
+                                                ${qcCtnOptionsHtml(true)}
                                             </select>
                                             <label style="white-space: nowrap; margin-left: 10px; margin-bottom: 0;">箱數:</label>
                                             <input type="number" name="quantity[]" class="form-control" min="0" step="1" oninput="this.value = this.value.replace(/[^0-9]/g, '')" style="width: 70px; height: 30px; padding: 2px 6px;"></div>
                                         <div class="form-group" style="display: flex; align-items: center; gap: 5px; margin-bottom: 0;">
                                             <label style="white-space: nowrap; margin-bottom: 0;">容器:</label>
                                             <select class="form-control" name="container[]" style="width: 100px; height: 30px; padding: 2px 6px;">
-                                                <option value="">請選擇</option>
-                                                <option value="P">PP箱</option>
-                                                <option value="E">蝴蝶籠</option>
-                                                <option value="T">鐵桶</option>
-                                                <option value="板">棧板</option>
+                                                ${qcCtnOptionsHtml(true)}
                                             </select>
                                             <label style="white-space: nowrap; margin-left: 10px; margin-bottom: 0;">箱數:</label>
                                             <input type="number" name="quantity[]" class="form-control" min="0" step="1" oninput="this.value = this.value.replace(/[^0-9]/g, '')" style="width: 70px; height: 30px; padding: 2px 6px;"></div>
@@ -4216,7 +4227,8 @@ if ($reply_id != "") {
 
             // 容器顯示：直接顯示「此 BOM 最新容器資訊」（取 bom_sn 最大且有填容器的那一站）
             function customContainerText(p1, p2) {
-                var names = { 'P': 'PP箱', 'E': '蝴蝶籠', 'T': '鐵桶', '板': '棧板' };
+                var names = {}; // 代碼→名稱：唯一來源 window.EG_QC_CONTAINERS（BOM總表「容器設定」維護）
+                (window.EG_QC_CONTAINERS || []).forEach(function(o){ names[o.code] = o.name; });
                 var out = [];
                 [p1, p2].forEach(function(v) {
                     v = (v == null ? '' : String(v)).trim();

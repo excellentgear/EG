@@ -4,6 +4,7 @@ if (!isset($_SESSION)){
 }
 include("../common/_config.php");
 include_once '../common/DBConnection.php';
+require_once '../common/qc_container_lib.php'; // 容器選項唯一來源（含代碼合法性驗證）
 include_once '_update_bom_ing_qc_status.php'; // ⭐ 1. 引入新的共用邏輯檔案
 
 
@@ -72,6 +73,26 @@ $clear_remark_only = isset($_POST['clear_remark_only']) && $_POST['clear_remark_
 $ok_quantities_post = $_POST['ok_total_qty'] ?? [];
 $qc_messages_post = $_POST['QCmessage'] ?? [];
 $qc_check_ids_post = $_POST['qc_check_id'] ?? [];
+
+// 鐵律8：前端下拉擋一次，這裡用同一份設定再擋一次（擋直接打 API 塞任意字串）。
+// 刻意在 transaction 之前驗，錯誤時整筆請求原樣退回、不會動到任何資料。
+// 已停用的代碼仍算合法，免得使用者頁面還開著舊清單時突然存不進去。
+if (isset($db) && $db instanceof PDO) eg_qc_container_db($db);
+foreach (($_POST['container'] ?? []) as $__i => $__c) {
+    $__c = trim((string)$__c);
+    if ($__c === '') continue;
+    if (!eg_qc_container_valid_code($__c)) {
+        $response['message'] = '容器種類不正確（' . $__c . '），請重新整理頁面後再試';
+        echo json_encode($response);
+        exit;
+    }
+    $__q = trim((string)(($_POST['quantity'] ?? [])[$__i] ?? ''));
+    if ($__q !== '' && (!ctype_digit($__q) || (int)$__q > 99999)) {
+        $response['message'] = '箱數必須是 0~99999 的整數';
+        echo json_encode($response);
+        exit;
+    }
+}
 
 if (empty($bom_ing_fid)) {
     error_log("[QC_OK] Error: Received empty bom_ing_fid. User_id: '" . $user_id . "'");

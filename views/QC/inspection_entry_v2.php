@@ -23,6 +23,7 @@
 // 載入效能：GET 只輸出 HTML，不做任何 DB 查詢；所有資料走 AJAX。
 // =============================================================================
 include_once '../../src/common/_config.php';
+require_once '../../src/common/qc_container_lib.php'; // 容器選項唯一來源（設定入口：BOM總表 →「容器設定」；只多一次輕量查詢）
 
 // CSRF：與舊頁共用同一組 session token（後端比對的就是 $_SESSION['qc_csrf']）
 if (empty($_SESSION['qc_csrf'])) { $_SESSION['qc_csrf'] = bin2hex(random_bytes(16)); }
@@ -1190,10 +1191,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div style="display:flex;gap:6px;">
                     <select class="form-control input-sm" id="insp-container-1" style="width:110px;">
                         <option value="">請選擇</option>
-                        <option value="P">PP箱</option>
-                        <option value="E">蝴蝶籠</option>
-                        <option value="T">鐵桶</option>
-                        <option value="板">棧板</option>
+<?php foreach (eg_qc_container_options($db ?? null) as $__c): ?>
+                        <option value="<?= htmlspecialchars($__c['code'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($__c['name'], ENT_QUOTES, 'UTF-8') ?></option>
+<?php endforeach; ?>
                     </select>
                     <input type="number" class="form-control input-sm" id="insp-quantity-1" min="0" step="1" placeholder="箱數" style="width:80px;">
                 </div>
@@ -1202,10 +1202,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div style="display:flex;gap:6px;">
                     <select class="form-control input-sm" id="insp-container-2" style="width:110px;">
                         <option value="">請選擇</option>
-                        <option value="P">PP箱</option>
-                        <option value="E">蝴蝶籠</option>
-                        <option value="T">鐵桶</option>
-                        <option value="板">棧板</option>
+<?php foreach (eg_qc_container_options($db ?? null) as $__c): ?>
+                        <option value="<?= htmlspecialchars($__c['code'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($__c['name'], ENT_QUOTES, 'UTF-8') ?></option>
+<?php endforeach; ?>
                     </select>
                     <input type="number" class="form-control input-sm" id="insp-quantity-2" min="0" step="1" placeholder="箱數" style="width:80px;">
                 </div>

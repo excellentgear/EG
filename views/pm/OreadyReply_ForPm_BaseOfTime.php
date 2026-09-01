@@ -1460,6 +1460,10 @@ echo "    window.EG_QC_CONTAINERS = " . json_encode(eg_qc_container_options(), J
 ";
 echo "    window.canEditContainer = " . json_encode(eg_qc_container_can_edit($db, $id)) . "; // 可否回報容器
 ";
+echo "    window.canSetContainer = " . json_encode(eg_qc_container_can_settings($db, $id)) . "; // 可否設定容器種類
+";
+echo "    window.EG_QC_CTN_CSRF = " . json_encode(eg_qc_container_csrf()) . "; // 容器設定存檔用
+";
 echo "    window.oreadyIsAdmin = " . json_encode($permission_code === 'A') . "; // 目前權限=A者可開啟角色功能設定\n";
 echo "    window.globalWorkdaysList = " . json_encode($js_workdays_list_php) . "; // Workday list for JS\n";
 echo "    window.initialLightSettings = " . json_encode($light_settings_php) . ";\n";
@@ -6422,10 +6426,7 @@ echo "</script>\n";
                         <label class="col-xs-2 control-label qr-modal-label">容器：</label>
                         <div class="col-xs-4 qr-modal-input-group">
                             <select class="form-control packaging-type" id="packaging-type-${bomIngFidEsc}">
-                                <option>PP箱</option>
-                                <option>蝴蝶籠</option>
-                                <option>鐵桶</option>
-                                <option>棧板</option>
+                                ${(window.EG_QC_CONTAINERS || []).map(function(o){ return '<option>' + escapeHtml(o.name) + '</option>'; }).join('')}
                             </select>
                         </div>
                         <label class="col-xs-2 control-label qr-modal-label">箱數：</label>
@@ -6436,7 +6437,7 @@ echo "</script>\n";
                 </div>                
                 <div class="form-group" style="margin-top: 0;">
                     <div class="row">
-                        <div class="col-xs-12 calculation-result" style="padding-top: 7px; font-weight: bold;">共 ? PP箱</div>
+                        <div class="col-xs-12 calculation-result" style="padding-top: 7px; font-weight: bold;">共 ? ${escapeHtml((((window.EG_QC_CONTAINERS || [])[0]) || {}).name || '')}</div>
                     </div>
                 </div>
                 <div class="form-group qrcode-display-area" style="text-align: center; margin-top: 15px; display: none;">
@@ -15075,6 +15076,10 @@ echo "</script>\n";
                                                 <?php if ($permission_code === 'A' || $oready_feat_process_settings): ?>
                                                     <button type="button" id="btn-internal-proc-setting" class="btn btn-xs btn-info" style="margin-left: 4px;" title="設定哪些製程類型視為廠內加工（例外設定）">內製製程</button>
                                                 <?php endif; ?>
+                                                <!-- 容器設定：容器種類與顯示名稱的唯一設定入口（全站共用，權限比照製程設定） -->
+                                                <?php if ($permission_code === 'A' || $oready_feat_process_settings): ?>
+                                                    <button type="button" id="btn-qc-ctn-setting" class="btn btn-xs btn-warning" style="margin-left: 4px;" title="設定容器種類與顯示名稱（BOM總表 / QC待驗清單 / 線上檢驗 共用同一份）">容器設定</button>
+                                                <?php endif; ?>
                                                 <!-- <span id="process-not-halfway-filter-status-text" style="font-weight: bold; margin-left: 5px; display: none;"></span> -->
                                                 <small id="set-workday-btn" class="btn btn-xs btn-warning btn-return-style" style="margin-left: 10px; cursor: pointer; display: none;">設定工作日</small>
                                             </div>
@@ -15171,7 +15176,9 @@ echo "</script>\n";
             <div class="modal-content">
                 <div class="modal-header">
                     <button type="button" class="close" data-dismiss="modal">&times;</button>
-                    <h4 class="modal-title" style="font-size:15px;">回報容器</h4>
+                    <h4 class="modal-title" style="font-size:15px;">回報容器
+                        <button type="button" class="btn btn-xs btn-default" id="qcCtnCfgOpen" style="display:none;margin-left:6px;" title="設定容器種類與顯示名稱"><i class="fa fa-gear"></i> 設定</button>
+                    </h4>
                 </div>
                 <div class="modal-body">
                     <div id="qcCtnTarget" style="font-size:12px;color:#555;margin-bottom:8px;"></div>
@@ -15196,6 +15203,45 @@ echo "</script>\n";
                         <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
                         <button type="button" class="btn btn-primary btn-sm" id="qcCtnSave">儲存</button>
                     </span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── 容器設定跳窗（容器種類的唯一設定入口，存 system_parameters QC_CONTAINER/options）── -->
+    <div class="modal fade" id="qcCtnCfgModal" tabindex="-1" role="dialog" style="z-index:10065;">
+        <div class="modal-dialog" role="document" style="width:640px;max-width:96vw;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal">&times;</button>
+                    <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-gear"></i> 容器設定</h4>
+                </div>
+                <div class="modal-body" style="max-height:70vh;overflow:auto;">
+                    <div style="font-size:12px;color:#7A4A12;background:#FDF3E3;border:1px solid #F0DDBD;border-radius:3px;padding:6px 8px;margin-bottom:8px;line-height:1.7;">
+                        這裡設定的容器，<b>BOM總表（本頁）、QC待驗清單的允收與箱數計算、線上檢驗</b>都會同時套用，不必再各頁改一次。<br>
+                        <b>顯示名稱</b>＝畫面上看到的字（例：PP箱）；<b>儲存代碼</b>＝實際存進資料庫的字（例：P，存成「3P」＝3 個 PP箱）。<br>
+                        代碼<b>不可以數字開頭</b>（開頭的數字會被當成箱數），也不可含空白、加號或逗號；已經有資料在用的代碼不給改。<br>
+                        已經有資料在用的容器<b>不能刪除，只能停用</b>；停用後新的回報不再出現該選項，舊資料仍看得到名稱。
+                    </div>
+                    <table class="table table-bordered" style="margin-bottom:8px;font-size:13px;">
+                        <thead>
+                            <tr style="background:#f7f7f7;">
+                                <th style="width:64px;text-align:center;">順序</th>
+                                <th>顯示名稱</th>
+                                <th style="width:120px;">儲存代碼</th>
+                                <th style="width:56px;text-align:center;">啟用</th>
+                                <th style="width:72px;text-align:center;">使用中</th>
+                                <th style="width:52px;text-align:center;">刪除</th>
+                            </tr>
+                        </thead>
+                        <tbody id="qcCtnCfgBody"></tbody>
+                    </table>
+                    <button type="button" class="btn btn-xs btn-default" id="qcCtnCfgAdd"><i class="fa fa-plus"></i> 新增容器</button>
+                    <div id="qcCtnCfgErr" style="color:#DD5138;font-size:12px;margin-top:8px;display:none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉<small>(不儲存)</small></button>
+                    <button type="button" class="btn btn-primary btn-sm" id="qcCtnCfgSave">儲存</button>
                 </div>
             </div>
         </div>
@@ -15558,6 +15604,162 @@ echo "</script>\n";
         $(document).on('keydown', '#qcContainerModal .qc-ctn-qty', function(e){
             if (e.key === 'Enter' || e.keyCode === 13) { e.preventDefault(); submit($('#qcContainerModal'), false); }
         });
+    })();
+    </script>
+
+    <script>
+    /* ── 容器設定：容器種類與顯示名稱的唯一維護入口 ─────────────
+       存 system_parameters(QC_CONTAINER/options)；BOM總表 / QC待驗清單 / 線上檢驗共用同一份
+       前端即時驗證，後端 QC_Container_API.php 用同一套規則再擋一次（鐵律8）
+    ------------------------------------------------------------ */
+    (function(){
+        var API = '../../src/store/QC_Container_API.php';
+        var rows = [], usage = {};
+
+        function esc(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+
+        // 前端規則＝後端 eg_qc_container_validate_list() 的同一份規則
+        function checkRow(i){
+            var r = rows[i];
+            if (!r.name) return '顯示名稱不可空白';
+            if (r.name.length > 20) return '顯示名稱最多 20 個字';
+            if (!r.code) return '儲存代碼不可空白';
+            if (r.code.length > 10) return '儲存代碼最多 10 個字';
+            if (/^[0-9]/.test(r.code)) return '儲存代碼不可以數字開頭（開頭的數字會被當成箱數，例 3P 的 3）';
+            if (/[\s+,]/.test(r.code)) return '儲存代碼不可含空白、加號或逗號';
+            for (var j = 0; j < rows.length; j++) {
+                if (j !== i && rows[j].code && rows[j].code.toUpperCase() === r.code.toUpperCase()) {
+                    return '儲存代碼與第 ' + (j + 1) + ' 列重複';
+                }
+            }
+            return '';
+        }
+
+        // 只更新紅框與錯誤字，不重畫（重畫會把使用者正在打字的游標弄丟）
+        function paintErrors(){
+            var first = '';
+            $('#qcCtnCfgBody tr[data-idx]').each(function(){
+                var i = +$(this).attr('data-idx');
+                var e = checkRow(i);
+                if (e && !first) first = e;
+                $(this).find('.qc-ctn-name, .qc-ctn-code').css('border-color', e ? '#DD5138' : '');
+                $(this).next('.qc-ctn-errrow').find('td').last().text(e ? ('第 ' + (i + 1) + ' 列：' + e) : '');
+                $(this).next('.qc-ctn-errrow').toggle(!!e);
+            });
+            if (!first) $('#qcCtnCfgErr').hide().text('');
+        }
+
+        function render(){
+            var $b = $('#qcCtnCfgBody').empty();
+            rows.forEach(function(r, i){
+                var used = usage[r.code] || 0;
+                var h = '<tr data-idx="' + i + '">' +
+                    '<td style="text-align:center;white-space:nowrap;">' +
+                        '<button type="button" class="btn btn-xs btn-default qc-ctn-up"' + (i === 0 ? ' disabled' : '') + ' title="上移">&#9650;</button> ' +
+                        '<button type="button" class="btn btn-xs btn-default qc-ctn-dn"' + (i === rows.length - 1 ? ' disabled' : '') + ' title="下移">&#9660;</button>' +
+                    '</td>' +
+                    '<td><input type="text" class="form-control input-sm qc-ctn-name" maxlength="20" data-eg-skip value="' + esc(r.name) + '" placeholder="例：PP箱"></td>' +
+                    '<td><input type="text" class="form-control input-sm qc-ctn-code" maxlength="10" data-eg-skip value="' + esc(r.code) + '" placeholder="例：P"' +
+                        (used > 0 ? ' readonly style="background:#f2f2f2;" title="已有資料使用中，代碼不可更改（改了舊資料會對不到名稱）"' : '') + '></td>' +
+                    '<td style="text-align:center;"><input type="checkbox" class="qc-ctn-act"' + (r.active ? ' checked' : '') + '></td>' +
+                    '<td style="text-align:center;font-size:12px;' + (used > 0 ? 'color:#7A4A12;font-weight:bold;' : 'color:#999;') + '">' + (used > 0 ? '用 ' + used : '－') + '</td>' +
+                    '<td style="text-align:center;"><button type="button" class="btn btn-xs btn-danger qc-ctn-del"' +
+                        (used > 0 ? ' disabled title="已有 ' + used + ' 筆資料使用中，不可刪除；請改成停用"' : ' title="刪除這一列"') + '>&times;</button></td>' +
+                '</tr>' +
+                '<tr class="qc-ctn-errrow" style="display:none;"><td style="border-top:0;"></td>' +
+                    '<td colspan="5" style="border-top:0;padding-top:0;color:#DD5138;font-size:12px;"></td></tr>';
+                $b.append(h);
+            });
+            paintErrors();
+        }
+
+        function idxOf(el){ return +$(el).closest('tr').attr('data-idx'); }
+
+        window.openContainerCfgModal = function(){
+            if (!window.canSetContainer) { alert('無權限設定容器種類'); return; }
+            var $m = $('#qcCtnCfgModal');
+            $('#qcCtnCfgErr').hide().text('');
+            $('#qcCtnCfgBody').html('<tr><td colspan="6" style="text-align:center;color:#999;">載入中…</td></tr>');
+            $m.modal('show');
+            // 點開即刷新：每次都重新抓目前設定與使用筆數，避免拿舊狀態存檔
+            $.get(API, { action: 'list' }, function(res){
+                if (!res || !res.success) {
+                    $('#qcCtnCfgBody').empty();
+                    $('#qcCtnCfgErr').show().text((res && res.message) || '讀取失敗');
+                    return;
+                }
+                rows  = (res.data || []).map(function(o){ return { code: o.code, name: o.name, active: o.active ? 1 : 0 }; });
+                usage = res.usage || {};
+                if (res.csrf) window.EG_QC_CTN_CSRF = res.csrf;
+                render();
+            }, 'json').fail(function(){
+                $('#qcCtnCfgBody').empty();
+                $('#qcCtnCfgErr').show().text('與伺服器通訊失敗');
+            });
+        };
+
+        $(document).on('click', '#btn-qc-ctn-setting, #qcCtnCfgOpen', function(){ window.openContainerCfgModal(); });
+        $(document).on('input', '#qcCtnCfgBody .qc-ctn-name', function(){ rows[idxOf(this)].name = this.value.trim(); paintErrors(); });
+        $(document).on('input', '#qcCtnCfgBody .qc-ctn-code', function(){ rows[idxOf(this)].code = this.value.trim(); paintErrors(); });
+        $(document).on('change', '#qcCtnCfgBody .qc-ctn-act', function(){ rows[idxOf(this)].active = this.checked ? 1 : 0; });
+        $(document).on('click', '#qcCtnCfgBody .qc-ctn-del', function(){
+            var i = idxOf(this);
+            if ((usage[rows[i].code] || 0) > 0) return; // 後端也會再擋一次
+            rows.splice(i, 1);
+            render();
+        });
+        $(document).on('click', '#qcCtnCfgBody .qc-ctn-up', function(){
+            var i = idxOf(this); if (i <= 0) return;
+            rows.splice(i - 1, 0, rows.splice(i, 1)[0]); render();
+        });
+        $(document).on('click', '#qcCtnCfgBody .qc-ctn-dn', function(){
+            var i = idxOf(this); if (i >= rows.length - 1) return;
+            rows.splice(i + 1, 0, rows.splice(i, 1)[0]); render();
+        });
+        $(document).on('click', '#qcCtnCfgAdd', function(){
+            if (rows.length >= 50) { $('#qcCtnCfgErr').show().text('容器最多 50 種'); return; }
+            rows.push({ code: '', name: '', active: 1 });
+            render();
+            $('#qcCtnCfgBody .qc-ctn-name').last().focus();
+        });
+
+        // 存檔成功後把畫面上已經畫好的下拉一起換掉（不必重新整理頁面）
+        function refreshExistingSelects(opts){
+            window.EG_QC_CONTAINERS = opts || [];
+            $('.packaging-type').each(function(){
+                var cur = $(this).val();
+                var $s = $(this).empty();
+                window.EG_QC_CONTAINERS.forEach(function(o){ $s.append($('<option>').text(o.name)); });
+                if (cur && window.EG_QC_CONTAINERS.some(function(o){ return o.name === cur; })) $s.val(cur);
+            });
+        }
+
+        $(document).on('click', '#qcCtnCfgSave', function(){
+            for (var i = 0; i < rows.length; i++) {
+                var e = checkRow(i);
+                if (e) { paintErrors(); $('#qcCtnCfgErr').show().text('第 ' + (i + 1) + ' 列：' + e); return; }
+            }
+            if (!rows.length) { $('#qcCtnCfgErr').show().text('至少要保留一種容器'); return; }
+            if (!rows.some(function(r){ return r.active; })) { $('#qcCtnCfgErr').show().text('至少要有一種容器維持啟用'); return; }
+
+            var $btn = $(this).prop('disabled', true);
+            $.post(API, { action: 'save', csrf: window.EG_QC_CTN_CSRF || '', options: JSON.stringify(rows) }, null, 'json')
+             .done(function(res){
+                $btn.prop('disabled', false);
+                if (!res || !res.success) { $('#qcCtnCfgErr').show().text((res && res.message) || '儲存失敗'); return; }
+                refreshExistingSelects(res.options);
+                usage = res.usage || usage;
+                $('#qcCtnCfgModal').modal('hide');
+                if (typeof showTemporaryMessage === 'function') showTemporaryMessage('容器設定已儲存', true);
+             })
+             .fail(function(){
+                $btn.prop('disabled', false);
+                $('#qcCtnCfgErr').show().text('與伺服器通訊失敗，請稍後再試');
+             });
+        });
+
+        $(function(){ if (window.canSetContainer) $('#qcCtnCfgOpen').show(); });
     })();
     </script>
 
