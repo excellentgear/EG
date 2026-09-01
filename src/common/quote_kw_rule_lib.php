@@ -140,33 +140,61 @@ function qkw_split_ids(string $s): array
 }
 
 // 單一關鍵字：內含「|」代表任一即可（例 冶具|治具）；一律不分大小寫
-function qkw_hit_one(string $hay, string $kw): bool
+// 回傳「實際命中的那個字」，沒中回 null——確認畫面要講得出「這條為什麼會中」，
+// 而且多條同時命中時要靠它比較誰精確（短的字被長的字包住＝那條該讓位）。
+function qkw_hit_one_kw(string $hay, string $kw): ?string
 {
     foreach (explode('|', $kw) as $alt) {
         $alt = trim($alt);
-        if ($alt !== '' && mb_stripos($hay, $alt) !== false) return true;
+        if ($alt !== '' && mb_stripos($hay, $alt) !== false) return $alt;
     }
-    return false;
+    return null;
+}
+function qkw_hit_one(string $hay, string $kw): bool { return qkw_hit_one_kw($hay, $kw) !== null; }
+
+// 命中時回傳「這條規則實際命中的關鍵字清單」（all 模式會有多個），沒命中回 null。
+function qkw_rule_hit_kw(array $rule, string $spec, string $clientId): ?array
+{
+    if (!empty($rule['customer_ids'])) {
+        $list = array_map('trim', explode(',', (string)$rule['customer_ids']));
+        if (!in_array($clientId, $list, true)) return null;    // 有指定客戶＝只在這些客戶身上成立
+    }
+    $inc = qkw_split_kw((string)$rule['include_kw']);
+    if (!$inc) return null;
+    // 包含：預設「全部都要中」(all)；設成 any 則任一個中就算命中
+    // （這是最容易誤會的地方——使用者常以為逗號＝「或」，所以規則表單上是兩顆並排的選項）
+    $hitKw = [];
+    if (($rule['include_mode'] ?? 'all') === 'any') {
+        foreach ($inc as $kw) { $m = qkw_hit_one_kw($spec, $kw); if ($m !== null) { $hitKw[] = $m; break; } }
+        if (!$hitKw) return null;
+    } else {
+        foreach ($inc as $kw) { $m = qkw_hit_one_kw($spec, $kw); if ($m === null) return null; $hitKw[] = $m; }
+    }
+    foreach (qkw_split_kw((string)$rule['exclude_kw']) as $kw) if (qkw_hit_one($spec, $kw)) return null;  // 排除＝任一中就出局
+    return array_values(array_unique($hitKw));
 }
 
 function qkw_rule_hit(array $rule, string $spec, string $clientId): bool
 {
-    if (!empty($rule['customer_ids'])) {
-        $list = array_map('trim', explode(',', (string)$rule['customer_ids']));
-        if (!in_array($clientId, $list, true)) return false;   // 有指定客戶＝只在這些客戶身上成立
+    return qkw_rule_hit_kw($rule, $spec, $clientId) !== null;
+}
+
+// 誰在讓位：某條規則命中的字「每一個」都被另一條規則命中的字包住（而且比它長）＝這條比較不精確。
+// 例：規格「DP10T78PA14.5滾刀」——「粗滾」命中的是「滾」、「刀具-滾齒刀」命中的是「滾刀」，
+// 「滾」被「滾刀」包住，所以系統建議只用滾齒刀。**只是建議，最後仍由使用者在確認畫面選。**
+function qkw_shadowed(array $hits, int $i): bool
+{
+    if (!$hits[$i]['kws']) return false;
+    foreach ($hits[$i]['kws'] as $kw) {
+        $covered = false;
+        foreach ($hits as $j => $h) {
+            if ($j === $i) continue;
+            foreach ($h['kws'] as $kw2) {
+                if (mb_strlen($kw2) > mb_strlen($kw) && mb_stripos($kw2, $kw) !== false) { $covered = true; break 2; }
+            }
+        }
+        if (!$covered) return false;   // 只要有一個字沒被包住，這條就不算讓位
     }
-    $inc = qkw_split_kw((string)$rule['include_kw']);
-    if (!$inc) return false;
-    // 包含：預設「全部都要中」(all)；設成 any 則任一個中就算命中
-    // （這是最容易誤會的地方——使用者常以為逗號＝「或」，所以規則表單上是兩顆並排的選項）
-    if (($rule['include_mode'] ?? 'all') === 'any') {
-        $anyHit = false;
-        foreach ($inc as $kw) if (qkw_hit_one($spec, $kw)) { $anyHit = true; break; }
-        if (!$anyHit) return false;
-    } else {
-        foreach ($inc as $kw) if (!qkw_hit_one($spec, $kw)) return false;
-    }
-    foreach (qkw_split_kw((string)$rule['exclude_kw']) as $kw) if (qkw_hit_one($spec, $kw)) return false;  // 排除＝任一中就出局
     return true;
 }
 
@@ -201,6 +229,77 @@ function qkw_rule_preview(PDO $pdo, array $rule, array $quoteIds = []): array
         if (count($samples) < 5) $samples[] = $spec;
     }
     return ['matched' => $all, 'unset' => $unset, 'samples' => $samples];
+}
+
+// ── 多條規則同時命中時的候選方案 ─────────────────────────
+// 使用者拍板：**不自作主張取聯集，也不自作主張只留一條，一律把候選列出來讓人選**。
+// 系統只做兩件事：①講清楚每條規則是命中哪個字才成立的 ②標一個建議值（讓位規則見 qkw_shadowed）。
+// 回傳 options＝候選清單（第一個是建議值）、rec＝建議值在清單裡的索引、conflict＝要不要讓人選。
+function qkw_build_options(array $hits, array $tagName): array
+{
+    // 沒指定標籤也沒勾「帶入備註」的規則不可能有結果，直接不列（否則畫面上會出現一個選了沒作用的選項）
+    $hits = array_values(array_filter($hits, fn($h) => qkw_split_ids((string)$h['rule']['sub_tag_ids']) || !empty($h['rule']['to_note'])));
+    if (!$hits) return ['options' => [], 'rec' => 0, 'conflict' => false, 'sig' => '', 'hits' => []];
+
+    $lbl = function (array $ids, bool $note) use ($tagName): string {
+        if ($note) return '帶入備註（規格文字帶進整張報價單的備註欄）';
+        return implode(' ＋ ', array_map(fn($i) => $tagName[$i] ?? ('#' . $i), $ids));
+    };
+    // 有標籤就以標籤為準，只有「帶入備註」規則命中才走備註（與既有口徑一致）
+    $merge = function (array $idxs) use ($hits, $lbl): array {
+        $tags = []; $note = false;
+        foreach ($idxs as $i) {
+            if (!empty($hits[$i]['rule']['to_note'])) { $note = true; continue; }
+            foreach (qkw_split_ids((string)$hits[$i]['rule']['sub_tag_ids']) as $sid) $tags[$sid] = true;
+        }
+        $ids = array_keys($tags); sort($ids);
+        $kind = $ids ? 'tags' : ($note ? 'note' : '');
+        return ['kind' => $kind, 'sub_tag_ids' => implode(',', $ids), 'label' => $lbl($ids, $kind === 'note')];
+    };
+
+    $meta = [];
+    foreach ($hits as $i => $h) {
+        $meta[] = ['name' => $h['rule']['rule_name'], 'rule_id' => (int)$h['rule']['rule_id'],
+                   'kw' => implode('＋', $h['kws']), 'shadowed' => qkw_shadowed($hits, $i) ? 1 : 0];
+    }
+    $keep = []; foreach ($meta as $i => $m) if (!$m['shadowed']) $keep[] = $i;
+    if (!$keep) $keep = array_keys($hits);           // 互相包住（理論上不會發生）就全留，不要留白
+
+    $best = $merge($keep);
+    $all  = $merge(array_keys($hits));
+
+    // 每條規則各自的結果都一樣（例：代料成品／料到成品都帶「全製」）＝其實沒有分歧，不必問使用者
+    $distinct = [];
+    foreach (array_keys($hits) as $i) { $o = $merge([$i]); $distinct[$o['kind'] . ':' . $o['sub_tag_ids']] = true; }
+    $conflict = count($hits) > 1 && count($distinct) > 1;
+
+    if (!$conflict) return ['options' => [$best + ['key' => 'best', 'desc' => '', 'recommend' => 1]],
+                            'rec' => 0, 'conflict' => false, 'sig' => '', 'hits' => $meta];
+
+    $shadowNames = [];
+    foreach ($meta as $m) if ($m['shadowed']) $shadowNames[] = $m['name'] . '（命中：' . $m['kw'] . '）';
+    $keepNames = []; foreach ($keep as $i) $keepNames[] = $meta[$i]['name'];
+
+    $options = [];
+    $seen = [];
+    $push = function (array $o, string $key, string $desc, int $rec) use (&$options, &$seen) {
+        if ($o['kind'] === '') return;
+        $sig = $o['kind'] . ':' . $o['sub_tag_ids'];
+        if (isset($seen[$sig])) return;               // 結果一樣的候選只留一個，不要給兩顆看起來一樣的按鈕
+        $seen[$sig] = true;
+        $options[] = $o + ['key' => $key, 'desc' => $desc, 'recommend' => $rec];
+    };
+    $push($best, 'best',
+        count($keep) < count($hits)
+            ? ('只用 ' . implode('、', $keepNames) . '（' . implode('、', $shadowNames) . ' 的關鍵字被包在裡面，建議讓位）')
+            : ('全部套用（' . implode('、', $keepNames) . '）'),
+        1);
+    foreach ($meta as $i => $m) $push($merge([$i]), 'r' . $m['rule_id'], '只用「' . $m['name'] . '」（命中：' . $m['kw'] . '）', 0);
+    $push($all, 'all', '全部規則都要（' . implode('、', array_column($meta, 'name')) . '）', 0);
+
+    $rids = array_column($meta, 'rule_id'); sort($rids);
+    return ['options' => $options, 'rec' => 0, 'conflict' => true,
+            'sig' => implode(',', $rids) . '#' . $best['kind'] . ':' . $best['sub_tag_ids'], 'hits' => $meta];
 }
 
 // ── 掃描：回傳「依建議標籤組合分組」的結果 ───────────────
@@ -240,29 +339,27 @@ function qkw_scan(PDO $pdo, array $quoteIds = [], bool $onlyUnset = true): array
     foreach ($rows as $r) {
         $spec = (string)($r['specification'] ?? '');
         if (trim($spec) === '') continue;                       // 規格空白無從判斷，留給人工
-        $tags = []; $hitRules = []; $noteRule = null;
+        $hits = [];
         foreach ($rules as $ru) {
-            if (!qkw_rule_hit($ru, $spec, (string)($r['client_id'] ?? ''))) continue;
-            $hitRules[] = $ru['rule_name'];
-            if (!empty($ru['to_note'])) { $noteRule = $ru['rule_name']; continue; }
-            foreach (qkw_split_ids((string)$ru['sub_tag_ids']) as $sid) $tags[$sid] = true;
+            $kws = qkw_rule_hit_kw($ru, $spec, (string)($r['client_id'] ?? ''));
+            if ($kws === null) continue;
+            $hits[] = ['rule' => $ru, 'kws' => $kws];
         }
-        if (!$tags && $noteRule === null) continue;
+        if (!$hits) continue;
+        $opts = qkw_build_options($hits, $tagName);
+        if (!$opts['options']) continue;                        // 命中的規則全都沒指定標籤也沒勾備註
         $matched++;
-        // 多條規則同時命中時標籤取聯集；有標籤就以標籤為準，只有「帶入備註」規則命中才走備註
-        if ($tags) {
-            $ids = array_keys($tags); sort($ids);
-            $key   = 'T:' . implode(',', $ids);
-            $label = implode(' ＋ ', array_map(fn($i) => $tagName[$i] ?? ('#' . $i), $ids));
-            $kind  = 'tags';
-        } else {
-            $ids = []; $key = 'N'; $label = '帶入備註（規格文字帶進整張報價單的備註欄）'; $kind = 'note';
-        }
+
+        $rec = $opts['options'][$opts['rec']];
+        $key = $opts['conflict'] ? ('C:' . $opts['sig']) : ($rec['kind'] === 'note' ? 'N' : ('T:' . $rec['sub_tag_ids']));
         if (!isset($groups[$key])) {
-            $groups[$key] = ['key' => $key, 'kind' => $kind, 'label' => $label,
-                             'sub_tag_ids' => implode(',', $ids), 'rules' => [], 'items' => []];
+            $groups[$key] = ['key' => $key, 'kind' => $rec['kind'], 'label' => $rec['label'],
+                             'sub_tag_ids' => $rec['sub_tag_ids'], 'rules' => [], 'items' => [],
+                             'conflict' => $opts['conflict'] ? 1 : 0,
+                             'options' => $opts['conflict'] ? $opts['options'] : [],
+                             'rec' => $opts['rec'], 'hits' => $opts['hits']];
         }
-        foreach ($hitRules as $rn) $groups[$key]['rules'][$rn] = true;
+        foreach ($opts['hits'] as $h) $groups[$key]['rules'][$h['name']] = true;
         $groups[$key]['items'][] = [
             'item_id' => (int)$r['item_id'], 'quote_id' => (int)$r['quote_id'], 'quote_no' => $r['quote_no'],
             'client_name' => $r['client_name'], 'product_id' => $r['product_id'], 'spec' => $spec,

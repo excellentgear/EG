@@ -76,6 +76,14 @@ try {
         .kw-group-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:6px 10px; background:#FBF6EC; cursor:pointer; }
         .kw-group-head .kw-label { font-weight:700; color:#5b3a1e; }
         .kw-group-head .kw-rules { font-size:11px; color:#a2703a; }
+        /* 多條規則同時命中同一筆規格時的候選方案：系統只標「建議」，一律由使用者自己選 */
+        .kw-opts { border-top:1px dashed #EADFC8; background:#FFFDF8; padding:5px 10px 6px; }
+        .kw-opts .kw-opts-hd { font-size:11px; color:#a2703a; margin-bottom:3px; }
+        .kw-opts label.kw-opt { display:block; font-weight:400; font-size:12px; margin:0; padding:2px 4px; border-radius:4px; cursor:pointer; }
+        .kw-opts label.kw-opt:hover { background:#F7E8D2; }
+        .kw-opts label.kw-opt.on { background:#F7E0BD; }
+        .kw-opts label.kw-opt b { color:#5b3a1e; }
+        .kw-opts label.kw-opt .d { color:#8a5a2b; font-size:11px; }
         .kw-group-body { display:none; max-height:280px; overflow:auto; padding:4px 10px 8px; }
         .kw-group.open .kw-group-body { display:block; }
         table.kw-item-table { width:100%; border-collapse:collapse; font-size:12px; }
@@ -296,18 +304,29 @@ try {
             <b>「包含」用逗號連接＝這些字<u>全部都要有</u></b>（例 <code>齒研,冶具|治具</code> ＝ 要同時含「齒研」而且含「冶具」或「治具」）；
             想表達「這個<u>或</u>那個」請在<b>同一個關鍵字裡用 <code>|</code></b>（例 <code>冶具|治具</code>）。<br>
             <b>「不包含」用逗號連接＝其中<u>任何一個</u>出現就不算命中</b>（例 <code>冶具,治具,刀</code>）。<br>
-            客戶不勾＝通用規則；勾了多個＝<u>任一</u>符合即成立。多條規則同時命中時，建議的標籤取<b>聯集</b>。
+            客戶不勾＝通用規則；勾了多個＝<u>任一</u>符合即成立。<br>
+            多條規則同時命中同一筆規格、而且要帶的標籤不一樣時，<b>偵測畫面會把候選列出來讓你選</b>（系統只把比較精確的那個預選起來，
+            例：規格「滾刀」被「粗滾」命中的是單字「滾」、被「刀具-滾齒刀」命中的是「滾刀」，「滾」包在「滾刀」裡面所以建議讓位）。
         </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;flex-wrap:wrap;">
+            <input type="text" class="form-control input-sm" id="krFilter" style="max-width:300px;"
+                   placeholder="搜尋規則名稱／關鍵字／製程標籤／客戶…" data-eg-skip>
+            <label style="font-size:12px;margin:0;font-weight:400;"><input type="checkbox" id="krOnlyActive"> 只看啟用中</label>
+            <span style="font-size:12px;color:#a2703a;" id="krCount"></span>
+        </div>
+        <div id="krListBox" style="max-height:232px;overflow:auto;border:1px solid #EADFC8;border-radius:4px;">
         <table style="width:100%;border-collapse:collapse;font-size:12px;">
-            <thead><tr style="color:#8a5a2b;border-bottom:1px solid #E4C293;">
+            <thead><tr style="color:#8a5a2b;background:#FBF6EC;position:sticky;top:0;z-index:1;box-shadow:0 1px 0 #E4C293;">
                 <th style="text-align:left;padding:4px 6px;">規則名稱</th><th style="text-align:left;">包含</th>
                 <th style="text-align:left;">不包含</th><th style="text-align:left;">客戶</th>
                 <th style="text-align:left;">帶入</th><th style="text-align:left;width:110px;">操作</th>
             </tr></thead>
             <tbody id="kwRuleRows"></tbody>
         </table>
+        </div>
         <hr style="margin:10px 0;">
         <div id="kwRuleForm">
+            <div id="krFormHd" style="font-size:12px;font-weight:700;color:#5b3a1e;margin-bottom:4px;">新增規則</div>
             <input type="hidden" id="krRuleId" value="0">
             <div style="display:flex;gap:10px;flex-wrap:wrap;">
                 <div style="flex:1;min-width:180px;"><label style="font-size:12px;">規則名稱 *</label>
@@ -1469,7 +1488,14 @@ function runKwScan() {
         kwGroups.forEach(function(g){ g.items.forEach(function(it){ kwChecked[it.item_id] = true; }); });
         $('#kwScanSummary').html(res.data.rules === 0
             ? '<span style="color:#DD5138;">尚未設定任何關鍵字規則，請先按工具列的「規則設定」新增。</span>'
-            : ('掃描 ' + res.data.scanned + ' 筆未設定製程的項目，命中 <b>' + res.data.matched + '</b> 筆，共 ' + kwGroups.length + ' 種建議組合（使用 ' + res.data.rules + ' 條規則）'));
+            : ('掃描 ' + res.data.scanned + ' 筆未設定製程的項目，命中 <b>' + res.data.matched + '</b> 筆，共 ' + kwGroups.length + ' 種建議組合（使用 ' + res.data.rules + ' 條規則）' +
+               (function(){
+                   const c = kwGroups.filter(function(g){ return Number(g.conflict); });
+                   if (!c.length) return '';
+                   const n = c.reduce(function(a, g){ return a + g.count; }, 0);
+                   return '<br><span style="color:#DD5138;">其中 <b>' + c.length + '</b> 種（' + n + ' 筆）同時命中多條規則、要帶的標籤不一樣，' +
+                          '已在該組底下列出候選並預選建議值，<b>套用前請確認選的是哪一組</b>。</span>';
+               })()));
         renderKwGroups();
     });
 }
@@ -1484,19 +1510,52 @@ function renderKwGroups() {
             '<div class="kw-group-head" onclick="kwToggleOpen(' + gi + ')">' +
                 '<input type="checkbox" onclick="event.stopPropagation();kwToggleGroup(' + gi + ',this.checked)" ' +
                     (checkedN === g.items.length ? 'checked' : '') + ' id="kwGChk' + gi + '">' +
-                '<span class="kw-label">' + (g.kind === 'note' ? '<span class="qt-badge note">備註</span> ' : '') + escapeQt(g.label) + '</span>' +
+                '<span class="kw-label" id="kwGLbl' + gi + '">' + kwGroupLabelHtml(g) + '</span>' +
                 '<span style="color:#8a5a2b;">' + g.count + ' 筆</span>' +
                 (hadN ? '<span class="qt-badge warn">其中 ' + hadN + ' 筆原本已有設定，套用會覆蓋</span>' : '') +
                 '<span class="kw-rules">命中規則：' + escapeQt((g.rules || []).join('、')) + '</span>' +
                 '<span style="margin-left:auto;font-size:11px;color:#a2703a;" id="kwGSel' + gi + '">已勾 ' + checkedN + '</span>' +
                 '<i class="fa fa-caret-down"></i>' +
             '</div>' +
+            kwOptionsHtml(g, gi) +
             '<div class="kw-group-body" id="kwGBody' + gi + '"></div>' +
         '</div>';
     });
     $('#kwGroups').html(html);
     updateKwSel();
 }
+
+function kwGroupLabelHtml(g) {
+    return (g.kind === 'note' ? '<span class="qt-badge note">備註</span> ' : '') + escapeQt(g.label);
+}
+
+// 一筆規格同時命中多條規則、而且各條要帶的標籤不一樣時，**不自作主張**取聯集或砍掉哪一條，
+// 一律把候選列出來讓使用者選；系統只把「比較精確的那個」預選起來（短關鍵字被長關鍵字包住＝讓位）。
+function kwOptionsHtml(g, gi) {
+    if (!Number(g.conflict) || !(g.options || []).length) return '';
+    let h = '<div class="kw-opts"><div class="kw-opts-hd"><i class="fa fa-question-circle"></i> ' +
+            '這批同時命中 <b>' + (g.rules || []).length + '</b> 條規則、而且要帶的標籤不一樣，請選擇要帶入哪一組：</div>';
+    g.options.forEach(function(o, oi) {
+        const on = Number(g.pick != null ? g.pick : g.rec) === oi;
+        h += '<label class="kw-opt' + (on ? ' on' : '') + '" id="kwOpt' + gi + '_' + oi + '">' +
+             '<input type="radio" name="kwOpt' + gi + '" class="kw-opt-radio" data-gi="' + gi + '" data-oi="' + oi + '"' +
+             (on ? ' checked' : '') + '> ' +
+             '<b>' + (o.kind === 'note' ? '帶入備註' : escapeQt(o.label)) + '</b>' +
+             (Number(o.recommend) ? ' <span class="qt-badge ok">建議</span>' : '') +
+             ' <span class="d">' + escapeQt(o.desc || '') + '</span></label>';
+    });
+    return h + '</div>';
+}
+
+// 選了哪個候選就換掉這一組要套用的內容（套用時讀的是 g.kind / g.sub_tag_ids）
+$(document).on('change', '.kw-opt-radio', function() {
+    const gi = Number($(this).data('gi')), oi = Number($(this).data('oi'));
+    const g = kwGroups[gi]; if (!g || !g.options || !g.options[oi]) return;
+    const o = g.options[oi];
+    g.pick = oi; g.kind = o.kind; g.sub_tag_ids = o.sub_tag_ids; g.label = o.label;
+    $('#kwGLbl' + gi).html(kwGroupLabelHtml(g));
+    g.options.forEach(function(_, i){ $('#kwOpt' + gi + '_' + i).toggleClass('on', i === oi); });
+});
 
 // 逐筆清單很大（單一組可能三千筆），展開時才畫，避免一次塞進 DOM 卡住整個跳窗
 function kwToggleOpen(gi) {
@@ -1636,13 +1695,35 @@ function krLoad() {
     });
 }
 
+// 規則已經 50 條以上，整份列出來根本找不到要改的那條，所以列表可搜尋＋自己捲動（表頭釘住）
+let krTagNames = {};
 function krRenderRows(tagNames) {
-    if (!krRules.length) { $('#kwRuleRows').html('<tr><td colspan="6" style="color:#999;padding:8px;">尚未設定任何規則</td></tr>'); return; }
+    if (tagNames) krTagNames = tagNames;
+    const kw = String($('#krFilter').val() || '').trim().toLowerCase();
+    const onlyActive = $('#krOnlyActive').is(':checked');
+    const editing = Number($('#krRuleId').val() || 0);
+    const rows = krRules.filter(function(r) {
+        if (onlyActive && !Number(r.is_active)) return false;
+        if (!kw) return true;
+        const tagTxt = String(r.sub_tag_ids || '').split(',').filter(Boolean)
+            .map(function(id){ return krTagNames[id] || ''; }).join(' ');
+        // 正在編輯的那條永遠留著，不然打字篩掉之後會看不到自己在改哪一條
+        return Number(r.rule_id) === editing ||
+               [r.rule_name, r.include_kw, r.exclude_kw, r.customer_ids, tagTxt].join(' ').toLowerCase().indexOf(kw) !== -1;
+    });
+    $('#krCount').text(rows.length === krRules.length ? ('共 ' + krRules.length + ' 條規則')
+                                                     : ('符合 ' + rows.length + ' 條／共 ' + krRules.length + ' 條'));
+    if (!rows.length) {
+        $('#kwRuleRows').html('<tr><td colspan="6" style="color:#999;padding:8px;">' +
+            (krRules.length ? '沒有符合搜尋條件的規則' : '尚未設定任何規則') + '</td></tr>');
+        return;
+    }
     let h = '';
-    krRules.forEach(function(r) {
+    rows.forEach(function(r) {
         const tags = String(r.sub_tag_ids || '').split(',').filter(Boolean)
-            .map(function(id){ return tagNames[id] || ('#' + id); }).join('、');
-        h += '<tr class="kw-rule-row">' +
+            .map(function(id){ return krTagNames[id] || ('#' + id); }).join('、');
+        h += '<tr class="kw-rule-row" id="krRow' + r.rule_id + '"' +
+             (Number(r.rule_id) === editing ? ' style="background:#F7E0BD;"' : '') + '>' +
             '<td>' + escapeQt(r.rule_name) + (Number(r.is_active) ? '' : ' <span class="qt-badge warn">停用</span>') + '</td>' +
             '<td>' + escapeQt(r.include_kw) +
                 (String(r.include_kw).indexOf(',') >= 0
@@ -1764,12 +1845,18 @@ function krValidate() {
     return ok;
 }
 
+$(document).on('input', '#krFilter', function(){ krRenderRows(); });
+$(document).on('change', '#krOnlyActive', function(){ krRenderRows(); });
+
 function krResetForm() {
     $('#krRuleId').val(0); $('#krName').val(''); $('#krInc').val(''); $('#krExc').val('');
     $('#krPriority').val(0); $('#krToNote').prop('checked', false);
     $('input[name="krIncMode"][value="any"]').prop('checked', true); $('#krPreview').text('');
     krTagSel = []; krCustSel = {}; $('#krCustFilter').val('');
+    $('#krFormHd').html('新增規則');
+    $('#krSaveBtn').html('<i class="fa fa-save"></i> 儲存規則');
     krRenderTagPicker(); krRenderCustBox(''); krValidate();
+    if (krRules.length) krRenderRows();      // 清掉列表上的「編輯中」標示
 }
 
 function krEdit(ruleId) {
@@ -1783,7 +1870,23 @@ function krEdit(ruleId) {
     krTagSel = String(r.sub_tag_ids || '').split(',').filter(Boolean).map(Number);
     krCustSel = {}; String(r.customer_ids || '').split(',').filter(Boolean).forEach(function(c){ krCustSel[c] = true; });
     $('#krCustFilter').val('');
+    $('#krFormHd').html('修改規則：<span style="color:#DD5138;">' + escapeQt(r.rule_name) + '</span>' +
+        '　<a href="javascript:void(0)" style="font-weight:400;font-size:11px;" onclick="krResetForm()">取消修改（改為新增一條）</a>');
+    $('#krSaveBtn').html('<i class="fa fa-save"></i> 儲存修改');
     krRenderTagPicker(); krRenderCustBox(''); krValidate();
+    krRenderRows();                                   // 讓列表上那一列標成編輯中
+    // 按了編輯卻沒有任何反應（表單在下面看不到）是這個跳窗最難用的地方：捲到表單、聚焦、閃一下
+    const box = document.getElementById('krListBox');
+    const row = document.getElementById('krRow' + r.rule_id);
+    if (box && row) box.scrollTop = Math.max(0, row.offsetTop - box.clientHeight / 2);
+    const form = document.getElementById('kwRuleForm');
+    if (form) {
+        form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        form.style.transition = 'background .25s';
+        form.style.background = '#F7E0BD';
+        setTimeout(function(){ form.style.background = ''; }, 700);
+    }
+    setTimeout(function(){ $('#krName').focus().select(); }, 60);
 }
 
 function krSave() {
