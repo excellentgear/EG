@@ -391,8 +391,15 @@ function qkw_sub_tag_names(PDO $pdo): array
 // 使用者要的是「臨時想到一組關鍵字，掃出來、框選幾筆、加上或拿掉某些標籤」，
 // 不必為了做一次而在規則表裡留一條垃圾規則。比對規則與正式規則完全相同（同一支 qkw_rule_hit）。
 // $filter：all＝全部命中／unset＝只要還沒設定製程的／set＝只要已經設定過的
-function qkw_quick_scan(PDO $pdo, array $rule, array $quoteIds = [], string $filter = 'all', int $limit = 5000): array
+// $ftags／$fmode：依「項目目前的製程標籤」再篩一次
+//   exact    ＝這一筆的標籤組合要**完全等於**指定的那幾個（不管順序、不能多也不能少）
+//   contains ＝這一筆**至少**含有指定的那幾個（可以還有別的）
+// 有標籤篩選時「包含關鍵字」可以不填（例如「把所有『粗滾＋齒研』的改成只有粗滾」）
+function qkw_quick_scan(PDO $pdo, array $rule, array $quoteIds = [], string $filter = 'all', int $limit = 5000,
+                        array $ftags = [], string $fmode = 'contains'): array
 {
+    $ftags = qkw_split_ids(implode(',', $ftags));
+    sort($ftags);
     qkw_ensure_schema($pdo);
     $sql = "SELECT qi.item_id, qi.quote_id, qi.product_id, qi.d_setting_d_id, qi.specification, qi.note_only, qi.process_notes,
                    ql.quote_no, ql.client_id, ql.client_name, ql.quote_date,
@@ -411,16 +418,30 @@ function qkw_quick_scan(PDO $pdo, array $rule, array $quoteIds = [], string $fil
     $st->execute($args);
     $tagName = qkw_sub_tag_names($pdo);
     $items = []; $total = 0;
+    $useKw = qkw_split_kw((string)$rule['include_kw']) !== [];
+    $custs = array_filter(array_map('trim', explode(',', (string)($rule['customer_ids'] ?? ''))));
     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
         $spec = (string)($r['specification'] ?? '');
         if (trim($spec) === '') continue;
-        if (!qkw_rule_hit($rule, $spec, (string)($r['client_id'] ?? ''))) continue;
+        if ($useKw) {
+            if (!qkw_rule_hit($rule, $spec, (string)($r['client_id'] ?? ''))) continue;
+        } elseif ($custs && !in_array((string)($r['client_id'] ?? ''), $custs, true)) {
+            continue;                                    // 沒填關鍵字時，指定客戶一樣要生效
+        }
         $isSet = ((int)$r['has_map']) || trim((string)$r['process_notes']) !== '' || (int)$r['note_only'];
         if ($filter === 'unset' && $isSet) continue;
         if ($filter === 'set'  && !$isSet) continue;
+        $cur = qkw_split_ids((string)$r['process_notes']);
+        if ($ftags) {
+            $mine = $cur; sort($mine);
+            if ($fmode === 'exact') {
+                if ($mine !== $ftags) continue;          // 組合要一模一樣
+            } else {
+                foreach ($ftags as $t) if (!in_array($t, $mine, true)) continue 2;
+            }
+        }
         $total++;
         if (count($items) >= $limit) continue;
-        $cur = qkw_split_ids((string)$r['process_notes']);
         $items[] = ['item_id' => (int)$r['item_id'], 'quote_id' => (int)$r['quote_id'], 'quote_no' => $r['quote_no'],
                     'client_name' => $r['client_name'], 'product_id' => $r['product_id'],
                     'd_setting_d_id' => (int)($r['d_setting_d_id'] ?? 0), 'spec' => $spec,

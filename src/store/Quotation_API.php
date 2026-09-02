@@ -1987,10 +1987,15 @@ try {
                      'include_mode' => (($_POST['include_mode'] ?? 'any') === 'all' ? 'all' : 'any'),
                      'exclude_kw'   => trim($_POST['exclude_kw'] ?? ''),
                      'customer_ids' => trim($_POST['customer_ids'] ?? '')];
-            if (qkw_split_kw($rule['include_kw']) === []) throw new Exception('請至少填一個「包含」關鍵字');
-            $qids = json_decode($_POST['quote_ids'] ?? '[]', true);
-            $flt  = in_array($_POST['filter'] ?? 'all', ['all', 'unset', 'set'], true) ? $_POST['filter'] : 'all';
-            $response = ['success' => true, 'data' => qkw_quick_scan($pdo, $rule, is_array($qids) ? $qids : [], $flt)];
+            $ftags = json_decode($_POST['filter_tags'] ?? '[]', true);
+            $ftags = is_array($ftags) ? $ftags : [];
+            // 關鍵字與標籤篩選至少要有一個，否則等於「全部項目」——那不是篩選，是誤操作
+            if (qkw_split_kw($rule['include_kw']) === [] && !$ftags) throw new Exception('請至少填一個「包含」關鍵字，或指定要篩選的製程標籤');
+            $qids  = json_decode($_POST['quote_ids'] ?? '[]', true);
+            $flt   = in_array($_POST['filter'] ?? 'all', ['all', 'unset', 'set'], true) ? $_POST['filter'] : 'all';
+            $fmode = ($_POST['filter_mode'] ?? 'contains') === 'exact' ? 'exact' : 'contains';
+            $response = ['success' => true,
+                         'data' => qkw_quick_scan($pdo, $rule, is_array($qids) ? $qids : [], $flt, 5000, $ftags, $fmode)];
             break;
         }
 
