@@ -400,7 +400,7 @@ $roleLabel = ia_role_label($perms);
         <h4>不符合通知單的四段分工</h4>
         <ul>
             <li><b>段一 稽核員填</b>：不合格事實描述、不合格類型（主要／次要／觀察）、違反條文、要求完成期限。</li>
-            <li><b>段二 受稽單位填</b>：<b>單位主管核示</b>、原因分析、糾正措施及完成時間、預防措施及完成時間、責任主管。
+            <li><b>段二 受稽單位填</b>：原因分析、糾正措施及完成時間、預防措施及完成時間、責任主管。
                 填完按「送出回覆」才會進到下一段。<b>稽核員／內稽管理員可以代填</b>（對方不方便用電腦、或補歷史紙本時），代填會在下方歷程留下紅字紀錄。</li>
             <li><b>段三 稽核組長填</b>：糾正和預防措施執行狀況驗證描述、驗證通過或不通過。<b>不通過會退回段二</b>並重新通知受稽單位。</li>
             <li><b>段四 管理代表填</b>：管理代表意見，按「結案」本單結束、通知受稽單位。</li>
@@ -661,8 +661,6 @@ $roleLabel = ia_role_label($perms);
                 <div><select id="nHead" data-eg-filter="輸入人員姓名篩選…"></select>
                      <span id="nHeadSuggest" style="font-size:12px;color:#8a6d45;"></span></div>
                 <label>簽核日期</label><div><input type="date" id="nHeadDate"></div>
-                <label>單位主管核示</label>
-                <div class="full"><textarea id="nHeadNote" placeholder="單位主管簽核時的核示內容（列印版會一併印出）"></textarea></div>
                 <label>原因分析<span style="color:#DD5138;">*</span></label>
                 <div class="full"><textarea id="nCause"></textarea><div class="err-msg" id="errNCause"></div></div>
                 <label>糾正措施及<br>完成時間<span style="color:#DD5138;">*</span></label>
@@ -1893,7 +1891,6 @@ function openNc(id){
         // 段二
         $('#nHead').html(peopleOptions('', NC.head_id, '（未指定）'));
         $('#nHeadDate').val(inputDate(NC.head_date) || META.today);
-        $('#nHeadNote').val(NC.head_note||'');
         $('#nCause').val(NC.cause||''); $('#nCorr').val(NC.corrective||''); $('#nPrev').val(NC.preventive||'');
         $('#nResp').html(peopleOptions('', NC.resp_id, '（未指定）'));
         $('#nRespDate').val(inputDate(NC.resp_date) || META.today);
@@ -1966,7 +1963,7 @@ function saveSec2(submit){
     }
     $.post(API, {action:'nc_save_sec2', nc_id:NC.nc_id, submit:submit?1:'', cause:$('#nCause').val(),
         corrective:$('#nCorr').val(), preventive:$('#nPrev').val(), head_id:$('#nHead').val(),
-        head_note:$('#nHeadNote').val(), head_date:$('#nHeadDate').val(),
+        head_date:$('#nHeadDate').val(),
         resp_id:$('#nResp').val(), resp_date:$('#nRespDate').val()}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         alert(submit ? ('已送出回覆'+(res.proxy?'（已記錄為代填）':'')) : '已暫存');
@@ -2697,7 +2694,8 @@ function printCheck(id){
             h += '</tbody></table>';
             h += '<div class="ia-note">'
                + (k.kind==='as' ? '' : '確認項目及結果；以「V」表示之。') + '</div>';
-            h += '<div style="margin-top:10px;font-size:12px;">稽核員: <span class="stamp-inline">'
+            // 2026-08-27 使用者要求：稽核員的簽章跟一般表格的「製表」一樣靠右，不要放左下角
+            h += '<div style="margin-top:10px;font-size:12px;text-align:right;">稽核員: <span class="stamp-inline">'
                + stampHtml(m, sp(k.auditor_id, k.auditor_name, k.check_date), k.check_date) + '</span></div>';
             // 2026-08-27 使用者要求：右側已經印了稽核日期，標題就不要重複出現日期
             // （標題常被存成「系統稽核紀錄表 2024-12-16」，這裡把結尾的日期去掉）
@@ -2721,43 +2719,66 @@ function printNc(id){
                        maker_id:n.auditor_id||'', maker_name:n.auditor_name||''}, function(m){
             var h = printHead(m);
             h += '<div style="font-size:12px;margin-bottom:5px;">表單編號: '+esc(n.nc_no||'')+'</div>';
+            /* 2026-08-27 使用者要求的版面（依紙本 2-GM-06-07）：
+               ①「不合格類型」加框、移到「不合格事實描述」上方
+               ②「違反條文:」是標題要粗體
+               ③ 拿掉「單位主管核示」整行（紙本沒有這一格）
+               稽核員段、受稽單位段、驗證段各自併成一大格（紙本中間沒有橫線），
+               圖章一律靠右下，段與段之間用一條粗線分開。 */
+            var pre = function (t) { return '<div class="pre">' + esc(t || '') + '</div>'; };
+            var signOne = function (label, id, name, date) {
+                return esc(label) + ': <span class="stamp-inline">' + stampHtml(m, sp(id, name, date), date) + '</span>';
+            };
+            var signRight = function (label, id, name, date) {
+                return '<div style="text-align:right;margin-top:8px;">' + signOne(label, id, name, date) + '</div>';
+            };
+            /* 紙本這兩個章是並排在同一行（各佔半邊），不要上下疊——疊起來整格會多高出一個章 */
+            var signPair = function (a, b) {
+                return '<div style="margin-top:8px;overflow:hidden;">'
+                     + '<div style="float:left;width:50%;text-align:right;">' + a + '</div>'
+                     + '<div style="float:left;width:50%;text-align:right;">' + (b || '') + '</div></div>';
+            };
             h += '<table class="ia-p">'
               + '<tr><th style="width:100px;">受稽核單位</th><td style="width:150px;">'+esc(n.dept_name||'')+'</td>'
               + '<th style="width:80px;">受審核人</th><td style="width:110px;">'+esc(n.auditee_name||'')+'</td>'
               + '<th style="width:80px;">稽核日期</th><td>'+dispDate(n.audit_date)+'</td></tr>'
-              + '<tr><td class="pre" colspan="6" style="min-height:90px;height:90px;">'
-              + '<b>不合格事實描述:</b>\n'+esc(n.fact||'')+'</td></tr>'
-              + '<tr><td class="l" colspan="3">不合格類型: '+esc(n.type_label||'')+'</td>'
-              + '<td class="l" colspan="3">違反條文: '+esc(n.clause_ref||'')+'</td></tr>'
-              + '<tr><td class="l" colspan="3">稽核員: <span class="stamp-inline">'
-              + stampHtml(m, sp(n.auditor_id, n.auditor_name, n.auditor_date), n.auditor_date)+'</span></td>'
-              + '<td class="l" colspan="3">受審查單位主管: <span class="stamp-inline">'
-              + stampHtml(m, sp(n.head_id, n.head_name, n.head_date), n.head_date)+'</span></td></tr>'
-              /* 單位主管核示（使用者要求：主管簽核時要能填核示，列印一併印出） */
-              + '<tr><td class="pre" colspan="6" style="min-height:52px;height:52px;">'
-              + '<b>單位主管核示:</b>\n'+esc(n.head_note||'')+'</td></tr>'
-              + '<tr><td class="l" colspan="6">要求完成期限: '+(n.due_date?dispDate(n.due_date):'')+'</td></tr>'
-              + '<tr><td class="pre" colspan="6" style="min-height:76px;height:76px;">'
-              + '<b>原因分析:</b>\n'+esc(n.cause||'')+'</td></tr>'
-              + '<tr><td class="pre" colspan="6" style="min-height:66px;height:66px;">'
-              + '<b>糾正措施及完成時間:</b>\n'+esc(n.corrective||'')+'</td></tr>'
-              + '<tr><td class="pre" colspan="6" style="min-height:66px;height:66px;">'
-              + '<b>預防措施及完成時間:</b>\n'+esc(n.preventive||'')+'</td></tr>'
-              + '<tr><td class="l" colspan="6">責任主管: <span class="stamp-inline">'
-              + stampHtml(m, sp(n.resp_id, n.resp_name, n.resp_date), n.resp_date)+'</span></td></tr>'
-              + '<tr><td class="pre" colspan="6" style="min-height:66px;height:66px;">'
-              + '<b>糾正和預防措施執行狀況驗證描述:</b>\n'+esc(n.verify_desc||'')+'</td></tr>'
-              + '<tr><td class="l" colspan="3">結束: '+esc(n.close_note||'')+'</td>'
-              + '<td class="l" colspan="3">稽核組長: <span class="stamp-inline">'
-              + stampHtml(m, sp(n.leader_id, n.leader_name, n.leader_date), n.leader_date)+'</span></td></tr>'
-              + '<tr><td class="pre" colspan="6" style="min-height:58px;height:58px;">'
-              /* 紙本這一格是「管理代表意見」＋下方「簽名」，簽名就是圖章本身，
-                 所以不要再多印一行空的「簽名:」文字（會變成一行沒有內容的標籤）。 */
-              + '<b>管理代表意見:</b>\n'+esc(n.mgr_note||'')+'</td></tr>'
-              + (n.mgr_name
-                 ? ('<tr><td class="l" colspan="6">簽名: <span class="stamp-inline">'
-                    + stampHtml(m, sp(n.mgr_id, n.mgr_name, n.mgr_date), n.mgr_date)+'</span></td></tr>')
-                 : '')
+
+              /* ---- 稽核員段 ---- */
+              + '<tr><td colspan="6" class="l" style="height:160px;vertical-align:top;">'
+              + '<div style="display:inline-block;border:1px solid #000;padding:2px 10px;margin-bottom:10px;">'
+              + '不合格類型: '+esc(n.type_label||'')+'</div>'
+              + '<div style="font-weight:bold;">不合格事實描述:</div>' + pre(n.fact)
+              + '<div style="margin-top:10px;" class="pre"><b>違反條文:</b> '+esc(n.clause_ref||'')+'</div>'
+              + signPair(signOne('稽核員', n.auditor_id, n.auditor_name, n.auditor_date),
+                         n.head_name ? signOne('受審查單位主管', n.head_id, n.head_name, n.head_date) : '')
+              + '</td></tr>'
+
+              /* 要求完成期限之後是受稽單位要填的部分，用一條粗線分開 */
+              + '<tr><td class="l" colspan="6" style="border-bottom:2px solid #000;">要求完成期限: '
+              + (n.due_date?dispDate(n.due_date):'')+'</td></tr>'
+
+              /* ---- 受稽單位段（原因分析／糾正／預防，紙本是同一大格） ---- */
+              + '<tr><td colspan="6" class="l" style="height:250px;vertical-align:top;">'
+              + '<div style="font-weight:bold;">原因分析:</div>' + pre(n.cause)
+              + '<div style="font-weight:bold;margin-top:14px;">糾正措施及完成時間:</div>' + pre(n.corrective)
+              + '<div style="font-weight:bold;margin-top:14px;">預防措施及完成時間:</div>' + pre(n.preventive)
+              + signRight('責任主管', n.resp_id, n.resp_name, n.resp_date)
+              + '</td></tr>'
+
+              /* ---- 驗證段 ---- */
+              + '<tr><td colspan="6" class="l" style="height:150px;vertical-align:top;">'
+              + '<div style="font-weight:bold;">糾正和預防措施執行狀況驗證描述:</div>' + pre(n.verify_desc)
+              + '</td></tr>'
+              + '<tr><td colspan="6" class="l" style="height:60px;vertical-align:top;">'
+              + '<div style="font-weight:bold;">結束:</div>' + pre(n.close_note)
+              + signRight('稽核組長', n.leader_id, n.leader_name, n.leader_date)
+              + '</td></tr>'
+
+              /* ---- 管理代表段（紙本的「簽名」就是圖章本身，不另印一行空標籤） ---- */
+              + '<tr><td colspan="6" class="l" style="height:80px;vertical-align:top;">'
+              + '<div style="font-weight:bold;">管理代表意見:</div>' + pre(n.mgr_note)
+              + (n.mgr_name ? signRight('簽名', n.mgr_id, n.mgr_name, n.mgr_date) : '')
+              + '</td></tr>'
               + '</table>';
             logPrint('內稽不符合通知單 '+(n.nc_no||('#'+id)), 'ia_nc', id);
             iaPrintWindow('內稽不符合通知單 '+(n.nc_no||''), h, '', m.doc_no, false);

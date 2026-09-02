@@ -1111,7 +1111,11 @@ case 'nc_save_sec2': {
         $respName = (string)($q->fetchColumn() ?: '');
         if ($respName === '') jerr('責任主管不存在');
     }
-    $headNote = trim((string)($_POST['head_note'] ?? ''));       // 單位主管核示（使用者要求）
+    // 「單位主管核示」2026-08-27 起紙本與畫面都沒有這一格了（使用者：完全不需要這行）。
+    // 欄位保留在 DB 不刪，沒送這個參數時就沿用原值，不要把既有內容洗成空的。
+    $headNote = array_key_exists('head_note', $_POST)
+              ? (trim((string)$_POST['head_note']) ?: null)
+              : ($n['head_note'] ?? null);
     $headDate = iaDate($_POST['head_date'] ?? '') ?: $today;
     $respDate = iaDate($_POST['resp_date'] ?? '') ?: $today;
 
@@ -1121,7 +1125,7 @@ case 'nc_save_sec2': {
                           head_note=?, head_date=?, resp_id=?, resp_name=?, resp_date=?, updated_at=NOW()
                        WHERE nc_id=?")
            ->execute([$cause ?: null, $corr ?: null, $prev ?: null, $headId, $headName,
-                      $headNote ?: null, $headId ? $headDate : null,
+                      $headNote, $headId ? $headDate : null,
                       $respId, $respName, $respId ? $respDate : null, $id]);
         if ($submit && $n['stage'] === 'issued') {
             $db->prepare("UPDATE ia_nc SET stage='replied', updated_at=NOW() WHERE nc_id=?")->execute([$id]);
