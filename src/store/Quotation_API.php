@@ -246,6 +246,20 @@ function qtag_usage_of(PDO $pdo, array $sids): array
     return ['count' => $total, 'per_tag' => $per, 'quote_nos' => $qnos];
 }
 
+// 同一個標籤群組底下不可以有同名子標籤（新增／改名／換群組共用同一份判定；前端也擋一次＝鐵律8）。
+// 比對前先 trim；大小寫由欄位定序（utf8mb4_0900_ai_ci）視為相同。
+// 回傳撞名的那一筆（沒撞名回 null），讓錯誤訊息講得出「是跟哪一個標籤重複」。
+function qtag_name_taken(PDO $pdo, int $groupId, string $name, int $exceptSid = 0): ?array
+{
+    $name = trim($name);
+    if ($groupId <= 0 || $name === '') return null;
+    $q = $pdo->prepare("SELECT sub_tag_id, sub_tag_name FROM quotation_process_sub_tag
+                        WHERE group_id=? AND is_active=1 AND sub_tag_name=? AND sub_tag_id<>? LIMIT 1");
+    $q->execute([$groupId, $name, $exceptSid]);
+    $r = $q->fetch(PDO::FETCH_ASSOC);
+    return $r ?: null;
+}
+
 // 報價單設定權限（比照 views/Sales/quotation_list_NEW.php 的判定；鐵律8：不可只擋前端）
 function qtag_can_settings(PDO $pdo, $uid): bool
 {
@@ -2835,6 +2849,17 @@ try {
             $name = trim($_POST['sub_tag_name'] ?? '');
             $ord  = intval($_POST['sort_order'] ?? 0);
             if (!$name || !$gid) throw new Exception('參數不完整');
+            // 改名時一律以「這個標籤實際所在的群組」為準，不採信前端送來的 group_id
+            $chkGid = $gid;
+            if ($sid) {
+                $gq = $pdo->prepare("SELECT group_id FROM quotation_process_sub_tag WHERE sub_tag_id=?");
+                $gq->execute([$sid]);
+                $curGid = (int)$gq->fetchColumn();
+                if ($curGid) $chkGid = $curGid;
+            }
+            if ($dupTag = qtag_name_taken($pdo, $chkGid, $name, $sid)) {
+                throw new Exception('同一個群組底下已經有「' . $dupTag['sub_tag_name'] . '」這個子標籤了，名稱不可重複。');
+            }
             if ($sid) {
                 $pdo->prepare("UPDATE quotation_process_sub_tag SET sub_tag_name=?,sort_order=? WHERE sub_tag_id=?")
                     ->execute([$name, $ord, $sid]);
@@ -2896,6 +2921,10 @@ try {
             $tg->execute([$tgt]);
             $target = $tg->fetch(PDO::FETCH_ASSOC);
             if (!$target) throw new Exception('目標群組不存在或已停用');
+            if ($dupTag = qtag_name_taken($pdo, $tgt, (string)$tag['sub_tag_name'], $sid)) {
+                throw new Exception('「' . $target['group_name'] . '」底下已經有同名的「' . $dupTag['sub_tag_name']
+                    . '」，不可搬移（同群組內標籤名稱不可重複）。請先改名，或改用「整組移轉」把報價單項目併到那個標籤。');
+            }
 
             $pdo->beginTransaction();
             // 排到目標群組的最後一個

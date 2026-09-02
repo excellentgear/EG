@@ -353,6 +353,10 @@ body { background:var(--bg); }
     color:#8a5a2b; background:#FFF3E0; border:1px solid #E4D3BC; border-radius:3px;
     padding:0 4px; margin-left:3px; font-size:10px; white-space:nowrap;
 }
+.pt-dup-badge {
+    color:#fff; background:#DD5138; border:1px solid #c33f28; border-radius:3px;
+    padding:0 4px; margin-left:3px; font-size:10px; white-space:nowrap; cursor:help;
+}
 .pt-drag-handle { color:#bbb; cursor:grab; padding:0 4px; font-size:13px; }
 .pt-drag-handle:active { cursor:grabbing; }
 .ui-sortable-helper { box-shadow:0 4px 12px rgba(0,0,0,.2); opacity:.95; }
@@ -3116,6 +3120,17 @@ function selectPtGroup(gid) {
     renderPtSubTagList();
     renderPtProcList();
 }
+// 同一個群組底下子標籤名稱不可重複（新增／改名／換群組共用同一份判定；
+// 後端 save_process_sub_tag／move_process_sub_tag 會再擋一次＝鐵律8）。
+function ptNormName(s) { return String(s == null ? '' : s).trim().toLowerCase(); }
+function ptFindDupTag(gid, name, exceptSid) {
+    const g = processTagTree.find(x => x.group_id === gid);
+    if (!g) return null;
+    const n = ptNormName(name);
+    if (!n) return null;
+    return (g.sub_tags || []).find(s => s.sub_tag_id !== exceptSid && ptNormName(s.sub_tag_name) === n) || null;
+}
+
 function renderPtSubTagList() {
     $('#pt-merge-btn').toggle(!!ptSelectedGroupId);
     if (!ptSelectedGroupId) {
@@ -3131,9 +3146,13 @@ function renderPtSubTagList() {
         const usedTag = used
             ? `<small class="pt-used-badge" title="已被 ${used} 筆報價單項目使用，不可刪除；要換群組請用搬移">用 ${used}</small>`
             : '';
+        // 名稱重複（同群組內）：新的一律擋下，但既有的要標出來才有人去處理
+        const dupTag = ptFindDupTag(ptSelectedGroupId, st.sub_tag_name, st.sub_tag_id)
+            ? `<small class="pt-dup-badge" title="同群組內有另一個同名標籤（名稱不可重複）；請改名，或用「整組移轉」把兩個標籤併成一個">重複</small>`
+            : '';
         html += `<div class="pt-group-item ${active?'active':''}" data-sid="${st.sub_tag_id}">
             <span class="pt-drag-handle" title="拖移排序">&#9776;</span>
-            <span style="flex:1;text-align:left;">${escapeHtml(st.sub_tag_name)} <small style="color:#aaa;">(${(st.process_nos||[]).length})</small>${usedTag}</span>
+            <span style="flex:1;text-align:left;">${escapeHtml(st.sub_tag_name)} <small style="color:#aaa;">(${(st.process_nos||[]).length})</small>${usedTag}${dupTag}</span>
             <span style="display:flex;gap:2px;align-items:center;">
                 <span class="pt-move" data-sid="${st.sub_tag_id}" onclick="event.stopPropagation();movePtSubTag($(this).data('sid'))" title="搬移到其他群組">
                     <i class="fa fa-share"></i>
@@ -3174,6 +3193,14 @@ function addPtSubTag() {
     if (!ptSelectedGroupId) return;
     const name = $('#pt-new-sub').val().trim();
     if (!name) return;
+    const dup = ptFindDupTag(ptSelectedGroupId, name, 0);
+    if (dup) {
+        Swal.fire({ icon:'error', title:'名稱重複',
+            html: `這個群組底下已經有「<b>${escapeHtml(dup.sub_tag_name)}</b>」了，同一個群組內的子標籤名稱不可重複。`,
+            confirmButtonText:'知道了' });
+        $('#pt-new-sub').focus().select();
+        return;
+    }
     $.post(API_URL, { action:'save_process_sub_tag', group_id:ptSelectedGroupId, sub_tag_name:name, sort_order:99 }, res => {
         if (res.success) {
             $('#pt-new-sub').val('');
@@ -3198,6 +3225,8 @@ function renamePtSubTag(sid) {
         preConfirm: name => {
             name = name.trim();
             if (!name) { Swal.showValidationMessage('名稱不可為空'); return false; }
+            const dup = ptFindDupTag(ptSelectedGroupId, name, sid);
+            if (dup) { Swal.showValidationMessage('這個群組底下已經有「' + dup.sub_tag_name + '」了，名稱不可重複'); return false; }
             return name;
         }
     }).then(r => {
@@ -3254,9 +3283,19 @@ function movePtSubTag(sid) {
 
     const used    = ptUsage[sid] || 0;
     const typeTxt = t => (t === 'full_process' ? '全製' : '單一');
-    const opts    = targets.map(g =>
-        `<option value="${g.group_id}" data-type="${g.group_type || 'single_process'}">${escapeHtml(g.group_name)}（${typeTxt(g.group_type)}）</option>`
-    ).join('');
+    // 目標群組已經有同名標籤就不給選（同群組內名稱不可重複；後端也會擋＝鐵律8）
+    const opts    = targets.map(g => {
+        const dup = ptFindDupTag(g.group_id, st.sub_tag_name, sid);
+        return `<option value="${g.group_id}" data-type="${g.group_type || 'single_process'}" data-dup="${dup ? 1 : 0}"
+                        ${dup ? 'disabled' : ''}>${escapeHtml(g.group_name)}（${typeTxt(g.group_type)}）${dup ? ' — 已有同名標籤，不可搬移' : ''}</option>`;
+    }).join('');
+    if (targets.every(g => ptFindDupTag(g.group_id, st.sub_tag_name, sid))) {
+        Swal.fire({ icon:'error', title:'無法搬移',
+            html: `其他每一個群組底下都已經有同名的「<b>${escapeHtml(st.sub_tag_name)}</b>」，`
+                + `同群組內標籤名稱不可重複。請先改名，或用「整組移轉」把報價單項目併到那個標籤。`,
+            confirmButtonText:'知道了' });
+        return;
+    }
 
     Swal.fire({
         title: '搬移子標籤',
@@ -3280,6 +3319,8 @@ function movePtSubTag(sid) {
         didOpen: () => {
             $(document).off('focusin.modal');
             const $sel = $('#ptMoveTarget');
+            const first = $sel.find('option:not(:disabled)').first().val();   // 反灰的選項不可當預設值
+            if (first !== undefined) $sel.val(first);
             const paint = () => {
                 const t = $sel.find('option:selected').data('type') || 'single_process';
                 if (t === (cur.group_type || 'single_process')) {
@@ -3294,7 +3335,13 @@ function movePtSubTag(sid) {
             $sel.on('change', paint);
             paint();
         },
-        preConfirm: () => parseInt($('#ptMoveTarget').val()) || 0
+        preConfirm: () => {
+            const v = parseInt($('#ptMoveTarget').val()) || 0;
+            if (!v) { Swal.showValidationMessage('請選擇要搬到哪一個群組'); return false; }
+            const dup = ptFindDupTag(v, st.sub_tag_name, sid);
+            if (dup) { Swal.showValidationMessage('這個群組底下已經有同名的「' + dup.sub_tag_name + '」，不可搬移'); return false; }
+            return v;
+        }
     }).then(r => {
         if (!r.isConfirmed || !r.value) return;
         $.post(API_URL, { action:'move_process_sub_tag', sub_tag_id:sid, target_group_id:r.value }, res => {
