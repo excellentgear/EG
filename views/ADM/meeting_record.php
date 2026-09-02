@@ -137,15 +137,42 @@ foreach ($roleRows as $rr) {
         table.itm-tbl thead th { background:#F7E0BD; color:#5b3a1e; }
         table.itm-tbl textarea { width:100%; min-height:44px; border:1px solid #D8BE93; border-radius:4px; padding:4px 6px; font-size:12.5px; box-sizing:border-box; }
         table.itm-tbl input[type=text], table.itm-tbl input[type=date] { width:100%; border:1px solid #D8BE93; border-radius:4px; padding:3px 5px; font-size:12px; box-sizing:border-box; }
-        .dp-pick { position:relative; border:1px solid #D8BE93; border-radius:4px; background:#fff; padding:2px 3px; min-width:130px; }
-        .dp-tags { display:flex; flex-wrap:wrap; gap:2px; }
-        .dp-tags .tg { background:#F7E0BD; color:#5b3a1e; border-radius:9px; font-size:11px; padding:1px 5px 1px 7px; white-space:nowrap; }
-        .dp-tags .tg i { cursor:pointer; color:#b5762a; margin-left:3px; }
-        .dp-pick > input { width:100%; border:none !important; outline:none; font-size:11.5px; padding:2px 3px !important; }
-        .dp-list { display:none; position:absolute; left:0; right:0; top:100%; z-index:30; background:#fff;
-            border:1px solid #D8BE93; border-radius:0 0 4px 4px; max-height:170px; overflow-y:auto; box-shadow:0 4px 10px rgba(0,0,0,.12); min-width:150px; }
-        .dp-list div { padding:3px 8px; font-size:11.5px; color:#5b3a1e; cursor:pointer; }
-        .dp-list div:hover { background:#FBF0DD; }
+        /* （原本儲存格內的 .dp-pick/.dp-list 下拉已於 2026-09-02 全部改成挑選跳窗，樣式一併移除） */
+        /* 負責部門／指定人員挑選跳窗（2026-09-02 使用者回報「負責人員的選單很糟糕」）：
+           原本是把候選清單塞在表格儲存格內的 .dp-list（position:absolute + left/right:0），
+           寬度只能等於那一欄（約 130px），「康信銘（總經理室 廠長）」這種字串整個擠成一團，
+           而且它還被外層會捲動的 .m-body 裁掉。改成獨立跳窗＝有足夠寬度，且先選部門再選人。 */
+        .pick-mask { z-index:1060; }                 /* 疊在編輯／調整負責人跳窗之上 */
+        .pick-sel { display:flex; flex-wrap:wrap; gap:4px; min-height:26px; border:1px solid #EADFC8;
+            border-radius:6px; padding:5px 7px; background:#FBF6EC; }
+        .pick-sel .tg { background:#F7E0BD; color:#5b3a1e; border-radius:10px; font-size:12px; padding:2px 7px 2px 9px; white-space:nowrap; }
+        .pick-sel .tg i { cursor:pointer; color:#b5762a; margin-left:4px; }
+        .pick-sel .empty { color:#b0a390; font-size:12px; }
+        .pick-list { max-height:300px; overflow-y:auto; border:1px solid #EADFC8; border-radius:6px; margin-top:8px; }
+        /* 一定要連 .mt-modal .m-body 一起寫：本頁既有的 `.mt-modal .m-body label{display:block;margin:9px 0 3px}`
+           特異度(0,2,1)高過單一 class 的 .pick-row(0,1,0)，只寫 .pick-row 的話 display:flex 會被蓋掉、
+           整列退回 block，裡面的 span 變成 inline ＝ min-width 完全無效，部門/職稱/姓名 三欄會黏成一串
+           「生管組組長何沐桐」。這個只有實際渲染量 rect 才看得出來，看原始碼與 node --check 都抓不到。 */
+        .mt-modal .m-body label.pick-row { display:flex; align-items:baseline; gap:8px; padding:5px 10px;
+            font-size:12.5px; color:#5b3a1e; cursor:pointer; border-bottom:1px solid #F5EDDF; margin:0; font-weight:normal; }
+        .mt-modal .m-body label.pick-row:last-child { border-bottom:none; }
+        .mt-modal .m-body label.pick-row:hover { background:#FBF0DD; }
+        .mt-modal .m-body label.pick-row.on { background:#FDF3E2; }
+        .mt-modal .m-body label.pick-row.lock { color:#8a6d45; cursor:not-allowed; background:#F5EFE4; }
+        .mt-modal .m-body label.pick-row input { margin:0; width:auto; flex:0 0 auto; }
+        .mt-modal .m-body label.pick-row .p-dept { color:#8a6d45; flex:0 0 88px; }
+        .mt-modal .m-body label.pick-row .p-pos  { color:#8a6d45; flex:0 0 66px; }
+        .mt-modal .m-body label.pick-row .p-name { font-weight:bold; flex:0 0 auto; }
+        .mt-modal .m-body label.pick-row .p-more { color:#b0956f; font-size:11.5px; }
+        .pick-empty { color:#b0a390; font-size:12px; padding:10px; }
+        .pick-count { font-size:12px; color:#8a6d45; margin-top:6px; }
+        /* 儲存格內只留已選標籤＋一顆按鈕，不再塞下拉清單 */
+        .own-cell .tg { background:#F7E0BD; color:#5b3a1e; border-radius:9px; font-size:11px; padding:1px 5px 1px 7px;
+            white-space:nowrap; display:inline-block; margin:0 2px 2px 0; }
+        .own-cell .tg i { cursor:pointer; color:#b5762a; margin-left:3px; }
+        .own-btn { font-size:11px; border:1px dashed #D8BE93; background:#fff; color:#8A5A2B; border-radius:4px;
+            cursor:pointer; padding:2px 7px; width:100%; }
+        .own-btn:hover { background:#FBF0DD; }
         .confirm-yes { color:#7a5217; font-weight:bold; font-size:11.5px; }
         .confirm-no { color:#b0a390; font-size:11.5px; }
         .mt-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; background:#fff; }
@@ -487,6 +514,25 @@ foreach ($roleRows as $rr) {
         <button class="b-ok" onclick="ownerAdjustSave()">儲存並通知</button></div>
 </div></div>
 
+<!-- 負責部門／指定人員挑選（2026-09-02 使用者回報選單很糟糕）：先選部門再選人，放在最後面才能疊在其他跳窗之上 -->
+<div class="mt-mask pick-mask" id="pickMask"><div class="mt-modal" style="max-width:600px;">
+    <div class="m-head"><span id="pickTitle">選擇人員</span><span class="m-close" onclick="closeMask('pickMask')">✕</span></div>
+    <div class="m-body">
+        <label style="margin-top:0;">已選擇</label>
+        <div class="pick-sel" id="pickSel"></div>
+        <div id="pickDeptRow">
+            <label>先選部門<span style="font-weight:normal;color:#8a6d45;font-size:11.5px;">（含子部門；兼任該部門的人也會列出）</span></label>
+            <select id="pickDept" data-eg-filter="輸入部門名稱篩選…"></select>
+        </div>
+        <label>關鍵字（姓名／部門／職稱）</label>
+        <input type="text" id="pickKw" placeholder="不確定在哪個部門時直接打姓名…" autocomplete="off">
+        <div class="pick-list" id="pickList"></div>
+        <div class="pick-count" id="pickCount"></div>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('pickMask')">取消</button>
+        <button class="b-ok" onclick="pickConfirm()">確定</button></div>
+</div></div>
+
 <!-- 使用說明 modal（鐵律7） -->
 <div class="mt-mask" id="helpUseMask"><div class="mt-modal wide">
     <div class="m-head"><span>使用說明 — 會議紀錄管理</span><span class="m-close" onclick="closeMask('helpUseMask')">✕</span></div>
@@ -511,7 +557,8 @@ foreach ($roleRows as $rr) {
         　－<b>回簽中要增減負責人不必整張撤回</b>：檢視畫面每個項目的「負責人/部門」欄下方有<b>「調整負責人」</b>（記錄人本人或管理員），可單獨增減<b>這一項</b>尚未回簽的負責部門／指定人員，其餘內容與其他項目完全不動。<b>已經回簽的對象不可移除</b>（移除了他的確認簽名會跟著失效），<b>也不可切換「負責部門↔指定人員」模式</b>（那等於整項重新定義，請走撤回）。新加入的人會併進<b>這一項原本那則通知</b>的收件人並收到推播（不另發第二則、不重複打擾已收到的人），被移除且尚未回覆的人手上那則通知會同時失效；移除後若剩下的都已回簽，該項目即算完成，整張都完成時會自動送交主席簽章。<br>
         <b>⑤負責人/部門項目確認</b>：要項的「負責人/部門」欄可點連結<b>切換兩種模式（二擇一，切換會清空另一種的選擇）</b>：<br>
         　－<b>選部門</b>（可多選）：<b>每個負責部門各要一位代表簽名</b>，系統依序自動算出誰要簽（現場只有算出的那位本人能輸入密碼簽這格）：①該部門本次以<b>主要角色</b>出席的主管優先（有設職級的職稱，如經理/副理/課長/組長等）②該部門沒有主要角色主管出席，才由<b>兼任</b>該部門主管的出席者代簽 ③連兼任主管都沒有，才由該部門出席人員中職稱排序最高者代簽（②③兩種情況章旁都標示「(代)」，不特別區分是否兼任）。<br>
-        　－<b>指定人員</b>（可多選、可打字搜尋全公司人員）：直接指名的人只要本次有出席就是必簽者，不套用主管優先判定；沒指定到部門，不論那位人員屬於哪個部門都是他本人簽。清單會把每個人的<b>所有職務都列出來</b>（主要職務在前，兼任的加註「（兼任）」，例：<i>何沐桐（技術部 工程師／生管組 組長（兼任）</i>），關鍵字也可以打<b>部門或職稱</b>搜尋。<br>
+        　－<b>指定人員</b>（可多選）：直接指名的人只要本次有出席就是必簽者，不套用主管優先判定；沒指定到部門，不論那位人員屬於哪個部門都是他本人簽。<br>
+        　－<b>怎麼挑</b>：儲存格內只顯示已選的人（按標籤上的 × 可直接移除），按<b>「選擇人員」</b>開挑選跳窗——<b>先選部門、再從該部門的人裡面挑</b>（部門<b>含子部門</b>，例如選「資材部」會一併列出生管組／採購組／倉管組的人；<b>兼任</b>該部門的人也會出現，並顯示他在<b>該部門</b>的職稱）。不確定在哪個部門時，把部門留在「全部部門」直接打姓名即可，關鍵字也吃部門與職稱。清單一列一人、<b>部門／職稱／姓名</b>分欄對齊，兼多個職務的人會標「＋另有 N 個職務」（滑鼠移上去看全部）。「選擇負責部門」是同一個跳窗。<br>
         兩種模式下，負責人（部門或指定人員）本次沒有人出席、或現場代表尚未來得及簽名時，「存檔並通知」都會改發通知（該部門本次所有出席人員＋部門主管，或指定人員本人）請對方回覆確認，任一人回覆即算完成，回覆內容會顯示在項目下方；同一份通知一旦有人完成回覆就會自動關閉，其他被通知的人之後開啟只會看到唯讀狀態，不會再重複送出回覆蓋掉別人。<br>
         <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。已完成核准的會議記錄在「檢視」畫面也能再插入/更新：一般人插入後會<b>清空目前簽核紀錄改回草稿</b>，需重新送出取得主席／總經理簽章；<b>超級管理員</b>插入後<b>維持已核准狀態</b>，不需重新送審。
         <h4>重要行為</h4>
@@ -1032,38 +1079,26 @@ function toggleOwnerMode(kind,i){
     else { a.owner_mode = 'user'; a.owner_depts = []; a.owner_users = a.owner_users || []; }
     renderItems(kind);
 }
-function deptPickHtml(kind,i,ids){
-    var tags = '';
-    ids.forEach(function(id){ var d=deptById(id); if(d) tags += '<span class="tg">'+esc(d.name)+'<i class="fa fa-times" onclick="itmDeptDel(\''+kind+'\','+i+',\''+id+'\')"></i></span>'; });
-    return '<div class="dp-pick itm-dp" data-kind="'+kind+'" data-i="'+i+'"><div class="dp-tags">'+tags+'</div>'
-         + '<input type="text" class="itm-dp-kw" placeholder="選部門…" data-eg-skip autocomplete="off"><div class="dp-list"></div></div>';
-}
-function itmDeptDel(kind,i,id){
-    var a = itemsArr(kind)[i]; if (!a) return;
-    a.owner_depts = a.owner_depts.filter(function(x){ return String(x)!==String(id); });
-    renderItems(kind);
-}
-$(document).on('focus input', '.itm-dp-kw', function(){
-    var $pick = $(this).closest('.itm-dp'), kind = $pick.data('kind'), i = $pick.data('i');
-    var a = itemsArr(kind)[i]; if (!a) return;
-    var kw = $.trim($(this).val()).toLowerCase(), h = '';
-    DEPTS.forEach(function(d){
-        if (kw && d.name.toLowerCase().indexOf(kw)<0) return;
-        var on = (a.owner_depts||[]).some(function(x){ return String(x)===String(d.id); });
-        h += '<div data-id="'+d.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(d.name)+'</div>';
-    });
-    $pick.find('.dp-list').html(h || '<div style="color:#b0a390;">查無部門</div>').show();
-});
-$(document).on('click', '.itm-dp .dp-list div[data-id]', function(){
-    var $pick = $(this).closest('.itm-dp'), kind = $pick.data('kind'), i = $pick.data('i'), id = String($(this).data('id'));
-    var a = itemsArr(kind)[i]; if (!a) return;
-    a.owner_depts = a.owner_depts || [];
-    var idx = a.owner_depts.findIndex(function(x){ return String(x)===id; });
-    if (idx>=0) a.owner_depts.splice(idx,1); else a.owner_depts.push(id);
-    renderItems(kind);
-});
-/* 指定人員挑選器：與部門挑選器同一套UI模式(標籤+打字篩選)，資料來源改用全員清單 ALL_PEOPLE(超過10筆一律可打字篩選，鐵則見ai-rules/08)。 */
+/* ---------- 負責部門／指定人員挑選（2026-09-02 使用者回報「負責人員的選單很糟糕」全面改寫） ----------
+   舊版把候選清單塞在表格儲存格裡（.dp-list 靠 position:absolute 撐開），寬度只能等於那一欄約 130px，
+   「康信銘（總經理室 廠長）」整串擠成一團看不清楚，而且清單還會被外層會捲動的 .m-body 裁掉。
+   改成獨立跳窗：①**先選部門再選人**（使用者指定）②一列一人、部門／職稱／姓名分欄對齊（鐵則5 的欄位順序）
+   ③不確定在哪個部門時可直接打姓名跨部門搜尋。部門與人員共用同一個跳窗，只差要不要顯示部門下拉。
+   儲存格內只留「已選標籤＋一顆按鈕」，不再有任何下拉。 */
 function personById(id){ for (var i=0;i<ALL_PEOPLE.length;i++) if (String(ALL_PEOPLE[i].id)===String(id)) return ALL_PEOPLE[i]; return null; }
+/* 人員的職務顯示(2026-09-01 使用者回報)：一個人可能同時掛主職與兼任(例：技術部 工程師＋生管組 組長)，
+   後端 people_all 已把**所有**職務都帶回來(posts_text，主職在前、兼任加註「（兼任）」)。 */
+function personPostsText(p){
+    if (!p) return '';
+    if (p.posts_text) return p.posts_text;
+    return $.trim((p.dept_name||'') + ' ' + (p.position_name||''));   // 舊快取或沒掛職務的人退回單一職務
+}
+/* 只要主要職務(原職位)——標籤放在會議要項表格的儲存格裡，兼三個職務的人整串印出來會撐爆欄位 */
+function personMainPostText(p){
+    if (!p) return '';
+    if (p.posts && p.posts.length) return p.posts[0].label;   // posts 已由後端排成主職在前
+    return $.trim((p.dept_name||'') + ' ' + (p.position_name||''));
+}
 /* 「負責人/部門」欄顯示文字：指定人員模式列人名，部門模式列部門名(二擇一，owner_users有值時優先)。 */
 function ownerDisplayText(it){
     var ownerUsers = it.owner_users ? String(it.owner_users).split(',') : [];
@@ -1072,64 +1107,167 @@ function ownerDisplayText(it){
     }
     return (it.owner_depts?String(it.owner_depts).split(','):[]).map(function(id){ var d=deptById(id); return d?d.name:''; }).filter(Boolean).join('、');
 }
-/* 人員的職務顯示(2026-09-01 使用者回報)：一個人可能同時掛主職與兼任(例：技術部 工程師＋生管組 組長)，
-   後端 people_all 已把**所有**職務都帶回來(posts_text，主職在前、兼任加註「（兼任）」)。
-   舊版只印共用庫挑出來的那一筆＝職級最高的那個，於是清單上只看得到兼任的部門，原職位整個不見。 */
-function personPostsText(p){
-    if (!p) return '';
-    if (p.posts_text) return p.posts_text;
-    return $.trim((p.dept_name||'') + ' ' + (p.position_name||''));   // 舊快取或沒掛職務的人退回單一職務
+var PICK = null;   // {mode:'user'|'dept', ids:[], locked:[], apply:function(ids){}}
+
+/* 某部門的所有子孫部門（含自己）：組織是樹狀的，選「資材部」要看得到生管組/採購組/倉管組的人，
+   與全站 eg_org_dept_ids() 的「含子部門認列」同一個口徑，不要只比單一 id。 */
+function deptSubtreeIds(rootId){
+    var out = [String(rootId)], added = true;
+    while (added){
+        added = false;
+        DEPTS.forEach(function(d){
+            if (d.parent_id === null || d.parent_id === undefined) return;
+            if (out.indexOf(String(d.id))>=0) return;
+            if (out.indexOf(String(d.parent_id))>=0){ out.push(String(d.id)); added = true; }
+        });
+    }
+    return out;
 }
-/* 已選取的標籤(chip)顯示「主要職務」就好，滑鼠移上去才看全部職務——標籤是塞在會議要項表格的儲存格裡，
-   兼三個職務的人(例：董事長室 董事長／總經理室 總經理／技術部 課長)整串印出來會把欄位撐爆。
-   要「看到所有兼任與原職位」的是下方的候選清單，那裡一律全列。 */
-function personMainPostText(p){
-    if (!p) return '';
-    if (p.posts && p.posts.length) return p.posts[0].label;   // posts 已由後端排成主職在前
-    return $.trim((p.dept_name||'') + ' ' + (p.position_name||''));
+/* 部門下拉依層級縮排，一眼看得出上下關係 */
+function deptOptionHtml(sel){
+    var h = '<option value="">全部部門</option>';
+    DEPTS.forEach(function(d){
+        var pad = new Array(Math.max(0,(+d.level||1)-1)+1).join('　');
+        h += '<option value="'+d.id+'"'+(String(sel)===String(d.id)?' selected':'')+'>'+pad+esc(d.name)+'</option>';
+    });
+    return h;
 }
-function userPickHtml(kind,i,ids){
+/* 這個人在指定部門底下的職務（用來在依部門篩選時顯示「該部門的職稱」而不是主職） */
+function personPostIn(p, deptIds){
+    var ps = p.posts||[];
+    for (var i=0;i<ps.length;i++) if (deptIds.indexOf(String(ps[i].dept_id))>=0) return ps[i];
+    return null;
+}
+function openPick(opts){
+    PICK = {mode:opts.mode, ids:(opts.ids||[]).map(String), locked:(opts.locked||[]).map(String), apply:opts.apply};
+    $('#pickTitle').text(opts.title || (opts.mode==='user'?'選擇指定人員':'選擇負責部門'));
+    $('#pickDeptRow').toggle(opts.mode==='user');       // 選部門時不需要再多一層部門下拉
+    $('#pickDept').html(deptOptionHtml('')).val('');
+    $('#pickKw').val('').attr('placeholder', opts.mode==='user'?'不確定在哪個部門時直接打姓名…':'輸入部門名稱…');
+    renderPick();
+    openMask('pickMask');
+}
+function renderPickSel(){
+    var h = '';
+    PICK.ids.forEach(function(id){
+        var lock = PICK.locked.indexOf(String(id))>=0, nm;
+        if (PICK.mode==='user'){ var p=personById(id); nm = p ? p.user_cname+'（'+personMainPostText(p)+'）' : ('#'+id); }
+        else { var d=deptById(id); nm = d ? d.name : ('#'+id); }
+        h += '<span class="tg"'+(lock?' style="background:#E7D2AE;" title="已回簽，不可移除"':'')+'>'
+           + (lock?'✔ ':'')+esc(nm)
+           + (lock?'':'<i class="fa fa-times" onclick="pickToggle(\''+id+'\')"></i>')+'</span>';
+    });
+    $('#pickSel').html(h || '<span class="empty">尚未選擇</span>');
+}
+function renderPick(){
+    if (!PICK) return;
+    renderPickSel();
+    var kw = $.trim($('#pickKw').val()).toLowerCase(), h = '', n = 0;
+    if (PICK.mode==='dept'){
+        DEPTS.forEach(function(d){
+            if (kw && d.name.toLowerCase().indexOf(kw)<0) return;
+            var on = PICK.ids.indexOf(String(d.id))>=0, lock = PICK.locked.indexOf(String(d.id))>=0;
+            var pad = new Array(Math.max(0,(+d.level||1)-1)+1).join('　');
+            h += '<label class="pick-row'+(on?' on':'')+(lock?' lock':'')+'" data-id="'+d.id+'">'
+               + '<input type="checkbox"'+(on?' checked':'')+(lock?' disabled':'')+'>'
+               + '<span class="p-name">'+pad+esc(d.name)+'</span>'
+               + (lock?'<span class="p-more">已回簽，不可移除</span>':'')+'</label>';
+            n++;
+        });
+    } else {
+        var deptId = $('#pickDept').val();
+        var sub = deptId ? deptSubtreeIds(deptId) : null;
+        // 有篩部門時依「該部門那筆職務」重新排序（鐵則5：部門/職稱 sort_order，不是姓名筆畫）。
+        // 不重排的話會沿用當事人主職的排序，兼任組長的人就被排在組員後面，看起來像清單壞掉。
+        var people = ALL_PEOPLE;
+        if (sub){
+            people = ALL_PEOPLE.filter(function(p){ return !!personPostIn(p, sub); }).slice();
+            people.sort(function(a,b){
+                var pa=personPostIn(a,sub), pb=personPostIn(b,sub);
+                return (pa.dept_sort-pb.dept_sort) || (pa.position_sort-pb.position_sort)
+                    || String(a.user_cname).localeCompare(String(b.user_cname));
+            });
+        }
+        people.forEach(function(p){
+            var post = sub ? personPostIn(p, sub) : null;
+            var full = personPostsText(p);
+            if (kw && p.user_cname.toLowerCase().indexOf(kw)<0 && full.toLowerCase().indexOf(kw)<0) return;
+            var on = PICK.ids.indexOf(String(p.id))>=0, lock = PICK.locked.indexOf(String(p.id))>=0;
+            // 依部門篩選時顯示「該部門的職稱」；沒篩部門就顯示主要職務，其餘兼任收在後面的灰字與 tooltip
+            var show = post || ((p.posts&&p.posts.length) ? p.posts[0] : null);
+            var others = (p.posts||[]).length - 1;
+            h += '<label class="pick-row'+(on?' on':'')+(lock?' lock':'')+'" data-id="'+p.id+'" title="'+esc(full)+'">'
+               + '<input type="checkbox"'+(on?' checked':'')+(lock?' disabled':'')+'>'
+               + '<span class="p-dept">'+esc(show?show.dept_name:'')+'</span>'
+               + '<span class="p-pos">'+esc(show?show.position_name:'')+'</span>'
+               + '<span class="p-name">'+esc(p.user_cname)+'</span>'
+               + (show&&!show.is_main?'<span class="p-more">（兼任）</span>':'')
+               + (others>0?'<span class="p-more">＋另有 '+others+' 個職務</span>':'')
+               + (lock?'<span class="p-more">已回簽，不可移除</span>':'')+'</label>';
+            n++;
+        });
+    }
+    $('#pickList').html(h || '<div class="pick-empty">查無符合的'+(PICK.mode==='user'?'人員':'部門')+'</div>');
+    $('#pickCount').text('共 '+n+' 筆，已選 '+PICK.ids.length+' 筆');
+}
+function pickToggle(id){
+    if (!PICK) return;
+    id = String(id);
+    var i = PICK.ids.indexOf(id);
+    if (i>=0){
+        if (PICK.locked.indexOf(id)>=0){ alert('此對象已經回簽完成，不可移除。'); return; }
+        PICK.ids.splice(i,1);
+    } else PICK.ids.push(id);
+    renderPick();
+}
+$(document).on('change', '#pickDept', renderPick);
+$(document).on('input', '#pickKw', renderPick);
+$(document).on('click', '#pickList .pick-row', function(e){
+    e.preventDefault();                                  // label 內的 checkbox 由 renderPick 重畫決定勾選狀態
+    if (!$(this).hasClass('lock')) pickToggle($(this).data('id'));
+});
+function pickConfirm(){
+    if (!PICK) return;
+    var apply = PICK.apply, ids = PICK.ids.slice();
+    closeMask('pickMask');
+    if (apply) apply(ids);
+}
+
+/* 儲存格內的顯示：已選標籤（可直接按 × 移除）＋一顆開啟挑選跳窗的按鈕 */
+function ownerCellHtml(kind,i,mode,ids){
     var tags = '';
     ids.forEach(function(id){
-        var p=personById(id); if(!p) return;
-        var mt = personMainPostText(p), pt = personPostsText(p);
-        tags += '<span class="tg" title="'+esc(pt)+'">'+esc(p.user_cname)+(mt?'('+esc(mt)+')':'')
-              + '<i class="fa fa-times" onclick="itmUserDel(\''+kind+'\','+i+',\''+id+'\')"></i></span>';
+        if (mode==='user'){
+            var p=personById(id); if(!p) return;
+            tags += '<span class="tg" title="'+esc(personPostsText(p))+'">'+esc(p.user_cname)
+                  + '<i class="fa fa-times" onclick="ownerCellDel(\''+kind+'\','+i+',\''+mode+'\',\''+id+'\')"></i></span>';
+        } else {
+            var d=deptById(id); if(!d) return;
+            tags += '<span class="tg">'+esc(d.name)
+                  + '<i class="fa fa-times" onclick="ownerCellDel(\''+kind+'\','+i+',\''+mode+'\',\''+id+'\')"></i></span>';
+        }
     });
-    return '<div class="dp-pick itm-up" data-kind="'+kind+'" data-i="'+i+'"><div class="dp-tags">'+tags+'</div>'
-         + '<input type="text" class="itm-up-kw" placeholder="搜尋姓名／部門／職稱…" data-eg-skip autocomplete="off"><div class="dp-list"></div></div>';
+    return '<div class="own-cell">' + (tags || '<span style="font-size:11px;color:#b0a390;">尚未指定</span>')
+         + '<button type="button" class="own-btn" style="margin-top:3px;" onclick="openOwnerPick(\''+kind+'\','+i+',\''+mode+'\')">'
+         + '<i class="fa fa-plus"></i> ' + (mode==='user'?'選擇人員':'選擇部門') + '</button></div>';
 }
-function itmUserDel(kind,i,id){
+function ownerCellDel(kind,i,mode,id){
     var a = itemsArr(kind)[i]; if (!a) return;
-    a.owner_users = a.owner_users.filter(function(x){ return String(x)!==String(id); });
+    var key = mode==='user' ? 'owner_users' : 'owner_depts';
+    a[key] = (a[key]||[]).filter(function(x){ return String(x)!==String(id); });
     renderItems(kind);
 }
-$(document).on('focus input', '.itm-up-kw', function(){
-    var $pick = $(this).closest('.itm-up'), kind = $pick.data('kind'), i = $pick.data('i');
+function openOwnerPick(kind,i,mode){
     var a = itemsArr(kind)[i]; if (!a) return;
-    var kw = $.trim($(this).val()).toLowerCase(), h = '', n = 0;
-    ALL_PEOPLE.forEach(function(p){
-        if (n >= 30) return; // 全員清單可能上百筆，篩選後只列前30筆避免卡頓，打更精確的關鍵字即可縮小範圍
-        var pt = personPostsText(p);
-        // 職務全部列出來以後，關鍵字也要能打部門/職稱(例如打「生管」找兼任生管組的人)，否則畫面看得到卻搜不到
-        if (kw && p.user_cname.toLowerCase().indexOf(kw)<0 && pt.toLowerCase().indexOf(kw)<0) return;
-        var on = (a.owner_users||[]).some(function(x){ return String(x)===String(p.id); });
-        h += '<div data-id="'+p.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(p.user_cname)
-           + (pt?'<span style="color:#8a6d45;">（'+esc(pt)+'）</span>':'')+'</div>';
-        n++;
-    });
-    $pick.find('.dp-list').html(h || '<div style="color:#b0a390;">查無人員</div>').show();
-});
-$(document).on('click', '.itm-up .dp-list div[data-id]', function(){
-    var $pick = $(this).closest('.itm-up'), kind = $pick.data('kind'), i = $pick.data('i'), id = String($(this).data('id'));
-    var a = itemsArr(kind)[i]; if (!a) return;
-    a.owner_users = a.owner_users || [];
-    var idx = a.owner_users.findIndex(function(x){ return String(x)===id; });
-    if (idx>=0) a.owner_users.splice(idx,1); else a.owner_users.push(id);
-    renderItems(kind);
-});
-$(document).on('click', function(e){ if (!$(e.target).closest('.itm-up').length) $('.itm-up .dp-list').hide(); });
-$(document).on('click', function(e){ if (!$(e.target).closest('.itm-dp').length) $('.itm-dp .dp-list').hide(); });
+    var key = mode==='user' ? 'owner_users' : 'owner_depts';
+    openPick({mode:mode, ids:(a[key]||[]).map(String), apply:function(ids){
+        var b = itemsArr(kind)[i]; if (!b) return;
+        b[key] = ids;
+        renderItems(kind);
+    }});
+}
+function userPickHtml(kind,i,ids){ return ownerCellHtml(kind,i,'user',ids); }
+function deptPickHtml(kind,i,ids){ return ownerCellHtml(kind,i,'dept',ids); }
 
 /* 出貨目標達成率快照：內容與 Shipping_Analysis_new.php 的「月份出貨KPI週報」完全相同(4週明細+合計+大額前三名)，
    共用同一份 kpi_lib.php 算出的資料結構，畫面/檢視/列印三處都呼叫這支 kpiReportHtml() 產生內容，避免各刻一份對不起來。 */
@@ -1525,19 +1663,26 @@ function renderOwnerAdjust(){
     if (!OADJ) return;
     var isUser = OADJ.mode==='user', tags = '';
     OADJ.ids.forEach(function(id){
-        var lock = OADJ.locked.indexOf(String(id))>=0;
-        var nm;
+        var lock = OADJ.locked.indexOf(String(id))>=0, nm;
         if (isUser){ var p=personById(id); nm = p ? p.user_cname+(personMainPostText(p)?'（'+personMainPostText(p)+'）':'') : ('#'+id); }
         else { var d=deptById(id); nm = d ? d.name : ('#'+id); }
         tags += '<span class="tg"'+(lock?' style="background:#E7D2AE;" title="已回簽，不可移除"':'')+'>'
               + (lock?'✔ ':'')+esc(nm)
               + (lock?'':'<i class="fa fa-times" onclick="oadjDel(\''+id+'\')"></i>')+'</span>';
     });
+    // 挑選一律走共用的 openPick() 跳窗（先選部門再選人），不要在這裡再刻一套下拉＝兩邊操作方式會不一樣
     $('#oadjBody').html('<label style="font-size:12px;">'+(isUser?'指定人員':'負責部門')+'</label>'
-        + '<div class="dp-pick oadj-pick" style="min-height:30px;"><div class="dp-tags">'
-        + (tags || '<span style="font-size:11.5px;color:#b0a390;">尚未指定</span>') + '</div>'
-        + '<input type="text" class="oadj-kw" placeholder="'+(isUser?'搜尋姓名／部門／職稱…':'選部門…')+'" data-eg-skip autocomplete="off">'
-        + '<div class="dp-list"></div></div>');
+        + '<div class="pick-sel">' + (tags || '<span class="empty">尚未指定</span>') + '</div>'
+        + '<button type="button" class="b-att wt" style="margin-top:6px;" onclick="oadjPick()">'
+        + '<i class="fa fa-plus"></i> ' + (isUser?'選擇人員':'選擇部門') + '</button>');
+}
+function oadjPick(){
+    if (!OADJ) return;
+    openPick({mode:OADJ.mode, ids:OADJ.ids, locked:OADJ.locked, apply:function(ids){
+        if (!OADJ) return;
+        OADJ.ids = ids;
+        renderOwnerAdjust();
+    }});
 }
 function oadjDel(id){
     if (!OADJ) return;
@@ -1545,39 +1690,6 @@ function oadjDel(id){
     OADJ.ids = OADJ.ids.filter(function(x){ return String(x)!==String(id); });
     renderOwnerAdjust();
 }
-$(document).on('focus input', '.oadj-kw', function(){
-    if (!OADJ) return;
-    var kw = $.trim($(this).val()).toLowerCase(), h = '', n = 0;
-    if (OADJ.mode==='user'){
-        ALL_PEOPLE.forEach(function(p){
-            if (n>=30) return;
-            var pt = personPostsText(p);
-            if (kw && p.user_cname.toLowerCase().indexOf(kw)<0 && pt.toLowerCase().indexOf(kw)<0) return;
-            var on = OADJ.ids.some(function(x){ return String(x)===String(p.id); });
-            h += '<div data-id="'+p.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(p.user_cname)
-               + (pt?'<span style="color:#8a6d45;">（'+esc(pt)+'）</span>':'')+'</div>';
-            n++;
-        });
-    } else {
-        DEPTS.forEach(function(d){
-            if (kw && d.name.toLowerCase().indexOf(kw)<0) return;
-            var on = OADJ.ids.some(function(x){ return String(x)===String(d.id); });
-            h += '<div data-id="'+d.id+'" style="'+(on?'color:#b0a390;':'')+'">'+(on?'✔ ':'')+esc(d.name)+'</div>';
-        });
-    }
-    $(this).closest('.oadj-pick').find('.dp-list').html(h || '<div style="color:#b0a390;">查無資料</div>').show();
-});
-$(document).on('click', '.oadj-pick .dp-list div[data-id]', function(){
-    if (!OADJ) return;
-    var id = String($(this).data('id'));
-    var i = OADJ.ids.findIndex(function(x){ return String(x)===id; });
-    if (i>=0){
-        if (OADJ.locked.indexOf(id)>=0){ alert('此對象已經回簽完成，不可移除。'); return; }
-        OADJ.ids.splice(i,1);
-    } else OADJ.ids.push(id);
-    renderOwnerAdjust();
-});
-$(document).on('click', function(e){ if (!$(e.target).closest('.oadj-pick').length) $('.oadj-pick .dp-list').hide(); });
 function ownerAdjustSave(){
     if (!OADJ) return;
     // 前端先擋一次（後端同規則再擋一次）：被移除的已回簽對象、以及「一個都沒留」的情況要問清楚

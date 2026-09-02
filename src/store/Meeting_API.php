@@ -563,6 +563,11 @@ case 'people_all': {
             'dept_name'     => (string)$p['dept_name'],
             'position_name' => (string)$p['position_name'],
             'is_main'       => (int)$p['is_main'],
+            // 排序值一起帶出去：前端「先選部門再選人」時要依**該部門那筆職務**排序（鐵則5 依部門/職稱
+            // sort_order 而非姓名筆畫）。少了這兩個值，篩生管組時會沿用當事人主職的排序，
+            // 於是兼任組長的人被排在組員後面，看起來像清單壞掉。
+            'dept_sort'     => (int)$p['dept_sort'],
+            'position_sort' => (int)$p['position_sort'],
             'label'         => trim($p['dept_name'] . ' ' . $p['position_name']) . ($p['is_main'] ? '' : '（兼任）'),
         ], $ps);
     };
