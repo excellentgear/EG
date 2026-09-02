@@ -835,7 +835,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 白名單欄位，避免被塞進奇怪的東西
             $allowed = ['stroke', 'width', 'lineEnds', 'lineStyle', 'fill', 'fillOn', 'textColor', 'fontSize', 'bold', 'underline',
                         'textBg', 'textBgOn', 'balloonSize', 'dcShape', 'dcSize', 'stampSize', 'maskColor', 'cropTransparent',
-                        'connectKind', 'dimStyle'];
+                        'connectKind', 'dimStyle', 'frameClip'];   // frameClip 原本漏在白名單外＝圖框裁切的開關一直存不起來
             $clean = [];
             foreach ($allowed as $k) if (array_key_exists($k, $prefs)) $clean[$k] = $prefs[$k];
             // 每個繪圖工具各自的線條設定（畫筆/直線/兩點連線/矩形/橢圓/標註各記各的，互不覆蓋）
@@ -1861,7 +1861,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             <b style="color:#6fc3ff;">② 編修與遮蓋</b>
             <ul style="padding-left:18px;margin:4px 0 10px;">
                 <li>畫筆(B)/直線(L)/矩形(R)/橢圓(O)；所有東西都是物件，隨時可移動、縮放、刪除；直線與畫筆都可在屬性列選<b>線型（實線/虛線/中心線）</b>與<b>端點（無/單箭頭/雙箭頭）</b></li>
-                <li><b>屬性列設定是「每個工具各記各的」</b>：畫筆／直線／兩點連線／矩形／橢圓／標註各自記住自己的外框色、粗細、線型、端點、填色，<b>在某個工具改的設定不會跑到別的工具</b>（例如改了兩點連線的端點，切回直線仍是直線原本的設定），切換工具時自動還原該工具上次的值，並依使用者記住到下次開啟。選取(V)狀態下改屬性列＝改「選取到的物件」，不會動到各工具的預設值</li>
+                <li><b>屬性列設定是「每個工具各記各的」</b>：畫筆／直線／兩點連線／矩形／橢圓／標註各自記住自己的外框色、粗細、線型、端點、填色，<b>在某個工具改的設定不會跑到別的工具</b>（例如改了兩點連線的端點，切回直線仍是直線原本的設定），切換工具時自動還原該工具上次的值，並依使用者記住到下次開啟。<b>選取(V)狀態下改屬性列＝改「選取到的物件」，同時也會把你改的那一項記成該類物件的下次預設</b>（例如選起一條線把它改粗成 10，之後用直線工具畫的線就是 10，不必再設定一次；只有你真的動過的欄位會被記住，單純點選別人畫的線不會改到任何設定）</li>
                 <li><b>兩點連線（⤳）</b>：點第一點→點第二點自動相連、可連續一直連，屬性列選<b>直線或曲線</b>（直線也可帶箭頭端點；選擇會記住）。曲線＝沿真圓弧生成的圓潤勾線；連好後切回選取(V)<b>雙擊該線＝編輯端點</b>，拖節點調曲度/改位置、「＋」加節點；Esc 取消已點的第一點</li>
                 <li>遮蓋刪除客戶資料：矩形(M)或不規則套索圈選，遮蓋色可改，匯出時才壓平</li>
                 <li>框選複製(C)：框一個範圍變成新圖塊；<b>框選搬移(X)</b>＝小畫家式切下搬走，所見即所得——底圖挖空、<b>完整落在框內的物件（圓/矩形/線條/標籤/文字…）一起烙進切塊搬走</b>；只壓到框線一部分的物件不動。旁邊的<b>套索工具</b>是不規則形狀版，按住拖曳圈任意形狀後放開即可切下。兩者都可連續使用，Esc 或切別的工具才離開。跨視窗貼上用 <b>Ctrl+Shift+V</b>（Ctrl+V 優先貼系統剪貼簿）</li>
@@ -2438,6 +2438,44 @@ function applyToolStyle(t) {
     });
     document.getElementById('p-width-v').textContent = document.getElementById('p-width').value;
 }
+/* 選取(V)狀態下改屬性列＝在改「選取到的那個物件」，但那也是使用者「最後一次設定」的意思：
+   常見流程是畫完一條線 → 覺得太細 → 選起來改粗 → 再畫下一條，這時下一條要接續改好的粗細，
+   不能又跳回工具上次記住的舊值（使用者回報 2026-09-02）。所以把「使用者主動改的那一個欄位」
+   同步寫進「選取物對應的那個工具」的記憶裡。
+   ‧只記使用者真的動過的**單一欄位**，不整組覆蓋——否則只改顏色會把沒同步的粗細一起寫進去。
+   ‧只有 change 事件才會走到這裡；refreshPropbar 回填是直接設 .value（不觸發 change），
+     所以「單純點選別人畫的粗紅線」不會改到任何工具的預設值（維持原本的設計）。 */
+function objToolKey(o) {
+    if (!o) return null;
+    if (o.type === 'activeSelection' && o.getObjects) {          // 多選：以第一個判斷得出來的為準
+        for (const c of o.getObjects()) { const k = objToolKey(c); if (k) return k; }
+        return null;
+    }
+    if (o.dimKind === 'distance' || o.isDimGuide) return 'dimdist';
+    if (o.dimKind === 'diameter') return 'dimcircle';
+    if (o.dimKind === 'angle') return 'dimangle';
+    if (o.connectKind) return 'connect';                        // 兩點連線畫出來的（直線或曲線）
+    if (isLineLike(o)) return 'line';
+    if (o.type === 'path') return 'draw';
+    if (o.type === 'rect') return 'rect';
+    if (o.type === 'ellipse' || o.type === 'circle') return 'ellipse';
+    return null;
+}
+function captureToolStyleField(key) {
+    if (currentTool !== 'select') return;      // 畫圖工具本身由 captureToolStyle() 整組記
+    const t = objToolKey(canvas.getActiveObject());
+    if (!t || !TOOL_STYLE_TOOLS.includes(t)) return;
+    const f = TOOL_STYLE_FIELDS.find(x => x[1] === key);
+    if (!f) return;
+    const el = document.getElementById(f[0]);
+    if (!el) return;
+    if (!toolStyles[t]) toolStyles[t] = {};
+    toolStyles[t][key] = f[2] ? el.checked : el.value;
+}
+TOOL_STYLE_FIELDS.forEach(([id, key]) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', () => captureToolStyleField(key));
+});
 
 /* ── 工具切換 ── */
 function setTool(t) {
@@ -2761,6 +2799,7 @@ function handleConnectClick(p) {
             strokeDashArray: dash, strokeLineCap: 'round', strokeLineJoin: 'round', objectCaching: false
         });
         poly.curved = true;
+        poly.connectKind = 'curve';   // 出身標記：選起來改屬性時要記回「兩點連線」而不是「直線」工具
         canvas.add(poly);
         canvas.requestRenderAll();
         pushState();
@@ -2770,6 +2809,7 @@ function handleConnectClick(p) {
     const o = (ends !== 'none')
         ? makeArrow(a.x, a.y, b.x, b.y, stroke, sw, ends, dash)
         : new fabric.Line([a.x, a.y, b.x, b.y], { stroke, strokeWidth: sw, strokeUniform: true, strokeDashArray: dash });
+    o.connectKind = 'line';
     canvas.add(o);
     canvas.requestRenderAll();
     pushState();   // 直線：工具保持啟用，可連續點下一組兩點（Esc 或 V 回選取）
@@ -6760,6 +6800,15 @@ function refreshPropbar() {
         const strokedChild = (obj.type === 'group' || obj.type === 'activeSelection') && obj.getObjects
             ? (obj.getObjects().find(isStrokeable) || obj) : obj;
         document.getElementById('p-line-style').value = styleFromDashArray(strokedChild.strokeDashArray);
+        // 外框色與粗細也一併回填成「選到的這個物件」目前的值：不回填的話滑桿還停在上一次的數字，
+        // 選了一條 10 的線一拖滑桿會突然跳成 3（使用者回報 2026-09-02）
+        const hxStroke = toHex(strokedChild.stroke);
+        if (hxStroke) document.getElementById('p-stroke').value = hxStroke;
+        const swNow = Math.round(strokedChild.strokeWidth || 0);
+        if (swNow >= 1) {
+            document.getElementById('p-width').value = Math.min(40, swNow);
+            document.getElementById('p-width-v').textContent = document.getElementById('p-width').value;
+        }
         // 回填「填色」目前狀態（拿選取內第一個有填色概念的形狀）
         let fillChild = null;
         eachInSelection(obj, o => { if (!fillChild && ['rect', 'ellipse', 'circle', 'polygon'].includes(o.type)) fillChild = o; return false; });
@@ -6898,7 +6947,14 @@ document.getElementById('p-width').addEventListener('input', function () {
     const v = parseInt(this.value, 10) || 3;
     if (canvas.isDrawingMode) canvas.freeDrawingBrush.width = v;
     const obj = canvas.getActiveObject();
-    if (obj && obj.type === 'group' && obj.isArrowGroup) return;   // 箭頭群組要整支重建，很重，放開滑桿（change）才做
+    // 箭頭群組：拖動滑桿當下就即時改粗細（使用者回報 2026-09-02：不要放開才看到變化）。
+    // 用 reshapeArrowGroup 就地換掉內部的線＋三角頭（同一個物件、不 remove/add、不重設選取），
+    // 比 rebuildArrowGroup 輕很多，拖動中每一格都跑得動；放開滑桿（change）只需要記一步復原。
+    if (obj && obj.type === 'group' && obj.isArrowGroup) {
+        applyArrowGroupWidth(obj, v);
+        canvas.requestRenderAll();
+        return;
+    }
     const headLen = arrowHeadLen(v);
     const n = eachInSelection(obj, o => {
         if (o.stroke && (o.type === 'line' || o.type === 'path' || o.type === 'rect' || o.type === 'ellipse' || o.type === 'circle' || o.type === 'polygon' || o.type === 'polyline')) {
@@ -6916,20 +6972,23 @@ document.getElementById('p-width').addEventListener('input', function () {
     });
     if (n) { if (obj.type === 'group') obj.dirty = true; canvas.requestRenderAll(); }
 });
-document.getElementById('p-width').addEventListener('change', function () {
-    // 放開滑桿才對箭頭群組整支重建（拖動中每格都 remove+重建 會拖慢畫面）
-    const v = parseInt(this.value, 10) || 3;
-    const obj = canvas.getActiveObject();
-    if (obj && obj.type === 'group' && obj.isArrowGroup) {
+/* 箭頭群組就地改粗細：線與三角頭一起換成新粗細算出來的那一組（頭大小＝arrowHeadLen(粗細)），
+   頭尾位置維持原本的箭頭尖端座標。回傳有沒有真的改到。 */
+function applyArrowGroupWidth(g, v) {
+    const aline = g.getObjects().find(c => c.type === 'line');
+    if (!aline) return false;
+    const pts = trueArrowEndpoints(g);   // 要先取，reshape 之後群組的 scale/angle 會被歸位
+    if (aline.strokeDashArray && aline.strokeDashArray.length) {
         // 箭頭虛線也要依新粗細重算間距（否則變粗後虛線間距不跟著變）
-        const aline = obj.getObjects().find(c => c.type === 'line');
-        const dash = (aline && aline.strokeDashArray && aline.strokeDashArray.length)
-            ? dashArrayFor(styleFromDashArray(aline.strokeDashArray), v) : (aline ? aline.strokeDashArray || null : null);
-        const no = rebuildArrowGroup(obj, { width: v, dash: dash });
-        canvas.setActiveObject(no);
-        canvas.requestRenderAll();
-        pushState();
+        aline.set('strokeDashArray', dashArrayFor(styleFromDashArray(aline.strokeDashArray), v));
     }
+    aline.set('strokeWidth', v);
+    return reshapeArrowGroup(g, pts[0], pts[1]);   // 內部依 line.strokeWidth 重算三角頭大小與線段縮短量
+}
+document.getElementById('p-width').addEventListener('change', function () {
+    // 拖動中（input）已經即時改好了，放開滑桿只記錄一步復原
+    const obj = canvas.getActiveObject();
+    if (obj && obj.type === 'group' && obj.isArrowGroup) { canvas.requestRenderAll(); pushState(); }
 });
 /* 圓角滑桿：矩形用 native rx/ry；封閉/折線圖形設 cornerRadius（由 renderRoundedPoly 描繪，
    節點資料不變仍可「編輯端點」）。拖動即時預覽（input），放開才記錄一步復原（change）。 */
