@@ -2484,15 +2484,23 @@ function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
     w.document.close();
 }
 /** 列印用：一個人一列，「部門 姓名」印在同一列不可拆行；字太長時自動縮小字級塞進欄寬。
- *  （2026-09-02 使用者要求：稽核員要顯示部門、要一人一列、部門與人名不可分段） */
-function personLine(txt, maxW){
-    txt = String(txt||'').trim();
-    if (!txt) return '';
+ *  同一格裡的每一列一律用同一個字級（取最長的那一列回推），不可以逐列各自算——
+ *  逐列算會讓同一格內的部門與人名大小不一（2026-09-02 使用者回報）。
+ *  （2026-09-02 使用者要求：稽核員要顯示部門、要一人一列、部門與人名不可分段、大小要一致） */
+function personLines(names, maxW){
+    var ns = (names||[]).map(function(t){ return String(t||'').trim(); })
+                        .filter(function(t){ return t !== ''; });
+    if (!ns.length) return '';
     maxW = maxW || 130;
-    // 中文字寬約等於字級，空白算半個字；由可用寬度回推字級，最小 8px、最大 12px
-    var n = txt.replace(/\s/g,'').length + (/\s/.test(txt) ? 0.5 : 0);
-    var size = Math.max(8, Math.min(12, Math.floor(maxW / Math.max(1, n) * 10) / 10));
-    return '<div style="white-space:nowrap;font-size:'+size+'px;line-height:1.5;">'+esc(txt)+'</div>';
+    // 中文字寬約等於字級，空白算半個字；由「最長的那一列」回推字級，最小 8px、最大 12px
+    var n = 1;
+    ns.forEach(function(t){
+        n = Math.max(n, t.replace(/\s/g,'').length + (/\s/.test(t) ? 0.5 : 0));
+    });
+    var size = Math.max(8, Math.min(12, Math.floor(maxW / n * 10) / 10));
+    return ns.map(function(t){
+        return '<div style="white-space:nowrap;font-size:'+size+'px;line-height:1.5;">'+esc(t)+'</div>';
+    }).join('');
 }
 /** 一列受稽單位的稽核員 → 多列「部門 姓名」（沒有人員清單時退回舊的姓名字串） */
 function auditorLines(d, maxW){
@@ -2500,7 +2508,7 @@ function auditorLines(d, maxW){
         return String(x.dept_name ? (x.dept_name+' '+x.user_name) : (x.user_name||''));
     }).filter(function(x){ return x.trim()!==''; });
     if (!ns.length) ns = String(d.auditor_name||'').split(/[、／\/]/).filter(function(x){ return x.trim()!==''; });
-    return ns.map(function(t){ return personLine(t, maxW); }).join('');
+    return personLines(ns, maxW);
 }
 function printHead(meta, titleOverride){
     return '<div class="pt-head"><div class="co">'+esc(meta.company||'')+'</div>'
@@ -2633,7 +2641,9 @@ function printCase(id){
                     return String(x.dept_name ? (x.dept_name + ' ' + x.user_name) : (x.user_name||''));
                 }).filter(function(x){ return x.trim()!==''; });
                 if (!ns.length && fallback) ns = String(fallback).split(/[、／\/]/).filter(function(x){ return x!==''; });
-                return ns.map(personLine).join('');
+                // 欄寬 140px 扣掉左右 padding ≈ 128px；不可寫成 ns.map(personLines) 之類，
+                // map 會把「索引」當成第二個參數傳進去（原本的 bug：第二個人以後都變 8px）
+                return personLines(ns, 128);
             };
             // 2026-08-27 使用者要求：標題改在上面（與畫面上的受稽單位列表同一種讀法），
             // 一個受稽單位一列；<thead> 讓表頭跨頁自然重複（列印分頁交給瀏覽器引擎）
