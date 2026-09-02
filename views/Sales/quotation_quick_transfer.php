@@ -1747,8 +1747,14 @@ function runKwScan() {
 function renderKwGroups() {
     // 重畫前先記住「哪幾組是展開的」與捲動位置：套用完之後如果整個收合、捲回最上面，
     // 使用者會以為勾選被清掉了（實際上 kwChecked 還在），做到一半的確認等於被打斷
-    const openKeys = {};
-    $('#kwGroups .kw-group.open').each(function(){ openKeys[$(this).attr('data-key')] = true; });
+    const openKeys = {}, innerTop = {};
+    $('#kwGroups .kw-group.open').each(function() {
+        const k = $(this).attr('data-key');
+        openKeys[k] = true;
+        // 每一組的逐筆清單自己也是捲動區（max-height:280px），只還原外層的話
+        // 會彈回該組最上面——使用者回報「跳掉、又顯示到某標籤建議的最上面」就是這個
+        innerTop[k] = $(this).find('.kw-group-body').scrollTop() || 0;
+    });
     const $sc = $('#kwScanMask .m-body');
     const keepTop = $sc.scrollTop();
     if (!kwGroups.length) { $('#kwGroups').html('<div style="color:#999;padding:14px;">沒有任何項目命中規則。</div>'); updateKwSel(); return; }
@@ -1763,7 +1769,7 @@ function renderKwGroups() {
                 '<span class="kw-label" id="kwGLbl' + gi + '">' + kwGroupLabelHtml(g) + '</span>' +
                 '<button type="button" class="btn btn-default btn-xs" title="直接改這一組要帶入的製程標籤（不會改到規則）" ' +
                     'onclick="event.stopPropagation();kwEditGroupTags(' + gi + ')"><i class="fa fa-pencil"></i> 改標籤</button>' +
-                '<span style="color:#8a5a2b;">' + g.count + ' 筆</span>' +
+                '<span style="color:#8a5a2b;" id="kwGCnt' + gi + '">' + g.count + ' 筆</span>' +
                 (hadN ? '<span class="qt-badge warn">其中 ' + hadN + ' 筆原本已有設定，套用會覆蓋</span>' : '') +
                 '<span class="kw-rules">命中規則：' + escapeQt((g.rules || []).join('、')) + '</span>' +
                 '<span style="margin-left:auto;font-size:11px;color:#a2703a;" id="kwGSel' + gi + '">已勾 ' + checkedN + '</span>' +
@@ -1779,6 +1785,7 @@ function renderKwGroups() {
         if (!openKeys[g.key]) return;
         kwDrawItems(gi);
         $('#kwG' + gi).addClass('open').data('drawn', 1);
+        if (innerTop[g.key]) $('#kwGBody' + gi).scrollTop(innerTop[g.key]);
     });
     if (keepTop) $sc.scrollTop(keepTop);
     updateKwSel();
@@ -2361,8 +2368,21 @@ function kwMoveToSlot(si, ids) {
         });
         g.count = g.items.length;
     });
-    kwGroups = kwGroups.filter(function(g){ return g.count > 0; });
-    renderKwGroups(); kwSlotRender(si);
+    // 有整組被搬空才需要重畫（組別數量變了）；否則就地把那幾列從畫面移除，
+    // 這樣使用者停在哪裡就停在哪裡，不會彈回清單最上面
+    const emptied = kwGroups.some(function(g){ return g.count === 0; });
+    if (emptied) {
+        kwGroups = kwGroups.filter(function(g){ return g.count > 0; });
+        renderKwGroups();
+    } else {
+        ids.forEach(function(id){ $('#kwGroups .kw-item-chk[value="' + id + '"]').closest('tr').remove(); });
+        kwGroups.forEach(function(g, gi) {
+            $('#kwGCnt' + gi).text(g.count + ' 筆');
+            kwSyncGroupHead(gi);
+        });
+        updateKwSel();
+    }
+    kwSlotRender(si);
     if (moved) showQtToast('已移入第 ' + (si + 1) + ' 組：' + moved + ' 筆');
 }
 
