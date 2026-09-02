@@ -95,15 +95,21 @@ case 'meta': {
     $gm = eg_org_user($db, 'top_approver');
     $presets = $db->query("SELECT preset_id, subject, location, start_time, end_time FROM meeting_preset ORDER BY sort_order, preset_id")->fetchAll(PDO::FETCH_ASSOC);
     // 出席簽到／項目確認簽名要套用哪個圖章模板(圖章管理→線上圖章設計)；未設定則維持預設的回墨印SVG
-    $stTplId = (int)meeting_setting_get($db, 'meeting_stamp_tpl_id', '0');
-    $stTpl = null;
-    if ($stTplId) {
+    // 圖章模板有兩個：逐列表格（簽到／項目確認簽名，長方章）與簽核欄（主席／總經理／製表，圓章）。
+    // 2026-09-02 使用者回報「印章內文字大小沒有套用圖章模板內的規定」——根因是本模組**只有前者**，
+    // 主席／總經理／製表一直寫死用預設回墨印（字級 11/14.5/19），完全不吃模板（模板1 是 9.6/12.3/15.8），
+    // 所以同一張會議記錄上兩種章的字級不一樣，跟內部稽核（已設模板1）也對不起來。
+    // 站上其他模組本來就都是兩個設定成對出現（da_stamp_tpl_id+da_cosign、tool_calib_footer+list、
+    // training_approval+training），本模組是唯一漏掉簽核欄那一個的，這裡補上。預設 1＝本人簽章(圓)，與其他模組一致。
+    $loadTpl = function (int $tid) use ($db): ?array {
+        if (!$tid) return null;
         $stt = $db->prepare("SELECT id, tpl_name, schema_json FROM stamp_template WHERE id=? AND is_active=1");
-        $stt->execute([$stTplId]);
-        if ($r = $stt->fetch(PDO::FETCH_ASSOC)) {
-            $stTpl = ['id'=>(int)$r['id'], 'tpl_name'=>$r['tpl_name'], 'schema'=>json_decode((string)$r['schema_json'], true)];
-        }
-    }
+        $stt->execute([$tid]);
+        $r = $stt->fetch(PDO::FETCH_ASSOC);
+        return $r ? ['id'=>(int)$r['id'], 'tpl_name'=>$r['tpl_name'], 'schema'=>json_decode((string)$r['schema_json'], true)] : null;
+    };
+    $stTpl   = $loadTpl((int)meeting_setting_get($db, 'meeting_stamp_tpl_id', '0'));
+    $apTpl   = $loadTpl((int)meeting_setting_get($db, 'meeting_approval_stamp_tpl_id', '1'));
     jout(['perms'=>$perms, 'departments'=>$depts, 'years'=>$years, 'is_superadmin'=>meeting_is_superadmin($db, $uid),
           'uid'=>$uid, 'uname'=>$uname, 'today'=>date('Y-m-d'), 'cur_year'=>$cy,
           'gm_name'=>$gm ? $gm['user_cname'] : null, 'gm_id'=>$gm ? (int)$gm['id'] : null, 'presets'=>$presets,
@@ -112,7 +118,7 @@ case 'meta': {
           'auto_submit'=>meeting_auto_submit_enabled($db),
           'as_doc_signsheet'=>($asSign = eg_asdoc_get($db, 'meeting_signsheet')), 'as_doc_signsheet_no'=>eg_asdoc_no($asSign),
           'as_doc_record'=>($asRec = eg_asdoc_get($db, 'meeting_record')), 'as_doc_record_no'=>eg_asdoc_no($asRec),
-          'stamp_template'=>$stTpl,
+          'stamp_template'=>$stTpl, 'approval_stamp_template'=>$apTpl,
           // 挑出席人員時要提示哪些行程來源（全站共用設定，定義與現值都由共用庫給，前端不寫死＝鐵律4）
           'sched_sources'=>eg_psched_sources(), 'sched_on'=>eg_psched_setting_get($db)]);
 }
@@ -1069,7 +1075,15 @@ case 'sched_setting_save': {
 case 'stamp_tpl_save': {
     if (!$perms['canAdmin']) jerr('無設定權限（限模組管理員）', 403);
     $tid = (int)($_POST['template_id'] ?? 0);
-    meeting_setting_save($db, 'meeting_stamp_tpl_id', (string)$tid);
+    // which=row（簽到／項目確認簽名，逐列長方章）／approval（主席／總經理／製表，簽核欄圓章）
+    $which = (string)($_POST['which'] ?? 'row');
+    if (!in_array($which, ['row','approval'], true)) jerr('參數不正確');
+    if ($tid) {   // 後端同規則再驗一次：模板要真的存在且啟用，否則畫面會安靜退回預設章
+        $c = $db->prepare("SELECT COUNT(*) FROM stamp_template WHERE id=? AND is_active=1");
+        $c->execute([$tid]);
+        if (!(int)$c->fetchColumn()) jerr('選擇的圖章模板不存在或已停用');
+    }
+    meeting_setting_save($db, $which === 'approval' ? 'meeting_approval_stamp_tpl_id' : 'meeting_stamp_tpl_id', (string)$tid);
     jout([]);
 }
 /* 出貨目標達成率(週報)基礎設定：週目標金額/帳款起始日，與 AS9100 KPI 設定頁(KpiAs_Setting_API.php)共用同一組 kpi_lib.php 函式，

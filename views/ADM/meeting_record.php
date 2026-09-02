@@ -471,7 +471,15 @@ foreach ($roleRows as $rr) {
                     <select id="setStampTpl" style="flex:1;"><option value="0">（預設印章樣式）</option></select>
                     <button type="button" class="b-att" onclick="submitStampTpl()">儲存</button>
                 </div>
-                <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">套用哪個模板請到「圖章管理 → 線上圖章設計」建立/挑選；有上傳掃描實體章的人一律優先用掃描章，這裡只影響沒掃描章時自動產生的印章樣式。</p>
+                <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">逐列表格用的簽名章（建議用長方章，欄位窄）。套用哪個模板請到「圖章管理 → 線上圖章設計」建立/挑選；有上傳掃描實體章的人一律優先用掃描章，這裡只影響沒掃描章時自動產生的印章樣式。</p>
+            </div>
+            <div style="margin-top:16px;">
+                <label>主席／總經理／製表 簽核欄的圖章樣式</label>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <select id="setApprovalStampTpl" style="flex:1;"><option value="0">（預設印章樣式）</option></select>
+                    <button type="button" class="b-att" onclick="submitApprovalStampTpl()">儲存</button>
+                </div>
+                <p class="text-muted" style="font-size:11.5px;margin:4px 0 0;">簽核欄空間大，建議用<b>圓形個人章</b>（站上其他模組的簽核欄也是用「本人簽章(圓)」）。<b>沒設定＝用系統預設回墨印，字級會跟模板不一樣</b>——這正是先前會議記錄的簽核章跟內部稽核對不起來的原因。</p>
             </div>
             <div style="margin-top:16px;">
                 <label>出貨目標達成率 基礎設定（週目標金額／帳款起始日）</label>
@@ -2009,12 +2017,12 @@ function meetingRecordPageHtml(m, res, docNoMode){
     var itemBody = meetingItemGroupRows(res.items, 'directive', '上級指示要項') + meetingItemGroupRows(res.items, 'general', '會議要項');
     var chairApp = m.chair_approval, gmApp = m.gm_approval;
     var chairStamp = (chairApp && chairApp.approver_name)
-        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(chairApp.approver_name, dispDate(chairApp.decided_at), String(chairApp.approver_id)!==String(m.chair_user_id)):'')
+        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(chairApp.approver_name, dispDate(chairApp.decided_at), String(chairApp.approver_id)!==String(m.chair_user_id), mApprovalStampSchema()):'')
         : '';
     var gmStamp = (gmApp && gmApp.approver_name)
-        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(gmApp.approver_name, dispDate(gmApp.decided_at), META.gm_id!=null && String(gmApp.approver_id)!==String(META.gm_id)):'')
+        ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(gmApp.approver_name, dispDate(gmApp.decided_at), META.gm_id!=null && String(gmApp.approver_id)!==String(META.gm_id), mApprovalStampSchema()):'')
         : '';
-    var madeStamp = (window.EGStamp&&EGStamp.stamp && m.recorder_name) ? EGStamp.stamp(m.recorder_name, dispDate(m.meeting_date)) : '';
+    var madeStamp = (window.EGStamp&&EGStamp.stamp && m.recorder_name) ? EGStamp.stamp(m.recorder_name, dispDate(m.meeting_date), false, mApprovalStampSchema()) : '';
     var recordTitle = (META.as_doc_record && META.as_doc_record.doc_name) ? META.as_doc_record.doc_name : '會議記錄';
     var attendeeNames = (res.attendees||[]).map(function(a){ return esc(a.user_name); }).join('、') || '—';
     return '<div class="mr-page">'
@@ -2038,7 +2046,7 @@ function meetingRecordPageHtml(m, res, docNoMode){
 /* 出貨目標達成率獨立一頁(有自己的簽章，只有「製表」一欄)，跟會議記錄各自一張A4，不再併頁(使用者明確要求)。 */
 function kpiPageHtml(m, preparerName){
     var k = JSON.parse(m.kpi_snapshot_json);
-    var madeStamp = (window.EGStamp&&EGStamp.stamp && preparerName) ? EGStamp.stamp(preparerName, dispDate(m.meeting_date)) : '';
+    var madeStamp = (window.EGStamp&&EGStamp.stamp && preparerName) ? EGStamp.stamp(preparerName, dispDate(m.meeting_date), false, mApprovalStampSchema()) : '';
     return '<div class="mr-page">'
         + '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">出貨目標達成率</div></div>'
         + kpiReportHtml(k)
@@ -2218,6 +2226,10 @@ function submitNasDir(){
 }
 /* 出席簽到／項目確認簽名要不要套用自訂圖章模板：META.stamp_template 由模組設定頁指定(見 loadStampTplOptions/submitStampTpl) */
 function mStampSchema(){ return META.stamp_template ? META.stamp_template.schema : null; }
+/* 簽核欄（主席／總經理／製表）的圖章模板：與逐列表格那個分開設定（2026-09-02 使用者回報）。
+   本模組原本這三格寫死用預設回墨印、完全不吃模板，字級跟同一張表上的確認簽名章、
+   以及內部稽核（已設模板1）都對不起來。站上其他模組本來就是兩個設定成對出現，這裡補齊。 */
+function mApprovalStampSchema(){ return META.approval_stamp_template ? META.approval_stamp_template.schema : null; }
 function loadStampTplOptions(){
     $.getJSON(API, {action:'stamp_tpl_options'}, function(res){
         if (!res.ok) return;
@@ -2227,12 +2239,25 @@ function loadStampTplOptions(){
             h += '<option value="'+t.id+'"'+(String(t.id)===String(cur)?' selected':'')+'>'+(t.type_name?esc(t.type_name)+'｜':'')+esc(t.tpl_name)+'</option>';
         });
         $('#setStampTpl').html(h);
+        // 簽核欄用的是另一個設定（兩個模板各自獨立，比照站上其他模組的成對設定）
+        var curAp = META.approval_stamp_template ? META.approval_stamp_template.id : 0;
+        var h2 = '<option value="0">（預設印章樣式）</option>';
+        (res.templates||[]).forEach(function(t){
+            h2 += '<option value="'+t.id+'"'+(String(t.id)===String(curAp)?' selected':'')+'>'+(t.type_name?esc(t.type_name)+'｜':'')+esc(t.tpl_name)+'</option>';
+        });
+        $('#setApprovalStampTpl').html(h2);
     });
 }
 function submitStampTpl(){
-    $.post(API, {action:'stamp_tpl_save', template_id:$('#setStampTpl').val()}, function(res){
+    $.post(API, {action:'stamp_tpl_save', which:'row', template_id:$('#setStampTpl').val()}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         loadMeta(function(){ alert('已儲存，重新整理頁面後對出席簽到/項目確認簽名生效'); });
+    }, 'json');
+}
+function submitApprovalStampTpl(){
+    $.post(API, {action:'stamp_tpl_save', which:'approval', template_id:$('#setApprovalStampTpl').val()}, function(res){
+        if (!res.ok){ alert(res.error||'儲存失敗'); return; }
+        loadMeta(function(){ alert('已儲存，重新整理頁面後對主席／總經理／製表的簽核章生效'); });
     }, 'json');
 }
 function loadKpiTargetUI(){
