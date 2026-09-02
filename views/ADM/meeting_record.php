@@ -173,6 +173,9 @@ foreach ($roleRows as $rr) {
         .own-btn { font-size:11px; border:1px dashed #D8BE93; background:#fff; color:#8A5A2B; border-radius:4px;
             cursor:pointer; padding:2px 7px; width:100%; }
         .own-btn:hover { background:#FBF0DD; }
+        .cf-more-btn { display:inline-block; font-size:11px; color:#8A5A2B; background:#FBF0DD; border:1px solid #E8D5B5;
+            border-radius:10px; padding:1px 8px; margin-top:3px; cursor:pointer; }
+        .cf-more-btn:hover { background:#F7E0BD; text-decoration:none; }
         .confirm-yes { color:#7a5217; font-weight:bold; font-size:11.5px; }
         .confirm-no { color:#b0a390; font-size:11.5px; }
         .mt-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; background:#fff; }
@@ -560,6 +563,7 @@ foreach ($roleRows as $rr) {
         　－<b>指定人員</b>（可多選）：直接指名的人只要本次有出席就是必簽者，不套用主管優先判定；沒指定到部門，不論那位人員屬於哪個部門都是他本人簽。<br>
         　－<b>怎麼挑</b>：儲存格內只顯示已選的人（按標籤上的 × 可直接移除），按<b>「選擇人員」</b>開挑選跳窗——<b>先選部門、再從該部門的人裡面挑</b>（部門<b>含子部門</b>，例如選「資材部」會一併列出生管組／採購組／倉管組的人；<b>兼任</b>該部門的人也會出現，並顯示他在<b>該部門</b>的職稱）。不確定在哪個部門時，把部門留在「全部部門」直接打姓名即可，關鍵字也吃部門與職稱。清單一列一人、<b>部門／職稱／姓名</b>分欄對齊，兼多個職務的人會標「＋另有 N 個職務」（滑鼠移上去看全部）。「選擇負責部門」是同一個跳窗。<br>
         兩種模式下，負責人（部門或指定人員）本次沒有人出席、或現場代表尚未來得及簽名時，「存檔並通知」都會改發通知（該部門本次所有出席人員＋部門主管，或指定人員本人）請對方回覆確認，任一人回覆即算完成，回覆內容會顯示在項目下方；同一份通知一旦有人完成回覆就會自動關閉，其他被通知的人之後開啟只會看到唯讀狀態，不會再重複送出回覆蓋掉別人。<br>
+        　－<b>確認簽名一多時怎麼顯示</b>：畫面上每一項<b>預設只顯示前 3 顆簽名章</b>，其餘收起來按「還有 N 位，展開」才出現（尚未回簽、還要輸入密碼的欄位一律不收，以免找不到地方簽）。<b>列印</b>時該欄放得下 1 顆章，超過就改印<b>「已確認 N 位（詳見附表）」</b>，全部簽名章移到最後面的<b>「確認簽名附表」</b>逐項列出——原本超出的章會被<b>安靜裁掉、紙上完全看不出少了人</b>，這在管制文件上不可接受，故一律改走附表。只有 1 位確認的項目維持直接蓋在表內，不會多印附表那一頁。<br>
         <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。已完成核准的會議記錄在「檢視」畫面也能再插入/更新：一般人插入後會<b>清空目前簽核紀錄改回草稿</b>，需重新送出取得主席／總經理簽章；<b>超級管理員</b>插入後<b>維持已核准狀態</b>，不需重新送審。
         <h4>重要行為</h4>
         ・草稿（未完成）除記錄人本人／管理員外，<b>出席人員／主席／總經理／項目負責部門或指定人員（需簽名的人）</b>也自動有唯讀權限可以檢視；一般「檢視全部」角色僅適用<b>已送出</b>的會議記錄，不含草稿。<br>
@@ -1708,31 +1712,59 @@ function ownerAdjustSave(){
     }, 'json');
 }
 
+/* 項目確認簽名要蓋的部門／職稱（2026-09-02 使用者回報「章跟上方簽到表不同」）：
+   後端 stamp_dept/stamp_position 已優先取「這個人在本次出席名單上的部門/職稱」＝簽到表蓋章用的同兩個欄位，
+   所以同一個人在兩處蓋出來的章會完全一樣。舊資料或後端沒帶時退回原本的欄位，不會變成空白。
+   畫面與列印都呼叫這兩支，不要各自判斷（兩邊走鐘就會又出現一邊有部門一邊沒有的情況）。 */
+function slotStampDept(s){ return (s.stamp_dept !== undefined && s.stamp_dept !== null && s.stamp_dept !== '') ? s.stamp_dept : (s.dept_name||''); }
+function slotStampPos(s){ return (s.stamp_position !== undefined && s.stamp_position !== null && s.stamp_position !== '') ? s.stamp_position : (s.position_name||''); }
+/* 畫面上的確認簽名欄：已回簽的人一多（產銷會議的指定人員實測有 11 位）整格會拉得很長，
+   2026-09-02 使用者要求改成可收合——預設只顯示前 MR_CONFIRM_SHOW 顆章，其餘收起來按「展開」才出現。
+   **只收合已回簽的**：尚未回簽的槽位還要輸入密碼簽名，收起來會變成找不到地方簽。
+   收合是純 DOM 切換不重畫整個檢視畫面，展開狀態不會因為別處重新整理而跳掉。 */
+var MR_CONFIRM_SHOW = 3;
+function toggleConfirmMore(itemId, btn){
+    var box = document.getElementById('cfMore' + itemId);
+    if (!box) return;
+    var open = box.style.display !== 'none';
+    box.style.display = open ? 'none' : '';
+    btn.innerHTML = open ? ('▸ 還有 ' + box.getAttribute('data-n') + ' 位，展開') : '▾ 收合';
+}
 function itemConfirmCellHtml(it){
     var slots = it.confirm_slots || [];
-    var h = slots.map(function(s){
+    var signedSeen = 0, inline = '', more = '', moreN = 0;
+    slots.forEach(function(s){
+        var html;
         if (s.signed) {
             // 2026-08-06改版：實際簽名者不一定是系統原本挑出的那位代表(部門任一出席人員/主管透過通知回覆都算數)，
             // s.user_name 已是後端依 dept_id 比對出的實際簽名人；有 reply_content 代表是透過通知回覆完成，顯示在下方。
-            // 2026-08-10修正：補上 s.position_name(職稱)，比照簽到表的 EGStamp.stamp() 呼叫方式(name,date,isDeputy,schema,dept,position)，
-            // 圖章模板若有設定{職稱}token 才會顯示，格式跟簽到表一致。
-            return '<div class="confirm-yes">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, dispDate(s.confirmed_at), false, mStampSchema(), s.dept_name, s.position_name):esc(s.user_name))
+            // 2026-09-02修正：蓋章的部門/職稱一律走 slotStampDept/Pos()，不可直接用 s.dept_name
+            // ——指定人員模式那個欄位是空的，章會變成只有姓名，跟上方簽到表的章長得不一樣（使用者回報）。
+            html = '<div class="confirm-yes">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, dispDate(s.confirmed_at), false, mStampSchema(), slotStampDept(s), slotStampPos(s)):esc(s.user_name))
                  + ' <span style="font-size:11px;">'+esc(s.dept_name||'')+slotTag(s)+'</span>'
                  + (META.is_superadmin?' <a href="javascript:void(0)" onclick="adminBackfillRow(\'item\','+it.item_id+')" style="font-size:11px;">[改日期]</a>':'')+'</div>'
                  + (s.reply_content ? '<div style="font-size:11px;color:#5b3a1e;margin-top:2px;">💬 '+esc(s.reply_content)+'</div>' : '');
+            signedSeen++;
+            if (signedSeen > MR_CONFIRM_SHOW) { more += html; moreN++; return; }
+            inline += html;
+            return;
         }
         // can_sign_in_person=false：這個部門/指定人員本次沒有可現場輸入密碼的人(2026-08-10修正)，
         // 不畫密碼框(反正沒人能簽)，改顯示等待通知回覆的提示，實際狀態看下方 notify_targets/notify_preview。
         if (!s.can_sign_in_person) {
-            return '<div style="font-size:11px;color:#8a6d45;">'+esc(s.dept_name||s.user_name||'')+'：尚未回覆（已另行通知相關人員）</div>';
+            inline += '<div style="font-size:11px;color:#8a6d45;">'+esc(s.dept_name||s.user_name||'')+'：尚未回覆（已另行通知相關人員）</div>';
+            return;
         }
-        return '<div class="item-confirm-box"><span style="font-size:11px;">'+esc(s.dept_name||'')+'：'+esc(s.user_name)+slotTag(s)+'</span>'
+        inline += '<div class="item-confirm-box"><span style="font-size:11px;">'+esc(s.dept_name||'')+'：'+esc(s.user_name)+slotTag(s)+'</span>'
              + '<input type="password" id="pwConfirm'+it.item_id+'_'+s.user_id+'" placeholder="密碼" style="width:70px;" data-eg-skip'
              + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();confirmItemWithPassword('+it.item_id+','+s.user_id+');}">'
              + '<button type="button" onclick="confirmItemWithPassword('+it.item_id+','+s.user_id+')">確認</button></div>';
-    }).join('');
-    // 2026-08-11修正：已經在上面簽名槽顯示過(蓋章+回覆內容)的人，不要在下面通知狀態清單再顯示一次，
-    // 否則同一個人的「OK」回覆內容會重複出現兩次，看起來像資料重複、造成混淆。
+    });
+    var h = inline;
+    if (moreN) {
+        h += '<div id="cfMore'+it.item_id+'" data-n="'+moreN+'" style="display:none;">'+more+'</div>'
+           + '<a href="javascript:void(0)" class="cf-more-btn" onclick="toggleConfirmMore('+it.item_id+',this)">▸ 還有 '+moreN+' 位，展開</a>';
+    }
     var signedUserIds = slots.filter(function(s){ return s.signed; }).map(function(s){ return String(s.user_id); });
     var nt = (it.notify_targets || []).filter(function(t){ return signedUserIds.indexOf(String(t.user_id)) === -1; });
     // 2026-08-26修正：一部門/一指定人員只要任一人回覆或現場簽名就算完成，此時其餘被通知的人已不需要回覆
@@ -1884,22 +1916,83 @@ function mrCss(){
         + 'table.sf .stamp-wrap,table.mr-items .mr-confirm-cell .stamp-wrap{height:90%;display:inline-flex;align-items:center;margin:0 4px 0 0;}'
         + 'table.sf .stamp-wrap svg,table.sf svg.car-stamp,table.mr-items .mr-confirm-cell .stamp-wrap svg,table.mr-items .mr-confirm-cell svg.car-stamp{height:100%;width:auto;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         + 'table.mr-items .mr-confirm-cell{height:44px;overflow:hidden;white-space:nowrap;}'
+        + '.mr-confirm-ref{font-size:11px;color:#333;white-space:normal;line-height:1.4;}'
+        // 確認簽名附表：一項一區塊，章自動換行（這裡不設 overflow:hidden，簽名章一個都不可以被裁掉）
+        + '.mr-page + .mr-page{page-break-before:always;}'
+        + 'table.ca-tbl{width:100%;border-collapse:collapse;margin-bottom:8px;}'
+        + 'table.ca-tbl th,table.ca-tbl td{border:1px solid #333;padding:6px;vertical-align:top;}'
+        + '.ca-no{width:92px;font-size:12px;text-align:center;background:#f2f2f2;}'
+        + '.ca-content{font-size:12px;text-align:left;margin-bottom:5px;color:#333;}'
+        + '.ca-stamps{display:flex;flex-wrap:wrap;gap:4px;}'
+        + '.ca-one{display:inline-flex;align-items:center;}'
+        + '.ca-one svg{height:40px;width:auto;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         + kpiCss();
+}
+/* 列印的「確認簽名」欄放得下幾顆章（2026-09-02 使用者拍板）：實測欄寬 239px、一顆長方章 160px，
+   放第二顆就已經超出（scrollWidth 338 > 239）而且 .mr-confirm-cell 是 overflow:hidden
+   ——**超出的簽名章會被安靜裁掉、紙上完全看不出少了人**，這在 AS9100 管制文件上不可接受。
+   故超過 1 位時本欄改印「已確認 N 位（詳見附表）」，簽名章全部移到最後面的附表逐項列出。
+   只有 1 位時維持原樣直接蓋在表內（絕大多數項目屬於這種，不必為了一顆章多印一頁）。 */
+var MR_CONFIRM_PRINT_INLINE = 1;
+/* 這一項的已回簽清單（畫面/列印/附表共用同一份取法，不要各自 filter 以免規則走鐘） */
+function itemSignedSlots(it){ return (it.confirm_slots||[]).filter(function(s){ return s.signed; }); }
+function confirmStampHtml(s){
+    var tag = slotTag(s);
+    return ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, dispDate(s.confirmed_at), false, mStampSchema(), slotStampDept(s), slotStampPos(s)):esc(s.user_name))
+         + (tag?'<span style="font-size:10px;">'+tag+'</span>':'');
+}
+/* 需要移到附表的項目（依列印順序：上級指示要項 → 會議要項），附表與主表用同一份判定與同一組項次編號 */
+function confirmAppendixItems(items){
+    var out = [];
+    ['directive','general'].forEach(function(kind){
+        var label = kind==='directive' ? '上級指示要項' : '會議要項';
+        (items||[]).filter(function(it){ return it.kind===kind; }).forEach(function(it,i){
+            if (itemSignedSlots(it).length > MR_CONFIRM_PRINT_INLINE) out.push({it:it, label:label, no:i+1});
+        });
+    });
+    return out;
 }
 function meetingItemGroupRows(items, kind, groupLabel){
     var rows = (items||[]).filter(function(it){ return it.kind===kind; });
     if (!rows.length) return '';
     return rows.map(function(it,i){
         var deptNames = ownerDisplayText(it);
-        var confirmHtml = (it.confirm_slots||[]).filter(function(s){ return s.signed; }).map(function(s){
-            var tag = slotTag(s);
-            return ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(s.user_name, dispDate(s.confirmed_at), false, mStampSchema(), s.dept_name, s.position_name):esc(s.user_name))
-                 + (tag?'<span style="font-size:10px;">'+tag+'</span>':'');
-        }).join('');
+        var signed = itemSignedSlots(it);
+        var confirmHtml = (signed.length > MR_CONFIRM_PRINT_INLINE)
+            ? '<span class="mr-confirm-ref">已確認 '+signed.length+' 位<br>（詳見附表）</span>'
+            : signed.map(confirmStampHtml).join('');
         return '<tr>' + (i===0 ? '<td class="mr-grp" rowspan="'+rows.length+'">'+groupLabel+'</td>' : '')
              + '<td>'+(i+1)+'</td><td class="t-left">'+esc(it.content).replace(/\n/g,'<br>')+'</td>'
              + '<td>'+dispDate(it.due_date)+'</td><td>'+esc(deptNames)+'</td><td class="mr-confirm-cell">'+confirmHtml+'</td><td>'+esc(it.remark||'')+'</td></tr>';
     }).join('');
+}
+/* 確認簽名附表（另起一頁）：只列出被移過來的項目，一項一區塊、章自動換行不會被裁掉。
+   沒有任何項目超量時回傳空字串＝完全不會多印這一頁。 */
+function confirmAppendixPageHtml(m, res, docNoMode){
+    var list = confirmAppendixItems(res.items);
+    if (!list.length) return '';
+    var blocks = list.map(function(x){
+        var stamps = itemSignedSlots(x.it).map(function(s){
+            return '<div class="ca-one">'+confirmStampHtml(s)+'</div>';
+        }).join('');
+        var txt = String(x.it.content||'').replace(/\s+/g,' ');
+        var brief = txt.length > 60 ? (txt.substr(0,60) + '…') : txt;   // 截斷要看得出來是截斷的
+        return '<table class="ca-tbl"><tr><th class="ca-no">'+esc(x.label)+'<br>第 '+x.no+' 項</th>'
+             + '<td class="ca-body"><div class="ca-content">'+esc(brief)+'</div>'
+             + '<div class="ca-stamps">'+stamps+'</div></td></tr></table>';
+    }).join('');
+    var recordTitle = (META.as_doc_record && META.as_doc_record.doc_name) ? META.as_doc_record.doc_name : '會議記錄';
+    return '<div class="mr-page">'
+        + '<div class="mr-title">'+esc(META.company_name||'')+'-'+esc(recordTitle)+'（確認簽名附表）</div>'
+        + '<table class="mr-head">'
+        + '<tr><th>主題</th><td class="val">'+esc(m.subject)+'</td><th>日期</th><td class="val">'+dispDate(m.meeting_date)+'</td>'
+        +   '<th>主席</th><td class="val">'+esc(m.chair_name||'')+'</td></tr></table>'
+        + blocks
+        + (docNoMode==='inline' && m.as_doc_record_no ? '<div class="mr-bottom-note"><span></span><span>'+esc(m.as_doc_record_no)+'</span></div>' : '')
+        // 'fixed' 模式**刻意不再輸出一次** .as-doc-fixed：那個是 position:fixed，列印時本來就會出現在
+        // 每一頁的右下角，附表這頁也印一個等於同一個位置疊兩層（文字重疊變糊）。附表的 AS 編號由
+        // 會議記錄那一頁的同一個元素負責。
+        + '</div>';
 }
 /* 宣布事項獨立表格用：只有序/內容/備註三欄，不含應完成日期/負責人/確認簽名(該三欄對宣布事項無意義)。 */
 function announceItemRows(items){
@@ -1994,7 +2087,7 @@ function resolvePreparerThenPrint(cb){
 function printMeetingRecord(){
     if (!VIEW) return;
     var m = VIEW.meeting, res = VIEW;
-    egPrintWindow('會議記錄', meetingRecordPageHtml(m, res, 'fixed'), mrCss(), '', true, true);
+    egPrintWindow('會議記錄', meetingRecordPageHtml(m, res, 'fixed') + confirmAppendixPageHtml(m, res, 'fixed'), mrCss(), '', true, true);
 }
 function printBlankSignSheet(){
     if (!VIEW) return;

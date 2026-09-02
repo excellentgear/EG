@@ -254,6 +254,31 @@ case 'get_detail': {
             // 實際簽名者的職稱(2026-08-10使用者要求要跟簽到表格式相同，圖章模板含職稱token時才會用到)：
             // 若簽名者剛好就是 required_signers 算出的那位現場代表，直接沿用(已含職稱)；否則(部門其他出席人員、
             // 或未出席透過通知回覆的人)現場查 user_department_position_map，優先取該負責部門底下的職稱，查不到才退回主要職稱。
+            // 蓋章用的部門／職稱（2026-09-02 使用者回報「會議記錄內欄位簽名的章明顯跟上方簽到表不同」）：
+            // 圖章模板「人員簽章(長方)」第一列是 `{部門} {姓名}`，而指定人員模式的 slot 一律 dept_name=''（原本
+            // 刻意不標部門），於是同一個人在簽到表蓋出「技術部 高志宏」、在項目確認欄卻只有「高志宏」，兩顆章長得不一樣。
+            // 修法：蓋章一律優先沿用**這個人在本次出席名單上的部門/職稱**（meeting_attendee，簽到表就是拿這兩個
+            // 欄位蓋的），保證同一人兩處完全一致；沒出席而透過通知回簽的人才即時查主要職務補上。
+            // 刻意另開 stamp_dept/stamp_position 兩個欄位，不動既有的 dept_name——那個是「要求簽章的部門」，
+            // 畫面上還要拿來當簽名槽的標題，覆寫掉會讓多部門項目看不出哪一格是哪個部門。
+            $attPos = [];
+            $apq = $db->prepare("SELECT user_id, dept_name, position_name FROM meeting_attendee WHERE meeting_id=?");
+            $apq->execute([$id]);
+            foreach ($apq->fetchAll(PDO::FETCH_ASSOC) as $ar) {
+                $attPos[(int)$ar['user_id']] = ['dept'=>(string)($ar['dept_name'] ?? ''), 'pos'=>(string)($ar['position_name'] ?? '')];
+            }
+            $stampOf = function (int $confUid) use ($db, &$attPos): array {
+                if (isset($attPos[$confUid])) return $attPos[$confUid];          // 出席者＝直接沿用簽到表那兩欄
+                $st = $db->prepare("SELECT d.name AS dept_name, p.name AS position_name
+                                     FROM user_department_position_map m
+                                     LEFT JOIN department d ON d.id=m.department_id
+                                     LEFT JOIN position p ON p.id=m.position_id
+                                     WHERE m.user_id=? ORDER BY m.is_main DESC, m.id ASC LIMIT 1");
+                $st->execute([$confUid]);
+                $r = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+                $attPos[$confUid] = ['dept'=>(string)($r['dept_name'] ?? ''), 'pos'=>(string)($r['position_name'] ?? '')];
+                return $attPos[$confUid];
+            };
             $resolvePosition = function(int $confUid, ?int $deptId) use ($db): string {
                 if ($deptId !== null) {
                     $st = $db->prepare("SELECT p.name FROM user_department_position_map m LEFT JOIN position p ON p.id=m.position_id
@@ -277,10 +302,12 @@ case 'get_detail': {
                     $posName = $sr
                         ? (($reqEntry && (int)$reqEntry['user_id'] === $confUid) ? (string)$reqEntry['position_name'] : $resolvePosition($confUid, null))
                         : (string)($reqEntry['position_name'] ?? '');
+                    $sd = $stampOf($confUid);
                     $slots[] = ['dept_id'=>null, 'dept_name'=>'',
                                 'user_id'=>$confUid,
                                 'user_name'=>$sr ? $sr['user_name'] : ($names[$ou] ?? ''),
                                 'position_name'=>$posName,
+                                'stamp_dept'=>$sd['dept'], 'stamp_position'=>$sd['pos'],
                                 'is_manager'=>true, 'is_main'=>true, 'can_sign_in_person'=>(bool)$reqEntry,
                                 'signed'=>(bool)$sr, 'confirmed_at'=>$sr['confirmed_at'] ?? null,
                                 'reply_content'=>$sr['reply_content'] ?? null];
@@ -295,10 +322,12 @@ case 'get_detail': {
                     $posName = $sr
                         ? (($reqEntry && (int)$reqEntry['user_id'] === $confUid) ? (string)$reqEntry['position_name'] : $resolvePosition($confUid, $d))
                         : (string)($reqEntry['position_name'] ?? '');
+                    $sd = $confUid ? $stampOf($confUid) : ['dept'=>'', 'pos'=>''];
                     $slots[] = ['dept_id'=>$d, 'dept_name'=>$deptNames[$d] ?? '',
                                 'user_id'=>$confUid,
                                 'user_name'=>$sr ? $sr['user_name'] : ($reqEntry['user_name'] ?? ''),
                                 'position_name'=>$posName,
+                                'stamp_dept'=>$sd['dept'], 'stamp_position'=>$sd['pos'],
                                 'is_manager'=>$reqEntry['is_manager'] ?? true, 'is_main'=>$reqEntry['is_main'] ?? true,
                                 'can_sign_in_person'=>(bool)$reqEntry,
                                 'signed'=>(bool)$sr, 'confirmed_at'=>$sr['confirmed_at'] ?? null,
