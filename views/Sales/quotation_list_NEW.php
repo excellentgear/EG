@@ -1212,6 +1212,11 @@ body { background:var(--bg); }
                 <div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:5px;">
                   <i class="fa fa-cogs"></i> 連結製程
                   <small id="pt-proc-sub-label" style="color:#aaa;font-weight:400;"></small>
+                  <button type="button" id="pt-proc-move-btn" class="btn btn-xs" onclick="movePtProcesses()"
+                          style="display:none;float:right;font-size:10px;padding:1px 6px;background:#8a5a2b;color:#fff;border-color:#8a5a2b;"
+                          title="把這個子標籤底下的製程搬到其他子標籤（可跨群組），報價單不受影響">
+                    <i class="fa fa-share"></i> 搬移製程
+                  </button>
                 </div>
                 <!-- 已選製程 chips -->
                 <div id="pt-linked-chips" style="min-height:28px;padding:3px 0 5px;border-bottom:1px solid #eee;margin-bottom:5px;line-height:1.8;display:none;">
@@ -1228,6 +1233,11 @@ body { background:var(--bg); }
                     <i class="fa fa-save"></i> 儲存製程連結
                   </button>
                   <small class="text-muted" style="margin-left:6px;font-size:11px;">勾選後按儲存才會寫入資料庫</small>
+                  <div style="font-size:10px;color:#8a5a2b;background:#FFF8ED;border:1px solid #E4D3BC;border-radius:3px;padding:4px 6px;margin-top:6px;line-height:1.6;">
+                    要把已連結的製程換到<strong>別的子標籤</strong>（可跨群組），按右上角
+                    <i class="fa fa-share" style="color:#8a5a2b;"></i>「搬移製程」，不必在兩邊各勾一次。
+                    搬移只改對照表，<strong>已開好的報價單不受影響</strong>。
+                  </div>
                 </div>
               </div>
             </div>
@@ -3577,7 +3587,7 @@ function selectPtSubTag(sid) {
 function renderPtProcList() {
     if (!ptSelectedSubTagId) {
         $('#pt-proc-list').html('<div class="text-muted" style="font-size:11px;">← 先選擇子標籤</div>');
-        $('#pt-proc-search-wrap, #pt-proc-save-wrap, #pt-linked-chips').hide();
+        $('#pt-proc-search-wrap, #pt-proc-save-wrap, #pt-linked-chips, #pt-proc-move-btn').hide();
         return;
     }
     const g      = processTagTree.find(x => x.group_id === ptSelectedGroupId);
@@ -3588,6 +3598,8 @@ function renderPtProcList() {
     ptCurrentChecked = [...linked];
 
     $('#pt-proc-search-wrap, #pt-proc-save-wrap, #pt-linked-chips').show();
+    // 沒有任何已連結製程就沒得搬（搬移一律以已儲存的連結為準）
+    $('#pt-proc-move-btn').toggle(linked.length > 0);
     $('#pt-proc-search').val('');
 
     renderPtLinkedChips(ptCurrentChecked);
@@ -3670,6 +3682,119 @@ function savePtProcesses() {
             });
             Swal.fire({ toast:true, position:'top-end', icon:'success', title:'製程連結已儲存', showConfirmButton:false, timer:1800 });
         } else { Swal.fire('錯誤', res.message, 'error'); }
+    });
+}
+
+// 把這個子標籤底下「已連結的製程」搬到其他子標籤（可跨群組）。
+// 只改標籤→製程的對照表，既有報價單項目完全不受影響——它們存的是 sub_tag_id（process_notes）
+// 加上存檔當下攤平的製程，所以舊單不會被回頭改掉；改的是「之後再選這個標籤會帶出哪些製程」。
+function movePtProcesses() {
+    if (!ptSelectedSubTagId) return;
+    const g  = processTagTree.find(x => x.group_id === ptSelectedGroupId);
+    const st = g ? (g.sub_tags || []).find(x => x.sub_tag_id === ptSelectedSubTagId) : null;
+    if (!st) return;
+    const linked = (st.process_nos || []).map(Number);
+    if (!linked.length) { Swal.fire('提示', '這個子標籤底下還沒有連結任何製程', 'info'); return; }
+
+    // 搬移一律以「已儲存」的連結為準；畫面上還沒按儲存的勾選會在重新載入時被捨棄，先講清楚
+    const dirty = ptCurrentChecked.length !== linked.length || ptCurrentChecked.some(p => !linked.includes(p));
+
+    const targets = [];
+    processTagTree.forEach(gg => (gg.sub_tags || []).forEach(s => {
+        if (s.sub_tag_id !== ptSelectedSubTagId) {
+            targets.push({ id:s.sub_tag_id, name:s.sub_tag_name, gname:gg.group_name, cnt:(s.process_nos||[]).length });
+        }
+    }));
+    if (!targets.length) { Swal.fire('提示', '目前沒有其他子標籤可以搬移', 'info'); return; }
+
+    const pname = pno => { const p = allProcesses.find(x => parseInt(x.id) === pno); return p ? p.text : ('#' + pno); };
+    const procHtml = linked.map(pno =>
+        `<label style="display:block;font-size:12.5px;font-weight:400;margin:0;padding:2px 4px;cursor:pointer;">
+            <input type="checkbox" class="ptMvProc" value="${pno}" checked style="margin-right:6px;">${escapeHtml(pname(pno))}
+         </label>`).join('');
+
+    // 子標籤有三十幾個，一律要能打字篩選（本頁不載 eg_input_rules.js，比照整組移轉自帶一個篩選框）
+    const fillTarget = kw => {
+        const cur  = parseInt($('#ptMvTarget').val()) || 0;
+        const kws  = (kw || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+        const list = targets.filter(t => {
+            if (!kws.length) return true;
+            const txt = (t.name + ' ' + t.gname).toLowerCase();
+            return kws.every(k => txt.indexOf(k) >= 0);
+        });
+        if (cur && !list.some(t => t.id === cur)) {          // 目前選中的永遠保留，不會被打字洗掉
+            const c = targets.find(t => t.id === cur);
+            if (c) list.unshift(c);
+        }
+        let html = '', lastG = null;
+        list.forEach(t => {
+            if (t.gname !== lastG) { if (lastG !== null) html += '</optgroup>'; html += `<optgroup label="${escapeHtml(t.gname)}">`; lastG = t.gname; }
+            html += `<option value="${t.id}">${escapeHtml(t.name)}（目前 ${t.cnt} 個製程）</option>`;
+        });
+        if (lastG !== null) html += '</optgroup>';
+        $('#ptMvTarget').html(html || '<option value="">（沒有符合的標籤）</option>');
+        if (cur && list.some(t => t.id === cur)) $('#ptMvTarget').val(cur);
+        if (list.length === 1) $('#ptMvTarget').val(list[0].id);
+        $('#ptMvTargetCnt').text(list.length + ' 個標籤');
+    };
+
+    Swal.fire({
+        title: '搬移製程到其他子標籤',
+        width: 620,
+        html: `
+          <div style="text-align:left;font-size:13px;line-height:1.8;">
+            <div style="margin-bottom:6px;">把「<b style="color:#8a5a2b;">${escapeHtml(st.sub_tag_name)}</b>」底下勾選的製程搬到：
+              <small id="ptMvTargetCnt" style="color:#aaa;"></small></div>
+            <input type="text" id="ptMvKw" class="form-control input-sm" placeholder="輸入標籤或群組名稱篩選…" style="font-size:12px;margin-bottom:4px;">
+            <select id="ptMvTarget" class="form-control" style="font-size:13px;"></select>
+            <div style="margin:10px 0 4px;">
+              要搬哪些製程
+              <span style="float:right;font-size:12px;">
+                <a href="javascript:;" id="ptMvAll">全選</a> ｜ <a href="javascript:;" id="ptMvNone">全不選</a>
+              </span>
+            </div>
+            <div id="ptMvList" style="max-height:200px;overflow:auto;border:1px solid #E4D3BC;border-radius:4px;padding:4px 6px;">${procHtml}</div>
+            <div style="margin-top:10px;background:#FFF8ED;border:1px solid #E4D3BC;border-radius:4px;padding:8px 10px;color:#6b4a22;font-size:12px;">
+              搬移只改「標籤→製程」的對照，<b>已經開好的報價單不會被改到</b>（那些項目的製程是存檔當下就記下來的）。<br>
+              之後在報價單點選標籤時，這些製程就會改成跟著新的子標籤帶出來。目標標籤本來就有的製程只會從原標籤移除、不會重複。
+              ${dirty ? '<br><span style="color:#DD5138;font-weight:700;">注意：右欄目前有尚未儲存的勾選變更，搬移後會以已儲存的內容重新載入。</span>' : ''}
+            </div>
+          </div>`,
+        showCancelButton: true,
+        confirmButtonText: '確定搬移',
+        cancelButtonText: '取消',
+        confirmButtonColor: '#8a5a2b',
+        didOpen: () => {
+            $(document).off('focusin.modal');
+            fillTarget('');
+            $('#ptMvKw').on('input', function () { fillTarget(this.value); });
+            $('#ptMvAll').on('click',  () => $('.ptMvProc').prop('checked', true));
+            $('#ptMvNone').on('click', () => $('.ptMvProc').prop('checked', false));
+        },
+        preConfirm: () => {
+            const pnos = $('.ptMvProc:checked').map(function(){ return parseInt(this.value); }).get();
+            const tgt  = parseInt($('#ptMvTarget').val()) || 0;
+            if (!pnos.length) { Swal.showValidationMessage('請至少勾選一個要搬移的製程'); return false; }
+            if (!tgt)         { Swal.showValidationMessage('請選擇要搬到哪一個子標籤'); return false; }
+            return { pnos, tgt };
+        }
+    }).then(r => {
+        if (!r.isConfirmed || !r.value) return;
+        ptPost({ action:'move_process_tag_processes', sub_tag_id:ptSelectedSubTagId,
+                 target_sub_tag_id:r.value.tgt, process_nos:JSON.stringify(r.value.pnos) }).then(res => {
+            if (!res.success) { Swal.fire('無法搬移', res.message || '搬移失敗', 'error'); return; }
+            const savedGid = ptSelectedGroupId, savedSid = ptSelectedSubTagId;
+            loadProcessTagTree(() => {
+                ptSelectedGroupId  = savedGid;
+                ptSelectedSubTagId = savedSid;
+                renderPtGroupList(); renderPtSubTagList(); renderPtProcList();
+            });
+            Swal.fire({ icon:'success', title:'已搬移',
+                html: `已把 <b>${res.moved + res.dup}</b> 個製程搬到「<b>${escapeHtml(res.to_group)}</b> ／ <b>${escapeHtml(res.to)}</b>」。`
+                    + (res.dup ? `<br><small style="color:#6b4a22;">其中 ${res.dup} 個目標標籤本來就有，只從原標籤移除。</small>` : '')
+                    + `<br><small style="color:#888;">「${escapeHtml(res.from)}」還剩 ${res.src_left} 個製程。</small>`,
+                confirmButtonText: '知道了', confirmButtonColor: '#8a5a2b' });
+        });
     });
 }
 

@@ -2990,6 +2990,8 @@ try {
 
         case 'save_process_tag_processes':
             // 更新子標籤下的製程對應（全量替換）
+            // 搬移／刪除都驗權限，這裡不驗的話直打 API 就能達到同樣效果（勾這裡取消、勾那裡加上）＝鐵律8
+            if (!qtag_can_settings($pdo, $user_id)) throw new Exception('您沒有報價單設定權限，不可修改製程連結');
             $sid  = intval($_POST['sub_tag_id'] ?? 0);
             $pnos = json_decode($_POST['process_nos'] ?? '[]', true) ?: [];
             if (!$sid) throw new Exception('缺少 sub_tag_id');
@@ -3002,6 +3004,64 @@ try {
             }
             $response = ['success' => true, 'message' => '已儲存'];
             break;
+
+        // 把子標籤底下「已連結的製程」搬到另一個子標籤（可跨群組）。
+        // 只動 quotation_process_tag_map（標籤→製程對照），完全不碰任何報價單：
+        // 既有報價單項目的製程是存 sub_tag_id（process_notes）＋存檔當下攤平的 quotation_item_process_map，
+        // 兩者都不因為對照表改動而變，所以舊單不會被回頭改掉；這裡改的是「之後再選這個標籤會帶出哪些製程」。
+        case 'move_process_tag_processes': {
+            if (!qtag_can_settings($pdo, $user_id)) throw new Exception('您沒有報價單設定權限，不可搬移製程連結');
+            $src  = intval($_POST['sub_tag_id'] ?? 0);
+            $tgt  = intval($_POST['target_sub_tag_id'] ?? 0);
+            $pnos = json_decode($_POST['process_nos'] ?? '[]', true);
+            if (!is_array($pnos)) throw new Exception('格式錯誤');
+            $pnos = array_values(array_unique(array_filter(array_map('intval', $pnos), fn($v) => $v > 0)));
+            if (!$src || !$tgt) throw new Exception('缺少參數');
+            if ($src === $tgt)  throw new Exception('目標子標籤不可以是原本那一個');
+            if (!$pnos)         throw new Exception('請至少選擇一個要搬移的製程');   // 空陣列與沒給是兩回事，一律擋下
+
+            $q = $pdo->prepare("SELECT s.sub_tag_id, s.sub_tag_name, s.is_active, g.group_name
+                                FROM quotation_process_sub_tag s
+                                JOIN quotation_process_tag_group g ON g.group_id = s.group_id
+                                WHERE s.sub_tag_id IN (?,?)");
+            $q->execute([$src, $tgt]);
+            $tags = $q->fetchAll(PDO::FETCH_UNIQUE | PDO::FETCH_ASSOC);
+            if (!isset($tags[$src])) throw new Exception('找不到原本的子標籤');
+            if (!isset($tags[$tgt]) || !(int)$tags[$tgt]['is_active']) throw new Exception('目標子標籤不存在或已停用');
+
+            // 只准搬「這個子標籤目前真的連著」的製程（前端也擋一次，這裡防直打 API＝鐵律8）
+            $ls = $pdo->prepare("SELECT process_no FROM quotation_process_tag_map WHERE sub_tag_id=?");
+            $ls->execute([$src]);
+            $srcHave = array_map('intval', $ls->fetchAll(PDO::FETCH_COLUMN));
+            $bad = array_values(array_diff($pnos, $srcHave));
+            if ($bad) throw new Exception('製程 #' . implode('、#', $bad) . ' 並不在此子標籤底下，無法搬移');
+            $ls->execute([$tgt]);
+            $tgtHave = array_map('intval', $ls->fetchAll(PDO::FETCH_COLUMN));
+
+            $moved = 0; $dup = 0;
+            $pdo->beginTransaction();
+            try {
+                $mx = $pdo->prepare("SELECT COALESCE(MAX(sort_order),-1)+1 FROM quotation_process_tag_map WHERE sub_tag_id=?");
+                $mx->execute([$tgt]);
+                $ord = (int)$mx->fetchColumn();
+                $ins = $pdo->prepare("INSERT IGNORE INTO quotation_process_tag_map (sub_tag_id, process_no, sort_order) VALUES (?,?,?)");
+                $del = $pdo->prepare("DELETE FROM quotation_process_tag_map WHERE sub_tag_id=? AND process_no=?");
+                foreach ($pnos as $pno) {
+                    if (in_array($pno, $tgtHave, true)) { $dup++; }          // 目標本來就有＝只從原標籤移除，不重複塞
+                    else { $ins->execute([$tgt, $pno, $ord++]); $moved++; }
+                    $del->execute([$src, $pno]);
+                }
+                $pdo->commit();
+            } catch (Exception $e) { $pdo->rollBack(); throw $e; }
+
+            $response = ['success' => true, 'message' => '已搬移',
+                         'moved' => $moved, 'dup' => $dup,
+                         'from' => $tags[$src]['sub_tag_name'],
+                         'to'   => $tags[$tgt]['sub_tag_name'],
+                         'to_group' => $tags[$tgt]['group_name'],
+                         'src_left' => count(array_diff($srcHave, $pnos))];
+            break;
+        }
 
         default:
             $response['message'] = 'Invalid action.';
