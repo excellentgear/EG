@@ -2040,7 +2040,7 @@ function loadReport(){
                 h += '<tr><td class="l">'+esc(d.dept_name)+'</td>'
                   + '<td>'+(d.major||'')+'</td><td>'+(d.minor||'')+'</td><td>'+(d.observe||'')+'</td>'
                   + '<td>'+dispDate(d.audited_date)+'</td><td>'+esc(d.audited_time||'')+'</td>'
-                  + '<td>'+esc(d.auditor_name||'')+'</td>'
+                  + '<td>'+auditorLines(d, 110)+'</td>'
                   + '<td><input type="date" class="rpDue" data-dept="'+esc(d.dept_name)+'" value="'
                   + esc(inputDate(d.improve_due))+'"'+(admin?'':' readonly')
                   + ' style="border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
@@ -2483,6 +2483,25 @@ function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
         + '<scr'+'ipt>window.onload=function(){'+js+'setTimeout(function(){window.print();},250);};</scr'+'ipt></body></html>');
     w.document.close();
 }
+/** 列印用：一個人一列，「部門 姓名」印在同一列不可拆行；字太長時自動縮小字級塞進欄寬。
+ *  （2026-09-02 使用者要求：稽核員要顯示部門、要一人一列、部門與人名不可分段） */
+function personLine(txt, maxW){
+    txt = String(txt||'').trim();
+    if (!txt) return '';
+    maxW = maxW || 130;
+    // 中文字寬約等於字級，空白算半個字；由可用寬度回推字級，最小 8px、最大 12px
+    var n = txt.replace(/\s/g,'').length + (/\s/.test(txt) ? 0.5 : 0);
+    var size = Math.max(8, Math.min(12, Math.floor(maxW / Math.max(1, n) * 10) / 10));
+    return '<div style="white-space:nowrap;font-size:'+size+'px;line-height:1.5;">'+esc(txt)+'</div>';
+}
+/** 一列受稽單位的稽核員 → 多列「部門 姓名」（沒有人員清單時退回舊的姓名字串） */
+function auditorLines(d, maxW){
+    var ns = (d.auditors||[]).map(function(x){
+        return String(x.dept_name ? (x.dept_name+' '+x.user_name) : (x.user_name||''));
+    }).filter(function(x){ return x.trim()!==''; });
+    if (!ns.length) ns = String(d.auditor_name||'').split(/[、／\/]/).filter(function(x){ return x.trim()!==''; });
+    return ns.map(function(t){ return personLine(t, maxW); }).join('');
+}
 function printHead(meta, titleOverride){
     return '<div class="pt-head"><div class="co">'+esc(meta.company||'')+'</div>'
          + '<div class="en">EXCELLENT GEAR TECHNOLOGY CO.,LTD</div>'
@@ -2529,6 +2548,10 @@ function withPrintMeta(key, bizDate, ctx, cb, people){
     var q = $.extend({action:'print_meta', key:key, biz_date:bizDate||''}, ctx||{});
     $.getJSON(API, q, function(res){
         if (!res.ok) { alert(res.error||'列印資料載入失敗'); return; }
+        // eg_stamp.js 的回墨印上半格印的是「本公司全名」，它讀的是全域 window.__ownCompany；
+        // 本頁沒設過這個變數，所以章的上半格一直是空的（2026-09-02 使用者回報「公司名稱顯示不完全」）。
+        // 名稱本來就跟著 print_meta 回來（禁寫死＝ai-rules/16），在這裡補上，14 個蓋章點一次全部正確。
+        if (res.company) window.__ownCompany = res.company;
         var need = (people||[]).filter(function(x){ return x && +x.id > 0 && !IDENT[identKey(x.id, x.date)]; });
         var go = function(){
             // 掃描實體章對照表是非同步載入的，沒等它有實體章的人會印成預設 SVG 章
@@ -2604,11 +2627,13 @@ function printCase(id){
               + '<th style="width:90px;">稽核組長</th><td>'+esc(c.leader_name||'')+'</td></tr></table>';
 
             var ds = c.depts||[];
-            // 稽核員／陪檢員可多位，一位一行才看得清楚
+            // 稽核員／陪檢員可多位，一位一行；一列印「部門 姓名」且部門與姓名不可被拆到兩行
             var nameLines = function(list, fallback){
-                var ns = (list||[]).map(function(x){ return String(x.user_name||''); }).filter(function(x){ return x!==''; });
+                var ns = (list||[]).map(function(x){
+                    return String(x.dept_name ? (x.dept_name + ' ' + x.user_name) : (x.user_name||''));
+                }).filter(function(x){ return x.trim()!==''; });
                 if (!ns.length && fallback) ns = String(fallback).split(/[、／\/]/).filter(function(x){ return x!==''; });
-                return ns.map(esc).join('<br>');
+                return ns.map(personLine).join('');
             };
             // 2026-08-27 使用者要求：標題改在上面（與畫面上的受稽單位列表同一種讀法），
             // 一個受稽單位一列；<thead> 讓表頭跨頁自然重複（列印分頁交給瀏覽器引擎）
@@ -2798,7 +2823,7 @@ $('#btnReportPrint').on('click', function(){
         var h = printHead(m);
         h += '<table class="ia-p"><thead>'
            + '<tr><th rowspan="2" style="width:90px;">受稽單位</th><th colspan="3">缺點數</th>'
-           + '<th colspan="2">受稽時間</th><th rowspan="2" style="width:70px;">稽核員</th>'
+           + '<th colspan="2">受稽時間</th><th rowspan="2" style="width:96px;">稽核員</th>'
            + '<th rowspan="2" style="width:110px;">預定完成改善時間</th></tr>'
            + '<tr><th style="width:34px;">主</th><th style="width:34px;">次</th><th style="width:34px;">觀</th>'
            + '<th style="width:82px;">日期</th><th style="width:56px;">時間</th></tr></thead><tbody>';
@@ -2807,7 +2832,7 @@ $('#btnReportPrint').on('click', function(){
             h += '<tr><td>'+esc(d.dept_name)+'</td>'
               + '<td>'+(d.major||'')+'</td><td>'+(d.minor||'')+'</td><td>'+(d.observe||'')+'</td>'
               + '<td>'+dispDate(d.audited_date)+'</td><td>'+esc(d.audited_time||'')+'</td>'
-              + '<td>'+esc(d.auditor_name||'')+'</td><td>'+dispDate(d.improve_due)+'</td></tr>';
+              + '<td>'+auditorLines(d, 90)+'</td><td>'+dispDate(d.improve_due)+'</td></tr>';
         });
         // 紙本這張表下半部是空白列，保留可手寫的空間
         for (var i=rows.length; i<12; i++){

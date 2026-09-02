@@ -59,6 +59,37 @@
         var k = Math.max(0, 1 - dy * dy);
         return Math.max(6, rx * Math.sqrt(k) - 2);
     }
+    /**
+     * 一列文字實際可用的半寬。
+     * 2026-09-02 使用者回報「公司名稱顯示不完全」：原本一律用「列中心那條線」的弦長當可用寬度，
+     * 但圓／橢圓越靠上下緣越窄，字是有高度的——靠近上下緣那幾列（公司名、人名）的字會壓到外框。
+     * 這裡改成取「整個字高跨過的範圍內最窄處」，也就是離圓心較遠的那一端。
+     */
+    function halfWidthForText(schema, cy, fs, W, H) {
+        var shape = schema.shape || 'circle';
+        if (shape === 'rect' || shape === 'roundrect' || shape === 'none') return halfWidthAt(schema, cy, W, H);
+        var half = fs * 0.45;                       // 中文字的墨水高度約佔字級的九成
+        var top = cy - half, bot = cy + half;
+        var far = (Math.abs(top - H / 2) > Math.abs(bot - H / 2)) ? top : bot;
+        return Math.min(halfWidthAt(schema, cy, W, H), halfWidthAt(schema, far, W, H));
+    }
+    /**
+     * 讓一列文字塞進外框內：先容許縮小字級最多 15%（保持字形比例），
+     * 還是不夠才用 textLength 壓字距（跟原本的作法一致）。
+     * 回 { fs, maxW }。
+     */
+    function fitRow(schema, cy, fs, len, W, H) {
+        len = Math.max(1, len);
+        var w = 2 * halfWidthForText(schema, cy, fs, W, H) - 4;
+        if (len * fs <= w) return { fs: fs, maxW: w };
+        var min = Math.max(5, fs * 0.85);
+        for (var k = 0; k < 6 && fs > min; k++) {
+            fs = Math.max(min, fs * 0.97);
+            w = 2 * halfWidthForText(schema, cy, fs, W, H) - 4;
+            if (len * fs <= w) break;
+        }
+        return { fs: fs, maxW: w };
+    }
     // render(schema, ctx) → SVG 字串。寬 schema.size px、高依 ratio。
     function render(schema, ctx) {
         schema = schema || {};
@@ -123,19 +154,20 @@
                     var startY = cy - lh * (n - 1) / 2;
                     for (var li = 0; li < n; li++) {
                         var ly = startY + li * lh;
-                        var lw = 2 * halfWidthAt(schema, ly, W, H) - 4;
-                        var lFit = lines[li].length * fs > lw;
-                        svg += '<text x="' + (W/2) + '" y="' + (ly + fs * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + fs.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'
-                             + (lFit ? ' textLength="' + lw.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : '')
+                        var lf = fitRow(schema, ly, fs, lines[li].length, W, H);
+                        var lFit = lines[li].length * lf.fs > lf.maxW;
+                        svg += '<text x="' + (W/2) + '" y="' + (ly + lf.fs * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + lf.fs.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'
+                             + (lFit ? ' textLength="' + lf.maxW.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : '')
                              + '>' + esc(lines[li]) + '</text>';
                     }
                 } else {
                     // 自動縮小（預設）：單行置中，超寬時以 textLength 壓縮字距；自動字級取列高 0.68 盡量填滿（同現有回墨章比例）
                     var fs2 = userFs || Math.min(rh * 0.68, maxW / Math.max(1, txt.length) * 1.15);
                     fs2 = Math.max(5, Math.min(fs2, rh * 0.92));
-                    var needFit = txt.length * fs2 > maxW;
-                    svg += '<text x="' + (W/2) + '" y="' + (cy + fs2 * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + fs2.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'
-                         + (needFit ? ' textLength="' + maxW.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : '')
+                    var rf = fitRow(schema, cy, fs2, txt.length, W, H);
+                    var needFit = txt.length * rf.fs > rf.maxW;
+                    svg += '<text x="' + (W/2) + '" y="' + (cy + rf.fs * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + rf.fs.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'
+                         + (needFit ? ' textLength="' + rf.maxW.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : '')
                          + '>' + esc(txt) + '</text>';
                 }
             }

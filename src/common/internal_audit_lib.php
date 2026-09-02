@@ -1158,16 +1158,22 @@ function ia_report_data(PDO $db, int $year): array
     } catch (Throwable $e) {}
 
     // 該年度各受稽單位的受稽時間／稽核員／人工指定的改善期限
+    // 稽核員可多位，報告表要「一人一列、部門與姓名同一列」，所以連人員清單一起帶出來
     $caseDept = [];
     try {
         $st = $db->prepare("SELECT cd.* FROM ia_case_dept cd JOIN ia_case c ON c.case_id=cd.case_id
                             WHERE c.year=? AND COALESCE(c.is_deleted,0)=0
                             ORDER BY cd.audited_date, cd.cd_id");
         $st->execute([$year]);
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $cdRows = $st->fetchAll(PDO::FETCH_ASSOC);
+        $pmap = ia_cd_people_map($db, array_map(function ($r) { return (int)$r['cd_id']; }, $cdRows), $cdRows);
+        foreach ($cdRows as $r) {
             $k = (string)($r['dept_name'] ?? '');
             if ($k === '') continue;
-            if (!isset($caseDept[$k])) $caseDept[$k] = $r;
+            if (!isset($caseDept[$k])) {
+                $r['auditors'] = $pmap[(int)$r['cd_id']]['auditor'] ?? [];
+                $caseDept[$k] = $r;
+            }
         }
     } catch (Throwable $e) {}
 
@@ -1183,6 +1189,7 @@ function ia_report_data(PDO $db, int $year): array
                 'audited_date' => (string)($cd['audited_date'] ?? ''),
                 'audited_time' => (string)($cd['audited_time'] ?? ''),
                 'auditor_name' => (string)($cd['auditor_name'] ?? ''),
+                'auditors'     => $cd['auditors'] ?? [],
                 'improve_due'  => (string)($cd['improve_due'] ?? ''),
                 'auto_due'     => '',
                 'closed'       => 0, 'total' => 0,
@@ -1202,6 +1209,11 @@ function ia_report_data(PDO $db, int $year): array
         }
         if ($byDept[$d]['auditor_name'] === '' && (string)($r['auditor_name'] ?? '') !== '') {
             $byDept[$d]['auditor_name'] = (string)$r['auditor_name'];
+            // 只有 IA 單查得到稽核員時，至少讓報告表印得出姓名（部門就留白）
+            if (!$byDept[$d]['auditors']) {
+                $byDept[$d]['auditors'] = [['user_id' => (int)($r['auditor_id'] ?? 0),
+                                            'user_name' => (string)$r['auditor_name'], 'dept_name' => '']];
+            }
         }
         $records[] = [
             'dept_name' => $d,
@@ -1221,7 +1233,8 @@ function ia_report_data(PDO $db, int $year): array
         $byDept[$name] = [
             'dept_name'=>$name, 'major'=>0, 'minor'=>0, 'observe'=>0,
             'audited_date'=>(string)($cd['audited_date'] ?? ''), 'audited_time'=>(string)($cd['audited_time'] ?? ''),
-            'auditor_name'=>(string)($cd['auditor_name'] ?? ''), 'improve_due'=>(string)($cd['improve_due'] ?? ''),
+            'auditor_name'=>(string)($cd['auditor_name'] ?? ''), 'auditors'=>$cd['auditors'] ?? [],
+            'improve_due'=>(string)($cd['improve_due'] ?? ''),
             'auto_due'=>'', 'closed'=>0, 'total'=>0,
         ];
     }
@@ -1614,6 +1627,16 @@ function ia_cd_people_map(PDO $db, array $cdIds, array $cdRows = []): array
     $out = [];
     foreach ($cdIds as $id) $out[(int)$id] = ['auditor' => [], 'escort' => []];
     if (!$out) return $out;
+    // 部門／職稱名稱一併帶出來——列印要印「部門 姓名」，不要讓每個呼叫端各查一次
+    static $deptName = null, $posName = null;
+    if ($deptName === null) {
+        $deptName = []; $posName = [];
+        try { foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d)
+                  $deptName[(int)$d['id']] = (string)$d['name']; } catch (Throwable $e) {}
+        try { foreach ($db->query("SELECT id, name FROM position")->fetchAll(PDO::FETCH_ASSOC) as $d)
+                  $posName[(int)$d['id']] = (string)$d['name']; } catch (Throwable $e) {}
+    }
+    $nm = function ($map, $id) { return $id ? ($map[(int)$id] ?? '') : ''; };
     $in = implode(',', array_fill(0, count($out), '?'));
     try {
         $st = $db->prepare("SELECT * FROM ia_case_dept_person WHERE cd_id IN ($in)
@@ -1627,6 +1650,8 @@ function ia_cd_people_map(PDO $db, array $cdIds, array $cdRows = []): array
                 'user_name'   => (string)($r['user_name'] ?? ''),
                 'dept_id'     => $r['dept_id'] !== null ? (int)$r['dept_id'] : null,
                 'position_id' => $r['position_id'] !== null ? (int)$r['position_id'] : null,
+                'dept_name'     => $nm($deptName, $r['dept_id']),
+                'position_name' => $nm($posName, $r['position_id']),
                 'post_key3'   => ia_post_key((int)$r['user_id'], $r['dept_id'], $r['position_id']),
             ];
         }
@@ -1660,6 +1685,8 @@ function ia_cd_people_map(PDO $db, array $cdIds, array $cdRows = []): array
                     'user_name'   => $nm,
                     'dept_id'     => ($r[$k . '_dept_id'] ?? null) !== null ? (int)$r[$k . '_dept_id'] : null,
                     'position_id' => ($r[$k . '_position_id'] ?? null) !== null ? (int)$r[$k . '_position_id'] : null,
+                    'dept_name'     => $nm($deptName, $r[$k . '_dept_id'] ?? null),
+                    'position_name' => $nm($posName, $r[$k . '_position_id'] ?? null),
                     'post_key3'   => ia_post_key($uid, $r[$k . '_dept_id'] ?? null, $r[$k . '_position_id'] ?? null),
                 ];
             }
