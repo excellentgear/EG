@@ -124,6 +124,13 @@ require_once __DIR__ . '/../../src/common/gear_tool_lib.php';
 $show_gear_tool = (isset($pdo) && $pdo) ? gear_tool_can_use($pdo, $uid) : false;
 $is_gear_admin  = gear_tool_is_admin();
 
+// ── 鍵槽計算工具（底部狀態列那顆「鍵槽計算」，在齒輪計算右側）──────────────────
+// 同樣與訂單追蹤頁共用同一個工具視窗（軸件／片狀鍵槽公差與極限值，純前端計算），
+// 唯一實作在 src/common/keyway_tool_lib.php ＋ views/Sales/_keyway_tool_ui.php，本頁不自刻。
+// 權限沿用該工具原本的規則（系統管理員或持有 ot_keyway_calc 功能碼的角色）。
+require_once __DIR__ . '/../../src/common/keyway_tool_lib.php';
+$can_keyway_calc = (isset($pdo) && $pdo) ? keyway_tool_can_use($pdo, $uid) : false;
+
 // ── 標籤實體檔 NAS 儲存 ─────────────────────────────────────────────────
 // 路徑可於 使用者權限管理頁 設定（system_settings: imgedit_label_nas_dir）。
 // 子資料夾前綴避免使用者ID與部門ID衝突：U<使用者ID>＝私人、D<部門ID>＝部門、company＝公司共用。
@@ -1398,6 +1405,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <?php if ($show_gear_tool): ?>
             <button class="tb-btn" onclick="openGearTool()" title="開啟齒輪計算工具：預設停靠在畫布右緣的側邊面板（可拖左緣調寬、按面板上的「浮出」變回可拖曳的獨立視窗）。與訂單追蹤頁同一個工具、同一份預留量與花鍵公差資料：基本齒輪計算、跨齒⇄跨珠、建議滾齒、回推轉位係數、內外花鍵與配合、栓槽、出尾計算"><i class="fa fa-cog"></i> 齒輪計算</button>
 <?php endif; ?>
+<?php if ($can_keyway_calc): ?>
+            <button class="tb-btn" onclick="openKwTool()" title="開啟鍵槽計算工具：與訂單追蹤頁同一個工具、同一套算法。軸件分頁＝軸上鍵槽（軸徑、槽寬、槽深與圓心到槽底），片狀分頁＝孔內鍵槽；填公稱值與上下偏差自動算出極限值與加工尺寸"><i class="fa fa-key"></i> 鍵槽計算</button>
+<?php endif; ?>
             <span style="margin-left:auto;">Ctrl+V 貼圖｜拖檔案進來開圖｜滾輪縮放｜空白鍵拖曳平移｜Delete 刪除｜Ctrl+Z 復原</span>
         </div>
     </div>
@@ -1893,6 +1903,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li><b>圖框裁切</b>（底部狀態列，預設開啟）：白色畫布就是 Figma 的「圖框(Frame)」。物件<b>中心點</b>落在圖框內＝屬於這個圖框，超出圖框邊界的部分會被切齊不顯示，匯出與列印也一樣切齊；中心點在圖框外的物件＝不屬於圖框，維持完整顯示不受影響。被切掉的部分只是不顯示，物件本身還在——照樣選得到、拖回圖框內就完整出現。要看到全部原樣就把這個勾選取消</li>
 <?php if ($show_gear_tool): ?>
                 <li><b>齒輪計算</b>（底部狀態列）：開啟<b>齒輪／花鍵計算工具</b>，預設<b>停靠在畫布右緣的側邊面板</b>（像 Figma 的頁內面板），版面自動改成上下排、不會蓋住整張圖，可以一邊看圖一邊算（關掉不影響畫布內容）。<b>面板左緣可拖曳調整寬度</b>；按面板標題列的「<b>浮出</b>」就變回可自由拖曳的獨立視窗、按「<b>停靠</b>」再貼回右緣，選擇會記住下次開啟沿用。與<b>訂單追蹤頁的「齒輪計算」是同一個工具、同一份預留量與花鍵公差資料</b>，兩邊算出來一定一致。分頁包含：基本齒輪計算、跨齒⇄跨珠互換、跨珠換算、建議滾齒值、由外徑或跨齒厚回推轉位係數 x、內／外花鍵與花鍵配合、矩形栓槽跨銷值、出尾長度與刀具外徑建議，以及模數／外徑預留量的管理。沒有出現這顆按鈕＝你的角色沒有「齒輪計算」權限，請洽管理者到<b>使用者權限管理 →「未交訂單／訂單追蹤」</b>區塊勾選</li>
+<?php endif; ?>
+<?php if ($can_keyway_calc): ?>
+                <li><b>鍵槽計算</b>（底部狀態列，齒輪計算右側）：開啟<b>鍵槽計算工具</b>浮動視窗，與<b>訂單追蹤頁的「鍵槽計算」是同一個工具、同一套算法</b>，兩邊算出來一定一致（純計算、不會動到畫布內容，標題列可拖曳移動位置）。兩個分頁：<b>軸件</b>＝軸上的鍵槽（軸徑、槽寬、槽深、圓心到槽底），<b>片狀</b>＝孔內的鍵槽；灰底欄位自己填（公稱值＋上下偏差），藍底欄位系統自動算出極限值與加工尺寸，圖示會同步標示對應位置。按「清除」清空目前分頁的輸入。沒有出現這顆按鈕＝你的角色沒有「鍵槽計算」權限，請洽管理者到<b>使用者權限管理 →「未交訂單／訂單追蹤」</b>區塊勾選</li>
 <?php endif; ?>
                 <li><b>直線／箭頭的拉伸</b>：選取一條線（含帶箭頭的線）只會出現<b>頭尾兩個圓點</b>，各自拖曳就是改長度與方向，不是整個外框等比例放大縮小；箭頭大小固定不會被拉扯變形。需要真的整體縮放（例如連箭頭一起放大）請改用屬性列的「粗細」或雙擊進入「編輯端點」</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
@@ -7839,6 +7852,12 @@ $gear_tool_dock = '#canvas-wrap';
 $gear_tool_dock_default = true;
 $gear_tool_dock_offset = '#label-lib';   // 標籤庫也貼右緣：它一打開，齒輪面板自動往左讓開並排
 include __DIR__ . '/_gear_tool_ui.php';
+?>
+
+<?php
+// 鍵槽計算工具視窗（CSS＋HTML＋JS）：與訂單追蹤頁共用同一份，禁止在本頁複製一套（鐵律4）
+$KEYWAY_TOOL_PDO = $pdo ?? null;
+include __DIR__ . '/_keyway_tool_ui.php';
 ?>
 </body>
 </html>
