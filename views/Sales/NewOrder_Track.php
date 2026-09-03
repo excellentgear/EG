@@ -3152,8 +3152,16 @@ foreach($dCounts as $c) {
         /* 急件（2026-09-03）：淺暖粉紅底色，需蓋過 table-striped 的斑馬紋故用 !important */
         #orderTable tbody tr.order-urgent > td { background-color: #FBE3DD !important; }
         #orderTable tbody tr.order-urgent:hover > td { background-color: #F7D5CC !important; }
-        .urgent-badge { display:inline-block;background:#F0A24B;color:#4A2A0A;font-size:10px;font-weight:700;
-                        border-radius:3px;padding:0 5px;letter-spacing:1px; }
+        /* 急件徽章的高度（2026-09-03 使用者回報「急件標示太高，導致整列變高影響閱讀」）：
+           原本只寫 font-size:10px 沒寫 line-height，就會去繼承表格列的 line-height（實測 28px），
+           結果一個 10px 的字佔掉 28px 的高度，客戶欄多這一列就把整列撐高（急件列 75.5px vs 一般列 69.7px）。
+           改成與同一列的「轉生管」按鈕等高：.btn-xs 是 font-size 11px→line-height 16.5px，
+           加上該按鈕自訂的 padding 2px 與框線 1px＝22.5px，故這裡照同一組數字組出 22.5px
+           （字級維持 10px，外觀不變；透明框線只是為了把高度湊到跟按鈕一致）。 */
+        .urgent-badge { display:inline-block;vertical-align:middle;
+                        background:#F0A24B;color:#4A2A0A;font-size:10px;font-weight:700;
+                        line-height:16.5px;padding:2px 5px;border:1px solid transparent;
+                        border-radius:3px;letter-spacing:1px; }
         
         /* Column Specifics */
         .col-date { width: 88px; text-align: center; font-family: "Consolas", monospace; color: #666; }
