@@ -185,6 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'orderDdate'         => $row['orderDdate'] ?? '',
                 'datepicker_ate'     => $row['datepicker_ate'] ?? '',
                 'Order_status'       => $row['Order_status'] ?? null,
+                'is_urgent'          => (int)($row['is_urgent'] ?? 0),
             ]]);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -1782,6 +1783,11 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     catch (Exception $_eRep) {
         try { $pdo->exec("ALTER TABLE order_track ADD COLUMN is_repeat_conversion TINYINT(1) NOT NULL DEFAULT 0 COMMENT '同一報價項目先前已轉過訂單、此為追加訂單=1(不影響KPI報價轉訂單比例統計)'"); } catch (Exception $_eRep2) {}
     }
+    // 相容舊表：is_urgent（急件旗標）首次執行自動補欄
+    try { $pdo->query("SELECT is_urgent FROM order_track LIMIT 1"); }
+    catch (Exception $_eUrg) {
+        try { $pdo->exec("ALTER TABLE order_track ADD COLUMN is_urgent TINYINT(1) NOT NULL DEFAULT 0 COMMENT '急件=1；篩選批圖中時排最上方(多筆依接單日新到舊)，清單以淺暖粉紅底色標示'"); } catch (Exception $_eUrg2) {}
+    }
 
     $whereClauses = ["1=1", "(ot.parent_order_id IS NULL OR ot.parent_order_id = 0)"];
     $params = [];
@@ -1915,6 +1921,12 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         'unfinished'    => $globalResult['unfinished'] ?? 0,
     ];
 
+    // 排序（使用者明確要求，2026-09-03）：只有「批圖中」篩選會把急件拉到最上方，
+    // 多筆急件依接單日(Order_date)由新到舊；非急件與其他篩選一律維持原本的建檔時間新到舊，不動既有行為。
+    $orderBySql = ($status === 'in_progress')
+        ? "ORDER BY ot.is_urgent DESC, CASE WHEN ot.is_urgent = 1 THEN ot.Order_date END DESC, ot.Created_At DESC"
+        : "ORDER BY ot.Created_At DESC";
+
     $dataSql = "SELECT ot.*, 
         CONCAT(DATE_FORMAT(ot.Order_date, '%y'), 'y/', DATE_FORMAT(ot.Order_date, '%c/%e')) AS Order_date_formatted, 
         CONCAT(DATE_FORMAT(ot.Delivery_date, '%y'), 'y/', DATE_FORMAT(ot.Delivery_date, '%c/%e')) AS Delivery_date_formatted, 
@@ -1929,7 +1941,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
         DATE_FORMAT(ot.Modified_At, '%c/%e') AS Modified_At_formatted
         FROM order_track ot LEFT JOIN user u ON u.id = ot.ate LEFT JOIN user AS creator ON creator.id = ot.Created_By
         LEFT JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
-        $whereSql ORDER BY ot.Created_At DESC LIMIT $limit OFFSET $offset";
+        $whereSql $orderBySql LIMIT $limit OFFSET $offset";
     $stmtData = $pdo->prepare($dataSql);
     $stmtData->execute($params);
     $order_list = $stmtData->fetchAll(PDO::FETCH_ASSOC);
@@ -2532,7 +2544,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                                . '<i class="fa ' . $_bomIconRow . '" style="color:' . $_bomColorRow . ';font-size:12px;margin-left:4px;"></i></a>';
             }
 ?>
-            <tr data-orderid="<?= safe_html($order['Order_id']) ?>" data-bom-icon="<?= htmlspecialchars($_bomIconHtml, ENT_QUOTES, 'UTF-8') ?>">
+            <tr class="<?= !empty($order['is_urgent']) ? 'order-urgent' : '' ?>" data-orderid="<?= safe_html($order['Order_id']) ?>" data-bom-icon="<?= htmlspecialchars($_bomIconHtml, ENT_QUOTES, 'UTF-8') ?>">
                 <?php if ($show_op_col): ?>
                 <td style="text-align: center;">
                     <div style="display: flex; flex-direction: column; align-items: center; gap: 3px;">
@@ -2553,6 +2565,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                 
                 <td class="col-date">
                     <div style="line-height:1.7;font-size:11px;">
+                        <?php if (!empty($order['is_urgent'])): ?><div><span class="urgent-badge" title="急件：篩選「批圖中」時會排在最上方"><i class="fa fa-bolt"></i> 急件</span></div><?php endif; ?>
                         <div style="color:#555;" title="接單日"><?= $order['Order_date_formatted'] ?></div>
                         <div style="color:#e67e22;font-weight:600;" title="交期"><?= $order['Delivery_date_formatted'] ?></div>
                         <?php if (!empty($order['Created_At_formatted'])): ?><div style="font-size:9px;color:#bbb;">(<?= $order['creator_name'] ? mb_substr($order['creator_name'], -2, 2, 'UTF-8') : '' ?> <?= $order['Created_At_formatted'] ?>)</div><?php endif; ?>
@@ -2933,6 +2946,11 @@ try { $conn->getPDO()->query("SELECT is_repeat_conversion FROM order_track LIMIT
 catch (Exception $_eRep) {
     try { $conn->getPDO()->exec("ALTER TABLE order_track ADD COLUMN is_repeat_conversion TINYINT(1) NOT NULL DEFAULT 0 COMMENT '同一報價項目先前已轉過訂單、此為追加訂單=1(不影響KPI報價轉訂單比例統計)'"); } catch (Exception $_eRep2) {}
 }
+// 相容舊表：is_urgent（急件旗標）首次載入自動補欄
+try { $conn->getPDO()->query("SELECT is_urgent FROM order_track LIMIT 1"); }
+catch (Exception $_eUrg) {
+    try { $conn->getPDO()->exec("ALTER TABLE order_track ADD COLUMN is_urgent TINYINT(1) NOT NULL DEFAULT 0 COMMENT '急件=1；篩選批圖中時排最上方(多筆依接單日新到舊)，清單以淺暖粉紅底色標示'"); } catch (Exception $_eUrg2) {}
+}
 $initStatsSql = "SELECT
     COUNT(*) as total_records,
     SUM(CASE WHEN (/* ot.quote_no IS NULL OR ot.quote_no = '' OR */ ot.unit_price IS NULL OR ot.unit_price = 0) THEN 1 ELSE 0 END) as unbound_op,
@@ -3130,6 +3148,11 @@ foreach($dCounts as $c) {
             line-height: 1.4;
         }
         table.dataTable tbody tr:hover { background-color: #FAFBFE !important; }
+        /* 急件（2026-09-03）：淺暖粉紅底色，需蓋過 table-striped 的斑馬紋故用 !important */
+        #orderTable tbody tr.order-urgent > td { background-color: #FBE3DD !important; }
+        #orderTable tbody tr.order-urgent:hover > td { background-color: #F7D5CC !important; }
+        .urgent-badge { display:inline-block;background:#F0A24B;color:#4A2A0A;font-size:10px;font-weight:700;
+                        border-radius:3px;padding:0 5px;letter-spacing:1px; }
         
         /* Column Specifics */
         .col-date { width: 88px; text-align: center; font-family: "Consolas", monospace; color: #666; }
@@ -3617,6 +3640,7 @@ foreach($dCounts as $c) {
                 <div class="modal-header">
                     <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
                     <button type="button" id="btn-toggle-closed" class="btn btn-xs pull-right" style="display:none;margin-right:8px;margin-top:2px;" onclick="toggleOrderStatus('closed')"></button>
+                    <button type="button" id="btn-toggle-urgent" class="btn btn-xs pull-right" style="margin-right:8px;margin-top:2px;" onclick="toggleUrgentFlag()" title="標記為急件：篩選「批圖中」時會排在最上方，清單以淺暖粉紅底色標示"></button>
                     <h4 class="modal-title"><i class="fa fa-plus-circle"></i> 新增訂單</h4>
                 </div>
                 <div class="modal-body" style="background:#f7f7f7;padding:12px;">
@@ -3630,6 +3654,7 @@ foreach($dCounts as $c) {
                                 <input type="hidden" name="bound_quote_item_id" id="bound_quote_item_id">
                                 <input type="hidden" name="quote_no"            id="hidden_quote_no">
                                 <input type="hidden" name="batch_key"           id="order_attach_batch_key">
+                                <input type="hidden" name="is_urgent"           id="hidden_is_urgent" value="0">
                                 <div class="row" style="margin:0 -5px;">
 
                                     <!-- Row 1: 訂單編號 | 客戶單號 -->
@@ -6854,12 +6879,31 @@ foreach($dCounts as $c) {
             $('input[name="orderindate"]').val(today);
             $('input[name="datepicker_ate"]').val(today);
 
+            setUrgentFlag(false);
+
             // 附件：新增模式尚無 Order_id，先產生暫存批次碼，存檔後由後端歸屬到新訂單
             $('#order_attach_batch_key').val(orderAttachNewBatchKey());
             orderAttachRefresh();
 
             $('#newOrderModal').modal('show');
         }
+
+        // 急件旗標（使用者明確要求，2026-09-03）
+        // 只是一個標記，不影響任何既有流程；效果有兩個：(1)篩選「批圖中」時排最上方
+        // （多筆急件依接單日由新到舊）(2)清單該列淺暖粉紅底色＋「急件」文字標籤。
+        // 存檔走既有 or_new/or_update（後端已有 ot_edit 權限守門），不另開 API。
+        function setUrgentFlag(on) {
+            $('#hidden_is_urgent').val(on ? '1' : '0');
+            var $b = $('#btn-toggle-urgent');
+            if (on) {
+                $b.css({ 'background': '#F0A24B', 'border-color': '#D98B33', 'color': '#4A2A0A', 'font-weight': '700' })
+                  .html('<i class="fa fa-bolt"></i> 急件（點此取消）');
+            } else {
+                $b.css({ 'background': '#fff', 'border-color': '#ccc', 'color': '#777', 'font-weight': '400' })
+                  .html('<i class="fa fa-bolt"></i> 設為急件');
+            }
+        }
+        function toggleUrgentFlag() { setUrgentFlag($('#hidden_is_urgent').val() !== '1'); }
 
         function editOrder(orderId) {
             $.post('', { action: 'get_order_detail', order_id: orderId }, function(res) {
@@ -6897,6 +6941,7 @@ foreach($dCounts as $c) {
                 if (data.orderDdate)     form.find('input[name="orderDdate"]').val(data.orderDdate);
                 if (data.ate)            form.find('select[name="ate"]').val(data.ate);
                 if (data.datepicker_ate) form.find('input[name="datepicker_ate"]').val(data.datepicker_ate);
+                setUrgentFlag(parseInt(data.is_urgent || 0) === 1);
 
                 $('#btn-save-copy').text('更新並複製');
                 $('#btn-save').text('確認更新');
@@ -7251,7 +7296,8 @@ foreach($dCounts as $c) {
                 $('#price-lock-icon').hide(); $('#price-source').text(''); $('#qty-warn').hide();
                 $('#panel-right-content').hide(); $('#panel-quotes-placeholder').show();
                 _lastLoadedPart = '';
-                // 複製為新訂單，不繼承狀態，重置狀態按鈕與欄位
+                // 複製為新訂單，不繼承狀態（急件旗標同樣不繼承），重置狀態按鈕與欄位
+                setUrgentFlag(false);
                 $('#btn-toggle-paused').hide();
                 $('#btn-toggle-closed').hide();
                 $('#newOrderForm').find('input, textarea, select').prop('readonly', false).prop('disabled', false);

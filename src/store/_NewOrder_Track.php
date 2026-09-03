@@ -195,6 +195,15 @@ try {
     }
 
     // ── 新增 ──────────────────────────────────────────────────────────
+    // 相容舊表：is_urgent（急件旗標）自動補欄；頁面載入時也會補，這裡是存檔端點的保險，
+    // 避免「欄位還沒建立就有人按存檔」時整張單存不進去。
+    try { $db->query("SELECT is_urgent FROM order_track LIMIT 1"); }
+    catch (Exception $_eUrg) {
+        try { $db->exec("ALTER TABLE order_track ADD COLUMN is_urgent TINYINT(1) NOT NULL DEFAULT 0 COMMENT '急件=1；篩選批圖中時排最上方(多筆依接單日新到舊)，清單以淺暖粉紅底色標示'"); } catch (Exception $_eUrg2) {}
+    }
+    // 急件旗標（使用者明確要求，2026-09-03）：只收 0/1，權限沿用本區塊上方的 ot_edit 守門。
+    $isUrgent = (!empty($_POST['is_urgent']) && $_POST['is_urgent'] !== '0') ? 1 : 0;
+
     if (isset($_POST['or_new']) || isset($_POST['or_new_copy'])) {
         ot_require_feature($db, $_ot_uid, 'ot_edit');
         // 附件標籤鐵則：這批暫存附件全部設好標籤才能存檔，否則擋下（不建立訂單）
@@ -231,6 +240,7 @@ try {
                     Created_At       = NOW(),
                     Created_By       = :Created_By,
                     Client_name_ID   = :Client_name_ID,
+                    is_urgent        = :is_urgent,
                     d_id_ID          = :d_id_ID";
         $stmt = $db->prepare($sql);
         $stmt->bindParam(':OrderNo',          $_POST['OrderNo']);
@@ -254,6 +264,7 @@ try {
         $stmt->bindValue(':unit_price',       $unitPrice);
         $stmt->bindValue(':quote_no',         $quoteNo);
         $stmt->bindValue(':quote_item_id',    $quoteItemId);
+        $stmt->bindValue(':is_urgent',        $isUrgent, PDO::PARAM_INT);
         $stmt->execute();
         $newId = $db->lastInsertId();
         // 新增訂單附件暫存轉正：畫面開啟時前端產生 batch_key，存檔前上傳的附件先存 temp，這裡歸給剛建立的訂單
@@ -297,7 +308,8 @@ try {
                        ate=:ate, drop_zone=:drop_zone,
                        unit_price=:unit_price, quote_no=:quote_no, quote_item_id=:quote_item_id,
                        Modified_By=:Modified_By, Modified_At=NOW(),
-                       Client_name_ID=:Client_name_ID, d_id_ID=:d_id_ID";
+                       Client_name_ID=:Client_name_ID, d_id_ID=:d_id_ID,
+                       is_urgent=:is_urgent";
 
         if ($_POST['orderDdate'] !== $curDel) {
             $sql = "UPDATE order_track SET $baseFields,
@@ -334,6 +346,7 @@ try {
         $stmt->bindValue(':unit_price',       $unitPrice);
         $stmt->bindValue(':quote_no',         $quoteNo);
         $stmt->bindValue(':quote_item_id',    $quoteItemId);
+        $stmt->bindValue(':is_urgent',        $isUrgent, PDO::PARAM_INT);
 
         if ($_POST['orderDdate'] !== $curDel) {
             $stmt->bindParam(':newDel',  $newDel);
