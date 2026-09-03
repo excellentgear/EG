@@ -26,7 +26,12 @@ if (!isset($can_keyway_calc)) {
         /* ── 鍵槽計算工具 ─────────────────────────────────────────────── */
         #kw-tool-window {
             position:fixed; z-index:10400; display:none;
-            width:920px; max-width:96vw; top:55px; left:50%; transform:translateX(-50%);
+            /* 920px 是抽出前的舊值，右欄（flex:1）會被撐到 423px、內容只用得到 227px，
+               每一列右側都空著約 237px（使用者回報「右側不需要那麼多空白」，2026-09-03）。
+               左欄 210＋間距 8＋示意圖 245＋間距 8 是固定的，右欄留 243px（最寬的表頭
+               「成品尺寸（右下：實心端）（與左上擇一）」需 226px、最寬的資料列含紅字需 227px），
+               故 243+471+24(內距)+2(框線)=740px。示意圖寬度沒動，標注線的相對位置完全不變。 */
+            width:740px; max-width:96vw; top:55px; left:50%; transform:translateX(-50%);
             background:#fff; border-radius:8px;
             box-shadow:0 12px 40px rgba(0,0,0,.35); border:1px solid #a5d6a7;
         }
