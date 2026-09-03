@@ -3,6 +3,8 @@
 // { shape:'circle|ellipse|rect|roundrect', color:'#cf3a2b', size:100, ratio:1, stroke:2.6, font:'kai|ming|hei',
 //   rows:[ {h:30, text:'{部門}', fs:0, mode:'shrink', wrapn:0}, ... ] }   // h=高度%（自動正規化）
 //   fs=字級（viewBox 單位，章寬=100；0/未填=自動）；mode='shrink' 超寬時壓縮字距（預設）｜'wrap' 超寬時自動換列
+//   fill=撐滿寬度百分比（0/未填=不撐滿，維持「只有超寬才壓縮」；100=撐到框內可用寬度；>100=再往外擠、真的貼到框線）
+//        字級留空(自動)的列會**直接把字放大**到剛好填滿；有指定字級的列則維持字級、以字距撐開到該寬度。
 //   wrapn=換列模式的「第一列字數」：前 N 字放第一列、其餘放第二列（超寬壓縮），字級依列數自動放大填滿；0/未填=依寬度自動折行
 // text 內可混用固定字樣與變數 token：{部門} {部門簡稱} {職稱} {姓名} {日期} {編號}
 // {部門簡稱}＝去掉部門名尾端常見組織後綴（中心/總部/分部/部/組/課/室/廠/處/隊/站）：生管組→生管、設計開發課→設計開發
@@ -137,6 +139,12 @@
                 var cy = (y + y2) / 2;
                 var maxW = 2 * halfWidthAt(schema, cy, W, H) - 4;
                 var userFs = +rows[i].fs > 0 ? +rows[i].fs : 0;
+                // 撐滿寬度（2026-09-03 使用者要求「特定文字要幾乎擠爆框線」）：
+                // 目標寬度＝該列可用弦寬 ×fill%。100＝貼到框內安全邊界，110 就會壓到框線上。
+                var fillPct = Math.max(0, Math.min(200, +rows[i].fill || 0));
+                var fillW = function (cyy, ffs) {
+                    return fillPct ? 2 * halfWidthForText(schema, cyy, ffs, W, H) * (fillPct / 100) : 0;
+                };
                 if (rows[i].mode === 'wrap') {
                     var wrapn = Math.max(0, Math.floor(+rows[i].wrapn || 0));
                     var lines, n, fs;
@@ -161,22 +169,33 @@
                     var startY = cy - lh * (n - 1) / 2;
                     for (var li = 0; li < n; li++) {
                         var ly = startY + li * lh;
-                        var lf = fitRow(schema, ly, fs, lines[li].length, W, H, userFs > 0 && fs === userFs);
-                        var lFit = lines[li].length * lf.fs > lf.maxW;
+                        var lfs = fs, lLen = Math.max(1, lines[li].length);
+                        // 撐滿：字級留空(自動)的列直接把字放大到剛好填滿該列寬度（受列高上限），
+                        // 有指定字級的列維持字級、下面用 textLength 把字距撐開到該寬度。
+                        if (fillPct && !userFs) lfs = Math.max(5, Math.min(fillW(ly, fs) / lLen, lh * 0.92));
+                        var lf = fitRow(schema, ly, lfs, lLen, W, H, fillPct ? true : (userFs > 0 && fs === userFs));
+                        var lTarget = fillPct ? fillW(ly, lf.fs) : 0;
+                        var lFit = lLen * lf.fs > lf.maxW;
                         svg += '<text x="' + (W/2) + '" y="' + (ly + lf.fs * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + lf.fs.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'
-                             + (lFit ? ' textLength="' + lf.maxW.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : '')
+                             + (lTarget ? ' textLength="' + lTarget.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"'
+                                        : (lFit ? ' textLength="' + lf.maxW.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : ''))
                              + '>' + esc(lines[li]) + '</text>';
                     }
                 } else {
                     // 自動縮小（預設）：單行置中，超寬時以 textLength 壓縮字距；自動字級取列高 0.68 盡量填滿（同現有回墨章比例）
-                    var fs2 = userFs || Math.min(rh * 0.68, maxW / Math.max(1, txt.length) * 1.15);
+                    var tLen = Math.max(1, txt.length);
+                    var fs2 = userFs || Math.min(rh * 0.68, maxW / tLen * 1.15);
+                    // 撐滿且字級留空(自動)：直接由目標寬度反推字級，讓字真的放大到貼齊框線
+                    if (fillPct && !userFs) fs2 = fillW(cy, rh * 0.7) / tLen;
                     fs2 = Math.max(5, Math.min(fs2, rh * 0.92));
                     // fs2 若已被列高 rh*0.92 壓過就不算「使用者指定的字級」（例：模板9 設 30 但列高只容得下 18.4），
                     // 那種情況維持原本的自動縮放，避免字撐出格子外
-                    var rf = fitRow(schema, cy, fs2, txt.length, W, H, userFs > 0 && fs2 === userFs);
-                    var needFit = txt.length * rf.fs > rf.maxW;
+                    var rf = fitRow(schema, cy, fs2, tLen, W, H, fillPct ? true : (userFs > 0 && fs2 === userFs));
+                    var target = fillPct ? fillW(cy, rf.fs) : 0;
+                    var needFit = tLen * rf.fs > rf.maxW;
                     svg += '<text x="' + (W/2) + '" y="' + (cy + rf.fs * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + rf.fs.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'
-                         + (needFit ? ' textLength="' + rf.maxW.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : '')
+                         + (target ? ' textLength="' + target.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"'
+                                   : (needFit ? ' textLength="' + rf.maxW.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : ''))
                          + '>' + esc(txt) + '</text>';
                 }
             }

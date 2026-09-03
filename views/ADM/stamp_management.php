@@ -306,6 +306,7 @@ try {
           <th style="width:60px;" title="字的大小（相對單位，章寬=100）；留空=依列高自動放大填滿">字級</th>
           <th style="width:66px;" title="文字超過章寬時的處理：縮小=壓縮字距擠在一行；換列=分成多行">超寬時</th>
           <th style="width:56px;" title="換列模式專用：第一列固定放前N個字，其餘自動放第二列；留空=改依可用寬度自動折行">首列字數</th>
+          <th style="width:60px;" title="讓這一列的字撐滿框內寬度。留空=不撐滿（維持原樣，只有超寬才壓縮）；100=貼到框內安全邊界；110~120=再往外擠、幾乎壓到框線上。字級留空的列會直接把字放大填滿，有指定字級的列則維持字級、把字距撐開。">撐滿%</th>
           <th style="width:28px;"></th></tr></thead>
           <tbody id="tplRows"></tbody></table>
         <button class="btn btn-default btn-xs" id="btnTplRowAdd" style="margin-top:4px;"><i class="fa fa-plus"></i> 加一列</button>
@@ -822,7 +823,7 @@ function sampleCtx(){
   return {company:window.__ownCompany||'公司全名',dept:'品保課',position:'課長',name:'王小明',date:dot(today()),
           serial:resolveSerialPrefix($('#serPrefix').val())+String(+$('#serStart').val()||1).padStart(+$('#serDigits').val()||3,'0')};
 }
-function tplRowHtml(h,text,fs,mode,wrapn){
+function tplRowHtml(h,text,fs,mode,wrapn,fill){
   const isWrap=mode==='wrap';
   return `<tr><td><input type="number" class="form-control input-sm tpl-h" value="${h}" min="1" max="100" step="1"></td>
     <td><input type="text" class="form-control input-sm tpl-text" value="${esc(text)}"></td>
@@ -831,6 +832,7 @@ function tplRowHtml(h,text,fs,mode,wrapn){
       <option value="shrink" ${!isWrap?'selected':''}>縮小</option>
       <option value="wrap" ${isWrap?'selected':''}>換列</option></select></td>
     <td><input type="number" class="form-control input-sm tpl-wrapn" value="${wrapn>0?wrapn:''}" placeholder="自動" min="1" max="20" step="1" ${isWrap?'':'disabled'}></td>
+    <td><input type="number" class="form-control input-sm tpl-fill" value="${fill>0?fill:''}" placeholder="不撐滿" min="50" max="200" step="5"></td>
     <td style="text-align:center;"><button class="btn btn-danger btn-xs tpl-row-del"><i class="fa fa-times"></i></button></td></tr>`;
 }
 $('#tplRows').on('change','.tpl-mode',function(){
@@ -852,7 +854,8 @@ function tplSchemaFromUI(){
   $('#tplRows tr').each(function(){
     rows.push({h:+$(this).find('.tpl-h').val()||1, text:$(this).find('.tpl-text').val()||'',
                fs:+$(this).find('.tpl-fs').val()||0, mode:$(this).find('.tpl-mode').val()||'shrink',
-               wrapn:+$(this).find('.tpl-wrapn').val()||0});
+               wrapn:+$(this).find('.tpl-wrapn').val()||0,
+               fill:+$(this).find('.tpl-fill').val()||0});
   });
   return {shape:$('#tplShape').val(), color:$('#tplColor').val(), size:+$('#tplSize').val()||100,
           ratio:+$('#tplRatio').val()||1, stroke:+$('#tplStroke').val()||2.6, font:$('#tplFont').val(), rows,
@@ -896,7 +899,7 @@ $('#tplModal').on('click','.tpl-row-del',function(){
   if($('#tplRows tr').length<=1){alert('至少保留一列');return;}
   $(this).closest('tr').remove(); tplPreview();
 });
-$('#btnTplRowAdd').on('click',function(){ $('#tplRows').append(tplRowHtml(30,'',0,'shrink',0)); tplPreview(); });
+$('#btnTplRowAdd').on('click',function(){ $('#tplRows').append(tplRowHtml(30,'',0,'shrink',0,0)); tplPreview(); });
 $('#tplModal').on('click','.tpl-color',function(e){ e.preventDefault(); $('#tplColor').val($(this).data('c')); tplPreview(); });
 
 function openTplModal(t){
@@ -909,7 +912,7 @@ function openTplModal(t){
   $('#tplSize').val(sc.size||100); tplSizeCmSync(true); $('#tplRatio').val(sc.ratio||1);
   $('#tplStroke').val(sc.stroke||2.6); $('#tplFont').val(sc.font||'kai');
   $('#tplFillRatio').val(Math.round((sc.fillRatio!=null?sc.fillRatio:0.9)*100)); $('#tplNoScale').prop('checked', !!sc.noScale);
-  $('#tplRows').html((sc.rows&&sc.rows.length?sc.rows:[{h:100,text:''}]).map(r=>tplRowHtml(r.h,r.text,+r.fs||0,r.mode||'shrink',+r.wrapn||0)).join(''));
+  $('#tplRows').html((sc.rows&&sc.rows.length?sc.rows:[{h:100,text:''}]).map(r=>tplRowHtml(r.h,r.text,+r.fs||0,r.mode||'shrink',+r.wrapn||0,+r.fill||0)).join(''));
   $('#serPrefix').val(t?t.serial_prefix:''); $('#serDigits').val(t?t.serial_digits:3);
   $('#serStart').val(t?t.serial_start:1); $('#serStep').val(t?t.serial_step:1);
   $('#serReset').val(t?t.serial_reset:'none');
