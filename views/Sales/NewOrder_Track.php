@@ -2565,7 +2565,6 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                 
                 <td class="col-date">
                     <div style="line-height:1.7;font-size:11px;">
-                        <?php if (!empty($order['is_urgent'])): ?><div><span class="urgent-badge" title="急件：篩選「批圖中」時會排在最上方"><i class="fa fa-bolt"></i> 急件</span></div><?php endif; ?>
                         <div style="color:#555;" title="接單日"><?= $order['Order_date_formatted'] ?></div>
                         <div style="color:#e67e22;font-weight:600;" title="交期"><?= $order['Delivery_date_formatted'] ?></div>
                         <?php if (!empty($order['Created_At_formatted'])): ?><div style="font-size:9px;color:#bbb;">(<?= $order['creator_name'] ? mb_substr($order['creator_name'], -2, 2, 'UTF-8') : '' ?> <?= $order['Created_At_formatted'] ?>)</div><?php endif; ?>
@@ -2583,6 +2582,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <i class="fa fa-unlink" title="尚未綁定ID，點此快速綁定" style="color:#ccc; font-size:10px; margin-left:3px; cursor:pointer;" onclick="openQuickBind('<?= $order['Order_id'] ?>','<?= safe_html($order['Client_name']) ?>','<?= safe_html($order['d_id']) ?>')"></i>
                     <?php endif; ?>
                     </span>
+                    <?php // 急件標籤（2026-09-03 使用者要求）：顯示在客戶名稱下方，不放接單日/交期欄 ?>
+                    <?php if (!empty($order['is_urgent'])): ?><div style="margin-top:2px;"><span class="urgent-badge" title="急件：篩選「批圖中」時會排在最上方"><i class="fa fa-bolt"></i> 急件</span></div><?php endif; ?>
                     <?php
                     // ── 與來源OP單的客戶不一致（2026-08-28）────────────────────────────
                     // 常見情境：用 A 客戶報價，接單後客戶要求改成 B 客戶名稱，報價單那邊改了、
