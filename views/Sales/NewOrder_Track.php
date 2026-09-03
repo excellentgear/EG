@@ -1023,8 +1023,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     // ── 快速綁定：儲存選定的客戶ID/料號ID/報價單到 order_track ─────────────
+    // ── 客戶欄解鎖：輸入本人密碼後才可更改已綁定料號訂單的客戶（2026-09-03 使用者要求）──
+    //    權限＝角色功能碼 ot_order_change_client；解鎖狀態記在 session（逐張訂單、30 分鐘）。
+    //    真正的守門在存檔那一刻（_NewOrder_Track.php 的 or_update 與下方 save_order_ids）再驗一次，
+    //    這支只負責「驗密碼、記下這個人解鎖了這張訂單」。
+    if ($_POST['action'] === 'client_unlock_verify') {
+        header('Content-Type: application/json');
+        require_once __DIR__ . '/../../src/common/order_track_perm_lib.php';
+        try {
+            $uid      = intval($_SESSION['id'] ?? 0);
+            $order_id = intval($_POST['order_id'] ?? 0);
+            if ($uid <= 0)      throw new Exception('登入狀態已失效，請重新登入');
+            if ($order_id <= 0) throw new Exception('未指定訂單');
+            if (!ot_can_change_client($pdo, $uid)) throw new Exception('您沒有更改訂單客戶的權限');
+
+            $wait = ot_client_unlock_fail_wait();
+            if ($wait > 0) throw new Exception('密碼連續錯誤次數過多，請於 ' . ceil($wait / 60) . ' 分鐘後再試');
+
+            $chk = ot_verify_own_password($pdo, $uid, (string)($_POST['password'] ?? ''));
+            if (!$chk['ok']) {
+                if (strpos($chk['msg'], '密碼錯誤') === 0) ot_client_unlock_fail_add();
+                throw new Exception($chk['msg']);
+            }
+            // 訂單要真的存在，否則解鎖一個不存在的單號沒有意義
+            $oq = $pdo->prepare("SELECT Order_id, Order_oo, Client_name_ID, d_id_ID FROM order_track WHERE Order_id = ? LIMIT 1");
+            $oq->execute([$order_id]);
+            $orow = $oq->fetch(PDO::FETCH_ASSOC);
+            if (!$orow) throw new Exception('查無此訂單');
+
+            ot_client_unlock_fail_reset();
+            ot_client_unlock_mark($uid, $order_id);
+            echo json_encode(['success' => true, 'ttl_min' => intval(OT_CLIENT_UNLOCK_TTL / 60)]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+
     if ($_POST['action'] === 'save_order_ids') {
         header('Content-Type: application/json');
+        require_once __DIR__ . '/../../src/common/order_track_perm_lib.php';
         try {
             $order_id    = $_POST['order_id']   ?? '';
             $customer_pk = !empty($_POST['customer_pk']) ? $_POST['customer_pk'] : null;
@@ -1033,6 +1071,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $unit_price  = isset($_POST['unit_price']) && $_POST['unit_price'] !== '' ? floatval($_POST['unit_price']) : null;
 
             if (empty($order_id)) throw new Exception('未指定訂單ID');
+
+            // 已綁定料號的訂單要換客戶，需具備 ot_order_change_client 並先以本人密碼解鎖（鐵律8：
+            // 前端只在解鎖後才送出，後端這裡同規則再擋一次）。本畫面（快速綁定）原本只給「尚未綁定」
+            // 的訂單使用，所以正常流程一定是舊客戶或舊料號其中一個是空的 → 完全不受影響。
+            $__otOld = null;
+            if ($customer_pk !== null) {
+                $__s = $pdo->prepare("SELECT Order_oo, Client_name_ID, d_id_ID FROM order_track WHERE Order_id = ? LIMIT 1");
+                $__s->execute([$order_id]);
+                $__otOld = $__s->fetch(PDO::FETCH_ASSOC) ?: null;
+                if ($__otOld) {
+                    $__g = ot_client_change_guard($pdo, intval($_SESSION['id'] ?? 0), intval($order_id),
+                                                  $__otOld['Client_name_ID'], $__otOld['d_id_ID'], $customer_pk);
+                    if (!$__g['ok']) throw new Exception($__g['msg']);
+                }
+            }
 
             $sets   = [];
             $params = [];
@@ -1052,6 +1105,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $params[':uid'] = $_SESSION['id'] ?? 0;
             $sql = "UPDATE order_track SET " . implode(', ', $sets) . ", Modified_By = :uid, Modified_At = NOW() WHERE Order_id = :oid";
             $pdo->prepare($sql)->execute($params);
+
+            // 換掉「已綁定訂單」的客戶要留稽核（誰、什麼時候、從哪一家換到哪一家）
+            if ($__otOld && trim((string)$__otOld['Client_name_ID']) !== '' && !empty($__otOld['d_id_ID'])
+                && trim((string)$__otOld['Client_name_ID']) !== trim((string)$customer_pk)) {
+                ot_client_change_audit($pdo, intval($_SESSION['id'] ?? 0), intval($order_id),
+                    (string)($__otOld['Order_oo'] ?? ''), $__otOld['Client_name_ID'], $customer_pk,
+                    $__otOld['d_id_ID'], ($part_pk !== null ? $part_pk : $__otOld['d_id_ID']));
+            }
 
             // 若料號無客戶綁定，且本次有指定客戶 → 自動補上客戶ID
             $part_customer_fixed = false;
@@ -1519,6 +1580,8 @@ $can_batch_draw            = ($can_update && $permission_code === 'A'); // 審�
 $can_to_pm                 = ($can_update && $permission_code === 'A'); // 轉生管/取消轉生管
 $can_order_change          = $can_update;                               // 訂單變更（舊制沿用一般編輯權限）
 $can_order_change_setting  = ($permission_code === 'A');                // 訂單變更設定
+// 更改已綁定訂單的客戶：全新功能，舊制沒有對應權限碼，一律預設關閉（不改變任何現有使用者的既有操作）
+$can_order_change_client   = false;
 $can_op_convert            = $can_create;                               // OP轉訂單（舊制沿用一般新增權限）
 $can_view_amount           = true;                                      // 金額顯示（舊制從未限制過，一律可見）
 $can_keyway_calc           = true;                                      // 鍵槽計算（舊制從未限制過，一律可見）
@@ -1613,6 +1676,10 @@ $OT_PAGE_FEATURES = [
     ['group'=>'訂單流程',     'code'=>'ot_op_convert',           'label'=>'OP轉訂單'],
     ['group'=>'訂單變更',     'code'=>'ot_order_change',         'label'=>'訂單變更'],
     ['group'=>'訂單變更',     'code'=>'ot_order_change_setting', 'label'=>'訂單變更設定'],
+    // 2026-09-03 使用者要求：訂單綁定料號後客戶會被鎖定（客戶由料號決定），
+    // 勾選本項的角色才能點客戶欄的鎖頭、輸入「本人登入密碼」解鎖後重新指定客戶與料號。
+    // 後端同規則再擋一次（src/store/_NewOrder_Track.php 的 or_update ＋本頁 save_order_ids）。
+    ['group'=>'訂單變更',     'code'=>'ot_order_change_client',  'label'=>'更改已建立訂單的客戶（需輸入本人密碼解鎖）'],
     ['group'=>'設計與批圖',   'code'=>'ot_design_note',          'label'=>'設計備註（編輯）'],
     ['group'=>'設計與批圖',   'code'=>'ot_img_editor',           'label'=>'批圖編輯器'],
     ['group'=>'設計與批圖',   'code'=>'ot_master_edit',          'label'=>'前往料號主檔編輯按鈕'],
@@ -1634,6 +1701,7 @@ if ($OT_USE_RBAC) {
     $can_to_pm                  = ot_hasF('ot_to_pm');
     $can_order_change           = ot_hasF('ot_order_change');
     $can_order_change_setting  = ot_hasF('ot_order_change_setting');
+    $can_order_change_client   = ot_hasF('ot_order_change_client');
     $can_op_convert             = ot_hasF('ot_op_convert');
     $can_view_amount            = ot_hasF('ot_view_amount');
     $can_keyway_calc            = ot_hasF('ot_keyway_calc');
@@ -3782,6 +3850,11 @@ foreach($dCounts as $c) {
                                 <input type="hidden" name="Order_id"            id="hidden_Order_id">
                                 <input type="hidden" name="Client_name_ID"      id="selected_customer_pk">
                                 <input type="hidden" name="d_id_ID"             id="selected_part_pk">
+                                <?php // 開啟編輯時這張訂單原本的客戶／料號（2026-09-03）：純前端比對用，
+                                      // 用來即時判斷「這次有沒有把客戶換掉」，好在存檔前就講清楚需要解鎖，
+                                      // 不要等按下更新才被後端回一個 403。不隨表單送出（沒有 name 屬性）。 ?>
+                                <input type="hidden" id="orig_client_pk">
+                                <input type="hidden" id="orig_part_pk">
                                 <input type="hidden" name="bound_quote_item_id" id="bound_quote_item_id">
                                 <input type="hidden" name="quote_no"            id="hidden_quote_no">
                                 <input type="hidden" name="batch_key"           id="order_attach_batch_key">
@@ -3811,6 +3884,9 @@ foreach($dCounts as $c) {
                                     <!-- Row 3: 客戶 | 料號 (各佔半排) -->
                                     <div class="col-xs-6 form-group" style="padding:0 5px;position:relative;">
                                         <label class="ctrl-label">客戶 <span class="text-danger">*</span>
+                                            <?php // 客戶鎖頭（2026-09-03）：綁定料號後客戶由料號決定＝唯讀，這顆圖示把「為什麼不能改」講清楚；
+                                                  // 角色勾了「更改已建立訂單的客戶」的人可以點它，輸入本人密碼後解鎖重新指定客戶與料號 ?>
+                                            <span id="client-lock-icon" style="display:none;margin-left:3px;"></span>
                                             <small id="customer-id-badge" style="display:none;background:#d4edda;color:#155724;padding:1px 5px;border-radius:10px;font-size:10px;font-weight:600;margin-left:3px;"></small>
                                             <small id="customer-id-missing" style="display:none;color:#c0392b;font-size:10px;margin-left:3px;">⚠未綁定</small>
                                             <button type="button" id="btn-quick-add-customer" class="btn btn-xs btn-link" style="display:none;color:#27ae60;padding:0;margin-left:4px;font-size:10px;" onclick="openQuickAddCustomer()"><i class="fa fa-plus-circle"></i>新增</button>
@@ -3822,6 +3898,10 @@ foreach($dCounts as $c) {
                                             </span>
                                         </div>
                                         <div id="client-suggestions" class="autocomplete-suggestions"></div>
+                                        <!-- 客戶解鎖狀態提示（2026-09-03）：解鎖後才顯示，說明接下來要怎麼改 -->
+                                        <div id="client-unlock-hint" style="display:none;margin-top:3px;font-size:10px;line-height:1.5;color:#4A2A0A;background:#FDF1DF;border:1px solid #F0A24B;border-radius:3px;padding:3px 6px;"></div>
+                                        <!-- 沒有解鎖卻把客戶換掉了：存檔一定會被後端擋，這裡在按下更新之前就先講明白 -->
+                                        <div id="client-change-block-hint" style="display:none;margin-top:3px;font-size:10px;line-height:1.5;color:#fff;background:#DD5138;border-radius:3px;padding:3px 6px;"></div>
                                         <!-- 來源OP單客戶不一致提示（2026-08-28）：純提示，不自動改欄位值 -->
                                         <div id="op-cust-diff-hint" style="display:none;margin-top:3px;font-size:10px;line-height:1.5;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:2px 5px;"></div>
                                     </div>
@@ -4356,6 +4436,40 @@ foreach($dCounts as $c) {
     </div>
 
     <!-- 快速綁定 Modal -->
+    <?php if ($can_order_change_client): ?>
+    <!-- ═══ 客戶解鎖（輸入本人密碼）═══════════════════════════════════════════
+         2026-09-03 使用者要求：訂單綁定料號後客戶被鎖定，具備「更改已建立訂單的客戶」角色
+         的人可以點客戶欄的鎖頭，輸入本人登入密碼後解鎖，重新指定客戶與料號。
+         沒有這個權限的人後端連這段 HTML 都不輸出。 -->
+    <div class="modal fade" id="clientUnlockModal" tabindex="-1" role="dialog" data-backdrop="static">
+        <div class="modal-dialog" role="document" style="max-width:460px;">
+            <div class="modal-content">
+                <div class="modal-header" style="background:#8a5a2b;color:#fff;border-radius:8px 8px 0 0;">
+                    <button type="button" class="close" style="color:#fff;opacity:.8;" data-dismiss="modal"><span>&times;</span></button>
+                    <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-unlock-alt"></i> 解鎖客戶欄位</h4>
+                </div>
+                <div class="modal-body" style="padding:14px;">
+                    <div style="font-size:12px;line-height:1.7;color:#4A2A0A;background:#FDF1DF;border:1px solid #F0A24B;border-radius:4px;padding:8px 10px;margin-bottom:10px;">
+                        <div style="font-weight:700;margin-bottom:3px;"><i class="fa fa-info-circle"></i> 這張訂單目前綁定：</div>
+                        <div id="cu-current-info" style="margin-bottom:5px;"></div>
+                        解鎖後客戶欄會恢復可輸入，改法與新增訂單相同：<br>
+                        ① <b>先選客戶</b>，再輸入料號（清單只會列出這個客戶底下的料號；查無此料號可按料號欄的「新增」快速建立並綁定）。<br>
+                        ② 或 <b>直接輸入料號</b>，從清單選取後客戶會自動帶入該料號的客戶名稱與ID。<br>
+                        <span style="color:#a0522d;">※ 客戶一經更動，原本的料號綁定會自動清除，必須重新選定料號才能存檔。</span>
+                    </div>
+                    <label style="font-size:12px;font-weight:600;">請輸入<span style="color:#DD5138;">您本人的登入密碼</span></label>
+                    <input type="password" id="cu-password" class="form-control input-sm" autocomplete="off" data-eg-skip placeholder="本人登入密碼">
+                    <div id="cu-msg" style="display:none;margin-top:6px;font-size:11.5px;color:#DD5138;"></div>
+                </div>
+                <div class="modal-footer" style="padding:8px 14px;">
+                    <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
+                    <button type="button" id="cu-submit" class="btn btn-sm" style="background:#8a5a2b;border-color:#7a4d24;color:#fff;" onclick="submitClientUnlock()"><i class="fa fa-unlock"></i> 解鎖</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
     <div class="modal fade" id="quickBindModal" tabindex="-1" role="dialog">
         <div class="modal-dialog modal-lg" role="document" style="max-width:700px;">
             <div class="modal-content">
@@ -4719,6 +4833,7 @@ foreach($dCounts as $c) {
         window.canUpdate = <?= json_encode($can_update) ?>;
         window.canDelete = <?= json_encode($can_delete) ?>;
         window.canUpdatePmget = <?= json_encode($can_to_pm) ?>; // 轉生管操作權限（ot_to_pm）
+        window.canChangeClient = <?= json_encode((bool)$can_order_change_client) ?>; // 更改已建立訂單的客戶（ot_order_change_client）
         window.designerList = <?= json_encode($ate_list) ?>; // 傳遞設計師列表給 JS
         
         function escapeHtml(text) {
@@ -5052,7 +5167,8 @@ foreach($dCounts as $c) {
             $('#newOrderForm').on('dblclick', 'input[type="text"], input[type="number"], textarea', function() {
                 if ($(this).val()) {
                     // 已綁定料號時客戶名稱鎖定，不可雙擊清除（客戶由料號決定）
-                    if ($(this).is('#client_name_input') && $('#selected_part_pk').val()) {
+                    // 例外：已用本人密碼解鎖這張訂單的客戶欄（2026-09-03）
+                    if ($(this).is('#client_name_input') && $('#selected_part_pk').val() && !otIsClientUnlocked()) {
                         showToast('已綁定料號，客戶名稱不可修改；如需更換客戶請先清除料號。', 'info');
                         return;
                     }
@@ -5224,6 +5340,140 @@ foreach($dCounts as $c) {
             }, 300);
         }
 
+        // ══ 客戶欄解鎖（2026-09-03 使用者要求）═══════════════════════════════════
+        // 訂單一綁定料號，客戶就由料號決定（後端存檔時也會用 d_setting.Customer_Id 覆寫），
+        // 所以客戶欄一直是唯讀反灰的。角色勾了「更改已建立訂單的客戶」(ot_order_change_client)
+        // 的人可以點鎖頭 → 輸入本人登入密碼 → 解鎖這一張訂單。
+        //
+        // 解鎖是「逐張訂單」的：otClientUnlockedFor 記的是被解鎖的那張訂單編號，換一張訂單、
+        // 關掉視窗、或存檔完成都會歸零，所以不會出現「解鎖一次之後整天都不用再驗密碼」。
+        // 後端 session 另有一份同樣逐張訂單、30 分鐘有效的解鎖狀態（鐵律8：前端擋一次、
+        // 後端存檔那一刻再擋一次），純改前端 JS 是繞不過去的。
+        var otClientUnlockedFor = null;   // 目前解鎖中的訂單編號（null＝未解鎖）
+        function otIsClientUnlocked() {
+            var oid = $('#hidden_Order_id').val() || '';
+            return !!(otClientUnlockedFor && oid && String(otClientUnlockedFor) === String(oid));
+        }
+        // 重新上鎖（換訂單／關視窗／存檔後呼叫）。不動後端 session，後端本來就有有效期與逐張判定。
+        function otResetClientUnlock() {
+            otClientUnlockedFor = null;
+            $('#client-unlock-hint').hide().empty();
+        }
+
+        // 客戶欄標題旁的鎖頭圖示
+        //   locked=true  → 目前不可修改（有權限者可點；無權限者只是說明為什麼不能改）
+        //   locked=false 且已綁料號 → 解鎖中，顯示開鎖圖示並可點回鎖
+        //   未綁料號     → 本來就可以自由輸入，不顯示任何圖示
+        function renderClientLockIcon(locked, hasPart) {
+            var $i = $('#client-lock-icon');
+            if (!$i.length) return;
+            // 解鎖中就一定要顯示「已解鎖」——這時料號綁定常常剛被清掉（改客戶會清），
+            // 若跟著 hasPart 一起隱藏，使用者就看不到自己還在解鎖狀態、也沒得按取消解鎖。
+            if (!hasPart && !otIsClientUnlocked()) { $i.hide().empty(); return; }
+            var isEdit = !!$('#hidden_Order_id').val();  // 新增中的訂單還沒有訂單編號，無從解鎖
+            if (locked) {
+                if (window.canChangeClient && isEdit) {
+                    $i.html('<a href="javascript:void(0)" onclick="openClientUnlock()" style="color:#8a5a2b;" '
+                          + 'title="客戶由料號決定，目前鎖定中。點此輸入本人密碼解鎖，即可重新指定客戶與料號">'
+                          + '<i class="fa fa-lock"></i></a>').show();
+                } else {
+                    $i.html('<i class="fa fa-lock" style="color:#999;" title="已綁定料號，客戶名稱由料號決定，不可修改'
+                          + (window.canChangeClient ? '' : '（需角色勾選「更改已建立訂單的客戶」才能解鎖）') + '"></i>').show();
+                }
+            } else {
+                $i.html('<a href="javascript:void(0)" onclick="relockClient()" style="color:#DD5138;font-weight:600;font-size:10px;" '
+                      + 'title="已解鎖，點此取消解鎖並還原成原本的客戶與料號">'
+                      + '<i class="fa fa-unlock"></i> 已解鎖</a>').show();
+            }
+        }
+
+        // 這次編輯有沒有把「原本就綁好客戶＋料號」的訂單換成別家客戶？
+        // 舊行為是「先清掉料號、再挑別家客戶的料號」就換得掉，2026-09-03 起這條路一樣要有權限＋解鎖
+        //（否則這個角色選項等於沒有作用）。存檔時後端會擋，所以這裡要在按下更新之前就先講明白，
+        // 不要讓使用者辛苦填完才吃一個 403。
+        function otClientChangedWithoutUnlock() {
+            var origC = $('#orig_client_pk').val() || '';
+            var origP = $('#orig_part_pk').val() || '';
+            var custPk = $('#selected_customer_pk').val() || '';
+            if (!origC || !origP || !custPk) return false;      // 原本沒綁客戶或沒綁料號＝補綁，照舊放行
+            if (String(custPk) === String(origC)) return false; // 客戶沒變
+            return !otIsClientUnlocked();
+        }
+        function renderClientChangeBlockHint() {
+            var $h = $('#client-change-block-hint');
+            if (!$h.length) return;
+            if (!otClientChangedWithoutUnlock()) { $h.hide().empty(); return; }
+            $h.html('<i class="fa fa-ban"></i> 這張訂單原本的客戶已變更，'
+                + (window.canChangeClient
+                    ? '請先點客戶欄的鎖頭輸入本人密碼解鎖，否則存檔會被擋下。'
+                    : '您沒有更改已建立訂單客戶的權限（需角色勾選「更改已建立訂單的客戶」），存檔會被擋下。')).show();
+        }
+
+        function openClientUnlock() {
+            if (!window.canChangeClient) return;
+            var oid = $('#hidden_Order_id').val();
+            if (!oid) { showToast('新增中的訂單客戶本來就可以直接輸入，不需要解鎖。', 'info'); return; }
+            $('#cu-current-info').html('客戶：<b>' + escapeHtml($('#client_name_input').val() || '(未填)') + '</b>'
+                + '（ID: ' + escapeHtml($('#selected_customer_pk').val() || '-') + '）　'
+                + '料號：<b>' + escapeHtml($('#part_id_input').val() || '(未填)') + '</b>'
+                + '（ID: ' + escapeHtml($('#selected_part_pk').val() || '-') + '）');
+            $('#cu-password').val('');
+            $('#cu-msg').hide().text('');
+            $('#cu-submit').prop('disabled', false);
+            $('#clientUnlockModal').modal('show');
+            setTimeout(function() { $('#cu-password').focus(); }, 400);
+        }
+
+        function submitClientUnlock() {
+            var oid = $('#hidden_Order_id').val();
+            var pw  = $('#cu-password').val();
+            if (!oid) { $('#cu-msg').text('找不到訂單編號，請關閉後重新開啟這張訂單。').show(); return; }
+            if (!pw)  { $('#cu-msg').text('請輸入本人密碼。').show(); $('#cu-password').focus(); return; }
+            $('#cu-submit').prop('disabled', true);
+            $.post('', { action: 'client_unlock_verify', order_id: oid, password: pw }, function(res) {
+                $('#cu-submit').prop('disabled', false);
+                if (!res || !res.success) {
+                    $('#cu-msg').text((res && res.message) ? res.message : '解鎖失敗，請稍後再試').show();
+                    $('#cu-password').val('').focus();
+                    return;
+                }
+                // 記住「解鎖前的原值」，按「取消解鎖」時要還原回去，避免改到一半反悔留下半套資料
+                otClientUnlockedFor = oid;
+                window._cuOrig = {
+                    cName: $('#client_name_input').val(), cPk: $('#selected_customer_pk').val(),
+                    pText: $('#part_id_input').val(),     pPk: $('#selected_part_pk').val(),
+                    pDrawing: $('#selected_part_drawing_no').val()
+                };
+                $('#clientUnlockModal').modal('hide');
+                $('#cu-password').val('');
+                $('#client-unlock-hint').html('<i class="fa fa-unlock"></i> <b>客戶欄已解鎖</b>（' + (res.ttl_min || 30)
+                    + ' 分鐘內有效）：可先選客戶再挑此客戶底下的料號，或直接輸入料號由系統帶出客戶。'
+                    + '<span style="color:#a0522d;">更動客戶會自動清除原料號綁定，請重新選定料號後才能存檔。</span>').show();
+                updateIdBadges();
+                $('#client_name_input').focus().select();
+                showToast('客戶欄已解鎖，請重新指定客戶與料號。');
+            }, 'json').fail(function() {
+                $('#cu-submit').prop('disabled', false);
+                $('#cu-msg').text('連線失敗，請稍後再試').show();
+            });
+        }
+
+        // 取消解鎖：把客戶／料號還原成解鎖當下的原值，避免留下「客戶改了、料號還沒改」的半套狀態
+        function relockClient() {
+            var o = window._cuOrig;
+            if (o) {
+                $('#client_name_input').val(o.cName || '');
+                $('#selected_customer_pk').val(o.cPk || '');
+                $('#part_id_input').val(o.pText || '');
+                $('#selected_part_pk').val(o.pPk || '');
+                $('#selected_part_drawing_no').val(o.pDrawing || '');
+            }
+            window._cuOrig = null;
+            otResetClientUnlock();
+            updateIdBadges();
+            showToast('已取消解鎖，客戶與料號已還原。', 'info');
+        }
+
         // ── Modal ID Badge 更新 + 右側面板觸發 ──────────────────────────────
         function updateIdBadges() {
             var custPk  = $('#selected_customer_pk').val();
@@ -5247,11 +5497,19 @@ foreach($dCounts as $c) {
             }
 
             // 綁定料號後鎖定客戶名稱：客戶由料號決定，避免改名後與後端資料不符
-            var lockClient = !!(partPk && partPk !== '' && partPk !== '0');
+            // 2026-09-03：具備 ot_order_change_client 的人可用本人密碼解鎖（otClientUnlockedFor），
+            // 解鎖後這一欄就恢復成跟新增訂單一樣可輸入可搜尋。
+            var lockClient = !!(partPk && partPk !== '' && partPk !== '0') && !otIsClientUnlocked();
             $('#client_name_input').prop('readonly', lockClient)
                 .css('background-color', lockClient ? '#f5f5f5' : '')
-                .attr('title', lockClient ? '已綁定料號，客戶名稱由料號決定，不可修改；如需更換客戶請先清除料號（可雙擊料號欄清除）' : '');
+                .attr('title', lockClient
+                    ? (window.canChangeClient
+                        ? '已綁定料號，客戶名稱由料號決定。要更換客戶請點左方鎖頭並輸入本人密碼解鎖。'
+                        : '已綁定料號，客戶名稱由料號決定，不可修改（需角色勾選「更改已建立訂單的客戶」才能解鎖）')
+                    : '');
             if (lockClient) $('#client-suggestions').hide().empty();
+            renderClientLockIcon(lockClient, !!(partPk && partPk !== '' && partPk !== '0'));
+            renderClientChangeBlockHint(custPk);
 
             // 料號 badge + 觸發右側面板 + 庫存面板
             var partDrawingNo = $('#selected_part_drawing_no').val() || '';
@@ -5594,6 +5852,16 @@ foreach($dCounts as $c) {
             updateIdBadges();
         });
 
+        // 關閉訂單視窗一律解除客戶解鎖狀態：下次開同一張訂單要改客戶就得重新輸入本人密碼
+        $('#newOrderModal').on('hidden.bs.modal', function() {
+            window._cuOrig = null;
+            otResetClientUnlock();
+            $('#orig_client_pk,#orig_part_pk').val('');
+        });
+        $('#clientUnlockModal').on('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); submitClientUnlock(); }
+        });
+
         // ※ 新增：料號設定 Modal 關閉時，若不是回流中，重置快速綁定情境旗標
         $('#partSettingsModal').on('hidden.bs.modal', function() {
             // 只有當 _qbPartNewContext 為 true 且不是在儲存成功的回流中（回流中已設為 false）
@@ -5609,6 +5877,25 @@ foreach($dCounts as $c) {
         $(document).on('input', '#client_name_input, #part_id_input', function() {
             // 短暫延遲讓 autocomplete 有機會更新 hidden PK
             setTimeout(updateIdBadges, 300);
+        });
+
+        // 解鎖狀態下改客戶＝原本綁的料號一定不再適用（料號是掛在客戶底下的），
+        // 所以一動客戶就把料號綁定解除、逼使用者重新選一次；料號文字刻意留著，
+        // 方便直接在新客戶底下搜尋同名料號，或按料號欄的「新增」快速建立並綁定。
+        // 不這樣做的話：後端存檔時會用料號的客戶把客戶欄蓋回去，畫面上看起來就像「改了沒反應」。
+        // 注意：只有使用者**真的在鍵盤上打字**才會觸發 input，程式用 .val() 帶入（例如選料號
+        // 自動帶出客戶）不會觸發，所以不會反過來把剛選好的料號清掉。
+        $(document).on('input', '#client_name_input', function() {
+            if (!otIsClientUnlocked()) return;
+            if ($('#selected_part_pk').val()) {
+                $('#selected_part_pk').val('');
+                $('#selected_part_drawing_no').val('');
+                $('#bound_quote_item_id').val('');
+                $('#hidden_quote_no').val('');
+                _lastLoadedPart = '';
+                showToast('客戶已變更，原料號綁定已解除，請重新選擇此客戶底下的料號。', 'info');
+                setTimeout(updateIdBadges, 310);
+            }
         });
 
         // 監聽必填欄位變動，更新拆批按鈕顯示狀態（新增模式）
@@ -7076,6 +7363,8 @@ foreach($dCounts as $c) {
         function openNewOrderModal() {
             $('#newOrderForm')[0].reset();
             $('#op-cust-diff-hint').hide().empty();
+            window._cuOrig = null; otResetClientUnlock();   // 新增模式客戶本來就可自由輸入，不帶著上一張訂單的解鎖狀態
+            $('#orig_client_pk,#orig_part_pk').val('');
             $('#hidden_Order_id').val('');
             $('#selected_customer_pk').val('');
             $('#selected_part_pk').val('');
@@ -7141,6 +7430,8 @@ foreach($dCounts as $c) {
         function toggleUrgentFlag() { setUrgentFlag($('#hidden_is_urgent').val() !== '1'); }
 
         function editOrder(orderId) {
+            window._cuOrig = null; otResetClientUnlock();   // 換一張訂單＝重新上鎖，要改客戶就得重新驗密碼
+            $('#orig_client_pk,#orig_part_pk').val('');
             $.post('', { action: 'get_order_detail', order_id: orderId }, function(res) {
                 if (!res.success) { alert('讀取資料失敗：' + (res.message || '')); return; }
                 var data = res.data;
@@ -7150,6 +7441,9 @@ foreach($dCounts as $c) {
                 $('#hidden_Order_id').val(data.Order_id || '');
                 $('#selected_customer_pk').val(data.Client_name_ID || '');
                 $('#selected_part_pk').val(data.d_id_ID || '');
+                // 記下開啟當下的客戶／料號，供「客戶是不是被換掉了」的即時判定用（2026-09-03）
+                $('#orig_client_pk').val(data.Client_name_ID || '');
+                $('#orig_part_pk').val(data.d_id_ID || '');
                 $('#selected_part_drawing_no').val(data.Drawing_No || '');
                 $('#bound_quote_item_id').val(data.quote_item_id || '');
                 $('#hidden_quote_no').val(data.quote_no || '');
@@ -7489,6 +7783,8 @@ foreach($dCounts as $c) {
         }
 
         function copyOrder(orderId) {
+            window._cuOrig = null; otResetClientUnlock();   // 複製＝新增模式，客戶本來就可自由輸入
+            $('#orig_client_pk,#orig_part_pk').val('');
             $.post('', { action: 'get_order_detail', order_id: orderId }, function(res) {
                 if (!res.success) { alert('讀取資料失敗：' + (res.message || '')); return; }
                 var data = res.data;
@@ -7616,6 +7912,13 @@ foreach($dCounts as $c) {
             var custPk = $('#selected_customer_pk').val();
             if (!custPk || custPk === '0') {
                 showOrderAlert('客戶尚未綁定ID，請從建議清單選取或新增客戶。'); $('#client_name_input').focus(); return;
+            }
+            // 客戶被換掉卻沒有解鎖：後端一定會擋，先在這裡講清楚原因（2026-09-03）
+            if (otClientChangedWithoutUnlock()) {
+                showOrderAlert(window.canChangeClient
+                    ? '這張訂單的客戶已被更改，但客戶欄尚未解鎖。\n請點客戶欄旁的鎖頭，輸入本人密碼解鎖後再存檔。'
+                    : '這張訂單已綁定料號，客戶由料號決定，您沒有更改客戶的權限。\n（需由管理者在「訂單變更」角色設定中勾選「更改已建立訂單的客戶」）');
+                return;
             }
             // 料號驗證（名稱必填，ID 必須綁定）
             if ($('#part_id_input').val().trim() === '') {

@@ -294,11 +294,24 @@ try {
         }
         if ($tagErr !== null) { echo json_encode(['success' => false, 'message' => $tagErr]); exit; }
 
-        $selStmt = $db->prepare("SELECT Delivery_date, Delivery_date_2 FROM order_track WHERE Order_id = ?");
+        $selStmt = $db->prepare("SELECT Delivery_date, Delivery_date_2, Order_oo, Client_name_ID, d_id_ID FROM order_track WHERE Order_id = ?");
         $selStmt->execute([intval($_POST['Order_id'])]);
         $row = $selStmt->fetch(PDO::FETCH_ASSOC);
         $curDel  = $row['Delivery_date']  ?? '';
         $curDel2 = $row['Delivery_date_2'] ?? null;
+
+        // ── 更改「已綁定料號訂單」的客戶：權限＋本人密碼解鎖守門（2026-09-03 使用者要求）──
+        // 上方已把 $clientNameId 依料號的 d_setting.Customer_Id 覆寫過，所以「換客戶」實際上
+        // 等同「把料號換成另一家客戶底下的料號」，這裡比對的就是覆寫後的最終值。
+        // 只有「原本客戶與料號都已綁定、而這次換成不同客戶」才需要權限＋解鎖；補綁空客戶、
+        // 未綁料號、客戶沒變等既有流程一律照舊（見 ot_client_change_guard 說明）。
+        $__ocGuard = ot_client_change_guard($db, $_ot_uid, $editOrderId,
+                                            $row['Client_name_ID'] ?? null, $row['d_id_ID'] ?? null, $clientNameId);
+        if (!$__ocGuard['ok']) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => $__ocGuard['msg']]);
+            exit;
+        }
 
         $baseFields = "Order_oo=:OrderNo, d_id=:d_id, Specification=NULL,
                        Order_ps=:Order_ps, Client_name=:Client_Name, Qty=:Qty,
@@ -356,6 +369,12 @@ try {
             $stmt->bindParam(':Delivery_date', $_POST['orderDdate']);
         }
         $stmt->execute();
+        // 客戶真的被換掉時留稽核，並清掉這張訂單的解鎖狀態（下次要再改就得重新輸入本人密碼）
+        if (!empty($__ocGuard['changed'])) {
+            ot_client_change_audit($db, $_ot_uid, $editOrderId, (string)($row['Order_oo'] ?? ''),
+                                   $row['Client_name_ID'] ?? '', $clientNameId, $row['d_id_ID'] ?? '', $dIdId);
+            ot_client_unlock_clear($_ot_uid, $editOrderId);
+        }
         // 編輯訂單附件暫存轉正：這次編輯中上傳的附件先存 temp，按下更新才歸給這張既有訂單；
         // 沒按更新就關閉視窗＝暫存到期(3天)自動清除，不會憑空掛到訂單上
         if ($editBatchKey !== '') {
