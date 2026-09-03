@@ -63,6 +63,14 @@ require_once '../../src/common/quote_customer_lib.php';   // 訂單 ↔ 來源OP
 
 $conn = new DBConnection();
 
+// ── 清掉舊版留在 session 裡的 NAS 檔名大清單（2026-09-03）──────────────────
+// 舊做法把 19,000 多個檔名存進 $_SESSION，session 檔膨脹到 600KB 以上，
+// 於是「全站每一支頁面」的每一次請求都要讀寫這 600KB。快取已改放系統暫存檔，
+// 這裡順手把既有 session 裡的殘留清掉（只在真的還留著時才動，平時零成本）。
+foreach (array_keys($_SESSION) as $__k) {
+    if (strncmp((string)$__k, 'nas_bom_files_', 14) === 0) unset($_SESSION[$__k]);
+}
+
 // --- AJAX: 設計部門設定相關處理 ---
 // --- AND OTHER AJAX ACTIONS FOR THIS PAGE ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
