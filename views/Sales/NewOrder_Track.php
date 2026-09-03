@@ -3797,6 +3797,7 @@ foreach($dCounts as $c) {
                         <div style="font-weight:700;font-size:12px;color:#2A3F54;margin-bottom:6px;">
                             <i class="fa fa-paperclip"></i> 附件
                             <small style="font-weight:400;color:#999;">（可一次選多檔上傳，上傳後再點每筆設定標籤；存檔前務必全部設定完成）</small>
+                            <div style="font-weight:400;font-size:11px;color:#8a5a2b;margin-top:2px;">備註：僅能刪除本人上傳的附件；他人上傳的檔案需由管理員或具附件刪除權限者處理。</div>
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
                             <span style="font-size:11px;color:#888;">預設標籤<small style="color:#bbb;">（選填，套用到本次上傳的所有檔案）</small>：</span>
@@ -4446,6 +4447,7 @@ foreach($dCounts as $c) {
                             <div style="font-weight:600;font-size:12px;color:#2A3F54;margin-bottom:8px;">
                                 <i class="fa fa-paperclip" style="color:#1ABB9C;"></i> 附件
                                 <small style="font-weight:400;color:#999;">（可一次選多檔上傳，建單後自動歸屬到對應的新訂單；建單前務必逐一設定標籤）</small>
+                                <div style="font-weight:400;font-size:11px;color:#8a5a2b;margin-top:2px;">備註：僅能刪除本人上傳的附件；他人上傳的檔案需由管理員或具附件刪除權限者處理。</div>
                             </div>
                             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
                                 <span style="font-size:11px;color:#888;">預設標籤<small style="color:#bbb;">（選填，套用到本次上傳的所有檔案）</small>：</span>
@@ -4502,6 +4504,7 @@ foreach($dCounts as $c) {
     <script src="../../resource/js/dataTables.bootstrap.min.js"></script>
     <script src="../../resource/js/dataTables.fixedHeader.min.js"></script>
     <script src="../../resource/js/custom.min.js"></script>
+    <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 
     <script>
         // ── 阻止 custom.min.js 的 init_DataTables 初始化 #orderTable ────────
@@ -6991,6 +6994,7 @@ foreach($dCounts as $c) {
                 '<i class="fa fa-file-o" style="color:#999;"></i>' +
                 '<a href="' + ORDER_ATTACH_API + '?action=download&id=' + f.id + '" target="_blank" style="color:#337ab7;">' + escapeHtml(f.original_name || f.filename) + '</a>' +
                 '<span style="color:#aaa;">' + (f.file_size || '') + '</span>' +
+                oaUploaderHtml(f) +
                 partTag +
                 (f.is_shared ? '<span style="font-size:10px;color:#8a5a2b;background:#FDEBD0;border:1px solid #E8B76C;border-radius:3px;padding:0 4px;" title="這份附件已自動連動到相同訂單編號的其他料號訂單；刪除會一併移除所有連結"><i class="fa fa-link"></i> 自動連動</span>' : '') +
                 '<span class="oa-tag-badge">' + (tagged
@@ -7001,6 +7005,15 @@ foreach($dCounts as $c) {
                 '</div>' +
                 '<div class="oa-tag-panel" style="display:' + (tagged ? 'none' : 'block') + ';padding:4px 0 4px 22px;">' + panelHtml + '</div>' +
                 '</div>';
+        }
+        // 上傳者與上傳時間（使用者明確要求，2026-09-03）：uploaded_by 仍是 user id（刪除鈕判定要用），
+        // 姓名由後端 list_files 以 LEFT JOIN user 回傳的 uploader_name 提供；日期顯示走共用 egFmtDate（ai-rules/20）。
+        function oaUploaderHtml(f) {
+            var who = f.uploader_name || '';
+            var when = f.uploaded_at ? (typeof egFmtDate === 'function' ? egFmtDate(f.uploaded_at, true) : f.uploaded_at) : '';
+            var txt = [who, when].filter(Boolean).join(' · ');
+            if (!txt) return '';
+            return '<span style="font-size:10px;color:#999;" title="上傳者／上傳時間"><i class="fa fa-user-o"></i> ' + escapeHtml(txt) + '</span>';
         }
         function oaHasUntagged(files) { return (files || []).some(function(f) { return !f.category_name; }); }
         // 事後改料號連結（多料號批次時的下拉選單，change 即時存檔）

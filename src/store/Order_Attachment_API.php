@@ -216,15 +216,21 @@ switch ($action) {
         $rows = [];
         if ($orderId > 0) {
             $stmt = $pdo->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.category_ids, a.linked_part_no, a.status, a.uploaded_by,
+                                          COALESCE(u.user_cname,'') AS uploader_name,
                                           DATE_FORMAT(a.uploaded_at,'%Y-%m-%d %H:%i') AS uploaded_at
-                                   FROM order_attachments a WHERE a.order_id=? AND a.status='active' ORDER BY a.id");
+                                   FROM order_attachments a
+                                   LEFT JOIN user u ON u.id = a.uploaded_by
+                                   WHERE a.order_id=? AND a.status='active' ORDER BY a.id");
             $stmt->execute([$orderId]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
         if ($batchKey !== '') {
             $stmt2 = $pdo->prepare("SELECT a.id, a.filename, a.original_name, a.file_size, a.category_ids, a.linked_part_no, a.status, a.uploaded_by,
+                                           COALESCE(u.user_cname,'') AS uploader_name,
                                            DATE_FORMAT(a.uploaded_at,'%Y-%m-%d %H:%i') AS uploaded_at
-                                    FROM order_attachments a WHERE a.batch_key=? AND a.status='temp' ORDER BY a.id");
+                                    FROM order_attachments a
+                                    LEFT JOIN user u ON u.id = a.uploaded_by
+                                    WHERE a.batch_key=? AND a.status='temp' ORDER BY a.id");
             $stmt2->execute([$batchKey]);
             $rows = array_merge($rows, $stmt2->fetchAll(PDO::FETCH_ASSOC));
         }
