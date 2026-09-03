@@ -17,6 +17,7 @@
  *   5. 數字欄：隱藏上下增減鈕、離開欄位時小數尾 0 省略（3.50→3.5、3.00→3）
  *   6. 可增列表格：在最末列按 ↓ 自動新增一列並跳過去；在「沒填東西的最末列」按 ↑ 自動移除該列並跳回上一列
  *   7. 長清單下拉可打字篩選：<select data-eg-filter> 自動長出一個篩選輸入框（人員／料號／客戶等清單一多就找不到人）
+ *      純篩選用的下拉再加 data-eg-filter-reset：雙擊篩選框或雙擊下拉＝把這一欄的篩選整個解除（關鍵字＋選取一起清）
  *
  * 個別欄位要排除：加 data-eg-skip
  * 整個區塊要排除：在祖先元素加 data-eg-skip
@@ -392,6 +393,30 @@
         box.addEventListener('input', apply);
         box.addEventListener('keydown', function (e) {
             if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); sel.focus(); }
+        });
+        /* 純篩選用的下拉可加 data-eg-filter-reset：雙擊「打字篩選框」或雙擊「下拉」
+           都等於把這一欄的篩選整個解除（關鍵字清空 + 選取回到空值選項）。
+           為什麼要 opt-in 而不是全站一律如此：一般表單裡的下拉（簽核人、母文件…）
+           選的是要存檔的值，清掉打字關鍵字就把使用者選好的人一起洗掉會是災難。 */
+        function egFilterResetSel() {
+            var reset = -1;
+            for (var i = 0; i < sel.options.length; i++) {
+                if (sel.options[i].value === '') { reset = i; break; }
+            }
+            if (reset < 0 || sel.selectedIndex === reset) return;
+            sel.selectedIndex = reset;
+            fire(sel, 'change');
+        }
+        box.addEventListener('dblclick', function () {
+            if (!sel.hasAttribute('data-eg-filter-reset')) return;
+            // 規則 1 掛在 document 的捕獲階段，跑到這裡時關鍵字已經清掉、選項也還原了
+            egFilterResetSel();
+        });
+        sel.addEventListener('dblclick', function () {
+            if (!sel.hasAttribute('data-eg-filter-reset')) return;
+            if (box.value === '') return;
+            box.value = '';                 // 反向：雙擊下拉解除選取時，打字關鍵字也一併清掉
+            apply();
         });
         sel.egFilterResnap = function () { snap(); apply(); };   // 頁面自行換掉整批選項後可呼叫
     }

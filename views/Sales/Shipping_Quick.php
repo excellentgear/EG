@@ -323,9 +323,9 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
     </div>
     <div class="sq-bar" style="background:#FBF3E4;">
       <label>篩選客戶</label>
-      <select id="mtClient" style="width:200px;" data-eg-filter="輸入客戶簡稱篩選…"><option value="">全部客戶</option></select>
+      <select id="mtClient" style="width:200px;" data-eg-filter="輸入客戶簡稱篩選…" data-eg-filter-reset><option value="">全部客戶</option></select>
       <label>篩選料號</label>
-      <select id="mtPart" style="width:230px;" data-eg-filter="輸入料號篩選…"><option value="">全部料號</option></select>
+      <select id="mtPart" style="width:230px;" data-eg-filter="輸入料號篩選…" data-eg-filter-reset><option value="">全部料號</option></select>
       <span class="mt-note">選了客戶，料號只列該客戶底下的；改動即重新試算。</span>
     </div>
     <div class="sq-bar" style="background:#FFF7E8;">
