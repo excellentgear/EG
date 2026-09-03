@@ -194,4 +194,95 @@ function eg_bom_dir_probe(string $utf8Dir): array {
     ];
 }
 
+
+/**
+ * 取得某個圖檔資料夾內「副檔名符合」的檔名清單（含快取），給「這個 BOM 有沒有圖面」這類判定用。
+ *
+ * 為什麼要有這支（2026-09-03，訂單追蹤清單載入 1.6 秒的根因）：
+ * 原本各頁自己 `scandir()` 整個資料夾（實際有 19,000 多個檔）再用巢狀迴圈逐一比對，
+ * 而且**把整份檔名清單存進 `$_SESSION`**——session 檔因此膨脹到 600KB 以上，於是
+ * 「全站每一支頁面」的每一次請求都要讀寫這 600KB，連不相干的頁面都被拖慢。
+ * 這裡改成：①快取放系統暫存檔、**全站共用**（不進 session）②只留副檔名符合的檔名
+ * ③另外提供 `eg_bom_file_prefix_index()` 讓比對變成 O(1) 雜湊查詢，不必每個編號掃全部檔名。
+ *
+ * @param string $utf8Dir UTF-8 路徑（編碼轉換由本檔處理）
+ * @param array  $exts    小寫副檔名白名單，例：['jpg','jpeg','png','pdf']
+ * @param int    $ttl     快取秒數（預設 300 秒，與原本 session 快取相同）
+ * @return string[] 檔名（不含路徑）；資料夾讀不到時回空陣列
+ */
+function eg_bom_file_cache_path(string $utf8Dir, array $exts): string {
+    $exts = array_values(array_unique(array_map('strtolower', $exts)));
+    sort($exts);
+    return rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR
+         . 'eg_bomfiles_' . md5($utf8Dir . '|' . implode(',', $exts)) . '.cache';
+}
+
+/**
+ * 只讀快取、絕不掃描（清單頁一律用這支）。
+ * 回傳 null＝完全沒有快取；回傳陣列＝可用的檔名清單（可能已過期，過期與否看 $ageOut）。
+ * **為什麼不在這裡順手掃一次**：那個資料夾在 NAS 上有 19,000 多個檔，實測掃完要一分半，
+ * 只要讓它跑在畫面要用的路徑上，使用者就會看到「載入中」卡住不動（2026-09-03 事故）。
+ */
+function eg_bom_file_cache_read(string $utf8Dir, array $exts, ?int &$ageOut = null): ?array {
+    static $mem = [];
+    $f = eg_bom_file_cache_path($utf8Dir, $exts);
+    if (isset($mem[$f])) { $ageOut = $mem[$f][1]; return $mem[$f][0]; }
+    if (!is_file($f)) { $ageOut = null; return null; }
+    $raw = @file_get_contents($f);
+    if ($raw === false || $raw === '') { $ageOut = null; return null; }
+    $list = @unserialize($raw);
+    if (!is_array($list)) { $ageOut = null; return null; }
+    $ageOut = time() - (int)@filemtime($f);
+    $mem[$f] = [$list, $ageOut];
+    return $list;
+}
+
+/**
+ * 真的去掃資料夾並寫進快取（**很慢，只能由背景／非同步的請求呼叫**）。
+ * 同時只允許一個請求在掃（鎖檔 10 分鐘），避免多人同時開頁面把 NAS 打爆。
+ * @return array{ok:bool,count:int,skipped:bool}
+ */
+function eg_bom_file_cache_refresh(string $utf8Dir, array $exts, int $lockTtl = 600): array {
+    $cacheFile = eg_bom_file_cache_path($utf8Dir, $exts);
+    $lockFile  = $cacheFile . '.lock';
+    if (is_file($lockFile) && (time() - (int)@filemtime($lockFile)) < $lockTtl) {
+        return ['ok' => true, 'count' => 0, 'skipped' => true];   // 已經有人在掃
+    }
+    @file_put_contents($lockFile, (string)time());
+    $exts = array_values(array_unique(array_map('strtolower', $exts)));
+    $fs   = eg_bom_fs_path(rtrim($utf8Dir, '/\\') . DIRECTORY_SEPARATOR);
+    $list = [];
+    $ok   = false;
+    $dh   = @opendir($fs);
+    if ($dh !== false) {
+        while (($fn = readdir($dh)) !== false) {
+            if ($fn === '.' || $fn === '..') continue;
+            $dot = strrpos($fn, '.');
+            if ($dot === false) continue;
+            if (in_array(strtolower(substr($fn, $dot + 1)), $exts, true)) $list[] = $fn;
+        }
+        closedir($dh);
+        @file_put_contents($cacheFile, serialize($list), LOCK_EX);
+        $ok = true;
+    }
+    @unlink($lockFile);
+    return ['ok' => $ok, 'count' => count($list), 'skipped' => false];
+}
+
+/**
+ * 依「要比對的編號長度」把檔名做成前綴索引：`[長度 => [前綴 => true]]`。
+ * 判定「檔名是否以某個編號開頭」時用 `isset($idx[strlen($no)][$no])`，
+ * 取代「每個編號 × 全部檔名」的巢狀掃描（實測 1.6 秒 → 數十毫秒）。
+ */
+function eg_bom_file_prefix_index(array $files, array $numbers): array {
+    $lens = [];
+    foreach ($numbers as $no) { $l = strlen((string)$no); if ($l > 0) $lens[$l] = true; }
+    $idx = [];
+    foreach (array_keys($lens) as $l) {
+        $m = [];
+        foreach ($files as $fn) { $m[substr($fn, 0, $l)] = true; }
+        $idx[$l] = $m;
+    }
+    return $idx;
+}
 }

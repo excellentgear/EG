@@ -1748,6 +1748,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 
 
+// ── 圖面檔名快取重建（2026-09-03）：只由前端在清單畫完之後非同步呼叫 ─────────
+// 那個 NAS 資料夾有 19,000 多個檔，掃一次要一分半，**絕不可以放在清單的路徑上**
+// （會變成畫面一直停在「載入中」）。這支專門負責慢慢掃、掃完寫進暫存檔快取，
+// 清單只讀快取；同一時間只允許一個人在掃（lib 內有鎖檔）。
+if (isset($_POST['action']) && $_POST['action'] === 'bom_file_cache_refresh') {
+    header('Content-Type: application/json');
+    @ignore_user_abort(true);
+    @set_time_limit(300);
+    // 掃描期間不要卡住這個人的其他請求（session 檔在掃描期間會被鎖住）
+    if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+    try {
+        require_once __DIR__ . '/../../src/common/bom_dir_lib.php';
+        $r = eg_bom_file_cache_refresh(eg_bom_scan_dir_auto(), ['jpg','jpeg','png','pdf']);
+        echo json_encode(['success' => true] + $r);
+    } catch (Throwable $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+
 // ── 設計備註「已處理」＝轉成溝通紀錄（2026-09-03 使用者要求）─────────────
 // 為什麼要有這個：設計備註原本只能一直往上加字，看不出來哪些已經處理完；按下「已處理」
 // 把當下整段內容存成一筆溝通紀錄並清空欄位，之後可以繼續打新的內容。
@@ -2229,6 +2250,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
 
     // 設計備註溝通紀錄筆數（2026-09-03）：Order_id => 筆數。整頁一次查完，不要每列各打一次；
     // 表還沒建起來（舊備份還原）時 catch 掉當作沒有紀錄，清單照樣顯示得出來。
+    $bom_cache_refresh = 0;   // 1＝圖面檔名快取需要背景重建（見下方 NAS 區塊）
     $ate_log_map = [];
     if (!empty($order_list)) {
         try {
@@ -2367,26 +2389,34 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                     $draw_valid_ext = ['jpg','jpeg','png','pdf'];
                     if (is_dir($nas_scan_dir)) {
                         // NAS 可存取：掃目錄（結果快取 5 分鐘，避免每次篩選都掃 NAS）
-                        $nas_cache_key = 'nas_bom_files_' . md5($nas_scan_dir);
-                        if (!array_key_exists($nas_cache_key, $_SESSION) || (time() - ($_SESSION[$nas_cache_key . '_ts'] ?? 0)) > 300) {
-                            $_SESSION[$nas_cache_key]        = scandir($nas_scan_dir);
-                            $_SESSION[$nas_cache_key . '_ts'] = time();
-                        }
-                        $nas_files = $_SESSION[$nas_cache_key];
-                        $all_bom_nums = array_unique(array_merge(...array_values($bom_by_did)));
-                        $bom_has_file = [];
-                        foreach ($all_bom_nums as $bnum) {
-                            foreach ($nas_files as $fn) {
-                                if ($fn === '.' || $fn === '..') continue;
-                                if (strpos($fn, $bnum) === 0) {
-                                    $ext = strtolower(pathinfo($fn, PATHINFO_EXTENSION));
-                                    if (in_array($ext, $draw_valid_ext)) {
-                                        $bom_has_file[$bnum] = true;
-                                        break; // 找到一個就夠了
-                                    }
-                                }
+                        // 【2026-09-03 效能修正】判定規則完全沒變（檔名以該 BOM 編號開頭且副檔名是
+                        // jpg/jpeg/png/pdf ＝有圖面），但換掉兩個會拖慢整站的做法：
+                        //  ① 原本把整份檔名清單（19,000 多筆）塞進 $_SESSION → session 檔膨脹到 600KB，
+                        //     全站每一支頁面的每一次請求都要讀寫這 600KB。改放系統暫存檔、全站共用。
+                        //  ② 原本「每個 BOM 編號 × 全部檔名」逐一 strpos＋pathinfo，一頁 20 列實測 1.6 秒
+                        //     （新訂單的 BOM 多半還沒有圖檔，掃不到就會把 19,000 筆全部掃完）。
+                        //     改成先做前綴雜湊索引，查詢變 O(1)。
+                        $__nasAge  = null;
+                        $nas_files = eg_bom_file_cache_read($nas_scan_dir, $draw_valid_ext, $__nasAge);
+                        if ($nas_files === null) {
+                            // 還沒有快取：**絕不在這裡同步掃 NAS**（那個資料夾 19,000 多個檔，掃完要一分半，
+                            // 畫面會卡在「載入中」）。這一輪先比照「NAS 不可存取」的既有退路：bom 表有記錄
+                            // 就視為有圖面，並請前端背景去把快取建起來，下一次就準了。
+                            foreach (array_keys($bom_by_did) as $did) { $has_drawing_map[$did] = true; }
+                            $bom_cache_refresh = 1;
+                        } else {
+                            if ($__nasAge !== null && $__nasAge > 600) $bom_cache_refresh = 1;   // 過期＝背景更新，不擋畫面
+                            $all_bom_nums   = array_unique(array_merge(...array_values($bom_by_did)));
+                            $bom_prefix_idx = eg_bom_file_prefix_index($nas_files, $all_bom_nums);
+                            $bom_has_file   = [];
+                            foreach ($all_bom_nums as $bnum) {
+                                $bl = strlen((string)$bnum);
+                                if ($bl > 0 && isset($bom_prefix_idx[$bl][$bnum])) $bom_has_file[$bnum] = true;
                             }
                         }
+                        // 舊版留在 session 裡的那份大清單順手清掉，讓既有 session 檔縮回正常大小
+                        $nas_cache_key = 'nas_bom_files_' . md5($nas_scan_dir);
+                        if (isset($_SESSION[$nas_cache_key])) unset($_SESSION[$nas_cache_key], $_SESSION[$nas_cache_key . '_ts']);
                         foreach ($bom_by_did as $did => $bnums) {
                             foreach ($bnums as $bnum) {
                                 if (!empty($bom_has_file[$bnum])) {
@@ -3064,7 +3094,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     ob_end_clean(); 
 
     // 6. 輸出絕對純淨的 JSON
-    echo json_encode(['success' => true, 'html' => $html, 'pagination' => $pagination, 'stats' => $statsResult]);
+    echo json_encode(['success' => true, 'html' => $html, 'pagination' => $pagination, 'stats' => $statsResult, 'bom_cache_refresh' => $bom_cache_refresh]);
     exit;
 }
 
@@ -4784,6 +4814,14 @@ foreach($dCounts as $c) {
                 $('#pagination-container').html(res.pagination);
                 $('textarea.table-textarea').each(function() { autoResize(this); });
                 if (typeof ocDecorateOrderBadges === 'function') ocDecorateOrderBadges();
+
+                // 圖面檔名快取過期或還沒建立時，背景去重建（不擋畫面、失敗也不提示；
+                // 一次只發一輪，避免每次換頁都打一支要掃 NAS 的慢請求）
+                if (res.bom_cache_refresh && !window.__bomCacheRefreshing) {
+                    window.__bomCacheRefreshing = true;
+                    $.post('', { action: 'bom_file_cache_refresh' })
+                     .always(function() { window.__bomCacheRefreshing = false; });
+                }
 
             }, 'json').fail(function(xhr) {
                 $('#orderTable tbody').html('<tr><td colspan="20" class="text-center text-danger" style="font-weight:bold;">載入失敗！請按 F12 查看 Console。</td></tr>');
