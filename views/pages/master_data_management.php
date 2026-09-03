@@ -9556,6 +9556,8 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 <script src="../../resource/js/eg_ack_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_ack_picker.js') ?>"></script>
 <!-- 照片相簿：九宮格＋點開放大（三頁共用同一份，禁止各頁自刻） -->
 <script src="../../resource/js/eg_photo_album.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_photo_album.js') ?>"></script>
+<!-- 階梯報價的數量區間／單價顯示格式（與 bom_viewer 共用同一份，禁止各頁自刻） -->
+<script src="../../resource/js/eg_quote_tier.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_quote_tier.js') ?>"></script>
 <script src="../../resource/js/o3dv.min.js"></script>
 
 <script>
@@ -18593,11 +18595,14 @@ function _pavRenderQuoteGroupList(files, wrap) {
             if (qs.items && qs.items.length) {
                 html += '<div style="margin-top:4px;border-top:1px dashed #d0ddef;padding-top:4px;">';
                 qs.items.forEach(function(it) {
-                    var priceStr = it.is_tiered ? '(階梯)' : (it.unit_price ? '$'+Number(it.unit_price).toLocaleString() : '');
+                    var tiers = (it.is_tiered && it.tiers) ? it.tiers : [];
+                    var priceStr = tiers.length ? EGQuoteTier.summary(tiers)
+                                 : (it.is_tiered ? '(階梯)' : (it.unit_price ? '$'+Number(it.unit_price).toLocaleString() : ''));
                     html += '<div style="font-size:10px;color:#555;line-height:1.5;">';
                     html += '<span style="color:#1a5276;font-weight:600;">'+escHtml(it.product_id||'')+'</span>';
                     if (it.specification) html += ' <span style="color:#888;">'+escHtml(it.specification)+'</span>';
-                    html += ' &times;'+escHtml(String(it.quantity||''))+' '+(it.unit||'');
+                    // 階梯品項的數量在各階裡，本身沒有數量，不顯示「×」
+                    if (!tiers.length) html += ' &times;'+escHtml(String(it.quantity||''))+' '+(it.unit||'');
                     if (priceStr) html += ' <span style="color:#e74c3c;">'+escHtml(priceStr)+'</span>';
                     html += '</div>';
                 });
@@ -18701,13 +18706,29 @@ function pavShowQuoteDetail(qno) {
                     combined += '<div style="color:#7d3c98;font-size:10px;">'+escHtml(it.specification)+'</div>';
                 }
                 if (!combined) combined = '<span style="color:#ccc;">—</span>';
-                html += '<tr style="border-bottom:1px solid #f0f0f0;">';
-                html += '<td style="padding:4px 6px;color:#1a5276;font-weight:600;">'+escHtml(it.product_id||'')+'</td>';
-                html += '<td style="padding:4px 6px;line-height:1.6;">'+combined+'</td>';
-                html += '<td style="padding:4px 6px;text-align:right;">'+escHtml(String(it.quantity||''))+' '+(it.unit||'')+'</td>';
-                html += '<td style="padding:4px 6px;text-align:right;color:'+(it.is_tiered?'#888':'#e74c3c')+';">'
-                      + (it.is_tiered ? '(階梯)' : (it.unit_price ? '$'+Number(it.unit_price).toLocaleString() : '—'))+'</td>';
-                html += '</tr>';
+                var tiers = (it.is_tiered && it.tiers) ? it.tiers : [];
+                if (tiers.length) {
+                    // 階梯報價：逐階列出數量區間與單價（品項本身沒有數量與單價）
+                    tiers.forEach(function(t, ti) {
+                        html += '<tr style="border-bottom:1px solid '+(ti===tiers.length-1?'#f0f0f0':'#f9f9f9')+';">';
+                        if (ti === 0) {
+                            html += '<td rowspan="'+tiers.length+'" style="padding:4px 6px;color:#1a5276;font-weight:600;vertical-align:middle;">'+escHtml(it.product_id||'')+'</td>';
+                            html += '<td rowspan="'+tiers.length+'" style="padding:4px 6px;line-height:1.6;vertical-align:middle;">'+combined+'<div style="color:#888;font-size:10px;">（階梯報價，單價依訂購數量區間）</div></td>';
+                        }
+                        var tol = EGQuoteTier.tolText(t);
+                        html += '<td style="padding:4px 6px;text-align:right;white-space:nowrap;">'+escHtml(EGQuoteTier.rangeText(t))+' '+escHtml(it.unit||'PCS')+(tol?'<div style="font-size:10px;color:#a06a1f;">'+tol+'</div>':'')+'</td>';
+                        html += '<td style="padding:4px 6px;text-align:right;color:#e74c3c;">'+escHtml(EGQuoteTier.priceText(t)||'—')+'</td>';
+                        html += '</tr>';
+                    });
+                } else {
+                    html += '<tr style="border-bottom:1px solid #f0f0f0;">';
+                    html += '<td style="padding:4px 6px;color:#1a5276;font-weight:600;">'+escHtml(it.product_id||'')+'</td>';
+                    html += '<td style="padding:4px 6px;line-height:1.6;">'+combined+'</td>';
+                    html += '<td style="padding:4px 6px;text-align:right;">'+escHtml(String(it.quantity||''))+' '+(it.unit||'')+'</td>';
+                    html += '<td style="padding:4px 6px;text-align:right;color:'+(it.is_tiered?'#888':'#e74c3c')+';">'
+                          + (it.is_tiered ? '(階梯)' : (it.unit_price ? '$'+Number(it.unit_price).toLocaleString() : '—'))+'</td>';
+                    html += '</tr>';
+                }
             });
             html += '</tbody></table>';
         }

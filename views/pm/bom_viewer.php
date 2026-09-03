@@ -887,6 +887,7 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <!-- 照片相簿：九宮格＋點開放大（三頁共用同一份，禁止各頁自刻）-->
 <script src="../../resource/js/eg_photo_album.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_photo_album.js') ?>"></script>
+<script src="../../resource/js/eg_quote_tier.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_quote_tier.js') ?>"></script>
 <script>
 var _bom        = <?= json_encode($bom) ?>;
 var _mode       = <?= json_encode($mode) ?>;   // 'bom' | 'did'
@@ -1684,12 +1685,28 @@ function showQuoteDetail(qno) {
                 }
                 if (it.specification) combined += '<div style="color:#7d3c98;font-size:10px;">' + escapeHtml(it.specification) + '</div>';
                 if (!combined) combined = '<span style="color:#ccc;">—</span>';
-                html += '<tr style="border-bottom:1px solid #f0f0f0;">';
-                html += '<td style="padding:4px 6px;color:#1a5276;font-weight:600;">' + escapeHtml(it.product_id || '') + '</td>';
-                html += '<td style="padding:4px 6px;line-height:1.6;">' + combined + '</td>';
-                html += '<td style="padding:4px 6px;text-align:right;">' + escapeHtml(String(it.quantity || '')) + ' ' + (it.unit || '') + '</td>';
-                html += '<td style="padding:4px 6px;text-align:right;color:' + (it.is_tiered ? '#888' : '#c0392b') + ';">' + (it.is_tiered ? '(階梯)' : (it.unit_price ? '$' + Number(it.unit_price).toLocaleString() : '—')) + '</td>';
-                html += '</tr>';
+                var tiers = (it.is_tiered && it.tiers) ? it.tiers : [];
+                if (tiers.length) {
+                    // 階梯報價：逐階列出數量區間與單價（品項本身沒有數量與單價）
+                    tiers.forEach(function(t, ti) {
+                        html += '<tr style="border-bottom:1px solid ' + (ti === tiers.length - 1 ? '#f0f0f0' : '#f9f9f9') + ';">';
+                        if (ti === 0) {
+                            html += '<td rowspan="' + tiers.length + '" style="padding:4px 6px;color:#1a5276;font-weight:600;vertical-align:middle;">' + escapeHtml(it.product_id || '') + '</td>';
+                            html += '<td rowspan="' + tiers.length + '" style="padding:4px 6px;line-height:1.6;vertical-align:middle;">' + combined + '<div style="color:#888;font-size:10px;">（階梯報價，單價依訂購數量區間）</div></td>';
+                        }
+                        var tol = EGQuoteTier.tolText(t);
+                        html += '<td style="padding:4px 6px;text-align:right;white-space:nowrap;">' + escapeHtml(EGQuoteTier.rangeText(t)) + ' ' + escapeHtml(it.unit || 'PCS') + (tol ? '<div style="font-size:10px;color:#a06a1f;">' + tol + '</div>' : '') + '</td>';
+                        html += '<td style="padding:4px 6px;text-align:right;color:#c0392b;">' + escapeHtml(EGQuoteTier.priceText(t) || '—') + '</td>';
+                        html += '</tr>';
+                    });
+                } else {
+                    html += '<tr style="border-bottom:1px solid #f0f0f0;">';
+                    html += '<td style="padding:4px 6px;color:#1a5276;font-weight:600;">' + escapeHtml(it.product_id || '') + '</td>';
+                    html += '<td style="padding:4px 6px;line-height:1.6;">' + combined + '</td>';
+                    html += '<td style="padding:4px 6px;text-align:right;">' + escapeHtml(String(it.quantity || '')) + ' ' + (it.unit || '') + '</td>';
+                    html += '<td style="padding:4px 6px;text-align:right;color:' + (it.is_tiered ? '#888' : '#c0392b') + ';">' + (it.is_tiered ? '(階梯)' : (it.unit_price ? '$' + Number(it.unit_price).toLocaleString() : '—')) + '</td>';
+                    html += '</tr>';
+                }
                 // 已轉訂單：下方一併顯示該筆訂單資料與訂單附件
                 if (it.order_oo) {
                     html += '<tr style="border-bottom:1px solid #f0f0f0;background:#eafaf6;">';

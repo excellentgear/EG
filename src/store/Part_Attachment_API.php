@@ -629,6 +629,24 @@ switch ($action) {
             }
             unset($it2, $qItems);
 
+            // 階梯報價的各階數量區間與單價（前端報價分頁要逐階列出，只印「(階梯)」＝看不到數量也看不到單價）
+            $tieredIds = [];
+            foreach ($items as $qItems) { foreach ($qItems as $itT) { if (!empty($itT['is_tiered'])) $tieredIds[] = (int)$itT['item_id']; } }
+            $tierByItemId = [];
+            if ($tieredIds) {
+                try {
+                    $phT   = implode(',', array_fill(0, count($tieredIds), '?'));
+                    $tStmt = $pdo->prepare("SELECT item_id, qty_min, qty_max, unit_price, tolerance_value, tolerance_unit, tolerance_note
+                        FROM quotation_item_tier WHERE item_id IN ($phT) ORDER BY item_id, sort_order, qty_min");
+                    $tStmt->execute($tieredIds);
+                    foreach ($tStmt->fetchAll(PDO::FETCH_ASSOC) as $t) { $tierByItemId[(int)$t['item_id']][] = $t; }
+                } catch (Throwable $_e) {}
+            }
+            foreach ($items as &$qItems) {
+                foreach ($qItems as &$it4) { $it4['tiers'] = !empty($it4['is_tiered']) ? ($tierByItemId[(int)$it4['item_id']] ?? []) : []; }
+            }
+            unset($it4, $qItems);
+
             // 品項是否已轉訂單（OP轉訂單）：報價資料分頁要合併顯示報價/訂單，已轉者改依訂單排序、
             // 並在下方一併顯示訂單資料與訂單附件（見 bom_viewer.php renderQuoteTab/showQuoteDetail）
             $allItemIds = [];
