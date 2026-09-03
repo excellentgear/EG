@@ -78,10 +78,17 @@
      * 還是不夠才用 textLength 壓字距（跟原本的作法一致）。
      * 回 { fs, maxW }。
      */
-    function fitRow(schema, cy, fs, len, W, H) {
+    /* lockFs（2026-09-03 使用者回報「印章內文字大小沒有套用圖章模板內的規定」）：
+       使用者在圖章模板設計裡「明確填了字級」時，這裡**不可以再自動縮小字級**——本檔開頭就寫明
+       `mode='shrink' 超寬時壓縮字距`，超寬本來就該交給下面的 textLength/lengthAdjust 去壓字距，
+       而不是先把字級砍到 85% 再壓一次（等於縮兩次）。實測模板1 設 11.3/14.5，印出來卻是 9.6/12.3
+       （正好是 ×0.85），比系統預設回墨印（11/14.5）還小一圈，所以蓋出來明顯比設計器裡看到的空。
+       字級留空＝自動的列不受影響，維持原本的自動縮放行為。 */
+    function fitRow(schema, cy, fs, len, W, H, lockFs) {
         len = Math.max(1, len);
         var w = 2 * halfWidthForText(schema, cy, fs, W, H) - 4;
         if (len * fs <= w) return { fs: fs, maxW: w };
+        if (lockFs) return { fs: fs, maxW: w };
         var min = Math.max(5, fs * 0.85);
         for (var k = 0; k < 6 && fs > min; k++) {
             fs = Math.max(min, fs * 0.97);
@@ -154,7 +161,7 @@
                     var startY = cy - lh * (n - 1) / 2;
                     for (var li = 0; li < n; li++) {
                         var ly = startY + li * lh;
-                        var lf = fitRow(schema, ly, fs, lines[li].length, W, H);
+                        var lf = fitRow(schema, ly, fs, lines[li].length, W, H, userFs > 0 && fs === userFs);
                         var lFit = lines[li].length * lf.fs > lf.maxW;
                         svg += '<text x="' + (W/2) + '" y="' + (ly + lf.fs * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + lf.fs.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'
                              + (lFit ? ' textLength="' + lf.maxW.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : '')
@@ -164,7 +171,9 @@
                     // 自動縮小（預設）：單行置中，超寬時以 textLength 壓縮字距；自動字級取列高 0.68 盡量填滿（同現有回墨章比例）
                     var fs2 = userFs || Math.min(rh * 0.68, maxW / Math.max(1, txt.length) * 1.15);
                     fs2 = Math.max(5, Math.min(fs2, rh * 0.92));
-                    var rf = fitRow(schema, cy, fs2, txt.length, W, H);
+                    // fs2 若已被列高 rh*0.92 壓過就不算「使用者指定的字級」（例：模板9 設 30 但列高只容得下 18.4），
+                    // 那種情況維持原本的自動縮放，避免字撐出格子外
+                    var rf = fitRow(schema, cy, fs2, txt.length, W, H, userFs > 0 && fs2 === userFs);
                     var needFit = txt.length * rf.fs > rf.maxW;
                     svg += '<text x="' + (W/2) + '" y="' + (cy + rf.fs * 0.36).toFixed(1) + '" text-anchor="middle" font-size="' + rf.fs.toFixed(1) + '" fill="' + color + '" font-weight="bold" font-family="' + font + '"'
                          + (needFit ? ' textLength="' + rf.maxW.toFixed(1) + '" lengthAdjust="spacingAndGlyphs"' : '')
