@@ -594,10 +594,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $png = $_POST['png'] ?? '';
             $noWorkfile = !empty($_POST['no_workfile']);
             $work = $noWorkfile ? '' : ($_POST['work'] ?? '');
-            // 分享範圍：私人／部門共用（預設）／指定人員；沒有「全公司共用」，避免任何人都能改到
+            // 分享範圍：私人（預設）／部門共用／指定人員；沒有「全公司共用」，避免任何人都能改到
             // （這組範圍只管工作檔的可見性，no_workfile 時不建工作檔、前端不會送這欄，故先取一次值再判斷，避免 undefined key）
-            $scopeRaw = $_POST['scope'] ?? 'dept';
-            $scope = in_array($scopeRaw, ['private', 'dept', 'custom'], true) ? $scopeRaw : 'dept';
+            $scopeRaw = $_POST['scope'] ?? 'private';
+            $scope = in_array($scopeRaw, ['private', 'dept', 'custom'], true) ? $scopeRaw : 'private';
             $shareIds = json_decode($_POST['share_user_ids'] ?? '[]', true);
             if (!is_array($shareIds)) $shareIds = [];
             $shareIds = array_values(array_unique(array_map('intval', $shareIds)));
@@ -1675,11 +1675,11 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <label style="min-width:0;"><input type="checkbox" id="pf-no-workfile" onchange="pfOnNoWorkfileChange()"> 只存圖片，不建立工作檔</label>
             </div>
             <div id="pf-scope-box">
-                <div style="font-size:11.5px;color:#f0a24b;margin:0 0 4px 0;"><i class="fa fa-info-circle"></i> 分享範圍只管<b>誰能開這份工作檔繼續編輯</b>。有建立工作檔時，壓平 PNG <b>一律只在這個編輯器裡看得到</b>，其他頁面（料號附件／圖面查閱／外來文件清單）都不列。</div>
+                <div style="font-size:11.5px;color:#f0a24b;margin:0 0 4px 0;"><i class="fa fa-info-circle"></i> 分享範圍只管<b>誰能開這份工作檔繼續編輯</b>，<b>預設「私人」</b>，要讓別人接手再改成部門或指定人員。有建立工作檔時，壓平 PNG <b>一律只在這個編輯器裡看得到</b>，其他頁面（料號附件／圖面查閱／外來文件清單）都不列。</div>
                 <div class="frm-row"><label>分享範圍</label>
                     <select id="pf-scope" style="flex:1;" onchange="pfOnScopeChange()">
-                        <option value="private">私人（只有自己看得到）</option>
-                        <option value="dept" selected>部門共用（同部門看得到）</option>
+                        <option value="private" selected>私人（只有自己看得到）</option>
+                        <option value="dept">部門共用（同部門看得到）</option>
                         <option value="custom">指定人員（自選要分享給誰）</option>
                     </select>
                     <select id="pf-dept" style="display:none;"></select>
@@ -1896,7 +1896,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <?php endif; ?>
                 <li><b>直線／箭頭的拉伸</b>：選取一條線（含帶箭頭的線）只會出現<b>頭尾兩個圓點</b>，各自拖曳就是改長度與方向，不是整個外框等比例放大縮小；箭頭大小固定不會被拉扯變形。需要真的整體縮放（例如連箭頭一起放大）請改用屬性列的「粗細」或雙擊進入「編輯端點」</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
-                <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>有建立工作檔的儲存＝暫存，連壓平 PNG 也只在批圖編輯器裡看得到</b>——料號附件、圖面查閱、外來文件清單等其他頁面一律不列，不分登入者（避免半成品被當成正式圖面）；<b>分享範圍（私人／部門／指定人員）只限制這份工作檔能被誰開啟重改</b>。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）。<b>有建立工作檔的儲存一律當暫存</b>：不必填發行章日期，也不會觸發圖面變更判定；要當正式出圖存進去，請勾「只存圖片，不建立工作檔」，那時標籤若屬「自家出的圖」就要填發行章日期並會比對是否為圖面變更。<b>製程標籤</b>選填：同一個料號常常有好幾個加工項目各自一張圖，選了製程之後<b>只會跟同料號、同標籤、同製程的圖比新舊版</b>，不會把別的加工項目的圖誤判成前一版；留空＝共用圖，會跟該標籤下所有製程一起比。候選只列「這個料號的訂單有過的加工項目」與「這個料號已經打過的製程標籤」（打過一次就記在這個料號裡，下次直接選）。另外<b>新舊版是同一個標籤各自比</b>——BOSS圖只跟BOSS圖比、++圖只跟++圖比、單製++圖再自成一組；掛「作廢」標籤的附件一律不參與新舊版判定</li>
+                <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>有建立工作檔的儲存＝暫存，連壓平 PNG 也只在批圖編輯器裡看得到</b>——料號附件、圖面查閱、外來文件清單等其他頁面一律不列，不分登入者（避免半成品被當成正式圖面）；<b>分享範圍（私人／部門／指定人員）只限制這份工作檔能被誰開啟重改，預設「私人」</b>。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）。<b>有建立工作檔的儲存一律當暫存</b>：不必填發行章日期，也不會觸發圖面變更判定；要當正式出圖存進去，請勾「只存圖片，不建立工作檔」，那時標籤若屬「自家出的圖」就要填發行章日期並會比對是否為圖面變更。<b>製程標籤</b>選填：同一個料號常常有好幾個加工項目各自一張圖，選了製程之後<b>只會跟同料號、同標籤、同製程的圖比新舊版</b>，不會把別的加工項目的圖誤判成前一版；留空＝共用圖，會跟該標籤下所有製程一起比。候選只列「這個料號的訂單有過的加工項目」與「這個料號已經打過的製程標籤」（打過一次就記在這個料號裡，下次直接選）。另外<b>新舊版是同一個標籤各自比</b>——BOSS圖只跟BOSS圖比、++圖只跟++圖比、單製++圖再自成一組；掛「作廢」標籤的附件一律不參與新舊版判定</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
                 <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋。<b>同一個標籤可以設定多組 #</b>（空格分隔，最多 10 個、每個最多 12 字），縮圖上固定顯示前 3 個、其餘收成灰底「+N」（滑鼠移上去看全部），但<b>收起來的一樣搜得到</b>。個數或字數超過時欄位下方會即時紅字說明原因</li>
                 <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編；<b>標籤（含快速標籤/自組標籤）內改字同樣適用</b></li>
@@ -6357,7 +6357,7 @@ function doPrintVector() {
 function openPartModal() {
     // 檔名預設：有帶入料號就直接用料號當檔名（現場慣例本來就是打料號當檔名），沒有才退回時間戳記
     document.getElementById('pf-name').value = PRELOAD_PART_NO || defaultFileName();
-    document.getElementById('pf-scope').value = 'dept';
+    document.getElementById('pf-scope').value = 'private';
     document.getElementById('pf-no-workfile').checked = false;
     document.getElementById('pf-save-status').textContent = '';
     document.querySelectorAll('.pf-cat').forEach(c => { c.checked = false; });
