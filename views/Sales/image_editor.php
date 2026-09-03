@@ -1581,12 +1581,19 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <div class="modal-box" style="min-width:82vw;max-width:94vw;">
         <h3><i class="fa fa-tags"></i> 標籤管理
             <span style="font-size:11.5px;color:#8b949e;font-weight:400;margin-left:10px;">
-                框選、Ctrl+點選、<b>Shift+點選（範圍）</b>多選 → 拖曳到目標欄＝搬移，<b>按住 Ctrl 拖曳＝複製</b>；部門欄先點亮要發佈的部門（可複選），拖入時同時放到所有亮起的部門；欄內已依分類分組，<b>點分類標題＝整組選取</b>，選好按「設定分類」即可整批改分類
+                左上角搜尋框可依<b>名稱／#標示／分類</b>即時篩選三欄；框選、Ctrl+點選、<b>Shift+點選（範圍）</b>多選 → 拖曳到目標欄＝搬移，<b>按住 Ctrl 拖曳＝複製</b>；部門欄先點亮要發佈的部門（可複選），拖入時同時放到所有亮起的部門；欄內已依分類分組，<b>點分類標題＝整組選取</b>，選好按「設定分類」即可整批改分類
             </span>
         </h3>
         <div class="modal-body" style="max-width:none;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                <span style="font-size:12px;color:#9aa4ad;">已選 <b id="lm-sel-count" style="color:#6fc3ff;">0</b> 個</span>
+                <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <input type="text" id="lm-search" oninput="lmOnSearch()" onfocus="this.select()" ondblclick="this.value='';lmOnSearch()"
+                        placeholder="🔍 搜尋名稱 / #標示 / 分類（模糊）"
+                        title="輸入即時篩選三欄的標籤（名稱、#標示、分類都比對）；「#關鍵字」只找 #標示；空格分隔多個關鍵字＝全部都要符合；雙擊清空。篩選時會自動取消已被篩掉的選取，避免「刪除選取」動到看不見的標籤"
+                        style="width:230px;background:#1d2024;border:1px solid #45494f;color:#eee;border-radius:3px;padding:4px 6px;font-size:12px;">
+                    <span id="lm-filter-note" style="font-size:11.5px;color:#f0a24b;display:none;"></span>
+                    <span style="font-size:12px;color:#9aa4ad;">已選 <b id="lm-sel-count" style="color:#6fc3ff;">0</b> 個</span>
+                </span>
                 <span style="display:flex;gap:6px;flex-wrap:wrap;">
                     <button class="pb-btn" onclick="lmMakeGroupLabel()" title="把選取的多個標籤組成一個「群組標籤」存進庫：之後點一下整組插入圖面，不用每次自己拉再群組"><i class="fa fa-object-group"></i> 組成群組標籤</button>
                     <button class="pb-btn" onclick="lmOpenSetCat()" title="批次設定選取標籤的分類（分類名稱自訂，輸入新名稱即新增分類）"><i class="fa fa-folder-o"></i> 設定分類</button>
@@ -1911,7 +1918,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
                 <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>有建立工作檔的儲存＝暫存，連壓平 PNG 也只在批圖編輯器裡看得到</b>——料號附件、圖面查閱、外來文件清單等其他頁面一律不列，不分登入者（避免半成品被當成正式圖面）；<b>分享範圍（私人／部門／指定人員）只限制這份工作檔能被誰開啟重改，預設「私人」</b>。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）。<b>有建立工作檔的儲存一律當暫存</b>：不必填發行章日期，也不會觸發圖面變更判定；要當正式出圖存進去，請勾「只存圖片，不建立工作檔」，那時標籤若屬「自家出的圖」就要填發行章日期並會比對是否為圖面變更。<b>製程標籤</b>選填：同一個料號常常有好幾個加工項目各自一張圖，選了製程之後<b>只會跟同料號、同標籤、同製程的圖比新舊版</b>，不會把別的加工項目的圖誤判成前一版；留空＝共用圖，會跟該標籤下所有製程一起比。候選只列「這個料號的訂單有過的加工項目」與「這個料號已經打過的製程標籤」（打過一次就記在這個料號裡，下次直接選）。另外<b>新舊版是同一個標籤各自比</b>——BOSS圖只跟BOSS圖比、++圖只跟++圖比、單製++圖再自成一組；掛「作廢」標籤的附件一律不參與新舊版判定</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
-                <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋。<b>同一個標籤可以設定多組 #</b>（空格分隔，最多 10 個、每個最多 12 字），縮圖上固定顯示前 3 個、其餘收成灰底「+N」（滑鼠移上去看全部），但<b>收起來的一樣搜得到</b>。個數或字數超過時欄位下方會即時紅字說明原因</li>
+                <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；<b>「管理」跳窗左上角也有同一個搜尋框</b>，三欄（私人／部門／公司）會一起篩選，旁邊橘字顯示「顯示 N / 共 M 個」提醒你現在看到的不是全部；<b>改關鍵字時會自動取消已被篩掉的選取</b>，所以「刪除選取／設定分類」永遠只會動到你當下看得到的標籤；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋。<b>同一個標籤可以設定多組 #</b>（空格分隔，最多 10 個、每個最多 12 字），縮圖上固定顯示前 3 個、其餘收成灰底「+N」（滑鼠移上去看全部），但<b>收起來的一樣搜得到</b>。個數或字數超過時欄位下方會即時紅字說明原因</li>
                 <li>工程符號與公差：屬性列「文字」區有符號鈕（Ø ° ± ▽ ↧ ⌴ ⌵ □ ⌒ Ra ×），編輯文字時點一下插到游標處（研磨＝連按▽）；文字輸入 <b>A^B</b>（如 25 -0^-0.18）結束編輯自動變成上下公差小字，雙擊可還原 ^ 字串重編；<b>標籤（含快速標籤/自組標籤）內改字同樣適用</b></li>
                 <li>研磨/粗糙度記號：標籤庫「<b>加工符號</b>」分類（技術部部門標籤）有「研磨記號 G＋▽▽▽」與「粗糙度記號 0.8＋G」，點一下放到圖上（預設透明底、可移動縮放旋轉），<b>雙擊 G 或 0.8 即可改字</b></li>
             </ul>
@@ -4640,6 +4647,8 @@ const lmSel = new Set();
 async function openLibMgr() {
     lmSel.clear();
     lmAnchor = null; lmAnchorGrid = null;
+    // 每次開啟都從「全部」開始：上次留下的關鍵字會讓人以為標籤不見了
+    const ms = document.getElementById('lm-search'); if (ms) ms.value = '';
     showModal('libmgr-modal');
     document.getElementById('libmgr-body').innerHTML = '<div style="color:#8b949e;padding:20px;">載入中…</div>';
     await loadLabelLibrary();   // 取最新資料（含部門/權限資訊）
@@ -4694,6 +4703,44 @@ function lmCols() {
     ];
 }
 function lmUpdateCount() { document.getElementById('lm-sel-count').textContent = lmSel.size; }
+/* ── 標籤模糊比對：標籤庫側欄與標籤管理跳窗共用同一份規則（禁止各自再寫一份，鐵律4）──
+   名稱／#標示／分類都比對；「#關鍵字」因為 haystack 裡的標示前面補了 #，所以只會命中 #標示；
+   空格分隔多個關鍵字＝每個都要命中（可分散在不同欄位）。 */
+function labelQueryWords(q) {
+    q = String(q || '').trim().toLowerCase();
+    return q ? q.split(/\s+/) : [];
+}
+function labelTagHay(tags) {
+    return String(tags || '').trim().split(/\s+/).filter(Boolean).map(t => '#' + t).join(' ');
+}
+function labelHitQuery(row, words) {
+    if (!words.length) return true;
+    const hay = (row.label_name + ' ' + (row.category || '') + ' ' + labelTagHay(row.tags)).toLowerCase();
+    return words.every(w => hay.includes(w));
+}
+/* 標籤管理跳窗：某一欄目前該顯示哪些列（含搜尋篩選）。renderLibMgr 與選取收斂共用，
+   兩邊各算一次一定會走鐘（篩掉的列還留在選取集裡＝「刪除選取」會刪到看不見的標籤）。 */
+function lmRowsOf(scope, words) {
+    if (words === undefined) words = labelQueryWords((document.getElementById('lm-search') || {}).value);
+    let rows;
+    if (scope === 'private') rows = customLabels.filter(r => r.owner_type === 'private');
+    else if (scope === 'company') rows = customLabels.filter(r => r.owner_type === 'company');
+    else {
+        const act = lmActiveDepts();
+        rows = customLabels.filter(r => r.owner_type === 'dept' && act.includes(Number(r.owner_dept_id)));
+    }
+    return rows.filter(r => labelHitQuery(r, words));
+}
+/* 改篩選：先把「已經被篩掉」的選取取消掉再重繪。
+   不做的話畫面上顯示「已選 12 個」但只看得到 3 個，按下「刪除選取」會連看不見的 9 個一起刪。 */
+function lmOnSearch() {
+    const vis = new Set();
+    lmCols().forEach(c => lmRowsOf(c.scope).forEach(r => vis.add(r.label_id)));
+    Array.from(lmSel).forEach(id => { if (!vis.has(id)) lmSel.delete(id); });
+    lmAnchor = null; lmAnchorGrid = null;
+    renderLibMgr();
+    lmUpdateCount();
+}
 function renderLibMgr() {
     const body = document.getElementById('libmgr-body');
     // 記住各欄捲動位置：設定分類/#標示/隱藏名稱等操作後重繪，不要跳回最上面
@@ -4724,13 +4771,7 @@ function renderLibMgr() {
         const grid = document.createElement('div');
         grid.className = 'lm-grid';
         // 欄內容
-        let rows = [];
-        if (col.scope === 'private') rows = customLabels.filter(r => r.owner_type === 'private');
-        else if (col.scope === 'company') rows = customLabels.filter(r => r.owner_type === 'company');
-        else if (col.scope === 'dept') {
-            const act = lmActiveDepts();
-            rows = customLabels.filter(r => r.owner_type === 'dept' && act.includes(Number(r.owner_dept_id)));
-        }
+        let rows = lmRowsOf(col.scope);
         rows.sort((a, b) => String(a.category || '').localeCompare(String(b.category || ''))
             || String(a.label_name || '').localeCompare(String(b.label_name || '')));
         let lastCat = null;
@@ -4859,6 +4900,22 @@ function renderLibMgr() {
         if (g && scrollPos[col.dataset.scope]) g.scrollTop = scrollPos[col.dataset.scope];
     });
     syncLmSelClass(); lmUpdateCount();
+    lmUpdateFilterNote();
+}
+/* 篩選中一定要在畫面上講清楚「現在看到的不是全部」——否則使用者會以為標籤被刪掉了，
+   而且「刪除選取／設定分類」這些批次動作看起來就會像是對整個標籤庫生效。 */
+function lmUpdateFilterNote() {
+    const note = document.getElementById('lm-filter-note');
+    if (!note) return;
+    const words = labelQueryWords((document.getElementById('lm-search') || {}).value);
+    if (!words.length) { note.style.display = 'none'; note.textContent = ''; return; }
+    let shown = 0, total = 0;
+    lmCols().forEach(c => {
+        shown += lmRowsOf(c.scope, words).length;
+        total += lmRowsOf(c.scope, []).length;
+    });
+    note.style.display = '';
+    note.textContent = '篩選中：顯示 ' + shown + ' / ' + total + ' 個（雙擊搜尋框清除）';
 }
 function syncLmSelClass() {
     document.querySelectorAll('#libmgr-body .lm-item').forEach(it =>
@@ -5006,9 +5063,7 @@ function renderLibrary() {
     const filter = document.getElementById('lib-cat-filter').value;
     // 模糊搜尋：名稱/#標示/分類都比對；「#xx」只比對#標示；空格分隔多關鍵字＝全部都要符合
     const q = (document.getElementById('lib-search').value || '').trim().toLowerCase();
-    const words = q ? q.split(/\s+/) : [];
-    const hitQ = hay => !words.length || words.every(w => hay.includes(w));
-    const tagHay = tags => String(tags || '').trim().split(/\s+/).filter(Boolean).map(t => '#' + t).join(' ');
+    const words = labelQueryWords(q);   // 比對規則與標籤管理跳窗共用（labelHitQuery）
     // 標籤：先分範圍（公司共用/部門/私人），範圍內再依分類分組（原「內建標籤」已改為技術部部門標籤，一併走這裡）
     const cbox = document.getElementById('lib-customs');
     cbox.innerHTML = '';
@@ -5020,7 +5075,7 @@ function renderLibrary() {
     SCOPES.filter(sc => scopeShown(sc.key)).forEach(sc => {
         const rows = customLabels.filter(r => (r.owner_type || 'company') === sc.key
             && (!filter || (r.category || '未分類') === filter)
-            && hitQ((r.label_name + ' ' + (r.category || '') + ' ' + tagHay(r.tags)).toLowerCase()));
+            && labelHitQuery(r, words));
         if (!rows.length) return;
         const sh = document.createElement('div');
         sh.className = 'lib-sec';
