@@ -136,6 +136,15 @@ table.sq-t tbody tr.noready{color:#a08a6a;}
 .sq-modal{background:#fff;border-radius:8px;width:960px;max-width:100%;margin:0 auto;
   box-shadow:0 6px 30px rgba(0,0,0,.3);}
 .sq-modal.narrow{width:640px;}
+/* 回填工具欄位多，需要更寬；一律用固定像素不用 vw（vw 是整個瀏覽器視窗、會蓋過側邊選單） */
+.sq-modal.wide{width:1180px;}
+/* 第二層跳窗（在回填跳窗之上再開候選訂單） */
+.sq-mask.lv2{z-index:10001;background:rgba(60,40,20,.35);}
+/* 已被其他出貨吃完的訂單：照樣列出供確認，但整列反灰不可選 */
+table.sq-t tbody tr.dim{background:#F4EEE3 !important;color:#a2916f;}
+table.sq-t tbody tr.dim b{color:#a2916f;}
+.mt-manual{background:#8A5A2B;color:#fff;}
+.mt-note{font-size:12px;color:#8a6d45;}
 .sq-modal .m-head{background:var(--sq-normal);color:var(--sq-ink);padding:9px 14px;font-weight:bold;
   border-radius:8px 8px 0 0;display:flex;align-items:center;}
 .sq-modal .m-close{margin-left:auto;cursor:pointer;font-size:17px;}
@@ -297,13 +306,14 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
 
 <?php if ($perms['canAdmin']): ?>
 <!-- 舊資料回填 -->
-<div class="sq-mask" id="mkMatch"><div class="sq-modal">
+<div class="sq-mask" id="mkMatch"><div class="sq-modal wide">
   <div class="m-head"><i class="fa fa-link"></i>&nbsp;舊資料訂單回填<span class="m-close" data-close="mkMatch">✕</span></div>
   <div class="m-body">
     <p style="font-size:13px;color:#5b3a1e;">
       現有出貨資料多由 ERP 匯入、未帶訂單編號，導致「訂單未出量」算不出來。
       本工具用<b>客戶簡稱＋料號id＋日期先後（FIFO）</b>推算對應訂單，
       <b style="color:#DD5138;">須人工確認勾選後才會寫入</b>。建議由早到晚逐段區間處理（每段套用後再算下一段）。
+      每一列都可以按「改選」自行指定要綁哪一張訂單；勾選「無法對應」還能把系統推不出來的那些列叫出來手動指定。
     </p>
     <div class="sq-bar">
       <label>出貨日期區間</label>
@@ -311,11 +321,19 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
       <button id="btnMtGo" class="btn-warm"><i class="fa fa-search"></i> 試算</button>
       <span id="mtSummary" style="font-size:13px;color:#5b3a1e;margin-left:10px;"></span>
     </div>
+    <div class="sq-bar" style="background:#FBF3E4;">
+      <label>篩選客戶</label>
+      <select id="mtClient" style="width:200px;" data-eg-filter="輸入客戶簡稱篩選…"><option value="">全部客戶</option></select>
+      <label>篩選料號</label>
+      <select id="mtPart" style="width:230px;" data-eg-filter="輸入料號篩選…"><option value="">全部料號</option></select>
+      <span class="mt-note">選了客戶，料號只列該客戶底下的；改動即重新試算。</span>
+    </div>
     <div class="sq-bar" style="background:#FFF7E8;">
       <label>只顯示</label>
       <label><input type="checkbox" class="mt-f" value="high" checked> <span class="pill p-normal">高信心</span></label>
       <label><input type="checkbox" class="mt-f" value="mid" checked> <span class="pill p-urgent">中</span></label>
       <label><input type="checkbox" class="mt-f" value="low"> <span class="pill p-super">低(出貨量超過訂單)</span></label>
+      <label><input type="checkbox" class="mt-f" value="none"> <span class="pill p-none">無法對應(手動指定)</span></label>
       <button id="btnMtAllHigh" style="margin-left:8px;">勾選所有高信心</button>
       <button id="btnMtNone">清除勾選</button>
     </div>
@@ -325,6 +343,31 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
     <span id="mtSel" style="float:left;color:#5b3a1e;font-size:13px;line-height:32px;">已勾選 0 筆</span>
     <button data-close="mkMatch">取消</button>
     <button class="go" id="btnMtApply"><i class="fa fa-check"></i> 回填勾選的資料</button>
+  </div>
+</div></div>
+
+<!-- 手動改選訂單（第二層，開在回填跳窗之上）-->
+<div class="sq-mask lv2" id="mkCand"><div class="sq-modal wide">
+  <div class="m-head"><i class="fa fa-exchange"></i>&nbsp;改選要回填的訂單<span class="m-close" data-close="mkCand">✕</span></div>
+  <div class="m-body">
+    <div id="cdShip" style="font-size:13px;color:#5b3a1e;background:#FFF7E8;border:1px solid #EADFC8;
+         border-radius:5px;padding:8px 12px;margin-bottom:8px;"></div>
+    <div class="sq-bar" style="background:#FBF3E4;">
+      <label><input type="checkbox" id="cdSame" checked> 只列相同料號</label>
+      <span class="mt-note">訂單常下組合件名稱、製作時才拆成子件料號；取消勾選就列出這個客戶的所有訂單。</span>
+      <input type="text" id="cdKw" placeholder="訂單編號／料號／規格關鍵字" style="width:220px;margin-left:auto;">
+      <button id="btnCdGo" class="btn-warm"><i class="fa fa-search"></i> 查詢</button>
+    </div>
+    <div id="cdList" style="max-height:46vh;overflow:auto;"></div>
+    <div class="mt-note" style="margin-top:6px;">
+      候選一律限定<b>同一個客戶簡稱</b>（跨客戶綁一定是錯的，後端寫入時也會再擋一次）。
+      <span style="color:#a2916f;">整列反灰</span>＝該訂單的量已被其他出貨吃完，不可選，列出來只是方便你確認。
+    </div>
+  </div>
+  <div class="m-foot">
+    <span id="cdCnt" style="float:left;color:#5b3a1e;font-size:13px;line-height:32px;"></span>
+    <button id="btnCdClear">改回系統建議</button>
+    <button data-close="mkCand">取消</button>
   </div>
 </div></div>
 <?php endif; ?>
@@ -823,76 +866,275 @@ $('#btnPrintDn').on('click',function(){
  * 舊資料訂單回填
  * ══════════════════════════════════════════════════════════ */
 if(CAN_ADMIN){
+  var mtManual = {};   // is_id => 手動指定的訂單（覆蓋系統建議）
+  var mtParts  = [];   // 篩選用料號清單（含所屬客戶）
+  var mtCandIs = 0;    // 目前正在改選的出貨明細 id
+  var cdOrders = [];   // 候選跳窗當次列出的訂單
+  var RSN = {no_order:'查無此客戶＋料號的訂單', used_up:'訂單量已被其他出貨出完',
+             later:'訂單下單日晚於出貨日'};
+
   $('#btnMatch').on('click',function(){ openMask('mkMatch'); });
-  $('#btnMtGo').on('click',function(){
+
+  function mtRange(){
     var f=$('#mtFrom').val(), t=$('#mtTo').val();
-    if(!f||!t){ toast('請指定出貨日期區間', true); return; }
+    if(!f||!t){ toast('請指定出貨日期區間', true); return null; }
+    return {date_from:f, date_to:t};
+  }
+
+  /* 試算＝載入篩選來源（客戶／料號）＋跑一次對應 */
+  $('#btnMtGo').on('click',function(){
+    var r=mtRange(); if(!r) return;
+    $.post(API+'?action=match_filters', r, function(res){
+      if(!res.ok) return;
+      mtParts = res.parts||[];
+      var cur=$('#mtClient').val()||'';
+      var h='<option value="">全部客戶</option>';
+      (res.clients||[]).forEach(function(c){
+        h+='<option value="'+esc(c.name)+'">'+esc(c.name)+'（'+nf(c.cnt)+'）</option>'; });
+      $('#mtClient').html(h).val(cur);
+      if($('#mtClient').val()===null) $('#mtClient').val('');
+      fillParts();
+    },'json');
+    runMatch();
+  });
+
+  /* 料號下拉：選了客戶就只列該客戶底下的料號 */
+  function fillParts(){
+    var cn=$('#mtClient').val()||'', cur=$('#mtPart').val()||'';
+    var agg={}, keys=[];
+    mtParts.forEach(function(p){
+      if(cn && p.client!==cn) return;
+      if(!agg[p.d_id]){ agg[p.d_id]={product_id:p.product_id, cnt:0}; keys.push(p.d_id); }
+      agg[p.d_id].cnt += (Number(p.cnt)||0);
+    });
+    keys.sort(function(a,b){ return String(agg[a].product_id).localeCompare(String(agg[b].product_id)); });
+    var h='<option value="">全部料號</option>';
+    keys.forEach(function(k){
+      h+='<option value="'+k+'">'+esc(agg[k].product_id)+'（'+nf(agg[k].cnt)+'）</option>'; });
+    $('#mtPart').html(h);
+    $('#mtPart').val(cur && agg[cur] ? cur : '');
+  }
+
+  $('#mtClient').on('change',function(){ fillParts(); runMatch(); });
+  $('#mtPart').on('change', runMatch);
+
+  function runMatch(){
+    var r=mtRange(); if(!r) return;
+    r.client         = $('#mtClient').val()||'';
+    r.d_id           = $('#mtPart').val()||0;
+    // 「無法對應」的列量大，預設不撈；勾了才向後端要
+    r.with_unmatched = $('.mt-f[value=none]').is(':checked') ? 1 : 0;
     $('#mtList').html('<div style="padding:14px;color:#8a6d45;">試算中…</div>');
-    $.post(API+'?action=match_preview', {date_from:f, date_to:t}, function(r){
-      if(!r.ok){ toast(esc(r.error||'試算失敗'), true); return; }
-      lastMatch = r.pairs||[];
-      var s=r.summary||{};
+    $.post(API+'?action=match_preview', r, function(res){
+      if(!res.ok){ toast(esc(res.error||'試算失敗'), true); return; }
+      lastMatch = res.pairs||[];
+      /* 手動指定過的列一定要留著。取消「無法對應」等於重新跟後端要一份不含那些列的結果，
+         不補回來的話，剛剛一筆一筆指定好的訂單會整批從畫面上消失、也不會被回填。 */
+      var have={};
+      lastMatch.forEach(function(p){ have[p.is_id]=1; });
+      for(var k in mtManual){
+        if(mtManual.hasOwnProperty(k) && !have[k] && mtManual[k]._row) lastMatch.push(mtManual[k]._row);
+      }
+      lastMatch.sort(function(a,b){
+        return a.ship_date===b.ship_date ? (a.is_id-b.is_id) : (a.ship_date<b.ship_date?-1:1); });
+      var s=res.summary||{};
       $('#mtSummary').html('待回填明細 <b>'+nf(s.ship_rows)+'</b> 筆，推得對應 <b style="color:#8A5A2B;">'
         +nf(s.matched)+'</b> 筆，無法對應 <b style="color:#DD5138;">'+nf(s.unmatched)+'</b> 筆');
       renderMatch();
     },'json').fail(function(){ toast('試算失敗', true); });
-  });
+  }
 
-  $(document).on('change','.mt-f', renderMatch);
+  /* 手動指定的訂單優先於系統建議 */
+  function eff(p){
+    var m=mtManual[p.is_id];
+    return m ? $.extend({}, p, m, {manual:true}) : p;
+  }
+
+  $(document).on('change','.mt-f',function(){
+    if(this.value==='none') runMatch(); else renderMatch();
+  });
 
   function renderMatch(){
     var show={};
     $('.mt-f:checked').each(function(){ show[this.value]=1; });
-    var list=lastMatch.filter(function(p){ return show[p.confidence]; });
+    // 手動指定過的列一律顯示，免得被篩選藏起來又不知道自己選過
+    var list=lastMatch.filter(function(p){ return show[p.confidence] || mtManual[p.is_id]; });
     if(!list.length){ $('#mtList').html('<div style="padding:14px;color:#8a6d45;">目前篩選條件下沒有資料。</div>');
       updateMtSel(); return; }
     var h='<table class="sq-t"><thead><tr><th style="width:32px;"><input type="checkbox" id="mtAll"></th>'
         +'<th>信心</th><th>出貨單</th><th>出貨日</th><th>客戶</th><th>料號</th><th>出貨量</th><th>出貨單價</th>'
-        +'<th>→ 訂單</th><th>訂單日</th><th>訂購量</th><th>當時剩餘</th><th>訂單單價</th></tr></thead><tbody>';
-    list.forEach(function(p,i){
-      var pill = p.confidence==='high' ? '<span class="pill p-normal">高</span>'
-               : p.confidence==='mid'  ? '<span class="pill p-urgent">中</span>'
-               : '<span class="pill p-super">低</span>';
-      h+='<tr><td><input type="checkbox" class="mt-ck" data-is="'+p.is_id+'" data-oid="'+p.order_id+'"'
-        +(p.confidence==='high'?' checked':'')+'></td>'
-        +'<td>'+pill+'</td><td>'+esc(p.is_number)+'</td><td>'+esc(p.ship_date)+'</td>'
-        +'<td class="l">'+esc(p.client_name)+'</td><td class="l">'+esc(p.product_id)+'</td>'
-        +'<td class="r">'+nf(p.ship_qty)+'</td><td class="r">'+np(p.ship_price)+'</td>'
-        +'<td><b>'+esc(p.order_oo||'—')+'</b></td><td>'+esc(p.order_date)+'</td>'
-        +'<td class="r">'+nf(p.order_qty)+'</td>'
-        +'<td class="r"'+(p.over_qty?' style="color:#DD5138;font-weight:bold;"':'')+'>'+nf(p.order_left)+'</td>'
-        +'<td class="r"'+(p.price_match?'':' style="color:#DD5138;"')+'>'+np(p.order_price)+'</td></tr>';
+        +'<th>&rarr; 訂單</th><th>訂單日</th><th>訂購量</th><th>當時剩餘</th><th>訂單單價</th>'
+        +'<th style="width:74px;">操作</th></tr></thead><tbody>';
+    list.forEach(function(p0){
+      var p   = eff(p0);
+      var has = (p.order_id||0) > 0;
+      var pill = p.manual                ? '<span class="pill mt-manual">手動</span>'
+               : p0.confidence==='high'  ? '<span class="pill p-normal">高</span>'
+               : p0.confidence==='mid'   ? '<span class="pill p-urgent">中</span>'
+               : p0.confidence==='low'   ? '<span class="pill p-super">低</span>'
+               :                           '<span class="pill p-none">無</span>';
+      var ckd = has && (p.manual || p0.confidence==='high');
+      h+='<tr'+(has?'':' class="noready"')+'>'
+        +'<td><input type="checkbox" class="mt-ck" data-is="'+p0.is_id+'" data-oid="'+(has?p.order_id:0)+'"'
+        +(has?'':' disabled')+(ckd?' checked':'')+'></td>'
+        +'<td>'+pill+'</td><td>'+esc(p0.is_number)+'</td><td>'+esc(p0.ship_date)+'</td>'
+        +'<td class="l">'+esc(p0.client_name)+'</td><td class="l">'+esc(p0.product_id)+'</td>'
+        +'<td class="r">'+nf(p0.ship_qty)+'</td><td class="r">'+np(p0.ship_price)+'</td>';
+      if(has){
+        h+='<td><b>'+esc(p.order_oo||'—')+'</b>'
+          +((p.manual && p.part_no && p.part_no!==p0.product_id)
+              ? '<div class="mt-note">訂單料號：'+esc(p.part_no)+'</div>' : '')+'</td>'
+          +'<td>'+esc(p.order_date)+'</td><td class="r">'+nf(p.order_qty)+'</td>'
+          +'<td class="r"'+(p.over_qty?' style="color:#DD5138;font-weight:bold;"':'')+'>'+nf(p.order_left)+'</td>'
+          +'<td class="r"'+(p.price_match?'':' style="color:#DD5138;"')+'>'+np(p.order_price)+'</td>';
+      }else{
+        h+='<td colspan="5" class="l" style="color:#a2916f;">'
+          +esc(RSN[p0.no_reason]||'系統推不出對應')+'　&rarr; 可按右側「指定訂單」自行挑一張</td>';
+      }
+      h+='<td><button class="mt-pick" data-is="'+p0.is_id+'">'+(has?'改選':'指定訂單')+'</button></td></tr>';
     });
     $('#mtList').html(h+'</tbody></table>');
     updateMtSel();
   }
 
-  $(document).on('change','#mtAll',function(){ $('.mt-ck').prop('checked', this.checked); updateMtSel(); });
+  $(document).on('change','#mtAll',function(){
+    $('.mt-ck').not(':disabled').prop('checked', this.checked); updateMtSel(); });
   $(document).on('change','.mt-ck', updateMtSel);
-  function updateMtSel(){ $('#mtSel').text('已勾選 '+$('.mt-ck:checked').length+' 筆'); }
+  function updateMtSel(){
+    var n=$('.mt-ck:checked').length, vis={};
+    $('.mt-ck').each(function(){ vis[$(this).data('is')]=1; });
+    var hid=0; for(var k in mtManual){ if(mtManual.hasOwnProperty(k) && !vis[k]) hid++; }
+    $('#mtSel').html('已勾選 <b>'+nf(n)+'</b> 筆'
+      +(hid ? ' <span style="color:#DD5138;">（另有 '+nf(hid)+' 筆手動指定不在目前篩選內，不會被回填）</span>' : ''));
+  }
 
   $('#btnMtAllHigh').on('click',function(){
     $('.mt-f[value=high]').prop('checked',true);
-    renderMatch();                       // 重畫後高信心列預設已勾選
-    var high={};
-    lastMatch.forEach(function(p){ if(p.confidence==='high') high[p.is_id]=1; });
-    $('#mtList .mt-ck').each(function(){ $(this).prop('checked', !!high[$(this).data('is')]); });
+    renderMatch();                       // 重畫後高信心與手動指定列預設已勾選
+    var keep={};
+    lastMatch.forEach(function(p){ if(p.confidence==='high') keep[p.is_id]=1; });
+    for(var k in mtManual){ if(mtManual.hasOwnProperty(k)) keep[k]=1; }
+    $('#mtList .mt-ck').each(function(){
+      $(this).prop('checked', !this.disabled && !!keep[$(this).data('is')]); });
     updateMtSel();
   });
   $('#btnMtNone').on('click',function(){ $('.mt-ck').prop('checked',false); updateMtSel(); });
 
+  /* -- 手動改選訂單 -------------------------------------------------- */
+  $(document).on('click','.mt-pick',function(){
+    mtCandIs = parseInt($(this).data('is'),10)||0;
+    if(!mtCandIs) return;
+    $('#cdSame').prop('checked',true); $('#cdKw').val('');
+    openMask('mkCand');
+    loadCand();
+  });
+  $('#btnCdGo').on('click', loadCand);
+  $('#cdSame').on('change', loadCand);
+  $('#cdKw').on('keydown',function(e){ if(e.which===13){ e.preventDefault(); loadCand(); } });
+
+  function loadCand(){
+    if(!mtCandIs) return;
+    $('#cdList').html('<div style="padding:14px;color:#8a6d45;">查詢中…</div>');
+    $.post(API+'?action=match_candidates', {
+      is_id: mtCandIs,
+      same_part: $('#cdSame').is(':checked') ? 1 : 0,
+      kw: $('#cdKw').val()||''
+    }, function(r){
+      if(!r.ok){ toast(esc(r.error||'查詢失敗'), true); return; }
+      renderCand(r);
+    },'json').fail(function(){ toast('查詢失敗', true); });
+  }
+
+  function renderCand(r){
+    var s=r.ship||{}, os=r.orders||[];
+    cdOrders = os;
+    var cur=null;
+    lastMatch.forEach(function(p){ if(p.is_id===s.is_id) cur=p; });
+    var e = cur ? eff(cur) : null;
+    var curOid = e ? (e.order_id||0) : 0;
+
+    $('#cdShip').html('出貨單 <b>'+esc(s.is_number)+'</b>　出貨日 '+esc(s.ship_date)
+      +'　客戶 <b>'+esc(s.client_name)+'</b>　料號 <b>'+esc(s.product_id)+'</b>'
+      +'　出貨量 <b>'+nf(s.ship_qty)+'</b>　出貨單價 '+np(s.ship_price)+'<br>'
+      +(curOid ? '目前指定：<b style="color:#8A5A2B;">'+esc(e.order_oo||'')+'</b>'
+                 +(mtManual[s.is_id]?'（手動指定）':'（系統建議）')
+               : '目前：<span style="color:#DD5138;">尚未指定</span>'));
+
+    if(r.error){ $('#cdList').html('<div style="padding:14px;color:#DD5138;">'+esc(r.error)+'</div>');
+      $('#cdCnt').text(''); return; }
+    if(!os.length){
+      $('#cdList').html('<div style="padding:14px;color:#8a6d45;">這個客戶底下沒有符合條件的訂單。'
+        +'訂單常下組合件名稱，可取消「只列相同料號」再找一次。</div>');
+      $('#cdCnt').text(''); return; }
+
+    var h='<table class="sq-t"><thead><tr><th style="width:70px;">選用</th><th>訂單編號</th><th>訂單日</th>'
+      +'<th>交期</th><th>訂單料號</th><th>訂購量</th><th>已出量</th><th>剩餘量</th><th>單價</th>'
+      +'<th>備註</th></tr></thead><tbody>';
+    os.forEach(function(o,i){
+      var tag=[];
+      if(!o.selectable)   tag.push('<b>已被其他出貨出完，不可選</b>');
+      else if(o.over_qty) tag.push('<span style="color:#DD5138;">出貨量超過剩餘量</span>');
+      if(!o.same_part)    tag.push('<span style="color:#8A5A2B;">料號與出貨不同</span>');
+      if(o.late)          tag.push('<span style="color:#DD5138;">下單日晚於出貨日</span>');
+      if(!o.price_match)  tag.push('<span style="color:#DD5138;">單價不符</span>');
+      if(o.closed)        tag.push('已結案');
+      h+='<tr class="'+(o.selectable?'':'dim')+(o.order_id===curOid?' on':'')+'">'
+        +'<td>'+(o.selectable
+            ? '<button class="cd-use" data-i="'+i+'">'+(o.order_id===curOid?'目前':'選用')+'</button>'
+            : '—')+'</td>'
+        +'<td><b>'+esc(o.order_oo||'—')+'</b></td><td>'+esc(o.order_date)+'</td>'
+        +'<td>'+esc(o.delivery||'')+'</td><td class="l">'+esc(o.part_no)+'</td>'
+        +'<td class="r">'+nf(o.order_qty)+'</td><td class="r">'+nf(o.used_qty)+'</td>'
+        +'<td class="r"'+(o.selectable?'':' style="font-weight:bold;"')+'>'+nf(o.order_left)+'</td>'
+        +'<td class="r">'+np(o.order_price)+'</td>'
+        +'<td class="l">'+(tag.join('　')||'')+'</td></tr>';
+    });
+    $('#cdList').html(h+'</tbody></table>');
+    var tot=Number(r.total)||os.length;
+    $('#cdCnt').text(tot>os.length
+      ? '這個客戶共 '+nf(tot)+' 張訂單，只顯示離出貨日最近的 '+nf(os.length)+' 張（請用關鍵字縮小）'
+      : '候選 '+nf(os.length)+' 張');
+  }
+
+  $(document).on('click','.cd-use',function(){
+    var o = cdOrders[parseInt($(this).data('i'),10)];
+    if(!o || !o.selectable) return;
+    var base=null;
+    lastMatch.forEach(function(p){ if(p.is_id===mtCandIs) base=p; });
+    mtManual[mtCandIs] = {
+      order_id:o.order_id, order_oo:o.order_oo, order_date:o.order_date,
+      order_qty:o.order_qty, order_left:o.order_left, order_price:o.order_price,
+      price_match:o.price_match, over_qty:o.over_qty, part_no:o.part_no,
+      _row: base                      // 換篩選條件重新試算時要靠它把這一列補回來
+    };
+    closeMask('mkCand');
+    renderMatch();
+    toast('已指定訂單 '+esc(o.order_oo||''));
+  });
+
+  $('#btnCdClear').on('click',function(){
+    if(!mtManual[mtCandIs]){ closeMask('mkCand'); return; }
+    delete mtManual[mtCandIs];
+    closeMask('mkCand'); renderMatch();
+    toast('已改回系統建議');
+  });
+
   $('#btnMtApply').on('click',function(){
-    var pairs=[];
+    var pairs=[], manual=0;
     $('.mt-ck:checked').each(function(){
-      pairs.push({is_id:parseInt($(this).data('is'),10), order_id:parseInt($(this).data('oid'),10)});
+      var isId=parseInt($(this).data('is'),10)||0, oid=parseInt($(this).data('oid'),10)||0;
+      if(isId>0 && oid>0){ pairs.push({is_id:isId, order_id:oid}); if(mtManual[isId]) manual++; }
     });
     if(!pairs.length){ toast('請先勾選要回填的資料', true); return; }
-    if(!confirm('確定將 '+pairs.length+' 筆出貨明細回填訂單編號？\n（僅寫入目前訂單編號為空的資料）')) return;
+    if(!confirm('確定將 '+pairs.length+' 筆出貨明細回填訂單編號？'
+      +(manual? '\n其中 '+manual+' 筆是你手動指定的訂單。':'')
+      +'\n（僅寫入目前訂單編號為空、且客戶簡稱相符的資料）')) return;
     var $b=$(this).prop('disabled',true).html('<i class="fa fa-spinner fa-spin"></i> 回填中…');
     $.post(API+'?action=match_apply', {csrf:CSRF, pairs:JSON.stringify(pairs)}, function(r){
       $b.prop('disabled',false).html('<i class="fa fa-check"></i> 回填勾選的資料');
       if(!r.ok){ toast(esc(r.error||'回填失敗'), true); return; }
       toast(esc(r.message));
+      mtManual = {};          // 已寫入的不再保留手動指定
       $('#btnMtGo').click();
       load();
     },'json').fail(function(){

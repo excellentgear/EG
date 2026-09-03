@@ -151,7 +151,32 @@ case 'match_preview': {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) {
         sq_err('請指定出貨日期區間');
     }
-    sq_out(sq_match_preview($db, $from, $to));
+    sq_out(sq_match_preview($db, $from, $to, [
+        'client'         => trim((string)($src['client'] ?? '')),
+        'd_id'           => (int)($src['d_id'] ?? 0),
+        'with_unmatched' => !empty($src['with_unmatched']),
+    ]));
+}
+
+/* ── 回填工具的篩選來源（該區間內待回填的客戶／料號）────────────────── */
+case 'match_filters': {
+    $src  = $_POST ?: $_GET;
+    $from = trim((string)($src['date_from'] ?? ''));
+    $to   = trim((string)($src['date_to'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $to)) {
+        sq_err('請指定出貨日期區間');
+    }
+    sq_out(sq_match_filters($db, $from, $to));
+}
+
+/* ── 手動改選訂單：列出該筆出貨可綁的候選訂單（一律同客戶）──────────── */
+case 'match_candidates': {
+    if (!$perms['canAdmin']) sq_err('僅出貨管理員可回填舊資料', 403);
+    $src  = $_POST ?: $_GET;
+    $isId = (int)($src['is_id'] ?? 0);
+    if ($isId <= 0) sq_err('缺少出貨明細 id');
+    $same = !isset($src['same_part']) || !empty($src['same_part']);
+    sq_out(sq_match_candidates($db, $isId, $same, (string)($src['kw'] ?? '')));
 }
 
 case 'match_apply': {

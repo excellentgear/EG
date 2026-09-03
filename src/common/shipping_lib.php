@@ -13,6 +13,8 @@
  */
 
 if (!defined('SQ_MODULE')) define('SQ_MODULE', 'shipping');
+/** 手動改選訂單時，候選清單一次最多列幾張（取離出貨日最近的那些） */
+if (!defined('SQ_CAND_LIMIT')) define('SQ_CAND_LIMIT', 300);
 
 /* ============================================================
  * 權限（RBAC，比照 vendor_audit_lib.php）
@@ -537,16 +539,26 @@ function sq_auto_allocate(PDO $db, int $orderId, int $qty): array
  * 產生回填候選。同一 (客戶, 料號) 群組內，出貨依日期 FIFO 吃訂單剩餘量。
  * @return array ['pairs'=>[...], 'summary'=>[...]]
  */
-function sq_match_preview(PDO $db, string $from, string $to): array
+function sq_match_preview(PDO $db, string $from, string $to, array $opt = []): array
 {
+    /* 篩選：客戶簡稱（精確）／料號 id。這兩個鍵都是「整組 (客戶,料號) 保留或整組排除」，
+       不會把同一組的出貨切成兩半，所以群組內 FIFO 的先後順序不受影響（日期區間才會）。 */
+    $client = trim((string)($opt['client'] ?? ''));
+    $didF   = (int)($opt['d_id'] ?? 0);
+    $withNo = !empty($opt['with_unmatched']);   // 連「推不出對應」的也回傳，供人工指定
+
+    $w   = ["il.Order_id IS NULL", "il.d_setting_id IS NOT NULL", "il.Order_date BETWEEN ? AND ?"];
+    $par = [$from, $to];
+    if ($client !== '') { $w[] = "il.Client_name = ?";  $par[] = $client; }
+    if ($didF   >  0)   { $w[] = "il.d_setting_id = ?"; $par[] = $didF; }
+
     $st = $db->prepare("
         SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') AS ship_date,
                il.Client_name, il.Product_id, il.d_setting_id, il.Qty, il.Unit_price
         FROM is_list il
-        WHERE il.Order_id IS NULL AND il.d_setting_id IS NOT NULL
-          AND il.Order_date BETWEEN ? AND ?
+        WHERE " . implode(' AND ', $w) . "
         ORDER BY il.Order_date, il.IS_id");
-    $st->execute([$from, $to]);
+    $st->execute($par);
     $ships = $st->fetchAll(PDO::FETCH_ASSOC);
 
     $summary = ['ship_rows' => count($ships), 'matched' => 0, 'unmatched' => 0, 'qty_matched' => 0];
@@ -590,7 +602,30 @@ function sq_match_preview(PDO $db, string $from, string $to): array
             break;
         }
 
-        if (!$hit) { $summary['unmatched']++; continue; }
+        if (!$hit) {
+            $summary['unmatched']++;
+            if ($withNo) {
+                // 講明為什麼推不出來，使用者才知道這一列該不該手動指定訂單
+                $reason = !$cand ? 'no_order'
+                        : (max(array_column($ordersByKey[$key], 'left')) <= 0 ? 'used_up' : 'later');
+                $pairs[] = [
+                    'is_id'       => (int)$s['IS_id'],
+                    'is_number'   => $s['IS_number'],
+                    'ship_date'   => $s['ship_date'],
+                    'client_name' => $s['Client_name'],
+                    'product_id'  => $s['Product_id'],
+                    'ship_qty'    => (int)$s['Qty'],
+                    'ship_price'  => (float)$s['Unit_price'],
+                    'order_id'    => 0,  'order_oo'   => '', 'order_date' => '',
+                    'order_qty'   => 0,  'order_left' => 0,  'order_price' => 0.0,
+                    'confidence'  => 'none',
+                    'price_match' => true,
+                    'over_qty'    => false,
+                    'no_reason'   => $reason,
+                ];
+            }
+            continue;
+        }
 
         $exact      = ((int)$hit['left'] === (int)$s['Qty']);
         $over       = ((int)$s['Qty'] > (int)$hit['left']);   // 出貨量超過訂單剩餘量
@@ -621,18 +656,154 @@ function sq_match_preview(PDO $db, string $from, string $to): array
     return ['pairs' => $pairs, 'summary' => $summary];
 }
 
+/**
+ * 回填工具的篩選來源：該日期區間內「待回填」出貨明細出現過的客戶與料號。
+ * 料號一併帶客戶，前端選了客戶後只列該客戶底下的料號。
+ */
+function sq_match_filters(PDO $db, string $from, string $to): array
+{
+    $st = $db->prepare("
+        SELECT il.Client_name, il.d_setting_id, MAX(il.Product_id) AS product_id, COUNT(*) AS cnt
+        FROM is_list il
+        WHERE il.Order_id IS NULL AND il.d_setting_id IS NOT NULL
+          AND il.Order_date BETWEEN ? AND ?
+        GROUP BY il.Client_name, il.d_setting_id
+        ORDER BY il.Client_name, product_id");
+    $st->execute([$from, $to]);
+
+    $clients = []; $parts = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $cn = (string)$r['Client_name'];
+        $clients[$cn] = ($clients[$cn] ?? 0) + (int)$r['cnt'];
+        $parts[] = [
+            'client'     => $cn,
+            'd_id'       => (int)$r['d_setting_id'],
+            'product_id' => (string)$r['product_id'],
+            'cnt'        => (int)$r['cnt'],
+        ];
+    }
+    $cl = [];
+    foreach ($clients as $name => $cnt) $cl[] = ['name' => $name, 'cnt' => $cnt];
+    usort($cl, function ($a, $b) { return strcmp($a['name'], $b['name']); });
+
+    return ['clients' => $cl, 'parts' => $parts];
+}
+
+/**
+ * 某一筆出貨明細「可以手動綁哪些訂單」。
+ * 候選一律限定同一個客戶簡稱（跨客戶綁一定是錯的，後端寫入時也再擋一次）；
+ * 料號則可放寬——訂單常下組合件名稱、製作時才拆成子件料號，強制同料號會一筆都選不到。
+ * 剩餘量已為 0（被其他出貨吃完）的訂單「照樣列出但不可選」，讓使用者看得到「這張已出完，所以才輪到下一張」。
+ */
+function sq_match_candidates(PDO $db, int $isId, bool $samePart = true, string $kw = ''): array
+{
+    $st = $db->prepare("
+        SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') AS ship_date,
+               il.Client_name, il.Product_id, il.d_setting_id, il.Qty, il.Unit_price, il.Order_id
+        FROM is_list il WHERE il.IS_id = ?");
+    $st->execute([$isId]);
+    $s = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$s) return ['ship' => null, 'orders' => [], 'error' => '找不到這筆出貨明細'];
+
+    $did = (int)$s['d_setting_id'];
+    $w   = ["ot.Client_name = :cn"];
+    $par = [':cn' => $s['Client_name']];
+    if ($samePart) {
+        if ($did <= 0) return ['ship' => $s, 'orders' => [], 'error' => '這筆出貨沒有綁料號id，無法用「相同料號」篩選'];
+        $w[] = "ot.d_id_ID = :did";
+        $par[':did'] = $did;
+    }
+    $kw = trim($kw);
+    if ($kw !== '') {
+        $w[] = "(ot.Order_oo LIKE :kw OR ot.d_id LIKE :kw OR ot.Specification LIKE :kw)";
+        $par[':kw'] = '%' . $kw . '%';
+    }
+
+    // 先數總筆數，畫面才講得出「共幾張、顯示了幾張」
+    $cs = $db->prepare("SELECT COUNT(*) FROM order_track ot WHERE " . implode(' AND ', $w));
+    $cs->execute($par);
+    $total = (int)$cs->fetchColumn();
+
+    /* 超過上限時取「離出貨日最近」的那些，不是最舊的那些——像和大這種客戶光是同一個料號
+       就有上千張訂單，取最舊的 300 張會把出貨日附近真正該綁的那幾張整批切掉。
+       撈出來之後仍依訂單日期排序顯示，方便一路看下來確認哪張先被出完。 */
+    $so = $db->prepare("
+        SELECT ot.Order_id, ot.Order_oo, ot.Client_name, ot.d_id, ot.d_id_ID, ot.Specification,
+               ot.Qty, ot.unit_price, ot.Order_status,
+               DATE_FORMAT(ot.Order_date,'%Y-%m-%d')    AS order_date,
+               DATE_FORMAT(ot.Delivery_date,'%Y-%m-%d') AS delivery_date,
+               COALESCE(sh.sq, 0) AS used_qty
+        FROM order_track ot
+        LEFT JOIN (SELECT Order_id, SUM(Qty) AS sq FROM is_list
+                   WHERE Order_id IS NOT NULL GROUP BY Order_id) sh ON sh.Order_id = ot.Order_id
+        WHERE " . implode(' AND ', $w) . "
+        ORDER BY ABS(DATEDIFF(ot.Order_date, :sd)), ot.Order_id
+        LIMIT :lim");
+    $par[':sd'] = $s['ship_date'];
+    $so->bindValue(':lim', SQ_CAND_LIMIT, PDO::PARAM_INT);
+    foreach ($par as $k => $v) { if ($k !== ':lim') $so->bindValue($k, $v); }
+    $so->execute();
+
+    $rows = $so->fetchAll(PDO::FETCH_ASSOC);
+    usort($rows, function ($a, $b) {
+        return [$a['order_date'], (int)$a['Order_id']] <=> [$b['order_date'], (int)$b['Order_id']];
+    });
+
+    $orders = [];
+    foreach ($rows as $o) {
+        $left = (int)$o['Qty'] - (int)$o['used_qty'];
+        $orders[] = [
+            'order_id'    => (int)$o['Order_id'],
+            'order_oo'    => (string)$o['Order_oo'],
+            'order_date'  => (string)$o['order_date'],
+            'delivery'    => (string)$o['delivery_date'],
+            'part_no'     => (string)$o['d_id'],
+            'spec'        => (string)$o['Specification'],
+            'order_qty'   => (int)$o['Qty'],
+            'used_qty'    => (int)$o['used_qty'],
+            'order_left'  => $left,
+            'order_price' => (float)$o['unit_price'],
+            'same_part'   => ($did > 0 && (int)$o['d_id_ID'] === $did),
+            'price_match' => (abs((float)$o['unit_price'] - (float)$s['Unit_price']) < 0.01),
+            'over_qty'    => ((int)$s['Qty'] > $left),          // 這筆出貨量超過剩餘量
+            'late'        => ($o['order_date'] > $s['ship_date']), // 下單日晚於出貨日
+            'closed'      => ((string)$o['Order_status'] === '9'),
+            // 已被其他出貨吃完＝不可選（照樣列出供確認）
+            'selectable'  => ($left > 0),
+        ];
+    }
+
+    return ['total' => $total, 'shown' => count($orders), 'limit' => SQ_CAND_LIMIT, 'ship' => [
+        'is_id'       => (int)$s['IS_id'],
+        'is_number'   => (string)$s['IS_number'],
+        'ship_date'   => (string)$s['ship_date'],
+        'client_name' => (string)$s['Client_name'],
+        'product_id'  => (string)$s['Product_id'],
+        'ship_qty'    => (int)$s['Qty'],
+        'ship_price'  => (float)$s['Unit_price'],
+    ], 'orders' => $orders];
+}
+
 /** 寫入回填結果（僅覆寫 Order_id 仍為 NULL 的列，避免蓋掉已正確的資料） */
 function sq_match_apply(PDO $db, array $pairs, string $userId): array
 {
     $applied = 0; $skipped = 0;
     try {
         $db->beginTransaction();
-        $up = $db->prepare("UPDATE is_list SET Order_id = ? WHERE IS_id = ? AND Order_id IS NULL");
+        /* 客戶必須相符才寫得進去（鐵律8：前端候選清單已限定同客戶，後端同規則再擋一次，
+           避免有人直打 API 把出貨綁到別家的訂單）。料號刻意不擋——訂單常下組合件名稱，
+           製作時才拆成子件料號，使用者可自行選擇是否限定相同料號。 */
+        $up = $db->prepare("
+            UPDATE is_list il
+              JOIN order_track ot ON ot.Order_id = :oid
+               SET il.Order_id = ot.Order_id
+             WHERE il.IS_id = :isid AND il.Order_id IS NULL
+               AND ot.Client_name = il.Client_name");
         foreach ($pairs as $p) {
             $isId = (int)($p['is_id'] ?? 0);
             $oid  = (int)($p['order_id'] ?? 0);
             if ($isId <= 0 || $oid <= 0) { $skipped++; continue; }
-            $up->execute([$oid, $isId]);
+            $up->execute([':oid' => $oid, ':isid' => $isId]);
             if ($up->rowCount() > 0) $applied++; else $skipped++;
         }
         $db->commit();
@@ -641,7 +812,7 @@ function sq_match_apply(PDO $db, array $pairs, string $userId): array
         return ['success' => false, 'message' => '回填失敗：' . $e->getMessage()];
     }
     return ['success' => true, 'applied' => $applied, 'skipped' => $skipped,
-            'message' => "已回填 {$applied} 筆" . ($skipped ? "，略過 {$skipped} 筆（已有訂單或資料異動）" : '')];
+            'message' => "已回填 {$applied} 筆" . ($skipped ? "，略過 {$skipped} 筆（已有訂單編號、客戶簡稱不符或資料已異動）" : '')];
 }
 
 /* ============================================================
