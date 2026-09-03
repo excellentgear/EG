@@ -1549,9 +1549,9 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
             </div></div>
             <div class="frm-row"><label>背景</label>
                 <select id="sl-bg" onchange="document.getElementById('sl-bg-color').style.display=(this.value==='custom')?'':'none'"
-                    title="插入圖面時標籤墊的底色；透明＝不遮住圖線。插入前勾標籤庫的「以透明背景插入」一樣可臨時改為透明">
-                    <option value="white" selected>白底（預設）</option>
-                    <option value="transparent">透明（不遮圖線）</option>
+                    title="插入圖面時標籤墊的底色；透明＝不遮住圖線（預設）。要蓋住底下圖線再改為白底或自訂色">
+                    <option value="transparent" selected>透明（不遮圖線，預設）</option>
+                    <option value="white">白底</option>
                     <option value="custom">自訂顏色…</option>
                 </select>
                 <input type="color" id="sl-bg-color" value="#ffffff" style="display:none;">
@@ -1890,7 +1890,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>文字(T)/標籤放上後<b>永遠可再拖移、雙擊改字、拉角縮放</b>（不像小畫家會固定）</li>
                 <li>標籤庫：分公司共用／部門／私人（可分類篩選）。點一下放到圖上；<b>雙擊改字</b>，外框自動貼合字長；「底色」按鈕或插入前勾「透明背景」可切換白底/透明（原內建常用標籤已改為技術部的部門標籤）</li>
                 <li>製程表格標籤（如 (  )齒研）：<b>雙擊空白格可填數值</b>（如公差 29.91 -0.056），Enter 可換行打上下公差，格子自動加寬加高；雙擊標題可把括號填入製程序號</li>
-                <li>自己組好的標籤（矩形＋文字框選）按「把選取存為標籤」入庫；填分類方便日後查找。存檔時可選<b>背景</b>（白底/透明/自訂色）；沒特別選＝插入時自動墊白底，插入前勾「以透明背景插入」則不墊</li>
+                <li>自己組好的標籤（矩形＋文字框選）按「把選取存為標籤」入庫；填分類方便日後查找。存檔時可選<b>背景</b>（透明/白底/自訂色）；<b>預設透明</b>＝插入時不遮住底下圖線，要蓋住圖線請改選白底或自訂色</li>
                 <li><b>Alt＋拖曳</b>＝原地留一份拖走一份；Ctrl+D 原地複製</li>
                 <li>群組：框選按 <b>Ctrl+G</b>；<b>雙擊群組＝進入</b>拆成多選可調個別位置，調完 Ctrl+G 組回（標籤群組雙擊是改字，用 <b>Alt＋雙擊</b>進入）</li>
             </ul>
@@ -1936,7 +1936,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
                 <li>輸入方式：在文字中打 <b>A^B</b>，結束編輯後自動變成「A 疊在 B 上」的小字（0.55 倍），例如 <b>25 -0^-0.18</b> → 25 加上「-0 / -0.18」上下公差；^ 前後接受數字/字母/±.,° 的短字串，同一行可放多組</li>
                 <li>適用範圍：一般文字（文字工具）、<b>標籤（左側標籤工具的快速標籤）與自組標籤內改字</b>都支援；標籤邊框會自動貼合堆疊後的寬高</li>
                 <li>修改：<b>雙擊</b>堆疊文字＝還原成含 ^ 的原始字串整串重編；改到沒有 ^ 就變回一般文字</li>
-                <li>入庫：堆疊文字選取後可「把選取存為標籤」，插入後一樣可雙擊重編；背景（白底/透明/自訂色）依存標籤時的設定</li>
+                <li>入庫：堆疊文字選取後可「把選取存為標籤」，插入後一樣可雙擊重編；背景（透明/白底/自訂色）依存標籤時的設定，預設透明</li>
             </ul>
         </div>
         <div class="modal-foot"><button class="tb-btn primary" onclick="hideModal('help-modal')">知道了</button></div>
@@ -4950,7 +4950,7 @@ function lmMakeGroupLabel() {
     const rows = customLabels.filter(r => lmSel.has(r.label_id));   // 依顯示順序
     if (!rows.length) return;
     pendingLabelSpec = { kind: 'multi', specs: rows.map(r => JSON.parse(JSON.stringify(r.spec))) };
-    syncSlBg('');   // 群組標籤背景預設白底（同各子標籤預設），要整組透明/自訂色再自行選
+    syncSlBg('');   // 群組標籤背景預設透明（同一般存標籤預設），要整組白底/自訂色再自行選
     document.getElementById('sl-name').value = '';
     document.getElementById('sl-cat').value = '群組';
     document.getElementById('sl-tags').value = '';
@@ -5158,10 +5158,10 @@ function saveSelectionAsLabel() {
     showModal('savelabel-modal');
     document.getElementById('sl-name').focus();
 }
-/* 存標籤跳窗「背景」選項回填：white/transparent/自訂色（undefined 視為白底預設） */
+/* 存標籤跳窗「背景」選項回填：white/transparent/自訂色（沒指定＝透明，新標籤預設） */
 function syncSlBg(bg) {
     const sel = document.getElementById('sl-bg'), clr = document.getElementById('sl-bg-color');
-    sel.value = (bg === 'transparent') ? 'transparent' : ((bg && bg !== 'white') ? 'custom' : 'white');
+    sel.value = (bg === 'white') ? 'white' : ((bg && bg !== 'transparent') ? 'custom' : 'transparent');
     clr.value = /^#[0-9a-fA-F]{6}$/.test(bg || '') ? bg : '#ffffff';
     clr.style.display = (sel.value === 'custom') ? '' : 'none';
 }
