@@ -1279,6 +1279,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $kws = $kws_p !== '' ? array_values(array_filter(array_map('trim', explode('||', $kws_p)))) : ($kw_fb !== '' ? [$kw_fb] : []);
             // 僅主查詢 SELECT 使用的參數（count 查詢不可帶入，否則參數數量不符）
             $params_sel = [];
+            // 第一段（分頁）查詢只會用到 kw_direct 這組參數，:kwm* 屬於 kw_parent_src_sql 不可帶入
+            $params_kwd = [];
             $kw_direct_sql     = '1';    // 是否直接命中關鍵字（無關鍵字搜尋時恆為 1）
             $kw_parent_src_sql = 'NULL'; // 命中關鍵字的所屬組合件料號清單（供前端標示「由組合件帶出」）
             if (!empty($kws)) {
@@ -1297,6 +1299,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $kw_direct_ors[] = "(d.D_Setting_Id LIKE :kws$ki OR d.Drawing_No LIKE :kws$ki OR d.Spec_No LIKE :kws$ki OR d.Remark LIKE :kws$ki OR d.Customer_Id LIKE :kws$ki OR c.customer LIKE :kws$ki"
                                      . " OR EXISTS (SELECT 1 FROM d_setting_alias aks$ki WHERE aks$ki.d_id=d.d_id AND aks$ki.alias_code LIKE :kws$ki))";
                     $params_sel[":kws$ki"] = "%$kw_i%";
+                    $params_kwd[":kws$ki"] = "%$kw_i%";
                     $kw_parent_ors[] = "(pks.D_Setting_Id LIKE :kwm$ki OR pks.Drawing_No LIKE :kwm$ki OR pks.Spec_No LIKE :kwm$ki OR pks.Remark LIKE :kwm$ki)";
                     $params_sel[":kwm$ki"] = "%$kw_i%";
                 }
@@ -1660,15 +1663,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
             $sort_by = $_POST['sort_by'] ?? '';
             switch ($sort_by) {
-                case 'ship_count_asc':  $order_sql = 'ORDER BY ship_cy_count ASC, d.D_Setting_Id ASC'; break;
-                case 'ship_count_desc': $order_sql = 'ORDER BY ship_cy_count DESC, d.D_Setting_Id ASC'; break;
-                case 'ship_qty_asc':    $order_sql = 'ORDER BY ship_cy_qty ASC, d.D_Setting_Id ASC'; break;
-                case 'ship_qty_desc':   $order_sql = 'ORDER BY ship_cy_qty DESC, d.D_Setting_Id ASC'; break;
-                default:                $order_sql = 'ORDER BY d.D_Setting_Id ASC'; break;
+                case 'ship_count_asc':  $order_sql = 'ORDER BY ship_cy_count ASC, d.D_Setting_Id ASC, d.d_id ASC'; break;
+                case 'ship_count_desc': $order_sql = 'ORDER BY ship_cy_count DESC, d.D_Setting_Id ASC, d.d_id ASC'; break;
+                case 'ship_qty_asc':    $order_sql = 'ORDER BY ship_cy_qty ASC, d.D_Setting_Id ASC, d.d_id ASC'; break;
+                case 'ship_qty_desc':   $order_sql = 'ORDER BY ship_cy_qty DESC, d.D_Setting_Id ASC, d.d_id ASC'; break;
+                default:                $order_sql = 'ORDER BY d.D_Setting_Id ASC, d.d_id ASC'; break;
             }
             // 關鍵字搜尋＋預設排序時：直接命中的組合件置頂（使用者選了出貨排序則尊重其排序）
             if (!empty($kws) && !in_array($sort_by, ['ship_count_asc','ship_count_desc','ship_qty_asc','ship_qty_desc'], true)) {
-                $order_sql = 'ORDER BY (kw_direct=1 AND d.Is_Assembly=1) DESC, d.D_Setting_Id ASC';
+                $order_sql = 'ORDER BY (kw_direct=1 AND d.Is_Assembly=1) DESC, d.D_Setting_Id ASC, d.d_id ASC';
             }
 
             // 建立巢狀 REPLACE 表達式，用於 display_template 套用
@@ -1695,6 +1698,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $tmpl_expr = 'dt.display_template';
             foreach ($tmpl_replacements as $token => $expr) {
                 $tmpl_expr = "REPLACE($tmpl_expr, '$token', $expr)";
+            }
+
+            /* 出貨統計衍生表：第一段（分頁）與第二段（明細）共用同一份定義，
+               不可各自複製一份，否則統計口徑會兩邊走鐘。
+               出貨統計一律以「料號 id (d_setting.d_id)」歸戶，不可用料號字串 join——
+               同一個料號在 d_setting 可能有多列（不同版次/規格），用字串 join 會讓每一列
+               都顯示同一份統計（實際沒單據的那列也會有數字）。
+               規則：優先取 is_list.d_setting_id（2026 起 ERP 匯入已綁定）；
+                     未綁定的舊資料才回退用料號字串比對，且一律歸給該料號最早建立的那一列。
+               先 DISTINCT 去重（相同 IS+料號id+Date+Qty+Price 視為重複行），再聚合 */
+            $ss_join = "
+                LEFT JOIN (
+                    SELECT sub.eff_d_id,
+                           COUNT(DISTINCT CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())   THEN sub.IS_number END) AS ship_cy_count,
+                           SUM(CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())   THEN sub.Qty ELSE 0 END) AS ship_cy_qty,
+                           COUNT(DISTINCT CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())-1 THEN sub.IS_number END) AS ship_py_count,
+                           SUM(CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())-1 THEN sub.Qty ELSE 0 END) AS ship_py_qty
+                    FROM (
+                        SELECT DISTINCT COALESCE(il.d_setting_id, fb.min_d_id) AS eff_d_id,
+                               il.IS_number, il.Order_date, il.Qty, il.Unit_price
+                        FROM is_list il
+                        LEFT JOIN is_sale_type ist ON ist.sale_type_id=il.sale_type
+                        LEFT JOIN (SELECT D_Setting_Id, MIN(d_id) AS min_d_id FROM d_setting GROUP BY D_Setting_Id) fb
+                               ON fb.D_Setting_Id=il.Product_id
+                        WHERE (il.sale_type IS NULL OR ist.is_count=1)
+                          AND il.Order_date BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 YEAR), '%Y-01-01') AND CURDATE()
+                    ) sub
+                    WHERE sub.eff_d_id IS NOT NULL
+                    GROUP BY sub.eff_d_id
+                ) ss ON ss.eff_d_id=d.d_id";
+
+            /* ── 第一段：先只把「這一頁要顯示的 d_id」挑出來 ───────────────────
+               為什麼要拆成兩段：主查詢的 SELECT 清單裡有 has_quote 等相關子查詢，
+               而關鍵字搜尋時 ORDER BY 會參照 SELECT 別名 kw_direct，MySQL 必須先把
+               整份 SELECT 清單對「所有命中列」算完才排得了序、才取得到 LIMIT 10。
+               於是關鍵字愈寬鬆愈慢（實測「RC」命中 128 列＝28 秒、「A」命中 8765 列
+               ＝逾 90 秒直接沒有結果）。拆開後第一段只算 d_id 與排序鍵（實測 8765
+               命中仍約 0.11 秒），第二段只對這一頁的列算重欄位，成本與命中總數無關。*/
+            $need_ss_pg = in_array($sort_by, ['ship_count_asc','ship_count_desc','ship_qty_asc','ship_qty_desc'], true);
+            $pgq = $pdo->prepare("
+                SELECT d.d_id, $kw_direct_sql AS kw_direct
+                FROM d_setting d
+                LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id
+                " . ($need_ss_pg ? $ss_join : '') . "
+                WHERE $where
+                $order_sql
+                LIMIT $lmt OFFSET $off");
+            $pgq->execute(array_merge($params, $params_kwd));
+            $page_ids = $pgq->fetchAll(PDO::FETCH_COLUMN, 0);
+            if (empty($page_ids)) {
+                echo json_encode(['success'=>true,'data'=>[],'total'=>$total,'pages'=>(int)ceil($total/$lmt),'page'=>$pg]);
+                exit;
+            }
+            // IN 與 FIELD 各用一組具名參數：PDO 未開啟模擬預處理時，同一個具名參數不可重複出現
+            $pg_id_phs = $pg_id_phs_ord = ''; $pg_id_params = []; $pg_id_params2 = [];
+            foreach (array_values($page_ids) as $i => $vid) {
+                $pg_id_phs     .= ($i ? ',' : '') . ":pid$i";
+                $pg_id_phs_ord .= ($i ? ',' : '') . ":pio$i";
+                $pg_id_params[":pid$i"]  = (int)$vid;
+                $pg_id_params2[":pio$i"] = (int)$vid;
             }
 
             $stmt = $pdo->prepare("
@@ -1780,35 +1843,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                        COALESCE(ss.ship_py_qty,0)   AS ship_py_qty
                 FROM d_setting d
                 LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id
-                LEFT JOIN (
-                    /* 出貨統計一律以「料號 id (d_setting.d_id)」歸戶，不可用料號字串 join——
-                       同一個料號在 d_setting 可能有多列（不同版次/規格），用字串 join 會讓每一列
-                       都顯示同一份統計（實際沒單據的那列也會有數字）。
-                       規則：優先取 is_list.d_setting_id（2026 起 ERP 匯入已綁定）；
-                             未綁定的舊資料才回退用料號字串比對，且一律歸給該料號最早建立的那一列。
-                       先 DISTINCT 去重（相同 IS+料號id+Date+Qty+Price 視為重複行），再聚合 */
-                    SELECT sub.eff_d_id,
-                           COUNT(DISTINCT CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())   THEN sub.IS_number END) AS ship_cy_count,
-                           SUM(CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())   THEN sub.Qty ELSE 0 END) AS ship_cy_qty,
-                           COUNT(DISTINCT CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())-1 THEN sub.IS_number END) AS ship_py_count,
-                           SUM(CASE WHEN YEAR(sub.Order_date)=YEAR(CURDATE())-1 THEN sub.Qty ELSE 0 END) AS ship_py_qty
-                    FROM (
-                        SELECT DISTINCT COALESCE(il.d_setting_id, fb.min_d_id) AS eff_d_id,
-                               il.IS_number, il.Order_date, il.Qty, il.Unit_price
-                        FROM is_list il
-                        LEFT JOIN is_sale_type ist ON ist.sale_type_id=il.sale_type
-                        LEFT JOIN (SELECT D_Setting_Id, MIN(d_id) AS min_d_id FROM d_setting GROUP BY D_Setting_Id) fb
-                               ON fb.D_Setting_Id=il.Product_id
-                        WHERE (il.sale_type IS NULL OR ist.is_count=1)
-                          AND il.Order_date BETWEEN DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 YEAR), '%Y-01-01') AND CURDATE()
-                    ) sub
-                    WHERE sub.eff_d_id IS NOT NULL
-                    GROUP BY sub.eff_d_id
-                ) ss ON ss.eff_d_id=d.d_id
-                WHERE $where
-                $order_sql
-                LIMIT $lmt OFFSET $off");
-            $stmt->execute(array_merge($params, $params_sel));
+                $ss_join
+                WHERE d.d_id IN ($pg_id_phs)
+                ORDER BY FIELD(d.d_id, $pg_id_phs_ord)");
+            $stmt->execute(array_merge($params_sel, $pg_id_params, $pg_id_params2));
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             // 設計備註（有查看權限時補上）
             if ($can_see_design && !empty($rows)) {
