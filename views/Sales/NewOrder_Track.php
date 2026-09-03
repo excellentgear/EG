@@ -1747,6 +1747,113 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 }
 
+
+// ── 設計備註「已處理」＝轉成溝通紀錄（2026-09-03 使用者要求）─────────────
+// 為什麼要有這個：設計備註原本只能一直往上加字，看不出來哪些已經處理完；按下「已處理」
+// 把當下整段內容存成一筆溝通紀錄並清空欄位，之後可以繼續打新的內容。
+// 連帶好處：「批圖溝通中」的判定本來就是 ateNote 有內容且未轉生管，欄位清空後自然
+// 不再被算進去＝該卡片只會剩下「還沒處理完」的訂單，不必另外改統計 SQL。
+function ot_ensure_ate_note_log(PDO $pdo) {
+    static $done = false;
+    if ($done) return;
+    try { $pdo->query("SELECT 1 FROM order_ate_note_log LIMIT 1"); $done = true; return; }
+    catch (Exception $e) { /* 表還不存在，往下建 */ }
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS order_ate_note_log (
+            log_id INT NOT NULL AUTO_INCREMENT,
+            Order_id INT NOT NULL COMMENT '對應 order_track.Order_id',
+            note_text VARCHAR(250) NOT NULL COMMENT '按下「已處理」當下的設計備註內容',
+            created_by INT NULL COMMENT '按下已處理的人 user.id',
+            created_by_name VARCHAR(30) NULL COMMENT '按下已處理的人姓名（當下快照）',
+            created_at DATETIME NOT NULL COMMENT '轉為溝通紀錄的時間',
+            PRIMARY KEY (log_id), KEY idx_order (Order_id, log_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          COMMENT='訂單設計備註溝通紀錄：按「已處理」把當下 ateNote 存成一筆紀錄並清空欄位'");
+        $done = true;
+    } catch (Exception $e) {}
+}
+
+if (isset($_POST['action']) && $_POST['action'] === 'ate_note_done') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        // 權限與設計備註「可編輯」同一條（舊制 A/X，RBAC 走 ot_design_note）；
+        // 只擋前端等於沒擋，這裡後端同規則再擋一次（鐵律8）
+        if (!$can_edit_ateNote) { echo json_encode(['success'=>false,'message'=>'您沒有編輯設計備註的權限']); exit; }
+        $oid  = intval($_POST['order_id'] ?? 0);
+        $text = trim((string)($_POST['text'] ?? ''));
+        $orig = (string)($_POST['orig'] ?? '');
+        if (!$oid) throw new Exception('未指定訂單');
+        $st = $pdo->prepare("SELECT ateNote FROM order_track WHERE Order_id = ?");
+        $st->execute([$oid]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) throw new Exception('查無此訂單');
+        $dbNote = (string)($row['ateNote'] ?? '');
+        // 點開即刷新鐵則：別人在這段期間改過同一欄，就不要拿畫面上的舊內容覆蓋掉
+        if ($dbNote !== $orig) {
+            echo json_encode(['success'=>false,'code'=>'CONFLICT','current'=>$dbNote,
+                'message'=>'這筆訂單的設計備註已被其他人修改，畫面已更新為最新內容，請確認後再按一次']);
+            exit;
+        }
+        if ($text === '') { echo json_encode(['success'=>false,'message'=>'設計備註沒有內容，不需要轉成溝通紀錄']); exit; }
+        if (mb_strlen($text, 'UTF-8') > 250) $text = mb_substr($text, 0, 250, 'UTF-8');
+        ot_ensure_ate_note_log($pdo);
+        $uname = '';
+        try {
+            $us = $pdo->prepare("SELECT user_cname FROM user WHERE id = ?");
+            $us->execute([$id]);
+            $uname = (string)($us->fetchColumn() ?: '');
+        } catch (Exception $e) {}
+        $pdo->beginTransaction();
+        $ins = $pdo->prepare("INSERT INTO order_ate_note_log (Order_id, note_text, created_by, created_by_name, created_at)
+                              VALUES (?, ?, ?, ?, NOW())");
+        $ins->execute([$oid, $text, ($id ?: null), ($uname !== '' ? $uname : null)]);
+        // 只清設計備註本身，刻意不動 Modified_At/Modified_By：那兩欄是訂單內容變更的軌跡，
+        // 備註處理掉不等於訂單被改過（訂單變更比對會拿它當基準）
+        $pdo->prepare("UPDATE order_track SET ateNote = '' WHERE Order_id = ?")->execute([$oid]);
+        $pdo->commit();
+        $cnt = 0;
+        try {
+            $cs = $pdo->prepare("SELECT COUNT(*) FROM order_ate_note_log WHERE Order_id = ?");
+            $cs->execute([$oid]);
+            $cnt = (int)$cs->fetchColumn();
+        } catch (Exception $e) {}
+        echo json_encode(['success'=>true,'log_count'=>$cnt]);
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
+    }
+    exit;
+}
+
+// 溝通紀錄查看（唯讀，看得到這一頁的人都看得到）
+if (isset($_POST['action']) && $_POST['action'] === 'ate_note_logs') {
+    header('Content-Type: application/json');
+    $pdo = $conn->getPDO();
+    try {
+        $oid = intval($_POST['order_id'] ?? 0);
+        if (!$oid) throw new Exception('未指定訂單');
+        $logs = [];
+        try {
+            $st = $pdo->prepare("SELECT log_id, note_text, created_by_name,
+                DATE_FORMAT(created_at,'%Y-%m-%d %H:%i') AS created_at
+                FROM order_ate_note_log WHERE Order_id = ? ORDER BY log_id DESC");
+            $st->execute([$oid]);
+            $logs = $st->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) { $logs = []; }   // 表還沒建起來時當作沒有紀錄，不要讓畫面壞掉
+        $cur = '';
+        try {
+            $cs = $pdo->prepare("SELECT ateNote FROM order_track WHERE Order_id = ?");
+            $cs->execute([$oid]);
+            $cur = (string)($cs->fetchColumn() ?: '');
+        } catch (Exception $e) {}
+        echo json_encode(['success'=>true,'logs'=>$logs,'current'=>$cur]);
+    } catch (Exception $e) {
+        echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
+    }
+    exit;
+}
+
 // --- 新增：AJAX 分頁與篩選 API (由前端 JS 呼叫) ---
 if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $pdo = $conn->getPDO(); // [FIX] 確保 $pdo 變數在此作用域可用
@@ -2118,6 +2225,22 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
 
     if (!empty($order_list)) {
         try { $op_cust_map = qcc_orders_op_customer_map($pdo, $order_list); } catch (Throwable $eOpc) { $op_cust_map = []; }
+    }
+
+    // 設計備註溝通紀錄筆數（2026-09-03）：Order_id => 筆數。整頁一次查完，不要每列各打一次；
+    // 表還沒建起來（舊備份還原）時 catch 掉當作沒有紀錄，清單照樣顯示得出來。
+    $ate_log_map = [];
+    if (!empty($order_list)) {
+        try {
+            $oidsL = array_values(array_filter(array_map('intval', array_column($order_list, 'Order_id'))));
+            if ($oidsL) {
+                $phL = implode(',', array_fill(0, count($oidsL), '?'));
+                $qL = $pdo->prepare("SELECT Order_id, COUNT(*) AS cnt FROM order_ate_note_log
+                                     WHERE Order_id IN ($phL) GROUP BY Order_id");
+                $qL->execute($oidsL);
+                foreach ($qL->fetchAll(PDO::FETCH_ASSOC) as $rL) { $ate_log_map[(int)$rL['Order_id']] = (int)$rL['cnt']; }
+            }
+        } catch (Exception $eL) { $ate_log_map = []; }
     }
 
     if (!empty($order_list)) {
@@ -2807,6 +2930,24 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                         <textarea class="table-textarea" name="ateNote" <?= $can_edit_ateNote ? '' : 'readonly' ?> rows="1" data-orig="<?= safe_html($order['ateNote']) ?>" oninput="autoResize(this)" onfocus="autoResize(this)" onblur="autoResize(this)" onkeydown="handleKeyDown(event, this, '<?= $order['Order_id'] ?>')"><?= safe_html($order['ateNote']) ?></textarea>
                         <span class="note-more-hint" title="內容超過5行，點擊欄位可展開查看全文"><i class="fa fa-ellipsis-h"></i> 還有更多</span>
                     </div>
+                    <?php
+                    // 設計備註「已處理」與溝通紀錄（2026-09-03 使用者要求）
+                    // 已處理＝把目前這段內容轉成一筆溝通紀錄並清空欄位，之後可以繼續打新的；
+                    // 欄位一空「批圖溝通中」就不會再算這一筆（該卡片的判定本來就是 ateNote 有內容且未轉生管），
+                    // 所以統計 SQL 一行都不必改，剩下的自然就是「還沒處理完」的訂單。
+                    $_ateLogCnt = (int)($ate_log_map[(int)$order['Order_id']] ?? 0);
+                    $_ateHasTxt = (trim((string)($order['ateNote'] ?? '')) !== '');
+                    ?>
+                    <div class="ate-note-bar">
+                        <?php if ($can_edit_ateNote): ?>
+                        <button type="button" class="ate-note-btn ate-note-done" <?= $_ateHasTxt ? '' : 'style="display:none;"' ?>
+                                onclick="ateNoteDone(<?= (int)$order['Order_id'] ?>, this)"
+                                title="把目前這段設計備註轉成溝通紀錄並清空欄位，之後可以繼續打新的內容；清空後就不再算「批圖溝通中」"><i class="fa fa-check"></i> 已處理</button>
+                        <?php endif; ?>
+                        <button type="button" class="ate-note-btn ate-note-log" <?= $_ateLogCnt > 0 ? '' : 'style="display:none;"' ?>
+                                onclick="openAteNoteLogs(<?= (int)$order['Order_id'] ?>)"
+                                title="查看這張訂單過去按過「已處理」的設計備註（溝通紀錄）"><i class="fa fa-history"></i> 溝通紀錄 <span class="n"><?= $_ateLogCnt ?></span></button>
+                    </div>
                 </td>
                 <td class="col-status" name="pmGetCell">
                     <?php
@@ -3206,6 +3347,21 @@ foreach($dCounts as $c) {
         }
         .table-textarea:hover { border-color: #ddd; background: #f9f9f9; }
         .table-textarea:focus { border-color: #3498DB; background: #fff; outline: none; box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.1); }
+
+        /* 設計備註「已處理／溝通紀錄」小按鈕（2026-09-03）＝暖色系（ai-rules/10） */
+        .ate-note-bar { margin-top:2px; display:flex; gap:4px; flex-wrap:wrap; }
+        .ate-note-btn { border:1px solid; border-radius:3px; font-size:10px; line-height:1.5;
+                        padding:0 5px; background:#fff; cursor:pointer; }
+        .ate-note-done { border-color:#E0A46A; color:#8a4b12; background:#FDF1E3; }
+        .ate-note-done:hover { background:#F7DFC5; }
+        .ate-note-done[disabled] { opacity:.6; cursor:default; }
+        .ate-note-log { border-color:#D8CBB8; color:#6b5638; background:#FAF6EF; }
+        .ate-note-log:hover { background:#F1E8D9; }
+        .ate-note-log .n { font-weight:700; }
+        .ate-log-item { border:1px solid #EADFCD; border-left:3px solid #F0A24B; border-radius:4px;
+                        background:#fff; padding:6px 9px; margin-bottom:6px; }
+        .ate-log-item .meta { font-size:11px; color:#8a7355; margin-bottom:3px; }
+        .ate-log-item .txt { font-size:13px; color:#333; white-space:pre-wrap; word-break:break-word; }
 
         /* 備註欄位超過5行時的「還有更多」提示 */
         .textarea-wrap { position: relative; }
@@ -6548,6 +6704,102 @@ foreach($dCounts as $c) {
             });
         }
 
+        // ── 設計備註：已處理（轉成溝通紀錄）／查看溝通紀錄（2026-09-03 使用者要求）──
+        // 為什麼要有：設計備註原本只能一直往上加字，看不出來處理完了沒。按「已處理」把目前
+        // 這段內容存成一筆溝通紀錄並清空欄位，之後照樣可以繼續打新的；欄位清空後「批圖溝通中」
+        // 就不會再算這一筆，所以那張卡片剩下的都是還沒處理完的。
+        function ateNoteToggleDoneBtn(textarea) {
+            var $td = $(textarea).closest('td');
+            var $btn = $td.find('.ate-note-done');
+            if (!$btn.length) return;                       // 沒有編輯權限的人不會有這顆
+            $btn.toggle($.trim(textarea.value) !== '');
+        }
+        // 打字當下就決定這顆按鈕出不出現（AJAX 換頁重繪的列也涵蓋，故用事件委派）
+        $(document).on('input', 'textarea[name="ateNote"]', function() { ateNoteToggleDoneBtn(this); });
+
+        function ateNoteDone(orderId, btn) {
+            var $btn = $(btn);
+            var $td  = $btn.closest('td');
+            var ta   = $td.find('textarea[name="ateNote"]')[0];
+            if (!ta) return;
+            var text = $.trim(ta.value);
+            if (text === '') { alert('設計備註沒有內容，不需要轉成溝通紀錄'); return; }
+            if (!confirm('要把目前這段設計備註轉成「溝通紀錄」並清空欄位嗎？\n（紀錄按「溝通紀錄」隨時可以看，清空後可以繼續打新的內容）\n\n' + text)) return;
+            $btn.prop('disabled', true);
+            $.post('', {
+                action: 'ate_note_done',
+                order_id: orderId,
+                text: text,
+                orig: ta.getAttribute('data-orig') || ''
+            }, function(res) {
+                $btn.prop('disabled', false);
+                if (!res || !res.success) {
+                    // 別人剛改過同一欄：把畫面換成最新內容再請使用者確認，不要用舊內容覆蓋掉
+                    if (res && res.code === 'CONFLICT') {
+                        ta.value = res.current || '';
+                        ta.setAttribute('data-orig', res.current || '');
+                        autoResize(ta);
+                        ateNoteToggleDoneBtn(ta);
+                    }
+                    alert((res && res.message) ? res.message : '轉成溝通紀錄失敗');
+                    return;
+                }
+                ta.value = '';
+                ta.setAttribute('data-orig', '');
+                autoResize(ta);
+                $btn.hide();
+                var $log = $td.find('.ate-note-log');
+                $log.find('.n').text(res.log_count || 0);
+                $log.show();
+                // 這一筆已經不算「批圖溝通中」了，卡片數字同步減一（不整頁重載，避免打斷正在編輯的人）
+                var $cc = $('#count-communication');
+                var cur = parseInt(String($cc.text()).replace(/,/g, ''), 10);
+                if (!isNaN(cur) && cur > 0) $cc.text(cur - 1);
+                $(ta).css('background-color', '#d4edda');
+                setTimeout(function() { $(ta).css('background-color', 'transparent'); }, 1000);
+            }, 'json').fail(function() {
+                $btn.prop('disabled', false);
+                alert('連線失敗，請重試');
+            });
+        }
+
+        function openAteNoteLogs(orderId) {
+            var $body = $('#ate-log-modal-body');
+            $body.html('<div class="text-center" style="padding:18px;"><i class="fa fa-spinner fa-spin fa-2x"></i></div>');
+            $('#ate-log-modal-title').text('訂單 ' + orderId);
+            $('#ate-log-modal').modal('show');
+            $.post('', { action: 'ate_note_logs', order_id: orderId }, function(res) {
+                if (!res || !res.success) {
+                    $body.html('<div class="alert alert-danger" style="margin:0;">讀取失敗：' + escapeHtml((res && res.message) || '') + '</div>');
+                    return;
+                }
+                var html = '';
+                if (res.current && $.trim(res.current) !== '') {
+                    html += '<div style="font-size:12px;color:#8a4b12;background:#FDF1E3;border:1px solid #E0A46A;border-radius:4px;padding:6px 9px;margin-bottom:10px;">'
+                          + '<b><i class="fa fa-pencil"></i> 目前尚未處理的設計備註</b>'
+                          + '<div style="white-space:pre-wrap;word-break:break-word;color:#333;font-size:13px;margin-top:3px;">'
+                          + escapeHtml(res.current) + '</div></div>';
+                }
+                var logs = res.logs || [];
+                if (!logs.length) {
+                    html += '<div class="alert alert-info" style="margin:0;">這張訂單還沒有溝通紀錄（按過「已處理」的設計備註才會留在這裡）</div>';
+                } else {
+                    html += '<div style="font-size:11px;color:#999;margin-bottom:5px;">共 ' + logs.length + ' 筆，由新到舊</div>';
+                    for (var i = 0; i < logs.length; i++) {
+                        var g = logs[i];
+                        var when = g.created_at ? (typeof egFmtDate === 'function' ? egFmtDate(g.created_at, true) : g.created_at) : '';
+                        html += '<div class="ate-log-item"><div class="meta"><i class="fa fa-clock-o"></i> ' + escapeHtml(when)
+                              + (g.created_by_name ? ' ・ ' + escapeHtml(g.created_by_name) : '')
+                              + '</div><div class="txt">' + escapeHtml(g.note_text || '') + '</div></div>';
+                    }
+                }
+                $body.html(html);
+            }, 'json').fail(function() {
+                $body.html('<div class="alert alert-danger" style="margin:0;">連線失敗，請重試</div>');
+            });
+        }
+
+
         // --- Status Update Functions ---
 
         function updateInReview(orderId) {
@@ -8847,6 +9099,24 @@ foreach($dCounts as $c) {
             <div class="modal-footer" style="display:flex;align-items:center;justify-content:space-between;">
                 <a id="ot-dn-mdm-link" href="../../views/pages/master_data_management.php" target="_blank"
                     class="btn btn-default btn-sm"><i class="fa fa-external-link"></i> 前往主檔管理</a>
+                <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+            </div>
+        </div></div>
+    </div>
+
+    <!-- ═══ MODAL: 設計備註溝通紀錄（按過「已處理」的內容）═══════════════════ -->
+    <div class="modal fade" id="ate-log-modal" tabindex="-1">
+        <div class="modal-dialog" style="max-width:620px;width:90%;"><div class="modal-content">
+            <div class="modal-header" style="background:#8a5a2b;">
+                <button type="button" class="close" data-dismiss="modal" style="color:#fff;">&times;</button>
+                <h4 class="modal-title" style="color:#fff;font-size:15px;">
+                    <i class="fa fa-history"></i> 設計備註溝通紀錄 — <span id="ate-log-modal-title"></span>
+                </h4>
+            </div>
+            <div class="modal-body" style="max-height:70vh;overflow-y:auto;padding:14px;">
+                <div id="ate-log-modal-body"></div>
+            </div>
+            <div class="modal-footer">
                 <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
             </div>
         </div></div>
