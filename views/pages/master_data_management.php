@@ -153,7 +153,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20260622_01');
+define('MDM_MIGRATION_VERSION', '20260903_01');   // 2026-09-03 新增 process_notes 的失效欄位（is_void/void_*/unvoid_*）
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -888,6 +888,16 @@ try { $pdo->exec("ALTER TABLE process_notes ADD COLUMN created_by_id INT NULL");
 try { $pdo->exec("ALTER TABLE process_notes ADD COLUMN created_by VARCHAR(100) NULL"); } catch(Exception $e){}
 try { $pdo->exec("ALTER TABLE process_notes ADD COLUMN updated_by_id INT NULL"); } catch(Exception $e){}
 try { $pdo->exec("ALTER TABLE process_notes ADD COLUMN updated_by VARCHAR(100) NULL"); } catch(Exception $e){}
+// 備註「失效」：不刪除資料，只在前端列表隱藏；編輯製程內反灰唯讀，有編輯權限者可解除
+// （這一段在 MDM_MIGRATION_VERSION 版本鎖之內，改版時記得一併把版本號往上跳，否則不會執行）
+try { $pdo->exec("ALTER TABLE process_notes ADD COLUMN is_void TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=已失效，前端列表不顯示'"); } catch(Exception $e){}
+try { $pdo->exec("ALTER TABLE process_notes ADD COLUMN void_at DATETIME NULL COMMENT '設為失效的時間'"); } catch(Exception $e){}
+try { $pdo->exec("ALTER TABLE process_notes ADD COLUMN void_by_id INT NULL COMMENT '設為失效的人 user_id'"); } catch(Exception $e){}
+try { $pdo->exec("ALTER TABLE process_notes ADD COLUMN void_by VARCHAR(100) NULL COMMENT '設為失效的人 顯示名稱'"); } catch(Exception $e){}
+try { $pdo->exec("ALTER TABLE process_notes ADD COLUMN unvoid_at DATETIME NULL COMMENT '最近一次解除失效的時間'"); } catch(Exception $e){}
+try { $pdo->exec("ALTER TABLE process_notes ADD COLUMN unvoid_by_id INT NULL COMMENT '最近一次解除失效的人 user_id'"); } catch(Exception $e){}
+try { $pdo->exec("ALTER TABLE process_notes ADD COLUMN unvoid_by VARCHAR(100) NULL COMMENT '最近一次解除失效的人 顯示名稱'"); } catch(Exception $e){}
+try { $pdo->exec("ALTER TABLE process_notes ADD INDEX idx_void (is_void)"); } catch(Exception $e){}
 // 確保 design_notes 有 created_by_id/created_by/updated_by 欄位（舊表升級）
 try { $pdo->exec("ALTER TABLE design_notes ADD COLUMN created_by_id INT NULL"); } catch(Exception $e){}
 try { $pdo->exec("ALTER TABLE design_notes ADD COLUMN created_by VARCHAR(100) NULL"); } catch(Exception $e){}
@@ -5547,7 +5557,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         GROUP_CONCAT(ni.img_id    ORDER BY ni.img_id SEPARATOR '\t') AS img_ids
                      FROM process_notes n
                      LEFT JOIN note_images ni ON ni.note_id=n.note_id AND ni.note_type IN ('process_oper','process_design')
-                     WHERE n.note_type IN {$noteTypes}
+                     WHERE n.note_type IN {$noteTypes} AND n.is_void=0
                      GROUP BY n.note_id ORDER BY n.process_no_id, n.note_type, n.note_id";
             $nRows = $pdo->query($nSql)->fetchAll(PDO::FETCH_ASSOC);
             $nMap = [];
@@ -5604,7 +5614,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $imgStmt = $pdo->prepare("SELECT img_id, file_name, original_name FROM note_images WHERE note_id=? AND note_type=? ORDER BY sort_order,img_id");
             foreach ($note_types as $nt) {
                 $fetch_pno = isset($linkedTypes[$nt]) ? (int)$linkedTypes[$nt]['src_pno'] : $pno;
-                $stmt = $pdo->prepare("SELECT pn.note_id, pn.note_type, pn.note_text, pn.created_by, pn.created_by_id, pn.created_at, pn.updated_at, pn.updated_by, pn.updated_by_id FROM process_notes pn WHERE pn.process_no_id=? AND pn.note_type=? ORDER BY pn.created_at ASC");
+                // 已失效的備註在這裡仍要撈出來（編輯製程視窗要反灰顯示並讓有權限者解除），
+                // 只有前端列表（list_processes）才過濾掉
+                $stmt = $pdo->prepare("SELECT pn.note_id, pn.note_type, pn.note_text, pn.created_by, pn.created_by_id, pn.created_at, pn.updated_at, pn.updated_by, pn.updated_by_id,
+                                              pn.is_void, pn.void_at, pn.void_by, pn.void_by_id, pn.unvoid_at, pn.unvoid_by, pn.unvoid_by_id
+                                       FROM process_notes pn WHERE pn.process_no_id=? AND pn.note_type=? ORDER BY pn.is_void ASC, pn.created_at ASC");
                 $stmt->execute([$fetch_pno, $nt]);
                 $typeRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 foreach ($typeRows as &$r) {
@@ -5653,6 +5667,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 _log_audit($pdo,'insert','process','note:pno:'.$pno,$pn_tname,[['field'=>$ntLabel,'old'=>'','new'=>mb_strimwidth($text,0,120,'…')]],$uid,$op);
             }
             echo json_encode(['success'=>true,'note_id'=>$note_id]);
+        } catch(Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ── 設為失效／解除失效（備註不刪除，只在前端列表隱藏）──────────────────
+    if ($_POST['action'] === 'set_process_note_void') {
+        try {
+            // 前端只對有編輯權限者顯示按鈕，這裡一定要再擋一次（鐵律8）
+            if (!$can_proc_edit) throw new Exception('無備註編輯權限（需 A 或含D權限）');
+            $note_id = intval($_POST['note_id'] ?? 0);
+            $to_void = (string)($_POST['is_void'] ?? '') === '1';
+            if (!$note_id) throw new Exception('備註不可為空');
+            $vq = $pdo->prepare("SELECT note_id, process_no_id, note_type, note_text, is_void FROM process_notes WHERE note_id=?");
+            $vq->execute([$note_id]);
+            $vrow = $vq->fetch(PDO::FETCH_ASSOC);
+            if ($vrow === false) throw new Exception('找不到此備註');
+            // 技術備註才有失效機制；作業備註目前沒有這顆按鈕，直打 API 也擋下
+            if ($vrow['note_type'] !== 'design') throw new Exception('目前只有技術備註可以設為失效');
+            $cur_void = ((int)$vrow['is_void'] === 1);
+            // 點開即刷新（ai-rules/08 第六節）：畫面上的狀態若已被別人改過，擋下並要求重新整理
+            if ($cur_void === $to_void) {
+                throw new Exception($to_void ? '這筆備註已經是失效狀態了（畫面可能不是最新的，請重新整理）'
+                                             : '這筆備註目前不是失效狀態（畫面可能不是最新的，請重新整理）');
+            }
+            $op       = _get_operator($pdo, $uid);
+            $v_pno    = intval($vrow['process_no_id']);
+            $v_tname  = _target_display_name($pdo, 'process', (string)$v_pno);
+            if ($to_void) {
+                $pdo->prepare("UPDATE process_notes SET is_void=1, void_at=NOW(), void_by_id=?, void_by=? WHERE note_id=?")
+                    ->execute([$uid, $op, $note_id]);
+            } else {
+                // 解除時保留 void_* 讓畫面仍看得到「上次是誰設為失效」，另記這次是誰解開的
+                $pdo->prepare("UPDATE process_notes SET is_void=0, unvoid_at=NOW(), unvoid_by_id=?, unvoid_by=? WHERE note_id=?")
+                    ->execute([$uid, $op, $note_id]);
+            }
+            _log_audit($pdo, 'update', 'process', 'note:pno:'.$v_pno, $v_tname,
+                [['field'=>'技術備註', 'old'=>($to_void?'有效':'已失效'), 'new'=>($to_void?'已失效':'有效').'：'.mb_strimwidth((string)$vrow['note_text'],0,80,'…')]],
+                $uid, $op);
+            // 回傳最新狀態給前端直接套用，不必再打一次 API
+            $vq2 = $pdo->prepare("SELECT is_void, void_at, void_by, unvoid_at, unvoid_by FROM process_notes WHERE note_id=?");
+            $vq2->execute([$note_id]);
+            echo json_encode(['success'=>true,'note'=>$vq2->fetch(PDO::FETCH_ASSOC)]);
         } catch(Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
@@ -5726,7 +5782,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     }
                     $pdo->prepare("DELETE FROM process_notes WHERE process_no_id=? AND note_type=?")->execute([$dst_pno, $nt]);
                 }
-                $srcNotes = $pdo->prepare("SELECT note_id, note_text FROM process_notes WHERE process_no_id=? AND note_type=? ORDER BY created_at ASC");
+                // 已失效的備註不複製過去，否則失效內容會在別的製程重新變成有效的
+                $srcNotes = $pdo->prepare("SELECT note_id, note_text FROM process_notes WHERE process_no_id=? AND note_type=? AND is_void=0 ORDER BY created_at ASC");
                 $srcNotes->execute([$src_pno, $nt]);
                 $imgSrc = $pdo->prepare("SELECT file_name, original_name FROM note_images WHERE note_id=? AND note_type=? ORDER BY sort_order,img_id");
                 $imgIns = $pdo->prepare("INSERT INTO note_images (note_type,note_id,file_name,original_name,file_size,created_by_id) VALUES (?,?,?,?,?,?)");
@@ -5799,7 +5856,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $nas_dir = $_nas_dir;
                 $pdo->beginTransaction();
                 // Copy notes from src to dst
-                $srcNotes = $pdo->prepare("SELECT note_id, note_text FROM process_notes WHERE process_no_id=? AND note_type=? ORDER BY created_at ASC");
+                // 已失效的備註不複製過去，否則失效內容會在別的製程重新變成有效的
+                $srcNotes = $pdo->prepare("SELECT note_id, note_text FROM process_notes WHERE process_no_id=? AND note_type=? AND is_void=0 ORDER BY created_at ASC");
                 $srcNotes->execute([$src_pno, $nt]);
                 $imgSrc = $pdo->prepare("SELECT file_name, original_name FROM note_images WHERE note_id=? AND note_type=? ORDER BY sort_order,img_id");
                 $imgIns = $pdo->prepare("INSERT INTO note_images (note_type,note_id,file_name,original_name,file_size,created_by_id) VALUES (?,?,?,?,?,?)");
@@ -23536,11 +23594,22 @@ function _renderProcModalNoteList(wrapId, notes, pno, noteType, linksAsDst, link
     notes.forEach(function(n) {
         var imgNoteType = 'process_' + n.note_type;
         _noteCache[n.note_id] = { text: n.note_text||'', noteType: n.note_type, subjectType:'process', subjectId: pno, createdById: n.created_by_id };
-        var canEditThis = !isLocked;
-        html += '<div data-creator-id="' + (n.created_by_id||0) + '" style="background:#fff;border:1px solid ' + borderColor + ';border-radius:6px;padding:10px;margin-bottom:8px;' + (isLocked ? 'opacity:.88;' : '') + '">';
-        html += '<div style="font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;">' + escHtml(n.note_text||'') + '</div>';
+        // is_void 由 PDO 回傳可能是字串 '1' 也可能是數字 1，一律用 parseInt 比對（用 === 比字串會恆為 false）
+        var isVoid      = parseInt(n.is_void || 0, 10) === 1;
+        // 已失效＝整張卡片唯讀（不可編輯、不可刪、不可傳附件），只留「解除失效」
+        var canEditThis = !isLocked && !isVoid;
+        var cardBg      = isVoid ? '#f4f4f4' : '#fff';
+        var cardBorder  = isVoid ? '#d8d8d8' : borderColor;
+        html += '<div data-creator-id="' + (n.created_by_id||0) + '" style="background:' + cardBg + ';border:1px solid ' + cardBorder + ';border-radius:6px;padding:10px;margin-bottom:8px;' + (isVoid ? 'opacity:.72;' : (isLocked ? 'opacity:.88;' : '')) + '">';
+        if (isVoid) {
+            html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;">';
+            html += '<span class="pn-void-badge" style="font-size:10px;font-weight:600;background:#EDE3D5;color:#7a5a2e;border:1px solid #D9C4A6;border-radius:10px;padding:1px 8px;white-space:nowrap;"><i class="fa fa-ban" style="margin-right:3px;"></i>已失效</span>';
+            html += '<span style="font-size:11px;color:#8a7a63;">' + escHtml(n.void_by || '（不明）') + ' 於 ' + escHtml(_pnWhen(n.void_at)) + ' 設為失效</span>';
+            html += '</div>';
+        }
+        html += '<div style="font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;' + (isVoid ? 'color:#8c8c8c;text-decoration:line-through;text-decoration-color:#c9c9c9;' : '') + '">' + escHtml(n.note_text||'') + '</div>';
         if (n.images && n.images.length) {
-            html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">';
+            html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;' + (isVoid ? 'filter:grayscale(1);' : '') + '">';
             n.images.forEach(function(img) {
                 var url = NAS_URL_DIR + encodeURIComponent(img.file_name||'');
                 var delCall = 'deleteNoteImage(' + img.img_id + ',' + n.note_id + ',\'process\',' + pno + ')';
@@ -23548,11 +23617,24 @@ function _renderProcModalNoteList(wrapId, notes, pno, noteType, linksAsDst, link
             });
             html += '</div>';
         }
+        // 曾經被解除過失效就一直留著紀錄（使用者要求：解開也要留下誰、什麼時候）
+        if (n.unvoid_at) {
+            html += '<div style="margin-top:6px;font-size:11px;color:#8a7a63;"><i class="fa fa-undo" style="margin-right:3px;"></i>'
+                  + escHtml(n.unvoid_by || '（不明）') + ' 於 ' + escHtml(_pnWhen(n.unvoid_at)) + ' 解除失效</div>';
+        }
         html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:10px;color:#aaa;">';
         var _pnDispTime   = (n.updated_by && n.updated_at) ? escHtml(n.updated_at) : escHtml(n.created_at||'');
         var _pnDispPerson = n.updated_by ? ('<span style="color:#e67e22;">✎ '+escHtml(n.updated_by)+'</span>') : (n.created_by ? escHtml(n.created_by) : '');
         html += '<span>' + _pnDispTime + (_pnDispPerson ? ' &nbsp; ' + _pnDispPerson : '') + '</span>';
         html += '<div style="display:flex;gap:4px;">';
+        // 失效／解除失效：只有技術備註有，且連動來的（唯讀）不給改——要改請到來源製程
+        if (CAN_EDIT_DESIGN && noteType === 'design' && !isLocked) {
+            if (isVoid) {
+                html += '<button class="btn btn-xs btn-default" style="color:#7a5a2e;border-color:#D9C4A6;background:#FBF4E9;" onclick="_setProcNoteVoid(' + n.note_id + ',' + pno + ',0)" title="解除失效，恢復顯示在製程列表"><i class="fa fa-undo"></i> 解除失效</button>';
+            } else {
+                html += '<button class="btn btn-xs btn-default" style="color:#8a5a12;border-color:#E4D3BC;background:#FFF3E2;" onclick="_setProcNoteVoid(' + n.note_id + ',' + pno + ',1)" title="設為失效：內容保留，但不再顯示在製程列表"><i class="fa fa-ban"></i> 失效</button>';
+            }
+        }
         if (CAN_EDIT_DESIGN && canEditThis) {
             html += '<label class="btn btn-xs btn-default" style="margin:0;padding:1px 6px;cursor:pointer;" title="上傳附件"><i class="fa fa-paperclip"></i>';
             html += '<input type="file" accept="*" style="display:none;" onchange="uploadNoteImage(this,' + n.note_id + ',\'' + imgNoteType + '\',\'process\',' + pno + ')"></label>';
@@ -23562,6 +23644,30 @@ function _renderProcModalNoteList(wrapId, notes, pno, noteType, linksAsDst, link
         html += '</div></div></div>';
     });
     wrap.innerHTML = html;
+}
+
+// 失效／解除失效的時間顯示：日期走 ai-rules/20 的 YYYY.MM.DD，後面補時分（稽核用途需要看到幾點）
+function _pnWhen(dt) {
+    if (!dt) return '—';
+    var s = String(dt);
+    var d = (typeof egFmtDate === 'function') ? egFmtDate(s.substring(0,10)) : s.substring(0,10);
+    var t = s.length >= 16 ? s.substring(11,16) : '';
+    return t ? (d + ' ' + t) : d;
+}
+
+// 設為失效／解除失效（內容不刪除，只是不再顯示在製程列表）
+function _setProcNoteVoid(noteId, pno, toVoid) {
+    var msg = toVoid
+        ? '確定將這筆技術備註設為「失效」？\n\n・內容與附件都會保留，不會刪除\n・製程列表不再顯示這筆備註\n・編輯製程時仍看得到（反灰、不可編輯）\n・之後有編輯權限的人都可以解除失效'
+        : '確定「解除失效」？\n\n這筆技術備註會恢復顯示在製程列表，並記錄是您在此時解除的。';
+    if (!confirm(msg)) return;
+    $.post(SELF_URL, {action:'set_process_note_void', note_id:noteId, is_void:(toVoid?1:0)}, function(r) {
+        if (r.success) {
+            showToast(toVoid ? '已設為失效' : '已解除失效');
+            loadProcModalNotes(pno);   // 重新載入才會帶回最新的失效人／時間
+            loadProcessList();         // 列表要同步把它藏起來／放回來
+        } else showToast(r.message||'操作失敗','error');
+    });
 }
 
 function openProcNoteModal(noteType) {
