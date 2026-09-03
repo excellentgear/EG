@@ -282,6 +282,95 @@ function qtag_can_settings(PDO $pdo, $uid): bool
     } catch (Exception $e) { return false; }
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// 報價單快速轉移頁的「報價單號搜尋 → 修改料號／料號ID／製程標籤」（2026-09-03）
+//   其他 quick_* 動作一律只作用於 pending_review=1（尚待確認的匯入舊資料），
+//   這一組是刻意的例外：ERP 匯入的舊報價單轉正式之後才發現料號打錯／綁到別的料號主檔／
+//   製程標籤點錯時，原本只能到報價單管理頁一張一張改（那邊會走鎖定與簽核流程，補歷史資料很不順）。
+//   為了不變成「繞過主編輯頁的後門」，這組動作只開放三個欄位，並且：
+//     ・一律驗編輯權限（前端會反灰，後端同規則再擋一次＝鐵律8）
+//     ・一律寫進 quotation_change_log（誰、什麼時候、把什麼改成什麼），正式報價單的改動要追得到
+// ══════════════════════════════════════════════════════════════════════════
+
+// 編輯權限：與頁面 $canEdit、quick_autobind_quote 同一條規則
+// （尚無任何權限記錄時視為全員開放，這是本模組的既有慣例，不在這裡改變它）
+function qsedit_require_perm(PDO $pdo, int $uid): void
+{
+    $total = (int)$pdo->query("SELECT COUNT(*) FROM user_module_permissions WHERE module_code='quotation_list'")->fetchColumn();
+    if ($total <= 0) return;
+    $p = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='quotation_list' LIMIT 1");
+    $p->execute([$uid]);
+    $perm = (string)$p->fetchColumn();
+    if (strpos($perm, 'A') === false && strpos($perm, 'U') === false) throw new Exception('您沒有修改報價單的權限');
+}
+
+// 取項目＋所屬報價單（找不到就丟例外，四個動作共用同一份查詢與錯誤訊息）
+function qsedit_item_row(PDO $pdo, int $itemId): array
+{
+    $q = $pdo->prepare("SELECT qi.item_id, qi.quote_id, qi.product_id, qi.d_setting_d_id,
+                               ql.quote_no, ql.pending_review
+                        FROM quotation_item qi
+                        JOIN quotation_list ql ON ql.quote_id = qi.quote_id
+                        WHERE qi.item_id=?");
+    $q->execute([$itemId]);
+    $row = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$row) throw new Exception('找不到報價項目');
+    return $row;
+}
+
+// 變更紀錄：與報價單管理頁的編輯共用同一張 quotation_change_log，
+// 不另開一張「快速轉移頁專用」的紀錄表（同一張單的歷程分散在兩個地方就沒人查得到）
+function qsedit_log(PDO $pdo, int $quoteId, int $uid, string $summary, array $diff): void
+{
+    try {
+        $pdo->prepare("INSERT INTO quotation_change_log (quote_id,changed_by,changed_at,summary,diff_json) VALUES (?,?,NOW(),?,?)")
+            ->execute([$quoteId, $uid, mb_substr($summary, 0, 190), json_encode($diff, JSON_UNESCAPED_UNICODE)]);
+    } catch (Exception $e) {}
+}
+
+// 製程標籤寫入（唯一實作）：quick_set_item_process 與 qsedit_set_process 共用。
+// 兩邊各寫一份的話，「一定要連 process_notes 一起寫」這條規則遲早只會在其中一邊被遵守。
+function qsedit_write_process(PDO $pdo, int $itemId, string $processNos, string $subTagIds, string $groupTypeIn): ?string
+{
+    $pnos = array_filter(array_map('trim', explode(',', $processNos)), fn($v) => $v !== '' && is_numeric($v));
+
+    // process_notes 存的是「使用者實際點選的子標籤 id 清單」（逗號分隔），這是報價單管理頁
+    // 判定要顯示哪些製程標籤的唯一依據；quotation_item_process_map 只是攤平後的 process_no。
+    // 一定要一起寫：同一個 process_no 會同時屬於好幾個子標籤（例如 202 同時在
+    // 全製／齒研治具／滾齒治具／線割治具／插齒治具底下），光靠 process_no 反推不出點的是哪一個。
+    $subIds = array_values(array_unique(array_filter(
+        array_map('intval', explode(',', $subTagIds)),
+        fn($v) => $v > 0
+    )));
+    if ($subIds) {
+        $sph  = implode(',', array_fill(0, count($subIds), '?'));
+        $vchk = $pdo->prepare("SELECT sub_tag_id FROM quotation_process_sub_tag WHERE sub_tag_id IN ($sph) AND is_active=1");
+        $vchk->execute($subIds);
+        $valid  = array_map('intval', $vchk->fetchAll(PDO::FETCH_COLUMN));
+        $subIds = array_values(array_intersect($subIds, $valid));
+    }
+    $procNotes = $subIds ? implode(',', $subIds) : null;
+    $groupType = in_array($groupTypeIn, ['full_process','full_process_split','single_process'], true)
+        ? $groupTypeIn : (empty($pnos) ? 'single_process' : null);
+
+    $pdo->beginTransaction();
+    $pdo->prepare("DELETE FROM quotation_item_process_map WHERE quotation_item_id=?")->execute([$itemId]);
+    if (!empty($pnos)) {
+        $ins = $pdo->prepare("INSERT INTO quotation_item_process_map (quotation_item_id,process_no) VALUES (?,?)");
+        foreach ($pnos as $pno) $ins->execute([$itemId, $pno]);
+    }
+    if ($groupType !== null) {
+        $pdo->prepare("UPDATE quotation_item SET process_group_type=?, process_notes=?, updated_at=NOW() WHERE item_id=?")
+            ->execute([$groupType, $procNotes, $itemId]);
+    } else {
+        $pdo->prepare("UPDATE quotation_item SET process_notes=?, updated_at=NOW() WHERE item_id=?")
+            ->execute([$procNotes, $itemId]);
+    }
+    $pdo->commit();
+    return $procNotes;
+}
+
 // ──────────────────────────────────────────────────────────────
 // 製程標籤：整組移轉（把一批舊子標籤上的報價單項目全部改成同一個目標子標籤）
 // 唯一實作 —— 預覽（merge_process_tags_preview）與實際執行（merge_process_tags_apply）共用同一份規則，
@@ -1810,42 +1899,9 @@ try {
             $pr = $chk->fetchColumn();
             if ($pr === false) throw new Exception('找不到報價項目');
             if (!$pr) throw new Exception('此報價單已是正式資料，請至報價單管理頁編輯');
-            $pnos = array_filter(array_map('trim', explode(',', $_POST['process_nos'] ?? '')), fn($v) => $v !== '' && is_numeric($v));
-
-            // process_notes 存的是「使用者實際點選的子標籤 id 清單」（逗號分隔），這是報價單管理頁
-            // 判定要顯示哪些製程標籤的唯一依據；quotation_item_process_map 只是攤平後的 process_no。
-            // 一定要一起寫：同一個 process_no 會同時屬於好幾個子標籤（例如 202 同時在
-            // 全製／齒研治具／滾齒治具／線割治具／插齒治具底下），光靠 process_no 反推不出點的是哪一個，
-            // 沒寫的話報價單管理頁檢視畫面會空白、編輯畫面則會把所有含該 process_no 的子標籤全部點亮。
-            $subIds = array_values(array_unique(array_filter(
-                array_map('intval', explode(',', (string)($_POST['sub_tag_ids'] ?? ''))),
-                fn($v) => $v > 0
-            )));
-            if ($subIds) {
-                $sph  = implode(',', array_fill(0, count($subIds), '?'));
-                $vchk = $pdo->prepare("SELECT sub_tag_id FROM quotation_process_sub_tag WHERE sub_tag_id IN ($sph) AND is_active=1");
-                $vchk->execute($subIds);
-                $valid = array_map('intval', $vchk->fetchAll(PDO::FETCH_COLUMN));
-                $subIds = array_values(array_intersect($subIds, $valid));
-            }
-            $procNotes = $subIds ? implode(',', $subIds) : null;
-            // 比照 quotation_list_NEW.php 的製程標籤導覽：groupType 由前端依「最後點選的標籤所屬群組」帶入
-            $groupType = in_array($_POST['group_type'] ?? '', ['full_process','full_process_split','single_process'], true)
-                ? $_POST['group_type'] : (empty($pnos) ? 'single_process' : null);
-            $pdo->beginTransaction();
-            $pdo->prepare("DELETE FROM quotation_item_process_map WHERE quotation_item_id=?")->execute([$item_id]);
-            if (!empty($pnos)) {
-                $ins = $pdo->prepare("INSERT INTO quotation_item_process_map (quotation_item_id,process_no) VALUES (?,?)");
-                foreach ($pnos as $pno) $ins->execute([$item_id, $pno]);
-            }
-            if ($groupType !== null) {
-                $pdo->prepare("UPDATE quotation_item SET process_group_type=?, process_notes=?, updated_at=NOW() WHERE item_id=?")
-                    ->execute([$groupType, $procNotes, $item_id]);
-            } else {
-                $pdo->prepare("UPDATE quotation_item SET process_notes=?, updated_at=NOW() WHERE item_id=?")
-                    ->execute([$procNotes, $item_id]);
-            }
-            $pdo->commit();
+            // 寫入規則收在 qsedit_write_process()（唯一實作），與搜尋修改介面的 qsedit_set_process 共用
+            $procNotes = qsedit_write_process($pdo, $item_id, (string)($_POST['process_nos'] ?? ''),
+                                              (string)($_POST['sub_tag_ids'] ?? ''), (string)($_POST['group_type'] ?? ''));
             $response = ['success' => true, 'process_notes' => $procNotes];
             break;
         }
@@ -2169,6 +2225,137 @@ try {
             // 系統無法可靠回推「該歷史日期當時的業務主管」是誰（人員部門職位無歷史版本紀錄），
             // 與其虛構一個現在的主管簽在幾年前的日期上，不如誠實留空；也因此不會觸發「待核准」通知。
             $response = ['success' => true, 'updated' => $stmt->rowCount()];
+            break;
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // 報價單號搜尋 → 修改料號／料號ID／製程標籤（2026-09-03）
+        //   說明與設計理由見上方 qsedit_* 函式群的註解。
+        //   刻意不掛 pending_review 的限制：這一組就是為了修正「已經轉成正式」的匯入單而做的。
+        // ══════════════════════════════════════════════════════════════════
+
+        // 依報價單號搜尋（含已轉正式）。回傳每張單的待補件統計，讓畫面能標出還缺什麼。
+        case 'qsedit_search': {
+            $term = trim($_GET['term'] ?? $_POST['term'] ?? '');
+            if ($term === '') throw new Exception('請輸入報價單號');
+            // 全站搜尋鐵則：LIKE '%詞%'，不要用 ngram FULLTEXT（單號含「-」時片語比對會回 0 筆）
+            $stmt = $pdo->prepare("
+                SELECT ql.quote_id, ql.quote_no, ql.quote_date, ql.client_id, ql.client_name,
+                       ql.pending_review, ql.total_amount,
+                       COUNT(qi.item_id) AS item_count,
+                       SUM(qi.d_setting_d_id IS NULL) AS items_no_dsetting,
+                       SUM(NOT EXISTS (SELECT 1 FROM quotation_item_process_map m WHERE m.quotation_item_id = qi.item_id)
+                           AND (qi.process_notes IS NULL OR qi.process_notes = '')
+                           AND qi.note_only = 0) AS items_no_process
+                FROM quotation_list ql
+                LEFT JOIN quotation_item qi ON qi.quote_id = ql.quote_id
+                WHERE ql.quote_no LIKE ?
+                GROUP BY ql.quote_id
+                ORDER BY ql.quote_no DESC
+                LIMIT 50
+            ");
+            $stmt->execute(['%' . $term . '%']);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $response = ['success' => true, 'data' => $rows, 'truncated' => count($rows) >= 50];
+            break;
+        }
+
+        // 修改料號文字。已綁定料號ID的項目改了文字＝這一列指到的東西變了，舊的綁定一定是錯的，
+        // 所以一律自動解除綁定（使用者拍板），不留下「文字寫 A、實際綁到 B 的圖面與檢驗標準」這種看不出來的錯。
+        // 例外：改成的文字剛好等於主檔料號時代表只是把文字補正回一致，綁定保留。
+        case 'qsedit_set_partno': {
+            qsedit_require_perm($pdo, (int)$user_id);
+            $item_id = intval($_POST['item_id'] ?? 0);
+            $partNo  = trim($_POST['part_no'] ?? '');
+            if (!$item_id) throw new Exception('缺少項目');
+            if ($partNo === '') throw new Exception('料號不可為空白');
+            // 前端已用 maxlength 擋一次，後端同規則再擋（鐵律8）；欄位是 varchar(30)，超過會被 MySQL 靜默截斷
+            if (mb_strlen($partNo) > 30) throw new Exception('料號最多 30 個字（目前 ' . mb_strlen($partNo) . ' 個字）');
+
+            $row = qsedit_item_row($pdo, $item_id);
+            $old = (string)$row['product_id'];
+            if ($old === $partNo) { $response = ['success' => true, 'changed' => false, 'unbound' => false]; break; }
+
+            $unbind = false;
+            if ($row['d_setting_d_id']) {
+                $dq = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
+                $dq->execute([(int)$row['d_setting_d_id']]);
+                $masterNo = (string)$dq->fetchColumn();
+                $unbind = (strcasecmp(trim($masterNo), $partNo) !== 0);
+            }
+            if ($unbind) {
+                $pdo->prepare("UPDATE quotation_item SET product_id=?, d_setting_d_id=NULL, updated_at=NOW() WHERE item_id=?")
+                    ->execute([$partNo, $item_id]);
+            } else {
+                $pdo->prepare("UPDATE quotation_item SET product_id=?, updated_at=NOW() WHERE item_id=?")
+                    ->execute([$partNo, $item_id]);
+            }
+            $pdo->prepare("UPDATE quotation_list SET updated_by=?, updated_at=NOW() WHERE quote_id=?")
+                ->execute([$user_id, (int)$row['quote_id']]);
+            qsedit_log($pdo, (int)$row['quote_id'], (int)$user_id,
+                       '快速轉移頁修改料號：' . $old . ' → ' . $partNo . ($unbind ? '（已自動解除料號ID綁定）' : ''),
+                       ['item_id' => $item_id, 'field' => 'product_id', 'old' => $old, 'new' => $partNo,
+                        'unbound_d_id' => $unbind ? (int)$row['d_setting_d_id'] : null]);
+            $response = ['success' => true, 'changed' => true, 'unbound' => $unbind];
+            break;
+        }
+
+        // 綁定／解除綁定料號ID（d_id=0＝解除）。綁定時比照 quick_bind_item_dsetting 把料號文字
+        // 同步成主檔料號，兩者才不會分岔。
+        case 'qsedit_bind': {
+            qsedit_require_perm($pdo, (int)$user_id);
+            $item_id = intval($_POST['item_id'] ?? 0);
+            $d_id    = intval($_POST['d_id'] ?? 0);
+            if (!$item_id) throw new Exception('缺少項目');
+            $row = qsedit_item_row($pdo, $item_id);
+
+            if ($d_id <= 0) {
+                if (!$row['d_setting_d_id']) { $response = ['success' => true, 'changed' => false]; break; }
+                $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=NULL, updated_at=NOW() WHERE item_id=?")->execute([$item_id]);
+                $pdo->prepare("UPDATE quotation_list SET updated_by=?, updated_at=NOW() WHERE quote_id=?")
+                    ->execute([$user_id, (int)$row['quote_id']]);
+                qsedit_log($pdo, (int)$row['quote_id'], (int)$user_id,
+                           '快速轉移頁解除料號ID綁定：' . $row['product_id'],
+                           ['item_id' => $item_id, 'field' => 'd_setting_d_id', 'old' => (int)$row['d_setting_d_id'], 'new' => null]);
+                $response = ['success' => true, 'changed' => true, 'd_id' => null, 'product_id' => $row['product_id']];
+                break;
+            }
+
+            $dq = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
+            $dq->execute([$d_id]);
+            $tds = $dq->fetchColumn();
+            if ($tds === false) throw new Exception('找不到此料號ID');
+            $pdo->prepare("UPDATE quotation_item SET d_setting_d_id=?, product_id=?, updated_at=NOW() WHERE item_id=?")
+                ->execute([$d_id, $tds, $item_id]);
+            $pdo->prepare("UPDATE quotation_list SET updated_by=?, updated_at=NOW() WHERE quote_id=?")
+                ->execute([$user_id, (int)$row['quote_id']]);
+            qsedit_log($pdo, (int)$row['quote_id'], (int)$user_id,
+                       '快速轉移頁綁定料號ID：' . $row['product_id'] . ' → #' . $d_id . '（' . $tds . '）',
+                       ['item_id' => $item_id, 'field' => 'd_setting_d_id',
+                        'old' => $row['d_setting_d_id'] ? (int)$row['d_setting_d_id'] : null, 'new' => $d_id,
+                        'product_id_old' => (string)$row['product_id'], 'product_id_new' => (string)$tds]);
+            $response = ['success' => true, 'changed' => true, 'd_id' => $d_id, 'product_id' => $tds];
+            break;
+        }
+
+        // 修改製程標籤（寫入規則與 quick_set_item_process 共用同一支 qsedit_write_process）
+        case 'qsedit_set_process': {
+            qsedit_require_perm($pdo, (int)$user_id);
+            $item_id = intval($_POST['item_id'] ?? 0);
+            if (!$item_id) throw new Exception('缺少項目');
+            $row = qsedit_item_row($pdo, $item_id);
+            $oq = $pdo->prepare("SELECT process_notes FROM quotation_item WHERE item_id=?");
+            $oq->execute([$item_id]);
+            $oldNotes = $oq->fetchColumn();
+            $procNotes = qsedit_write_process($pdo, $item_id, (string)($_POST['process_nos'] ?? ''),
+                                              (string)($_POST['sub_tag_ids'] ?? ''), (string)($_POST['group_type'] ?? ''));
+            $pdo->prepare("UPDATE quotation_list SET updated_by=?, updated_at=NOW() WHERE quote_id=?")
+                ->execute([$user_id, (int)$row['quote_id']]);
+            qsedit_log($pdo, (int)$row['quote_id'], (int)$user_id,
+                       '快速轉移頁修改製程標籤：' . $row['product_id'],
+                       ['item_id' => $item_id, 'field' => 'process_notes',
+                        'old' => $oldNotes === false ? null : $oldNotes, 'new' => $procNotes]);
+            $response = ['success' => true, 'process_notes' => $procNotes];
             break;
         }
 

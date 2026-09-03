@@ -50,6 +50,26 @@ try {
         /* 標籤挑選是「從另一個跳窗裡再開一層」的（快速套用／偵測結果改標籤），
            跟其他跳窗同一個 z-index 就會被蓋在後面看不到 */
         #tagPickMask { z-index:1080; }
+        /* 快速綁定料號ID 是「從搜尋修改跳窗裡再開一層」的，跟其他跳窗同一層就會被蓋在後面看不到 */
+        #quickBindPartMask { z-index:1090; }
+        .qs-searchbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+        .qs-hit { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:6px 10px; border:1px solid #EADFC8;
+            border-radius:6px; margin-bottom:5px; background:#fff; cursor:pointer; font-size:12px; }
+        .qs-hit:hover { background:#FBF6EC; }
+        .qs-hit.on { background:#F7E0BD; border-color:#F0A24B; }
+        .qs-hit .qno { font-weight:700; color:#5b3a1e; }
+        .qs-head { background:#FBF6EC; border:1px solid #E4C293; border-radius:6px; padding:8px 10px; margin:8px 0;
+            display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:12px; color:#5b3a1e; }
+        .qs-head .qno { font-size:15px; font-weight:700; }
+        .qs-tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin-bottom:8px;
+            font-size:11px; color:#6B471A; }
+        table.qs-item-table { width:100%; border-collapse:collapse; font-size:12px; }
+        table.qs-item-table th { background:#F7F4EE; color:#5b3a1e; padding:5px 6px; border-bottom:2px solid #E4C293; text-align:left; }
+        table.qs-item-table td { padding:5px 6px; border-bottom:1px solid #F0E6D6; vertical-align:top; }
+        .qs-partno-in { width:100%; max-width:190px; }
+        .qs-partno-in.dirty { border-color:#F0A24B; background:#FFFDF6; }
+        .qs-err { color:#DD5138; font-size:11px; margin-top:2px; }
+        .qs-warn { color:#a2703a; font-size:11px; margin-top:2px; }
         /* 「套用到這裡為止」的指定模式：滑到哪一組/哪一列就標出來，點下去＝以那裡為界 */
         .pick-mode .kw-group-head, #qaRows.pick-mode tr { cursor:crosshair; }
         .pick-mode .kw-group-head:hover { background:#F7E0BD; box-shadow:inset 0 -3px 0 #DD5138; }
@@ -240,6 +260,18 @@ try {
                     <span style="color:#c0392b;">您沒有編輯權限，僅供檢視</span>
                 <?php endif; ?>
             </div>
+            <!-- 依報價單號搜尋：本頁其他功能都只作用於「尚待確認」的匯入單，
+                 這一列是唯一能碰到「已經轉成正式」報價單的入口（只開放料號／料號ID／製程標籤三項） -->
+            <div class="qt-bar">
+                <span class="qt-bar-label">搜尋</span>
+                <input type="text" id="qtQnoSearch" class="form-control input-sm" style="width:200px;display:inline-block;"
+                       maxlength="30" placeholder="報價單號（可只打一段）">
+                <button class="btn btn-default btn-sm" id="btnQnoSearch" style="border-color:#8a5a2b;color:#8a5a2b;"
+                        title="依報價單號搜尋（含已轉成正式的報價單），可修改料號、綁定的料號ID與製程標籤">
+                    <i class="fa fa-search"></i> 依單號搜尋修改（含已轉正式）
+                </button>
+                <span style="color:#a2703a;font-size:11px;">匯入的舊單轉正式之後才發現料號打錯、綁錯料號ID、製程標籤點錯時，在這裡改</span>
+            </div>
 
             <div id="qtCards"></div>
             <div class="qt-pagination" id="qtPagination"></div>
@@ -298,13 +330,24 @@ try {
         </ul>
         <h4>重要行為</h4>
         <ul>
-            <li>本頁的修改只作用在「尚待確認」的報價單，一旦轉入正式，請回報價單管理頁編輯（本頁會拒絕再次修改已正式的資料）。</li>
+            <li>本頁清單上的所有操作（批次設定製程、關鍵字偵測、一鍵綁定、轉正式…）都只作用在「尚待確認」的報價單。已轉入正式的單要修正<b>料號、綁定的料號ID、製程標籤</b>請用工具列的<b>「依單號搜尋修改」</b>（見下一節）；其餘欄位（數量、單價、客戶、備註）仍請回報價單管理頁編輯。</li>
             <li><b>為什麼料號ID與製程一定要補齊才能轉正</b>：料號ID(d_setting)是全系統判定「這筆報價屬於哪個料號」的唯一依據，沒綁定的話出貨統計、歷史單價、毛利分析都認不到這張報價單；製程則決定這筆報價的加工內容，沒設定的話報價單列印與後續轉訂單都看不出要做什麼。而且轉正之後這張單就不再出現在本頁，也無法再從這裡補，等於永久漏掉。因此兩項都是<b>強制擋下</b>，不是提示——後端同樣會擋，不能繞過畫面直接送出。</li>
             <li>綁定料號ID／設定製程／切換客戶都是<b>單張報價單/單筆項目</b>的修正，不會像料號管理頁的「移轉綁定」一樣影響全系統其他歷史資料。</li>
             <li>轉入正式時：若這張報價單本身沒有真實填表人資訊（ERP匯入本來就沒有這項資料），系統會自動標記為「業務公用」帳號製表；<b>核准欄位刻意留空不自動核准</b>——系統無法確認幾年前當時真正的業務主管是誰，與其虛構一筆假的核准紀錄，不如留白讓有需要的人自行判斷；也因此<b>不會</b>發送「待核准」通知給現在的主管。</li>
         </ul>
+        <h4>依單號搜尋修改（含已轉成正式的報價單）</h4>
+        <ul>
+            <li><b>什麼時候用</b>：匯入的舊報價單已經轉成正式之後，才發現<b>料號打錯</b>、<b>綁到別的料號ID</b>或<b>製程標籤點錯</b>。這是本頁唯一能碰到已轉正式報價單的入口。</li>
+            <li><b>怎麼用</b>：工具列「搜尋」列輸入<b>報價單號</b>（可只打一段，前後模糊比對）按 Enter 或按鈕；結果列會標示每張單是<b>已轉正式</b>還是<b>尚待確認</b>，點一列即開啟明細。<b>只找到一張時直接開啟</b>，不用再點一次。</li>
+            <li><b>只開放三個欄位</b>：料號、綁定的料號ID、製程標籤。規格、數量、單價、客戶、備註一律唯讀顯示（只是讓您認出是哪一列），要改請至報價單管理頁。</li>
+            <li><b>改料號文字會自動解除料號ID綁定</b>：料號一改就代表這一列指到的東西變了，原本綁的那筆料號主檔（圖面、檢驗標準）一定是錯的，所以系統會一併解除綁定並提醒您重新綁定——避免留下「料號寫 A、實際綁到 B」這種畫面上完全看不出來的錯。<b>例外</b>：改成的文字剛好與目前綁定的主檔料號相同（只是把文字補正回一致，大小寫不同也算），綁定會保留。動手前會先跳出確認視窗告訴您綁定將被解除。</li>
+            <li><b>綁定／解除</b>：「綁定／重新綁定」開的是跟清單上同一個快速綁定跳窗（可搜尋、找不到可新建料號）；已綁定的列另有紅色「解除」鈕。綁定時料號文字會自動同步成主檔的料號，兩者不會分岔。</li>
+            <li><b>製程標籤</b>：跟清單上同一套標籤選擇器（先選大類再點子標籤，點一下即存檔）。已轉正式的單不提供「帶入備註」——那是轉入前用來補齊製程的手段。</li>
+            <li><b>每一次修改都會寫進該報價單的變更紀錄</b>（誰、什麼時候、把什麼改成什麼），正式報價單的改動都追得到。</li>
+            <li>尚待確認的單也可以用這個入口找、一樣改得動，改的與清單上是同一份資料（兩邊同時開著會一起更新）。</li>
+        </ul>
         <h4>權限</h4>
-        <p>沿用報價單管理頁權限（module: quotation_list），需要 U（修改）或 A（管理）權限才能編輯，僅檢閱者唯讀。</p>
+        <p>沿用報價單管理頁權限（module: quotation_list），需要 U（修改）或 A（管理）權限才能編輯，僅檢閱者唯讀。「依單號搜尋修改」同樣需要 U 或 A，沒有權限時只能檢視、後端也會擋下（不是只擋畫面）。</p>
     </div>
     <div class="m-foot"><button class="btn btn-warning" onclick="closeMask('helpUseMask')">我知道了</button></div>
 </div></div>
@@ -625,6 +668,22 @@ try {
         <button class="btn btn-default" onclick="closeMask('batchBindMask')">不用了</button>
         <button class="btn btn-primary" onclick="confirmBatchBind()"><i class="fa fa-check"></i> 一併綁定已勾選項目</button>
     </div>
+</div></div>
+
+<!-- 依報價單號搜尋 → 修改料號／綁定的料號ID／製程標籤（含已轉成正式的報價單） -->
+<div class="va-mask" id="qsEditMask"><div class="va-modal wide" style="max-width:1180px;">
+    <div class="m-head"><span><i class="fa fa-search"></i> 依單號搜尋修改　料號／料號ID／製程標籤</span><span class="m-close" onclick="closeQsEdit()">✕</span></div>
+    <div class="m-body">
+        <div class="qs-searchbar">
+            <input type="text" id="qsTerm" class="form-control input-sm" style="width:220px;display:inline-block;"
+                   maxlength="30" placeholder="報價單號（可只打一段）">
+            <button class="btn btn-warning btn-sm" id="qsSearchBtn"><i class="fa fa-search"></i> 搜尋</button>
+            <span id="qsSearchMsg" style="font-size:12px;color:#8a5a2b;"></span>
+        </div>
+        <div id="qsResults"></div>
+        <div id="qsDetail"></div>
+    </div>
+    <div class="m-foot"><button class="btn btn-default" onclick="closeQsEdit()">關閉</button></div>
 </div></div>
 
 <script src="../../resource/js/jquery.min.js"></script>
@@ -952,6 +1011,26 @@ function findQuoteIdByItemId(itemId) {
     return qid;
 }
 
+// 製程標籤的編輯狀態（目前展開的群組＋已選子標籤）初始化。
+// 唯一實作：主清單的卡片（drawItems）與「依單號搜尋修改」跳窗（qsDrawItems）共用，
+// 兩邊各寫一份的話「有 process_notes 就以它為準」這條規則遲早只會在其中一邊被遵守。
+function ensureProcState(it) {
+    if (qtProcState[it.item_id]) return;
+    const procIds = (it.processes || '').split(',').filter(function(v){ return v !== ''; });
+    // process_notes 就是當初實際點選的子標籤 id 清單，有存就以它為準；
+    // 沒有（舊資料）才退回由 process_no 反推——但那是多對多、推不準的，
+    // 會把所有含該 process_no 的子標籤全部點亮，只能當沒有更好資訊時的猜測。
+    const savedSubIds = String(it.process_notes || '').split(',')
+        .map(function(v){ return parseInt(v, 10); })
+        .filter(function(v){ return !isNaN(v) && v > 0; });
+    const selected = savedSubIds.length ? savedSubIds : inferSubTagsFromProcessIds(procIds);
+    let activeGid = processTagTree.length ? processTagTree[0].group_id : null;
+    for (const g of processTagTree) {
+        if ((g.sub_tags || []).some(st => selected.includes(st.sub_tag_id))) { activeGid = g.group_id; break; }
+    }
+    qtProcState[it.item_id] = { activeGid: activeGid, selected: selected };
+}
+
 function drawItems(qid, allItems) {
     const row = qtData.find(function(r){ return String(r.quote_id) === String(qid); });
     // 勾了「只看未綁定料號ID的項目」時，卡片裡也只列還沒綁的那幾列，
@@ -962,21 +1041,7 @@ function drawItems(qid, allItems) {
     let html = '<table class="qt-item-table"><thead><tr><th>料號</th><th>規格</th><th>數量</th><th>單價</th><th style="width:170px;">料號ID綁定</th><th style="min-width:260px;">製程</th></tr></thead><tbody>';
     items.forEach(function(it, idx) {
         const boundText = it.d_setting_d_id ? ('<span class="qt-badge ok">已綁定 #' + it.d_setting_d_id + '</span>') : '<span class="qt-badge warn">未綁定</span>';
-        const procIds = (it.processes || '').split(',').filter(function(v){return v!=='';});
-        if (!qtProcState[it.item_id]) {
-            // process_notes 就是當初實際點選的子標籤 id 清單，有存就以它為準；
-            // 沒有（舊資料）才退回由 process_no 反推——但那是多對多、推不準的，
-            // 會把所有含該 process_no 的子標籤全部點亮，只能當沒有更好資訊時的猜測。
-            const savedSubIds = String(it.process_notes || '').split(',')
-                .map(function(v){ return parseInt(v, 10); })
-                .filter(function(v){ return !isNaN(v) && v > 0; });
-            const selected = savedSubIds.length ? savedSubIds : inferSubTagsFromProcessIds(procIds);
-            let activeGid = processTagTree.length ? processTagTree[0].group_id : null;
-            for (const g of processTagTree) {
-                if ((g.sub_tags || []).some(st => selected.includes(st.sub_tag_id))) { activeGid = g.group_id; break; }
-            }
-            qtProcState[it.item_id] = { activeGid: activeGid, selected: selected };
-        }
+        ensureProcState(it);
         const prevItemId = idx > 0 ? items[idx - 1].item_id : null;
         html += '<tr data-item="' + it.item_id + '">' +
             '<td>' + partLinkHtml(it.product_id, it.d_setting_d_id) + '</td>' +
@@ -989,6 +1054,9 @@ function drawItems(qid, allItems) {
     });
     html += '</tbody></table>';
     $('#qtCardBody' + qid).html(html);
+    // 「依單號搜尋修改」跳窗正在看同一張單時一起重畫：套用到本單全部／帶入備註這些既有動作
+    // 都是呼叫 drawItems 收尾的，不接這一行的話跳窗裡的內容會停在改動前的樣子（而且不會報錯）
+    if (qsQuoteId !== null && String(qsQuoteId) === String(qid)) qsDrawItems();
 }
 
 // 點料號開圖面：走既有的料號圖面查閱頁（views/pm/part_viewer.php），不在本頁另刻一套預覽。
@@ -1071,10 +1139,14 @@ function renderProcWidget(itemId, prevItemId, totalInQuote) {
         toolbar += '</div>';
     }
     // 沒有對應製程標籤的項目（例如「半月型六角口模 線割對半」）走這顆：規格文字帶進報價單備註欄，
-    // 該列改以備註表示，也算補齊了製程、可以轉入正式報價單
-    toolbar += '<div style="font-size:10px;margin-bottom:2px;"><a href="javascript:void(0)" ' +
-               'title="把這一筆的規格文字帶進整張報價單的備註欄，本列改以備註表示" ' +
-               'onclick="setItemNoteOnly(' + itemId + ',true)"><i class="fa fa-comment-o"></i> 帶入備註</a></div>';
+    // 該列改以備註表示，也算補齊了製程、可以轉入正式報價單。
+    // 已轉正式的單不給這一顆：它是「轉入前的補齊手段」，而且後端 quick_set_item_note_only
+    // 一律擋下正式報價單，留著只會是一顆按了就跳錯誤訊息的死按鈕。
+    if (!qsIsFormalItem(itemId)) {
+        toolbar += '<div style="font-size:10px;margin-bottom:2px;"><a href="javascript:void(0)" ' +
+                   'title="把這一筆的規格文字帶進整張報價單的備註欄，本列改以備註表示" ' +
+                   'onclick="setItemNoteOnly(' + itemId + ',true)"><i class="fa fa-comment-o"></i> 帶入備註</a></div>';
+    }
 
     let l1 = '<div class="qt-proc-l1">';
     processTagTree.forEach(function(g) {
@@ -1184,7 +1256,10 @@ function saveItemProcess(itemId) {
     // sub_tag_ids 一定要送：報價單管理頁是靠 process_notes（子標籤 id 清單）決定顯示哪些製程標籤的，
     // 只送攤平後的 process_no 會讓那邊的檢視畫面空白、編輯畫面點亮一堆不相干的標籤
     const subIdsStr = state.selected.join(',');
-    $.post(API_URL, { action: 'quick_set_item_process', item_id: itemId, process_nos: [...procIds].join(','), group_type: groupType, sub_tag_ids: subIdsStr }, function(res) {
+    // 已轉正式的報價單走 qsedit_set_process（會驗權限並留變更紀錄）；
+    // quick_set_item_process 一律擋下正式報價單，用錯的話畫面會跳「此報價單已是正式資料」
+    const act = qsIsFormalItem(itemId) ? 'qsedit_set_process' : 'quick_set_item_process';
+    $.post(API_URL, { action: act, item_id: itemId, process_nos: [...procIds].join(','), group_type: groupType, sub_tag_ids: subIdsStr }, function(res) {
         if (!res.success) { qtNotify('設定製程失敗：' + res.message, 'err'); return; }
         Object.keys(qtItemsCache).forEach(function(qid) {
             qtItemsCache[qid].forEach(function(it) {
@@ -1325,7 +1400,9 @@ function submitQbpNewPart() {
 function saveQuickBindPart() {
     if (!qbpSelectedPart) return;
     const boundItemId = qbpItemId, boundDId = qbpSelectedPart.d_id, boundProductText = qbpOrigProductText, boundClientId = qbpClientId;
-    $.post(API_URL, { action: 'quick_bind_item_dsetting', item_id: boundItemId, d_id: boundDId }, function(res) {
+    // 已轉正式的報價單走 qsedit_bind（驗權限＋留變更紀錄）；quick_bind_item_dsetting 一律擋下正式報價單
+    const isFormal = qsIsFormalItem(boundItemId);
+    $.post(API_URL, { action: isFormal ? 'qsedit_bind' : 'quick_bind_item_dsetting', item_id: boundItemId, d_id: boundDId }, function(res) {
         if (!res.success) { qtNotify('綁定失敗：' + res.message, 'err'); return; }
         const dSettingId = res.product_id || qbpSelectedPart.D_Setting_Id;
         Object.keys(qtItemsCache).forEach(function(qid) {
@@ -1333,9 +1410,12 @@ function saveQuickBindPart() {
         });
         closeMask('quickBindPartMask');
         const qid = findQuoteIdByItemId(boundItemId);
-        if (qid) drawItems(qid, qtItemsCache[qid]);
+        if (qid) drawItems(qid, qtItemsCache[qid]);   // 跳窗開著同一張單時 drawItems 會順帶重畫跳窗
         refreshStatsOnly(boundItemId);
-        checkBatchBindCandidates(boundProductText, boundClientId, boundDId, dSettingId, boundItemId);
+        // 「同料號的其他項目要不要一併綁定」只找 pending_review=1 的項目，
+        // 從正式報價單這條路徑進來時一定是 0 筆，跳過不必多打一次 API
+        if (!isFormal) checkBatchBindCandidates(boundProductText, boundClientId, boundDId, dSettingId, boundItemId);
+        else qtNotify('已綁定料號ID #' + boundDId + '（' + dSettingId + '）', 'ok');
     });
 }
 
@@ -2916,6 +2996,267 @@ $('#btnTransferReady').on('click', function() {
 $(document).on('click', function(e) {
     if (!$(e.target).closest('.qt-search-box').length) $('.qt-search-results').hide();
 });
+
+// ════════════════════════════════════════════════════════════════════════
+// 依報價單號搜尋 → 修改料號／綁定的料號ID／製程標籤（2026-09-03）
+//   本頁其他功能一律只作用於 pending_review=1（尚待確認的匯入單）；這個跳窗是唯一能碰到
+//   「已經轉成正式」報價單的入口，而且只開放三個欄位（使用者拍板），後端走另一組 qsedit_* 動作，
+//   會驗編輯權限並把每一次改動寫進 quotation_change_log。
+//   刻意把項目放進 qtItemsCache／qtProcState：製程標籤選擇器（renderProcWidget／redrawProcCell／
+//   saveItemProcess）就能整套沿用，不必為了跳窗再刻第二份製程 UI（鐵律4）。
+// ════════════════════════════════════════════════════════════════════════
+let qsQuoteId = null;          // 跳窗目前開著的報價單（null＝沒開）
+let qsQuoteRow = null;         // 該報價單的表頭資料
+let qsFormalQuotes = {};       // quote_id => true（已轉正式的單，寫入要走 qsedit_* 動作）
+let qsHits = [];
+
+// 這一筆項目屬不屬於「已轉正式」的報價單。saveItemProcess／saveQuickBindPart 靠它決定要打哪一支 API，
+// 打錯的話後端會回「此報價單已是正式資料，請至報價單管理頁編輯」。
+function qsIsFormalItem(itemId) {
+    const qid = findQuoteIdByItemId(itemId);
+    return !!(qid && qsFormalQuotes[qid]);
+}
+
+function openQsEdit(term) {
+    qsQuoteId = null; qsQuoteRow = null; qsHits = [];
+    $('#qsResults').empty();
+    $('#qsDetail').empty();
+    $('#qsSearchMsg').text('');
+    $('#qsTerm').val(term || '');
+    openMask('qsEditMask');
+    if (String(term || '').trim() !== '') qsDoSearch();
+    else setTimeout(function(){ $('#qsTerm').focus(); }, 50);
+}
+
+function closeQsEdit() {
+    closeMask('qsEditMask');
+    qsQuoteId = null; qsQuoteRow = null;
+}
+
+function qsDoSearch() {
+    const term = $('#qsTerm').val().trim();
+    if (!term) { $('#qsSearchMsg').html('<span style="color:#DD5138;">請輸入報價單號</span>'); $('#qsTerm').focus(); return; }
+    $('#qsSearchMsg').html('<i class="fa fa-spinner fa-spin"></i> 搜尋中…');
+    $('#qsResults').empty(); $('#qsDetail').empty(); qsQuoteId = null;
+    $.get(API_URL, { action: 'qsedit_search', term: term }, function(res) {
+        if (!res.success) { $('#qsSearchMsg').html('<span style="color:#DD5138;">搜尋失敗：' + escapeQt(res.message || '') + '</span>'); return; }
+        qsHits = res.data || [];
+        if (!qsHits.length) {
+            $('#qsSearchMsg').html('<span style="color:#DD5138;">找不到單號含「' + escapeQt(term) + '」的報價單</span>');
+            return;
+        }
+        $('#qsSearchMsg').text('找到 ' + qsHits.length + ' 張' + (res.truncated ? '（只顯示前 50 張，請再多打幾碼）' : ''));
+        // 只有一張時直接開，不用再點一次（單號多半是整串貼進來的）
+        if (qsHits.length === 1) { qsRenderHits(qsHits[0].quote_id); qsOpenQuote(qsHits[0].quote_id); }
+        else qsRenderHits(null);
+    });
+}
+
+function qsRenderHits(activeId) {
+    let html = '';
+    qsHits.forEach(function(r) {
+        const noDs = Number(r.items_no_dsetting) || 0, noPc = Number(r.items_no_process) || 0, cnt = Number(r.item_count) || 0;
+        html += '<div class="qs-hit' + (String(activeId) === String(r.quote_id) ? ' on' : '') + '" data-qid="' + r.quote_id + '">' +
+            '<span class="qno">' + escapeQt(r.quote_no) + '</span>' +
+            '<span>' + fmtDate(r.quote_date) + '</span>' +
+            '<span>客戶：' + escapeQt(r.client_name || '（未設定）') + (r.client_id ? ' <small style="color:#aaa">(' + escapeQt(r.client_id) + ')</small>' : '') + '</span>' +
+            '<span>項目 ' + cnt + ' 筆</span>' +
+            (Number(r.pending_review) === 1
+                ? '<span class="qt-badge warn">尚待確認</span>'
+                : '<span class="qt-badge ok">已轉正式</span>') +
+            (noDs > 0 ? '<span class="qt-badge warn">料號ID缺 ' + noDs + '</span>' : '') +
+            (noPc > 0 ? '<span class="qt-badge warn">製程缺 ' + noPc + '</span>' : '') +
+            '<span style="margin-left:auto;color:#8a5a2b;">開啟修改 <i class="fa fa-angle-right"></i></span>' +
+            '</div>';
+    });
+    $('#qsResults').html(html);
+}
+$(document).on('click', '.qs-hit', function() { qsOpenQuote($(this).data('qid')); });
+
+function qsOpenQuote(qid) {
+    qsQuoteId = qid;
+    qsRenderHits(qid);
+    const hit = qsHits.find(function(r){ return String(r.quote_id) === String(qid); });
+    qsFormalQuotes[qid] = hit ? (Number(hit.pending_review) !== 1) : false;
+    $('#qsDetail').html('<div style="padding:14px;color:#999;"><i class="fa fa-spinner fa-spin"></i> 載入項目中…</div>');
+    // get_detail 不分 pending_review，正式與待確認的單都拿得到，不必另做一支載入用的 action
+    $.get(API_URL, { action: 'get_detail', quote_id: qid }, function(res) {
+        if (!res.success) { $('#qsDetail').html('<div style="color:#DD5138;padding:10px;">載入失敗：' + escapeQt(res.message || '') + '</div>'); return; }
+        qsQuoteRow = res.data;
+        qsFormalQuotes[qid] = Number(res.data.pending_review) !== 1;
+        qtItemsCache[qid] = res.data.items || [];
+        qsDrawItems();
+    });
+}
+
+function qsDrawItems() {
+    if (qsQuoteId === null) return;
+    const items = qtItemsCache[qsQuoteId];
+    // 清單重抓時 qtItemsCache 會被整個清空（loadPendingList），跳窗還開著就會沒東西可畫；
+    // 這裡自己補抓一次，不要留一個空白跳窗讓人以為資料不見了
+    if (!items) { qsOpenQuote(qsQuoteId); return; }
+    const r = qsQuoteRow || {};
+    const isFormal = !!qsFormalQuotes[qsQuoteId];
+
+    let html = '<div class="qs-head">' +
+        '<span class="qno">' + escapeQt(r.quote_no || '') + '</span>' +
+        '<span>' + fmtDate(r.quote_date) + '</span>' +
+        '<span>客戶：' + escapeQt(r.client_name || '（未設定）') + (r.client_id ? ' <small style="color:#aaa">(' + escapeQt(r.client_id) + ')</small>' : '') + '</span>' +
+        '<span>項目 ' + items.length + ' 筆</span>' +
+        (isFormal ? '<span class="qt-badge ok">已轉正式</span>' : '<span class="qt-badge warn">尚待確認</span>') +
+        '</div>';
+
+    html += '<div class="qs-tip">' +
+        (isFormal
+            ? '這是<b>已經轉成正式</b>的報價單，本畫面只開放修改<b>料號</b>、<b>綁定的料號ID</b>與<b>製程標籤</b>三項，其餘欄位請至報價單管理頁編輯。每一次修改都會記進該報價單的變更紀錄。'
+            : '這張單還在「尚待確認」清單裡，本畫面的修改與清單上的操作是同一份資料。') +
+        '　改了<b>料號文字</b>而它跟原本綁定的料號主檔不一樣時，<b>會自動解除料號ID綁定</b>並要求重新綁定（避免留下「料號寫 A、實際綁到 B 的圖面與檢驗標準」這種看不出來的錯）。</div>';
+
+    if (!CAN_EDIT) html += '<div class="qs-err" style="margin-bottom:6px;">您沒有編輯權限，以下僅供檢視。</div>';
+
+    html += '<table class="qs-item-table"><thead><tr>' +
+        '<th style="width:40px;">#</th>' +
+        '<th style="width:230px;">料號</th>' +
+        '<th>規格</th>' +
+        '<th style="width:60px;">數量</th>' +
+        '<th style="width:70px;">單價</th>' +
+        '<th style="width:190px;">料號ID綁定</th>' +
+        '<th style="min-width:260px;">製程標籤</th>' +
+        '</tr></thead><tbody>';
+
+    items.forEach(function(it, idx) {
+        ensureProcState(it);
+        const prevItemId = idx > 0 ? items[idx - 1].item_id : null;
+        html += '<tr data-item="' + it.item_id + '">' +
+            '<td>' + (idx + 1) + '</td>' +
+            '<td>' + qsPartNoCell(it) + '</td>' +
+            '<td>' + escapeQt(it.specification || '') + '</td>' +
+            '<td>' + escapeQt(it.quantity) + '</td>' +
+            '<td>' + escapeQt(it.unit_price) + '</td>' +
+            '<td>' + qsBindCell(it) + '</td>' +
+            '<td>' + (CAN_EDIT ? renderProcWidget(it.item_id, prevItemId, items.length) : qsProcReadOnly(it)) + '</td>' +
+            '</tr>';
+    });
+    html += '</tbody></table>';
+    $('#qsDetail').html(html);
+}
+
+// 料號欄：文字框＋儲存。原文放在 data-orig，改過才讓儲存鈕亮起來（避免整表被無意義地重存一輪）
+function qsPartNoCell(it) {
+    const txt = String(it.product_id == null ? '' : it.product_id);
+    if (!CAN_EDIT) return partLinkHtml(txt, it.d_setting_d_id);
+    return '<div>' +
+        '<input type="text" class="form-control input-sm qs-partno-in" maxlength="30" ' +
+               'data-item="' + it.item_id + '" data-orig="' + escapeQt(txt) + '" value="' + escapeQt(txt) + '">' +
+        '<div style="margin-top:3px;">' +
+            '<button type="button" class="btn btn-primary btn-xs qs-partno-save" data-item="' + it.item_id + '" disabled>' +
+                '<i class="fa fa-save"></i> 儲存料號</button> ' +
+            partLinkHtml(txt, it.d_setting_d_id) +
+        '</div>' +
+        '<div class="qs-err" data-err="' + it.item_id + '"></div>' +
+        '</div>';
+}
+
+function qsBindCell(it) {
+    let html = it.d_setting_d_id
+        ? '<span class="qt-badge ok">已綁定 #' + it.d_setting_d_id + '</span>'
+        : '<span class="qt-badge warn">未綁定</span>';
+    if (!CAN_EDIT) return html;
+    const cid = qsQuoteRow ? (qsQuoteRow.client_id || '') : '';
+    const cname = qsQuoteRow ? (qsQuoteRow.client_name || '') : '';
+    html += '<div style="margin-top:3px;">' +
+        '<button type="button" class="btn btn-default btn-xs" ' +
+            'onclick="openQuickBindPart(' + it.item_id + ',\'' + String(it.product_id).replace(/'/g, '') + '\',\'' + String(cid).replace(/'/g, '') + '\',\'' + String(cname).replace(/'/g, '') + '\')">' +
+            '<i class="fa fa-link"></i> ' + (it.d_setting_d_id ? '重新綁定' : '綁定') + '</button>';
+    if (it.d_setting_d_id) {
+        html += ' <button type="button" class="btn btn-default btn-xs qs-unbind" data-item="' + it.item_id + '" ' +
+                'style="border-color:#DD5138;color:#DD5138;"><i class="fa fa-chain-broken"></i> 解除</button>';
+    }
+    html += '</div>';
+    return html;
+}
+
+// 沒有編輯權限時的製程顯示（純文字，不給選擇器）
+function qsProcReadOnly(it) {
+    const st = qtProcState[it.item_id];
+    if (!st || !st.selected.length) return '<span style="color:#999;">（未設定）</span>';
+    return st.selected.map(function(sid) {
+        let nm = String(sid);
+        processTagTree.forEach(function(g){ (g.sub_tags || []).forEach(function(s){ if (s.sub_tag_id === sid) nm = s.sub_tag_name; }); });
+        return '<span class="qt-proc-chip done">' + escapeQt(nm) + '</span>';
+    }).join('');
+}
+
+// 即時驗證：空白／超過 30 字（欄位是 varchar(30)，超過會被 MySQL 靜默截斷）當場說明原因，
+// 後端 qsedit_set_partno 以同一規則再擋一次（鐵律8）
+function qsValidatePartNo(itemId) {
+    const $in = $('.qs-partno-in[data-item="' + itemId + '"]');
+    const val = $in.val().trim(), orig = String($in.attr('data-orig'));
+    const $err = $('.qs-err[data-err="' + itemId + '"]');
+    const $btn = $('.qs-partno-save[data-item="' + itemId + '"]');
+    let msg = '';
+    if (val === '') msg = '料號不可為空白';
+    else if (val.length > 30) msg = '料號最多 30 個字（目前 ' + val.length + ' 個字）';
+    $err.text(msg);
+    $in.toggleClass('dirty', val !== orig).css('border-color', msg ? '#DD5138' : '');
+    $btn.prop('disabled', !!msg || val === orig);
+    return !msg;
+}
+$(document).on('input', '.qs-partno-in', function() { qsValidatePartNo($(this).data('item')); });
+$(document).on('keydown', '.qs-partno-in', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); qsSavePartNo($(this).data('item')); }
+});
+$(document).on('click', '.qs-partno-save', function() { qsSavePartNo($(this).data('item')); });
+
+function qsSavePartNo(itemId) {
+    if (!qsValidatePartNo(itemId)) return;
+    const $in = $('.qs-partno-in[data-item="' + itemId + '"]');
+    const val = $in.val().trim(), orig = String($in.attr('data-orig'));
+    if (val === orig) return;
+    const it = findItemById(itemId);
+    // 已綁定的列改文字＝這一列指到的東西變了，後端會自動解除綁定；先講清楚再做，不要事後才發現綁定不見了
+    if (it && it.d_setting_d_id &&
+        !confirm('料號要由「' + orig + '」改成「' + val + '」。\n\n' +
+                 '這一列目前綁定料號ID #' + it.d_setting_d_id + '，改了之後綁定會自動解除，需要重新綁定。\n\n確定要修改嗎？')) return;
+    const $btn = $('.qs-partno-save[data-item="' + itemId + '"]').prop('disabled', true);
+    $.post(API_URL, { action: 'qsedit_set_partno', item_id: itemId, part_no: val }, function(res) {
+        $btn.prop('disabled', false);
+        if (!res.success) { $('.qs-err[data-err="' + itemId + '"]').text(res.message || '儲存失敗'); return; }
+        Object.keys(qtItemsCache).forEach(function(qid) {
+            (qtItemsCache[qid] || []).forEach(function(x) {
+                if (String(x.item_id) === String(itemId)) { x.product_id = val; if (res.unbound) x.d_setting_d_id = null; }
+            });
+        });
+        const qid = findQuoteIdByItemId(itemId);
+        if (qid) drawItems(qid, qtItemsCache[qid]);   // 主清單也開著同一張單時一起更新
+        qsDrawItems();
+        refreshStatsOnly(itemId);
+        showQtToast(res.unbound ? '料號已修改，原料號ID綁定已解除，請重新綁定' : '料號已修改');
+    });
+}
+
+$(document).on('click', '.qs-unbind', function() {
+    const itemId = $(this).data('item');
+    const it = findItemById(itemId);
+    if (!it || !it.d_setting_d_id) return;
+    if (!confirm('要解除「' + it.product_id + '」目前綁定的料號ID #' + it.d_setting_d_id + ' 嗎？\n\n解除後這一筆就查不到對應的料號主檔（圖面、檢驗標準）。')) return;
+    $.post(API_URL, { action: 'qsedit_bind', item_id: itemId, d_id: 0 }, function(res) {
+        if (!res.success) { qtNotify('解除綁定失敗：' + res.message, 'err'); return; }
+        Object.keys(qtItemsCache).forEach(function(qid) {
+            (qtItemsCache[qid] || []).forEach(function(x) { if (String(x.item_id) === String(itemId)) x.d_setting_d_id = null; });
+        });
+        const qid = findQuoteIdByItemId(itemId);
+        if (qid) drawItems(qid, qtItemsCache[qid]);
+        qsDrawItems();
+        refreshStatsOnly(itemId);
+        showQtToast('已解除料號ID綁定');
+    });
+});
+
+$('#qsSearchBtn').on('click', qsDoSearch);
+$('#qsTerm').on('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); qsDoSearch(); } });
+$('#btnQnoSearch').on('click', function() { openQsEdit($('#qtQnoSearch').val()); });
+$('#qtQnoSearch').on('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); openQsEdit($(this).val()); } });
 
 loadProcessTagTree(function() { loadPendingList(); });
 </script>
