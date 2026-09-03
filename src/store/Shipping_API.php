@@ -12,6 +12,7 @@ require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/shipping_lib.php';
+include_once $document_root . '/EGsystem/src/common/trace_chain_lib.php';   // 追溯鏈（報價→訂單→製令→出貨→退貨）
 
 function sq_out(array $a) { header('Content-Type: application/json; charset=utf-8'); echo json_encode(array_merge(['ok' => true], $a), JSON_UNESCAPED_UNICODE); exit; }
 function sq_err(string $m, int $c = 400) { header('Content-Type: application/json; charset=utf-8'); http_response_code($c); echo json_encode(['ok' => false, 'error' => $m], JSON_UNESCAPED_UNICODE); exit; }
@@ -187,6 +188,52 @@ case 'match_apply': {
     $pairs = json_decode($_POST['pairs'] ?? '[]', true);
     if (!is_array($pairs) || !$pairs) sq_err('沒有要回填的資料');
     sq_out(sq_match_apply($db, $pairs, (string)$uid));
+}
+
+/* ── 追溯鏈：某客戶底下有資料的料號 ──────────────────────────────────── */
+case 'chain_parts': {
+    $src = $_POST ?: $_GET;
+    $cli = trim((string)($src['client'] ?? ''));
+    if ($cli === '') sq_err('請先選擇客戶');
+    sq_out(['parts' => tc_parts($db, $cli)]);
+}
+
+/* ── 追溯鏈：載入一支料號的五個泳道與所有對應 ────────────────────────── */
+case 'chain_load': {
+    $src = $_POST ?: $_GET;
+    $r = tc_chain($db, [
+        'd_id'       => (int)($src['d_id'] ?? 0),
+        'client'     => trim((string)($src['client'] ?? '')),
+        'date_from'  => trim((string)($src['date_from'] ?? '')),
+        'date_to'    => trim((string)($src['date_to'] ?? '')),
+        'order'      => (($src['order'] ?? 'new') === 'old') ? 'old' : 'new',
+        'limit'      => (int)($src['limit'] ?? TC_LANE_LIMIT),
+        'all_client' => !empty($src['all_client']),
+    ]);
+    if (!empty($r['error'])) sq_err($r['error']);
+    $r['can_link'] = (bool)$perms['canAdmin'];
+    sq_out($r);
+}
+
+/* ── 追溯鏈：建立／解除一條對應（拖放綁定）──────────────────────────── */
+case 'chain_link':
+case 'chain_unlink': {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') sq_err('必須用 POST', 405);
+    if (!$perms['canAdmin']) sq_err('僅出貨管理員可建立或解除對應', 403);
+    if (!sq_csrf_ok($_POST['csrf'] ?? '')) sq_err('CSRF 驗證失敗，請重新整理頁面');
+
+    $type = trim((string)($_POST['type'] ?? ''));
+    $from = (string)($_POST['from_id'] ?? '');   // 製令的 id 是編號字串，不可一律轉 int
+    $to   = (string)($_POST['to_id'] ?? '');
+    $sk   = trim((string)($_POST['src_kind'] ?? ''));
+    if ($type === '' || $from === '' || $to === '') sq_err('缺少對應的來源或目標');
+
+    $u = ['id' => $uid, 'user_id' => $uid, 'user_cname' => $uname];
+    $r = ($action === 'chain_link')
+        ? tc_link($db, $type, $from, $to, (int)($_POST['qty'] ?? 0), $u, $sk)
+        : tc_unlink($db, $type, $from, $to, $u, $sk);
+    if (empty($r['success'])) sq_err($r['message'] ?? '操作失敗');
+    sq_out($r);
 }
 
 default:

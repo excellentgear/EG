@@ -145,6 +145,53 @@ table.sq-t tbody tr.dim{background:#F4EEE3 !important;color:#a2916f;}
 table.sq-t tbody tr.dim b{color:#a2916f;}
 .mt-manual{background:#8A5A2B;color:#fff;}
 .mt-note{font-size:12px;color:#8a6d45;}
+
+/* ── 追溯對照（報價→訂單→製令→出貨→退貨）──────────────────────────
+   五個泳道並排，每張卡片用「分段長條」表示自己的數量被分給了誰各多少。
+   顏色一律取自固定暖色盤（ai-rules/10），依對方卡片在該泳道的序號取色，
+   不用隨機／HSL——同一張單在任何地方都是同一個顏色，滑上去才對得起來。 */
+.sq-modal.xwide{width:1360px;}
+.tc-lanes{display:flex;gap:8px;align-items:flex-start;}
+.tc-lane{flex:1 1 0;min-width:0;background:#FFFCF6;border:1px solid var(--sq-line);border-radius:6px;
+  display:flex;flex-direction:column;}
+.tc-lane-h{background:var(--sq-normal);color:var(--sq-ink);font-weight:bold;font-size:13px;
+  padding:5px 8px;border-radius:5px 5px 0 0;display:flex;align-items:center;gap:6px;}
+.tc-lane-h span{margin-left:auto;font-weight:normal;font-size:11.5px;color:#8a6d45;}
+.tc-lane-b{padding:6px;overflow-y:auto;overflow-x:hidden;max-height:52vh;min-height:120px;}
+.tc-lane.tc-drop{outline:2px dashed var(--sq-acc);outline-offset:-3px;}
+
+.tc-card{background:#fff;border:1px solid #EADFC8;border-left-width:4px;border-radius:5px;
+  padding:5px 7px;margin-bottom:6px;font-size:12px;color:var(--sq-ink);cursor:grab;}
+.tc-card:last-child{margin-bottom:0;}
+.tc-card.tc-dim{opacity:.22;}
+.tc-card.tc-hi{box-shadow:0 0 0 2px var(--sq-acc);}
+.tc-card.tc-drag{opacity:.45;}
+.tc-card.tc-over{background:#FCEBD2;box-shadow:0 0 0 2px var(--sq-acc);}
+.tc-card.tc-closed{background:#FAF6EE;}
+.tc-c-h{display:flex;align-items:center;gap:4px;}
+.tc-c-h b{font-size:12.5px;}
+.tc-grip{cursor:grab;color:#c7b192;font-size:12px;letter-spacing:-1px;user-select:none;}
+.tc-grip:hover{color:var(--sq-acc);}
+.tc-date{margin-left:auto;color:#8a6d45;font-size:11px;}
+.tc-c-q{color:#6b4522;margin:1px 0 2px;}
+.tc-c-q i{font-style:normal;color:#8a6d45;}
+.tc-tag{display:inline-block;padding:0 5px;border-radius:8px;font-size:10.5px;line-height:15px;
+  background:#EFE6D6;color:#8a6d45;margin-left:3px;}
+.tc-tag.warn{background:var(--sq-super);color:#fff;}
+
+.tc-bar-row{display:flex;align-items:center;gap:4px;margin-top:2px;}
+.tc-bl{width:26px;flex:0 0 26px;color:#8a6d45;font-size:10.5px;}
+.tc-bar{flex:1 1 auto;height:11px;background:#F1E7D6;border-radius:3px;overflow:hidden;display:flex;}
+.tc-seg{height:100%;display:block;cursor:pointer;border-right:1px solid rgba(255,255,255,.65);}
+.tc-seg:last-child{border-right:0;}
+.tc-seg.tc-seg-free{background:#F1E7D6;cursor:default;}
+.tc-seg.tc-seg-over{background:var(--sq-super) !important;}
+.tc-bn{flex:0 0 auto;font-size:10.5px;color:#8a6d45;min-width:52px;text-align:right;}
+.tc-bn.over{color:var(--sq-super);font-weight:bold;}
+.tc-empty{padding:14px;color:#8a6d45;font-size:12.5px;text-align:center;}
+.tc-legend{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:#5b3a1e;align-items:center;}
+.tc-legend i{font-style:normal;display:inline-block;width:11px;height:11px;border-radius:2px;
+  vertical-align:-1px;margin-right:3px;}
 .sq-modal .m-head{background:var(--sq-normal);color:var(--sq-ink);padding:9px 14px;font-weight:bold;
   border-radius:8px 8px 0 0;display:flex;align-items:center;}
 .sq-modal .m-close{margin-left:auto;cursor:pointer;font-size:17px;}
@@ -206,6 +253,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
       <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
       <button id="btnPdf"><i class="fa fa-file-pdf-o"></i> 匯出PDF／列印</button>
       <button id="btnRecent"><i class="fa fa-history"></i> 近期出貨單</button>
+      <button id="btnChain"><i class="fa fa-sitemap"></i> 追溯對照</button>
       <?php if ($perms['canAdmin']): ?>
       <button id="btnMatch"><i class="fa fa-link"></i> 舊資料訂單回填</button>
       <?php endif; ?>
@@ -372,6 +420,67 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
 </div></div>
 <?php endif; ?>
 
+<!-- 追溯對照：報價單 → 訂單 → 製令 → 出貨單 → 退貨單 →(重出)出貨單 -->
+<div class="sq-mask" id="mkChain"><div class="sq-modal xwide">
+  <div class="m-head"><i class="fa fa-sitemap"></i>&nbsp;追溯對照
+    <span style="font-weight:normal;font-size:12.5px;margin-left:8px;">報價單 → 訂單 → 製令 → 出貨單 → 退貨單 →(重出)出貨單</span>
+    <span class="m-close" data-close="mkChain">✕</span></div>
+  <div class="m-body">
+    <div class="sq-bar">
+      <label>客戶</label>
+      <select id="tcClient" style="width:190px;" data-eg-filter="輸入客戶簡稱篩選…" data-eg-filter-reset><option value="">請選擇客戶</option></select>
+      <label>料號</label>
+      <select id="tcPart" style="width:230px;" data-eg-filter="輸入料號篩選…" data-eg-filter-reset><option value="">請先選客戶</option></select>
+      <label>日期</label>
+      <input type="date" id="tcFrom" style="width:145px;"> ~ <input type="date" id="tcTo" style="width:145px;">
+      <select id="tcOrder" style="width:120px;">
+        <option value="new">日期新→舊</option><option value="old">日期舊→新</option>
+      </select>
+      <label title="各表的客戶簡稱寫法可能不一致，勾起來就只用料號查"><input type="checkbox" id="tcAllCli"> 不限客戶</label>
+      <button id="btnTcGo" class="btn-warm"><i class="fa fa-search"></i> 載入</button>
+    </div>
+    <div class="sq-bar" style="background:#FFF7E8;">
+      <div class="tc-legend">
+        <b>怎麼用：</b>
+        <span>拖<b>卡片本體</b>到別欄的卡片＝建立對應（會問你分配數量）</span>
+        <span>拖左上角 <b class="tc-grip">⠿</b> ＝在同一欄調整順序，方便並排比對</span>
+        <span>滑到卡片上＝把相關的單據一起打亮</span>
+        <span>點<b>彩色長條</b>＝改分配量或解除</span>
+      </div>
+    </div>
+    <div class="sq-bar" style="background:#FBF3E4;">
+      <span id="tcInfo" style="font-size:13px;color:#5b3a1e;">請先選客戶與料號，再按「載入」。</span>
+      <span class="mt-note" style="margin-left:auto;">長條的顏色＝對方那張單的顏色；尾端<i style="display:inline-block;width:11px;height:11px;background:#F1E7D6;border-radius:2px;vertical-align:-1px;"></i>灰色＝還沒分配的量</span>
+    </div>
+    <div id="tcLanes" class="tc-lanes"><div class="tc-empty" style="width:100%;">尚未載入資料。</div></div>
+  </div>
+  <div class="m-foot">
+    <span id="tcFoot" style="float:left;color:#5b3a1e;font-size:12.5px;line-height:32px;"></span>
+    <button id="btnTcMore">每欄多載 100 筆</button>
+    <button data-close="mkChain">關閉</button>
+  </div>
+</div></div>
+
+<!-- 分配數量（第三層，開在追溯對照之上）-->
+<div class="sq-mask lv2" id="mkTcQty"><div class="sq-modal narrow">
+  <div class="m-head"><i class="fa fa-exchange"></i>&nbsp;<span id="tqTitle">建立對應</span>
+    <span class="m-close" data-close="mkTcQty">✕</span></div>
+  <div class="m-body" style="font-size:13px;color:#5b3a1e;">
+    <div id="tqInfo" style="background:#FFF7E8;border:1px solid #EADFC8;border-radius:5px;padding:8px 12px;margin-bottom:10px;"></div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="margin:0;">分配數量</label>
+      <input type="number" id="tqQty" class="qty-in" style="width:110px;" min="1">
+      <span id="tqHint" class="mt-note"></span>
+    </div>
+    <div id="tqErr" style="color:#DD5138;font-size:12.5px;margin-top:6px;"></div>
+  </div>
+  <div class="m-foot">
+    <button id="btnTqDel" style="float:left;color:#DD5138;border-color:#E8B8AC;">解除這條對應</button>
+    <button data-close="mkTcQty">取消</button>
+    <button class="go" id="btnTqOk"><i class="fa fa-check"></i> 確定</button>
+  </div>
+</div></div>
+
 <!-- 角色說明 -->
 <div class="sq-mask" id="mkRole"><div class="sq-modal narrow">
   <div class="m-head">角色權限說明<span class="m-close" data-close="mkRole">✕</span></div>
@@ -392,6 +501,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?: time() ?>"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?: time() ?>"></script>
 <script>
 /* 左側欄：版型預設 #sidebar-menu 為 visibility:hidden，需在 ready 後手動恢復，
    否則整個左側選單不會出現（漏掉這段是本頁第一版側欄消失的原因）。 */
@@ -425,6 +535,11 @@ function np(n){ var v=Number(n)||0; return String(parseFloat(v.toFixed(4))); }
 function toast(m, bad){
   var $m=$('#msg').removeClass('ok bad').addClass(bad?'bad':'ok').html(m).stop(true,true).fadeIn(150);
   clearTimeout($m.data('t')); $m.data('t', setTimeout(function(){ $m.fadeOut(400); }, bad?6500:3800));
+}
+/* 顯示用日期一律 YYYY.MM.DD（ai-rules/20）；共用檔萬一沒載到也不要整段 JS 掛掉 */
+function dispDate(d){
+  if(d==null||d==='') return '';
+  return (typeof egFmtDate==='function') ? egFmtDate(d) : String(d);
 }
 function openMask(id){ $('#'+id).addClass('show'); }
 function closeMask(id){ $('#'+id).removeClass('show'); }
@@ -463,6 +578,14 @@ function init(){
     (r.clients||[]).forEach(function(c){
       h+='<option value="'+esc(c.customer_id)+'">'+esc(c.name)+'（'+c.cnt+'）</option>'; });
     $('#clientSel').html(h);
+    // 追溯對照的客戶下拉用「客戶簡稱」當值（各單據表都是以簡稱歸戶）
+    var h2='<option value="">請選擇客戶</option>';
+    (r.clients||[]).forEach(function(c){
+      h2+='<option value="'+esc(c.name)+'">'+esc(c.name)+'（'+c.cnt+'）</option>'; });
+    $('#tcClient').html(h2);
+    var y=new Date(r.today); y.setFullYear(y.getFullYear()-1);
+    $('#tcFrom').val(y.toISOString().slice(0,10));
+    $('#tcTo').val(r.today);
     bindInputRules($(document));
     load();
   }).fail(function(){ toast('無法連線到出貨 API', true); });
@@ -1143,6 +1266,341 @@ if(CAN_ADMIN){
     });
   });
 }
+
+
+/* ══════════════════════════════════════════════════════════
+ * 追溯對照：報價單 → 訂單 → 製令 → 出貨單 → 退貨單 →(重出)出貨單
+ *
+ * 為什麼要畫成「分段長條」而不是列文字：這幾種單據彼此是多對多而且會拆分數量
+ * （一張製令分給 6 張訂單、一張出貨單分屬多張訂單都真的存在），
+ * 只印文字看不出「這張單的量分給了誰各多少、還剩多少沒分配」。
+ * ══════════════════════════════════════════════════════════ */
+/* 固定暖色盤（ai-rules/10）：顏色代表「對方那張單」，同一張單在任何地方都同色，
+   絕不用隨機或 HSL 上色，否則兩次重畫顏色就對不起來了。 */
+var TC_COLORS = ['#F0A24B','#DD5138','#C77B30','#E8B04B','#B5651D','#D98E5A',
+                 '#A9552B','#E5A06B','#C9963F','#8A5A2B','#EFC07A','#B07A4A'];
+var TC_KINDS  = ['quote','order','bom','ship','ret'];
+/* 每種卡片要畫哪幾條長條：side='a' 代表這張卡是連結的來源端，'b' 代表目標端 */
+var TC_BARS = {
+  quote: [{lab:'訂單', type:'quote_order', side:'a'}],
+  order: [{lab:'製令', type:'order_bom',   side:'a'},
+          {lab:'出貨', type:'order_ship',  side:'a'},
+          {lab:'退貨', type:'ship_return', side:'a'}],
+  bom:   [{lab:'訂單', type:'order_bom',   side:'b'},
+          {lab:'出貨', type:'bom_ship',    side:'a'}],
+  ship:  [{lab:'訂單', type:'order_ship',  side:'b'},
+          {lab:'製令', type:'bom_ship',    side:'b'},
+          {lab:'退貨', type:'ship_return', side:'a'}],
+  ret:   [{lab:'來源', type:'ship_return', side:'b'},
+          {lab:'重出', type:'return_ship', side:'a'}]
+};
+/* 兩種卡片之間可以建立哪一種連結（順向逆向都認，與後端 tc_link_types() 同一份規則） */
+var TC_PAIRS = {
+  'quote|order':['quote_order','quote'], 'order|bom':['order_bom','order'],
+  'order|ship':['order_ship','order'],   'bom|ship':['bom_ship','bom'],
+  'ship|ret':['ship_return','ship'],     'order|ret':['ship_return','order'],
+  'ret|ship':['return_ship','ret']
+};
+var TC = {data:null, nodes:{}, linksBy:{}, canLink:false, limit:100,
+          dragKey:'', dragMode:'', gripDown:false, cur:null, orderMemo:{}};
+
+function tcPair(k1,k2){
+  // ship↔ret 有兩種可能（出貨→退貨、退貨→重出出貨），依拖曳方向決定
+  if(k1==='ship'&&k2==='ret') return ['ship_return','ship'];
+  if(k1==='ret'&&k2==='ship') return ['return_ship','ret'];
+  return TC_PAIRS[k1+'|'+k2] || TC_PAIRS[k2+'|'+k1] || null;
+}
+
+$('#btnChain').on('click',function(){ openMask('mkChain'); });
+
+/* 選了客戶就去撈該客戶底下有資料的料號 */
+$('#tcClient').on('change',function(){
+  var c=$(this).val()||'';
+  if(!c){ $('#tcPart').html('<option value="">請先選客戶</option>'); return; }
+  $('#tcPart').html('<option value="">載入中…</option>');
+  $.post(API+'?action=chain_parts',{client:c},function(r){
+    if(!r.ok){ toast(esc(r.error||'讀取料號失敗'), true); return; }
+    var h='<option value="">請選擇料號</option>';
+    (r.parts||[]).forEach(function(p){
+      h+='<option value="'+p.d_id+'">'+esc(p.part_no)+'（'+nf(p.cnt)+'）</option>'; });
+    $('#tcPart').html(h);
+  },'json').fail(function(){ toast('讀取料號失敗', true); });
+});
+
+$('#btnTcGo').on('click',function(){ TC.limit=100; tcLoad(); });
+$('#btnTcMore').on('click',function(){ TC.limit+=100; tcLoad(); });
+$('#tcOrder').on('change',function(){ if(TC.data) tcLoad(); });
+$('#tcAllCli').on('change',function(){ if(TC.data) tcLoad(); });
+
+function tcLoad(){
+  var did=$('#tcPart').val()||0;
+  if(!did){ toast('請先選擇客戶與料號', true); return; }
+  tcMemoOrder();
+  $('#tcLanes').html('<div class="tc-empty" style="width:100%;">載入中…</div>');
+  $.post(API+'?action=chain_load',{
+    d_id:did, client:$('#tcClient').val()||'', date_from:$('#tcFrom').val()||'',
+    date_to:$('#tcTo').val()||'', order:$('#tcOrder').val()||'new',
+    limit:TC.limit, all_client:$('#tcAllCli').is(':checked')?1:0
+  },function(r){
+    if(!r.ok){ toast(esc(r.error||'載入失敗'), true);
+      $('#tcLanes').html('<div class="tc-empty" style="width:100%;">載入失敗。</div>'); return; }
+    TC.data=r; TC.canLink=!!r.can_link;
+    tcIndex(); tcRender();
+  },'json').fail(function(){ toast('載入失敗', true); });
+}
+
+/* 把節點與連結建成索引：每張卡片一個穩定顏色（依它在自己泳道的序號取色） */
+function tcIndex(){
+  TC.nodes={}; TC.linksBy={};
+  TC_KINDS.forEach(function(k){
+    var L=TC.data.lanes[k]; if(!L) return;
+    L.rows.forEach(function(n,i){
+      n.key=k+':'+n.id; n.color=TC_COLORS[i%TC_COLORS.length]; n.idx=i;
+      TC.nodes[n.key]=n;
+    });
+  });
+  (TC.data.links||[]).forEach(function(l){
+    (TC.linksBy[l.a]=TC.linksBy[l.a]||[]).push(l);
+    (TC.linksBy[l.b]=TC.linksBy[l.b]||[]).push(l);
+  });
+}
+
+/* 重新載入前先記住每一欄目前被拖成什麼順序，載完照樣排回去 */
+function tcMemoOrder(){
+  TC_KINDS.forEach(function(k){
+    var a=[];
+    $('#tcLanes .tc-lane[data-kind="'+k+'"] .tc-card').each(function(){ a.push($(this).data('key')); });
+    if(a.length) TC.orderMemo[k]=a;
+  });
+}
+function tcApplyMemo(){
+  TC_KINDS.forEach(function(k){
+    var memo=TC.orderMemo[k]; if(!memo||!memo.length) return;
+    var $b=$('#tcLanes .tc-lane[data-kind="'+k+'"] .tc-lane-b');
+    memo.forEach(function(key){
+      var $c=$b.find('.tc-card[data-key="'+key.replace(/"/g,'')+'"]');
+      if($c.length) $b.append($c);          // 依記憶的順序逐一搬到最後＝還原順序
+    });
+  });
+}
+
+function tcRender(){
+  var d=TC.data, h='';
+  TC_KINDS.forEach(function(k){
+    var L=d.lanes[k];
+    h+='<div class="tc-lane" data-kind="'+k+'"><div class="tc-lane-h">'+esc(L.name)
+      +'<span>'+(L.total>L.rows.length ? '顯示 '+nf(L.rows.length)+' / 共 '+nf(L.total)
+                                       : '共 '+nf(L.total))+'</span></div><div class="tc-lane-b">';
+    if(!L.rows.length) h+='<div class="tc-empty">沒有資料</div>';
+    L.rows.forEach(function(n){ h+=tcCard(n,k); });
+    h+='</div></div>';
+  });
+  $('#tcLanes').html(h);
+  tcApplyMemo();
+  var p=d.part||{};
+  $('#tcInfo').html('料號 <b>'+esc(p.part_no||'')+'</b>'
+    +(p.client?'　客戶 <b>'+esc(p.client)+'</b>':'')
+    +'　每欄上限 '+nf(d.limit)+' 筆'
+    +(TC.canLink?'':'　<span style="color:#DD5138;">（你沒有建立對應的權限，僅可檢視）</span>'));
+  var tot=0; TC_KINDS.forEach(function(k){ tot+=d.lanes[k].total; });
+  $('#tcFoot').text('五欄合計 '+nf(tot)+' 筆，已建立對應 '+nf((d.links||[]).length)+' 條');
+}
+
+function tcCard(n,kind){
+  var h='<div class="tc-card'+(n.closed?' tc-closed':'')+'" data-key="'+n.key+'" data-kind="'+kind
+      +'" draggable="true" style="border-left-color:'+n.color+';">'
+    +'<div class="tc-c-h"><span class="tc-grip" title="拖這裡可調整這一欄的順序">⠿</span>'
+    +'<b>'+esc(n.no||'—')+'</b><span class="tc-date">'+esc(dispDate(n.date))+'</span></div>'
+    +'<div class="tc-c-q">數量 <b>'+nf(n.qty)+'</b>'
+    +(n.price?'　<i>單價 '+np(n.price)+'</i>':'')
+    +(n.closed?'<span class="tc-tag">已結案</span>':'')
+    +(n.part?'<span class="tc-tag">'+esc(n.part)+'</span>':'')
+    +'</div>';
+  (TC_BARS[kind]||[]).forEach(function(sp){ h+=tcBarRow(n,sp); });
+  return h+'</div>';
+}
+
+function tcBarRow(n,sp){
+  var ls=(TC.linksBy[n.key]||[]).filter(function(l){
+    return l.type===sp.type && (sp.side==='a' ? l.a===n.key : l.b===n.key); });
+  var sum=0; ls.forEach(function(l){ sum+=l.qty; });
+  var base=Math.max(n.qty||0, sum) || 1;
+  var over=(n.qty>0 && sum>n.qty);
+  var bar='';
+  ls.forEach(function(l){
+    var other=TC.nodes[sp.side==='a'?l.b:l.a];
+    var col=other?other.color:'#C7B192';
+    bar+='<i class="tc-seg" style="width:'+(l.qty/base*100)+'%;background:'+col+';"'
+      +' data-link="'+l.type+'|'+l.a+'|'+l.b+'"'
+      +' title="'+esc((other?other.no:'（未載入的單據）')+'　'+nf(l.qty)
+        +(l.src==='legacy'?'（來自舊欄位）':'')+'　點一下可改分配量或解除')+'"></i>';
+  });
+  if(sum<base) bar+='<i class="tc-seg tc-seg-free" style="width:'+((base-sum)/base*100)+'%;"></i>';
+  return '<div class="tc-bar-row"><span class="tc-bl">'+sp.lab+'</span>'
+    +'<div class="tc-bar">'+bar+'</div>'
+    +'<span class="tc-bn'+(over?' over':'')+'">'+nf(sum)+'/'+nf(n.qty)+'</span></div>';
+}
+
+/* ── 滑過卡片：把相關單據一起打亮，其餘變淡 ─────────────── */
+$(document).on('mouseenter','#tcLanes .tc-card',function(){
+  var key=$(this).data('key'), rel={};
+  rel[key]=1;
+  (TC.linksBy[key]||[]).forEach(function(l){ rel[l.a]=1; rel[l.b]=1; });
+  $('#tcLanes .tc-card').each(function(){
+    var k=$(this).data('key');
+    $(this).toggleClass('tc-hi', !!rel[k]).toggleClass('tc-dim', !rel[k]);
+  });
+  $('#tcLanes .tc-seg[data-link]').each(function(){
+    var p=String($(this).attr('data-link')).split('|');
+    $(this).toggleClass('tc-seg-over', p[1]===key||p[2]===key);
+  });
+}).on('mouseleave','#tcLanes .tc-card',function(){
+  $('#tcLanes .tc-card').removeClass('tc-hi tc-dim');
+  $('#tcLanes .tc-seg').removeClass('tc-seg-over');
+});
+
+/* ── 拖曳：抓 ⠿＝同欄調順序，抓卡片本體＝跨欄建立對應 ───── */
+$(document).on('mousedown','#tcLanes .tc-grip',function(){ TC.gripDown=true; });
+$(document).on('mouseup','#tcLanes',function(){ setTimeout(function(){ TC.gripDown=false; },0); });
+
+$(document).on('dragstart','#tcLanes .tc-card',function(e){
+  TC.dragKey=$(this).data('key');
+  TC.dragMode=TC.gripDown?'reorder':'link';
+  $(this).addClass('tc-drag');
+  try{ e.originalEvent.dataTransfer.setData('text/plain',TC.dragKey);
+       e.originalEvent.dataTransfer.effectAllowed='move'; }catch(err){}
+});
+$(document).on('dragend','#tcLanes .tc-card',function(){
+  $('#tcLanes .tc-card').removeClass('tc-drag tc-over');
+  $('#tcLanes .tc-lane').removeClass('tc-drop');
+  TC.dragKey=''; TC.dragMode=''; TC.gripDown=false;
+});
+$(document).on('dragover','#tcLanes .tc-card',function(e){
+  if(!TC.dragKey) return;
+  var src=TC.nodes[TC.dragKey], dst=TC.nodes[$(this).data('key')];
+  if(!src||!dst||src.key===dst.key) return;
+  if(TC.dragMode==='reorder'){
+    if($(this).data('kind')!==$('#tcLanes .tc-card[data-key="'+TC.dragKey+'"]').data('kind')) return;
+    e.preventDefault();
+    // 即時搬移，拖到哪就排到哪（純畫面順序，不寫回資料庫）
+    var $d=$('#tcLanes .tc-card[data-key="'+TC.dragKey+'"]'), $t=$(this);
+    var r=this.getBoundingClientRect();
+    if(e.originalEvent.clientY < r.top+r.height/2) $t.before($d); else $t.after($d);
+    return;
+  }
+  if(!TC.canLink) return;
+  if(!tcPair($(this).data('kind'), $('#tcLanes .tc-card[data-key="'+TC.dragKey+'"]').data('kind'))) return;
+  e.preventDefault();
+  $(this).addClass('tc-over');
+}).on('dragleave','#tcLanes .tc-card',function(){ $(this).removeClass('tc-over'); });
+
+$(document).on('drop','#tcLanes .tc-card',function(e){
+  e.preventDefault();
+  $(this).removeClass('tc-over');
+  if(TC.dragMode!=='link'||!TC.dragKey) return;
+  if(!TC.canLink){ toast('你沒有建立對應的權限', true); return; }
+  var a=TC.nodes[TC.dragKey], b=TC.nodes[$(this).data('key')];
+  if(!a||!b) return;
+  var pr=tcPair(a.kind, b.kind);
+  if(!pr){ toast('這兩種單據之間沒有可建立的對應', true); return; }
+  // pr[1] 是這種連結的「來源種類」，據此決定誰是 from、誰是 to
+  var from=(a.kind===pr[1])?a:b, to=(a.kind===pr[1])?b:a;
+  tcOpenQty(pr[0], from, to, a.kind===pr[1]?a.kind:b.kind);
+});
+
+/* ── 點彩色長條＝改分配量或解除 ─────────────────────────── */
+$(document).on('click','#tcLanes .tc-seg[data-link]',function(e){
+  e.stopPropagation();
+  var p=String($(this).attr('data-link')).split('|');
+  var l=(TC.data.links||[]).filter(function(x){
+    return x.type===p[0]&&x.a===p[1]&&x.b===p[2]; })[0];
+  if(!l) return;
+  var from=TC.nodes[l.a], to=TC.nodes[l.b];
+  if(!from||!to){ toast('對方那張單不在目前載入的範圍內，請放寬日期或筆數再試', true); return; }
+  tcOpenQty(l.type, from, to, from.kind, l.qty);
+});
+
+/* ── 分配數量跳窗 ───────────────────────────────────────── */
+function tcFree(node, type, side, exceptQty){
+  var ls=(TC.linksBy[node.key]||[]).filter(function(l){
+    return l.type===type && (side==='a'?l.a===node.key:l.b===node.key); });
+  var sum=0; ls.forEach(function(l){ sum+=l.qty; });
+  return (node.qty||0) - sum + (exceptQty||0);
+}
+function tcOpenQty(type, from, to, srcKind, existQty){
+  var isEdit=(existQty!==undefined && existQty!==null);
+  TC.cur={type:type, from:from, to:to, srcKind:srcKind, isEdit:isEdit};
+  var noQty=(type==='quote_order');
+  var fa=noQty?0:tcFree(from,type,'a',isEdit?existQty:0);
+  var fb=noQty?0:tcFree(to,  type,'b',isEdit?existQty:0);
+  $('#tqTitle').text(isEdit?'調整對應':'建立對應');
+  $('#tqInfo').html('<b>'+esc(from.no)+'</b>（'+esc(from.kindName||tcKindName(from.kind))+'　數量 '+nf(from.qty)+'）'
+    +' <span style="color:#8A5A2B;">→</span> '
+    +'<b>'+esc(to.no)+'</b>（'+esc(tcKindName(to.kind))+'　數量 '+nf(to.qty)+'）'
+    + (noQty ? '<div class="mt-note" style="margin-top:4px;">報價單不分配數量：一份報價本來就會對應到很多張訂單。</div>'
+             : '<div class="mt-note" style="margin-top:4px;">可分配上限：'+esc(from.no)+' 還剩 <b>'+nf(fa)+'</b>、'
+               +esc(to.no)+' 還剩 <b>'+nf(fb)+'</b></div>')
+    + ((from.part&&to.part&&from.part!==to.part)
+        ? '<div style="color:#DD5138;font-size:12px;margin-top:4px;">料號不同（'+esc(from.part)+' ↔ '+esc(to.part)
+          +'）—— 若是組合件拆件請確認無誤</div>' : ''));
+  $('#tqQty').prop('disabled',noQty).val(noQty?'':(isEdit?existQty:Math.max(1,Math.min(fa,fb))));
+  $('#tqHint').text(noQty?'':'建議值＝兩邊剩餘量取小');
+  $('#tqErr').text('');
+  $('#btnTqDel').toggle(!!isEdit);
+  openMask('mkTcQty');
+}
+function tcKindName(k){
+  return {quote:'報價單',order:'訂單',bom:'製令',ship:'出貨單',ret:'退貨單'}[k]||k;
+}
+/* 前端即時擋一次（後端 tc_link() 同規則再擋一次，鐵律8） */
+$('#tqQty').on('input',function(){
+  var c=TC.cur; if(!c||c.type==='quote_order') return;
+  var v=parseInt($(this).val(),10)||0;
+  var fa=tcFree(c.from,c.type,'a',c.isEdit?tcCurQty():0);
+  var fb=tcFree(c.to,  c.type,'b',c.isEdit?tcCurQty():0);
+  var msg='';
+  // 兩邊都超過時報「比較緊」的那個上限，使用者才知道到底能填多少
+  if(v<=0) msg='分配數量必須大於 0';
+  else if(v>fa||v>fb){
+    msg=(fa<=fb) ? (c.from.no+' 只剩 '+nf(fa)+' 可分配')
+                 : (c.to.no+' 只剩 '+nf(fb)+' 可分配');
+  }
+  $('#tqErr').text(msg);
+  $(this).toggleClass('over',!!msg);
+});
+function tcCurQty(){
+  var c=TC.cur; if(!c) return 0;
+  var l=(TC.data.links||[]).filter(function(x){
+    return x.type===c.type&&x.a===c.from.key&&x.b===c.to.key; })[0];
+  return l?l.qty:0;
+}
+$('#btnTqOk').on('click',function(){
+  var c=TC.cur; if(!c) return;
+  var q=(c.type==='quote_order')?1:(parseInt($('#tqQty').val(),10)||0);
+  if(c.type!=='quote_order'){
+    $('#tqQty').trigger('input');
+    if($('#tqErr').text()!==''){ toast($('#tqErr').text(), true); return; }
+  }
+  var $b=$(this).prop('disabled',true);
+  $.post(API+'?action=chain_link',{csrf:CSRF, type:c.type, from_id:c.from.id, to_id:c.to.id,
+                                   qty:q, src_kind:c.srcKind},function(r){
+    $b.prop('disabled',false);
+    if(!r.ok){ toast(esc(r.error||'建立失敗'), true); return; }
+    toast(esc(r.message)+((r.warn&&r.warn.length)?'（'+esc(r.warn.join('；'))+'）':''));
+    closeMask('mkTcQty'); tcLoad();
+  },'json').fail(function(){ $b.prop('disabled',false); toast('建立失敗', true); });
+});
+$('#btnTqDel').on('click',function(){
+  var c=TC.cur; if(!c) return;
+  if(!confirm('確定解除「'+c.from.no+' → '+c.to.no+'」這條對應？')) return;
+  var $b=$(this).prop('disabled',true);
+  $.post(API+'?action=chain_unlink',{csrf:CSRF, type:c.type, from_id:c.from.id, to_id:c.to.id,
+                                     src_kind:c.srcKind},function(r){
+    $b.prop('disabled',false);
+    if(!r.ok){ toast(esc(r.error||'解除失敗'), true); return; }
+    toast(esc(r.message)); closeMask('mkTcQty'); tcLoad();
+  },'json').fail(function(){ $b.prop('disabled',false); toast('解除失敗', true); });
+});
 
 $('#btnRoleHelp').on('click',function(){ openMask('mkRole'); });
 
