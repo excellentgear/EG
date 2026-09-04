@@ -153,7 +153,7 @@ $db  = new DBConnection();
 $pdo = $db->getPDO();
 
 // ── Migration 版本鎖：版本符合時跳過所有 ALTER/CREATE，只跑一次 ──────────
-define('MDM_MIGRATION_VERSION', '20260903_01');   // 2026-09-03 新增 process_notes 的失效欄位（is_void/void_*/unvoid_*）
+define('MDM_MIGRATION_VERSION', '20260904_01');   // 2026-09-04 齒輪類型去重（同名重複選項）＋皮帶輪規格模板改為「齒型-齒數」
 $_mdm_skip_migration = false;
 try {
     // system_settings 可能尚不存在（第一次執行），用 try 保護
@@ -382,18 +382,38 @@ try {
     try { $pdo->exec("ALTER TABLE dict_industry_type ADD COLUMN sort_order INT NOT NULL DEFAULT 0"); } catch(Exception $e){}
     $pdo->exec("INSERT IGNORE INTO dict_workpiece_type (type_code, type_name) VALUES ('N','一般'),('G','齒輪'),('H','滾刀')");
     // ── 新增齒輪類型（spec_category + display_template），已存在則靜默跳過 ──
+    // ※ dict_gear_type.type_name 沒有 UNIQUE key，所以原本的 INSERT IGNORE 其實一個都擋不掉：
+    //   每次 MDM_MIGRATION_VERSION 往上跳、這段重跑一次，就再插一整批同名齒型（2026-06-22、
+    //   2026-09-03 各插一批＝齒輪類型下拉出現重複選項）。改成先撈現有名稱、只補缺的那幾筆。
     try {
-        $pdo->exec("INSERT IGNORE INTO dict_gear_type (type_name,has_helix_angle,sort_order,spec_category,display_template) VALUES
-            ('直齒輪', 0, 10,'standard',    '{Module}×{Teeth}T PA{Pressure_Angle}°{X_PART} {GRADE}'),
-            ('螺旋齒輪',1, 20,'standard',    '{Module}×{Teeth}T PA{Pressure_Angle}° {Helix_Direction}{Helix_Angle_Str}°{X_PART} {GRADE}'),
-            ('內齒輪', 0, 30,'standard',    '{Module}×{Teeth}T PA{Pressure_Angle}°{X_PART} {GRADE}'),
-            ('齒條',   0, 40,'rack',        '{Module}×{Teeth}T PA{Pressure_Angle}°'),
-            ('蝸桿',   1, 50,'worm_gear',   '{Module}×{spec_starts}條 PA{Pressure_Angle}° {Helix_Direction}{Helix_Angle_Str}°'),
-            ('蝸輪',   1, 60,'worm_wheel',  '{Module}×{Teeth}T PA{Pressure_Angle}° {Helix_Direction}{Helix_Angle_Str}°{X_PART}'),
-            ('鏈輪',   0, 70,'sprocket',    '{spec_chain_size}×{Teeth}T'),
-            ('皮帶輪', 0, 80,'timing_pulley','{Teeth}{spec_pulley_profile}'),
-            ('外花鍵', 0, 90,'spline',       NULL),
-            ('內花鍵', 0,100,'spline',       NULL)");
+        $_gt_seed = [
+            ['直齒輪',  0,  10,'standard',     '{Module}×{Teeth}T PA{Pressure_Angle}°{X_PART} {GRADE}'],
+            ['螺旋齒輪',1,  20,'standard',     '{Module}×{Teeth}T PA{Pressure_Angle}° {Helix_Direction}{Helix_Angle_Str}°{X_PART} {GRADE}'],
+            ['內齒輪',  0,  30,'standard',     '{Module}×{Teeth}T PA{Pressure_Angle}°{X_PART} {GRADE}'],
+            ['齒條',    0,  40,'rack',         '{Module}×{Teeth}T PA{Pressure_Angle}°'],
+            ['蝸桿',    1,  50,'worm_gear',    '{Module}×{spec_starts}條 PA{Pressure_Angle}° {Helix_Direction}{Helix_Angle_Str}°'],
+            ['蝸輪',    1,  60,'worm_wheel',   '{Module}×{Teeth}T PA{Pressure_Angle}° {Helix_Direction}{Helix_Angle_Str}°{X_PART}'],
+            ['鏈輪',    0,  70,'sprocket',     '{spec_chain_size}×{Teeth}T'],
+            ['皮帶輪',  0,  80,'timing_pulley','{spec_pulley_profile}-{Teeth}'],
+            ['外花鍵',  0,  90,'spline',       null],
+            ['內花鍵',  0, 100,'spline',       null],
+        ];
+        $_gt_exist = array_flip($pdo->query("SELECT type_name FROM dict_gear_type")->fetchAll(PDO::FETCH_COLUMN));
+        $_gt_ins   = $pdo->prepare("INSERT INTO dict_gear_type (type_name,has_helix_angle,sort_order,spec_category,display_template) VALUES (?,?,?,?,?)");
+        foreach ($_gt_seed as $_g) { if (!isset($_gt_exist[$_g[0]])) $_gt_ins->execute($_g); }
+    } catch(Exception $e){}
+    // ── 收拾上述 INSERT IGNORE 造成的重複同名齒型：保留最舊的一筆，其餘停用 ──
+    //    只停用「沒有任何料號、也沒有欄位設定在用」的那些，有人在用的一律不動。
+    try {
+        $_gt_hasFieldTbl = (bool)$pdo->query("SHOW TABLES LIKE 'dict_gear_type_fields'")->fetchColumn();
+        $_gt_dupSql = "SELECT a.gear_type_id FROM dict_gear_type a
+                       JOIN (SELECT type_name, MIN(gear_type_id) keep_id FROM dict_gear_type
+                             WHERE is_active=1 GROUP BY type_name HAVING COUNT(*)>1) b ON b.type_name=a.type_name
+                       WHERE a.is_active=1 AND a.gear_type_id<>b.keep_id
+                         AND NOT EXISTS (SELECT 1 FROM d_setting_gear g WHERE g.Gear_Type=a.gear_type_id)"
+                    . ($_gt_hasFieldTbl ? " AND NOT EXISTS (SELECT 1 FROM dict_gear_type_fields f WHERE f.gear_type_id=a.gear_type_id)" : "");
+        $_gt_dupIds = $pdo->query($_gt_dupSql)->fetchAll(PDO::FETCH_COLUMN);
+        if ($_gt_dupIds) $pdo->exec("UPDATE dict_gear_type SET is_active=0 WHERE gear_type_id IN (".implode(',', array_map('intval',$_gt_dupIds)).")");
     } catch(Exception $e){}
     // ── 補充已有類型缺少的 spec_category / display_template（安全 UPDATE） ──
     try {
@@ -405,6 +425,10 @@ try {
         $pdo->exec("UPDATE dict_gear_type SET display_template=REPLACE(display_template,'M{Module}','{Module}') WHERE display_template LIKE '%M{Module}%'");
         // 蝸輪獨立 spec_category
         $pdo->exec("UPDATE dict_gear_type SET spec_category='worm_wheel' WHERE type_name='蝸輪' AND spec_category='worm_gear'");
+        // 皮帶輪舊模板 '{Teeth}{spec_pulley_profile}' 會印成「358YU」（齒數與齒型黏在一起看不懂），
+        // 改成「8YU-35」＝齒型-齒數。只改這個已知寫壞的值，不動使用者自訂過的模板。
+        $pdo->exec("UPDATE dict_gear_type SET display_template='{spec_pulley_profile}-{Teeth}'
+                    WHERE spec_category='timing_pulley' AND display_template='{Teeth}{spec_pulley_profile}'");
     } catch(Exception $e){}
 
     // ── 確保 sort_order 欄位存在（若尚未 ALTER） ──
