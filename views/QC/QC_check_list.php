@@ -292,6 +292,46 @@ if ($reply_id != "") {
     }
     .qc-status-btn.active .dot { opacity:1; }
 
+    /* ── 報工進度徽章（狀態欄）：暖色系，ai-rules/10 ──────────────
+       目的：把「其實已經報工驗滿、只差沒人按【完成】」跟「真的還沒驗」
+       在清單上一眼分得出來。純顯示，不改任何既有判定。
+       字級小一定要自己寫 line-height，否則會繼承表格列的行高把整列撐高
+       （2026-09-03 急件徽章踩過同一個坑）。 */
+    .qc-prog-badge {
+        display: inline-block;
+        margin-top: 3px;
+        padding: 1px 6px;
+        border-radius: 10px;
+        font-size: 10px;
+        line-height: 15px;
+        white-space: nowrap;
+        border: 1px solid transparent;
+    }
+    .qc-prog-full { background:#F7E0BD; border-color:#E0B77A; color:#7A4A12; font-weight:600; }
+    .qc-prog-part { background:#FFFDF8; border-color:#E0B77A; border-style:dashed; color:#A8814A; }
+    .qc-prog-next { background:#FDF3E3; border-color:#C9A063; color:#8a5a1a; }
+    .qc-prog-badge + .qc-prog-badge { margin-left: 3px; }
+
+    /* 一鍵完成 */
+    .btn-qc-bulk {
+        padding: 4px 10px;
+        border: 1px solid #E0B77A;
+        border-radius: 4px;
+        background: #F7E0BD;
+        color: #7A4A12;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+    .btn-qc-bulk:hover { background:#F0A24B; border-color:#F0A24B; color:#fff; }
+    .btn-qc-bulk[disabled] { opacity:.5; cursor:not-allowed; }
+    #qcBulkList { max-height: 260px; overflow-y: auto; border:1px solid #e5e5e5; border-radius:4px; }
+    #qcBulkList table { margin-bottom:0; font-size:12px; }
+    #qcBulkList td, #qcBulkList th { padding:3px 6px; }
+    .qc-bulk-res-ok   { color:#1a7a1a; }
+    .qc-bulk-res-fail { color:#DD5138; }
+
     /* 製程篩選按鈕 */
     .qc-pti-btn {
         padding: 3px 9px;
@@ -750,6 +790,11 @@ if ($reply_id != "") {
                                         </button>
                                     </div>
                                     <div class="qc-toolbar-right">
+                                        <!-- 一鍵完成：把「已驗滿、只差按完成」的整批按完成 -->
+                                        <button class="btn-qc-bulk" id="btn-qc-bulk-complete" onclick="openBulkCompleteModal()"
+                                                title="把「報工已驗滿、只差沒人按完成」的製程整批標記為完成">
+                                            <i class="fa fa-check-square-o"></i> 一鍵完成
+                                        </button>
                                         <!-- 統計 -->
                                         <button class="btn-qc-stats" onclick="openStatsModal()">
                                             <i class="fa fa-bar-chart" style="color:#8E44AD;"></i> 統計
@@ -785,6 +830,25 @@ if ($reply_id != "") {
                                         </button>
                                         <button class="qc-status-btn" data-qc="green"  onclick="setQcFilter('green')">
                                             <span class="dot dot-green"></span>允收
+                                        </button>
+                                    </div>
+
+                                    <div class="qc-filter-divider"></div>
+
+                                    <!-- ── 報工進度篩選：把「其實已經報工完、只差按完成」的挑出來 ── -->
+                                    <div class="qc-filter-group">
+                                        <span class="qc-filter-label">報工</span>
+                                        <button class="qc-status-btn" data-qc="full" onclick="setQcProgFilter('full')"
+                                                title="報工數量已達總數，只差沒有人按【完成】。按完成後才會離開待驗清單並寫入 QC完工紀錄">
+                                            已驗滿·待按完成
+                                        </button>
+                                        <button class="qc-status-btn" data-qc="part" onclick="setQcProgFilter('part')"
+                                                title="有報工但還沒報滿（例：總數 1500 只驗了 130）">
+                                            只驗一部分
+                                        </button>
+                                        <button class="qc-status-btn" data-qc="nextstarted" onclick="setQcProgFilter('nextstarted')"
+                                                title="同一個 BOM 後面的站別已經發單開工了，這一站多半是事後才補按回廠的">
+                                            後站已開工
                                         </button>
                                     </div>
 
@@ -893,6 +957,36 @@ if ($reply_id != "") {
 
                     <!-- 列印區（隱藏，print 時顯示）-->
                     <div id="stats-print-area"></div>
+
+                    <!-- ── 一鍵完成 Modal（把「已驗滿、只差按完成」的整批按完成）── -->
+                    <div id="qcBulkCompleteModal" class="modal fade" role="dialog">
+                        <div class="modal-dialog" style="width:640px;max-width:96vw;">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <button type="button" class="close" data-dismiss="modal">×</button>
+                                    <h4 class="modal-title"><i class="fa fa-check-square-o"></i> 一鍵完成</h4>
+                                </div>
+                                <div class="modal-body">
+                                    <div style="font-size:12px;color:#7A4A12;background:#FDF3E3;border:1px dashed #E0B77A;border-radius:3px;padding:6px 9px;margin-bottom:8px;line-height:1.6;">
+                                        下面是<b>報工數量已經達到總數、只差沒有人按【完成】</b>的製程。<br>
+                                        按下確認後會逐筆標記完成（等同一筆一筆按【完成】），完成後它們會離開待驗清單、寫進 QC完工紀錄。<br>
+                                        <span style="color:#DD5138;">只列出符合目前「製程／搜尋」篩選條件的資料</span>，清單是按下按鈕當下重新跟後端要的最新狀態。
+                                    </div>
+                                    <div id="qcBulkErr" style="display:none;color:#DD5138;font-size:12px;margin-bottom:6px;"></div>
+                                    <div id="qcBulkLoading" style="text-align:center;padding:26px;color:#999;">
+                                        <i class="fa fa-spinner fa-spin fa-2x"></i>
+                                    </div>
+                                    <div id="qcBulkList" style="display:none;"></div>
+                                    <div id="qcBulkProgress" style="display:none;font-size:12px;margin-top:8px;color:#7A4A12;"></div>
+                                </div>
+                                <div class="modal-footer">
+                                    <span id="qcBulkCount" style="float:left;font-size:12px;color:#666;line-height:30px;"></span>
+                                    <button type="button" class="btn btn-default" data-dismiss="modal" id="qcBulkClose">關閉</button>
+                                    <button type="button" class="btn btn-warning" id="qcBulkRun" disabled>確認完成</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
                     <!-- 新增報工 Modal -->
                     <div id="myModal_reply_custom" class="modal fade" role="dialog">
@@ -1090,6 +1184,31 @@ if ($reply_id != "") {
         const AUTO_UPDATE_INTERVAL_MS = 5000; // 5 seconds
 
         var customBomData = null; // ⭐ 新增：用於暫存「新增」彈窗中查詢的BOM資料
+
+        /* ── 報工進度：唯一算法（鐵律4）─────────────────────────────
+           已檢驗數量＝允收＋異常＋驗退＋特採。清單徽章、篩選、「完成」跳窗、
+           「一鍵完成」全部走這一支，不可以各自再寫一份加總，否則畫面上寫
+           「已驗滿」按下去卻顯示短缺。後端 _fetch_qc_data.php 的 QC_DONE_SUM
+           用的是同一組欄位。 */
+        window.qcInspectedQty = function(item) {
+            if (!item) return 0;
+            return (parseFloat(item.QC_ok_sqty)  || 0)
+                 + (parseFloat(item.QC_QQ_sqty)  || 0)
+                 + (parseFloat(item.QC_ng_sqty)  || 0)
+                 + (parseFloat(item.QC_aod_sqty) || 0);
+        };
+        window.qcProgress = function(item) {
+            var total = parseFloat(item && item.sqty) || 0;
+            var done  = window.qcInspectedQty(item);
+            return {
+                total: total,
+                done:  done,
+                short: Math.max(0, total - done),
+                full:  (total > 0 && done >= total),   // 已驗滿，只差按完成
+                part:  (done > 0 && (total <= 0 || done < total)),
+                none:  (done <= 0)
+            };
+        };
         // Global DataTable instance and column index
         var dataTableInstance;
 
@@ -1220,6 +1339,11 @@ if ($reply_id != "") {
             $('.qc-status-btn').removeClass('active');
             $('.qc-status-btn[data-qc="'+qcVal+'"]').addClass('active');
             fetchAndUpdateData(1, { qc: qcVal });
+        }
+
+        // 報工進度那三顆：再按一次＝取消該篩選回到「全部」（狀態那四顆的行為不動）
+        function setQcProgFilter(qcVal) {
+            setQcFilter(currentQcCheckFilter === qcVal ? 'all' : qcVal);
         }
 
         function toggleQcCheckFilter() {
@@ -1676,6 +1800,12 @@ if ($reply_id != "") {
 
                 var qcCheckFilterState = window.currentQcCheckFilter;
                 if (qcCheckFilterState === "all") {
+                    return true;
+                }
+                // 報工進度那三種是「後端已經在 SQL 篩好」的，前端不可以再濾一次——
+                // 這個函式最後是 return false（沒對上就整列藏起來），
+                // 不放行的話畫面會變成「筆數顯示 3 筆、表格卻寫 No matching records found」。
+                if (qcCheckFilterState === "full" || qcCheckFilterState === "part" || qcCheckFilterState === "nextstarted") {
                     return true;
                 }
 
@@ -2147,6 +2277,10 @@ if ($reply_id != "") {
                     item.d_id = item.d_id || '';
                     item.QC_QQ_sqty = item.QC_QQ_sqty || 0;
                     item.QC_ok_sqty = item.QC_ok_sqty || 0;
+                    item.QC_ng_sqty = item.QC_ng_sqty || 0;
+                    item.QC_aod_sqty = item.QC_aod_sqty || 0;
+                    item.next_started = item.next_started || 0;
+                    item.next_started_info = item.next_started_info || '';
                     item.latest_QQ_date_formatted = item.latest_QQ_date_formatted || '';
                     item.latest_ok_date_formatted = item.latest_ok_date_formatted || '';
                     item.return_date = item.return_date || '';
@@ -2193,6 +2327,22 @@ if ($reply_id != "") {
                         }
                         statusHtml = `<div class="qc-flex">${statusParts.join('&emsp;')}</div>`;
                     }
+
+                    // ── 報工進度／補按回廠 徽章（純顯示，不影響任何既有判定）──
+                    var _prog = window.qcProgress(item);
+                    var _badges = '';
+                    if (_prog.full) {
+                        _badges += `<span class="qc-prog-badge qc-prog-full" title="報工已達總數 ${he(String(_prog.total))}，只差按【完成】。按了才會離開待驗清單並寫進 QC完工紀錄">✓ 已驗滿·待按完成</span>`;
+                    } else if (_prog.part) {
+                        _badges += `<span class="qc-prog-badge qc-prog-part" title="已報工 ${he(String(_prog.done))}，總數 ${he(String(_prog.total))}，還差 ${he(String(_prog.short))} 沒驗">已驗 ${he(String(_prog.done))}/${he(String(_prog.total))}</span>`;
+                    }
+                    if (+item.next_started) {
+                        var _ni = String(item.next_started_info || '').split('|');
+                        var _nName = _ni[0] || '';
+                        var _nDate = _ni[1] || '';
+                        _badges += `<span class="qc-prog-badge qc-prog-next" title="這個 BOM 後面的站別（${he(_nName)}${_nDate ? ' ' + he(_nDate) + ' 發單' : ''}）已經開工了，這一站多半是事後才補按回廠的，確認過就可以直接按【完成】">後站已開工${_nName ? '·' + he(_nName) : ''}</span>`;
+                    }
+                    if (_badges) statusHtml += `<div style="line-height:1;">${_badges}</div>`;
 
                     // QR code and BOM/button functionality
                     var qrCodeButtonHtml = `
@@ -4351,11 +4501,12 @@ if ($reply_id != "") {
                     return;
                 }
 
-                // 獲取數量
-                var totalQty = parseFloat(itemData.sqty) || 0;
+                // 獲取數量（走共用的 qcProgress()，與清單徽章、一鍵完成同一套算法＝鐵律4）
+                var _p = window.qcProgress(itemData);
+                var totalQty = _p.total;
                 var abnormalQty = parseFloat(itemData.QC_QQ_sqty) || 0;
                 var acceptedQty = parseFloat(itemData.QC_ok_sqty) || 0;
-                var shortage = totalQty - abnormalQty - acceptedQty;
+                var shortage = totalQty - _p.done;
 
                 // 建立要顯示的 HTML 字串
                 var contentHtml = `總數 ${totalQty}`;
@@ -4621,6 +4772,14 @@ if ($reply_id != "") {
             <button onclick="ccSearch()" style="padding:5px 12px;background:#2E6DA4;color:#fff;border:none;border-radius:4px;font-size:13px;cursor:pointer;">搜尋</button>
             <button onclick="ccReset()" style="padding:5px 10px;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;font-size:13px;cursor:pointer;">重設</button>
         </div>
+        <!-- 含未完工的報工：預設不勾＝完全維持原本只列已完工 -->
+        <div style="padding:6px 16px;border-bottom:1px solid #E4E9F0;flex-shrink:0;">
+            <label style="font-size:12px;color:#7A4A12;font-weight:normal;margin:0;cursor:pointer;display:inline-flex;align-items:center;gap:5px;"
+                   title="品管用「新增報工（未在列表上）」報過工、但還沒有人按【完成】的製程，原本在這裡查不到。勾起來就會一起列出並標成「未完工」。">
+                <input type="checkbox" id="cc-include-pending" style="margin:0;" onchange="ccToggleIncludePending()">
+                含未完工的報工紀錄（有報工但還沒按【完成】）
+            </label>
+        </div>
         <div class="qc-drawer-body" id="qcCompletedBody">
             <div class="text-center text-muted" style="padding:40px;"><i class="fa fa-spinner fa-spin fa-2x"></i></div>
         </div>
@@ -4629,8 +4788,156 @@ if ($reply_id != "") {
     </div>
 
     <script>
+    /* ── 一鍵完成：把「報工已驗滿、只差按完成」的整批標記完成 ────────────
+       三件事：
+       ① 按下按鈕的當下才跟後端要清單（ai-rules/08 第六節「點開即刷新」），
+          不用畫面上那份可能已經過期的快取；
+       ② 用 all=1 取「全部符合目前篩選」的資料，不是只有這一頁（ai-rules/08）；
+       ③ 完成動作逐筆走既有的 _update_qc_completion.php，不另外寫一套完工邏輯
+          （鐵律4）；別人已經先完成的那幾筆後端會回「已完工」，逐筆照實回報。
+    ------------------------------------------------------------------ */
+    var qcBulk = { rows: [], running: false, abort: false };
+
+    function qcBulkEsc(s) {
+        if (s === null || s === undefined) return '';
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function openBulkCompleteModal() {
+        var $m = $('#qcBulkCompleteModal');
+        qcBulk.rows = []; qcBulk.abort = false; qcBulk.running = false;
+        $('#qcBulkErr').hide().text('');
+        $('#qcBulkList').hide().empty();
+        $('#qcBulkProgress').hide().empty();
+        $('#qcBulkCount').text('');
+        $('#qcBulkRun').prop('disabled', true).text('確認完成');
+        $('#qcBulkClose').prop('disabled', false);
+        $('#qcBulkLoading').show();
+        if (typeof autoUpdatePaused !== 'undefined') autoUpdatePaused = true; // 跑批次時不要被 5 秒自動更新插隊
+        $m.modal('show');
+
+        var p = window.qcPagination || {};
+        $.ajax({
+            url: '../../src/store/_fetch_qc_data.php',
+            type: 'GET', dataType: 'json',
+            data: {
+                all: 1, qc: 'full',                  // 只要「已驗滿」的
+                pti:    p.filterPTI    || '',        // 沿用目前的製程／搜尋篩選
+                search: p.filterSearch || ''
+            }
+        }).done(function(res) {
+            $('#qcBulkLoading').hide();
+            if (!res || !res.success) {
+                $('#qcBulkErr').show().text('讀取失敗：' + ((res && res.message) || '未知錯誤'));
+                return;
+            }
+            // 後端已用同一組欄位判定過，前端再用共用的 qcProgress() 確認一次（雙保險）
+            qcBulk.rows = (res.data || []).filter(function(it) { return window.qcProgress(it).full; });
+            renderBulkList();
+        }).fail(function(xhr) {
+            $('#qcBulkLoading').hide();
+            $('#qcBulkErr').show().text('與伺服器通訊失敗（HTTP ' + xhr.status + '）');
+        });
+    }
+
+    function renderBulkList() {
+        var rows = qcBulk.rows;
+        if (!rows.length) {
+            $('#qcBulkList').show().html('<div style="padding:24px;text-align:center;color:#999;font-size:13px;">目前沒有「已驗滿、只差按完成」的製程。</div>');
+            $('#qcBulkCount').text('0 筆');
+            $('#qcBulkRun').prop('disabled', true);
+            return;
+        }
+        var h = '<table class="table table-condensed table-bordered"><thead><tr style="background:#f5f5f5;">' +
+                '<th style="width:26px;" class="text-center"><input type="checkbox" id="qcBulkAll" checked></th>' +
+                '<th>BOM</th><th>客戶／料號</th><th>製程</th><th class="text-center" style="width:96px;">報工／總數</th>' +
+                '<th style="width:78px;">結果</th></tr></thead><tbody>';
+        rows.forEach(function(it) {
+            var pr = window.qcProgress(it);
+            h += '<tr data-fid="' + qcBulkEsc(it.bom_ing_fid) + '">' +
+                 '<td class="text-center"><input type="checkbox" class="qc-bulk-cb" checked value="' + qcBulkEsc(it.bom_ing_fid) + '"></td>' +
+                 '<td style="white-space:nowrap;">' + qcBulkEsc(it.bom) +
+                    (+it.next_started ? ' <span class="qc-prog-badge qc-prog-next">後站已開工</span>' : '') + '</td>' +
+                 '<td>' + qcBulkEsc(it.Client_Name) + '<br><span style="color:#888;">' + qcBulkEsc(it.d_id) + '</span></td>' +
+                 '<td style="white-space:nowrap;">' + (it.ProcessNo ? '[' + qcBulkEsc(it.ProcessNo) + '] ' : '') + qcBulkEsc(it.ProcessName) + '</td>' +
+                 '<td class="text-center">' + qcBulkEsc(String(pr.done)) + ' / ' + qcBulkEsc(String(pr.total)) + '</td>' +
+                 '<td class="qc-bulk-res" style="font-size:11px;">—</td>' +
+                 '</tr>';
+        });
+        h += '</tbody></table>';
+        $('#qcBulkList').show().html(h);
+        updateBulkCount();
+        $('#qcBulkAll').on('change', function() {
+            $('.qc-bulk-cb').prop('checked', $(this).is(':checked'));
+            updateBulkCount();
+        });
+        $(document).off('change.qcBulk').on('change.qcBulk', '.qc-bulk-cb', updateBulkCount);
+    }
+
+    function updateBulkCount() {
+        var n = $('.qc-bulk-cb:checked').length;
+        $('#qcBulkCount').text('已勾選 ' + n + ' / ' + qcBulk.rows.length + ' 筆');
+        $('#qcBulkRun').prop('disabled', n === 0 || qcBulk.running);
+    }
+
+    $(document).on('click', '#qcBulkRun', function() {
+        if (qcBulk.running) return;
+        var fids = $('.qc-bulk-cb:checked').map(function() { return this.value; }).get();
+        if (!fids.length) return;
+        if (!confirm('確定要把勾選的 ' + fids.length + ' 筆標記為完成嗎？\n完成後它們會離開待驗清單，並寫進 QC完工紀錄。')) return;
+
+        qcBulk.running = true; qcBulk.abort = false;
+        $('#qcBulkRun').prop('disabled', true).text('處理中...');
+        $('#qcBulkClose').prop('disabled', true);
+        $('#qcBulkAll, .qc-bulk-cb').prop('disabled', true);
+        var okN = 0, failN = 0, i = 0;
+        $('#qcBulkProgress').show();
+
+        function step() {
+            if (i >= fids.length || qcBulk.abort) { finish(); return; }
+            var fid = fids[i];
+            var $cell = $('#qcBulkList tr[data-fid="' + fid + '"] .qc-bulk-res');
+            $('#qcBulkProgress').text('處理中 ' + (i + 1) + ' / ' + fids.length + '（成功 ' + okN + '、失敗 ' + failN + '）');
+            $.ajax({
+                url: '../../src/store/_update_qc_completion.php',
+                type: 'POST', dataType: 'json',
+                data: { bom_ing_fid: fid }
+            }).done(function(res) {
+                if (res && res.success) { okN++;  $cell.attr('class','qc-bulk-res qc-bulk-res-ok').text('✓ 完成'); }
+                else { failN++; $cell.attr('class','qc-bulk-res qc-bulk-res-fail').text((res && res.message) || '失敗'); }
+            }).fail(function(xhr) {
+                failN++; $cell.attr('class','qc-bulk-res qc-bulk-res-fail').text('HTTP ' + xhr.status);
+            }).always(function() { i++; step(); });   // 一定要逐筆序列送：同一個 session 併發會被 PHP 的 session 檔鎖排隊
+        }
+        function finish() {
+            qcBulk.running = false;
+            $('#qcBulkProgress').text('完成：成功 ' + okN + ' 筆、失敗 ' + failN + ' 筆。' +
+                (failN ? '失敗的原因看右邊「結果」欄（多半是別人已經先完成了）。' : ''));
+            $('#qcBulkRun').text('確認完成').prop('disabled', true);
+            $('#qcBulkClose').prop('disabled', false);
+            if (typeof fetchAndUpdateData === 'function') fetchAndUpdateData(1);
+        }
+        step();
+    });
+
+    // 關閉時把自動更新放回去
+    $(document).on('hidden.bs.modal', '#qcBulkCompleteModal', function() {
+        if (qcBulk.running) return;               // 還在跑就先不要恢復
+        if (typeof autoUpdatePaused !== 'undefined') autoUpdatePaused = false;
+        $(document).off('change.qcBulk');
+    });
+    </script>
+
+    <script>
     // ── QC完工紀錄 Drawer ─────────────────────────────────────
-    var ccState = { page:1, perPage:5, search:'', totalPages:1, totalRecords:0, loading:false };
+    var ccState = { page:1, perPage:5, search:'', totalPages:1, totalRecords:0, loading:false, includePending:false };
+
+    // 勾／取消「含未完工的報工紀錄」→ 重新從第 1 頁載入
+    function ccToggleIncludePending() {
+        var cb = document.getElementById('cc-include-pending');
+        ccState.includePending = !!(cb && cb.checked);
+        loadCompletedRecords(1, ccState.search);
+    }
 
     function openCompletedDrawer() {
         document.getElementById('qcCompletedOverlay').style.display = 'block';
@@ -4688,7 +4995,8 @@ if ($reply_id != "") {
                 mode:    'completed',
                 page:    ccState.page,
                 perPage: ccState.perPage,
-                search:  ccState.search
+                search:  ccState.search,
+                include_pending: ccState.includePending ? 1 : 0
             },
             success: function(res) {
                 ccState.loading = false;
@@ -4697,7 +5005,10 @@ if ($reply_id != "") {
                     return;
                 }
                 if (!res.data || !res.data.length) {
-                    $body.html('<p class="text-muted text-center" style="padding:30px;">沒有完工紀錄</p>');
+                    $body.html('<p class="text-muted text-center" style="padding:30px;">沒有完工紀錄'
+                        + (ccState.includePending ? '，也沒有未完工的報工紀錄' :
+                           '<br><span style="font-size:12px;color:#A8814A;">若確定有報過工，請勾選上方「含未完工的報工紀錄」——沒有按過【完成】的不會出現在這裡</span>')
+                        + '</p>');
                     return;
                 }
                 ccState.totalRecords = res.totalRecords || res.data.length;
@@ -4729,10 +5040,19 @@ if ($reply_id != "") {
                             '</div>';
                     }
 
-                    html += '<div class="qc-completed-card">' +
+                    // 未完工（有報工但沒人按【完成】）：整張卡片標成暖色並註明
+                    var isPending = (String(r.qc_completed) !== '1');
+                    var pendTag = isPending
+                        ? '<span style="background:#F0A24B;color:#fff;border-radius:3px;padding:0 5px;font-size:10px;line-height:15px;display:inline-block;margin-left:5px;" title="這一站已經有報工紀錄，但還沒有人按【完成】，所以還掛在 QC 待驗清單上">未完工</span>'
+                        : '';
+                    var timeHtml = isPending
+                        ? '<span style="color:#A8814A;">最後報工<br>' + _esc(r.last_check_at || '-') + '</span>'
+                        : (_esc(r.qc_completed_at) + '<br><span style="color:#27AE60;font-weight:600;">' + _esc(r.qc_completed_by_name || '-') + '</span>');
+
+                    html += '<div class="qc-completed-card"' + (isPending ? ' style="background:#FFFDF8;border-left:3px solid #F0A24B;"' : '') + '>' +
                         '<div class="cc-head">' +
                             '<div style="flex:1;min-width:0;">' +
-                                '<div class="cc-bom">' + _esc(r.bom) + '</div>' +
+                                '<div class="cc-bom">' + _esc(r.bom) + pendTag + '</div>' +
                                 '<div class="cc-meta">' +
                                     _esc(r.Client_Name) + '　' + _esc(r.d_id) +
                                     (r.ProcessName ? '　' + _esc(r.ProcessName) : '') +
@@ -4744,8 +5064,7 @@ if ($reply_id != "") {
                                 ncrHtml +
                             '</div>' +
                             '<div class="cc-time" style="text-align:right;flex-shrink:0;margin-left:8px;">' +
-                                _esc(r.qc_completed_at) + '<br>' +
-                                '<span style="color:#27AE60;font-weight:600;">' + _esc(r.qc_completed_by_name || '-') + '</span>' +
+                                timeHtml +
                             '</div>' +
                         '</div>' +
                     '</div>';

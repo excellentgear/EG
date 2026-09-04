@@ -25,8 +25,28 @@ if (($_GET['mode'] ?? '') === 'completed') {
     $offset  = ($page - 1) * $perPage;
     $search  = trim($_GET['search'] ?? '');
 
+    // include_pending=1：連「已經報工、但還沒有人按【完成】」的也一起列出來。
+    // 預設 0＝維持原本只列已完工，既有使用者看到的畫面與筆數一個字都不會變。
+    $incPending = (($_GET['include_pending'] ?? '') === '1');
+
+    // 有沒有報工紀錄，兩種模式都要用到（未完工的判定、排序的時間來源）
+    $qcJoin = "
+            LEFT JOIN (
+                SELECT bom_ing_fid_ref,
+                    SUM(CASE WHEN QC_check='QQ' THEN QC_QQ_sqty ELSE 0 END) AS QC_QQ_sqty,
+                    SUM(CASE WHEN QC_check='ok' THEN QC_ok_sqty  ELSE 0 END) AS QC_ok_sqty,
+                    SUM(CASE WHEN QC_check='ng' THEN QC_ng_sqty  ELSE 0 END) AS QC_ng_sqty,
+                    SUM(CASE WHEN QC_check='AOD' THEN QC_aod_sqty ELSE 0 END) AS QC_aod_sqty,
+                    MAX(qc_check_id)   AS max_qc_check_id,
+                    MAX(QC_check_date) AS last_check_at
+                FROM qc_check
+                GROUP BY bom_ing_fid_ref
+            ) qc ON qc.bom_ing_fid_ref = bi.bom_ing_fid";
+
     try {
-        $whereStr = "WHERE bi.qc_completed = 1";
+        $whereStr = $incPending
+            ? "WHERE (bi.qc_completed = 1 OR qc.bom_ing_fid_ref IS NOT NULL)"
+            : "WHERE bi.qc_completed = 1";
         $binds    = [];
         if ($search !== '') {
             $like = '%' . $search . '%';
@@ -34,7 +54,8 @@ if (($_GET['mode'] ?? '') === 'completed') {
             $binds = [$like, $like, $like, $like];
         }
 
-        $cntStmt = $db->prepare("SELECT COUNT(*) FROM bom_ing bi JOIN bom b ON bi.bom=b.bom $whereStr");
+        // 計數也要掛同一個 qc join，否則 include_pending 時筆數與清單對不起來
+        $cntStmt = $db->prepare("SELECT COUNT(*) FROM bom_ing bi JOIN bom b ON bi.bom=b.bom $qcJoin $whereStr");
         $cntStmt->execute($binds);
         $totalRecords = (int)$cntStmt->fetchColumn();
 
@@ -42,17 +63,28 @@ if (($_GET['mode'] ?? '') === 'completed') {
         $lim = (int)$perPage;
         $off = (int)$offset;
 
+        // 排序：預設模式一個字都不改（有 1 筆 qc_completed=1 但 qc_completed_at 是 NULL，
+        // 換成 COALESCE 會讓它換位置）。只有勾了「含未完工」時才改用
+        // 「完工時間，沒有就用最後一次報工時間」，否則未完工的會全部沉到最底下。
+        $orderBy = $incPending
+            ? "ORDER BY COALESCE(bi.qc_completed_at, qc.last_check_at) DESC"
+            : "ORDER BY bi.qc_completed_at DESC";
+
         $dataStmt = $db->prepare("
             SELECT
                 bi.bom_ing_fid, bi.bom, b.d_id, b.Client_Name,
                 pn.ProcessName, bi.maker_id, bi.sqty,
                 DATE_FORMAT(bi.qc_completed_at,'%Y-%m-%d %H:%i') AS qc_completed_at,
                 u.user_cname AS qc_completed_by_name,
+                bi.qc_completed,
+                bi.processing_state,
+                DATE_FORMAT(qc.last_check_at,'%Y-%m-%d %H:%i') AS last_check_at,
                 bi.QC_ps AS biqc_ps,
                 -- QC 檢驗結果彙總
                 COALESCE(qc.QC_QQ_sqty,0) AS QC_QQ_sqty,
                 COALESCE(qc.QC_ok_sqty,0) AS QC_ok_sqty,
                 COALESCE(qc.QC_ng_sqty,0) AS QC_ng_sqty,
+                COALESCE(qc.QC_aod_sqty,0) AS QC_aod_sqty,
                 -- 異常單
                 qao.abnormal_order_no,
                 qao.id AS qa_abnormal_id,
@@ -62,19 +94,11 @@ if (($_GET['mode'] ?? '') === 'completed') {
             JOIN bom b ON bi.bom=b.bom
             LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
             LEFT JOIN user u ON u.id=bi.qc_completed_by
-            LEFT JOIN (
-                SELECT bom_ing_fid_ref,
-                    SUM(CASE WHEN QC_check='QQ' THEN QC_QQ_sqty ELSE 0 END) AS QC_QQ_sqty,
-                    SUM(CASE WHEN QC_check='ok' THEN QC_ok_sqty  ELSE 0 END) AS QC_ok_sqty,
-                    SUM(CASE WHEN QC_check='ng' THEN QC_ng_sqty  ELSE 0 END) AS QC_ng_sqty,
-                    MAX(qc_check_id) AS max_qc_check_id
-                FROM qc_check
-                GROUP BY bom_ing_fid_ref
-            ) qc ON qc.bom_ing_fid_ref = bi.bom_ing_fid
+            $qcJoin
             LEFT JOIN qa_abnormal_order qao
                 ON qao.source_type='QC' AND qao.source_id=qc.max_qc_check_id
             $whereStr
-            ORDER BY bi.qc_completed_at DESC
+            $orderBy
             LIMIT $lim OFFSET $off
         ");
         $dataStmt->execute($binds);
@@ -98,6 +122,10 @@ if (($_GET['mode'] ?? '') === 'completed') {
 $page    = max(1, (int)($_GET['page']    ?? 1));
 $perPage = max(1, (int)($_GET['perPage'] ?? 30));
 $offset  = ($page - 1) * $perPage;
+// all=1：不分頁，一次取出符合目前篩選的全部資料。
+// 只給「一鍵完成」按下去的當下用（要對全部符合條件的資料判定，不能只看這一頁），
+// 沒帶這個參數時分頁行為完全不變。
+if (($_GET['all'] ?? '') === '1') { $page = 1; $perPage = 100000; $offset = 0; }
 
 $filterPTI    = trim($_GET['pti']    ?? '');
 $filterQC     = trim($_GET['qc']     ?? '');
@@ -118,12 +146,34 @@ if ($filterSearch !== '') {
     $extraParts[] = "(bi.bom LIKE ? OR b.d_id LIKE ? OR b.Client_Name LIKE ? OR bi.maker_id LIKE ? OR pn.ProcessName LIKE ?)";
     $extraBinds   = array_merge($extraBinds, [$like, $like, $like, $like, $like]);
 }
+// 已檢驗數量的唯一算法：允收＋異常＋驗退＋特採。前端的徽章與「一鍵完成」
+// 用同一個算法（qcInspectedQty()），兩邊要一致，不可各寫一份。
+const QC_DONE_SUM = "(COALESCE(qc.QC_ok_sqty,0)+COALESCE(qc.QC_QQ_sqty,0)+COALESCE(qc.QC_ng_sqty,0)+COALESCE(qc.QC_aod_sqty,0))";
+// 後站已開工：同一個 BOM 裡 bom_sn 更後面的站已經發過單且在進行中／已回廠。
+// 用來標出「其實早就跑到下一關、只是前站補按回廠」的那些列。
+const QC_NEXT_STARTED_SQL = "EXISTS (
+        SELECT 1 FROM bom_ing nb
+        WHERE nb.bom = bi.bom
+          AND nb.bom_sn > bi.bom_sn
+          AND nb.is_consumed = 0
+          AND nb.outsource_date IS NOT NULL
+          AND nb.processing_state IN ('ing','Q','P','E')
+    )";
+
 if ($filterQC === 'gray') {
     $extraParts[] = "(bi.QC_check IS NULL OR bi.QC_check='') AND COALESCE(qc.QC_QQ_sqty,0)=0 AND COALESCE(qc.QC_ok_sqty,0)=0";
 } elseif ($filterQC === 'qq') {
     $extraParts[] = "COALESCE(qc.QC_QQ_sqty,0) > 0";
 } elseif ($filterQC === 'green') {
     $extraParts[] = "COALESCE(qc.QC_ok_sqty,0) > 0";
+} elseif ($filterQC === 'full') {
+    // 已經報工驗滿、只差沒人按「完成」
+    $extraParts[] = "bi.sqty > 0 AND " . QC_DONE_SUM . " >= bi.sqty";
+} elseif ($filterQC === 'part') {
+    // 報了一部分（例：1500 只驗了 130）
+    $extraParts[] = QC_DONE_SUM . " > 0 AND (bi.sqty <= 0 OR " . QC_DONE_SUM . " < bi.sqty)";
+} elseif ($filterQC === 'nextstarted') {
+    $extraParts[] = QC_NEXT_STARTED_SQL;
 }
 
 $extraWhere = empty($extraParts) ? '' : ' AND ' . implode(' AND ', $extraParts);
@@ -165,7 +215,18 @@ SELECT SQL_CALC_FOUND_ROWS
     qq_date.latest_QQ_date_formatted,
     ok_date.latest_ok_date_formatted,
     qao.abnormal_order_no,
-    qao.id AS qa_abnormal_id
+    qao.id AS qa_abnormal_id,
+    -- 後站已開工（1/0）與是哪一站、哪天發的單，供清單標示「補按回廠」用
+    " . QC_NEXT_STARTED_SQL . " AS next_started,
+    (SELECT CONCAT(COALESCE(pnn.ProcessName,''), '|', COALESCE(DATE_FORMAT(nb2.outsource_date,'%m/%d'),''))
+       FROM bom_ing nb2
+       LEFT JOIN process_no pnn ON pnn.ProcessNo = nb2.process_no
+      WHERE nb2.bom = bi.bom
+        AND nb2.bom_sn > bi.bom_sn
+        AND nb2.is_consumed = 0
+        AND nb2.outsource_date IS NOT NULL
+        AND nb2.processing_state IN ('ing','Q','P','E')
+      ORDER BY nb2.bom_sn ASC LIMIT 1) AS next_started_info
 FROM bom_ing bi
 JOIN (
     SELECT bom, COALESCE(bom_sn, -1) AS sn, COALESCE(batch_label, '') AS bl, MAX(outsource_date) AS max_date
