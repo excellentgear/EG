@@ -6388,6 +6388,14 @@ echo "</script>\n";
             // Generate and append modal HTML for this row
             modalsHtmlBuffer += generateQrModalForRow(row); // Assuming generateQrModalForRow is defined
 
+            // ── 批次檢視（唯一掛勾點，實作全在 views/pm/_bom_batch_view.php）──
+            //    預設關閉；沒開、沒拆批、或該檔沒載入時，這裡等同不存在。
+            //    包 try/catch 是刻意的：批次檢視就算整個爆掉，這一列也必須照常畫出來。
+            if (window.EGBatchView && window.EGBatchView.decorateRow) {
+                try { window.EGBatchView.decorateRow(tr, row, tbody); }
+                catch (e) { console.error('[批次檢視] decorateRow 失敗，已略過：', e); }
+            }
+
             tbody.appendChild(tr); // 將完成的行添加到 tbody
         });
 
@@ -17241,6 +17249,9 @@ echo "</script>\n";
 })();
 </script>
 <script src="capacity_gantt.js?v=<?= @filemtime(__DIR__ . '/capacity_gantt.js') ?>"></script>
+<?php /* 批次檢視（Phase 1，只做顯示）：開關預設關閉且只存在使用者自己的瀏覽器，
+         沒開的時候上面那個 decorateRow 掛勾等同不存在，畫面與未加入前完全相同 */ ?>
+<?php include __DIR__ . '/_bom_batch_view.php'; ?>
 </body>
 
 </html>
