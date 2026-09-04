@@ -358,6 +358,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     .part-dd { position:absolute; z-index:1060; left:0; right:0; top:100%;
                background:#fff; border:1px solid var(--line); border-radius:0 0 6px 6px;
                max-height:210px; overflow:auto; box-shadow:0 6px 14px rgba(74,53,36,.18); }
+    /* 跳窗比瀏覽器視窗高時（登錄圖面變更的欄位很多，1280x720 就會超出），底部按鈕會被推到畫面外
+       ——使用者回報「看不到底下按鈕」。這裡把頁尾按鈕列釘在視窗底部：跳窗照舊整個捲動，
+       但「取消／存成草稿／儲存並通知簽收」永遠看得見。
+       刻意不改成「modal-body 自己捲動」：料號候選與簽收對象候選都是 position:absolute 的浮層，
+       body 一變成捲動容器就會被裁掉（見 review_form 踩過的坑）。 */
+    #editModal .modal-footer, #detailModal .modal-footer, #settingModal .modal-footer {
+        position:sticky; bottom:0; z-index:6;
+        background:#fff; border-top:1px solid var(--line);
+        box-shadow:0 -4px 10px rgba(74,53,36,.10);
+    }
     .err-msg { color:var(--coral); }
     .form-control.err { border-color:var(--coral); }
     .form-control.warn { border-color:var(--amber); }
