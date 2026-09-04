@@ -9052,9 +9052,8 @@ foreach($dCounts as $c) {
                                 itemsHtml += `<div class="suggestion-item" data-pk="${safePk}" data-display-id="${safeDisplayId}" data-spec="${safeSpec}" data-client-id="${safeClientId}" data-client-name="${safeClientName}" data-drawing-no="${safeDrawingNo}">${safeDisplayId}${drawingNoBadge}${bomBadge} (${item.Spec_No || '無規格'}) - ${item.Client_Name || '無客戶'}</div>`;
                                 if (item.D_Setting_Id.toLowerCase() === term.toLowerCase()) {
                                     $('#selected_part_pk').val(item.d_id);
-                                    if ($('input[name="Process"]').val() === '') {
-                                        $('input[name="Process"]').val(item.Spec_No || '');
-                                    }
+                                    // ※ 2026-09-04：綁定料號後不再把「料號規格 Spec_No」帶入製程欄（使用者指出這是錯的）。
+                                    //    製程一律由使用者手動輸入，或從右側 OP單（報價單）項目帶入該項目的製程。
                                     // 綁定料號後客戶由料號決定：一律以料號客戶覆蓋，避免與後端資料不符
                                     $('#client_name_input').val(item.Client_Name || '');
                                     $('#selected_customer_pk').val(item.Customer_Id || '');
@@ -9079,10 +9078,8 @@ foreach($dCounts as $c) {
                     $input.val($(this).data('display-id'));
                     $('#selected_part_pk').val($(this).data('pk'));
                     $('#selected_part_drawing_no').val($(this).data('drawing-no') || '');
-                    // ※ 修改：只有製程欄位為空時才帶入料號規格，不覆蓋已填內容
-                    if ($('input[name="Process"]').val().trim() === '') {
-                        $('input[name="Process"]').val($(this).data('spec') || '');
-                    }
+                    // ※ 2026-09-04：綁定料號後不再把「料號規格 Spec_No」帶入製程欄（使用者指出這是錯的）。
+                    //    製程一律由使用者手動輸入，或從右側 OP單（報價單）項目帶入該項目的製程。
                     $('#client_name_input').val($(this).data('client-name') || '');
                     $('#selected_customer_pk').val($(this).data('client-id') || '');
                 }
