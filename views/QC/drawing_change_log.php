@@ -119,7 +119,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $d_id    = (int)($_POST['d_id'] ?? 0);
             $summary = trim($_POST['summary'] ?? '');
             $isDraft = (($_POST['keep_draft'] ?? '') === '1');   // 草稿可以先存著不送出
-            if ($d_id <= 0)     throw new Exception('請選擇料號');
+            // 料號一定要真的綁到主檔的一筆（前端會先擋，這裡是真正的守門＝鐵律8；
+            // 只打字沒點選清單、或料號主檔已被刪掉，都不可以存進來變成孤兒紀錄）
+            if ($d_id <= 0) throw new Exception('尚未綁定料號 ID——請在料號欄位輸入關鍵字，再從清單點選');
+            $chkP = $pdo->prepare("SELECT COUNT(*) FROM d_setting WHERE d_id = ?");
+            $chkP->execute([$d_id]);
+            if (!(int)$chkP->fetchColumn()) throw new Exception('找不到這個料號 ID（可能已被刪除），請重新從清單點選料號');
             if (!$isDraft && $summary === '') throw new Exception('請填寫變更摘要');
             $oldRev  = trim($_POST['old_revision'] ?? '');
             $newRev  = trim($_POST['new_revision'] ?? '');
@@ -368,6 +373,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         background:#fff; border-top:1px solid var(--line);
         box-shadow:0 -4px 10px rgba(74,53,36,.10);
     }
+    /* 料號 →「圖面查閱」：以分頁開啟，使用者可以把它拖到另一個螢幕，一邊看圖一邊填這張表 */
+    .open-dwg { cursor:pointer; color:#8a5a00; border-bottom:1px dotted #C77C1A; }
+    .open-dwg:hover { color:var(--amber); }
+    .btn-dwg { display:inline-block; margin-left:6px; padding:1px 8px; font-size:12px; line-height:18px;
+               border:1px solid #E4D3BC; border-radius:4px; background:#FFF8EE; color:#6B4423; cursor:pointer; }
+    .btn-dwg:hover { background:var(--sand); }
     .err-msg { color:var(--coral); }
     .form-control.err { border-color:var(--coral); }
     .form-control.warn { border-color:var(--amber); }
@@ -632,7 +643,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <h4>操作步驟</h4>
             <ol>
                 <li>按右上「登錄圖面變更」。</li>
-                <li>料號欄輸入關鍵字，<b>從清單點選</b>（必須綁到料號 ID，只打字不算）；選好後<b>客戶名稱會自動帶出</b>。</li>
+                <li>料號欄輸入關鍵字，<b>從清單點選</b>（必須綁到料號 ID，只打字不算）；選好後<b>客戶名稱會自動帶出</b>。
+                    沒綁到料號 ID（含「打了字卻沒從清單點選」）時欄位會標紅字說明原因，<b>按存檔會被擋下來</b>。</li>
+                <li>綁好料號後，點<b>料號本身</b>或旁邊的「<i class="fa fa-picture-o"></i> 開啟圖面」，會用<b>另一個分頁</b>開啟圖面查閱——
+                    分頁可以拖到另一個螢幕擺著，一邊看圖一邊填這張表。清單與明細跳窗上的料號同樣點得開；
+                    同一個料號重複點會沿用同一個分頁，不會愈開愈多。</li>
                 <li>選變更範圍（客戶版次／僅廠內版次），確認自動帶出的版次日期。</li>
                 <li>填變更摘要（<b>必填</b>，這句話會出現在檢驗人員的提醒上）與明細。</li>
                 <li>指定簽收對象 → 「儲存並通知簽收」。內容還沒想好可以先按「存成草稿」，草稿<b>不會通知任何人、也不會換檢驗標準版次</b>。</li>
@@ -686,6 +701,32 @@ $(function(){
         if (o.data && typeof o.data==='object' && !(o.data instanceof FormData) && o.data.csrf===undefined) o.data.csrf=CSRF;
     });
     function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,function(c){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c];}); }
+
+    /* ── 料號 → 圖面查閱（使用者要求：填這張表時要能一邊看圖）──────────────────
+       以「分頁」開啟而不是 window.open 的彈出視窗：分頁可以被拖到另一個螢幕擺著，
+       填表跟看圖同時進行。同一個料號重複點沿用同一個分頁（視窗名稱帶 d_id），不會開一堆。
+       一律帶 pk＝d_setting.d_id（整數 PK）：同名料號可能有多筆主檔（不同客戶／版次），
+       只給料號文字會把別家的圖混進來。 */
+    function openPartDrawing(partNo, pk){
+        pk = parseInt(pk,10)||0;
+        if(!pk && !partNo) return;
+        var q = pk ? ('?pk='+encodeURIComponent(pk)) : ('?d_id='+encodeURIComponent(partNo));
+        window.open('../pm/bom_viewer.php'+q, 'bom_dv_'+(pk||partNo));
+    }
+    function dwgLink(partNo, pk){
+        if(!partNo && !pk) return esc(partNo);
+        return '<span class="open-dwg" data-part="'+esc(partNo)+'" data-pk="'+(parseInt(pk,10)||0)+'"'+
+               ' title="點擊以分頁開啟圖面查閱（可拖到另一個螢幕）">'+esc(partNo)+'</span>';
+    }
+    function dwgBtn(partNo, pk){
+        if(!partNo && !pk) return '';
+        return ' <span class="btn-dwg open-dwg" data-part="'+esc(partNo)+'" data-pk="'+(parseInt(pk,10)||0)+'"'+
+               ' title="以分頁開啟圖面查閱（可拖到另一個螢幕，一邊看圖一邊填）"><i class="fa fa-picture-o"></i> 開啟圖面</span>';
+    }
+    $(document).on('click', '.open-dwg', function(e){
+        e.preventDefault(); e.stopPropagation();
+        openPartDrawing($(this).attr('data-part')||'', $(this).attr('data-pk')||0);
+    });
 
     // 統一的送出：憑證失效（session 被 GC 掃掉、或 token 換過）時自動跟後端要一次目前的 token 再重送，
     // 使用者不必把填好的表單重打一遍。真的被登出（code=LOGIN）就照實說，不再誤報成 CSRF。
@@ -748,7 +789,7 @@ $(function(){
                          : (esc(c.old_revision||'—')+' → <b>'+esc(c.new_revision||'—')+'</b>');
                 return '<tr class="dc-row" data-id="'+c.id+'">'+
                     '<td><b>'+esc(c.change_no)+'</b></td>'+
-                    '<td>'+esc(c.part_no||('d_id '+c.d_id))+'</td>'+
+                    '<td>'+(c.part_no ? dwgLink(c.part_no, c.d_id) : esc('d_id '+c.d_id))+'</td>'+
                     '<td>'+esc(c.customer_name||'—')+'</td>'+
                     '<td>'+cust+'</td>'+
                     '<td>'+(c.int_old_revision?dispDate(c.int_old_revision):'—')+' → <b>'+(c.int_new_revision?dispDate(c.int_new_revision):'—')+'</b></td>'+
@@ -847,21 +888,34 @@ $(function(){
     // 只存 d_id：料號字串會因改版／重新命名而變，綁 ID 才不會斷線。
     // 對應地，master_data_management.php 的料號刪除也已把 qc_drawing_change 列入
     // 關聯阻擋＋綁定移轉，避免料號被刪掉後這裡的紀錄變孤兒。
+    /* 料號綁定檢查（使用者要求：沒綁到料號 ID 就要跳錯誤並禁止存檔）。
+       「畫面上打的字」與「真正綁定的那一筆」對不起來，等於使用者以為換了料號、其實沒有——
+       這種狀態一律當成未綁定擋下來，不可以只給一句提醒就讓它存進去。
+       回傳空字串＝可以存；否則回傳要講給使用者聽的原因（畫面紅字與存檔攔截共用同一句）。 */
+    function partBindError(){
+        var kw = $.trim($('#f-part-kw').val());
+        if(!pickedPart) return '尚未綁定料號 ID——請在上面的欄位輸入關鍵字，再從清單點選（只打字不算綁定）';
+        if(kw === '')   return '料號欄位是空的＝原本的綁定已解除，請重新輸入關鍵字並從清單點選料號';
+        if(kw !== pickedPart.part_no)
+            return '「'+kw+'」還沒從清單點選，目前並未綁定到料號 ID——請點選清單中的料號（或把欄位改回 '+pickedPart.part_no+'）';
+        return '';
+    }
     function renderPicked(){
         var $p = $('#part-picked'), $kw = $('#f-part-kw');
         $kw.removeClass('err warn');
         if(!pickedPart){
-            $p.html('<span class="err-msg"><i class="fa fa-exclamation-circle"></i> 尚未選定料號——請在上面輸入關鍵字，再從清單點選（必須綁定料號 ID，只打字不算）</span>');
+            $p.html('<span class="err-msg"><i class="fa fa-exclamation-circle"></i> ' + esc(partBindError()) + '</span>');
             $kw.addClass('err');
             return;
         }
         var kw = $.trim($kw.val());
         var stale = (kw !== '' && kw !== pickedPart.part_no);
-        $p.html('<span style="color:#C77C1A;"><i class="fa fa-check"></i> 已綁定料號 <b>'+esc(pickedPart.part_no)+'</b></span>'+
+        $p.html('<span style="color:#C77C1A;"><i class="fa fa-check"></i> 已綁定料號 <b>'+dwgLink(pickedPart.part_no, pickedPart.d_id)+'</b></span>'+
                 ' <span class="muted-help">(d_id '+pickedPart.d_id+')</span>'+
+                dwgBtn(pickedPart.part_no, pickedPart.d_id)+
                 (pickedPart.customer ? ' <span class="muted-help">｜客戶 '+esc(pickedPart.customer)+'</span>' : '')+
-                (stale ? '<br><span class="err-msg">搜尋字串已改成「'+esc(kw)+'」但還沒重新點選，現在存檔仍會綁上面那一筆</span>' : ''));
-        if(stale) $kw.addClass('warn');
+                (stale ? '<br><span class="err-msg"><i class="fa fa-exclamation-circle"></i> '+esc(partBindError())+'</span>' : ''));
+        if(stale) $kw.addClass('err');   // 這是錯誤不是提醒：這個狀態下按存檔會被擋下（使用者要求）
     }
     function renderPartResults(){
         $('#part-results').show().html(partRows.length ? partRows.map(function(p,i){
@@ -945,7 +999,14 @@ $(function(){
     });
     /** 存檔（keepDraft=true＝先存草稿不通知）。改別人填的紀錄要先過操作確認密碼。 */
     function doSave(keepDraft, confirmPw){
-        if(!pickedPart){ renderPicked(); $('#f-part-kw').focus(); alert('請從即時搜尋清單中點選料號（需綁定料號 ID）'); return; }
+        // 沒綁定料號 ID 一律擋下（含「打了字但沒從清單點選」）：畫面紅字＋跳錯誤，後端也會再擋一次
+        var pErr = partBindError();
+        if(pErr){
+            renderPicked();
+            $('#f-part-kw').addClass('err').focus();
+            alert('無法存檔：' + pErr);
+            return;
+        }
         var summary = $('#f-summary').val().trim();
         $('#f-summary').removeClass('err'); $('#f-summary-err').hide();
         if(!keepDraft && !summary){
@@ -1022,7 +1083,11 @@ $(function(){
     $('#pw-input').on('keydown', function(e){ if(e.key==='Enter'){ e.preventDefault(); $('#pw-ok').click(); } });
 
     // ---- 明細 / 簽收 ----
-    $('#dc-list').on('click','.dc-row', function(){ openDetail($(this).data('id')); });
+    // 點列＝開明細；但點在料號上是「開圖面查閱分頁」，不要連帶把明細也開起來
+    $('#dc-list').on('click','.dc-row', function(e){
+        if($(e.target).closest('.open-dwg').length) return;
+        openDetail($(this).data('id'));
+    });
     function openDetail(id){
         curId=id;
         $('#detail-body').html('載入中…'); $('#btn-ack,#btn-edit,#btn-close-chg,#btn-del,#btn-submit').hide();
@@ -1034,7 +1099,8 @@ $(function(){
             var h='<table class="table table-condensed table-bordered dc-table">'+
                 '<tr><th width="120">變更單號</th><td><b>'+esc(c.change_no)+'</b>　<span class="as-tag">AS '+esc(c.as_doc_no)+'</span></td></tr>'+
                 (c.status==='DRAFT'?'<tr><th>狀態</th><td><span class="badge badge-draft">草稿</span> <span class="muted-help">尚未送出：還沒通知任何人，也還沒換檢驗標準版次。補完內容後按下方「送出」才正式成立。</span></td></tr>':'')+
-                '<tr><th>料號</th><td>'+esc(c.part_no||'')+(c.customer_name?('　<span class="muted-help">客戶：'+esc(c.customer_name)+'</span>'):'')+'</td></tr>'+
+                '<tr><th>料號</th><td>'+dwgLink(c.part_no||'', c.d_id)+dwgBtn(c.part_no||'', c.d_id)+
+                    (c.customer_name?('　<span class="muted-help">客戶：'+esc(c.customer_name)+'</span>'):'')+'</td></tr>'+
                 '<tr><th>變更範圍</th><td>'+(c.rev_scope==='internal'?'僅廠內版次變更（客戶版次不動）':'客戶版次變更（客戶＋廠內都換版）')+'</td></tr>'+
                 (c.rev_scope==='internal'?'':
                     ('<tr><th>客戶版次</th><td>'+esc(c.old_revision||'—')+' → <b>'+esc(c.new_revision||'—')+'</b></td></tr>'))+
