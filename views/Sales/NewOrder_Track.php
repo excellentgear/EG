@@ -5120,8 +5120,15 @@ foreach($dCounts as $c) {
                 var colIdx = $(this).index();
                 if (colIdx === 2 + colOffset) {
                     // 客戶欄雙擊篩選
-                    var val = $(this).text().trim();
+                    // 這一格除了客戶名稱外還可能有「急件」徽章、綁定圖示、OP客戶不一致提示，
+                    // 直接取整格文字會變成「和昕　急件」而查無資料（2026-09-04 使用者回報）。
+                    // 客戶名稱本來就包在 .oc-client-name 內，直接取它；
+                    // 萬一沒有這個 span（舊快取/舊版列），退回「只取本格的純文字節點」而不含子區塊。
+                    var $cn  = $(this).find('.oc-client-name');
+                    var val  = $cn.length ? $cn.text().trim()
+                                          : $(this).clone().children().remove().end().text().trim();
                     var $f = $('#filter-client');
+                    if (!$f.val() && !val) return;   // 取不到名稱又沒有篩選可清 → 什麼都不做
                     $f.val($f.val() ? '' : val);
                     isStatCardFilter = false; lockedStats = null;
                     fetchTableData(1);
