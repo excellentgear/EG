@@ -397,7 +397,11 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
 
     function inject() {
         if (document.getElementById('eg-bv-toggle')) return;
-        var anchor = document.querySelector('button[onclick="scrollToProcesses()"]');
+        // 掛在「通知廠商圖」右側（使用者指定）。刻意不掛在「顯示製程／設定業務」
+        // 那一列，那一列多一顆鈕會把排版擠掉。
+        var anchor = document.getElementById('btn-vendor-notify-img');
+        if (anchor && anchor.parentNode && anchor.parentNode.tagName === 'A') anchor = anchor.parentNode;
+        if (!anchor) anchor = document.querySelector('button[onclick="scrollToProcesses()"]');  // 退路
         if (!anchor) return;
         var btn = document.createElement('button');
         btn.type = 'button';
