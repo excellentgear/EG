@@ -743,7 +743,8 @@ $(function(){
                     '<td>'+cust+'</td>'+
                     '<td>'+(c.int_old_revision?dispDate(c.int_old_revision):'—')+' → <b>'+(c.int_new_revision?dispDate(c.int_new_revision):'—')+'</b></td>'+
                     '<td>'+(c.from_process_no ? esc(c.from_process_name||('#'+c.from_process_no))+' 起' : '全部製程')+'</td>'+
-                    '<td>'+esc(c.summary||'<span class="muted-help">（草稿未填）</span>')+'</td>'+
+                    // 草稿未填的提示是 HTML，不可以一起丟進 esc()，否則整串標籤會原字顯示在欄位裡
+                    '<td>'+(c.summary?esc(c.summary):'<span class="muted-help">（草稿未填）</span>')+'</td>'+
                     '<td>'+(c.status==='DRAFT'?'<span class="muted-help">—</span>':ack)+'</td>'+
                     '<td>'+st+'</td>'+
                     '<td class="muted-help">'+esc(c.created_by_name||c.created_by||'')+'<br>'+String(c.created_at||'').substring(0,16)+'</td></tr>';
@@ -976,12 +977,8 @@ $(function(){
         var msg = '已送出' + (res.notified ? ('，並已通知 ' + res.notified + ' 位人員簽收') : '');
         var ec = res.eng_change;
         if(ec && ec.ec_id){
-            msg += '
-
-' + (ec.message || '');
-            if(confirm(msg + '
-
-要現在開啟工程變更申請單嗎？')){
+            msg += '\n\n' + (ec.message || '');
+            if(confirm(msg + '\n\n要現在開啟工程變更申請單嗎？')){
                 window.open('../TD/eng_change.php?id=' + ec.ec_id, '_blank');
             }
             return;
