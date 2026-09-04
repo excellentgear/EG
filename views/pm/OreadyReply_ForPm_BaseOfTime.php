@@ -2306,6 +2306,40 @@ echo "</script>\n";
     #qcContainerModal .qc-ctn-row label { margin-bottom: 0; white-space: nowrap; }
     #qcContainerModal .qc-ctn-hint { font-size: 12px; color: #7A4A12; background: #FDF3E3; border: 1px dashed #E0B77A; border-radius: 3px; padding: 5px 8px; margin-bottom: 8px; }
 
+    /* ── 訂單綁定清單的「製程／備註」副標：過長自動收成一行，點一下展開全文 ──
+       訂單備註沒有長度限制，而訂單號那一格是 white-space:nowrap，
+       備註一長就把整張表撐到幾千 px，連帶把「修改 BOM 資料」跳窗的右欄擠掉
+       （2026-09-04 使用者實測回報）。這裡把副標限寬並截字，
+       表格寬度就不再受備註長度影響。 */
+    .ord-bind-sub {
+        display: block;
+        max-width: 330px;
+        color: #888;
+        font-size: 10px;
+        line-height: 1.3;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    /* 只有真的被截斷的那幾筆才長出「可點」的樣子（由 JS 量測後加上 is-long） */
+    .ord-bind-sub.is-long {
+        cursor: pointer;
+        border-bottom: 1px dotted #C9A063;
+    }
+    .ord-bind-sub.is-long:hover { color: #7A4A12; }
+    .ord-bind-sub.expanded {
+        /* 展開後把寬度釘死在截字時的同一個寬度：不釘的話 word-break 會讓
+           min-content 縮成一個字，整張表跟著變窄＝按一下版面就跳一次 */
+        width: 330px;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        word-break: break-all;
+        background: #FDF3E3;
+        border-radius: 3px;
+        padding: 1px 3px;
+    }
+
     .btn-return-style {
         padding-left: 3px;
         /* Adjust horizontal padding for the text "已回" */
@@ -2894,6 +2928,13 @@ echo "</script>\n";
                 return_date:      _nd(item.return_date),
                 QC_check:         item.QC_check || null,
                 QC_check_date:    _nd(item.QC_check_date),
+                // 容器四欄（QC 品管填 QC_ps/QC_ps2、生管填 pm_ps/pm_ps2）：
+                // 少帶就會「初載看得到容器、自動更新後容器消失」，這是後備路徑，
+                // 主路徑是後端 _fetch_data.php 回傳的 ing_active_map，兩邊欄位要一致。
+                QC_ps:            item.QC_ps  != null ? item.QC_ps  : null,
+                QC_ps2:           item.QC_ps2 != null ? item.QC_ps2 : null,
+                pm_ps:            item.pm_ps  != null ? item.pm_ps  : null,
+                pm_ps2:           item.pm_ps2 != null ? item.pm_ps2 : null,
                 qc_completed:     item.qc_completed ? 1 : 0,
                 qc_completed_at:  _nd(item.qc_completed_at),
                 maker_id:         item.maker_id || '',
@@ -12125,8 +12166,8 @@ echo "</script>\n";
                     </td>
                     <td style="white-space:nowrap;">
                         ${escapeHtml(o.Order_oo || '')}
-                        ${o.Processing_items ? `<br><span style="color:#888;font-size:10px;line-height:1.3;display:block;">製程：${escapeHtml(o.Processing_items)}</span>` : ''}
-                        ${o.Order_ps ? `<span style="color:#888;font-size:10px;line-height:1.3;display:block;">備註：${escapeHtml(o.Order_ps)}</span>` : ''}
+                        ${o.Processing_items ? `<br><span class="ord-bind-sub" title="製程：${escapeHtml(o.Processing_items)}">製程：${escapeHtml(o.Processing_items)}</span>` : ''}
+                        ${o.Order_ps ? `<span class="ord-bind-sub" title="備註：${escapeHtml(o.Order_ps)}">備註：${escapeHtml(o.Order_ps)}</span>` : ''}
                     </td>
                     <td class="text-center">${escapeHtml(delDate)}</td>
                     <td class="text-center">${escapeHtml(String(o.Qty || 0))}</td>
@@ -12144,6 +12185,19 @@ echo "</script>\n";
             });
             html += '</tbody></table>';
             $container.html(warnHtml + html);
+
+            // ── 過長的製程／備註：量測後才標成可點，點一下展開／收合完整內容 ──
+            //    用 scrollWidth 實際量測，沒被截斷的短備註就不會多出一個看起來可點卻沒作用的樣式。
+            $container.find('.ord-bind-sub').each(function() {
+                if (this.scrollWidth > this.clientWidth + 1) {
+                    this.classList.add('is-long');
+                    this.title = (this.title || '') + '\n（點一下展開完整內容）';
+                }
+            });
+            $container.off('click.ordSub').on('click.ordSub', '.ord-bind-sub.is-long', function(e) {
+                e.stopPropagation();
+                this.classList.toggle('expanded');
+            });
 
             // ── 勾選事件：自動填入建議數量 ──
             $container.find('.order-bind-cb').on('change', function() {

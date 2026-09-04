@@ -843,7 +843,14 @@ foreach ($raw_ps_rows as $_iam_item) {
         'return_date'      => $_iam_fmt($_iam_item['return_date'] ?? null),
         'QC_check'         => $_iam_item['QC_check'] ?? null,
         'QC_check_date'    => !empty($_iam_qcd) && $_iam_qcd !== '0000-00-00 00:00:00' ? $_iam_fmt($_iam_qcd) : null,
+        // 容器四欄必須與頁面初載（OreadyReply_ForPm_BaseOfTime.php 的 $bom_ing_active_map）
+        // 完全一致，缺一欄就會出現「初載看得到容器、自動更新後容器消失」——
+        // 生管回報的容器存在 pm_ps/pm_ps2，之前這裡只給 QC_ps，所以只有生管填過的那些
+        // BOM（畫面上的 2E 等）在自動更新後整個不見（2026-09-04 使用者實測回報）。
         'QC_ps'            => $_iam_item['QC_ps'] ?? null,
+        'QC_ps2'           => $_iam_item['QC_ps2'] ?? null,
+        'pm_ps'            => $_iam_item['pm_ps'] ?? null,
+        'pm_ps2'           => $_iam_item['pm_ps2'] ?? null,
         'qc_completed'     => (int)($_iam_item['qc_completed'] ?? 0),
         'qc_completed_at'  => $_iam_fmt($_iam_item['qc_completed_at'] ?? null),
         'maker_id'         => $_iam_item['maker_id'] ?? '',
