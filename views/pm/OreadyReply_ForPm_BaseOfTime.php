@@ -759,6 +759,36 @@ foreach ($bom_ing_active_map as &$_iam_procs) {
 }
 unset($_iam_procs);
 
+// ── 廠商聯絡資訊（電話／傳真／地址）：供「發單日」欄位的廠商名稱滑鼠浮動視窗使用 ──
+// 刻意不塞進 $bom_ing_active_map：那份 map 有三個地方各建一次（本頁初載、
+// _fetch_data.php 的 ing_active_map、前端 buildIngActiveMap），漏一份就會出現
+// 「初載看得到、自動更新後不見」（2026-09-04 容器事故）。改成獨立的 [maker_id_no => 聯絡資訊]
+// 對照表，render 當下即時查，AJAX 自動更新後仍然有效。
+$maker_info_map = [];
+$_mkinfo_nos = [];
+foreach ($bom_ing_active_map as $_mkinfo_procs) {
+    foreach ($_mkinfo_procs as $_mkinfo_p) {
+        $_mkinfo_n = trim((string)($_mkinfo_p['maker_id_no'] ?? ''));
+        if ($_mkinfo_n !== '') $_mkinfo_nos[$_mkinfo_n] = true;
+    }
+}
+if (!empty($_mkinfo_nos)) {
+    try {
+        $_mkinfo_keys = array_keys($_mkinfo_nos);
+        $_mkinfo_ph   = implode(',', array_fill(0, count($_mkinfo_keys), '?'));
+        $_mkinfo_stmt = $db->prepare("SELECT maker_id_no, m_tel, m_tel2, m_fax, factory_address FROM maker_list WHERE maker_id_no IN ($_mkinfo_ph)");
+        $_mkinfo_stmt->execute($_mkinfo_keys);
+        foreach ($_mkinfo_stmt->fetchAll(PDO::FETCH_ASSOC) as $_mkinfo_r) {
+            $maker_info_map[(string)$_mkinfo_r['maker_id_no']] = [
+                'tel'  => trim((string)($_mkinfo_r['m_tel'] ?? '')),
+                'tel2' => trim((string)($_mkinfo_r['m_tel2'] ?? '')),
+                'fax'  => trim((string)($_mkinfo_r['m_fax'] ?? '')),
+                'addr' => trim((string)($_mkinfo_r['factory_address'] ?? '')),
+            ];
+        }
+    } catch (PDOException $e) { error_log('maker_info_map query error: ' . $e->getMessage()); }
+}
+
 // ── 批量查詢 bom_ing_transfer_log（本BOM當關最新單價 + 同料號歷史單價）──────
 $transfer_price_map    = []; // [bom][bom_sn] = 最新單價列
 $transfer_history_map  = []; // [product_id][bom_sn] = [{...}, ...] 由新到舊（排除本BOM）
@@ -1444,6 +1474,7 @@ echo "    window.initialMaxCount = " . json_encode((int)($bom_ps_list_max ?: 0))
 echo "    window.transferPriceMap = " . json_encode($transfer_price_map ?: []) . "; // [bom][bom_sn] 最新單價\n";
 echo "    window.ingActiveMap = " . json_encode($bom_ing_active_map ?: (object)[]) . "; // [bom] => [{per-process active data}] 供發單日欄位使用\n";
 echo "    window.transferHistoryMap = " . json_encode($transfer_history_map ?: []) . "; // [product_id][bom_sn] 同料號歷史\n";
+echo "    window.makerInfoMap = " . json_encode($maker_info_map ?: (object)[]) . "; // [maker_id_no] => {tel,tel2,fax,addr} 供廠商名稱浮動視窗使用\n";
 echo "    window.currentUserStatus = " . json_encode($user_status ?? null) . ";\n";
 echo "    window.canCreate = " . json_encode($can_create) . ";\n";
 echo "    window.canUpdate = " . json_encode($can_update) . ";\n";
@@ -2946,6 +2977,40 @@ echo "</script>\n";
             map[bom].sort(function(a, b) { return parseInt(a.bom_sn || 0, 10) - parseInt(b.bom_sn || 0, 10); });
         });
         return map;
+    }
+
+    // ── 廠商名稱滑鼠浮動視窗（電話／傳真／地址）──────────────────────────────
+    // 資料來源 window.makerInfoMap（PHP 初載建立、AJAX 自動更新時合併），
+    // key 為 maker_id_no；查不到就不掛 popover（行為與掛不上時完全相同，不影響操作）。
+    function buildMakerInfoTip(makerNo) {
+        var info = (window.makerInfoMap || {})[String(makerNo == null ? '' : makerNo).trim()];
+        if (!info) return '';
+        var lines = [];
+        var _v = function(x) {
+            var s = String(x == null ? '' : x).trim();
+            return (s === '' || s.toLowerCase() === 'null') ? '' : s;
+        };
+        var tel = _v(info.tel), tel2 = _v(info.tel2), fax = _v(info.fax), addr = _v(info.addr);
+        if (tel)  lines.push('TEL：' + escapeHtml(tel));
+        if (tel2) lines.push('TEL2：' + escapeHtml(tel2));
+        if (fax)  lines.push('FAX：' + escapeHtml(fax));
+        if (addr) lines.push('地址：' + escapeHtml(addr));
+        return lines.join('<br>');
+    }
+    // 把 popover 掛到指定元素上（沿用本頁既有的 hover popover 初始化，見 updateTable 結尾）
+    function applyMakerPopover(el, makerNo, makerName) {
+        if (!el) return false;
+        var content = buildMakerInfoTip(makerNo);
+        if (!content) return false;
+        el.style.cursor = 'pointer';
+        el.setAttribute('data-toggle', 'popover');
+        el.setAttribute('data-placement', 'top');
+        el.setAttribute('data-container', 'body');
+        el.setAttribute('data-trigger', 'hover');
+        el.setAttribute('data-html', 'true');
+        if (makerName) el.setAttribute('title', String(makerName));
+        el.setAttribute('data-content', content);
+        return true;
     }
 
     // New helper function for date formatting specifically for the "發單日" column
@@ -4659,6 +4724,10 @@ echo "</script>\n";
                         if (response.transfer_history_map) window.transferHistoryMap = response.transfer_history_map;
                         if (response.ing_active_map) window.ingActiveMap = response.ing_active_map;
                         else window.ingActiveMap = buildIngActiveMap(newBomPSList);
+                        // 廠商聯絡資訊：合併而非取代，後端沒回傳時仍沿用初載那份（浮動視窗不會消失）
+                        if (response.maker_info_map && typeof response.maker_info_map === 'object') {
+                            window.makerInfoMap = Object.assign(window.makerInfoMap || {}, response.maker_info_map);
+                        }
                         if (typeof callback === 'function') {
                             callback(); // Execute the callback before rendering main table if needed, or after
                         }
@@ -5372,8 +5441,24 @@ echo "</script>\n";
                 // 有有效狀態（Q/P/ing/E）且 ingActiveMap 資料暫缺時，顯示狀態文字作為安全備援
                 // 其餘情況（未發包、僅 N 狀態）統一顯示「未發包」
                 if (_fbStateVal && _fbStateVal !== 'N' && (_fbDate || _fbMaker)) {
+                    // 廠商名稱同樣要能滑鼠浮出電話／傳真／地址（此路徑用本列自帶的廠商欄位）
+                    var _fbTip = '';
+                    (function() {
+                        var _p = function(label, v) {
+                            var s = String(v == null ? '' : v).trim();
+                            if (s === '' || s.toLowerCase() === 'null') return;
+                            _fbTip += (_fbTip ? '<br>' : '') + label + '：' + escapeHtml(s);
+                        };
+                        _p('TEL', row.m_tel); _p('TEL2', row.m_tel2);
+                        _p('FAX', row.m_fax); _p('地址', row.factory_address);
+                    })();
+                    var _fbMakerHtml = _fbMaker
+                        ? ' <span class="maker-info-pop"' + (_fbTip
+                            ? ' style="cursor:pointer;" data-toggle="popover" data-placement="top" data-container="body" data-trigger="hover" data-html="true" title="' + _fbMaker + '" data-content="' + _fbTip.replace(/"/g, '&quot;') + '"'
+                            : '') + '>' + _fbMaker + '</span>'
+                        : '';
                     _fbDiv.innerHTML = escapeHtml(row.ProcessName || '') +
-                        (_fbDate ? (' ' + _fbDate) : '') + (_fbMaker ? (' ' + _fbMaker) : '') +
+                        (_fbDate ? (' ' + _fbDate) : '') + _fbMakerHtml +
                         ' (' + translateProcessingState(_fbStateVal) + ')';
                 } else {
                     _fbDiv.style.color = '#999';
@@ -5481,7 +5566,16 @@ echo "</script>\n";
                     if (_od || _mk) {
                         var _dmDiv = document.createElement('div');
                         _dmDiv.style.cssText = 'color:#555;font-size:11px;';
-                        _dmDiv.textContent = [_od, _mk].filter(Boolean).join(' ');
+                        if (_od) _dmDiv.appendChild(document.createTextNode(_od));
+                        if (_mk) {
+                            if (_od) _dmDiv.appendChild(document.createTextNode(' '));
+                            // 廠商名稱獨立成 span，掛上電話／傳真／地址浮動視窗
+                            var _mkSpan = document.createElement('span');
+                            _mkSpan.className = 'maker-info-pop'; // 刻意不用 vendor-name-tooltip-trigger：該 class 會被發單日欄位的雙擊篩選處理器排除掉
+                            _mkSpan.textContent = _mk;
+                            applyMakerPopover(_mkSpan, _proc.maker_id_no, _mk);
+                            _dmDiv.appendChild(_mkSpan);
+                        }
                         _pDiv.appendChild(_dmDiv);
                     }
                     var _st  = String(_proc.processing_state || '');

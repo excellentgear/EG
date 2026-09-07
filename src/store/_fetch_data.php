@@ -864,6 +864,33 @@ foreach ($ing_active_map as &$_iam_procs) {
 }
 unset($_iam_procs);
 
+// maker_info_map：[maker_id_no => {tel,tel2,fax,addr}]，供發單日欄位的廠商名稱浮動視窗使用。
+// 刻意獨立於 ing_active_map 之外（那份 map 有三個地方各建一次，容易漏欄位）。
+$maker_info_map = [];
+$_mkinfo_nos = [];
+foreach ($ing_active_map as $_mkinfo_procs) {
+    foreach ($_mkinfo_procs as $_mkinfo_p) {
+        $_mkinfo_n = trim((string)($_mkinfo_p['maker_id_no'] ?? ''));
+        if ($_mkinfo_n !== '') $_mkinfo_nos[$_mkinfo_n] = true;
+    }
+}
+if (!empty($_mkinfo_nos)) {
+    try {
+        $_mkinfo_keys = array_keys($_mkinfo_nos);
+        $_mkinfo_ph   = implode(',', array_fill(0, count($_mkinfo_keys), '?'));
+        $_mkinfo_stmt = $db->prepare("SELECT maker_id_no, m_tel, m_tel2, m_fax, factory_address FROM maker_list WHERE maker_id_no IN ($_mkinfo_ph)");
+        $_mkinfo_stmt->execute($_mkinfo_keys);
+        foreach ($_mkinfo_stmt->fetchAll(PDO::FETCH_ASSOC) as $_mkinfo_r) {
+            $maker_info_map[(string)$_mkinfo_r['maker_id_no']] = [
+                'tel'  => trim((string)($_mkinfo_r['m_tel'] ?? '')),
+                'tel2' => trim((string)($_mkinfo_r['m_tel2'] ?? '')),
+                'fax'  => trim((string)($_mkinfo_r['m_fax'] ?? '')),
+                'addr' => trim((string)($_mkinfo_r['factory_address'] ?? '')),
+            ];
+        }
+    } catch (PDOException $e) { error_log('_fetch_data maker_info_map error: ' . $e->getMessage()); }
+}
+
 echo json_encode([
     'success' => true,
     'data' => $data_to_return,
@@ -873,6 +900,7 @@ echo json_encode([
     'all_process_types' => $all_process_types,
     'transfer_price_map' => $transfer_price_map,
     'ing_active_map' => $ing_active_map ?: (object)[],
+    'maker_info_map' => $maker_info_map ?: (object)[],
 ]);
 
 ?>
