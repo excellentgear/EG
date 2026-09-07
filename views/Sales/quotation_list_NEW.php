@@ -419,14 +419,48 @@ body { background:var(--bg); }
 
 /* ── 歷史快帶入 ── */
 .hq-row td { padding:2px 0 5px 32px !important; background:transparent; }
-.hq-wrap { display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
+.hq-wrap { display:flex; flex-wrap:wrap; gap:5px; align-items:stretch; }
 .hq-chip {
-    background:#f0f8ff; border:1px solid #cce; border-radius:4px;
-    padding:2px 8px; font-size:11px; cursor:pointer; transition:background .12s;
-    display:inline-block;
+    background:#fdf6ec; border:1px solid #e4c293; border-radius:4px;
+    padding:3px 8px; font-size:11px; cursor:pointer; transition:background .12s;
+    display:inline-flex; flex-direction:column; gap:1px; line-height:1.55;
+    color:#6B471A; max-width:360px;
 }
-.hq-chip:hover { background:#ddf; border-color:#88c; }
-.hq-chip b { color:var(--primary); }
+.hq-chip:hover { background:#F7E0BD; border-color:#d6a35c; }
+.hq-chip b { color:#8a5a2b; }
+.hq-chip-l1 { display:flex; align-items:center; gap:5px; white-space:nowrap; }
+.hq-chip-l2 { font-size:10px; color:#a08a6f; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* 製程比對徽章（暖色系；顏色不是唯一資訊，另有文字） */
+.hq-mt { display:inline-block; font-size:9px; padding:0 5px; border-radius:8px;
+         font-weight:700; white-space:nowrap; border:1px solid; }
+.hq-mt-same { background:#F7E0BD; border-color:#E4C293; color:#6B471A; }
+.hq-mt-part { background:#F0A24B; border-color:#D6851F; color:#4E2C0B; }
+.hq-mt-diff { background:#DD5138; border-color:#BE3C25; color:#FFFFFF; }
+.hq-mt-none { background:#f2ede6; border-color:#ddd3c6; color:#a08a6f; }
+.hq-price-btn {
+    border:1px solid #d6a35c; background:#fff; color:#8a5a2b; border-radius:3px;
+    font-size:9.5px; padding:0 5px; cursor:pointer; line-height:15px;
+}
+.hq-price-btn:hover { background:#F0A24B; color:#4E2C0B; }
+/* 帶入目標列提示（歷史分頁 postMessage 回來時閃爍，確認帶到正確的列）*/
+.hq-target-flash { animation: hqFlash 1s ease-in-out 3; }
+@keyframes hqFlash { 0%,100% { background:transparent; } 50% { background:#F7E0BD; } }
+/* 檢視畫面「帶入」欄：僅由原報價單分頁以 ?hq_pick=1 開啟時才出現 */
+tr.hq-pick-hit > td { background:#fdf6ec; }
+
+/* ── 項次編號 + 重複項目提示（2026-09-07）── */
+.item-row-no {
+    font-size:10px; font-weight:700; color:#a08a6f;
+    line-height:1.2; margin-bottom:2px; text-align:center;
+}
+#quoteItemsTable > tbody > tr.item-row.dup-row > td { background:#F8DCD5 !important; }
+#quoteItemsTable > tbody > tr.item-row.dup-row .item-row-no { color:#8C3A28; }
+#dupWarnBar {
+    margin:6px 0 0; padding:6px 10px; font-size:12px; line-height:1.7;
+    background:#F8DCD5; border:1px solid #E9B8AC; border-left:4px solid #DD5138;
+    border-radius:3px; color:#6B471A;
+}
+#dupWarnBar b { color:#8C3A28; }
 
 /* ── 議價 badge ── */
 .nego-badge {
@@ -857,7 +891,7 @@ body { background:var(--bg); }
                                 </colgroup>
                                 <thead>
                                     <tr>
-                                        <th></th>
+                                        <th style="text-align:center;" title="項次（錯誤訊息會用這個編號指出是哪一列）">#</th>
                                         <th>料號</th>
                                         <th>製程 <small style="color:#aaa;font-weight:400;">/ 製程分類</small></th>
                                         <th>料號備註</th>
@@ -872,6 +906,8 @@ body { background:var(--bg); }
                                 <tbody></tbody>
                             </table>
                         </div>
+                        <!-- 重複項目提示（內容完全相同的列；2026-09-07 新增，無重複時不顯示）-->
+                        <div id="dupWarnBar" style="display:none;"></div>
                         <button type="button" class="btn btn-info btn-sm" onclick="addItemRow()">
                             <i class="fa fa-plus"></i> 新增項目
                         </button>
@@ -1800,6 +1836,21 @@ let _tempUploadQno = null;      // 新建報價有上傳但未儲存的 quote_no
 let defaultTolerance = { value: 5, unit: '%' };
 let currentUploadPath = '';
 
+// ── 歷史報價「開新分頁檢視 → 帶入」用的網址參數（2026-09-07）──
+// 只有由原報價單分頁以 ?hq_pick=1 開啟、且 window.opener 還活著時才進入挑選模式；
+// 一般使用者直接開這一頁完全不受影響（沒有這三個參數＝行為與原本完全相同）
+const HQ_PICK = (function () {
+    try {
+        const sp = new URLSearchParams(window.location.search);
+        if (sp.get('hq_pick') !== '1') return null;
+        if (!window.opener || window.opener.closed) return null;
+        return {
+            item_id: parseInt(sp.get('hq_item'), 10) || 0,
+            row    : sp.get('hq_row') || ''
+        };
+    } catch (e) { return null; }
+})();
+
 // ══════════════════════════════════════════════════════
 // 工具函式
 // ══════════════════════════════════════════════════════
@@ -1869,13 +1920,28 @@ $(document).ready(function () {
     // 通知點擊深連結：?open_id=quote_id 直接開啟該張報價單檢視畫面（比照CAR/QA的open_id慣例）
     (function () {
         var openId = parseInt(new URLSearchParams(window.location.search).get('open_id'), 10);
-        if (openId > 0) openViewMode(openId);
+        if (!(openId > 0)) return;
+        if (!HQ_PICK) { openViewMode(openId); return; }
+        // 帶入模式：製程名稱要靠 processTagTree 才顯示得出來（它是另一支非同步請求），
+        // 等它載完再開，否則畫面與確認視窗會看到空白製程；最多等 3 秒，逾時照常開
+        var waited = 0;
+        (function waitTree() {
+            if (processTagTree.length || waited >= 3000) { openViewMode(openId); return; }
+            waited += 100;
+            setTimeout(waitTree, 100);
+        })();
     })();
     // 簽核專屬頁(quotation_approval_view.php)以 window.open 開啟時，這裡是它的 opener——
     // 核准/駁回完成後該分頁會 postMessage 回來，這裡收到才主動重新整理清單/當前檢視畫面，
     // 避免使用者已開著的這頁清單/檢視在另一分頁簽核完後仍顯示舊的審核狀態
     window.addEventListener('message', function (ev) {
         if (!ev.data) return;
+        // 歷史報價分頁按下「帶入」→ 回填到當初點選的那一列（會再確認一次才寫入）
+        if (ev.data.type === 'quotation_hq_apply') {
+            if (ev.origin !== window.location.origin) return;   // 只收同來源的訊息
+            hqReceiveApply(ev.data);
+            return;
+        }
         // 補件審核頁(quotation_supplement_view.php)完成核准/駁回 → 更新補件待審徽章與清單、刷新檢視附件
         if (ev.data.type === 'quotation_supplement_done') {
             if (CAN_SIGN) refreshSuppReviewBadge();
@@ -4210,9 +4276,21 @@ function renderViewPanel(q, contact, detail) {
     const esc = s => escapeHtml(String(s||''));
     const fmtNum = n => (parseFloat(n||0)).toLocaleString('zh-TW', {minimumFractionDigits:0, maximumFractionDigits:2});
     const negLabel = q.is_negotiation == 1 ? '<small style="color:#c0392b;font-weight:bold;margin-right:2px;">議價</small>' : '';
+    // 「帶入」挑選模式：僅由原報價單分頁以 ?hq_pick=1 開啟時才多出這一欄，
+    // 一般檢視（含通知深連結 ?open_id=）完全維持原樣
+    const pickOn   = !!HQ_PICK;
+    const pickCell = (it, rowspan) => pickOn
+        ? `<td class="text-center" ${rowspan > 1 ? `rowspan="${rowspan}"` : ''} style="vertical-align:middle;white-space:nowrap;">
+               <button type="button" class="btn btn-xs hq-pick-btn" data-item="${esc(it.item_id)}"
+                       style="background:#8a5a2b;color:#fff;font-weight:600;"
+                       title="把這一列的製程與單價帶回原本的報價單"><i class="fa fa-sign-in"></i> 帶入</button>
+           </td>`
+        : '';
     let itemsHtml = '';
     (q.items || []).forEach((it, i) => {
         const isTiered = it.is_tiered == 1;
+        const pickHit  = pickOn && HQ_PICK.item_id && String(it.item_id) === String(HQ_PICK.item_id);
+        const trCls    = pickHit ? ' class="hq-pick-hit"' : '';
         // 品名規格欄：Spec_No+齒輪規格 / 製程 / 料號備註
         const leftSpec = [it.spec_no, it.gear_spec].filter(Boolean).join(' ');
         const desc = [leftSpec, it.process_names, it.specification].filter(Boolean).join(' / ');
@@ -4227,7 +4305,7 @@ function renderViewPanel(q, contact, detail) {
             const tolTxt = t => (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '')
                 ? '' : `<div style="font-size:10px;color:#a06a1f;">容差±${fmtNum(t.tolerance_value)}${esc(t.tolerance_unit || '')}${t.tolerance_note ? '｜' + esc(t.tolerance_note) : ''}</div>`;
             it.tiers.forEach((t, ti) => {
-                itemsHtml += `<tr>
+                itemsHtml += `<tr${trCls}>
                     ${ti===0 ? `<td rowspan="${it.tiers.length}" style="vertical-align:middle;text-align:center;">${i+1}</td>
                         <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:12px;">${qlDrawingSpan(it.product_id, it.d_setting_d_id)}</td>
                         <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:11px;">${descHtml}<div style="font-size:10px;color:#888;">（階梯報價，單價依訂購數量區間）</div></td>` : ''}
@@ -4235,11 +4313,12 @@ function renderViewPanel(q, contact, detail) {
                     <td class="text-center">${esc(it.unit||'PCS')}</td>
                     <td class="text-right">${negLabel}${fmtNum(t.unit_price)}</td>
                     <td></td>
+                    ${ti===0 ? pickCell(it, it.tiers.length) : ''}
                 </tr>`;
             });
         } else {
             const amt = parseFloat(it.amount || 0);
-            itemsHtml += `<tr>
+            itemsHtml += `<tr${trCls}>
                 <td class="text-center">${i+1}</td>
                 <td style="font-size:12px;">${qlDrawingSpan(it.product_id, it.d_setting_d_id)}</td>
                 <td style="font-size:11px;">${descHtml}</td>
@@ -4247,6 +4326,7 @@ function renderViewPanel(q, contact, detail) {
                 <td class="text-center">${esc(it.unit||'PCS')}</td>
                 <td class="text-right">${negLabel}${fmtNum(it.unit_price)}</td>
                 <td class="text-right">${fmtNum(amt)}</td>
+                ${pickCell(it, 1)}
             </tr>`;
         }
         // 組合件子件清單（勾選顯示才出現；畫面超過 2 件收合）
@@ -4261,7 +4341,7 @@ function renderViewPanel(q, contact, detail) {
             const printBadge = it.print_bom == 1
                 ? `<span style="color:#c0392b;font-weight:normal;font-size:10px;">（列印時包含）</span>`
                 : `<span style="color:#aaa;font-weight:normal;font-size:10px;">（僅畫面顯示，不列印）</span>`;
-            itemsHtml += `<tr><td style="border-top:none;"></td><td colspan="6" style="font-size:11px;color:#666;background:#faf7fd;border-top:none;padding:4px 8px;">
+            itemsHtml += `<tr><td style="border-top:none;"></td><td colspan="${pickOn ? 7 : 6}" style="font-size:11px;color:#666;background:#faf7fd;border-top:none;padding:4px 8px;">
                 <div style="margin-bottom:2px;"><span style="color:#8e44ad;font-weight:700;"><i class="fa fa-sitemap"></i> 組合件子件清單</span> ${printBadge}</div>
                 <div style="padding-left:6px;border-left:2px solid #d8c3ef;line-height:1.6;">
                 ${head}
@@ -4293,14 +4373,20 @@ function renderViewPanel(q, contact, detail) {
         </div>
     </div>
     ${noteHtml ? `<div style="font-size:13px;margin-bottom:10px;padding:8px 12px;background:#fafafa;border-left:3px solid var(--accent);border-radius:3px;"><strong>備註：</strong><br>${noteHtml}</div>` : ''}
+    ${pickOn ? `<div id="hqPickBar" style="margin-bottom:8px;padding:7px 12px;background:#fdf6ec;border:1px solid #e4c293;border-left:4px solid #F0A24B;border-radius:3px;font-size:12px;color:#6B471A;">
+        <i class="fa fa-sign-in"></i> <b>帶入模式</b>：這是從報價單編輯畫面開啟的歷史報價單。
+        確認下方哪一列才是要參考的項目後，按該列的「帶入」把<b>製程與單價</b>回填到原本那一列（原分頁會再確認一次才寫入）。
+        ${HQ_PICK.item_id ? '淺色標示的列＝原分頁點到的那一筆歷史紀錄。' : ''}
+    </div>` : ''}
     <table class="table table-condensed table-bordered view-item-table" style="margin-bottom:4px;">
         <thead><tr>
             <th style="width:4%;text-align:center;">#</th><th style="width:16%;">料號</th>
             <th>品名規格／加工項目 / 備註</th>
             <th style="width:7%;text-align:right;">數量</th><th style="width:6%;text-align:center;">單位</th>
             <th style="width:10%;text-align:right;">單價</th><th style="width:11%;text-align:right;">金額</th>
+            ${pickOn ? '<th style="width:8%;text-align:center;">帶入</th>' : ''}
         </tr></thead>
-        <tbody>${itemsHtml||'<tr><td colspan="7" class="text-center text-muted">無報價項目</td></tr>'}</tbody>
+        <tbody>${itemsHtml||`<tr><td colspan="${pickOn ? 8 : 7}" class="text-center text-muted">無報價項目</td></tr>`}</tbody>
     </table>
     <div id="viewAttachSection" style="margin-top:10px;">
         <div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:6px;display:flex;align-items:center;gap:5px;">
@@ -4316,6 +4402,7 @@ function renderViewPanel(q, contact, detail) {
         <span style="font-size:11px;color:#999;margin-left:6px;">已核准報價單追加附件，需經簽核者審核通過才會正式放入此報價單</span>
     </div>` : ''}`;
     $('#viewBody').html(html);
+    if (pickOn) hqBindPickButtons(q);   // 帶入模式：綁定每一列的「帶入」鈕
     // 記住目前檢視單的料號清單（product_id，與 linked_parts 儲存格式一致；供補件 modal 下拉使用）
     _viewQuoteParts = [...new Set((q.items || []).map(it => it.product_id).filter(Boolean))];
     loadFileList(q.quote_no, true);
@@ -4612,6 +4699,8 @@ function resetEditor() {
     $('#note-tmpl-btns .note-tmpl-btn').removeClass('nt-applied');
     $('#editorClientNameTag').text('');
     $('#historyBar').hide();
+    $('#dupWarnBar').hide().empty();
+    _dupReported = '';
     updateClientBoundCheck();
     loadClientContacts(null); // 清除聯絡人下拉與隱藏列
 }
@@ -4842,10 +4931,27 @@ function saveQuote(onSuccess) {
             confirmButtonText: '仍要存檔',
             cancelButtonText: '返回補填',
             confirmButtonColor: '#F0A24B',
-        }).then(r => { if (r.isConfirmed) _saveQuoteNoteGate(onSuccess); });
+        }).then(r => { if (r.isConfirmed) _saveQuoteDupGate(onSuccess); });
         return;
     }
-    _saveQuoteNoteGate(onSuccess);
+    _saveQuoteDupGate(onSuccess);
+}
+// 重複項目關卡：內容完全相同的列在存檔前再攔一次（可確認後仍要存，不硬性阻擋既有作業）
+function _saveQuoteDupGate(onSuccess) {
+    const groups = findDuplicateItemRows();
+    updateDupWarn(false);
+    if (!groups.length) { _saveQuoteNoteGate(onSuccess); return; }
+    Swal.fire({
+        title: '有重複的報價項目',
+        html: '下列項次的料號、製程、數量、單位、金額、料號備註完全相同：<br><br>'
+            + groups.map(g => `　・第 <b>${g.join('、')}</b> 列`).join('<br>')
+            + '<br><br><small style="color:#a08a6f;">確定是刻意重複才繼續存檔，否則請返回刪除多餘的列。</small>',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: '仍要存檔',
+        cancelButtonText: '返回修改',
+        confirmButtonColor: '#F0A24B'
+    }).then(r => { if (r.isConfirmed) _saveQuoteNoteGate(onSuccess); });
 }
 function _saveQuoteNoteGate(onSuccess) {
     // 備註為空時提示
@@ -4892,25 +4998,31 @@ function _doSaveQuote(onSuccess) {
     }
     let valid = true;
     let validMsg = '';
-    $('#quoteItemsTable > tbody > tr.item-row').each(function () {
+    $('#quoteItemsTable > tbody > tr.item-row').each(function (rowIdx) {
         const $row     = $(this);
+        const no       = rowIdx + 1;                                  // 項次（與畫面左側編號一致）
         const isTiered = parseInt($row.data('is-tiered')) === 1;
         const pid      = $row.find('.product_id_hidden').val();
-        if (!pid) { valid = false; validMsg = '請填寫所有項目的料號'; return false; }
+        if (!pid) { valid = false; validMsg = `第 ${no} 列尚未填寫料號`; return false; }
         if (!$row.find('.d_setting_d_id_hidden').val().trim()) {
             valid = false;
-            validMsg = `料號「${pid}」尚未綁定：請從建議清單選擇，或使用「建立新料號」快速建立綁定`;
+            validMsg = `第 ${no} 列的料號「${pid}」尚未綁定：請從建議清單選擇，或使用「建立新料號」快速建立綁定`;
             return false;
         }
+        // 以下三項對「已綁定料號」的列一律必填（金額可為 0，但不可空白）；
+        // 階梯報價的數量／單價欄位本來就是停用的，改由 fixAllTiersBeforeSave() 檢查階梯區間，不在這裡誤擋
         if (!$row.find('.proc-subtags-hidden').val().trim()) {
-            valid = false; validMsg = '所有項目的製程為必選'; return false;
+            valid = false; validMsg = `第 ${no} 列（料號 ${pid}）尚未選擇製程`; return false;
         }
         if (!isTiered) {
             if ($row.find('.quantity').val() === '') {
-                valid = false; validMsg = '請填寫所有項目的數量'; return false;
+                valid = false; validMsg = `第 ${no} 列（料號 ${pid}）尚未填寫數量`; return false;
             }
             if ($row.find('.unit-price').val() === '') {
-                valid = false; validMsg = '請填寫所有項目的單價'; return false;
+                valid = false; validMsg = `第 ${no} 列（料號 ${pid}）尚未填寫單價（可填 0）`; return false;
+            }
+            if (($row.find('.amount').val() || '').replace(/,/g, '').trim() === '') {
+                valid = false; validMsg = `第 ${no} 列（料號 ${pid}）金額為空白（可為 0）`; return false;
             }
         }
         const item = {
@@ -6015,7 +6127,8 @@ function addItemRow(item = {}) {
     const _hasBound = item.d_setting_d_id ? '' : 'display:none;';
     const rowHtml = `
     <tr class="item-row" data-item-id="${item.item_id || ''}" data-is-tiered="${isTiered ? 1 : 0}">
-        <td>
+        <td style="text-align:center;">
+            <div class="item-row-no" title="項次">-</div>
             <button type="button" class="btn btn-danger btn-xs" onclick="removeItemRow(this)" title="刪除此項目">
                 <i class="fa fa-trash"></i>
             </button>
@@ -6110,6 +6223,8 @@ function addItemRow(item = {}) {
         loadGearSpecs($newRow, _gDid ? null : item.product_id, _gDid);
         loadBomInfo($newRow, _gDid ? null : item.product_id, _gDid);
     }
+    renumberItemRows();
+    scheduleDupCheck(false);   // 載入既有明細時只標示，不跳視窗
 }
 
 function removeItemRow(btn) {
@@ -6119,7 +6234,106 @@ function removeItemRow(btn) {
     $row.nextUntil('tr.item-row', 'tr.bom-row').remove();
     $row.remove();
     calculateTotal();
+    renumberItemRows();
+    updateDupWarn(false);
 }
+
+// ══════════════════════════════════════════════════════
+// 項次編號 ＋ 重複項目即時比對（2026-09-07 新增）
+// 起因：OP1150907003 同一個料號＋製程＋數量＋金額被重複建立 3 次，畫面上完全看不出來
+// ══════════════════════════════════════════════════════
+
+// 重新編號：錯誤訊息一律用這個項次指出是哪一列
+function renumberItemRows() {
+    $('#quoteItemsTable > tbody > tr.item-row').each(function (i) {
+        $(this).children('td').first().find('.item-row-no').text(i + 1);
+    });
+}
+
+// 這一列的比對指紋：料號綁定編號＋製程＋數量＋單位＋金額＋料號備註
+// 回傳 null＝還沒綁料號，不參與比對（避免打字打到一半就一直跳提示）
+function itemRowSignature($row) {
+    const did = ($row.find('.d_setting_d_id_hidden').val() || '').trim();
+    if (!did) return null;
+    const norm = v => String(v == null ? '' : v).trim();
+    const num  = v => { const n = parseFloat(String(v == null ? '' : v).replace(/,/g, '')); return isNaN(n) ? '' : String(n); };
+    const procs = ($row.find('.proc-subtags-hidden').val() || '')
+        .split(',').map(s => s.trim()).filter(Boolean).map(Number)
+        .sort((a, b) => a - b).join(',');
+    const isTiered = parseInt($row.data('is-tiered')) === 1;
+    let priceSig;
+    if (isTiered) {
+        // 階梯報價：整張階梯表都相同才算重複（只比合計金額會把不同階梯結構誤判成同一筆）
+        const t = [];
+        $row.next('tr.tier-row').find('.tier-tbody tr.tier-input-row').each(function () {
+            t.push([num($(this).find('.tier-qty-min').val()),
+                    num($(this).find('.tier-qty-max').val()),
+                    num($(this).find('.tier-unit-price').val())].join(':'));
+        });
+        priceSig = 'T|' + t.join('|');
+    } else {
+        priceSig = 'S|' + num($row.find('.quantity').val()) + '|' + num($row.find('.amount').val());
+    }
+    return [did, procs, norm($row.find('.item-unit').val()), priceSig,
+            norm($row.find('input[name="specification"]').val())].join('##');
+}
+
+// 內容完全相同的列 → 回傳項次群組，例：[[1,3,5]]
+function findDuplicateItemRows() {
+    const map = {};
+    $('#quoteItemsTable > tbody > tr.item-row').each(function (i) {
+        const sig = itemRowSignature($(this));
+        if (!sig) return;
+        (map[sig] = map[sig] || []).push(i + 1);
+    });
+    return Object.keys(map).map(k => map[k]).filter(g => g.length > 1);
+}
+
+let _dupReported = '';   // 已提示過的組合，避免每敲一個字就跳一次視窗
+
+function updateDupWarn(popup) {
+    const groups = findDuplicateItemRows();
+    const $rows  = $('#quoteItemsTable > tbody > tr.item-row');
+    const dupNos = new Set();
+    groups.forEach(g => g.forEach(n => dupNos.add(n)));
+    $rows.removeClass('dup-row').each(function (i) {
+        if (dupNos.has(i + 1)) $(this).addClass('dup-row');
+    });
+
+    const $bar = $('#dupWarnBar');
+    if (!groups.length) { $bar.hide().empty(); _dupReported = ''; return; }
+    $bar.html('<i class="fa fa-exclamation-triangle"></i> <b>有重複的報價項目</b>'
+        + '（料號、製程、數量、單位、金額、料號備註完全相同）：<br>'
+        + groups.map(g => `　・第 <b>${g.join('、')}</b> 列內容完全相同`).join('<br>')
+        + '<br><small>若不是刻意重複，請刪除多餘的列後再儲存。</small>').show();
+
+    const key = JSON.stringify(groups);
+    if (popup && key !== _dupReported) {
+        _dupReported = key;
+        const g    = groups[groups.length - 1];
+        const last = g[g.length - 1];
+        Swal.fire({
+            icon: 'error', title: '這一筆已經建立過了',
+            html: `第 <b>${last}</b> 列與第 <b>${g.slice(0, -1).join('、')}</b> 列的內容完全相同<br>
+                   <small style="color:#a08a6f;">（料號、製程、數量、單位、金額、料號備註都一樣）</small><br><br>
+                   請確認是否重複建立，若不需要請刪除多餘的那一列。`,
+            confirmButtonColor: '#8a5a2b'
+        });
+    }
+}
+
+let _dupTimer = null;
+function scheduleDupCheck(popup) {
+    clearTimeout(_dupTimer);
+    _dupTimer = setTimeout(() => updateDupWarn(popup === true), 400);
+}
+
+// 打完資料就比對（停止輸入 0.4 秒後）
+$(document).on('input change',
+    '#quoteItemsTable .quantity, #quoteItemsTable .unit-price, #quoteItemsTable .item-unit,'
+  + '#quoteItemsTable input[name="specification"],'
+  + '#quoteItemsTable .tier-qty-min, #quoteItemsTable .tier-qty-max, #quoteItemsTable .tier-unit-price',
+    function () { scheduleDupCheck(true); });
 
 // 項目列是否「完全空白尚未輸入」：料號、製程、料號備註、數量、單價、金額全空才算
 // （金額為唯讀自動計算欄，空字串或 0 視為空白；階梯模式一律視為已輸入）
@@ -6251,6 +6465,10 @@ function toggleProcSubTag($cell, subTagId, groupId) {
     const activeGid = parseInt($cell.find('.proc-l1-btn.active').data('gid')) || (processTagTree[0] && processTagTree[0].group_id);
     if (activeGid) renderProcL2($cell, activeGid, false);
     renderProcSelectedChips($cell);
+    // 製程一改，下方歷史卡片的「製程相同/不同」徽章要跟著重算，否則徽章會停在舊狀態
+    const $hqIr = $cell.closest('tr.item-row');
+    if ($hqIr.length && typeof renderHqChips === 'function') renderHqChips($hqIr);
+    scheduleDupCheck(true);   // 製程也是重複比對的條件之一
 }
 
 // 渲染已選子標籤 chips
@@ -6280,6 +6498,10 @@ function removeProcSubTagChip(el) {
     const activeGid = parseInt($cell.find('.proc-l1-btn.active').data('gid')) || (processTagTree[0] && processTagTree[0].group_id);
     if (activeGid) renderProcL2($cell, activeGid, false);
     renderProcSelectedChips($cell);
+    // 製程一改，下方歷史卡片的「製程相同/不同」徽章要跟著重算，否則徽章會停在舊狀態
+    const $hqIr = $cell.closest('tr.item-row');
+    if ($hqIr.length && typeof renderHqChips === 'function') renderHqChips($hqIr);
+    scheduleDupCheck(true);   // 製程也是重複比對的條件之一
 }
 
 // ══════════════════════════════════════════════════════
@@ -6420,35 +6642,75 @@ function renderBomArea($tr) {
 }
 
 // ══════════════════════════════════════════════════════
+// 歷史報價：顯示製程／數量並與目前這列比對 → 點擊開新分頁檢視 → 由該分頁按「帶入」回填
+// （2026-09-07 新增。原本點卡片＝直接帶單價，該行為保留為卡片上的「帶單價」小按鈕）
+// ══════════════════════════════════════════════════════
+
+// 記住「哪一列按下了哪一張歷史單」，帶入回來時用來確認沒有帶錯列
+const HQ_PENDING = {};
+
+// sub_tag_id 陣列 → 製程中文名（查不到名稱就顯示 #id，不要整段空白讓人以為沒製程）
+function hqSubTagNames(ids) {
+    if (!ids || !ids.length) return '';
+    return ids.map(sid => {
+        let name = '';
+        processTagTree.forEach(g => (g.sub_tags || []).forEach(st => {
+            if (st.sub_tag_id === sid) name = st.sub_tag_name;
+        }));
+        return name || ('#' + sid);
+    }).join('・');
+}
+
+// 一筆歷史資料的製程 sub_tag_id：優先用 process_notes（精確），舊資料才由製程代號推算
+function hqRowSubTagIds(r) {
+    const saved = String(r.process_notes || '').split(',')
+        .map(s => parseInt(s.trim())).filter(x => x > 0);
+    if (saved.length) return saved;
+    const procs = String(r.processes || '').split(',').map(s => s.trim()).filter(Boolean);
+    return procs.length ? inferSubTagsFromProcessIds(procs) : [];
+}
+
+// 製程比對徽章（顏色不是唯一資訊，另有文字，黑白列印也讀得懂）
+function hqMatchInfo(curIds, histIds) {
+    if (!curIds.length && !histIds.length)
+        return { cls:'hq-mt-none', txt:'無製程', tip:'目前這列與這筆歷史都沒有選製程' };
+    if (!curIds.length)
+        return { cls:'hq-mt-none', txt:'尚未選製程', tip:'目前這列還沒選製程，無法比對' };
+    if (!histIds.length)
+        return { cls:'hq-mt-none', txt:'歷史無製程', tip:'這筆歷史報價沒有記錄製程' };
+    const cur = new Set(curIds), his = new Set(histIds);
+    const inter = [...his].filter(x => cur.has(x));
+    if (inter.length === cur.size && inter.length === his.size)
+        return { cls:'hq-mt-same', txt:'✔ 製程相同', tip:'製程與目前這列完全相同' };
+    if (inter.length === 0)
+        return { cls:'hq-mt-diff', txt:'✖ 製程不同', tip:'與目前這列沒有任何相同的製程' };
+    return { cls:'hq-mt-part', txt:`△ 部分相同 ${inter.length}/${his.size}`,
+             tip:`相同：${hqSubTagNames(inter)}` };
+}
+
+// 取得某項目列的歷史列（tier-row 會插在 item-row 與 hq-row 之間，故用 nextUntil 找）
+function hqRowOf($itemRow) {
+    return $itemRow.nextUntil('tr.item-row', 'tr.hq-row');
+}
+
 function loadItemHistory($itemRow, productId) {
     const clientName = $('#client_name').val().trim();
     if (!clientName || !productId) return;
 
-    // 移除舊的快帶列
-    $itemRow.next('tr.hq-row').remove();
+    // 移除舊的快帶列（用 nextUntil：階梯模式時 hq-row 不是緊接在 item-row 後面）
+    hqRowOf($itemRow).remove();
     const $tierRow = $itemRow.next('tr.tier-row');
     const colCount = $itemRow.find('td').length;
 
     $.get(API_URL, { action: 'get_price_history', client_name: clientName, product_id: productId }, res => {
         if (!res.success || !res.data || !res.data.length) return;
-        const recent = res.data.slice(0, 5);
-        let chips = recent.map(r => {
-            let label, payload;
-            if (r.is_tiered && r.tiers && r.tiers.length) {
-                label = r.tiers.map(t => `${formatNumber(t.qty_min)}+: ${formatNumber(t.unit_price)}`).join(' / ');
-                payload = '';
-            } else {
-                label = `${escapeHtml(String(r.quote_date||'').replace(/-/g,'.'))} @ <b>${formatNumber(r.unit_price)}</b>`;
-                payload = r.unit_price;
-            }
-            const attr = payload !== '' ? `data-price="${payload}"` : '';
-            return `<span class="hq-chip" ${attr} title="${escapeHtml(r.quote_no)}">${label}</span>`;
-        }).join('');
+        $itemRow.data('hq-list', res.data.slice(0, 5));
 
         const $hqTr = $(`<tr class="hq-row"><td colspan="${colCount}" class="hq-row">
             <div class="hq-wrap" style="padding:3px 0 5px 0;">
-                <small style="color:#aaa;font-size:10px;white-space:nowrap;"><i class="fa fa-history"></i> 歷史</small>
-                ${chips}
+                <small style="color:#a08a6f;font-size:10px;white-space:nowrap;"
+                       title="同客戶＋同料號的歷史報價。點卡片＝開新分頁檢視該張報價單，再由該分頁按「帶入」回填">
+                    <i class="fa fa-history"></i> 歷史</small>
             </div>
         </td></tr>`);
 
@@ -6456,16 +6718,265 @@ function loadItemHistory($itemRow, productId) {
         if ($tierRow.length) $tierRow.after($hqTr);
         else $itemRow.after($hqTr);
 
-        // 點擊快帶入單價
-        $hqTr.find('.hq-chip[data-price]').on('click', function () {
-            const price = $(this).data('price');
-            if (!price && price !== 0) return;
-            const $isTiered = parseInt($itemRow.data('is-tiered'));
-            if (!$isTiered) {
-                $itemRow.find('.unit-price').val(price).trigger('input');
-            }
+        renderHqChips($itemRow);
+    });
+}
+
+// 畫出歷史卡片（製程／數量／比對徽章）；目前這列的製程一改就重畫，徽章不會過期
+function renderHqChips($itemRow) {
+    const $hqTr = hqRowOf($itemRow);
+    if (!$hqTr.length) return;
+    const list  = $itemRow.data('hq-list') || [];
+    const $wrap = $hqTr.find('.hq-wrap');
+    $wrap.find('.hq-chip').remove();
+    const curIds = getProcSelectedSubTags($itemRow.find('.process-cell'));
+
+    let html = '';
+    list.forEach((r, idx) => {
+        const histIds = hqRowSubTagIds(r);
+        const m       = hqMatchInfo(curIds, histIds);
+        const isTier  = r.is_tiered == 1 && r.tiers && r.tiers.length;
+        const dateTxt = escapeHtml(String(r.quote_date || '').replace(/-/g, '.'));
+        const priceTxt = isTier
+            ? '階梯 ' + r.tiers.map(t => `${formatNumber(t.qty_min)}+:${formatNumber(t.unit_price)}`).join(' / ')
+            : `@ <b>${formatNumber(r.unit_price)}</b>`;
+        const procTxt = hqSubTagNames(histIds) || '（無製程）';
+        const qtyTxt  = isTier ? '' : `　數量 ${formatNumber(r.quantity)} ${escapeHtml(r.unit || 'PCS')}`;
+        html += `<span class="hq-chip" data-idx="${idx}"
+            title="${escapeHtml(r.quote_no)}｜製程：${escapeHtml(procTxt)}｜${escapeHtml(m.tip)}（點擊開新分頁檢視這張報價單）">
+            <span class="hq-chip-l1">${dateTxt} ${priceTxt}
+                <span class="hq-mt ${m.cls}">${m.txt}</span>
+                ${isTier ? '' : `<button type="button" class="hq-price-btn" data-price="${r.unit_price}"
+                    title="不開分頁，直接把單價帶到這一列（原本點卡片的行為）">帶單價</button>`}
+            </span>
+            <span class="hq-chip-l2">${escapeHtml(procTxt)}${qtyTxt}</span>
+        </span>`;
+    });
+    $wrap.append(html);
+
+    // 「帶單價」＝維持原本一鍵帶入單價的行為（階梯模式不動）
+    $wrap.find('.hq-price-btn').on('click', function (e) {
+        e.stopPropagation();
+        const price = $(this).data('price');
+        if (price === undefined || price === null || price === '') return;
+        if (parseInt($itemRow.data('is-tiered')) === 1) return;
+        $itemRow.find('.unit-price').val(price).trigger('input');
+    });
+    // 點卡片＝開新分頁檢視這張歷史報價單
+    $wrap.find('.hq-chip').on('click', function () {
+        const r = list[parseInt($(this).data('idx'))];
+        if (r) hqOpenHistoryTab($itemRow, r);
+    });
+}
+
+// 開新分頁檢視歷史報價單；帶上這一列的識別碼，讓該分頁按「帶入」時能回填到正確的列
+function hqOpenHistoryTab($itemRow, r) {
+    let token = $itemRow.data('hq-token');
+    if (!token) {
+        token = 'hq' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
+        $itemRow.data('hq-token', token);
+    }
+    HQ_PENDING[token] = {
+        product_id: ($itemRow.find('.product_id_hidden').val() || '').trim(),
+        part_text : ($itemRow.find('.part-search').val() || '').trim(),
+        quote_no  : r.quote_no || ''
+    };
+    const url = 'quotation_list_NEW.php?open_id=' + encodeURIComponent(r.quote_id)
+              + '&hq_pick=1&hq_item=' + encodeURIComponent(r.item_id)
+              + '&hq_row='  + encodeURIComponent(token);
+    window.open(url, '_blank');
+}
+
+// ──────────────────────────────────────────────
+// 【歷史分頁這一側】按下「帶入」→ 確認要帶什麼 → postMessage 回原分頁
+// ──────────────────────────────────────────────
+function hqBindPickButtons(q) {
+    const items = q.items || [];
+    $('#viewBody').find('.hq-pick-btn').off('click').on('click', function () {
+        const iid = String($(this).data('item'));
+        const it  = items.find(x => String(x.item_id) === iid);
+        if (!it) { Swal.fire('錯誤', '找不到這一列的資料，請重新整理頁面。', 'error'); return; }
+        hqAskAndSend(q, it);
+    });
+}
+
+function hqAskAndSend(q, it) {
+    if (!window.opener || window.opener.closed) {
+        Swal.fire('無法帶入', '原本的報價單分頁已經關閉了。請回到報價單編輯畫面，重新點一次歷史紀錄。', 'warning');
+        return;
+    }
+    const e2       = s => escapeHtml(String(s == null ? '' : s));
+    const subIds   = hqRowSubTagIds(it);
+    const procTxt  = (it.process_names || hqSubTagNames(subIds)) || '（無製程）';
+    const isTier   = (it.is_tiered == 1 && (it.tiers || []).length) ? 1 : 0;
+    const priceTxt = isTier
+        ? '階梯 ' + it.tiers.map(t => `${formatNumber(t.qty_min)}+:${formatNumber(t.unit_price)}`).join(' / ')
+        : formatNumber(it.unit_price);
+
+    Swal.fire({
+        title: '帶入到原本的報價單',
+        html: `<div style="text-align:left;font-size:13px;line-height:1.95;">
+            <div style="margin-bottom:6px;color:#a08a6f;">來源：${e2(q.quote_no)}　料號 <b>${e2(it.product_id)}</b></div>
+            <label style="display:block;font-weight:normal;"><input type="checkbox" id="hqOptProc" checked> 製程：<b>${e2(procTxt)}</b></label>
+            <label style="display:block;font-weight:normal;"><input type="checkbox" id="hqOptPrice" checked> 單價：<b>${e2(priceTxt)}</b>${isTier ? '（含階梯區間）' : ''}</label>
+            <label style="display:block;font-weight:normal;"><input type="checkbox" id="hqOptQty"> 數量：<b>${e2(formatNumber(it.quantity))} ${e2(it.unit || 'PCS')}</b></label>
+            <div style="margin-top:8px;color:#a08a6f;font-size:11.5px;">
+                按下「帶入」後不會直接寫入——原分頁會先顯示「要帶到哪一列」讓您再確認一次。</div>
+        </div>`,
+        showCancelButton: true, confirmButtonText: '帶入', cancelButtonText: '取消',
+        confirmButtonColor: '#8a5a2b',
+        preConfirm: () => ({
+            proc : document.getElementById('hqOptProc').checked,
+            price: document.getElementById('hqOptPrice').checked,
+            qty  : document.getElementById('hqOptQty').checked
+        })
+    }).then(res => {
+        const opt = res && res.value;
+        if (!opt) return;
+        if (!opt.proc && !opt.price && !opt.qty) {
+            Swal.fire('未帶入', '三個項目都沒有勾選，沒有任何內容被帶入。', 'info');
+            return;
+        }
+        if (!window.opener || window.opener.closed) {
+            Swal.fire('無法帶入', '原本的報價單分頁已經關閉了。', 'warning');
+            return;
+        }
+        const payload = {
+            quote_no: q.quote_no, quote_id: q.quote_id, item_id: it.item_id,
+            product_id: it.product_id,
+            with_proc: !!opt.proc, with_price: !!opt.price, with_qty: !!opt.qty,
+            process_notes: subIds.join(','),
+            process_group_type: it.process_group_type || 'single_process',
+            process_names: procTxt,
+            is_tiered: isTier,
+            unit_price: it.unit_price,
+            tiers: (it.tiers || []).map(t => ({
+                qty_min: t.qty_min, qty_max: t.qty_max, unit_price: t.unit_price,
+                tolerance_value: t.tolerance_value, tolerance_unit: t.tolerance_unit,
+                tolerance_note: t.tolerance_note
+            })),
+            quantity: it.quantity, unit: it.unit
+        };
+        try {
+            window.opener.postMessage(
+                { type: 'quotation_hq_apply', row: HQ_PICK.row, payload: payload },
+                window.location.origin
+            );
+            window.opener.focus();
+        } catch (err) {
+            Swal.fire('無法帶入', '與原分頁溝通失敗，請回到報價單編輯畫面手動輸入。', 'error');
+            return;
+        }
+        Swal.fire({
+            icon: 'success', title: '已送到原分頁',
+            html: '請切回原本的報價單分頁按下「確定帶入」完成回填。<br><small style="color:#a08a6f;">這個分頁可以繼續檢視，或直接關閉。</small>',
+            confirmButtonColor: '#8a5a2b'
         });
     });
+}
+
+// ──────────────────────────────────────────────
+// 【原分頁這一側】收到帶入 → 找回正確的列 → 再確認一次 → 寫入
+// ──────────────────────────────────────────────
+function hqReceiveApply(msg) {
+    const p     = msg.payload || {};
+    const token = msg.row || '';
+    const warn  = t => Swal.fire('未帶入', t, 'warning');
+
+    if (!$('#editorPanel').is(':visible')) {
+        warn('原本的報價單編輯畫面已經關閉或切換掉了，為避免帶錯資料，這次沒有帶入任何內容。');
+        return;
+    }
+    const $rows = $('#quoteItemsTable > tbody > tr.item-row').filter(function () {
+        return $(this).data('hq-token') === token;
+    });
+    if ($rows.length !== 1) {
+        warn('找不到當初點選歷史紀錄的那一列（可能已被刪除或重新載入過），這次沒有帶入任何內容。');
+        return;
+    }
+    const $row   = $rows.first();
+    const expect = (HQ_PENDING[token] && HQ_PENDING[token].product_id) || '';
+    const nowPid = ($row.find('.product_id_hidden').val() || '').trim();
+    if (expect && nowPid && nowPid !== expect) {
+        warn(`那一列的料號已經被改成「${escapeHtml(nowPid)}」（原本是「${escapeHtml(expect)}」），為避免帶錯資料，這次沒有帶入任何內容。`);
+        return;
+    }
+
+    // 讓使用者親眼看到要帶到哪一列
+    const $all  = $('#quoteItemsTable > tbody > tr.item-row');
+    const rowNo = $all.index($row) + 1;
+    $row.addClass('hq-target-flash');
+    setTimeout(() => $row.removeClass('hq-target-flash'), 3200);
+    try { $row[0].scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+    window.focus();
+
+    const e2      = s => escapeHtml(String(s == null ? '' : s));
+    const $cell   = $row.find('.process-cell');
+    const curProc = hqSubTagNames(getProcSelectedSubTags($cell)) || '（未選）';
+    const curTier = parseInt($row.data('is-tiered')) === 1;
+    const curPri  = curTier ? '（目前為階梯報價）' : (($row.find('.unit-price').val() || '').trim() || '（空白）');
+    const curQty  = curTier ? '（目前為階梯報價）' : (($row.find('.quantity').val() || '').trim() || '（空白）');
+    const newPri  = p.is_tiered
+        ? '階梯 ' + (p.tiers || []).map(t => `${formatNumber(t.qty_min)}+:${formatNumber(t.unit_price)}`).join(' / ')
+        : formatNumber(p.unit_price);
+    const line = (on, name, from, to) => on
+        ? `<tr><td style="padding:2px 8px 2px 0;color:#a08a6f;white-space:nowrap;">${name}</td>
+               <td style="padding:2px 0;">${e2(from)} <span style="color:#8a5a2b;">→</span> <b>${e2(to)}</b></td></tr>`
+        : '';
+
+    Swal.fire({
+        title: `確定帶入第 ${rowNo} 列？`,
+        html: `<div style="text-align:left;font-size:13px;">
+            <div style="margin-bottom:6px;color:#a08a6f;">
+                目標列料號：<b>${e2(nowPid || ($row.find('.part-search').val() || '') || '（尚未選料號）')}</b><br>
+                來源：${e2(p.quote_no)}
+            </div>
+            <table style="width:100%;font-size:12.5px;line-height:1.7;">
+                ${line(p.with_proc,  '製程', curProc, p.process_names || '（無製程）')}
+                ${line(p.with_price, '單價', curPri,  newPri)}
+                ${line(p.with_qty,   '數量', curQty,  `${formatNumber(p.quantity)} ${p.unit || 'PCS'}`)}
+            </table>
+            <div style="margin-top:8px;color:#DD5138;font-size:11.5px;">畫面上已把目標列標示出來，請確認是正確的那一列再按確定。</div>
+        </div>`,
+        showCancelButton: true, confirmButtonText: '確定帶入', cancelButtonText: '取消',
+        confirmButtonColor: '#8a5a2b'
+    }).then(r => {
+        if (!r.value) return;
+        hqApplyToRow($row, p);
+        Swal.fire({ toast: true, position: 'top-end', icon: 'success',
+                    title: `已帶入第 ${rowNo} 列`, showConfirmButton: false, timer: 2500 });
+    });
+}
+
+// 實際寫入（只動使用者勾選的欄位，其餘一律不碰）
+function hqApplyToRow($row, p) {
+    if (p.with_proc) {
+        const ids = String(p.process_notes || '').split(',')
+            .map(s => parseInt(s.trim())).filter(x => x > 0);
+        const $cell = $row.find('.process-cell');
+        initProcCellNav($cell, ids);
+        $cell.find('.proc-group-type-hidden').val(ids.length ? (p.process_group_type || 'single_process') : 'single_process');
+    }
+    if (p.with_price) {
+        const $tbtn    = $row.find('.tier-toggle-btn');
+        const curTier  = parseInt($row.data('is-tiered')) === 1;
+        if (p.is_tiered) {
+            if (!curTier && $tbtn.length) toggleTierMode($tbtn[0]);   // 切成階梯模式
+            renderTierSection($row, p.tiers || []);
+            $row.next('tr.tier-row').find('.tier-unit-price').trigger('input');  // 重算門檻小計
+        } else {
+            if (curTier && $tbtn.length) toggleTierMode($tbtn[0]);    // 關掉階梯模式
+            $row.find('.unit-price').val(p.unit_price).trigger('input');
+        }
+    }
+    if (p.with_qty && parseInt($row.data('is-tiered')) !== 1) {
+        $row.find('.quantity').val(p.quantity).trigger('input');
+        const $u = $row.find('.item-unit');
+        if (p.unit && $u.find(`option[value="${p.unit}"]`).length) $u.val(p.unit);
+    }
+    calculateTotal();
+    renderHqChips($row);   // 製程改了，比對徽章跟著更新
+    scheduleDupCheck(true);
 }
 
 // ══════════════════════════════════════════════════════
@@ -8132,6 +8643,7 @@ function bindPartToRow($tr, partId, dId) {
     loadGearSpecs($tr, null, dId);
     loadBomInfo($tr, null, dId);
     refreshPartAttachBadges();
+    scheduleDupCheck(true);   // 綁定料號後才有得比對
 }
 
 // 清除客戶篩選（從「找不到料號」的快捷連結觸發）
@@ -8178,6 +8690,7 @@ $(document).on('click', '.part-suggestions .suggestion-item', function () {
     $tr.find('.print-bom-hidden').val(0);
     loadBomInfo($tr, dId ? null : partId, dId || null);
     refreshPartAttachBadges();
+    scheduleDupCheck(true);   // 綁定料號後才有得比對
 });
 
 // ══════════════════════════════════════════════════════
