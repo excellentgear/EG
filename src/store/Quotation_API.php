@@ -308,7 +308,9 @@ function qsedit_require_perm(PDO $pdo, int $uid): void
 // 取項目＋所屬報價單（找不到就丟例外，四個動作共用同一份查詢與錯誤訊息）
 function qsedit_item_row(PDO $pdo, int $itemId): array
 {
+    // 數量／單位／單價／階梯旗標一併帶出來（qsedit_set_qty 要用），其餘動作只是多幾個欄位不受影響
     $q = $pdo->prepare("SELECT qi.item_id, qi.quote_id, qi.product_id, qi.d_setting_d_id,
+                               qi.quantity, qi.unit, qi.unit_price, qi.amount, qi.is_tiered,
                                ql.quote_no, ql.pending_review
                         FROM quotation_item qi
                         JOIN quotation_list ql ON ql.quote_id = qi.quote_id
@@ -327,6 +329,41 @@ function qsedit_log(PDO $pdo, int $quoteId, int $uid, string $summary, array $di
         $pdo->prepare("INSERT INTO quotation_change_log (quote_id,changed_by,changed_at,summary,diff_json) VALUES (?,?,NOW(),?,?)")
             ->execute([$quoteId, $uid, mb_substr($summary, 0, 190), json_encode($diff, JSON_UNESCAPED_UNICODE)]);
     } catch (Exception $e) {}
+}
+
+// 可用的數量單位（唯一實作）：與報價單管理頁 buildUnitOptions() 取的是同一份來源（stock_units），
+// 取值規則也一樣＝unit_symbol 優先、沒有才用 unit_name。前端下拉列什麼，後端就只收什麼（鐵律8）；
+// 另外一律放行「這一筆目前的單位」——舊匯入資料存的是 PCS 而單位表登記的符號是小寫 pcs，
+// 不放行的話光是改數量就會被自己的驗證擋下來。
+function qsedit_unit_options(PDO $pdo): array
+{
+    $rows = $pdo->query("SELECT unit_name, unit_symbol FROM stock_units WHERE is_active=1")->fetchAll(PDO::FETCH_ASSOC);
+    $out = [];
+    foreach ($rows as $r) {
+        // 名稱與符號兩種寫法都收：主檔登記的是 PCS/pcs 兩種大小寫，畫面的下拉照報價單管理頁只列符號，
+        // 後端只收符號的話，舊資料那 4 萬多筆的大寫 PCS 一旦改成別的單位就再也選不回來
+        foreach ([$r['unit_symbol'], $r['unit_name']] as $v) {
+            $v = trim((string)$v);
+            if ($v !== '') $out[] = $v;
+        }
+    }
+    return array_values(array_unique($out));
+}
+
+// 改完數量之後把整張單的總金額重算（總金額＝各項目 amount 加總，與報價單管理頁 calculateTotal() 同口徑；
+// 階梯項目的 amount 本來就已經是各階小計的加總，所以這裡不必特別處理）。
+// 回傳 [舊值, 新值] 讓呼叫端能回報與留紀錄——極少數舊資料的總金額本來就跟項目對不起來，
+// 改了數量之後金額會跟著被修正，這件事一定要讓使用者看得到，不可以默默改掉。
+function qsedit_sync_total(PDO $pdo, int $quoteId): array
+{
+    $old = $pdo->prepare("SELECT total_amount FROM quotation_list WHERE quote_id=?");
+    $old->execute([$quoteId]);
+    $oldVal = (float)$old->fetchColumn();
+    $sum = $pdo->prepare("SELECT COALESCE(SUM(amount),0) FROM quotation_item WHERE quote_id=?");
+    $sum->execute([$quoteId]);
+    $newVal = (float)$sum->fetchColumn();
+    $pdo->prepare("UPDATE quotation_list SET total_amount=? WHERE quote_id=?")->execute([$newVal, $quoteId]);
+    return [$oldVal, $newVal];
 }
 
 // 製程標籤寫入（唯一實作）：quick_set_item_process 與 qsedit_set_process 共用。
@@ -2359,6 +2396,65 @@ try {
             break;
         }
 
+        // 修改數量與數量單位（2026-09-07）
+        //   跟料號一樣是「已轉正式之後才發現匯入的數字不對」時的修正入口，一樣只走這一支、一樣留變更紀錄。
+        //   數量一改，這一筆的金額（amount＝數量×單價）與整張單的總金額都要跟著重算——
+        //   只改 quantity 不重算的話，畫面上數量變了、金額卻還是舊的，而且完全不會報錯。
+        //   階梯報價的項目數量是由各階距決定的（報價單管理頁那邊的數量欄本來就是反灰的），
+        //   這裡一律擋下數量的異動，只開放單位。
+        case 'qsedit_set_qty': {
+            qsedit_require_perm($pdo, (int)$user_id);
+            $item_id = intval($_POST['item_id'] ?? 0);
+            if (!$item_id) throw new Exception('缺少項目');
+            $row = qsedit_item_row($pdo, $item_id);
+
+            $qtyRaw = trim((string)($_POST['quantity'] ?? ''));
+            $unit   = trim((string)($_POST['unit'] ?? ''));
+            $oldQty = (int)$row['quantity'];
+            $oldUnit = (string)$row['unit'];
+
+            // 數量：整數、不可為負（0 是既有匯入資料裡真的存在的值，允許，本功能就是用來補的）
+            if ($qtyRaw === '' || !preg_match('/^\d+$/', $qtyRaw)) throw new Exception('數量請填 0 以上的整數');
+            $qty = (int)$qtyRaw;
+            if ($qty > 999999999) throw new Exception('數量超過上限（999,999,999）');
+            if ((int)$row['is_tiered'] === 1 && $qty !== $oldQty) {
+                throw new Exception('這一筆是階梯報價，數量由各階距決定，請至報價單管理頁調整階梯');
+            }
+
+            // 單位：只收單位主檔（stock_units）裡有的，或這一筆目前的值
+            if ($unit === '') throw new Exception('數量單位不可為空白');
+            if (mb_strlen($unit) > 20) throw new Exception('數量單位最多 20 個字');
+            $units = qsedit_unit_options($pdo);
+            if ($unit !== $oldUnit && !in_array($unit, $units, true)) {
+                throw new Exception('數量單位「' . $unit . '」不在單位主檔內，請先到庫存單位設定新增');
+            }
+
+            if ($qty === $oldQty && $unit === $oldUnit) { $response = ['success' => true, 'changed' => false]; break; }
+
+            // 金額欄位是 decimal(12,2)，算出來超過就會被 MySQL 截斷／報錯，先擋下並講清楚原因
+            $price  = (float)$row['unit_price'];
+            $amount = (int)$row['is_tiered'] === 1 ? (float)$row['amount'] : round($qty * $price, 2);
+            if ($amount > 9999999999.99) throw new Exception('數量 × 單價 超過金額欄位上限，請確認數量是否填錯');
+
+            $pdo->prepare("UPDATE quotation_item SET quantity=?, unit=?, amount=?, updated_at=NOW() WHERE item_id=?")
+                ->execute([$qty, $unit, $amount, $item_id]);
+            [$totalOld, $totalNew] = qsedit_sync_total($pdo, (int)$row['quote_id']);
+            $pdo->prepare("UPDATE quotation_list SET updated_by=?, updated_at=NOW() WHERE quote_id=?")
+                ->execute([$user_id, (int)$row['quote_id']]);
+
+            qsedit_log($pdo, (int)$row['quote_id'], (int)$user_id,
+                       '快速轉移頁修改數量：' . $row['product_id'] . ' ' . $oldQty . ' ' . $oldUnit . ' → ' . $qty . ' ' . $unit,
+                       ['item_id' => $item_id, 'field' => 'quantity_unit',
+                        'old' => ['quantity' => $oldQty, 'unit' => $oldUnit, 'amount' => (float)$row['amount']],
+                        'new' => ['quantity' => $qty, 'unit' => $unit, 'amount' => $amount],
+                        'total_amount_old' => $totalOld, 'total_amount_new' => $totalNew]);
+
+            $response = ['success' => true, 'changed' => true, 'quantity' => $qty, 'unit' => $unit,
+                         'amount' => $amount, 'total_amount' => $totalNew,
+                         'total_changed' => (abs($totalNew - $totalOld) > 0.005)];
+            break;
+        }
+
         // ══════════════════════════════════════════════════════════════════
         // 整張報價單變更客戶（2026-08-28）
         //   實作全部收在 src/common/quote_customer_lib.php，本區塊只做守門與參數轉接。
@@ -2641,6 +2737,9 @@ try {
                     ql.quote_id, ql.quote_no, ql.quote_date, ql.currency, ql.is_negotiation,
                     qi.item_id, qi.quantity, qi.unit_price, qi.amount, qi.is_tiered,
                     qi.specification,
+                    -- 以下四欄為「歷史製程比對／開新分頁檢視」新增（2026-09-07）：
+                    -- process_notes 才是製程的精確來源（存 sub_tag_id 清單），processes 只是攤平後的製程代號
+                    qi.product_id, qi.unit, qi.process_notes, qi.process_group_type,
                     GROUP_CONCAT(DISTINCT qipm.process_no ORDER BY qipm.process_no) AS processes
                 FROM quotation_item qi
                 JOIN quotation_list ql ON qi.quote_id = ql.quote_id
