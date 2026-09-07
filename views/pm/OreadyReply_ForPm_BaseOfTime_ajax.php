@@ -1708,6 +1708,31 @@ else if (isset($_POST['action']) && $_POST['action'] === 'create_bom') {
     $orders_json = json_decode($_POST['order_pcs_json'] ?? '[]', true) ?: [];
 
     if (empty($bom)||empty($d_id)||$sqty<1) { echo json_encode(['success'=>false,'message'=>'必填欄位不足']); exit; }
+
+    // 製程代號一定要是「主檔管理→製程」分頁裡有的（process_no 表）。
+    // 前端已即時擋過一次，這裡是真正的守門（鐵律8）：沒有這道，直接打 API
+    // 就能塞進主檔沒有的代號，之後 BOM 那一格只會印一個光禿禿的數字。
+    $txt_pnos = [];   // 擋下來的（不是數字、或主檔查無）
+    $num_set  = [];   // 待查的代號，以代號當 key 去重
+    foreach ($procs as $p) {
+        $raw = trim((string)($p['process_no'] ?? ''));
+        if ($raw === '') continue;
+        if (!preg_match('/^\d+$/', $raw)) { $txt_pnos[] = $raw; continue; }
+        $num_set[(int)$raw] = (int)$raw;
+    }
+    $num_pnos = array_values($num_set);
+    if (!empty($num_pnos)) {
+        $ph_p = implode(',', array_fill(0, count($num_pnos), '?'));
+        $sp = $db->prepare("SELECT ProcessNo FROM process_no WHERE ProcessNo IN ($ph_p)");
+        $sp->execute($num_pnos);
+        $found = array_map('intval', $sp->fetchAll(PDO::FETCH_COLUMN));
+        foreach ($num_pnos as $n) { if (!in_array($n, $found, true)) $txt_pnos[] = (string)$n; }
+    }
+    if (!empty($txt_pnos)) {
+        echo json_encode(['success'=>false,'message'=>'主檔查無製程代號：'.implode('、', $txt_pnos).'。請從清單選取，或先到「主檔管理→製程」建立該製程。']);
+        exit;
+    }
+
     $chk = $db->prepare("SELECT COUNT(*) FROM bom WHERE bom=?"); $chk->execute([$bom]);
     if ($chk->fetchColumn()>0) { echo json_encode(['success'=>false,'bom_exists'=>true,'message'=>'BOM號碼「'.$bom.'」已存在。']); exit; }
 

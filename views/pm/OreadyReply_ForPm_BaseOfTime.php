@@ -789,6 +789,15 @@ if (!empty($_mkinfo_nos)) {
     } catch (PDOException $e) { error_log('maker_info_map query error: ' . $e->getMessage()); }
 }
 
+// ── 製程主檔（process_no）：新增BOM／新增製程的製程代號只能用這裡面有的 ──
+// 原本只有 AJAX 自動更新回來時才會有（window.allProcessTypes），
+// 所以剛開頁面的那幾秒「製程中文」下拉是空的、也無從驗證代號；
+// 208 筆很小，直接在初載就給，之後 AJAX 回來再覆蓋（欄位完全相同）。
+$all_process_types_init = [];
+try {
+    $all_process_types_init = $db->query("SELECT ProcessNo, ProcessName FROM process_no ORDER BY ProcessNo")->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) { error_log('process_no init list error: ' . $e->getMessage()); }
+
 // ── 批量查詢 bom_ing_transfer_log（本BOM當關最新單價 + 同料號歷史單價）──────
 $transfer_price_map    = []; // [bom][bom_sn] = 最新單價列
 $transfer_history_map  = []; // [product_id][bom_sn] = [{...}, ...] 由新到舊（排除本BOM）
@@ -1475,6 +1484,7 @@ echo "    window.transferPriceMap = " . json_encode($transfer_price_map ?: []) .
 echo "    window.ingActiveMap = " . json_encode($bom_ing_active_map ?: (object)[]) . "; // [bom] => [{per-process active data}] 供發單日欄位使用\n";
 echo "    window.transferHistoryMap = " . json_encode($transfer_history_map ?: []) . "; // [product_id][bom_sn] 同料號歷史\n";
 echo "    window.makerInfoMap = " . json_encode($maker_info_map ?: (object)[]) . "; // [maker_id_no] => {tel,tel2,fax,addr} 供廠商名稱浮動視窗使用\n";
+echo "    window.allProcessTypes = " . json_encode($all_process_types_init ?: []) . "; // 製程主檔（process_no）：新增BOM／新增製程的代號只能用這裡面的，AJAX 回來會再覆蓋\n";
 echo "    window.currentUserStatus = " . json_encode($user_status ?? null) . ";\n";
 echo "    window.canCreate = " . json_encode($can_create) . ";\n";
 echo "    window.canUpdate = " . json_encode($can_update) . ";\n";
@@ -2979,6 +2989,44 @@ echo "</script>\n";
         return map;
     }
 
+    // ── 製程代號檢查（唯一實作，「新增BOM」與「新增製程」共用）────────────────
+    // 規則：製程代號只能用「主檔管理→製程」分頁裡有的編號（process_no 表）。
+    // 沒有這道檢查時，隨手打一個 211 也存得進去，之後 BOM 那一格就只印一個
+    // 光禿禿的數字（ProcessName 是 LEFT JOIN 來的，主檔沒有就是 NULL），
+    // 使用者 2026-09-07 回報的就是這種列。前端只是即時講清楚原因，
+    // 真正的守門在後端（_add_bom_ing.php 與 create_bom 都會再驗一次）。
+    function egProcessMasterMap() {
+        var m = {};
+        (window.allProcessTypes || []).forEach(function (p) {
+            if (!p || p.ProcessNo === null || p.ProcessNo === undefined) return;
+            m[String(p.ProcessNo).trim()] = (p.ProcessName === null || p.ProcessName === undefined) ? '' : String(p.ProcessName);
+        });
+        return m;
+    }
+    // 回傳 {ok, name, reason}；reason: empty=沒填 / notnum=不是數字 / notfound=主檔查無 / noname=主檔有但沒有名稱（只提醒不擋）
+    function egProcessCheck(no) {
+        var key = String(no === null || no === undefined ? '' : no).trim();
+        if (key === '') return { ok: false, reason: 'empty' };
+        if (!/^\d+$/.test(key)) return { ok: false, reason: 'notnum' };
+        var m = egProcessMasterMap();
+        // 主檔還沒載進來時不擋（不然剛開頁面會變成什麼都不能新增）；後端一律會再驗一次
+        if (!Object.keys(m).length) return { ok: true, name: '', reason: 'nomaster' };
+        key = String(parseInt(key, 10));   // 去前導零，主檔存的是整數
+        if (!(key in m)) return { ok: false, reason: 'notfound' };
+        var nm = m[key];
+        return { ok: true, name: nm, reason: nm.trim() === '' ? 'noname' : '' };
+    }
+    function egProcessCheckMsg(res, no) {
+        if (res.ok) {
+            return res.reason === 'noname'
+                ? '⚠ 代號 ' + no + ' 在主檔沒有製程名稱，BOM 上只會顯示數字（可先到「主檔管理→製程」補名稱）'
+                : '';
+        }
+        if (res.reason === 'empty')  return '請輸入製程代號';
+        if (res.reason === 'notnum') return '⚠ 製程代號只能是數字';
+        return '⚠ 主檔查無製程代號 ' + no + '，請改從清單選取，或先到「主檔管理→製程」建立此製程';
+    }
+
     // ── 廠商名稱滑鼠浮動視窗（電話／傳真／地址）──────────────────────────────
     // 資料來源 window.makerInfoMap（PHP 初載建立、AJAX 自動更新時合併），
     // key 為 maker_id_no；查不到就不掛 popover（行為與掛不上時完全相同，不影響操作）。
@@ -3090,7 +3138,9 @@ echo "</script>\n";
     var currentCustomerIndex = -1; // For customer switching
     var availableVendors = []; // For vendor switching
     var currentVendorIndex = -1; // For vendor switching
-    var allProcessTypes = []; // To store all process types for the add modal
+    // ⚠ 這是全域 var，等同 window.allProcessTypes；直接寫 [] 會把上面 PHP 初載
+    //   給的製程主檔清成空的（var 在全域就是 window 屬性），製程代號驗證就會失效。
+    var allProcessTypes = window.allProcessTypes || []; // To store all process types for the add modal
     var isCustomerSwitchingActive = false; // For customer switching title display
     var isSelectFocused = false; // <--- 新增或確認此行存在
     var dynamicDateCounter = 0; // Counter for dynamic date inputs
@@ -4719,7 +4769,10 @@ echo "</script>\n";
                         fullDataset = applyWorkdayCalculationsToDataset(fullDataset); // Calculate workdays for AJAX refreshed data
                         maxCount = newMaxCount;
                         window.maxCount = newMaxCount;
-                        window.allProcessTypes = response.all_process_types || []; // Store all process types globally
+                        // 只有真的回了資料才覆蓋，回空的就沿用初載那份（不然製程代號驗證會失效）
+                        if (response.all_process_types && response.all_process_types.length) {
+                            window.allProcessTypes = response.all_process_types; // Store all process types globally
+                        }
                         if (response.transfer_price_map) window.transferPriceMap = response.transfer_price_map;
                         if (response.transfer_history_map) window.transferHistoryMap = response.transfer_history_map;
                         if (response.ing_active_map) window.ingActiveMap = response.ing_active_map;
@@ -5911,63 +5964,12 @@ echo "</script>\n";
             }
             // --- END: 新增邏輯 ---
 
-            // ⭐ 新增：創建一個 flex 容器來並排顯示製程名稱和輸入框
-            var bomPsContainer = document.createElement('div');
-            bomPsContainer.style.display = 'flex';
-            bomPsContainer.style.alignItems = 'center'; // 垂直居中
-            bomPsContainer.style.gap = '5px'; // 名稱和輸入框之間的間距
-
-            // ⭐ 新增：創建顯示製程名稱的 span
-            var processNameSpan = document.createElement('span');
-            processNameSpan.textContent = row.ProcessName || ''; // 從 row data 取得製程名稱
-            processNameSpan.style.whiteSpace = 'nowrap'; // 防止製程名稱換行
-            processNameSpan.style.flexShrink = '0'; // 防止名稱被壓縮
-
-            // ⭐ 新增：將製程名稱 span 加入容器
-            bomPsContainer.appendChild(processNameSpan);
-
-            var bomPsText = row.bom_bom_ps || ""; // This is bom.bom_ps from backend
-            var bomPsLineCount = Math.max(bomPsText.split("\n").length, 1);
-            var bomPsTextarea = document.createElement('textarea');
-            var bomPsInitialRows = (bomPsLineCount > 3) ? 3 : bomPsLineCount; // Keep this logic for rows attribute
-
-            // BOM備註 (textarea part)
-            bomPsTextarea.id = 'single_bet_ps-' + row.bom_ing_fid; // ⭐ 修改：ID 從 bom 改為 bom_ing_fid，以確保唯一性並用於更新
-            bomPsTextarea.name = 'single_bet_ps_textarea'; // ⭐ 修改：name 屬性以反映新用途
-            bomPsTextarea.rows = bomPsInitialRows;
-            bomPsTextarea.setAttribute('data-orig', bomPsText);
-            // ⭐ 修改：調整 textarea 樣式以在 flex 容器中正常顯示
-            bomPsTextarea.style.cssText = 'resize: none; overflow: hidden; line-height: 1.2em; padding: 2px; width: 100%; box-sizing: border-box; flex-grow: 1;'; // 使用 flex-grow: 1 填滿剩餘空間
-            if (bomPsLineCount > 3) {
-                bomPsTextarea.style.overflowY = 'scroll';
-            }
-            // 根據使用者身份設定 textarea 是否唯讀
-            if (!(window.userStatus == 1)) {
-                bomPsTextarea.readOnly = true;
-            }
-
-            bomPsTextarea.value = bomPsText;
-            // Event listeners for the textarea
-            bomPsTextarea.addEventListener('input', function() {
-                autoResize(this);
-            });
-            bomPsTextarea.addEventListener('keydown', function(event) {
-                handleBomPsKeyDown(event, this, row.bom_ing_fid);
-            }); // ⭐ 修改：傳遞 bom_ing_fid 作為識別碼
-            bomPsTextarea.addEventListener('focus', function() {
-                isTextareaFocused = true;
-                console.log('%cBOM備註 Textarea focused:', 'color: blue; font-weight: bold;', this.id, 'isTextareaFocused:', isTextareaFocused, 'Time:', new Date().toLocaleTimeString());
-            });
-            bomPsTextarea.addEventListener('blur', function() {
-                isTextareaFocused = false;
-                console.log('%cBOM備註 Textarea blurred:', 'color: orange; font-weight: bold;', this.id, 'isTextareaFocused:', isTextareaFocused, 'Time:', new Date().toLocaleTimeString());
-            });
-
-            // ⭐ 新增：將 textarea 加入容器
-            bomPsContainer.appendChild(bomPsTextarea);
-
-            // ⭐ 修改：將整個容器加入儲存格
-            tdBomPs.appendChild(bomPsContainer);
+            // 單關備註：目前製程有幾個就畫幾個輸入框，各自對應自己的 bom_ing_fid
+            // （實作與說明見 buildBomPsRowEl／currentProcsOfRow）
+            var _curProcs = currentProcsOfRow(row);
+            _curProcs.forEach(function (proc) { tdBomPs.appendChild(buildBomPsRowEl(proc)); });
+            // 下方「是否要加分隔線」的既有判斷仍沿用彙總值
+            var bomPsText = row.bom_bom_ps || "";
 
             // --- START: UNIFIED REMARK GATHERING AND DISPLAY ---
 
@@ -6015,11 +6017,15 @@ echo "</script>\n";
 
             // 收集所有相關製程的 "單關備註" (single_bet_ps)
             // 包含當前製程和其他製程
+            // ⚠ 排除「目前製程」時要比對整組 bom_sn（row.bom_sn 可能是 "80,90,100"），
+            //    也要注意型別（p.bom_sn 是數字、row.bom_sn 是字串），
+            //    否則上面已經給了可編輯輸入框的那幾關，會在下面唯讀清單再出現一次。
+            const _curFidSet = _curProcs.map(p => String(p.bom_ing_fid));
             const otherProcessesWithRemarks = (window.bomPSList && Array.isArray(window.bomPSList)) ?
                 window.bomPSList
                 .filter(p =>
                     p.bom === row.bom && // 篩選出相同 BOM 的所有製程
-                    p.bom_sn !== row.bom_sn && // 排除目前正在顯示的製程
+                    _curFidSet.indexOf(String(p.bom_ing_fid)) === -1 && // 排除目前正在顯示（已有輸入框）的製程
                     p.single_bet_ps && String(p.single_bet_ps).trim() !== '' // 過濾掉 single_bet_ps 為空或無內容的製程
                 )
                 .sort((a, b) => (parseInt(b.bom_sn) || 0) - (parseInt(a.bom_sn) || 0)) // 依照 bom_sn 由大到小排序
@@ -7098,6 +7104,61 @@ echo "</script>\n";
         }
     }
 
+    // ── 單關備註（single_bet_ps）輸入框：一個製程一個，唯一實作 ─────────────
+    // 為什麼要一個製程一個：這一列可能同時有好幾個製程在跑（row.bom_sn 是
+    // "80,90,100"、row.bom_ing_fid 是 "138996,138997,138998" 這種逗號字串）。
+    // 舊版只畫一個框、id 帶整串 fid，送到後端被 PDO::PARAM_INT 一轉型就只剩
+    // 第一個，等於「不管在哪一關打字都寫到第一關」。
+    // 另外製程名稱舊版是 nowrap + flex-shrink:0，名稱一長就把輸入框擠到
+    // 只剩 6px（實測），所以名稱改成可截斷、輸入框保底寬度。
+    function buildBomPsRowEl(proc) {
+        var line = document.createElement('div');
+        line.style.cssText = 'display:flex;align-items:center;gap:5px;margin-bottom:3px;';
+
+        var fullName = (proc.ProcessName === null || proc.ProcessName === undefined || String(proc.ProcessName).trim() === '')
+            ? ('製程' + (proc.process_no != null ? proc.process_no : (proc.bom_sn != null ? proc.bom_sn : '')))
+            : String(proc.ProcessName);
+        var nm = document.createElement('span');
+        nm.textContent = fullName;
+        nm.title = fullName;   // 被截斷時滑鼠移上去看得到全名
+        nm.style.cssText = 'flex:0 1 auto;min-width:0;max-width:40%;white-space:nowrap;'
+                         + 'overflow:hidden;text-overflow:ellipsis;font-size:11px;color:#555;';
+        line.appendChild(nm);
+
+        var txt = (proc.single_bet_ps === null || proc.single_bet_ps === undefined) ? '' : String(proc.single_bet_ps);
+        var lineCount = Math.max(txt.split('\n').length, 1);
+        var ta = document.createElement('textarea');
+        ta.id = 'single_bet_ps-' + proc.bom_ing_fid;
+        ta.name = 'single_bet_ps_textarea';
+        ta.rows = (lineCount > 3) ? 3 : lineCount;
+        ta.setAttribute('data-orig', txt);
+        ta.setAttribute('data-fid', proc.bom_ing_fid);
+        ta.title = fullName + ' 的單關備註（Enter 存檔、Shift+Enter 換行）';
+        ta.style.cssText = 'resize:none;overflow:hidden;line-height:1.2em;padding:2px;'
+                         + 'box-sizing:border-box;flex:1 1 auto;width:auto;min-width:70px;';
+        if (lineCount > 3) ta.style.overflowY = 'scroll';
+        if (!(window.userStatus == 1)) ta.readOnly = true;
+        ta.value = txt;
+        ta.addEventListener('input',  function () { autoResize(this); });
+        ta.addEventListener('keydown', function (e) { handleBomPsKeyDown(e, this, proc.bom_ing_fid); });
+        ta.addEventListener('focus',  function () { isTextareaFocused = true; });
+        ta.addEventListener('blur',   function () { isTextareaFocused = false; });
+        line.appendChild(ta);
+        return line;
+    }
+    // 取這一列「目前製程」的逐筆資料（bomPSList 是唯一來源；撈不到才退回彙總值）
+    function currentProcsOfRow(row) {
+        var sns = String(row.bom_sn == null ? '' : row.bom_sn).split(',')
+                    .map(function (s) { return String(s).trim(); }).filter(Boolean);
+        var list = (window.bomPSList || []).filter(function (p) {
+            return p && p.bom === row.bom && sns.indexOf(String(p.bom_sn).trim()) >= 0;
+        }).sort(function (a, b) { return (parseInt(a.bom_sn, 10) || 0) - (parseInt(b.bom_sn, 10) || 0); });
+        if (list.length) return list;
+        // 退路：bomPSList 還沒進來時照舊畫一個框，畫面不開天窗
+        return [{ bom_sn: row.bom_sn, bom_ing_fid: row.bom_ing_fid,
+                  ProcessName: row.ProcessName || '', single_bet_ps: row.bom_bom_ps || '' }];
+    }
+
     // Modified handleKeyDown for bom.bom_ps
     function handleBomPsKeyDown(event, textarea, bomIdentifier) { // bomIdentifier is row.bom
         var key = event.key || event.keyCode;
@@ -7149,15 +7210,25 @@ echo "</script>\n";
                             textarea.style.backgroundColor = '';
                         }, 1000);
 
-                        // --- CRITICAL: Update fullDataset ---
-                        const itemInFullDataset = fullDataset.find(item => item.bom_ing_fid == bomIdentifier); // ⭐ 修改：使用 bom_ing_fid 查找
+                        // --- CRITICAL: 樂觀更新本機資料 ---
+                        // 輸入框現在是「一個製程一個」，備註的唯一來源是 bomPSList
+                        // 的 single_bet_ps，這裡一定要更新它，否則下一次重繪
+                        // （5 秒自動更新之外的篩選／換頁）會把剛打的字換回舊值。
+                        let _psHit = false;
+                        if (window.bomPSList && Array.isArray(window.bomPSList)) {
+                            window.bomPSList.forEach(function (p) {
+                                if (p && String(p.bom_ing_fid) === String(bomIdentifier)) {
+                                    p.single_bet_ps = newBomPsValue; _psHit = true;
+                                }
+                            });
+                        }
+                        // 單一製程的列，彙總值就等於這一關的值，一併更新（多製程的彙總值
+                        // 交給下一次自動更新，畫面本來就是讀各自的輸入框）
+                        const itemInFullDataset = fullDataset.find(item => String(item.bom_ing_fid) === String(bomIdentifier));
                         if (itemInFullDataset) {
                             itemInFullDataset.bom_bom_ps = newBomPsValue; // Ensure this field name matches _fetch_data.php
-                            // console.log("Updated fullDataset for bom_ing_fid:", bomIdentifier, "with new single_bet_ps:", newBomPsValue);
-                        } else {
-                            console.warn("Could not find BOM in fullDataset to update bom_ps:", bomIdentifier);
-                            // Optionally, trigger a full refresh if this happens, as data might be inconsistent
-                            // fetchDataAndFilter(); 
+                        } else if (!_psHit) {
+                            console.warn("Could not find process in bomPSList/fullDataset to update single_bet_ps:", bomIdentifier);
                         }
                         // --- End of CRITICAL update ---
 
@@ -10891,9 +10962,13 @@ echo "</script>\n";
             // 收集製程（含廠商/備註），自動跳過空白行並重新編號
             var pInputs=procRows.querySelectorAll('.pcInput');
             var procs=[];
+            var badProcs=[];   // 打了字但不是主檔裡的製程代號 → 一律擋下，不可以放它進資料庫
             pInputs.forEach(function(pi){
                 var pno=pi.dataset.pno||pi.value.split(' ')[0].trim();
-                if (!pno||isNaN(parseInt(pno))){ return; } // 跳過空白行，不報錯
+                if (!pi.value.trim() && !pi.dataset.pno){ return; }      // 真正的空白行才略過
+                if (!pno||isNaN(parseInt(pno))){ badProcs.push(pi.value.trim()||'(空白)'); return; }
+                var _chk = egProcessCheck(pno);
+                if (!_chk.ok){ badProcs.push(pi.value.trim()||pno); pi.style.borderColor='#dc3545'; return; }
                 var rowEl = pi.closest('div[draggable]') || pi.parentElement.parentElement;
                 var makerEl = rowEl ? rowEl.querySelector('.pcMaker') : null;
                 var psEl    = rowEl ? rowEl.querySelector('.pcPs')    : null;
@@ -10904,6 +10979,11 @@ echo "</script>\n";
                     ps:          psEl    ? (psEl.value||'')               : ''
                 });
             });
+            if (badProcs.length){
+                alert('以下製程不是「主檔管理→製程」分頁裡的代號，無法新增：\n\n　' + badProcs.join('\n　')
+                    + '\n\n請從下拉清單選取，或先到「主檔管理→製程」建立該製程。');
+                return;
+            }
             if (procs.length===0){ alert('請至少新增一個有效製程（從下拉選單選取）'); return; }
 
             confirmBtn.disabled=true; confirmBtn.textContent='新增中...';
@@ -13344,7 +13424,10 @@ echo "</script>\n";
             </div>
             <div class="form-group">
                 <label for="new-process-no" class="col-sm-3 control-label">製程代號:</label>
-                <div class="col-sm-9"><input type="text" id="new-process-no" class="form-control" style="width: 80px;"></div>
+                <div class="col-sm-9">
+                    <input type="text" id="new-process-no" class="form-control" style="width: 80px;">
+                    <div id="new-process-no-msg" style="font-size:11px;line-height:1.5;margin-top:3px;min-height:16px;"></div>
+                </div>
             </div>
             <div class="form-group">
                 <label for="new-process-name-hint" class="col-sm-3 control-label">製程中文:</label>
@@ -13372,6 +13455,14 @@ echo "</script>\n";
             // Validation
             if (!newSn || !newProcessNo) {
                 showTemporaryMessage('SN 和 製程代號 欄位不可為空！', false);
+                return;
+            }
+            // 製程代號一定要是「主檔管理→製程」分頁裡有的編號（後端也會再擋一次）
+            const pchk = egProcessCheck(newProcessNo);
+            if (!pchk.ok) {
+                showTemporaryMessage(egProcessCheckMsg(pchk, newProcessNo), false);
+                const npi = document.getElementById('new-process-no');
+                if (npi) { npi.style.borderColor = '#dc3545'; npi.focus(); }
                 return;
             }
             const currentBOMProcesses = window.bomPSList.filter(p => p.bom === rowData.bom);
@@ -13437,14 +13528,27 @@ echo "</script>\n";
             }
         });
 
-        // When ProcessNo is typed, update ProcessName hint
+        // When ProcessNo is typed, update ProcessName hint（並即時檢查主檔有沒有這個代號）
         processNoInput.addEventListener('input', function() {
             const enteredId = this.value.trim();
-            const foundProcess = (window.allProcessTypes || []).find(pt => String(pt.ProcessNo) === enteredId);
-            if (foundProcess) {
-                processNameHintInput.value = foundProcess.ProcessName;
+            const msgEl = document.getElementById('new-process-no-msg');
+            const res = egProcessCheck(enteredId);
+            processNameHintInput.value = (res.ok && res.name) ? res.name : '';
+            if (enteredId === '') {
+                this.style.borderColor = '';
+                if (msgEl) { msgEl.textContent = ''; }
+                return;
+            }
+            const txt = egProcessCheckMsg(res, enteredId);
+            if (!res.ok) {
+                this.style.borderColor = '#dc3545';
+                if (msgEl) { msgEl.style.color = '#dc3545'; msgEl.textContent = txt; }
+            } else if (res.reason === 'noname') {
+                this.style.borderColor = '#E0B77A';
+                if (msgEl) { msgEl.style.color = '#A8814A'; msgEl.textContent = txt; }
             } else {
-                processNameHintInput.value = ''; // If no match, clear the hint
+                this.style.borderColor = '#5cb85c';
+                if (msgEl) { msgEl.style.color = '#4A7A4A'; msgEl.textContent = '✔ ' + enteredId + ' ' + res.name; }
             }
         });
     }

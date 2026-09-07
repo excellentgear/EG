@@ -28,6 +28,23 @@ if (
     $bom_ing_id = $bom . '-' . $new_sn;
 
     try {
+        // 製程代號一定要是「主檔管理→製程」分頁裡有的（process_no 表）。
+        // 前端已經即時擋過一次，這裡是真正的守門：沒有這道，直接打 API 或
+        // 前端出狀況時就會塞進一個主檔沒有的代號，之後 BOM 那一格只會印出
+        // 一個光禿禿的數字（ProcessName 是 LEFT JOIN 來的，主檔沒有就是 NULL）。
+        if (!preg_match('/^\d+$/', $new_process_no)) {
+            $response['message'] = '製程代號只能是數字。';
+            echo json_encode($response);
+            exit;
+        }
+        $pnoChk = $db->prepare("SELECT COUNT(*) FROM process_no WHERE ProcessNo = ?");
+        $pnoChk->execute([(int)$new_process_no]);
+        if ((int)$pnoChk->fetchColumn() === 0) {
+            $response['message'] = '主檔查無製程代號 ' . htmlspecialchars($new_process_no) . '，請先到「主檔管理→製程」建立此製程。';
+            echo json_encode($response);
+            exit;
+        }
+
         // Server-side validation for uniqueness within the same BOM
         $checkSql = "SELECT COUNT(*) FROM bom_ing WHERE bom = :bom AND (bom_sn = :new_sn OR process_no = :new_process_no)";
         $checkStmt = $db->prepare($checkSql);
