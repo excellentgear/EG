@@ -2104,6 +2104,34 @@ else if (isset($_POST['action']) && $_POST['action'] === 'copy_bom_processes') {
 }
 
 // ── 搜尋製程 ───────────────────────────────────────────────────────────────
+// ── 批次檢視「公司預設」（none/lane/flow/both）：只有系統管理員可以改 ─────────
+else if (isset($_POST['action']) && $_POST['action'] === 'bv_save_default') {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    include_once '../../src/common/role_features_helper.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    // 前端只是把選項藏起來，這裡才是真正的守門（鐵律8）；
+    // 判定與頁面開頭同一套 RBAC（page scope → group scope，權限字元含 'A'）。
+    if (!isset($_SESSION['id'])) { echo json_encode(['success'=>false,'message'=>'未登入']); exit; }
+    if (!oready_resolve_is_admin($db, (int)$_SESSION['id'], $_SERVER['PHP_SELF'])) {
+        echo json_encode(['success'=>false,'message'=>'只有系統管理員可以變更公司預設']); exit;
+    }
+    $bv_val = trim($_POST['value'] ?? '');
+    if (!in_array($bv_val, ['none','lane','flow','both'], true)) { echo json_encode(['success'=>false,'message'=>'設定值不正確']); exit; }
+    try {
+        // ⚠ system_parameters.param_value 是 JSON 欄位，直接塞 'both' 會回 3140 Invalid JSON。
+        //   比照同群組既有的寫法（{"day":"3"}、{"show":true}）存成物件。
+        $bv_json = json_encode(['mode' => $bv_val], JSON_UNESCAPED_UNICODE);
+        $bvs = $db->prepare("INSERT INTO system_parameters (param_group, param_key, param_value, description)
+                             VALUES ('BOM_SETTING', 'batch_view_default', :val, '批次檢視公司預設(none/lane/flow/both)')
+                             ON DUPLICATE KEY UPDATE param_value = :val2");
+        $bvs->execute([':val'=>$bv_json, ':val2'=>$bv_json]);
+        echo json_encode(['success'=>true,'value'=>$bv_val]);
+    } catch (PDOException $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+    exit;
+}
+
 else if (isset($_POST['action']) && $_POST['action'] === 'search_process') {
     session_write_close();
     include_once '../../src/common/DBConnection.php';

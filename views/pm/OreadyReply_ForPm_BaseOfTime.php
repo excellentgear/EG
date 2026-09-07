@@ -663,6 +663,10 @@ if (!empty($all_boms)) {
             'QC_check'         => $row['QC_check'] ?? null,
             'qc_completed'     => (int)($row['qc_completed'] ?? 0),
             'QC_check_date'    => $fmt_d($row['QC_check_date'] ?? null),
+            // ⚠ 這份欄位必須與 src/store/_fetch_data.php 的 $batch_entry 完全一致，
+            //   缺一欄就會出現「初載看得到、自動更新後不見」。
+            'single_bet_ps'    => $row['single_bet_ps'] ?? null,
+            'ps'               => $row['ps'] ?? null,
         ];
 
         // 活躍批次（is_consumed=0）→ 供篩選與互動功能
@@ -1485,6 +1489,18 @@ echo "    window.ingActiveMap = " . json_encode($bom_ing_active_map ?: (object)[
 echo "    window.transferHistoryMap = " . json_encode($transfer_history_map ?: []) . "; // [product_id][bom_sn] 同料號歷史\n";
 echo "    window.makerInfoMap = " . json_encode($maker_info_map ?: (object)[]) . "; // [maker_id_no] => {tel,tel2,fax,addr} 供廠商名稱浮動視窗使用\n";
 echo "    window.allProcessTypes = " . json_encode($all_process_types_init ?: []) . "; // 製程主檔（process_no）：新增BOM／新增製程的代號只能用這裡面的，AJAX 回來會再覆蓋\n";
+// 批次檢視的「公司預設」（none/lane/flow/both）：管理員設定，個人沒自己設定過就套用這個
+$_bv_default = 'none';
+try {
+    $_bv_row = $conn->getOne("SELECT param_value FROM system_parameters WHERE param_group='BOM_SETTING' AND param_key='batch_view_default' LIMIT 1");
+    $_bv_raw = is_array($_bv_row) ? ($_bv_row['param_value'] ?? '') : (string)$_bv_row;
+    // param_value 是 JSON 欄位，同群組慣例是存物件（{"mode":"both"}）
+    $_bv_j = json_decode((string)$_bv_raw, true);
+    $_bv_val = is_array($_bv_j) ? (string)($_bv_j['mode'] ?? '') : (string)$_bv_j;
+    if (in_array($_bv_val, ['none','lane','flow','both'], true)) $_bv_default = $_bv_val;
+} catch (Exception $e) { /* 沒設定過就用 none，不影響任何人 */ }
+echo "    window.EG_BV_DEFAULT = " . json_encode($_bv_default) . "; // 批次檢視公司預設\n";
+echo "    window.EG_BV_CAN_SET_DEFAULT = " . json_encode($display_permission_code === 'A') . "; // 只有系統管理員能改公司預設\n";
 echo "    window.currentUserStatus = " . json_encode($user_status ?? null) . ";\n";
 echo "    window.canCreate = " . json_encode($can_create) . ";\n";
 echo "    window.canUpdate = " . json_encode($can_update) . ";\n";
@@ -5605,6 +5621,12 @@ echo "</script>\n";
                 }
                 _displayProcs.forEach(function(_proc, _pi) {
                     var _pDiv = document.createElement('div');
+                    // 這三個屬性只是給「批次檢視」用來把狀態按鈕／燈號搬到流程圖節點裡，
+                    // 沒開批次檢視時完全不影響任何行為（純資料屬性）。
+                    _pDiv.className = 'bv-proc-block';
+                    _pDiv.setAttribute('data-bv-sn', String(_proc.bom_sn == null ? '' : _proc.bom_sn));
+                    _pDiv.setAttribute('data-bv-label', String(_proc.batch_label || ''));
+                    _pDiv.setAttribute('data-bv-fid', String(_proc.bom_ing_fid == null ? '' : _proc.bom_ing_fid));
                     _pDiv.style.cssText = 'margin-top:' + (_pi === 0 ? '1' : '4') + 'px;' +
                         (_pi > 0 ? 'padding-top:3px;border-top:1px dotted #ddd;' : '') + 'line-height:1.2;';
                     var _nameDiv = document.createElement('div');
@@ -5658,6 +5680,7 @@ echo "</script>\n";
                             (function(_id, _excQc, _f) { _ingBtn.onclick = function() { if (window.userStatus == 1) markAsReturned(_id, this, _excQc, _f); }; })(_iid, _proc.is_exclude_qc ? 1 : 0, _fid);
                         }
                         var _ingBtnRow = document.createElement('div');
+                        _ingBtnRow.className = 'bv-btnrow';   // 批次檢視會把整列搬進流程圖節點
                         _ingBtnRow.style.cssText = 'margin-top:2px;display:flex;align-items:center;justify-content:flex-end;';
                         _ingBtnRow.appendChild(_ingBtn);
                         _pDiv.appendChild(_ingBtnRow);
@@ -5665,6 +5688,7 @@ echo "</script>\n";
                     } else if (_st === 'N' && _proc.batch_label) {
                         // 拆分批次尚未發包（N 狀態）→ 顯示待發包標籤
                         var _nRow = document.createElement('div');
+                        _nRow.className = 'bv-btnrow';   // 批次檢視會把整列搬進流程圖節點
                         _nRow.style.cssText = 'margin-top:2px;display:flex;align-items:center;justify-content:flex-end;';
                         var _nBadge = document.createElement('span');
                         _nBadge.className = 'label label-default';
@@ -5675,6 +5699,7 @@ echo "</script>\n";
                         _lastBtnRow = _nRow;
                     } else if (_effectiveSt === 'Q' || _effectiveSt === 'P' || _effectiveSt === 'E') {
                         var _btnRow = document.createElement('div');
+                        _btnRow.className = 'bv-btnrow';   // 批次檢視會把整列搬進流程圖節點
                         _btnRow.style.cssText = 'margin-top:2px;display:flex;align-items:center;justify-content:flex-end;';
                         var _dh = '';
                         if (_effectiveSt === 'Q' && _proc.return_date) {

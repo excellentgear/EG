@@ -747,10 +747,16 @@ if (!empty($current_page_boms)) {
     $fd = function($v) { return (!empty($v) && $v !== '0000-00-00 00:00:00') ? date('Y/m/d', strtotime($v)) : null; };
     foreach ($raw_ps_rows as $r) {
         $key = $r['bom'] . '_' . $r['bom_sn'];
+        // ⚠ 這份欄位必須與頁面初載（OreadyReply_ForPm_BaseOfTime.php 的 $batch_entry）
+        //   完全一致，缺一欄就會出現「初載看得到、自動更新 5 秒後就不見」這種
+        //   只有實際等下去才看得到的 bug（2026-09-04 容器事故同一種）。
+        //   bom_ing_fid／maker_id_no 原本這裡就漏了，2026-09-07 補上。
         $batch_entry = [
+            'bom_ing_fid'      => $r['bom_ing_fid'] ?? null,
             'batch_label'      => $r['batch_label'] ?? null,
             'sqty'             => $r['sqty'],
             'maker_id'         => $r['maker_id'] ?? '',
+            'maker_id_no'      => $r['maker_id_no'] ?? '',
             'outsource_date'   => $fd($r['outsource_date']),
             'return_date'      => $fd($r['return_date']),
             'processing_state' => $r['processing_state'] ?? '',
@@ -758,6 +764,8 @@ if (!empty($current_page_boms)) {
             'QC_check'         => $r['QC_check'] ?? null,
             'qc_completed'     => (int)($r['qc_completed'] ?? 0),
             'QC_check_date'    => $fd($r['QC_check_date'] ?? null),
+            'single_bet_ps'    => $r['single_bet_ps'] ?? null,
+            'ps'               => $r['ps'] ?? null,
         ];
         // 活躍批次（is_consumed=0）→ 供 split_batches
         if (empty($r['is_consumed'])) {

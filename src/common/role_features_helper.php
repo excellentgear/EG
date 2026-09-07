@@ -343,3 +343,53 @@ if (!function_exists('oready_resolve_can_view_price')) {
         }
     }
 }
+
+if (!function_exists('oready_resolve_is_admin')) {
+    /**
+     * BOM 總表（OreadyReply_ForPm_BaseOfTime.php）的「系統管理員（權限碼 A）」判定。
+     *
+     * 判斷規則必須與該頁開頭的權限判斷保持一致：page scope → group scope 取到的
+     * 權限字元集合裡有 'A' 就是管理者。用於後端要擋「只有管理者能做」的動作
+     * （鐵律8：前端把選項藏起來不算守門）。
+     *
+     * fail-closed：判不出來一律當作沒有權限。
+     */
+    function oready_resolve_is_admin($pdo, $user_id, $script_path = '/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php') {
+        $user_id = (int)$user_id;
+        if ($user_id <= 0 || !eg_user_is_active($pdo, $user_id)) return false;
+        try {
+            $st = $pdo->prepare("
+                SELECT smp.page_id, smp.group_id
+                FROM system_module_pages smp
+                WHERE (:script LIKE CONCAT('%', smp.page_url) AND smp.page_url IS NOT NULL AND smp.page_url != '')
+                   OR (:script LIKE CONCAT('%', smp.page_url_readonly) AND smp.page_url_readonly IS NOT NULL AND smp.page_url_readonly != '')
+                LIMIT 1
+            ");
+            $st->execute([':script' => $script_path]);
+            $page = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$page) return false;
+
+            $group_module_code = null;
+            if (!empty($page['group_id'])) {
+                $st2 = $pdo->prepare("SELECT module_code FROM system_modules WHERE group_id = :gid LIMIT 1");
+                $st2->execute([':gid' => $page['group_id']]);
+                $group_module_code = $st2->fetchColumn();
+            }
+
+            $st3 = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=:uid AND scope='page' AND module_code=:pid");
+            $st3->execute([':uid' => $user_id, ':pid' => $page['page_id']]);
+            $perms = array_filter($st3->fetchAll(PDO::FETCH_COLUMN));
+            if (!$perms && !empty($group_module_code)) {
+                $st4 = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=:uid AND scope='group' AND module_code=:mc");
+                $st4->execute([':uid' => $user_id, ':mc' => $group_module_code]);
+                $perms = array_filter($st4->fetchAll(PDO::FETCH_COLUMN));
+            }
+
+            $chars = [];
+            foreach ($perms as $p) { $chars = array_merge($chars, str_split($p)); }
+            return in_array('A', array_unique($chars), true);
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+}

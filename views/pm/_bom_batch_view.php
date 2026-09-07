@@ -69,6 +69,22 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
 .eg-bv-station{flex:0 0 168px;display:flex;align-items:center;}
 .eg-bv-node{flex:1;min-width:0;border:1px solid #E0B77A;border-radius:4px;background:#fff;padding:3px 5px;font-size:10px;line-height:1.35;}
 .eg-bv-node.na{border-style:dashed;border-color:#E2E2E2;background:transparent;}
+/* 已經過此關（待移轉／已移轉）：淺暖底＋較深的暖色框線 */
+.eg-bv-node.eg-bv-passed{background:#FBF3E6;border-color:#C9A063;}
+/* 目前關卡：另一個淺暖底＋較粗的左框線，一眼看得出「現在在這裡」 */
+.eg-bv-node.eg-bv-current{background:#FDF6EC;border-color:#F0A24B;box-shadow:inset 3px 0 0 #F0A24B;}
+/* 節點內的備註（廠商下方）*/
+.eg-bv-note-ro{font-size:9px;color:#7A4A12;line-height:1.35;margin-top:2px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.eg-bv-note-raw{font-size:9px;color:#999;line-height:1.35;margin-top:1px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.eg-bv-note-in{width:100%;box-sizing:border-box;margin-top:2px;padding:1px 3px;font-size:9px;
+    line-height:1.35;border:1px solid #E0B77A;border-radius:2px;background:#fff;color:#333;}
+.eg-bv-note-in:focus{outline:none;border-color:#F0A24B;}
+/* 從發單日欄搬進來的狀態按鈕／檢驗燈號 */
+.eg-bv-node-act{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:3px;}
+.eg-bv-node-act:empty{display:none;}
+.eg-bv-node-act .bv-btnrow{margin-top:2px !important;}
 .eg-bv-node-t{font-weight:600;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .eg-bv-node-s{color:#777;font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .eg-bv-link{flex:0 0 22px;height:1px;background:#C9A063;position:relative;align-self:center;}
@@ -77,6 +93,12 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
 .eg-bv-link.off:after{display:none;}
 .eg-bv-branch{color:#DD5138;font-size:9px;font-weight:600;}
 .eg-bv-note{font-size:10px;color:#A8814A;margin-top:3px;}
+
+/* 流程圖開啟時，發單日欄留下的「目前這一關」摘要 */
+.eg-bv-cur-line{margin-top:2px;line-height:1.25;}
+.eg-bv-cur-t{font-weight:600;font-size:12px;color:#333;}
+.eg-bv-cur-s{color:#555;font-size:11px;}
+.eg-bv-cur-h{color:#A8814A;font-size:10px;margin-top:2px;}
 
 /* 開關鈕 */
 #eg-bv-toggle{margin-left:6px;}
@@ -99,15 +121,34 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
     // 快取：decorateRow 是「每一列每一次重繪」都會呼叫的，而本頁每 5 秒自動更新一次；
     // 每列都去讀一次 localStorage 是不必要的固定成本，故快取起來、寫入時才失效。
     var _pref = null;
+    // 公司預設（管理員設定）：none / lane / flow / both。
+    // 個人「沒自己動過開關」時套用它；動過的人以自己的選擇為準（使用者拍板）。
+    function companyDefault() {
+        var v = String(window.EG_BV_DEFAULT || 'none');
+        return (v === 'lane' || v === 'flow' || v === 'both') ? v : 'none';
+    }
+    function defaultPref() {
+        var d = companyDefault();
+        return { lane: (d === 'lane' || d === 'both'), flow: (d === 'flow' || d === 'both'), _from: 'company' };
+    }
     function readPref() {
         if (_pref) return _pref;
-        try { _pref = JSON.parse(localStorage.getItem(LS_KEY) || '{}') || {}; }
-        catch (e) { _pref = {}; }   // 私密視窗／停用 site data 時 localStorage 會丟例外
+        var raw = null;
+        try { raw = localStorage.getItem(LS_KEY); } catch (e) { raw = null; }  // 私密視窗會丟例外
+        if (raw === null || raw === '') { _pref = defaultPref(); return _pref; }
+        try { _pref = JSON.parse(raw) || defaultPref(); }
+        catch (e) { _pref = defaultPref(); }
         return _pref;
     }
     function writePref(p) {
         _pref = p || {};
+        delete _pref._from;   // 一旦自己動過就不再是「跟著公司預設」
         try { localStorage.setItem(LS_KEY, JSON.stringify(_pref)); } catch (e) {}
+    }
+    function usingCompanyDefault() { return readPref()._from === 'company'; }
+    function resetToCompanyDefault() {
+        try { localStorage.removeItem(LS_KEY); } catch (e) {}
+        _pref = null;
     }
     function on(k) { return !!readPref()[k]; }
     function anyOn() { var p = readPref(); return !!(p.lane || p.flow); }
@@ -216,7 +257,50 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
     }
 
     /* ── (b) 流程圖 ───────────────────────────────────────────── */
-    function flowHtml(sts) {
+    // 這一批是不是「目前關卡」＝發單日欄目前顯示的那幾關（row.bom_sn 可能是 "80,90,100"）
+    function curSnSet(row) {
+        var m = {};
+        String(row && row.bom_sn != null ? row.bom_sn : '').split(',').forEach(function (s) {
+            s = String(s).trim(); if (s) m[s] = true;
+        });
+        return m;
+    }
+    // 節點的走勢分類（使用者指定）：
+    //   passed  已經過此關（待移轉／已移轉）→ 淺暖底＋框線變色
+    //   current 目前關卡（bom_sn 在發單日欄那組裡）→ 另一個淺暖底
+    //   其餘    未走到 → 維持原本樣式
+    function nodePhase(st, s, curSet) {
+        if (st.k === 'wait' || st.k === 'done') return 'passed';
+        if (curSet[String(s.bom_sn).trim()]) return 'current';
+        return '';
+    }
+    // 備註能不能在流程圖裡直接改（使用者指定）：
+    //   已移轉(E) → 不得編輯；目前關卡 → 在上方「BOM/製程備註」欄編輯，這裡唯讀；
+    //   其餘（未來關卡）→ 這裡可以直接編輯。
+    function noteEditable(st, phase) {
+        if (st.k === 'done') return false;   // 已移轉
+        if (phase === 'current') return false;
+        return canEditNote();
+    }
+    function canEditNote() { return (window.userStatus == 1); }
+    // 節點裡「廠商下方」要顯示的備註：單關備註（可編輯的那個）＋ ERP 原始備註
+    function noteHtml(b, st, phase) {
+        var sp  = (b.single_bet_ps === null || b.single_bet_ps === undefined) ? '' : String(b.single_bet_ps);
+        var raw = (b.ps === null || b.ps === undefined) ? '' : String(b.ps);
+        var h = '';
+        if (noteEditable(st, phase) && b.bom_ing_fid) {
+            h += '<input class="eg-bv-note-in" type="text" value="' + esc(sp) + '"'
+               + ' data-fid="' + esc(b.bom_ing_fid) + '" data-orig="' + esc(sp) + '"'
+               + ' placeholder="單關備註（Enter 存檔）" title="單關備註（Enter 存檔）">';
+        } else if (sp !== '') {
+            h += '<div class="eg-bv-note-ro" title="' + esc(sp) + '">' + esc(sp) + '</div>';
+        }
+        if (raw !== '') h += '<div class="eg-bv-note-raw" title="' + esc(raw) + '">' + esc(raw) + '</div>';
+        return h;
+    }
+
+    function flowHtml(sts, row) {
+        var curSet = curSnSet(row);
         // 只取有拆批的站，並收集所有出現過的批號
         var cols = sts.filter(function (s) { return s.batches; });
         if (!cols.length) return '';
@@ -242,12 +326,18 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
                 h += '<div class="eg-bv-station">';
                 if (b) {
                     var st = statusOf(b);
+                    var phase = nodePhase(st, s, curSet);
                     var sub = [fmtDate(b.outsource_date), b.maker_id || ''].filter(Boolean).join(' ');
-                    h += '<div class="eg-bv-node' + (st.dim ? ' eg-bv-done' : '') + '">'
+                    // data-bv-* 是給 decorateRow 把「狀態按鈕／檢驗燈號」原封不動搬進來用的
+                    h += '<div class="eg-bv-node' + (st.dim ? ' eg-bv-done' : '')
+                      +      (phase ? ' eg-bv-' + phase : '') + '"'
+                      +      ' data-bv-sn="' + esc(s.bom_sn) + '" data-bv-label="' + esc(b.batch_label || '') + '">'
                       +    '<div class="eg-bv-node-t">' + esc(s.bom_sn) + esc(s.name)
                       +      ' <span class="eg-bv-qty">x' + esc(b.sqty != null ? b.sqty : '') + '</span>'
                       +      ' ' + badgeHtml(st) + '</div>'
                       +    (sub ? '<div class="eg-bv-node-s">' + esc(sub) + '</div>' : '')
+                      +    noteHtml(b, st, phase)
+                      +    '<div class="eg-bv-node-act"></div>'
                       +    (firstSeen === ci && ci > 0 ? '<div class="eg-bv-branch">∟ 此站才出現（由其他批分出）</div>' : '')
                       +  '</div>';
                 } else {
@@ -330,6 +420,131 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
         scheduleSync();
     }
 
+    /* ── 把發單日欄的「狀態按鈕／檢驗燈號」搬進對應的流程圖節點 ──────────────
+       刻意用搬移（appendChild 同一個節點）而不是重畫：那些按鈕的 onclick 裡
+       包著移轉權限、featTransfer、isCRU、userStatus 等一整套判斷，重刻一份
+       必定走鐘（鐵律4），而且將來正式頁改了規則這裡不會跟著改。            */
+    function relocateActions(tr, ftd) {
+        var tdOut = tr.querySelector('td[name="outsource_date"]');
+        if (!tdOut) return;
+        var blocks = tdOut.querySelectorAll('.bv-proc-block');
+        for (var i = 0; i < blocks.length; i++) {
+            var blk = blocks[i];
+            var sn  = blk.getAttribute('data-bv-sn') || '';
+            var lbl = blk.getAttribute('data-bv-label') || '';
+            var node = ftd.querySelector('.eg-bv-node[data-bv-sn="' + cssEsc(sn) + '"][data-bv-label="' + cssEsc(lbl) + '"]');
+            if (!node) continue;   // 找不到對應節點就原地保留，絕不把按鈕弄不見
+            var slot = node.querySelector('.eg-bv-node-act');
+            if (!slot) continue;
+            var rows = blk.querySelectorAll('.bv-btnrow');
+            for (var j = 0; j < rows.length; j++) slot.appendChild(rows[j]);
+        }
+    }
+    // 屬性選擇器用的簡易跳脫（批號只會是 A/B/C 這種，但還是保守處理）
+    function cssEsc(v) { return String(v).replace(/["\\]/g, '\\$&'); }
+
+    /* ── 流程圖開啟時，發單日欄只留「總數量＋目前這一關的製程/日期/廠商」──────
+       各批次明細改到流程圖看（使用者指定）。按鈕已由 relocateActions 搬走，
+       這裡只是把剩下的批次區塊收成一行摘要；工作天數那一行原樣保留。      */
+    function slimOutsourceCell(tr, sts, row) {
+        var tdOut = tr.querySelector('td[name="outsource_date"]');
+        if (!tdOut) return;
+        var blocks = tdOut.querySelectorAll('.bv-proc-block');
+        if (!blocks.length) return;
+        var curSet = curSnSet(row);
+        // 取「目前這一關」：以發單日欄本來就在顯示的那些 sn 為準，取最後（最新）一個
+        var pick = null;
+        for (var i = 0; i < sts.length; i++) {
+            if (curSet[String(sts[i].bom_sn).trim()]) pick = sts[i];
+        }
+        var line = document.createElement('div');
+        line.className = 'eg-bv-cur-line';
+        if (pick) {
+            // 日期／廠商取這一關最新的那一批（多批時以最新發單日為準）
+            var best = null;
+            (pick.batches || []).forEach(function (b) {
+                if (!best || String(b.outsource_date || '') > String(best.outsource_date || '')) best = b;
+            });
+            var od = best ? fmtDate(best.outsource_date) : '';
+            var mk = best ? (best.maker_id || '') : '';
+            line.innerHTML = '<div class="eg-bv-cur-t">' + esc(pick.bom_sn) + esc(pick.name) + '</div>'
+                           + ((od || mk) ? '<div class="eg-bv-cur-s"></div>' : '')
+                           + '<div class="eg-bv-cur-h">各批次明細與操作請見下方流程圖</div>';
+            // 廠商名稱的電話／傳真／地址浮動視窗不可以因為改版就不見了：
+            // 沿用正式頁的 applyMakerPopover（同一份實作），本列此時還沒被 append，
+            // updateTable 結尾那次 popover 初始化會一併涵蓋到。
+            var sEl = line.querySelector('.eg-bv-cur-s');
+            if (sEl) {
+                if (od) sEl.appendChild(document.createTextNode(od + (mk ? ' ' : '')));
+                if (mk) {
+                    var mkSpan = document.createElement('span');
+                    mkSpan.className = 'maker-info-pop';
+                    mkSpan.textContent = mk;
+                    if (typeof window.applyMakerPopover === 'function') {
+                        try { window.applyMakerPopover(mkSpan, best && best.maker_id_no, mk); } catch (e) {}
+                    }
+                    sEl.appendChild(mkSpan);
+                }
+            }
+        } else {
+            line.innerHTML = '<div class="eg-bv-cur-h">各批次明細與操作請見下方流程圖</div>';
+        }
+        blocks[0].parentNode.insertBefore(line, blocks[0]);
+        for (var k = 0; k < blocks.length; k++) blocks[k].parentNode.removeChild(blocks[k]);
+    }
+
+    /* ── 流程圖裡的單關備註輸入框：Enter 存檔 ───────────────────────────────
+       走正式頁既有的端點與規則（一個 bom_ing_fid 一筆），不另外開 API。   */
+    function bindNoteInputs(ftd) {
+        var ins = ftd.querySelectorAll('.eg-bv-note-in');
+        for (var i = 0; i < ins.length; i++) {
+            (function (el) {
+                el.addEventListener('keydown', function (e) {
+                    if (e.key !== 'Enter' && e.keyCode !== 13) return;
+                    e.preventDefault();
+                    var fid = el.getAttribute('data-fid') || '';
+                    var val = el.value;
+                    if (!/^\d+$/.test(fid)) return;
+                    if (val === (el.getAttribute('data-orig') || '')) return;
+                    el.disabled = true; el.style.borderColor = '#F0A24B';
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('POST', '_update_single_bet_ps.php', true);
+                    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+                    xhr.onreadystatechange = function () {
+                        if (xhr.readyState !== 4) return;
+                        el.disabled = false; el.style.borderColor = '';
+                        var ok = false, msg = '';
+                        try { var r = JSON.parse(xhr.responseText); ok = !!(r && r.success); msg = (r && r.message) || ''; }
+                        catch (ex) { msg = '回應格式錯誤'; }
+                        if (ok) {
+                            el.setAttribute('data-orig', val);
+                            el.style.backgroundColor = '#EAF3EA';
+                            setTimeout(function () { el.style.backgroundColor = ''; }, 900);
+                            // 同步本機資料，下一次重繪才不會把剛打的字換回舊值
+                            syncNoteToLocal(fid, val);
+                        } else {
+                            el.style.borderColor = '#DD5138';
+                            alert('單關備註存檔失敗：' + (msg || '未知錯誤'));
+                        }
+                    };
+                    xhr.send('bom_ing_fid=' + encodeURIComponent(fid) + '&single_bet_ps=' + encodeURIComponent(val));
+                });
+                // 在輸入框裡打字不要觸發表格的其他按鍵處理
+                el.addEventListener('keyup', function (e) { e.stopPropagation(); });
+            })(ins[i]);
+        }
+    }
+    function syncNoteToLocal(fid, val) {
+        (window.bomPSList || []).forEach(function (p) {
+            if (!p) return;
+            if (String(p.bom_ing_fid) === String(fid)) p.single_bet_ps = val;
+            ['split_batches', 'all_split_batches'].forEach(function (key) {
+                if (!Array.isArray(p[key])) return;
+                p[key].forEach(function (b) { if (b && String(b.bom_ing_fid) === String(fid)) b.single_bet_ps = val; });
+            });
+        });
+    }
+
     /* ── 對外唯一入口：正式頁在 tbody.appendChild(tr) 前呼叫 ── */
     function decorateRow(tr, row, tbody) {
         if (!anyOn()) return;                       // 沒開＝完全不做事
@@ -353,7 +568,7 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
         }
 
         if (on('flow')) {
-            var fh = flowHtml(sts);
+            var fh = flowHtml(sts, row);
             if (fh) {
                 var ftr = document.createElement('tr');
                 ftr.className = 'eg-bv-flow-row';
@@ -361,6 +576,12 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
                 ftd.colSpan = Math.max(1, tr.children.length);
                 ftd.innerHTML = fh;
                 ftr.appendChild(ftd);
+                // 狀態按鈕／檢驗燈號一律「搬」而不是重畫：同一個 DOM 節點連同它的
+                // onclick 與權限判斷整組移進流程圖，才不會在這裡重刻一份權限規則（鐵律4/8）。
+                relocateActions(tr, ftd);
+                // 發單日欄改成只留「總數量＋目前這一關」（使用者指定）
+                slimOutsourceCell(tr, sts, row);
+                bindNoteInputs(ftd);
                 // ⚠ 這裡絕對不可以自己 tbody.appendChild(tr)——呼叫端在我 return 之後
                 //   還會再 append 一次，同一個節點 append 兩次是「搬移」，
                 //   結果會變成本列跑到流程列後面。改用微任務：等呼叫端把 tr 放進
@@ -392,18 +613,62 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
         var m = document.createElement('div');
         m.id = 'eg-bv-menu';
         m.className = 'eg-bv-menu';
+        var dnames = { none: '都不開啟', lane: '泳道表格', flow: '流程圖', both: '兩種都開' };
+        var cd = companyDefault();
         m.innerHTML =
             '<label><input type="checkbox" id="eg-bv-lane"' + (p.lane ? ' checked' : '') + '>泳道表格（發單日摘要＋製程欄批次）</label>' +
             '<label><input type="checkbox" id="eg-bv-flow"' + (p.flow ? ' checked' : '') + '>流程圖（該列下方展開站點連線）</label>' +
             '<hr><div class="eg-bv-hint">兩種可以分開開、也可以一起開。<br>' +
             '設定只存在你自己的瀏覽器，<b>不會影響其他人</b>。<br>' +
-            '只有<b>拆過批</b>的 BOM 會換成新版面。</div>';
+            '只有<b>拆過批</b>的 BOM 會換成新版面。<br>' +
+            '開啟流程圖時，發單日欄只留「目前這一關」，各批次的狀態按鈕與檢驗燈號改到流程圖裡按。<br>' +
+            '目前公司預設：<b>' + esc(dnames[cd] || cd) + '</b>' +
+            (usingCompanyDefault() ? '（你正在套用公司預設）' : '') + '</div>' +
+            '<div style="margin-top:6px;"><button type="button" id="eg-bv-reset" class="btn btn-xs btn-default">還原成公司預設</button></div>' +
+            (window.EG_BV_CAN_SET_DEFAULT ?
+              '<hr><div class="eg-bv-hint"><b>管理員：設定公司預設</b><br>只影響「沒有自己動過開關」的人。</div>' +
+              '<select id="eg-bv-cdef" class="form-control input-sm" style="margin-top:4px;">' +
+                ['none','lane','flow','both'].map(function (k) {
+                    return '<option value="' + k + '"' + (k === cd ? ' selected' : '') + '>' + esc(dnames[k]) + '</option>';
+                }).join('') +
+              '</select><div id="eg-bv-cdef-msg" style="font-size:10.5px;margin-top:3px;min-height:14px;"></div>'
+              : '');
         document.body.appendChild(m);
         var r = btn.getBoundingClientRect();
         m.style.left = Math.max(6, Math.min(r.left, window.innerWidth - m.offsetWidth - 10)) + 'px';
         m.style.top  = (r.bottom + window.scrollY + 4) + 'px';
         m.querySelector('#eg-bv-lane').onchange = function () { var q = readPref(); q.lane = this.checked; writePref(q); refresh(); };
         m.querySelector('#eg-bv-flow').onchange = function () { var q = readPref(); q.flow = this.checked; writePref(q); refresh(); };
+        m.querySelector('#eg-bv-reset').onclick = function () { resetToCompanyDefault(); m.remove(); refresh(); };
+        var cdefSel = m.querySelector('#eg-bv-cdef');
+        if (cdefSel) {
+            cdefSel.onchange = function () {
+                var val = this.value, msg = m.querySelector('#eg-bv-cdef-msg'), sel = this;
+                sel.disabled = true;
+                if (msg) { msg.style.color = '#A8814A'; msg.textContent = '儲存中…'; }
+                var xhr = new XMLHttpRequest();
+                // 端點就是本頁自己（action 走 OreadyReply_ForPm_BaseOfTime_ajax.php），
+                // 後端會再驗一次是不是系統管理員（鐵律8）。
+                xhr.open('POST', window.location.pathname, true);
+                xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState !== 4) return;
+                    sel.disabled = false;
+                    var ok = false, em = '';
+                    try { var r = JSON.parse(xhr.responseText.replace(/^﻿/, '')); ok = !!(r && r.success); em = (r && r.message) || ''; }
+                    catch (ex) { em = '回應格式錯誤'; }
+                    if (ok) {
+                        window.EG_BV_DEFAULT = val;
+                        if (msg) { msg.style.color = '#4A7A4A'; msg.textContent = '✔ 已儲存，未自訂開關的人下次開頁面就會套用'; }
+                        if (usingCompanyDefault()) { _pref = null; refresh(); }
+                    } else {
+                        if (msg) { msg.style.color = '#DD5138'; msg.textContent = '✘ ' + (em || '儲存失敗'); }
+                        sel.value = companyDefault();
+                    }
+                };
+                xhr.send('action=bv_save_default&value=' + encodeURIComponent(val));
+            };
+        }
         setTimeout(function () {
             document.addEventListener('mousedown', function h(e) {
                 var mm = document.getElementById('eg-bv-menu');
