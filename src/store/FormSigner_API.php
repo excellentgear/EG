@@ -184,6 +184,8 @@ case 'template_rename': {
     $id = (int)($_POST['id'] ?? 0);
     $name = trim((string)($_POST['name'] ?? ''));
     if ($name === '') jerr('請輸入樣板名稱');
+    if (mb_strlen($name, 'UTF-8') > 120) jerr('樣板名稱最多 120 個字');
+    if (!fsd_template_get($db, $id)) jerr('找不到此樣板', 404);
     fsd_template_rename($db, $id, $name, $uname);
     jout(['template'=>fsd_template_get($db, $id)]);
 }

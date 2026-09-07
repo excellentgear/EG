@@ -47,16 +47,33 @@ $perms = fsd_perms($db, $fsdUser);
         table.fsd-tbl th, table.fsd-tbl td { border:1px solid #EADFC8; padding:6px 8px; }
         table.fsd-tbl thead th { background:#F7E0BD; color:#5b3a1e; }
         .fsd-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; }
+        /* 案件列表各欄寬度：狀態不可換行（「進行中」被折成兩行會把整列撐高），
+           樣板/最新列印/業務日期收窄把寬度讓給案件名稱與進度欄。 */
+        table.fsd-tbl th.c-tpl, table.fsd-tbl td.c-tpl { width:92px; }
+        table.fsd-tbl th.c-date, table.fsd-tbl td.c-date { width:96px; white-space:nowrap; }
+        table.fsd-tbl th.c-status, table.fsd-tbl td.c-status { width:74px; white-space:nowrap; text-align:center; }
+        table.fsd-tbl th.c-print, table.fsd-tbl td.c-print { width:86px; }
+        table.fsd-tbl th.c-act, table.fsd-tbl td.c-act { width:150px; white-space:nowrap; }
+        /* 分頁：列表右上角（UI 規則），每頁 5/10/20/50 可選、預設 10 筆 */
+        .fsd-pager { display:flex; align-items:center; gap:4px; margin-left:auto; }
+        .fsd-pager .pg-info { color:#8a6d45; font-size:12px; }
+        .fsd-pager select { height:26px; font-size:12px; padding:0 4px; border:1px solid #D8BE93; border-radius:4px; color:#5b3a1e; }
+        .fsd-pager button { height:26px; min-width:28px; padding:0 7px; font-size:12px; line-height:24px;
+            border:1px solid #D8BE93; border-radius:4px; background:#fff; color:#5b3a1e; cursor:pointer; }
+        .fsd-pager button.active { background:#F0A24B; border-color:#d98a33; color:#fff; font-weight:bold; }
+        .fsd-pager button:disabled { color:#c9bda8; border-color:#EADFC8; cursor:default; }
         .tag-on { color:#7a5217; font-weight:bold; } .tag-off { color:#b0a390; }
-        .badge-stage { display:inline-block; padding:2px 8px; border-radius:9px; font-size:11.5px; }
+        /* 表格內的小徽章一定要自己指定 line-height，否則會繼承表格列的行高把整列撐高 */
+        .badge-stage { display:inline-block; padding:1px 8px; border-radius:9px; font-size:11.5px; line-height:16px; }
         .badge-draft { background:#fbeadb; color:#b5762a; }
         .badge-progress { background:#F7E0BD; color:#5b3a1e; }
         .badge-approved { background:#dcefdc; color:#2e6b2e; }
         .badge-rejected { background:#f6d9d3; color:#a13a24; }
         .badge-void { background:#eee; color:#999; }
-        .prog-wrap { display:flex; flex-wrap:wrap; align-items:center; gap:2px; }
-        .prog-chip { display:inline-flex; align-items:center; gap:3px; padding:2px 8px; border-radius:14px; border:1px solid #D8BE93;
-            background:#FBF3E4; color:#7a5217; font-size:12px; white-space:nowrap; }
+        .prog-wrap { display:flex; flex-wrap:wrap; align-items:center; gap:2px 3px; }
+        /* 人名膠囊：自訂 line-height（不繼承列高）＋縮小內距，一列多關卡時不把整列撐高 */
+        .prog-chip { display:inline-flex; align-items:center; gap:2px; padding:0 6px; border-radius:9px; border:1px solid #D8BE93;
+            background:#FBF3E4; color:#7a5217; font-size:11px; line-height:16px; white-space:nowrap; }
         .prog-chip.done { background:#dcefdc; border-color:#8fc98f; color:#2e6b2e; }
         .prog-chip.pending { background:#F0A24B; border-color:#c97f30; color:#5b3a1e; font-weight:bold; }
         .prog-chip.skipped { background:#eee; border-color:#ddd; color:#999; }
@@ -194,11 +211,15 @@ $perms = fsd_perms($db, $fsdUser);
                 <button type="button" class="flt-status-btn" data-status="in_progress" onclick="toggleStatusFilter(this)">進行中</button>
                 <button type="button" class="flt-status-btn" data-status="approved" onclick="toggleStatusFilter(this)">已完成</button>
                 <button type="button" class="flt-status-btn" data-status="rejected" onclick="toggleStatusFilter(this)">已駁回</button>
+                <!-- data-eg-skip：分頁的每頁筆數只有 4 個選項，不需要（也不可以）長出打字篩選框——
+                     eg_input_rules 的 MutationObserver 對「動態加進來的 select」是一律接手的，
+                     而這個 select 每次翻頁都會被重畫，接手時原節點已被換掉會丟例外。 -->
+                <span class="fsd-pager" id="casePager" data-eg-skip="1"></span>
             </div>
             <div class="fsd-table-wrap">
             <table class="fsd-tbl">
-                <thead><tr><th>案件</th><th>樣板</th><th>申請人</th><th>業務日期</th><th>進度</th><th>狀態</th><th style="width:110px;">最新列印</th><th style="width:160px;">操作</th></tr></thead>
-                <tbody id="caseBody"><tr><td colspan="7" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
+                <thead><tr><th>案件</th><th class="c-tpl">樣板</th><th>申請人</th><th class="c-date">業務日期</th><th>進度</th><th class="c-status">狀態</th><th class="c-print">最新列印</th><th class="c-act">操作</th></tr></thead>
+                <tbody id="caseBody"><tr><td colspan="8" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
             </table>
             </div>
         </div>
@@ -445,7 +466,7 @@ $perms = fsd_perms($db, $fsdUser);
         ・<b>上傳 PDF 不會被轉成圖片</b>：匯出的 PDF 直接沿用原始 PDF 的頁面內容，畫質與原檔完全相同（掃描影像是原封不動搬過去的）；畫面上看到的預覽底圖才是轉圖產生的，只用來給您拖曳定位，不影響最終檔案。<br>
         ・<b>加密保護的 PDF 無法處理</b>，會在上傳當下就擋下並說明原因，請改上傳未加密的 PDF 或圖片檔——系統不會自動改用畫質較差的方式硬做。<br>
         ・PDF 裡的圖章大小與位置跟列印版一致（未綁定圖章模板＝固定 91px，有綁定＝該模板設定的實際尺寸，皆置中於框內）。<br>
-        ・<b>簽章依「業務日期當時」的職務解析</b>：自動解析的簽核人（部門自動主管／填表人・送出者上一階主管）、圖章上印的部門職稱、以及補案件挑人時看到的部門職稱，一律回推該案件業務日期當時的狀態，不是這個人現在的職務。例：2023 年的舊表單，當年是倉管組長、現在已升課長，仍會印當年的職務。資料來源是<b>員工管理→異動紀錄</b>；沒補登過異動的人一律用現況（與以前完全相同）。補歷史文件時當年在職、現已離職的人也解析得到。<br>・<b>列表有「最新列印」欄</b>：顯示這件最近一次被列印的日期，印過不只一次會標次數，點日期可看完整紀錄（誰、什麼時候、用哪一種方式）。<b>瀏覽器列印、開啟合成PDF、下載合成PDF 三種都算一次列印</b>，因為三者都等於文件被拿出去用了。<br>・<b>頁碼可關閉</b>：預設值由樣板設定（樣板管理頁的「預設顯示頁碼」），案件詳情工具列也有「顯示頁碼」勾選框可逐案調整，取消後列印與匯出的 PDF 都不會在左下角印「第X頁／共Y頁」（適合本身表格已有頁次欄的 AS 表單）。<b>建立後隨時可改</b>，改動會讓已產生的 PDF 作廢、下次開啟時用新設定重新產生；單頁文件本來就不印頁碼。可調整者：申請人本人或管理員。<br>・<b>列表的「申請人」欄顯示的是填表人</b>（建立時選定或事後修改的那一位），不是技術上按下建立鈕的人；還沒選填表人的案件才會顯示建立者並標註。<br>・<b>連結 AS 文件編號</b>（樣板有開放才會出現）：純粹是「這份簽核完成的文件＝那份 AS 文件的內容」的對應關係，讓「AS 文件管理」上傳同一編號的版本附件時可以直接<b>由表單簽核案件導入</b>，同一份文件不用上傳兩次。<b>這不是列印右下角要印的 AS 編號</b>（那個由樣板綁定，兩者互不影響）。連結後案件名稱會自動加上 AS 編號當開頭，列表一眼看得出對應哪份文件。<br>・簽核人來源有「<b>送出者上一階主管</b>」與「<b>填表人上一階主管</b>」兩種，差別在於從誰往上找：前者是按下建立/送出的人，後者是表單真正歸屬的填表人。管理員代別人建案件時通常要用後者。<b>樣板只要用到「填表人上一階主管」，該案件就一定要指定填表人才能送出</b>（否則那一關找不到人會被整關略過）。<br>・<b>填表人＝這張表單實際上是誰填的</b>，也是簽核來源選「填表人」時圖章要蓋的人；簽核來源選「部門自動主管」但沒指定部門時，也是用填表人的部門去找主管（沒選填表人才退回用申請人的部門）。<br>・<b>填表人預設未選定</b>（以前會自動帶成建立案件的人，管理員代別人建案件時圖章就會蓋到管理員，所以改掉）。<b>只有框了「填表人」圖章欄位的案件，未指定填表人就不能送出</b>；沒用到填表人圖章的案件不強迫選，但仍可自願填。<br>・設定填表人的權限：<b>草稿階段</b>由申請人本人或管理員設定；<b>送出後</b>只有超級管理員可以回改。<br>・<b>回改填表人會連已經蓋好的填表人圖章一起換成新的人</b>，儲存前會跳出確認告訴您會動到幾個章；同時已產生的合成 PDF 會作廢，下次開啟案件時自動用新的章重新產生。<br>・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
+        ・<b>簽章依「業務日期當時」的職務解析</b>：自動解析的簽核人（部門自動主管／填表人・送出者上一階主管）、圖章上印的部門職稱、以及補案件挑人時看到的部門職稱，一律回推該案件業務日期當時的狀態，不是這個人現在的職務。例：2023 年的舊表單，當年是倉管組長、現在已升課長，仍會印當年的職務。資料來源是<b>員工管理→異動紀錄</b>；沒補登過異動的人一律用現況（與以前完全相同）。補歷史文件時當年在職、現已離職的人也解析得到。<br>・<b>列表一頁 10 筆</b>：分頁鈕在列表右上角，每頁筆數可改 5／10／20／50，翻頁與換筆數都只是換顯示（資料一次載齊，不會重新查詢）；一改篩選條件就自動回到第 1 頁。<br>・<b>樣板名稱要改</b>：到「樣板管理→」點樣板名稱旁的鉛筆（僅管理員），改完這裡的「樣板」欄會一起顯示新名稱，案件內容不受影響。<br>・<b>列表有「最新列印」欄</b>：顯示這件最近一次被列印的日期，印過不只一次會標次數，點日期可看完整紀錄（誰、什麼時候、用哪一種方式）。<b>瀏覽器列印、開啟合成PDF、下載合成PDF 三種都算一次列印</b>，因為三者都等於文件被拿出去用了。<br>・<b>頁碼可關閉</b>：預設值由樣板設定（樣板管理頁的「預設顯示頁碼」），案件詳情工具列也有「顯示頁碼」勾選框可逐案調整，取消後列印與匯出的 PDF 都不會在左下角印「第X頁／共Y頁」（適合本身表格已有頁次欄的 AS 表單）。<b>建立後隨時可改</b>，改動會讓已產生的 PDF 作廢、下次開啟時用新設定重新產生；單頁文件本來就不印頁碼。可調整者：申請人本人或管理員。<br>・<b>列表的「申請人」欄顯示的是填表人</b>（建立時選定或事後修改的那一位），不是技術上按下建立鈕的人；還沒選填表人的案件才會顯示建立者並標註。<br>・<b>連結 AS 文件編號</b>（樣板有開放才會出現）：純粹是「這份簽核完成的文件＝那份 AS 文件的內容」的對應關係，讓「AS 文件管理」上傳同一編號的版本附件時可以直接<b>由表單簽核案件導入</b>，同一份文件不用上傳兩次。<b>這不是列印右下角要印的 AS 編號</b>（那個由樣板綁定，兩者互不影響）。連結後案件名稱會自動加上 AS 編號當開頭，列表一眼看得出對應哪份文件。<br>・簽核人來源有「<b>送出者上一階主管</b>」與「<b>填表人上一階主管</b>」兩種，差別在於從誰往上找：前者是按下建立/送出的人，後者是表單真正歸屬的填表人。管理員代別人建案件時通常要用後者。<b>樣板只要用到「填表人上一階主管」，該案件就一定要指定填表人才能送出</b>（否則那一關找不到人會被整關略過）。<br>・<b>填表人＝這張表單實際上是誰填的</b>，也是簽核來源選「填表人」時圖章要蓋的人；簽核來源選「部門自動主管」但沒指定部門時，也是用填表人的部門去找主管（沒選填表人才退回用申請人的部門）。<br>・<b>填表人預設未選定</b>（以前會自動帶成建立案件的人，管理員代別人建案件時圖章就會蓋到管理員，所以改掉）。<b>只有框了「填表人」圖章欄位的案件，未指定填表人就不能送出</b>；沒用到填表人圖章的案件不強迫選，但仍可自願填。<br>・設定填表人的權限：<b>草稿階段</b>由申請人本人或管理員設定；<b>送出後</b>只有超級管理員可以回改。<br>・<b>回改填表人會連已經蓋好的填表人圖章一起換成新的人</b>，儲存前會跳出確認告訴您會動到幾個章；同時已產生的合成 PDF 會作廢，下次開啟案件時自動用新的章重新產生。<br>・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
         <h4>設定入口</h4>
         樣板的階段/槽位/框選提示由管理員在「樣板管理」頁設定；操作確認密碼在「修改個人密碼」頁設定（需超級管理員先授權）。
         <h4>權限角色</h4>
@@ -626,10 +647,10 @@ function renderCaseRow(c){
             actions += ' <button onclick="window.open(API+\'?action=case_export_file&id='+c.id+'\',\'_blank\')" title="開啟合成PDF（可直接列印）"><i class="fa fa-file-pdf-o"></i></button>';
     }
     var tplCell = isBf ? '<span class="badge-stage badge-draft">補案件</span>' : esc(c.template_name);
-    return '<tr><td>'+esc(c.title||c.template_name)+'</td><td>'+tplCell+'</td><td>'+caseOwnerCell(c)+'</td>'
-        + '<td>'+dispDate(c.business_date)+'</td><td>'+stageTxt+'</td><td>'+statusBadge(c.status)+'</td>'
-        + '<td>'+printCell(c)+'</td>'
-        + '<td>'+actions+'</td></tr>';
+    return '<tr><td>'+esc(c.title||c.template_name)+'</td><td class="c-tpl">'+tplCell+'</td><td>'+caseOwnerCell(c)+'</td>'
+        + '<td class="c-date">'+dispDate(c.business_date)+'</td><td>'+stageTxt+'</td><td class="c-status">'+statusBadge(c.status)+'</td>'
+        + '<td class="c-print">'+printCell(c)+'</td>'
+        + '<td class="c-act">'+actions+'</td></tr>';
 }
 /* -------- 列表上的「申請人」＝這張表單實際歸屬的人 --------
    顯示的是**填表人**（建立案件時選定、或事後修改過的那一位），不是技術上按下建立鈕的人
@@ -671,8 +692,46 @@ function applyCaseFilter(){
         }
         return true;
     });
-    var h = list.map(renderCaseRow).join('');
-    $('#caseBody').html(h || '<tr><td colspan="8" style="text-align:center;color:#8a6d45;padding:10px;">'+(CASES.length?'沒有符合篩選條件的案件':'尚無案件')+'</td></tr>');
+    CASES_FILTERED = list;
+    CASE_PAGE = 1;              // 篩選條件一改就回到第 1 頁（否則會停在一個已不存在的頁碼上看到空白）
+    renderCasePage();
+}
+/* -------- 前端分頁（案件清單一次全載，純顯示切頁；分頁鈕在列表右上角＝UI 規則） -------- */
+var CASES_FILTERED = [], CASE_PAGE = 1, CASE_PER = 10;
+function casePageCount(){ return Math.max(1, Math.ceil(CASES_FILTERED.length / CASE_PER)); }
+function gotoCasePage(p){
+    var mx = casePageCount();
+    CASE_PAGE = Math.min(Math.max(1, p), mx);
+    renderCasePage();
+}
+function changeCasePer(v){ CASE_PER = parseInt(v,10) || 10; CASE_PAGE = 1; renderCasePage(); }
+function renderCasePage(){
+    var total = CASES_FILTERED.length, mx = casePageCount();
+    if (CASE_PAGE > mx) CASE_PAGE = mx;
+    var st = (CASE_PAGE - 1) * CASE_PER;
+    var rows = CASES_FILTERED.slice(st, st + CASE_PER);
+    $('#caseBody').html(rows.map(renderCaseRow).join('')
+        || '<tr><td colspan="8" style="text-align:center;color:#8a6d45;padding:10px;">'+(CASES.length?'沒有符合篩選條件的案件':'尚無案件')+'</td></tr>');
+    renderCasePager(total, mx, st, rows.length);
+}
+function renderCasePager(total, mx, st, shown){
+    var h = '<span class="pg-info">' + (total ? (st+1)+'–'+(st+shown)+' / 共 '+total+' 件' : '共 0 件') + '</span>'
+          // data-eg-skip 要直接掛在 select 上（不能只掛在外層）：這個 select 每次重畫都會被換掉，
+          // eg_input_rules 的 MutationObserver 事後才處理「被加進來的 select」，那時它已經沒有父節點，
+          // 靠 closest() 往上找外層的 data-eg-skip 會找不到而丟例外。
+          + '<select data-eg-skip="1" onchange="changeCasePer(this.value)" title="每頁筆數">'
+          + [5,10,20,50].map(function(n){ return '<option value="'+n+'"'+(n===CASE_PER?' selected':'')+'>'+n+' 筆</option>'; }).join('')
+          + '</select>'
+          + '<button type="button" onclick="gotoCasePage(CASE_PAGE-1)"'+(CASE_PAGE<=1?' disabled':'')+'>‹</button>';
+    // 頁數多時只顯示目前頁附近的頁碼，避免一整排數字把工具列撐爆
+    var from = Math.max(1, CASE_PAGE-2), to = Math.min(mx, from+4);
+    from = Math.max(1, to-4);
+    if (from > 1) h += '<button type="button" onclick="gotoCasePage(1)">1</button>' + (from > 2 ? '<span class="pg-info">…</span>' : '');
+    for (var p = from; p <= to; p++)
+        h += '<button type="button" class="'+(p===CASE_PAGE?'active':'')+'" onclick="gotoCasePage('+p+')">'+p+'</button>';
+    if (to < mx) h += (to < mx-1 ? '<span class="pg-info">…</span>' : '') + '<button type="button" onclick="gotoCasePage('+mx+')">'+mx+'</button>';
+    h += '<button type="button" onclick="gotoCasePage(CASE_PAGE+1)"'+(CASE_PAGE>=mx?' disabled':'')+'>›</button>';
+    $('#casePager').html(h);
 }
 function loadCases(){
     $.getJSON(API, {action:'case_list'}, function(res){

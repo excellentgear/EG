@@ -165,6 +165,19 @@ $perms = fsd_perms($db, $fsdUser);
         <button class="b-ok" onclick="submitUpload()">上傳</button></div>
 </div></div>
 
+<!-- 修改樣板名稱 modal（僅管理員；只改名稱，樣板檔案/框選位置/簽核流程完全不動） -->
+<div class="fsd-mask" id="renameMask"><div class="fsd-modal">
+    <div class="m-head"><span>修改樣板名稱</span><span class="m-close" onclick="closeMask('renameMask')">✕</span></div>
+    <div class="m-body">
+        <label>樣板名稱</label><input type="text" id="rnName" maxlength="100" placeholder="例：出貨檢驗簽核單">
+        <div id="rnWarn" style="display:none;color:#a13a24;font-size:12px;margin-top:-4px;"></div>
+        <p style="font-size:11.5px;color:#8a6d45;">只更改名稱，樣板檔案、框選位置與簽核流程都不會變動。<br>
+        已經用這個樣板建立過的案件，列表上的「樣板」欄會一起顯示成新名稱（案件本身的簽核內容不受影響）。</p>
+    </div>
+    <div class="m-foot"><button class="b-cancel" onclick="closeMask('renameMask')">取消</button>
+        <button class="b-ok" onclick="submitRenameTpl()">儲存</button></div>
+</div></div>
+
 <!-- A4/A3裁切框 modal：框住文件實際內容範圍，取代直接信任原始像素量測出的寬高比 -->
 <div class="fsd-mask" id="cropMask"><div class="fsd-modal wide">
     <div class="m-head"><span>A4/A3 裁切框</span><span class="m-close" onclick="closeMask('cropMask')">✕</span></div>
@@ -225,6 +238,7 @@ $perms = fsd_perms($db, $fsdUser);
         在管理員上傳的表單原始檔（圖片或多頁PDF）上，用「拖拽標籤到畫面定位」的方式框選出圖章區與回覆內容區，設定意見階段（並簽、不卡關）與決策階段（1~2人、真正決定流程走向）的有序流程。與「審核表單」「AS線上表單設計器」是三套獨立引擎，本模組專門用在需要保留原始版面（如客戶指定格式、紙本掃描件）的表單。
         <h4>操作步驟</h4>
         <b>①上傳新樣板</b>：填名稱、選檔案（圖片或PDF），上傳後系統自動量測頁面尺寸。<br>
+        <b>①之一 改樣板名稱</b>：清單「樣板名稱」右邊的鉛筆（僅管理員）可隨時改名，只改名稱，樣板檔案、框選位置與簽核流程都不會變動；已用這個樣板建立過的案件，案件列表上的「樣板」欄也會一起顯示成新名稱。<br>
         <b>②設定階段</b>：新增階段（意見/決策二擇一）、每階段可加多個槽位（簽核人來源：固定人員／部門自動主管／送出者上一階主管／全站最高決策者），設定完按「儲存階段設定」。<br>
         <b>③框選</b>：左側「待框選標籤」依剛設定的階段槽位自動產生（每槽位各一個圖章框標籤＋一個回覆框標籤），拖到右側頁面對應位置放開即完成框選；已放置的框可再拖曳調整位置/大小，選取後可刪除。圖章框有最小尺寸限制（比照全站列印圖章91px標準換算），太小會被擋下。<br>
         <b>④綁定AS文件</b>：可選填，綁定後列印時頁尾會顯示對應的AS文件編號與版次。<br>
@@ -281,7 +295,10 @@ function loadTemplates(){
         var h = '';
         TEMPLATES.forEach(function(t){
             var docTxt = t.as_doc ? (t.as_doc.doc_no + ' ' + t.as_doc.doc_name) : '<span class="tag-off">未綁定</span>';
-            h += '<tr><td>'+esc(t.name)+'</td><td>'+(t.file_type==='pdf'?'PDF':'圖片')+'</td><td>'+t.page_count+'</td><td>'+docTxt+'</td>'
+            // 樣板名稱：管理員可就地改名（鉛筆鈕）；案件列表的「樣板」欄是即時查樣板名稱，改完舊案件也會跟著顯示新名稱
+            var nameCell = esc(t.name) + (META.perms.canAdmin
+                ? ' <a href="javascript:;" onclick="openRenameTpl('+t.id+')" title="修改樣板名稱" style="color:#8a6d45;"><i class="fa fa-pencil"></i></a>' : '');
+            h += '<tr><td>'+nameCell+'</td><td>'+(t.file_type==='pdf'?'PDF':'圖片')+'</td><td>'+t.page_count+'</td><td>'+docTxt+'</td>'
                + '<td>'+(t.published_version>0?('v'+t.published_version):'<span class="tag-off">尚未發布</span>')+'</td>'
                + '<td>'+(t.status==='active'?'<span class="tag-on">啟用</span>':'<span class="tag-off">停用</span>')+'</td>'
                + '<td>'
@@ -322,6 +339,40 @@ function submitUpload(){
     }).catch(function(){ alert('上傳失敗（連線錯誤）'); });
 }
 $('#btnAddTpl').on('click', function(){ openMask('uploadMask'); });
+
+/* -------- 樣板改名（僅管理員；後端 template_rename 同樣會再驗一次權限與名稱） -------- */
+var RN_TPL = 0;
+function openRenameTpl(id){
+    var t = (TEMPLATES||[]).filter(function(x){ return String(x.id)===String(id); })[0];
+    if (!t){ alert('找不到此樣板，請重新整理'); loadTemplates(); return; }
+    RN_TPL = t.id;
+    $('#rnName').val(t.name); $('#rnWarn').hide().text('');
+    openMask('renameMask');
+    setTimeout(function(){ $('#rnName').focus().select(); }, 50);
+}
+/** 即時驗證：空白擋下、與其他樣板同名時提醒（同名不擋，但要讓管理員知道清單上會出現兩個一樣的名字）。 */
+function rnValidate(){
+    var n = $.trim($('#rnName').val());
+    if (!n){ $('#rnWarn').show().text('請輸入樣板名稱'); return false; }
+    var dup = (TEMPLATES||[]).some(function(x){ return String(x.id)!==String(RN_TPL) && x.name === n; });
+    if (dup) $('#rnWarn').show().text('已有另一個樣板叫這個名字，建立案件時會分不出來，建議改成不同名稱。');
+    else $('#rnWarn').hide().text('');
+    return true;
+}
+$('#rnName').on('input', rnValidate);
+function submitRenameTpl(){
+    if (!rnValidate()) { $('#rnName').focus(); return; }
+    var n = $.trim($('#rnName').val());
+    $.post(API, {action:'template_rename', csrf:META.csrf, id:RN_TPL, name:n}, function(res){
+        if (!res.ok){ alert(res.error||'修改失敗'); return; }
+        closeMask('renameMask');
+        loadTemplates();
+        if (CUR_TPL && String(CUR_TPL.id)===String(RN_TPL) && res.template) {   // 設計工作區開著同一個樣板時同步標題
+            CUR_TPL.name = res.template.name;
+            $('#dsgTplName').text(CUR_TPL.name + '（'+(CUR_TPL.file_type==='pdf'?'PDF':'圖片')+'，共'+CUR_TPL.page_count+'頁）');
+        }
+    }, 'json');
+}
 
 /* ============================================================ 角色設定（比照 review_form_template.php） ============================================================ */
 $('#btnRoleSetting').on('click', function(){ openMask('roleSetMask'); loadRoles(); });
