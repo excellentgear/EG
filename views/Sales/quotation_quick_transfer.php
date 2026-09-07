@@ -68,6 +68,18 @@ try {
         table.qs-item-table td { padding:5px 6px; border-bottom:1px solid #F0E6D6; vertical-align:top; }
         .qs-partno-in { width:100%; max-width:190px; }
         .qs-partno-in.dirty { border-color:#F0A24B; background:#FFFDF6; }
+        .qs-qty-wrap { display:flex; gap:4px; align-items:center; }
+        .qs-qty-in { width:82px; text-align:right; }
+        .qs-unit-in { width:74px; padding-left:4px; padding-right:4px; }
+        .qs-qty-in.dirty, .qs-unit-in.dirty { border-color:#F0A24B; background:#FFFDF6; }
+        .qs-qty-in[disabled] { background:#F2EDE4; color:#8a7a63; }
+        .qs-batch { display:flex; align-items:center; gap:8px; flex-wrap:wrap; background:#FBF6EC; border:1px solid #E4C293;
+                    border-radius:6px; padding:6px 10px; margin-bottom:8px; font-size:12px; }
+        .qs-batch input[type=number] { width:90px; display:inline-block; }
+        .qs-batch select { width:110px; display:inline-block; }
+        .qs-batch .qs-batch-hint { flex-basis:100%; color:#8a5a2b; font-size:11px; }
+        .qs-batch .qs-batch-res { color:#5b3a1e; }
+        table.qs-item-table td.qs-chk-cell, table.qs-item-table th.qs-chk-cell { text-align:center; }
         .qs-err { color:#DD5138; font-size:11px; margin-top:2px; }
         .qs-warn { color:#a2703a; font-size:11px; margin-top:2px; }
         /* 「套用到這裡為止」的指定模式：滑到哪一組/哪一列就標出來，點下去＝以那裡為界 */
@@ -261,16 +273,16 @@ try {
                 <?php endif; ?>
             </div>
             <!-- 依報價單號搜尋：本頁其他功能都只作用於「尚待確認」的匯入單，
-                 這一列是唯一能碰到「已經轉成正式」報價單的入口（只開放料號／料號ID／製程標籤三項） -->
+                 這一列是唯一能碰到「已經轉成正式」報價單的入口（只開放料號／料號ID／製程標籤／數量與數量單位） -->
             <div class="qt-bar">
                 <span class="qt-bar-label">搜尋</span>
                 <input type="text" id="qtQnoSearch" class="form-control input-sm" style="width:200px;display:inline-block;"
                        maxlength="30" placeholder="報價單號（可只打一段）">
                 <button class="btn btn-default btn-sm" id="btnQnoSearch" style="border-color:#8a5a2b;color:#8a5a2b;"
-                        title="依報價單號搜尋（含已轉成正式的報價單），可修改料號、綁定的料號ID與製程標籤">
+                        title="依報價單號搜尋（含已轉成正式的報價單），可修改料號、綁定的料號ID、製程標籤與數量／數量單位">
                     <i class="fa fa-search"></i> 依單號搜尋修改（含已轉正式）
                 </button>
-                <span style="color:#a2703a;font-size:11px;">匯入的舊單轉正式之後才發現料號打錯、綁錯料號ID、製程標籤點錯時，在這裡改</span>
+                <span style="color:#a2703a;font-size:11px;">匯入的舊單轉正式之後才發現料號打錯、綁錯料號ID、製程標籤點錯、數量或單位不對時，在這裡改</span>
             </div>
 
             <div id="qtCards"></div>
@@ -330,19 +342,21 @@ try {
         </ul>
         <h4>重要行為</h4>
         <ul>
-            <li>本頁清單上的所有操作（批次設定製程、關鍵字偵測、一鍵綁定、轉正式…）都只作用在「尚待確認」的報價單。已轉入正式的單要修正<b>料號、綁定的料號ID、製程標籤</b>請用工具列的<b>「依單號搜尋修改」</b>（見下一節）；其餘欄位（數量、單價、客戶、備註）仍請回報價單管理頁編輯。</li>
+            <li>本頁清單上的所有操作（批次設定製程、關鍵字偵測、一鍵綁定、轉正式…）都只作用在「尚待確認」的報價單。已轉入正式的單要修正<b>料號、綁定的料號ID、製程標籤、數量與數量單位</b>請用工具列的<b>「依單號搜尋修改」</b>（見下一節）；其餘欄位（單價、客戶、備註）仍請回報價單管理頁編輯。</li>
             <li><b>為什麼料號ID與製程一定要補齊才能轉正</b>：料號ID(d_setting)是全系統判定「這筆報價屬於哪個料號」的唯一依據，沒綁定的話出貨統計、歷史單價、毛利分析都認不到這張報價單；製程則決定這筆報價的加工內容，沒設定的話報價單列印與後續轉訂單都看不出要做什麼。而且轉正之後這張單就不再出現在本頁，也無法再從這裡補，等於永久漏掉。因此兩項都是<b>強制擋下</b>，不是提示——後端同樣會擋，不能繞過畫面直接送出。</li>
             <li>綁定料號ID／設定製程／切換客戶都是<b>單張報價單/單筆項目</b>的修正，不會像料號管理頁的「移轉綁定」一樣影響全系統其他歷史資料。</li>
             <li>轉入正式時：若這張報價單本身沒有真實填表人資訊（ERP匯入本來就沒有這項資料），系統會自動標記為「業務公用」帳號製表；<b>核准欄位刻意留空不自動核准</b>——系統無法確認幾年前當時真正的業務主管是誰，與其虛構一筆假的核准紀錄，不如留白讓有需要的人自行判斷；也因此<b>不會</b>發送「待核准」通知給現在的主管。</li>
         </ul>
         <h4>依單號搜尋修改（含已轉成正式的報價單）</h4>
         <ul>
-            <li><b>什麼時候用</b>：匯入的舊報價單已經轉成正式之後，才發現<b>料號打錯</b>、<b>綁到別的料號ID</b>或<b>製程標籤點錯</b>。這是本頁唯一能碰到已轉正式報價單的入口。</li>
+            <li><b>什麼時候用</b>：匯入的舊報價單已經轉成正式之後，才發現<b>料號打錯</b>、<b>綁到別的料號ID</b>、<b>製程標籤點錯</b>或<b>數量／數量單位不對</b>。這是本頁唯一能碰到已轉正式報價單的入口。</li>
             <li><b>怎麼用</b>：工具列「搜尋」列輸入<b>報價單號</b>（可只打一段，前後模糊比對）按 Enter 或按鈕；結果列會標示每張單是<b>已轉正式</b>還是<b>尚待確認</b>，點一列即開啟明細。<b>只找到一張時直接開啟</b>，不用再點一次。</li>
-            <li><b>只開放三個欄位</b>：料號、綁定的料號ID、製程標籤。規格、數量、單價、客戶、備註一律唯讀顯示（只是讓您認出是哪一列），要改請至報價單管理頁。</li>
+            <li><b>只開放四個欄位</b>：料號、綁定的料號ID、製程標籤、數量與數量單位。規格、單價、客戶、備註一律唯讀顯示（只是讓您認出是哪一列），要改請至報價單管理頁。</li>
             <li><b>改料號文字會自動解除料號ID綁定</b>：料號一改就代表這一列指到的東西變了，原本綁的那筆料號主檔（圖面、檢驗標準）一定是錯的，所以系統會一併解除綁定並提醒您重新綁定——避免留下「料號寫 A、實際綁到 B」這種畫面上完全看不出來的錯。<b>例外</b>：改成的文字剛好與目前綁定的主檔料號相同（只是把文字補正回一致，大小寫不同也算），綁定會保留。動手前會先跳出確認視窗告訴您綁定將被解除。</li>
             <li><b>綁定／解除</b>：「綁定／重新綁定」開的是跟清單上同一個快速綁定跳窗（可搜尋、找不到可新建料號）；已綁定的列另有紅色「解除」鈕。綁定時料號文字會自動同步成主檔的料號，兩者不會分岔。</li>
             <li><b>製程標籤</b>：跟清單上同一套標籤選擇器（先選大類再點子標籤，點一下即存檔）。已轉正式的單不提供「帶入備註」——那是轉入前用來補齊製程的手段。</li>
+            <li><b>數量／數量單位</b>：數量直接改，單位由下拉選（選項與報價單管理頁同一份庫存單位主檔；<b>目前這一筆的單位一定保留在選項裡</b>，所以舊資料的單位不會被自動改掉）。改完按「儲存數量」，<b>這一筆的金額（數量×單價）與整張單的總金額會一併重算</b>，跳窗上方的總金額當場更新。<b>階梯報價</b>的項目數量是由各階距決定的，數量欄反灰不可改（只能改單位），要調整請至報價單管理頁改階梯。</li>
+            <li><b>批次修改數量／單位</b>：整張舊單常常是「單位整批打錯」或「數量整批是 0」，一列一列改沒有意義。勾選要改的列（表頭勾選框＝全選，<b>按住 Shift 點第二格可連續選取一整段</b>），在表格上方填<b>數量</b>或選<b>單位</b>（<b>兩個都可以留空＝那一項不變更</b>），按「套用到勾選的 N 筆」。規則與單筆完全一樣，<b>驗不過的那幾筆只會被略過並列出原因</b>（例如階梯報價的數量），不會整批卡住；金額與總金額一次算完，變更紀錄只留一筆。<b>套用之後條件與勾選會自動清空</b>，避免接著又按一次、用的卻是上一批的條件。</li>
             <li><b>每一次修改都會寫進該報價單的變更紀錄</b>（誰、什麼時候、把什麼改成什麼），正式報價單的改動都追得到。</li>
             <li>尚待確認的單也可以用這個入口找、一樣改得動，改的與清單上是同一份資料（兩邊同時開著會一起更新）。</li>
         </ul>
@@ -672,7 +686,7 @@ try {
 
 <!-- 依報價單號搜尋 → 修改料號／綁定的料號ID／製程標籤（含已轉成正式的報價單） -->
 <div class="va-mask" id="qsEditMask"><div class="va-modal wide" style="max-width:1180px;">
-    <div class="m-head"><span><i class="fa fa-search"></i> 依單號搜尋修改　料號／料號ID／製程標籤</span><span class="m-close" onclick="closeQsEdit()">✕</span></div>
+    <div class="m-head"><span><i class="fa fa-search"></i> 依單號搜尋修改　料號／料號ID／製程標籤／數量</span><span class="m-close" onclick="closeQsEdit()">✕</span></div>
     <div class="m-body">
         <div class="qs-searchbar">
             <input type="text" id="qsTerm" class="form-control input-sm" style="width:220px;display:inline-block;"
@@ -3009,6 +3023,7 @@ let qsQuoteId = null;          // 跳窗目前開著的報價單（null＝沒開
 let qsQuoteRow = null;         // 該報價單的表頭資料
 let qsFormalQuotes = {};       // quote_id => true（已轉正式的單，寫入要走 qsedit_* 動作）
 let qsHits = [];
+let qsUnits = [];              // 數量單位主檔（stock_units），與報價單管理頁同一份來源，本頁只載一次
 
 // 這一筆項目屬不屬於「已轉正式」的報價單。saveItemProcess／saveQuickBindPart 靠它決定要打哪一支 API，
 // 打錯的話後端會回「此報價單已是正式資料，請至報價單管理頁編輯」。
@@ -3023,7 +3038,9 @@ function openQsEdit(term) {
     $('#qsDetail').empty();
     $('#qsSearchMsg').text('');
     $('#qsTerm').val(term || '');
+    qsBatchSel = {}; qsBatchQtyVal = ''; qsBatchUnitVal = ''; qsBatchMsgHtml = ''; qsLastChkIdx = null;
     openMask('qsEditMask');
+    qsLoadUnits();
     if (String(term || '').trim() !== '') qsDoSearch();
     else setTimeout(function(){ $('#qsTerm').focus(); }, 50);
 }
@@ -3074,6 +3091,10 @@ function qsRenderHits(activeId) {
 $(document).on('click', '.qs-hit', function() { qsOpenQuote($(this).data('qid')); });
 
 function qsOpenQuote(qid) {
+    // 換一張單＝勾選與批次條件全部歸零（沿用上一張單的勾選會改到完全不相干的項目）
+    if (String(qsQuoteId) !== String(qid)) {
+        qsBatchSel = {}; qsBatchQtyVal = ''; qsBatchUnitVal = ''; qsBatchMsgHtml = ''; qsLastChkIdx = null;
+    }
     qsQuoteId = qid;
     qsRenderHits(qid);
     const hit = qsHits.find(function(r){ return String(r.quote_id) === String(qid); });
@@ -3103,22 +3124,26 @@ function qsDrawItems() {
         '<span>' + fmtDate(r.quote_date) + '</span>' +
         '<span>客戶：' + escapeQt(r.client_name || '（未設定）') + (r.client_id ? ' <small style="color:#aaa">(' + escapeQt(r.client_id) + ')</small>' : '') + '</span>' +
         '<span>項目 ' + items.length + ' 筆</span>' +
+        '<span>總金額：<b id="qsTotalAmt">' + qtFmtMoney(r.total_amount) + '</b></span>' +
         (isFormal ? '<span class="qt-badge ok">已轉正式</span>' : '<span class="qt-badge warn">尚待確認</span>') +
         '</div>';
 
     html += '<div class="qs-tip">' +
         (isFormal
-            ? '這是<b>已經轉成正式</b>的報價單，本畫面只開放修改<b>料號</b>、<b>綁定的料號ID</b>與<b>製程標籤</b>三項，其餘欄位請至報價單管理頁編輯。每一次修改都會記進該報價單的變更紀錄。'
+            ? '這是<b>已經轉成正式</b>的報價單，本畫面只開放修改<b>料號</b>、<b>綁定的料號ID</b>、<b>製程標籤</b>與<b>數量／數量單位</b>，其餘欄位請至報價單管理頁編輯。每一次修改都會記進該報價單的變更紀錄。'
             : '這張單還在「尚待確認」清單裡，本畫面的修改與清單上的操作是同一份資料。') +
-        '　改了<b>料號文字</b>而它跟原本綁定的料號主檔不一樣時，<b>會自動解除料號ID綁定</b>並要求重新綁定（避免留下「料號寫 A、實際綁到 B 的圖面與檢驗標準」這種看不出來的錯）。</div>';
+        '　改了<b>料號文字</b>而它跟原本綁定的料號主檔不一樣時，<b>會自動解除料號ID綁定</b>並要求重新綁定（避免留下「料號寫 A、實際綁到 B 的圖面與檢驗標準」這種看不出來的錯）。' +
+        '　改了<b>數量</b>時，這一筆的金額（數量×單價）與整張單的<b>總金額會一併重算</b>。</div>';
 
     if (!CAN_EDIT) html += '<div class="qs-err" style="margin-bottom:6px;">您沒有編輯權限，以下僅供檢視。</div>';
+    if (CAN_EDIT) html += qsBatchBarHtml();
 
     html += '<table class="qs-item-table"><thead><tr>' +
+        (CAN_EDIT ? '<th class="qs-chk-cell" style="width:28px;"><input type="checkbox" id="qsChkAll" title="全選／全部取消"></th>' : '') +
         '<th style="width:40px;">#</th>' +
         '<th style="width:230px;">料號</th>' +
         '<th>規格</th>' +
-        '<th style="width:60px;">數量</th>' +
+        '<th style="width:170px;">數量／單位</th>' +
         '<th style="width:70px;">單價</th>' +
         '<th style="width:190px;">料號ID綁定</th>' +
         '<th style="min-width:260px;">製程標籤</th>' +
@@ -3128,10 +3153,12 @@ function qsDrawItems() {
         ensureProcState(it);
         const prevItemId = idx > 0 ? items[idx - 1].item_id : null;
         html += '<tr data-item="' + it.item_id + '">' +
+            (CAN_EDIT ? ('<td class="qs-chk-cell"><input type="checkbox" class="qs-row-chk" data-item="' + it.item_id +
+                         '" data-idx="' + idx + '"' + (qsBatchSel[it.item_id] ? ' checked' : '') + '></td>') : '') +
             '<td>' + (idx + 1) + '</td>' +
             '<td>' + qsPartNoCell(it) + '</td>' +
             '<td>' + escapeQt(it.specification || '') + '</td>' +
-            '<td>' + escapeQt(it.quantity) + '</td>' +
+            '<td>' + qsQtyCell(it) + '</td>' +
             '<td>' + escapeQt(it.unit_price) + '</td>' +
             '<td>' + qsBindCell(it) + '</td>' +
             '<td>' + (CAN_EDIT ? renderProcWidget(it.item_id, prevItemId, items.length) : qsProcReadOnly(it)) + '</td>' +
@@ -3139,6 +3166,7 @@ function qsDrawItems() {
     });
     html += '</tbody></table>';
     $('#qsDetail').html(html);
+    if (CAN_EDIT) qsBatchSync();
 }
 
 // 料號欄：文字框＋儲存。原文放在 data-orig，改過才讓儲存鈕亮起來（避免整表被無意義地重存一輪）
@@ -3155,6 +3183,194 @@ function qsPartNoCell(it) {
         '</div>' +
         '<div class="qs-err" data-err="' + it.item_id + '"></div>' +
         '</div>';
+}
+
+// 數量／單位欄：做法與料號欄一致（原值放 data-orig、改過儲存鈕才亮、當場驗、錯誤原因寫在欄位下方）。
+// 單位下拉的選項來源與報價單管理頁同一份（stock_units），並一律保留「目前這一筆的單位」——
+// 舊匯入資料存的是大寫 PCS，單位主檔登記的符號卻是小寫 pcs，不保留的話一打開就被改掉了。
+function qsQtyCell(it) {
+    const qty  = String(it.quantity == null ? '' : it.quantity);
+    const unit = String(it.unit || 'PCS');
+    if (!CAN_EDIT) return escapeQt(qty) + ' ' + escapeQt(unit);
+    // 階梯報價的數量是由各階距決定的（報價單管理頁的數量欄本來就是反灰），這裡同樣只開放單位
+    const tiered = Number(it.is_tiered) === 1;
+    return '<div class="qs-qty-wrap">' +
+            '<input type="number" min="0" step="1" class="form-control input-sm qs-qty-in" ' +
+                   'data-item="' + it.item_id + '" data-orig="' + escapeQt(qty) + '" value="' + escapeQt(qty) + '"' +
+                   (tiered ? ' disabled title="階梯報價的數量由各階距決定，請至報價單管理頁調整階梯"' : '') + '>' +
+            '<select class="form-control input-sm qs-unit-in" data-item="' + it.item_id + '" ' +
+                    'data-orig="' + escapeQt(unit) + '">' + qsUnitOptions(unit) + '</select>' +
+        '</div>' +
+        '<div style="margin-top:3px;">' +
+            '<button type="button" class="btn btn-primary btn-xs qs-qty-save" data-item="' + it.item_id + '" disabled>' +
+                '<i class="fa fa-save"></i> 儲存數量</button>' +
+        '</div>' +
+        (tiered ? '<div class="qs-warn">階梯報價，數量不可改</div>' : '') +
+        '<div class="qs-err" data-qerr="' + it.item_id + '"></div>';
+}
+
+// 單位下拉的選項（比照報價單管理頁 buildUnitOptions：unit_symbol 優先、沒有才用 unit_name；
+// 清單裡沒有目前這個值時補一個，才不會一打開就把舊資料的單位改掉）
+function qsUnitOptions(selectedUnit) {
+    const sel = selectedUnit || 'PCS';
+    let opts = '';
+    qsUnits.forEach(function(u) {
+        const val = u.unit_symbol || u.unit_name;
+        opts += '<option value="' + escapeQt(val) + '"' + (val === sel ? ' selected' : '') + '>' + escapeQt(val) + '</option>';
+    });
+    if (!opts || !qsUnits.some(function(u){ return (u.unit_symbol || u.unit_name) === sel; })) {
+        opts = '<option value="' + escapeQt(sel) + '" selected>' + escapeQt(sel) + '</option>' + opts;
+    }
+    return opts;
+}
+
+// 單位主檔只在本頁載入一次（跳窗每次重畫都要用）。載回來時跳窗已經開著就重畫一次，
+// 不然使用者會看到一個只有一個選項的單位下拉。
+function qsLoadUnits(cb) {
+    if (qsUnits.length) { if (cb) cb(); return; }
+    $.get(API_URL, { action: 'get_units' }, function(res) {
+        if (res && res.success) qsUnits = res.units || [];
+        if (qsQuoteId !== null) qsDrawItems();
+        if (cb) cb();
+    });
+}
+
+// ── 批次修改數量／單位 ──────────────────────────────────────────────
+// 舊匯入的單子常常是「整張單的單位都打錯」或「整張單的數量都是 0」，一列一列改沒有意義。
+// 勾選要改的列，填數量或單位（兩個各自可留空＝不變更），一次送出；規則與單筆完全相同
+// （後端共用同一支 qsedit_apply_qty），驗不過的那幾筆會被略過並回報原因，不會整批卡住。
+let qsBatchSel = {};      // item_id => true（勾選狀態，跳窗重畫時要還原，否則按一下單筆儲存就全部消失）
+let qsBatchQtyVal = '';   // 批次列上填的數量／單位也要跨重畫保留
+let qsBatchUnitVal = '';
+let qsBatchMsgHtml = '';  // 上一次批次修改的結果（略過了哪幾筆）
+let qsLastChkIdx = null;  // Shift 連續勾選的起點
+
+function qsBatchBarHtml() {
+    let uopt = '<option value="">（不變更）</option>';
+    qsUnits.forEach(function(u) {
+        const v = u.unit_symbol || u.unit_name;
+        uopt += '<option value="' + escapeQt(v) + '"' + (v === qsBatchUnitVal ? ' selected' : '') + '>' + escapeQt(v) + '</option>';
+    });
+    return '<div class="qs-batch">' +
+        '<b><i class="fa fa-list-ul"></i> 批次修改</b>' +
+        '<span>數量 <input type="number" min="0" step="1" id="qsBatchQty" class="form-control input-sm" ' +
+              'placeholder="不變更" value="' + escapeQt(qsBatchQtyVal) + '" data-eg-skip></span>' +
+        '<span>單位 <select id="qsBatchUnit" class="form-control input-sm">' + uopt + '</select></span>' +
+        '<button type="button" class="btn btn-warning btn-sm" id="qsBatchApply" disabled>' +
+            '<i class="fa fa-check"></i> 套用到勾選的 <b id="qsBatchCnt">0</b> 筆</button>' +
+        '<span id="qsBatchMsg">' + qsBatchMsgHtml + '</span>' +
+        '<div class="qs-batch-hint">數量與單位<b>留空＝不變更</b>；' +
+            '<b>階梯報價</b>的項目會自動略過數量（單位照樣改得動），做完會列出哪幾筆略過了。' +
+            '勾選框可按住 <b>Shift</b> 點第二格連續選取一整段。</div>' +
+        '</div>';
+}
+
+// 勾選數、按鈕狀態、即時驗證（與單筆同一組規則）。每次重畫或勾選變動都呼叫。
+function qsBatchSync() {
+    const $bar = $('#qsBatchApply');
+    if (!$bar.length) return;
+    const ids = qsBatchCheckedIds();
+    $('#qsBatchCnt').text(ids.length);
+    const qty = String($('#qsBatchQty').val() || '').trim();
+    const unit = String($('#qsBatchUnit').val() || '');
+    qsBatchQtyVal = qty; qsBatchUnitVal = unit;
+    let msg = '';
+    if (qty !== '' && !/^\d+$/.test(qty)) msg = '數量請填 0 以上的整數';
+    else if (qty !== '' && Number(qty) > 999999999) msg = '數量超過上限（999,999,999）';
+    $('#qsBatchQty').css('border-color', msg ? '#DD5138' : '');
+    if (msg) { $('#qsBatchMsg').html('<span style="color:#DD5138;">' + escapeQt(msg) + '</span>'); }
+    else if (qsBatchMsgHtml) { $('#qsBatchMsg').html(qsBatchMsgHtml); }
+    else { $('#qsBatchMsg').empty(); }
+    $bar.prop('disabled', !!msg || ids.length === 0 || (qty === '' && unit === ''));
+    // 全選框：全部勾起來才打勾
+    const $rows = $('.qs-row-chk');
+    $('#qsChkAll').prop('checked', $rows.length > 0 && ids.length === $rows.length);
+}
+
+function qsBatchCheckedIds() {
+    return $('.qs-row-chk:checked').map(function(){ return String($(this).data('item')); }).get();
+}
+
+$(document).on('change', '#qsChkAll', function() {
+    const on = $(this).is(':checked');
+    $('.qs-row-chk').each(function() {
+        this.checked = on;
+        qsBatchSel[$(this).data('item')] = on ? true : false;
+    });
+    qsLastChkIdx = null;
+    qsBatchSync();
+});
+$(document).on('click', '.qs-row-chk', function(e) {
+    const idx = Number($(this).data('idx'));
+    // Shift 連續勾選：與「快速套用」掃描結果那邊同一個操作習慣
+    if (e.shiftKey && qsLastChkIdx !== null && qsLastChkIdx !== idx) {
+        const on = this.checked, a = Math.min(qsLastChkIdx, idx), b = Math.max(qsLastChkIdx, idx);
+        $('.qs-row-chk').each(function() {
+            const i = Number($(this).data('idx'));
+            if (i >= a && i <= b) { this.checked = on; qsBatchSel[$(this).data('item')] = on ? true : false; }
+        });
+    }
+    qsLastChkIdx = idx;
+    qsBatchSel[$(this).data('item')] = this.checked ? true : false;
+    qsBatchSync();
+});
+$(document).on('input', '#qsBatchQty', function() { qsBatchMsgHtml = ''; qsBatchSync(); });
+$(document).on('change', '#qsBatchUnit', function() { qsBatchMsgHtml = ''; qsBatchSync(); });
+$(document).on('keydown', '#qsBatchQty', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (!$('#qsBatchApply').prop('disabled')) qsBatchApply(); }
+});
+$(document).on('click', '#qsBatchApply', function() { qsBatchApply(); });
+
+function qsBatchApply() {
+    const ids = qsBatchCheckedIds();
+    const qty = String($('#qsBatchQty').val() || '').trim();
+    const unit = String($('#qsBatchUnit').val() || '');
+    if (!ids.length || (qty === '' && unit === '')) return;
+    const what = [];
+    if (qty !== '') what.push('數量改成 ' + qty);
+    if (unit !== '') what.push('單位改成 ' + unit);
+    if (!confirm('要把勾選的 ' + ids.length + ' 筆項目' + what.join('、') + ' 嗎？\n\n' +
+                 '這一筆一筆的金額與整張單的總金額會一併重算，動作會記進報價單的變更紀錄。')) return;
+    const $btn = $('#qsBatchApply').prop('disabled', true);
+    const data = { action: 'qsedit_set_qty_batch', item_ids: JSON.stringify(ids) };
+    // 留空的欄位「不送」而不是送空字串：後端以「有沒有這個參數」判定要不要變更
+    if (qty !== '') data.quantity = qty;
+    if (unit !== '') data.unit = unit;
+    $.post(API_URL, data, function(res) {
+        $btn.prop('disabled', false);
+        if (!res.success) { qsBatchMsgHtml = '<span style="color:#DD5138;">' + escapeQt(res.message || '批次修改失敗') + '</span>'; qsBatchSync(); return; }
+        const map = {};
+        (res.items || []).forEach(function(x) { map[String(x.item_id)] = x['new']; });
+        Object.keys(qtItemsCache).forEach(function(qid) {
+            (qtItemsCache[qid] || []).forEach(function(x) {
+                const n = map[String(x.item_id)];
+                if (n) { x.quantity = n.quantity; x.unit = n.unit; x.amount = n.amount; }
+            });
+        });
+        if (qsQuoteRow) qsQuoteRow.total_amount = res.total_amount;
+        // 套用完把條件與勾選清空（比照本頁「快速套用」的既有做法）：不清的話接著再按一次
+        // 用的會是上一批的條件與上一批的勾選，很容易多改一輪卻不自知
+        qsBatchSel = {}; qsBatchQtyVal = ''; qsBatchUnitVal = ''; qsLastChkIdx = null;
+        let m = '<span class="qs-batch-res">已修改 <b>' + res.applied + '</b> 筆';
+        if (res.unchanged) m += '、內容相同未變動 ' + res.unchanged + ' 筆';
+        if ((res.skipped || []).length) {
+            m += '、<span style="color:#DD5138;">略過 ' + res.skipped.length + ' 筆</span>（' +
+                 res.skipped.map(function(x){ return escapeQt(x.product_id) + '：' + escapeQt(x.reason); }).join('；') + '）';
+        }
+        m += (res.total_changed ? '，總金額重算為 ' + qtFmtMoney(res.total_amount) : '') + '</span>';
+        qsBatchMsgHtml = m;
+        const qid = qsQuoteId;
+        if (qid) drawItems(qid, qtItemsCache[qid]);
+        qsDrawItems();
+        showQtToast('批次修改完成：成功 ' + res.applied + ' 筆' +
+                    ((res.skipped || []).length ? '、略過 ' + res.skipped.length + ' 筆' : ''));
+    });
+}
+
+function qtFmtMoney(n) {
+    const v = parseFloat(n);
+    if (isNaN(v)) return '0';
+    return v.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
 function qsBindCell(it) {
@@ -3232,6 +3448,62 @@ function qsSavePartNo(itemId) {
         qsDrawItems();
         refreshStatsOnly(itemId);
         showQtToast(res.unbound ? '料號已修改，原料號ID綁定已解除，請重新綁定' : '料號已修改');
+    });
+}
+
+// 數量／單位即時驗證：整數、不可為負、不可超過欄位上限，金額（數量×單價）也不可超過 decimal(12,2)；
+// 後端 qsedit_set_qty 以同一組規則再擋一次（鐵律8）
+function qsValidateQty(itemId) {
+    const $q = $('.qs-qty-in[data-item="' + itemId + '"]');
+    const $u = $('.qs-unit-in[data-item="' + itemId + '"]');
+    const $err = $('.qs-err[data-qerr="' + itemId + '"]');
+    const $btn = $('.qs-qty-save[data-item="' + itemId + '"]');
+    if (!$q.length || !$u.length) return false;
+    const qty = String($q.val()).trim(), unit = String($u.val() || '');
+    const origQty = String($q.attr('data-orig')), origUnit = String($u.attr('data-orig'));
+    const it = findItemById(itemId);
+    let msg = '';
+    if (qty === '') msg = '數量不可為空白';
+    else if (!/^\d+$/.test(qty)) msg = '數量請填 0 以上的整數';
+    else if (Number(qty) > 999999999) msg = '數量超過上限（999,999,999）';
+    else if (unit === '') msg = '請選擇數量單位';
+    else if (it && Number(it.is_tiered) !== 1 &&
+             Number(qty) * (parseFloat(it.unit_price) || 0) > 9999999999.99) msg = '數量 × 單價 超過金額欄位上限，請確認數量';
+    const dirty = (qty !== origQty) || (unit !== origUnit);
+    $err.text(msg);
+    $q.toggleClass('dirty', qty !== origQty).css('border-color', msg ? '#DD5138' : '');
+    $u.toggleClass('dirty', unit !== origUnit);
+    $btn.prop('disabled', !!msg || !dirty);
+    return !msg && dirty;
+}
+$(document).on('input', '.qs-qty-in', function() { qsValidateQty($(this).data('item')); });
+$(document).on('change', '.qs-unit-in', function() { qsValidateQty($(this).data('item')); });
+$(document).on('keydown', '.qs-qty-in', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); qsSaveQty($(this).data('item')); }
+});
+$(document).on('click', '.qs-qty-save', function() { qsSaveQty($(this).data('item')); });
+
+function qsSaveQty(itemId) {
+    if (!qsValidateQty(itemId)) return;
+    const $q = $('.qs-qty-in[data-item="' + itemId + '"]');
+    const $u = $('.qs-unit-in[data-item="' + itemId + '"]');
+    const qty = String($q.val()).trim(), unit = String($u.val() || '');
+    const $btn = $('.qs-qty-save[data-item="' + itemId + '"]').prop('disabled', true);
+    $.post(API_URL, { action: 'qsedit_set_qty', item_id: itemId, quantity: qty, unit: unit }, function(res) {
+        $btn.prop('disabled', false);
+        if (!res.success) { $('.qs-err[data-qerr="' + itemId + '"]').text(res.message || '儲存失敗'); return; }
+        Object.keys(qtItemsCache).forEach(function(qid) {
+            (qtItemsCache[qid] || []).forEach(function(x) {
+                if (String(x.item_id) === String(itemId)) { x.quantity = res.quantity; x.unit = res.unit; x.amount = res.amount; }
+            });
+        });
+        const qid = findQuoteIdByItemId(itemId);
+        // 總金額由後端重算後回傳，畫面直接換上（自己在前端再算一次＝兩邊規則會走鐘）
+        if (qsQuoteRow && qid && String(qsQuoteRow.quote_id) === String(qid)) qsQuoteRow.total_amount = res.total_amount;
+        if (qid) drawItems(qid, qtItemsCache[qid]);   // 主清單也開著同一張單時一起更新
+        qsDrawItems();
+        showQtToast('數量已修改為 ' + res.quantity + ' ' + res.unit +
+                    (res.total_changed ? '，整張單的總金額重算為 ' + qtFmtMoney(res.total_amount) : ''));
     });
 }
 

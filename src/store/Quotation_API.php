@@ -350,6 +350,58 @@ function qsedit_unit_options(PDO $pdo): array
     return array_values(array_unique($out));
 }
 
+// 數量／單位寫入（唯一實作）：單筆的 qsedit_set_qty 與批次的 qsedit_set_qty_batch 共用。
+// 兩邊各寫一份的話，「階梯報價不准改數量」「金額要跟著重算」這些規則遲早只會在其中一邊被遵守。
+// $qtyRaw／$unitIn 傳 null＝這一項不變更（批次修改用：只填數量或只填單位都可以）。
+// 驗不過一律丟例外，由呼叫端決定是整批中止還是略過這一筆。
+function qsedit_apply_qty(PDO $pdo, array $row, ?string $qtyRaw, ?string $unitIn, array $units): array
+{
+    $oldQty  = (int)$row['quantity'];
+    $oldUnit = (string)$row['unit'];
+    $tiered  = ((int)$row['is_tiered'] === 1);
+
+    // 數量：整數、不可為負（0 是既有匯入資料裡真的存在的值，允許，本功能就是用來補的）
+    if ($qtyRaw === null) {
+        $qty = $oldQty;
+    } else {
+        $qtyRaw = trim($qtyRaw);
+        if ($qtyRaw === '' || !preg_match('/^\d+$/', $qtyRaw)) throw new Exception('數量請填 0 以上的整數');
+        $qty = (int)$qtyRaw;
+        if ($qty > 999999999) throw new Exception('數量超過上限（999,999,999）');
+        if ($tiered && $qty !== $oldQty) {
+            throw new Exception('這一筆是階梯報價，數量由各階距決定，請至報價單管理頁調整階梯');
+        }
+    }
+
+    // 單位：只收單位主檔（stock_units）裡有的，或這一筆目前的值
+    if ($unitIn === null) {
+        $unit = $oldUnit;
+    } else {
+        $unit = trim($unitIn);
+        if ($unit === '') throw new Exception('數量單位不可為空白');
+        if (mb_strlen($unit) > 20) throw new Exception('數量單位最多 20 個字');
+        if ($unit !== $oldUnit && !in_array($unit, $units, true)) {
+            throw new Exception('數量單位「' . $unit . '」不在單位主檔內，請先到庫存單位設定新增');
+        }
+    }
+
+    if ($qty === $oldQty && $unit === $oldUnit) {
+        return ['changed' => false, 'quantity' => $qty, 'unit' => $unit, 'amount' => (float)$row['amount'],
+                'old_quantity' => $oldQty, 'old_unit' => $oldUnit, 'old_amount' => (float)$row['amount']];
+    }
+
+    // 金額欄位是 decimal(12,2)，算出來超過就會被 MySQL 截斷／報錯，先擋下並講清楚原因
+    // （階梯項目的 amount 是各階小計的加總，不由數量×單價決定，所以原樣保留）
+    $amount = $tiered ? (float)$row['amount'] : round($qty * (float)$row['unit_price'], 2);
+    if ($amount > 9999999999.99) throw new Exception('數量 × 單價 超過金額欄位上限，請確認數量是否填錯');
+
+    $pdo->prepare("UPDATE quotation_item SET quantity=?, unit=?, amount=?, updated_at=NOW() WHERE item_id=?")
+        ->execute([$qty, $unit, $amount, (int)$row['item_id']]);
+
+    return ['changed' => true, 'quantity' => $qty, 'unit' => $unit, 'amount' => $amount,
+            'old_quantity' => $oldQty, 'old_unit' => $oldUnit, 'old_amount' => (float)$row['amount']];
+}
+
 // 改完數量之後把整張單的總金額重算（總金額＝各項目 amount 加總，與報價單管理頁 calculateTotal() 同口徑；
 // 階梯項目的 amount 本來就已經是各階小計的加總，所以這裡不必特別處理）。
 // 回傳 [舊值, 新值] 讓呼叫端能回報與留紀錄——極少數舊資料的總金額本來就跟項目對不起來，
@@ -2408,49 +2460,105 @@ try {
             if (!$item_id) throw new Exception('缺少項目');
             $row = qsedit_item_row($pdo, $item_id);
 
-            $qtyRaw = trim((string)($_POST['quantity'] ?? ''));
-            $unit   = trim((string)($_POST['unit'] ?? ''));
-            $oldQty = (int)$row['quantity'];
-            $oldUnit = (string)$row['unit'];
+            $r = qsedit_apply_qty($pdo, $row, (string)($_POST['quantity'] ?? ''), (string)($_POST['unit'] ?? ''),
+                                  qsedit_unit_options($pdo));
+            if (!$r['changed']) { $response = ['success' => true, 'changed' => false]; break; }
 
-            // 數量：整數、不可為負（0 是既有匯入資料裡真的存在的值，允許，本功能就是用來補的）
-            if ($qtyRaw === '' || !preg_match('/^\d+$/', $qtyRaw)) throw new Exception('數量請填 0 以上的整數');
-            $qty = (int)$qtyRaw;
-            if ($qty > 999999999) throw new Exception('數量超過上限（999,999,999）');
-            if ((int)$row['is_tiered'] === 1 && $qty !== $oldQty) {
-                throw new Exception('這一筆是階梯報價，數量由各階距決定，請至報價單管理頁調整階梯');
-            }
-
-            // 單位：只收單位主檔（stock_units）裡有的，或這一筆目前的值
-            if ($unit === '') throw new Exception('數量單位不可為空白');
-            if (mb_strlen($unit) > 20) throw new Exception('數量單位最多 20 個字');
-            $units = qsedit_unit_options($pdo);
-            if ($unit !== $oldUnit && !in_array($unit, $units, true)) {
-                throw new Exception('數量單位「' . $unit . '」不在單位主檔內，請先到庫存單位設定新增');
-            }
-
-            if ($qty === $oldQty && $unit === $oldUnit) { $response = ['success' => true, 'changed' => false]; break; }
-
-            // 金額欄位是 decimal(12,2)，算出來超過就會被 MySQL 截斷／報錯，先擋下並講清楚原因
-            $price  = (float)$row['unit_price'];
-            $amount = (int)$row['is_tiered'] === 1 ? (float)$row['amount'] : round($qty * $price, 2);
-            if ($amount > 9999999999.99) throw new Exception('數量 × 單價 超過金額欄位上限，請確認數量是否填錯');
-
-            $pdo->prepare("UPDATE quotation_item SET quantity=?, unit=?, amount=?, updated_at=NOW() WHERE item_id=?")
-                ->execute([$qty, $unit, $amount, $item_id]);
             [$totalOld, $totalNew] = qsedit_sync_total($pdo, (int)$row['quote_id']);
             $pdo->prepare("UPDATE quotation_list SET updated_by=?, updated_at=NOW() WHERE quote_id=?")
                 ->execute([$user_id, (int)$row['quote_id']]);
 
             qsedit_log($pdo, (int)$row['quote_id'], (int)$user_id,
-                       '快速轉移頁修改數量：' . $row['product_id'] . ' ' . $oldQty . ' ' . $oldUnit . ' → ' . $qty . ' ' . $unit,
+                       '快速轉移頁修改數量：' . $row['product_id'] . ' ' . $r['old_quantity'] . ' ' . $r['old_unit'] .
+                       ' → ' . $r['quantity'] . ' ' . $r['unit'],
                        ['item_id' => $item_id, 'field' => 'quantity_unit',
-                        'old' => ['quantity' => $oldQty, 'unit' => $oldUnit, 'amount' => (float)$row['amount']],
-                        'new' => ['quantity' => $qty, 'unit' => $unit, 'amount' => $amount],
+                        'old' => ['quantity' => $r['old_quantity'], 'unit' => $r['old_unit'], 'amount' => $r['old_amount']],
+                        'new' => ['quantity' => $r['quantity'], 'unit' => $r['unit'], 'amount' => $r['amount']],
                         'total_amount_old' => $totalOld, 'total_amount_new' => $totalNew]);
 
-            $response = ['success' => true, 'changed' => true, 'quantity' => $qty, 'unit' => $unit,
-                         'amount' => $amount, 'total_amount' => $totalNew,
+            $response = ['success' => true, 'changed' => true, 'quantity' => $r['quantity'], 'unit' => $r['unit'],
+                         'amount' => $r['amount'], 'total_amount' => $totalNew,
+                         'total_changed' => (abs($totalNew - $totalOld) > 0.005)];
+            break;
+        }
+
+        // 批次修改數量／單位（2026-09-07）
+        //   同一張報價單裡勾選多筆，一次改成同一個數量或同一個單位（兩個欄位各自可留空＝不變更）。
+        //   舊匯入資料常見「整張單的單位都打錯」「整張單的數量都是 0」，一列一列改沒有意義。
+        //   規則與單筆完全一樣（共用 qsedit_apply_qty），差別只在：
+        //     ・驗不過的那一筆「略過並回報原因」，不整批中止——否則整張單裡只要有一筆階梯報價，
+        //       其餘二十筆就全部改不了，而且使用者看不出來是哪一筆卡住。
+        //     ・總金額最後只重算一次，變更紀錄也只寫一筆（逐筆寫會把變更紀錄洗成幾十列）。
+        case 'qsedit_set_qty_batch': {
+            qsedit_require_perm($pdo, (int)$user_id);
+            $ids = json_decode((string)($_POST['item_ids'] ?? '[]'), true);
+            if (!is_array($ids)) $ids = [];
+            $ids = array_values(array_unique(array_filter(array_map('intval', $ids), fn($v) => $v > 0)));
+            if (!$ids) throw new Exception('請先勾選要修改的項目');
+            if (count($ids) > 300) throw new Exception('一次最多修改 300 筆');
+
+            // 「沒有送這個參數」＝不變更；送了空字串則照單筆的規則驗（會被擋下並說明原因）
+            $qtyRaw = array_key_exists('quantity', $_POST) ? (string)$_POST['quantity'] : null;
+            $unitIn = array_key_exists('unit', $_POST)     ? (string)$_POST['unit']     : null;
+            if ($qtyRaw === null && $unitIn === null) throw new Exception('請至少填寫要修改的數量或單位');
+            // 值本身就填錯（不是整數、超過上限）是「這一次批次修改」的錯，不是某一筆項目的錯，
+            // 先整批擋下並說明原因；逐筆略過的話會回一個「成功 0 筆」看起來像沒事發生
+            if ($qtyRaw !== null) {
+                $qtyChk = trim($qtyRaw);
+                if ($qtyChk === '' || !preg_match('/^\d+$/', $qtyChk)) throw new Exception('數量請填 0 以上的整數');
+                if ((int)$qtyChk > 999999999) throw new Exception('數量超過上限（999,999,999）');
+            }
+
+            $units = qsedit_unit_options($pdo);
+            $ph    = implode(',', array_fill(0, count($ids), '?'));
+            $rows  = $pdo->prepare("SELECT qi.item_id, qi.quote_id, qi.product_id, qi.quantity, qi.unit,
+                                           qi.unit_price, qi.amount, qi.is_tiered
+                                    FROM quotation_item qi WHERE qi.item_id IN ($ph)");
+            $rows->execute($ids);
+            $items = $rows->fetchAll(PDO::FETCH_ASSOC);
+            if (!$items) throw new Exception('找不到報價項目');
+            // 一次只處理同一張報價單（畫面上本來就是在同一張單裡勾選）：跨單批改的話總金額要重算好幾張，
+            // 變更紀錄也不知道該寫在哪一張單上
+            $quoteIds = array_values(array_unique(array_map(fn($r) => (int)$r['quote_id'], $items)));
+            if (count($quoteIds) > 1) throw new Exception('一次只能修改同一張報價單裡的項目');
+            $quoteId = $quoteIds[0];
+
+            $applied = []; $skipped = []; $unchanged = 0;
+            $pdo->beginTransaction();
+            try {
+                foreach ($items as $row) {
+                    try {
+                        $r = qsedit_apply_qty($pdo, $row, $qtyRaw, $unitIn, $units);
+                        if (!$r['changed']) { $unchanged++; continue; }
+                        $applied[] = ['item_id' => (int)$row['item_id'], 'product_id' => (string)$row['product_id'],
+                                      'old' => ['quantity' => $r['old_quantity'], 'unit' => $r['old_unit'], 'amount' => $r['old_amount']],
+                                      'new' => ['quantity' => $r['quantity'], 'unit' => $r['unit'], 'amount' => $r['amount']]];
+                    } catch (Exception $e) {
+                        $skipped[] = ['item_id' => (int)$row['item_id'], 'product_id' => (string)$row['product_id'],
+                                      'reason' => $e->getMessage()];
+                    }
+                }
+                [$totalOld, $totalNew] = qsedit_sync_total($pdo, $quoteId);
+                $pdo->prepare("UPDATE quotation_list SET updated_by=?, updated_at=NOW() WHERE quote_id=?")
+                    ->execute([$user_id, $quoteId]);
+                $pdo->commit();
+            } catch (Exception $e) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
+                throw $e;
+            }
+
+            $what = [];
+            if ($qtyRaw !== null) $what[] = '數量→' . trim($qtyRaw);
+            if ($unitIn !== null) $what[] = '單位→' . trim($unitIn);
+            qsedit_log($pdo, $quoteId, (int)$user_id,
+                       '快速轉移頁批次修改數量（' . implode('、', $what) . '）：成功 ' . count($applied) .
+                       ' 筆、略過 ' . count($skipped) . ' 筆',
+                       ['field' => 'quantity_unit_batch', 'request' => ['quantity' => $qtyRaw, 'unit' => $unitIn],
+                        'applied' => $applied, 'skipped' => $skipped, 'unchanged' => $unchanged,
+                        'total_amount_old' => $totalOld, 'total_amount_new' => $totalNew]);
+
+            $response = ['success' => true, 'applied' => count($applied), 'unchanged' => $unchanged,
+                         'skipped' => $skipped, 'items' => $applied, 'total_amount' => $totalNew,
                          'total_changed' => (abs($totalNew - $totalOld) > 0.005)];
             break;
         }
