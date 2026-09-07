@@ -39,8 +39,12 @@
     'font-weight':          /^(bold|bolder|normal|lighter|[1-9]00)$/i,
     'font-style':           /^(italic|oblique|normal)$/i,
     'text-decoration':      /^[a-zA-Z\- ]{1,40}$/,
-    'text-decoration-line': /^[a-zA-Z\- ]{1,40}$/
+    'text-decoration-line': /^[a-zA-Z\- ]{1,40}$/,
+    // 縮排：只收 em 單位、最多 20em，寫在區塊元素上（見 indentBlocks）
+    'margin-left':          /^(\d{1,2}(\.\d)?)em$/
   };
+  var INDENT_STEP = 2;    // 每按一次縮排 2em
+  var INDENT_MAX  = 20;   // 上限（與 STYLES['margin-left'] 的 2 位數上限一致）
   // 這些指令要產生 <b>/<i>/<u>/<strike> 標籤，不要走 CSS——
   // styleWithCSS=true 時它們會變成 <span style="font-weight:bold">，樣式一被清就整個失效。
   var TAG_CMDS = ['bold', 'italic', 'underline', 'strikeThrough'];
@@ -75,6 +79,20 @@
         while (c.firstChild) c.parentNode.insertBefore(c.firstChild, c);
         c.parentNode.removeChild(c);
         return;
+      }
+      // 沒有 <ul>/<ol> 當父層的孤兒 <li> 改成 <div>：
+      // 貼上 Word／網頁內容時很容易只帶進 <li> 而沒有清單容器，瀏覽器仍會把它算成
+      // display:list-item ＝ 每一行前面莫名其妙冒出一個「•」（使用者 2026-09-07 回報）。
+      // 換成 <div> 可以保住原本的分行，只是不再有項目符號。
+      if (tag === 'LI') {
+        var pt = c.parentNode && c.parentNode.nodeName ? c.parentNode.nodeName.toUpperCase() : '';
+        if (pt !== 'UL' && pt !== 'OL') {
+          var dv = d.createElement('div');
+          if (c.getAttribute('style')) dv.setAttribute('style', c.getAttribute('style'));
+          while (c.firstChild) dv.appendChild(c.firstChild);
+          c.parentNode.replaceChild(dv, c);
+          c = dv;
+        }
       }
       var style = cleanStyle(c.getAttribute('style'));
       Array.prototype.slice.call(c.attributes).forEach(function (a) { c.removeAttribute(a.name); });
@@ -126,9 +144,66 @@
       + '<span class="egrt-drop"><button type="button" class="egrt-btn egrt-tgl" data-pop="back" title="背景底色">'
       + '<i class="fa fa-paint-brush"></i><span class="egrt-ul" style="background:#F0A24B;"></span></button>' + swatches('back', BG_COLORS) + '</span>'
       + '<span class="egrt-sep"></span>'
-      + btn('insertUnorderedList', 'list-ul', '項目符號清單')
+      + btn('egOutdent', 'outdent', '減少縮排')
+      + btn('egIndent', 'indent', '增加縮排')
+      + '<span class="egrt-sep"></span>'
+      + btn('insertUnorderedList', 'list-ul', '項目符號清單（會顯示「•」）')
       + btn('insertOrderedList', 'list-ol', '編號清單')
       + '</div>';
+  }
+
+  /* ── 縮排 ────────────────────────────────────────────────────────────────
+     刻意**不用** execCommand('indent')：Chrome 會產生 <blockquote>，
+     而 blockquote 不在白名單裡，存檔清洗時會被脫殼＝縮排整個消失，而且不會報錯。
+     這裡自己在區塊元素上加 margin-left（div/p 本來就在白名單），
+     縮排才存得住、也才跟顯示端一致。
+     （使用者 2026-09-07：原本是用清單來排版，結果前端每行都冒出「•」，
+       他要的其實是縮排而不是項目符號。） */
+  function blockOf(node, root) {
+    var n = (node && node.nodeType === 3) ? node.parentNode : node;
+    while (n && n !== root) {
+      if (n.nodeType === 1 && ['DIV','P','LI'].indexOf(n.nodeName) >= 0) return n;
+      n = n.parentNode;
+    }
+    return null;
+  }
+  /** 取得選取範圍涵蓋的區塊元素；整段還沒有區塊容器時就地包一個 <div> */
+  function selectedBlocks(body) {
+    var sel = w.getSelection();
+    if (!sel || !sel.rangeCount || !body.contains(sel.anchorNode)) return [];
+    var rg = sel.getRangeAt(0);
+    var out = [];
+    var all = body.querySelectorAll('div,p,li');
+    for (var i = 0; i < all.length; i++) {
+      if (rg.intersectsNode(all[i])) {
+        // 只取最外層那一個，巢狀的子區塊不重複加（不然一按縮排就跳兩格）
+        var covered = false;
+        for (var j = 0; j < out.length; j++) { if (out[j].contains(all[i])) { covered = true; break; } }
+        if (!covered) out.push(all[i]);
+      }
+    }
+    if (!out.length) {
+      var b = blockOf(rg.startContainer, body);
+      if (b) { out.push(b); }
+      else {
+        // 整個編輯區還是純文字（沒有任何區塊）→ 包一層 div 才有東西可以縮排
+        var dv = d.createElement('div');
+        while (body.firstChild) dv.appendChild(body.firstChild);
+        body.appendChild(dv);
+        out.push(dv);
+      }
+    }
+    return out;
+  }
+  function indentBlocks(body, dir) {
+    var blocks = selectedBlocks(body);
+    blocks.forEach(function (b) {
+      var cur = parseFloat((b.style.marginLeft || '').replace('em', '')) || 0;
+      var nx  = Math.max(0, Math.min(INDENT_MAX, cur + dir * INDENT_STEP));
+      if (nx <= 0) b.style.marginLeft = '';
+      else b.style.marginLeft = nx + 'em';
+    });
+    return blocks.length > 0;
   }
 
   function injectCss() {
@@ -205,6 +280,13 @@
     }
     function exec(cmd, val) {
       body.focus();
+      // 縮排是自己實作的（見 indentBlocks），不走 execCommand
+      if (cmd === 'egIndent' || cmd === 'egOutdent') {
+        indentBlocks(body, cmd === 'egIndent' ? 1 : -1);
+        refreshState(); refreshCount();
+        if (opt.onChange) opt.onChange();
+        return;
+      }
       useCss(cmd);
       try { d.execCommand(cmd, false, val === undefined ? null : val); } catch (e) {}
       refreshState(); refreshCount();

@@ -793,15 +793,9 @@ case 'create_document':
     $rsum    = trim($_POST['revised_summary'] ?? '') ?: null;
     $cstat   = trim($_POST['change_status'] ?? '制訂');
     $tagIds  = array_filter(array_map('intval', explode(',', $_POST['tag_ids'] ?? '')));
-    asFreqEnsure($db);
-    $fqType  = trim($_POST['freq_type'] ?? '');
-    $fqN     = trim((string)($_POST['freq_n'] ?? ''));
-    $fqNote  = mb_substr(trim($_POST['freq_note'] ?? ''), 0, 500);
-    $ownerDs = array_filter(array_map('intval', explode(',', $_POST['owner_dept_ids'] ?? '')));
-    if ($fqErr = asFreqValidate($fqType, $fqN, $fqNote)) jout(['status'=>'error','message'=>$fqErr]);
-    $fqType  = $fqType !== '' ? $fqType : null;
-    $fqN     = ($fqType !== null && $fqType !== 'irregular') ? (int)$fqN : null;   // 不定時沒有數量
-    $fqNote  = ($fqType !== null && $fqNote !== '') ? $fqNote : null;              // 沒設頻率就不留備註
+    // 更新頻率／負責課室刻意不在這裡收：那是管理員限定、且獨立於「編輯文件」的設定，
+    // 唯一寫入點是 save_doc_freq（同 save_doc_remark 的理由——兩個寫入點規則遲早走鐘，
+    // 而且一般使用者存文件資料時會把管理員設好的內容整組洗掉）。
 
     if ($doc_no==='' || $doc_name==='')
         jout(['status'=>'error','message'=>'文件編號、名稱為必填']);
@@ -830,11 +824,10 @@ case 'create_document':
 
     $db->beginTransaction();
     try {
-        $db->prepare("INSERT INTO as_document (doc_no,doc_name,doc_type,doc_level,department_id,parent_doc_id,current_version,freq_type,freq_n,freq_note,created_by,created_at,updated_at)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")
-           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$version,$fqType,$fqN,$fqNote,$GLOBALS['currentCname']]);
+        $db->prepare("INSERT INTO as_document (doc_no,doc_name,doc_type,doc_level,department_id,parent_doc_id,current_version,created_by,created_at,updated_at)
+                      VALUES (?,?,?,?,?,?,?,?,NOW(),NOW())")
+           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$version,$GLOBALS['currentCname']]);
         $docId = (int)$db->lastInsertId();
-        asSaveOwnerDepts($db, $docId, $ownerDs);
 
         $dir = asDocDir($db, $docId);
         if (($hasFile || $hasApply) && !is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
@@ -986,15 +979,7 @@ case 'update_document_meta':
     $dept    = ($_POST['department_id'] ?? '')!=='' ? (int)$_POST['department_id'] : null;
     $parent  = ($_POST['parent_doc_id'] ?? '')!=='' ? (int)$_POST['parent_doc_id'] : null;
     $tagIds  = array_filter(array_map('intval', explode(',', $_POST['tag_ids'] ?? '')));
-    asFreqEnsure($db);
-    $fqType  = trim($_POST['freq_type'] ?? '');
-    $fqN     = trim((string)($_POST['freq_n'] ?? ''));
-    $fqNote  = mb_substr(trim($_POST['freq_note'] ?? ''), 0, 500);
-    $ownerDs = array_filter(array_map('intval', explode(',', $_POST['owner_dept_ids'] ?? '')));
-    if ($fqErr = asFreqValidate($fqType, $fqN, $fqNote)) jout(['status'=>'error','message'=>$fqErr]);
-    $fqType  = $fqType !== '' ? $fqType : null;
-    $fqN     = ($fqType !== null && $fqType !== 'irregular') ? (int)$fqN : null;   // 不定時沒有數量
-    $fqNote  = ($fqType !== null && $fqNote !== '') ? $fqNote : null;              // 沒設頻率就不留備註
+    // 更新頻率／負責課室不在這裡收，見 save_doc_freq（管理員限定、獨立設定）
     if ($id<=0 || $doc_no==='' || $doc_name==='') jout(['status'=>'error','message'=>'資料不完整']);
     if ($parent === $id) $parent = null; // 不可自己當自己的母文件
     $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0 AND id!=?");
@@ -1018,10 +1003,8 @@ case 'update_document_meta':
 
     $db->beginTransaction();
     try {
-        $db->prepare("UPDATE as_document SET doc_no=?,doc_name=?,doc_type=?,doc_level=?,department_id=?,parent_doc_id=?,
-                             freq_type=?,freq_n=?,freq_note=?,updated_at=NOW() WHERE id=?")
-           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$fqType,$fqN,$fqNote,$id]);
-        asSaveOwnerDepts($db, $id, $ownerDs);
+        $db->prepare("UPDATE as_document SET doc_no=?,doc_name=?,doc_type=?,doc_level=?,department_id=?,parent_doc_id=?,updated_at=NOW() WHERE id=?")
+           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$id]);
 
         // 換編號時連動更新底下表單編號：舊前綴「oldNo-」換成「新編號-」（含遞迴子孫）；
         // cascade_dept=1 時子文件所屬部門一併改成本文件的新部門（換負責部門情境）
@@ -1069,6 +1052,106 @@ case 'save_doc_remark':
     $db->prepare("UPDATE as_document SET remark_html=?, updated_at=NOW() WHERE id=?")
        ->execute([$remark === '' ? null : $remark, $id]);
     jout(['status'=>'success','remark_html'=>$remark]);
+
+/* ══════════════ 更新頻率 / 負責課室（管理員限定，與「編輯文件」完全分開） ══════════════
+   使用者明確要求（2026-09-07）：只有管理員可以設定，且要跟編輯文件分開，避免誤改到其他資料。
+   所以這裡是**唯一寫入點**，不併進 update_document_meta；反過來 update_document_meta 也
+   一個字都不會動到這三個欄位與 as_doc_owner_dept。 */
+
+/** 開啟設定跳窗時先跟後端要一次最新值（ai-rules/08 第六節「點開即刷新」，避免蓋掉別人剛改的） */
+case 'doc_freq_get':
+    asFreqEnsure($db);
+    $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)($_GET['ids'] ?? ''))), fn($v)=>$v>0)));
+    if (!$ids) jout(['status'=>'error','message'=>'請先選擇文件']);
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $st = $db->prepare("SELECT id, doc_no, doc_name, freq_type, freq_n, freq_note FROM as_document WHERE id IN ($ph)");
+    $st->execute($ids);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    $od = $db->prepare("SELECT od.doc_id, od.department_id, dp.name
+                        FROM as_doc_owner_dept od JOIN department dp ON dp.id=od.department_id
+                        WHERE od.doc_id IN ($ph) ORDER BY dp.sort_order, dp.level, dp.id");
+    $od->execute($ids);
+    $byDoc = [];
+    foreach ($od->fetchAll(PDO::FETCH_ASSOC) as $r) $byDoc[$r['doc_id']][] = ['id'=>(int)$r['department_id'],'name'=>$r['name']];
+    foreach ($rows as &$r) { $r['owner_depts'] = $byDoc[$r['id']] ?? []; }
+    unset($r);
+    jout(['status'=>'success','data'=>$rows]);
+
+/** 存檔（單筆與批次同一支：批次＝一次帶多個 id，並各自指定「要不要改」）
+ *  freq_mode  : keep 不變／set 設定為／clear 清除
+ *  owner_mode : keep 不變／replace 取代為／add 加入／remove 移除
+ *  刻意用明確的模式而不是「有填就改」——批次時若把空白當成「清空」，
+ *  使用者只想改頻率就會把幾十份文件的負責課室整批洗掉，而且不會有任何提示。 */
+case 'save_doc_freq':
+    if (!asIsAdmin()) jout(['status'=>'error','message'=>'僅管理員可設定更新頻率與負責課室']);
+    asFreqEnsure($db);
+    $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)($_POST['ids'] ?? ''))), fn($v)=>$v>0)));
+    if (!$ids) jout(['status'=>'error','message'=>'請先選擇要設定的文件']);
+    if (count($ids) > 500) jout(['status'=>'error','message'=>'一次最多設定 500 份文件']);
+
+    $fqMode  = (string)($_POST['freq_mode']  ?? 'set');
+    $owMode  = (string)($_POST['owner_mode'] ?? 'replace');
+    if (!in_array($fqMode, ['keep','set','clear'], true))            jout(['status'=>'error','message'=>'更新頻率的處理方式不正確']);
+    if (!in_array($owMode, ['keep','replace','add','remove'], true)) jout(['status'=>'error','message'=>'負責課室的處理方式不正確']);
+    if ($fqMode === 'keep' && $owMode === 'keep')                    jout(['status'=>'error','message'=>'兩項都選「不變」＝沒有要改的內容']);
+
+    $fqType = trim($_POST['freq_type'] ?? '');
+    $fqN    = trim((string)($_POST['freq_n'] ?? ''));
+    $fqNote = mb_substr(trim($_POST['freq_note'] ?? ''), 0, 500);
+    if ($fqMode === 'set') {
+        if ($fqType === '') jout(['status'=>'error','message'=>'請選擇更新頻率（不改請選「不變」，要清空請選「清除」）']);
+        if ($fqErr = asFreqValidate($fqType, $fqN, $fqNote)) jout(['status'=>'error','message'=>$fqErr]);
+    }
+    $ownerDs = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)($_POST['owner_dept_ids'] ?? ''))), fn($v)=>$v>0)));
+    if (in_array($owMode, ['add','remove'], true) && !$ownerDs)
+        jout(['status'=>'error','message'=>'請選擇要加入／移除的負責課室']);
+
+    // 只認真實存在的文件，避免直打 API 塞不存在的 id
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $chk = $db->prepare("SELECT id FROM as_document WHERE id IN ($ph)");
+    $chk->execute($ids);
+    $ids = array_map('intval', $chk->fetchAll(PDO::FETCH_COLUMN));
+    if (!$ids) jout(['status'=>'error','message'=>'查無這些文件']);
+
+    $db->beginTransaction();
+    try {
+        if ($fqMode !== 'keep') {
+            $t = $fqMode === 'clear' ? null : $fqType;
+            $n = ($t !== null && $t !== 'irregular') ? (int)$fqN : null;   // 不定時沒有數量
+            $s = ($t !== null && $fqNote !== '')     ? $fqNote  : null;    // 沒設頻率就不留備註
+            $up = $db->prepare("UPDATE as_document SET freq_type=?, freq_n=?, freq_note=?, updated_at=NOW() WHERE id=?");
+            foreach ($ids as $did) $up->execute([$t, $n, $s, $did]);
+        }
+        if ($owMode === 'replace') {
+            foreach ($ids as $did) asSaveOwnerDepts($db, $did, $ownerDs);
+        } elseif ($owMode === 'add') {
+            $ok = $db->prepare("SELECT id FROM department WHERE id IN (".implode(',', array_fill(0,count($ownerDs),'?')).")");
+            $ok->execute($ownerDs);
+            $valid = array_map('intval', $ok->fetchAll(PDO::FETCH_COLUMN));
+            $ins = $db->prepare("INSERT IGNORE INTO as_doc_owner_dept (doc_id, department_id) VALUES (?,?)");
+            foreach ($ids as $did) foreach ($valid as $dp) $ins->execute([$did, $dp]);
+        } elseif ($owMode === 'remove') {
+            $dph = implode(',', array_fill(0, count($ownerDs), '?'));
+            $del = $db->prepare("DELETE FROM as_doc_owner_dept WHERE doc_id=? AND department_id IN ($dph)");
+            foreach ($ids as $did) $del->execute(array_merge([$did], $ownerDs));
+        }
+        $db->commit();
+    } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
+
+    // 回傳異動後的內容，前端直接就地更新那幾列（不必整份重載）
+    $ph2 = implode(',', array_fill(0, count($ids), '?'));
+    $st = $db->prepare("SELECT id, freq_type, freq_n, freq_note FROM as_document WHERE id IN ($ph2)");
+    $st->execute($ids);
+    $out = $st->fetchAll(PDO::FETCH_ASSOC);
+    $od = $db->prepare("SELECT od.doc_id, od.department_id, dp.name
+                        FROM as_doc_owner_dept od JOIN department dp ON dp.id=od.department_id
+                        WHERE od.doc_id IN ($ph2) ORDER BY dp.sort_order, dp.level, dp.id");
+    $od->execute($ids);
+    $byDoc = [];
+    foreach ($od->fetchAll(PDO::FETCH_ASSOC) as $r) $byDoc[$r['doc_id']][] = ['id'=>(int)$r['department_id'],'name'=>$r['name']];
+    foreach ($out as &$r) { $r['owner_depts'] = $byDoc[$r['id']] ?? []; }
+    unset($r);
+    jout(['status'=>'success','updated'=>count($ids),'data'=>$out]);
 
 // ══════════════ 刪除文件（主檔軟刪除；版本與檔案仍留存可查） ══════════════
 case 'delete_document':

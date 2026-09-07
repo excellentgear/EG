@@ -33,6 +33,9 @@ define('EG_RT_STYLES', [
     'font-style'           => '/^(italic|oblique|normal)$/i',
     'text-decoration'      => '/^[a-zA-Z\- ]{1,40}$/',
     'text-decoration-line' => '/^[a-zA-Z\- ]{1,40}$/',
+    // 縮排：只收 em 單位、最多 2 位數（前端 eg_richtext.js 的縮排鈕寫在區塊元素上）。
+    // 不放行 px/%/calc()，避免有人把版面推到畫面外。
+    'margin-left'          => '/^(\d{1,2}(\.\d)?)em$/',
 ]);
 
 /**
@@ -112,6 +115,23 @@ function eg_rt_clean_node(DOMDocument $doc, DOMNode $node): void
             }
             $child->parentNode->removeChild($child);
             continue;
+        }
+
+        // 沒有 <ul>/<ol> 當父層的孤兒 <li> 改成 <div>：
+        // 貼上 Word／網頁內容時很容易只帶進 <li> 而沒有清單容器，瀏覽器仍會把它算成
+        // display:list-item ＝ 每一行前面莫名其妙冒出一個「•」（使用者 2026-09-07 回報）。
+        // 換成 <div> 可以保住原本的分行，只是不再有項目符號。
+        if ($tag === 'li') {
+            $pt = ($child->parentNode && $child->parentNode->nodeType === XML_ELEMENT_NODE)
+                ? strtolower($child->parentNode->nodeName) : '';
+            if ($pt !== 'ul' && $pt !== 'ol') {
+                $dv = $doc->createElement('div');
+                if ($child->getAttribute('style') !== '') $dv->setAttribute('style', $child->getAttribute('style'));
+                while ($child->firstChild) { $dv->appendChild($child->firstChild); }
+                $child->parentNode->replaceChild($dv, $child);
+                $child = $dv;
+                $tag = 'div';
+            }
         }
 
         // 屬性全清，只留重建後的 style
