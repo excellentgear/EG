@@ -195,6 +195,88 @@ function asRemarkEnsure(PDO $db): void {
     } catch (Exception $e) { /* 無權限改結構時不擋主流程，備註功能自然不出現 */ }
 }
 
+/* ══════════════ 更新頻率 ＋ 負責課室（可複選） ══════════════
+   使用者交辦（2026-09-07）：「主要要記錄用」，另要能依負責課室篩選、依更新頻率排序。
+   ‧頻率＝類型(freq_type)＋數量(freq_n)：不定時 irregular／每N天 day／週 week／月 month／季 quarter／年 year
+   ‧不定時一定要有備註說明（freq_note），其他的備註為選填 → 前端即時擋、後端 asFreqValidate() 再擋一次（鐵律8）
+   ‧負責課室是多筆，故獨立一張 as_doc_owner_dept，不塞成逗號字串（塞字串就沒辦法用 JOIN 篩選與排序） */
+function asFreqEnsure(PDO $db): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        $cols = [];
+        foreach ($db->query("SHOW COLUMNS FROM as_document")->fetchAll(PDO::FETCH_ASSOC) as $c) $cols[$c['Field']] = 1;
+        $add = [];
+        if (!isset($cols['freq_type'])) $add[] = "ADD COLUMN freq_type VARCHAR(10) NULL COMMENT '更新頻率類型：irregular不定時/day天/week週/month月/quarter季/year年'";
+        if (!isset($cols['freq_n']))    $add[] = "ADD COLUMN freq_n TINYINT UNSIGNED NULL COMMENT '更新頻率數量：每 N 天/週/月/季/年（不定時為 NULL）'";
+        if (!isset($cols['freq_note'])) $add[] = "ADD COLUMN freq_note VARCHAR(500) NULL COMMENT '更新頻率備註（不定時必填，其餘選填）'";
+        if ($add) $db->exec("ALTER TABLE as_document ".implode(', ', $add));
+        $db->exec("CREATE TABLE IF NOT EXISTS as_doc_owner_dept (
+            doc_id INT NOT NULL,
+            department_id INT NOT NULL,
+            PRIMARY KEY (doc_id, department_id),
+            KEY idx_adod_dept (department_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS文件的負責課室（可複選，見 as_document_management.php）'");
+    } catch (Exception $e) { /* 無權限改結構時不擋主流程，本功能自然不出現 */ }
+}
+
+/** 頻率類型 → 顯示文字（唯一實作，前端 asFreqText() 與列印共用同一組定義） */
+function asFreqUnits(): array {
+    return ['day'=>'天', 'week'=>'週', 'month'=>'月', 'quarter'=>'季', 'year'=>'年'];
+}
+
+/** 排序用：把頻率換算成「大約幾天」。不定時／未設定回 NULL（排在有週期的後面） */
+function asFreqDaysSql(string $a = 'd'): string {
+    return "CASE $a.freq_type
+              WHEN 'day'     THEN $a.freq_n * 1
+              WHEN 'week'    THEN $a.freq_n * 7
+              WHEN 'month'   THEN $a.freq_n * 30
+              WHEN 'quarter' THEN $a.freq_n * 91
+              WHEN 'year'    THEN $a.freq_n * 365
+              ELSE NULL END";
+}
+
+/** 前後端同一套規則（鐵律8）。回傳錯誤訊息字串，通過回 '' */
+function asFreqValidate(string $type, $n, string $note): string {
+    if ($type === '') return '';
+    if ($type === 'irregular') {
+        if (trim($note) === '') return '更新頻率選「不定時」時，備註說明為必填（請說明什麼情況下會更新）';
+        return '';
+    }
+    if (!isset(asFreqUnits()[$type])) return '更新頻率類型不正確';
+    $n = (int)$n;
+    if ($n < 1 || $n > 255) return '更新頻率的數量請填 1~255 的整數';
+    return '';
+}
+
+/** 負責課室寫入（唯一寫入點；只收真實存在的部門 id） */
+function asSaveOwnerDepts(PDO $db, int $docId, array $ids): void {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids), fn($v) => $v > 0)));
+    $db->prepare("DELETE FROM as_doc_owner_dept WHERE doc_id=?")->execute([$docId]);
+    if (!$ids) return;
+    $ph  = implode(',', array_fill(0, count($ids), '?'));
+    $ok  = $db->prepare("SELECT id FROM department WHERE id IN ($ph)");
+    $ok->execute($ids);
+    $ins = $db->prepare("INSERT IGNORE INTO as_doc_owner_dept (doc_id, department_id) VALUES (?,?)");
+    foreach ($ok->fetchAll(PDO::FETCH_COLUMN) as $did) $ins->execute([$docId, (int)$did]);
+}
+
+/** 某部門＋其底下所有課室的 id（組織是樹狀的，選「資材部」要連生管/採購/倉管組一起找得到） */
+function asDeptSubtreeIds(PDO $db, int $deptId): array {
+    $all = $db->query("SELECT id, parent_id FROM department")->fetchAll(PDO::FETCH_ASSOC);
+    $kids = [];
+    foreach ($all as $r) { $kids[(int)$r['parent_id']][] = (int)$r['id']; }
+    $out = []; $stack = [$deptId];
+    while ($stack) {
+        $cur = array_pop($stack);
+        if (isset($out[$cur])) continue;
+        $out[$cur] = true;
+        foreach ($kids[$cur] ?? [] as $k) $stack[] = $k;
+    }
+    return array_keys($out);
+}
+
 function asEditorTermEnsure(PDO $db): void {
     static $done = false;
     if ($done) return;
@@ -535,11 +617,19 @@ case 'meta':
     $deptsWithDocs = $db->query("SELECT DISTINCT department_id FROM as_document WHERE is_deleted=0 AND department_id IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
     // 制修訂頁次/摘要 常用文字
     $phrases = $db->query("SELECT id, field, phrase FROM as_doc_phrase ORDER BY field, sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
-    jout(['status'=>'success','departments'=>$depts,'dept_codes'=>$deptCodes,'depts_with_docs'=>array_map('intval',$deptsWithDocs),'positions'=>$poss,'tags'=>$tags,'users'=>$users,'parents'=>$parents,'phrases'=>$phrases]);
+    // 有被指定為「負責課室」的部門（供清單篩選下拉，只列出真的有掛文件的）
+    asFreqEnsure($db);
+    $ownerDeptIds = $db->query("SELECT DISTINCT od.department_id FROM as_doc_owner_dept od
+                                JOIN as_document d ON d.id=od.doc_id AND d.is_deleted=0")->fetchAll(PDO::FETCH_COLUMN);
+    jout(['status'=>'success','departments'=>$depts,'dept_codes'=>$deptCodes,'depts_with_docs'=>array_map('intval',$deptsWithDocs),
+          'owner_dept_ids'=>array_map('intval',$ownerDeptIds),
+          'company_name'=>asOwnCompanyName($db),   // 列印大標題用（ai-rules/16，禁寫死）
+          'positions'=>$poss,'tags'=>$tags,'users'=>$users,'parents'=>$parents,'phrases'=>$phrases]);
 
 // ══════════════ 文件清單（搜尋 / 篩選） ══════════════
 case 'list_documents':
     asRemarkEnsure($db);              // remark_html 由下方 d.* 一併帶出
+    asFreqEnsure($db);                // freq_* 同樣由 d.* 帶出；負責課室另外撈成陣列
     $kw    = trim($_GET['keyword'] ?? '');
     $level = trim($_GET['level'] ?? '');
     $dept  = trim($_GET['department_id'] ?? '');
@@ -565,7 +655,26 @@ case 'list_documents':
     if ($tag>0)       { $where[] = "d.id IN (SELECT doc_id FROM as_doc_tag_map WHERE tag_id = ?)"; $params[]=$tag; }
     $parentId = (int)($_GET['parent_id'] ?? 0);
     if ($parentId>0)  { $where[] = "d.parent_doc_id = ?"; $params[]=$parentId; }
+    // 負責課室篩選：選了部門＝連同其底下的課室一起算（組織是樹狀的，選「資材部」要含生管/採購/倉管組）
+    $ownerDept = (int)($_GET['owner_dept_id'] ?? 0);
+    if ($ownerDept > 0) {
+        $sub = asDeptSubtreeIds($db, $ownerDept);
+        $sph = implode(',', array_fill(0, count($sub), '?'));
+        $where[] = "EXISTS (SELECT 1 FROM as_doc_owner_dept od WHERE od.doc_id = d.id AND od.department_id IN ($sph))";
+        foreach ($sub as $s) $params[] = $s;
+    }
     $wsql = $where ? ('WHERE '.implode(' AND ',$where)) : '';
+
+    // 排序：預設文件編號；freq_asc＝更新頻率密→疏、freq_desc＝疏→密。
+    // 兩種頻率排序都把「有週期的」排最前面，接著不定時，最後才是沒設定的
+    // （不然沒設定的會夾在中間，看起來像排序壞掉）。
+    $sort  = (string)($_GET['sort'] ?? '');
+    $fdays = asFreqDaysSql('d');
+    $frank = "CASE WHEN d.freq_type IN ('day','week','month','quarter','year') THEN 0
+                   WHEN d.freq_type = 'irregular' THEN 1 ELSE 2 END";
+    if ($sort === 'freq_asc')      $orderSql = "ORDER BY $frank ASC, ($fdays) ASC, d.doc_no ASC";
+    elseif ($sort === 'freq_desc') $orderSql = "ORDER BY $frank ASC, ($fdays) DESC, d.doc_no ASC";
+    else                           $orderSql = "ORDER BY d.doc_no ASC";
 
     $sql = "SELECT d.*, dep.name AS dept_name,
                    v.revised_date, v.change_status, v.file_name AS current_file_name,
@@ -580,7 +689,7 @@ case 'list_documents':
             LEFT JOIN system_parameters rvfsp ON rvfsp.param_group='AS_DOC_BIND' AND rvfsp.param_key LIKE 'review_form_tpl\\_%' AND rvfsp.param_value = d.id
             LEFT JOIN rf_template rt ON rt.id = CAST(SUBSTRING(rvfsp.param_key, 17) AS UNSIGNED) AND rt.status='active'
             $wsql
-            ORDER BY d.doc_no ASC";
+            $orderSql";
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
     $docs = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -609,12 +718,24 @@ case 'list_documents':
         $byDoc = [];
         foreach ($tm->fetchAll(PDO::FETCH_ASSOC) as $r) { $byDoc[$r['doc_id']][] = $r; }
         foreach ($docs as &$d) { $d['tags'] = $byDoc[$d['id']] ?? []; }
+        unset($d);
+
+        // 負責課室（可複選）：依部門的 sort_order 排，畫面與列印都照這個順序顯示
+        $om = $db->prepare("SELECT od.doc_id, dp.id, dp.name
+                            FROM as_doc_owner_dept od JOIN department dp ON dp.id = od.department_id
+                            WHERE od.doc_id IN ($ph) ORDER BY dp.sort_order, dp.level, dp.id");
+        $om->execute($ids);
+        $byDocO = [];
+        foreach ($om->fetchAll(PDO::FETCH_ASSOC) as $r) { $byDocO[$r['doc_id']][] = ['id'=>(int)$r['id'],'name'=>$r['name']]; }
+        foreach ($docs as &$d) { $d['owner_depts'] = $byDocO[$d['id']] ?? []; }
+        unset($d);
     }
     jout(['status'=>'success','data'=>$docs]);
 
 // ══════════════ 單一文件明細（含版本 / 標籤 / 權限） ══════════════
 case 'get_document':
     asRemarkEnsure($db);
+    asFreqEnsure($db);      // 要在 SELECT d.* 之前，否則首次執行時 freq_* 欄位還沒建出來
     $id = (int)($_GET['id'] ?? 0);
     if ($id<=0) jout(['status'=>'error','message'=>'無效 ID']);
     $st = $db->prepare("SELECT d.*, dep.name AS dept_name, pd.doc_no AS parent_doc_no, pd.doc_name AS parent_doc_name
@@ -649,6 +770,13 @@ case 'get_document':
     $tg->execute([$id]);
     $doc['tags'] = $tg->fetchAll(PDO::FETCH_ASSOC);
 
+    // 負責課室（可複選）
+    $od = $db->prepare("SELECT od.department_id AS id, dp.name
+                        FROM as_doc_owner_dept od JOIN department dp ON dp.id=od.department_id
+                        WHERE od.doc_id=? ORDER BY dp.sort_order, dp.level, dp.id");
+    $od->execute([$id]);
+    $doc['owner_depts'] = array_map(fn($r) => ['id'=>(int)$r['id'],'name'=>$r['name']], $od->fetchAll(PDO::FETCH_ASSOC));
+
     jout(['status'=>'success','data'=>$doc]);
 
 // ══════════════ 新增文件（首版） ══════════════
@@ -665,6 +793,15 @@ case 'create_document':
     $rsum    = trim($_POST['revised_summary'] ?? '') ?: null;
     $cstat   = trim($_POST['change_status'] ?? '制訂');
     $tagIds  = array_filter(array_map('intval', explode(',', $_POST['tag_ids'] ?? '')));
+    asFreqEnsure($db);
+    $fqType  = trim($_POST['freq_type'] ?? '');
+    $fqN     = trim((string)($_POST['freq_n'] ?? ''));
+    $fqNote  = mb_substr(trim($_POST['freq_note'] ?? ''), 0, 500);
+    $ownerDs = array_filter(array_map('intval', explode(',', $_POST['owner_dept_ids'] ?? '')));
+    if ($fqErr = asFreqValidate($fqType, $fqN, $fqNote)) jout(['status'=>'error','message'=>$fqErr]);
+    $fqType  = $fqType !== '' ? $fqType : null;
+    $fqN     = ($fqType !== null && $fqType !== 'irregular') ? (int)$fqN : null;   // 不定時沒有數量
+    $fqNote  = ($fqType !== null && $fqNote !== '') ? $fqNote : null;              // 沒設頻率就不留備註
 
     if ($doc_no==='' || $doc_name==='')
         jout(['status'=>'error','message'=>'文件編號、名稱為必填']);
@@ -693,10 +830,11 @@ case 'create_document':
 
     $db->beginTransaction();
     try {
-        $db->prepare("INSERT INTO as_document (doc_no,doc_name,doc_type,doc_level,department_id,parent_doc_id,current_version,created_by,created_at,updated_at)
-                      VALUES (?,?,?,?,?,?,?,?,NOW(),NOW())")
-           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$version,$GLOBALS['currentCname']]);
+        $db->prepare("INSERT INTO as_document (doc_no,doc_name,doc_type,doc_level,department_id,parent_doc_id,current_version,freq_type,freq_n,freq_note,created_by,created_at,updated_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")
+           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$version,$fqType,$fqN,$fqNote,$GLOBALS['currentCname']]);
         $docId = (int)$db->lastInsertId();
+        asSaveOwnerDepts($db, $docId, $ownerDs);
 
         $dir = asDocDir($db, $docId);
         if (($hasFile || $hasApply) && !is_dir($dir) && !mkdir($dir, 0777, true)) throw new Exception('無法建立資料夾（NAS 未連線？）');
@@ -848,6 +986,15 @@ case 'update_document_meta':
     $dept    = ($_POST['department_id'] ?? '')!=='' ? (int)$_POST['department_id'] : null;
     $parent  = ($_POST['parent_doc_id'] ?? '')!=='' ? (int)$_POST['parent_doc_id'] : null;
     $tagIds  = array_filter(array_map('intval', explode(',', $_POST['tag_ids'] ?? '')));
+    asFreqEnsure($db);
+    $fqType  = trim($_POST['freq_type'] ?? '');
+    $fqN     = trim((string)($_POST['freq_n'] ?? ''));
+    $fqNote  = mb_substr(trim($_POST['freq_note'] ?? ''), 0, 500);
+    $ownerDs = array_filter(array_map('intval', explode(',', $_POST['owner_dept_ids'] ?? '')));
+    if ($fqErr = asFreqValidate($fqType, $fqN, $fqNote)) jout(['status'=>'error','message'=>$fqErr]);
+    $fqType  = $fqType !== '' ? $fqType : null;
+    $fqN     = ($fqType !== null && $fqType !== 'irregular') ? (int)$fqN : null;   // 不定時沒有數量
+    $fqNote  = ($fqType !== null && $fqNote !== '') ? $fqNote : null;              // 沒設頻率就不留備註
     if ($id<=0 || $doc_no==='' || $doc_name==='') jout(['status'=>'error','message'=>'資料不完整']);
     if ($parent === $id) $parent = null; // 不可自己當自己的母文件
     $dup = $db->prepare("SELECT COUNT(*) FROM as_document WHERE doc_no=? AND is_deleted=0 AND id!=?");
@@ -871,8 +1018,10 @@ case 'update_document_meta':
 
     $db->beginTransaction();
     try {
-        $db->prepare("UPDATE as_document SET doc_no=?,doc_name=?,doc_type=?,doc_level=?,department_id=?,parent_doc_id=?,updated_at=NOW() WHERE id=?")
-           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$id]);
+        $db->prepare("UPDATE as_document SET doc_no=?,doc_name=?,doc_type=?,doc_level=?,department_id=?,parent_doc_id=?,
+                             freq_type=?,freq_n=?,freq_note=?,updated_at=NOW() WHERE id=?")
+           ->execute([$doc_no,$doc_name,$doc_type,$level,$dept,$parent,$fqType,$fqN,$fqNote,$id]);
+        asSaveOwnerDepts($db, $id, $ownerDs);
 
         // 換編號時連動更新底下表單編號：舊前綴「oldNo-」換成「新編號-」（含遞迴子孫）；
         // cascade_dept=1 時子文件所屬部門一併改成本文件的新部門（換負責部門情境）

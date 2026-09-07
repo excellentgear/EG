@@ -191,6 +191,30 @@ if ($deptPerm === 'R') {
                   <button class="btn btn-default btn-block" id="btnClearFilter"><i class="fa fa-eraser"></i> 清除</button>
                 </div>
               </div>
+              <!-- 負責課室 / 更新頻率：篩選＋排序＋列印（設定欄位在「編輯資料」跳窗內） -->
+              <div class="row" style="margin-bottom:8px;">
+                <div class="col-md-4">
+                  <!-- 本頁不在 eg_input_rules.js 覆蓋範圍（列於 input_rules_baseline.txt），
+                       故不掛 data-eg-filter（掛了會是死屬性）；部門只有十幾筆，下拉可直接看完。 -->
+                  <select class="form-control" id="filterOwnerDept"
+                          title="列出這個單位要負責的文件；選上層部門會連同其底下的課室一起列出（如「資材部」含生管／採購／倉管組）">
+                    <option value="">全部負責課室</option>
+                  </select>
+                </div>
+                <div class="col-md-4">
+                  <select class="form-control" id="sortBy" title="依更新頻率排序時，有週期的排在最前面，其次「不定時」，最後才是尚未設定頻率的">
+                    <option value="">排序：文件編號</option>
+                    <option value="freq_asc">排序：更新頻率（密 → 疏）</option>
+                    <option value="freq_desc">排序：更新頻率（疏 → 密）</option>
+                  </select>
+                </div>
+                <div class="col-md-4">
+                  <button class="btn btn-default btn-block" id="btnPrintFreq"
+                          title="把目前篩選出來的全部文件（不只這一頁）連同更新頻率、負責課室、備註一起列印">
+                    <i class="fa fa-print"></i> 列印頻率 / 負責課室清單
+                  </button>
+                </div>
+              </div>
               <div class="row" style="margin-bottom:12px;">
                 <div class="col-md-12">
                   <span class="text-muted" style="font-size:12px;">標籤篩選：</span>
@@ -203,6 +227,7 @@ if ($deptPerm === 'R') {
                   <thead>
                     <tr>
                       <?php if ($asCaps['update']): ?><th style="width:24px;"><input type="checkbox" id="chkAllDocs" title="全選本頁（批次加標籤用）"></th><?php endif; ?>
+                      <th class="fq-col" style="width:150px;" title="更新頻率＋負責課室＋備註（於「編輯資料」內設定；備註或課室過長者點一下展開）">更新頻率 / 負責課室</th>
                       <th>文件編號</th><th>文件名稱</th><th>類別</th><th>階級</th><th>部門</th>
                       <th>母文件 / 表單</th>
                       <th>目前版本</th><th>修訂日期</th><th>標籤</th>
@@ -281,6 +306,37 @@ if ($deptPerm === 'R') {
             <label>標籤 / 分類</label>
             <div id="docTagPicker" style="border:1px solid #ddd;border-radius:4px;padding:8px;min-height:40px;"></div>
             <input type="hidden" name="tag_ids" id="doc_tag_ids">
+          </div>
+
+          <!-- 更新頻率 / 負責課室（記錄用；清單最左欄會顯示，並可依此篩選與排序） -->
+          <div class="row">
+            <div class="form-group col-md-4"><label>更新頻率</label>
+              <div style="display:flex;gap:6px;">
+                <select class="form-control" name="freq_type" id="doc_freq_type" style="flex:1 1 auto;">
+                  <option value="">— 未設定 —</option>
+                  <option value="irregular">不定時</option>
+                  <option value="day">每 ? 天</option>
+                  <option value="week">每 ? 週</option>
+                  <option value="month">每 ? 月</option>
+                  <option value="quarter">每 ? 季</option>
+                  <option value="year">每 ? 年</option>
+                </select>
+                <input type="number" min="1" max="255" step="1" class="form-control" name="freq_n" id="doc_freq_n"
+                       placeholder="數量" style="flex:0 0 78px;width:78px;" title="每幾天／週／月／季／年更新一次">
+              </div>
+              <div class="req-note" id="freqTypeErr" style="display:none;"></div>
+            </div>
+            <div class="form-group col-md-8"><label>更新頻率備註 <span class="req-note" id="freqNoteReq" style="display:none;">＊選「不定時」時必填</span></label>
+              <input type="text" class="form-control" name="freq_note" id="doc_freq_note" maxlength="500"
+                     placeholder="例：接單時需填寫（選「不定時」一定要說明什麼情況下會更新）">
+              <div class="req-note" id="freqNoteErr" style="display:none;"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>負責課室（可複選）</label>
+            <div id="docOwnerDeptPicker" style="border:1px solid #ddd;border-radius:4px;padding:8px;min-height:40px;"></div>
+            <input type="hidden" name="owner_dept_ids" id="doc_owner_dept_ids">
+            <p class="text-muted" style="font-size:11px;margin:4px 0 0;">點一下切換選取。清單可依此篩選出「這個單位要負責的表單」；選上層部門篩選時會連同其底下的課室一起列出。</p>
           </div>
 
           <hr>
@@ -561,6 +617,25 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
 .doc-remark p{ margin:0; }
 /* 使用者拍板：備註只在畫面上看，列印版（文件管制總覽表等）一律不帶 */
 @media print { .doc-remark{ display:none !important; } }
+
+/* ── 更新頻率 / 負責課室（清單最左欄；ai-rules/10 暖色系，文字本身就是資訊、顏色只是輔助）──
+   三層由上到下：頻率徽章 → 負責課室 → 備註。後兩層內容可能很長，
+   一律先夾成 2 行，**只有真的被截斷的才變成可點**（用 scrollHeight 量出來的，
+   沒截斷就長出「可點」樣式會讓使用者一直去點沒有下文的東西）。 */
+.fq-cell{ font-size:11.5px; line-height:1.5; max-width:150px; }
+.fq-badge{ display:inline-block; padding:0 6px; border-radius:3px; font-size:11px; line-height:18px;
+           background:#F7E0BD; color:#8A5A2B; border:1px solid #E8C07A; white-space:nowrap; }
+.fq-badge.fq-irregular{ background:#F3EDE4; color:#7A6A55; border-color:#DCCEB8; }
+.fq-none{ color:#bbb; font-size:11px; }
+.fq-depts{ margin-top:3px; color:#6B4E2E; word-break:break-word; }
+.fq-note{ margin-top:2px; color:#8a7a66; word-break:break-word; }
+.fq-clamp{ display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.fq-clamp.fq-on{ cursor:pointer; }
+.fq-clamp.fq-on::after{ content:'⋯ 展開'; display:block; color:#C67B2E; font-size:10.5px; }
+.fq-clamp.fq-open{ -webkit-line-clamp:unset; line-clamp:unset; display:block; }
+.fq-clamp.fq-open::after{ content:'收合'; }
+/* 直接列印畫面時不帶這一欄（正式列印走「頻率/負責清單」另組的表格） */
+@media print { .fq-cell, .fq-col{ display:none !important; } }
 </style>
 <!-- ═════════ 批次補建版本 Modal（管理員；既有文件一次補多版） ═════════ -->
 <div class="modal fade" id="verBatchModal" tabindex="-1" role="dialog">
@@ -1082,8 +1157,24 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
 <script src="../../resource/js/eg_richtext.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_richtext.js') ?>"></script>
+<!-- 列印紀錄（ai-rules/23 鐵則一：會列印的頁面一律留紀錄） -->
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script>
 window.asPerm = <?php echo json_encode($asCaps); ?>;
+<?php
+  // 列印版「製表」圖章用（ai-rules/16 第三之二節：簽章一律走 eg_stamp.js 帶日期印章）
+  // 注意：`$conn` 在 sideAndTopBarMenu.html 內被覆寫成 DBConnection 物件（不是 PDO 了），
+  // 這裡一定要另外取一次 PDO，直接拿 $conn->prepare() 會 Fatal 而且整頁輸出就斷在這裡。
+  $asMeName = '';
+  try {
+      $_pdo = (new DBConnection())->getPDO();
+      $_st  = $_pdo->prepare("SELECT user_cname FROM user WHERE id=?");
+      $_st->execute([$id]);
+      $asMeName = (string)($_st->fetchColumn() ?: '');
+  } catch (Throwable $e) { $asMeName = ''; }
+  if ($asMeName === '') $asMeName = (string)($_SESSION['userName'] ?? '');
+?>
+window.asMeName = <?php echo json_encode($asMeName, JSON_UNESCAPED_UNICODE); ?>;
 $(function(){
   const API = '../../src/store/AS_Document_API.php';
   const canC = !!window.asPerm.create;
@@ -1169,6 +1260,12 @@ $(function(){
       const dOpts = '<option value="">全部部門</option>' + META.departments.filter(d=>withDocs.includes(parseInt(d.id))).map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
       $('#filterDept').html(dOpts);
       if(fVal) $('#filterDept').val(fVal);
+      // 負責課室篩選：全部部門都列（挑上層部門＝連同底下課室一起篩），只有「有掛文件」的加★好認
+      const ownerHas = META.owner_dept_ids||[];
+      const oVal = $('#filterOwnerDept').val();
+      $('#filterOwnerDept').html('<option value="">全部負責課室</option>' + META.departments.map(d=>
+        `<option value="${d.id}">${esc(d.name)}${ownerHas.includes(parseInt(d.id))?' ★':''}</option>`).join(''));
+      if(oVal) $('#filterOwnerDept').val(oVal);
       $('#doc_department_id').html('<option value="">跨部門 / 未指定</option>' + META.departments.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join(''));
       // 使用者下拉（負責人/代理人）——重建時保留目前選取值，避免設定跳掉
       const uOpts = META.users.map(u=>`<option value="${u.id}">${esc(u.user_cname)}</option>`).join('');
@@ -1198,6 +1295,8 @@ $(function(){
       department_id: $('#filterDept').val(),
       tag_id: activeTagId,
       parent_id: activeParentId,
+      owner_dept_id: $('#filterOwnerDept').val()||'',
+      sort: $('#sortBy').val()||'',
       include_deleted: $('#incDeleted').is(':checked') ? '1':'0'
     };
     $.getJSON(API+'?action=list_documents', p, r=>{
@@ -1249,6 +1348,28 @@ $(function(){
     return `<div class="doc-remark egrt-view">${html}</div>`;
   }
 
+  // 清單最左欄：更新頻率 → 負責課室 → 備註（由上到下三層，使用者指定的版面）。
+  // 課室與備註都先夾成 2 行，實際有沒有被截斷等 renderDocs() 畫完再量（markFreqClamp）。
+  function freqCell(d){
+    const ft = asFreqText(d);
+    const dp = ownerDeptNames(d);
+    const nt = (d.freq_note||'').trim();
+    if(!ft && !dp && !nt) return '<span class="fq-none">未設定</span>';
+    let h = '<div class="fq-cell">';
+    h += ft ? `<div><span class="fq-badge ${d.freq_type==='irregular'?'fq-irregular':''}">${esc(ft)}</span></div>`
+            : '<div><span class="fq-none">頻率未設定</span></div>';
+    if(dp) h += `<div class="fq-depts fq-clamp" title="${esc(dp)}">${esc(dp)}</div>`;
+    if(nt) h += `<div class="fq-note fq-clamp" title="${esc(nt)}">${esc(nt)}</div>`;
+    return h + '</div>';
+  }
+  /** 只有真的被夾掉才變成可點（沒被截斷卻長出「展開」＝使用者點了沒有下文） */
+  function markFreqClamp(){
+    $('#docTableBody .fq-clamp').each(function(){
+      if(this.scrollHeight > this.clientHeight + 1) $(this).addClass('fq-on');
+    });
+  }
+  $('#docTableBody').on('click','.fq-clamp.fq-on', function(){ $(this).toggleClass('fq-open'); });
+
   function renderDocs(){
     const size = parseInt($('#pageSize').val())||10;
     const total = DOCS.length;
@@ -1258,7 +1379,7 @@ $(function(){
     const start = (curPage-1)*size;
     const rows = DOCS.slice(start, start+size);
     const tb = $('#docTableBody').empty();
-    if(rows.length===0){ tb.append(`<tr><td colspan="${canU?12:11}" class="text-center text-muted">無資料</td></tr>`); }
+    if(rows.length===0){ tb.append(`<tr><td colspan="${canU?13:12}" class="text-center text-muted">無資料</td></tr>`); }
     rows.forEach(d=>{
       const tags = (d.tags||[]).map(t=>`<span class="tag-chip" style="background:${esc(t.color)};">${esc(t.name)}</span>`).join(' ');
       let ops = '';
@@ -1328,6 +1449,7 @@ $(function(){
         + (isOb ? ` <span class="label ob-tag" title="廢止日期 ${esc(dispDate(d.obsolete_date||''))}${d.obsolete_reason?'｜'+esc(d.obsolete_reason):''}">已廢止 ${esc(dispDate(d.obsolete_date||''))}</span>` : '');
       tb.append(`<tr class="${isOb?'doc-obsolete':''}">
         ${canU?`<td><input type="checkbox" class="doc-chk" value="${d.id}"></td>`:''}
+        <td class="fq-col">${freqCell(d)}</td>
         <td>${esc(d.doc_no)}${delMark}</td>
         <td>${nameCell}${docRemarkCell(d)}</td>
         <td>${esc(d.doc_type)||'-'}</td>
@@ -1347,6 +1469,7 @@ $(function(){
         const mnote = esc(mr.note||'').replace(/#([^\s#<]+)/g,'<span class="label label-primary" style="font-weight:normal;font-size:10px;">#$1</span>');
         tb.append(`<tr style="background:#fffbe6;">
           ${canU?'<td></td>':''}
+          <td class="fq-col"></td>
           <td></td>
           <td colspan="9" style="padding-left:30px;">
             <i class="fa fa-paperclip text-warning"></i> <strong>${esc(mr.title)}</strong>
@@ -1359,6 +1482,7 @@ $(function(){
       });
     });
     $('#totalInfo').text(`共 ${total} 筆`);
+    markFreqClamp();   // 一定要等列都畫進 DOM 才量得到 scrollHeight
     // 分頁列
     const pg = $('#pager').empty();
     function pi(label,page,dis,act){ return `<li class="${dis?'disabled':''} ${act?'active':''}"><a href="#" data-page="${page}">${label}</a></li>`; }
@@ -1396,8 +1520,83 @@ $(function(){
     $('#searchKw').val($(this).data('tag'));
     loadDocs();
   });
-  $('#filterLevel,#filterDept,#incDeleted').on('change', loadDocs);
-  $('#btnClearFilter').on('click', ()=>{ $('#searchKw').val(''); $('#filterLevel').val(''); $('#filterDept').val(''); activeTagId=0; activeParentId=0; activeParentNo=''; renderTagFilter(); loadDocs(); });
+  $('#filterLevel,#filterDept,#incDeleted,#filterOwnerDept,#sortBy').on('change', loadDocs);
+  $('#btnClearFilter').on('click', ()=>{ $('#searchKw').val(''); $('#filterLevel').val(''); $('#filterDept').val('');
+    $('#filterOwnerDept').val(''); $('#sortBy').val('');
+    activeTagId=0; activeParentId=0; activeParentNo=''; renderTagFilter(); loadDocs(); });
+
+  // ══ 列印「更新頻率 / 負責課室清單」════════════════════════════════════════
+  // 印的是**目前篩選出來的全部文件**（DOCS 就是後端回來的完整結果，不是只有這一頁），
+  // 版面依 ai-rules/16：大標題＝本公司全名（動態取，禁寫死）、頁碼左下 counter(pages)、製表走 eg_stamp。
+  function freqFilterDesc(){
+    const p = [];
+    const kw = $('#searchKw').val().trim();
+    const od = $('#filterOwnerDept option:selected').text();
+    if(kw) p.push('關鍵字：'+kw);
+    if($('#filterLevel').val()) p.push('階級：'+$('#filterLevel option:selected').text());
+    if($('#filterDept').val())  p.push('所屬部門：'+$('#filterDept option:selected').text());
+    if($('#filterOwnerDept').val()) p.push('負責課室：'+od.replace(' ★','')+'（含其下課室）');
+    if(activeTagId) p.push('標籤：'+(((META.tags||[]).find(t=>t.id==activeTagId)||{}).name||''));
+    if(activeParentId) p.push('母文件：'+activeParentNo);
+    if($('#sortBy').val()) p.push($('#sortBy option:selected').text());
+    if($('#incDeleted').is(':checked')) p.push('含已刪除');
+    return p.length ? p.join('　｜　') : '（未設篩選條件＝全部文件）';
+  }
+  $('#btnPrintFreq').on('click', function(){
+    if(!DOCS.length){ alert('目前沒有符合篩選條件的文件可列印'); return; }
+    const rows = DOCS.map((d,i)=>{
+      const dp = ownerDeptNames(d);
+      return `<tr>
+        <td>${i+1}</td>
+        <td>${esc(asFreqText(d))||'－'}</td>
+        <td class="tl">${esc(dp)||'－'}</td>
+        <td>${esc(d.doc_no)||''}</td>
+        <td class="tl">${esc(d.doc_name)||''}</td>
+        <td class="tl">${esc((d.freq_note||'').trim())}</td>
+      </tr>`;
+    }).join('');
+    const today = (typeof egFmtDate==='function') ? egFmtDate(new Date().toISOString().slice(0,10)) : '';
+    const maker = (window.EGStamp && window.asMeName)
+        ? EGStamp.stamp(window.asMeName, today, false).replace(/(href|src)="\//g, '$1="'+location.origin+'/')
+        : esc(window.asMeName||'');
+    const body = `<div class="p-comp">${esc(META.company_name||'')}</div>
+      <div class="p-title">文件更新頻率與負責課室清單</div>
+      <div class="p-cond">篩選條件：${esc(freqFilterDesc())}　｜　共 ${DOCS.length} 筆</div>
+      <table class="p-tb">
+      <colgroup><col style="width:6%"><col style="width:11%"><col style="width:19%"><col style="width:16%"><col style="width:26%"><col style="width:22%"></colgroup>
+      <thead><tr><th>項次</th><th>更新頻率</th><th>負責課室</th><th>文件編號</th><th>文件名稱</th><th>備註</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+      <div class="p-sign"><div class="s-cell">製表：${maker}</div></div>`;
+    const css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0 auto;width:186mm;max-width:100%;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}'
+      + '.p-title{font-size:17px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:4px;}'
+      + '.p-cond{font-size:11px;color:#555;margin:0 0 6px 2px;}'
+      + 'table.p-tb{width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;}'
+      + 'table.p-tb thead{display:table-header-group;}'
+      + 'table.p-tb th,table.p-tb td{border:1px solid #666;padding:3px 5px;text-align:center;overflow-wrap:anywhere;word-break:break-all;}'
+      + 'table.p-tb thead th{background:#f3ead6;}'
+      + 'table.p-tb td.tl{text-align:left;}'
+      + 'table.p-tb tr{break-inside:avoid;}'
+      + '.p-sign{display:flex;justify-content:flex-end;margin-top:8px;break-inside:avoid;}'
+      + '.p-sign .s-cell{font-size:13px;display:flex;align-items:center;min-height:80px;}'
+      + 'svg.car-stamp{width:91px !important;height:91px !important;opacity:.92;vertical-align:middle;}'
+      + '.stamp-wrap{display:inline-block;text-align:center;margin:0 8px;}'
+      + '.stamp-wrap .stamp-title{display:none;}'
+      + '@page{size:A4 portrait;margin:12mm 12mm 18mm;}';
+    EGPrintLog.record({source:'as_doc', doc_kind:'form',
+      doc_name:'文件更新頻率與負責課室清單（'+DOCS.length+' 筆）', note:freqFilterDesc().substring(0,255)});
+    const w = window.open('', '_blank');
+    // 標題留空：瀏覽器列印頁首會印出網頁標題＋日期，本站列印一律不要頁首
+    w.document.write('<html><head><meta charset="utf-8"><title></title><style>'+css+'</style></head><body>'+body
+      +'<scr'+'ipt>window.onload=function(){'
+      +'var onePageA4=(297-30)*96/25.4;'
+      +'if(document.body.scrollHeight>onePageA4*0.92){'
+      +'var st=document.createElement(\'style\');'
+      +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
+      +'document.head.appendChild(st);}'
+      +'setTimeout(function(){window.print();},200);};</scr'+'ipt></body></html>');
+    w.document.close();
+  });
 
   // 母文件下拉（excludeId=編輯中的自己不可選）
   function fillParentSelect(excludeId, selected){
@@ -1570,6 +1769,69 @@ $(function(){
   }
   $('#docTagPicker').on('click','.tag-filter', function(){ $(this).toggleClass('active'); syncDocTagIds(); });
   function syncDocTagIds(){ const ids=[]; $('#docTagPicker .tag-filter.active').each(function(){ ids.push($(this).data('id')); }); $('#doc_tag_ids').val(ids.join(',')); }
+
+  // ══ 更新頻率 / 負責課室 ═════════════════════════════════════════════════
+  // 單位文字與後端 asFreqUnits() 是同一組定義；改動時兩邊要一起改。
+  const FREQ_UNIT = {day:'天', week:'週', month:'月', quarter:'季', year:'年'};
+  /** 頻率顯示文字：不定時／每天／每 3 月（n=1 時省略數字，「每1月」讀起來很怪） */
+  function asFreqText(d){
+    const t = d.freq_type||'';
+    if(t==='') return '';
+    if(t==='irregular') return '不定時';
+    const u = FREQ_UNIT[t]; if(!u) return '';
+    const n = parseInt(d.freq_n)||0;
+    return n>1 ? ('每 '+n+' '+u) : ('每'+u);
+  }
+  function ownerDeptNames(d){ return (d.owner_depts||[]).map(x=>x.name).join('、'); }
+
+  // 負責課室選取器（chip 點選切換）。部門只有十幾個，chip 比多選下拉好按也看得到全部。
+  function renderOwnerDeptPicker(selected){
+    selected = (selected||[]).map(v=>String(v));
+    const box = $('#docOwnerDeptPicker').empty();
+    const list = META.departments||[];
+    if(!list.length){ box.append('<span class="text-muted">尚無部門資料</span>'); return; }
+    list.forEach(dp=>{
+      const on = selected.includes(String(dp.id));
+      box.append(`<span class="tag-chip tag-filter ${on?'active':''}" data-id="${dp.id}" style="background:#C67B2E;">${esc(dp.name)}</span>`);
+    });
+    syncOwnerDeptIds();
+  }
+  $('#docOwnerDeptPicker').on('click','.tag-filter', function(){ $(this).toggleClass('active'); syncOwnerDeptIds(); });
+  function syncOwnerDeptIds(){
+    const ids=[]; $('#docOwnerDeptPicker .tag-filter.active').each(function(){ ids.push($(this).data('id')); });
+    $('#doc_owner_dept_ids').val(ids.join(','));
+  }
+
+  /** 前端即時驗證（後端 asFreqValidate() 有同一套規則再擋一次＝鐵律8）。回傳 true＝可送出 */
+  function validateFreqForm(showErr){
+    const t = $('#doc_freq_type').val()||'';
+    const n = ($('#doc_freq_n').val()||'').trim();
+    const note = ($('#doc_freq_note').val()||'').trim();
+    let eType='', eNote='';
+    if(t!=='' && t!=='irregular'){
+      const iv = parseInt(n);
+      if(n==='' || isNaN(iv) || iv<1 || iv>255) eType = '請填寫數量（1~255 的整數），例如「每 3 月」的 3';
+    }
+    if(t==='irregular' && note==='') eNote = '選「不定時」時，備註說明為必填（請說明什麼情況下會更新）';
+    if(showErr){
+      $('#freqTypeErr').text(eType).toggle(!!eType);
+      $('#doc_freq_n').css('border-color', eType?'#a94442':'');
+      $('#freqNoteErr').text(eNote).toggle(!!eNote);
+      $('#doc_freq_note').css('border-color', eNote?'#a94442':'');
+    }
+    return !eType && !eNote;
+  }
+  // 頻率類型切換：不定時＝沒有數量（停用並清空）＋備註變必填提示；未設定＝兩者都不需要
+  function syncFreqUi(){
+    const t = $('#doc_freq_type').val()||'';
+    const needN = (t!=='' && t!=='irregular');
+    $('#doc_freq_n').prop('disabled', !needN);
+    if(!needN) $('#doc_freq_n').val('');
+    $('#freqNoteReq').toggle(t==='irregular');
+    validateFreqForm(true);
+  }
+  $('#doc_freq_type').on('change', syncFreqUi);
+  $('#doc_freq_n,#doc_freq_note').on('input', ()=>validateFreqForm(true));
 
   // 通用標籤選取器（快速建檔/批次上傳）：未選=灰色，點選=亮起原色
   function renderTagPickBox(sel){
@@ -1931,6 +2193,9 @@ $(function(){
        && !confirm('目前的結構總覽尚未（或已失效）核准，列印將不顯示簽章。仍要列印嗎？')) return;
     const body = window.treePrintBody(false);
     const asTxt = asDoc ? String(asDoc.doc_no).replace(/['\\]/g,'') : '';
+    // ai-rules/23 鐵則一：記的是「按下列印」這個動作（按取消也會留一筆，這是刻意的）
+    EGPrintLog.record({source:'as_doc', doc_kind:'form',
+      doc_name:(asDoc ? (asDoc.doc_no+' '+asDoc.doc_name) : 'AS 文件結構總覽')});
     // body 固定 186mm＝A4 210mm 扣掉左右各 12mm 頁邊，畫面上與列印同寬，表格不會撐出紙外
     const css = 'body{font-family:"Microsoft JhengHei",sans-serif;margin:0 auto;width:186mm;max-width:100%;color:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
       + '.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}'
@@ -2124,6 +2389,7 @@ $(function(){
     const md = qrMakeDate(), dot = md.replace(/-/g,'.');
     const asDoc = QR.as_doc;
     const title = asDoc ? asDoc.doc_name : '品質記錄一覽表';   // 表頭＝綁定文件的表單名稱，禁寫死
+    EGPrintLog.record({source:'as_doc', doc_kind:'form', doc_name:(asDoc?(asDoc.doc_no+' '):'')+title});   // ai-rules/23
     const mkName = (QR_SIGN.by_date[md]||{}).name || '';
     const apName = (QR_SIGN.approver||{}).name || '';
     const st = nm => (nm && window.EGStamp)
@@ -2253,6 +2519,8 @@ $(function(){
     $('#firstVersionFiles').show();
     $('#doc_file').prop('required', !canNA); $('#doc_version').prop('required',true);
     renderDocTagPicker([]);
+    $('#doc_freq_type').val(''); $('#doc_freq_n').val(''); $('#doc_freq_note').val('');
+    renderOwnerDeptPicker([]); syncFreqUi();
     fillParentSelect(0, '');
     $('#doc_code_sel').hide().empty();
     setDeptOptions($('#doc_department_id'), null); // 復原完整部門清單（清除上次多部門代碼的限制）
@@ -2288,6 +2556,11 @@ $(function(){
       $('#doc_revised_pages').val(cv.revised_pages||'');
       $('#doc_revised_summary').val(cv.revised_summary||'');
       renderDocTagPicker((d.tags||[]).map(t=>t.id));
+      $('#doc_freq_type').val(d.freq_type||'');
+      $('#doc_freq_n').val(d.freq_n==null?'':d.freq_n);
+      $('#doc_freq_note').val(d.freq_note||'');
+      renderOwnerDeptPicker((d.owner_depts||[]).map(x=>x.id));
+      syncFreqUi();
       fillParentSelect(d.id, d.parent_doc_id||'');
       syncParentByType($('#doc_type'), $('#doc_parent_id'), $('#doc_department_id'));
       syncDeptFromDocNo(d.doc_no, $('#doc_department_id'), $('#doc_parent_id')); // 編號部門代碼最終決定部門(多部門→限縮下拉)
@@ -2298,10 +2571,17 @@ $(function(){
 
   $('#docForm').on('submit', function(e){
     e.preventDefault();
+    if(!validateFreqForm(true)){
+      // 欄位在跳窗上半部，錯誤訊息可能在捲動範圍外，捲回去讓使用者看得到
+      $('#doc_freq_type')[0].scrollIntoView({block:'center'});
+      return;
+    }
     const isEdit = $('#doc_id').val()!=='';
     const url = API + '?action=' + (isEdit?'update_document_meta':'create_document');
     const fd = new FormData(this);
     // 被鎖定(disabled)的欄位不會進 FormData，手動補值
+    fd.set('freq_n', $('#doc_freq_n').val()||'');          // 不定時/未設定時是 disabled
+    fd.set('owner_dept_ids', $('#doc_owner_dept_ids').val()||'');
     fd.set('doc_level', $('#doc_level').val()||'');
     fd.set('department_id', $('#doc_department_id').val()||'');
     fd.set('parent_doc_id', $('#doc_parent_id').val()||'');
