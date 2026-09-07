@@ -35,10 +35,11 @@
     white-space:nowrap;border:1px solid transparent;font-weight:600;}
 .eg-bv-ing {background:#E8F0FE;border-color:#B7CDEB;color:#2E6DA4;}   /* 加工中 */
 .eg-bv-qc  {background:#F7E0BD;border-color:#E0B77A;color:#7A4A12;}   /* QC待驗 */
-.eg-bv-ok  {background:#EAF3EA;border-color:#CFE3CF;color:#4A7A4A;}   /* 已完成 */
-.eg-bv-ng  {background:#DD5138;border-color:#DD5138;color:#fff;}      /* NG */
-.eg-bv-na  {background:#F5F5F5;border-color:#E2E2E2;color:#999;}      /* 未執行 */
-.eg-bv-done{opacity:.55;}                                             /* 已完成整體淡化 */
+.eg-bv-ok  {background:#EAF3EA;border-color:#CFE3CF;color:#4A7A4A;}   /* 待移轉（本站已驗完） */
+.eg-bv-mv  {background:#F1EBE1;border-color:#D8C7AE;color:#7A5A2E;}   /* 已移轉（已走到下一站） */
+.eg-bv-ng  {background:#DD5138;border-color:#DD5138;color:#fff;}      /* 判定NG（附加標，不蓋掉狀態） */
+.eg-bv-na  {background:#F5F5F5;border-color:#E2E2E2;color:#999;}      /* 待發包 */
+.eg-bv-done{opacity:.55;}                                             /* 本站已做完 → 整列淡化 */
 
 /* 發單日欄的「同時進行中」摘要 */
 .eg-bv-sum{margin:0 0 4px;padding:3px 5px;background:#FFFDF8;border:1px dashed #E0B77A;border-radius:3px;
@@ -118,18 +119,34 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
     }
 
     /* ── 一個批次的狀態判定（唯一實作，泳道與流程圖共用）──
-       欄位語意見資料字典：N=待發包 P=待移轉 Q=QC待驗 ing=加工中 E=已移轉 */
+       ⚠ 狀態文字一律比照「發單日」欄目前顯示的說法，兩邊不可以各講各的
+       （使用者 2026-09-07 回報：泳道寫「已結」「OK」，發單日同一批寫「已移轉」「待移轉」）。
+       欄位語意見資料字典：N=待發包 P=待移轉 Q=QC待驗 ing=加工中 E=已移轉。
+       另兩條規則同樣照抄發單日欄：
+         ① qc_completed=1 但狀態還停在 Q → 一律視為 P（待移轉）
+         ② QC 判定 NG 不是一種「狀態」，狀態照原本顯示，NG 另外加一個紅標
+            （舊版直接用 NG 蓋掉狀態，看不出那批到底走到哪裡） */
     function statusOf(b) {
-        var st = String(b.processing_state || '');
-        if (String(b.QC_check || '') === 'ng')            return { k: 'ng',  t: 'NG',     cls: 'eg-bv-ng'  };
-        if (st === 'ing')                                  return { k: 'ing', t: '加工中', cls: 'eg-bv-ing' };
-        if (st === 'Q' && !(b.qc_completed == 1))           return { k: 'qc',  t: 'QC待驗', cls: 'eg-bv-qc'  };
-        if (st === 'E' || st === '1' || st === 1)           return { k: 'ok',  t: '已結',   cls: 'eg-bv-ok'  };
-        if (st === 'P' || (b.qc_completed == 1))            return { k: 'ok',  t: 'OK',     cls: 'eg-bv-ok'  };
-        if (st === 'N')                                     return { k: 'na',  t: '未發包', cls: 'eg-bv-na'  };
-        return { k: 'na', t: st || '—', cls: 'eg-bv-na' };
+        var st  = String(b.processing_state || '');
+        var eff = (st === 'Q' && b.qc_completed == 1) ? 'P' : st;
+        var r;
+        if (eff === 'ing')                              r = { k: 'ing',  t: '加工中', cls: 'eg-bv-ing' };
+        else if (eff === 'Q')                           r = { k: 'qc',   t: 'QC待驗', cls: 'eg-bv-qc'  };
+        else if (eff === 'P')                           r = { k: 'wait', t: '待移轉', cls: 'eg-bv-ok'  };
+        else if (eff === 'E' || eff === '1' || eff === 1) r = { k: 'done', t: '已移轉', cls: 'eg-bv-mv' };
+        else if (eff === 'N')                           r = { k: 'na',   t: '待發包', cls: 'eg-bv-na'  };
+        else                                            r = { k: 'na',   t: eff || '—', cls: 'eg-bv-na' };
+        r.ng   = (String(b.QC_check || '') === 'ng');   // 判定 NG（額外紅標，不蓋掉狀態）
+        r.dim  = (r.k === 'done' || r.k === 'wait');    // 這一站已經做完 → 整列淡化
+        return r;
     }
-    function isLive(s) { return s.k === 'ing' || s.k === 'qc' || s.k === 'ng'; }
+    // 「進行中」＝加工中／QC待驗，或判定 NG（NG 要跳出來讓人看到）
+    function isLive(s) { return s.k === 'ing' || s.k === 'qc' || !!s.ng; }
+    // 狀態標籤（含 NG 紅標）的 HTML，泳道與流程圖共用
+    function badgeHtml(s) {
+        return '<span class="eg-bv-badge ' + s.cls + '">' + esc(s.t) + '</span>'
+             + (s.ng ? '<span class="eg-bv-badge eg-bv-ng" style="margin-left:3px;">NG</span>' : '');
+    }
 
     /* ── 取這支 BOM 的逐站批次結構 ──
        來源就是製程欄本來在用的 window.bomPSList，不另外查資料 */
@@ -174,7 +191,7 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
                 if (!isLive(st)) return;
                 live.push('<span class="eg-bv-sum-i">' + esc(s.bom_sn) + esc(s.name)
                         + ' <b>' + esc(b.batch_label || '─') + '</b> '
-                        + '<span class="eg-bv-badge ' + st.cls + '">' + esc(st.t) + '</span></span>');
+                        + badgeHtml(st) + '</span>');
             });
         });
         if (!live.length) return '';
@@ -188,10 +205,10 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
         s.batches.forEach(function (b) {
             var st = statusOf(b);
             var sub = [fmtDate(b.outsource_date), b.maker_id || ''].filter(Boolean).join(' ');
-            h += '<div class="eg-bv-row' + (st.k === 'ok' ? ' eg-bv-done' : '') + '">'
+            h += '<div class="eg-bv-row' + (st.dim ? ' eg-bv-done' : '') + '">'
               +    '<span class="eg-bv-lbl">' + esc(b.batch_label || '─') + '</span>'
               +    '<span class="eg-bv-qty">' + esc(b.sqty != null ? b.sqty : '') + '</span>'
-              +    '<span class="eg-bv-badge ' + st.cls + '">' + esc(st.t) + '</span>'
+              +    badgeHtml(st)
               +    (sub ? '<span class="eg-bv-sub">' + esc(sub) + '</span>' : '')
               +  '</div>';
         });
@@ -226,10 +243,10 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
                 if (b) {
                     var st = statusOf(b);
                     var sub = [fmtDate(b.outsource_date), b.maker_id || ''].filter(Boolean).join(' ');
-                    h += '<div class="eg-bv-node' + (st.k === 'ok' ? ' eg-bv-done' : '') + '">'
+                    h += '<div class="eg-bv-node' + (st.dim ? ' eg-bv-done' : '') + '">'
                       +    '<div class="eg-bv-node-t">' + esc(s.bom_sn) + esc(s.name)
                       +      ' <span class="eg-bv-qty">x' + esc(b.sqty != null ? b.sqty : '') + '</span>'
-                      +      ' <span class="eg-bv-badge ' + st.cls + '">' + esc(st.t) + '</span></div>'
+                      +      ' ' + badgeHtml(st) + '</div>'
                       +    (sub ? '<div class="eg-bv-node-s">' + esc(sub) + '</div>' : '')
                       +    (firstSeen === ci && ci > 0 ? '<div class="eg-bv-branch">∟ 此站才出現（由其他批分出）</div>' : '')
                       +  '</div>';
@@ -414,11 +431,14 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
         var lg = document.createElement('div');
         lg.id = 'eg-bv-legend';
         lg.className = 'eg-bv-legend';
+        // 狀態名稱與「發單日」欄完全相同，兩邊不可以各講各的
         lg.innerHTML = '<b>圖例</b>'
+            + '<span><span class="eg-bv-dot" style="background:#999;"></span>待發包</span>'
             + '<span><span class="eg-bv-dot" style="background:#2E6DA4;"></span>加工中</span>'
             + '<span><span class="eg-bv-dot" style="background:#F0A24B;"></span>QC待驗</span>'
-            + '<span><span class="eg-bv-dot" style="background:#4A7A4A;"></span>OK（已完成，淡化）</span>'
-            + '<span><span class="eg-bv-dot" style="background:#DD5138;"></span>NG</span>'
+            + '<span><span class="eg-bv-dot" style="background:#4A7A4A;"></span>待移轉（本站已驗完，淡化）</span>'
+            + '<span><span class="eg-bv-dot" style="background:#C9A063;"></span>已移轉（已走到下一站，淡化）</span>'
+            + '<span><span class="eg-bv-dot" style="background:#DD5138;"></span>判定NG（附加在狀態右側）</span>'
             + '<span><span class="eg-bv-hdot" style="margin-left:0;"></span>欄位標題旁圓點＝該欄目前有進行中批次</span>';
         var tbl = document.getElementById('table-DOWN');
         if (tbl && tbl.parentNode) tbl.parentNode.insertBefore(lg, tbl);
