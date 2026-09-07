@@ -599,8 +599,27 @@ function fsd_case_print_log(PDO $db, int $caseId, int $limit = 200): array {
     } catch (Throwable $e) { return []; }
 }
 
+/**
+ * 案件用的樣板內容＝發布當時的版本快照（關卡/槽位/框選位置一經送出就不該再變動）。
+ * 但**圖章長什麼樣子例外**：2026-09-07 使用者要求「畫面上的章要跟圖章管理裡的模板一樣，
+ * 印出來的又要跟畫面一樣（所見即所得）」。快照裡存的是發布當時的模板設計，之後在圖章管理
+ * 調過字級/撐滿比例都不會反映進來，於是同一顆章在圖章管理看到的與案件上蓋出來的長得不一樣
+ * （實測：快照那份沒有 fill 值，現行模板是 120/0/140）。
+ * 故圖章模板一律「即時取現行設定」，只有查不到（模板被停用/刪除）才退回快照那一份。
+ */
 function fsd_case_schema(PDO $db, array $case): array {
-    return fsd_template_schema_at_version($db, (int)$case['template_id'], (int)$case['template_version']) ?: ['stages'=>[], 'fields'=>[], 'pages'=>[], 'file'=>[]];
+    $schema = fsd_template_schema_at_version($db, (int)$case['template_id'], (int)$case['template_version'])
+              ?: ['stages'=>[], 'fields'=>[], 'pages'=>[], 'file'=>[]];
+    // 清單頁會逐件呼叫本函式，故同一個請求內每個樣板只查一次（不走 fsd_template_get，那支還會另外查 AS 綁定）
+    static $liveStampTpl = [];
+    $tid = (int)$case['template_id'];
+    if (!array_key_exists($tid, $liveStampTpl)) {
+        $st = $db->prepare("SELECT stamp_tpl_id FROM fsd_template WHERE id=?");
+        $st->execute([$tid]);
+        $liveStampTpl[$tid] = fsd_stamp_tpl_get($db, (int)($st->fetchColumn() ?: 0));
+    }
+    if ($liveStampTpl[$tid]) $schema['stamp_tpl'] = $liveStampTpl[$tid];
+    return $schema;
 }
 
 function fsd_case_responses(PDO $db, int $caseId): array {
