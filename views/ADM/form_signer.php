@@ -166,6 +166,11 @@ $perms = fsd_perms($db, $fsdUser);
             .page-help-btn, .fsd-toolbar, #listPanel, #fieldPanel, .fsd-action-panel, .top_nav, .left_col,
             .page-title, .clearfix { display:none !important; }
             .right_col { margin:0 !important; padding:0 !important; }
+            /* custom.min.js 的 setContentHeight() 會依「螢幕視窗高度」在 .right_col 掛上 inline
+               min-height（實測 1315px≒348mm）。列印時那個高度遠超過可印範圍（A4 橫式只有 190mm），
+               於是文件本身明明只有一頁，後面還是被撐出一張空白紙。列印一律把版型的最小高度歸零。 */
+            html, body, .container.body, .main_container, .right_col, #detailPanel {
+                min-height:0 !important; height:auto !important; }
             .fsd-doc-grid { display:block; max-height:none; overflow:visible; border:none; padding:0; gap:0; }
             /* 每份頁面各自獨立分頁；page-break-after 只套在非最後一頁，否則最後一頁後面會多印一張空白頁。
                寬高改由 doPrint() 依可印範圍算好明確mm尺寸蓋掉aspect-ratio，保證單頁裝得下(不會被瀏覽器

@@ -24,6 +24,7 @@
 
 require_once __DIR__ . '/asdoc_lib.php';
 require_once __DIR__ . '/approval_lib.php';
+require_once __DIR__ . '/auto_sign_time_lib.php';   // 自動簽核蓋章時間一律 09:30~19:00 且人人錯開（唯一實作）
 require_once __DIR__ . '/delegate_lib.php';
 require_once __DIR__ . '/org_role_lib.php';
 
@@ -668,29 +669,44 @@ function fsd_notify(PDO $db, int $refId, array $toUids, string $title, string $c
 
 /* -------- 自動簽核(ai-rules/21 三條鐵則，比照 rvf_auto_sign，僅用於決策階段) -------- */
 
-/** 對決策階段單一槽位自動簽核；$cumulativeOffsetMin是從本階段開始算起累加的分鐘數(讓連續多槽位的自動簽核
- *  時間依序遞增,不會全部疊在同一秒,呼叫端逐槽位累加後傳入)，回傳這次用掉的累加值供下一槽位接續使用。 */
-function fsd_auto_sign_decision(PDO $db, int $caseId, int $stageSeq, string $level, array $signer, string $slotKey, string $bizDate, int $cumulativeOffsetMin): int {
-    $aid = eg_approval_submit($db, 'form_signer', $caseId, $level, (int)$signer['id'], $signer['user_cname']);
-    eg_approval_decide($db, $aid, (int)$signer['id'], $signer['user_cname'], 'approved', '（系統自動簽核）');
-    $cumulativeOffsetMin += random_int(5, 30);
-    $db->prepare("UPDATE approval_record SET decided_at = LEAST(DATE_ADD(submitted_at, INTERVAL ? MINUTE), CONCAT(?, ' 23:59:59')) WHERE id=?")
-       ->execute([$cumulativeOffsetMin, $bizDate, $aid]);
-    $rec = eg_approval_latest($db, 'form_signer', $caseId, $level);
-    $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,reply_text,responded_at)
-                  VALUES (?,?,?,?,?, 'approved', 1, '（系統自動簽核）', ?)")
-       ->execute([$caseId, $stageSeq, $slotKey, (int)$signer['id'], $signer['user_cname'], $rec['decided_at'] ?? date('Y-m-d H:i:s')]);
-    return $cumulativeOffsetMin;
+/** 這件案子在業務日期當天「已經寫進去的最後一個自動簽核時間」（回應紀錄與簽核紀錄取較晚者）。
+ *  下一個章要從它往後排，這樣不管走哪一條路徑（意見/決策/補案件）都不會有兩個人時間完全相同。 */
+function fsd_auto_sign_last_ts(PDO $db, int $caseId, string $bizDate): ?string {
+    $st = $db->prepare("SELECT MAX(t) FROM (
+            SELECT MAX(responded_at) t FROM fsd_case_response WHERE case_id=? AND DATE(responded_at)=?
+            UNION ALL
+            SELECT MAX(decided_at) t FROM approval_record WHERE module='form_signer' AND entity_id=? AND DATE(decided_at)=?
+        ) x");
+    $st->execute([$caseId, $bizDate, $caseId, $bizDate]);
+    $v = $st->fetchColumn();
+    return $v ? (string)$v : null;
 }
 
-/** 意見階段全體槽位自動同意(auto_sign開啟時)，每人各自隨機錯開5~30分鐘(比照決策自動簽核的鐵則精神)。
- *  時間戳一律用DB NOW()+INTERVAL計算,不可用PHP time()/date()(PHP與DB時區可能差8小時，見as_form_builder記憶的跨模組教訓)。 */
-function fsd_auto_sign_advisory_slot(PDO $db, int $caseId, int $stageSeq, string $slotKey, array $signer, string $bizDate): void {
-    $offsetMin = random_int(5, 30);
+/** 對決策階段單一槽位自動簽核。蓋章時間走共用的 eg_auto_sign_next_ts()：一律落在業務日期當天
+ *  09:30~19:00（使用者 2026-09-07 要求：不可超出含加班的上班時間，並預留文件上傳時間），
+ *  且從這件案子已寫入的最後一個時間往後排，兩個人不會出現相同時間。
+ *  （舊版是 submitted_at+N 再 LEAST 到「業務日期 23:59:59」，補歷史案件時每個人都會被壓成 23:59:59。） */
+function fsd_auto_sign_decision(PDO $db, int $caseId, int $stageSeq, string $level, array $signer, string $slotKey, string $bizDate): string {
+    $aid = eg_approval_submit($db, 'form_signer', $caseId, $level, (int)$signer['id'], $signer['user_cname']);
+    eg_approval_decide($db, $aid, (int)$signer['id'], $signer['user_cname'], 'approved', '（系統自動簽核）');
+    $ts = eg_auto_sign_next_ts($db, $bizDate, fsd_auto_sign_last_ts($db, $caseId, $bizDate));
+    // submitted_at 一併往前挪一點：否則會出現「決行時間早於送出時間」這種對不起來的紀錄
+    $db->prepare("UPDATE approval_record SET submitted_at=?, decided_at=? WHERE id=?")
+       ->execute([eg_auto_sign_before_ts($ts), $ts, $aid]);
     $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,reply_text,responded_at)
-                  VALUES (?,?,?,?,?, 'agree', 1, '（系統自動簽核）',
-                          LEAST(DATE_ADD(NOW(), INTERVAL ? MINUTE), CONCAT(?, ' 23:59:59')))")
-       ->execute([$caseId, $stageSeq, $slotKey, (int)$signer['id'], $signer['user_cname'], $offsetMin, $bizDate]);
+                  VALUES (?,?,?,?,?, 'approved', 1, '（系統自動簽核）', ?)")
+       ->execute([$caseId, $stageSeq, $slotKey, (int)$signer['id'], $signer['user_cname'], $ts]);
+    return $ts;
+}
+
+/** 意見階段全體槽位自動同意(auto_sign開啟時)：時間同樣走共用的 09:30~19:00 窗口並逐一往後排。
+ *  時間戳不可以用 PHP 的 date() 自己算「今天」(PHP 是 UTC、MySQL 是本地時間，差 8 小時)，
+ *  共用函式內部是查 DB 的 CURDATE()/CURTIME()。 */
+function fsd_auto_sign_advisory_slot(PDO $db, int $caseId, int $stageSeq, string $slotKey, array $signer, string $bizDate): void {
+    $ts = eg_auto_sign_next_ts($db, $bizDate, fsd_auto_sign_last_ts($db, $caseId, $bizDate));
+    $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,reply_text,responded_at)
+                  VALUES (?,?,?,?,?, 'agree', 1, '（系統自動簽核）', ?)")
+       ->execute([$caseId, $stageSeq, $slotKey, (int)$signer['id'], $signer['user_cname'], $ts]);
 }
 
 /** 依檢視者權限清洗回應紀錄：「系統自動簽核」字樣(is_auto=1)只有管理員能看到，一般/唯讀使用者一律隱藏該筆回覆文字與自動簽核事實，
@@ -763,7 +779,6 @@ function fsd_case_decision_advance(PDO $db, array $case, array $schema, int $sta
  *  全部槽位都解析不到人時比照人工流程退回最高決策者/送出者本人兜底單一決策。 */
 function fsd_case_decision_auto_sign_all(PDO $db, array $case, array $stage, int $stageSeq, string $bizDate): void {
     $submitterUid = (int)$case['applicant_id'];
-    $cumOffset = 0;
     $anySigned = false;
     foreach ($stage['signers'] as $sg) {
         $r = fsd_resolve_signer_for_case($db, $sg, $case);
@@ -772,7 +787,7 @@ function fsd_case_decision_auto_sign_all(PDO $db, array $case, array $stage, int
                ->execute([$case['id'], $stageSeq, $sg['slot_key']]);
             continue;
         }
-        $cumOffset = fsd_auto_sign_decision($db, (int)$case['id'], $stageSeq, 'stage_'.$stageSeq, $r['user'], $sg['slot_key'], $bizDate, $cumOffset);
+        fsd_auto_sign_decision($db, (int)$case['id'], $stageSeq, 'stage_'.$stageSeq, $r['user'], $sg['slot_key'], $bizDate);
         $anySigned = true;
     }
     if (!$anySigned) {
@@ -780,7 +795,7 @@ function fsd_case_decision_auto_sign_all(PDO $db, array $case, array $stage, int
         $top = eg_org_user($db, 'top_approver');
         $fallback = ($top && (int)$top['id'] !== $submitterUid) ? ['id'=>(int)$top['id'],'user_cname'=>$top['user_cname']] : ['id'=>$submitterUid,'user_cname'=>$case['applicant_name']];
         $slotKey = $stage['signers'][0]['slot_key'] ?? ('s'.$stageSeq.'_g1');
-        fsd_auto_sign_decision($db, (int)$case['id'], $stageSeq, 'stage_'.$stageSeq, $fallback, $slotKey, $bizDate, 0);
+        fsd_auto_sign_decision($db, (int)$case['id'], $stageSeq, 'stage_'.$stageSeq, $fallback, $slotKey, $bizDate);
     }
 }
 
@@ -1768,11 +1783,13 @@ function fsd_backfill_submit(PDO $db, int $caseId, int $uid): array {
         // 補案件的框一律是圖章(box_type='stamp')，圖章框不會把 reply_text 印在文件上，所以只影響簽核紀錄區。
         $ins = $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,reply_text,responded_at)
                              VALUES (?,0,?,?,?,'approved',1,'（系統自動簽核）',?)");
-        $minutes = 9 * 60;
+        $left = count($fields);
+        $lastTs = null;
         foreach ($fields as $f) {
-            $minutes = min(23 * 60, $minutes + random_int(5, 30));
-            $ts = $bizDate . ' ' . sprintf('%02d:%02d:00', intdiv($minutes, 60), $minutes % 60);
-            $ins->execute([$caseId, $f['slot_key'], (int)$f['signer_user_id'], $f['signer_name'], $ts]);
+            // 蓋章時間走共用窗口 09:30~19:00 並逐一往後排（$left 讓章多的時候自動縮短間隔，
+            // 不會把窗口用完後全部擠在 19:00；同一件案子兩個人不會有相同時間）
+            $lastTs = eg_auto_sign_next_ts($db, $bizDate, $lastTs, $left--);
+            $ins->execute([$caseId, $f['slot_key'], (int)$f['signer_user_id'], $f['signer_name'], $lastTs]);
         }
         $db->prepare("UPDATE fsd_case SET status='approved',submitted_at=NOW(),current_stage_seq=0,updated_at=NOW() WHERE id=?")->execute([$caseId]);
         $db->commit();
