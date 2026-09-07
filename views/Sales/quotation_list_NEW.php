@@ -445,8 +445,15 @@ body { background:var(--bg); }
 /* 帶入目標列提示（歷史分頁 postMessage 回來時閃爍，確認帶到正確的列）*/
 .hq-target-flash { animation: hqFlash 1s ease-in-out 3; }
 @keyframes hqFlash { 0%,100% { background:transparent; } 50% { background:#F7E0BD; } }
-/* 檢視畫面「帶入」欄：僅由原報價單分頁以 ?hq_pick=1 開啟時才出現 */
-tr.hq-pick-hit > td { background:#fdf6ec; }
+/* 歷史報價檢視跳窗 */
+#hqQuoteBody tr.hq-modal-hit > td { background:#fdf6ec; }
+#hqOptBar {
+    display:flex; flex-wrap:wrap; align-items:center; gap:4px 16px;
+    font-size:12px; color:#6B471A; background:#faf6f0;
+    border:1px solid #efe7db; border-radius:3px; padding:6px 12px; margin-bottom:8px;
+}
+#hqOptBar label { font-weight:normal; margin:0; cursor:pointer; display:inline-flex; align-items:center; gap:4px; }
+#hqOptBar input[type=checkbox] { margin:0; }
 
 /* ── 項次編號 + 重複項目提示（2026-09-07）── */
 .item-row-no {
@@ -1472,6 +1479,21 @@ tr.hq-pick-hit > td { background:#fdf6ec; }
   </div></div>
 </div>
 
+<!-- ══ 歷史報價單檢視 Modal（點下方歷史卡片開啟，可把該列製程／單價帶入目前報價單）══ -->
+<div class="modal fade" id="hqQuoteModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:1000px;max-width:96%;" role="document"><div class="modal-content">
+    <div class="modal-header" style="background:var(--primary);color:#fff;padding:12px 18px;">
+      <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.8;"><span>&times;</span></button>
+      <h4 class="modal-title" style="font-size:15px;" id="hqQuoteTitle"></h4>
+      <div id="hqQuoteSub" style="font-size:11.5px;opacity:.85;margin-top:2px;"></div>
+    </div>
+    <div class="modal-body" style="padding:12px 16px;" id="hqQuoteBody"></div>
+    <div class="modal-footer" style="padding:8px 16px;">
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button>
+    </div>
+  </div></div>
+</div>
+
 <!-- ══ 歷史紀錄 Modal（已刪除 + 列印紀錄 分頁）══ -->
 <div class="modal fade" id="historyLogModal" tabindex="-1" role="dialog">
   <div class="modal-dialog modal-lg" style="width:880px;max-width:96vw;" role="document"><div class="modal-content">
@@ -1836,21 +1858,6 @@ let _tempUploadQno = null;      // 新建報價有上傳但未儲存的 quote_no
 let defaultTolerance = { value: 5, unit: '%' };
 let currentUploadPath = '';
 
-// ── 歷史報價「開新分頁檢視 → 帶入」用的網址參數（2026-09-07）──
-// 只有由原報價單分頁以 ?hq_pick=1 開啟、且 window.opener 還活著時才進入挑選模式；
-// 一般使用者直接開這一頁完全不受影響（沒有這三個參數＝行為與原本完全相同）
-const HQ_PICK = (function () {
-    try {
-        const sp = new URLSearchParams(window.location.search);
-        if (sp.get('hq_pick') !== '1') return null;
-        if (!window.opener || window.opener.closed) return null;
-        return {
-            item_id: parseInt(sp.get('hq_item'), 10) || 0,
-            row    : sp.get('hq_row') || ''
-        };
-    } catch (e) { return null; }
-})();
-
 // ══════════════════════════════════════════════════════
 // 工具函式
 // ══════════════════════════════════════════════════════
@@ -1920,28 +1927,13 @@ $(document).ready(function () {
     // 通知點擊深連結：?open_id=quote_id 直接開啟該張報價單檢視畫面（比照CAR/QA的open_id慣例）
     (function () {
         var openId = parseInt(new URLSearchParams(window.location.search).get('open_id'), 10);
-        if (!(openId > 0)) return;
-        if (!HQ_PICK) { openViewMode(openId); return; }
-        // 帶入模式：製程名稱要靠 processTagTree 才顯示得出來（它是另一支非同步請求），
-        // 等它載完再開，否則畫面與確認視窗會看到空白製程；最多等 3 秒，逾時照常開
-        var waited = 0;
-        (function waitTree() {
-            if (processTagTree.length || waited >= 3000) { openViewMode(openId); return; }
-            waited += 100;
-            setTimeout(waitTree, 100);
-        })();
+        if (openId > 0) openViewMode(openId);
     })();
     // 簽核專屬頁(quotation_approval_view.php)以 window.open 開啟時，這裡是它的 opener——
     // 核准/駁回完成後該分頁會 postMessage 回來，這裡收到才主動重新整理清單/當前檢視畫面，
     // 避免使用者已開著的這頁清單/檢視在另一分頁簽核完後仍顯示舊的審核狀態
     window.addEventListener('message', function (ev) {
         if (!ev.data) return;
-        // 歷史報價分頁按下「帶入」→ 回填到當初點選的那一列（會再確認一次才寫入）
-        if (ev.data.type === 'quotation_hq_apply') {
-            if (ev.origin !== window.location.origin) return;   // 只收同來源的訊息
-            hqReceiveApply(ev.data);
-            return;
-        }
         // 補件審核頁(quotation_supplement_view.php)完成核准/駁回 → 更新補件待審徽章與清單、刷新檢視附件
         if (ev.data.type === 'quotation_supplement_done') {
             if (CAN_SIGN) refreshSuppReviewBadge();
@@ -4276,21 +4268,9 @@ function renderViewPanel(q, contact, detail) {
     const esc = s => escapeHtml(String(s||''));
     const fmtNum = n => (parseFloat(n||0)).toLocaleString('zh-TW', {minimumFractionDigits:0, maximumFractionDigits:2});
     const negLabel = q.is_negotiation == 1 ? '<small style="color:#c0392b;font-weight:bold;margin-right:2px;">議價</small>' : '';
-    // 「帶入」挑選模式：僅由原報價單分頁以 ?hq_pick=1 開啟時才多出這一欄，
-    // 一般檢視（含通知深連結 ?open_id=）完全維持原樣
-    const pickOn   = !!HQ_PICK;
-    const pickCell = (it, rowspan) => pickOn
-        ? `<td class="text-center" ${rowspan > 1 ? `rowspan="${rowspan}"` : ''} style="vertical-align:middle;white-space:nowrap;">
-               <button type="button" class="btn btn-xs hq-pick-btn" data-item="${esc(it.item_id)}"
-                       style="background:#8a5a2b;color:#fff;font-weight:600;"
-                       title="把這一列的製程與單價帶回原本的報價單"><i class="fa fa-sign-in"></i> 帶入</button>
-           </td>`
-        : '';
     let itemsHtml = '';
     (q.items || []).forEach((it, i) => {
         const isTiered = it.is_tiered == 1;
-        const pickHit  = pickOn && HQ_PICK.item_id && String(it.item_id) === String(HQ_PICK.item_id);
-        const trCls    = pickHit ? ' class="hq-pick-hit"' : '';
         // 品名規格欄：Spec_No+齒輪規格 / 製程 / 料號備註
         const leftSpec = [it.spec_no, it.gear_spec].filter(Boolean).join(' ');
         const desc = [leftSpec, it.process_names, it.specification].filter(Boolean).join(' / ');
@@ -4305,7 +4285,7 @@ function renderViewPanel(q, contact, detail) {
             const tolTxt = t => (t.tolerance_value === null || t.tolerance_value === undefined || t.tolerance_value === '')
                 ? '' : `<div style="font-size:10px;color:#a06a1f;">容差±${fmtNum(t.tolerance_value)}${esc(t.tolerance_unit || '')}${t.tolerance_note ? '｜' + esc(t.tolerance_note) : ''}</div>`;
             it.tiers.forEach((t, ti) => {
-                itemsHtml += `<tr${trCls}>
+                itemsHtml += `<tr>
                     ${ti===0 ? `<td rowspan="${it.tiers.length}" style="vertical-align:middle;text-align:center;">${i+1}</td>
                         <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:12px;">${qlDrawingSpan(it.product_id, it.d_setting_d_id)}</td>
                         <td rowspan="${it.tiers.length}" style="vertical-align:middle;font-size:11px;">${descHtml}<div style="font-size:10px;color:#888;">（階梯報價，單價依訂購數量區間）</div></td>` : ''}
@@ -4313,12 +4293,11 @@ function renderViewPanel(q, contact, detail) {
                     <td class="text-center">${esc(it.unit||'PCS')}</td>
                     <td class="text-right">${negLabel}${fmtNum(t.unit_price)}</td>
                     <td></td>
-                    ${ti===0 ? pickCell(it, it.tiers.length) : ''}
                 </tr>`;
             });
         } else {
             const amt = parseFloat(it.amount || 0);
-            itemsHtml += `<tr${trCls}>
+            itemsHtml += `<tr>
                 <td class="text-center">${i+1}</td>
                 <td style="font-size:12px;">${qlDrawingSpan(it.product_id, it.d_setting_d_id)}</td>
                 <td style="font-size:11px;">${descHtml}</td>
@@ -4326,7 +4305,6 @@ function renderViewPanel(q, contact, detail) {
                 <td class="text-center">${esc(it.unit||'PCS')}</td>
                 <td class="text-right">${negLabel}${fmtNum(it.unit_price)}</td>
                 <td class="text-right">${fmtNum(amt)}</td>
-                ${pickCell(it, 1)}
             </tr>`;
         }
         // 組合件子件清單（勾選顯示才出現；畫面超過 2 件收合）
@@ -4341,7 +4319,7 @@ function renderViewPanel(q, contact, detail) {
             const printBadge = it.print_bom == 1
                 ? `<span style="color:#c0392b;font-weight:normal;font-size:10px;">（列印時包含）</span>`
                 : `<span style="color:#aaa;font-weight:normal;font-size:10px;">（僅畫面顯示，不列印）</span>`;
-            itemsHtml += `<tr><td style="border-top:none;"></td><td colspan="${pickOn ? 7 : 6}" style="font-size:11px;color:#666;background:#faf7fd;border-top:none;padding:4px 8px;">
+            itemsHtml += `<tr><td style="border-top:none;"></td><td colspan="6" style="font-size:11px;color:#666;background:#faf7fd;border-top:none;padding:4px 8px;">
                 <div style="margin-bottom:2px;"><span style="color:#8e44ad;font-weight:700;"><i class="fa fa-sitemap"></i> 組合件子件清單</span> ${printBadge}</div>
                 <div style="padding-left:6px;border-left:2px solid #d8c3ef;line-height:1.6;">
                 ${head}
@@ -4373,20 +4351,14 @@ function renderViewPanel(q, contact, detail) {
         </div>
     </div>
     ${noteHtml ? `<div style="font-size:13px;margin-bottom:10px;padding:8px 12px;background:#fafafa;border-left:3px solid var(--accent);border-radius:3px;"><strong>備註：</strong><br>${noteHtml}</div>` : ''}
-    ${pickOn ? `<div id="hqPickBar" style="margin-bottom:8px;padding:7px 12px;background:#fdf6ec;border:1px solid #e4c293;border-left:4px solid #F0A24B;border-radius:3px;font-size:12px;color:#6B471A;">
-        <i class="fa fa-sign-in"></i> <b>帶入模式</b>：這是從報價單編輯畫面開啟的歷史報價單。
-        確認下方哪一列才是要參考的項目後，按該列的「帶入」把<b>製程與單價</b>回填到原本那一列（原分頁會再確認一次才寫入）。
-        ${HQ_PICK.item_id ? '淺色標示的列＝原分頁點到的那一筆歷史紀錄。' : ''}
-    </div>` : ''}
     <table class="table table-condensed table-bordered view-item-table" style="margin-bottom:4px;">
         <thead><tr>
             <th style="width:4%;text-align:center;">#</th><th style="width:16%;">料號</th>
             <th>品名規格／加工項目 / 備註</th>
             <th style="width:7%;text-align:right;">數量</th><th style="width:6%;text-align:center;">單位</th>
             <th style="width:10%;text-align:right;">單價</th><th style="width:11%;text-align:right;">金額</th>
-            ${pickOn ? '<th style="width:8%;text-align:center;">帶入</th>' : ''}
         </tr></thead>
-        <tbody>${itemsHtml||`<tr><td colspan="${pickOn ? 8 : 7}" class="text-center text-muted">無報價項目</td></tr>`}</tbody>
+        <tbody>${itemsHtml||'<tr><td colspan="7" class="text-center text-muted">無報價項目</td></tr>'}</tbody>
     </table>
     <div id="viewAttachSection" style="margin-top:10px;">
         <div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:6px;display:flex;align-items:center;gap:5px;">
@@ -4402,7 +4374,6 @@ function renderViewPanel(q, contact, detail) {
         <span style="font-size:11px;color:#999;margin-left:6px;">已核准報價單追加附件，需經簽核者審核通過才會正式放入此報價單</span>
     </div>` : ''}`;
     $('#viewBody').html(html);
-    if (pickOn) hqBindPickButtons(q);   // 帶入模式：綁定每一列的「帶入」鈕
     // 記住目前檢視單的料號清單（product_id，與 linked_parts 儲存格式一致；供補件 modal 下拉使用）
     _viewQuoteParts = [...new Set((q.items || []).map(it => it.product_id).filter(Boolean))];
     loadFileList(q.quote_no, true);
@@ -6642,12 +6613,9 @@ function renderBomArea($tr) {
 }
 
 // ══════════════════════════════════════════════════════
-// 歷史報價：顯示製程／數量並與目前這列比對 → 點擊開新分頁檢視 → 由該分頁按「帶入」回填
+// 歷史報價：顯示製程／數量並與目前這列比對 → 點擊跳窗檢視 → 在跳窗裡按「帶入」回填
 // （2026-09-07 新增。原本點卡片＝直接帶單價，該行為保留為卡片上的「帶單價」小按鈕）
 // ══════════════════════════════════════════════════════
-
-// 記住「哪一列按下了哪一張歷史單」，帶入回來時用來確認沒有帶錯列
-const HQ_PENDING = {};
 
 // sub_tag_id 陣列 → 製程中文名（查不到名稱就顯示 #id，不要整段空白讓人以為沒製程）
 function hqSubTagNames(ids) {
@@ -6762,157 +6730,181 @@ function renderHqChips($itemRow) {
         if (parseInt($itemRow.data('is-tiered')) === 1) return;
         $itemRow.find('.unit-price').val(price).trigger('input');
     });
-    // 點卡片＝開新分頁檢視這張歷史報價單
+    // 點卡片＝跳窗檢視這張歷史報價單
     $wrap.find('.hq-chip').on('click', function () {
         const r = list[parseInt($(this).data('idx'))];
-        if (r) hqOpenHistoryTab($itemRow, r);
+        if (r) hqOpenHistoryModal($itemRow, r);
     });
 }
 
-// 開新分頁檢視歷史報價單；帶上這一列的識別碼，讓該分頁按「帶入」時能回填到正確的列
-function hqOpenHistoryTab($itemRow, r) {
-    let token = $itemRow.data('hq-token');
-    if (!token) {
-        token = 'hq' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
-        $itemRow.data('hq-token', token);
-    }
-    HQ_PENDING[token] = {
-        product_id: ($itemRow.find('.product_id_hidden').val() || '').trim(),
-        part_text : ($itemRow.find('.part-search').val() || '').trim(),
-        quote_no  : r.quote_no || ''
+// ──────────────────────────────────────────────
+// 跳窗檢視歷史報價單 →（在跳窗內）按「帶入」回填到當初點選的那一列
+// 刻意用跳窗不開新分頁：留在同一頁才知道要帶回哪一列，也不會把使用者切走
+// ──────────────────────────────────────────────
+let _hqCtx = null;   // { $row, productId, itemId, quote }
+
+function hqOpenHistoryModal($itemRow, r) {
+    _hqCtx = {
+        $row      : $itemRow,
+        productId : ($itemRow.find('.product_id_hidden').val() || '').trim(),
+        itemId    : parseInt(r.item_id) || 0,
+        quote     : null
     };
-    const url = 'quotation_list_NEW.php?open_id=' + encodeURIComponent(r.quote_id)
-              + '&hq_pick=1&hq_item=' + encodeURIComponent(r.item_id)
-              + '&hq_row='  + encodeURIComponent(token);
-    window.open(url, '_blank');
-}
+    const rowNo = $('#quoteItemsTable > tbody > tr.item-row').index($itemRow) + 1;
+    $('#hqQuoteTitle').html(`<i class="fa fa-history" style="margin-right:7px;"></i>歷史報價單 ${escapeHtml(r.quote_no || '')}`);
+    $('#hqQuoteSub').text(`帶入目標：第 ${rowNo} 列`);
+    $('#hqQuoteBody').html('<div class="text-center text-muted" style="padding:40px;"><i class="fa fa-spinner fa-spin fa-2x"></i></div>');
+    $('#hqQuoteModal').modal('show');
 
-// ──────────────────────────────────────────────
-// 【歷史分頁這一側】按下「帶入」→ 確認要帶什麼 → postMessage 回原分頁
-// ──────────────────────────────────────────────
-function hqBindPickButtons(q) {
-    const items = q.items || [];
-    $('#viewBody').find('.hq-pick-btn').off('click').on('click', function () {
-        const iid = String($(this).data('item'));
-        const it  = items.find(x => String(x.item_id) === iid);
-        if (!it) { Swal.fire('錯誤', '找不到這一列的資料，請重新整理頁面。', 'error'); return; }
-        hqAskAndSend(q, it);
+    $.get(API_URL, { action: 'get_print_data', quote_id: r.quote_id }, res => {
+        if (!res || !res.success || !res.quote) {
+            $('#hqQuoteBody').html('<div class="text-center text-danger" style="padding:30px;">載入失敗，請關閉後重試</div>');
+            return;
+        }
+        const q = res.quote;
+        (q.items || []).forEach(it => { it._subIds = hqRowSubTagIds(it); });
+        _hqCtx.quote = q;
+        hqRenderQuoteModal(q);
+    }).fail(() => {
+        $('#hqQuoteBody').html('<div class="text-center text-danger" style="padding:30px;">與伺服器通訊失敗</div>');
     });
 }
 
-function hqAskAndSend(q, it) {
-    if (!window.opener || window.opener.closed) {
-        Swal.fire('無法帶入', '原本的報價單分頁已經關閉了。請回到報價單編輯畫面，重新點一次歷史紀錄。', 'warning');
-        return;
-    }
-    const e2       = s => escapeHtml(String(s == null ? '' : s));
-    const subIds   = hqRowSubTagIds(it);
-    const procTxt  = (it.process_names || hqSubTagNames(subIds)) || '（無製程）';
-    const isTier   = (it.is_tiered == 1 && (it.tiers || []).length) ? 1 : 0;
-    const priceTxt = isTier
-        ? '階梯 ' + it.tiers.map(t => `${formatNumber(t.qty_min)}+:${formatNumber(t.unit_price)}`).join(' / ')
-        : formatNumber(it.unit_price);
+function hqRenderQuoteModal(q) {
+    const e2     = s => escapeHtml(String(s == null ? '' : s));
+    const fmtNum = n => (parseFloat(n || 0)).toLocaleString('zh-TW', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    const curIds = _hqCtx ? getProcSelectedSubTags(_hqCtx.$row.find('.process-cell')) : [];
 
-    Swal.fire({
-        title: '帶入到原本的報價單',
-        html: `<div style="text-align:left;font-size:13px;line-height:1.95;">
-            <div style="margin-bottom:6px;color:#a08a6f;">來源：${e2(q.quote_no)}　料號 <b>${e2(it.product_id)}</b></div>
-            <label style="display:block;font-weight:normal;"><input type="checkbox" id="hqOptProc" checked> 製程：<b>${e2(procTxt)}</b></label>
-            <label style="display:block;font-weight:normal;"><input type="checkbox" id="hqOptPrice" checked> 單價：<b>${e2(priceTxt)}</b>${isTier ? '（含階梯區間）' : ''}</label>
-            <label style="display:block;font-weight:normal;"><input type="checkbox" id="hqOptQty"> 數量：<b>${e2(formatNumber(it.quantity))} ${e2(it.unit || 'PCS')}</b></label>
-            <div style="margin-top:8px;color:#a08a6f;font-size:11.5px;">
-                按下「帶入」後不會直接寫入——原分頁會先顯示「要帶到哪一列」讓您再確認一次。</div>
-        </div>`,
-        showCancelButton: true, confirmButtonText: '帶入', cancelButtonText: '取消',
-        confirmButtonColor: '#8a5a2b',
-        preConfirm: () => ({
-            proc : document.getElementById('hqOptProc').checked,
-            price: document.getElementById('hqOptPrice').checked,
-            qty  : document.getElementById('hqOptQty').checked
-        })
-    }).then(res => {
-        const opt = res && res.value;
-        if (!opt) return;
-        if (!opt.proc && !opt.price && !opt.qty) {
-            Swal.fire('未帶入', '三個項目都沒有勾選，沒有任何內容被帶入。', 'info');
-            return;
-        }
-        if (!window.opener || window.opener.closed) {
-            Swal.fire('無法帶入', '原本的報價單分頁已經關閉了。', 'warning');
-            return;
-        }
-        const payload = {
-            quote_no: q.quote_no, quote_id: q.quote_id, item_id: it.item_id,
-            product_id: it.product_id,
-            with_proc: !!opt.proc, with_price: !!opt.price, with_qty: !!opt.qty,
-            process_notes: subIds.join(','),
-            process_group_type: it.process_group_type || 'single_process',
-            process_names: procTxt,
-            is_tiered: isTier,
-            unit_price: it.unit_price,
-            tiers: (it.tiers || []).map(t => ({
-                qty_min: t.qty_min, qty_max: t.qty_max, unit_price: t.unit_price,
-                tolerance_value: t.tolerance_value, tolerance_unit: t.tolerance_unit,
-                tolerance_note: t.tolerance_note
-            })),
-            quantity: it.quantity, unit: it.unit
-        };
-        try {
-            window.opener.postMessage(
-                { type: 'quotation_hq_apply', row: HQ_PICK.row, payload: payload },
-                window.location.origin
-            );
-            window.opener.focus();
-        } catch (err) {
-            Swal.fire('無法帶入', '與原分頁溝通失敗，請回到報價單編輯畫面手動輸入。', 'error');
-            return;
-        }
-        Swal.fire({
-            icon: 'success', title: '已送到原分頁',
-            html: '請切回原本的報價單分頁按下「確定帶入」完成回填。<br><small style="color:#a08a6f;">這個分頁可以繼續檢視，或直接關閉。</small>',
-            confirmButtonColor: '#8a5a2b'
-        });
+    let rows = '';
+    (q.items || []).forEach((it, i) => {
+        const subIds  = it._subIds || [];
+        const procTxt = hqSubTagNames(subIds) || '（無製程）';
+        const m       = hqMatchInfo(curIds, subIds);
+        const isTier  = (it.is_tiered == 1 && (it.tiers || []).length) ? 1 : 0;
+        const hit     = _hqCtx && _hqCtx.itemId && String(it.item_id) === String(_hqCtx.itemId);
+        const priceHtml = isTier
+            ? (it.tiers.map(t => `<div style="white-space:nowrap;">${fmtNum(t.qty_min)}+ ： ${fmtNum(t.unit_price)}</div>`).join('')
+               + '<div style="font-size:10px;color:#a08a6f;">階梯報價</div>')
+            : fmtNum(it.unit_price);
+        rows += `<tr class="${hit ? 'hq-modal-hit' : ''}">
+            <td class="text-center">${i + 1}</td>
+            <td style="font-size:12px;word-break:break-all;">${e2(it.product_id)}
+                ${hit ? '<div style="font-size:10px;color:#8a5a2b;">← 您點的那一筆</div>' : ''}</td>
+            <td style="font-size:11.5px;">${e2(procTxt)}
+                <div style="margin-top:2px;"><span class="hq-mt ${m.cls}">${m.txt}</span></div></td>
+            <td style="font-size:11px;color:#a08a6f;">${e2(it.specification || '')}</td>
+            <td class="text-right">${isTier ? '—' : fmtNum(it.quantity)}</td>
+            <td class="text-center">${e2(it.unit || 'PCS')}</td>
+            <td class="text-right">${priceHtml}</td>
+            <td class="text-center" style="white-space:nowrap;">
+                <button type="button" class="btn btn-xs hq-pick-btn" data-idx="${i}"
+                        style="background:#8a5a2b;color:#fff;font-weight:600;"
+                        title="把這一列的製程與單價帶入報價單"><i class="fa fa-sign-in"></i> 帶入</button>
+            </td>
+        </tr>`;
+    });
+
+    const noteHtml = q.note
+        ? q.note.split(/[；;]/).map(s => s.trim()).filter(Boolean).map(e2).join('<br>') : '';
+
+    $('#hqQuoteBody').html(`
+        <div style="display:flex;flex-wrap:wrap;gap:6px 22px;font-size:12.5px;color:#6B471A;
+                    background:#fdf6ec;border:1px solid #e4c293;border-radius:3px;padding:6px 12px;margin-bottom:8px;">
+            <span>客戶：<b>${e2(q.client_name)}</b></span>
+            <span>報價日期：<b>${e2(q.quote_date ? String(q.quote_date).replace(/-/g, '.') : '—')}</b></span>
+            <span>幣別：<b>${e2(q.currency === 'TWD' ? 'NTD' : (q.currency || 'NTD'))}</b></span>
+            <span>業務：<b>${e2(q.created_by_name || '')}</b></span>
+            <span>總金額：<b>${fmtNum(q.total_amount)}</b></span>
+            ${q.is_negotiation == 1 ? '<span style="color:#c0392b;font-weight:700;">議價</span>' : ''}
+        </div>
+        ${noteHtml ? `<div style="font-size:12px;margin-bottom:8px;padding:6px 10px;background:#fafafa;
+                       border-left:3px solid #d8c7b0;border-radius:3px;"><b>備註：</b><br>${noteHtml}</div>` : ''}
+        <div id="hqOptBar">
+            <b>要帶入的欄位：</b>
+            <label><input type="checkbox" id="hqOptProc" checked> 製程</label>
+            <label><input type="checkbox" id="hqOptPrice" checked> 單價（含階梯）</label>
+            <label><input type="checkbox" id="hqOptQty"> 數量</label>
+            <span style="color:#a08a6f;">勾好之後，按下方那一列的「帶入」；按下後還會再確認一次才寫入。</span>
+        </div>
+        <div style="max-height:52vh;overflow:auto;">
+        <table class="table table-condensed table-bordered" style="margin:0;font-size:12.5px;">
+            <thead><tr style="background:#faf6f0;">
+                <th style="width:38px;text-align:center;">#</th>
+                <th style="width:150px;">料號</th>
+                <th>製程</th>
+                <th style="width:120px;">料號備註</th>
+                <th style="width:66px;text-align:right;">數量</th>
+                <th style="width:56px;text-align:center;">單位</th>
+                <th style="width:104px;text-align:right;">單價</th>
+                <th style="width:78px;text-align:center;">帶入</th>
+            </tr></thead>
+            <tbody>${rows || '<tr><td colspan="8" class="text-center text-muted">此報價單沒有項目</td></tr>'}</tbody>
+        </table></div>`);
+
+    $('#hqQuoteBody').find('.hq-pick-btn').on('click', function () {
+        const it = (q.items || [])[parseInt($(this).data('idx'))];
+        if (it) hqPickFromModal(q, it);
     });
 }
 
-// ──────────────────────────────────────────────
-// 【原分頁這一側】收到帶入 → 找回正確的列 → 再確認一次 → 寫入
-// ──────────────────────────────────────────────
-function hqReceiveApply(msg) {
-    const p     = msg.payload || {};
-    const token = msg.row || '';
-    const warn  = t => Swal.fire('未帶入', t, 'warning');
+// 跳窗裡按下某一列的「帶入」：先關跳窗，再把目標列標示出來確認一次才寫入
+function hqPickFromModal(q, it) {
+    const warn = t => Swal.fire('未帶入', t, 'warning');
+    const opt  = {
+        proc : $('#hqOptProc').is(':checked'),
+        price: $('#hqOptPrice').is(':checked'),
+        qty  : $('#hqOptQty').is(':checked')
+    };
+    if (!opt.proc && !opt.price && !opt.qty) {
+        Swal.fire('未帶入', '「要帶入的欄位」三個都沒有勾選，沒有任何內容被帶入。', 'info');
+        return;
+    }
+    if (!_hqCtx || !_hqCtx.$row || !_hqCtx.$row.length) { warn('找不到要帶入的報價列，請關閉後重新點一次歷史紀錄。'); return; }
 
-    if (!$('#editorPanel').is(':visible')) {
-        warn('原本的報價單編輯畫面已經關閉或切換掉了，為避免帶錯資料，這次沒有帶入任何內容。');
+    const $row = _hqCtx.$row;
+    // 這一列還在畫面上嗎（可能已被刪除、或整個編輯器已重新載入）
+    if (!$.contains(document, $row[0]) || !$('#editorPanel').is(':visible')) {
+        warn('原本那一列已經不在畫面上了（可能已刪除或重新載入過），為避免帶錯資料，這次沒有帶入任何內容。');
         return;
     }
-    const $rows = $('#quoteItemsTable > tbody > tr.item-row').filter(function () {
-        return $(this).data('hq-token') === token;
-    });
-    if ($rows.length !== 1) {
-        warn('找不到當初點選歷史紀錄的那一列（可能已被刪除或重新載入過），這次沒有帶入任何內容。');
-        return;
-    }
-    const $row   = $rows.first();
-    const expect = (HQ_PENDING[token] && HQ_PENDING[token].product_id) || '';
     const nowPid = ($row.find('.product_id_hidden').val() || '').trim();
-    if (expect && nowPid && nowPid !== expect) {
-        warn(`那一列的料號已經被改成「${escapeHtml(nowPid)}」（原本是「${escapeHtml(expect)}」），為避免帶錯資料，這次沒有帶入任何內容。`);
+    if (_hqCtx.productId && nowPid && nowPid !== _hqCtx.productId) {
+        warn(`那一列的料號已經被改成「${escapeHtml(nowPid)}」（原本是「${escapeHtml(_hqCtx.productId)}」），為避免帶錯資料，這次沒有帶入任何內容。`);
         return;
     }
 
-    // 讓使用者親眼看到要帶到哪一列
-    const $all  = $('#quoteItemsTable > tbody > tr.item-row');
-    const rowNo = $all.index($row) + 1;
+    const subIds  = it._subIds || hqRowSubTagIds(it);
+    const isTier  = (it.is_tiered == 1 && (it.tiers || []).length) ? 1 : 0;
+    const p = {
+        quote_no: q.quote_no,
+        with_proc: opt.proc, with_price: opt.price, with_qty: opt.qty,
+        process_notes: subIds.join(','),
+        process_group_type: it.process_group_type || 'single_process',
+        process_names: hqSubTagNames(subIds) || '（無製程）',
+        is_tiered: isTier,
+        unit_price: it.unit_price,
+        tiers: (it.tiers || []).map(t => ({
+            qty_min: t.qty_min, qty_max: t.qty_max, unit_price: t.unit_price,
+            tolerance_value: t.tolerance_value, tolerance_unit: t.tolerance_unit,
+            tolerance_note: t.tolerance_note
+        })),
+        quantity: it.quantity, unit: it.unit
+    };
+
+    // 先關跳窗再確認，才看得到被標示的目標列（也避免跳窗與確認視窗疊在一起）
+    $('#hqQuoteModal').one('hidden.bs.modal', () => hqConfirmApply($row, p, nowPid));
+    $('#hqQuoteModal').modal('hide');
+}
+
+// 把目標列捲到畫面中央＋閃爍標示，列出變更前→後，確認後才真的寫入
+function hqConfirmApply($row, p, nowPid) {
+    const rowNo = $('#quoteItemsTable > tbody > tr.item-row').index($row) + 1;
     $row.addClass('hq-target-flash');
     setTimeout(() => $row.removeClass('hq-target-flash'), 3200);
     try { $row[0].scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
-    window.focus();
 
     const e2      = s => escapeHtml(String(s == null ? '' : s));
-    const $cell   = $row.find('.process-cell');
-    const curProc = hqSubTagNames(getProcSelectedSubTags($cell)) || '（未選）';
+    const curProc = hqSubTagNames(getProcSelectedSubTags($row.find('.process-cell'))) || '（未選）';
     const curTier = parseInt($row.data('is-tiered')) === 1;
     const curPri  = curTier ? '（目前為階梯報價）' : (($row.find('.unit-price').val() || '').trim() || '（空白）');
     const curQty  = curTier ? '（目前為階梯報價）' : (($row.find('.quantity').val() || '').trim() || '（空白）');
