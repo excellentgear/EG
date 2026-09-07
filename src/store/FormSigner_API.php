@@ -381,7 +381,9 @@ case 'case_get': {
     jout([
         'case'=>$case, 'schema'=>$schema, 'responses'=>$responses, 'current_stage'=>$curStage,
         'can_advisory_respond'=>$canAdvisory, 'can_decision_respond'=>$canDecision,
-        'can_edit_fields'=>$case['status']==='draft' && ($isOwner || $perms['canAdmin']),
+        'can_edit_fields'=>($case['status']==='draft' && ($isOwner || $perms['canAdmin'])) || fsd_can_post_edit($case, $uid),
+        // 已完成案件的事後編修（改/加圖章位置、更換附件）＝僅超級管理員(id=1)，2026-09-07 使用者拍板
+        'can_post_edit'=>fsd_can_post_edit($case, $uid),
         'can_delete_draft'=>$case['status']==='draft' && ($isOwner || $perms['canAdmin']),
         'can_delete_hard'=>$canDeleteHard, 'can_delete_soft'=>$canDeleteSoft,
         // 草稿：申請人本人或管理員可設填表人（不然「預設未選定」會沒人設得了）；已送出：仍限超級管理員回改
@@ -390,7 +392,7 @@ case 'case_get': {
         'filler_stamped'=>fsd_case_filler_stamped_count($db, $case), // 已蓋幾個填表人章（換人前跳確認用）
         'pages'=>fsd_case_pages_get($db, $id),
         // 補案件的圖章框要附上人員姓名與該章自己綁的圖章模板 schema（一般案件是全部共用樣板那一個模板）
-        'fields'=>fsd_is_backfill($case) ? fsd_backfill_fields_for_view($db, $id) : fsd_case_field_list($db, $id),
+        'fields'=>fsd_case_fields_for_view($db, $id, $case),
         'field_whitelist'=>array_keys(fsd_case_field_whitelist($db, $case)),
         'as_doc_no'=>fsd_case_asdoc_no($db, $case),
         'company_name'=>eg_company_full_name($db),
@@ -434,9 +436,13 @@ case 'case_replace_file': {
     $id = (int)($_POST['case_id'] ?? 0);
     $case = fsd_case_get($db, $id);
     if (!$case) jerr('找不到此案件', 404);
+    $postEdit = fsd_can_post_edit($case, $uid);
+    // 已完成案件更換附件＝只有超級管理員（使用者 2026-09-07 拍板）；換完框選一律清空要重新框
+    if ($case['status'] !== 'draft' && !$postEdit) jerr('已完成的案件只有超級管理員可以更換附件', 403);
     if ((int)$case['applicant_id'] !== $uid && !$perms['canAdmin']) jerr('只有申請人本人或管理員可以編輯', 403);
     $doc = fsd_case_upload_doc($db, 'files');
-    $r = fsd_case_replace_file_doc($db, $id, $doc);
+    $r = fsd_case_replace_file_doc($db, $id, $doc, $postEdit);
+    if (!empty($r['ok']) && $postEdit) fsd_post_edit_audit($db, $uid, $uname, $id, '更換已完成案件的附件（框選已清空）');
     if (!$r['ok']) jerr($r['msg']);
     jout([]);
 }
@@ -503,10 +509,14 @@ case 'case_field_save': {
     $id = (int)($_POST['case_id'] ?? 0);
     $case = fsd_case_get($db, $id);
     if (!$case) jerr('找不到此案件', 404);
+    $postEdit = fsd_can_post_edit($case, $uid);
+    // 已完成的案件只有超級管理員能編修（草稿維持原本：申請人本人或管理員）
+    if (!$postEdit && $case['status'] !== 'draft') jerr('已完成的案件只有超級管理員可以編修', 403);
     if ((int)$case['applicant_id'] !== $uid && !$perms['canAdmin']) jerr('只有申請人本人或管理員可以編輯', 403);
     $field = json_decode((string)($_POST['field'] ?? '{}'), true);
     if (!is_array($field)) jerr('框選資料格式不正確');
-    $r = fsd_case_field_save($db, $id, $field);
+    $r = fsd_case_field_save($db, $id, $field, $postEdit);
+    if (!empty($r['ok']) && $postEdit) fsd_post_edit_audit($db, $uid, $uname, $id, '調整圖章/回覆框位置');
     if (!$r['ok']) jerr($r['msg']);
     jout(['id'=>$r['id'], 'fields'=>$r['fields']]);
 }
@@ -516,9 +526,12 @@ case 'case_field_delete': {
     $id = (int)($_POST['case_id'] ?? 0);
     $case = fsd_case_get($db, $id);
     if (!$case) jerr('找不到此案件', 404);
+    $postEdit = fsd_can_post_edit($case, $uid);
+    if (!$postEdit && $case['status'] !== 'draft') jerr('已完成的案件只有超級管理員可以編修', 403);
     if ((int)$case['applicant_id'] !== $uid && !$perms['canAdmin']) jerr('只有申請人本人或管理員可以編輯', 403);
     $fieldId = (int)($_POST['field_id'] ?? 0);
-    $r = fsd_case_field_delete($db, $id, $fieldId);
+    $r = fsd_case_field_delete($db, $id, $fieldId, $postEdit);
+    if ($postEdit) fsd_post_edit_audit($db, $uid, $uname, $id, '刪除圖章/回覆框');
     jout(['fields'=>$r['fields']]);
 }
 
@@ -528,9 +541,11 @@ case 'case_field_delete_page': {
     $id = (int)($_POST['case_id'] ?? 0);
     $case = fsd_case_get($db, $id);
     if (!$case) jerr('找不到此案件', 404);
+    $postEdit = fsd_can_post_edit($case, $uid);
+    if (!$postEdit && $case['status'] !== 'draft') jerr('已完成的案件只有超級管理員可以編修', 403);
     if ((int)$case['applicant_id'] !== $uid && !$perms['canAdmin']) jerr('只有申請人本人或管理員可以編輯', 403);
     $pageNo = (int)($_POST['page_no'] ?? 0);
-    $r = fsd_case_field_delete_by_page($db, $id, $pageNo);
+    $r = fsd_case_field_delete_by_page($db, $id, $pageNo, $postEdit);
     if (!$r['ok']) jerr($r['msg']);
     jout(['fields'=>$r['fields']]);
 }
@@ -572,10 +587,15 @@ case 'backfill_update_head': {
 
 case 'backfill_field_save': {
     fsd_need_csrf();
-    if (!$perms['canAdmin']) jerr('僅管理員可使用補案件功能', 403);
+    $bfCaseId = (int)($_POST['case_id'] ?? 0);
+    $bfCase   = fsd_case_get($db, $bfCaseId);
+    $postEdit = fsd_can_post_edit($bfCase, $uid);   // 已完成案件補蓋圖章＝僅超級管理員
+    if (!$postEdit && !$perms['canAdmin']) jerr('僅管理員可使用補案件功能', 403);
+    if (!$postEdit && $bfCase && $bfCase['status'] !== 'draft') jerr('已完成的案件只有超級管理員可以編修', 403);
     $field = json_decode((string)($_POST['field'] ?? '{}'), true);
     if (!is_array($field)) jerr('圖章資料格式不正確');
-    $r = fsd_backfill_field_save($db, (int)($_POST['case_id'] ?? 0), $field);
+    $r = fsd_backfill_field_save($db, $bfCaseId, $field, $postEdit);
+    if (!empty($r['ok']) && $postEdit) fsd_post_edit_audit($db, $uid, $uname, $bfCaseId, '新增/調整事後補蓋的圖章');
     if (!$r['ok']) jerr($r['msg']);
     jout(['id'=>$r['id'], 'fields'=>$r['fields']]);
 }

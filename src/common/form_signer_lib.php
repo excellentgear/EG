@@ -1379,16 +1379,19 @@ function fsd_case_create_draft_images(PDO $db, int $templateId, int $uid, string
 }
 
 /** 草稿階段更換文件：整批換掉，之前框選的位置一併清空(避免對到舊文件版面)；已產生的匯出PDF一併作廢。 */
-function fsd_case_replace_file_doc(PDO $db, int $caseId, array $doc): array {
+function fsd_case_replace_file_doc(PDO $db, int $caseId, array $doc, bool $postEdit = false): array {
     $case = fsd_case_get($db, $caseId);
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
-    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可更換文件'];
+    if ($case['status'] !== 'draft' && !$postEdit) return ['ok'=>false, 'msg'=>'僅草稿狀態可更換文件'];
     if (fsd_case_doc_empty($doc)) return ['ok'=>false, 'msg'=>'請上傳要簽核的文件'];
     $isPdf = (($doc['type'] ?? 'image') === 'pdf');
     $db->beginTransaction();
     try {
         $db->prepare("UPDATE fsd_case SET file_type=?,file_name=?,export_pdf_name=NULL,export_pdf_at=NULL,export_mode=NULL,updated_at=NOW() WHERE id=?")
            ->execute([$isPdf ? 'pdf' : 'image', $isPdf ? $doc['file_name'] : null, $caseId]);
+        // 框選一律清空重新框（使用者拍板）；連帶把「事後補蓋的章」自己的簽核紀錄也清掉，
+        // 正式關卡簽出來的紀錄一律保留（那是真的簽核歷史，不因為換一份掃描檔而消失）。
+        if ($postEdit) $db->prepare("DELETE FROM fsd_case_response WHERE case_id=? AND slot_key LIKE 'pe%'")->execute([$caseId]);
         $db->prepare("DELETE FROM fsd_case_field WHERE case_id=?")->execute([$caseId]);
         fsd_case_doc_pages_write($db, $caseId, $doc);
         $db->commit();
@@ -1537,10 +1540,11 @@ function fsd_case_field_list(PDO $db, int $caseId): array {
 }
 
 /** 存一個案件框選區塊；只允許草稿狀態編輯；(slot_key,box_type) 必須在樣板白名單內；圖章框最小尺寸驗證同樣板規則。 */
-function fsd_case_field_save(PDO $db, int $caseId, array $f): array {
+function fsd_case_field_save(PDO $db, int $caseId, array $f, bool $postEdit = false): array {
     $case = fsd_case_get($db, $caseId);
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
-    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可調整框選'];
+    if ($case['status'] !== 'draft' && !$postEdit) return ['ok'=>false, 'msg'=>'僅草稿狀態可調整框選'];
+    if ($postEdit) fsd_case_pdf_invalidate($db, $caseId);   // 位置動過＝已存檔的合成PDF作廢，下次開啟重新產生
     $slotKey = trim((string)($f['slot_key'] ?? ''));
     $boxType = ($f['box_type'] ?? '') === 'reply' ? 'reply' : 'stamp';
     $whitelist = fsd_case_field_whitelist($db, $case);
@@ -1574,21 +1578,82 @@ function fsd_case_field_save(PDO $db, int $caseId, array $f): array {
     return ['ok'=>true, 'id'=>$id, 'fields'=>fsd_case_field_list($db, $caseId)];
 }
 
-function fsd_case_field_delete(PDO $db, int $caseId, int $fieldId): array {
+function fsd_case_field_delete(PDO $db, int $caseId, int $fieldId, bool $postEdit = false): array {
     $case = fsd_case_get($db, $caseId);
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
-    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可調整框選'];
+    if ($case['status'] !== 'draft' && !$postEdit) return ['ok'=>false, 'msg'=>'僅草稿狀態可調整框選'];
+    // 事後編修刪掉的若是「事後補蓋的章」，它自己那筆簽核紀錄要一起刪掉（正式關卡的紀錄一律不動）
+    if ($postEdit) {
+        $st = $db->prepare("SELECT slot_key, signer_user_id FROM fsd_case_field WHERE id=? AND case_id=?");
+        $st->execute([$fieldId, $caseId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if ($row && (int)$row['signer_user_id'] && strpos((string)$row['slot_key'], 'pe') === 0) {
+            $db->prepare("DELETE FROM fsd_case_response WHERE case_id=? AND slot_key=?")->execute([$caseId, $row['slot_key']]);
+        }
+        fsd_case_pdf_invalidate($db, $caseId);
+    }
     $db->prepare("DELETE FROM fsd_case_field WHERE id=? AND case_id=?")->execute([$fieldId, $caseId]);
     return ['ok'=>true, 'fields'=>fsd_case_field_list($db, $caseId)];
 }
 
 /** 整頁清空框選(旋轉該頁時用)。 */
-function fsd_case_field_delete_by_page(PDO $db, int $caseId, int $pageNo): array {
+function fsd_case_field_delete_by_page(PDO $db, int $caseId, int $pageNo, bool $postEdit = false): array {
     $case = fsd_case_get($db, $caseId);
     if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
-    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可調整框選'];
+    if ($case['status'] !== 'draft' && !$postEdit) return ['ok'=>false, 'msg'=>'僅草稿狀態可調整框選'];
+    if ($postEdit) {
+        $db->prepare("DELETE r FROM fsd_case_response r JOIN fsd_case_field f
+                        ON f.case_id=r.case_id AND f.slot_key=r.slot_key
+                      WHERE r.case_id=? AND f.page_no=? AND f.slot_key LIKE 'pe%'")->execute([$caseId, $pageNo]);
+        fsd_case_pdf_invalidate($db, $caseId);
+    }
     $db->prepare("DELETE FROM fsd_case_field WHERE case_id=? AND page_no=?")->execute([$caseId, $pageNo]);
     return ['ok'=>true, 'fields'=>fsd_case_field_list($db, $caseId)];
+}
+
+/* ============================================================ 已完成案件的事後編修（僅超級管理員，2026-09-07 使用者要求） ============================================================
+ * 使用者拍板三項：①改圖章位置與更換附件都只有超級管理員可以做 ②更換附件後框選一律清空重新框
+ * ③可以新增圖章，每個新增的章各自指定人員與圖章模板（比照補案件），並在簽核紀錄各留一筆。
+ * 事後補蓋的章 slot_key 一律以 'pe' 開頭（post-edit），才分得出哪些是正式關卡簽的、哪些是事後補上的。 */
+
+/** 事後編修一律留稽核（改的是已經簽核完成的正式文件，要看得出誰在什麼時候動過什麼）。 */
+function fsd_post_edit_audit(PDO $db, int $uid, string $uname, int $caseId, string $what, array $extra = []): void {
+    try {
+        $case = fsd_case_get($db, $caseId);
+        $chg  = array_merge([['field' => '動作', 'old' => '', 'new' => $what]], $extra);
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('update','fsd_case_post_edit',?,?,?,?,?,NOW())")
+           ->execute([(string)$caseId, (string)($case['title'] ?? ''), json_encode($chg, JSON_UNESCAPED_UNICODE), $uid, $uname]);
+    } catch (Throwable $e) { /* 稽核寫入失敗不擋主要作業 */ }
+}
+
+/** 這件案子現在可不可以做事後編修：已完成(approved)＋超級管理員(id=1)。 */
+function fsd_can_post_edit(?array $case, int $uid): bool {
+    return $case && $uid === 1 && ($case['status'] ?? '') === 'approved';
+}
+
+/** 內容一經更動，已存檔的合成PDF就不再等於畫面內容，一律作廢讓它下次重新產生。 */
+function fsd_case_pdf_invalidate(PDO $db, int $caseId): void {
+    $db->prepare("UPDATE fsd_case SET export_pdf_name=NULL, export_pdf_at=NULL, export_mode=NULL, updated_at=NOW() WHERE id=?")
+       ->execute([$caseId]);
+}
+
+/** 事後補蓋的章要有自己的簽核紀錄（is_auto=1），時間走共用的 09:30~19:00 窗口並排在既有紀錄之後。 */
+function fsd_post_edit_sync_response(PDO $db, array $case, string $slotKey, int $signerId, ?string $signerName): void {
+    if (!$signerId || strpos($slotKey, 'pe') !== 0) return;
+    $caseId  = (int)$case['id'];
+    $bizDate = (string)($case['business_date'] ?: date('Y-m-d'));
+    $st = $db->prepare("SELECT id FROM fsd_case_response WHERE case_id=? AND slot_key=?");
+    $st->execute([$caseId, $slotKey]);
+    if ($id = (int)($st->fetchColumn() ?: 0)) {   // 只換人時更新姓名，時間保留（不要每拖一次章就跳一次時間）
+        $db->prepare("UPDATE fsd_case_response SET resolved_user_id=?, resolved_user_name=? WHERE id=?")
+           ->execute([$signerId, $signerName, $id]);
+        return;
+    }
+    $ts = eg_auto_sign_next_ts($db, $bizDate, fsd_auto_sign_last_ts($db, $caseId, $bizDate));
+    $db->prepare("INSERT INTO fsd_case_response (case_id,stage_seq,slot_key,resolved_user_id,resolved_user_name,decision,is_auto,reply_text,responded_at)
+                  VALUES (?,0,?,?,?,'approved',1,'（系統自動簽核）',?)")
+       ->execute([$caseId, $slotKey, $signerId, $signerName, $ts]);
 }
 
 /* ============================================================ 補案件（backfill；2026-08-17 使用者明確要求） ============================================================
@@ -1692,10 +1757,14 @@ function fsd_backfill_stamp_box(PDO $db, ?array $page, int $stampTplId): array {
 }
 
 /** 補案件的圖章框存檔（新增/移動/改人/改模板都走這支）。slot_key 由後端配（bf1..bf30），前端不需要也不可自訂。 */
-function fsd_backfill_field_save(PDO $db, int $caseId, array $f): array {
+function fsd_backfill_field_save(PDO $db, int $caseId, array $f, bool $postEdit = false): array {
     $case = fsd_case_get($db, $caseId);
-    if (!$case || !fsd_is_backfill($case)) return ['ok'=>false, 'msg'=>'找不到此補案件'];
-    if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可調整圖章'];
+    if (!$case) return ['ok'=>false, 'msg'=>'找不到此案件'];
+    // 事後編修時，一般案件也走這支（新增的章各自帶人員與模板＝跟補案件同一套），故不再限定補案件
+    if (!$postEdit && !fsd_is_backfill($case)) return ['ok'=>false, 'msg'=>'找不到此補案件'];
+    if ($case['status'] !== 'draft' && !$postEdit) return ['ok'=>false, 'msg'=>'僅草稿狀態可調整圖章'];
+    // 新增圖章時還沒選人是正常的（比照補案件：先放章再選人），所以這裡不擋；
+    // 沒有人員的章不會產生簽核紀錄、也畫不出東西，前端「完成編修」時會提醒還有幾個章沒指定人。
     $fieldId = (int)($f['id'] ?? 0);
     $pageNo  = (int)($f['page_no'] ?? 1);
     $x = (float)($f['x'] ?? 0); $y = (float)($f['y'] ?? 0);
@@ -1723,21 +1792,30 @@ function fsd_backfill_field_save(PDO $db, int $caseId, array $f): array {
     $w = $box['w']; $h = $box['h'];
     $x = max(0, min(1 - $w, $x));
     $y = max(0, min(1 - $h, $y));
+    // 事後編修在「已完成的案件」上補章，前綴用 pe（正式關卡簽的章一律不是 pe 開頭，兩者要分得出來）
+    $prefix = ($postEdit && !fsd_is_backfill($case)) ? 'pe' : 'bf';
     if ($fieldId) {
         $db->prepare("UPDATE fsd_case_field SET page_no=?,x=?,y=?,w=?,h=?,signer_user_id=?,signer_name=?,stamp_tpl_id=? WHERE id=? AND case_id=?")
            ->execute([$pageNo, $x, $y, $w, $h, $signerId ?: null, $signerName, $stampTpl ?: null, $fieldId, $caseId]);
+        $cur = $db->prepare("SELECT slot_key FROM fsd_case_field WHERE id=? AND case_id=?");
+        $cur->execute([$fieldId, $caseId]);
+        $slotKey = (string)($cur->fetchColumn() ?: '');
     } else {
         // slot_key 找目前沒用到的最小號碼（刪掉中間某個圖章後號碼可回收，不會因為累計新增而爆掉 bf30）
         $used = $db->prepare("SELECT slot_key FROM fsd_case_field WHERE case_id=?");
         $used->execute([$caseId]);
         $usedKeys = array_flip($used->fetchAll(PDO::FETCH_COLUMN));
         $slotKey = '';
-        for ($i = 1; $i <= FSD_BACKFILL_MAX_STAMPS; $i++) { if (!isset($usedKeys['bf' . $i])) { $slotKey = 'bf' . $i; break; } }
+        for ($i = 1; $i <= FSD_BACKFILL_MAX_STAMPS; $i++) { if (!isset($usedKeys[$prefix . $i])) { $slotKey = $prefix . $i; break; } }
         if ($slotKey === '') return ['ok'=>false, 'msg'=>'圖章數量已達上限 ' . FSD_BACKFILL_MAX_STAMPS . ' 個'];
         $db->prepare("INSERT INTO fsd_case_field (case_id,slot_key,box_type,page_no,x,y,w,h,signer_user_id,signer_name,stamp_tpl_id)
                       VALUES (?,?,'stamp',?,?,?,?,?,?,?,?)")
            ->execute([$caseId, $slotKey, $pageNo, $x, $y, $w, $h, $signerId ?: null, $signerName, $stampTpl ?: null]);
         $fieldId = (int)$db->lastInsertId();
+    }
+    if ($postEdit) {
+        fsd_post_edit_sync_response($db, $case, $slotKey, $signerId, $signerName);
+        fsd_case_pdf_invalidate($db, $caseId);
     }
     return ['ok'=>true, 'id'=>$fieldId, 'fields'=>fsd_case_field_list($db, $caseId)];
 }
@@ -1815,6 +1893,17 @@ function fsd_backfill_fields_for_view(PDO $db, int $caseId): array {
     }
     unset($f);
     return $fields;
+}
+
+/** 檢視/列印用的框選清單：補案件、以及一般案件裡「事後補蓋的章」都要附上人員與模板資訊，
+ *  沒有任何帶人員的框時就用原本輕量的清單（不必逐筆回推職稱）。 */
+function fsd_case_fields_for_view(PDO $db, int $caseId, ?array $case = null): array {
+    $case = $case ?: fsd_case_get($db, $caseId);
+    if (!$case) return [];
+    if (fsd_is_backfill($case)) return fsd_backfill_fields_for_view($db, $caseId);
+    $st = $db->prepare("SELECT COUNT(*) FROM fsd_case_field WHERE case_id=? AND signer_user_id IS NOT NULL");
+    $st->execute([$caseId]);
+    return (int)$st->fetchColumn() ? fsd_backfill_fields_for_view($db, $caseId) : fsd_case_field_list($db, $caseId);
 }
 
 /** 草稿→送出：轉 in_progress 並開始跑第1關（原本 fsd_case_create 送出部分抽出來，讓建立與送出分開兩步）。 */

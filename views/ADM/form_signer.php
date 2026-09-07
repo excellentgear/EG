@@ -282,6 +282,8 @@ $perms = fsd_perms($db, $fsdUser);
                 <label id="dtlPageNoWrap" style="display:none;margin:0 6px 0 0;font-size:12px;color:#5b3a1e;white-space:nowrap;"
                        title="關掉後，列印與匯出的 PDF 都不會在左下角印「第X頁／共Y頁」。單頁文件本來就不印頁碼。改動會讓已產生的 PDF 重新產生。">
                     <input type="checkbox" id="dtlPageNo" onchange="setPageNo(this.checked)"> 顯示頁碼</label>
+                <button id="btnPostEdit" style="display:none;color:#a13a24;border-color:#DD5138;" onclick="openFieldDesigner(CUR_CASE.id)"
+                        title="已完成案件的事後編修（僅超級管理員）：調整或新增圖章位置、更換附件"><i class="fa fa-pen"></i> 事後編修</button>
                 <button id="btnPdfOpen" style="display:none;" onclick="fsdOpenPdf(false)" title="開啟已存檔的合成PDF，可直接在檢視器內列印"><i class="fa fa-file-pdf-o"></i> PDF</button>
                 <button id="btnPdfDl" style="display:none;" onclick="fsdOpenPdf(true)" title="下載合成PDF檔"><i class="fa fa-download"></i> 下載PDF</button>
                 <button class="btn-warm" onclick="doPrint()"><i class="fa fa-print"></i> 列印</button>
@@ -471,7 +473,7 @@ $perms = fsd_perms($db, $fsdUser);
         ・<b>上傳 PDF 不會被轉成圖片</b>：匯出的 PDF 直接沿用原始 PDF 的頁面內容，畫質與原檔完全相同（掃描影像是原封不動搬過去的）；畫面上看到的預覽底圖才是轉圖產生的，只用來給您拖曳定位，不影響最終檔案。<br>
         ・<b>加密保護的 PDF 無法處理</b>，會在上傳當下就擋下並說明原因，請改上傳未加密的 PDF 或圖片檔——系統不會自動改用畫質較差的方式硬做。<br>
         ・PDF 裡的圖章大小與位置跟列印版一致（未綁定圖章模板＝固定 91px，有綁定＝該模板設定的實際尺寸，皆置中於框內）。<br>
-        ・<b>簽章依「業務日期當時」的職務解析</b>：自動解析的簽核人（部門自動主管／填表人・送出者上一階主管）、圖章上印的部門職稱、以及補案件挑人時看到的部門職稱，一律回推該案件業務日期當時的狀態，不是這個人現在的職務。例：2023 年的舊表單，當年是倉管組長、現在已升課長，仍會印當年的職務。資料來源是<b>員工管理→異動紀錄</b>；沒補登過異動的人一律用現況（與以前完全相同）。補歷史文件時當年在職、現已離職的人也解析得到。<br>・<b>列表一頁 10 筆</b>：分頁鈕在列表右上角，每頁筆數可改 5／10／20／50，翻頁與換筆數都只是換顯示（資料一次載齊，不會重新查詢）；一改篩選條件就自動回到第 1 頁。<br>・<b>樣板名稱要改</b>：到「樣板管理→」點樣板名稱旁的鉛筆（僅管理員），改完這裡的「樣板」欄會一起顯示新名稱，案件內容不受影響。<br>・<b>列表有「最新列印」欄</b>：顯示這件最近一次被列印的日期，印過不只一次會標次數，點日期可看完整紀錄（誰、什麼時候、用哪一種方式）。<b>瀏覽器列印、開啟合成PDF、下載合成PDF 三種都算一次列印</b>，因為三者都等於文件被拿出去用了。<br>・<b>頁碼可關閉</b>：預設值由樣板設定（樣板管理頁的「預設顯示頁碼」），案件詳情工具列也有「顯示頁碼」勾選框可逐案調整，取消後列印與匯出的 PDF 都不會在左下角印「第X頁／共Y頁」（適合本身表格已有頁次欄的 AS 表單）。<b>建立後隨時可改</b>，改動會讓已產生的 PDF 作廢、下次開啟時用新設定重新產生；單頁文件本來就不印頁碼。可調整者：申請人本人或管理員。<br>・<b>列表的「申請人」欄顯示的是填表人</b>（建立時選定或事後修改的那一位），不是技術上按下建立鈕的人；還沒選填表人的案件才會顯示建立者並標註。<br>・<b>連結 AS 文件編號</b>（樣板有開放才會出現）：純粹是「這份簽核完成的文件＝那份 AS 文件的內容」的對應關係，讓「AS 文件管理」上傳同一編號的版本附件時可以直接<b>由表單簽核案件導入</b>，同一份文件不用上傳兩次。<b>這不是列印右下角要印的 AS 編號</b>（那個由樣板綁定，兩者互不影響）。連結後案件名稱會自動加上 AS 編號當開頭，列表一眼看得出對應哪份文件。<br>・簽核人來源有「<b>送出者上一階主管</b>」與「<b>填表人上一階主管</b>」兩種，差別在於從誰往上找：前者是按下建立/送出的人，後者是表單真正歸屬的填表人。管理員代別人建案件時通常要用後者。<b>樣板只要用到「填表人上一階主管」，該案件就一定要指定填表人才能送出</b>（否則那一關找不到人會被整關略過）。<br>・<b>填表人＝這張表單實際上是誰填的</b>，也是簽核來源選「填表人」時圖章要蓋的人；簽核來源選「部門自動主管」但沒指定部門時，也是用填表人的部門去找主管（沒選填表人才退回用申請人的部門）。<br>・<b>填表人預設未選定</b>（以前會自動帶成建立案件的人，管理員代別人建案件時圖章就會蓋到管理員，所以改掉）。<b>只有框了「填表人」圖章欄位的案件，未指定填表人就不能送出</b>；沒用到填表人圖章的案件不強迫選，但仍可自願填。<br>・設定填表人的權限：<b>草稿階段</b>由申請人本人或管理員設定；<b>送出後</b>只有超級管理員可以回改。<br>・<b>回改填表人會連已經蓋好的填表人圖章一起換成新的人</b>，儲存前會跳出確認告訴您會動到幾個章；同時已產生的合成 PDF 會作廢，下次開啟案件時自動用新的章重新產生。<br>・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
+        ・<b>簽章依「業務日期當時」的職務解析</b>：自動解析的簽核人（部門自動主管／填表人・送出者上一階主管）、圖章上印的部門職稱、以及補案件挑人時看到的部門職稱，一律回推該案件業務日期當時的狀態，不是這個人現在的職務。例：2023 年的舊表單，當年是倉管組長、現在已升課長，仍會印當年的職務。資料來源是<b>員工管理→異動紀錄</b>；沒補登過異動的人一律用現況（與以前完全相同）。補歷史文件時當年在職、現已離職的人也解析得到。<br>・<b>已完成案件的事後編修（僅超級管理員）</b>：已完成的案件在詳情頁會多一顆紅色「事後編修」鈕。可以①拖曳既有圖章調整位置②按「＋新增圖章」補蓋章（每個補蓋的章各自選是誰的章與圖章模板，日期用案件業務日期，並在簽核紀錄的「事後補蓋的圖章」區各留一筆）③按「更換文件」更換附件——<b>換附件會把所有框選清空，必須重新框選</b>。任何一項改動都會讓已存檔的合成 PDF 作廢、下次開啟時用新內容重新產生，並寫入稽核紀錄（誰、什麼時候、做了什麼）。一般管理員沒有這顆按鈕，直接呼叫 API 也會被擋。<br>・<b>自動簽核的時間</b>：一律落在案件業務日期當天的 <b>09:30~19:00</b>（不會超出含加班的上班時間，09:30 起算是預留文件上傳整理的時間），同一件案子的每個人依簽核順序往後錯開 5~30 分鐘，<b>不會有兩個人時間完全相同</b>。<br>・<b>列表一頁 10 筆</b>：分頁鈕在列表右上角，每頁筆數可改 5／10／20／50，翻頁與換筆數都只是換顯示（資料一次載齊，不會重新查詢）；一改篩選條件就自動回到第 1 頁。<br>・<b>樣板名稱要改</b>：到「樣板管理→」點樣板名稱旁的鉛筆（僅管理員），改完這裡的「樣板」欄會一起顯示新名稱，案件內容不受影響。<br>・<b>列表有「最新列印」欄</b>：顯示這件最近一次被列印的日期，印過不只一次會標次數，點日期可看完整紀錄（誰、什麼時候、用哪一種方式）。<b>瀏覽器列印、開啟合成PDF、下載合成PDF 三種都算一次列印</b>，因為三者都等於文件被拿出去用了。<br>・<b>頁碼可關閉</b>：預設值由樣板設定（樣板管理頁的「預設顯示頁碼」），案件詳情工具列也有「顯示頁碼」勾選框可逐案調整，取消後列印與匯出的 PDF 都不會在左下角印「第X頁／共Y頁」（適合本身表格已有頁次欄的 AS 表單）。<b>建立後隨時可改</b>，改動會讓已產生的 PDF 作廢、下次開啟時用新設定重新產生；單頁文件本來就不印頁碼。可調整者：申請人本人或管理員。<br>・<b>列表的「申請人」欄顯示的是填表人</b>（建立時選定或事後修改的那一位），不是技術上按下建立鈕的人；還沒選填表人的案件才會顯示建立者並標註。<br>・<b>連結 AS 文件編號</b>（樣板有開放才會出現）：純粹是「這份簽核完成的文件＝那份 AS 文件的內容」的對應關係，讓「AS 文件管理」上傳同一編號的版本附件時可以直接<b>由表單簽核案件導入</b>，同一份文件不用上傳兩次。<b>這不是列印右下角要印的 AS 編號</b>（那個由樣板綁定，兩者互不影響）。連結後案件名稱會自動加上 AS 編號當開頭，列表一眼看得出對應哪份文件。<br>・簽核人來源有「<b>送出者上一階主管</b>」與「<b>填表人上一階主管</b>」兩種，差別在於從誰往上找：前者是按下建立/送出的人，後者是表單真正歸屬的填表人。管理員代別人建案件時通常要用後者。<b>樣板只要用到「填表人上一階主管」，該案件就一定要指定填表人才能送出</b>（否則那一關找不到人會被整關略過）。<br>・<b>填表人＝這張表單實際上是誰填的</b>，也是簽核來源選「填表人」時圖章要蓋的人；簽核來源選「部門自動主管」但沒指定部門時，也是用填表人的部門去找主管（沒選填表人才退回用申請人的部門）。<br>・<b>填表人預設未選定</b>（以前會自動帶成建立案件的人，管理員代別人建案件時圖章就會蓋到管理員，所以改掉）。<b>只有框了「填表人」圖章欄位的案件，未指定填表人就不能送出</b>；沒用到填表人圖章的案件不強迫選，但仍可自願填。<br>・設定填表人的權限：<b>草稿階段</b>由申請人本人或管理員設定；<b>送出後</b>只有超級管理員可以回改。<br>・<b>回改填表人會連已經蓋好的填表人圖章一起換成新的人</b>，儲存前會跳出確認告訴您會動到幾個章；同時已產生的合成 PDF 會作廢，下次開啟案件時自動用新的章重新產生。<br>・<b>要查自動簽核紀錄請看案件詳情下方的「簽核紀錄」區</b>：管理員會在該筆紀錄後面看到橘色的「系統自動簽核」標記（補案件的每個圖章也各有一筆）。此標記<b>只出現在這裡</b>，文件本身、列印版與匯出的 PDF 上一律不顯示，一般使用者看到的也是正常的簽核紀錄。
         <h4>設定入口</h4>
         樣板的階段/槽位/框選提示由管理員在「樣板管理」頁設定；操作確認密碼在「修改個人密碼」頁設定（需超級管理員先授權）。
         <h4>權限角色</h4>
@@ -494,6 +496,7 @@ $perms = fsd_perms($db, $fsdUser);
 var API = '../../src/store/FormSigner_API.php';
 var META = {}, CASES = [], TEMPLATES = [];
 var CUR_CASE = null, CUR_SCHEMA = null, CUR_RESPONSES = null, CUR_AS_DOC_NO = '', CUR_CASE_PAGES = [], CUR_FIELDS = [];
+var CUR_CAN_POST_EDIT = false;   // 這件案子目前的登入者可不可以事後編修
 var FP_CASE = null, FP_TPL_SCHEMA = null, FP_WHITELIST = [], FP_CANVASES = {}, FP_SELECTED = null;
 /* API 用 HTTP 狀態碼回錯(jerr 400/401/403…)，jQuery 在非 2xx 時不會呼叫 success，
    各處 `if(!res.ok){alert(...)}` 全都跑不到＝畫面完全沒反應、只有 console 一行紅字。
@@ -824,6 +827,7 @@ function submitCreate(){
    簽章日期一律用案件業務日期（2026-08-17 使用者拍板）。 */
 var BF_META = null, BF_FILES = [], BF_AS_DOC_ID = 0, BF_EDIT_CASE = null;
 var FP_BACKFILL = false, BF_FIELDS = [], BF_OBJS = {};
+var FP_POST_EDIT = false;   // 事後編修模式（已完成案件＋超級管理員）
 
 function bfMaxStamps(){ return (BF_META && BF_META.max_stamps) || 30; }
 /** 業務日期改變時重抓人員清單：標籤要顯示「當時」的部門/職稱（補舊表單挑人才不會挑錯）。 */
@@ -979,7 +983,7 @@ function bfRefreshRow(fid){
 function bfSaveField(fieldObj, onDone, onFail, skipRender){
     $.post(API, {action:'backfill_field_save', csrf:META.csrf, case_id:FP_CASE.id, field:JSON.stringify(fieldObj)}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); if (onFail) onFail(); return; }
-        BF_FIELDS = res.fields || [];
+        BF_FIELDS = fsdOwnStampFields(res.fields);
         if (skipRender) bfRefreshRow(res.id); else renderBfList();
         if (onDone) onDone(res);
     }, 'json').fail(function(){ if (onFail) onFail(); });
@@ -1048,7 +1052,7 @@ function bfDeleteStamp(fid){
         var obj = BF_OBJS[fid];
         if (obj && FP_CANVASES[obj.pageNo]) { FP_CANVASES[obj.pageNo].remove(obj); FP_CANVASES[obj.pageNo].renderAll(); }
         delete BF_OBJS[fid];
-        BF_FIELDS = res.fields || [];
+        BF_FIELDS = fsdOwnStampFields(res.fields);
         FP_SELECTED = null;
         renderBfList();
     }, 'json');
@@ -1201,6 +1205,8 @@ function openCase(id){
             ? '填表人：'+esc(CUR_CASE.filler_name||'')
             : '<span style="color:#DD5138;font-weight:bold;">填表人：未選定</span>');
         $('#btnEditFiller').toggle(!!res.can_set_filler);
+        CUR_CAN_POST_EDIT = !!res.can_post_edit;             // 已完成案件的事後編修＝僅超級管理員
+        $('#btnPostEdit').toggle(CUR_CAN_POST_EDIT);
         CUR_AS_DOC_NO = res.as_doc_no || '';
         CUR_CASE_PAGES = res.pages || []; // 案件自己上傳文件的頁面(不是CUR_SCHEMA.pages那份樣板參考頁!)，doPrint()量版面一定要用這份
         CUR_FIELDS = res.fields || [];
@@ -1378,6 +1384,16 @@ function renderResponses(){
             h += '<div class="r-row" style="padding-left:10px;">'+esc(who)+'：'+txt+'</div>';
         });
     });
+    // 事後補蓋的章（pe*）不屬於任何關卡，另外列一段，才不會在紀錄上看不到卻印在文件上
+    var extra = (CUR_FIELDS||[]).filter(function(f){ return /^pe\d+$/.test(String(f.slot_key||'')); });
+    if (extra.length) {
+        h += '<div class="r-row" style="margin-top:6px;"><b>事後補蓋的圖章</b>（已完成後由超級管理員補上，各留一筆紀錄）</div>';
+        extra.forEach(function(f, i){
+            var r = bySlot[f.slot_key];
+            h += '<div class="r-row" style="padding-left:10px;">圖章 '+(i+1)+'（第'+f.page_no+'頁）：'+esc(f.signer_name||'（未指定）')
+               + (r && r.responded_at ? '｜'+dispDateTime(r.responded_at) : '') + autoSignTag(r) + '</div>';
+        });
+    }
     $('#respList').html(h || '<span style="color:#8a6d45;">（無資料）</span>');
 }
 /* ============================================================ 圖章/回覆內容：畫面疊圖層與匯出PDF的共用判斷 ============================================================ */
@@ -1391,7 +1407,8 @@ function fsdCaseStampSchema(){
  *  兩邊規則一旦走鐘，就會變成「畫面看到的」跟「PDF 印出來的」不一樣。
  *  回傳 {kind:'stamp',html} / {kind:'text',text} / {kind:'sod',text} / null（這個框現在沒東西） */
 function fsdBoxContent(f, r){
-    if (f.box_type === 'stamp' && CUR_CASE && CUR_CASE.case_kind === 'backfill'){
+    // 自帶人員的章（補案件的 bf*、事後補蓋的 pe*）一律用欄位上的人員與模板畫；一般槽位的章才看簽核回應
+    if (f.box_type === 'stamp' && CUR_CASE && (CUR_CASE.case_kind === 'backfill' || f.signer_name)){
         // 補案件：每個章各自帶人員與自己的圖章模板；日期一律用案件業務日期(2026-08-17使用者拍板)
         var bfSchema = (f.stamp_tpl && f.stamp_tpl.schema) ? $.extend({}, f.stamp_tpl.schema, {noScale:true}) : null;
         // 第5/6參數＝部門/職稱：一律是「業務日期當時」的（後端回推 user_position_history），
@@ -1639,6 +1656,8 @@ function openFieldDesigner(id){
         // （先前多圖案件在框選畫面只畫得出一頁 595x842 的預設頁、補案件按新增圖章會說「找不到第1頁」，都是這個原因）
         FP_CASE.pages = res.pages || [];
         FP_BACKFILL = FP_CASE.case_kind === 'backfill';
+        // 事後編修（已完成案件＋超級管理員）：一般案件變成「原本的槽位框選」＋「可另外補蓋圖章」的混合模式
+        FP_POST_EDIT = !!res.can_post_edit && FP_CASE.status !== 'draft';
         $('#listPanel,#detailPanel').hide(); $('#fieldPanel').show();
         $('#fpTitle').text(FP_CASE.title || '');
         FP_NEEDS_FILLER = !!res.needs_filler;
@@ -1647,14 +1666,29 @@ function openFieldDesigner(id){
         // 補案件沒有樣板：關掉樣板參考與待框選標籤，改用圖章清單面板
         $('#refPanel').toggle(!FP_BACKFILL);
         $('#labelPanel').toggle(!FP_BACKFILL);
-        $('#bfStampPanel').toggle(FP_BACKFILL);
-        $('#btnBfEditHead').toggle(FP_BACKFILL);
-        $('#btnFpSubmit').html(FP_BACKFILL ? '<i class="fa fa-check"></i> 儲存並完成（自動審核）' : '<i class="fa fa-check"></i> 儲存並送出');
-        if (FP_BACKFILL) $('#fpHintText').text('在每一頁上方按「＋新增圖章」，再把章拖到紙本原本蓋章的位置。圖章大小固定＝該章圖章模板的實際尺寸（所見即所印），只能移動位置、不能拉大縮小；要改大小請改用別的圖章模板。');
+        $('#bfStampPanel').toggle(FP_BACKFILL || FP_POST_EDIT);   // 事後編修也要能「＋新增圖章」
+        $('#btnBfEditHead').toggle(FP_BACKFILL && !FP_POST_EDIT);
+        $('#btnFpSubmit').html(FP_POST_EDIT ? '<i class="fa fa-check"></i> 完成編修'
+                             : (FP_BACKFILL ? '<i class="fa fa-check"></i> 儲存並完成（自動審核）' : '<i class="fa fa-check"></i> 儲存並送出'));
+        if (FP_POST_EDIT) $('#fpHintText').html('<b style="color:#a13a24;">事後編修（已完成的案件）</b>：可以拖曳既有圖章調整位置，也可以按「＋新增圖章」補蓋章（每個補蓋的章各自指定是誰的章與圖章模板，日期用案件業務日期）。<b>任何改動都會讓已存檔的合成 PDF 作廢、下次開啟時重新產生</b>，並留下稽核紀錄。要更換附件請按上方「更換文件」——<b>換檔後所有框選會被清空，必須重新框</b>。');
+        else if (FP_BACKFILL) $('#fpHintText').text('在每一頁上方按「＋新增圖章」，再把章拖到紙本原本蓋章的位置。圖章大小固定＝該章圖章模板的實際尺寸（所見即所印），只能移動位置、不能拉大縮小；要改大小請改用別的圖章模板。');
         else $('#fpHintText').text('把左側「待框選標籤」拖到您上傳的文件對應位置；只能框選樣板本身已框選過的欄位（樣板沒有的欄位這裡也不會出現）。');
+        if (FP_POST_EDIT && !FP_BACKFILL) {
+            // 混合模式：槽位框選照舊，另外把「帶人員的章」（事後補蓋的）交給圖章面板管理
+            bfEnsureMeta(function(){
+                BF_FIELDS = fsdOwnStampFields(res.fields); BF_OBJS = {};
+                var pre = 0;
+                BF_FIELDS.forEach(function(f){ if (!pre && f.stamp_tpl_id) pre = f.stamp_tpl_id; });
+                $('#bfDefaultTpl').html(bfTplOptionsHtml(pre));
+                buildSlotColorMap();
+                renderRefPanel();
+                buildFpCanvases(res.fields || []);
+            });
+            return;
+        }
         if (FP_BACKFILL) {
             bfEnsureMeta(function(){
-                BF_FIELDS = res.fields || []; BF_OBJS = {};
+                BF_FIELDS = fsdOwnStampFields(res.fields); BF_OBJS = {};
                 // 預設模板：沿用目前圖章已經在用的那一個(回來繼續設定時不會被洗掉)，都沒有才空白
                 var pre = 0;
                 BF_FIELDS.forEach(function(f){ if (!pre && f.stamp_tpl_id) pre = f.stamp_tpl_id; });
@@ -1673,8 +1707,21 @@ function openFieldDesigner(id){
     });
 }
 $('#btnFieldBack').on('click', function(){ $('#fieldPanel').hide(); $('#listPanel').show(); FP_CASE=null; loadCases(); });
-function openReplaceFile(){ $('#rpFile').val(''); RP_FILES=[]; renderRpThumbs(); openMask('replaceMask'); }
+function openReplaceFile(){
+    // 換行一律用 String.fromCharCode(10) 組，不要在 JS 字串裡打換行符號
+    // （這支檔案的 inline script 只要有一個真正的換行在字串裡，整頁 JS 就全掛，php -l 也抓不到）
+    var rpWarn = ['這是已完成的案件。更換附件後：',
+                  '・目前所有圖章/回覆框的位置會被清空，必須重新框選',
+                  '・已存檔的合成 PDF 會作廢，下次開啟時重新產生',
+                  '・本次動作會留下稽核紀錄', '', '確定要更換附件嗎？'].join(String.fromCharCode(10));
+    if (FP_POST_EDIT && !confirm(rpWarn)) return;
+    $('#rpFile').val(''); RP_FILES=[]; renderRpThumbs(); openMask('replaceMask');
+}
 var RP_FILES = [];
+/* 「自帶人員的圖章框」＝補案件的 bf* 與事後補蓋的 pe*（一般案件的槽位框是 s1_g1 這種，不帶人員）。
+   混合模式下要靠它決定：這個框該走槽位存檔還是圖章存檔、要不要列進右側圖章清單。 */
+function fsdIsOwnStampSlot(slotKey){ return /^(bf|pe)\d+$/.test(String(slotKey||'')); }
+function fsdOwnStampFields(list){ return (list||[]).filter(function(f){ return fsdIsOwnStampSlot(f.slot_key); }); }
 function rpFilesChanged(fileList){ var f = fsdCheckFiles(fileList); if (f === null){ $('#rpFile').val(''); return; } RP_FILES = f; renderRpThumbs(); }
 function rpRemoveThumb(i){ RP_FILES.splice(i,1); renderRpThumbs(); }
 function renderRpThumbs(){
@@ -1902,7 +1949,7 @@ function buildFpCanvases(existingFields){
            + (p.paper_size ? ' <span style="color:#3f8a3f;">['+p.paper_size+'已裁切]</span>' : '')
            + ' <button type="button" onclick="fpRotatePage('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-rotate-right"></i> 旋轉90°</button>'
            + ' <button type="button" onclick="openCropModal('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #D8BE93;background:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-crop"></i> A4/A3裁切</button>'
-           + (FP_BACKFILL ? ' <button type="button" onclick="bfAddStamp('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-plus"></i> 新增圖章</button>' : '')
+           + ((FP_BACKFILL || FP_POST_EDIT) ? ' <button type="button" onclick="bfAddStamp('+p.page_no+')" style="height:20px;font-size:11px;padding:0 6px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:3px;cursor:pointer;"><i class="fa fa-plus"></i> 新增圖章</button>' : '')
            + '</div><canvas id="fpcv_'+p.page_no+'"></canvas></div>';
     });
     $('#fpPageGrid').html(h);
@@ -1942,17 +1989,17 @@ function buildFpCanvases(existingFields){
     });
     existingFields.forEach(function(f){
         var g = fpAddFieldBox(f.page_no, f.slot_key, f.box_type, f.x, f.y, f.w, f.h, f.id);
-        if (FP_BACKFILL && g) BF_OBJS[f.id] = g;
+        if (g && (FP_BACKFILL || (FP_POST_EDIT && fsdIsOwnStampSlot(f.slot_key)))) BF_OBJS[f.id] = g;
     });
-    if (FP_BACKFILL) renderBfList();
-    else renderFpLabelList(existingFields.map(function(f){ return f.slot_key+'_'+f.box_type; }));
+    if (FP_BACKFILL || FP_POST_EDIT) renderBfList();
+    if (!FP_BACKFILL) renderFpLabelList(existingFields.map(function(f){ return f.slot_key+'_'+f.box_type; }));
 }
 function fpAddFieldBox(pageNo, slotKey, boxType, xFrac, yFrac, wFrac, hFrac, fieldId){
     var cv = FP_CANVASES[pageNo];
     if (!cv) return;
     var color = slotColor(slotKey); // 跟待框選標籤/樣板參考同一套顏色，方便對照是哪一個槽位
     var label = boxType === 'stamp' ? '章' : '覆';
-    if (FP_BACKFILL) { var bff = bfFieldBySlot(slotKey); label = (bff && bff.signer_name) ? bff.signer_name : '未指定'; }
+    if (FP_BACKFILL || (FP_POST_EDIT && fsdIsOwnStampSlot(slotKey))) { var bff = bfFieldBySlot(slotKey); label = (bff && bff.signer_name) ? bff.signer_name : '未指定'; }
     var rect = new fabric.Rect({originX:'left', originY:'top', fill:color, opacity:0.32, stroke:color, strokeWidth:1.5});
     var text = new fabric.Text(label, {fontSize:13, fill:'#5b3a1e', originX:'center', originY:'center'});
     var group = new fabric.Group([rect, text], {
@@ -1969,7 +2016,8 @@ function fpAddFieldBox(pageNo, slotKey, boxType, xFrac, yFrac, wFrac, hFrac, fie
 }
 function fpSaveFieldPosition(pageNo, obj){
     if (!obj || obj.pageNo === undefined) return;
-    if (FP_BACKFILL) { bfSaveFieldPosition(pageNo, obj); return; }  // 補案件走自己的存檔(沒有樣板槽位白名單)
+    // 補案件全部走圖章存檔；事後編修的混合模式只有「自帶人員的章」走圖章存檔，槽位框仍走原本的框選存檔
+    if (FP_BACKFILL || (FP_POST_EDIT && (!obj.slotKey || fsdIsOwnStampSlot(obj.slotKey)))) { bfSaveFieldPosition(pageNo, obj); return; }
     var cv = FP_CANVASES[pageNo];
     var xFrac = obj.left / cv.width, yFrac = obj.top / cv.height;
     var wFrac = (obj.width * obj.scaleX) / cv.width, hFrac = (obj.height * obj.scaleY) / cv.height;
@@ -1984,6 +2032,7 @@ function fpDeleteSelected(){
     if (!FP_SELECTED){ alert('請先點選一個框'); return; }
     var obj = FP_SELECTED.obj, cv = FP_SELECTED.canvas;
     if (!obj.fieldId){ cv.remove(obj); FP_SELECTED = null; return; }
+    if (FP_POST_EDIT && fsdIsOwnStampSlot(obj.slotKey)) { bfDeleteStamp(obj.fieldId); return; }
     $.post(API, {action:'case_field_delete', csrf:META.csrf, case_id:FP_CASE.id, field_id:obj.fieldId}, function(res){
         if (!res.ok){ alert(res.error||'刪除失敗'); return; }
         cv.remove(obj); FP_SELECTED = null;
@@ -1991,6 +2040,14 @@ function fpDeleteSelected(){
     }, 'json');
 }
 function fpSubmit(){
+    if (FP_POST_EDIT) {   // 事後編修：內容是逐項即時存檔的，這裡只做完整性檢查後回到案件詳情
+        var noSigner = (BF_FIELDS||[]).filter(function(f){ return !f.signer_user_id; });
+        if (noSigner.length){ alert('還有 '+noSigner.length+' 個補蓋的圖章沒有指定是誰的章，請先在右側圖章清單選好人員。'); return; }
+        var cid = FP_CASE.id;
+        $('#fieldPanel').hide(); FP_CASE = null; FP_POST_EDIT = false;
+        openCase(cid);
+        return;
+    }
     if (FP_BACKFILL) {
         if (!BF_FIELDS.length){ alert('請至少新增一個圖章'); return; }
         var bad = BF_FIELDS.filter(function(f){ return !f.signer_user_id; });
