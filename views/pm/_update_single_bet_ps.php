@@ -33,6 +33,16 @@ $bom_ing_fid_from_post = trim($_POST['bom_ing_fid']);
 $ps_value_from_post = $_POST['single_bet_ps'];
 $modified_by_user_id = $_SESSION['id'] ?? 'system_single_bet_ps_update';
 
+// bom_ing_fid 一定要是單一個數字。
+// 舊版前端在「同時有多個製程」時傳的是 "138996,138997,138998" 這種逗號字串，
+// 下面 bindValue 用 PDO::PARAM_INT 一轉型就只剩第一個 → 不管在哪一關打字
+// 都寫到第一關，而且不會有任何錯誤訊息。這裡直接擋下，逼呼叫端送單一製程。
+if (!preg_match('/^\d+$/', $bom_ing_fid_from_post)) {
+    $response['message'] = '製程識別碼不正確（必須是單一製程）。請重新整理頁面後再試。';
+    echo json_encode($response);
+    exit;
+}
+
 // 準備 SQL 語法，採用命名參數方式
 try {
     // 更新 bom_ing 資料表的 single_bet_ps 欄位
