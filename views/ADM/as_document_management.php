@@ -412,6 +412,15 @@ if ($deptPerm === 'R') {
           <div class="req-note" id="fqTypeErr" style="display:none;"></div>
         </div>
 
+        <!-- 指定月份（使用者交辦 2026-09-08）：只有「一年會固定落在某幾個月」的頻率才出現。
+             每 6 個月＝一年 2 次 → 可指定 1、7 月（彼此一定間隔 6 個月）；
+             每 3 個月＝一年 4 次 → 點其中一個月份，其餘三個自動補齊；不點＝不指定月份。
+             每天／每週／每 1 個月都是「每個週期都要做」，沒有月份好指定，故整區不出現。 -->
+        <div class="form-group" id="fqMonthWrap" style="display:none;">
+          <label>指定月份 <span class="text-muted" style="font-weight:normal;font-size:11px;">（可不指定）</span></label>
+          <div id="fqMonthBox" style="border:1px solid #ddd;border-radius:4px;padding:8px;"></div>
+        </div>
+
         <div class="form-group" id="fqNoteWrap">
           <label>更新頻率備註 <span class="req-note" id="fqNoteReq" style="display:none;">＊選「不定時」時必填</span></label>
           <div style="margin-bottom:4px;" id="fqNotePhrases"></div>
@@ -1875,14 +1884,43 @@ $(function(){
   // ══ 更新頻率 / 負責課室 ═════════════════════════════════════════════════
   // 單位文字與後端 asFreqUnits() 是同一組定義；改動時兩邊要一起改。
   const FREQ_UNIT = {day:'天', week:'週', month:'月', quarter:'季', year:'年'};
-  /** 頻率顯示文字：不定時／每天／每 3 月（n=1 時省略數字，「每1月」讀起來很怪） */
+  /** 這個頻率可不可以指定月份？一年要指定幾個月、彼此間隔幾個月。
+   *  ★後端 asFreqMonthPlan() 是同一套規則（鐵律8），改這裡要一起改。
+   *  回傳 null＝沒有固定月份可談（每天／每週／每 1 個月都是每個週期都要做）。
+   *  exact=false＝週期不是整年的因數（如每 5 個月），指定的只是「起算月份」。 */
+  function fqMonthPlan(t, n){
+    n = parseInt(n)||1; if(n<1) n=1;
+    let m;
+    if(t==='year')          return {slots:1, interval:12*n, exact:true};
+    else if(t==='quarter')  m = n*3;
+    else if(t==='month')    m = n;
+    else                    return null;
+    if(m<=1)  return null;
+    if(m>=12) return {slots:1, interval:m, exact:(m%12===0)};
+    if(12%m===0) return {slots:12/m, interval:m, exact:true};
+    return {slots:1, interval:m, exact:false};
+  }
+  /** 指定月份解析：只收 1~12、去重、由小到大（空＝不指定） */
+  function fqMonthsOf(d){
+    const seen={}, out=[];
+    String(d.freq_months||'').split(',').forEach(v=>{ const i=parseInt(v); if(i>=1&&i<=12&&!seen[i]){seen[i]=1;out.push(i);} });
+    return out.sort((a,b)=>a-b);
+  }
+  /** 頻率顯示文字：不定時／每天／每 3 月（n=1 時省略數字，「每1月」讀起來很怪）
+   *  有指定月份時附在後面：每 6 月（1、7 月）；週期不整年的只標起算月份 */
   function asFreqText(d){
     const t = d.freq_type||'';
     if(t==='') return '';
     if(t==='irregular') return '不定時';
     const u = FREQ_UNIT[t]; if(!u) return '';
     const n = parseInt(d.freq_n)||0;
-    return n>1 ? ('每 '+n+' '+u) : ('每'+u);
+    let s = n>1 ? ('每 '+n+' '+u) : ('每'+u);
+    const ms = fqMonthsOf(d);
+    if(ms.length){
+      const plan = fqMonthPlan(t, n||1);
+      s += (plan && !plan.exact) ? '（起算 '+ms[0]+' 月）' : '（'+ms.join('、')+' 月）';
+    }
+    return s;
   }
   function ownerDeptNames(d){ return (d.owner_depts||[]).map(x=>x.name).join('、'); }
 
@@ -1928,6 +1966,69 @@ $(function(){
     renderFqDeptSel();
   }
 
+  // ── 指定月份選取器 ───────────────────────────────────────────────────────
+  //   使用者交辦：點一個月份就自動補齊其餘（每 3 個月＝4 個、每 6 個月＝2 個），
+  //   點已經選起來的月份＝取消指定。間隔由頻率決定，不給手動排出「1 月、2 月」這種
+  //   間隔不對的組合（後端 asFreqValidate() 也會再擋一次）。
+  let FQ_MONTHS = [];    // 目前選取的月份（1~12，由小到大；空＝不指定）
+
+  function fqPlanNow(){
+    const t = $('#fqType').val()||'';
+    let n = parseInt(($('#fqN').val()||'').trim()); if(isNaN(n)||n<1) n=1;
+    return fqMonthPlan(t, n);
+  }
+  /** 這組月份合不合目前的頻率（頻率改掉後用來判斷舊的選取還能不能留） */
+  function fqMonthsFit(ms, plan){
+    if(!plan || !ms.length || ms.length!==plan.slots) return false;
+    if(plan.slots===1) return true;
+    for(let i=1;i<ms.length;i++) if(ms[i]-ms[i-1]!==plan.interval) return false;
+    return (12-ms[ms.length-1]+ms[0])===plan.interval;
+  }
+  function renderFqMonths(plan){
+    const box = $('#fqMonthBox').empty();
+    let chips = '';
+    for(let m=1;m<=12;m++){
+      const on = FQ_MONTHS.includes(m);
+      chips += `<span class="tag-chip tag-filter fq-mon${on?' active':''}" data-m="${m}" style="background:#C67B2E;">${m} 月</span>`;
+    }
+    box.append('<div>'+chips+'</div>');
+    const sel = FQ_MONTHS.length
+      ? '已指定：<b>'+FQ_MONTHS.join('、')+' 月</b>　<a href="javascript:void(0)" class="fq-mon-clear">清除（改為不指定）</a>'
+      : '<span class="text-muted">尚未指定月份（存檔＝不指定月份，只記錄週期）</span>';
+    let hint;
+    if(!plan.exact){
+      hint = '這個週期不是整年的倍數，每年不會固定落在同一個月，所以這裡指定的是<b>起算月份</b>（點一下選擇，再點一次取消）。';
+    } else if(plan.slots>1){
+      hint = '一年 '+plan.slots+' 次、彼此間隔 '+plan.interval+' 個月：<b>點其中一個月份，其餘 '+(plan.slots-1)+' 個會自動補齊</b>（例：點 1 月＝'
+           + [1,1+plan.interval].filter(v=>v<=12).join('、') + (plan.slots>2?'…':'') + ' 月）。點已選的月份＝取消指定。';
+    } else {
+      hint = '一個週期只更新一次，可指定固定在哪一個月（點一下選擇，再點一次取消）。';
+    }
+    box.append('<div style="margin-top:6px;font-size:11px;">'+sel+'</div>');
+    box.append('<div class="text-muted" style="margin-top:2px;font-size:11px;">'+hint+'</div>');
+  }
+  /** 頻率一改就重算，算不出來（新頻率沒有月份可談、或舊選取間隔不對）就清空
+   *  ＝CLAUDE.md「推導欄位鐵則」 */
+  function syncFqMonthUi(){
+    const plan = fqPlanNow();
+    $('#fqMonthWrap').toggle(!!plan);
+    if(!plan){ FQ_MONTHS=[]; $('#fqMonthBox').empty(); return; }
+    if(FQ_MONTHS.length && !fqMonthsFit(FQ_MONTHS, plan)) FQ_MONTHS = [];
+    renderFqMonths(plan);
+  }
+  $('#fqMonthBox').on('click','.fq-mon', function(){
+    const plan = fqPlanNow(); if(!plan) return;
+    const m = parseInt($(this).data('m'));
+    if(FQ_MONTHS.includes(m)){ FQ_MONTHS = []; }          // 點已選的＝取消指定
+    else {
+      FQ_MONTHS = [];
+      for(let i=0;i<plan.slots;i++) FQ_MONTHS.push(((m-1+i*plan.interval)%12)+1);
+      FQ_MONTHS.sort((a,b)=>a-b);
+    }
+    renderFqMonths(plan);
+  });
+  $('#fqMonthBox').on('click','.fq-mon-clear', function(){ FQ_MONTHS=[]; renderFqMonths(fqPlanNow()); });
+
   /** 前端即時驗證（後端 save_doc_freq 有同一套規則再擋一次＝鐵律8）。回傳 true＝可送出 */
   function validateFq(showErr){
     const t=$('#fqType').val()||'', n=($('#fqN').val()||'').trim(), note=($('#fqNote').val()||'').trim();
@@ -1955,14 +2056,17 @@ $(function(){
     $('#fqNHint').text(needN ? '（留白＝1）' : '');
     $('#fqNoteWrap').toggle(t!=='');
     $('#fqNoteReq').toggle(t==='irregular');
+    syncFqMonthUi();          // 頻率一改，指定月份要跟著重算（算不出來就清空）
     validateFq(true);
   }
   $('#fqType').on('change', syncFqUi);
-  $('#fqN,#fqNote').on('input', ()=>validateFq(true));
+  $('#fqNote').on('input', ()=>validateFq(true));
+  // 數量也是「指定月份」的來源欄位（每 6 月與每 3 月要指定的月份數不同），改了要一起重算
+  $('#fqN').on('input', ()=>{ syncFqMonthUi(); validateFq(true); });
   // 離開數量欄時留白就補 1，讓使用者看得到實際會存進去的值（不是存檔當下才偷偷變）
   $('#fqN').on('blur', function(){
     const t=$('#fqType').val()||'';
-    if(t!=='' && t!=='irregular' && ($(this).val()||'').trim()===''){ $(this).val(1); validateFq(true); }
+    if(t!=='' && t!=='irregular' && ($(this).val()||'').trim()===''){ $(this).val(1); syncFqMonthUi(); validateFq(true); }
   });
   // 備註快速字句
   $('#fqNotePhrases').on('click','.fq-phrase', function(){
@@ -1993,12 +2097,14 @@ $(function(){
       // （帶了會讓人誤以為那是全部文件的共同現況）
       if(many){
         $('#fqType').val(''); $('#fqN').val(''); $('#fqNote').val('');
+        FQ_MONTHS = [];
         renderFqDeptPicker([]);
       } else {
         const d = rows[0];
         $('#fqType').val(d.freq_type||'');
         $('#fqN').val(d.freq_n==null?'':d.freq_n);
         $('#fqNote').val(d.freq_note||'');
+        FQ_MONTHS = fqMonthsOf(d);
         renderFqDeptPicker((d.owner_depts||[]).map(x=>x.id));
       }
       syncFqUi();
@@ -2010,10 +2116,11 @@ $(function(){
     if(!validateFq(true)) return;
     const t=$('#fqType').val()||'';
     if(t!=='' && t!=='irregular' && ($('#fqN').val()||'').trim()==='') $('#fqN').val(1);   // 留白＝1
+    const fqMonthsStr = FQ_MONTHS.join(',');
     if(FQ_IDS.length>1){
       const nSel = ($('#fqDeptIds').val()||'').split(',').filter(Boolean).length;
       const msg = '將把勾選的 '+FQ_IDS.length+' 份文件都設成：\n'
-                + '・更新頻率：'+(t==='' ? '未設定（清除）' : asFreqText({freq_type:t, freq_n:$('#fqN').val()}))+'\n'
+                + '・更新頻率：'+(t==='' ? '未設定（清除）' : asFreqText({freq_type:t, freq_n:$('#fqN').val(), freq_months:fqMonthsStr}))+'\n'
                 + '・負責課室：'+(nSel ? ('目前選取的 '+nSel+' 個') : '不指定（清空）')+'\n\n'
                 + '原本的內容會被取代。確定要執行嗎？';
       if(!confirm(msg)) return;
@@ -2021,7 +2128,7 @@ $(function(){
     NProgress.start();
     $.post(API+'?action=save_doc_freq', {
       ids: FQ_IDS.join(','),
-      freq_type: t, freq_n: $('#fqN').val()||'',
+      freq_type: t, freq_n: $('#fqN').val()||'', freq_months: fqMonthsStr,
       freq_note: $('#fqNote').val()||'', owner_dept_ids: $('#fqDeptIds').val()||''
     }, null, 'json')
     .done(r=>{
@@ -2029,7 +2136,7 @@ $(function(){
       // 就地更新那幾列，不整份重載（篩選／分頁／勾選都留在原狀）
       (r.data||[]).forEach(u=>{
         const row = DOCS.find(x=>String(x.id)===String(u.id));
-        if(row){ row.freq_type=u.freq_type; row.freq_n=u.freq_n; row.freq_note=u.freq_note; row.owner_depts=u.owner_depts; }
+        if(row){ row.freq_type=u.freq_type; row.freq_n=u.freq_n; row.freq_note=u.freq_note; row.freq_months=u.freq_months; row.owner_depts=u.owner_depts; }
       });
       $('#freqModal').modal('hide');
       renderDocs();

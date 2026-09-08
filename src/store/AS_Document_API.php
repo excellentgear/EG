@@ -211,6 +211,7 @@ function asFreqEnsure(PDO $db): void {
         if (!isset($cols['freq_type'])) $add[] = "ADD COLUMN freq_type VARCHAR(10) NULL COMMENT '更新頻率類型：irregular不定時/day天/week週/month月/quarter季/year年'";
         if (!isset($cols['freq_n']))    $add[] = "ADD COLUMN freq_n TINYINT UNSIGNED NULL COMMENT '更新頻率數量：每 N 天/週/月/季/年（不定時為 NULL）'";
         if (!isset($cols['freq_note'])) $add[] = "ADD COLUMN freq_note VARCHAR(500) NULL COMMENT '更新頻率備註（不定時必填，其餘選填）'";
+        if (!isset($cols['freq_months'])) $add[] = "ADD COLUMN freq_months VARCHAR(40) NULL COMMENT '指定月份：逗號分隔的月份數字（如每6月＝1,7），NULL＝不指定月份'";
         if ($add) $db->exec("ALTER TABLE as_document ".implode(', ', $add));
         $db->exec("CREATE TABLE IF NOT EXISTS as_doc_owner_dept (
             doc_id INT NOT NULL,
@@ -237,16 +238,58 @@ function asFreqDaysSql(string $a = 'd'): string {
               ELSE NULL END";
 }
 
+/** 這個頻率可不可以指定月份？可以的話一年要指定幾個月、彼此間隔幾個月。
+ *  使用者交辦（2026-09-08）：每 6 個月＝一年 2 次，可指定 1 月、7 月（間隔必須是 6）；
+ *  每 3 個月＝一年 4 次，指定其中一個就能自動補齊其餘三個。
+ *  回傳 null＝這個頻率沒有「固定月份」可談（每天／每週／每月都是每個週期都要做）。
+ *  exact=false＝週期不是整年的因數（如每 5 個月），只能指定「起算月份」，不會每年固定落在同一個月。
+ *  ★前端 fqMonthPlan() 是同一套規則，改這裡要一起改。 */
+function asFreqMonthPlan(string $type, $n): ?array {
+    $n = (int)$n; if ($n < 1) $n = 1;
+    if ($type === 'year')       return ['slots'=>1, 'interval'=>12*$n, 'exact'=>true];   // 每 N 年＝一年當中的哪一個月
+    if ($type === 'quarter')    $m = $n * 3;
+    elseif ($type === 'month')  $m = $n;
+    else                        return null;                                            // 天／週／不定時／未設定
+    if ($m <= 1)  return null;                                                          // 每月＝每個月都要，沒有月份好指定
+    if ($m >= 12) return ['slots'=>1, 'interval'=>$m, 'exact'=>($m % 12 === 0)];
+    if (12 % $m === 0) return ['slots'=>intdiv(12, $m), 'interval'=>$m, 'exact'=>true];
+    return ['slots'=>1, 'interval'=>$m, 'exact'=>false];
+}
+
+/** 指定月份正規化：只收 1~12、去重、由小到大。空＝不指定（唯一解析點） */
+function asFreqParseMonths($raw): array {
+    $parts = is_array($raw) ? $raw : explode(',', (string)$raw);
+    $out = [];
+    foreach ($parts as $p) { $v = (int)trim((string)$p); if ($v >= 1 && $v <= 12) $out[$v] = 1; }
+    $out = array_keys($out); sort($out);
+    return $out;
+}
+
 /** 前後端同一套規則（鐵律8）。回傳錯誤訊息字串，通過回 '' */
-function asFreqValidate(string $type, $n, string $note): string {
+function asFreqValidate(string $type, $n, string $note, $months = ''): string {
     if ($type === '') return '';
+    $ms = asFreqParseMonths($months);
     if ($type === 'irregular') {
+        if ($ms) return '選「不定時」時不能指定月份';
         if (trim($note) === '') return '更新頻率選「不定時」時，備註說明為必填（請說明什麼情況下會更新）';
         return '';
     }
     if (!isset(asFreqUnits()[$type])) return '更新頻率類型不正確';
     $n = (int)$n;
     if ($n < 1 || $n > 255) return '更新頻率的數量請填 1~255 的整數';
+    if ($ms) {
+        $plan = asFreqMonthPlan($type, $n);
+        if (!$plan) return '這個更新頻率沒有固定月份可以指定（每天／每週／每個月都是每個週期都要做）';
+        if (count($ms) !== $plan['slots'])
+            return '指定月份要剛好 '.$plan['slots'].' 個'.($plan['slots'] > 1 ? '（每 '.$plan['interval'].' 個月一次）' : '').'，目前選了 '.count($ms).' 個';
+        if ($plan['slots'] > 1) {
+            $iv = $plan['interval'];
+            $ok = true;
+            for ($i = 1; $i < count($ms); $i++) if ($ms[$i] - $ms[$i-1] !== $iv) $ok = false;
+            if (12 - $ms[count($ms)-1] + $ms[0] !== $iv) $ok = false;
+            if (!$ok) return '指定的月份彼此必須間隔 '.$iv.' 個月（例：每 '.$iv.' 個月＝'.implode('、', range(1, 12, $iv)).' 月）';
+        }
+    }
     return '';
 }
 
@@ -1068,7 +1111,7 @@ case 'doc_freq_get':
     $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)($_GET['ids'] ?? ''))), fn($v)=>$v>0)));
     if (!$ids) jout(['status'=>'error','message'=>'請先選擇文件']);
     $ph = implode(',', array_fill(0, count($ids), '?'));
-    $st = $db->prepare("SELECT id, doc_no, doc_name, freq_type, freq_n, freq_note FROM as_document WHERE id IN ($ph)");
+    $st = $db->prepare("SELECT id, doc_no, doc_name, freq_type, freq_n, freq_note, freq_months FROM as_document WHERE id IN ($ph)");
     $st->execute($ids);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     $od = $db->prepare("SELECT od.doc_id, od.department_id, dp.name
@@ -1099,7 +1142,14 @@ case 'save_doc_freq':
     // 「每 ? 天/週/月/季/年」沒填數量一律當成 1（使用者要求；填 1 是最常見的情況，
     //  為了少填一個字就把整張表擋下來很煩）
     if ($fqType !== '' && $fqType !== 'irregular' && $fqN === '') $fqN = '1';
-    if ($fqErr = asFreqValidate($fqType, $fqN, $fqNote)) jout(['status'=>'error','message'=>$fqErr]);
+    // 指定月份：畫面上只點得出 1~12，但直打 API 可能送別的值——不可以安靜地丟掉（會變成
+    // 「送了月份卻存成不指定」也不報錯），所以每一個非空的值都要是 1~12 才收
+    $fqMonthsRaw = trim((string)($_POST['freq_months'] ?? ''));
+    $fqMonths = asFreqParseMonths($fqMonthsRaw);
+    $fqMonthsTok = array_values(array_filter(array_map('trim', explode(',', $fqMonthsRaw)), fn($v)=>$v!==''));
+    foreach ($fqMonthsTok as $tk) if (!ctype_digit($tk) || (int)$tk < 1 || (int)$tk > 12)
+        jout(['status'=>'error','message'=>'指定月份只能填 1~12 的月份數字']);
+    if ($fqErr = asFreqValidate($fqType, $fqN, $fqNote, $fqMonths)) jout(['status'=>'error','message'=>$fqErr]);
 
     $ownerDs = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)($_POST['owner_dept_ids'] ?? ''))), fn($v)=>$v>0)));
 
@@ -1115,9 +1165,11 @@ case 'save_doc_freq':
         $t = $fqType !== '' ? $fqType : null;
         $n = ($t !== null && $t !== 'irregular') ? (int)$fqN : null;   // 不定時沒有數量
         $s = ($t !== null && $fqNote !== '')     ? $fqNote  : null;    // 沒設頻率就不留備註
-        $up = $db->prepare("UPDATE as_document SET freq_type=?, freq_n=?, freq_note=?, updated_at=NOW() WHERE id=?");
+        // 指定月份：沒設頻率／不定時／沒點月份都存 NULL（＝不指定月份）
+        $mo = ($t !== null && $t !== 'irregular' && $fqMonths) ? implode(',', $fqMonths) : null;
+        $up = $db->prepare("UPDATE as_document SET freq_type=?, freq_n=?, freq_note=?, freq_months=?, updated_at=NOW() WHERE id=?");
         foreach ($ids as $did) {
-            $up->execute([$t, $n, $s, $did]);
+            $up->execute([$t, $n, $s, $mo, $did]);
             asSaveOwnerDepts($db, $did, $ownerDs);
         }
         $db->commit();
@@ -1125,7 +1177,7 @@ case 'save_doc_freq':
 
     // 回傳異動後的內容，前端直接就地更新那幾列（不必整份重載）
     $ph2 = implode(',', array_fill(0, count($ids), '?'));
-    $st = $db->prepare("SELECT id, freq_type, freq_n, freq_note FROM as_document WHERE id IN ($ph2)");
+    $st = $db->prepare("SELECT id, freq_type, freq_n, freq_note, freq_months FROM as_document WHERE id IN ($ph2)");
     $st->execute($ids);
     $out = $st->fetchAll(PDO::FETCH_ASSOC);
     $od = $db->prepare("SELECT od.doc_id, od.department_id, dp.name
