@@ -410,6 +410,51 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
                 'source'         => 'quote',
             ];
         }
+        // ── 綁定到報價單的「料號附件」（2026-09-08 使用者回報）────────────────
+        //   料號附件那邊勾了「與報價單共用」的標籤可以綁定報價單；綁了之後這裡也要
+        //   一起列進對應的報價單群組，否則使用者綁完在這一頁還是看不到。
+        //   **檔案本體是料號附件那一份**（不複製），所以下載網址走 Part_Attachment_API，
+        //   過濾規則（批圖工作檔、價格類標籤）也一律比照本頁對料號附件的處理，
+        //   否則會從這個入口繞過那些限制。
+        try {
+            require_once __DIR__ . '/../../src/common/part_attach_link_lib.php';
+            $boundRows = pal_bound_part_attachments_for_dids($pdo2, $dids);
+            if ($boundRows) {
+                require_once __DIR__ . '/../../src/common/imgedit_visibility.php';
+                $boundRows = imgedit_filter_attachment_rows($pdo2, $boundRows, (int)($_SESSION['id'] ?? 0));
+                $boundRows = imgedit_strip_workfiles($boundRows, $pdo2);
+                require_once __DIR__ . '/../../src/common/pref_attach_lib.php';
+                $prefCatIds2 = eg_pref_attach_cat_ids($pdo2);
+                $hidePref2   = $prefCatIds2 ? !eg_pref_attach_can_view($pdo2, (int)($_SESSION['id'] ?? 0)) : false;
+                foreach ($boundRows as $r) {
+                    if ($hidePref2 && eg_pref_attach_hit($r['category_ids'], $prefCatIds2)) continue;
+                    $ext = strtolower(pathinfo($r['filename'], PATHINFO_EXTENSION));
+                    $catNames = [];
+                    foreach (array_filter(array_map('trim', explode(',', (string)$r['category_ids']))) as $cid) {
+                        if (isset($cats[(int)$cid])) $catNames[] = $cats[(int)$cid];
+                    }
+                    $result[] = [
+                        'id'             => (int)$r['id'],
+                        'filename'       => $r['filename'],
+                        'display_name'   => $r['original_name'] ?: $r['filename'],
+                        'url'            => '../../src/store/Part_Attachment_API.php?action=download&id=' . (int)$r['id'],
+                        'ext'            => $ext,
+                        'file_size'      => $r['file_size'] ?: '',
+                        'note'           => (string)($r['note'] ?? ''),
+                        'uploaded_by'    => $r['uploaded_by'] ?: '',
+                        'uploaded_at'    => substr($r['uploaded_at'] ?: '', 0, 16),
+                        'category_names' => $catNames,
+                        'quote_no'       => $r['quote_no'],
+                        'bind_from'      => $bindLabelByDid[(int)$r['d_id']] ?? null,
+                        'revision'         => ($r['revision'] === null ? '' : (string)$r['revision']),
+                        'issue_stamp_date' => $r['issue_stamp_date'] ?: '',
+                        // from_part＝這是料號附件綁過來的（畫面標示用），不是 quotation_attachments 的列
+                        'from_part'      => 1,
+                        'source'         => 'quote',
+                    ];
+                }
+            }
+        } catch (Exception $_e) {}
         echo json_encode(['success' => true, 'attachments' => $result]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -1408,6 +1453,11 @@ function makeAttItem(att, showSource) {
     var isObs = (att.category_names || []).indexOf('作廢') >= 0;
     var st = isObs ? 'background:#fff0f0;border-left:3px solid #e74c3c;' : '';
     var bindTag = att.bind_from ? '<br><span style="font-size:10px;color:#1ABB9C;"><i class="fa fa-link"></i> 來自綁定料號 '+escapeHtml(att.bind_from)+'</span>' : '';
+    // 料號附件綁定到報價單而顯示在報價群組裡的（2026-09-08）：標明檔案本體在料號附件那邊，
+    // 免得使用者以為報價單裡另外存了一份
+    var fromPartBadge = att.from_part
+        ? '<span style="font-size:9px;font-weight:700;background:#F0A24B;color:#4A3524;border-radius:3px;padding:0 4px;margin-right:4px;" title="這是料號附件綁定過來的，檔案本體在料號主檔；要修改請到料號附件">料號附件</span>'
+        : '';
     return '<a href="#" class="list-group-item bom-file-item att-file-item"'
         + ' data-path="'+escapeHtml(att.url)+'"'
         + ' data-type="'+escapeHtml(att.ext)+'"'
@@ -1416,7 +1466,7 @@ function makeAttItem(att, showSource) {
         + ' style="'+st+'">'
         + (isObs ? '<div style="display:inline-block;background:#e74c3c;color:#fff;font-size:10px;font-weight:700;padding:0 7px;border-radius:3px;letter-spacing:1px;margin-bottom:3px;">⊘ 作廢</div><br>' : '')
         + '<p class="list-group-item-text" style="'+(isObs?'color:#c0392b;text-decoration:line-through;':'')+'">'
-        + srcBadge + extBadge + catBadges + revBadge + issBadge + escapeHtml(att.display_name)
+        + srcBadge + fromPartBadge + extBadge + catBadges + revBadge + issBadge + escapeHtml(att.display_name)
         + (info ? '<br><small style="color:#aaa;font-size:10px;">'+escapeHtml(info)+'</small>' : '')
         + bindTag
         + '</p></a>';

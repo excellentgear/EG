@@ -120,6 +120,35 @@ function pal_maker_names(PDO $pdo, array $makerNos): array {
 }
 
 /**
+ * 某些料號「綁了報價單」的料號附件（給各種以報價單分組的檢視畫面用）。
+ * 2026-09-08 使用者回報：綁定之後在 bom_viewer 的報價單分組裡看不到——那些畫面
+ * 只讀 quotation_attachments，所以這裡把「同一批料號底下、已綁報價單」的料號附件
+ * 一起撈出來，讓呼叫端併進對應的報價單群組。
+ * 回傳的是原始列（含 quote_no），過濾（批圖工作檔、價格類標籤）由呼叫端比照它
+ * 原本對料號附件的規則處理——因為這些本來就是料號附件，規則必須一致。
+ */
+function pal_bound_part_attachments_for_dids(PDO $pdo, array $dids): array {
+    pal_ensure_schema($pdo);
+    $dids = array_values(array_unique(array_filter(array_map('intval', $dids))));
+    if (!$dids) return [];
+    $ph = implode(',', array_fill(0, count($dids), '?'));
+    try {
+        $st = $pdo->prepare(
+            "SELECT pa.id, pa.d_id, pa.filename, pa.original_name, pa.category_ids,
+                    pa.file_size, pa.note, pa.revision, pa.issue_stamp_date, pa.album_id,
+                    pa.quote_no, COALESCE(pa.maker_no,'') AS maker_no,
+                    COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by, pa.uploaded_at
+               FROM part_attachments pa
+               LEFT JOIN user u ON u.id = pa.uploaded_by_id
+              WHERE pa.d_id IN ($ph) AND pa.deleted_at IS NULL
+                AND pa.quote_no IS NOT NULL AND pa.quote_no <> ''
+              ORDER BY pa.uploaded_at DESC");
+        $st->execute($dids);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) { return []; }
+}
+
+/**
  * 某張報價單「由料號附件綁進來」的附件（給報價單附件清單一起列出來用）。
  * 回傳欄位刻意排成跟 quotation_attachments 的清單一致，呼叫端只要接上去就好；
  * from_part=1 讓呼叫端知道這是唯讀的外來列（不可在報價單那邊刪改）。

@@ -18748,6 +18748,19 @@ function openAttachAllView(dId, partNo) {
     });
 }
 
+/* 報價單分頁要列哪些附件（2026-09-08 使用者回報：綁定後在報價單裡看不到）：
+   ①本來就是報價單附件的 ②料號附件但綁定了報價單的。
+   收斂成一支判定，四個設定 filteredFiles 的地方共用，不要各寫一份（鐵律4）。
+   注意 source 仍然是 'part'，所以「編輯／刪除」那些依 source 判斷的守門完全不受影響——
+   綁進來的料號附件在這裡照樣改得動、刪得掉（它本來就是這個料號的附件）。 */
+function _pavIsQuoteFile(f) {
+    return f && (f.source === 'quote' || !!f.bind_quote_no);
+}
+/** 這個附件要歸到哪一張報價單底下 */
+function _pavQuoteKeyOf(f) {
+    return (f && (f.quote_no || f.bind_quote_no)) || '__unknown__';
+}
+
 function openAttachQuoteView(dId, partNo) {
     _pav.dId=dId; _pav.partNo=partNo; _pav.mode='quote'; _pav.catId=0;
     _pav.quoteSummaries = {};
@@ -18757,10 +18770,13 @@ function openAttachQuoteView(dId, partNo) {
     _pavShowUploadBtn(false);
     _pavOpen();
     _pavLoadFiles(function(files) {
-        _pav.filteredFiles = files.filter(function(f){ return f.source === 'quote'; });
+        _pav.filteredFiles = files.filter(_pavIsQuoteFile);
         // 收集所有 quote_no，批次取報價單摘要（無附件時由後端依 d_id 撈）
         var qNos = [];
-        _pav.filteredFiles.forEach(function(f){ if (f.quote_no && qNos.indexOf(f.quote_no)<0) qNos.push(f.quote_no); });
+        _pav.filteredFiles.forEach(function(f){
+            var q = _pavQuoteKeyOf(f);
+            if (q !== '__unknown__' && qNos.indexOf(q) < 0) qNos.push(q);
+        });
         $.post(PART_ATTACH_API_URL, { action:'get_quote_summaries', quote_nos:JSON.stringify(qNos), d_id:_pav.dId }, function(r) {
             _pav.quoteSummaries = (r.success && r.data && typeof r.data === 'object' && !Array.isArray(r.data)) ? r.data : {};
             _pavRenderList();
@@ -18842,7 +18858,7 @@ function _pavRenderQuoteGroupList(files, wrap) {
     // 依 quote_no 分組，每組按最新附件時間排序（由新到舊）
     var groups = {};  // quote_no → [files...]
     files.forEach(function(f) {
-        var qno = f.quote_no || '__unknown__';
+        var qno = _pavQuoteKeyOf(f);
         if (!groups[qno]) groups[qno] = [];
         groups[qno].push(f);
     });
@@ -18943,7 +18959,12 @@ function _pavRenderQuoteGroupList(files, wrap) {
             html += '<div class="pav-file-item" data-idx="'+globalIdx+'" onclick="pavSelectFile('+globalIdx+')" '
                   + 'style="padding:5px 10px 5px 18px;cursor:pointer;border-bottom:1px solid #f0f0f0;transition:background .1s;display:flex;align-items:center;gap:6px;">';
             html += '<div style="flex:1;min-width:0;">';
-            html += '<div>'+tagDisplay+'</div>';
+            // 綁定進來的料號附件要標明出處，免得以為報價單裡另外存了一份（2026-09-08）
+            html += '<div style="display:flex;gap:3px;align-items:center;flex-wrap:wrap;">'
+                  + (f.bind_quote_no ? '<span style="font-size:10px;font-weight:700;background:#F0A24B;color:#4A3524;border-radius:3px;padding:1px 6px;" title="這是料號附件綁定過來的，檔案本體在料號附件">料號附件</span>' : '')
+                  + tagDisplay + '</div>';
+            // 備註（與一般附件清單同一套：有填才顯示，不顯示檔名）
+            if (f.note) html += '<div style="font-size:11px;color:#4A3524;margin-top:2px;word-break:break-all;" title="'+escHtml(f.note)+'"><i class="fa fa-comment-o" style="opacity:.45;margin-right:3px;"></i>'+escHtml(f.note)+'</div>';
             html += '<div style="font-size:10px;color:#aaa;margin-top:2px;display:flex;gap:8px;">';
             html += '<span>'+escHtml(dt)+'</span>';
             if (f.uploaded_by) html += '<span><i class="fa fa-user" style="opacity:.5;margin-right:2px;"></i>'+escHtml(f.uploaded_by)+'</span>';
@@ -19789,7 +19810,7 @@ function pavDeleteCurrent() {
             _pavLoadFiles(function(files) {
                 // 重建 tabs（刪除後 tab 可能消失）
                 if (_pav.mode !== 'quote') _pavBuildCatTabs(files);
-                if (_pav.mode==='quote') _pav.filteredFiles = files.filter(function(x){ return x.source==='quote'; });
+                if (_pav.mode==='quote') _pav.filteredFiles = files.filter(_pavIsQuoteFile);
                 else _pav.filteredFiles = files.filter(function(x){ return x.source!=='quote'; });
                 _pavRenderList();
             });
@@ -19917,7 +19938,9 @@ function pavRestoreAttach(id) {
         pavOpenDeleteLog(); // 重新整理刪除紀錄列表
         _pavLoadFiles(function(files) {
             if (_pav.mode !== 'quote') _pavBuildCatTabs(files);
-            _pav.filteredFiles = files.filter(function(x){ return x.source !== 'quote'; });
+            _pav.filteredFiles = (_pav.mode === 'quote')
+                ? files.filter(_pavIsQuoteFile)
+                : files.filter(function(x){ return x.source !== 'quote'; });
             _pavRenderList();
         });
     });
@@ -20887,9 +20910,11 @@ function submitAttachEdit() {
         _refreshPartAttachCell(_pav.dId);
         _pavLoadFiles(function(files) {
             _pav.allFiles = files;
-            _pav.filteredFiles = _pav.mode==='tag'
-                ? files.filter(function(x){ return x.category_ids && x.category_ids.split(',').map(function(y){ return y.trim(); }).indexOf(String(_pav.catId))>=0; })
-                : files.filter(function(x){ return x.source!=='quote'; });
+            _pav.filteredFiles = _pav.mode==='quote'
+                ? files.filter(_pavIsQuoteFile)
+                : (_pav.mode==='tag'
+                    ? files.filter(function(x){ return x.category_ids && x.category_ids.split(',').map(function(y){ return y.trim(); }).indexOf(String(_pav.catId))>=0; })
+                    : files.filter(function(x){ return x.source!=='quote'; }));
             _pavRenderList();
         });
     });
