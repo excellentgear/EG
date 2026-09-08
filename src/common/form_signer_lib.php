@@ -1451,6 +1451,10 @@ function fsd_case_set_show_page_no(PDO $db, int $caseId, int $byUid, bool $on, b
 function fsd_case_export_set(PDO $db, int $caseId, string $fileName, string $mode): void {
     $db->prepare("UPDATE fsd_case SET export_pdf_name=?,export_pdf_at=NOW(),export_mode=? WHERE id=?")
        ->execute([$fileName, $mode, $caseId]);
+    // 合成 PDF 一有新版，AS 文件管理由這件導入的檢視版就跟著換（2026-09-08 使用者拍板「完全自動同步」）。
+    // 刻意掛在這個「唯一寫入點」而不是各個呼叫端：往後不管哪條路徑重新產生 PDF，AS 那邊都不會再落後。
+    // 同步失敗（NAS 沒連上等）一律不可以害 PDF 產生失敗，故整段吞掉例外。
+    try { fsd_asdoc_sync_view_from_case($db, $caseId); } catch (Throwable $e) { /* 不擋主要作業 */ }
 }
 
 /** 案件是否已有合成PDF可開。 */
@@ -1536,6 +1540,102 @@ function fsd_case_delete_block_msg(array $usage): string {
     foreach ($usage as $u) $list[] = $u['doc_no'] . ' ' . $u['doc_name'] . '（' . $u['version'] . ' 版）';
     return '已經有 AS 文件套用此案件的文件：' . implode('、', $list)
          . '。請先至「AS 文件管理」刪除此版本，才可刪除本案件。';
+}
+
+/**
+ * 案件的合成 PDF 產生／重新產生之後，把「AS 文件管理由這件導入的檢視版」一起換成最新那一份。
+ * 2026-09-08 使用者拍板「完全自動同步」：在表單簽核設計器更換附件或事後編修圖章之後，
+ * AS 文件管理那邊不必再按任何按鈕就會是最新內容。
+ *
+ * 為什麼需要這支：導入（AS_Document_API 的 asFsdImportFile）是把合成 PDF「複製一份」到 AS 文件資料夾，
+ * 複製完兩邊就各走各的——案件事後被換掉附件，AS 檢視版仍是導入當下那份舊複本，而且畫面上完全看不出來
+ * （2026-09-08 實際發生於 2-DC-03 2.0 ／案件 #326）。
+ *
+ * 四條守門，缺一不可：
+ *  ①只同步「該文件目前的版本」——已被改版的歷史版本是發行紀錄，不可以被後來的動作改掉內容。
+ *  ②只同步 src_fsd_case_id 認列＝原本就是由這件導入的檢視版，自行上傳的檢視版一律不碰。
+ *  ③已經是同一份 PDF（view_src_pdf_name 相同，或首次同步時 md5 相同）就只補記來源、不重複複製。
+ *  ④舊檔一律保留不刪——這是自動發生的動作、沒有人按下任何按鈕，留著才救得回來。
+ * 回傳每個版本的處理結果供呼叫端記錄；呼叫端一律不可因為同步失敗而讓產生 PDF 整支失敗。
+ */
+function fsd_asdoc_sync_view_from_case(PDO $db, int $caseId): array {
+    require_once __DIR__ . '/attach_lib.php';
+    require_once __DIR__ . '/date_fmt_lib.php';
+    $out = [];
+    $case = fsd_case_get($db, $caseId);
+    if (!$case || ($case['status'] ?? '') !== 'approved') return $out;
+    $src = trim((string)($case['export_pdf_name'] ?? ''));
+    if ($src === '') return $out;
+
+    try {
+        $st = $db->prepare("SELECT v.id, v.doc_id, v.version, v.view_file_name, v.view_src_pdf_name,
+                                   d.doc_no, d.doc_name, d.current_version_id
+                            FROM as_document_version v
+                            JOIN as_document d ON d.id = v.doc_id
+                            WHERE v.src_fsd_case_id = ?");
+        $st->execute([$caseId]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        return $out;   // 欄位還沒建（migrate 未跑）時當作沒有可同步的版本，不擋主要作業
+    }
+    if (!$rows) return $out;
+
+    $srcPath = rtrim(eg_attach_dir($db, 'fsd_case_nas_dir', '表單簽核設計器-案件'), '\\/')
+             . DIRECTORY_SEPARATOR . $src;
+    if (!is_file($srcPath)) { return [['result' => 'src_missing', 'file' => $src]]; }
+
+    $root = '';
+    try {
+        $s = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key='as_doc_nas_dir'");
+        $s->execute();
+        $root = rtrim((string)$s->fetchColumn(), "/\\");
+    } catch (Throwable $e) { $root = ''; }
+    if ($root === '') return [['result' => 'as_root_unset']];
+
+    // 顯示名比照導入當下的規則「案件名稱 業務日期.pdf」，版本清單看得出是哪一件
+    $safe = preg_replace('/[\\\\\/:*?"<>|]+/u', '_', trim((string)$case['title']) ?: ('案件' . $caseId));
+    $showName = trim($safe . ' ' . eg_fmt_date($case['business_date'])) . '.pdf';
+
+    foreach ($rows as $r) {
+        $verId = (int)$r['id'];
+        $tag = ['version_id' => $verId, 'doc_no' => $r['doc_no'], 'version' => $r['version']];
+        $mark = trim((string)$r['view_src_pdf_name']);
+        if (trim((string)$r['view_file_name']) === '') { $out[] = $tag + ['result' => 'no_view_file']; continue; }
+        if ((int)$r['current_version_id'] !== $verId)  { $out[] = $tag + ['result' => 'history_version']; continue; }
+        // 在 AS 文件管理人工替換／補上去的檢視版：那是人特地換的，自動同步一律不覆蓋
+        if ($mark === '__manual__') { $out[] = $tag + ['result' => 'manual_override']; continue; }
+        if ($mark === $src) { $out[] = $tag + ['result' => 'already_latest']; continue; }
+
+        $dir  = $root . DIRECTORY_SEPARATOR . 'docs' . DIRECTORY_SEPARATOR . (int)$r['doc_id'];
+        $curr = $dir . DIRECTORY_SEPARATOR . $r['view_file_name'];
+        // 首次同步（舊資料沒有 view_src_pdf_name）：內容本來就一樣就只補記來源，不必多複製一份到 NAS
+        if ($mark === '' && is_file($curr)
+            && filesize($curr) === filesize($srcPath) && md5_file($curr) === md5_file($srcPath)) {
+            $db->prepare("UPDATE as_document_version SET view_src_pdf_name=?, view_synced_at=NOW() WHERE id=?")
+               ->execute([$src, $verId]);
+            $out[] = $tag + ['result' => 'already_latest'];
+            continue;
+        }
+        if (!is_dir($dir) && !@mkdir($dir, 0777, true)) { $out[] = $tag + ['result' => 'dir_fail']; continue; }
+        $name = date('Ymd_His_') . bin2hex(random_bytes(4)) . '.pdf';
+        if (!@copy($srcPath, $dir . DIRECTORY_SEPARATOR . $name)) { $out[] = $tag + ['result' => 'copy_fail']; continue; }
+
+        $old = (string)$r['view_file_name'];
+        $db->prepare("UPDATE as_document_version
+                      SET view_file_name=?, view_original_name=?, view_src_pdf_name=?, view_synced_at=NOW()
+                      WHERE id=?")
+           ->execute([$name, $showName, $src, $verId]);
+        try {
+            $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                          VALUES ('update','as_doc_view_sync',?,?,?,0,'系統自動同步',NOW())")
+               ->execute([(string)$verId,
+                          trim($r['doc_no'] . ' ' . $r['doc_name'] . ' ' . $r['version'] . ' 版'),
+                          json_encode([['field' => '檢視版檔案（由表單簽核案件 #' . $caseId . ' 自動同步）',
+                                        'old' => $old, 'new' => $name]], JSON_UNESCAPED_UNICODE)]);
+        } catch (Throwable $e) { /* 稽核寫入失敗不擋同步 */ }
+        $out[] = $tag + ['result' => 'synced', 'old' => $old, 'new' => $name];
+    }
+    return $out;
 }
 
 function fsd_case_pages_get(PDO $db, int $caseId): array {

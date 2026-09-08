@@ -368,7 +368,8 @@ function asFsdImportFile(PDO $db, int $caseId, int $docId, string $destDir): arr
     $safe = preg_replace('/[\\\\\/:*?"<>|]+/u', '_', trim((string)$case['title']) ?: ('案件' . $caseId));
     return ['file_name'=>$name,
             'original_name'=>trim($safe . ' ' . eg_fmt_date($case['business_date'])) . '.pdf',
-            'case_id'=>$caseId];
+            'case_id'=>$caseId,
+            'src_pdf'=>$src];   // 來源合成 PDF 的檔名，供之後判斷這份複本是不是已經落後（自動同步用）
 }
 /** 串流下載/開啟一個實體檔案（$inline=true 時 PDF/圖片直接在瀏覽器開啟） */
 function asStream(string $fullpath, string $downloadName, bool $inline = false): void {
@@ -943,7 +944,7 @@ case 'add_version':
 
         // 檢視版（選填）：沒傳＝線上預覽退回用下載版，之後可在歷史版本「補檔」；
         // 也可改由「表單簽核案件」導入該案件已簽核完成的合成 PDF（線上預覽看到的就是簽好章那一份）
-        $viewName = null; $viewOrig = null; $srcCaseId = null;
+        $viewName = null; $viewOrig = null; $srcCaseId = null; $viewSrcPdf = null;
         if ($hasView) {
             $viewName = asMakeName($viewExt);
             if (!move_uploaded_file($_FILES['view_file']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$viewName)) throw new Exception('檢視版寫入失敗');
@@ -951,13 +952,16 @@ case 'add_version':
         } elseif ($fsdCaseId > 0) {
             $imp = asFsdImportFile($db, $fsdCaseId, $docId, $dir);
             $viewName = $imp['file_name']; $viewOrig = $imp['original_name']; $srcCaseId = $imp['case_id'];
+            // 記下複製來源是案件的哪一份合成 PDF：案件事後被換附件、重新產生 PDF 時，
+            // fsd_asdoc_sync_view_from_case() 靠這個欄位判斷這裡是不是已經是最新的（2026-09-08 自動同步）
+            $viewSrcPdf = $imp['src_pdf'] ?? null;
         }
 
         // 舊版快照沿用主檔當下的階級/部門
         $db->prepare("INSERT INTO as_document_version
-              (doc_id,version,change_status,revised_date,revised_pages,revised_summary,doc_level_snapshot,department_id_snapshot,file_name,original_name,view_file_name,view_original_name,apply_form_file_name,apply_form_original_name,src_fsd_case_id,uploaded_by,uploaded_at)
-              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())")
-           ->execute([$docId,$version,$cstat,$rdate,$rpages,$rsum,$doc['doc_level'],$doc['department_id'],$fname,$orig,$viewName,$viewOrig,$applyName,$applyOrig,$srcCaseId,$GLOBALS['currentCname']]);
+              (doc_id,version,change_status,revised_date,revised_pages,revised_summary,doc_level_snapshot,department_id_snapshot,file_name,original_name,view_file_name,view_original_name,apply_form_file_name,apply_form_original_name,src_fsd_case_id,view_src_pdf_name,view_synced_at,uploaded_by,uploaded_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,".(!empty($viewSrcPdf)?"NOW()":"NULL").",?,NOW())")
+           ->execute([$docId,$version,$cstat,$rdate,$rpages,$rsum,$doc['doc_level'],$doc['department_id'],$fname,$orig,$viewName,$viewOrig,$applyName,$applyOrig,$srcCaseId,($viewSrcPdf ?? null),$GLOBALS['currentCname']]);
         $verId = (int)$db->lastInsertId();
 
         $db->prepare("UPDATE as_document SET current_version=?, current_version_id=?, updated_at=NOW() WHERE id=?")
@@ -2162,6 +2166,10 @@ case 'version_attach_file':
     if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir.DIRECTORY_SEPARATOR.$fname)) jout(['status'=>'error','message'=>'檔案寫入失敗']);
     $db->prepare("UPDATE as_document_version SET $col=?, $colO=? WHERE id=?")
        ->execute([$fname, basename($_FILES['file']['name']), $verId]);
+    // 人工補上去的檢視版不參與自動同步（同 version_replace_file 的理由）
+    if ($which === 'view')
+        $db->prepare("UPDATE as_document_version SET view_src_pdf_name='__manual__', view_synced_at=NULL WHERE id=?")
+           ->execute([$verId]);
     jout(['status'=>'success']);
 
 // ══════════════ 修改某一版的修訂日期（管理員；打錯日期就地更正） ══════════════
@@ -2254,6 +2262,11 @@ case 'version_replace_file':
         $db->beginTransaction();
         $db->prepare("UPDATE as_document_version SET $col=?, $colO=? WHERE id=?")
            ->execute([$fname, basename($_FILES['file']['name']), $verId]);
+        // 檢視版被人工替換過就停掉自動同步——這一份是人特地換上去的，不可以被來源案件下一次
+        // 重新產生 PDF 時安靜蓋掉（fsd_asdoc_sync_view_from_case 看到這個標記會跳過）
+        if ($which === 'view')
+            $db->prepare("UPDATE as_document_version SET view_src_pdf_name='__manual__', view_synced_at=NULL WHERE id=?")
+               ->execute([$verId]);
         $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
                       VALUES ('views/ADM/as_document_management.php', ?, ?, NOW(), ?)")
            ->execute(['替換目前版本檔案',

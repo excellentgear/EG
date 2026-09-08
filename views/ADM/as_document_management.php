@@ -984,7 +984,7 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
               <div id="ver_fsd_wrap" style="display:none;margin-top:4px;">
                 <label style="font-weight:normal;font-size:12px;margin-bottom:2px;">或由「表單簽核案件」導入（同一份文件不用上傳兩次）</label>
                 <select class="form-control input-sm" name="fsd_case_id" id="ver_fsd_case"></select>
-                <span class="text-muted" style="font-size:11px;">只列出已簽核完成、已產生 PDF、且連結到本文件編號的案件；導入的就是簽好章的合成 PDF，線上預覽會顯示它。</span>
+                <span class="text-muted" style="font-size:11px;">只列出已簽核完成、已產生 PDF、且連結到本文件編號的案件；導入的就是簽好章的合成 PDF，線上預覽會顯示它。<b>導入之後會自動保持同步</b>：之後在表單簽核設計器更換那件案件的附件或事後編修圖章，這裡的檢視版會在案件重新產生 PDF 時自動換成最新那一份（只換「目前版本」，歷史版本是發行紀錄不會被動到；若之後在這裡人工替換過檢視版，就改以人工那份為準、不再自動覆蓋）。</span>
               </div></div>
             <div class="form-group col-md-4"><label>文件制修申請單（附件一）* <span class="req-note">改版必附</span></label><input type="file" name="apply_form" id="ver_apply_form" required></div>
           </div>
