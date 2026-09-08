@@ -67,6 +67,40 @@ function getQuotAttachDays(PDO $pdo, string $key, int $default): int {
         return $n > 0 ? $n : $default;
     } catch (Exception $e) { return $default; }
 }
+/* ── 補件是否需要重新審核（2026-09-08 使用者要求）────────────────────────────
+   兩層設定，任一成立就免審：
+     ①全站開關 system_parameters(QUOTATION, supp_need_review)＝0（**預設 1＝維持現況**）
+     ②該附件的類別全部都勾了 quotation_file_categories.supp_no_review
+   ②刻意要求「全部」而不是「任一」：一個附件可以掛多個類別，只要還掛著一個需要審核的
+   類別，就代表它仍有需要被看過的內容，放行會讓那個類別的把關失效。
+   免審＝直接成為正式附件(active)，不建簽核紀錄、不發通知（使用者拍板），但寫 audit_log。 */
+function quotSuppNeedReviewGlobal(PDO $pdo): bool {
+    try {
+        $st = $pdo->prepare("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key='supp_need_review' LIMIT 1");
+        $st->execute();
+        $v = $st->fetchColumn();
+        if ($v === false || $v === null || $v === '') return true;   // 沒設定過＝維持現況（要審）
+        $d = json_decode($v, true);
+        return !(($d === 0) || ($d === '0') || ($d === false));
+    } catch (Exception $e) { return true; }
+}
+/** 免審的類別 id（有勾 supp_no_review 的） */
+function quotSuppNoReviewCatIds(PDO $pdo): array {
+    try {
+        return array_map('intval', $pdo->query("SELECT id FROM quotation_file_categories WHERE COALESCE(supp_no_review,0)=1")->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Exception $e) { return []; }
+}
+/** 這個附件（依它的類別）補件時要不要重新審核 */
+function quotSuppNeedReview(PDO $pdo, string $categoryIds): bool {
+    if (!quotSuppNeedReviewGlobal($pdo)) return false;              // 全站關掉＝一律免審
+    $cats = array_values(array_filter(array_map('intval', explode(',', $categoryIds))));
+    if (!$cats) return true;                                        // 沒類別的本來就擋在前面，保守起見要審
+    $free = quotSuppNoReviewCatIds($pdo);
+    if (!$free) return true;
+    foreach ($cats as $c) { if (!in_array($c, $free, true)) return true; }
+    return false;                                                   // 全部類別都免審才免審
+}
+
 // 垃圾桶實體資料夾（被否決補件先搬到這裡，7天後 purge；「先進暫存檔」）
 function trashDir(string $base, string $quoteNo): string {
     return rtrim($base, '/\\') . DIRECTORY_SEPARATOR . '_att_trash' . DIRECTORY_SEPARATOR . $quoteNo . DIRECTORY_SEPARATOR;
@@ -138,6 +172,8 @@ function initTables(PDO $pdo): void {
     try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN external_doc_name VARCHAR(100) NULL COMMENT '外來文件類別名稱(空=用標籤名)'"); } catch(PDOException $e){}
     // 暫存/補件/垃圾狀態機（2026-07-22）：temp=未存檔暫存 active=正式 pending=補件待審 trash=已否決待清
     try { $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'active' COMMENT 'temp/active/pending/trash' AFTER linked_parts"); } catch(PDOException $e){}
+    // 2026-09-08 使用者要求：已核准報價單補附件不一定每次都要重新審核
+    try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN supp_no_review TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=此類別的附件補件時免重新審核，直接成為正式附件'"); } catch(PDOException $e){}
     try { $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN expire_at DATETIME NULL COMMENT 'temp/trash 自動清除到期時間，NULL=不清' AFTER updated_at"); } catch(PDOException $e){}
     try { $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN trashed_reason VARCHAR(500) NULL COMMENT '補件被否決原因' AFTER expire_at"); } catch(PDOException $e){}
     try { $pdo->exec("ALTER TABLE quotation_attachments ADD INDEX idx_status_expire (status, expire_at)"); } catch(PDOException $e){}
@@ -152,7 +188,8 @@ switch ($action) {
         initTables($pdo);
         $rows = $pdo->query(
             "SELECT id, category_name, sort_order, COALESCE(show_in_list,0) AS show_in_list, tag_variables,
-                    COALESCE(is_external_doc,0) AS is_external_doc, external_doc_name
+                    COALESCE(is_external_doc,0) AS is_external_doc, external_doc_name,
+                    COALESCE(supp_no_review,0) AS supp_no_review
              FROM quotation_file_categories WHERE is_active=1 ORDER BY sort_order, id"
         )->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['success' => true, 'categories' => $rows]);
@@ -163,7 +200,8 @@ switch ($action) {
         initTables($pdo);
         $rows = $pdo->query(
             "SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, tag_variables,
-                    COALESCE(is_external_doc,0) AS is_external_doc, external_doc_name
+                    COALESCE(is_external_doc,0) AS is_external_doc, external_doc_name,
+                    COALESCE(supp_no_review,0) AS supp_no_review
              FROM quotation_file_categories ORDER BY sort_order, id"
         )->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['success' => true, 'categories' => $rows]);
@@ -194,6 +232,15 @@ switch ($action) {
             if (isset($_POST['tag_variables']))     { $sets[]='tag_variables=?';     $vals[]=$tagVars; }
             if (isset($_POST['is_external_doc']))   { $sets[]='is_external_doc=?';   $vals[]=$isExtDoc; }
             if (isset($_POST['external_doc_name'])) { $sets[]='external_doc_name=?'; $vals[]=$extDocName; }
+            // 「補件免重新審核」＝把一道簽核關卡關掉，故另外驗權限（需報價單設定權限）。
+            // 只擋這一個欄位，其餘既有欄位的存檔行為完全不變（主檔管理頁不會送這個欄位）。
+            if (isset($_POST['supp_no_review'])) {
+                $_cf = _quotFeats($pdo);
+                if (!rbac_has($_cf, 'all') && !rbac_has($_cf, 'quotation_settings')) {
+                    echo json_encode(['success'=>false,'message'=>'沒有報價單設定權限，不能變更「補件免重新審核」']); exit;
+                }
+                $sets[]='supp_no_review=?'; $vals[]=(intval($_POST['supp_no_review']) ? 1 : 0);
+            }
             $vals[] = $catId;
             $pdo->prepare("UPDATE quotation_file_categories SET ".implode(',', $sets)." WHERE id=?")
                 ->execute($vals);
@@ -352,6 +399,8 @@ switch ($action) {
                     'category_name' => null,
                     'linked_parts'  => null,
                     'note'          => $pf['note'],
+                    'maker_no'      => (string)($pf['maker_no'] ?? ''),
+                    'maker_name'    => (string)($pf['maker_name'] ?? ''),
                     'uploaded_by'   => $pf['uploaded_by'],
                     'status'        => 'active',
                 ];
@@ -544,10 +593,24 @@ switch ($action) {
         $targets = $sel->fetchAll(PDO::FETCH_ASSOC);
         if (empty($targets)) { echo json_encode(['success'=>false,'message'=>'沒有可送審的補件附件（需先上傳並設定類別）']); break; }
 
-        $done = 0; $skipped = [];
+        $done = 0; $skipped = []; $autoActive = 0;
         foreach ($targets as $t) {
             if (empty($t['category_ids'])) { $skipped[] = ($t['original_name'] ?: ('#'.$t['id'])) . '（未設類別）'; continue; }
             $attId = (int)$t['id'];
+            // 免審（全站關掉審核，或這個附件的類別全部都勾了免審）＝直接成為正式附件。
+            // 不建簽核紀錄、不發通知（使用者拍板：發了等於還是要人去點），但一定要留稽核。
+            if (!quotSuppNeedReview($pdo, (string)$t['category_ids'])) {
+                $pdo->prepare("UPDATE quotation_attachments SET status='active', expire_at=NULL WHERE id=? AND status='temp'")->execute([$attId]);
+                try {
+                    $pdo->prepare("INSERT INTO audit_log (action_type,target_type,target_id,target_name,changes,user_id,operator,created_at)
+                                   VALUES ('insert','quotation_attach_no_review',?,?,?,?,?,NOW())")
+                        ->execute([(string)$attId, mb_substr((string)($t['original_name'] ?: ''), 0, 200, 'UTF-8'),
+                                   '報價單 ' . $quoteNo . ' 補件免重新審核，直接成為正式附件（類別 id：' . $t['category_ids'] . '）',
+                                   $uid, $name]);
+                } catch (Exception $_e) {}
+                $autoActive++;
+                continue;
+            }
             $pdo->prepare("UPDATE quotation_attachments SET status='pending', expire_at=NULL WHERE id=? AND status='temp'")->execute([$attId]);
             $apId  = eg_approval_submit($pdo, 'quotation_attach', $attId, 'manager', $uid, $name);
             $label = _quotPartLabel($t['linked_parts']);
@@ -555,8 +618,11 @@ switch ($action) {
             if ($evId) eg_approval_set_live_event($pdo, $apId, $evId);
             $done++;
         }
-        echo json_encode(['success'=>$done>0, 'submitted'=>$done, 'skipped'=>$skipped,
-                          'message'=>$done>0 ? "已送出 {$done} 件補件審核" : '沒有附件送審（請先設定類別）']);
+        $msgs = [];
+        if ($done)       $msgs[] = "已送出 {$done} 件補件審核";
+        if ($autoActive) $msgs[] = "{$autoActive} 件免審核，已直接加入此報價單";
+        echo json_encode(['success'=>($done + $autoActive) > 0, 'submitted'=>$done, 'auto_active'=>$autoActive, 'skipped'=>$skipped,
+                          'message'=>$msgs ? implode('；', $msgs) : '沒有附件送審（請先設定類別）']);
         break;
     }
 

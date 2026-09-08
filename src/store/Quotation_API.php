@@ -2890,6 +2890,17 @@ try {
             $pval = $_POST['param_value'] ?? '';
             $desc = $_POST['description'] ?? '';
             if (!$pg || !$pk) throw new Exception('缺少參數');
+            // 2026-09-08：「補附件免重新審核」是把一道簽核關卡關掉的設定，不可以讓任何登入者
+            // 直打 API 就改掉，故這一個 key 另外驗權限（需報價單設定權限 quotation_settings）。
+            // 只擋這一個 key＝其餘既有參數的行為完全不變。
+            if ($pg === 'QUOTATION' && $pk === 'supp_need_review') {
+                require_once __DIR__ . '/../common/rbac.php';
+                $_pf = [];
+                try { $_pf = rbac_user_features($pdo, (int)$user_id); } catch (Exception $_e) { $_pf = []; }
+                if (!rbac_has($_pf, 'all') && !rbac_has($_pf, 'quotation_settings')) {
+                    throw new Exception('沒有報價單設定權限，不能變更補件審核設定');
+                }
+            }
             // 驗證是合法 JSON
             $decoded = json_decode($pval, true);
             if (json_last_error() !== JSON_ERROR_NONE) throw new Exception('param_value 必須是合法 JSON');

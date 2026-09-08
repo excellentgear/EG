@@ -137,9 +137,11 @@ function pal_bound_part_attachments_for_dids(PDO $pdo, array $dids): array {
             "SELECT pa.id, pa.d_id, pa.filename, pa.original_name, pa.category_ids,
                     pa.file_size, pa.note, pa.revision, pa.issue_stamp_date, pa.album_id,
                     pa.quote_no, COALESCE(pa.maker_no,'') AS maker_no,
+                    COALESCE(NULLIF(ml.maker_id,''), ml.maker_id_all, '') AS maker_name,
                     COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by, pa.uploaded_at
                FROM part_attachments pa
                LEFT JOIN user u ON u.id = pa.uploaded_by_id
+               LEFT JOIN maker_list ml ON ml.maker_id_no = pa.maker_no
               WHERE pa.d_id IN ($ph) AND pa.deleted_at IS NULL
                 AND pa.quote_no IS NOT NULL AND pa.quote_no <> ''
               ORDER BY pa.uploaded_at DESC");
@@ -162,9 +164,12 @@ function pal_quote_linked_part_attachments(PDO $pdo, string $quoteNo): array {
             "SELECT pa.id, pa.d_id, pa.filename, pa.original_name, pa.category_ids,
                     pa.file_size, pa.note, pa.revision, pa.uploaded_at,
                     COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by,
-                    COALESCE(ds.D_Setting_Id,'') AS part_no
+                    COALESCE(ds.D_Setting_Id,'') AS part_no,
+                    COALESCE(pa.maker_no,'') AS maker_no,
+                    COALESCE(NULLIF(ml.maker_id,''), ml.maker_id_all, '') AS maker_name
                FROM part_attachments pa
                LEFT JOIN user u ON u.id = pa.uploaded_by_id
+               LEFT JOIN maker_list ml ON ml.maker_id_no = pa.maker_no
                LEFT JOIN d_setting ds ON ds.d_id = pa.d_id
               WHERE pa.quote_no = ? AND pa.deleted_at IS NULL
               ORDER BY pa.uploaded_at DESC, pa.id DESC");

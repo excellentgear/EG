@@ -445,6 +445,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'get_quote_attachments_by_di
                         'uploaded_at'    => substr($r['uploaded_at'] ?: '', 0, 16),
                         'category_names' => $catNames,
                         'quote_no'       => $r['quote_no'],
+                        'maker_no'       => (string)($r['maker_no'] ?? ''),
+                        'maker_name'     => (string)($r['maker_name'] ?? ''),
                         'bind_from'      => $bindLabelByDid[(int)$r['d_id']] ?? null,
                         'revision'         => ($r['revision'] === null ? '' : (string)$r['revision']),
                         'issue_stamp_date' => $r['issue_stamp_date'] ?: '',
@@ -1425,7 +1427,11 @@ function showAlbumGrid(key) {
 // 平常各分頁自己顯示時不需要（同分頁內來源已經很清楚）
 var _bomSourceLabel = { quote: '報價', order: '訂單', other: '其他' };
 var _bomSourceColor = { quote: '#8a4b0f', order: '#1ABB9C', other: '#7d3c98' };
-function makeAttItem(att, showSource) {
+/* hideName＝這一列不顯示檔名（2026-09-08 使用者要求）。
+   掃描檔名多半是日期流水號，看不出是什麼；報價單分組改成以「類別標籤＋廠商」辨識。
+   檔名仍寫在 data-name（開檔／列印／另存都用它）與整列的 title，只是不佔版面。
+   **只有報價單分組傳 true**，圖面／其他附件／訂單附件維持原樣不動。 */
+function makeAttItem(att, showSource, hideName) {
     var catBadges = '';
     (att.category_names || []).forEach(function(cn) {
         if (cn === '作廢') return;
@@ -1453,6 +1459,14 @@ function makeAttItem(att, showSource) {
     var isObs = (att.category_names || []).indexOf('作廢') >= 0;
     var st = isObs ? 'background:#fff0f0;border-left:3px solid #e74c3c;' : '';
     var bindTag = att.bind_from ? '<br><span style="font-size:10px;color:#1ABB9C;"><i class="fa fa-link"></i> 來自綁定料號 '+escapeHtml(att.bind_from)+'</span>' : '';
+    // 廠商：緊接在類別標籤旁（使用者指定的位置）；沒綁廠商的附件完全看不出差別
+    var makerBadge = att.maker_no
+        ? '<span style="font-size:10px;font-weight:600;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;border-radius:3px;padding:0 5px;margin-right:4px;" title="廠商"><i class="fa fa-industry" style="margin-right:2px;"></i>'+escapeHtml(att.maker_name || att.maker_no)+'</span>'
+        : '';
+    // 不顯示檔名時，整列至少要有東西可辨識：類別標籤／廠商都沒有才退回「（未分類）」
+    var nameHtml = hideName
+        ? ((catBadges || makerBadge) ? '' : '<span style="color:#aaa;">（未分類）</span>')
+        : escapeHtml(att.display_name);
     // 料號附件綁定到報價單而顯示在報價群組裡的（2026-09-08）：標明檔案本體在料號附件那邊，
     // 免得使用者以為報價單裡另外存了一份
     var fromPartBadge = att.from_part
@@ -1463,10 +1477,11 @@ function makeAttItem(att, showSource) {
         + ' data-type="'+escapeHtml(att.ext)+'"'
         + ' data-name="'+escapeHtml(att.display_name)+'"'
         + ' data-obsolete="'+(isObs?'1':'0')+'"'
+        + ' title="'+escapeHtml(att.display_name)+'"'
         + ' style="'+st+'">'
         + (isObs ? '<div style="display:inline-block;background:#e74c3c;color:#fff;font-size:10px;font-weight:700;padding:0 7px;border-radius:3px;letter-spacing:1px;margin-bottom:3px;">⊘ 作廢</div><br>' : '')
         + '<p class="list-group-item-text" style="'+(isObs?'color:#c0392b;text-decoration:line-through;':'')+'">'
-        + srcBadge + fromPartBadge + extBadge + catBadges + revBadge + issBadge + escapeHtml(att.display_name)
+        + srcBadge + fromPartBadge + extBadge + catBadges + makerBadge + revBadge + issBadge + nameHtml
         + (info ? '<br><small style="color:#aaa;font-size:10px;">'+escapeHtml(info)+'</small>' : '')
         + bindTag
         + '</p></a>';
@@ -1632,7 +1647,7 @@ function orderGroupHtml(og, quoteGroups, summaries) {
     og.files.forEach(function(f) { html += makeAttItem(f); });
     if (og.quote_no && quoteGroups.hasOwnProperty(og.quote_no)) {
         html += quoteHeadHtml(og.quote_no, summaries[og.quote_no], true);
-        (quoteGroups[og.quote_no] || []).forEach(function(f) { html += makeAttItem(f); });
+        (quoteGroups[og.quote_no] || []).forEach(function(f) { html += makeAttItem(f, false, true); });
     }
     return html;
 }
@@ -1677,7 +1692,7 @@ function renderOrderQuoteTab() {
             html += orderGroupHtml(g.orderGroups[e.key], g.quoteGroups, g.summaries);
         } else {
             html += quoteHeadHtml(e.key, g.summaries[e.key], false);
-            (g.quoteGroups[e.key] || []).forEach(function(f) { html += makeAttItem(f); });
+            (g.quoteGroups[e.key] || []).forEach(function(f) { html += makeAttItem(f, false, true); });
         }
     });
     $('#bom-file-list').html(html);

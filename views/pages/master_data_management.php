@@ -18957,12 +18957,16 @@ function _pavRenderQuoteGroupList(files, wrap) {
                 ? tagLabels.map(function(t){ return '<span style="font-size:10px;background:#e8f4fd;color:#1a5276;border-radius:3px;padding:1px 6px;margin-right:2px;">'+escHtml(t)+'</span>'; }).join('')
                 : '<span style="font-size:10px;color:#aaa;">未分類</span>';
             html += '<div class="pav-file-item" data-idx="'+globalIdx+'" onclick="pavSelectFile('+globalIdx+')" '
+                  + 'title="'+escHtml(f.original_name || f.filename || '')+'" '
                   + 'style="padding:5px 10px 5px 18px;cursor:pointer;border-bottom:1px solid #f0f0f0;transition:background .1s;display:flex;align-items:center;gap:6px;">';
             html += '<div style="flex:1;min-width:0;">';
             // 綁定進來的料號附件要標明出處，免得以為報價單裡另外存了一份（2026-09-08）
+            var qMk = f.maker_no
+                ? '<span style="font-size:10px;font-weight:600;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;border-radius:3px;padding:1px 6px;" title="廠商"><i class="fa fa-industry" style="margin-right:2px;opacity:.7;"></i>'+escHtml(f.maker_name || f.maker_no)+'</span>'
+                : '';
             html += '<div style="display:flex;gap:3px;align-items:center;flex-wrap:wrap;">'
                   + (f.bind_quote_no ? '<span style="font-size:10px;font-weight:700;background:#F0A24B;color:#4A3524;border-radius:3px;padding:1px 6px;" title="這是料號附件綁定過來的，檔案本體在料號附件">料號附件</span>' : '')
-                  + tagDisplay + '</div>';
+                  + tagDisplay + qMk + '</div>';
             // 備註（與一般附件清單同一套：有填才顯示，不顯示檔名）
             if (f.note) html += '<div style="font-size:11px;color:#4A3524;margin-top:2px;word-break:break-all;" title="'+escHtml(f.note)+'"><i class="fa fa-comment-o" style="opacity:.45;margin-right:3px;"></i>'+escHtml(f.note)+'</div>';
             html += '<div style="font-size:10px;color:#aaa;margin-top:2px;display:flex;gap:8px;">';
@@ -19141,7 +19145,11 @@ function _pavRenderList() {
         // 第一行：圖示 + 類別標籤 +（作廢 / 版次 / 發行日）
         html += '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">';
         html += '<i class="fa '+icon+'" style="color:'+(isObs?'#c0392b':'#888')+';flex-shrink:0;font-size:12px;"></i>';
-        html += '<span style="flex:1;min-width:0;display:flex;gap:3px;flex-wrap:wrap;align-items:center;">'+(tags||'')+'</span>';
+        // 廠商緊接在類別標籤旁（2026-09-08 使用者指定的位置）；沒綁廠商的完全看不出差別
+        var mkTag = f.maker_no
+            ? '<span style="font-size:12px;font-weight:600;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;border-radius:4px;padding:1px 7px;" title="廠商"><i class="fa fa-industry" style="margin-right:2px;opacity:.7;"></i>'+escHtml(f.maker_name || f.maker_no)+'</span>'
+            : '';
+        html += '<span style="flex:1;min-width:0;display:flex;gap:3px;flex-wrap:wrap;align-items:center;">'+(tags||'')+mkTag+'</span>';
         if (isObs) html += '<span style="flex-shrink:0;background:#e74c3c;color:#fff;font-size:9px;font-weight:700;padding:0 5px;border-radius:3px;letter-spacing:1px;">作廢</span>';
         // 版次 0 也要顯示：不可用 if(f.revision) 判斷（0 / "0" 會被當成沒填）
         if (f.revision !== null && f.revision !== undefined && String(f.revision) !== '')
@@ -19164,8 +19172,7 @@ function _pavRenderList() {
         html += '<div style="display:flex;gap:5px;margin-top:1px;align-items:center;flex-wrap:wrap;font-size:10px;color:#aaa;line-height:1.3;">';
         html += '<span>'+escHtml(dt)+'</span>';
         if (f.uploaded_by) html += '<span style="color:#888;">'+escHtml(f.uploaded_by)+'</span>';
-        // 廠商／綁定報價單（2026-09-08）：只有真的有值才出現，沒設定過的附件完全看不出差別
-        if (f.maker_no) html += '<span style="background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;font-weight:600;padding:0 5px;border-radius:3px;" title="廠商"><i class="fa fa-industry" style="margin-right:2px;"></i>'+escHtml(f.maker_name || f.maker_no)+'</span>';
+        // 綁定報價單（2026-09-08）：只有真的有值才出現。廠商已顯示在第一行的標籤旁，這裡不重複
         if (f.bind_quote_no) html += '<span style="background:#F3E8FF;color:#6e2fa3;border:1px solid #DCC9EE;font-weight:600;padding:0 5px;border-radius:3px;" title="已綁定報價單，這份附件會一起出現在該報價單上">報價 '+escHtml(f.bind_quote_no)+'</span>';
         html += '</div>';
         html += '</div>';

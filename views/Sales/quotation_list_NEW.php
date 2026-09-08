@@ -1125,6 +1125,21 @@ body { background:var(--bg); }
               </div>
               <small class="text-muted">附件上傳後未存檔＝暫存，逾「未存檔暫存」天數自動刪除；補件被否決的附件先進暫存區，逾「補件被否決」天數自動刪除（預設 2 天／7 天）。</small>
             </div>
+            <!-- 2026-09-08 使用者要求：已核准的報價單補附件是否一定要重新審核 -->
+            <div class="form-group" style="margin-top:12px;">
+              <label style="font-size:13px;">已核准報價單「補附件」的審核</label>
+              <div class="checkbox" style="margin:4px 0;">
+                <label><input type="checkbox" id="qs-supp-review" data-eg-skip onchange="saveSuppNeedReview(this.checked)">
+                  <b>補附件需要重新審核</b>（預設開啟）</label>
+              </div>
+              <small class="text-muted">
+                開啟＝維持現況：已核准的報價單追加附件時，附件先變成「補件審核中」，要簽核者核准後才正式放進報價單。<br>
+                關閉＝<b>全部類別</b>的補件都直接成為正式附件、不再送審。<br>
+                只想放行某幾種附件（例如加工廠報價這種不影響報價內容的），<b>不要關這個開關</b>，
+                改到「附件類別」分頁把那個類別勾「補件免重新審核」即可。<br>
+                不論哪一種免審，都會留下稽核紀錄（誰、什麼時候、哪一張單、哪個附件），只是不發待審通知。
+              </small>
+            </div>
           </div>
 
           <!-- ── Tab 2：附件類別 ── -->
@@ -1184,6 +1199,18 @@ body { background:var(--bg); }
                     <div class="form-group" id="cat-extdoc-name-group" style="display:none;">
                       <label>外來文件類別名稱<small class="text-muted">（清單/列印顯示用；留空＝直接用標籤名稱）</small></label>
                       <input type="text" class="form-control input-sm" id="cat-extdoc-name" placeholder="例：客戶圖面">
+                    </div>
+                    <!-- 2026-09-08 使用者要求：已核准的報價單補附件不一定每次都要重新審核 -->
+                    <div class="form-group" style="margin-bottom:6px;">
+                      <div class="checkbox" style="margin:0;">
+                        <label><input type="checkbox" id="cat-suppfree-chk" data-eg-skip>
+                          <b>補件免重新審核</b></label>
+                      </div>
+                      <small class="text-muted">
+                        勾選後：已核准的報價單追加<b>這個類別</b>的附件時，<b>不必再送簽核者審核</b>，直接成為正式附件。<br>
+                        一個附件可以掛多個類別，<b>要全部類別都勾了才免審</b>——只要還掛著一個沒勾的類別就照舊送審。<br>
+                        免審仍會留下稽核紀錄（誰、什麼時候、哪一張單、哪個附件），只是不發待審通知。
+                      </small>
                     </div>
                     <button class="btn btn-success btn-sm" onclick="saveCategorySettings()">
                       <i class="fa fa-save"></i> 儲存
@@ -1950,6 +1977,7 @@ $(document).ready(function () {
     loadUploadPath();
     loadValidDays();        // ★ 載入有效天數設定
     loadAttachDays();       // ★ 載入附件暫存/垃圾自動清除天數設定
+    loadSuppNeedReview();   // ★ 載入「補附件是否需要重新審核」設定（沒設定過＝要審核＝現況）
     loadPrintApprovalSetting();  // ★ 載入「需審核通過才能列印」開關（列印閘門用）
     initFileUpload();
 
@@ -2904,9 +2932,12 @@ function renderSettingCategoryTable(cats) {
         const extBadge = c.is_external_doc == 1
             ? ` <span class="label" style="background:#F0A24B;" title="列入外來文件清單${c.external_doc_name ? '：'+escapeHtml(c.external_doc_name) : ''}">外來文件</span>`
             : '';
+        const suppBadge = c.supp_no_review == 1
+            ? ` <span class="label" style="background:#8A6A45;" title="已核准報價單追加此類別附件時免重新審核，直接成為正式附件">補件免審</span>`
+            : '';
         html += `<tr data-cat-id="${c.id}" draggable="false">
             <td style="width:24px;cursor:grab;color:#bbb;text-align:center;" class="cat-drag-handle">&#9776;</td>
-            <td>${escapeHtml(c.category_name)} ${badge}${extBadge}</td>
+            <td>${escapeHtml(c.category_name)} ${badge}${extBadge}${suppBadge}</td>
             <td>
                 <button class="btn btn-xs btn-warning" onclick="editCategorySettings(${c.id})">
                     <i class="fa fa-pencil"></i>
@@ -2953,8 +2984,9 @@ function saveCategorySettings() {
     if (!name) { Swal.fire('提示','請填寫類別名稱','warning'); return; }
     const isExt   = $('#cat-extdoc-chk').is(':checked') ? 1 : 0;
     const extName = $('#cat-extdoc-name').val().trim();
+    const suppFree= $('#cat-suppfree-chk').is(':checked') ? 1 : 0;
     $.post(FILE_API_URL, { action:'save_category', cat_id:id, category_name:name, sort_order:ord,
-                           is_external_doc:isExt, external_doc_name:extName }, res => {
+                           is_external_doc:isExt, external_doc_name:extName, supp_no_review:suppFree }, res => {
         if (res.success) {
             Swal.fire({ toast:true, position:'top-end', icon:'success', title:res.message, showConfirmButton:false, timer:1800 });
             resetCategoryForm();
@@ -2971,6 +3003,7 @@ function editCategorySettings(id) {
     $('#cat-extdoc-chk').prop('checked', c.is_external_doc == 1);
     $('#cat-extdoc-name').val(c.external_doc_name || '');
     $('#cat-extdoc-name-group').toggle(c.is_external_doc == 1);
+    $('#cat-suppfree-chk').prop('checked', c.supp_no_review == 1);
     $('#cat-form-title').text('修改類別');
 }
 function resetCategoryForm() {
@@ -2980,6 +3013,7 @@ function resetCategoryForm() {
     $('#cat-extdoc-chk').prop('checked', false);
     $('#cat-extdoc-name').val('');
     $('#cat-extdoc-name-group').hide();
+    $('#cat-suppfree-chk').prop('checked', false);
     $('#cat-form-title').text('新增類別');
 }
 function deactivateCategorySettings(id) {
@@ -5331,6 +5365,19 @@ function _suppValidate() {
         if (hasReq && $(this).find('.supp-part').val() === 'all') ok = false;
     });
     $('#suppSubmitBtn').prop('disabled', !ok);
+    // 全部都免審時把按鈕講成「加入報價單」，免得使用者以為還要等人審（2026-09-08）
+    let anyNeed = false;
+    $rows.each(function () {
+        const cats = $(this).find('.supp-cat:checked').map((i, el) => el.value).get();
+        if (cats.length && _suppCatsNeedReview(cats)) anyNeed = true;
+    });
+    const $b = $('#suppSubmitBtn');
+    if ($rows.length && !anyNeed) {
+        $b.html('<i class="fa fa-check"></i> 加入報價單（免審核）')
+          .attr('title', '這些附件的類別已設定為補件免重新審核，送出後直接成為正式附件');
+    } else {
+        $b.html('<i class="fa fa-paper-plane"></i> 送出補件審核').attr('title', '');
+    }
 }
 // 勾選到必備類別時，若目前料號為「共用」則自動改選第一個料號（沒有料號可選則維持，送出時擋下）
 function _suppSyncPart(chk) {
@@ -7242,6 +7289,42 @@ function loadValidDays() {
         }
     });
 }
+/* 已核准報價單補附件是否需要重新審核（2026-09-08 使用者要求）。
+   **沒設定過＝需要審核＝完全維持現況**，所以既有使用者不會因為這次改版而改變行為。
+   真正的把關在後端 quotSuppNeedReview()（前端只是設定介面，直打 API 也繞不過去）。 */
+let _suppNeedReviewGlobal = true;    // 預設要審核＝維持現況（讀不到設定也一樣）
+function loadSuppNeedReview() {
+    $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'supp_need_review' }, res => {
+        // null（沒設定過）一律視為 1＝要審核
+        const need = !(res && res.success && (res.value === 0 || res.value === '0' || res.value === false));
+        _suppNeedReviewGlobal = need;
+        $('#qs-supp-review').prop('checked', need);
+    }).fail(() => { _suppNeedReviewGlobal = true; $('#qs-supp-review').prop('checked', true); });
+}
+/* 這個附件（依它勾的類別）補件時要不要重新審核——與後端 quotSuppNeedReview() 同一套規則：
+   全站關掉＝一律免審；否則要「所有勾到的類別都免審」才免審。
+   前端只是把畫面上的字講清楚，真正的判定在後端（直打 API 繞不過去＝鐵律8）。 */
+function _suppCatsNeedReview(catIds) {
+    if (!_suppNeedReviewGlobal) return false;
+    if (!catIds || !catIds.length) return true;
+    return catIds.some(function (id) {
+        const c = (typeof getCatById === 'function') ? getCatById(id) : null;
+        return !(c && c.supp_no_review == 1);
+    });
+}
+function saveSuppNeedReview(need) {
+    $.post(API_URL, { action:'save_param', param_group:'QUOTATION', param_key:'supp_need_review',
+        param_value: JSON.stringify(need ? 1 : 0), description:'已核准報價單補附件是否需要重新審核' }, res => {
+        if (res && res.success) {
+            Swal.fire({ toast:true, position:'top-end', icon:'success',
+                        title: need ? '補附件仍需重新審核' : '補附件改為免審核', showConfirmButton:false, timer:2200 });
+        } else {
+            Swal.fire('錯誤', (res && res.message) || '儲存失敗', 'error');
+            loadSuppNeedReview();          // 存不進去就把畫面切回真正的設定值，不要留一個假的勾
+        }
+    }).fail(() => { Swal.fire('錯誤','與伺服器通訊失敗','error'); loadSuppNeedReview(); });
+}
+
 // 附件暫存/垃圾自動清除天數（後端 getQuotAttachDays 讀同名 param，預設 2/7）
 function loadAttachDays() {
     $.get(API_URL, { action:'get_param', param_group:'QUOTATION', param_key:'temp_attach_days' }, res => {
@@ -7978,6 +8061,15 @@ function appendPartLinkedFileItem(f, targetSel) {
     const noteHtml = f.note
         ? `<span style="font-size:11px;color:#4A3524;" title="${escapeHtml(f.note)}"><i class="fa fa-comment-o" style="opacity:.45;"></i> ${escapeHtml(f.note)}</span>`
         : '';
+    // 廠商緊接在類別標籤旁（2026-09-08 使用者指定）
+    const makerHtml = f.maker_no
+        ? `<span style="font-size:11px;font-weight:600;background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;border-radius:3px;padding:1px 6px;white-space:nowrap;" title="廠商"><i class="fa fa-industry" style="opacity:.7;"></i> ${escapeHtml(f.maker_name || f.maker_no)}</span>`
+        : '';
+    // 掃描檔名看不出是什麼，改以「類別標籤＋廠商」辨識；檔名仍在 title 與 data，不佔版面。
+    // 兩者都沒有時才退回顯示檔名，否則整列會沒有東西可點。
+    const labelHtml = (catLabel || f.maker_no)
+        ? '<span style="color:#8A6A45;font-size:11px;">開啟檔案</span>'
+        : dispName;
     const $item = $(`<div class="part-linked-file-item" style="border-left:3px solid #C77C1A;background:#FFFCF7;padding:2px 6px;margin:2px 0;">
         <div class="file-item" style="border-bottom:none;">
             <i class="fa ${icon}"></i>
@@ -7985,7 +8077,8 @@ function appendPartLinkedFileItem(f, targetSel) {
                   title="這是料號附件綁定過來的，檔案本體在料號主檔那邊；要修改請到料號附件">料號附件</span>
             ${f.part_no ? `<span style="font-size:11px;color:#8A6A45;font-family:Consolas,monospace;">${escapeHtml(f.part_no)}</span>` : ''}
             ${catHtml}
-            <span class="file-item-name" title="${escapeHtml(f.original_name||f.filename)}" style="cursor:pointer;">${dispName}</span>
+            ${makerHtml}
+            <span class="file-item-name" title="${escapeHtml(f.original_name||f.filename)}" style="cursor:pointer;text-decoration:underline;text-underline-offset:2px;">${labelHtml}</span>
             ${noteHtml}
             <span class="file-item-size">${escapeHtml(f.size||'')}</span>
             <span class="file-item-time">${escapeHtml(f.mtime||'')}</span>
