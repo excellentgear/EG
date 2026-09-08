@@ -1077,11 +1077,11 @@ case 'doc_freq_get':
     unset($r);
     jout(['status'=>'success','data'=>$rows]);
 
-/** 存檔（單筆與批次同一支：批次＝一次帶多個 id，並各自指定「要不要改」）
- *  freq_mode  : keep 不變／set 設定為／clear 清除
- *  owner_mode : keep 不變／replace 取代為／add 加入／remove 移除
- *  刻意用明確的模式而不是「有填就改」——批次時若把空白當成「清空」，
- *  使用者只想改頻率就會把幾十份文件的負責課室整批洗掉，而且不會有任何提示。 */
+/** 存檔（單筆與批次同一支：批次＝一次帶多個 id，內容一律照畫面上填的那一份寫進去）
+ *  使用者明確要求（2026-09-07）：不要「設定為／清除／不變」「取代／加入／移除」那些選項，
+ *  就是直接填、直接點選。所以這裡只有一條路：
+ *    freq_type 空 ＝ 改回未設定（三個欄位一起清掉）
+ *    負責課室   ＝ 一律取代成畫面上選的那幾個（沒選＝清空） */
 case 'save_doc_freq':
     if (!asIsAdmin()) jout(['status'=>'error','message'=>'僅管理員可設定更新頻率與負責課室']);
     asFreqEnsure($db);
@@ -1089,22 +1089,15 @@ case 'save_doc_freq':
     if (!$ids) jout(['status'=>'error','message'=>'請先選擇要設定的文件']);
     if (count($ids) > 500) jout(['status'=>'error','message'=>'一次最多設定 500 份文件']);
 
-    $fqMode  = (string)($_POST['freq_mode']  ?? 'set');
-    $owMode  = (string)($_POST['owner_mode'] ?? 'replace');
-    if (!in_array($fqMode, ['keep','set','clear'], true))            jout(['status'=>'error','message'=>'更新頻率的處理方式不正確']);
-    if (!in_array($owMode, ['keep','replace','add','remove'], true)) jout(['status'=>'error','message'=>'負責課室的處理方式不正確']);
-    if ($fqMode === 'keep' && $owMode === 'keep')                    jout(['status'=>'error','message'=>'兩項都選「不變」＝沒有要改的內容']);
-
     $fqType = trim($_POST['freq_type'] ?? '');
     $fqN    = trim((string)($_POST['freq_n'] ?? ''));
     $fqNote = mb_substr(trim($_POST['freq_note'] ?? ''), 0, 500);
-    if ($fqMode === 'set') {
-        if ($fqType === '') jout(['status'=>'error','message'=>'請選擇更新頻率（不改請選「不變」，要清空請選「清除」）']);
-        if ($fqErr = asFreqValidate($fqType, $fqN, $fqNote)) jout(['status'=>'error','message'=>$fqErr]);
-    }
+    // 「每 ? 天/週/月/季/年」沒填數量一律當成 1（使用者要求；填 1 是最常見的情況，
+    //  為了少填一個字就把整張表擋下來很煩）
+    if ($fqType !== '' && $fqType !== 'irregular' && $fqN === '') $fqN = '1';
+    if ($fqErr = asFreqValidate($fqType, $fqN, $fqNote)) jout(['status'=>'error','message'=>$fqErr]);
+
     $ownerDs = array_values(array_unique(array_filter(array_map('intval', explode(',', (string)($_POST['owner_dept_ids'] ?? ''))), fn($v)=>$v>0)));
-    if (in_array($owMode, ['add','remove'], true) && !$ownerDs)
-        jout(['status'=>'error','message'=>'請選擇要加入／移除的負責課室']);
 
     // 只認真實存在的文件，避免直打 API 塞不存在的 id
     $ph = implode(',', array_fill(0, count($ids), '?'));
@@ -1115,25 +1108,13 @@ case 'save_doc_freq':
 
     $db->beginTransaction();
     try {
-        if ($fqMode !== 'keep') {
-            $t = $fqMode === 'clear' ? null : $fqType;
-            $n = ($t !== null && $t !== 'irregular') ? (int)$fqN : null;   // 不定時沒有數量
-            $s = ($t !== null && $fqNote !== '')     ? $fqNote  : null;    // 沒設頻率就不留備註
-            $up = $db->prepare("UPDATE as_document SET freq_type=?, freq_n=?, freq_note=?, updated_at=NOW() WHERE id=?");
-            foreach ($ids as $did) $up->execute([$t, $n, $s, $did]);
-        }
-        if ($owMode === 'replace') {
-            foreach ($ids as $did) asSaveOwnerDepts($db, $did, $ownerDs);
-        } elseif ($owMode === 'add') {
-            $ok = $db->prepare("SELECT id FROM department WHERE id IN (".implode(',', array_fill(0,count($ownerDs),'?')).")");
-            $ok->execute($ownerDs);
-            $valid = array_map('intval', $ok->fetchAll(PDO::FETCH_COLUMN));
-            $ins = $db->prepare("INSERT IGNORE INTO as_doc_owner_dept (doc_id, department_id) VALUES (?,?)");
-            foreach ($ids as $did) foreach ($valid as $dp) $ins->execute([$did, $dp]);
-        } elseif ($owMode === 'remove') {
-            $dph = implode(',', array_fill(0, count($ownerDs), '?'));
-            $del = $db->prepare("DELETE FROM as_doc_owner_dept WHERE doc_id=? AND department_id IN ($dph)");
-            foreach ($ids as $did) $del->execute(array_merge([$did], $ownerDs));
+        $t = $fqType !== '' ? $fqType : null;
+        $n = ($t !== null && $t !== 'irregular') ? (int)$fqN : null;   // 不定時沒有數量
+        $s = ($t !== null && $fqNote !== '')     ? $fqNote  : null;    // 沒設頻率就不留備註
+        $up = $db->prepare("UPDATE as_document SET freq_type=?, freq_n=?, freq_note=?, updated_at=NOW() WHERE id=?");
+        foreach ($ids as $did) {
+            $up->execute([$t, $n, $s, $did]);
+            asSaveOwnerDepts($db, $did, $ownerDs);
         }
         $db->commit();
     } catch (Exception $e) { $db->rollBack(); jout(['status'=>'error','message'=>$e->getMessage()]); }
