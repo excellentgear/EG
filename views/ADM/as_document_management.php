@@ -230,7 +230,7 @@ if ($deptPerm === 'R') {
                 </div>
                 <div class="col-md-4">
                   <button class="btn btn-eg-print btn-block" id="btnPrintFreq"
-                          title="把目前篩選出來的全部文件（不只這一頁）連同更新頻率、負責課室、備註一起列印">
+                          title="把目前篩選出來的全部文件（不只這一頁）連同更新頻率、負責課室、備註一起列印；已廢止的文件不會印出來">
                     <i class="fa fa-print"></i> 列印頻率 / 負責課室清單
                   </button>
                 </div>
@@ -1643,8 +1643,13 @@ $(function(){
     return p.length ? p.join('　｜　') : '（未設篩選條件＝全部文件）';
   }
   $('#btnPrintFreq').on('click', function(){
-    if(!DOCS.length){ alert('目前沒有符合篩選條件的文件可列印'); return; }
-    const rows = DOCS.map((d,i)=>{
+    // 使用者指定：已廢止的文件不印在這張清單上（畫面清單仍照常顯示，只有列印排除）
+    const PRINT_DOCS = DOCS.filter(d => d.is_obsolete != 1);
+    if(!PRINT_DOCS.length){
+      alert(DOCS.length ? '符合篩選條件的文件全部都是已廢止的，本清單不列印已廢止文件' : '目前沒有符合篩選條件的文件可列印');
+      return;
+    }
+    const rows = PRINT_DOCS.map((d,i)=>{
       const dp = ownerDeptNames(d);
       const wp = WEB_PAGES[String(d.id)];
       return `<tr>
@@ -1663,7 +1668,7 @@ $(function(){
     const today = (typeof egFmtDate==='function') ? egFmtDate(new Date().toISOString().slice(0,10)) : '';
     const body = `<div class="p-comp">${esc(META.company_name||'')}</div>
       <div class="p-title">文件更新頻率與負責課室清單</div>
-      <div class="p-cond"><span>篩選條件：${esc(freqFilterDesc())}　｜　共 ${DOCS.length} 筆</span><span>列印日期：${esc(today)}</span></div>
+      <div class="p-cond"><span>篩選條件：${esc(freqFilterDesc())}　｜　不含已廢止　｜　共 ${PRINT_DOCS.length} 筆</span><span>列印日期：${esc(today)}</span></div>
       <table class="p-tb">
       <colgroup><col style="width:4%"><col style="width:8%"><col style="width:14%"><col style="width:11%"><col style="width:18%"><col style="width:5%"><col style="width:5%"><col style="width:17%"><col style="width:18%"></colgroup>
       <thead><tr><th>項次</th><th>更新頻率</th><th>負責課室</th><th>文件編號</th><th>文件名稱</th><th>版次</th><th>網頁</th><th>頻率備註</th><th>文件備註</th></tr></thead>
@@ -1681,7 +1686,7 @@ $(function(){
       + 'table.p-tb tr{break-inside:avoid;}'
       + '@page{size:A4 landscape;margin:10mm 10mm 16mm;}';
     EGPrintLog.record({source:'as_doc', doc_kind:'form',
-      doc_name:'文件更新頻率與負責課室清單（'+DOCS.length+' 筆）', note:freqFilterDesc().substring(0,255)});
+      doc_name:'文件更新頻率與負責課室清單（'+PRINT_DOCS.length+' 筆）', note:('不含已廢止｜'+freqFilterDesc()).substring(0,255)});
     const w = window.open('', '_blank');
     // 標題留空：瀏覽器列印頁首會印出網頁標題＋日期，本站列印一律不要頁首
     w.document.write('<html><head><meta charset="utf-8"><title></title><style>'+css+'</style></head><body>'+body
