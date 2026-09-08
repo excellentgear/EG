@@ -1156,6 +1156,90 @@ function _zh_field($f) {
 function _diff_rows($old, $new, $fields) {
     $ch=[]; foreach($fields as $f){ $ov=isset($old[$f])&&$old[$f]!==null?(string)$old[$f]:''; $nv=isset($new[$f])&&$new[$f]!==null?(string)$new[$f]:''; if($ov!==$nv) $ch[]=['field'=>_zh_field($f),'old'=>$ov,'new'=>$nv]; } return $ch;
 }
+// ── 標籤「使用中」判定（料號標籤／子標籤／孫子標籤＝列舉選項）───────────────────
+// 2026-09-08 使用者要求：已被使用的標籤、子標籤、孫子標籤一律不可刪除。
+// 唯一實作，check_delete* 與 delete* 都走這裡（鐵律8：前端擋一次、後端同規則再擋一次）。
+// 注意：孫子標籤在料號上是以「選項文字」存進 item_sub_label_map.input_value（沒有 option_id 可比對），
+//       故一律以 sub_id + option_value 判定使用中。
+function _label_ref_map($pdo, $kind) {
+    // 其他模組對標籤／子標籤的參照：刪掉不會報錯，但會安靜地讓那邊的設定失效，故一併擋下並講明在哪裡。
+    // 每次請求只查一次（表都很小：KPI 規則 2 筆、備註模板數筆）。
+    static $cache = [];
+    if (isset($cache[$kind])) return $cache[$kind];
+    $map = [];
+    $add = function($id, $txt) use (&$map) { $id = intval($id); if ($id > 0) { $map[$id][] = $txt; } };
+    try {
+        $rows = $pdo->query("SELECT rule_id, rule_name, cond_label_ids, cond_or_label_ids, d_sources, l_type, l_label_id, l_sub_id, material_label_id FROM kpi_weight_calc_rule")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) {
+            $txt = 'KPI 重量計算規則「'.($r['rule_name'] ?: ('#'.$r['rule_id'])).'」';
+            if ($kind === 'label') {
+                foreach (['cond_label_ids','cond_or_label_ids'] as $jf) {
+                    foreach ((json_decode($r[$jf] ?? '[]', true) ?: []) as $v) $add($v, $txt);
+                }
+                if (($r['l_type'] ?? '') === 'label') $add($r['l_label_id'], $txt);
+                $add($r['material_label_id'], $txt);
+            } else {
+                $add($r['l_sub_id'], $txt);
+            }
+            foreach ((json_decode($r['d_sources'] ?? '[]', true) ?: []) as $ds) {
+                if (($ds['type'] ?? '') !== 'label') continue;
+                $add($kind === 'label' ? ($ds['label_id'] ?? 0) : ($ds['sub_id'] ?? 0), $txt);
+            }
+        }
+    } catch (Exception $e) { /* 表不存在或欄位不同：略過，不影響料號使用中的判定 */ }
+    try {
+        $bcol = ($kind === 'label') ? 'bound_label_id' : 'bound_sub_id';
+        foreach ($pdo->query("SELECT keyword, density_g, $bcol AS bid FROM kpi_material_density WHERE $bcol IS NOT NULL")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            // keyword 常常是空的（改用綁定標籤取代關鍵字比對），空的就用密度值認人
+            $who = trim((string)$r['keyword']) !== '' ? '「'.$r['keyword'].'」' : '（密度 '.rtrim(rtrim((string)$r['density_g'], '0'), '.').'）';
+            $add($r['bid'], 'KPI 材質密度設定'.$who);
+        }
+    } catch (Exception $e) {}
+    if ($kind === 'label') {
+        try {
+            foreach ($pdo->query("SELECT label, variables FROM quotation_note_templates WHERE variables LIKE '%label_pick%'")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                foreach ((json_decode($r['variables'] ?? '[]', true) ?: []) as $v) {
+                    if (($v['var_type'] ?? '') === 'label_pick') $add($v['label_id'] ?? 0, '報價備註模板「'.$r['label'].'」');
+                }
+            }
+        } catch (Exception $e) {}
+    }
+    foreach ($map as $k => $v) $map[$k] = array_values(array_unique($v));
+    $cache[$kind] = $map;
+    return $map;
+}
+function _label_usage($pdo, $kind, $id) {
+    $out  = ['used'=>false, 'parts'=>0, 'refs'=>[], 'reason'=>''];
+    $id   = intval($id);
+    $what = ['label'=>'標籤', 'sub'=>'子標籤', 'option'=>'選項'][$kind] ?? '項目';
+    if ($id <= 0) return $out;
+    if ($kind === 'label') {
+        $q = $pdo->prepare("SELECT COUNT(*) FROM item_label_map WHERE label_id=?"); $q->execute([$id]);
+        $out['parts'] = (int)$q->fetchColumn();
+    } elseif ($kind === 'sub') {
+        $q = $pdo->prepare("SELECT COUNT(*) FROM item_sub_label_map WHERE sub_id=?"); $q->execute([$id]);
+        $out['parts'] = (int)$q->fetchColumn();
+    } elseif ($kind === 'option') {
+        $o = $pdo->prepare("SELECT sub_id, option_value FROM dict_label_sub_option WHERE option_id=?"); $o->execute([$id]);
+        if ($orow = $o->fetch(PDO::FETCH_ASSOC)) {
+            $q = $pdo->prepare("SELECT COUNT(*) FROM item_sub_label_map WHERE sub_id=? AND input_value=?");
+            $q->execute([intval($orow['sub_id']), $orow['option_value']]);
+            $out['parts'] = (int)$q->fetchColumn();
+        }
+    }
+    if ($kind === 'label' || $kind === 'sub') {
+        $out['refs'] = _label_ref_map($pdo, $kind)[$id] ?? [];
+    }
+    $out['used'] = ($out['parts'] > 0 || !empty($out['refs']));
+    if ($out['used']) {
+        $seg = [];
+        if ($out['parts'] > 0) $seg[] = "已有 {$out['parts']} 筆料號使用";
+        if (!empty($out['refs'])) $seg[] = '已被 '.implode('、', array_slice($out['refs'], 0, 3)).(count($out['refs']) > 3 ? ' 等' : '').' 參照';
+        $tail = ($kind === 'option') ? '（請先改掉料號上的值）' : '（請先移除使用中的資料）';
+        $out['reason'] = "此{$what}".implode('、', $seg).'，無法刪除'.$tail;
+    }
+    return $out;
+}
 function _recalc_diff_labels($pdo, $d_id) {
     try {
         // 取此料號所有 calc_diff 標籤實例
@@ -4320,7 +4404,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 } else {
                     $stmt = $pdo->query("SELECT label_id, label_name, type_code, is_repeatable, input_type, has_draw_lathe, is_range, sort_order, has_tolerance, is_calc_diff, calc_base_label_id, calc_sub_label_id, tolerance_std_upper, COALESCE(is_exclude_calc,0) AS is_exclude_calc, COALESCE(is_dimension,0) AS is_dimension, COALESCE(is_qty_dim,0) AS is_qty_dim, COALESCE(prefix_char,'') AS prefix_char, COALESCE(suffix_char,'') AS suffix_char, COALESCE(is_hidden_frontend,0) AS is_hidden_frontend, COALESCE(lathe_optional,0) AS lathe_optional, COALESCE(has_draw_lathe_depth,0) AS has_draw_lathe_depth, COALESCE(is_triple_dim,0) AS is_triple_dim, COALESCE(calc_base_name,'') AS calc_base_name, COALESCE(calc_sub_name,'') AS calc_sub_name FROM dict_label WHERE is_active=1 ORDER BY sort_order, label_id");
                 }
-                echo json_encode(['success'=>true,'data'=>$stmt->fetchAll(PDO::FETCH_ASSOC)]);
+                $lbl_rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                // 使用中筆數（供清單顯示「用 N」徽章並反灰刪除鈕；真正的守門在 check_delete／delete）
+                $lbl_use = [];
+                foreach ($pdo->query("SELECT label_id, COUNT(*) c FROM item_label_map GROUP BY label_id")->fetchAll(PDO::FETCH_ASSOC) as $u) $lbl_use[(int)$u['label_id']] = (int)$u['c'];
+                $lbl_ref = _label_ref_map($pdo, 'label');
+                foreach ($lbl_rows as &$_lr) {
+                    $_lid = (int)$_lr['label_id'];
+                    $_lr['used_cnt']  = $lbl_use[$_lid] ?? 0;
+                    $_lr['used_refs'] = $lbl_ref[$_lid] ?? [];
+                }
+                unset($_lr);
+                echo json_encode(['success'=>true,'data'=>$lbl_rows]);
             } elseif ($op === 'check_name') {
                 $name      = trim($_POST['label_name'] ?? '');
                 $exclude   = intval($_POST['label_id'] ?? 0);
@@ -4425,21 +4520,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 echo json_encode(['success'=>true,'label_id'=>$new_id]);
             } elseif ($op === 'check_delete') {
                 $id = intval($_POST['id'] ?? 0);
-                $chk = $pdo->prepare("SELECT COUNT(*) FROM item_label_map WHERE label_id=?"); $chk->execute([$id]);
-                $cnt = (int)$chk->fetchColumn();
-                echo json_encode($cnt > 0 ? ['can_delete'=>false,'reason'=>"此標籤已有 {$cnt} 筆料號使用，無法刪除（請先移除料號上的標籤）"] : ['can_delete'=>true]);
+                $us = _label_usage($pdo, 'label', $id);
+                echo json_encode($us['used'] ? ['can_delete'=>false,'reason'=>$us['reason']] : ['can_delete'=>true]);
             } elseif ($op === 'check_delete_sub') {
                 $sub_id = intval($_POST['sub_id'] ?? 0);
-                $chk = $pdo->prepare("SELECT COUNT(*) FROM item_sub_label_map WHERE sub_id=?"); $chk->execute([$sub_id]);
-                $cnt = (int)$chk->fetchColumn();
-                echo json_encode($cnt > 0 ? ['can_delete'=>false,'reason'=>"此子標籤已有 {$cnt} 筆料號使用，無法刪除"] : ['can_delete'=>true]);
+                $us = _label_usage($pdo, 'sub', $sub_id);
+                echo json_encode($us['used'] ? ['can_delete'=>false,'reason'=>$us['reason']] : ['can_delete'=>true]);
+            } elseif ($op === 'check_delete_sub_option') {
+                // 孫子標籤（列舉選項）
+                $opt_id = intval($_POST['option_id'] ?? 0);
+                $us = _label_usage($pdo, 'option', $opt_id);
+                echo json_encode($us['used'] ? ['can_delete'=>false,'reason'=>$us['reason']] : ['can_delete'=>true]);
             } elseif ($op === 'delete') {
                 if (!$can_dict_part) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
                 $id = intval($_POST['id'] ?? 0);
-                $chk = $pdo->prepare("SELECT COUNT(*) FROM item_label_map WHERE label_id=?");
-                $chk->execute([$id]);
-                $cnt = (int)$chk->fetchColumn();
-                if ($cnt > 0) throw new Exception("此標籤已有 {$cnt} 筆料號使用，無法刪除（請先移除料號上的標籤）");
+                $us = _label_usage($pdo, 'label', $id);
+                if ($us['used']) throw new Exception($us['reason']);
                 $del_lbl = $pdo->prepare("SELECT label_name FROM dict_label WHERE label_id=?"); $del_lbl->execute([$id]); $del_lbl_name = $del_lbl->fetchColumn();
                 $pdo->prepare("UPDATE dict_label SET is_active=0 WHERE label_id=?")->execute([$id]);
                 _log_audit($pdo,'delete','dict','label:'.$id,$del_lbl_name?:('id:'.$id),null,$_SESSION['user_id']??null,_get_operator($pdo,$_SESSION['user_id']??null));
@@ -4456,8 +4552,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $stmt->execute([$label_id]);
                 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 $opts_q = $pdo->prepare("SELECT option_id, option_value, sort_order FROM dict_label_sub_option WHERE sub_id=? AND is_active=1 ORDER BY sort_order, option_id");
+                // 使用中筆數：子標籤看 sub_id，孫子標籤（選項）看 sub_id + 選項文字
+                $sub_use = [];
+                if (!empty($rows)) {
+                    $sids = array_map(function($r){ return (int)$r['sub_id']; }, $rows);
+                    $sph  = implode(',', array_fill(0, count($sids), '?'));
+                    $suq  = $pdo->prepare("SELECT sub_id, COUNT(*) c FROM item_sub_label_map WHERE sub_id IN ($sph) GROUP BY sub_id");
+                    $suq->execute($sids);
+                    foreach ($suq->fetchAll(PDO::FETCH_ASSOC) as $u) $sub_use[(int)$u['sub_id']] = (int)$u['c'];
+                }
+                $opt_use_q = $pdo->prepare("SELECT input_value, COUNT(*) c FROM item_sub_label_map WHERE sub_id=? AND input_value IS NOT NULL GROUP BY input_value");
+                $sub_ref   = _label_ref_map($pdo, 'sub');
                 foreach ($rows as &$row) {
-                    if ($row['is_enum']) { $opts_q->execute([$row['sub_id']]); $row['options'] = $opts_q->fetchAll(PDO::FETCH_ASSOC); }
+                    $row['used_cnt']  = $sub_use[(int)$row['sub_id']] ?? 0;
+                    $row['used_refs'] = $sub_ref[(int)$row['sub_id']] ?? [];
+                    if ($row['is_enum']) {
+                        $opts_q->execute([$row['sub_id']]);
+                        $row['options'] = $opts_q->fetchAll(PDO::FETCH_ASSOC);
+                        $opt_use_q->execute([$row['sub_id']]);
+                        $ouse = [];
+                        foreach ($opt_use_q->fetchAll(PDO::FETCH_ASSOC) as $ou) $ouse[(string)$ou['input_value']] = (int)$ou['c'];
+                        foreach ($row['options'] as &$_op) $_op['used_cnt'] = $ouse[(string)$_op['option_value']] ?? 0;
+                        unset($_op);
+                    }
                     else { $row['options'] = []; }
                 }
                 unset($row);
@@ -4467,7 +4584,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (!$sub_id_q) { echo json_encode(['success'=>false,'message'=>'invalid']); exit; }
                 $sq = $pdo->prepare("SELECT option_id, option_value, sort_order FROM dict_label_sub_option WHERE sub_id=? AND is_active=1 ORDER BY sort_order, option_id");
                 $sq->execute([$sub_id_q]);
-                echo json_encode(['success'=>true,'data'=>$sq->fetchAll(PDO::FETCH_ASSOC)]);
+                $opt_rows = $sq->fetchAll(PDO::FETCH_ASSOC);
+                $ou_q = $pdo->prepare("SELECT input_value, COUNT(*) c FROM item_sub_label_map WHERE sub_id=? AND input_value IS NOT NULL GROUP BY input_value");
+                $ou_q->execute([$sub_id_q]);
+                $ouse = [];
+                foreach ($ou_q->fetchAll(PDO::FETCH_ASSOC) as $ou) $ouse[(string)$ou['input_value']] = (int)$ou['c'];
+                foreach ($opt_rows as &$_op) $_op['used_cnt'] = $ouse[(string)$_op['option_value']] ?? 0;
+                unset($_op);
+                echo json_encode(['success'=>true,'data'=>$opt_rows]);
             } elseif ($op === 'save_sub_option') {
                 if (!$can_dict_part) throw new Exception('無權限');
                 $sub_id_q = intval($_POST['sub_id'] ?? 0);
@@ -4485,7 +4609,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 if (!$can_dict_part) throw new Exception('無權限');
                 $opt_id = intval($_POST['option_id'] ?? 0);
                 if (!$opt_id) { echo json_encode(['success'=>false,'message'=>'invalid']); exit; }
+                // 已被料號使用的孫子標籤不可刪除（鐵律8：前端擋一次、後端同規則再擋一次）
+                $us = _label_usage($pdo, 'option', $opt_id);
+                if ($us['used']) throw new Exception($us['reason']);
+                $del_opt = $pdo->prepare("SELECT option_value FROM dict_label_sub_option WHERE option_id=?"); $del_opt->execute([$opt_id]); $del_opt_val = $del_opt->fetchColumn();
                 $pdo->prepare("UPDATE dict_label_sub_option SET is_active=0 WHERE option_id=?")->execute([$opt_id]);
+                _log_audit($pdo,'delete','dict','label-sub-option:'.$opt_id,$del_opt_val?:('id:'.$opt_id),null,$_SESSION['user_id']??null,_get_operator($pdo,$_SESSION['user_id']??null));
                 echo json_encode(['success'=>true]);
             } elseif ($op === 'reorder_sub_options') {
                 if (!$can_dict_part) throw new Exception('無權限');
@@ -4551,10 +4680,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } elseif ($op === 'delete_sub') {
                 if (!$can_dict_part) throw new Exception('無刪除權限（需要 A、CDR 或 CDRU 權限）');
                 $sub_id = intval($_POST['sub_id'] ?? 0);
-                $chk = $pdo->prepare("SELECT COUNT(*) FROM item_sub_label_map WHERE sub_id=?");
-                $chk->execute([$sub_id]);
-                $cnt = (int)$chk->fetchColumn();
-                if ($cnt > 0) throw new Exception("此子標籤已有 {$cnt} 筆料號使用，無法刪除");
+                $us = _label_usage($pdo, 'sub', $sub_id);
+                if ($us['used']) throw new Exception($us['reason']);
                 $del_ls = $pdo->prepare("SELECT sub_name FROM dict_label_sub WHERE sub_id=?"); $del_ls->execute([$sub_id]); $del_ls_name = $del_ls->fetchColumn();
                 $pdo->prepare("UPDATE dict_label_sub SET is_active=0 WHERE sub_id=?")->execute([$sub_id]);
                 _log_audit($pdo,'delete','dict','label-sub:'.$sub_id,$del_ls_name?:('id:'.$sub_id),null,$_SESSION['user_id']??null,_get_operator($pdo,$_SESSION['user_id']??null));
@@ -17037,6 +17164,33 @@ function removeMakerAlias(alias_id, btn) {
 var currentDictType = 'workpiece';
 
 // Config per dict type
+// ── 標籤／子標籤／孫子標籤「使用中」的徽章與刪除鎖定 ─────────────────────────────
+// 2026-09-08 使用者要求：已被使用的三層標籤一律不可刪除。
+// 這裡只是把後端 _label_usage() 算好的結果畫出來＋先擋一次，真正的守門在後端（鐵律8）。
+function labelUseCnt(d)  { return Number((d && d.used_cnt) || 0); }
+function labelUseRefs(d) { return (d && d.used_refs && d.used_refs.length) ? d.used_refs : []; }
+function labelUsedBadge(d) {
+    var n = labelUseCnt(d), refs = labelUseRefs(d);
+    if (!n && !refs.length) return '';
+    var tip = [];
+    if (n) tip.push('料號 ' + n + ' 筆');
+    if (refs.length) tip.push(refs.join('、'));
+    return '<span title="' + escAttr(tip.join('；') + '　使用中，不可刪除') + '" style="font-size:10px;background:#F7E0BD;color:#8a5a1a;border:1px solid #e6c48f;border-radius:3px;padding:0 4px;margin-left:4px;">用 ' + (n || refs.length) + '</span>';
+}
+function labelUseLockReason(d, what) {
+    var n = labelUseCnt(d), refs = labelUseRefs(d);
+    if (!n && !refs.length) return '';
+    var seg = [];
+    if (n) seg.push('已有 ' + n + ' 筆料號使用');
+    if (refs.length) seg.push('已被 ' + refs.slice(0, 3).join('、') + (refs.length > 3 ? ' 等' : '') + ' 參照');
+    return '此' + (what || '項目') + seg.join('、') + '，無法刪除（請先移除使用中的資料）';
+}
+function lockedDelBtn(reason) {
+    // 刪除鈕改成鎖頭：點下去講清楚為什麼不能刪，不是直接不給按（使用者才知道要先去哪裡處理）
+    return '<button type="button" class="btn btn-xs btn-default" style="color:#b0733a;background:#faf1e4;border-color:#e6c48f;cursor:not-allowed;"'
+         + ' title="' + escHtml(reason) + '" data-lock-reason="' + escHtml(reason) + '"'
+         + ' onclick="showToast(this.getAttribute(\'data-lock-reason\'),\'error\')"><i class="fa fa-lock"></i></button>';
+}
 var dictConfig = {
     'workpiece': {
         title: '工件種類',
@@ -17241,8 +17395,12 @@ var dictConfig = {
                 ? '<span style="font-size:10px;background:#eceff1;color:#78909c;border-radius:3px;padding:1px 4px;margin-left:3px;">隱藏</span>' : '';
             var pfxBadge  = (d.prefix_char) ? '<span style="font-size:10px;background:#f9fbe7;color:#827717;border-radius:3px;padding:1px 4px;margin-left:2px;">前'+escHtml(d.prefix_char)+'</span>' : '';
             var sfxBadge  = (d.suffix_char) ? '<span style="font-size:10px;background:#f9fbe7;color:#827717;border-radius:3px;padding:1px 4px;margin-left:2px;">後'+escHtml(d.suffix_char)+'</span>' : '';
-            return '<strong style="font-size:12px;">'+escHtml(d.label_name||'')+'</strong>' + itBadge + repBadge + dlBadge + latheOptBadge + rngBadge + tolBadge + calcBadge + exclBadge + dimBadge + qtyDimBadge + pfxBadge + sfxBadge + hiddenBadge;
+            return '<strong style="font-size:12px;">'+escHtml(d.label_name||'')+'</strong>' + itBadge + repBadge + dlBadge + latheOptBadge + rngBadge + tolBadge + calcBadge + exclBadge + dimBadge + qtyDimBadge + pfxBadge + sfxBadge + hiddenBadge + labelUsedBadge(d);
         },
+        // 已被使用的標籤不可刪除（回傳原因字串＝鎖住；空字串＝可刪）。
+        // 標籤清單目前走自己的 renderLabelDictPage()，這裡是給共用的 renderDictTable() 用的，
+        // 兩條路徑都吃同一份判定，日後改走哪一條都不會漏掉鎖定。
+        deleteLockReason: function(d){ return labelUseLockReason(d, '標籤'); },
         renderForm: function() {
             var html = '<div style="width:100%;">';
             // Row 1: name + input type + save/clear
@@ -18344,7 +18502,9 @@ function renderDictTable(type, data) {
             html += '<td style="text-align:center;">';
             if (_canEditDict(type)) html += '<button class="btn btn-xs btn-default" onclick="editDictEntry('+idx+')" title="編輯" style="margin-right:3px;"><i class="fa fa-pencil"></i></button>';
             var canDelThis = (type === 'maker-proc-label') ? CAN_DELETE_ALL : _canEditDict(type);
-            if (canDelThis) html += '<button class="btn btn-xs btn-danger"  onclick="deleteDictEntry(\''+escAttr(String(id))+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
+            var lockReason = (typeof cfg.deleteLockReason === 'function') ? cfg.deleteLockReason(d) : '';
+            if (canDelThis && lockReason) html += lockedDelBtn(lockReason);
+            else if (canDelThis) html += '<button class="btn btn-xs btn-danger"  onclick="deleteDictEntry(\''+escAttr(String(id))+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
             html += '</td></tr>';
         });
     }
@@ -21818,22 +21978,41 @@ function renderSubOptionsInline(opts, subId) {
     listEl.innerHTML = '';
     if (!opts.length) { listEl.innerHTML = '<span style="font-size:11px;color:#aaa;">尚無選項</span>'; return; }
     opts.forEach(function(opt) {
+        var usedN = Number(opt.used_cnt || 0);   // 已被幾筆料號使用（後端算）
         var tag = document.createElement('span');
         tag.style.cssText = 'display:inline-flex;align-items:center;background:#e3f2fd;color:#1565C0;border:1px solid #bbdefb;border-radius:12px;padding:2px 8px;font-size:11px;gap:4px;';
         tag.innerHTML = escHtml(opt.option_value);
+        if (usedN > 0) {
+            // 已被使用的孫子標籤不可刪除：× 改成鎖頭，點下去說明原因（點開即刷新，避免看到舊的筆數）
+            tag.style.background = '#faf1e4'; tag.style.color = '#8a5a1a'; tag.style.borderColor = '#e6c48f';
+            var lk = document.createElement('span');
+            lk.style.cssText = 'cursor:not-allowed;color:#b0733a;font-size:10px;margin-left:2px;';
+            lk.innerHTML = '<i class="fa fa-lock"></i> 用 ' + usedN;
+            lk.title = '已有 ' + usedN + ' 筆料號使用，無法刪除';
+            lk.onclick = (function(v, n) {
+                return function() { showToast('選項「'+v+'」已有 '+n+' 筆料號使用，無法刪除（請先改掉料號上的值）','error'); };
+            })(opt.option_value, usedN);
+            tag.appendChild(lk);
+            listEl.appendChild(tag);
+            return;
+        }
         var rm = document.createElement('span');
         rm.style.cssText = 'cursor:pointer;color:#aaa;font-size:10px;margin-left:2px;';
         rm.textContent = '×';
-        rm.onclick = (function(oid, sv) {
+        rm.onclick = (function(oid, sv, oval) {
             return function() {
-                if (!confirm('刪除選項「'+opt.option_value+'」？')) return;
-                api({ action:'manage_labels', op:'delete_sub_option', option_id:oid }).done(function(r) {
-                    if (!r.success) { showToast(r.message||'刪除失敗','error'); return; }
-                    loadSubOptions(sv);
-                    delete _subLabelCache[String($('#dict-edit-id').val()||'')];
+                // 點開即刷新：按下當下再向後端確認一次有沒有人用（別人可能剛剛才套用這個選項）
+                api({ action:'manage_labels', op:'check_delete_sub_option', option_id:oid }).done(function(cr) {
+                    if (!cr.can_delete) { showToast(cr.reason || '此選項已被使用，無法刪除','error'); loadSubOptions(sv); return; }
+                    if (!confirm('刪除選項「'+oval+'」？')) return;
+                    api({ action:'manage_labels', op:'delete_sub_option', option_id:oid }).done(function(r) {
+                        if (!r.success) { showToast(r.message||'刪除失敗','error'); return; }
+                        loadSubOptions(sv);
+                        delete _subLabelCache[String($('#dict-edit-id').val()||'')];
+                    });
                 });
             };
-        })(opt.option_id, subId);
+        })(opt.option_id, subId, opt.option_value);
         tag.appendChild(rm);
         listEl.appendChild(tag);
     });
@@ -21998,10 +22177,12 @@ function renderLabelSubsTable(subs) {
         var sfxB    = s.suffix_char ? '<span style="font-size:10px;background:#f9fbe7;color:#827717;border-radius:3px;padding:1px 4px;margin-left:2px;">後'+escHtml(s.suffix_char)+'</span>' : '';
         html += '<tr data-sub-row="'+s.sub_id+'">';
         html += '<td style="width:28px;padding:4px 6px;cursor:grab;color:#bbb;text-align:center;"><i class="fa fa-bars"></i></td>';
-        html += '<td style="padding:3px 6px;"><strong>'+escHtml(s.sub_name)+'</strong> <span style="color:#aaa;font-size:10px;">'+(itMap[s.input_type]||s.input_type)+'</span>'+hasDlB+repB+rngB+tolB+dimB+qtyDimB+qtyTripleB+imperialDimB+countersinkB+dlDepthB+tripleDimB+enumB+hideNmB+pfxB+sfxB+'</td>';
+        html += '<td style="padding:3px 6px;"><strong>'+escHtml(s.sub_name)+'</strong> <span style="color:#aaa;font-size:10px;">'+(itMap[s.input_type]||s.input_type)+'</span>'+hasDlB+repB+rngB+tolB+dimB+qtyDimB+qtyTripleB+imperialDimB+countersinkB+dlDepthB+tripleDimB+enumB+hideNmB+pfxB+sfxB+labelUsedBadge(s)+'</td>';
         html += '<td style="padding:3px 6px;text-align:center;white-space:nowrap;">';
         if (_canEditDict('label-sub')) html += '<button class="btn btn-xs btn-default" onclick="editLabelSub('+i+')" style="margin-right:3px;"><i class="fa fa-pencil"></i></button>';
-        if (_canEditDict('label-sub')) html += '<button class="btn btn-xs btn-danger" onclick="deleteLabelSub('+s.sub_id+')"><i class="fa fa-trash"></i></button>';
+        var subLock = labelUseLockReason(s, '子標籤');
+        if (_canEditDict('label-sub') && subLock) html += lockedDelBtn(subLock);
+        else if (_canEditDict('label-sub')) html += '<button class="btn btn-xs btn-danger" onclick="deleteLabelSub('+s.sub_id+')"><i class="fa fa-trash"></i></button>';
         html += '</td></tr>';
     });
     // Cache for edit
@@ -22422,11 +22603,13 @@ function renderLabelDictPage() {
             }
             html += '<tr data-row-id="'+d.label_id+'"'+(isHiddenRow?' style="opacity:0.7;"':'')+'>';
             html += '<td style="padding:3px 6px;vertical-align:middle;">'+(typeBadges||'<span style="color:#ccc;font-size:10px;">—</span>')+'</td>';
-            html += '<td style="padding:3px 6px;vertical-align:middle;"><strong style="font-size:12px;">'+escHtml(d.label_name||'')+'</strong>'+itBadge+repBadge+dlBadge+rngBadge+tolBadge+calcBadge+exclBadge+dimBadge2+qtyDimBadge2+pfxBadge2+sfxBadge2+hidBadge2+'</td>';
+            html += '<td style="padding:3px 6px;vertical-align:middle;"><strong style="font-size:12px;">'+escHtml(d.label_name||'')+'</strong>'+itBadge+repBadge+dlBadge+rngBadge+tolBadge+calcBadge+exclBadge+dimBadge2+qtyDimBadge2+pfxBadge2+sfxBadge2+hidBadge2+labelUsedBadge(d)+'</td>';
             html += '<td style="padding:3px 6px;text-align:center;white-space:nowrap;">';
             html += '<button class="btn btn-xs btn-info" onclick="viewLabelSubs('+realIdx+')" title="查看子標籤" style="margin-right:2px;"><i class="fa fa-list"></i></button>';
             if (_canEditDict('label')) html += '<button class="btn btn-xs btn-default" onclick="editDictEntry('+realIdx+')" title="編輯" style="margin-right:2px;"><i class="fa fa-pencil"></i></button>';
-            if (_canEditDict('label')) html += '<button class="btn btn-xs btn-danger" onclick="deleteDictEntry(\''+d.label_id+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
+            var lblLock = labelUseLockReason(d, '標籤');
+            if (_canEditDict('label') && lblLock) html += lockedDelBtn(lblLock);
+            else if (_canEditDict('label')) html += '<button class="btn btn-xs btn-danger" onclick="deleteDictEntry(\''+d.label_id+'\')" title="刪除"><i class="fa fa-trash"></i></button>';
             html += '</td></tr>';
         });
     }
