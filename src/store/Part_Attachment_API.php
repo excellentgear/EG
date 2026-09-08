@@ -17,6 +17,7 @@ require_once __DIR__ . '/../common/DBConnection.php';   // 2026-08-24 改 requir
 require_once __DIR__ . '/../common/imgedit_visibility.php';
 require_once __DIR__ . '/../common/dwg_change_lib.php';   // 發行章日期判定／建立圖面變更（唯一實作點）
 require_once __DIR__ . '/../common/photo_album_lib.php';  // 照片相簿分組＋縮圖（唯一實作點）
+require_once __DIR__ . '/../common/part_attach_link_lib.php'; // 綁定報價單／廠商欄位的逐標籤開關（唯一實作點）
 $db  = new DBConnection();
 $pdo = $db->getPDO();
 
@@ -84,6 +85,7 @@ function initPartAttachTables(PDO $pdo): void {
 initPartAttachTables($pdo);
 dwg_ensure_schema($pdo);   // issue_stamp_date / is_own_drawing / trigger_attachment_id 欄位補建
 pa_album_ensure_schema($pdo);   // 相簿表／album_id／is_photo_album 欄位補建
+pal_ensure_schema($pdo);        // quote_bindable／need_maker 旗標與 quote_no／maker_no 欄位補建
 
 /** 相簿寫入動作的守門：料號主檔頁的 C/U/A（前端有擋，後端同規則再擋一次＝鐵律8） */
 function _paRequireAlbumEdit(PDO $pdo, int $uid): void {
@@ -171,9 +173,19 @@ switch ($action) {
             $alRow = pa_album_get($pdo, $upAlbum);
             if (!$alRow || (int)$alRow['d_id'] !== $dId) { $upAlbum = 0; }
         }
+        // 綁定報價單／廠商（2026-09-08）：兩個都是選填，只有勾了對應旗標的標籤才會送過來。
+        // 前端已擋一次，這裡同規則再擋一次（直打 API 繞不過去＝鐵律8）：報價單一定要真的有這個
+        // 料號、廠商一定要在 maker_list 裡，否則綁出來的關聯之後在報價單那邊會變成孤兒。
         try {
-            $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,process_tag,album_id,uploaded_by,uploaded_by_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
-                ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $upIssue, ($upProc !== '' ? $upProc : null), ($upAlbum ?: null), $uploadedByName, $uploadedById]);
+            $upQuoteNo = pal_check_quote_no($pdo, $dId, (string)($_POST['quote_no'] ?? ''));
+            $upMakerNo = pal_check_maker_no($pdo, (string)($_POST['maker_no'] ?? ''));
+        } catch (Exception $e) {
+            @unlink($dir . $fname);
+            echo json_encode(['success'=>false,'message'=>$e->getMessage()]); exit;
+        }
+        try {
+            $pdo->prepare("INSERT INTO part_attachments (d_id,filename,original_name,category_ids,tag_var_values,file_size,note,revision,issue_stamp_date,process_tag,album_id,quote_no,maker_no,uploaded_by,uploaded_by_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                ->execute([$dId, $fname, $orig, $catIds, $tagVarVals, $sz, $note, $revision, $upIssue, ($upProc !== '' ? $upProc : null), ($upAlbum ?: null), $upQuoteNo, $upMakerNo, $uploadedByName, $uploadedById]);
             $newAttachId = (int)$pdo->lastInsertId();
             // dwg_verdict.kind='change' 時前端要跳出「填變更內容」表單，再呼叫 create_dwg_change
             echo json_encode(['success'=>true,'id'=>$newAttachId,'filename'=>$fname,'original_name'=>$orig,
@@ -209,9 +221,12 @@ switch ($action) {
 
         // 1. 直接上傳的料號附件（JOIN user 取中文名稱）
         $partStmt = $pdo->prepare("SELECT pa.id,'part' AS source,pa.filename,pa.original_name,pa.category_ids,pa.tag_var_values,pa.file_size,pa.note,pa.revision,pa.issue_stamp_date,pa.process_tag,pa.album_id,
-            COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by, pa.uploaded_at, '' AS quote_no
+            COALESCE(u.user_cname, pa.uploaded_by) AS uploaded_by, pa.uploaded_at, '' AS quote_no,
+            COALESCE(pa.quote_no,'') AS bind_quote_no, COALESCE(pa.maker_no,'') AS maker_no,
+            COALESCE(NULLIF(ml.maker_id,''), ml.maker_id_all, '') AS maker_name
             FROM part_attachments pa
             LEFT JOIN user u ON u.id = pa.uploaded_by_id
+            LEFT JOIN maker_list ml ON ml.maker_id_no = pa.maker_no
             WHERE pa.d_id=? AND pa.deleted_at IS NULL");
         $partStmt->execute([$dId]);
         $data = $partStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -233,6 +248,7 @@ switch ($action) {
                 $qStmt = $pdo->prepare("
                     SELECT a.id,'quote' AS source,a.filename,a.original_name,a.category_ids,
                            NULL AS tag_var_values,a.file_size,NULL AS note,NULL AS revision,NULL AS issue_stamp_date,NULL AS process_tag,NULL AS album_id,
+                           '' AS bind_quote_no, '' AS maker_no, '' AS maker_name,
                            COALESCE(u.user_cname, a.uploaded_by) AS uploaded_by,
                            a.uploaded_at, a.quote_no
                     FROM quotation_attachments a
@@ -764,13 +780,38 @@ switch ($action) {
             }
             if ($cur === '') { echo json_encode(['success'=>false,'message'=>'此標籤屬於「自家出的圖」，請填發行章日期']); exit; }
         }
+        // 綁定報價單／廠商：比照 issue_stamp_date，沒送這個欄位＝這次不動它
+        // （標籤沒勾對應旗標時前端就不送，不可把「沒送」當成「清空」而把值洗掉）
+        $hasQuote = array_key_exists('quote_no', $_POST);
+        $hasMaker = array_key_exists('maker_no', $_POST);
+        $mQuote = $mMaker = null;
+        if ($hasQuote || $hasMaker) {
+            $qd = $pdo->prepare("SELECT d_id FROM part_attachments WHERE id=?");
+            $qd->execute([$id]);
+            $mDId = (int)$qd->fetchColumn();
+            try {
+                if ($hasQuote) $mQuote = pal_check_quote_no($pdo, $mDId, (string)$_POST['quote_no']);
+                if ($hasMaker) $mMaker = pal_check_maker_no($pdo, (string)$_POST['maker_no']);
+            } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); exit; }
+        }
         $sets = ['category_ids=?','tag_var_values=?','note=?','revision=?'];
         $vals = [$catIds, $tagVals, $note, $revision];
         if ($hasIssue) { $sets[] = 'issue_stamp_date=?'; $vals[] = ($mIssue !== '' ? $mIssue : null); }
         if ($hasProc)  { $sets[] = 'process_tag=?';      $vals[] = ($mProc  !== '' ? $mProc  : null); }
+        if ($hasQuote) { $sets[] = 'quote_no=?';         $vals[] = $mQuote; }
+        if ($hasMaker) { $sets[] = 'maker_no=?';         $vals[] = $mMaker; }
         $vals[] = $id;
         $pdo->prepare("UPDATE part_attachments SET " . implode(',', $sets) . " WHERE id=?")->execute($vals);
         echo json_encode(['success'=>true]);
+        break;
+
+    // ── 這個料號可以綁定的報價單清單（2026-09-08）────────────────────
+    //   只列「這張報價單真的有這個料號」的，綁定才不會綁到不相干的單。
+    //   純讀取，不卡報價查閱權限：這裡只回單號／日期／客戶，不含金額。
+    case 'quote_candidates':
+        $qcDId = intval($_GET['d_id'] ?? $_POST['d_id'] ?? 0);
+        if (!$qcDId) { echo json_encode(['success'=>false,'message'=>'缺少料號 ID']); exit; }
+        echo json_encode(['success'=>true,'data'=>pal_quote_candidates($pdo, $qcDId)]);
         break;
 
     // ── 圖面變更：表單用的下拉資料（製程／簽收人員）────────────────

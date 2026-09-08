@@ -329,6 +329,34 @@ switch ($action) {
                 }
             }
         }
+        // ── 由料號附件綁過來的附件（2026-09-08 使用者要求）──────────────────
+        //   本來應該傳在報價單裡的附件，業務補傳到料號附件時報價單上就看不到了。
+        //   料號附件那邊勾了「與報價單共用」的標籤可以綁定報價單，綁到的就在這裡一起回傳。
+        //   **只建關聯不複製檔案**：所以事後換檔、旋轉、改標籤兩邊都是同一份、自動同步。
+        //   這些列標了 from_part=1，前端用另一套唯讀的畫法（沒有刪除鈕、不能改類別），
+        //   既有的附件列一行程式都沒動。
+        if (!empty($quoteNo)) {
+            require_once __DIR__ . '/../common/part_attach_link_lib.php';
+            foreach (pal_quote_linked_part_attachments($pdo, $quoteNo) as $pf) {
+                $files[] = [
+                    'attachment_id' => null,                 // 不是 quotation_attachments 的列，不可讓前端拿去改
+                    'part_attach_id'=> (int)$pf['id'],
+                    'from_part'     => 1,
+                    'part_no'       => $pf['part_no'],
+                    'filename'      => $pf['filename'],
+                    'original_name' => $pf['original_name'] ?: $pf['filename'],
+                    'size'          => $pf['file_size'] ?: '',
+                    'mtime'         => $pf['uploaded_at'] ? date('Y-m-d H:i', strtotime($pf['uploaded_at'])) : '',
+                    'category_id'   => null,
+                    'category_ids'  => $pf['category_ids'],
+                    'category_name' => null,
+                    'linked_parts'  => null,
+                    'note'          => $pf['note'],
+                    'uploaded_by'   => $pf['uploaded_by'],
+                    'status'        => 'active',
+                ];
+            }
+        }
         echo json_encode(['success' => true, 'files' => $files]);
         break;
 

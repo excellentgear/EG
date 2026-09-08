@@ -7782,7 +7782,8 @@ function loadFileList(quoteNo, isViewMode) {
         $.get(FILE_API_URL, { action: 'list_files', quote_no: quoteNo }, res => {
             $('#viewAttachList').empty();
             if (res.success && res.files.length > 0) {
-                res.files.forEach(f => appendFileItemView(f, quoteNo));
+                res.files.forEach(f => f.from_part ? appendPartLinkedFileItem(f, '#viewAttachList')
+                                                   : appendFileItemView(f, quoteNo));
             } else {
                 $('#viewAttachSection').hide();
             }
@@ -7792,7 +7793,8 @@ function loadFileList(quoteNo, isViewMode) {
     $('#uploadedFilesList').empty();
     $.get(FILE_API_URL, { action: 'list_files', quote_no: quoteNo }, res => {
         if (res.success) {
-            res.files.forEach(f => appendFileItem(f, quoteNo));
+            res.files.forEach(f => f.from_part ? appendPartLinkedFileItem(f, '#uploadedFilesList')
+                                               : appendFileItem(f, quoteNo));
         }
         refreshPartAttachBadges();
     });
@@ -7948,6 +7950,53 @@ $(function () {
 });
 
 // ── 檢視模式附件項目（唯讀，可點開）────────────────────────
+/* ── 由料號附件綁過來的附件（2026-09-08 使用者要求）──────────────────────
+   料號主檔那邊，勾了「與報價單共用」的附件標籤可以綁定報價單；綁到這張單的
+   料號附件就會出現在這裡。**檔案本體只有料號附件那一份**（不複製），所以之後
+   換檔、旋轉、改標籤兩邊自動同步，不會出現「報價單這份還是舊的」。
+
+   這裡刻意用一套獨立的唯讀畫法（class 也刻意不叫 file-item-wrap）：
+   ① 沒有刪除鈕、沒有類別／料號連結面板——那些動作都要回料號附件那邊做，
+      在這裡改會找不到對應的 quotation_attachments 列。
+   ② 既有那些「掃 .file-item-wrap 做驗證／統計」的程式一律掃不到這些列，
+      所以報價單原本的存檔檢查、必備附件判定完全不受影響。 */
+function appendPartLinkedFileItem(f, targetSel) {
+    const ext  = (String(f.filename||'').split('.').pop() || '').toLowerCase();
+    const icon = ['pdf'].includes(ext) ? 'fa-file-pdf-o text-danger'
+               : ['xls','xlsx'].includes(ext) ? 'fa-file-excel-o text-success'
+               : ['doc','docx'].includes(ext) ? 'fa-file-word-o text-primary'
+               : ['png','jpg','jpeg','gif','bmp'].includes(ext) ? 'fa-file-image-o text-warning'
+               : 'fa-file-o text-muted';
+    const dlUrl = `../../src/store/Part_Attachment_API.php?action=download&id=${encodeURIComponent(f.part_attach_id)}&v=${encodeURIComponent(f.mtime||'')}`;
+    const dispName = escapeHtml(f.original_name || f.filename);
+    const catLabel = String(f.category_ids || '').split(',').map(s => s.trim()).filter(Boolean)
+        .map(id => { const c = getCatById(id); return c ? c.category_name : ''; })
+        .filter(Boolean).map(escapeHtml).join(', ');
+    const catHtml = catLabel
+        ? `<span style="font-size:11px;color:#666;background:#f0f0f0;border-radius:3px;padding:1px 6px;white-space:nowrap;"><i class="fa fa-tag"></i> ${catLabel}</span>`
+        : '';
+    const noteHtml = f.note
+        ? `<span style="font-size:11px;color:#4A3524;" title="${escapeHtml(f.note)}"><i class="fa fa-comment-o" style="opacity:.45;"></i> ${escapeHtml(f.note)}</span>`
+        : '';
+    const $item = $(`<div class="part-linked-file-item" style="border-left:3px solid #C77C1A;background:#FFFCF7;padding:2px 6px;margin:2px 0;">
+        <div class="file-item" style="border-bottom:none;">
+            <i class="fa ${icon}"></i>
+            <span style="font-size:10px;font-weight:700;background:#F0A24B;color:#4A3524;border-radius:3px;padding:1px 6px;white-space:nowrap;"
+                  title="這是料號附件綁定過來的，檔案本體在料號主檔那邊；要修改請到料號附件">料號附件</span>
+            ${f.part_no ? `<span style="font-size:11px;color:#8A6A45;font-family:Consolas,monospace;">${escapeHtml(f.part_no)}</span>` : ''}
+            ${catHtml}
+            <span class="file-item-name" title="${escapeHtml(f.original_name||f.filename)}" style="cursor:pointer;">${dispName}</span>
+            ${noteHtml}
+            <span class="file-item-size">${escapeHtml(f.size||'')}</span>
+            <span class="file-item-time">${escapeHtml(f.mtime||'')}</span>
+        </div>
+    </div>`);
+    $item.find('.file-item-name').on('click', () => window.open(dlUrl, '_blank'));
+    $(targetSel).append($item);
+    // 檢視模式下若原本沒有任何報價附件，區塊會被藏起來；有綁進來的就要打開
+    if (targetSel === '#viewAttachList') $('#viewAttachSection').show();
+}
+
 function appendFileItemView(f, quoteNo) {
     const ext  = (f.filename.split('.').pop() || '').toLowerCase();
     const icon = ['pdf'].includes(ext) ? 'fa-file-pdf-o text-danger'

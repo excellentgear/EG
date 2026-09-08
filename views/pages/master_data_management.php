@@ -6284,7 +6284,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 // show_in_part_viewer＝優選顯示在 BOM 總覽的料號查閱畫面（唯一實作 pref_attach_lib）
                 require_once __DIR__ . '/../../src/common/pref_attach_lib.php';
                 eg_pref_attach_ensure_schema($pdo);
-                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark, COALESCE(dwg_group,'') AS dwg_group, COALESCE(dwg_trigger,1) AS dwg_trigger, COALESCE(is_photo_album,0) AS is_photo_album, COALESCE(show_in_part_viewer,0) AS show_in_part_viewer FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
+                // quote_bindable＝可綁定報價單、need_maker＝要填廠商（唯一實作 part_attach_link_lib）
+                require_once __DIR__ . '/../../src/common/part_attach_link_lib.php';
+                pal_ensure_schema($pdo);
+                $rows = $pdo->query("SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, COALESCE(tag_variables,'') AS tag_variables, COALESCE(is_own_drawing,0) AS is_own_drawing, COALESCE(is_external_doc,0) AS is_external_doc, COALESCE(external_doc_name,'') AS external_doc_name, COALESCE(show_in_other_attach,0) AS show_in_other_attach, COALESCE(is_obsolete_mark,0) AS is_obsolete_mark, COALESCE(dwg_group,'') AS dwg_group, COALESCE(dwg_trigger,1) AS dwg_trigger, COALESCE(is_photo_album,0) AS is_photo_album, COALESCE(show_in_part_viewer,0) AS show_in_part_viewer, COALESCE(quote_bindable,0) AS quote_bindable, COALESCE(need_maker,0) AS need_maker FROM quotation_file_categories ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
                 echo json_encode(['success'=>true,'data'=>$rows]);
             } elseif ($op_code === 'save') {
                 if (!$can_attach_cat_edit) throw new Exception('無編輯附件類別標籤權限（需 A/CDR/CDRU）');
@@ -6311,6 +6314,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 require_once __DIR__ . '/../../src/common/pref_attach_lib.php';
                 eg_pref_attach_ensure_schema($pdo);
                 $part_viewer  = intval($_POST['show_in_part_viewer'] ?? 0) ? 1 : 0;
+                // 2026-09-08 使用者要求的兩個逐標籤開關（唯一實作 part_attach_link_lib，不寫死標籤名稱）
+                //   quote_bindable＝此標籤與報價單共用 → 料號附件可綁定報價單（報價單那邊會一起列出來）
+                //   need_maker    ＝此標籤的附件會有廠商資訊 → 上傳／編輯多一個選填的廠商欄位
+                require_once __DIR__ . '/../../src/common/part_attach_link_lib.php';
+                pal_ensure_schema($pdo);
+                $quote_bind   = intval($_POST['quote_bindable'] ?? 0) ? 1 : 0;
+                $need_maker   = intval($_POST['need_maker'] ?? 0) ? 1 : 0;
                 $reactivate   = intval($_POST['reactivate'] ?? 0);
                 $op_name      = _get_operator($pdo, $uid);
                 if ($cat_id && $reactivate) {
@@ -6318,14 +6328,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     echo json_encode(['success'=>true,'message'=>'已重新啟用','cat_id'=>$cat_id]);
                 } elseif ($cat_id) {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=?,dwg_group=?,dwg_trigger=?,is_photo_album=?,show_in_part_viewer=? WHERE id=?")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer, $cat_id]);
+                    $pdo->prepare("UPDATE quotation_file_categories SET category_name=?,sort_order=?,show_in_list=?,tag_variables=?,is_own_drawing=?,is_external_doc=?,external_doc_name=?,show_in_other_attach=?,is_obsolete_mark=?,dwg_group=?,dwg_trigger=?,is_photo_album=?,show_in_part_viewer=?,quote_bindable=?,need_maker=? WHERE id=?")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer, $quote_bind, $need_maker, $cat_id]);
                     _log_audit($pdo,'update','dict','attach-cat:'.$cat_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已更新','cat_id'=>$cat_id]);
                 } else {
                     if (!$name) throw new Exception('類別名稱不可為空');
-                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark,dwg_group,dwg_trigger,is_photo_album,show_in_part_viewer) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
-                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer]);
+                    $pdo->prepare("INSERT INTO quotation_file_categories (category_name,sort_order,show_in_list,tag_variables,is_own_drawing,is_external_doc,external_doc_name,show_in_other_attach,is_obsolete_mark,dwg_group,dwg_trigger,is_photo_album,show_in_part_viewer,quote_bindable,need_maker) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                        ->execute([$name, $order, $show_in_list, $tag_vars, $own_drawing, $is_ext_doc, $ext_doc_name, $show_other, $obsolete, $dwg_group, $dwg_trigger, $photo_album, $part_viewer, $quote_bind, $need_maker]);
                     $new_id = (int)$pdo->lastInsertId();
                     _log_audit($pdo,'insert','dict','attach-cat:'.$new_id,$name,null,$uid,$op_name);
                     echo json_encode(['success'=>true,'message'=>'已新增','cat_id'=>$new_id]);
@@ -6695,6 +6705,9 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 .parts-cust-dropdown { position:absolute; top:100%; left:0; z-index:9999; width:220px; max-height:200px; overflow-y:auto; background:#fff; border:1px solid #ddd; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.12); display:none; }
 .parts-cust-dropdown .pac-item { padding:5px 12px; font-size:12px; cursor:pointer; }
 .parts-cust-dropdown .pac-item:hover { background:#f0f4f8; }
+/* 鍵盤 ↑↓ 選到的那一列（2026-09-08 使用者要求：所有篩選框都要能用鍵盤選）
+   底色用暖色系（ai-rules/10），與滑鼠 hover 的淺灰藍區隔得開 */
+.parts-cust-dropdown .pac-item.pac-active { background:#FDF0DC; box-shadow:inset 3px 0 0 #F0A24B; }
 .part-cust-chip { display:inline-flex; align-items:center; gap:5px; background:#e3f2fd; color:#1565c0; border:1px solid #1565c0aa; border-radius:13px; padding:2px 10px; font-size:12px; font-weight:600; }
 .part-cust-chip .rm { cursor:pointer; color:#aaa; font-size:11px; margin-left:2px; }
 .part-cust-chip .rm:hover { color:#e74c3c; }
@@ -7285,8 +7298,10 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                     <span id="proc-search-chips" class="kw-chips" style="display:inline-flex;flex-wrap:wrap;gap:3px;"></span>
                     <input type="text" id="proc-search-input" class="multi-kw-input" placeholder="搜尋ID、製程名稱、備註…"
                            onkeydown="onProcKwKeydown(event)"
-                           oninput="filterProcessList()"
-                           ondblclick="if(this.value){this.value='';filterProcessList();}">
+                           oninput="filterProcessList();onProcSearchAc(this.value)"
+                           ondblclick="if(this.value){this.value='';filterProcessList();onProcSearchAc('');}">
+                    <!-- 2026-09-08 使用者要求：所有分頁的篩選框都要有建議清單＋鍵盤上下選 -->
+                    <div id="proc-search-dd" class="parts-cust-dropdown" style="top:100%;left:0;right:0;width:auto;max-width:none;min-width:220px;"></div>
                 </div>
                 <?php if ($can_proc_edit): ?>
                 <button class="btn-add" onclick="openProcessModal(null)"><i class="fa fa-plus"></i> 新增製程</button>
@@ -8857,6 +8872,34 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
                                 事後也能在相簿列建立相簿再多選照片加入。<b>相簿只是系統裡的分組，NAS 上不會多開資料夾。</b>
                             </div>
                         </div>
+                        <!-- 與報價單共用的標籤（2026-09-08 使用者要求）：本來應該傳在報價單裡的附件，
+                             業務補傳到料號附件時報價單上就看不到了。勾了這一項，上傳／編輯料號附件時
+                             會多一個「綁定報價單」的選單（可不選），綁了之後那張報價單的附件清單會
+                             一起把它列出來。只建關聯不複製檔案，所以事後換檔兩邊自動同步。 -->
+                        <div class="form-group" style="margin-bottom:8px;">
+                            <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+                                <input type="checkbox" id="acat-quote-bindable"> 與<b>報價單共用</b>（料號附件可綁定報價單）
+                            </label>
+                            <div style="font-size:10px;color:#aaa;margin-top:2px;">
+                                勾選後：上傳／編輯此類別的料號附件時會多出<b>「綁定報價單」</b>選單，
+                                候選只列<b>這個料號真的出現過的報價單</b>（可不選＝不綁定）。<br>
+                                綁定之後，<b>該報價單的附件清單會把這個料號附件一起列出來</b>並標示「料號附件」——
+                                <b>不會複製檔案</b>，所以之後換檔、旋轉、改標籤兩邊都是同一份、自動同步；
+                                在報價單那邊是唯讀的（要改請回料號附件改）。
+                            </div>
+                        </div>
+                        <!-- 廠商欄位（2026-09-08 使用者要求）：部分附件（如外包廠商提供的規格書）
+                             要記得是哪一家廠商給的 -->
+                        <div class="form-group" style="margin-bottom:8px;">
+                            <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
+                                <input type="checkbox" id="acat-need-maker"> 此標籤的附件要記<b>廠商</b>
+                            </label>
+                            <div style="font-size:10px;color:#aaa;margin-top:2px;">
+                                勾選後：上傳／編輯此類別的料號附件時會多出<b>「廠商」</b>欄位（<b>選填</b>，可留空）。
+                                輸入部分廠商代號或名稱即出現清單供選擇，來源是<b>廠商主檔</b>，
+                                選好後會顯示在附件清單上。
+                            </div>
+                        </div>
                         <div class="form-group" style="margin-bottom:8px;">
                             <label style="font-size:11px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
                                 <input type="checkbox" id="acat-external-doc" onchange="document.getElementById('acat-extdoc-name-wrap').style.display=this.checked?'':'none'"> 列入外來文件清單（AS9100）
@@ -9381,6 +9424,28 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
         <input type="date" id="pau-issue-date" class="form-control input-sm" style="max-width:200px;">
         <div id="pau-issue-hint" style="font-size:11px;margin-top:4px;"></div>
     </div>
+    <!-- 綁定報價單／廠商（2026-09-08 使用者要求）：只有標籤勾了對應開關才出現。
+         放在單檔區塊之外＝多檔一起上傳時共用（同一次補傳本來就是同一張報價單、同一家廠商）。 -->
+    <div id="pau-quote-wrap" class="form-group" style="display:none;margin-top:8px;margin-bottom:0;padding:8px;background:#F7F2FB;border:1px solid #E0D2EC;border-radius:4px;">
+        <label style="font-size:12px;">綁定報價單
+            <small style="color:#aaa;font-weight:normal;">（選填；綁了之後這份附件會一起出現在該報價單的附件清單上）</small></label>
+        <select id="pau-quote-no" class="form-control input-sm" style="max-width:420px;" data-eg-filter="輸入報價單號或客戶篩選…">
+            <option value="">— 不綁定 —</option>
+        </select>
+        <div id="pau-quote-hint" style="font-size:11px;color:#7f8c8d;margin-top:4px;">
+            候選只列<b>這個料號出現過的報價單</b>。不複製檔案，之後換檔兩邊自動同步。
+        </div>
+    </div>
+    <div id="pau-maker-wrap" class="form-group" style="display:none;margin-top:8px;margin-bottom:0;padding:8px;background:#FFF9F0;border:1px solid #F1E3CE;border-radius:4px;position:relative;">
+        <label style="font-size:12px;">廠商 <small style="color:#aaa;font-weight:normal;">（選填；輸入部分廠商代號或名稱後點選）</small></label>
+        <div style="position:relative;max-width:420px;">
+            <input type="text" id="pau-maker-kw" class="form-control input-sm" maxlength="100" autocomplete="off"
+                   placeholder="輸入廠商代號或名稱…" oninput="onPauMakerInput(this.value)" data-eg-skip>
+            <input type="hidden" id="pau-maker-no">
+            <div id="pau-maker-dd" class="parts-cust-dropdown" style="display:none;top:100%;left:0;right:0;width:auto;max-width:none;"></div>
+        </div>
+        <div id="pau-maker-hint" style="font-size:11px;color:#7f8c8d;margin-top:4px;">尚未選擇廠商（可留空）</div>
+    </div>
     <!-- 相簿（2026-08-25 使用者要求）：勾到「以相簿檢視」的標籤（如產品照片）時才出現。
          同一次上傳的照片自動歸成一本相簿；不想分相簿就把勾勾拿掉，照片一樣傳得上去（進「未分相簿」）。
          放在單檔區塊之外＝多檔一起上傳時共用同一本相簿（本來就是同一次拍的）。 -->
@@ -9437,6 +9502,25 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
 </div>
 </div></div></div>
 
+<!-- ═══ MODAL: 上傳前預覽（2026-09-08 使用者要求）══════════════════════
+     多檔上傳時掃描檔名看不出哪個是哪個，標籤還沒選完／還沒存檔就想先看一眼。
+     這裡直接讀瀏覽器裡的檔案本身（URL.createObjectURL），完全不經過伺服器，
+     所以還沒上傳也看得到。z-index 要高於上傳跳窗（1050）否則會被蓋住。 -->
+<div class="modal fade" id="pauPreviewModal" tabindex="-1" style="z-index:1090;">
+<div class="modal-dialog" style="width:900px;max-width:96vw;"><div class="modal-content" style="height:80vh;display:flex;flex-direction:column;">
+<div class="modal-header" style="background:linear-gradient(135deg,#1a5276,#2980b9);flex-shrink:0;padding:8px 14px;">
+    <button type="button" class="close" data-dismiss="modal" style="color:#fff;">&times;</button>
+    <h4 class="modal-title" style="color:#fff;font-size:14px;margin:0;"><i class="fa fa-eye"></i> 預覽（尚未上傳）— <span id="pau-pv-name" style="font-family:Consolas,monospace;font-size:12px;"></span></h4>
+</div>
+<div class="modal-body" id="pau-pv-body" style="flex:1;padding:0;overflow:auto;background:#f8f9fa;display:flex;align-items:center;justify-content:center;"></div>
+<div class="modal-footer" style="padding:6px 14px;flex-shrink:0;">
+    <span id="pau-pv-pos" style="float:left;font-size:11px;color:#888;line-height:26px;"></span>
+    <button type="button" class="btn btn-xs btn-default" onclick="pauPreviewStep(-1)"><i class="fa fa-chevron-left"></i> 上一個</button>
+    <button type="button" class="btn btn-xs btn-default" onclick="pauPreviewStep(1)">下一個 <i class="fa fa-chevron-right"></i></button>
+    <button type="button" class="btn btn-xs btn-default" data-dismiss="modal">關閉</button>
+</div>
+</div></div></div>
+
 <!-- ═══ MODAL: 附件刪除紀錄 ══════════════════════════════════════════ -->
 <div class="modal fade" id="partAttachDeleteLogModal" tabindex="-1">
 <div class="modal-dialog" style="width:700px;max-width:96vw;"><div class="modal-content">
@@ -9485,6 +9569,25 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
     <div class="form-group">
         <label style="font-size:12px;font-weight:700;color:#555;">備註</label>
         <input type="text" id="pae-note" class="form-control input-sm" maxlength="200" placeholder="選填">
+    </div>
+    <!-- 綁定報價單／廠商（2026-09-08）：只有標籤勾了對應開關才出現，與上傳跳窗同一套規則 -->
+    <div class="form-group" id="pae-quote-wrap" style="display:none;">
+        <label style="font-size:12px;font-weight:700;color:#555;">綁定報價單
+            <small style="color:#aaa;font-weight:normal;">（選填；綁了會一起出現在該報價單）</small></label>
+        <select id="pae-quote-no" class="form-control input-sm" data-eg-filter="輸入報價單號或客戶篩選…">
+            <option value="">— 不綁定 —</option>
+        </select>
+    </div>
+    <div class="form-group" id="pae-maker-wrap" style="display:none;">
+        <label style="font-size:12px;font-weight:700;color:#555;">廠商
+            <small style="color:#aaa;font-weight:normal;">（選填；輸入代號或名稱後點選）</small></label>
+        <div style="position:relative;">
+            <input type="text" id="pae-maker-kw" class="form-control input-sm" maxlength="100" autocomplete="off"
+                   placeholder="輸入廠商代號或名稱…" oninput="onPaeMakerInput(this.value)" data-eg-skip>
+            <input type="hidden" id="pae-maker-no">
+            <div id="pae-maker-dd" class="parts-cust-dropdown" style="display:none;top:100%;left:0;right:0;width:auto;max-width:none;"></div>
+        </div>
+        <div id="pae-maker-hint" style="font-size:11px;color:#7f8c8d;margin-top:3px;">尚未選擇廠商（可留空）</div>
     </div>
 </div>
 <div class="modal-footer">
@@ -10672,13 +10775,87 @@ document.addEventListener('click', function(e) {
         if (dd) dd.style.display='none';
     }
     // 關閉搜尋欄建議下拉
-    ['parts-search-dd','cust-search-dd','makers-search-dd'].forEach(function(id) {
+    ['parts-search-dd','cust-search-dd','makers-search-dd','proc-search-dd'].forEach(function(id) {
         var ddEl = document.getElementById(id);
         if (ddEl && ddEl.style.display!=='none') {
             var wrap2 = ddEl.parentElement;
             if (!wrap2 || !wrap2.contains(e.target)) ddEl.style.display='none';
         }
     });
+});
+
+/* ══ 建議清單的鍵盤操作（2026-09-08 使用者要求：全頁所有篩選框一體適用）══════
+   料號／客戶／廠商／製程各分頁的篩選框打字後都會浮出建議清單，原本只能用滑鼠點。
+   這裡做成**一支通用的**處理器，任何「輸入框 + 同一個容器裡的 .parts-cust-dropdown」
+   組合自動就有 ↑↓ 移動、Enter 選定、Esc 關閉，日後新增篩選框不必再寫一次（鐵律4）。
+
+   為什麼掛在 document 的**捕獲階段**：這些輸入框身上本來就有自己的 onkeydown
+   （例如 Enter＝把目前打的字加成關鍵字 chip）。事件先經過捕獲階段才到元素本身，
+   所以在這裡攔下並 stopPropagation，元素自己的處理器就不會再跑一次——
+   否則按 Enter 會變成「選了清單那筆、同時又把打到一半的字也加成 chip」。
+   沒有選到任何一列時完全不攔，Enter 照舊＝維持既有操作習慣。 */
+function _acDropdownOf(input) {
+    if (!input || input.tagName !== 'INPUT') return null;
+    // 從輸入框往上找最近的定位容器，再找裡面**顯示中**的建議清單
+    var node = input.parentElement, depth = 0;
+    while (node && depth < 4) {
+        var dds = node.querySelectorAll('.parts-cust-dropdown');
+        for (var i = 0; i < dds.length; i++) {
+            var dd = dds[i];
+            if (dd.style.display !== 'none' && dd.offsetParent !== null && dd.querySelector('.pac-item')) return dd;
+        }
+        node = node.parentElement; depth++;
+    }
+    return null;
+}
+function _acItems(dd) {
+    // 「查無符合」那種提示列沒有可選的值，不列入鍵盤巡覽
+    return Array.prototype.filter.call(dd.querySelectorAll('.pac-item'), function(el) {
+        return el.dataset && (el.dataset.val !== undefined || el.dataset.id !== undefined || el.dataset.no !== undefined);
+    });
+}
+function _acMove(dd, dir) {
+    var items = _acItems(dd);
+    if (!items.length) return false;
+    var cur = -1;
+    for (var i = 0; i < items.length; i++) if (items[i].classList.contains('pac-active')) { cur = i; break; }
+    var next = cur + dir;
+    if (next < 0) next = items.length - 1;
+    if (next >= items.length) next = 0;
+    items.forEach(function(el){ el.classList.remove('pac-active'); });
+    items[next].classList.add('pac-active');
+    // 選到的那列若在可視範圍外要自己捲進來（清單通常只有 200~300px 高）
+    if (items[next].scrollIntoView) items[next].scrollIntoView({ block:'nearest' });
+    return true;
+}
+document.addEventListener('keydown', function(e) {
+    var key = e.key || '';
+    if (key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'Enter' && key !== 'Escape') return;
+    var dd = _acDropdownOf(e.target);
+    if (!dd) return;
+    if (key === 'Escape') {
+        dd.style.display = 'none';
+        e.preventDefault(); e.stopPropagation();
+        return;
+    }
+    if (key === 'ArrowDown' || key === 'ArrowUp') {
+        if (_acMove(dd, key === 'ArrowDown' ? 1 : -1)) { e.preventDefault(); e.stopPropagation(); }
+        return;
+    }
+    // Enter：只有真的用鍵盤選到某一列時才接管，否則放行給原本的處理器
+    var act = dd.querySelector('.pac-item.pac-active');
+    if (!act) return;
+    e.preventDefault(); e.stopPropagation();
+    // 各清單的選取都綁在 mousedown 上（避免輸入框先失焦），這裡照樣派送 mousedown
+    act.dispatchEvent(new MouseEvent('mousedown', { bubbles:true, cancelable:true }));
+    dd.style.display = 'none';
+}, true);
+// 清單內容一重畫就把舊的選取狀態清掉（不清的話會停在一個已經不存在的位置）
+document.addEventListener('mousemove', function(e) {
+    var it = e.target && e.target.closest ? e.target.closest('.parts-cust-dropdown .pac-item') : null;
+    if (!it) return;
+    var dd = it.closest('.parts-cust-dropdown');
+    if (dd) dd.querySelectorAll('.pac-item.pac-active').forEach(function(el){ el.classList.remove('pac-active'); });
 });
 
 // ── addKwChip 通用輔助 ─────────────────────────────────────────────────────
@@ -18383,6 +18560,10 @@ function editAttachCat(id) {
     if (albChk) albChk.checked = (c.is_photo_album=='1'||c.is_photo_album===1);
     var pvChk = document.getElementById('acat-part-viewer');
     if (pvChk) pvChk.checked = (c.show_in_part_viewer=='1'||c.show_in_part_viewer===1);
+    var qbChk = document.getElementById('acat-quote-bindable');
+    if (qbChk) qbChk.checked = (c.quote_bindable=='1'||c.quote_bindable===1);
+    var mkChk = document.getElementById('acat-need-maker');
+    if (mkChk) mkChk.checked = (c.need_maker=='1'||c.need_maker===1);
     var obsChk = document.getElementById('acat-obsolete-mark');
     if (obsChk) obsChk.checked = (c.is_obsolete_mark=='1'||c.is_obsolete_mark===1);
     var dgIn = document.getElementById('acat-dwg-group');
@@ -18421,6 +18602,10 @@ function resetAttachCatForm() {
     if (albChk) albChk.checked = false;
     var pvChk = document.getElementById('acat-part-viewer');
     if (pvChk) pvChk.checked = false;
+    var qbChk = document.getElementById('acat-quote-bindable');
+    if (qbChk) qbChk.checked = false;
+    var mkChk = document.getElementById('acat-need-maker');
+    if (mkChk) mkChk.checked = false;
     var obsChk = document.getElementById('acat-obsolete-mark');
     if (obsChk) obsChk.checked = false;
     var dgIn = document.getElementById('acat-dwg-group');
@@ -18483,7 +18668,9 @@ function saveAttachCategory() {
             dwg_group:((document.getElementById('acat-dwg-group')||{}).value||'').trim(),
             dwg_trigger:(document.getElementById('acat-dwg-trigger')||{}).checked ? 1 : 0,
             is_photo_album:(document.getElementById('acat-photo-album')||{}).checked ? 1 : 0,
-            show_in_part_viewer:(document.getElementById('acat-part-viewer')||{}).checked ? 1 : 0 }).done(function(r) {
+            show_in_part_viewer:(document.getElementById('acat-part-viewer')||{}).checked ? 1 : 0,
+            quote_bindable:(document.getElementById('acat-quote-bindable')||{}).checked ? 1 : 0,
+            need_maker:(document.getElementById('acat-need-maker')||{}).checked ? 1 : 0 }).done(function(r) {
         if (r.success) { _attachCatsCache = null; showToast(r.message||'已儲存'); resetAttachCatForm(); loadAttachCatTable(); }
         else showToast(r.message||'儲存失敗','error');
     });
@@ -18926,11 +19113,14 @@ function _pavRenderList() {
         var isObs = _pavIsObsolete(f);
         var itemStyle = 'padding:4px 8px;cursor:pointer;border-bottom:1px solid #f0f0f0;transition:background .1s;'
                       + (isObs ? 'background:#fff0f0;border-left:3px solid #e74c3c;' : '');
-        html += '<div class="pav-file-item" data-idx="'+fIdx+'" data-obsolete="'+(isObs?'1':'0')+'" onclick="pavSelectFile('+fIdx+')" style="'+itemStyle+'">';
-        // 第一行：圖示 + 檔名 +（行內作廢標記 / 版次）
-        html += '<div style="display:flex;align-items:center;gap:5px;">';
+        html += '<div class="pav-file-item" data-idx="'+fIdx+'" data-obsolete="'+(isObs?'1':'0')+'" onclick="pavSelectFile('+fIdx+')" style="'+itemStyle+'" title="'+name+'">';
+        // ── 2026-09-08 使用者要求：清單上**不顯示檔名**（掃描檔名看不出是什麼），
+        //    第一行改成放標籤與各種標記，第二行放備註。完整檔名仍在整列的 title、
+        //    以及右側預覽區上方的檔名列看得到。
+        // 第一行：圖示 + 類別標籤 +（作廢 / 版次 / 發行日）
+        html += '<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;">';
         html += '<i class="fa '+icon+'" style="color:'+(isObs?'#c0392b':'#888')+';flex-shrink:0;font-size:12px;"></i>';
-        html += '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;'+(isObs?'color:#c0392b;text-decoration:line-through;':'')+'">'+name+'</span>';
+        html += '<span style="flex:1;min-width:0;display:flex;gap:3px;flex-wrap:wrap;align-items:center;">'+(tags||'')+'</span>';
         if (isObs) html += '<span style="flex-shrink:0;background:#e74c3c;color:#fff;font-size:9px;font-weight:700;padding:0 5px;border-radius:3px;letter-spacing:1px;">作廢</span>';
         // 版次 0 也要顯示：不可用 if(f.revision) 判斷（0 / "0" 會被當成沒填）
         if (f.revision !== null && f.revision !== undefined && String(f.revision) !== '')
@@ -18944,12 +19134,18 @@ function _pavRenderList() {
                 html += '<span style="flex-shrink:0;background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;font-size:10px;font-weight:600;padding:0 5px;border-radius:3px;" title="自家出的圖但沒有發行章日期，無法偵測圖面變更——請按編輯補上">未設發行日</span>';
         }
         html += '</div>';
-        // 第二行：日期 · 上傳者 · 標籤（單行）
+        // 第二行：備註（標籤下方；沒填就整行不出現＝使用者拍板，不顯示「未填備註」）
+        if (f.note) {
+            html += '<div style="margin-top:2px;font-size:11px;color:#4A3524;line-height:1.35;word-break:break-all;" title="'+escHtml(f.note)+'">'
+                  + '<i class="fa fa-comment-o" style="opacity:.45;margin-right:3px;"></i>'+escHtml(f.note)+'</div>';
+        }
+        // 第三行：日期 · 上傳者 ·（廠商 / 已綁報價單）
         html += '<div style="display:flex;gap:5px;margin-top:1px;align-items:center;flex-wrap:wrap;font-size:10px;color:#aaa;line-height:1.3;">';
         html += '<span>'+escHtml(dt)+'</span>';
         if (f.uploaded_by) html += '<span style="color:#888;">'+escHtml(f.uploaded_by)+'</span>';
-        if (tags) html += tags;
-        if (f.note) html += '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#666;" title="'+escHtml(f.note)+'"><i class="fa fa-comment-o" style="opacity:.5;margin-right:2px;"></i>'+escHtml(f.note)+'</span>';
+        // 廠商／綁定報價單（2026-09-08）：只有真的有值才出現，沒設定過的附件完全看不出差別
+        if (f.maker_no) html += '<span style="background:#FFF3E2;color:#8a5a12;border:1px solid #E4D3BC;font-weight:600;padding:0 5px;border-radius:3px;" title="廠商"><i class="fa fa-industry" style="margin-right:2px;"></i>'+escHtml(f.maker_name || f.maker_no)+'</span>';
+        if (f.bind_quote_no) html += '<span style="background:#F3E8FF;color:#6e2fa3;border:1px solid #DCC9EE;font-weight:600;padding:0 5px;border-radius:3px;" title="已綁定報價單，這份附件會一起出現在該報價單上">報價 '+escHtml(f.bind_quote_no)+'</span>';
         html += '</div>';
         html += '</div>';
     });
@@ -19786,7 +19982,7 @@ function _pauBuildFileCatChips(fileIdx, cats, checkedIds) {
     cats.forEach(function(c) {
         var ck = (checkedIds||[]).indexOf(String(c.id)) >= 0 ? 'checked' : '';
         html += '<label style="display:inline-flex;align-items:center;gap:3px;background:#f0f8ff;color:#1a5276;border:1px solid #aed6f1;border-radius:8px;padding:1px 8px;cursor:pointer;font-weight:normal;font-size:11px;margin-bottom:2px;">'
-              + '<input type="checkbox" value="'+c.id+'" class="pau-row-cat" data-fidx="'+fileIdx+'" '+ck+' onchange="refreshPauIssueRow();refreshPauAlbumRow();validatePauCat();" style="cursor:pointer;">'
+              + '<input type="checkbox" value="'+c.id+'" class="pau-row-cat" data-fidx="'+fileIdx+'" '+ck+' onchange="refreshPauIssueRow();refreshPauAlbumRow();refreshPauLinkRows();validatePauCat();" style="cursor:pointer;">'
               + escHtml(c.category_name)+'</label>';
     });
     html += '</div>';
@@ -19814,8 +20010,10 @@ function _pauRenderFileRows(fileArr, cats) {
     fileArr.forEach(function(f, idx) {
         var ext = (f.name||'').split('.').pop().toLowerCase();
         html += '<tr style="border-bottom:1px solid #e4e8ed;'+(idx%2===1?'background:#fafbfc;':'')+'vertical-align:top;">';
-        html += '<td style="padding:5px 8px;color:#1a5276;word-break:break-all;font-weight:600;" title="'+escHtml(f.name)+'">'
-              + '<i class="fa '+_fileIcon(ext)+'" style="color:#888;margin-right:4px;"></i>'+escHtml(f.name)+'</td>';
+        html += '<td style="padding:5px 8px;word-break:break-all;font-weight:600;">'
+              + '<a href="javascript:void(0)" onclick="pauPreviewFile('+idx+')" title="點一下預覽這個檔案（還沒上傳也看得到）"'
+              + ' style="color:#1a5276;text-decoration:underline;text-underline-offset:2px;">'
+              + '<i class="fa '+_fileIcon(ext)+'" style="color:#888;margin-right:4px;"></i>'+escHtml(f.name)+'</a></td>';
         html += '<td style="padding:5px 8px;">'+_pauBuildFileCatChips(idx, cats, [])+'</td>';
         html += '<td style="padding:5px 8px;"><input type="text" class="form-control input-sm pau-row-rev" data-fidx="'+idx+'" maxlength="50" placeholder="版次" style="font-size:11px;"></td>';
         html += '<td style="padding:5px 8px;"><select class="form-control input-sm pau-row-proc" data-fidx="'+idx+'" style="font-size:11px;">'+_pauProcOptionsHtml('')+'</select></td>';
@@ -19825,7 +20023,7 @@ function _pauRenderFileRows(fileArr, cats) {
     html += '</tbody></table>';
     // 套用到全部按鈕（在第一列上方）
     var wrapHtml = '<div style="padding:6px 8px;background:#eef4fb;border-bottom:1px solid #d6eaf8;font-size:11px;color:#555;display:flex;align-items:center;gap:8px;">'
-        + '<span><i class="fa fa-info-circle"></i> 每個檔案可個別設定類別標籤、製程標籤與備註（同一次出圖的 -1／-2 常常一起傳，製程要逐列各自選）</span>'
+        + '<span><i class="fa fa-info-circle"></i> 每個檔案可個別設定類別標籤、製程標籤與備註（同一次出圖的 -1／-2 常常一起傳，製程要逐列各自選）；<b>點檔案名稱可以先預覽內容</b></span>'
         + '<button type="button" class="btn btn-xs btn-default" onclick="pauApplyFirstToAll()" style="margin-left:auto;"><i class="fa fa-copy"></i> 以第一個為準套用全部</button>'
         + '</div>' + html;
     rows.innerHTML = wrapHtml;
@@ -19882,6 +20080,15 @@ function _openPartAttachUploadModal(dId, partNo, preselectedFiles) {
     var _pauAe  = document.getElementById('pau-album-err');  if (_pauAe) _pauAe.style.display = 'none';
     _pauAlbums = [];
     _pauLoadAlbums(dId, function(){ refreshPauAlbumRow(); });   // 相簿清單先備好，勾到相簿標籤時才有東西可選
+    // 綁定報價單／廠商（2026-09-08）：欄位先清乾淨再把候選備好，勾到對應標籤時才會顯示出來
+    var _pauQw = document.getElementById('pau-quote-wrap'); if (_pauQw) _pauQw.style.display = 'none';
+    var _pauMw = document.getElementById('pau-maker-wrap'); if (_pauMw) _pauMw.style.display = 'none';
+    var _pauQs = document.getElementById('pau-quote-no');   if (_pauQs) _pauQs.value = '';
+    var _pauMk = document.getElementById('pau-maker-no');   if (_pauMk) _pauMk.value = '';
+    var _pauMkw= document.getElementById('pau-maker-kw');   if (_pauMkw) _pauMkw.value = '';
+    var _pauMh = document.getElementById('pau-maker-hint'); if (_pauMh) { _pauMh.style.color = '#7f8c8d'; _pauMh.textContent = '尚未選擇廠商（可留空）'; }
+    _pauQuoteCands = [];
+    _pauLoadQuoteCands(dId, function(){ refreshPauLinkRows(); });
     document.getElementById('pau-vars-section').style.display = 'none';
     document.getElementById('pau-vars-inputs').innerHTML = '';
     document.getElementById('pau-file-rows').style.display = 'none';
@@ -19892,8 +20099,7 @@ function _openPartAttachUploadModal(dId, partNo, preselectedFiles) {
     if (single) single.style.display = '';
     var fileArr = Array.isArray(preselectedFiles) ? preselectedFiles : (preselectedFiles ? [preselectedFiles] : []);
     window._pauFiles = fileArr;
-    var cntEl = document.getElementById('pau-file-count');
-    if (cntEl) cntEl.textContent = !fileArr.length ? '未選擇' : fileArr.length + ' 個檔案';
+    _pauUpdateFileCount(fileArr);
     loadActiveCatsForUpload(function(cats) {
       _pauLoadProcCands(dId, function() {
         var _pp = document.getElementById('pau-proc');
@@ -19919,11 +20125,24 @@ function _openPartAttachUploadModal(dId, partNo, preselectedFiles) {
     $('#partAttachUploadModal').modal('show');
 }
 
+/** 選檔區右邊那行字：單檔時直接把檔名做成可點的預覽連結（2026-09-08 使用者要求） */
+function _pauUpdateFileCount(fileArr) {
+    var cntEl = document.getElementById('pau-file-count');
+    if (!cntEl) return;
+    if (!fileArr || !fileArr.length) { cntEl.textContent = '未選擇'; return; }
+    if (fileArr.length === 1) {
+        cntEl.innerHTML = '<a href="javascript:void(0)" onclick="pauPreviewFile(0)" title="點一下預覽這個檔案（還沒上傳也看得到）"'
+            + ' style="color:#1a5276;text-decoration:underline;text-underline-offset:2px;">'
+            + '<i class="fa fa-eye" style="margin-right:3px;"></i>' + escHtml(fileArr[0].name || '') + '</a>';
+    } else {
+        cntEl.textContent = fileArr.length + ' 個檔案（點下方檔名可預覽）';
+    }
+}
+
 function onPauFileChange(input) {
     var fileArr = Array.from(input.files || []);
     window._pauFiles = fileArr;
-    var cntEl = document.getElementById('pau-file-count');
-    if (cntEl) cntEl.textContent = !fileArr.length ? '未選擇' : fileArr.length + ' 個檔案';
+    _pauUpdateFileCount(fileArr);
     // 重建 rows / single mode
     loadActiveCatsForUpload(function(cats) {
         document.getElementById('pau-note').value = '';
@@ -19943,6 +20162,7 @@ function onPauFileChange(input) {
         }
         refreshPauIssueRow();
         refreshPauAlbumRow();
+        refreshPauLinkRows();
     });
 }
 
@@ -20003,6 +20223,179 @@ function validatePauIssue() {
     hint.textContent = '上傳後會自動跟這個料號既有的自家圖面比對：比較新＝圖面變更（會請你填變更內容），第一次＝首次發行。';
     return true;
 }
+
+/* ── 上傳前預覽（2026-09-08 使用者要求）───────────────────────────────────
+   多檔上傳後只看得到檔名（掃描檔多半是日期流水號），根本分不出哪個是哪個，
+   於是標籤也選不下去。這裡讓使用者在**還沒選完標籤／還沒上傳**的狀態下，
+   點檔案名稱就能直接看內容——讀的是瀏覽器記憶體裡的檔案（createObjectURL），
+   不經過伺服器，所以不必先上傳、也不會留下任何暫存檔。
+   用完一定要 revokeObjectURL，否則整批大圖會一直佔著記憶體。 */
+var _pauPvUrl = null, _pauPvIdx = -1;
+
+function _pauPvClear() {
+    if (_pauPvUrl) { try { URL.revokeObjectURL(_pauPvUrl); } catch(e){} _pauPvUrl = null; }
+    var body = document.getElementById('pau-pv-body');
+    if (body) body.innerHTML = '';
+}
+function pauPreviewFile(idx) {
+    var files = window._pauFiles || [];
+    var f = files[idx];
+    if (!f) return;
+    _pauPvClear();
+    _pauPvIdx = idx;
+    var name = f.name || '';
+    var ext  = name.split('.').pop().toLowerCase();
+    var nameEl = document.getElementById('pau-pv-name'); if (nameEl) nameEl.textContent = name;
+    var posEl  = document.getElementById('pau-pv-pos');
+    if (posEl) posEl.textContent = '第 ' + (idx+1) + ' / ' + files.length + ' 個檔案' + (files.length > 1 ? '（可用下方按鈕或 ←／→ 換檔）' : '');
+    var body = document.getElementById('pau-pv-body');
+    if (!body) return;
+    _pauPvUrl = URL.createObjectURL(f);
+    if (['jpg','jpeg','png','gif','bmp','webp','svg'].indexOf(ext) >= 0) {
+        body.innerHTML = '<img src="' + _pauPvUrl + '" style="max-width:100%;max-height:100%;object-fit:contain;">';
+    } else if (ext === 'pdf') {
+        body.innerHTML = '<iframe src="' + _pauPvUrl + '" style="width:100%;height:100%;border:0;"></iframe>';
+    } else {
+        body.innerHTML = '<div style="text-align:center;color:#888;font-size:13px;padding:30px;">'
+            + '<i class="fa ' + _fileIcon(ext) + '" style="font-size:44px;color:#bbb;display:block;margin-bottom:10px;"></i>'
+            + '這種檔案（.' + escHtml(ext) + '）沒辦法在瀏覽器裡直接預覽<br>'
+            + '<span style="font-size:11px;color:#aaa;">檔名：' + escHtml(name) + '</span></div>';
+    }
+    $('#pauPreviewModal').modal('show');
+}
+function pauPreviewStep(d) {
+    var files = window._pauFiles || [];
+    if (!files.length) return;
+    var n = _pauPvIdx + d;
+    if (n < 0) n = files.length - 1;
+    if (n >= files.length) n = 0;
+    pauPreviewFile(n);
+}
+$(document).on('hidden.bs.modal', '#pauPreviewModal', function(){ _pauPvClear(); });
+$(document).on('keydown', function(e) {
+    if (!$('#pauPreviewModal').hasClass('in')) return;
+    if (e.key === 'ArrowLeft')  { e.preventDefault(); pauPreviewStep(-1); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); pauPreviewStep(1); }
+});
+
+/* ── 綁定報價單／廠商（2026-09-08 使用者要求）─────────────────────────────
+   哪些標籤要出現這兩個欄位，由 quotation_file_categories.quote_bindable / need_maker
+   決定（標籤設定可勾），不寫死標籤名稱＝鐵律4。兩個都是選填，沒勾的標籤完全看不到，
+   所以既有的上傳操作一個字都不會變。 */
+var _pauQuoteCands = [];     // 這個料號可以綁的報價單（開跳窗時抓一次）
+
+function _pauQuoteBindCatIds() {
+    return (_attachCatsCache||[]).filter(function(c){ return c.quote_bindable==1||c.quote_bindable==='1'; })
+                                 .map(function(c){ return String(c.id); });
+}
+function _pauMakerCatIds() {
+    return (_attachCatsCache||[]).filter(function(c){ return c.need_maker==1||c.need_maker==='1'; })
+                                 .map(function(c){ return String(c.id); });
+}
+/** 目前勾選的標籤裡有沒有命中這組旗標標籤 */
+function _pauCatsHit(flagIds) {
+    if (!flagIds.length) return false;
+    return _pauSelectedCatIds().some(function(id){ return flagIds.indexOf(String(id)) >= 0; });
+}
+/** 讀這個料號可以綁定的報價單（只列這張單真的有這個料號的） */
+function _pauLoadQuoteCands(dId, cb) {
+    $.get(PART_ATTACH_API_URL, { action:'quote_candidates', d_id:dId }, function(r) {
+        _pauQuoteCands = (r && r.success && r.data) ? r.data : [];
+        if (cb) cb(_pauQuoteCands);
+    }).fail(function(){ _pauQuoteCands = []; if (cb) cb([]); });
+}
+function _pauQuoteOptionsHtml(sel) {
+    var h = '<option value="">— 不綁定 —</option>';
+    (_pauQuoteCands||[]).forEach(function(q) {
+        var label = q.quote_no + (q.quote_date ? '（' + egFmtDate(q.quote_date) + '）' : '')
+                  + (q.client_name ? ' ' + q.client_name : '')
+                  + ((q.is_draft==1||q.is_draft==='1') ? ' [草稿]' : '');
+        h += '<option value="' + escHtml(q.quote_no) + '"' + (String(sel||'')===String(q.quote_no)?' selected':'') + '>'
+           + escHtml(label) + '</option>';
+    });
+    return h;
+}
+/** 依目前勾選的標籤決定這兩塊要不要出現（上傳跳窗） */
+function refreshPauLinkRows() {
+    var qw = document.getElementById('pau-quote-wrap');
+    if (qw) {
+        var need = _pauCatsHit(_pauQuoteBindCatIds());
+        qw.style.display = need ? '' : 'none';
+        var sel = document.getElementById('pau-quote-no');
+        if (need && sel) {
+            var keep = sel.value;
+            sel.innerHTML = _pauQuoteOptionsHtml(keep);
+            var hint = document.getElementById('pau-quote-hint');
+            if (hint && !(_pauQuoteCands||[]).length) {
+                hint.innerHTML = '<span style="color:#C77C1A;">這個料號目前沒有任何報價單可以綁定</span>';
+            }
+        }
+        if (!need && sel) sel.value = '';       // 標籤改掉就不要留著一個看不見的綁定
+    }
+    var mw = document.getElementById('pau-maker-wrap');
+    if (mw) {
+        var needM = _pauCatsHit(_pauMakerCatIds());
+        mw.style.display = needM ? '' : 'none';
+        if (!needM) {
+            var mk = document.getElementById('pau-maker-no'); if (mk) mk.value = '';
+            var kw = document.getElementById('pau-maker-kw'); if (kw) kw.value = '';
+        }
+    }
+}
+/** 廠商自動完成：來源 maker_list（沿用廠商分頁既有的 search_makers_ac，不另寫一支） */
+var _pauMakerAcTimer = null;
+function onPauMakerInput(kw) {
+    clearTimeout(_pauMakerAcTimer);
+    var dd = document.getElementById('pau-maker-dd');
+    var hid = document.getElementById('pau-maker-no');
+    var hint = document.getElementById('pau-maker-hint');
+    if (hid) hid.value = '';                       // 一改字就當作還沒選定，避免留著上一次選的廠商
+    if (hint) { hint.style.color = '#7f8c8d'; hint.textContent = kw ? '請從清單中點選廠商（沒點選＝不填廠商）' : '尚未選擇廠商（可留空）'; }
+    if (!kw) { if (dd) dd.style.display = 'none'; return; }
+    _pauMakerAcTimer = setTimeout(function() {
+        api({ action:'search_makers_ac', kw:kw }).done(function(r) {
+            if (!dd) return;
+            if (!r.success || !r.data || !r.data.length) {
+                dd.innerHTML = '<div class="pac-item" style="color:#aaa;cursor:default;">查無符合的廠商</div>';
+                dd.style.display = 'block';
+                return;
+            }
+            dd.innerHTML = r.data.map(function(m) {
+                var nm = m.maker_short || m.maker_full || '';
+                return '<div class="pac-item" data-no="' + escHtml(m.maker_id_no) + '" data-nm="' + escHtml(nm) + '">'
+                     + '<strong>' + escHtml(m.maker_id_no) + '</strong>'
+                     + (nm ? '<span style="color:#888;margin-left:6px;">' + escHtml(nm) + '</span>' : '') + '</div>';
+            }).join('');
+            dd.style.display = 'block';
+            dd.querySelectorAll('.pac-item[data-no]').forEach(function(item) {
+                item.addEventListener('mousedown', function(e) {
+                    e.preventDefault();
+                    pauPickMaker(this.dataset.no, this.dataset.nm);
+                });
+            });
+        });
+    }, 200);
+}
+function pauPickMaker(no, nm) {
+    var hid = document.getElementById('pau-maker-no'); if (hid) hid.value = no || '';
+    var kw  = document.getElementById('pau-maker-kw'); if (kw) kw.value = (no || '') + (nm ? ' ' + nm : '');
+    var dd  = document.getElementById('pau-maker-dd'); if (dd) dd.style.display = 'none';
+    var hint = document.getElementById('pau-maker-hint');
+    if (hint) { hint.style.color = '#27865a'; hint.textContent = '已選擇廠商：' + (no||'') + (nm ? '（' + nm + '）' : ''); }
+}
+// 點到別處關掉廠商建議清單
+document.addEventListener('click', function(e) {
+    var dd = document.getElementById('pau-maker-dd');
+    if (dd && dd.style.display !== 'none') {
+        var wrap = dd.parentElement;
+        if (!wrap || !wrap.contains(e.target)) dd.style.display = 'none';
+    }
+    var dd2 = document.getElementById('pae-maker-dd');
+    if (dd2 && dd2.style.display !== 'none') {
+        var wrap2 = dd2.parentElement;
+        if (!wrap2 || !wrap2.contains(e.target)) dd2.style.display = 'none';
+    }
+});
 
 /* ── 相簿（2026-08-25 使用者要求）───────────────────────────────────────
    哪些標籤要用相簿，由 quotation_file_categories.is_photo_album 決定（標籤設定可勾），
@@ -20103,6 +20496,7 @@ function onPauCatChange() {
     validatePauCat();
     refreshPauIssueRow();
     refreshPauAlbumRow();
+    refreshPauLinkRows();
     var selectedIds = [];
     document.querySelectorAll('.pau-cat-chk:checked').forEach(function(cb){ selectedIds.push(cb.value); });
     var varSec = document.getElementById('pau-vars-section');
@@ -20144,6 +20538,12 @@ function submitPartAttachUpload() {
     if (!validatePauAlbum()) { var _an=document.getElementById('pau-album-name'); if (_an) _an.focus(); showToast('請確認相簿名稱','error'); return; }
     var issueDate = (document.getElementById('pau-issue-wrap').style.display !== 'none')
                   ? (document.getElementById('pau-issue-date').value||'') : '';
+    // 綁定報價單／廠商：欄位沒顯示出來就一律送空字串（＝不綁定／不填），
+    // 不可把隱藏欄位裡的殘值一起送出去
+    var bindQuoteNo = (document.getElementById('pau-quote-wrap')||{}).style && document.getElementById('pau-quote-wrap').style.display !== 'none'
+                    ? ((document.getElementById('pau-quote-no')||{}).value||'') : '';
+    var bindMakerNo = (document.getElementById('pau-maker-wrap')||{}).style && document.getElementById('pau-maker-wrap').style.display !== 'none'
+                    ? ((document.getElementById('pau-maker-no')||{}).value||'') : '';
     var isMulti = files.length > 1;
     // 收集每個檔案的設定
     var fileSettings = files.map(function(f, idx) {
@@ -20199,6 +20599,8 @@ function submitPartAttachUpload() {
         fd.append('process_tag', s.procTag||'');
         fd.append('issue_stamp_date', issueDate);
         fd.append('album_id', albumId || 0);
+        fd.append('quote_no', bindQuoteNo);
+        fd.append('maker_no', bindMakerNo);
         $.ajax({ url:PART_ATTACH_API_URL, type:'POST', data:fd, processData:false, contentType:false, success:function(r) {
             if (r.success) {
                 done++;
@@ -20302,6 +20704,7 @@ function _pauProcOptionsHtml(selected) {
 }
 
 var _paeStoredIssue = '';   // 目前編輯中附件原本存的發行章日期（不可被「預設今天」蓋掉）
+var _paeStoredQuote = '';   // 目前編輯中附件原本綁定的報價單號
 function pavEditMeta() {
     var f = _pav.currentFile;
     if (!f || f.source === 'quote') return;
@@ -20311,6 +20714,19 @@ function pavEditMeta() {
     document.getElementById('pae-revision').value = (f.revision === null || f.revision === undefined) ? '' : String(f.revision);
     _paeStoredIssue = (f.issue_stamp_date || '').substring(0,10);   // 這筆附件原本存的發行章日期
     document.getElementById('pae-issue-date').value = _paeStoredIssue;
+    // 綁定報價單／廠商：帶入這筆附件原本存的值（候選清單依所屬料號現查）
+    _paeStoredQuote = f.bind_quote_no || '';
+    var _paeQw = document.getElementById('pae-quote-wrap'); if (_paeQw) _paeQw.style.display = 'none';
+    var _paeMw = document.getElementById('pae-maker-wrap'); if (_paeMw) _paeMw.style.display = 'none';
+    var _paeMk = document.getElementById('pae-maker-no'); if (_paeMk) _paeMk.value = f.maker_no || '';
+    var _paeMkw= document.getElementById('pae-maker-kw');
+    if (_paeMkw) _paeMkw.value = f.maker_no ? (f.maker_no + (f.maker_name ? ' ' + f.maker_name : '')) : '';
+    var _paeMh = document.getElementById('pae-maker-hint');
+    if (_paeMh) {
+        _paeMh.style.color = f.maker_no ? '#27865a' : '#7f8c8d';
+        _paeMh.textContent = f.maker_no ? ('目前廠商：' + f.maker_no + (f.maker_name ? '（' + f.maker_name + '）' : '')) : '尚未選擇廠商（可留空）';
+    }
+    _pauLoadQuoteCands(_pav.dId, function(){ refreshPaeLinkRows(); });
     // 製程標籤：候選依這筆附件所屬料號現查，目前值就算已不在候選內也會保留（見 _pauProcOptionsHtml）
     _pauLoadProcCands(_pav.dId, function() {
         var _pe = document.getElementById('pae-proc');
@@ -20332,12 +20748,66 @@ function pavEditMeta() {
                     : 'background:#f0f8ff;color:#1a5276;border:1px solid #aed6f1;');
             var ck = checked.indexOf(String(c.id)) >= 0 ? 'checked' : '';
             var label = isObsCat ? '⊘ 作廢' : escHtml(c.category_name);
-            lbl.innerHTML = '<input type="checkbox" value="'+c.id+'" class="pae-cat-chk" '+ck+' onchange="refreshPaeIssueRow();var _b=document.getElementById(&quot;pae-cat-chips&quot;),_e=document.getElementById(&quot;pae-cat-err&quot;);if(document.querySelectorAll(&quot;.pae-cat-chk:checked&quot;).length){if(_b)_b.style.borderColor=&quot;&quot;;if(_e)_e.style.display=&quot;none&quot;;}" style="cursor:pointer;accent-color:#e74c3c;"> '+label;
+            lbl.innerHTML = '<input type="checkbox" value="'+c.id+'" class="pae-cat-chk" '+ck+' onchange="refreshPaeIssueRow();refreshPaeLinkRows();var _b=document.getElementById(&quot;pae-cat-chips&quot;),_e=document.getElementById(&quot;pae-cat-err&quot;);if(document.querySelectorAll(&quot;.pae-cat-chk:checked&quot;).length){if(_b)_b.style.borderColor=&quot;&quot;;if(_e)_e.style.display=&quot;none&quot;;}" style="cursor:pointer;accent-color:#e74c3c;"> '+label;
             chips.appendChild(lbl);
         });
         refreshPaeIssueRow();
+        refreshPaeLinkRows();
     });
     $('#partAttachEditModal').modal('show');
+}
+
+/* ── 編輯附件：綁定報價單／廠商（與上傳跳窗同一套判定）───────────────── */
+function refreshPaeLinkRows() {
+    var ids = [];
+    document.querySelectorAll('.pae-cat-chk:checked').forEach(function(cb){ ids.push(String(cb.value)); });
+    function hit(flagIds) { return flagIds.length && ids.some(function(id){ return flagIds.indexOf(id) >= 0; }); }
+    var qw = document.getElementById('pae-quote-wrap');
+    if (qw) {
+        var need = hit(_pauQuoteBindCatIds());
+        qw.style.display = need ? '' : 'none';
+        var sel = document.getElementById('pae-quote-no');
+        if (need && sel) sel.innerHTML = _pauQuoteOptionsHtml(_paeStoredQuote);
+    }
+    var mw = document.getElementById('pae-maker-wrap');
+    if (mw) mw.style.display = hit(_pauMakerCatIds()) ? '' : 'none';
+}
+var _paeMakerAcTimer = null;
+function onPaeMakerInput(kw) {
+    clearTimeout(_paeMakerAcTimer);
+    var dd = document.getElementById('pae-maker-dd');
+    var hid = document.getElementById('pae-maker-no');
+    var hint = document.getElementById('pae-maker-hint');
+    if (hid) hid.value = '';
+    if (hint) { hint.style.color = '#7f8c8d'; hint.textContent = kw ? '請從清單中點選廠商（沒點選＝不填廠商）' : '尚未選擇廠商（可留空）'; }
+    if (!kw) { if (dd) dd.style.display = 'none'; return; }
+    _paeMakerAcTimer = setTimeout(function() {
+        api({ action:'search_makers_ac', kw:kw }).done(function(r) {
+            if (!dd) return;
+            if (!r.success || !r.data || !r.data.length) {
+                dd.innerHTML = '<div class="pac-item" style="color:#aaa;cursor:default;">查無符合的廠商</div>';
+                dd.style.display = 'block'; return;
+            }
+            dd.innerHTML = r.data.map(function(m) {
+                var nm = m.maker_short || m.maker_full || '';
+                return '<div class="pac-item" data-no="' + escHtml(m.maker_id_no) + '" data-nm="' + escHtml(nm) + '">'
+                     + '<strong>' + escHtml(m.maker_id_no) + '</strong>'
+                     + (nm ? '<span style="color:#888;margin-left:6px;">' + escHtml(nm) + '</span>' : '') + '</div>';
+            }).join('');
+            dd.style.display = 'block';
+            dd.querySelectorAll('.pac-item[data-no]').forEach(function(item) {
+                item.addEventListener('mousedown', function(e) {
+                    e.preventDefault();
+                    var no = this.dataset.no, nm = this.dataset.nm;
+                    var h = document.getElementById('pae-maker-no'); if (h) h.value = no || '';
+                    var k = document.getElementById('pae-maker-kw'); if (k) k.value = (no||'') + (nm ? ' ' + nm : '');
+                    dd.style.display = 'none';
+                    var ht = document.getElementById('pae-maker-hint');
+                    if (ht) { ht.style.color = '#27865a'; ht.textContent = '已選擇廠商：' + (no||'') + (nm ? '（' + nm + '）' : ''); }
+                });
+            });
+        });
+    }, 200);
 }
 
 /* 編輯附件時的發行章日期：勾到「自家出的圖」才要求填（與上傳同一套判準） */
@@ -20397,6 +20867,11 @@ function submitAttachEdit() {
     var procTag = (document.getElementById('pae-proc')||{}).value || '';
     var payload = { action:'update_meta', id:id, category_ids:catIds.join(','), note:note, revision:revision, process_tag:procTag };
     if (shownIssue) payload.issue_stamp_date = issueDate;
+    // 綁定報價單／廠商：同樣「欄位沒顯示就不送」＝後端維持原值，不會被標籤一改就洗掉
+    var shownQuote = (document.getElementById('pae-quote-wrap')||{}).style && document.getElementById('pae-quote-wrap').style.display !== 'none';
+    var shownMaker = (document.getElementById('pae-maker-wrap')||{}).style && document.getElementById('pae-maker-wrap').style.display !== 'none';
+    if (shownQuote) payload.quote_no = (document.getElementById('pae-quote-no')||{}).value || '';
+    if (shownMaker) payload.maker_no = (document.getElementById('pae-maker-no')||{}).value || '';
     $.post(PART_ATTACH_API_URL, payload, function(r) {
         if (!r.success) { showToast(r.message||'儲存失敗','error'); return; }
         // 更新本地資料
@@ -20404,6 +20879,8 @@ function submitAttachEdit() {
         if (f) {
             f.category_ids = catIds.join(','); f.note = note; f.revision = revision; f.process_tag = procTag;
             if (shownIssue) f.issue_stamp_date = issueDate;   // 沒送就別動本地快取，否則下次開編輯又會變成空的
+            if (shownQuote) f.bind_quote_no = payload.quote_no;
+            if (shownMaker) f.maker_no = payload.maker_no;
         }
         showToast('已儲存');
         $('#partAttachEditModal').modal('hide');
@@ -23206,6 +23683,54 @@ function onProcKwKeydown(event) {
         filterProcessList();
         updateProcClearBtn();
     }
+}
+
+/* 製程篩選框的建議清單（2026-09-08 使用者要求）：資料就是畫面上已經載好的製程清單，
+   不另外打 API。點選（或鍵盤 Enter 選定）＝把它加成關鍵字，行為與原本手動打字後按 Enter 相同，
+   所以既有的即時篩選、關鍵字 chip 都照舊運作。 */
+var _procAcTimer = null;
+function onProcSearchAc(kw) {
+    clearTimeout(_procAcTimer);
+    var dd = document.getElementById('proc-search-dd');
+    if (!dd) return;
+    kw = (kw||'').trim();
+    if (!kw) { dd.style.display = 'none'; dd.innerHTML = ''; return; }
+    _procAcTimer = setTimeout(function() {
+        var low = kw.toLowerCase();
+        var hits = (_processAll||[]).filter(function(p) {
+            return String(p.ProcessNo||'').indexOf(low) >= 0
+                || (p.ProcessName||'').toLowerCase().indexOf(low) >= 0
+                || (p.type_names||'').toLowerCase().indexOf(low) >= 0;
+        }).slice(0, 15);
+        if (!hits.length) { dd.style.display = 'none'; dd.innerHTML = ''; return; }
+        dd.innerHTML = hits.map(function(p) {
+            return '<div class="pac-item" data-val="' + escHtml(p.ProcessName || String(p.ProcessNo)) + '">'
+                 + '<strong>' + escHtml(String(p.ProcessNo||'')) + '</strong>'
+                 + '<span style="margin-left:6px;">' + escHtml(p.ProcessName||'') + '</span>'
+                 + (p.type_names ? '<span style="color:#888;margin-left:6px;font-size:11px;">' + escHtml(p.type_names) + '</span>' : '')
+                 + '</div>';
+        }).join('');
+        dd.style.display = 'block';
+        dd.querySelectorAll('.pac-item').forEach(function(item) {
+            item.addEventListener('mousedown', function(e) {
+                e.preventDefault();
+                addProcKwChip(this.dataset.val);
+            });
+        });
+    }, 150);
+}
+/** 把一個關鍵字加進製程篩選（與手動打字後按 Enter 完全同一條路） */
+function addProcKwChip(val) {
+    val = (val||'').trim();
+    if (!val) return;
+    var input = document.getElementById('proc-search-input');
+    if (_procKwChips.indexOf(val) < 0) _procKwChips.push(val);
+    if (input) input.value = '';
+    var dd = document.getElementById('proc-search-dd');
+    if (dd) { dd.style.display = 'none'; dd.innerHTML = ''; }
+    renderProcKwChips();
+    filterProcessList();
+    updateProcClearBtn();
 }
 
 function renderProcKwChips() {
