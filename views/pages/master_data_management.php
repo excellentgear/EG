@@ -1293,7 +1293,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     // ── 帳號/權限再驗一次 ──
     $uid     = $_SESSION['id'] ?? $_SESSION['user_id'] ?? 0;
-    $_nas_dir = _get_setting($pdo, 'notes_nas_dir', 'Z:/BOM/ERP/技術/');
+    // 結尾一律補上路徑分隔字元：底下所有用法都是「$_nas_dir . 檔名」直接串接，
+    // 設定值若沒帶結尾的 \（目前設定就是 …\ERP\技術），上傳會被寫成上一層的
+    // 「技術20260908_xxx.png」——當下不報錯，但讀檔端點 NoteImage_API 是用
+    // rtrim()+DIRECTORY_SEPARATOR 組路徑，永遠 404，附件看起來就是憑空消失。
+    $_nas_dir = rtrim(_get_setting($pdo, 'notes_nas_dir', 'Z:/BOM/ERP/技術/'), "/\\") . DIRECTORY_SEPARATOR;
 
     // ─── 料號 ─────────────────────────────────────────────────────────────
     if ($_POST['action'] === 'list_parts') {
@@ -24017,13 +24021,25 @@ function submitNoteModal() {
     });
 }
 
+// 檔案讀不到時不要整個藏起來——那會讓附件像憑空消失（清單上還標著「含圖片」、
+// 跳窗裡卻什麼都沒有、也沒有任何錯誤），改成看得見的失敗提示才查得出問題。
+function _noteFileBroken(el) {
+    var a = el.parentNode; if (!a) return;
+    a.innerHTML = '<span style="display:inline-flex;flex-direction:column;align-items:center;justify-content:center;width:90px;height:90px;border:1px dashed #E0C39A;border-radius:4px;background:#FDF3E3;color:#8a5a2e;padding:4px;text-align:center;">'
+                + '<i class="fa fa-exclamation-triangle" style="font-size:20px;"></i>'
+                + '<span style="font-size:9px;margin-top:4px;line-height:1.3;">附件讀取失敗</span></span>';
+    a.removeAttribute('href');
+    a.style.cursor = 'default';
+    a.title = '檔案在 NAS 上找不到，請聯絡管理員';
+}
+
 function _noteFileHtml(img, url, canEdit, deleteCall) {
     var fname = img.file_name || '';
     var ext   = fname.split('.').pop().toLowerCase();
     var imgExts = ['jpg','jpeg','png','gif','webp','bmp','tif','tiff','svg'];
     var html = '<span style="position:relative;display:inline-block;">';
     if (imgExts.indexOf(ext) >= 0) {
-        html += '<a href="'+url+'" target="_blank"><img src="'+url+'" style="max-width:220px;max-height:180px;width:auto;height:auto;object-fit:contain;border:1px solid #ddd;border-radius:4px;" onerror="this.parentNode.parentNode.style.display=\'none\'"></a>';
+        html += '<a href="'+url+'" target="_blank" title="'+escAttr(img.original_name||fname)+'"><img src="'+url+'" style="max-width:220px;max-height:180px;width:auto;height:auto;object-fit:contain;border:1px solid #ddd;border-radius:4px;" onerror="_noteFileBroken(this)"></a>';
     } else if (ext === 'pdf') {
         html += '<a href="'+url+'" target="_blank" style="display:inline-flex;flex-direction:column;align-items:center;justify-content:center;width:90px;height:90px;border:1px solid #f5c6c6;border-radius:4px;background:#fff5f5;color:#c0392b;text-decoration:none;padding:4px;">';
         html += '<i class="fa fa-file-pdf-o" style="font-size:28px;"></i>';
