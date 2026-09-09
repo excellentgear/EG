@@ -237,7 +237,7 @@ if ($deptPerm === 'R') {
                     <div id="position-rank-section" class="col-md-12 col-sm-12 col-xs-12">
                         <div class="x_panel">
                             <div class="x_title">
-                                <h2>職稱階級管理 <small style="color:#8a5a2b;">（數字越小＝越高階；供權責分離自動找上一級主管；非主管的職稱不必設階級）</small></h2>
+                                <h2>職稱階級管理 <small style="color:#8a5a2b;">（數字越小＝越高階；供權責分離自動找上一級主管；非主管的職稱不必設階級。同一階可放多個職稱＝視為同階主管）</small></h2>
                                 <ul class="nav navbar-right panel_toolbox">
                                     <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
                                     <li><a class="close-link"><i class="fa fa-close"></i></a></li>
@@ -258,10 +258,11 @@ if ($deptPerm === 'R') {
                                     <button type="submit" class="btn btn-primary" style="margin-left:8px;">新增階級</button>
                                 </form>
                                 <?php endif; ?>
-                                <table class="table table-striped table-hover" style="max-width:640px;">
-                                    <thead><tr><th style="width:130px;">順序(越小越高)</th><th>名稱</th><th style="width:170px;">操作</th></tr></thead>
+                                <table class="table table-striped table-hover">
+                                    <thead><tr><th style="width:130px;">順序(越小越高)</th><th style="width:210px;">名稱</th><th>屬於此階的職稱</th><th style="width:230px;">操作</th></tr></thead>
                                     <tbody id="position-rank-body"></tbody>
                                 </table>
+                                <div id="rank-unassigned-box" style="margin-top:10px;"></div>
                             </div>
                         </div>
                     </div>
@@ -271,6 +272,37 @@ if ($deptPerm === 'R') {
         <!-- /page content -->
 
         <button class="scroll-to-top" onclick="scrollToTop()">回頂端</button>
+
+        <!-- 設定「哪些職稱屬於這一階主管」Modal -->
+        <div class="modal fade" id="rankPositionsModal" tabindex="-1" role="dialog" aria-labelledby="rankPositionsModalLabel">
+            <div class="modal-dialog modal-lg" role="document">
+                <div class="modal-content">
+                    <form id="rankPositionsForm">
+                        <div class="modal-header">
+                            <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                            <h4 class="modal-title" id="rankPositionsModalLabel">設定此階級包含的職稱</h4>
+                        </div>
+                        <div class="modal-body">
+                            <p style="color:#8a5a2b;margin-bottom:10px;">
+                                目前設定的階級：<strong id="rank_pos_title"></strong><br>
+                                勾選＝該職稱屬於這一階主管（可勾多個，代表同階）；取消勾選＝改為非主管。<br>
+                                一個職稱只能屬於一個階級，勾選後會自動從原本的階級移出。
+                            </p>
+                            <div style="margin-bottom:8px;">
+                                <button type="button" class="btn btn-xs btn-default" id="rank_pos_all">全選</button>
+                                <button type="button" class="btn btn-xs btn-default" id="rank_pos_none">全部取消</button>
+                            </div>
+                            <div id="rank_pos_list" class="row" style="max-height:360px;overflow-y:auto;"></div>
+                            <input type="hidden" id="rank_pos_order">
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                            <button type="submit" class="btn btn-primary">儲存</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
 
         <!-- Add Job Title Modal -->
         <div class="modal fade" id="addJobTitleModal" tabindex="-1" role="dialog"
@@ -596,30 +628,52 @@ if ($deptPerm === 'R') {
         }
 
         // ---- 職稱階級管理（position_rank：管理者可增減修改） ----
-        let positionRanks = []; // [{id,name,rank_order}]
+        let positionRanks = [];   // [{id,name,rank_order,positions:[{id,name,sort_order}]}]
+        let rankUnassigned = [];  // 未設階級（非主管）的職稱
+        let rankOrphans = [];     // 已被職稱使用、但尚未建立名稱的層級 [{rank_order,positions:[]}]
+
         function rankName(level) {
             if (level === null || level === '' || typeof level === 'undefined') return '非主管';
             const r = positionRanks.find(x => String(x.rank_order) === String(level));
-            return r ? r.name : ('第' + level + '階');
+            return r ? r.name : ('第' + level + '階（未建立階級）');
+        }
+        // 目前所有職稱（含其階級），用於「設定此階級包含的職稱」勾選清單
+        function allPositionsWithLevel() {
+            const list = [];
+            positionRanks.forEach(r => r.positions.forEach(p => list.push(Object.assign({}, p, { level: r.rank_order }))));
+            rankOrphans.forEach(o => o.positions.forEach(p => list.push(Object.assign({}, p, { level: o.rank_order }))));
+            rankUnassigned.forEach(p => list.push(Object.assign({}, p, { level: null })));
+            list.sort((a, b) => (a.sort_order - b.sort_order) || (a.id - b.id));
+            return list;
         }
         function populateLevelSelects() {
+            // 除了已建立的階級，也把「已被職稱使用但還沒建立名稱」的層級列出來，
+            // 否則編輯那些職稱時下拉找不到對應選項，會被瀏覽器退回「非主管」而在存檔時把階級洗掉。
             $('.job-level-select').each(function() {
                 const $s = $(this);
                 const cur = $s.val();
                 $s.empty().append('<option value="">非主管</option>');
                 positionRanks.forEach(r => $s.append(`<option value="${r.rank_order}">${escapeHtml(r.name)}</option>`));
+                rankOrphans.forEach(o => $s.append(`<option value="${o.rank_order}">第${o.rank_order}階（未建立階級）</option>`));
                 $s.val(cur);
             });
         }
         function loadPositionRanks(cb) {
             callApi('get_position_ranks', 'GET', null, function(resp) {
                 if (resp.status === 'success') {
-                    positionRanks = resp.data;
+                    positionRanks = (resp.data || []).map(r => Object.assign({ positions: [] }, r));
+                    rankUnassigned = resp.unassigned || [];
+                    rankOrphans = resp.orphans || [];
                     populateLevelSelects();
                     renderPositionRanks();
                 }
                 if (typeof cb === 'function') cb();
             });
+        }
+        function posChips(list, muted) {
+            if (!list || list.length === 0) return '<span class="text-muted">尚未指定職稱</span>';
+            const bg = muted ? '#c9a06a' : '#b26a1a';
+            return list.map(p => `<span class="label" style="background-color:${bg};display:inline-block;margin:2px 3px 2px 0;font-size:12px;">${escapeHtml(String(p.sort_order))}　${escapeHtml(p.name)}</span>`).join('');
         }
         function renderPositionRanks() {
             const tbody = $('#position-rank-body');
@@ -628,19 +682,96 @@ if ($deptPerm === 'R') {
             const perm = window.deptPerm || '';
             const canEdit = perm.includes('A') || perm.includes('U');
             const canDel = perm.includes('A') || perm.includes('D');
-            if (positionRanks.length === 0) { tbody.append('<tr><td colspan="3" class="text-muted text-center">尚無階級，請於上方新增</td></tr>'); return; }
+            const canAdd = perm.includes('A') || perm.includes('C');
+
+            if (positionRanks.length === 0 && rankOrphans.length === 0) {
+                tbody.append('<tr><td colspan="4" class="text-muted text-center">尚無階級，請於上方新增</td></tr>');
+            }
             positionRanks.forEach(r => {
+                const assignBtn = canEdit
+                    ? `<button type="button" class="btn btn-sm btn-info btn-rank-positions" data-order="${r.rank_order}" data-name="${escapeHtml(r.name)}">設定職稱</button> `
+                    : '';
                 if (canEdit) {
                     tbody.append(`<tr data-id="${r.id}">
                         <td><input type="number" class="form-control input-sm rank-order-edit" value="${escapeHtml(String(r.rank_order))}" style="width:80px;" min="1"></td>
                         <td><input type="text" class="form-control input-sm rank-name-edit" value="${escapeHtml(r.name)}"></td>
-                        <td><button type="button" class="btn btn-sm btn-success btn-save-rank">儲存</button> ${canDel ? '<button type="button" class="btn btn-sm btn-danger btn-del-rank">刪除</button>' : ''}</td>
+                        <td>${posChips(r.positions)}</td>
+                        <td class="text-nowrap">${assignBtn}<button type="button" class="btn btn-sm btn-success btn-save-rank">儲存</button> ${canDel ? '<button type="button" class="btn btn-sm btn-danger btn-del-rank">刪除</button>' : ''}</td>
                     </tr>`);
                 } else {
-                    tbody.append(`<tr><td>${escapeHtml(String(r.rank_order))}</td><td>${escapeHtml(r.name)}</td><td>-</td></tr>`);
+                    tbody.append(`<tr><td>${escapeHtml(String(r.rank_order))}</td><td>${escapeHtml(r.name)}</td><td>${posChips(r.positions)}</td><td>-</td></tr>`);
                 }
             });
+            // 已被職稱使用、卻沒有建立階級名稱的層級：先讓管理者補建名稱，補建後才能指派職稱
+            rankOrphans.forEach(o => {
+                const act = canAdd
+                    ? `<div class="input-group input-group-sm" style="width:220px;">
+                           <input type="text" class="form-control orphan-name" value="第${o.rank_order}階主管" placeholder="階級名稱">
+                           <span class="input-group-btn"><button type="button" class="btn btn-warning btn-create-orphan-rank" data-order="${o.rank_order}">建立階級</button></span>
+                       </div>`
+                    : '-';
+                tbody.append(`<tr style="background-color:#fdf3e3;">
+                    <td>${o.rank_order}</td>
+                    <td><span style="color:#8a5a2b;">尚未建立階級名稱</span></td>
+                    <td>${posChips(o.positions)}</td>
+                    <td>${act}</td>
+                </tr>`);
+            });
+
+            const box = $('#rank-unassigned-box');
+            box.empty();
+            if (rankOrphans.length > 0) {
+                box.append(`<div style="color:#8a5a2b;margin-bottom:6px;">※ 上表橘底列＝已有職稱設在該層級，但這裡還沒有建立階級名稱（多半是舊資料）。建立名稱後就能用「設定職稱」調整成員。</div>`);
+            }
+            box.append(`<div><strong>未設階級（非主管）：</strong>${rankUnassigned.length ? posChips(rankUnassigned, true) : '<span class="text-muted">無</span>'}</div>`);
         }
+
+        // ---- 設定「哪些職稱屬於這一階主管」 ----
+        $(document).on('click', '.btn-rank-positions', function() {
+            const order = String($(this).data('order'));
+            const name = $(this).data('name');
+            $('#rank_pos_order').val(order);
+            $('#rank_pos_title').text(`第 ${order} 階 － ${name}`);
+            const list = $('#rank_pos_list');
+            list.empty();
+            allPositionsWithLevel().forEach(p => {
+                const mine = String(p.level) === order;
+                const cur = p.level === null
+                    ? '<span class="text-muted">目前：非主管</span>'
+                    : (mine ? '<span style="color:#b26a1a;">目前：本階</span>' : `<span class="text-muted">目前：${escapeHtml(rankName(p.level))}</span>`);
+                list.append(`<div class="col-md-4 col-sm-6 col-xs-12" style="margin-bottom:6px;">
+                    <label style="font-weight:normal;">
+                        <input type="checkbox" class="rank-pos-cb" value="${p.id}" ${mine ? 'checked' : ''}>
+                        <span class="badge">${escapeHtml(String(p.sort_order))}</span> ${escapeHtml(p.name)}
+                        <br><small style="margin-left:22px;">${cur}</small>
+                    </label>
+                </div>`);
+            });
+            $('#rankPositionsModal').modal('show');
+        });
+        $('#rank_pos_all').on('click', function() { $('.rank-pos-cb').prop('checked', true); });
+        $('#rank_pos_none').on('click', function() { $('.rank-pos-cb').prop('checked', false); });
+        $('#rankPositionsForm').on('submit', function(e) {
+            e.preventDefault();
+            const data = { rank_order: $('#rank_pos_order').val(), position_ids: [] };
+            $('.rank-pos-cb:checked').each(function() { data.position_ids.push($(this).val()); });
+            callApi('update_rank_positions', 'POST', data, function(resp) {
+                if (resp.status === 'success') {
+                    $('#rankPositionsModal').modal('hide');
+                    loadPositionRanks(function() { loadJobTitles(); });
+                } else alert(resp.message);
+            });
+        });
+        // 補建「已被使用但沒有名稱」的層級
+        $(document).on('click', '.btn-create-orphan-rank', function() {
+            const order = $(this).data('order');
+            const name = ($(this).closest('td').find('.orphan-name').val() || '').trim();
+            if (name === '') { alert('請輸入階級名稱'); return; }
+            callApi('add_position_rank', 'POST', { rank_order: order, name: name }, function(resp) {
+                if (resp.status === 'success') loadPositionRanks(function() { loadJobTitles(); });
+                else alert(resp.message);
+            });
+        });
         $('#addRankForm').on('submit', function(e) {
             e.preventDefault();
             const order = $('#rank_order_new').val();

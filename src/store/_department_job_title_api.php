@@ -84,6 +84,9 @@ switch ($action) {
     case 'delete_position_rank':
         deletePositionRank();
         break;
+    case 'update_rank_positions': // 設定「哪些職稱屬於這一階主管」
+        updateRankPositions();
+        break;
 
     // --- 職稱代理 (Position Delegate) Actions ---
     case 'get_position_delegates':
@@ -745,20 +748,150 @@ function updateDeptPositionOwner() {
 
 // ---- 職稱階級管理 (position_rank：管理者可增減修改) ----
 
-/** 取得所有階級（依 rank_order 由高到低排序，數字小=高階） */
+/**
+ * 本頁權限（與 department_job_title_settings.php 用同一套判定：page scope 優先，其次 group scope）。
+ * 回傳權限字元字串，A=全部。前端已依權限藏鈕，這裡是後端再擋一次（鐵律8）。
+ */
+function djtPerm() {
+    global $db;
+    static $perm = null;
+    if ($perm !== null) return $perm;
+    $perm = '';
+    if (empty($_SESSION['userName'])) return $perm;
+    try {
+        $st = $db->prepare("SELECT id FROM user WHERE user_uname = ?");
+        $st->execute([$_SESSION['userName']]);
+        $uid = $st->fetchColumn();
+        if (!$uid) return $perm;
+        $page = $db->query("SELECT page_id, group_id FROM system_module_pages
+                            WHERE page_url LIKE '%department_job_title_settings.php'
+                               OR page_url_readonly LIKE '%department_job_title_settings.php' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        if (!$page) return $perm;
+        $st = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id = ? AND scope = 'page' AND module_code = ?");
+        $st->execute([$uid, $page['page_id']]);
+        $found = $st->fetchAll(PDO::FETCH_COLUMN);
+        if (empty($found) && !empty($page['group_id'])) {
+            $st = $db->prepare("SELECT module_code FROM system_modules WHERE group_id = ? LIMIT 1");
+            $st->execute([$page['group_id']]);
+            $gm = $st->fetchColumn();
+            if ($gm) {
+                $st = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id = ? AND scope = 'group' AND module_code = ?");
+                $st->execute([$uid, $gm]);
+                $found = $st->fetchAll(PDO::FETCH_COLUMN);
+            }
+        }
+        $chars = [];
+        foreach ($found as $p) { $chars = array_merge($chars, str_split((string)$p)); }
+        $perm = implode('', array_unique($chars));
+    } catch (Exception $e) {
+        $perm = '';
+    }
+    return $perm;
+}
+
+/** 沒有權限就回錯誤並回傳 false（呼叫端 return 即可） */
+function djtRequire($need) {
+    $p = djtPerm();
+    if (strpos($p, 'A') !== false || strpos($p, $need) !== false) return true;
+    echo json_encode(['status'=>'error','message'=>'您沒有權限執行此操作。']);
+    return false;
+}
+
+/**
+ * 取得所有階級（依 rank_order 由小到大＝由高階到低階），並帶出每一階目前包含哪些職稱。
+ * position_level.level 存的是 rank_order 的值（不是 position_rank.id）。
+ * 另回傳：unassigned＝未設階級（非主管）的職稱、orphans＝已被職稱使用但尚未建立名稱的層級。
+ */
 function getPositionRanks() {
     global $db;
     try {
         $rows = $db->query("SELECT id, name, rank_order FROM position_rank ORDER BY rank_order ASC")->fetchAll(PDO::FETCH_ASSOC);
-        echo json_encode(['status'=>'success','data'=>$rows]);
+        $pos = $db->query("SELECT p.id, p.name, p.sort_order, pl.level
+                           FROM position p
+                           LEFT JOIN position_level pl ON pl.position_id = p.id
+                           ORDER BY p.sort_order ASC, p.id ASC")->fetchAll(PDO::FETCH_ASSOC);
+        $byLevel = [];
+        $unassigned = [];
+        foreach ($pos as $p) {
+            $item = ['id'=>(int)$p['id'], 'name'=>$p['name'], 'sort_order'=>(int)$p['sort_order']];
+            if ($p['level'] === null || $p['level'] === '') { $unassigned[] = $item; }
+            else { $byLevel[(int)$p['level']][] = $item; }
+        }
+        $known = [];
+        foreach ($rows as $i => $r) {
+            $ro = (int)$r['rank_order'];
+            $rows[$i]['rank_order'] = $ro;
+            $rows[$i]['positions'] = isset($byLevel[$ro]) ? $byLevel[$ro] : [];
+            $known[$ro] = true;
+        }
+        $orphans = [];
+        foreach ($byLevel as $lv => $list) {
+            if (!isset($known[$lv])) $orphans[] = ['rank_order'=>$lv, 'positions'=>$list];
+        }
+        usort($orphans, function($a, $b) { return $a['rank_order'] - $b['rank_order']; });
+        echo json_encode(['status'=>'success','data'=>$rows,'unassigned'=>$unassigned,'orphans'=>$orphans]);
     } catch (PDOException $e) {
         echo json_encode(['status'=>'error','message'=>'讀取階級失敗: '.$e->getMessage()]);
+    }
+}
+
+/**
+ * 設定「哪些職稱屬於這一階主管」。
+ * 勾選的職稱一律改成此階（會自動從原本的階級移出，因為一個職稱只能有一個階級）；
+ * 原本在此階、這次沒被勾選的，改為非主管（刪除 position_level 該列）。
+ */
+function updateRankPositions() {
+    global $db;
+    if (!djtRequire('U')) return;
+    $rank_order = isset($_POST['rank_order']) && $_POST['rank_order'] !== '' ? intval($_POST['rank_order']) : null;
+    if ($rank_order === null) { echo json_encode(['status'=>'error','message'=>'缺少階級順序。']); return; }
+    $ids = isset($_POST['position_ids']) ? (array)$_POST['position_ids'] : [];
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids), function($v) { return $v > 0; })));
+    try {
+        $chk = $db->prepare("SELECT COUNT(*) FROM position_rank WHERE rank_order = ?");
+        $chk->execute([$rank_order]);
+        if ((int)$chk->fetchColumn() === 0) {
+            echo json_encode(['status'=>'error','message'=>'找不到此階級，請重新整理頁面後再試。']); return;
+        }
+        // 只接受真的存在的職稱 id
+        if ($ids) {
+            $in = implode(',', array_fill(0, count($ids), '?'));
+            $st = $db->prepare("SELECT id FROM position WHERE id IN ($in)");
+            $st->execute($ids);
+            $valid = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+            if (count($valid) !== count($ids)) {
+                echo json_encode(['status'=>'error','message'=>'有職稱已不存在，請重新整理頁面後再試。']); return;
+            }
+            $ids = $valid;
+        }
+        $db->beginTransaction();
+        // 1. 原本在此階、這次沒勾的 → 改為非主管
+        $sql = "DELETE FROM position_level WHERE level = ?";
+        $params = [$rank_order];
+        if ($ids) {
+            $sql .= " AND position_id NOT IN (" . implode(',', array_fill(0, count($ids), '?')) . ")";
+            $params = array_merge($params, $ids);
+        }
+        $db->prepare($sql)->execute($params);
+        // 2. 勾選的 → 設為此階（先清掉舊列避免同一職稱殘留多列）
+        if ($ids) {
+            $in = implode(',', array_fill(0, count($ids), '?'));
+            $db->prepare("DELETE FROM position_level WHERE position_id IN ($in)")->execute($ids);
+            $ins = $db->prepare("INSERT INTO position_level (position_id, `level`, created_at, updated_at) VALUES (?, ?, NOW(), NOW())");
+            foreach ($ids as $pid) $ins->execute([$pid, $rank_order]);
+        }
+        $db->commit();
+        echo json_encode(['status'=>'success','message'=>'此階級的職稱已更新。']);
+    } catch (PDOException $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        echo json_encode(['status'=>'error','message'=>'更新失敗: '.$e->getMessage()]);
     }
 }
 
 /** 新增階級 */
 function addPositionRank() {
     global $db;
+    if (!djtRequire('C')) return;
     $name = trim($_POST['name'] ?? '');
     $rank_order = isset($_POST['rank_order']) && $_POST['rank_order'] !== '' ? intval($_POST['rank_order']) : null;
     if ($name === '' || $rank_order === null) { echo json_encode(['status'=>'error','message'=>'階級名稱與順序為必填。']); return; }
@@ -776,6 +909,7 @@ function addPositionRank() {
 /** 修改階級（改名安全；改順序時同步 position_level.level 既有指派，維持一致） */
 function updatePositionRank() {
     global $db;
+    if (!djtRequire('U')) return;
     $id = intval($_POST['id'] ?? 0);
     $name = trim($_POST['name'] ?? '');
     $rank_order = isset($_POST['rank_order']) && $_POST['rank_order'] !== '' ? intval($_POST['rank_order']) : null;
@@ -809,6 +943,7 @@ function updatePositionRank() {
 /** 刪除階級（若仍有職稱指派此階級則擋下） */
 function deletePositionRank() {
     global $db;
+    if (!djtRequire('D')) return;
     $id = intval($_POST['id'] ?? 0);
     if ($id <= 0) { echo json_encode(['status'=>'error','message'=>'缺少 id']); return; }
     try {
