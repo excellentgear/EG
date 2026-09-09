@@ -148,6 +148,11 @@ if ($deptPerm === 'R') {
         .scroll-to-top:hover {
             background-color: rgba(255, 255, 255, 0.7);
         }
+        /* 職稱清單拖曳排序 */
+        .jt-row .jt-handle { cursor: grab; color: #b26a1a; margin-right: 4px; user-select: none; }
+        .jt-row.jt-dragging { opacity: .4; }
+        .jt-row.jt-over-top > td { box-shadow: inset 0 3px 0 0 #F0A24B; }
+        .jt-row.jt-over-bottom > td { box-shadow: inset 0 -3px 0 0 #F0A24B; }
     </style>
 </head>
 
@@ -225,6 +230,12 @@ if ($deptPerm === 'R') {
                                 <?php if (strpos($deptPerm, 'A') !== false || strpos($deptPerm, 'C') !== false): ?>
                                 <button type="button" class="btn btn-primary" style="margin-bottom: 15px;"
                                     data-toggle="modal" data-target="#addJobTitleModal">新增職稱</button>
+                                <?php endif; ?>
+                                <?php if (strpos($deptPerm, 'A') !== false || strpos($deptPerm, 'U') !== false): ?>
+                                <div style="color:#8a5a2b;margin-bottom:10px;">
+                                    按住每一列左邊的 <span style="color:#b26a1a;">&#10287;</span> 可以直接拖曳調整順序，放開就存檔。
+                                    拖曳只會重新分配前面那個排序編號，<strong>不會影響下方「職稱階級管理」已經設定好的對應</strong>（階級是綁在職稱本身，跟排序編號無關）。
+                                </div>
                                 <?php endif; ?>
                                 <div class="row" id="job-title-list">
                                     <!-- 這裡將用 JavaScript 動態載入職稱資料 -->
@@ -814,57 +825,126 @@ if ($deptPerm === 'R') {
         });
 
         // 載入職稱列表 (水平排列)
+        let jobTitles = []; // 畫面上的順序＝這個陣列的順序
         function loadJobTitles() {
             callApi('get_job_titles', 'GET', null, function(response) {
                 if (response.status === 'success' && response.data) {
-                    var jobTitleList = $('#job-title-list');
-                    jobTitleList.empty();
-
-                    if (response.data.length === 0) return;
-
-                    var numColumns = Math.max(1, Math.min(4, Math.ceil(response.data.length / 5))); // 每欄 5 筆、最多 4 欄
-                    // 每欄筆數用算的：職稱超過 20 個時，若固定每欄 5 筆，第 21 筆之後會被欄數上限吃掉而整個看不到
-                    var itemsPerColumn = Math.ceil(response.data.length / numColumns);
-                    var colSize = Math.max(3, Math.floor(12 / numColumns)); // 每欄至少佔3格
-                    var colClass = 'col-md-' + colSize;
-
-                    for (let i = 0; i < numColumns; i++) {
-                        var column = $(`<div class="${colClass}"></div>`);
-                        var table = $('<table class="table table-condensed"><tbody></tbody></table>');
-                        var tbody = table.find('tbody');
-
-                        for (let j = i * itemsPerColumn; j < Math.min((i + 1) * itemsPerColumn, response.data.length); j++) {
-                            var item = response.data[j];
-                            const levelText = rankName(item.level);
-                            // 注意：階級可以是 0（最高決策者），不可用 item.level 的真假值判斷有沒有設階級
-                            const hasLevel = item.level !== null && item.level !== '' && typeof item.level !== 'undefined';
-                            const levelBadge = hasLevel
-                                ? ` <span class="badge" style="background-color:#b26a1a;">${escapeHtml(levelText)}</span>`
-                                : ` <span class="badge" style="background-color:#c9a06a;">非主管</span>`;
-
-                            let editBtn = '';
-                            let delBtn = '';
-                            const perm = window.deptPerm || '';
-                            if (perm.includes('A') || perm.includes('U')) {
-                                editBtn = `<button class="btn btn-xs btn-info btn-edit-job-title" data-id="${item.id}">編輯</button>`;
-                            }
-                            if (perm.includes('A') || perm.includes('D')) {
-                                delBtn = `<button class="btn btn-xs btn-danger btn-delete-job-title" data-id="${item.id}">刪除</button>`;
-                            }
-
-                            var row = `<tr>
-                                <td><span class="badge">${escapeHtml(item.sort_order) || '0'}</span> ${escapeHtml(item.name)}${levelBadge}</td>
-                                <td class="text-right text-nowrap">
-                                    ${editBtn}
-                                    ${delBtn}
-                                </td>
-                            </tr>`;
-                            tbody.append(row);
-                        }
-                        column.append(table);
-                        jobTitleList.append(column);
-                    }
+                    jobTitles = response.data;
+                    renderJobTitles();
                 } else { alert('讀取職稱資料失敗: ' + response.message); }
+            });
+        }
+        function renderJobTitles() {
+            var jobTitleList = $('#job-title-list');
+            jobTitleList.empty();
+            if (jobTitles.length === 0) return;
+
+            const perm = window.deptPerm || '';
+            const canEdit = perm.includes('A') || perm.includes('U');
+            const canDel = perm.includes('A') || perm.includes('D');
+
+            var numColumns = Math.max(1, Math.min(4, Math.ceil(jobTitles.length / 5))); // 每欄 5 筆、最多 4 欄
+            // 每欄筆數用算的：職稱超過 20 個時，若固定每欄 5 筆，第 21 筆之後會被欄數上限吃掉而整個看不到
+            var itemsPerColumn = Math.ceil(jobTitles.length / numColumns);
+            var colSize = Math.max(3, Math.floor(12 / numColumns)); // 每欄至少佔3格
+            var colClass = 'col-md-' + colSize;
+
+            for (let i = 0; i < numColumns; i++) {
+                var column = $(`<div class="${colClass}"></div>`);
+                var table = $('<table class="table table-condensed"><tbody></tbody></table>');
+                var tbody = table.find('tbody');
+
+                for (let j = i * itemsPerColumn; j < Math.min((i + 1) * itemsPerColumn, jobTitles.length); j++) {
+                    var item = jobTitles[j];
+                    const levelText = rankName(item.level);
+                    // 注意：階級可以是 0（最高決策者），不可用 item.level 的真假值判斷有沒有設階級
+                    const hasLevel = item.level !== null && item.level !== '' && typeof item.level !== 'undefined';
+                    const levelBadge = hasLevel
+                        ? ` <span class="badge" style="background-color:#b26a1a;">${escapeHtml(levelText)}</span>`
+                        : ` <span class="badge" style="background-color:#c9a06a;">非主管</span>`;
+
+                    let editBtn = '';
+                    let delBtn = '';
+                    if (canEdit) {
+                        editBtn = `<button class="btn btn-xs btn-info btn-edit-job-title" data-id="${item.id}">編輯</button>`;
+                    }
+                    if (canDel) {
+                        delBtn = `<button class="btn btn-xs btn-danger btn-delete-job-title" data-id="${item.id}">刪除</button>`;
+                    }
+                    const handle = canEdit ? '<span class="jt-handle" title="按住可拖曳調整順序">&#10287;</span>' : '';
+
+                    var row = `<tr class="jt-row" data-idx="${j}" data-id="${item.id}"${canEdit ? ' draggable="true"' : ''}>
+                        <td>${handle}<span class="badge">${escapeHtml(item.sort_order) || '0'}</span> ${escapeHtml(item.name)}${levelBadge}</td>
+                        <td class="text-right text-nowrap">
+                            ${editBtn}
+                            ${delBtn}
+                        </td>
+                    </tr>`;
+                    tbody.append(row);
+                }
+                column.append(table);
+                jobTitleList.append(column);
+            }
+        }
+
+        // ---- 拖曳調整職稱順序 ----
+        // 只重新分配「排序編號」（position.sort_order）；職稱本身的 id 不變，
+        // 而職稱階級是綁在 id 上（position_level.position_id），所以拖曳完階級對應完全不受影響。
+        let jtDragIdx = null;
+        function jtClearMarks() { $('.jt-row').removeClass('jt-over-top jt-over-bottom'); }
+        $(document).on('dragstart', '.jt-row', function(e) {
+            jtDragIdx = parseInt($(this).attr('data-idx'), 10);
+            const dt = e.originalEvent.dataTransfer;
+            dt.effectAllowed = 'move';
+            try { dt.setData('text/plain', String(jtDragIdx)); } catch (err) {}
+            $(this).addClass('jt-dragging');
+        });
+        $(document).on('dragend', '.jt-row', function() {
+            jtDragIdx = null;
+            $('.jt-row').removeClass('jt-dragging');
+            jtClearMarks();
+        });
+        $(document).on('dragover', '.jt-row', function(e) {
+            if (jtDragIdx === null) return;
+            e.preventDefault();
+            e.originalEvent.dataTransfer.dropEffect = 'move';
+            const r = this.getBoundingClientRect();
+            const after = (e.originalEvent.clientY - r.top) > r.height / 2;
+            jtClearMarks();
+            $(this).addClass(after ? 'jt-over-bottom' : 'jt-over-top');
+        });
+        $(document).on('drop', '.jt-row', function(e) {
+            e.preventDefault();
+            if (jtDragIdx === null) return;
+            const from = jtDragIdx;
+            const over = parseInt($(this).attr('data-idx'), 10);
+            const r = this.getBoundingClientRect();
+            const after = (e.originalEvent.clientY - r.top) > r.height / 2;
+            jtDragIdx = null;
+            $('.jt-row').removeClass('jt-dragging');
+            jtClearMarks();
+            let to = after ? over + 1 : over;
+            if (to > from) to--;            // 先把來源抽掉，後面的索引會往前一格
+            if (to === from) return;        // 位置沒變就什麼都不做
+            jtApplyReorder(from, to);
+        });
+        function jtApplyReorder(from, to) {
+            const before = jobTitles.slice();
+            const arr = jobTitles.slice();
+            const moved = arr.splice(from, 1)[0];
+            arr.splice(to, 0, moved);
+            // 沿用原本就有的那組編號（由小到大）套回新順序，像 90/91/99 這種刻意留的號碼才不會消失
+            const orders = before.map(x => parseInt(x.sort_order, 10) || 0).sort((a, b) => a - b);
+            arr.forEach((x, i) => { x.sort_order = orders[i]; });
+            jobTitles = arr;
+            renderJobTitles(); // 先讓畫面立刻反映，存檔失敗再整份重載回正確狀態
+            callApi('reorder_job_titles', 'POST', { ids: arr.map(x => x.id) }, function(resp) {
+                if (resp.status === 'success') {
+                    loadPositionRanks(function() { loadJobTitles(); }); // 階級表上的編號徽章也要跟著更新
+                } else {
+                    alert(resp.message);
+                    loadPositionRanks(function() { loadJobTitles(); });
+                }
             });
         }
 

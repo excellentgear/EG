@@ -87,6 +87,9 @@ switch ($action) {
     case 'update_rank_positions': // 設定「哪些職稱屬於這一階主管」
         updateRankPositions();
         break;
+    case 'reorder_job_titles': // 拖曳調整職稱順序（只改 position.sort_order）
+        reorderJobTitles();
+        break;
 
     // --- 職稱代理 (Position Delegate) Actions ---
     case 'get_position_delegates':
@@ -513,6 +516,49 @@ function addJobTitle() {
         } else {
             echo json_encode(['status' => 'error', 'message' => '資料庫錯誤: ' . $e->getMessage()]);
         }
+    }
+}
+
+/**
+ * 拖曳調整職稱順序：只重新分配 position.sort_order。
+ * 沿用「原本就有的那組編號」（由小到大）套回新順序，所以像 90/91/99 這種刻意留的號碼不會消失。
+ * 注意：職稱階級的綁定是掛在 position.id 上（position_level.position_id），
+ * 這裡一個字都不會動到 position_level，排序change 完階級對應完全不變。
+ */
+function reorderJobTitles() {
+    global $db;
+    if (!djtRequire('U')) return;
+    $ids = isset($_POST['ids']) ? (array)$_POST['ids'] : [];
+    $ids = array_values(array_map('intval', $ids));
+    if (count($ids) !== count(array_unique($ids)) || count($ids) === 0) {
+        echo json_encode(['status'=>'error','message'=>'排序資料有誤，請重新整理頁面後再試。']); return;
+    }
+    try {
+        $all = $db->query("SELECT id, sort_order FROM position")->fetchAll(PDO::FETCH_KEY_PAIR);
+        // 必須送全部職稱：只送一部分會把沒送到的那些編號洗掉
+        if (count($ids) !== count($all)) {
+            echo json_encode(['status'=>'error','message'=>'職稱清單已被其他人變動，請重新整理頁面後再試。']); return;
+        }
+        foreach ($ids as $id) {
+            if (!array_key_exists($id, $all)) {
+                echo json_encode(['status'=>'error','message'=>'職稱清單已被其他人變動，請重新整理頁面後再試。']); return;
+            }
+        }
+        $orders = array_map('intval', array_values($all));
+        sort($orders, SORT_NUMERIC);
+        $db->beginTransaction();
+        $upd = $db->prepare("UPDATE `position` SET sort_order = ?, updated_at = NOW() WHERE id = ?");
+        $changed = 0;
+        foreach ($ids as $i => $id) {
+            if ((int)$all[$id] === $orders[$i]) continue; // 沒變的不寫，updated_at 才不會整批被洗掉
+            $upd->execute([$orders[$i], $id]);
+            $changed++;
+        }
+        $db->commit();
+        echo json_encode(['status'=>'success','message'=>'職稱順序已更新。','changed'=>$changed]);
+    } catch (PDOException $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        echo json_encode(['status'=>'error','message'=>'排序失敗: '.$e->getMessage()]);
     }
 }
 
