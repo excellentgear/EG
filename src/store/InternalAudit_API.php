@@ -1561,13 +1561,14 @@ case 'qualify_save': {
     $ids = json_decode((string)($_POST['post_keys'] ?? $_POST['user_ids'] ?? '[]'), true);
     if (!is_array($ids)) jerr('格式錯誤');
     $db->beginTransaction();
+    $dropped = [];
     try {
-        ia_qualify_save($db, $kind, $ids, $uname);
+        $dropped = ia_qualify_save($db, $kind, $ids, $uname);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
     // 存完讀回來確認（存不進去卻回成功，使用者只會一直重存）
     $back = ia_qualify_map($db);
-    jout(['saved' => true, 'count' => count($back[$kind] ?? [])]);
+    jout(['saved' => true, 'count' => count($back[$kind] ?? []), 'dropped' => count($dropped)]);
 }
 
 

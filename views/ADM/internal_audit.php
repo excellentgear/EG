@@ -2973,9 +2973,9 @@ $('#btnQualify').on('click', function(){
 });
 $(document).on('click', '.q-tab', function(){
     // 切分頁前先把目前這一頁的勾選記回 QMAP，不然切回來會發現剛剛勾的不見了。
-    // 一定要走 qCheckedIds()：值是「uid:deptId:posId」字串，用 +val() 轉數字會全部變成 NaN，
-    // 存進 QMAP 之後切回來就整份名單都沒勾（2026-08-26 使用者回報的症狀）。
-    QMAP[QKIND] = qCheckedIds();
+    // 一定要走 qSyncMap()（內部用 qCheckedIds()）：值是「uid:deptId:posId」字串，
+    // 用 +val() 轉數字會全部變成 NaN，存進 QMAP 之後切回來就整份名單都沒勾（2026-08-26 使用者回報的症狀）。
+    qSyncMap();
     $('.q-tab').removeClass('on'); $(this).addClass('on');
     QKIND = $(this).data('kind');
     renderQualify();
@@ -3009,34 +3009,75 @@ function renderQualify(){
 function qCheckedIds(){
     return $('#qPick .qChk:checked').map(function(){ return $(this).val(); }).get();
 }
+/** 目前畫面上「有畫出來」的職務鍵（被關鍵字篩掉的不算） */
+function qVisibleKeys(){
+    var v = {};
+    $('#qPick .qChk').each(function(){ v[$(this).val()] = 1; });
+    return v;
+}
+/** 目前還存在的職務鍵（人離職或職務異動掉了就不在裡面） */
+function qKnownKeys(){
+    var m = {};
+    (QPOSTS||[]).forEach(function(p){
+        m[p.post_key3 || postKeyOf(p.id, p.dept_id, p.position_id)] = 1;
+    });
+    return m;
+}
+/** 把畫面上的勾選合併回 QMAP。**一定要合併不能直接覆寫**——被關鍵字篩掉的列根本沒畫出來，
+    直接 QMAP[QKIND]=qCheckedIds() 會把那些人默默從名單裡刷掉（打完關鍵字就少一批人）。 */
+function qSyncMap(){
+    var visible = qVisibleKeys();
+    var keep = (QMAP[QKIND]||[]).filter(function(k){ return !visible[k]; });
+    QMAP[QKIND] = keep.concat(qCheckedIds());
+}
+/** 已失效的職務要講清楚是誰，不然使用者只看得到一個數字、不知道要不要補勾回來 */
+function qStaleDesc(staleKeys){
+    var byUid = {};
+    (QPOSTS||[]).forEach(function(p){ byUid[String(p.id)] = p; });
+    return staleKeys.map(function(k){
+        var p = byUid[String(k).split(':')[0]];
+        return p ? (p.user_cname + '（職務已異動，仍在職，請重新勾選目前的職務）')
+                 : ('員工編號 ' + String(k).split(':')[0] + '（已離職）');
+    }).join('、');
+}
 function updateQCount(shown){
-    var keys = qCheckedIds();
+    var visible = qVisibleKeys(), known = qKnownKeys();
+    var prev = QMAP[QKIND] || [];
+    var hidden = prev.filter(function(k){ return !visible[k] && known[k]; });   // 被篩選藏起來、仍有效
+    var stale  = prev.filter(function(k){ return !known[k]; });                 // 已離職或職務異動
+    var keys = hidden.concat(qCheckedIds());
     var people = {};
     keys.forEach(function(k){ people[String(k).split(':')[0]] = 1; });
     var kindLab = (META.qualify_kinds||{})[QKIND] || QKIND;
-    $('#qCount').text(kindLab + '：已勾 ' + keys.length + ' 個職務（' + Object.keys(people).length + ' 人）'
+    $('#qCount').html(esc(kindLab + '：已勾 ' + keys.length + ' 個職務（' + Object.keys(people).length + ' 人）'
         + (shown != null ? ('／顯示 ' + shown + ' 列') : '')
-        + (keys.length === 0 ? '　不限制，全體在職員工的所有職務都可指派' : ''));
+        + (hidden.length ? ('　其中 ' + hidden.length + ' 個被關鍵字篩選隱藏，儲存時一併保留') : '')
+        + (keys.length === 0 ? '　不限制，全體在職員工的所有職務都可指派' : ''))
+        + (stale.length ? ('　<span style="color:#C4442D;">另有 ' + stale.length
+            + ' 個職務已失效，儲存時會自動移除：' + esc(qStaleDesc(stale)) + '</span>') : ''));
 }
 $(document).on('change', '.qChk', function(){ updateQCount(); });
 $('#qFilter').on('input', function(){
-    QMAP[QKIND] = qCheckedIds();
+    qSyncMap();
     renderQualify();
 });
 $('#qAll').on('click', function(){ $('#qPick .qChk').prop('checked', true); updateQCount(); return false; });
 $('#qNone').on('click', function(){ $('#qPick .qChk').prop('checked', false); updateQCount(); return false; });
 $('#btnQualifySave').on('click', function(){
     // 篩選中被藏起來的人也要一起送，否則打了關鍵字再存會把沒顯示的人全部刷掉
-    var visible = {};
-    $('#qPick .qChk').each(function(){ visible[$(this).val()] = 1; });
+    var visible = qVisibleKeys(), known = qKnownKeys();
     var checked = qCheckedIds();
-    var keep = (QMAP[QKIND]||[]).filter(function(k){ return !visible[k]; });
+    var keep = (QMAP[QKIND]||[]).filter(function(k){ return !visible[k] && known[k]; });
+    // 已失效的職務（離職／職務異動）不送出去，名單裡卡一筆舊資料不該讓整份存不了
+    var stale = (QMAP[QKIND]||[]).filter(function(k){ return !known[k]; }).length;
     var ids = keep.concat(checked);
     $.post(API, {action:'qualify_save', kind:QKIND, post_keys:JSON.stringify(ids)}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         QMAP[QKIND] = ids;
         alert((META.qualify_kinds||{})[QKIND] + ' 名單已儲存（' + res.count + ' 個職務'
-              + (res.count === 0 ? '＝不限制' : '') + '）');
+              + (res.count === 0 ? '＝不限制' : '') + '）'
+              + (stale ? ('\n另清除 ' + stale + ' 個已失效的職務（人員離職或職務異動）。') : ''));
+        renderQualify();
         loadMeta();
     }, 'json');
 });

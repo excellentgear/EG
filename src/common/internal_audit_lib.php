@@ -1455,9 +1455,13 @@ function ia_qualify_map(PDO $db): array
 /**
  * 整批覆寫某身分的名單。傳入的是職務鍵 'uid:deptId:posId'。
  * 空陣列＝不限制（全體在職員工的所有職務都可指派）。
- * 只接受「真的存在的職務」——直接打 API 塞一個不存在的組合就會被擋（鐵律8）。
+ * 只存「真的存在的職務」——直接打 API 塞一個不存在的組合一樣進不了資料庫（鐵律8）。
+ * **已失效的職務（人員離職、或職務異動掉了）一律略過、不整批擋下**：名單是舊資料，
+ * 裡面遲早會有人離職或調動，擋下來的話使用者連一個字都改不了、也不知道是誰失效
+ * （2026-09-09 使用者回報「一直顯示儲存失敗」＝名單裡有已離職的林國棟與調過職的林鴻銘）。
+ * 回傳被略過的職務鍵，讓呼叫端可以回報「清掉了幾筆」。
  */
-function ia_qualify_save(PDO $db, string $kind, array $postKeys, string $byName): void
+function ia_qualify_save(PDO $db, string $kind, array $postKeys, string $byName): array
 {
     if (!isset(IA_QUALIFY_KINDS[$kind])) throw new RuntimeException('身分別不正確');
 
@@ -1467,17 +1471,19 @@ function ia_qualify_save(PDO $db, string $kind, array $postKeys, string $byName)
             $valid[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = $p;
         }
     } catch (Throwable $e) {}
+    // 一筆職務都查不到＝人員資料讀取失敗，這時候「全部略過」會把整份名單清光，寧可擋下來
+    if (!$valid) throw new RuntimeException('目前查不到任何在職職務資料，為避免誤刪名單已停止儲存');
 
-    $keys = [];
+    $keys = []; $dropped = [];
     foreach ($postKeys as $k) {
         $k = trim((string)$k);
         if ($k === '' || isset($keys[$k])) continue;
-        if (!isset($valid[$k])) throw new RuntimeException('有職務不存在或已異動，請重新整理後再設定');
+        if (!isset($valid[$k])) { $dropped[$k] = 1; continue; }
         $keys[$k] = 1;
     }
 
     $db->prepare("DELETE FROM ia_qualified_person WHERE kind=?")->execute([$kind]);
-    if (!$keys) return;
+    if (!$keys) return array_keys($dropped);
     $ins = $db->prepare("INSERT INTO ia_qualified_person
                             (kind, user_id, dept_id, position_id, sort_order, updated_at, updated_by)
                          VALUES (?,?,?,?,?,NOW(),?)");
@@ -1486,6 +1492,7 @@ function ia_qualify_save(PDO $db, string $kind, array $postKeys, string $byName)
         list($uid, $dept, $pos) = ia_post_parse($k);
         $ins->execute([$kind, $uid, $dept, $pos, ++$i * 10, $byName]);
     }
+    return array_keys($dropped);
 }
 
 /**
