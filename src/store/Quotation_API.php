@@ -2873,6 +2873,51 @@ try {
             $response = ['success' => true, 'data' => $rows];
             break;
 
+        // ── 審核通知對象：職級清單＋目前簽核者，供設定畫面即時預覽（2026-09-09）──
+        // 只給有報價單設定權限的人看（內容是全公司主管的職務名單）。
+        case 'notify_exclude_info': {
+            require_once __DIR__ . '/../common/rbac.php';
+            $_pf = [];
+            try { $_pf = rbac_user_features($pdo, (int)$user_id); } catch (Exception $_e) { $_pf = []; }
+            if (!rbac_has($_pf, 'all') && !rbac_has($_pf, 'quotation_settings')) {
+                throw new Exception('沒有報價單設定權限');
+            }
+            $excl = eg_quotation_notify_exclude_levels($pdo);
+
+            // 職級清單：一律查目前實際的職稱資料組出來，不寫死任何一份對照表（鐵律4）
+            $lvRows = $pdo->query("SELECT pl.level, GROUP_CONCAT(p.name ORDER BY p.sort_order, p.id SEPARATOR '、') AS positions
+                                   FROM position_level pl JOIN position p ON p.id = pl.position_id
+                                   WHERE pl.level IS NOT NULL GROUP BY pl.level ORDER BY pl.level")->fetchAll(PDO::FETCH_ASSOC);
+            $levels = [];
+            foreach ($lvRows as $r) {
+                $levels[] = ['level' => (int)$r['level'], 'positions' => (string)$r['positions'], 'excluded' => in_array((int)$r['level'], $excl, true)];
+            }
+            $levels[] = ['level' => -1, 'positions' => '（職稱沒有設定職級的人）', 'excluded' => in_array(-1, $excl, true)];
+
+            // 目前具簽核權者：顯示他的職務與代表職級，並標出這份設定會不會把他排掉
+            $signers = eg_quotation_signers($pdo);
+            $lvMap   = eg_quotation_user_level_map($pdo, $signers);
+            $people  = [];
+            if ($signers) {
+                $in = implode(',', array_map('intval', $signers));
+                $pr = $pdo->query("SELECT u.id, u.user_cname, u.state,
+                                          GROUP_CONCAT(DISTINCT CONCAT(d.name,' ',p.name) ORDER BY p.sort_order SEPARATOR '、') AS posts
+                                   FROM user u
+                                   LEFT JOIN user_department_position_map m ON m.user_id = u.id
+                                   LEFT JOIN department d ON d.id = m.department_id
+                                   LEFT JOIN position   p ON p.id = m.position_id
+                                   WHERE u.id IN ({$in}) GROUP BY u.id, u.user_cname, u.state")->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($pr as $r) {
+                    $uid = (int)$r['id'];
+                    $lv  = $lvMap[$uid] ?? -1;
+                    $people[] = ['id' => $uid, 'name' => (string)$r['user_cname'], 'posts' => (string)($r['posts'] ?? ''),
+                                 'level' => $lv, 'excluded' => in_array($lv, $excl, true)];
+                }
+            }
+            $response = ['success' => true, 'levels' => $levels, 'signers' => $people, 'exclude' => $excl];
+            break;
+        }
+
         // ── 取得/儲存系統參數 ──
         case 'get_param':
             $pg  = $_GET['param_group'] ?? '';
@@ -2893,6 +2938,21 @@ try {
             // 2026-09-08：「補附件免重新審核」是把一道簽核關卡關掉的設定，不可以讓任何登入者
             // 直打 API 就改掉，故這一個 key 另外驗權限（需報價單設定權限 quotation_settings）。
             // 只擋這一個 key＝其餘既有參數的行為完全不變。
+            // 2026-09-09：「審核通知排除職級」會決定誰收得到待簽核通知，設錯＝有人再也收不到單，
+            // 同樣不可以讓任何登入者直打 API 就改掉（與 supp_need_review 同一道守門）。
+            if ($pg === 'QUOTATION' && $pk === 'notify_exclude_levels') {
+                require_once __DIR__ . '/../common/rbac.php';
+                $_pf = [];
+                try { $_pf = rbac_user_features($pdo, (int)$user_id); } catch (Exception $_e) { $_pf = []; }
+                if (!rbac_has($_pf, 'all') && !rbac_has($_pf, 'quotation_settings')) {
+                    throw new Exception('沒有報價單設定權限，不能變更審核通知對象設定');
+                }
+                $lv = json_decode($pval, true);
+                if (!is_array($lv)) throw new Exception('排除職級必須是清單');
+                foreach ($lv as $one) {
+                    if (!is_int($one) && !ctype_digit(ltrim((string)$one, '-'))) throw new Exception('排除職級必須是數字');
+                }
+            }
             if ($pg === 'QUOTATION' && $pk === 'supp_need_review') {
                 require_once __DIR__ . '/../common/rbac.php';
                 $_pf = [];

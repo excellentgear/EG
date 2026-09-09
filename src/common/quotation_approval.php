@@ -33,6 +33,84 @@ if (!function_exists('eg_quotation_signers')) {
     }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   審核通知的「職級排除」（2026-09-09 使用者要求）
+   ---------------------------------------------------------------------------
+   問題：通知對象＝所有具 quotation_sign 權限的人，而最高主管（總經理／董事長）
+   同時兼著課長之類的主管職，於是每一張報價單送審他都會收到通知。
+   作法：可設定「哪些職級不要收到待簽核通知」。
+   **只影響「通知」，不影響簽核權限**——被排除的人照樣簽得動、頁面上照樣看得到
+   待簽核清單與待處理徽章，只是不會再被通知（置頂欄／推播）打擾。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+if (!function_exists('eg_quotation_notify_exclude_levels')) {
+    /** 讀設定：不發待簽核通知的職級清單（int[]；-1＝未設定職級者）。沒設定過＝空陣列＝完全維持現況。 */
+    function eg_quotation_notify_exclude_levels(PDO $pdo): array {
+        try {
+            $st = $pdo->prepare("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key='notify_exclude_levels'");
+            $st->execute();
+            $raw = $st->fetchColumn();
+            if ($raw === false || $raw === null || $raw === '') return [];
+            $arr = json_decode((string)$raw, true);
+            if (!is_array($arr)) return [];
+            return array_values(array_unique(array_map('intval', $arr)));
+        } catch (Throwable $e) { return []; }
+    }
+}
+
+if (!function_exists('eg_quotation_user_level_map')) {
+    /**
+     * 這些人各自的「代表職級」：取他所有職務中**職級最高**的那一個（level 數字越小越高）。
+     * 一人常兼多職（例：總經理＋技術課課長），兼任的高階身分才是他真正的層級，
+     * 所以用 MIN(level) 而不是「隨便挑一筆」或「任一筆命中就算」。
+     * 完全沒有職級可查的人回 -1（＝設定畫面上的「未設定職級」）。
+     * @return array<int,int> [user_id => level]
+     */
+    function eg_quotation_user_level_map(PDO $pdo, array $userIds): array {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $userIds))));
+        if (empty($ids)) return [];
+        $map = array_fill_keys($ids, -1);
+        try {
+            $in = implode(',', $ids);
+            $rows = $pdo->query("SELECT m.user_id, MIN(pl.level) AS lv
+                                 FROM user_department_position_map m
+                                 JOIN position_level pl ON pl.position_id = m.position_id
+                                 WHERE m.user_id IN ({$in}) AND pl.level IS NOT NULL
+                                 GROUP BY m.user_id")->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as $r) $map[(int)$r['user_id']] = (int)$r['lv'];
+        } catch (Throwable $e) { /* 查不到職級就維持 -1，通知照發 */ }
+        return $map;
+    }
+}
+
+if (!function_exists('eg_quotation_notify_targets')) {
+    /**
+     * 實際要收到「待簽核通知」的人＝有 quotation_sign 權限者，扣掉被排除職級的人。
+     * **扣完會變成一個人都不剩時一律退回「全部通知」**——寧可多吵一次，也不能讓報價單
+     * 送出去之後沒有任何人收到通知（那會變成單子安靜地卡在那裡沒人知道要簽）。
+     * @param array|null $info 回填診斷資訊（設定畫面即時預覽用）
+     */
+    function eg_quotation_notify_targets(PDO $pdo, ?array &$info = null): array {
+        $all      = eg_quotation_signers($pdo);
+        $excludes = eg_quotation_notify_exclude_levels($pdo);
+        $info = ['all' => $all, 'excluded' => [], 'fallback_all' => false];
+        if (empty($all) || empty($excludes)) return $all;
+
+        $levels = eg_quotation_user_level_map($pdo, $all);
+        $keep = $drop = [];
+        foreach ($all as $uid) {
+            if (in_array($levels[$uid] ?? -1, $excludes, true)) $drop[] = $uid; else $keep[] = $uid;
+        }
+        $info['excluded'] = $drop;
+        if (empty($keep)) {                 // 全員都被排除＝設定等於「都不通知」，一律退回全部
+            $info['fallback_all'] = true;
+            $info['excluded'] = [];
+            return $all;
+        }
+        return $keep;
+    }
+}
+
 if (!function_exists('eg_quotation_missing_required_attach')) {
     /**
      * 伺服器端二次驗證必備附件完整性（不可只信前端送來的 is_draft）。
@@ -92,9 +170,9 @@ if (!function_exists('eg_quotation_missing_required_attach')) {
 }
 
 if (!function_exists('eg_quotation_notify_approval')) {
-    /** 建立審核通知（送給所有具 quotation_sign 權限者，mode=sign 動作完成前不消失）。回傳 live_event id（失敗回 0）。 */
+    /** 建立審核通知（送給具 quotation_sign 權限、且職級未被排除者，mode=sign 動作完成前不消失）。回傳 live_event id（失敗回 0）。 */
     function eg_quotation_notify_approval(PDO $pdo, int $quoteId, string $quoteNo, int $submittedByUid, string $submittedByName): int {
-        $signers = eg_quotation_signers($pdo);
+        $signers = eg_quotation_notify_targets($pdo);
         if (empty($signers)) return 0;
         try {
             // 防重複：同一張單只能有一則活著的待簽核通知——發新通知前先結束舊的

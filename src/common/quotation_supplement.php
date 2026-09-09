@@ -8,9 +8,9 @@ require_once __DIR__ . '/approval_lib.php';
 require_once __DIR__ . '/quotation_approval.php'; // 沿用 eg_quotation_signers()
 
 if (!function_exists('eg_quot_supp_notify_request')) {
-    /** 補件送審 → 通知所有具 quotation_sign 權限者（mode=sign，決定前不消失）。回傳 live_event id（失敗回 0）。 */
+    /** 補件送審 → 通知具 quotation_sign 權限、且職級未被排除者（mode=sign，決定前不消失）。回傳 live_event id（失敗回 0）。 */
     function eg_quot_supp_notify_request(PDO $pdo, int $attId, string $quoteNo, string $partLabel, int $uploaderUid, string $uploaderName): int {
-        $signers = eg_quotation_signers($pdo);
+        $signers = eg_quotation_notify_targets($pdo);   // 排除職級的設定與報價單簽核通知共用同一份（唯一實作）
         if (empty($signers)) return 0;
         try {
             // 防重複：同一件補件附件只能有一則活著的待審通知

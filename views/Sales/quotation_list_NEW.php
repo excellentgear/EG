@@ -1125,6 +1125,20 @@ body { background:var(--bg); }
               </div>
               <small class="text-muted">附件上傳後未存檔＝暫存，逾「未存檔暫存」天數自動刪除；補件被否決的附件先進暫存區，逾「補件被否決」天數自動刪除（預設 2 天／7 天）。</small>
             </div>
+            <!-- 2026-09-09 使用者要求：最高主管兼著主管職，每張單都收到審核通知 → 可依職級排除通知對象 -->
+            <div class="form-group" style="margin-top:12px;">
+              <label style="font-size:13px;">審核通知對象（排除職級）</label>
+              <div id="qs-notify-levels" style="border:1px solid #e8dcc8;background:#fffaf2;border-radius:5px;padding:8px 10px;">
+                <div class="text-muted" style="font-size:12px;">載入中…</div>
+              </div>
+              <div id="qs-notify-preview" style="margin-top:6px;"></div>
+              <small class="text-muted">
+                勾起來的職級<b>不會再收到</b>報價單待簽核／補件待審的通知（置頂欄與推播）。<br>
+                <b>只擋通知、不動權限</b>：被排除的人照樣簽得動，頁面上的待處理清單也照樣看得到，只是不會被通知打擾。<br>
+                一人兼多職時以他<b>職級最高</b>的那個職務為準（例：兼技術課課長的總經理＝總經理那一級）。<br>
+                若勾到「所有簽核者都被排除」，系統會自動退回通知全部人——否則報價單送出後不會有任何人知道要簽。
+              </small>
+            </div>
             <!-- 2026-09-08 使用者要求：已核准的報價單補附件是否一定要重新審核 -->
             <div class="form-group" style="margin-top:12px;">
               <label style="font-size:13px;">已核准報價單「補附件」的審核</label>
@@ -2879,6 +2893,8 @@ function openSettingsModal() {
     loadFormNumber();
     loadValidDays();
     loadPrintApprovalSetting();
+    // 每次開設定都重讀＝點開即刷新（人員職務／簽核權限可能剛被別人改過，見 ai-rules/08 第六節）
+    loadNotifyExcludeLevels();
     $('#quoteSettingsModal').modal('show');
 }
 
@@ -7289,6 +7305,74 @@ function loadValidDays() {
         }
     });
 }
+/* ── 審核通知對象：排除職級（2026-09-09 使用者要求）──────────────────────────
+   最高主管同時兼著主管職，於是每張報價單送審都會通知到他。這裡可以指定「哪些職級
+   不要收通知」。**只擋通知不擋權限**，真正的判定在後端 eg_quotation_notify_targets()
+   （前端只是設定介面＋預覽，直打 API 也繞不過去＝鐵律8）。 */
+let _notifyLevelInfo = null;
+function loadNotifyExcludeLevels() {
+    if (!CAN_SETTINGS) return;
+    $.get(API_URL, { action:'notify_exclude_info' }, res => {
+        if (!res || !res.success) { $('#qs-notify-levels').html('<div class="text-muted" style="font-size:12px;">讀取失敗</div>'); return; }
+        _notifyLevelInfo = res;
+        renderNotifyExcludeLevels();
+    }, 'json').fail(() => $('#qs-notify-levels').html('<div class="text-muted" style="font-size:12px;">讀取失敗</div>'));
+}
+function renderNotifyExcludeLevels() {
+    if (!_notifyLevelInfo) return;
+    let html = '<div style="display:flex;flex-wrap:wrap;gap:4px 18px;">';
+    _notifyLevelInfo.levels.forEach(l => {
+        html += `<label style="font-weight:normal;font-size:13px;margin:0;">
+            <input type="checkbox" class="qs-notify-lv" data-eg-skip value="${l.level}"${l.excluded ? ' checked' : ''}
+                   onchange="onNotifyLevelToggle()"> ${l.level >= 0 ? '職級 ' + l.level : '未設定職級'}
+            <span style="color:#8a5a00;">（${escapeHtml(l.positions)}）</span></label>`;
+    });
+    html += '</div>';
+    $('#qs-notify-levels').html(html);
+    renderNotifyPreview();
+}
+// 目前勾選會造成的結果——即時算給使用者看，不必存檔才知道誰被排掉
+function renderNotifyPreview() {
+    if (!_notifyLevelInfo) return;
+    const sel = $('.qs-notify-lv:checked').map(function () { return parseInt(this.value); }).get();
+    const signers = _notifyLevelInfo.signers || [];
+    const drop = signers.filter(s => sel.indexOf(s.level) >= 0);
+    const keep = signers.filter(s => sel.indexOf(s.level) < 0);
+    const nameOf = s => escapeHtml(s.name) + (s.posts ? `<span style="color:#999;font-size:11px;">（${escapeHtml(s.posts)}）</span>` : '');
+    let html = '';
+    if (!signers.length) {
+        html = '<div style="font-size:12px;color:#DD5138;">目前沒有任何人具備「簽核報價單」權限，送審不會通知到任何人。</div>';
+    } else if (drop.length && !keep.length) {
+        html = `<div style="font-size:12px;color:#DD5138;"><i class="fa fa-exclamation-triangle"></i>
+                所有簽核者都被排除了，系統會自動退回「通知全部人」（否則單子送出後沒有人會知道要簽）。請至少保留一位。</div>`;
+    } else {
+        html = `<div style="font-size:12px;color:#5a7d3a;">會收到通知（${keep.length}）：${keep.map(nameOf).join('、') || '—'}</div>`;
+        if (drop.length) html += `<div style="font-size:12px;color:#a86a1e;">不再收到通知（${drop.length}）：${drop.map(nameOf).join('、')}
+                                  <span style="color:#999;">（仍可簽核）</span></div>`;
+    }
+    $('#qs-notify-preview').html(html);
+}
+function onNotifyLevelToggle() {
+    renderNotifyPreview();
+    const sel = $('.qs-notify-lv:checked').map(function () { return parseInt(this.value); }).get();
+    $.post(API_URL, { action:'save_param', param_group:'QUOTATION', param_key:'notify_exclude_levels',
+        param_value: JSON.stringify(sel), description:'報價單審核通知排除的職級' }, res => {
+        if (res && res.success) {
+            if (_notifyLevelInfo) {
+                _notifyLevelInfo.exclude = sel;
+                _notifyLevelInfo.levels.forEach(l => { l.excluded = sel.indexOf(l.level) >= 0; });
+                _notifyLevelInfo.signers.forEach(s => { s.excluded = sel.indexOf(s.level) >= 0; });
+            }
+            Swal.fire({ toast:true, position:'top-end', icon:'success',
+                        title: sel.length ? '已更新審核通知排除職級' : '已取消排除，全部簽核者都會收到通知',
+                        showConfirmButton:false, timer:2200 });
+        } else {
+            Swal.fire('錯誤', (res && res.message) || '儲存失敗', 'error');
+            loadNotifyExcludeLevels();   // 存不進去就把畫面切回真正的設定值，不要留一個假的勾
+        }
+    }).fail(() => { Swal.fire('錯誤','與伺服器通訊失敗','error'); loadNotifyExcludeLevels(); });
+}
+
 /* 已核准報價單補附件是否需要重新審核（2026-09-08 使用者要求）。
    **沒設定過＝需要審核＝完全維持現況**，所以既有使用者不會因為這次改版而改變行為。
    真正的把關在後端 quotSuppNeedReview()（前端只是設定介面，直打 API 也繞不過去）。 */
