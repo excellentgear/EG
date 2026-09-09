@@ -6591,11 +6591,18 @@ echo "</script>\n";
                 <button type="button" class="close" data-dismiss="modal">&times;</button>
                 <h4 class="modal-title">
                     ${bomEsc} / ${dIdEsc}<br>
-                    <small style="font-weight:normal;">總數：${sqtyEsc}</small>
+                    <small style="font-weight:normal;">製令總數：${sqtyEsc}</small>
                 </h4>
             </div>
             <div class="modal-body" data-total-qty="${sqtyEsc}" data-bom="${bomEsc}" data-d-id="${dIdEsc}" style="min-height: 180px;">
                 <div class="form-group qr-modal-centered-form-group">
+                    <div class="row qr-modal-controls-row" style="margin-bottom: 10px;"> <!-- 列印總數：預設製令總數，可自行修改 -->
+                        <label class="col-xs-2 control-label qr-modal-label">總數：</label>
+                        <div class="col-xs-4 qr-modal-input-group">
+                            <input type="number" class="form-control print-total-qty" id="print-total-qty-${bomIngFidEsc}" min="0" step="any" value="${sqtyEsc}">
+                        </div>
+                        <div class="col-xs-6" style="padding-top:7px; font-size:12px; color:#8a6d3b;">預設製令總數 ${sqtyEsc}，可改成實際要列印的總數</div>
+                    </div>
                     <div class="row qr-modal-controls-row" style="margin-bottom: 10px;">
                         <label class="col-xs-2 control-label qr-modal-label">容器：</label>
                         <div class="col-xs-4 qr-modal-input-group">
@@ -14765,12 +14772,24 @@ echo "</script>\n";
             }
         });
 
+        // 取得這張標籤要印的總數：以跳窗內可修改的「總數」欄位為準，沒填才回退製令原始總數
+        function qrPrintTotalQty($modal) {
+            const $t = $modal.find('.print-total-qty');
+            if ($t.length && $.trim(String($t.val())) !== '') {
+                const v = parseFloat($t.val());
+                if (!isNaN(v) && v >= 0) return v;
+            }
+            return parseFloat($modal.find('.modal-body').data('total-qty')) || 0;
+        }
+
         // Attach event listeners to #modals-container (ensure this div exists in your HTML)
-        $('#modals-container').on('input change', '.qty-per-unit, .packaging-type', function() {
+        $('#modals-container').on('input change', '.qty-per-unit, .packaging-type, .print-total-qty', function() {
             const $modal = $(this).closest('.modal');
             if (!$modal.find('.qty-per-unit').length) return;
 
-            const totalQty = parseFloat($modal.find('.modal-body').data('total-qty')) || 0;
+            // 正在改「總數」時不跳警告也不動箱數（邊打字邊驗會在輸入到一半就誤判）
+            const fromTotalInput = $(this).hasClass('print-total-qty');
+            const totalQty = qrPrintTotalQty($modal);
             const $qtyPerUnitInput = $modal.find('.qty-per-unit');
             const $packagingTypeSelect = $modal.find('.packaging-type');
             const $calculationResultDiv = $modal.find('.calculation-result');
@@ -14778,7 +14797,7 @@ echo "</script>\n";
             let qtyPerUnit = parseFloat($qtyPerUnitInput.val()) || 0;
             const packagingType = $packagingTypeSelect.val();
 
-            if (qtyPerUnit > totalQty && totalQty > 0) {
+            if (!fromTotalInput && qtyPerUnit > totalQty && totalQty > 0) {
                 alert("每單位數量 (" + qtyPerUnit + ") 不可超過總數 (" + totalQty + ")。");
                 $qtyPerUnitInput.val(totalQty);
                 qtyPerUnit = totalQty;
@@ -14795,6 +14814,7 @@ echo "</script>\n";
             const $modal = $(this).closest('.modal');
             if (!$modal.find('.qty-per-unit').length) return;
             $modal.find('.qty-per-unit').val('');
+            $modal.find('.print-total-qty').val($modal.find('.modal-body').data('total-qty')); // 總數還原成製令原始總數
             $modal.find('.packaging-type').prop('disabled', false).trigger('change');
             $modal.find('.direct-print-qrcode-button').show();
             $modal.find('.qrcode-display-area').hide().html('');
@@ -14807,7 +14827,7 @@ echo "</script>\n";
             const $modal = $(this).closest('.modal');
             const bomForQr = $modal.find('.modal-body').data('bom');
             const dIdFromModal = $modal.find('.modal-body').data('d-id') || 'N/A';
-            const totalQty = parseFloat($modal.find('.modal-body').data('total-qty')) || 0;
+            const totalQty = qrPrintTotalQty($modal); // 以跳窗內可修改的總數為準
             const packagingTypeVal = $modal.find('.packaging-type option:selected').text();
             const userInputTotalBoxes = parseFloat($modal.find('.qty-per-unit').val()) || 0;
 
@@ -14877,6 +14897,14 @@ echo "</script>\n";
             }
         });
 
+        // 總數按 Enter 跳到「箱數」（不直接列印）
+        $('#modals-container').on('keypress', '.print-total-qty', function(e) {
+            if (e.which === 13) {
+                e.preventDefault();
+                $(this).closest('.modal').find('.qty-per-unit').focus().select();
+            }
+        });
+
         $('#modals-container').on('keypress', '.qty-per-unit', function(e) {
             if (e.which === 13) {
                 e.preventDefault();
@@ -14891,6 +14919,11 @@ echo "</script>\n";
 
         $('#modals-container').on('shown.bs.modal', '.modal[id^="myModal_qrcode_"]', function() {
             var $modal = $(this);
+            // 每次開啟都把「總數」還原成製令原始總數，上一次改過的值不留到下一次
+            var $totalInput = $modal.find('.print-total-qty');
+            if ($totalInput.length) {
+                $totalInput.val($modal.find('.modal-body').data('total-qty'));
+            }
             var $qtyInput = $modal.find('.qty-per-unit');
             if ($qtyInput.length) {
                 if ($qtyInput.val() === '' || parseFloat($qtyInput.val()) === 0) {
