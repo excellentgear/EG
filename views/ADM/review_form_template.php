@@ -318,6 +318,8 @@ function loadStampTplOptions(){
         $('#stListStamp,#stFooterStamp').html(h);
     });
 }
+// 新增模板：帶 id=0 開設定跳窗（openSettingModal 內已有「新增」分支會把欄位全部重設成預設值）
+$('#btnAddTpl').on('click', function(){ openSettingModal(0); });
 $('#btnRoleSetting').on('click', function(){ openMask('roleSetMask'); loadRoles(); });
 var RAPI = '../../src/store/Roles_API.php';
 var ROLES = [], CURROLE = 0;
