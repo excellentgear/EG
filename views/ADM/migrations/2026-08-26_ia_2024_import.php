@@ -326,7 +326,7 @@ function preflight(PDO $db): array
  * 三、各動作
  * ============================================================ */
 
-/** 稽核員／陪檢員資格名單：依 2024 紙本重建（認到 人員＋部門＋職稱） */
+/** 稽核員／陪檢員資格名單：依 2024 紙本重建（認到 部門＋職稱，不記人名；2026-09-09 起） */
 function do_qualify(PDO $db, bool $write): void
 {
     head('稽核員／陪檢員資格名單（依 2024 紙本）');
@@ -355,9 +355,13 @@ function do_qualify(PDO $db, bool $write): void
             $ins = $db->prepare("INSERT INTO ia_qualified_person
                                     (kind,user_id,dept_id,position_id,sort_order,updated_at,updated_by)
                                  VALUES (?,?,?,?,?,NOW(),?)");
-            $i = 0;
+            // 2026-09-09 起名單認到「部門＋職稱」不認人（user_id 固定 0），同職務的多個人自然合併成一列
+            $i = 0; $seen = [];
             foreach ($rows as $p) {
-                $ins->execute([$kind, (int)$p['id'], (int)$p['dept_id'], (int)$p['position_id'], ++$i, IA2024_MARK]);
+                $k = (int)$p['dept_id'] . ':' . (int)$p['position_id'];
+                if (!(int)$p['dept_id'] || !(int)$p['position_id'] || isset($seen[$k])) continue;
+                $seen[$k] = 1;
+                $ins->execute([$kind, 0, (int)$p['dept_id'], (int)$p['position_id'], ++$i, IA2024_MARK]);
             }
         }
         $db->commit();
@@ -600,7 +604,7 @@ function do_verify(PDO $db): void
     say('  不符合通知單：' . $q("SELECT COUNT(*) FROM ia_nc    WHERE created_by_name=$m") . ' 張（應 3）');
     say('  系統稽核紀錄表：' . $q("SELECT COUNT(*) FROM ia_check WHERE created_by_name=$m") . ' 張（應 1）');
     say('  紀錄表項目：'   . $q("SELECT COUNT(*) FROM ia_check_item i JOIN ia_check k ON k.check_id=i.check_id WHERE k.created_by_name=$m") . '（應 19）');
-    say('  資格名單：'     . $q("SELECT COUNT(*) FROM ia_qualified_person WHERE updated_by=$m") . ' 筆（應 9）');
+    say('  資格名單：'     . $q("SELECT COUNT(*) FROM ia_qualified_person WHERE updated_by=$m") . ' 筆（應 9 個職務，同職務多人會合併）');
     say('  稽核範本：'     . $q("SELECT COUNT(*) FROM ia_process_template WHERE updated_by=$m") . ' 個（應 8）');
     say('  紀錄表已連到 IA 單的列：' . $q("SELECT COUNT(*) FROM ia_check_item i JOIN ia_check k ON k.check_id=i.check_id
                                             WHERE k.created_by_name=$m AND i.nc_id IS NOT NULL") . '（應 2）');

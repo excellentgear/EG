@@ -1547,18 +1547,19 @@ case 'unit_delete': {
 /* ============================ 稽核員／陪檢員資格名單 ============================ */
 case 'qualify_get': {
     iaReqView($perms);
-    // posts＝一個職務一列（跨部門兼任的人會出現多列），使用者要求多職務要全部列出來
-    $posts = eg_people_posts($db, []);
-    foreach ($posts as &$p) $p['post_key3'] = ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id']);
-    unset($p);
-    jout(['kinds' => IA_QUALIFY_KINDS, 'map' => ia_qualify_map($db), 'posts' => $posts]);
+    // jobs＝可以挑的「部門＋職稱」一列一個（名單只認職務不認人，人名建通知單時才即時抓）
+    $map = ia_qualify_map($db);
+    $sel = [];
+    foreach ($map as $ks) foreach ($ks as $k) $sel[$k] = 1;
+    jout(['kinds' => IA_QUALIFY_KINDS, 'map' => $map, 'jobs' => ia_job_options($db, array_keys($sel))]);
 }
 
 case 'qualify_save': {
     iaReqAdmin($perms);
     $kind = (string)($_POST['kind'] ?? '');
     if (!isset(IA_QUALIFY_KINDS[$kind])) jerr('身分別不正確');
-    $ids = json_decode((string)($_POST['post_keys'] ?? $_POST['user_ids'] ?? '[]'), true);
+    // job_keys＝'deptId:posId'（現制）；post_keys/user_ids 是舊參數名，留著相容
+    $ids = json_decode((string)($_POST['job_keys'] ?? $_POST['post_keys'] ?? $_POST['user_ids'] ?? '[]'), true);
     if (!is_array($ids)) jerr('格式錯誤');
     $db->beginTransaction();
     $dropped = [];

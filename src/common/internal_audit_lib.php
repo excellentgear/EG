@@ -384,6 +384,24 @@ function ia_ensure_schema(PDO $db): void
                     $del->execute([(int)$o['qp_id']]);
                 }
             }
+            /* 2026-09-09 使用者要求：名單只記「部門＋職稱」，不記人名——人員會異動，
+               但「這個職稱可以當稽核員」不會變；人名在建通知單的當下即時抓該部門該職稱的在職人員。
+               既有的「人員＋部門＋職稱」列就地換成該職務（user_id=0＝整個職務），重複的自然合併。
+               可重複執行：只處理 user_id<>0 的殘留列。 */
+            $byPerson = $db->query("SELECT qp_id, kind, user_id, dept_id, position_id
+                                    FROM ia_qualified_person WHERE user_id<>0")->fetchAll(PDO::FETCH_ASSOC);
+            if ($byPerson) {
+                $ins2 = $db->prepare("INSERT IGNORE INTO ia_qualified_person
+                                        (kind, user_id, dept_id, position_id, sort_order, updated_at, updated_by)
+                                      VALUES (?,0,?,?,0,NOW(),'schema-upgrade')");
+                $del2 = $db->prepare("DELETE FROM ia_qualified_person WHERE qp_id=?");
+                foreach ($byPerson as $o) {
+                    if ((int)$o['dept_id'] && (int)$o['position_id']) {
+                        $ins2->execute([$o['kind'], (int)$o['dept_id'], (int)$o['position_id']]);
+                    }
+                    $del2->execute([(int)$o['qp_id']]);
+                }
+            }
         } catch (Throwable $e) {}
 
         /* 稽核員／陪檢員／稽核組長是「以哪個職務」執行稽核——存到職務層級，
@@ -1395,9 +1413,30 @@ function ia_post_parse(string $key): array
 }
 
 /**
- * 某身分的合格「職務」清單（一個職務一列，跨部門兼任的人會出現多列）。
+ * 資格名單本身認到的是「部門＋職稱」＝一個職稱一筆（使用者要求 2026-09-09）。
+ * 人員會異動、離職、調部門，但「這個職稱可以當稽核員」不會跟著變；
+ * 所以名單只記職務，**人名一律在建稽核通知單的當下即時抓**該部門該職稱目前的在職人員。
+ * 職務鍵格式 'deptId:positionId'，前後端共用同一個字串（跟人員層級的 post_key3 是兩種東西）。
+ */
+function ia_job_key(?int $deptId, ?int $posId): string
+{
+    return (int)$deptId . ':' . (int)$posId;
+}
+
+/** 'deptId:posId' → [deptId, posId]；格式不對回 [0,0] */
+function ia_job_parse(string $key): array
+{
+    $p = explode(':', trim($key));
+    if (count($p) !== 2) return [0, 0];
+    return [(int)$p[0], (int)$p[1]];
+}
+
+/**
+ * 某身分「目前可以挑的人」＝資格名單上那些部門＋職稱，現在在職的人（一個職務一列，
+ * 跨部門兼任的人會出現多列）。名單記職務、這裡現查人，所以**人員異動、離職、新人接任
+ * 都不必回頭改名單**（使用者要求 2026-09-09）。
  * **名單沒設定時一律回全體在職員工的所有職務**——否則模組剛上線一個人都挑不到，
- * 使用者會以為壞掉。已離職者不會出現在 eg_people_posts()，所以名單裡的離職者自然失效。
+ * 使用者會以為壞掉。已離職者不會出現在 eg_people_posts()，所以自然不會被挑到。
  * 每列在 eg_people_posts() 的欄位之外多帶 post_key3。
  */
 function ia_qualified_posts(PDO $db, string $kind): array
@@ -1412,14 +1451,17 @@ function ia_qualified_posts(PDO $db, string $kind): array
 
     $keys = [];
     try {
-        $st = $db->prepare("SELECT user_id, dept_id, position_id FROM ia_qualified_person WHERE kind=?");
+        $st = $db->prepare("SELECT dept_id, position_id FROM ia_qualified_person WHERE kind=?");
         $st->execute([$kind]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $keys[ia_post_key((int)$r['user_id'], (int)$r['dept_id'], (int)$r['position_id'])] = 1;
+            $keys[ia_job_key((int)$r['dept_id'], (int)$r['position_id'])] = 1;
         }
     } catch (Throwable $e) {}
     if (!$keys) return $all;                      // 沒設定＝不限制
-    return array_values(array_filter($all, function ($p) use ($keys) { return isset($keys[$p['post_key3']]); }));
+    // 名單記的是職務（部門＋職稱），這裡把「目前在該職務上的人」現查出來＝人員異動自動跟著換
+    return array_values(array_filter($all, function ($p) use ($keys) {
+        return isset($keys[ia_job_key($p['dept_id'], $p['position_id'])]);
+    }));
 }
 
 /**
@@ -1437,48 +1479,117 @@ function ia_qualified_people(PDO $db, string $kind): array
     return $out;
 }
 
-/** 目前設定的名單（管理畫面用），回 kind => ['uid:deptId:posId', ...] */
+/** 目前設定的名單（管理畫面用），回 kind => ['deptId:posId', ...] */
 function ia_qualify_map(PDO $db): array
 {
     $out = array_fill_keys(array_keys(IA_QUALIFY_KINDS), []);
+    $seen = [];
     try {
-        foreach ($db->query("SELECT kind, user_id, dept_id, position_id FROM ia_qualified_person
+        foreach ($db->query("SELECT kind, dept_id, position_id FROM ia_qualified_person
                              ORDER BY sort_order, qp_id")->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            if (isset($out[$r['kind']])) {
-                $out[$r['kind']][] = ia_post_key((int)$r['user_id'], (int)$r['dept_id'], (int)$r['position_id']);
-            }
+            if (!isset($out[$r['kind']])) continue;
+            $k = ia_job_key((int)$r['dept_id'], (int)$r['position_id']);
+            if (isset($seen[$r['kind'] . '|' . $k])) continue;   // 舊制多人同職務會有多列，這裡合併成一個職務
+            $seen[$r['kind'] . '|' . $k] = 1;
+            $out[$r['kind']][] = $k;
         }
     } catch (Throwable $e) {}
     return $out;
 }
 
 /**
- * 整批覆寫某身分的名單。傳入的是職務鍵 'uid:deptId:posId'。
+ * 資格名單可以挑的「部門＋職稱」清單（管理畫面用）。
+ * 來源＝目前**真的有人在任**的職務組合；另外把「已經在名單上、但現在剛好沒有人」的組合也補進來
+ * （職缺是暫時的，不補進來使用者會看不到自己設過什麼、也沒得取消）。
+ * 每列：job_key/dept_id/dept_name/position_id/position_name/people[]/people_count。
+ */
+function ia_job_options(PDO $db, array $alsoKeys = []): array
+{
+    $rows = [];
+    $posts = [];
+    try { $posts = eg_people_posts($db, []); } catch (Throwable $e) { $posts = []; }
+    foreach ($posts as $p) {
+        $k = ia_job_key($p['dept_id'], $p['position_id']);
+        if (!isset($rows[$k])) {
+            $rows[$k] = [
+                'job_key'       => $k,
+                'dept_id'       => (int)$p['dept_id'],   'dept_name'     => (string)$p['dept_name'],
+                'position_id'   => (int)$p['position_id'],'position_name' => (string)$p['position_name'],
+                'dept_sort'     => (int)($p['dept_sort'] ?? 999),
+                'position_sort' => (int)($p['position_sort'] ?? 999),
+                'people'        => [],
+            ];
+        }
+        $rows[$k]['people'][] = (string)$p['user_cname']
+            . ((int)$p['is_main'] === 0 ? '（兼任）' : '')
+            . (!empty($p['leave_note']) ? '［' . $p['leave_note'] . '］' : '');
+    }
+
+    // 名單上但目前沒人在任的職務：查得到部門／職稱名稱就補一列出來（人數 0）
+    $need = [];
+    foreach ($alsoKeys as $k) {
+        $k = trim((string)$k);
+        if ($k === '' || isset($rows[$k])) continue;
+        list($d, $ps) = ia_job_parse($k);
+        if ($d && $ps) $need[$k] = [$d, $ps];
+    }
+    if ($need) {
+        $dn = $pn = $dsort = $psort = [];
+        try {
+            foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM department")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $dn[(int)$r['id']] = (string)$r['name']; $dsort[(int)$r['id']] = (int)$r['s'];
+            }
+            foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM position")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $pn[(int)$r['id']] = (string)$r['name']; $psort[(int)$r['id']] = (int)$r['s'];
+            }
+        } catch (Throwable $e) {}
+        foreach ($need as $k => $dp) {
+            list($d, $ps) = $dp;
+            if (!isset($dn[$d]) || !isset($pn[$ps])) continue;   // 部門或職稱已被刪掉＝這個組合不存在了
+            $rows[$k] = ['job_key' => $k, 'dept_id' => $d, 'dept_name' => $dn[$d],
+                         'position_id' => $ps, 'position_name' => $pn[$ps],
+                         'dept_sort' => $dsort[$d] ?? 999, 'position_sort' => $psort[$ps] ?? 999, 'people' => []];
+        }
+    }
+
+    $out = array_values($rows);
+    // 欄位順序固定「部門/職稱」，排序依部門與職稱的 sort_order（ai-rules/08 第五節鐵則6）
+    usort($out, function ($a, $b) {
+        return [$a['dept_sort'], $a['dept_id'], $a['position_sort'], $a['position_id']]
+           <=> [$b['dept_sort'], $b['dept_id'], $b['position_sort'], $b['position_id']];
+    });
+    foreach ($out as &$r) $r['people_count'] = count($r['people']);
+    unset($r);
+    return $out;
+}
+
+/**
+ * 整批覆寫某身分的名單。傳入的是職務鍵 'deptId:posId'（部門＋職稱，不含人）。
  * 空陣列＝不限制（全體在職員工的所有職務都可指派）。
- * 只存「真的存在的職務」——直接打 API 塞一個不存在的組合一樣進不了資料庫（鐵律8）。
- * **已失效的職務（人員離職、或職務異動掉了）一律略過、不整批擋下**：名單是舊資料，
- * 裡面遲早會有人離職或調動，擋下來的話使用者連一個字都改不了、也不知道是誰失效
- * （2026-09-09 使用者回報「一直顯示儲存失敗」＝名單裡有已離職的林國棟與調過職的林鴻銘）。
+ * 只存「部門與職稱都真的存在」的組合——直接打 API 塞一個不存在的組合一樣進不了資料庫（鐵律8）；
+ * **不存在的組合略過就好、不整批擋下**：名單是舊資料，部門或職稱遲早會被改，
+ * 擋下來的話使用者連一個字都改不了（2026-09-09 使用者回報「一直顯示儲存失敗」的教訓）。
+ * 目前沒有人在任的職務**照存**——職缺是暫時的，新人接任就自動有資格。
  * 回傳被略過的職務鍵，讓呼叫端可以回報「清掉了幾筆」。
  */
-function ia_qualify_save(PDO $db, string $kind, array $postKeys, string $byName): array
+function ia_qualify_save(PDO $db, string $kind, array $jobKeys, string $byName): array
 {
     if (!isset(IA_QUALIFY_KINDS[$kind])) throw new RuntimeException('身分別不正確');
 
-    $valid = [];
+    $depts = $poss = [];
     try {
-        foreach (eg_people_posts($db, []) as $p) {
-            $valid[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = $p;
-        }
+        foreach ($db->query("SELECT id FROM department")->fetchAll(PDO::FETCH_COLUMN) as $id) $depts[(int)$id] = 1;
+        foreach ($db->query("SELECT id FROM position")->fetchAll(PDO::FETCH_COLUMN)   as $id) $poss[(int)$id]  = 1;
     } catch (Throwable $e) {}
-    // 一筆職務都查不到＝人員資料讀取失敗，這時候「全部略過」會把整份名單清光，寧可擋下來
-    if (!$valid) throw new RuntimeException('目前查不到任何在職職務資料，為避免誤刪名單已停止儲存');
+    // 部門或職稱一筆都查不到＝資料讀取失敗，這時候「全部略過」會把整份名單清光，寧可擋下來
+    if (!$depts || !$poss) throw new RuntimeException('目前查不到部門或職稱資料，為避免誤刪名單已停止儲存');
 
     $keys = []; $dropped = [];
-    foreach ($postKeys as $k) {
+    foreach ($jobKeys as $k) {
         $k = trim((string)$k);
         if ($k === '' || isset($keys[$k])) continue;
-        if (!isset($valid[$k])) { $dropped[$k] = 1; continue; }
+        list($d, $p) = ia_job_parse($k);
+        if (!$d || !$p || !isset($depts[$d]) || !isset($poss[$p])) { $dropped[$k] = 1; continue; }
         $keys[$k] = 1;
     }
 
@@ -1486,11 +1597,11 @@ function ia_qualify_save(PDO $db, string $kind, array $postKeys, string $byName)
     if (!$keys) return array_keys($dropped);
     $ins = $db->prepare("INSERT INTO ia_qualified_person
                             (kind, user_id, dept_id, position_id, sort_order, updated_at, updated_by)
-                         VALUES (?,?,?,?,?,NOW(),?)");
+                         VALUES (?,0,?,?,?,NOW(),?)");
     $i = 0;
     foreach (array_keys($keys) as $k) {
-        list($uid, $dept, $pos) = ia_post_parse($k);
-        $ins->execute([$kind, $uid, $dept, $pos, ++$i * 10, $byName]);
+        list($dept, $pos) = ia_job_parse($k);
+        $ins->execute([$kind, $dept, $pos, ++$i * 10, $byName]);
     }
     return array_keys($dropped);
 }

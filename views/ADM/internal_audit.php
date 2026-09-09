@@ -411,7 +411,7 @@ $roleLabel = ia_role_label($perms);
             <li><b>年度計畫表的 ◎ 不用手動點</b>：把稽核通知單的狀態改成「執行中」或「已結案」，該單位那個月就會自動變 ◎。沒排 ○ 卻做了也會出現 ◎。</li>
             <li><b>好幾個部門是同一個受稽單位</b>（例：生產部＋生產1廠＋生產2廠＋生產3廠）：到工具列「受稽單位」綁成一個群組。
                 綁定後計畫表上是<b>一欄</b>、報告表上是<b>一列</b>，稽核其中任何一個廠都算這個單位已執行；這個單位底下所有部門的人都看得到並可回覆該單位的不符合通知單。一個部門只能屬於一個受稽單位。</li>
-            <li><b>誰可以當稽核員／陪檢員</b>：工具列「稽核員資格」可指定名單。<b>資格認到「人員＋部門＋職稱」</b>——兼任的人主職與兼任職各自獨立，可以只有其中一個有資格。指定後相關下拉只列名單內的職務，挑選時也是挑職務。<b>名單留空＝不限制</b>。離職者會自動失效。</li>
+            <li><b>誰可以當稽核員／陪檢員</b>：工具列「稽核員資格」可指定名單。<b>名單設定的是「部門＋職稱」，不指定人名</b>——人名是<b>建稽核通知單的當下</b>才抓該部門該職稱目前的在職人員，所以<b>人員異動、離職、新人接任都不必回頭改名單</b>；同一個職稱有兩個人時兩位都會出現在候選裡，由填表人挑。兼任的職務是獨立一列（例：品管課課長與總經理室總經理分開設定），所以「兼任才有資格」設定得出來。指定後相關下拉只列名單內職務上的人，挑選時挑的仍是「某人的某個職務」（圖章的部門職稱才印得對）。<b>名單留空＝不限制</b>。</li>
             <li><b>要補以前年度的資料</b>：左上角年度下拉本來就含近十年，直接切到那一年再建立即可，不必先有當年的資料。</li>
             <li><b>稽核起始主過程要填什麼</b>：這次稽核從哪一段流程切入，稽核員由這裡開始循序把相關過程查完。紙本備註列了三類可填：<b>主過程</b>（客戶需求檢討→開發→訂單/合約審查→生產→倉儲出貨→客戶回饋）、<b>管理過程</b>（文件/記錄管理、人力資源訓練、不符合管理、資料分析、內部稽核、矯正/預防措施管理、持續改善、管理責任…）、<b>支援過程</b>（採購、供應商管理、IQC/FAI/IPQC/FQC、儀器/量具、機器/治具、生管、型態(鑑別追溯)、特殊特性…）。起點<b>不必等於該單位的日常業務</b>——紙本備註第 1 條要求「跳過自己的直接職務」，讓稽核員從別人的角度切入。<b>同一次稽核裡不可以有兩列填相同的起始主過程</b>，重複會即時標紅、也存不進去。</li>
             <li><b>稽核員與陪檢員怎麼帶</b>：選了範本之後，該列的稽核員／陪檢員下拉會縮到範本指定的部門範圍內、且只列有資格的職務；<b>候選只有一位就自動帶入</b>。系統<b>先決定稽核員</b>，陪檢員的候選會自動排除稽核員本人（同一人不可兩邊都當，即使是不同職務）。<b>陪檢員可以不填</b>。</li>
@@ -791,16 +791,17 @@ $roleLabel = ia_role_label($perms);
 <div class="ia-mask" id="qualifyMask"><div class="ia-modal">
     <div class="ia-mhead"><h4><i class="fa fa-user-plus"></i> 稽核員／陪檢員資格名單</h4><span class="x" data-close>&times;</span></div>
     <div class="ia-mbody">
-        <div class="ia-hint">設定哪些<b>職務</b>可以被指派為<b>稽核員</b>或<b>陪檢員</b>——資格認到<b>人員＋部門＋職稱</b>，一個職務一列。
-        <br>兼任的人會出現多列，<b>各列各自獨立</b>：主職沒有資格、兼任職有資格（或反過來）都設定得出來。
-        <br>設定後，稽核通知單與查檢表的對應下拉<b>只會列出名單內的職務</b>，挑的時候也是挑職務，才知道他是以哪個身分執行稽核。
-        <br><b>名單留空＝不限制</b>（全體在職員工的所有職務都可指派）。離職者會自動失效，不必手動移除。</div>
+        <div class="ia-hint">設定哪些<b>職務</b>可以被指派為<b>稽核員</b>或<b>陪檢員</b>——名單認到<b>部門＋職稱</b>，<b>不指定人名</b>。
+        <br><b>人名是建稽核通知單的當下才抓</b>該部門該職稱目前的在職人員，所以<b>人員異動、離職、新人接任都不必回頭改這份名單</b>。
+        <br>右側「目前人員」只是讓你確認這個職稱現在是誰，<b>不是設定值</b>；同一個職稱有兩個人時兩位都會出現在候選裡，由填表人挑。
+        <br>兼任的職務也是獨立一列（例：<b>品管課 課長</b> 與 <b>總經理室 總經理</b> 分開設定），所以「兼任才有資格」設定得出來。
+        <br>設定後，稽核通知單與查檢表的對應下拉<b>只會列出名單內職務上的人</b>。<b>名單留空＝不限制</b>（全體在職員工的所有職務都可指派）。</div>
         <div class="ia-tabs" style="margin-top:4px;">
             <div class="ia-tab on q-tab" data-kind="auditor">稽核員</div>
             <div class="ia-tab q-tab" data-kind="escort">陪檢員</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-            <input type="text" id="qFilter" placeholder="輸入部門或姓名篩選…"
+            <input type="text" id="qFilter" placeholder="輸入部門、職稱或姓名篩選…"
                    style="border:1px solid #D8BE93;border-radius:4px;padding:4px 8px;font-size:13px;width:230px;">
             <button id="qAll" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全選</button>
             <button id="qNone" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全部清空</button>
@@ -2959,11 +2960,13 @@ function delUnit(unitId, name){
 }
 
 /* ============================ 稽核員／陪檢員資格名單 ============================ */
-var QMAP = {}, QKIND = 'auditor', QPEOPLE = [], QPOSTS = [];
+/* 名單認到「部門＋職稱」（QJOBS，鍵 'deptId:posId'），不認人名——
+   人員會異動，但職稱不會；人名一律在建稽核通知單的當下即時抓（使用者要求 2026-09-09）。 */
+var QMAP = {}, QKIND = 'auditor', QJOBS = [];
 $('#btnQualify').on('click', function(){
     $.getJSON(API, {action:'qualify_get'}, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
-        QMAP = res.map||{}; QPEOPLE = res.people||[]; QPOSTS = res.posts||[];
+        QMAP = res.map||{}; QJOBS = res.jobs||[];
         QKIND = 'auditor';
         $('.q-tab').removeClass('on'); $('.q-tab[data-kind=auditor]').addClass('on');
         $('#qFilter').val('');
@@ -2973,34 +2976,35 @@ $('#btnQualify').on('click', function(){
 });
 $(document).on('click', '.q-tab', function(){
     // 切分頁前先把目前這一頁的勾選記回 QMAP，不然切回來會發現剛剛勾的不見了。
-    // 一定要走 qSyncMap()（內部用 qCheckedIds()）：值是「uid:deptId:posId」字串，
+    // 一定要走 qSyncMap()（內部用 qCheckedIds()）：值是「deptId:posId」字串，
     // 用 +val() 轉數字會全部變成 NaN，存進 QMAP 之後切回來就整份名單都沒勾（2026-08-26 使用者回報的症狀）。
     qSyncMap();
     $('.q-tab').removeClass('on'); $(this).addClass('on');
     QKIND = $(this).data('kind');
     renderQualify();
 });
-/* 一個職務一列，**各列各自獨立勾選**：資格認到 人員＋部門＋職稱。
-   兼任的人可能主職沒有稽核員資格、兼任職才有（或反過來），所以不可以跨列連動。 */
+/* 一個「部門＋職稱」一列。**右側人名只是現況顯示、不是設定值**，
+   所以人員異動時這份名單不必動——建通知單時後端會重新抓該職務目前的在職人員。 */
 function renderQualify(){
     var picked = {};
     (QMAP[QKIND]||[]).forEach(function(k){ picked[k] = 1; });
     var kw = $('#qFilter').val().trim().toLowerCase();
     var h = '', shown = 0;
-    (QPOSTS||[]).forEach(function(p){
-        var hay = ((p.dept_name||'')+' '+(p.position_name||'')+' '+(p.user_cname||'')).toLowerCase();
+    (QJOBS||[]).forEach(function(j){
+        var names = (j.people||[]).join('、');
+        var hay = ((j.dept_name||'')+' '+(j.position_name||'')+' '+names).toLowerCase();
         if (kw && hay.indexOf(kw) < 0) return;
         shown++;
-        var key = p.post_key3 || postKeyOf(p.id, p.dept_id, p.position_id);
-        // 欄位順序固定「部門/職稱/姓名」（ai-rules/08 第五節鐵則6）
+        var key = j.job_key;
+        // 欄位順序固定「部門/職稱/人員」（ai-rules/08 第五節鐵則6）
         h += '<label class="pick-row"><input type="checkbox" class="qChk" value="'+esc(key)+'"'
            + (picked[key]?' checked':'')+'>'
-           + '<span class="pk-name">'+esc(p.dept_name||'')+'</span>'
-           + '<span class="pk-name" style="flex:0 0 90px;">'+esc(p.position_name||'')+'</span>'
-           + '<span class="pk-sub" style="color:#5b3a1e;">'+esc(p.user_cname||'')
-           + (+p.is_main === 0 ? '<span style="color:#a08356;">（兼任）</span>' : '')
-           + (p.leave_note ? ('　<span style="color:#C4442D;">'+esc(p.leave_note)+'</span>') : '')+'</span>'
-           + '</label>';
+           + '<span class="pk-name">'+esc(j.dept_name||'')+'</span>'
+           + '<span class="pk-name" style="flex:0 0 90px;">'+esc(j.position_name||'')+'</span>'
+           + '<span class="pk-sub" style="color:#5b3a1e;">'
+           + (names ? ('目前：'+esc(names))
+                    : '<span style="color:#C4442D;">目前無人在任（有人接任就自動有資格）</span>')
+           + '</span></label>';
     });
     $('#qPick').html(h || '<div class="ia-empty">沒有符合的職務</div>');
     updateQCount(shown);
@@ -3015,46 +3019,38 @@ function qVisibleKeys(){
     $('#qPick .qChk').each(function(){ v[$(this).val()] = 1; });
     return v;
 }
-/** 目前還存在的職務鍵（人離職或職務異動掉了就不在裡面） */
+/** 目前還存在的職務鍵（部門或職稱被刪掉了才會不在裡面；沒人在任的職務仍算存在） */
 function qKnownKeys(){
     var m = {};
-    (QPOSTS||[]).forEach(function(p){
-        m[p.post_key3 || postKeyOf(p.id, p.dept_id, p.position_id)] = 1;
-    });
+    (QJOBS||[]).forEach(function(j){ m[j.job_key] = j; });
     return m;
 }
 /** 把畫面上的勾選合併回 QMAP。**一定要合併不能直接覆寫**——被關鍵字篩掉的列根本沒畫出來，
-    直接 QMAP[QKIND]=qCheckedIds() 會把那些人默默從名單裡刷掉（打完關鍵字就少一批人）。 */
+    直接 QMAP[QKIND]=qCheckedIds() 會把那些職務默默從名單裡刷掉（打完關鍵字就少一批）。 */
 function qSyncMap(){
     var visible = qVisibleKeys();
     var keep = (QMAP[QKIND]||[]).filter(function(k){ return !visible[k]; });
     QMAP[QKIND] = keep.concat(qCheckedIds());
 }
-/** 已失效的職務要講清楚是誰，不然使用者只看得到一個數字、不知道要不要補勾回來 */
-function qStaleDesc(staleKeys){
-    var byUid = {};
-    (QPOSTS||[]).forEach(function(p){ byUid[String(p.id)] = p; });
-    return staleKeys.map(function(k){
-        var p = byUid[String(k).split(':')[0]];
-        return p ? (p.user_cname + '（職務已異動，仍在職，請重新勾選目前的職務）')
-                 : ('員工編號 ' + String(k).split(':')[0] + '（已離職）');
-    }).join('、');
-}
 function updateQCount(shown){
     var visible = qVisibleKeys(), known = qKnownKeys();
     var prev = QMAP[QKIND] || [];
     var hidden = prev.filter(function(k){ return !visible[k] && known[k]; });   // 被篩選藏起來、仍有效
-    var stale  = prev.filter(function(k){ return !known[k]; });                 // 已離職或職務異動
+    var stale  = prev.filter(function(k){ return !known[k]; });                 // 部門或職稱已不存在
     var keys = hidden.concat(qCheckedIds());
-    var people = {};
-    keys.forEach(function(k){ people[String(k).split(':')[0]] = 1; });
+    var heads = 0, vacant = 0;                     // 這些職務目前總共涵蓋幾個人
+    keys.forEach(function(k){
+        var n = known[k] ? (known[k].people_count||0) : 0;
+        heads += n; if (!n) vacant++;
+    });
     var kindLab = (META.qualify_kinds||{})[QKIND] || QKIND;
-    $('#qCount').html(esc(kindLab + '：已勾 ' + keys.length + ' 個職務（' + Object.keys(people).length + ' 人）'
+    $('#qCount').html(esc(kindLab + '：已選 ' + keys.length + ' 個職務（目前涵蓋 ' + heads + ' 人'
+        + (vacant ? ('，其中 ' + vacant + ' 個職務目前無人在任') : '') + '）'
         + (shown != null ? ('／顯示 ' + shown + ' 列') : '')
         + (hidden.length ? ('　其中 ' + hidden.length + ' 個被關鍵字篩選隱藏，儲存時一併保留') : '')
         + (keys.length === 0 ? '　不限制，全體在職員工的所有職務都可指派' : ''))
         + (stale.length ? ('　<span style="color:#C4442D;">另有 ' + stale.length
-            + ' 個職務已失效，儲存時會自動移除：' + esc(qStaleDesc(stale)) + '</span>') : ''));
+            + ' 個職務的部門或職稱已不存在，儲存時會自動移除</span>') : ''));
 }
 $(document).on('change', '.qChk', function(){ updateQCount(); });
 $('#qFilter').on('input', function(){
@@ -3064,19 +3060,19 @@ $('#qFilter').on('input', function(){
 $('#qAll').on('click', function(){ $('#qPick .qChk').prop('checked', true); updateQCount(); return false; });
 $('#qNone').on('click', function(){ $('#qPick .qChk').prop('checked', false); updateQCount(); return false; });
 $('#btnQualifySave').on('click', function(){
-    // 篩選中被藏起來的人也要一起送，否則打了關鍵字再存會把沒顯示的人全部刷掉
+    // 篩選中被藏起來的職務也要一起送，否則打了關鍵字再存會把沒顯示的整批刷掉
     var visible = qVisibleKeys(), known = qKnownKeys();
     var checked = qCheckedIds();
     var keep = (QMAP[QKIND]||[]).filter(function(k){ return !visible[k] && known[k]; });
-    // 已失效的職務（離職／職務異動）不送出去，名單裡卡一筆舊資料不該讓整份存不了
+    // 部門或職稱已不存在的舊資料不送出去，名單裡卡一筆舊資料不該讓整份存不了
     var stale = (QMAP[QKIND]||[]).filter(function(k){ return !known[k]; }).length;
     var ids = keep.concat(checked);
-    $.post(API, {action:'qualify_save', kind:QKIND, post_keys:JSON.stringify(ids)}, function(res){
+    $.post(API, {action:'qualify_save', kind:QKIND, job_keys:JSON.stringify(ids)}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         QMAP[QKIND] = ids;
         alert((META.qualify_kinds||{})[QKIND] + ' 名單已儲存（' + res.count + ' 個職務'
               + (res.count === 0 ? '＝不限制' : '') + '）'
-              + (stale ? ('\n另清除 ' + stale + ' 個已失效的職務（人員離職或職務異動）。') : ''));
+              + (stale ? ('\n另清除 ' + stale + ' 個部門或職稱已不存在的舊設定。') : ''));
         renderQualify();
         loadMeta();
     }, 'json');
