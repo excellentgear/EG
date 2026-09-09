@@ -284,6 +284,48 @@ function el_next_log_no(PDO $db, ?string $date = null): string
     return $prefix . substr((string)microtime(true), -3);
 }
 
+/**
+ * 標題沒填時自動組一個（使用者要求）。
+ *
+ * 用「這筆一定有的東西」組：第一個綁定對象 ＋ 類型 ＋ 第一條問題摘要，
+ * 而不是丟一個「未命名」——清單上全是同名的列跟沒有標題一樣糟。
+ */
+function el_auto_title(PDO $db, array $binds, array $items, string $logType, int $logId = 0): string
+{
+    $typeNames = ['outsource'=>'發包','drawing'=>'批圖','spec'=>'規格','material'=>'材料',
+                  'quality'=>'品質','delivery'=>'交期','other'=>''];
+    $parts = [];
+    $types = el_bind_types();
+    foreach ($binds as $b) {
+        $t = (string)($b['bind_type'] ?? '');
+        $bid = trim((string)($b['bind_id'] ?? ''));
+        if (!isset($types[$t]) || $bid === '') continue;
+        $label = $types[$t]['manual'] ? $bid : (el_bind_label($db, $t, $bid) ?? $bid);
+        if ($label !== '') { $parts[] = $label; break; }   // 只取第一個，標題不要太長
+    }
+    $tn = $typeNames[$logType] ?? '';
+    if ($tn !== '') $parts[] = $tn . '問題';
+    if (!$parts) {
+        foreach ($items as $it) {
+            $q = trim((string)($it['question'] ?? ''));
+            if ($q !== '') { $parts[] = mb_substr($q, 0, 24); break; }
+        }
+    }
+    if (!$parts) {
+        // 什麼都沒有時才退回編號（至少每一列不會同名）
+        if ($logId > 0) {
+            try {
+                $st = $db->prepare("SELECT log_no FROM eng_log WHERE id=?");
+                $st->execute([$logId]);
+                $no = (string)$st->fetchColumn();
+                if ($no !== '') return $no;
+            } catch (Throwable $e) {}
+        }
+        return '未命名紀錄 ' . date('Y-m-d H:i');
+    }
+    return mb_substr(implode(' ', $parts), 0, 200);
+}
+
 /* ============================ 綁定：解析與展開 ============================ */
 
 /** 綁定顯示文字一律以 DB 當下資料為準；手填單號直接回單號本身 */

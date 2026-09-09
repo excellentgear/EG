@@ -131,7 +131,10 @@ if ($action === 'filter_options') {
     [$vs, $vp] = el_visible_sql($P);
     $out = ['customers' => [], 'parts' => [], 'makers' => []];
     try {
-        $st = $db->prepare("SELECT DISTINCT x.customer_id AS id, c.customer AS label
+        /* 顯示文字要把 ID 一起帶上（使用者要求可以打部分 ID 篩選）——
+           共用的 data-eg-filter 是比對選項「顯示文字」，ID 不在文字裡就篩不到。 */
+        $st = $db->prepare("SELECT DISTINCT x.customer_id AS id,
+                                   CONCAT(COALESCE(c.customer, x.customer_id), '（', x.customer_id, '）') AS label
                             FROM eng_log_index x JOIN eng_log t ON t.id = x.log_id
                             LEFT JOIN customer_list c ON c.customer_id = x.customer_id
                             WHERE x.customer_id IS NOT NULL AND {$vs} ORDER BY c.customer LIMIT 500");
@@ -145,7 +148,8 @@ if ($action === 'filter_options') {
         $st->execute($vp);
         $out['parts'] = $st->fetchAll(PDO::FETCH_ASSOC);
 
-        $st = $db->prepare("SELECT DISTINCT x.maker_id_no AS id, m.maker_id AS label
+        $st = $db->prepare("SELECT DISTINCT x.maker_id_no AS id,
+                                   CONCAT(COALESCE(m.maker_id, x.maker_id_no), '（', x.maker_id_no, '）') AS label
                             FROM eng_log_index x JOIN eng_log t ON t.id = x.log_id
                             LEFT JOIN maker_list m ON m.maker_id_no = x.maker_id_no
                             WHERE x.maker_id_no IS NOT NULL AND {$vs} ORDER BY m.maker_id LIMIT 500");
@@ -153,6 +157,31 @@ if ($action === 'filter_options') {
         $out['makers'] = $st->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) { jerr('讀取篩選選項失敗：' . $e->getMessage()); }
     jout($out);
+}
+
+/** 上方統計卡的數字（每張卡＝一個快捷篩選，數字與該篩選撈出來的筆數一致） */
+if ($action === 'stats') {
+    [$vs, $vp] = el_visible_sql($P);
+    $def = el_default_follow_up_days();
+    $waiting = "EXISTS(SELECT 1 FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting')";
+    $overdue = "EXISTS(SELECT 1 FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting'
+                    AND i.asked_at IS NOT NULL
+                    AND i.asked_at <= DATE_SUB(CURDATE(), INTERVAL COALESCE(i.follow_up_days,{$def}) DAY))";
+    $sql = "SELECT
+              COUNT(*) AS total,
+              SUM(t.status='open') AS open_cnt,
+              SUM(t.status='open' AND {$waiting}) AS waiting_cnt,
+              SUM(t.status='open' AND {$overdue}) AS overdue_cnt,
+              SUM(t.status='open' AND t.deadline IS NOT NULL
+                  AND DATE(t.deadline) BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)) AS week_cnt,
+              SUM(t.status='done') AS done_cnt,
+              SUM(NOT EXISTS(SELECT 1 FROM eng_log_index x WHERE x.log_id=t.id AND x.part_d_id IS NOT NULL)) AS unlinked_cnt
+            FROM eng_log t WHERE {$vs}";
+    $st = $db->prepare($sql);
+    $st->execute($vp);
+    $r = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+    foreach ($r as $k => $v) $r[$k] = (int)$v;
+    jout(['stats' => $r]);
 }
 
 /* ── 清單 ──────────────────────────────────────────────────────────── */
@@ -232,8 +261,25 @@ if ($action === 'list') {
                           FROM eng_log_bind WHERE log_id IN ({$in}) ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
         $map = [];
         foreach ($bs as $b) $map[(int)$b['log_id']][] = $b;
+
+        /* 只要展開得出料號就在清單上顯示（使用者要求）——包含綁 BOM／訂單／出貨單
+           間接推導出來的，不是只有直接綁的那種。點下去要能開圖面，所以連
+           d_setting.D_Setting_Id（料號文字）一起帶出來。 */
+        $ps = $db->query("SELECT x.log_id, x.part_d_id AS pk, d.D_Setting_Id AS part_no
+                          FROM eng_log_index x LEFT JOIN d_setting d ON d.d_id = x.part_d_id
+                          WHERE x.log_id IN ({$in}) AND x.part_d_id IS NOT NULL
+                          ORDER BY d.D_Setting_Id")->fetchAll(PDO::FETCH_ASSOC);
+        $pmap = [];
+        foreach ($ps as $p) $pmap[(int)$p['log_id']][] = ['pk' => (int)$p['pk'], 'part_no' => (string)$p['part_no']];
+
         foreach ($rows as &$r) {
             $r['binds'] = $map[(int)$r['id']] ?? [];
+            $r['parts'] = $pmap[(int)$r['id']] ?? [];
+            // 綁了 BOM 時，點料號要開「只含這張 BOM 的圖檔」的 part_viewer（比照 OreadyReply）
+            $r['bom'] = '';
+            foreach ($r['binds'] as $b) {
+                if ($b['bind_type'] === 'bom') { $r['bom'] = (string)$b['bind_id']; break; }
+            }
             $r['wait_days'] = $r['oldest_wait'] ? el_item_waiting_days($db, (string)$r['oldest_wait']) : 0;
             $r['unlinked']  = ((int)$r['part_cnt'] === 0);
         }
@@ -285,7 +331,6 @@ if ($action === 'save_log') {
     need_csrf(); need_edit();
     $id    = (int)($_POST['id'] ?? 0);
     $title = trim((string)($_POST['title'] ?? ''));
-    if ($title === '') jerr('請填寫標題');
     if (mb_strlen($title) > 200) jerr('標題請控制在 200 字以內');
 
     $logType = trim((string)($_POST['log_type'] ?? 'other'));
@@ -304,6 +349,20 @@ if ($action === 'save_log') {
     if (!is_array($tempFiles)) $tempFiles = [];
 
     $bindTypes = el_bind_types();
+
+    /* 標題沒填就自動組一個（使用者要求）：綁定的第一個對象 ＋ 類型 ＋ 第一條問題摘要。
+       用「這筆一定有的東西」組，而不是丟一個「未命名」讓清單全是同名的列。 */
+    if ($title === '') $title = el_auto_title($db, $binds, $items, $logType, $id);
+
+    /* 對象一定要帶 ID（使用者要求）：只打名字的話，對方主檔改名就對應不到，
+       三軸索引也展不出這一家。前端擋一次、這裡同規則再擋一次（鐵律8）。 */
+    foreach ($items as $k => $it) {
+        $tt = trim((string)($it['target_type'] ?? ''));
+        if ($tt === '') continue;
+        if (!in_array($tt, ['customer', 'maker', 'user'], true)) jerr('第 ' . ($k + 1) . ' 條的對象類別不正確');
+        if (trim((string)($it['target_id'] ?? '')) === '')
+            jerr('第 ' . ($k + 1) . ' 條的對象要從清單選擇（只打名字的話日後對方改名就對應不到）');
+    }
 
     try {
         $db->beginTransaction();
@@ -453,6 +512,8 @@ if ($action === 'item_save') {
     $ti = trim((string)($_POST['target_id'] ?? ''));
     $tl = trim((string)($_POST['target_label'] ?? ''));
     $tc = trim((string)($_POST['target_contact'] ?? ''));
+    // 對象一定要帶 ID（同 save_log）：只打名字的話對方改名就對應不到，索引也展不出來
+    if ($tt !== null && $ti === '') jerr('對象要從清單選擇（只打名字的話日後對方改名就對應不到）');
     $asked = el_norm_date($_POST['asked_at'] ?? '') ?? $today;
     if ($asked > $today) jerr('提出日期不可以是未來日期');
     $fud = el_norm_int($_POST['follow_up_days'] ?? '');
@@ -660,34 +721,62 @@ if ($action === 'bind_search') {
     if ($kw === '') jout(['rows' => []]);
     $like = '%' . $kw . '%';
     $rows = [];
+    /* 單據類（BOM／訂單／出貨單／退貨單）一律「單號、客戶名稱、客戶ID、料號」都能搜——
+       實際作業時手上未必有單號，多半是先想到「和大那張 RC105 的單」。 */
     try {
         switch ($type) {
             case 'bom':
-                $st = $db->prepare("SELECT bom AS id, bom AS label, Client_Name AS sub FROM bom
-                                    WHERE bom LIKE ? ORDER BY bom DESC LIMIT 30");
-                $st->execute([$like]); $rows = $st->fetchAll(PDO::FETCH_ASSOC); break;
+                $st = $db->prepare("SELECT b.bom AS id, b.bom AS label,
+                                           CONCAT(COALESCE(b.Client_Name,''), '　', COALESCE(b.d_id,'')) AS sub
+                                    FROM bom b
+                                    WHERE b.bom LIKE ? OR b.Client_Name LIKE ? OR b.d_id LIKE ?
+                                    ORDER BY b.bom DESC LIMIT 30");
+                $st->execute([$like, $like, $like]); $rows = $st->fetchAll(PDO::FETCH_ASSOC); break;
             case 'part':
-                $st = $db->prepare("SELECT d_id AS id, D_Setting_Id AS label, Drawing_No AS sub FROM d_setting
-                                    WHERE D_Setting_Id LIKE ? OR Drawing_No LIKE ? ORDER BY D_Setting_Id LIMIT 30");
-                $st->execute([$like, $like]); $rows = $st->fetchAll(PDO::FETCH_ASSOC); break;
+                $st = $db->prepare("SELECT d.d_id AS id, d.D_Setting_Id AS label,
+                                           CONCAT(COALESCE(c.customer,''), '　', COALESCE(d.Drawing_No,'')) AS sub
+                                    FROM d_setting d LEFT JOIN customer_list c ON c.customer_id = d.Customer_Id
+                                    WHERE d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ?
+                                       OR c.customer LIKE ? OR d.Customer_Id LIKE ?
+                                    ORDER BY d.D_Setting_Id LIMIT 30");
+                $st->execute([$like, $like, $like, $like]); $rows = $st->fetchAll(PDO::FETCH_ASSOC); break;
             case 'order':
-                $st = $db->prepare("SELECT Order_id AS id, Order_oo AS label, Client_name AS sub FROM order_track
-                                    WHERE Order_oo LIKE ? ORDER BY Order_id DESC LIMIT 30");
-                $st->execute([$like]); $rows = $st->fetchAll(PDO::FETCH_ASSOC); break;
+                $st = $db->prepare("SELECT o.Order_id AS id, o.Order_oo AS label,
+                                           CONCAT(COALESCE(o.Client_name,''), '　', COALESCE(o.d_id,'')) AS sub
+                                    FROM order_track o
+                                    WHERE o.Order_oo LIKE ? OR o.Client_name LIKE ?
+                                       OR o.Client_name_ID LIKE ? OR o.d_id LIKE ?
+                                    ORDER BY o.Order_id DESC LIMIT 30");
+                $st->execute([$like, $like, $like, $like]); $rows = $st->fetchAll(PDO::FETCH_ASSOC); break;
+            /* 出貨單／退貨單要能用料號搜，但**不可以**寫成相關子查詢：
+               is_list 有 37,745 列，`EXISTS(... WHERE i2.IS_number = i.IS_number ...)` 會對每一列
+               再掃一次整張表，實測直接把請求拖到逾時。改成兩段：先用料號文字查出 d_id（單次、
+               走 D_Setting_Id 索引），再用 `d_setting_id IN (...)` 過濾，成本與命中數無關。 */
             case 'ship':
-                $st = $db->prepare("SELECT IS_number AS id, IS_number AS label,
-                                           CONCAT(COALESCE(Client_name,''), '　', COALESCE(MIN(Order_date),''),
-                                                  '　', COUNT(DISTINCT d_setting_id), ' 個料號') AS sub
-                                    FROM is_list WHERE IS_number LIKE ?
-                                    GROUP BY IS_number, Client_name ORDER BY IS_number DESC LIMIT 30");
-                $st->execute([$like]); $rows = $st->fetchAll(PDO::FETCH_ASSOC); break;
             case 'return':
-                $st = $db->prepare("SELECT IR_no AS id, IR_no AS label,
-                                           CONCAT(COALESCE(Client_name,''), '　', COALESCE(MIN(IR_date),''),
-                                                  '　', COUNT(DISTINCT d_setting_id), ' 個料號') AS sub
-                                    FROM ir_track WHERE IR_no LIKE ?
-                                    GROUP BY IR_no, Client_name ORDER BY IR_no DESC LIMIT 30");
-                $st->execute([$like]); $rows = $st->fetchAll(PDO::FETCH_ASSOC); break;
+                $dids = [];
+                $q = $db->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id LIKE ? LIMIT 200");
+                $q->execute([$like]);
+                $dids = array_map('intval', $q->fetchAll(PDO::FETCH_COLUMN));
+                $didIn = $dids ? (' OR x.d_setting_id IN (' . implode(',', $dids) . ')') : '';
+                if ($type === 'ship') {
+                    $st = $db->prepare("SELECT x.IS_number AS id, x.IS_number AS label,
+                                               CONCAT(COALESCE(x.Client_name,''), '　', COALESCE(MIN(x.Order_date),''),
+                                                      '　', COUNT(DISTINCT x.d_setting_id), ' 個料號') AS sub
+                                        FROM is_list x
+                                        WHERE (x.IS_number LIKE ? OR x.Client_name LIKE ? OR x.Client_id LIKE ?{$didIn})
+                                        GROUP BY x.IS_number, x.Client_name ORDER BY x.IS_number DESC LIMIT 30");
+                    $st->execute([$like, $like, $like]);
+                } else {
+                    $st = $db->prepare("SELECT x.IR_no AS id, x.IR_no AS label,
+                                               CONCAT(COALESCE(x.Client_name,''), '　', COALESCE(MIN(x.IR_date),''),
+                                                      '　', COUNT(DISTINCT x.d_setting_id), ' 個料號') AS sub
+                                        FROM ir_track x
+                                        WHERE (x.IR_no LIKE ? OR x.Client_name LIKE ?{$didIn})
+                                        GROUP BY x.IR_no, x.Client_name ORDER BY x.IR_no DESC LIMIT 30");
+                    $st->execute([$like, $like]);
+                }
+                $rows = $st->fetchAll(PDO::FETCH_ASSOC); break;
             case 'customer':
                 $st = $db->prepare("SELECT customer_id AS id, customer AS label, customer_id AS sub FROM customer_list
                                     WHERE customer LIKE ? OR customer_id LIKE ? ORDER BY customer LIMIT 30");
@@ -702,6 +791,58 @@ if ($action === 'bind_search') {
         }
     } catch (Throwable $e) { jerr('搜尋失敗：' . $e->getMessage()); }
     jout(['rows' => $rows]);
+}
+
+/**
+ * 問題對象＝公司內部時的部門清單／部門底下的人員。
+ *
+ * 人員一律走 people_lib 的 eg_people_list()（鐵律／ai-rules/08 第五節，禁止各頁自寫人員 SQL）：
+ * 只列未離職者、依職稱 sort_order 由高到低排序、長期請假者標記假別期間。
+ * 帶 dept_ids 時**含兼任**——某人主職在技術部、兼任生管組組長，在生管組底下也找得到他。
+ */
+if ($action === 'dept_list') {
+    $rows = [];
+    try {
+        $rows = $db->query("SELECT id, name FROM department
+                            ORDER BY COALESCE(sort_order,999), id")->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { jerr('讀取部門失敗：' . $e->getMessage()); }
+    jout(['rows' => $rows]);
+}
+if ($action === 'dept_people') {
+    require_once __DIR__ . '/../common/people_lib.php';
+    $deptId = (int)($_GET['dept_id'] ?? 0);
+    if ($deptId <= 0) jout(['rows' => []]);
+    $out = [];
+    try {
+        $people = eg_people_list($db, ['dept_ids' => [$deptId]]);
+        foreach ($people as $p) {
+            $label = trim((string)($p['position_name'] ?? '')) !== ''
+                   ? $p['position_name'] . '　' . $p['user_cname'] : $p['user_cname'];
+            if (!empty($p['leave_note'])) $label .= '（' . $p['leave_note'] . '）';
+            $out[] = ['id' => (string)$p['id'], 'label' => (string)$p['user_cname'],
+                      'display' => $label, 'position' => (string)($p['position_name'] ?? ''),
+                      'dept' => (string)($p['dept_name'] ?? '')];
+        }
+    } catch (Throwable $e) { jerr('讀取人員失敗：' . $e->getMessage()); }
+    jout(['rows' => $out]);
+}
+
+/**
+ * 綁定 BOM 的逐關製程進度（顯示方式比照 views/user/personal_task.php 的 BOM 製程條）。
+ * 走共用的 eg_bom_progress()，與個人工作紀錄同一套口徑，不另寫一份。
+ */
+if ($action === 'bom_flow') {
+    require_once __DIR__ . '/../common/bom_progress_lib.php';
+    $boms = json_decode((string)($_GET['boms'] ?? '[]'), true);
+    if (!is_array($boms)) $boms = [];
+    $out = [];
+    foreach (array_slice($boms, 0, 40) as $b) {
+        $b = trim((string)$b);
+        if ($b === '') continue;
+        $p = eg_bom_progress($db, $b);
+        if ($p) $out[$b] = $p;
+    }
+    jout(['flows' => $out]);
 }
 
 /** 出貨單／退貨單底下的料號（多料號時跳出勾選清單） */
