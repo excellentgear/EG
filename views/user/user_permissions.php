@@ -367,6 +367,7 @@ $EG_ROLE_MODULES = [
     'business_trip'       => ['prefix'=>'btrp',    'label'=>'公出單',              'page'=>'business_trip.php'],
     'doc_apply'           => ['prefix'=>'dap',     'label'=>'文件制修申請單',      'page'=>'doc_apply.php'],
     'eng_change'          => ['prefix'=>'eng',     'label'=>'工程變更申請單',      'page'=>'eng_change.php'],
+    'eng_log'             => ['prefix'=>'elog',    'label'=>'工程處理紀錄',        'page'=>'eng_log.php'],
     'print_sign_log'      => ['prefix'=>'psl',     'label'=>'列印與簽核紀錄',      'page'=>'print_sign_log.php'],
     'internal_audit'      => ['prefix'=>'ia',      'label'=>'內部稽核',            'page'=>'internal_audit.php'],
     'leave'               => ['prefix'=>'leave',   'label'=>'請假系統',            'page'=>'leave_request.php'],
@@ -1513,6 +1514,17 @@ $_quotDepts = array_keys($_deptSet);
                          是那個人才簽得下去（本人不在時自動換代理人，圖章加「代」字）。沒有任何角色的人，仍看得到「輪到自己簽」的那幾張單，否則收到通知點進來會是空白頁。<br>
                          各關卡與六個會審單位對應的部門一律即時查<a href="../admin/org_role_setting.php" target="_blank" style="color:#b5762a;">組織角色綁定</a>，不寫死部門 id 或人名。管理者固定擁有全部權限。',
                         rs_of('eng_change'), rsu_of('eng_change'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('elog', 'eng_log', '工程處理紀錄', 'fa-comments-o', '#b5762f',
+                        '為每位使用者指派「<a href="../TD/eng_log.php" target="_blank" style="color:#b5762a;">工程處理紀錄</a>」頁的角色。
+                         這頁用來記錄發包／批圖過程中「問了誰、對方怎麼回、最後怎麼處理」，日後可用<strong>客戶／料號／廠商</strong>三個角度查回來。
+                         <span style="color:#b06f27;">本頁沒有簽核流程</span>，需要正式單據請到工程變更申請單、異常矯正單等各自的模組開立。<br>
+                         角色功能：<strong>工程處理紀錄使用</strong>＝建立與編輯<span style="color:#b06f27;">自己的</span>紀錄、填寫對象回覆、上傳附件、結案；
+                         <strong>工程處理紀錄檢閱</strong>＝唯讀查看全公司的紀錄（不能新增或修改）；
+                         <strong>工程處理紀錄管理員</strong>＝全部＋查看與修改他人的紀錄、刪除。<br>
+                         <span style="color:#b06f27;">可見範圍逐筆設定</span>：每一筆紀錄可各自設為「僅自己／本部門／全公司」，自己建立的一律看得到；
+                         沒有指派任何角色的人<strong>完全看不到這頁的資料</strong>（本模組不做過渡期相容放行）。管理者固定擁有全部權限。',
+                        rs_of('eng_log'), rsu_of('eng_log'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('psl', 'print_sign_log', '列印與簽核紀錄', 'fa-history', '#b06f27',
                         '為每位使用者指派「<a href="../admin/print_sign_log.php" target="_blank" style="color:#b5762a;">列印與簽核紀錄</a>」頁的角色。

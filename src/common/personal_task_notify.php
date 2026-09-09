@@ -5,8 +5,17 @@
 // 由 personal_task_remind_run.php（順路觸發背景啟動）呼叫 personal_task_process_due_reminders()。
 
 if (!function_exists('personal_task_remind_user')) {
-    /** 對單一使用者發送提醒（推播失敗只記 log，不阻斷流程） */
-    function personal_task_remind_user(PDO $db, int $userId, string $title, string $body): void
+    /**
+     * 對單一使用者發送提醒（推播失敗只記 log，不阻斷流程）。
+     *
+     * $url / $tag 是 2026-09-09 新增的可選參數，預設值＝原本寫死的值，
+     * 所以既有呼叫端一行都不必改。加這兩個參數是為了讓「工程處理紀錄」(eng_log_lib.php)
+     * 共用同一條推播管線（Web Push＋Telegram、不寫 live_event），
+     * 而不是再複製一份一模一樣的發送程式（鐵律4）。
+     */
+    function personal_task_remind_user(PDO $db, int $userId, string $title, string $body,
+                                       string $url = '/EGsystem/views/user/personal_task.php',
+                                       string $tag = 'personal-task'): void
     {
         // Web Push：手機 PWA 與電腦瀏覽器有訂閱推播者都會跳系統通知（類似行事曆提醒）
         try {
@@ -14,8 +23,8 @@ if (!function_exists('personal_task_remind_user')) {
             eg_push_send_to_users($db, [$userId], [
                 'title' => $title,
                 'body'  => $body,
-                'url'   => '/EGsystem/views/user/personal_task.php',
-                'tag'   => 'personal-task',
+                'url'   => $url,
+                'tag'   => $tag,
             // 個人工作紀錄僅本人可見 → 不轉送共用帳號（現場平板多人共用，會把私人待辦公開，見 ai-rules/13）
             ], ['fanout' => false]);
         } catch (\Throwable $e) {
