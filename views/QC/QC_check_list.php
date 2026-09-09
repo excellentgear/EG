@@ -2051,7 +2051,10 @@ if ($reply_id != "") {
                         <div class="col-xs-4 qr-modal-input-group">
                             <input type="number" class="form-control print-total-qty" id="print-total-qty-${bomIngFidEsc}" min="0" step="any" value="${sqtyEsc}">
                         </div>
-                        <div class="col-xs-6" style="padding-top:7px; font-size:12px; color:#8a6d3b;">預設製令總數 ${sqtyEsc}，可改成實際要列印的總數</div>
+                        <div class="col-xs-6" style="padding-top:7px; font-size:12px; color:#8a6d3b;">
+                            <span class="print-total-hint">預設製令總數 ${sqtyEsc}，可改成實際要列印的總數</span>
+                            <span class="print-total-warn" style="display:none; color:#DD5138; font-weight:bold;">⚠ 已超過製令總數 ${sqtyEsc}</span>
+                        </div>
                     </div>
                     <div class="row qr-modal-controls-row" style="margin-bottom: 10px;"> <!-- ADDED qr-modal-controls-row -->
                         <label class="col-xs-2 control-label qr-modal-label">容器：</label>
@@ -3613,6 +3616,36 @@ if ($reply_id != "") {
                 return parseFloat($modal.find('.modal-body').data('total-qty')) || 0;
             }
 
+            // 列印總數若超過製令總數：欄位變紅底＋旁邊紅字提醒（回傳是否超過）
+            function qrTotalOverCheck($modal) {
+                const $t = $modal.find('.print-total-qty');
+                if (!$t.length) return false;
+                const orig = parseFloat($modal.find('.modal-body').data('total-qty'));
+                const cur = parseFloat($t.val());
+                const over = (!isNaN(orig) && !isNaN(cur) && cur > orig);
+                if (over) {
+                    $t.css({'background-color':'#DD5138','color':'#fff','border-color':'#DD5138','font-weight':'bold'});
+                } else {
+                    $t.css({'background-color':'','color':'','border-color':'','font-weight':''});
+                }
+                $modal.find('.print-total-warn').toggle(over);
+                $modal.find('.print-total-hint').toggle(!over);
+                return over;
+            }
+
+            // 總數欄位聚焦時自動全選，方便直接蓋掉重打
+            $('#modals-container').on('focus', '.print-total-qty', function() {
+                const el = this;
+                el.setAttribute('data-selecting', '1');
+                setTimeout(function() { try { el.select(); } catch (e) {} }, 0);
+            });
+            $('#modals-container').on('mouseup', '.print-total-qty', function(e) {
+                if (this.getAttribute('data-selecting') === '1') {
+                    this.setAttribute('data-selecting', '');
+                    e.preventDefault(); // 點擊帶起來的 mouseup 會把全選取消掉
+                }
+            });
+
             // QR Code Modal: Event listeners for dynamic calculation and buttons
             $('#modals-container').on('input change', '.qty-per-unit, .packaging-type, .print-total-qty', function() {
                 const $modal = $(this).closest('.modal');
@@ -3620,6 +3653,7 @@ if ($reply_id != "") {
 
                 // 正在改「總數」時不跳警告也不動箱數（邊打字邊驗會在輸入到一半就誤判）
                 const fromTotalInput = $(this).hasClass('print-total-qty');
+                qrTotalOverCheck($modal); // 超過製令總數即時變紅底
                 const totalQty = qrPrintTotalQty($modal);
                 const $qtyPerUnitInput = $modal.find('.qty-per-unit');
                 const $packagingTypeSelect = $modal.find('.packaging-type');
@@ -3650,6 +3684,7 @@ if ($reply_id != "") {
 
                 $modal.find('.qty-per-unit').val('');
                 $modal.find('.print-total-qty').val($modal.find('.modal-body').data('total-qty')); // 總數還原成製令原始總數
+                qrTotalOverCheck($modal); // 還原後把紅底提醒一併解除
                 $modal.find('.packaging-type').prop('disabled', false).trigger('change');
                 $modal.find('.generate-qrcode-button').show();
                 $modal.find('.direct-print-qrcode-button').show(); // Ensure print button is visible
@@ -3725,6 +3760,15 @@ if ($reply_id != "") {
                 if (userInputTotalBoxes <= 0) {
                     alert("請輸入有效的總箱數才能列印。"); // Changed alert message
                     return;
+                }
+
+                // 總數超過製令總數：列印前再確認一次（多印是可以的，但不要是打錯字）
+                if (qrTotalOverCheck($modal)) {
+                    const origTotalForWarn = parseFloat($modal.find('.modal-body').data('total-qty'));
+                    if (!confirm("總數 " + totalQty + " 已超過製令總數 " + origTotalForWarn + "，確定要用這個數量列印嗎？")) {
+                        $modal.find('.print-total-qty').focus().select();
+                        return;
+                    }
                 }
 
                 const totalPagesToPrint = userInputTotalBoxes; // Use user input directly
@@ -3908,6 +3952,7 @@ if ($reply_id != "") {
                 var $totalInput = $(this).find('.print-total-qty');
                 if ($totalInput.length) {
                     $totalInput.val($(this).find('.modal-body').data('total-qty'));
+                    qrTotalOverCheck($(this));
                 }
                 // Find the 'qty-per-unit' input within this specific modal and focus on it
                 var $qtyInput = $(this).find('.qty-per-unit');
