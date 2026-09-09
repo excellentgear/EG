@@ -237,7 +237,7 @@ if ($deptPerm === 'R') {
                     <div id="position-rank-section" class="col-md-12 col-sm-12 col-xs-12">
                         <div class="x_panel">
                             <div class="x_title">
-                                <h2>職稱階級管理 <small style="color:#8a5a2b;">（數字越小＝越高階；供權責分離自動找上一級主管；非主管的職稱不必設階級。同一階可放多個職稱＝視為同階主管）</small></h2>
+                                <h2>職稱階級管理 <small style="color:#8a5a2b;">（數字越小＝越高階，可以從 0 開始，例如 0＝最高決策者；供權責分離自動找上一級主管；非主管的職稱不必設階級。同一階可放多個職稱＝視為同階主管）</small></h2>
                                 <ul class="nav navbar-right panel_toolbox">
                                     <li><a class="collapse-link"><i class="fa fa-chevron-up"></i></a></li>
                                     <li><a class="close-link"><i class="fa fa-close"></i></a></li>
@@ -249,11 +249,11 @@ if ($deptPerm === 'R') {
                                 <form id="addRankForm" class="form-inline" style="margin-bottom:14px;">
                                     <div class="form-group">
                                         <label>順序</label>
-                                        <input type="number" id="rank_order_new" class="form-control" style="width:90px;" placeholder="如 4" min="1">
+                                        <input type="number" id="rank_order_new" class="form-control" style="width:90px;" placeholder="如 0" min="0">
                                     </div>
                                     <div class="form-group" style="margin-left:8px;">
                                         <label>名稱</label>
-                                        <input type="text" id="rank_name_new" class="form-control" placeholder="如 四階主管">
+                                        <input type="text" id="rank_name_new" class="form-control" style="width:200px;" placeholder="如 最高決策者">
                                     </div>
                                     <button type="submit" class="btn btn-primary" style="margin-left:8px;">新增階級</button>
                                 </form>
@@ -693,7 +693,7 @@ if ($deptPerm === 'R') {
                     : '';
                 if (canEdit) {
                     tbody.append(`<tr data-id="${r.id}">
-                        <td><input type="number" class="form-control input-sm rank-order-edit" value="${escapeHtml(String(r.rank_order))}" style="width:80px;" min="1"></td>
+                        <td><input type="number" class="form-control input-sm rank-order-edit" value="${escapeHtml(String(r.rank_order))}" style="width:80px;" min="0"></td>
                         <td><input type="text" class="form-control input-sm rank-name-edit" value="${escapeHtml(r.name)}"></td>
                         <td>${posChips(r.positions)}</td>
                         <td class="text-nowrap">${assignBtn}<button type="button" class="btn btn-sm btn-success btn-save-rank">儲存</button> ${canDel ? '<button type="button" class="btn btn-sm btn-danger btn-del-rank">刪除</button>' : ''}</td>
@@ -734,19 +734,29 @@ if ($deptPerm === 'R') {
             $('#rank_pos_title').text(`第 ${order} 階 － ${name}`);
             const list = $('#rank_pos_list');
             list.empty();
-            allPositionsWithLevel().forEach(p => {
-                const mine = String(p.level) === order;
-                const cur = p.level === null
-                    ? '<span class="text-muted">目前：非主管</span>'
-                    : (mine ? '<span style="color:#b26a1a;">目前：本階</span>' : `<span class="text-muted">目前：${escapeHtml(rankName(p.level))}</span>`);
-                list.append(`<div class="col-md-4 col-sm-6 col-xs-12" style="margin-bottom:6px;">
-                    <label style="font-weight:normal;">
-                        <input type="checkbox" class="rank-pos-cb" value="${p.id}" ${mine ? 'checked' : ''}>
-                        <span class="badge">${escapeHtml(String(p.sort_order))}</span> ${escapeHtml(p.name)}
-                        <br><small style="margin-left:22px;">${cur}</small>
-                    </label>
-                </div>`);
-            });
+            // 排法比照上方「職稱設定」清單：直向填（第一欄由上到下填滿才換下一欄），每欄 5 筆、最多 4 欄
+            const items = allPositionsWithLevel();
+            const numColumns = Math.max(1, Math.min(4, Math.ceil(items.length / 5)));
+            const perColumn = Math.ceil(items.length / numColumns); // 用算的，欄數上限造成的餘數才不會被丟掉
+            const colClass = 'col-md-' + Math.max(3, Math.floor(12 / numColumns));
+            for (let i = 0; i < numColumns; i++) {
+                const col = $(`<div class="${colClass}"></div>`);
+                for (let j = i * perColumn; j < Math.min((i + 1) * perColumn, items.length); j++) {
+                    const p = items[j];
+                    const mine = String(p.level) === order;
+                    const cur = p.level === null
+                        ? '<span class="text-muted">目前：非主管</span>'
+                        : (mine ? '<span style="color:#b26a1a;">目前：本階</span>' : `<span class="text-muted">目前：${escapeHtml(rankName(p.level))}</span>`);
+                    col.append(`<div style="margin-bottom:6px;">
+                        <label style="font-weight:normal;">
+                            <input type="checkbox" class="rank-pos-cb" value="${p.id}" ${mine ? 'checked' : ''}>
+                            <span class="badge">${escapeHtml(String(p.sort_order))}</span> ${escapeHtml(p.name)}
+                            <br><small style="margin-left:22px;">${cur}</small>
+                        </label>
+                    </div>`);
+                }
+                list.append(col);
+            }
             $('#rankPositionsModal').modal('show');
         });
         $('#rank_pos_all').on('click', function() { $('.rank-pos-cb').prop('checked', true); });
@@ -812,9 +822,9 @@ if ($deptPerm === 'R') {
 
                     if (response.data.length === 0) return;
 
-                    var itemsPerColumn = 5;
-                    var numColumns = Math.ceil(response.data.length / itemsPerColumn);
-                    numColumns = Math.min(numColumns, 4); // 最多 4 欄，若要3欄則改為3
+                    var numColumns = Math.max(1, Math.min(4, Math.ceil(response.data.length / 5))); // 每欄 5 筆、最多 4 欄
+                    // 每欄筆數用算的：職稱超過 20 個時，若固定每欄 5 筆，第 21 筆之後會被欄數上限吃掉而整個看不到
+                    var itemsPerColumn = Math.ceil(response.data.length / numColumns);
                     var colSize = Math.max(3, Math.floor(12 / numColumns)); // 每欄至少佔3格
                     var colClass = 'col-md-' + colSize;
 
@@ -826,7 +836,9 @@ if ($deptPerm === 'R') {
                         for (let j = i * itemsPerColumn; j < Math.min((i + 1) * itemsPerColumn, response.data.length); j++) {
                             var item = response.data[j];
                             const levelText = rankName(item.level);
-                            const levelBadge = item.level
+                            // 注意：階級可以是 0（最高決策者），不可用 item.level 的真假值判斷有沒有設階級
+                            const hasLevel = item.level !== null && item.level !== '' && typeof item.level !== 'undefined';
+                            const levelBadge = hasLevel
                                 ? ` <span class="badge" style="background-color:#b26a1a;">${escapeHtml(levelText)}</span>`
                                 : ` <span class="badge" style="background-color:#c9a06a;">非主管</span>`;
 
@@ -1004,7 +1016,9 @@ if ($deptPerm === 'R') {
                     $('#edit_job_title_id').val(response.data.id);
                     $('#edit_job_title_sort_order').val(response.data.sort_order || 0);
                     $('#edit_job_title_name').val(response.data.name);
-                    $('#edit_job_title_level').val(response.data.level || '');
+                    // 階級可能是 0（最高決策者），用 || '' 會被當成沒設階級而退回「非主管」，一按儲存就把階級洗掉
+                    const lv = response.data.level;
+                    $('#edit_job_title_level').val(lv === null || lv === '' || typeof lv === 'undefined' ? '' : String(lv));
                     $('#editJobTitleModal').modal('show');
                 } else { alert('獲取資料失敗: ' + response.message); }
             });

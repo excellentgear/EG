@@ -1704,7 +1704,8 @@ $(function () {
 
                     // 篩選出主管職稱並按層級分組
                     const supervisorsByLevel = response.data.reduce((acc, title) => {
-                        if (title.level && parseInt(title.level) > 0) {
+                        // 階級可以是 0（最高決策者），用真假值或 > 0 判斷會把它整個漏掉
+                        if (title.level !== null && title.level !== '' && typeof title.level !== 'undefined' && parseInt(title.level) >= 0) {
                             if (!acc[title.level]) acc[title.level] = [];
                             acc[title.level].push(escapeHtml(title.name));
                         }
@@ -2071,7 +2072,9 @@ $(function () {
                     });
                     selHtml = `<select class="form-control input-sm dpo-owner-select" data-dp-id="${row.id}" style="width:auto; display:inline-block; min-width:160px;">${opts}</select>`;
                 }
-                const lvlBadge = row.level ? `<span class="label" style="background-color:#b26a1a;">${levelText(row.level)}</span>` : '<span class="label" style="background-color:#c9a06a;">未設階級</span>';
+                // 階級可以是 0（最高決策者），不可用真假值判斷有沒有設階級
+                const hasLvl = row.level !== null && row.level !== '' && typeof row.level !== 'undefined';
+                const lvlBadge = hasLvl ? `<span class="label" style="background-color:#b26a1a;">${levelText(row.level)}</span>` : '<span class="label" style="background-color:#c9a06a;">未設階級</span>';
 
                 tbody.append(`<tr>
                     <td>${escapeHtml(row.department_name)}</td>
