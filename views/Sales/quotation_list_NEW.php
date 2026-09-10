@@ -346,8 +346,22 @@ body { background:var(--bg); }
 .pt-group-item .pt-del  { color:#e74c3c; cursor:pointer; padding:0 3px; visibility:hidden; }
 .pt-group-item .pt-edit { color:#337ab7; cursor:pointer; padding:0 3px; visibility:hidden; }
 .pt-group-item .pt-move { color:#8a5a2b; cursor:pointer; padding:0 3px; visibility:hidden; }
+/* 設定跳窗內容過長時在跳窗內部捲動，不要把整個跳窗撐得比螢幕還高（底下的內容與按鈕會看不到、也點不到） */
+#quoteSettingsModal > .modal-dialog > .modal-content > .modal-body > .tab-content {
+    max-height: calc(100vh - 215px); overflow-y: auto;
+}
+#qs-tab-proc-tags #pt-group-list,
+#qs-tab-proc-tags #pt-sub-list { max-height:300px; overflow-y:auto; overflow-x:hidden; }
+.pt-group-item .pt-note { color:#C1811F; cursor:pointer; padding:0 3px; visibility:hidden; }
+.pt-group-item .pt-note.pt-note-on { visibility:visible; }
 .pt-group-item .pt-del.pt-locked { color:#c9c2b8; }
-.pt-group-item:hover .pt-del, .pt-group-item:hover .pt-edit, .pt-group-item:hover .pt-move { visibility:visible; }
+.pt-group-item:hover .pt-del, .pt-group-item:hover .pt-edit,
+.pt-group-item:hover .pt-move, .pt-group-item:hover .pt-note { visibility:visible; }
+/* 已設定「點選時帶入料號備註」的標籤 */
+.pt-note-badge {
+    color:#8a5a2b; background:#FFF8ED; border:1px solid #E4D3BC; border-radius:3px;
+    padding:0 4px; margin-left:3px; font-size:10px; white-space:nowrap;
+}
 /* 已被報價單使用的標籤：刪除受保護（改用搬移） */
 .pt-used-badge {
     color:#8a5a2b; background:#FFF3E0; border:1px solid #E4D3BC; border-radius:3px;
@@ -1283,7 +1297,8 @@ body { background:var(--bg); }
                   標籤上的<span class="pt-used-badge">用 N</span>＝已被 N 筆報價單項目使用，<strong>不可刪除</strong>。
                   要換群組請按 <i class="fa fa-share" style="color:#8a5a2b;"></i>「搬移」——標籤編號不變，報價單會跟著走、不會遺失。<br>
                   要把整組標籤<strong>合併成另一個標籤</strong>（報價單項目一起改）請按右上角
-                  <i class="fa fa-random" style="color:#8a5a2b;"></i>「整組移轉」，移轉後可選擇是否移除舊標籤。
+                  <i class="fa fa-random" style="color:#8a5a2b;"></i>「整組移轉」，移轉後可選擇是否移除舊標籤。<br>
+                  按 <i class="fa fa-comment-o" style="color:#C1811F;"></i> 設定<strong>點選標籤時自動帶入的「料號備註」</strong>（可用 <code>{變數}</code>、可一次複製到多個標籤）；標 <span class="pt-note-badge">備註</span> 者已設定，沒設定的點起來與原本完全相同。
                 </div>
                 <div class="input-group input-group-sm" id="pt-sub-form" style="display:none;">
                   <input type="text" id="pt-new-sub" class="form-control" placeholder="新子標籤">
@@ -1398,6 +1413,59 @@ body { background:var(--bg); }
       </div>
     </div>
   </div>
+</div>
+
+<!-- ══ 製程標籤：料號備註設定 Modal ══ -->
+<div class="modal fade" id="ptNoteModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" role="document" style="width:640px;max-width:96%;"><div class="modal-content">
+    <div class="modal-header">
+      <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+      <h4 class="modal-title" style="font-size:15px;">
+        <i class="fa fa-comment-o"></i> 製程標籤的料號備註
+        <small id="ptn-tag-name" style="color:#8a5a2b;margin-left:6px;"></small>
+      </h4>
+    </div>
+    <div class="modal-body" style="padding:12px 16px;">
+      <input type="hidden" id="ptn-sub-tag-id">
+      <div style="font-size:11px;color:#8a5a2b;background:#FFF8ED;border:1px solid #E4D3BC;border-radius:3px;padding:5px 8px;margin-bottom:10px;line-height:1.7;">
+        設定之後，在報價單裡<strong>點選這個製程標籤</strong>就會把下面的備註帶入<strong>該列的「料號備註」</strong>欄位。<br>
+        有 <code>{變數}</code> 的話會先跳出視窗請使用者填值；取消勾選這個標籤時，帶入的那一段會自動移除。<br>
+        <strong>留空存檔＝這個標籤不帶備註</strong>（行為與現在完全相同）。料號備註欄位上限 100 字。
+      </div>
+      <div class="form-group">
+        <label style="font-size:12px;">備註文字</label>
+        <textarea class="form-control input-sm" id="ptn-text" rows="3" maxlength="500"
+                  placeholder="例：熱處理硬度 HRC {下限}~{上限}，附材質證明"></textarea>
+        <small class="text-muted">用 <code>{變數名}</code> 作為佔位符，點標籤時會要求填入</small>
+      </div>
+      <div class="form-group">
+        <label style="font-size:12px;">變數定義</label>
+        <div id="ptn-vars-list" style="margin-bottom:5px;"></div>
+        <button type="button" class="btn btn-xs btn-default" onclick="addNtmplVar('#ptn-vars-list')">
+          <i class="fa fa-plus"></i> 新增變數
+        </button>
+        <small class="text-muted" style="margin-left:6px;">依備註文字中 {} 的順序新增</small>
+      </div>
+      <div id="ptn-preview" style="font-size:12px;color:#666;background:#fafafa;border-left:3px solid #E4D3BC;padding:6px 10px;line-height:1.7;"></div>
+      <div style="margin-top:10px;border-top:1px dashed #ddd;padding-top:8px;">
+        <button type="button" class="btn btn-xs" style="background:#8a5a2b;color:#fff;border-color:#8a5a2b;" onclick="openPtNoteCopy()">
+          <i class="fa fa-copy"></i> 複製到其他標籤…
+        </button>
+        <small class="text-muted" style="margin-left:6px;">
+          先存這個標籤，再把同一份備註複製過去；<strong>複製過去的是各自獨立的一份</strong>，之後每個標籤都能再自行增減。
+        </small>
+      </div>
+    </div>
+    <div class="modal-footer" style="padding:8px 14px;">
+      <button type="button" class="btn btn-danger btn-sm" style="float:left;" onclick="clearPtSubTagNote()">
+        <i class="fa fa-eraser"></i> 清除備註
+      </button>
+      <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
+      <button type="button" class="btn btn-success btn-sm" onclick="savePtSubTagNote()">
+        <i class="fa fa-save"></i> 儲存
+      </button>
+    </div>
+  </div></div>
 </div>
 
 <!-- ══ 客戶管理 Modal ══ -->
@@ -2427,13 +2495,14 @@ function onNtmplVarTypeChange(sel) {
         });
     }
 }
-function addNtmplVar() {
+// listSel 省略＝備註模板設定頁；製程標籤的料號備註設定跳窗傳自己的容器共用同一份實作
+function addNtmplVar(listSel) {
     const $row = $(buildNtmplVarRow(null));
-    $('#ntmpl-vars-list').append($row);
+    $(listSel || '#ntmpl-vars-list').append($row);
 }
-function getNtmplVars() {
+function getNtmplVars(listSel) {
     const vars = [];
-    $('.ntmpl-var-row').each(function() {
+    $(listSel || '#ntmpl-vars-list').find('.ntmpl-var-row').each(function() {
         const key    = $(this).find('.ntmpl-var-key').val().trim();
         const vtype  = $(this).find('.ntmpl-var-type').val();
         const hint   = $(this).find('.ntmpl-var-hint').val().trim();
@@ -2442,8 +2511,9 @@ function getNtmplVars() {
     });
     return vars;
 }
-function renderNtmplVarRows(vars) {
-    $('#ntmpl-vars-list').empty();
+function renderNtmplVarRows(vars, listSel) {
+    const $list = $(listSel || '#ntmpl-vars-list');
+    $list.empty();
     if (!vars || !vars.length) return;
     // 先載入標籤清單，再繪製
     const hasLabel = vars.some(v => v.var_type === 'label_pick');
@@ -2461,20 +2531,46 @@ function renderNtmplVarRows(vars) {
                     $row.find('.ntmpl-var-label').html(html).show();
                     $row.find('.ntmpl-var-hint').hide();
                 }
-                $('#ntmpl-vars-list').append($row);
+                $list.append($row);
             });
         });
     } else {
-        vars.forEach(v => $('#ntmpl-vars-list').append(buildNtmplVarRow(v)));
+        vars.forEach(v => $list.append(buildNtmplVarRow(v)));
     }
 }
 
 // ─ 套用模板（含變數 Swal）─
-function applyNoteTemplate(text, vars, onApplied) {
+// opts 全部省略＝原本的行為（帶入整張報價單的備註欄 #note、不限字數、取消就什麼都不做）；
+// 製程標籤的料號備註共用這一支，只多傳目標欄位、字數上限與取消時的處理。
+function applyNoteTemplate(text, vars, onApplied, opts) {
+    opts = opts || {};
+    const $target  = opts.$target && opts.$target.length ? opts.$target : $('#note');
+    const sep      = opts.sep != null ? opts.sep : '　';
+    const maxLen   = parseInt(opts.maxLen) || 0;
+    const onCancel = opts.onCancel || null;
+    // 合併後的長度檢查：超過上限一律擋下並講清楚還差幾字，
+    // 不可默默帶入——料號備註欄位資料庫只有 100 字元，存檔時會被截斷且不會有任何提示。
+    function overflowMsg(seg) {
+        const cur    = ($target.val() || '').trim();
+        const merged = cur ? cur + sep + seg : seg;
+        if (!maxLen || merged.length <= maxLen) return null;
+        return `料號備註最多 ${maxLen} 字：目前 ${cur.length} 字，這一段要 ${seg.length} 字`
+             + `（含分隔共 ${merged.length} 字），還差 ${merged.length - maxLen} 字。請先精簡料號備註或縮短填入的內容。`;
+    }
+    function putSeg(seg) {
+        const cur = ($target.val() || '').trim();
+        $target.val(cur ? cur + sep + seg : seg).trigger('input');
+        if (onApplied) onApplied(seg);
+    }
     if (!vars || !vars.length) {
-        const cur = $('#note').val().trim();
-        $('#note').val(cur ? cur + '　' + text : text).trigger('input');
-        if (onApplied) onApplied();
+        const bad = overflowMsg(text);
+        if (bad) {
+            // 有 onCancel 的呼叫端自己會跳說明視窗，這裡再跳一次會把它蓋掉
+            if (onCancel) onCancel('overflow', bad);
+            else Swal.fire({ icon:'warning', title:'字數超過上限', text: bad });
+            return;
+        }
+        putSeg(text);
         return;
     }
     // 先取得所有 label_pick 變數需要的子標籤，再建 Swal
@@ -2550,17 +2646,20 @@ function applyNoteTemplate(text, vars, onApplied) {
                 if (!v) { Swal.showValidationMessage(`請填入 ${vars[i].hint || vars[i].key}`); return false; }
                 vals[vars[i].key] = v;
             }
+            // 字數不夠時留在視窗裡講清楚還差幾字，使用者可以當場改短再送出
+            let seg = text;
+            Object.entries(vals).forEach(([k, v]) => { seg = seg.split('{' + k + '}').join(v); });
+            const bad = overflowMsg(seg);
+            if (bad) { Swal.showValidationMessage(bad); return false; }
             return vals;
         }
     }).then(r => {
-        if (!r.isConfirmed) return;
+        if (!r.isConfirmed) { if (onCancel) onCancel('cancel'); return; }
         let result = text;
         Object.entries(r.value).forEach(([k, v]) => {
             result = result.split('{' + k + '}').join(v);
         });
-        const cur = $('#note').val().trim();
-        $('#note').val(cur ? cur + '　' + result : result).trigger('input');
-        if (onApplied) onApplied();
+        putSeg(result);
     });
     }); // end Promise.all.then
 }
@@ -3258,10 +3357,19 @@ function renderPtSubTagList() {
         const dupTag = ptFindDupTag(ptSelectedGroupId, st.sub_tag_name, st.sub_tag_id)
             ? `<small class="pt-dup-badge" title="同群組內有另一個同名標籤（名稱不可重複）；請改名，或用「整組移轉」把兩個標籤併成一個">重複</small>`
             : '';
+        // 已設定「點選標籤時帶入料號備註」的標籤要看得出來，否則設了什麼只能一個一個點開才知道
+        const hasNote  = !!(st.note_text && String(st.note_text).trim());
+        const nVarCnt  = hasNote ? ptTagNoteVars(st).length : 0;
+        const noteTag  = hasNote
+            ? `<small class="pt-note-badge" title="點選這個標籤時會把備註帶入該列的料號備註${nVarCnt?'（有 '+nVarCnt+' 個變數要填）':''}：\n${escapeHtml(String(st.note_text))}">備註${nVarCnt?'・'+nVarCnt+'變數':''}</small>`
+            : '';
         html += `<div class="pt-group-item ${active?'active':''}" data-sid="${st.sub_tag_id}">
             <span class="pt-drag-handle" title="拖移排序">&#9776;</span>
-            <span style="flex:1;text-align:left;">${escapeHtml(st.sub_tag_name)} <small style="color:#aaa;">(${(st.process_nos||[]).length})</small>${usedTag}${dupTag}</span>
+            <span style="flex:1;text-align:left;">${escapeHtml(st.sub_tag_name)} <small style="color:#aaa;">(${(st.process_nos||[]).length})</small>${usedTag}${dupTag}${noteTag}</span>
             <span style="display:flex;gap:2px;align-items:center;">
+                <span class="pt-note ${hasNote?'pt-note-on':''}" data-sid="${st.sub_tag_id}" onclick="event.stopPropagation();editPtSubTagNote($(this).data('sid'))" title="設定點選此標籤時要帶入料號備註的文字">
+                    <i class="fa fa-comment-o"></i>
+                </span>
                 <span class="pt-move" data-sid="${st.sub_tag_id}" onclick="event.stopPropagation();movePtSubTag($(this).data('sid'))" title="搬移到其他群組">
                     <i class="fa fa-share"></i>
                 </span>
@@ -3277,7 +3385,7 @@ function renderPtSubTagList() {
     $('#pt-sub-list').html(html || '<div class="text-muted" style="font-size:11px;">尚無子標籤</div>');
     // 事件委派取代 inline onclick
     $('#pt-sub-list').off('click.ptsub').on('click.ptsub', '.pt-group-item', function(e) {
-        if ($(e.target).closest('.pt-drag-handle, .pt-del, .pt-edit, .pt-move').length) return;
+        if ($(e.target).closest('.pt-drag-handle, .pt-del, .pt-edit, .pt-move, .pt-note').length) return;
         selectPtSubTag($(this).data('sid'));
     });
     if (subs.length > 1) {
@@ -3297,6 +3405,257 @@ function renderPtSubTagList() {
         }
     }
 }
+// ══════════════════════════════════════════════════════
+// 製程子標籤的「料號備註」（點選標籤→跳窗填變數→帶入該列料號備註）
+// ══════════════════════════════════════════════════════
+const PT_NOTE_MAXLEN = 100;   // quotation_item.specification 是 varchar(100)，超過會被資料庫默默截斷
+const PT_NOTE_SEP    = '　';  // 與備註模板同一個分隔字元
+
+// 子標籤的變數定義（DB 存 JSON 字串；壞掉的資料一律當成沒有變數，不可讓整頁掛掉）
+function ptTagNoteVars(st) {
+    if (!st || !st.note_vars) return [];
+    if (Array.isArray(st.note_vars)) return st.note_vars;
+    try { const v = JSON.parse(st.note_vars); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+}
+// 跨群組找子標籤（項目列上的標籤不一定屬於目前設定頁選到的群組）
+function ptFindSubTagById(sid) {
+    for (const g of processTagTree) {
+        const st = (g.sub_tags || []).find(x => x.sub_tag_id === sid);
+        if (st) return st;
+    }
+    return null;
+}
+
+function editPtSubTagNote(sid) {
+    const st = ptFindSubTagById(sid);
+    if (!st) { Swal.fire('提示', '找不到這個子標籤，請重新整理後再試', 'warning'); return; }
+    $('#ptn-sub-tag-id').val(sid);
+    $('#ptn-tag-name').text(st.sub_tag_name);
+    $('#ptn-text').val(st.note_text || '');
+    renderNtmplVarRows(ptTagNoteVars(st), '#ptn-vars-list');
+    ptnUpdatePreview();
+    $('#ptNoteModal').modal('show');
+}
+// 即時提示：目前這段備註幾個字、有哪些變數、有沒有沒定義的變數、料號備註放不放得下
+function ptnUpdatePreview() {
+    const text = ($('#ptn-text').val() || '').trim();
+    if (!text) { $('#ptn-preview').html('<span style="color:#999;">目前留空＝點選這個標籤不會帶入任何料號備註。</span>'); return; }
+    const keys    = (text.match(/\{[^{}]+\}/g) || []).map(s => s.slice(1, -1));
+    const defined = getNtmplVars('#ptn-vars-list').map(v => v.key);
+    // 文字裡有 {M} 卻沒替它定義變數的話，點標籤時不會問、會把「{M}」原樣印進料號備註
+    const missing = keys.filter((k, i) => keys.indexOf(k) === i && defined.indexOf(k) === -1);
+    const miss = missing.length
+        ? `<br><span style="color:#DD5138;">尚未定義的變數：${missing.map(k => '<code>{' + escapeHtml(k) + '}</code>').join('、')}
+             ——點標籤時<b>不會跳出來問</b>，會把 <code>{${escapeHtml(missing[0])}}</code> 原樣寫進料號備註。</span>
+           <button type="button" class="btn btn-xs btn-warning" style="margin-left:6px;" onclick="ptnFillMissingVars()">
+             <i class="fa fa-magic"></i> 自動補上這 ${missing.length} 個
+           </button>` : '';
+    const warn = text.length > PT_NOTE_MAXLEN
+        ? `<br><span style="color:#DD5138;">這段就已經 ${text.length} 字，超過料號備註上限 ${PT_NOTE_MAXLEN} 字，帶入時會被擋下。</span>` : '';
+    $('#ptn-preview').html(
+        `帶入內容：<b>${escapeHtml(text)}</b><br>共 ${text.length} 字（含變數佔位符）`
+        + (keys.length ? `，變數：${keys.map(k => '<code>{' + escapeHtml(k) + '}</code>').join('、')}` : '，無變數')
+        + miss + warn
+    );
+}
+// 一鍵把備註文字裡「還沒定義」的 {變數} 補成變數列（提示文字預設用變數名，可再自行改）
+function ptnFillMissingVars() {
+    const text    = ($('#ptn-text').val() || '').trim();
+    const keys    = (text.match(/\{[^{}]+\}/g) || []).map(s => s.slice(1, -1));
+    const defined = getNtmplVars('#ptn-vars-list').map(v => v.key);
+    keys.filter((k, i) => keys.indexOf(k) === i && defined.indexOf(k) === -1).forEach(k => {
+        const $row = $(buildNtmplVarRow({ key: k, hint: k, var_type: 'text', label_id: null }));
+        $('#ptn-vars-list').append($row);
+    });
+    ptnUpdatePreview();
+}
+$(document).on('input', '#ptn-text', ptnUpdatePreview);
+// 變數列一增減／改名，「尚未定義的變數」提示要跟著重算
+$(document).on('input change', '#ptn-vars-list .ntmpl-var-key, #ptn-vars-list .ntmpl-var-type', ptnUpdatePreview);
+$(document).on('click', '#ptn-vars-list .btn-danger', () => setTimeout(ptnUpdatePreview, 0));
+
+// 取跳窗上目前的內容並驗證（前端即時擋，後端同規則再擋一次＝鐵律8）；不合法回 null 並已跳提示
+function ptnCollect() {
+    const text = ($('#ptn-text').val() || '').trim();
+    const vars = getNtmplVars('#ptn-vars-list');
+    const seen = {};
+    for (const v of vars) {
+        if (seen[v.key]) { Swal.fire('提示', `變數名稱 {${v.key}} 重複了，同一個標籤內不可有兩個同名變數`, 'warning'); return null; }
+        seen[v.key] = true;
+        if (text.indexOf('{' + v.key + '}') === -1) {
+            Swal.fire('提示', `備註文字中找不到變數 {${v.key}} 的佔位符`, 'warning');
+            return null;
+        }
+    }
+    return { text, vars };
+}
+function savePtSubTagNote(opts) {
+    opts = opts || {};
+    const sid = parseInt($('#ptn-sub-tag-id').val());
+    if (!sid) return;
+    const d = ptnCollect();
+    if (!d) return;
+    $.post(API_URL, {
+        action: 'save_process_sub_tag_note',
+        sub_tag_id: sid,
+        note_text: d.text,
+        note_vars: JSON.stringify(d.vars)
+    }, res => {
+        if (!res.success) { Swal.fire('錯誤', res.message || '儲存失敗', 'error'); return; }
+        if (!opts.keepOpen) $('#ptNoteModal').modal('hide');
+        loadProcessTagTree(() => {
+            renderPtSubTagList();
+            if (opts.then) opts.then(d);
+        });
+        if (!opts.keepOpen) {
+            Swal.fire({ toast:true, position:'top-end', icon:'success', title: res.message || '已儲存', showConfirmButton:false, timer:1800 });
+        }
+    });
+}
+function clearPtSubTagNote() {
+    $('#ptn-text').val('');
+    $('#ptn-vars-list').empty();
+    ptnUpdatePreview();
+    savePtSubTagNote();
+}
+
+// ── 把這份料號備註一次複製到多個製程標籤 ──────────────
+// 複製出去的是各自獨立的一份（不是連動），所以之後每個標籤都能再自行增減。
+let _ptnCopySel = {};   // sub_tag_id → 標籤名稱
+function openPtNoteCopy() {
+    const d = ptnCollect();
+    if (!d) return;
+    if (!d.text) { Swal.fire('提示', '備註文字是空的，沒有東西可以複製', 'warning'); return; }
+    // 先把來源標籤自己存起來，否則會出現「複製過去了、來源這一個卻沒存到」
+    savePtSubTagNote({ keepOpen: true, then: dd => ptnCopyPicker(dd) });
+}
+function ptnCopyWords() {
+    return ($('#ptn-copy-q').val() || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+function ptnCopyRender() {
+    const srcSid = parseInt($('#ptn-sub-tag-id').val());
+    const words  = ptnCopyWords();
+    let total = 0, shown = 0, html = '';
+    processTagTree.forEach(g => {
+        const rows = (g.sub_tags || []).filter(st => st.sub_tag_id !== srcSid);
+        total += rows.length;
+        const hay = st => (g.group_name + ' ' + st.sub_tag_name).toLowerCase();
+        const hit = rows.filter(st => words.every(w => hay(st).indexOf(w) !== -1));
+        if (!hit.length) return;
+        shown += hit.length;
+        html += `<div style="margin:6px 0 2px;font-size:11px;color:#8a5a2b;font-weight:700;">
+                   ${escapeHtml(g.group_name)}
+                   <a href="javascript:;" class="ptn-copy-gall" data-gid="${g.group_id}" style="font-weight:400;margin-left:6px;">全選本組</a>
+                 </div>`;
+        hit.forEach(st => {
+            const has = !!(st.note_text && String(st.note_text).trim());
+            html += `<label style="display:block;font-weight:400;font-size:12px;margin:0 0 2px;padding:2px 4px;border-radius:3px;${has?'background:#FFF8ED;':''}">
+                <input type="checkbox" class="ptn-copy-cb" value="${st.sub_tag_id}"
+                       data-name="${escapeHtml(st.sub_tag_name)}" data-gid="${g.group_id}"
+                       ${_ptnCopySel[st.sub_tag_id] ? 'checked' : ''} style="margin-right:5px;">
+                ${escapeHtml(st.sub_tag_name)}
+                ${has ? '<small class="pt-note-badge" title="這個標籤已經有備註了，複製會覆蓋掉">已有備註</small>' : ''}
+            </label>`;
+        });
+    });
+    $('#ptn-copy-list').html(html || '<div class="text-muted" style="font-size:12px;padding:8px;">沒有符合的標籤</div>');
+    $('#ptn-copy-count').text(`顯示 ${shown} / 共 ${total} 個標籤`);
+    ptnCopySyncChips();
+}
+// 已選的一律用 chip 列在上面：篩選後被藏起來的也看得到，才不會「畫面上看不到卻被一起改掉」
+function ptnCopySyncChips() {
+    const ids = Object.keys(_ptnCopySel);
+    if (!ids.length) {
+        $('#ptn-copy-chips').html('<span style="color:#999;font-size:11px;">尚未選取任何標籤</span>');
+        $('#ptn-copy-warn').empty();
+        return;
+    }
+    $('#ptn-copy-chips').html(ids.map(id =>
+        `<span class="proc-tag" data-sid="${id}">${escapeHtml(_ptnCopySel[id])}<span class="proc-tag-x ptn-copy-x" data-sid="${id}">&times;</span></span>`
+    ).join(''));
+    const dup = ids.filter(id => {
+        const st = ptFindSubTagById(parseInt(id));
+        return st && st.note_text && String(st.note_text).trim();
+    }).length;
+    $('#ptn-copy-warn').html(`已選 <b>${ids.length}</b> 個`
+        + (dup ? `，其中 <b style="color:#DD5138;">${dup} 個已經有備註，複製會直接覆蓋掉</b>` : '')
+        + '。');
+}
+function ptnCopyPicker(d) {
+    _ptnCopySel = {};
+    Swal.fire({
+        title: '複製料號備註到其他標籤',
+        width: 660,
+        html: `<div style="text-align:left;font-size:12px;">
+            <div style="background:#FFF8ED;border:1px solid #E4D3BC;border-radius:3px;padding:5px 8px;margin-bottom:8px;line-height:1.6;">
+              要複製的內容：<b>${escapeHtml(d.text)}</b>
+              ${d.vars.length ? `<br>變數：${d.vars.map(v => '<code>{' + escapeHtml(v.key) + '}</code>').join('、')}` : ''}
+              <br><span style="color:#8a5a2b;">複製過去的是各自獨立的一份，之後每個標籤都可以再自行增減。</span>
+            </div>
+            <input type="text" id="ptn-copy-q" class="form-control input-sm" placeholder="輸入標籤或群組名稱篩選…" style="margin-bottom:6px;">
+            <div id="ptn-copy-chips" style="min-height:24px;margin-bottom:4px;line-height:1.9;"></div>
+            <div id="ptn-copy-warn" style="font-size:11px;color:#8a5a2b;margin-bottom:4px;"></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+              <small id="ptn-copy-count" class="text-muted"></small>
+              <span>
+                <a href="javascript:;" id="ptn-copy-all" style="font-size:11px;">全選目前顯示的</a>
+                <a href="javascript:;" id="ptn-copy-none" style="font-size:11px;margin-left:8px;">清除選取</a>
+              </span>
+            </div>
+            <div id="ptn-copy-list" style="max-height:300px;overflow-y:auto;border:1px solid #eee;border-radius:3px;padding:4px 6px;"></div>
+        </div>`,
+        showCancelButton: true,
+        confirmButtonText: '複製過去',
+        cancelButtonText: '取消',
+        focusConfirm: false,
+        didOpen: () => {
+            ptnCopyRender();
+            $('#ptn-copy-q').on('input', ptnCopyRender);
+            $('#ptn-copy-list').on('change', '.ptn-copy-cb', function () {
+                if (this.checked) _ptnCopySel[this.value] = $(this).data('name');
+                else delete _ptnCopySel[this.value];
+                ptnCopySyncChips();
+            });
+            $('#ptn-copy-list').on('click', '.ptn-copy-gall', function () {
+                $('#ptn-copy-list').find('.ptn-copy-cb[data-gid="' + $(this).data('gid') + '"]').each(function () {
+                    this.checked = true; _ptnCopySel[this.value] = $(this).data('name');
+                });
+                ptnCopySyncChips();
+            });
+            $('#ptn-copy-all').on('click', () => {
+                $('#ptn-copy-list .ptn-copy-cb').each(function () {
+                    this.checked = true; _ptnCopySel[this.value] = $(this).data('name');
+                });
+                ptnCopySyncChips();
+            });
+            $('#ptn-copy-none').on('click', () => { _ptnCopySel = {}; ptnCopyRender(); });
+            $('#ptn-copy-chips').on('click', '.ptn-copy-x', function () {
+                delete _ptnCopySel[$(this).data('sid')];
+                ptnCopyRender();
+            });
+        },
+        preConfirm: () => {
+            const ids = Object.keys(_ptnCopySel).map(x => parseInt(x));
+            if (!ids.length) { Swal.showValidationMessage('請至少選擇一個要複製過去的標籤'); return false; }
+            return new Promise(resolve => {
+                $.post(API_URL, {
+                    action: 'copy_process_sub_tag_note',
+                    sub_tag_ids: JSON.stringify(ids),
+                    note_text: d.text,
+                    note_vars: JSON.stringify(d.vars)
+                }, res => {
+                    if (!res.success) { Swal.showValidationMessage(res.message || '複製失敗'); resolve(false); return; }
+                    resolve(res);
+                }).fail(() => { Swal.showValidationMessage('連線失敗，請再試一次'); resolve(false); });
+            });
+        }
+    }).then(r => {
+        if (!r.isConfirmed || !r.value) return;
+        loadProcessTagTree(() => renderPtSubTagList());
+        Swal.fire({ icon:'success', title:'已複製', text: r.value.message || '' });
+    });
+}
+
 function addPtSubTag() {
     if (!ptSelectedGroupId) return;
     const name = $('#pt-new-sub').val().trim();
@@ -6482,9 +6841,78 @@ function renderProcL2($cell, gid, setActive) {
     $cell.find('.proc-direct-l2').html(html || '<small class="text-muted" style="font-size:10px;">此群組尚無子標籤</small>');
 }
 
+// ── 製程標籤帶入「料號備註」──────────────────────────
+// 只有在設定頁替該標籤填了備註文字時才會動作；沒設定的標籤點起來與原本完全相同。
+// 這一列已由哪個標籤帶入了哪一段文字，記在 cell 的 data 上（取消標籤時才知道要拿掉哪一段）
+function ptRowNoteMap($cell)          { return $cell.data('ptNoteSeg') || {}; }
+function ptRowNoteSet($cell, sid, s)  { const m = ptRowNoteMap($cell); m[sid] = s; $cell.data('ptNoteSeg', m); }
+function ptRowNoteDel($cell, sid)     { const m = ptRowNoteMap($cell); delete m[sid]; $cell.data('ptNoteSeg', m); }
+function ptSpecInput($cell)           { return $cell.closest('tr.item-row').find('input[name="specification"]'); }
+
+// 取消選取（供「填變數時按取消」用；規則比照 × 移除 chip）
+function ptUnselectSubTag($cell, sid) {
+    const selected = getProcSelectedSubTags($cell).filter(x => x !== sid);
+    $cell.find('.proc-subtags-hidden').val(selected.join(','));
+    if (!selected.length) $cell.find('.proc-group-type-hidden').val('single_process');
+    syncProcHiddenFromSubTags($cell);
+    const activeGid = parseInt($cell.find('.proc-l1-btn.active').data('gid')) || (processTagTree[0] && processTagTree[0].group_id);
+    if (activeGid) renderProcL2($cell, activeGid, false);
+    renderProcSelectedChips($cell);
+    const $ir = $cell.closest('tr.item-row');
+    if ($ir.length && typeof renderHqChips === 'function') renderHqChips($ir);
+    scheduleDupCheck(true);
+}
+
+// 勾選標籤 → 帶入料號備註（有 {變數} 先跳窗填值）
+function ptApplyTagNote($cell, sid) {
+    const st = ptFindSubTagById(sid);
+    if (!st || !st.note_text || !String(st.note_text).trim()) return;
+    const $spec = ptSpecInput($cell);
+    if (!$spec.length) return;
+    applyNoteTemplate(String(st.note_text), ptTagNoteVars(st),
+        seg => ptRowNoteSet($cell, sid, seg),
+        {
+            $target: $spec,
+            sep:     PT_NOTE_SEP,
+            maxLen:  PT_NOTE_MAXLEN,
+            onCancel: (reason, msg) => {
+                // 使用者拍板：沒填完就不算選這個標籤，而且要講清楚標籤為什麼自己不見了
+                ptUnselectSubTag($cell, sid);
+                Swal.fire({
+                    icon: 'info',
+                    title: reason === 'overflow' ? '料號備註放不下，已自動移除標籤' : '未填寫資料，已自動移除標籤',
+                    html: `「<b>${escapeHtml(st.sub_tag_name)}</b>」要填寫料號備註才算選取，`
+                        + (reason === 'overflow' ? `但${escapeHtml(msg || '料號備註會超過字數上限')}` : '因為沒有填完，')
+                        + '已自動取消這個標籤。<br><small style="color:#888;">要重新選取請再點一次這個標籤。</small>'
+                });
+            }
+        });
+}
+
+// 取消標籤 → 把當初帶進去的那一段拿掉（使用者自己打的字不動）
+function ptRemoveTagNote($cell, sid) {
+    let seg = ptRowNoteMap($cell)[sid];
+    if (seg == null) {
+        // 重新開啟的舊報價單沒有這份對照；沒有變數的標籤文字固定，還認得出來，有變數的就不動它
+        const st = ptFindSubTagById(sid);
+        if (st && st.note_text && !ptTagNoteVars(st).length) seg = String(st.note_text);
+    }
+    ptRowNoteDel($cell, sid);
+    if (!seg) return;
+    const $spec = ptSpecInput($cell);
+    if (!$spec.length) return;
+    const cur = $spec.val() || '';
+    let next = cur;
+    if      (cur.indexOf(PT_NOTE_SEP + seg) !== -1) next = cur.split(PT_NOTE_SEP + seg).join('');
+    else if (cur.indexOf(seg + PT_NOTE_SEP) !== -1) next = cur.split(seg + PT_NOTE_SEP).join('');
+    else if (cur.indexOf(seg) !== -1)               next = cur.split(seg).join('');
+    if (next !== cur) $spec.val(next.trim()).trigger('input');
+}
+
 // 點擊子標籤：toggle 選取
 function toggleProcSubTag($cell, subTagId, groupId) {
     let selected = getProcSelectedSubTags($cell);
+    const turningOn = !selected.includes(subTagId);
     if (selected.includes(subTagId)) {
         selected = selected.filter(x => x !== subTagId);
     } else {
@@ -6503,6 +6931,9 @@ function toggleProcSubTag($cell, subTagId, groupId) {
     const $hqIr = $cell.closest('tr.item-row');
     if ($hqIr.length && typeof renderHqChips === 'function') renderHqChips($hqIr);
     scheduleDupCheck(true);   // 製程也是重複比對的條件之一
+    // 這個標籤有設定料號備註時才會動作（沒設定的標籤與原本完全相同）
+    if (turningOn) ptApplyTagNote($cell, subTagId);
+    else           ptRemoveTagNote($cell, subTagId);
 }
 
 // 渲染已選子標籤 chips
@@ -6536,6 +6967,7 @@ function removeProcSubTagChip(el) {
     const $hqIr = $cell.closest('tr.item-row');
     if ($hqIr.length && typeof renderHqChips === 'function') renderHqChips($hqIr);
     scheduleDupCheck(true);   // 製程也是重複比對的條件之一
+    ptRemoveTagNote($cell, sid);   // 這個標籤帶進料號備註的那一段一併移除
 }
 
 // ══════════════════════════════════════════════════════

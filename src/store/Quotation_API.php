@@ -282,6 +282,51 @@ function qtag_can_settings(PDO $pdo, $uid): bool
     } catch (Exception $e) { return false; }
 }
 
+// 製程子標籤的「料號備註」欄位（點選標籤時跳窗填變數、結果帶入該列料號備註）。
+// init_process_tags 與 get_process_tag_tree 是兩支各自獨立的請求、前端也沒有先後保證，
+// 所以讀取端要自己確保欄位在，否則首次載入有機會撞上 Unknown column 讓整棵標籤樹讀不到＝製程欄整片空白。
+function qtag_ensure_note_cols(PDO $pdo): void
+{
+    static $done = false;
+    if ($done) return;
+    try {
+        $has = $pdo->query("SHOW COLUMNS FROM quotation_process_sub_tag LIKE 'note_text'")->fetch(PDO::FETCH_ASSOC);
+        $done = true;   // 查得到表才算確認過；表還沒建起來時下次請求再試
+        if (!$has) {
+            try { $pdo->exec("ALTER TABLE quotation_process_sub_tag ADD COLUMN note_text VARCHAR(500) NULL COMMENT '點選此標籤時帶入料號備註的文字' AFTER sub_tag_name"); } catch (PDOException $e) {}
+            try { $pdo->exec("ALTER TABLE quotation_process_sub_tag ADD COLUMN note_vars TEXT NULL COMMENT '料號備註變數定義 JSON' AFTER note_text"); } catch (PDOException $e) {}
+        }
+    } catch (Exception $e) { /* 表尚未建立：交給 init_process_tags */ }
+}
+
+// 料號備註的變數定義驗證＋正規化（設定單一標籤與複製到多個標籤共用同一份規則，不各寫一份）。
+// 前端已即時擋一次，這裡同規則再擋一次（鐵律8）：變數在備註文字裡找不到 {佔位符} 的話，
+// 使用者填了值也永遠不會被替換掉，畫面上不會有任何錯誤、只是備註裡永遠留著 {變數名}。
+function qtag_clean_note_vars(string $text, $rawJson): array
+{
+    $vars = json_decode(trim((string)$rawJson), true);
+    if (!is_array($vars)) $vars = [];
+    if ($text === '') return [];   // 清空備註文字＝這個標籤不再帶備註，變數一併清掉
+    $clean = [];
+    $seen  = [];
+    foreach ($vars as $v) {
+        if (!is_array($v)) continue;
+        $k = trim((string)($v['key'] ?? ''));
+        if ($k === '') continue;
+        if (isset($seen[$k])) throw new Exception('變數名稱 {' . $k . '} 重複了，同一個標籤內不可有兩個同名變數');
+        $seen[$k] = true;
+        if (mb_strpos($text, '{' . $k . '}') === false) throw new Exception('備註文字中找不到變數 {' . $k . '} 的佔位符');
+        $clean[] = [
+            'key'      => mb_substr($k, 0, 20),
+            'hint'     => mb_substr(trim((string)($v['hint'] ?? '')), 0, 30),
+            'var_type' => (($v['var_type'] ?? 'text') === 'label_pick') ? 'label_pick' : 'text',
+            'label_id' => (isset($v['label_id']) && $v['label_id'] !== '' && $v['label_id'] !== null)
+                          ? intval($v['label_id']) : null,
+        ];
+    }
+    return $clean;
+}
+
 
 // ══════════════════════════════════════════════════════════════════════════
 // 報價單快速轉移頁的「報價單號搜尋 → 修改料號／料號ID／製程標籤」（2026-09-03）
@@ -3198,6 +3243,8 @@ try {
                 created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
                 INDEX idx_group (group_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+            // 相容舊表：補加「點選標籤時帶入料號備註」的兩個欄位
+            qtag_ensure_note_cols($pdo);
             $pdo->exec("CREATE TABLE IF NOT EXISTS quotation_process_tag_map (
                 id         INT AUTO_INCREMENT PRIMARY KEY,
                 sub_tag_id INT NOT NULL,
@@ -3211,6 +3258,7 @@ try {
 
         case 'get_process_tag_tree':
             // 回傳完整三層樹：群組 → 子標籤 → 製程清單
+            qtag_ensure_note_cols($pdo);
             $groups = $pdo->query("
                 SELECT group_id, group_name, group_type, sort_order
                 FROM quotation_process_tag_group
@@ -3219,6 +3267,7 @@ try {
 
             $subTags = $pdo->query("
                 SELECT s.sub_tag_id, s.group_id, s.sub_tag_name, s.sort_order,
+                       s.note_text, s.note_vars,
                        GROUP_CONCAT(m.process_no ORDER BY m.sort_order) AS process_nos
                 FROM quotation_process_sub_tag s
                 LEFT JOIN quotation_process_tag_map m ON m.sub_tag_id = s.sub_tag_id
@@ -3335,6 +3384,69 @@ try {
                 $response = ['success' => true, 'message' => '已新增', 'sub_tag_id' => (int)$pdo->lastInsertId()];
             }
             break;
+
+        // 設定「點選這個子標籤時要帶入料號備註的文字」（含 {變數} 定義）。
+        // 刻意獨立一個 action，不併進 save_process_sub_tag（那支是改名／排序，兩個寫入點規則會走鐘，
+        // 而且改名時若一併寫這兩欄，沒帶參數的舊呼叫會把已設定的備註整段洗掉）。
+        case 'save_process_sub_tag_note': {
+            if (!qtag_can_settings($pdo, $user_id)) throw new Exception('您沒有報價單設定權限，不可設定製程標籤的料號備註');
+            qtag_ensure_note_cols($pdo);
+            $sid = intval($_POST['sub_tag_id'] ?? 0);
+            if (!$sid) throw new Exception('缺少 sub_tag_id');
+            $nq = $pdo->prepare("SELECT sub_tag_name FROM quotation_process_sub_tag WHERE sub_tag_id=?");
+            $nq->execute([$sid]);
+            if ($nq->fetchColumn() === false) throw new Exception('找不到這個子標籤，請重新整理頁面後再試');
+
+            $text = trim($_POST['note_text'] ?? '');
+            if (mb_strlen($text) > 500) throw new Exception('備註文字最多 500 字');
+            $clean = qtag_clean_note_vars($text, $_POST['note_vars'] ?? '[]');
+
+            $pdo->prepare("UPDATE quotation_process_sub_tag SET note_text=?, note_vars=? WHERE sub_tag_id=?")
+                ->execute([
+                    $text === '' ? null : $text,
+                    $clean ? json_encode($clean, JSON_UNESCAPED_UNICODE) : null,
+                    $sid,
+                ]);
+            $response = ['success' => true, 'message' => $text === '' ? '已清除這個標籤的料號備註' : '已儲存'];
+            break;
+        }
+
+        // 把一份料號備註（文字＋變數）一次複製到多個製程標籤。
+        // 複製出去的是各自獨立的一份，之後每個標籤都能再自行增減，不會互相連動。
+        case 'copy_process_sub_tag_note': {
+            if (!qtag_can_settings($pdo, $user_id)) throw new Exception('您沒有報價單設定權限，不可設定製程標籤的料號備註');
+            qtag_ensure_note_cols($pdo);
+            $ids = json_decode($_POST['sub_tag_ids'] ?? '[]', true);
+            if (!is_array($ids)) $ids = [];
+            $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+            if (!$ids) throw new Exception('請先選擇要複製到哪些標籤');
+            if (count($ids) > 200) throw new Exception('一次最多複製到 200 個標籤');
+
+            $text = trim($_POST['note_text'] ?? '');
+            if ($text === '') throw new Exception('備註文字是空的，沒有東西可以複製');
+            if (mb_strlen($text) > 500) throw new Exception('備註文字最多 500 字');
+            $clean = qtag_clean_note_vars($text, $_POST['note_vars'] ?? '[]');
+
+            // 只寫真的存在的標籤（前端清單是快取，可能已被別人刪掉）
+            $ph  = implode(',', array_fill(0, count($ids), '?'));
+            $chk = $pdo->prepare("SELECT sub_tag_id FROM quotation_process_sub_tag WHERE sub_tag_id IN ($ph) AND is_active=1");
+            $chk->execute($ids);
+            $valid = array_map('intval', $chk->fetchAll(PDO::FETCH_COLUMN));
+            if (!$valid) throw new Exception('選到的標籤都不存在了，請重新整理頁面後再試');
+
+            $vph = implode(',', array_fill(0, count($valid), '?'));
+            $upd = $pdo->prepare("UPDATE quotation_process_sub_tag SET note_text=?, note_vars=? WHERE sub_tag_id IN ($vph)");
+            $upd->execute(array_merge([$text, $clean ? json_encode($clean, JSON_UNESCAPED_UNICODE) : null], $valid));
+
+            $response = [
+                'success' => true,
+                'applied' => count($valid),
+                'skipped' => count($ids) - count($valid),
+                'message' => '已複製到 ' . count($valid) . ' 個標籤'
+                             . (count($ids) > count($valid) ? '（' . (count($ids) - count($valid)) . ' 個已不存在，略過）' : ''),
+            ];
+            break;
+        }
 
         case 'delete_process_sub_tag':
             if (!qtag_can_settings($pdo, $user_id)) throw new Exception('您沒有報價單設定權限，不可刪除製程標籤');
