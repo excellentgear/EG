@@ -553,7 +553,28 @@ LBLSQL;
             static $hasBomTbl=null,$hasAttachTbl=null;
             if ($hasBomTbl===null){ try{ $hasBomTbl=(bool)$pdo->query("SHOW TABLES LIKE 'bom'")->fetchColumn(); }catch(Exception $e){ $hasBomTbl=false; } }
             if ($hasAttachTbl===null){ try{ $hasAttachTbl=(bool)$pdo->query("SHOW TABLES LIKE 'part_attachments'")->fetchColumn(); }catch(Exception $e){ $hasAttachTbl=false; } }
-            $drawSel   = $hasBomTbl ? "(SELECT EXISTS(SELECT 1 FROM bom WHERE d_id=si.d_id)) AS has_drawing," : "0 AS has_drawing,";
+            // 有無圖面：bom.d_id 是 utf8mb3、stock_items.d_id 是 utf8mb4，兩邊直接 `=` 比對時 MySQL 必須把
+            // bom.d_id 逐列轉成 utf8mb4 才能比 → bom 的索引整個用不到，變成「每一列庫存都全表掃一次 bom」
+            // （實測整支列表查詢 2.9 秒，其中 2.85 秒都花在這裡；把要比的值轉成 bom 那一邊的字元集後 0.05 秒，
+            //   全表 1,494 筆逐列比對結果完全相同）。字元集相同時維持原本寫法不加 CONVERT——
+            // CONVERT 出來的是該字元集的「預設定序」，跟欄位定序不同一樣會讓索引失效。
+            static $bomDidCS = null;
+            if ($bomDidCS === null) {
+                $bomDidCS = '';
+                try {
+                    $csq = $pdo->query("SELECT
+                            MAX(CASE WHEN TABLE_NAME='bom' THEN CHARACTER_SET_NAME END) AS bom_cs,
+                            MAX(CASE WHEN TABLE_NAME='stock_items' THEN CHARACTER_SET_NAME END) AS si_cs
+                        FROM information_schema.COLUMNS
+                        WHERE TABLE_SCHEMA=DATABASE() AND COLUMN_NAME='d_id' AND TABLE_NAME IN ('bom','stock_items')")->fetch(PDO::FETCH_ASSOC);
+                    if ($csq && !empty($csq['bom_cs']) && !empty($csq['si_cs'])
+                        && $csq['bom_cs'] !== $csq['si_cs'] && preg_match('/^[a-z0-9_]+$/', $csq['bom_cs'])) {
+                        $bomDidCS = $csq['bom_cs'];
+                    }
+                } catch(Exception $e2){}
+            }
+            $bomDidCmp = $bomDidCS ? "CONVERT(si.d_id USING $bomDidCS)" : "si.d_id";
+            $drawSel   = $hasBomTbl ? "(SELECT EXISTS(SELECT 1 FROM bom WHERE bom.d_id=$bomDidCmp)) AS has_drawing," : "0 AS has_drawing,";
             $attachSel = ($hasAttachTbl && $hasDsid) ? "(SELECT EXISTS(SELECT 1 FROM part_attachments WHERE d_id=si.d_setting_id AND deleted_at IS NULL)) AS has_attach," : "0 AS has_attach,";
 
             $sortColSql = ($sortCol==='client_name' && $hasDsid) ? 'clp.customer' : "si.`$sortCol`";
@@ -1017,6 +1038,30 @@ LBLSQL;
                     $spr=$sp->fetch(PDO::FETCH_ASSOC);
                     if ($spr) { $spv=json_decode($spr['param_value'],true); if (!empty($spv['years'])) $ey=(int)$spv['years']; }
                 } catch(Exception $e2){}
+            }
+
+            // ── 料號一定要綁到料號主檔（前端擋一次、後端同規則再擋一次＝鐵律8）──────────────
+            // stock_items.d_id 存的是料號「文字」，d_setting_id 才是主檔 ID；只打字不從清單挑，
+            // 以前會安靜地存成未綁定（客戶欄也跟著空白）。
+            // 相容既有資料：既有品項且料號沒被改過、原本就沒綁的，維持放行不擋（避免影響現有使用者日常操作）；
+            // 那些舊資料由「料號綁定檢查」工具（管理員）另行補綁。
+            if (!$d_setting_id) {
+                $mt = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=?");
+                $mt->execute([$d_id]);
+                $dsMatches = $mt->fetchAll(PDO::FETCH_COLUMN);
+                $isLegacyUnbound = false;
+                if ($id > 0) {
+                    $ost = $pdo->prepare("SELECT d_id, d_setting_id FROM stock_items WHERE stock_item_id=?");
+                    $ost->execute([$id]);
+                    $oldSelf = $ost->fetch(PDO::FETCH_ASSOC);
+                    $isLegacyUnbound = ($oldSelf && (string)$oldSelf['d_id'] === (string)$d_id && empty($oldSelf['d_setting_id']));
+                }
+                if (count($dsMatches) === 1) {
+                    $d_setting_id = (int)$dsMatches[0];   // 完全相同且只有一筆＝無歧義，直接補綁
+                } elseif (!$isLegacyUnbound) {
+                    if (count($dsMatches) === 0) throw new Exception('查無此料號「'.$d_id.'」，請至基本設定內新增料號');
+                    throw new Exception('料號「'.$d_id.'」在料號資料表中有 '.count($dsMatches).' 筆，請從清單中選擇要綁定的那一筆');
+                }
             }
 
             // 只加入資料表中存在的欄位
@@ -2103,6 +2148,94 @@ LBLSQL;
         } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
 
+    }
+
+    // ── 料號「完全相同」比對：給存檔前的綁定檢查用（search_d_id 是模糊搜尋、只回前 15 筆，數不準）──
+    if ($_POST['action'] === 'resolve_d_id') {
+        try {
+            $t = trim($_POST['d_id'] ?? '');
+            if ($t === '') { echo json_encode(['success'=>true,'matches'=>[]]); exit; }
+            $st = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Spec_No, d.Revision, d.Remark, d.Customer_Id, c.customer AS client_name
+                                 FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id
+                                 WHERE d.D_Setting_Id = ? ORDER BY d.d_id LIMIT 50");
+            $st->execute([$t]);
+            echo json_encode(['success'=>true,'matches'=>$st->fetchAll(PDO::FETCH_ASSOC)]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ── 料號綁定檢查（管理員）：列出未綁定料號ID的庫存品項＋完全同名的候選料號 ──────────
+    if ($_POST['action'] === 'unbound_parts_list') {
+        try {
+            // 注意：$PAGE_PERM 只有非 POST（開頁面）時才會去查，AJAX 進來時它還是預設值 'A'，
+            // 拿它守門等於誰都放行 → 一律比照 purge_stock_item 當場查一次
+            $chkPerm = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'");
+            $chkPerm->execute([$userId]); $permRow2 = $chkPerm->fetch(PDO::FETCH_ASSOC);
+            if (!$permRow2 || $permRow2['permission'] !== 'A') throw new Exception('權限不足，需要 A 級權限');
+            $rows = $pdo->query("SELECT si.stock_item_id, si.d_id, si.qty, si.item_type, si.storage_location,
+                                        COALESCE(c.category_name,'') AS category_name
+                                 FROM stock_items si
+                                 LEFT JOIN stock_item_categories c ON c.category_id=si.item_type
+                                 WHERE si.is_active=1 AND (si.d_setting_id IS NULL OR si.d_setting_id=0)
+                                 ORDER BY si.d_id")->fetchAll(PDO::FETCH_ASSOC);
+            // 一次撈出所有候選（同名料號可能有多筆主檔：不同客戶／版次／備註）
+            $out = [];
+            if ($rows) {
+                $names = array_values(array_unique(array_map(fn($r)=>$r['d_id'], $rows)));
+                $ph = implode(',', array_fill(0, count($names), '?'));
+                $cs = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Spec_No, d.Revision, d.Remark, d.Customer_Id, c.customer AS client_name
+                                     FROM d_setting d LEFT JOIN customer_list c ON c.customer_id=d.Customer_Id
+                                     WHERE d.D_Setting_Id IN ($ph) ORDER BY d.d_id");
+                $cs->execute($names);
+                $byName = [];
+                foreach ($cs->fetchAll(PDO::FETCH_ASSOC) as $c2) { $byName[$c2['D_Setting_Id']][] = $c2; }
+                foreach ($rows as $r) {
+                    $r['candidates'] = $byName[$r['d_id']] ?? [];
+                    $out[] = $r;
+                }
+            }
+            echo json_encode(['success'=>true,'data'=>$out]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ── 料號綁定檢查（管理員）：批次補綁 ──────────────────────────────────────
+    if ($_POST['action'] === 'unbound_parts_bind') {
+        try {
+            // 注意：$PAGE_PERM 只有非 POST（開頁面）時才會去查，AJAX 進來時它還是預設值 'A'，
+            // 拿它守門等於誰都放行 → 一律比照 purge_stock_item 當場查一次
+            $chkPerm = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND module_code='stock'");
+            $chkPerm->execute([$userId]); $permRow2 = $chkPerm->fetch(PDO::FETCH_ASSOC);
+            if (!$permRow2 || $permRow2['permission'] !== 'A') throw new Exception('權限不足，需要 A 級權限');
+            $pairs = json_decode($_POST['pairs'] ?? '[]', true);
+            if (!is_array($pairs) || !$pairs) throw new Exception('未選擇要綁定的資料');
+            $pdo->beginTransaction();
+            $done = 0; $skipped = [];
+            $selSt = $pdo->prepare("SELECT d_id, d_setting_id FROM stock_items WHERE stock_item_id=? AND is_active=1");
+            $dsSt  = $pdo->prepare("SELECT D_Setting_Id FROM d_setting WHERE d_id=?");
+            $updSt = $pdo->prepare("UPDATE stock_items SET d_setting_id=?, Modified_By=?, Modified_At=NOW() WHERE stock_item_id=?");
+            foreach ($pairs as $pr) {
+                $sid = intval($pr['stock_item_id'] ?? 0);
+                $dsid= intval($pr['d_setting_id'] ?? 0);
+                if (!$sid || !$dsid) { $skipped[] = "#$sid 參數不完整"; continue; }
+                $selSt->execute([$sid]); $srow = $selSt->fetch(PDO::FETCH_ASSOC);
+                if (!$srow) { $skipped[] = "#$sid 查無此品項"; continue; }
+                if (!empty($srow['d_setting_id'])) { $skipped[] = $srow['d_id'].'：已經綁定過，請重新整理'; continue; }
+                $dsSt->execute([$dsid]); $dname = $dsSt->fetchColumn();
+                if ($dname === false) { $skipped[] = $srow['d_id'].'：目標料號不存在'; continue; }
+                // 只准綁到「料號文字完全相同」的主檔——否則直接打 API 就能把庫存綁到別的料號上（鐵律8）
+                if ((string)$dname !== (string)$srow['d_id']) { $skipped[] = $srow['d_id'].'：與目標料號「'.$dname.'」不相同，不予綁定'; continue; }
+                $updSt->execute([$dsid, $userId, $sid]);
+                $done++;
+                try {
+                    $pdo->prepare("INSERT INTO audit_log (action_type,target_type,target_id,target_name,changes,user_id,operator,created_at) VALUES ('update','stock_part_bind',?,?,?,?,?,NOW())")
+                        ->execute([$sid, $srow['d_id'], json_encode(['d_setting_id'=>['from'=>null,'to'=>$dsid]], JSON_UNESCAPED_UNICODE), $userId, $_SESSION['userName'] ?? '']);
+                } catch(Exception $e2){}
+            }
+            $pdo->commit();
+            echo json_encode(['success'=>true,'bound'=>$done,'skipped'=>$skipped]);
+        } catch(Exception $e){ if($pdo->inTransaction())$pdo->rollBack(); echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
     }
 
 
@@ -4290,7 +4423,45 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <div style="overflow-x:auto;"><table class="table tbl-sm" id="safety-table" style="margin:0;"><thead><tr><th>料號</th><th>安全庫存</th><th>單位</th><th></th></tr></thead><tbody id="safety-tbody"></tbody></table></div>
       <div id="safety-pager" class="pager" style="padding:5px 10px;border-top:none;"></div>
     </div>
+    <!-- 料號綁定檢查（僅 A 級權限）：把只打了料號文字、沒綁到料號主檔的既有庫存補綁回去 -->
+    <div class="setting-card" id="bind-card" style="display:none;">
+      <h5><i class="fa fa-link"></i> 料號綁定檢查 <button id="btn-open-bind" class="btn btn-xs" style="background:var(--accent);color:#fff;" onclick="openBindModal()"><i class="fa fa-wrench"></i> 開啟</button></h5>
+      <div style="font-size:12px;color:#666;line-height:1.7;">
+        沒有綁定「料號ID」的庫存品項，客戶欄不會自動帶入、也連不到圖面與料號資料。
+        這裡會列出所有未綁定的品項，並自動比對料號資料表中<b>名稱完全相同</b>的料號供一鍵補綁。
+        <div id="bind-summary" style="margin-top:8px;font-weight:700;color:var(--primary);">統計中…</div>
+      </div>
+    </div>
   </div>
+</div>
+
+<!-- ══ Modal: 料號綁定檢查 ══ -->
+<div class="modal fade" id="bindModal" tabindex="-1" role="dialog">
+ <div class="modal-dialog" role="document" style="width:1000px;max-width:96vw;">
+  <div class="modal-content">
+   <div class="modal-header"><button class="close" data-dismiss="modal"><span>&times;</span></button><h4 class="modal-title"><i class="fa fa-link"></i> 料號綁定檢查</h4></div>
+   <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
+     <div style="background:#FDF6EC;border:1px solid #F0D9B5;border-radius:6px;padding:8px 10px;font-size:12px;color:#8a6d3b;line-height:1.7;margin-bottom:10px;">
+       「建議綁定」是以<b>料號名稱完全相同</b>比對出來的。同名料號有多筆（不同客戶／版次／備註）時請自行挑一筆；
+       料號資料表中查無同名料號的，要先到<b>基本設定</b>新增料號才綁得起來。
+       綁定只會補上料號ID，<b>不會更動數量、儲位或任何庫存異動</b>。
+     </div>
+     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+       <button class="btn btn-xs" style="background:#16a085;color:#fff;" onclick="bindSelectAllSuggested()"><i class="fa fa-check-square-o"></i> 全選有建議的</button>
+       <button class="btn btn-xs" style="background:#95a5a6;color:#fff;" onclick="bindClearSel()"><i class="fa fa-square-o"></i> 全部取消</button>
+       <span id="bind-count" style="font-size:12px;color:#666;"></span>
+       <button class="btn btn-sm" style="background:var(--accent);color:#fff;margin-left:auto;" onclick="submitBind()"><i class="fa fa-link"></i> 綁定選取的品項</button>
+     </div>
+     <div style="overflow-x:auto;">
+       <table class="table tbl-sm" style="margin:0;">
+         <thead><tr><th style="width:34px;"></th><th>料號</th><th>種類</th><th>庫存</th><th>儲位</th><th style="min-width:280px;">要綁定的料號</th></tr></thead>
+         <tbody id="bind-tbody"><tr><td colspan="6" class="text-center text-muted">載入中...</td></tr></tbody>
+       </table>
+     </div>
+   </div>
+   <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">關閉</button></div>
+  </div>
+ </div>
 </div>
 
 <!-- ═══ TAB: 領庫需求單 ═══ -->
@@ -4644,6 +4815,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
           <input type="text" id="item-did" class="form-control" placeholder="輸入料號搜尋..." autocomplete="off">
           <input type="hidden" id="item-dsid">
           <div class="ac-box" id="ac-did" style="display:none;"></div>
+          <div id="item-did-msg" style="display:none;margin-top:4px;font-size:12px;line-height:1.5;"></div>
           <div id="item-asm-display" style="margin-top:5px;"></div>
         </div>
         <div class="form-group"><label>品項種類 <span style="color:red;">*</span></label>
@@ -5586,7 +5758,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script>
 // ── 全域 ────────────────────────────────────────
-var G = { page:1, rows:[], sortCol:'Modified_At', sortDir:'desc', allLocs:[], allCats:[], allUnits:[], allDepts:[], allAreas:[], currentItemDsid:null, currentItemUnits:[], countLoaded:false, reqLoaded:false, reportLoaded:false, currentCountSession:null, _todayOnly:false, _isAdminUser:false, _canCount:false, _canBatch:false, locPage:1, catPage:1, unitPage:1, safetyPage:1, managePageSize:8, locAreaFilter: 'all',
+var G = { page:1, rows:[], sortCol:'Modified_At', sortDir:'desc', allLocs:[], allCats:[], allUnits:[], allDepts:[], allAreas:[], currentItemDsid:null, currentItemUnits:[], countLoaded:false, reqLoaded:false, reportLoaded:false, currentCountSession:null, _todayOnly:false, _statCats:[], _isAdminUser:false, _canCount:false, _canBatch:false, locPage:1, catPage:1, unitPage:1, safetyPage:1, managePageSize:8, locAreaFilter: 'all',
     req:{page:1,pageSize:20,status:'0',kw:'',currentReqId:null,issueItems:[],currentReq:null,issueBatches:{},issuePendingItems:[]},
     rpt:{view:'day',dateFrom:'',dateTo:'',page:1,pageSize:20,refDate:new Date()} };
 var PERM = '<?php echo htmlspecialchars($PAGE_PERM ?? "R", ENT_QUOTES); ?>';
@@ -5865,6 +6037,7 @@ $(function(){
         $('#item-client').val($t.data('cname'));
         $('#item-cid').val($t.data('cid'));
         $('#ac-did').hide();
+        setDidBound(String($t.data('did')||''));
         G.currentItemDsid=$t.data('dsid');
 
         // 清除舊顯示
@@ -6023,6 +6196,7 @@ function loadMasterData(){
             catCards+='<div class="sc" style="border-left-color:'+esc(c.color||'#888')+';--sc-color:'+esc(c.color||'#888')+';min-width:90px;flex:0 0 auto;" onclick="filterCard(\'cat_'+c.category_id+'\',this)"><div class="sc-val" id="sv-cat-'+c.category_id+'">—</div><div class="sc-label">'+esc(c.category_name)+'</div></div>';
         });
         $('#cat-cards').html(catCards);
+        applyCatCardCounts(); // 卡片比統計晚到時，把已經拿到的數字補上去
     });
     ajx({action:'get_units'},function(r){
         if(!r.success)return;
@@ -6091,8 +6265,16 @@ function loadStats(){
         var sv=parseFloat(d.sale_value||0);
         $('#sv-sale').text(sv>=1000000?'$'+(sv/1000000).toFixed(1)+'M':'$'+Math.round(sv).toLocaleString());
         $('#sv-today').text(fmt(d.today));
-        (d.categories||[]).forEach(function(cat){ $('#sv-cat-'+cat.category_id).text(fmt(cat.cnt||0)); });
+        // 種類卡片是 get_categories 回來才畫出來的，跟本支是兩個各自獨立的 AJAX；
+        // 先回來的一方要把結果留著，等另一方到齊再套用，否則統計先到＝卡片還沒生出來，
+        // 選擇器選不到任何東西，數字就永遠停在初始的「—」（種類卡片全部顯示 —，但篩選其實有資料）。
+        G._statCats = d.categories||[];
+        applyCatCardCounts();
     });
+}
+// 把統計數字寫進種類卡片（統計與卡片兩邊誰後到都由這一支負責套用）
+function applyCatCardCounts(){
+    (G._statCats||[]).forEach(function(cat){ $('#sv-cat-'+cat.category_id).text(fmt(cat.cnt||0)); });
 }
 
 // ── 篩選卡片 ────────────────────────────────────
@@ -6507,6 +6689,15 @@ function openEdit(id){
             return;
         }
         $('#item-id').val(d.stock_item_id); $('#item-did').val(d.d_id); $('#item-dsid').val(d.d_setting_id||'');
+        // 記住開啟當下的料號：料號沒被改過的舊資料（本來就沒綁）維持原樣可存，不擋既有操作
+        G._didBoundText     = d.d_id||'';
+        G._didLegacyText    = d.d_id||'';
+        G._didLegacyUnbound = !d.d_setting_id;
+        hideDidMsg();
+        if(G._didLegacyUnbound){
+            showDidMsg('<i class="fa fa-info-circle"></i> 這筆是尚未綁定料號ID的舊資料（客戶欄不會自動帶入）。'
+                + (PERM==='A' ? '可到「主資料設定 → 料號綁定檢查」批次補綁，或在此重新選一次料號。' : '請洽管理員以「料號綁定檢查」補綁。'), '#8a6d3b');
+        }
         $('#item-cat').val(d.item_type||''); onCatChange(d.location_id);
         $('#item-client').val(d.client_name||''); $('#item-cid').val(d.client_id||'');
         // 保管者 / 廠商（欄位是否顯示已由 onCatChange 依種類設定處理）
@@ -6551,6 +6742,8 @@ function openEdit(id){
 function clearItemForm(){
     $('#item-id,#item-dsid,#item-order-id').val('');
     $('#item-did,#item-client,#item-cid,#item-bom,#item-order-disp').val('');
+    G._didBoundText=''; G._didLegacyText=''; G._didLegacyUnbound=false;
+    if(typeof hideDidMsg==='function') hideDidMsg();
     $('#item-cost,#item-price,#item-ey,#item-pkg,#item-r1').val('');
     $('#item-keeper,#item-keeper-id,#item-vendor,#item-vendor-id').val('');
     $('#ac-keeper,#ac-vendor').hide(); $('#item-keeper-wrap,#item-vendor-wrap').hide();
@@ -6798,6 +6991,12 @@ function saveItem(){
     if(!$('#item-loc').val()){toast('儲位為必填','error');return;}
     if(parseFloat($('#item-qty').val()||0)<0){toast('庫存數量不可為負數','error');return;}
     if(!$('#item-unit').val()){toast('主計量單位為必填','error');return;}
+    // 料號必須綁到料號主檔（查無／多筆同名時會在欄位下方紅字說明並停在這裡，不會送出）
+    syncDidBinding();
+    ensureDidBound(function(){ saveItemGo(); });
+}
+function saveItemGo(){
+    var did=($('#item-did').val()||'').trim();
     // 製造日期未填則帶入庫日期
     var sd=$('#item-sd').val()||''; var mfg=$('#item-mfg').val()||'';
     if(sd && !mfg){ mfg=sd; $('#item-mfg').val(mfg); }
@@ -7475,7 +7674,92 @@ function checkStockReqParam(){
 
 // ── 設定頁 ──────────────────────────────────────
 function loadSettingData(){
-    loadLocs(1); loadCats(1); loadUnits(1); loadSafety(1);
+    loadLocs(1); loadCats(1); loadUnits(1); loadSafety(1); loadBindSummary();
+}
+
+// ══════ 料號綁定檢查（僅 A 級權限）════════════════════════════════════════
+// 只補 stock_items.d_setting_id，不動數量／儲位／異動紀錄。
+var BIND_ROWS = [];
+function loadBindSummary(){
+    if(PERM!=='A') return;
+    $('#bind-card').show();
+    ajx({action:'unbound_parts_list'}, function(r){
+        if(!r.success){ $('#bind-summary').text('讀取失敗：'+(r.message||'')).css('color','#DD5138'); return; }
+        BIND_ROWS = r.data||[];
+        var one=0, multi=0, none=0;
+        BIND_ROWS.forEach(function(x){ var n=(x.candidates||[]).length; if(n===1)one++; else if(n>1)multi++; else none++; });
+        if(!BIND_ROWS.length){ $('#bind-summary').html('<i class="fa fa-check-circle"></i> 全部品項都已綁定料號ID').css('color','#16a085'); }
+        else $('#bind-summary').html('未綁定共 <b>'+BIND_ROWS.length+'</b> 筆　（可直接補綁 '+one+' 筆、同名多筆需自選 '+multi+' 筆、查無此料號 '+none+' 筆）').css('color','var(--primary)');
+    });
+}
+function openBindModal(){
+    if(PERM!=='A'){ toast('需要 A 級權限','error'); return; }
+    $('#bind-tbody').html('<tr><td colspan="6" class="text-center text-muted"><i class="fa fa-spinner fa-spin"></i></td></tr>');
+    $('#bindModal').modal('show');
+    // 點開即刷新：每次開窗都跟後端要最新清單，避免拿舊快取去綁已經被別人綁過的資料
+    ajx({action:'unbound_parts_list'}, function(r){
+        if(!r.success){ $('#bind-tbody').html('<tr><td colspan="6" class="text-center text-danger">'+esc(r.message||'載入失敗')+'</td></tr>'); return; }
+        BIND_ROWS = r.data||[];
+        renderBindTable();
+    });
+}
+function renderBindTable(){
+    if(!BIND_ROWS.length){ $('#bind-tbody').html('<tr><td colspan="6" class="text-center text-muted">沒有未綁定的品項</td></tr>'); $('#bind-count').text(''); return; }
+    var h='';
+    BIND_ROWS.forEach(function(x){
+        var cands=x.candidates||[];
+        var sel='';
+        if(!cands.length){
+            sel='<span style="color:#DD5138;font-size:12px;"><i class="fa fa-exclamation-triangle"></i> 查無此料號，請至基本設定內新增料號</span>';
+        }else{
+            // 本頁不在 eg_input_rules.js 覆蓋範圍（列於 input_rules_baseline.txt），
+            // 掛 data-eg-filter 會是死屬性；同名料號候選一般只有 2~3 筆，不需要篩選框。
+            sel='<select class="form-control input-sm bind-sel" data-sid="'+x.stock_item_id+'" style="height:30px;">';
+            if(cands.length>1) sel+='<option value="">— 請選擇要綁定的料號 —</option>';
+            cands.forEach(function(c){
+                var lbl=c.D_Setting_Id+(c.Revision?'　版次'+c.Revision:'')+(c.client_name?'　'+c.client_name:'')+(c.Remark?'　'+c.Remark:'')+(c.Spec_No?'　'+c.Spec_No:'');
+                sel+='<option value="'+c.d_id+'">'+esc(lbl)+'</option>';
+            });
+            sel+='</select>';
+            if(cands.length>1) sel+='<div style="font-size:11px;color:#8a6d3b;margin-top:3px;">同名料號有 '+cands.length+' 筆，請確認要綁哪一筆</div>';
+        }
+        var canChk=cands.length>0;
+        h+='<tr>'
+          +'<td>'+(canChk?'<input type="checkbox" class="bind-chk" data-sid="'+x.stock_item_id+'"'+(cands.length===1?' checked':'')+'>':'')+'</td>'
+          +'<td><b>'+esc(x.d_id)+'</b></td>'
+          +'<td>'+esc(x.category_name||'')+'</td>'
+          +'<td>'+(x.qty||0)+'</td>'
+          +'<td>'+esc(x.storage_location||'')+'</td>'
+          +'<td>'+sel+'</td>'
+          +'</tr>';
+    });
+    $('#bind-tbody').html(h);
+    updateBindCount();
+}
+function updateBindCount(){ $('#bind-count').text('已勾選 '+$('.bind-chk:checked').length+' / 共 '+BIND_ROWS.length+' 筆'); }
+$(document).on('change','.bind-chk',updateBindCount);
+function bindSelectAllSuggested(){ $('.bind-chk').prop('checked',true); updateBindCount(); }
+function bindClearSel(){ $('.bind-chk').prop('checked',false); updateBindCount(); }
+function submitBind(){
+    var pairs=[], missing=0;
+    $('.bind-chk:checked').each(function(){
+        var sid=$(this).data('sid');
+        var v=$('.bind-sel[data-sid="'+sid+'"]').val();
+        if(!v){ missing++; return; }
+        pairs.push({stock_item_id:sid, d_setting_id:v});
+    });
+    if(missing){ toast('有 '+missing+' 筆還沒選定要綁定的料號','error'); return; }
+    if(!pairs.length){ toast('請先勾選要綁定的品項','error'); return; }
+    if(!confirm('確定要綁定 '+pairs.length+' 筆嗎？\n（只會補上料號ID，不會更動數量與儲位）')) return;
+    ajx({action:'unbound_parts_bind', pairs:JSON.stringify(pairs)}, function(r){
+        if(!r.success){ toast(r.message||'綁定失敗','error'); return; }
+        var msg='已綁定 '+(r.bound||0)+' 筆';
+        if(r.skipped&&r.skipped.length) msg+='，略過 '+r.skipped.length+' 筆：'+r.skipped.join('；');
+        toast(msg, (r.skipped&&r.skipped.length)?'error':'success');
+        openBindModal();       // 重新載入清單（已綁的會自動消失）
+        loadBindSummary();
+        loadList(G.page);      // 列表客戶欄會跟著帶出來
+    });
 }
 function loadLocs(p){
     G.locPage=p;
@@ -8803,6 +9087,7 @@ function confirmCreateDId(){
         toast('料號 '+code+' 建立成功','success');
         $('#item-did').val(r.D_Setting_Id); $('#item-dsid').val(r.d_id);
         if(r.client_name){ $('#item-client').val(r.client_name); $('#item-cid').val(r.client_id||''); }
+        setDidBound(String(r.D_Setting_Id||''));
         $('#item-unit-manage-wrap').show(); G.currentItemDsid=r.d_id;
     });
 }
@@ -8856,9 +9141,55 @@ function confirmPurge(){
     });
 }
 
+// ══════ 料號綁定（stock_items.d_setting_id）══════════════════════════════
+// 只在輸入框打字、沒從清單挑一筆，以前會安靜地存成「有料號文字、沒有料號ID」，
+// 客戶欄也跟著空白。以下三件事保證綁定：
+//   ① 打過字就把上一次挑好的綁定作廢（不然改完料號還掛著舊料號的ID）
+//   ② 存檔前先比對「完全相同」的料號：查無→請去基本設定新增；有一筆以上→一定要從清單挑
+//   ③ 後端 save_stock_item 用同一套規則再擋一次（鐵律8）
+// 既有未綁定的舊資料不受影響：料號沒改過就照舊存得起來，由管理員的「料號綁定檢查」補綁。
+function setDidBound(text){ G._didBoundText = text; hideDidMsg(); }
+function hideDidMsg(){ $('#item-did-msg').hide().empty(); }
+function showDidMsg(html,color){ $('#item-did-msg').html(html).css('color',color||'#DD5138').show(); }
+// 打字後與已綁定的料號不一致 → 綁定作廢（客戶欄一併清掉，避免留著別的料號的客戶）
+function syncDidBinding(){
+    var t=($('#item-did').val()||'').trim();
+    if($('#item-dsid').val() && t !== (G._didBoundText||'')){
+        $('#item-dsid').val(''); $('#item-client').val(''); $('#item-cid').val('');
+        G.currentItemDsid=null;
+    }
+}
+// 存檔前的綁定檢查：已綁定或屬於「舊資料且料號沒改過」直接放行，其餘一律要求選料號
+function ensureDidBound(cb){
+    var t=($('#item-did').val()||'').trim();
+    if($('#item-dsid').val()){ hideDidMsg(); cb(); return; }
+    if(G._didLegacyUnbound && t === (G._didLegacyText||'')){ cb(); return; } // 舊資料原樣放行
+    ajx({action:'resolve_d_id', d_id:t}, function(r){
+        if(!r.success){ showDidMsg('料號檢查失敗：'+esc(r.message||''),'#DD5138'); return; }
+        var m=r.matches||[];
+        if(!m.length){
+            showDidMsg('<i class="fa fa-exclamation-triangle"></i> 查無此料號「'+esc(t)+'」，請至基本設定內新增料號','#DD5138');
+            $('#item-did').focus();
+            return;
+        }
+        showDidMsg('<i class="fa fa-hand-o-up"></i> 料號「'+esc(t)+'」在料號資料表中有 '+m.length+' 筆，請從下方清單點選要綁定的那一筆','#DD5138');
+        var h='';
+        m.forEach(function(d){
+            h+='<div class="ac-item" data-did="'+esc(d.D_Setting_Id)+'" data-dsid="'+d.d_id+'" data-cname="'+esc(d.client_name||'')+'" data-cid="'+esc(d.Customer_Id||'')+'"><strong>'+esc(d.D_Setting_Id)+'</strong>'
+               +(d.Spec_No?'<span class="sub"> '+esc(d.Spec_No)+'</span>':'')
+               +(d.Revision?'<span class="sub"> 版次'+esc(d.Revision)+'</span>':'')
+               +(d.Remark?'<span class="sub"> '+esc(d.Remark)+'</span>':'')
+               +(d.client_name?'<span class="sub"> — '+esc(d.client_name)+'</span>':'')+'</div>';
+        });
+        $('#ac-did').html(h).show();
+        $('#item-did').focus();
+    });
+}
+
 // ── 料號自動完成：查無時提示建立 ─────────────────
 // 覆蓋原本的 #item-did input 事件，在查無時多加建立按鈕
 $('#item-did').off('input').on('input',function(){
+    syncDidBinding(); hideDidMsg();
     var t=$(this).val().trim(); if(t.length<1){$('#ac-did').hide();return;}
     ajx({action:'search_d_id',term:t},function(r){
         if(!r.success){$('#ac-did').hide();return;}
