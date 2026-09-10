@@ -218,9 +218,30 @@ case 'instance_save_items': {
     if ($inst['status'] !== 'draft') jerr('此表單已送出，內容已鎖定不可編輯');
     $items = json_decode((string)($_POST['items'] ?? '[]'), true);
     if (!is_array($items)) jerr('項次資料格式不正確');
+    // 直式標題（模板固定列標題）模式：列數由模板決定，使用者不可增刪——前端不給按鈕，後端一律再校正一次列數
+    // （鐵律8：不可只擋前端）。多的截掉、少的補空白列，避免直打 API 塞出對不到列標題的孤兒列。
+    $instTpl = rvf_template_get($db, (int)$inst['template_id']);
+    $instSchema = rvf_template_schema_at_version($db, (int)$inst['template_id'], (int)$inst['template_version'])
+                  ?: (json_decode((string)($instTpl['current_schema_json'] ?? ''), true) ?: []);
+    $fixedHeads = rvf_schema_row_headings($instSchema);
+    if ($fixedHeads) {
+        $items = array_slice(array_values($items), 0, count($fixedHeads));
+        while (count($items) < count($fixedHeads)) $items[] = ['id'=>0, 'subitems'=>[['id'=>0, 'content'=>'', 'data'=>new stdClass(), 'owner_depts'=>[], 'owner_users'=>[]]]];
+    }
     $title = trim((string)($_POST['title'] ?? ''));
     $bizDate = trim((string)($_POST['business_date'] ?? '')) ?: $inst['business_date'];
-    $db->prepare("UPDATE rf_instance SET title=?,business_date=?,updated_at=NOW() WHERE id=?")->execute([$title, $bizDate, $id]);
+    // 橫式標題下方那一列的值（一欄一個、整張表單只有一組）；模板沒啟用就一律存 NULL，
+    // 且只收 schema 裡真的存在的欄位 key，避免直打 API 塞進一堆對不到欄位的垃圾。
+    $headData = null;
+    if (rvf_schema_head_row($instSchema)) {
+        $raw = json_decode((string)($_POST['head_data'] ?? ''), true);
+        $keys = array_column($instSchema['fields'] ?? [], 'key');
+        $clean = [];
+        if (is_array($raw)) foreach ($raw as $k => $v) { if (in_array($k, $keys, true)) $clean[$k] = (string)$v; }
+        $headData = json_encode($clean, JSON_UNESCAPED_UNICODE);
+    }
+    $db->prepare("UPDATE rf_instance SET title=?,business_date=?,head_data_json=?,updated_at=NOW() WHERE id=?")
+       ->execute([$title, $bizDate, $headData, $id]);
     rvf_instance_items_save($db, $id, $items);
     jout(['items'=>rvf_instance_items_get($db, $id)]);
 }

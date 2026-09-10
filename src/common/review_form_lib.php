@@ -29,6 +29,10 @@ require_once __DIR__ . '/org_role_lib.php';
 
 const RVF_APPROVER_METHODS = ['dept_or_user', 'auto_supervisor', 'top_approver'];
 
+/** 「直式標題右側可填入欄」的值存在該列第一個小項 data_json 的這個保留鍵底下（不是 schema 定義的欄位，
+ *  所以不會被必填檢查掃到，也不會跟使用者自訂的欄位 key 撞名——自訂 key 一律是 c_ 開頭）。 */
+const RVF_ROWSIDE_KEY = '__rowside';
+
 const RVF_FEATURES = [
     ['code' => 'rvf_view',          'group' => 'view', 'label' => '檢閱審核表單列表（沒勾也看得到自己建立的表單）'],
     ['code' => 'rvf_view_all',      'group' => 'view', 'label' => '檢視全部人員建立的表單'],
@@ -334,6 +338,30 @@ function rvf_template_duplicate(PDO $db, int $srcId, string $byName): int {
 /** 有勾選「年度標題」的模板，建立表單時必須帶年度（西元年，內部一律存西元年，民國年只在顯示時換算），
  *  年度限制在建立日期年份的前一年～後一年之間（2026-08-14 使用者明確要求，例如跨年度時仍可標記上一/下一年度）。
  *  前端 review_form.php 已有同規則的即時檢查，這裡是後端最終防線。 */
+/* -------- 表格結構（2026-09-09 新增：可關閉負責單位/負責人欄、可用模板固定的「直式標題」列）--------
+   舊模板的 schema 沒有這些鍵，一律退回原本行為（有負責人欄、列由使用者自行增減），既有表單完全不受影響。 */
+
+/** 這個模板要不要「負責單位／負責人」欄（未設定＝要，維持舊行為）。 */
+function rvf_schema_need_owner(array $schema): bool {
+    return !array_key_exists('need_owner', $schema) || (int)$schema['need_owner'] === 1;
+}
+/** 直式標題（左側固定列標題）模式；沒有任何列標題時視同未啟用。 */
+function rvf_schema_row_headings(array $schema): array {
+    if (($schema['row_mode'] ?? 'free') !== 'fixed') return [];
+    $h = array_values(array_filter(array_map(fn($s) => trim((string)$s), (array)($schema['row_headings'] ?? [])), fn($s) => $s !== ''));
+    return $h;
+}
+function rvf_schema_fixed_rows(array $schema): bool { return rvf_schema_row_headings($schema) !== []; }
+/** 橫式標題下方要不要多一列可填欄（值存 rf_instance.head_data_json，一欄一個值、不是逐列）。 */
+function rvf_schema_head_row(array $schema): bool { return !empty($schema['head_row']); }
+/** 直式標題右側要不要多一欄可填欄（逐列一個值，存該列第一個小項 data_json 的保留鍵）。只有直式標題模式才有意義。 */
+function rvf_schema_row_side(array $schema): bool { return !empty($schema['row_side']) && rvf_schema_fixed_rows($schema); }
+/** 沒有負責單位/負責人就沒有可簽名的對象，簽名方式一律視同 none（前端 schemaSignMode() 同一套判定）。 */
+function rvf_schema_sign_mode(array $schema): string {
+    if (!rvf_schema_need_owner($schema)) return 'none';
+    return (string)($schema['sign_mode'] ?? 'password');
+}
+
 function rvf_instance_create(PDO $db, int $templateId, int $uid, string $uname, string $title, string $bizDate, ?int $yearHeading = null): int {
     $tpl = rvf_template_get($db, $templateId);
     if (!$tpl) throw new Exception('找不到此模板');
@@ -349,7 +377,20 @@ function rvf_instance_create(PDO $db, int $templateId, int $uid, string $uname, 
     $db->prepare("INSERT INTO rf_instance (template_id,template_version,title,business_date,year_heading,status,created_by,created_by_name)
                   VALUES (?,?,?,?,?,'draft',?,?)")
        ->execute([$templateId, (int)$tpl['published_version'], $title, $bizDate, $yearHeading, $uid, $uname]);
-    return (int)$db->lastInsertId();
+    $instanceId = (int)$db->lastInsertId();
+    // 直式標題模式：列由模板決定、使用者不可增刪，所以建立表單當下就把列建好（各一個空白小項），
+    // 使用者一打開就看到完整矩陣，不必先按存檔才長出格子。
+    $schema = json_decode((string)$tpl['current_schema_json'], true) ?: [];
+    $heads  = rvf_schema_row_headings($schema);
+    if ($heads) {
+        $insItem = $db->prepare("INSERT INTO rf_instance_item (instance_id,sort_order) VALUES (?,?)");
+        $insSub  = $db->prepare("INSERT INTO rf_instance_subitem (item_id,sort_order,content,data_json,owner_depts,owner_users) VALUES (?,0,'','{}','','')");
+        foreach ($heads as $i => $_) {
+            $insItem->execute([$instanceId, $i]);
+            $insSub->execute([(int)$db->lastInsertId()]);
+        }
+    }
+    return $instanceId;
 }
 
 function rvf_instance_get(PDO $db, int $id): ?array {
@@ -517,7 +558,7 @@ function rvf_item_confirm(PDO $db, int $subitemId, int $forUid, string $password
     $inst = rvf_instance_get($db, (int)$sub['instance_id']);
     if ($inst) {
         $schema = rvf_template_schema_at_version($db, (int)$inst['template_id'], (int)$inst['template_version']);
-        if (($schema['sign_mode'] ?? 'password') === 'none') return ['ok'=>false, 'msg'=>'本模板不須簽名，前端不應顯示此動作'];
+        if (rvf_schema_sign_mode($schema) === 'none') return ['ok'=>false, 'msg'=>'本模板不須簽名，前端不應顯示此動作'];
     }
     $signers = rvf_item_required_signers($db, $sub);
     $signer = null;
@@ -661,13 +702,18 @@ function rvf_instance_missing_required(PDO $db, int $instanceId, array $schema):
     $missing = [];
     $fields = array_filter($schema['fields'] ?? [], fn($c) => !empty($c['required']) && ($c['type'] ?? '') !== 'seq');
     $items = rvf_instance_items_get($db, $instanceId);
+    // 直式標題模式沒有讓使用者填的「項目」欄（列名稱是模板固定的），故不檢查 content，也沒有「大項標題列」。
+    $heads = rvf_schema_row_headings($schema);
+    $fixedRows = $heads !== [];
     foreach ($items as $i => $it) {
         $subs = $it['subitems'] ?? [];
         $n = count($subs);
         foreach ($subs as $k => $sub) {
-            $label = '第' . ($i + 1) . '項' . ($n > 1 ? '第' . ($k + 1) . '小項' : '');
-            if (trim((string)($sub['content'] ?? '')) === '') $missing[] = $label . '「項目」內容';
-            if ($k === 0 && $n > 1) continue; // 標題列只需要項目內容
+            $label = $fixedRows
+                ? ('「' . ($heads[$i] ?? ('第' . ($i + 1) . '列')) . '」' . ($n > 1 ? '第' . ($k + 1) . '小項' : ''))
+                : ('第' . ($i + 1) . '項' . ($n > 1 ? '第' . ($k + 1) . '小項' : ''));
+            if (!$fixedRows && trim((string)($sub['content'] ?? '')) === '') $missing[] = $label . '「項目」內容';
+            if (!$fixedRows && $k === 0 && $n > 1) continue; // 標題列只需要項目內容
             $data = (array)($sub['data'] ?? []); // data 沒內容時 json_decode 退回 stdClass，這裡統一轉陣列避免存取報錯
             foreach ($fields as $c) {
                 $v = $data[$c['key']] ?? null;
@@ -715,7 +761,7 @@ function rvf_instance_submit(PDO $db, int $instanceId, int $uid, string $uname):
     }
 
     $schema = json_decode((string)$tpl['current_schema_json'], true) ?: [];
-    if (($schema['sign_mode'] ?? 'password') === 'notify') rvf_notify_item_owners($db, $instanceId, $uid);
+    if (rvf_schema_sign_mode($schema) === 'notify') rvf_notify_item_owners($db, $instanceId, $uid);
 
     return $result;
 }

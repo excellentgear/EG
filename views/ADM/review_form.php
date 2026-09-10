@@ -96,6 +96,17 @@ $perms = rvf_perms($db, $rvfUser);
         table.itm-tbl td.subitem-heading { background:#FDF8EF; }
         table.itm-tbl td.subitem-heading textarea { font-weight:bold; border-color:#D8BE93; }
         table.itm-tbl td.subitem-heading-note { background:#F5F0E5; color:#b0a390; font-size:11px; text-align:left; font-style:italic; }
+        /* 直式標題（左側固定列標題）與標題直書（2026-09-09 使用者明確要求，像 SWOT／組織處境分析表那種矩陣） */
+        .hdr-vert { writing-mode:vertical-rl; text-orientation:upright; letter-spacing:2px; display:inline-block; white-space:nowrap; }
+        table.itm-tbl td.row-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; text-align:center; vertical-align:middle; white-space:pre-wrap; }
+        table.itm-tbl td.row-head .hdr-vert { line-height:1.15; }
+        table.itm-tbl td.row-head.row-head-left { text-align:left; }
+        table.itm-tbl td.row-side { vertical-align:middle; }
+        table.itm-tbl tr.head-band td { background:#FDF8EF; }
+        .rf-corner { position:relative; min-width:110px; height:56px; padding:0 !important; }
+        .rf-corner .cor-line { position:absolute; left:0; top:0; width:100%; height:100%; }
+        .rf-corner .cor-col { position:absolute; right:6px; top:3px; font-weight:bold; }
+        .rf-corner .cor-row { position:absolute; left:6px; bottom:3px; font-weight:bold; }
         .col-fill { margin-top:4px; display:flex; flex-direction:column; gap:3px; font-weight:normal; }
         .col-fill .col-fill-inp { width:100%; min-width:0; border:1px solid #D8BE93; border-radius:4px; padding:2px 4px; font-size:11px; box-sizing:border-box; background:#fff; color:#5b3a1e; }
         .sign-slot { border:1px dashed #E8D5B5; border-radius:4px; padding:3px 5px; margin-bottom:3px; font-size:11px; }
@@ -164,6 +175,7 @@ $perms = rvf_perms($db, $rvfUser);
         <b>①新增表單</b>：選擇模板、填建立日期，建立後進入草稿編輯畫面，「填表人」固定為建立者本人，表單名稱固定沿用模板名稱。<br>
         <b>②填寫項次</b>：用「+新增列」「-刪除末列」增減項目，逐列填寫內容與模板定義的欄位；可設定該列的負責單位（可多選，該部門任一主管簽即算完成）與負責人（可多選，每人都要各自簽）；有設定「相關日期」欄位的模板可逐列填寫。每個項目可用「+小項」拆出多個小項（例如同一項目下有好幾點要分別敘述），每個小項的「項目」內容、自訂欄位、負責部門/負責人、簽名確認全部各自獨立填寫（負責人不同、各自簽自己的），項次編號只在該項目第一列顯示；日期／下拉選單欄位可在表頭一次選好值按「整欄套用」，快速套用到目前所有項目與小項的同一欄，不用逐列手動填相同值。<br>
         <b>③送出</b>：草稿階段可存檔或送出；送出後內容鎖定不可再編輯，依模板設定進入審核（審核部門任一主管審過即完成）→ 核准（依模板設定的核准優先序解析）。<br>
+        <b>③-1 直式標題（矩陣式表單）</b>：模板若設定了「直式標題」（例：SWOT／組織處境分析表），表格最左欄會是模板固定好的<b>列標題</b>，與上方的欄位標題交叉成矩陣，左上角是斜線分隔的兩個維度名稱。這種表單<b>不能自己增減列</b>（沒有「+新增列」按鈕），只要填交叉格的內容即可；同一個列標題底下要分成好幾點時，按該列標題格內的「＋小項」。另外模板可以關閉「負責單位／負責人」欄，關閉時整個表單就不會出現負責人與簽名欄；各欄標題與左側列標題要置中還是靠左、要不要直書，都由模板逐欄設定。模板若開了「橫式標題下方那一列」，表格第一列會是一整排可填的格子——那一列<b>整張表單只填一次</b>（不是逐列）；若開了「直式標題右側那一欄」，每一列的列標題右邊會多一個可填的窄格，逐列各填各的。<br>
         <b>④負責人簽名</b>：模板設為「現場密碼簽名」時，畫面上各負責人可自行輸入本人密碼簽名；設為「通知回簽」時，送出後系統會通知負責人前來簽名。<br>
         <b>⑤列印</b>：完成或進行中都可列印，依模板設定的紙張大小（A4/A3）自動縮放至一頁，頁碼顯示於左下角、綁定的 AS 文件編號顯示於右下角，簽章一律蓋章並帶日期。<br>
         <b>⑥複製表單</b>：任何狀態的表單（含已完成）都可按「複製此表單」，以複製者本人的身分建立一份新草稿，項次內容比照原表單帶入，但不含簽名/審核/核准紀錄，需重新走一次流程。
@@ -194,7 +206,51 @@ function esc(s){ return $('<div>').text(s==null?'':s).html(); }
 function dispDate(d){ return (typeof egFmtDate === 'function') ? egFmtDate(d) : (d||''); }
 // 欄位標題可在「項次欄位定義」用 Enter 手動換行(最多3行)，這裡把換行字元轉成 <br>；
 // 手動換行後若欄位仍太窄導致真正列印時還是擠爆，由 egPrintWindow() 內的自動縮小接手（2026-08-14）。
-function hdrLabelHtml(label){ return esc(label||'').replace(/\n/g,'<br>'); }
+function hdrLabelHtml(label, vertical){
+    var t = esc(label||'').replace(/\n/g,'<br>');
+    // 標題直書（2026-09-09）：writing-mode 讓文字由上而下、CJK 字元維持正立，欄寬可以很窄。
+    return vertical ? '<span class="hdr-vert">'+t+'</span>' : t;
+}
+/* 標題置中與否逐欄可設（2026-09-09 使用者明確要求）；沒設定過的欄位一律視同置中＝維持既有外觀。 */
+function hdrCentered(c){ return (c.hdr_center===undefined) ? true : !!Number(c.hdr_center); }
+/* 兩個方向都要明講：填寫畫面的佈景主題把 th 設成 text-align:left（不是瀏覽器預設的置中），
+   列印版的 CSS 又是置中，只寫其中一邊會讓「置中」在畫面上完全沒有作用（實測發現）。 */
+function hdrThAttr(c){ return ' style="text-align:' + (hdrCentered(c) ? 'center' : 'left') + ';"'; }
+/* ---- 表格結構（2026-09-09 新增；舊模板的 schema 沒有這些鍵，一律退回原本行為＝有負責人欄、列由使用者自行增減） ---- */
+function schemaNeedOwner(s){ s = s || CUR_SCHEMA || {}; return s.need_owner===undefined ? true : !!Number(s.need_owner); }
+function schemaFixedRows(s){ s = s || CUR_SCHEMA || {}; return s.row_mode==='fixed' && !!(s.row_headings||[]).length; }
+function schemaRowHeads(s){ s = s || CUR_SCHEMA || {}; return schemaFixedRows(s) ? (s.row_headings||[]) : []; }
+/* 沒有負責單位/負責人就沒有可以簽名的對象，簽名欄一律不出現（後端 rvf_schema_sign_mode() 同一套判定）。 */
+function schemaSignMode(s){ s = s || CUR_SCHEMA || {}; return schemaNeedOwner(s) ? (s.sign_mode||'password') : 'none'; }
+/* 左上角斜線標題：右上＝欄的維度名稱、左下＝列的維度名稱（比照組織處境分析表紙本）。
+   斜線用 inline SVG 畫（不是 CSS 漸層），列印時線條一定印得出來、不受背景色列印設定影響。 */
+function cornerCellHtml(s){
+    s = s || CUR_SCHEMA || {};
+    var c = $.trim(s.corner_col_label||''), r = $.trim(s.corner_row_label||'');
+    if (!c && !r) return '項目';
+    return '<svg class="cor-line" viewBox="0 0 100 100" preserveAspectRatio="none">'
+         + '<line x1="0" y1="0" x2="100" y2="100" stroke="currentColor" stroke-width="1" vector-effect="non-scaling-stroke"/></svg>'
+         + '<span class="cor-col">'+esc(c)+'</span><span class="cor-row">'+esc(r)+'</span>';
+}
+/* 兩個可選的「額外可填入區」（2026-09-09 使用者明確要求，紙本組織處境分析表就長這樣）：
+   ①橫式標題下方多一列 —— 每個欄位各一格，整張表單只有一組值，存 rf_instance.head_data_json
+   ②直式標題右側多一欄 —— 逐列各一格，存該列第一個小項 data 的保留鍵 __rowside（不是 schema 定義的欄位，
+     所以不會被必填檢查掃到，也不會跟自訂欄位 key 撞名）。兩個都預設關閉＝跟原本完全一樣。 */
+var RVF_ROWSIDE_KEY = '__rowside';
+function schemaHeadRow(s){ s = s || CUR_SCHEMA || {}; return !!Number(s.head_row||0); }
+function schemaRowSide(s){ s = s || CUR_SCHEMA || {}; return !!Number(s.row_side||0) && schemaFixedRows(s); }
+function headDataGet(key){ return (HEAD_DATA && HEAD_DATA[key]) || ''; }
+function headDataEdit(key, val){ HEAD_DATA[key] = val; }
+// 用事件委派而不是 inline onchange：欄位 key 是使用者自訂的字串（可能含引號），組進 onchange 屬性裡會把 HTML 打壞。
+$(document).on('change input', '#itmBody input[data-head-key]', function(){ headDataEdit($(this).data('head-key'), this.value); });
+function rowSideEdit(i, val){ if (ITEMS[i] && ITEMS[i].subitems[0]) ITEMS[i].subitems[0].data[RVF_ROWSIDE_KEY] = val; }
+function rowSideGet(i){ var it = ITEMS[i]; return (it && it.subitems[0] && it.subitems[0].data[RVF_ROWSIDE_KEY]) || ''; }
+function rowHeadCentered(s){ s = s || CUR_SCHEMA || {}; return (s.row_head_center===undefined) ? true : !!Number(s.row_head_center); }
+function rowHeadHtml(i, s){
+    s = s || CUR_SCHEMA || {};
+    var txt = (schemaRowHeads(s)[i] || '');
+    return Number(s.row_head_vertical||0) ? '<span class="hdr-vert">'+esc(txt)+'</span>' : esc(txt).replace(/\n/g,'<br>');
+}
 // 年度標題顯示：內部一律存西元年，依模板設定的格式換算顯示成西元或民國年（2026-08-14）。
 function yearDisplay(adYear, fmt){ if (!adYear) return ''; return fmt==='roc' ? ((adYear-1911)+'年') : (adYear+'年'); }
 // 負責部門/人員配對顯示：依每個人員實際所屬部門(dept_ids，含兼任)比對是否屬於已選部門之一，
@@ -341,12 +397,25 @@ function openView(id){
                          confirms:s.confirms||[], required_signers:s.required_signers||[], fully_signed:s.fully_signed};
             })};
         });
+        try { HEAD_DATA = JSON.parse(CUR.head_data_json||'{}') || {}; } catch(e){ HEAD_DATA = {}; }
+        rvfPadFixedRows();
         $('#viewTitle').text('#'+CUR.id+' '+CUR.tpl.name+'（'+STATUS_LABEL[CUR.status]+'）');
         renderView();
         openMask('viewMask');
     });
 }
+var HEAD_DATA = {};
 function isDraftMine(){ return CUR.status==='draft' && String(CUR.created_by)===String(META.uid); }
+/* 直式標題模式：畫面上的列一律等於模板定義的列標題數量。正常情況後端 rvf_instance_create() 建表單當下就把列
+   建好了，這裡是防呆——舊表單、或模板事後才改成直式標題時，列數對不上就在畫面上補齊（存檔時才真正寫進資料庫），
+   不然會出現「有標題卻沒有可以填的格子」或「多出一列沒有標題的空白列」。 */
+function rvfPadFixedRows(){
+    if (!schemaFixedRows()) return;
+    var need = schemaRowHeads().length;
+    while (ITEMS.length < need) ITEMS.push({id:0, subitems:[rvfBlankSubitem()]});
+    // 多出來的列只在「自己的草稿」才截掉（那時使用者還能重填）；已送出的表單寧可整列照顯示也不要把資料藏起來。
+    if (ITEMS.length > need && isDraftMine()) ITEMS = ITEMS.slice(0, need);
+}
 function renderView(){
     var h = '';
     if (PREVIEW_MODE) h += '<div style="background:#FFF7E8;border:1px dashed #E8D5B5;border-radius:6px;padding:6px 10px;margin-bottom:10px;font-size:12.5px;color:#8a6d45;">'
@@ -359,12 +428,18 @@ function renderView(){
         h += '<div style="margin-top:4px;font-size:12.5px;color:#8a6d45;">送出日：'+dispDate(CUR.submit_date)+
              (META.perms.isAdmin ? ' <a href="javascript:void(0)" onclick="editSubmitDate()" style="margin-left:6px;">（超級管理員：修改送出日）</a>' : '')+'</div>';
     }
-    h += '<div class="itm-tbl-wrap"><table class="itm-tbl"><thead><tr><th style="width:26px;">#</th><th>項目</th>';
-    (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th>'+hdrLabelHtml(c.label)+colFillHtml(c)+'</th>'; });
-    h += '<th>負責單位/負責人</th>';
-    if ((CUR_SCHEMA.sign_mode||'password')!=='none') h += '<th>簽名</th>';
-    h += (isDraftMine()?'<th></th>':'')+'</tr></thead><tbody id="itmBody" data-eg-row-add="itemAdd" data-eg-row-del="itemDelLast"></tbody></table></div>';
-    if (isDraftMine()) h += '<button class="rf-btn-sm" onclick="itemAdd()" style="margin-right:6px;">+新增列</button><button class="rf-btn-sm" onclick="itemDelLast()">-刪除末列</button>';
+    // 直式標題（fixed）模式：最左欄改成模板定義的固定列標題，表頭那格＝左上角斜線維度名稱，序號欄不顯示（列標題本身就是識別）。
+    var fixedRows = schemaFixedRows();
+    h += '<div class="itm-tbl-wrap"><table class="itm-tbl"><thead><tr>';
+    h += fixedRows ? '<th class="rf-corner">'+cornerCellHtml()+'</th>' : '<th style="width:26px;text-align:center;">#</th><th style="text-align:center;">項目</th>';
+    if (schemaRowSide()) h += '<th style="text-align:center;">'+esc(CUR_SCHEMA.row_side_label||'')+'</th>';
+    (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th'+hdrThAttr(c)+'>'+hdrLabelHtml(c.label, c.vertical)+colFillHtml(c)+'</th>'; });
+    if (schemaNeedOwner()) h += '<th>負責單位/負責人</th>';
+    if (schemaSignMode()!=='none') h += '<th>簽名</th>';
+    h += ((isDraftMine() && !fixedRows)?'<th></th>':'')+'</tr></thead><tbody id="itmBody"'+(fixedRows?'':' data-eg-row-add="itemAdd" data-eg-row-del="itemDelLast"')+'></tbody></table></div>';
+    // 固定列模式下列由模板決定，不提供增減列（使用者拍板「完全固定」）。
+    if (isDraftMine() && !fixedRows) h += '<button class="rf-btn-sm" onclick="itemAdd()" style="margin-right:6px;">+新增列</button><button class="rf-btn-sm" onclick="itemDelLast()">-刪除末列</button>';
+    else if (isDraftMine() && fixedRows) h += '<span style="color:#8a6d45;font-size:12px;">本表單的列由模板固定（'+schemaRowHeads().length+' 列），不可增減；同一列要分成多點時請按該列的「＋小項」。</span>';
     h += '<div style="margin-top:12px;">';
     if (PREVIEW_MODE) {
         h += '<span style="color:#8a6d45;font-size:12px;">試填後按下方「列印」即可查看實際排版；不需要送出或審核。</span>';
@@ -420,6 +495,13 @@ function subItemContentHtml(i,k,sub,n){
     if (n>1) btns += '<span class="rf-mini-btn" onclick="subItemDel('+i+','+k+')">-此小項</span>';
     btns += '</div>';
     return ta+btns;
+}
+/* 直式標題模式的列標題格內控制鈕：列本身固定不可增刪，只保留「＋小項」讓同一個列標題底下拆成多點。 */
+function subRowCtrlHtml(i,k,n){
+    if (!isDraftMine()) return '';
+    var btns = '<div class="subitem-ctrl"><span class="rf-mini-btn" onclick="subItemAdd('+i+')">+小項</span>';
+    if (n>1) btns += '<span class="rf-mini-btn" onclick="subItemDel('+i+','+(n-1)+')">-末小項</span>';
+    return btns+'</div>';
 }
 /* 項次(自動編號)欄位在有小項時只在第一列顯示數字、其餘小項列留空（使用者明確要求；欄位本身不合併，只是不重複顯示內容） */
 function fieldInputHtml(i, k, c){
@@ -552,14 +634,58 @@ function renderItems(){
     var h = '';
     var inlineFields = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout!=='block'; });
     var blockFields = (CUR_SCHEMA.fields||[]).filter(function(c){ return c.layout==='block'; });
-    var hasSignCol = (CUR_SCHEMA.sign_mode||'password')!=='none';
+    var hasSignCol = schemaSignMode()!=='none';
+    var hasOwnerCol = schemaNeedOwner();
+    var fixedRows = schemaFixedRows();
     // 負責部門/負責人/簽名/刪除鈕都不再合併（2026-08-12 改版：每個小項各自獨立負責人與簽名），
     // 每個小項自己一整列都是完整欄位，只有「項次」編號與「刪除整個項次」鈕只在該項目第一個小項列顯示。
-    var blockColspan = 2 + inlineFields.length + (hasSignCol?1:0) + (isDraftMine()?1:0);
+    var hasSideCol = schemaRowSide();
+    var blockColspan = (fixedRows?1:2) + (hasSideCol?1:0) + inlineFields.length + (hasOwnerCol?1:0) + (hasSignCol?1:0) + ((isDraftMine()&&!fixedRows)?1:0);
+    /* 橫式標題下方的可填入列：整張表單只有一組值（一欄一格），所以放在 tbody 第一列、不放 thead
+       （放 thead 的話列印分頁時每一頁都會再印一次已填的內容）。 */
+    function headBandRowHtml(){
+        if (!schemaHeadRow()) return '';
+        var dis = isDraftMine() ? '' : 'disabled';
+        var r = '<tr class="head-band">';
+        r += fixedRows ? '<td class="row-head">'+esc(CUR_SCHEMA.head_row_label||'')+'</td>'
+                       : '<td></td><td>'+esc(CUR_SCHEMA.head_row_label||'')+'</td>';
+        if (hasSideCol) r += '<td></td>';
+        inlineFields.forEach(function(c){
+            r += '<td><input type="text" data-head-key="'+esc(c.key)+'" '+dis+' value="'+esc(headDataGet(c.key))+'"></td>';
+        });
+        if (hasOwnerCol) r += '<td></td>';
+        if (hasSignCol) r += '<td></td>';
+        if (isDraftMine() && !fixedRows) r += '<td></td>';
+        return r + '</tr>';
+    }
+    // 直式標題模式：列標題儲存格用 rowspan 蓋住該列底下所有小項，每個小項都是完整的內容列（不再有「大項標題列」）。
+    if (fixedRows) {
+        var hFx = '';
+        ITEMS.forEach(function(it,i){
+            if (!it.subitems || !it.subitems.length) it.subitems = [rvfBlankSubitem()];
+            var subs = it.subitems, n = subs.length;
+            subs.forEach(function(sub,k){
+                var rs = (blockFields.length?n*2:n);
+                hFx += '<tr>';
+                if (k===0) hFx += '<td class="row-head'+(rowHeadCentered()?'':' row-head-left')+'" rowspan="'+rs+'">'+rowHeadHtml(i)+subRowCtrlHtml(i,k,n)+'</td>';
+                // 直式標題右側那一欄也是逐列一格，跟著列標題一起 rowspan（同一列的小項共用）
+                if (k===0 && hasSideCol) hFx += '<td class="row-side" rowspan="'+rs+'"><input type="text" '+(isDraftMine()?'':'disabled')+' value="'+esc(rowSideGet(i))+'" onchange="rowSideEdit('+i+',this.value)"></td>';
+                inlineFields.forEach(function(c){ hFx += '<td>'+fieldInputHtml(i,k,c)+'</td>'; });
+                if (hasOwnerCol) hFx += '<td><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,k,sub.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,k,sub.owner_users,sub.owner_depts)+'</td>';
+                if (hasSignCol) hFx += '<td>'+signSlotsHtml(sub)+'</td>';
+                hFx += '</tr>';
+                if (blockFields.length) {
+                    hFx += '<tr><td colspan="'+(blockColspan-1)+'">' + blockFields.map(function(c){ return fieldInputHtml(i,k,c); }).join('') + '</td></tr>';
+                }
+            });
+        });
+        $('#itmBody').html(headBandRowHtml() + (hFx || '<tr><td colspan="10" style="text-align:center;color:#8a6d45;">此模板未定義列標題</td></tr>'));
+        return;
+    }
     // 有小項時，項次本身這一列(subitems[0]＝新增項次時原本就有的那一列)降級為純標題列：
     // 只有「項目」文字可填，其餘自訂欄位/負責部門/負責人/簽名全部不需要——因為大項只是標題，
     // 真正的內容與各自的負責人/簽名都在下面各個小項（2026-08-13 使用者明確要求）。
-    var headingSpan = inlineFields.length + 1 + (hasSignCol?1:0);
+    var headingSpan = inlineFields.length + (hasOwnerCol?1:0) + (hasSignCol?1:0);
     ITEMS.forEach(function(it,i){
         if (!it.subitems || !it.subitems.length) it.subitems = [rvfBlankSubitem()];
         var subs = it.subitems, n = subs.length;
@@ -571,7 +697,7 @@ function renderItems(){
                 h += '<td colspan="'+headingSpan+'" class="subitem-heading-note">'+(isDraftMine()?'（大項標題，欄位/負責人/簽名由下方各小項各自填寫）':'')+'</td>';
             } else {
                 inlineFields.forEach(function(c){ h += '<td>'+fieldInputHtml(i,k,c)+'</td>'; });
-                h += '<td><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,k,sub.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,k,sub.owner_users,sub.owner_depts)+'</td>';
+                if (hasOwnerCol) h += '<td><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,k,sub.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,k,sub.owner_users,sub.owner_depts)+'</td>';
                 if (hasSignCol) h += '<td>'+signSlotsHtml(sub)+'</td>';
             }
             if (isDraftMine()) h += '<td>'+(k===0?'<span class="rf-del" onclick="itemDel('+i+')" title="刪除整個項次(含全部小項)"><i class="fa fa-times"></i></span>':'')+'</td>';
@@ -581,25 +707,30 @@ function renderItems(){
             }
         });
     });
-    $('#itmBody').html(h || '<tr><td colspan="10" style="text-align:center;color:#8a6d45;">尚未建立項目</td></tr>');
+    $('#itmBody').html(headBandRowHtml() + (h || '<tr><td colspan="10" style="text-align:center;color:#8a6d45;">尚未建立項目</td></tr>'));
 }
 
 function collectItems(){
+    var fixedRows = schemaFixedRows(), needOwner = schemaNeedOwner();
     return ITEMS.map(function(it){
         var n = it.subitems.length;
         return {id:it.id, subitems: it.subitems.map(function(s,k){
-            var isHeading = (k===0 && n>1);
+            // 直式標題模式沒有「大項標題列」——列標題來自模板，每個小項都是完整的內容列。
+            var isHeading = (!fixedRows && k===0 && n>1);
             // 大項標題列存檔時強制清空自訂欄位/負責部門/負責人（2026-08-13 使用者明確要求：
             // 有小項時大項只是標題，不需要這些值，避免殘留舊資料造成「簽不到卻要求簽名」的孤兒狀態）。
-            return {id:s.id, content:s.content,
+            // 直式標題模式的「項目」欄不存在（列標題來自模板 schema），content 一律空字串不佔資料；
+            // 模板關掉負責單位/負責人時一律存空，避免殘留舊值變成「畫面看不到卻要求簽名」的孤兒狀態。
+            return {id:s.id, content: fixedRows ? '' : s.content,
                      data: isHeading ? {} : s.data,
-                     owner_depts: isHeading ? [] : s.owner_depts,
-                     owner_users: isHeading ? [] : s.owner_users};
+                     owner_depts: (isHeading || !needOwner) ? [] : s.owner_depts,
+                     owner_users: (isHeading || !needOwner) ? [] : s.owner_users};
         })};
     });
 }
 function saveDraft(cb){
-    $.post(API, {action:'instance_save_items', csrf:META.csrf, instance_id:CUR.id, business_date:$('#vBizDate').val(), items:JSON.stringify(collectItems())}, function(res){
+    $.post(API, {action:'instance_save_items', csrf:META.csrf, instance_id:CUR.id, business_date:$('#vBizDate').val(),
+                 items:JSON.stringify(collectItems()), head_data:JSON.stringify(HEAD_DATA||{})}, function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         if (cb) cb(); else { loadList(); openView(CUR.id); alert('已儲存'); }
     }, 'json');
@@ -610,12 +741,15 @@ function saveDraft(cb){
    前端擋是即時體驗，後端 rvf_instance_submit() 會用同一套規則再驗一次，不可只做前端。 */
 function findMissingRequiredFields(){
     var missing = [];
+    var fixedRows = schemaFixedRows();
     ITEMS.forEach(function(it, i){
         var subs = it.subitems || [];
         subs.forEach(function(sub, k){
-            var label = '第'+(i+1)+'項' + (subs.length>1 ? '第'+(k+1)+'小項' : '');
-            if (!$.trim(sub.content||'')) missing.push(label+'「項目」內容');
-            var isHeading = (k===0 && subs.length>1);
+            // 直式標題模式的列名稱是模板固定的，沒有「項目」欄要填，改用列標題當提示文字。
+            var label = fixedRows ? ('「'+(schemaRowHeads()[i]||('第'+(i+1)+'列'))+'」' + (subs.length>1 ? '第'+(k+1)+'小項' : ''))
+                                  : ('第'+(i+1)+'項' + (subs.length>1 ? '第'+(k+1)+'小項' : ''));
+            if (!fixedRows && !$.trim(sub.content||'')) missing.push(label+'「項目」內容');
+            var isHeading = (!fixedRows && k===0 && subs.length>1);
             if (isHeading) return; // 標題列只需要項目內容，其餘欄位本來就返灰不填
             (CUR_SCHEMA.fields||[]).forEach(function(c){
                 if (!c.required || c.type==='seq') return;
@@ -631,6 +765,7 @@ function findMissingRequiredFields(){
    比對用 dept_ids（含兼任）。只有小項同時有選負責部門時才檢查，未選部門(全公司名單挑人)不受此限。 */
 function findOwnerDeptMismatch(){
     var msgs = [];
+    if (!schemaNeedOwner()) return msgs; // 模板沒有負責單位/負責人欄，沒有東西要比對
     ITEMS.forEach(function(it, i){
         var subs = it.subitems || [];
         subs.forEach(function(sub, k){
@@ -739,6 +874,16 @@ function rfCss(){
     return 'table.rf-p-items{width:100%;border-collapse:collapse;font-size:12px;margin-top:2px;}'
          + 'table.rf-p-items th,table.rf-p-items td{border:1px solid #333;padding:6px 7px;text-align:center;}'
          + 'table.rf-p-items td.t-left{text-align:left;}'
+         // 直式標題（2026-09-09）：斜線角格用 inline SVG 畫線（不是 CSS 背景漸層，那在列印時會被「不印背景」的設定吃掉）；
+         // 標題直書用 writing-mode，CJK 字元靠 text-orientation:upright 維持正立不躺著。
+         + 'table.rf-p-items th.rf-corner{position:relative;padding:0;height:52px;min-width:96px;}'
+         + 'table.rf-p-items th.rf-corner .cor-line{position:absolute;left:0;top:0;width:100%;height:100%;}'
+         + 'table.rf-p-items th.rf-corner .cor-col{position:absolute;right:6px;top:3px;}'
+         + 'table.rf-p-items th.rf-corner .cor-row{position:absolute;left:6px;bottom:3px;}'
+         + 'table.rf-p-items td.row-head{font-weight:bold;vertical-align:middle;white-space:pre-wrap;}'
+         + 'table.rf-p-items td.row-head.row-head-left{text-align:left;}'
+         + 'table.rf-p-items td.row-side{vertical-align:middle;}'
+         + '.hdr-vert{writing-mode:vertical-rl;text-orientation:upright;letter-spacing:2px;display:inline-block;white-space:nowrap;line-height:1.15;}'
          + '.rf-p-datebar{text-align:right;font-size:12px;color:#333;margin-bottom:3px;}'
          // 圖章尺寸直接比照 training_record.php 既有、使用者已驗證正確的寫法（不分有無指定圖章模板一律套用，
          // 不加 !important；SVG 本身的 width/height 屬性是「表現屬性」，樣式表選到就會蓋過去不需要 !important）。
@@ -772,18 +917,39 @@ function printForm(){
     // 表頭不重複顯示狀態/填表人（2026-08-13 使用者明確要求：製表人姓名+日期下方本來就有「製表」圖章，不必再印一次；
     // 狀態對已完成的表單沒有意義），建立日期改印在項目表格右上角。
     h += '<div class="rf-p-datebar">建立日期：'+dispDate(CUR.business_date)+'</div>';
-    var pHasSignCol = (schema.sign_mode||'password')!=='none';
+    var pHasSignCol = schemaSignMode(schema)!=='none';
+    var pHasOwnerCol = schemaNeedOwner(schema);
+    var pFixedRows = schemaFixedRows(schema);
     var inlineFieldsP = (schema.fields||[]);
-    h += '<table class="rf-p-items"><thead><tr><th>#</th><th>項目</th>';
-    inlineFieldsP.forEach(function(c){ h += '<th class="hdr-auto">'+hdrLabelHtml(c.label)+'</th>'; });
-    h += '<th>負責單位/人</th>'+(pHasSignCol?'<th>簽名</th>':'')+'</tr></thead><tbody>';
-    var headingSpanP = inlineFieldsP.length + 1 + (pHasSignCol?1:0);
+    h += '<table class="rf-p-items"><thead><tr>';
+    var pHasSideCol = schemaRowSide(schema);
+    h += pFixedRows ? '<th class="rf-corner">'+cornerCellHtml(schema)+'</th>' : '<th>#</th><th>項目</th>';
+    if (pHasSideCol) h += '<th>'+esc(schema.row_side_label||'')+'</th>';
+    inlineFieldsP.forEach(function(c){ h += '<th class="hdr-auto"'+hdrThAttr(c)+'>'+hdrLabelHtml(c.label, c.vertical)+'</th>'; });
+    h += (pHasOwnerCol?'<th>負責單位/人</th>':'')+(pHasSignCol?'<th>簽名</th>':'')+'</tr></thead><tbody>';
+    var headingSpanP = inlineFieldsP.length + (pHasOwnerCol?1:0) + (pHasSignCol?1:0);
+    if (schemaHeadRow(schema)) {
+        var pHead = {};
+        try { pHead = JSON.parse(CUR.head_data_json||'{}') || {}; } catch(e){ pHead = {}; }
+        h += '<tr>';
+        h += pFixedRows ? '<td class="row-head">'+esc(schema.head_row_label||'')+'</td>'
+                        : '<td></td><td class="t-left">'+esc(schema.head_row_label||'')+'</td>';
+        if (pHasSideCol) h += '<td></td>';
+        inlineFieldsP.forEach(function(c){ h += '<td>'+esc(pHead[c.key]||'')+'</td>'; });
+        if (pHasOwnerCol) h += '<td></td>';
+        if (pHasSignCol) h += '<td></td>';
+        h += '</tr>';
+    }
     ITEMS.forEach(function(it,i){
         var subs = (it.subitems&&it.subitems.length) ? it.subitems : [rvfBlankSubitem()];
         var n = subs.length;
         subs.forEach(function(sub,k){
-            var isHeading = (k===0 && n>1);
-            h += '<tr><td>'+(k===0?(i+1):'')+'</td><td class="t-left">'+esc(sub.content).replace(/\n/g,'<br>')+'</td>';
+            // 直式標題模式：列標題格用 rowspan 蓋住該列所有小項，沒有「大項標題列」。
+            var isHeading = (!pFixedRows && k===0 && n>1);
+            h += '<tr>';
+            if (pFixedRows) h += (k===0 ? '<td class="row-head'+(rowHeadCentered(schema)?'':' row-head-left')+'" rowspan="'+n+'">'+rowHeadHtml(i, schema)+'</td>' : '');
+            if (pHasSideCol && k===0) h += '<td class="row-side" rowspan="'+n+'">'+esc(rowSideGet(i))+'</td>';
+            else h += '<td>'+(k===0?(i+1):'')+'</td><td class="t-left">'+esc(sub.content).replace(/\n/g,'<br>')+'</td>';
             if (isHeading) {
                 // 有小項時大項這一列只是標題，其餘欄位整列合併成一個空白儲存格（2026-08-13 使用者明確要求；
                 // 項次已經在最前面單獨一格，這裡的合併不含項次欄，符合「除了項次外都合併」）。
@@ -801,7 +967,7 @@ function printForm(){
             // 而不是把部門、人員各自攤平成一整串再用「/」分隔。見 ownerPairLines()。
             // 每行「部門 / 人員」本身不可斷行（2026-08-14 使用者實測回報：欄位太窄時姓名被硬拆成「陳俊」「宏」兩行），
             // 只在多組部門/人員之間換行；nowrap 讓瀏覽器在該欄位寬度不夠時自動撐開欄寬，不會拆字。
-            h += '<td>'+ownerPairLines(sub.owner_depts, sub.owner_users).map(function(l){ return '<span style="white-space:nowrap;">'+esc(l)+'</span>'; }).join('<br>')+'</td>';
+            if (pHasOwnerCol) h += '<td>'+ownerPairLines(sub.owner_depts, sub.owner_users).map(function(l){ return '<span style="white-space:nowrap;">'+esc(l)+'</span>'; }).join('<br>')+'</td>';
             if (pHasSignCol) {
                 var signHtml = (sub.confirms||[]).map(function(c){ return stampList(c.user_name, dispDate(c.signed_at)); }).join('');
                 if (!signHtml && PREVIEW_MODE && (sub.owner_depts.length || sub.owner_users.length)) signHtml = stampList('（簽名樣式預覽）', dispDate(CUR.business_date));
@@ -852,6 +1018,8 @@ function initPreview(){
             review: null, approval: null, can_review: false, can_approve: false
         };
         $('#viewTitle').text('試填預覽 — ' + CUR.tpl.name);
+        HEAD_DATA = {};
+        rvfPadFixedRows(); // 預覽沒有實際資料列，直式標題模式要先依模板的列標題補出對應的空白列
         renderView();
         openMask('viewMask');
     }

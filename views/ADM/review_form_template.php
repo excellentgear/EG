@@ -173,10 +173,37 @@ $perms = rvf_perms($db, $rvfUser);
     <div class="m-head"><span id="schemaTitle">項次欄位定義</span><span class="m-close" onclick="closeMask('schemaMask')">✕</span></div>
     <div class="m-body">
         <input type="hidden" id="scTplId" value="0">
+
+        <div class="rf-sec" style="border-top:none;margin-top:0;padding-top:0;"><div class="rf-sec-title">表格結構</div>
+            <label><input type="checkbox" id="scNeedOwner" checked> 需要「負責單位／負責人」欄位</label>
+            <div class="rf-hint">不勾＝填寫畫面與列印版都不出現「負責單位／負責人」欄，也不會要求任何人簽名（下方「負責人簽名方式」會自動停用）。</div>
+            <label><input type="checkbox" id="scHeadRow"> 橫式標題<b>下方</b>再加一列可填入資料（每個欄位各填一格，整張表單只填一次，不是逐列）</label>
+            <div style="margin:-2px 0 6px 22px;"><input type="text" id="scHeadRowLabel" maxlength="20" placeholder="這一列最左邊那格要顯示的文字（可留空）" style="max-width:320px;"></div>
+            <label><input type="checkbox" id="scUseRowHead"> 使用直式標題（左側固定列標題，與上方的橫式欄位標題交叉成矩陣，例：SWOT／組織處境分析表）</label>
+            <div class="rf-hint">開啟後最左欄改為下方定義的「列標題」（取代原本讓使用者自己打字的「項目」欄），建立表單時自動產生這些列，使用者<b>不可增刪列</b>、只能填交叉格的內容；每個列標題底下仍可用「＋小項」拆成多點。</div>
+            <div id="rowHeadBox" style="display:none;border:1px dashed #E8D5B5;border-radius:6px;padding:8px;margin-top:6px;">
+                <div class="grid2">
+                    <div><label>欄的維度名稱（左上角斜線右上半）</label><input type="text" id="scCornerCol" maxlength="30" placeholder="例：內部問題"></div>
+                    <div><label>列的維度名稱（左上角斜線左下半）</label><input type="text" id="scCornerRow" maxlength="30" placeholder="例：外部問題"></div>
+                </div>
+                <div class="rf-hint">兩個都留空＝左上角那格只寫「項目」、不畫斜線。</div>
+                <label style="display:inline-block;margin-right:18px;"><input type="checkbox" id="scRowHeadCenter" checked> 列標題置中（取消＝靠左）</label>
+                <label style="display:inline-block;"><input type="checkbox" id="scRowHeadVertical"> 列標題文字直書（由上而下一字一行，適合很窄的左欄）</label>
+                <label><input type="checkbox" id="scRowSide"> 直式標題<b>右側</b>再加一欄可填入資料（逐列各填一格，紙本組織處境分析表左邊那個窄欄）</label>
+                <div style="margin:-2px 0 6px 22px;"><input type="text" id="scRowSideLabel" maxlength="20" placeholder="這一欄的標題（可留空）" style="max-width:260px;"></div>
+                <label>列標題（由上而下依序）</label>
+                <table class="col-tbl">
+                    <thead><tr><th style="width:8%;">順序</th><th>標題文字</th><th style="width:10%;"></th></tr></thead>
+                    <tbody id="rowHeadBody" data-eg-row-add="rowHeadAdd" data-eg-row-del="rowHeadDelLast"></tbody>
+                </table>
+                <button type="button" onclick="rowHeadAdd()" style="height:26px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;">+ 新增列標題</button>
+            </div>
+        </div>
+
         <div class="rf-sec-title">逐列可填欄位（除固定的「項目」文字外，額外可設定審查結果／其他欄位／日期欄位，可自由混合排序）</div>
-        <div class="rf-hint">每列固定含「項目」文字欄；以下欄位會依此清單的順序顯示在項目欄之後，文字/下拉/日期/項次欄位可任意混合排序——拖動最左側 <i class="fa fa-bars"></i> 調整順序。「排版」選整行代表獨佔一列（適合長文字），選並排代表與其他並排欄位同一列。輸入欄按鍵盤 ↓ 鍵在最後一列會自動新增一列，最後一列空白時按鍵盤 ↑ 鍵會自動移除。</div>
+        <div class="rf-hint">每列固定含「項目」文字欄；以下欄位會依此清單的順序顯示在項目欄之後，文字/下拉/日期/項次欄位可任意混合排序——拖動最左側 <i class="fa fa-bars"></i> 調整順序。「排版」選整行代表獨佔一列（適合長文字），選並排代表與其他並排欄位同一列；「內容對齊」管格子裡的內容，「標題」那一欄的兩個勾選管的是表頭文字要不要置中、要不要直書。輸入欄按鍵盤 ↓ 鍵在最後一列會自動新增一列，最後一列空白時按鍵盤 ↑ 鍵會自動移除。</div>
         <table class="col-tbl">
-            <thead><tr><th style="width:5%;"></th><th style="width:13%;">標籤</th><th style="width:10%;">類型</th><th style="width:15%;">提示詞（灰字）</th><th style="width:15%;">選項(逗號分隔，僅下拉用)</th><th style="width:6%;">必填</th><th style="width:8%;">排版</th><th style="width:9%;">文字對齊</th><th style="width:9%;"></th></tr></thead>
+            <thead><tr><th style="width:5%;"></th><th style="width:13%;">標籤</th><th style="width:10%;">類型</th><th style="width:13%;">提示詞（灰字）</th><th style="width:13%;">選項(逗號分隔，僅下拉用)</th><th style="width:6%;">必填</th><th style="width:8%;">排版</th><th style="width:9%;" title="這一欄「內容」的對齊方式，與標題無關">內容對齊</th><th style="width:10%;" title="這一欄「標題」怎麼排：置中或靠左、要不要直書">標題</th><th style="width:9%;"></th></tr></thead>
             <tbody id="colBody" data-eg-row-add="fieldAdd" data-eg-row-del="fieldDelLast"></tbody>
         </table>
         <button type="button" onclick="fieldAdd()" style="height:26px;font-size:12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;border-radius:4px;cursor:pointer;">+ 新增欄位</button>
@@ -193,6 +220,7 @@ $perms = rvf_perms($db, $rvfUser);
             <label><input type="radio" name="signMode" value="password"> 現場輸入本人密碼線上簽名</label>
             <label><input type="radio" name="signMode" value="notify"> 送出後改用通知請對方回簽</label>
             <label><input type="radio" name="signMode" value="none"> 不須簽名（負責單位/負責人僅供標示，不需線上簽名、也不發送通知簽章）</label>
+            <div class="rf-hint" id="signModeHint" style="display:none;color:#DD5138;">本模板未勾選「需要負責單位／負責人欄位」，沒有可簽名的對象，故固定為「不須簽名」。</div>
         </div>
 
         <div class="rf-sec"><div class="rf-sec-title">維護人員名單</div>
@@ -263,6 +291,7 @@ $perms = rvf_perms($db, $rvfUser);
         <h4>操作步驟</h4>
         <b>①新增模板</b>：設定名稱、綁定 AS 文件編號、列印紙張大小（A4/A3）與方向（預設橫式，可改直式）、逐列簽章／製表核准簽章要套用的圖章樣式（不設定則用預設樣式，樣式請到「圖章管理→線上圖章設計」建立）、是否需要審核（設審核部門，任一主管審過即完成）、是否需要核准（可設核准優先序：綁部門或人員／自動抓送出者上一階主管／全站最高決策者，預設只用「最高決策者」，可調整順序或組合）、維護部門（可指派誰能修改項次內容）。<br>
         <b>②設定項次欄位定義</b>：除固定的「項目」文字欄外，可新增任意數量的自訂欄位（文字/多行文字/下拉選單/日期，四種類型可自由混合排序，例如：欄位、日期、欄位、日期…），每欄可設提示詞（填寫畫面上顯示的灰字）、是否必填、排版方式（並排/整行）；欄位順序可拖動最左側圖示或用 ▲▼ 調整；並選擇負責人簽名方式（現場密碼簽名／送出後通知回簽／不須簽名，三擇一）。<br>
+        <b>②-1 表格結構（直式標題／負責人欄）</b>：在「項次欄位定義」最上方可設定 ——「需要負責單位／負責人欄位」不勾就完全不出現該欄，也不會要求任何人簽名；「使用直式標題」勾起來後，表格最左欄改成模板預先定義好的<b>列標題</b>（取代讓使用者自己打字的「項目」欄），與上方橫式的欄位標題交叉成矩陣（＝SWOT／組織處境分析表那種版面），建立表單時自動產生這些列、使用者不可增刪，只能填交叉格的內容（每個列標題底下仍可用「＋小項」拆成多點）；左上角那格可填「欄的維度名稱」與「列的維度名稱」，會自動畫成斜線分隔的兩半（兩個都留空就只寫「項目」不畫斜線）。另外有兩個<b>可選的額外填寫區</b>（預設都關閉＝跟原本一樣）：勾「橫式標題下方再加一列」會在欄位標題那一列的下面多一列，每個欄位各一格、<b>整張表單只填一次</b>（不是逐列，適合填該欄的補充說明或分類）；勾「直式標題右側再加一欄」會在左側列標題的右邊多一個窄欄，<b>逐列各填一格</b>（紙本組織處境分析表左邊那個窄欄就是這個）。兩者都可以各自填一個標題文字，留空就是空白格。另外每個欄位的「標題」可各自設定<b>置中或靠左</b>、要不要<b>直書</b>（文字由上而下一字一行，欄寬可以很窄），左側列標題也有同樣的置中與直書選項；欄位表裡的「內容對齊」管的是格子內容、與標題各自獨立。<br>
         <b>③維護人員</b>：管理員或維護部門內主管可指派特定人員為「維護人員」，該名單與維護部門主管都能修改「項次欄位定義」，但不能改模板其他設定（AS文件綁定/審核/核准/維護部門本身）。<br>
         <b>④連動 AS 文件改版</b>：修改項次欄位定義存檔時可勾選「連動更新 AS 文件版次」，需上傳新版文件檔與文件制修申請單（有「免附件補登」權限者可免附件），存檔後立即生效成為現行版本；已建立的舊表單仍顯示建立當下的欄位定義，不受影響。
         <h4>重要行為</h4>
@@ -529,10 +558,40 @@ function renderFields(){
            + '<td><select '+(c.type==='text'||c.type==='textarea'?'':'disabled')+' onchange="fieldEdit('+i+',\'align\',this.value)" title="只有單行/多行文字欄位需要設定，其他類型不受影響">'
            +   ['left','center','right'].map(function(a){ return '<option value="'+a+'"'+((c.align||'left')===a?' selected':'')+'>'+({left:'靠左',center:'置中',right:'靠右'})[a]+'</option>'; }).join('')
            + '</select></td>'
+           + '<td style="white-space:nowrap;font-size:11.5px;color:#5b3a1e;">'
+           +   '<label style="display:block;margin:0;font-weight:normal;cursor:pointer;"><input type="checkbox" style="width:auto;" '+((c.hdr_center===undefined||Number(c.hdr_center))?'checked':'')+' title="取消＝標題靠左，預設為置中" onchange="fieldEdit('+i+',\'hdr_center\',this.checked?1:0)"> 置中</label>'
+           +   '<label style="display:block;margin:0;font-weight:normal;cursor:pointer;"><input type="checkbox" style="width:auto;" '+(c.vertical?'checked':'')+' title="勾選＝這一欄的標題文字改成直書（由上而下一字一行）" onchange="fieldEdit('+i+',\'vertical\',this.checked?1:0)"> 直書</label>'
+           + '</td>'
            + '<td style="text-align:center;white-space:nowrap;"><span class="rf-del" onclick="fieldDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
     });
-    $('#colBody').html(h || '<tr><td colspan="9" style="text-align:center;color:#8a6d45;">尚未新增欄位</td></tr>');
+    $('#colBody').html(h || '<tr><td colspan="10" style="text-align:center;color:#8a6d45;">尚未新增欄位</td></tr>');
 }
+/* ---- 直式標題（左側列標題）：模板預先定義，建立表單時自動產生成固定的列，使用者不可增刪（2026-09-09 使用者拍板） ---- */
+var ROWHEADS = [];
+function rowHeadAdd(){ ROWHEADS.push(''); renderRowHeads(); }
+function rowHeadDel(i){ ROWHEADS.splice(i,1); renderRowHeads(); }
+function rowHeadDelLast(){ if (ROWHEADS.length) ROWHEADS.pop(); renderRowHeads(); }
+function rowHeadEdit(i,v){ ROWHEADS[i]=v; }
+function renderRowHeads(){
+    var h = ROWHEADS.map(function(t,i){
+        return '<tr><td style="text-align:center;color:#8a6d45;">'+(i+1)+'</td>'
+             + '<td><input type="text" maxlength="60" value="'+esc(t)+'" placeholder="例：機會" onchange="rowHeadEdit('+i+',this.value)"></td>'
+             + '<td style="text-align:center;"><span class="rf-del" onclick="rowHeadDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
+    }).join('');
+    $('#rowHeadBody').html(h || '<tr><td colspan="3" style="text-align:center;color:#8a6d45;">尚未新增列標題</td></tr>');
+}
+$(document).on('change', '#scUseRowHead', function(){
+    $('#rowHeadBox').toggle(this.checked);
+    if (this.checked && !ROWHEADS.length) { ROWHEADS = ['','']; renderRowHeads(); }
+});
+/* 沒有負責單位/負責人就沒有人可以簽名，簽名方式一律鎖成「不須簽名」（後端 rvf_schema_sign_mode() 同規則再判一次）。 */
+function syncSignModeEnabled(){
+    var on = $('#scNeedOwner').is(':checked');
+    $('input[name=signMode]').prop('disabled', !on);
+    if (!on) $('input[name=signMode][value="none"]').prop('checked', true);
+    $('#signModeHint').toggle(!on);
+}
+$(document).on('change', '#scNeedOwner', syncSignModeEnabled);
 /* 拖移重排序（使用者明確要求「上下拖移」）：原生 HTML5 drag and drop，不引入額外套件。 */
 var FLD_DRAG_FROM = null;
 $(document).on('dragstart', '#colBody tr.fld-row', function(e){
@@ -568,7 +627,22 @@ function openSchemaModal(id){
                 .concat((t.schema.date_fields||[]).map(function(d){ return toOptStr($.extend({_keyManual:true, type:'date', placeholder:'', required:0, layout:'inline', options:''}, d)); }));
         }
         renderFields();
+        // 表格結構（need_owner 舊資料沒有這個鍵＝維持原本一律顯示負責單位/負責人的行為）
+        $('#scNeedOwner').prop('checked', t.schema.need_owner===undefined ? true : !!Number(t.schema.need_owner));
+        ROWHEADS = (t.schema.row_mode==='fixed' && Array.isArray(t.schema.row_headings)) ? t.schema.row_headings.slice() : [];
+        $('#scUseRowHead').prop('checked', t.schema.row_mode==='fixed');
+        $('#rowHeadBox').toggle(t.schema.row_mode==='fixed');
+        $('#scCornerCol').val(t.schema.corner_col_label||'');
+        $('#scCornerRow').val(t.schema.corner_row_label||'');
+        $('#scRowHeadVertical').prop('checked', !!Number(t.schema.row_head_vertical||0));
+        $('#scRowHeadCenter').prop('checked', t.schema.row_head_center===undefined ? true : !!Number(t.schema.row_head_center));
+        $('#scHeadRow').prop('checked', !!Number(t.schema.head_row||0));
+        $('#scHeadRowLabel').val(t.schema.head_row_label||'');
+        $('#scRowSide').prop('checked', !!Number(t.schema.row_side||0));
+        $('#scRowSideLabel').val(t.schema.row_side_label||'');
+        renderRowHeads();
         $('input[name=signMode][value="'+(t.schema.sign_mode||'password')+'"]').prop('checked',true);
+        syncSignModeEnabled();
         renderMaintainers(t.maintainers||[]);
         $('#scYearBox').toggle(t.has_year_heading==1);
         $('#scYearFormat').val(t.schema.year_format||'ad');
@@ -598,14 +672,28 @@ function maintainerRemove(uid){
 $('#scBumpAsDoc').on('change', function(){ $('#bumpBox').toggle(this.checked); });
 
 function buildSchemaObj(){
+    var useRow = $('#scUseRowHead').is(':checked');
+    var rowHeads = ROWHEADS.map(function(s){ return $.trim(s||''); }).filter(function(s){ return s!==''; });
     return {
         fields: FIELDS.filter(function(c){ return $.trim(c.label)!==''; }).map(function(c){
             var optStr = Array.isArray(c.options) ? c.options.join(',') : String(c.options||'');
             return {key:c.key, label:c.label, type:c.type, placeholder:c.placeholder||'', required:c.required?1:0, layout:c.layout,
                      align: (c.type==='text'||c.type==='textarea') ? (c.align||'left') : 'left',
+                     vertical: c.vertical?1:0, hdr_center: (c.hdr_center===undefined||Number(c.hdr_center))?1:0,
                      options: c.type==='select' ? optStr.split(',').map(function(s){return $.trim(s);}).filter(Boolean) : []};
         }),
-        sign_mode: $('input[name=signMode]:checked').val() || 'password',
+        need_owner: $('#scNeedOwner').is(':checked') ? 1 : 0,
+        row_mode: useRow ? 'fixed' : 'free',
+        row_headings: useRow ? rowHeads : [],
+        corner_col_label: useRow ? $.trim($('#scCornerCol').val()||'') : '',
+        corner_row_label: useRow ? $.trim($('#scCornerRow').val()||'') : '',
+        row_head_vertical: (useRow && $('#scRowHeadVertical').is(':checked')) ? 1 : 0,
+        row_head_center: (useRow && !$('#scRowHeadCenter').is(':checked')) ? 0 : 1,
+        head_row: $('#scHeadRow').is(':checked') ? 1 : 0,
+        head_row_label: $('#scHeadRow').is(':checked') ? $.trim($('#scHeadRowLabel').val()||'') : '',
+        row_side: (useRow && $('#scRowSide').is(':checked')) ? 1 : 0,
+        row_side_label: (useRow && $('#scRowSide').is(':checked')) ? $.trim($('#scRowSideLabel').val()||'') : '',
+        sign_mode: $('#scNeedOwner').is(':checked') ? ($('input[name=signMode]:checked').val() || 'password') : 'none',
         year_format: $('#scYearFormat').val() || 'ad',
         year_position: $('#scYearPos').val() || 'left'
     };
@@ -622,6 +710,9 @@ function previewSchema(){
     window.open('review_form.php?preview=1', '_blank');
 }
 function submitSchema(){
+    if ($('#scUseRowHead').is(':checked') && !ROWHEADS.filter(function(s){ return $.trim(s||'')!==''; }).length) {
+        alert('已勾選「使用直式標題」，請至少填一個列標題（或取消勾選）'); return;
+    }
     var schema = buildSchemaObj();
     if (!$('#scBumpAsDoc').is(':checked')) {
         doSchemaSave(schema, null); return;
