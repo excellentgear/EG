@@ -641,9 +641,13 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
         body { margin: 0; background: #f5f5f5; overflow: hidden; }
         .main-wrap { display: flex; height: 100vh; overflow: hidden; }
 
-        /* ── 左側檔案列表面板 ── */
+        /* ── 左側檔案列表面板 ──
+           寬度 280→340px（2026-09-10 使用者回報）：三個分頁鈕（圖面查閱／訂單／報價／其他附件）
+           連圖示與筆數徽章一起量測，最少要 290px（筆數 3 位數時 316px），280px 扣掉直向捲軸只剩
+           約 265px＝筆數被切掉、面板底下還長出一條左右拉桿。overflow-x:hidden 是第二道保險
+           （面板內只有清單與說明文字，本來就都會自動換行，不靠橫向捲動）。 */
         #file-panel {
-            width: 280px; min-width: 180px; overflow-y: auto; height: 100vh;
+            width: 340px; min-width: 180px; overflow-y: auto; overflow-x: hidden; height: 100vh;
             background: #fff; border-right: 1px solid #ddd; flex-shrink: 0;
         }
         /* 料號主檔切換器（同名料號有多筆不同客戶／版次時才出現）；配色走 ai-rules/10 暖色系 */
@@ -716,14 +720,21 @@ if (!in_array($initTab, ['drawing','quote','other','order_attach'], true)) $init
 
         /* ── 分頁切換列（僅 did 模式：圖面查閱 / 訂單／報價 / 其他附件）── */
         #bom-tabbar { display: flex; border-bottom: 1px solid #e0d3c0; background: #faf5ec; }
+        /* 分頁鈕本身改成 flex：面板真的被縮到很窄時（使用者自行拉小視窗、或往後多一個分頁），
+           被截掉的是「文字」而不是最右邊的筆數徽章——徽章 flex:none 永遠完整顯示。
+           flex-basis 刻意用 auto 不用 0：用 0 會把空間「平均」分給三個分頁，
+           最長的「訂單／報價」在筆數變成 3 位數時就會被擠掉一個字（總寬其實還夠）。 */
         .bom-tab {
-            flex: 1; text-align: center; padding: 8px 4px; font-size: 12.5px; cursor: pointer;
+            flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 3px;
+            text-align: center; padding: 8px 4px; font-size: 12.5px; cursor: pointer;
             color: #8a6a3f; border-bottom: 3px solid transparent; user-select: none; white-space: nowrap;
         }
+        .bom-tab .tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .bom-tab > i.fa { flex: none; }
         .bom-tab:hover { background: #f3e7d3; }
         .bom-tab.active { color: #8a4b0f; font-weight: bold; border-bottom-color: #d4761a; background: #fff; }
         .bom-tab .tab-count {
-            display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 3px;
+            flex: none; display: inline-block; min-width: 16px; padding: 0 4px;
             font-size: 10px; line-height: 15px; border-radius: 8px; background: #e6c9a0; color: #6b4a1f;
         }
         .bom-tab.active .tab-count { background: #d4761a; color: #fff; }
@@ -1334,8 +1345,11 @@ function renderTabbar() {
     var html = '';
     ['drawing','order_attach','other'].forEach(function(t) {
         if (!_tabEnabled[t]) return;
-        html += '<div class="bom-tab'+(t===_activeTab?' active':'')+'" data-tab="'+t+'">'
-             +  '<i class="fa '+_tabMeta[t].icon+'"></i> '+_tabMeta[t].label
+        // 文字包一層 .tab-label：面板被縮很窄時只截文字（並以 title 補完整名稱），
+        // 右邊的筆數徽章不會被切掉（見上方 .bom-tab 的 CSS）
+        html += '<div class="bom-tab'+(t===_activeTab?' active':'')+'" data-tab="'+t+'" title="'+_tabMeta[t].label+'">'
+             +  '<i class="fa '+_tabMeta[t].icon+'"></i>'
+             +  '<span class="tab-label">'+_tabMeta[t].label+'</span>'
              +  '<span class="tab-count">'+tabCount(t)+'</span></div>';
     });
     $('#bom-tabbar').html(html).show();
