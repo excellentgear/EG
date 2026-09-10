@@ -101,12 +101,16 @@ $perms = rvf_perms($db, $rvfUser);
         table.itm-tbl td.row-head { background:#F7E0BD; color:#5b3a1e; font-weight:bold; text-align:center; vertical-align:middle; white-space:pre-wrap; }
         table.itm-tbl td.row-head .hdr-vert { line-height:1.15; }
         table.itm-tbl td.row-head.row-head-left { text-align:left; }
-        table.itm-tbl td.row-side { vertical-align:middle; }
+        table.itm-tbl td.row-side { vertical-align:top; }
+        table.itm-tbl textarea.fill-auto { width:100%; min-height:26px; overflow:hidden; resize:vertical;
+            border:1px solid #D8BE93; border-radius:4px; padding:4px 6px; font-size:12.5px; box-sizing:border-box; }
         table.itm-tbl tr.head-band td { background:#FDF8EF; }
         .rf-corner { position:relative; min-width:110px; height:56px; padding:0 !important; }
         .rf-corner .cor-line { position:absolute; left:0; top:0; width:100%; height:100%; }
         .rf-corner .cor-col { position:absolute; right:6px; top:3px; font-weight:bold; }
         .rf-corner .cor-row { position:absolute; left:6px; bottom:3px; font-weight:bold; }
+        table.itm-tbl thead th.rf-corner.corner-merge { border-bottom:none; }
+        table.itm-tbl td.row-head.merge-up { border-top:none; }
         .col-fill { margin-top:4px; display:flex; flex-direction:column; gap:3px; font-weight:normal; }
         .col-fill .col-fill-inp { width:100%; min-width:0; border:1px solid #D8BE93; border-radius:4px; padding:2px 4px; font-size:11px; box-sizing:border-box; background:#fff; color:#5b3a1e; }
         .sign-slot { border:1px dashed #E8D5B5; border-radius:4px; padding:3px 5px; margin-bottom:3px; font-size:11px; }
@@ -206,6 +210,9 @@ function esc(s){ return $('<div>').text(s==null?'':s).html(); }
 function dispDate(d){ return (typeof egFmtDate === 'function') ? egFmtDate(d) : (d||''); }
 // 欄位標題可在「項次欄位定義」用 Enter 手動換行(最多3行)，這裡把換行字元轉成 <br>；
 // 手動換行後若欄位仍太窄導致真正列印時還是擠爆，由 egPrintWindow() 內的自動縮小接手（2026-08-14）。
+/* 使用者在多行文字欄位打的分段，列印時要照樣換行（2026-09-10 使用者實測回報：印出來全部黏成一段）。
+   textarea 的值裡是真正的換行字元，HTML 不會自己斷行，一定要轉成 <br>。 */
+function nl2brEsc(v){ return esc(v==null?'':String(v)).split(/\r\n|\r|\n/).join('<br>'); }
 function hdrLabelHtml(label, vertical){
     var t = esc(label||'').replace(/\n/g,'<br>');
     // 標題直書（2026-09-09）：writing-mode 讓文字由上而下、CJK 字元維持正立，欄寬可以很窄。
@@ -242,7 +249,12 @@ function schemaRowSide(s){ s = s || CUR_SCHEMA || {}; return !!Number(s.row_side
 function headDataGet(key){ return (HEAD_DATA && HEAD_DATA[key]) || ''; }
 function headDataEdit(key, val){ HEAD_DATA[key] = val; }
 // 用事件委派而不是 inline onchange：欄位 key 是使用者自訂的字串（可能含引號），組進 onchange 屬性裡會把 HTML 打壞。
-$(document).on('change input', '#itmBody input[data-head-key]', function(){ headDataEdit($(this).data('head-key'), this.value); });
+$(document).on('change input', '#itmBody [data-head-key]', function(){ headDataEdit($(this).data('head-key'), this.value); fillAutoGrow(this); });
+$(document).on('change input', '#itmBody [data-rowside]', function(){ rowSideEdit(parseInt($(this).data('rowside'),10), this.value); fillAutoGrow(this); });
+/* 這兩區的內容多半是「1、…2、…3、…」這種條列，所以用會自動長高的多行文字框：
+   打幾行就多高，不必自己拉，也不會像單行輸入框那樣把後面的字藏起來（2026-09-10 使用者明確要求）。 */
+function fillAutoGrow(el){ if (!el) return; el.style.height='auto'; el.style.height=(el.scrollHeight+2)+'px'; }
+function fillAutoGrowAll(){ $('#itmBody textarea.fill-auto').each(function(){ fillAutoGrow(this); }); }
 function rowSideEdit(i, val){ if (ITEMS[i] && ITEMS[i].subitems[0]) ITEMS[i].subitems[0].data[RVF_ROWSIDE_KEY] = val; }
 function rowSideGet(i){ var it = ITEMS[i]; return (it && it.subitems[0] && it.subitems[0].data[RVF_ROWSIDE_KEY]) || ''; }
 function rowHeadCentered(s){ s = s || CUR_SCHEMA || {}; return (s.row_head_center===undefined) ? true : !!Number(s.row_head_center); }
@@ -431,7 +443,8 @@ function renderView(){
     // 直式標題（fixed）模式：最左欄改成模板定義的固定列標題，表頭那格＝左上角斜線維度名稱，序號欄不顯示（列標題本身就是識別）。
     var fixedRows = schemaFixedRows();
     h += '<div class="itm-tbl-wrap"><table class="itm-tbl"><thead><tr>';
-    h += fixedRows ? '<th class="rf-corner">'+cornerCellHtml()+'</th>' : '<th style="width:26px;text-align:center;">#</th><th style="text-align:center;">項目</th>';
+    var cornerMerge = fixedRows && schemaHeadRow() && !$.trim(CUR_SCHEMA.head_row_label||'');
+    h += fixedRows ? '<th class="rf-corner'+(cornerMerge?' corner-merge':'')+'">'+cornerCellHtml()+'</th>' : '<th style="width:26px;text-align:center;">#</th><th style="text-align:center;">項目</th>';
     if (schemaRowSide()) h += '<th style="text-align:center;">'+esc(CUR_SCHEMA.row_side_label||'')+'</th>';
     (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th'+hdrThAttr(c)+'>'+hdrLabelHtml(c.label, c.vertical)+colFillHtml(c)+'</th>'; });
     if (schemaNeedOwner()) h += '<th>負責單位/負責人</th>';
@@ -647,11 +660,12 @@ function renderItems(){
         if (!schemaHeadRow()) return '';
         var dis = isDraftMine() ? '' : 'disabled';
         var r = '<tr class="head-band">';
-        r += fixedRows ? '<td class="row-head">'+esc(CUR_SCHEMA.head_row_label||'')+'</td>'
+        var mergeUp = fixedRows && !$.trim(CUR_SCHEMA.head_row_label||'');
+        r += fixedRows ? '<td class="row-head'+(mergeUp?' merge-up':'')+'">'+esc(CUR_SCHEMA.head_row_label||'')+'</td>'
                        : '<td></td><td>'+esc(CUR_SCHEMA.head_row_label||'')+'</td>';
         if (hasSideCol) r += '<td></td>';
         inlineFields.forEach(function(c){
-            r += '<td><input type="text" data-head-key="'+esc(c.key)+'" '+dis+' value="'+esc(headDataGet(c.key))+'"></td>';
+            r += '<td><textarea class="fill-auto" rows="1" data-head-key="'+esc(c.key)+'" '+dis+'>'+esc(headDataGet(c.key))+'</textarea></td>';
         });
         if (hasOwnerCol) r += '<td></td>';
         if (hasSignCol) r += '<td></td>';
@@ -669,7 +683,7 @@ function renderItems(){
                 hFx += '<tr>';
                 if (k===0) hFx += '<td class="row-head'+(rowHeadCentered()?'':' row-head-left')+'" rowspan="'+rs+'">'+rowHeadHtml(i)+subRowCtrlHtml(i,k,n)+'</td>';
                 // 直式標題右側那一欄也是逐列一格，跟著列標題一起 rowspan（同一列的小項共用）
-                if (k===0 && hasSideCol) hFx += '<td class="row-side" rowspan="'+rs+'"><input type="text" '+(isDraftMine()?'':'disabled')+' value="'+esc(rowSideGet(i))+'" onchange="rowSideEdit('+i+',this.value)"></td>';
+                if (k===0 && hasSideCol) hFx += '<td class="row-side" rowspan="'+rs+'"><textarea class="fill-auto" rows="1" data-rowside="'+i+'" '+(isDraftMine()?'':'disabled')+'>'+esc(rowSideGet(i))+'</textarea></td>';
                 inlineFields.forEach(function(c){ hFx += '<td>'+fieldInputHtml(i,k,c)+'</td>'; });
                 if (hasOwnerCol) hFx += '<td><div class="owner-lbl">負責部門</div>'+deptTagHtml(i,k,sub.owner_depts)+'<div class="owner-lbl">負責人</div>'+userTagHtml(i,k,sub.owner_users,sub.owner_depts)+'</td>';
                 if (hasSignCol) hFx += '<td>'+signSlotsHtml(sub)+'</td>';
@@ -680,6 +694,7 @@ function renderItems(){
             });
         });
         $('#itmBody').html(headBandRowHtml() + (hFx || '<tr><td colspan="10" style="text-align:center;color:#8a6d45;">此模板未定義列標題</td></tr>'));
+        fillAutoGrowAll();
         return;
     }
     // 有小項時，項次本身這一列(subitems[0]＝新增項次時原本就有的那一列)降級為純標題列：
@@ -708,6 +723,7 @@ function renderItems(){
         });
     });
     $('#itmBody').html(headBandRowHtml() + (h || '<tr><td colspan="10" style="text-align:center;color:#8a6d45;">尚未建立項目</td></tr>'));
+    fillAutoGrowAll();
 }
 
 function collectItems(){
@@ -854,9 +870,15 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
         + 'setTimeout(function(){'
         // 欄位標題手動換行(最多3行)後，若欄寬還是太窄導致行數超過3行，逐步縮小該表頭字級直到符合
         // （只縮該 th 本身字級，不是整頁 zoom，不會影響圖章尺寸；2026-08-14 使用者明確要求）。
+        // 2026-09-10 修正：原本量的是 th.scrollHeight，但表格儲存格的高度會被「同一列最高的那一格」撐大
+        // （左上角斜線角格有固定高度），於是每個欄位標題都被誤判成換了很多行、一路縮到 8px 下限，
+        // 實測比左側列標題小了 4px。改成量標題文字自己那層 .hdr-in 的高度，跟同列其他格無關。
+        // 直書標題(.hdr-vert)是往下長不是往下換行，本來就不該套這個縮字邏輯，直接跳過。
         + 'document.querySelectorAll("th.hdr-auto").forEach(function(th){'
+        + 'if(th.querySelector(".hdr-vert"))return;'
+        + 'var inner=th.querySelector(".hdr-in")||th;'
         + 'var fs=12,minFs=8,tries=0;'
-        + 'while(tries<16){th.style.fontSize=fs+"px";var lh=fs*1.25;var lines=th.scrollHeight/lh;if(lines<=3.15||fs<=minFs)break;fs-=0.5;tries++;}'
+        + 'while(tries<16){th.style.fontSize=fs+"px";var lh=fs*1.25;var lines=inner.scrollHeight/lh;if(lines<=3.15||fs<=minFs)break;fs-=0.5;tries++;}'
         + '});'
         + 'var pageH=('+(landscape ? (paper==='A3'?'297':'210') : (paper==='A3'?'420':'297'))+'-28)*96/25.4;'
         // 頁碼只在超過一頁才顯示（ai-rules/16 第二節，比照 quotation_list_test.php／training_record.php 既有作法）：
@@ -880,9 +902,11 @@ function rfCss(){
          + 'table.rf-p-items th.rf-corner .cor-line{position:absolute;left:0;top:0;width:100%;height:100%;}'
          + 'table.rf-p-items th.rf-corner .cor-col{position:absolute;right:6px;top:3px;}'
          + 'table.rf-p-items th.rf-corner .cor-row{position:absolute;left:6px;bottom:3px;}'
+         + 'table.rf-p-items th.rf-corner.corner-merge{border-bottom:none;}'
+         + 'table.rf-p-items td.row-head.merge-up{border-top:none;}'
          + 'table.rf-p-items td.row-head{font-weight:bold;vertical-align:middle;white-space:pre-wrap;}'
          + 'table.rf-p-items td.row-head.row-head-left{text-align:left;}'
-         + 'table.rf-p-items td.row-side{vertical-align:middle;}'
+         + 'table.rf-p-items td.row-side{vertical-align:top;text-align:left;}'
          + '.hdr-vert{writing-mode:vertical-rl;text-orientation:upright;letter-spacing:2px;display:inline-block;white-space:nowrap;line-height:1.15;}'
          + '.rf-p-datebar{text-align:right;font-size:12px;color:#333;margin-bottom:3px;}'
          // 圖章尺寸直接比照 training_record.php 既有、使用者已驗證正確的寫法（不分有無指定圖章模板一律套用，
@@ -923,19 +947,22 @@ function printForm(){
     var inlineFieldsP = (schema.fields||[]);
     h += '<table class="rf-p-items"><thead><tr>';
     var pHasSideCol = schemaRowSide(schema);
-    h += pFixedRows ? '<th class="rf-corner">'+cornerCellHtml(schema)+'</th>' : '<th>#</th><th>項目</th>';
+    var pCornerMerge = pFixedRows && schemaHeadRow(schema) && !$.trim(schema.head_row_label||'');
+    h += pFixedRows ? '<th class="rf-corner'+(pCornerMerge?' corner-merge':'')+'">'+cornerCellHtml(schema)+'</th>' : '<th>#</th><th>項目</th>';
     if (pHasSideCol) h += '<th>'+esc(schema.row_side_label||'')+'</th>';
-    inlineFieldsP.forEach(function(c){ h += '<th class="hdr-auto"'+hdrThAttr(c)+'>'+hdrLabelHtml(c.label, c.vertical)+'</th>'; });
+    inlineFieldsP.forEach(function(c){ h += '<th class="hdr-auto"'+hdrThAttr(c)+'><div class="hdr-in">'+hdrLabelHtml(c.label, c.vertical)+'</div></th>'; });
     h += (pHasOwnerCol?'<th>負責單位/人</th>':'')+(pHasSignCol?'<th>簽名</th>':'')+'</tr></thead><tbody>';
     var headingSpanP = inlineFieldsP.length + (pHasOwnerCol?1:0) + (pHasSignCol?1:0);
     if (schemaHeadRow(schema)) {
-        var pHead = {};
-        try { pHead = JSON.parse(CUR.head_data_json||'{}') || {}; } catch(e){ pHead = {}; }
+        // 一律用畫面上當下的 HEAD_DATA（含還沒按存檔的新字），不可以回頭去讀 CUR.head_data_json——
+        // 那是「載入這張表單當下」的舊值，剛打完就按列印會整列印不出來（2026-09-10 使用者實測回報）。
+        var pHead = HEAD_DATA || {};
         h += '<tr>';
-        h += pFixedRows ? '<td class="row-head">'+esc(schema.head_row_label||'')+'</td>'
+        var pMergeUp = pFixedRows && !$.trim(schema.head_row_label||'');
+        h += pFixedRows ? '<td class="row-head'+(pMergeUp?' merge-up':'')+'">'+esc(schema.head_row_label||'')+'</td>'
                         : '<td></td><td class="t-left">'+esc(schema.head_row_label||'')+'</td>';
         if (pHasSideCol) h += '<td></td>';
-        inlineFieldsP.forEach(function(c){ h += '<td>'+esc(pHead[c.key]||'')+'</td>'; });
+        inlineFieldsP.forEach(function(c){ h += '<td style="text-align:'+((c.type==='text'||c.type==='textarea')?(c.align||'left'):'center')+';">'+nl2brEsc(pHead[c.key]||'')+'</td>'; });
         if (pHasOwnerCol) h += '<td></td>';
         if (pHasSignCol) h += '<td></td>';
         h += '</tr>';
@@ -948,7 +975,7 @@ function printForm(){
             var isHeading = (!pFixedRows && k===0 && n>1);
             h += '<tr>';
             if (pFixedRows) h += (k===0 ? '<td class="row-head'+(rowHeadCentered(schema)?'':' row-head-left')+'" rowspan="'+n+'">'+rowHeadHtml(i, schema)+'</td>' : '');
-            if (pHasSideCol && k===0) h += '<td class="row-side" rowspan="'+n+'">'+esc(rowSideGet(i))+'</td>';
+            if (pHasSideCol && k===0) h += '<td class="row-side" rowspan="'+n+'">'+nl2brEsc(rowSideGet(i))+'</td>';
             else h += '<td>'+(k===0?(i+1):'')+'</td><td class="t-left">'+esc(sub.content).replace(/\n/g,'<br>')+'</td>';
             if (isHeading) {
                 // 有小項時大項這一列只是標題，其餘欄位整列合併成一個空白儲存格（2026-08-13 使用者明確要求；
@@ -957,7 +984,7 @@ function printForm(){
                 return;
             }
             inlineFieldsP.forEach(function(c){
-                var cellTxt = c.type==='seq' ? (k===0?String(i+1):'') : (c.type==='date' ? dispDate(sub.data[c.key]||'') : esc(sub.data[c.key]||''));
+                var cellTxt = c.type==='seq' ? (k===0?String(i+1):'') : (c.type==='date' ? dispDate(sub.data[c.key]||'') : nl2brEsc(sub.data[c.key]||''));
                 var cellAlign = (c.type==='text'||c.type==='textarea') ? (c.align||'left') : 'center';
                 h += '<td style="text-align:'+cellAlign+';">'+cellTxt+'</td>';
             });
@@ -983,16 +1010,14 @@ function printForm(){
     // 簽章欄由左到右固定「核准、審核、製表」（2026-08-14 使用者明確更正：先前做反了；A4橫式全站簽核流程
     // 一律比照此順序——最左側＝核准(或本張單上的最高簽核人員)，中間＝審核(與製表同部門主管或設定好的部門內主管)，
     // 最右側＝製表，詳見 ai-rules/18 新規則）。
+    // 免審核／免核准的模板，那一格整個不要出現——不印標題也不印任何說明文字（2026-09-10 使用者明確要求：
+    // 「免審核的情況就不要出現審核字樣，也不需多加解釋」）。剩下幾格就平均分配寬度。
+    var footCells = [];
+    if (t.need_approval) footCells.push(['核准', (CUR.approval && CUR.approval.status==='approved') ? stampFooter(CUR.approval.approver_name, dispDate(CUR.business_date)) : '']);
+    if (t.need_review)   footCells.push(['審核', (CUR.review && CUR.review.status==='approved') ? stampFooter(CUR.review.approver_name, dispDate(CUR.business_date)) : '']);
+    footCells.push(['製表', stampFooter(CUR.created_by_name, dispDate(CUR.business_date))]);
     h += '<table class="rf-p-foot"><tr>';
-    h += '<td><div class="foot-lbl">核准</div>' + (
-        !t.need_approval ? '<div class="foot-na">（本模板免核准）</div>'
-        : (CUR.approval && CUR.approval.status==='approved' ? stampFooter(CUR.approval.approver_name, dispDate(CUR.business_date)) : '')
-    ) + '</td>';
-    h += '<td><div class="foot-lbl">審核</div>' + (
-        !t.need_review ? '<div class="foot-na">（本模板免審核）</div>'
-        : (CUR.review && CUR.review.status==='approved' ? stampFooter(CUR.review.approver_name, dispDate(CUR.business_date)) : '')
-    ) + '</td>';
-    h += '<td><div class="foot-lbl">製表</div>' + stampFooter(CUR.created_by_name, dispDate(CUR.business_date)) + '</td>';
+    footCells.forEach(function(c){ h += '<td style="width:'+(100/footCells.length).toFixed(2)+'%;"><div class="foot-lbl">'+esc(c[0])+'</div>'+c[1]+'</td>'; });
     h += '</tr></table>';
     egPrintWindow(t.name, h, rfCss(), CUR.as_doc_no, t.paper_size, t.orientation!=='portrait');
 }
