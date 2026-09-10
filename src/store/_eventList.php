@@ -20,6 +20,9 @@ $source = trim($_GET['source'] ?? '');
 // 搜尋範圍（工具列下拉）：all=全部欄位（含通知對象）/ creator=公告者 / target=通知對象 / title=標題+內容
 $field  = $_GET['field'] ?? 'all';
 if (!in_array($field, ['all', 'creator', 'target', 'title'], true)) $field = 'all';
+// 已讀狀態篩選：''=全部 / unread_any=尚有人未閱 / read_all=全部人都已閱 / unread_me=我自己尚未已閱
+$readState = $_GET['read_state'] ?? '';
+if (!in_array($readState, ['', 'unread_any', 'read_all', 'unread_me'], true)) $readState = '';
 
 // live_event.created_at（建立時間，供列表區分同日多筆公告先後）：首次使用自動補欄並以修改歷史回填
 try {
@@ -75,6 +78,29 @@ if ($kw !== '') {
         $where .= " AND $cond";
     }
 }
+// 已讀狀態篩選：用來快速找出「還沒處理完」的那幾則（例如要把它們改成開啟自動已閱）。
+// 「還有人沒讀」＝存在一位符合對象、且既沒有已閱紀錄也沒有回應紀錄的在職人員。
+// 對象展開的規則與 push_send.php 的 eg_push_event_recipients() 一致（全體/身分/部門/指名，只算在職 state 1,99）。
+// 實測 704 則約 129ms，與清單原本的載入時間同一個量級，不另建索引。
+if ($readState !== '') {
+    $unreadAny = "EXISTS (
+        SELECT 1 FROM `user` u2
+         WHERE u2.state IN (1,99)
+           AND EXISTS (SELECT 1 FROM live_event_target t3 WHERE t3.live_event_id = le.id AND (
+                    t3.target_type='all'
+                 OR (t3.target_type='status' AND (u2.user_status=t3.target_id OR u2.user_status2=t3.target_id OR u2.user_status3=t3.target_id))
+                 OR (t3.target_type='dept'   AND EXISTS (SELECT 1 FROM user_department_position_map m3 WHERE m3.user_id=u2.id AND m3.department_id=t3.target_id))
+                 OR (t3.target_type='user'   AND t3.target_id=u2.id)))
+           AND NOT EXISTS (SELECT 1 FROM live_event_for_user f3 WHERE f3.live_event_id=le.id AND f3.user_id=u2.id AND f3.oready_read=1)
+           AND NOT EXISTS (SELECT 1 FROM live_event_response r3 WHERE r3.live_event_id=le.id AND r3.user_id=u2.id AND r3.read_at IS NOT NULL))";
+    if ($readState === 'unread_any')      $where .= " AND $unreadAny";
+    elseif ($readState === 'read_all')    $where .= " AND NOT $unreadAny";
+    elseif ($readState === 'unread_me') {
+        $where .= " AND NOT EXISTS (SELECT 1 FROM live_event_for_user f4 WHERE f4.live_event_id=le.id AND f4.user_id=$uid AND f4.oready_read=1)
+                    AND NOT EXISTS (SELECT 1 FROM live_event_response  r4 WHERE r4.live_event_id=le.id AND r4.user_id=$uid AND r4.read_at IS NOT NULL)";
+    }
+}
+
 if ($source !== '') {
     $where .= " AND le.source = :src"; $bind[':src'] = $source;
 } elseif ($hiddenSources) {
@@ -177,6 +203,19 @@ function eg_reads_for($db, $ids) {
     return $m;
 }
 
+// 應讀人數（本頁這幾列才算，10 筆左右成本可忽略）。
+// 對象展開一律走 push_send.php 的 eg_push_event_recipients()＝全站唯一實作，不在這裡再刻一份判定。
+function eg_recipient_counts($db, $ids) {
+    if (empty($ids)) return [];
+    require_once __DIR__ . '/../push/push_send.php';
+    $out = [];
+    foreach ($ids as $eid) {
+        try { $out[$eid] = count(eg_push_event_recipients($db, (int)$eid)); }
+        catch (Throwable $e) { $out[$eid] = 0; }
+    }
+    return $out;
+}
+
 // ── CSV 匯出（全部符合條件，不分頁）──────────────────────────────
 if ($export === 'csv') {
     $stmt = $db->prepare("SELECT le.*, u.user_cname AS creator_name $baseFrom ORDER BY le.eventdate DESC, le.id DESC");
@@ -222,9 +261,11 @@ if ($export === 'print') {
         . '</style></head><body>';
     echo '<button class="noprint" onclick="window.print()" style="float:right;padding:6px 14px;">列印 / 存成 PDF</button>';
     $fieldLabel = ['all' => '全部欄位', 'creator' => '公告者', 'target' => '通知對象', 'title' => '標題 / 內容'];
+    $readLabel  = ['unread_any' => '尚有人未閱', 'read_all' => '全部人都已閱', 'unread_me' => '我尚未已閱'];
     echo '<h2>公告 / 通知列表</h2><div class="sub">匯出時間：' . date('Y-m-d H:i') . '　共 ' . count($rows) . ' 筆'
         . ($kw !== '' ? '　搜尋：' . $h($kw) . '（範圍：' . $h($fieldLabel[$field]) . '）' : '')
-        . ($source !== '' ? '　來源：' . $h($source) : '') . '</div>';
+        . ($source !== '' ? '　來源：' . $h($source) : '')
+        . ($readState !== '' ? '　已讀狀態：' . $h($readLabel[$readState] ?? $readState) : '') . '</div>';
     echo '<table><thead><tr><th>發布 / 結束</th><th>來源</th><th>公告者</th><th>對象</th><th>標題</th><th>內容</th><th>已讀</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         $labels = array_map(function ($x) { return $x['label']; }, $tg[$r['id']] ?? []);
@@ -259,6 +300,7 @@ try {
     $tg = eg_targets_for($db, $ids, $deptMap, $statMap, $userMap);
     $rd = eg_reads_for($db, $ids);
     $ed = eg_editors_for($db, $ids, $deptMap, $userMap);
+    $rc = eg_recipient_counts($db, $ids);
 
     $myDeptIds = array_map('intval', explode(',', $myDeptIn));
     $data = [];
@@ -288,6 +330,7 @@ try {
             'title'     => $r['title'],
             'content'   => $r['content'],
             'reads'     => $rd[$r['id']] ?? 0,
+            'recipients' => $rc[$r['id']] ?? 0,   // 應讀人數（列表顯示成「已讀 / 應讀」，讓已讀狀態篩選看得懂）
             'ref_type'  => $r['ref_type'] ?? '',
             'ref_id'    => (int)($r['ref_id'] ?? 0),
             'can_edit'   => $rowCanEdit,

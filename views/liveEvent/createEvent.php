@@ -462,6 +462,9 @@ if (isset($_POST['btn_go_events'])) {
         .eg-read .fa { margin-right: 3px; }
         a.eg-read-link { text-decoration: none; color: var(--eg-accent-d); font-weight: 600; }
         a.eg-read-link:hover { color: var(--eg-accent); text-decoration: underline; }
+        /* 還有人沒讀：用暖橘色標出來（顏色不是唯一資訊，數字本身就是「已讀/應讀」） */
+        .eg-read-pending, a.eg-read-link.eg-read-pending { color: #c77c1a; }
+        a.eg-read-link.eg-read-pending:hover { color: #a9660f; }
         a.eg-row-title-link { text-decoration: none; }
         a.eg-row-title-link:hover .eg-row-title { color: var(--eg-accent-d); text-decoration: underline; }
 
@@ -809,6 +812,12 @@ if (isset($_POST['btn_go_events'])) {
                                 <?php if ($can_manage) : ?>
                                     <button type="button" id="eg-src-pref-btn" class="eg-tool-btn" title="來源顯示設定：勾選的來源不顯示於「所有來源」列表（於下拉選單指定該來源仍可查看；不影響推播通知）"><i class="fa fa-filter"></i></button>
                                 <?php endif; ?>
+                                <select id="eg-filter-read" class="eg-tool-select" title="依已讀狀態篩選：想快速找出「還沒被讀完」的通知（例如要把它們改成開啟自動已閱）時很有用">
+                                    <option value="">所有已讀狀態</option>
+                                    <option value="unread_any">尚有人未閱</option>
+                                    <option value="read_all">全部人都已閱</option>
+                                    <option value="unread_me">我尚未已閱</option>
+                                </select>
                                 <select id="eg-page-size" class="eg-tool-select" title="每頁筆數">
                                     <option value="5">5 筆</option>
                                     <option value="10" selected>10 筆</option>
@@ -1189,6 +1198,15 @@ if (isset($_POST['btn_go_events'])) {
                         <li>右側下拉可縮小範圍：<b>公告者 / 通知對象 / 標題・內容</b>。找「發給業務部的通知」就選「通知對象」。</li>
                         <li>多個關鍵字用<b>空白分隔，每個都要命中</b>（可以分散在不同欄位）。</li>
                         <li>在搜尋框內<b>雙擊</b>可清空；CSV 與 PDF 匯出會套用目前的搜尋與來源篩選。</li>
+                    </ul>
+
+                    <h4>已讀狀態篩選（工具列）</h4>
+                    <ul>
+                        <li><b>尚有人未閱</b>：這則還有對象沒讀過。要快速找出「還沒處理完」的通知（例如想把它們改成開啟自動已閱）就選這個。</li>
+                        <li><b>全部人都已閱</b>：所有對象都讀過了。</li>
+                        <li><b>我尚未已閱</b>：只看自己還沒讀的。</li>
+                        <li>「已讀」欄顯示的是 <b>已讀人數 / 應讀人數</b>，還有人沒讀時數字會標成橘色；點數字可展開是誰讀了、誰還沒。</li>
+                        <li>應讀人數只算<b>在職</b>人員（離職、留停者不列入）。</li>
                     </ul>
 
                     <h4>批次修改通知對象</h4>
@@ -1841,7 +1859,7 @@ if (isset($_POST['btn_go_events'])) {
             // 表格欄數（展開面板的 colspan 要跟著勾選欄一起變，少算一欄整列會位移）
             EG.listCols = <?= $can_batch ? 8 : 7 ?>;
             var LIST_API = '../../src/store/_eventList.php';
-            var egState = { page: 1, size: 10, kw: '', source: '', field: 'all', pages: 1, total: 0 };
+            var egState = { page: 1, size: 10, kw: '', source: '', field: 'all', readState: '', pages: 1, total: 0 };
             var $searchInput = $('#eg-search-input');
             var $searchField = $('#eg-search-field');
 
@@ -1850,7 +1868,8 @@ if (isset($_POST['btn_go_events'])) {
             function egRenderRows(rows) {
                 if (!rows.length) {
                     $('#eg-list-tbody').empty();
-                    $('#eg-list-msg').html('<i class="fa ' + ((egState.kw || egState.source) ? 'fa-search-minus' : 'fa-inbox') + '"></i> ' + ((egState.kw || egState.source) ? '找不到符合的公告 / 通知' : '目前沒有任何公告 / 通知')).show();
+                    var filtering = egState.kw || egState.source || egState.readState;
+                    $('#eg-list-msg').html('<i class="fa ' + (filtering ? 'fa-search-minus' : 'fa-inbox') + '"></i> ' + (filtering ? '找不到符合的公告 / 通知' : '目前沒有任何公告 / 通知')).show();
                     return;
                 }
                 $('#eg-list-msg').hide();
@@ -1889,11 +1908,16 @@ if (isset($_POST['btn_go_events'])) {
                         + '<td class="eg-creator">' + creatorHtml + '</td>'
                         + '<td><div class="eg-targets">' + (pills || '<span class="eg-pill">—</span>') + '</div></td>'
                         + '<td><a class="eg-row-title-link" href="viewEvent.php?event=' + r.id + '" target="_blank" title="開啟檢視畫面（左側內容、右側附件）"><div class="eg-row-title">' + egEsc(r.title) + ' <i class="fa fa-external-link" style="font-size:11px;color:#9ab0c4;"></i></div></a><div class="eg-row-content">' + egEsc(r.content) + '</div></td>';
-                    // 已讀欄：管理權限者可點開已讀人員清單，其他人只看數字
+                    // 已讀欄：顯示「已讀 / 應讀」，還有人沒讀時把數字標成暖橘色，
+                    // 這樣用「尚有人未閱」篩選之後，一眼就看得出每一列還差幾個人（只有數字看不出來）。
+                    var totalR = (r.recipients == null) ? null : r.recipients;
+                    var pending = (totalR !== null && r.reads < totalR);
+                    var readTxt = '<i class="fa fa-eye"></i> ' + r.reads + (totalR !== null ? ' / ' + totalR : '');
+                    var readTip = (totalR !== null ? '應讀 ' + totalR + ' 人、已讀 ' + r.reads + ' 人' : '已讀 ' + r.reads + ' 人');
                     if (EG.canManage) {
-                        html += '<td><a href="javascript:;" class="eg-read eg-read-link" data-eid="' + r.id + '" data-title="' + egEsc(r.title) + '" title="查看已讀人員"><i class="fa fa-eye"></i> ' + r.reads + '</a></td>';
+                        html += '<td><a href="javascript:;" class="eg-read eg-read-link' + (pending ? ' eg-read-pending' : '') + '" data-eid="' + r.id + '" data-title="' + egEsc(r.title) + '" title="' + readTip + '（點開可查看已讀人員）">' + readTxt + '</a></td>';
                     } else {
-                        html += '<td><span class="eg-read"><i class="fa fa-eye"></i> ' + r.reads + '</span></td>';
+                        html += '<td><span class="eg-read' + (pending ? ' eg-read-pending' : '') + '" title="' + readTip + '">' + readTxt + '</span></td>';
                     }
                     // 操作欄：逐列權限（只有系統管理員可改/刪任何公告；其他人僅本人建立或本人為共同編輯者）
                     html += '<td class="eg-op">';
@@ -1939,12 +1963,12 @@ if (isset($_POST['btn_go_events'])) {
                 $('#eg-list-msg').html('<i class="fa fa-spinner fa-spin"></i>').show();
                 // 來源下拉還沒填過（例：編輯往返直接還原到第 N 頁）就順便跟後端要一次
                 var needSources = $('#eg-filter-source option').length <= 1 ? 1 : 0;
-                $.get(LIST_API, { page: egState.page, size: egState.size, kw: egState.kw, source: egState.source, field: egState.field, need_sources: needSources }, function(res) {
+                $.get(LIST_API, { page: egState.page, size: egState.size, kw: egState.kw, source: egState.source, field: egState.field, read_state: egState.readState, need_sources: needSources }, function(res) {
                     if (!res || !res.ok) { $('#eg-list-tbody').empty(); $('#eg-list-msg').html(res && res.msg ? res.msg : '載入失敗').show(); if (done) done(); return; }
                     egState.pages = res.pages; egState.total = res.total;
                     egRenderRows(res.rows);
                     egRenderPager();
-                    $('#eg-list-title').text((egState.kw || egState.source ? '搜尋結果' : '公告 / 通知列表') + '（' + res.total + '）');
+                    $('#eg-list-title').text(((egState.kw || egState.source || egState.readState) ? '搜尋結果' : '公告 / 通知列表') + '（' + res.total + '）');
                     if (res.sources && res.sources.length) {
                         // 來源下拉：隱藏中的來源標註（隱藏中）——「所有來源」不含它們，指定選取仍可查看
                         var opt = '<option value="">所有來源</option>';
@@ -2169,6 +2193,7 @@ if (isset($_POST['btn_go_events'])) {
             $('#eg-pager').on('click', '.pg:not(.disabled):not(.active)', function() { var pg = parseInt($(this).data('pg'), 10); if (pg >= 1 && pg <= egState.pages) egLoadList(pg); });
             $('#eg-page-size').on('change', function() { egState.size = parseInt(this.value, 10) || 10; egLoadList(1); });
             $('#eg-filter-source').on('change', function() { egState.source = this.value; egLoadList(1); });
+            $('#eg-filter-read').on('change', function() { egState.readState = this.value; egLoadList(1); });
 
             // 來源顯示設定（管理權限者）：勾選＝隱藏於「所有來源」列表；不影響推播
             var SRC_PREF_API = '../../src/store/_noticeSourcePrefs.php';
@@ -2222,7 +2247,8 @@ if (isset($_POST['btn_go_events'])) {
             // 匯出 CSV / 列印PDF（皆套用目前搜尋與來源篩選）
             function egExportQs(kind) {
                 return LIST_API + '?export=' + kind + '&kw=' + encodeURIComponent(egState.kw)
-                     + '&source=' + encodeURIComponent(egState.source) + '&field=' + encodeURIComponent(egState.field);
+                     + '&source=' + encodeURIComponent(egState.source) + '&field=' + encodeURIComponent(egState.field)
+                     + '&read_state=' + encodeURIComponent(egState.readState);
             }
             $('#eg-export-csv').on('click', function() { window.location = egExportQs('csv'); });
             $('#eg-export-pdf').on('click', function() { window.open(egExportQs('print'), '_blank'); });
@@ -2237,7 +2263,7 @@ if (isset($_POST['btn_go_events'])) {
                 try {
                     sessionStorage.setItem(EG_LIST_STATE_KEY, JSON.stringify({
                         page: egState.page, size: egState.size, kw: egState.kw,
-                        source: egState.source, field: egState.field,
+                        source: egState.source, field: egState.field, readState: egState.readState,
                         scrollY: window.pageYOffset || document.documentElement.scrollTop || 0
                     }));
                 } catch (e) {}
@@ -2261,8 +2287,10 @@ if (isset($_POST['btn_go_events'])) {
                 egState.kw     = egRestore.kw || '';
                 egState.source = egRestore.source || '';
                 egState.field  = egRestore.field || 'all';
+                egState.readState = egRestore.readState || '';
                 $('#eg-page-size').val(String(egState.size));
                 $searchField.val(egState.field);
+                $('#eg-filter-read').val(egState.readState);
                 if (egState.kw) { $searchInput.val(egState.kw); }
                 egSyncSearchUI();
                 egLoadList(parseInt(egRestore.page, 10) || 1, function() {
