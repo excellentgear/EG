@@ -160,6 +160,88 @@ function stock_req_person_asof(PDO $pdo, int $userId, ?string $date): array {
     } catch (Throwable $e) { return $out; }
 }
 
+/* ── 料號標籤篩選（庫存列表「標籤篩選」用）──────────────────────────────
+ * 標籤是三層：dict_label（標籤）→ dict_label_sub（子標籤）→ 值；
+ * 料號上的值存在 item_label_map（主標籤）／item_sub_label_map（子標籤），
+ * 而「值」可能落在 input_value（文字／數字／列舉），也可能落在 value_min/value_max（範圍、尺寸）。
+ *
+ * 選項的比對鍵一律用「原始欄位」編碼，不用畫面上看到的顯示文字：
+ *   i:<input_value>  → 比對 input_value
+ *   r:<min>~<max>    → 比對 value_min/value_max（NULL 安全比對）
+ * 顯示文字是前端 buildLabelsHtml() 依十幾種旗標組出來的，拿它當比對鍵只要格式差一個字就會篩不到東西。
+ */
+function stock_lbl_num($v): string {
+    if ($v === null || $v === '') return '';
+    $s = (string)$v;
+    if (strpos($s, '.') !== false) $s = rtrim(rtrim($s, '0'), '.'); // decimal(15,4) 轉字串會帶 .0000
+    return $s === '' ? '0' : $s;
+}
+function stock_lbl_val_key(array $r): string {
+    $iv = trim((string)($r['input_value'] ?? ''));
+    if ($iv !== '') return 'i:' . $iv;
+    $mn = stock_lbl_num($r['value_min'] ?? null);
+    $mx = stock_lbl_num($r['value_max'] ?? null);
+    if ($mn === '' && $mx === '') return '';       // 這個標籤只是「有／沒有」，沒有值可挑
+    return 'r:' . $mn . '~' . $mx;
+}
+function stock_lbl_val_text(array $r): string {
+    $iv = trim((string)($r['input_value'] ?? ''));
+    if ($iv !== '') return $iv;
+    $mn = stock_lbl_num($r['value_min'] ?? null);
+    $mx = stock_lbl_num($r['value_max'] ?? null);
+    if ($mn !== '' && $mx !== '') return $mn . '×' . $mx;
+    return $mn !== '' ? $mn : $mx;
+}
+/** 把前端送來的標籤條件轉成 WHERE 片段。
+ *  同一個標籤／子標籤內選多個值＝OR，不同標籤／子標籤之間＝AND（沒選值＝只要「有這個標籤」）。
+ *  $dsidCol＝料號主檔 d_id 欄位（庫存列表是 si.d_setting_id）；$params 會被塞進對應的具名參數。
+ *  回傳空字串代表沒有任何有效條件（呼叫端就完全不要加這段，維持原本查詢）。 */
+function stock_lbl_filter_sql($raw, string $dsidCol, array &$params): string {
+    $conds = is_array($raw) ? $raw : (json_decode((string)$raw, true) ?: []);
+    if (!is_array($conds) || !$conds) return '';
+    $parts = []; $i = 0;
+    foreach ($conds as $c) {
+        if (!is_array($c)) continue;
+        $lid = intval($c['label_id'] ?? 0); if (!$lid) continue;
+        $sid = intval($c['sub_id'] ?? 0);
+        $vals = [];
+        foreach ((array)($c['values'] ?? []) as $v) { $v = (string)$v; if ($v !== '') $vals[] = $v; }
+        $vals = array_slice(array_values(array_unique($vals)), 0, 50);
+        if (++$i > 12) break;                       // 安全上限，避免有人硬塞一百個條件
+        $a = 'lf' . $i;
+        $params[":{$a}lid"] = $lid;
+        if ($sid > 0) {
+            $params[":{$a}sid"] = $sid;
+            $from = "item_label_map {$a}m JOIN item_sub_label_map {$a}s ON {$a}s.parent_map_id={$a}m.map_id";
+            $base = "{$a}m.d_id=$dsidCol AND {$a}m.label_id=:{$a}lid AND {$a}s.sub_id=:{$a}sid";
+            $va   = "{$a}s";
+        } else {
+            $from = "item_label_map {$a}m";
+            $base = "{$a}m.d_id=$dsidCol AND {$a}m.label_id=:{$a}lid";
+            $va   = "{$a}m";
+        }
+        $vSql = '';
+        if ($vals) {
+            $ors = []; $j = 0;
+            foreach ($vals as $v) {
+                $j++;
+                if (strncmp($v, 'r:', 2) === 0) {
+                    [$mn, $mx] = array_pad(explode('~', substr($v, 2), 2), 2, '');
+                    $ors[] = "({$va}.value_min <=> CAST(:{$a}n{$j} AS DECIMAL(15,4)) AND {$va}.value_max <=> CAST(:{$a}x{$j} AS DECIMAL(15,4)))";
+                    $params[":{$a}n{$j}"] = ($mn === '' ? null : $mn);
+                    $params[":{$a}x{$j}"] = ($mx === '' ? null : $mx);
+                } else {
+                    $ors[] = "{$va}.input_value = :{$a}v{$j}";
+                    $params[":{$a}v{$j}"] = (strncmp($v, 'i:', 2) === 0) ? substr($v, 2) : $v;
+                }
+            }
+            $vSql = ' AND (' . implode(' OR ', $ors) . ')';
+        }
+        $parts[] = "EXISTS(SELECT 1 FROM $from WHERE $base$vSql)";
+    }
+    return $parts ? implode(' AND ', $parts) : '';
+}
+
 // ─────────────────────────────────────────────────
 //  AJAX
 // ─────────────────────────────────────────────────
@@ -473,6 +555,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if ($hasLocation && $locF!==''&&$locF!=='all') { $where[]='si.location_id=:loc'; $p[':loc']=(int)$locF; }
             if ($clientF!=='') { $where[]=($hasDsid?'dsp.Customer_Id':'si.client_id').'=:cli'; $p[':cli']=$clientF; }
 
+            // 標籤篩選（料號底下的標籤內容）：純 EXISTS 子查詢，不動既有 JOIN，
+            // 沒送條件時整段不加＝原本的查詢一個字都不變
+            if ($hasDsid) {
+                $lblFilterSql = stock_lbl_filter_sql($_POST['label_filters'] ?? '', 'si.d_setting_id', $p);
+                if ($lblFilterSql !== '') $where[] = $lblFilterSql;
+            }
+
             $safetyJoin = '';
             if ($qtyF==='low') {
                 $safetyJoin = 'JOIN stock_safety_stock ss ON ss.d_id=si.d_id';
@@ -668,6 +757,85 @@ LBLSQL;
             } catch(Exception $e2){}
 
             echo json_encode(['success'=>true,'data'=>$rows,'total'=>$total,'page'=>$page,'page_size'=>$ps,'total_pages'=>(int)ceil($total/$ps),'filter_locs'=>$filterLocs,'filter_clients'=>$filterClients]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // ── 標籤篩選：可挑的標籤／子標籤／值（從目前庫存的料號實際用到的標籤即時算出）──
+    //    不同產品的標籤本來就不一樣，所以清單不寫死，且會跟著畫面上的種類／儲位／客戶篩選縮小範圍。
+    //    數字＝目前範圍內有幾個料號有這個標籤值。
+    if ($_POST['action'] === 'get_stock_label_facets') {
+        try {
+            $siColsF = $pdo->query("SHOW COLUMNS FROM stock_items")->fetchAll(PDO::FETCH_COLUMN);
+            if (!in_array('d_setting_id', $siColsF)) { echo json_encode(['success'=>true,'labels'=>[]]); exit; }
+
+            $sw = ['si.is_active=1','si.d_setting_id IS NOT NULL']; $sp = []; $sJoin = '';
+            $fCat = $_POST['category_id'] ?? ''; $fLoc = $_POST['location_id'] ?? ''; $fCli = trim($_POST['client_id'] ?? '');
+            if (in_array('item_type', $siColsF)   && $fCat!=='' && $fCat!=='all') { $sw[]='si.item_type=:fcat';   $sp[':fcat']=(int)$fCat; }
+            if (in_array('location_id', $siColsF) && $fLoc!=='' && $fLoc!=='all') { $sw[]='si.location_id=:floc'; $sp[':floc']=(int)$fLoc; }
+            if ($fCli !== '') { $sJoin = 'LEFT JOIN d_setting dspf ON dspf.d_id=si.d_setting_id'; $sw[]='dspf.Customer_Id=:fcli'; $sp[':fcli']=$fCli; }
+            $scope = "SELECT DISTINCT si.d_setting_id FROM stock_items si $sJoin WHERE ".implode(' AND ', $sw);
+
+            // 隱藏標籤（is_hidden_frontend=1）列表上本來就不顯示，篩選也一併排除，
+            // 否則會篩出「看不到那個標籤」的列，使用者無從確認為什麼被篩出來
+            $lblWhere = "l.is_active=1 AND COALESCE(l.is_hidden_frontend,0)=0 AND m.d_id IN ($scope)";
+            $run = function(string $sql) use ($pdo, $sp) { $st=$pdo->prepare($sql); $st->execute($sp); return $st->fetchAll(PDO::FETCH_ASSOC); };
+
+            $labels = $run("SELECT l.label_id,l.label_name,COALESCE(l.sort_order,0) AS lsort,COUNT(DISTINCT m.d_id) AS cnt
+                            FROM item_label_map m JOIN dict_label l ON l.label_id=m.label_id
+                            WHERE $lblWhere GROUP BY l.label_id,l.label_name,l.sort_order ORDER BY lsort,l.label_name");
+            $lblVals = $run("SELECT m.label_id,m.input_value,m.value_min,m.value_max,COUNT(DISTINCT m.d_id) AS cnt
+                             FROM item_label_map m JOIN dict_label l ON l.label_id=m.label_id
+                             WHERE $lblWhere GROUP BY m.label_id,m.input_value,m.value_min,m.value_max");
+            $subs = $run("SELECT m.label_id,ds.sub_id,ds.sub_name,COALESCE(ds.sort_order,0) AS ssort,COUNT(DISTINCT m.d_id) AS cnt
+                          FROM item_label_map m JOIN dict_label l ON l.label_id=m.label_id
+                          JOIN item_sub_label_map s ON s.parent_map_id=m.map_id
+                          JOIN dict_label_sub ds ON ds.sub_id=s.sub_id AND ds.is_active=1
+                          WHERE $lblWhere GROUP BY m.label_id,ds.sub_id,ds.sub_name,ds.sort_order ORDER BY ssort,ds.sub_name");
+            $subVals = $run("SELECT m.label_id,s.sub_id,s.input_value,s.value_min,s.value_max,COUNT(DISTINCT m.d_id) AS cnt
+                             FROM item_label_map m JOIN dict_label l ON l.label_id=m.label_id
+                             JOIN item_sub_label_map s ON s.parent_map_id=m.map_id
+                             JOIN dict_label_sub ds ON ds.sub_id=s.sub_id AND ds.is_active=1
+                             WHERE $lblWhere GROUP BY m.label_id,s.sub_id,s.input_value,s.value_min,s.value_max");
+
+            // 值清單整理：同一個 key 合併筆數，依筆數多到少排序（常用的排前面）
+            $collect = function(array $rows, string $groupKey) {
+                $out = [];
+                foreach ($rows as $r) {
+                    $k = stock_lbl_val_key($r); if ($k === '') continue;
+                    $g = $r[$groupKey] ?? '';
+                    if (!isset($out[$g][$k])) $out[$g][$k] = ['key'=>$k,'text'=>stock_lbl_val_text($r),'cnt'=>0];
+                    $out[$g][$k]['cnt'] += (int)$r['cnt'];
+                }
+                foreach ($out as &$g) { usort($g, fn($a,$b)=>$b['cnt']<=>$a['cnt'] ?: strnatcasecmp($a['text'],$b['text'])); }
+                unset($g);
+                return $out;
+            };
+            $lblValMap = $collect($lblVals, 'label_id');
+            $subValMap = [];
+            foreach ($subVals as $r) { $r['_gk'] = $r['label_id'].'-'.$r['sub_id']; $subValMap[] = $r; }
+            $subValMap = $collect($subValMap, '_gk');
+
+            $subMap = [];
+            foreach ($subs as $s) {
+                $subMap[$s['label_id']][] = [
+                    'sub_id'   => (int)$s['sub_id'],
+                    'sub_name' => (string)$s['sub_name'],
+                    'cnt'      => (int)$s['cnt'],
+                    'options'  => array_values($subValMap[$s['label_id'].'-'.$s['sub_id']] ?? []),
+                ];
+            }
+            $out = [];
+            foreach ($labels as $l) {
+                $out[] = [
+                    'label_id'   => (int)$l['label_id'],
+                    'label_name' => (string)$l['label_name'],
+                    'cnt'        => (int)$l['cnt'],
+                    'options'    => array_values($lblValMap[$l['label_id']] ?? []),
+                    'subs'       => $subMap[$l['label_id']] ?? [],
+                ];
+            }
+            echo json_encode(['success'=>true,'labels'=>$out]);
         } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
@@ -4090,6 +4258,23 @@ html,body,.main_container,.container.body{overflow-x:hidden!important;}
 .fbar .form-control,.fbar .btn{height:33px;font-size:13px}
 .fbar input{max-width:200px}
 
+/* 標籤篩選（暖色系，見 ai-rules/10）：未選＝淺砂底深棕字，已選＝赭橘底白字 */
+.lblf-badge{display:inline-block;min-width:17px;height:17px;line-height:17px;padding:0 5px;margin-left:5px;border-radius:9px;background:#E07B39;color:#fff;font-size:11px;font-weight:700;text-align:center}
+#btn-lblfilter.on{background:#FDF0E2;border-color:#E9B27C;color:#8A4B12;font-weight:600}
+.lblf-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;margin:2px 4px 2px 0;border-radius:12px;border:1px solid #E9B27C;background:#FDF0E2;color:#8A4B12;font-size:12px;line-height:17px;cursor:pointer;user-select:none;white-space:nowrap}
+.lblf-chip:hover{background:#F8E1C6}
+.lblf-chip.on{background:#E07B39;border-color:#C96520;color:#fff}
+.lblf-chip .c{opacity:.7;font-size:11px}
+.lblf-chip .x{font-weight:700;opacity:.65;padding-left:2px}
+.lblf-chip .x:hover{opacity:1}
+.lblf-card{border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:8px;background:#fff}
+.lblf-card > .h{font-size:13px;font-weight:700;color:#5C3A17;margin-bottom:5px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.lblf-sub{display:flex;align-items:flex-start;gap:6px;padding:3px 0;border-top:1px dashed #F0E4D4}
+.lblf-sub > .n{flex:0 0 96px;font-size:12px;color:#7A4A12;padding-top:4px;word-break:break-all}
+.lblf-sub > .v{flex:1;min-width:0}
+#lblf-active{margin:-8px 0 12px 2px}
+#lblf-active .t{font-size:12px;color:#888;margin-right:4px}
+
 /* 表格 */
 .mc{background:var(--card);border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,.05);overflow:hidden;max-width:100%;}
 .mc table thead th{background:#f8f9fa;color:#555;font-weight:700;padding:9px 7px;font-size:12px;border-bottom:2px solid var(--border);white-space:nowrap;vertical-align:middle}
@@ -4297,6 +4482,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       <option value="3">3年未出庫</option>
       <option value="5">5年未出庫</option>
     </select>
+    <button class="btn btn-default btn-sm" id="btn-lblfilter" onclick="openLabelFilter()" title="依料號底下的標籤內容篩選（例：模數 M 2.5、滾齒刀規格 內徑 22.225）"><i class="fa fa-tags"></i> 標籤篩選<span id="lblf-cnt" class="lblf-badge" style="display:none;">0</span></button>
     <button class="btn btn-default btn-sm" onclick="resetFilters()">重置</button>
     <button class="btn btn-sm btn-info" id="btn-batch-group" style="display:none; border-radius:6px; font-weight:600;" onclick="openMergeExistingGroupModal()"><i class="fa fa-compress"></i> 合併為組合件 (<span id="sel-cnt">0</span>)</button>
     <button class="btn btn-sm" id="btn-batch-unit" style="display:none; background:#7f8c8d; color:#fff; border-radius:6px; font-weight:600;" onclick="openBatchUnitModal()"><i class="fa fa-balance-scale"></i> 設定單位</button>
@@ -4307,6 +4493,9 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
       </select>
     </div>
   </div>
+
+  <!-- 目前套用中的標籤條件（沒有條件時整列不佔空間） -->
+  <div id="lblf-active" style="display:none;"></div>
 
   <!-- 表格 -->
   <div class="mc">
@@ -5419,6 +5608,29 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 </div>
 </div></div></div>
 
+<!-- ══ Modal: 標籤篩選 ══ -->
+<div class="modal fade" id="lblFilterModal" tabindex="-1">
+<div class="modal-dialog" style="max-width:900px;width:96%;"><div class="modal-content">
+<div class="modal-header"><button class="close" data-dismiss="modal"><span>&times;</span></button><h4 class="modal-title"><i class="fa fa-tags"></i> 標籤篩選</h4></div>
+<div class="modal-body" style="padding-top:10px;">
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+    <input type="text" id="lblf-kw" class="form-control" style="flex:1;min-width:220px;" placeholder="🔍 輸入標籤名稱或值即時篩選下方清單（例：模數 / 內徑 / 22.225，雙擊清除）" autocomplete="off">
+    <button type="button" class="btn btn-default btn-sm" onclick="lblfClearDraft()"><i class="fa fa-eraser"></i> 清除已選</button>
+  </div>
+  <div id="lblf-draft" style="min-height:26px;padding:5px 8px;border:1px dashed #E9B27C;border-radius:6px;background:#FFFBF6;margin-bottom:8px;font-size:12px;color:#999;">尚未選擇任何條件</div>
+  <div id="lblf-body" style="max-height:50vh;overflow:auto;padding-right:4px;"><div class="empty" style="padding:20px;text-align:center;color:#999;"><i class="fa fa-spinner fa-spin"></i></div></div>
+  <div class="alert alert-info" style="font-size:12px;margin:10px 0 0;">
+    <b>怎麼用</b>：點標籤名稱＝只要「有這個標籤」的料號；點底下的值＝值要相符。<br>
+    <b>同一個標籤／子標籤內選多個值＝其中一個符合即可</b>；<b>不同標籤之間＝全部都要符合</b>。括號裡的數字是目前庫存中有幾個料號有這個值。<br>
+    清單只列出<b>目前庫存實際用到的標籤</b>，並跟著上方的種類／儲位／客戶篩選縮小範圍（所以不同產品看到的標籤會不一樣）；主檔設為隱藏的標籤因為列表上看不到，這裡也不列。
+  </div>
+</div>
+<div class="modal-footer">
+  <button class="btn btn-default" data-dismiss="modal">取消</button>
+  <button class="btn btn-primary" onclick="applyLabelFilter()" style="background:#E07B39;border-color:#C96520;"><i class="fa fa-filter"></i> 套用篩選</button>
+</div>
+</div></div></div>
+
 <!-- ══ Modal: 安全庫存 ══ -->
 <div class="modal fade" id="safetyModal" tabindex="-1">
 <div class="modal-dialog" style="max-width:400px;"><div class="modal-content">
@@ -5760,6 +5972,7 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 // ── 全域 ────────────────────────────────────────
 var G = { page:1, rows:[], sortCol:'Modified_At', sortDir:'desc', allLocs:[], allCats:[], allUnits:[], allDepts:[], allAreas:[], currentItemDsid:null, currentItemUnits:[], countLoaded:false, reqLoaded:false, reportLoaded:false, currentCountSession:null, _todayOnly:false, _statCats:[], _isAdminUser:false, _canCount:false, _canBatch:false, locPage:1, catPage:1, unitPage:1, safetyPage:1, managePageSize:8, locAreaFilter: 'all',
     req:{page:1,pageSize:20,status:'0',kw:'',currentReqId:null,issueItems:[],currentReq:null,issueBatches:{},issuePendingItems:[]},
+    lblf:{applied:[],draft:[],facets:null,scopeKey:''},   // 標籤篩選：applied=已套用、draft=跳窗中編輯的
     rpt:{view:'day',dateFrom:'',dateTo:'',page:1,pageSize:20,refDate:new Date()} };
 var PERM = '<?php echo htmlspecialchars($PAGE_PERM ?? "R", ENT_QUOTES); ?>';
 var CURRENT_USER_ID = <?php echo intval($CURRENT_USER_ID ?? 0); ?>;
@@ -6295,6 +6508,7 @@ function resetFilters(){
     $('#f-search').val(''); $('#f-cat').val('all'); $('#f-loc').val('all');
     $('#f-qty').val('all'); $('#f-client').val(''); $('#f-stale').val('0');
     G._todayOnly=false;
+    G.lblf.applied=[]; G.lblf.draft=[]; renderLblfApplied();
     $('.sc').removeClass('active'); $('#scard-all').addClass('active');
     loadList(1);
 }
@@ -6312,6 +6526,7 @@ function loadList(page){
         location_id:$('#f-loc').val(), qty_filter:$('#f-qty').val(),
         client_id:$('#f-client').val(), stale_years:$('#f-stale').val()||0,
         today_only:G._todayOnly?1:0,
+        label_filters: G.lblf.applied.length ? JSON.stringify(G.lblf.applied) : '',
         sort_col:G.sortCol, sort_dir:G.sortDir
     }, function(r){
         if(!r.success){ $('#stock-tbody').html('<tr><td colspan="11" class="text-center text-danger">'+esc(r.message||'載入失敗')+'</td></tr>'); return; }
@@ -6337,6 +6552,137 @@ function _updateFilterDropdowns(r){
     // 完整的下拉選項已在 loadMasterData 初始載入，保持不變即可。
     // （如有需要可在 resetFilters 後重新載入）
 }
+
+// ── 標籤篩選（依料號底下的標籤內容）─────────────────────────────────────
+// 條件格式：{label_id, sub_id(0=主標籤), values:[比對鍵…], _t:顯示文字}
+// 比對鍵由後端產生（i:輸入值／r:min~max），前端只負責原樣傳回，不自己組字串比對。
+function lblfScopeKey(){ return [$('#f-cat').val(),$('#f-loc').val(),$('#f-client').val()].join('|'); }
+function _lblfFindIdx(list,lid,sid){ for(var i=0;i<list.length;i++){ if(list[i].label_id===lid && list[i].sub_id===sid) return i; } return -1; }
+function _lblfLabel(lid){ var f=G.lblf.facets||[],r=null; f.forEach(function(x){ if(x.label_id===lid) r=x; }); return r; }
+function _lblfValText(L,sid,key){
+    var opts=[];
+    if(L){ opts=sid?((( L.subs||[]).filter(function(s){return s.sub_id===sid;})[0]||{}).options||[]):(L.options||[]); }
+    for(var i=0;i<opts.length;i++){ if(opts[i].key===key) return opts[i].text; }
+    return String(key||'').replace(/^i:/,'').replace(/^r:/,'').replace('~','×');
+}
+function _lblfCondText(c){
+    var L=_lblfLabel(c.label_id);
+    var name=L?_stripLabelHint(L.label_name):('標籤#'+c.label_id);
+    if(c.sub_id){
+        var S=((L&&L.subs||[]).filter(function(s){return s.sub_id===c.sub_id;})[0]);
+        name+=' · '+(S?_stripLabelHint(S.sub_name):('#'+c.sub_id));
+    }
+    var vals=(c.values||[]).map(function(k){ return _lblfValText(L,c.sub_id,k); });
+    return name+(vals.length?'：'+vals.join(' / '):'');
+}
+function _lblfSyncText(list){ (list||[]).forEach(function(c){ c._t=_lblfCondText(c); }); }
+
+// useSearchKw=true 時把搜尋框現在打的字帶進跳窗的關鍵字（搜不到東西時那顆提示鈕用）
+function openLabelFilter(useSearchKw){
+    G.lblf.draft=JSON.parse(JSON.stringify(G.lblf.applied||[]));
+    $('#lblf-kw').val(useSearchKw===true ? ($('#f-search').val()||'').trim() : '');
+    $('#lblFilterModal').modal('show');
+    var key=lblfScopeKey();
+    if(G.lblf.facets && G.lblf.scopeKey===key){ renderLblfBody(); renderLblfDraft(); return; }
+    $('#lblf-body').html('<div style="padding:24px;text-align:center;color:#999;"><i class="fa fa-spinner fa-spin"></i> 載入標籤…</div>');
+    ajx({action:'get_stock_label_facets', category_id:$('#f-cat').val(), location_id:$('#f-loc').val(), client_id:$('#f-client').val()}, function(r){
+        if(!r.success){ $('#lblf-body').html('<div style="padding:20px;color:#E74C3C;">'+esc(r.message||'載入失敗')+'</div>'); return; }
+        G.lblf.facets=r.labels||[]; G.lblf.scopeKey=key;
+        _lblfSyncText(G.lblf.draft);
+        renderLblfBody(); renderLblfDraft();
+    });
+}
+function lblfToggle(lid,sid,key){
+    lid=parseInt(lid,10); sid=parseInt(sid,10)||0;
+    var d=G.lblf.draft, i=_lblfFindIdx(d,lid,sid);
+    if(!key){
+        // 點標籤／子標籤名稱＝這個條件整個加入或整個移除（含底下已挑的值）
+        if(i<0) d.push({label_id:lid,sub_id:sid,values:[]}); else d.splice(i,1);
+    } else {
+        if(i<0){ d.push({label_id:lid,sub_id:sid,values:[key]}); }
+        else {
+            var vs=d[i].values||[], vi=vs.indexOf(key);
+            if(vi<0) vs.push(key); else vs.splice(vi,1);
+            d[i].values=vs;   // 值全部取消時條件保留＝「只要有這個標籤」，名稱仍亮著不會突然消失
+        }
+    }
+    _lblfSyncText(d);
+    renderLblfBody(); renderLblfDraft();
+}
+function _lblfChip(lid,sid,key,inner,on){
+    return '<span class="lblf-chip'+(on?' on':'')+'" data-lid="'+lid+'" data-sid="'+sid+'" data-key="'+esc(key||'')+'">'+inner+'</span>';
+}
+function renderLblfBody(){
+    var kws=($('#lblf-kw').val()||'').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    var hit=function(t){ t=String(t||'').toLowerCase(); for(var i=0;i<kws.length;i++){ if(t.indexOf(kws[i])<0) return false; } return true; };
+    var d=G.lblf.draft, html='', shown=0;
+    (G.lblf.facets||[]).forEach(function(L){
+        var lname=_stripLabelHint(L.label_name), lHit=(!kws.length)||hit(lname);
+        var opts=(L.options||[]).filter(function(o){ return lHit||hit(lname+' '+o.text); });
+        var subs=[];
+        (L.subs||[]).forEach(function(S){
+            var sname=_stripLabelHint(S.sub_name), sHit=lHit||hit(lname+' '+sname);
+            var so=(S.options||[]).filter(function(o){ return sHit||hit(lname+' '+sname+' '+o.text); });
+            if(sHit||so.length) subs.push({S:S,sname:sname,opts:sHit?(S.options||[]):so});
+        });
+        if(!lHit&&!opts.length&&!subs.length) return;
+        shown++;
+        var li=_lblfFindIdx(d,L.label_id,0), lvals=(li>=0?(d[li].values||[]):[]);
+        html+='<div class="lblf-card"><div class="h">'
+            + _lblfChip(L.label_id,0,'',esc(lname)+' <span class="c">('+L.cnt+')</span>', li>=0)
+            + '</div>';
+        if(opts.length){
+            html+='<div>'+opts.map(function(o){ return _lblfChip(L.label_id,0,o.key,esc(o.text)+' <span class="c">('+o.cnt+')</span>', lvals.indexOf(o.key)>=0); }).join('')+'</div>';
+        }
+        subs.forEach(function(x){
+            var si=_lblfFindIdx(d,L.label_id,x.S.sub_id), svals=(si>=0?(d[si].values||[]):[]);
+            html+='<div class="lblf-sub"><div class="n">'
+                + _lblfChip(L.label_id,x.S.sub_id,'',esc(x.sname||'（無名稱）'),si>=0)
+                + '</div><div class="v">';
+            html+= x.opts.length
+                ? x.opts.map(function(o){ return _lblfChip(L.label_id,x.S.sub_id,o.key,esc(o.text)+' <span class="c">('+o.cnt+')</span>', svals.indexOf(o.key)>=0); }).join('')
+                : '<span style="font-size:11px;color:#aaa;line-height:23px;">（此子標籤沒有數值，只有「有／沒有」）</span>';
+            html+='</div></div>';
+        });
+        html+='</div>';
+    });
+    if(!shown) html='<div style="padding:24px;text-align:center;color:#999;">'+(kws.length?'找不到符合的標籤':'目前庫存的料號沒有可篩選的標籤')+'</div>';
+    $('#lblf-body').html(html);
+}
+function renderLblfDraft(){
+    var d=G.lblf.draft||[];
+    if(!d.length){ $('#lblf-draft').html('尚未選擇任何條件').css('color','#999'); return; }
+    $('#lblf-draft').css('color','').html(
+        d.map(function(c,i){ return '<span class="lblf-chip on" data-di="'+i+'" title="點擊移除">'+esc(c._t||'')+'<span class="x">×</span></span>'; }).join('')
+    );
+}
+function lblfClearDraft(){ G.lblf.draft=[]; renderLblfBody(); renderLblfDraft(); }
+function applyLabelFilter(){
+    G.lblf.applied=JSON.parse(JSON.stringify(G.lblf.draft||[]));
+    renderLblfApplied();
+    $('#lblFilterModal').modal('hide');
+    loadList(1);
+}
+function renderLblfApplied(){
+    var d=G.lblf.applied||[];
+    $('#lblf-cnt').text(d.length).toggle(d.length>0);
+    $('#btn-lblfilter').toggleClass('on', d.length>0);
+    if(!d.length){ $('#lblf-active').hide().empty(); return; }
+    $('#lblf-active').html(
+        '<span class="t">標籤條件：</span>'
+        + d.map(function(c,i){ return '<span class="lblf-chip on" data-ai="'+i+'" title="點擊移除這個條件">'+esc(c._t||'')+'<span class="x">×</span></span>'; }).join('')
+        + '<span class="lblf-chip" data-ai="-1" title="清除全部標籤條件">全部清除</span>'
+    ).show();
+}
+$(document).on('click','#lblf-body .lblf-chip',function(){ lblfToggle($(this).attr('data-lid'),$(this).attr('data-sid'),$(this).attr('data-key')||''); });
+$(document).on('click','#lblf-draft .lblf-chip',function(){ var i=parseInt($(this).attr('data-di'),10); if(i>=0){ G.lblf.draft.splice(i,1); renderLblfBody(); renderLblfDraft(); } });
+$(document).on('click','#lblf-active .lblf-chip',function(){
+    var i=parseInt($(this).attr('data-ai'),10);
+    if(i<0) G.lblf.applied=[]; else G.lblf.applied.splice(i,1);
+    renderLblfApplied(); loadList(1);
+});
+$(document).on('input','#lblf-kw',function(){ renderLblfBody(); });
+$(document).on('dblclick','#lblf-kw',function(){ if($(this).val()!==''){ $(this).val(''); renderLblfBody(); } });
 
 // ── 點擊料號開啟圖資跳窗（與 master_data 料號分頁相同：開啟 bom_viewer.php 可拖移視窗）──
 // pk＝d_setting.d_id（整數 PK）：同名料號可能有多筆主檔（不同客戶／版次），不指名會混在一起
@@ -6507,7 +6853,13 @@ function _samePartKey(r){
     return (r.d_id||'')+'|'+(r.client_name||'')+'|'+(r.part_remark||'')+'|'+(r.part_revision||'')+'|'+(r.group_id||0);
 }
 function renderTable(rows, page, ps){
-    if(!rows||!rows.length){ $('#stock-tbody').html('<tr><td colspan="12"><div class="empty"><i class="fa fa-inbox"></i><div>尚無庫存資料</div></div></td></tr>'); return; }
+    if(!rows||!rows.length){
+        // 搜尋不到時，很可能使用者打的是「料號底下的標籤內容」（搜尋框只比對料號/包裝箱/備註/客戶/儲位），
+        // 直接給一條路過去，不用自己想到要開標籤篩選
+        var _kw=($('#f-search').val()||'').trim(), _hint='';
+        if(_kw) _hint='<div style="margin-top:6px;font-size:12px;color:#8A4B12;">「'+esc(_kw)+'」也可能是<b>料號底下的標籤內容</b>（例：模數、內徑、齒型）'
+            +'<br><button class="btn btn-xs" style="margin-top:5px;background:#E07B39;border-color:#C96520;color:#fff;" onclick="openLabelFilter(true)"><i class="fa fa-tags"></i> 用「標籤篩選」找找看</button></div>';
+        $('#stock-tbody').html('<tr><td colspan="12"><div class="empty"><i class="fa fa-inbox"></i><div>尚無庫存資料</div>'+_hint+'</div></td></tr>'); return; }
     var start=(page-1)*ps+1, h='';
 
     // 先統計同料號的所有行（在本頁內）；組合件與非組合件分開統計（不混計）
