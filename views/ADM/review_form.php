@@ -444,8 +444,12 @@ function renderView(){
     var fixedRows = schemaFixedRows();
     h += '<div class="itm-tbl-wrap"><table class="itm-tbl"><thead><tr>';
     var cornerMerge = fixedRows && schemaHeadRow() && !$.trim(CUR_SCHEMA.head_row_label||'');
-    h += fixedRows ? '<th class="rf-corner'+(cornerMerge?' corner-merge':'')+'">'+cornerCellHtml()+'</th>' : '<th style="width:26px;text-align:center;">#</th><th style="text-align:center;">項目</th>';
-    if (schemaRowSide()) h += '<th style="text-align:center;">'+esc(CUR_SCHEMA.row_side_label||'')+'</th>';
+    // 右側那一欄沒有自己的標題時，斜線角格就往右延伸把它一起蓋住（紙本就是一個涵蓋左邊整塊的大斜線格），
+    // 不要在它上面留一個空的儲存格（2026-09-10 使用者明確要求）。有填標題文字時才單獨一格。
+    var sideNoHdr = schemaRowSide() && !$.trim(CUR_SCHEMA.row_side_label||'');
+    var cornerSpan = sideNoHdr ? 2 : 1;
+    h += fixedRows ? '<th class="rf-corner'+(cornerMerge?' corner-merge':'')+'" colspan="'+cornerSpan+'">'+cornerCellHtml()+'</th>' : '<th style="width:26px;text-align:center;">#</th><th style="text-align:center;">項目</th>';
+    if (schemaRowSide() && !sideNoHdr) h += '<th style="text-align:center;">'+esc(CUR_SCHEMA.row_side_label||'')+'</th>';
     (CUR_SCHEMA.fields||[]).forEach(function(c){ if (c.layout!=='block') h += '<th'+hdrThAttr(c)+'>'+hdrLabelHtml(c.label, c.vertical)+colFillHtml(c)+'</th>'; });
     if (schemaNeedOwner()) h += '<th>負責單位/負責人</th>';
     if (schemaSignMode()!=='none') h += '<th>簽名</th>';
@@ -661,9 +665,10 @@ function renderItems(){
         var dis = isDraftMine() ? '' : 'disabled';
         var r = '<tr class="head-band">';
         var mergeUp = fixedRows && !$.trim(CUR_SCHEMA.head_row_label||'');
-        r += fixedRows ? '<td class="row-head'+(mergeUp?' merge-up':'')+'">'+esc(CUR_SCHEMA.head_row_label||'')+'</td>'
+        var bandSideNoHdr = hasSideCol && !$.trim(CUR_SCHEMA.row_side_label||'');
+        r += fixedRows ? '<td class="row-head'+(mergeUp?' merge-up':'')+'" colspan="'+(bandSideNoHdr?2:1)+'">'+esc(CUR_SCHEMA.head_row_label||'')+'</td>'
                        : '<td></td><td>'+esc(CUR_SCHEMA.head_row_label||'')+'</td>';
-        if (hasSideCol) r += '<td></td>';
+        if (hasSideCol && !bandSideNoHdr) r += '<td></td>';
         inlineFields.forEach(function(c){
             r += '<td><textarea class="fill-auto" rows="1" data-head-key="'+esc(c.key)+'" '+dis+'>'+esc(headDataGet(c.key))+'</textarea></td>';
         });
@@ -948,8 +953,9 @@ function printForm(){
     h += '<table class="rf-p-items"><thead><tr>';
     var pHasSideCol = schemaRowSide(schema);
     var pCornerMerge = pFixedRows && schemaHeadRow(schema) && !$.trim(schema.head_row_label||'');
-    h += pFixedRows ? '<th class="rf-corner'+(pCornerMerge?' corner-merge':'')+'">'+cornerCellHtml(schema)+'</th>' : '<th>#</th><th>項目</th>';
-    if (pHasSideCol) h += '<th>'+esc(schema.row_side_label||'')+'</th>';
+    var pSideNoHdr = pHasSideCol && !$.trim(schema.row_side_label||'');
+    h += pFixedRows ? '<th class="rf-corner'+(pCornerMerge?' corner-merge':'')+'" colspan="'+(pSideNoHdr?2:1)+'">'+cornerCellHtml(schema)+'</th>' : '<th>#</th><th>項目</th>';
+    if (pHasSideCol && !pSideNoHdr) h += '<th>'+esc(schema.row_side_label||'')+'</th>';
     inlineFieldsP.forEach(function(c){ h += '<th class="hdr-auto"'+hdrThAttr(c)+'><div class="hdr-in">'+hdrLabelHtml(c.label, c.vertical)+'</div></th>'; });
     h += (pHasOwnerCol?'<th>負責單位/人</th>':'')+(pHasSignCol?'<th>簽名</th>':'')+'</tr></thead><tbody>';
     var headingSpanP = inlineFieldsP.length + (pHasOwnerCol?1:0) + (pHasSignCol?1:0);
@@ -959,9 +965,9 @@ function printForm(){
         var pHead = HEAD_DATA || {};
         h += '<tr>';
         var pMergeUp = pFixedRows && !$.trim(schema.head_row_label||'');
-        h += pFixedRows ? '<td class="row-head'+(pMergeUp?' merge-up':'')+'">'+esc(schema.head_row_label||'')+'</td>'
+        h += pFixedRows ? '<td class="row-head'+(pMergeUp?' merge-up':'')+'" colspan="'+(pSideNoHdr?2:1)+'">'+esc(schema.head_row_label||'')+'</td>'
                         : '<td></td><td class="t-left">'+esc(schema.head_row_label||'')+'</td>';
-        if (pHasSideCol) h += '<td></td>';
+        if (pHasSideCol && !pSideNoHdr) h += '<td></td>';
         inlineFieldsP.forEach(function(c){ h += '<td style="text-align:'+((c.type==='text'||c.type==='textarea')?(c.align||'left'):'center')+';">'+nl2brEsc(pHead[c.key]||'')+'</td>'; });
         if (pHasOwnerCol) h += '<td></td>';
         if (pHasSignCol) h += '<td></td>';
