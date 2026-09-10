@@ -1592,9 +1592,8 @@ function fsd_asdoc_sync_view_from_case(PDO $db, int $caseId): array {
     } catch (Throwable $e) { $root = ''; }
     if ($root === '') return [['result' => 'as_root_unset']];
 
-    // 顯示名比照導入當下的規則「案件名稱 業務日期.pdf」，版本清單看得出是哪一件
-    $safe = preg_replace('/[\\\\\/:*?"<>|]+/u', '_', trim((string)$case['title']) ?: ('案件' . $caseId));
-    $showName = trim($safe . ' ' . eg_fmt_date($case['business_date'])) . '.pdf';
+    // 顯示名比照導入當下的規則「案件名稱 業務日期.pdf」，版本清單看得出是哪一件（唯一實作在上面）
+    $showName = fsd_case_file_show_name($case);
 
     foreach ($rows as $r) {
         $verId = (int)$r['id'];
@@ -1834,15 +1833,15 @@ function fsd_backfill_people(PDO $db, string $asOfDate = ''): array {
 }
 
 /** 補案件建立草稿：不綁樣板，直接吃上傳的多張圖片成頁（圖片處理與一般案件共用 API 端的 fsd_case_upload_images）。 */
-function fsd_backfill_create_draft(PDO $db, int $uid, string $uname, string $title, string $bizDate, int $asDocId, array $doc): array {
+function fsd_backfill_create_draft(PDO $db, int $uid, string $uname, string $title, string $bizDate, int $asDocId, array $doc, bool $hidePrint = false): array {
     if (fsd_case_doc_empty($doc)) return ['ok'=>false, 'msg'=>'請上傳要補進系統的文件'];
     $isPdf = (($doc['type'] ?? 'image') === 'pdf');
     $bizDate = $bizDate ?: date('Y-m-d');
     $db->beginTransaction();
     try {
-        $db->prepare("INSERT INTO fsd_case (template_id,template_version,case_kind,as_doc_id,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,status,current_stage_seq)
-                      VALUES (0,0,'backfill',?,?,?,?,?,?,?,?,?,'draft',0)")
-           ->execute([$asDocId ?: null, $isPdf ? 'pdf' : 'image', $isPdf ? $doc['file_name'] : null,
+        $db->prepare("INSERT INTO fsd_case (template_id,template_version,case_kind,as_doc_id,as_doc_hide_print,file_type,file_name,title,applicant_id,applicant_name,filler_id,filler_name,business_date,status,current_stage_seq)
+                      VALUES (0,0,'backfill',?,?,?,?,?,?,?,?,?,?,'draft',0)")
+           ->execute([$asDocId ?: null, $hidePrint ? 1 : 0, $isPdf ? 'pdf' : 'image', $isPdf ? $doc['file_name'] : null,
                       $title ?: '補案件', $uid, $uname, $uid, $uname, $bizDate]);
         $caseId = (int)$db->lastInsertId();
         fsd_case_doc_pages_write($db, $caseId, $doc);
@@ -1854,14 +1853,37 @@ function fsd_backfill_create_draft(PDO $db, int $uid, string $uname, string $tit
     return ['ok'=>true, 'id'=>$caseId];
 }
 
-/** 補案件更新表頭（標題／業務日期／AS文件），僅草稿可改。 */
-function fsd_backfill_update_head(PDO $db, int $caseId, string $title, string $bizDate, int $asDocId): array {
+/** 補案件更新表頭（標題／業務日期／AS文件／要不要印編號），僅草稿可改。 */
+function fsd_backfill_update_head(PDO $db, int $caseId, string $title, string $bizDate, int $asDocId, bool $hidePrint = false): array {
     $case = fsd_case_get($db, $caseId);
     if (!$case || !fsd_is_backfill($case)) return ['ok'=>false, 'msg'=>'找不到此補案件'];
     if ($case['status'] !== 'draft') return ['ok'=>false, 'msg'=>'僅草稿狀態可修改'];
-    $db->prepare("UPDATE fsd_case SET title=?,business_date=?,as_doc_id=?,updated_at=NOW() WHERE id=?")
-       ->execute([$title ?: '補案件', $bizDate ?: $case['business_date'], $asDocId ?: null, $caseId]);
+    $db->prepare("UPDATE fsd_case SET title=?,business_date=?,as_doc_id=?,as_doc_hide_print=?,updated_at=NOW() WHERE id=?")
+       ->execute([$title ?: '補案件', $bizDate ?: $case['business_date'], $asDocId ?: null, $hidePrint ? 1 : 0, $caseId]);
     return ['ok'=>true, 'case'=>fsd_case_get($db, $caseId)];
+}
+
+/**
+ * 樣板設定：綁定的 AS 編號要不要印在列印頁右下角。
+ * 已經產生過合成 PDF 的案件必須一併作廢重產——那份 PDF 是「產生當下」把編號燒進去的，
+ * 不作廢的話改了設定卻只有畫面變、下載到的 PDF 還是印著舊編號，而且完全看不出來。
+ * 作廢＝清掉 export_pdf_name，案件下次被開啟時前端會自動補產一份（openCase 既有行為）。
+ */
+function fsd_template_set_asdoc_hide_print(PDO $db, int $templateId, bool $hide): array {
+    $tpl = fsd_template_get($db, $templateId);
+    if (!$tpl) return ['ok'=>false, 'msg'=>'找不到此樣板'];
+    if ((int)($tpl['as_doc_hide_print'] ?? 0) === ($hide ? 1 : 0)) return ['ok'=>true, 'invalidated'=>0];
+    $db->beginTransaction();
+    try {
+        $db->prepare("UPDATE fsd_template SET as_doc_hide_print=?, updated_at=NOW() WHERE id=?")
+           ->execute([$hide ? 1 : 0, $templateId]);
+        $st = $db->prepare("UPDATE fsd_case SET export_pdf_name=NULL, export_pdf_at=NULL, export_mode=NULL, updated_at=NOW()
+                            WHERE template_id=? AND case_kind='normal' AND export_pdf_name IS NOT NULL");
+        $st->execute([$templateId]);
+        $n = $st->rowCount();
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); return ['ok'=>false, 'msg'=>'設定失敗：' . $e->getMessage()]; }
+    return ['ok'=>true, 'invalidated'=>$n];
 }
 
 /**
@@ -2214,10 +2236,41 @@ function fsd_asdoc_no_display(PDO $db, int $templateId, ?string $bizDate = null)
     return eg_asdoc_no_asof($db, fsd_asdoc_module($templateId), $bizDate);
 }
 
+/**
+ * 案件的合成 PDF 對外顯示／下載時的檔名＝「案件名稱 業務日期.pdf」（使用者指定；日期用全站顯示格式
+ * YYYY.MM.DD＝ai-rules/20）。**唯一實作**——原本三個地方各寫一份，其中兩份的正規表示式寫錯：
+ *
+ *   preg_replace('/[\\\/:*?"<>|]+/u', …)   ← PHP 字串是 /[\\/:*?"<>|]+/u
+ *
+ * 用「/」當定界字元、字元類別裡又出現沒跳脫的「/」，Apache 這邊的 PHP 會把它當成結束定界字元而
+ * **編譯失敗回傳 null**（preg_last_error()=1），於是 $safe 變成空字串——實測下載到的檔名從
+ * 「2-GM-01-01 2026.01.06.pdf」默默變成「2026.01.06.pdf」，案件名稱整個不見了，而且不會報錯。
+ * 更難查的是**同一段程式用 CLI 跑卻是正常的**，只看 CLI 測試永遠測不出來。
+ * 改用「~」當定界字元就沒有這個歧義（「~」不會出現在字元類別裡）。
+ */
+function fsd_case_file_show_name(array $case): string {
+    require_once __DIR__ . '/date_fmt_lib.php';
+    $title = trim((string)($case['title'] ?? '')) ?: ('案件' . (int)($case['id'] ?? 0));
+    $safe  = preg_replace('~[\\\\/:*?"<>|]+~u', '_', $title);
+    if ($safe === null || $safe === '') $safe = '案件' . (int)($case['id'] ?? 0);
+    return trim($safe . ' ' . eg_fmt_date($case['business_date'] ?? '')) . '.pdf';
+}
+
 /** 某案件列印右下角要印的 AS 文件編號：一般案件走樣板綁定，補案件走案件自己挑的 as_doc_id；
- *  兩者版次都依業務日期回推當時生效版（ai-rules/16 第三之四節）。 */
+ *  兩者版次都依業務日期回推當時生效版（ai-rules/16 第三之四節）。
+ *
+ *  2026-09-10：勾了「不在列印頁顯示編號」時這裡回空字串——**綁定本身照樣成立**，
+ *  AS 文件管理的「填寫紀錄」仍然連動得到（那份清單是用綁定反查的，不看這個旗標）。
+ *  用途：紙本掃描檔上本來就印好編號了，再印一次會變成同一頁兩組編號。
+ *  這是全站唯一決定「這件要印哪個 AS 編號」的地方（畫面右下角與合成 PDF 都走這支），
+ *  所以旗標只要擋在這裡就夠，不必再去改列印與 PDF 兩條路徑。 */
 function fsd_case_asdoc_no(PDO $db, array $case): string {
     $bizDate = $case['business_date'] ?? null;
-    if (fsd_is_backfill($case)) return eg_asdoc_no_asof_id($db, (int)($case['as_doc_id'] ?? 0), $bizDate);
+    if (fsd_is_backfill($case)) {
+        if (!empty($case['as_doc_hide_print'])) return '';
+        return eg_asdoc_no_asof_id($db, (int)($case['as_doc_id'] ?? 0), $bizDate);
+    }
+    $tpl = fsd_template_get($db, (int)$case['template_id']);
+    if ($tpl && !empty($tpl['as_doc_hide_print'])) return '';
     return fsd_asdoc_no_display($db, (int)$case['template_id'], $bizDate);
 }

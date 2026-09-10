@@ -130,6 +130,87 @@ function eg_asdoc_no_asof(PDO $db, string $module, ?string $bizDate = null): str
     return eg_asdoc_no_asof_id($db, eg_asdoc_id($db, $module), $bizDate);
 }
 
+/**
+ * 反查：哪些「模組代碼以 $prefix 開頭」的綁定指向這份 AS 文件，回傳代碼後綴的整數 id 陣列。
+ * 例：eg_asdoc_bound_ids($db, 'fsd_tpl_', 26) → [3]（＝表單簽核樣板 id 3 綁了這份文件）
+ *
+ * 為什麼要有這支：AS 文件管理的「填寫紀錄」要由文件往回找「有哪些樣板／模板是這份表單」，
+ * 而綁定值存在 system_parameters(param_group='AS_DOC_BIND')、且**舊資料有的存 json 有的存純數字**
+ * （見 eg_asdoc_id()）。各頁自己 parse 一次遲早漏掉 json 那種寫法，故一律走這支。
+ * 同一份文件可能被多個樣板綁（實際存在：fsd_tpl_78 與 fsd_tpl_79 都綁 doc 5），所以回傳的是陣列。
+ */
+function eg_asdoc_bound_ids(PDO $db, string $prefix, int $docId): array {
+    if ($docId <= 0 || $prefix === '') return [];
+    try {
+        $st = $db->prepare("SELECT param_key, param_value FROM system_parameters
+                            WHERE param_group=? AND param_key LIKE ?");
+        $st->execute([EG_ASDOC_GROUP, $prefix . '%']);
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $suffix = substr((string)$r['param_key'], strlen($prefix));
+            if ($suffix === '' || !ctype_digit($suffix)) continue;   // 只認純數字後綴，避免撿到別的設定鍵
+            $v = (string)$r['param_value'];
+            $d = json_decode($v, true);
+            $id = (int)(is_numeric($d) ? $d : (is_numeric($v) ? $v : 0));
+            if ($id === $docId) $out[] = (int)$suffix;
+        }
+        return $out;
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * AS 文件管理的頁面 ACRUD 權限字串（user_permissions.php 權限矩陣：page scope 優先、group scope 備援）。
+ * 唯一實作——AS_Document_API 的 asPagePerm() 直接轉呼叫這支，其他模組要判斷「這個人有沒有 AS 文件檢閱權」
+ * 一律走 eg_asdoc_user_can()，不要各自再抄一份查詢。
+ */
+function eg_asdoc_page_perm(PDO $db, int $uid): string {
+    if ($uid <= 0) return '';
+    try {
+        $st = $db->prepare("SELECT page_id, group_id FROM system_module_pages
+                            WHERE page_url LIKE '%views/ADM/as_document_management.php' LIMIT 1");
+        $st->execute();
+        $pg = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$pg) return '';
+        $st = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='page' AND module_code=?");
+        $st->execute([$uid, $pg['page_id']]);
+        $perms = $st->fetchAll(PDO::FETCH_COLUMN);
+        if (empty($perms) && !empty($pg['group_id'])) {
+            $st = $db->prepare("SELECT module_code FROM system_modules WHERE group_id=? LIMIT 1");
+            $st->execute([$pg['group_id']]);
+            $gCode = $st->fetchColumn();
+            if ($gCode) {
+                $st = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='group' AND module_code=?");
+                $st->execute([$uid, $gCode]);
+                $perms = $st->fetchAll(PDO::FETCH_COLUMN);
+            }
+        }
+        $chars = [];
+        foreach ($perms as $p) { $chars = array_merge($chars, str_split((string)$p)); }
+        return implode('', array_unique($chars));
+    } catch (Throwable $e) { return ''; }
+}
+
+/** 能力判斷本體（不查 DB，供已經算好 features／pagePerm 的呼叫端使用；AS_Document_API 的 asCan() 走這支）。 */
+function eg_asdoc_can_with(array $features, bool $isRoleAdmin, string $pagePerm, string $what): bool {
+    if ($isRoleAdmin || strpos($pagePerm, 'A') !== false) return true;
+    $charMap = ['view'=>'R', 'create'=>'C', 'update'=>'U', 'delete'=>'D'];
+    if (isset($charMap[$what]) && strpos($pagePerm, $charMap[$what]) !== false) return true;
+    // 上傳紀錄：與「新增文件」分開設定，但相容既有已具新增文件權限者
+    if ($what === 'upload_record')
+        return in_array('asdoc_upload_record', $features, true)
+            || eg_asdoc_can_with($features, $isRoleAdmin, $pagePerm, 'create');
+    return in_array('asdoc_' . $what, $features, true);
+}
+
+/** 由 user id 直接判斷 AS 文件管理的某項能力（view/create/update/delete/settings/…）。 */
+function eg_asdoc_user_can(PDO $db, int $uid, string $what): bool {
+    if ($uid <= 0) return false;
+    require_once __DIR__ . '/role_features_helper.php';
+    try { $features = rf_load_user_features_override($db, $uid, 'as_doc'); }
+    catch (Throwable $e) { $features = []; }
+    return eg_asdoc_can_with($features, in_array('all', $features, true), eg_asdoc_page_perm($db, $uid), $what);
+}
+
 /** 存綁定（$docId=0 代表取消綁定） */
 function eg_asdoc_save(PDO $db, string $module, int $docId, string $by = ''): void {
     try {

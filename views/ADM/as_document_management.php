@@ -826,22 +826,21 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
           <span class="text-muted" style="font-size:11px;margin-left:6px;">連結後此表單的電子化開單結果會顯示在下方</span>
         </div>
 
-        <div id="recElectronicBlock" style="display:none;">
-          <h4 style="margin-top:0;"><i class="fa fa-bolt" style="color:#f39c12;"></i> 電子化紀錄 <small id="recElecInfo"></small>
-            <a href="#" id="recElecLink" target="_blank" class="btn btn-xs btn-primary" style="margin-left:8px;">前往模組頁</a></h4>
-          <div class="table-responsive" style="max-height:220px;overflow-y:auto;">
-            <table class="table table-condensed table-striped" style="font-size:12px;">
-              <thead><tr><th style="width:150px;">單號</th><th style="width:100px;">日期</th><th>內容摘要</th></tr></thead>
-              <tbody id="recElecBody"></tbody>
-            </table>
-          </div>
-          <hr>
+        <div id="recModuleLink" class="alert alert-info" style="padding:6px 10px;font-size:12px;display:none;">
+          <i class="fa fa-bolt" style="color:#f39c12;"></i> 本文件已連結電子化模組
+          <b id="recModuleName"></b>，開單結果已一併列在下方清單。
+          <a href="#" id="recModuleUrl" target="_blank" class="btn btn-xs btn-primary" style="margin-left:6px;">前往模組頁</a>
         </div>
 
-        <h4><i class="fa fa-file-text-o" style="color:#3498db;"></i> <span id="recPaperTitle">紙本／檔案紀錄</span> <small id="recPaperInfo"></small></h4>
+        <h4><i class="fa fa-file-text-o" style="color:#3498db;"></i> <span id="recPaperTitle">填寫紀錄</span> <small id="recPaperInfo"></small></h4>
+        <p class="text-muted" style="font-size:11.5px;margin:-4px 0 6px;">
+          紙本／檔案上傳、表單簽核設計器（含補案件）、審核表單與已連結的電子化模組合併顯示，依日期新→舊排序；
+          線上簽核的表單只收<b>已完成</b>的。已完成者按「預覽」即可看到蓋好簽章後的樣貌。
+        </p>
         <div class="table-responsive">
           <table class="table table-condensed table-striped" style="font-size:12px;">
-            <thead><tr><th>標題</th><th style="width:100px;">紀錄日期</th><th>備註</th><th style="width:90px;">上傳者</th><th style="width:150px;">操作</th></tr></thead>
+            <thead><tr><th style="width:120px;">來源</th><th>標題</th><th style="width:100px;">日期</th>
+              <th style="width:110px;">填表／上傳者</th><th>備註</th><th style="width:150px;">操作</th></tr></thead>
             <tbody id="recPaperBody"></tbody>
           </table>
         </div>
@@ -3713,31 +3712,53 @@ $(function(){
       const isForm = r.doc.doc_type==='表單';
       // 表單=填寫紀錄；其他文件=留存附件（無編號僅保存）。電子化連結僅表單適用。
       $('#recordModal .modal-title').contents().first()[0].textContent = (isForm?'填寫紀錄':'留存附件（無編號）')+' － ';
-      $('#recPaperTitle').text(isForm ? '紙本／檔案紀錄' : '留存檔案（無編號，僅保存）');
+      $('#recPaperTitle').text(isForm ? '填寫紀錄' : '留存檔案（無編號，僅保存）');
       $('#rec_linked_module').val(r.doc.linked_module||'');
       $('#recLinkedWrap').toggle(canS && isForm);
-      // 電子化區
-      if(r.electronic){
-        $('#recElectronicBlock').show();
-        $('#recElecInfo').text(`${r.electronic.module_name}｜共 ${r.electronic.total} 筆（顯示最新 20 筆）`);
-        $('#recElecLink').attr('href', r.electronic.page_url);
-        const eb=$('#recElecBody').empty();
-        (r.electronic.rows||[]).forEach(x=>eb.append(`<tr><td>${esc(x.no)}</td><td>${esc(x.rec_date)||'-'}</td><td>${esc((x.title||'').substring(0,80))}</td></tr>`));
-        if(!(r.electronic.rows||[]).length) eb.append('<tr><td colspan="3" class="text-muted text-center">尚無資料</td></tr>');
-      } else { $('#recElectronicBlock').hide(); }
-      // 紙本區
+      // 已連結的電子化模組（CAR／品質異常）：開單結果已併進下方同一份清單，這裡只留前往模組頁的入口
+      if(r.module_link){
+        $('#recModuleLink').show();
+        $('#recModuleName').text(r.module_link.name);
+        $('#recModuleUrl').attr('href', r.module_link.url);
+      } else { $('#recModuleLink').hide(); }
+      // 合併清單：紙本上傳／表單簽核設計器（含補案件）／審核表單／電子化模組，一律依日期新→舊
       $('#recPaperInfo').text(`共 ${r.total} 筆`);
+      const docIdNow = $('#rec_doc_id').val();
       const tb=$('#recPaperBody').empty();
       (r.records||[]).forEach(x=>{
-        let op = `<a class="btn btn-xs btn-default" href="${API}?action=form_record_download&id=${x.id}&inline=1" target="_blank">預覽</a> `;
-        if(canDL) op += `<a class="btn btn-xs btn-info" href="${API}?action=form_record_download&id=${x.id}">下載</a> `;
-        if(canD) op += `<button class="btn btn-xs btn-danger rec-del" data-id="${x.id}">刪</button>`;
+        let op='';
+        if(x.src==='paper'){
+          op  = `<a class="btn btn-xs btn-default" href="${API}?action=form_record_download&id=${x.id}&inline=1" target="_blank">預覽</a> `;
+          if(canDL) op += `<a class="btn btn-xs btn-info" href="${API}?action=form_record_download&id=${x.id}">下載</a> `;
+          if(canD)  op += `<button class="btn btn-xs btn-danger rec-del" data-id="${x.id}">刪</button>`;
+        } else if(x.src==='fsd'){
+          // 已完成案件的合成 PDF ＝ 蓋好章之後的樣貌。合成 PDF 必須由瀏覽器把圖章畫成圖再送後端疊圖，
+          // 後端自己產不出來，所以還沒產生過的（多半是早期補登的案件）預覽改成開案件頁——那頁開啟時
+          // 本來就會自動補產一份，畫面上同樣看得到蓋好章的樣子。
+          if(x.can_preview){
+            op  = `<a class="btn btn-xs btn-default" href="${API}?action=form_record_fsd_pdf&doc_id=${docIdNow}&case_id=${x.id}" target="_blank">預覽</a> `;
+            if(canDL) op += `<a class="btn btn-xs btn-info" href="${API}?action=form_record_fsd_pdf&doc_id=${docIdNow}&case_id=${x.id}&dl=1">下載</a> `;
+            op += `<a class="btn btn-xs btn-link" href="${esc(x.open_url)}" target="_blank">開啟案件</a>`;
+          } else {
+            op  = `<a class="btn btn-xs btn-default" href="${esc(x.open_url)}" target="_blank" `
+                + `title="這一件還沒產生過簽章後的 PDF，開啟案件時會自動補產一份，之後這裡就會直接是 PDF 預覽">預覽（開啟案件）</a>`;
+          }
+        } else if(x.src==='rvf'){
+          // 審核表單沒有存起來的 PDF（列印是前端即時產生的），預覽＝開該筆表單的列印版面
+          op  = `<a class="btn btn-xs btn-default" href="${esc(x.open_url)}&print=1" target="_blank">預覽</a> `;
+          op += `<a class="btn btn-xs btn-link" href="${esc(x.open_url)}" target="_blank">開啟表單</a>`;
+        } else if(x.open_url){
+          op  = `<a class="btn btn-xs btn-link" href="${esc(x.open_url)}" target="_blank">前往模組頁</a>`;
+        }
         // 備註中的 #文字 顯示為可點擊標籤（點了＝以 #標籤 全域搜尋，找出所有含此標籤的文件）
         const noteHtml = esc(x.note||'-').replace(/#([^\s#<]+)/g,
           '<a href="javascript:void(0)" class="note-hashtag label label-primary" data-tag="#$1" style="font-weight:normal;font-size:11px;">#$1</a>');
-        tb.append(`<tr><td>${esc(x.title)}</td><td>${esc(x.record_date)||'-'}</td><td>${noteHtml}</td><td>${esc(x.uploaded_by_name)||'-'}</td><td class="text-nowrap">${op}</td></tr>`);
+        const badge = x.status ? ` <span class="label label-success" style="font-weight:normal;">${esc(x.status)}</span>` : '';
+        tb.append(`<tr><td class="text-nowrap">${esc(x.src_name)}${badge}</td><td>${esc(x.title)}</td>`
+          + `<td>${dispDate(x.rec_date)||'-'}</td><td>${esc(x.person)||'-'}</td><td>${noteHtml}</td>`
+          + `<td class="text-nowrap">${op}</td></tr>`);
       });
-      if(!(r.records||[]).length) tb.append('<tr><td colspan="5" class="text-muted text-center">尚無紙本紀錄</td></tr>');
+      if(!(r.records||[]).length) tb.append('<tr><td colspan="6" class="text-muted text-center">尚無填寫紀錄</td></tr>');
       // 分頁
       const pages = Math.max(1, Math.ceil(r.total/r.page_size));
       const pg=$('#recPager').empty();

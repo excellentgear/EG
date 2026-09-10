@@ -12,6 +12,8 @@ require_once __DIR__ . '/../common/api_guard.php';   // 在職狀態守門（離
 include_once $document_root . '/EGsystem/src/common/_config.php';
 include_once $document_root . '/EGsystem/src/common/DBConnection.php';
 include_once $document_root . '/EGsystem/src/common/asdoc_lib.php';
+// 填寫紀錄彙整（紙本上傳＋表單簽核案件＋審核表單＋既有電子化模組）：唯一實作，禁止在本檔再寫一份
+include_once $document_root . '/EGsystem/src/common/asdoc_record_lib.php';
 // 表單簽核案件導入（同一份文件不用上傳兩次）：只用到查詢與路徑函式，不碰簽核流程
 include_once $document_root . '/EGsystem/src/common/form_signer_lib.php';
 include_once $document_root . '/EGsystem/src/common/attach_lib.php';
@@ -43,31 +45,11 @@ include_once $document_root . '/EGsystem/src/common/role_features_helper.php';
 $asFeatures    = $currentUserId ? rf_load_user_features_override($db, $currentUserId, 'as_doc') : [];
 $asIsRoleAdmin = in_array('all', $asFeatures, true);
 
-/** 頁面 ACRUD 字串（user_permissions.php 權限矩陣：page scope 優先、group scope 備援） */
+/** 頁面 ACRUD 字串（user_permissions.php 權限矩陣：page scope 優先、group scope 備援）
+ *  唯一實作已移到 asdoc_lib.php 的 eg_asdoc_page_perm()——別的模組（審核表單的填寫紀錄預覽）也要判斷
+ *  「這個人有沒有 AS 文件檢閱權」，兩邊各抄一份遲早走鐘（鐵律4）。這裡保留同名函式只是不動既有呼叫端。 */
 function asPagePerm(PDO $db, int $uid): string {
-    try {
-        $st = $db->prepare("SELECT page_id, group_id FROM system_module_pages
-                            WHERE page_url LIKE '%views/ADM/as_document_management.php' LIMIT 1");
-        $st->execute();
-        $pg = $st->fetch(PDO::FETCH_ASSOC);
-        if (!$pg) return '';
-        $st = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='page' AND module_code=?");
-        $st->execute([$uid, $pg['page_id']]);
-        $perms = $st->fetchAll(PDO::FETCH_COLUMN);
-        if (empty($perms) && !empty($pg['group_id'])) {
-            $st = $db->prepare("SELECT module_code FROM system_modules WHERE group_id=? LIMIT 1");
-            $st->execute([$pg['group_id']]);
-            $gCode = $st->fetchColumn();
-            if ($gCode) {
-                $st = $db->prepare("SELECT permission FROM user_module_permissions WHERE user_id=? AND scope='group' AND module_code=?");
-                $st->execute([$uid, $gCode]);
-                $perms = $st->fetchAll(PDO::FETCH_COLUMN);
-            }
-        }
-        $chars = [];
-        foreach ($perms as $p) { $chars = array_merge($chars, str_split($p)); }
-        return implode('', array_unique($chars));
-    } catch (Exception $e) { return ''; }
+    return eg_asdoc_page_perm($db, $uid);
 }
 $asPagePerm = $currentUserId ? asPagePerm($db, $currentUserId) : '';
 
@@ -78,12 +60,7 @@ $asNoAttach = in_array('asdoc_no_attach', $asFeatures, true);
 /** 能力判斷：view/create/update/delete 走「頁面ACRUD OR 角色功能碼」；settings/edit_online 只認 A 或對應功能碼 */
 function asCan(string $what): bool {
     global $asFeatures, $asIsRoleAdmin, $asPagePerm;
-    if ($asIsRoleAdmin || strpos($asPagePerm, 'A') !== false) return true;
-    $charMap = ['view'=>'R', 'create'=>'C', 'update'=>'U', 'delete'=>'D'];
-    if (isset($charMap[$what]) && strpos($asPagePerm, $charMap[$what]) !== false) return true;
-    // 上傳紀錄：與「新增文件」分開設定，但相容既有已具新增文件權限者
-    if ($what === 'upload_record') return in_array('asdoc_upload_record', $asFeatures, true) || asCan('create');
-    return in_array('asdoc_' . $what, $asFeatures, true);
+    return eg_asdoc_can_with($asFeatures, $asIsRoleAdmin, $asPagePerm, $what);
 }
 
 // ── 共用工具 ───────────────────────────────────────────────────────
@@ -407,10 +384,9 @@ function asFsdImportFile(PDO $db, int $caseId, int $docId, string $destDir): arr
     $name = asMakeName('pdf');
     if (!@copy($srcPath, rtrim($destDir, '\\/') . DIRECTORY_SEPARATOR . $name))
         jout(['status'=>'error','message'=>'導入寫入失敗（NAS 未連線？）']);
-    // 顯示名比照案件下載檔名「案件名稱 業務日期.pdf」，版本清單看得出是哪一件
-    $safe = preg_replace('/[\\\\\/:*?"<>|]+/u', '_', trim((string)$case['title']) ?: ('案件' . $caseId));
+    // 顯示名比照案件下載檔名「案件名稱 業務日期.pdf」，版本清單看得出是哪一件（唯一實作在 form_signer_lib）
     return ['file_name'=>$name,
-            'original_name'=>trim($safe . ' ' . eg_fmt_date($case['business_date'])) . '.pdf',
+            'original_name'=>fsd_case_file_show_name($case),
             'case_id'=>$caseId,
             'src_pdf'=>$src];   // 來源合成 PDF 的檔名，供之後判斷這份複本是不是已經落後（自動同步用）
 }
@@ -602,6 +578,7 @@ $asGate = [
     // save_doc_remark 於 case 內另行檢查（僅限管理員）
     // add_versions_batch 於 case 內另行檢查（僅限管理員）
     // form_record_download 於 case 內依 inline 分流（預覽=view / 原檔=download）
+    // form_record_fsd_pdf 於 case 內檢查（view ＋「這件真的屬於這份文件」的歸屬驗證）
 ];
 if (!$currentUserId) {
     if ($action === 'download' || $action === 'download_template') { http_response_code(403); exit('尚未登入'); }
@@ -1498,7 +1475,9 @@ case 'download':
         $ver  = trim((string)($v['version'] ?? ''));
         if ($base !== '') {
             $oname = $base . ($ver !== '' ? ('-' . $ver) : '') . ($ext !== '' ? ('.' . $ext) : '');
-            $oname = preg_replace('/[\\\\\/:*?"<>|]/', '_', $oname);
+            // 定界字元用「~」：用「/」時字元類別裡那個沒跳脫的「/」會被當成結束定界字元，
+            // 在 Apache 這邊的 PHP 直接編譯失敗回 null＝下載檔名整個變空（2026-09-10 實測修正）
+            $oname = preg_replace('~[\\\\/:*?"<>|]~', '_', $oname);
         }
     }
     // 線上預覽：Office 檔先轉 PDF 快取再 inline 串流
@@ -2085,32 +2064,46 @@ case 'form_records_list':
     $doc = $st->fetch(PDO::FETCH_ASSOC);
     if (!$doc) jout(['status'=>'error','message'=>'文件不存在']);
 
-    // 紙本紀錄（後端分頁，符合 ai-rules/08）
-    $tot = $db->prepare("SELECT COUNT(*) FROM as_form_record WHERE form_doc_id=? AND is_deleted=0");
-    $tot->execute([$docId]);
-    $total = (int)$tot->fetchColumn();
-    $st = $db->prepare("SELECT r.*, COALESCE(u.user_cname, r.uploaded_by) AS uploaded_by_name
-                        FROM as_form_record r LEFT JOIN user u ON u.user_uname = r.uploaded_by
-                        WHERE r.form_doc_id=? AND r.is_deleted=0
-                        ORDER BY r.record_date DESC, r.id DESC
-                        LIMIT ".(($page-1)*$size).",".$size);
-    $st->execute([$docId]);
-    $records = $st->fetchAll(PDO::FETCH_ASSOC);
+    /* 2026-09-10 起：紙本上傳、表單簽核設計器（一般案件＋補案件）、審核表單、既有 linked_module
+       電子化模組**合併成同一份清單**，一律依日期新→舊，後端分頁（ai-rules/08：總筆數以全部
+       符合條件的資料為準）。彙整規則的唯一實作在 asdoc_record_lib.php，不要在這裡再寫一份。 */
+    $r = eg_asdoc_fill_records($db, $docId, $page, $size);
+    $moduleLink = null;
+    if ($doc['linked_module'] === 'car')              $moduleLink = ['name'=>'異常矯正處理單(CAR)', 'url'=>'../QA/correction_order.php'];
+    elseif ($doc['linked_module'] === 'qa_abnormal')  $moduleLink = ['name'=>'品質異常處理單',       'url'=>'../QA/qa_abnormal_view.php'];
+    jout(['status'=>'success','doc'=>$doc,'records'=>$r['rows'],'total'=>$r['total'],
+          'page'=>$r['page'],'page_size'=>$r['page_size'],'module_link'=>$moduleLink]);
 
-    // 電子化模組結果（最新 20 筆＋模組頁連結；完整查詢至模組頁）
-    $electronic = null;
-    if ($doc['linked_module'] === 'car') {
-        $rows = $db->query("SELECT id, car_no AS no, fill_date AS rec_date, source_desc AS title
-                            FROM car_order ORDER BY id DESC LIMIT 20")->fetchAll(PDO::FETCH_ASSOC);
-        $cnt = (int)$db->query("SELECT COUNT(*) FROM car_order")->fetchColumn();
-        $electronic = ['module'=>'car','module_name'=>'異常矯正處理單(CAR)','page_url'=>'../QA/correction_order.php','total'=>$cnt,'rows'=>$rows];
-    } elseif ($doc['linked_module'] === 'qa_abnormal') {
-        $rows = $db->query("SELECT id, abnormal_order_no AS no, occurrence_date AS rec_date, abnormal_phenomenon AS title
-                            FROM qa_abnormal_order ORDER BY id DESC LIMIT 20")->fetchAll(PDO::FETCH_ASSOC);
-        $cnt = (int)$db->query("SELECT COUNT(*) FROM qa_abnormal_order")->fetchColumn();
-        $electronic = ['module'=>'qa_abnormal','module_name'=>'品質異常處理單','page_url'=>'../QA/qa_abnormal_view.php','total'=>$cnt,'rows'=>$rows];
+/* 填寫紀錄的「預覽」：串流表單簽核案件已簽章完成的合成 PDF。
+   權限依使用者拍板＝**AS 文件檢閱權限**（與紙本紀錄的預覽一致），但一定要再驗一次「這件真的屬於
+   這份文件」——不驗的話，任何有 AS 檢閱權的人把 case_id 換個數字就能看到任何一件簽核案件（鐵律8）。 */
+case 'form_record_fsd_pdf': {
+    if (!asCan('view')) { http_response_code(403); header('Content-Type: text/plain; charset=utf-8'); exit('無檢閱權限'); }
+    $docId  = (int)($_GET['doc_id'] ?? 0);
+    $caseId = (int)($_GET['case_id'] ?? 0);
+    if (!eg_asdoc_fill_owns_fsd_case($db, $docId, $caseId)) {
+        http_response_code(404); header('Content-Type: text/plain; charset=utf-8'); exit('這筆紀錄不屬於本文件');
     }
-    jout(['status'=>'success','doc'=>$doc,'records'=>$records,'total'=>$total,'page'=>$page,'page_size'=>$size,'electronic'=>$electronic]);
+    $case = fsd_case_get($db, $caseId);
+    $name = trim((string)($case['export_pdf_name'] ?? ''));
+    if ($name === '') {
+        http_response_code(404); header('Content-Type: text/plain; charset=utf-8');
+        exit('此案件尚未產生簽章後的 PDF，請由「表單簽核設計器」開啟該案件一次（會自動補產）後再預覽。');
+    }
+    $fp = rtrim(eg_attach_dir($db, 'fsd_case_nas_dir', '表單簽核設計器-案件'), '\/') . DIRECTORY_SEPARATOR . $name;
+    if (!is_file($fp)) { http_response_code(404); header('Content-Type: text/plain; charset=utf-8'); exit('PDF 檔不存在或已被搬移'); }
+    $show = fsd_case_file_show_name($case);   // 顯示檔名的唯一實作（見 form_signer_lib.php）
+    // 開／下載這份已簽章的 PDF 一律留紀錄（ai-rules/23）：這跟在表單簽核設計器按開啟是同一份檔案，
+    // 所以寫進同一張案件列印紀錄，不另開一張表。
+    fsd_case_print_log_add($db, $caseId, !empty($_GET['dl']) ? 'pdf_download' : 'pdf_open',
+                           $currentUserId, $currentCname ?: $currentUserName);
+    header('Content-Type: application/pdf');
+    header('Content-Length: ' . filesize($fp));
+    header('Content-Disposition: ' . (!empty($_GET['dl']) ? 'attachment' : 'inline')
+        . "; filename*=UTF-8''" . rawurlencode($show));
+    readfile($fp);
+    exit;
+}
 
 case 'form_records_upload':
     $docId = (int)($_POST['doc_id'] ?? 0);

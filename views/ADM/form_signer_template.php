@@ -122,6 +122,9 @@ $perms = fsd_perms($db, $fsdUser);
                 <b id="dsgTplName" style="margin-left:6px;"></b>
                 <button onclick="openAsDocPicker()">綁定AS文件</button>
                 <span id="dsgAsDoc" style="color:#5b3a1e;font-size:12px;"></span>
+                <label style="margin:0 0 0 8px;font-size:12px;color:#5b3a1e;white-space:nowrap;"
+                       title="打勾＝這個樣板的案件列印時，右下角不印 AS 文件編號。綁定本身照樣成立：AS 文件管理的「填寫紀錄」仍然會列出這個樣板的所有已完成案件。用於紙本掃描檔上本來就已經印好編號、不需要系統再印一次的表單。改這個設定會把已經產生過的合成 PDF 作廢，案件下次被開啟時自動重新產生。">
+                    <input type="checkbox" id="dsgAsDocHide" onchange="saveAsDocHidePrint(this.checked)"> 不在列印頁顯示編號</label>
                 <label style="margin:0 0 0 10px;font-size:12px;color:#5b3a1e;white-space:nowrap;"
                        title="打勾後，用這個樣板建立案件時可以挑一個 AS 文件編號。之後在「AS 文件管理」上傳同一個編號的版本附件時，就能直接選「由表單簽核案件導入」拿這份已簽核完成的 PDF，同一份文件不用上傳兩次。此設定與上方「列印用的 AS 編號綁定」無關。">
                     <input type="checkbox" id="dsgAllowAsLink" onchange="saveAllowAsLink(this.checked)"> 建立案件時可連結 AS 文件編號</label>
@@ -246,7 +249,9 @@ $perms = fsd_perms($db, $fsdUser);
         <h4>重要行為</h4>
         ・發布是「存檔即生效」的版本快照，已建立的案件會固定使用建立當下的版本，之後改版不影響進行中的案件。<br>
         ・意見階段沒有駁回動作、不互相卡關，全部槽位（扣除迴避的）都回應才算完成；逾期未回應僅會提醒，不會自動略過。<br>
-        ・槽位解析出的人若剛好是送出案件的本人，該槽位自動略過（強制迴避，避免球員兼裁判）。
+        ・槽位解析出的人若剛好是送出案件的本人，該槽位自動略過（強制迴避，避免球員兼裁判）。<br>
+        ・<b>綁定 AS 文件</b>有兩個作用：①案件列印時右下角印出該編號（版次依案件業務日期回推當時生效版）②該樣板<b>已完成</b>的案件會自動出現在「AS 文件管理 → 該份文件 → 填寫紀錄」裡，在那裡可以直接預覽蓋好章的合成 PDF。<br>
+        ・工具列的<b>「不在列印頁顯示編號」</b>只關掉上面第①項——<b>綁定與填寫紀錄的連動照樣成立</b>。用於掃描的紙本上本來就印好編號、不需要系統再印一次的表單。<b>改這個設定會把這個樣板已經產生過的合成 PDF 一併作廢</b>（編號是產生 PDF 當下燒進去的），案件下次被開啟時會自動重新產生，儲存時會告訴您影響幾件。
         <h4>設定入口</h4>
         本頁「上傳新樣板」／清單「設計」。
         <h4>權限角色</h4>
@@ -454,6 +459,7 @@ function openDesigner(id){
         $('#listPanel').hide(); $('#designerPanel').show();
         $('#dsgTplName').text(CUR_TPL.name + '（'+(CUR_TPL.file_type==='pdf'?'PDF':'圖片')+'，共'+CUR_TPL.page_count+'頁）');
         $('#dsgAsDoc').text(CUR_TPL.as_doc ? ('已綁定：'+CUR_TPL.as_doc.doc_no+' '+CUR_TPL.as_doc.doc_name) : '未綁定AS文件');
+        $('#dsgAsDocHide').prop('checked', !!Number(CUR_TPL.as_doc_hide_print));
         $('#dsgAllowAsLink').prop('checked', !!Number(CUR_TPL.allow_case_as_link));
         $('#dsgPageNo').prop('checked', Number(CUR_TPL.default_show_page_no ?? 1) === 1);
         loadStampTplOptions();
@@ -469,6 +475,16 @@ $('#btnBackList').on('click', function(){
     $('#designerPanel').hide(); $('#listPanel').show();
     CANVASES = {}; loadTemplates();
 });
+/** 樣板設定：綁定的 AS 編號要不要印在列印頁右下角。打勾＝不印，但綁定照樣成立（填寫紀錄仍會連動）。
+ *  改了會把這個樣板已產生過的合成 PDF 一併作廢重產，所以要把影響筆數講出來，不要安靜地改。 */
+function saveAsDocHidePrint(on){
+    $.post(API, {action:'template_set_asdoc_print', csrf:META.csrf, id:CUR_TPL.id, hide:on?1:0}, function(r){
+        if (!r.ok){ alert(r.error||'設定失敗'); $('#dsgAsDocHide').prop('checked', !on); return; }
+        CUR_TPL.as_doc_hide_print = on ? 1 : 0;
+        var n = parseInt(r.invalidated,10) || 0;
+        if (n) alert('已設定。這個樣板有 ' + n + ' 件已完成案件的合成 PDF 一併作廢，下次開啟該案件時會自動重新產生（重產後右下角編號才會跟著改）。');
+    }, 'json');
+}
 /** 樣板開關：建立案件時可不可以挑一個 AS 文件編號（供 AS 文件管理導入同一份檔案；與列印綁定無關）。 */
 function saveAllowAsLink(on){
     $.post(API, {action:'template_set_as_link', csrf:META.csrf, id:CUR_TPL.id, allow:on?1:0}, function(r){

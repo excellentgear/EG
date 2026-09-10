@@ -204,6 +204,20 @@ case 'template_set_as_link': {
     jout(['template'=>fsd_template_get($db, $id)]);
 }
 
+/**
+ * 樣板設定：綁定的 AS 編號要不要印在列印頁右下角（2026-09-10 使用者要求）。
+ * 打勾＝不印，但**綁定照樣成立**，AS 文件管理的「填寫紀錄」仍然連動得到這個樣板的所有案件。
+ * 已產生過合成 PDF 的案件會一併作廢重產（編號是產生當下燒進 PDF 的，不重產就只有畫面變）。
+ */
+case 'template_set_asdoc_print': {
+    fsd_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可修改樣板', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    $r = fsd_template_set_asdoc_hide_print($db, $id, !empty($_POST['hide']));
+    if (!$r['ok']) jerr($r['msg'], 404);
+    jout(['template'=>fsd_template_get($db, $id), 'invalidated'=>$r['invalidated'] ?? 0]);
+}
+
 /** 樣板設定：用這個樣板建立案件時，預設要不要顯示頁碼（案件建立後仍可逐案修改）。 */
 case 'template_set_page_no': {
     fsd_need_csrf();
@@ -571,7 +585,8 @@ case 'backfill_create_draft': {
     $bizDate = trim((string)($_POST['business_date'] ?? '')) ?: date('Y-m-d');
     $asDocId = (int)($_POST['as_doc_id'] ?? 0);
     $doc     = fsd_case_upload_doc($db, 'files');
-    $r = fsd_backfill_create_draft($db, $uid, $uname, $title, $bizDate, $asDocId, $doc);
+    $hide    = !empty($_POST['as_doc_hide_print']);
+    $r = fsd_backfill_create_draft($db, $uid, $uname, $title, $bizDate, $asDocId, $doc, $hide);
     if (!$r['ok']) jerr($r['msg']);
     jout(['id'=>$r['id']]);
 }
@@ -580,7 +595,8 @@ case 'backfill_update_head': {
     fsd_need_csrf();
     if (!$perms['canAdmin']) jerr('僅管理員可使用補案件功能', 403);
     $r = fsd_backfill_update_head($db, (int)($_POST['case_id'] ?? 0), trim((string)($_POST['title'] ?? '')),
-        trim((string)($_POST['business_date'] ?? '')), (int)($_POST['as_doc_id'] ?? 0));
+        trim((string)($_POST['business_date'] ?? '')), (int)($_POST['as_doc_id'] ?? 0),
+        !empty($_POST['as_doc_hide_print']));
     if (!$r['ok']) jerr($r['msg']);
     jout(['case'=>$r['case']]);
 }
@@ -785,10 +801,9 @@ case 'case_export_file': {
     if (!fsd_case_has_export($case)) jerr('此案件尚未產生 PDF', 404);
     $fp = fsd_case_attach_dir_safe($db) . $case['export_pdf_name'];
     if (!is_file($fp)) jerr('PDF 檔不存在或已被搬移，請重新產生', 404);
-    // 下載檔名＝「案件名稱 業務日期」（使用者指定）。日期用全站顯示格式 YYYY.MM.DD（ai-rules/20）；
-    // 檔名不能出現 \ / : * ? " < > | 這些字元，一律換成底線。
-    $safe = preg_replace('/[\\\/:*?"<>|]+/u', '_', trim((string)$case['title']) ?: ('案件' . $id));
-    $show = trim($safe . ' ' . eg_fmt_date($case['business_date'])) . '.pdf';
+    // 下載檔名＝「案件名稱 業務日期」（使用者指定）；組法唯一實作見 form_signer_lib.php
+    // （原本這裡的正規表示式在 Apache 下會編譯失敗，檔名默默掉了案件名稱，2026-09-10 修正）
+    $show = fsd_case_file_show_name($case);
     fsd_case_print_log_add($db, $id, !empty($_GET['dl']) ? 'pdf_download' : 'pdf_open', $uid, $uname);
     header('Content-Type: application/pdf');
     header('Content-Length: ' . filesize($fp));

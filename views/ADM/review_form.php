@@ -187,7 +187,9 @@ $perms = rvf_perms($db, $rvfUser);
         ・只有填表人本人可以編輯/送出自己的草稿；已送出的表單內容鎖定，不可再修改項次。<br>
         ・草稿只有填表人本人能刪除；已送出（含已完成）的表單一般人不可刪除，僅管理員能刪（會連同審核/核准紀錄一併移除，無法復原）。<br>
         ・審核/核准為 OR-gate：合格名單中任一人處理即完成該關，其餘人之後看到的會是唯讀狀態。<br>
-        ・核准人解析到送出表單的本人時會自動跳下一順位，不會球員兼裁判。
+        ・核准人解析到送出表單的本人時會自動跳下一順位，不會球員兼裁判。<br>
+        ・<b>已完成的表單會自動出現在「AS 文件管理」的填寫紀錄裡</b>：只要模板有綁定 AS 文件編號（在「模板管理」設定），該模板<b>已完成</b>的表單就會列進那份文件的填寫紀錄（依建立日期新→舊）；在那裡按「預覽」會開啟本頁並直接顯示<b>蓋好簽章後的列印版面</b>（上方有「列印」鈕）。草稿與進行中的不會出現。<br>
+        ・上面那個預覽是<b>唯讀</b>的：具「AS 文件檢閱」權限的人即使不是填表人本人，也看得到這些已完成表單的內容（因為填寫紀錄本來就列得到它）；<b>編輯／送出／審核／核准／刪除的權限完全沒有放寬</b>，仍然只有填表人本人或合格簽核人做得到。
         <h4>權限角色</h4>
         審核表單檢閱＝看清單（僅看自己建立的）；檢視全部＝看全部人建立的表單；審核表單建立＝新增/填寫/送出；模板管理＝可另到「模板管理」頁設定；管理者全權。
     </div>
@@ -400,7 +402,7 @@ function loadList(){
 }
 
 /* ============ 檢視/編輯 ============ */
-function openView(id){
+function openView(id, cb){
     $.getJSON(API, {action:'instance_get', id:id}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         CUR = res.instance; CUR_SCHEMA = res.schema; CUR.tpl = res.template;
@@ -419,6 +421,7 @@ function openView(id){
         $('#viewTitle').text('#'+CUR.id+' '+CUR.tpl.name+'（'+STATUS_LABEL[CUR.status]+'）');
         renderView();
         openMask('viewMask');
+        if (cb) cb();
     });
 }
 var HEAD_DATA = {};
@@ -850,7 +853,11 @@ function editSubmitDate(){
 }
 
 /* ============ 列印 ============ */
-function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
+/* 組出「整份列印文件」的 HTML（含樣式與自動縮字/頁碼判定腳本）。2026-09-10 由 egPrintWindow() 拆出來：
+   AS 文件管理的「填寫紀錄」按預覽時，要在同一頁的 iframe 裡顯示**完全同一份版面**——非使用者點擊
+   觸發的 window.open 會被彈出視窗封鎖擋掉，按了等於什麼都沒有。兩邊共用同一份 HTML，版面不會走鐘。
+   autoPrint=false 只是不自動叫出列印對話框，縮字與頁碼判定完全一樣。 */
+function rfPrintDocHtml(title, bodyHtml, extraCss, docNo, paper, landscape, autoPrint){
     var asCss = String(docNo||'').replace(/['\\]/g,'');
     var css = '@page{size:'+(paper||'A4')+' '+(landscape?'landscape':'portrait')+';margin:12mm 8mm 16mm;}'
             + 'html,body{margin:0;padding:0;}'
@@ -859,13 +866,11 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
             + '.pt-head .yr{font-size:13px;color:#333;}.pt-head .yr-left{position:absolute;left:0;top:50%;transform:translateY(-50%);}.pt-head .yr-right{position:absolute;right:0;top:50%;transform:translateY(-50%);}.pt-head .yr-center{margin-top:3px;}'
             + '.rf-as-doc{position:fixed;right:8mm;bottom:6mm;font-size:9pt;color:#333;}'
             + (extraCss||'');
-    var w = window.open('', '_blank');
-    if (!w){ alert('請允許彈出視窗'); return; }
     // <!DOCTYPE html> 不可省略：少了它視窗會落入 Quirks Mode，<body> 內容不滿版時會被撐滿整個視窗高度
     // （document.body.scrollHeight 量出來永遠接近視窗高度而非實際內容高度），下面靠 scrollHeight 判斷單頁/多頁
     // 的頁碼顯示邏輯會失準，導致只有一頁的文件也顯示「第1頁／共1頁」（2026-08-14 使用者實測回報、絕對禁止；
     // 比照 training_record.php 既有正確寫法修正）。
-    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
+    return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>'+css+'</style></head><body>'
         + bodyHtml
         + (asCss ? '<div class="rf-as-doc">'+asCss+'</div>' : '')
         + '<scr'+'ipt>window.onload=function(){'
@@ -897,8 +902,13 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
         + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'
         + 'document.head.appendChild(st);'
         + '}'
-        + 'window.print();'
-        + '},120);};</scr'+'ipt></body></html>');
+        + (autoPrint ? 'window.print();' : '')
+        + '},120);};</scr'+'ipt></body></html>';
+}
+function egPrintWindow(title, bodyHtml, extraCss, docNo, paper, landscape){
+    var w = window.open('', '_blank');
+    if (!w){ alert('請允許彈出視窗'); return; }
+    w.document.write(rfPrintDocHtml(title, bodyHtml, extraCss, docNo, paper, landscape, true));
     w.document.close();
 }
 function rfCss(){
@@ -937,7 +947,9 @@ function stampOrName(name, date, isDeputy, schema){
    模板沒設定時 schema 是 null，EGStamp.stamp 會自動退回預設樣式。 */
 function stampList(name, date, isDeputy){ return stampOrName(name, date, isDeputy, CUR.tpl.list_stamp ? CUR.tpl.list_stamp.schema : null); }
 function stampFooter(name, date, isDeputy){ return stampOrName(name, date, isDeputy, CUR.tpl.footer_stamp ? CUR.tpl.footer_stamp.schema : null); }
-function printForm(){
+/* 列印版面的內容本體（表頭＋項目表＋頁尾三顆章）。拆成 body 與「怎麼呈現」兩段，讓「開新視窗列印」
+   與「AS 文件管理填寫紀錄的預覽」共用同一份，不會出現兩套版面各自演進的情況。 */
+function rfPrintBodyHtml(){
     var t = CUR.tpl, schema = CUR_SCHEMA;
     // 年度標題：跟大標題(公司名/模板名稱)同一區塊顯示（2026-08-14 使用者明確確認位置語意）；
     // 左/右＝該區塊左右兩側（絕對定位不佔版面），置中＝模板名稱下方。
@@ -1030,7 +1042,11 @@ function printForm(){
     h += '<table class="rf-p-foot"><tr>';
     footCells.forEach(function(c){ h += '<td style="width:'+(100/footCells.length).toFixed(2)+'%;"><div class="foot-lbl">'+esc(c[0])+'</div>'+c[1]+'</td>'; });
     h += '</tr></table>';
-    egPrintWindow(t.name, h, rfCss(), CUR.as_doc_no, t.paper_size, t.orientation!=='portrait');
+    return h;
+}
+function printForm(){
+    var t = CUR.tpl;
+    egPrintWindow(t.name, rfPrintBodyHtml(), rfCss(), CUR.as_doc_no, t.paper_size, t.orientation!=='portrait');
 }
 
 /* 試填預覽入口：①由 review_form_template.php 的「試填預覽並列印」開新分頁帶 ?preview=1 進來，讀
@@ -1069,8 +1085,42 @@ function initPreview(){
         });
     } else openPreview(null, '');
 }
+/* ============ 由 AS 文件管理「填寫紀錄」點進來 ============
+   ?inst_id=N        直接開這一筆表單的檢視視窗
+   ?inst_id=N&print=1 另外把「列印版面」畫在畫面最上層（＝已簽章完成後的樣貌）
+   刻意不用 window.open：不是使用者點擊觸發的開新視窗會被彈出視窗封鎖直接擋掉，
+   使用者只會看到「按了預覽什麼都沒發生」。改成同一頁蓋一層 iframe，內容與列印版一模一樣，
+   上方留一顆「列印」按鈕（那才是使用者點擊，print() 一定叫得出來）。 */
+var Q_INST_ID = parseInt(new URLSearchParams(location.search).get('inst_id'), 10) || 0;
+var Q_PRINT   = (new URLSearchParams(location.search).get('print') === '1');
+function rfOpenPrintPreview(){
+    if (!CUR || !CUR.tpl) return;
+    var t = CUR.tpl;
+    var html = rfPrintDocHtml(t.name, rfPrintBodyHtml(), rfCss(), CUR.as_doc_no,
+                              t.paper_size, t.orientation !== 'portrait', false);
+    $('#rfPvWrap').remove();
+    var $w = $('<div id="rfPvWrap"></div>').css({position:'fixed', inset:0, background:'#6b4a24', zIndex:2000,
+                                                 display:'flex', flexDirection:'column'});
+    var $bar = $('<div></div>').css({padding:'8px 12px', background:'#F7E0BD', color:'#5b3a1e',
+                                     display:'flex', gap:'8px', alignItems:'center', fontSize:'13px'});
+    $bar.append($('<b></b>').text('列印預覽（已簽章後的樣貌） — ' + (CUR.tpl.name || '')));
+    var $print = $('<button>列印</button>').css({marginLeft:'auto', height:'28px', padding:'0 14px', cursor:'pointer',
+                                                 border:'1px solid #d98a33', borderRadius:'4px', background:'#F0A24B', color:'#fff'});
+    var $close = $('<button>關閉預覽</button>').css({height:'28px', padding:'0 14px', cursor:'pointer',
+                                                 border:'1px solid #D8BE93', borderRadius:'4px', background:'#fff', color:'#5b3a1e'});
+    var $frame = $('<iframe></iframe>').css({flex:'1 1 auto', width:'100%', border:'0', background:'#fff'});
+    $print.on('click', function(){ try { $frame[0].contentWindow.focus(); $frame[0].contentWindow.print(); } catch(e){} });
+    $close.on('click', function(){ $w.remove(); });
+    $w.append($bar.append($print).append($close)).append($frame).appendTo('body');
+    $frame.attr('srcdoc', html);
+}
 if (PREVIEW_MODE) loadMeta(initPreview);
-else loadMeta(function(){ loadTemplates(loadList); });
+else loadMeta(function(){
+    loadTemplates(function(){
+        loadList();
+        if (Q_INST_ID) openView(Q_INST_ID, function(){ if (Q_PRINT) rfOpenPrintPreview(); });
+    });
+});
 </script>
 </body>
 </html>

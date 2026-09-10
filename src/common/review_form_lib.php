@@ -472,6 +472,23 @@ function rvf_instance_get(PDO $db, int $id): ?array {
     return $st->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 
+/**
+ * 誰可以「唯讀檢視」某一筆表單（2026-09-10）。
+ *  ①原本的規則：看得到全部的人（canViewAll）／自己建立的。
+ *  ②新增：**已完成**且該模板有綁 AS 文件編號時，具 AS 文件「檢閱」權限的人也看得到——
+ *    因為 AS 文件管理的「填寫紀錄」已經把這一筆列出來、還提供「預覽（簽章後的樣貌）」，
+ *    看得到清單卻打不開內容沒有意義（使用者拍板：預覽依 AS 文件檢閱權限）。
+ * 只放行「讀」：編輯／送出／簽核／刪除各自的守門完全不動（都另外要求本人＋草稿狀態）。
+ */
+function rvf_can_view_instance(PDO $db, array $inst, int $uid, array $perms): bool {
+    if (!empty($perms['canViewAll'])) return true;
+    if ((int)($inst['created_by'] ?? 0) === $uid) return true;
+    if (($inst['status'] ?? '') !== 'approved') return false;
+    require_once __DIR__ . '/asdoc_record_lib.php';
+    if (!eg_asdoc_rvf_doc_ids($db, (int)($inst['template_id'] ?? 0))) return false;
+    return eg_asdoc_user_can($db, $uid, 'view');
+}
+
 function rvf_instance_list(PDO $db, int $templateId = 0, ?int $onlyCreatedBy = null): array {
     $sql = "SELECT * FROM rf_instance WHERE 1=1";
     $params = [];

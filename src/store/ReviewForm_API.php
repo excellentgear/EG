@@ -206,7 +206,7 @@ case 'instance_get': {
     $id = (int)($_GET['id'] ?? 0);
     $inst = rvf_instance_get($db, $id);
     if (!$inst) jerr('找不到此表單', 404);
-    if (!$perms['canViewAll'] && (int)$inst['created_by'] !== $uid) jerr('無權檢視他人建立的表單', 403);
+    if (!rvf_can_view_instance($db, $inst, $uid, $perms)) jerr('無權檢視他人建立的表單', 403);
     $tpl = rvf_template_get($db, (int)$inst['template_id']);
     $schema = rvf_template_schema_at_version($db, (int)$inst['template_id'], (int)$inst['template_version']) ?: (json_decode((string)$tpl['current_schema_json'], true) ?: []);
     $items = rvf_instance_items_get($db, $id);
