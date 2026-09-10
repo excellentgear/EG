@@ -14316,6 +14316,7 @@ echo "</script>\n";
                         <input type="text" id="completed-bom-search-term" class="form-control" placeholder="輸入 BOM、料號或客戶" style="flex:1;">
                         <button type="button" id="execute-completed-search-btn" class="btn btn-primary btn-sm">查詢</button>
                     </div>
+                    <div id="completed-bom-summary" style="display:none;margin-bottom:10px;"></div>
                     <div id="completed-bom-results-area" style="overflow-x:auto;overflow-y:auto;max-height:70vh;"></div>
                 </div>
             </div>
@@ -14340,9 +14341,39 @@ echo "</script>\n";
             }
         });
 
+        // 顯示「顯示上限 / 實際查到幾筆」；超過上限時另外提示可改用完整查詢（無筆數上限）並自動帶入關鍵字。
+        // 上限數字一律用後端回傳的 limit，不在前端寫死第二份（鐵律4）。
+        function renderCompletedSummary(searchTerm, shown, total, limit) {
+            const box = document.getElementById('completed-bom-summary');
+            if (!box) return;
+            if (total === null || typeof total === 'undefined') { box.style.display = 'none'; box.innerHTML = ''; return; }
+            const nf = function(n){ return Number(n).toLocaleString('en-US'); };
+            const over = (limit > 0 && total > limit);
+            let html = '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:7px 10px;border-radius:4px;font-size:12.5px;line-height:1.6;'
+                + (over ? 'background:#F7E0BD;border:1px solid #E0B378;' : 'background:#FBF5EA;border:1px solid #EADFC8;') + 'color:#5b3a1e;">';
+            html += '<span>查詢結果共 <b>' + nf(total) + '</b> 筆，本次顯示 <b>' + nf(shown) + '</b> 筆（顯示上限 ' + nf(limit) + ' 筆），依結案日期由新到舊排序。</span>';
+            if (over) {
+                html += '<span style="color:#a0521f;"><i class="fa fa-exclamation-triangle"></i> 超過顯示上限，僅列出最新的 ' + nf(limit) + ' 筆，其餘 ' + nf(total - limit) + ' 筆未顯示。</span>'
+                     +  '<button type="button" id="completed-bom-goto-full" class="btn btn-xs" '
+                     +  'style="background:#F0A24B;color:#fff;border:1px solid #d98a33;font-size:12px;padding:2px 10px;" '
+                     +  'title="開新分頁進入「已完工BOM查詢列印」，自動把目前的關鍵字帶入全域搜尋，且不限筆數">'
+                     +  '前往完整查詢（無筆數上限）</button>';
+            }
+            html += '</div>';
+            box.innerHTML = html;
+            box.style.display = 'block';
+            const gotoBtn = document.getElementById('completed-bom-goto-full');
+            if (gotoBtn) {
+                gotoBtn.onclick = function() {
+                    window.open('OreadyReply_completed_query.php?kw=' + encodeURIComponent(searchTerm), '_blank');
+                };
+            }
+        }
+
         document.getElementById('execute-completed-search-btn').addEventListener('click', function() {
             const searchTerm = document.getElementById('completed-bom-search-term').value.trim();
             const resultsArea = document.getElementById('completed-bom-results-area');
+            renderCompletedSummary(searchTerm, 0, null, 0);
             resultsArea.innerHTML = '<p>查詢中...</p>';
 
             if (!searchTerm) {
@@ -14360,6 +14391,12 @@ echo "</script>\n";
                 dataType: 'json',
                 success: function(response) {
                     resultsArea.innerHTML = '';
+                    var _shown = (response.data && response.data.length) ? response.data.length : 0;
+                    renderCompletedSummary(
+                        searchTerm, _shown,
+                        (typeof response.total === 'undefined' ? null : response.total),
+                        response.limit || 0
+                    );
                     if (!response.success || !response.data || !response.data.length) {
                         resultsArea.innerHTML = '<p>' + escapeHtml(response.message||'查無資料。') + '</p>';
                         return;
@@ -14510,6 +14547,7 @@ echo "</script>\n";
                     table.appendChild(tbody); resultsArea.appendChild(table);
                 },
                 error: function(xhr, status, error) {
+                    renderCompletedSummary(searchTerm, 0, null, 0);
                     resultsArea.innerHTML = '<p style="color: red;">查詢時發生錯誤，請稍後再試。</p>';
                     console.error("AJAX error for completed BOM search:", status, error, xhr.responseText);
                 }

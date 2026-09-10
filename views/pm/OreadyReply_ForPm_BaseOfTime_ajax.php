@@ -171,10 +171,32 @@ else if (isset($_POST['action']) && $_POST['action'] === 'search_completed_bom')
 
     $searchTerm = trim($_POST['searchTerm']);
 
+    // 本跳窗的顯示上限（只顯示最新的 N 筆）。前端顯示的「顯示上限」文字一律用回傳的這個值，
+    // 不要在前端另外寫死一份數字，否則之後調整這裡前端會繼續顯示舊上限（鐵律4）。
+    $completedSearchLimit = 50;
+
     try {
         $searchTermWildcard = '%' . $searchTerm . '%';
 
-        // 1. 撈符合條件的已完工 BOM（processing_state='1'）
+        // 排序用的「結案日期」：closed_at 是 2026-05-22 才上線的手動結案功能才會填，在那之前就已
+        // processing_state='1' 的舊資料（約 89%）是 NULL；BOM 編號固定為 B-YYYMMDDNNN（民國年3碼+MMDD+流水3碼），
+        // 故沒有 closed_at 時退回用 BOM 編號回推的日期。判定與 OreadyReply_completed_query.php 的
+        // $OCQ_EFFDATE 完全相同，兩邊排序才會一致（同一筆資料在跳窗與完整查詢頁的先後順序不會互相矛盾）。
+        $effDateExpr = "COALESCE(DATE(b.closed_at), STR_TO_DATE(CONCAT(
+                CAST(SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),1,3) AS UNSIGNED) + 1911, '-',
+                SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),4,2), '-',
+                SUBSTRING(SUBSTRING_INDEX(b.bom,'-',-1),6,2)
+            ), '%Y-%m-%d'))";
+        $whereSql = "b.processing_state = '1'
+                  AND (b.bom LIKE :searchTerm OR b.d_id LIKE :searchTerm OR b.Client_Name LIKE :searchTerm)";
+
+        // 0. 先算「符合條件的總筆數」（不受顯示上限影響），讓前端能提示是否超過上限、要不要改用完整查詢
+        $stmtCnt = $db->prepare("SELECT COUNT(*) FROM bom b WHERE $whereSql");
+        $stmtCnt->bindParam(':searchTerm', $searchTermWildcard, PDO::PARAM_STR);
+        $stmtCnt->execute();
+        $totalCount = (int)$stmtCnt->fetchColumn();
+
+        // 1. 撈符合條件的已完工 BOM（processing_state='1'），依結案日期由新到舊取最新的 N 筆
         // client_name_display：優先用 customer_list.customer（若有綁定 d_setting_id），否則用 bom.Client_Name
         $sql = "SELECT b.bom, b.d_id, b.Client_Name, b.sqty AS Qty, b.priority_type,
                        COALESCE(cl.customer, b.Client_Name) AS client_name_display,
@@ -185,14 +207,16 @@ else if (isset($_POST['action']) && $_POST['action'] === 'search_completed_bom')
                 LEFT JOIN d_setting ds ON ds.d_id = b.d_setting_id
                 LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
                 LEFT JOIN user u_close ON u_close.id = b.closed_by
-                WHERE b.processing_state = '1'
-                  AND (b.bom LIKE :searchTerm OR b.d_id LIKE :searchTerm OR b.Client_Name LIKE :searchTerm)
-                ORDER BY b.bom ASC
-                LIMIT 50";
+                WHERE $whereSql
+                ORDER BY $effDateExpr DESC, b.bom DESC
+                LIMIT $completedSearchLimit";
         $stmt = $db->prepare($sql);
         $stmt->bindParam(':searchTerm', $searchTermWildcard, PDO::PARAM_STR);
         $stmt->execute();
         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $response['total'] = $totalCount;
+        $response['limit'] = $completedSearchLimit;
 
         if (!empty($results)) {
             $bom_list = array_column($results, 'bom');

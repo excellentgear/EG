@@ -587,6 +587,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <li>篩選框有內容時雙擊可清空（全站共用規則），清空後會自動連帶重新查詢。</li>
             <li>製程大類的可選清單會依「目前其餘篩選條件」動態連動，只列真的有資料的選項。</li>
             <li>結案日期區間預設近30天；按「清除篩選(查全部)」可清空所有條件、改查全部歷史已結案資料。</li>
+            <li>從 BOM總表「查詢已完工資料」跳窗按<b>「前往完整查詢（無筆數上限）」</b>進來時，該跳窗的關鍵字會自動帶進上方<b>全域搜尋</b>，同時<b>自動清空結案日期區間</b>（因為那個跳窗本來就不限日期，只是有 50 筆顯示上限），畫面上方會出現橘色提示條說明；帶入後仍可自行再調整任一篩選條件。<b>查全部歷史資料時載入會比預設的近30天久（約數秒）</b>，屬正常現象。</li>
             <li>全域關鍵字可用空白分隔多個關鍵字，每個關鍵字都要在（可分散於不同欄位）命中才算符合。</li>
             <li>列表分頁顯示（避免一次載入全部拖慢速度），可調整每頁筆數。</li>
             <li>「列印」「匯出CSV」「統整報表」皆依目前篩選條件抓「全部」符合筆數（不受分頁限制）。</li>
@@ -1025,6 +1026,28 @@ $('#btnSummary').on('click', function(){
         w.document.close();
     }, 'json');
 });
+
+// 由 BOM總表「查詢已完工資料」跳窗的「前往完整查詢」按鈕帶進來的關鍵字（?kw=…）。
+// 那個跳窗本身不限結案日期、只是有筆數上限，所以帶入關鍵字時要一併清空預設的近30天區間，
+// 否則使用者會看到「改用完整查詢反而查更少」的矛盾結果。沒有帶 kw 時完全不影響原本的預設行為。
+(function(){
+    var kw = '';
+    try {
+        kw = (new URLSearchParams(window.location.search)).get('kw') || '';
+    } catch (e) {
+        var m = /[?&]kw=([^&]*)/.exec(window.location.search || '');
+        kw = m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : '';
+    }
+    kw = $.trim(kw);
+    if (!kw) return;
+    $('#fKeyword').val(kw);
+    $('#fDateFrom, #fDateTo').val('');
+    $('<div class="ocq-stat" style="background:#F7E0BD;border:1px solid #E0B378;color:#5b3a1e;'
+        + 'padding:7px 10px;border-radius:4px;font-size:12.5px;line-height:1.6;flex-wrap:wrap;"></div>')
+        .html('<i class="fa fa-info-circle"></i>&nbsp;已從「BOM總表 → 查詢已完工資料」帶入關鍵字 <b>'
+            + esc(kw) + '</b>，並已清空結案日期區間改查全部歷史資料；可自行再調整上方任一篩選條件。')
+        .insertBefore('.ocq-stat:first');
+})();
 
 applyFilters();
 </script>
