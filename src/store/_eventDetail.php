@@ -29,16 +29,17 @@ try {
     // 本人對此公告的通知方式（符合的對象中，取最高義務 reply>sign>read）
     $ts = $db->prepare("SELECT target_type, target_id, mode FROM live_event_target WHERE live_event_id = ?");
     $ts->execute([$eid]);
-    $rank = ['read' => 1, 'sign' => 2, 'reply' => 3];
-    $myModeRank = 0;
+    require_once __DIR__ . '/../common/notice_mode_lib.php';
+    $myModes = [];
     foreach ($ts->fetchAll(PDO::FETCH_ASSOC) as $t) {
         $match = ($t['target_type'] === 'all')
             || ($t['target_type'] === 'status' && in_array((int)$t['target_id'], $myStatus, true))
             || ($t['target_type'] === 'dept'   && in_array((int)$t['target_id'], $myDept, true))
             || ($t['target_type'] === 'user'   && (int)$t['target_id'] === $uid);
-        if ($match) { $r = $rank[$t['mode']] ?? 1; if ($r > $myModeRank) $myModeRank = $r; }
+        if ($match) $myModes[] = $t['mode'];
     }
-    $myMode = $myModeRank >= 3 ? 'reply' : ($myModeRank === 2 ? 'sign' : 'read');
+    // autoread（開啟自動已閱）與 read 同為義務等級 1；判定一律走共用函式
+    $myMode = eg_notice_mode_pick($myModes);
 
     // 公告附件（含標籤名稱與備注；附件標籤系統 2026-07-07 新增）
     try {

@@ -84,10 +84,16 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         $view_uid_in = implode(',', array_map('intval', $my_view_uids));
 
         // 未過期、對象(全體/部門/身分/本人)符合，且「要求動作尚未完成」的公告/通知。
-        // 要求動作依 live_event_target.mode：read=已閱、sign=回簽、reply=回覆+回簽；
+        // 要求動作依 live_event_target.mode：autoread=開啟自動已閱、read=已閱、sign=回簽、reply=回覆+回簽；
         // 只點開看過(標了已閱)但還沒回簽/回覆者，仍要留在置頂欄未讀清單（need_mode=同一則中最重的未完成要求）。
+        //
+        // auto_read：點開就自動標已閱、不必按「確認已閱」的通知。判定規則與 notice_mode_lib.php 的
+        // eg_notice_mode_pick() 一致——「嚴格的贏」：同一則裡只要另有一列把這個人歸在 read(要自己按)，
+        // 就不算自動已閱。故必須 has_auto=1 且 has_plain_read=0 且 need_mode=1 三者同時成立。
         $event = $conn->getAll(
             "SELECT le.*, MAX(CASE WHEN t.mode='reply' THEN 3 WHEN t.mode='sign' THEN 2 ELSE 1 END) AS need_mode,
+                    MAX(CASE WHEN t.mode='autoread' THEN 1 ELSE 0 END) AS has_auto,
+                    MAX(CASE WHEN t.mode NOT IN ('autoread','sign','reply') THEN 1 ELSE 0 END) AS has_plain_read,
                     MAX(CASE WHEN t.target_type='user' AND t.target_id <> ".(int)$id." THEN t.target_id END) AS for_uid,
                     MAX(CASE WHEN t.target_type='user' AND t.target_id <> ".(int)$id." THEN fu.user_cname END) AS for_name
              FROM `live_event` le
@@ -348,6 +354,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                                        data-reftype="<?= htmlspecialchars($ev['ref_type'] ?? '', ENT_QUOTES) ?>"
                                        data-refid="<?= (int)($ev['ref_id'] ?? 0) ?>"
                                        data-needmode="<?= (int)($ev['need_mode'] ?? 1) ?>"
+                                       data-autoread="<?= ((int)($ev['need_mode'] ?? 1) === 1 && !empty($ev['has_auto']) && empty($ev['has_plain_read'])) ? 1 : 0 ?>"
                                        data-foruid="<?= (int)($ev['for_uid'] ?? 0) ?>"
                                        data-forname="<?= htmlspecialchars((string)($ev['for_name'] ?? ''), ENT_QUOTES) ?>"
                                        data-title="<?= htmlspecialchars($ev['title'], ENT_QUOTES) ?>"
@@ -445,7 +452,10 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         var nmId = null;
         var nmForUid = 0, nmForName = '';   // 這則通知是給哪位成員的（共用帳號代收時 > 0）
         var nmEsc = function(s) { return $('<i>').text(s == null ? '' : s).html(); };
-        var modeName = { read: '已閱', sign: '回簽', reply: '回覆 + 回簽' };
+        var modeName = { autoread: '開啟自動已閱', read: '已閱', sign: '回簽', reply: '回覆 + 回簽' };
+        // 這次開啟是否已由系統自動標記已閱（autoread 模式）。詳情是非同步取回的，
+        // 若不記這個旗標，畫面會因為「標已閱」還沒寫完而先畫出一顆「確認已閱」按鈕。
+        var nmAutoMarked = false;
 
         // 代成員確認：跳窗要密碼 → 驗過才寫紀錄（記在成員本人身上、signed_via 留共用帳號）
         var spCb = null;
@@ -657,6 +667,14 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 nmMarkRead(nmRemoveFromList);
                 return;
             }
+            // 通知方式＝「開啟通知自動認定已閱」(autoread)：點開的當下就標已閱並從鈴鐺移除，
+            // 不必再按「確認已閱」。共用帳號代收成員的通知(foruid>0)刻意排除——那必須由本人
+            // 輸入密碼才算數(ai-rules/13)，自動標會讓已讀名單變成「共用帳號已閱」而失真。
+            nmAutoMarked = false;
+            if (parseInt($(this).data('autoread'), 10) === 1 && !nmForUid) {
+                nmAutoMarked = true;
+                nmMarkRead(nmRemoveFromList);
+            }
             $('#nm-title').text($(this).data('title') || '');
             $('#nm-meta').text('');
             $('#nm-loading').show(); $('#nm-2col').hide();
@@ -740,7 +758,9 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             h += '<div class="eg-nm-modebadge mode-' + mode + '">需求：' + modeName[mode] + '</div>';
             h += '<div class="eg-nm-mystatus">' + nmStatusLine(st) + '</div>';
 
-            var done = st && ((mode === 'read' && st.read_at) || (mode === 'sign' && st.signed_at) || (mode === 'reply' && (st.replied_at || st.signed_at)));
+            var done = st && (((mode === 'read' || mode === 'autoread') && st.read_at) || (mode === 'sign' && st.signed_at) || (mode === 'reply' && (st.replied_at || st.signed_at)));
+            // autoread：開啟當下已自動標記（nmAutoMarked），即使詳情是在寫入前取回的也直接顯示已完成
+            if (mode === 'autoread' && nmAutoMarked) done = true;
             // 已結束的通知(2026-08-26新增)：發起的模組已把這件事結案／撤回（例：會議記錄同一項目已由其他人
             // 回簽完成＝任一人回覆即完成）。不再顯示回覆表單，避免使用者以為系統還在等他回覆；仍可確認已閱。
             if (res.closed && !done && (mode === 'sign' || mode === 'reply')) {
@@ -749,6 +769,11 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             } else if (res.deadline_passed && (mode === 'sign' || mode === 'reply')) {
                 h += '<div class="eg-nm-expired"><i class="fa fa-clock-o"></i> 已超過回覆/回簽期限</div>';
                 if (!(st && st.read_at)) h += '<button class="eg-btn eg-btn-primary nm-do" data-act="read">確認已閱</button>';
+            } else if (mode === 'autoread') {
+                // 開啟即視為已閱：正常情況進到這裡時已經標好了，只回報結果不再要求動作。
+                // 共用帳號代收(需本人密碼)或自動標記失敗時仍留一顆按鈕，才不會變成永遠標不掉。
+                if (done) h += '<div class="eg-nm-doneok"><i class="fa fa-check-circle"></i> 已閱（開啟時自動標記）</div>';
+                else h += '<button class="eg-btn eg-btn-primary nm-do" data-act="read"><i class="fa fa-check"></i> 確認已閱</button>';
             } else if (mode === 'read') {
                 if (!done) h += '<button class="eg-btn eg-btn-primary nm-do" data-act="read"><i class="fa fa-check"></i> 確認已閱</button>';
                 else h += '<div class="eg-nm-doneok"><i class="fa fa-check-circle"></i> 已完成</div>';
@@ -1047,6 +1072,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
     .eg-nm-nopreview a { margin-top: 12px; display: inline-block; text-decoration: none; }
     /* 右側回應區 */
     .eg-nm-modebadge { display: inline-block; font-size: 12px; font-weight: 700; padding: 3px 12px; border-radius: 16px; margin-bottom: 10px; }
+    .eg-nm-modebadge.mode-autoread { background: #f7efe2; color: #8a6a3d; }
     .eg-nm-modebadge.mode-read { background: rgba(26,187,156,.13); color: #169a80; }
     .eg-nm-modebadge.mode-sign { background: #fff3df; color: #c77c1a; }
     .eg-nm-modebadge.mode-reply { background: #f0eafc; color: #7a4fc0; }

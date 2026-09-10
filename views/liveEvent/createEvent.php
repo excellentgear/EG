@@ -26,6 +26,7 @@ $CAN_EDIT   = rbac_has($_features, 'notice_edit');
 $CAN_DELETE = rbac_has($_features, 'notice_delete');
 $IS_ADMIN   = rbac_has($_features, 'all');
 $can_manage = $CAN_EDIT || $CAN_DELETE; // 列表「已讀/操作」欄是否顯示
+$can_batch  = $CAN_EDIT || $IS_ADMIN;   // 列表是否顯示勾選欄與「批次改對象」（逐則權限後端再擋一次）
 
 // 無檢視權限（且非初始全權狀態）→ 導回儀表板
 // 注意：此處使用者「已登入」，不可設定 lastpage 再導回登入頁，
@@ -307,6 +308,22 @@ if (isset($_POST['btn_go_events'])) {
         #eg-search-clear { display: none; width: 22px; height: 22px; line-height: 20px; text-align: center; border-radius: 50%; background: #eef2f5; color: #8a9bab; font-size: 16px; text-decoration: none; margin-right: 4px; }
         #eg-search-clear:hover { background: #e74c3c; color: #fff; }
         .eg-search.has-text #eg-search-clear { display: inline-block; }
+        /* 使用說明（鐵律7）：樣式與全站一致，照抄 views/pm/vendor_audit.php */
+        .page-help-btn { height:30px; font-size:13px; padding:0 12px; border:1px solid #d98a33; border-radius:15px;
+            background:#F0A24B; color:#fff; cursor:pointer; }
+        .page-help-btn:hover { background:#d98a33; }
+        @media print { .page-help-btn { display:none !important; } }
+        .help-doc { font-size:13px; color:#5b3a1e; line-height:1.75; }
+        .help-doc h4 { color:#8A5A2B; border-bottom:2px solid #F7E0BD; padding-bottom:3px; margin:14px 0 6px; font-size:15px; }
+        .help-doc h4:first-child { margin-top:0; }
+        .help-doc b { color:#8A5A2B; }
+        .help-doc ul { margin:4px 0 8px; padding-left:20px; }
+        .help-doc li { margin:2px 0; }
+        .help-doc .tip { background:#FFF7E8; border:1px dashed #F0A24B; border-radius:6px; padding:6px 10px; margin:6px 0; }
+        /* 搜尋範圍下拉：貼在搜尋框右側同一顆膠囊裡，用細線分隔 */
+        .eg-search-field { border: none; border-left: 1px solid var(--eg-line); outline: none; background: transparent; font-size: 12.5px; color: var(--eg-dark); padding: 4px 6px 4px 9px; margin-right: 4px; cursor: pointer; max-width: 110px; }
+        .eg-search-field:focus { color: var(--eg-accent-d); }
+        .eg-search.field-on { border-color: var(--eg-accent); }
         .eg-head-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .eg-btn-perm { border: 1px solid var(--eg-line); background: #fff; color: var(--eg-dark); border-radius: 30px; padding: 7px 16px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .15s; }
         .eg-btn-perm:hover { background: #f4f7f9; border-color: var(--eg-accent); color: var(--eg-accent-d); }
@@ -362,6 +379,7 @@ if (isset($_POST['btn_go_events'])) {
         .eg-tmzone { border: 1px solid var(--eg-line); border-radius: 9px; overflow: hidden; transition: border-color .12s, background .12s; }
         .eg-tmzone.dragover { border-color: var(--eg-accent); background: #f0faf7; }
         .eg-tmzone-head { padding: 6px 11px; font-size: 12.5px; font-weight: 700; color: var(--eg-dark); background: #f8f9fa; border-bottom: 1px solid var(--eg-line); }
+        .eg-tmzone[data-mode="autoread"] .eg-tmzone-head { color: #8a6a3d; }
         .eg-tmzone[data-mode="sign"] .eg-tmzone-head { color: #c77c1a; }
         .eg-tmzone[data-mode="reply"] .eg-tmzone-head { color: #7a4fc0; }
         .eg-tmzone-body { min-height: 40px; padding: 7px 9px; display: flex; flex-wrap: wrap; gap: 5px; align-content: flex-start; }
@@ -480,6 +498,22 @@ if (isset($_POST['btn_go_events'])) {
         .eg-readers-close { font-size: 12.5px; color: #c0392b; text-decoration: none; white-space: nowrap; }
         .eg-readers-close:hover { text-decoration: underline; color: #c0392b; }
         .eg-readers-body { max-height: 46vh; overflow-y: auto; background: #fff; }
+        /* 快速已閱（系統管理員代按）：接在已讀人員面板上方的區塊 */
+        .eg-readers-head .rd-tool { font-size: 12.5px; color: #8a6a3d; background: #f7efe2; border: 1px solid #e2d3ba; border-radius: 20px; padding: 3px 12px; text-decoration: none; white-space: nowrap; margin-right: 10px; }
+        .eg-readers-head .rd-tool:hover { background: #efe1c9; color: #6d5230; text-decoration: none; }
+        .eg-readers-head .rd-head-right { display: flex; align-items: center; }
+        .qr-panel { background: #fffdf8; border-bottom: 2px solid #e2d3ba; padding: 10px 14px; }
+        .qr-panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; font-size: 12.5px; color: #6d5230; }
+        .qr-panel-head .qr-note { color: var(--eg-muted); font-size: 11.5px; }
+        .qr-btn { border: none; border-radius: 20px; padding: 5px 15px; font-size: 12.5px; font-weight: 600; cursor: pointer; background: #F0A24B; color: #fff; }
+        .qr-btn:disabled { background: #e3e8ec; color: #a9b4bd; cursor: not-allowed; }
+        .qr-btn-ghost { background: #fff; color: #8a6a3d; border: 1px solid #e2d3ba; }
+        .qr-list { max-height: 34vh; overflow-y: auto; background: #fff; border: 1px solid #e8e3d8; border-radius: 8px; }
+        .qr-list table { width: 100%; border-collapse: collapse; }
+        .qr-list th { font-size: 11.5px; color: var(--eg-muted); text-align: left; padding: 7px 10px; background: #faf7f1; border-bottom: 1px solid #e8e3d8; position: sticky; top: 0; white-space: nowrap; }
+        .qr-list td { padding: 6px 10px; border-bottom: 1px solid #f2eee6; font-size: 12.5px; }
+        .qr-list tr.qr-off td { color: #a9b4bd; background: #fafafa; }
+        .qr-why { font-size: 11px; color: #b08a5a; }
         .eg-op { text-align: center; white-space: nowrap; }
         .eg-op a { text-decoration: none; display: inline-block; }
         .eg-op .eg-mini { display: inline-block; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 6px; margin: 0 2px; text-align: center; transition: all .15s; }
@@ -573,6 +607,7 @@ if (isset($_POST['btn_go_events'])) {
                             </span>
                         </div>
                         <div class="eg-head-right">
+                            <button type="button" class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
                             <?php if ($tg_hb_stale) : ?>
                                 <span style="background:#fdecea;color:#c0392b;border:1px solid #f5b7b1;border-radius:14px;padding:4px 12px;font-size:12.5px;font-weight:700;"
                                       title="Telegram 輪詢心跳超過 5 分鐘未更新：按鈕回覆/回簽與附件索取暫時沒有反應（推播發送不受影響）。輪詢會在有人瀏覽系統頁面時自動重啟；若持續異常請檢查伺服器。">
@@ -592,8 +627,14 @@ if (isset($_POST['btn_go_events'])) {
                             <?php endif; ?>
                             <div class="eg-search">
                                 <i class="fa fa-search"></i>
-                                <input id="eg-search-input" type="text" placeholder="即時搜尋 標題/內容/來源/公告者..." autocomplete="off">
+                                <input id="eg-search-input" type="text" placeholder="即時搜尋 標題/內容/來源/公告者/通知對象..." autocomplete="off">
                                 <a href="javascript:;" id="eg-search-clear" title="清除搜尋（或在欄內雙擊清除）">&times;</a>
+                                <select id="eg-search-field" class="eg-search-field" title="搜尋範圍：預設全部欄位；指定後只比對該欄位（多個關鍵字用空白分隔，每個都要命中）">
+                                    <option value="all">全部欄位</option>
+                                    <option value="creator">公告者</option>
+                                    <option value="target">通知對象</option>
+                                    <option value="title">標題 / 內容</option>
+                                </select>
                             </div>
                         </div>
                     </div>
@@ -699,9 +740,13 @@ if (isset($_POST['btn_go_events'])) {
                                             </div>
                                             <div class="eg-field">
                                                 <label>各對象通知方式 <span class="hint">拖曳標籤到區塊；可先點選多個再拖</span></label>
-                                                <div class="eg-tmzones">
+                                                <div class="eg-tmzones" id="eg-zones">
+                                                    <div class="eg-tmzone" data-mode="autoread" title="對象把通知點開就算已閱，不必再按「確認已閱」，鈴鐺會立刻少一則。適合審核通過、結果通知這類看過就好的訊息。">
+                                                        <div class="eg-tmzone-head"><i class="fa fa-magic"></i> 開啟自動已閱 <span class="hint" style="font-weight:normal;">點開即視為已閱</span></div>
+                                                        <div class="eg-tmzone-body" id="zone-autoread"></div>
+                                                    </div>
                                                     <div class="eg-tmzone" data-mode="read">
-                                                        <div class="eg-tmzone-head"><i class="fa fa-eye"></i> 已閱（預設）</div>
+                                                        <div class="eg-tmzone-head"><i class="fa fa-eye"></i> 已閱（預設）<span class="hint" style="font-weight:normal;">要自己按確認</span></div>
                                                         <div class="eg-tmzone-body" id="zone-read"></div>
                                                     </div>
                                                     <div class="eg-tmzone" data-mode="sign">
@@ -770,6 +815,9 @@ if (isset($_POST['btn_go_events'])) {
                                     <option value="20">20 筆</option>
                                     <option value="50">50 筆</option>
                                 </select>
+                                <?php if ($can_batch) : ?>
+                                    <button type="button" id="eg-batch-target-btn" class="eg-tool-btn" disabled title="勾選 2 則以上「通知對象完全相同」的公告 / 通知，一次改掉它們的對象與通知方式"><i class="fa fa-users"></i> 批次改對象 <span id="eg-batch-count"></span></button>
+                                <?php endif; ?>
                                 <button type="button" id="eg-export-csv" class="eg-tool-btn" title="匯出 CSV"><i class="fa fa-file-excel-o"></i> CSV</button>
                                 <button type="button" id="eg-export-pdf" class="eg-tool-btn" title="列印 / PDF"><i class="fa fa-file-pdf-o"></i> PDF</button>
                                 <span class="eg-pager" id="eg-pager"></span>
@@ -779,6 +827,9 @@ if (isset($_POST['btn_go_events'])) {
                             <table class="eg-table">
                                 <thead>
                                     <tr>
+                                        <?php if ($can_batch) : ?>
+                                            <th style="width:34px;text-align:center;"><input type="checkbox" id="eg-check-all" title="全選本頁（只勾得動您有權修改的）"></th>
+                                        <?php endif; ?>
                                         <th style="width:120px">發布 / 結束</th>
                                         <th style="width:100px">來源</th>
                                         <th style="width:130px">公告者</th>
@@ -1020,6 +1071,165 @@ if (isset($_POST['btn_go_events'])) {
         </div>
     </div>
 
+    <?php if ($can_batch) : ?>
+    <!-- 批次修改通知對象 modal（僅適用於「通知對象完全相同」的公告 / 通知）-->
+    <div class="modal fade" id="batchTargetModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog" role="document" style="width:660px;max-width:96vw;">
+            <div class="modal-content">
+                <div class="modal-header" style="background:var(--eg-dark);color:#fff;border-radius:6px 6px 0 0;">
+                    <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
+                    <h4 class="modal-title"><i class="fa fa-users"></i> 批次修改通知對象</h4>
+                </div>
+                <div class="modal-body" style="padding:16px 20px;">
+                    <div id="btLoading" style="text-align:center;padding:22px;color:#8a97a5;"><i class="fa fa-spinner fa-spin"></i> 檢查中…</div>
+                    <div id="btBlocked" style="display:none;"></div>
+                    <div id="btForm" style="display:none;">
+                        <p style="font-size:12.5px;color:#8a97a5;margin-bottom:10px;">
+                            將對 <b id="btCount">0</b> 則公告 / 通知套用<b>同一份</b>對象與通知方式（它們目前的對象完全相同）。<br>
+                            套用後：<b>新加進來的人會收到通知</b>；<b>被移除的人已發出的通知會被取消</b>（推播改寫為「通知已取消」、Telegram 訊息一併收回）。<br>
+                            公告內容、附件、期限與共同編輯者<b>都不會被更動</b>。
+                        </p>
+                        <div style="margin-bottom:10px;">
+                            <a href="javascript:;" id="btToggleList" style="font-size:12px;">▸ 檢視要修改的清單</a>
+                            <div id="btList" style="display:none;max-height:22vh;overflow-y:auto;border:1px solid var(--eg-line);border-radius:6px;padding:8px 10px;margin-top:6px;font-size:12px;color:#5a6b7b;"></div>
+                        </div>
+                        <div class="eg-field">
+                            <label for="bt-targets">對象 <span class="req">*</span> <span class="hint">可多選：部門 / 職稱 / 人員，或選「全體」</span></label>
+                            <select id="bt-targets" multiple>
+                                <option value="all">全體（所有人）</option>
+                                <optgroup label="部門">
+                                    <?php foreach ($departments as $d) : $path = getDeptPath($d['id'], $deptMap); ?>
+                                        <option value="dept-<?= $d['id'] ?>"><?= htmlspecialchars($path) ?></option>
+                                    <?php endforeach; ?>
+                                </optgroup>
+                                <optgroup label="職稱">
+                                    <?php foreach ($statuses as $s) : ?>
+                                        <option value="status-<?= $s['id'] ?>"><?= htmlspecialchars($s['title']) ?></option>
+                                    <?php endforeach; ?>
+                                </optgroup>
+                                <optgroup label="人員">
+                                    <?php foreach ($users as $u) :
+                                        $upath = getDeptPath($u['department_id'] ?? 0, $deptMap);
+                                        $upos = $u['position_name'] ?? '未指定'; ?>
+                                        <option value="user-<?= $u['id'] ?>"><?= htmlspecialchars($u['user_cname']) ?>（<?= htmlspecialchars($upath) ?> / <?= htmlspecialchars($upos) ?>）</option>
+                                    <?php endforeach; ?>
+                                </optgroup>
+                            </select>
+                        </div>
+                        <div class="eg-field" style="margin-top:10px;">
+                            <label>各對象通知方式 <span class="hint">拖曳標籤到區塊；可先點選多個再拖</span></label>
+                            <div class="eg-tmzones" id="bt-zones">
+                                <div class="eg-tmzone" data-mode="autoread">
+                                    <div class="eg-tmzone-head"><i class="fa fa-magic"></i> 開啟自動已閱 <span class="hint" style="font-weight:normal;">點開即視為已閱</span></div>
+                                    <div class="eg-tmzone-body" id="bt-zone-autoread"></div>
+                                </div>
+                                <div class="eg-tmzone" data-mode="read">
+                                    <div class="eg-tmzone-head"><i class="fa fa-eye"></i> 已閱（預設）<span class="hint" style="font-weight:normal;">要自己按確認</span></div>
+                                    <div class="eg-tmzone-body" id="bt-zone-read"></div>
+                                </div>
+                                <div class="eg-tmzone" data-mode="sign">
+                                    <div class="eg-tmzone-head"><i class="fa fa-pencil-square-o"></i> 回簽</div>
+                                    <div class="eg-tmzone-body" id="bt-zone-sign"></div>
+                                </div>
+                                <div class="eg-tmzone" data-mode="reply">
+                                    <div class="eg-tmzone-head"><i class="fa fa-comments-o"></i> 回覆 + 回簽</div>
+                                    <div class="eg-tmzone-body" id="bt-zone-reply"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="btErr" style="display:none;color:#c0392b;font-size:12.5px;margin-top:8px;"></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="btApply" disabled><i class="fa fa-check"></i> 套用到勾選的公告</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- 使用說明（鐵律7）：改動本頁功能時這裡的內容要同步更新 -->
+    <div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog" role="document" style="width:760px;max-width:96vw;">
+            <div class="modal-content">
+                <div class="modal-header" style="background:var(--eg-dark);color:#fff;border-radius:6px 6px 0 0;">
+                    <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
+                    <h4 class="modal-title"><i class="fa fa-question-circle"></i> 公告 / 通知管理 — 使用說明</h4>
+                </div>
+                <div class="modal-body help-doc" style="max-height:72vh;overflow-y:auto;">
+                    <h4>這頁在做什麼</h4>
+                    <ul>
+                        <li>發布公告 / 通知給全體、部門、職稱或指定人員，並追蹤誰看過、誰回簽、誰回覆。</li>
+                        <li>各模組（請假、報價單、異常單…）自動送出的通知也會匯集在這裡，來源欄可看出是哪一個模組發的。</li>
+                    </ul>
+
+                    <h4>四種「通知方式」怎麼選</h4>
+                    <p>在「各對象通知方式」把對象標籤拖到對應區塊即可，<b>可以先點選多個標籤再一起拖</b>。</p>
+                    <ul>
+                        <li><b>開啟自動已閱</b>：對象<b>把通知點開就算已閱</b>，不必再按「確認已閱」，鈴鐺會立刻少一則。適合「審核通過」「處理結果」這類看過就好、不需要對方表態的訊息。</li>
+                        <li><b>已閱（預設）</b>：對象要自己按下「確認已閱」才算數。</li>
+                        <li><b>回簽</b>：對象要按「回簽」表示已確認。</li>
+                        <li><b>回覆 + 回簽</b>：對象要留下文字回覆（可附檔）。</li>
+                    </ul>
+                    <div class="tip">
+                        <b>同一個人被兩種方式命中時，以「比較嚴格」的那個為準。</b>
+                        例如某人被指名為「開啟自動已閱」，但他的部門在同一則裡被設成「已閱」，
+                        系統仍會要求他自己按確認，不會偷偷幫他標記。
+                    </div>
+                    <div class="tip">
+                        「開啟自動已閱」有兩個例外會退回成要自己按：
+                        <b>共用帳號代收</b>（現場共用帳號要由本人輸入密碼才算數，否則已讀名單會失真）、
+                        以及 <b>Telegram</b>（Telegram 沒有「打開了」這個訊號，只能靠按鈕）。
+                    </div>
+
+                    <h4>搜尋（畫面最上方）</h4>
+                    <ul>
+                        <li>打字即時搜尋，預設比對<b>標題、內容、來源、公告者、通知對象</b>。</li>
+                        <li>右側下拉可縮小範圍：<b>公告者 / 通知對象 / 標題・內容</b>。找「發給業務部的通知」就選「通知對象」。</li>
+                        <li>多個關鍵字用<b>空白分隔，每個都要命中</b>（可以分散在不同欄位）。</li>
+                        <li>在搜尋框內<b>雙擊</b>可清空；CSV 與 PDF 匯出會套用目前的搜尋與來源篩選。</li>
+                    </ul>
+
+                    <h4>批次修改通知對象</h4>
+                    <ul>
+                        <li>在列表左側勾選 2 則以上 → 按工具列的<b>「批次改對象」</b>，一次改掉它們的對象與通知方式。</li>
+                        <li><b>只適用於「通知對象完全相同」的那幾則</b>（含每個對象的通知方式）。只要有一則不一樣就會整批擋下，並列出是哪幾則不同——因為一起改等於把它們原本各自的設定洗掉。</li>
+                        <li>套用後：<b>新加進來的人會收到通知</b>；<b>被移除的人已發出的通知會被取消</b>（推播改寫成「通知已取消」、Telegram 訊息一併收回）。</li>
+                        <li>只會動對象，<b>公告內容、附件、期限、共同編輯者都不會被更動</b>，每一則都會留下修改歷史。</li>
+                        <li>沒有權限修改的那幾則，勾選框是停用的（滑過去會說明原因）。</li>
+                    </ul>
+
+                    <h4>快速已閱（限系統管理員）</h4>
+                    <ul>
+                        <li>點列表「已讀」欄的 👁 展開已讀人員，再按右上角<b>「快速已閱」</b>，會列出這則的所有收件人與各自狀態。</li>
+                        <li>勾選後按「標記已閱」＝<b>代替他們按下已閱</b>，系統會記下是哪位管理員代按的（並寫入稽核紀錄）。</li>
+                        <li><b>「回簽」與「回覆 + 回簽」的對象不適用</b>，那要的是本人的意思表示，不是「有沒有看到」，這些人的勾選框是停用的。</li>
+                        <li>已經閱讀過的人也不會重複標記。</li>
+                    </ul>
+
+                    <h4>其他常見疑問</h4>
+                    <ul>
+                        <li><b>編輯完會回到原本那一頁</b>：按「編輯」或送出表單前，系統會記住目前的頁碼與搜尋條件，存完自動回到原位；一般重新整理則回到第 1 頁。</li>
+                        <li><b>來源顯示設定</b>（漏斗圖示）：勾選的來源不出現在「所有來源」列表，於下拉指定該來源仍可查看，<b>不影響推播</b>。</li>
+                        <li><b>來源「訂單變更」的通知已鎖定</b>，要移除請到訂單追蹤頁作廢該變更單。</li>
+                        <li>只有系統管理員看得到全部公告；其他人看得到的是「與自己相關的」與「自己建立 / 自己是共同編輯者的」。</li>
+                    </ul>
+
+                    <h4>權限角色</h4>
+                    <ul>
+                        <li>角色在<b>管理設定 → 使用者權限</b>指派；目前登入者的角色顯示在頁面標題右側，點 <b>?</b> 可看各角色權限。</li>
+                        <li>檢視 / 新增 / 編輯 / 刪除 分開設定；<b>「快速已閱」固定只有系統管理員可用</b>。</li>
+                        <li>編輯與刪除是<b>逐則判定</b>：系統管理員可改任何一則，其他人只能改自己發布或自己是共同編輯者的那幾則（後端會再擋一次）。</li>
+                    </ul>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 已訂閱推播裝置 modal（分頁：已訂閱裝置 / 設定說明+自我診斷） -->
     <div class="modal fade" id="subsModal" tabindex="-1" role="dialog" aria-hidden="true">
         <div class="modal-dialog modal-lg" role="document">
@@ -1188,7 +1398,8 @@ if (isset($_POST['btn_go_events'])) {
     <script>
         $(function() {
             // 跳窗統一移到 body 底下（避免被版面容器的定位/裁切影響），關閉後清除殘留背板
-            $('#readersModal,#subsModal,#histModal,#roleHelpModal,#permModal,#settingsModal,#srcPrefModal,#attTagModal,#attSheetModal,#attPrevModal').appendTo('body');
+            $('#readersModal,#subsModal,#histModal,#roleHelpModal,#permModal,#settingsModal,#srcPrefModal,#attTagModal,#attSheetModal,#attPrevModal,#helpUseMask,#batchTargetModal').appendTo('body');
+            $('#btnPageHelp').on('click', function() { $('#helpUseMask').modal('show'); });
             $(document).on('hidden.bs.modal', '.modal', function() {
                 if (!$('.modal.in').length) { $('.modal-backdrop').remove(); $('body').removeClass('modal-open'); }
             });
@@ -1212,22 +1423,31 @@ if (isset($_POST['btn_go_events'])) {
             // ===== 各對象通知方式：拖放到 已閱/回簽/回覆+回簽 三個區塊（支援多選拖移）=====
             var targetModes = <?= json_encode((object)($selected_target_modes ?? []), JSON_UNESCAPED_UNICODE) ?>;
 
-            function egSyncTargetModes() {
+            // 從某一組區塊讀出 { 對象代碼 => 通知方式 }。
+            // 區塊有兩組（新增/修改表單的 #eg-zones、批次改對象跳窗的 #bt-zones），
+            // 選擇器一定要帶容器 —— 用 $('.eg-tmzone-body') 全域抓的話，
+            // 在跳窗裡拖一下就會把表單那份 target_modes 一起改掉。
+            function egZoneModes(container) {
                 var out = {};
-                $('.eg-tmzone-body').each(function() {
+                $(container).find('.eg-tmzone-body').each(function() {
                     var mode = $(this).parent().data('mode');
                     $(this).children('.eg-tmchip').each(function() { out[$(this).data('code')] = mode; });
                 });
-                targetModes = out;
-                $('#target_modes').val(JSON.stringify(out));
+                return out;
+            }
+            function egSyncTargetModes() {
+                targetModes = egZoneModes('#eg-zones');
+                $('#target_modes').val(JSON.stringify(targetModes));
             }
             function egRenderZones() {
                 // 無新增/編輯權限時表單（含 #targets）不會渲染；防呆避免中斷本區塊後續的列表載入
                 var data = ($t.length && $t.select2('data')) || [];
-                $('.eg-tmzone-body').empty();
+                $('#eg-zones .eg-tmzone-body').empty();
                 data.forEach(function(o) {
                     var mode = targetModes[o.id] || 'read';
-                    var zone = mode === 'sign' ? '#zone-sign' : (mode === 'reply' ? '#zone-reply' : '#zone-read');
+                    var zone = mode === 'sign' ? '#zone-sign'
+                             : (mode === 'reply' ? '#zone-reply'
+                             : (mode === 'autoread' ? '#zone-autoread' : '#zone-read'));
                     var chip = $('<span class="eg-tmchip" draggable="true"></span>')
                         .attr('data-code', o.id)
                         .html('<i class="fa fa-user-o"></i> ' + $('<i>').text(o.text).html());
@@ -1262,7 +1482,9 @@ if (isset($_POST['btn_go_events'])) {
                 });
                 $('.eg-tmchip').removeClass('sel dragging');
                 dragCodes = [];
-                egSyncTargetModes();
+                // 只同步「被拖進去的那一組」區塊，兩組互不干擾
+                if ($zone.closest('#bt-zones').length) { if (window.btSyncModes) window.btSyncModes(); }
+                else egSyncTargetModes();
             });
 
             egRenderZones();
@@ -1440,9 +1662,14 @@ if (isset($_POST['btn_go_events'])) {
                 var $exist = $('#eg-readers-tr-' + eid);
                 if ($exist.length) { $exist.remove(); return; }
                 $('.eg-readers-tr').remove(); // 一次只展開一筆
-                var $det = $('<tr class="eg-readers-tr" id="eg-readers-tr-' + eid + '"><td colspan="7"><div class="eg-readers-panel">'
+                // 「快速已閱」限系統管理員（使用者拍板，比照既有的「改未閱」）
+                var qrBtn = EG.isAdmin
+                    ? '<a href="javascript:;" class="rd-tool rd-quickread" data-eid="' + eid + '" title="代替尚未閱讀的人員按下已閱（回簽／回覆+回簽 的對象不適用）"><i class="fa fa-bolt"></i> 快速已閱</a>'
+                    : '';
+                var $det = $('<tr class="eg-readers-tr" id="eg-readers-tr-' + eid + '"><td colspan="' + EG.listCols + '"><div class="eg-readers-panel">'
                           + '<div class="eg-readers-head"><span><i class="fa fa-eye"></i> 已讀人員　<b>' + egEsc(title) + '</b></span>'
-                          + '<a href="javascript:;" class="eg-readers-close" title="收合">收合 ✕</a></div>'
+                          + '<span class="rd-head-right">' + qrBtn + '<a href="javascript:;" class="eg-readers-close" title="收合">收合 ✕</a></span></div>'
+                          + '<div class="eg-qr-wrap"></div>'
                           + '<div class="eg-readers-body"><div class="rd-empty"><i class="fa fa-spinner fa-spin"></i></div></div>'
                           + '</div></td></tr>');
                 $tr.after($det);
@@ -1607,11 +1834,16 @@ if (isset($_POST['btn_go_events'])) {
                 isAdmin:   <?= $IS_ADMIN ? 'true' : 'false' ?>,
                 canEdit:   <?= $CAN_EDIT ? 'true' : 'false' ?>,
                 canDelete: <?= $CAN_DELETE ? 'true' : 'false' ?>,
+                canBatch:  <?= $can_batch ? 'true' : 'false' ?>,
+                isEdit:    <?= $is_edit ? 'true' : 'false' ?>,
                 uid: <?= (int)$id ?>
             };
+            // 表格欄數（展開面板的 colspan 要跟著勾選欄一起變，少算一欄整列會位移）
+            EG.listCols = <?= $can_batch ? 8 : 7 ?>;
             var LIST_API = '../../src/store/_eventList.php';
-            var egState = { page: 1, size: 10, kw: '', source: '', pages: 1, total: 0 };
+            var egState = { page: 1, size: 10, kw: '', source: '', field: 'all', pages: 1, total: 0 };
             var $searchInput = $('#eg-search-input');
+            var $searchField = $('#eg-search-field');
 
             function egEsc(s) { return $('<i>').text(s == null ? '' : s).html(); }
 
@@ -1642,7 +1874,16 @@ if (isset($_POST['btn_go_events'])) {
                     if (r.editors && r.editors.length) {
                         creatorHtml += '<span class="eg-coeds" title="共同編輯者">共編：' + r.editors.map(egEsc).join('、') + '</span>';
                     }
+                    // 勾選欄（批次改對象用）：沒有修改權限的那幾則給停用的勾選框並說明原因，
+                    // 而不是整格留白——否則使用者會以為系統壞了或漏畫。
+                    var cbCell = '';
+                    if (EG.canBatch) {
+                        cbCell = r.can_edit
+                            ? '<td class="eg-cbcell"><input type="checkbox" class="eg-row-cb" data-eid="' + r.id + '"></td>'
+                            : '<td class="eg-cbcell"><input type="checkbox" disabled title="您沒有修改此則的權限，無法納入批次修改"></td>';
+                    }
                     html += '<tr>'
+                        + cbCell
                         + '<td class="eg-date">' + dateHtml + '</td>'
                         + '<td><span class="eg-src">' + egEsc(r.source || '—') + '</span></td>'
                         + '<td class="eg-creator">' + creatorHtml + '</td>'
@@ -1696,13 +1937,15 @@ if (isset($_POST['btn_go_events'])) {
             function egLoadList(page, done) {
                 egState.page = page || 1;
                 $('#eg-list-msg').html('<i class="fa fa-spinner fa-spin"></i>').show();
-                $.get(LIST_API, { page: egState.page, size: egState.size, kw: egState.kw, source: egState.source }, function(res) {
+                // 來源下拉還沒填過（例：編輯往返直接還原到第 N 頁）就順便跟後端要一次
+                var needSources = $('#eg-filter-source option').length <= 1 ? 1 : 0;
+                $.get(LIST_API, { page: egState.page, size: egState.size, kw: egState.kw, source: egState.source, field: egState.field, need_sources: needSources }, function(res) {
                     if (!res || !res.ok) { $('#eg-list-tbody').empty(); $('#eg-list-msg').html(res && res.msg ? res.msg : '載入失敗').show(); if (done) done(); return; }
                     egState.pages = res.pages; egState.total = res.total;
                     egRenderRows(res.rows);
                     egRenderPager();
                     $('#eg-list-title').text((egState.kw || egState.source ? '搜尋結果' : '公告 / 通知列表') + '（' + res.total + '）');
-                    if (res.sources && res.sources.length && egState.page === 1) {
+                    if (res.sources && res.sources.length) {
                         // 來源下拉：隱藏中的來源標註（隱藏中）——「所有來源」不含它們，指定選取仍可查看
                         var opt = '<option value="">所有來源</option>';
                         res.sources.forEach(function(s) {
@@ -1729,6 +1972,198 @@ if (isset($_POST['btn_go_events'])) {
                     // 等列表重繪完成（頁面高度已定）再把捲動位置放回原處
                     egLoadList(targetPage, function() { window.scrollTo(0, scrollY); });
                 }, 'json').fail(function() { $a.css('pointer-events', ''); alert('連線失敗，刪除未完成'); });
+            });
+
+            // ===== 批次修改通知對象（勾選 → 檢查對象是否一致 → 套用同一份對象）=====
+            if (EG.canBatch) {
+                var BATCH_API = '../../src/store/_eventBatchTargets.php';
+                var btIds = [];
+
+                function egCheckedIds() {
+                    return $('#eg-list-tbody .eg-row-cb:checked').map(function() { return parseInt($(this).data('eid'), 10); }).get();
+                }
+                function egSyncBatchBtn() {
+                    var n = egCheckedIds().length;
+                    $('#eg-batch-count').text(n ? '（' + n + '）' : '');
+                    $('#eg-batch-target-btn').prop('disabled', n < 2);
+                    var boxes = $('#eg-list-tbody .eg-row-cb');
+                    $('#eg-check-all').prop('checked', boxes.length > 0 && n === boxes.length);
+                }
+                $('#eg-list-tbody').on('change', '.eg-row-cb', egSyncBatchBtn);
+                $('#eg-check-all').on('change', function() {
+                    $('#eg-list-tbody .eg-row-cb').prop('checked', this.checked);
+                    egSyncBatchBtn();
+                });
+                // 換頁/搜尋會重繪列表 → 勾選自然消失，按鈕狀態要跟著歸零
+                var _egRenderRowsOrig = egRenderRows;
+                egRenderRows = function(rows) { _egRenderRowsOrig(rows); egSyncBatchBtn(); };
+
+                var $bt = $('#bt-targets').select2({
+                    width: '100%',
+                    placeholder: '選擇對象（部門 / 職稱 / 人員，可多選）',
+                    closeOnSelect: false,
+                    allowClear: true,
+                    dropdownParent: $('#batchTargetModal')   // 不指定的話下拉會被 modal 蓋住／點不到
+                });
+                var btModes = {};
+                // 供 document 層的 drop 處理呼叫（兩組區塊各自同步，見上方 drop 事件）
+                window.btSyncModes = function() { btModes = egZoneModes('#bt-zones'); };
+                function btRenderZones() {
+                    var data = $bt.select2('data') || [];
+                    $('#bt-zones .eg-tmzone-body').empty();
+                    data.forEach(function(o) {
+                        var mode = btModes[o.id] || 'read';
+                        var zone = mode === 'sign' ? '#bt-zone-sign'
+                                 : (mode === 'reply' ? '#bt-zone-reply'
+                                 : (mode === 'autoread' ? '#bt-zone-autoread' : '#bt-zone-read'));
+                        $(zone).append($('<span class="eg-tmchip" draggable="true"></span>')
+                            .attr('data-code', o.id)
+                            .html('<i class="fa fa-user-o"></i> ' + egEsc(o.text)));
+                    });
+                    window.btSyncModes();
+                }
+                $bt.on('change', btRenderZones);
+                // 選了「全體」就清掉其他；選了其他就移除「全體」（與新增表單同一套規則）
+                $bt.on('select2:select', function(e) {
+                    if (e.params.data.id === 'all') { $bt.val(['all']).trigger('change'); }
+                    else if (($bt.val() || []).indexOf('all') !== -1) {
+                        $bt.val(($bt.val() || []).filter(function(x) { return x !== 'all'; })).trigger('change');
+                    }
+                });
+
+                $('#eg-batch-target-btn').on('click', function() {
+                    btIds = egCheckedIds();
+                    if (btIds.length < 2) { alert('請先勾選 2 則以上'); return; }
+                    $('#btLoading').show(); $('#btBlocked').hide().empty(); $('#btForm').hide();
+                    $('#btErr').hide().empty(); $('#btApply').prop('disabled', true);
+                    $('#batchTargetModal').modal('show');
+                    // 點開即刷新（ai-rules/08 第六節）：以「按下當下」的後端狀態判定，不採信畫面上的快取
+                    $.post(BATCH_API, { action: 'check', ids: JSON.stringify(btIds) }, function(res) {
+                        $('#btLoading').hide();
+                        if (!res || !res.ok) {
+                            var h = '<div style="color:#c0392b;font-size:13px;margin-bottom:8px;"><i class="fa fa-exclamation-triangle"></i> ' + egEsc((res && res.msg) || '檢查失敗') + '</div>';
+                            var bad = (res && (res.blocked || res.diff)) || [];
+                            if (bad.length) {
+                                h += '<div style="max-height:40vh;overflow-y:auto;border:1px solid var(--eg-line);border-radius:6px;padding:8px 10px;font-size:12.5px;">';
+                                bad.forEach(function(b) { h += '<div style="padding:3px 0;border-bottom:1px dashed #eee;">' + egEsc(b.title) + (b.why ? '<span style="color:#b08a5a;"> — ' + egEsc(b.why) + '</span>' : '') + '</div>'; });
+                                h += '</div>';
+                            }
+                            $('#btBlocked').html(h).show();
+                            return;
+                        }
+                        $('#btCount').text(res.count);
+                        $('#btList').html((res.titles || []).map(function(t) {
+                            return '<div style="padding:2px 0;">' + egEsc(t.eventdate) + '　' + egEsc(t.title) + '</div>';
+                        }).join(''));
+                        // 帶入目前共同的對象與通知方式（使用者多半只是要加一兩個人，不必重選）
+                        btModes = {};
+                        var codes = [];
+                        (res.targets || []).forEach(function(t) { codes.push(t.code); btModes[t.code] = t.mode; });
+                        $bt.val(codes).trigger('change');
+                        $('#btForm').show(); $('#btApply').prop('disabled', false);
+                    }, 'json').fail(function() { $('#btLoading').hide(); $('#btBlocked').html('<span style="color:#c0392b;">連線失敗</span>').show(); });
+                });
+
+                $('#btToggleList').on('click', function() {
+                    var $l = $('#btList').toggle();
+                    $(this).text(($l.is(':visible') ? '▾' : '▸') + ' 檢視要修改的清單');
+                });
+
+                $('#btApply').on('click', function() {
+                    var codes = $bt.val() || [];
+                    if (!codes.length) { $('#btErr').text('請至少選擇一個通知對象').show(); return; }
+                    $('#btErr').hide().empty();
+                    if (!confirm('確定將這 ' + btIds.length + ' 則的通知對象一起改掉？\n新加入的人會收到通知，被移除的人已發出的通知會被取消。')) return;
+                    var $b = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 套用中…');
+                    $.post(BATCH_API, {
+                        action: 'apply', ids: JSON.stringify(btIds),
+                        targets: JSON.stringify(codes), modes: JSON.stringify(btModes)
+                    }, function(res) {
+                        $b.prop('disabled', false).html('<i class="fa fa-check"></i> 套用到勾選的公告');
+                        if (!res || !res.ok) { $('#btErr').text((res && res.msg) || '套用失敗').show(); return; }
+                        $('#batchTargetModal').modal('hide');
+                        alert('已修改 ' + res.updated + ' 則。\n新加入並已發出通知：' + res.notified + ' 人次\n已取消通知（被移除的對象）：' + res.cancelled + ' 人次');
+                        egLoadList(egState.page);   // 留在原本這一頁
+                    }, 'json').fail(function() {
+                        $b.prop('disabled', false).html('<i class="fa fa-check"></i> 套用到勾選的公告');
+                        $('#btErr').text('連線失敗，未完成').show();
+                    });
+                });
+            }
+
+            // ===== 快速已閱（系統管理員代按）=====
+            var QUICKREAD_API = '../../src/store/_eventQuickRead.php';
+            $(document).on('click', '.rd-quickread', function() {
+                var eid = $(this).data('eid');
+                var $wrap = $('#eg-readers-tr-' + eid).find('.eg-qr-wrap');
+                if ($wrap.children().length) { $wrap.empty(); return; }   // 再按一次收合
+                $wrap.html('<div class="qr-panel"><i class="fa fa-spinner fa-spin"></i> 載入收件人…</div>');
+                $.get(QUICKREAD_API, { action: 'list', eventid: eid }, function(res) {
+                    if (!res || !res.ok) { $wrap.html('<div class="qr-panel" style="color:#c0392b;">' + egEsc((res && res.msg) || '載入失敗') + '</div>'); return; }
+                    if (!res.rows.length) { $wrap.html('<div class="qr-panel">這則通知沒有收件人</div>'); return; }
+                    var h = '<div class="qr-panel">'
+                          + '<div class="qr-panel-head">'
+                          + '<label style="margin:0;font-weight:600;cursor:pointer;"><input type="checkbox" class="qr-all"> 全選可代按的 ' + res.eligible_count + ' 人</label>'
+                          + '<button type="button" class="qr-btn qr-do" data-eid="' + eid + '" disabled>標記已閱（<span class="qr-n">0</span>）</button>'
+                          + '<span class="qr-note">代替尚未閱讀的人按下已閱；系統會記下是您代按的。'
+                          + '<b>回簽／回覆+回簽</b> 的對象不適用（那要本人自己回應）。</span>'
+                          + '</div><div class="qr-list"><table><thead><tr>'
+                          + '<th style="width:32px"></th><th style="width:110px">部門</th><th style="width:90px">職稱</th>'
+                          + '<th style="width:90px">姓名</th><th style="width:110px">通知方式</th><th>狀態</th>'
+                          + '</tr></thead><tbody>';
+                    res.rows.forEach(function(r) {
+                        var cb = r.eligible
+                            ? '<input type="checkbox" class="qr-cb" value="' + r.user_id + '">'
+                            : '<input type="checkbox" disabled title="' + egEsc(r.why) + '">';
+                        h += '<tr class="' + (r.eligible ? '' : 'qr-off') + '">'
+                           + '<td>' + cb + '</td>'
+                           + '<td>' + egEsc(r.dept) + '</td>'
+                           + '<td>' + egEsc(r.position) + '</td>'
+                           + '<td>' + egEsc(r.name) + '</td>'
+                           + '<td>' + egEsc(r.mode_label) + '</td>'
+                           + '<td>' + (r.eligible ? '<span style="color:#c77c1a;">尚未閱讀</span>' : '<span class="qr-why">' + egEsc(r.why) + '</span>') + '</td>'
+                           + '</tr>';
+                    });
+                    h += '</tbody></table></div></div>';
+                    $wrap.html(h);
+                }, 'json').fail(function() { $wrap.html('<div class="qr-panel" style="color:#c0392b;">連線失敗</div>'); });
+            });
+            function qrSyncCount($p) {
+                var n = $p.find('.qr-cb:checked').length;
+                $p.find('.qr-n').text(n);
+                $p.find('.qr-do').prop('disabled', n === 0);
+                $p.find('.qr-all').prop('checked', n > 0 && n === $p.find('.qr-cb').length);
+            }
+            $(document).on('change', '.qr-all', function() {
+                var $p = $(this).closest('.qr-panel');
+                $p.find('.qr-cb').prop('checked', this.checked);
+                qrSyncCount($p);
+            });
+            $(document).on('change', '.qr-cb', function() { qrSyncCount($(this).closest('.qr-panel')); });
+            $(document).on('click', '.qr-do', function() {
+                var $b = $(this), eid = $b.data('eid'), $p = $b.closest('.qr-panel');
+                var uids = $p.find('.qr-cb:checked').map(function() { return parseInt(this.value, 10); }).get();
+                if (!uids.length) return;
+                if (!confirm('確定代替這 ' + uids.length + ' 位人員按下「已閱」？\n這會寫入他們的已讀紀錄，並記下是您代按的。')) return;
+                $b.prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 處理中…');
+                $.post(QUICKREAD_API, { action: 'mark', eventid: eid, uids: JSON.stringify(uids) }, function(res) {
+                    if (!res || !res.ok) {
+                        $b.prop('disabled', false).html('標記已閱（<span class="qr-n">' + uids.length + '</span>）');
+                        alert((res && res.msg) || '標記失敗'); return;
+                    }
+                    var msg = '已標記 ' + res.marked + ' 人';
+                    if (res.skipped && res.skipped.length) {
+                        msg += '\n略過 ' + res.skipped.length + ' 人：\n'
+                             + res.skipped.map(function(s) { return '・' + s.name + '（' + s.why + '）'; }).join('\n');
+                    }
+                    alert(msg);
+                    // 已讀數與兩份清單都要跟著更新（不重整整頁）
+                    $('#eg-readers-tr-' + eid).remove();
+                    egLoadList(egState.page, function() { $('.eg-read-link[data-eid="' + eid + '"]').trigger('click'); });
+                }, 'json').fail(function() {
+                    $b.prop('disabled', false).html('標記已閱（<span class="qr-n">' + uids.length + '</span>）');
+                    alert('連線失敗');
+                });
             });
 
             $('#eg-pager').on('click', '.pg:not(.disabled):not(.active)', function() { var pg = parseInt($(this).data('pg'), 10); if (pg >= 1 && pg <= egState.pages) egLoadList(pg); });
@@ -1762,7 +2197,19 @@ if (isset($_POST['btn_go_events'])) {
                 }, 'json').fail(function() { $b.prop('disabled', false); alert('連線失敗'); });
             });
 
-            function egSyncSearchUI() { var has = ($searchInput.val() || '').length > 0; $('.eg-search').toggleClass('has-text', has); $('.eg-card-form').toggle(!has); }
+            function egSyncSearchUI() {
+                var has = ($searchInput.val() || '').length > 0;
+                $('.eg-search').toggleClass('has-text', has).toggleClass('field-on', egState.field !== 'all');
+                // 搜尋中收起新增表單騰出版面；但「修改中」不可收——搜尋後點編輯回來時
+                // 關鍵字會被一併還原，收起來的話使用者會找不到要改的那張表單。
+                $('.eg-card-form').toggle(!has || EG.isEdit);
+            }
+            // 搜尋範圍改變：已經打了字就立刻重查，沒打字只記住選擇（不必無謂打一次 API）
+            $searchField.on('change', function() {
+                egState.field = this.value || 'all';
+                egSyncSearchUI();
+                if ((($searchInput.val() || '').trim()) !== '') { egState.kw = ($searchInput.val() || '').trim(); egLoadList(1); }
+            });
             var egSearchTimer = null;
             $searchInput.on('input', function() {
                 egSyncSearchUI();
@@ -1773,11 +2220,58 @@ if (isset($_POST['btn_go_events'])) {
             $('#eg-search-clear').on('click', function() { $searchInput.val('').focus(); egSyncSearchUI(); egState.kw = ''; egLoadList(1); });
 
             // 匯出 CSV / 列印PDF（皆套用目前搜尋與來源篩選）
-            $('#eg-export-csv').on('click', function() { window.location = LIST_API + '?export=csv&kw=' + encodeURIComponent(egState.kw) + '&source=' + encodeURIComponent(egState.source); });
-            $('#eg-export-pdf').on('click', function() { window.open(LIST_API + '?export=print&kw=' + encodeURIComponent(egState.kw) + '&source=' + encodeURIComponent(egState.source), '_blank'); });
+            function egExportQs(kind) {
+                return LIST_API + '?export=' + kind + '&kw=' + encodeURIComponent(egState.kw)
+                     + '&source=' + encodeURIComponent(egState.source) + '&field=' + encodeURIComponent(egState.field);
+            }
+            $('#eg-export-csv').on('click', function() { window.location = egExportQs('csv'); });
+            $('#eg-export-pdf').on('click', function() { window.open(egExportQs('print'), '_blank'); });
 
-            // 進頁：只載第 1 頁
-            egLoadList(1);
+            // ===== 列表位置保留（編輯往返用）=====
+            // 「編輯」是整頁轉址到 _updateEvent.php 再導回本頁、存檔又是整頁 POST，
+            // 中間 JS 狀態全部歸零，所以編輯完一定會掉回第 1 頁。
+            // 作法：離開前把目前的頁碼/筆數/搜尋條件寫進 sessionStorage，回來時取出後「立刻刪掉」——
+            // 只還原這一次往返，不會變成「這個分頁以後永遠停在某一頁」那種難以預期的行為。
+            var EG_LIST_STATE_KEY = 'egNoticeListState';
+            function egSaveListState() {
+                try {
+                    sessionStorage.setItem(EG_LIST_STATE_KEY, JSON.stringify({
+                        page: egState.page, size: egState.size, kw: egState.kw,
+                        source: egState.source, field: egState.field,
+                        scrollY: window.pageYOffset || document.documentElement.scrollTop || 0
+                    }));
+                } catch (e) {}
+            }
+            function egTakeListState() {
+                try {
+                    var raw = sessionStorage.getItem(EG_LIST_STATE_KEY);
+                    sessionStorage.removeItem(EG_LIST_STATE_KEY); // 取出即失效
+                    return raw ? JSON.parse(raw) : null;
+                } catch (e) { return null; }
+            }
+            // 點「編輯」離開本頁前先記住位置
+            $('#eg-list-tbody').on('click', 'a[href*="_updateEvent.php"], a[href*="edit_abnormal="]', egSaveListState);
+            // 送出新增/修改表單前也記住（存檔後導回本頁）
+            $('.eg-card-form form').on('submit', egSaveListState);
+
+            // 進頁：有上次留下的位置就回到那一頁，否則載第 1 頁
+            var egRestore = egTakeListState();
+            if (egRestore) {
+                egState.size   = parseInt(egRestore.size, 10) || 10;
+                egState.kw     = egRestore.kw || '';
+                egState.source = egRestore.source || '';
+                egState.field  = egRestore.field || 'all';
+                $('#eg-page-size').val(String(egState.size));
+                $searchField.val(egState.field);
+                if (egState.kw) { $searchInput.val(egState.kw); }
+                egSyncSearchUI();
+                egLoadList(parseInt(egRestore.page, 10) || 1, function() {
+                    // 等列表重繪完成（頁面高度已定）再把捲動位置放回原處
+                    if (egRestore.scrollY) window.scrollTo(0, egRestore.scrollY);
+                });
+            } else {
+                egLoadList(1);
+            }
 
             // 後端擋下鎖定通知的刪改時，導回帶 locked=1 提示
             if (/[?&]locked=1/.test(window.location.search)) {

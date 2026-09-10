@@ -65,8 +65,9 @@ try {
                         LIMIT $size OFFSET $off")->fetchAll(PDO::FETCH_ASSOC);
 
     $ids = array_column($rows, 'id');
-    $modeRank = ['read' => 1, 'sign' => 2, 'reply' => 3];
-    $myMode = [];   // event_id => 'read'|'sign'|'reply'
+    require_once __DIR__ . '/../common/notice_mode_lib.php';
+    $myModes = [];  // event_id => [符合的對象列的 mode…]（最後交給 eg_notice_mode_pick 決定）
+    $myMode = [];   // event_id => 'autoread'|'read'|'sign'|'reply'
     $resp = [];     // event_id => [read_at, signed_at, replied_at]
     $readSet = [];  // event_id => true (live_event_for_user 已閱)
     $forOf = [];    // event_id => member_uid（共用帳號代收成員的通知時）
@@ -85,12 +86,12 @@ try {
                 || ($t['target_type'] === 'dept'   && in_array($tid, $deptIds, true))
                 || ($t['target_type'] === 'user'   && in_array($tid, $viewUids, true));
             if (!$matched) continue;
-            $r = $modeRank[$t['mode']] ?? 1;
             $eid = (int)$t['live_event_id'];
-            if (!isset($myMode[$eid]) || $r > $modeRank[$myMode[$eid]]) $myMode[$eid] = $t['mode'];
+            $myModes[$eid][] = $t['mode'];
             // 這則是「代收成員的」→ 記下給誰的（顯示標籤、完成狀態要看該成員）
             if ($t['target_type'] === 'user' && $tid !== $uid && isset($memberNames[$tid])) $forOf[$eid] = $tid;
         }
+        foreach ($myModes as $eid => $ms) $myMode[$eid] = eg_notice_mode_pick($ms);
 
         // 回應（回簽/回覆）：含代收成員的，取「該則負責人」的狀態
         $rs = $db->query("SELECT live_event_id, user_id, read_at, signed_at, replied_at FROM live_event_response
@@ -116,7 +117,8 @@ try {
         $mode = $myMode[$eid] ?? 'read';
         $rp = $resp[$eid] ?? null;
         $hasRead = !empty($readSet[$eid]) || ($rp && !empty($rp['read_at']));
-        $done = ($mode === 'read' && $hasRead)
+        // autoread（開啟自動已閱）的完成條件與 read 相同＝有已閱紀錄；差別只在前端會自動幫他標
+        $done = (($mode === 'read' || $mode === 'autoread') && $hasRead)
              || ($mode === 'sign' && $rp && !empty($rp['signed_at']))
              || ($mode === 'reply' && $rp && !empty($rp['replied_at']));
         $expired = !empty($r['reply_deadline']) && $r['reply_deadline'] < $today;
@@ -129,7 +131,7 @@ try {
             'eventdate' => $r['eventdate'],
             'enddate'   => $r['enddate'],
             'reply_deadline' => $r['reply_deadline'],
-            'mode'      => $mode,     // read / sign / reply
+            'mode'      => $mode,     // autoread / read / sign / reply
             'done'      => $done,     // 我是否已完成該義務
             'read'      => $hasRead,  // 是否已閱
             'expired'   => $expired,  // 回覆/回簽期限已過

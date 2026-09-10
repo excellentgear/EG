@@ -44,6 +44,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
         .b-mode-sign{ background:#fff3df; color:#c77c1a; }
         .b-mode-reply{ background:#f0eafc; color:#7a4fc0; }
         .b-mode-read{ background:#eef2f5; color:#5a6b7b; }
+        .b-mode-auto{ background:#f7efe2; color:#8a6a3d; }
         .m-src{ font-size:11px; color:#5a6b7b; background:#f0f4f7; border-radius:5px; padding:1px 7px; }
         .m-title{ font-size:15.5px; font-weight:700; color:var(--dark); margin:2px 0 4px; }
         .m-snippet{ font-size:13px; color:var(--muted); line-height:1.5; display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
@@ -113,8 +114,11 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
         var API_RESPOND = '../../src/store/_eventRespond.php';
         function fileUrl(t, id, dl){ return '../../src/store/_eventFile.php?t=' + t + '&id=' + id + (dl ? '&dl=1' : ''); }
         var esc = function (s) { return $('<i>').text(s == null ? '' : s).html(); };
-        var modeName = { read:'確認已閱', sign:'回簽', reply:'回覆 + 回簽' };
-        var modeBadgeCls = { read:'b-mode-read', sign:'b-mode-sign', reply:'b-mode-reply' };
+        var modeName = { autoread:'開啟自動已閱', read:'確認已閱', sign:'回簽', reply:'回覆 + 回簽' };
+        var modeBadgeCls = { autoread:'b-mode-auto', read:'b-mode-read', sign:'b-mode-sign', reply:'b-mode-reply' };
+        // 這次開啟是否已由系統自動標記已閱（autoread 模式）；詳情是非同步取回的，
+        // 不記這個旗標會因為「標已閱」還沒寫完而先畫出一顆「確認已閱」按鈕。
+        var autoMarked = false;
         var st = { page:1, size:20, pages:1, curId:0 };
 
         // 關閉 GET 快取：iOS 加入主畫面的 App(WKWebView) 會快取 GET，
@@ -139,7 +143,8 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
                         ? '<span class="m-badge b-done"><i class="fa fa-check"></i> 已完成</span>'
                         : '<span class="m-badge b-todo">待處理</span>';
                     var modeBadge = '<span class="m-badge ' + modeBadgeCls[r.mode] + '">' + modeName[r.mode] + '</span>';
-                    h += '<div class="m-card" data-id="' + r.id + '" data-reftype="' + esc(r.ref_type || '') + '" data-refid="' + (r.ref_id || 0) + '">'
+                    h += '<div class="m-card" data-id="' + r.id + '" data-reftype="' + esc(r.ref_type || '') + '" data-refid="' + (r.ref_id || 0) + '"'
+                       + ' data-mode="' + esc(r.mode || '') + '" data-foruid="' + (r.for_uid || 0) + '">'
                        + '<div class="row1">' + stateBadge + modeBadge + (r.source ? '<span class="m-src">' + esc(r.source) + '</span>' : '') + '</div>'
                        + '<div class="m-title">' + esc(r.title) + '</div>'
                        + '<div class="m-snippet">' + esc(r.snippet) + '</div>'
@@ -155,6 +160,13 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
         $(document).on('click', '#btn-more', function(){ loadList(st.page + 1); });
         $(document).on('click', '.m-card', function(){
             var rt = $(this).data('reftype');
+            // 通知方式＝「開啟通知自動認定已閱」(autoread)：點開的當下就標已閱，不必再按「確認已閱」。
+            // 共用帳號代收成員的通知(foruid>0)排除——那必須本人確認才算數(ai-rules/13)。
+            autoMarked = false;
+            if ($(this).data('mode') === 'autoread' && !parseInt($(this).data('foruid'), 10)) {
+                autoMarked = true;
+                $.post('../../src/store/_markEventRead.php', { eventid: $(this).data('id') });
+            }
             // 品質異常單通知 → 開異常單檢視頁（含異常單資訊與回覆回簽）
             if (rt === 'QA'){ location.href = '../QA/qa_abnormal_view.php?event=' + $(this).data('id'); return; }
             // 異常矯正處理單 → 開單據頁並自動彈出該單填寫（當事人無檢閱權限也可開，open_id=ref_id=car_id）
@@ -269,7 +281,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
 
         function buildAction(res){
             var mode = res.my_mode, s = res.my_status, h = '';
-            var mbcls = { read:'b-mode-read', sign:'b-mode-sign', reply:'b-mode-reply' };
+            var mbcls = modeBadgeCls;
             h += '<span class="modebadge ' + mbcls[mode] + '">需求：' + modeName[mode] + '</span>';
             // 目前狀態
             var line = '';
@@ -281,11 +293,17 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             if (!line) line = '<span class="todo">尚未處理</span>';
             h += '<div class="mstatus">' + line + '</div>';
 
-            var done = s && ((mode==='read' && s.read_at) || (mode==='sign' && s.signed_at) || (mode==='reply' && (s.replied_at || s.signed_at)));
+            var done = s && (((mode==='read' || mode==='autoread') && s.read_at) || (mode==='sign' && s.signed_at) || (mode==='reply' && (s.replied_at || s.signed_at)));
+            if (mode === 'autoread' && autoMarked) done = true;
 
             if (res.deadline_passed && (mode==='sign' || mode==='reply')){
                 h += '<div class="expired"><i class="fa fa-clock-o"></i> 已超過回覆 / 回簽期限</div>';
                 if (!(s && s.read_at)) h += '<button class="m-btn m-btn-primary act" data-act="read">確認已閱</button>';
+            } else if (mode === 'autoread'){
+                // 開啟即視為已閱：正常情況進到這裡已經標好了，只回報結果不再要求動作。
+                // 自動標記失敗時仍留一顆按鈕，才不會變成永遠標不掉。
+                if (done) h += '<div class="doneok"><i class="fa fa-check-circle"></i> 已閱（開啟時自動標記）</div>';
+                else h += '<button class="m-btn m-btn-primary act" data-act="read"><i class="fa fa-check"></i> 確認已閱</button>';
             } else if (mode === 'read'){
                 if (!done) h += '<button class="m-btn m-btn-primary act" data-act="read"><i class="fa fa-check"></i> 確認已閱</button>';
                 else h += '<div class="doneok"><i class="fa fa-check-circle"></i> 已完成</div>';

@@ -278,3 +278,44 @@ if (!function_exists('eg_telegram_for_event')) {
         }
     }
 }
+
+if (!function_exists('eg_telegram_retract_event_for')) {
+    /**
+     * 只對「指定的幾個人」收回這則公告的 Telegram 通知（對象被改掉、某些人不再是收件人時用）。
+     *
+     * 與 eg_telegram_retract_event() 的差別：那支是整則全部收回（內容改版時用），
+     * 這支依 telegram_users 的綁定把 user_id 換成 chat_id，只改那些人的訊息。
+     */
+    function eg_telegram_retract_event_for(PDO $db, int $eventId, array $userIds): void
+    {
+        try {
+            if (!tg_is_configured()) return;
+            $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
+            if (empty($userIds)) return;
+            $in = implode(',', $userIds);
+            $chatIds = $db->query("SELECT chat_id FROM telegram_users WHERE is_active = 1 AND user_id IN ($in)")->fetchAll(PDO::FETCH_COLUMN);
+            if (empty($chatIds)) return;
+
+            $ph = implode(',', array_fill(0, count($chatIds), '?'));
+            $rows = $db->prepare("SELECT id, chat_id, telegram_message_id FROM telegram_messages
+                                   WHERE direction = 'out' AND related_record_id = ?
+                                     AND telegram_message_id IS NOT NULL
+                                     AND chat_id IN ($ph)
+                                     AND (message_text LIKE '📢%' OR message_text LIKE '🔄%')
+                                     AND message_text NOT LIKE '[已收回]%'");
+            $rows->execute(array_merge([$eventId], $chatIds));
+            $list = $rows->fetchAll(PDO::FETCH_ASSOC);
+            if (empty($list)) return;
+
+            $newText = '✅ 這則通知的對象已調整，您已不在對象內，不需要處理。';
+            $mark = $db->prepare("UPDATE telegram_messages SET message_text = CONCAT('[已收回] ', message_text) WHERE id = ?");
+            foreach ($list as $r) {
+                $res = tg_edit_message($r['chat_id'], $r['telegram_message_id'], $newText);
+                if (!empty($res['ok'])) $mark->execute([$r['id']]);
+                usleep(100000); // 避免觸發 Telegram 速率限制
+            }
+        } catch (\Throwable $e) {
+            error_log('[telegram] retract event for users failed: ' . $e->getMessage());
+        }
+    }
+}

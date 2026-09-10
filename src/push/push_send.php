@@ -295,3 +295,41 @@ if (!function_exists('eg_push_event_notify')) {
         }
     }
 }
+
+if (!function_exists('eg_push_event_cancel')) {
+    /**
+     * 對「已經不再是這則公告對象的人」收回通知（Web Push）。
+     *
+     * 已經送到作業系統的推播沒有辦法憑空消失，能做的是「用同一個 tag 覆蓋掉它」——
+     * push-sw.js 對相同 tag 的通知會取代前一則，所以這裡送一則簡短的取消說明，
+     * 收件人看到的會是原本那則被換成「這則通知已與您無關」，而不是多一則新的洗版訊息。
+     *
+     * 刻意不採用「service worker 靜默關閉通知」那條路：不顯示任何通知的 push
+     * 會被 Chrome 記一次違規，累積幾次後改由瀏覽器自己彈出「網站在背景更新」的
+     * 系統訊息，反而更難解釋。
+     */
+    function eg_push_event_cancel(PDO $db, int $eventId, array $userIds): array
+    {
+        try {
+            $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
+            if (empty($userIds)) return ['ok' => true, 'sent' => 0, 'failed' => 0, 'removed' => 0];
+
+            $ev = $db->prepare("SELECT id, title, source FROM live_event WHERE id = ?");
+            $ev->execute([$eventId]);
+            $event = $ev->fetch(PDO::FETCH_ASSOC);
+            if (!$event) return ['ok' => false, 'msg' => 'event not found'];
+
+            $payload = [
+                'title' => '✅ [通知已取消] ' . ($event['source'] ? '[' . $event['source'] . '] ' : '') . $event['title'],
+                'body'  => '這則通知的對象已調整，您已不在對象內，不需要處理。',
+                'tag'   => 'live-event-' . $eventId,   // 同 tag ＝ 取代原本那則
+                'url'   => '/EGsystem/views/liveEvent/mobile.php',
+                'eventId' => (int)$eventId,
+            ];
+            return eg_push_send_to_users($db, $userIds, $payload, ['event_id' => (int)$eventId]);
+        } catch (\Throwable $e) {
+            error_log('[push] eg_push_event_cancel failed: ' . $e->getMessage());
+            return ['ok' => false, 'msg' => $e->getMessage()];
+        }
+    }
+}

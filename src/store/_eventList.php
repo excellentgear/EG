@@ -17,6 +17,9 @@ $size   = (int)($_GET['size'] ?? 10);
 if (!in_array($size, [5, 10, 20, 50], true)) $size = 10;
 $kw     = trim($_GET['kw'] ?? '');
 $source = trim($_GET['source'] ?? '');
+// 搜尋範圍（工具列下拉）：all=全部欄位（含通知對象）/ creator=公告者 / target=通知對象 / title=標題+內容
+$field  = $_GET['field'] ?? 'all';
+if (!in_array($field, ['all', 'creator', 'target', 'title'], true)) $field = 'all';
 
 // live_event.created_at（建立時間，供列表區分同日多筆公告先後）：首次使用自動補欄並以修改歷史回填
 try {
@@ -47,9 +50,30 @@ try {
 // WHERE 條件
 $where = '1=1';
 $bind = [];
+// 關鍵字：多個詞以空白分隔，每個詞都要命中（可分散在不同欄位）＝全站全表搜尋鐵則。
+// 「通知對象」是另一張表(live_event_target)且要反查部門/身分/人員名稱，故用 EXISTS 子查詢比對。
 if ($kw !== '') {
-    $where .= " AND (le.title LIKE :kw OR le.content LIKE :kw OR le.source LIKE :kw OR u.user_cname LIKE :kw)";
-    $bind[':kw'] = '%' . $kw . '%';
+    $words = preg_split('/\s+/u', $kw, -1, PREG_SPLIT_NO_EMPTY);
+    $targetExists = "EXISTS (SELECT 1 FROM live_event_target t2
+                              LEFT JOIN department  d2 ON t2.target_type='dept'   AND d2.id = t2.target_id
+                              LEFT JOIN user_status s2 ON t2.target_type='status' AND s2.id = t2.target_id
+                              LEFT JOIN `user`      u2 ON t2.target_type='user'   AND u2.id = t2.target_id
+                             WHERE t2.live_event_id = le.id
+                               AND ( (t2.target_type='all' AND '全體' LIKE %s)
+                                     OR d2.name LIKE %s OR s2.title LIKE %s OR u2.user_cname LIKE %s ))";
+    $i = 0;
+    foreach ($words as $w) {
+        $k = ':kw' . ($i++);
+        $bind[$k] = '%' . $w . '%';
+        switch ($field) {
+            case 'creator': $cond = "u.user_cname LIKE $k"; break;
+            case 'target':  $cond = sprintf($targetExists, $k, $k, $k, $k); break;
+            case 'title':   $cond = "(le.title LIKE $k OR le.content LIKE $k)"; break;
+            default:        $cond = "(le.title LIKE $k OR le.content LIKE $k OR le.source LIKE $k OR u.user_cname LIKE $k OR "
+                                  . sprintf($targetExists, $k, $k, $k, $k) . ")";
+        }
+        $where .= " AND $cond";
+    }
 }
 if ($source !== '') {
     $where .= " AND le.source = :src"; $bind[':src'] = $source;
@@ -197,8 +221,10 @@ if ($export === 'print') {
         . '@media print{.noprint{display:none;}}'
         . '</style></head><body>';
     echo '<button class="noprint" onclick="window.print()" style="float:right;padding:6px 14px;">列印 / 存成 PDF</button>';
+    $fieldLabel = ['all' => '全部欄位', 'creator' => '公告者', 'target' => '通知對象', 'title' => '標題 / 內容'];
     echo '<h2>公告 / 通知列表</h2><div class="sub">匯出時間：' . date('Y-m-d H:i') . '　共 ' . count($rows) . ' 筆'
-        . ($kw !== '' ? '　搜尋：' . $h($kw) : '') . ($source !== '' ? '　來源：' . $h($source) : '') . '</div>';
+        . ($kw !== '' ? '　搜尋：' . $h($kw) . '（範圍：' . $h($fieldLabel[$field]) . '）' : '')
+        . ($source !== '' ? '　來源：' . $h($source) : '') . '</div>';
     echo '<table><thead><tr><th>發布 / 結束</th><th>來源</th><th>公告者</th><th>對象</th><th>標題</th><th>內容</th><th>已讀</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         $labels = array_map(function ($x) { return $x['label']; }, $tg[$r['id']] ?? []);
@@ -270,8 +296,9 @@ try {
     }
 
     // 來源清單（給篩選下拉，僅首頁帶回即可；標記隱藏中的來源）
+    // need_sources：直接還原到第 N 頁（編輯往返）時前端下拉還是空的，會另外指名要一次
     $sources = [];
-    if ($page === 1) {
+    if ($page === 1 || !empty($_GET['need_sources'])) {
         foreach ($db->query("SELECT DISTINCT source FROM live_event WHERE source IS NOT NULL AND source <> '' ORDER BY source")->fetchAll(PDO::FETCH_COLUMN) as $s) {
             $sources[] = ['name' => $s, 'hidden' => in_array($s, $hiddenSources, true)];
         }
