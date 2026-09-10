@@ -2107,14 +2107,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     // 搜尋子件（組合件用）
+    // 2026-09-10 新增客戶篩選：cust_only=1（預設）＝只列本料號所屬客戶底下的料號；
+    // 取消勾選時可另外指定 cust_id 縮小範圍（不指定＝全部客戶）。
+    // 原本固定 LIMIT 15 且沒有 ORDER BY：全庫 23,696 個非組合件料號，關鍵字「A」命中 8,782 筆
+    // 卻只回 15 筆、也不告訴使用者被截斷（＝使用者回報的「篩選列表過少」），故改為
+    // 回傳命中總數 total 讓前端能顯示「顯示 50／共 8,782 筆」並提示縮小範圍。
     if ($_POST['action'] === 'search_child_parts') {
         try {
-            $kw = trim($_POST['keyword'] ?? '');
-            $exclude = intval($_POST['exclude_d_id'] ?? 0);
-            if (empty($kw)) { echo json_encode(['success'=>true,'data'=>[]]); exit; }
-            $stmt = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Spec_No, c.customer AS client_name FROM d_setting d LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id WHERE (d.D_Setting_Id LIKE ? OR d.Spec_No LIKE ? OR d.Customer_Id LIKE ? OR d.Drawing_No LIKE ?) AND d.d_id <> ? AND d.Is_Assembly=0 LIMIT 15");
-            $stmt->execute(["%$kw%", "%$kw%", "%$kw%", "%$kw%", $exclude]);
-            echo json_encode(['success'=>true,'data'=>$stmt->fetchAll(PDO::FETCH_ASSOC)]);
+            $kw        = trim($_POST['keyword'] ?? '');
+            $exclude   = intval($_POST['exclude_d_id'] ?? 0);
+            $cust_only = intval($_POST['cust_only'] ?? 0) === 1;
+            $cust_id   = trim($_POST['cust_id'] ?? '');
+            // 勾了「只篩選此客戶」卻還沒有客戶：條件不成立，回原因給前端提示。
+            // 不可以默默地當成「不篩選客戶」列出全部料號——那會讓使用者以為篩到的是這家客戶的料號。
+            if ($cust_only && $cust_id === '') {
+                echo json_encode(['success'=>true,'data'=>[],'total'=>0,'need_customer'=>true]); exit;
+            }
+            // 有指定客戶時允許空關鍵字（＝列出該客戶底下的料號）；兩者皆空才不查
+            if ($kw === '' && $cust_id === '') { echo json_encode(['success'=>true,'data'=>[],'total'=>0]); exit; }
+
+            $where  = ['d.d_id <> ?', 'd.Is_Assembly=0'];
+            $params = [$exclude];
+            if ($kw !== '') {
+                $where[] = '(d.D_Setting_Id LIKE ? OR d.Spec_No LIKE ? OR d.Customer_Id LIKE ? OR d.Drawing_No LIKE ?)';
+                array_push($params, "%$kw%", "%$kw%", "%$kw%", "%$kw%");
+            }
+            if ($cust_id !== '') { $where[] = 'd.Customer_Id = ?'; $params[] = $cust_id; }
+            $whereSQL = implode(' AND ', $where);
+
+            $cnt = $pdo->prepare("SELECT COUNT(*) FROM d_setting d WHERE $whereSQL");
+            $cnt->execute($params);
+            $total = (int)$cnt->fetchColumn();
+
+            $lim  = 50;
+            // ORDER BY 補上 d.d_id 當決定性排序鍵：料號有同名並列，只排 D_Setting_Id 時
+            // 並列順序不穩定，同一組條件兩次搜尋會回不同的 50 筆
+            $stmt = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Spec_No, d.Customer_Id, c.customer AS client_name
+                FROM d_setting d LEFT JOIN customer_list c ON d.Customer_Id=c.customer_id
+                WHERE $whereSQL ORDER BY d.D_Setting_Id, d.d_id LIMIT $lim");
+            $stmt->execute($params);
+            echo json_encode(['success'=>true,'data'=>$stmt->fetchAll(PDO::FETCH_ASSOC),'total'=>$total,'shown_limit'=>$lim]);
+        } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    // 子件搜尋的客戶挑選清單（取消「只篩選此客戶」後用來縮小範圍，可不選＝全部客戶）
+    // 只列真的擁有非組合件料號的客戶並附上筆數，選了才知道範圍多大；
+    // 刻意「不」比照 search_customers_dropdown 濾掉停用客戶——有 19 家已停用客戶仍持有 228 個
+    // 非組合件料號，濾掉的話那些料號會變成永遠選不到，只在清單上標示「已停用」即可。
+    if ($_POST['action'] === 'search_child_customers') {
+        try {
+            $kw  = trim($_POST['keyword'] ?? '');
+            $lim = 30;
+            $stmt = $pdo->prepare("SELECT c.customer_id, c.customer, c.is_inactive, COUNT(d.d_id) AS part_cnt
+                FROM customer_list c JOIN d_setting d ON d.Customer_Id=c.customer_id AND d.Is_Assembly=0
+                WHERE (c.customer_id LIKE ? OR c.customer LIKE ?)
+                GROUP BY c.customer_id, c.customer, c.is_inactive
+                ORDER BY part_cnt DESC, c.customer_id LIMIT $lim");
+            $stmt->execute(["%$kw%","%$kw%"]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $cnt = $pdo->prepare("SELECT COUNT(*) FROM (SELECT c.customer_id FROM customer_list c
+                JOIN d_setting d ON d.Customer_Id=c.customer_id AND d.Is_Assembly=0
+                WHERE (c.customer_id LIKE ? OR c.customer LIKE ?) GROUP BY c.customer_id) t");
+            $cnt->execute(["%$kw%","%$kw%"]);
+            echo json_encode(['success'=>true,'data'=>$rows,'total'=>(int)$cnt->fetchColumn(),'shown_limit'=>$lim]);
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
         exit;
     }
@@ -7806,11 +7862,24 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
         </thead>
         <tbody id="bom-rows-wrap"></tbody>
     </table>
+    <!-- 子件搜尋範圍：預設只找本料號所屬客戶底下的料號（現有 42 筆 BOM 對應全部都是同客戶） -->
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+        <label style="font-weight:normal;cursor:pointer;margin:0;white-space:nowrap;">
+            <input type="checkbox" id="bom-cust-only" checked style="margin-right:5px;" onchange="onBomCustOnlyChange()">
+            只篩選此客戶
+        </label>
+        <span id="bom-cust-only-label" style="font-size:12px;color:#8a6d3b;background:#fdf5e6;border:1px solid #f0d9a8;border-radius:3px;padding:2px 8px;"></span>
+        <div id="bom-cust-pick-wrap" style="display:none;position:relative;">
+            <input type="text" id="bom-cust-input" class="form-control input-sm" placeholder="不限客戶（可輸入客戶ID／名稱指定）…" autocomplete="off" style="width:280px;" oninput="searchChildCustomer(this.value)" onfocus="searchChildCustomer(this.value)">
+            <div id="bom-cust-dropdown" style="display:none;position:absolute;z-index:1051;width:340px;background:#fff;border:1px solid #ddd;max-height:200px;overflow-y:auto;border-radius:0 0 6px 6px;box-shadow:0 4px 12px rgba(0,0,0,.1);font-size:13px;"></div>
+        </div>
+        <button type="button" id="bom-cust-clear" class="btn btn-default btn-xs" style="display:none;" onclick="clearChildCustomer()"><i class="fa fa-times"></i> 清除客戶</button>
+    </div>
     <div style="position:relative;">
-        <input type="text" id="bom-search-input" class="form-control input-sm" placeholder="搜尋子件料號（輸入關鍵字）…" autocomplete="off" style="width:280px;" oninput="searchChildPart(this.value)">
+        <input type="text" id="bom-search-input" class="form-control input-sm" placeholder="搜尋子件料號（輸入關鍵字）…" autocomplete="off" style="width:280px;" oninput="searchChildPart(this.value)" onfocus="searchChildPart(this.value)">
         <div id="bom-child-dropdown" style="display:none;position:absolute;z-index:1050;width:320px;background:#fff;border:1px solid #ddd;max-height:180px;overflow-y:auto;border-radius:0 0 6px 6px;box-shadow:0 4px 12px rgba(0,0,0,.1);font-size:13px;"></div>
     </div>
-    <div class="id-hint" style="margin-top:4px;">只能選取非組合件料號作為子件</div>
+    <div class="id-hint" id="bom-search-hint" style="margin-top:4px;">只能選取非組合件料號作為子件</div>
 </div>
 
 </form>
@@ -13658,7 +13727,7 @@ document.addEventListener('mousedown', function(e){
 // ── Assembly change handler ───────────────────────────
 function onAssemblyChange(checked) {
     var bs = document.getElementById('bom-section');
-    if (checked) { $(bs).slideDown(200); renderBomRows(); }
+    if (checked) { $(bs).slideDown(200); renderBomRows(); resetBomChildSearch(); }
     else         { $(bs).slideUp(200); bomRows = []; renderBomRows(); }
 }
 
@@ -14710,15 +14779,137 @@ function syncAliasesHidden() {
     return rows;
 }
 
+// ── 子件搜尋的客戶範圍 ────────────────────────────────
+// bomCustPick = 取消「只篩選此客戶」後另外指定的客戶（空字串＝不限客戶）
+var bomCustPick = { id:'', name:'' };
+
+function _bomSetHint(msg, warn) {
+    var el = document.getElementById('bom-search-hint');
+    if (!el) return;
+    el.innerHTML = msg || '只能選取非組合件料號作為子件';
+    el.style.color = warn ? '#DD5138' : '';
+}
+
+// 目前搜尋要套用的客戶條件：勾選＝本料號的客戶（即時讀，客戶欄改了立刻跟著變）；取消＝使用者另選的
+function _bomScope() {
+    var only = !!(document.getElementById('bom-cust-only')||{}).checked;
+    if (only) {
+        return { cust_only:1, cust_id:(document.getElementById('pf-Customer_Id')||{value:''}).value.trim() };
+    }
+    return { cust_only:0, cust_id:bomCustPick.id };
+}
+
+function onBomCustOnlyChange() {
+    var only = !!document.getElementById('bom-cust-only').checked;
+    document.getElementById('bom-cust-pick-wrap').style.display  = only ? 'none' : '';
+    document.getElementById('bom-cust-only-label').style.display = only ? '' : 'none';
+    document.getElementById('bom-cust-dropdown').style.display   = 'none';
+    _bomRefreshCustLabel();
+    _bomSyncClearBtn();
+    // 範圍變了，已展開的結果就不再符合條件，重查一次（沒打關鍵字時只更新提示）
+    document.getElementById('bom-child-dropdown').style.display = 'none';
+    searchChildPart((document.getElementById('bom-search-input')||{value:''}).value);
+}
+
+function _bomRefreshCustLabel() {
+    var el = document.getElementById('bom-cust-only-label');
+    if (!el) return;
+    var cid  = (document.getElementById('pf-Customer_Id')||{value:''}).value.trim();
+    var disp = (document.getElementById('pf-customer-display')||{value:''}).value.trim();
+    if (!cid) { el.innerHTML = '尚未選擇客戶'; return; }
+    el.innerHTML = escHtml(disp || cid);
+}
+
+function _bomSyncClearBtn() {
+    var only = !!(document.getElementById('bom-cust-only')||{}).checked;
+    var btn  = document.getElementById('bom-cust-clear');
+    if (btn) btn.style.display = (!only && bomCustPick.id) ? '' : 'none';
+}
+
+var childCustTimer;
+function searchChildCustomer(kw) {
+    clearTimeout(childCustTimer);
+    var dd = document.getElementById('bom-cust-dropdown');
+    if (!dd) return;
+    childCustTimer = setTimeout(function() {
+        api({ action:'search_child_customers', keyword:kw }).done(function(r) {
+            if (!r.success || !r.data || !r.data.length) {
+                dd.innerHTML = '<div style="padding:8px 12px;color:#999;">查無符合的客戶</div>';
+                dd.style.display = 'block';
+                return;
+            }
+            var html = '<div style="padding:6px 12px;cursor:pointer;border-bottom:1px solid #eee;background:#fafafa;" onclick="clearChildCustomer()"><em style="color:#777;">不限客戶（搜尋全部料號）</em></div>';
+            r.data.forEach(function(c) {
+                html += '<div style="padding:6px 12px;cursor:pointer;border-bottom:1px solid #f5f5f5;" onclick="selectChildCustomer(\''+escAttr(c.customer_id)+'\',\''+escAttr(c.customer)+'\')">';
+                html += '<strong style="color:#2A3F54;">'+escHtml(c.customer_id)+'</strong> — '+escHtml(c.customer);
+                if (String(c.is_inactive) !== '0') html += ' <small style="color:#DD5138;">已停用</small>';
+                html += '<small style="color:#aaa;float:right;">'+c.part_cnt+' 筆</small>';
+                html += '</div>';
+            });
+            if (r.total > r.data.length) {
+                html += '<div style="padding:6px 12px;color:#8a6d3b;background:#fdf5e6;">共 '+r.total+' 家，顯示前 '+r.data.length+' 家，請輸入更精確的關鍵字</div>';
+            }
+            dd.innerHTML = html;
+            dd.style.display = 'block';
+        });
+    }, 250);
+}
+
+function selectChildCustomer(id, name) {
+    bomCustPick = { id:id, name:name };
+    document.getElementById('bom-cust-input').value = name + ' (' + id + ')';
+    document.getElementById('bom-cust-dropdown').style.display = 'none';
+    _bomSyncClearBtn();
+    searchChildPart((document.getElementById('bom-search-input')||{value:''}).value);
+}
+
+function clearChildCustomer() {
+    bomCustPick = { id:'', name:'' };
+    var i = document.getElementById('bom-cust-input'); if (i) i.value = '';
+    document.getElementById('bom-cust-dropdown').style.display = 'none';
+    _bomSyncClearBtn();
+    searchChildPart((document.getElementById('bom-search-input')||{value:''}).value);
+}
+
+// 開啟／切換組合件時把搜尋範圍回到預設（只篩選此客戶）
+function resetBomChildSearch() {
+    var chk = document.getElementById('bom-cust-only'); if (chk) chk.checked = true;
+    bomCustPick = { id:'', name:'' };
+    var ci = document.getElementById('bom-cust-input');    if (ci) ci.value = '';
+    var si = document.getElementById('bom-search-input');  if (si) si.value = '';
+    var dd = document.getElementById('bom-child-dropdown');if (dd) dd.style.display = 'none';
+    var cd = document.getElementById('bom-cust-dropdown'); if (cd) cd.style.display = 'none';
+    var pw = document.getElementById('bom-cust-pick-wrap');if (pw) pw.style.display = 'none';
+    var ol = document.getElementById('bom-cust-only-label');if (ol) ol.style.display = '';
+    _bomRefreshCustLabel();
+    _bomSyncClearBtn();
+    _bomSetHint('');
+}
+
 var childSearchTimer;
 function searchChildPart(kw) {
     clearTimeout(childSearchTimer);
     var dd = document.getElementById('bom-child-dropdown');
-    if (!kw.trim()) { dd.style.display='none'; return; }
+    var sc = _bomScope();
+    _bomRefreshCustLabel();
+    // 勾了「只篩選此客戶」但料號還沒選客戶：講清楚原因，不要只是查不到東西
+    if (sc.cust_only && !sc.cust_id) {
+        dd.style.display = 'none';
+        _bomSetHint('已勾選「只篩選此客戶」，但此料號尚未選擇客戶。請先於上方選擇客戶，或取消勾選以搜尋全部料號。', true);
+        return;
+    }
+    // 沒有關鍵字時：有指定客戶就直接列該客戶底下的料號，否則收起來
+    if (!kw.trim() && !sc.cust_id) { dd.style.display='none'; _bomSetHint(''); return; }
     childSearchTimer = setTimeout(function() {
         var excl = parseInt(document.getElementById('pf-d_id').value) || 0;
-        api({ action:'search_child_parts', keyword:kw, exclude_d_id:excl }).done(function(r) {
-            if (!r.success || !r.data.length) { dd.style.display='none'; return; }
+        api({ action:'search_child_parts', keyword:kw, exclude_d_id:excl, cust_only:sc.cust_only, cust_id:sc.cust_id }).done(function(r) {
+            if (!r.success) { dd.style.display='none'; return; }
+            var scopeTxt = sc.cust_only ? '（限本料號客戶）' : (sc.cust_id ? '（限 '+escHtml(bomCustPick.name||sc.cust_id)+'）' : '（全部客戶）');
+            if (!r.data.length) {
+                dd.style.display='none';
+                _bomSetHint('查無符合的子件料號 '+scopeTxt+'。可取消「只篩選此客戶」或改用其他關鍵字。', true);
+                return;
+            }
             var html = '';
             r.data.forEach(function(p) {
                 html += '<div class="bom-child-item" onclick="addBomChild('+p.d_id+',\''+escAttr(p.D_Setting_Id)+'\')">';
@@ -14727,6 +14918,13 @@ function searchChildPart(kw) {
                 if (p.client_name) html += '<small style="color:#aaa;float:right;">'+escHtml(p.client_name)+'</small>';
                 html += '</div>';
             });
+            var total = (typeof r.total === 'number') ? r.total : r.data.length;
+            if (total > r.data.length) {
+                html += '<div style="padding:6px 10px;color:#8a6d3b;background:#fdf5e6;border-top:1px solid #f0d9a8;">共 '+total+' 筆，僅顯示前 '+r.data.length+' 筆</div>';
+                _bomSetHint('顯示 '+r.data.length+' ／ 共 '+total+' 筆 '+scopeTxt+'，請輸入更精確的關鍵字或指定客戶以縮小範圍。', true);
+            } else {
+                _bomSetHint('找到 '+total+' 筆 '+scopeTxt+'。只能選取非組合件料號作為子件。');
+            }
             dd.innerHTML = html;
             dd.style.display = 'block';
         });
@@ -14735,6 +14933,10 @@ function searchChildPart(kw) {
 document.addEventListener('click', function(e) {
     if (!e.target.closest('#bom-search-input') && !e.target.closest('#bom-child-dropdown'))
         document.getElementById('bom-child-dropdown').style.display = 'none';
+    if (!e.target.closest('#bom-cust-input') && !e.target.closest('#bom-cust-dropdown')) {
+        var _cd = document.getElementById('bom-cust-dropdown');
+        if (_cd) _cd.style.display = 'none';
+    }
 });
 
 function addBomChild(d_id, part_no) {
@@ -14744,6 +14946,7 @@ function addBomChild(d_id, part_no) {
     renderBomRows();
     document.getElementById('bom-search-input').value = '';
     document.getElementById('bom-child-dropdown').style.display = 'none';
+    _bomSetHint('');   // 清掉上一次搜尋的「共 N 筆」提示，否則會停在已經不成立的數字
 }
 
 // ── Open / Submit ─────────────────────────────────────
@@ -14881,6 +15084,7 @@ function openPartModal(d_id) {
                 }
                 renderBomRows();
             } else { renderBomRows(); }
+            resetBomChildSearch();   // 子件搜尋範圍回到預設（只篩選此客戶），並帶出這張料號的客戶
             // 設計備註已在列表有獨立按鈕，編輯視窗內不顯示
             var pdWrap = document.getElementById('part-design-note-wrap');
             if (pdWrap) pdWrap.style.display = 'none';
@@ -14911,6 +15115,7 @@ function openPartModal(d_id) {
         fillAliasRows([]);
         renderGearRows();
         renderBomRows();
+        resetBomChildSearch();   // 新增料號：子件搜尋範圍回到預設（此時尚未選客戶，勾選狀態會提示先選客戶）
         var pdWrap = document.getElementById('part-design-note-wrap');
         if (pdWrap) pdWrap.style.display = 'none';
         var saveBtn = document.getElementById('part-save-btn');
@@ -15151,6 +15356,7 @@ function copyPartModal(d_id) {
             }
             renderBomRows();
         } else { renderBomRows(); }
+        resetBomChildSearch();   // 同上：複製料號後搜尋範圍也回到預設
         // 設計備註不複製（屬於原料號，複製後再另行建立）
         var pdWrap = document.getElementById('part-design-note-wrap');
         if (pdWrap) pdWrap.style.display = 'none';
@@ -15174,6 +15380,7 @@ document.getElementById('pf-customer-display').addEventListener('input', functio
         (function(){ var _sr=document.getElementById('spec-suggest-row'); if(_sr) _sr.style.display='none'; })();
         clearToolSpecForm();
         document.getElementById('pf-cust-hint').textContent = '';
+        if (typeof _bomRefreshCustLabel === 'function') _bomRefreshCustLabel();
         return;
     }
     custDropTimer = setTimeout(function() {
@@ -15200,6 +15407,8 @@ function selectCust(id, name) {
     document.getElementById('pf-customer-display').value = name + ' (' + id + ')';
     document.getElementById('pf-cust-hint').textContent = '已選擇：' + id;
     document.getElementById('pf-customer-dropdown').style.display='none';
+    // 組合件子件搜尋若正勾著「只篩選此客戶」，範圍要跟著換到新客戶
+    if (typeof _bomRefreshCustLabel === 'function') _bomRefreshCustLabel();
 }
 
 // ═══════════════════════════════════════════════════
