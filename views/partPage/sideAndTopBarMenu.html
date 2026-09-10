@@ -86,14 +86,11 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         // 未過期、對象(全體/部門/身分/本人)符合，且「要求動作尚未完成」的公告/通知。
         // 要求動作依 live_event_target.mode：autoread=開啟自動已閱、read=已閱、sign=回簽、reply=回覆+回簽；
         // 只點開看過(標了已閱)但還沒回簽/回覆者，仍要留在置頂欄未讀清單（need_mode=同一則中最重的未完成要求）。
-        //
-        // auto_read：點開就自動標已閱、不必按「確認已閱」的通知。判定規則與 notice_mode_lib.php 的
-        // eg_notice_mode_pick() 一致——「嚴格的贏」：同一則裡只要另有一列把這個人歸在 read(要自己按)，
-        // 就不算自動已閱。故必須 has_auto=1 且 has_plain_read=0 且 need_mode=1 三者同時成立。
+        // autoread 的義務等級與 read 相同（need_mode=1），差別只在「點開就自動標已閱」——那是在點開後
+        // 由 _eventDetail.php 回的 my_mode 決定的，這裡刻意不預先算，否則開著這一頁的期間通知方式被改過
+        // （例如管理員用「批次改對象」調整），算好的值就是舊的。
         $event = $conn->getAll(
             "SELECT le.*, MAX(CASE WHEN t.mode='reply' THEN 3 WHEN t.mode='sign' THEN 2 ELSE 1 END) AS need_mode,
-                    MAX(CASE WHEN t.mode='autoread' THEN 1 ELSE 0 END) AS has_auto,
-                    MAX(CASE WHEN t.mode NOT IN ('autoread','sign','reply') THEN 1 ELSE 0 END) AS has_plain_read,
                     MAX(CASE WHEN t.target_type='user' AND t.target_id <> ".(int)$id." THEN t.target_id END) AS for_uid,
                     MAX(CASE WHEN t.target_type='user' AND t.target_id <> ".(int)$id." THEN fu.user_cname END) AS for_name
              FROM `live_event` le
@@ -354,7 +351,6 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                                        data-reftype="<?= htmlspecialchars($ev['ref_type'] ?? '', ENT_QUOTES) ?>"
                                        data-refid="<?= (int)($ev['ref_id'] ?? 0) ?>"
                                        data-needmode="<?= (int)($ev['need_mode'] ?? 1) ?>"
-                                       data-autoread="<?= ((int)($ev['need_mode'] ?? 1) === 1 && !empty($ev['has_auto']) && empty($ev['has_plain_read'])) ? 1 : 0 ?>"
                                        data-foruid="<?= (int)($ev['for_uid'] ?? 0) ?>"
                                        data-forname="<?= htmlspecialchars((string)($ev['for_name'] ?? ''), ENT_QUOTES) ?>"
                                        data-title="<?= htmlspecialchars($ev['title'], ENT_QUOTES) ?>"
@@ -667,14 +663,9 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 nmMarkRead(nmRemoveFromList);
                 return;
             }
-            // 通知方式＝「開啟通知自動認定已閱」(autoread)：點開的當下就標已閱並從鈴鐺移除，
-            // 不必再按「確認已閱」。共用帳號代收成員的通知(foruid>0)刻意排除——那必須由本人
-            // 輸入密碼才算數(ai-rules/13)，自動標會讓已讀名單變成「共用帳號已閱」而失真。
+            // autoread（開啟自動已閱）的實際處理在 nmRender()：要等詳情回來、拿到「現在」的通知方式才算數。
+            // 不在這裡用 data-autoread 判斷——那是頁面載入當下算好的，見 nmRender 內的說明。
             nmAutoMarked = false;
-            if (parseInt($(this).data('autoread'), 10) === 1 && !nmForUid) {
-                nmAutoMarked = true;
-                nmMarkRead(nmRemoveFromList);
-            }
             $('#nm-title').text($(this).data('title') || '');
             $('#nm-meta').text('');
             $('#nm-loading').show(); $('#nm-2col').hide();
@@ -731,6 +722,17 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 if (a.first) nmShowPreview('e', a.first.id, a.first.ext, a.first.name);
             } else {
                 $('#nm-attwrap').hide();
+            }
+
+            // 通知方式＝「開啟通知自動認定已閱」(autoread)：點開的當下就標已閱並從鈴鐺移除，不必按「確認已閱」。
+            // 判定一律用這裡剛取回的 res.my_mode，**不可以用鈴鐺項目上的 data-autoread**——那是「頁面載入
+            // 當下」算好的，公告的通知方式若在這一頁開著的期間被改過（例如管理員剛用「批次改對象」調整過），
+            // 屬性就是舊的，症狀是「資料庫明明已經是自動已閱，點開卻還是要自己按」。
+            // 共用帳號代收(nmForUid>0)刻意排除：那必須由本人輸入密碼才算數(ai-rules/13)，
+            // 自動標會讓已讀名單變成「共用帳號已閱」而失真。
+            if (res.my_mode === 'autoread' && !nmForUid && !(res.my_status && res.my_status.read_at)) {
+                nmAutoMarked = true;
+                nmMarkRead(nmRemoveFromList);
             }
 
             // 右側：依模式的回應區

@@ -119,6 +119,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
         // 這次開啟是否已由系統自動標記已閱（autoread 模式）；詳情是非同步取回的，
         // 不記這個旗標會因為「標已閱」還沒寫完而先畫出一顆「確認已閱」按鈕。
         var autoMarked = false;
+        var nmForUidCur = 0;   // 這則是不是共用帳號代收成員的（>0＝是，不可自動標已閱）
         var st = { page:1, size:20, pages:1, curId:0 };
 
         // 關閉 GET 快取：iOS 加入主畫面的 App(WKWebView) 會快取 GET，
@@ -144,7 +145,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
                         : '<span class="m-badge b-todo">待處理</span>';
                     var modeBadge = '<span class="m-badge ' + modeBadgeCls[r.mode] + '">' + modeName[r.mode] + '</span>';
                     h += '<div class="m-card" data-id="' + r.id + '" data-reftype="' + esc(r.ref_type || '') + '" data-refid="' + (r.ref_id || 0) + '"'
-                       + ' data-mode="' + esc(r.mode || '') + '" data-foruid="' + (r.for_uid || 0) + '">'
+                       + ' data-foruid="' + (r.for_uid || 0) + '">'
                        + '<div class="row1">' + stateBadge + modeBadge + (r.source ? '<span class="m-src">' + esc(r.source) + '</span>' : '') + '</div>'
                        + '<div class="m-title">' + esc(r.title) + '</div>'
                        + '<div class="m-snippet">' + esc(r.snippet) + '</div>'
@@ -160,13 +161,10 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
         $(document).on('click', '#btn-more', function(){ loadList(st.page + 1); });
         $(document).on('click', '.m-card', function(){
             var rt = $(this).data('reftype');
-            // 通知方式＝「開啟通知自動認定已閱」(autoread)：點開的當下就標已閱，不必再按「確認已閱」。
-            // 共用帳號代收成員的通知(foruid>0)排除——那必須本人確認才算數(ai-rules/13)。
+            // autoread（開啟自動已閱）的實際處理在 renderDetail()：要等詳情回來、拿到「現在」的通知方式才算數
+            // （清單上的 mode 是上次載入清單時的值，期間被改過就會是舊的）。
             autoMarked = false;
-            if ($(this).data('mode') === 'autoread' && !parseInt($(this).data('foruid'), 10)) {
-                autoMarked = true;
-                $.post('../../src/store/_markEventRead.php', { eventid: $(this).data('id') });
-            }
+            nmForUidCur = parseInt($(this).data('foruid'), 10) || 0;
             // 品質異常單通知 → 開異常單檢視頁（含異常單資訊與回覆回簽）
             if (rt === 'QA'){ location.href = '../QA/qa_abnormal_view.php?event=' + $(this).data('id'); return; }
             // 異常矯正處理單 → 開單據頁並自動彈出該單填寫（當事人無檢閱權限也可開，open_id=ref_id=car_id）
@@ -221,6 +219,12 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             if (e.ref_type === 'VENDOR_AUDIT_PLAN_RESULT'){ location.href = '../pm/vendor_audit.php?plan_year=' + (e.ref_id || 0); return; }
             // 領料單通知：直接導到庫存頁並展開該筆
             if (e.ref_type === 'STOCK_REQ'){ location.href = '../pages/stock.php?req=' + (e.ref_id || 0); return; }
+            // 通知方式＝「開啟通知自動認定已閱」(autoread)：點開當下就標已閱，不必再按「確認已閱」。
+            // 判定用這裡剛取回的 res.my_mode（清單上的 mode 可能是舊的）；共用帳號代收排除(ai-rules/13)。
+            if (res.my_mode === 'autoread' && !nmForUidCur && !(res.my_status && res.my_status.read_at)){
+                autoMarked = true;
+                $.post('../../src/store/_markEventRead.php', { eventid: e.id });
+            }
             h += '<div class="d-title">' + esc(e.title) + '</div>';
             var meta = [];
             if (e.source) meta.push('來源：' + esc(e.source));
