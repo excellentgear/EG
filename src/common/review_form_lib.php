@@ -333,6 +333,79 @@ function rvf_template_duplicate(PDO $db, int $srcId, string $byName): int {
     return $newId;
 }
 
+/** 模板目前的使用狀況（刪除保護／停用提示用，2026-09-10 新增）。
+ *  **刪除前一定要重新呼叫這支拿最新數字**（ai-rules/08 第六節「點開即刷新」）：畫面上的清單是先前載入的快取，
+ *  別人剛用這個模板建了一張表單，照著舊快取放行就會把有人正在填的表單連同模板一起刪掉。 */
+function rvf_template_usage(PDO $db, int $templateId): array {
+    $cnt = function (string $sql) use ($db, $templateId): int {
+        $st = $db->prepare($sql); $st->execute([$templateId]); return (int)$st->fetchColumn();
+    };
+    $st = $db->prepare("SELECT status, COUNT(*) c FROM rf_instance WHERE template_id=? GROUP BY status");
+    $st->execute([$templateId]);
+    $byStatus = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $byStatus[(string)$r['status']] = (int)$r['c'];
+    return [
+        'instances'        => $cnt("SELECT COUNT(*) FROM rf_instance WHERE template_id=?"),
+        'instance_status'  => $byStatus,
+        'versions'         => $cnt("SELECT COUNT(*) FROM rf_template_version WHERE template_id=?"),
+        'maintainers'      => $cnt("SELECT COUNT(*) FROM rf_template_maintainer_user WHERE template_id=?"),
+    ];
+}
+
+/** 稽核紀錄（模板的停用/啟用/刪除都留一筆，target_type 一律 review_form_template）。 */
+function rvf_template_audit(PDO $db, string $actionType, int $templateId, string $name, array $changes, int $uid, string $byName): void {
+    try {
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES (?,?,?,?,?,?,?,NOW())")
+           ->execute([$actionType, 'review_form_template', (string)$templateId, $name,
+                      json_encode($changes, JSON_UNESCAPED_UNICODE), $uid ?: null, $byName]);
+    } catch (Throwable $e) {}
+}
+
+/** 停用／啟用模板（2026-09-10 新增）。停用＝rf_template.status='archived'：
+ *  建立表單頁的模板下拉本來就只列 status='active'（review_form.php loadTemplates），所以停用後不會有人再用它開新表單，
+ *  **既有表單完全不受影響**（清單、填寫、簽名、列印照舊，欄位定義各自吃自己建立當下的版本）。 */
+function rvf_template_set_status(PDO $db, int $id, string $status, int $uid, string $byName): void {
+    $status = $status === 'archived' ? 'archived' : 'active';
+    $tpl = rvf_template_get($db, $id);
+    if (!$tpl) throw new Exception('找不到此模板');
+    if ((string)$tpl['status'] === $status) {
+        throw new Exception($status === 'archived' ? '此模板已經是停用狀態，請重新整理頁面。' : '此模板已經是啟用狀態，請重新整理頁面。');
+    }
+    $db->prepare("UPDATE rf_template SET status=?, updated_by=?, updated_at=NOW() WHERE id=?")->execute([$status, $byName, $id]);
+    rvf_template_audit($db, 'update', $id, (string)$tpl['name'], ['status'=>[$tpl['status'], $status]], $uid, $byName);
+}
+
+/** 刪除模板（2026-09-10 新增，僅管理員）。
+ *  **已經有表單用這個模板就一律擋下**——rf_instance 記的是 template_id 與建立當下的 template_version，模板一刪，
+ *  那些表單的名稱／欄位定義／列印表頭全部查不到（instance_list 是 JOIN rf_template 現況），畫面不會報錯只會變空白，
+ *  屬於事後救不回來的資料破壞。要讓它不再被使用請改用「停用」。
+ *  可刪時連同版本歷程、維護人員名單、AS 文件綁定一起清掉（留著就是永遠不會再被讀到的孤兒資料）。 */
+function rvf_template_delete(PDO $db, int $id, int $uid, string $byName): array {
+    $tpl = rvf_template_get($db, $id);
+    if (!$tpl) throw new Exception('找不到此模板');
+    $usage = rvf_template_usage($db, $id);
+    if ($usage['instances'] > 0) {
+        throw new Exception('此模板已經有 ' . $usage['instances'] . ' 張表單在使用，不可刪除。若不希望再有人用它建立新表單，請改按「停用」（既有表單仍可查看與列印）。');
+    }
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM rf_template_maintainer_user WHERE template_id=?")->execute([$id]);
+        $db->prepare("DELETE FROM rf_template_version WHERE template_id=?")->execute([$id]);
+        $db->prepare("DELETE FROM rf_template WHERE id=?")->execute([$id]);
+        // AS 文件綁定存在 system_parameters(AS_DOC_BIND, review_form_tpl_<id>)，模板刪了那一列就是孤兒，一併清除。
+        $db->prepare("DELETE FROM system_parameters WHERE param_group=? AND param_key=?")
+           ->execute([EG_ASDOC_GROUP, rvf_asdoc_module($id)]);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw $e; }
+    rvf_template_audit($db, 'delete', $id, (string)$tpl['name'], [
+        'as_doc'      => $tpl['as_doc']['doc_no'] ?? '',
+        'versions'    => $usage['versions'],
+        'maintainers' => $usage['maintainers'],
+    ], $uid, $byName);
+    return $usage;
+}
+
 /* ============================================================ 表單（instance） ============================================================ */
 
 /** 有勾選「年度標題」的模板，建立表單時必須帶年度（西元年，內部一律存西元年，民國年只在顯示時換算），

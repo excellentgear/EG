@@ -325,9 +325,14 @@ function loadMeta(cb){
 function loadTemplates(cb){
     $.getJSON('../../src/store/ReviewForm_API.php', {action:'template_list'}, function(res){
         if (!res.ok) return;
+        /* 停用（archived）的模板：不可再用來建立新表單，但用它建立的既有表單照舊要看得到，
+           所以「篩選」下拉仍列出（標示已停用），只有「新增表單」的下拉排除。 */
         TEMPLATES = (res.templates||[]).filter(function(t){ return t.status==='active'; });
         var opts = TEMPLATES.map(function(t){ return '<option value="'+t.id+'">'+esc(t.name)+'</option>'; }).join('');
-        $('#tplFilter').html('<option value="0">全部</option>'+opts);
+        var filterOpts = (res.templates||[]).map(function(t){
+            return '<option value="'+t.id+'">'+esc(t.name)+(t.status==='archived'?'（已停用）':'')+'</option>';
+        }).join('');
+        $('#tplFilter').html('<option value="0">全部</option>'+filterOpts);
         $('#addTplSel').html(opts);
         if (cb) cb();
     });

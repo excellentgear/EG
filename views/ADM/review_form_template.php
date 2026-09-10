@@ -46,6 +46,15 @@ $perms = rvf_perms($db, $rvfUser);
         table.rf-tbl thead th { background:#F7E0BD; color:#5b3a1e; }
         .rf-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; }
         .tag-on { color:#7a5217; font-weight:bold; } .tag-off { color:#b0a390; }
+        /* 已停用的模板：整列淡化＋左側橘邊，一眼看得出來，但仍看得到內容（既有表單還在用它列印） */
+        table.rf-tbl tr.tpl-archived td { background:#FBF6EE; color:#8a7a66; }
+        table.rf-tbl tr.tpl-archived td:first-child { border-left:3px solid #F0A24B; }
+        .st-badge { display:inline-block; padding:1px 6px; border-radius:3px; font-size:11px; border:1px solid transparent; }
+        .st-active { background:#F7E0BD; color:#7a5217; border-color:#E0BE86; }
+        .st-archived { background:#EFE7DA; color:#8a6d45; border-color:#D8C6A8; }
+        .btn-del { color:#DD5138; }
+        /* 已被表單使用＝刪不掉，鈕標灰但仍可點（點下去會說明原因並引導改用「停用」） */
+        .btn-del-off { color:#b0a390; }
         .rf-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:1050; }
         .rf-modal { background:#fff; border-radius:8px; max-width:640px; margin:30px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
             max-height:90vh; display:flex; flex-direction:column; }
@@ -108,8 +117,8 @@ $perms = rvf_perms($db, $rvfUser);
         </div>
         <div class="rf-table-wrap">
         <table class="rf-tbl">
-            <thead><tr><th>模板名稱</th><th>綁定AS文件</th><th>紙張</th><th>審核</th><th>核准</th><th>維護部門</th><th style="width:200px;">操作</th></tr></thead>
-            <tbody id="tplBody"><tr><td colspan="7" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
+            <thead><tr><th>模板名稱</th><th>綁定AS文件</th><th>紙張</th><th>審核</th><th>核准</th><th>維護部門</th><th style="width:70px;">狀態</th><th style="width:280px;">操作</th></tr></thead>
+            <tbody id="tplBody"><tr><td colspan="8" style="text-align:center;color:#8a6d45;">載入中…</td></tr></tbody>
         </table>
         </div>
 <?php endif; ?>
@@ -294,11 +303,14 @@ $perms = rvf_perms($db, $rvfUser);
         <b>②-1 表格結構（直式標題／負責人欄）</b>：在「項次欄位定義」最上方可設定 ——「需要負責單位／負責人欄位」不勾就完全不出現該欄，也不會要求任何人簽名；「使用直式標題」勾起來後，表格最左欄改成模板預先定義好的<b>列標題</b>（取代讓使用者自己打字的「項目」欄），與上方橫式的欄位標題交叉成矩陣（＝SWOT／組織處境分析表那種版面），建立表單時自動產生這些列、使用者不可增刪，只能填交叉格的內容（每個列標題底下仍可用「＋小項」拆成多點）；左上角那格可填「欄的維度名稱」與「列的維度名稱」，會自動畫成斜線分隔的兩半（兩個都留空就只寫「項目」不畫斜線）。另外有兩個<b>可選的額外填寫區</b>（預設都關閉＝跟原本一樣）：勾「橫式標題下方再加一列」會在欄位標題那一列的下面多一列，每個欄位各一格、<b>整張表單只填一次</b>（不是逐列，適合填該欄的補充說明或分類）；勾「直式標題右側再加一欄」會在左側列標題的右邊多一個窄欄，<b>逐列各填一格</b>（紙本組織處境分析表左邊那個窄欄就是這個）。兩者都可以各自填一個標題文字，留空就是空白格。另外每個欄位的「標題」可各自設定<b>置中或靠左</b>、要不要<b>直書</b>（文字由上而下一字一行，欄寬可以很窄），左側列標題也有同樣的置中與直書選項；欄位表裡的「內容對齊」管的是格子內容、與標題各自獨立。<br>
         <b>③維護人員</b>：管理員或維護部門內主管可指派特定人員為「維護人員」，該名單與維護部門主管都能修改「項次欄位定義」，但不能改模板其他設定（AS文件綁定/審核/核准/維護部門本身）。<br>
         <b>④連動 AS 文件改版</b>：修改項次欄位定義存檔時可勾選「連動更新 AS 文件版次」，需上傳新版文件檔與文件制修申請單（有「免附件補登」權限者可免附件），存檔後立即生效成為現行版本；已建立的舊表單仍顯示建立當下的欄位定義，不受影響。
+        <b>⑤停用模板</b>（管理員）：不再使用的模板按「停用」，「建立/填寫表單」頁的模板下拉就不再列出它，沒有人能再用它開新表單；<b>已建立的表單完全不受影響</b>，照樣查得到、填得到、簽得了、印得出來（篩選下拉仍會列出並標示「已停用」）。停用是可逆的，隨時可按「啟用」放回去。<br>
+        <b>⑥刪除模板</b>（管理員）：<b>只有「一張表單都還沒建立過」的模板才刪得掉</b>。已經有表單在用的一律擋下——模板一刪，那些表單的欄位定義與列印表頭會全部失去對應而變成空白且無法復原，這種情況請改用「停用」。可刪除時會一併清掉該模板的項次欄位定義版本歷程、維護人員名單與 AS 文件綁定（<b>AS 文件本身不會被刪</b>，只是解除綁定，之後可綁到別的模板）。
         <h4>重要行為</h4>
         ・項次欄位定義改版是「存檔即生效」，不另設草稿。已建立的表單各自記錄自己建立當下對應的模板版本，欄位顯示不受之後改版影響。<br>
-        ・核准優先序解析到送出表單的本人時，會自動跳下一順位，不會球員兼裁判。
+        ・核准優先序解析到送出表單的本人時，會自動跳下一順位，不會球員兼裁判。<br>
+        ・按下「停用／刪除」的當下會重新向後端確認這個模板目前的表單筆數與狀態，所以別人剛用它建了表單也不會被誤刪；畫面顯示的數字若已過期會自動重新整理。
         <h4>設定入口</h4>
-        本頁清單「編輯設定」（管理員）／「編輯項次」（管理員或維護人員）。
+        本頁清單「編輯設定」（管理員）／「編輯項次」（管理員或維護人員）／「複製・停用・刪除」（管理員）。
         <h4>權限角色</h4>
         審核表單檢閱＝看清單；審核表單建立＝可到「建立/填寫表單」頁使用；模板管理＝本頁全部設定；管理者全權。
     </div>
@@ -435,17 +447,23 @@ function loadTemplates(){
         var h = '';
         TEMPLATES.forEach(function(t){
             var docTxt = t.as_doc ? (t.as_doc.doc_no + ' ' + t.as_doc.doc_name) : '<span class="tag-off">未綁定</span>';
-            h += '<tr><td>'+esc(t.name)+'</td><td>'+docTxt+'</td><td>'+t.paper_size+(t.orientation==='portrait'?'直式':'橫式')+'</td>'
+            var archived = (t.status === 'archived');
+            var used = parseInt(t.instance_count||0, 10);   // 已被幾張表單使用（>0 就刪不掉，鈕標灰但仍可點＝點了會說明原因）
+            h += '<tr'+(archived?' class="tpl-archived"':'')+'><td>'+esc(t.name)+'</td><td>'+docTxt+'</td><td>'+t.paper_size+(t.orientation==='portrait'?'直式':'橫式')+'</td>'
                + '<td>'+(t.need_review==1?'<span class="tag-on">需審核</span>':'<span class="tag-off">不需要</span>')+'</td>'
                + '<td>'+(t.need_approval==1?'<span class="tag-on">需核准</span>':'<span class="tag-off">不需要</span>')+'</td>'
                + '<td>'+(t.maintain_dept_id?deptName(t.maintain_dept_id):'<span class="tag-off">（未設定）</span>')+'</td>'
+               + '<td><span class="st-badge '+(archived?'st-archived':'st-active')+'">'+(archived?'已停用':'啟用中')+'</span>'
+               + (used>0 ? '<div style="font-size:11px;color:#8a6d45;margin-top:2px;">已建 '+used+' 張</div>' : '')+'</td>'
                + '<td>'
                + (META.perms.canAdmin ? '<button onclick="openSettingModal('+t.id+')" style="margin-right:4px;">編輯設定</button>' : '')
                + (t.can_edit_items ? '<button onclick="openSchemaModal('+t.id+')" style="margin-right:4px;">編輯項次</button>' : '')
-               + (META.perms.canAdmin ? '<button onclick="duplicateTemplate('+t.id+')">複製</button>' : '')
+               + (META.perms.canAdmin ? '<button onclick="duplicateTemplate('+t.id+')" style="margin-right:4px;">複製</button>' : '')
+               + (META.perms.canAdmin ? '<button onclick="setTemplateStatus('+t.id+','+(archived?'0':'1')+')" style="margin-right:4px;">'+(archived?'啟用':'停用')+'</button>' : '')
+               + (META.perms.canAdmin ? '<button class="'+(used>0?'btn-del-off':'btn-del')+'" title="'+(used>0?('已有 '+used+' 張表單使用，不可刪除（請改用「停用」）'):'刪除此模板')+'" onclick="deleteTemplate('+t.id+')">刪除</button>' : '')
                + '</td></tr>';
         });
-        $('#tplBody').html(h || '<tr><td colspan="7" style="text-align:center;color:#8a6d45;padding:10px;">尚未建立任何模板</td></tr>');
+        $('#tplBody').html(h || '<tr><td colspan="8" style="text-align:center;color:#8a6d45;padding:10px;">尚未建立任何模板</td></tr>');
     });
 }
 function deptName(id){ var d=(META.departments||[]).find(function(x){ return String(x.id)===String(id); }); return d?esc(d.name):''; }
@@ -459,6 +477,61 @@ function duplicateTemplate(id){
         loadTemplates();
         openSettingModal(res.id);
     }, 'json');
+}
+
+/* 停用／啟用模板（2026-09-10 新增）：停用後「建立/填寫表單」頁的模板下拉不再列出它（沒有人能再用它開新表單），
+   但既有表單完全不受影響——照樣看得到、填得到、印得出來，欄位定義各自吃自己建立當下的版本。 */
+function setTemplateStatus(id, toArchived){
+    tplUsage(id, function(u){
+        var isArchived = (u.status === 'archived');
+        if (isArchived === !!toArchived){ alert('此模板的狀態已被其他人變更，畫面已重新整理。'); loadTemplates(); return; }
+        var msg = toArchived
+            ? '確定要停用模板「'+u.name+'」？\n\n停用後沒有人能再用它建立新表單。\n目前已建立的 '+u.usage.instances+' 張表單不受影響（照樣可查看、填寫、簽名與列印），日後隨時可以再啟用。'
+            : '確定要重新啟用模板「'+u.name+'」？啟用後所有人可再用它建立新表單。';
+        if (!confirm(msg)) return;
+        $.post(API, {action:'template_set_status', csrf:META.csrf, id:id, status:(toArchived?'archived':'active')}, function(res){
+            if (!res.ok){ alert(res.error||'變更失敗'); loadTemplates(); return; }
+            loadTemplates();
+        }, 'json');
+    });
+}
+
+/* 刪除模板（2026-09-10 新增，僅管理員）：已經有表單用這個模板就一律擋下並引導改用「停用」——
+   rf_instance 只記 template_id 與建立當下的版本號，模板一刪那些表單的名稱／欄位定義／列印表頭全部查不到，
+   畫面不會報錯只會變空白，是救不回來的資料破壞。後端 rvf_template_delete() 用同一條規則再擋一次（鐵律8）。 */
+function deleteTemplate(id){
+    tplUsage(id, function(u){
+        if (u.usage.instances > 0){
+            alert('模板「'+u.name+'」已經有 '+u.usage.instances+' 張表單在使用，不可刪除。\n\n'
+                + '（刪掉模板會讓那些表單失去欄位定義與列印表頭，無法復原。）\n'
+                + '若不希望再有人用它建立新表單，請改按「停用」——既有表單仍可查看與列印。');
+            loadTemplates();
+            return;
+        }
+        var d = ['確定要刪除模板「'+u.name+'」？此動作無法復原。', ''];
+        d.push('・目前沒有任何表單使用此模板。');
+        d.push('・會一併刪除：項次欄位定義的版本歷程 '+u.usage.versions+' 筆、維護人員名單 '+u.usage.maintainers+' 人'+(u.as_doc?('、AS 文件綁定（'+u.as_doc+'）'):'')+'。');
+        d.push('・AS 文件本身不會被刪除，只是解除這個模板的綁定。');
+        if (!confirm(d.join('\n'))) return;
+        $.post(API, {action:'template_delete', csrf:META.csrf, id:id}, function(res){
+            if (!res.ok){ alert(res.error||'刪除失敗'); loadTemplates(); return; }
+            alert('已刪除模板「'+u.name+'」。');
+            loadTemplates();
+        }, 'json');
+    });
+}
+
+/* 點開即刷新（ai-rules/08 第六節）：停用／刪除一律先向後端要這個模板「當下」的使用筆數與狀態，
+   不可拿清單載入當時的快取判斷——別人剛用這個模板建了一張表單，照舊快取放行就會把它連同模板一起刪掉。 */
+function tplUsage(id, cb){
+    $.getJSON(API, {action:'template_usage', id:id}, function(res){
+        if (!res.ok){ alert(res.error||'讀取模板狀態失敗'); loadTemplates(); return; }
+        cb(res);
+    }).fail(function(xhr){
+        var m = ''; try { m = (JSON.parse(xhr.responseText)||{}).error; } catch(e){}
+        alert(m || '讀取模板狀態失敗，請重新整理頁面後再試。');
+        loadTemplates();
+    });
 }
 
 /* ============ 模板設定 ============ */

@@ -54,10 +54,17 @@ case 'meta': {
 
 case 'template_list': {
     $rows = rvf_template_list($db);
+    // 每個模板已被幾張表單使用（一次撈完，不逐筆查）；用途只有畫面上把「刪除」標灰＋寫明原因，
+    // 真正的放行與否一律在按下去當下重查（template_usage / rvf_template_delete），不採信這份快取。
+    $used = [];
+    foreach ($db->query("SELECT template_id, COUNT(*) c FROM rf_instance GROUP BY template_id")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+        $used[(int)$x['template_id']] = (int)$x['c'];
+    }
     foreach ($rows as &$r) {
         $r['schema'] = json_decode((string)$r['current_schema_json'], true) ?: [];
         $r['approver_chain'] = json_decode((string)$r['approver_chain_json'], true) ?: ['top_approver'];
         $r['can_edit_items'] = rvf_can_edit_items($db, $uid, $perms['canAdmin'], $r);
+        $r['instance_count'] = $used[(int)$r['id']] ?? 0;
     }
     jout(['templates'=>$rows]);
 }
@@ -131,6 +138,35 @@ case 'template_duplicate': {
     if (!rvf_template_get($db, $id)) jerr('找不到來源模板', 404);
     $newId = rvf_template_duplicate($db, $id, $uname);
     jout(['id'=>$newId, 'template'=>rvf_template_get($db, $newId)]);
+}
+
+/* 模板目前使用狀況：前端按「刪除／停用」的當下先打這支拿最新數字再決定要不要放行（ai-rules/08 第六節 點開即刷新），
+   不可只信清單載入當時的快取——別人剛用這個模板建了表單就會漏判。 */
+case 'template_usage': {
+    if (!$perms['canAdmin']) jerr('僅管理員可管理模板', 403);
+    $id = (int)($_GET['id'] ?? 0);
+    $t = rvf_template_get($db, $id);
+    if (!$t) jerr('找不到此模板（可能已被刪除），請重新整理頁面。', 404);
+    jout(['usage'=>rvf_template_usage($db, $id), 'name'=>$t['name'], 'status'=>$t['status'],
+          'as_doc'=>$t['as_doc'] ? ($t['as_doc']['doc_no'].' '.$t['as_doc']['doc_name']) : '']);
+}
+
+case 'template_set_status': {
+    rvf_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可停用/啟用模板', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    try { rvf_template_set_status($db, $id, (string)($_POST['status'] ?? ''), $uid, $uname); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['template'=>rvf_template_get($db, $id)]);
+}
+
+case 'template_delete': {
+    rvf_need_csrf();
+    if (!$perms['canAdmin']) jerr('僅管理員可刪除模板', 403);
+    $id = (int)($_POST['id'] ?? 0);
+    try { $usage = rvf_template_delete($db, $id, $uid, $uname); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['deleted'=>$usage]);
 }
 
 case 'maintainer_add': case 'maintainer_remove': {
