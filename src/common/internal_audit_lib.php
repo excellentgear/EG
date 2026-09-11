@@ -72,7 +72,20 @@ const IA_SETTING_KEYS  = [
     'ia_sign_review',
     'ia_meeting_pre_subject',
     'ia_meeting_end_subject',
+    'ia_case_remark_tpl',
 ];
+
+/**
+ * 稽核通知單「備註」的內建預設文字（＝紙本 2-GM-06-02 上印好的附註）。
+ * 只在**這個設定從來沒被存過**時才拿來當預設值（見 ia_settings）；
+ * 管理員一旦存過（含刻意存成空白），就一律以設定值為準，不可以再偷偷蓋回這段文字——
+ * 否則會出現「清空存檔後又自己跑回來」這種存了卻像沒存的症狀。
+ */
+const IA_CASE_REMARK_DEFAULT =
+      "1.稽核員以過程導向由稽核起始主過程開始循序完成所有相關過程；稽核項目除主過程外，應包含其相關管理及支援過程，但跳過自己的直接職務。\n"
+    . "2.主過程:客戶需求檢討→開發→訂單/合約審查→生產→倉儲出貨→客戶回饋\n"
+    . "　管理過程:包含但不限文件/記錄管理、人力資源訓練、不符合管理、資料分析、內部稽核、矯正/預防措施管理、持續改善、管理責任…等。\n"
+    . "　支援過程:包含但不限採購、供應商管理、IQC/FAI/IPQC/FQC、儀器/量具、機器/治具、生管、型態(鑑別追溯)、特殊特性…等。";
 
 /** 簽章格來源選項（核准／審查）。不寫死人名，一律由組織角色綁定即時解析 */
 const IA_SIGN_SOURCES = [
@@ -547,14 +560,20 @@ function ia_setting_decode($raw): string
 function ia_settings(PDO $db): array
 {
     $out = array_fill_keys(IA_SETTING_KEYS, '');
+    $has = [];
     try {
         $st = $db->prepare("SELECT param_key, param_value FROM system_parameters WHERE param_group=?");
         $st->execute([IA_SETTING_GROUP]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            if (array_key_exists($r['param_key'], $out)) $out[$r['param_key']] = ia_setting_decode($r['param_value']);
+            if (array_key_exists($r['param_key'], $out)) {
+                $out[$r['param_key']] = ia_setting_decode($r['param_value']);
+                $has[$r['param_key']] = true;
+            }
         }
     } catch (Throwable $e) {}
     if ($out['ia_remind_days'] === '') $out['ia_remind_days'] = '7';
+    // 從來沒設定過＝沿用紙本印好的那段附註；設定過就一律以設定值為準（存成空白＝不自動帶入）
+    if (empty($has['ia_case_remark_tpl'])) $out['ia_case_remark_tpl'] = IA_CASE_REMARK_DEFAULT;
     return $out;
 }
 

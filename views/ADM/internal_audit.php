@@ -426,7 +426,8 @@ $roleLabel = ia_role_label($perms);
 
         <h4>設定入口</h4>
         <ul>
-            <li><b>設定</b>（右上工具列，限內稽管理員）：七份表單各自的 AS 文件編號綁定、簽章圖章模板、核准／審查格的簽章人來源、到期提醒天數、會議主旨預設文字。</li>
+            <li><b>設定</b>（右上工具列，限內稽管理員）：七份表單各自的 AS 文件編號綁定、簽章圖章模板、核准／審查格的簽章人來源、到期提醒天數、會議主旨預設文字、<b>稽核通知單「備註」預設文字</b>。</li>
+            <li><b>稽核通知單的備註要怎麼改</b>：按「新增稽核通知單」時自動帶進備註欄的那段文字，內容在<b>設定 → 稽核通知單「備註」預設文字</b>（<b>全站只有一份</b>，限內稽管理員）。改了只影響<b>之後新增</b>的通知單，已經建好的舊單不會被改動；每一張單仍可各自修改自己的備註。整段清空並儲存＝新增時不帶備註，按「還原內建預設文字」可帶回紙本 2-GM-06-02 印好的附註。</li>
             <li><b>受稽單位</b>（右上工具列，限內稽管理員）：把多個部門綁成同一個受稽單位。</li>
             <li><b>稽核範本</b>（右上工具列，限內稽管理員）：預先設定「稽核起始主過程→受稽單位→稽核員／陪檢員從哪些部門挑」，填通知單時一列選一個就帶入。</li>
             <li><b>稽核員資格</b>（右上工具列，限內稽管理員）：稽核員／陪檢員的合格人員名單。</li>
@@ -474,6 +475,15 @@ $roleLabel = ia_role_label($perms);
                 <div><input type="text" id="setRemindDays" style="width:90px;"> 天（0～365；設 0＝只在逾期後提醒）
                      <div class="err-msg" id="errRemindDays"></div></div>
                 <label>&nbsp;</label><div></div>
+            </div>
+        </div>
+        <div class="ia-sec"><h5>稽核通知單「備註」預設文字</h5>
+            <div class="ia-hint">按「新增稽核通知單」時會把這段文字<b>自動帶進備註欄</b>（每一張單都還是可以各自改，改過的舊單不受影響）。
+                <b>整個清空並儲存＝新增時不帶任何備註</b>；按「還原內建預設文字」可以帶回紙本 2-GM-06-02 上印好的那段附註。</div>
+            <div><textarea id="setCaseRemark" rows="6" style="width:100%;" placeholder="留空＝新增通知單時不自動帶入備註"></textarea>
+                 <div class="err-msg" id="errCaseRemark"></div>
+                 <div style="margin-top:4px;"><button type="button" id="btnCaseRemarkDefault">還原內建預設文字</button>
+                      <span style="font-size:12px;color:#8a6d45;margin-left:6px;" id="setCaseRemarkCnt"></span></div>
             </div>
         </div>
         <div class="ia-sec"><h5>會議主旨預設文字</h5>
@@ -1320,11 +1330,10 @@ function openCase(id){
         clearErrs($('#caseMask')); openMask('caseMask');
     });
 }
+/* 新增通知單時自動帶入的備註＝設定跳窗裡管理員設的那一段（只有一個版本，全站共用）。
+   從來沒設定過時後端會回內建預設文字；管理員存成空白＝不自動帶入。 */
 function defaultCaseRemark(){
-    return '1.稽核員以過程導向由稽核起始主過程開始循序完成所有相關過程；稽核項目除主過程外，應包含其相關管理及支援過程，但跳過自己的直接職務。\n'
-         + '2.主過程:客戶需求檢討→開發→訂單/合約審查→生產→倉儲出貨→客戶回饋\n'
-         + '　管理過程:包含但不限文件/記錄管理、人力資源訓練、不符合管理、資料分析、內部稽核、矯正/預防措施管理、持續改善、管理責任…等。\n'
-         + '　支援過程:包含但不限採購、供應商管理、IQC/FAI/IPQC/FQC、儀器/量具、機器/治具、生管、型態(鑑別追溯)、特殊特性…等。';
+    return String(((META.settings||{}).ia_case_remark_tpl) || '');
 }
 /* 稽核員／陪檢員可多位（2026-08-27）：CASE_ROWS 上存的是職務鍵陣列 auditor_keys／escort_keys */
 function newCaseRow(){ return {auditor_keys:[], escort_keys:[]}; }
@@ -2110,7 +2119,9 @@ $('#btnSetting').on('click', function(){
     $('#setRemindDays').val(s.ia_remind_days||'7');
     $('#setMeetPre').val(s.ia_meeting_pre_subject||'');
     $('#setMeetEnd').val(s.ia_meeting_end_subject||'');
+    $('#setCaseRemark').val(s.ia_case_remark_tpl||'');
     clearErrs($('#settingMask'));
+    caseRemarkCnt();                       // clearErrs 之後才算，否則紅字會被清掉
     openMask('settingMask');
 });
 function pickAsDoc(key){
@@ -2142,16 +2153,32 @@ $('#setRemindDays').on('input', function(){
     var v = $(this).val().trim();
     fieldErr($(this), 'errRemindDays', (v==='' || (/^\d+$/.test(v) && +v<=365)) ? '' : '請填 0～365 的整數');
 });
+/* 備註預設文字：即時顯示字數並在超過上限當下就標紅（後端同規則再擋一次） */
+function caseRemarkCnt(){
+    var n = $('#setCaseRemark').val().replace(/\r\n/g,'\n').length;
+    $('#setCaseRemarkCnt').text('目前 '+n+' 字／上限 2000 字'+(n===0?'（空白＝新增通知單時不帶備註）':''));
+    fieldErr($('#setCaseRemark'), 'errCaseRemark', n>2000 ? '備註預設文字最多 2000 字' : '');
+    return n;
+}
+$('#setCaseRemark').on('input', caseRemarkCnt);
+$('#btnCaseRemarkDefault').on('click', function(){
+    var d = META.case_remark_default || '';
+    if (!d) { alert('讀不到內建預設文字，請重新整理頁面再試'); return; }
+    if ($('#setCaseRemark').val().trim() && !confirm('會覆蓋目前這段文字，確定還原成內建預設？')) return;
+    $('#setCaseRemark').val(d); caseRemarkCnt();
+});
 $('#btnSettingSave').on('click', function(){
     var v = $('#setRemindDays').val().trim();
     if (!(v==='' || (/^\d+$/.test(v) && +v<=365))) { fieldErr($('#setRemindDays'),'errRemindDays','請填 0～365 的整數'); return; }
+    if (caseRemarkCnt() > 2000) { $('#setCaseRemark').focus(); return; }
     var jobs = [
         ['ia_stamp_tpl_id',       $('#setStampTpl').val()],
         ['ia_sign_approve',       $('#setSignApprove').val()],
         ['ia_sign_review',        $('#setSignReview').val()],
         ['ia_remind_days',        v],
         ['ia_meeting_pre_subject',$('#setMeetPre').val()],
-        ['ia_meeting_end_subject',$('#setMeetEnd').val()]
+        ['ia_meeting_end_subject',$('#setMeetEnd').val()],
+        ['ia_case_remark_tpl',    $('#setCaseRemark').val().replace(/\r\n/g,'\n')]
     ];
     var done = 0, failed = '';
     jobs.forEach(function(j){

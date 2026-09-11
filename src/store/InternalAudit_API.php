@@ -130,6 +130,7 @@ case 'meta': {
         'perms'     => $perms,
         'role_label'=> ia_role_label($perms),
         'settings'  => $set,
+        'case_remark_default' => IA_CASE_REMARK_DEFAULT,   // 設定跳窗的「還原內建預設文字」用
         'sign_sources' => IA_SIGN_SOURCES,
         'nc_types'  => IA_NC_TYPES,
         'nc_stages' => IA_NC_STAGES,
@@ -163,6 +164,10 @@ case 'save_setting': {
     $v = (string)($_POST['value'] ?? '');
     if ($k === 'ia_remind_days') {
         if ($v !== '' && (!ctype_digit($v) || (int)$v > 365)) jerr('提醒天數請填 0~365 的整數');
+    }
+    if ($k === 'ia_case_remark_tpl') {
+        $v = str_replace("\r\n", "\n", $v);
+        if (mb_strlen($v) > 2000) jerr('備註預設文字最多 2000 字（目前 ' . mb_strlen($v) . ' 字）');
     }
     if (in_array($k, ['ia_sign_approve', 'ia_sign_review'], true) && !array_key_exists($v, IA_SIGN_SOURCES)) {
         jerr('不支援的簽章來源');
