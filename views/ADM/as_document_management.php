@@ -835,7 +835,8 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
         <h4><i class="fa fa-file-text-o" style="color:#3498db;"></i> <span id="recPaperTitle">填寫紀錄</span> <small id="recPaperInfo"></small></h4>
         <p class="text-muted" style="font-size:11.5px;margin:-4px 0 6px;">
           紙本／檔案上傳、表單簽核設計器（含補案件）、審核表單與已連結的電子化模組合併顯示，依日期新→舊排序；
-          線上簽核的表單只收<b>已完成</b>的。已完成者按「預覽」即可看到蓋好簽章後的樣貌。
+          線上簽核的表單只收<b>已完成</b>的。已完成者按「預覽」會<b>在本頁開跳窗</b>顯示蓋好簽章後的樣貌，
+          跳窗內可縮放（預設 100%，窗口放不下時自動縮到適合寬度）並直接列印，<b>列印出來永遠是原尺寸、不受畫面縮放影響</b>。
         </p>
         <div class="table-responsive">
           <table class="table table-condensed table-striped" style="font-size:12px;">
@@ -861,6 +862,45 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
         </div>
       </div>
       <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ 填寫紀錄「預覽」跳窗（2026-09-11 使用者要求：不要跳到別的頁面，就在本頁開跳窗看，
+     要能縮放、預設 100% 看得到完整內容、並且可以直接列印） ═════════ -->
+<div class="modal fade" id="recPvModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:96%;max-width:1400px;margin:16px auto;" role="document">
+    <div class="modal-content">
+      <div class="modal-header" style="padding:8px 14px;">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title" style="font-size:15px;">
+          <i class="fa fa-search-plus" style="color:#3498db;"></i> 預覽 － <span id="pvTitle"></span>
+        </h4>
+      </div>
+      <div class="modal-body" style="padding:8px 10px;">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+          <span id="pvZoomWrap" style="display:none;">
+            <button class="btn btn-xs btn-default" id="pvZoomOut" title="縮小"><i class="fa fa-minus"></i></button>
+            <span id="pvZoomTxt" style="display:inline-block;min-width:48px;text-align:center;font-size:12px;color:#5b3a1e;">100%</span>
+            <button class="btn btn-xs btn-default" id="pvZoomIn" title="放大"><i class="fa fa-plus"></i></button>
+            <button class="btn btn-xs btn-default" id="pvZoom100" style="margin-left:4px;">100%</button>
+            <button class="btn btn-xs btn-default" id="pvZoomFit">適合寬度</button>
+          </span>
+          <span id="pvNativeHint" style="display:none;font-size:11.5px;color:#8a6d45;">
+            <i class="fa fa-info-circle"></i> 這是 PDF／圖檔，縮放與列印請用檢視器自己的工具列（或按右邊的列印）。
+          </span>
+          <span style="margin-left:auto;"></span>
+          <button class="btn btn-xs btn-primary" id="pvPrint"><i class="fa fa-print"></i> 列印</button>
+          <a class="btn btn-xs btn-default" id="pvOpenNew" href="#" target="_blank"><i class="fa fa-external-link"></i> 新分頁開啟</a>
+          <a class="btn btn-xs btn-info" id="pvDownload" href="#" style="display:none;"><i class="fa fa-download"></i> 下載</a>
+        </div>
+        <div id="pvStage" style="overflow:auto;background:#ece5da;border:1px solid #E8D5B5;border-radius:4px;height:calc(100vh - 210px);min-height:320px;">
+          <div id="pvSizer" style="position:relative;width:100%;height:100%;">
+            <iframe id="pvFrame" style="position:absolute;left:0;top:0;width:100%;height:100%;border:0;background:#fff;"></iframe>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="padding:6px 14px;"><button type="button" class="btn btn-default btn-sm" data-dismiss="modal">關閉</button></div>
     </div>
   </div>
 </div>
@@ -3726,9 +3766,13 @@ $(function(){
       const docIdNow = $('#rec_doc_id').val();
       const tb=$('#recPaperBody').empty();
       (r.records||[]).forEach(x=>{
+        // 預覽一律在本頁的跳窗內開（2026-09-11 使用者要求）：不跳去別的頁面、可縮放、可直接列印。
+        // pvOpen(來源型態, 網址, 標題, 下載網址)；'html'＝可縮放的排版預覽，'file'＝PDF／圖檔交給瀏覽器檢視器。
+        const pv = (kind,url,dl)=>`<button class="btn btn-xs btn-default rec-pv" data-kind="${kind}" data-url="${esc(url)}"`
+          + (dl?` data-dl="${esc(dl)}"`:'') + ` data-title="${esc(x.src_name+'｜'+(x.title||''))}">預覽</button> `;
         let op='';
         if(x.src==='paper'){
-          op  = `<a class="btn btn-xs btn-default" href="${API}?action=form_record_download&id=${x.id}&inline=1" target="_blank">預覽</a> `;
+          op  = pv('file', `${API}?action=form_record_download&id=${x.id}&inline=1`, canDL?`${API}?action=form_record_download&id=${x.id}`:'');
           if(canDL) op += `<a class="btn btn-xs btn-info" href="${API}?action=form_record_download&id=${x.id}">下載</a> `;
           if(canD)  op += `<button class="btn btn-xs btn-danger rec-del" data-id="${x.id}">刪</button>`;
         } else if(x.src==='fsd'){
@@ -3736,17 +3780,17 @@ $(function(){
           // 後端自己產不出來，所以還沒產生過的（多半是早期補登的案件）預覽改成開案件頁——那頁開啟時
           // 本來就會自動補產一份，畫面上同樣看得到蓋好章的樣子。
           if(x.can_preview){
-            op  = `<a class="btn btn-xs btn-default" href="${API}?action=form_record_fsd_pdf&doc_id=${docIdNow}&case_id=${x.id}" target="_blank">預覽</a> `;
-            if(canDL) op += `<a class="btn btn-xs btn-info" href="${API}?action=form_record_fsd_pdf&doc_id=${docIdNow}&case_id=${x.id}&dl=1">下載</a> `;
+            const u = `${API}?action=form_record_fsd_pdf&doc_id=${docIdNow}&case_id=${x.id}`;
+            op  = pv('file', u, canDL ? (u+'&dl=1') : '');
+            if(canDL) op += `<a class="btn btn-xs btn-info" href="${u}&dl=1">下載</a> `;
             op += `<a class="btn btn-xs btn-link" href="${esc(x.open_url)}" target="_blank">開啟案件</a>`;
           } else {
             op  = `<a class="btn btn-xs btn-default" href="${esc(x.open_url)}" target="_blank" `
                 + `title="這一件還沒產生過簽章後的 PDF，開啟案件時會自動補產一份，之後這裡就會直接是 PDF 預覽">預覽（開啟案件）</a>`;
           }
         } else if(x.src==='rvf'){
-          // 審核表單沒有存起來的 PDF（列印是前端即時產生的），預覽＝開該筆表單的列印版面
-          op  = `<a class="btn btn-xs btn-default" href="${esc(x.open_url)}&print=1" target="_blank">預覽</a> `;
-          op += `<a class="btn btn-xs btn-link" href="${esc(x.open_url)}" target="_blank">開啟表單</a>`;
+          // 審核表單沒有存起來的 PDF（列印是前端即時產生的），預覽＝在跳窗內嵌一個「整頁只有列印版面」的頁面
+          op  = pv('html', `${esc(x.open_url)}&print=1`);
         } else if(x.open_url){
           op  = `<a class="btn btn-xs btn-link" href="${esc(x.open_url)}" target="_blank">前往模組頁</a>`;
         }
@@ -3770,6 +3814,96 @@ $(function(){
       $('#recUploadBlock').toggle(canRecUp);
     });
   }
+  /* ── 填寫紀錄的「預覽」跳窗（縮放／列印／新分頁／下載）──
+     兩種來源型態：
+       file＝PDF 或圖檔，交給瀏覽器內建檢視器（它自己就有縮放與列印工具列），我們不另外套縮放——
+             對 PDF 檢視器做 CSS 縮放會連它的工具列一起放大，反而更難用。
+       html＝審核表單那種「整頁只有列印版面」的頁面，同源所以量得到真正的紙張寬高，由我們做縮放。
+     縮放是把 iframe 元素本身 transform:scale，**不動 iframe 裡的文件**，所以按「列印」印出來的
+     永遠是原尺寸，不會被畫面上的縮放比例影響。transform 不佔版面，另用 pvSizer 撐出捲動範圍。 */
+  const PV = {kind:'', zoom:1, natW:0, natH:0};
+  function pvApplyZoom(){
+    const $f=$('#pvFrame'), $sz=$('#pvSizer');
+    if(PV.kind!=='html' || !PV.natW){
+      $f.css({width:'100%',height:'100%',transform:'none'}); $sz.css({width:'100%',height:'100%'});
+      return;
+    }
+    $f.css({width:PV.natW+'px', height:PV.natH+'px', transform:'scale('+PV.zoom+')', transformOrigin:'0 0'});
+    $sz.css({width:Math.ceil(PV.natW*PV.zoom)+'px', height:Math.ceil(PV.natH*PV.zoom)+'px'});
+    $('#pvZoomTxt').text(Math.round(PV.zoom*100)+'%');
+  }
+  function pvFitWidth(){
+    if(PV.kind!=='html'||!PV.natW) return;
+    PV.zoom = Math.max(0.2, Math.min(3, ($('#pvStage').width()-4)/PV.natW));
+    pvApplyZoom();
+  }
+  function pvOpen(kind, url, title, dlUrl){
+    PV.kind=kind; PV.zoom=1; PV.natW=0; PV.natH=0;
+    $('#pvTitle').text(title||'');
+    $('#pvZoomWrap').toggle(kind==='html');
+    $('#pvNativeHint').toggle(kind!=='html');
+    $('#pvOpenNew').attr('href', url);
+    $('#pvDownload').attr('href', dlUrl||'#').toggle(!!dlUrl);
+    $('#pvZoomTxt').text('100%');
+    $('#pvFrame').css({width:'100%',height:'100%',transform:'none'});
+    $('#pvSizer').css({width:'100%',height:'100%'});
+    $('#pvFrame').attr('src', url);
+    $('#recPvModal').modal('show');
+  }
+  /* 量紙張的實際寬高——**不能在 iframe 的 load 事件當下量**：那一支預覽頁是先跟後端要資料、
+     拿到之後才用 document.write 把整頁換成列印版面的，load 事件觸發時裡面根本還沒有內容
+     （實測量到的是跳窗本身的寬度 1376，於是縮放整個失效、按鈕按了也沒反應）。
+     改成輪詢到「.pt-head 真的畫出來了」才量，並且繼續多量幾次——版面裡的欄位標題會自動縮字，
+     高度在那之後才定案。 */
+  let pvPollTimer = null;
+  function pvMeasure(tries, first){
+    if(PV.kind!=='html') return;
+    const f=document.getElementById('pvFrame');
+    let d=null; try { d = f.contentDocument; } catch(e){ d = null; }   // 同源才量得到；量不到就維持滿版
+    const ready = !!(d && d.body && d.body.querySelector('.pt-head'));
+    if(ready){
+      // 寬高一律量 **body**：預覽頁的 body 就是「一張紙」（寬度已用 mm 釘死），
+      // 而 <html> 會被 iframe 撐滿，拿 documentElement 會量到跳窗自己的寬度（實測 1361 而不是 A4 的 1123）。
+      const w = d.body.scrollWidth || 0;
+      const h = Math.max(d.body.scrollHeight || 0, d.body.offsetHeight || 0);
+      if(w>0 && h>0 && (w!==PV.natW || h!==PV.natH)){
+        PV.natW = w; PV.natH = h;
+        if(first){
+          // 預設 100%（使用者要求）；只有紙張寬到這個跳窗放不下時才自動縮到「適合寬度」，避免一開啟就被切掉
+          const stageW = $('#pvStage').width()-4;
+          PV.zoom = (w <= stageW) ? 1 : Math.max(0.2, stageW/w);
+          first = false;
+        }
+        pvApplyZoom();
+      } else if (w>0) { first = false; }
+    }
+    if(tries>0) pvPollTimer = setTimeout(()=>pvMeasure(tries-1, first), 200);
+  }
+  $('#pvFrame').on('load', function(){
+    if(pvPollTimer){ clearTimeout(pvPollTimer); pvPollTimer=null; }
+    if(PV.kind==='html') pvMeasure(40, true);   // 最多量 8 秒
+  });
+  $('#pvZoomIn').on('click', ()=>{ PV.zoom=Math.min(3, Math.round((PV.zoom+0.1)*100)/100); pvApplyZoom(); });
+  $('#pvZoomOut').on('click', ()=>{ PV.zoom=Math.max(0.2, Math.round((PV.zoom-0.1)*100)/100); pvApplyZoom(); });
+  $('#pvZoom100').on('click', ()=>{ PV.zoom=1; pvApplyZoom(); });
+  $('#pvZoomFit').on('click', pvFitWidth);
+  $('#pvPrint').on('click', function(){
+    const f=document.getElementById('pvFrame');
+    try { f.contentWindow.focus(); f.contentWindow.print(); }
+    catch(e){ window.open($('#pvOpenNew').attr('href'), '_blank'); }   // 跨來源印不動就改開新分頁讓使用者自己印
+  });
+  $('#recPaperBody').on('click','.rec-pv', function(){
+    const $b=$(this);
+    pvOpen($b.data('kind'), $b.data('url'), $b.data('title'), $b.data('dl')||'');
+  });
+  // 疊在「填寫紀錄」跳窗上面：關掉上層時 Bootstrap 會把 body 的 modal-open 一起拿掉，
+  // 下層跳窗就變成整頁可捲動。手動補回去，維持原本的行為。
+  $('#recPvModal').on('hidden.bs.modal', function(){
+    if(pvPollTimer){ clearTimeout(pvPollTimer); pvPollTimer=null; }
+    $('#pvFrame').attr('src','about:blank');
+    if($('#recordModal').hasClass('in')) $('body').addClass('modal-open');
+  });
+
   $('#docTableBody').on('click','.op-record', function(){
     $('#rec_doc_id').val($(this).data('id'));
     $('#rec_files').val(''); $('#recUploadRows').empty(); $('#recUploadSubmit').hide(); $('#recUploadResult').empty();

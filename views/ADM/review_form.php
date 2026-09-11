@@ -188,8 +188,9 @@ $perms = rvf_perms($db, $rvfUser);
         ・草稿只有填表人本人能刪除；已送出（含已完成）的表單一般人不可刪除，僅管理員能刪（會連同審核/核准紀錄一併移除，無法復原）。<br>
         ・審核/核准為 OR-gate：合格名單中任一人處理即完成該關，其餘人之後看到的會是唯讀狀態。<br>
         ・核准人解析到送出表單的本人時會自動跳下一順位，不會球員兼裁判。<br>
-        ・<b>已完成的表單會自動出現在「AS 文件管理」的填寫紀錄裡</b>：只要模板有綁定 AS 文件編號（在「模板管理」設定），該模板<b>已完成</b>的表單就會列進那份文件的填寫紀錄（依建立日期新→舊）；在那裡按「預覽」會開啟本頁並直接顯示<b>蓋好簽章後的列印版面</b>（上方有「列印」鈕）。草稿與進行中的不會出現。<br>
-        ・上面那個預覽是<b>唯讀</b>的：具「AS 文件檢閱」權限的人即使不是填表人本人，也看得到這些已完成表單的內容（因為填寫紀錄本來就列得到它）；<b>編輯／送出／審核／核准／刪除的權限完全沒有放寬</b>，仍然只有填表人本人或合格簽核人做得到。
+        ・<b>已完成的表單會自動出現在「AS 文件管理」的填寫紀錄裡</b>：只要模板有綁定 AS 文件編號（在「模板管理」設定），該模板<b>已完成</b>的表單就會列進那份文件的填寫紀錄（依建立日期新→舊）；在那裡按「預覽」會<b>在 AS 文件管理那一頁的跳窗內</b>顯示這張表單<b>蓋好簽章後的列印版面</b>（可縮放、可直接列印），不會跳到本頁來。草稿與進行中的不會出現。<br>
+        ・上面那個預覽是<b>唯讀</b>的：具「AS 文件檢閱」權限的人即使不是填表人本人，也看得到這些已完成表單的內容（因為填寫紀錄本來就列得到它）；<b>編輯／送出／審核／核准／刪除的權限完全沒有放寬</b>，仍然只有填表人本人或合格簽核人做得到。<br>
+        ・預覽用的網址是 <code>review_form.php?inst_id=N&amp;print=1</code>，這個模式下<b>整頁就只有那一張表單</b>——不畫側欄、清單、工具列與任何按鈕，所以它不會變成一個「從填寫紀錄跳進審核表單」的入口。看得到哪一筆仍由後端逐筆判定，改網址換一個編號一樣會被擋。
         <h4>權限角色</h4>
         審核表單檢閱＝看清單（僅看自己建立的）；檢視全部＝看全部人建立的表單；審核表單建立＝新增/填寫/送出；模板管理＝可另到「模板管理」頁設定；管理者全權。
     </div>
@@ -402,9 +403,15 @@ function loadList(){
 }
 
 /* ============ 檢視/編輯 ============ */
-function openView(id, cb){
-    $.getJSON(API, {action:'instance_get', id:id}, function(res){
-        if (!res.ok){ alert(res.error||'載入失敗'); return; }
+/* onErr 有值＝這一頁是被 AS 文件管理的「預覽」跳窗用 iframe 內嵌的。此時：
+   ①錯誤原因直接畫在畫面上，不跳 alert ②同時關掉這個請求的全域 ajaxError（global:false）——
+   後端的「無權檢視」是用 **HTTP 403** 回的，$.getJSON 根本不會進 success，只會觸發上面那個全域
+   ajaxError 跳一句無關的「連線或伺服器發生錯誤」；而在 iframe 裡跳 alert 會把整個分頁卡住
+   （2026-09-11 實測：無頭瀏覽器直接鎖死到連 CDP 都沒有回應）。 */
+function openView(id, cb, onErr){
+    $.ajax({url:API, data:{action:'instance_get', id:id}, dataType:'json', global: !onErr})
+     .done(function(res){
+        if (!res.ok){ if (onErr) { onErr(res.error||'載入失敗'); return; } alert(res.error||'載入失敗'); return; }
         CUR = res.instance; CUR_SCHEMA = res.schema; CUR.tpl = res.template;
         CUR.as_doc_no = res.as_doc_no; CUR.company_name = res.company_name;
         CUR.review = res.review; CUR.approval = res.approval; CUR.can_review = res.can_review; CUR.can_approve = res.can_approve;
@@ -422,7 +429,13 @@ function openView(id, cb){
         renderView();
         openMask('viewMask');
         if (cb) cb();
-    });
+     })
+     .fail(function(xhr){
+        if (!onErr) return;                       // 沒有 onErr＝一般頁面，全域 ajaxError 已經會提示，不重複跳
+        var msg = '';
+        try { msg = (JSON.parse(xhr.responseText) || {}).error || ''; } catch(e){}
+        onErr(msg || '載入失敗');
+     });
 }
 var HEAD_DATA = {};
 function isDraftMine(){ return CUR.status==='draft' && String(CUR.created_by)===String(META.uid); }
@@ -866,6 +879,15 @@ function rfPrintDocHtml(title, bodyHtml, extraCss, docNo, paper, landscape, auto
             + '.pt-head .yr{font-size:13px;color:#333;}.pt-head .yr-left{position:absolute;left:0;top:50%;transform:translateY(-50%);}.pt-head .yr-right{position:absolute;right:0;top:50%;transform:translateY(-50%);}.pt-head .yr-center{margin-top:3px;}'
             + '.rf-as-doc{position:fixed;right:8mm;bottom:6mm;font-size:9pt;color:#333;}'
             + (extraCss||'');
+    // 純預覽模式（autoPrint=false）：螢幕上把 body 排成「一張實際紙張」——寬度＝紙張寬、內距＝@page 的邊界。
+    // 這樣外面的跳窗量到的 scrollWidth 就是真正的紙張寬度，100% 縮放看到的大小＝印出來的大小。
+    // 全部包在 @media screen 內，列印時完全不生效，不會影響真正印出來的版面。
+    if (!autoPrint) {
+        var pw = (paper === 'A3') ? (landscape ? 420 : 297) : (landscape ? 297 : 210);
+        css += '@media screen{html{background:#ece5da;}'
+             + 'body{position:relative;width:' + pw + 'mm;margin:0 auto;padding:12mm 8mm 16mm;box-sizing:border-box;background:#fff;}'
+             + '.rf-as-doc{position:absolute;right:8mm;bottom:6mm;}}';
+    }
     // <!DOCTYPE html> 不可省略：少了它視窗會落入 Quirks Mode，<body> 內容不滿版時會被撐滿整個視窗高度
     // （document.body.scrollHeight 量出來永遠接近視窗高度而非實際內容高度），下面靠 scrollHeight 判斷單頁/多頁
     // 的頁碼顯示邏輯會失準，導致只有一頁的文件也顯示「第1頁／共1頁」（2026-08-14 使用者實測回報、絕對禁止；
@@ -1086,39 +1108,42 @@ function initPreview(){
     } else openPreview(null, '');
 }
 /* ============ 由 AS 文件管理「填寫紀錄」點進來 ============
-   ?inst_id=N        直接開這一筆表單的檢視視窗
-   ?inst_id=N&print=1 另外把「列印版面」畫在畫面最上層（＝已簽章完成後的樣貌）
-   刻意不用 window.open：不是使用者點擊觸發的開新視窗會被彈出視窗封鎖直接擋掉，
-   使用者只會看到「按了預覽什麼都沒發生」。改成同一頁蓋一層 iframe，內容與列印版一模一樣，
-   上方留一顆「列印」按鈕（那才是使用者點擊，print() 一定叫得出來）。 */
+   ?inst_id=N          直接開這一筆表單的檢視視窗（原本的頁面，權限照舊）
+   ?inst_id=N&print=1  **整頁就只有列印版面**（已簽章完成後的樣貌），不畫側欄、清單、工具列與任何按鈕。
+
+   為什麼做成「整頁只有預覽」而不是蓋一層：這支網址是給 AS 文件管理的「填寫紀錄」跳窗用 iframe 內嵌的，
+   縮放、列印、關閉一律由那邊的跳窗工具列提供（2026-09-11 使用者要求）。同時這也讓「從填寫紀錄點預覽」
+   不會變成一個跳進審核表單頁面的入口——這個模式下什麼都點不到，只看得到那一張表單本身。
+   內容與真正列印時用的是同一份 HTML（rfPrintDocHtml），版面不會走鐘。 */
 var Q_INST_ID = parseInt(new URLSearchParams(location.search).get('inst_id'), 10) || 0;
 var Q_PRINT   = (new URLSearchParams(location.search).get('print') === '1');
-function rfOpenPrintPreview(){
+function rfRenderPrintOnlyPage(){
     if (!CUR || !CUR.tpl) return;
     var t = CUR.tpl;
     var html = rfPrintDocHtml(t.name, rfPrintBodyHtml(), rfCss(), CUR.as_doc_no,
                               t.paper_size, t.orientation !== 'portrait', false);
-    $('#rfPvWrap').remove();
-    var $w = $('<div id="rfPvWrap"></div>').css({position:'fixed', inset:0, background:'#6b4a24', zIndex:2000,
-                                                 display:'flex', flexDirection:'column'});
-    var $bar = $('<div></div>').css({padding:'8px 12px', background:'#F7E0BD', color:'#5b3a1e',
-                                     display:'flex', gap:'8px', alignItems:'center', fontSize:'13px'});
-    $bar.append($('<b></b>').text('列印預覽（已簽章後的樣貌） — ' + (CUR.tpl.name || '')));
-    var $print = $('<button>列印</button>').css({marginLeft:'auto', height:'28px', padding:'0 14px', cursor:'pointer',
-                                                 border:'1px solid #d98a33', borderRadius:'4px', background:'#F0A24B', color:'#fff'});
-    var $close = $('<button>關閉預覽</button>').css({height:'28px', padding:'0 14px', cursor:'pointer',
-                                                 border:'1px solid #D8BE93', borderRadius:'4px', background:'#fff', color:'#5b3a1e'});
-    var $frame = $('<iframe></iframe>').css({flex:'1 1 auto', width:'100%', border:'0', background:'#fff'});
-    $print.on('click', function(){ try { $frame[0].contentWindow.focus(); $frame[0].contentWindow.print(); } catch(e){} });
-    $close.on('click', function(){ $w.remove(); });
-    $w.append($bar.append($print).append($close)).append($frame).appendTo('body');
-    $frame.attr('srcdoc', html);
+    // 用整份文件取代目前這一頁：iframe 裡量到的寬高就是「這張紙的實際尺寸」，外面才好算縮放比例
+    document.open(); document.write(html); document.close();
 }
 if (PREVIEW_MODE) loadMeta(initPreview);
+else if (Q_INST_ID && Q_PRINT) {
+    // 只預覽：不載模板清單、不載表單清單，畫面上不會出現任何可以點去別的地方的東西
+    loadMeta(function(){
+        openView(Q_INST_ID, rfRenderPrintOnlyPage, function(msg){
+            // 這一頁是被 AS 文件管理的預覽跳窗用 iframe 內嵌的，跳 alert 會卡在跳窗裡面很難關，
+            // 改成直接把原因寫在畫面上（例：沒有權限看這一筆、或這筆已被刪除）。
+            document.body.innerHTML = '';
+            var d = document.createElement('div');
+            d.style.cssText = 'padding:28px;font-family:"Microsoft JhengHei",sans-serif;color:#8a5a2b;font-size:14px;';
+            d.textContent = msg || '載入失敗';
+            document.body.appendChild(d);
+        });
+    });
+}
 else loadMeta(function(){
     loadTemplates(function(){
         loadList();
-        if (Q_INST_ID) openView(Q_INST_ID, function(){ if (Q_PRINT) rfOpenPrintPreview(); });
+        if (Q_INST_ID) openView(Q_INST_ID);
     });
 });
 </script>
