@@ -346,6 +346,15 @@ body { background:var(--bg); }
 .pt-group-item .pt-del  { color:#e74c3c; cursor:pointer; padding:0 3px; visibility:hidden; }
 .pt-group-item .pt-edit { color:#337ab7; cursor:pointer; padding:0 3px; visibility:hidden; }
 .pt-group-item .pt-move { color:#8a5a2b; cursor:pointer; padding:0 3px; visibility:hidden; }
+/* 填變數跳窗的「選項按鈕」（←→ 移動、Enter 確定；移到哪個就是選哪個） */
+.ntv-opts { display:flex; flex-wrap:wrap; gap:6px; margin-top:3px; }
+.ntv-opt {
+    border:1px solid #D8C7B0; background:#fff; color:#5B4636; border-radius:4px;
+    padding:6px 16px; font-size:14px; line-height:1.2; cursor:pointer;
+}
+.ntv-opt:hover { background:#FFF3E0; }
+.ntv-opt:focus { outline:none; border-color:#C1811F; box-shadow:0 0 0 2px rgba(193,129,31,.30); }
+.ntv-opt.active { background:#F0A24B; border-color:#C1811F; color:#fff; font-weight:700; }
 /* 設定跳窗內容過長時在跳窗內部捲動，不要把整個跳窗撐得比螢幕還高（底下的內容與按鈕會看不到、也點不到） */
 #quoteSettingsModal > .modal-dialog > .modal-content > .modal-body > .tab-content {
     max-height: calc(100vh - 215px); overflow-y: auto;
@@ -1430,6 +1439,8 @@ body { background:var(--bg); }
       <div style="font-size:11px;color:#8a5a2b;background:#FFF8ED;border:1px solid #E4D3BC;border-radius:3px;padding:5px 8px;margin-bottom:10px;line-height:1.7;">
         設定之後，在報價單裡<strong>點選這個製程標籤</strong>就會把下面的備註帶入<strong>該列的「料號備註」</strong>欄位。<br>
         有 <code>{變數}</code> 的話會先跳出視窗請使用者填值；取消勾選這個標籤時，帶入的那一段會自動移除。<br>
+        每個變數可設<strong>防呆</strong>（只能填數字／只能填文字／必須大於小於等於「另一個變數」或「固定值」，例：外徑必須大於內孔、外徑小於 1000），
+        也可以設成<strong>選項按鈕</strong>（例：旋向＝RH,LH）。填值時 <b>↑↓</b> 換欄位（自動全選）、<b>←→</b> 切換選項、<b>Enter</b> 下一欄／送出。<br>
         <strong>留空存檔＝這個標籤不帶備註</strong>（行為與現在完全相同）。料號備註欄位上限 100 字。
       </div>
       <div class="form-group">
@@ -2457,34 +2468,108 @@ function loadPartLabels(cb) {
     });
 }
 
+// 防呆條件的運算子（前端顯示用；後端 qtag_clean_note_vars 有同一份白名單）
+const NTV_OPS = [['>','大於'],['>=','大於等於'],['<','小於'],['<=','小於等於'],['=','等於'],['!=','不等於']];
+
 function buildNtmplVarRow(v) {
     const key      = v ? escapeHtml(v.key||'') : '';
     const hint     = v ? escapeHtml(v.hint||'') : '';
     const vtype    = v ? (v.var_type||'text') : 'text';
     const labelId  = v ? (v.label_id||'') : '';
+    const itype    = (v && v.input_type) ? v.input_type : 'any';
+    const optsTxt  = (v && Array.isArray(v.options)) ? escapeHtml(v.options.join(',')) : '';
+    const rules    = (v && Array.isArray(v.rules)) ? v.rules : [];
     const isLabel  = vtype === 'label_pick';
+    const isChoice = vtype === 'choice';
     // 標籤選擇器 options（同步建立時可能還沒有資料，改用 data-label-id 動態載入）
-    return `<div class="ntmpl-var-row" style="display:flex;gap:4px;margin-bottom:4px;align-items:flex-start;flex-wrap:wrap;">
+    return `<div class="ntmpl-var-row" style="margin-bottom:6px;padding-bottom:4px;border-bottom:1px dotted #eee;">
+      <div style="display:flex;gap:4px;align-items:flex-start;flex-wrap:wrap;">
         <span style="color:#888;font-size:13px;padding-top:4px;">{</span>
         <input type="text" class="form-control input-sm ntmpl-var-key" style="width:55px;" placeholder="變數名" maxlength="20" value="${key}">
         <span style="color:#888;font-size:13px;padding-top:4px;">}</span>
         <select class="form-control input-sm ntmpl-var-type" style="width:100px;" onchange="onNtmplVarTypeChange(this)">
             <option value="text"       ${vtype==='text'       ?'selected':''}>文字輸入</option>
-            <option value="label_pick" ${vtype==='label_pick' ?'selected':''}>料號標籤選</option>
+            <option value="choice"     ${isChoice             ?'selected':''}>選項按鈕</option>
+            <option value="label_pick" ${isLabel              ?'selected':''}>料號標籤選</option>
         </select>
-        <input type="text" class="form-control input-sm ntmpl-var-hint" style="flex:1;min-width:80px;${isLabel?'display:none;':''}" placeholder="提示文字" maxlength="30" value="${hint}">
+        <input type="text" class="form-control input-sm ntmpl-var-hint" style="flex:1;min-width:80px;${isLabel?'display:none;':''}" placeholder="顯示名稱（例：旋向）" maxlength="30" value="${hint}">
         <select class="form-control input-sm ntmpl-var-label" style="flex:1;min-width:100px;${!isLabel?'display:none;':''}" data-selected="${labelId}">
             <option value="">載入中...</option>
         </select>
-        <button type="button" class="btn btn-xs btn-danger" onclick="$(this).closest('.ntmpl-var-row').remove()">
+        <button type="button" class="btn btn-xs btn-danger" onclick="$(this).closest('.ntmpl-var-row').remove();ntmplRefreshRuleRefs(this)">
+            <i class="fa fa-times"></i>
+        </button>
+      </div>
+      <div class="ntmpl-var-adv" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin:4px 0 0 14px;">
+        <span style="font-size:11px;color:#8a5a2b;">防呆</span>
+        <select class="form-control input-sm ntmpl-var-input-type" style="width:104px;font-size:11px;${isChoice||isLabel?'display:none;':''}">
+            <option value="any"    ${itype==='any'   ?'selected':''}>不限數字文字</option>
+            <option value="number" ${itype==='number'?'selected':''}>只能填數字</option>
+            <option value="text"   ${itype==='text'  ?'selected':''}>只能填文字</option>
+        </select>
+        <input type="text" class="form-control input-sm ntmpl-var-options" style="flex:1;min-width:140px;font-size:11px;${isChoice?'':'display:none;'}"
+               placeholder="選項，用逗號分隔（例：RH,LH）" value="${optsTxt}">
+        <button type="button" class="btn btn-xs btn-default" style="font-size:10px;" onclick="addNtmplRule(this)">
+            <i class="fa fa-plus"></i> 條件
+        </button>
+        <div class="ntmpl-var-rules" style="width:100%;">${rules.map(r => buildNtmplRuleRow(r)).join('')}</div>
+      </div>
+    </div>`;
+}
+function buildNtmplRuleRow(r) {
+    r = r || {};
+    const op  = r.op || '>';
+    const ref = r.ref ? escapeHtml(r.ref) : '';
+    const val = (r.value != null) ? escapeHtml(String(r.value)) : '';
+    return `<div class="ntmpl-rule-row" style="display:flex;gap:4px;align-items:center;margin-top:3px;">
+        <span style="font-size:11px;color:#888;">必須</span>
+        <select class="form-control input-sm ntmpl-rule-op" style="width:92px;font-size:11px;">
+            ${NTV_OPS.map(o => `<option value="${o[0]}" ${op===o[0]?'selected':''}>${o[1]}</option>`).join('')}
+        </select>
+        <select class="form-control input-sm ntmpl-rule-ref" style="width:118px;font-size:11px;" data-selected="${ref}"
+                onchange="$(this).closest('.ntmpl-rule-row').find('.ntmpl-rule-val').toggle(!this.value);">
+            <option value="">固定值 →</option>
+        </select>
+        <input type="text" class="form-control input-sm ntmpl-rule-val" style="width:90px;font-size:11px;${ref?'display:none;':''}"
+               placeholder="例：1000" value="${val}">
+        <button type="button" class="btn btn-xs btn-default" style="font-size:10px;" onclick="$(this).closest('.ntmpl-rule-row').remove()">
             <i class="fa fa-times"></i>
         </button>
     </div>`;
 }
+// 條件的「比較對象」下拉＝同一份清單裡的其他變數；變數名一改就要重新長出來，
+// 否則會留著一個指到舊名字的條件，畫面上看不出錯、實際永遠比不出結果。
+function ntmplRefreshRuleRefs(anyEl) {
+    const $list = $(anyEl).closest('#ntmpl-vars-list, #ptn-vars-list');
+    const $scope = $list.length ? $list : $(anyEl).closest('.ntmpl-var-row').parent();
+    $scope.find('.ntmpl-rule-row').each(function () {
+        const $sel = $(this).find('.ntmpl-rule-ref');
+        const cur  = $sel.val() || $sel.attr('data-selected') || '';
+        const self = ($(this).closest('.ntmpl-var-row').find('.ntmpl-var-key').val() || '').trim();
+        let html = '<option value="">固定值 →</option>';
+        $scope.find('.ntmpl-var-row').each(function () {
+            const k = ($(this).find('.ntmpl-var-key').val() || '').trim();
+            if (!k || k === self) return;
+            html += `<option value="${escapeHtml(k)}" ${cur===k?'selected':''}>{${escapeHtml(k)}}</option>`;
+        });
+        $sel.html(html);
+        $(this).find('.ntmpl-rule-val').toggle(!$sel.val());
+    });
+}
+function addNtmplRule(btn) {
+    $(btn).closest('.ntmpl-var-adv').find('.ntmpl-var-rules').append(buildNtmplRuleRow(null));
+    ntmplRefreshRuleRefs(btn);
+}
+$(document).on('input', '#ntmpl-vars-list .ntmpl-var-key, #ptn-vars-list .ntmpl-var-key', function () {
+    ntmplRefreshRuleRefs(this);
+});
 function onNtmplVarTypeChange(sel) {
     const $row = $(sel).closest('.ntmpl-var-row');
-    const isLabel = $(sel).val() === 'label_pick';
+    const t = $(sel).val();
+    const isLabel = t === 'label_pick', isChoice = t === 'choice';
     $row.find('.ntmpl-var-hint').toggle(!isLabel);
+    $row.find('.ntmpl-var-options').toggle(isChoice);
+    $row.find('.ntmpl-var-input-type').toggle(!isLabel && !isChoice);
     const $lsel = $row.find('.ntmpl-var-label');
     $lsel.toggle(isLabel);
     if (isLabel && $lsel.find('option').length <= 1) {
@@ -2504,10 +2589,29 @@ function getNtmplVars(listSel) {
     const vars = [];
     $(listSel || '#ntmpl-vars-list').find('.ntmpl-var-row').each(function() {
         const key    = $(this).find('.ntmpl-var-key').val().trim();
-        const vtype  = $(this).find('.ntmpl-var-type').val();
+        const vtype  = $(this).find('.ntmpl-var-type').val() || 'text';
         const hint   = $(this).find('.ntmpl-var-hint').val().trim();
         const lid    = $(this).find('.ntmpl-var-label').val();
-        if (key) vars.push({ key, hint, var_type: vtype || 'text', label_id: lid ? parseInt(lid) : null });
+        if (!key) return;
+        const options = vtype === 'choice'
+            ? ($(this).find('.ntmpl-var-options').val() || '').split(/[,，、\n]/).map(s => s.trim()).filter(Boolean)
+            : [];
+        const rules = [];
+        $(this).find('.ntmpl-rule-row').each(function () {
+            const op  = $(this).find('.ntmpl-rule-op').val();
+            const ref = $(this).find('.ntmpl-rule-ref').val() || '';
+            const val = ($(this).find('.ntmpl-rule-val').val() || '').trim();
+            if (ref)            rules.push({ op, ref, value: null });
+            else if (val !== '') rules.push({ op, ref: null, value: val });
+        });
+        vars.push({
+            key, hint,
+            var_type: vtype,
+            label_id: lid ? parseInt(lid) : null,
+            // 沒設定＝any＝數字文字都可以（舊資料沒有這些欄位，一律走這條＝行為與原本相同）
+            input_type: (vtype === 'text' ? ($(this).find('.ntmpl-var-input-type').val() || 'any') : 'any'),
+            options, rules
+        });
     });
     return vars;
 }
@@ -2533,10 +2637,63 @@ function renderNtmplVarRows(vars, listSel) {
                 }
                 $list.append($row);
             });
+            ntmplRefreshRuleRefs($list.find('.ntmpl-var-row').first());
         });
     } else {
         vars.forEach(v => $list.append(buildNtmplVarRow(v)));
+        if ($list.find('.ntmpl-var-row').length) ntmplRefreshRuleRefs($list.find('.ntmpl-var-row').first());
     }
+}
+
+// ── 變數值的防呆檢查（設定頁定義、填值跳窗即時驗，沒設定任何條件的變數完全不受影響）──
+function ntvNum(s) {
+    s = String(s == null ? '' : s).trim();
+    return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s) : null;
+}
+const NTV_OP_SYM = { '>':'>', '>=':'≥', '<':'<', '<=':'≤', '=':'=', '!=':'≠' };
+const NTV_OP_TXT = { '>':'大於', '>=':'大於等於', '<':'小於', '<=':'小於等於', '=':'等於', '!=':'不可以等於' };
+function ntvVarName(v) { return (v && (v.hint || v.key)) || ''; }
+// 欄位下方那行灰字：先講清楚這一欄的限制，不要等使用者填完才報錯
+function ntvRuleHint(v, vars) {
+    const parts = [];
+    if (v.input_type === 'number') parts.push('只能填數字');
+    else if (v.input_type === 'text') parts.push('只能填文字');
+    (v.rules || []).forEach(r => {
+        const sym = NTV_OP_SYM[r.op] || r.op;
+        if (r.ref) {
+            const t = (vars || []).find(x => x.key === r.ref);
+            parts.push('需 ' + sym + ' ' + (t && t.hint ? t.hint : '') + '{' + r.ref + '}');
+        } else {
+            parts.push('需 ' + sym + ' ' + r.value);
+        }
+    });
+    return parts.join('、');
+}
+// 回傳錯誤訊息字串；沒問題回空字串
+function ntvCheckValue(v, val, vals, vars) {
+    val = String(val == null ? '' : val).trim();
+    const name = ntvVarName(v);
+    if (!val) return '請填入 ' + name;
+    if (v.input_type === 'number' && ntvNum(val) === null) return name + ' 只能填數字（目前填的是「' + val + '」）';
+    if (v.input_type === 'text' && ntvNum(val) !== null)   return name + ' 只能填文字，不可以只填數字';
+    for (const r of (v.rules || [])) {
+        const other = r.ref ? String((vals || {})[r.ref] == null ? '' : vals[r.ref]).trim()
+                            : String(r.value == null ? '' : r.value).trim();
+        // 對方那一欄還沒填＝先不判定（等它填了會整批重驗一次），否則一開窗就滿江紅
+        if (r.ref && other === '') continue;
+        const refName = r.ref ? (ntvVarName((vars || []).find(x => x.key === r.ref) || { key: r.ref }) + '（' + other + '）') : other;
+        const a = ntvNum(val), b = ntvNum(other);
+        if (r.op === '=' || r.op === '!=') {
+            const eq = (a !== null && b !== null) ? (a === b) : (val === other);
+            if (r.op === '='  && !eq) return name + ' 必須等於 ' + refName;
+            if (r.op === '!=' &&  eq) return name + ' 不可以等於 ' + refName;
+            continue;
+        }
+        if (a === null || b === null) return name + ' 與 ' + refName + ' 要比大小，兩邊都必須是數字';
+        const pass = { '>': a > b, '>=': a >= b, '<': a < b, '<=': a <= b }[r.op];
+        if (!pass) return name + ' 必須' + (NTV_OP_TXT[r.op] || r.op) + ' ' + refName + '，目前是 ' + val;
+    }
+    return '';
 }
 
 // ─ 套用模板（含變數 Swal）─
@@ -2546,20 +2703,22 @@ function applyNoteTemplate(text, vars, onApplied, opts) {
     opts = opts || {};
     const $target  = opts.$target && opts.$target.length ? opts.$target : $('#note');
     const sep      = opts.sep != null ? opts.sep : '　';
+    // sepFn：分隔字元要看前面那段結尾才決定時用（「依製程類型自動帶入」是依標點決定要不要加「；」）
+    const sepFn    = opts.sepFn || (() => sep);
     const maxLen   = parseInt(opts.maxLen) || 0;
     const onCancel = opts.onCancel || null;
     // 合併後的長度檢查：超過上限一律擋下並講清楚還差幾字，
     // 不可默默帶入——料號備註欄位資料庫只有 100 字元，存檔時會被截斷且不會有任何提示。
     function overflowMsg(seg) {
         const cur    = ($target.val() || '').trim();
-        const merged = cur ? cur + sep + seg : seg;
+        const merged = cur ? cur + sepFn(cur) + seg : seg;
         if (!maxLen || merged.length <= maxLen) return null;
         return `料號備註最多 ${maxLen} 字：目前 ${cur.length} 字，這一段要 ${seg.length} 字`
              + `（含分隔共 ${merged.length} 字），還差 ${merged.length - maxLen} 字。請先精簡料號備註或縮短填入的內容。`;
     }
     function putSeg(seg) {
         const cur = ($target.val() || '').trim();
-        $target.val(cur ? cur + sep + seg : seg).trigger('input');
+        $target.val(cur ? cur + sepFn(cur) + seg : seg).trigger('input');
         if (onApplied) onApplied(seg);
     }
     if (!vars || !vars.length) {
@@ -2591,7 +2750,12 @@ function applyNoteTemplate(text, vars, onApplied, opts) {
     vars.forEach((v, i) => {
         const prompt = v.hint ? `${v.hint}（{${escapeHtml(v.key)}}）` : `{${escapeHtml(v.key)}}`;
         html += `<div style="margin-bottom:10px;"><label style="font-size:13px;font-weight:600;margin-bottom:3px;">${prompt}</label>`;
-        if (v.var_type === 'label_pick' && subLists[i]) {
+        if (v.var_type === 'choice' && (v.options || []).length) {
+            // 選項按鈕：←→ 移動（移到哪個就選哪個）、Enter 確定並跳下一欄
+            html += `<div class="ntv-opts" id="swal-ntvar-${i}-wrap">`
+                  + v.options.map(o => `<button type="button" class="ntv-opt" data-v="${escapeHtml(o)}">${escapeHtml(o)}</button>`).join('')
+                  + `</div><input type="hidden" id="swal-ntvar-${i}">`;
+        } else if (v.var_type === 'label_pick' && subLists[i]) {
             html += `<select id="swal-ntvar-${i}" class="swal2-input" style="margin:0;width:100%;height:34px;">
                 <option value="">— 請選擇 —</option>`;
             subLists[i].forEach(s => {
@@ -2608,43 +2772,126 @@ function applyNoteTemplate(text, vars, onApplied, opts) {
         } else {
             html += `<input id="swal-ntvar-${i}" class="swal2-input" style="margin:0;width:100%;" placeholder="請輸入 ${escapeHtml(v.hint || v.key)}">`;
         }
+        const rh = ntvRuleHint(v, vars);
+        if (rh) html += `<div style="font-size:11px;color:#8a5a2b;margin-top:2px;">${escapeHtml(rh)}</div>`;
+        html += `<div class="ntv-err" id="swal-ntverr-${i}" style="font-size:11px;color:#DD5138;margin-top:2px;"></div>`;
         html += `</div>`;
     });
+    html += `<div style="font-size:11px;color:#999;border-top:1px dashed #eee;padding-top:5px;">
+               ↑↓ 上下移動欄位（自動全選）　←→ 切換選項　Enter 下一欄 / 送出
+             </div>`;
     html += '</div>';
     Swal.fire({
         title: '請填入變數值',
         html,
+        footer: opts.footer || undefined,
         showCancelButton: true,
-        confirmButtonText: '確定帶入',
-        cancelButtonText: '取消',
+        confirmButtonText: opts.confirmText || '確定帶入',
+        cancelButtonText: opts.cancelText || '取消',
         focusConfirm: false,
         didOpen: () => {
-            vars.forEach((v, i) => {
-                const el = document.getElementById('swal-ntvar-' + i);
-                if (!el) return;
-                if (v.var_type === 'label_pick') {
-                    // 下拉選單：選完後自動跳下一個欄位
-                    el.addEventListener('change', function() {
-                        if (!this.value) return;
-                        const next = document.getElementById('swal-ntvar-' + (i + 1));
-                        if (next) next.focus(); else Swal.clickConfirm();
-                    });
-                } else {
-                    el.addEventListener('keydown', function(e) {
-                        if (e.key !== 'Enter') return;
-                        e.preventDefault();
-                        const next = document.getElementById('swal-ntvar-' + (i + 1));
-                        if (next) next.focus(); else Swal.clickConfirm();
-                    });
+            const el   = i => document.getElementById('swal-ntvar-' + i);
+            const wrap = i => document.getElementById('swal-ntvar-' + i + '-wrap');
+            // 移到第 i 欄：輸入框自動全選（方便直接覆蓋重打）、選項欄則把焦點放在目前選中的按鈕上
+            function goTo(i) {
+                if (i < 0) return;
+                if (i >= vars.length) { Swal.clickConfirm(); return; }
+                const w = wrap(i);
+                if (w) {
+                    // 移到選項欄＝停在哪顆就選哪顆。這裡一定要直接呼叫 pick，不可以只靠 focus 事件——
+                    // SweetAlert2 會在 didOpen「之前」就先把焦點放到第一顆按鈕上，那時事件還沒掛，
+                    // 之後再 .focus() 因為它已經是焦點所以不會再觸發一次，結果就是「看起來有選、值卻是空的」。
+                    const t = w.querySelector('.ntv-opt.active') || w.querySelector('.ntv-opt');
+                    if (t) { t.focus(); pick(i, t, false); }
+                    return;
                 }
+                const e = el(i);
+                if (!e) return;
+                e.focus();
+                if (typeof e.select === 'function') { try { e.select(); } catch (err) {} }
+            }
+            function curVals() {
+                const o = {};
+                vars.forEach((v, j) => { const e = el(j); o[v.key] = e ? String(e.value).trim() : ''; });
+                return o;
+            }
+            // 有跨變數條件時，改一欄會影響別欄的判定，所以一律整批重驗
+            function checkAll() {
+                const vals = curVals();
+                vars.forEach((v, j) => {
+                    const box = document.getElementById('swal-ntverr-' + j);
+                    if (!box) return;
+                    box.textContent = vals[v.key] ? ntvCheckValue(v, vals[v.key], vals, vars) : '';
+                });
+            }
+            function pick(i, btn, advance) {
+                const w = wrap(i);
+                if (!w) return;
+                w.querySelectorAll('.ntv-opt').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                const e = el(i);
+                if (e) e.value = btn.getAttribute('data-v') || '';
+                checkAll();
+                if (advance) goTo(i + 1);
+            }
+            vars.forEach((v, i) => {
+                const w = wrap(i);
+                if (w) {
+                    const list = Array.prototype.slice.call(w.querySelectorAll('.ntv-opt'));
+                    list.forEach((btn, bi) => {
+                        btn.addEventListener('focus', () => pick(i, btn, false));   // 移過去＝選起來
+                        btn.addEventListener('click', () => pick(i, btn, true));
+                        btn.addEventListener('keydown', ev => {
+                            if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') {
+                                ev.preventDefault();
+                                const nxt = list[bi + (ev.key === 'ArrowRight' ? 1 : -1)];
+                                if (nxt) { nxt.focus(); pick(i, nxt, false); }
+                            } else if (ev.key === 'ArrowDown') { ev.preventDefault(); goTo(i + 1); }
+                            else if (ev.key === 'ArrowUp')     { ev.preventDefault(); goTo(i - 1); }
+                            else if (ev.key === 'Enter')       { ev.preventDefault(); pick(i, btn, true); }
+                        });
+                    });
+                    return;
+                }
+                const e = el(i);
+                if (!e) return;
+                if (v.var_type === 'label_pick') {
+                    // 下拉選單：↑↓ 維持原本的「切換選項」原生行為，選完後自動跳下一個欄位
+                    e.addEventListener('change', function () {
+                        if (!this.value) return;
+                        checkAll();
+                        goTo(i + 1);
+                    });
+                    return;
+                }
+                e.addEventListener('input', checkAll);
+                e.addEventListener('keydown', function (ev) {
+                    if (ev.key === 'Enter')          { ev.preventDefault(); goTo(i + 1); }
+                    else if (ev.key === 'ArrowDown') { ev.preventDefault(); if (i + 1 < vars.length) goTo(i + 1); }
+                    else if (ev.key === 'ArrowUp')   { ev.preventDefault(); goTo(i - 1); }
+                });
             });
+            goTo(0);
         },
         preConfirm: () => {
             const vals = {};
             for (let i = 0; i < vars.length; i++) {
-                const v = document.getElementById('swal-ntvar-' + i).value.trim();
-                if (!v) { Swal.showValidationMessage(`請填入 ${vars[i].hint || vars[i].key}`); return false; }
-                vals[vars[i].key] = v;
+                const e = document.getElementById('swal-ntvar-' + i);
+                vals[vars[i].key] = e ? String(e.value).trim() : '';
+            }
+            // 防呆：設定頁定義的條件在這裡再驗一次（沒定義條件的變數只檢查有沒有填，與原本相同）
+            for (let i = 0; i < vars.length; i++) {
+                const err = ntvCheckValue(vars[i], vals[vars[i].key], vals, vars);
+                if (err) {
+                    Swal.showValidationMessage(err);
+                    const box = document.getElementById('swal-ntverr-' + i);
+                    if (box) box.textContent = err;
+                    const w = document.getElementById('swal-ntvar-' + i + '-wrap');
+                    const t = w ? (w.querySelector('.ntv-opt.active') || w.querySelector('.ntv-opt'))
+                                : document.getElementById('swal-ntvar-' + i);
+                    if (t && t.focus) t.focus();
+                    return false;
+                }
             }
             // 字數不夠時留在視窗裡講清楚還差幾字，使用者可以當場改短再送出
             let seg = text;
@@ -2757,51 +3004,16 @@ function applyProcTypeNotes() {
             appendSegment(t.note_text);
             processNext(idx + 1, segments);
         } else {
-            // 有變數：彈窗填值
-            let html = '<div style="text-align:left;padding:0 4px;">';
-            t.vars.forEach((v, i) => {
-                const prompt = v.hint ? `${v.hint}（{${escapeHtml(v.key)}}）` : `{${escapeHtml(v.key)}}`;
-                html += `<div style="margin-bottom:10px;"><label style="font-size:13px;font-weight:600;">${prompt}</label>
-                    <input id="swal-ntvar-${i}" class="swal2-input" style="margin:0;width:100%;" placeholder="${escapeHtml(v.hint||v.key)}"></div>`;
-            });
-            html += `</div><p style="font-size:11px;color:#888;margin-top:6px;">模板：${escapeHtml(t.label)}</p>`;
-            Swal.fire({
-                title:'請填入變數值',
-                html,
-                showCancelButton:true,
-                confirmButtonText:'帶入',
-                cancelButtonText:'跳過',
-                focusConfirm:false,
-                didOpen: () => {
-                    t.vars.forEach((v, i) => {
-                        const el = document.getElementById('swal-ntvar-'+i);
-                        if (!el) return;
-                        el.addEventListener('keydown', e => {
-                            if (e.key !== 'Enter') return;
-                            e.preventDefault();
-                            const next = document.getElementById('swal-ntvar-'+(i+1));
-                            if (next) next.focus(); else Swal.clickConfirm();
-                        });
-                    });
-                    document.getElementById('swal-ntvar-0') && document.getElementById('swal-ntvar-0').focus();
-                },
-                preConfirm: () => {
-                    const vals = {};
-                    for (let i = 0; i < t.vars.length; i++) {
-                        const v = document.getElementById('swal-ntvar-'+i).value.trim();
-                        if (!v) { Swal.showValidationMessage(`請填入 ${t.vars[i].hint||t.vars[i].key}`); return false; }
-                        vals[t.vars[i].key] = v;
-                    }
-                    return vals;
-                }
-            }).then(r => {
-                if (r.isConfirmed) {
-                    let text = t.note_text;
-                    Object.entries(r.value).forEach(([k, v]) => { text = text.split('{'+k+'}').join(v); });
-                    appendSegment(text);
-                }
+            // 有變數：走與「點標籤／點模板按鈕」完全同一支填值跳窗（選項按鈕、防呆條件、
+            // 鍵盤上下移動與料號標籤選才不會只有其中一邊有＝鐵律4，不要在這裡再刻一份）
+            applyNoteTemplate(t.note_text, t.vars, () => processNext(idx + 1, segments), {
+                $target: $('#note'),
+                sepFn: cur => (chinesePunct.test(cur.slice(-1)) ? '' : '；'),
+                confirmText: '帶入',
+                cancelText: '跳過',
+                footer: '模板：' + t.label,
                 // 無論確定或跳過都繼續下一個
-                processNext(idx + 1, segments);
+                onCancel: () => processNext(idx + 1, segments)
             });
         }
     }

@@ -316,13 +316,64 @@ function qtag_clean_note_vars(string $text, $rawJson): array
         if (isset($seen[$k])) throw new Exception('變數名稱 {' . $k . '} 重複了，同一個標籤內不可有兩個同名變數');
         $seen[$k] = true;
         if (mb_strpos($text, '{' . $k . '}') === false) throw new Exception('備註文字中找不到變數 {' . $k . '} 的佔位符');
+        $vt = $v['var_type'] ?? 'text';
+        if (!in_array($vt, ['text', 'label_pick', 'choice'], true)) $vt = 'text';
+
+        // 選項型（例：旋向＝RH／LH）：至少要有一個選項，否則畫面上會變成一格空白、點也點不到
+        $options = [];
+        if ($vt === 'choice') {
+            foreach ((array)($v['options'] ?? []) as $o) {
+                $o = trim((string)$o);
+                if ($o === '') continue;
+                $o = mb_substr($o, 0, 20);
+                if (!in_array($o, $options, true)) $options[] = $o;
+                if (count($options) >= 20) break;
+            }
+            if (!$options) throw new Exception('變數 {' . $k . '} 設成「選項」就一定要填選項內容（例：RH,LH）');
+        }
+
+        // 輸入類型：不設定＝any＝數字文字都可以（既有資料沒有這個欄位，一律當成 any，行為與原本相同）
+        $it = $v['input_type'] ?? 'any';
+        if (!in_array($it, ['any', 'number', 'text'], true)) $it = 'any';
+        if ($vt !== 'text') $it = 'any';   // 選項／料號標籤選是選的，不是打字的
+
+        // 防呆條件：這個變數必須 大於/小於/等於… 另一個變數或一個固定值
+        $rules = [];
+        foreach ((array)($v['rules'] ?? []) as $r) {
+            if (!is_array($r)) continue;
+            $op = (string)($r['op'] ?? '');
+            if (!in_array($op, ['>', '>=', '<', '<=', '=', '!='], true)) continue;
+            $ref = trim((string)($r['ref'] ?? ''));
+            if ($ref !== '') {
+                if ($ref === $k) throw new Exception('變數 {' . $k . '} 的防呆條件不可以拿自己跟自己比');
+                $rules[] = ['op' => $op, 'ref' => mb_substr($ref, 0, 20), 'value' => null];
+            } else {
+                $val = trim((string)($r['value'] ?? ''));
+                if ($val === '') continue;   // 兩邊都沒填＝這條規則沒意義，直接丟掉不報錯
+                $rules[] = ['op' => $op, 'ref' => null, 'value' => mb_substr($val, 0, 30)];
+            }
+            if (count($rules) >= 5) break;
+        }
+
         $clean[] = [
-            'key'      => mb_substr($k, 0, 20),
-            'hint'     => mb_substr(trim((string)($v['hint'] ?? '')), 0, 30),
-            'var_type' => (($v['var_type'] ?? 'text') === 'label_pick') ? 'label_pick' : 'text',
-            'label_id' => (isset($v['label_id']) && $v['label_id'] !== '' && $v['label_id'] !== null)
-                          ? intval($v['label_id']) : null,
+            'key'        => mb_substr($k, 0, 20),
+            'hint'       => mb_substr(trim((string)($v['hint'] ?? '')), 0, 30),
+            'var_type'   => $vt,
+            'label_id'   => (isset($v['label_id']) && $v['label_id'] !== '' && $v['label_id'] !== null)
+                            ? intval($v['label_id']) : null,
+            'input_type' => $it,
+            'options'    => $options,
+            'rules'      => $rules,
         ];
+    }
+    // 條件指到的變數必須真的存在，否則那條規則永遠比不出結果、使用者卻完全看不出為什麼
+    $keys = array_column($clean, 'key');
+    foreach ($clean as $c) {
+        foreach ($c['rules'] as $r) {
+            if ($r['ref'] !== null && !in_array($r['ref'], $keys, true)) {
+                throw new Exception('變數 {' . $c['key'] . '} 的防呆條件指到不存在的變數 {' . $r['ref'] . '}');
+            }
+        }
     }
     return $clean;
 }
