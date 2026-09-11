@@ -6,6 +6,7 @@ include '../../src/common/_config.php';
 require_once '../../src/common/part_alias_lib.php';
 require_once '../../src/common/order_track_perm_lib.php';
 require_once '../../src/common/order_auto_pmget_lib.php';  // 指定特定設計＝存檔自動轉生管（唯一實作）
+require_once '../../src/common/order_attach_cat_lib.php';   // 訂單附件「需綁定料號」的類別判定（唯一實作）
 
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
@@ -101,24 +102,20 @@ try {
         return '下列附件尚未設定類別標籤，請設定後再存檔：' . implode('、', $names);
     }
 
-    // 沿用報價單既有「必備類別，需連結單一料號」設定（system_parameters QUOTATION/required_attach_cats，
-    // quotation_list_NEW.php 維護）：OP轉訂單批次內若真的有多種料號，這些類別的附件不可設為「共用（全部）」，
+    // 「需綁定料號」的類別（訂單頁自己的設定，未設定過時沿用報價單那份；唯一實作 order_attach_cat_lib.php）：
+    // OP轉訂單批次內若真的有多種料號，這些類別的附件不可設為「共用（全部）」，
     // 一定要挑對應料號，否則將來 bom_viewer 圖面查閱頁無法正確歸戶到單一料號。只在批次真的有多料號時才擋，
     // 單一料號訂單/批次沒有這個歧義問題，不受影響。回傳 null＝通過；否則為錯誤訊息。
     function eg_order_attach_check_required_part(PDO $db, string $batchKey): ?string {
         try {
-            $st = $db->prepare("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key='required_attach_cats'");
-            $st->execute();
-            $v = $st->fetchColumn();
-            $reqIds = $v ? array_map('intval', (json_decode($v, true) ?: [])) : [];
+            $reqIds = eg_oa_require_part_cat_ids($db);
             if (!$reqIds) return null;
             $st2 = $db->prepare("SELECT original_name, filename, category_ids FROM order_attachments
                                  WHERE batch_key=? AND status='temp' AND (linked_part_no IS NULL OR linked_part_no='')");
             $st2->execute([$batchKey]);
             $bad = [];
             foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                $cats = array_map('intval', array_filter(explode(',', (string)$r['category_ids'])));
-                if (array_intersect($cats, $reqIds)) $bad[] = $r['original_name'] ?: $r['filename'];
+                if (eg_oa_cats_need_part($r['category_ids'], $reqIds)) $bad[] = $r['original_name'] ?: $r['filename'];
             }
             if (!$bad) return null;
             return '下列附件的類別需要指定對應料號（批次內有多筆料號，不可設為共用）：' . implode('、', $bad);
@@ -126,17 +123,17 @@ try {
     }
 
     // 單筆新增/編輯訂單（or_new/or_update，非OP轉訂單批次）：存檔後把「共用附件」同步給相同訂單編號
-    // （Order_oo）底下的其他料號訂單（使用者明確要求，2026-08-12）。判定共用的方式沿用既有「必備類別，
-    // 需連結單一料號」設定：附件所勾的類別只要都不在 required_attach_cats 內＝視為共用附件，該訂單編號
-    // 底下每一張料號訂單都要看得到；只要有勾到需綁定單一料號的類別＝維持只掛在原本那張訂單，不做同步。
+    // （Order_oo）底下的其他料號訂單（使用者明確要求，2026-08-12）。判定共用的方式：附件所勾的類別只要
+    // 都不是「需綁定料號」的類別（order_attach_cat_lib.php）＝視為共用附件，該訂單編號底下每一張料號訂單
+    // 都要看得到；只要勾到需綁定料號的類別、**或這份檔案已經自己指定了 linked_part_no**＝維持只掛在原本
+    // 那張訂單，不做同步（後者是 2026-09-11 補的，見下方迴圈內註解）。
     // 雙向同步：既有訂單新掛上共用附件時要補給其他料號；新建的訂單也要補上該訂單編號既有的共用附件。
     // 同一實體檔案(filename)用多筆 order_attachments 列參照到不同 order_id，不複製實體檔（比照OP轉訂單既有作法）。
     function eg_order_attach_sync_shared_by_orderno(PDO $db, string $orderNo): void {
         $orderNo = trim($orderNo);
         if ($orderNo === '') return;
         try {
-            $rv = $db->query("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key='required_attach_cats'")->fetchColumn();
-            $reqIds = $rv ? array_map('intval', (json_decode($rv, true) ?: [])) : [];
+            $reqIds = eg_oa_require_part_cat_ids($db);
 
             $oq = $db->prepare("SELECT Order_id FROM order_track WHERE Order_oo = ?");
             $oq->execute([$orderNo]);
@@ -144,7 +141,7 @@ try {
             if (count($orderIds) < 2) return; // 這個訂單編號目前只有一張訂單，沒有其他料號可同步
 
             $ph = implode(',', array_fill(0, count($orderIds), '?'));
-            $aq = $db->prepare("SELECT order_id, filename, original_name, category_ids, file_size, uploaded_by
+            $aq = $db->prepare("SELECT order_id, filename, original_name, category_ids, file_size, uploaded_by, linked_part_no
                                  FROM order_attachments WHERE order_id IN ($ph) AND status='active'");
             $aq->execute($orderIds);
             $rows = $aq->fetchAll(PDO::FETCH_ASSOC);
@@ -156,9 +153,14 @@ try {
                 $fn = $r['filename'];
                 if (!isset($byFile[$fn])) {
                     $catIds = array_values(array_filter(array_map('intval', explode(',', (string)$r['category_ids']))));
-                    $shared = $catIds && !array_intersect($catIds, $reqIds);
+                    $shared = $catIds && !eg_oa_cats_need_part($r['category_ids'], $reqIds);
                     $byFile[$fn] = ['orders' => [], 'info' => $r, 'shared' => $shared];
                 }
+                // 已經綁定特定料號的附件一律不連動（使用者明確要求，2026-09-11）：這份檔案是某一個料號專屬的
+                // （例如 OP 轉訂單時整批上傳、但逐張指定了對應料號的原圖），連動過去會讓其他料號的圖面查閱頁
+                // 看到不屬於自己的圖。判定要看「這份實體檔的所有參照列」，只要任一列有綁料號就整組不連動——
+                // 連動出來的複本是不帶 linked_part_no 的，只看第一列會誤判成共用。
+                if (trim((string)($r['linked_part_no'] ?? '')) !== '') $byFile[$fn]['shared'] = false;
                 $byFile[$fn]['orders'][(int)$r['order_id']] = true;
             }
 

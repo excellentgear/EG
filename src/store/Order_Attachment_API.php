@@ -18,6 +18,7 @@ if ($action !== 'download') {
 require_once __DIR__ . '/../common/DBConnection.php';   // 2026-08-24 改 require_once＋__DIR__：api_guard 已先載入過，用 include 會二次宣告 class 直接 500
 require_once '../common/attach_lib.php';
 require_once '../common/rbac.php';
+require_once __DIR__ . '/../common/order_attach_cat_lib.php';   // 「需綁定料號」的類別判定（唯一實作）
 $db  = new DBConnection();
 $pdo = $db->getPDO();
 
@@ -136,38 +137,50 @@ switch ($action) {
                 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             }
         } catch (Exception $e) { $rows = []; }
-        // 標記沿用報價單「必備類別，需連結單一料號」設定（quotation_list_NEW.php 維護）：
+        // 標記「需綁定料號」的類別（本頁自己的設定；未設定過時沿用報價單 required_attach_cats）：
         // 這些類別在批次真的有多種料號時不可設為共用，前端用來顯示 * 提示與擋料號選擇未填的送出
-        $reqIds = [];
-        try {
-            $rv = $pdo->query("SELECT param_value FROM system_parameters WHERE param_group='QUOTATION' AND param_key='required_attach_cats'")->fetchColumn();
-            if ($rv) $reqIds = array_map('intval', (json_decode($rv, true) ?: []));
-        } catch (Exception $e) {}
+        $reqIds = eg_oa_require_part_cat_ids($pdo);
         foreach ($rows as &$r) { $r['required'] = in_array((int)$r['id'], $reqIds, true); }
         unset($r);
         echo json_encode(['success' => true, 'categories' => $rows]);
         break;
 
-    // ── 本頁使用的附件標籤設定：取得全部類別＋目前已啟用的子集（設定跳窗用）──
+    // ── 本頁使用的附件標籤設定：取得全部類別＋目前已啟用的子集＋「需綁定料號」的子集（設定跳窗用）──
     case 'get_categories_setting': {
         try {
             $all = $pdo->query("SELECT id, category_name, sort_order FROM quotation_file_categories WHERE is_active=1 ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC);
         } catch (Exception $e) { $all = []; }
         $enabled = oaEnabledCatIds($pdo);
-        echo json_encode(['success' => true, 'categories' => $all, 'enabled_ids' => $enabled, 'customized' => $enabled !== null]);
+        // 需綁定料號：回傳「目前實際生效」的清單（未客製化時＝報價單那份），前端就照這份打勾，
+        // 所以管理員即使只是來改別的東西、順手按了儲存，寫回去的也是同一組值＝行為不會被動改變。
+        $reqOwn = eg_oa_require_part_setting($pdo);
+        echo json_encode([
+            'success'                 => true,
+            'categories'              => $all,
+            'enabled_ids'             => $enabled,
+            'customized'              => $enabled !== null,
+            'require_part_ids'        => eg_oa_require_part_cat_ids($pdo),
+            'require_part_customized' => $reqOwn !== null,
+        ]);
         break;
     }
-    // ── 儲存本頁使用的附件標籤子集（僅管理員）───────────────────
+    // ── 儲存本頁使用的附件標籤子集＋「需綁定料號」子集（僅管理員）──
     case 'save_categories_setting': {
         if (!_oaIsAdmin($pdo, $uid)) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'僅管理員可設定']); break; }
         $ids = array_values(array_filter(array_map('intval', explode(',', trim($_POST['category_ids'] ?? '')))));
         $val = implode(',', $ids); // 允許存空字串＝客製化但目前一個都沒勾
         $uname = $_SESSION['user_cname'] ?? ($_SESSION['userName'] ?? 'system');
-        $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by, updated_at)
-                       VALUES ('order_attach_enabled_cats', ?, ?, ?, NOW())
+        $save = $pdo->prepare("INSERT INTO system_settings (setting_key, setting_value, updated_by_id, updated_by, updated_at)
+                       VALUES (?, ?, ?, ?, NOW())
                        ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value),
-                          updated_by_id=VALUES(updated_by_id), updated_by=VALUES(updated_by), updated_at=NOW()")
-            ->execute([$val, ($uid ?: null), $uname]);
+                          updated_by_id=VALUES(updated_by_id), updated_by=VALUES(updated_by), updated_at=NOW()");
+        $save->execute(['order_attach_enabled_cats', $val, ($uid ?: null), $uname]);
+        // 需綁定料號：舊版前端不會送這個欄位，沒送就完全不動這一列（維持沿用報價單那份），
+        // 不可以把「沒送」當成「一個都不勾」——那會在舊分頁按一次儲存就把設定整個清掉。
+        if (array_key_exists('require_part_cat_ids', $_POST)) {
+            $rIds = array_values(array_filter(array_map('intval', explode(',', trim((string)$_POST['require_part_cat_ids'])))));
+            $save->execute(['order_attach_require_part_cats', implode(',', $rIds), ($uid ?: null), $uname]);
+        }
         echo json_encode(['success' => true, 'message' => '已儲存']);
         break;
     }

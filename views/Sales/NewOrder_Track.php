@@ -7546,11 +7546,12 @@ foreach($dCounts as $c) {
                 var ck = checkedIds.indexOf(String(c.id)) !== -1 ? ' checked' : '';
                 return '<label style="font-weight:400;display:inline-flex;align-items:center;gap:3px;margin:0 10px 4px 0;cursor:pointer;">' +
                     '<input type="checkbox" value="' + c.id + '"' + ck + '>' + escapeHtml(c.category_name) +
-                    (c.required ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : '') + '</label>';
+                    (c.required ? ' <span style="color:#DD5138;" title="此標籤需綁定料號：不可設為共用（全部），一定要指定對應料號">*</span>' : '') + '</label>';
             }).join('') || '<span style="color:#aaa;">尚未設定本頁可用標籤，請至「設定」跳窗設定</span>';
             var parts = availableParts || [];
-            // 必備類別（沿用報價單 required_attach_cats）：這個檔已勾到必備類別時，「共用（全部）」選項直接不給選，
-            // 逼使用者一定要指定料號（比照報價單附件標籤功能 renderFileTagPanel 的 hasReqCat 做法）
+            // 「需綁定料號」的標籤（設定跳窗→本頁使用的附件標籤；未設定過時沿用報價單的必備類別）：
+            // 這個檔已勾到這種標籤時，「共用（全部）」選項直接不給選，逼使用者一定要指定料號。
+            // 綁好料號的附件在存檔時也不會再自動連動到相同訂單編號的其他料號訂單（_NewOrder_Track.php）。
             var reqIds = (cats || []).filter(function(c) { return c.required; }).map(function(c) { return String(c.id); });
             var hasReq = checkedIds.some(function(id) { return reqIds.indexOf(id) !== -1; });
             var needPick = hasReq && !f.linked_part_no;
@@ -7562,7 +7563,7 @@ foreach($dCounts as $c) {
                             : '<option value="">共用（全部）</option>') +
                         parts.map(function(p) { return '<option value="' + escapeHtml(p) + '"' + (f.linked_part_no === p ? ' selected' : '') + '>' + escapeHtml(p) + '</option>'; }).join('') +
                       '</select>' +
-                      (hasReq ? ' <span style="font-size:9px;color:#DD5138;" title="必備類別附件不可設為共用，須連結單一料號">*必選料號</span>' : '')
+                      (hasReq ? ' <span style="font-size:9px;color:#DD5138;" title="此標籤設定為「需綁定料號」：不可設為共用，須連結單一料號">*必選料號</span>' : '')
                     : '<span style="font-size:10px;color:#999;">' + (f.linked_part_no ? ('料號：' + escapeHtml(f.linked_part_no)) : '共用（全部）') + '</span>')
                 : '';
             // 刪除鈕：只有上傳者本人／管理員／被指派 ot_attach_delete 才顯示（後端 delete_file 同規則再擋一次，不可只靠前端隱藏）
@@ -7714,12 +7715,12 @@ foreach($dCounts as $c) {
                 doList();
             }
         }
-        // 上傳前的「預設標籤」勾選區塊（訂單/OP轉訂單共用）；必備類別（沿用報價單 required_attach_cats）標紅色 *
+        // 上傳前的「預設標籤」勾選區塊（訂單/OP轉訂單共用）；設定為「需綁定料號」的標籤標紅色 *
         function oaRenderPresetCats(selector) {
             $(selector).html((orderAttachCats || []).map(function(c) {
                 return '<label style="font-weight:400;display:inline-flex;align-items:center;gap:3px;margin:0;cursor:pointer;">' +
                     '<input type="checkbox" value="' + c.id + '">' + escapeHtml(c.category_name) +
-                    (c.required ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : '') + '</label>';
+                    (c.required ? ' <span style="color:#DD5138;" title="此標籤需綁定料號：不可設為共用（全部），一定要指定對應料號">*</span>' : '') + '</label>';
             }).join(''));
         }
         // 批次上傳：可一次選多檔；預設標籤（若有勾選）套用到全部檔案，不勾也能先上傳、之後再逐一設定。
@@ -7763,24 +7764,52 @@ foreach($dCounts as $c) {
                 orderAttachLoadPathSetting();
             }, 'json');
         }
-        // 本頁使用的附件標籤（子集）設定：全部類別打勾清單＋目前啟用的打勾狀態
+        // 本頁使用的附件標籤（子集）設定：每個標籤兩個勾——「本頁使用」與「需綁定料號」。
+        // 需綁定料號的預設勾選一律取後端回傳的「目前實際生效」清單（未客製化時＝報價單的必備類別），
+        // 所以管理員只是來改別的東西、順手按了儲存，也不會把行為改掉（嚴禁影響現有使用者）。
         function orderAttachLoadCatsSetting() {
             $.post(ORDER_ATTACH_API, { action: 'get_categories_setting' }, function(res) {
                 var $box = $('#oat-cats-setting');
                 if (!res.success) { $box.html('<span style="color:#c0392b;">讀取失敗</span>'); return; }
-                var enabled = res.enabled_ids; // null=尚未客製化(全部顯示)；陣列=目前啟用的id清單
+                var enabled = res.enabled_ids;                  // null=尚未客製化(全部顯示)；陣列=目前啟用的id清單
+                var reqIds  = res.require_part_ids || [];       // 目前實際生效的「需綁定料號」清單
                 $box.html((res.categories || []).map(function(c) {
-                    var ck = (enabled === null || enabled.indexOf(c.id) !== -1) ? ' checked' : '';
-                    return '<label style="font-weight:400;display:inline-flex;align-items:center;gap:4px;margin:0;cursor:pointer;">' +
-                        '<input type="checkbox" value="' + c.id + '"' + ck + '>' + escapeHtml(c.category_name) + '</label>';
+                    var on  = (enabled === null || enabled.indexOf(c.id) !== -1);
+                    var req = reqIds.indexOf(c.id) !== -1;
+                    return '<div class="oat-cat-chip" style="border:1px solid ' + (on ? '#E4D3BC' : '#e6e6e6') + ';background:' + (on ? '#FFFDF9' : '#f7f7f7') + ';border-radius:4px;padding:4px 8px;min-width:118px;">' +
+                        '<label style="font-weight:600;display:flex;align-items:center;gap:4px;margin:0;cursor:pointer;color:' + (on ? '#5d4037' : '#aaa') + ';">' +
+                          '<input type="checkbox" class="oat-cat-on" value="' + c.id + '"' + (on ? ' checked' : '') + '>' + escapeHtml(c.category_name) +
+                        '</label>' +
+                        '<label style="font-weight:400;display:flex;align-items:center;gap:4px;margin:2px 0 0;cursor:pointer;font-size:11px;color:' + (on ? '#8a5a2b' : '#bbb') + ';" title="勾起來＝這個標籤的附件必須指定對應料號，不可設為共用（全部）">' +
+                          '<input type="checkbox" class="oat-cat-req" value="' + c.id + '"' + (req ? ' checked' : '') + (on ? '' : ' disabled') + '> 需綁定料號' +
+                        '</label>' +
+                      '</div>';
                 }).join('') || '<span style="color:#aaa;">尚無可用類別</span>');
-                $('#oat-cats-msg').text(enabled === null ? '（尚未客製化，目前顯示全部標籤）' : '').css('color', '#888');
+                var note = [];
+                if (enabled === null) note.push('尚未客製化，目前顯示全部標籤');
+                if (!res.require_part_customized) note.push('「需綁定料號」目前沿用報價單的必備類別設定');
+                $('#oat-cats-msg').text(note.length ? ('（' + note.join('；') + '）') : '').css('color', '#888');
             }, 'json');
         }
+        // 取消「本頁使用」時，同一張標籤的「需綁定料號」跟著停用（本頁看不到的標籤不必談要不要綁料號）；
+        // 停用的勾選狀態仍保留、儲存時照樣送出，不會因為關掉顯示就把原本的設定安靜地清掉。
+        $(document).on('change', '#oat-cats-setting .oat-cat-on', function() {
+            var on = this.checked;
+            var $chip = $(this).closest('.oat-cat-chip');
+            $chip.find('.oat-cat-req').prop('disabled', !on);
+            $chip.css({ 'border-color': on ? '#E4D3BC' : '#e6e6e6', 'background': on ? '#FFFDF9' : '#f7f7f7' });
+            $chip.find('label').eq(0).css('color', on ? '#5d4037' : '#aaa');
+            $chip.find('label').eq(1).css('color', on ? '#8a5a2b' : '#bbb');
+        });
         function orderAttachSaveCatsSetting() {
-            var ids = [];
-            $('#oat-cats-setting input:checked').each(function() { ids.push($(this).val()); });
-            $.post(ORDER_ATTACH_API, { action: 'save_categories_setting', category_ids: ids.join(',') }, function(res) {
+            var ids = [], reqIds = [];
+            $('#oat-cats-setting .oat-cat-on:checked').each(function() { ids.push($(this).val()); });
+            $('#oat-cats-setting .oat-cat-req:checked').each(function() { reqIds.push($(this).val()); });
+            $.post(ORDER_ATTACH_API, {
+                action: 'save_categories_setting',
+                category_ids: ids.join(','),
+                require_part_cat_ids: reqIds.join(',')
+            }, function(res) {
                 var $msg = $('#oat-cats-msg');
                 if (!res.success) { $msg.css('color', '#c0392b').text(res.message || '儲存失敗'); return; }
                 $msg.css('color', '#27ae60').text('已儲存');
@@ -8452,7 +8481,7 @@ foreach($dCounts as $c) {
                 $('#op-attach-part-wrap').hide();
             }
         }
-        // 目前預設標籤是否勾到必備類別（沿用報價單 required_attach_cats）
+        // 目前預設標籤是否勾到「需綁定料號」的標籤（設定跳窗→本頁使用的附件標籤；未設定過時沿用報價單的必備類別）
         function opAttachHasReqCatChecked() {
             var reqIds = (orderAttachCats || []).filter(function(c) { return c.required; }).map(function(c) { return String(c.id); });
             if (!reqIds.length) return false;
@@ -8460,7 +8489,7 @@ foreach($dCounts as $c) {
             $('#op-attach-cats input:checked').each(function() { if (reqIds.indexOf($(this).val()) !== -1) hit = true; });
             return hit;
         }
-        // 上傳前的「對應料號」下拉：預設標籤勾到必備類別時，比照報價單附件標籤功能拿掉「共用（全部）」選項，
+        // 上傳前的「對應料號」下拉：預設標籤勾到「需綁定料號」的標籤時，拿掉「共用（全部）」選項，
         // 逼使用者上傳前就先指定料號（而不是等存檔時才被擋下）
         function opAttachRebuildPartSelect() {
             var parts = opAttachPartsList || [];
@@ -8476,7 +8505,7 @@ foreach($dCounts as $c) {
             if (curVal && parts.indexOf(curVal) !== -1) $sel.val(curVal);
         }
         $(document).on('change', '#op-attach-cats input[type="checkbox"]', opAttachRebuildPartSelect);
-        // 必備類別（reqCats，沿用報價單 required_attach_cats）在批次真的有多種料號時不可設為共用；
+        // 「需綁定料號」的標籤在批次真的有多種料號時不可設為共用；
         // 只有單一料號時已自動視為該料號，不會落入這個問題
         function oaHasUnboundRequired(files) {
             if (!opAttachMultiPart) return false;
@@ -8507,7 +8536,7 @@ foreach($dCounts as $c) {
             $('#op-attach-cats input:checked').each(function() { presetCats.push($(this).val()); });
             var linkPart = $('#op-attach-part-wrap').is(':visible') ? $('#op-attach-part').val() : '';
             if ($('#op-attach-part-wrap').is(':visible') && opAttachHasReqCatChecked() && !linkPart) {
-                showOrderAlert('預設標籤含必備類別，這批有多種料號，請先在「對應料號」選好要連結的料號再上傳。');
+                showOrderAlert('預設標籤含「需綁定料號」的標籤，這批有多種料號，請先在「對應料號」選好要連結的料號再上傳。');
                 return;
             }
             var tasks = [];
@@ -8572,7 +8601,7 @@ foreach($dCounts as $c) {
             }
             // 必備類別附件在多料號批次中不可設為共用，必須指定對應料號
             if (oaHasUnboundRequired(opAttachFilesCache)) {
-                $('#op-create-error').text('這批有多種料號，含必備類別的附件必須指定對應料號（不可設為共用），請在附件列的料號下拉選擇後再建立訂單。').show();
+                $('#op-create-error').text('這批有多種料號，含「需綁定料號」標籤的附件必須指定對應料號（不可設為共用），請在附件列的料號下拉選擇後再建立訂單。').show();
                 return;
             }
 
@@ -9597,7 +9626,12 @@ foreach($dCounts as $c) {
             <div class="main-card" style="margin-bottom:10px;">
               <div style="font-weight:700;color:#444;margin-bottom:6px;"><i class="fa fa-tags"></i> 本頁使用的附件標籤</div>
               <div style="font-size:11px;color:#888;margin-bottom:6px;">類別標籤共用報價單的分類清單；這裡只是挑選「訂單／OP轉訂單上傳附件時」要顯示哪些，避免全部～16個標籤一次列出來很混亂。未曾在此設定過＝預設全部顯示。</div>
-              <div id="oat-cats-setting" style="display:flex;flex-wrap:wrap;gap:8px 14px;font-size:12px;margin-bottom:8px;"><span style="color:#aaa;">載入中…</span></div>
+              <div style="font-size:11px;color:#8a5a2b;background:#FFF6EC;border:1px solid #E8D3B8;border-radius:4px;padding:6px 8px;margin-bottom:8px;line-height:1.6;">
+                <b>需綁定料號</b>：勾起來的標籤，在「OP轉訂單」這種一次含多個料號的批次裡，附件<b>一定要指定對應料號</b>，不可以設成「共用（全部）」。<br>
+                例如<b>原圖</b>雖然都是整批一起上傳，但一張原圖只屬於某一個料號；沒有綁定的話會被當成共用附件掛到同一張訂單編號底下的每個料號，之後在<b>圖面查閱</b>就會看到不屬於該料號的圖。<br>
+                已經綁定料號的附件，也<b>不會</b>再自動連動到相同訂單編號的其他料號訂單。<span style="color:#aaa;">（沒有動過這個設定＝沿用報價單的「必備類別」設定，行為與先前完全相同）</span>
+              </div>
+              <div id="oat-cats-setting" style="display:flex;flex-wrap:wrap;gap:6px;font-size:12px;margin-bottom:8px;"><span style="color:#aaa;">載入中…</span></div>
               <button type="button" class="btn btn-primary btn-sm" onclick="orderAttachSaveCatsSetting()"><i class="fa fa-save"></i> 儲存</button>
               <span id="oat-cats-msg" style="font-size:11px;margin-left:8px;"></span>
             </div>
