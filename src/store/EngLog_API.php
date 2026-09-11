@@ -111,8 +111,11 @@ if ($action === 'bootstrap') {
             'item_status'  => el_item_status(),
             'log_status'   => el_log_status(),
             'visibility'   => el_visibility(),
-            'channels'     => el_channels(),
-            'log_types'    => ['outsource'=>'發包','drawing'=>'批圖','spec'=>'規格','material'=>'材料','quality'=>'品質','delivery'=>'交期','other'=>'其他'],
+            'channels'     => el_channels($db),
+            'channels_all' => el_channels($db, true),
+            'log_types'    => el_log_types(),
+            'log_types_active' => el_log_types_active(),
+            'auto_type'    => ['return'=>'return', 'order'=>'drawing'],
             'def_follow_up'=> el_default_follow_up_days(),
             'def_urgent'   => el_default_urgent_days(),
         ],
@@ -175,7 +178,8 @@ if ($action === 'stats') {
               SUM(t.status='open' AND t.deadline IS NOT NULL
                   AND DATE(t.deadline) BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)) AS week_cnt,
               SUM(t.status='done') AS done_cnt,
-              SUM(NOT EXISTS(SELECT 1 FROM eng_log_index x WHERE x.log_id=t.id AND x.part_d_id IS NOT NULL)) AS unlinked_cnt
+              SUM(NOT EXISTS(SELECT 1 FROM eng_log_index x WHERE x.log_id=t.id
+                  AND (x.part_d_id IS NOT NULL OR x.customer_id IS NOT NULL OR x.maker_id_no IS NOT NULL))) AS unlinked_cnt
             FROM eng_log t WHERE {$vs}";
     $st = $db->prepare($sql);
     $st->execute($vp);
@@ -230,7 +234,8 @@ if ($action === 'list') {
     elseif ($quick === 'overdue')  { $where[] = "t.status='open' AND {$overdueExists}"; }
     elseif ($quick === 'week')     { $where[] = "t.status='open' AND t.deadline IS NOT NULL AND DATE(t.deadline) BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY)"; }
     elseif ($quick === 'done')     { $where[] = "t.status='done'"; }
-    elseif ($quick === 'unlinked') { $where[] = "NOT EXISTS(SELECT 1 FROM eng_log_index x WHERE x.log_id=t.id AND x.part_d_id IS NOT NULL)"; }
+    elseif ($quick === 'unlinked') { $where[] = "NOT EXISTS(SELECT 1 FROM eng_log_index x WHERE x.log_id=t.id
+                                   AND (x.part_d_id IS NOT NULL OR x.customer_id IS NOT NULL OR x.maker_id_no IS NOT NULL))"; }
 
     $w = implode(' AND ', $where);
     $page = max(1, (int)($_GET['page'] ?? 1));
@@ -248,7 +253,8 @@ if ($action === 'list') {
                (SELECT COUNT(*) FROM eng_log_item i WHERE i.log_id=t.id AND i.status IN ('answered','resolved')) AS item_done,
                (SELECT COUNT(*) FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting') AS item_wait,
                (SELECT MIN(i.asked_at) FROM eng_log_item i WHERE i.log_id=t.id AND i.status='waiting') AS oldest_wait,
-               (SELECT COUNT(*) FROM eng_log_index x WHERE x.log_id=t.id AND x.part_d_id IS NOT NULL) AS part_cnt
+               (SELECT COUNT(*) FROM eng_log_index x WHERE x.log_id=t.id
+                  AND (x.part_d_id IS NOT NULL OR x.customer_id IS NOT NULL OR x.maker_id_no IS NOT NULL)) AS part_cnt
         FROM eng_log t LEFT JOIN `user` u ON u.id = t.user_id
         WHERE {$w} ORDER BY t.created_at DESC, t.id DESC{$lim}");
     $st->execute($params);
@@ -272,9 +278,20 @@ if ($action === 'list') {
         $pmap = [];
         foreach ($ps as $p) $pmap[(int)$p['log_id']][] = ['pk' => (int)$p['pk'], 'part_no' => (string)$p['part_no']];
 
+        // 客戶名稱：綁 BOM 自動推導出來的也要顯示（使用者要求列表看得到客戶）
+        $cs = $db->query("SELECT x.log_id, COALESCE(c.customer, x.customer_id) AS name
+                          FROM eng_log_index x LEFT JOIN customer_list c ON c.customer_id = x.customer_id
+                          WHERE x.log_id IN ({$in}) AND x.customer_id IS NOT NULL
+                          ORDER BY c.customer")->fetchAll(PDO::FETCH_ASSOC);
+        $cmap = [];
+        foreach ($cs as $c) { $n = trim((string)$c['name']); if ($n !== '') $cmap[(int)$c['log_id']][$n] = true; }
+
         foreach ($rows as &$r) {
             $r['binds'] = $map[(int)$r['id']] ?? [];
             $r['parts'] = $pmap[(int)$r['id']] ?? [];
+            $r['customers'] = array_keys($cmap[(int)$r['id']] ?? []);
+            $r['auto_title'] = el_auto_title($db, (int)$r['id'], (string)$r['log_type']);
+            $r['title_manual'] = (string)($r['title_manual'] ?? '');
             // 綁了 BOM 時，點料號要開「只含這張 BOM 的圖檔」的 part_viewer（比照 OreadyReply）
             $r['bom'] = '';
             foreach ($r['binds'] as $b) {
@@ -309,8 +326,32 @@ if ($action === 'get') {
                           WHERE r.item_id IN ({$in}) ORDER BY r.replied_on, r.id")->fetchAll(PDO::FETCH_ASSOC);
         foreach ($rs as $x) $replies[(int)$x['item_id']][] = $x;
     }
+    /* 公司內部的對象要連「部門 職稱」一起顯示（使用者要求，不能只有人名）。
+       依 people_lib 的挑法取職級最高那筆，兼任者顯示的就是他真正的簽核身分。 */
+    $postMap = [];
+    $uids = [];
+    foreach ($items as $it) if (($it['target_type'] ?? '') === 'user' && $it['target_id'] !== null) $uids[] = (int)$it['target_id'];
+    if ($uids) {
+        $uin = implode(',', array_unique(array_filter($uids)));
+        if ($uin !== '') {
+            try {
+                foreach ($db->query("SELECT m.user_id, d.name AS dept, p.name AS pos, COALESCE(p.sort_order,999) s
+                                     FROM user_department_position_map m
+                                     LEFT JOIN department d ON d.id = m.department_id
+                                     LEFT JOIN position p ON p.id = m.position_id
+                                     WHERE m.user_id IN ({$uin})
+                                     ORDER BY s ASC, m.is_main DESC, m.id ASC")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $u = (int)$r['user_id'];
+                    if (isset($postMap[$u])) continue;   // 只取排序後的第一筆
+                    $postMap[$u] = trim(((string)$r['dept']) . ' ' . ((string)$r['pos']));
+                }
+            } catch (Throwable $e) {}
+        }
+    }
     $def = el_default_follow_up_days();
     foreach ($items as &$it) {
+        $it['target_post'] = (($it['target_type'] ?? '') === 'user')
+            ? (string)($postMap[(int)$it['target_id']] ?? '') : '';
         $it['replies'] = $replies[(int)$it['id']] ?? [];
         $it['wait_days'] = ($it['status'] === 'waiting') ? el_item_waiting_days($db, (string)$it['asked_at']) : 0;
         $it['overdue'] = ($it['status'] === 'waiting' && $it['wait_days'] >= (int)($it['follow_up_days'] ?? $def));
@@ -322,6 +363,8 @@ if ($action === 'get') {
     $files = $st->fetchAll(PDO::FETCH_ASSOC);
 
     $row['can_write'] = el_can_write($row, $P);
+    $row['auto_title'] = el_auto_title($db, $id, (string)$row['log_type']);
+    $row['title_manual'] = (string)($row['title_manual'] ?? '');
     jout(['log' => $row, 'binds' => $binds, 'items' => $items, 'files' => $files,
           'unlinked' => !el_has_part($db, $id)]);
 }
@@ -330,6 +373,7 @@ if ($action === 'get') {
 if ($action === 'save_log') {
     need_csrf(); need_edit();
     $id    = (int)($_POST['id'] ?? 0);
+    // 標題欄位存的是「使用者自己打的那一段」；自動標題每次讀取時即時算，不存 DB
     $title = trim((string)($_POST['title'] ?? ''));
     if (mb_strlen($title) > 200) jerr('標題請控制在 200 字以內');
 
@@ -350,9 +394,18 @@ if ($action === 'save_log') {
 
     $bindTypes = el_bind_types();
 
-    /* 標題沒填就自動組一個（使用者要求）：綁定的第一個對象 ＋ 類型 ＋ 第一條問題摘要。
-       用「這筆一定有的東西」組，而不是丟一個「未命名」讓清單全是同名的列。 */
-    if ($title === '') $title = el_auto_title($db, $binds, $items, $logType, $id);
+    /* 綁定對象必填（2026-09-11 使用者要求）：沒有綁定的紀錄日後用客戶／料號／廠商
+       一筆都查不到，等於存了沒有用。 */
+    if (!$binds) jerr('請至少綁定一個對象（BOM／料號／訂單／出貨單／退貨單／客戶／廠商）');
+
+    /* 類型沒選時依綁定自動判定（退貨單＝退貨、訂單＝批圖），使用者仍可自己改 */
+    if ($logType === '' || $logType === 'other') {
+        foreach ($binds as $b) {
+            $auto = el_auto_type_for_bind((string)($b['bind_type'] ?? ''));
+            if ($auto !== '') { $logType = $auto; break; }
+        }
+    }
+    if ($logType === '') $logType = 'other';
 
     /* 對象一定要帶 ID（使用者要求）：只打名字的話，對方主檔改名就對應不到，
        三軸索引也展不出這一家。前端擋一次、這裡同規則再擋一次（鐵律8）。 */
@@ -375,23 +428,24 @@ if ($action === 'save_log') {
             if (!el_can_write($cur, $P)) { $db->rollBack(); jerr('只能修改自己建立的紀錄（管理員才能改他人的）'); }
             // 期限或提醒被改過 → 重置 remind_sent，否則改了期限也不會再提醒
             $resend = ($cur['deadline'] !== $deadline || (string)$cur['remind_before_minutes'] !== (string)$remind) ? 0 : (int)$cur['remind_sent'];
-            $db->prepare("UPDATE eng_log SET title=?, log_type=?, visibility=?, deadline=?, remind_before_minutes=?,
-                          remind_sent=?, urgent_days=?, note=?, updated_at=? WHERE id=?")
-               ->execute([$title, $logType, $vis, $deadline, $remind, $resend, $urgent, ($note === '' ? null : $note), $now, $id]);
+            $db->prepare("UPDATE eng_log SET title=?, title_manual=?, log_type=?, visibility=?, deadline=?,
+                          remind_before_minutes=?, remind_sent=?, urgent_days=?, note=?, updated_at=? WHERE id=?")
+               ->execute([$title, ($title === '' ? null : $title), $logType, $vis, $deadline,
+                          $remind, $resend, $urgent, ($note === '' ? null : $note), $now, $id]);
         } else {
             $logNo = el_next_log_no($db, $today);
-            $db->prepare("INSERT INTO eng_log (log_no, user_id, dept_id, title, log_type, status, visibility,
-                          deadline, remind_before_minutes, remind_sent, urgent_days, note, created_at)
-                          VALUES (?,?,?,?,?,'open',?,?,?,0,?,?,?)")
-               ->execute([$logNo, (int)$P['uid'], $P['dept_id'], $title, $logType, $vis,
-                          $deadline, $remind, $urgent, ($note === '' ? null : $note), $now]);
+            $db->prepare("INSERT INTO eng_log (log_no, user_id, dept_id, title, title_manual, log_type, status,
+                          visibility, deadline, remind_before_minutes, remind_sent, urgent_days, note, created_at)
+                          VALUES (?,?,?,?,?,?,'open',?,?,?,0,?,?,?)")
+               ->execute([$logNo, (int)$P['uid'], $P['dept_id'], $title, ($title === '' ? null : $title),
+                          $logType, $vis, $deadline, $remind, $urgent, ($note === '' ? null : $note), $now]);
             $id = (int)$db->lastInsertId();
         }
 
         /* 綁定：整批重寫（數量少，比逐筆比對簡單且不會漏） */
         $db->prepare("DELETE FROM eng_log_bind WHERE log_id=?")->execute([$id]);
-        $insB = $db->prepare("INSERT INTO eng_log_bind (log_id, bind_type, bind_id, bind_label, is_manual, sel_parts, sort_order)
-                              VALUES (?,?,?,?,?,?,?)");
+        $insB = $db->prepare("INSERT INTO eng_log_bind (log_id, bind_type, bind_id, bind_label, is_manual, sel_parts, meta, sort_order)
+                              VALUES (?,?,?,?,?,?,?,?)");
         $seen = []; $sort = 0;
         foreach ($binds as $b) {
             $t = (string)($b['bind_type'] ?? '');
@@ -406,7 +460,10 @@ if ($action === 'save_log') {
             if (in_array($t, el_multipart_types(), true) && isset($b['sel_parts']) && is_array($b['sel_parts'])) {
                 $sel = json_encode(array_values(array_map('intval', $b['sel_parts'])));
             }
-            $insB->execute([$id, $t, $bid, ($label === '' ? null : $label), $manual, $sel, $sort++]);
+            // meta：BOM 綁定時記下使用者選的是哪一關製程與當時的發包廠商
+            $meta = null;
+            if (isset($b['meta']) && is_array($b['meta'])) $meta = json_encode($b['meta'], JSON_UNESCAPED_UNICODE);
+            $insB->execute([$id, $t, $bid, ($label === '' ? null : $label), $manual, $sel, $meta, $sort++]);
         }
 
         /* 新建時可一次帶入多條問題（可增列表格一口氣打完） */
@@ -480,8 +537,8 @@ if ($action === 'close_log') {
     el_need_write($row, $P);
     // 點開即刷新鐵則：已經被別人結案了就擋下並請對方重新整理
     if ($row['status'] === 'done') jerr('這筆已經結案了，請重新整理後查看');
+    // 結論改為選填（2026-09-11 使用者指正：不該強迫寫）
     $conclusion = trim((string)($_POST['conclusion'] ?? ''));
-    if ($conclusion === '') jerr('請填寫結論（一句話就好）');
     if (mb_strlen($conclusion) > 500) jerr('結論請控制在 500 字以內');
     $db->prepare("UPDATE eng_log SET status='done', conclusion=?, closed_at=?, updated_at=? WHERE id=?")
        ->execute([$conclusion, $now, $now, $id]);
@@ -534,10 +591,17 @@ if ($action === 'item_save') {
         } else {
             $mx = $db->prepare("SELECT COALESCE(MAX(seq),0)+1 FROM eng_log_item WHERE log_id=?");
             $mx->execute([$logId]);
-            $db->prepare("INSERT INTO eng_log_item (log_id, seq, question, target_type, target_id, target_label,
-                          target_contact, asked_at, status, follow_up_days, remind_sent, created_at)
-                          VALUES (?,?,?,?,?,?,?,?, 'waiting', ?, 0, ?)")
-               ->execute([$logId, (int)$mx->fetchColumn(), $q, $tt, ($ti === '' ? null : $ti),
+            // 延伸問題：對方回覆之後才衍生出來的小問題，掛在原問題底下
+            $parent = el_norm_int($_POST['parent_item_id'] ?? '');
+            if ($parent !== null) {
+                $pc = $db->prepare("SELECT 1 FROM eng_log_item WHERE id=? AND log_id=?");
+                $pc->execute([$parent, $logId]);
+                if (!$pc->fetchColumn()) { $db->rollBack(); jerr('要延伸的那一條問題不存在，請重新整理'); }
+            }
+            $db->prepare("INSERT INTO eng_log_item (log_id, parent_item_id, seq, question, target_type, target_id,
+                          target_label, target_contact, asked_at, status, follow_up_days, remind_sent, created_at)
+                          VALUES (?,?,?,?,?,?,?,?,?, 'waiting', ?, 0, ?)")
+               ->execute([$logId, $parent, (int)$mx->fetchColumn(), $q, $tt, ($ti === '' ? null : $ti),
                           ($tl === '' ? null : $tl), ($tc === '' ? null : $tc), $asked, $fud, $now]);
             $itemId = (int)$db->lastInsertId();
         }
@@ -843,6 +907,81 @@ if ($action === 'bom_flow') {
         if ($p) $out[$b] = $p;
     }
     jout(['flows' => $out]);
+}
+
+/**
+ * 一張 BOM 的逐關製程＋目前發包廠商（類型＝製程中時挑「哪一關出問題」）。
+ * 選到的那一關若已發包就自動帶出廠商；沒發包就讓使用者自己搜廠商（可不綁）。
+ */
+if ($action === 'bom_processes') {
+    $bom = trim((string)($_GET['bom'] ?? ''));
+    if ($bom === '') jout(['rows' => []]);
+    jout(['rows' => el_bom_processes($db, $bom)]);
+}
+
+/* ── 回覆方式選項的維護（僅管理員） ─────────────────────────────────── */
+if ($action === 'channel_list') {
+    jout(['rows' => el_channel_rows($db)]);
+}
+if ($action === 'channel_save') {
+    need_csrf();
+    if (!$P['canAdmin']) jerr('只有管理員可以維護回覆方式');
+    $cid  = (int)($_POST['id'] ?? 0);
+    $name = trim((string)($_POST['name'] ?? ''));
+    if ($name === '') jerr('請填寫名稱');
+    if (mb_strlen($name) > 40) jerr('名稱請控制在 40 字以內');
+    $act  = !empty($_POST['is_active']) ? 1 : 0;
+    $sort = (int)($_POST['sort_order'] ?? 0);
+    try {
+        if ($cid > 0) {
+            // code 建立後不再更動：既有回覆存的是 code，改了會全部對不到
+            $db->prepare("UPDATE eng_log_channel SET name=?, sort_order=?, is_active=? WHERE id=?")
+               ->execute([$name, $sort, $act, $cid]);
+        } else {
+            $code = trim((string)($_POST['code'] ?? ''));
+            if ($code === '') $code = 'c' . substr(bin2hex(random_bytes(4)), 0, 6);
+            if (!preg_match('/^[a-z0-9_]{1,20}$/i', $code)) jerr('代碼只能用英數字與底線');
+            $chk = $db->prepare("SELECT 1 FROM eng_log_channel WHERE code=?");
+            $chk->execute([$code]);
+            if ($chk->fetchColumn()) jerr('這個代碼已經存在');
+            $db->prepare("INSERT INTO eng_log_channel (code, name, sort_order, is_active, created_at) VALUES (?,?,?,?,?)")
+               ->execute([$code, $name, $sort, $act, $now]);
+            $cid = (int)$db->lastInsertId();
+        }
+    } catch (Throwable $e) { jerr('儲存失敗：' . $e->getMessage()); }
+    jout(['id' => $cid, 'rows' => el_channel_rows($db)]);
+}
+if ($action === 'channel_delete') {
+    need_csrf();
+    if (!$P['canAdmin']) jerr('只有管理員可以維護回覆方式');
+    $cid = (int)($_POST['id'] ?? 0);
+    $st = $db->prepare("SELECT code FROM eng_log_channel WHERE id=?");
+    $st->execute([$cid]);
+    $code = (string)$st->fetchColumn();
+    if ($code === '') jerr('查無此選項，請重新整理');
+    // 已經被用過的不給硬刪，否則那些回覆的方式會變成查不到的孤兒；改建議停用
+    $u = $db->prepare("SELECT COUNT(*) FROM eng_log_reply WHERE channel=?");
+    $u->execute([$code]);
+    $used = (int)$u->fetchColumn();
+    if ($used > 0) jerr('這個方式已經被 ' . $used . ' 則回覆使用中，不能刪除。請改成「停用」，既有紀錄才不會變成空白。');
+    $db->prepare("DELETE FROM eng_log_channel WHERE id=?")->execute([$cid]);
+    jout(['rows' => el_channel_rows($db)]);
+}
+
+/** 附件備註（顯示在附件下方） */
+if ($action === 'file_note') {
+    need_csrf(); need_edit();
+    $fid  = (int)($_POST['id'] ?? 0);
+    $note = trim((string)($_POST['note'] ?? ''));
+    if (mb_strlen($note) > 500) jerr('備註請控制在 500 字以內');
+    $st = $db->prepare("SELECT * FROM eng_log_file WHERE id=?");
+    $st->execute([$fid]);
+    $f = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$f) jerr('查無此附件，請重新整理');
+    if ((int)$f['log_id'] > 0) { $row = el_load_log($db, (int)$f['log_id'], $P); el_need_write($row, $P); }
+    elseif ((int)$f['uploaded_by'] !== (int)$P['uid']) jerr('只能修改自己上傳的暫存檔');
+    $db->prepare("UPDATE eng_log_file SET note=? WHERE id=?")->execute([($note === '' ? null : $note), $fid]);
+    jout([]);
 }
 
 /** 出貨單／退貨單底下的料號（多料號時跳出勾選清單） */
