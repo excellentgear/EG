@@ -88,11 +88,21 @@ $roleLabel = ia_role_label($perms);
         .cl-seq { color:#8a6d45; font-size:12px; }
         tr.cl-dragging { opacity:.45; background:#FDF3E3; }
         #clauseBody tr[draggable="true"]:hover .cl-drag { color:#8A5A2B; }
+        /* 條文的作業項目欄（2026-09-11）：項目設在 AS 文件管理，這裡只勾「這一條對應到哪幾個」 */
+        .cl-task-doc { font-size:11px; color:#8a6d45; font-weight:bold; margin:3px 0 1px; }
+        .cl-task-chk { display:inline-block; font-size:12px; color:#5b3a1e; font-weight:normal;
+            background:#FBF5EA; border:1px solid #E8D5B5; border-radius:10px; padding:1px 8px; margin:0 3px 3px 0; cursor:pointer; }
+        .cl-task-chk input { margin-right:2px; vertical-align:-1px; }
+        .cl-task-hint { font-size:11px; color:#b0a390; margin:2px 0; }
+        /* 自動儲存的狀態字（2026-09-11：拿掉「存」按鈕後，要看得出來到底存了沒） */
+        .cl-st { font-size:11px; color:#7a9a5e; margin-top:2px; min-height:14px; line-height:14px; }
+        .cl-st.bad { color:#C4442D; font-weight:bold; }
         /* 打字模糊篩選的建議清單（相關表單編號／違反條文共用） */
         .ia-sug-wrap { position:relative; }
         .ia-sug { position:absolute; z-index:60; left:0; right:0; top:100%; max-height:230px; overflow-y:auto;
             background:#fff; border:1px solid #D8BE93; border-radius:0 0 5px 5px; box-shadow:0 6px 14px rgba(90,60,20,.18); }
         .ia-sug div { padding:5px 8px; font-size:12px; color:#5b3a1e; cursor:pointer; border-bottom:1px solid #F3E7D2; }
+        .ia-sug .sug-extra { padding:1px 0 0; border:none; font-size:11px; color:#a08356; }
         .ia-sug div:last-child { border-bottom:0; }
         .ia-sug div:hover, .ia-sug div.on { background:#FDF3E3; }
         .ia-sug .no { color:#b5762a; font-weight:bold; margin-right:6px; }
@@ -195,6 +205,16 @@ $roleLabel = ia_role_label($perms);
         .pick-wrap label { display:block; padding:4px 10px; margin:0; font-size:13px; color:#5b3a1e; cursor:pointer; border-bottom:1px solid #F3EADA; }
         .pick-wrap label:hover { background:#FDF3E2; }
         .pick-wrap label.hdr { background:#F3E4C9; font-weight:bold; color:#6b4a20; }
+        /* 建立查檢表：作業項目標籤（點一下＝只勾這個用途的條文）與每一列的用途徽章 */
+        .nk-chip { display:inline-block; font-size:12px; color:#8A5A2B; background:#FBF5EA; border:1px solid #E8D5B5;
+            border-radius:11px; padding:1px 10px; margin:0 4px 4px 0; cursor:pointer; user-select:none; }
+        .nk-chip:hover { background:#F7E0BD; }
+        .nk-chip.on { background:#F0A24B; color:#fff; border-color:#d98a33; font-weight:bold; }
+        .nk-chip.clear { color:#C4442D; }
+        .nk-task { display:inline-block; font-size:11px; color:#8A5A2B; background:#F7E0BD; border:1px solid #E8D5B5;
+            border-radius:9px; padding:0 7px; margin-left:4px; }
+        .pick-wrap label.dim { color:#b0a390; }
+        .pick-wrap label.dim .nk-task { opacity:.55; }
         /* 勾選清單一律對齊：勾選框固定欄寬、名稱固定欄寬、右側說明自己一欄，
            不用全形空白做縮排（那會讓每一列的文字起點都不一樣，看起來歪七扭八） */
         .pick-wrap label.pick-row { display:flex; align-items:center; gap:8px; }
@@ -392,7 +412,8 @@ $roleLabel = ia_role_label($perms);
             <li><b>①年度計畫（2-GM-06-01）</b>：先按「建立本年度計畫表」，選要納入的受稽單位，再在格狀表點格子排定 ○。存檔後送審、核准。</li>
             <li><b>②稽核通知單（2-GM-06-02）</b>：新增一張，填通知日期、稽核期間、稽核組長，下方逐列填「稽核起始主過程／受稽單位／稽核員／陪檢員」（稽核員與陪檢員都可以指定多位）。
                 稽核件號會依<b>通知日期</b>自動產生（西元年後兩碼+月日+流水，例 241216001）。存檔後可按「事前會議」建立會議紀錄草稿。</li>
-            <li><b>③查檢表</b>：三種各自建立，建立時勾選這次要查的項目。現場逐列判定合格／不合格並填所見證據。判「不合格」的列可直接按「開不符合單」。</li>
+            <li><b>③查檢表</b>：三種各自建立，建立時勾選這次要查的項目。現場逐列判定合格／不合格並填所見證據。判「不合格」的列可直接按「開不符合單」。
+                AS 查檢表可用上方的<b>作業項目標籤</b>（品管檢測／外包加工…）一鍵挑題，不必在 71 條原文裡用眼睛找。</li>
             <li><b>④不符合通知單（2-GM-06-07）</b>：分四段填，各段只有該角色能填（見下）。系統會通知受稽單位主管，期限前與逾期會自動再提醒。</li>
             <li><b>⑤稽核報告表（2-GM-06-08）</b>：缺點數與缺點記錄自動彙總，只要調整「預定完成改善時間」與補充文字，然後核准、列印。</li>
         </ul>
@@ -421,6 +442,13 @@ $roleLabel = ia_role_label($perms);
             <li><b>到期提醒</b>：期限前 N 天（預設 7 天，可在「設定」改）與逾期後，每天最多發一則通知給受稽單位主管與受審核人。提醒是有人用到這個模組時順便檢查，不是背景排程。</li>
             <li><b>查檢表結案前必須每一項都判定過</b>合格／不合格，否則不讓結案（避免漏查）。</li>
             <li><b>條文題庫刪不掉</b>：已經被既有查檢表引用的 AS 條文按刪除會自動改成「停用」（不再出現在新建的查檢表），舊表內容不受影響。</li>
+            <li><b>作業項目：看不懂條文在查什麼的解法</b>（2026-09-11 起）。AS 條文是原文（「8.4 外部提供的過程、產品和服務的控制」），看不出實務上對應公司哪一段作業，所以加了一層白話的<b>作業項目</b>：
+                <br>⑴<b>項目本身設在 AS 文件管理</b>：該文件的 <b>⚙ → 作業項目</b>（管理員限定），一份文件可以寫好幾個（同一份文件常常不只做一件事），例如供應商管理程序＝外包加工、供應商評鑑。
+                <br>⑵<b>條文題庫</b>的「作業項目」欄再挑「這一條對應到哪幾個」，候選就是該條文左欄列出來的那幾份文件底下的項目。
+                <br>⑶<b>建立查檢表</b>時上方會長出這些標籤，點一下＝只勾有這個用途的條文（可多選，再點一次取消）；每一列也同時顯示品質管理系統要求、對應的文件表單與作業項目。
+                <br>⑷<b>填寫查檢表</b>時每一列的要求下方會顯示作業項目；<b>不符合通知單</b>的「違反條文」打字建議也會一併顯示，打「外包加工」就找得到對應條文。
+                <br>⑸查檢表顯示的是<b>目前最新</b>的作業項目（不存快照），所以文件的項目改了，舊查檢表打開也會跟著是新的說法；<b>列印版不印作業項目</b>，紙本版面維持原樣。
+                <br>⑹在 AS 文件管理刪掉某個作業項目時，條文這邊已經挑好的對應會一起解除（存檔後會告訴你解除了幾筆）。</li>
             <li><b>列印</b>：每張表都是 A4，公司全名、表頭表單名稱、頁尾右下角的 AS 文件編號都由「設定」裡綁定的 AS 文件推導，<b>版次依該單據的日期回推當時生效的版次</b>。按下列印會留下列印紀錄（列印與簽核紀錄頁查得到）。</li>
         </ul>
 
@@ -519,10 +547,16 @@ $roleLabel = ia_role_label($perms);
         <div class="ia-hint">這是<b>AS稽核查檢表</b>的題目來源，建一次每年沿用。勾「章節標題」的列在查檢表上只當分隔標題、不判定合格與否。
         已被既有查檢表引用的條文按刪除會自動改成停用（不再出現在新表），舊表內容不受影響。<br>
         <b>順序用拖的</b>：抓住左邊的 <i class="fa fa-bars"></i> 上下拖曳，放開就自動重新編號並存檔，不必手動輸入數字。
-        「建立的文件、表單」按<b>＋選文件</b>可以打編號或名稱模糊篩選後多選。</div>
+        「建立的文件、表單」按<b>＋選文件</b>可以打編號或名稱模糊篩選後多選。<br>
+        <b>改完自動儲存</b>：文字欄位離開欄位、勾選框點下去當下就會存，右側會顯示「已儲存」，不必再按存檔鈕。<br>
+        <b>作業項目</b>＝這一條實務上在查哪幾件事（品管檢測／外包加工…）。項目本身設在
+        <b>AS 文件管理 → 該文件的 ⚙ → 作業項目</b>（一份文件可以有好幾個），這裡只挑「這一條對應到哪幾個」，
+        候選就是左欄那幾份文件底下的項目；勾好之後，<b>建立查檢表</b>可以直接用它一鍵挑題、<b>填寫查檢表</b>時每一列也看得到。</div>
         <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
             <th style="width:64px;">順序</th><th style="width:70px;">標題列</th><th>品質管理系統要求</th>
-            <th style="width:260px;">建立的文件、表單</th><th style="width:70px;">啟用</th><th style="width:110px;">操作</th>
+            <th style="width:240px;">建立的文件、表單</th>
+            <th style="width:230px;" title="這一條實務上對應到哪幾件事，勾了才會顯示在建立／填寫查檢表上">作業項目</th>
+            <th style="width:70px;">啟用</th><th style="width:110px;">操作</th>
         </tr></thead><tbody id="clauseBody"></tbody></table></div>
     </div>
     <div class="ia-mfoot"><button data-close>關閉</button></div>
@@ -606,6 +640,12 @@ $roleLabel = ia_role_label($perms);
                 <button id="nkAll" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全選</button>
                 <button id="nkNone" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全不選</button>
                 <span id="nkCount" style="font-size:12px;color:#8a6d45;"></span>
+            </div>
+            <!-- 作業項目快速挑題（只有 AS 查檢表有）：條文原文看不出實務上在查什麼，
+                 點一下就只勾該用途的條文。項目設在 AS 文件管理 → ⚙ 作業項目，條文題庫逐條挑對應。 -->
+            <div id="nkTaskBar" style="display:none;margin-bottom:6px;">
+                <span style="font-size:12px;color:#8a6d45;">依作業項目挑題：</span>
+                <span id="nkTaskChips"></span>
             </div>
             <div class="pick-wrap" id="nkPick" style="max-height:300px;"></div>
             <div class="err-msg" id="errNkPick"></div>
@@ -922,10 +962,24 @@ function toPlainMap(v){
 function dispDate(d){ return (window.egFmtDate ? egFmtDate(d) : (d||'')) || ''; }
 /* <input type=date> 要的是 Y-m-d，不能吃 YYYY.MM.DD */
 function inputDate(d){ if(!d) return ''; return String(d).substr(0,10); }
-function openMask(id){ $('#'+id).show(); }
-function closeMask(id){ $('#'+id).hide(); }
-$(document).on('click','[data-close]', function(){ $(this).closest('.ia-mask').hide(); });
-$(document).on('click','.ia-mask', function(e){ if(e.target===this) $(this).hide(); });
+/* 跳窗可以疊跳窗（例：條文題庫 →「＋選文件」）。所有 .ia-mask 的 z-index 都是 9000，
+   同層時**誰在 HTML 裡寫得晚誰就蓋在上面**——「選文件」寫在「條文題庫」前面，
+   於是後開的選文件反而被壓在後面：看得到一點點、卻完全點不到（2026-09-11 使用者回報）。
+   修法：開啟時一律算出目前最上層的跳窗再往上疊，關掉就還原，不必逐個跳窗去記 z-index。 */
+var IA_MASK_Z = 9000;
+function openMask(id){
+    var $m = $('#'+id), top = IA_MASK_Z;
+    $('.ia-mask:visible').each(function(){
+        if (this === $m[0]) return;
+        var z = parseInt($(this).css('z-index'), 10);
+        if (z && z > top) top = z;
+    });
+    $m.css('z-index', top + 10).show();
+}
+function closeMask(id){ $('#'+id).hide().css('z-index',''); }
+function hideMask($m){ $m.hide().css('z-index',''); }
+$(document).on('click','[data-close]', function(){ hideMask($(this).closest('.ia-mask')); });
+$(document).on('click','.ia-mask', function(e){ if(e.target===this) hideMask($(this)); });
 /* API 用 HTTP 狀態碼回錯，jQuery 非 2xx 不會進 success，錯誤只會掉進 console —— 統一顯示出來 */
 $(document).ajaxError(function(_e, xhr){
     if (xhr && xhr.status && xhr.status !== 200) {
@@ -1580,6 +1634,7 @@ $('#btnCheckNew').on('click', function(){
 $('#nkKind').on('change', loadBank);
 function loadBank(){
     var kind = $('#nkKind').val();
+    NK_TASKS = []; NK_CHECKED = {};       // 換種類＝重來一次，不要把上一種的勾選帶過去
     $('#nkHalfLab, #nkHalf').closest('div').toggle(kind==='kpi');
     $('#nkHalfLab').toggle(kind==='kpi');
     $.getJSON(API, {action:'check_bank', kind:kind, year:YEAR}, function(res){
@@ -1590,18 +1645,68 @@ function loadBank(){
 }
 function bankRow(kind, r){
     if (kind==='as')     return {id:+r.clause_id,  hdr:+r.is_header===1,
-                                 text:r.clause_text, sub:r.doc_ref||''};
-    if (kind==='system') return {id:+r.id, hdr:false, text:(r.doc_no||'')+'　'+(r.doc_name||''), sub:''};
+                                 text:r.clause_text, sub:r.doc_ref||'',
+                                 tasks:(r.tasks||[]).map(function(t){ return t.task_name; })};
+    if (kind==='system') return {id:+r.id, hdr:false, text:(r.doc_no||'')+'　'+(r.doc_name||''), sub:'', tasks:[]};
     return {id:+r.indicator_id, hdr:false,
-            text:(r.dept_name?r.dept_name+'　':'')+(r.name||''), sub:r.target_text?('目標：'+r.target_text):''};
+            text:(r.dept_name?r.dept_name+'　':'')+(r.name||''), sub:r.target_text?('目標：'+r.target_text):'', tasks:[]};
+}
+/* 作業項目標籤（只有 AS 查檢表）：點一下＝只勾有這個用途的條文，再點一下取消。
+   同時選多個＝聯集。一個都沒選＝回到全部勾選（跟原本行為一樣）。 */
+var NK_TASKS = [];
+function renderTaskChips(){
+    var kind = $('#nkKind').val();
+    if (kind !== 'as') { $('#nkTaskBar').hide(); NK_TASKS = []; return; }
+    var all = {};
+    BANK.forEach(function(raw){ (raw.tasks||[]).forEach(function(t){ all[t.task_name] = 1; }); });
+    var names = Object.keys(all).sort();
+    if (!names.length) { $('#nkTaskBar').hide(); NK_TASKS = []; return; }
+    NK_TASKS = NK_TASKS.filter(function(n){ return names.indexOf(n) >= 0; });
+    $('#nkTaskChips').html(names.map(function(n){
+        return '<span class="nk-chip'+(NK_TASKS.indexOf(n)>=0?' on':'')+'" data-t="'+esc(n)+'">'+esc(n)+'</span>';
+    }).join('') + (NK_TASKS.length ? '<span class="nk-chip clear" data-clear="1">✕ 清除</span>' : ''));
+    $('#nkTaskBar').show();
+}
+$(document).on('click', '#nkTaskChips .nk-chip', function(){
+    if ($(this).data('clear')) { NK_TASKS = []; }
+    else {
+        var n = String($(this).data('t')), i = NK_TASKS.indexOf(n);
+        if (i >= 0) NK_TASKS.splice(i, 1); else NK_TASKS.push(n);
+    }
+    NK_CHECKED = {};        // 按標籤＝重挑一次，之前逐列勾的以標籤為準
+    renderBank();
+});
+function rowHitTask(r){
+    if (!NK_TASKS.length) return true;
+    for (var i=0;i<NK_TASKS.length;i++) if ((r.tasks||[]).indexOf(NK_TASKS[i]) >= 0) return true;
+    return false;
+}
+/* 勾選狀態記在 NK_CHECKED（id => true/false），**不以畫面上的勾選框為準**：
+   打關鍵字篩選時不符合的列根本不在畫面上，只讀畫面＝剛剛勾好的東西會在篩選後整批消失
+   （原本的「已勾 N 項」與建立時送出的清單都有這個問題）。沒被動過的列才回退到標籤判定。 */
+var NK_CHECKED = {};
+function nkIsChecked(r){
+    return (NK_CHECKED[r.id] !== undefined) ? !!NK_CHECKED[r.id] : rowHitTask(r);
+}
+/** 目前實際勾選的（跨篩選、跨標籤），回 {ids:[含標題列], real:非標題列的筆數} */
+function nkPicked(){
+    var kind = $('#nkKind').val(), ids = [], real = 0;
+    BANK.forEach(function(raw){
+        var r = bankRow(kind, raw);
+        if (r.hdr) { ids.push(r.id); return; }       // 標題列一定跟著建進去
+        if (nkIsChecked(r)) { ids.push(r.id); real++; }
+    });
+    return {ids:ids, real:real};
 }
 function renderBank(){
     var kind = $('#nkKind').val();
     var kw = $('#nkFilter').val().trim().toLowerCase();
+    renderTaskChips();
     var h = '', shown = 0;
     BANK.forEach(function(raw){
         var r = bankRow(kind, raw);
-        var hay = (r.text+' '+r.sub).toLowerCase();
+        // 作業項目也吃關鍵字（打「外包」找得到掛這個用途的條文）
+        var hay = (r.text+' '+r.sub+' '+(r.tasks||[]).join(' ')).toLowerCase();
         if (kw && hay.indexOf(kw) < 0) return;
         shown++;
         if (r.hdr) {
@@ -1609,29 +1714,44 @@ function renderBank(){
             h += '<label class="hdr"><input type="checkbox" class="bkChk bkHdr" value="'+r.id+'" checked onclick="return false;"> '
                + esc(r.text)+'</label>';
         } else {
-            h += '<label><input type="checkbox" class="bkChk" value="'+r.id+'" checked> '+esc(r.text)
-               + (r.sub ? '<span style="color:#a08356;font-size:12px;">　'+esc(r.sub)+'</span>' : '')+'</label>';
+            var on = nkIsChecked(r);
+            h += '<label'+(!on ? ' class="dim"' : '')+'>'
+               + '<input type="checkbox" class="bkChk" value="'+r.id+'"'+(on?' checked':'')+'> '+esc(r.text)
+               + (r.sub ? '<span style="color:#a08356;font-size:12px;">　'+esc(r.sub)+'</span>' : '')
+               + (r.tasks||[]).map(function(t){ return '<span class="nk-task">'+esc(t)+'</span>'; }).join('')
+               + '</label>';
         }
     });
     $('#nkPick').html(h || '<div class="ia-empty">題庫沒有符合的項目</div>');
     updateBankCount(shown);
 }
 function updateBankCount(shown){
-    var n = $('#nkPick .bkChk:not(.bkHdr):checked').length;
-    $('#nkCount').text('已勾 '+n+' 項'+(shown!=null?('／顯示 '+shown+' 列'):''));
+    var p = nkPicked();
+    $('#nkCount').text('已勾 '+p.real+' 項'+(shown!=null?('／顯示 '+shown+' 列'):''));
 }
-$(document).on('change','.bkChk', function(){ updateBankCount(); });
+$(document).on('change','.bkChk', function(){
+    if ($(this).hasClass('bkHdr')) return;
+    NK_CHECKED[+$(this).val()] = $(this).is(':checked');
+    $(this).closest('label').toggleClass('dim', !$(this).is(':checked'));
+    updateBankCount();
+});
 $('#nkFilter').on('input', renderBank);
-$('#nkAll').on('click', function(){ $('#nkPick .bkChk').prop('checked', true); updateBankCount(); return false; });
-$('#nkNone').on('click', function(){ $('#nkPick .bkChk:not(.bkHdr)').prop('checked', false); updateBankCount(); return false; });
+/* 全選／全不選以「目前篩選出來的列」為準（看得到的才動），但記在 NK_CHECKED 而不是畫面上 */
+$('#nkAll').on('click', function(){
+    $('#nkPick .bkChk:not(.bkHdr)').each(function(){ NK_CHECKED[+$(this).val()] = true; });
+    renderBank(); return false;
+});
+$('#nkNone').on('click', function(){
+    $('#nkPick .bkChk:not(.bkHdr)').each(function(){ NK_CHECKED[+$(this).val()] = false; });
+    renderBank(); return false;
+});
 $('#btnCheckCreate').on('click', function(){
     clearErrs($('#checkNewMask'));
     var kind = $('#nkKind').val(), ok = true;
     ok = fieldErr($('#nkDate'), 'errNkDate', $('#nkDate').val() ? '' : '請填稽核日期') && ok;
     if (kind==='kpi') ok = fieldErr($('#nkHalf'), 'errNkHalf', $('#nkHalf').val() ? '' : '請選上／下半年度') && ok;
     // 篩選中被藏起來的項目仍然算數（否則使用者打了關鍵字就只會建出看得到的那幾題）
-    var picked = $('#nkPick .bkChk:checked').map(function(){ return +$(this).val(); }).get();
-    var real   = $('#nkPick .bkChk:not(.bkHdr):checked').length;
+    var p = nkPicked(), picked = p.ids, real = p.real;
     if (!real) { $('#errNkPick').addClass('on').text('請至少勾選一個要查核的項目'); ok = false; }
     if (!ok) return;
     $.post(API, {action:'check_create', kind:kind, check_date:$('#nkDate').val(), half:$('#nkHalf').val(),
@@ -1691,7 +1811,10 @@ function renderCheckItems(){
         }
         h += '<tr>';
         if (k==='as') {
-            h += '<td>'+n+'</td><td class="l">'+esc(it.col_a)+'</td><td class="l" style="font-size:12px;color:#7a6444;">'+esc(it.col_b||'')+'</td>'
+            // 作業項目：條文原文看不出實務上在查什麼，這裡用小徽章補上（列印版不帶，維持紙本版面）
+            var tks = (it.tasks||[]).map(function(t){ return '<span class="nk-task">'+esc(t.task_name)+'</span>'; }).join('');
+            h += '<td>'+n+'</td><td class="l">'+esc(it.col_a)+(tks?('<div style="margin-top:2px;">'+tks+'</div>'):'')+'</td>'
+              + '<td class="l" style="font-size:12px;color:#7a6444;">'+esc(it.col_b||'')+'</td>'
               + '<td>'+okChk+'</td><td>'+ngChk+'</td>'
               + '<td><input type="text" class="ckF" data-id="'+it.item_id+'" data-f="evidence" value="'+esc(it.evidence||'')+'"'
               + (ro?' readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;"></td>'
@@ -2267,7 +2390,7 @@ $('#btnDocPickOk').on('click', function(){
     add = add.filter(function(x){ return cur.indexOf(x) < 0; });
     $ta.val((cur ? cur + ' ' : '') + add.join(' '));
     closeMask('docPickMask');
-    if (add.length) alert('已加入 '+add.length+' 份文件，記得按該列的「存」才會寫入。');
+    if (add.length) autoSaveClause(DOCPICK_TR);   // 自動儲存，不再要求使用者按「存」
 });
 
 /* ---- ②③ 打字即時建議（附掛在既有 input 上，不改欄位本身） ---- */
@@ -2284,7 +2407,8 @@ function attachSuggest($inp, getList){
                 if (n >= 30) return;
                 if (!kwHit(o.search, kw)) return;
                 n++;
-                h += '<div data-v="'+esc(o.value)+'">'+(o.no?'<span class="no">'+esc(o.no)+'</span>':'')+esc(o.label)+'</div>';
+                h += '<div data-v="'+esc(o.value)+'">'+(o.no?'<span class="no">'+esc(o.no)+'</span>':'')+esc(o.label)
+                   + (o.extra ? '<div class="sug-extra">'+esc(o.extra)+'</div>' : '')+'</div>';
             });
             $box.html(h || '<div class="empty">查無符合項目</div>').show();
         });
@@ -2318,8 +2442,13 @@ function sugClauses(cb){
     loadClauseBank(function(rows){
         cb(rows.map(function(c){
             // 一併正規化，避免相容字被原封不動存進 ia_nc.clause_ref，之後查詢一樣找不到
-            var t = nfc(c.clause_text).replace(/\s+/g,' ').trim();
-            return {value:t, no:'', label:t, search:t + ' ' + (c.doc_ref||'')};
+            var t  = nfc(c.clause_text).replace(/\s+/g,' ').trim();
+            var tk = (c.tasks||[]).map(function(x){ return x.task_name; });
+            // 建議清單上把「這一條在查什麼」一起顯示出來（作業項目＋對應文件），
+            // 光看 AS 條文原文開單的人根本認不出來是哪一條；打「外包加工」也要找得到。
+            return {value:t, no:'', label:t, search:t + ' ' + (c.doc_ref||'') + ' ' + tk.join(' '),
+                    extra:(tk.length ? '作業項目：'+tk.join('、') : '') +
+                          ((c.doc_ref||'') ? (tk.length ? '　' : '') + '文件：'+String(c.doc_ref).replace(/\s+/g,'、') : '')};
         }));
     });
 }
@@ -2339,7 +2468,7 @@ function loadClauses(){
         (res.rows||[]).forEach(function(c){
             h += clauseRowHtml(c);
         });
-        $('#clauseBody').html(h || '<tr><td colspan="6" class="ia-empty">題庫是空的</td></tr>');
+        $('#clauseBody').html(h || '<tr><td colspan="7" class="ia-empty">題庫是空的</td></tr>');
         clauseRenumber();
         openMask('clauseMask');
     });
@@ -2353,9 +2482,42 @@ function clauseRowHtml(c){
       + '<td class="l"><textarea class="clF" data-f="clause_text" style="width:100%;min-height:38px;border:1px solid #D8BE93;border-radius:3px;padding:3px 5px;font-size:12px;">'+esc(c.clause_text||'')+'</textarea></td>'
       + '<td class="l"><textarea class="clF" data-f="doc_ref" style="width:100%;min-height:34px;border:1px solid #D8BE93;border-radius:3px;padding:3px 5px;font-size:12px;">'+esc(c.doc_ref||'')+'</textarea>'
       + '<span class="ia-op" style="margin-top:2px;" onclick="openDocPick(this)"><i class="fa fa-plus"></i> 選文件</span></td>'
+      + '<td class="l cl-task">'+clauseTaskHtml(c)+'</td>'
       + '<td><input type="checkbox" class="clF" data-f="is_active"'+(c.clause_id===undefined||+c.is_active?' checked':'')+'></td>'
-      + '<td><span class="ia-op" onclick="saveClause(this)"><i class="fa fa-save"></i> 存</span>'
-      + '<span class="ia-op danger" onclick="delClause(this)"><i class="fa fa-trash"></i></span></td></tr>';
+      + '<td><span class="ia-op danger" onclick="delClause(this)"><i class="fa fa-trash"></i></span>'
+      + '<div class="cl-st"></div></td></tr>';
+}
+/* 作業項目欄（2026-09-11 使用者交辦）：
+   條文原文看不出實務上在查什麼，所以掛「作業項目」（品管檢測／外包加工…）。
+   項目本身是設在 **AS 文件管理 → ⚙ 作業項目**（一份文件可以有好幾個），
+   這裡只負責挑「這一條對應到哪幾個」，候選一律限這一條左欄列出來的那幾份文件。 */
+function clauseTaskHtml(c){
+    c = c || {};
+    var docs = c.doc_tasks || [], picked = {};
+    (c.tasks||[]).forEach(function(t){ picked[t.task_id] = 1; });
+    if (!docs.length) {
+        return '<span class="cl-task-hint">左欄先填／選文件，才挑得到作業項目</span>';
+    }
+    var h = '', any = false;
+    docs.forEach(function(d){
+        if (!(d.tasks||[]).length) {
+            h += '<div class="cl-task-hint">'+esc(d.doc_no)+' 尚未設定作業項目</div>';
+            return;
+        }
+        any = true;
+        h += '<div class="cl-task-doc" title="'+esc(d.doc_no+' '+d.doc_name)+'">'+esc(d.doc_no)+'</div>';
+        d.tasks.forEach(function(t){
+            h += '<label class="cl-task-chk"><input type="checkbox" class="clTask" data-eg-skip value="'+t.task_id+'"'
+               + (picked[t.task_id]?' checked':'')+'> '+esc(t.task_name)+'</label>';
+        });
+    });
+    if (!any) h += '<div class="cl-task-hint">到 AS 文件管理 → ⚙ 作業項目 設定後就會出現在這裡</div>';
+    return h;
+}
+/* 勾選作業項目＝直接存（跟其他欄位一樣自動儲存） */
+$('#clauseBody').on('change', '.clTask', function(){ autoSaveClause($(this).closest('tr')); });
+function clauseTaskIds($tr){
+    return $tr.find('.clTask:checked').map(function(){ return +$(this).val(); }).get();
 }
 /* 畫面上的序號只是顯示（1,2,3…）；真正的 sort_order 由後端重新編成 10,20,30… */
 function clauseRenumber(){
@@ -2392,18 +2554,38 @@ function rowClause($tr){
         var f = $(this).data('f');
         o[f] = ($(this).attr('type')==='checkbox') ? ($(this).is(':checked')?1:'') : $(this).val();
     });
+    o.task_ids = JSON.stringify(clauseTaskIds($tr));
     return o;
 }
-function saveClause(el){
-    var $tr = $(el).closest('tr');
+/* 自動儲存（2026-09-11 使用者要求：改完就存，不要再按一次「存」）。
+   textarea 的 change 是離開欄位、勾選框是點下去當下觸發，兩者都只在值真的變了才發。
+   刻意不做「每打一個字就送」：那會在打長條文時打出幾十次寫入。 */
+$('#clauseBody').on('change', '.clF', function(){ autoSaveClause($(this).closest('tr')); });
+function clauseFlash($tr, msg, bad){
+    var $s = $tr.find('.cl-st').text(msg||'').toggleClass('bad', !!bad);
+    if (msg && !bad) setTimeout(function(){ if ($s.text()===msg) $s.text(''); }, 2000);
+}
+function autoSaveClause($tr, cb){
     var o = rowClause($tr);
-    if (!String(o.clause_text||'').trim()) { alert('請填品質管理系統要求'); return; }
+    var $ta = $tr.find('textarea[data-f="clause_text"]');
+    if (!String(o.clause_text||'').trim()) {
+        // 空白不送（新列還沒打字就切走很常見），但要當場講清楚為什麼沒存
+        $ta.addClass('err');
+        clauseFlash($tr, $tr.data('id') ? '未存：要求不可空白' : '未存：請先填要求', true);
+        return;
+    }
+    $ta.removeClass('err');
+    clauseFlash($tr, '儲存中…');
     $.post(API, $.extend({action:'clause_save'}, o), function(res){
-        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        if (!res.ok) { clauseFlash($tr, '儲存失敗', true); return; }
+        var isNew = !$tr.data('id');
         $tr.attr('data-id', res.clause_id).data('id', res.clause_id);
-        clauseSaveOrder();          // 新列存完才有 id，順帶把整份順序寫回去
-        alert('已儲存');
-    }, 'json');
+        // 文件欄剛被改過的話，可挑的作業項目也跟著變了——用後端回來的重畫，不要讓畫面停在舊候選
+        $tr.find('.cl-task').html(clauseTaskHtml({doc_tasks:res.doc_tasks, tasks:res.tasks}));
+        clauseFlash($tr, '已儲存');
+        if (isNew) clauseSaveOrder();   // 新列存完才有 id，順帶把整份順序寫回去
+        if (cb) cb();
+    }, 'json').fail(function(){ clauseFlash($tr, '儲存失敗', true); });
 }
 function delClause(el){
     var $tr = $(el).closest('tr');

@@ -253,6 +253,18 @@ function ia_ensure_schema(PDO $db): void
             updated_at  DATETIME NULL, updated_by VARCHAR(60) NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS稽核查檢表條文題庫（可增修，建一次每年沿用）'");
 
+        /* ---- 條文 ↔ AS 文件的「作業項目」（2026-09-11 使用者交辦）----
+           條文是 AS9100 原文（「8.4 外部提供的過程、產品和服務的控制」），看不出實務上在查什麼；
+           作業項目（品管檢測／外包加工…）掛在 AS 文件底下（as_doc_task，唯一實作在 asdoc_lib.php），
+           這裡記的是「這一條對應到該文件底下的哪幾個項目」——同一份文件常常不只做一件事，
+           所以不能只連到文件，要連到項目。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_as_clause_task (
+            clause_id INT NOT NULL,
+            task_id   INT NOT NULL,
+            PRIMARY KEY (clause_id, task_id),
+            KEY idx_iact_task (task_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS條文對應的作業項目（as_doc_task）'");
+
         /* ---- 2-GM-06-07 內稽不符合通知單 ---- */
         $db->exec("CREATE TABLE IF NOT EXISTS ia_nc (
             nc_id        INT AUTO_INCREMENT PRIMARY KEY,
@@ -709,6 +721,101 @@ function ia_as_clauses(PDO $db, bool $activeOnly = true): array
              . " ORDER BY sort_order, clause_id";
         return $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) { return []; }
+}
+
+/* ---- 條文的「作業項目」（2026-09-11）------------------------------------------
+ * 條文的「建立的文件、表單」是自由文字（`名稱(編號)`，以空白或換行分隔），
+ * 所以要先把裡面的**文件編號**撈出來，才知道這一條可以挑哪些作業項目。
+ * 編號格式全站一致：`1-GM-01`／`2-GM-06-02`（階-部門碼-序號[-序號]）。
+ */
+function ia_clause_doc_nos(?string $docRef): array
+{
+    if (!$docRef) return [];
+    preg_match_all('/\d-[A-Za-z]{2,3}-\d{2}(?:-\d{2})*[A-Za-z]?/u', (string)$docRef, $m);
+    return array_values(array_unique($m[0] ?? []));
+}
+
+/**
+ * 這一條可以挑的作業項目，依文件分組：[ ['doc_id','doc_no','doc_name','tasks'=>[['task_id','task_name'],…]], … ]
+ * 文件編號打錯／該文件已刪除時那一份自然不會出現（不報錯，題庫本來就允許自由填寫）。
+ */
+function ia_clause_doc_tasks(PDO $db, ?string $docRef): array
+{
+    $nos = ia_clause_doc_nos($docRef);
+    if (!$nos) return [];
+    try {
+        $in = implode(',', array_fill(0, count($nos), '?'));
+        $st = $db->prepare("SELECT id, doc_no, doc_name FROM as_document
+                             WHERE is_deleted=0 AND doc_no IN ($in) ORDER BY doc_no");
+        $st->execute($nos);
+        $docs = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    if (!$docs) return [];
+    $tasks = eg_asdoc_tasks($db, array_column($docs, 'id'));
+    $byDoc = [];
+    foreach ($tasks as $t) {
+        $byDoc[(int)$t['doc_id']][] = ['task_id'=>(int)$t['task_id'], 'task_name'=>(string)$t['task_name']];
+    }
+    $out = [];
+    foreach ($docs as $d) {
+        $out[] = ['doc_id'=>(int)$d['id'], 'doc_no'=>(string)$d['doc_no'], 'doc_name'=>(string)$d['doc_name'],
+                  'tasks'=>$byDoc[(int)$d['id']] ?? []];
+    }
+    return $out;
+}
+
+/** 已挑選的作業項目：clause_id => [['task_id','task_name','doc_no','doc_name'],…]（$clauseIds 留空＝全部） */
+function ia_clause_task_map(PDO $db, array $clauseIds = []): array
+{
+    $out = [];
+    try {
+        $sql = "SELECT ct.clause_id, t.task_id, t.task_name, d.doc_no, d.doc_name
+                  FROM ia_as_clause_task ct
+                  JOIN as_doc_task t ON t.task_id = ct.task_id
+                  JOIN as_document d ON d.id = t.doc_id AND d.is_deleted = 0";
+        $arg = [];
+        $clauseIds = array_values(array_unique(array_filter(array_map('intval', $clauseIds))));
+        if ($clauseIds) {
+            $sql .= " WHERE ct.clause_id IN (" . implode(',', array_fill(0, count($clauseIds), '?')) . ")";
+            $arg = $clauseIds;
+        }
+        $sql .= " ORDER BY d.doc_no, t.sort_order, t.task_id";
+        $st = $db->prepare($sql);
+        $st->execute($arg);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[(int)$r['clause_id']][] = ['task_id'=>(int)$r['task_id'], 'task_name'=>(string)$r['task_name'],
+                                            'doc_no'=>(string)$r['doc_no'], 'doc_name'=>(string)$r['doc_name']];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/**
+ * 存某一條文挑選的作業項目。
+ * 鐵律8：只收「真的屬於這一條所列文件」的項目——否則直打 API 就能把任意文件的項目掛上來，
+ * 畫面上會出現跟這條完全無關的用途標籤。回傳實際寫入的筆數。
+ */
+function ia_clause_tasks_save(PDO $db, int $clauseId, array $taskIds, ?string $docRef = null): int
+{
+    if ($docRef === null) {
+        $st = $db->prepare("SELECT doc_ref FROM ia_as_clause WHERE clause_id=?");
+        $st->execute([$clauseId]);
+        $docRef = (string)($st->fetchColumn() ?: '');
+    }
+    $allow = [];
+    foreach (ia_clause_doc_tasks($db, $docRef) as $d) {
+        foreach ($d['tasks'] as $t) $allow[(int)$t['task_id']] = true;
+    }
+    $ids = [];
+    foreach ($taskIds as $t) { $t = (int)$t; if ($t > 0 && isset($allow[$t])) $ids[$t] = true; }
+    $ids = array_keys($ids);
+
+    $db->prepare("DELETE FROM ia_as_clause_task WHERE clause_id=?")->execute([$clauseId]);
+    if ($ids) {
+        $ins = $db->prepare("INSERT IGNORE INTO ia_as_clause_task (clause_id, task_id) VALUES (?,?)");
+        foreach ($ids as $t) $ins->execute([$clauseId, $t]);
+    }
+    return count($ids);
 }
 
 /**

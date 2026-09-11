@@ -211,6 +211,125 @@ function eg_asdoc_user_can(PDO $db, int $uid, string $what): bool {
     return eg_asdoc_can_with($features, in_array('all', $features, true), eg_asdoc_page_perm($db, $uid), $what);
 }
 
+/* ════════════════ AS 文件的「作業項目」（2026-09-11 使用者交辦） ════════════════
+ * 是什麼：一份 AS 文件用白話寫出「這份文件實際上在做哪幾件事」，例如
+ *   供應商管理程序 → 外包加工、供應商評鑑；品質管制程序 → 品管檢測、進料檢驗。
+ * 為什麼要：內稽查檢表的題目是 AS9100 條文原文（「8.4 外部提供的過程、產品和服務的控制」），
+ *   光看條文完全不知道實務上對應公司的哪一段作業，建查檢表時只能憑印象亂勾。
+ * 為什麼一份文件要能寫好幾個：**同一份文件常常不只做一件事**（使用者原話），
+ *   所以是文件底下掛多個作業項目，條文再去挑「這一條對應到哪幾個」。
+ * 唯一實作放這裡：AS 文件管理（維護）與內部稽核（挑選、顯示）兩頁共用同一份，
+ *   兩邊各寫一份遲早走鐘（鐵律4）。
+ */
+
+/** 建表（可重複執行）。⚠ DDL 會隱式 commit，呼叫端一律在 beginTransaction() 之前呼叫。 */
+function eg_asdoc_task_ensure(PDO $db): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        $db->exec("CREATE TABLE IF NOT EXISTS as_doc_task (
+            task_id    INT AUTO_INCREMENT PRIMARY KEY,
+            doc_id     INT NOT NULL,
+            task_name  VARCHAR(60) NOT NULL COMMENT '作業項目（白話用途，如 品管檢測／外包加工）',
+            sort_order INT NOT NULL DEFAULT 0,
+            updated_at DATETIME NULL,
+            updated_by VARCHAR(60) NULL,
+            UNIQUE KEY uq_adt (doc_id, task_name),
+            KEY idx_adt_doc (doc_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS文件的作業項目（一份文件可有多個，見 asdoc_lib.php）'");
+    } catch (Throwable $e) { /* 沒權限改結構時不擋主流程，本功能自然不出現 */ }
+}
+
+/** 作業項目清單。$docIds 留空＝全部；回傳依文件、sort_order 排序的原始列 */
+function eg_asdoc_tasks(PDO $db, array $docIds = []): array {
+    eg_asdoc_task_ensure($db);
+    try {
+        $docIds = array_values(array_unique(array_filter(array_map('intval', $docIds))));
+        $sql = "SELECT t.task_id, t.doc_id, t.task_name, t.sort_order,
+                       d.doc_no, d.doc_name
+                  FROM as_doc_task t
+                  JOIN as_document d ON d.id = t.doc_id
+                 WHERE d.is_deleted = 0";
+        $arg = [];
+        if ($docIds) {
+            $sql .= " AND t.doc_id IN (" . implode(',', array_fill(0, count($docIds), '?')) . ")";
+            $arg = $docIds;
+        }
+        $sql .= " ORDER BY d.doc_no, t.sort_order, t.task_id";
+        $st = $db->prepare($sql);
+        $st->execute($arg);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/** 每份文件有幾個作業項目（清單上標「已設 N」用）。回 [doc_id => 數量] */
+function eg_asdoc_task_counts(PDO $db): array {
+    eg_asdoc_task_ensure($db);
+    $out = [];
+    try {
+        foreach ($db->query("SELECT doc_id, COUNT(*) c FROM as_doc_task GROUP BY doc_id")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[(int)$r['doc_id']] = (int)$r['c'];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 名稱清洗：去頭尾空白、把全形空白與連續空白收成一個、長度上限 */
+function eg_asdoc_task_norm(string $s): string {
+    $s = str_replace(["\xe3\x80\x80", "\r", "\n", "\t"], ' ', $s);
+    $s = trim(preg_replace('/\s+/u', ' ', $s));
+    return mb_substr($s, 0, 30);
+}
+
+/**
+ * 整份重存某文件的作業項目（$names 依畫面順序）。
+ * 刻意用「比對後只動有變的」而不是全刪重建：task_id 一換，條文那邊挑好的對應就會整批不見。
+ * 回傳 ['added'=>n,'removed'=>n,'kept'=>n,'unlinked'=>被連帶解除的條文對應數]
+ */
+function eg_asdoc_tasks_save(PDO $db, int $docId, array $names, string $by = ''): array {
+    eg_asdoc_task_ensure($db);
+    $clean = [];
+    foreach ($names as $n) {
+        $n = eg_asdoc_task_norm((string)$n);
+        if ($n === '' || isset($clean[$n])) continue;
+        $clean[$n] = true;
+    }
+    $clean = array_keys($clean);
+    if (count($clean) > 30) throw new RuntimeException('一份文件最多 30 個作業項目');
+
+    $st = $db->prepare("SELECT task_id, task_name FROM as_doc_task WHERE doc_id=?");
+    $st->execute([$docId]);
+    $cur = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $cur[(string)$r['task_name']] = (int)$r['task_id'];
+
+    $del = [];
+    foreach ($cur as $name => $tid) if (!in_array($name, $clean, true)) $del[] = $tid;
+
+    $unlinked = 0;
+    if ($del) {
+        $in = implode(',', array_fill(0, count($del), '?'));
+        // 條文那邊挑過的對應要一起解除，否則會留下指向已刪項目的孤兒列
+        try {
+            $q = $db->prepare("SELECT COUNT(*) FROM ia_as_clause_task WHERE task_id IN ($in)");
+            $q->execute($del);
+            $unlinked = (int)$q->fetchColumn();
+            $db->prepare("DELETE FROM ia_as_clause_task WHERE task_id IN ($in)")->execute($del);
+        } catch (Throwable $e) { /* 內稽模組的表還沒建起來時略過 */ }
+        $db->prepare("DELETE FROM as_doc_task WHERE task_id IN ($in)")->execute($del);
+    }
+
+    $add = 0;
+    $ins = $db->prepare("INSERT INTO as_doc_task (doc_id, task_name, sort_order, updated_at, updated_by)
+                         VALUES (?,?,?,NOW(),?)");
+    $upd = $db->prepare("UPDATE as_doc_task SET sort_order=?, updated_at=NOW(), updated_by=? WHERE task_id=?");
+    foreach ($clean as $i => $name) {
+        if (isset($cur[$name])) { $upd->execute([($i + 1) * 10, $by, $cur[$name]]); }
+        else { $ins->execute([$docId, $name, ($i + 1) * 10, $by]); $add++; }
+    }
+    return ['added'=>$add, 'removed'=>count($del), 'kept'=>count($clean) - $add, 'unlinked'=>$unlinked];
+}
+
 /** 存綁定（$docId=0 代表取消綁定） */
 function eg_asdoc_save(PDO $db, string $module, int $docId, string $by = ''): void {
     try {

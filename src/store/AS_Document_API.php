@@ -573,6 +573,8 @@ $asGate = [
     'save_dept_codes'=>'settings',
     'form_records_list'=>'view', 'form_records_upload'=>'upload_record', 'form_record_delete'=>'delete',
     'set_linked_module'=>'settings',
+    'doc_task_list'=>'view',        // 作業項目：看得到文件的人就看得到（內部稽核挑條文時要用）
+    // save_doc_tasks 於 case 內另行檢查（僅限管理員）
     'phrase_add'=>'update', 'phrase_delete'=>'update',
     'version_attach_file'=>'update', 'docs_add_tags'=>'update',
     // save_doc_remark 於 case 內另行檢查（僅限管理員）
@@ -749,6 +751,12 @@ case 'list_documents':
         $byDocO = [];
         foreach ($om->fetchAll(PDO::FETCH_ASSOC) as $r) { $byDocO[$r['doc_id']][] = ['id'=>(int)$r['id'],'name'=>$r['name']]; }
         foreach ($docs as &$d) { $d['owner_depts'] = $byDocO[$d['id']] ?? []; }
+        unset($d);
+
+        // 作業項目（白話用途，內部稽核的條文題庫會挑用）——清單只要名字，⚙ 選單標「已設 N」用
+        $byDocT = [];
+        foreach (eg_asdoc_tasks($db, $ids) as $t) { $byDocT[(int)$t['doc_id']][] = $t['task_name']; }
+        foreach ($docs as &$d) { $d['tasks'] = $byDocT[(int)$d['id']] ?? []; }
         unset($d);
     }
     jout(['status'=>'success','data'=>$docs]);
@@ -1076,6 +1084,30 @@ case 'save_doc_remark':
     $db->prepare("UPDATE as_document SET remark_html=?, updated_at=NOW() WHERE id=?")
        ->execute([$remark === '' ? null : $remark, $id]);
     jout(['status'=>'success','remark_html'=>$remark]);
+
+/* ══════════════ 作業項目（2026-09-11 使用者交辦） ══════════════
+   一份 AS 文件用白話寫出「實務上在做哪幾件事」（品管檢測／外包加工…），一份可以有好幾個。
+   用途：內部稽核的 AS 條文題庫可以逐條挑「這一條對應到哪幾個作業項目」，
+   建查檢表與填寫查檢表時就看得懂這一條實際上在查什麼（見 asdoc_lib.php 的說明）。
+   唯一寫入點在這裡，讀寫規則一律走 asdoc_lib（兩頁共用同一份＝鐵律4）。 */
+case 'doc_task_list': {
+    $id = (int)($_GET['doc_id'] ?? $_POST['doc_id'] ?? 0);
+    if ($id<=0) jout(['status'=>'error','message'=>'無效 ID']);
+    jout(['status'=>'success','data'=>eg_asdoc_tasks($db, [$id])]);
+}
+case 'save_doc_tasks': {
+    if (!asIsAdmin()) jout(['status'=>'error','message'=>'僅管理員可維護作業項目']);
+    $id = (int)($_POST['doc_id'] ?? 0);
+    if ($id<=0) jout(['status'=>'error','message'=>'無效 ID']);
+    $exists = $db->prepare("SELECT COUNT(*) FROM as_document WHERE id=? AND is_deleted=0");
+    $exists->execute([$id]);
+    if (!$exists->fetchColumn()) jout(['status'=>'error','message'=>'查無此文件']);
+    $names = json_decode((string)($_POST['tasks'] ?? '[]'), true);
+    if (!is_array($names)) jout(['status'=>'error','message'=>'作業項目格式錯誤']);
+    try { $r = eg_asdoc_tasks_save($db, $id, $names, $GLOBALS['currentCname'] ?? ''); }
+    catch (Throwable $e) { jout(['status'=>'error','message'=>$e->getMessage()]); }
+    jout(['status'=>'success'] + $r + ['data'=>eg_asdoc_tasks($db, [$id])]);
+}
 
 /* ══════════════ 更新頻率 / 負責課室（管理員限定，與「編輯文件」完全分開） ══════════════
    使用者明確要求（2026-09-07）：只有管理員可以設定，且要跟編輯文件分開，避免誤改到其他資料。

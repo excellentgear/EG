@@ -626,7 +626,14 @@ case 'check_bank': {
     $kind = (string)($_GET['kind'] ?? '');
     if (!isset(IA_CHECK_KINDS[$kind])) jerr('查檢表種類不正確');
     $year = (int)($_GET['year'] ?? substr($today, 0, 4));
-    if     ($kind === 'as')     jout(['kind' => $kind, 'rows' => ia_as_clauses($db)]);
+    if ($kind === 'as') {
+        // 條文原文看不出實務上在查什麼，故一併帶出作業項目（品管檢測／外包加工…）供挑選與快速勾選
+        $rows = ia_as_clauses($db);
+        $map  = ia_clause_task_map($db, array_column($rows, 'clause_id'));
+        foreach ($rows as &$r) { $r['tasks'] = $map[(int)$r['clause_id']] ?? []; }
+        unset($r);
+        jout(['kind' => $kind, 'rows' => $rows]);
+    }
     elseif ($kind === 'system') jout(['kind' => $kind, 'rows' => ia_system_forms($db)]);
     else                        jout(['kind' => $kind, 'rows' => ia_kpi_indicators($db, $year)]);
 }
@@ -733,6 +740,17 @@ case 'check_get': {
                          WHERE i.check_id=? ORDER BY i.sort_order, i.item_id");
     $st->execute([$kid]);
     $k['items'] = $st->fetchAll(PDO::FETCH_ASSOC);
+    // AS 查檢表：每一列補上該條文目前的作業項目（即時查，不隨查檢表存一份快照＝鐵律4，
+    // 文件的作業項目改了，舊表打開也會跟著是最新的說法）
+    if ($k['kind'] === 'as') {
+        $cids = [];
+        foreach ($k['items'] as $it) if (($it['ref_kind'] ?? '') === 'as_clause') $cids[] = (int)$it['ref_id'];
+        $map = $cids ? ia_clause_task_map($db, $cids) : [];
+        foreach ($k['items'] as &$it) {
+            $it['tasks'] = (($it['ref_kind'] ?? '') === 'as_clause') ? ($map[(int)$it['ref_id']] ?? []) : [];
+        }
+        unset($it);
+    }
     $k['kind_label'] = IA_CHECK_KINDS[$k['kind']]['label'] ?? $k['kind'];
     $k['can_edit'] = ($perms['canAudit'] && $k['status'] !== 'done') || $perms['canAdmin'];
     jout(['row' => $k]);
@@ -807,7 +825,15 @@ case 'check_delete': {
 /* ---- AS 條文題庫維護 ---- */
 case 'clause_list': {
     iaReqView($perms);
-    jout(['rows' => ia_as_clauses($db, false)]);
+    $rows = ia_as_clauses($db, false);
+    // 每一條帶上「可挑的作業項目（依它列的文件）」與「已挑的」——題庫畫面要一次畫得出來
+    $picked = ia_clause_task_map($db, array_column($rows, 'clause_id'));
+    foreach ($rows as &$r) {
+        $r['doc_tasks'] = ia_clause_doc_tasks($db, $r['doc_ref'] ?? '');
+        $r['tasks']     = $picked[(int)$r['clause_id']] ?? [];
+    }
+    unset($r);
+    jout(['rows' => $rows]);
 }
 /* AS 文件挑選清單（2026-08-26 使用者要求：條文題庫的「建立的文件、表單」與 IA 單的「相關表單編號」
    都要能打編號或名稱模糊篩選後挑選，不要手打）。回全部未廢止的 AS 文件，前端自己過濾即可，
@@ -892,7 +918,13 @@ case 'clause_save': {
                       VALUES (?,?,?,?,?,NOW(),?)")->execute([$sort, $hdr, $text, $ref ?: null, $act, $uname]);
         $id = (int)$db->lastInsertId();
     }
-    jout(['clause_id' => $id]);
+    // 作業項目（有送才動；沒送＝這次不碰，避免別的呼叫端把已挑好的整組洗掉）
+    if (array_key_exists('task_ids', $_POST)) {
+        $tids = json_decode((string)$_POST['task_ids'], true);
+        ia_clause_tasks_save($db, $id, is_array($tids) ? $tids : [], $ref);
+    }
+    $tasks = ia_clause_task_map($db, [$id])[$id] ?? [];
+    jout(['clause_id' => $id, 'tasks' => $tasks, 'doc_tasks' => ia_clause_doc_tasks($db, $ref)]);
 }
 case 'clause_delete': {
     iaReqAdmin($perms);
@@ -906,6 +938,7 @@ case 'clause_delete': {
         jout(['deactivated' => true, 'note' => '此條文已被既有查檢表引用，已改為停用（不再出現在新表）而非刪除']);
     }
     $db->prepare("DELETE FROM ia_as_clause WHERE clause_id=?")->execute([$id]);
+    try { $db->prepare("DELETE FROM ia_as_clause_task WHERE clause_id=?")->execute([$id]); } catch (Throwable $e) {}
     jout(['deleted' => true]);
 }
 

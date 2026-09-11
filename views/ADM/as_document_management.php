@@ -1115,6 +1115,35 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
   </div>
 </div>
 
+<!-- ═════════ 作業項目 Modal（管理員；供內部稽核的 AS 條文題庫挑選） ═════════ -->
+<div class="modal fade" id="taskModal" tabindex="-1" role="dialog">
+  <div class="modal-dialog" style="width:94%;max-width:620px;" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal">&times;</button>
+        <h4 class="modal-title"><i class="fa fa-tasks"></i> 作業項目 － <span id="task_doc_title"></span></h4>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted" style="font-size:12px;margin-bottom:6px;">
+          用<b>白話</b>寫出這份文件實務上<b>在做哪幾件事</b>（例：<code>品管檢測</code>、<code>外包加工</code>、<code>供應商評鑑</code>）。
+          <b>一份文件可以有好幾個</b>——同一份文件常常不只做一件事。<br>
+          用途：<b>內部稽核</b>的 AS 條文題庫可以逐條挑「這一條對應到哪幾個作業項目」，
+          之後<b>建立查檢表</b>與<b>填寫查檢表</b>時就看得懂這一條實際上在查什麼。一個項目最多 30 字，一份文件最多 30 個。
+        </p>
+        <input type="hidden" id="task_doc_id">
+        <div id="taskRows"></div>
+        <button type="button" class="btn btn-default btn-sm" id="btnTaskAdd" style="margin-top:6px;"><i class="fa fa-plus"></i> 新增一個</button>
+        <div id="taskErr" style="color:#DD5138;font-size:12px;margin-top:6px;"></div>
+        <div id="taskUsed" style="color:#8a6d45;font-size:12px;margin-top:6px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="btnTaskSave">儲存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ═════════ 權限設定 Modal ═════════ -->
 <div class="modal fade" id="permModal" tabindex="-1" role="dialog">
   <div class="modal-dialog modal-lg" role="document">
@@ -1557,6 +1586,8 @@ $(function(){
       // 更新頻率／負責課室（管理員限定，與編輯資料分開；清單該欄雙擊也是同一張跳窗）
       if(window.asPerm.admin) mgmt += `<li><a href="javascript:void(0)" class="op-freq" data-id="${d.id}"><i class="fa fa-clock-o"></i> 更新頻率 / 負責課室${(d.freq_type||(d.owner_depts||[]).length)?'（已設定）':''}</a></li>`;
       if(window.asPerm.admin) mgmt += `<li><a href="javascript:void(0)" class="op-remark" data-id="${d.id}" data-name="${esc(d.doc_name)}" data-no="${esc(d.doc_no)}"><i class="fa fa-sticky-note-o"></i> 文件備註${(d.remark_html||'')?'（已填）':''}</a></li>`;
+      // 作業項目（管理員）：這份文件實務上在做哪幾件事，供內部稽核的 AS 條文題庫逐條挑選
+      if(window.asPerm.admin) mgmt += `<li><a href="javascript:void(0)" class="op-task" data-id="${d.id}" data-name="${esc(d.doc_name)}" data-no="${esc(d.doc_no)}"><i class="fa fa-tasks"></i> 作業項目${(d.tasks||[]).length?('（已設 '+d.tasks.length+'）'):''}</a></li>`;
       if(canD){
         if(mgmt) mgmt += '<li class="divider"></li>';
         mgmt += d.is_deleted==1
@@ -3507,6 +3538,56 @@ $(function(){
      .done(r=>{
         if(r.status==='success'){ $('#remarkModal').modal('hide'); showToast('備註已儲存'); loadDocs(); }
         else alert(r.message||'儲存失敗');
+     })
+     .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
+  });
+
+  // ── 作業項目（⚙ → 作業項目）：一份文件實務上在做哪幾件事，內部稽核的條文題庫會挑用 ──
+  function taskRowHtml(v){
+    return `<div class="input-group" style="margin-bottom:4px;">
+      <input type="text" class="form-control task-in" maxlength="30" value="${esc(v||'')}" placeholder="例：品管檢測">
+      <span class="input-group-btn"><button type="button" class="btn btn-default task-del" title="移除這一個"><i class="fa fa-times"></i></button></span>
+    </div>`;
+  }
+  $('#docTableBody').on('click','.op-task', function(){
+    const id = $(this).data('id');
+    $('#task_doc_id').val(id);
+    $('#task_doc_title').text($(this).data('no') + '　' + $(this).data('name'));
+    $('#taskErr,#taskUsed').text('');
+    // 點開即刷新（ai-rules/08 第六節）：不要拿清單快取的舊資料給人接著改
+    $.getJSON(API+'?action=doc_task_list', {doc_id:id}, r=>{
+      if(r.status!=='success'){ alert(r.message||'讀取失敗'); return; }
+      const rows = (r.data||[]).map(t=>taskRowHtml(t.task_name)).join('');
+      $('#taskRows').html(rows || taskRowHtml(''));
+      $('#taskModal').modal('show');
+    });
+  });
+  $('#btnTaskAdd').on('click', function(){ $('#taskRows').append(taskRowHtml('')); $('#taskRows .task-in').last().focus(); });
+  $('#taskRows').on('click','.task-del', function(){
+    $(this).closest('.input-group').remove();
+    if(!$('#taskRows .task-in').length) $('#taskRows').append(taskRowHtml(''));
+  });
+  // 即時擋重複（後端 eg_asdoc_tasks_save 也會自己去重＝鐵律8，這裡只是讓人當場看得到）
+  $('#taskRows').on('input','.task-in', function(){
+    const seen = {}; let dup = '';
+    $('#taskRows .task-in').each(function(){
+      const v = $(this).val().trim();
+      if(!v) { $(this).css('border-color',''); return; }
+      if(seen[v]){ dup = v; $(this).css('border-color','#DD5138'); } else { seen[v]=1; $(this).css('border-color',''); }
+    });
+    $('#taskErr').text(dup ? ('「'+dup+'」重複了，重複的會自動只留一個') : '');
+  });
+  $('#btnTaskSave').on('click', function(){
+    const names = $('#taskRows .task-in').map(function(){ return $(this).val().trim(); }).get().filter(Boolean);
+    if(names.length > 30){ $('#taskErr').text('一份文件最多 30 個作業項目'); return; }
+    NProgress.start();
+    $.post(API+'?action=save_doc_tasks', {doc_id:$('#task_doc_id').val(), tasks:JSON.stringify(names)}, null, 'json')
+     .done(r=>{
+        if(r.status!=='success'){ alert(r.message||'儲存失敗'); return; }
+        $('#taskModal').modal('hide');
+        // 刪掉的項目會連帶解除內部稽核那邊已經挑好的對應，一定要講出來（默默解除等於資料悄悄少掉）
+        showToast('作業項目已儲存' + (r.unlinked ? ('；同時解除了 '+r.unlinked+' 筆內稽條文的對應') : ''));
+        loadDocs();
      })
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
   });
