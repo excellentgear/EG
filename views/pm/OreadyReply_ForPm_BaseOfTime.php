@@ -14365,7 +14365,10 @@ echo "</script>\n";
             const gotoBtn = document.getElementById('completed-bom-goto-full');
             if (gotoBtn) {
                 gotoBtn.onclick = function() {
-                    window.open('OreadyReply_completed_query.php?kw=' + encodeURIComponent(searchTerm), '_blank');
+                    // 一併把「本跳窗以全部年份查到幾筆」帶過去（t=）：完整查詢頁預設只看近1年，
+                    // 沒有這個數字的話使用者會以為「改用完整查詢反而查更少」。
+                    window.open('OreadyReply_completed_query.php?kw=' + encodeURIComponent(searchTerm)
+                        + '&t=' + encodeURIComponent(total), '_blank');
                 };
             }
         }

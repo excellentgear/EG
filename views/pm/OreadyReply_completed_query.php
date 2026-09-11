@@ -185,6 +185,35 @@ function ocq_build_filter($p, $exclude = []) {
     return ['WHERE ' . implode(' AND ', $where), $params];
 }
 
+// 單次查詢（畫面清單）的筆數上限：超過就不撈資料、請使用者縮小年份或加關鍵字（使用者拍板，2026-09-11）。
+// 目前全站已結案 11,474 筆、單一年度最多 3,660 筆，所以 5000 的意思是「單年一定過、全部年份才會被擋」。
+// 只影響畫面清單；列印／匯出／統整報表不套這個上限（維持原本的 3000 筆確認視窗）。
+const OCQ_LIST_MAX = 5000;
+
+/**
+ * 判斷這批 BOM 在 NAS 的 BOM 資料夾裡有沒有對應的 .xlsm 檔（有才給 ms-excel 開檔連結）。
+ * 兩個必須這樣做的理由：
+ *  ① **絕不在畫面要用的路徑上掃 NAS**——那個資料夾 8,608 個檔，冷連線時可能要等很久（2026-09-03 事故），
+ *     所以只讀 `eg_bom_file_cache_read()` 的共用快取；沒有快取就回 null（前端當作「無法判定」照樣給連結，
+ *     跟 BOM總表現況一致，不會因為快取還沒建好就讓大家都點不到檔案），並回旗標讓前端在畫面畫完後背景重建。
+ *  ② 檔名比對用小寫全名（`<BOM>.xlsm`），不是前綴——BOM 編號等長，前綴比對會把 B-1150903018 誤判成
+ *     B-11509030181 之類的其他檔。
+ * @return array{0: array<string,bool>, 1: bool}  [bom => 有沒有檔, 需不需要背景重建快取]
+ */
+function ocq_bom_file_map(array $bom_list): array {
+    if (!$bom_list) return [[], false];
+    require_once __DIR__ . '/../../src/common/bom_dir_lib.php';
+    $dir   = eg_bom_scan_dir_auto();
+    $age   = null;
+    $files = eg_bom_file_cache_read($dir, ['xlsm'], $age);
+    if ($files === null) return [[], true];                 // 完全沒有快取＝無法判定，請前端背景建一次
+    $set = [];
+    foreach ($files as $fn) $set[strtolower($fn)] = true;
+    $map = [];
+    foreach ($bom_list as $b) $map[$b] = isset($set[strtolower($b . '.xlsm')]);
+    return [$map, ($age === null || $age > 300)];           // 超過 5 分鐘就順便請前端背景更新
+}
+
 // 批量撈已結案BOM的製程明細（每 bom+bom_sn 取最新一筆，避免重複），比照既有 search_completed_bom
 function ocq_fetch_processes($pdo, $bom_list) {
     if (!$bom_list) return [[], 0];
@@ -290,6 +319,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $stmtCnt->execute($params);
             $total = (int)$stmtCnt->fetchColumn();
 
+            // 單次查詢筆數上限：超過就不撈資料、直接請使用者縮小範圍（使用者拍板，2026-09-11）。
+            // 只擋「畫面清單」這一條路；列印／匯出／統整報表維持原本的 3000 筆確認視窗不變，
+            // 才不會把既有「清除篩選後整批匯出」的用法弄壞。
+            if ($total > OCQ_LIST_MAX) {
+                echo json_encode(['success' => true, 'total' => $total, 'page' => 1, 'page_size' => $page_size,
+                    'rows' => [], 'max_process_count' => 0, 'price_map' => [],
+                    'blocked' => true, 'limit_max' => OCQ_LIST_MAX]);
+                exit;
+            }
+
             $sql = "SELECT $OCQ_COLS $OCQ_FROM $whereSql ORDER BY $OCQ_EFFDATE DESC, b.bom DESC LIMIT $page_size OFFSET $offset";
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
@@ -298,11 +337,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $bom_list = array_column($rows, 'bom');
             list($proc_map, $max_count) = ocq_fetch_processes($pdo, $bom_list);
             $price_map = ocq_fetch_prices($pdo, $bom_list);
-            foreach ($rows as &$row) { $row['processes'] = $proc_map[$row['bom']] ?? []; }
+            list($file_map, $cache_stale) = ocq_bom_file_map($bom_list);
+            foreach ($rows as &$row) {
+                $row['processes'] = $proc_map[$row['bom']] ?? [];
+                $row['has_file']  = $file_map[$row['bom']] ?? null;   // true/false；null＝快取還沒建好、無法判定
+            }
             unset($row);
 
             echo json_encode(['success' => true, 'total' => $total, 'page' => $page, 'page_size' => $page_size,
-                'rows' => $rows, 'max_process_count' => $max_count, 'price_map' => $price_map]);
+                'rows' => $rows, 'max_process_count' => $max_count, 'price_map' => $price_map,
+                'bom_cache_refresh' => $cache_stale, 'limit_max' => OCQ_LIST_MAX]);
         } elseif ($action === 'get_print') {
             list($whereSql, $params) = ocq_build_filter($_POST);
             $sql = "SELECT $OCQ_COLS $OCQ_FROM $whereSql ORDER BY $OCQ_EFFDATE DESC, b.bom DESC";
@@ -384,11 +428,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'processes' => $processes, 'customers' => $customers, 'company_name' => $company]);
         } elseif ($action === 'get_facets') {
             list($whereP, $paramsP) = ocq_build_filter($_POST, ['process_type']);
-            $stmtP = $pdo->prepare("SELECT pn.process_type_id, pt.process_type AS category_name, COUNT(DISTINCT b.bom) cnt
-                $OCQ_FROM INNER JOIN bom_ing bi_f ON bi_f.bom = b.bom
+            // 這裡有一個看不出來但差 7 倍的重點：有全域關鍵字時，**一定要先把「命中的 bom」收成衍生表**
+            // 再去 JOIN bom_ing。直接 `$OCQ_FROM INNER JOIN bom_ing` 的話，關鍵字那段 EXISTS 子查詢會對
+            // 「bom × bom_ing」的每一列各算一次（bom_ing 有 82,937 列）而不是每個 bom 算一次，實測要 5.9 秒。
+            // 內層的 `GROUP BY b.bom` 不是為了去重（本來就一個 bom 一列），是為了**強制 MySQL 具現化衍生表**
+            // ——沒有它優化器會把衍生表併回外層，等於沒改。實測 5.9 秒 → 0.81 秒、結果逐欄完全相同。
+            // **但具現化本身有約 250ms 的固定成本**，所以沒有關鍵字時刻意不加這個 GROUP BY：此時衍生表會被
+            // 併回外層＝執行計畫與改寫前完全一樣，像「只篩交期」這種很選擇性的條件仍維持原本的 18ms。
+            $matHint = (trim($_POST['keyword'] ?? '') !== '') ? 'GROUP BY b.bom' : '';
+            $stmtP = $pdo->prepare("SELECT pn.process_type_id, pt.process_type AS category_name, COUNT(DISTINCT m.bom) cnt
+                FROM (SELECT b.bom $OCQ_FROM $whereP $matHint) m
+                INNER JOIN bom_ing bi_f ON bi_f.bom = m.bom
                 LEFT JOIN process_no pn ON pn.ProcessNo = bi_f.process_no
                 LEFT JOIN process_type pt ON pt.process_type_id = pn.process_type_id
-                $whereP GROUP BY pn.process_type_id, pt.process_type ORDER BY pn.process_type_id");
+                GROUP BY pn.process_type_id, pt.process_type ORDER BY pn.process_type_id");
             $stmtP->execute($paramsP);
             $processes = $stmtP->fetchAll(PDO::FETCH_ASSOC);
 
@@ -408,6 +461,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $vendors = $stmtV->fetchAll(PDO::FETCH_COLUMN);
 
             echo json_encode(['success' => true, 'customers' => $customers, 'sales' => $sales, 'vendors' => $vendors]);
+        } elseif ($action === 'bom_file_cache_refresh') {
+            // BOM .xlsm 檔名快取重建：**很慢（要掃 NAS）**，只由前端在畫面畫完之後背景呼叫，
+            // 絕不放在清單查詢那條路上。鎖檔由 lib 處理，同一時間只會有一個人在掃。
+            @ignore_user_abort(true);
+            @set_time_limit(300);
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+            require_once __DIR__ . '/../../src/common/bom_dir_lib.php';
+            $r = eg_bom_file_cache_refresh(eg_bom_scan_dir_auto(), ['xlsm']);
+            echo json_encode(['success' => true] + $r);
         } else {
             echo json_encode(['success' => false, 'message' => '未知操作']);
         }
@@ -416,6 +478,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     exit;
 }
+
+// 年份切換列要列出哪些年：取「實際有已結案資料」的最早／最晚年份（含沒有 closed_at、以 BOM 編號
+// 回推日期的舊資料）。不寫死年份，資料跨到新的一年就自動多一顆鈕（鐵律4）。實測約 30ms。
+$ocq_year_min = (int)date('Y');
+$ocq_year_max = (int)date('Y');
+try {
+    $yr = $pdo->query("SELECT MIN(YEAR($OCQ_EFFDATE)) AS mn, MAX(YEAR($OCQ_EFFDATE)) AS mx
+                       FROM bom b WHERE b.processing_state='1'")->fetch(PDO::FETCH_ASSOC);
+    if ($yr && $yr['mn']) {
+        $ocq_year_min = max(1990, (int)$yr['mn']);
+        $ocq_year_max = max((int)$yr['mx'], (int)date('Y'));   // 今年一定要看得到（就算今年還沒有結案資料）
+    }
+} catch (Throwable $e) { /* 取不到就退回「只有今年」，不讓年份列害整頁開不起來 */ }
 
 ?>
 <!DOCTYPE html>
@@ -462,6 +537,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .ocq-toolbar .btn-warm:hover { background: #d98a33; }
         .ocq-stat { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; font-size: 13px; color: #5b3a1e; }
         .ocq-stat b { color: #8A5A2B; font-size: 16px; }
+        /* 結案年份快速切換列（配色沿用本頁既有的暖色系） */
+        .ocq-years { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; width: 100%;
+            margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px dashed #EADFC8; }
+        .ocq-ybtn { height: 26px; min-width: 30px; padding: 0 10px; font-size: 12.5px; line-height: 1;
+            border: 1px solid #D8BE93; background: #fff; color: #5b3a1e; border-radius: 13px; cursor: pointer; }
+        .ocq-ybtn:hover:not(:disabled) { background: #FBF0DC; }
+        .ocq-ybtn.active { background: #F0A24B; border-color: #d98a33; color: #fff; font-weight: bold; }
+        .ocq-ybtn:disabled { opacity: .4; cursor: default; }
+        .ocq-ysep { width: 1px; height: 18px; background: #E0D2B4; margin: 0 4px; }
+        .ocq-yhint { font-size: 12px; color: #a06a1f; }
+        /* 從 BOM總表跳窗帶關鍵字進來時的提示條。**刻意不沿用 .ocq-stat**——那個是 display:flex + gap:14px，
+           句子裡的每個 <b> 都會變成獨立的 flex item 被 14px 間距撐開，變成一句話被切成好幾塊。 */
+        .ocq-carry { display: block; margin-bottom: 8px; padding: 7px 10px; border-radius: 4px;
+            background: #F7E0BD; border: 1px solid #E0B378; color: #5b3a1e; font-size: 12.5px; line-height: 1.7; }
+        .ocq-carry b { color: #8A5A2B; }
+        .ocq-bom-link { color: #1d5fa8; text-decoration: none; }
+        .ocq-bom-link:hover { color: #0d3f77; text-decoration: underline; }
+        /* 製程大類統計是背景補上的（比清單慢），補回來之前先淡化，不要讓頁籤整排消失 */
+        .ocq-facet-loading { opacity: .45; }
+        .ocq-facet-loading::after { content: '統計中…'; font-size: 12px; color: #a06a1f; margin-left: 6px; align-self: center; }
+        /* 超過單次查詢筆數上限時的提示區 */
+        .ocq-blocked { padding: 22px 18px; text-align: center; color: #5b3a1e; }
+        .ocq-blocked .bk-title { font-size: 14px; font-weight: bold; color: #a0521f; margin-bottom: 6px; }
+        .ocq-blocked .bk-acts { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
         .ocq-table-wrap { overflow-x: auto; border: 1px solid #E8D5B5; border-radius: 6px; background: #fff; }
         table.ocq-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         table.ocq-table th, table.ocq-table td { border: 1px solid #EADFC8; padding: 5px 8px; white-space: nowrap; text-align: center; vertical-align: top; }
@@ -508,6 +607,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         </div>
 
         <div class="ocq-toolbar">
+            <!-- 結案年份快速切換：預設「近1年」，點年份只看那一年、箭號往前/往後推一年（使用者拍板，2026-09-11）。
+                 這一列會連動下方的結案日期區間欄位，使用者仍可自己手打日期（手打後年份鈕就不再反白＝自訂區間）。 -->
+            <div class="ocq-years" id="yearBar">
+                <label style="margin-left:0;white-space:nowrap;">結案年份</label>
+                <button class="ocq-ybtn" id="yPrev" title="往前一年">&laquo;</button>
+                <span id="yearList" style="display:inline-flex;gap:4px;"></span>
+                <button class="ocq-ybtn" id="yNext" title="往後一年">&raquo;</button>
+                <span class="ocq-ysep"></span>
+                <button class="ocq-ybtn" data-range="1y" title="今天往前推一年（預設）">近1年</button>
+                <button class="ocq-ybtn" data-range="all" title="不限日期查全部歷史（資料量大時會較慢）">全部年份</button>
+                <span id="yearHint" class="ocq-yhint"></span>
+            </div>
             <div style="display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;align-items:center;width:100%;">
                 <label title="2026-05-22「手動結案」功能上線前就已結案的舊資料沒有結案時間紀錄，改用BOM編號回推的建立日期篩選/顯示，並標註「(推算)」" style="cursor:help;border-bottom:1px dotted #a06a1f;white-space:nowrap;">結案日期 <i class="fa fa-info-circle" style="color:#a06a1f;"></i></label>
                 <input type="date" id="fDateFrom" max="9999-12-31">
@@ -527,7 +638,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <option value="E">特急件E</option>
                 </select>
                 <button class="btn-warm" id="btnSearch"><i class="fa fa-search"></i> 查詢</button>
-                <button id="btnClear"><i class="fa fa-eraser"></i> 清除篩選(查全部)</button>
+                <button id="btnClear" title="清掉所有篩選條件，日期回到預設的近1年（要查全部歷史請按上方年份列的「全部年份」）"><i class="fa fa-eraser"></i> 清除篩選</button>
                 <button id="btnPrint" style="margin-left:auto;"><i class="fa fa-print"></i> 列印</button>
                 <button id="btnExportCsv"><i class="fa fa-file-excel-o"></i> 匯出CSV</button>
                 <button id="btnSummary"><i class="fa fa-bar-chart"></i> 統整報表(PDF)</button>
@@ -586,13 +697,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <li>表格內的<b>客戶／BOM／料號用滑鼠雙擊</b>可直接帶入對應篩選框並立即查詢，方便快速鎖定同客戶或同BOM的其他資料（料號欄請雙擊文字以外的空白處，文字本身是開圖面用的）。</li>
             <li>篩選框有內容時雙擊可清空（全站共用規則），清空後會自動連帶重新查詢。</li>
             <li>製程大類的可選清單會依「目前其餘篩選條件」動態連動，只列真的有資料的選項。</li>
-            <li>結案日期區間預設近30天；按「清除篩選(查全部)」可清空所有條件、改查全部歷史已結案資料。</li>
-            <li>從 BOM總表「查詢已完工資料」跳窗按<b>「前往完整查詢（無筆數上限）」</b>進來時，該跳窗的關鍵字會自動帶進上方<b>全域搜尋</b>，同時<b>自動清空結案日期區間</b>（因為那個跳窗本來就不限日期，只是有 50 筆顯示上限），畫面上方會出現橘色提示條說明；帶入後仍可自行再調整任一篩選條件。<b>查全部歷史資料時載入會比預設的近30天久（約數秒）</b>，屬正常現象。</li>
+            <li><b>結案年份</b>快速切換列：預設<b>近1年</b>；點年份只看那一年、用 &laquo; &raquo; 往前／往後推一年，另有「全部年份」（不限日期，資料量大時較慢）。自己手打結案日期時年份鈕會顯示「（自訂區間）」。</li>
+            <li>按「清除篩選」可清掉所有條件、日期回到預設的近1年。</li>
+            <li>從 BOM總表「查詢已完工資料」跳窗按<b>「前往完整查詢（無筆數上限）」</b>進來時，該跳窗的關鍵字會自動帶進上方<b>全域搜尋</b>，日期維持本頁預設的<b>近1年</b>；畫面上方的橘色提示條會一併告訴你「該跳窗以全部年份查到幾筆」，要看全部歷史按提示條上的<b>「改看全部年份」</b>即可。</li>
+            <li>表格內的 <b>BOM 編號點一下</b>會用 Excel 開啟 NAS 上對應的 BOM 檔（與 BOM總表相同）；<b>NAS 上找不到該檔時就只顯示文字、不給連結</b>，不會點了沒反應。要雙擊帶入篩選請點該格文字以外的空白處。</li>
             <li>全域關鍵字可用空白分隔多個關鍵字，每個關鍵字都要在（可分散於不同欄位）命中才算符合。</li>
             <li>列表分頁顯示（避免一次載入全部拖慢速度），可調整每頁筆數。</li>
             <li>「列印」「匯出CSV」「統整報表」皆依目前篩選條件抓「全部」符合筆數（不受分頁限制）。</li>
         </ul>
         <h4>重要行為/常見疑問</h4>
+        <div class="tip"><b>單次查詢上限 5,000 筆</b>：畫面清單查出來超過這個筆數時不會顯示資料，改提示你縮小結案年份或加上關鍵字／客戶等條件（提示裡直接附了各年份的快速按鈕）。「全部年份」目前共一萬多筆，所以按下去會看到這個提示，這是正常的。<b>「列印」「匯出CSV」「統整報表」不受這個上限限制</b>，要一次取得全部資料請用那三顆。</div>
+        <div class="tip"><b>製程大類頁籤是背景載入的</b>：清單會先出現（約 0.1～1 秒），製程大類的筆數統計比較花時間，補上來之前該列會淡化並顯示「統計中…」，不會卡住整頁。</div>
         <div class="tip">若篩選結果筆數較多（超過3000筆），列印/匯出/統整報表前會先跳出確認提示，避免不小心產生過大的工作。</div>
         <div class="tip">結案日期是2026-05-22「手動結案」功能上線才開始記錄的，在此之前就已結案的舊資料（約佔已結案總數九成以上）完全沒有結案時間紀錄。這類舊資料改用「BOM編號回推的建立日期」代替（BOM編號格式固定為 B-民國年3碼+月2碼+日2碼+流水號3碼），清單/列印上會標註「(推算)」以資區別；此推算日期同時用於日期篩選與排序。</div>
         <div class="tip">「統整報表」的<b>結案耗時</b>統計（平均/最短/最長結案時間）只計算真的有結案時間紀錄的BOM（合格結案紀錄），無結案時間、改用BOM編號推算日期的舊資料一律不列入耗時計算（會顯示在「不列入計算筆數」），因為推算日期本身就是建立日期，拿來跟自己相減沒有意義。</div>
@@ -626,14 +741,68 @@ document.getElementById('btnPageHelp').addEventListener('click', function(){ doc
 var lastTotal = 0;
 var curPage = 1;
 var curProcess = '';
+// BOM 檔案的網址前綴，與 OreadyReply_ForPm_BaseOfTime.php 相同（Apache 的 Alias /nas 指到 BOM 資料夾）
+var OCQ_NAS_BASE = window.location.protocol + '//' + window.location.host + '/nas/';
 
 function esc(s){ return $('<div>').text(s==null?'':String(s)).html(); }
 function todayStr(){ var d=new Date(); return d.toISOString().substr(0,10); }
 function addDaysStr(days){ var d=new Date(); d.setDate(d.getDate()+days); return d.toISOString().substr(0,10); }
 
-// 預設近30天
-$('#fDateFrom').val(addDaysStr(-29));
-$('#fDateTo').val(todayStr());
+// ── 結案年份快速切換（2026-09-11 使用者拍板：預設「近1年」、單年頁籤＋前後箭號）─────────────
+// 刻意**不另外記一份「目前選了哪個年份」的狀態**：唯一真相就是下方那兩個日期輸入框，年份鈕只是
+// 「幫忙把日期填好」＋「依目前日期反推該反白哪一顆」。這樣清除篩選、從跳窗帶關鍵字進來、使用者
+// 自己手打日期，三條路都不必各自去同步狀態，也不會出現「鈕反白著但日期其實是別的區間」。
+var OCQ_YEAR_MIN = <?= (int)$ocq_year_min ?>, OCQ_YEAR_MAX = <?= (int)$ocq_year_max ?>;
+var OCQ_LIST_MAX = <?= (int)OCQ_LIST_MAX ?>;
+
+function ySetDates(from, to){ $('#fDateFrom').val(from); $('#fDateTo').val(to); }
+function yRange1y(){ return [addDaysStr(-364), todayStr()]; }
+
+// 依目前日期區間反推現在是哪一種模式：{mode:'year'|'1y'|'all'|'custom', year:數字或null}
+function yCurrentMode(){
+    var f = $('#fDateFrom').val(), t = $('#fDateTo').val();
+    if (!f && !t) return { mode:'all', year:null };
+    var m = /^(\d{4})-01-01$/.exec(f);
+    if (m && t === m[1] + '-12-31') return { mode:'year', year:parseInt(m[1],10) };
+    var r = yRange1y();
+    if (f === r[0] && t === r[1]) return { mode:'1y', year:null };
+    return { mode:'custom', year:null };
+}
+
+function renderYearBar(){
+    var st = yCurrentMode();
+    var $list = $('#yearList').empty();
+    for (var y = OCQ_YEAR_MAX; y >= OCQ_YEAR_MIN; y--){
+        $('<button class="ocq-ybtn' + (st.mode==='year' && st.year===y ? ' active' : '') + '">' + y + '</button>')
+            .on('click', (function(yy){ return function(){ ySetDates(yy+'-01-01', yy+'-12-31'); renderYearBar(); applyFilters(); }; })(y))
+            .appendTo($list);
+    }
+    $('#yearBar .ocq-ybtn[data-range="1y"]').toggleClass('active', st.mode==='1y');
+    $('#yearBar .ocq-ybtn[data-range="all"]').toggleClass('active', st.mode==='all');
+    // 箭號：單年模式下往前/往後推一年；不在單年模式時按下就跳到最新的一年當起點
+    $('#yPrev').prop('disabled', st.mode==='year' && st.year<=OCQ_YEAR_MIN);
+    $('#yNext').prop('disabled', st.mode==='year' && st.year>=OCQ_YEAR_MAX);
+    $('#yearHint').text(st.mode==='custom' ? '（自訂區間）' : (st.mode==='all' ? '（不限日期，資料量大時較慢）' : ''));
+}
+
+function yStep(delta){
+    var st = yCurrentMode();
+    var y = (st.mode === 'year') ? st.year + delta : OCQ_YEAR_MAX;
+    if (y < OCQ_YEAR_MIN) y = OCQ_YEAR_MIN;
+    if (y > OCQ_YEAR_MAX) y = OCQ_YEAR_MAX;
+    ySetDates(y+'-01-01', y+'-12-31');
+    renderYearBar(); applyFilters();
+}
+$('#yPrev').on('click', function(){ yStep(-1); });
+$('#yNext').on('click', function(){ yStep(1); });
+$('#yearBar .ocq-ybtn[data-range]').on('click', function(){
+    if ($(this).data('range') === 'all') ySetDates('', '');
+    else { var r = yRange1y(); ySetDates(r[0], r[1]); }
+    renderYearBar(); applyFilters();
+});
+
+// 預設近1年（原本是近30天；使用者拍板改為近1年，跨年時才不會1月1日一開就只剩幾天的資料）
+(function(){ var r = yRange1y(); $('#fDateFrom').val(r[0]); $('#fDateTo').val(r[1]); })();
 
 function curFilters(){
     return {
@@ -685,7 +854,13 @@ function rowToTr(item, maxProc, priceMap){
     // 文字四周空白很大，只綁在文字span上很容易點在空白處沒反應）；值改用 data-val(URI編碼) 傳遞，
     // 避免客戶名稱等內容含特殊字元時打斷HTML屬性字串。
     var custTd = '<td class="ocq-fillable" data-field="customer" data-val="'+encodeURIComponent(item.client_name_display||'')+'" title="雙擊帶入客戶篩選">'+esc(item.client_name_display||'')+'</td>';
-    var bomTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.bom||'')+'" title="雙擊帶入BOM/料號篩選"><figure class="'+cc+'"></figure><span class="ocq-nowrap">'+esc(item.bom)+'</span>'+closedInfo+'</td>';
+    // BOM 編號：跟 BOM總表一樣點一下用 Excel 開 NAS 上的 <BOM>.xlsm。
+    // has_file 是後端用檔名快取查出來的：true＝有檔給連結、false＝沒檔只印文字（使用者要求「若無檔案可不顯示超連結」）、
+    // null＝快取還沒建好無法判定，此時比照 BOM總表現況照樣給連結（寧可點下去沒開，也不要讓大家突然都點不到）。
+    var bomText = item.has_file === false
+        ? '<span class="ocq-nowrap" title="NAS 上找不到這個 BOM 的 .xlsm 檔">'+esc(item.bom)+'</span>'
+        : '<a class="ocq-nowrap ocq-bom-link" href="ms-excel:ofe|u|'+OCQ_NAS_BASE+encodeURIComponent(item.bom)+'.xlsm" target="_blank" title="點擊以 Excel 開啟此 BOM 檔">'+esc(item.bom)+'</a>';
+    var bomTd = '<td class="t-left ocq-fillable" data-field="bom" data-val="'+encodeURIComponent(item.bom||'')+'" title="雙擊帶入BOM/料號篩選"><figure class="'+cc+'"></figure>'+bomText+closedInfo+'</td>';
     // 料號文字本身＝點一下開圖面查閱（bom_viewer）；文字以外的空白處維持雙擊帶入篩選
     var didText = item.d_id
         ? '<span class="ocq-part-link" data-part="'+encodeURIComponent(item.d_id)+'" data-pk="'+(parseInt(item.d_setting_id,10)||0)+'" title="點擊開啟圖面查閱">'+esc(item.d_id)+'</span>'
@@ -728,6 +903,7 @@ function renderPager(total, page, pageSize){
     $p.append($next);
 }
 
+var _listSeq = 0;
 function loadList(page){
     page = page || 1;
     curPage = page;
@@ -735,19 +911,61 @@ function loadList(page){
     f.action = 'list';
     f.page = page;
     f.page_size = $('#pageSizeSel').val();
+    var seq = ++_listSeq;
     $('#ocqTbody').html('<tr><td colspan="6" class="ocq-empty"><i class="fa fa-spinner fa-spin"></i> 載入中...</td></tr>');
     $.post('', f, function(res){
+        if (seq !== _listSeq) return;             // 已經有更新的一次查詢在跑，這份丟掉
         if (!res.success){ $('#ocqTbody').html('<tr><td colspan="6" class="ocq-empty">' + esc(res.message||'查詢失敗') + '</td></tr>'); return; }
         lastTotal = res.total;
-        $('#statTotal').text(res.total);
+        $('#statTotal').text(Number(res.total).toLocaleString('en-US'));
         var colCount = buildThead(res.max_process_count || 0);
+        if (res.blocked){
+            $('#ocqTbody').html('<tr><td colspan="'+colCount+'">' + blockedHtml(res.total, res.limit_max) + '</td></tr>');
+            $('#ocqPager').empty();
+            bindBlockedActions();
+            return;
+        }
         if (!res.rows.length){
             $('#ocqTbody').html('<tr><td colspan="'+colCount+'" class="ocq-empty">查無符合條件的已完工BOM</td></tr>');
         } else {
             $('#ocqTbody').html(res.rows.map(function(r){ return rowToTr(r, res.max_process_count||0, res.price_map||{}); }).join(''));
         }
         renderPager(res.total, res.page, res.page_size);
+
+        // BOM .xlsm 檔名快取還沒建好或已過期時，等畫面畫完才背景重建（掃 NAS 很慢，不可擋在查詢路徑上）。
+        // 一次只發一輪；失敗也不提示，下次查詢會再試。
+        if (res.bom_cache_refresh && !window.__ocqBomCacheRefreshing){
+            window.__ocqBomCacheRefreshing = true;
+            $.post('', { action: 'bom_file_cache_refresh' })
+             .always(function(){ window.__ocqBomCacheRefreshing = false; });
+        }
     }, 'json');
+}
+
+// 超過單次查詢筆數上限時顯示的內容：講清楚為什麼、並直接給可以馬上按的縮小範圍選項
+function blockedHtml(total, max){
+    var yrs = '';
+    for (var y = OCQ_YEAR_MAX; y >= Math.max(OCQ_YEAR_MIN, OCQ_YEAR_MAX-4); y--){
+        yrs += '<button class="ocq-ybtn bk-year" data-y="'+y+'">只看 '+y+' 年</button>';
+    }
+    return '<div class="ocq-blocked">'
+        + '<div class="bk-title"><i class="fa fa-exclamation-triangle"></i> 查詢結果共 '
+        + Number(total).toLocaleString('en-US') + ' 筆，超過單次查詢上限 ' + Number(max).toLocaleString('en-US') + ' 筆</div>'
+        + '<div>資料量太大時整頁會變得很慢，請先縮小結案年份範圍、或加上關鍵字／客戶等條件再查詢。</div>'
+        + '<div class="bk-acts">' + yrs
+        + '<button class="ocq-ybtn bk-1y">近1年</button></div>'
+        + '<div style="margin-top:10px;font-size:12px;color:#8a6d45;">'
+        + '仍要一次取得全部資料時，可直接用上方的「列印」「匯出CSV」「統整報表」——那三項不受這個上限限制。</div>'
+        + '</div>';
+}
+function bindBlockedActions(){
+    $('#ocqTbody .bk-year').on('click', function(){
+        var y = $(this).data('y');
+        ySetDates(y+'-01-01', y+'-12-31'); renderYearBar(); applyFilters();
+    });
+    $('#ocqTbody .bk-1y').on('click', function(){
+        var r = yRange1y(); ySetDates(r[0], r[1]); renderYearBar(); applyFilters();
+    });
 }
 
 function renderProcessTabs(list){
@@ -766,13 +984,23 @@ function renderProcessTabs(list){
     if (curProcess !== '' && !stillValid) curProcess = '';
 }
 
+// 製程大類頁籤是「慢的那一支」（要對命中的每個 BOM 去統計製程），而清單只要 0.1~0.6 秒。
+// **絕對不要再讓清單等它**（原本是 refreshFacets 成功後才 loadList，於是畫面要空等 6 秒才有東西）。
+// 這裡改成各跑各的：清單立刻載、頁籤在背景補上，補回來之前先顯示「統計中…」而不是讓頁籤消失。
+var _facetSeq = 0;
 function refreshFacets(cb){
     var f = curFilters();
     f.action = 'get_facets';
+    var seq = ++_facetSeq;
+    $('#processTabs').addClass('ocq-facet-loading');
     $.post('', f, function(res){
+        if (seq !== _facetSeq) return;            // 使用者又改了條件，這份已經過期，丟掉不要蓋掉新的
+        $('#processTabs').removeClass('ocq-facet-loading');
         if (res.success) renderProcessTabs(res.processes || []);
         if (cb) cb();
-    }, 'json');
+    }, 'json').fail(function(){
+        if (seq === _facetSeq) $('#processTabs').removeClass('ocq-facet-loading');
+    });
 }
 
 function loadOptions(){
@@ -785,9 +1013,12 @@ function loadOptions(){
 }
 loadOptions();
 
-function applyFilters(){ refreshFacets(function(){ loadList(1); }); }
+// 清單先跑（快），製程大類頁籤在背景補（慢）——兩支各自發出，畫面不會空等。
+function applyFilters(){ loadList(1); refreshFacets(); }
 
 $('#btnSearch').on('click', applyFilters);
+// 手打／用月曆改結案日期時，年份鈕要跟著重算該反白哪一顆（改成不是整年就顯示「（自訂區間）」）
+['#fDateFrom','#fDateTo'].forEach(function(sel){ $(sel).on('change', renderYearBar); });
 ['#fDateFrom','#fDateTo','#fPriority'].forEach(function(sel){ $(sel).on('change', applyFilters); });
 // 即時篩選（防抖200ms，跟主頁全域搜尋同款）；eg_input_rules.js的「有值雙擊清空」也會觸發input事件，
 // 因此雙擊清空篩選框內容時會自動連帶重新查詢，不需要另外處理。
@@ -819,6 +1050,8 @@ $('#ocqTbody').on('click', '.ocq-part-link', function(e){
 });
 // 料號文字上的雙擊不再連帶觸發「帶入篩選」（避免同時開窗又改篩選條件）
 $('#ocqTbody').on('dblclick', '.ocq-part-link', function(e){ e.stopPropagation(); });
+// BOM 文字上的雙擊同理：擋掉「開第二次 Excel」與「帶入篩選」，要帶入篩選請雙擊該格文字以外的空白處
+$('#ocqTbody').on('dblclick', '.ocq-bom-link', function(e){ e.preventDefault(); e.stopPropagation(); });
 
 // 開啟圖面查閱視窗（同一料號重複點沿用同一個視窗，不會開一堆）
 // pk＝d_setting.d_id（整數 PK）：同名料號可能有多筆主檔（不同客戶／版次），不指名會混在一起
@@ -837,10 +1070,13 @@ function openPartDrawing(pid, pk){
 }
 
 $('#btnClear').on('click', function(){
+    // 原本這顆是「清成不限日期＝查全部」；現在「全部年份」已經有自己的按鈕在年份列上，
+    // 所以這顆改成回到預設的近1年（否則按一下就會撞到單次查詢筆數上限，看起來像壞掉）。
     $('#fCustomer, #fSales, #fBom, #fVendor, #fQty, #fDelivery, #fKeyword').val('');
-    $('#fDateFrom, #fDateTo').val('');
+    var r = yRange1y(); $('#fDateFrom').val(r[0]); $('#fDateTo').val(r[1]);
     $('#fPriority').val('');
     curProcess = '';
+    renderYearBar();
     applyFilters();
 });
 
@@ -1027,28 +1263,30 @@ $('#btnSummary').on('click', function(){
     }, 'json');
 });
 
-// 由 BOM總表「查詢已完工資料」跳窗的「前往完整查詢」按鈕帶進來的關鍵字（?kw=…）。
-// 那個跳窗本身不限結案日期、只是有筆數上限，所以帶入關鍵字時要一併清空預設的近30天區間，
-// 否則使用者會看到「改用完整查詢反而查更少」的矛盾結果。沒有帶 kw 時完全不影響原本的預設行為。
+// 由 BOM總表「查詢已完工資料」跳窗的「前往完整查詢」按鈕帶進來的關鍵字（?kw=…&t=跳窗當時的總筆數）。
+// 日期維持本頁預設的近1年（使用者拍板），但那個跳窗本身是不限日期的，所以提示條要把「跳窗當時查到
+// 全部年份共幾筆」一併講出來並附一顆「改看全部年份」，否則使用者會覺得「改用完整查詢反而查更少」。
 (function(){
-    var kw = '';
-    try {
-        kw = (new URLSearchParams(window.location.search)).get('kw') || '';
-    } catch (e) {
-        var m = /[?&]kw=([^&]*)/.exec(window.location.search || '');
-        kw = m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : '';
+    var qs = window.location.search || '';
+    function qp(k){
+        try { return (new URLSearchParams(qs)).get(k) || ''; }
+        catch (e) { var m = new RegExp('[?&]'+k+'=([^&]*)').exec(qs); return m ? decodeURIComponent(m[1].replace(/\+/g,' ')) : ''; }
     }
-    kw = $.trim(kw);
+    var kw = $.trim(qp('kw'));
     if (!kw) return;
+    var srcTotal = parseInt(qp('t'), 10);
     $('#fKeyword').val(kw);
-    $('#fDateFrom, #fDateTo').val('');
-    $('<div class="ocq-stat" style="background:#F7E0BD;border:1px solid #E0B378;color:#5b3a1e;'
-        + 'padding:7px 10px;border-radius:4px;font-size:12.5px;line-height:1.6;flex-wrap:wrap;"></div>')
-        .html('<i class="fa fa-info-circle"></i>&nbsp;已從「BOM總表 → 查詢已完工資料」帶入關鍵字 <b>'
-            + esc(kw) + '</b>，並已清空結案日期區間改查全部歷史資料；可自行再調整上方任一篩選條件。')
-        .insertBefore('.ocq-stat:first');
+    var html = '<i class="fa fa-info-circle"></i>&nbsp;已從「BOM總表 → 查詢已完工資料」帶入關鍵字 <b>'
+        + esc(kw) + '</b>，目前顯示<b>近1年</b>的結案資料。';
+    if (srcTotal > 0) {
+        html += '（該跳窗以<b>全部年份</b>查到的是 <b>' + srcTotal.toLocaleString('en-US') + '</b> 筆）';
+    }
+    html += '&nbsp;<button class="ocq-ybtn" id="kwGoAll" style="height:22px;font-size:12px;padding:0 9px;">改看全部年份</button>';
+    $('<div class="ocq-carry"></div>').html(html).insertBefore('.ocq-stat:first');
+    $('#kwGoAll').on('click', function(){ ySetDates('', ''); renderYearBar(); applyFilters(); });
 })();
 
+renderYearBar();
 applyFilters();
 </script>
 </body>
