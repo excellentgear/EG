@@ -441,6 +441,7 @@ $roleLabel = ia_role_label($perms);
             <li><b>IA 編號依稽核日期產生</b>（IA+西元後兩碼+月日+流水，例 IA24121601），補歷史紙本時編號會跟表單上的日期對得起來。</li>
             <li><b>到期提醒</b>：期限前 N 天（預設 7 天，可在「設定」改）與逾期後，每天最多發一則通知給受稽單位主管與受審核人。提醒是有人用到這個模組時順便檢查，不是背景排程。</li>
             <li><b>查檢表結案前必須每一項都判定過</b>合格／不合格，否則不讓結案（避免漏查）。</li>
+            <li><b>建錯的稽核通知單怎麼刪</b>（2026-09-11 起）：<b>內稽管理員</b>可以刪除<b>尚未結案</b>的通知單——清單操作欄的垃圾桶圖示，或開啟後按下方的「刪除」。兩個限制：<b>已結案的不給刪</b>（要刪請先把狀態改回「執行中」）、<b>底下還有不符合通知單的不給刪</b>（那些 IA 單會變孤兒、仍留在清單與稽核報告表裡，請先到「不符合通知單」分頁處理或刪除）。刪除會<b>連同底下的查檢表一起刪</b>（含已填好的結果），年度計畫表上這一次稽核的 ◎ 也會一併消失；<b>已建立的會議紀錄不會被刪除</b>，那是會議紀錄模組自己的資料，請自行過去處理。</li>
             <li><b>條文題庫刪不掉</b>：已經被既有查檢表引用的 AS 條文按刪除會自動改成「停用」（不再出現在新建的查檢表），舊表內容不受影響。</li>
             <li><b>作業項目：看不懂條文在查什麼的解法</b>（2026-09-11 起）。AS 條文是原文（「8.4 外部提供的過程、產品和服務的控制」），看不出實務上對應公司哪一段作業，所以加了一層白話的<b>作業項目</b>：
                 <br>⑴<b>項目本身設在 AS 文件管理</b>：該文件的 <b>⚙ → 作業項目</b>（管理員限定），一份文件可以寫好幾個（同一份文件常常不只做一件事），例如供應商管理程序＝外包加工、供應商評鑑。
@@ -613,6 +614,9 @@ $roleLabel = ia_role_label($perms);
     <div class="ia-mfoot">
         <button data-close>關閉</button>
         <button id="btnCasePrint"><i class="fa fa-print"></i> 列印</button>
+<?php if ($perms['canAdmin']): ?>
+        <button id="btnCaseDelete" class="btn-danger" style="display:none;"><i class="fa fa-trash"></i> 刪除</button>
+<?php endif; ?>
         <button id="btnCaseSave" class="btn-warm">儲存</button>
     </div>
 </div></div>
@@ -1337,13 +1341,52 @@ function renderCases(){
           + esc(CASE_ST[r.status]||r.status)+'</span></td>'
           + '<td><span class="ia-op" onclick="openCase('+r.case_id+')"><i class="fa fa-edit"></i> 開啟</span>'
           + '<span class="ia-op" onclick="printCase('+r.case_id+')"><i class="fa fa-print"></i></span>'
+          + (CASE_CAN_DEL && r.status!=='closed'
+              ? '<span class="ia-op danger" onclick="delCase('+r.case_id+')" title="刪除這張稽核通知單"><i class="fa fa-trash"></i></span>'
+              : '')
           + '</td></tr>';
     });
     $('#caseBody').html(h);
 }
 
+/* 刪除稽核通知單（管理員限定，且只能刪「尚未結案」的；2026-09-11 使用者交辦）。
+   依 ai-rules/08 第六節「點開即刷新」：按下當下先向後端拿這一筆的最新狀態再判斷，
+   不用清單上的快取——別人剛結案或剛開了 IA 單時要當場擋下並重新整理清單。
+   後端 case_delete 會用同一組規則再擋一次（鐵律8）。 */
+var CASE_CAN_DEL = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
+function delCase(id){
+    if (!CASE_CAN_DEL) return;
+    $.getJSON(API, {action:'case_get', case_id:id}, function(res){
+        if (!res.ok) { alert(res.error||'載入失敗，請重新整理清單'); loadCases(); return; }
+        var c = res.row;
+        if (c.status === 'closed') {
+            alert('這張通知單已結案，不可刪除。\n要刪除請先把狀態改回「執行中」。');
+            loadCases(); return;
+        }
+        var ncCnt = (c.ncs||[]).length, ckCnt = (c.checks||[]).length;
+        if (ncCnt > 0) {
+            alert('這張通知單底下還有 '+ncCnt+' 張不符合通知單，請先到「不符合通知單」分頁處理或刪除。');
+            loadCases(); return;
+        }
+        var msg = '確定刪除稽核通知單「'+(c.case_no || ('第'+c.seq_no+'次'))+'」？\n\n';
+        if (ckCnt) msg += '・底下 '+ckCnt+' 份查檢表會一起刪除（含已填好的結果）\n';
+        msg += '・年度計畫表上這一次稽核的「◎ 實際實施」會一併消失\n';
+        if (+c.pre_meeting_id || +c.end_meeting_id) msg += '・已建立的會議紀錄不會被刪除，請自行到會議紀錄模組處理\n';
+        if (!confirm(msg)) return;
+        $.post(API, {action:'case_delete', case_id:id}, function(r){
+            if (!r.ok) { alert(r.error||'刪除失敗'); loadCases(); return; }
+            closeMask('caseMask');
+            PAGE.case = 1;
+            loadCases(); loadChecks();
+            if (currentPane()==='dash')  loadDash();
+            if (currentPane()==='plan')  loadPlan();
+        }, 'json');
+    });
+}
+
 var CASE_ID = 0, CASE_ROWS = [];
 $('#btnCaseNew').on('click', function(){ openCase(0); });
+$('#btnCaseDelete').on('click', function(){ if (CASE_ID) delCase(CASE_ID); });
 function openCase(id){
     CASE_ID = id;
     if (!id) {
@@ -1354,6 +1397,7 @@ function openCase(id){
         $('#cLeader').html(postOptions(META.auditors, '', '', '（未指定）'));
         CASE_ROWS = [newCaseRow(),newCaseRow(),newCaseRow()];
         renderCaseRows(); $('#cMeetingSec').hide();
+        $('#btnCaseDelete').hide();
         clearErrs($('#caseMask')); openMask('caseMask');
         return;
     }
@@ -1381,6 +1425,8 @@ function openCase(id){
         renderCaseRows();
         renderCaseMeeting(c);
         $('#cMeetingSec').show();
+        // 已結案的不給刪（後端同規則再擋一次）
+        $('#btnCaseDelete').toggle(CASE_CAN_DEL && c.status !== 'closed');
         clearErrs($('#caseMask')); openMask('caseMask');
     });
 }

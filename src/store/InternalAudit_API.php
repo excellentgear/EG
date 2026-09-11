@@ -609,14 +609,48 @@ case 'case_status': {
 }
 
 case 'case_delete': {
+    // 管理員可刪「已建立但尚未結案」的通知單（2026-09-11 使用者交辦）。
+    // 前端擋一次、這裡同規則再擋一次（鐵律8）：已結案的一律不給刪，
+    // 底下還有不符合通知單的也不給刪（刪了那些 IA 單會變孤兒、仍留在清單與稽核報告表裡）。
     iaReqAdmin($perms);
     $cid = (int)($_POST['case_id'] ?? 0);
+    $q = $db->prepare("SELECT case_id, case_no, year, seq_no, status FROM ia_case
+                        WHERE case_id=? AND COALESCE(is_deleted,0)=0");
+    $q->execute([$cid]);
+    $c = $q->fetch(PDO::FETCH_ASSOC);
+    if (!$c) jerr('找不到這張稽核通知單（可能已被刪除，請重新整理清單）', 404);
+    if ($c['status'] === 'closed') jerr('這張通知單已結案，不可刪除。要刪請先把狀態改回「執行中」。');
+
     $q = $db->prepare("SELECT COUNT(*) FROM ia_nc WHERE case_id=? AND COALESCE(is_deleted,0)=0");
     $q->execute([$cid]);
-    if ((int)$q->fetchColumn() > 0) jerr('這張通知單底下還有不符合通知單，請先處理');
-    $db->prepare("UPDATE ia_case SET is_deleted=1, updated_at=NOW() WHERE case_id=?")->execute([$cid]);
-    $db->prepare("UPDATE ia_check SET is_deleted=1 WHERE case_id=?")->execute([$cid]);
-    jout(['deleted' => true]);
+    $ncCnt = (int)$q->fetchColumn();
+    if ($ncCnt > 0) jerr('這張通知單底下還有 ' . $ncCnt . ' 張不符合通知單，請先到「不符合通知單」分頁處理或刪除。');
+
+    $q = $db->prepare("SELECT COUNT(*) FROM ia_check WHERE case_id=? AND COALESCE(is_deleted,0)=0");
+    $q->execute([$cid]);
+    $chkCnt = (int)$q->fetchColumn();
+
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE ia_case SET is_deleted=1, updated_at=NOW() WHERE case_id=?")->execute([$cid]);
+        $db->prepare("UPDATE ia_check SET is_deleted=1 WHERE case_id=?")->execute([$cid]);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        jerr('刪除失敗：' . $e->getMessage(), 500);
+    }
+
+    // 刪除是不可逆的管理動作（雖然是軟刪除），留一筆稽核軌跡
+    try {
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('delete','ia_case',?,?,?,?,?,NOW())")
+           ->execute([(string)$cid,
+                      (string)($c['case_no'] ?: ($c['year'] . ' 第' . $c['seq_no'] . '次')),
+                      json_encode(['status' => $c['status'], 'checks_deleted' => $chkCnt], JSON_UNESCAPED_UNICODE),
+                      $uid, $uname]);
+    } catch (Throwable $e) {}
+
+    jout(['deleted' => true, 'check_cnt' => $chkCnt]);
 }
 
 /* ============================ 查檢表（AS／系統／績效） ============================ */
