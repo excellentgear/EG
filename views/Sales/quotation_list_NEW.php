@@ -346,6 +346,14 @@ body { background:var(--bg); }
 .pt-group-item .pt-del  { color:#e74c3c; cursor:pointer; padding:0 3px; visibility:hidden; }
 .pt-group-item .pt-edit { color:#337ab7; cursor:pointer; padding:0 3px; visibility:hidden; }
 .pt-group-item .pt-move { color:#8a5a2b; cursor:pointer; padding:0 3px; visibility:hidden; }
+/* 變數多的時候（砂輪那種 7 個變數）跳窗會比螢幕還高，底部的儲存鈕會看不到也點不到 */
+#ptNoteModal .modal-body { max-height:calc(100vh - 200px); overflow-y:auto; }
+/* 變數定義：一列一個變數，欄位縮到剛好夠用（顯示名稱多半只有兩三個字） */
+.ntmpl-var-row { margin-bottom:4px; padding-bottom:4px; border-bottom:1px dotted #eee; }
+.ntmpl-var-row:last-child { border-bottom:0; }
+.ntmpl-var-row .ntmpl-var-rules:empty { display:none; }
+.ntmpl-var-row .form-control { height:26px; }
+.ntmpl-rule-row .form-control { height:24px; }
 /* 填變數跳窗的「選項按鈕」（←→ 移動、Enter 確定；移到哪個就是選哪個） */
 .ntv-opts { display:flex; flex-wrap:wrap; gap:6px; margin-top:3px; }
 .ntv-opt {
@@ -2482,35 +2490,34 @@ function buildNtmplVarRow(v) {
     const isLabel  = vtype === 'label_pick';
     const isChoice = vtype === 'choice';
     // 標籤選擇器 options（同步建立時可能還沒有資料，改用 data-label-id 動態載入）
-    return `<div class="ntmpl-var-row" style="margin-bottom:6px;padding-bottom:4px;border-bottom:1px dotted #eee;">
-      <div style="display:flex;gap:4px;align-items:flex-start;flex-wrap:wrap;">
-        <span style="color:#888;font-size:13px;padding-top:4px;">{</span>
-        <input type="text" class="form-control input-sm ntmpl-var-key" style="width:55px;" placeholder="變數名" maxlength="20" value="${key}">
-        <span style="color:#888;font-size:13px;padding-top:4px;">}</span>
-        <select class="form-control input-sm ntmpl-var-type" style="width:100px;" onchange="onNtmplVarTypeChange(this)">
+    // 一列一個變數：{變數名} 輸入類型 防呆 ＋條件 顯示名稱 ×
+    // 顯示名稱都是「外徑」「旋向」這種兩三個字，欄位不必留寬
+    return `<div class="ntmpl-var-row">
+      <div class="ntmpl-var-adv" style="display:flex;gap:3px;align-items:center;flex-wrap:wrap;">
+        <span style="color:#aaa;font-size:12px;">{</span>
+        <input type="text" class="form-control input-sm ntmpl-var-key" style="width:50px;padding:3px 5px;" placeholder="變數" maxlength="20" value="${key}">
+        <span style="color:#aaa;font-size:12px;">}</span>
+        <select class="form-control input-sm ntmpl-var-type" style="width:82px;font-size:11px;padding:3px 2px;" onchange="onNtmplVarTypeChange(this)">
             <option value="text"       ${vtype==='text'       ?'selected':''}>文字輸入</option>
             <option value="choice"     ${isChoice             ?'selected':''}>選項按鈕</option>
-            <option value="label_pick" ${isLabel              ?'selected':''}>料號標籤選</option>
+            <option value="label_pick" ${isLabel              ?'selected':''}>料號標籤</option>
         </select>
-        <input type="text" class="form-control input-sm ntmpl-var-hint" style="flex:1;min-width:80px;${isLabel?'display:none;':''}" placeholder="顯示名稱（例：旋向）" maxlength="30" value="${hint}">
-        <select class="form-control input-sm ntmpl-var-label" style="flex:1;min-width:100px;${!isLabel?'display:none;':''}" data-selected="${labelId}">
+        <select class="form-control input-sm ntmpl-var-input-type" style="width:84px;font-size:11px;padding:3px 2px;${isChoice||isLabel?'display:none;':''}" title="防呆：限制只能填數字或只能填文字">
+            <option value="any"    ${itype==='any'   ?'selected':''}>不限</option>
+            <option value="number" ${itype==='number'?'selected':''}>只能數字</option>
+            <option value="text"   ${itype==='text'  ?'selected':''}>只能文字</option>
+        </select>
+        <input type="text" class="form-control input-sm ntmpl-var-options" style="width:120px;font-size:11px;padding:3px 5px;${isChoice?'':'display:none;'}"
+               placeholder="選項 RH,LH" title="選項按鈕的內容，用逗號分隔" value="${optsTxt}">
+        <select class="form-control input-sm ntmpl-var-label" style="width:120px;font-size:11px;padding:3px 2px;${!isLabel?'display:none;':''}" data-selected="${labelId}">
             <option value="">載入中...</option>
         </select>
-        <button type="button" class="btn btn-xs btn-danger" onclick="$(this).closest('.ntmpl-var-row').remove();ntmplRefreshRuleRefs(this)">
-            <i class="fa fa-times"></i>
+        <button type="button" class="btn btn-xs btn-default" style="padding:2px 5px;" title="新增防呆條件（例：必須大於另一個變數、必須小於 1000）" onclick="addNtmplRule(this)">
+            <i class="fa fa-plus"></i>條件
         </button>
-      </div>
-      <div class="ntmpl-var-adv" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin:4px 0 0 14px;">
-        <span style="font-size:11px;color:#8a5a2b;">防呆</span>
-        <select class="form-control input-sm ntmpl-var-input-type" style="width:104px;font-size:11px;${isChoice||isLabel?'display:none;':''}">
-            <option value="any"    ${itype==='any'   ?'selected':''}>不限數字文字</option>
-            <option value="number" ${itype==='number'?'selected':''}>只能填數字</option>
-            <option value="text"   ${itype==='text'  ?'selected':''}>只能填文字</option>
-        </select>
-        <input type="text" class="form-control input-sm ntmpl-var-options" style="flex:1;min-width:140px;font-size:11px;${isChoice?'':'display:none;'}"
-               placeholder="選項，用逗號分隔（例：RH,LH）" value="${optsTxt}">
-        <button type="button" class="btn btn-xs btn-default" style="font-size:10px;" onclick="addNtmplRule(this)">
-            <i class="fa fa-plus"></i> 條件
+        <input type="text" class="form-control input-sm ntmpl-var-hint" style="width:96px;padding:3px 5px;${isLabel?'display:none;':''}" placeholder="顯示名稱" maxlength="30" value="${hint}" title="填值時顯示的名稱，例：外徑、旋向">
+        <button type="button" class="btn btn-xs btn-danger" style="padding:2px 5px;" title="刪除這個變數" onclick="$(this).closest('.ntmpl-var-row').remove();ntmplRefreshRuleRefs(this)">
+            <i class="fa fa-times"></i>
         </button>
         <div class="ntmpl-var-rules" style="width:100%;">${rules.map(r => buildNtmplRuleRow(r)).join('')}</div>
       </div>
@@ -2521,18 +2528,18 @@ function buildNtmplRuleRow(r) {
     const op  = r.op || '>';
     const ref = r.ref ? escapeHtml(r.ref) : '';
     const val = (r.value != null) ? escapeHtml(String(r.value)) : '';
-    return `<div class="ntmpl-rule-row" style="display:flex;gap:4px;align-items:center;margin-top:3px;">
-        <span style="font-size:11px;color:#888;">必須</span>
-        <select class="form-control input-sm ntmpl-rule-op" style="width:92px;font-size:11px;">
+    return `<div class="ntmpl-rule-row" style="display:flex;gap:3px;align-items:center;margin:3px 0 0 16px;">
+        <span style="font-size:11px;color:#8a5a2b;">必須</span>
+        <select class="form-control input-sm ntmpl-rule-op" style="width:82px;font-size:11px;padding:2px 2px;">
             ${NTV_OPS.map(o => `<option value="${o[0]}" ${op===o[0]?'selected':''}>${o[1]}</option>`).join('')}
         </select>
-        <select class="form-control input-sm ntmpl-rule-ref" style="width:118px;font-size:11px;" data-selected="${ref}"
+        <select class="form-control input-sm ntmpl-rule-ref" style="width:96px;font-size:11px;padding:2px 2px;" data-selected="${ref}"
                 onchange="$(this).closest('.ntmpl-rule-row').find('.ntmpl-rule-val').toggle(!this.value);">
             <option value="">固定值 →</option>
         </select>
-        <input type="text" class="form-control input-sm ntmpl-rule-val" style="width:90px;font-size:11px;${ref?'display:none;':''}"
-               placeholder="例：1000" value="${val}">
-        <button type="button" class="btn btn-xs btn-default" style="font-size:10px;" onclick="$(this).closest('.ntmpl-rule-row').remove()">
+        <input type="text" class="form-control input-sm ntmpl-rule-val" style="width:72px;font-size:11px;padding:2px 5px;${ref?'display:none;':''}"
+               placeholder="1000" value="${val}">
+        <button type="button" class="btn btn-xs btn-default" style="padding:1px 5px;" title="刪除這個條件" onclick="$(this).closest('.ntmpl-rule-row').remove()">
             <i class="fa fa-times"></i>
         </button>
     </div>`;
