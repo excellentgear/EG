@@ -206,6 +206,8 @@ $roleLabel = ia_role_label($perms);
         .pick-wrap label:hover { background:#FDF3E2; }
         .pick-wrap label.hdr { background:#F3E4C9; font-weight:bold; color:#6b4a20; }
         /* 建立查檢表：作業項目標籤（點一下＝只勾這個用途的條文）與每一列的用途徽章 */
+        .nk-chips { max-height:56px; overflow:hidden; margin-top:3px; }
+        .nk-chips.open { max-height:190px; overflow-y:auto; }
         .nk-chip { display:inline-block; font-size:12px; color:#8A5A2B; background:#FBF5EA; border:1px solid #E8D5B5;
             border-radius:11px; padding:1px 10px; margin:0 4px 4px 0; cursor:pointer; user-select:none; }
         .nk-chip:hover { background:#F7E0BD; }
@@ -649,7 +651,8 @@ $roleLabel = ia_role_label($perms);
                  點一下就只勾該用途的條文。項目設在 AS 文件管理 → ⚙ 作業項目，條文題庫逐條挑對應。 -->
             <div id="nkTaskBar" style="display:none;margin-bottom:6px;">
                 <span style="font-size:12px;color:#8a6d45;">依作業項目挑題：</span>
-                <span id="nkTaskChips"></span>
+                <span class="ia-op" id="nkTaskMore"></span>
+                <div id="nkTaskChips" class="nk-chips"></div>
             </div>
             <div class="pick-wrap" id="nkPick" style="max-height:300px;"></div>
             <div class="err-msg" id="errNkPick"></div>
@@ -1699,7 +1702,7 @@ function bankRow(kind, r){
 }
 /* 作業項目標籤（只有 AS 查檢表）：點一下＝只勾有這個用途的條文，再點一下取消。
    同時選多個＝聯集。一個都沒選＝回到全部勾選（跟原本行為一樣）。 */
-var NK_TASKS = [];
+var NK_TASKS = [], NK_CHIPS_OPEN = false;
 function renderTaskChips(){
     var kind = $('#nkKind').val();
     if (kind !== 'as') { $('#nkTaskBar').hide(); NK_TASKS = []; return; }
@@ -1708,11 +1711,22 @@ function renderTaskChips(){
     var names = Object.keys(all).sort();
     if (!names.length) { $('#nkTaskBar').hide(); NK_TASKS = []; return; }
     NK_TASKS = NK_TASKS.filter(function(n){ return names.indexOf(n) >= 0; });
-    $('#nkTaskChips').html(names.map(function(n){
+    // 標籤可能上百個，上方的關鍵字一併用來篩標籤（打「供應商」就只剩供應商相關的），
+    // 但**已選中的標籤一定留著**——被篩掉就再也取消不了了
+    var kw = $('#nkFilter').val().trim().toLowerCase();
+    var show = names.filter(function(n){
+        return NK_TASKS.indexOf(n) >= 0 || !kw || n.toLowerCase().indexOf(kw) >= 0;
+    });
+    $('#nkTaskChips').html(show.map(function(n){
         return '<span class="nk-chip'+(NK_TASKS.indexOf(n)>=0?' on':'')+'" data-t="'+esc(n)+'">'+esc(n)+'</span>';
     }).join('') + (NK_TASKS.length ? '<span class="nk-chip clear" data-clear="1">✕ 清除</span>' : ''));
+    // 預設只露兩排，按「全部 N 個」才展開（不然一百多顆標籤會把勾選清單擠到看不見）
+    $('#nkTaskChips').toggleClass('open', NK_CHIPS_OPEN);
+    $('#nkTaskMore').text(NK_CHIPS_OPEN ? '收合標籤' : ('全部 '+show.length+' 個 ▾'))
+                    .toggle(show.length > 12);
     $('#nkTaskBar').show();
 }
+$(document).on('click', '#nkTaskMore', function(){ NK_CHIPS_OPEN = !NK_CHIPS_OPEN; renderTaskChips(); });
 $(document).on('click', '#nkTaskChips .nk-chip', function(){
     if ($(this).data('clear')) { NK_TASKS = []; }
     else {
