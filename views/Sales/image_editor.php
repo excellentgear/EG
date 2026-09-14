@@ -580,14 +580,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true, 'count' => $done]);
         } elseif ($act === 'part_search') {
             // 料號搜尋（料號/圖號）
+            // 同一個料號文字常常對到多筆主檔（不同客戶／版次）——實測 OB321500200 有兩筆
+            //（旻成 #440、松田 #19799），只印料號文字的話畫面上是兩行一模一樣的字，
+            // 使用者根本挑不出要存到哪一筆（使用者 2026-09-14 回報）。故一律連客戶／版次／
+            // 主檔編號一起回傳，由前端組成看得出差別的選項文字。
             $q = trim($_POST['q'] ?? '');
             if ($q === '') throw new Exception('請輸入料號或圖號關鍵字');
-            $st = $pdo->prepare("SELECT d_id, D_Setting_Id, Drawing_No FROM d_setting
-                                 WHERE D_Setting_Id LIKE ? OR Drawing_No LIKE ?
-                                 ORDER BY d_id DESC LIMIT 20");
+            $st = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Revision,
+                                        d.Customer_Id, c.customer AS customer_name
+                                   FROM d_setting d
+                                   LEFT JOIN customer_list c ON c.customer_id = d.Customer_Id
+                                  WHERE d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ?
+                                  ORDER BY d.d_id DESC LIMIT 20");
             $like = '%' . $q . '%';
             $st->execute([$like, $like]);
-            echo json_encode(['success' => true, 'parts' => $st->fetchAll(PDO::FETCH_ASSOC)]);
+            echo json_encode(['success' => true, 'parts' => $st->fetchAll(PDO::FETCH_ASSOC)], JSON_UNESCAPED_UNICODE);
+        } elseif ($act === 'part_get') {
+            // 依「料號主檔 PK」取單筆（圖面查閱等頁面帶 ?part_d_id= 進來時用）。
+            // 帶 PK 進來就代表呼叫端已經指名是哪一筆主檔，這裡絕不可以再用料號文字去找，
+            // 否則同名料號又會挑到別家那一筆（＝這次要修的問題本身）。
+            $dId = (int)($_POST['d_id'] ?? 0);
+            if ($dId <= 0) throw new Exception('缺少料號主檔編號');
+            $st = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Revision,
+                                        d.Customer_Id, c.customer AS customer_name
+                                   FROM d_setting d
+                                   LEFT JOIN customer_list c ON c.customer_id = d.Customer_Id
+                                  WHERE d.d_id = ?");
+            $st->execute([$dId]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$row) throw new Exception('找不到這筆料號主檔（可能已被刪除）');
+            echo json_encode(['success' => true, 'part' => $row], JSON_UNESCAPED_UNICODE);
         } elseif ($act === 'process_candidates') {
             // 製程標籤候選（此料號訂單有過的加工項目＋此料號附件已經打過的），唯一實作在 dwg_change_lib
             $dId = (int)($_POST['d_id'] ?? 0);
@@ -619,6 +641,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (!$catIds) throw new Exception('請至少選擇一個附件標籤（圖面／報價之後全靠它分類）');
             $catStr = implode(',', $catIds);
             if ($dId <= 0) throw new Exception('請先選擇料號');
+            // ── 存到哪一筆料號主檔：一律以 d_setting.d_id（整數 PK）為準，禁止只靠料號文字 ──
+            // 同名料號在主檔常常有好幾筆（不同客戶），只認文字就會存錯家（使用者 2026-09-14 回報）。
+            //   ① 這個 PK 一定要真的存在（資料被刪／前端亂送都擋掉）
+            //   ② 呼叫端若有「鎖定的主檔」（從圖面查閱帶 ?part_d_id= 進來），存檔時必須還是同一筆；
+            //      不一致代表中途被改掉，寧可擋下來也不要默默存到別家（鐵律8：前端擋一次、後端同規則再擋）
+            $pchk = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, c.customer AS customer_name
+                                     FROM d_setting d
+                                     LEFT JOIN customer_list c ON c.customer_id = d.Customer_Id
+                                    WHERE d.d_id = ?");
+            $pchk->execute([$dId]);
+            $partRow = $pchk->fetch(PDO::FETCH_ASSOC);
+            if (!$partRow) throw new Exception('找不到這筆料號主檔（可能已被刪除），請重新搜尋並選擇料號');
+            $lockDid = (int)($_POST['lock_d_id'] ?? 0);
+            if ($lockDid > 0 && $lockDid !== $dId) {
+                throw new Exception('要存入的料號主檔與開啟時鎖定的不一致（鎖定 #' . $lockDid . '、實際 #' . $dId . '），為避免存錯料號已擋下，請重新開啟跳窗確認');
+            }
             // 發行章日期：只在「只存圖片（不建立工作檔）」這條路徑、且標籤是自家出的圖時必填
             //（見 ai-rules/15-圖面變更判定依據.md）。判定要在寫入這一筆之前算，否則會拿自己跟自己比。
             // 版次（選填）：跟料號附件頁上傳跳窗同一個欄位 part_attachments.revision(varchar(50))。
@@ -713,8 +751,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
             }
             $pdo->commit();
+            // part_no／customer 回傳給前端在狀態列寫明「存進了哪一筆主檔」——同名料號有好幾筆時，
+            // 使用者要能當場看見存到的是哪一家，而不是事後到附件清單才發現存錯
             echo json_encode(['success' => true, 'png_id' => $pngId, 'work_id' => $workId, 'extracted' => $n,
-                              'auto_removed' => $removed, 'dwg_verdict' => $dwgVerdict]);
+                              'auto_removed' => $removed, 'dwg_verdict' => $dwgVerdict,
+                              'd_id' => $dId, 'part_no' => (string)$partRow['D_Setting_Id'],
+                              'customer_name' => (string)($partRow['customer_name'] ?? '')], JSON_UNESCAPED_UNICODE);
         } elseif ($act === 'auto_dwg_change') {
             // 「自動換圖記錄」：自動帶入料號/客戶/新舊發行日建成草稿，前端再另開分頁補完送出。
             // 與料號附件頁那顆按鈕共用 dwg_auto_draft_from_part()（唯一實作點）。
@@ -1623,12 +1665,21 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
     <div class="modal-box" style="min-width:480px;">
         <h3 style="display:flex;align-items:center;justify-content:space-between;"><span><i class="fa fa-archive"></i> 料號附件</span><span style="cursor:pointer;color:#8b949e;" onclick="hideModal('partfile-modal')" title="關閉"><i class="fa fa-times"></i></span></h3>
         <div class="modal-body">
-            <div class="frm-row"><label>料號/圖號</label>
+            <!-- 鎖定列：由圖面查閱（bom_viewer.php）帶 ?part_d_id= 進來時顯示。
+                 那邊已經指名是哪一筆料號主檔（同名料號有好幾家客戶），這裡就不可以再讓料號文字決定。 -->
+            <div id="pf-lock-bar" style="display:none;background:#3a2f1d;border:1px solid #8a6d3b;border-radius:4px;padding:6px 8px;margin-bottom:8px;font-size:12px;color:#f0c987;">
+                <i class="fa fa-lock"></i> <span id="pf-lock-text"></span>
+                <button class="tb-btn" style="margin-left:6px;" onclick="pfUnlockPart()" title="解除鎖定後可自行搜尋改存到其他料號主檔"><i class="fa fa-unlock-alt"></i> 改選其他料號</button>
+            </div>
+            <div class="frm-row" id="pf-search-row"><label>料號/圖號</label>
                 <input type="text" id="pf-q" style="flex:1;" placeholder="輸入料號或圖號關鍵字後按搜尋">
-                <button class="tb-btn" onclick="pfSearch()"><i class="fa fa-search"></i> 搜尋</button>
+                <button class="tb-btn" id="pf-search-btn" onclick="pfSearch()"><i class="fa fa-search"></i> 搜尋</button>
             </div>
             <div class="frm-row"><label>選擇料號</label>
-                <select id="pf-part" style="flex:1;" onchange="pfApplyPartToName(); pfLoadWorkfiles(); pfLoadProcTags()"><option value="">— 請先搜尋 —</option></select>
+                <div style="flex:1;">
+                    <select id="pf-part" style="width:100%;" onchange="pfOnPartChange()"><option value="">— 請先搜尋 —</option></select>
+                    <div id="pf-part-info" style="font-size:11.5px;color:#8b949e;margin-top:3px;">同一個料號在主檔常常有好幾筆（不同客戶），選項後方的客戶與 #編號才是分辨依據。</div>
+                </div>
             </div>
             <hr style="border-color:#3c4046;margin:10px 0;">
             <div style="font-weight:700;color:#6fc3ff;font-size:12.5px;margin-bottom:6px;"><i class="fa fa-save"></i> 儲存目前畫布到此料號</div>
@@ -1916,6 +1967,7 @@ $safeRole  = htmlspecialchars($roleLabel, ENT_QUOTES, 'UTF-8');
 <?php endif; ?>
                 <li><b>直線／箭頭的拉伸</b>：選取一條線（含帶箭頭的線）只會出現<b>頭尾兩個圓點</b>，各自拖曳就是改長度與方向，不是整個外框等比例放大縮小；箭頭大小固定不會被拉扯變形。需要真的整體縮放（例如連箭頭一起放大）請改用屬性列的「粗細」或雙擊進入「編輯端點」</li>
                 <li>浮水印：頂列「浮水印」→ 自訂文字/角度（建議-30°）/單一或填滿（自動間距）/濃淡（預設15%不影響閱讀）；套用後自動鎖定，重新套用會取代舊的</li>
+                <li><b>存到哪一筆料號主檔</b>（2026-09-14 起）：同一個料號文字在主檔常常有好幾筆（不同客戶，例 OB321500200 就有兩筆），所以下拉選項一律印成「料號｜圖號｜客戶｜Rev.｜#主檔編號」，下方也會寫明「將存入：○○（客戶 ○○、料號主檔 #○）」。<b>從圖面查閱（圖面/附件頁的「批圖編輯器」按鈕）開啟時，會直接鎖定你當時正在看的那一筆主檔</b>（跳窗頂端有橘色鎖定列），不會再靠料號文字猜、也就不會存到別家去；真的要改存別筆請按鎖定列的「改選其他料號」。存檔一律以主檔編號（d_id）為準，後端會再比對一次，不一致就擋下不寫入。</li>
                 <li>料號附件：頂列「料號附件」→ 搜尋料號 → 儲存＝壓平PNG＋<b>可再編輯的工作檔</b>；之後從同跳窗開啟工作檔，標籤/文字/球標全部還能改，改完儲存成新版本。<b>有建立工作檔的儲存＝暫存，連壓平 PNG 也只在批圖編輯器裡看得到</b>——料號附件、圖面查閱、外來文件清單等其他頁面一律不列，不分登入者（避免半成品被當成正式圖面）；<b>分享範圍（私人／部門／指定人員）只限制這份工作檔能被誰開啟重改，預設「私人」</b>。<b>解析度倍率預設 2×</b>＝跟「另存圖片後再上傳」印出來一樣清晰（1× 印出來會偏糊，只有想省檔案空間才調低）。<b>版次</b>選填，跟料號附件頁上傳跳窗是同一個欄位，填了附件清單會顯示 Rev. 標籤（只掛在圖片上，工作檔不掛）。<b>有建立工作檔的儲存一律當暫存</b>：不必填發行章日期，也不會觸發圖面變更判定；要當正式出圖存進去，請勾「只存圖片，不建立工作檔」，那時標籤若屬「自家出的圖」就要填發行章日期並會比對是否為圖面變更。<b>製程標籤</b>選填：同一個料號常常有好幾個加工項目各自一張圖，選了製程之後<b>只會跟同料號、同標籤、同製程的圖比新舊版</b>，不會把別的加工項目的圖誤判成前一版；留空＝共用圖，會跟該標籤下所有製程一起比。候選只列「這個料號的訂單有過的加工項目」與「這個料號已經打過的製程標籤」（打過一次就記在這個料號裡，下次直接選）。另外<b>新舊版是同一個標籤各自比</b>——BOSS圖只跟BOSS圖比、++圖只跟++圖比、單製++圖再自成一組；掛「作廢」標籤的附件一律不參與新舊版判定</li>
                 <li>標籤庫「建立文字標籤」＝直接打字生成可改字標籤；管理跳窗「組成群組標籤」＝多選標籤打包，之後點一下整組插入（雙擊進入可調個別位置）；「設定分類」批次改分類（名稱自訂）；管理跳窗欄內依分類分組，<b>點分類標題＝整組選取</b></li>
                 <li>標籤搜尋與#標示：標籤庫面板上方搜尋框可模糊搜尋名稱/#標示/分類（「#關鍵字」只找標示、空格分隔＝全部要符合、雙擊清空）；<b>「管理」跳窗左上角也有同一個搜尋框</b>，三欄（私人／部門／公司）會一起篩選，旁邊橘字顯示「顯示 N / 共 M 個」提醒你現在看到的不是全部；<b>改關鍵字時會自動取消已被篩掉的選取</b>，所以「刪除選取／設定分類」永遠只會動到你當下看得到的標籤；「設定#標示」把選取標籤加上左上角藍底小徽章，方便分群找尋。<b>同一個標籤可以設定多組 #</b>（空格分隔，最多 10 個、每個最多 12 字），縮圖上固定顯示前 3 個、其餘收成灰底「+N」（滑鼠移上去看全部），但<b>收起來的一樣搜得到</b>。個數或字數超過時欄位下方會即時紅字說明原因</li>
@@ -2064,6 +2116,10 @@ const DIRDB = 'eg_imgedit_fs';                // IndexedDB：預設儲存資料�
 // 由圖面檢視（bom_viewer.php）等頁面帶入的料號：?part_no=料號文字，開「料號附件」存檔跳窗時
 // 自動搜尋/選好這個料號、檔名也直接帶入，不用使用者自己再打一次
 const PRELOAD_PART_NO = new URLSearchParams(window.location.search).get('part_no') || '';
+// ?part_d_id=<d_setting.d_id>：呼叫端指名「就是這一筆料號主檔」。
+// 同一個料號文字在主檔可能有好幾筆（不同客戶），只帶料號文字會挑錯家（使用者 2026-09-14 回報：
+// OB321500200 有旻成/松田兩筆，一直存不進想要的那一筆），所以有帶 PK 時一律鎖定它、不再靠文字比對。
+const PRELOAD_PART_D_ID = parseInt(new URLSearchParams(window.location.search).get('part_d_id') || '0', 10) || 0;
 
 let artW = 1600, artH = 1200;                 // 畫布（工作區）尺寸
 let currentTool = 'select';
@@ -6442,8 +6498,18 @@ function openPartModal() {
     pd.innerHTML = MY_DEPTS.map(d => '<option value="' + d.id + '">' + escHtml(d.name) + '</option>').join('');
     if (MY_MAIN_DEPT_ID) pd.value = String(MY_MAIN_DEPT_ID);   // 預設主要職務部門
     pfOnScopeChange();
+    // 每次開窗都回到「呼叫端指名哪一筆就鎖哪一筆」的狀態：
+    // 有帶 ?part_d_id= 就只放那一筆主檔（同名料號不會挑錯家）；沒有才退回關鍵字搜尋。
+    pfLockedDid = 0;
+    document.getElementById('pf-lock-bar').style.display = 'none';
+    document.getElementById('pf-search-row').style.display = '';
+    document.getElementById('pf-part').innerHTML = '<option value="">— 請先搜尋 —</option>';
+    pfPartsMap = {};
+    pfRenderPartInfo();
     showModal('partfile-modal');
-    if (PRELOAD_PART_NO) {
+    if (PRELOAD_PART_D_ID) {
+        pfLoadLockedPart();
+    } else if (PRELOAD_PART_NO) {
         document.getElementById('pf-q').value = PRELOAD_PART_NO;
         pfSearch(true);
     } else {
@@ -6540,7 +6606,86 @@ function pfRenderShareUsers() {
     }).join('')
         : '<span style="color:#8b949e;font-size:12px;">查無符合的人員（可能是對方沒有批圖編輯器使用權）</span>';
 }
-let pfPartsMap = {};   // d_id -> D_Setting_Id，搜尋後供 pfApplyPartToName() 把檔名帶成料號
+let pfPartsMap = {};   // d_id -> 該筆主檔資料（料號/圖號/客戶/版次），供檔名帶入與「存到哪一筆」提示
+let pfLockedDid = 0;   // >0＝呼叫端指名的料號主檔 PK，存檔時一定要是這一筆（後端會再擋一次）
+/** 選項文字：同名料號要靠客戶與 #主檔編號才分得出來，故一律連著印（使用者 2026-09-14 回報） */
+function pfPartOptText(p) {
+    return (p.D_Setting_Id || '')
+         + (p.Drawing_No ? '｜' + p.Drawing_No : '')
+         + '｜' + (p.customer_name || p.Customer_Id || '未設客戶')
+         + (p.Revision ? '｜Rev.' + p.Revision : '')
+         + '  #' + p.d_id;
+}
+/** 選好料號後的連動：檔名、工作檔清單、製程候選、以及「現在會存到哪一筆」的提示 */
+function pfOnPartChange() {
+    pfApplyPartToName();
+    pfRenderPartInfo();
+    pfLoadWorkfiles();
+    pfLoadProcTags();
+}
+/** 提示列：寫清楚這次會存進哪一筆主檔（料號＋客戶＋#PK），避免同名料號存錯家 */
+function pfRenderPartInfo() {
+    const box = document.getElementById('pf-part-info');
+    if (!box) return;
+    const d = document.getElementById('pf-part').value;
+    const p = pfPartsMap[d];
+    if (!p) {
+        box.style.color = '#8b949e';
+        box.textContent = '同一個料號在主檔常常有好幾筆（不同客戶），選項後方的客戶與 #編號才是分辨依據。';
+        return;
+    }
+    box.style.color = '#7ed957';
+    box.textContent = '將存入：' + (p.D_Setting_Id || '') + '（客戶 ' + (p.customer_name || p.Customer_Id || '未設定')
+                    + '、料號主檔 #' + p.d_id + '）';
+}
+/** 把一筆主檔資料放進下拉並選起來（鎖定或搜尋命中都走這裡，選項值一律是 d_id） */
+function pfSetPartOptions(parts, selectDid) {
+    const sel = document.getElementById('pf-part');
+    pfPartsMap = {};
+    (parts || []).forEach(p => { pfPartsMap[p.d_id] = p; });
+    sel.innerHTML = (parts && parts.length)
+        ? parts.map(p => '<option value="' + p.d_id + '">' + escHtml(pfPartOptText(p)) + '</option>').join('')
+        : '<option value="">查無符合料號</option>';
+    if (selectDid && pfPartsMap[selectDid]) sel.value = String(selectDid);
+}
+/** 鎖定模式（從圖面查閱帶 ?part_d_id= 進來）：只放這一筆，搜尋列停用 */
+async function pfLoadLockedPart() {
+    try {
+        const fd = new FormData();
+        fd.append('action', 'part_get'); fd.append('d_id', String(PRELOAD_PART_D_ID));
+        const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
+        if (!res.success || !res.part) throw new Error(res.message || '');
+        pfLockedDid = Number(res.part.d_id);
+        pfSetPartOptions([res.part], pfLockedDid);
+        document.getElementById('pf-lock-text').textContent =
+            '已鎖定圖面查閱帶入的料號主檔：' + (res.part.D_Setting_Id || '')
+            + '（客戶 ' + (res.part.customer_name || res.part.Customer_Id || '未設定') + '、#' + res.part.d_id + '）。'
+            + '同名料號還有別家時不會存錯；要改存別筆請按右邊。';
+        document.getElementById('pf-lock-bar').style.display = '';
+        document.getElementById('pf-search-row').style.display = 'none';
+        pfApplyPartToName();
+        pfRenderPartInfo();
+        pfLoadWorkfiles();
+        pfLoadProcTags();
+    } catch (e) {
+        // 鎖不起來（主檔被刪等）就退回一般搜尋，不要讓人完全存不了檔
+        pfLockedDid = 0;
+        document.getElementById('pf-lock-bar').style.display = 'none';
+        document.getElementById('pf-search-row').style.display = '';
+        toast('帶入的料號主檔讀取失敗，請自行搜尋選擇：' + (e.message || ''));
+        if (PRELOAD_PART_NO) { document.getElementById('pf-q').value = PRELOAD_PART_NO; pfSearch(true); }
+    }
+}
+/** 解除鎖定：使用者自己選擇改存到別筆主檔（解除後就跟一般開窗一樣靠下拉挑，值仍是 d_id） */
+function pfUnlockPart() {
+    if (!confirm('解除鎖定後就不再限定存入圖面查閱帶進來的那一筆料號主檔。\n同一個料號在主檔可能有好幾筆（不同客戶），請自行確認選到的是哪一筆。\n\n確定要解除鎖定嗎？')) return;
+    pfLockedDid = 0;
+    document.getElementById('pf-lock-bar').style.display = 'none';
+    document.getElementById('pf-search-row').style.display = '';
+    const q = document.getElementById('pf-q');
+    q.value = PRELOAD_PART_NO || (pfPartsMap[document.getElementById('pf-part').value] || {}).D_Setting_Id || '';
+    if (q.value) pfSearch(true); else q.focus();
+}
 async function pfSearch(auto) {
     const q = document.getElementById('pf-q').value.trim();
     if (!q) { if (!auto) toast('請輸入料號或圖號關鍵字'); return; }
@@ -6549,26 +6694,24 @@ async function pfSearch(auto) {
         fd.append('action', 'part_search'); fd.append('q', q);
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
         if (!res.success) throw new Error(res.message || '');
-        const sel = document.getElementById('pf-part');
-        pfPartsMap = {};
-        res.parts.forEach(p => { pfPartsMap[p.d_id] = p.D_Setting_Id; });
-        sel.innerHTML = res.parts.length
-            ? res.parts.map(p => '<option value="' + p.d_id + '">' + escHtml(p.D_Setting_Id + (p.Drawing_No ? '｜' + p.Drawing_No : '')) + '</option>').join('')
-            : '<option value="">查無符合料號</option>';
-        // 自動帶入時（從圖面檢視開啟）：料號可能對到多筆不同客戶，優先選「料號完全相同」那筆，
-        // 而不是搜尋結果預設選到的第一筆（LIKE 排序不保證是同一顆料號）
+        // 自動帶入時（從圖面檢視開啟）：只有料號文字時仍可能對到多筆不同客戶，先選「料號完全相同」那筆，
+        // 但那只是預設值——真正要存對家一律靠呼叫端帶 ?part_d_id=（見 pfLoadLockedPart）
+        let want = 0;
         if (auto && PRELOAD_PART_NO) {
             const exact = res.parts.find(p => p.D_Setting_Id === PRELOAD_PART_NO);
-            if (exact) sel.value = String(exact.d_id);
+            if (exact) want = Number(exact.d_id);
         }
+        pfSetPartOptions(res.parts, want);
         pfApplyPartToName();   // 搜尋出結果後，檔名自動帶成選到的料號（現場慣例打料號當檔名，見 pf-name 預設註解）
+        pfRenderPartInfo();
         pfLoadWorkfiles();
+        pfLoadProcTags();
     } catch (e) { if (!auto) toast('搜尋失敗：' + (e.message || '')); }
 }
 /** 搜尋/切換選到的料號時，把「檔名」自動帶成該料號（使用者可再手動改） */
 function pfApplyPartToName() {
-    const partNo = pfPartsMap[document.getElementById('pf-part').value];
-    if (partNo) document.getElementById('pf-name').value = partNo;
+    const p = pfPartsMap[document.getElementById('pf-part').value];
+    if (p && p.D_Setting_Id) document.getElementById('pf-name').value = p.D_Setting_Id;
 }
 /* 製程標籤候選：換料號就重載。分兩組——「此料號用過的」放前面（＝使用者要的每料號自動記憶），
    「此料號訂單的加工項目」放後面。選項一多就靠共用檔的 data-eg-filter 打字篩選。 */
@@ -6692,6 +6835,8 @@ function pfRenderMultHint() {
 async function pfSave() {
     const d = document.getElementById('pf-part').value;
     if (!d) { toast('請先搜尋並選擇料號'); return; }
+    // 存到哪一筆料號主檔一律以 d_id 為準；鎖定中就一定要是鎖定的那一筆（後端同規則再擋一次＝鐵律8）
+    if (pfLockedDid && Number(d) !== pfLockedDid) { toast('目前鎖定的是另一筆料號主檔，請重新開啟跳窗或按「改選其他料號」'); return; }
     const name = document.getElementById('pf-name').value.trim() || defaultFileName();
     const noWorkfile = document.getElementById('pf-no-workfile').checked;
     const scope = document.getElementById('pf-scope').value;
@@ -6716,6 +6861,7 @@ async function pfSave() {
         const fd = new FormData();
         fd.append('action', 'save_workfile');
         fd.append('d_id', d);
+        if (pfLockedDid) fd.append('lock_d_id', String(pfLockedDid));
         fd.append('name', name);
         fd.append('png', png);
         fd.append('no_workfile', noWorkfile ? '1' : '');
@@ -6734,12 +6880,16 @@ async function pfSave() {
         const res = await fetch('image_editor.php', { method: 'POST', body: fd }).then(r => r.json());
         if (!res.success) throw new Error(res.message || '');
         const savedAt = nowTimeStr();
-        toast(noWorkfile
+        // 存到哪一筆主檔要當場講清楚（同名料號有好幾家客戶時，事後才發現存錯就來不及了）
+        const savedWhere = (res.part_no || '') + '（客戶 ' + (res.customer_name || '未設定') + '、料號主檔 #' + (res.d_id || d) + '）';
+        toast((noWorkfile
             ? '已存入料號附件：壓平圖'
             : '已存入料號附件：壓平圖＋工作檔（底圖抽離 ' + (res.extracted || 0) + ' 張）' +
-              (res.auto_removed ? '，並自動清掉 ' + res.auto_removed + ' 份超過保留上限的舊工作檔' : ''));
+              (res.auto_removed ? '，並自動清掉 ' + res.auto_removed + ' 份超過保留上限的舊工作檔' : ''))
+            + '｜' + savedWhere);
         status.style.color = '#7ed957';
-        status.innerHTML = '<i class="fa fa-check-circle"></i> 已於 ' + savedAt + ' 儲存成功' + (noWorkfile ? '（僅圖片）' : '（圖片＋工作檔）');
+        status.innerHTML = '<i class="fa fa-check-circle"></i> 已於 ' + savedAt + ' 儲存成功' + (noWorkfile ? '（僅圖片）' : '（圖片＋工作檔）')
+                         + '<br>存入：' + escHtml(savedWhere);
         // 圖面變更判定：本頁不做登錄表單（欄位多、跳窗會蓋住畫布），
         // 改成問要不要自動建立→建成草稿→另開分頁到「圖面變更紀錄」頁補完（與料號附件上傳同一條路）
         const v = res.dwg_verdict || {};

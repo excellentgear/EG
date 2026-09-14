@@ -1048,10 +1048,15 @@ function openImageEditor() {
         params.push('preload_name=' + encodeURIComponent(_currentName || ''));
         if (_type === 'pdf') params.push('preload_type=pdf');   // 走 API 下載端點的網址不一定有 .pdf 副檔名，型別直接註明
     }
-    // 本頁看的就是這個料號，編輯器那邊「料號附件」存檔跳窗開啟時自動搜尋/選好這個料號、
+    // 本頁看的就是這個料號，編輯器那邊「料號附件」存檔跳窗開啟時自動選好這個料號、
     // 檔名也預設帶入，不用使用者自己再打一次（見 image_editor.php 的 PRELOAD_PART_NO）
     var _partNo = (_mode === 'did') ? _d_id : _bom;
     if (_partNo) params.push('part_no=' + encodeURIComponent(_partNo));
+    // ★料號主檔 PK（d_setting.d_id）＝真正的歸戶鍵，一定要一起帶過去。
+    //   同一個料號文字在主檔常常有好幾筆（不同客戶）——例 OB321500200 有旻成 #440、松田 #19799，
+    //   只帶料號文字的話編輯器那邊兩個選項長得一模一樣，存檔會存到別家去（使用者 2026-09-14 回報）。
+    //   本頁已經用 _pk 鎖定在看哪一筆（頂端切換器換的也是它），帶過去編輯器就直接鎖定同一筆。
+    if (_mode === 'did' && _pk > 0) params.push('part_d_id=' + encodeURIComponent(_pk));
     if (params.length) url += '?' + params.join('&');
     window.open(url, 'egImgEditor_' + Date.now(),
         'width=1280,height=860,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
