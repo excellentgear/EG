@@ -1538,6 +1538,130 @@ else if (isset($_POST['action']) && $_POST['action'] === 'cancel_transfer') {
     exit;
 }
 
+// ── 清除「資料轉入時誤設」的外包發單日（僅系統管理員）──────────────────────
+// 背景：ERP 舊資料轉入時，有些製程被自動填了根本不該存在的 outsource_date
+//      （例：B-1140922003 的包裝關被寫成 2024-12-27，比這張 BOM 本身還早半年），
+//       畫面上就會一直被算成「已過 N 日未回」，也會干擾「篩選發單未回」。
+// 規則（使用者指定）：**已經有品管檢驗紀錄或回廠紀錄的製程一律不可清除發包日**，
+//       因為那代表這一關真的出去加工過，日期只是寫錯也必須由 QC 那條線去更正。
+// 只清 outsource_date 一欄，不動 processing_state / 廠商 / QC 任何欄位——要整關退回
+// 待發包請用既有的「取消移轉」(cancel_transfer)，兩者刻意分開，不互相取代。
+// check_only=1：只回報現況不寫入（配合 ai-rules/08 第六節「點開即刷新」，
+//       避免拿畫面上可能已經過期的快取去判斷能不能清）。
+else if (isset($_POST['action']) && $_POST['action'] === 'clear_outsource_date') {
+    include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/_config.php';
+    include_once '../../src/common/role_features_helper.php';
+    header('Content-Type: application/json; charset=utf-8');
+    if (!isset($db) && class_exists('DBConnection')) { $c = new DBConnection(); $db = $c->getPDO(); }
+    if (!isset($_SESSION['id'])) { echo json_encode(['success'=>false,'message'=>'未登入，請重新整理頁面後再試。']); exit; }
+    $_cod_uid = (int)$_SESSION['id'];
+    // 前端只是把按鈕藏起來，這裡才是真正的守門（鐵律8）；判定與頁面開頭同一套 RBAC。
+    if (!oready_resolve_is_admin($db, $_cod_uid, $_SERVER['PHP_SELF'])) {
+        echo json_encode(['success'=>false,'message'=>'只有系統管理員可以清除發包日']); exit;
+    }
+    session_write_close();
+    $_cod_fid   = trim($_POST['bom_ing_fid'] ?? '');
+    $_cod_check = !empty($_POST['check_only']);
+    if ($_cod_fid === '' || !ctype_digit($_cod_fid)) { echo json_encode(['success'=>false,'message'=>'缺少或不正確的 bom_ing_fid']); exit; }
+    try {
+        $_cod_st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, bi.batch_label,
+                                        bi.processing_state, bi.maker_id, bi.qc_completed, bi.QC_check,
+                                        DATE_FORMAT(bi.outsource_date, '%Y/%m/%d') AS od,
+                                        DATE_FORMAT(bi.return_date,    '%Y/%m/%d') AS rd,
+                                        DATE_FORMAT(bi.QC_check_date,  '%Y/%m/%d') AS qcd,
+                                        pn.ProcessName
+                                 FROM bom_ing bi
+                                 LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+                                 WHERE bi.bom_ing_fid = ?");
+        $_cod_st->execute([$_cod_fid]);
+        $_cod_r = $_cod_st->fetch(PDO::FETCH_ASSOC);
+        if (!$_cod_r) { echo json_encode(['success'=>false,'message'=>'找不到對應製程記錄 (fid='.$_cod_fid.')']); exit; }
+
+        $_cod_info = [
+            'fid'              => $_cod_r['bom_ing_fid'],
+            'bom'              => $_cod_r['bom'],
+            'bom_sn'           => $_cod_r['bom_sn'],
+            'process_no'       => $_cod_r['process_no'],
+            'ProcessName'      => $_cod_r['ProcessName'] ?? '',
+            'batch_label'      => $_cod_r['batch_label'],
+            'processing_state' => $_cod_r['processing_state'],
+            'maker_id'         => $_cod_r['maker_id'],
+            'outsource_date'   => $_cod_r['od'],
+            'return_date'      => $_cod_r['rd'],
+            'QC_check_date'    => $_cod_r['qcd'],
+        ];
+
+        // ── 「已有品管檢驗紀錄或回廠紀錄」的完整判定 ──
+        //    bom_ing 自己的欄位 + 四張 QC 子表都要查，只看 bom_ing 會漏掉「線上檢驗單已開但
+        //    還沒回寫 QC_check」這種情況。
+        $_cod_block = [];
+        if (!empty($_cod_r['rd'])) $_cod_block[] = '已有回廠紀錄（回廠日 ' . $_cod_r['rd'] . '）';
+        if (!empty($_cod_r['QC_check']) || !empty($_cod_r['qcd']) || (int)$_cod_r['qc_completed'] === 1) {
+            $_cod_block[] = '已有品管檢驗紀錄' . (!empty($_cod_r['qcd']) ? '（檢驗日 ' . $_cod_r['qcd'] . '）' : '');
+        }
+        $_cod_tabs = [
+            'qc_check'              => ['bom_ing_fid_ref', 'QC 報工紀錄'],
+            'qc_check_form'         => ['bom_ing_fid',     '線上檢驗單'],
+            'qc_packing_inspection' => ['bom_ing_fid',     '包裝檢驗紀錄'],
+            'qc_incoming_batch'     => ['bom_ing_fid',     '回廠進貨批次'],
+        ];
+        foreach ($_cod_tabs as $_cod_t => $_cod_c) {
+            try {
+                $_cod_q = $db->prepare("SELECT COUNT(*) FROM `{$_cod_t}` WHERE `{$_cod_c[0]}` = ?");
+                $_cod_q->execute([$_cod_fid]);
+                $_cod_n = (int)$_cod_q->fetchColumn();
+                if ($_cod_n > 0) $_cod_block[] = $_cod_c[1] . ' ' . $_cod_n . ' 筆';
+            } catch (PDOException $_cod_te) { /* 該表不存在時略過，不影響主判定 */ }
+        }
+
+        if (empty($_cod_r['od'])) {
+            echo json_encode(['success'=>false,'no_action'=>true,'info'=>$_cod_info,
+                              'message'=>'這一關目前沒有發包日，無須清除。']);
+            exit;
+        }
+        if (!empty($_cod_block)) {
+            echo json_encode(['success'=>false,'blocked'=>true,'blockers'=>$_cod_block,'info'=>$_cod_info,
+                              'message'=>'這一關已經有品管檢驗紀錄或回廠紀錄，不可清除發包日。']);
+            exit;
+        }
+        if ($_cod_check) {
+            echo json_encode(['success'=>true,'check_only'=>true,'can_clear'=>true,'info'=>$_cod_info]);
+            exit;
+        }
+
+        $db->beginTransaction();
+        $_cod_up = $db->prepare("UPDATE bom_ing SET outsource_date = NULL, Modified_At = NOW(), Modified_By = :u
+                                 WHERE bom_ing_fid = :f AND outsource_date IS NOT NULL");
+        $_cod_up->execute([':u' => $_cod_uid, ':f' => $_cod_fid]);
+        $_cod_rows = $_cod_up->rowCount();
+        if ($_cod_rows < 1) {
+            $db->rollBack();
+            echo json_encode(['success'=>false,'no_action'=>true,'info'=>$_cod_info,
+                              'message'=>'這一關的發包日剛剛已被其他人清除，請重新整理後再確認。']);
+            exit;
+        }
+        $_cod_note = '清除誤設發包日 ' . $_cod_r['od']
+                   . '（SN ' . $_cod_r['bom_sn'] . ' ' . $_cod_r['process_no'] . ' ' . ($_cod_r['ProcessName'] ?? '') . '）';
+        $db->prepare("INSERT INTO bom_ing_event (bom_ing_fid, event_type, event_note, Created_By) VALUES (?,?,?,?)")
+           ->execute([$_cod_fid, 'clear_outsource_date', mb_substr($_cod_note, 0, 200), $_cod_uid]);
+        try {
+            $db->prepare("INSERT INTO bom_operation_log (bom, bom_ing_fid, operation_type, operator_id, details_json) VALUES (?,?,?,?,?)")
+               ->execute([$_cod_r['bom'], $_cod_fid, 'clear_outsource_date', $_cod_uid,
+                          json_encode(['cleared_outsource_date'=>$_cod_r['od']] + $_cod_info, JSON_UNESCAPED_UNICODE)]);
+        } catch (PDOException $_cod_le) { error_log('bom_operation_log insert error: ' . $_cod_le->getMessage()); }
+        $db->commit();
+
+        $_cod_info['outsource_date'] = null;
+        echo json_encode(['success'=>true,'info'=>$_cod_info,'cleared_date'=>$_cod_r['od'],
+                          'message'=>'已清除發包日 ' . $_cod_r['od']]);
+    } catch (PDOException $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        echo json_encode(['success'=>false,'message'=>$e->getMessage(),'fid'=>$_cod_fid]);
+    }
+    exit;
+}
+
 // ── 標記跳過（僅限N狀態，尚未發包的製程；例如趕件改製程/漏送，確定本站不加工）────
 else if (isset($_POST['action']) && $_POST['action'] === 'mark_skip') {
     session_write_close();
@@ -1699,7 +1823,7 @@ else if (isset($_POST['action']) && $_POST['action'] === 'fetch_bom_operation_lo
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         // 簡易統計（依操作類型）
-        $opLabels = ['manual_close'=>'人工結案','cancel_close'=>'取消結案','transfer'=>'移轉','create_bom'=>'新增BOM'];
+        $opLabels = ['manual_close'=>'人工結案','cancel_close'=>'取消結案','transfer'=>'移轉','create_bom'=>'新增BOM','clear_outsource_date'=>'清除發包日'];
         $stats = [];
         foreach ($rows as $r) {
             $t = $r['operation_type'];

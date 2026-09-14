@@ -1933,8 +1933,57 @@ echo "</script>\n";
         border-radius: 4px;
     }
 
+    /* ── 分頁控制列：整列一律「不換行、不上下相疊」（使用者明確要求）────────────
+       原本 .pagination-controls / .pagination-left-group 都是 flex 且子元素可被壓縮，
+       視窗一窄就會出現「轉 CSV／轉 JPG 上下疊成兩顆」「顯示 N 筆中的 1-7 筆，第 1/79
+       頁 被折成兩行」，整個畫面跟著被撐高。
+       修法：全列 nowrap + 每個元素 flex-shrink:0（不准被壓扁）+ 文字 white-space:nowrap，
+       真的放不下時只由「這一列自己」橫向捲動，不影響頁面其他部分、也不會有橫向溢出。 */
+    .pagination-controls {
+        flex-wrap: nowrap;
+        gap: 10px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: thin;          /* 捲軸細一點，不要再多吃一行高度 */
+        scrollbar-color: #ccc transparent;
+    }
+
+    .pagination-controls::-webkit-scrollbar { height: 6px; }
+    .pagination-controls::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+    .pagination-controls::-webkit-scrollbar-track { background: transparent; }
+
+    .pagination-left-group {
+        flex-wrap: nowrap !important;
+        flex-shrink: 0;
+    }
+
+    /* 左側群組內的每一塊（匯出鈕組、筆數文字、各功能鈕、篩選區）都不准被壓縮 */
+    .pagination-controls .pagination-left-group > *,
+    .pagination-controls .pagination-left-group > div > * {
+        flex-shrink: 0;
+    }
+
+    .pagination-controls .export-buttons {
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+
+    .pagination-controls .pagination-left-group .btn,
+    .pagination-controls .pagination-left-group button,
+    .pagination-controls .pagination-left-group small,
+    .pagination-controls .pagination-left-group span {
+        white-space: nowrap;
+    }
+
+    .pagination-buttons {
+        flex-shrink: 0;
+        white-space: nowrap;
+    }
+
     .pagination-info {
         font-size: 14px;
+        white-space: nowrap;
+        flex-shrink: 0;
     }
 
     .pagination-buttons button {
@@ -6486,7 +6535,8 @@ echo "</script>\n";
                                         ProcessName: pi.ProcessName,
                                         maker_id_no: pi.maker_id_no,
                                         maker_id: pi.maker_id,
-                                        batch_label: null
+                                        batch_label: null,
+                                        outsource_date: pi.outsource_date   // 僅供管理員判斷要不要顯示「清除發包日」
                                     }, {
                                         action: 'quick_sync_transfer',
                                         note: '將以今天作為回廠日期自動回廠；若此製程QC已完工會直接跳到「待移轉」。'
@@ -9877,7 +9927,8 @@ echo "</script>\n";
             maker_id: processInfo.maker_id,
             batch_label: processInfo.batch_label || null,
             bom_sn: processInfo.bom_sn,
-            processing_state: processInfo.processing_state
+            processing_state: processInfo.processing_state,
+            outsource_date: processInfo.outsource_date   // 僅供管理員判斷要不要顯示「清除發包日」
         });
     }
 
@@ -9940,7 +9991,8 @@ echo "</script>\n";
                     maker_id: b.maker_id,
                     batch_label: b.batch_label,
                     bom_sn: processInfo.bom_sn,
-                    processing_state: b.processing_state
+                    processing_state: b.processing_state,
+                    outsource_date: b.outsource_date   // 僅供管理員判斷要不要顯示「清除發包日」
                 });
             };
         });
@@ -9985,6 +10037,23 @@ echo "</script>\n";
       <button id="qtr-etr-cancel-${fid}" class="btn btn-sm btn-default">取消</button>
     </div>
   </div>` : '';
+        // ── 清除發包日（僅系統管理員）：修掉「資料轉入時被自動填上的錯誤外包發單日」──
+        //    只清 outsource_date 一欄，不動狀態／廠商／QC；能不能清一律以按下當下向後端
+        //    重新查到的狀態為準（ai-rules/08 第六節「點開即刷新」），不信任畫面上的快取。
+        const _odRaw = String(target.outsource_date == null ? '' : target.outsource_date).trim();
+        const _hasOd = _odRaw !== '' && _odRaw.indexOf('0000-00-00') !== 0;
+        const _canClearOd = !!window.oreadyIsAdmin && _hasOd;
+        const _codBtnHtml = _canClearOd
+            ? `<button id="qtr-cod-${fid}" class="btn btn-default" style="${_canMarkE ? '' : 'margin-right:auto;'}color:#a4491a;border-color:#d9861f;" title="清除這一關被誤設的外包發單日（已有品管檢驗紀錄或回廠紀錄者不可清除）">清除發包日</button>`
+            : '';
+        const _codPanelHtml = _canClearOd ? `
+  <div id="qtr-cod-panel-${fid}" style="display:none;margin-top:12px;padding:10px;border:1px solid #d9861f;background:#FDF3E3;border-radius:4px;">
+    <div id="qtr-cod-body-${fid}" style="font-size:12px;color:#7a4a10;line-height:1.6;">正在向伺服器確認這一關目前的狀態…</div>
+    <div style="margin-top:8px;display:flex;gap:6px;align-items:center;justify-content:flex-end;">
+      <button id="qtr-cod-go-${fid}" class="btn btn-sm" disabled style="background:#c0561f;border:1px solid #a4491a;color:#fff;">確認清除發包日</button>
+      <button id="qtr-cod-cancel-${fid}" class="btn btn-sm btn-default">取消</button>
+    </div>
+  </div>` : '';
 
         const modalId='qtr-modal-'+fid; const ex=document.getElementById(modalId); if(ex)ex.remove();
         const overlay=document.createElement('div');
@@ -10014,8 +10083,10 @@ echo "</script>\n";
   </div>
   ${_qtrNoteHtml}
   ${_etrPanelHtml}
+  ${_codPanelHtml}
 </div>
-<div style="padding:10px 16px;border-top:1px solid #e0e0e0;display:flex;justify-content:flex-end;gap:8px;">
+<div style="padding:10px 16px;border-top:1px solid #e0e0e0;display:flex;flex-wrap:nowrap;justify-content:flex-end;gap:8px;">
+  ${_codBtnHtml}
   ${_etrBtnHtml}
   <button id="qtr-cancel-${fid}" class="btn btn-default">取消</button>
   <button id="qtr-confirm-${fid}" class="btn btn-primary">確認移轉</button>
@@ -10160,6 +10231,95 @@ echo "</script>\n";
                     error: function() {
                         alert('與伺服器通訊失敗。');
                         $go.prop('disabled', false).text('確認設為已移轉');
+                    }
+                });
+            };
+        }
+
+        // ── 清除發包日：點開就先向後端要最新狀態，能不能清由後端說了算（鐵律8＋點開即刷新）──
+        if (_canClearOd) {
+            const _codBtn    = document.getElementById('qtr-cod-'+fid);
+            const _codPanel  = document.getElementById('qtr-cod-panel-'+fid);
+            const _codBody   = document.getElementById('qtr-cod-body-'+fid);
+            const _codGo     = document.getElementById('qtr-cod-go-'+fid);
+            const _codCancel = document.getElementById('qtr-cod-cancel-'+fid);
+
+            const _codLine = function(label, val) {
+                return '<div><span style="color:#8a6a3a;display:inline-block;min-width:5em;">' + escapeHtml(label) + '</span>'
+                     + '<b>' + escapeHtml(val == null || val === '' ? '－' : String(val)) + '</b></div>';
+            };
+
+            _codCancel.onclick = function() { _codPanel.style.display = 'none'; _codBtn.disabled = false; };
+
+            _codBtn.onclick = function() {
+                _codPanel.style.display = 'block';
+                _codBtn.disabled = true;
+                _codGo.disabled  = true;
+                _codBody.innerHTML = '正在向伺服器確認這一關目前的狀態…';
+                $.ajax({
+                    url: _phpSelf, type: 'POST', dataType: 'json',
+                    data: { action: 'clear_outsource_date', bom_ing_fid: fid, check_only: 1 },
+                    success: function(resp) {
+                        var _i = (resp && resp.info) || {};
+                        var _head = _codLine('BOM', _i.bom || bom)
+                                  + _codLine('關別', (_i.bom_sn ? ('SN ' + _i.bom_sn + '　') : '') + (_i.process_no || procNo) + ' ' + (_i.ProcessName || procName)
+                                             + (_i.batch_label ? ('　[批次 ' + _i.batch_label + ']') : ''))
+                                  + _codLine('目前發包日', _i.outsource_date)
+                                  + _codLine('廠商', _i.maker_id)
+                                  + _codLine('目前狀態', _i.processing_state);
+                        if (resp && resp.success && resp.can_clear) {
+                            _codBody.innerHTML = _head
+                                + '<div style="margin-top:8px;color:#8a2d10;">將把這一關的<b>發包日清空</b>（狀態、廠商、QC 資料都不動）。<br>'
+                                + '若這一關其實是整關都不該發包，請改用「取消移轉」把它退回待發包。</div>';
+                            _codGo.disabled = false;
+                        } else {
+                            var _msg = (resp && resp.message) || '無法清除。';
+                            var _bl  = (resp && resp.blockers) || [];
+                            _codBody.innerHTML = _head
+                                + '<div style="margin-top:8px;color:#DD5138;font-weight:bold;">' + escapeHtml(_msg) + '</div>'
+                                + (_bl.length ? '<ul style="margin:4px 0 0 18px;color:#DD5138;">' + _bl.map(function(b){ return '<li>' + escapeHtml(b) + '</li>'; }).join('') + '</ul>' : '');
+                            _codGo.disabled = true;
+                        }
+                    },
+                    error: function() {
+                        _codBody.innerHTML = '<span style="color:#DD5138;">與伺服器通訊失敗，請重新整理頁面後再試。</span>';
+                        _codGo.disabled = true;
+                    }
+                });
+            };
+
+            _codGo.onclick = function() {
+                const $go = $(_codGo);
+                $go.prop('disabled', true).text('處理中...');
+                $.ajax({
+                    url: _phpSelf, type: 'POST', dataType: 'json',
+                    data: { action: 'clear_outsource_date', bom_ing_fid: fid },
+                    success: function(resp) {
+                        if (resp && resp.success) {
+                            showTemporaryMessage(resp.message || '已清除發包日', true);
+                            _closeQtr();
+                            // 樂觀更新前端快取（下一次 fetchDataAndFilter 會再以後端資料覆蓋）
+                            if (Array.isArray(window.bomPSList)) window.bomPSList.forEach(function(p) {
+                                if (String(p.bom_ing_fid || '') === String(fid)) p.outsource_date = null;
+                            });
+                            if (window.ingActiveMap && Array.isArray(window.ingActiveMap[bom])) {
+                                window.ingActiveMap[bom].forEach(function(p) {
+                                    if (String(p.bom_ing_fid || '') === String(fid)) p.outsource_date = null;
+                                });
+                            }
+                            delete _rowDetailCache[bom];
+                            processAndRenderData();
+                            isSelectFocused = false; isTextareaFocused = false;
+                            isUpdatingOrderId = false; isPriorityUpdating = false;
+                            fetchDataAndFilter();
+                        } else {
+                            alert('清除失敗：' + ((resp && resp.message) || '未知錯誤'));
+                            $go.prop('disabled', false).text('確認清除發包日');
+                        }
+                    },
+                    error: function() {
+                        alert('與伺服器通訊失敗。');
+                        $go.prop('disabled', false).text('確認清除發包日');
                     }
                 });
             };
