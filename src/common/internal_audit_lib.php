@@ -466,6 +466,27 @@ function ia_ensure_schema(PDO $db): void
             dept_id INT NOT NULL,
             UNIQUE KEY uk_td (tpl_id, kind, dept_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='稽核範本的候選部門（多選）'");
+        /* ---- 稽核範本「組合」（2026-09-14 使用者交辦）----
+           常常一起稽核的那幾個範本存成一組，填通知單時選一次就整批帶入好幾列，
+           不必一列一列挑。組合只是「範本的清單」，本身不存主過程／單位／人員，
+           所以範本改了組合帶出來的內容自動跟著改（鐵律4：不複製第二份）。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_process_tpl_set (
+            set_id     INT AUTO_INCREMENT PRIMARY KEY,
+            set_name   VARCHAR(100) NOT NULL COMMENT '組合名稱（例：上半年度全廠稽核）',
+            note       VARCHAR(255) NULL,
+            sort_order INT NOT NULL DEFAULT 0,
+            is_active  TINYINT NOT NULL DEFAULT 1,
+            updated_at DATETIME NULL, updated_by VARCHAR(60) NULL,
+            KEY idx_set_active (is_active, sort_order)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='稽核範本組合（一次帶入多列受稽單位）'");
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_process_tpl_set_item (
+            si_id      INT AUTO_INCREMENT PRIMARY KEY,
+            set_id     INT NOT NULL,
+            tpl_id     INT NOT NULL,
+            sort_order INT NOT NULL DEFAULT 0,
+            UNIQUE KEY uk_si (set_id, tpl_id),
+            KEY idx_si_tpl (tpl_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='稽核範本組合的成員範本'");
 
         /* ---- 角色（module='internal_audit'） ---- */
         foreach ([
@@ -623,22 +644,67 @@ function ia_today(PDO $db): string
 
 /**
  * 稽核件號：西元年後兩碼 + MMDD + 3 位流水，例 241216001（2024.12.16 第 1 件）
- * 依「通知日期」產生，不是建檔當天——補歷史單據時編號才跟表單上的日期對得起來。
+ * 依「稽核日期（稽核起）」產生，不是建檔當天——補歷史單據時編號才跟紙本對得起來
+ * （2024 兩張紙本 241115001／241216001 就是用稽核日期編的）。沒填稽核起時才退回通知日期。
  */
-function ia_next_case_no(PDO $db, string $notifyDate): string
+function ia_next_case_no(PDO $db, string $baseDate, int $exceptCaseId = 0): string
 {
-    $ts = strtotime($notifyDate ?: 'now');
+    $ts = strtotime($baseDate ?: 'now');
     if (!$ts) $ts = time();
     // 2026-08-27 使用者指定改用「西元年後兩碼＋MMDD＋3 位流水」（例 241216001），
     // 與 IA 單號（IA+西元後兩碼+MMDD+2位）同一套年份寫法，不再混用民國年。
     $prefix = date('ymd', $ts);
     try {
-        $st = $db->prepare("SELECT case_no FROM ia_case WHERE case_no LIKE ? ORDER BY case_no DESC LIMIT 1");
-        $st->execute([$prefix . '%']);
+        // 重編時要把「自己」排除掉，否則同一天重算會一直往後跳號
+        $sql = "SELECT case_no FROM ia_case WHERE case_no LIKE ?"
+             . ($exceptCaseId ? " AND case_id<>?" : "") . " ORDER BY case_no DESC LIMIT 1";
+        $st  = $db->prepare($sql);
+        $st->execute($exceptCaseId ? [$prefix . '%', $exceptCaseId] : [$prefix . '%']);
         $last = (string)($st->fetchColumn() ?: '');
         $n = $last !== '' ? ((int)substr($last, -3)) + 1 : 1;
     } catch (Throwable $e) { $n = 1; }
     return $prefix . sprintf('%03d', $n);
+}
+
+/** 稽核件號的基準日：稽核起，沒填才退回通知日期 */
+function ia_case_no_base(array $case): string
+{
+    $af = trim((string)($case['audit_from'] ?? ''));
+    if ($af !== '' && $af !== '0000-00-00') return $af;
+    return (string)($case['notify_date'] ?? '');
+}
+
+/**
+ * 稽核日期被改過（或編號是舊規則留下來的）時把件號重編。
+ * 產品開發評估表／PFMEA 的 *_sync_doc_no() 同一套想法：編號前八碼永遠＝表單上的日期。
+ * **只重編還是草稿、且未執行的**——已發出／執行中／已結案的紙本上印著舊號，改了會對不起來。
+ * 回傳 ['changed'=>bool, 'old'=>string, 'new'=>string]
+ */
+function ia_case_sync_no(PDO $db, int $caseId): array
+{
+    $out = ['changed' => false, 'old' => '', 'new' => ''];
+    try {
+        $st = $db->prepare("SELECT case_id, case_no, notify_date, audit_from, status, executed
+                              FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
+        $st->execute([$caseId]);
+        $c = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$c) return $out;
+        $out['old'] = $out['new'] = (string)$c['case_no'];
+        if ((string)$c['status'] !== 'draft' || (int)$c['executed'] === 1) return $out;
+
+        $base = ia_case_no_base($c);
+        $ts   = strtotime($base ?: 'now');
+        if (!$ts) return $out;
+        $prefix = date('ymd', $ts);
+        // 已經是這個日期開頭的就不動（流水號不重排，免得同一天的幾張互相換號）
+        if (strncmp((string)$c['case_no'], $prefix, 6) === 0 && strlen((string)$c['case_no']) === 9) return $out;
+
+        $no = ia_next_case_no($db, $base, $caseId);
+        $db->prepare("UPDATE ia_case SET case_no=? WHERE case_id=?")->execute([$no, $caseId]);
+        $out['new'] = $no;
+        $out['changed'] = ($no !== $out['old']);
+    } catch (Throwable $e) {}
+    return $out;
 }
 
 /**
@@ -2090,4 +2156,117 @@ function ia_tpl_validate(PDO $db, int $tplId, string $name, int $unitDeptId, arr
         if ((int)$st->fetchColumn() > 0) return '已經有相同「起始主過程＋受稽單位」的範本了';
     } catch (Throwable $e) {}
     return '';
+}
+
+/* ============================ 稽核範本組合 ============================ */
+/**
+ * 範本組合清單（2026-09-14 使用者交辦）：常一起稽核的那幾個範本存成一組，
+ * 填通知單時選一次就整批帶入好幾列。
+ * 組合只存「有哪些範本」，主過程／受稽單位／候選人員一律即時由範本算出來（鐵律4），
+ * 所以範本改了、或被停用刪除，組合帶出來的內容自動跟著對。
+ * 回傳每筆：set_id/set_name/note/is_active/tpl_ids[]/tpl_names[]（含已失效範本的提示）
+ */
+function ia_tpl_sets(PDO $db, bool $activeOnly = true): array
+{
+    $rows = [];
+    try {
+        $sql = "SELECT * FROM ia_process_tpl_set" . ($activeOnly ? " WHERE is_active=1" : "")
+             . " ORDER BY sort_order, set_id";
+        $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    if (!$rows) return [];
+
+    // 範本本體（含停用的也撈，才看得出「這一組裡有一個範本已停用」）
+    $tpl = [];
+    foreach (ia_process_templates($db, false) as $t) $tpl[(int)$t['tpl_id']] = $t;
+
+    $items = [];
+    try {
+        foreach ($db->query("SELECT set_id, tpl_id, sort_order FROM ia_process_tpl_set_item
+                             ORDER BY sort_order, si_id")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $items[(int)$r['set_id']][] = (int)$r['tpl_id'];
+        }
+    } catch (Throwable $e) {}
+
+    $out = [];
+    foreach ($rows as $r) {
+        $sid   = (int)$r['set_id'];
+        $ids   = $items[$sid] ?? [];
+        $names = [];
+        $usable = [];
+        foreach ($ids as $tid) {
+            $t = $tpl[$tid] ?? null;
+            if (!$t) { $names[] = '（範本已刪除）'; continue; }
+            $nm = $t['process_name'] . '　→　' . $t['unit_name'];
+            if (!(int)$t['is_active']) { $names[] = $nm . '（已停用）'; continue; }
+            $names[]  = $nm;
+            $usable[] = $tid;
+        }
+        $out[] = [
+            'set_id'    => $sid,
+            'set_name'  => (string)$r['set_name'],
+            'note'      => (string)($r['note'] ?? ''),
+            'is_active' => (int)$r['is_active'],
+            'sort_order'=> (int)$r['sort_order'],
+            'tpl_ids'   => $usable,      // 帶入通知單時真正會用的（已停用／已刪除的不帶）
+            'all_ids'   => $ids,         // 設定畫面用（勾選狀態要看得到原本挑了哪些）
+            'tpl_names' => $names,
+        ];
+    }
+    return $out;
+}
+
+/** 範本組合設定驗證（前端擋一次、後端同規則再擋一次＝鐵律8） */
+function ia_tplset_validate(PDO $db, int $setId, string $name, array $tplIds): string
+{
+    $name = trim($name);
+    if ($name === '') return '請填組合名稱';
+    if (mb_strlen($name) > 100) return '組合名稱過長（上限 100 字）';
+    if (!$tplIds) return '請至少勾選一個範本';
+    if (count($tplIds) > 50) return '一個組合最多 50 個範本';
+
+    $in = implode(',', array_fill(0, count($tplIds), '?'));
+    try {
+        $st = $db->prepare("SELECT COUNT(*) FROM ia_process_template WHERE tpl_id IN ($in)");
+        $st->execute($tplIds);
+        if ((int)$st->fetchColumn() !== count($tplIds)) return '有範本不存在（可能剛被刪除，請重新整理）';
+    } catch (Throwable $e) { return '範本讀取失敗'; }
+
+    try {
+        $st = $db->prepare("SELECT COUNT(*) FROM ia_process_tpl_set WHERE set_name=? AND set_id<>?");
+        $st->execute([$name, $setId]);
+        if ((int)$st->fetchColumn() > 0) return '已經有同名的範本組合了';
+    } catch (Throwable $e) {}
+    return '';
+}
+
+/* ============================ AS 文件的部門代碼 ============================ */
+/**
+ * AS 文件編號第二段的部門代碼 → 部門名稱（例 QA→品保部）。
+ * 給「建立查檢表」把作業項目標籤分類用——162 個標籤平鋪在一起找不到東西，
+ * 依代碼歸到部門底下才有辦法快速挑。代碼本身設在 AS 文件管理（as_dept_code），不寫死。
+ */
+function ia_as_dept_code_names(PDO $db): array
+{
+    $out = [];
+    try {
+        $rows = $db->query("SELECT c.code, c.label, d.name
+                              FROM as_dept_code c
+                         LEFT JOIN department d ON d.id = c.department_id
+                          ORDER BY c.sort_order, c.id")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $r) {
+            $code = strtoupper(trim((string)$r['code']));
+            if ($code === '' || isset($out[$code])) continue;   // 同一代碼有多列（例 SM）時只取第一個
+            $name = trim((string)($r['name'] ?? ''));
+            if ($name === '') $name = trim((string)($r['label'] ?? ''));
+            $out[$code] = $name !== '' ? $name : $code;
+        }
+    } catch (Throwable $e) {}
+    // 同一個部門名稱被兩個代碼共用時（例 PD／PH 都是生管組）要標出代碼，
+    // 否則分類清單上會出現兩個一模一樣的群組標題，看不出差別
+    $cnt = array_count_values($out);
+    foreach ($out as $code => $name) {
+        if (($cnt[$name] ?? 0) > 1) $out[$code] = $name . '（' . $code . '）';
+    }
+    return $out;
 }

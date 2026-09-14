@@ -215,6 +215,26 @@ $roleLabel = ia_role_label($perms);
         .nk-chip.clear { color:#C4442D; }
         .nk-task { display:inline-block; font-size:11px; color:#8A5A2B; background:#F7E0BD; border:1px solid #E8D5B5;
             border-radius:9px; padding:0 7px; margin-left:4px; }
+        /* 建立查檢表：左右分割（左＝作業項目標籤依部門分類，右＝已選標籤＋題目清單）。
+           2026-09-14 使用者回報：162 個標籤平鋪在上方「不方便閱讀」，且點完看不出自己選了什麼。 */
+        .nk-split { display:flex; gap:10px; align-items:stretch; }
+        .nk-side { flex:0 0 250px; width:250px; display:flex; flex-direction:column;
+            border:1px solid #E8D5B5; border-radius:5px; background:#FFFCF6; overflow:hidden; }
+        .nk-side-hd { flex:0 0 auto; padding:6px 8px; border-bottom:1px solid #EEDCC0; background:#F7EEDF; }
+        .nk-side-hd b { color:#8A5A2B; font-size:13px; }
+        .nk-side-hd input { width:100%; margin-top:4px; border:1px solid #D8BE93; border-radius:4px;
+            padding:2px 6px; font-size:12px; }
+        .nk-side-body { flex:1 1 auto; overflow-y:auto; padding:4px 6px 8px; }
+        .nk-grp { margin-top:4px; }
+        .nk-grp-hd { font-size:12px; font-weight:bold; color:#6b4a20; background:#F3E4C9; border-radius:4px;
+            padding:2px 7px; cursor:pointer; user-select:none; display:flex; align-items:center; gap:4px; }
+        .nk-grp-hd .n { margin-left:auto; font-weight:normal; color:#8a6d45; }
+        .nk-grp-body { padding:4px 2px 2px; }
+        .nk-main { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
+        .nk-sel { border:1px solid #E8D5B5; border-radius:5px; background:#FDF6EA; padding:5px 8px; margin-bottom:6px; }
+        .nk-sel .lb { font-size:12px; color:#8a6d45; margin-right:4px; }
+        .nk-sel .nk-chip { cursor:default; }
+        .nk-sel .nk-chip .x { margin-left:5px; cursor:pointer; font-weight:bold; }
         .pick-wrap label.dim { color:#b0a390; }
         .pick-wrap label.dim .nk-task { opacity:.55; }
         /* 勾選清單一律對齊：勾選框固定欄寬、名稱固定欄寬、右側說明自己一欄，
@@ -306,6 +326,14 @@ $roleLabel = ia_role_label($perms);
                 <label style="font-size:13px;color:#6b5535;">表下備註</label>
                 <input type="text" id="planRemark" style="width:100%;max-width:640px;border:1px solid #D8BE93;border-radius:4px;padding:4px 8px;font-size:13px;">
             </div>
+            <!-- 製表人可事後修改（2026-09-14 使用者回報：原本建檔當下寫死、改不了） -->
+            <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;" id="planMakerBox">
+                <label style="font-size:13px;color:#6b5535;margin:0;">製表人</label>
+                <select id="planMaker" data-eg-filter="輸入姓名篩選…" style="min-width:240px;border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;font-size:13px;"></select>
+                <label style="font-size:13px;color:#6b5535;margin:0;">製表日期</label>
+                <input type="date" id="planMakerDate" style="border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;font-size:13px;">
+                <span style="font-size:12px;color:#8a6d45;">改完按上方「儲存排定」，列印版的製表圖章會跟著換。</span>
+            </div>
         </div>
 
         <!-- ============ 稽核通知單 ============ -->
@@ -394,6 +422,16 @@ $roleLabel = ia_role_label($perms);
                 <label style="font-size:13px;color:#6b5535;">補充文字（列印時接在缺點記錄後面）</label>
                 <textarea id="reportNote" style="width:100%;min-height:70px;border:1px solid #D8BE93;border-radius:4px;padding:6px 8px;font-size:13px;"></textarea>
             </div>
+<?php if ($perms['canAdmin']): ?>
+            <!-- 製表人可事後修改（2026-09-14） -->
+            <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <label style="font-size:13px;color:#6b5535;margin:0;">製表人</label>
+                <select id="reportMaker" data-eg-filter="輸入姓名篩選…" style="min-width:240px;border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;font-size:13px;"></select>
+                <label style="font-size:13px;color:#6b5535;margin:0;">製表日期</label>
+                <input type="date" id="reportMakerDate" style="border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;font-size:13px;">
+                <span style="font-size:12px;color:#8a6d45;">改完按上方「儲存」。</span>
+            </div>
+<?php endif; ?>
         </div>
 <?php endif; ?>
 
@@ -415,7 +453,8 @@ $roleLabel = ia_role_label($perms);
             <li><b>②稽核通知單（2-GM-06-02）</b>：新增一張，填通知日期、稽核期間、稽核組長，下方逐列填「稽核起始主過程／受稽單位／稽核員／陪檢員」（稽核員與陪檢員都可以指定多位）。
                 稽核件號會依<b>通知日期</b>自動產生（西元年後兩碼+月日+流水，例 241216001）。存檔後可按「事前會議」建立會議紀錄草稿。</li>
             <li><b>③查檢表</b>：三種各自建立，建立時勾選這次要查的項目。現場逐列判定合格／不合格並填所見證據。判「不合格」的列可直接按「開不符合單」。
-                AS 查檢表可用上方的<b>作業項目標籤</b>（品管檢測／外包加工…）一鍵挑題，不必在 71 條原文裡用眼睛找。</li>
+                AS 查檢表可用<b>左側的作業項目標籤</b>（品管檢測／外包加工…）一鍵挑題，不必在 71 條原文裡用眼睛找。
+                <b>建立查檢表預設一題都不勾</b>（2026-09-14 起），請先從左欄點選這次要查的作業項目，或直接在右側逐題勾選。</li>
             <li><b>④不符合通知單（2-GM-06-07）</b>：分四段填，各段只有該角色能填（見下）。系統會通知受稽單位主管，期限前與逾期會自動再提醒。</li>
             <li><b>⑤稽核報告表（2-GM-06-08）</b>：缺點數與缺點記錄自動彙總，只要調整「預定完成改善時間」與補充文字，然後核准、列印。</li>
         </ul>
@@ -441,6 +480,10 @@ $roleLabel = ia_role_label($perms);
             <li><b>稽核員／陪檢員都可以有多位</b>（2026-08-27 起）：已選的人會變成一個個標籤，按標籤上的 <b>×</b> 移除、用下方的「＋加入稽核員／＋加入陪檢員」再加人，<b>每一種最多 <?= IA_CD_PERSON_MAX ?> 位</b>。已經被選走的人（不管在哪一邊）不會再出現在候選裡，所以不會不小心把同一個人排成兩種身分。列印版的稽核員／陪檢員欄會一位一行印出來；自動建會議紀錄時，<b>全部</b>稽核員與陪檢員都會被帶進與會人員。</li>
             <li><b>受審查單位主管是誰，依稽核日期回推當時的職務</b>（不是現在的職務），所以補去年的舊單不會蓋到今年才上任的人。查不到當時的主管時寧可留白，不會亂帶人。</li>
             <li><b>IA 編號依稽核日期產生</b>（IA+西元後兩碼+月日+流水，例 IA24121601），補歷史紙本時編號會跟表單上的日期對得起來。</li>
+            <li><b>稽核件號也是依稽核日期產生</b>（西元後兩碼＋月日＋3 位流水，例 251204001＝2025.12.04 的第 1 件；沒填稽核起才退回通知日期）。
+                <b>改了稽核日期，件號會自動跟著重編</b>並在存檔後告訴你新舊號——但<b>只有還是草稿的才重編</b>，已發出／執行中／已結案的紙本上印著舊號，一律不動。</li>
+            <li><b>製表人可以改</b>（2026-09-14 起，限內稽管理員）：<b>年度計畫</b>（表格下方）、<b>稽核通知單</b>（基本資料區）、<b>稽核報告表</b>（補充文字下方）三張都有「製表人／製表日期」，
+                改完存檔，<b>列印版的製表圖章會跟著換</b>。原本的製表人已離職時仍會留在下拉選項裡（標「已離職／非在職」），不會因為開來存個檔就被洗掉。</li>
             <li><b>到期提醒</b>：期限前 N 天（預設 7 天，可在「設定」改）與逾期後，每天最多發一則通知給受稽單位主管與受審核人。提醒是有人用到這個模組時順便檢查，不是背景排程。</li>
             <li><b>查檢表結案前必須每一項都判定過</b>合格／不合格，否則不讓結案（避免漏查）。</li>
             <li><b>建錯的稽核通知單怎麼刪</b>（2026-09-11 起）：<b>內稽管理員</b>可以刪除<b>尚未結案</b>的通知單——清單操作欄的垃圾桶圖示，或開啟後按下方的「刪除」。兩個限制：<b>已結案的不給刪</b>（要刪請先把狀態改回「執行中」）、<b>底下還有不符合通知單的不給刪</b>（那些 IA 單會變孤兒、仍留在清單與稽核報告表裡，請先到「不符合通知單」分頁處理或刪除）。刪除會<b>連同底下的查檢表一起刪</b>（含已填好的結果），年度計畫表上這一次稽核的 ◎ 也會一併消失；<b>已建立的會議紀錄不會被刪除</b>，那是會議紀錄模組自己的資料，請自行過去處理。</li>
@@ -461,6 +504,10 @@ $roleLabel = ia_role_label($perms);
             <li><b>稽核通知單的備註要怎麼改</b>：按「新增稽核通知單」時自動帶進備註欄的那段文字，內容在<b>設定 → 稽核通知單「備註」預設文字</b>（<b>全站只有一份</b>，限內稽管理員）。改了只影響<b>之後新增</b>的通知單，已經建好的舊單不會被改動；每一張單仍可各自修改自己的備註。整段清空並儲存＝新增時不帶備註，按「還原內建預設文字」可帶回紙本 2-GM-06-02 印好的附註。</li>
             <li><b>受稽單位</b>（右上工具列，限內稽管理員）：把多個部門綁成同一個受稽單位。</li>
             <li><b>稽核範本</b>（右上工具列，限內稽管理員）：預先設定「稽核起始主過程→受稽單位→稽核員／陪檢員從哪些部門挑」，填通知單時一列選一個就帶入。</li>
+            <li><b>範本組合＝把常一起稽核的那幾個範本存成一組</b>（2026-09-14 起）：在「稽核範本」跳窗下方的<b>範本組合</b>建立，
+                填稽核通知單時按受稽單位區塊的「<b>帶入範本組合</b>」選一次，那幾列就整批長出來，不必一列一列挑。
+                組合只記「有哪些範本」，所以<b>範本本身改了組合帶出來的內容就跟著改</b>；組合裡的範本被停用或刪除時那一列自動不帶，其餘照常。
+                表格上<b>已經有的起始主過程不會重複加</b>（同一次稽核裡本來就不可以重複），帶完會告訴你跳過了哪幾個。</li>
             <li><b>稽核員資格</b>（右上工具列，限內稽管理員）：稽核員／陪檢員的合格人員名單。</li>
             <li><b>AS條文題庫</b>（右上工具列，限內稽管理員）：AS稽核查檢表的題目來源，建一次每年沿用。</li>
             <li>部門清單來自組織架構（部門管理），簽章人來源與管理代表來自「組織角色綁定設定」，人員清單來自員工管理，這裡都不另存一份。</li>
@@ -594,10 +641,19 @@ $roleLabel = ia_role_label($perms);
                      <input type="text" id="cMeetEnd" placeholder="16:30" style="width:80px;">
                      <div class="err-msg" id="errCMeetTime"></div></div>
                 <label>地點</label><div class="full"><input type="text" id="cMeetPlace" placeholder="二樓會議室"></div>
+<?php if ($perms['canAdmin']): ?>
+                <label>製表人</label>
+                <div><select id="cMaker" data-eg-filter="輸入姓名篩選…"></select></div>
+                <label>製表日期</label><div><input type="date" id="cMakerDate"></div>
+<?php endif; ?>
                 <label>備註</label><div class="full"><textarea id="cRemark"></textarea></div>
             </div>
         </div>
-        <div class="ia-sec"><h5>受稽單位　<span class="lock-note">在最後一列按 ↓ 自動加一列</span></h5>
+        <div class="ia-sec"><h5>受稽單位　<span class="lock-note">在最後一列按 ↓ 自動加一列</span>
+<?php if ($perms['canAdmin']): ?>
+            <button id="btnCaseTplSet" style="margin-left:10px;height:24px;font-size:12px;padding:0 10px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;"><i class="fa fa-object-group"></i> 帶入範本組合</button>
+<?php endif; ?>
+        </h5>
             <div class="err-msg" id="cDupWarn" style="margin-bottom:4px;"></div>
             <div class="err-msg" id="cEscWarn" style="margin-bottom:4px;"></div>
             <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
@@ -624,7 +680,7 @@ $roleLabel = ia_role_label($perms);
 </div></div>
 
 <!-- ============================ 建立查檢表 ============================ -->
-<div class="ia-mask" id="checkNewMask"><div class="ia-modal">
+<div class="ia-mask" id="checkNewMask"><div class="ia-modal wide">
     <div class="ia-mhead"><h4><i class="fa fa-plus"></i> 建立查檢表</h4><span class="x" data-close>&times;</span></div>
     <div class="ia-mbody">
         <div class="ia-form">
@@ -639,23 +695,30 @@ $roleLabel = ia_role_label($perms);
                  <div class="err-msg" id="errNkHalf"></div></div>
             <label>標題</label><div><input type="text" id="nkTitle" placeholder="留空＝用種類名稱"></div>
         </div>
-        <div style="margin-top:10px;">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-                <b style="color:#8A5A2B;font-size:14px;">這次要查的項目</b>
-                <input type="text" id="nkFilter" placeholder="輸入關鍵字篩選…" style="border:1px solid #D8BE93;border-radius:4px;padding:3px 8px;font-size:13px;width:220px;">
-                <button id="nkAll" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全選</button>
-                <button id="nkNone" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全不選</button>
-                <span id="nkCount" style="font-size:12px;color:#8a6d45;"></span>
+        <div style="margin-top:10px;" class="nk-split">
+            <!-- 左欄：作業項目標籤（只有 AS 查檢表有）。條文原文看不出實務上在查什麼，
+                 點一下就只勾該用途的條文。項目設在 AS 文件管理 → ⚙ 作業項目，條文題庫逐條挑對應。
+                 2026-09-14 起依 AS 文件編號的部門代碼分類，並移到左側分割欄（原本平鋪在上方看不完）。 -->
+            <div class="nk-side" id="nkTaskSide" style="display:none;">
+                <div class="nk-side-hd">
+                    <b>依作業項目挑題</b>
+                    <input type="text" id="nkTaskFilter" placeholder="篩選作業項目…">
+                </div>
+                <div class="nk-side-body" id="nkTaskGroups"></div>
             </div>
-            <!-- 作業項目快速挑題（只有 AS 查檢表有）：條文原文看不出實務上在查什麼，
-                 點一下就只勾該用途的條文。項目設在 AS 文件管理 → ⚙ 作業項目，條文題庫逐條挑對應。 -->
-            <div id="nkTaskBar" style="display:none;margin-bottom:6px;">
-                <span style="font-size:12px;color:#8a6d45;">依作業項目挑題：</span>
-                <span class="ia-op" id="nkTaskMore"></span>
-                <div id="nkTaskChips" class="nk-chips"></div>
+            <div class="nk-main">
+                <!-- 已選的標籤另外列在這裡，方便確認自己挑了什麼（使用者 2026-09-14 要求） -->
+                <div class="nk-sel" id="nkTaskSel" style="display:none;"></div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+                    <b style="color:#8A5A2B;font-size:14px;">這次要查的項目</b>
+                    <input type="text" id="nkFilter" placeholder="輸入關鍵字篩選…" style="border:1px solid #D8BE93;border-radius:4px;padding:3px 8px;font-size:13px;width:200px;">
+                    <button id="nkAll" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全選</button>
+                    <button id="nkNone" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全不選</button>
+                    <span id="nkCount" style="font-size:12px;color:#8a6d45;"></span>
+                </div>
+                <div class="pick-wrap" id="nkPick" style="max-height:360px;"></div>
+                <div class="err-msg" id="errNkPick"></div>
             </div>
-            <div class="pick-wrap" id="nkPick" style="max-height:300px;"></div>
-            <div class="err-msg" id="errNkPick"></div>
         </div>
     </div>
     <div class="ia-mfoot"><button data-close>取消</button><button id="btnCheckCreate" class="btn-warm">建立</button></div>
@@ -886,8 +949,61 @@ $roleLabel = ia_role_label($perms);
             <th>稽核員候選部門</th><th>陪檢員候選部門</th>
             <th style="width:70px;">啟用</th><th style="width:110px;">操作</th>
         </tr></thead><tbody id="tplBody"></tbody></table></div>
+
+        <!-- 範本組合（2026-09-14 使用者交辦）：常一起稽核的那幾個範本存成一組，
+             填通知單時選一次就整批帶入好幾列，不必一列一列挑。 -->
+        <div style="display:flex;align-items:center;gap:10px;margin-top:16px;">
+            <h4 style="font-size:15px;color:#8A5A2B;margin:0;"><i class="fa fa-object-group"></i> 範本組合</h4>
+<?php if ($perms['canAdmin']): ?>
+            <button id="btnTplSetNew" style="margin-left:auto;"><i class="fa fa-plus"></i> 新增組合</button>
+<?php endif; ?>
+        </div>
+        <div class="ia-hint">把<b>常一起稽核的那幾個範本存成一組</b>，填稽核通知單時按「<b>帶入範本組合</b>」選一次，
+        那幾列受稽單位就整批長出來（起始主過程、受稽單位、稽核員／陪檢員候選都照各自的範本帶）。<br>
+        組合只記「有哪些範本」，<b>範本本身改了組合帶出來的內容就跟著改</b>；
+        組合裡的範本被停用或刪除時<b>那一列自動不帶</b>，其餘照常。</div>
+        <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
+            <th style="width:180px;">組合名稱</th><th>包含的範本</th>
+            <th style="width:70px;">啟用</th><th style="width:110px;">操作</th>
+        </tr></thead><tbody id="tplSetBody"></tbody></table></div>
     </div>
     <div class="ia-mfoot"><button data-close>關閉</button></div>
+</div></div>
+
+<!-- ============================ 範本組合編輯 ============================ -->
+<div class="ia-mask" id="tplSetEditMask"><div class="ia-modal">
+    <div class="ia-mhead"><h4 id="tplSetEditTitle">稽核範本組合</h4><span class="x" data-close>&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-form" style="grid-template-columns:100px 1fr;">
+            <label>組合名稱<span style="color:#DD5138;">*</span></label>
+            <div><input type="text" id="tsName" placeholder="例：上半年度全廠稽核">
+                 <div class="err-msg" id="errTsName"></div></div>
+            <label>備註</label><div><input type="text" id="tsNote" placeholder="選填"></div>
+            <label>啟用</label><div><label style="font-weight:normal;"><input type="checkbox" id="tsActive" checked> 出現在填表時的組合清單</label></div>
+        </div>
+        <div style="margin-top:10px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                <b style="color:#8A5A2B;font-size:14px;">包含哪些範本<span style="color:#DD5138;">*</span></b>
+                <input type="text" id="tsFilter" placeholder="輸入主過程或單位篩選…" style="border:1px solid #D8BE93;border-radius:4px;padding:3px 8px;font-size:13px;width:220px;">
+                <span id="tsCount" style="font-size:12px;color:#8a6d45;"></span>
+            </div>
+            <div class="pick-wrap" id="tsPick" style="max-height:300px;"></div>
+            <div class="err-msg" id="errTsPick"></div>
+            <div style="font-size:12px;color:#8a6d45;margin-top:4px;">帶入通知單時的列順序＝這份清單由上到下的順序。</div>
+        </div>
+    </div>
+    <div class="ia-mfoot"><button data-close>取消</button><button id="btnTplSetSave" class="btn-warm">儲存</button></div>
+</div></div>
+
+<!-- ============================ 通知單：挑範本組合帶入 ============================ -->
+<div class="ia-mask" id="tplSetPickMask"><div class="ia-modal narrow">
+    <div class="ia-mhead"><h4><i class="fa fa-object-group"></i> 帶入範本組合</h4><span class="x" data-close>&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">選一個組合，底下那幾個範本會<b>一次全部加成受稽單位的列</b>。
+        已經在表格上的起始主過程<b>不會重複加</b>（同一次稽核裡不可以重複）。</div>
+        <div id="tplSetPickBody"></div>
+    </div>
+    <div class="ia-mfoot"><button data-close>取消</button></div>
 </div></div>
 
 <div class="ia-mask" id="tplEditMask"><div class="ia-modal">
@@ -1012,6 +1128,19 @@ function peopleOptions(list, cur, blank){
         var label = (p.dept_name?p.dept_name+'　':'') + (p.position_name?p.position_name+'　':'') + p.user_cname
                   + (p.leave_note ? '（'+p.leave_note+'）' : '');
         h += '<option value="'+p.id+'"'+(String(cur)===String(p.id)?' selected':'')+'>'+esc(label)+'</option>';
+    });
+    return h;
+}
+/* 製表人下拉（2026-09-14 使用者交辦：年度計畫／稽核通知單／稽核報告表都要能事後改製表人）。
+   補歷史表單時原本的製表人可能已經離職，eg_people_list 不會列離職者，
+   不特別處理的話「打開來存個檔」就會把製表人洗掉，所以查不到就把原本那位補進選項。 */
+function makerOptions(curId, curName){
+    var h = '<option value="">（不指定）</option>', found = false;
+    (META.people||[]).forEach(function(p){ if (String(p.id)===String(curId||'')) found = true; });
+    if (curId && !found) h += '<option value="'+esc(curId)+'" selected>'+esc((curName||'#'+curId)+'（已離職／非在職）')+'</option>';
+    (META.people||[]).forEach(function(p){
+        var label = (p.dept_name?p.dept_name+'\u3000':'') + (p.position_name?p.position_name+'\u3000':'') + p.user_cname;
+        h += '<option value="'+p.id+'"'+(String(curId||'')===String(p.id)?' selected':'')+'>'+esc(label)+'</option>';
     });
     return h;
 }
@@ -1177,10 +1306,15 @@ function loadPlan(){
                 + '<?= $perms['canAdmin'] ? "，請按上方「建立本年度計畫表」" : "，請洽內稽管理員建立" ?></div>');
             $('#planStatusBox').text(''); $('#planRemark').val('');
             $('#btnPlanCreate').show(); $('#btnPlanDepts,#btnPlanSave,#btnPlanSubmit,#btnPlanApprove').hide();
+            $('#planMakerBox').hide();
             return;
         }
         $('#btnPlanCreate').hide(); $('#btnPlanDepts,#btnPlanSave,#btnPlanSubmit,#btnPlanApprove').show();
         $('#planRemark').val(PLAN.remark||'');
+        // 製表人（可改）；已核准的計劃表比照其他欄位只有系統管理員動得了
+        $('#planMakerBox').toggle(<?= $perms['canAdmin'] ? 'true' : 'false' ?>);
+        $('#planMaker').html(makerOptions(PLAN.maker_id, PLAN.maker_name)).prop('disabled', planReadonly());
+        $('#planMakerDate').val(inputDate(PLAN.maker_date)).prop('readonly', planReadonly());
         var stLabel = {draft:'草稿', submitted:'已送審', approved:'已核准'}[PLAN.status] || PLAN.status;
         var box = '狀態：<span class="st st-'+(PLAN.status==='approved'?'done':PLAN.status)+'">'+esc(stLabel)+'</span>';
         if (PLAN.maker_name)    box += '　製表：'+esc(PLAN.maker_name)+' '+dispDate(PLAN.maker_date);
@@ -1262,7 +1396,8 @@ $('#btnPlanSave').on('click', function(){
     // 用 Object.keys 不用 $.each：$.each 遇到「像陣列」的東西只會跑數字索引，字串鍵會被整批跳過
     Object.keys(PLAN.cells).forEach(function(k){ var p=k.split('-'); cells.push({dept_id:+p[0], month:+p[1]}); });
     $.post(API, {action:'plan_save_cells', plan_id:PLAN.plan_id, cells:JSON.stringify(cells),
-                 remark:$('#planRemark').val()}, function(res){
+                 remark:$('#planRemark').val(),
+                 maker_id:($('#planMaker').val()||''), maker_date:($('#planMakerDate').val()||'')}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         alert('已儲存'); loadPlan();
     }, 'json');
@@ -1398,6 +1533,8 @@ function openCase(id){
         $('#cFrom,#cTo,#cMeetDate,#cMeetStart,#cMeetEnd,#cMeetPlace').val('');
         $('#cRemark').val(defaultCaseRemark());
         $('#cLeader').html(postOptions(META.auditors, '', '', '（未指定）'));
+        $('#cMaker').html(makerOptions(META.me.id, META.me.name));
+        $('#cMakerDate').val(META.today);
         CASE_ROWS = [newCaseRow(),newCaseRow(),newCaseRow()];
         renderCaseRows(); $('#cMeetingSec').hide();
         $('#btnCaseDelete').hide();
@@ -1414,6 +1551,8 @@ function openCase(id){
         $('#cTo').val(inputDate(c.audit_to)); $('#cMeetDate').val(inputDate(c.end_meet_date));
         $('#cMeetStart').val(c.end_meet_start||''); $('#cMeetEnd').val(c.end_meet_end||'');
         $('#cMeetPlace').val(c.end_meet_place||''); $('#cRemark').val(c.remark||'');
+        $('#cMaker').html(makerOptions(c.maker_id, c.maker_name));
+        $('#cMakerDate').val(inputDate(c.maker_date));
         $('#cLeader').html(postOptions(META.auditors, postKeyOf(c.leader_id, c.leader_dept_id, c.leader_position_id), c.leader_id, '（未指定）'));
         CASE_ROWS = (c.depts||[]).map(function(d){ return {
             start_process:d.start_process||'', dept_id:d.dept_id||'',
@@ -1588,9 +1727,12 @@ $('#btnCaseSave').on('click', function(){
         audit_from:$('#cFrom').val(), audit_to:$('#cTo').val(), leader_key:$('#cLeader').val(),
         end_meet_date:$('#cMeetDate').val(), end_meet_start:$('#cMeetStart').val(), end_meet_end:$('#cMeetEnd').val(),
         end_meet_place:$('#cMeetPlace').val(), remark:$('#cRemark').val(),
+        maker_id:($('#cMaker').val()||''), maker_date:($('#cMakerDate').val()||''),
         depts:JSON.stringify(collectCaseRows())}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
-        alert('已儲存'); CASE_ID = res.case_id;
+        // 稽核日期改過的話件號會跟著重編，要講出來（不然使用者只會覺得編號莫名其妙變了）
+        alert('已儲存' + (res.no_changed ? ('\n\n稽核日期改變，稽核件號已由 ' + res.no_old + ' 重編為 ' + res.case_no) : ''));
+        CASE_ID = res.case_id;
         loadCases(function(){ openCase(CASE_ID); });
     }, 'json');
 });
@@ -1683,12 +1825,14 @@ $('#btnCheckNew').on('click', function(){
 $('#nkKind').on('change', loadBank);
 function loadBank(){
     var kind = $('#nkKind').val();
-    NK_TASKS = []; NK_CHECKED = {};       // 換種類＝重來一次，不要把上一種的勾選帶過去
+    NK_TASKS = []; NK_CHECKED = {}; NK_GRP_OPEN = {};   // 換種類＝重來一次，不要把上一種的勾選帶過去
+    $('#nkTaskFilter').val('');
     $('#nkHalfLab, #nkHalf').closest('div').toggle(kind==='kpi');
     $('#nkHalfLab').toggle(kind==='kpi');
     $.getJSON(API, {action:'check_bank', kind:kind, year:YEAR}, function(res){
         if (!res.ok) { $('#nkPick').html('<div class="ia-empty">'+esc(res.error||'載入失敗')+'</div>'); return; }
         BANK = res.rows||[];
+        NK_DEPT_CODES = res.dept_codes || {};   // AS 文件編號的部門代碼→部門名稱（標籤分類用）
         renderBank();
     });
 }
@@ -1701,33 +1845,78 @@ function bankRow(kind, r){
             text:(r.dept_name?r.dept_name+'　':'')+(r.name||''), sub:r.target_text?('目標：'+r.target_text):'', tasks:[]};
 }
 /* 作業項目標籤（只有 AS 查檢表）：點一下＝只勾有這個用途的條文，再點一下取消。
-   同時選多個＝聯集。一個都沒選＝回到全部勾選（跟原本行為一樣）。 */
-var NK_TASKS = [], NK_CHIPS_OPEN = false;
-function renderTaskChips(){
-    var kind = $('#nkKind').val();
-    if (kind !== 'as') { $('#nkTaskBar').hide(); NK_TASKS = []; return; }
-    var all = {};
-    BANK.forEach(function(raw){ (raw.tasks||[]).forEach(function(t){ all[t.task_name] = 1; }); });
-    var names = Object.keys(all).sort();
-    if (!names.length) { $('#nkTaskBar').hide(); NK_TASKS = []; return; }
-    NK_TASKS = NK_TASKS.filter(function(n){ return names.indexOf(n) >= 0; });
-    // 標籤可能上百個，上方的關鍵字一併用來篩標籤（打「供應商」就只剩供應商相關的），
-    // 但**已選中的標籤一定留著**——被篩掉就再也取消不了了
-    var kw = $('#nkFilter').val().trim().toLowerCase();
-    var show = names.filter(function(n){
-        return NK_TASKS.indexOf(n) >= 0 || !kw || n.toLowerCase().indexOf(kw) >= 0;
+   同時選多個＝聯集。**一個都沒選＝一題都不勾**（2026-09-14 使用者指定改成預設全不選）。
+   標籤依 AS 文件編號第二段的部門代碼分類、長在左側分割欄；已選的另外列在右側上方方便確認。 */
+var NK_TASKS = [], NK_GRP_OPEN = {}, NK_DEPT_CODES = {};
+/** 標籤 → 它出現在哪些部門（同一個作業項目名稱可能掛在不同文件底下，那就兩個群組都列） */
+function nkTaskGroupMap(){
+    var m = {};
+    BANK.forEach(function(raw){
+        (raw.tasks||[]).forEach(function(t){
+            var mm = /^\s*\d-([A-Za-z]{2})-/.exec(String(t.doc_no||''));
+            var code = mm ? mm[1].toUpperCase() : '';
+            var g = NK_DEPT_CODES[code] || (code || '未分類');
+            (m[t.task_name] || (m[t.task_name] = {}))[g] = 1;
+        });
     });
-    $('#nkTaskChips').html(show.map(function(n){
-        return '<span class="nk-chip'+(NK_TASKS.indexOf(n)>=0?' on':'')+'" data-t="'+esc(n)+'">'+esc(n)+'</span>';
-    }).join('') + (NK_TASKS.length ? '<span class="nk-chip clear" data-clear="1">✕ 清除</span>' : ''));
-    // 預設只露兩排，按「全部 N 個」才展開（不然一百多顆標籤會把勾選清單擠到看不見）
-    $('#nkTaskChips').toggleClass('open', NK_CHIPS_OPEN);
-    $('#nkTaskMore').text(NK_CHIPS_OPEN ? '收合標籤' : ('全部 '+show.length+' 個 ▾'))
-                    .toggle(show.length > 12);
-    $('#nkTaskBar').show();
+    return m;
 }
-$(document).on('click', '#nkTaskMore', function(){ NK_CHIPS_OPEN = !NK_CHIPS_OPEN; renderTaskChips(); });
-$(document).on('click', '#nkTaskChips .nk-chip', function(){
+function nkChip(n, on, withX){
+    return '<span class="nk-chip'+(on?' on':'')+'" data-t="'+esc(n)+'">'+esc(n)
+         + (withX ? '<span class="x">×</span>' : '') + '</span>';
+}
+function renderTaskPanel(){
+    var kind = $('#nkKind').val();
+    if (kind !== 'as') { $('#nkTaskSide').hide(); $('#nkTaskSel').hide(); NK_TASKS = []; return; }
+    var gm = nkTaskGroupMap(), names = Object.keys(gm).sort();
+    if (!names.length) { $('#nkTaskSide').hide(); $('#nkTaskSel').hide(); NK_TASKS = []; return; }
+    NK_TASKS = NK_TASKS.filter(function(n){ return names.indexOf(n) >= 0; });
+
+    // 左欄：依部門分組。**已選中的標籤一定留著**——被篩掉就再也取消不了了
+    var kw = $('#nkTaskFilter').val().trim().toLowerCase();
+    var groups = {};
+    names.forEach(function(n){
+        if (kw && n.toLowerCase().indexOf(kw) < 0 && NK_TASKS.indexOf(n) < 0) return;
+        Object.keys(gm[n]).forEach(function(g){ (groups[g] || (groups[g] = [])).push(n); });
+    });
+    var gnames = Object.keys(groups).sort(function(a,b){
+        if (a === '未分類') return 1;
+        if (b === '未分類') return -1;
+        return a.localeCompare(b, 'zh-Hant');
+    });
+    var h = '';
+    gnames.forEach(function(g){
+        // 打了關鍵字就自動展開（不然篩完還要一個一個點開＝等於沒篩）；有選中的那一組也一定展開
+        var sel  = groups[g].filter(function(n){ return NK_TASKS.indexOf(n) >= 0; }).length;
+        var open = !!NK_GRP_OPEN[g] || !!kw || sel > 0;
+        h += '<div class="nk-grp"><div class="nk-grp-hd" data-g="'+esc(g)+'">'
+           + '<span>'+(open?'▾':'▸')+'</span><span>'+esc(g)+'</span>'
+           + '<span class="n">'+(sel?('已選 '+sel+' / '):'')+groups[g].length+'</span></div>'
+           + (open ? '<div class="nk-grp-body">'
+                   + groups[g].map(function(n){ return nkChip(n, NK_TASKS.indexOf(n)>=0, false); }).join('')
+                   + '</div>' : '')
+           + '</div>';
+    });
+    $('#nkTaskGroups').html(h || '<div class="ia-empty" style="padding:10px;">沒有符合的作業項目</div>');
+    $('#nkTaskSide').show();
+
+    // 右欄上方：已選清單（按 × 取消）——點完標籤看不出自己挑了什麼，所以另外列出來
+    if (NK_TASKS.length) {
+        $('#nkTaskSel').show().html('<span class="lb">已選作業項目 '+NK_TASKS.length+' 個：</span>'
+            + NK_TASKS.map(function(n){ return nkChip(n, true, true); }).join('')
+            + '<span class="nk-chip clear" data-clear="1">✕ 全部清除</span>');
+    } else {
+        $('#nkTaskSel').show().html('<span class="lb">尚未選擇作業項目（預設一題都不勾）'
+            + '——請從左側點選要查的項目，或直接在右側逐題勾選。</span>');
+    }
+}
+/* 標籤群組展開／收合（預設全部收合，一百多顆標籤攤開會看不完） */
+$(document).on('click', '#nkTaskGroups .nk-grp-hd', function(){
+    var g = String($(this).data('g'));
+    NK_GRP_OPEN[g] = !NK_GRP_OPEN[g];
+    renderTaskPanel();
+});
+$(document).on('click', '#nkTaskGroups .nk-chip, #nkTaskSel .nk-chip', function(){
     if ($(this).data('clear')) { NK_TASKS = []; }
     else {
         var n = String($(this).data('t')), i = NK_TASKS.indexOf(n);
@@ -1736,8 +1925,10 @@ $(document).on('click', '#nkTaskChips .nk-chip', function(){
     NK_CHECKED = {};        // 按標籤＝重挑一次，之前逐列勾的以標籤為準
     renderBank();
 });
+$('#nkTaskFilter').on('input', renderTaskPanel);
 function rowHitTask(r){
-    if (!NK_TASKS.length) return true;
+    // 一個標籤都沒選＝一題都不勾（2026-09-14 使用者指定的預設值）
+    if (!NK_TASKS.length) return false;
     for (var i=0;i<NK_TASKS.length;i++) if ((r.tasks||[]).indexOf(NK_TASKS[i]) >= 0) return true;
     return false;
 }
@@ -1761,7 +1952,7 @@ function nkPicked(){
 function renderBank(){
     var kind = $('#nkKind').val();
     var kw = $('#nkFilter').val().trim().toLowerCase();
-    renderTaskChips();
+    renderTaskPanel();
     var h = '', shown = 0;
     BANK.forEach(function(raw){
         var r = bankRow(kind, raw);
@@ -2224,6 +2415,8 @@ function loadReport(){
                     : '<span style="color:#8a6d45;">尚未建立（按「儲存」即建立）</span>';
         $('#reportStatusBox').html(box);
         $('#reportNote').val(r ? (r.extra_note||'') : '');
+        $('#reportMaker').html(makerOptions(r ? r.maker_id : META.me.id, r ? r.maker_name : META.me.name));
+        $('#reportMakerDate').val(r ? inputDate(r.maker_date) : META.today);
         var rows = res.rows||[], admin = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
         if (!rows.length) {
             $('#reportBody').html('<tr><td colspan="9" class="ia-empty">'+YEAR+' 年度還沒有稽核紀錄</td></tr>');
@@ -2262,6 +2455,7 @@ $('#btnReportSave').on('click', function(){
         return {dept_name:$(this).data('dept'), improve_due:$(this).val()};
     }).get();
     $.post(API, {action:'report_save', year:YEAR, extra_note:$('#reportNote').val(),
+                 maker_id:($('#reportMaker').val()||''), maker_date:($('#reportMakerDate').val()||''),
                  dues:JSON.stringify(dues)}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         alert('已儲存'); loadReport();
@@ -3397,8 +3591,10 @@ function loadTpls(cb){
               + '</td></tr>';
         });
         $('#tplBody').html(h || '<tr><td colspan="6" class="ia-empty">還沒有範本，按右上「新增範本」建立</td></tr>');
-        if (cb) { cb(); return; }
-        openMask('tplMask');
+        loadTplSets(function(){
+            if (cb) { cb(); return; }
+            openMask('tplMask');
+        });
     });
 }
 $('#btnTplNew').on('click', function(){ openTplEdit(0); });
@@ -3478,6 +3674,158 @@ function delTpl(tplId, name){
         if (!res.ok) { alert(res.error||'刪除失敗'); return; }
         loadMeta(function(){ loadTpls(); });
     }, 'json');
+}
+
+/* ============================ 稽核範本組合（2026-09-14 使用者交辦） ============================
+   常一起稽核的那幾個範本存成一組，填通知單時選一次就整批帶入好幾列。
+   組合只記「有哪些範本」，主過程／受稽單位／候選人員一律即時由範本算出來（鐵律4）。 */
+var TPL_SETS = [];
+function loadTplSets(cb){
+    $.getJSON(API, {action:'tplset_list'}, function(res){
+        if (!res.ok) { if (cb) cb(); return; }
+        TPL_SETS = res.rows||[];
+        var admin = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
+        var h = '';
+        TPL_SETS.forEach(function(t){
+            var names = (t.tpl_names||[]);
+            h += '<tr'+(+t.is_active?'':' style="opacity:.55;"')+'>'
+              + '<td class="l"><b>'+esc(t.set_name)+'</b>'
+              + (t.note ? '<div style="font-size:12px;color:#a08356;">'+esc(t.note)+'</div>' : '')+'</td>'
+              + '<td class="l">'+(names.length ? esc(names.join('、')) : '<span style="color:#a08356;">（沒有範本）</span>')
+              + '<span style="color:#a08356;font-size:12px;">　共 '+names.length+' 個</span></td>'
+              + '<td>'+(+t.is_active?'✓':'—')+'</td>'
+              + '<td>'+(admin
+                  ? ('<span class="ia-op" onclick="openTplSetEdit('+t.set_id+')"><i class="fa fa-edit"></i> 編輯</span>'
+                   + '<span class="ia-op danger" onclick="delTplSet('+t.set_id+',\''+esc(t.set_name).replace(/'/g,"\\'")+'\')"><i class="fa fa-times"></i></span>')
+                  : '—')+'</td></tr>';
+        });
+        $('#tplSetBody').html(h || '<tr><td colspan="4" class="ia-empty">還沒有範本組合'
+            + (admin ? '，按右上「新增組合」建立' : '')+'</td></tr>');
+        if (cb) cb();
+    });
+}
+$('#btnTplSetNew').on('click', function(){ openTplSetEdit(0); });
+function openTplSetEdit(setId){
+    var t = null;
+    if (+setId > 0) TPL_SETS.forEach(function(x){ if (+x.set_id === +setId) t = x; });
+    $('#tplSetEditTitle').text(setId ? ('編輯組合　'+(t?t.set_name:'')) : '新增範本組合');
+    $('#btnTplSetSave').data('set-id', setId);
+    $('#tsName').val(t ? t.set_name : '');
+    $('#tsNote').val(t ? (t.note||'') : '');
+    $('#tsActive').prop('checked', t ? !!+t.is_active : true);
+    $('#tsFilter').val('');
+    TS_PICK = (t ? (t.all_ids||[]) : []).slice();     // 勾選順序＝帶入通知單的列順序
+    renderTsPick();
+    clearErrs($('#tplSetEditMask'));
+    openMask('tplSetEditMask');
+}
+/* 勾選狀態記在 TS_PICK（依勾選順序），不以畫面上的勾選框為準——
+   打了關鍵字時被篩掉的列根本不在畫面上，只讀畫面＝剛剛勾好的會整批消失。 */
+var TS_PICK = [];
+function renderTsPick(){
+    var kw = $('#tsFilter').val().trim().toLowerCase(), h = '', shown = 0;
+    TPLS.forEach(function(t){
+        var hay = (t.process_name+' '+(t.unit_name||'')).toLowerCase();
+        if (kw && hay.indexOf(kw) < 0) return;
+        shown++;
+        var on = TS_PICK.indexOf(+t.tpl_id) >= 0;
+        h += '<label class="pick-row"'+(+t.is_active?'':' style="opacity:.55;"')+'>'
+           + '<input type="checkbox" class="tsChk" value="'+t.tpl_id+'"'+(on?' checked':'')+'>'
+           + '<span class="pk-name">'+esc(t.process_name)+'</span>'
+           + '<span class="pk-sub">'+esc(t.unit_name||'')+(+t.is_active?'':'（已停用，帶入時會跳過）')+'</span>'
+           + '</label>';
+    });
+    $('#tsPick').html(h || '<div class="ia-empty">沒有符合的範本</div>');
+    $('#tsCount').text('已選 '+TS_PICK.length+' 個／顯示 '+shown+' 個');
+}
+$('#tsFilter').on('input', renderTsPick);
+$(document).on('change', '.tsChk', function(){
+    var id = +$(this).val(), i = TS_PICK.indexOf(id);
+    if ($(this).is(':checked')) { if (i < 0) TS_PICK.push(id); }
+    else if (i >= 0) TS_PICK.splice(i, 1);
+    $('#tsCount').text('已選 '+TS_PICK.length+' 個');
+});
+$('#btnTplSetSave').on('click', function(){
+    clearErrs($('#tplSetEditMask'));
+    var ok = fieldErr($('#tsName'), 'errTsName', $('#tsName').val().trim() ? '' : '請填組合名稱');
+    if (!TS_PICK.length) { $('#errTsPick').addClass('on').text('請至少勾選一個範本'); ok = false; }
+    if (!ok) return;
+    $.post(API, {action:'tplset_save', set_id:(+$(this).data('set-id')||0),
+        set_name:$('#tsName').val(), note:$('#tsNote').val(),
+        is_active:$('#tsActive').is(':checked')?1:'',
+        tpl_ids:JSON.stringify(TS_PICK)}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        closeMask('tplSetEditMask');
+        loadMeta(function(){ loadTplSets(); });
+    }, 'json');
+});
+function delTplSet(setId, name){
+    if (!confirm('刪除範本組合「'+name+'」？\n只是刪掉這個「一次帶入多列」的捷徑，底下的範本本身不會被刪。')) return;
+    $.post(API, {action:'tplset_delete', set_id:setId}, function(res){
+        if (!res.ok) { alert(res.error||'刪除失敗'); return; }
+        loadMeta(function(){ loadTplSets(); });
+    }, 'json');
+}
+
+/* ---- 通知單：一次帶入一整組範本 ---- */
+$('#btnCaseTplSet').on('click', function(){
+    var sets = (META.tpl_sets||[]).filter(function(t){ return (t.tpl_ids||[]).length; });
+    if (!sets.length) {
+        alert('還沒有可用的範本組合。\n請到工具列「稽核範本」→ 下方「範本組合」→「新增組合」建立。');
+        return;
+    }
+    var h = '';
+    sets.forEach(function(t){
+        h += '<div class="pick-wrap" style="max-height:none;margin-bottom:8px;">'
+           + '<label style="cursor:pointer;" onclick="applyTplSet('+t.set_id+')">'
+           + '<b style="color:#8A5A2B;">'+esc(t.set_name)+'</b>'
+           + '<span style="color:#a08356;font-size:12px;">　共 '+(t.tpl_ids||[]).length+' 列</span>'
+           + (t.note ? '<div style="font-size:12px;color:#a08356;">'+esc(t.note)+'</div>' : '')
+           + '<div style="font-size:12px;color:#8a6d45;margin-top:2px;">'+esc((t.tpl_names||[]).join('、'))+'</div>'
+           + '</label></div>';
+    });
+    $('#tplSetPickBody').html(h);
+    openMask('tplSetPickMask');
+});
+/** 把整組範本一次加成受稽單位的列。
+ *  已經在表格上的起始主過程不重複加（同一次稽核裡不可以重複，加了只會被擋在存檔前）；
+ *  末尾那些「按 ↓ 加出來還沒填」的空列先拿掉，不然新列會被推到空列後面看起來很亂。 */
+function applyTplSet(setId){
+    var t = null;
+    (META.tpl_sets||[]).forEach(function(x){ if (+x.set_id === +setId) t = x; });
+    if (!t) return;
+    // 目前已經有的起始主過程（比對時大小寫與前後空白不算數，跟 checkDupProcess 同一套）
+    var have = {};
+    CASE_ROWS.forEach(function(r){
+        var v = String(r.start_process||'').trim().toLowerCase();
+        if (v) have[v] = 1;
+    });
+    // 整列全空的列（含剛按 ↓ 加出來的）先清掉
+    CASE_ROWS = CASE_ROWS.filter(function(r){
+        return String(r.start_process||'').trim() !== '' || r.dept_id
+            || (r.auditor_keys||[]).length || (r.escort_keys||[]).length
+            || r.audited_date || r.audited_time || r.improve_due;
+    });
+    var added = 0, skipped = [];
+    (t.tpl_ids||[]).forEach(function(tid){
+        var tpl = null;
+        (META.templates||[]).forEach(function(x){ if (+x.tpl_id === +tid) tpl = x; });
+        if (!tpl) return;
+        var key = String(tpl.process_name||'').trim().toLowerCase();
+        if (key && have[key]) { skipped.push(tpl.process_name); return; }
+        have[key] = 1;
+        var r = newCaseRow();
+        CASE_ROWS.push(r);
+        applyTpl(CASE_ROWS.length - 1, tpl.tpl_id);   // 帶入與逐列選範本走同一支，規則不會走鐘
+        added++;
+    });
+    if (!CASE_ROWS.length) CASE_ROWS = [newCaseRow()];
+    renderCaseRows();
+    closeMask('tplSetPickMask');
+    if (skipped.length) {
+        alert('已帶入 '+added+' 列。\n\n以下 '+skipped.length+' 個起始主過程表格上已經有了，沒有重複加入：\n'
+            + skipped.join('\n'));
+    }
 }
 
 /* ============================ 通知單：逐列帶入範本 ============================ */

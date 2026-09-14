@@ -89,6 +89,28 @@ function iaRowPostKeys(array $d, string $kind): array
     return $out;
 }
 
+/**
+ * 表單上的「製表人」（2026-09-14 使用者交辦：年度計畫／稽核通知單／稽核報告表都要能事後改）。
+ * 原本是建檔當下寫死、事後完全改不了，補歷史資料或換人接手時對不起來。
+ * 前端沒有送 maker_id 這個欄位（舊呼叫端）時回 null＝這次不要動製表人。
+ * 送了空字串＝清掉。姓名一律由 user 表現查，不採信前端送的名字。
+ * 回 ['id'=>?int,'name'=>?string,'date'=>?string]
+ */
+function iaMakerFromPost(PDO $db, string $curDate = ''): ?array
+{
+    if (!array_key_exists('maker_id', $_POST)) return null;
+    $raw = trim((string)$_POST['maker_id']);
+    $date = iaDate($_POST['maker_date'] ?? '') ?: ($curDate ?: null);
+    if ($raw === '') return ['id' => null, 'name' => null, 'date' => null];
+    $uid = iaInt($raw);
+    if ($uid === null) jerr('製表人不正確');
+    $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
+    $st->execute([$uid]);
+    $nm = (string)($st->fetchColumn() ?: '');
+    if ($nm === '') jerr('製表人不存在');
+    return ['id' => $uid, 'name' => $nm, 'date' => $date];
+}
+
 switch ($action) {
 
 /* ============================ meta ============================ */
@@ -149,6 +171,8 @@ case 'meta': {
         'qualify_kinds' => IA_QUALIFY_KINDS,
         // 稽核範本：填通知單時一列一列帶入（含已算好的候選人員）
         'templates' => ia_process_templates($db),
+        // 範本組合：填通知單時選一次就整批帶入好幾列受稽單位
+        'tpl_sets'  => ia_tpl_sets($db),
         'stamp_tpls'=> $stampTpls,
         'years'     => $years,
         'this_year' => $cy,
@@ -269,6 +293,11 @@ case 'plan_save_cells': {
         }
         $db->prepare("UPDATE ia_plan SET remark=?, updated_at=NOW() WHERE plan_id=?")
            ->execute([mb_substr(trim((string)($_POST['remark'] ?? '')), 0, 500) ?: null, $pid]);
+        // 製表人可事後修改（2026-09-14）——原本只有建檔當下寫得進去
+        if (($mk = iaMakerFromPost($db, (string)($plan['maker_date'] ?? ''))) !== null) {
+            $db->prepare("UPDATE ia_plan SET maker_id=?, maker_name=?, maker_date=? WHERE plan_id=?")
+               ->execute([$mk['id'], $mk['name'], $mk['date'], $pid]);
+        }
         $db->commit();
         jout(['saved' => true]);
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
@@ -499,11 +528,21 @@ case 'case_save': {
                           iaDate($_POST['end_meet_date'] ?? ''), $ems, $eme,
                           mb_substr(trim((string)($_POST['end_meet_place'] ?? '')), 0, 150) ?: null,
                           trim((string)($_POST['remark'] ?? '')) ?: null, $cid]);
+            // 製表人可事後修改（2026-09-14）
+            if (($mk = iaMakerFromPost($db, (string)($old['maker_date'] ?? ''))) !== null) {
+                $db->prepare("UPDATE ia_case SET maker_id=?, maker_name=?, maker_date=? WHERE case_id=?")
+                   ->execute([$mk['id'], $mk['name'], $mk['date'], $cid]);
+            }
         } else {
             $q = $db->prepare("SELECT COALESCE(MAX(seq_no),0)+1 FROM ia_case WHERE year=? AND COALESCE(is_deleted,0)=0");
             $q->execute([$year]);
             $seq = (int)$q->fetchColumn();
-            $caseNo = ia_next_case_no($db, $nd);
+            // 件號依「稽核日期（稽核起）」產生，沒填才退回通知日期（2026-09-14 使用者拍板，
+            // 與 2024 兩張紙本 241115001／241216001 的編法一致）
+            $caseNo = ia_next_case_no($db, $af ?: $nd);
+            // 製表人：前端有指定就用指定的，沒指定＝建檔者本人（原本的行為）
+            $mkNew = iaMakerFromPost($db, $nd) ?: ['id' => $uid, 'name' => $uname, 'date' => $nd];
+            if ($mkNew['id'] === null) $mkNew['date'] = null;
             $db->prepare("INSERT INTO ia_case (year, seq_no, case_no, notify_date, audit_from, audit_to,
                               leader_id, leader_name, leader_dept_id, leader_position_id,
                               end_meet_date, end_meet_start, end_meet_end, end_meet_place,
@@ -514,7 +553,7 @@ case 'case_save': {
                           iaDate($_POST['end_meet_date'] ?? ''), $ems, $eme,
                           mb_substr(trim((string)($_POST['end_meet_place'] ?? '')), 0, 150) ?: null,
                           trim((string)($_POST['remark'] ?? '')) ?: null,
-                          $uid, $uname, $nd, $uid, $uname]);
+                          $mkNew['id'], $mkNew['name'], $mkNew['date'], $uid, $uname]);
             $cid = (int)$db->lastInsertId();
         }
 
@@ -587,8 +626,11 @@ case 'case_save': {
             ia_cd_people_set($db, $cdId, $cid, 'escort',  $people['escort']);
         }
         $db->commit();
-        jout(['case_id' => $cid]);
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
+
+    // 稽核日期被改過的話件號要跟著重編（只重編還是草稿且未執行的；已發出的紙本印著舊號不動）
+    $sync = ia_case_sync_no($db, $cid);
+    jout(['case_id' => $cid, 'case_no' => $sync['new'], 'no_changed' => $sync['changed'], 'no_old' => $sync['old']]);
 }
 
 case 'case_status': {
@@ -666,7 +708,8 @@ case 'check_bank': {
         $map  = ia_clause_task_map($db, array_column($rows, 'clause_id'));
         foreach ($rows as &$r) { $r['tasks'] = $map[(int)$r['clause_id']] ?? []; }
         unset($r);
-        jout(['kind' => $kind, 'rows' => $rows]);
+        // 作業項目標籤要分類（2026-09-14）：依 AS 文件編號第二段的部門代碼歸到部門底下
+        jout(['kind' => $kind, 'rows' => $rows, 'dept_codes' => ia_as_dept_code_names($db)]);
     }
     elseif ($kind === 'system') jout(['kind' => $kind, 'rows' => ia_system_forms($db)]);
     else                        jout(['kind' => $kind, 'rows' => ia_kpi_indicators($db, $year)]);
@@ -1340,10 +1383,17 @@ case 'report_save': {
     if ($rid) {
         $db->prepare("UPDATE ia_report SET extra_note=?, updated_at=NOW() WHERE report_id=?")
            ->execute([$note ?: null, $rid]);
+        // 製表人可事後修改（2026-09-14）
+        $q = $db->prepare("SELECT maker_date FROM ia_report WHERE report_id=?"); $q->execute([$rid]);
+        if (($mk = iaMakerFromPost($db, (string)($q->fetchColumn() ?: ''))) !== null) {
+            $db->prepare("UPDATE ia_report SET maker_id=?, maker_name=?, maker_date=? WHERE report_id=?")
+               ->execute([$mk['id'], $mk['name'], $mk['date'], $rid]);
+        }
     } else {
+        $mkNew = iaMakerFromPost($db, $today) ?: ['id' => $uid, 'name' => $uname, 'date' => $today];
         $db->prepare("INSERT INTO ia_report (year, extra_note, status, maker_id, maker_name, maker_date,
                           created_by, created_at, updated_at) VALUES (?,?, 'draft', ?,?,?,?, NOW(), NOW())")
-           ->execute([$year, $note ?: null, $uid, $uname, $today, $uid]);
+           ->execute([$year, $note ?: null, $mkNew['id'], $mkNew['name'], $mkNew['date'], $uid]);
         $rid = (int)$db->lastInsertId();
     }
     // 預定完成改善時間是存在 ia_case_dept.improve_due（那才是「受稽單位」層級的欄位）
@@ -1695,7 +1745,60 @@ case 'tpl_delete': {
     try {
         // 範本只是「填表時的帶入來源」，已經填進通知單的內容是快照、不受影響，所以可以真的刪
         $db->prepare("DELETE FROM ia_process_tpl_dept WHERE tpl_id=?")->execute([$tplId]);
+        // 被刪掉的範本要從所有組合裡一併移除，不然組合會留一列「（範本已刪除）」
+        $db->prepare("DELETE FROM ia_process_tpl_set_item WHERE tpl_id=?")->execute([$tplId]);
         $db->prepare("DELETE FROM ia_process_template WHERE tpl_id=?")->execute([$tplId]);
+        $db->commit();
+        jout(['deleted' => true]);
+    } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：' . $e->getMessage(), 500); }
+}
+
+/* ============================ 稽核範本組合（一次帶入多列） ============================ */
+case 'tplset_list': {
+    iaReqView($perms);
+    jout(['rows' => ia_tpl_sets($db, false), 'templates' => ia_process_templates($db, false)]);
+}
+
+case 'tplset_save': {
+    iaReqAdmin($perms);
+    $setId = (int)($_POST['set_id'] ?? 0);
+    $name  = trim((string)($_POST['set_name'] ?? ''));
+    $ids   = json_decode((string)($_POST['tpl_ids'] ?? '[]'), true);
+    $ids   = is_array($ids) ? array_values(array_unique(array_filter(array_map('intval', $ids)))) : [];
+
+    $err = ia_tplset_validate($db, $setId, $name, $ids);
+    if ($err !== '') jerr($err);
+
+    $db->beginTransaction();
+    try {
+        $note = mb_substr(trim((string)($_POST['note'] ?? '')), 0, 255) ?: null;
+        if ($setId) {
+            $db->prepare("UPDATE ia_process_tpl_set SET set_name=?, note=?, is_active=?,
+                              updated_at=NOW(), updated_by=? WHERE set_id=?")
+               ->execute([$name, $note, empty($_POST['is_active']) ? 0 : 1, $uname, $setId]);
+        } else {
+            $db->prepare("INSERT INTO ia_process_tpl_set (set_name, note, sort_order, is_active, updated_at, updated_by)
+                          VALUES (?,?,(SELECT COALESCE(MAX(s.sort_order),0)+10
+                                       FROM (SELECT sort_order FROM ia_process_tpl_set) s),1,NOW(),?)")
+               ->execute([$name, $note, $uname]);
+            $setId = (int)$db->lastInsertId();
+        }
+        $db->prepare("DELETE FROM ia_process_tpl_set_item WHERE set_id=?")->execute([$setId]);
+        $ins = $db->prepare("INSERT INTO ia_process_tpl_set_item (set_id, tpl_id, sort_order) VALUES (?,?,?)");
+        $i = 0;
+        foreach ($ids as $t) $ins->execute([$setId, $t, $i += 10]);   // 勾選順序＝帶入通知單的列順序
+        $db->commit();
+        jout(['set_id' => $setId]);
+    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
+}
+
+case 'tplset_delete': {
+    iaReqAdmin($perms);
+    $setId = (int)($_POST['set_id'] ?? 0);
+    $db->beginTransaction();
+    try {
+        $db->prepare("DELETE FROM ia_process_tpl_set_item WHERE set_id=?")->execute([$setId]);
+        $db->prepare("DELETE FROM ia_process_tpl_set WHERE set_id=?")->execute([$setId]);
         $db->commit();
         jout(['deleted' => true]);
     } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：' . $e->getMessage(), 500); }
