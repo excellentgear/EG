@@ -411,6 +411,8 @@ function kpi_as_registry(): array {
         'complaint_rate' => [
             'name' => '客訴頻率(客退單/出貨單)',
             'page' => '退貨單管理 views/Sales/ir.php ＋ 出貨 is_list',
+            'tables' => ['is_list','ir_track'],
+            'links' => [['label'=>'退貨追蹤（客退單）','url'=>'/EGsystem/views/Sales/IR_Track.php'], ['label'=>'快速出貨(新版)（出貨單）','url'=>'/EGsystem/views/Sales/Shipping_Quick.php']],
             'desc' => '分子=當月客戶退貨單筆數(ir_track)；分母=當月出貨單筆數(is_list)',
             'params' => [
                 ['key'=>'exclude_return_types','label'=>'排除退貨性質id(逗號分隔)','type'=>'intlist','fe'=>1],
@@ -418,6 +420,8 @@ function kpi_as_registry(): array {
         'order_target_amount' => [
             'name' => '受訂目標達成率(同出貨分析頁)',
             'page' => '出貨分析 views/Sales/Shipping_Analysis_new.php',
+            'tables' => ['order_track','kpi_monthly_targets','system_parameters'],
+            'links' => [['label'=>'訂單進度追蹤（訂單交期／數量／單價）','url'=>'/EGsystem/src/store/_cleanOrder_Track_ate_only.php'], ['label'=>'KPI 設定（各月受訂目標金額）','url'=>'/EGsystem/views/news/KPI_setting.php'], ['label'=>'出貨分析（全域月目標）','url'=>'/EGsystem/views/Sales/Shipping_Analysis_new.php']],
             'desc' => '帳款月窗口接單金額(order_track 交期歸屬, Qty×單價, 排除狀態9/無單價)÷月受訂目標(kpi_monthly_targets/system_parameters KPI_TARGET)',
             'params' => [
                 ['key'=>'monthly_targets','label'=>'各月目標金額(留空=用出貨分析頁全域目標)','type'=>'months_map','fe'=>0],
@@ -425,6 +429,8 @@ function kpi_as_registry(): array {
         'shipping_target_amount' => [
             'name' => '銷貨額達成率(出貨金額/月目標)',
             'page' => '出貨管理 is_list',
+            'tables' => ['is_list'],
+            'links' => [['label'=>'快速出貨(新版)（出貨金額）','url'=>'/EGsystem/views/Sales/Shipping_Quick.php'], ['label'=>'KPI 設定（各月銷貨目標金額）','url'=>'/EGsystem/views/news/KPI_setting.php']],
             'desc' => '分子=當月出貨金額 Σ(Qty×單價)；分母=設定的各月銷貨目標金額',
             'params' => [
                 ['key'=>'monthly_targets','label'=>'各月銷貨目標金額(必填才能算)','type'=>'months_map','fe'=>0],
@@ -432,6 +438,8 @@ function kpi_as_registry(): array {
         'quote_to_order' => [
             'name' => '報價單接單率',
             'page' => '報價單管理 quotation_list ＋ 訂單 order_track',
+            'tables' => ['quotation_list','order_track'],
+            'links' => [['label'=>'報價單（報價單筆數／狀態）','url'=>'/EGsystem/views/Sales/quotation_list_NEW.php'], ['label'=>'訂單進度追蹤（訂單引用的報價單號）','url'=>'/EGsystem/src/store/_cleanOrder_Track_ate_only.php']],
             'desc' => '分母=當月報價單數；分子=其中報價單號已被訂單引用(order_track.quote_no)',
             'params' => [
                 ['key'=>'exclude_draft','label'=>'排除草稿報價單(1=是)','type'=>'bool','fe'=>1],
@@ -439,6 +447,8 @@ function kpi_as_registry(): array {
         'vendor_ontime' => [
             'name' => '廠商準時交貨率(發包日+約定工作天)',
             'page' => '發包管理 bom_ing(發包日/回廠日)',
+            'tables' => ['bom_ing','process_no'],
+            'links' => [['label'=>'BOM 總表（發包日／回廠日）','url'=>'/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php'], ['label'=>'KPI 設定（約定工作天數）','url'=>'/EGsystem/views/news/KPI_setting.php'], ['label'=>'外包廠商績效（對照查詢）','url'=>'/EGsystem/views/pages/vendor_kpi.php']],
             'desc' => '應交日=發包日+約定工作天數(可按製程類別分別設定)；分母=應交日落在當月的發包筆數；分子=回廠日≤應交日',
             'params' => [
                 ['key'=>'default_days','label'=>'預設約定工作天數','type'=>'int','fe'=>1],
@@ -447,6 +457,8 @@ function kpi_as_registry(): array {
         'order_ontime' => [
             'name' => '訂單準時出貨率(準交率)',
             'page' => '訂單管理 order_track/order_list',
+            'tables' => ['order_track','order_list'],
+            'links' => [['label'=>'訂單進度追蹤（交期／狀態）','url'=>'/EGsystem/src/store/_cleanOrder_Track_ate_only.php'], ['label'=>'未交訂單（未交數量）','url'=>'/EGsystem/src/store/_cleanNewOrder_Track.php']],
             'desc' => '分母=當月交期訂單筆數；分子=非未交(order_list Qty=Open_Qty 且進行中=未交)；沿用原KPI頁排除規則(d_id ZZZ、-jg/-jh/-hg)',
             'params' => [
                 ['key'=>'exclude_clients','label'=>'排除客戶(逗號分隔)','type'=>'textlist','fe'=>1],
@@ -454,11 +466,15 @@ function kpi_as_registry(): array {
         'stock_accuracy' => [
             'name' => '庫存正確率(盤點差異)',
             'page' => '庫存盤點 stock_count_sessions/details',
+            'tables' => ['stock_count_details','stock_count_sessions'],
+            'links' => [['label'=>'庫存管理（盤點作業）','url'=>'/EGsystem/views/pages/stock.php']],
             'desc' => '每季：分母=該季已完成盤點明細筆數；分子=無差異筆數(正確率)',
             'params' => []],
         'drawing_ontime' => [
             'name' => '出圖準時率(業務→設計→生管)',
             'page' => '訂單追蹤 order_track(ateGet/pmGet)',
+            'tables' => ['order_track','evenement'],
+            'links' => [['label'=>'訂單追蹤（接單移轉設計／設計移轉生管）','url'=>'/EGsystem/views/Sales/NewOrder_Track.php','perm_url'=>'/EGsystem/src/store/_cleanOrder_Track_ate_only.php'], ['label'=>'業務待辦追蹤','url'=>'/EGsystem/views/Sales/Sales_Track.php'], ['label'=>'行事曆管理（工作日認定）','url'=>'/EGsystem/views/pages/calendar.php']],
             'desc' => '接單移轉設計到設計移轉生管 ≤N 工作日(evenement行事曆)為準時',
             'params' => [
                 ['key'=>'threshold_days','label'=>'準時門檻(工作日,含起訖日)','type'=>'int','fe'=>1],
@@ -468,6 +484,8 @@ function kpi_as_registry(): array {
         'capacity_rate' => [
             'name' => '產能績效(完成數/機器工時)',
             'page' => '現場報工 pm_process_daily_report',
+            'tables' => ['pm_process_daily_report','machine_list'],
+            'links' => [['label'=>'待加工排程（現場報工登錄）','url'=>'/EGsystem/views/pm/process_schedule_NOW.php'], ['label'=>'報工紀錄查詢','url'=>'/EGsystem/views/pm/process_report_query.php'], ['label'=>'KPI 生產效率分析（機台資產設定）','url'=>'/EGsystem/views/pm/kpi_main.php']],
             'desc' => '分子=Σ本日完成數量；分母=Σ生產起訖工時(小時)；機台範圍=機台種類或指定機台',
             'params' => [
                 ['key'=>'machine_type_ids','label'=>'機台種類(製程類別id,逗號分隔)','type'=>'machine_type_ids','fe'=>0],
@@ -476,6 +494,8 @@ function kpi_as_registry(): array {
         'process_ng_rate' => [
             'name' => '製程不良率(報工NG/完成數)',
             'page' => '現場報工NG pm_process_daily_ng',
+            'tables' => ['pm_process_daily_ng','pm_process_daily_report'],
+            'links' => [['label'=>'待加工排程（報工NG數登錄）','url'=>'/EGsystem/views/pm/process_schedule_NOW.php'], ['label'=>'報工紀錄查詢','url'=>'/EGsystem/views/pm/process_report_query.php']],
             'desc' => '分子=Σ當月NG數；分母=Σ當月完成數；限指定製程類別(如齒研=12)',
             'params' => [
                 ['key'=>'process_type_ids','label'=>'製程類別id(逗號分隔)','type'=>'process_type_ids','fe'=>0],
@@ -483,6 +503,8 @@ function kpi_as_registry(): array {
         'incoming_ng_rate' => [
             'name' => '進料檢驗不良率(發包回廠QC)',
             'page' => '發包回廠檢驗 bom_ing(QC_check)',
+            'tables' => ['bom_ing'],
+            'links' => [['label'=>'QC待驗（回廠檢驗判定）','url'=>'/EGsystem/views/QC/QC_check_list.php'], ['label'=>'BOM 總表（回廠日／檢驗數量）','url'=>'/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php']],
             'desc' => '分母=當月QC檢驗筆數；分子=判定為不良的筆數(預設ng=驗退)',
             'params' => [
                 ['key'=>'ng_statuses','label'=>'算不良的判定(ng/QQ/AOD 逗號分隔)','type'=>'statuslist','fe'=>1],
@@ -490,11 +512,15 @@ function kpi_as_registry(): array {
         'packing_ng_rate' => [
             'name' => '成品出貨不良率(出貨檢驗)',
             'page' => '出貨檢驗 qc_packing_inspection',
+            'tables' => ['qc_packing_inspection'],
+            'links' => [['label'=>'包裝檢驗表（全檢數／NG數）','url'=>'/EGsystem/views/QC/packaging_inspection_entry.php']],
             'desc' => '分子=ΣNG總數；分母=Σ實際全檢數量',
             'params' => []],
         'calibration_ontime' => [
             'name' => '量測儀器按時校驗率',
             'page' => '量測儀器校驗管理 views/QC/tool_calibration.php',
+            'tables' => ['qc_tool_calibration','qc_tool','qc_tool_list'],
+            'links' => [['label'=>'量測儀器校驗（校驗日／到期日）','url'=>'/EGsystem/views/QC/tool_calibration.php']],
             'desc' => '分母=當月應校驗量具數(已完成紀錄到期日在當月＋尚待完成的到期)；分子=其中準時完成(校驗日≤到期日+寬限)者',
             'params' => [
                 ['key'=>'grace_days','label'=>'準時寬限天數(0=須到期日前完成)','type'=>'int','fe'=>1],
@@ -502,6 +528,8 @@ function kpi_as_registry(): array {
         'training_completion' => [
             'name' => '人員教育訓練達成率',
             'page' => '教育訓練管理 views/ADM/training_record.php',
+            'tables' => ['training_session'],
+            'links' => [['label'=>'教育訓練管理（計畫月份／完成狀態）','url'=>'/EGsystem/views/ADM/training_record.php']],
             'desc' => '分母=當月計畫訓練場次(排除取消)；分子=其中已完成場次',
             'params' => [
                 ['key'=>'include_cancelled','label'=>'取消場次是否計入分母(1=是)','type'=>'bool','fe'=>1],
@@ -509,6 +537,8 @@ function kpi_as_registry(): array {
         'vendor_audit_ontime' => [
             'name' => '廠商稽核按時執行率',
             'page' => '供應商稽核管理 views/pm/vendor_audit.php',
+            'tables' => ['vendor_audit_target','maker_list'],
+            'links' => [['label'=>'供應商稽核（稽核對象／稽核日）','url'=>'/EGsystem/views/pm/vendor_audit.php']],
             'desc' => '半年批次(6=上半年/12=下半年)：分母=該期稽核對象數(排除停用廠商)；分子=其中已完成稽核(有稽核日)者',
             'params' => []],
     ];
@@ -1021,13 +1051,27 @@ function kpi_as_builder_summary(PDO $db, array $spec): string {
     return $s;
 }
 
-/** 指標資料來源說明（給明細彈窗）：['label','page','desc'] */
-function kpi_as_source_info(PDO $db, string $mode, ?string $calc, array $params): array {
-    if ($mode === 'manual') return ['label'=>'手動填寫', 'page'=>'由擔當者每期填報', 'desc'=>''];
-    if ($calc === '__builder__') return ['label'=>'自訂公式', 'page'=>'資料來源目錄', 'desc'=>kpi_as_builder_summary($db, $params)];
+/** 指標資料來源說明（給明細彈窗）：['label','page','desc','links']
+ *  links＝「要去哪一頁改真正的資料」，帶 $uid 才會做權限判定（見 kpi_as_source_links） */
+function kpi_as_source_info(PDO $db, string $mode, ?string $calc, array $params, int $uid = 0): array {
+    if ($mode === 'manual') return ['label'=>'手動填寫', 'page'=>'由擔當者每期填報', 'desc'=>'', 'links'=>[]];
+    if ($calc === '__builder__') {
+        $ln = [];
+        if ($uid > 0) {
+            if (!function_exists('eg_asdoc_page_can_open')) {
+                $f = __DIR__ . '/asdoc_page_lib.php';
+                if (is_file($f)) require_once $f;
+            }
+            $u2 = '/EGsystem/views/news/KPI_setting.php';
+            $can = function_exists('eg_asdoc_page_can_open') ? eg_asdoc_page_can_open($db, $uid, $u2) : false;
+            $ln[] = ['label'=>'KPI 設定（資料來源目錄／自訂公式）', 'url'=>$can ? $u2 : '', 'can'=>$can ? 1 : 0];
+        }
+        return ['label'=>'自訂公式', 'page'=>'資料來源目錄', 'desc'=>kpi_as_builder_summary($db, $params), 'links'=>$ln];
+    }
     $reg = kpi_as_registry();
-    if ($calc && isset($reg[$calc])) return ['label'=>$reg[$calc]['name'], 'page'=>$reg[$calc]['page'], 'desc'=>$reg[$calc]['desc']];
-    return ['label'=>'—', 'page'=>'', 'desc'=>''];
+    if ($calc && isset($reg[$calc])) return ['label'=>$reg[$calc]['name'], 'page'=>$reg[$calc]['page'],
+        'desc'=>$reg[$calc]['desc'], 'links'=>$uid > 0 ? kpi_as_source_links($db, $uid, $calc) : []];
+    return ['label'=>'—', 'page'=>'', 'desc'=>'', 'links'=>[]];
 }
 
 /** 目錄（含欄位）供設定頁使用 */
@@ -1041,4 +1085,117 @@ function kpi_as_catalog(PDO $db): array {
     }
     foreach ($cats as &$c) $c['fields'] = $fmap[(int)$c['ds_id']] ?? [];
     return $cats;
+}
+
+/* ============================================================
+ * 快照過期偵測（使用者要求 2026-09-14）
+ * 背景：自動指標的值是寫進 kpi_as_monthly_value 的「快照」，原本只有「完全沒有快照」
+ *       時才會現場結算一次；快照寫下去之後，來源資料再怎麼補登都不會重算也不會提示
+ *       （實際案例：4~7月的教育訓練場次是 8/13 之後才補建的，快照停在 8/11 的 0/0，
+ *         畫面就一直顯示「?」）。
+ * 判定：快照 computed_at < 來源資料表最後異動時間 → 這一格算過期，要重算並標示。
+ * 取「來源最後異動時間」一律走 information_schema.tables.UPDATE_TIME
+ *       （新增/修改/刪除都算得到，一次把整個資料庫的表撈回來約 2ms；
+ *         預設統計值會快取 24 小時，所以要先把 information_schema_stats_expiry 設為 0）。
+ *       該值為 NULL（引擎不提供／重啟後未異動）時，退回該表時間戳欄位的 MAX()。
+ * ============================================================ */
+
+/** 這個計算模組會讀到哪些資料表（只用於過期偵測，不影響計算本身） */
+function kpi_as_source_tables(PDO $db, ?string $calc, array $params): array {
+    if ($calc === '__builder__') {
+        $ids = [];
+        foreach (['num', 'den'] as $side) {
+            if (!empty($params[$side]['ds_id'])) $ids[] = (int)$params[$side]['ds_id'];
+        }
+        if (!$ids) return [];
+        $in = implode(',', array_fill(0, count($ids), '?'));
+        try {
+            $st = $db->prepare("SELECT table_name FROM kpi_ds_catalog WHERE ds_id IN ($in)");
+            $st->execute($ids);
+            return array_values(array_filter($st->fetchAll(PDO::FETCH_COLUMN)));
+        } catch (Throwable $e) { return []; }
+    }
+    $reg = kpi_as_registry();
+    if ($calc && isset($reg[$calc]['tables']) && is_array($reg[$calc]['tables'])) return $reg[$calc]['tables'];
+    return [];
+}
+
+/** 單一資料表的時間戳欄位最大值（UPDATE_TIME 取不到時的退路） */
+function kpi_as_table_ts_max(PDO $db, string $table): ?string {
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $table)) return null;
+    try { $cols = $db->query("SHOW COLUMNS FROM `$table`")->fetchAll(PDO::FETCH_ASSOC); }
+    catch (Throwable $e) { return null; }
+    $pick = [];
+    foreach ($cols as $c) {
+        if (preg_match('/^(modified_at|updated_at|created_at|update_time)$/i', (string)$c['Field'])
+            && preg_match('/^(timestamp|datetime)/i', (string)$c['Type'])) {
+            $pick[] = $c['Field'];
+        }
+    }
+    if (!$pick) return null;
+    $sel = [];
+    foreach ($pick as $p) $sel[] = "MAX(`$p`)";
+    try { $row = $db->query("SELECT " . implode(',', $sel) . " FROM `$table`")->fetch(PDO::FETCH_NUM); }
+    catch (Throwable $e) { return null; }
+    $max = null;
+    foreach (($row ?: []) as $v) { if ($v !== null && ($max === null || $v > $max)) $max = $v; }
+    return $max;
+}
+
+/** 一組資料表的「最後異動時間」（取最大值）；全部取不到回 null＝不做過期判定 */
+function kpi_as_tables_mtime(PDO $db, array $tables): ?string {
+    static $ut = null, $fb = [];
+    $tables = array_values(array_unique(array_filter(array_map('strval', $tables), 'strlen')));
+    if (!$tables) return null;
+    if ($ut === null) {
+        $ut = [];
+        try { $db->exec("SET SESSION information_schema_stats_expiry=0"); } catch (Throwable $e) {}
+        try {
+            $st = $db->query("SELECT TABLE_NAME, UPDATE_TIME FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE()");
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $ut[strtolower((string)$r['TABLE_NAME'])] = $r['UPDATE_TIME'] ?: null;
+            }
+        } catch (Throwable $e) { $ut = []; }
+    }
+    $max = null;
+    foreach ($tables as $t) {
+        $k = strtolower($t);
+        $v = $ut[$k] ?? null;
+        if ($v === null) {
+            if (!array_key_exists($k, $fb)) $fb[$k] = kpi_as_table_ts_max($db, $t);
+            $v = $fb[$k];
+        }
+        if ($v !== null && ($max === null || $v > $max)) $max = $v;
+    }
+    return $max;
+}
+
+/** 快照是否已過期（來源資料在快照之後又動過） */
+function kpi_as_snapshot_stale(?string $computedAt, ?string $srcMtime): bool {
+    if (!$computedAt || !$srcMtime) return false;
+    return strtotime($computedAt) < strtotime($srcMtime);
+}
+
+/**
+ * 指標的「資料來源頁面」清單（要去哪一頁改真正的資料）。
+ * 權限比照左側選單（eg_asdoc_page_can_open）：沒權限者只回標籤、不回網址（鐵律8：不外洩入口）。
+ * 沒有登記進選單的頁面（如訂單追蹤）用 perm_url 指定一個「權限參考頁」。
+ */
+function kpi_as_source_links(PDO $db, int $uid, ?string $calc): array {
+    $reg = kpi_as_registry();
+    $links = ($calc && isset($reg[$calc]['links']) && is_array($reg[$calc]['links'])) ? $reg[$calc]['links'] : [];
+    if (!$links) return [];
+    if (!function_exists('eg_asdoc_page_can_open')) {
+        $f = __DIR__ . '/asdoc_page_lib.php';
+        if (is_file($f)) require_once $f;
+    }
+    $out = [];
+    foreach ($links as $ln) {
+        $url  = (string)($ln['url'] ?? '');
+        $perm = (string)($ln['perm_url'] ?? $url);
+        $can  = ($url !== '' && function_exists('eg_asdoc_page_can_open'))
+                ? eg_asdoc_page_can_open($db, $uid, $perm) : false;
+        $out[] = ['label' => (string)($ln['label'] ?? ''), 'url' => $can ? $url : '', 'can' => $can ? 1 : 0];
+    }
+    return $out;
 }

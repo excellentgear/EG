@@ -117,11 +117,20 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         .kpi-print-comp { font-size:20px; font-weight:bold; }
         .kpi-print-title { font-size:15px; font-weight:bold; letter-spacing:3px; margin-top:2px; }
         .kpi-print-sub { font-size:11px; color:#555; margin-top:2px; }
+        /* 快照過期提示：來源資料在結算之後又異動過 → 已自動重算（暖色系 ai-rules/10） */
+        #staleBar { display:none; margin:6px 0 0; padding:6px 10px; border:1px solid #F0A24B;
+                    background:#FDF3E3; color:#5b3a1e; font-size:13px; border-radius:4px; }
+        #staleBar b { color:#C2601C; }
+        #staleBar .sb-link { color:#C2601C; text-decoration:underline; cursor:pointer; margin-left:8px; }
+        .kpi-stale-mark { color:#C2601C; font-weight:bold; margin-left:2px; cursor:help; }
+        .kpi-src-links a { color:#C2601C; }
+        .kpi-src-links .noperm { color:#999; }
         /* 兩份規則刻意重複：@media print 是保險（萬一使用者直接 Ctrl+P 未走 printKpi()）；
            body.kpi-printing 是 printKpi() 按下當下同步套用，讓縮放量測時的版面跟真正列印時一致（見下方 printKpi()） */
         @media print {
             .page-title, .kpi-toolbar, #chartBox, #cellMenu, .nav_menu, .left_col, .kpi-sim-bar, footer,
-            .kpi-role-badge .fa-question-circle, .kpi-ov-mark, .kpi-legend { display:none !important; }
+            .kpi-role-badge .fa-question-circle, .kpi-ov-mark, .kpi-legend,
+            #staleBar, .kpi-stale-mark { display:none !important; }
             .right_col { margin:0 !important; padding:0 !important; }
             table.kpi-table { font-size:10px; }
             table.kpi-table th, table.kpi-table td { padding:2px 3px; }
@@ -132,7 +141,8 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         body.kpi-printing .page-title, body.kpi-printing .kpi-toolbar, body.kpi-printing #chartBox, body.kpi-printing #cellMenu,
         body.kpi-printing .nav_menu, body.kpi-printing .left_col, body.kpi-printing .kpi-sim-bar,
         body.kpi-printing footer, body.kpi-printing .kpi-role-badge .fa-question-circle,
-        body.kpi-printing .kpi-ov-mark, body.kpi-printing .kpi-legend { display:none !important; }
+        body.kpi-printing .kpi-ov-mark, body.kpi-printing .kpi-legend,
+        body.kpi-printing #staleBar, body.kpi-printing .kpi-stale-mark { display:none !important; }
         body.kpi-printing .right_col { margin:0 !important; padding:0 !important; }
         body.kpi-printing table.kpi-table { font-size:10px; }
         body.kpi-printing table.kpi-table th, body.kpi-printing table.kpi-table td { padding:2px 3px; }
@@ -173,6 +183,8 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
                 <i class="fa fa-question-circle" id="btnRoleHelp" title="角色權限說明"></i></span>
         </div>
 
+        <div id="staleBar"></div>
+
         <div class="kpi-print-head" id="kpiPrintHead">
             <div class="kpi-print-comp"></div>
             <div class="kpi-print-title"></div>
@@ -194,7 +206,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         </div>
         <div class="kpi-legend" style="font-size:11px;color:#8a6d45;margin-top:4px;">
             說明：<span class="kpi-preview">橘色斜體</span>=當月即時試算(未定案)；<span class="kpi-below">紅字</span>=未達標；
-            <span class="kpi-ov-mark">✱</span>=手動覆寫；<span class="kpi-attach-badge">📎n</span>=佐證附件；?=無資料；NA=未到期；－=本期已填在其他月份。
+            <span class="kpi-ov-mark">✱</span>=手動覆寫；<span class="kpi-attach-badge">📎n</span>=佐證附件；<span class="kpi-stale-mark">⟳</span>=快照過期已自動重算；?=無資料；NA=未到期；－=本期已填在其他月份。
             點儲存格可操作（明細/附件/填寫/覆寫/重算）；每季/每半年/每年的手動指標一期只能擇一月份填寫，如需改填其他月份請先清除。
         </div>
 
@@ -311,6 +323,7 @@ $(document).ready(function(){
 
 var API = '../../src/store/KpiAs_API.php';
 var META = null, MATRIX = null, YEAR = null;
+var STALE = {}, STALE_INFO = null;   // 快照過期：{indicator_id:{month:{old,new,...}}}
 var canView = <?= $kpiPerms['canView'] ? 'true' : 'false' ?>;
 
 /* ---------- 共用 ---------- */
@@ -341,7 +354,8 @@ function loadMeta(cb){
         if (cb) cb();
     });
 }
-function loadMatrix(){
+function loadMatrix(afterScan){
+    if (!afterScan) { STALE = {}; STALE_INFO = null; $('#staleBar').hide().empty(); }
     NProgress.start();
     $.getJSON(API, {action:'matrix', year: YEAR}, function(res){
         NProgress.done();
@@ -352,7 +366,75 @@ function loadMatrix(){
         renderChart();
         var anyRecalc = res.rows.some(function(r){ return r.can_recalc; });
         $('#btnRecalcYear').toggle(anyRecalc);
+        if (!afterScan) runStaleScan();   // 畫面先出來，過期偵測在背景跑
     }).fail(function(x){ NProgress.done(); alert('載入失敗：' + (x.responseJSON && x.responseJSON.error || x.status)); });
+}
+
+/* ---------- 快照過期偵測（使用者要求 2026-09-14） ----------
+   自動指標的值是「快照」，來源資料事後補登不會重算也不會提示。這裡在畫面畫完之後
+   非同步比對「快照結算時間」與「來源資料表最後異動時間」，過期就自動重算，
+   並把真的變動的格子標上 ⟳、上方跳出提示條。已鎖定年度只標示、不寫入。 */
+function runStaleScan(){
+    var y = YEAR;
+    $.post(API, {action:'stale_scan', year:y}, function(res){
+        if (!res || !res.ok || y !== YEAR) return;
+        var list = (res.updated || []).concat(res.stale || []);
+        if (!list.length) return;
+        STALE = {};
+        list.forEach(function(x){
+            if (!STALE[x.indicator_id]) STALE[x.indicator_id] = {};
+            STALE[x.indicator_id][x.month] = x;
+        });
+        STALE_INFO = {list:list, can_write:+res.can_write === 1, truncated:!!res.truncated};
+        showStaleBar();
+        loadMatrix(true);        // 重新載入拿到重算後的新值，再套上 ⟳ 標記
+    }, 'json');
+}
+function staleCellTitle(x, canWrite){
+    var o = (x.old === null || x.old === undefined) ? '無資料' : x.old;
+    var n = (x.new === null || x.new === undefined) ? '無資料' : x.new;
+    var base = '原結算時間：' + (x.old_at || '').substr(0,16)
+             + '\n來源資料最後異動：' + (x.src_at || '').substr(0,16);
+    return canWrite
+        ? '快照已過期，已自動重算\n原值：' + o + '　→　新值：' + n + '\n' + base
+        : '快照已過期（此年度已鎖定，未自動寫入）\n目前快照：' + o
+          + '　→　依現行資料應為：' + n + '\n' + base
+          + '\n請由 KPI 管理者按「重算」更新';
+}
+function showStaleBar(){
+    if (!STALE_INFO) return;
+    var n = STALE_INFO.list.length;
+    var h = STALE_INFO.can_write
+        ? '<i class="fa fa-refresh"></i> 快照已過期：有 <b>' + n + '</b> 格的來源資料在上次結算之後又異動過，<b>已自動重算並更新</b>（標 ⟳ 的格子）。'
+        : '<i class="fa fa-exclamation-triangle"></i> 快照已過期：有 <b>' + n + '</b> 格與現行資料不符，但 ' + YEAR + ' 年度已鎖定，<b>未自動更新</b>，需由 KPI 管理者重算。';
+    if (STALE_INFO.truncated) h += ' <span style="color:#DD5138;">(本次僅處理前 60 格，重新整理可繼續)</span>';
+    h += '<span class="sb-link" onclick="openStaleList()">查看清單</span>';
+    h += '<span class="sb-link" onclick="hideStaleBar()">關閉</span>';
+    $('#staleBar').html(h).show();
+}
+function hideStaleBar(){ $('#staleBar').hide(); }
+function openStaleList(){
+    if (!STALE_INFO) return;
+    var h = '<div style="margin-bottom:6px;color:#8a6d45;font-size:12px;">'
+          + (STALE_INFO.can_write ? '下列儲存格的來源資料在上次結算之後又異動過，已自動重算：'
+                                  : '下列儲存格與現行資料不符（年度已鎖定，未自動更新）：')
+          + '</div>';
+    h += '<table class="kpi-table" style="width:100%;font-size:12px;"><thead><tr>'
+       + '<th>項次</th><th>指標</th><th>月份</th><th>原值</th><th>新值</th><th>分子/分母</th><th>原結算時間</th></tr></thead><tbody>';
+    STALE_INFO.list.forEach(function(x){
+        h += '<tr><td style="text-align:center;">' + x.item_no + '</td><td>' + esc(x.name) + '</td>'
+           + '<td style="text-align:center;">' + x.month + '月</td>'
+           + '<td style="text-align:center;color:#999;">' + (x.old === null ? '?' : x.old) + '</td>'
+           + '<td style="text-align:center;color:#C2601C;font-weight:bold;">' + (x.new === null ? '?' : x.new) + '</td>'
+           + '<td style="text-align:center;">' + (x.num === null || x.num === undefined ? '-' : (+x.num)) + ' / '
+           + (x.den === null || x.den === undefined ? '-' : (+x.den)) + '</td>'
+           + '<td style="text-align:center;">' + esc((x.old_at || '').substr(0,16)) + '</td></tr>';
+        if (x.shadowed) h += '<tr><td></td><td colspan="6" style="color:#8a6d45;">↑ 這一格畫面上顯示的是手動覆寫／手動填寫值，自動值變動不影響顯示</td></tr>';
+    });
+    h += '</tbody></table>';
+    $('#dtTitle').text('快照過期清單（' + YEAR + '年）');
+    $('#dtBody').html(h);
+    openMask('dtMask');
 }
 
 /* ---------- 表格渲染 ---------- */
@@ -385,6 +467,8 @@ function renderTable(){
                 if (c.src === 'override') txt += '<span class="kpi-ov-mark" title="手動覆寫：'+esc(c.ov_reason||'')+'">✱</span>';
             }
             if (c.attach > 0) txt += '<span class="kpi-attach-badge" title="佐證附件 '+c.attach+' 件">📎'+c.attach+'</span>';
+            var sx = STALE[r.indicator_id] && STALE[r.indicator_id][m];
+            if (sx) txt += '<span class="kpi-stale-mark" title="'+esc(staleCellTitle(sx, STALE_INFO && STALE_INFO.can_write))+'">⟳</span>';
             html += '<td class="'+cls+'" data-ri="'+ri+'" data-m="'+m+'">'+txt+'</td>';
         }
         var avgTxt, pavgTxt;
@@ -412,6 +496,11 @@ $(document).on('click', 'td.kpi-cell', function(e){
     var items = [];
     items.push({t:'<i class="fa fa-info-circle"></i> 數值明細', f:function(){ showDetail(ri,m); }});
     items.push({t:'<i class="fa fa-paperclip"></i> 附件（'+c.attach+'）', f:function(){ openAttach(r.indicator_id, m, r); }});
+    ((r.source_info && r.source_info.links) || []).forEach(function(ln){
+        if (!+ln.can || !ln.url) return;   // 沒權限的不出現在選單（網址後端本來就不回傳）
+        items.push({t:'<i class="fa fa-external-link"></i> 前往：'+esc(ln.label),
+                    f:function(){ window.open(ln.url, '_blank', 'noopener'); }});
+    });
     if (r.can_fill && !c.future && !c.locked_month) items.push({t:'<i class="fa fa-pencil"></i> 填寫/修改', f:function(){ openFill(ri,m); }});
     if (r.can_fill && c.src === 'manual') items.push({t:'<i class="fa fa-eraser"></i> 清除填寫', f:function(){ doClearFill(r.indicator_id, m); }});
     if (r.can_recalc && !c.future && c.src !== 'preview')
@@ -431,6 +520,19 @@ $(document).on('click', 'td.kpi-cell', function(e){
 });
 $(document).on('click', function(){ $('#cellMenu').hide(); });
 
+/* 資料來源頁面連結（要去哪一頁改真正的資料；沒權限只顯示灰字，後端不回網址） */
+function srcLinksHtml(si, lead){
+    var ls = (si && si.links) || [];
+    if (!ls.length) return '';
+    var h = '<div class="kpi-src-links" style="margin:4px 0;">' + esc(lead) + '：';
+    ls.forEach(function(ln, i){
+        if (i) h += '　';
+        h += (+ln.can && ln.url)
+           ? '<a href="' + esc(ln.url) + '" target="_blank" rel="noopener">' + esc(ln.label) + ' <i class="fa fa-external-link"></i></a>'
+           : '<span class="noperm" title="您沒有這一頁的權限，請洽管理者">' + esc(ln.label) + '（無權限）</span>';
+    });
+    return h + '</div>';
+}
 function showDetail(ri, m){
     var r = MATRIX.rows[ri], c = r.cells[m];
     var si = r.source_info || {};
@@ -441,6 +543,7 @@ function showDetail(ri, m){
     h += '資料來源：'+esc(si.label||(r.source_mode==='manual'?'手動填寫':'-'))
        + (si.page?'（'+esc(si.page)+'）':'')+'<br>';
     if (si.desc) h += '計算口徑：'+esc(si.desc)+'<br>';
+    h += srcLinksHtml(si, '要調整數值請到');
     h += '擔當者：'+esc(r.owner||'-')+'　｜　頻率：'+freqName(r.freq)+'<br>';
     h += '<hr style="border-color:#EADFC8;margin:6px 0;">';
     h += '顯示值：<b>'+(c.v===null?'?':fmtVal(c.v, r.value_type))+'</b>（來源：'+({auto:'自動計算(快照)',manual:'手動填寫',override:'手動覆寫',preview:'當月即時試算',none:'無資料'}[c.src]||c.src)+'）<br>';

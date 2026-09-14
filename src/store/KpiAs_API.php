@@ -202,7 +202,7 @@ case 'matrix': {
                 }
             }
         }
-        $srcInfo = kpi_as_source_info($db, $iy['source_mode'], $iy['calculator_key'], $params);
+        $srcInfo = kpi_as_source_info($db, $iy['source_mode'], $iy['calculator_key'], $params, $uid);
         $rows[] = [
             'indicator_id'=>$iid, 'item_no'=>(int)$iy['item_no'], 'name'=>$iy['name'],
             'clause'=>$iy['clause'], 'stat_desc'=>$iy['stat_desc'], 'freq'=>$iy['freq'],
@@ -246,6 +246,69 @@ case 'recalc': {
     kpi_as_log($db, $iid, $year, $month ?: null, 'recalc', null, null,
                implode(',', $done), '重新計算月份：' . (implode(',', $done) ?: '無'), $u);
     jout(['recalced'=>$done]);
+}
+
+/* ---------- 快照過期掃描（畫面載入後非同步呼叫；使用者要求 2026-09-14） ----------
+   自動指標的值是快照，來源資料事後補登不會重算也不會提示（例：4~7月教育訓練場次
+   是快照寫完之後才補建的，畫面就一直顯示「?」）。這裡比對「快照 computed_at」與
+   「來源資料表最後異動時間」，過期就重算，並回報哪幾格的值真的變了。
+   寫入條件比照既有懶惰結算＝系統自動維護，不看個人權限；但**已鎖定年度只標示不寫入**
+   （隔年2/1起僅管理者可動，見 kpi_as_year_locked）。 */
+case 'stale_scan': {
+    $year = max(2025, min($curY, (int)($_POST['year'] ?? $_GET['year'] ?? $curY)));
+    // 已鎖定年度（隔年2/1起）一律只標示、不自動寫入——管理者也一樣。
+    // 那是已經結案的品質紀錄，要不要跟著新資料改，必須由人按「重算」決定。
+    $canWrite = !kpi_as_year_locked($year);
+    $iys = kpi_load_iy($db, $year);
+    // 一次把整年的快照撈回來（原本逐格 SELECT＝每次開頁多兩百次來回）
+    $mvAll = [];
+    $stAll = $db->prepare("SELECT indicator_id, month, auto_value, override_value, manual_value, computed_at
+                           FROM kpi_as_monthly_value WHERE year=?");
+    $stAll->execute([$year]);
+    foreach ($stAll->fetchAll(PDO::FETCH_ASSOC) as $r) $mvAll[(int)$r['indicator_id']][(int)$r['month']] = $r;
+    $cap = 60;                 // 單次最多重算幾格，避免背景掃描把頁面拖慢
+    $checked = 0; $done = 0; $truncated = false;
+    $updated = [];             // 值真的變了（已重算並寫回）
+    $stale   = [];             // 已過期但沒寫回（鎖定年度）
+    foreach ($iys as $iy) {
+        if ($iy['source_mode'] !== 'auto' || empty($iy['calculator_key'])) continue;
+        $iid = (int)$iy['indicator_id'];
+        $params = kpi_as_params($iy['params_json']);
+        $mtime = kpi_as_tables_mtime($db, kpi_as_source_tables($db, (string)$iy['calculator_key'], $params));
+        if ($mtime === null) continue;   // 判不出來源異動時間就不做過期判定（不亂標）
+        foreach (kpi_as_months($iy['freq']) as $m) {
+            if (!kpi_month_ended($year, $m)) continue;   // 未結束月份本來就即時試算
+            $mv = $mvAll[$iid][$m] ?? null;
+            if (!$mv || $mv['computed_at'] === null) continue;  // 沒快照的交給既有懶惰結算
+            if (!kpi_as_snapshot_stale($mv['computed_at'], $mtime)) continue;
+            $checked++;
+            if ($done >= $cap) { $truncated = true; continue; }
+            $done++;
+            $old = $mv['auto_value'] === null ? null : round((float)$mv['auto_value'], 2);
+            if ($canWrite) {
+                $res = kpi_as_settle($db, $iy, $year, $m, $u);
+                $new = ($res && $res['value'] !== null) ? round((float)$res['value'], 2) : null;
+            } else {
+                $res = kpi_as_compute($db, (string)$iy['calculator_key'], $year, $m, $params);
+                $new = ($res && $res['value'] !== null) ? round((float)$res['value'], 2) : null;
+            }
+            if ($new === $old) continue;                 // 只是來源動過但結果一樣＝不吵使用者
+            $row = ['indicator_id'=>$iid, 'item_no'=>(int)$iy['item_no'], 'name'=>$iy['name'],
+                    'month'=>$m, 'old'=>$old, 'new'=>$new,
+                    'num'=>$res['num'] ?? null, 'den'=>$res['den'] ?? null,
+                    'old_at'=>$mv['computed_at'], 'src_at'=>$mtime,
+                    'shadowed'=>($mv['override_value'] !== null || $mv['manual_value'] !== null) ? 1 : 0];
+            if ($canWrite) {
+                $updated[] = $row;
+                kpi_as_log($db, $iid, $year, $m, 'auto_recalc', 'auto_value', $old, $new,
+                           '快照過期自動重算（來源最後異動 ' . $mtime . '，原快照 ' . $mv['computed_at'] . '）', $u);
+            } else {
+                $stale[] = $row;
+            }
+        }
+    }
+    jout(['year'=>$year, 'checked'=>$checked, 'recalced'=>$done, 'truncated'=>$truncated,
+          'can_write'=>$canWrite ? 1 : 0, 'updated'=>$updated, 'stale'=>$stale]);
 }
 
 /* ---------- 前端試算（不入快照；僅 fe=1 參數可調，管理者不受限） ---------- */
