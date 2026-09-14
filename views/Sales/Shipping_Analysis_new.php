@@ -8,6 +8,7 @@ if (!isset($_SESSION['userName'])) {
 include '../../src/common/DBConnection.php';
 include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
+require_once __DIR__ . '/../../src/common/ship_order_bind_lib.php';  // 出貨單↔訂單綁定的唯一實作（兩種來源都要讀，禁各頁自寫）
 
 $conn = new DBConnection();
 
@@ -337,12 +338,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_b
             // 已綁定出貨單（透過 bom_order_process_map → order_id → shipment_order_map + is_list）
             // 查詢方式1：透過 shipment_order_map 精確綁定的出貨單
             $se1 = $pdo->prepare(
-                'SELECT bopm.bom,'
+                'SELECT bopm.bom, bopm.order_id, ot.Order_oo,'
                 . ' il.IS_id, il.IS_number, il.Order_date, il.Client_name, il.Specification,'
                 . ' il.Qty, il.Unit_price, som.shipped_qty'
                 . ' FROM bom_order_process_map bopm'
                 . ' JOIN shipment_order_map som ON som.Order_id = bopm.order_id'
                 . ' JOIN is_list il ON il.IS_id = som.IS_id'
+                . ' LEFT JOIN order_track ot ON ot.Order_id = bopm.order_id'
                 . ' WHERE bopm.bom IN (' . $ph . ')'
                 . ' ORDER BY bopm.bom, il.Order_date DESC'
             );
@@ -356,11 +358,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_b
 
             // 查詢方式2：透過 is_list.Order_id 直接關聯（補充沒在方式1的）
             $se2 = $pdo->prepare(
-                'SELECT bopm.bom,'
+                'SELECT bopm.bom, bopm.order_id, ot.Order_oo,'
                 . ' il.IS_id, il.IS_number, il.Order_date, il.Client_name, il.Specification,'
                 . ' il.Qty, il.Unit_price, il.Qty AS shipped_qty'
                 . ' FROM bom_order_process_map bopm'
                 . ' JOIN is_list il ON il.Order_id = bopm.order_id'
+                . ' LEFT JOIN order_track ot ON ot.Order_id = bopm.order_id'
                 . ' WHERE bopm.bom IN (' . $ph . ')'
                 . ' ORDER BY bopm.bom, il.Order_date DESC'
             );
@@ -450,26 +453,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         )->execute([$bom, $order_id, $allocated_qty]);
 
         if ($is_id > 0) {
-            // 確認 order_id 存在於 order_list（shipment_order_map 有外鍵限制）
-            $ol_chk = $pdo->prepare('SELECT Order_id FROM order_list WHERE Order_id=? LIMIT 1');
-            $ol_chk->execute([$order_id]);
-            $in_order_list = $ol_chk->fetchColumn();
+            // 這裡原本先檢查 order_id 在不在 order_list，理由寫著「shipment_order_map 有外鍵限制」——
+            // 但實際的外鍵 fk_som_order_track 是指向 order_track（資料表註解寫成 order_list 是錯的）。
+            // 於是歷史訂單永遠過不了這道檢查，分配表一列都寫不進去，只留下 is_list.Order_id，
+            // 造成「在這頁綁的，ERP 成本分析的綁定跳窗看不到也解不掉」。
+            // 改成依真正的外鍵對象檢查，並一律走共用庫寫入。
+            $ot_chk = $pdo->prepare('SELECT Order_id FROM order_track WHERE Order_id=? LIMIT 1');
+            $ot_chk->execute([$order_id]);
+            if (!$ot_chk->fetchColumn()) throw new Exception('找不到訂單資料（order_track），無法建立綁定');
 
-            if ($in_order_list) {
-                // order_id 在 order_list 才能寫入 shipment_order_map
-                $chk = $pdo->prepare('SELECT id FROM shipment_order_map WHERE IS_id=? AND Order_id=? LIMIT 1');
-                $chk->execute([$is_id, $order_id]);
-                if (!$chk->fetchColumn()) {
-                    $pdo->prepare('INSERT INTO shipment_order_map (IS_id, Order_id, shipped_qty, created_at) VALUES (?, ?, ?, NOW())')
-                        ->execute([$is_id, $order_id, $allocated_qty]);
-                }
+            // 保留這張訂單既有的分配，只把本筆出貨加進去（不可整批覆寫，否則會洗掉別筆）
+            $keep = [];
+            foreach (sob_bound_map($pdo, $order_id) as $sid => $info) {
+                $keep[intval($sid)] = ['IS_id' => intval($sid), 'shipped_qty' => intval($info['qty'])];
             }
-            // 無論如何都更新 is_list.Order_id（此欄位無外鍵限制）
-            $pdo->prepare('UPDATE is_list SET Order_id=? WHERE IS_id=? AND (Order_id IS NULL OR Order_id=0)')
-                ->execute([$order_id, $is_id]);
+            $keep[$is_id] = ['IS_id' => $is_id, 'shipped_qty' => $allocated_qty];
+            sob_save_order_binds($pdo, $order_id, array_values($keep));
         }
         $pdo->commit();
-        echo json_encode(['success' => true, 'order_id' => $order_id, 'in_order_list' => isset($in_order_list) && $in_order_list ? true : false]);
+        echo json_encode(['success' => true, 'order_id' => $order_id, 'in_order_list' => true]);
     } catch(Exception $e) {
         if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -548,6 +550,100 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'unbin
             ->execute([$bom, $order_id]);
         echo json_encode(['success' => true]);
     } catch(Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── AJAX: 取這張訂單可綁定的出貨單清單（同料號全部列出，供一次勾選多筆）──
+// 比照 ERP 成本分析的綁定跳窗：原本這頁一次只能綁「目前這一筆」出貨單，
+// 同一張訂單有好幾次分批出貨時要一筆一筆重複操作。
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_shipments_for_order_bind') {
+    header('Content-Type: application/json');
+    try {
+        $pdo        = $conn->getPDO();
+        $product_id = trim($_POST['product_id'] ?? '');
+        $order_id   = intval($_POST['order_id'] ?? 0);
+        if ($product_id === '' || $order_id <= 0) throw new Exception('缺少參數');
+
+        $ord = $pdo->prepare('SELECT Order_oo, Client_name, Qty FROM order_track WHERE Order_id=? LIMIT 1');
+        $ord->execute([$order_id]);
+        $order = $ord->fetch(PDO::FETCH_ASSOC) ?: null;
+
+        $st = $pdo->prepare(
+            'SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date, "%Y-%m-%d") AS ship_date,'
+            . ' il.Qty, il.Unit_price, il.Client_name,'
+            . ' COALESCE(il.Specification, "") AS Specification,'
+            . ' COALESCE(il.Content, "") AS Content,'
+            . ' COALESCE(il.Note, "") AS Note,'
+            . ' COALESCE(ist.sale_type_name, "出貨") AS sale_type_name'
+            . ' FROM is_list il'
+            . ' LEFT JOIN is_sale_type ist ON il.sale_type = ist.sale_type_id'
+            . ' WHERE il.Product_id = ?'
+            . '   AND (ist.count_for_order IS NULL OR ist.count_for_order != 0)'
+            . ' ORDER BY il.Order_date DESC LIMIT 200'
+        );
+        $st->execute([$product_id]);
+        $ships = $st->fetchAll(PDO::FETCH_ASSOC);
+
+        $bound_map = sob_bound_map($pdo, $order_id);
+        $all_binds = sob_ship_bindings($pdo, array_column($ships, 'IS_id'));
+        foreach ($ships as &$s) {
+            $sid = intval($s['IS_id']);
+            $s['is_bound']    = isset($bound_map[$sid]) ? 1 : 0;
+            $s['shipped_qty'] = isset($bound_map[$sid]) ? $bound_map[$sid]['qty'] : intval($s['Qty']);
+            // 拆給別張訂單的分配也要看得到，否則會誤以為這張出貨還沒被用掉
+            $others = [];
+            foreach ($all_binds[$sid] ?? [] as $b) {
+                if (intval($b['order_id']) === $order_id) continue;
+                $others[] = ['order_oo' => $b['order_oo'], 'qty' => $b['qty']];
+            }
+            $s['other_binds'] = $others;
+        }
+        unset($s);
+        echo json_encode(['success' => true, 'ships' => $ships, 'order' => $order]);
+    } catch(Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── AJAX: 整批儲存「這張訂單」的出貨單綁定（勾選／取消勾選一次到位）──
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_shipment_order_bind') {
+    header('Content-Type: application/json');
+    try {
+        $pdo      = $conn->getPDO();
+        $order_id = intval($_POST['order_id'] ?? 0);
+        $ships    = json_decode(trim($_POST['ship_json'] ?? '[]'), true) ?: [];
+        if ($order_id <= 0) throw new Exception('缺少訂單ID');
+
+        $pdo->beginTransaction();
+        $res = sob_save_order_binds($pdo, $order_id, $ships);
+        $pdo->commit();
+        echo json_encode(['success' => true] + $res);
+    } catch(Exception $e) {
+        if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── AJAX: 解除單一「出貨單 ↔ 訂單」綁定 ──
+// 本頁原本只有「解除 BOM↔訂單」，綁錯出貨單時完全沒有解除的辦法。
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'unbind_shipment_order') {
+    header('Content-Type: application/json');
+    try {
+        $pdo      = $conn->getPDO();
+        $is_id    = intval($_POST['is_id'] ?? 0);
+        $order_id = intval($_POST['order_id'] ?? 0);
+        if ($is_id <= 0 || $order_id <= 0) throw new Exception('參數不足');
+
+        $pdo->beginTransaction();
+        $hit = sob_unbind($pdo, $is_id, $order_id);
+        $pdo->commit();
+        echo json_encode(['success' => true, 'removed' => $hit]);
+    } catch(Exception $e) {
+        if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
     exit;
@@ -1072,9 +1168,22 @@ try { $conn->getPDO()->query("SELECT 1 FROM bom_order_process_map LIMIT 1"); $_q
 try { $conn->getPDO()->query("SELECT 1 FROM shipment_order_map LIMIT 1"); $_q_has_som     = true; } catch(Exception $_qe) {}
 
 // 依資料表存在狀況決定子查詢
+// 綁定有兩種來源：is_list.Order_id（舊式直接綁定）與 shipment_order_map（可拆量的分配表）。
+// 兩種都要認：只認 is_list.Order_id 的話，在 ERP 成本分析頁綁好的（只寫分配表）
+// 在這張清單上會一律顯示「未綁定」，使用者會以為綁定沒成功而重複操作。
+//
+// 刻意拆成兩個子查詢再於 PHP 合併，不要寫成一個帶 OR 的子查詢：
+// 「WHERE bopm.order_id = isl.Order_id OR bopm.order_id IN (...)」會讓
+// bom_order_process_map 用不到索引，實測同一個一年區間從 22ms 變成 16,656ms（慢 750 倍）。
 $_q_bom_sub = $_q_has_bom_map
     ? "(SELECT GROUP_CONCAT(DISTINCT bopm.bom ORDER BY bopm.bom SEPARATOR ', ')
          FROM bom_order_process_map bopm WHERE bopm.order_id = isl.Order_id)"
+    : "NULL";
+$_q_bom_sub_som = ($_q_has_bom_map && $_q_has_som)
+    ? "(SELECT GROUP_CONCAT(DISTINCT bopm2.bom ORDER BY bopm2.bom SEPARATOR ', ')
+         FROM shipment_order_map som3
+         JOIN bom_order_process_map bopm2 ON bopm2.order_id = som3.Order_id
+        WHERE som3.IS_id = isl.IS_id)"
     : "NULL";
 $_q_som_sub = $_q_has_som
     ? "(SELECT COUNT(*) FROM shipment_order_map som WHERE som.IS_id = isl.IS_id)"
@@ -1089,6 +1198,7 @@ $sql .= " isl.Warehouse, isl.Note, isl.sale_type, isl.billing_month_override, is
 $sql .= " ds.Spec_No AS d_spec_no,";
 $sql .= " ist.sale_type_name, ist.is_count, ist.exclude_anomaly, ist.exclude_top10,";
 $sql .= " ($_q_bom_sub) AS bom_list,";
+$sql .= " ($_q_bom_sub_som) AS bom_list_som,";
 $sql .= " ($_q_som_sub) AS is_shipment_mapped,";
 $sql .= " cl.settlement_mode, cl.settlement_day";
 $sql .= " FROM is_list isl";
@@ -1112,6 +1222,19 @@ foreach ($rows as &$_r) {
     $_r['Client_name_raw'] = $_r['Client_name'];
     $_r['Client_name']     = ($_r['Client_name_display'] !== null && $_r['Client_name_display'] !== '')
                              ? $_r['Client_name_display'] : $_r['Client_name'];
+
+    // 兩種綁定來源查出來的 BOM 合併成同一欄（去重、排序），下游的清單圖示／CSV／列印
+    // 全部沿用 bom_list 一欄即可，不必逐個呼叫端各判斷一次。
+    $_boms = [];
+    foreach ([$_r['bom_list'] ?? '', $_r['bom_list_som'] ?? ''] as $_bl) {
+        if ($_bl === '' || $_bl === null) continue;
+        foreach (explode(',', $_bl) as $_b) {
+            $_b = trim($_b);
+            if ($_b !== '') $_boms[$_b] = true;
+        }
+    }
+    if ($_boms) { $_k = array_keys($_boms); sort($_k); $_r['bom_list'] = implode(', ', $_k); }
+    unset($_r['bom_list_som']);
 }
 unset($_r);
 
@@ -2995,6 +3118,41 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                     <span id="cbind_sel_info" class="text-muted" style="float:left; font-size:12px; line-height:32px;"></span>
                     <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
                     <button type="button" class="btn btn-primary" id="cbind_apply"><i class="fa fa-check"></i> 套用勾選項目</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 一次勾選多筆出貨單 Modal（疊在 BOM 設定跳窗之上，故 z-index 要拉高） -->
+    <div class="modal fade" id="multiShipModal" tabindex="-1" role="dialog" style="z-index:10600;">
+        <div class="modal-dialog" role="document" style="width:900px; max-width:96%;">
+            <div class="modal-content">
+                <div class="modal-header" style="background:#1e6b3a; color:#fff; border-radius:4px 4px 0 0; padding:10px 15px;">
+                    <button type="button" class="close" data-dismiss="modal" style="color:#fff; opacity:.8;"><span>&times;</span></button>
+                    <h4 class="modal-title" style="font-size:14px;">
+                        <i class="fa fa-truck"></i> 出貨單綁定：<span id="ms_order_no"></span>
+                    </h4>
+                </div>
+                <div class="modal-body" style="padding:10px 15px;">
+                    <div style="background:#fdf6ec; border:1px solid #f0dcc0; border-radius:4px; padding:6px 10px; margin-bottom:8px; font-size:12px;">
+                        訂單數量：<strong id="ms_order_qty">-</strong>
+                        &nbsp;已綁定出貨：<strong id="ms_total_qty" style="color:gray;">0</strong> 件
+                        &nbsp;<span id="ms_warn" style="color:#DD5138; font-size:11px; display:none;"></span>
+                        <span class="pull-right">
+                            <button type="button" class="btn btn-xs btn-default" onclick="msSelectAll(true)">全選</button>
+                            <button type="button" class="btn btn-xs btn-default" onclick="msSelectAll(false)">取消全選</button>
+                        </span>
+                    </div>
+                    <div id="ms_ship_list" style="border:1px solid #dee2e6; border-radius:4px; max-height:400px; overflow-y:auto;"></div>
+                    <div style="margin-top:8px; font-size:11px; color:#999;">
+                        <i class="fa fa-info-circle"></i>
+                        勾選後可調整「綁定出貨量」（預設帶入出貨單全量）；取消勾選再儲存＝解除該筆綁定。
+                        一張出貨單可以分配給多張訂單，已分配給別張訂單的會標在單號下方。
+                    </div>
+                </div>
+                <div class="modal-footer" style="padding:8px 15px;">
+                    <button type="button" class="btn btn-success" onclick="msSave()"><i class="fa fa-save"></i> 儲存綁定</button>
+                    <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
                 </div>
             </div>
         </div>
@@ -6326,21 +6484,36 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
 
             // 已綁定出貨單
             var bShips = b.bound_shipments || [];
+            // 一次勾選多筆出貨單：訂單一旦確定，就用跳窗把同料號的出貨單全部列出來勾
+            var multiBtn = '';
+            if (b.bound_orders && b.bound_orders.length) {
+                multiBtn = ' <button type="button" class="btn btn-xs btn-primary btn-open-multi-ship"'
+                    + ' data-order-id="' + (b.bound_orders[0].order_id || '') + '"'
+                    + ' style="margin-left:6px;"><i class="fa fa-list-ul"></i> 一次勾選多筆出貨單</button>';
+            }
             if (bShips.length) {
-                html += '<strong style="font-size:12px;"><i class="fa fa-truck text-primary"></i> 已關聯出貨單</strong>'
-                    + '<table class="table table-condensed table-bordered" style="font-size:11px; margin-top:4px; margin-bottom:6px;"><thead style="background:#d6eaf8;"><tr><th>出貨單號</th><th>規格</th><th>出貨數</th><th>單價</th><th>日期</th></tr></thead><tbody>';
+                html += '<strong style="font-size:12px;"><i class="fa fa-truck text-primary"></i> 已關聯出貨單</strong>' + multiBtn
+                    + '<table class="table table-condensed table-bordered" style="font-size:11px; margin-top:4px; margin-bottom:6px;"><thead style="background:#d6eaf8;"><tr><th>出貨單號</th><th>訂單號</th><th>規格</th><th>出貨數</th><th>單價</th><th>日期</th><th></th></tr></thead><tbody>';
                 bShips.forEach(function(s) {
                     html += '<tr>'
                         + '<td><strong>' + $('<span>').text(s.IS_number || '').html() + '</strong></td>'
+                        + '<td style="font-size:10px;">' + $('<span>').text(s.Order_oo || '').html() + '</td>'
                         + '<td style="font-size:10px;">' + $('<span>').text(s.Specification || '').html() + '</td>'
                         + '<td class="text-right">' + (s.shipped_qty || s.Qty || '') + '</td>'
                         + '<td class="text-right">' + (s.Unit_price > 0 ? 'NT$' + Number(s.Unit_price).toLocaleString() : '-') + '</td>'
                         + '<td>' + (s.Order_date || '') + '</td>'
+                        + '<td><button type="button" class="btn btn-xs btn-danger btn-unbind-ship"'
+                        + ' data-is-id="' + (s.IS_id || '') + '"'
+                        + ' data-order-id="' + (s.order_id || '') + '"'
+                        + ' data-is-number="' + $('<span>').text(s.IS_number || '').html() + '"'
+                        + ' data-order-oo="' + $('<span>').text(s.Order_oo || '').html() + '"'
+                        + ' title="解除這張出貨單與這張訂單的綁定">'
+                        + '<i class="fa fa-chain-broken"></i> 解除</button></td>'
                         + '</tr>';
                 });
                 html += '</tbody></table>';
             } else {
-                html += '<div class="text-muted" style="font-size:11px; margin-bottom:4px; color:#e67e22;"><i class="fa fa-truck"></i> 尚未關聯任何出貨單</div>';
+                html += '<div class="text-muted" style="font-size:11px; margin-bottom:4px; color:#e67e22;"><i class="fa fa-truck"></i> 尚未關聯任何出貨單</div>' + multiBtn;
             }
             html += '</div></div>';
 
@@ -6538,6 +6711,186 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                 } else { showToast('解除失敗：' + res.message, 'danger'); }
             }, 'json');
         });
+
+        // ── 出貨單綁定：解除單筆 ───────────────────────────────
+        // 重新載入 BOM 跳窗內容（解除／整批綁定後共用，避免各自寫一份refresh）
+        function reloadBomModal(keepBom) {
+            var isId = $('#bom_is_id').val();
+            if (!isId) return;
+            $.post('', { action: 'get_bom_list_for_is', is_id: isId }, function(res2) {
+                if (!res2.success) return;
+                _bomList = res2.boms || [];
+                if (res2.is_info) _bomIsInfo = res2.is_info;
+                renderBomIsInfo();
+                renderBomList();
+                _selectedBom = null;
+                _bomList.forEach(function(bx) { if (bx.bom === keepBom) _selectedBom = bx; });
+                if (_selectedBom) renderBomDetail(_selectedBom);
+                // 主清單那一列的 BOM 欄位也要跟著更新，否則畫面上還是舊的綁定狀態
+                var tbl = $('#shippingTable').DataTable();
+                var idx = tbl.rows().eq(0).filter(function(ri) { return tbl.cell(ri, 0).data() == isId; });
+                if (idx.length > 0) {
+                    var rd = tbl.row(idx[0]).data();
+                    rd.bom_list = _bomList.filter(function(bx){ return bx.is_bound; }).map(function(bx){ return bx.bom; }).join(', ');
+                    tbl.row(idx[0]).data(rd).draw(false);
+                }
+            }, 'json');
+        }
+
+        $(document).on('click', '.btn-unbind-ship', function() {
+            var isId     = $(this).data('is-id');
+            var orderId  = $(this).data('order-id');
+            var isNumber = $(this).data('is-number');
+            var orderOo  = $(this).data('order-oo');
+            if (!isId || !orderId) { showToast('缺少參數，請重新整理後再試', 'danger'); return; }
+            if (!confirm('確定解除出貨單 ' + isNumber + ' 與訂單 ' + orderOo + ' 的綁定？\n\n只解除這一筆對應關係，出貨資料本身不會被刪除。')) return;
+            var keepBom = _selectedBom ? _selectedBom.bom : '';
+            $.post('', { action: 'unbind_shipment_order', is_id: isId, order_id: orderId }, function(res) {
+                if (res.success) {
+                    showToast(res.removed ? '已解除綁定' : '這筆綁定已不存在，畫面已更新', res.removed ? 'success' : 'info');
+                    reloadBomModal(keepBom);
+                } else { showToast('解除失敗：' + (res.message || ''), 'danger'); }
+            }, 'json');
+        });
+
+        // ── 出貨單綁定：一次勾選多筆 ───────────────────────────
+        var _msOrderId = 0, _msOrderQty = 0, _msKeepBom = '';
+
+        // 這個跳窗是疊在「BOM 設定」跳窗之上的。Bootstrap 3 不處理堆疊：
+        // 第二層的遮罩仍是 1040，會跑到第一層跳窗後面；關掉第二層時又會把
+        // body 的 modal-open 移掉，害第一層變成不能捲動。兩件都要自己補。
+        $('#multiShipModal').on('show.bs.modal', function() {
+            var z = 10600;
+            setTimeout(function() {
+                $('.modal-backdrop').not('.ms-stacked').addClass('ms-stacked').css('z-index', z - 10);
+            }, 0);
+        }).on('hidden.bs.modal', function() {
+            $('.modal-backdrop.ms-stacked').removeClass('ms-stacked');
+            if ($('.modal.in').length) $('body').addClass('modal-open');
+        });
+
+        $(document).on('click', '.btn-open-multi-ship', function() {
+            var orderId = parseInt($(this).data('order-id')) || 0;
+            var pid     = _bomIsInfo ? (_bomIsInfo.Product_id || '') : '';
+            if (!orderId) { showToast('這個 BOM 尚未綁定訂單，請先綁定訂單', 'info'); return; }
+            if (!pid)     { showToast('取不到料號，請重新開啟此跳窗', 'danger'); return; }
+            _msOrderId = orderId;
+            _msKeepBom = _selectedBom ? _selectedBom.bom : '';
+            $('#ms_ship_list').html('<div style="padding:20px;text-align:center;color:#999;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>');
+            $('#ms_order_no').text('');
+            $('#ms_order_qty').text('-');
+            $('#ms_total_qty').text('0').css('color', 'gray');
+            $('#ms_warn').hide();
+            $('#multiShipModal').modal('show');
+            $.post('', { action: 'get_shipments_for_order_bind', product_id: pid, order_id: orderId }, function(res) {
+                if (!res.success) {
+                    $('#ms_ship_list').html('<div style="padding:12px;color:red;">載入失敗：' + $('<span>').text(res.message || '').html() + '</div>');
+                    return;
+                }
+                _msOrderQty = res.order ? (parseInt(res.order.Qty) || 0) : 0;
+                $('#ms_order_no').text(res.order ? (res.order.Order_oo || '') : '');
+                $('#ms_order_qty').text(_msOrderQty || '-');
+                msRenderShipList(res.ships || []);
+            }, 'json');
+        });
+
+        function msRenderShipList(ships) {
+            if (!ships.length) {
+                $('#ms_ship_list').html('<div style="padding:12px;text-align:center;color:#999;">此料號沒有出貨記錄。</div>');
+                return;
+            }
+            var esc = function(v) { return $('<span>').text(v == null ? '' : v).html(); };
+            var html = '<table class="table table-condensed table-bordered" style="margin-bottom:0; font-size:12px;">'
+                + '<thead><tr style="background:#f5f5f5;">'
+                + '<th width="28" class="text-center">✓</th>'
+                + '<th style="white-space:nowrap;">出貨單號</th>'
+                + '<th style="white-space:nowrap;">日期</th>'
+                + '<th>規格／備註</th>'
+                + '<th width="52" class="text-center">出貨量</th>'
+                + '<th width="62" class="text-center">單價</th>'
+                + '<th width="80" class="text-center">綁定出貨量</th>'
+                + '</tr></thead><tbody>';
+            ships.forEach(function(s) {
+                var shipQty = parseInt(s.Qty) || 0;
+                var bindQty = s.is_bound ? (parseInt(s.shipped_qty) || shipQty) : '';
+                // 拆給別張訂單的分配一併標出來，否則會誤以為這張出貨還沒被用掉
+                var otherTxt = '';
+                (s.other_binds || []).forEach(function(o) {
+                    otherTxt += '<div style="color:#b06a1e; font-size:10px; white-space:nowrap;">'
+                        + '<i class="fa fa-link"></i> 已分配 ' + (parseInt(o.qty) || 0) + ' 件給 ' + esc(o.order_oo)
+                        + '</div>';
+                });
+                var specParts = [s.Specification, s.Content].filter(function(v) { return v && v.trim(); });
+                html += '<tr style="' + (s.is_bound ? 'background:#f0fff4;' : '') + '">'
+                    + '<td class="text-center"><input type="checkbox" class="ms-cb" value="' + (parseInt(s.IS_id) || 0) + '"'
+                    + (s.is_bound ? ' checked' : '') + ' data-ship-qty="' + shipQty + '"></td>'
+                    + '<td style="white-space:nowrap;"><strong>' + esc(s.IS_number) + '</strong>' + otherTxt + '</td>'
+                    + '<td style="white-space:nowrap;">' + esc(s.ship_date) + '</td>'
+                    + '<td style="font-size:11px; color:#666; word-break:break-word;">' + esc(specParts.join(' / ') || '–')
+                    + (s.Note ? '<div style="color:#888; font-size:10px;">' + esc(s.Note) + '</div>' : '') + '</td>'
+                    + '<td class="text-center">' + shipQty + '</td>'
+                    + '<td class="text-center" style="white-space:nowrap;">' + (s.Unit_price > 0 ? 'NT$' + Number(s.Unit_price).toLocaleString() : '-') + '</td>'
+                    + '<td><input type="text" inputmode="numeric" class="form-control input-sm ms-qty" value="' + bindQty
+                    + '" style="height:22px; padding:2px 4px; width:66px;" placeholder="數量" data-eg-skip></td>'
+                    + '</tr>';
+            });
+            html += '</tbody></table>';
+            $('#ms_ship_list').html(html);
+            msUpdateTotal();
+        }
+
+        $(document).on('change', '.ms-cb', function() {
+            var $row = $(this).closest('tr');
+            $row.find('.ms-qty').val($(this).is(':checked') ? (parseInt($(this).data('ship-qty')) || 0) : '');
+            msUpdateTotal();
+        });
+        $(document).on('input', '.ms-qty', msUpdateTotal);
+
+        function msSelectAll(checked) {
+            $('#ms_ship_list .ms-cb').each(function() {
+                $(this).prop('checked', checked);
+                $(this).closest('tr').find('.ms-qty').val(checked ? (parseInt($(this).data('ship-qty')) || 0) : '');
+            });
+            msUpdateTotal();
+        }
+
+        function msUpdateTotal() {
+            var total = 0;
+            $('#ms_ship_list .ms-cb:checked').each(function() {
+                total += parseInt($(this).closest('tr').find('.ms-qty').val()) || 0;
+            });
+            var color = total > _msOrderQty ? '#DD5138' : (total === _msOrderQty && total > 0 ? '#1e6b3a' : 'gray');
+            $('#ms_total_qty').text(total).css('color', color);
+            if (_msOrderQty > 0 && total > _msOrderQty) {
+                $('#ms_warn').text('⚠ 綁定量超過訂單數量 ' + _msOrderQty).show();
+            } else if (_msOrderQty > 0 && total > 0 && total < _msOrderQty) {
+                $('#ms_warn').text('尚有 ' + (_msOrderQty - total) + ' 件未綁定').show();
+            } else { $('#ms_warn').hide(); }
+        }
+
+        function msSave() {
+            var ships = [];
+            var bad   = false;
+            $('#ms_ship_list .ms-cb:checked').each(function() {
+                var isId = parseInt($(this).val()) || 0;
+                var qty  = parseInt($(this).closest('tr').find('.ms-qty').val()) || 0;
+                if (isId > 0 && qty <= 0) bad = true;
+                if (isId > 0 && qty > 0) ships.push({ IS_id: isId, shipped_qty: qty });
+            });
+            if (bad) { showToast('有勾選的出貨單沒有填綁定出貨量', 'danger'); return; }
+            if (!ships.length && !confirm('沒有勾選任何出貨單，這會把這張訂單目前的出貨綁定全部解除。\n\n確定要繼續嗎？')) return;
+            $.post('', {
+                action:    'save_shipment_order_bind',
+                order_id:  _msOrderId,
+                ship_json: JSON.stringify(ships)
+            }, function(res) {
+                if (res.success) {
+                    showToast('已儲存綁定（共 ' + res.bound + ' 筆，合計 ' + res.total_qty + ' 件）', 'success');
+                    $('#multiShipModal').modal('hide');
+                    reloadBomModal(_msKeepBom);
+                } else { showToast('儲存失敗：' + (res.message || ''), 'danger'); }
+            }, 'json');
+        }
 
         // ── 列印 PDF 報表 ──
         function printAnalysisReport(includeDetail) {

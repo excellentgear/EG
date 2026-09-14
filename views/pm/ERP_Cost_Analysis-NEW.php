@@ -10,6 +10,7 @@ if (!isset($_SESSION['userName'])) {
 include '../../src/common/DBConnection.php';
 include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
+require_once __DIR__ . '/../../src/common/ship_order_bind_lib.php';  // 出貨單↔訂單綁定的唯一實作（兩種來源都要讀，禁各頁自寫）
 
 // ── 圖面獨立視窗模式 ──────────────────────────────────────
 if (isset($_GET['viewer'])) {
@@ -1950,12 +1951,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if (!$part_no || !$order_id) { echo json_encode(['success' => false, 'message' => '缺少參數']); exit; }
         try {
             // 取已綁定到此訂單的出貨單
-            $st_bound = $pdo->prepare("SELECT IS_id, shipped_qty FROM shipment_order_map WHERE Order_id = ?");
-            $st_bound->execute([$order_id]);
-            $bound_map = [];
-            foreach ($st_bound->fetchAll(PDO::FETCH_ASSOC) as $b) {
-                $bound_map[intval($b['IS_id'])] = intval($b['shipped_qty']);
-            }
+            // 一定要兩種來源都讀（分配表＋is_list.Order_id 的舊式直接綁定）：
+            // 只讀分配表的話，舊式綁定會變成「明細顯示已綁定、跳窗卻一片空白」，
+            // 而且因為跳窗看不到就勾不掉，那筆綁定會永遠解不掉。
+            $bound_map = sob_bound_map($pdo, $order_id);
 
             // 取此料號所有出貨單（排除 is_count=0 備註類型，不應列入成本計算）
             $st_ship = $pdo->prepare("
@@ -1977,10 +1976,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ");
             $st_ship->execute([$part_no]);
             $ships = $st_ship->fetchAll(PDO::FETCH_ASSOC);
+            // 每張出貨單被分配到哪幾張訂單：一張出貨可以拆給多張訂單，
+            // 使用者要求「每一筆分配都要追查得到」，所以把別張訂單的分配一併帶回前端顯示。
+            $all_binds = sob_ship_bindings($pdo, array_column($ships, 'IS_id'));
             foreach ($ships as &$s) {
                 $sid = intval($s['IS_id']);
                 $s['is_bound']    = isset($bound_map[$sid]) ? 1 : 0;
-                $s['shipped_qty'] = $bound_map[$sid] ?? $s['Qty'];
+                $s['shipped_qty'] = isset($bound_map[$sid]) ? $bound_map[$sid]['qty'] : $s['Qty'];
+                $others = [];
+                foreach ($all_binds[$sid] ?? [] as $b) {
+                    if (intval($b['order_id']) === $order_id) continue;
+                    $others[] = ['order_oo' => $b['order_oo'], 'qty' => $b['qty']];
+                }
+                $s['other_binds'] = $others;
             }
             unset($s);
             echo json_encode(['success' => true, 'ships' => $ships]);
@@ -1996,15 +2004,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $ships = json_decode($ship_json, true) ?: [];
         try {
             $pdo->beginTransaction();
-            $pdo->prepare("DELETE FROM shipment_order_map WHERE Order_id = ?")->execute([$order_id]);
-            if (!empty($ships)) {
-                $ins = $pdo->prepare("INSERT INTO shipment_order_map (IS_id, Order_id, shipped_qty) VALUES (?, ?, ?)");
-                foreach ($ships as $s) {
-                    $is_id = intval($s['IS_id']      ?? 0);
-                    $qty   = intval($s['shipped_qty'] ?? 0);
-                    if ($is_id > 0 && $qty > 0) $ins->execute([$is_id, $order_id, $qty]);
-                }
-            }
+            // 走共用庫：分配表與 is_list.Order_id 一起處理。
+            // 取消勾選時務必連舊式直接綁定一起解掉，否則畫面上會出現「怎麼取消都取消不了」。
+            sob_save_order_binds($pdo, $order_id, $ships);
             // 自動結案：出貨總量 >= 訂單數量 → 結案；已結案但出貨不足 → 取消結案
             $stOrd = $pdo->prepare("SELECT Qty, Order_status FROM order_track WHERE Order_id = ?");
             $stOrd->execute([$order_id]);
@@ -5239,7 +5241,15 @@ function renderBindShipList(ships) {
         var stBadge = s.sale_type_name && s.sale_type_name !== '出貨'
             ? '<span style="display:inline-block;background:#e3f2fd;color:#1565c0;border-radius:3px;padding:0 5px;font-size:10px;font-weight:600;margin-right:4px;">' + esc(s.sale_type_name) + '</span>'
             : '';
-        html += '<td style="white-space:nowrap;">' + stBadge + esc(s.IS_number || '') + '</td>';
+        // 一張出貨可拆給多張訂單，把「已分配給別張訂單」直接標在單號下方，
+        // 否則使用者只看得到本張訂單的分配，會誤以為這張出貨還沒被用掉。
+        var otherTxt = '';
+        (s.other_binds || []).forEach(function(o) {
+            otherTxt += '<div style="color:#b06a1e;font-size:10px;white-space:nowrap;">'
+                     +  '<i class="fa fa-link"></i> 已分配 ' + (parseInt(o.qty) || 0) + ' 件給 ' + esc(o.order_oo || '')
+                     +  '</div>';
+        });
+        html += '<td style="white-space:nowrap;">' + stBadge + esc(s.IS_number || '') + otherTxt + '</td>';
         html += '<td style="white-space:nowrap;">' + esc(s.ship_date || '') + '</td>';
         var specParts = [s.Specification, s.Content].filter(function(v){ return v && v.trim(); });
         var specText  = specParts.join(' / ') || '–';
