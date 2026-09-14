@@ -15600,10 +15600,11 @@ echo "</script>\n";
 
                                     <!-- 在表格上方添加分頁控制項 -->
                                     <div class="pagination-controls">
-                                        <div class="pagination-left-group" style="display: flex; align-items: center; gap: 15px;">
-                                            <div class="export-buttons" style="margin-right: 15px; display: inline-block; vertical-align: middle;">
-                                                <button id="btn-export-csv" class="btn btn-info btn-sm" title="將目前篩選結果匯出為CSV">轉 CSV</button>
-                                                <button id="btn-export-jpg" class="btn btn-info btn-sm" title="將目前表格畫面匯出為JPG">轉 JPG</button>
+                                        <div class="pagination-left-group" style="display: flex; align-items: center; gap: 10px;">
+                                            <!-- 轉 CSV／轉 JPG 改用 btn-xs（與本列其他按鈕同一尺寸），讓整列塞得下不必出現捲軸 -->
+                                            <div class="export-buttons" style="margin-right: 6px; display: inline-block; vertical-align: middle;">
+                                                <button id="btn-export-csv" class="btn btn-info btn-xs" title="將目前篩選結果匯出為CSV">轉 CSV</button>
+                                                <button id="btn-export-jpg" class="btn btn-info btn-xs" title="將目前表格畫面匯出為JPG">轉 JPG</button>
                                             </div>
                                             <div class="pagination-info" id="pagination-info">
                                                 顯示 0 筆中的 0 筆，第 0/0 頁
