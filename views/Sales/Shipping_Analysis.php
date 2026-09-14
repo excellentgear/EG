@@ -8,6 +8,7 @@ if (!isset($_SESSION['userName'])) {
 include '../../src/common/DBConnection.php';
 include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
+require_once __DIR__ . '/../../src/common/ship_order_bind_lib.php';  // 出貨單↔訂單綁定的唯一實作（兩種來源都要讀，禁各頁自寫）
 
 $conn = new DBConnection();
 
@@ -287,12 +288,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_b
             // 已綁定出貨單（透過 bom_order_process_map → order_id → shipment_order_map + is_list）
             // 查詢方式1：透過 shipment_order_map 精確綁定的出貨單
             $se1 = $pdo->prepare(
-                'SELECT bopm.bom,'
+                'SELECT bopm.bom, bopm.order_id, ot2.Order_oo,'
                 . ' il.IS_id, il.IS_number, il.Order_date, il.Client_name, il.Specification,'
                 . ' il.Qty, il.Unit_price, som.shipped_qty'
                 . ' FROM bom_order_process_map bopm'
                 . ' JOIN shipment_order_map som ON som.Order_id = bopm.order_id'
                 . ' JOIN is_list il ON il.IS_id = som.IS_id'
+                . ' LEFT JOIN order_track ot2 ON ot2.Order_id = bopm.order_id'
                 . ' WHERE bopm.bom IN (' . $ph . ')'
                 . ' ORDER BY bopm.bom, il.Order_date DESC'
             );
@@ -306,11 +308,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'get_b
 
             // 查詢方式2：透過 is_list.Order_id 直接關聯（補充沒在方式1的）
             $se2 = $pdo->prepare(
-                'SELECT bopm.bom,'
+                'SELECT bopm.bom, bopm.order_id, ot2.Order_oo,'
                 . ' il.IS_id, il.IS_number, il.Order_date, il.Client_name, il.Specification,'
                 . ' il.Qty, il.Unit_price, il.Qty AS shipped_qty'
                 . ' FROM bom_order_process_map bopm'
                 . ' JOIN is_list il ON il.Order_id = bopm.order_id'
+                . ' LEFT JOIN order_track ot2 ON ot2.Order_id = bopm.order_id'
                 . ' WHERE bopm.bom IN (' . $ph . ')'
                 . ' ORDER BY bopm.bom, il.Order_date DESC'
             );
@@ -400,26 +403,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         )->execute([$bom, $order_id, $allocated_qty]);
 
         if ($is_id > 0) {
-            // 確認 order_id 存在於 order_list（shipment_order_map 有外鍵限制）
-            $ol_chk = $pdo->prepare('SELECT Order_id FROM order_list WHERE Order_id=? LIMIT 1');
-            $ol_chk->execute([$order_id]);
-            $in_order_list = $ol_chk->fetchColumn();
+            // 這裡原本先檢查 order_id 在不在 order_list，理由寫著「shipment_order_map 有外鍵限制」——
+            // 但真正的外鍵 fk_som_order_track 是指向 order_track（資料表註解寫成 order_list 是錯的）。
+            // 歷史訂單因此永遠過不了這道檢查，分配表一列都寫不進去，只留下 is_list.Order_id。
+            $ot_chk = $pdo->prepare('SELECT Order_id FROM order_track WHERE Order_id=? LIMIT 1');
+            $ot_chk->execute([$order_id]);
+            if (!$ot_chk->fetchColumn()) throw new Exception('找不到訂單資料（order_track），無法建立綁定');
 
-            if ($in_order_list) {
-                // order_id 在 order_list 才能寫入 shipment_order_map
-                $chk = $pdo->prepare('SELECT id FROM shipment_order_map WHERE IS_id=? AND Order_id=? LIMIT 1');
-                $chk->execute([$is_id, $order_id]);
-                if (!$chk->fetchColumn()) {
-                    $pdo->prepare('INSERT INTO shipment_order_map (IS_id, Order_id, shipped_qty, created_at) VALUES (?, ?, ?, NOW())')
-                        ->execute([$is_id, $order_id, $allocated_qty]);
-                }
+            // 保留這張訂單既有的分配，只把本筆出貨加進去（不可整批覆寫，否則會洗掉別筆）
+            $keep = [];
+            foreach (sob_bound_map($pdo, $order_id) as $sid => $info) {
+                $keep[intval($sid)] = ['IS_id' => intval($sid), 'shipped_qty' => intval($info['qty'])];
             }
-            // 無論如何都更新 is_list.Order_id（此欄位無外鍵限制）
-            $pdo->prepare('UPDATE is_list SET Order_id=? WHERE IS_id=? AND (Order_id IS NULL OR Order_id=0)')
-                ->execute([$order_id, $is_id]);
+            $keep[$is_id] = ['IS_id' => $is_id, 'shipped_qty' => $allocated_qty];
+            sob_save_order_binds($pdo, $order_id, array_values($keep));
         }
         $pdo->commit();
-        echo json_encode(['success' => true, 'order_id' => $order_id, 'in_order_list' => isset($in_order_list) && $in_order_list ? true : false]);
+        echo json_encode(['success' => true, 'order_id' => $order_id, 'in_order_list' => true]);
     } catch(Exception $e) {
         if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -498,6 +498,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'unbin
             ->execute([$bom, $order_id]);
         echo json_encode(['success' => true]);
     } catch(Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── AJAX: 解除單一「出貨單 ↔ 訂單」綁定 ──
+// 本頁原本只有「解除 BOM↔訂單」，綁錯出貨單時完全沒有解除的辦法。
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'unbind_shipment_order') {
+    header('Content-Type: application/json');
+    try {
+        $pdo      = $conn->getPDO();
+        $is_id    = intval($_POST['is_id'] ?? 0);
+        $order_id = intval($_POST['order_id'] ?? 0);
+        if ($is_id <= 0 || $order_id <= 0) throw new Exception('參數不足');
+
+        $pdo->beginTransaction();
+        $hit = sob_unbind($pdo, $is_id, $order_id);
+        $pdo->commit();
+        echo json_encode(['success' => true, 'removed' => $hit]);
+    } catch(Exception $e) {
+        if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     }
     exit;
@@ -659,9 +680,19 @@ try { $conn->getPDO()->query("SELECT 1 FROM bom_order_process_map LIMIT 1"); $_q
 try { $conn->getPDO()->query("SELECT 1 FROM shipment_order_map LIMIT 1"); $_q_has_som     = true; } catch(Exception $_qe) {}
 
 // 依資料表存在狀況決定子查詢
+// 綁定有兩種來源：is_list.Order_id（舊式直接綁定）與 shipment_order_map（可拆量的分配表），
+// 兩種都要認，否則在 ERP 成本分析頁綁好的（只寫分配表）在這張清單上會顯示為未綁定。
+// 刻意拆成兩個子查詢再於 PHP 合併：寫成一個帶 OR 的子查詢會讓 bom_order_process_map
+// 用不到索引，實測同一個一年區間從 22ms 變成 16,656ms。
 $_q_bom_sub = $_q_has_bom_map
     ? "(SELECT GROUP_CONCAT(DISTINCT bopm.bom ORDER BY bopm.bom SEPARATOR ', ')
          FROM bom_order_process_map bopm WHERE bopm.order_id = isl.Order_id)"
+    : "NULL";
+$_q_bom_sub_som = ($_q_has_bom_map && $_q_has_som)
+    ? "(SELECT GROUP_CONCAT(DISTINCT bopm2.bom ORDER BY bopm2.bom SEPARATOR ', ')
+         FROM shipment_order_map som3
+         JOIN bom_order_process_map bopm2 ON bopm2.order_id = som3.Order_id
+        WHERE som3.IS_id = isl.IS_id)"
     : "NULL";
 $_q_som_sub = $_q_has_som
     ? "(SELECT COUNT(*) FROM shipment_order_map som WHERE som.IS_id = isl.IS_id)"
@@ -675,6 +706,7 @@ $sql .= " isl.Specification, isl.Qty, isl.Unit_price, isl.Order_id,";
 $sql .= " isl.Warehouse, isl.Note, isl.sale_type,";
 $sql .= " ist.sale_type_name, ist.is_count, ist.exclude_anomaly,";
 $sql .= " ($_q_bom_sub) AS bom_list,";
+$sql .= " ($_q_bom_sub_som) AS bom_list_som,";
 $sql .= " ($_q_som_sub) AS is_shipment_mapped";
 $sql .= " FROM is_list isl";
 $sql .= " LEFT JOIN user ON user.id = isl.Created_By";
@@ -687,6 +719,21 @@ $sql .= " ORDER BY isl.Order_date DESC, isl.IS_id DESC";
 $stmt = $conn->getPDO()->prepare($sql);
 $stmt->execute([':start_date' => $start_date, ':end_date' => $end_date]);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// 兩種綁定來源查出來的 BOM 合併成同一欄（去重、排序），下游一律沿用 bom_list 一欄
+foreach ($rows as &$_r) {
+    $_boms = [];
+    foreach ([$_r['bom_list'] ?? '', $_r['bom_list_som'] ?? ''] as $_bl) {
+        if ($_bl === '' || $_bl === null) continue;
+        foreach (explode(',', $_bl) as $_b) {
+            $_b = trim($_b);
+            if ($_b !== '') $_boms[$_b] = true;
+        }
+    }
+    if ($_boms) { $_k = array_keys($_boms); sort($_k); $_r['bom_list'] = implode(', ', $_k); }
+    unset($_r['bom_list_som']);
+}
+unset($_r);
 
 // 讀取結帳日設定
 $stmt_param = $conn->getPDO()->prepare("SELECT param_value FROM system_parameters WHERE param_group = 'SHIPPING_ANALYSIS' AND param_key = 'CLOSING_DATE_RULES'");
@@ -3913,14 +3960,22 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
             var bShips = b.bound_shipments || [];
             if (bShips.length) {
                 html += '<strong style="font-size:12px;"><i class="fa fa-truck text-primary"></i> 已關聯出貨單</strong>'
-                    + '<table class="table table-condensed table-bordered" style="font-size:11px; margin-top:4px; margin-bottom:6px;"><thead style="background:#d6eaf8;"><tr><th>出貨單號</th><th>規格</th><th>出貨數</th><th>單價</th><th>日期</th></tr></thead><tbody>';
+                    + '<table class="table table-condensed table-bordered" style="font-size:11px; margin-top:4px; margin-bottom:6px;"><thead style="background:#d6eaf8;"><tr><th>出貨單號</th><th>訂單號</th><th>規格</th><th>出貨數</th><th>單價</th><th>日期</th><th></th></tr></thead><tbody>';
                 bShips.forEach(function(s) {
                     html += '<tr>'
                         + '<td><strong>' + $('<span>').text(s.IS_number || '').html() + '</strong></td>'
+                        + '<td style="font-size:10px;">' + $('<span>').text(s.Order_oo || '').html() + '</td>'
                         + '<td style="font-size:10px;">' + $('<span>').text(s.Specification || '').html() + '</td>'
                         + '<td class="text-right">' + (s.shipped_qty || s.Qty || '') + '</td>'
                         + '<td class="text-right">' + (s.Unit_price > 0 ? 'NT$' + Number(s.Unit_price).toLocaleString() : '-') + '</td>'
                         + '<td>' + (s.Order_date || '') + '</td>'
+                        + '<td><button type="button" class="btn btn-xs btn-danger btn-unbind-ship"'
+                        + ' data-is-id="' + (s.IS_id || '') + '"'
+                        + ' data-order-id="' + (s.order_id || '') + '"'
+                        + ' data-is-number="' + $('<span>').text(s.IS_number || '').html() + '"'
+                        + ' data-order-oo="' + $('<span>').text(s.Order_oo || '').html() + '"'
+                        + ' title="解除這張出貨單與這張訂單的綁定">'
+                        + '<i class="fa fa-chain-broken"></i> 解除</button></td>'
                         + '</tr>';
                 });
                 html += '</tbody></table>';
@@ -4121,6 +4176,31 @@ GROUP BY COALESCE(ist.sale_type_name, '一般產品')";
                         }
                     }, 'json');
                 } else { showToast('解除失敗：' + res.message, 'danger'); }
+            }, 'json');
+        });
+
+        // 解除單一「出貨單 ↔ 訂單」綁定（本頁原本綁錯出貨單完全無法可解）
+        $(document).on('click', '.btn-unbind-ship', function() {
+            var isId     = $(this).data('is-id');
+            var orderId  = $(this).data('order-id');
+            var isNumber = $(this).data('is-number');
+            var orderOo  = $(this).data('order-oo');
+            if (!isId || !orderId) { showToast('缺少參數，請重新整理後再試', 'danger'); return; }
+            if (!confirm('確定解除出貨單 ' + isNumber + ' 與訂單 ' + orderOo + ' 的綁定？\n\n只解除這一筆對應關係，出貨資料本身不會被刪除。')) return;
+            var keepBom = _selectedBom ? _selectedBom.bom : '';
+            $.post('', { action: 'unbind_shipment_order', is_id: isId, order_id: orderId }, function(res) {
+                if (res.success) {
+                    showToast(res.removed ? '已解除綁定' : '這筆綁定已不存在，畫面已更新', res.removed ? 'success' : 'info');
+                    var isId2 = $('#bom_is_id').val();
+                    $.post('', { action: 'get_bom_list_for_is', is_id: isId2 }, function(res2) {
+                        if (!res2.success) return;
+                        _bomList = res2.boms || [];
+                        renderBomList();
+                        _selectedBom = null;
+                        _bomList.forEach(function(bx) { if (bx.bom === keepBom) _selectedBom = bx; });
+                        if (_selectedBom) renderBomDetail(_selectedBom);
+                    }, 'json');
+                } else { showToast('解除失敗：' + (res.message || ''), 'danger'); }
             }, 'json');
         });
 

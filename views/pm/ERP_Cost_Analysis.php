@@ -13,6 +13,7 @@ if (!isset($_SESSION['userName'])) {
 include '../../src/common/DBConnection.php';
 include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
+require_once __DIR__ . '/../../src/common/ship_order_bind_lib.php';  // 出貨單↔訂單綁定的唯一實作（兩種來源都要讀，禁各頁自寫）
 
 // --- AJAX: 取得可用年份 ---
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_available_years') {
@@ -820,17 +821,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $pdo = $db_conn_ajax->getPDO();
         $order_id = $_POST['order_id'];
         
-        // 只從 shipment_order_map 查（來源2 is_list.Order_id 會造成刪除後仍顯示）
-        $sql1 = "SELECT som.IS_id, som.shipped_qty, il.IS_number, il.Order_date,
+        // 兩種來源都要查：只查分配表的話，舊式的 is_list.Order_id 綁定會變成
+        // 「明細顯示已綁定、這裡卻一片空白」，而且因為看不到就勾不掉、永遠解不掉。
+        // （原註解說來源2「會造成刪除後仍顯示」——真正的原因是當時刪除時沒有一併
+        //   清掉 is_list.Order_id；現在存檔一律走共用庫，兩邊會同時被解除。）
+        $bound = sob_bound_map($pdo, $order_id);
+        $mappings = [];
+        if ($bound) {
+            $ph = implode(',', array_fill(0, count($bound), '?'));
+            $stmt1 = $pdo->prepare(
+                "SELECT il.IS_id, il.IS_number, il.Order_date,
                         il.Client_name, il.Specification, il.Qty, il.Unit_price
-                 FROM shipment_order_map som
-                 JOIN is_list il ON som.IS_id = il.IS_id
-                 WHERE som.Order_id = ?
-                 ORDER BY il.Order_date DESC";
-        $stmt1 = $pdo->prepare($sql1);
-        $stmt1->execute([$order_id]);
-        $mappings = $stmt1->fetchAll(PDO::FETCH_ASSOC);
-        
+                 FROM is_list il WHERE il.IS_id IN ($ph)
+                 ORDER BY il.Order_date DESC"
+            );
+            $stmt1->execute(array_keys($bound));
+            foreach ($stmt1->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $r['shipped_qty'] = $bound[intval($r['IS_id'])]['qty'];
+                $mappings[] = $r;
+            }
+        }
+
         echo json_encode(['success' => true, 'data' => $mappings]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -848,44 +859,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $mappings = $_POST['mappings'] ?? [];
         
         $pdo->beginTransaction();
-        
-        // [FIX] 暫時關閉外鍵檢查，避免 shipment_order_map 的 Order_id FK 指向錯誤資料表
-        $pdo->exec("SET FOREIGN_KEY_CHECKS=0");
-        // 先取得要清除 is_list.Order_id 的 IS_id 清單（只清除透過 shipment_order_map 綁定的）
-        $to_clear_ids = $pdo->prepare("SELECT IS_id FROM shipment_order_map WHERE Order_id = ?");
-        $to_clear_ids->execute([$order_id]);
-        $clear_ids = array_column($to_clear_ids->fetchAll(PDO::FETCH_ASSOC), 'IS_id');
-        $pdo->prepare("DELETE FROM shipment_order_map WHERE Order_id = ?")->execute([$order_id]);
-        // 清除 is_list.Order_id（只清除原本透過 shipment_order_map 綁定的，且沒有其他 shipment_order_map 記錄的）
-        if (!empty($clear_ids)) {
-            $ph_clear = implode(',', array_fill(0, count($clear_ids), '?'));
-            $pdo->prepare("UPDATE is_list SET Order_id = NULL WHERE IS_id IN ($ph_clear)")->execute($clear_ids);
-        }
-        
-        if (!empty($mappings)) {
-            $stmt_ins = $pdo->prepare("INSERT INTO shipment_order_map (IS_id, Order_id, shipped_qty, created_at) VALUES (?, ?, ?, NOW())");
-            foreach ($mappings as $map) {
-                if (empty($map['IS_id'])) continue;
-                $stmt_ins->execute([$map['IS_id'], $order_id, $map['shipped_qty']]);
-            }
-        }
-        
-        // 同步更新 is_list.Order_id（讓子查詢能直接查到出貨單）
-        if (!empty($mappings)) {
-            $upd = $pdo->prepare("UPDATE is_list SET Order_id=? WHERE IS_id=? AND (Order_id IS NULL OR Order_id=0)");
-            foreach ($mappings as $map) {
-                if (empty($map['IS_id'])) continue;
-                $upd->execute([$order_id, intval($map['IS_id'])]);
-            }
-        }
-        $pdo->exec("SET FOREIGN_KEY_CHECKS=1");
+        // 走共用庫：分配表與 is_list.Order_id 一起處理，取消勾選時兩邊同時解除。
+        // 原本這裡會 SET FOREIGN_KEY_CHECKS=0，理由寫著「FK 指向錯誤資料表」——
+        // 實際上 fk_som_order_track 本來就是指向 order_track（是資料表註解寫成 order_list 誤導），
+        // 關掉外鍵檢查等於讓不存在的訂單也寫得進去，已移除。
+        sob_save_order_binds($pdo, $order_id, $mappings);
         $pdo->commit();
         echo json_encode(['success' => true, 'message' => '出貨對應已儲存']);
     } catch (Exception $e) {
-        if ($pdo->inTransaction()) {
-            try { $pdo->exec("SET FOREIGN_KEY_CHECKS=1"); } catch(Exception $e2) {}
-            $pdo->rollBack();
-        }
+        if (isset($pdo) && $pdo->inTransaction()) $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => '儲存失敗: ' . $e->getMessage()]);
     }
     exit;
