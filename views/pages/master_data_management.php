@@ -9463,6 +9463,14 @@ body { background: var(--bg); font-family: "Segoe UI","Roboto","Helvetica Neue",
         style="font-size:11px;background:#F0A24B;color:#4A3524;border:1px solid #C77C1A;border-radius:6px;padding:2px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;font-weight:700;">
         <i class="fa fa-exchange"></i> 自動換圖記錄
     </button>
+    <!-- 不需建立（使用者要求 2026-09-14）：上傳／批圖編輯器存檔後系統自動建立的那張草稿，
+         這次其實不必登錄變更時按它整筆取消，不必為了清掉它開放刪除權限。
+         只對「自動建立且尚未送出」的草稿有效；已送出的正式紀錄仍然只有管理員能刪。 -->
+    <button type="button" id="pav-btn-dwg-cancel" onclick="pavCancelDwgChange()"
+        title="這次換圖不需要登錄變更紀錄：取消系統自動建立的圖面變更草稿（會留稽核紀錄）"
+        style="font-size:11px;background:#FFF8EE;color:#C77C1A;border:1px solid #C77C1A;border-radius:6px;padding:2px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;font-weight:700;">
+        <i class="fa fa-ban"></i> 不需建立
+    </button>
     <button type="button" id="pav-btn-del-log" onclick="pavOpenDeleteLog()" title="查看已刪除的附件紀錄"
         style="font-size:11px;background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:6px;padding:2px 10px;cursor:pointer;white-space:nowrap;flex-shrink:0;">
         <i class="fa fa-history"></i> 刪除紀錄
@@ -20213,6 +20221,38 @@ function pavAutoDwgChange() {
         if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-exchange"></i> 自動換圖記錄'; }
         alert('自動換圖記錄失敗：' + (x.responseText || '連線錯誤'));
     });
+}
+
+/**
+ * 不需建立（使用者要求 2026-09-14）：把「上傳圖／批圖編輯器存檔」後系統自動偵測換圖建立的
+ * 那張**草稿**整筆取消。分兩步是刻意的——先跟後端要「要取消的是哪一張」（單號、新舊發行日），
+ * 讓使用者看清楚再確認，不要按一下就默默刪掉東西。
+ * 權限與刪除都在後端 dwg_change_lib.php（與圖面變更紀錄頁那顆按鈕同一支）。
+ */
+function pavCancelDwgChange() {
+    var dId = _pav.dId;
+    if (!dId) { alert('請先開啟某個料號的附件'); return; }
+    var btn = document.getElementById('pav-btn-dwg-cancel');
+    var rst = function(){ if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa fa-ban"></i> 不需建立'; } };
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 查詢中…'; }
+    $.post(PART_ATTACH_API_URL, { action:'cancel_dwg_change', d_id:dId }, function(r) {
+        rst();
+        if (!r.success) { alert(r.message || '無法取消'); return; }
+        var d = function(v){ return v ? (typeof egFmtDate==='function' ? egFmtDate(v) : String(v).substring(0,10)) : '—'; };
+        var msg = '這次換圖不需要建立變更紀錄？\n\n'
+                + '變更單號：' + (r.change_no || '') + '\n'
+                + '廠內版次：' + d(r.int_old_revision) + ' → ' + d(r.int_new_revision) + '\n'
+                + '變更摘要：' + (r.summary || '（尚未填寫）') + '\n\n'
+                + '按「確定」會把這張系統自動建立的草稿整筆刪除（誰在什麼時候取消的會留在稽核紀錄裡）。\n'
+                + '之後若改變主意，重新上傳圖或按「自動換圖記錄」一樣可以再建立。';
+        if (!confirm(msg)) return;
+        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> 取消中…'; }
+        $.post(PART_ATTACH_API_URL, { action:'cancel_dwg_change', d_id:dId, change_id:r.id, confirm:'1' }, function(r2) {
+            rst();
+            if (!r2.success) { alert(r2.message || '取消失敗'); return; }
+            alert(r2.message);
+        }, 'json').fail(function(x) { rst(); alert('取消失敗：' + (x.responseText || '連線錯誤')); });
+    }, 'json').fail(function(x) { rst(); alert('查詢失敗：' + (x.responseText || '連線錯誤')); });
 }
 
 /** 版次異動紀錄（主檔「版次」右側按鈕）：誰改的、何時改的、對應的廠內版次是哪一天 */

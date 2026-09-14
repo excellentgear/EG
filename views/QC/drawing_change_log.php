@@ -42,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
     try {
         $WRITE = ['save_change', 'ack_change', 'close_change', 'delete_change', 'submit_change',
-                  'save_default_ack', 'auto_from_attach'];
+                  'save_default_ack', 'auto_from_attach', 'cancel_auto_draft'];
         if (in_array($act, $WRITE, true)) {
             // 先確認人還在。session 檔被 PHP 的 GC 掃掉時（見 src/common/_config.php 的防護說明），
             // 這一行上面的 $_SESSION['qc_csrf'] 會在同一個請求裡重新產生，token 比對必定不過——
@@ -80,7 +80,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sql .= " ORDER BY c.id DESC LIMIT 200";
             $s = $pdo->prepare($sql); $s->execute($p);
             echo json_encode(['success' => true, 'rows' => $s->fetchAll(PDO::FETCH_ASSOC),
-                              'can_manage' => $canManage, 'me' => (int)$uid, 'is_admin' => $isAdmin], JSON_UNESCAPED_UNICODE);
+                              'can_manage' => $canManage, 'me' => (int)$uid, 'is_admin' => $isAdmin,
+                              // 「不需建立」：只對自動建立的草稿出現，權限見 dwg_cancel_perm()
+                              'can_cancel' => dwg_cancel_perm($pdo, (int)$uid)['can']], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
@@ -108,7 +110,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true, 'row' => $row, 'acks' => $a->fetchAll(PDO::FETCH_ASSOC),
                               'confirms' => $c->fetchAll(PDO::FETCH_ASSOC),
                               'can_manage' => $canManage, 'me' => (int)$uid, 'is_admin' => $isAdmin,
-                              'edit_perm' => $perm], JSON_UNESCAPED_UNICODE);
+                              'edit_perm' => $perm,
+                              // 這一筆是不是「自動建立、還沒送出」＝可以按「不需建立」的對象
+                              'is_auto_draft' => dwg_is_auto_draft($row),
+                              'can_cancel' => dwg_cancel_perm($pdo, (int)$uid)['can']], JSON_UNESCAPED_UNICODE);
             exit;
         }
 
@@ -275,6 +280,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
             exit;
         }
+        // ---- 「不需建立」：取消（刪掉）自動偵測換圖建出來的草稿 ----
+        // 權限刻意不是「管理員才能刪」：見 dwg_cancel_perm() 的說明（唯一實作在 dwg_change_lib.php）。
+        // 只對「自動建立且尚未送出」的草稿有效，已送出的正式紀錄仍然只有管理員能刪。
+        if ($act === 'cancel_auto_draft') {
+            $r = dwg_cancel_auto_draft($pdo, (int)($_POST['id'] ?? 0), (int)$uid);
+            echo json_encode(['success' => true] + $r, JSON_UNESCAPED_UNICODE);
+            exit;
+        }
         if ($act === 'delete_change') {
             if (!in_array('all', $feats, true)) throw new Exception('刪除變更紀錄僅限管理員');
             $id = (int)($_POST['id'] ?? 0);
@@ -387,6 +400,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     .rev-box { background:#FFFDF8; border:1px solid var(--line); border-radius:6px; padding:10px 10px 0; margin-bottom:10px; }
     .ro-auto { background:#F2ECE3 !important; color:#6B4423; }
     .badge-draft { background:#cfc3b2; color:#4A3524; }
+    /* 清單列上的「不需建立」：字級小，line-height 一定要自己指定，
+       不然會繼承表格列的行高把整列撐高（2026-09-03 急件徽章踩過同一個坑） */
+    .btn-cancel-auto-row { display:inline-block; margin-top:3px; padding:1px 6px; font-size:11px;
+                           line-height:15px; border:1px solid #C77C1A; border-radius:4px;
+                           background:#FFF8EE; color:#C77C1A; cursor:pointer; white-space:nowrap; }
+    .btn-cancel-auto-row:hover { background:var(--sand); color:#6B4423; }
     .page-help-btn { margin-left:8px; }
     .help-doc h4 { color:#6B4423; margin:14px 0 6px; font-size:15px; }
     .help-doc li { margin-bottom:4px; }
@@ -556,6 +575,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <div class="modal-body" id="detail-body">載入中…</div>
         <div class="modal-footer">
             <button class="btn btn-default pull-left" id="btn-del" style="display:none;color:#DD5138;"><i class="fa fa-trash"></i> 刪除此紀錄</button>
+            <!-- 「不需建立」：只有「系統自動偵測換圖建出來、還沒送出」的草稿才會出現。
+                 這次換圖不必登錄時按它，整筆草稿直接刪掉（會留稽核紀錄），不必請管理員幫忙刪。 -->
+            <button class="btn btn-default pull-left" id="btn-cancel-auto" style="display:none;color:#C77C1A;margin-left:6px;"
+                    title="這次換圖不需要登錄變更紀錄，把系統自動建立的這張草稿取消掉"><i class="fa fa-ban"></i> 不需建立</button>
             <button class="btn btn-default" id="btn-edit" style="display:none;"><i class="fa fa-pencil"></i> 修改</button>
             <button class="btn btn-warm" id="btn-submit" style="display:none;"><i class="fa fa-paper-plane"></i> 送出（正式成立並通知簽收）</button>
             <button class="btn btn-warm-o" id="btn-close-chg" style="display:none;"></button>
@@ -657,6 +680,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <ul>
                 <li>在<b>料號附件</b>上傳圖面、或用<b>批圖編輯器</b>存成料號附件時，只要標籤屬於「自家出的圖」且發行章日期比前一版新，系統會判定成換圖並<b>問你要不要自動建立變更紀錄</b>。</li>
                 <li>當下按「否」也沒關係：之後隨時可以到<b>料號主檔 → 料號附件</b>，按<b>「自動換圖記錄」</b>，系統會把料號、客戶、新舊發行日自動帶好建成草稿，並另開分頁讓你補完內容。</li>
+                <li><b>這次其實不必登錄變更時，按「不需建立」</b>：自動建立的草稿列（狀態欄「草稿」下方）與明細跳窗左下角都有這顆按鈕，按下去會把<b>整張草稿刪掉</b>，不必請管理員幫忙刪。
+                    <b>料號附件跳窗</b>上方也有同一顆（給沒有本頁檢閱權限的上傳者用）。誰在什麼時候取消了哪一張，會留在<b>稽核紀錄</b>裡查得到。</li>
+                <li>取消之後<b>同一次換圖再上傳圖或再按「自動換圖記錄」，系統一樣會再問一次要不要建立</b>（使用者拍板），臨時改變主意隨時可以重新建立。</li>
+                <li><b>只有「自動建立且尚未送出」的草稿</b>能用「不需建立」取消。已經按過「送出」的正式紀錄（已通知簽收、已複製檢驗標準新版次）要作廢仍然只有系統管理員能刪。</li>
             </ul>
 
             <h4>誰可以修改</h4>
@@ -677,6 +704,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <li><b>檢閱</b>：有品管檢驗任一權限（唯讀檢閱／填寫檢驗／管理設定／修改歷史）即可看清單與明細、也能簽收。</li>
                 <li><b>建立／修改</b>：需要「管理檢驗設定」權限。</li>
                 <li><b>刪除</b>：僅系統管理員。</li>
+                <li><b>「不需建立」（取消自動建立的草稿）</b>：有<b>料號附件上傳權限</b>或<b>批圖編輯器使用權限</b>的人就可以按——換圖這個動作是誰做的，誰就可以說這次不必登錄，不必為了清掉一張系統自建的空草稿去開放刪除權限。</li>
+                <li>角色指派在 <b>使用者權限管理 → 品管檢驗（QC）</b>；角色有哪些功能在 <b>品管檢驗 → 設定 → 權限設定</b>。</li>
             </ul>
         </div>
         <div class="modal-footer"><button class="btn btn-default" data-dismiss="modal">關閉</button></div>
@@ -745,6 +774,28 @@ $(function(){
 
     var LOOK={processes:[],people:[],departments:[]}, CAN_MANAGE=false, pickedPart=null, curId=null, ME=0;
     var IS_ADMIN=false, DEF_ACK={users:[],depts:[]}, SET_ACK=null, curDetail=null, EDIT_PERM=null;
+    // 「不需建立」：可不可以按由後端 dwg_cancel_perm() 決定（料號附件上傳權限／批圖編輯器使用權限）
+    var CAN_CANCEL=false, ROWS_BY_ID={};
+    /** 這一筆是不是「系統自動偵測換圖建出來、還沒送出」的草稿＝可以按「不需建立」的對象 */
+    function isAutoDraft(c){
+        return c && c.status==='DRAFT' && (c.create_source==='attach' || c.create_source==='imgedit');
+    }
+    /** 「不需建立」：把自動建立的草稿整筆取消（後端刪除並留稽核紀錄）。done＝成功後要做的事 */
+    function cancelAutoDraft(c, done){
+        var msg = '這次換圖不需要建立變更紀錄？\n\n'
+                + '變更單號：' + (c.change_no||'') + '\n'
+                + '料號：' + (c.part_no || ('d_id '+c.d_id)) + '\n'
+                + '廠內版次：' + (c.int_old_revision?dispDate(c.int_old_revision):'—') + ' → '
+                + (c.int_new_revision?dispDate(c.int_new_revision):'—') + '\n\n'
+                + '按「確定」會把這張系統自動建立的草稿整筆刪除（誰在什麼時候取消的會留在稽核紀錄裡）。\n'
+                + '之後若改變主意，重新上傳圖或按「自動換圖記錄」一樣可以再建立。';
+        if(!confirm(msg)) return;
+        post({action:'cancel_auto_draft', id:c.id}, function(res){
+            if(!res.success){ alert(res.message); return; }
+            alert(res.message);
+            if(typeof done==='function') done();
+        });
+    }
     // 由別頁（料號附件的「自動換圖記錄」）另開分頁帶進來的變更單 id，lookups 回來後自動開明細
     var OPEN_ID = parseInt((location.search.match(/[?&]id=(\d+)/)||[])[1]||0, 10);
     // 日期顯示一律 YYYY.MM.DD（ai-rules/20）；共用檔只匯出 egFmtDate()，各頁自己包一層是既有慣例
@@ -777,13 +828,16 @@ $(function(){
         $('#dc-list').html('<tr><td colspan="10" class="text-center muted-help">載入中…</td></tr>');
         post({action:'list', keyword:$('#kw').val()}, function(r){
             if(!r.success){ $('#dc-list').html('<tr><td colspan="10" class="text-danger">'+esc(r.message)+'</td></tr>'); return; }
-            var rows=r.rows||[];
+            var rows=r.rows||[]; CAN_CANCEL = !!r.can_cancel;
+            ROWS_BY_ID = {}; rows.forEach(function(c){ ROWS_BY_ID[String(c.id)] = c; });
             $('#dc-list').html(rows.length ? rows.map(function(c){
                 var ack=(c.ack_total>0) ? ((c.ack_done>=c.ack_total)
                         ? '<span class="ack-done">✔ '+c.ack_done+'/'+c.ack_total+'</span>'
                         : '<span class="ack-wait">'+c.ack_done+'/'+c.ack_total+'</span>') : '—';
                 var st = c.status==='DRAFT' ? '<span class="badge badge-draft">草稿</span>'
                        : '<span class="badge '+(c.status==='CLOSED'?'badge-closed':'badge-open')+'">'+(c.status==='CLOSED'?'已結案':'進行中')+'</span>';
+                // 「不需建立」：系統自動偵測換圖建出來、還沒送出的草稿才給；點它不要順便開明細
+                if(CAN_CANCEL && isAutoDraft(c)) st += '<br><span class="btn-cancel-auto-row" data-id="'+c.id+'">不需建立</span>';
                 var cust = (c.rev_scope==='internal')
                          ? '<span class="muted-help">僅廠內</span>'
                          : (esc(c.old_revision||'—')+' → <b>'+esc(c.new_revision||'—')+'</b>');
@@ -1086,11 +1140,19 @@ $(function(){
     // 點列＝開明細；但點在料號上是「開圖面查閱分頁」，不要連帶把明細也開起來
     $('#dc-list').on('click','.dc-row', function(e){
         if($(e.target).closest('.open-dwg').length) return;
+        if($(e.target).closest('.btn-cancel-auto-row').length) return;   // 按「不需建立」不要順便開明細
         openDetail($(this).data('id'));
+    });
+    // 清單列上的「不需建立」（只出現在自動建立的草稿列）
+    $('#dc-list').on('click','.btn-cancel-auto-row', function(e){
+        e.stopPropagation();
+        var c = ROWS_BY_ID[String($(this).data('id'))];
+        if(!c) return;
+        cancelAutoDraft(c, load);
     });
     function openDetail(id){
         curId=id;
-        $('#detail-body').html('載入中…'); $('#btn-ack,#btn-edit,#btn-close-chg,#btn-del,#btn-submit').hide();
+        $('#detail-body').html('載入中…'); $('#btn-ack,#btn-edit,#btn-close-chg,#btn-del,#btn-submit,#btn-cancel-auto').hide();
         $('#detailModal').modal('show');
         post({action:'detail', id:id}, function(r){
             if(!r.success){ $('#detail-body').html('<div class="text-danger">'+esc(r.message)+'</div>'); return; }
@@ -1153,6 +1215,10 @@ $(function(){
                     post({action:'close_change', id:c.id, reopen:(c.status==='CLOSED'?'1':'0')}, function(){ $('#detailModal').modal('hide'); load(); });
                 });
             }
+            // 「不需建立」：只有自動建立的草稿才給按（已送出的要作廢仍然只有管理員能刪）
+            $('#btn-cancel-auto').toggle(!!(r.can_cancel && r.is_auto_draft)).off('click').on('click', function(){
+                cancelAutoDraft(c, function(){ $('#detailModal').modal('hide'); load(); });
+            });
             $('#btn-del').toggle(!!r.can_manage).off('click').on('click', function(){
                 if(!confirm('確定刪除變更紀錄 '+c.change_no+'？（不會還原已建立的檢驗標準新版本）')) return;
                 post({action:'delete_change', id:c.id}, function(res){

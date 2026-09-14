@@ -1017,6 +1017,169 @@ function dwg_submit_change(PDO $pdo, int $id, int $uid): array {
 }
 
 /**
+ * 「不需建立」：誰可以取消（刪掉）自動偵測換圖建出來的**草稿**（使用者拍板 2026-09-14）。
+ *
+ * 為什麼不是沿用「刪除變更紀錄僅限管理員」：自動建立的草稿是系統在「有人上傳圖／批圖編輯器存檔」
+ * 當下自己長出來的，現場常常有「這次只是補掃一張、不必登錄變更」的情況。若只有管理員能刪，
+ * 等於為了清掉一張系統自己建的空草稿要開放刪除權限給一堆人——那才是真正的風險。
+ * 故使用者指定：**可以做出「換圖」這個動作的人，就可以說這次不需建立**：
+ *   ① 系統管理員（rbac 'all'）
+ *   ② 有料號附件上傳權限者＝料號主檔頁面權限碼含 A/C/U（與 master_data_management.php 的
+ *      $can_part_attach 同一條規則，不另立新功能碼）
+ *   ③ 有批圖編輯器使用權限者＝被指派 module='imgedit' 的角色（與 image_editor.php 的 $canUse
+ *      同一條規則，含「還沒有任何人被指派時全站暫時開放」的過渡期行為）
+ * 只放寬「取消自動草稿」這一件事；修改／送出／刪除正式紀錄的規則一律不動。
+ *
+ * @return array{can:bool, reason:string, why:string}
+ */
+function dwg_cancel_perm(PDO $pdo, int $uid): array {
+    $no = ['can' => false, 'why' => '',
+           'reason' => '您沒有權限取消自動建立的圖面變更草稿（需要「料號附件上傳」或「批圖編輯器使用」權限）'];
+    if ($uid <= 0) return $no;
+
+    // ① 系統管理員
+    try {
+        require_once __DIR__ . '/rbac.php';
+        if (in_array('all', rbac_user_features($pdo, $uid), true)) {
+            return ['can' => true, 'reason' => '', 'why' => '系統管理員'];
+        }
+    } catch (Throwable $e) {}
+
+    // ② 料號附件上傳權限（料號主檔頁面權限碼 A/C/U）
+    try {
+        $st = $pdo->prepare("SELECT page_id, group_id FROM system_module_pages
+                              WHERE page_url LIKE '%master_data_management.php' LIMIT 1");
+        $st->execute();
+        if ($pg = $st->fetch(PDO::FETCH_ASSOC)) {
+            $q = $pdo->prepare("SELECT permission FROM user_module_permissions
+                                 WHERE user_id=? AND scope='page' AND module_code=?");
+            $q->execute([$uid, $pg['page_id']]);
+            $perms = array_filter($q->fetchAll(PDO::FETCH_COLUMN));
+            if (!$perms && !empty($pg['group_id'])) {
+                $g = $pdo->prepare("SELECT module_code FROM system_modules WHERE group_id=? LIMIT 1");
+                $g->execute([$pg['group_id']]);
+                if ($gc = $g->fetchColumn()) {
+                    $q2 = $pdo->prepare("SELECT permission FROM user_module_permissions
+                                          WHERE user_id=? AND scope='group' AND module_code=?");
+                    $q2->execute([$uid, $gc]);
+                    $perms = array_filter($q2->fetchAll(PDO::FETCH_COLUMN));
+                }
+            }
+            $chars = [];
+            foreach ($perms as $p) { $chars = array_merge($chars, str_split((string)$p)); }
+            if (array_intersect(['A', 'C', 'U'], $chars)) {
+                return ['can' => true, 'reason' => '', 'why' => '料號附件上傳權限'];
+            }
+        }
+    } catch (Throwable $e) {}
+
+    // ③ 批圖編輯器使用權限（與 image_editor.php 同一條規則）
+    try {
+        $total = (int)$pdo->query("SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                                    WHERE r.module='imgedit'")->fetchColumn();
+        if ($total === 0) {   // 還沒有任何人被指派＝該頁目前對全站開放，這裡照同一口徑
+            return ['can' => true, 'reason' => '', 'why' => '批圖編輯器（尚未指派角色，暫時開放）'];
+        }
+        $st = $pdo->prepare("SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id
+                              WHERE ur.user_id=? AND r.module='imgedit'");
+        $st->execute([$uid]);
+        if ((int)$st->fetchColumn() > 0) {
+            return ['can' => true, 'reason' => '', 'why' => '批圖編輯器使用權限'];
+        }
+    } catch (Throwable $e) {}
+
+    return $no;
+}
+
+/** 這一筆是不是「自動偵測換圖建出來、還沒送出」的草稿＝可以按「不需建立」的對象 */
+function dwg_is_auto_draft(array $c): bool {
+    return (string)($c['status'] ?? '') === 'DRAFT'
+        && in_array((string)($c['create_source'] ?? ''), ['attach', 'imgedit'], true);
+}
+
+/**
+ * 找出這個料號目前「自動建立且還沒送出」的草稿（料號附件跳窗那顆「不需建立」用）。
+ * 有指定附件時優先找由那張附件觸發的；找不到就取最新的一筆自動草稿。
+ */
+function dwg_auto_draft_find(PDO $pdo, int $dId, ?int $attachId = null): ?array {
+    if ($dId <= 0) return null;
+    try {
+        if ($attachId) {
+            $st = $pdo->prepare("SELECT * FROM qc_drawing_change
+                                  WHERE d_id=? AND trigger_attachment_id=? AND status='DRAFT'
+                                    AND create_source IN ('attach','imgedit') ORDER BY id DESC LIMIT 1");
+            $st->execute([$dId, $attachId]);
+            if ($r = $st->fetch(PDO::FETCH_ASSOC)) return $r;
+        }
+        $st = $pdo->prepare("SELECT * FROM qc_drawing_change
+                              WHERE d_id=? AND status='DRAFT' AND create_source IN ('attach','imgedit')
+                              ORDER BY id DESC LIMIT 1");
+        $st->execute([$dId]);
+        return $st->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $e) { return null; }
+}
+
+/**
+ * 「不需建立」＝把自動建立的草稿整筆刪掉（使用者拍板：直接刪除，不留作廢狀態）。
+ *
+ * 刻意只擋在「自動建立且尚未送出」這一種：
+ *   - 已送出（OPEN/CLOSED）的已經通知過簽收、也已經把檢驗標準複製成新版次、回寫過料號主檔版次，
+ *     那不是「不需建立」而是作廢，仍然只有管理員能刪（維持原本的 delete_change 規則）。
+ *   - 手動登錄的紀錄是人自己打的，不在這顆按鈕的範圍內。
+ * 刪除前寫一筆 audit_log（誰、哪一張單、哪個料號、哪一次換圖），這樣即使記錄本身沒了，
+ * 「這次換圖被判定為不需登錄」仍然查得到——這是開放非管理員刪除的前提。
+ *
+ * @return array{ok:bool, id:int, change_no:string, message:string}
+ */
+function dwg_cancel_auto_draft(PDO $pdo, int $id, int $uid): array {
+    dwg_ensure_schema($pdo);
+    $st = $pdo->prepare("SELECT * FROM qc_drawing_change WHERE id=?");
+    $st->execute([$id]);
+    $c = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$c) throw new Exception('查無此變更紀錄（可能已經被取消或刪除了，請重新整理）');
+    if ((string)$c['status'] !== 'DRAFT') {
+        throw new Exception('這筆已經送出、正式成立（已通知簽收並複製檢驗標準版次），不能用「不需建立」取消；'
+                          . '如果確定要作廢，請洽系統管理員。');
+    }
+    if (!dwg_is_auto_draft($c)) {
+        throw new Exception('「不需建立」只適用於系統自動偵測換圖所建立的草稿；這一筆是手動登錄的，'
+                          . '請由建立者自行修改，或洽系統管理員刪除。');
+    }
+    $perm = dwg_cancel_perm($pdo, $uid);
+    if (!$perm['can']) throw new Exception($perm['reason']);
+
+    $partNo = dwg_part_info($pdo, (int)$c['d_id'])['part_no'] ?? '';
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare("DELETE FROM qc_drawing_change_ack WHERE change_id=?")->execute([$id]);
+        $pdo->prepare("DELETE FROM qc_drawing_change_confirm WHERE change_id=?")->execute([$id]);
+        $pdo->prepare("DELETE FROM qc_drawing_change WHERE id=?")->execute([$id]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        throw $e;
+    }
+    try {
+        $pdo->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                       VALUES ('delete','dwg_change_cancel',?,?,?,?,?,NOW())")
+            ->execute([(string)$id, (string)$c['change_no'] . ' ' . $partNo,
+                       json_encode(['reason' => '不需建立（自動偵測換圖的草稿）',
+                                    'part_no' => $partNo, 'd_id' => (int)$c['d_id'],
+                                    'int_old_revision' => $c['int_old_revision'],
+                                    'int_new_revision' => $c['int_new_revision'],
+                                    'trigger_attachment_id' => $c['trigger_attachment_id'],
+                                    'create_source' => $c['create_source'],
+                                    'created_by' => $c['created_by'],
+                                    'perm' => $perm['why']], JSON_UNESCAPED_UNICODE),
+                       $uid, dwg_user_name($pdo, $uid)]);
+    } catch (Throwable $e) { /* 稽核寫入失敗不擋主要作業 */ }
+
+    return ['ok' => true, 'id' => $id, 'change_no' => (string)$c['change_no'],
+            'message' => '已取消 ' . $c['change_no'] . '（這次換圖不建立變更紀錄）。'
+                       . '之後若改變主意，重新上傳圖或按「自動換圖記錄」一樣可以再建立。'];
+}
+
+/**
  * 誰可以修改這一筆變更紀錄（使用者拍板）：
  *   ① 自己填的（created_by＝本人）→ 直接可改
  *   ② 別人填的 → 只有管理員可以改，而且要輸入**操作確認密碼**（走全站共用的 confirm_password_lib）

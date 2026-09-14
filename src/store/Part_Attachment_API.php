@@ -882,6 +882,46 @@ switch ($action) {
         } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()], JSON_UNESCAPED_UNICODE); }
         break;
 
+    // ── 圖面變更：「不需建立」（使用者要求 2026-09-14）──────────────
+    // 自動偵測換圖建出來的草稿，這次其實不必登錄時按它。分兩步：
+    //   confirm 空／0 → 只回報「找到哪一張草稿」，前端跳出確認視窗（要讓人看到單號與新舊發行日再決定）
+    //   confirm=1     → 真的取消（整筆刪除並寫 audit_log）
+    // 權限與刪除的唯一實作在 dwg_change_lib.php 的 dwg_cancel_perm()／dwg_cancel_auto_draft()，
+    // 這裡只是端點；圖面變更紀錄頁那顆按鈕走的是同一支（鐵律4）。
+    case 'cancel_dwg_change':
+        try {
+            $cDid = intval($_POST['d_id'] ?? 0);
+            $cAtt = intval($_POST['attachment_id'] ?? 0) ?: null;
+            $cId  = intval($_POST['change_id'] ?? 0);
+            if (!$cId) {
+                $draft = dwg_auto_draft_find($pdo, $cDid, $cAtt);
+                if (!$draft) throw new Exception('這個料號目前沒有「系統自動建立、尚未送出」的圖面變更草稿。'
+                                               . '（已經送出的正式紀錄不能用「不需建立」取消，請洽系統管理員）');
+                $cId = (int)$draft['id'];
+            } else {
+                $st = $pdo->prepare("SELECT * FROM qc_drawing_change WHERE id=?");
+                $st->execute([$cId]);
+                $draft = $st->fetch(PDO::FETCH_ASSOC);
+                if (!$draft) throw new Exception('查無此變更紀錄（可能已經被取消了）');
+            }
+            if (($_POST['confirm'] ?? '') !== '1') {
+                // 只回報要取消哪一張，真正的權限與狀態把關在下面那條（confirm=1）同樣會再驗一次
+                $perm = dwg_cancel_perm($pdo, $uploadedById);
+                if (!$perm['can']) throw new Exception($perm['reason']);
+                if (!dwg_is_auto_draft($draft)) throw new Exception('這一筆不是系統自動建立的草稿，不能用「不需建立」取消');
+                echo json_encode(['success'=>true, 'confirm_needed'=>true, 'id'=>(int)$draft['id'],
+                                  'change_no'=>(string)$draft['change_no'],
+                                  'int_old_revision'=>$draft['int_old_revision'],
+                                  'int_new_revision'=>$draft['int_new_revision'],
+                                  'summary'=>(string)$draft['summary']], JSON_UNESCAPED_UNICODE);
+                break;
+            }
+            $r = dwg_cancel_auto_draft($pdo, $cId, $uploadedById);
+            echo json_encode(['success'=>true, 'id'=>$r['id'], 'change_no'=>$r['change_no'],
+                              'message'=>$r['message']], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()], JSON_UNESCAPED_UNICODE); }
+        break;
+
     // ── 料號版次異動紀錄（主檔「版次」旁邊那顆按鈕）────────────────
     case 'revision_log':
         try {
