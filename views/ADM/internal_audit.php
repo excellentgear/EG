@@ -205,6 +205,12 @@ $roleLabel = ia_role_label($perms);
         .pick-wrap label { display:block; padding:4px 10px; margin:0; font-size:13px; color:#5b3a1e; cursor:pointer; border-bottom:1px solid #F3EADA; }
         .pick-wrap label:hover { background:#FDF3E2; }
         .pick-wrap label.hdr { background:#F3E4C9; font-weight:bold; color:#6b4a20; }
+        /* 章節標題列＝分隔用，不是題目，所以沒有勾選框 */
+        .pick-wrap .hdr-row { display:flex; align-items:center; gap:8px; padding:4px 10px; font-size:13px;
+            font-weight:bold; color:#8a7355; background:#F7EFE0; border-bottom:1px solid #F3EADA; }
+        .pick-wrap .hdr-row.on { color:#6b4a20; background:#F3E4C9; }
+        .pick-wrap .hdr-row .hdr-n { margin-left:auto; font-weight:normal; font-size:11px; color:#a08356; }
+        .pick-wrap .hdr-row.on .hdr-n { color:#8A5A2B; }
         /* 建立查檢表：作業項目標籤（點一下＝只勾這個用途的條文）與每一列的用途徽章 */
         .nk-chips { max-height:56px; overflow:hidden; margin-top:3px; }
         .nk-chips.open { max-height:190px; overflow-y:auto; }
@@ -2149,12 +2155,25 @@ var NK_CHECKED = {};
 function nkIsChecked(r){
     return (NK_CHECKED[r.id] !== undefined) ? !!NK_CHECKED[r.id] : rowHitTask(r);
 }
-/** 目前實際勾選的（跨篩選、跨標籤），回 {ids:[含標題列], real:非標題列的筆數} */
-function nkPicked(){
-    var kind = $('#nkKind').val(), ids = [], real = 0;
+/** 每個章節標題列底下勾了幾題（題庫是照順序排的：一個標題列管到下一個標題列為止）
+    2026-09-15 使用者回報：標題列固定勾住又取消不掉。原因是它被當成「一定要帶進去」，
+    所以做成 checked＋onclick:return false。改成標題列不是勾選框、也不無條件帶入，
+    只有「底下真的有題目被勾」的那幾章才會跟著建進查檢表（否則會建出空的章節標題）。 */
+function nkHdrPicked(){
+    var kind = $('#nkKind').val(), cnt = {}, cur = null;
     BANK.forEach(function(raw){
         var r = bankRow(kind, raw);
-        if (r.hdr) { ids.push(r.id); return; }       // 標題列一定跟著建進去
+        if (r.hdr) { cur = r.id; if (cnt[cur] === undefined) cnt[cur] = 0; return; }
+        if (cur !== null && nkIsChecked(r)) cnt[cur]++;
+    });
+    return cnt;
+}
+/** 目前實際勾選的（跨篩選、跨標籤），回 {ids:[含有題目的章節標題列], real:非標題列的筆數} */
+function nkPicked(){
+    var kind = $('#nkKind').val(), ids = [], real = 0, hc = nkHdrPicked();
+    BANK.forEach(function(raw){
+        var r = bankRow(kind, raw);
+        if (r.hdr) { if (hc[r.id] > 0) ids.push(r.id); return; }   // 這一章有題目才帶標題列
         if (nkIsChecked(r)) { ids.push(r.id); real++; }
     });
     return {ids:ids, real:real};
@@ -2163,17 +2182,20 @@ function renderBank(){
     var kind = $('#nkKind').val();
     var kw = $('#nkFilter').val().trim().toLowerCase();
     renderTaskPanel();
+    var HDRCNT = nkHdrPicked();      // 每章勾了幾題（標題列上顯示）
     var h = '', shown = 0;
     BANK.forEach(function(raw){
         var r = bankRow(kind, raw);
         // 作業項目／部門也吃關鍵字（打「外包」找得到掛這個用途的條文）
         var hay = (r.text+' '+r.sub+' '+(r.badges||[]).join(' ')+' '+(r.tags||[]).join(' ')).toLowerCase();
         if (kw && hay.indexOf(kw) < 0) return;
-        shown++;
+        if (!r.hdr) shown++;          // 「顯示 N 列」只算真的題目，標題列不算
         if (r.hdr) {
-            // 章節標題列一定跟著建進去（不然條文會沒有分隔），所以勾選框固定勾住且不給取消
-            h += '<label class="hdr"><input type="checkbox" class="bkChk bkHdr" value="'+r.id+'" checked onclick="return false;"> '
-               + esc(r.text)+'</label>';
+            // 章節標題列只是分隔，不是可以查核的題目 → 不給勾選框（以前做成固定勾住又點不動，
+            // 看起來像「被系統勾走又取消不掉」）。底下有題目被勾時才會跟著建進查檢表。
+            var hn = HDRCNT[r.id] || 0;
+            h += '<div class="hdr-row' + (hn ? ' on' : '') + '" data-h="' + r.id + '">' + esc(r.text)
+               + '<span class="hdr-n">' + (hn ? ('本章已勾 ' + hn + ' 題') : '本章未勾選') + '</span></div>';
         } else {
             var on = nkIsChecked(r);
             h += '<label'+(!on ? ' class="dim"' : '')+'>'
@@ -2190,10 +2212,19 @@ function updateBankCount(shown){
     var p = nkPicked();
     $('#nkCount').text('已勾 '+p.real+' 項'+(shown!=null?('／顯示 '+shown+' 列'):''));
 }
+/** 只更新章節標題列上的「本章已勾 N 題」（不整份重繪，否則捲動位置會彈回最上面） */
+function updateHdrCounts(){
+    var hc = nkHdrPicked();
+    $('#nkPick .hdr-row').each(function(){
+        var n = hc[+$(this).attr('data-h')] || 0;
+        $(this).toggleClass('on', n > 0)
+               .find('.hdr-n').text(n ? ('本章已勾 ' + n + ' 題') : '本章未勾選');
+    });
+}
 $(document).on('change','.bkChk', function(){
-    if ($(this).hasClass('bkHdr')) return;
     NK_CHECKED[+$(this).val()] = $(this).is(':checked');
     $(this).closest('label').toggleClass('dim', !$(this).is(':checked'));
+    updateHdrCounts();
     updateBankCount();
 });
 $('#nkFilter').on('input', renderBank);
