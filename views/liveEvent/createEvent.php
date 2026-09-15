@@ -825,7 +825,7 @@ if (isset($_POST['btn_go_events'])) {
                                     <option value="50">50 筆</option>
                                 </select>
                                 <?php if ($can_batch) : ?>
-                                    <button type="button" id="eg-batch-target-btn" class="eg-tool-btn" disabled title="勾選 2 則以上「通知對象完全相同」的公告 / 通知，一次改掉它們的對象與通知方式"><i class="fa fa-users"></i> 批次改對象 <span id="eg-batch-count"></span></button>
+                                    <button type="button" id="eg-batch-target-btn" class="eg-tool-btn" disabled title="勾選 1 則以上的公告 / 通知，一次改掉它們的對象與通知方式（勾選 2 則以上時，須為「通知對象完全相同」的那幾則）"><i class="fa fa-users"></i> 批次改對象 <span id="eg-batch-count"></span></button>
                                 <?php endif; ?>
                                 <button type="button" id="eg-export-csv" class="eg-tool-btn" title="匯出 CSV"><i class="fa fa-file-excel-o"></i> CSV</button>
                                 <button type="button" id="eg-export-pdf" class="eg-tool-btn" title="列印 / PDF"><i class="fa fa-file-pdf-o"></i> PDF</button>
@@ -1094,7 +1094,7 @@ if (isset($_POST['btn_go_events'])) {
                     <div id="btBlocked" style="display:none;"></div>
                     <div id="btForm" style="display:none;">
                         <p style="font-size:12.5px;color:#8a97a5;margin-bottom:10px;">
-                            將對 <b id="btCount">0</b> 則公告 / 通知套用<b>同一份</b>對象與通知方式（它們目前的對象完全相同）。<br>
+                            將對 <b id="btCount">0</b> 則公告 / 通知套用<b>同一份</b>對象與通知方式（勾選 2 則以上時，它們目前的對象必須完全相同）。<br>
                             套用後：<b>新加進來的人會收到通知</b>；<b>被移除的人已發出的通知會被取消</b>（推播改寫為「通知已取消」、Telegram 訊息一併收回）。<br>
                             公告內容、附件、期限與共同編輯者<b>都不會被更動</b>。
                         </p>
@@ -1211,7 +1211,7 @@ if (isset($_POST['btn_go_events'])) {
 
                     <h4>批次修改通知對象</h4>
                     <ul>
-                        <li>在列表左側勾選 2 則以上 → 按工具列的<b>「批次改對象」</b>，一次改掉它們的對象與通知方式。</li>
+                        <li>在列表左側勾選 <b>1 則以上</b> → 按工具列的<b>「批次改對象」</b>，一次改掉它們的對象與通知方式（只勾 1 則就等於單獨改那一則，篩選後只剩一筆時也用得到）。</li>
                         <li><b>只適用於「通知對象完全相同」的那幾則</b>（含每個對象的通知方式）。只要有一則不一樣就會整批擋下，並列出是哪幾則不同——因為一起改等於把它們原本各自的設定洗掉。</li>
                         <li>套用後：<b>新加進來的人會收到通知</b>；<b>被移除的人已發出的通知會被取消</b>（推播改寫成「通知已取消」、Telegram 訊息一併收回）。</li>
                         <li>只會動對象，<b>公告內容、附件、期限、共同編輯者都不會被更動</b>，每一則都會留下修改歷史。</li>
@@ -2009,7 +2009,8 @@ if (isset($_POST['btn_go_events'])) {
                 function egSyncBatchBtn() {
                     var n = egCheckedIds().length;
                     $('#eg-batch-count').text(n ? '（' + n + '）' : '');
-                    $('#eg-batch-target-btn').prop('disabled', n < 2);
+                    // 勾 1 則也要能用：篩選後只剩一筆時原本按不下去，等於那一筆永遠改不了對象
+                    $('#eg-batch-target-btn').prop('disabled', n < 1);
                     var boxes = $('#eg-list-tbody .eg-row-cb');
                     $('#eg-check-all').prop('checked', boxes.length > 0 && n === boxes.length);
                 }
@@ -2057,7 +2058,7 @@ if (isset($_POST['btn_go_events'])) {
 
                 $('#eg-batch-target-btn').on('click', function() {
                     btIds = egCheckedIds();
-                    if (btIds.length < 2) { alert('請先勾選 2 則以上'); return; }
+                    if (btIds.length < 1) { alert('請先勾選要修改的公告 / 通知'); return; }
                     $('#btLoading').show(); $('#btBlocked').hide().empty(); $('#btForm').hide();
                     $('#btErr').hide().empty(); $('#btApply').prop('disabled', true);
                     $('#batchTargetModal').modal('show');
@@ -2431,7 +2432,8 @@ if (isset($_POST['btn_go_events'])) {
                     // 轉換角色下拉（排除自己）
                     var opt = '<option value="">直接移除此角色（這些人員將不再擁有此角色）</option>';
                     _permRolesCache.forEach(function(r) {
-                        if (r.role_id != roleId) opt += '<option value="' + r.role_id + '">轉換為：' + $('<i>').text(r.role_name).html() + '</option>';
+                        // 排除全站系統角色（管理員）：轉過去等於把這些人全部變成全站管理員，後端也會擋下
+                        if (r.role_id != roleId && r.is_system != 1) opt += '<option value="' + r.role_id + '">轉換為：' + $('<i>').text(r.role_name).html() + '</option>';
                     });
                     $('#pdo-transfer').html(opt);
                     $('#pdo-transfer-wrap').show();
