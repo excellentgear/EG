@@ -250,7 +250,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
 
         <div id="staleBar"></div>
         <div id="fillBar" style="display:none;">
-            <b>補登模式</b>：直接在格子裡打字（Enter／↑↓ 上下移動、Tab 往右），填完按「儲存全部」。
+            <b>補登模式</b>：直接在格子裡打字（<b>Enter 或 Tab＝往右一格</b>、<b>↑↓＝上下移動</b>），填完按「儲存全部」。
             空白＝清除該格的覆寫。<span style="color:#8a6d45;">未到期或該指標不適用的月份不給填。</span>
             <input type="text" id="fillNote" maxlength="200" placeholder="整批說明（選填，例：依 2025 紙本補登）">
             <span class="fb-n">未儲存 <b id="fillCount">0</b> 格</span>
@@ -885,16 +885,44 @@ $(document).on('input', '#kpiBody .fillIn', function(){
     $i.addClass('dirty');
     $('#fillCount').text(Object.keys(FILL_DIRTY).length);
 });
-/* 鍵盤移動：Enter／↓＝下一列同月份，↑＝上一列，Tab 交給瀏覽器（同列往右） */
+/* 點到已有資料的格子＝整個值選起來，直接打字就換掉（2026-09-15 使用者要求）。
+   本頁不在共用檔 eg_input_rules.js 的涵蓋名單內（見 input_rules_baseline.txt），
+   而且補登模式的 Enter／↑↓ 是這頁自己處理的，整支載進來會動到頁面其他輸入框的行為，
+   所以這裡只針對補登格子做同一件事，寫法比照共用檔規則 2（延後執行並再確認焦點還在，
+   否則 Chrome 會把焦點從別的欄位搶回來）。
+   滑鼠點擊會在 focus 之後把游標放到點到的位置＝取消選取，所以要吃掉那一次 mouseup。 */
+$(document).on('focus', '#kpiBody .fillIn', function(){
+    var el = this;
+    if (el.value === '') return;
+    el.__selAll = true;
+    setTimeout(function(){
+        if (document.activeElement !== el) return;
+        try { el.select(); } catch (err) {}
+    }, 0);
+});
+$(document).on('mouseup', '#kpiBody .fillIn', function(e){
+    if (this.__selAll) { e.preventDefault(); this.__selAll = false; }
+});
+$(document).on('blur', '#kpiBody .fillIn', function(){ this.__selAll = false; });
+
+/* 鍵盤移動（2026-09-15 使用者指定）：
+   Enter＝往右一格（同一列的下一個月份，到列尾接下一列開頭，跟 Excel 的 Tab 一樣）
+   ↑↓＝同一個月份上下移動　　←→ 不攔截，留給游標在數字裡面移動 */
 $(document).on('keydown', '#kpiBody .fillIn', function(e){
     var k = e.key;
     if (k !== 'Enter' && k !== 'ArrowDown' && k !== 'ArrowUp') return;
     e.preventDefault();
+    if (k === 'Enter') {
+        var all = $('#kpiBody .fillIn');          // DOM 順序＝同列由左到右、再換下一列
+        var i = all.index(this);
+        if (i >= 0 && i + 1 < all.length) all.eq(i + 1).focus().select();
+        return;
+    }
     var m = $(this).attr('data-m');
-    var all = $('#kpiBody .fillIn[data-m="' + m + '"]');
-    var idx = all.index(this);
+    var col = $('#kpiBody .fillIn[data-m="' + m + '"]');
+    var idx = col.index(this);
     var to = (k === 'ArrowUp') ? idx - 1 : idx + 1;
-    if (to >= 0 && to < all.length) { all.eq(to).focus().select(); }
+    if (to >= 0 && to < col.length) { col.eq(to).focus().select(); }
 });
 function fillSave(){
     var keys = Object.keys(FILL_DIRTY);
