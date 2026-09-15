@@ -406,7 +406,43 @@ case 'detail_rows': {
         $r['ex_at']     = isset($adj[$k]) ? (string)$adj[$k]['created_at'] : '';
         $rows[] = $r;
     }
+    // 可改真實資料的指標：把可編輯欄位與每一列目前的值一併帶出來（欄位定義來自程式碼白名單）
+    $editFields = []; $canEdit = 0;
+    $spec = kpi_as_detail_edit_spec($calc);
+    if ($em['mode'] === 'allow' && $spec) {
+        $canEdit = kpi_as_can_modify($year, $perms, ((int)$iy['owner_user_id'] === $uid)) ? 1 : 0;
+        foreach ($spec['fields'] as $f) {
+            $opts = [];
+            foreach (($f['opts'] ?? []) as $k => $t) $opts[] = ['v'=>(string)$k, 't'=>$t];
+            $editFields[] = ['k'=>$f['k'], 't'=>$f['t'], 'type'=>$f['type'],
+                             'opts'=>$opts, 'hint'=>$f['hint'] ?? ''];
+        }
+        if ($rows) {
+            $keys = array_map(function ($r) { return $r['key']; }, $rows);
+            $cols = array_map(function ($f) { return '`' . $f['k'] . '`'; }, $spec['fields']);
+            $in = implode(',', array_fill(0, count($keys), '?'));
+            try {
+                $q = $db->prepare("SELECT `" . $spec['pk'] . "` AS __k, " . implode(',', $cols)
+                                  . " FROM `" . $spec['table'] . "` WHERE `" . $spec['pk'] . "` IN ($in)");
+                $q->execute($keys);
+                $cur = [];
+                foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $cr) {
+                    $k = (string)$cr['__k']; unset($cr['__k']);
+                    foreach ($cr as $ck => $cv) {
+                        // 日期欄位可能是 datetime，<input type=date> 只吃 YYYY-MM-DD
+                        $cur[$k][$ck] = ($cv === null) ? '' : substr((string)$cv, 0, 10);
+                        foreach ($spec['fields'] as $f) {
+                            if ($f['k'] === $ck && ($f['type'] ?? '') !== 'date') $cur[$k][$ck] = (string)$cv;
+                        }
+                    }
+                }
+                foreach ($rows as &$rr) { $rr['edit'] = $cur[(string)$rr['key']] ?? new stdClass(); }
+                unset($rr);
+            } catch (Throwable $e) { /* 取不到就不給編輯欄位，不影響清單本身 */ }
+        }
+    }
     jout(['supported'=>1, 'mode'=>$em['mode'], 'setting'=>$em['setting'], 'suggest'=>$em['suggest'],
+          'edit_fields'=>$editFields, 'can_edit'=>$canEdit, 'warn'=>$d['warn'] ?? 0,
           'why'=>$em['why'], 'cols'=>$d['cols'], 'rows'=>$rows, 'total'=>$d['total'],
           'truncated'=>$d['total'] > $cap ? 1 : 0, 'note'=>$d['note'],
           'links'=>kpi_as_source_links($db, $uid, $calc),
@@ -494,6 +530,115 @@ case 'adjust_del': {
     kpi_as_log($db, $iid, $year, $month, 'adjust_del', 'exclude', implode(',', $keys), null,
                '取消排除 ' . $n . ' 筆', $u);
     jout(['removed'=>$n,
+          'value'=>($res && $res['value'] !== null) ? round($res['value'], 2) : null,
+          'num'=>$res['num'] ?? null, 'den'=>$res['den'] ?? null]);
+}
+
+/* ---------- 直接修改來源資料（只限「可改真實資料」的指標；使用者要求 2026-09-15） ----------
+   安全邊界：表名／主鍵／欄位／可選值一律取自程式碼裡的白名單（kpi_as_detail_edit_spec），
+   請求端只送 row_key 與欄位代號；而且**一定要先確認那一筆真的出現在這一格的違規清單裡**，
+   否則這支端點就會變成「可以改任何一列 bom_ing／order_track」的萬用編輯器（鐵律8）。 */
+case 'src_edit': {
+    $iid   = (int)($_POST['indicator_id'] ?? 0);
+    $year  = (int)($_POST['year'] ?? 0);
+    $month = max(1, min(12, (int)($_POST['month'] ?? 0)));
+    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    $iy = kpi_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $calc = (string)$iy['calculator_key'];
+    if ($iy['source_mode'] !== 'auto' || !kpi_as_detail_supported($calc)) jerr('這個指標不支援明細修改');
+
+    $em = kpi_as_edit_mode($db, $iid, $calc);
+    if ($em['mode'] !== 'allow') jerr('這個指標的來源資料不開放直接修改（' . $em['why'] . '），請改用「排除」', 403);
+    if (!kpi_as_can_modify($year, $perms, ((int)$iy['owner_user_id'] === $uid))) {
+        jerr(kpi_as_year_locked($year) ? '此年度已結案鎖定，僅 KPI 管理者可修改'
+                                       : '您沒有修改這個指標來源資料的權限（限擔當者本人、KPI 填報或 KPI 管理者）', 403);
+    }
+    $spec = kpi_as_detail_edit_spec($calc);
+    if (!$spec) jerr('這個指標沒有可修改的欄位');
+
+    $rowKey = trim((string)($_POST['row_key'] ?? ''));
+    $fieldK = trim((string)($_POST['field'] ?? ''));
+    $value  = (string)($_POST['value'] ?? '');
+    if ($rowKey === '') jerr('缺少資料列');
+    $fd = null;
+    foreach ($spec['fields'] as $f) { if ($f['k'] === $fieldK) { $fd = $f; break; } }
+    if (!$fd) jerr('這個欄位不開放修改');
+
+    // 這一筆必須真的在「這一格的不符合標準清單」裡
+    $params = kpi_as_params($iy['params_json']);
+    $d = kpi_as_detail($db, $calc, $year, $month, $params);
+    $hit = null;
+    foreach ($d['rows'] as $r) { if ((string)$r['key'] === $rowKey) { $hit = $r; break; } }
+    if (!$hit) jerr('這一筆已經不在本月的清單內（可能別人剛改過），請重新整理後再試');
+
+    // 值的驗證：型態與可選值都來自白名單
+    $val = $value;
+    if (($fd['type'] ?? '') === 'select') {
+        if (!isset($fd['opts'][$val])) jerr('選項不正確');
+    } elseif (($fd['type'] ?? '') === 'date') {
+        if ($val === '') {
+            if (empty($fd['nullable'])) jerr('這個欄位不可留空');
+            $val = null;
+        } elseif (!preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $val, $mm) || !checkdate((int)$mm[2], (int)$mm[3], (int)$mm[1])) {
+            jerr('日期格式不正確');
+        }
+    } else {
+        jerr('欄位型態不支援');
+    }
+
+    $table = $spec['table']; $pk = $spec['pk'];
+    if (!preg_match('/^[A-Za-z0-9_]+$/', $table) || !preg_match('/^[A-Za-z0-9_]+$/', $pk)
+        || !preg_match('/^[A-Za-z0-9_]+$/', $fieldK)) jerr('設定不正確');
+
+    $st = $db->prepare("SELECT `$fieldK` FROM `$table` WHERE `$pk`=?");
+    $st->execute([$rowKey]);
+    if ($st->rowCount() === 0) jerr('來源資料不存在');
+    $oldVal = $st->fetchColumn();
+    $oldStr = $oldVal === null ? '' : (string)$oldVal;
+    $newStr = $val === null ? '' : (string)$val;
+    if (substr($oldStr, 0, 10) === substr($newStr, 0, 10) && strlen($oldStr) && strlen($newStr)) {
+        // 同一天（日期欄可能帶時分秒）或完全相同＝沒有變更
+        if ($oldStr === $newStr || (($fd['type'] ?? '') === 'date')) jerr('值沒有變更');
+    }
+
+    $sets = ["`$fieldK`=?"]; $bind = [$val];
+    if (!empty($spec['stamp']['by'])) { $sets[] = "`" . $spec['stamp']['by'] . "`=?"; $bind[] = (string)$u['user_cname']; }
+    if (!empty($spec['stamp']['at'])) { $sets[] = "`" . $spec['stamp']['at'] . "`=NOW()"; }
+    $bind[] = $rowKey;
+    $db->beginTransaction();
+    try {
+        $db->prepare("UPDATE `$table` SET " . implode(',', $sets) . " WHERE `$pk`=?")->execute($bind);
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('寫入失敗：' . $e->getMessage(), 500); }
+
+    kpi_as_log($db, $iid, $year, $month, 'src_edit', $table . '.' . $fieldK, $oldStr, $newStr,
+               '由 KPI 明細修改來源資料（' . $spec['pk'] . '=' . $rowKey . '）', $u);
+    // 全站稽核紀錄（改的是別的模組的資料，只寫 KPI 自己的 change_log 會查不到）
+    try {
+        $db->prepare("INSERT INTO audit_log (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES ('kpi_src_edit', ?, ?, ?, ?, ?, ?, NOW())")
+           ->execute([$table, (string)$rowKey, mb_substr(implode(' ｜ ', $hit['vals']), 0, 100),
+                      json_encode(['field'=>$fieldK, 'old'=>$oldStr, 'new'=>$newStr,
+                                   'indicator_id'=>$iid, 'year'=>$year, 'month'=>$month],
+                                  JSON_UNESCAPED_UNICODE),
+                      (int)$u['id'], (string)$u['user_cname']]);
+    } catch (Throwable $e) {}
+
+    // 重算：這一格一定要算；若改的是「決定算在哪個月」的欄位，另一個月也要跟著算
+    $res = kpi_as_settle($db, $iy, $year, $month, $u);
+    $also = null;
+    if (!empty($fd['remonth'])) {
+        $t = kpi_as_edit_target_ym($calc, $fieldK, $newStr, $year);
+        if ($t && !($t[0] === $year && $t[1] === $month)) {
+            $iy2 = ($t[0] === $year) ? $iy : kpi_get_iy_row($db, $iid, $t[0]);
+            if ($iy2 && !kpi_as_year_locked($t[0]) && in_array($t[1], kpi_as_months($iy2['freq']), true)) {
+                kpi_as_settle($db, $iy2, $t[0], $t[1], $u);
+                $also = $t[0] . '年' . $t[1] . '月';
+            }
+        }
+    }
+    jout(['old'=>$oldStr, 'new'=>$newStr, 'also_recalced'=>$also,
           'value'=>($res && $res['value'] !== null) ? round($res['value'], 2) : null,
           'num'=>$res['num'] ?? null, 'den'=>$res['den'] ?? null]);
 }

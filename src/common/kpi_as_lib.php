@@ -1288,7 +1288,8 @@ function kpi_as_edit_mode(PDO $db, int $iid, ?string $calc): array {
 
 /** 這個計算模組有沒有做「違規明細」（沒做的一律不給排除，避免排了卻不影響計算） */
 function kpi_as_detail_supported(?string $calc): bool {
-    return in_array((string)$calc, ['vendor_ontime', 'order_ontime'], true);
+    return in_array((string)$calc, ['vendor_ontime', 'order_ontime',
+                                    'training_completion', 'drawing_ontime', 'incoming_ng_rate'], true);
 }
 
 /** 某一格已排除的來源列（完整資料，內部畫面用） */
@@ -1411,6 +1412,196 @@ function kpi_as_detail(PDO $db, ?string $calc, int $year, int $month, array $par
                          . ($exCli ? ('排除客戶：' . implode('、', $exCli) . '。') : '');
             return $out;
         }
+
+        /* ---- #19 人員教育訓練達成率：當月計畫卻沒完成的場次 ---- */
+        case 'training_completion': {
+            $inc = kpi_as_pv($params, 'include_cancelled', 0);
+            $inc = ((int)$inc === 1);
+            $sql = "SELECT session_id, course_name, train_type, org_unit, status, done_date,
+                           target_headcount, actual_headcount, plan_month
+                    FROM training_session WHERE year=? AND plan_month=? AND status<>'done'";
+            if (!$inc) $sql .= " AND status<>'cancelled'";
+            $sql .= " ORDER BY session_id";
+            $st = $db->prepare($sql);
+            $st->execute([$year, $month]);
+            $stName = ['planned'=>'計畫中', 'scheduled'=>'已排定', 'cancelled'=>'取消', 'done'=>'已完成'];
+            $out['cols'] = [['k'=>'course','t'=>'課程名稱'], ['k'=>'type','t'=>'類型'], ['k'=>'unit','t'=>'受訓單位'],
+                            ['k'=>'st','t'=>'目前狀態'], ['k'=>'people','t'=>'預定人數']];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $out['total']++;
+                $stv = (string)$r['status'];
+                $out['rows'][] = [
+                    'key'  => (string)$r['session_id'],
+                    'vals' => ['course'=>(string)$r['course_name'],
+                               'type'=>((string)$r['train_type'] === 'out' ? '外訓' : '內訓'),
+                               'unit'=>(string)$r['org_unit'], 'st'=>($stName[$stv] ?? $stv),
+                               'people'=>(string)(0 + $r['target_headcount'])],
+                    'why'  => '列在 ' . $month . ' 月的計畫，但還沒登錄完成（狀態：' . ($stName[$stv] ?? $stv) . '）',
+                    'fix'  => '若這場已經辦完了，請到教育訓練管理登錄完成（要有簽到與評鑑，所以不在這裡改）；'
+                            . '若改到別的月份舉辦，直接把「計畫月份」改成實際月份，這一筆就會改算到那個月；'
+                            . '若確定不辦了，狀態改成「取消」就不會列入分母。',
+                ];
+            }
+            $out['note'] = '達成率＝當月已完成場次 ÷ 當月計畫場次'
+                         . ($inc ? '（取消的場次有列入分母）' : '（取消的場次不列入分母）') . '。';
+            return $out;
+        }
+
+        /* ---- #11 出圖準時率：接單移轉設計之後，超過門檻工作日才移轉生管（或還沒移轉） ---- */
+        case 'drawing_ontime': {
+            $threshold = max(1, (int)kpi_as_pv($params, 'threshold_days', 4));
+            $designers = kpi_as_list(kpi_as_pv($params, 'designer_ids', ['109110201','112020603']));
+            if (!$designers) { $out['note'] = '尚未設定設計者，無法判定。'; return $out; }
+            $exCli = kpi_as_list(kpi_as_pv($params, 'exclude_clients', []));
+            $sql = "SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.Client_name, ot.ate, ot.ateGet, ot.pmGet,
+                           us.user_cname AS designer
+                    FROM order_track ot
+                    LEFT JOIN user us ON us.id=ot.ate
+                    WHERE ot.ate IN (" . implode(',', array_fill(0, count($designers), '?')) . ")
+                      AND DATE_FORMAT(ot.ateGet,'%Y-%m')=?";
+            $bind = array_merge($designers, [$ym]);
+            if ($exCli) {
+                $sql .= " AND ot.Client_name NOT IN (" . implode(',', array_fill(0, count($exCli), '?')) . ")";
+                $bind = array_merge($bind, $exCli);
+            }
+            $sql .= " ORDER BY ot.ateGet, ot.Order_id";
+            $st = $db->prepare($sql);
+            $st->execute($bind);
+            $warnN = 0;
+            $out['cols'] = [['k'=>'oo','t'=>'訂單編號'], ['k'=>'client','t'=>'客戶'], ['k'=>'d_id','t'=>'料號'],
+                            ['k'=>'designer','t'=>'設計者'], ['k'=>'ate','t'=>'接單移轉設計'],
+                            ['k'=>'pm','t'=>'設計移轉生管'], ['k'=>'days','t'=>'工作日']];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $noPm = (empty($r['pmGet']) || $r['pmGet'] === '0000-00-00 00:00:00');
+                $d1 = substr((string)$r['ateGet'], 0, 10);
+                $d2 = $noPm ? '' : substr((string)$r['pmGet'], 0, 10);
+                $days = null;
+                if (!$noPm) $days = ($d1 === $d2) ? 1 : kpi_as_workdays_inclusive($db, $d1, $d2);
+                if (!$noPm && $days <= $threshold) continue;      // 準時＝不是違規列
+                // 注意：**現行計算把「還沒登錄移轉生管」當成進行中、算成準時**（見 compute 的
+                // 「未移轉視為進行中」那一行）。所以這種列不能算進違規數，否則明細筆數會跟
+                // den-num 對不起來（實測 2026-08：真正違規 47 筆、未移轉 14 筆）。
+                // 但它多半是「圖交了卻沒登錄」，是最值得補的資料，所以照樣列出來標成提醒。
+                $warn = $noPm ? 1 : 0;
+                if (!$warn) $out['total']++;
+                if ($noPm) {
+                    $why = '（提醒）尚未登錄「設計移轉生管」——現行口徑視為進行中，仍算準時';
+                    $fix = '若圖已經交給生管，請把移轉日期補上（可直接在這裡改），補上之後才會真正納入準時判定；'
+                         . '還在設計中的就維持空白。';
+                } else {
+                    $why = '接單到移轉生管共 ' . $days . ' 個工作日，超過門檻 ' . $threshold . ' 天';
+                    $fix = '確認兩個日期是否登錄錯誤（可直接在這裡改）；若確實花了這麼久，屬真實逾期，不必修改。';
+                }
+                $out['rows'][] = [
+                    'key'  => (string)$r['Order_id'],
+                    'vals' => ['oo'=>(string)$r['Order_oo'], 'client'=>(string)$r['Client_name'],
+                               'd_id'=>(string)$r['d_id'], 'designer'=>(string)($r['designer'] ?: $r['ate']),
+                               'ate'=>$d1, 'pm'=>($d2 !== '' ? $d2 : '—'),
+                               'days'=>($days === null ? '—' : (string)$days)],
+                    'why'  => $why, 'fix' => $fix, 'warn' => $warn,
+                ];
+                if ($warn) $warnN++;
+            }
+            $out['warn'] = $warnN;
+            $out['note'] = '準時＝接單移轉設計到設計移轉生管在 ' . $threshold . ' 個工作日內（含起訖日，依行事曆工作日）。'
+                         . ($warnN ? ('另有 ' . $warnN . ' 筆還沒登錄移轉生管，依現行口徑算成準時，已一併列出（標「提醒」）。') : '');
+            return $out;
+        }
+
+        /* ---- #16 進料檢驗不良率：當月判定為不良的那幾筆 ---- */
+        case 'incoming_ng_rate': {
+            $ngs = kpi_as_list(kpi_as_pv($params, 'ng_statuses', ['ng']));
+            if (!$ngs) $ngs = ['ng'];
+            $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.QC_check, bi.QC_check_date, bi.QC_ps,
+                                       pn.ProcessName, bi.process_no,
+                                       COALESCE(mk.maker_id, bi.maker_id) AS maker_name
+                                FROM bom_ing bi
+                                LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                                LEFT JOIN maker_list mk ON mk.maker_id_no=bi.maker_id_no
+                                WHERE bi.QC_check_date IS NOT NULL AND DATE_FORMAT(bi.QC_check_date,'%Y-%m')=?
+                                  AND bi.QC_check IN (" . implode(',', array_fill(0, count($ngs), '?')) . ")
+                                ORDER BY bi.QC_check_date, bi.bom_ing_fid");
+            $st->execute(array_merge([$ym], $ngs));
+            $ckName = ['ok'=>'允收', 'ng'=>'驗退', 'QQ'=>'特採', 'AOD'=>'特採(AOD)'];
+            $out['cols'] = [['k'=>'bom','t'=>'製令'], ['k'=>'proc','t'=>'製程'], ['k'=>'maker','t'=>'廠商'],
+                            ['k'=>'qty','t'=>'數量'], ['k'=>'ck','t'=>'判定'], ['k'=>'ckd','t'=>'檢驗日'],
+                            ['k'=>'ps','t'=>'檢驗備註']];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $out['total']++;
+                $cv = (string)$r['QC_check'];
+                $out['rows'][] = [
+                    'key'  => (string)$r['bom_ing_fid'],
+                    'vals' => ['bom'=>(string)$r['bom'], 'proc'=>(string)($r['ProcessName'] ? $r['ProcessName'] : $r['process_no']),
+                               'maker'=>(string)$r['maker_name'], 'qty'=>(string)$r['sqty'],
+                               'ck'=>(($ckName[$cv] ?? $cv) . '（' . $cv . '）'),
+                               'ckd'=>substr((string)$r['QC_check_date'], 0, 10),
+                               'ps'=>mb_substr((string)$r['QC_ps'], 0, 40)],
+                    'why'  => '檢驗判定為「' . ($ckName[$cv] ?? $cv) . '」，計入不良',
+                    'fix'  => '只有「判定登錄錯誤」才在這裡改判定；確實不良請維持原判定（屬真實不良率）。'
+                            . '若檢驗日期打錯月份，改日期即可讓這一筆算到正確的月份。',
+                ];
+            }
+            $out['note'] = '不良率＝當月判定為 ' . implode('／', $ngs) . ' 的筆數 ÷ 當月檢驗總筆數。';
+            return $out;
+        }
     }
     return $out;
+}
+
+/* ============================================================
+ * 可直接修改真實資料的指標：違規明細的可編輯欄位白名單
+ * 只有這裡列出來的資料表／主鍵／欄位／可選值才改得動；請求端只送 row_key 與欄位代號，
+ * 表名欄名一律取自這份程式碼（不吃使用者輸入），且寫入前一定要先確認那一筆
+ * 真的出現在「這一格的違規清單」裡（見 API src_edit）。
+ * ============================================================ */
+function kpi_as_detail_edit_spec(?string $calc): array {
+    switch ((string)$calc) {
+        case 'training_completion':
+            $mon = [];
+            for ($i = 1; $i <= 12; $i++) $mon[(string)$i] = $i . '月';
+            return [
+                'table' => 'training_session', 'pk' => 'session_id',
+                'stamp' => null,                       // 這張表沒有 Modified_* 欄位
+                'fields' => [
+                    ['k'=>'plan_month', 't'=>'計畫月份', 'type'=>'select', 'opts'=>$mon, 'remonth'=>1,
+                     'hint'=>'改成實際舉辦的月份，這一筆就會改算到那個月'],
+                    ['k'=>'status', 't'=>'狀態', 'type'=>'select',
+                     'opts'=>['planned'=>'計畫中', 'scheduled'=>'已排定', 'cancelled'=>'取消（不列入分母）'],
+                     'hint'=>'「已完成」要有簽到與評鑑，請到教育訓練管理登錄'],
+                ]];
+        case 'drawing_ontime':
+            return [
+                // 刻意不寫 order_track 的 Modified_By/Modified_At：那是訂單變更比對的基準，
+                // 在這裡蓋掉會讓訂單變更誤判（沿用 2026-09-03 設計備註那次的決定）。
+                'table' => 'order_track', 'pk' => 'Order_id', 'stamp' => null,
+                'fields' => [
+                    ['k'=>'pmGet', 't'=>'設計移轉生管', 'type'=>'date', 'nullable'=>1,
+                     'hint'=>'圖已交生管卻沒登錄的，補上實際日期'],
+                    ['k'=>'ateGet', 't'=>'接單移轉設計', 'type'=>'date', 'remonth'=>1,
+                     'hint'=>'這一欄決定這筆算在哪一個月'],
+                ]];
+        case 'incoming_ng_rate':
+            return [
+                'table' => 'bom_ing', 'pk' => 'bom_ing_fid',
+                'stamp' => ['by'=>'Modified_By', 'at'=>'Modified_At'],
+                'fields' => [
+                    ['k'=>'QC_check', 't'=>'檢驗判定', 'type'=>'select',
+                     'opts'=>['ok'=>'允收 ok', 'ng'=>'驗退 ng', 'QQ'=>'特採 QQ'],
+                     'hint'=>'只有登錄錯誤才改；確實不良請維持原判定'],
+                    ['k'=>'QC_check_date', 't'=>'檢驗日期', 'type'=>'date', 'remonth'=>1,
+                     'hint'=>'這一欄決定這筆算在哪一個月'],
+                ]];
+    }
+    return [];
+}
+
+/** 修改後這一筆會落在哪一個年月（remonth 欄位用）；回 [year, month] 或 null */
+function kpi_as_edit_target_ym(?string $calc, string $field, string $value, int $curYear): ?array {
+    if ($value === '') return null;
+    if ($calc === 'training_completion' && $field === 'plan_month') {
+        $m = (int)$value;
+        return ($m >= 1 && $m <= 12) ? [$curYear, $m] : null;
+    }
+    if (preg_match('/^(\d{4})-(\d{2})-\d{2}/', $value, $m2)) return [(int)$m2[1], (int)$m2[2]];
+    return null;
 }

@@ -125,6 +125,14 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         table.vio-tbl .vio-why { color:#C2601C; white-space:nowrap; }
         table.vio-tbl .vio-fix { color:#7a6046; min-width:280px; }
         table.vio-tbl .vio-ex { color:#8A5A2B; margin-top:2px; font-size:11px; }
+        table.vio-tbl tr.warn td { background:#FBF7EF; }
+        table.vio-tbl tr.warn .vio-why { color:#8a6d45; }
+        table.vio-tbl .vio-edit { white-space:nowrap; }
+        table.vio-tbl .ve-row { display:flex; align-items:center; gap:4px; margin:1px 0; }
+        table.vio-tbl .ve-lb { font-size:11px; color:#8a6d45; width:78px; flex:0 0 78px; cursor:help; }
+        table.vio-tbl .veF { height:24px; font-size:12px; border:1px solid #D8BE93; border-radius:3px;
+            padding:0 4px; background:#fff; color:#5b3a1e; }
+        table.vio-tbl select.veF { max-width:130px; }
         #vioFoot button { height:30px; padding:0 14px; border-radius:4px; font-size:13px; margin-left:6px;
             border:1px solid #D8BE93; background:#fff; color:#5b3a1e; cursor:pointer; }
         #vioFoot button.warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
@@ -661,17 +669,20 @@ function renderVio(){
            + '如果某幾筆不應該算進這個月的績效，請勾選後按下方「排除選取」並填寫原因——'
            + '<b>排除只影響 KPI 計算，不會動到任何一筆真實資料</b>。</div>';
     } else if (d.mode === 'allow') {
-        h += '<div class="vio-warn ok">這個指標可以<b>直接到來源頁面修正真實資料</b>，改完回到 KPI 頁會自動重算。</div>';
+        h += '<div class="vio-warn ok">這個指標的來源資料<b>可以直接在最右邊那一欄修改</b>（改完立刻重算，並留下誰改了什麼的紀錄）；'
+           + '也可以到來源頁面處理。<b>只有登錄錯誤才改</b>，確實不符合標準的請保持原樣。</div>';
     }
     h += srcLinksHtml(d, '來源頁面');
 
     h += '<div class="vio-tblwrap"><table class="vio-tbl"><thead><tr>';
     if (+d.can_adjust && d.mode === 'deny') h += '<th style="width:28px;"><input type="checkbox" id="vioAll"></th>';
     d.cols.forEach(function(c){ h += '<th>'+esc(c.t)+'</th>'; });
-    h += '<th>不符合的原因</th><th>建議怎麼處理</th></tr></thead><tbody>';
+    h += '<th>不符合的原因</th><th>建議怎麼處理</th>';
+    if (d.mode === 'allow' && (d.edit_fields||[]).length) h += '<th>直接修改</th>';
+    h += '</tr></thead><tbody>';
     if (!d.rows.length) h += '<tr><td colspan="20" style="padding:14px;color:#8a6d45;">這個月沒有不符合標準的項目。</td></tr>';
     d.rows.forEach(function(x){
-        h += '<tr class="'+(+x.excluded?'ex':'')+'" data-k="'+esc(x.key)+'">';
+        h += '<tr class="'+(+x.excluded?'ex ':'')+(+x.warn?'warn':'')+'" data-k="'+esc(x.key)+'">';
         if (+d.can_adjust && d.mode === 'deny') {
             h += '<td><input type="checkbox" class="vioChk" value="'+esc(x.key)+'"'+(+x.excluded?' checked':'')+'></td>';
         }
@@ -681,6 +692,29 @@ function renderVio(){
            + (+x.excluded ? ('<div class="vio-ex">已排除計算：'+esc(x.ex_reason||'')
                 + '（'+esc(x.ex_by||'')+' '+esc((x.ex_at||'').substr(0,16))+'）</div>') : '')
            + '</td>';
+        if (d.mode === 'allow' && (d.edit_fields||[]).length) {
+            h += '<td class="vio-edit">';
+            if (+d.can_edit) {
+                d.edit_fields.forEach(function(f){
+                    var cur = x.edit && x.edit[f.k] != null ? String(x.edit[f.k]) : '';
+                    h += '<div class="ve-row"><span class="ve-lb" title="'+esc(f.hint||'')+'">'+esc(f.t)+'</span>';
+                    if (f.type === 'select') {
+                        h += '<select class="veF" data-k="'+esc(x.key)+'" data-f="'+esc(f.k)+'">';
+                        h += '<option value="">（不變）</option>';
+                        (f.opts||[]).forEach(function(o){
+                            h += '<option value="'+esc(o.v)+'"'+(o.v===cur?' selected':'')+'>'+esc(o.t)+'</option>';
+                        });
+                        h += '</select>';
+                    } else {
+                        h += '<input type="date" class="veF" data-k="'+esc(x.key)+'" data-f="'+esc(f.k)+'" value="'+esc(cur)+'">';
+                    }
+                    h += '</div>';
+                });
+            } else {
+                h += '<span style="color:#a08356;font-size:11px;">無修改權限</span>';
+            }
+            h += '</td>';
+        }
         h += '</tr>';
     });
     h += '</tbody></table></div>';
@@ -739,6 +773,28 @@ $(document).on('click', '#vioUndo', function(){
         openVio(VIO.ri, VIO.m);
         loadMatrix(true);
     }, 'json').fail(function(x){ alert('取消失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status)); });
+});
+/* 直接修改來源資料（allow 模式）：改一個欄位就送一次，成功後整份重載並同步主表 */
+$(document).on('change', '#vioBody .veF', function(){
+    var $f = $(this), key = $f.attr('data-k'), field = $f.attr('data-f'), val = $f.val();
+    if (val === '' && $f.is('select')) return;                 // 下拉的「（不變）」
+    var lb = $f.closest('.ve-row').find('.ve-lb').text();
+    if (!confirm('確定把這一筆的「'+lb+'」改成「'+(val||'（清空）')+'」？\n這會直接修改來源資料，並立刻重算這一格。')) {
+        openVio(VIO.ri, VIO.m); return;
+    }
+    $f.prop('disabled', true);
+    $.post(API, {action:'src_edit', indicator_id:VIO.iid, year:YEAR, month:VIO.m,
+                 row_key:key, field:field, value:val}, function(res){
+        if (!res.ok) { alert(res.error||'修改失敗'); openVio(VIO.ri, VIO.m); return; }
+        alert('已修改（'+(res.old||'空白')+' → '+(res.new||'空白')+'）。這一格重算為 '
+              + (res.value===null?'無資料':res.value) + '（'+res.num+'／'+res.den+'）。'
+              + (res.also_recalced ? ('\n這一筆已改算到 '+res.also_recalced+'，該月份也重算了。') : ''));
+        openVio(VIO.ri, VIO.m);
+        loadMatrix(true);
+    }, 'json').fail(function(x){
+        alert('修改失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status));
+        openVio(VIO.ri, VIO.m);
+    });
 });
 $(document).on('change', '#vioMode', function(){
     var mode = $(this).val();
