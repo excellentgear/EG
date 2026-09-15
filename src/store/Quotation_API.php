@@ -1592,6 +1592,10 @@ try {
             $stmt->execute([$quote_id]);
             $quote = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$quote) throw new Exception('找不到報價單');
+            // 這張是不是 ERP 匯入補建的歷史單（管理員補附件用；判定唯一實作在共用庫，
+            // 前端不自己比對備註字串＝鐵律4。後端要擋的時候會再判一次＝鐵律8）
+            require_once __DIR__ . '/../common/quotation_legacy_lib.php';
+            $quote['is_legacy_import'] = eg_quot_is_legacy_import($quote['note'] ?? '') ? 1 : 0;
             $quote['items'] = fetchItemsWithTiers($pdo, $quote_id);
             // 每個項目補齒輪規格文字
             if (!empty($quote['items'])) {

@@ -50,6 +50,55 @@ function pal_maker_cat_ids(PDO $pdo): array {
     } catch (Exception $e) { return []; }
 }
 
+/* ── 報價單附件也要有廠商欄位（2026-09-15 使用者要求）───────────────────────
+   `need_maker` 這個標籤旗標本來只有料號附件在吃（master_data_management），
+   報價單附件那邊完全沒接，所以「加工廠報價」這種標籤明明早就勾了要填廠商，
+   在報價單裡卻連欄位都看不到。這裡把同一個旗標接到報價單附件，**不另建旗標**。
+
+   必填則是另一個旗標 `maker_required_quote`：使用者拍板**只在報價單附件生效**
+   （料號附件維持選填，不受影響），預設 0＝跟現在完全一樣。 */
+
+/** 補建報價單附件這邊需要的欄位（可重複執行） */
+function pal_ensure_quote_schema(PDO $pdo): void {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    pal_ensure_schema($pdo);
+    try { $pdo->exec("ALTER TABLE quotation_file_categories ADD COLUMN maker_required_quote TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=報價單附件掛此標籤時廠商必填（料號附件不受影響）'"); } catch (Exception $e) {}
+    try { $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN maker_no VARCHAR(11) NULL COMMENT '廠商 maker_list.maker_id_no（標籤有勾 need_maker 才會用到）'"); } catch (Exception $e) {}
+}
+
+/** 報價單附件「廠商必填」的標籤 id（要同時勾 need_maker 才算數：沒有欄位就談不上必填） */
+function pal_maker_required_quote_cat_ids(PDO $pdo): array {
+    pal_ensure_quote_schema($pdo);
+    try {
+        return array_map('strval', $pdo->query(
+            "SELECT id FROM quotation_file_categories
+              WHERE COALESCE(need_maker,0)=1 AND COALESCE(maker_required_quote,0)=1")->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Exception $e) { return []; }
+}
+
+/**
+ * 廠商自動完成的查詢（報價單附件的廠商欄位用；料號主檔那邊有自己更早的一份，
+ * 欄位與輸出格式相同，不為了統一去動那支 1.5MB 的巨檔）。
+ * 已停用的廠商（status='X'）不列。
+ */
+function pal_maker_search(PDO $pdo, string $kw, int $limit = 15): array {
+    $kw = trim($kw);
+    if ($kw === '') return [];
+    $limit = max(1, min(50, $limit));
+    try {
+        $st = $pdo->prepare(
+            "SELECT maker_id_no, COALESCE(maker_id,'') AS maker_short, COALESCE(maker_id_all,'') AS maker_full
+               FROM maker_list
+              WHERE (maker_id_no LIKE :kw OR maker_id LIKE :kw OR maker_id_all LIKE :kw)
+                AND (status IS NULL OR status <> 'X')
+              ORDER BY maker_id_no LIMIT $limit");
+        $st->execute([':kw' => '%' . $kw . '%']);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) { return []; }
+}
+
 /** 這組標籤裡有沒有「可綁定報價單」的（決定要不要顯示欄位） */
 function pal_cats_hit(array $catIds, array $flagIds): bool {
     foreach ($catIds as $c) {

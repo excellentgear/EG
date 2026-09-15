@@ -177,6 +177,26 @@ function initTables(PDO $pdo): void {
     try { $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN expire_at DATETIME NULL COMMENT 'temp/trash 自動清除到期時間，NULL=不清' AFTER updated_at"); } catch(PDOException $e){}
     try { $pdo->exec("ALTER TABLE quotation_attachments ADD COLUMN trashed_reason VARCHAR(500) NULL COMMENT '補件被否決原因' AFTER expire_at"); } catch(PDOException $e){}
     try { $pdo->exec("ALTER TABLE quotation_attachments ADD INDEX idx_status_expire (status, expire_at)"); } catch(PDOException $e){}
+    // 2026-09-15 使用者要求：報價單附件也要能綁廠商（標籤旗標 need_maker 沿用料號附件那一份，
+    // 不另建；必填是另一個只在報價單生效的旗標 maker_required_quote）。唯一實作 part_attach_link_lib。
+    require_once __DIR__ . '/../common/part_attach_link_lib.php';
+    pal_ensure_quote_schema($pdo);
+}
+
+/* ── 報價單附件的廠商欄位（2026-09-15）────────────────────────────────────
+   哪些標籤要出現廠商欄位＝quotation_file_categories.need_maker（與料號附件共用同一個
+   旗標，不寫死標籤名稱＝鐵律4）；要不要必填＝maker_required_quote（只在報價單生效）。 */
+/** 這組類別裡有沒有「要填廠商」的 */
+function quotCatsNeedMaker(PDO $pdo, string $categoryIds): bool {
+    require_once __DIR__ . '/../common/part_attach_link_lib.php';
+    $cats = array_values(array_filter(array_map('trim', explode(',', $categoryIds)), fn($x) => $x !== ''));
+    return $cats ? pal_cats_hit($cats, pal_maker_cat_ids($pdo)) : false;
+}
+/** 這組類別裡有沒有「廠商必填」的 */
+function quotCatsMakerRequired(PDO $pdo, string $categoryIds): bool {
+    require_once __DIR__ . '/../common/part_attach_link_lib.php';
+    $cats = array_values(array_filter(array_map('trim', explode(',', $categoryIds)), fn($x) => $x !== ''));
+    return $cats ? pal_cats_hit($cats, pal_maker_required_quote_cat_ids($pdo)) : false;
 }
 
 $uploadedBy = $_SESSION['id'] ?? $_SESSION['userName'] ?? '';
@@ -189,7 +209,9 @@ switch ($action) {
         $rows = $pdo->query(
             "SELECT id, category_name, sort_order, COALESCE(show_in_list,0) AS show_in_list, tag_variables,
                     COALESCE(is_external_doc,0) AS is_external_doc, external_doc_name,
-                    COALESCE(supp_no_review,0) AS supp_no_review
+                    COALESCE(supp_no_review,0) AS supp_no_review,
+                    COALESCE(need_maker,0) AS need_maker,
+                    COALESCE(maker_required_quote,0) AS maker_required_quote
              FROM quotation_file_categories WHERE is_active=1 ORDER BY sort_order, id"
         )->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['success' => true, 'categories' => $rows]);
@@ -201,7 +223,9 @@ switch ($action) {
         $rows = $pdo->query(
             "SELECT id, category_name, sort_order, is_active, COALESCE(show_in_list,0) AS show_in_list, tag_variables,
                     COALESCE(is_external_doc,0) AS is_external_doc, external_doc_name,
-                    COALESCE(supp_no_review,0) AS supp_no_review
+                    COALESCE(supp_no_review,0) AS supp_no_review,
+                    COALESCE(need_maker,0) AS need_maker,
+                    COALESCE(maker_required_quote,0) AS maker_required_quote
              FROM quotation_file_categories ORDER BY sort_order, id"
         )->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['success' => true, 'categories' => $rows]);
@@ -240,6 +264,19 @@ switch ($action) {
                     echo json_encode(['success'=>false,'message'=>'沒有報價單設定權限，不能變更「補件免重新審核」']); exit;
                 }
                 $sets[]='supp_no_review=?'; $vals[]=(intval($_POST['supp_no_review']) ? 1 : 0);
+            }
+            // 廠商欄位（2026-09-15）：need_maker 是「要不要有廠商欄位」（料號附件與報價單附件共用同一個
+            // 旗標）、maker_required_quote 是「報價單附件要不要必填」（使用者拍板只在報價單生效）。
+            // 兩者都會改變別人畫面上的必填規則，故一樣要報價單設定權限；沒送的頁面完全不受影響。
+            if (isset($_POST['need_maker']) || isset($_POST['maker_required_quote'])) {
+                $_mf = _quotFeats($pdo);
+                if (!rbac_has($_mf, 'all') && !rbac_has($_mf, 'quotation_settings')) {
+                    echo json_encode(['success'=>false,'message'=>'沒有報價單設定權限，不能變更廠商欄位設定']); exit;
+                }
+                require_once __DIR__ . '/../common/part_attach_link_lib.php';
+                pal_ensure_quote_schema($pdo);
+                if (isset($_POST['need_maker']))           { $sets[]='need_maker=?';           $vals[]=(intval($_POST['need_maker']) ? 1 : 0); }
+                if (isset($_POST['maker_required_quote'])) { $sets[]='maker_required_quote=?'; $vals[]=(intval($_POST['maker_required_quote']) ? 1 : 0); }
             }
             $vals[] = $catId;
             $pdo->prepare("UPDATE quotation_file_categories SET ".implode(',', $sets)." WHERE id=?")
@@ -347,9 +384,12 @@ switch ($action) {
                     SELECT a.id, a.filename, a.original_name, a.category_id, a.category_ids,
                            a.linked_parts, a.file_size, a.status,
                            DATE_FORMAT(a.uploaded_at,'%Y-%m-%d %H:%i') AS mtime,
-                           c.category_name
+                           c.category_name,
+                           COALESCE(a.maker_no,'') AS maker_no,
+                           COALESCE(NULLIF(ml.maker_id,''), ml.maker_id_all, '') AS maker_name
                     FROM quotation_attachments a
                     LEFT JOIN quotation_file_categories c ON c.id = a.category_id
+                    LEFT JOIN maker_list ml ON ml.maker_id_no = a.maker_no
                     WHERE a.quote_no = ? AND a.status <> 'trash'
                 ");
                 $stmt->execute([$quoteNo]);
@@ -369,8 +409,14 @@ switch ($action) {
                         'size'          => $db['file_size']     ?? fmtSize((int)filesize($fp)),
                         'mtime'         => $db['mtime']         ?? date('Y-m-d H:i', filemtime($fp)),
                         'category_id'   => $db ? $db['category_id']   : null,
+                        // 2026-09-15：原本漏回傳 category_ids，前端只好退回只認 category_id（第一個類別），
+                        // 掛多個標籤的附件重新整理後就少顯示了（全庫 10 筆）。廠商欄位要靠全部類別判定，
+                        // 所以這裡把它補回去；必備類別的判定結果不受影響（那 10 筆的第一個類別本來就是必備的那個）。
+                        'category_ids'  => $db ? ($db['category_ids'] ?: ($db['category_id'] ? (string)$db['category_id'] : null)) : null,
                         'category_name' => $db ? $db['category_name'] : null,
                         'linked_parts'  => $db ? $db['linked_parts']  : null,
+                        'maker_no'      => $db ? (string)($db['maker_no'] ?? '')   : '',
+                        'maker_name'    => $db ? (string)($db['maker_name'] ?? '') : '',
                         'status'        => $db ? ($db['status'] ?? 'active') : 'active',
                     ];
                 }
@@ -423,13 +469,62 @@ switch ($action) {
         if (!$attachId) {
             echo json_encode(['success' => false, 'message' => '缺少 attachment_id']); exit;
         }
+        initTables($pdo);
+        require_once __DIR__ . '/../common/part_attach_link_lib.php';
+
+        // ── 廠商（2026-09-15 使用者要求）────────────────────────────────────
+        // `array_key_exists` 而不是 `!empty`：**沒送這個欄位＝舊的呼叫端（例如補件送審時
+        // 那支只改類別與料號的儲存），不可以把已填的廠商洗掉**；送了空字串才是真的要清掉。
+        $curRow = $pdo->prepare("SELECT category_ids, category_id, COALESCE(maker_no,'') AS maker_no FROM quotation_attachments WHERE id=? LIMIT 1");
+        $curRow->execute([$attachId]);
+        $cur = $curRow->fetch(PDO::FETCH_ASSOC);
+        if (!$cur) { echo json_encode(['success'=>false,'message'=>'找不到此附件']); exit; }
+        $oldCats  = (string)($cur['category_ids'] ?: ($cur['category_id'] ? (string)$cur['category_id'] : ''));
+        $oldMaker = (string)$cur['maker_no'];
+
+        $makerSent = array_key_exists('maker_no', $_POST);
+        $makerNo   = $oldMaker;
+        if ($makerSent) {
+            try { $makerNo = (string)(pal_check_maker_no($pdo, (string)$_POST['maker_no']) ?? ''); }
+            catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); exit; }
+        }
+        // 標籤已經不需要廠商了就順手清掉，免得留一個看不見的值
+        if ($makerNo !== '' && !quotCatsNeedMaker($pdo, (string)$catIdsStr)) $makerNo = '';
+
+        // 必填檢查（前端擋一次、後端同規則再擋一次＝鐵律8）。
+        // **只擋「這次動到的」**（使用者拍板）：這次新掛上必填廠商的標籤、或這次把廠商清掉，
+        // 才要求一定要有廠商；本來就掛著、本來就沒填的舊附件不擋，只在畫面上提示，
+        // 否則一開啟必填，既有報價單光是改個別的標籤都會被擋住＝影響現有使用者。
+        if (quotCatsMakerRequired($pdo, (string)$catIdsStr) && $makerNo === '') {
+            $addedRequired = quotCatsMakerRequired($pdo, (string)$catIdsStr)
+                             && !quotCatsMakerRequired($pdo, $oldCats);
+            $clearedMaker  = $makerSent && $oldMaker !== '';
+            if ($addedRequired || $clearedMaker) {
+                echo json_encode(['success'=>false,'code'=>'MAKER_REQUIRED',
+                                  'message'=>'這個附件類別已設定「廠商必填」，請先選擇廠商']); exit;
+            }
+        }
+
         $pdo->prepare("
             UPDATE quotation_attachments
-            SET category_id=?, category_ids=?, linked_parts=?, updated_at=NOW()
+            SET category_id=?, category_ids=?, linked_parts=?, maker_no=?, updated_at=NOW()
             WHERE id=?
-        ")->execute([$firstCatId, $catIdsStr, $linkedParts, $attachId]);
-        echo json_encode(['success' => true]);
+        ")->execute([$firstCatId, $catIdsStr, $linkedParts, ($makerNo !== '' ? $makerNo : null), $attachId]);
+        $mkName = '';
+        if ($makerNo !== '') {
+            $nm = pal_maker_names($pdo, [$makerNo]);
+            $mkName = (string)($nm[$makerNo] ?? '');
+        }
+        echo json_encode(['success' => true, 'maker_no' => $makerNo, 'maker_name' => $mkName]);
         break;
+
+    // ── 廠商自動完成（報價單附件的廠商欄位用）────────────────────
+    case 'maker_search': {
+        $kw   = trim($_GET['kw'] ?? $_POST['kw'] ?? '');
+        require_once __DIR__ . '/../common/part_attach_link_lib.php';
+        echo json_encode(['success' => true, 'data' => pal_maker_search($pdo, $kw, 15)]);
+        break;
+    }
 
     // ── 刪除單一檔案（+ DB 記錄）─────────────────────────────
     case 'delete_file':
@@ -569,25 +664,44 @@ switch ($action) {
         $ids     = array_values(array_filter(array_map('intval', (array)$ids)));
         if ($quoteNo === '' || empty($ids)) { echo json_encode(['success'=>false,'message'=>'參數不足']); break; }
 
-        // 報價單須存在且已核准
-        $qStmt = $pdo->prepare("SELECT quote_id, created_by, approval_status FROM quotation_list WHERE quote_no=? LIMIT 1");
+        // 報價單須存在
+        $qStmt = $pdo->prepare("SELECT quote_id, created_by, approval_status, note FROM quotation_list WHERE quote_no=? LIMIT 1");
         $qStmt->execute([$quoteNo]);
         $quote = $qStmt->fetch(PDO::FETCH_ASSOC);
         if (!$quote) { echo json_encode(['success'=>false,'message'=>'找不到此報價單']); break; }
-        if (($quote['approval_status'] ?? '') !== 'approved') {
-            echo json_encode(['success'=>false,'message'=>'此報價單尚未核准，附件請直接編輯報價單並存檔即可，毋須補件審核']); break;
-        }
-        // 權限：報價單建立者本人，或具 quotation_edit（管理者全權）
-        $feats = _quotFeats($pdo);
+
+        $feats   = _quotFeats($pdo);
         $isAdmin = rbac_has($feats, 'all');
         $canEdit = $isAdmin || rbac_has($feats, 'quotation_edit');
         $isOwner = ((int)$quote['created_by'] === _quotUid());
-        if (!$canEdit && !$isOwner) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無補件權限']); break; }
+        $isApproved = (($quote['approval_status'] ?? '') === 'approved');
+
+        /* ── 管理員補附件到「ERP 匯入補建的歷史報價單」（2026-09-15 使用者要求）──────
+           這種單從來沒有走過簽核，所以原本那顆「已核准才出現」的補件按鈕看不到，
+           12,496 張舊單等於沒有任何補附件的入口。使用者拍板兩件事：
+             ①只開放給管理員 ②只開放 ERP 匯入補建的歷史單（其他沒簽核的單不給）
+           而且**直接成為正式附件、不送審**——補件審核的用意是保護「已核准」的單不被偷改，
+           舊單既沒核准過又限定管理員，送審等於管理員自己審自己。仍寫 audit_log 留痕。 */
+        $legacyMode = false;
+        if (!$isApproved) {
+            require_once __DIR__ . '/../common/quotation_legacy_lib.php';
+            if (!$isAdmin) {
+                echo json_encode(['success'=>false,'message'=>'此報價單尚未核准，附件請直接編輯報價單並存檔即可，毋須補件審核']); break;
+            }
+            if (!eg_quot_is_legacy_import($quote['note'] ?? '')) {
+                echo json_encode(['success'=>false,'message'=>'只有 ERP 匯入補建的歷史報價單才提供管理員補附件；這張單請直接編輯報價單並存檔']); break;
+            }
+            $legacyMode = true;
+        } else {
+            // 權限：報價單建立者本人，或具 quotation_edit（管理者全權）
+            if (!$canEdit && !$isOwner) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無補件權限']); break; }
+        }
 
         $uid  = _quotUid();
         $name = eg_quotation_current_user_name($pdo, $uid);
         $ph   = implode(',', array_fill(0, count($ids), '?'));
-        $sel  = $pdo->prepare("SELECT id, original_name, category_ids, linked_parts FROM quotation_attachments
+        $sel  = $pdo->prepare("SELECT id, original_name, category_ids, linked_parts, COALESCE(maker_no,'') AS maker_no
+                               FROM quotation_attachments
                                WHERE quote_no=? AND status='temp' AND id IN ($ph)");
         $sel->execute(array_merge([$quoteNo], $ids));
         $targets = $sel->fetchAll(PDO::FETCH_ASSOC);
@@ -596,16 +710,23 @@ switch ($action) {
         $done = 0; $skipped = []; $autoActive = 0;
         foreach ($targets as $t) {
             if (empty($t['category_ids'])) { $skipped[] = ($t['original_name'] ?: ('#'.$t['id'])) . '（未設類別）'; continue; }
+            // 廠商必填（2026-09-15）：這是這次新上傳的附件，一律算「這次動到的」，所以要擋（鐵律8）
+            if (quotCatsMakerRequired($pdo, (string)$t['category_ids']) && (string)$t['maker_no'] === '') {
+                $skipped[] = ($t['original_name'] ?: ('#'.$t['id'])) . '（未選廠商）'; continue;
+            }
             $attId = (int)$t['id'];
             // 免審（全站關掉審核，或這個附件的類別全部都勾了免審）＝直接成為正式附件。
             // 不建簽核紀錄、不發通知（使用者拍板：發了等於還是要人去點），但一定要留稽核。
-            if (!quotSuppNeedReview($pdo, (string)$t['category_ids'])) {
+            if ($legacyMode || !quotSuppNeedReview($pdo, (string)$t['category_ids'])) {
                 $pdo->prepare("UPDATE quotation_attachments SET status='active', expire_at=NULL WHERE id=? AND status='temp'")->execute([$attId]);
                 try {
                     $pdo->prepare("INSERT INTO audit_log (action_type,target_type,target_id,target_name,changes,user_id,operator,created_at)
-                                   VALUES ('insert','quotation_attach_no_review',?,?,?,?,?,NOW())")
-                        ->execute([(string)$attId, mb_substr((string)($t['original_name'] ?: ''), 0, 200, 'UTF-8'),
-                                   '報價單 ' . $quoteNo . ' 補件免重新審核，直接成為正式附件（類別 id：' . $t['category_ids'] . '）',
+                                   VALUES ('insert',?,?,?,?,?,?,NOW())")
+                        ->execute([$legacyMode ? 'quotation_attach_legacy_add' : 'quotation_attach_no_review',
+                                   (string)$attId, mb_substr((string)($t['original_name'] ?: ''), 0, 200, 'UTF-8'),
+                                   $legacyMode
+                                     ? ('管理員為 ERP 匯入補建的歷史報價單 ' . $quoteNo . ' 補上附件，直接成為正式附件（類別 id：' . $t['category_ids'] . '）')
+                                     : ('報價單 ' . $quoteNo . ' 補件免重新審核，直接成為正式附件（類別 id：' . $t['category_ids'] . '）'),
                                    $uid, $name]);
                 } catch (Exception $_e) {}
                 $autoActive++;
@@ -620,7 +741,7 @@ switch ($action) {
         }
         $msgs = [];
         if ($done)       $msgs[] = "已送出 {$done} 件補件審核";
-        if ($autoActive) $msgs[] = "{$autoActive} 件免審核，已直接加入此報價單";
+        if ($autoActive) $msgs[] = $legacyMode ? "{$autoActive} 件已加入此報價單" : "{$autoActive} 件免審核，已直接加入此報價單";
         echo json_encode(['success'=>($done + $autoActive) > 0, 'submitted'=>$done, 'auto_active'=>$autoActive, 'skipped'=>$skipped,
                           'message'=>$msgs ? implode('；', $msgs) : '沒有附件送審（請先設定類別）']);
         break;

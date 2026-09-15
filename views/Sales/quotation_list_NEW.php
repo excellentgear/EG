@@ -131,6 +131,16 @@ $CAN_CHG_CUSTOMER = _hasF('quotation_change_customer');   // 整張單變更客�
 $IS_ADMIN         = _hasF('all');
 $_perm            = $IS_ADMIN ? 'A（管理員）' : (empty($_my_roles) ? '（未指派角色）' : implode('、',$_my_roles));
 
+/* ── 管理員為「ERP 匯入補建的舊報價單」補附件（2026-09-15 使用者要求）────────────
+   權限刻意**不沿用上面的 $IS_ADMIN**：本頁的 $_features 對「完全沒指派角色」的人會
+   fail-open 成 ['all']（過渡期相容），而這是一個授權動作，沿用那條退路就會變成畫面上
+   長出按鈕、按下去卻被後端擋。這裡與後端 API 用同一支 rbac 判定，兩邊結果一致。 */
+$CAN_LEGACY_SUPP = false;
+try {
+    require_once __DIR__ . '/../../src/common/rbac.php';
+    $CAN_LEGACY_SUPP = rbac_has(rbac_user_features($_pdo, $_user_id), 'all');
+} catch (Exception $_e) { $CAN_LEGACY_SUPP = false; }
+
 // 具「簽核報價單」權限者即使沒有一般檢視權限，也必須能進本頁處理待簽核通知（比照CAR當事人例外）
 if (!$CAN_VIEW && !$CAN_SIGN) { header('HTTP/1.1 403 Forbidden'); echo '您沒有瀏覽此頁面的權限。'; exit; }
 
@@ -1257,6 +1267,29 @@ body { background:var(--bg); }
                         免審仍會留下稽核紀錄（誰、什麼時候、哪一張單、哪個附件），只是不發待審通知。
                       </small>
                     </div>
+                    <!-- 2026-09-15 使用者要求：加工廠報價這種附件要能綁廠商，且必填與否由管理員決定 -->
+                    <div class="form-group" style="margin-bottom:6px;">
+                      <div class="checkbox" style="margin:0;">
+                        <label><input type="checkbox" id="cat-needmaker-chk" data-eg-skip
+                                      onchange="$('#cat-makerreq-group').toggle(this.checked); if(!this.checked) $('#cat-makerreq-chk').prop('checked', false);">
+                          <b>附件要填廠商</b></label>
+                      </div>
+                      <small class="text-muted">
+                        勾選後：報價單附件與料號附件掛到<b>這個類別</b>時，多出一個「廠商」欄位（來源＝廠商主檔，可打字搜尋）。<br>
+                        這個勾選是<b>兩邊共用</b>的（料號主檔管理的附件標籤設定也是同一個），取消勾選＝兩邊都不再出現廠商欄位。
+                      </small>
+                    </div>
+                    <div class="form-group" id="cat-makerreq-group" style="display:none;margin-bottom:6px;">
+                      <div class="checkbox" style="margin:0;">
+                        <label><input type="checkbox" id="cat-makerreq-chk" data-eg-skip>
+                          <b>廠商必填</b>（只在報價單附件生效）</label>
+                      </div>
+                      <small class="text-muted">
+                        勾選後：報價單這邊把附件掛上<b>這個類別</b>時一定要選廠商，沒選不給存。<br>
+                        <b>已經上傳好、沒填廠商的舊附件不受影響</b>——只在附件列上標「未填廠商」提醒，不會擋住報價單存檔。<br>
+                        料號附件（料號主檔管理）那邊維持選填，不受此設定影響。
+                      </small>
+                    </div>
                     <button class="btn btn-success btn-sm" onclick="saveCategorySettings()">
                       <i class="fa fa-save"></i> 儲存
                     </button>
@@ -1710,10 +1743,10 @@ body { background:var(--bg); }
   <div class="modal-dialog modal-lg" style="width:640px;max-width:96vw;" role="document"><div class="modal-content">
     <div class="modal-header" style="background:#F0A24B;color:#fff;padding:12px 18px;">
       <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.85;"><span>&times;</span></button>
-      <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-plus" style="margin-right:7px;"></i>補件 — <span id="suppModalQno"></span></h4>
+      <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-plus" style="margin-right:7px;"></i><span id="suppModalTitleText">補件</span> — <span id="suppModalQno"></span></h4>
     </div>
     <div class="modal-body" style="font-size:13px;max-height:70vh;overflow-y:auto;padding:14px 18px;">
-      <div style="font-size:12px;color:#7a4a00;background:#F7E0BD;border-radius:4px;padding:8px 10px;margin-bottom:10px;">
+      <div id="suppModalHint" style="font-size:12px;color:#7a4a00;background:#F7E0BD;border-radius:4px;padding:8px 10px;margin-bottom:10px;">
         追加的附件會先存為暫存，送出後由簽核者審核「是否允許放入此報價單」；通過才正式放入、否決則刪除並通知您。
       </div>
       <div id="suppDrop" style="border:2px dashed #F0A24B;border-radius:6px;padding:18px;text-align:center;color:#a86a1e;cursor:pointer;margin-bottom:10px;">
@@ -1959,6 +1992,7 @@ const CAN_VIEW_HISTORY = <?= json_encode($CAN_VIEW_HISTORY) ?>;
 const CAN_CHG_CUSTOMER = <?= json_encode($CAN_CHG_CUSTOMER) ?>;
 const CURRENT_UID      = <?= json_encode((int)($_SESSION['id'] ?? 0)) ?>;
 const IS_ADMIN         = <?= json_encode($IS_ADMIN) ?>;
+const CAN_LEGACY_SUPP  = <?= json_encode($CAN_LEGACY_SUPP) ?>;   // 舊報價單補附件（只給真正的管理員）
 const PERM_CODE        = <?= json_encode($_perm) ?>;
 const MY_USER_ID       = <?= json_encode($_user_id) ?>;
 
@@ -3269,9 +3303,12 @@ function renderSettingCategoryTable(cats) {
         const suppBadge = c.supp_no_review == 1
             ? ` <span class="label" style="background:#8A6A45;" title="已核准報價單追加此類別附件時免重新審核，直接成為正式附件">補件免審</span>`
             : '';
+        const makerBadge = c.need_maker == 1
+            ? ` <span class="label" style="background:#C77C1A;" title="${c.maker_required_quote == 1 ? '報價單附件掛此標籤時一定要選廠商' : '此標籤的附件會有廠商欄位（選填）'}">${c.maker_required_quote == 1 ? '廠商必填' : '要填廠商'}</span>`
+            : '';
         html += `<tr data-cat-id="${c.id}" draggable="false">
             <td style="width:24px;cursor:grab;color:#bbb;text-align:center;" class="cat-drag-handle">&#9776;</td>
-            <td>${escapeHtml(c.category_name)} ${badge}${extBadge}${suppBadge}</td>
+            <td>${escapeHtml(c.category_name)} ${badge}${extBadge}${suppBadge}${makerBadge}</td>
             <td>
                 <button class="btn btn-xs btn-warning" onclick="editCategorySettings(${c.id})">
                     <i class="fa fa-pencil"></i>
@@ -3319,8 +3356,11 @@ function saveCategorySettings() {
     const isExt   = $('#cat-extdoc-chk').is(':checked') ? 1 : 0;
     const extName = $('#cat-extdoc-name').val().trim();
     const suppFree= $('#cat-suppfree-chk').is(':checked') ? 1 : 0;
+    const needMk  = $('#cat-needmaker-chk').is(':checked') ? 1 : 0;
+    const mkReq   = (needMk && $('#cat-makerreq-chk').is(':checked')) ? 1 : 0;   // 沒有廠商欄位就談不上必填
     $.post(FILE_API_URL, { action:'save_category', cat_id:id, category_name:name, sort_order:ord,
-                           is_external_doc:isExt, external_doc_name:extName, supp_no_review:suppFree }, res => {
+                           is_external_doc:isExt, external_doc_name:extName, supp_no_review:suppFree,
+                           need_maker:needMk, maker_required_quote:mkReq }, res => {
         if (res.success) {
             Swal.fire({ toast:true, position:'top-end', icon:'success', title:res.message, showConfirmButton:false, timer:1800 });
             resetCategoryForm();
@@ -3338,6 +3378,9 @@ function editCategorySettings(id) {
     $('#cat-extdoc-name').val(c.external_doc_name || '');
     $('#cat-extdoc-name-group').toggle(c.is_external_doc == 1);
     $('#cat-suppfree-chk').prop('checked', c.supp_no_review == 1);
+    $('#cat-needmaker-chk').prop('checked', c.need_maker == 1);
+    $('#cat-makerreq-chk').prop('checked', c.maker_required_quote == 1);
+    $('#cat-makerreq-group').toggle(c.need_maker == 1);
     $('#cat-form-title').text('修改類別');
 }
 function resetCategoryForm() {
@@ -3348,6 +3391,9 @@ function resetCategoryForm() {
     $('#cat-extdoc-name').val('');
     $('#cat-extdoc-name-group').hide();
     $('#cat-suppfree-chk').prop('checked', false);
+    $('#cat-needmaker-chk').prop('checked', false);
+    $('#cat-makerreq-chk').prop('checked', false);
+    $('#cat-makerreq-group').hide();
     $('#cat-form-title').text('新增類別');
 }
 function deactivateCategorySettings(id) {
@@ -5000,6 +5046,13 @@ function renderViewPanel(q, contact, detail) {
             <i class="fa fa-plus"></i> 補件（追加附件送審）
         </button>
         <span style="font-size:11px;color:#999;margin-left:6px;">已核准報價單追加附件，需經簽核者審核通過才會正式放入此報價單</span>
+    </div>` : ''}
+    ${(q.approval_status!=='approved' && q.is_legacy_import==1 && CAN_LEGACY_SUPP) ? `
+    <div id="viewLegacySuppBar" style="margin-top:8px;">
+        <button class="btn btn-xs" style="background:#8A6A45;color:#fff;font-weight:600;" onclick="openSupplementModal('${esc(q.quote_no)}', true)">
+            <i class="fa fa-plus"></i> 補附件（管理員）
+        </button>
+        <span style="font-size:11px;color:#999;margin-left:6px;">ERP 匯入補建的歷史報價單，補上的附件直接成為正式附件（不送審，會留稽核紀錄）</span>
     </div>` : ''}`;
     $('#viewBody').html(html);
     // 記住目前檢視單的料號清單（product_id，與 linked_parts 儲存格式一致；供補件 modal 下拉使用）
@@ -5890,17 +5943,97 @@ function qlDrawingSpan(pid, pk) {
 // ══════════════════════════════════════════════════════════════
 // 補件重審（功能2）前端：已核准報價單追加附件 → 送簽核者審核
 // ══════════════════════════════════════════════════════════════
+/* ── 報價單附件的廠商欄位（2026-09-15 使用者要求）────────────────────────────
+   哪些標籤要出現廠商欄位＝quotation_file_categories.need_maker（**與料號附件共用同一個
+   旗標**，不寫死「加工廠報價」這個名字＝鐵律4）；要不要必填＝maker_required_quote
+   （使用者拍板只在報價單附件生效，料號附件維持選填）。兩個旗標都沒勾＝跟現在完全一樣。
+   這一組是補件跳窗與附件標籤面板共用的畫法，不要各自再刻一份。 */
+function makerCatIds()    { return (allFileCategories||[]).filter(c => c.need_maker == 1).map(c => String(c.id)); }
+function makerReqCatIds() { return (allFileCategories||[]).filter(c => c.need_maker == 1 && c.maker_required_quote == 1).map(c => String(c.id)); }
+function catsNeedMaker(ids)     { const f = makerCatIds();    return (ids||[]).some(i => f.indexOf(String(i)) >= 0); }
+function catsMakerRequired(ids) { const f = makerReqCatIds(); return (ids||[]).some(i => f.indexOf(String(i)) >= 0); }
+
+/** 廠商挑選盒（打字→即時查 maker_list→點選）。回傳 HTML；值放在 .qmaker-no */
+function quotMakerBoxHtml(curNo, curName, required) {
+    const label = curNo ? (curNo + (curName ? ' ' + curName : '')) : '';
+    return `<span class="qmaker-box" data-required="${required?1:0}" style="position:relative;display:inline-block;">
+        <input type="hidden" class="qmaker-no" value="${escapeHtml(curNo||'')}">
+        <input type="text" class="qmaker-kw form-control input-sm" data-eg-skip autocomplete="off"
+               style="display:inline-block;width:240px;" placeholder="輸入廠商代號或名稱…" value="${escapeHtml(label)}">
+        <div class="qmaker-dd" style="display:none;position:absolute;z-index:1200;left:0;top:100%;min-width:280px;max-height:230px;overflow:auto;background:#fff;border:1px solid #ddd;border-radius:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);"></div>
+        <span class="qmaker-hint" style="font-size:11px;margin-left:6px;"></span>
+    </span>`;
+}
+function _qmakerHint($box) {
+    const no  = $box.find('.qmaker-no').val() || '';
+    const kw  = ($box.find('.qmaker-kw').val() || '').trim();
+    const req = String($box.attr('data-required')) === '1';
+    const $h  = $box.find('.qmaker-hint');
+    if (no)       $h.css('color', '#27865a').text('已選擇廠商：' + kw);
+    else if (req) $h.css('color', '#DD5138').text('必填：請從清單中點選廠商');
+    else          $h.css('color', '#999').text(kw ? '請從清單中點選廠商（沒點選＝不填廠商）' : '尚未選擇廠商（可留空）');
+}
+/** 設定／清空廠商盒的值（外部呼叫用） */
+function quotMakerBoxSet($box, no, name, required) {
+    if (typeof required !== 'undefined') $box.attr('data-required', required ? 1 : 0);
+    $box.find('.qmaker-no').val(no || '');
+    $box.find('.qmaker-kw').val(no ? (no + (name ? ' ' + name : '')) : '');
+    _qmakerHint($box);
+}
+let _qmakerTimer = null;
+$(document).on('input', '.qmaker-kw', function () {
+    const $box = $(this).closest('.qmaker-box'), $dd = $box.find('.qmaker-dd');
+    const kw = ($(this).val() || '').trim();
+    $box.find('.qmaker-no').val('');            // 一改字就當作還沒選定，避免留著上一次選的廠商
+    _qmakerHint($box);
+    $box.trigger('qmaker:change');
+    clearTimeout(_qmakerTimer);
+    if (!kw) { $dd.hide().empty(); return; }
+    _qmakerTimer = setTimeout(() => {
+        $.get(FILE_API_URL, { action: 'maker_search', kw }, res => {
+            const rows = (res && res.success && res.data) ? res.data : [];
+            $dd.html(rows.length
+                ? rows.map(m => {
+                    const nm = m.maker_short || m.maker_full || '';
+                    return `<div class="qmaker-item" data-no="${escapeHtml(m.maker_id_no)}" data-nm="${escapeHtml(nm)}" style="padding:4px 8px;cursor:pointer;">`
+                         + `<strong>${escapeHtml(m.maker_id_no)}</strong>${nm ? ' <span style="color:#888;">'+escapeHtml(nm)+'</span>' : ''}</div>`;
+                  }).join('')
+                : '<div style="padding:4px 8px;color:#aaa;">查無符合的廠商</div>').show();
+        }, 'json');
+    }, 200);
+});
+$(document).on('mousedown', '.qmaker-item', function (e) {
+    e.preventDefault();
+    // 用 attr 讀：廠商代號像 0012 這種純數字，jQuery 的 .data() 會自動轉成數字把前導 0 吃掉
+    const no = $(this).attr('data-no') || '', nm = $(this).attr('data-nm') || '';
+    const $box = $(this).closest('.qmaker-box');
+    quotMakerBoxSet($box, no, nm);
+    $box.find('.qmaker-dd').hide().empty();
+    $box.trigger('qmaker:change');
+});
+$(document).on('mousedown', function (e) {
+    if (!$(e.target).closest('.qmaker-box').length) $('.qmaker-dd').hide();
+});
+
 let _viewQuoteParts = [];   // 目前檢視報價單的料號(product_id)清單
 let _suppQno = '';          // 補件中的報價單號
+let _suppLegacy = false;    // 是否為「管理員補附件到 ERP 匯入補建的舊報價單」（直接成為正式附件）
 let _suppUploaded = [];     // 本次已上傳的暫存附件 [{attachment_id, filename, original_name}]
 
-function openSupplementModal(quoteNo) {
+function openSupplementModal(quoteNo, legacy) {
     _suppQno = quoteNo;
+    _suppLegacy = !!legacy;      // 管理員為 ERP 匯入補建的舊報價單補附件（不送審）
     _suppUploaded = [];
+    $('#suppModalTitleText').text(_suppLegacy ? '補附件（管理員）' : '補件');
+    $('#suppModalHint').html(_suppLegacy
+        ? '這是 ERP 匯入補建的歷史報價單（從來沒有走過線上簽核）。補上的附件<b>直接成為此報價單的正式附件、不送審</b>，'
+          + '但會留下稽核紀錄（誰、什麼時候、補了哪一個附件）。'
+        : '追加的附件會先存為暫存，送出後由簽核者審核「是否允許放入此報價單」；通過才正式放入、否決則刪除並通知您。');
     $('#suppModalQno').text(quoteNo);
     $('#suppFileList').empty();
     $('#suppFileInput').val('');
     $('#suppSubmitBtn').prop('disabled', true);   // 尚無附件／未選類別前不可送審
+    _suppValidate();                              // 一開窗就把按鈕文案講對（舊單＝加入報價單、不送審）
     $('#supplementModal').modal('show');
 }
 
@@ -5928,7 +6061,7 @@ function _suppFileRowHtml(attId, name, filename) {
     const catOpts = fileCategories.length
         ? fileCategories.map(c => {
             const req = reqCats.some(r => Number(r) === Number(c.id));
-            return `<label style="margin-right:8px;font-weight:400;"><input type="checkbox" class="supp-cat" value="${c.id}" data-req="${req?1:0}" onchange="_suppSyncPart(this);_suppValidate()"> ${escapeHtml(c.category_name)}${req ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : ''}</label>`;
+            return `<label style="margin-right:8px;font-weight:400;"><input type="checkbox" class="supp-cat" value="${c.id}" data-req="${req?1:0}" onchange="_suppSyncPart(this);_suppSyncMaker(this);_suppValidate()"> ${escapeHtml(c.category_name)}${req ? ' <span style="color:#DD5138;" title="必備類別，需連結單一料號">*</span>' : ''}</label>`;
           }).join('')
         : '<span class="text-muted">尚無啟用類別</span>';
     const partOpts = ['<option value="all">共用（此報價單全部料號）</option>']
@@ -5944,6 +6077,10 @@ function _suppFileRowHtml(attId, name, filename) {
         <div style="font-size:12px;margin-bottom:4px;"><span style="color:#888;">類別（必選）：</span>${catOpts}
             ${reqCats.length ? '<span style="color:#DD5138;font-size:11px;margin-left:4px;">（* 必備類別，須連結單一料號）</span>' : ''}</div>
         <div style="font-size:12px;"><span style="color:#888;">連結料號：</span><select class="supp-part form-control input-sm" style="display:inline-block;width:auto;" onchange="_suppValidate()">${partOpts}</select></div>
+        <div class="supp-maker-row" style="font-size:12px;margin-top:4px;display:none;">
+            <span style="color:#888;">廠商<span class="supp-maker-req" style="color:#DD5138;display:none;">（必填）</span>：</span>
+            ${quotMakerBoxHtml('', '', false)}
+        </div>
     </div>`;
 }
 // 送出補件審核前的即時檢核：每個附件都必須選好類別（必備類別還需連結單一料號），
@@ -5957,6 +6094,8 @@ function _suppValidate() {
         if (!cats.length) { ok = false; return; }
         const hasReq = cats.some(c => reqCats.some(r => Number(r) === Number(c)));
         if (hasReq && $(this).find('.supp-part').val() === 'all') ok = false;
+        // 廠商必填（標籤設定可勾；後端 submit_supplement 會同規則再擋一次＝鐵律8）
+        if (catsMakerRequired(cats) && !($(this).find('.qmaker-no').val() || '').trim()) ok = false;
     });
     $('#suppSubmitBtn').prop('disabled', !ok);
     // 全部都免審時把按鈕講成「加入報價單」，免得使用者以為還要等人審（2026-09-08）
@@ -5966,6 +6105,11 @@ function _suppValidate() {
         if (cats.length && _suppCatsNeedReview(cats)) anyNeed = true;
     });
     const $b = $('#suppSubmitBtn');
+    if (_suppLegacy) {
+        $b.html('<i class="fa fa-check"></i> 加入報價單（不送審）')
+          .attr('title', 'ERP 匯入補建的歷史報價單，管理員補上的附件直接成為正式附件');
+        return;
+    }
     if ($rows.length && !anyNeed) {
         $b.html('<i class="fa fa-check"></i> 加入報價單（免審核）')
           .attr('title', '這些附件的類別已設定為補件免重新審核，送出後直接成為正式附件');
@@ -5984,6 +6128,23 @@ function _suppSyncPart(chk) {
     }
 }
 
+// 這一列勾到的類別要不要填廠商（need_maker）／要不要必填（maker_required_quote）
+function _suppSyncMaker(el) {
+    const $row  = $(el).closest('.supp-file');
+    const cats  = $row.find('.supp-cat:checked').map((i, o) => o.value).get();
+    const need  = catsNeedMaker(cats);
+    const req   = catsMakerRequired(cats);
+    const $wrap = $row.find('.supp-maker-row');
+    const $box  = $wrap.find('.qmaker-box');
+    $wrap.toggle(need);
+    $wrap.find('.supp-maker-req').toggle(req);
+    $box.attr('data-required', req ? 1 : 0);
+    if (!need) quotMakerBoxSet($box, '', '', false);   // 標籤改掉就不要留著一個看不見的廠商
+    else _qmakerHint($box);
+}
+// 廠商選好/清掉 → 立刻重算「可不可以送出」
+$(document).on('qmaker:change', '#suppFileList .qmaker-box', function () { _suppValidate(); });
+
 function _suppRemove(attId, btn) {
     const rec = _suppUploaded.find(u => Number(u.attachment_id) === Number(attId));
     if (rec) $.post(FILE_API_URL, { action:'delete_file', quote_no:_suppQno, filename: rec.filename });
@@ -5997,20 +6158,24 @@ function submitSupplement() {
     if (!$rows.length) { Swal.fire('提示','請先上傳要補的附件','info'); return; }
     const reqCats = (typeof effectiveRequiredCats === 'function') ? effectiveRequiredCats() : [];
     const plan = [];
-    let noCat = false, needPart = false;
+    let noCat = false, needPart = false, needMaker = false;
     $rows.each(function () {
         const attId = $(this).data('att-id');
         const cats  = $(this).find('.supp-cat:checked').map((i,el)=>el.value).get();
         const part  = $(this).find('.supp-part').val();
+        const maker = ($(this).find('.qmaker-no').val() || '').trim();
         if (!cats.length) { noCat = true; return; }
         const hasReq = cats.some(c => reqCats.some(r => Number(r) === Number(c)));
         if (hasReq && part === 'all') { needPart = true; }
-        plan.push({ attId, cats, linked: (part === 'all') ? 'all' : JSON.stringify([part]) });
+        if (catsMakerRequired(cats) && !maker) { needMaker = true; }
+        plan.push({ attId, cats, linked: (part === 'all') ? 'all' : JSON.stringify([part]),
+                    maker: catsNeedMaker(cats) ? maker : '' });
     });
-    if (noCat)    { Swal.fire('請設定類別','每個補件附件都必須至少選一個類別','warning'); return; }
-    if (needPart) { Swal.fire('必備類別需連結料號','所選類別含必備附件類別，必須連結單一料號（不可設為「共用」）','warning'); return; }
+    if (noCat)     { Swal.fire('請設定類別','每個補件附件都必須至少選一個類別','warning'); return; }
+    if (needPart)  { Swal.fire('必備類別需連結料號','所選類別含必備附件類別，必須連結單一料號（不可設為「共用」）','warning'); return; }
+    if (needMaker) { Swal.fire('請選擇廠商','所選類別已設定「廠商必填」，請從清單中點選廠商','warning'); return; }
     const ids = plan.map(p => p.attId);
-    const savers = plan.map(p => $.post(FILE_API_URL, { action:'update_attachment', attachment_id:p.attId, category_ids:p.cats.join(','), linked_parts:p.linked }));
+    const savers = plan.map(p => $.post(FILE_API_URL, { action:'update_attachment', attachment_id:p.attId, category_ids:p.cats.join(','), linked_parts:p.linked, maker_no:p.maker }));
     $('#suppSubmitBtn').prop('disabled', true);
     $.when.apply($, savers).always(() => {
         $.post(FILE_API_URL, { action:'submit_supplement', quote_no:_suppQno, attachment_ids: JSON.stringify(ids) }, res => {
@@ -8674,6 +8839,7 @@ function appendFileItem(f, quoteNo) {
                 <span class="file-cat-label" style="margin-left:3px;">${catLabel}</span>
             </button>
             <span class="file-part-badge-slot">${partBadgeHtml}</span>
+            <span class="file-maker-badge-slot">${fileMakerBadgeHtml(f.maker_no, f.maker_name, initCatIds)}</span>
             ${statusBadge}
             <span class="file-item-name" title="${escapeHtml(f.original_name||f.filename)}${isImg?'（點擊可檢視並旋轉）':''}" style="cursor:pointer;">${dispName}${isImg?' <i class="fa fa-search-plus" style="opacity:.5;font-size:10px;"></i>':''}</span>
             <span class="file-item-size">${escapeHtml(f.size)}</span>
@@ -8920,6 +9086,12 @@ function renderFileTagPanel($wrap, f, quoteNo) {
         partsHtml += ' <span class="text-muted" style="font-size:11px;">（尚未填寫料號）</span>';
     }
 
+    // 廠商（2026-09-15）：標籤有勾 need_maker 才出現；有勾 maker_required_quote 才是必填
+    const needMaker = catsNeedMaker(curCatIds);
+    const reqMaker  = catsMakerRequired(curCatIds);
+    const curMaker  = String(f.maker_no   || '');
+    const curMakerNm= String(f.maker_name || '');
+
     $wrap.find('.file-tag-panel').html(`
         <div class="ftp-row">
             <span class="ftp-label">類別：</span>
@@ -8929,7 +9101,26 @@ function renderFileTagPanel($wrap, f, quoteNo) {
             <span class="ftp-label">連結料號：</span>
             <div class="ftp-btns part-btns">${partsHtml}</div>
         </div>
+        ${needMaker ? `<div class="ftp-row">
+            <span class="ftp-label">廠商${reqMaker ? '<span style="color:#DD5138;" title="此類別已設定廠商必填">*</span>' : ''}：</span>
+            <div class="ftp-btns">${quotMakerBoxHtml(curMaker, curMakerNm, reqMaker)}
+                ${(reqMaker && !curMaker) ? '<div style="font-size:11px;color:#C77C1A;margin-top:3px;">這個類別已設定「廠商必填」，選好廠商就會自動存檔（舊附件不補填也不會擋住報價單存檔）</div>' : ''}
+            </div>
+        </div>` : ''}
     `);
+    _qmakerHint($wrap.find('.qmaker-box'));
+    /* 廠商選好／清空就存檔。打字中間（還沒從清單點選）**刻意不存**——那時 .qmaker-no 是空的，
+       存下去會把原本填好的廠商洗掉；整格清空才視為「要清掉廠商」。 */
+    $wrap.find('.qmaker-box').off('qmaker:change').on('qmaker:change', function () {
+        const $box = $(this);
+        const no   = ($box.find('.qmaker-no').val() || '').trim();
+        const kw   = ($box.find('.qmaker-kw').val() || '').trim();
+        if (!no && kw !== '') return;               // 打字中，尚未選定
+        f.maker_no = no;
+        if (!no) f.maker_name = '';
+        if (attachId) saveAttachmentMeta(attachId, f.category_ids || '', getLinkedPartsFromWrap($wrap), no, $wrap, f);
+        else updateFileMakerBadge($wrap, no, '');
+    });
 
     // ── 類別按鈕事件（多選 toggle）──
     $wrap.find('.file-cat-btn').off('click').on('click', function () {
@@ -8954,9 +9145,10 @@ function renderFileTagPanel($wrap, f, quoteNo) {
         } else {
             $wrap.find('.file-cat-clear').remove();
         }
-        if (attachId) saveAttachmentMeta(attachId, idsStr, getLinkedPartsFromWrap($wrap));
+        if (attachId) saveAttachmentMeta(attachId, idsStr, getLinkedPartsFromWrap($wrap), undefined, $wrap, f);
+        else updateFileMakerBadge($wrap, f.maker_no || '', f.maker_name || '');
         refreshPartAttachBadges();
-        // 類別增減可能切換必備模式（全部料號選項顯示/隱藏），重繪面板
+        // 類別增減可能切換必備模式（全部料號選項顯示/隱藏）與廠商欄位，重繪面板
         renderFileTagPanel($wrap, f, quoteNo);
     });
     // 初始化清除按鈕事件（用事件委派，支援動態插入的按鈕）
@@ -8967,7 +9159,8 @@ function renderFileTagPanel($wrap, f, quoteNo) {
         $wrap.data('cat-ids', '');
         updateFileCatBadge($wrap, null);
         $wrap.find('.file-cat-clear').remove();
-        if (attachId) saveAttachmentMeta(attachId, '', getLinkedPartsFromWrap($wrap));
+        if (attachId) saveAttachmentMeta(attachId, '', getLinkedPartsFromWrap($wrap), undefined, $wrap, f);
+        else updateFileMakerBadge($wrap, '', '');
         refreshPartAttachBadges();
         renderFileTagPanel($wrap, f, quoteNo);
     });
@@ -9019,6 +9212,25 @@ function updateFilePartBadge($wrap, parts) {
     $wrap.find('.file-part-badge-slot').html(filePartBadgeHtml(parts));
 }
 
+/* 廠商徽章（2026-09-15）：標籤有勾 need_maker 才會有意義。
+   已填＝直接看得到是哪一家；**必填卻沒填的舊附件只標示、不擋存檔**（使用者拍板），
+   點開標籤面板即可補填。 */
+function fileMakerBadgeHtml(makerNo, makerName, catIds) {
+    const cats = catIds || [];
+    if (makerNo) {
+        const label = escapeHtml(String(makerNo) + (makerName ? '（' + makerName + '）' : ''));
+        return `<span class="file-maker-label" style="font-size:11px;color:#8a5a00;background:#FDF3E3;border-radius:3px;padding:1px 6px;white-space:nowrap;" title="附件廠商"><i class="fa fa-industry"></i> ${label}</span>`;
+    }
+    if (catsMakerRequired(cats)) {
+        return `<span class="file-maker-label" style="font-size:11px;color:#C77C1A;background:#FFF7EA;border:1px solid #F0D9B5;border-radius:3px;padding:0 6px;white-space:nowrap;" title="這個附件類別已設定廠商必填，請點左側標籤鈕補填（不影響存檔）"><i class="fa fa-industry"></i> 未填廠商</span>`;
+    }
+    return '';
+}
+function updateFileMakerBadge($wrap, makerNo, makerName) {
+    const cats = String($wrap.data('cat-ids') || '').split(',').map(s => s.trim()).filter(Boolean);
+    $wrap.find('.file-maker-badge-slot').html(fileMakerBadgeHtml(makerNo, makerName, cats));
+}
+
 // 更新 🏷 按鈕的類別文字（只有一個地方）
 function updateFileCatBadge($wrap, catName) {
     const $btn = $wrap.find('.file-tag-toggle-btn');
@@ -9032,14 +9244,19 @@ function updateFileCatBadge($wrap, catName) {
     }
 }
 
-// 儲存類別（多選，逗號分隔 ID）+ 料號連結到 DB
-function saveAttachmentMeta(attachId, categoryIds, linkedParts) {
-    $.post(FILE_API_URL, {
-        action: 'update_attachment',
-        attachment_id: attachId,
-        category_ids:  categoryIds,
-        linked_parts:  linkedParts
-    }).fail(() => {
+// 儲存類別（多選，逗號分隔 ID）+ 料號連結 + 廠商到 DB
+// makerNo 沒傳＝這次不動廠商（後端用 array_key_exists 判定，不會把已填的廠商洗掉）
+function saveAttachmentMeta(attachId, categoryIds, linkedParts, makerNo, $wrap, f) {
+    const data = { action:'update_attachment', attachment_id:attachId, category_ids:categoryIds, linked_parts:linkedParts };
+    if (typeof makerNo !== 'undefined' && makerNo !== null) data.maker_no = makerNo;
+    return $.post(FILE_API_URL, data, res => {
+        if (res && res.success === false) {
+            Swal.fire('無法儲存', res.message || '請稍後再試', 'warning');
+            return;
+        }
+        if (res && f) { f.maker_no = res.maker_no || ''; f.maker_name = res.maker_name || ''; }
+        if (res && $wrap && $wrap.length) updateFileMakerBadge($wrap, res.maker_no || '', res.maker_name || '');
+    }, 'json').fail(() => {
         Swal.fire({ toast: true, position: 'top-end', icon: 'warning', title: '標籤儲存失敗', showConfirmButton: false, timer: 2000 });
     });
 }
