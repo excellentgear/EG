@@ -833,7 +833,8 @@ foreach ($options as $o) { $labelByPath[$o['path']] = $o['label']; }
                     $('#pdo-userlist').html(h);
                     var opt = '<option value="">直接移除此角色（這些人員將不再擁有此角色）</option>';
                     _permRolesCache.forEach(function(r) {
-                        if (r.role_id != roleId) opt += '<option value="' + r.role_id + '">轉換為：' + $('<i>').text(r.role_name).html() + '</option>';
+                        // 排除全站系統角色（管理員）：轉過去等於把這些人全部變成全站管理員，後端也會擋下
+                        if (r.role_id != roleId && r.is_system != 1) opt += '<option value="' + r.role_id + '">轉換為：' + $('<i>').text(r.role_name).html() + '</option>';
                     });
                     $('#pdo-transfer').html(opt);
                     $('#pdo-transfer-wrap').show();

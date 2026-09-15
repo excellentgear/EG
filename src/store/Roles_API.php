@@ -281,7 +281,7 @@ switch ($action) {
             $module = $_GET['module'] ?? $_POST['module'] ?? '';
             if ($module !== '') {
                 $urStmt = $pdo->prepare("
-                    SELECT ur.user_id, r.role_id, r.role_name
+                    SELECT ur.user_id, r.role_id, r.role_name, r.is_system
                     FROM user_roles ur
                     JOIN roles r ON r.role_id = ur.role_id
                     WHERE r.module = ? OR r.is_system = 1");
@@ -289,14 +289,16 @@ switch ($action) {
                 $urRows = $urStmt->fetchAll(PDO::FETCH_ASSOC);
             } else {
                 $urRows = $pdo->query("
-                    SELECT ur.user_id, r.role_id, r.role_name
+                    SELECT ur.user_id, r.role_id, r.role_name, r.is_system
                     FROM user_roles ur
                     JOIN roles r ON r.role_id = ur.role_id
                 ")->fetchAll(PDO::FETCH_ASSOC);
             }
+            // is_system 一併回傳：前端要標示「這是全站系統管理員」時一律用這個欄位判斷，
+            // 不要比對 role_name === '管理員'（角色可被改名，寫死名稱＝改名後標示就失效＝鐵律4）
             $urMap = [];
             foreach ($urRows as $row) {
-                $urMap[$row['user_id']][] = ['role_id'=>$row['role_id'],'role_name'=>$row['role_name']];
+                $urMap[$row['user_id']][] = ['role_id'=>$row['role_id'],'role_name'=>$row['role_name'],'is_system'=>(int)$row['is_system']];
             }
             foreach ($users as &$u) $u['roles'] = $urMap[$u['id']] ?? [];
             unset($u);
@@ -316,6 +318,21 @@ switch ($action) {
         $rid = intval($_POST['role_id'] ?? 0);
         if (!$uid || !$rid) { $response = ['success'=>false,'message'=>'缺少參數']; break; }
         try {
+            // 系統角色（管理員）＝全站所有模組的全部權限，不是「這個模組的管理員」。
+            // 它會出現在每一個模組的角色清單裡，實際上已經被誤點過三次（2026-08-26 何沐桐／
+            // 2026-09-09 葉卿雅／2026-09-14 林雅婷，都是點完隔幾秒又改點該模組自己的「一般管理員」，
+            // 但誤點的那筆沒有被移除），症狀是側欄冒出使用者從沒被授權的單頁模組（更新資料／排程系統…），
+            // 因為 rf_has_module_role() 對 is_system=1 一律回 true。
+            // 故此處要求呼叫端明確帶 confirm_system=1（前端跳確認窗時附上），
+            // 直打 API 或舊的轉換流程誤送到系統角色時一律擋下並講清楚原因（鐵律8）。
+            $chkSys = $pdo->prepare("SELECT is_system, role_name FROM roles WHERE role_id=? LIMIT 1");
+            $chkSys->execute([$rid]);
+            $rInfo = $chkSys->fetch(PDO::FETCH_ASSOC);
+            if (!$rInfo) { $response = ['success'=>false,'message'=>'角色不存在']; break; }
+            if ((int)$rInfo['is_system'] === 1 && (string)($_POST['confirm_system'] ?? '') !== '1') {
+                $response = ['success'=>false,'message'=>'「'.$rInfo['role_name'].'」是全站系統角色（等同全部模組的全部權限），不是本模組的管理員。若確定要指派，請由權限設定頁的確認提示操作。'];
+                break;
+            }
             $st = $pdo->prepare("INSERT IGNORE INTO user_roles (user_id,role_id) VALUES (?,?)");
             $st->execute([$uid,$rid]);
             if ($st->rowCount() > 0) {

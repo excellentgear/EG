@@ -441,7 +441,7 @@ try {
          FROM user_roles ur JOIN roles r ON r.role_id = ur.role_id")->fetchAll(PDO::FETCH_ASSOC);
     $_sysRoleUsers = [];
     foreach ($_urRows as $_r) {
-        $_entry = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name']];
+        $_entry = ['role_id'=>$_r['role_id'], 'role_name'=>$_r['role_name'], 'is_system'=>(int)$_r['is_system']];
         if ((int)$_r['is_system'] === 1) {
             $_sysRoleUsers[$_r['user_id']][] = $_entry;
             foreach (array_keys($RS) as $_m) $RSU[$_m][$_r['user_id']][] = $_entry;   // 系統角色：每個模組都顯示
@@ -555,6 +555,20 @@ if (!function_exists('eg_render_role_section')) {
                     </div>
                     <div class="x_content">
                         <p style="font-size:12px;color:#888;margin-bottom:12px;"><i class="fa fa-info-circle"></i> <?= $hint ?></p>
+                        <?php
+                        // 「管理員」（roles.is_system=1）會出現在每一個模組的角色清單裡，但它是**全站**系統角色，
+                        // 不是本模組的管理員；勾下去等於取得全部模組的全部權限（側欄的單頁模組也會全部冒出來）。
+                        // 已誤點過三次，故在每個區塊都明白寫出來，判斷一律用 is_system 不比對角色名稱（鐵律4）。
+                        $_sysNames = [];
+                        foreach ($roles as $_r) { if (!empty($_r['is_system'])) $_sysNames[] = $_r['role_name']; }
+                        if ($_sysNames): ?>
+                        <p style="font-size:12px;color:#B23B1E;background:#FBEAE3;border:1px solid #E8BCA9;border-radius:3px;padding:6px 9px;margin-bottom:12px;">
+                            <i class="fa fa-exclamation-triangle"></i>
+                            清單裡的「<?= htmlspecialchars(implode('」「', $_sysNames)) ?>」是<strong>全站系統角色</strong>——指派下去等於取得
+                            <strong>全部模組的全部權限</strong>（左側選單也會多出他原本沒被授權的項目），<strong>不是</strong>本區塊的管理員。
+                            要給本模組的管理權限，請選名稱裡有「○○管理員」的那一個。
+                        </p>
+                        <?php endif; ?>
                         <?php if (empty($roles)): ?>
                             <div class="alert alert-warning">尚未建立任何角色，請先至該頁面的「權限設定」建立角色。</div>
                         <?php else: ?>
@@ -597,11 +611,11 @@ if (!function_exists('eg_render_role_section')) {
                                         <td id="<?= $prefix ?>-tags-<?= $admin['id'] ?>">
                                             <?php if (empty($assignedRoles)): ?>
                                                 <span class="text-muted" style="font-size:12px;">（未指派）</span>
-                                            <?php else: foreach ($assignedRoles as $ar): ?>
-                                                <span class="label <?= $ar['role_name']==='管理員'?'label-danger':'label-primary' ?>" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;">
-                                                    <?= htmlspecialchars($ar['role_name']) ?>
+                                            <?php else: foreach ($assignedRoles as $ar): $_arSys = !empty($ar['is_system']); ?>
+                                                <span class="label <?= $_arSys?'label-danger':'label-primary' ?>" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;"<?= $_arSys?' title="全站系統角色：擁有全部模組的全部權限"':'' ?>>
+                                                    <?= htmlspecialchars($ar['role_name']) ?><?= $_arSys ? '（全站）' : '' ?>
                                                     <?php if ($canEdit): ?>
-                                                        <a href="#" onclick="roleRemove('<?= $prefix ?>','<?= $module ?>',<?= $admin['id'] ?>,<?= $ar['role_id'] ?>,<?= $ar['role_name']==='管理員'?1:0 ?>);return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除">×</a>
+                                                        <a href="#" onclick="roleRemove('<?= $prefix ?>','<?= $module ?>',<?= $admin['id'] ?>,<?= $ar['role_id'] ?>,<?= $_arSys?1:0 ?>);return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除">×</a>
                                                     <?php endif; ?>
                                                 </span>
                                             <?php endforeach; endif; ?>
@@ -611,7 +625,9 @@ if (!function_exists('eg_render_role_section')) {
                                             <div class="input-group input-group-sm">
                                                 <select class="form-control" id="<?= $prefix ?>-sel-<?= $admin['id'] ?>">
                                                     <option value="">— 選擇角色 —</option>
-                                                    <?php foreach ($roles as $role): ?><option value="<?= $role['role_id'] ?>"><?= htmlspecialchars($role['role_name']) ?></option><?php endforeach; ?>
+                                                    <?php foreach ($roles as $role): $_isSys = !empty($role['is_system']); ?>
+                                                    <option value="<?= $role['role_id'] ?>" data-sys="<?= $_isSys ? 1 : 0 ?>"<?= $_isSys ? ' style="color:#B23B1E;font-weight:600;"' : '' ?>><?= htmlspecialchars($role['role_name']) ?><?= $_isSys ? '（⚠ 全站・全部權限）' : '' ?></option>
+                                                    <?php endforeach; ?>
                                                 </select>
                                                 <span class="input-group-btn">
                                                     <button class="btn btn-primary btn-sm" type="button" onclick="roleAssign('<?= $prefix ?>','<?= $module ?>',<?= $admin['id'] ?>)"><i class="fa fa-plus"></i> 指派</button>
@@ -2222,6 +2238,8 @@ $_quotDepts = array_keys($_deptSet);
         // 模組代碼 → 中文名（與 PHP 端 eg_module_label() 同一張表，畫面上不要出現 as_doc 這種代碼）
         var EG_MODULE_LABEL = <?= json_encode(array_map(function($m){ return $m['label']; }, $EG_ROLE_MODULES), JSON_UNESCAPED_UNICODE) ?>;
         function egModLabel(m) { return (m && EG_MODULE_LABEL[m]) ? EG_MODULE_LABEL[m] : (m || ''); }
+        // 目前持有「全站系統角色」的人：複製權限時要先講清楚，否則會把全站管理員安靜地複製給對方
+        var EG_SYS_ROLE_UIDS = <?= json_encode(array_map('strval', array_keys($_sysRoleUsers ?? [])), JSON_UNESCAPED_UNICODE) ?>;
 
         // 複製其他員工的權限設定（角色指派＋選單群組/頁面權限）
         $(document).on('click', '#btn-copy-perm', function() {
@@ -2235,7 +2253,12 @@ $_quotDepts = array_keys($_deptSet);
             var modeText = mode === 'overwrite'
                 ? '覆蓋：會先清空「' + tgtName + '」原本所有的角色與模組權限，再完全比照「' + srcName + '」'
                 : '合併：只補上「' + tgtName + '」目前沒有的設定，保留他原本已有的其他設定';
-            if (!confirm('確定要把「' + srcName + '」的權限設定複製給「' + tgtName + '」嗎？\n\n' + modeText + '\n\n（不含頁面白名單等個別例外設定）')) return;
+            // 來源持有全站系統角色時，複製會一併把「全站管理員」帶過去（角色是整批複製的），
+            // 這件事在畫面上完全看不出來，所以一定要先講明白
+            var sysWarn = (EG_SYS_ROLE_UIDS.indexOf(String(srcId)) !== -1)
+                ? '\n\n⚠「' + srcName + '」持有全站系統角色（管理員），複製後「' + tgtName + '」也會變成全站管理員，\n　　取得全部模組的全部權限。若不是要給全站管理員，請改用下方各模組的角色指派逐項給。'
+                : '';
+            if (!confirm('確定要把「' + srcName + '」的權限設定複製給「' + tgtName + '」嗎？\n\n' + modeText + sysWarn + '\n\n（不含頁面白名單等個別例外設定）')) return;
             var $btn = $(this).prop('disabled', true);
             $.post(ROLES_API, { action: 'copy_user_permissions', source_user_id: srcId, target_user_id: tgtId, mode: mode })
             .done(function(res) {
@@ -2712,11 +2735,24 @@ $_quotDepts = array_keys($_deptSet);
         // ══════════════════════════════════════════════════════════════
 
         function roleAssign(p, module, userId) {
-            var roleId = $('#' + p + '-sel-' + userId).val();
+            var $sel = $('#' + p + '-sel-' + userId);
+            var roleId = $sel.val();
             if (!roleId) { alert('請先選擇角色'); return; }
-            var $btn = $('#' + p + '-sel-' + userId).closest('.input-group').find('button');
+            // 系統角色（管理員）＝全站全部模組的全部權限，不是本模組的管理員。
+            // 這是已經誤點過三次的地方，所以指派前一定要再確認一次；後端也會要求 confirm_system（鐵律8）。
+            var $opt = $sel.find('option:selected');
+            var isSys = String($opt.data('sys')) === '1';
+            var userName = ($('#' + p + '-tags-' + userId).closest('tr').find('td').first().text() || '這位使用者').trim();
+            if (isSys && !confirm(
+                '⚠ 這是「全站系統角色」，不是本模組的管理員。\n\n' +
+                '指派「' + $opt.text().replace('（⚠ 全站・全部權限）','') + '」給「' + userName + '」之後，他會取得\n' +
+                '　・全部模組的全部權限\n' +
+                '　・左側選單會多出他原本沒被授權的項目（更新資料、排程系統…）\n\n' +
+                '如果只是要給他本模組的管理權限，請改選名稱裡有「○○管理員」的那一個。\n\n' +
+                '確定要指派全站系統角色嗎？')) return;
+            var $btn = $sel.closest('.input-group').find('button');
             $btn.prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i>');
-            $.post(ROLES_API, { action:'assign_user_role', user_id:userId, role_id:roleId })
+            $.post(ROLES_API, { action:'assign_user_role', user_id:userId, role_id:roleId, confirm_system: isSys ? 1 : 0 })
             .done(function(res) {
                 if (!res.success) { alert('指派失敗：' + (res.message || '未知錯誤')); return; }
                 roleReloadRow(p, module, userId);
@@ -2728,7 +2764,7 @@ $_quotDepts = array_keys($_deptSet);
 
         function roleRemove(p, module, userId, roleId, isAdm) {
             var msg = isAdm
-                ? '「管理員」是全域系統角色，移除後此使用者在「所有模組」（報價單／公告通知／首頁／品管檢驗）的管理員權限都會一併消失。\n\n確認移除？'
+                ? '這是全站系統角色，移除後此使用者在「所有模組」的管理員權限都會一併消失，\n左側選單也會只剩下他被個別授權的項目。\n\n確認移除？'
                 : '確認移除此角色？';
             if (!confirm(msg)) return;
             $.post(ROLES_API, { action:'remove_user_role', user_id:userId, role_id:roleId })
@@ -2752,9 +2788,10 @@ $_quotDepts = array_keys($_deptSet);
                 }
                 var html = '';
                 user.roles.forEach(function(r) {
-                    var isAdm = r.role_name === '管理員';
-                    html += '<span class="label ' + (isAdm ? 'label-danger' : 'label-primary') + '" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;">';
-                    html += r.role_name;
+                    // 一律用 is_system 判斷（角色可以改名，比對名稱＝改名後標示就失效）
+                    var isAdm = (r.is_system == 1);
+                    html += '<span class="label ' + (isAdm ? 'label-danger' : 'label-primary') + '" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;"' + (isAdm ? ' title="全站系統角色：擁有全部模組的全部權限"' : '') + '>';
+                    html += r.role_name + (isAdm ? '（全站）' : '');
                     html += ' <a href="#" onclick="roleRemove(\'' + p + '\',\'' + module + '\',' + userId + ',' + r.role_id + ',' + (isAdm ? 1 : 0) + ');return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除此角色">&times;</a>';
                     html += '</span>';
                 });

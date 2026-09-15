@@ -5022,7 +5022,8 @@ $(function(){
             if(!users.length){ $('#del-role-users').html('<div class="alert alert-info" style="margin:0;">目前沒有人員被指派為此角色，可直接刪除。</div>'); }
             else {
                 $('#del-role-users').html('<div class="alert alert-warning" style="margin:0;"><b>下列 '+users.length+' 位人員目前是「'+esc(_permRoleName)+'」：</b><br>'+users.map(function(u){ return esc(u.user_cname||u.user_uname||u.id); }).join('、')+'</div>');
-                var opts='<option value="">不轉移（僅移除此角色指派）</option>'+_permRolesData.filter(function(r){ return r.role_id!=_permRole; }).map(function(r){ return '<option value="'+r.role_id+'">'+esc(r.role_name)+'</option>'; }).join('');
+                // 排除全站系統角色（管理員）：轉過去等於把這些人全部變成全站管理員，後端也會擋下
+                var opts='<option value="">不轉移（僅移除此角色指派）</option>'+_permRolesData.filter(function(r){ return r.role_id!=_permRole && r.is_system!=1; }).map(function(r){ return '<option value="'+r.role_id+'">'+esc(r.role_name)+'</option>'; }).join('');
                 $('#del-transfer-role').html(opts); $('#del-transfer-wrap').show();
             }
         },'json');
