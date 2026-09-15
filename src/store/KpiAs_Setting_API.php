@@ -33,7 +33,7 @@ $curY = (int)date('Y');
 switch ($action) {
 
 case 'get_all': {
-    $year = max(2025, min($curY, (int)($_GET['year'] ?? $curY)));
+    $year = kpi_as_year_pick($db, $_GET['year'] ?? $curY);
     kpi_as_ensure_year($db, $year);
     $st = $db->prepare("SELECT i.indicator_id, i.item_no, i.name, i.clause, i.stat_desc, i.freq, i.value_type,
                                i.sort_order, i.is_active AS ind_active,
@@ -82,7 +82,7 @@ case 'get_all': {
     }
 
     jout([
-        'year'=>$year, 'years'=>range(2025, $curY),
+        'year'=>$year, 'years'=>kpi_as_years($db), 'years_addable'=>kpi_as_years_addable($db),
         'indicators'=>$indicators,
         'registry'=>kpi_as_registry(),
         'rules'=>$rules,
@@ -102,7 +102,7 @@ case 'get_all': {
 case 'save_iy': {
     $iid = (int)($_POST['indicator_id'] ?? 0);
     $year = (int)($_POST['year'] ?? 0);
-    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    if (!kpi_as_year_ok($db, $year)) jerr('年度不合法');
     kpi_as_ensure_year($db, $year);
     $st = $db->prepare("SELECT * FROM kpi_as_indicator_year WHERE indicator_id=? AND year=?");
     $st->execute([$iid, $year]);
@@ -188,7 +188,7 @@ case 'save_indicator': {
 case 'add_indicator': {
     $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 100);
     if ($name === '') jerr('指標內容必填');
-    $year = max(2025, min($curY, (int)($_POST['year'] ?? $curY)));
+    $year = kpi_as_year_pick($db, $_POST['year'] ?? $curY);
     $itemNo = (int)($_POST['item_no'] ?? 0);
     if ($itemNo <= 0) {
         $itemNo = (int)$db->query("SELECT COALESCE(MAX(item_no),0)+1 FROM kpi_as_indicator")->fetchColumn();
@@ -214,10 +214,24 @@ case 'add_indicator': {
     jout(['indicator_id'=>$iid ?? 0]);
 }
 
+/* ---------- 新增年度（使用者要求 2026-09-15：要能補 2024、也要能先開 2027） ----------
+   原本全站年度寫死 2025~今年，所以兩邊都開不了。這裡建立年度＝把來源年度的指標設定
+   整批複製過去（只補缺漏，不覆蓋既有），之後 KPI 頁的年度下拉就會出現這一年。 */
+case 'year_add': {
+    if (!$perms['canAdmin']) jerr('僅KPI管理者可新增年度', 403);
+    $to   = (int)($_POST['year'] ?? 0);
+    $from = (int)($_POST['from'] ?? 0);
+    if (in_array($to, kpi_as_years($db), true)) jerr($to . ' 年度已經存在');
+    if ($from && !kpi_as_year_ok($db, $from)) jerr('來源年度不正確');
+    try { $n = kpi_as_year_create($db, $to, $from, $u); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['year'=>$to, 'created'=>$n]);
+}
+
 case 'copy_year': {
     $from = (int)($_POST['from'] ?? 0);
     $to = (int)($_POST['to'] ?? 0);
-    if ($from < 2025 || $to < 2025 || $to > $curY || $from === $to) jerr('年度不合法');
+    if (!kpi_as_year_ok($db, $from) || !kpi_as_year_ok($db, $to) || $from === $to) jerr('年度不合法');
     $st = $db->prepare("INSERT INTO kpi_as_indicator_year
         (indicator_id,year,owner_user_id,owner_display,source_mode,calculator_key,params_json,
          target_direction,target_value,target_unit,target_text,Created_By)
@@ -354,7 +368,7 @@ case 'get_field_values': {
 case 'preview_builder': {
     $spec = json_decode((string)($_POST['spec'] ?? '{}'), true);
     if (!is_array($spec)) jerr('spec 格式錯誤');
-    $year = max(2025, min($curY, (int)($_POST['year'] ?? $curY)));
+    $year = kpi_as_year_pick($db, $_POST['year'] ?? $curY);
     $month = (int)($_POST['month'] ?? (int)date('n'));
     $res = kpi_as_builder_compute($db, $year, $month, $spec);
     jout(['result'=>$res]);

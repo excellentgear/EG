@@ -113,6 +113,8 @@ $kpiPerms = kpi_as_perms($db, $kpiUser);
             <a class="btn" href="KPI.php" style="line-height:28px;"><i class="fa fa-arrow-left"></i> 回 KPI 總覽</a>
             <label style="margin:0;font-size:13px;color:#5b3a1e;">年度</label>
             <select id="yearSel"></select>
+            <button id="btnAddYear" title="新增一個年度（補舊年度資料或先開下一年度）">
+                <i class="fa fa-plus"></i> 新增年度</button>
             <button id="btnCopyYear" title="把某年度的目標/公式/擔當者設定複製到另一年度(僅補缺漏)">
                 <i class="fa fa-copy"></i> 年度設定複製</button>
             <button id="btnAddInd"><i class="fa fa-plus"></i> 新增指標</button>
@@ -795,6 +797,23 @@ $('#btnSaveSettings').on('click', function(){
         alert('已儲存。實際生效路徑：' + res.attach_base_effective + (res.attach_base_ok ? '（可存取）' : '（目前無法存取，請確認NAS）'));
         loadAll();
     }, 'json');
+});
+/* 新增年度（2026-09-15 使用者回報 2024／2027 都加不進來）：
+   年度清單原本寫死 2025~今年，現在改由資料庫決定，這顆按鈕就是唯一的新增入口。 */
+$('#btnAddYear').on('click', function(){
+    var addable = DATA && DATA.years_addable ? DATA.years_addable : [];
+    if (!addable.length) { alert('目前沒有可以新增的年度（允許範圍：2015 ~ 今年+3）'); return; }
+    var y = prompt('要新增哪一個年度？\n可新增：' + addable.join('、'), addable[addable.length-1]);
+    if (!y) return;
+    y = +y;
+    if (addable.indexOf(y) < 0) { alert('這個年度不能新增（已存在或超出允許範圍）'); return; }
+    var from = prompt('設定（目標值／公式／擔當者）要複製自哪一年？留空＝自動挑最接近的年度', '');
+    $.post(API, {action:'year_add', year:y, from:(from ? +from : 0)}, function(res){
+        if (!res.ok) { alert(res.error||'新增失敗'); return; }
+        alert('已新增 ' + res.year + ' 年度，複製了 ' + res.created + ' 項指標設定。\n'
+            + '接下來可到 KPI 主頁切換到該年度補資料。');
+        YEAR = res.year; loadAll();
+    }, 'json').fail(function(x){ alert('新增失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status)); });
 });
 $('#btnCopyYear').on('click', function(){
     var from = prompt('從哪一年度複製設定？（目標年度＝目前選擇的 ' + YEAR + '）', YEAR - 1);

@@ -50,10 +50,12 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         .kpi-role-badge { margin-left:auto; font-size:13px; color:#5b3a1e; background:#F7E0BD;
             border-radius:12px; padding:4px 12px; }
         .kpi-role-badge .fa-question-circle { cursor:pointer; color:#b5762a; margin-left:5px; }
-        .kpi-table-wrap { overflow-x:auto; border:1px solid #E8D5B5; border-radius:6px; background:#fff; }
+        .kpi-table-wrap { overflow:auto; max-height:calc(100vh - 235px); min-height:320px;
+            border:1px solid #E8D5B5; border-radius:6px; background:#fff; }
         table.kpi-table { width:100%; border-collapse:collapse; font-size:13px; table-layout:auto; }
         table.kpi-table th, table.kpi-table td { border:1px solid #EADFC8; padding:4px 6px; white-space:nowrap; text-align:center; }
-        table.kpi-table thead th { position:sticky; top:0; z-index:5; background:#F7E0BD; color:#5b3a1e; font-weight:bold; }
+        table.kpi-table thead th { position:sticky; top:0; z-index:5; background:#F7E0BD; color:#5b3a1e; font-weight:bold;
+            box-shadow:inset 0 -2px 0 #D8BE93; }
         table.kpi-table td.kpi-name { text-align:left; max-width:220px; overflow:hidden; text-overflow:ellipsis; cursor:help; }
         table.kpi-table tbody tr:nth-child(even) { background:#FBF6EC; }
         table.kpi-table tbody tr:hover { background:#FBF0DD; }
@@ -70,6 +72,21 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         .kpi-attach-badge i { font-size:9px; }
         .kpi-attach-badge:hover { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .kpi-avg { background:#FDF3E0; font-weight:bold; }
+        /* 補登模式：整張表變成可直接填寫的格子 */
+        #fillBar { margin:6px 0 0; padding:6px 10px; border:1px solid #D8BE93; background:#FBF5EA;
+            color:#5b3a1e; font-size:13px; border-radius:4px; }
+        #fillBar input[type=text] { height:26px; border:1px solid #D8BE93; border-radius:4px; padding:0 8px;
+            font-size:12px; width:260px; margin-left:8px; }
+        #fillBar .fb-n { margin-left:10px; color:#8a6d45; }
+        #fillBar button { height:26px; padding:0 12px; border-radius:4px; font-size:12px; margin-left:6px;
+            border:1px solid #D8BE93; background:#fff; color:#5b3a1e; cursor:pointer; }
+        #fillBar button.warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        #btnFill.on { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        table.kpi-table td .fillIn { width:100%; min-width:44px; box-sizing:border-box; height:22px; font-size:12px;
+            text-align:center; border:1px solid #E8D5B5; border-radius:3px; padding:0 2px; background:#fff; color:#5b3a1e; }
+        table.kpi-table td .fillIn:focus { border-color:#F0A24B; outline:none; background:#FFFBF3; }
+        table.kpi-table td .fillIn.ov { background:#FDF3E3; }
+        table.kpi-table td .fillIn.dirty { border-color:#C2601C; background:#FBEBD6; font-weight:bold; }
         /* 儲存格彈出選單 */
         #cellMenu { position:absolute; z-index:1000; background:#fff; border:1px solid #D8BE93; border-radius:6px;
             box-shadow:0 3px 10px rgba(90,58,30,.25); min-width:170px; display:none; }
@@ -173,7 +190,14 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
             .right_col { margin:0 !important; padding:0 !important; }
             table.kpi-table { font-size:10px; }
             table.kpi-table th, table.kpi-table td { padding:2px 3px; }
-            .kpi-table-wrap { overflow:visible; border:none; }
+            table.kpi-table td.kpi-name { max-width:none; overflow:visible; text-overflow:clip; }
+            /* 前 5 欄（項次/指標內容/擔當者/頻率/判定目標）縮到剛好容納文字，
+               多出來的寬度全部讓給 12 個月份與平均欄。
+               不這樣做的話 width:100% 會按比例灌水，指標內容欄會拉到 239px 但最長文字只用得到 77px，
+               整欄右側都是空白（2026-09-15 使用者回報）。width:1% 是「縮到內容寬」的標準寫法，
+               不可以改成 width:auto ——那會讓整張表縮成 543px、印在 A4 橫式上變一小條。 */
+            table.kpi-table th:nth-child(-n+5), table.kpi-table td:nth-child(-n+5) { width:1%; }
+            .kpi-table-wrap { overflow:visible; border:none; max-height:none !important; min-height:0 !important; }
             table.kpi-table thead th { position:static; }
             .kpi-print-head { display:block !important; }
         }
@@ -186,7 +210,10 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         body.kpi-printing .right_col { margin:0 !important; padding:0 !important; }
         body.kpi-printing table.kpi-table { font-size:10px; }
         body.kpi-printing table.kpi-table th, body.kpi-printing table.kpi-table td { padding:2px 3px; }
-        body.kpi-printing .kpi-table-wrap { overflow:visible; border:none; }
+        body.kpi-printing table.kpi-table td.kpi-name { max-width:none; overflow:visible; text-overflow:clip; }
+        body.kpi-printing table.kpi-table th:nth-child(-n+5),
+        body.kpi-printing table.kpi-table td:nth-child(-n+5) { width:1%; }
+        body.kpi-printing .kpi-table-wrap { overflow:visible; border:none; max-height:none !important; min-height:0 !important; }
         body.kpi-printing table.kpi-table thead th { position:static; }
         body.kpi-printing .kpi-print-head { display:block !important; }
     </style>
@@ -212,6 +239,8 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
             <select id="yearSel"></select>
             <button id="btnRecalcYear" title="重新計算本年度所有自動指標(已結束月份)" style="display:none;">
                 <i class="fa fa-refresh"></i> 重算本年</button>
+            <button id="btnFill" style="display:none;" title="整張表直接填寫（補舊年度資料用，不需逐格填原因）">
+                <i class="fa fa-table"></i> 補登模式</button>
             <button id="btnUpload"><i class="fa fa-paperclip"></i> 上傳佐證</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
             <label style="margin:0;font-size:13px;color:#5b3a1e;">紙張</label>
@@ -224,6 +253,14 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         </div>
 
         <div id="staleBar"></div>
+        <div id="fillBar" style="display:none;">
+            <b>補登模式</b>：直接在格子裡打字（Enter／↑↓ 上下移動、Tab 往右），填完按「儲存全部」。
+            空白＝清除該格的覆寫。<span style="color:#8a6d45;">未到期或該指標不適用的月份不給填。</span>
+            <input type="text" id="fillNote" maxlength="200" placeholder="整批說明（選填，例：依 2025 紙本補登）">
+            <span class="fb-n">未儲存 <b id="fillCount">0</b> 格</span>
+            <button class="warm" onclick="fillSave()"><i class="fa fa-save"></i> 儲存全部</button>
+            <button onclick="toggleFill()">離開補登模式</button>
+        </div>
 
         <div class="kpi-print-head" id="kpiPrintHead">
             <div class="kpi-print-comp"></div>
@@ -415,6 +452,7 @@ function loadMatrix(afterScan){
         renderChart();
         var anyRecalc = res.rows.some(function(r){ return r.can_recalc; });
         $('#btnRecalcYear').toggle(anyRecalc);
+        $('#btnFill').toggle(!!res.is_admin);
         if (!afterScan) runStaleScan();   // 畫面先出來，過期偵測在背景跑
     }).fail(function(x){ NProgress.done(); alert('載入失敗：' + (x.responseJSON && x.responseJSON.error || x.status)); });
 }
@@ -504,6 +542,13 @@ function renderTable(){
         for (var m=1; m<=12; m++){
             if (r.months.indexOf(m) < 0) { html += '<td class="kpi-na">—</td>'; continue; }
             var c = r.cells[m];
+            if (FILL) {                                   // 補登模式：整格換成輸入框
+                html += '<td class="kpi-cell fill-td" data-ri="'+ri+'" data-m="'+m+'">'
+                      + (fillEditable(r, m) ? fillCellHtml(r, ri, m)
+                                            : '<span class="kpi-na">'+(c.future?'NA':'—')+'</span>')
+                      + '</td>';
+                continue;
+            }
             var cls = 'kpi-cell', txt;
             if (c.future) { txt = '<span class="kpi-na">NA</span>'; }
             else if (c.locked_month) { txt = '<span class="kpi-na" title="本期已於'+c.locked_month+'月填寫，如需改填此月份請先清除該月份內容">－</span>'; }
@@ -541,6 +586,7 @@ function renderTable(){
 
 /* ---------- 儲存格選單 ---------- */
 $(document).on('click', 'td.kpi-cell', function(e){
+    if (FILL) return;                                   // 補登模式：點格子＝直接編輯，不開選單
     var ri = +$(this).data('ri'), m = +$(this).data('m');
     var r = MATRIX.rows[ri], c = r.cells[m];
     var items = [];
@@ -803,6 +849,81 @@ $(document).on('change', '#vioMode', function(){
         openVio(VIO.ri, VIO.m);
     }, 'json').fail(function(x){ alert('設定失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status)); });
 });
+
+
+/* ---------- 補登模式（使用者要求 2026-09-15：補舊年度資料要像 Excel 一樣直接填） ----------
+   打開之後整張表的每一格變成輸入框，直接打字、Tab／Enter／↑↓ 移動，最後按一次「儲存」整批送出。
+   寫入的是「手動覆寫」，但**不要求逐格填原因**（整批寫同一句說明；誰改的與時間照樣留下）。
+   僅系統管理員可用；未來月份與該指標不適用的月份不給輸入。 */
+var FILL = false, FILL_DIRTY = {};
+function fillCanUse(){ return MATRIX && MATRIX.is_admin; }
+function toggleFill(){
+    if (!fillCanUse()) { alert('補登模式僅系統管理員可用'); return; }
+    if (FILL && Object.keys(FILL_DIRTY).length) {
+        if (!confirm('有 ' + Object.keys(FILL_DIRTY).length + ' 格還沒儲存，確定離開補登模式？')) return;
+    }
+    FILL = !FILL;
+    FILL_DIRTY = {};
+    $('#btnFill').toggleClass('on', FILL);
+    $('#fillBar').toggle(FILL);
+    renderTable();
+}
+function fillKey(iid, m){ return iid + '_' + m; }
+/** 這一格在補登模式下能不能填 */
+function fillEditable(r, m){
+    var c = r.cells[m];
+    return !!c && !c.future && !c.locked_month && r.months.indexOf(m) >= 0;
+}
+function fillCellHtml(r, ri, m){
+    var c = r.cells[m];
+    var v = (c.v === null || c.v === undefined) ? '' : c.v;
+    var k = fillKey(r.indicator_id, m);
+    if (k in FILL_DIRTY) v = FILL_DIRTY[k];
+    var cls = 'fillIn' + (c.src === 'override' ? ' ov' : '') + ((k in FILL_DIRTY) ? ' dirty' : '');
+    return '<input type="text" class="' + cls + '" data-i="' + r.indicator_id + '" data-m="' + m
+         + '" data-ri="' + ri + '" value="' + esc(String(v)) + '" autocomplete="off">';
+}
+$(document).on('input', '#kpiBody .fillIn', function(){
+    var $i = $(this);
+    FILL_DIRTY[fillKey($i.attr('data-i'), $i.attr('data-m'))] = $i.val();
+    $i.addClass('dirty');
+    $('#fillCount').text(Object.keys(FILL_DIRTY).length);
+});
+/* 鍵盤移動：Enter／↓＝下一列同月份，↑＝上一列，Tab 交給瀏覽器（同列往右） */
+$(document).on('keydown', '#kpiBody .fillIn', function(e){
+    var k = e.key;
+    if (k !== 'Enter' && k !== 'ArrowDown' && k !== 'ArrowUp') return;
+    e.preventDefault();
+    var m = $(this).attr('data-m');
+    var all = $('#kpiBody .fillIn[data-m="' + m + '"]');
+    var idx = all.index(this);
+    var to = (k === 'ArrowUp') ? idx - 1 : idx + 1;
+    if (to >= 0 && to < all.length) { all.eq(to).focus().select(); }
+});
+function fillSave(){
+    var keys = Object.keys(FILL_DIRTY);
+    if (!keys.length) { alert('沒有變更'); return; }
+    var bad = [];
+    var cells = keys.map(function(k){
+        var p = k.split('_'), v = $.trim(String(FILL_DIRTY[k]));
+        if (v !== '' && isNaN(Number(v))) bad.push(v);
+        return {i:+p[0], m:+p[1], v:v};
+    });
+    if (bad.length) { alert('有 ' + bad.length + ' 格不是數字：' + bad.slice(0,5).join('、') + '\n請改成數字，或清空該格。'); return; }
+    var note = $('#fillNote').val();
+    if (!confirm('把 ' + cells.length + ' 格寫進 ' + YEAR + ' 年度？\n（寫入方式＝手動覆寫，不需要逐格填原因；空白的格子＝清除覆寫）')) return;
+    NProgress.start();
+    $.post(API, {action:'bulk_override', year:YEAR, note:note, cells:JSON.stringify(cells)}, function(res){
+        NProgress.done();
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        var msg = '已寫入 ' + res.saved + ' 格' + (res.cleared ? ('，清除 ' + res.cleared + ' 格') : '') + '。';
+        if (res.skipped && res.skipped.length) msg += '\n略過 ' + res.skipped.length + ' 格：\n' + res.skipped.slice(0,8).join('\n');
+        alert(msg);
+        FILL_DIRTY = {};
+        $('#fillCount').text('0');
+        loadMatrix(true);
+    }, 'json').fail(function(x){ NProgress.done(); alert('儲存失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status)); });
+}
 
 /* ---------- 重算 ---------- */
 function doRecalc(iid, month){

@@ -72,9 +72,9 @@ switch ($action) {
 
 /* ---------- 基本資訊 ---------- */
 case 'meta': {
-    $years = range(2025, $curY);
+    $years = kpi_as_years($db);
     // 本人可填/可傳附件的指標：僅擔當者本人、其請假代理人；系統管理者=全部（RBAC鐵律）
-    $year = max(2025, min($curY, (int)($_GET['year'] ?? $curY)));
+    $year = kpi_as_year_pick($db, $_GET['year'] ?? $curY);
     kpi_as_ensure_year($db, $year);
     $st = $db->prepare("SELECT i.indicator_id, i.item_no, i.name, i.freq, y.source_mode, y.year, y.owner_user_id
                         FROM kpi_as_indicator i
@@ -101,7 +101,7 @@ case 'meta': {
 
 /* ---------- 年度矩陣（含懶惰結算＋當月即時試算） ---------- */
 case 'matrix': {
-    $year = max(2025, min($curY, (int)($_GET['year'] ?? $curY)));
+    $year = kpi_as_year_pick($db, $_GET['year'] ?? $curY);
     $iys = kpi_load_iy($db, $year);
     $mvs = kpi_load_mv($db, $year);
     // 附件數
@@ -221,7 +221,8 @@ case 'matrix': {
         ];
     }
     jout(['year'=>$year, 'rows'=>$rows, 'year_locked'=>kpi_as_year_locked($year),
-          'can_admin'=>$perms['canAdmin'], 'attach_max'=>kpi_as_attach_max($db)]);
+          'can_admin'=>$perms['canAdmin'], 'is_admin'=>!empty($perms['isAdmin']) ? 1 : 0,
+          'attach_max'=>kpi_as_attach_max($db)]);
 }
 
 /* ---------- 重算（快照）：本年=擔當者/填報/管理者；舊年度僅管理者 ---------- */
@@ -229,7 +230,7 @@ case 'recalc': {
     $iid = (int)($_POST['indicator_id'] ?? 0);
     $year = (int)($_POST['year'] ?? 0);
     $month = (int)($_POST['month'] ?? 0); // 0=全年已結束月份
-    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    if (!kpi_as_year_ok($db, $year)) jerr('年度不合法');
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     if ($iy['source_mode'] !== 'auto') jerr('手動填寫指標不提供重算');
@@ -255,7 +256,7 @@ case 'recalc': {
    寫入條件比照既有懶惰結算＝系統自動維護，不看個人權限；但**已鎖定年度只標示不寫入**
    （隔年2/1起僅管理者可動，見 kpi_as_year_locked）。 */
 case 'stale_scan': {
-    $year = max(2025, min($curY, (int)($_POST['year'] ?? $_GET['year'] ?? $curY)));
+    $year = kpi_as_year_pick($db, $_POST['year'] ?? $_GET['year'] ?? $curY);
     // 已鎖定年度（隔年2/1起）一律只標示、不自動寫入——管理者也一樣。
     // 那是已經結案的品質紀錄，要不要跟著新資料改，必須由人按「重算」決定。
     $canWrite = !kpi_as_year_locked($year);
@@ -314,7 +315,7 @@ case 'stale_scan': {
 /* ---------- 前端試算（不入快照；僅 fe=1 參數可調，管理者不受限） ---------- */
 case 'preview': {
     $iid = (int)($_GET['indicator_id'] ?? 0);
-    $year = max(2025, min($curY, (int)($_GET['year'] ?? $curY)));
+    $year = kpi_as_year_pick($db, $_GET['year'] ?? $curY);
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     if ($iy['source_mode'] !== 'auto') jerr('手動指標無法試算');
@@ -344,7 +345,7 @@ case 'apply_params': {
     if (!$perms['canAdmin']) jerr('僅KPI管理者可套用修改本年度設定', 403);
     $iid = (int)($_POST['indicator_id'] ?? 0);
     $year = (int)($_POST['year'] ?? 0);
-    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    if (!kpi_as_year_ok($db, $year)) jerr('年度不合法');
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     if ($iy['source_mode'] !== 'auto') jerr('手動指標無參數可套用');
@@ -378,7 +379,7 @@ case 'apply_params': {
    mode=allow → 去來源頁面改真實資料；mode=deny → 只能排除這一筆（不動真實資料）。 */
 case 'detail_rows': {
     $iid   = (int)($_GET['indicator_id'] ?? 0);
-    $year  = max(2025, min($curY, (int)($_GET['year'] ?? $curY)));
+    $year  = kpi_as_year_pick($db, $_GET['year'] ?? $curY);
     $month = max(1, min(12, (int)($_GET['month'] ?? 1)));
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
@@ -456,7 +457,7 @@ case 'adjust_add': {
     $iid   = (int)($_POST['indicator_id'] ?? 0);
     $year  = (int)($_POST['year'] ?? 0);
     $month = max(1, min(12, (int)($_POST['month'] ?? 0)));
-    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    if (!kpi_as_year_ok($db, $year)) jerr('年度不合法');
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     $calc = (string)$iy['calculator_key'];
@@ -510,7 +511,7 @@ case 'adjust_del': {
     $iid   = (int)($_POST['indicator_id'] ?? 0);
     $year  = (int)($_POST['year'] ?? 0);
     $month = max(1, min(12, (int)($_POST['month'] ?? 0)));
-    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    if (!kpi_as_year_ok($db, $year)) jerr('年度不合法');
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     // 訊息要分清楚是「年度鎖了」還是「你沒權限」——講錯的話使用者會一直去找管理者解鎖
@@ -534,6 +535,59 @@ case 'adjust_del': {
           'num'=>$res['num'] ?? null, 'den'=>$res['den'] ?? null]);
 }
 
+/* ---------- 補登模式：整張表像 Excel 一樣直接填（使用者要求 2026-09-15） ----------
+   補舊年度資料時，一格一格開跳窗、還要每格填覆寫原因，實務上根本填不完。
+   這支端點讓**系統管理員**一次送整批值，寫成手動覆寫（override）但**不要求逐格原因**，
+   改成整批寫同一句說明（誰在什麼時候補的照樣留在 override_by／override_at 與變更歷史）。
+   限制：⑴僅系統管理員 ⑵只能補「已結束的月份」（未來月份沒有意義）
+        ⑶值一律照該指標的 value_type 正規化 ⑷空字串＝清掉這一格的覆寫。 */
+case 'bulk_override': {
+    if (empty($perms['isAdmin'])) jerr('僅系統管理員可使用補登模式', 403);
+    $year = (int)($_POST['year'] ?? 0);
+    if (!kpi_as_year_ok($db, $year)) jerr('年度不合法');
+    $cells = json_decode((string)($_POST['cells'] ?? '[]'), true);
+    if (!is_array($cells) || !$cells) jerr('沒有要寫入的資料');
+    if (count($cells) > 500) jerr('一次最多 500 格');
+    $note = mb_substr(trim((string)($_POST['note'] ?? '')), 0, 200);
+    if ($note === '') $note = '補登舊年度資料（補登模式整批填寫）';
+
+    $iys = [];
+    foreach (kpi_load_iy($db, $year) as $r) $iys[(int)$r['indicator_id']] = $r;
+
+    $set = $db->prepare("INSERT INTO kpi_as_monthly_value
+            (indicator_id,year,month,override_value,override_by,override_by_name,override_at,override_reason)
+            VALUES (?,?,?,?,?,?,NOW(),?)
+            ON DUPLICATE KEY UPDATE override_value=VALUES(override_value), override_by=VALUES(override_by),
+                    override_by_name=VALUES(override_by_name), override_at=NOW(), override_reason=VALUES(override_reason)");
+    $clr = $db->prepare("UPDATE kpi_as_monthly_value
+            SET override_value=NULL, override_by=NULL, override_by_name=NULL, override_at=NULL, override_reason=NULL
+            WHERE indicator_id=? AND year=? AND month=?");
+    $saved = 0; $cleared = 0; $skipped = [];
+    $db->beginTransaction();
+    try {
+        foreach ($cells as $c) {
+            $iid = (int)($c['i'] ?? 0);
+            $m   = (int)($c['m'] ?? 0);
+            $raw = trim((string)($c['v'] ?? ''));
+            $iy  = $iys[$iid] ?? null;
+            if (!$iy) { $skipped[] = "指標 $iid 不存在"; continue; }
+            if (!in_array($m, kpi_as_valid_months($iy), true)) { $skipped[] = $iy['name'] . " {$m}月 不適用"; continue; }
+            if (!kpi_month_ended($year, $m)) { $skipped[] = $iy['name'] . " {$m}月 尚未結束"; continue; }
+            if ($raw === '') { $clr->execute([$iid, $year, $m]); $cleared += $clr->rowCount() ? 1 : 0; continue; }
+            if (!is_numeric($raw)) { $skipped[] = $iy['name'] . " {$m}月「{$raw}」不是數字"; continue; }
+            $val = (float)$raw;
+            if ($iy['value_type'] === 'yesno') $val = $val >= 1 ? 1 : 0;
+            $set->execute([$iid, $year, $m, $val, $uid, $u['user_cname'], $note]);
+            $saved++;
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('寫入失敗：' . $e->getMessage(), 500); }
+
+    kpi_as_log($db, null, $year, null, 'bulk_override', 'override_value', null,
+               '寫入 ' . $saved . ' 格／清除 ' . $cleared . ' 格', $note, $u);
+    jout(['saved'=>$saved, 'cleared'=>$cleared, 'skipped'=>$skipped]);
+}
+
 /* ---------- 直接修改來源資料（只限「可改真實資料」的指標；使用者要求 2026-09-15） ----------
    安全邊界：表名／主鍵／欄位／可選值一律取自程式碼裡的白名單（kpi_as_detail_edit_spec），
    請求端只送 row_key 與欄位代號；而且**一定要先確認那一筆真的出現在這一格的違規清單裡**，
@@ -542,7 +596,7 @@ case 'src_edit': {
     $iid   = (int)($_POST['indicator_id'] ?? 0);
     $year  = (int)($_POST['year'] ?? 0);
     $month = max(1, min(12, (int)($_POST['month'] ?? 0)));
-    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    if (!kpi_as_year_ok($db, $year)) jerr('年度不合法');
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     $calc = (string)$iy['calculator_key'];
@@ -663,7 +717,7 @@ case 'fill': {
     $iid = (int)($_POST['indicator_id'] ?? 0);
     $year = (int)($_POST['year'] ?? 0);
     $month = (int)($_POST['month'] ?? 0);
-    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    if (!kpi_as_year_ok($db, $year)) jerr('年度不合法');
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     if ($iy['source_mode'] !== 'manual') jerr('此指標為自動計算，如需修正請用覆寫功能');
@@ -788,7 +842,7 @@ case 'attach_upload': {
     $iid = (int)($_POST['indicator_id'] ?? 0);
     $year = (int)($_POST['year'] ?? 0);
     $month = (int)($_POST['month'] ?? 0);
-    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    if (!kpi_as_year_ok($db, $year)) jerr('年度不合法');
     $iy = kpi_get_iy_row($db, $iid, $year);
     if (!$iy) jerr('找不到指標');
     if (!in_array($month, kpi_as_valid_months($iy), true)) jerr('該指標此月份不適用');

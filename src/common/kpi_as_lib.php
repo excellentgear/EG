@@ -277,7 +277,9 @@ function kpi_as_seed_indicators(PDO $db): void {
 
 /** 確保某年度有年度版本列（無則從最近的舊年度複製，達成「逐年版本、預設沿用」） */
 function kpi_as_ensure_year(PDO $db, int $year): void {
-    if ($year < 2025 || $year > (int)date('Y')) return;
+    // 只補「已經存在的年度」缺漏的指標列；要開一個全新的年度請走 kpi_as_year_create()
+    // （否則使用者隨手在網址列打一個年度就會安靜地生出一整年設定）
+    if (!kpi_as_year_ok($db, $year)) return;
     $rows = $db->query("SELECT i.indicator_id FROM kpi_as_indicator i
                         WHERE i.is_active=1 AND NOT EXISTS
                         (SELECT 1 FROM kpi_as_indicator_year y WHERE y.indicator_id=i.indicator_id AND y.year={$year})")
@@ -1604,4 +1606,84 @@ function kpi_as_edit_target_ym(?string $calc, string $field, string $value, int 
     }
     if (preg_match('/^(\d{4})-(\d{2})-\d{2}/', $value, $m2)) return [(int)$m2[1], (int)$m2[2]];
     return null;
+}
+
+/* ============================================================
+ * 年度清單（使用者要求 2026-09-15：要能補 2024、也要能先開 2027）
+ * 原本全站寫死 range(2025, 今年)，所以 2024 補不了、2027 也開不了。
+ * 改成「資料庫裡已經有設定的年度 ∪ 2025~今年」，新增年度走 kpi_as_year_create()。
+ * ============================================================ */
+const KPI_AS_YEAR_MIN = 2015;          // 再舊就不合理（公司 ERP 資料起點之前）
+const KPI_AS_YEAR_AHEAD = 3;           // 最多預先開未來 3 年
+
+function kpi_as_years(PDO $db): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $cur = (int)date('Y');
+    $ys = [];
+    for ($y = 2025; $y <= $cur; $y++) $ys[$y] = 1;   // 舊有預設範圍一律保留（不會讓既有畫面變少）
+    try {
+        foreach ($db->query("SELECT DISTINCT year FROM kpi_as_indicator_year")->fetchAll(PDO::FETCH_COLUMN) as $y) {
+            $y = (int)$y;
+            if ($y >= KPI_AS_YEAR_MIN && $y <= $cur + KPI_AS_YEAR_AHEAD) $ys[$y] = 1;
+        }
+    } catch (Throwable $e) {}
+    $cache = array_keys($ys);
+    sort($cache);
+    return $cache;
+}
+
+/** 這個年度可不可以用（清單內才算） */
+function kpi_as_year_ok(PDO $db, int $y): bool {
+    return in_array($y, kpi_as_years($db), true);
+}
+
+/** 把請求帶進來的年度收斂成合法年度（不合法就用今年） */
+function kpi_as_year_pick(PDO $db, $raw): int {
+    $y = (int)$raw;
+    return kpi_as_year_ok($db, $y) ? $y : (int)date('Y');
+}
+
+/** 可以新增哪些年度（還沒建、且在允許範圍內） */
+function kpi_as_years_addable(PDO $db): array {
+    $cur = (int)date('Y');
+    $have = kpi_as_years($db);
+    $out = [];
+    for ($y = KPI_AS_YEAR_MIN; $y <= $cur + KPI_AS_YEAR_AHEAD; $y++) {
+        if (!in_array($y, $have, true)) $out[] = $y;
+    }
+    return $out;
+}
+
+/**
+ * 新增一個年度：把來源年度的指標設定整批複製過去（只補缺漏，不覆蓋既有）。
+ * 回傳建立的指標筆數；$from 留 0＝自動挑最接近的已存在年度。
+ */
+function kpi_as_year_create(PDO $db, int $to, int $from, array $u): int {
+    $cur = (int)date('Y');
+    if ($to < KPI_AS_YEAR_MIN || $to > $cur + KPI_AS_YEAR_AHEAD) throw new RuntimeException('年度超出允許範圍');
+    $have = kpi_as_years($db);
+    if (!$from) {
+        $best = null;
+        foreach ($have as $y) {
+            if ($y === $to) continue;
+            if ($best === null || abs($y - $to) < abs($best - $to)) $best = $y;
+        }
+        $from = (int)$best;
+    }
+    if (!$from) throw new RuntimeException('找不到可以複製設定的年度');
+    $st = $db->prepare("INSERT INTO kpi_as_indicator_year
+        (indicator_id,year,owner_user_id,owner_dept_id,owner_position_id,owner_display,source_mode,calculator_key,
+         params_json,target_direction,target_value,target_unit,target_text,is_active,Created_By)
+        SELECT s.indicator_id, ?, s.owner_user_id, s.owner_dept_id, s.owner_position_id, s.owner_display,
+               s.source_mode, s.calculator_key, s.params_json, s.target_direction, s.target_value,
+               s.target_unit, s.target_text, s.is_active, ?
+        FROM kpi_as_indicator_year s
+        WHERE s.year=? AND NOT EXISTS
+          (SELECT 1 FROM kpi_as_indicator_year t WHERE t.indicator_id=s.indicator_id AND t.year=?)");
+    $st->execute([$to, (string)$u['user_cname'], $from, $to]);
+    $n = $st->rowCount();
+    kpi_as_log($db, null, $to, null, 'setting', 'year_add', $from, $to,
+               "新增 {$to} 年度（設定複製自 {$from} 年，共 {$n} 項）", $u);
+    return $n;
 }
