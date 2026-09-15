@@ -60,6 +60,7 @@ include '../../src/store/_setting.php';
 include '../../src/common/_config.php';
 require_once '../../src/common/part_alias_lib.php';
 require_once '../../src/common/quote_customer_lib.php';   // 訂單 ↔ 來源OP單客戶連動（唯一實作）
+require_once '../../src/common/order_price_lib.php';      // 訂單顯示單價判定（清單與編輯跳窗共用，唯一實作）
 
 $conn = new DBConnection();
 
@@ -108,49 +109,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // 客戶顯示名稱：已綁定優先從 customer_list 取中文名，否則退回暫存名稱
             $client_name_display = !empty($row['cl_customer_name']) ? $row['cl_customer_name'] : ($row['Client_name'] ?? '');
 
-            // 若 order_track.unit_price 為空，嘗試從報價單查單價
-            $unit_price = $row['unit_price'] ?? '';
-            $unit_price_source = 'order_track';
-            if ($unit_price === '' || $unit_price === null || floatval($unit_price) == 0) {
-                try {
-                    // 優先：有 quote_item_id 直接精確查詢
-                    if (!empty($row['quote_item_id'])) {
-                        $sq = $pdo->prepare("SELECT unit_price FROM quotation_item WHERE item_id = ? LIMIT 1");
-                        $sq->execute([intval($row['quote_item_id'])]);
-                        $qrow = $sq->fetch(PDO::FETCH_ASSOC);
-                        if ($qrow && floatval($qrow['unit_price']) > 0) {
-                            $unit_price = $qrow['unit_price'];
-                            $unit_price_source = 'quotation';
-                        }
-                    }
-                    // 退而求其次：有 quote_no 用 quote_no + 料號 查
-                    if (($unit_price === '' || floatval($unit_price) == 0) && !empty($row['quote_no'])) {
-                        $sq2 = $pdo->prepare("SELECT qi.unit_price FROM quotation_list ql
-                            JOIN quotation_item qi ON ql.quote_id = qi.quote_id
-                            WHERE ql.quote_no = ? AND qi.product_id LIKE ?
-                            ORDER BY qi.item_id DESC LIMIT 1");
-                        $sq2->execute([$row['quote_no'], '%' . ($row['d_id'] ?? '') . '%']);
-                        $qrow2 = $sq2->fetch(PDO::FETCH_ASSOC);
-                        if ($qrow2 && floatval($qrow2['unit_price']) > 0) {
-                            $unit_price = $qrow2['unit_price'];
-                            $unit_price_source = 'quotation';
-                        }
-                    }
-                    // 最後備援：用料號查最近報價
-                    if (($unit_price === '' || floatval($unit_price) == 0) && !empty($row['d_id'])) {
-                        $sq3 = $pdo->prepare("SELECT qi.unit_price FROM quotation_list ql
-                            JOIN quotation_item qi ON ql.quote_id = qi.quote_id
-                            WHERE qi.product_id LIKE ? AND qi.unit_price > 0
-                            ORDER BY ql.quote_date DESC LIMIT 1");
-                        $sq3->execute(['%' . $row['d_id'] . '%']);
-                        $qrow3 = $sq3->fetch(PDO::FETCH_ASSOC);
-                        if ($qrow3 && floatval($qrow3['unit_price']) > 0) {
-                            $unit_price = $qrow3['unit_price'];
-                            $unit_price_source = 'quotation_by_part';
-                        }
-                    }
-                } catch (Exception $eIgnore) {}
-            }
+            // 單價：只有「訂單真的綁定了報價單」才推導，絕不用料號去猜（2026-09-15）
+            // 原本這裡最後一段是：用料號 LIKE 比對「任何一張」報價單取最新那張，不比對客戶、
+            // 不比對訂單日期。而推導值是直接塞進表單的 unit_price 欄位，使用者進跳窗只改個
+            // 交期再按「確認更新」，猜出來的價格就會被永久寫進 order_track（下游 acc_lib／
+            // ppr_lib／kpi_lib 全部跟著錯）。判定已收斂到 order_price_lib，與清單共用同一套。
+            $__price = eg_order_price_resolve($pdo, $row);
+            $unit_price        = $__price['price'];
+            $unit_price_source = ($__price['source'] === 'none') ? 'order_track' : $__price['source'];
 
             // 來源OP單目前的客戶（2026-08-28）：純供畫面提示用，不覆蓋任何欄位值
             $op_client_id = ''; $op_client_name = ''; $op_mismatch = false;
@@ -2151,46 +2117,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
     $order_list = $stmtData->fetchAll(PDO::FETCH_ASSOC);
 
     // 批次查詢 display_unit_price（取代 correlated subquery，整頁只跑一次）
+    // 判定規則收斂到 src/common/order_price_lib.php，與編輯跳窗共用同一套（2026-09-15）
     if (!empty($order_list)) {
-        $needQuoteNos = [];
-        foreach ($order_list as $o) {
-            if ((empty($o['unit_price']) || floatval($o['unit_price']) == 0) && !empty($o['quote_no'])) {
-                $needQuoteNos[] = $o['quote_no'];
-            }
-        }
-        $needQuoteNos = array_values(array_unique($needQuoteNos));
-        $quoteItemMap = [];
-        if (!empty($needQuoteNos)) {
-            $phQ = implode(',', array_fill(0, count($needQuoteNos), '?'));
-            $sqStmt = $pdo->prepare("SELECT ql.quote_no, qi.product_id, qi.unit_price, qi.item_id
-                FROM quotation_list ql
-                JOIN quotation_item qi ON ql.quote_id = qi.quote_id
-                WHERE ql.quote_no IN ($phQ) AND qi.unit_price > 0
-                ORDER BY qi.item_id DESC");
-            $sqStmt->execute($needQuoteNos);
-            foreach ($sqStmt->fetchAll(PDO::FETCH_ASSOC) as $qi) {
-                $quoteItemMap[$qi['quote_no']][] = $qi;
-            }
-        }
-        foreach ($order_list as &$order) {
-            $up = floatval($order['unit_price'] ?? 0);
-            if ($up > 0) {
-                $order['display_unit_price'] = $up;
-                continue;
-            }
-            $qno = $order['quote_no'] ?? '';
-            $did = $order['d_id'] ?? '';
-            $order['display_unit_price'] = null;
-            if (!empty($qno) && !empty($did) && isset($quoteItemMap[$qno])) {
-                foreach ($quoteItemMap[$qno] as $qi) {
-                    if (strpos($qi['product_id'], $did) !== false) {
-                        $order['display_unit_price'] = floatval($qi['unit_price']);
-                        break;
-                    }
-                }
-            }
-        }
-        unset($order);
+        eg_order_price_fill($pdo, $order_list);
     }
 
     // 設計師當月接單統計（1 分鐘 Session 快取）
@@ -8067,8 +7996,16 @@ foreach($dCounts as $c) {
                                 setTimeout(function() { $('#newOrderModal').modal('show'); }, 350);
                             }
                         } else {
-                            showToast('操作成功！' + autoPmMsg + '頁面將重新整理...');
-                            setTimeout(function() { location.reload(); }, autoPmMsg ? 1800 : 800);
+                            // 存檔後不再 location.reload()（2026-09-15 使用者回報）：整頁重載會把
+                            // 篩選條件、年份、頁數與捲動位置全部清掉，使用者每改一筆就被踢回第一頁。
+                            // 改走本頁既有的 AJAX 分頁刷新——複製模式與刪除本來就是這樣做，
+                            // fetchTableData() 會照 currentPage 與目前各篩選欄重新取一次，
+                            // 所以篩選／頁數自然保留，改過的那一列也會換成最新內容。
+                            showToast('操作成功！' + autoPmMsg);
+                            var savedId = newOrderId || orderId || null;
+                            $('#newOrderModal').modal('hide');
+                            refreshOrderTable();
+                            if (savedId) otFlashRow(savedId);
                         }
                     };
                     maybePromptAssemblyExpand(newOrderId || orderId || null, proceedAfterSave);
@@ -8146,6 +8083,31 @@ foreach($dCounts as $c) {
         function refreshOrderTable() {
             // 用現有的 AJAX 分頁機制刷新表格，不需要重建 DataTable
             fetchTableData(currentPage);
+        }
+
+        // 存檔後把剛改過的那一列捲進畫面並短暫打亮（2026-09-15）
+        // 刻意用輪詢等表格重繪完成，不去改 fetchTableData 的簽章——那是每次分頁／篩選
+        // 都會走的熱路徑，動它的風險遠大於這裡多等幾個 tick。
+        function otFlashRow(orderId) {
+            if (!orderId) return;
+            var tries = 0;
+            (function wait() {
+                var $row = $('tr[data-orderid="' + orderId + '"]');
+                if (!$row.length) {
+                    if (++tries > 25) return;            // 約 3 秒後放棄（該列可能已不符目前篩選）
+                    return setTimeout(wait, 120);
+                }
+                try {
+                    var el = $row[0];
+                    if (el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                } catch (e) {}
+                var prev = $row.css('background-color');
+                $row.css('transition', 'background-color .35s').css('background-color', '#F7E0BD');
+                setTimeout(function() {
+                    $row.css('background-color', prev || '');
+                    setTimeout(function() { $row.css('transition', ''); }, 400);
+                }, 1200);
+            })();
         }
 
         // ── 組合件：儲存後詢問是否自動展開子件訂單 ──────────────────────────
