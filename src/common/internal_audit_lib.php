@@ -947,6 +947,219 @@ function ia_kpi_indicators(PDO $db, int $year): array
     return $rows;
 }
 
+/* ---- 表單 → 品質管理系統要求（AS 條文）反查（2026-09-15 使用者交辦）-------------------
+ * 系統稽核紀錄表查的是「某一份表單」，但開不符合通知單時「違反條文」要填的是 AS9100 條文。
+ * 條文題庫的 doc_ref 本來就寫著「這一條建立了哪些文件、表單」，所以反過來查就得到
+ * 「這份表單對應到哪幾條要求」——**不另外建一張對照表**（鐵律4：兩份對照表遲早走鐘，
+ * 而且條文題庫本來就會改）。
+ * 回傳 doc_no => [ ['clause_id'=>, 'clause_text'=>], … ]
+ */
+function ia_clause_map_by_doc_no(PDO $db): array
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $out = [];
+    foreach (ia_as_clauses($db) as $c) {
+        if ((int)$c['is_header'] === 1) continue;                 // 章節標題列不是要求本身
+        foreach (ia_clause_doc_nos($c['doc_ref'] ?? '') as $no) {
+            $out[$no][] = ['clause_id' => (int)$c['clause_id'], 'clause_text' => (string)$c['clause_text']];
+        }
+    }
+    return $cache = $out;
+}
+
+/** 條文清單 → 不符合通知單「違反條文」欄位文字（一條一行；欄位長度 300） */
+function ia_clause_ref_text(array $clauses, int $max = 300): string
+{
+    $t = [];
+    foreach ($clauses as $c) {
+        $x = trim((string)($c['clause_text'] ?? ''));
+        if ($x !== '' && !in_array($x, $t, true)) $t[] = $x;
+    }
+    return mb_substr(implode("\n", $t), 0, $max);
+}
+
+/** AS 文件編號的部門代碼（編號第二段），如 2-SM-01-02 → SM */
+function ia_doc_dept_code(?string $docNo): string
+{
+    if (!$docNo) return '';
+    return preg_match('/^\s*\d-([A-Za-z]{2,3})-/', (string)$docNo, $m) ? strtoupper($m[1]) : '';
+}
+
+/**
+ * 系統稽核紀錄表的題庫（表單清單）＋「這份表單屬於哪個部門」＋「對應到哪幾條要求」。
+ * 部門一律由編號的部門代碼推導（as_dept_code，不寫死），所以新增部門代碼不必回頭改這裡。
+ */
+function ia_system_forms_full(PDO $db): array
+{
+    $codes = ia_as_dept_code_names($db);
+    $cmap  = ia_clause_map_by_doc_no($db);
+    $out = [];
+    foreach (ia_system_forms($db) as $f) {
+        $code = ia_doc_dept_code($f['doc_no'] ?? '');
+        $f['dept_code'] = $code;
+        $f['dept_name'] = $codes[$code] ?? ($code !== '' ? $code : '未分類');
+        $f['clauses']   = $cmap[(string)$f['doc_no']] ?? [];
+        $out[] = $f;
+    }
+    return $out;
+}
+
+/* ---- 績效執行稽核查檢表（2-GM-06-03）：全部自動判定 ----------------------------------
+ * 2026-09-15 使用者拍板三件事：
+ *   ①這張表稽核的是**去年一整年**（2025 年建立＝稽核 2024 年度），所以不分上／下半年。
+ *   ②受稽人＝KPI 頁面（views/news/KPI.php）設定的**擔當者**，且部門／職稱要正確——
+ *     擔當者有兼任問題（何沐桐主職技術課工程師、兼生管組組長，KPI 上兩個部門各有指標），
+ *     所以職稱一定要用「該指標登記的那個部門」去解析，不可以拿主職或職級最高的那筆。
+ *   ③達成／沒達成自動判定：**該年度只要有任一次未達標就算沒達成**。
+ * 判定一律走 KPI 模組自己的 kpi_as_display_value()／kpi_as_below_target()，不自己再寫一套。
+ */
+function ia_kpi_audit_year(?string $checkDate): int
+{
+    $y = (int)substr((string)($checkDate ?: date('Y-m-d')), 0, 4);
+    return $y - 1;                       // 今年建立＝稽核去年整年度
+}
+
+/** 擔當者的部門：優先用 owner_dept_id，沒設就從 owner_display「姓名/部門」拆出來 */
+function ia_kpi_owner_dept_name(array $iy): string
+{
+    $disp = (string)($iy['owner_display'] ?? '');
+    if (strpos($disp, '/') !== false) {
+        $p = explode('/', $disp);
+        $d = trim((string)end($p));
+        if ($d !== '') return $d;
+    }
+    return '';
+}
+
+/**
+ * 該年度每一項 KPI 指標的稽核列（含自動判定結果）。
+ * 回傳每列：indicator_id, dept_name, name, target_text, owner_id, owner_name,
+ *           owner_dept_name, owner_position_name, result(ok/ng/''), detail, months
+ */
+function ia_kpi_audit_rows(PDO $db, int $year): array
+{
+    require_once __DIR__ . '/kpi_as_lib.php';
+    $rows = [];
+    try {
+        $st = $db->prepare(
+            "SELECT i.indicator_id, i.item_no, i.name, i.freq, i.value_type, i.stat_desc,
+                    y.owner_user_id, y.owner_dept_id, y.owner_position_id, y.owner_display,
+                    y.source_mode, y.target_direction, y.target_value, y.target_unit, y.target_text
+               FROM kpi_as_indicator i
+               JOIN kpi_as_indicator_year y ON y.indicator_id = i.indicator_id AND y.`year` = ?
+              WHERE i.is_active = 1 AND COALESCE(y.is_active,1) = 1
+              ORDER BY i.sort_order, i.item_no");
+        $st->execute([$year]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    if (!$rows) return [];
+
+    // 該年度所有月值一次撈回來（逐列查會變成 21×12 次查詢）
+    $vals = [];
+    try {
+        $st = $db->prepare("SELECT * FROM kpi_as_monthly_value WHERE `year`=?");
+        $st->execute([$year]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $v) $vals[(int)$v['indicator_id']][(int)$v['month']] = $v;
+    } catch (Throwable $e) {}
+
+    // 擔當者的職稱：一定要用「該指標登記的那個部門」的職務（兼任）
+    $posts = [];
+    try { foreach (eg_people_posts($db, []) as $p) $posts[(int)$p['id']][] = $p; } catch (Throwable $e) {}
+    $unitName = [];
+    try {
+        foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d)
+            $unitName[(int)$d['id']] = (string)$d['name'];
+    } catch (Throwable $e) {}
+
+    $out = [];
+    foreach ($rows as $r) {
+        $iid  = (int)$r['indicator_id'];
+        $oid  = (int)($r['owner_user_id'] ?? 0);
+        $dept = (int)($r['owner_dept_id'] ?? 0) ? ($unitName[(int)$r['owner_dept_id']] ?? '') : ia_kpi_owner_dept_name($r);
+        $oname = ''; $opos = '';
+        if ($oid) {
+            $cands = $posts[$oid] ?? [];
+            foreach ($cands as $p) {
+                $oname = (string)$p['user_cname'];
+                if (($dept !== '' && (string)$p['dept_name'] === $dept)
+                 || ((int)($r['owner_dept_id'] ?? 0) && (int)$p['dept_id'] === (int)$r['owner_dept_id'])) {
+                    $opos = (string)$p['position_name'];
+                    if ($dept === '') $dept = (string)$p['dept_name'];
+                    break;
+                }
+            }
+            if ($oname === '') {
+                $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$oid]);
+                $oname = (string)($q->fetchColumn() ?: '');
+            }
+            if ($opos === '' && $cands) {          // 該部門查不到職務（例如事後調動）→ 退回主職，但不改部門
+                foreach ($cands as $p) { if ((int)$p['is_main'] === 1) { $opos = (string)$p['position_name']; break; } }
+                if ($opos === '') $opos = (string)$cands[0]['position_name'];
+            }
+        }
+        if ($oname === '') {                        // 連擔當者都沒設：退回 owner_display 的姓名段
+            $disp = (string)($r['owner_display'] ?? '');
+            $oname = trim(explode('/', $disp)[0] ?? '');
+        }
+
+        // 目標文字：優先用設定的 target_text，沒有才用 方向+值+單位 組出來
+        $target = trim((string)($r['target_text'] ?? ''));
+        if ($target === '' && $r['target_value'] !== null) {
+            $dir = ['gte' => '以上', 'lte' => '以下', 'yes' => ''][$r['target_direction']] ?? '';
+            $target = rtrim(rtrim(number_format((float)$r['target_value'], 2, '.', ''), '0'), '.')
+                    . (string)$r['target_unit'] . $dir;
+        }
+        if ($target === '') $target = trim((string)($r['stat_desc'] ?? ''));
+
+        // 判定：該年度**任一次**未達標就是沒達成（使用者拍板）
+        $iy = ['target_value' => $r['target_value'], 'target_direction' => $r['target_direction'],
+               'freq' => $r['freq'], 'source_mode' => $r['source_mode']];
+        $months = kpi_as_valid_months($iy);
+        $fail = []; $have = 0; $miss = [];
+        foreach ($months as $m) {
+            $mv = $vals[$iid][$m] ?? null;
+            $v  = kpi_as_display_value($mv);
+            if ($v === null) { $miss[] = $m; continue; }
+            $have++;
+            if (kpi_as_below_target($v, $iy)) {
+                $fail[] = ['month' => $m, 'value' => $v];
+            }
+        }
+        $result = $fail ? 'ng' : ($have ? 'ok' : '');
+        $unit = (string)$r['target_unit'];
+        $detail = '';
+        if ($fail) {
+            $detail = $year . ' 年 ' . implode('、', array_map(function ($f) use ($unit) {
+                return $f['month'] . '月（' . rtrim(rtrim(number_format($f['value'], 2, '.', ''), '0'), '.') . $unit . '）';
+            }, $fail)) . ' 未達標，目標 ' . $target;
+        } elseif ($have) {
+            $detail = $year . ' 年共 ' . $have . ' 筆實績全部達標，目標 ' . $target;
+        } else {
+            $detail = $year . ' 年沒有任何實績資料（KPI 尚未填報），無法自動判定';
+        }
+        if ($miss && $have) $detail .= '；未填報月份：' . implode('、', $miss);
+
+        $out[] = [
+            'indicator_id' => $iid,
+            'item_no'      => (int)$r['item_no'],
+            'name'         => (string)$r['name'],
+            'freq'         => (string)$r['freq'],
+            'freq_label'   => ['monthly'=>'每月','quarterly'=>'每季','halfyear'=>'每半年','yearly'=>'每年'][$r['freq']] ?? (string)$r['freq'],
+            'dept_name'    => $dept,
+            'target_text'  => $target,
+            'owner_id'     => $oid ?: null,
+            'owner_name'   => $oname,
+            'owner_position_name' => $opos,
+            'result'       => $result,
+            'detail'       => $detail,
+            'fail_months'  => array_column($fail, 'month'),
+            'have'         => $have,
+        ];
+    }
+    return $out;
+}
+
 /** 依種類建出查檢表的初始題目列（勾選哪幾題由呼叫端決定，這裡只負責題庫轉成列） */
 function ia_check_build_items(PDO $db, string $kind, int $year, array $pick = []): array
 {
@@ -967,17 +1180,189 @@ function ia_check_build_items(PDO $db, string $kind, int $year, array $pick = []
                         'col_c'=>null, 'col_d'=>null, 'ref_kind'=>'as_document', 'ref_id'=>$id];
         }
     } elseif ($kind === 'kpi') {
-        foreach (ia_kpi_indicators($db, $year) as $k) {
+        // 2026-09-15 起：部門／目標／受稽人（擔當者）／達成與否全部自動帶，
+        // 管理員只要填建立日期。判定結果一併寫進 result 與 evidence（所見證據）。
+        foreach (ia_kpi_audit_rows($db, $year) as $k) {
             $id = (int)$k['indicator_id'];
             if ($pick && !in_array($id, $pick, true)) continue;
             $items[] = ['is_header'=>0, 'col_a'=>(string)$k['dept_name'], 'col_b'=>(string)$k['name'],
-                        'col_c'=>(string)$k['target_text'], 'col_d'=>null,
-                        'ref_kind'=>'kpi_indicator', 'ref_id'=>$id];
+                        'col_c'=>(string)$k['target_text'], 'col_d'=>(string)$k['owner_name'],
+                        'ref_kind'=>'kpi_indicator', 'ref_id'=>$id,
+                        'result'=>(string)$k['result'], 'evidence'=>(string)$k['detail']];
         }
     }
+    foreach ($items as &$it0) {
+        if (!array_key_exists('result', $it0))   $it0['result'] = null;
+        if (!array_key_exists('evidence', $it0)) $it0['evidence'] = null;
+    }
+    unset($it0);
     foreach ($items as $i => &$it) $it['sort_order'] = $i + 1;
     unset($it);
     return $items;
+}
+
+/* ---- 績效沒達成 → 自動開立異常矯正處理單（CAR）------------------------------------
+ * 2026-09-15 使用者交辦：績效執行稽核查檢表「沒達成」的項目要自動開 CAR
+ * （views/QA/correction_order.php），單上要寫清楚哪個年度、哪些月份沒達成、達成率／合格條件，
+ * 並固定加上一句「請說明原因及確認是否需要調整KPI目標?」。
+ * **不自己再寫一套 CAR 流程**：配號、簽章、紀錄、通知一律用 CAR 模組自己的函式，
+ * 這裡只負責組出內容並寫入 car_order（CAR 的建立端點吃的是表單 POST，不能直接呼叫）。
+ */
+function ia_car_create_from_kpi(PDO $db, array $check, array $item, int $uid, string $uname): array
+{
+    require_once __DIR__ . '/car_lib.php';
+    require_once __DIR__ . '/car_notify.php';
+
+    $year    = ia_kpi_audit_year((string)($check['check_date'] ?? ''));
+    $bizDate = substr((string)($check['check_date'] ?? ''), 0, 10);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $bizDate)) $bizDate = date('Y-m-d');
+    $deptName = trim((string)($item['col_a'] ?? ''));
+    $target   = trim((string)($item['col_c'] ?? ''));
+    $owner    = trim((string)($item['col_d'] ?? ''));
+
+    // 判定明細：優先用建立查檢表時算好的「所見證據」（那就是未達標月份與數值）
+    $detail = trim((string)($item['evidence'] ?? ''));
+    $rowNow = null;
+    foreach (ia_kpi_audit_rows($db, $year) as $k) {
+        if ((int)$k['indicator_id'] === (int)($item['ref_id'] ?? 0)) { $rowNow = $k; break; }
+    }
+    if ($detail === '' && $rowNow) $detail = (string)$rowNow['detail'];
+    $freqLab = $rowNow['freq_label'] ?? '';
+
+    $desc = '【' . $year . ' 年度 績效執行稽核查檢表（2-GM-06-03）】' . "\n"
+          . '指標項目：' . trim((string)($item['col_b'] ?? '')) . ($deptName !== '' ? '（' . $deptName . '）' : '') . "\n"
+          . '統計週期：' . ($freqLab !== '' ? $freqLab : '—') . "\n"
+          . '合格條件（KPI 目標）：' . ($target !== '' ? $target : '—') . "\n"
+          . '稽核結果：沒達成' . "\n"
+          . '未達成情形：' . ($detail !== '' ? $detail : '—') . "\n"
+          . '請說明原因及確認是否需要調整KPI目標?';
+
+    // 責任單位：以指標登記的部門為準（名稱→id；查不到就不綁部門，單子照樣開得出來）
+    $deptId = null;
+    if ($deptName !== '') {
+        $q = $db->prepare("SELECT id FROM department WHERE name=? ORDER BY id LIMIT 1");
+        $q->execute([$deptName]);
+        $deptId = (int)($q->fetchColumn() ?: 0) ?: null;
+    }
+    $ownerId = null;
+    if ($owner !== '' && $rowNow && !empty($rowNow['owner_id'])) $ownerId = (int)$rowNow['owner_id'];
+
+    $own = !$db->inTransaction();
+    if ($own) $db->beginTransaction();
+    try {
+        $no = car_alloc_numbers($db, 1, date('Ymd', strtotime($bizDate)))[0];
+        $db->prepare(
+            "INSERT INTO car_order (car_no, group_no, source_type, source_no, source_desc,
+                 fill_date, found_date, created_by, created_by_name,
+                 resp_type, resp_dept_id, resp_person_id, resp_display,
+                 abnormal_desc, status, stage_since, created_at, updated_at)
+             VALUES (?,?, 'OTHER', ?,?, ?,?, ?,?, ?,?,?,?, ?, 'open', NOW(), NOW(), NOW())")
+           ->execute([$no, $no,
+                      mb_substr('2-GM-06-03 ' . $year . '年度績效執行稽核查檢表', 0, 50),
+                      mb_substr(trim((string)($item['col_b'] ?? '')), 0, 255),
+                      $bizDate, $bizDate, $uid, $uname,
+                      $deptId ? 'dept' : null, $deptId, $ownerId,
+                      mb_substr(trim($deptName . ($owner !== '' ? ' ' . $owner : '')), 0, 120) ?: null,
+                      $desc]);
+        $carId = (int)$db->lastInsertId();
+
+        // 異常說明由填表人自動簽章（與 CAR 建立端點同一條規則）
+        $db->prepare("INSERT INTO car_signature (car_id, section, signed_by, signed_name, signed_at, signed_date_label)
+                      VALUES (?, 'desc', ?, ?, NOW(), ?)")
+           ->execute([$carId, $uid, $uname, eg_fmt_date($bizDate)]);
+        car_log($db, $carId, 'create', $uid, $uname, '由 ' . $year . ' 年度績效執行稽核查檢表自動開立');
+
+        // 擔當者就是回覆人，免主管再指派一次
+        if ($ownerId) {
+            $db->prepare("UPDATE car_order SET status='assigned', assigned_to=?, assigned_to_name=?,
+                             assigned_by=?, assigned_by_name=?, assigned_at=NOW(), stage_since=NOW() WHERE id=?")
+               ->execute([$ownerId, $owner, $uid, $uname, $carId]);
+            car_log($db, $carId, 'assign', $uid, $uname, 'KPI 擔當者「' . $owner . '」自動指定為回覆人');
+        }
+        $db->prepare("UPDATE ia_check_item SET car_id=?, remark=? WHERE item_id=?")
+           ->execute([$carId, $no, (int)$item['item_id']]);
+        if ($own) $db->commit();
+    } catch (Throwable $e) {
+        if ($own && $db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+
+    try {   // 通知（走 CAR 模組自己的通知，推播失敗不影響開單）
+        $ro = $db->prepare("SELECT * FROM car_order WHERE id=?"); $ro->execute([$carId]);
+        $o = $ro->fetch(PDO::FETCH_ASSOC) ?: [];
+        if ($o) {
+            if (!empty($o['assigned_to'])) {
+                car_notify($db, $carId, car_notify_title('🔧', $o, '指派您回覆'),
+                    car_notify_body($db, $o, '本單由內部稽核（績效執行稽核查檢表）自動開立，請說明原因並確認是否需要調整 KPI 目標。'),
+                    [(int)$o['assigned_to']], $uid, 'reply');
+                car_notify($db, $carId, car_notify_title('📣', $o, '貴單位被開立矯正單'),
+                    car_notify_body($db, $o, '由內部稽核自動開立。'),
+                    array_diff(car_primary_recipients($db, $o), [(int)$o['assigned_to']]), $uid);
+            } else {
+                car_notify($db, $carId, car_notify_title('🔧', $o, '待指派回覆人'),
+                    car_notify_body($db, $o, '由內部稽核（績效執行稽核查檢表）自動開立。'),
+                    car_primary_recipients($db, $o), $uid);
+            }
+        }
+    } catch (Throwable $e) {}
+
+    return ['car_id' => $carId, 'car_no' => $no];
+}
+
+/**
+ * AS稽核查檢表依「系統稽核紀錄表」自動判定合格／不合格（2026-09-15 使用者交辦）。
+ * 規則：一條要求（條文）底下列了哪些文件表單是題庫本來就寫好的（doc_ref），
+ *   ①那些表單只要有任何一份在來源的系統稽核紀錄表被判**不合格** → 這一條就是不合格，
+ *     並在「所見證據或建議」列出是哪幾份（編號＋名稱＋IA 單號），方便跟系統稽核紀錄表比對；
+ *   ②全部都合格（至少查過一份） → 合格；
+ *   ③一份都沒查到 → **不判定**（留白給稽核員自己看），不要亂猜成合格。
+ * 回傳 ['ng'=>n, 'ok'=>n, 'skip'=>n]
+ */
+function ia_as_apply_system_result(PDO $db, int $checkId, int $srcCheckId): array
+{
+    $st = $db->prepare("SELECT i.col_a, i.col_b, i.result, n.nc_no
+                          FROM ia_check_item i LEFT JOIN ia_nc n ON n.nc_id = i.nc_id
+                         WHERE i.check_id=? AND i.is_header=0 AND i.ref_kind='as_document'");
+    $st->execute([$srcCheckId]);
+    $forms = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $no = trim((string)$r['col_a']);
+        if ($no === '') continue;
+        $forms[$no] = ['name' => (string)$r['col_b'], 'result' => (string)$r['result'], 'nc_no' => (string)($r['nc_no'] ?? '')];
+    }
+    $out = ['ng' => 0, 'ok' => 0, 'skip' => 0];
+    if (!$forms) return $out;
+
+    $st = $db->prepare("SELECT item_id, ref_id FROM ia_check_item
+                         WHERE check_id=? AND is_header=0 AND ref_kind='as_clause'");
+    $st->execute([$checkId]);
+    $items = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$items) return $out;
+
+    $refs = [];
+    foreach ($db->query("SELECT clause_id, doc_ref FROM ia_as_clause")->fetchAll(PDO::FETCH_ASSOC) as $c)
+        $refs[(int)$c['clause_id']] = (string)($c['doc_ref'] ?? '');
+
+    $upd = $db->prepare("UPDATE ia_check_item SET result=?, evidence=? WHERE item_id=?");
+    foreach ($items as $it) {
+        $ngs = []; $oks = [];
+        foreach (ia_clause_doc_nos($refs[(int)$it['ref_id']] ?? '') as $no) {
+            if (!isset($forms[$no])) continue;
+            $f = $forms[$no];
+            if ($f['result'] === 'ng') $ngs[] = $no . ' ' . $f['name'] . ($f['nc_no'] !== '' ? '（' . $f['nc_no'] . '）' : '');
+            elseif ($f['result'] === 'ok') $oks[] = $no . ' ' . $f['name'];
+        }
+        if ($ngs) {
+            $upd->execute(['ng', '系統稽核紀錄表不合格：' . implode('；', $ngs), (int)$it['item_id']]);
+            $out['ng']++;
+        } elseif ($oks) {
+            $upd->execute(['ok', '系統稽核紀錄表已查核：' . implode('；', $oks), (int)$it['item_id']]);
+            $out['ok']++;
+        } else {
+            $out['skip']++;
+        }
+    }
+    return $out;
 }
 
 /* ============================ 依業務日期回推當時職務（ai-rules/22） ============================ */

@@ -120,7 +120,10 @@ case 'meta': {
     try { $depts = $db->query("SELECT id, name, parent_id, level FROM department ORDER BY sort_order, id")
                       ->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) {}
     $people = [];
-    try { $people = eg_people_list($db, []); } catch (Throwable $e) {}
+    // posts＝這個人「所有」的職務（含主職與兼任）。eg_people_list() 一人只回一列、
+    // 而且挑的是「職級最高」那一筆＝兼任常常蓋掉主職，製表人下拉就會看不到主職務
+    // （2026-09-14 使用者回報）。補上 posts 之後由前端自己決定要印哪一個。
+    try { $people = ia_annotate_posts($db, eg_people_list($db, [])); } catch (Throwable $e) {}
 
     // 七份表單各自的 AS 綁定（表頭名稱與頁尾編號都由綁定推導，不寫死）
     $asDocs = [];
@@ -711,8 +714,16 @@ case 'check_bank': {
         // 作業項目標籤要分類（2026-09-14）：依 AS 文件編號第二段的部門代碼歸到部門底下
         jout(['kind' => $kind, 'rows' => $rows, 'dept_codes' => ia_as_dept_code_names($db)]);
     }
-    elseif ($kind === 'system') jout(['kind' => $kind, 'rows' => ia_system_forms($db)]);
-    else                        jout(['kind' => $kind, 'rows' => ia_kpi_indicators($db, $year)]);
+    elseif ($kind === 'system') {
+        // 2026-09-15 使用者要求：要能「從部門挑到我這次要稽核的表單」，
+        // 所以每一份表單一併帶出它的部門（編號的部門代碼推導）與對應的品質管理系統要求。
+        jout(['kind' => $kind, 'rows' => ia_system_forms_full($db), 'dept_codes' => ia_as_dept_code_names($db)]);
+    }
+    else {
+        // 績效執行稽核查檢表稽核的是「去年整年度」，且達成／沒達成與受稽人（擔當者）全自動帶
+        $ay = ia_kpi_audit_year((string)($_GET['check_date'] ?? ''));
+        jout(['kind' => $kind, 'rows' => ia_kpi_audit_rows($db, $ay), 'audit_year' => $ay]);
+    }
 }
 
 case 'check_list': {
@@ -752,8 +763,10 @@ case 'check_create': {
     $cd = iaDate($_POST['check_date'] ?? '');
     if (!$cd) jerr('請填稽核日期');
     $year = (int)substr($cd, 0, 4);
-    $half = (string)($_POST['half'] ?? '');
-    if ($kind === 'kpi' && !in_array($half, ['H1', 'H2'], true)) jerr('績效執行稽核查檢表請選上／下半年度');
+    // 績效執行稽核查檢表稽核的是**去年整年度**（2026 年建立＝稽核 2025），所以不分上／下半年
+    // （2026-09-15 使用者拍板，取代原本必選 H1/H2 的作法）。
+    $half = '';
+    if ($kind === 'kpi') $year = ia_kpi_audit_year($cd);
     $caseId = iaInt($_POST['case_id'] ?? '');
     if ($caseId) {
         $q = $db->prepare("SELECT 1 FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
@@ -794,14 +807,26 @@ case 'check_create': {
                       mb_substr(trim((string)($_POST['title'] ?? '')), 0, 150) ?: null,
                       $auditorId, $auditorName, $auditorDept, $auditorPos, $cd, $uid, $uname]);
         $kid = (int)$db->lastInsertId();
+        // result／evidence：績效查檢表建立當下就由 KPI 資料自動判定好（2026-09-15），
+        // 其他兩種維持空白由稽核員填。
         $ins = $db->prepare("INSERT INTO ia_check_item (check_id, sort_order, is_header, col_a, col_b, col_c, col_d,
-                                 ref_kind, ref_id) VALUES (?,?,?,?,?,?,?,?,?)");
+                                 ref_kind, ref_id, result, evidence) VALUES (?,?,?,?,?,?,?,?,?,?,?)");
         foreach ($items as $it) {
             $ins->execute([$kid, $it['sort_order'], $it['is_header'], $it['col_a'], $it['col_b'],
-                           $it['col_c'], $it['col_d'], $it['ref_kind'], $it['ref_id']]);
+                           $it['col_c'], $it['col_d'], $it['ref_kind'], $it['ref_id'],
+                           ($it['result'] ?? '') ?: null, ($it['evidence'] ?? '') ?: null]);
+        }
+        // AS稽核查檢表可以直接沿用「系統稽核紀錄表」的結果自動判定（使用者 2026-09-15 交辦）
+        $srcId = iaInt($_POST['src_check_id'] ?? '');
+        $applied = null;
+        if ($kind === 'as' && $srcId) {
+            $q = $db->prepare("SELECT kind FROM ia_check WHERE check_id=? AND COALESCE(is_deleted,0)=0");
+            $q->execute([$srcId]);
+            if ((string)$q->fetchColumn() !== 'system') jerr('來源必須是系統稽核紀錄表');
+            $applied = ia_as_apply_system_result($db, $kid, $srcId);
         }
         $db->commit();
-        jout(['check_id' => $kid, 'items' => count($items)]);
+        jout(['check_id' => $kid, 'items' => count($items), 'applied' => $applied]);
     } catch (Throwable $e) { $db->rollBack(); jerr('建立失敗：' . $e->getMessage(), 500); }
 }
 
@@ -827,6 +852,38 @@ case 'check_get': {
             $it['tasks'] = (($it['ref_kind'] ?? '') === 'as_clause') ? ($map[(int)$it['ref_id']] ?? []) : [];
         }
         unset($it);
+    }
+    // 系統稽核紀錄表：每一列補上「這份表單對應到哪幾條品質管理系統要求」（即時查條文題庫＝鐵律4）。
+    // 開不符合通知單時的「違反條文」就是從這裡帶的（2026-09-15 使用者交辦）。
+    if ($k['kind'] === 'system') {
+        $cmap  = ia_clause_map_by_doc_no($db);
+        $codes = ia_as_dept_code_names($db);
+        foreach ($k['items'] as &$it) {
+            $cl = $cmap[trim((string)$it['col_a'])] ?? [];
+            $it['clauses'] = $cl;
+            $it['clause_ref'] = ia_clause_ref_text($cl);
+            $code = ia_doc_dept_code((string)$it['col_a']);
+            $it['dept_name'] = $codes[$code] ?? '';   // 開不符合通知單時的受稽核單位預設值
+        }
+        unset($it);
+    }
+    // 績效查檢表：已經轉成異常矯正處理單的列要顯示單號（備註欄就是印這個）
+    if ($k['kind'] === 'kpi') {
+        $ids = [];
+        foreach ($k['items'] as $it) if (!empty($it['car_id'])) $ids[] = (int)$it['car_id'];
+        $map = [];
+        if ($ids) {
+            try {
+                foreach ($db->query("SELECT id, car_no, status FROM car_order WHERE id IN (" . implode(',', $ids) . ")")
+                            ->fetchAll(PDO::FETCH_ASSOC) as $c) $map[(int)$c['id']] = $c;
+            } catch (Throwable $e) {}
+        }
+        foreach ($k['items'] as &$it) {
+            $c = $map[(int)($it['car_id'] ?? 0)] ?? null;
+            $it['car_no'] = $c['car_no'] ?? null;
+        }
+        unset($it);
+        $k['audit_year'] = ia_kpi_audit_year((string)$k['check_date']);
     }
     $k['kind_label'] = IA_CHECK_KINDS[$k['kind']]['label'] ?? $k['kind'];
     $k['can_edit'] = ($perms['canAudit'] && $k['status'] !== 'done') || $perms['canAdmin'];
@@ -887,6 +944,30 @@ case 'check_done': {
     if ($to === 'draft' && !$perms['canAdmin']) jerr('取消結案需內稽管理員權限', 403);
     $db->prepare("UPDATE ia_check SET status=?, updated_at=NOW() WHERE check_id=?")->execute([$to, $kid]);
     jout(['saved' => true]);
+}
+
+case 'car_from_item': {
+    // 績效執行稽核查檢表「沒達成」→ 自動開立異常矯正處理單（views/QA/correction_order.php）
+    // 並把單號寫回該列備註（紙本那一欄本來就叫「備註(異常矯正處理單編號)」）。
+    iaReqAudit($perms);
+    $iid = (int)($_POST['item_id'] ?? 0);
+    $st = $db->prepare("SELECT i.*, k.kind, k.check_date, k.year, k.status AS check_status
+                          FROM ia_check_item i JOIN ia_check k ON k.check_id=i.check_id
+                         WHERE i.item_id=? AND COALESCE(k.is_deleted,0)=0");
+    $st->execute([$iid]);
+    $it = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$it) jerr('找不到這個項目', 404);
+    if ($it['kind'] !== 'kpi') jerr('只有績效執行稽核查檢表才開異常矯正處理單');
+    if ((string)$it['result'] !== 'ng') jerr('這個項目不是「沒達成」，不需要開矯正單');
+    if (!empty($it['car_id'])) {
+        $q = $db->prepare("SELECT car_no FROM car_order WHERE id=?"); $q->execute([(int)$it['car_id']]);
+        jerr('這個項目已經開過矯正單 ' . (string)($q->fetchColumn() ?: ''));
+    }
+    $ck = ['check_date' => $it['check_date']];
+    try {
+        $res = ia_car_create_from_kpi($db, $ck, $it, $uid, $uname);
+    } catch (Throwable $e) { jerr('開立矯正單失敗：' . $e->getMessage(), 500); }
+    jout($res);
 }
 
 case 'check_delete': {
@@ -1408,6 +1489,20 @@ case 'report_save': {
         }
     }
     jout(['report_id' => $rid]);
+}
+
+case 'report_delete': {
+    // 2026-09-14 使用者要求：稽核內建立完的單據，管理員一律要刪得掉。
+    // 報告表上的缺點數是由不符合通知單即時算的，這裡刪掉的只有這張表本身（補充文字＋製表／核准）。
+    iaReqAdmin($perms);
+    $year = (int)($_POST['year'] ?? 0);
+    if ($year < 2000 || $year > 2200) jerr('年度不正確');
+    $st = $db->prepare("SELECT report_id FROM ia_report WHERE year=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$year]);
+    $rid = (int)($st->fetchColumn() ?: 0);
+    if (!$rid) jerr('這個年度還沒有稽核報告表', 404);
+    $db->prepare("UPDATE ia_report SET is_deleted=1, updated_at=NOW() WHERE report_id=?")->execute([$rid]);
+    jout(['deleted' => true]);
 }
 
 case 'report_approve': {

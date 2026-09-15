@@ -235,6 +235,10 @@ $roleLabel = ia_role_label($perms);
         .nk-sel .lb { font-size:12px; color:#8a6d45; margin-right:4px; }
         .nk-sel .nk-chip { cursor:default; }
         .nk-sel .nk-chip .x { margin-left:5px; cursor:pointer; font-weight:bold; }
+        /* 已選的作業項目各自掛在哪幾份文件（點了標籤看不出挑到哪張表單／程序書＝使用者回報） */
+        .nk-seldoc { margin-top:5px; padding-top:5px; border-top:1px dashed #E8D5B5;
+            font-size:12px; color:#7a6444; max-height:92px; overflow:auto; }
+        .nk-seldoc b { color:#8A5A2B; }
         .pick-wrap label.dim { color:#b0a390; }
         .pick-wrap label.dim .nk-task { opacity:.55; }
         /* 勾選清單一律對齊：勾選框固定欄寬、名稱固定欄寬、右側說明自己一欄，
@@ -313,6 +317,7 @@ $roleLabel = ia_role_label($perms);
                 <button id="btnPlanSave" class="btn-warm"><i class="fa fa-save"></i> 儲存排定</button>
                 <button id="btnPlanSubmit"><i class="fa fa-paper-plane"></i> 送審</button>
                 <button id="btnPlanApprove"><i class="fa fa-check"></i> 核准</button>
+                <button id="btnPlanDelete" class="btn-danger"><i class="fa fa-trash"></i> 刪除計畫表</button>
                 <?php endif; ?>
                 <button id="btnPlanPrint"><i class="fa fa-print"></i> 列印</button>
             </div>
@@ -405,6 +410,7 @@ $roleLabel = ia_role_label($perms);
                 <?php if ($perms['canAdmin']): ?>
                 <button id="btnReportSave" class="btn-warm"><i class="fa fa-save"></i> 儲存</button>
                 <button id="btnReportApprove"><i class="fa fa-check"></i> 核准</button>
+                <button id="btnReportDelete" class="btn-danger"><i class="fa fa-trash"></i> 刪除報告表</button>
                 <?php endif; ?>
                 <button id="btnReportPrint"><i class="fa fa-print"></i> 列印</button>
             </div>
@@ -685,14 +691,20 @@ $roleLabel = ia_role_label($perms);
     <div class="ia-mbody">
         <div class="ia-form">
             <label>種類<span style="color:#DD5138;">*</span></label>
-            <div><select id="nkKind"></select></div>
-            <label>稽核日期<span style="color:#DD5138;">*</span></label>
+            <div><select id="nkKind"></select>
+                 <div id="nkKindHint" style="font-size:12px;color:#8a6d45;margin-top:3px;"></div></div>
+            <label>建立（稽核）日期<span style="color:#DD5138;">*</span></label>
             <div><input type="date" id="nkDate"><div class="err-msg" id="errNkDate"></div></div>
             <label>稽核人</label><div><select id="nkAuditor" data-eg-filter="輸入人員姓名篩選…"></select></div>
             <label>所屬件號</label><div><select id="nkCase"></select></div>
-            <label id="nkHalfLab">半年度</label>
-            <div><select id="nkHalf"><option value="">（請選擇）</option><option value="H1">上半年度</option><option value="H2">下半年度</option></select>
-                 <div class="err-msg" id="errNkHalf"></div></div>
+            <label id="nkYearLab">稽核年度</label>
+            <div id="nkYearWrap"><input type="text" id="nkYearShow" readonly
+                 style="width:120px;background:#f5efe4;border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;">
+                 <span style="font-size:12px;color:#8a6d45;">　績效執行稽核查檢表稽核的是<b>去年一整年</b>，年度由上面的建立日期自動推導，不分上／下半年。</span></div>
+            <label id="nkSrcLab">自動判定來源</label>
+            <div id="nkSrcWrap"><select id="nkSrc" style="min-width:320px;"></select>
+                 <div style="font-size:12px;color:#8a6d45;margin-top:3px;">選一張已經填好的<b>系統稽核紀錄表</b>，建立時會自動把合格／不合格判定過來，
+                 並在「所見證據或建議」列出是哪幾份表單不合格，方便兩張表互相比對。</div></div>
             <label>標題</label><div><input type="text" id="nkTitle" placeholder="留空＝用種類名稱"></div>
         </div>
         <div style="margin-top:10px;" class="nk-split">
@@ -701,7 +713,7 @@ $roleLabel = ia_role_label($perms);
                  2026-09-14 起依 AS 文件編號的部門代碼分類，並移到左側分割欄（原本平鋪在上方看不完）。 -->
             <div class="nk-side" id="nkTaskSide" style="display:none;">
                 <div class="nk-side-hd">
-                    <b>依作業項目挑題</b>
+                    <b id="nkTaskTitle">依作業項目挑題</b>
                     <input type="text" id="nkTaskFilter" placeholder="篩選作業項目…">
                 </div>
                 <div class="nk-side-body" id="nkTaskGroups"></div>
@@ -734,11 +746,13 @@ $roleLabel = ia_role_label($perms);
             <label>稽核人</label><div><input type="text" id="ckAuditor" readonly></div>
             <label>狀態</label><div><input type="text" id="ckStatus" readonly></div>
         </div>
+        <div id="ckAutoBar" class="ia-hint" style="display:none;"></div>
         <div class="ia-table-wrap"><table class="ia-table"><thead id="ckHead"></thead><tbody id="ckBody"></tbody></table></div>
     </div>
     <div class="ia-mfoot">
         <button data-close>關閉</button>
         <button id="btnCheckPrint"><i class="fa fa-print"></i> 列印</button>
+        <button id="btnCheckAuto" class="btn-warm"><i class="fa fa-magic"></i> 一鍵開立</button>
         <button id="btnCheckReopen">取消結案</button>
         <button id="btnCheckSave">儲存</button>
         <button id="btnCheckDone" class="btn-warm">結案</button>
@@ -1070,6 +1084,8 @@ $(document).ready(function(){ $('#sidebar-menu').css('visibility','visible'); })
 
 var API  = '../../src/store/InternalAudit_API.php';
 var META = null, YEAR = 0, PLAN = null, CASES = [];
+/* 內稽管理員＝各分頁的刪除鈕都看得到（2026-09-14 使用者要求：稽核內建立完的單據都要能刪） */
+var IS_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
 var PAGE = {case:1, check:1, nc:1}, PER = 20;
 var LIST = {case:[], check:[], nc:[]};
 
@@ -1139,10 +1155,25 @@ function makerOptions(curId, curName){
     (META.people||[]).forEach(function(p){ if (String(p.id)===String(curId||'')) found = true; });
     if (curId && !found) h += '<option value="'+esc(curId)+'" selected>'+esc((curName||'#'+curId)+'（已離職／非在職）')+'</option>';
     (META.people||[]).forEach(function(p){
-        var label = (p.dept_name?p.dept_name+'\u3000':'') + (p.position_name?p.position_name+'\u3000':'') + p.user_cname;
-        h += '<option value="'+p.id+'"'+(String(curId||'')===String(p.id)?' selected':'')+'>'+esc(label)+'</option>';
+        h += '<option value="'+p.id+'"'+(String(curId||'')===String(p.id)?' selected':'')+'>'+esc(personPostLabel(p))+'</option>';
     });
     return h;
+}
+/* 「部門　職稱　姓名」；多職務者以**主職**為準，兼任接在括號裡（2026-09-14 使用者回報：
+   製表人下拉只看得到兼任職位——eg_people_list() 一人只回一列、而且挑的是「職級最高」那一筆，
+   所以主職會被兼任蓋掉。posts＝這個人所有職務，由後端 ia_annotate_posts() 帶回來。） */
+function personPostLabel(p){
+    var posts = p.posts || [], main = null, others = [];
+    posts.forEach(function(x){ if (!main && +x.is_main === 1) main = x; else others.push(x); });
+    var head = main || {dept_name:p.dept_name, position_name:p.position_name};
+    var label = ((head.dept_name||'') ? head.dept_name+'\u3000' : '')
+              + ((head.position_name||'') ? head.position_name+'\u3000' : '') + p.user_cname;
+    if (main && others.length) {
+        label += '\uff08\u517c ' + others.map(function(x){
+            return ((x.dept_name||'')+' '+(x.position_name||'')).trim();
+        }).join('\u3001') + '\uff09';
+    }
+    return label;
 }
 /**
  * 稽核員／陪檢員／稽核組長／稽核人的下拉：選的是「職務」不是「人」。
@@ -1419,6 +1450,15 @@ $('#btnPlanApprove').on('click', function(){
             loadPlan();
         }, 'json');
     }, true);
+});
+/* 刪除年度計畫表（管理員限定；API 早就有，只是畫面上一直沒有按鈕＝使用者 2026-09-14 回報） */
+$('#btnPlanDelete').on('click', function(){
+    if (!PLAN) { alert('本年度還沒有計畫表'); return; }
+    if (!confirm('確定刪除 '+YEAR+' 年度稽核計劃表？\n排定的○格子會一起刪除；已建立的稽核通知單與查檢表不受影響。')) return;
+    $.post(API, {action:'plan_delete', plan_id:PLAN.plan_id}, function(res){
+        if (!res.ok) { alert(res.error||'刪除失敗'); return; }
+        loadPlan();
+    }, 'json');
 });
 
 /* 通用「輸入業務日期後確認」跳窗 */
@@ -1803,9 +1843,19 @@ function renderChecks(){
           + '<td><span class="st st-'+(r.status==='done'?'done':'draft')+'">'+(r.status==='done'?'已結案':'填寫中')+'</span></td>'
           + '<td><span class="ia-op" onclick="openCheck('+r.check_id+')"><i class="fa fa-edit"></i> 開啟</span>'
           + '<span class="ia-op" onclick="printCheck('+r.check_id+')"><i class="fa fa-print"></i></span>'
+          + (IS_ADMIN ? '<span class="ia-op danger" onclick="delCheck('+r.check_id+')" title="刪除這張查檢表"><i class="fa fa-trash"></i></span>' : '')
           + '</td></tr>';
     });
     $('#checkBody').html(h);
+}
+/* 刪除查檢表（管理員限定）。已經開過不符合通知單的擋在後端，這裡先把原因講清楚。 */
+function delCheck(id){
+    if (!IS_ADMIN) return;
+    if (!confirm('確定刪除這張查檢表？\n（已經開過不符合通知單的查檢表不可刪除，請先刪掉那幾張 IA 單）')) return;
+    $.post(API, {action:'check_delete', check_id:id}, function(res){
+        if (!res.ok) { alert(res.error||'刪除失敗'); return; }
+        loadChecks();
+    }, 'json');
 }
 
 /* ---- 建立查檢表：先看題庫再勾 ---- */
@@ -1814,35 +1864,79 @@ $('#btnCheckNew').on('click', function(){
     var kh = '';
     $.each(META.check_kinds||{}, function(k,v){ kh += '<option value="'+k+'">'+esc(v.label)+'</option>'; });
     $('#nkKind').html(kh);
+    // 清單上已經篩了種類就沿用（使用者多半是在那個種類的清單上按下「建立查檢表」）
+    if ($('#checkKind').val()) $('#nkKind').val($('#checkKind').val());
     $('#nkDate').val(META.today);
     $('#nkAuditor').html(postOptions(META.auditors, '', META.me.id, '（未指定）'));
     $('#nkCase').html(caseOptions(''));
-    $('#nkTitle').val(''); $('#nkFilter').val(''); $('#nkHalf').val('');
+    $('#nkTitle').val(''); $('#nkFilter').val('');
     clearErrs($('#checkNewMask'));
-    loadBank();
+    nkKindChanged();
     openMask('checkNewMask');
 });
-$('#nkKind').on('change', loadBank);
+/* 先選種類，畫面再依種類長出對應的選項（2026-09-14 使用者要求）。 */
+var NK_KIND_HINT = {
+    as:     'AS稽核查檢表：題目＝AS9100 條文題庫。可從左欄用「作業項目」挑題；也可以指定一張已填好的系統稽核紀錄表，建立時自動判定合格／不合格。',
+    system: '系統稽核紀錄表：題目＝AS 文件裡的「表單」。請從左欄挑這次要稽核的部門，右側就會自動勾起該部門的表單，再把不需要的取消勾選即可。',
+    kpi:    '績效執行稽核查檢表：稽核「去年一整年」的 KPI。部門／指標／目標／受稽人（擔當者）與達成／沒達成全部自動帶入，您只要確認建立日期與要查哪幾項。'
+};
+function kpiAuditYear(d){ var y = parseInt(String(d||META.today).substr(0,4),10)||0; return y-1; }
+function nkKindChanged(){
+    var kind = $('#nkKind').val(), isKpi = (kind==='kpi'), isAs = (kind==='as');
+    $('#nkKindHint').text(NK_KIND_HINT[kind]||'');
+    // **不可以用 `$('#nkYearLab').closest('div')`**：label 的 closest('div') 是整個 .ia-form，
+    // 一 toggle 會把種類／日期整區都藏起來（2026-09-14 踩過一次）。
+    $('#nkYearLab').toggle(isKpi); $('#nkYearWrap').toggle(isKpi);
+    $('#nkSrcLab').toggle(isAs);   $('#nkSrcWrap').toggle(isAs);
+    $('#nkYearShow').val(isKpi ? (kpiAuditYear($('#nkDate').val())+' 年度（去年整年）') : '');
+    if (isAs) loadSrcChecks();
+    loadBank();
+}
+$('#nkKind').on('change', nkKindChanged);
+$('#nkDate').on('change', function(){
+    if ($('#nkKind').val()==='kpi') nkKindChanged();      // 稽核年度＝建立日期的前一年，日期一改要跟著換題庫
+});
+/** AS 查檢表的「自動判定來源」下拉：已建立的系統稽核紀錄表 */
+function loadSrcChecks(){
+    $.getJSON(API, {action:'check_list', kind:'system'}, function(res){
+        var h = '<option value="">（不自動判定，合格／不合格留白自己填）</option>';
+        (res.rows||[]).forEach(function(r){
+            h += '<option value="'+r.check_id+'">'
+               + esc(dispDate(r.check_date)+'　'+(r.title||'系統稽核紀錄表')
+                     +'（'+r.item_cnt+' 項，不合格 '+r.ng_cnt+'）')+'</option>';
+        });
+        $('#nkSrc').html(h);
+    });
+}
 function loadBank(){
     var kind = $('#nkKind').val();
     NK_TASKS = []; NK_CHECKED = {}; NK_GRP_OPEN = {};   // 換種類＝重來一次，不要把上一種的勾選帶過去
     $('#nkTaskFilter').val('');
-    $('#nkHalfLab, #nkHalf').closest('div').toggle(kind==='kpi');
-    $('#nkHalfLab').toggle(kind==='kpi');
-    $.getJSON(API, {action:'check_bank', kind:kind, year:YEAR}, function(res){
+    $.getJSON(API, {action:'check_bank', kind:kind, year:YEAR, check_date:$('#nkDate').val()}, function(res){
         if (!res.ok) { $('#nkPick').html('<div class="ia-empty">'+esc(res.error||'載入失敗')+'</div>'); return; }
         BANK = res.rows||[];
         NK_DEPT_CODES = res.dept_codes || {};   // AS 文件編號的部門代碼→部門名稱（標籤分類用）
         renderBank();
     });
 }
+/* 一列題目在畫面上的樣子。tags＝左欄用哪些標籤挑得到這一列（AS＝作業項目、其餘＝部門）。 */
 function bankRow(kind, r){
     if (kind==='as')     return {id:+r.clause_id,  hdr:+r.is_header===1,
                                  text:r.clause_text, sub:r.doc_ref||'',
-                                 tasks:(r.tasks||[]).map(function(t){ return t.task_name; })};
-    if (kind==='system') return {id:+r.id, hdr:false, text:(r.doc_no||'')+'　'+(r.doc_name||''), sub:'', tasks:[]};
+                                 tags:(r.tasks||[]).map(function(t){ return t.task_name; }),
+                                 badges:(r.tasks||[]).map(function(t){ return t.task_name; })};
+    if (kind==='system') return {id:+r.id, hdr:false, text:(r.doc_no||'')+'　'+(r.doc_name||''),
+                                 // 品質管理系統要求＝開不符合通知單時要填的「違反條文」，先讓使用者在這裡看到
+                                 sub:(r.clauses||[]).map(function(c){ return c.clause_text; }).join('；'),
+                                 tags:[r.dept_name||'未分類'], badges:[r.dept_name||'未分類']};
+    var res = r.result==='ng' ? '沒達成' : (r.result==='ok' ? '達成' : '資料不足');
     return {id:+r.indicator_id, hdr:false,
-            text:(r.dept_name?r.dept_name+'　':'')+(r.name||''), sub:r.target_text?('目標：'+r.target_text):'', tasks:[]};
+            text:(r.dept_name?r.dept_name+'　':'')+(r.name||''),
+            sub:'目標：'+(r.target_text||'—')
+                +'　受稽人：'+(r.owner_name||'（KPI 未設定擔當者）')
+                +(r.owner_position_name?('（'+r.owner_position_name+'）'):'')
+                +'　自動判定：'+res,
+            tags:[r.dept_name||'未分類'], badges:[r.freq_label||'', res].filter(Boolean)};
 }
 /* 作業項目標籤（只有 AS 查檢表）：點一下＝只勾有這個用途的條文，再點一下取消。
    同時選多個＝聯集。**一個都沒選＝一題都不勾**（2026-09-14 使用者指定改成預設全不選）。
@@ -1861,13 +1955,64 @@ function nkTaskGroupMap(){
     });
     return m;
 }
-function nkChip(n, on, withX){
-    return '<span class="nk-chip'+(on?' on':'')+'" data-t="'+esc(n)+'">'+esc(n)
+function nkChip(n, on, withX, label){
+    return '<span class="nk-chip'+(on?' on':'')+'" data-t="'+esc(n)+'">'+esc(label==null?n:label)
          + (withX ? '<span class="x">×</span>' : '') + '</span>';
 }
+/** 左欄挑題模式：AS＝作業項目（依部門分組）／系統稽核紀錄表與績效查檢表＝直接挑部門 */
+function nkMode(){ return $('#nkKind').val()==='as' ? 'task' : 'dept'; }
+/** 標籤 → 目前題庫裡有幾列掛著它（部門模式要顯示「業務課（6）」才知道挑下去會勾到幾張表單） */
+function nkTagCount(){
+    var kind = $('#nkKind').val(), c = {};
+    BANK.forEach(function(raw){
+        var r = bankRow(kind, raw);
+        if (r.hdr) return;
+        (r.tags||[]).forEach(function(t){ c[t] = (c[t]||0) + 1; });
+    });
+    return c;
+}
+/** AS 專用：作業項目 → 掛在哪幾份文件（點了標籤看不出挑到哪張表單／程序書＝2026-09-14 使用者回報） */
+function nkTaskDocs(){
+    var m = {};
+    BANK.forEach(function(raw){
+        (raw.tasks||[]).forEach(function(t){
+            var key = ((t.doc_no||'')+' '+(t.doc_name||'')).trim();
+            var a = m[t.task_name] || (m[t.task_name] = []);
+            if (a.indexOf(key) < 0) a.push(key);
+        });
+    });
+    return m;
+}
 function renderTaskPanel(){
-    var kind = $('#nkKind').val();
-    if (kind !== 'as') { $('#nkTaskSide').hide(); $('#nkTaskSel').hide(); NK_TASKS = []; return; }
+    var kind = $('#nkKind').val(), mode = nkMode();
+    $('#nkTaskTitle').text(mode==='task' ? '依作業項目挑題' : '依部門挑題');
+    $('#nkTaskFilter').attr('placeholder', mode==='task' ? '篩選作業項目…' : '篩選部門…');
+
+    if (mode === 'dept') {                       // 系統稽核紀錄表／績效查檢表：左欄直接列部門
+        var cnt = nkTagCount(), dnames = Object.keys(cnt).sort(function(a,b){
+            if (a === '未分類') return 1;
+            if (b === '未分類') return -1;
+            return a.localeCompare(b, 'zh-Hant');
+        });
+        NK_TASKS = NK_TASKS.filter(function(n){ return dnames.indexOf(n) >= 0; });
+        if (!dnames.length) { $('#nkTaskSide').hide(); $('#nkTaskSel').hide(); NK_TASKS = []; return; }
+        var kw2 = $('#nkTaskFilter').val().trim().toLowerCase();
+        $('#nkTaskGroups').html('<div class="nk-grp"><div class="nk-grp-body">'
+            + dnames.filter(function(n){ return !kw2 || n.toLowerCase().indexOf(kw2)>=0 || NK_TASKS.indexOf(n)>=0; })
+                    .map(function(n){ return nkChip(n, NK_TASKS.indexOf(n)>=0, false, n+'（'+cnt[n]+'）'); }).join('')
+            + '</div></div>');
+        $('#nkTaskSide').show();
+        if (NK_TASKS.length) {
+            $('#nkTaskSel').show().html('<span class="lb">已選部門 '+NK_TASKS.length+' 個：</span>'
+                + NK_TASKS.map(function(n){ return nkChip(n, true, true, n); }).join('')
+                + '<span class="nk-chip clear" data-clear="1">✕ 全部清除</span>');
+        } else {
+            $('#nkTaskSel').show().html('<span class="lb">尚未選擇部門（預設一題都不勾）'
+                + '——請從左側點選這次要稽核的部門，右側就會勾起該部門的項目，再把不需要的取消勾選。</span>');
+        }
+        return;
+    }
+
     var gm = nkTaskGroupMap(), names = Object.keys(gm).sort();
     if (!names.length) { $('#nkTaskSide').hide(); $('#nkTaskSel').hide(); NK_TASKS = []; return; }
     NK_TASKS = NK_TASKS.filter(function(n){ return names.indexOf(n) >= 0; });
@@ -1900,11 +2045,16 @@ function renderTaskPanel(){
     $('#nkTaskGroups').html(h || '<div class="ia-empty" style="padding:10px;">沒有符合的作業項目</div>');
     $('#nkTaskSide').show();
 
-    // 右欄上方：已選清單（按 × 取消）——點完標籤看不出自己挑了什麼，所以另外列出來
+    // 右欄上方：已選清單（按 × 取消）——點完標籤看不出自己挑了什麼，所以另外列出來；
+    // 2026-09-14 使用者再回報「看不出來是哪個表單或程序書被選到」，故一併列出該項目掛在哪幾份文件。
     if (NK_TASKS.length) {
+        var docs = nkTaskDocs();
         $('#nkTaskSel').show().html('<span class="lb">已選作業項目 '+NK_TASKS.length+' 個：</span>'
             + NK_TASKS.map(function(n){ return nkChip(n, true, true); }).join('')
-            + '<span class="nk-chip clear" data-clear="1">✕ 全部清除</span>');
+            + '<span class="nk-chip clear" data-clear="1">✕ 全部清除</span>'
+            + '<div class="nk-seldoc">' + NK_TASKS.map(function(n){
+                  return '<div><b>'+esc(n)+'</b>：'+esc((docs[n]||[]).join('、') || '（題庫裡沒有對應的文件）')+'</div>';
+              }).join('') + '</div>');
     } else {
         $('#nkTaskSel').show().html('<span class="lb">尚未選擇作業項目（預設一題都不勾）'
             + '——請從左側點選要查的項目，或直接在右側逐題勾選。</span>');
@@ -1927,9 +2077,9 @@ $(document).on('click', '#nkTaskGroups .nk-chip, #nkTaskSel .nk-chip', function(
 });
 $('#nkTaskFilter').on('input', renderTaskPanel);
 function rowHitTask(r){
-    // 一個標籤都沒選＝一題都不勾（2026-09-14 使用者指定的預設值）
+    // 一個標籤（AS＝作業項目／其餘＝部門）都沒選＝一題都不勾（2026-09-14 使用者指定的預設值）
     if (!NK_TASKS.length) return false;
-    for (var i=0;i<NK_TASKS.length;i++) if ((r.tasks||[]).indexOf(NK_TASKS[i]) >= 0) return true;
+    for (var i=0;i<NK_TASKS.length;i++) if ((r.tags||[]).indexOf(NK_TASKS[i]) >= 0) return true;
     return false;
 }
 /* 勾選狀態記在 NK_CHECKED（id => true/false），**不以畫面上的勾選框為準**：
@@ -1956,8 +2106,8 @@ function renderBank(){
     var h = '', shown = 0;
     BANK.forEach(function(raw){
         var r = bankRow(kind, raw);
-        // 作業項目也吃關鍵字（打「外包」找得到掛這個用途的條文）
-        var hay = (r.text+' '+r.sub+' '+(r.tasks||[]).join(' ')).toLowerCase();
+        // 作業項目／部門也吃關鍵字（打「外包」找得到掛這個用途的條文）
+        var hay = (r.text+' '+r.sub+' '+(r.badges||[]).join(' ')+' '+(r.tags||[]).join(' ')).toLowerCase();
         if (kw && hay.indexOf(kw) < 0) return;
         shown++;
         if (r.hdr) {
@@ -1969,7 +2119,7 @@ function renderBank(){
             h += '<label'+(!on ? ' class="dim"' : '')+'>'
                + '<input type="checkbox" class="bkChk" value="'+r.id+'"'+(on?' checked':'')+'> '+esc(r.text)
                + (r.sub ? '<span style="color:#a08356;font-size:12px;">　'+esc(r.sub)+'</span>' : '')
-               + (r.tasks||[]).map(function(t){ return '<span class="nk-task">'+esc(t)+'</span>'; }).join('')
+               + (r.badges||[]).map(function(t){ return '<span class="nk-task">'+esc(t)+'</span>'; }).join('')
                + '</label>';
         }
     });
@@ -1999,17 +2149,21 @@ $('#nkNone').on('click', function(){
 $('#btnCheckCreate').on('click', function(){
     clearErrs($('#checkNewMask'));
     var kind = $('#nkKind').val(), ok = true;
-    ok = fieldErr($('#nkDate'), 'errNkDate', $('#nkDate').val() ? '' : '請填稽核日期') && ok;
-    if (kind==='kpi') ok = fieldErr($('#nkHalf'), 'errNkHalf', $('#nkHalf').val() ? '' : '請選上／下半年度') && ok;
+    ok = fieldErr($('#nkDate'), 'errNkDate', $('#nkDate').val() ? '' : '請填建立（稽核）日期') && ok;
     // 篩選中被藏起來的項目仍然算數（否則使用者打了關鍵字就只會建出看得到的那幾題）
     var p = nkPicked(), picked = p.ids, real = p.real;
     if (!real) { $('#errNkPick').addClass('on').text('請至少勾選一個要查核的項目'); ok = false; }
     if (!ok) return;
-    $.post(API, {action:'check_create', kind:kind, check_date:$('#nkDate').val(), half:$('#nkHalf').val(),
+    $.post(API, {action:'check_create', kind:kind, check_date:$('#nkDate').val(),
         auditor_key:$('#nkAuditor').val(), case_id:$('#nkCase').val(), title:$('#nkTitle').val(),
+        src_check_id:(kind==='as' ? ($('#nkSrc').val()||'') : ''),
         pick:JSON.stringify(picked)}, function(res){
         if (!res.ok) { alert(res.error||'建立失敗'); return; }
         closeMask('checkNewMask');
+        if (res.applied) {
+            alert('已依系統稽核紀錄表自動判定：不合格 '+res.applied.ng+' 條、合格 '+res.applied.ok+' 條、'
+                + '未判定 '+res.applied.skip+' 條（未判定＝這一條列的表單這次沒有查到，請自行填寫）。');
+        }
         loadChecks(); openCheck(res.check_id);
     }, 'json');
 });
@@ -2020,7 +2174,9 @@ function openCheck(id){
     $.getJSON(API, {action:'check_get', check_id:id}, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
         CHK = res.row;
-        $('#ckTitle').text(CHK.kind_label + (CHK.half ? '（'+(CHK.half==='H1'?'上':'下')+'半年度）' : ''));
+        $('#ckTitle').text(CHK.kind_label
+            + (CHK.kind==='kpi' && CHK.audit_year ? '（稽核 '+CHK.audit_year+' 年度）' : '')
+            + (CHK.half ? '（'+(CHK.half==='H1'?'上':'下')+'半年度）' : ''));
         $('#ckTitleInput').val(CHK.title||'');
         $('#ckDate').val(inputDate(CHK.check_date));
         $('#ckAuditor').val(CHK.auditor_name||'');
@@ -2030,13 +2186,14 @@ function openCheck(id){
         $('#btnCheckSave,#btnCheckDone').toggle(!ro);
         $('#btnCheckReopen').toggle(CHK.status==='done' && <?= $perms['canAdmin'] ? 'true' : 'false' ?>);
         renderCheckItems();
+        renderCheckAutoBar(ro);
         openMask('checkMask');
     });
 }
 var CK_HEADS = {
     as:     ['項次','品質管理系統要求','建立的文件、表單','合格','不合格','所見證據或建議','備註'],
-    system: ['序號','表單編號','表單名稱','受稽人','合格','不合格','備註'],
-    kpi:    ['序','部門','內容','目標','受稽人','達成','沒達成','備註']
+    system: ['序號','表單編號','表單名稱','受稽人','合格','不合格','備註（內稽不符合通知單編號）'],
+    kpi:    ['序','部門','內容','目標','受稽人','達成','沒達成','備註（異常矯正處理單編號）']
 };
 function renderCheckItems(){
     var k = CHK.kind, ro = !CHK.can_edit;
@@ -2055,7 +2212,14 @@ function renderCheckItems(){
         var remark = '<input type="text" class="ckF" data-id="'+it.item_id+'" data-f="remark" value="'+esc(it.remark||'')+'"'
                    + (ro?' readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;">';
         var ncBtn = '';
-        if (it.nc_id) {
+        if (k==='kpi') {
+            // 績效沒達成開的是「異常矯正處理單」（紙本備註欄本來就印 CAR 單號），不是 IA 單
+            if (it.car_id) {
+                ncBtn = '<span class="ia-op" onclick="openCar('+it.car_id+')">'+esc(it.car_no||'矯正單')+'</span>';
+            } else if (it.result==='ng' && !ro && <?= $perms['canAudit'] ? 'true' : 'false' ?>) {
+                ncBtn = '<span class="ia-op" onclick="carFromItem('+it.item_id+')"><i class="fa fa-plus"></i> 開矯正單</span>';
+            }
+        } else if (it.nc_id) {
             ncBtn = '<span class="ia-op" onclick="openNc('+it.nc_id+')">'+esc(it.nc_no||'IA單')+'</span>';
         } else if (it.result==='ng' && !ro && <?= $perms['canAudit'] ? 'true' : 'false' ?>) {
             ncBtn = '<span class="ia-op" onclick="newNcFromItem('+it.item_id+')"><i class="fa fa-plus"></i> 開不符合單</span>';
@@ -2088,6 +2252,79 @@ function renderCheckItems(){
     });
     $('#ckBody').html(h);
 }
+/* 「可以自動建立的就自動建立，人工才要填的再提醒管理員」（2026-09-14 使用者要求）。
+   這條提示列統計這張表還有幾件可以一鍵做掉、又有哪幾件一定要人工填。 */
+function renderCheckAutoBar(ro){
+    var k = CHK.kind, items = (CHK.items||[]).filter(function(x){ return +x.is_header!==1; });
+    var ng = items.filter(function(x){ return x.result==='ng'; });
+    var pending = ng.filter(function(x){ return k==='kpi' ? !x.car_id : !x.nc_id; });
+    var todo = items.filter(function(x){ return !x.result; });
+    var manual = [];
+    if (k==='system') manual = items.filter(function(x){ return !x.col_c; });      // 受稽人沒填
+    if (k==='kpi')    manual = items.filter(function(x){ return !x.col_d || !x.result; });
+    var msg = [];
+    if (pending.length) msg.push('<b style="color:#C4442D;">有 '+pending.length+' 項判定為'
+        + (k==='kpi'?'沒達成但還沒開矯正單':'不合格但還沒開不符合通知單')+'</b>，可按下方「一鍵開立」一次處理。');
+    if (todo.length)   msg.push('還有 '+todo.length+' 項沒有判定。');
+    if (manual.length) msg.push('有 '+manual.length+' 項需要人工確認（'
+        + (k==='system' ? '受稽人未填' : 'KPI 沒有實績資料或未設定擔當者') + '）。');
+    if (k==='kpi' && CHK.audit_year) msg.unshift('本表自動判定的是 <b>'+CHK.audit_year
+        + ' 年度</b>的 KPI 實績：該年度只要有任一次未達標就算「沒達成」。');
+    $('#ckAutoBar').toggle(msg.length>0).html(msg.join('<br>'));
+    $('#btnCheckAuto').toggle(!ro && pending.length>0 && k!=='as')
+        .html('<i class="fa fa-magic"></i> 一鍵開立'+(k==='kpi'?'矯正單':'不符合通知單')+'（'+pending.length+'）');
+}
+/* 一鍵開立：不合格／沒達成的列一次全部開單。
+   不符合通知單的「不合格類型」是人工判斷，所以先問一次要用哪一種，其餘欄位（受稽單位、受稽人、
+   相關表單編號、違反條文、事實描述）全部自動帶好；開完直接回到查檢表可逐張再修。 */
+$('#btnCheckAuto').on('click', function(){
+    var k = CHK.kind;
+    var items = (CHK.items||[]).filter(function(x){
+        return +x.is_header!==1 && x.result==='ng' && (k==='kpi' ? !x.car_id : !x.nc_id);
+    });
+    if (!items.length) { alert('沒有需要開單的項目'); return; }
+    if (k==='kpi') {
+        if (!confirm('要為 '+items.length+' 項「沒達成」各開立一張異常矯正處理單嗎？\n'
+                   + '單號會自動寫回備註欄，並通知該單位擔當者說明原因。')) return;
+        var okN = 0, errs = [];
+        (function next(i){
+            if (i >= items.length) {
+                alert('完成：已開立 '+okN+' 張矯正單'+(errs.length?('\n失敗 '+errs.length+' 張：\n'+errs.join('\n')):''));
+                openCheck(CHK.check_id); loadChecks(); return;
+            }
+            $.post(API, {action:'car_from_item', item_id:items[i].item_id}, function(res){
+                if (res.ok) okN++; else errs.push((items[i].col_b||'')+'：'+(res.error||'失敗'));
+                next(i+1);
+            }, 'json').fail(function(){ errs.push((items[i].col_b||'')+'：連線失敗'); next(i+1); });
+        })(0);
+        return;
+    }
+    // system：一律先問不合格類型（紙本上這欄是稽核員判斷的，不可以替他決定）
+    var types = META.nc_types||{}, keys = Object.keys(types);
+    var tip = keys.map(function(k2,i){ return (i+1)+'='+types[k2]; }).join('　');
+    var ans = prompt('要為 '+items.length+' 項不合格各開立一張內稽不符合通知單。\n'
+                   + '請輸入這批的不合格類型（開完可逐張修改）：\n'+tip, '2');
+    if (ans === null) return;
+    var idx = parseInt(ans, 10) - 1;
+    if (!(idx >= 0 && idx < keys.length)) { alert('類型不正確，已取消'); return; }
+    var type = keys[idx], okN2 = 0, errs2 = [];
+    (function next(i){
+        if (i >= items.length) {
+            alert('完成：已開立 '+okN2+' 張不符合通知單'+(errs2.length?('\n失敗 '+errs2.length+' 張：\n'+errs2.join('\n')):''));
+            openCheck(CHK.check_id); loadChecks(); loadNcs(); return;
+        }
+        var pre = ncPrefillFromItem(items[i]);
+        $.post(API, {action:'nc_create', audit_date:pre.audit_date, case_id:pre.case_id,
+            dept_id:guessDeptId(pre), auditee_id:guessUserId(pre.auditee_name),
+            fact:pre.fact || ((items[i].col_a||'')+' '+(items[i].col_b||'')+' 稽核不合格'),
+            nc_type:type, clause_ref:pre.clause_ref, ref_form_no:pre.ref_form_no,
+            src_kind:pre.src_kind, src_item_id:pre.src_item_id}, function(res){
+            if (res.ok) okN2++; else errs2.push((items[i].col_a||'')+'：'+(res.error||'失敗'));
+            next(i+1);
+        }, 'json').fail(function(){ errs2.push((items[i].col_a||'')+'：連線失敗'); next(i+1); });
+    })(0);
+});
+
 /* 受稽人欄位存的是姓名字串（紙本就是簽人名），用人員清單當下拉但存名字 */
 function nameOptions(cur){
     var h = '<option value="">（未指定）</option>', found=false;
@@ -2138,24 +2375,50 @@ $('#btnCheckReopen').on('click', function(){
         openCheck(CHK.check_id); loadChecks();
     }, 'json');
 });
+/* 績效「沒達成」→ 自動開立異常矯正處理單（CAR），單號自動寫回備註欄（2026-09-15 使用者交辦）。
+   單上會自動帶出：稽核的是哪個年度、哪幾個月沒達成、當時的數值與 KPI 目標，
+   並固定附上「請說明原因及確認是否需要調整KPI目標?」。 */
+function carFromItem(itemId){
+    var it = null;
+    (CHK.items||[]).forEach(function(x){ if (+x.item_id===+itemId) it = x; });
+    if (!it) return;
+    if (!confirm('要為「'+(it.col_b||'')+'」開立異常矯正處理單嗎？\n'
+               + '責任單位：'+(it.col_a||'—')+'　回覆人：'+(it.col_d||'（未設定擔當者，將通知該單位主管指派）'))) return;
+    saveCheck(true, function(){
+        $.post(API, {action:'car_from_item', item_id:itemId}, function(res){
+            if (!res.ok) { alert(res.error||'開立失敗'); return; }
+            alert('已開立異常矯正處理單 '+res.car_no+'，單號已寫入備註欄。');
+            openCheck(CHK.check_id); loadChecks();
+        }, 'json');
+    });
+}
+function openCar(carId){ window.open('../QA/correction_order.php?open_id='+carId, '_blank'); }
+
 /* 由查檢表的不合格列直接開不符合通知單，欄位自動帶好 */
 function newNcFromItem(itemId){
     var it = null;
     (CHK.items||[]).forEach(function(x){ if (+x.item_id===+itemId) it = x; });
     if (!it) return;
     saveCheck(true, function(){
-        openNcNew({
-            case_id: CHK.case_id || '',
-            audit_date: inputDate(CHK.check_date),
-            src_kind: CHK.kind,
-            src_item_id: itemId,
-            ref_form_no: CHK.kind==='system' ? (it.col_a||'') : '',
-            clause_ref: CHK.kind==='as' ? (it.col_a||'') : '',
-            fact: '',
-            auditee_name: CHK.kind==='system' ? (it.col_c||'') : (CHK.kind==='kpi' ? (it.col_d||'') : ''),
-            dept_hint: CHK.kind==='kpi' ? (it.col_a||'') : ''
-        });
+        openNcNew(ncPrefillFromItem(it));
     });
+}
+/* 一列不合格 → 不符合通知單要帶的欄位。
+   系統稽核紀錄表的「違反條文」＝該表單對應到的品質管理系統要求（由條文題庫的「建立的文件、表單」
+   反查，後端 check_get 已經算好帶在 it.clause_ref；2026-09-15 使用者交辦）。 */
+function ncPrefillFromItem(it){
+    var sysNo = CHK.kind==='system' ? (it.col_a||'') : '';
+    return {
+        case_id: CHK.case_id || '',
+        audit_date: inputDate(CHK.check_date),
+        src_kind: CHK.kind,
+        src_item_id: it.item_id,
+        ref_form_no: sysNo,
+        clause_ref: CHK.kind==='as' ? (it.col_a||'') : (it.clause_ref||''),
+        fact: sysNo ? (sysNo+' '+(it.col_b||'')+' 稽核不合格' + (it.evidence ? ('：'+it.evidence) : '')) : (it.evidence||''),
+        auditee_name: CHK.kind==='system' ? (it.col_c||'') : (CHK.kind==='kpi' ? (it.col_d||'') : ''),
+        dept_hint: CHK.kind==='kpi' ? (it.col_a||'') : (it.dept_name||'')
+    };
 }
 </script>
 <script>
@@ -2190,6 +2453,7 @@ function renderNcs(){
           + '<td><span class="st st-'+esc(r.stage)+'">'+esc(r.stage_label||'')+'</span></td>'
           + '<td><span class="ia-op" onclick="openNc('+r.nc_id+')"><i class="fa fa-edit"></i> 開啟</span>'
           + '<span class="ia-op" onclick="printNc('+r.nc_id+')"><i class="fa fa-print"></i></span>'
+          + (IS_ADMIN ? '<span class="ia-op danger" onclick="delNcRow('+r.nc_id+',\''+esc(r.nc_no||'').replace(/\'/g,'')+'\')" title="刪除這張不符合通知單"><i class="fa fa-trash"></i></span>' : '')
           + '</td></tr>';
     });
     $('#ncBody').html(h);
@@ -2214,7 +2478,8 @@ function openNcNew(pre){
     openMask('ncNewMask');
 }
 function guessDeptId(pre){
-    var name = String(pre.dept_hint||'').trim();
+    // 部門代碼同名時 ia_as_dept_code_names() 會在後面標代碼（例「生管組（PD）」），比對前要去掉
+    var name = String(pre.dept_hint||'').trim().replace(/（[A-Za-z]{2,3}）$/, '');
     if (name) {
         var hit = 0;
         (META.depts||[]).forEach(function(d){ if (!hit && d.name===name) hit = d.id; });
@@ -2400,6 +2665,16 @@ $('#btnNcDelete').on('click', function(){
         closeMask('ncMask'); loadNcs();
     }, 'json');
 });
+/* 清單上直接刪（管理員限定；原本只有打開單據才刪得掉，找不到刪除鈕＝使用者 2026-09-14 回報） */
+function delNcRow(id, no){
+    if (!IS_ADMIN) return;
+    if (!confirm('確定刪除不符合通知單 '+(no||'')+'？\n刪除後它不再出現在清單與稽核報告表，對應的查檢表那一列也會解除連結。')) return;
+    $.post(API, {action:'nc_delete', nc_id:id}, function(res){
+        if (!res.ok) { alert(res.error||'刪除失敗'); return; }
+        loadNcs();
+        if (CHK) openCheck(CHK.check_id);
+    }, 'json');
+}
 
 /* ============================ 稽核報告表 2-GM-06-08 ============================ */
 var REPORT = null;
@@ -2468,6 +2743,16 @@ $('#btnReportApprove').on('click', function(){
             loadReport();
         }, 'json');
     });
+});
+/* 刪除稽核報告表（管理員限定）。表格內容本來就是由不符合通知單即時算出來的，
+   刪掉的只有「補充文字＋製表／核准」這張表本身，稽核資料一筆都不會少。 */
+$('#btnReportDelete').on('click', function(){
+    if (!REPORT) { alert(YEAR+' 年度還沒有建立稽核報告表（按「儲存」才會建立）'); return; }
+    if (!confirm('確定刪除 '+YEAR+' 年度稽核報告表？\n表格上的缺點數是即時算出來的不受影響，刪掉的是補充文字與製表／核准紀錄。')) return;
+    $.post(API, {action:'report_delete', year:YEAR}, function(res){
+        if (!res.ok) { alert(res.error||'刪除失敗'); return; }
+        loadReport();
+    }, 'json');
 });
 
 /* ============================ 設定 ============================ */
