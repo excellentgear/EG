@@ -376,7 +376,9 @@ $roleLabel = ia_role_label($perms);
                 <button id="btnCheckNew" class="btn-warm"><i class="fa fa-plus"></i> 建立查檢表</button>
                 <?php endif; ?>
             </div>
-            <div class="ia-hint">建立時可勾選這次要查哪些項目：<b>AS稽核查檢表</b>帶 AS9100 條文題庫、<b>系統稽核紀錄表</b>帶 AS 文件的表單清單、<b>績效執行稽核查檢表</b>帶 KPI 指標與目標值。判定「不合格／沒達成」的項目可以直接開不符合通知單。</div>
+            <div class="ia-hint">先選<b>種類</b>，畫面才會長出該種類要填的欄位與挑題方式：<b>AS稽核查檢表</b>帶 AS9100 條文題庫（可用作業項目挑題，也可直接沿用系統稽核紀錄表的判定）、<b>系統稽核紀錄表</b>從左欄挑部門帶出該部門的表單、<b>績效執行稽核查檢表</b>自動帶去年整年的 KPI 與達成與否。判定「不合格」的開<b>內稽不符合通知單</b>、「沒達成」的開<b>異常矯正處理單</b>。</div>
+            <!-- 能自動建立的就自動建立，人工才要填的地方主動提醒（2026-09-14 使用者要求） -->
+            <div class="ia-hint" id="checkAutoHint" style="display:none;background:#FDF0DC;border-color:#F0A24B;"></div>
             <div class="ia-pager" id="checkPager"></div>
             <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
                 <th>種類</th><th>標題</th><th>所屬件號</th><th>稽核人</th><th>稽核日期</th>
@@ -458,9 +460,15 @@ $roleLabel = ia_role_label($perms);
             <li><b>①年度計畫（2-GM-06-01）</b>：先按「建立本年度計畫表」，選要納入的受稽單位，再在格狀表點格子排定 ○。存檔後送審、核准。</li>
             <li><b>②稽核通知單（2-GM-06-02）</b>：新增一張，填通知日期、稽核期間、稽核組長，下方逐列填「稽核起始主過程／受稽單位／稽核員／陪檢員」（稽核員與陪檢員都可以指定多位）。
                 稽核件號會依<b>通知日期</b>自動產生（西元年後兩碼+月日+流水，例 241216001）。存檔後可按「事前會議」建立會議紀錄草稿。</li>
-            <li><b>③查檢表</b>：三種各自建立，建立時勾選這次要查的項目。現場逐列判定合格／不合格並填所見證據。判「不合格」的列可直接按「開不符合單」。
-                AS 查檢表可用<b>左側的作業項目標籤</b>（品管檢測／外包加工…）一鍵挑題，不必在 71 條原文裡用眼睛找。
-                <b>建立查檢表預設一題都不勾</b>（2026-09-14 起），請先從左欄點選這次要查的作業項目，或直接在右側逐題勾選。</li>
+            <li><b>③查檢表</b>：<b>先選種類</b>，畫面才會長出該種類要填的欄位與挑題方式；建立時填「建立（稽核）日期」，再勾這次要查的項目。
+                <b>建立查檢表預設一題都不勾</b>（2026-09-14 起），請先從左欄點選，或直接在右側逐題勾選。三種的差別：
+                <ul>
+                    <li><b>系統稽核紀錄表（2-GM-06-06）</b>：題目＝AS 文件裡的「表單」。<b>左欄挑部門</b>（依 AS 文件編號的部門代碼分類），右側就會勾起該部門的表單，再把不需要的取消勾選即可；每一列一併顯示這份表單對應到的<b>品質管理系統要求</b>，開不符合通知單時「違反條文」會自動帶入。逐列選受稽人、判定合格／不合格。</li>
+                    <li><b>AS稽核查檢表（2-GM-06-04）</b>：題目＝AS9100 條文題庫。可用<b>左側的作業項目標籤</b>（品管檢測／外包加工…）一鍵挑題（已選的標籤下方會列出它掛在哪幾份文件表單）；
+                        也可以在「自動判定來源」選一張已填好的<b>系統稽核紀錄表</b>，建立時就依它自動判定合格／不合格，並在「所見證據或建議」列出是哪幾份表單不合格（含 IA 單號）方便比對。</li>
+                    <li><b>績效執行稽核查檢表（2-GM-06-03）</b>：稽核<b>去年一整年</b>的 KPI（2026 年建立＝稽核 2025 年度），<b>不分上下半年</b>。部門、指標、目標、受稽人（KPI 頁面設定的<b>擔當者</b>，兼任者取該指標登記部門的職稱）與<b>達成／沒達成全部自動判定</b>——該年度只要有<b>任一次</b>未達標就算沒達成。您只要確認建立日期與要查哪幾項。</li>
+                </ul>
+                判「不合格」的列按「開不符合單」、績效「沒達成」的列按「開矯正單」；表格上方會統計還有幾件沒開單，下方「<b>一鍵開立</b>」可一次全部開完。</li>
             <li><b>④不符合通知單（2-GM-06-07）</b>：分四段填，各段只有該角色能填（見下）。系統會通知受稽單位主管，期限前與逾期會自動再提醒。</li>
             <li><b>⑤稽核報告表（2-GM-06-08）</b>：缺點數與缺點記錄自動彙總，只要調整「預定完成改善時間」與補充文字，然後核准、列印。</li>
         </ul>
@@ -476,6 +484,9 @@ $roleLabel = ia_role_label($perms);
 
         <h4>重要行為／常見疑問</h4>
         <ul>
+            <li><b>可以自動建立的都會自動建立</b>：查檢表分頁上方的橘色提示列會告訴你「今年的績效執行稽核查檢表還沒建」「已經有系統稽核紀錄表，可以直接建 AS稽核查檢表並自動判定」「還有幾張表判定出不合格卻沒開單」，按提示列上的連結就會把能自動帶的全部帶好，<b>只留建立日期這種一定要人工確認的欄位</b>。</li>
+            <li><b>績效沒達成開的是「異常矯正處理單」不是 IA 單</b>：紙本備註欄本來就印矯正單編號。按「開矯正單」會自動帶出年度、哪幾個月沒達成、當時的數值與 KPI 目標，並附上「請說明原因及確認是否需要調整KPI目標?」，責任單位＝該指標的部門、回覆人＝擔當者；開完單號自動寫回備註欄。</li>
+            <li><b>管理員可以刪除</b>：年度計畫表、稽核通知單、查檢表、不符合通知單、稽核報告表在各自的清單／工具列上都有刪除鈕（限內稽管理員）。已經開過不符合通知單的查檢表要先刪掉那幾張 IA 單才刪得掉。</li>
             <li><b>年度計畫表的 ◎ 不用手動點</b>：把稽核通知單的狀態改成「執行中」或「已結案」，該單位那個月就會自動變 ◎。沒排 ○ 卻做了也會出現 ◎。</li>
             <li><b>好幾個部門是同一個受稽單位</b>（例：生產部＋生產1廠＋生產2廠＋生產3廠）：到工具列「受稽單位」綁成一個群組。
                 綁定後計畫表上是<b>一欄</b>、報告表上是<b>一列</b>，稽核其中任何一個廠都算這個單位已執行；這個單位底下所有部門的人都看得到並可回覆該單位的不符合通知單。一個部門只能屬於一個受稽單位。</li>
@@ -1271,7 +1282,11 @@ function loadMeta(cb){
         META = res;
         var ysel = $('#yearSel').empty();
         (res.years||[]).forEach(function(y){ ysel.append('<option value="'+y+'">'+y+' 年</option>'); });
-        YEAR = +(res.years && res.years.length ? res.years[0] : String(res.today).substr(0,4));
+        // 年度選單第一個是「明年」（補未來排程用），但預設一定要停在**今年**，
+        // 否則一開頁面看到的是明年、清單永遠空的（2026-09-15 實測發現）。
+        var cy = +String(res.today).substr(0,4);
+        YEAR = ((res.years||[]).indexOf(cy) >= 0) ? cy
+             : +(res.years && res.years.length ? res.years[0] : cy);
         ysel.val(YEAR);
         // 種類／階段／類型下拉一律由後端常數帶出來，畫面不另寫一份對照（鐵律4）
         var kh = '<option value="">全部</option>';
@@ -1828,7 +1843,11 @@ function kindLabel(k){ return ((META.check_kinds||{})[k]||{}).label || k; }
 function renderChecks(){
     $('#checkPager').html(renderPager('check', LIST.check.length));
     var rows = pageSlice('check');
-    if (!rows.length) { $('#checkBody').html('<tr><td colspan="10" class="ia-empty">沒有符合條件的查檢表</td></tr>'); return; }
+    if (!rows.length) {
+        $('#checkBody').html('<tr><td colspan="10" class="ia-empty">沒有符合條件的查檢表</td></tr>');
+        renderCheckAutoHint();     // 一張都還沒建的時候最需要這條提示，不可以提早 return 就跳過
+        return;
+    }
     var h = '';
     rows.forEach(function(r){
         h += '<tr>'
@@ -1847,6 +1866,47 @@ function renderChecks(){
           + '</td></tr>';
     });
     $('#checkBody').html(h);
+    renderCheckAutoHint();
+}
+/* 「可以自動建立的就自動建立，人工才要填的再提醒」（2026-09-14 使用者要求）。
+   ①去年整年的績效執行稽核查檢表還沒建 → 一鍵建立（只要求填建立日期，其餘全自動）
+   ②已有填好的系統稽核紀錄表、但還沒有 AS稽核查檢表 → 一鍵依它自動判定建立
+   ③有判定不合格／沒達成卻還沒開單的 → 提醒去那張表按「一鍵開立」 */
+function renderCheckAutoHint(){
+    if (!<?= $perms['canAudit'] ? 'true' : 'false' ?>) { $('#checkAutoHint').hide(); return; }
+    // 只在「沒有另外篩種類」時提示，否則篩成單一種類會誤報成沒建立
+    if ($('#checkKind').val()) { $('#checkAutoHint').hide(); return; }
+    var all = LIST.check||[], msgs = [];
+    var kpiYear = YEAR - 1;                       // 本年度這張表稽核的是去年
+    var hasKpi = all.some(function(r){ return r.kind==='kpi'; });
+    if (!hasKpi) {
+        msgs.push('<b>'+YEAR+' 年建立的績效執行稽核查檢表（稽核 '+kpiYear+' 年度）</b>還沒建立。'
+            + '<span class="ia-op" onclick="autoNewCheck(\'kpi\')"><i class="fa fa-magic"></i> 自動建立（只要填建立日期）</span>');
+    }
+    var sysDone = all.filter(function(r){ return r.kind==='system' && r.status==='done'; });
+    if (sysDone.length && !all.some(function(r){ return r.kind==='as'; })) {
+        msgs.push('已經有填好的<b>系統稽核紀錄表</b>，可直接建立 <b>AS稽核查檢表</b>並自動判定合格／不合格。'
+            + '<span class="ia-op" onclick="autoNewCheck(\'as\')"><i class="fa fa-magic"></i> 依系統稽核紀錄表建立</span>');
+    }
+    var pend = all.filter(function(r){ return +r.ng_cnt > 0; }).length;
+    if (pend) msgs.push('有 '+pend+' 張查檢表判定出不合格／沒達成的項目，開啟後可用「一鍵開立」批次開單。');
+    $('#checkAutoHint').toggle(msgs.length>0).html(msgs.join('<br>'));
+}
+/** 由提示列直接開建立跳窗：種類先選好、題目全勾、日期留給管理員確認 */
+function autoNewCheck(kind){
+    $('#btnCheckNew').trigger('click');
+    setTimeout(function(){
+        $('#nkKind').val(kind);
+        nkKindChanged();
+        setTimeout(function(){
+            $('#nkAll').trigger('click');            // 全部帶入（要取消的自己取消）
+            if (kind==='as') {                       // 自動判定來源預設選最近一張系統稽核紀錄表
+                var $s = $('#nkSrc');
+                if ($s.find('option').length > 1) $s.val($s.find('option').eq(1).val());
+            }
+            $('#nkDate').focus();
+        }, 600);
+    }, 0);
 }
 /* 刪除查檢表（管理員限定）。已經開過不符合通知單的擋在後端，這裡先把原因講清楚。 */
 function delCheck(id){

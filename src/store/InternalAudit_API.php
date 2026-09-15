@@ -765,8 +765,10 @@ case 'check_create': {
     $year = (int)substr($cd, 0, 4);
     // 績效執行稽核查檢表稽核的是**去年整年度**（2026 年建立＝稽核 2025），所以不分上／下半年
     // （2026-09-15 使用者拍板，取代原本必選 H1/H2 的作法）。
+    // 注意 ia_check.year 仍然是「這張表自己的年度＝建立年」——清單、年度篩選、稽核報告表都吃它；
+    // 「要稽核哪一年的 KPI」只用在抓題庫，由 check_date 即時推導（存兩份遲早對不起來）。
     $half = '';
-    if ($kind === 'kpi') $year = ia_kpi_audit_year($cd);
+    $bankYear = ($kind === 'kpi') ? ia_kpi_audit_year($cd) : $year;
     $caseId = iaInt($_POST['case_id'] ?? '');
     if ($caseId) {
         $q = $db->prepare("SELECT 1 FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
@@ -778,7 +780,7 @@ case 'check_create': {
     $pick = json_decode((string)($_POST['pick'] ?? '[]'), true);
     $pick = is_array($pick) ? array_values(array_filter(array_map('intval', $pick))) : [];
     if (!$pick) jerr('請至少勾選一個要查核的項目');
-    $items = ia_check_build_items($db, $kind, $year, $pick);
+    $items = ia_check_build_items($db, $kind, $bankYear, $pick);
     // 只勾到章節標題列也算沒勾（會建出一張只有標題沒有題目的空表）
     $real = 0; foreach ($items as $it) { if (!$it['is_header']) $real++; }
     if ($real === 0) jerr('請至少勾選一個要查核的項目（目前只勾到章節標題列）');
