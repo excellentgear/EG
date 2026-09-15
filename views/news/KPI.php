@@ -64,8 +64,11 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         .kpi-none { color:#c4863a; }
         .kpi-preview { color:#F0A24B; font-style:italic; }
         .kpi-ov-mark { color:#DD5138; font-size:10px; vertical-align:super; }
-        .kpi-attach-badge { display:inline-block; font-size:10px; background:#F7E0BD; color:#7a5217;
-            border-radius:8px; padding:0 4px; margin-left:2px; }
+        .kpi-attach-badge { display:inline-flex; align-items:center; gap:2px; font-size:10px; line-height:14px;
+            height:14px; background:#F7E0BD; color:#8A5A2B; border:1px solid #E8D5B5; border-radius:7px;
+            padding:0 5px; margin-left:3px; vertical-align:middle; font-weight:normal; }
+        .kpi-attach-badge i { font-size:9px; }
+        .kpi-attach-badge:hover { background:#F0A24B; color:#fff; border-color:#d98a33; }
         .kpi-avg { background:#FDF3E0; font-weight:bold; }
         /* 儲存格彈出選單 */
         #cellMenu { position:absolute; z-index:1000; background:#fff; border:1px solid #D8BE93; border-radius:6px;
@@ -148,7 +151,9 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
                     background:#FDF3E3; color:#5b3a1e; font-size:13px; border-radius:4px; }
         #staleBar b { color:#C2601C; }
         #staleBar .sb-link { color:#C2601C; text-decoration:underline; cursor:pointer; margin-left:8px; }
-        .kpi-stale-mark { color:#C2601C; font-weight:bold; margin-left:2px; cursor:help; }
+        .kpi-stale-mark { display:inline-flex; align-items:center; font-size:10px; line-height:14px; height:14px;
+            color:#C2601C; background:#FBEBD6; border:1px solid #F0A24B; border-radius:7px;
+            padding:0 4px; margin-left:3px; vertical-align:middle; cursor:help; }
         .kpi-src-links a { color:#C2601C; }
         .kpi-src-links .noperm { color:#999; }
         /* 兩份規則刻意重複：@media print 是保險（萬一使用者直接 Ctrl+P 未走 printKpi()）；
@@ -233,7 +238,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         </div>
         <div class="kpi-legend" style="font-size:11px;color:#8a6d45;margin-top:4px;">
             說明：<span class="kpi-preview">橘色斜體</span>=當月即時試算(未定案)；<span class="kpi-below">紅字</span>=未達標；
-            <span class="kpi-ov-mark">✱</span>=手動覆寫；<span class="kpi-attach-badge">📎n</span>=佐證附件；<span class="kpi-stale-mark">⟳</span>=快照過期已自動重算；?=無資料；NA=未到期；－=本期已填在其他月份。
+            <span class="kpi-ov-mark">✱</span>=手動覆寫；<span class="kpi-attach-badge"><i class="fa fa-paperclip"></i>n</span>=佐證附件；<span class="kpi-stale-mark">⟳</span>=快照過期已自動重算；?=無資料；NA=未到期；－=本期已填在其他月份。
             點儲存格可操作（明細/附件/填寫/覆寫/重算）；每季/每半年/每年的手動指標一期只能擇一月份填寫，如需改填其他月份請先清除。
         </div>
 
@@ -301,7 +306,9 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         <div id="attList" style="min-height:40px;"></div>
         <div id="attUpBox" style="margin-top:10px;border-top:1px dashed #EADFC8;padding-top:8px;">
             <label>新增附件（<span id="attLimitTxt"></span>）</label>
-            <input type="file" id="attFile">
+            <input type="file" id="attFile" multiple
+                   accept=".jpg,.jpeg,.png,.gif,.webp,.bmp,.pdf,.xls,.xlsx,.xlsm,.xlsb,.doc,.docx,.docm,.ppt,.pptx,.csv,.txt,.zip,.7z,.rar,.odt,.ods">
+            <div style="font-size:11px;color:#8a6d45;margin-top:2px;">可一次選多個檔案（Ctrl／Shift 多選）；支援 Excel（含 xlsm 巨集檔）、Word、PDF、圖片、壓縮檔，單檔 20MB。</div>
             <label>附件說明（選填）</label>
             <input type="text" id="attNote" maxlength="200" placeholder="例：6月客訴統計表、盤點紀錄掃描檔…">
             <div style="text-align:right;margin-top:6px;">
@@ -500,7 +507,8 @@ function renderTable(){
                 else txt = f;
                 if (c.src === 'override') txt += '<span class="kpi-ov-mark" title="手動覆寫：'+esc(c.ov_reason||'')+'">✱</span>';
             }
-            if (c.attach > 0) txt += '<span class="kpi-attach-badge" title="佐證附件 '+c.attach+' 件">📎'+c.attach+'</span>';
+            if (c.attach > 0) txt += '<span class="kpi-attach-badge" title="佐證附件 '+c.attach+' 件（點儲存格→附件）">'
+                                    + '<i class="fa fa-paperclip"></i>'+c.attach+'</span>';
             var sx = STALE[r.indicator_id] && STALE[r.indicator_id][m];
             if (sx) txt += '<span class="kpi-stale-mark" title="'+esc(staleCellTitle(sx, STALE_INFO && STALE_INFO.can_write))+'">⟳</span>';
             html += '<td class="'+cls+'" data-ri="'+ri+'" data-m="'+m+'">'+txt+'</td>';
@@ -886,27 +894,44 @@ function refreshAttList(){
         $('#attList').html(h);
     });
 }
+/* 一次多選上傳（2026-09-15 使用者要求）：後端一支請求收一個檔，所以前端逐檔送、
+   全部送完才回報。**送出當下直接讀 input.files**（不靠 change 事件記住檔案，
+   見記憶 file_upload_change_event），中途失敗的那幾檔會個別列出來、不影響已成功的。 */
 function submitAttach(){
     var c = curAttCell();
     var f = document.getElementById('attFile');
     if (!c.iid || !c.m) { alert('請選擇指標與月份'); return; }
-    if (!f.files.length) { alert('請選擇檔案'); return; }
-    var fd = new FormData();
-    fd.append('action', 'attach_upload');
-    fd.append('indicator_id', c.iid);
-    fd.append('year', YEAR);
-    fd.append('month', c.m);
-    fd.append('note', $('#attNote').val());
-    fd.append('file', f.files[0]);
+    var files = f.files ? Array.prototype.slice.call(f.files) : [];
+    if (!files.length) { alert('請選擇檔案'); return; }
+    var note = $('#attNote').val();
+    var okN = 0, errs = [];
     NProgress.start();
-    $.ajax({url:API, method:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
-        .done(function(res){
+    (function next(i){
+        if (i >= files.length) {
             NProgress.done();
-            if (!res.ok) { alert(res.error||'上傳失敗'); return; }
             f.value = ''; $('#attNote').val('');
             refreshAttList(); loadMatrix();
-        })
-        .fail(function(x){ NProgress.done(); alert('上傳失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); });
+            if (errs.length) alert('成功 ' + okN + ' 個，失敗 ' + errs.length + ' 個：\n' + errs.join('\n'));
+            else if (okN > 1) alert('已上傳 ' + okN + ' 個檔案。');
+            return;
+        }
+        var fd = new FormData();
+        fd.append('action', 'attach_upload');
+        fd.append('indicator_id', c.iid);
+        fd.append('year', YEAR);
+        fd.append('month', c.m);
+        fd.append('note', note);
+        fd.append('file', files[i]);
+        $.ajax({url:API, method:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+            .done(function(res){
+                if (res && res.ok) okN++; else errs.push(files[i].name + '：' + ((res && res.error) || '上傳失敗'));
+                next(i + 1);
+            })
+            .fail(function(x){
+                errs.push(files[i].name + '：' + ((x.responseJSON && x.responseJSON.error) || x.status));
+                next(i + 1);
+            });
+    })(0);
 }
 function delAttach(aid){
     if (!confirm('刪除此附件？（NAS上的檔案將一併刪除）')) return;

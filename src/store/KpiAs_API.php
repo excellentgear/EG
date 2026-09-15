@@ -652,8 +652,17 @@ case 'attach_upload': {
         jerr('僅該指標擔當者本人或其請假代理人可上傳佐證', 403);
     if (empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) jerr('檔案上傳失敗');
     if ($_FILES['file']['size'] > 20 * 1024 * 1024) jerr('檔案超過 20MB');
-    $allowed = ['jpg','jpeg','png','gif','webp','bmp','pdf','xls','xlsx','doc','docx','ppt','pptx','csv','txt','zip'];
+    // xlsm＝含巨集的 Excel，現場的統計表多半是這種格式（2026-09-15 使用者要求加入）
+    $allowed = ['jpg','jpeg','png','gif','webp','bmp','pdf','xls','xlsx','xlsm','xlsb','doc','docx','docm',
+                'ppt','pptx','csv','txt','zip','7z','rar','odt','ods'];
     $orig = basename((string)$_FILES['file']['name']);
+    // 檔名不是合法 UTF-8 時（某些用戶端會送 Big5），寫 utf8mb4 欄位會丟 1366 例外，
+    // 使用者只會看到「上傳沒反應」的空白回應 → 先轉成 UTF-8，轉不了就用檔案本身的副檔名命名
+    if (!mb_check_encoding($orig, 'UTF-8')) {
+        // 指定 BIG-5（本地環境唯一會出現的非 UTF-8 檔名）；用偵測清單會被 SJIS 先驗證過關而解成亂碼
+        $conv = @mb_convert_encoding($orig, 'UTF-8', 'BIG-5');
+        $orig = ($conv !== false && mb_check_encoding($conv, 'UTF-8')) ? $conv : ('附件_' . date('Ymd_His'));
+    }
     $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
     if (!in_array($ext, $allowed, true)) jerr('不支援的檔案格式：' . $ext);
     $max = kpi_as_attach_max($db);
@@ -668,8 +677,9 @@ case 'attach_upload': {
     $st = $db->prepare("INSERT INTO kpi_as_attachment (indicator_id,year,month,file_name,original_name,file_size,note,uploaded_by,uploaded_by_name)
                         VALUES (?,?,?,?,?,?,?,?,?)");
     $st->execute([$iid, $year, $month, $fname, $orig, (int)$_FILES['file']['size'], $note, $uid, $u['user_cname']]);
+    $newId = (int)$db->lastInsertId();   // 要在寫稽核紀錄「之前」取，否則拿到的是 change_log 的 id
     kpi_as_log($db, $iid, $year, $month, 'attach', 'upload', null, $orig, $note ?: null, $u);
-    jout(['attach_id'=>(int)$db->lastInsertId()]);
+    jout(['attach_id'=>$newId]);
 }
 
 case 'attach_delete': {
