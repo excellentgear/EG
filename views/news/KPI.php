@@ -102,6 +102,32 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button
             { -webkit-appearance:none; margin:0; }
         input[type=number] { -moz-appearance:textfield; }
+        /* 不符合標準的明細跳窗 */
+        .kpi-modal.vio-modal { max-width:1180px; }
+        .vio-head { font-size:14px; color:#5b3a1e; padding-bottom:6px; border-bottom:1px solid #EADFC8; }
+        .vio-mode { display:inline-block; font-size:12px; border-radius:10px; padding:1px 9px; margin-left:4px; }
+        .vio-mode.deny { background:#F7E0BD; color:#8A5A2B; border:1px solid #E8D5B5; }
+        .vio-mode.allow { background:#EFE3C8; color:#6b4a20; border:1px solid #D8BE93; }
+        .vio-mode.na { background:#F1ECE3; color:#a08356; border:1px solid #E3D9C7; }
+        .vio-note { font-size:12px; color:#8a6d45; margin:8px 0; }
+        .vio-warn { font-size:12px; color:#8A5A2B; background:#FDF3E3; border:1px solid #F0A24B;
+            border-radius:4px; padding:6px 10px; margin:6px 0; }
+        .vio-warn.ok { border-color:#D8BE93; background:#FBF5EA; }
+        .vio-tblwrap { max-height:46vh; overflow:auto; border:1px solid #EADFC8; border-radius:4px; margin-top:8px; }
+        table.vio-tbl { width:100%; border-collapse:collapse; font-size:12px; }
+        table.vio-tbl th { position:sticky; top:0; background:#F7E0BD; color:#5b3a1e; padding:5px 7px;
+            text-align:left; white-space:nowrap; z-index:1; }
+        table.vio-tbl td { padding:4px 7px; border-top:1px solid #F3EADA; color:#5b3a1e; vertical-align:top; }
+        table.vio-tbl tr.ex td { background:#F5F1E8; color:#a08356; }
+        table.vio-tbl .vio-why { color:#C2601C; white-space:nowrap; }
+        table.vio-tbl .vio-fix { color:#7a6046; min-width:280px; }
+        table.vio-tbl .vio-ex { color:#8A5A2B; margin-top:2px; font-size:11px; }
+        #vioFoot button { height:30px; padding:0 14px; border-radius:4px; font-size:13px; margin-left:6px;
+            border:1px solid #D8BE93; background:#fff; color:#5b3a1e; cursor:pointer; }
+        #vioFoot button.warm { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        #vioFoot input[type=text] { height:28px; border:1px solid #D8BE93; border-radius:4px; padding:0 8px; font-size:13px; }
+        #vioFoot .vio-set { margin-left:14px; font-size:12px; color:#8a6d45; }
+        #vioFoot .vio-set select { height:28px; border:1px solid #D8BE93; border-radius:4px; font-size:12px; }
         .att-row { display:flex; gap:8px; align-items:center; border-bottom:1px dashed #EADFC8; padding:6px 0; font-size:13px; }
         .att-row .att-name { color:#b5762a; cursor:pointer; text-decoration:underline; flex:1;
             overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -130,7 +156,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         @media print {
             .page-title, .kpi-toolbar, #chartBox, #cellMenu, .nav_menu, .left_col, .kpi-sim-bar, footer,
             .kpi-role-badge .fa-question-circle, .kpi-ov-mark, .kpi-legend,
-            #staleBar, .kpi-stale-mark { display:none !important; }
+            #staleBar, .kpi-stale-mark, .kpi-modal-mask { display:none !important; }
             .right_col { margin:0 !important; padding:0 !important; }
             table.kpi-table { font-size:10px; }
             table.kpi-table th, table.kpi-table td { padding:2px 3px; }
@@ -142,7 +168,8 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         body.kpi-printing .nav_menu, body.kpi-printing .left_col, body.kpi-printing .kpi-sim-bar,
         body.kpi-printing footer, body.kpi-printing .kpi-role-badge .fa-question-circle,
         body.kpi-printing .kpi-ov-mark, body.kpi-printing .kpi-legend,
-        body.kpi-printing #staleBar, body.kpi-printing .kpi-stale-mark { display:none !important; }
+        body.kpi-printing #staleBar, body.kpi-printing .kpi-stale-mark,
+        body.kpi-printing .kpi-modal-mask { display:none !important; }
         body.kpi-printing .right_col { margin:0 !important; padding:0 !important; }
         body.kpi-printing table.kpi-table { font-size:10px; }
         body.kpi-printing table.kpi-table th, body.kpi-printing table.kpi-table td { padding:2px 3px; }
@@ -289,6 +316,13 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
 <div class="kpi-modal-mask" id="dtMask"><div class="kpi-modal">
     <div class="m-head"><span id="dtTitle">數值明細</span><span class="m-close" onclick="closeMask('dtMask')">✕</span></div>
     <div class="m-body" id="dtBody" style="font-size:13px;color:#5b3a1e;"></div>
+</div></div>
+
+<!-- 不符合標準的明細 modal（只列超過規定的那幾筆＋修改建議；列印不含此內容） -->
+<div class="kpi-modal-mask" id="vioMask"><div class="kpi-modal vio-modal">
+    <div class="m-head"><span id="vioTitle">不符合標準的明細</span><span class="m-close" onclick="closeMask('vioMask')">✕</span></div>
+    <div class="m-body" id="vioBody" style="font-size:13px;color:#5b3a1e;"></div>
+    <div class="m-foot" id="vioFoot" style="text-align:left;"></div>
 </div></div>
 
 <!-- 角色說明 modal -->
@@ -496,6 +530,8 @@ $(document).on('click', 'td.kpi-cell', function(e){
     var items = [];
     items.push({t:'<i class="fa fa-info-circle"></i> 數值明細', f:function(){ showDetail(ri,m); }});
     items.push({t:'<i class="fa fa-paperclip"></i> 附件（'+c.attach+'）', f:function(){ openAttach(r.indicator_id, m, r); }});
+    if (r.source_mode === 'auto' && !c.future)
+        items.push({t:'<i class="fa fa-exclamation-triangle"></i> 不符合標準的明細', f:function(){ openVio(ri, m); }});
     ((r.source_info && r.source_info.links) || []).forEach(function(ln){
         if (!+ln.can || !ln.url) return;   // 沒權限的不出現在選單（網址後端本來就不回傳）
         items.push({t:'<i class="fa fa-external-link"></i> 前往：'+esc(ln.label),
@@ -559,10 +595,150 @@ function showDetail(ri, m){
     if (c.ov_by) h += '覆寫：'+esc(c.ov_by)+'（'+esc(c.ov_reason||'')+'）'+esc((c.ov_at||'').substr(0,16))+'<br>';
     if (c.filled_by) h += '填寫：'+esc(c.filled_by)+' '+esc((c.filled_at||'').substr(0,16))+'<br>';
     if (c.note) h += '備註：'+esc(c.note)+'<br>';
+    if (r.source_mode === 'auto' && !c.future) {
+        h += '<hr style="border-color:#EADFC8;margin:6px 0;">'
+           + '<button onclick="closeMask(\'dtMask\');openVio('+ri+','+m+')" '
+           + 'style="height:28px;padding:0 12px;border:1px solid #d98a33;background:#F0A24B;color:#fff;'
+           + 'border-radius:4px;cursor:pointer;font-size:13px;">'
+           + '<i class="fa fa-exclamation-triangle"></i> 看不符合標準的明細</button>';
+    }
     $('#dtTitle').text('數值明細');
     $('#dtBody').html(h);
     openMask('dtMask');
 }
+
+
+/* ---------- 不符合標準的明細（使用者要求 2026-09-15） ----------
+   只列「超過規定」的那幾筆＋每一筆的修改建議。
+   mode=allow → 去來源頁面改真實資料；mode=deny → 只能排除這一筆（真實資料一個字都不動）。
+   列印一律只印最後結果，這個跳窗與排除紀錄都不會出現在列印版上。 */
+var VIO = null;
+function openVio(ri, m){
+    var r = MATRIX.rows[ri];
+    VIO = {ri:ri, iid:r.indicator_id, m:m, row:r, data:null, sel:{}};
+    $('#vioTitle').text('不符合標準的明細');
+    $('#vioBody').html('<div style="padding:16px;color:#8a6d45;">載入中…</div>');
+    $('#vioFoot').empty();
+    openMask('vioMask');
+    $.getJSON(API, {action:'detail_rows', indicator_id:r.indicator_id, year:YEAR, month:m}, function(res){
+        if (!res || !res.ok) { $('#vioBody').html('<div style="padding:16px;color:#DD5138;">'+esc((res&&res.error)||'載入失敗')+'</div>'); return; }
+        VIO.data = res;
+        renderVio();
+    }).fail(function(x){
+        $('#vioBody').html('<div style="padding:16px;color:#DD5138;">載入失敗：'+esc((x.responseJSON&&x.responseJSON.error)||x.status)+'</div>');
+    });
+}
+function vioModeBadge(d){
+    if (d.mode === 'deny')  return '<span class="vio-mode deny">不可修改真實資料</span>';
+    if (d.mode === 'allow') return '<span class="vio-mode allow">可直接修改真實資料</span>';
+    return '<span class="vio-mode na">不適用</span>';
+}
+function renderVio(){
+    var d = VIO.data, r = VIO.row, h = '';
+    h += '<div class="vio-head"><b>'+r.item_no+'. '+esc(r.name)+'</b>（'+YEAR+'年'+VIO.m+'月）　'
+       + '判定目標：'+esc(r.target.text||'—')+'　'+vioModeBadge(d)+'</div>';
+    if (!+d.supported) {
+        h += '<div class="vio-note">'+esc(d.msg||'這個指標還沒有做不符合標準的明細。')+'</div>';
+        h += srcLinksHtml(d, '要調整數值請到');
+        $('#vioBody').html(h); $('#vioFoot').empty();
+        return;
+    }
+    var exN = 0;
+    d.rows.forEach(function(x){ if (+x.excluded) exN++; });
+    h += '<div class="vio-note">'+esc(d.note||'')
+       + '<br>不符合標準 <b>'+d.total+'</b> 筆'+(exN?('，其中 <b>'+exN+'</b> 筆已排除計算'):'')
+       + (+d.truncated ? '（畫面最多顯示 500 筆）' : '')+'。</div>';
+    if (d.mode === 'deny') {
+        h += '<div class="vio-warn">這個指標的來源資料<b>不開放直接修改</b>（'+esc(d.why||'')+'）。'
+           + '如果某幾筆不應該算進這個月的績效，請勾選後按下方「排除選取」並填寫原因——'
+           + '<b>排除只影響 KPI 計算，不會動到任何一筆真實資料</b>。</div>';
+    } else if (d.mode === 'allow') {
+        h += '<div class="vio-warn ok">這個指標可以<b>直接到來源頁面修正真實資料</b>，改完回到 KPI 頁會自動重算。</div>';
+    }
+    h += srcLinksHtml(d, '來源頁面');
+
+    h += '<div class="vio-tblwrap"><table class="vio-tbl"><thead><tr>';
+    if (+d.can_adjust && d.mode === 'deny') h += '<th style="width:28px;"><input type="checkbox" id="vioAll"></th>';
+    d.cols.forEach(function(c){ h += '<th>'+esc(c.t)+'</th>'; });
+    h += '<th>不符合的原因</th><th>建議怎麼處理</th></tr></thead><tbody>';
+    if (!d.rows.length) h += '<tr><td colspan="20" style="padding:14px;color:#8a6d45;">這個月沒有不符合標準的項目。</td></tr>';
+    d.rows.forEach(function(x){
+        h += '<tr class="'+(+x.excluded?'ex':'')+'" data-k="'+esc(x.key)+'">';
+        if (+d.can_adjust && d.mode === 'deny') {
+            h += '<td><input type="checkbox" class="vioChk" value="'+esc(x.key)+'"'+(+x.excluded?' checked':'')+'></td>';
+        }
+        d.cols.forEach(function(c){ h += '<td>'+esc(x.vals[c.k]==null?'':x.vals[c.k])+'</td>'; });
+        h += '<td class="vio-why">'+esc(x.why||'')+'</td>';
+        h += '<td class="vio-fix">'+esc(x.fix||'')
+           + (+x.excluded ? ('<div class="vio-ex">已排除計算：'+esc(x.ex_reason||'')
+                + '（'+esc(x.ex_by||'')+' '+esc((x.ex_at||'').substr(0,16))+'）</div>') : '')
+           + '</td>';
+        h += '</tr>';
+    });
+    h += '</tbody></table></div>';
+    $('#vioBody').html(h);
+
+    var f = '';
+    if (+d.can_adjust && d.mode === 'deny') {
+        f += '<input type="text" id="vioReason" placeholder="排除原因（必填，例：客戶要求延後交期）" style="width:320px;">'
+           + '<button class="warm" id="vioDo">排除選取</button>'
+           + '<button id="vioUndo">取消排除選取</button>';
+    } else if (!+d.can_adjust && d.mode === 'deny') {
+        f += '<span style="color:#8a6d45;font-size:12px;">您沒有調整這個指標的權限，只能檢視。</span>';
+    }
+    if (+d.can_set_mode) {
+        f += '<span class="vio-set">管理員設定：'
+           + '<select id="vioMode">'
+           + '<option value="suggest"'+(d.setting==='suggest'?' selected':'')+'>依系統建議（'+esc(d.suggest)+'）</option>'
+           + '<option value="allow"'+(d.setting==='allow'?' selected':'')+'>可直接修改真實資料</option>'
+           + '<option value="deny"'+(d.setting==='deny'?' selected':'')+'>不可修改，只能排除</option>'
+           + '</select></span>';
+    }
+    $('#vioFoot').html(f);
+}
+$(document).on('change', '#vioAll', function(){
+    $('#vioBody .vioChk').prop('checked', $(this).is(':checked'));
+});
+$(document).on('click', '#vioDo', function(){
+    var keys = $('#vioBody .vioChk:checked').map(function(){ return $(this).val(); }).get();
+    // 已經排除過的不用再送一次
+    var already = {};
+    VIO.data.rows.forEach(function(x){ if (+x.excluded) already[String(x.key)] = 1; });
+    keys = keys.filter(function(k){ return !already[k]; });
+    if (!keys.length) { alert('請勾選要排除的項目（已排除的不用再勾一次）'); return; }
+    var reason = $.trim($('#vioReason').val());
+    if (!reason) { $('#vioReason').css('border-color','#DD5138').focus(); alert('請填排除原因'); return; }
+    if (!confirm('把勾選的 '+keys.length+' 筆排除在這個月的計算之外？\n（不會修改任何一筆真實資料）')) return;
+    $.post(API, {action:'adjust_add', indicator_id:VIO.iid, year:YEAR, month:VIO.m,
+                 keys:JSON.stringify(keys), reason:reason}, function(res){
+        if (!res.ok) { alert(res.error||'排除失敗'); return; }
+        alert('已排除 '+res.added+' 筆，這一格重算為 '+(res.value===null?'無資料':res.value)
+              +'（'+res.num+'／'+res.den+'）。');
+        openVio(VIO.ri, VIO.m);
+        loadMatrix(true);
+    }, 'json').fail(function(x){ alert('排除失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status)); });
+});
+$(document).on('click', '#vioUndo', function(){
+    var keys = $('#vioBody .vioChk:checked').map(function(){ return $(this).val(); }).get();
+    var already = {};
+    VIO.data.rows.forEach(function(x){ if (+x.excluded) already[String(x.key)] = 1; });
+    keys = keys.filter(function(k){ return already[k]; });
+    if (!keys.length) { alert('請勾選「已排除」的項目才能取消排除'); return; }
+    $.post(API, {action:'adjust_del', indicator_id:VIO.iid, year:YEAR, month:VIO.m,
+                 keys:JSON.stringify(keys)}, function(res){
+        if (!res.ok) { alert(res.error||'取消失敗'); return; }
+        alert('已取消排除 '+res.removed+' 筆，這一格重算為 '+(res.value===null?'無資料':res.value)+'。');
+        openVio(VIO.ri, VIO.m);
+        loadMatrix(true);
+    }, 'json').fail(function(x){ alert('取消失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status)); });
+});
+$(document).on('change', '#vioMode', function(){
+    var mode = $(this).val();
+    $.post(API, {action:'edit_mode_save', indicator_id:VIO.iid, mode:mode}, function(res){
+        if (!res.ok) { alert(res.error||'設定失敗'); return; }
+        openVio(VIO.ri, VIO.m);
+    }, 'json').fail(function(x){ alert('設定失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status)); });
+});
 
 /* ---------- 重算 ---------- */
 function doRecalc(iid, month){

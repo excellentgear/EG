@@ -373,6 +373,146 @@ case 'apply_params': {
     jout(['changed'=>count($changed)]);
 }
 
+/* ---------- 不符合標準的明細（使用者要求 2026-09-15：只列超過規定的，並附修改建議） ----------
+   回傳這一格「哪幾筆沒達到標準」＋每一筆該怎麼處理；
+   mode=allow → 去來源頁面改真實資料；mode=deny → 只能排除這一筆（不動真實資料）。 */
+case 'detail_rows': {
+    $iid   = (int)($_GET['indicator_id'] ?? 0);
+    $year  = max(2025, min($curY, (int)($_GET['year'] ?? $curY)));
+    $month = max(1, min(12, (int)($_GET['month'] ?? 1)));
+    $iy = kpi_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $calc = (string)$iy['calculator_key'];
+    $em = kpi_as_edit_mode($db, $iid, $calc);
+    if ($iy['source_mode'] !== 'auto' || !kpi_as_detail_supported($calc)) {
+        jout(['supported'=>0, 'mode'=>$em['mode'], 'why'=>$em['why'], 'rows'=>[], 'cols'=>[],
+              'links'=>kpi_as_source_links($db, $uid, $calc),
+              'msg'=>$iy['source_mode'] !== 'auto' ? '手動填寫的指標沒有來源明細。'
+                                                   : '這個指標還沒有做「不符合標準的明細」。']);
+    }
+    $params = kpi_as_params($iy['params_json']);
+    $d = kpi_as_detail($db, $calc, $year, $month, $params);
+    // 已排除的仍然列出來（灰底標「已排除」），否則使用者排掉之後就再也看不到、也解不開
+    $adj = [];
+    foreach (kpi_as_adjust_rows($db, $iid, $year, $month) as $a) $adj[(string)$a['row_key']] = $a;
+    $rows = [];
+    $cap = 500;
+    foreach ($d['rows'] as $r) {
+        if (count($rows) >= $cap) break;
+        $k = (string)$r['key'];
+        $r['excluded']  = isset($adj[$k]) ? 1 : 0;
+        $r['ex_reason'] = isset($adj[$k]) ? (string)$adj[$k]['reason'] : '';
+        $r['ex_by']     = isset($adj[$k]) ? (string)$adj[$k]['created_by_name'] : '';
+        $r['ex_at']     = isset($adj[$k]) ? (string)$adj[$k]['created_at'] : '';
+        $rows[] = $r;
+    }
+    jout(['supported'=>1, 'mode'=>$em['mode'], 'setting'=>$em['setting'], 'suggest'=>$em['suggest'],
+          'why'=>$em['why'], 'cols'=>$d['cols'], 'rows'=>$rows, 'total'=>$d['total'],
+          'truncated'=>$d['total'] > $cap ? 1 : 0, 'note'=>$d['note'],
+          'links'=>kpi_as_source_links($db, $uid, $calc),
+          'can_adjust'=>kpi_as_can_modify($year, $perms, ((int)$iy['owner_user_id'] === $uid)) ? 1 : 0,
+          'can_set_mode'=>$perms['canAdmin'] ? 1 : 0,
+          'target'=>['dir'=>$iy['target_direction'], 'value'=>$iy['target_value'], 'text'=>$iy['target_text']]]);
+}
+
+/* ---------- 排除／取消排除某幾筆來源列（不修改真實資料） ---------- */
+case 'adjust_add': {
+    $iid   = (int)($_POST['indicator_id'] ?? 0);
+    $year  = (int)($_POST['year'] ?? 0);
+    $month = max(1, min(12, (int)($_POST['month'] ?? 0)));
+    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    $iy = kpi_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $calc = (string)$iy['calculator_key'];
+    if ($iy['source_mode'] !== 'auto' || !kpi_as_detail_supported($calc)) jerr('這個指標不支援排除');
+    // 訊息要分清楚是「年度鎖了」還是「你沒權限」——講錯的話使用者會一直去找管理者解鎖
+    if (!kpi_as_can_modify($year, $perms, ((int)$iy['owner_user_id'] === $uid))) {
+        jerr(kpi_as_year_locked($year) ? '此年度已結案鎖定，僅 KPI 管理者可調整'
+                                       : '您沒有調整這個指標的權限（限擔當者本人、KPI 填報或 KPI 管理者）', 403);
+    }
+    $reason = trim((string)($_POST['reason'] ?? ''));
+    if ($reason === '') jerr('請填排除原因');
+    if (mb_strlen($reason) > 200) $reason = mb_substr($reason, 0, 200);
+    $keys = json_decode((string)($_POST['keys'] ?? '[]'), true);
+    $keys = is_array($keys) ? array_values(array_unique(array_filter(array_map('strval', $keys), 'strlen'))) : [];
+    if (!$keys) jerr('請選擇要排除的項目');
+
+    // 只准排除「這一格真的算得到、而且確實沒達到標準」的那幾筆（前端擋一次，後端同規則再擋＝鐵律8）
+    $params = kpi_as_params($iy['params_json']);
+    $d = kpi_as_detail($db, $calc, $year, $month, $params);
+    $valid = [];
+    foreach ($d['rows'] as $r) $valid[(string)$r['key']] = $r;
+    $ins = $db->prepare("INSERT INTO kpi_as_adjust
+        (indicator_id,year,month,calculator_key,row_key,row_label,row_json,reason,created_by,created_by_name)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+        ON DUPLICATE KEY UPDATE reason=VALUES(reason), created_by=VALUES(created_by),
+                                created_by_name=VALUES(created_by_name), created_at=NOW()");
+    $done = 0; $skip = 0;
+    $db->beginTransaction();
+    try {
+        foreach ($keys as $k) {
+            if (!isset($valid[$k])) { $skip++; continue; }
+            $r = $valid[$k];
+            $ins->execute([$iid, $year, $month, $calc, $k,
+                           mb_substr(implode(' ｜ ', $r['vals']), 0, 250),
+                           json_encode($r, JSON_UNESCAPED_UNICODE), $reason,
+                           (int)$u['id'], (string)$u['user_cname']]);
+            $done++;
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); jerr('寫入失敗：' . $e->getMessage(), 500); }
+    if (!$done) jerr('沒有可排除的項目（選到的資料已經不在這個月的違規清單內，請重新整理）');
+    $res = kpi_as_settle($db, $iy, $year, $month, $u);   // 立刻重算這一格
+    kpi_as_log($db, $iid, $year, $month, 'adjust_add', 'exclude', null, implode(',', $keys),
+               '排除 ' . $done . ' 筆（原因：' . $reason . '）', $u);
+    jout(['added'=>$done, 'skipped'=>$skip,
+          'value'=>($res && $res['value'] !== null) ? round($res['value'], 2) : null,
+          'num'=>$res['num'] ?? null, 'den'=>$res['den'] ?? null]);
+}
+
+case 'adjust_del': {
+    $iid   = (int)($_POST['indicator_id'] ?? 0);
+    $year  = (int)($_POST['year'] ?? 0);
+    $month = max(1, min(12, (int)($_POST['month'] ?? 0)));
+    if ($year < 2025 || $year > $curY) jerr('年度不合法');
+    $iy = kpi_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    // 訊息要分清楚是「年度鎖了」還是「你沒權限」——講錯的話使用者會一直去找管理者解鎖
+    if (!kpi_as_can_modify($year, $perms, ((int)$iy['owner_user_id'] === $uid))) {
+        jerr(kpi_as_year_locked($year) ? '此年度已結案鎖定，僅 KPI 管理者可調整'
+                                       : '您沒有調整這個指標的權限（限擔當者本人、KPI 填報或 KPI 管理者）', 403);
+    }
+    $keys = json_decode((string)($_POST['keys'] ?? '[]'), true);
+    $keys = is_array($keys) ? array_values(array_filter(array_map('strval', $keys), 'strlen')) : [];
+    if (!$keys) jerr('請選擇要取消排除的項目');
+    $in = implode(',', array_fill(0, count($keys), '?'));
+    $st = $db->prepare("DELETE FROM kpi_as_adjust WHERE indicator_id=? AND year=? AND month=? AND row_key IN ($in)");
+    $st->execute(array_merge([$iid, $year, $month], $keys));
+    $n = $st->rowCount();
+    if (!$n) jerr('這幾筆本來就沒有被排除（請重新整理）');
+    $res = kpi_as_settle($db, $iy, $year, $month, $u);
+    kpi_as_log($db, $iid, $year, $month, 'adjust_del', 'exclude', implode(',', $keys), null,
+               '取消排除 ' . $n . ' 筆', $u);
+    jout(['removed'=>$n,
+          'value'=>($res && $res['value'] !== null) ? round($res['value'], 2) : null,
+          'num'=>$res['num'] ?? null, 'den'=>$res['den'] ?? null]);
+}
+
+/* ---------- 管理員設定：這個指標的來源資料可不可以直接改 ---------- */
+case 'edit_mode_save': {
+    if (!$perms['canAdmin']) jerr('僅KPI管理者可設定', 403);
+    $iid  = (int)($_POST['indicator_id'] ?? 0);
+    $mode = (string)($_POST['mode'] ?? '');
+    if (!in_array($mode, ['suggest', 'allow', 'deny'], true)) jerr('設定值不正確');
+    $st = $db->prepare("SELECT 1 FROM kpi_as_indicator WHERE indicator_id=?");
+    $st->execute([$iid]);
+    if (!$st->fetchColumn()) jerr('找不到指標');
+    $db->prepare("UPDATE kpi_as_indicator SET src_edit_mode=?, Modified_By=?, Modified_At=NOW() WHERE indicator_id=?")
+       ->execute([$mode, (string)$u['user_cname'], $iid]);
+    kpi_as_log($db, $iid, null, null, 'edit_mode', 'src_edit_mode', null, $mode, '來源資料可否直接修改', $u);
+    jout(['mode'=>$mode]);
+}
+
 /* ---------- 手動填寫（manual 模式；擔當者本人／其請假代理人；鎖定年僅KPI管理員） ---------- */
 case 'fill': {
     $iid = (int)($_POST['indicator_id'] ?? 0);

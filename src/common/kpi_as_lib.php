@@ -149,6 +149,28 @@ function kpi_as_ensure_schema(PDO $db): void {
     try { $db->exec("ALTER TABLE kpi_as_indicator_year ADD COLUMN owner_dept_id INT NULL COMMENT '擔當者部門 department.id（兼任者用以精準還原）' AFTER owner_user_id"); } catch (Throwable $e) {}
     try { $db->exec("ALTER TABLE kpi_as_indicator_year ADD COLUMN owner_position_id INT NULL COMMENT '擔當者職位 position.id' AFTER owner_dept_id"); } catch (Throwable $e) {}
 
+    // 「調整」＝把某幾筆來源資料排除在這一格的計算之外（不動真實資料）。
+    // 只用於「不可改真實資料」的指標（改真資料會連動帳務月份的那幾項）。
+    $db->exec("CREATE TABLE IF NOT EXISTS kpi_as_adjust (
+        adj_id INT AUTO_INCREMENT PRIMARY KEY,
+        indicator_id INT NOT NULL,
+        year SMALLINT NOT NULL,
+        month TINYINT NOT NULL,
+        calculator_key VARCHAR(40) NOT NULL COMMENT '計算模組代號(排除鍵的意義由它決定)',
+        row_key VARCHAR(100) NOT NULL COMMENT '來源列識別(如 bom_ing_fid、order_track.Order_id)',
+        row_label VARCHAR(255) NULL COMMENT '排除當下的摘要(內部畫面用)',
+        row_json TEXT NULL COMMENT '排除當下的內容快照(內部備查，不列印)',
+        reason VARCHAR(255) NOT NULL COMMENT '排除原因(必填)',
+        created_by INT NULL,
+        created_by_name VARCHAR(50) NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_cell_row (indicator_id, year, month, row_key),
+        KEY idx_cell (indicator_id, year, month)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='KPI計算調整-排除指定來源列(不修改真實資料)'");
+
+    // 這個指標的來源資料可不可以直接改：suggest=依系統建議 / allow=可改 / deny=只能用排除
+    try { $db->exec("ALTER TABLE kpi_as_indicator ADD COLUMN src_edit_mode ENUM('suggest','allow','deny') NOT NULL DEFAULT 'suggest' COMMENT '來源資料可否直接修改 suggest=依系統建議' AFTER is_active"); } catch (Throwable $e) {}
+
     // 角色 seed（module='kpi'，固定 role_code，供 user_permissions.php 指派）
     foreach ([['kpi_view','KPI檢閱'],['kpi_fill','KPI填報'],['kpi_admin','KPI管理員']] as $r) {
         $st = $db->prepare("SELECT 1 FROM roles WHERE role_code=? AND module='kpi' LIMIT 1");
@@ -636,7 +658,13 @@ function kpi_as_list($v): array {
 /* ============================================================
  * 計算模組（回傳 ['num'=>分子,'den'=>分母,'value'=>值] 或 null=無法計算）
  * ============================================================ */
-function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $params): ?array {
+/**
+ * @param array $exclRows 這一格被「排除」的來源列 row_key（見 kpi_as_adjust）。
+ *        注意：個別 case 內另有同名的 $excl 區域變數（參數設定的排除客戶／排除退貨性質），兩者不同。
+ *                    只有 kpi_as_detail_supported() 為真的計算模組才吃得到，
+ *                    其餘模組不開放排除功能（UI 也不會給按鈕），避免排了卻沒作用。
+ */
+function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $params, array $exclRows = []): ?array {
     $ym = sprintf('%04d-%02d', $year, $month);
     $ms = sprintf('%04d-%02d-01', $year, $month);
     $me = date('Y-m-t', strtotime($ms));
@@ -729,15 +757,17 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
                 }
             }
             $winStart = date('Y-m-d', strtotime($ms . ' -120 days'));
-            $st = $db->prepare("SELECT bi.outsource_date, bi.return_date, pn.process_type_id
+            $st = $db->prepare("SELECT bi.bom_ing_fid, bi.outsource_date, bi.return_date, pn.process_type_id
                                 FROM bom_ing bi
                                 LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
                                 WHERE bi.outsource_date IS NOT NULL
                                   AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no<>''
                                   AND DATE(bi.outsource_date) BETWEEN ? AND ?");
             $st->execute([$winStart, $me]);
+            $exSet = $exclRows ? array_flip(array_map('strval', $exclRows)) : [];
             $num = 0; $den = 0;
             while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+                if ($exSet && isset($exSet[(string)$r['bom_ing_fid']])) continue;   // 已排除的不進分子也不進分母
                 $days = isset($dmap[(int)$r['process_type_id']]) ? $dmap[(int)$r['process_type_id']] : $defDays;
                 $due = kpi_as_add_workdays($db, (string)$r['outsource_date'], $days);
                 if ($due < $ms || $due > $me) continue;   // 應交日不在當月
@@ -748,14 +778,21 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
         }
 
         case 'order_ontime': {
-            $excl = kpi_as_list(kpi_as_pv($params, 'exclude_clients', ['寶嘉誠','泳建']));
-            $notIn = $excl ? (" AND Client_name NOT IN (" . implode(',', array_fill(0, count($excl), '?')) . ")") : '';
+            $exCli = kpi_as_list(kpi_as_pv($params, 'exclude_clients', ['寶嘉誠','泳建']));   // 參數設定的排除客戶（與逐筆排除 $excl 不同）
+            $notIn = $exCli ? (" AND Client_name NOT IN (" . implode(',', array_fill(0, count($exCli), '?')) . ")") : '';
+            // 逐筆排除只套在 order_list（未交清單）那一邊，**不可以套到 order_track**：
+            // 兩張表是各自獨立的資料（order_track＝自建訂單追蹤、客戶存中文名，Order_id 1~9643；
+            // order_list＝ERP 未交訂單、客戶存代號如 CJ002，Order_id 34232~67249），
+            // 2026-08 兩邊用 Order_id／Order_oo+料號 都一筆都對不起來。
+            // 拿 order_list 的 Order_id 去 order_track 做 NOT IN，只會砍到不相干的訂單。
+            $exIds = array_values(array_filter(array_map('intval', $exclRows)));
+            $exSql = $exIds ? (" AND Order_id NOT IN (" . implode(',', array_fill(0, count($exIds), '?')) . ")") : '';
             $base = " UPPER(d_id)<>'ZZZ' AND LOWER(d_id) NOT REGEXP '-(jg|jh|hg)$' AND DATE_FORMAT(Delivery_date,'%Y-%m')=?" . $notIn;
             $st = $db->prepare("SELECT COUNT(*) FROM order_track WHERE" . $base);
-            $st->execute(array_merge([$ym], $excl));
+            $st->execute(array_merge([$ym], $exCli));
             $den = (int)$st->fetchColumn();
-            $st = $db->prepare("SELECT COUNT(*) FROM order_list WHERE" . $base . " AND Qty=Open_Qty AND Order_status IS NULL");
-            $st->execute(array_merge([$ym], $excl));
+            $st = $db->prepare("SELECT COUNT(*) FROM order_list WHERE" . $base . $exSql . " AND Qty=Open_Qty AND Order_status IS NULL");
+            $st->execute(array_merge([$ym], $exCli, $exIds));
             $undone = (int)$st->fetchColumn();
             $num = max(0, $den - $undone);
             return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
@@ -900,7 +937,8 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
 /** 計算並寫入某格快照（僅 auto 模式）。回傳計算結果或 null */
 function kpi_as_settle(PDO $db, array $iy, int $year, int $month, array $u): ?array {
     if ($iy['source_mode'] !== 'auto' || empty($iy['calculator_key'])) return null;
-    $res = kpi_as_compute($db, $iy['calculator_key'], $year, $month, kpi_as_params($iy['params_json']));
+    $res = kpi_as_compute($db, $iy['calculator_key'], $year, $month, kpi_as_params($iy['params_json']),
+                          kpi_as_adjust_keys($db, (int)$iy['indicator_id'], $year, $month));
     $val = $res ? $res['value'] : null;
     $st = $db->prepare("INSERT INTO kpi_as_monthly_value (indicator_id,year,month,auto_value,numerator,denominator,computed_at)
                         VALUES (?,?,?,?,?,?,NOW())
@@ -1196,6 +1234,183 @@ function kpi_as_source_links(PDO $db, int $uid, ?string $calc): array {
         $can  = ($url !== '' && function_exists('eg_asdoc_page_can_open'))
                 ? eg_asdoc_page_can_open($db, $uid, $perm) : false;
         $out[] = ['label' => (string)($ln['label'] ?? ''), 'url' => $can ? $url : '', 'can' => $can ? 1 : 0];
+    }
+    return $out;
+}
+
+/* ============================================================
+ * 不符合標準的明細 ＋ 修改建議（使用者要求 2026-09-14）
+ * 「先判斷哪些超過規定，只顯示超過規定的提供修改，並附上修改建議」
+ * ——不是把整格的來源資料全倒出來。
+ * 兩種處置：
+ *   allow（可改真實資料）＝列出違規列＋建議，到來源頁面修正
+ *   deny （不可改真實資料）＝只能「排除」這一筆（寫 kpi_as_adjust，真實資料一個字都不動）
+ * 哪些不可改由 kpi_as_edit_mode_suggest() 給系統建議，管理員可在 KPI 設定頁覆寫。
+ * ============================================================ */
+
+/** 系統建議：來源資料可不可以直接改。deny=不可改(會連動帳務) allow=可改 na=不適用 */
+function kpi_as_edit_mode_suggest(?string $calc): array {
+    switch ((string)$calc) {
+        case 'complaint_rate':
+            return ['deny', '分母是出貨單、分子是客退單，兩者都直接連動應收帳款月份與發票'];
+        case 'order_target_amount':
+            return ['deny', '訂單金額與交期歸屬直接影響帳款月份'];
+        case 'shipping_target_amount':
+            return ['deny', '出貨金額直接連動應收帳款月份與發票'];
+        case 'vendor_ontime':
+            return ['deny', '發包日／回廠日會影響加工費的應付帳款月份'];
+        case 'order_ontime':
+            return ['deny', '訂單交期與未交量會影響出貨與應收帳款月份'];
+        case 'packing_ng_rate':
+        case 'calibration_ontime':
+            return ['na', '目前來源尚未連動，實務上以手動覆寫填值'];
+        case '':
+            return ['na', '手動填寫指標'];
+        default:
+            return ['allow', '不影響帳務，可直接修正來源資料'];
+    }
+}
+
+/** 這個指標實際採用的模式（管理員設定優先於系統建議） */
+function kpi_as_edit_mode(PDO $db, int $iid, ?string $calc): array {
+    $sg  = kpi_as_edit_mode_suggest($calc);
+    $sug = $sg[0]; $why = $sg[1];
+    $set = 'suggest';
+    try {
+        $st = $db->prepare("SELECT src_edit_mode FROM kpi_as_indicator WHERE indicator_id=?");
+        $st->execute([$iid]);
+        $v = $st->fetchColumn();
+        if ($v) $set = (string)$v;
+    } catch (Throwable $e) {}
+    $eff = ($set === 'suggest') ? $sug : $set;
+    return ['mode' => $eff, 'setting' => $set, 'suggest' => $sug, 'why' => $why];
+}
+
+/** 這個計算模組有沒有做「違規明細」（沒做的一律不給排除，避免排了卻不影響計算） */
+function kpi_as_detail_supported(?string $calc): bool {
+    return in_array((string)$calc, ['vendor_ontime', 'order_ontime'], true);
+}
+
+/** 某一格已排除的來源列（完整資料，內部畫面用） */
+function kpi_as_adjust_rows(PDO $db, int $iid, int $year, int $month): array {
+    try {
+        $st = $db->prepare("SELECT * FROM kpi_as_adjust WHERE indicator_id=? AND year=? AND month=? ORDER BY adj_id");
+        $st->execute([$iid, $year, $month]);
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/** 某一格已排除的 row_key（計算時用） */
+function kpi_as_adjust_keys(PDO $db, int $iid, int $year, int $month): array {
+    try {
+        $st = $db->prepare("SELECT row_key FROM kpi_as_adjust WHERE indicator_id=? AND year=? AND month=?");
+        $st->execute([$iid, $year, $month]);
+        return $st->fetchAll(PDO::FETCH_COLUMN) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 不符合標準的明細。
+ * 回傳 ['cols'=>[['k','t']], 'rows'=>[['key','vals','why','fix']], 'total'=>n, 'note'=>'']
+ * rows 只含「超過規定」的那幾筆；已排除的由呼叫端用 kpi_as_adjust_rows() 疊上去。
+ */
+function kpi_as_detail(PDO $db, ?string $calc, int $year, int $month, array $params): array {
+    $ms = sprintf('%04d-%02d-01', $year, $month);
+    $me = date('Y-m-t', strtotime($ms));
+    $ym = sprintf('%04d-%02d', $year, $month);
+    $out = ['cols' => [], 'rows' => [], 'total' => 0, 'note' => ''];
+
+    switch ((string)$calc) {
+
+        case 'vendor_ontime': {
+            $defDays = max(0, (int)kpi_as_pv($params, 'default_days', 7));
+            $dmapRaw = kpi_as_pv($params, 'days_by_process_type', []);
+            $dmap = [];
+            if (is_array($dmapRaw)) {
+                foreach ($dmapRaw as $k => $v) { if (is_numeric($v)) $dmap[(int)$k] = (int)$v; }
+            } else {
+                foreach (kpi_as_list($dmapRaw) as $line) {
+                    if (preg_match('/^(\d+)\s*[:：]\s*(\d+)$/u', $line, $m2)) $dmap[(int)$m2[1]] = (int)$m2[2];
+                }
+            }
+            $winStart = date('Y-m-d', strtotime($ms . ' -120 days'));
+            $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.outsource_date, bi.return_date,
+                                       bi.process_no, pn.ProcessName, pn.process_type_id,
+                                       COALESCE(mk.maker_id, bi.maker_id) AS maker_name
+                                FROM bom_ing bi
+                                LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                                LEFT JOIN maker_list mk ON mk.maker_id_no=bi.maker_id_no
+                                WHERE bi.outsource_date IS NOT NULL
+                                  AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no<>''
+                                  AND DATE(bi.outsource_date) BETWEEN ? AND ?");
+            $st->execute([$winStart, $me]);
+            $out['cols'] = [['k'=>'bom','t'=>'製令'], ['k'=>'proc','t'=>'製程'], ['k'=>'maker','t'=>'廠商'],
+                            ['k'=>'qty','t'=>'數量'], ['k'=>'out','t'=>'發包日'], ['k'=>'due','t'=>'應交日'],
+                            ['k'=>'back','t'=>'回廠日']];
+            $today = date('Y-m-d');
+            while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+                $ptid = (int)$r['process_type_id'];
+                $days = isset($dmap[$ptid]) ? $dmap[$ptid] : $defDays;
+                $due  = kpi_as_add_workdays($db, (string)$r['outsource_date'], $days);
+                if ($due < $ms || $due > $me) continue;           // 應交日不在當月＝不屬於這一格
+                $back = $r['return_date'] ? substr((string)$r['return_date'], 0, 10) : '';
+                if ($back !== '' && $back <= $due) continue;       // 準時＝不是違規列
+                $out['total']++;
+                if ($back === '') {
+                    $late = (int)round((strtotime($today) - strtotime($due)) / 86400);
+                    $why  = '未登錄回廠日' . ($late > 0 ? ('（已逾應交日 ' . $late . ' 天）') : '');
+                    $fix  = '若貨已回廠，請到 BOM 總表補登「回廠日」；若確實尚未回廠，屬真實遲交，不必修改。';
+                } else {
+                    $late = (int)round((strtotime($back) - strtotime($due)) / 86400);
+                    $why  = '回廠日晚於應交日 ' . $late . ' 天';
+                    $fix  = '確認回廠日是否登錄錯誤（BOM 總表可改）；若這個製程本來就需要 '
+                          . ($days + $late) . ' 個工作天以上，請到 KPI 設定把「'
+                          . ($r['ProcessName'] ? $r['ProcessName'] : ('製程類別' . $ptid))
+                          . '」的約定工作天由 ' . $days . ' 天往上調整。';
+                }
+                $out['rows'][] = [
+                    'key'  => (string)$r['bom_ing_fid'],
+                    'vals' => ['bom'=>(string)$r['bom'], 'proc'=>(string)($r['ProcessName'] ? $r['ProcessName'] : $r['process_no']),
+                               'maker'=>(string)$r['maker_name'], 'qty'=>(string)$r['sqty'],
+                               'out'=>substr((string)$r['outsource_date'], 0, 10), 'due'=>$due,
+                               'back'=>($back !== '' ? $back : '—')],
+                    'why'  => $why, 'fix' => $fix,
+                ];
+            }
+            usort($out['rows'], function ($a, $b) { return strcmp($a['vals']['due'], $b['vals']['due']); });
+            $out['note'] = '應交日＝發包日＋約定工作天（依行事曆工作日）。只列「應交日落在本月、卻沒有準時回廠」的發包。';
+            return $out;
+        }
+
+        case 'order_ontime': {
+            $exCli = kpi_as_list(kpi_as_pv($params, 'exclude_clients', ['寶嘉誠','泳建']));
+            $notIn = $exCli ? (" AND ol.Client_name NOT IN (" . implode(',', array_fill(0, count($exCli), '?')) . ")") : '';
+            $sql = "SELECT ol.Order_id, ol.Order_oo, ol.d_id, ol.Client_name, ol.Qty, ol.Open_Qty, ol.Delivery_date
+                    FROM order_list ol
+                    WHERE UPPER(ol.d_id)<>'ZZZ' AND LOWER(ol.d_id) NOT REGEXP '-(jg|jh|hg)$'
+                      AND DATE_FORMAT(ol.Delivery_date,'%Y-%m')=?" . $notIn . "
+                      AND ol.Qty=ol.Open_Qty AND ol.Order_status IS NULL
+                    ORDER BY ol.Delivery_date, ol.Order_id";
+            $st = $db->prepare($sql);
+            $st->execute(array_merge([$ym], $exCli));
+            $out['cols'] = [['k'=>'oo','t'=>'訂單編號'], ['k'=>'client','t'=>'客戶'], ['k'=>'d_id','t'=>'料號'],
+                            ['k'=>'qty','t'=>'訂單量'], ['k'=>'open','t'=>'未交量'], ['k'=>'dd','t'=>'交期']];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $out['total']++;
+                $out['rows'][] = [
+                    'key'  => (string)$r['Order_id'],
+                    'vals' => ['oo'=>(string)$r['Order_oo'], 'client'=>(string)$r['Client_name'],
+                               'd_id'=>(string)$r['d_id'], 'qty'=>(string)(0 + $r['Qty']),
+                               'open'=>(string)(0 + $r['Open_Qty']), 'dd'=>substr((string)$r['Delivery_date'], 0, 10)],
+                    'why'  => '交期已到本月，但未交量＝訂單量（完全沒出貨）',
+                    'fix'  => '若實際已出貨，請確認出貨單有沒有帶到這張訂單（未交量沒被沖銷）；'
+                            . '若客戶要求延後交期，請到訂單追蹤更新交期，這一筆就會改算到新的月份。',
+                ];
+            }
+            $out['note'] = '判定沿用本指標既有規則：料號 ZZZ 與 -jg/-jh/-hg 結尾不計。'
+                         . ($exCli ? ('排除客戶：' . implode('、', $exCli) . '。') : '');
+            return $out;
+        }
     }
     return $out;
 }
