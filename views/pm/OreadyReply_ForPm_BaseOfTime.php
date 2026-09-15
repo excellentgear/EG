@@ -14209,7 +14209,17 @@ echo "</script>\n";
                         resultsDiv.innerHTML = '<p style="padding:8px;color:#c00;font-size:12px;">查無料號「' + escapeHtml(term) + '」。</p>';
                         return;
                     }
-                    var html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+                    // 命中數超過顯示上限時要講清楚，否則使用者會以為「系統查不到這筆」
+                    // （完全相同的料號後端已排在最前面，一定看得到）
+                    var html = '';
+                    if (res.truncated) {
+                        html += '<div style="position:sticky;top:0;z-index:1;background:#faf6f0;border-bottom:1px solid #d8c7b0;' +
+                                'color:#6B471A;font-size:11px;padding:4px 8px;line-height:1.5;">' +
+                                '符合「' + escapeHtml(term) + '」的料號超過 ' + (res.limit || 30) + ' 筆，僅顯示前 ' + (res.limit || 30) + ' 筆；' +
+                                '<strong>完全相同的料號已優先列在最前面</strong>。若沒看到要找的，請輸入更完整的料號。' +
+                                '</div>';
+                    }
+                    html += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
                     html += '<thead><tr style="background:#f0f0f0;">'+
                         '<th style="padding:4px 8px;">料號ID</th>'+
                         '<th style="padding:4px 8px;">顯示料號</th>'+
@@ -14217,11 +14227,16 @@ echo "</script>\n";
                         '<th style="padding:4px 8px;">客戶名稱</th>'+
                         '<th style="padding:4px 8px;"></th></tr></thead><tbody>';
                     res.results.forEach(function(r) {
-                        var matchStyle = r.exact_match ? 'background:#e8f5e9;' : '';
+                        // 完全相同的料號（後端已排在最前面）要一眼看得出來，不能只靠底色
+                        var matchStyle = r.exact_match ? 'background:#F7E0BD;box-shadow:inset 3px 0 0 #F0A24B;'
+                                       : (r.exact_other ? 'background:#faf6f0;' : '');
+                        var exactBadge = r.exact_match
+                            ? ' <span style="background:#F0A24B;color:#4E2C0B;font-size:10px;font-weight:normal;border-radius:2px;padding:0 4px;margin-left:4px;white-space:nowrap;">完全相同</span>'
+                            : (r.exact_other ? ' <span style="background:#EBD3A8;color:#6B471A;font-size:10px;font-weight:normal;border-radius:2px;padding:0 4px;margin-left:4px;white-space:nowrap;">圖號/品名相同</span>' : '');
                         var matchTip = r.client_match ? ' <span style="color:green;font-size:10px;">✓</span>' : '';
                         html += '<tr style="border-bottom:1px solid #eee;' + matchStyle + '">' +
                             '<td style="padding:4px 8px;color:#888;font-size:11px;">' + escapeHtml(r.d_id) + '</td>' +
-                            '<td style="padding:4px 8px;font-weight:bold;">' + escapeHtml(r.display_id || r.d_id) + (r.drawing_no && r.drawing_no !== (r.display_id || r.d_id) ? '<span style="font-size:11px;color:#1a7abf;display:block;margin-top:1px;">代：' + escapeHtml(r.drawing_no) + '</span>' : '') + '</td>' +
+                            '<td style="padding:4px 8px;font-weight:bold;">' + escapeHtml(r.display_id || r.d_id) + exactBadge + (r.drawing_no && r.drawing_no !== (r.display_id || r.d_id) ? '<span style="font-size:11px;color:#1a7abf;display:block;margin-top:1px;">代：' + escapeHtml(r.drawing_no) + '</span>' : '') + '</td>' +
                             '<td style="padding:4px 8px;color:#888;font-size:11px;">' + escapeHtml(r.customer_id || '') + '</td>' +
                             '<td style="padding:4px 8px;">' + escapeHtml(r.customer_name || '') + matchTip + '</td>' +
                             '<td style="padding:4px 8px;"><button type="button" class="btn btn-xs btn-success qb-apply-btn" data-bom="' + escapeHtml(rowData.bom) + '" data-did="' + escapeHtml(r.d_id) + '">套用</button></td></tr>';

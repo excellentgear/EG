@@ -2339,6 +2339,8 @@ else if (isset($_POST['action']) && $_POST['action'] === 'search_d_setting') {
     if (empty($term) && empty($d_setting_id)) { echo json_encode(['success'=>true,'results'=>[]]); exit; }
     try {
         $rows = [];
+        $LIMIT     = 30;    // 畫面顯示上限
+        $truncated = false; // 命中數超過上限（前端要提示使用者縮小範圍）
 
         // ── 策略1：若有 d_setting_id（數字ID），直接精確查詢 ──
         if (!empty($d_setting_id) && is_numeric($d_setting_id)) {
@@ -2369,10 +2371,23 @@ else if (isset($_POST['action']) && $_POST['action'] === 'search_d_setting') {
                 FROM d_setting ds
                 LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
                 WHERE ds.D_Setting_Id LIKE ? OR ds.Drawing_No LIKE ? OR ds.Spec_No LIKE ?
-                ORDER BY ds.D_Setting_Id ASC LIMIT 30
+                ORDER BY COALESCE(ds.D_Setting_Id = ?, 0) DESC,    /* 1.料號完全相同 */
+                         COALESCE(ds.Drawing_No   = ?, 0) DESC,    /* 2.圖號完全相同 */
+                         COALESCE(ds.Spec_No      = ?, 0) DESC,    /* 3.品名完全相同 */
+                         COALESCE(ds.D_Setting_Id LIKE ?, 0) DESC, /* 4.料號開頭相符 */
+                         ds.D_Setting_Id ASC, ds.d_id ASC
+                LIMIT ".($LIMIT + 1)."
             ");
-            $s2->execute(['%'.$term.'%', '%'.$term.'%', '%'.$term.'%']);
+            // 完全相同的料號一律排最前面：模糊命中常有上百筆（例：'109' 命中 164 筆），
+            // 原本只按 D_Setting_Id 字母排序取前 30 筆，真正的「109」永遠被擠在上限之外而看不到。
+            // COALESCE 是必要的：Drawing_No/Spec_No 多半是 NULL，(NULL = ?) 回 NULL，
+            // 在 DESC 下會被排到 0 的後面，等於把「沒有圖號的料號」整批往後推、打亂既有排序。
+            $s2->execute([
+                '%'.$term.'%', '%'.$term.'%', '%'.$term.'%',
+                $term, $term, $term, $term.'%'
+            ]);
             $rows = $s2->fetchAll(PDO::FETCH_ASSOC);
+            if (count($rows) > $LIMIT) { $truncated = true; $rows = array_slice($rows, 0, $LIMIT); }
         }
 
         // ── 策略3：fallback 用 term 搜尋 CAST(d_id) ──
@@ -2386,10 +2401,13 @@ else if (isset($_POST['action']) && $_POST['action'] === 'search_d_setting') {
                 FROM d_setting ds
                 LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
                 WHERE CAST(ds.d_id AS CHAR) LIKE ?
-                ORDER BY ds.d_id ASC LIMIT 30
+                ORDER BY COALESCE(CAST(ds.d_id AS CHAR) = ?, 0) DESC, /* 料號ID完全相同優先 */
+                         ds.d_id ASC
+                LIMIT ".($LIMIT + 1)."
             ");
-            $s3->execute(['%'.$term.'%']);
+            $s3->execute(['%'.$term.'%', $term]);
             $rows = $s3->fetchAll(PDO::FETCH_ASSOC);
+            if (count($rows) > $LIMIT) { $truncated = true; $rows = array_slice($rows, 0, $LIMIT); }
         }
 
         // 標記客戶是否相符，以及料號是否完全精確比對（非 LIKE）
@@ -2398,12 +2416,20 @@ else if (isset($_POST['action']) && $_POST['action'] === 'search_d_setting') {
             $r['client_match'] = (!empty($client) &&
                 (!empty($r['customer_name']) && stripos($r['customer_name'], $client) !== false ||
                  !empty($r['customer_id'])   && stripos($r['customer_id'],   $client) !== false));
-            // 只有 D_Setting_Id 完全等於搜尋詞才標記 exact_match（供前端顯示綠底）
-            $r['exact_match'] = (!empty($exact_term) && isset($r['display_id']) && $r['display_id'] === $exact_term);
+            // 只有 D_Setting_Id 完全等於搜尋詞才標記 exact_match（供前端顯示綠底＋「完全相同」標記）
+            // 比對規則與上面 ORDER BY 的 SQL `=` 一致＝不分大小寫，否則 SQL 排在第一列、
+            // 前端卻不標記，使用者看不出哪一筆才是完全相同的。
+            $r['exact_match'] = (!empty($exact_term) && isset($r['display_id'])
+                                 && strcasecmp(trim((string)$r['display_id']), $exact_term) === 0);
+            // 料號不同、但圖號或品名完全相同（ORDER BY 第 2、3 順位）
+            $r['exact_other'] = (!$r['exact_match'] && !empty($exact_term) && (
+                (!empty($r['drawing_no']) && strcasecmp(trim((string)$r['drawing_no']), $exact_term) === 0) ||
+                (!empty($r['spec_no'])    && strcasecmp(trim((string)$r['spec_no']),    $exact_term) === 0)
+            ));
         }
         unset($r);
-        echo json_encode(['success'=>true,'results'=>$rows,'debug'=>[
-            'term'=>$term, 'd_setting_id'=>$d_setting_id, 'rows_count'=>count($rows)
+        echo json_encode(['success'=>true,'results'=>$rows,'truncated'=>$truncated,'limit'=>$LIMIT,'debug'=>[
+            'term'=>$term, 'd_setting_id'=>$d_setting_id, 'rows_count'=>count($rows), 'truncated'=>$truncated
         ]]);
     } catch(PDOException $e){
         echo json_encode(['success'=>false,'message'=>$e->getMessage()]);
