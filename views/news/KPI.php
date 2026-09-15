@@ -188,15 +188,13 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
             .kpi-role-badge .fa-question-circle, .kpi-ov-mark, .kpi-legend,
             #staleBar, .kpi-stale-mark, .kpi-modal-mask { display:none !important; }
             .right_col { margin:0 !important; padding:0 !important; }
-            table.kpi-table { font-size:10px; }
-            table.kpi-table th, table.kpi-table td { padding:2px 3px; }
+            /* 列印時每一欄都照內容決定寬度（width:auto），不要用 width:100% 硬撐滿整頁——
+               撐滿會讓指標內容欄灌水到 239px（最長文字只用得到 77px、右側全是空白），
+               月份欄也被拉到 100px。表格變窄之後由 printKpi() 的縮放把它放大到貼齊紙張，
+               字反而更大（實測 zoom 0.52 → 1.5 以上）。 */
+            table.kpi-table { font-size:10px; width:auto; margin:0 auto; }
+            table.kpi-table th, table.kpi-table td { padding:2px 4px; }
             table.kpi-table td.kpi-name { max-width:none; overflow:visible; text-overflow:clip; }
-            /* 前 5 欄（項次/指標內容/擔當者/頻率/判定目標）縮到剛好容納文字，
-               多出來的寬度全部讓給 12 個月份與平均欄。
-               不這樣做的話 width:100% 會按比例灌水，指標內容欄會拉到 239px 但最長文字只用得到 77px，
-               整欄右側都是空白（2026-09-15 使用者回報）。width:1% 是「縮到內容寬」的標準寫法，
-               不可以改成 width:auto ——那會讓整張表縮成 543px、印在 A4 橫式上變一小條。 */
-            table.kpi-table th:nth-child(-n+5), table.kpi-table td:nth-child(-n+5) { width:1%; }
             .kpi-table-wrap { overflow:visible; border:none; max-height:none !important; min-height:0 !important; }
             table.kpi-table thead th { position:static; }
             .kpi-print-head { display:block !important; }
@@ -208,11 +206,9 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         body.kpi-printing #staleBar, body.kpi-printing .kpi-stale-mark,
         body.kpi-printing .kpi-modal-mask { display:none !important; }
         body.kpi-printing .right_col { margin:0 !important; padding:0 !important; }
-        body.kpi-printing table.kpi-table { font-size:10px; }
-        body.kpi-printing table.kpi-table th, body.kpi-printing table.kpi-table td { padding:2px 3px; }
+        body.kpi-printing table.kpi-table { font-size:10px; width:auto; margin:0 auto; }
+        body.kpi-printing table.kpi-table th, body.kpi-printing table.kpi-table td { padding:2px 4px; }
         body.kpi-printing table.kpi-table td.kpi-name { max-width:none; overflow:visible; text-overflow:clip; }
-        body.kpi-printing table.kpi-table th:nth-child(-n+5),
-        body.kpi-printing table.kpi-table td:nth-child(-n+5) { width:1%; }
         body.kpi-printing .kpi-table-wrap { overflow:visible; border:none; max-height:none !important; min-height:0 !important; }
         body.kpi-printing table.kpi-table thead th { position:static; }
         body.kpi-printing .kpi-print-head { display:block !important; }
@@ -239,7 +235,7 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
             <select id="yearSel"></select>
             <button id="btnRecalcYear" title="重新計算本年度所有自動指標(已結束月份)" style="display:none;">
                 <i class="fa fa-refresh"></i> 重算本年</button>
-            <button id="btnFill" style="display:none;" title="整張表直接填寫（補舊年度資料用，不需逐格填原因）">
+            <button id="btnFill" style="display:none;" onclick="toggleFill()" title="整張表直接填寫（補舊年度資料用，不需逐格填原因）">
                 <i class="fa fa-table"></i> 補登模式</button>
             <button id="btnUpload"><i class="fa fa-paperclip"></i> 上傳佐證</button>
             <button id="btnCsv"><i class="fa fa-file-text-o"></i> 匯出CSV</button>
@@ -1282,7 +1278,12 @@ function printKpi(){
     document.body.style.zoom = 1;
     // 量測「即將列印」版面（此時工具列/圖表已被 body.kpi-printing 隱藏、表頭已顯示）算出縮放比例，塞滿選定紙張的一頁
     var natW = document.getElementById('kpiTable').scrollWidth;
-    var natH = document.querySelector('.right_col').scrollHeight;
+    // 高度不可以拿 .right_col.scrollHeight——Gentelella 的 .right_col 有 min-height 撐著，
+    // 實測內容只有 424px 卻量到 1296px，縮放比例因此被壓到 0.52，列印出來字小得看不清楚
+    // （2026-09-15 使用者回報）。改成量「列印表頭＋表格」的實際高度。
+    var _ph = document.getElementById('kpiPrintHead');
+    var natH = (_ph && _ph.offsetHeight ? _ph.offsetHeight : 0)
+             + document.getElementById('kpiTable').offsetHeight + 8;
     var safeMm = 6; // 印表機不可印邊界安全值
     var pageWpx = kpiMmToPx(size.w - 8*2 - safeMm);
     var pageHpx = kpiMmToPx(size.h - 10 - 14 - safeMm);
