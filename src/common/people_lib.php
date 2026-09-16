@@ -285,6 +285,116 @@ if (!function_exists('eg_people_list_asof')) {
     }
 }
 
+if (!function_exists('eg_people_posts_asof')) {
+    /**
+     * 「某個日期當時」的逐職務人員清單（ai-rules/22 的職務層級版本，**唯一實作**）
+     *
+     * 與 eg_people_posts() 的三點差異（跟 eg_people_list_asof() 對 eg_people_list() 的差異同一套精神）：
+     *   1. 在職判定看該日期——該日之後才入職的不列、該日之前已離職的不列、
+     *      **該日還在職、之後才離職的要列**（補歷史單據時才選得到當時的人，標 is_former=1）。
+     *   2. 部門／職稱由 user_position_history 回推**當時**的（沒補登過異動的人＝現況）。
+     *   3. dept_ids 篩選比對的也是「當時」的部門，不是現在的部門。
+     *
+     * 為什麼一定要有這支：凡是「挑職務」而不是「挑人」的單據（稽核員／陪檢員／申請人／製表人…），
+     * 用 eg_people_posts() 就等於一律以**今天**的在職狀態與職務去解析——補歷史單據時當時在職的人
+     * 挑不到、當時的職稱也印成現在的。這個坑已經在多個模組各踩一次（文件制修申請單、內部稽核…），
+     * 所以收斂成共用庫，各頁不要再自己寫一份（鐵律4）。
+     *
+     * @param array  $opt  states / dept_ids（當時的部門）/ user_ids
+     * @param string $date Y-m-d；格式不合法或空字串時退回 eg_people_posts()（現況），不擋流程
+     * @return array 每列＝eg_people_posts() 的欄位，另加 is_former（現已離職）、asof_date
+     */
+    function eg_people_posts_asof(PDO $db, array $opt, string $date): array {
+        $date = trim($date);
+        if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $date)) return eg_people_posts($db, $opt);
+        require_once __DIR__ . '/position_history_lib.php';
+
+        $exclude = array_map('intval', explode(',', EG_PEOPLE_EXCLUDE_STATES));
+        $states  = isset($opt['states']) && is_array($opt['states']) ? array_map('intval', $opt['states']) : [1, 2, 3];
+        $states  = array_values(array_diff($states, $exclude));
+        if (!$states) return [];
+        $states[] = 0;   // 當時在職、現已離職的人要列得出來（下面再依離職日逐一過濾）
+
+        $deptIds = isset($opt['dept_ids']) && is_array($opt['dept_ids'])
+                 ? array_values(array_filter(array_map('intval', $opt['dept_ids']))) : [];
+        $userIds = isset($opt['user_ids']) && is_array($opt['user_ids'])
+                 ? array_values(array_filter(array_map('intval', $opt['user_ids']))) : [];
+
+        $where  = ["u.state IN (" . implode(',', array_unique($states)) . ")"];
+        $params = [];
+        if ($userIds) $where[] = "u.id IN (" . implode(',', $userIds) . ")";
+        // 該日之前已入職、且該日還沒離職（離職日沒登錄的離職者一律不列——不知道他哪天走的）
+        $where[] = "(u.hire_date IS NULL OR u.hire_date <= ?)";                          $params[] = $date;
+        $where[] = "(u.state <> 0 OR (u.leave_date IS NOT NULL AND u.leave_date >= ?))"; $params[] = $date;
+        try {
+            $st = $db->prepare("SELECT u.id, u.user_cname, u.user_uname, u.state FROM `user` u
+                                WHERE " . implode(' AND ', $where));
+            $st->execute($params);
+            $users = $st->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) { return []; }
+        if (!$users) return [];
+
+        // 部門／職稱的名稱與排序一律取「目前設定值」，查不到才退回快照裡當時存下來的名稱
+        // （快照沒有 sort_order，而改名後仍是同一個部門，用現名比較不會讓人以為是別的單位）
+        $deptMap = $posMap = [];
+        try {
+            foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d)
+                $deptMap[(int)$d['id']] = ['name' => (string)$d['name'], 'sort' => (int)$d['s']];
+            foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM position")->fetchAll(PDO::FETCH_ASSOC) as $p)
+                $posMap[(int)$p['id']]  = ['name' => (string)$p['name'], 'sort' => (int)$p['s']];
+        } catch (Throwable $e) {}
+
+        $snapAll = eg_position_snapshot_at_bulk($db, $date);
+        $leave   = eg_people_long_leave_map($db, array_map(fn($u) => (int)$u['id'], $users));
+
+        $out = [];
+        foreach ($users as $u) {
+            $uid  = (int)$u['id'];
+            $snap = $snapAll[$uid] ?? [];
+            if (!$snap) continue;                       // 當時沒有任何職務＝挑不到，也印不出部門職稱
+            $isFormer = ((int)$u['state'] === 0) ? 1 : 0;
+            $lv = $leave[$uid] ?? null;
+            foreach ($snap as $s) {
+                $did = (int)($s['department_id'] ?? 0);
+                $pid = (int)($s['position_id'] ?? 0);
+                if ($deptIds && !in_array($did, $deptIds, true)) continue;
+                $dn   = $deptMap[$did]['name'] ?? (string)($s['department_name'] ?? '');
+                $pn   = $posMap[$pid]['name']  ?? (string)($s['position_name'] ?? '');
+                $main = (int)($s['is_main'] ?? 0);
+                $out[] = [
+                    'id'            => $uid,
+                    'user_cname'    => (string)$u['user_cname'],
+                    'user_uname'    => (string)($u['user_uname'] ?? ''),
+                    'state'         => (int)$u['state'],
+                    'state_label'   => eg_people_state_label($u['state']),
+                    'dept_id'       => $did ?: null,
+                    'dept_name'     => $dn,
+                    'dept_sort'     => $deptMap[$did]['sort'] ?? 999,
+                    'position_id'   => $pid ?: null,
+                    'position_name' => $pn,
+                    'position_sort' => $posMap[$pid]['sort'] ?? 999,
+                    'is_main'       => $main,
+                    'is_former'     => $isFormer,
+                    'on_leave'      => $lv ? 1 : 0,
+                    'leave_note'    => $lv['note'] ?? '',
+                    'post_key'      => $uid . ':' . $did,
+                    'asof_date'     => $date,
+                    // 欄位順序固定「部門/職稱/姓名」（鐵則第 5 條）
+                    'display'       => trim($dn . '　' . $pn . '　' . $u['user_cname'])
+                                     . ($main ? '' : '（兼任）')
+                                     . ($isFormer ? '（已離職）' : '')
+                                     . ($lv ? '［' . $lv['note'] . '］' : ''),
+                ];
+            }
+        }
+        usort($out, function ($a, $b) {
+            return [$a['dept_sort'], (int)$a['dept_id'], $a['position_sort'], (int)$a['position_id'], $a['user_cname'], $a['id']]
+               <=> [$b['dept_sort'], (int)$b['dept_id'], $b['position_sort'], (int)$b['position_id'], $b['user_cname'], $b['id']];
+        });
+        return $out;
+    }
+}
+
 if (!function_exists('eg_people_multi_dept')) {
     /** 這批人是否跨部門（true＝列表必須顯示部門欄，鐵則第 4 條） */
     function eg_people_multi_dept(array $rows): bool {
