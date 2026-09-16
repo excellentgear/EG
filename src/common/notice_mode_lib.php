@@ -71,3 +71,29 @@ if (!function_exists('eg_notice_mode_label')) {
         }
     }
 }
+
+if (!function_exists('eg_notice_allow_sign_only')) {
+    /**
+     * 這種來源的 reply 通知「回覆內容是選填的」＝只按回簽也算完成（唯一實作，前後端都以此為準）。
+     * 會議記錄項目確認：負責人本來就只是要確認「這件事我知道了、我負責」，要不要留言由他自己決定
+     * （2026-09-16 使用者明確要求：負責人為指定人員時每個人都要回簽，回覆內容可自行決定寫不寫）。
+     * 新來源要加進來時只改這裡，不要在各前端各寫一份 ref_type 判斷。
+     */
+    function eg_notice_allow_sign_only(?string $refType): bool
+    {
+        return in_array((string)$refType, ['MEETING_ITEM_CONFIRM'], true);
+    }
+}
+
+if (!function_exists('eg_notice_mode_label_for')) {
+    /**
+     * 通知跳窗上「需求：○○」要印的字。
+     * reply 模式預設是「回覆 + 回簽」＝兩件事都要做；但 eg_notice_allow_sign_only() 的來源其實
+     * 回覆內容選填，仍印「回覆 + 回簽」會讓人以為非留言不可（使用者實測回報「為什麼需要回覆」）。
+     */
+    function eg_notice_mode_label_for(?string $mode, ?string $refType): string
+    {
+        if ($mode === 'reply' && eg_notice_allow_sign_only($refType)) return '回簽（回覆內容選填）';
+        return eg_notice_mode_label($mode);
+    }
+}

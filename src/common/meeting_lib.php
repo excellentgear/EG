@@ -422,6 +422,9 @@ function meeting_display_status(PDO $db, array $m): string {
     $itq->execute([$meetingId]);
     $items = $itq->fetchAll(PDO::FETCH_ASSOC);
     if (!$items) return $raw;
+    // 有項目還沒指定負責人＝根本還不能送（meeting_submit_blocker 會擋下），不可標成「待送簽核」，
+    // 否則畫面寫著可以送、按下去卻被擋，使用者只會覺得系統壞了
+    if (meeting_items_missing_owner($db, $meetingId)) return $raw;
     foreach ($items as $it) {
         if (!meeting_item_is_confirmed($db, $it)) return $raw;
     }
@@ -650,21 +653,34 @@ function meeting_close_single_item_notice(PDO $db, int $itemId): void {
  */
 function meeting_item_notice_text(PDO $db, array $m, array $item, array $targets): array {
     $ownerIds = array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_depts'] ?? '')))));
+    $ownerUserIds = $ownerIds ? [] : array_values(array_filter(array_map('intval', explode(',', (string)($item['owner_users'] ?? '')))));
+    $nameOf = function (array $ids) use ($db): array {
+        if (!$ids) return [];
+        $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
+        return array_map(function ($tid) use ($db, $st) { $st->execute([$tid]); return (string)($st->fetchColumn() ?: $tid); }, $ids);
+    };
+    // 完成規則兩種模式完全不同，通知上一定要寫對（2026-09-16 使用者回報：指名 11 個人的項目，通知卻寫
+    // 「任一人回覆即完成，不需每人都回」——後端 meeting_item_is_confirmed() 其實要求**每一位指定人員都要
+    // 各自回簽**才算完成，通知寫反了，收到的人會以為別人回過就不干他的事，這一項就永遠卡在回簽中）。
+    //   ・指定人員模式：一人一格簽名，每位都要各自回簽（回覆內容可留白，只按「僅回簽」也算數）
+    //   ・部門模式：一個部門一格簽名，該部門任一人回覆即完成該部門的確認
     if ($ownerIds) {
         $inDept = implode(',', $ownerIds);
         $ownerLabel = '負責部門：' . implode('、', $db->query("SELECT name FROM department WHERE id IN ($inDept)")->fetchAll(PDO::FETCH_COLUMN));
+        $rule = count($targets) > 1 ? "\n（同一個負責部門只要任一人回覆，即完成該部門的確認）" : '';
     } else {
-        $ownerLabel = '負責人：' . implode('、', array_map(function ($tid) use ($db) {
-            $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $st->execute([$tid]);
-            return (string)($st->fetchColumn() ?: $tid);
-        }, $targets));
+        // 指名的人全部列出（不是只列「還沒回的那幾位」），對方才看得出這一項總共要幾個人簽、自己是其中之一
+        $ownerLabel = '負責人：' . implode('、', $nameOf($ownerUserIds ?: $targets));
+        $rule = count($ownerUserIds) > 1
+            ? ("\n（本項目指名 " . count($ownerUserIds) . " 位負責人，每一位都要各自回簽才算完成，不是任一人回覆就好；"
+               . "回覆內容可以留白，直接按「僅回簽（不留言）」也算完成）")
+            : "\n（回覆內容可以留白，直接按「僅回簽（不留言）」也算完成）";
     }
     return [
         'title'   => '「' . $m['subject'] . '」會議記錄項目待確認：' . mb_substr((string)$item['content'], 0, 30),
         'content' => '「' . $m['subject'] . '」（' . $m['meeting_date'] . '）會議記錄的以下負責項目請確認並回覆：' . "\n" . $item['content']
                    . ($item['due_date'] ? ("\n應完成日期：" . $item['due_date']) : '')
-                   . "\n" . $ownerLabel
-                   . (count($targets) > 1 ? "\n（任一人回覆即完成，不需每人都回）" : ''),
+                   . "\n" . $ownerLabel . $rule,
     ];
 }
 
@@ -816,6 +832,29 @@ function meeting_auto_submit_enabled(PDO $db): bool {
     return meeting_setting_get($db, 'meeting_auto_submit', '1') === '1';
 }
 
+/**
+ * 「還沒指定負責人／負責部門」的項目（2026-09-16 使用者回報：上級指示要項沒有選負責人也送得出去）。
+ * 這種項目 meeting_item_is_confirmed() 一律回 true（沒有負責人＝沒有人要確認），於是整張記錄可以
+ * 一路送到主席簽核，紙本上那一格卻是空的，事後沒有人知道這件事該找誰——所以在送出／通知前就要擋下來。
+ * **宣布事項（kind=announce）不在此限**：它本來就只是宣布，沒有應完成日期、負責人與確認簽名欄。
+ * 回傳每項的顯示標籤，例：['上級指示要項第 1 項「AS 稽核延期…」', …]；空陣列＝全部都有指定。
+ */
+function meeting_items_missing_owner(PDO $db, int $meetingId): array {
+    $st = $db->prepare("SELECT kind, sort_order, item_id, content, owner_depts, owner_users
+                          FROM meeting_item WHERE meeting_id=? ORDER BY kind, sort_order, item_id");
+    $st->execute([$meetingId]);
+    $seq = []; $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $it) {
+        $kind = (string)$it['kind'];
+        if ($kind === 'announce') continue;                       // 宣布事項不需要負責人
+        $seq[$kind] = ($seq[$kind] ?? 0) + 1;                     // 序號依畫面上各表格自己從 1 開始
+        if (trim((string)($it['owner_depts'] ?? '')) !== '' || trim((string)($it['owner_users'] ?? '')) !== '') continue;
+        $out[] = ($kind === 'directive' ? '上級指示要項' : '會議要項') . '第 ' . $seq[$kind] . ' 項「'
+               . mb_substr((string)$it['content'], 0, 20) . '」';
+    }
+    return $out;
+}
+
 /** 可不可以送主席簽核：回傳擋下的原因（空字串＝三個條件都到齊、可以送）。
  *  手動送出用它產生錯誤訊息，自動送出用它判斷時機，兩邊規則保證一致（不要各寫一份）。 */
 function meeting_submit_blocker(PDO $db, array $m): string {
@@ -830,6 +869,8 @@ function meeting_submit_blocker(PDO $db, array $m): string {
     if (!$items) return '請至少建立一項會議要項或上級指示要項';
     $un = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=? AND signed=0"); $un->execute([$id]);
     if ((int)$un->fetchColumn() > 0) return '尚有出席人員未完成現場簽到，請先完成全部出席人員簽到再送出';
+    $miss = meeting_items_missing_owner($db, $id);
+    if ($miss) return '下列項目尚未指定負責人／負責部門，請先指定：' . implode('、', $miss);
     foreach ($items as $it) {
         if (!meeting_item_is_confirmed($db, $it)) {
             return '項目「' . mb_substr((string)$it['content'], 0, 20) . '…」尚有負責部門/指定人員未確認回簽，請先「存檔並通知」，待對方回覆確認後再送出';

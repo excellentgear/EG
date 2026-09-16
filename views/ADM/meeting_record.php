@@ -575,7 +575,9 @@ foreach ($roleRows as $rr) {
         　－<b>選部門</b>（可多選）：<b>每個負責部門各要一位代表簽名</b>，系統依序自動算出誰要簽（現場只有算出的那位本人能輸入密碼簽這格）：①該部門本次以<b>主要角色</b>出席的主管優先（有設職級的職稱，如經理/副理/課長/組長等）②該部門沒有主要角色主管出席，才由<b>兼任</b>該部門主管的出席者代簽 ③連兼任主管都沒有，才由該部門出席人員中職稱排序最高者代簽（②③兩種情況章旁都標示「(代)」，不特別區分是否兼任）。<br>
         　－<b>指定人員</b>（可多選）：直接指名的人只要本次有出席就是必簽者，不套用主管優先判定；沒指定到部門，不論那位人員屬於哪個部門都是他本人簽。<br>
         　－<b>怎麼挑</b>：儲存格內只顯示已選的人（按標籤上的 × 可直接移除），按<b>「選擇人員」</b>開挑選跳窗——<b>先選部門、再從該部門的人裡面挑</b>（部門<b>含子部門</b>，例如選「資材部」會一併列出生管組／採購組／倉管組的人；<b>兼任</b>該部門的人也會出現，並顯示他在<b>該部門</b>的職稱）。不確定在哪個部門時，把部門留在「全部部門」直接打姓名即可，關鍵字也吃部門與職稱。清單一列一人、<b>部門／職稱／姓名</b>分欄對齊，兼多個職務的人會標「＋另有 N 個職務」（滑鼠移上去看全部）。「選擇負責部門」是同一個跳窗。<br>
-        兩種模式下，負責人（部門或指定人員）本次沒有人出席、或現場代表尚未來得及簽名時，「存檔並通知」都會改發通知（該部門本次所有出席人員＋部門主管，或指定人員本人）請對方回覆確認，任一人回覆即算完成，回覆內容會顯示在項目下方；同一份通知一旦有人完成回覆就會自動關閉，其他被通知的人之後開啟只會看到唯讀狀態，不會再重複送出回覆蓋掉別人。<br>
+        　－<b>負責人／負責部門是必填</b>（宣布事項除外）：沒有指定的項目在畫面上會整列標紅，<b>存檔並通知／送簽核都會被擋下</b>並列出是哪幾項。理由很實際——沒有負責人就不會有人收到通知、也不會有人簽名，那一格在紙本上就是空白，事後沒有人知道這件事該找誰。單純要宣布、不需要任何人負責的內容，請改建在<b>「宣布事項」</b>表格（沒有應完成日期／負責人／確認簽名欄）。<br>
+        兩種模式下，負責人（部門或指定人員）本次沒有人出席、或現場代表尚未來得及簽名時，「存檔並通知」都會改發通知（該部門本次所有出席人員＋部門主管，或指定人員本人）請對方回覆確認，回覆內容會顯示在項目下方。<b>完成的條件兩種模式不一樣</b>：<b>選部門</b>＝<b>該部門任一人</b>回覆即完成該部門那一格；<b>指定人員</b>＝<b>每一位被指名的人都要各自回簽</b>（一人一格簽名，不是任一人回覆就好），回覆內容可自行決定寫不寫，直接按通知上的<b>「僅回簽（不留言）」</b>也算完成。整項全部到齊後那則通知才會自動關閉，其他人之後開啟只會看到唯讀狀態。<br>
+        　－<b>為什麼只有某些人有「密碼回簽」欄</b>：現場輸入密碼簽名只開放給<b>本次有出席</b>的人（沒出席的人不在現場，不可能當場輸入自己的密碼）；沒出席的負責人一律走通知回簽，畫面上會標明「本次未出席，已發通知請本人在系統內回簽」。兩種方式完成的效力完全相同。<br>
         　－<b>確認簽名一多時怎麼顯示</b>：畫面上每一項<b>預設只顯示前 3 顆簽名章</b>，其餘收起來按「還有 N 位，展開」才出現（尚未回簽、還要輸入密碼的欄位一律不收，以免找不到地方簽）。<b>列印</b>時該欄放得下 1 顆章，超過就改印<b>「已確認 N 位（詳見附表）」</b>，全部簽名章移到最後面的<b>「確認簽名附表」</b>逐項列出——原本超出的章會被<b>安靜裁掉、紙上完全看不出少了人</b>，這在管制文件上不可接受，故一律改走附表。只有 1 位確認的項目維持直接蓋在表內，不會多印附表那一頁。<br>
         <b>⑥插入出貨目標達成率</b>：草稿階段可按「插入本月數據」，系統會先確認出貨資料已更新至前一個工作天，未達標會提示還差幾天，不會插入不完整的數字；插入後的數字是<b>當下的快照</b>，之後不會再變動。已完成核准的會議記錄在「檢視」畫面也能再插入/更新：一般人插入後會<b>清空目前簽核紀錄改回草稿</b>，需重新送出取得主席／總經理簽章；<b>超級管理員</b>插入後<b>維持已核准狀態</b>，不需重新送審。
         <h4>重要行為</h4>
@@ -584,7 +586,9 @@ foreach ($roleRows as $rr) {
         ・列印的會議記錄／空白簽到表<b>不含電子簽章</b>，供現場紙本簽名或掃描存查；主席／總經理的簽核仍在系統內完成並自動蓋章存證；出席人員<b>全部完成電子簽到</b>後會多一顆「列印簽到表」按鈕，印出來的是已蓋章版；有插入出貨目標達成率時會多一顆「列印出貨目標達成率」按鈕。<b>每顆列印按鈕各自印一份文件</b>（不提供多份文件合併列印），確保各自的AS文件編號都能正確印在頁面右下角。<br>
         ・主席或總經理今日若有請假等行程，會自動由代理人處理（依「代理系統設定」解析，不必自己找人代簽）。<br>
         ・清單上方「狀態」按鈕可複選篩選（點選切換開關），每顆按鈕會顯示目前年度符合筆數。<br>
-        ・出席簽到蓋章的日期一律顯示<b>會議日期</b>（不論實際點擊簽到當下是哪一天），實際簽到時間僅另外標示供稽核參考。
+        ・出席簽到蓋章的日期一律顯示<b>會議日期</b>（不論實際點擊簽到當下是哪一天），實際簽到時間僅另外標示供稽核參考。<br>
+        ・「存檔並通知」發出的回簽通知，<b>公告者一律記這份會議記錄的「記錄」人</b>（即使是管理員代為按下按鈕），收到的人才看得出這是誰的會議、要找誰問。<br>
+        ・<b>宣布事項</b>在檢視畫面與列印版都會獨立列在最前面一張表（欄位只有序號／宣布事項／備註），不需要應完成日期、負責人與確認簽名。
         <h4>設定入口</h4>
         「常用設定」（主題旁的齒輪連結，僅管理員看得到）：維護主題+地點+時間的組合，供新增會議時一鍵套用（套用後仍可自行修改，不會鎖死）。
         <h4>權限角色</h4>
@@ -932,12 +936,14 @@ function renderAtt(){
 function mtReadiness(){
     var allSigned = ATT.length>0 && ATT.every(function(a){ return +a.signed===1; });
     var pending = ITEMS_D.concat(ITEMS_G).filter(function(it){
-        var hasOwner = (it.owner_depts&&it.owner_depts.length) || (it.owner_users&&it.owner_users.length);
-        if (!hasOwner) return false;
+        if (!itemHasOwner(it)) return false;
         var slots = it.confirm_slots||[];
         return !(slots.length>0 && slots.every(function(s){ return s.signed; }));
     }).length;
-    return {allSigned:allSigned, pending:pending};
+    // 編輯畫面的項目分成兩個陣列，補回 kind 才能用跟檢視畫面/後端同一套「第幾項」編號規則
+    var all = ITEMS_D.map(function(it){ return $.extend({kind:'directive'}, it); })
+             .concat(ITEMS_G.map(function(it){ return $.extend({kind:'general'}, it); }));
+    return {allSigned:allSigned, pending:pending, noOwner:itemsMissingOwner(all)};
 }
 function refreshEdSubmitBtn(){
     var r = mtReadiness();
@@ -1071,10 +1077,11 @@ function renderItems(kind){
     }
     a.forEach(function(it,i){
         var slots = it.confirm_slots||[], doneN = slots.filter(function(s){ return s.signed; }).length;
-        var hasOwner = (it.owner_depts&&it.owner_depts.length) || (it.owner_users&&it.owner_users.length);
+        var hasOwner = itemHasOwner(it);
         var confirmTxt = slots.length ? ('<span class="'+(doneN===slots.length?'confirm-yes':'confirm-no')+'">已簽 '+doneN+'/'+slots.length+'</span>')
                         : (hasOwner ? '<span class="confirm-no">負責人本次未出席</span>' : '<span class="confirm-no">未指派負責人</span>');
-        h += '<tr><td style="text-align:center;">'+(i+1)+'</td>'
+        // 未指定負責人的列標紅底：送出時會被擋下(前端+後端)，要讓人在填的當下就看見，而不是按了送出才知道
+        h += '<tr'+(hasOwner?'':' style="background:#FBE3DC;"')+'><td style="text-align:center;">'+(i+1)+'</td>'
            + '<td><textarea onchange="itemEdit(\''+kind+'\','+i+',\'content\',this.value)">'+esc(it.content||'')+'</textarea></td>'
            + '<td><input type="date" max="9999-12-31" value="'+esc(it.due_date||'')+'" onchange="itemEdit(\''+kind+'\','+i+',\'due_date\',this.value)"></td>'
            + '<td>'+ownerPickHtml(kind,i,it)+'</td>'
@@ -1092,7 +1099,10 @@ function renderItems(kind){
 function ownerPickHtml(kind,i,it){
     var mode = it.owner_mode || ((it.owner_users&&it.owner_users.length) ? 'user' : 'dept');
     var toggle = '<a href="javascript:void(0)" style="font-size:11px;display:block;" onclick="toggleOwnerMode(\''+kind+'\','+i+')">切換：'+(mode==='dept'?'改指定人員':'改選部門')+'</a>';
-    return toggle + (mode==='user' ? userPickHtml(kind,i,it.owner_users||[]) : deptPickHtml(kind,i,it.owner_depts||[]));
+    // 空著就講明原因（鐵律8 的「錯誤即時顯示原因」）：送出時一定會被擋，不要等按了送出才說
+    var warn = itemHasOwner(it) ? ''
+             : '<div class="errmsg" style="margin-top:2px;">必填：請指定負責部門或人員<br>（只是宣布事項請改建在「宣布事項」）</div>';
+    return toggle + (mode==='user' ? userPickHtml(kind,i,it.owner_users||[]) : deptPickHtml(kind,i,it.owner_depts||[])) + warn;
 }
 function toggleOwnerMode(kind,i){
     var a = itemsArr(kind)[i]; if (!a) return;
@@ -1454,6 +1464,17 @@ function saveDraft(thenSubmit){
     if (!edTimeValidate()){ alert('時間欄位有誤，請先修正'); return; }
     if (thenSubmit && !$('#edChair').val()){ alert('送出前請先指定主席'); return; }
     if (thenSubmit && !ATT.length){ alert('送出前請先加入出席人員'); return; }
+    // 沒指定負責人／負責部門的項目不可送出(2026-09-16 使用者回報)：那種項目不會通知任何人、也不會有人
+    // 簽名，卻能一路送到主席簽核，紙本上就是一格空白。後端 meeting_items_missing_owner() 會再擋一次。
+    if (thenSubmit) {
+        var miss = mtReadiness().noOwner;
+        if (miss.length) {
+            alert('下列項目尚未指定負責人／負責部門，請先指定後再送出：\n\n' + miss.join('\n')
+                  + '\n\n（宣布事項不需要負責人；若這幾項本來就只是宣布，請改建在「宣布事項」表格）');
+            renderItems('directive'); renderItems('general');   // 重畫讓紅框標示出來
+            return;
+        }
+    }
     $.post(API, gatherPayload(), function(res){
         if (!res.ok){ alert(res.error||'儲存失敗'); return; }
         EDIT_ID = res.meeting_id;
@@ -1520,8 +1541,11 @@ function viewHtml(res){
         var canAdjOwner = (m.approval_status==='notifying') && (+m.recorder_user_id===META.uid || PERMS.canAdmin);
         rows.forEach(function(it, idx){
             var deptNames = ownerDisplayText(it);
-            t += '<tr><td>'+(idx+1)+'</td><td>'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+dispDate(it.due_date)+'</td>'
-               + '<td>'+esc(deptNames||'—')
+            // 沒指定負責人的項目一定要一眼看得出來（2026-09-16 使用者回報：沒選負責人也送得出去，
+            // 紙本上那一格就是空白，事後沒人知道該找誰）；送出前端與後端都會擋，這裡負責講清楚是哪一項。
+            var noOwner = !itemHasOwner(it);
+            t += '<tr'+(noOwner?' style="background:#FBE3DC;"':'')+'><td>'+(idx+1)+'</td><td>'+esc(it.content).replace(/\n/g,'<br>')+'</td><td>'+dispDate(it.due_date)+'</td>'
+               + '<td>'+(noOwner ? '<span style="color:#DD5138;font-weight:bold;">⚠ 尚未指定負責人／負責部門</span>' : esc(deptNames||'—'))
                + (canAdjOwner ? '<br><a href="javascript:void(0)" style="font-size:11px;" onclick="openOwnerAdjust('+it.item_id+')">'
                                 + '<i class="fa fa-pencil"></i> 調整負責人</a>' : '')
                + '</td>'
@@ -1531,7 +1555,20 @@ function viewHtml(res){
         });
         return t + '</table>';
     }
-    h += itemsTable('directive','上級指示要項') + itemsTable('general','會議要項');
+    // 宣布事項(2026-09-16 使用者回報「狀態＝回簽中為什麼沒有顯示出宣布事項」)：這一區之前**從來沒有**被畫出來
+    // ——不是因為狀態，而是檢視畫面只畫了 directive/general 兩種。宣布事項本來就沒有應完成日期／負責人／確認
+    // 簽名欄(欄位與列印版 announceItemRows() 完全一致)，所以獨立一張表在最前面，跟紙本的排法相同。
+    function announceTable(){
+        var rows = (res.items||[]).filter(function(it){ return it.kind==='announce'; });
+        if (!rows.length) return '';
+        var t = '<h5>宣布事項</h5><table><tr><th style="width:40px;">序</th><th>宣布事項</th><th style="width:140px;">備註</th></tr>';
+        rows.forEach(function(it, idx){
+            t += '<tr><td>'+(idx+1)+'</td><td>'+esc(it.content).replace(/\n/g,'<br>')+'</td>'
+               + '<td>'+esc(it.remark||'')+'</td></tr>';
+        });
+        return t + '</table>';
+    }
+    h += announceTable() + itemsTable('directive','上級指示要項') + itemsTable('general','會議要項');
 
     if (m.kpi_snapshot_json) {
         h += '<h5>出貨目標達成率</h5>' + kpiReportHtml(JSON.parse(m.kpi_snapshot_json));
@@ -1557,7 +1594,10 @@ function viewHtml(res){
     // 不送交主席簽核）；全部確認完成後才會顯示「送簽核」真正送交主席簽核。
     if (m.can_edit) {
         var rdy = mtReadinessFromView(res);
-        if (!rdy.allSigned) {
+        if (rdy.noOwner.length) {
+            h += '<div class="mt-hint" style="color:#DD5138;border-color:#DD5138;">下列項目尚未指定負責人／負責部門，指定後才能送出（沒有負責人就不會有人收到通知、也不會有人簽名）：<br>'
+               + rdy.noOwner.map(esc).join('<br>') + '<br>請按上方「編輯」補上。</div>';
+        } else if (!rdy.allSigned) {
             h += '<div class="mt-hint">尚有出席人員未完成現場簽到，全部簽到後才能送出。</div>';
         } else {
             h += '<div style="margin-top:10px;">'
@@ -1593,16 +1633,34 @@ function viewHtml(res){
     }
     return h;
 }
+/* 這一項有沒有指定負責人／負責部門（編輯畫面是陣列、檢視畫面是後端來的逗號字串，兩種資料型態都要認得）。
+   **宣布事項不需要負責人**，呼叫端自己先排除。判定只有這一份，畫面標紅、擋送出、計算待回簽都用它。 */
+function itemHasOwner(it){
+    function has(v){ return Array.isArray(v) ? v.length>0 : !!(v && String(v).trim()!==''); }
+    return has(it.owner_depts) || has(it.owner_users);
+}
+/* 這張記錄裡「還沒指定負責人」的項目標籤（與後端 meeting_items_missing_owner() 同一套規則與措辭）。 */
+function itemsMissingOwner(items){
+    var seq = {}, out = [];
+    (items||[]).forEach(function(it){
+        if (it.kind==='announce') return;
+        seq[it.kind] = (seq[it.kind]||0) + 1;
+        if (itemHasOwner(it)) return;
+        out.push((it.kind==='directive'?'上級指示要項':'會議要項') + '第 ' + seq[it.kind] + ' 項「'
+                 + String(it.content||'').substr(0,20) + '」');
+    });
+    return out;
+}
 /* 檢視畫面用的送出就緒判斷：資料來自 get_detail 回傳的伺服器現況(比編輯畫面的 mtReadiness 準確，不會有前端暫存過期問題)。 */
 function mtReadinessFromView(res){
     var atts = res.attendees||[];
     var allSigned = atts.length>0 && atts.every(function(a){ return +a.signed===1; });
     var pending = (res.items||[]).filter(function(it){ return it.kind!=='announce'; }).filter(function(it){
-        if (!it.owner_depts && !it.owner_users) return false;
+        if (!itemHasOwner(it)) return false;
         var slots = it.confirm_slots||[];
         return !(slots.length>0 && slots.every(function(s){ return s.signed; }));
     }).length;
-    return {allSigned:allSigned, pending:pending};
+    return {allSigned:allSigned, pending:pending, noOwner:itemsMissingOwner(res.items)};
 }
 /* 檢視畫面直接送出(2026-08-06使用者明確要求)：內容已存檔，不需再gather表單，直接呼叫對應動作即可。
    hasPending=1 時只能存檔並通知(後端 submit 會擋下，不允許負責人未全部確認就送主席簽核)。 */
@@ -1752,6 +1810,14 @@ function toggleConfirmMore(itemId, btn){
 function itemConfirmCellHtml(it){
     var slots = it.confirm_slots || [];
     var signedSeen = 0, inline = '', more = '', moreN = 0;
+    // 指定人員模式（每位各一格）先講清楚規則與進度（2026-09-16 使用者回報「為什麼未回覆中只有康信銘有回簽欄」
+    // ——因為只有他本次有出席、才能當場輸入密碼簽名，其餘的人一律走通知回簽，但畫面上完全看不出這個道理）。
+    var isUserMode = slots.length>0 && slots.every(function(s){ return !s.dept_id; });
+    if (isUserMode && slots.length > 1) {
+        var doneN = slots.filter(function(s){ return s.signed; }).length;
+        inline += '<div style="font-size:11px;color:#8a6d45;margin-bottom:3px;">指名 '+slots.length+' 位負責人，'
+                + '<b>每一位都要各自回簽</b>（已完成 '+doneN+'／'+slots.length+'）</div>';
+    }
     slots.forEach(function(s){
         var html;
         if (s.signed) {
@@ -1770,11 +1836,18 @@ function itemConfirmCellHtml(it){
         }
         // can_sign_in_person=false：這個部門/指定人員本次沒有可現場輸入密碼的人(2026-08-10修正)，
         // 不畫密碼框(反正沒人能簽)，改顯示等待通知回覆的提示，實際狀態看下方 notify_targets/notify_preview。
+        // 2026-09-16：**要寫明為什麼沒有簽名框**——現場密碼簽名只開放給「本次有出席」的人（沒出席的人
+        // 不在現場，不可能當場輸入密碼），其餘一律走通知回簽；不講清楚就會像使用者問的「為什麼只有某某有回簽欄」。
         if (!s.can_sign_in_person) {
-            inline += '<div style="font-size:11px;color:#8a6d45;">'+esc(s.dept_name||s.user_name||'')+'：尚未回覆（已另行通知相關人員）</div>';
+            inline += '<div style="font-size:11px;color:#8a6d45;">'
+                    + esc(s.dept_name || s.user_name || '') + '：尚未回簽　'
+                    + (s.dept_id ? '<span style="color:#a08050;">（該部門本次無人出席，已通知部門主管在系統內回簽）</span>'
+                                 : '<span style="color:#a08050;">（本次未出席，無法現場簽名，已發通知請本人在系統內回簽）</span>')
+                    + '</div>';
             return;
         }
-        inline += '<div class="item-confirm-box"><span style="font-size:11px;">'+esc(s.dept_name||'')+'：'+esc(s.user_name)+slotTag(s)+'</span>'
+        inline += '<div class="item-confirm-box"><span style="font-size:11px;" title="本次有出席，可當場輸入本人密碼回簽">'
+             + esc(s.dept_name ? (s.dept_name+'：') : '')+esc(s.user_name)+slotTag(s)+'（本次出席，可當場簽）</span>'
              + '<input type="password" id="pwConfirm'+it.item_id+'_'+s.user_id+'" placeholder="密碼" style="width:70px;" data-eg-skip'
              + ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();confirmItemWithPassword('+it.item_id+','+s.user_id+');}">'
              + '<button type="button" onclick="confirmItemWithPassword('+it.item_id+','+s.user_id+')">確認</button></div>';
@@ -1866,9 +1939,12 @@ function decide(mid, level, decision){
 function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, showPageCounter){
     if (showPageCounter === undefined) showPageCounter = true;
     var asCss = String(docNo||'').replace(/['\\]/g,'');
+    // 頁邊(2026-09-16 使用者回報「列印太過滿版」)：原本左右只留 8mm，橫式 A4 的版心會到 281mm 寬，
+    // 表格幾乎貼著紙邊，印出來很壓迫、裝訂或印表機不可列印區還會吃掉邊框。改成左右 15mm、上 14mm，
+    // 下緣維持 16mm（頁碼與 AS 編號印在那條頁尾邊界裡，縮了會撞到表格）。
     var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';'
             + (pageCount
-                ? 'margin:12mm 8mm 16mm;' + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
+                ? 'margin:14mm 15mm 16mm;' + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
                 : 'margin:0;')
             + '}'
             + (pageCount ? '' : 'html,body{margin:0;padding:0;}')
@@ -1881,7 +1957,7 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, s
     var w = window.open('', '_blank');
     if (!w){ alert('請允許彈出視窗'); return; }
     var onloadJs = (pageCount && showPageCounter)
-        ? ('var onePageA4=('+(landscape?'210':'297')+'-28)*96/25.4;'
+        ? ('var onePageA4=('+(landscape?'210':'297')+'-30)*96/25.4;'   // 30＝上下頁邊 14+16mm，跟上面的 @page 一組
           +'if(document.body.scrollHeight>onePageA4*0.92){'
           +'var st=document.createElement(\'style\');'
           +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; } }";'

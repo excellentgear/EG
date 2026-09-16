@@ -757,7 +757,9 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 var reqId = res.event.ref_id || 0;
                 h += '<a class="eg-btn eg-btn-ghost" target="_blank" href="../pages/stock.php?req=' + reqId + '" style="display:inline-block;margin-bottom:8px;"><i class="fa fa-external-link"></i> 開新分頁查看領料單</a>';
             }
-            h += '<div class="eg-nm-modebadge mode-' + mode + '">需求：' + modeName[mode] + '</div>';
+            // 需求字樣一律以後端回的 mode_label 為準（唯一實作 notice_mode_lib.php）：會議記錄項目確認這種
+            // 「回覆內容選填」的通知若照印「回覆 + 回簽」，收到的人會以為非留言不可（2026-09-16 使用者回報）
+            h += '<div class="eg-nm-modebadge mode-' + mode + '">需求：' + nmEsc(res.mode_label || modeName[mode]) + '</div>';
             h += '<div class="eg-nm-mystatus">' + nmStatusLine(st) + '</div>';
 
             var done = st && (((mode === 'read' || mode === 'autoread') && st.read_at) || (mode === 'sign' && st.signed_at) || (mode === 'reply' && (st.replied_at || st.signed_at)));
@@ -785,7 +787,7 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
             } else { // reply
                 // 部分 ref_type（如 MEETING_ITEM_CONFIRM）後端已相容「僅回簽不留言」(action=sign)，
                 // 這類通知回覆內容改選填，並多給一顆「僅回簽」按鈕；其餘 ref_type 維持原本強制留言。
-                var allowSignOnly = res.event && res.event.ref_type === 'MEETING_ITEM_CONFIRM';
+                var allowSignOnly = !!res.allow_sign_only;
                 if (done) {
                     if (st.replied_at) {
                         h += '<div class="eg-nm-doneok"><i class="fa fa-check-circle"></i> 已回覆</div>';

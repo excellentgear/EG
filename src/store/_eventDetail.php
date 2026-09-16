@@ -110,6 +110,10 @@ try {
         ],
         'attachments' => $attachments,
         'my_mode' => $myMode,
+        // 「需求：○○」的字與「回覆內容是否選填」一律由後端決定（唯一實作 notice_mode_lib.php），
+        // 各前端不要各自再用 ref_type 判一次（電腦版與手機版一定會走鐘）
+        'mode_label' => eg_notice_mode_label_for($myMode, $event['ref_type'] ?? ''),
+        'allow_sign_only' => eg_notice_allow_sign_only($event['ref_type'] ?? ''),
         'my_status' => $mine ? [
             'read_at' => $mine['read_at'], 'signed_at' => $mine['signed_at'],
             'reply_content' => $mine['reply_content'], 'replied_at' => $mine['replied_at'], 'files' => $myFiles,

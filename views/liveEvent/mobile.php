@@ -286,7 +286,8 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
         function buildAction(res){
             var mode = res.my_mode, s = res.my_status, h = '';
             var mbcls = modeBadgeCls;
-            h += '<span class="modebadge ' + mbcls[mode] + '">需求：' + modeName[mode] + '</span>';
+            // 需求字樣以後端回的 mode_label 為準（與電腦版同一份判定，見 notice_mode_lib.php）
+            h += '<span class="modebadge ' + mbcls[mode] + '">需求：' + esc(res.mode_label || modeName[mode]) + '</span>';
             // 目前狀態
             var line = '';
             if (s){
@@ -317,7 +318,7 @@ $openEvent = isset($_GET['event']) ? (int)$_GET['event'] : 0;
             } else { // reply
                 // 部分 ref_type（如 MEETING_ITEM_CONFIRM）後端已相容「僅回簽不留言」(action=sign)，
                 // 這類通知回覆內容改選填，並多給一顆「僅回簽」按鈕；其餘 ref_type 維持原本強制留言。
-                var allowSignOnly = res.event && res.event.ref_type === 'MEETING_ITEM_CONFIRM';
+                var allowSignOnly = !!res.allow_sign_only;
                 if (done && s.replied_at){
                     h += '<div class="doneok"><i class="fa fa-check-circle"></i> 已回覆</div>';
                     if (s.reply_content) h += '<div class="lbl">我的回覆：</div><div class="replyshow">' + esc(s.reply_content) + '</div>';

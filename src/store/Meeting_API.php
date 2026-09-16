@@ -651,8 +651,10 @@ case 'submit': {
 }
 
 /* 存檔並通知(2026-08-10新增，使用者明確要求)：出席人員全部簽到後，若負責部門/指定人員尚未確認回簽，
-   一律先「存檔並通知」而不是直接送主席簽核——通知該部門本次所有出席人員＋部門主管(或指定人員本人)，
-   任一人回覆即完成該項目；全部項目都確認後才能真正 action=submit 送交主席簽核。
+   一律先「存檔並通知」而不是直接送主席簽核——通知該部門本次所有出席人員＋部門主管(或指定人員本人)。
+   完成規則兩種模式不同(2026-09-16 使用者明確要求，見 meeting_item_is_confirmed)：**部門模式**該部門任一人
+   回覆即完成該部門；**指定人員模式**每一位指定人員都要各自回簽才算完成。全部項目都確認後才能真正
+   action=submit 送交主席簽核。
    不會重複灌通知：已確認完成的項目跳過；已經有一則還在生效中的通知（尚未關閉）也跳過，避免每點一次就轟炸一次。 */
 case 'notify_pending_items': {
     $id = (int)($_POST['meeting_id'] ?? 0);
@@ -662,7 +664,14 @@ case 'notify_pending_items': {
     $unsigned = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=? AND signed=0");
     $unsigned->execute([$id]);
     if ((int)$unsigned->fetchColumn() > 0) jerr('尚有出席人員未完成現場簽到，請先完成全部出席人員簽到');
+    // 沒指定負責人的項目一律擋在這裡（2026-09-16 使用者回報）：那種項目不會有人被通知、也不會有人簽名，
+    // 卻照樣能一路送到主席簽核，紙本上就是一格空白（前端也會擋，這裡是鐵律8 的第二道）
+    $miss = meeting_items_missing_owner($db, $id);
+    if ($miss) jerr('下列項目尚未指定負責人／負責部門，請先指定後再通知：' . implode('、', $miss));
 
+    // 公告者＝這份會議記錄的「記錄」人（2026-09-16 使用者明確要求）。原本記的是按下按鈕的人，管理員代為
+    // 操作時通知上的公告者就變成「超級管理員」，收到的人看不出這是誰開的會、也不知道要找誰問。
+    $noticeFrom = (int)($m['recorder_user_id'] ?? 0) ?: $uid;
     $notified = 0;
     $activeStmt = $db->prepare("SELECT 1 FROM live_event WHERE ref_type='MEETING_ITEM_CONFIRM' AND ref_id=?
                                  AND (enddate IS NULL OR enddate>=CURDATE()) LIMIT 1");
@@ -676,7 +685,7 @@ case 'notify_pending_items': {
         $notified++;
         // 標題/內文一律走共用的 meeting_item_notice_text()，與「回簽中調整負責人」補發的通知用同一份措辭
         $tx = meeting_item_notice_text($db, $m, $it, $targets);
-        meeting_notify_item_owners($db, (int)$it['item_id'], $targets, $tx['title'], $tx['content'], $uid);
+        meeting_notify_item_owners($db, (int)$it['item_id'], $targets, $tx['title'], $tx['content'], $noticeFrom);
     }
     jout(['notified_items'=>$notified]);
 }
@@ -763,7 +772,8 @@ case 'owner_adjust': {
     } catch (Throwable $e) { $db->rollBack(); jerr('調整失敗：'.$e->getMessage(), 500); }
 
     // 通知收件人的增刪與可能的自動送簽核都放在交易外：推播一旦送出就收不回來，不可被 rollback 連帶回捲
-    $sync = meeting_item_notice_sync($db, $m, $itemId, $uid);
+    // 補發通知時的公告者一樣是記錄人（與「存檔並通知」一致，見該處說明）
+    $sync = meeting_item_notice_sync($db, $m, $itemId, (int)($m['recorder_user_id'] ?? 0) ?: $uid);
     $st->execute([$itemId, $id]);                      // 重讀調整後的這一列再判定，不要拿前面的舊值推算
     $after = $st->fetch(PDO::FETCH_ASSOC) ?: [];
     jout(['added'=>count($added), 'removed'=>count($removed),
