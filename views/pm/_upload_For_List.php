@@ -11,6 +11,7 @@ error_reporting(E_ALL);
 require '../../vendor/autoload.php'; // 確認引用正確路徑
 require_once '../../src/common/qc_form_generator.php'; // QC 檢驗紀錄表 .xlsm 產生器（BOM ERP匯入用）
 require_once '../../src/common/bom_outsource_lib.php'; // manual_seq_override_at 欄位／人工異動保護（Transfer_ERP_Commit 用）
+require_once '../../src/common/bom_client_lib.php'; // 客戶名稱唯一判定（料號文字會對到多家客戶，不可亂猜）
 use PhpOffice\PhpSpreadsheet\IOFactory; // 使用 PhpSpreadsheet 的 IOFactory 來載入 Excel 檔案
 if (isset($db)) { eg_bom_outsource_ensure_schema($db); }
 
@@ -2793,17 +2794,14 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Preview') {
             foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $b) $existingBoms[$b] = true;
         }
 
-        // 客戶查詢：d_id(半成品編號=料號) → d_setting.Customer_Id → customer_list.customer
+        // 客戶查詢：**不可以只用料號文字去查**——同一個料號文字在 d_setting 常常有好幾筆（不同客戶），
+        // 例 OB321500060 → #765 旻成、#19804 松田，硬挑一筆就會把別家的客戶寫進這張製令而且不報錯。
+        // 判定順序（唯一實作 src/common/bom_client_lib.php）：
+        //   已存在的製令 → 它綁定的料號主檔／它的訂單；新製令 → 料號文字只對到唯一一家時才採用。
         $dIds = array_values(array_unique(array_column($groups, 'd_id')));
-        $customerByDId = [];
-        foreach (array_chunk($dIds, 500) as $chunk) {
-            $ph = implode(',', array_fill(0, count($chunk), '?'));
-            $st = $db->prepare("SELECT ds.D_Setting_Id, cl.customer
-                                 FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
-                                 WHERE ds.D_Setting_Id IN ($ph)");
-            $st->execute($chunk);
-            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) $customerByDId[$row['D_Setting_Id']] = $row['customer'];
-        }
+        $customerByDId  = eg_bom_client_by_part($db, $dIds);               // 只含「唯一一家」的料號
+        $customerByBom  = eg_bom_client_resolve($db, array_keys($groups)); // 已存在的製令各自的客戶
+        $ambiguousParts = eg_bom_client_ambiguous_parts($db, $dIds);      // 同料號文字掛好幾家客戶的
 
         // 製程主檔（顯示用）
         $processNames = [];
@@ -2827,7 +2825,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Preview') {
         $unknownProcess = []; $unknownMaker = []; $unknownCustomer = [];
         foreach ($groups as $bom => $grp) {
             if (isset($existingBoms[$bom])) $existingBomCount++; else $newBomCount++;
-            if (empty($customerByDId[$grp['d_id']])) $unknownCustomer[$grp['d_id']] = true;
+            if (empty($customerByBom[$bom]) && empty($customerByDId[$grp['d_id']])) $unknownCustomer[$grp['d_id']] = true;
             foreach ($grp['rows'] as $row) {
                 $totalIngRows++;
                 if (!isset($processNames[$row['process_no']])) $unknownProcess[$row['process_no']] = true;
@@ -2842,6 +2840,11 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Preview') {
             $sample = array_slice(array_keys($unknownCustomer), 0, 10);
             $warnings[] = '料號查無客戶綁定（' . implode('、', $sample) . (count($unknownCustomer) > 10 ? '…等共' . count($unknownCustomer) . '筆' : '') . '），Client_Name 將留空';
         }
+        if (!empty($ambiguousParts)) {
+            $sample = array_slice($ambiguousParts, 0, 10);
+            $warnings[] = '下列料號在料號主檔對應到多家客戶（' . implode('、', $sample) . (count($ambiguousParts) > 10 ? '…等共' . count($ambiguousParts) . '筆' : '')
+                        . '）：已建立的製令一律以「該製令綁定的料號主檔／訂單」為準，判不出來的維持原本的客戶不覆蓋；新製令則留空，請到生管 BOM 總表綁定料號主檔';
+        }
 
         // 預覽樣本（前5個BOM）
         $previewRows = [];
@@ -2850,7 +2853,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Preview') {
                 'bom'           => $bom,
                 'd_id'          => $grp['d_id'],
                 'sqty'          => $grp['sqty'],
-                'client_name'   => $customerByDId[$grp['d_id']] ?? null,
+                'client_name'   => $customerByBom[$bom] ?? ($customerByDId[$grp['d_id']] ?? null),
                 'is_new'        => !isset($existingBoms[$bom]),
                 'process_count' => count($grp['rows']),
                 'processes'     => implode('、', array_map(fn($row) => $processNames[$row['process_no']] ?? ('#' . $row['process_no']), $grp['rows'])),
@@ -2892,17 +2895,10 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
     try {
         $db->beginTransaction();
 
-        // 客戶查詢（同 Preview，重新查一次確保資料最新）
+        // 客戶查詢（同 Preview，重新查一次確保資料最新；判定規則見 bom_client_lib.php）
         $dIds = array_values(array_unique(array_column($groups, 'd_id')));
-        $customerByDId = [];
-        foreach (array_chunk($dIds, 500) as $chunk) {
-            $ph = implode(',', array_fill(0, count($chunk), '?'));
-            $st = $db->prepare("SELECT ds.D_Setting_Id, cl.customer
-                                 FROM d_setting ds LEFT JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
-                                 WHERE ds.D_Setting_Id IN ($ph)");
-            $st->execute($chunk);
-            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $row) $customerByDId[$row['D_Setting_Id']] = $row['customer'];
-        }
+        $customerByDId = eg_bom_client_by_part($db, $dIds);               // 只含「唯一一家」的料號
+        $customerByBom = eg_bom_client_resolve($db, array_keys($groups)); // 已存在的製令各自的客戶
 
         // 廠商主檔
         $makerIdNoSet = [];
@@ -2922,7 +2918,7 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
         }
 
         // bom：只更新這次真正握有資料的欄位，不動 o_order_id/processing_state/Delivery_date 等其他流程維護的欄位
-        $bomExistsStmt = $db->prepare("SELECT bom FROM bom WHERE bom = ?");
+        $bomExistsStmt = $db->prepare("SELECT Client_Name FROM bom WHERE bom = ?");
         $bomInsertStmt = $db->prepare("INSERT INTO bom (bom, d_id, sqty, Client_Name, state, Created_By, Created_At, Modified_By, Modified_At)
                                         VALUES (?, ?, ?, ?, 'ing', ?, NOW(), ?, NOW())");
         $bomUpdateStmt = $db->prepare("UPDATE bom SET d_id = ?, sqty = ?, Client_Name = ?, Modified_By = ?, Modified_At = NOW() WHERE bom = ?");
@@ -2944,12 +2940,16 @@ if (isset($_GET['but']) && $_GET['but'] === 'BOM_ERP_Commit') {
         $newBoms = []; // 新建的 BOM，供 commit 後產生 QC 檢驗表
 
         foreach ($groups as $bom => $grp) {
-            $clientName = $customerByDId[$grp['d_id']] ?? null;
+            $clientName = $customerByBom[$bom] ?? ($customerByDId[$grp['d_id']] ?? null);
             $sqty       = is_numeric($grp['sqty']) ? (int)$grp['sqty'] : null;
 
             $bomExistsStmt->execute([$bom]);
-            if ($bomExistsStmt->fetch()) {
-                $bomUpdateStmt->execute([$grp['d_id'], $sqty, $clientName, $userId, $bom]);
+            $bomExistsRow = $bomExistsStmt->fetch(PDO::FETCH_ASSOC);
+            if ($bomExistsRow !== false) {
+                // 判不出來（料號文字對到多家、又沒有綁定與訂單可查）就**維持原本的客戶不覆蓋**，
+                // 絕對不要挑一筆寫進去——那正是 B-1150915004 被寫成松田（實際是旻成）的原因。
+                $writeClient = ($clientName !== null && $clientName !== '') ? $clientName : $bomExistsRow['Client_Name'];
+                $bomUpdateStmt->execute([$grp['d_id'], $sqty, $writeClient, $userId, $bom]);
                 $updatedBomCount++;
             } else {
                 $bomInsertStmt->execute([$bom, $grp['d_id'], $sqty, $clientName, $userId, $userId]);

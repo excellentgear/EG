@@ -14,6 +14,7 @@ if (!isset($_SESSION['userName'])) {
 
 include_once '../common/DBConnection.php';
 include_once '../common/_config.php';
+include_once '../common/bom_client_lib.php'; // 客戶名稱唯一判定（有綁料號主檔就以主檔為準）
 
 $conn = new DBConnection();
 $db   = $conn->getPDO();
@@ -50,12 +51,12 @@ if (($_GET['mode'] ?? '') === 'completed') {
         $binds    = [];
         if ($search !== '') {
             $like = '%' . $search . '%';
-            $whereStr .= " AND (bi.bom LIKE ? OR b.d_id LIKE ? OR b.Client_Name LIKE ? OR bi.maker_id LIKE ?)";
+            $whereStr .= " AND (bi.bom LIKE ? OR b.d_id LIKE ? OR " . eg_bom_client_expr('b') . " LIKE ? OR bi.maker_id LIKE ?)";
             $binds = [$like, $like, $like, $like];
         }
 
         // 計數也要掛同一個 qc join，否則 include_pending 時筆數與清單對不起來
-        $cntStmt = $db->prepare("SELECT COUNT(*) FROM bom_ing bi JOIN bom b ON bi.bom=b.bom $qcJoin $whereStr");
+        $cntStmt = $db->prepare("SELECT COUNT(*) FROM bom_ing bi JOIN bom b ON bi.bom=b.bom " . eg_bom_client_join('b') . " $qcJoin $whereStr");
         $cntStmt->execute($binds);
         $totalRecords = (int)$cntStmt->fetchColumn();
 
@@ -72,7 +73,7 @@ if (($_GET['mode'] ?? '') === 'completed') {
 
         $dataStmt = $db->prepare("
             SELECT
-                bi.bom_ing_fid, bi.bom, b.d_id, b.Client_Name,
+                bi.bom_ing_fid, bi.bom, b.d_id, " . eg_bom_client_expr('b') . " AS Client_Name,
                 pn.ProcessName, bi.maker_id, bi.sqty,
                 DATE_FORMAT(bi.qc_completed_at,'%Y-%m-%d %H:%i') AS qc_completed_at,
                 u.user_cname AS qc_completed_by_name,
@@ -92,6 +93,7 @@ if (($_GET['mode'] ?? '') === 'completed') {
                 qao.is_closed AS qa_is_closed
             FROM bom_ing bi
             JOIN bom b ON bi.bom=b.bom
+            " . eg_bom_client_join('b') . "
             LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
             LEFT JOIN user u ON u.id=bi.qc_completed_by
             $qcJoin
@@ -143,7 +145,7 @@ if ($filterPTI !== '') {
 }
 if ($filterSearch !== '') {
     $like = '%' . $filterSearch . '%';
-    $extraParts[] = "(bi.bom LIKE ? OR b.d_id LIKE ? OR b.Client_Name LIKE ? OR bi.maker_id LIKE ? OR pn.ProcessName LIKE ?)";
+    $extraParts[] = "(bi.bom LIKE ? OR b.d_id LIKE ? OR " . eg_bom_client_expr('b') . " LIKE ? OR bi.maker_id LIKE ? OR pn.ProcessName LIKE ?)";
     $extraBinds   = array_merge($extraBinds, [$like, $like, $like, $like, $like]);
 }
 // 已檢驗數量的唯一算法：允收＋異常＋驗退＋特採。前端的徽章與「一鍵完成」
@@ -184,7 +186,7 @@ SELECT SQL_CALC_FOUND_ROWS
     bi.bom_ing_fid,
     bi.bom,
     b.d_id,
-    b.Client_Name,
+    " . eg_bom_client_expr('b') . " AS Client_Name,
     b.processing_state          AS b_processing_state,
     bi.processing_state,
     DATE_FORMAT(bi.outsource_date,'%m/%d') AS outsource_date,
@@ -246,6 +248,7 @@ LEFT JOIN bom_ing newer ON
     AND COALESCE(newer.batch_label, '') = COALESCE(bi.batch_label, '')
     AND newer.is_consumed = 0
 JOIN bom b ON bi.bom = b.bom
+" . eg_bom_client_join('b') . "
 LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
 LEFT JOIN (
     SELECT

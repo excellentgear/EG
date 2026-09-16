@@ -13,6 +13,7 @@ if (!isset($_SESSION['id'])) {
 
 include_once __DIR__ . '/../common/DBConnection.php';
 include_once __DIR__ . '/../common/_config.php';
+include_once __DIR__ . '/../common/bom_client_lib.php'; // 客戶名稱唯一判定（有綁料號主檔就以主檔為準）
 
 $rawBom = isset($_POST['bom']) ? trim($_POST['bom']) : '';
 
@@ -24,9 +25,9 @@ if (!preg_match('/^B-\d{10}$/', $rawBom)) {
 try {
     // ── 1. 查 BOM 基本資料（含結案判斷）──────────────────────
     $stmtBase = $db->prepare("
-        SELECT Client_Name, d_id, sqty, processing_state
-        FROM bom
-        WHERE bom = ? AND d_id <> ''
+        SELECT " . eg_bom_client_expr('b') . " AS Client_Name, b.d_id, b.sqty, b.processing_state
+        FROM bom b " . eg_bom_client_join('b') . "
+        WHERE b.bom = ? AND b.d_id <> ''
         LIMIT 1
     ");
     $stmtBase->execute([$rawBom]);
@@ -69,7 +70,7 @@ try {
             pn.ProcessName,
             bi.maker_id,
             bi.sqty,
-            b.Client_Name,
+            " . eg_bom_client_expr('b') . " AS Client_Name,
             -- QC 彙總
             COALESCE(qc.QC_QQ_sqty, 0)  AS QC_QQ_sqty,
             COALESCE(qc.QC_ng_sqty, 0)  AS QC_ng_sqty,
@@ -88,6 +89,7 @@ try {
             qao.id AS qa_abnormal_id
         FROM bom_ing bi
         JOIN bom b ON bi.bom = b.bom
+        " . eg_bom_client_join('b') . "
         LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
         -- QC 彙總
         LEFT JOIN (
@@ -163,7 +165,7 @@ try {
 
     echo json_encode([
         'success'     => true,
-        'Client_Name' => mb_substr(str_replace(' ', '', $first['Client_Name']), 0, 3),
+        'Client_Name' => mb_substr(str_replace(' ', '', (string)$first['Client_Name']), 0, 3),
         'd_id'        => $first['d_id'],
         'Qty'         => (int)$first['bom_total_qty'],
         'ps'          => $first['ps'] ?? '',
