@@ -2759,8 +2759,14 @@ function ia_team_save(PDO $db, int $year, array $members, string $byName): int
         list($u, $d, $p) = ia_post_parse($key);
         if (!$u) continue;
         if (!isset($valid[$key])) throw new RuntimeException('小組成員的職務不存在（可能已異動），請重新挑選：' . $key);
-        if (isset($seenUser[$u])) continue;                 // 同一個人只算一列
-        $seenUser[$u] = 1;
+        /* 去重的單位是「職務」不是「人」（2026-09-16 使用者回報修正）。
+           同一個人**本來就會用不同職務各掛一筆**：何沐桐主職技術課工程師、兼生管組組長，
+           資格名單把「技術課 工程師」單獨指定成陪檢員（他負責技術課的資料），
+           那就是兩個不同的身分、兩筆。原本按 user_id 去重＝他只要先以組長身分進了小組，
+           技術課工程師那一筆就再也加不進來，而且畫面上連選項都看不到。
+           會議紀錄那邊本來就會依 user_id 再去重一次，所以不會變成同一個人出席兩次。 */
+        if (isset($seenUser[$key])) continue;               // 同一個「職務」只算一列
+        $seenUser[$key] = 1;
         $role = (string)($m['role'] ?? 'auditor');
         if (!isset(IA_TEAM_ROLES[$role])) $role = 'auditor';
         if ($role === 'leader') { $leaders++; if ($leaders > 1) throw new RuntimeException('稽核組長只能有一位'); }

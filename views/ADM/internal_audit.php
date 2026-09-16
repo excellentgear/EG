@@ -1043,6 +1043,8 @@ $roleLabel = ia_role_label($perms);
         之後<b>自動建立會議紀錄時與會人員就是這份名單，主席固定為稽核組長</b>，不必每次重挑。
         <br><b>稽核組長只能有一位</b>；候選只列該年度有<b>稽核員或陪檢員資格</b>的職務（資格名單留空時＝全體）。
         <br>成員存的是「某人的某個職務」，所以會議紀錄與圖章上的<b>部門職稱會印當時那個職務的</b>，不會被兼任職蓋掉。
+        <br><b>同一個人可以用不同職務各掛一筆</b>（例：主職技術課工程師負責技術課的資料、兼任生管組組長負責生管組的，就掛兩筆）；
+        <b>會議紀錄那邊仍只會列他一次</b>（取名單上排在前面的那個職務）。
         <br>常態小組每年差不多，可用右上「從其他年度複製」整批帶過來再增減；<b>原職務已異動或離職的成員會自動略過並列出來</b>。</div>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
             <select id="teamAddPost" data-eg-filter="輸入部門、職稱或姓名篩選…"
@@ -4255,12 +4257,15 @@ $('#teamYear').on('change', function(){
     openTeam(+$(this).val());
 });
 function renderTeam(){
-    // 已加入的人不再出現在候選（同一個人在同一年度只算一列）
+    /* 已加入的「職務」不再出現在候選——**去重的單位是職務不是人**（2026-09-16 使用者回報）。
+       同一個人本來就會用不同職務各掛一筆：何沐桐主職技術課工程師、兼生管組組長，
+       資格名單把「技術課 工程師」單獨指定成陪檢員（他負責技術課的資料），那是兩個身分、兩筆。
+       原本按人去重＝他只要先以組長身分進了小組，技術課工程師那一筆連選項都看不到。 */
     var used = {};
-    TEAM.members.forEach(function(m){ used[String(m.user_id)] = 1; });
+    TEAM.members.forEach(function(m){ used[String(m.post_key3)] = 1; });
     var oh = '<option value="">（請選要加入的人員職務）</option>';
     TEAM.candidates.forEach(function(p){
-        if (used[String(p.id)]) return;
+        if (used[String(p.post_key3)]) return;
         oh += '<option value="'+esc(p.post_key3)+'">'+esc(p.display||((p.dept_name||'')+'　'+(p.position_name||'')+'　'+p.user_cname))+'</option>';
     });
     $('#teamAddPost').html(oh);
@@ -4286,7 +4291,11 @@ function renderTeam(){
     $('#teamCopyFrom').html(ch);
 
     var leaders = TEAM.members.filter(function(m){ return m.role==='leader'; }).length;
-    $('#teamMsg').html(esc(TEAM.year + ' 年度共 ' + TEAM.members.length + ' 位成員')
+    var heads = {}; TEAM.members.forEach(function(m){ heads[String(m.user_id)] = 1; });
+    var nHead = Object.keys(heads).length;
+    $('#teamMsg').html(esc(TEAM.year + ' 年度共 ' + TEAM.members.length + ' 筆職務'
+        + (nHead === TEAM.members.length ? ('（' + nHead + ' 位成員）')
+                                         : ('／' + nHead + ' 位成員　有人用了不只一個職務，會議紀錄仍只列一次')))
         + (leaders === 1 ? '' : '　<span style="color:#C4442D;">稽核組長目前有 ' + leaders
              + ' 位（必須剛好一位，會議紀錄的主席固定用他）</span>'));
 }
