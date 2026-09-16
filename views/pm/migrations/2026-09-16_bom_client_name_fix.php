@@ -14,6 +14,9 @@
  *   php 2026-09-16_bom_client_name_fix.php --run      ← 只修「訂單也佐證同一家」＋「只差空白字元」的
  *   php 2026-09-16_bom_client_name_fix.php --run-all  ← 連「沒有訂單可佐證」的也一起修（請先看過試算清單）
  *   php 2026-09-16_bom_client_name_fix.php --verify   ← 修完再確認一次還有沒有不一致
+ *   php 2026-09-16_bom_client_name_fix.php --rollback ← 依備份檔把改過的那些列原樣還原
+ *
+ * 寫入前一律先把「改到的每一列的原值」存成同目錄的 .backup.json，所以隨時可以 --rollback 回去。
  *
  * 只動 `bom.Client_Name` 一個欄位，不碰 d_setting_id / o_order_id / 數量 / 狀態。
  * 可重複執行。
@@ -28,6 +31,28 @@ $argvFlags = array_slice($argv, 1);
 $doRun     = in_array('--run', $argvFlags, true);
 $doRunAll  = in_array('--run-all', $argvFlags, true);
 $doVerify  = in_array('--verify', $argvFlags, true);
+$doRollback= in_array('--rollback', $argvFlags, true);
+$BACKUP    = __DIR__ . '/2026-09-16_bom_client_name_fix.backup.json';
+
+if ($doRollback) {
+    if (!is_file($BACKUP)) exit("找不到備份檔 {$BACKUP}
+");
+    $bk = json_decode(file_get_contents($BACKUP), true);
+    if (!is_array($bk) || empty($bk['rows'])) exit("備份檔內容不正確
+");
+    $db->beginTransaction();
+    try {
+        // 只還原「現值仍等於我們當初寫進去的那個值」的列，中間被別人改過的一律不動
+        $up = $db->prepare("UPDATE bom SET Client_Name = ? WHERE bom = ? AND Client_Name <=> ?");
+        $n = 0;
+        foreach ($bk['rows'] as $r) { $up->execute([$r['old'], $r['bom'], $r['new']]); $n += $up->rowCount(); }
+        $db->commit();
+        echo "已還原 {$n} 筆（備份共 " . count($bk['rows']) . " 筆，差額＝期間已被別人改過，未覆蓋）。
+";
+    } catch (Throwable $e) { $db->rollBack(); echo "還原失敗，已全部回復：" . $e->getMessage() . "
+"; exit(1); }
+    exit(0);
+}
 
 $SQL = "
     SELECT b.bom, b.d_id, b.d_setting_id, b.Client_Name AS bom_client,
@@ -90,6 +115,21 @@ if (!$doRun && !$doRunAll) {
 
 $target = array_merge($whitespaceOnly, $orderConfirm);
 if ($doRunAll) $target = array_merge($target, $noEvidence);
+
+// 寫入前先留一份可回復的備份（含每一列的原值）
+$bkRows = [];
+foreach ($target as $r) $bkRows[] = ['bom' => $r['bom'], 'old' => $r['bom_client'], 'new' => $r['master_client']];
+if (file_exists($BACKUP)) {
+    $prev = json_decode((string)file_get_contents($BACKUP), true);
+    if (!empty($prev['rows'])) $bkRows = array_merge($prev['rows'], $bkRows); // 可重複執行，備份用累加不覆蓋
+}
+file_put_contents($BACKUP, json_encode(
+    ['at' => date('Y-m-d H:i:s'), 'rows' => $bkRows],
+    JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT
+));
+echo "
+原值已備份到 " . basename($BACKUP) . "（要退回請執行 --rollback）
+";
 
 $db->beginTransaction();
 try {

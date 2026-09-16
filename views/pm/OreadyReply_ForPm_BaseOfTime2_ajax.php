@@ -1807,6 +1807,14 @@ else if (isset($_POST['action']) && $_POST['action'] === 'create_bom') {
     $d_setting_id = trim($_POST['d_setting_id'] ?? ''); // d_setting.d_id 內部ID
     $d_id         = trim($_POST['d_id'] ?? '');         // d_setting.D_Setting_Id 顯示文字
     $cname        = trim($_POST['client_name'] ?? '');
+    // 綁了料號主檔就**以主檔的客戶為準**，不採信前端送過來的名字（同一個料號文字常常
+    // 掛在好幾家客戶底下，前端挑錯或事後改綁，這裡不擋就會把別家的客戶寫進製令）。
+    // 主檔沒綁客戶時才沿用前端帶來的值。唯一實作 src/common/bom_client_lib.php。
+    include_once '../../src/common/bom_client_lib.php';
+    if ($d_setting_id !== '') {
+        $cnameFromMaster = eg_bom_client_of_dsetting($db, $d_setting_id);
+        if ($cnameFromMaster !== null) $cname = $cnameFromMaster;
+    }
     $sqty   = intval($_POST['sqty'] ?? 0);
     $bom_ps = trim($_POST['bom_ps'] ?? '');
     $procs  = json_decode($_POST['processes'] ?? '[]', true) ?: [];
@@ -2338,8 +2346,15 @@ else if (isset($_POST['action']) && $_POST['action'] === 'apply_dsetting_to_bom'
         $ds = $s->fetch(PDO::FETCH_ASSOC);
         if (!$ds) { echo json_encode(['success'=>false,'message'=>'找不到料號設定 d_setting_id='.$d_setting_id]); exit; }
         // 更新 bom.d_setting_id 和 bom.d_id（顯示料號文字）及 bom.Client_Name (同步客戶)
-        $db->prepare("UPDATE bom SET d_setting_id=?, d_id=?, Client_Name=?, Modified_By=? WHERE bom=?")
-           ->execute([$d_setting_id, $ds['display_id'], $ds['customer_name'], $uid, $bom]);
+        // 綁定當下就把 ERP 匯入帶進來的舊客戶名稱一起換掉，之後各頁讀哪一邊都一致；
+        // **但主檔沒綁客戶時要保留原值**，不可以寫空字串把原本的名稱洗掉。
+        if (trim((string)$ds['customer_name']) !== '') {
+            $db->prepare("UPDATE bom SET d_setting_id=?, d_id=?, Client_Name=?, Modified_By=? WHERE bom=?")
+               ->execute([$d_setting_id, $ds['display_id'], $ds['customer_name'], $uid, $bom]);
+        } else {
+            $db->prepare("UPDATE bom SET d_setting_id=?, d_id=?, Modified_By=? WHERE bom=?")
+               ->execute([$d_setting_id, $ds['display_id'], $uid, $bom]);
+        }
         echo json_encode(['success'=>true, 'display_id'=>$ds['display_id'], 'customer_id'=>$ds['customer_id'], 'customer_name'=>$ds['customer_name']]);
     } catch(PDOException $e) {
         echo json_encode(['success'=>false,'message'=>$e->getMessage()]);

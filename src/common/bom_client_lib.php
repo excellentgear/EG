@@ -140,3 +140,23 @@ function eg_bom_client_ambiguous_parts(PDO $db, array $partNos): array
     }
     return $out;
 }
+
+/**
+ * 料號主檔（d_setting.d_id）對應的客戶名稱；沒綁客戶或查無主檔時回 null。
+ * 「把製令綁到某一筆料號主檔」的所有入口都用這支取客戶名稱，
+ * **回 null 時一律保留原本的 Client_Name，不可以寫空字串把 ERP 帶進來的名稱洗掉**。
+ */
+function eg_bom_client_of_dsetting(PDO $db, $dSettingId): ?string
+{
+    $dSettingId = (int)$dSettingId;
+    if ($dSettingId <= 0) return null;
+    $st = $db->prepare(
+        "SELECT cl.customer
+         FROM d_setting ds
+         JOIN customer_list cl ON cl.customer_id = ds.Customer_Id
+         WHERE ds.d_id = ? LIMIT 1"
+    );
+    $st->execute([$dSettingId]);
+    $v = $st->fetchColumn();
+    return ($v === false || $v === null || trim((string)$v) === '') ? null : (string)$v;
+}

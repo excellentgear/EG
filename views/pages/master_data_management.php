@@ -2261,6 +2261,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 // 外層的 $pdo->commit() 就會炸「There is no active transaction」
                 //（本專案在 eg_org_save() 踩過同一個坑）。
                 $rev_changed = (trim((string)($old_part_row['Revision'] ?? '')) !== trim((string)$Revision));
+                // 客戶換人時，把「已綁定這筆料號主檔」的製令客戶名稱一起換掉。
+                // bom.Client_Name 只是文字快取（多半是 ERP 匯入當下寫進去的），不同步就會在
+                // 直接讀這個欄位的頁面上繼續顯示舊客戶、而且完全不報錯。判定規則的唯一實作
+                // 見 src/common/bom_client_lib.php（顯示一律以綁定的料號主檔為準）。
+                if (trim((string)($old_part_row['Customer_Id'] ?? '')) !== trim((string)$Customer_Id)) {
+                    $cn_q = $pdo->prepare("SELECT customer FROM customer_list WHERE customer_id=? LIMIT 1");
+                    $cn_q->execute([$Customer_Id]);
+                    $cn_new = $cn_q->fetchColumn();
+                    // 查不到客戶名稱就維持原值，不可以寫空字串把原本的名稱洗掉
+                    if ($cn_new !== false && trim((string)$cn_new) !== '') {
+                        $pdo->prepare("UPDATE bom SET Client_Name=? WHERE d_setting_id=? AND NOT (Client_Name <=> ?)")
+                            ->execute([$cn_new, $d_id, $cn_new]);
+                    }
+                }
             } else {
                 if (!$can_create) throw new Exception('無新增權限');
                 $ck = $pdo->prepare("SELECT d_id FROM d_setting WHERE D_Setting_Id=? AND (Customer_Id <=> ?) AND (Spec_No <=> ?) AND (Revision <=> ?)");
