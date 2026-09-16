@@ -281,13 +281,15 @@ foreach ($roleRows as $rr) {
                 <div class="errmsg" id="errEdSubject"></div></div>
             <div><label>會議日期 *</label><input type="date" id="edDate" max="9999-12-31">
                 <div class="errmsg" id="errEdDate"></div></div>
-            <div><label>開始時間</label><input type="text" id="edStart" class="time-in" maxlength="5"
-                    data-eg-hint="24 小時制，可直接打 0900 / 900 / 9，離開欄位自動轉成 09:00">
+            <div><label>開始時間 *</label><input type="text" id="edStart" class="time-in" maxlength="5"
+                    data-eg-hint="送出前必填。24 小時制，可直接打 0900 / 900 / 9，離開欄位自動轉成 09:00">
                 <div class="errmsg" id="errEdStart"></div></div>
-            <div><label>結束時間</label><input type="text" id="edEnd" class="time-in" maxlength="5"
-                    data-eg-hint="24 小時制，可直接打 1700 / 17，離開欄位自動轉成 17:00">
+            <div><label>結束時間 *</label><input type="text" id="edEnd" class="time-in" maxlength="5"
+                    data-eg-hint="送出前必填。24 小時制，可直接打 1700 / 17，離開欄位自動轉成 17:00">
                 <div class="errmsg" id="errEdEnd"></div></div>
-            <div><label>地點</label><input type="text" id="edLoc" maxlength="100" list="edLocTags"><datalist id="edLocTags"></datalist></div>
+            <div><label>地點 *</label><input type="text" id="edLoc" maxlength="100" list="edLocTags"
+                    data-eg-hint="送出前必填。可直接打字，或從曾用過的地點清單挑"><datalist id="edLocTags"></datalist>
+                <div class="errmsg" id="errEdLoc"></div></div>
             <div><label>主席（出席人員內選一位） *</label><select id="edChair"><option value="">請先加入出席人員</option></select></div>
             <div><label>記錄</label><input type="text" id="edRecorder" maxlength="50" class="ro-auto" readonly tabindex="-1" data-eg-skip title="自動帶入目前登入者，不可修改"></div>
         </div>
@@ -556,7 +558,7 @@ foreach ($roleRows as $rr) {
         會議記錄（2-GM-05-01）線上化：建立會議基本資料與出席名單、現場密碼簽到、上級指示要項／會議要項雙表格、
         主席與總經理雙層簽核、產銷會議可自動插入本月出貨目標達成率佐證。
         <h4>操作步驟</h4>
-        <b>①新增</b>：填主題/日期/時間/地點（主題、地點可打字自由輸入，也可從曾用過的建議清單挑；有設定「常用設定」時可一鍵套用主題+地點+時間，套用後仍可自行修改），加入出席人員（依部門挑選，或套用已存的<b>公開/私人群組</b>——把常開會的一批人存成群組，下次直接套用，也可另存新群組），指定主席。日期時間存檔前後端都會檢查合理性（結束不可早於或等於開始）。「記錄」欄固定為目前登入者，不可修改。<br>
+        <b>①新增</b>：填主題/日期/時間/地點（主題、地點可打字自由輸入，也可從曾用過的建議清單挑；有設定「常用設定」時可一鍵套用主題+地點+時間，套用後仍可自行修改）。<b>會議主題、會議日期、開始時間、結束時間、地點都是必填</b>——主題存草稿就要有，<b>日期／開始時間／結束時間／地點則是「送出前」必填</b>（草稿可以先空著慢慢補，按下送出時系統會逐欄標紅告訴你缺哪一欄；後端同樣會擋）。接著加入出席人員（依部門挑選，或套用已存的<b>公開/私人群組</b>——把常開會的一批人存成群組，下次直接套用，也可另存新群組），指定主席。日期時間存檔前後端都會檢查合理性（結束不可早於或等於開始）。「記錄」欄固定為目前登入者，不可修改。<br>
         　－<b>開始／結束時間欄位本身永遠是空的</b>（不再印灰色的 09:00、17:00 當提示，避免被誤會成「已經填好時間了」）；<b>點一下欄位才會浮出格式提示</b>。輸入採 24 小時制，可直接打 <b>0900</b>／<b>900</b>／<b>9</b>，離開欄位自動轉成 <b>09:00</b>；小時或分鐘不合理會當場紅字說明原因。<br>
         　－<b>人員名單依「會議日期當天」的狀態產生</b>：那天之後才入職、或那天之前就已離職的人一律不出現；那天還在職、之後才離職的人<b>仍會出現</b>（所以補打舊會議紀錄時選得到當時的人）。部門與職稱也是回推<b>當時</b>的（有登錄職務異動紀錄者），不是現在的。<br>
         　－<b>名字右方會顯示他當天的行程</b>（例：<b>陳俊宏（總經理）10:00~11:00 會議</b>），來源包含請假、公出單、教育訓練/外訓、已排定的其他會議；系統會自動比對會議的開始～結束時間，<b>有重疊會標紅並註明「（時間重疊）」</b>。<br>
@@ -1466,7 +1468,16 @@ function saveDraft(thenSubmit){
     if (thenSubmit && !ATT.length){ alert('送出前請先加入出席人員'); return; }
     // 沒指定負責人／負責部門的項目不可送出(2026-09-16 使用者回報)：那種項目不會通知任何人、也不會有人
     // 簽名，卻能一路送到主席簽核，紙本上就是一格空白。後端 meeting_items_missing_owner() 會再擋一次。
+    // 日期／開始時間／結束時間／地點是送出前的必填欄位（2026-09-16 使用者明確要求）：
+    // 草稿階段可以先空著慢慢補，但送出＝這份紀錄要進 AS9100 品質紀錄，表頭不可以有空格。
+    // 逐欄標紅並寫出原因（不是丟一句「資料有誤」），後端 meeting_head_missing() 會再擋一次。
     if (thenSubmit) {
+        var headMiss = false;
+        headMiss = !setErr($('#edDate'),'errEdDate', $('#edDate').val() ? '' : '送出前必填：請選擇會議日期') || headMiss;
+        headMiss = !setErr($('#edStart'),'errEdStart', $.trim($('#edStart').val()) ? '' : '送出前必填：請輸入開始時間') || headMiss;
+        headMiss = !setErr($('#edEnd'),'errEdEnd', $.trim($('#edEnd').val()) ? '' : '送出前必填：請輸入結束時間') || headMiss;
+        headMiss = !setErr($('#edLoc'),'errEdLoc', $.trim($('#edLoc').val()) ? '' : '送出前必填：請輸入會議地點') || headMiss;
+        if (headMiss) { alert('送出前，會議日期、開始時間、結束時間、地點都必須填寫（已在欄位下方標示）。'); return; }
         var miss = mtReadiness().noOwner;
         if (miss.length) {
             alert('下列項目尚未指定負責人／負責部門，請先指定後再送出：\n\n' + miss.join('\n')
@@ -1594,7 +1605,10 @@ function viewHtml(res){
     // 不送交主席簽核）；全部確認完成後才會顯示「送簽核」真正送交主席簽核。
     if (m.can_edit) {
         var rdy = mtReadinessFromView(res);
-        if (rdy.noOwner.length) {
+        if (rdy.headMiss.length) {
+            h += '<div class="mt-hint" style="color:#DD5138;border-color:#DD5138;">尚未填寫：<b>'
+               + rdy.headMiss.map(esc).join('、') + '</b>。這幾欄是送出前的必填欄位，請按上方「編輯」補上後再送出。</div>';
+        } else if (rdy.noOwner.length) {
             h += '<div class="mt-hint" style="color:#DD5138;border-color:#DD5138;">下列項目尚未指定負責人／負責部門，指定後才能送出（沒有負責人就不會有人收到通知、也不會有人簽名）：<br>'
                + rdy.noOwner.map(esc).join('<br>') + '<br>請按上方「編輯」補上。</div>';
         } else if (!rdy.allSigned) {
@@ -1651,6 +1665,16 @@ function itemsMissingOwner(items){
     });
     return out;
 }
+/* 表頭必填欄位（2026-09-16 使用者明確要求）：日期／開始時間／結束時間／地點，送出前一個都不能少。
+   與後端 meeting_head_missing() 同一組欄位與措辭；草稿階段不檢查（可以先存著慢慢補）。 */
+function meetingHeadMissing(m){
+    var out = [];
+    if (!m.meeting_date) out.push('會議日期');
+    if (!String(m.start_time||'').trim()) out.push('開始時間');
+    if (!String(m.end_time||'').trim()) out.push('結束時間');
+    if (!String(m.location||'').trim()) out.push('地點');
+    return out;
+}
 /* 檢視畫面用的送出就緒判斷：資料來自 get_detail 回傳的伺服器現況(比編輯畫面的 mtReadiness 準確，不會有前端暫存過期問題)。 */
 function mtReadinessFromView(res){
     var atts = res.attendees||[];
@@ -1660,7 +1684,8 @@ function mtReadinessFromView(res){
         var slots = it.confirm_slots||[];
         return !(slots.length>0 && slots.every(function(s){ return s.signed; }));
     }).length;
-    return {allSigned:allSigned, pending:pending, noOwner:itemsMissingOwner(res.items)};
+    return {allSigned:allSigned, pending:pending, noOwner:itemsMissingOwner(res.items),
+            headMiss:meetingHeadMissing(res.meeting||{})};
 }
 /* 檢視畫面直接送出(2026-08-06使用者明確要求)：內容已存檔，不需再gather表單，直接呼叫對應動作即可。
    hasPending=1 時只能存檔並通知(後端 submit 會擋下，不允許負責人未全部確認就送主席簽核)。 */

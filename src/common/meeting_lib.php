@@ -404,13 +404,16 @@ function meeting_has_active_item_notices(PDO $db, int $meetingId): bool {
  * 新草稿」在畫面上長得一模一樣(都只顯示「草稿」)：
  *  - notifying(回簽中)：還有生效中的項目回覆通知。
  *  - ready(待送簽核)：出席已全部簽到、負責部門/指定人員也全部確認完成、且已指定主席，只差按下送簽核。
- * $m 需含 meeting_id、status、chair_user_id。
+ * $m 需含 meeting_id、status、chair_user_id，以及表頭必填欄位 meeting_date/start_time/end_time/location
+ * （兩個呼叫端都是 `SELECT *` 整列傳進來）。
  */
 function meeting_display_status(PDO $db, array $m): string {
     $raw = (string)$m['status'];
     if (!in_array($raw, ['draft', 'rejected'], true)) return $raw;
     $meetingId = (int)$m['meeting_id'];
     if (meeting_has_active_item_notices($db, $meetingId)) return 'notifying';
+    // 表頭必填欄位沒補齊就還不能送（meeting_submit_blocker 會擋），不可標成「待送簽核」
+    if (meeting_head_missing($m)) return $raw;
     if (!$m['chair_user_id']) return $raw;
     $ac = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=?");
     $ac->execute([$meetingId]);
@@ -855,11 +858,28 @@ function meeting_items_missing_owner(PDO $db, int $meetingId): array {
     return $out;
 }
 
+/**
+ * 表頭必填欄位（2026-09-16 使用者明確要求）：會議日期／開始時間／結束時間／地點。
+ * **草稿階段不檢查**（現場常是先開好單、事後補時間地點），只在「送出／存檔並通知」時擋——
+ * 送出代表這份紀錄要進 AS9100 品質紀錄與列印，表頭有空格就是一份不完整的紀錄。
+ * 回傳缺少的欄位名稱陣列（空陣列＝都有填）；前端 meetingHeadMissing() 是同一組欄位與措辭。
+ */
+function meeting_head_missing(array $m): array {
+    $out = [];
+    if (trim((string)($m['meeting_date'] ?? '')) === '') $out[] = '會議日期';
+    if (trim((string)($m['start_time']   ?? '')) === '') $out[] = '開始時間';
+    if (trim((string)($m['end_time']     ?? '')) === '') $out[] = '結束時間';
+    if (trim((string)($m['location']     ?? '')) === '') $out[] = '地點';
+    return $out;
+}
+
 /** 可不可以送主席簽核：回傳擋下的原因（空字串＝三個條件都到齊、可以送）。
  *  手動送出用它產生錯誤訊息，自動送出用它判斷時機，兩邊規則保證一致（不要各寫一份）。 */
 function meeting_submit_blocker(PDO $db, array $m): string {
     $id = (int)$m['meeting_id'];
     if (!in_array((string)$m['status'], ['draft', 'rejected'], true)) return '此會議記錄已送出過';
+    $headMiss = meeting_head_missing($m);
+    if ($headMiss) return '尚未填寫：' . implode('、', $headMiss) . '，這幾欄是送出前的必填欄位';
     if (!$m['chair_user_id']) return '請先指定本次會議主席';
     $ac = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=?"); $ac->execute([$id]);
     if ((int)$ac->fetchColumn() === 0) return '請先加入出席人員名單';

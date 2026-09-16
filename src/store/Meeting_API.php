@@ -661,6 +661,8 @@ case 'notify_pending_items': {
     $m = meeting_load($db, $id);
     if ((int)$m['recorder_user_id'] !== $uid && !$perms['canAdmin']) jerr('僅記錄人本人或管理員可通知', 403);
     if (!in_array($m['status'], ['draft','rejected'], true)) jerr('此會議記錄已送出，無法再通知');
+    $headMiss = meeting_head_missing($m);
+    if ($headMiss) jerr('尚未填寫：' . implode('、', $headMiss) . '，這幾欄是送出前的必填欄位');
     $unsigned = $db->prepare("SELECT COUNT(*) FROM meeting_attendee WHERE meeting_id=? AND signed=0");
     $unsigned->execute([$id]);
     if ((int)$unsigned->fetchColumn() > 0) jerr('尚有出席人員未完成現場簽到，請先完成全部出席人員簽到');
