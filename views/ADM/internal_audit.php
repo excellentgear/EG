@@ -1287,6 +1287,14 @@ function makerQualifiedPeople(){
             || String(a.user_cname||'').localeCompare(String(b.user_cname||''), 'zh-Hant');
     });
 }
+/** 新建單據時的製表人預設值：本人有資格才預選本人，否則留「（不指定）」。
+    不這樣做的話，像超級管理員這種不在人員清單裡的帳號一開單就會被加成
+    「超級管理員（已離職／無稽核資格）」這種看起來像壞掉的選項（2026-09-16 實測抓到）。 */
+function makerDefaultSelf(){
+    var rows = makerQualifiedPeople();
+    var hit = rows.some(function(p){ return String(p.id) === String(META.me.id); });
+    return hit ? META.me.id : '';
+}
 function makerOptions(curId, curName){
     var h = '<option value="">（不指定）</option>', found = false, rows = makerQualifiedPeople();
     rows.forEach(function(p){ if (String(p.id)===String(curId||'')) found = true; });
@@ -1780,7 +1788,7 @@ function openCase(id){
         $('#cFrom,#cTo,#cMeetDate,#cMeetStart,#cMeetEnd,#cMeetPlace,#cAllAudited,#cAllDue').val('');
         $('#cRemark').val(defaultCaseRemark());
         $('#cLeader').html(postOptions(META.auditors, '', '', '（未指定）'));
-        $('#cMaker').html(makerOptions(META.me.id, META.me.name));
+        $('#cMaker').html(makerOptions(makerDefaultSelf(), META.me.name));
         $('#cMakerDate').val(META.today);
         CASE_ROWS = [newCaseRow(),newCaseRow(),newCaseRow()];
         renderCaseRows(); $('#cMeetingSec').hide();
@@ -3014,7 +3022,7 @@ function loadReport(){
         $('#reportNote').val(r ? (r.extra_note||'') : '');
         // 製表人清單以**製表日期**當時的在職狀態與職稱為準（ai-rules/22）
         peopleAsof(r ? r.maker_date : META.today, function(){
-            $('#reportMaker').html(makerOptions(r ? r.maker_id : META.me.id, r ? r.maker_name : META.me.name));
+            $('#reportMaker').html(makerOptions(r ? r.maker_id : makerDefaultSelf(), r ? r.maker_name : META.me.name));
         });
         $('#reportMakerDate').val(r ? inputDate(r.maker_date) : META.today);
         var rows = res.rows||[], admin = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
