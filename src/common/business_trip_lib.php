@@ -18,6 +18,7 @@ require_once __DIR__ . '/approval_lib.php';
 require_once __DIR__ . '/delegate_lib.php';
 require_once __DIR__ . '/asdoc_lib.php';
 require_once __DIR__ . '/people_lib.php';
+require_once __DIR__ . '/unit_supervisor_lib.php';
 
 const BT_ASDOC_MODULE = 'business_trip';          // AS 文件綁定模組代碼（asdoc_lib）
 const BT_SETTING_KEYS = ['bt_need_approval', 'bt_auto_from_training', 'bt_stamp_tpl_id',
@@ -27,7 +28,7 @@ const BT_SIGN_SOURCES = [
     ''          => '（留白，紙本手蓋）',
     'approver'  => '實際核准的單位主管',
     'acc_dept'  => '會計部門主管（組織角色綁定）',
-    'sup'       => '申請人的上一級主管',
+    'sup'       => '單位主管（本人即本單位最高主管時往上一層單位，到課為止）',
     'top'       => '最高核准人員（組織角色綁定）',
 ];
 
@@ -246,10 +247,12 @@ function bt_user_identity(PDO $db, int $uid): array
 function bt_resolve_approver(PDO $db, ?int $deptId, int $tripUserId, bool $autoSign = false): ?array
 {
     $base = null; $why = ''; $selfOk = false;
-    $mgr = $deptId ? eg_org_dept_manager($db, $deptId) : null;
-    if ($mgr && (int)$mgr['id'] !== $tripUserId) {
-        $base = (int)$mgr['id'];
-        $why  = '單位主管';
+    // 單位主管一律走共用庫（ai-rules/24 審核層級規範）：公出人自己就是本單位最高主管時，
+    // 往上一層單位找（組長→課長），到課級為止——不要一步跳到總經理。
+    $sup = eg_unit_supervisor($db, $tripUserId, $deptId ?: null);
+    if (!empty($sup['id']) && (int)$sup['id'] !== $tripUserId) {
+        $base = (int)$sup['id'];
+        $why  = ($sup['hops'] > 0) ? ('上一層單位（' . $sup['stop_dept_name'] . '）主管') : '單位主管';
     } else {
         // 主管本人公出 → 往上找全站最高決策者。**最高決策者本人公出時就由他自己簽**（使用者定案）：
         // 他已經是全站最高一層，再往上沒有人，硬套 SoD 迴避只會變成「查無核准人」而讓單子沒人簽、簽章欄空白。
@@ -260,7 +263,9 @@ function bt_resolve_approver(PDO $db, ?int $deptId, int $tripUserId, bool $autoS
                 $selfOk = true;
                 $why    = '最高決策者本人公出，由本人核准（全站已無更上層可簽）';
             } else {
-                $why = $mgr ? '主管本人公出，改由最高核准人員核准' : '查無單位主管，改由最高核准人員核准';
+                // 到課級仍找不到上級（公出人自己就是課級最高主管）→ 依紙本附註改由最高核准人員核准
+                $why = !empty($sup['is_top']) ? '課級單位最高主管本人公出，改由最高核准人員核准'
+                                              : '查無單位主管，改由最高核准人員核准';
             }
         }
     }
@@ -382,11 +387,11 @@ function bt_print_signers(PDO $db, array $trip): array
                 $m   = $ids ? eg_org_dept_manager($db, $ids) : null;
                 return $m ? (string)$m['user_cname'] : '';
             case 'sup':
-                $sup = eg_resolve_supervisor($db, (int)$trip['user_id'], $trip['dept_id'] !== null ? (int)$trip['dept_id'] : null);
-                if (!$sup) return '';
-                $st = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
-                $st->execute([$sup]);
-                return (string)$st->fetchColumn();
+                // 單位主管走共用庫（ai-rules/24）：本人即本單位最高主管時往上一層單位，到課為止
+                $sup = eg_unit_supervisor($db, (int)$trip['user_id'],
+                                          $trip['dept_id'] !== null ? (int)$trip['dept_id'] : null,
+                                          (string)($trip['apply_date'] ?? ''));
+                return (string)($sup['name'] ?? '');
             case 'top':
                 $t = eg_org_user($db, 'top_approver');
                 return $t ? (string)$t['user_cname'] : '';

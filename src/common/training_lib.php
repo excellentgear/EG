@@ -806,11 +806,16 @@ function training_plan_notify_result(PDO $db, int $year, int $toUid, string $tit
  *   單層核准＝申請部門的部門主管；可於模組設定切換「免簽核」，免簽核時送出即視同核准（列印仍蓋章，比照計畫表）。
  *   通知＝比照 training_plan_notify 系列但一次性事件（非年度），故另建一套 ref_type=TRAINING_REQUEST_*。
  * ============================================================ */
-/** 某申請單位的核准人＝該部門主管；抓不到或就是申請人本人 → 視為免審（回 null，呼叫端自動核准） */
+/**
+ * 某申請單位的核准人＝**單位主管**（ai-rules/24 審核層級規範，唯一實作 unit_supervisor_lib.php）：
+ * 申請人自己就是本單位最高主管時往上一層單位找（組長→課長），到課級為止。
+ * 到課級仍是他本人（或整條路徑都沒有主管）→ 視為免審（回 null，呼叫端自動核准，維持原行為）。
+ */
 function training_request_signer(PDO $db, ?int $deptId, int $requesterId): ?array {
-    $m = eg_org_dept_manager($db, $deptId);
-    if (!$m || (int)$m['id'] === $requesterId) return null;
-    return ['id'=>(int)$m['id'], 'name'=>$m['user_cname']];
+    require_once __DIR__ . '/unit_supervisor_lib.php';
+    $sup = eg_unit_supervisor($db, $requesterId, $deptId ?: null);
+    if (empty($sup['id']) || (int)$sup['id'] === $requesterId) return null;
+    return ['id'=>(int)$sup['id'], 'name'=>(string)$sup['name']];
 }
 
 function training_request_notify(PDO $db, int $reqId, int $toUid, string $title, string $content, int $fromUid): int {

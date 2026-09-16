@@ -30,6 +30,7 @@ require_once __DIR__ . '/org_role_lib.php';
 require_once __DIR__ . '/delegate_lib.php';
 require_once __DIR__ . '/asdoc_lib.php';
 require_once __DIR__ . '/people_lib.php';
+require_once __DIR__ . '/unit_supervisor_lib.php';
 require_once __DIR__ . '/position_history_lib.php';
 require_once __DIR__ . '/approval_lib.php';
 require_once __DIR__ . '/date_fmt_lib.php';
@@ -69,7 +70,7 @@ const EC_VERDICTS = [
  * src 是「這一關預設找誰簽」的來源代碼，可在模組設定改（見 EC_SIGN_SOURCES）。
  */
 const EC_STAGES = [
-    'SUP'     => ['order' => 1, 'label' => '單位主管',     'sign_key' => 'sup',  'setting' => 'ec_sign_sup',  'default_src' => 'apply_dept_mgr'],
+    'SUP'     => ['order' => 1, 'label' => '單位主管',     'sign_key' => 'sup',  'setting' => 'ec_sign_sup',  'default_src' => 'unit_sup'],
     'WH'      => ['order' => 2, 'label' => '倉管組',       'sign_key' => 'wh',   'setting' => 'ec_sign_wh',   'default_src' => 'wh_dept_mgr'],
     'TD'      => ['order' => 3, 'label' => '技術課',       'sign_key' => 'td',   'setting' => 'ec_sign_td',   'default_src' => 'rd_dept_mgr'],
     'APPROVE' => ['order' => 4, 'label' => '核准',         'sign_key' => 'appr', 'setting' => 'ec_sign_appr', 'default_src' => 'top'],
@@ -80,8 +81,10 @@ const EC_STAGES = [
 /** 簽章人來源選項（值存設定；不在別處寫死人名，鐵律4） */
 const EC_SIGN_SOURCES = [
     ''                => '（留白，紙本手蓋）',
-    'apply_dept_mgr'  => '申請部門主管',
-    'applicant_sup'   => '申請人的上一級主管',
+    // 單位主管：申請人自己就是本單位最高主管時往上一層單位找，到課級為止（ai-rules/24）
+    'unit_sup'        => '單位主管（本人即本單位最高主管時往上一層單位，到課為止）',
+    'apply_dept_mgr'  => '申請部門主管（就是這個單位的主管，不往上追溯）',
+    'applicant_sup'   => '單位主管（同上，舊設定值相容）',
     'wh_dept_mgr'     => '倉管部門主管（組織角色綁定）',
     'rd_dept_mgr'     => '設計／技術部門主管（組織角色綁定）',
     'qc_dept_mgr'     => '品管部門主管（組織角色綁定）',
@@ -573,22 +576,15 @@ function ec_resolve_src(PDO $db, string $src, array $row): array
             if (!$did) return $none;
             $m = ec_dept_manager_asof($db, eg_dept_subtree_ids($db, $did), $date);
             return $m ? ['id' => $m['id'], 'name' => $m['user_cname']] : $none;
+        case 'unit_sup':
         case 'applicant_sup':
+            // 單位主管：一律走共用庫（ai-rules/24 審核層級規範，唯一實作 unit_supervisor_lib.php）。
+            // 它本身就吃業務日期回推當時職務（ai-rules/22），所以不必再為「過去的單據」另外走一條路。
             $aid = (int)($row['applicant_id'] ?? 0);
             if (!$aid) return $none;
-            // 上一級主管沒有「當時」版本可查，只有現況解析器；業務日期在過去時一律不用它
-            // （ai-rules/22 第一坑），改退回申請部門主管的回推結果。
-            $today = ec_db_now($db)['d'];
-            if ($date !== '' && $date < $today) {
-                $did = (int)($row['apply_dept_id'] ?? 0);
-                if (!$did) return $none;
-                $m = ec_dept_manager_asof($db, eg_dept_subtree_ids($db, $did), $date);
-                return $m ? ['id' => $m['id'], 'name' => $m['user_cname']] : $none;
-            }
-            $sup = eg_resolve_supervisor($db, $aid, (int)($row['apply_dept_id'] ?? 0) ?: null);
-            if (!$sup) return $none;
-            $idt = ec_user_identity_asof($db, (int)$sup, $date);
-            return ['id' => (int)$sup, 'name' => $idt['user_name']];
+            $sup = eg_unit_supervisor($db, $aid, (int)($row['apply_dept_id'] ?? 0) ?: null, $date);
+            if (empty($sup['id'])) return $none;   // 從缺（申請人即課級最高主管）＝這一關略過，章留白由紙本手蓋
+            return ['id' => (int)$sup['id'], 'name' => (string)$sup['name']];
         default:
             // xx_dept_mgr → 對應的組織角色綁定部門主管
             if (substr($src, -9) === '_dept_mgr') {

@@ -284,53 +284,24 @@ if (!function_exists('eg_position_delegate_persons')) {
 
 if (!function_exists('eg_resolve_supervisor')) {
     /**
-     * SoD 直升「上一級主管」。無全域主管鏈，規則：
-     *  1. 同部門內，職稱階級 < 被代理人階級（數字小=高）且最接近者（優先取該部門×該職稱的指定負責人）
-     *  2. 同部門無 → 沿 department.parent_id 上溯，取祖先部門的指定負責人（任一 primary_user_id）
-     *  3. 都無 → 回 null（交由呼叫端回退流程最終裁決者或掛管理員）
-     * 回傳 user id 或 null。
+     * SoD 直升「上一級主管」＝該員的**單位主管**，一律走共用庫 unit_supervisor_lib.php
+     * （ai-rules/24 審核層級規範，唯一實作；本函式只保留簽名與「找不到回 null」的既有契約）：
+     *  1. 該員所屬單位的最高主管（不是他本人）
+     *  2. 他自己就是該單位最高主管 → 往上一層單位（組→課）找該單位的最高主管
+     *  3. 到**課級**為止（不追溯到總經理室／董事長室這種全公司共同上級）→ 找不到回 null，
+     *     交由呼叫端回退流程最終裁決者或掛管理員
+     *
+     * 2026-09-16 改寫的原因（使用者回報「單位主管欄蓋到申請人自己的章」）：
+     *  舊版第 2 步只認 `department_position.primary_user_id`（指定負責人），而那個欄位全站一筆都沒有設定，
+     *  所以「往上一層找主管」從來沒有成功過——組長以上一律回 null。
+     *  另外舊版拿「主職的職級」去跟 $depHint 指定的那個部門比（兼任者的主職可能是工程師＝無職級），
+     *  會把同單位的副組長判成自己的上級。兩個問題都在共用庫裡一併解掉。
      */
     function eg_resolve_supervisor(PDO $db, int $targetUserId, ?int $depHint = null): ?int {
         try {
-            $main = eg_user_main_identity($db, $targetUserId);
-            $dep = $depHint ?? ($main['department_id'] ?? null);
-            if ($dep === null) return null;
-            $targetLevel = $main['level'] ?? 99; // 非主管視為最低
-
-            // 1. 同部門更高階（level < targetLevel），最接近者（level 越大越接近）；優先指定負責人
-            $st = $db->prepare("SELECT u.id, pl.level,
-                                       (SELECT dp.primary_user_id FROM department_position dp
-                                         WHERE dp.department_id = m.department_id AND dp.position_id = m.position_id
-                                         LIMIT 1) AS primary_uid
-                                FROM user_department_position_map m
-                                JOIN user u ON u.id = m.user_id AND u.state = 1
-                                JOIN position_level pl ON pl.position_id = m.position_id
-                                WHERE m.department_id = ? AND u.id <> ?
-                                  AND pl.level IS NOT NULL AND pl.level < ?
-                                ORDER BY pl.level DESC, (primary_uid = u.id) DESC
-                                LIMIT 1");
-            $st->execute([$dep, $targetUserId, $targetLevel]);
-            $r = $st->fetch(PDO::FETCH_ASSOC);
-            if ($r) return (int)($r['primary_uid'] ?: $r['id']);
-
-            // 2. 上溯父部門的指定負責人
-            $depCursor = $dep;
-            for ($hop = 0; $hop < 6; $hop++) { // 防無限迴圈
-                $pst = $db->prepare("SELECT parent_id FROM department WHERE id = ?");
-                $pst->execute([$depCursor]);
-                $parent = $pst->fetchColumn();
-                if (!$parent) break;
-                $sup = $db->prepare("SELECT primary_user_id FROM department_position dp
-                                     JOIN user u ON u.id = dp.primary_user_id AND u.state = 1
-                                     WHERE dp.department_id = ? AND dp.primary_user_id IS NOT NULL
-                                     ORDER BY (SELECT level FROM position_level pl WHERE pl.position_id = dp.position_id) ASC
-                                     LIMIT 1");
-                $sup->execute([$parent]);
-                $supId = $sup->fetchColumn();
-                if ($supId) return (int)$supId;
-                $depCursor = $parent;
-            }
-            return null;
+            require_once __DIR__ . '/unit_supervisor_lib.php';
+            $r = eg_unit_supervisor($db, $targetUserId, $depHint);
+            return !empty($r['id']) ? (int)$r['id'] : null;
         } catch (Throwable $e) { return null; }
     }
 }

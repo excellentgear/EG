@@ -929,12 +929,15 @@ function fsd_upper_dept_manager(PDO $db, int $uid): ?int {
         $dep = $main['department_id'] ?? null;
         $level = $main['level'] ?? 99;   // 非主管視為最低階
         if (!$dep) return null;
+        require_once __DIR__ . '/unit_supervisor_lib.php';
+        $depts  = eg_unit_dept_map($db);
         $cursor = (int)$dep;
         for ($hop = 0; $hop < 6; $hop++) {   // 與 delegate_lib 同樣的防無限迴圈上限
-            $pst = $db->prepare("SELECT parent_id FROM department WHERE id=?");
-            $pst->execute([$cursor]);
-            $parent = (int)$pst->fetchColumn();
-            if (!$parent) return null;
+            // 課級上限（ai-rules/24）：課級單位的最高主管本人送件時不往共同上級追溯
+            if (($depts[$cursor]['level'] ?? 9) <= EG_UNIT_SUP_TOP_LEVEL) return null;
+            $parent = (int)($depts[$cursor]['parent_id'] ?? 0);
+            if (!$parent || !isset($depts[$parent])) return null;
+            if (($depts[$parent]['level'] ?? 9) < EG_UNIT_SUP_TOP_LEVEL) return null;
             $st = $db->prepare("SELECT u.id,
                                        (SELECT dp.primary_user_id FROM department_position dp
                                          WHERE dp.department_id=m.department_id AND dp.position_id=m.position_id LIMIT 1) AS primary_uid
@@ -996,6 +999,18 @@ function fsd_position_levels(PDO $db): array {
     return $lv;
 }
 
+/** 職稱排序（同職級時課長先於副課長、組長先於副組長）。position_id => sort_order */
+function fsd_position_sorts(PDO $db): array {
+    static $so = null;
+    if ($so !== null) return $so;
+    $so = [];
+    try {
+        foreach ($db->query("SELECT id, COALESCE(sort_order,999) s FROM position")->fetchAll(PDO::FETCH_ASSOC) as $r)
+            $so[(int)$r['id']] = (int)$r['s'];
+    } catch (Throwable $e) {}
+    return $so;
+}
+
 /** 某人在該日期的**主職**：['dept_id','dept_name','position_name','level']；查不到回空陣列。 */
 function fsd_user_job_at(PDO $db, int $uid, string $date): array {
     $snap = fsd_pos_snapshot_at($db, $date)[$uid] ?? [];
@@ -1046,7 +1061,11 @@ function fsd_dept_manager_at(PDO $db, int $deptId, string $date): ?int {
     return $best;
 }
 
-/** 某人在該日期的上一階主管：同部門更高階 → 逐層上溯父部門。找不到回 null。 */
+/**
+ * 某人在該日期的上一階主管：同部門更高階 → 逐層上溯父部門（**到課級為止**）。找不到回 null。
+ * 課級上限見 ai-rules/24 審核層級規範：直線單位最高到「課」，再上去（總經理室／董事長室）是所有單位的
+ * 共同上級、不是誰的單位主管；課級單位的最高主管本人送件時這一關從缺（filler_supervisor 會退回本人簽）。
+ */
 function fsd_supervisor_at(PDO $db, int $uid, string $date, int $fromDeptId = 0): ?int {
     $job = fsd_user_job_at($db, $uid, $date);
     // $fromDeptId＝指定「以哪個部門的身分」往上找（兼任者用）：職級也要換成他在該部門的那一個，
@@ -1077,26 +1096,34 @@ function fsd_supervisor_at(PDO $db, int $uid, string $date, int $fromDeptId = 0)
         foreach (($snapAll[$pid] ?? []) as $r) if ((int)$r['department_id'] === $deptId) return $pid;
         return null;   // 當時不在這個部門就不算
     };
-    $findIn = function (int $deptId, int $myLevel) use ($snapAll, $ok, $lv, $uid): ?int {
-        $best = null; $bestLv = -1;
+    // 單位主管＝該單位的**最高主管**（ai-rules/24）：含本人一起比，本人就是最高時視同這一層沒有人
+    // ＝往上一層單位找。舊版是「取比自己高一階且最接近的那個人」，會讓副組長跳過同組的組長直接找到課長。
+    $so = fsd_position_sorts($db);
+    $findIn = function (int $deptId) use ($snapAll, $ok, $lv, $so, $uid): ?int {
+        $best = null; $bestKey = null;
         foreach ($snapAll as $u => $snap) {
-            if ((int)$u === $uid || !isset($ok[$u])) continue;
+            if (!isset($ok[$u])) continue;
             foreach ($snap as $r) {
                 if ((int)$r['department_id'] !== $deptId) continue;
-                $l = $lv[(int)$r['position_id']] ?? 999;
-                if ($l < $myLevel && $l > $bestLv) { $bestLv = $l; $best = (int)$u; }   // 取最接近自己上面的那一階
+                $pid = (int)$r['position_id'];
+                if (!isset($lv[$pid])) continue;                 // 沒有職級＝不是主管
+                $key = [$lv[$pid], $so[$pid] ?? 999, ((int)($r['is_main'] ?? 0) === 1 ? 0 : 1), (int)$u];
+                if ($bestKey === null || $key < $bestKey) { $bestKey = $key; $best = (int)$u; }
             }
         }
-        return $best;
+        return ($best && $best !== $uid) ? $best : null;
     };
-    if ($u = $findIn($job['dept_id'], $job['level'])) return $u;
-    $cursor = $job['dept_id'];
+    if ($u = $findIn($job['dept_id'])) return $u;
+    require_once __DIR__ . '/unit_supervisor_lib.php';
+    $depts  = eg_unit_dept_map($db);
+    $cursor = (int)$job['dept_id'];
     for ($hop = 0; $hop < 6; $hop++) {
-        $st = $db->prepare("SELECT parent_id FROM department WHERE id=?");
-        $st->execute([$cursor]);
-        $parent = (int)$st->fetchColumn();
-        if (!$parent) return null;
-        if ($u = $findIn($parent, $job['level'])) return $u;
+        // 課級上限（ai-rules/24）：本單位已經是課級 → 不再往上；上一層超過課級（總經理室／董事長室）→ 也不往上
+        if (($depts[$cursor]['level'] ?? 9) <= EG_UNIT_SUP_TOP_LEVEL) return null;
+        $parent = (int)($depts[$cursor]['parent_id'] ?? 0);
+        if (!$parent || !isset($depts[$parent])) return null;
+        if (($depts[$parent]['level'] ?? 9) < EG_UNIT_SUP_TOP_LEVEL) return null;
+        if ($u = $findIn($parent)) return $u;
         if ($u = $primaryOf($parent)) return $u;
         $cursor = $parent;
     }

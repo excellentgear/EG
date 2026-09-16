@@ -19,6 +19,7 @@ require_once __DIR__ . '/org_role_lib.php';
 require_once __DIR__ . '/delegate_lib.php';
 require_once __DIR__ . '/asdoc_lib.php';
 require_once __DIR__ . '/people_lib.php';
+require_once __DIR__ . '/unit_supervisor_lib.php';
 
 const DA_ASDOC_MODULE = 'doc_apply';
 
@@ -37,8 +38,8 @@ const DA_SIGN_SOURCES = [
     'mgmt_rep'       => '管理代表（組織角色綁定）',
     'hr_dept_mgr'    => '人事／管理部門主管（＝管理課主管）',
     'doc_dept_mgr'   => '文管中心負責人',
-    'apply_dept_mgr' => '申請部門主管',
-    'applicant_sup'  => '申請人的上一級主管',
+    'apply_dept_mgr' => '申請部門主管（就是這個單位的主管，不往上追溯）',
+    'applicant_sup'  => '單位主管（申請人自己就是本單位最高主管時往上一層單位，到課為止）',
     'applicant'      => '申請人（填表人）',
 ];
 
@@ -491,21 +492,16 @@ function da_resolve_signer_src(PDO $db, string $src, array $row): array
         case 'apply_dept_mgr':
             return $byMgr($row['dept_id'] ? [(int)$row['dept_id']] : []);
         case 'applicant_sup':
+            // 單位主管：一律走共用庫（ai-rules/24 審核層級規範，唯一實作 unit_supervisor_lib.php）。
+            // 申請人自己就是本單位最高主管時會往上一層單位找（組→課），到課級為止。
             $aid = (int)($row['applicant_id'] ?? 0);
             $did = $row['dept_id'] !== null ? (int)$row['dept_id'] : null;
-            // 申請人本身就是該單位的主管時，「單位主管」欄一樣蓋他自己的章
-            // （使用者明確要求：不做權責迴避，不要為了避嫌往上找人或留白）
-            if ($aid && $did) {
-                $m = da_dept_manager_asof($db, [$did], $asof);
-                if ($m && (int)$m['id'] === $aid) {
-                    return ['id'=>$aid, 'name'=>(string)($row['applicant_name'] ?? da_user_name($db, $aid))];
-                }
-            }
-            // 申請人不是該單位主管 → 蓋當時該單位主管的章；查不到才退回現況的上一級主管解析
-            $m2 = $did ? da_dept_manager_asof($db, [$did], $asof) : null;
-            if ($m2 && (int)$m2['id'] !== $aid) return ['id'=>(int)$m2['id'], 'name'=>(string)$m2['user_cname']];
-            $sup = eg_resolve_supervisor($db, $aid, $did);
-            return $sup ? ['id'=>(int)$sup, 'name'=>da_user_name($db, (int)$sup)] : $none;
+            if (!$aid) return $none;
+            $sup = eg_unit_supervisor($db, $aid, $did, $asof);
+            if (!empty($sup['id'])) return ['id'=>(int)$sup['id'], 'name'=>(string)$sup['name']];
+            // 從缺（申請人就是課級單位的最高主管，上面只剩全公司共同上級）→ 依使用者定調由申請人自己簽，
+            // 不往課級以上追溯、也不留白（紙本上這一格本來就是申請單位自己蓋）。
+            return ['id'=>$aid, 'name'=>(string)($row['applicant_name'] ?? da_user_name($db, $aid))];
         case 'applicant':
             return ['id'=>$row['applicant_id'] ? (int)$row['applicant_id'] : null,
                     'name'=>(string)($row['applicant_name'] ?? '')];
