@@ -172,6 +172,9 @@ case 'meta': {
         'auditors'  => ia_qualified_posts($db, 'auditor'),
         'escorts'   => ia_qualified_posts($db, 'escort'),
         'qualify_kinds' => IA_QUALIFY_KINDS,
+        // 稽核小組：哪些年度已經建過（建通知單前先提醒，會議紀錄也靠它帶與會人員）
+        'team_years'  => ia_team_years($db),
+        'team_roles'  => IA_TEAM_ROLES,
         // 稽核範本：填通知單時一列一列帶入（含已算好的候選人員）
         'templates' => ia_process_templates($db),
         // 範本組合：填通知單時選一次就整批帶入好幾列受稽單位
@@ -455,12 +458,16 @@ case 'case_save': {
     if ($ems && $eme && $eme < $ems) jerr('結束會議的結束時間不可早於開始時間');
 
     $year   = (int)substr($nd, 0, 4);
+    /* 這張單的業務日期＝稽核起日（沒填就退回通知日期）。人員的在職狀態、部門職稱與資格任期
+       一律以它為準（ai-rules/22）——否則補 2025 年的歷史單據時，當時在職現已離職的人一律
+       解析不到，畫面上明明選得到、按存檔卻被擋下來。前端也是用同一個日期取清單（鐵律8 同規則）。 */
+    $caseAsof = $af ?: $nd;
     // 稽核組長／稽核員／陪檢員都是挑「職務」（uid:deptId:posId），資格認到人員＋部門＋職稱。
     // 後端一定要再驗一次資格，不能只擋前端下拉（鐵律8）。
     $leader = null; $leaderName = null; $leaderDept = null; $leaderPos = null;
     $leaderKey = trim((string)($_POST['leader_key'] ?? ''));
     if ($leaderKey !== '') {
-        $lp = ia_resolve_post($db, $leaderKey, 'auditor');
+        $lp = ia_resolve_post($db, $leaderKey, 'auditor', $caseAsof);
         if (!$lp) jerr('稽核組長的職務不存在或沒有稽核員資格');
         $leader = $lp['user_id']; $leaderName = $lp['user_name'];
         $leaderDept = $lp['dept_id']; $leaderPos = $lp['position_id'];
@@ -596,7 +603,7 @@ case 'case_save': {
                 list($kind, $label) = $kk;
                 $list = [];
                 foreach (iaRowPostKeys($d, $kind) as $key) {
-                    $rp = ia_resolve_post($db, $key, $kind);
+                    $rp = ia_resolve_post($db, $key, $kind, $caseAsof);
                     if (!$rp) {
                         list($ku, $kd, $kp) = ia_post_parse($key);
                         if (!$ku || !isset($wasOn[$kind . '-' . $ku])) {
@@ -789,7 +796,7 @@ case 'check_create': {
     $auditorKey = trim((string)($_POST['auditor_key'] ?? ''));
     $auditorDept = null; $auditorPos = null;
     if ($auditorKey !== '') {
-        $ap = ia_resolve_post($db, $auditorKey, 'auditor');
+        $ap = ia_resolve_post($db, $auditorKey, 'auditor', $cd);
         if (!$ap) jerr('稽核人沒有該職務的稽核員資格');
         $auditorId = $ap['user_id']; $auditorName = $ap['user_name'];
         $auditorDept = $ap['dept_id']; $auditorPos = $ap['position_id'];
@@ -1551,10 +1558,21 @@ case 'meeting_create': {
     $etime = $kind === 'end' ? ($c['end_meet_end'] ?: null)   : null;
     $place = $kind === 'end' ? ($c['end_meet_place'] ?: null) : null;
 
-    // 主席＝稽核組長（沒填就用建立者）；與會人員＝受稽單位的陪檢員＋稽核員
-    $chairId   = (int)($c['leader_id'] ?? 0) ?: $uid;
+    /* 主席固定＝稽核組長（使用者要求 2026-09-16）：優先用這張單指定的稽核組長，
+       沒指定才用該年度稽核小組裡 role=leader 的那位，再沒有才退回建立者。 */
+    $team    = ia_team_get($db, $year);
+    $teamLead = null;
+    foreach ($team as $m) if ($m['role'] === 'leader') { $teamLead = $m; break; }
+    $chairId = (int)($c['leader_id'] ?? 0) ?: (int)($teamLead['user_id'] ?? 0) ?: $uid;
     $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$chairId]);
     $chairName = (string)($q->fetchColumn() ?: $uname);
+    // 主席「以哪個職務」出席：稽核組長那一列存的職務優先（圖章與名單的部門職稱才對得起來）
+    $chairPost = null;
+    if ((int)($c['leader_id'] ?? 0) === $chairId && (int)($c['leader_dept_id'] ?? 0)) {
+        $chairPost = ['dept_id' => (int)$c['leader_dept_id'], 'position_id' => (int)$c['leader_position_id']];
+    } elseif ($teamLead && (int)$teamLead['user_id'] === $chairId) {
+        $chairPost = ['dept_id' => (int)$teamLead['dept_id'], 'position_id' => (int)$teamLead['position_id']];
+    }
 
     $db->beginTransaction();
     try {
@@ -1566,33 +1584,55 @@ case 'meeting_create': {
                       $chairId, $chairName, $uid, $uname, $uid, $uname]);
         $mid = (int)$db->lastInsertId();
 
-        // 與會人員：稽核組長＋各受稽單位的稽核員與陪檢員（去重）
-        $q = $db->prepare("SELECT * FROM ia_case_dept WHERE case_id=? ORDER BY sort_order");
-        $q->execute([$cid]);
-        $cdRows = $q->fetchAll(PDO::FETCH_ASSOC);
-        $pmap = ia_cd_people_map($db, array_map(function ($r) { return (int)$r['cd_id']; }, $cdRows), $cdRows);
+        /* 與會人員（使用者要求 2026-09-16）：
+             ①**該年度的稽核小組成員**（主席＝稽核組長）
+             ②小組還沒建立時，退回舊規則＝這張單各受稽單位的稽核員與陪檢員
+                （否則小組沒建就變成一場沒有人的會議，比帶錯人更難用）
+           每個人一律記下「他是以哪個職務出席」，部門職稱再依**會議日期**回推（ai-rules/22）——
+           不帶職務的話 ia_identity_asof() 只會挑職級最高的那一個兼任職，跟通知單上挑的職務對不起來
+           （2026-09-16 使用者回報「會議紀錄上的部門與人員不正確」的根因）。 */
         $seen = []; $att = [];
-        $push = function ($id, $name) use (&$seen, &$att) {
+        $push = function ($id, $name, $dept = 0, $pos = 0) use (&$seen, &$att) {
             $id = (int)$id;
             if (!$id || isset($seen[$id])) return;
             $seen[$id] = 1;
-            $att[] = ['id' => $id, 'name' => (string)$name];
+            $att[] = ['id' => $id, 'name' => (string)$name, 'dept_id' => (int)$dept, 'position_id' => (int)$pos];
         };
-        $push($chairId, $chairName);
-        foreach ($cdRows as $r) {
-            $pp = $pmap[(int)$r['cd_id']] ?? ['auditor' => [], 'escort' => []];
-            foreach (array_merge($pp['auditor'], $pp['escort']) as $x) $push($x['user_id'], $x['user_name']);
+        $push($chairId, $chairName, (int)($chairPost['dept_id'] ?? 0), (int)($chairPost['position_id'] ?? 0));
+        $fromTeam = false;
+        if ($team) {
+            $fromTeam = true;
+            foreach ($team as $m) $push($m['user_id'], $m['user_name'], (int)$m['dept_id'], (int)$m['position_id']);
+        } else {
+            $q = $db->prepare("SELECT * FROM ia_case_dept WHERE case_id=? ORDER BY sort_order");
+            $q->execute([$cid]);
+            $cdRows = $q->fetchAll(PDO::FETCH_ASSOC);
+            $pmap = ia_cd_people_map($db, array_map(function ($r) { return (int)$r['cd_id']; }, $cdRows), $cdRows);
+            foreach ($cdRows as $r) {
+                $pp = $pmap[(int)$r['cd_id']] ?? ['auditor' => [], 'escort' => []];
+                foreach (array_merge($pp['auditor'], $pp['escort']) as $x) {
+                    $push($x['user_id'], $x['user_name'], (int)($x['dept_id'] ?? 0), (int)($x['position_id'] ?? 0));
+                }
+            }
+        }
+        // 姓名與部門職稱都以「會議日期當時」為準（現在已離職的人，補歷史會議一樣印得出當時的職稱）
+        $postByKey = $nameById = [];
+        foreach (eg_people_posts_asof($db, [], $mdate) as $p) {
+            $postByKey[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = $p;
+            $nameById[(int)$p['id']] = (string)$p['user_cname'];
         }
         $ins = $db->prepare("INSERT INTO meeting_attendee (meeting_id, user_id, user_name, dept_name,
                                  position_name, is_chair, signed) VALUES (?,?,?,?,?,?,0)");
         foreach ($att as $a) {
-            $idt = ia_identity_asof($db, $a['id'], $mdate);
-            $ins->execute([$mid, $a['id'], $a['name'], $idt['dept'] ?: null, $idt['position'] ?: null,
+            $hit = $postByKey[ia_post_key($a['id'], $a['dept_id'], $a['position_id'])] ?? null;
+            if ($hit) { $dept = (string)$hit['dept_name']; $pos = (string)$hit['position_name']; }
+            else { $idt = ia_identity_asof($db, $a['id'], $mdate); $dept = $idt['dept']; $pos = $idt['position']; }
+            $ins->execute([$mid, $a['id'], $nameById[$a['id']] ?? $a['name'], $dept ?: null, $pos ?: null,
                            $a['id'] === $chairId ? 1 : 0]);
         }
         $db->prepare("UPDATE ia_case SET `$col`=?, updated_at=NOW() WHERE case_id=?")->execute([$mid, $cid]);
         $db->commit();
-        jout(['meeting_id' => $mid, 'existed' => false, 'attendees' => count($att)]);
+        jout(['meeting_id' => $mid, 'existed' => false, 'attendees' => count($att), 'from_team' => $fromTeam]);
     } catch (Throwable $e) { $db->rollBack(); jerr('建立會議紀錄失敗：' . $e->getMessage(), 500); }
 }
 
@@ -1766,11 +1806,38 @@ case 'unit_delete': {
 /* ============================ 稽核員／陪檢員資格名單 ============================ */
 case 'qualify_get': {
     iaReqView($perms);
-    // jobs＝可以挑的「部門＋職稱」一列一個（名單只認職務不認人，人名建通知單時才即時抓）
+    // jobs＝可以挑的「部門＋職稱」一列一個（職位規則：該職務上的人都有資格）
+    // users＝「職位＋指定人員」規則（可帶任期）；posts＝指定人員時可以挑的職務清單
     $map = ia_qualify_map($db);
     $sel = [];
     foreach ($map as $ks) foreach ($ks as $k) $sel[$k] = 1;
-    jout(['kinds' => IA_QUALIFY_KINDS, 'map' => $map, 'jobs' => ia_job_options($db, array_keys($sel))]);
+    $posts = [];
+    try {
+        // 指定人員通常是「代理某位請假／離職的人」，所以候選要含**當時在職、現已離職**的人；
+        // 沒有單據日期可依，這裡用今天＋近三年當範圍，一律走共用的 asof 清單（ai-rules/22）
+        $seen = [];
+        foreach ([$today, substr($today, 0, 4) . '-01-01',
+                  ((int)substr($today, 0, 4) - 1) . '-07-01',
+                  ((int)substr($today, 0, 4) - 2) . '-07-01'] as $d) {
+            foreach (eg_people_posts_asof($db, [], $d) as $p) {
+                $k = ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id']);
+                if (isset($seen[$k])) continue;
+                $seen[$k] = 1;
+                $p['post_key3'] = $k;
+                $posts[] = $p;
+            }
+        }
+        usort($posts, fn($a, $b) => [$a['dept_sort'], (int)$a['dept_id'], $a['position_sort'], $a['user_cname']]
+                                <=> [$b['dept_sort'], (int)$b['dept_id'], $b['position_sort'], $b['user_cname']]);
+    } catch (Throwable $e) {}
+    // AS 文件負責人自動具備稽核員資格（期間＝as_document_management 的任期設定）——唯讀顯示用
+    $asTerms = [];
+    try {
+        require_once __DIR__ . '/../common/asdoc_editor_lib.php';
+        $asTerms = eg_asdoc_editor_terms($db);
+    } catch (Throwable $e) {}
+    jout(['kinds' => IA_QUALIFY_KINDS, 'map' => $map, 'jobs' => ia_job_options($db, array_keys($sel)),
+          'users' => ia_qualify_users($db), 'posts' => $posts, 'as_terms' => $asTerms]);
 }
 
 case 'qualify_save': {
@@ -1780,15 +1847,84 @@ case 'qualify_save': {
     // job_keys＝'deptId:posId'（現制）；post_keys/user_ids 是舊參數名，留著相容
     $ids = json_decode((string)($_POST['job_keys'] ?? $_POST['post_keys'] ?? $_POST['user_ids'] ?? '[]'), true);
     if (!is_array($ids)) jerr('格式錯誤');
+    // user_rules：沒送＝這次不動指定人員那一段（與製表人同一套「有沒有送」的判別法）
+    $userRules = null;
+    if (array_key_exists('user_rules', $_POST)) {
+        $userRules = json_decode((string)$_POST['user_rules'], true);
+        if (!is_array($userRules)) jerr('指定人員格式錯誤');
+    }
     $db->beginTransaction();
     $dropped = [];
     try {
-        $dropped = ia_qualify_save($db, $kind, $ids, $uname);
+        $dropped = ia_qualify_save($db, $kind, $ids, $uname, $userRules);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
     // 存完讀回來確認（存不進去卻回成功，使用者只會一直重存）
-    $back = ia_qualify_map($db);
-    jout(['saved' => true, 'count' => count($back[$kind] ?? []), 'dropped' => count($dropped)]);
+    $back  = ia_qualify_map($db);
+    $backU = ia_qualify_users($db);
+    jout(['saved' => true, 'count' => count($back[$kind] ?? []),
+          'user_count' => count($backU[$kind] ?? []), 'dropped' => count($dropped)]);
+}
+
+/* ============================ 稽核小組（年度） ============================ */
+case 'team_get': {
+    iaReqView($perms);
+    $y = (int)($_GET['year'] ?? $_POST['year'] ?? substr($today, 0, 4));
+    $asof = ia_team_asof($db, $y);
+    // 挑成員的候選＝該年度**有稽核員或陪檢員資格**的職務（資格名單留空時就是全體）
+    $cands = []; $seen = [];
+    foreach (['auditor', 'escort'] as $k) {
+        foreach (ia_qualified_posts($db, $k, $asof) as $p) {
+            if (isset($seen[$p['post_key3']])) continue;
+            $seen[$p['post_key3']] = 1;
+            $cands[] = $p;
+        }
+    }
+    usort($cands, fn($a, $b) => [$a['dept_sort'], (int)$a['dept_id'], $a['position_sort'], $a['user_cname']]
+                            <=> [$b['dept_sort'], (int)$b['dept_id'], $b['position_sort'], $b['user_cname']]);
+    jout(['year' => $y, 'asof' => $asof, 'roles' => IA_TEAM_ROLES,
+          'members' => ia_team_get($db, $y), 'candidates' => $cands,
+          'years' => ia_team_years($db)]);
+}
+
+case 'team_save': {
+    iaReqAdmin($perms);
+    $y = (int)($_POST['year'] ?? 0);
+    $ms = json_decode((string)($_POST['members'] ?? '[]'), true);
+    if (!is_array($ms)) jerr('格式錯誤');
+    $db->beginTransaction();
+    try {
+        $n = ia_team_save($db, $y, $ms, $uname);
+        $db->commit();
+        jout(['saved' => true, 'count' => $n, 'members' => ia_team_get($db, $y)]);
+    } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
+}
+
+case 'team_copy': {
+    iaReqAdmin($perms);
+    $from = (int)($_POST['from_year'] ?? 0);
+    $to   = (int)($_POST['to_year'] ?? 0);
+    if ($from === $to) jerr('來源年度與目標年度相同');
+    $db->beginTransaction();
+    try {
+        list($n, $skipped) = ia_team_copy($db, $from, $to, $uname);
+        $db->commit();
+        jout(['saved' => true, 'count' => $n, 'skipped' => $skipped, 'members' => ia_team_get($db, $to)]);
+    } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
+}
+
+/* 依業務日期回推的人員清單（ai-rules/22）——補歷史單據時要挑得到「當時在職、現已離職」的人，
+   職稱也要是當時的職稱。前端在開單／改日期時呼叫，把 META.people／auditors／escorts 換成該日期版本。 */
+case 'people_asof': {
+    iaReqView($perms);
+    $d = iaDate($_GET['date'] ?? $_POST['date'] ?? '') ?: $today;
+    jout([
+        'date'      => $d,
+        'people'    => ia_annotate_posts($db, eg_people_list_asof($db, [], $d), $d),
+        'auditors'  => ia_qualified_posts($db, 'auditor', $d),
+        'escorts'   => ia_qualified_posts($db, 'escort',  $d),
+        'templates' => ia_process_templates($db, true, $d),
+    ]);
 }
 
 

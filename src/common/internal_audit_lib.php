@@ -411,22 +411,30 @@ function ia_ensure_schema(PDO $db): void
             }
             /* 2026-09-09 使用者要求：名單只記「部門＋職稱」，不記人名——人員會異動，
                但「這個職稱可以當稽核員」不會變；人名在建通知單的當下即時抓該部門該職稱的在職人員。
-               既有的「人員＋部門＋職稱」列就地換成該職務（user_id=0＝整個職務），重複的自然合併。
-               可重複執行：只處理 user_id<>0 的殘留列。 */
-            $byPerson = $db->query("SELECT qp_id, kind, user_id, dept_id, position_id
-                                    FROM ia_qualified_person WHERE user_id<>0")->fetchAll(PDO::FETCH_ASSOC);
-            if ($byPerson) {
-                $ins2 = $db->prepare("INSERT IGNORE INTO ia_qualified_person
-                                        (kind, user_id, dept_id, position_id, sort_order, updated_at, updated_by)
-                                      VALUES (?,0,?,?,0,NOW(),'schema-upgrade')");
-                $del2 = $db->prepare("DELETE FROM ia_qualified_person WHERE qp_id=?");
-                foreach ($byPerson as $o) {
-                    if ((int)$o['dept_id'] && (int)$o['position_id']) {
-                        $ins2->execute([$o['kind'], (int)$o['dept_id'], (int)$o['position_id']]);
-                    }
-                    $del2->execute([(int)$o['qp_id']]);
-                }
+               既有的「人員＋部門＋職稱」列已於當時就地換成該職務（user_id=0＝整個職務）。
+               ★ 2026-09-16 起這段一次性轉換**必須移除**：新制的「職位＋指定人員」規則正是 user_id<>0
+                 的列（代理人臨時具備資格、AS 負責人…），留著這段等於每次開頁面就把使用者剛設的
+                 指定人員默默洗成「整個職務都有資格」——同職稱的其他人也會一起變成有資格，
+                 而且完全不報錯。要再轉一次請寫一次性 migration，不要放在會反覆執行的建表流程裡。 */
+
+            /* 2026-09-16 使用者要求：資格可以設成「職位」或「職位＋指定人員」，
+               指定人員還要能給任期（本人請假由代理人暫代那段期間才有資格）。
+               rule_kind: job=部門＋職稱（user_id=0） / user=部門＋職稱＋指定人員（user_id>0）
+               start_date/end_date：空＝不限（與 as_doc_editor_term 的任期語意完全一致）。 */
+            foreach ([
+                ['rule_kind',  "VARCHAR(10) NOT NULL DEFAULT 'job' COMMENT 'job=部門＋職稱 / user=指定人員' AFTER kind"],
+                ['start_date', "DATE NULL COMMENT '任期起（空=不限）' AFTER position_id"],
+                ['end_date',   "DATE NULL COMMENT '任期迄（空=至今）' AFTER start_date"],
+                ['note',       "VARCHAR(100) NULL COMMENT '備註（例：代理葉卿雅）' AFTER end_date"],
+            ] as $c) {
+                $has = $db->query("SHOW COLUMNS FROM ia_qualified_person LIKE '{$c[0]}'")->fetchAll();
+                if (!$has) $db->exec("ALTER TABLE ia_qualified_person ADD COLUMN `{$c[0]}` {$c[1]}");
             }
+            // 舊列一律是「部門＋職稱」規則
+            $db->exec("UPDATE ia_qualified_person SET rule_kind='job' WHERE user_id=0 AND rule_kind<>'job'");
+            // 同一人同一職務可以有多段任期，所以舊的 UNIQUE(kind,user_id,dept_id,position_id) 要放寬
+            try { $db->exec("ALTER TABLE ia_qualified_person DROP INDEX uk_kind_post"); } catch (Throwable $e) {}
+            try { $db->exec("ALTER TABLE ia_qualified_person ADD KEY idx_kind (kind, rule_kind)"); } catch (Throwable $e) {}
         } catch (Throwable $e) {}
 
         /* 稽核員／陪檢員／稽核組長是「以哪個職務」執行稽核——存到職務層級，
@@ -487,6 +495,26 @@ function ia_ensure_schema(PDO $db): void
             UNIQUE KEY uk_si (set_id, tpl_id),
             KEY idx_si_tpl (tpl_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='稽核範本組合的成員範本'");
+
+        /* ---- 稽核小組（2026-09-16 使用者交辦）----
+           「今年的內稽是誰在做」——建稽核通知單前先組好這一年的小組，
+           自動建立會議紀錄時**與會人員＝小組成員、主席＝稽核組長**，不必每次重挑。
+           小組是逐年的，可以從其他年度整批複製過來再增減。
+           存到職務層級（dept_id/position_id），圖章與會議紀錄的部門職稱才印得對。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_team_member (
+            tm_id       INT AUTO_INCREMENT PRIMARY KEY,
+            year        INT NOT NULL,
+            role        VARCHAR(10) NOT NULL COMMENT 'leader=稽核組長 / auditor=稽核員 / escort=陪檢員',
+            user_id     INT NOT NULL,
+            user_name   VARCHAR(60) NULL COMMENT '顯示用快取；姓名一律以 user 表為準',
+            dept_id     INT NULL,
+            position_id INT NULL,
+            note        VARCHAR(100) NULL,
+            sort_order  INT NOT NULL DEFAULT 0,
+            updated_at  DATETIME NULL, updated_by VARCHAR(60) NULL,
+            UNIQUE KEY uk_team (year, user_id, dept_id, position_id),
+            KEY idx_year (year, sort_order)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='年度稽核小組成員'");
 
         /* ---- 角色（module='internal_audit'） ---- */
         foreach ([
@@ -2009,46 +2037,129 @@ function ia_job_parse(string $key): array
 }
 
 /**
- * 某身分「目前可以挑的人」＝資格名單上那些部門＋職稱，現在在職的人（一個職務一列，
- * 跨部門兼任的人會出現多列）。名單記職務、這裡現查人，所以**人員異動、離職、新人接任
- * 都不必回頭改名單**（使用者要求 2026-09-09）。
- * **名單沒設定時一律回全體在職員工的所有職務**——否則模組剛上線一個人都挑不到，
- * 使用者會以為壞掉。已離職者不會出現在 eg_people_posts()，所以自然不會被挑到。
- * 每列在 eg_people_posts() 的欄位之外多帶 post_key3。
+ * 資格規則（原始列）。回 kind => [ ['rule_kind','user_id','dept_id','position_id','start_date','end_date','note'], ... ]
+ * rule_kind: job=部門＋職稱（該職務上的人都有資格）／user=部門＋職稱＋指定人員（只有這個人有資格）
  */
-function ia_qualified_posts(PDO $db, string $kind): array
+function ia_qualify_rules(PDO $db): array
+{
+    $out = array_fill_keys(array_keys(IA_QUALIFY_KINDS), []);
+    try {
+        foreach ($db->query("SELECT kind, rule_kind, user_id, dept_id, position_id, start_date, end_date, note
+                             FROM ia_qualified_person ORDER BY sort_order, qp_id")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (!isset($out[$r['kind']])) continue;
+            $out[$r['kind']][] = [
+                'rule_kind'   => ((string)($r['rule_kind'] ?? 'job') === 'user' && (int)$r['user_id'] > 0) ? 'user' : 'job',
+                'user_id'     => (int)$r['user_id'],
+                'dept_id'     => (int)$r['dept_id'],
+                'position_id' => (int)$r['position_id'],
+                'start_date'  => $r['start_date'],
+                'end_date'    => $r['end_date'],
+                'note'        => (string)($r['note'] ?? ''),
+            ];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 任期是否涵蓋某個日期（空起日＝最早、空迄日＝至今；與 as_doc_editor_term 同一套語意） */
+function ia_term_covers(?string $start, ?string $end, string $date): bool
+{
+    if ($date === '') return true;                       // 沒有業務日期就不用任期過濾
+    if ($start && $date < $start) return false;
+    if ($end   && $date > $end)   return false;
+    return true;
+}
+
+/**
+ * 「AS 文件負責人自動具備稽核員資格」（使用者要求 2026-09-16）。
+ * 期間比照 as_document_management.php→系統設定→結構總覽列印 裡設的**任期**，
+ * 所以文管中心負責人換人時這裡自動跟著換，不必回來改名單。
+ * 回傳 [user_id => 說明文字]；$date 空＝用今天。
+ */
+function ia_as_owner_auto_users(PDO $db, string $date): array
+{
+    require_once __DIR__ . '/asdoc_editor_lib.php';
+    $d = ($date !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) ? $date : ia_today($db);
+    $e = eg_asdoc_editor_at($db, $d);
+    if (!$e || !(int)$e['id']) return [];
+    return [(int)$e['id'] => 'AS 文件負責人（任期自動帶入）'];
+}
+
+/**
+ * 某身分「可以挑的人」＝資格名單涵蓋到的職務上、**該業務日期當時在職**的人
+ * （一個職務一列，跨部門兼任的人會出現多列）。
+ *
+ * $asofDate（Y-m-d，空＝現況）是 2026-09-16 使用者交辦的重點：
+ *   補歷史單據時要挑得到「當時在職、現在已離職」的人，職稱也要是**當時**的職稱
+ *   （例：文管中心負責人葉卿雅在 2025-11-03／2025-12-04 都還在職，補那兩張單時必須挑得到）。
+ *   走共用的 eg_people_posts_asof()，不在這裡自己寫一套（鐵律4、ai-rules/22）。
+ *
+ * 三種資格來源（任一命中即可）：
+ *   ①job 規則：該「部門＋職稱」上的人都有資格
+ *   ②user 規則：只有指定的那個人、在該職務上、且業務日期落在任期內才有資格
+ *     （代理人臨時具備資格用——同部門同職稱的其他人不會跟著有資格）
+ *   ③AS 文件負責人：自動具備**稽核員**資格，期間＝AS 任期
+ *
+ * **明確規則一條都沒設定時一律回全部**——否則模組剛上線一個人都挑不到，使用者會以為壞掉。
+ * 每列在 eg_people_posts() 的欄位之外多帶 post_key3 與 qualify_note。
+ */
+function ia_qualified_posts(PDO $db, string $kind, string $asofDate = ''): array
 {
     $all = [];
-    try { $all = eg_people_posts($db, []); } catch (Throwable $e) { $all = []; }
+    try {
+        $all = ($asofDate !== '') ? eg_people_posts_asof($db, [], $asofDate) : eg_people_posts($db, []);
+    } catch (Throwable $e) { $all = []; }
     foreach ($all as &$p) {
-        $p['post_key3'] = ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id']);
+        $p['post_key3']    = ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id']);
+        $p['qualify_note'] = '';
     }
     unset($p);
     if (!isset(IA_QUALIFY_KINDS[$kind])) return $all;
 
-    $keys = [];
-    try {
-        $st = $db->prepare("SELECT dept_id, position_id FROM ia_qualified_person WHERE kind=?");
-        $st->execute([$kind]);
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $keys[ia_job_key((int)$r['dept_id'], (int)$r['position_id'])] = 1;
+    $rules = ia_qualify_rules($db)[$kind] ?? [];
+    if (!$rules) return $all;                     // 沒設定＝不限制
+
+    $date = ($asofDate !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $asofDate)) ? $asofDate : '';
+    $jobKeys = [];      // 'deptId:posId' => 1
+    $userKeys = [];     // 'uid:deptId:posId' => note
+    foreach ($rules as $r) {
+        if (!ia_term_covers($r['start_date'], $r['end_date'], $date)) continue;
+        if ($r['rule_kind'] === 'user') {
+            $userKeys[ia_post_key($r['user_id'], $r['dept_id'], $r['position_id'])] =
+                ($r['note'] !== '' ? $r['note'] : '指定人員');
+        } else {
+            $jobKeys[ia_job_key($r['dept_id'], $r['position_id'])] = 1;
         }
-    } catch (Throwable $e) {}
-    if (!$keys) return $all;                      // 沒設定＝不限制
-    // 名單記的是職務（部門＋職稱），這裡把「目前在該職務上的人」現查出來＝人員異動自動跟著換
-    return array_values(array_filter($all, function ($p) use ($keys) {
-        return isset($keys[ia_job_key($p['dept_id'], $p['position_id'])]);
-    }));
+    }
+    // AS 文件負責人自動具備稽核員資格（該人的每一個職務都算）
+    $autoUsers = ($kind === 'auditor') ? ia_as_owner_auto_users($db, $date) : [];
+
+    $out = [];
+    foreach ($all as $p) {
+        $note = '';
+        if (isset($jobKeys[ia_job_key($p['dept_id'], $p['position_id'])])) {
+            $note = '';
+        } elseif (isset($userKeys[$p['post_key3']])) {
+            $note = $userKeys[$p['post_key3']];
+        } elseif (isset($autoUsers[(int)$p['id']])) {
+            $note = $autoUsers[(int)$p['id']];
+        } else {
+            continue;
+        }
+        $p['qualify_note'] = $note;
+        $out[] = $p;
+    }
+    return $out;
 }
 
 /**
  * 相容用：某身分的合格「人員」清單（去重）。
  * 有些地方只需要知道「這個人有沒有資格」（例如判斷既有單據上的人還算不算數）。
  */
-function ia_qualified_people(PDO $db, string $kind): array
+function ia_qualified_people(PDO $db, string $kind, string $asofDate = ''): array
 {
     $seen = []; $out = [];
-    foreach (ia_qualified_posts($db, $kind) as $p) {
+    foreach (ia_qualified_posts($db, $kind, $asofDate) as $p) {
         $id = (int)$p['id'];
         if (isset($seen[$id])) continue;
         $seen[$id] = 1; $out[] = $p;
@@ -2056,21 +2167,59 @@ function ia_qualified_people(PDO $db, string $kind): array
     return $out;
 }
 
-/** 目前設定的名單（管理畫面用），回 kind => ['deptId:posId', ...] */
+/** 目前設定的名單（管理畫面用），回 kind => ['deptId:posId', ...]（只含 job 規則） */
 function ia_qualify_map(PDO $db): array
 {
     $out = array_fill_keys(array_keys(IA_QUALIFY_KINDS), []);
     $seen = [];
-    try {
-        foreach ($db->query("SELECT kind, dept_id, position_id FROM ia_qualified_person
-                             ORDER BY sort_order, qp_id")->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            if (!isset($out[$r['kind']])) continue;
-            $k = ia_job_key((int)$r['dept_id'], (int)$r['position_id']);
-            if (isset($seen[$r['kind'] . '|' . $k])) continue;   // 舊制多人同職務會有多列，這裡合併成一個職務
-            $seen[$r['kind'] . '|' . $k] = 1;
-            $out[$r['kind']][] = $k;
+    foreach (ia_qualify_rules($db) as $kind => $rules) {
+        foreach ($rules as $r) {
+            if ($r['rule_kind'] !== 'job') continue;
+            $k = ia_job_key($r['dept_id'], $r['position_id']);
+            if (isset($seen[$kind . '|' . $k])) continue;
+            $seen[$kind . '|' . $k] = 1;
+            $out[$kind][] = $k;
         }
+    }
+    return $out;
+}
+
+/** 目前設定的「指定人員」列（管理畫面用），回 kind => [ {post_key3, user_id, user_name, dept/position 名稱, start_date, end_date, note}, ... ] */
+function ia_qualify_users(PDO $db): array
+{
+    $out = array_fill_keys(array_keys(IA_QUALIFY_KINDS), []);
+    $rules = ia_qualify_rules($db);
+    $uids = [];
+    foreach ($rules as $rs) foreach ($rs as $r) if ($r['rule_kind'] === 'user') $uids[$r['user_id']] = 1;
+    if (!$uids) return $out;
+
+    $names = $deptN = $posN = [];
+    try {
+        $in = implode(',', array_map('intval', array_keys($uids)));
+        foreach ($db->query("SELECT id, user_cname, state FROM `user` WHERE id IN ($in)")->fetchAll(PDO::FETCH_ASSOC) as $u)
+            $names[(int)$u['id']] = ['name' => (string)$u['user_cname'], 'resigned' => ((int)$u['state'] === 0)];
+        foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) $deptN[(int)$d['id']] = (string)$d['name'];
+        foreach ($db->query("SELECT id, name FROM position")->fetchAll(PDO::FETCH_ASSOC)   as $p) $posN[(int)$p['id']]  = (string)$p['name'];
     } catch (Throwable $e) {}
+
+    foreach ($rules as $kind => $rs) {
+        foreach ($rs as $r) {
+            if ($r['rule_kind'] !== 'user') continue;
+            $out[$kind][] = [
+                'post_key3'     => ia_post_key($r['user_id'], $r['dept_id'], $r['position_id']),
+                'user_id'       => $r['user_id'],
+                'user_name'     => $names[$r['user_id']]['name'] ?? ('#' . $r['user_id']),
+                'resigned'      => !empty($names[$r['user_id']]['resigned']),
+                'dept_id'       => $r['dept_id'],
+                'dept_name'     => $deptN[$r['dept_id']] ?? '',
+                'position_id'   => $r['position_id'],
+                'position_name' => $posN[$r['position_id']] ?? '',
+                'start_date'    => $r['start_date'],
+                'end_date'      => $r['end_date'],
+                'note'          => $r['note'],
+            ];
+        }
+    }
     return $out;
 }
 
@@ -2149,7 +2298,7 @@ function ia_job_options(PDO $db, array $alsoKeys = []): array
  * 目前沒有人在任的職務**照存**——職缺是暫時的，新人接任就自動有資格。
  * 回傳被略過的職務鍵，讓呼叫端可以回報「清掉了幾筆」。
  */
-function ia_qualify_save(PDO $db, string $kind, array $jobKeys, string $byName): array
+function ia_qualify_save(PDO $db, string $kind, array $jobKeys, string $byName, ?array $userRules = null): array
 {
     if (!isset(IA_QUALIFY_KINDS[$kind])) throw new RuntimeException('身分別不正確');
 
@@ -2170,15 +2319,53 @@ function ia_qualify_save(PDO $db, string $kind, array $jobKeys, string $byName):
         $keys[$k] = 1;
     }
 
+    /* 指定人員規則（職位＋這個人；可帶任期）。$userRules 傳 null＝呼叫端這次沒有送這一段，
+       維持原本的資料不動（與製表人 iaMakerFromPost() 同一套「有沒有送」的判別法：
+       送空陣列＝真的要清光，沒送＝舊呼叫端不要動它）。 */
+    $users = [];
+    if (is_array($userRules)) {
+        $seen = [];
+        foreach ($userRules as $r) {
+            if (!is_array($r)) continue;
+            $uid = (int)($r['user_id'] ?? 0);
+            $d   = (int)($r['dept_id'] ?? 0);
+            $p   = (int)($r['position_id'] ?? 0);
+            // 前端也是送職務鍵，兩種格式都收
+            if (!$uid && isset($r['post_key3'])) list($uid, $d, $p) = ia_post_parse((string)$r['post_key3']);
+            if (!$uid || !$d || !$p || !isset($depts[$d]) || !isset($poss[$p])) { $dropped['user:' . $uid] = 1; continue; }
+            $s = trim((string)($r['start_date'] ?? '')); $e = trim((string)($r['end_date'] ?? ''));
+            if ($s !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $s)) throw new RuntimeException('指定人員的任期起日格式不正確');
+            if ($e !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $e)) throw new RuntimeException('指定人員的任期迄日格式不正確');
+            if ($s !== '' && $e !== '' && $s > $e) throw new RuntimeException('指定人員的任期起日不可晚於迄日');
+            $sig = $uid . ':' . $d . ':' . $p . ':' . $s . ':' . $e;
+            if (isset($seen[$sig])) continue;
+            $seen[$sig] = 1;
+            $users[] = ['user_id' => $uid, 'dept_id' => $d, 'position_id' => $p,
+                        'start' => ($s ?: null), 'end' => ($e ?: null),
+                        'note' => mb_substr(trim((string)($r['note'] ?? '')), 0, 100)];
+        }
+    } else {
+        // 沒送＝沿用既有的指定人員列
+        foreach ((ia_qualify_rules($db)[$kind] ?? []) as $r) {
+            if ($r['rule_kind'] !== 'user') continue;
+            $users[] = ['user_id' => $r['user_id'], 'dept_id' => $r['dept_id'], 'position_id' => $r['position_id'],
+                        'start' => $r['start_date'], 'end' => $r['end_date'], 'note' => $r['note']];
+        }
+    }
+
     $db->prepare("DELETE FROM ia_qualified_person WHERE kind=?")->execute([$kind]);
-    if (!$keys) return array_keys($dropped);
     $ins = $db->prepare("INSERT INTO ia_qualified_person
-                            (kind, user_id, dept_id, position_id, sort_order, updated_at, updated_by)
-                         VALUES (?,0,?,?,?,NOW(),?)");
+                            (kind, rule_kind, user_id, dept_id, position_id, start_date, end_date, note,
+                             sort_order, updated_at, updated_by)
+                         VALUES (?,?,?,?,?,?,?,?,?,NOW(),?)");
     $i = 0;
     foreach (array_keys($keys) as $k) {
         list($dept, $pos) = ia_job_parse($k);
-        $ins->execute([$kind, $dept, $pos, ++$i * 10, $byName]);
+        $ins->execute([$kind, 'job', 0, $dept, $pos, null, null, null, ++$i * 10, $byName]);
+    }
+    foreach ($users as $u) {
+        $ins->execute([$kind, 'user', $u['user_id'], $u['dept_id'], $u['position_id'],
+                       $u['start'], $u['end'], ($u['note'] !== '' ? $u['note'] : null), ++$i * 10, $byName]);
     }
     return array_keys($dropped);
 }
@@ -2188,14 +2375,16 @@ function ia_qualify_save(PDO $db, string $kind, array $jobKeys, string $byName):
  * 回 ['user_id','user_name','dept_id','dept_name','position_id','position_name'] 或 null。
  * $kind 有給就順便驗資格——前端擋一次、後端同規則再擋一次（鐵律8）。
  */
-function ia_resolve_post(PDO $db, string $key, ?string $kind = null): ?array
+function ia_resolve_post(PDO $db, string $key, ?string $kind = null, string $asofDate = ''): ?array
 {
     if (trim($key) === '') return null;
     $posts = ($kind !== null && isset(IA_QUALIFY_KINDS[$kind]))
-           ? ia_qualified_posts($db, $kind)
-           : (function () use ($db) {
+           ? ia_qualified_posts($db, $kind, $asofDate)
+           : (function () use ($db, $asofDate) {
                  $all = [];
-                 try { $all = eg_people_posts($db, []); } catch (Throwable $e) {}
+                 try {
+                     $all = ($asofDate !== '') ? eg_people_posts_asof($db, [], $asofDate) : eg_people_posts($db, []);
+                 } catch (Throwable $e) {}
                  foreach ($all as &$p) $p['post_key3'] = ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id']);
                  unset($p);
                  return $all;
@@ -2235,16 +2424,19 @@ function ia_year_options(PDO $db): array
  * 使用者要求要全部列出來。走共用的 eg_people_posts()（一個職務一列），不自己拼 SQL。
  * 回傳每人多一個 posts 陣列與 posts_text（「品管部 課長／品管組 組長」）。
  */
-function ia_annotate_posts(PDO $db, array $people): array
+function ia_annotate_posts(PDO $db, array $people, string $asofDate = ''): array
 {
     if (!$people) return $people;
     $byUser = [];
     try {
-        foreach (eg_people_posts($db, []) as $p) {
+        foreach (($asofDate !== '' ? eg_people_posts_asof($db, [], $asofDate) : eg_people_posts($db, [])) as $p) {
             $byUser[(int)$p['id']][] = [
                 'dept_id'       => $p['dept_id'],
                 'dept_name'     => $p['dept_name'],
+                'dept_sort'     => (int)($p['dept_sort'] ?? 999),
+                'position_id'   => $p['position_id'],
                 'position_name' => $p['position_name'],
+                'position_sort' => (int)($p['position_sort'] ?? 999),
                 'is_main'       => (int)$p['is_main'],
             ];
         }
@@ -2418,13 +2610,170 @@ function ia_case_person_ids(PDO $db, int $caseId, string $kind = 'auditor', ?int
     return array_map('intval', array_keys($ids));
 }
 
+/* ============================ 稽核小組（年度） ============================
+ * 使用者要求（2026-09-16）：建稽核通知單前先組好這一年的稽核小組，可從其他年度複製；
+ * 自動建立會議紀錄時**與會人員＝小組成員、主席固定為稽核組長**。
+ */
+
+const IA_TEAM_ROLES = ['leader' => '稽核組長', 'auditor' => '稽核員', 'escort' => '陪檢員'];
+
+/** 該年度小組成員的業務日期（部門職稱要印當時的）——當年度就用該年年底，今年以後用今天 */
+function ia_team_asof(PDO $db, int $year): string
+{
+    $today = ia_today($db);
+    $cy = (int)substr($today, 0, 4);
+    if ($year <= 0 || $year >= $cy) return $today;
+    return $year . '-12-31';
+}
+
+/**
+ * 某年度的稽核小組。每列：tm_id/role/role_label/user_id/user_name/dept_id/dept_name/
+ *                        position_id/position_name/post_key3/note
+ * 部門與職稱名稱一律**依該年度回推**（ai-rules/22），不是印現在的。
+ */
+function ia_team_get(PDO $db, int $year): array
+{
+    $rows = [];
+    try {
+        $st = $db->prepare("SELECT * FROM ia_team_member WHERE year=? ORDER BY sort_order, tm_id");
+        $st->execute([$year]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+    if (!$rows) return [];
+
+    $asof = ia_team_asof($db, $year);
+    $postByKey = $nameById = [];
+    try {
+        foreach (eg_people_posts_asof($db, [], $asof) as $p) {
+            $postByKey[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = $p;
+            $nameById[(int)$p['id']] = (string)$p['user_cname'];
+        }
+    } catch (Throwable $e) {}
+    $deptN = $posN = [];
+    try {
+        foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) $deptN[(int)$d['id']] = (string)$d['name'];
+        foreach ($db->query("SELECT id, name FROM position")->fetchAll(PDO::FETCH_ASSOC)   as $p) $posN[(int)$p['id']]  = (string)$p['name'];
+    } catch (Throwable $e) {}
+
+    $out = [];
+    foreach ($rows as $r) {
+        $key = ia_post_key((int)$r['user_id'], (int)$r['dept_id'], (int)$r['position_id']);
+        $hit = $postByKey[$key] ?? null;
+        $out[] = [
+            'tm_id'         => (int)$r['tm_id'],
+            'role'          => (string)$r['role'],
+            'role_label'    => IA_TEAM_ROLES[$r['role']] ?? (string)$r['role'],
+            'user_id'       => (int)$r['user_id'],
+            'user_name'     => $nameById[(int)$r['user_id']] ?? (string)($r['user_name'] ?? ''),
+            'dept_id'       => (int)$r['dept_id'] ?: null,
+            'dept_name'     => $hit ? (string)$hit['dept_name'] : ($deptN[(int)$r['dept_id']] ?? ''),
+            'position_id'   => (int)$r['position_id'] ?: null,
+            'position_name' => $hit ? (string)$hit['position_name'] : ($posN[(int)$r['position_id']] ?? ''),
+            'post_key3'     => $key,
+            'note'          => (string)($r['note'] ?? ''),
+            // 當年度已經不在職／職務已異動的成員要標出來，否則使用者看不出為什麼會議帶不到人
+            'missing'       => $hit ? 0 : 1,
+        ];
+    }
+    return $out;
+}
+
+/** 已經建過小組的年度（複製來源下拉用） */
+function ia_team_years(PDO $db): array
+{
+    try {
+        return array_map('intval', $db->query("SELECT DISTINCT year FROM ia_team_member ORDER BY year DESC")
+                                      ->fetchAll(PDO::FETCH_COLUMN));
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 整批覆寫某年度的小組成員（唯一寫入點）。
+ * $members 每筆：['post_key3'|'user_id'+'dept_id'+'position_id', 'role', 'note']
+ * 規則：①稽核組長最多一位（會議主席固定用他）②同一個人在同一年度只算一列
+ *       ③職務不存在／人員不存在一律擋下（鐵律8）
+ */
+function ia_team_save(PDO $db, int $year, array $members, string $byName): int
+{
+    if ($year < 2000 || $year > 2200) throw new RuntimeException('年度不正確');
+    $valid = [];
+    try {
+        foreach (eg_people_posts_asof($db, [], ia_team_asof($db, $year)) as $p) {
+            $valid[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = $p;
+        }
+        // 補上現況的職務：小組常常是「今年新接任的人」，用年底回推會漏掉剛異動的
+        foreach (eg_people_posts($db, []) as $p) {
+            $valid[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = $p;
+        }
+    } catch (Throwable $e) {}
+    if (!$valid) throw new RuntimeException('目前查不到人員職務資料，為避免誤刪小組名單已停止儲存');
+
+    $clean = []; $seenUser = []; $leaders = 0;
+    foreach ($members as $m) {
+        if (!is_array($m)) continue;
+        $key = trim((string)($m['post_key3'] ?? ''));
+        if ($key === '') {
+            $key = ia_post_key((int)($m['user_id'] ?? 0), (int)($m['dept_id'] ?? 0), (int)($m['position_id'] ?? 0));
+        }
+        list($u, $d, $p) = ia_post_parse($key);
+        if (!$u) continue;
+        if (!isset($valid[$key])) throw new RuntimeException('小組成員的職務不存在（可能已異動），請重新挑選：' . $key);
+        if (isset($seenUser[$u])) continue;                 // 同一個人只算一列
+        $seenUser[$u] = 1;
+        $role = (string)($m['role'] ?? 'auditor');
+        if (!isset(IA_TEAM_ROLES[$role])) $role = 'auditor';
+        if ($role === 'leader') { $leaders++; if ($leaders > 1) throw new RuntimeException('稽核組長只能有一位'); }
+        $clean[] = ['role' => $role, 'user_id' => $u, 'user_name' => (string)$valid[$key]['user_cname'],
+                    'dept_id' => $d ?: null, 'position_id' => $p ?: null,
+                    'note' => mb_substr(trim((string)($m['note'] ?? '')), 0, 100)];
+    }
+
+    $db->prepare("DELETE FROM ia_team_member WHERE year=?")->execute([$year]);
+    if (!$clean) return 0;
+    $ins = $db->prepare("INSERT INTO ia_team_member
+                            (year, role, user_id, user_name, dept_id, position_id, note, sort_order, updated_at, updated_by)
+                         VALUES (?,?,?,?,?,?,?,?,NOW(),?)");
+    $i = 0;
+    foreach ($clean as $c) {
+        $ins->execute([$year, $c['role'], $c['user_id'], $c['user_name'], $c['dept_id'], $c['position_id'],
+                       ($c['note'] !== '' ? $c['note'] : null), ++$i * 10, $byName]);
+    }
+    return count($clean);
+}
+
+/**
+ * 從別的年度整批複製小組成員。
+ * **職務已不存在的成員會被略過**（例：當年的組員今年已離職），回傳 [複製筆數, 略過的姓名]。
+ */
+function ia_team_copy(PDO $db, int $fromYear, int $toYear, string $byName): array
+{
+    $src = ia_team_get($db, $fromYear);
+    if (!$src) throw new RuntimeException($fromYear . ' 年度沒有稽核小組可以複製');
+    $valid = [];
+    try {
+        foreach (eg_people_posts_asof($db, [], ia_team_asof($db, $toYear)) as $p)
+            $valid[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = 1;
+        foreach (eg_people_posts($db, []) as $p)
+            $valid[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = 1;
+    } catch (Throwable $e) {}
+
+    $keep = []; $skipped = [];
+    foreach ($src as $m) {
+        if (!isset($valid[$m['post_key3']])) { $skipped[] = $m['user_name'] . '（' . trim($m['dept_name'] . ' ' . $m['position_name']) . '）'; continue; }
+        $keep[] = ['post_key3' => $m['post_key3'], 'role' => $m['role'], 'note' => $m['note']];
+    }
+    if (!$keep) throw new RuntimeException('來源年度的成員在 ' . $toYear . ' 年都已不在原職務上，沒有可以複製的人');
+    $n = ia_team_save($db, $toYear, $keep, $byName);
+    return [$n, $skipped];
+}
+
 /* ============================ 稽核範本 ============================ */
 
 /**
  * 某些部門（含子部門）底下、具備某身分資格的職務。
  * 候選部門是多選，這裡把每個部門展開成子樹再取聯集。
  */
-function ia_posts_in_depts(PDO $db, string $kind, array $deptIds): array
+function ia_posts_in_depts(PDO $db, string $kind, array $deptIds, string $asofDate = ''): array
 {
     $scope = [];
     foreach ($deptIds as $d) {
@@ -2432,7 +2781,7 @@ function ia_posts_in_depts(PDO $db, string $kind, array $deptIds): array
         foreach (eg_dept_subtree_ids($db, $d) ?: [$d] as $x) $scope[(int)$x] = 1;
     }
     if (!$scope) return [];
-    return array_values(array_filter(ia_qualified_posts($db, $kind), function ($p) use ($scope) {
+    return array_values(array_filter(ia_qualified_posts($db, $kind, $asofDate), function ($p) use ($scope) {
         return isset($scope[(int)$p['dept_id']]);
     }));
 }
@@ -2448,7 +2797,7 @@ function ia_posts_in_depts(PDO $db, string $kind, array $deptIds): array
  *           auditor_dept_ids[]/escort_dept_ids[]/auditor_cands[]/escort_cands[]/
  *           auditor_auto（只有一位時的職務鍵，否則空）
  */
-function ia_process_templates(PDO $db, bool $activeOnly = true): array
+function ia_process_templates(PDO $db, bool $activeOnly = true, string $asofDate = ''): array
 {
     $rows = [];
     try {
@@ -2479,8 +2828,8 @@ function ia_process_templates(PDO $db, bool $activeOnly = true): array
         $id = (int)$r['tpl_id'];
         $aDepts = $deptsOf[$id]['auditor'] ?? [];
         $eDepts = $deptsOf[$id]['escort']  ?? [];
-        $aCands = ia_posts_in_depts($db, 'auditor', $aDepts);
-        $eCands = ia_posts_in_depts($db, 'escort',  $eDepts);
+        $aCands = ia_posts_in_depts($db, 'auditor', $aDepts, $asofDate);
+        $eCands = ia_posts_in_depts($db, 'escort',  $eDepts, $asofDate);
 
         // ③先決定稽核員：只有一位候選就自動帶入，陪檢員候選再把那個人排掉
         $auto = (count($aCands) === 1) ? $aCands[0]['post_key3'] : '';

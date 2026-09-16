@@ -297,32 +297,13 @@ function asDeptSubtreeIds(PDO $db, int $deptId): array {
     return array_keys($out);
 }
 
-function asEditorTermEnsure(PDO $db): void {
-    static $done = false;
-    if ($done) return;
-    $db->exec("CREATE TABLE IF NOT EXISTS as_doc_editor_term (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        start_date DATE NULL COMMENT '空=最早（不限）',
-        end_date DATE NULL COMMENT '空=至今',
-        note VARCHAR(100) NULL,
-        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_range (start_date, end_date)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AS文件管制總覽表－修改(製表)簽章人員任期'");
-    $done = true;
-}
+/* AS 文件負責人任期：讀取的實作已收斂進共用庫 src/common/asdoc_editor_lib.php（鐵律4）——
+   內部稽核要「AS 負責人自動具備稽核員資格、期間比照這裡的任期」，兩邊各查一次遲早走鐘。
+   這裡只留薄包裝，既有呼叫端不必改；**寫入**仍只在本檔的 save_tree_editor_terms。 */
+require_once __DIR__ . '/../common/asdoc_editor_lib.php';
+function asEditorTermEnsure(PDO $db): void { eg_asdoc_editor_ensure($db); }
 /** 任期清單（依起日排序；起日空者最前） */
-function asEditorTerms(PDO $db): array {
-    asEditorTermEnsure($db);
-    $rows = $db->query("SELECT t.id, t.user_id, t.start_date, t.end_date, t.note, u.user_cname, u.state
-                        FROM as_doc_editor_term t LEFT JOIN `user` u ON u.id = t.user_id
-                        ORDER BY COALESCE(t.start_date,'0001-01-01') ASC, t.id ASC")->fetchAll(PDO::FETCH_ASSOC);
-    return array_map(fn($r)=>[
-        'id'=>(int)$r['id'], 'user_id'=>(int)$r['user_id'], 'name'=>(string)($r['user_cname'] ?? ''),
-        'start_date'=>$r['start_date'], 'end_date'=>$r['end_date'], 'note'=>(string)($r['note'] ?? ''),
-        'resigned'=>((int)($r['state'] ?? 1) === 0),
-    ], $rows);
-}
+function asEditorTerms(PDO $db): array { return eg_asdoc_editor_terms($db); }
 /** 某日期當時的簽章人（沒有任期涵蓋該日＝回 null，由畫面手選遞補） */
 function asEditorOfDate(array $terms, string $date): ?array {
     foreach ($terms as $t) {

@@ -180,6 +180,13 @@ $roleLabel = ia_role_label($perms);
         .ia-sec > h5 { margin:0 0 8px; font-size:14px; color:#8A5A2B; border-bottom:1px solid #F0E0C4; padding-bottom:5px; }
         .ia-sec.locked { background:#F6F1E7; }
         .ia-sec .lock-note { float:right; font-size:12px; font-weight:normal; color:#a08356; }
+        /* 表頭的「全部同一日期」小工具（受稽日期／預定完成改善） */
+        .ia-allday { display:flex; gap:2px; margin-top:3px; font-weight:normal; }
+        .ia-allday input[type=date] { flex:1 1 auto; min-width:0; border:1px solid #D8BE93; border-radius:3px;
+                                      padding:1px 2px; font-size:11px; }
+        .ia-allday button { flex:0 0 auto; border:1px solid #D8BE93; border-radius:3px; background:#fff;
+                            font-size:11px; padding:0 5px; cursor:pointer; color:#8a6d45; }
+        .ia-allday button:hover { background:#F7E0BD; }
         /* 稽核員／陪檢員可多位：已選的人做成標籤，下方下拉再加人（2026-08-27） */
         .ia-ppl { display:flex; flex-wrap:wrap; gap:3px; }
         .ia-ppl .ppl-chip { display:inline-flex; align-items:center; gap:4px; max-width:100%;
@@ -287,6 +294,7 @@ $roleLabel = ia_role_label($perms);
             <button id="btnSetting"><i class="fa fa-cog"></i> 設定</button>
             <button id="btnUnitSetting"><i class="fa fa-sitemap"></i> 受稽單位</button>
             <button id="btnQualify"><i class="fa fa-user-plus"></i> 稽核員資格</button>
+            <button id="btnTeam"><i class="fa fa-users"></i> 稽核小組</button>
             <button id="btnTplSetting"><i class="fa fa-clone"></i> 稽核範本</button>
             <button id="btnClauseBank"><i class="fa fa-list-ol"></i> AS條文題庫</button>
             <?php endif; ?>
@@ -649,6 +657,8 @@ $roleLabel = ia_role_label($perms);
 <div class="ia-mask" id="caseMask"><div class="ia-modal wide">
     <div class="ia-mhead"><h4 id="caseTitle">稽核通知單</h4><span class="x" data-close>&times;</span></div>
     <div class="ia-mbody">
+        <!-- 這一年度還沒建稽核小組時的提示（2026-09-16 使用者要求：建通知單前先組好小組） -->
+        <div id="caseTeamHint" class="ia-hint" style="display:none;background:#FDF3E3;border-color:#E9C892;"></div>
         <div class="ia-sec"><h5>基本資料</h5>
             <div class="ia-form">
                 <label>稽核件號</label><div><input type="text" id="cNo" readonly placeholder="存檔後依通知日期自動產生"></div>
@@ -683,12 +693,22 @@ $roleLabel = ia_role_label($perms);
                 <th style="width:170px;">帶入範本</th>
                 <th style="width:170px;">稽核起始主過程</th><th style="width:140px;">受稽單位</th>
                 <th style="width:165px;">稽核員</th><th style="width:165px;">陪檢員</th>
-                <th style="width:130px;">受稽日期</th><th style="width:80px;">時間</th>
-                <th style="width:130px;">預定完成改善</th><th style="width:44px;"></th>
+                <!-- 全部同一天是常態（一天內跑完所有單位），所以直接在表頭給一個「全部」按鈕，
+                     不必一列一列點日曆（2026-09-16 使用者要求） -->
+                <th style="width:150px;">受稽日期
+                    <div class="ia-allday"><input type="date" id="cAllAudited"><button type="button" id="btnAllAudited" title="把這個日期套用到下面每一列">全部</button></div>
+                </th>
+                <th style="width:80px;">時間</th>
+                <th style="width:150px;">預定完成改善
+                    <div class="ia-allday"><input type="date" id="cAllDue"><button type="button" id="btnAllDue" title="把這個日期套用到下面每一列">全部</button></div>
+                </th>
+                <th style="width:44px;"></th>
             </tr></thead><tbody id="cDeptBody" data-eg-row-add="caseRowAdd" data-eg-row-del="caseRowDel"></tbody></table></div>
         </div>
         <div class="ia-sec" id="cMeetingSec"><h5>會議紀錄</h5>
-            <div class="ia-hint">會議紀錄走既有的「會議紀錄」模組，這裡只負責<b>自動建好草稿並帶入與會人員</b>（稽核組長＋各稽核員與陪檢員），再開新分頁給你填。同一張通知單重複按不會建出第二筆。</div>
+            <div class="ia-hint">會議紀錄走既有的「會議紀錄」模組，這裡只負責<b>自動建好草稿並帶入與會人員</b>，再開新分頁給你填。同一張通知單重複按不會建出第二筆。
+            <br>與會人員＝<b>該年度的稽核小組成員</b>（工具列「稽核小組」設定），<b>主席固定為稽核組長</b>；還沒建小組時退回用這張通知單上各受稽單位的稽核員與陪檢員。
+            <br>每個人的<b>部門與職稱是依「會議日期」回推當時的</b>，所以補舊年度的會議也會印當時那個職務，不會被現在的兼任職蓋掉。</div>
             <div id="cMeetingBox" style="font-size:13px;color:#5b3a1e;"></div>
         </div>
     </div>
@@ -964,6 +984,36 @@ $roleLabel = ia_role_label($perms);
 </div></div>
 
 
+<!-- ============================ 稽核小組（年度） ============================ -->
+<div class="ia-mask" id="teamMask"><div class="ia-modal wide">
+    <div class="ia-mhead"><h4><i class="fa fa-users"></i> 稽核小組</h4>
+        <select id="teamYear" style="margin-left:12px;border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;font-size:13px;"></select>
+        <span class="x" data-close style="margin-left:auto;">&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">這一年度的內稽<b>是誰在做</b>——建稽核通知單前先組好，
+        之後<b>自動建立會議紀錄時與會人員就是這份名單，主席固定為稽核組長</b>，不必每次重挑。
+        <br><b>稽核組長只能有一位</b>；候選只列該年度有<b>稽核員或陪檢員資格</b>的職務（資格名單留空時＝全體）。
+        <br>成員存的是「某人的某個職務」，所以會議紀錄與圖章上的<b>部門職稱會印當時那個職務的</b>，不會被兼任職蓋掉。
+        <br>常態小組每年差不多，可用右上「從其他年度複製」整批帶過來再增減；<b>原職務已異動或離職的成員會自動略過並列出來</b>。</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+            <select id="teamAddPost" data-eg-filter="輸入部門、職稱或姓名篩選…"
+                    style="min-width:300px;border:1px solid #D8BE93;border-radius:4px;padding:4px 6px;font-size:13px;"></select>
+            <select id="teamAddRole" style="border:1px solid #D8BE93;border-radius:4px;padding:4px 6px;font-size:13px;"></select>
+            <button id="btnTeamAdd" class="btn-warm" style="height:28px;font-size:13px;">＋加入成員</button>
+            <span style="margin-left:auto;"></span>
+            <select id="teamCopyFrom" style="border:1px solid #D8BE93;border-radius:4px;padding:4px 6px;font-size:13px;"></select>
+            <button id="btnTeamCopy" style="height:28px;font-size:13px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">從其他年度複製</button>
+        </div>
+        <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
+            <th style="width:110px;">身分</th><th style="width:130px;">部門</th><th style="width:110px;">職稱</th>
+            <th style="width:100px;">姓名</th><th>備註</th><th style="width:60px;">操作</th>
+        </tr></thead><tbody id="teamBody"></tbody></table></div>
+        <div id="teamMsg" style="font-size:12px;color:#8a6d45;margin-top:6px;"></div>
+    </div>
+    <div class="ia-mfoot"><button data-close>關閉</button><button id="btnTeamSave" class="btn-warm">儲存小組名單</button></div>
+</div></div>
+
+
 <!-- ============================ 稽核範本設定 ============================ -->
 <div class="ia-mask" id="tplMask"><div class="ia-modal wide">
     <div class="ia-mhead"><h4><i class="fa fa-clone"></i> 稽核範本設定</h4>
@@ -1166,15 +1216,48 @@ function peopleOptions(list, cur, blank){
 }
 /* 製表人下拉（2026-09-14 使用者交辦：年度計畫／稽核通知單／稽核報告表都要能事後改製表人）。
    補歷史表單時原本的製表人可能已經離職，eg_people_list 不會列離職者，
-   不特別處理的話「打開來存個檔」就會把製表人洗掉，所以查不到就把原本那位補進選項。 */
+   不特別處理的話「打開來存個檔」就會把製表人洗掉，所以查不到就把原本那位補進選項。
+
+   2026-09-15 使用者交辦兩件：
+   ①**只列有稽核員或陪檢員資格的人**——內稽的表單本來就是稽核小組在製作，全公司 40 幾個人
+     攤在下拉裡根本找不到人。資格由後端 META.auditors／META.escorts 帶回（已依業務日期回推）。
+   ②**同部門的人要排在一起**——eg_people_list() 的排序是「職稱 → 部門」，所以同一個部門的人
+     會被不同職稱拆散在清單各處；這裡改成**部門優先**（部門 sort_order → 職稱 sort_order → 姓名），
+     部門取「顯示標籤用的那個職務」＝主職，跟眼睛看到的字才對得起來。 */
+function makerQualifiedPeople(){
+    var ok = {};
+    (META.auditors||[]).concat(META.escorts||[]).forEach(function(p){ ok[String(p.id)] = 1; });
+    var list = (META.people||[]);
+    // 資格名單留空＝不限制，這時後端回的就是全體，ok 自然涵蓋所有人
+    var rows = list.filter(function(p){ return ok[String(p.id)]; });
+    if (!rows.length) rows = list.slice();          // 一個都對不上時寧可全列，也不要讓下拉變空的
+    return rows.slice().sort(function(a, b){
+        var ha = personHeadPost(a), hb = personHeadPost(b);
+        return (ha.dept_sort - hb.dept_sort) || ((ha.dept_id||0) - (hb.dept_id||0))
+            || (ha.position_sort - hb.position_sort)
+            || String(a.user_cname||'').localeCompare(String(b.user_cname||''), 'zh-Hant');
+    });
+}
 function makerOptions(curId, curName){
-    var h = '<option value="">（不指定）</option>', found = false;
-    (META.people||[]).forEach(function(p){ if (String(p.id)===String(curId||'')) found = true; });
-    if (curId && !found) h += '<option value="'+esc(curId)+'" selected>'+esc((curName||'#'+curId)+'（已離職／非在職）')+'</option>';
-    (META.people||[]).forEach(function(p){
+    var h = '<option value="">（不指定）</option>', found = false, rows = makerQualifiedPeople();
+    rows.forEach(function(p){ if (String(p.id)===String(curId||'')) found = true; });
+    if (curId && !found) h += '<option value="'+esc(curId)+'" selected>'+esc((curName||'#'+curId)+'（已離職／無稽核資格）')+'</option>';
+    var lastDept = null;
+    rows.forEach(function(p){
+        var d = personHeadPost(p).dept_name || '（未設部門）';
+        if (d !== lastDept) { lastDept = d; }        // 同部門相鄰＝排序已達成，不另加分隔以免下拉打字篩選被干擾
         h += '<option value="'+p.id+'"'+(String(curId||'')===String(p.id)?' selected':'')+'>'+esc(personPostLabel(p))+'</option>';
     });
     return h;
+}
+/** 這個人「標籤上顯示的那個職務」＝主職，沒有主職就用後端挑好的那一筆 */
+function personHeadPost(p){
+    var main = null;
+    (p.posts||[]).forEach(function(x){ if (!main && +x.is_main === 1) main = x; });
+    if (main) return {dept_id:main.dept_id, dept_name:main.dept_name, dept_sort:+main.dept_sort||999,
+                      position_sort:+main.position_sort||999};
+    return {dept_id:p.dept_id, dept_name:p.dept_name, dept_sort:+p.dept_sort||999,
+            position_sort:+p.position_sort||999};
 }
 /* 「部門　職稱　姓名」；多職務者以**主職**為準，兼任接在括號裡（2026-09-14 使用者回報：
    製表人下拉只看得到兼任職位——eg_people_list() 一人只回一列、而且挑的是「職級最高」那一筆，
@@ -1305,7 +1388,34 @@ function loadMeta(cb){
     });
 }
 $('#yearSel').on('change', function(){ YEAR = +$(this).val(); PAGE={case:1,check:1,nc:1}; loadPane(currentPane()); });
-$('#btnReload').on('click', function(){ loadMeta(function(){ loadPane(currentPane()); }); });
+$('#btnReload').on('click', function(){ ASOF_CACHE = {}; loadMeta(function(){ loadPane(currentPane()); }); });
+
+/* ---------- 依業務日期回推的人員清單（ai-rules/22，2026-09-16 使用者交辦） ----------
+   單據上的人一律要以**該單據的業務日期**為準：
+     ①當時在職、現在已離職的人要挑得到（例：文管中心負責人葉卿雅 2025-11 還在職）
+     ②部門與職稱要印當時的，不是現在的
+   meta 帶回來的是「今天」的版本，所以開單／改日期時要把 META.people／auditors／escorts／templates
+   換成該日期的版本。同一個日期只跟後端要一次（ASOF_CACHE）。 */
+var ASOF_CACHE = {}, ASOF_NOW = '';
+function asofDate(d){ return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : (META.today||''); }
+function applyAsof(r){
+    META.people    = r.people    || META.people;
+    META.auditors  = r.auditors  || META.auditors;
+    META.escorts   = r.escorts   || META.escorts;
+    META.templates = r.templates || META.templates;
+    ASOF_NOW = r.date || '';
+}
+function peopleAsof(date, cb){
+    var d = asofDate(date);
+    if (!d) { if (cb) cb(); return; }
+    if (ASOF_NOW === d) { if (cb) cb(); return; }
+    if (ASOF_CACHE[d]) { applyAsof(ASOF_CACHE[d]); if (cb) cb(); return; }
+    $.getJSON(API, {action:'people_asof', date:d}, function(res){
+        // 拿不到就沿用現有清單，不要讓整張表單開不起來
+        if (res && res.ok) { ASOF_CACHE[d] = res; applyAsof(res); }
+        if (cb) cb();
+    }).fail(function(){ if (cb) cb(); });
+}
 
 /* ============================ 總覽 ============================ */
 function loadDash(){
@@ -1365,7 +1475,10 @@ function loadPlan(){
         $('#planRemark').val(PLAN.remark||'');
         // 製表人（可改）；已核准的計劃表比照其他欄位只有系統管理員動得了
         $('#planMakerBox').toggle(<?= $perms['canAdmin'] ? 'true' : 'false' ?>);
-        $('#planMaker').html(makerOptions(PLAN.maker_id, PLAN.maker_name)).prop('disabled', planReadonly());
+        // 製表人清單以**製表日期**當時的在職狀態與職稱為準（ai-rules/22）
+        peopleAsof(PLAN.maker_date, function(){
+            $('#planMaker').html(makerOptions(PLAN.maker_id, PLAN.maker_name)).prop('disabled', planReadonly());
+        });
         $('#planMakerDate').val(inputDate(PLAN.maker_date)).prop('readonly', planReadonly());
         var stLabel = {draft:'草稿', submitted:'已送審', approved:'已核准'}[PLAN.status] || PLAN.status;
         var box = '狀態：<span class="st st-'+(PLAN.status==='approved'?'done':PLAN.status)+'">'+esc(stLabel)+'</span>';
@@ -1376,6 +1489,17 @@ function loadPlan(){
         renderPlanGrid();
     });
 }
+/* 改製表日期＝當時在職的人可能不同，下拉要跟著換（ai-rules/22） */
+$(document).on('change', '#planMakerDate', function(){
+    var cur = $('#planMaker').val();
+    peopleAsof($(this).val(), function(){
+        $('#planMaker').html(makerOptions(cur, (PLAN && PLAN.maker_name) || ''));
+    });
+});
+$(document).on('change', '#reportMakerDate', function(){
+    var cur = $('#reportMaker').val();
+    peopleAsof($(this).val(), function(){ $('#reportMaker').html(makerOptions(cur, '')); });
+});
 function planReadonly(){
     return !(<?= $perms['canAdmin'] ? 'true' : 'false' ?>) || (PLAN && PLAN.status==='approved' && !<?= $perms['isAdmin'] ? 'true' : 'false' ?>);
 }
@@ -1586,12 +1710,19 @@ function delCase(id){
 var CASE_ID = 0, CASE_ROWS = [];
 $('#btnCaseNew').on('click', function(){ openCase(0); });
 $('#btnCaseDelete').on('click', function(){ if (CASE_ID) delCase(CASE_ID); });
+/** 這張通知單的「業務日期」＝稽核起日，沒填就退回通知日期，再沒有就今天。
+    人員資格、在職狀態、部門職稱一律以它為準（ai-rules/22）。 */
+function caseBizDate(c){
+    if (c) return asofDate(c.audit_from || c.notify_date || META.today);
+    return asofDate($('#cFrom').val() || $('#cNotify').val() || META.today);
+}
 function openCase(id){
     CASE_ID = id;
     if (!id) {
+        peopleAsof(META.today, function(){
         $('#caseTitle').text('新增稽核通知單');
         $('#cNo,#cSeq').val(''); $('#cNotify').val(META.today);
-        $('#cFrom,#cTo,#cMeetDate,#cMeetStart,#cMeetEnd,#cMeetPlace').val('');
+        $('#cFrom,#cTo,#cMeetDate,#cMeetStart,#cMeetEnd,#cMeetPlace,#cAllAudited,#cAllDue').val('');
         $('#cRemark').val(defaultCaseRemark());
         $('#cLeader').html(postOptions(META.auditors, '', '', '（未指定）'));
         $('#cMaker').html(makerOptions(META.me.id, META.me.name));
@@ -1599,19 +1730,28 @@ function openCase(id){
         CASE_ROWS = [newCaseRow(),newCaseRow(),newCaseRow()];
         renderCaseRows(); $('#cMeetingSec').hide();
         $('#btnCaseDelete').hide();
+        teamHintForCase(META.today);
         clearErrs($('#caseMask')); openMask('caseMask');
+        });
         return;
     }
     // 點開即刷新：直接向後端拿這一筆的最新狀態，不用清單上的快取
     $.getJSON(API, {action:'case_get', case_id:id}, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
         var c = res.row;
+        // 先把人員清單換成「這張單的業務日期當時」的版本，再畫下拉（否則當時在職、現已離職的人挑不到）
+        peopleAsof(caseBizDate(c), function(){ openCaseRender(c); });
+    });
+}
+function openCaseRender(c){
+    {
         $('#caseTitle').text('稽核通知單　'+(c.case_no||'')+'（'+(CASE_ST[c.status]||c.status)+'）');
         $('#cNo').val(c.case_no||''); $('#cSeq').val('第'+c.seq_no+'次');
         $('#cNotify').val(inputDate(c.notify_date)); $('#cFrom').val(inputDate(c.audit_from));
         $('#cTo').val(inputDate(c.audit_to)); $('#cMeetDate').val(inputDate(c.end_meet_date));
         $('#cMeetStart').val(c.end_meet_start||''); $('#cMeetEnd').val(c.end_meet_end||'');
         $('#cMeetPlace').val(c.end_meet_place||''); $('#cRemark').val(c.remark||'');
+        $('#cAllAudited,#cAllDue').val('');
         $('#cMaker').html(makerOptions(c.maker_id, c.maker_name));
         $('#cMakerDate').val(inputDate(c.maker_date));
         $('#cLeader').html(postOptions(META.auditors, postKeyOf(c.leader_id, c.leader_dept_id, c.leader_position_id), c.leader_id, '（未指定）'));
@@ -1630,9 +1770,38 @@ function openCase(id){
         $('#cMeetingSec').show();
         // 已結案的不給刪（後端同規則再擋一次）
         $('#btnCaseDelete').toggle(CASE_CAN_DEL && c.status !== 'closed');
+        teamHintForCase(caseBizDate(c));
         clearErrs($('#caseMask')); openMask('caseMask');
-    });
+    }
 }
+/* 受稽日期／預定完成改善「全部同一日期」（2026-09-16 使用者要求）。
+   一天之內跑完所有受稽單位是常態，一列一列點日曆很花時間。
+   表頭沒填日期時，自動沿用**第一列已經填好的那個值**——多數情況使用者就是填完第一列才想到要全部一樣。 */
+function caseFillAllDate(field, headSel){
+    var v = $(headSel).val();
+    if (!v) {
+        for (var i = 0; i < CASE_ROWS.length; i++) { if (CASE_ROWS[i][field]) { v = CASE_ROWS[i][field]; break; } }
+    }
+    if (!v) { alert('請先在上方的日期欄選一個日期，或先填好其中一列'); $(headSel).focus(); return; }
+    CASE_ROWS.forEach(function(r){ r[field] = v; });
+    $(headSel).val(v);
+    renderCaseRows();
+}
+$(document).on('click', '#btnAllAudited', function(){ caseFillAllDate('audited_date', '#cAllAudited'); return false; });
+$(document).on('click', '#btnAllDue',     function(){ caseFillAllDate('improve_due',  '#cAllDue');     return false; });
+
+/* 改了稽核起日／通知日期＝業務日期換了，人員清單（在職狀態、職稱、資格任期）要跟著換。
+   不換的話畫面上還是舊日期那批人，挑完存檔後端會用新日期再驗一次＝存不進去又看不出原因。 */
+$(document).on('change', '#cFrom, #cNotify', function(){
+    if (!$('#caseMask').hasClass('on')) return;
+    var d = caseBizDate(null);
+    if (d === ASOF_NOW) return;
+    peopleAsof(d, function(){
+        $('#cLeader').html(postOptions(META.auditors, $('#cLeader').val(), '', '（未指定）'));
+        renderCaseRows();
+        teamHintForCase(d);
+    });
+});
 /* 新增通知單時自動帶入的備註＝設定跳窗裡管理員設的那一段（只有一個版本，全站共用）。
    從來沒設定過時後端會回內建預設文字；管理員存成空白＝不自動帶入。 */
 function defaultCaseRemark(){
@@ -1933,7 +2102,9 @@ $('#btnCheckNew').on('click', function(){
     // 清單上已經篩了種類就沿用（使用者多半是在那個種類的清單上按下「建立查檢表」）
     if ($('#checkKind').val()) $('#nkKind').val($('#checkKind').val());
     $('#nkDate').val(META.today);
-    $('#nkAuditor').html(postOptions(META.auditors, '', META.me.id, '（未指定）'));
+    peopleAsof(META.today, function(){
+        $('#nkAuditor').html(postOptions(META.auditors, '', META.me.id, '（未指定）'));
+    });
     $('#nkCase').html(caseOptions(''));
     $('#nkTitle').val(''); $('#nkFilter').val('');
     clearErrs($('#checkNewMask'));
@@ -1961,6 +2132,11 @@ function nkKindChanged(){
 $('#nkKind').on('change', nkKindChanged);
 $('#nkDate').on('change', function(){
     if ($('#nkKind').val()==='kpi') nkKindChanged();      // 稽核年度＝建立日期的前一年，日期一改要跟著換題庫
+    // 稽核人清單以**稽核日期**當時的在職狀態與職稱為準（ai-rules/22）
+    var cur = $('#nkAuditor').val();
+    peopleAsof($(this).val(), function(){
+        $('#nkAuditor').html(postOptions(META.auditors, cur, META.me.id, '（未指定）'));
+    });
 });
 /** AS 查檢表的「自動判定來源」下拉：已建立的系統稽核紀錄表 */
 function loadSrcChecks(){
@@ -2781,7 +2957,10 @@ function loadReport(){
                     : '<span style="color:#8a6d45;">尚未建立（按「儲存」即建立）</span>';
         $('#reportStatusBox').html(box);
         $('#reportNote').val(r ? (r.extra_note||'') : '');
-        $('#reportMaker').html(makerOptions(r ? r.maker_id : META.me.id, r ? r.maker_name : META.me.name));
+        // 製表人清單以**製表日期**當時的在職狀態與職稱為準（ai-rules/22）
+        peopleAsof(r ? r.maker_date : META.today, function(){
+            $('#reportMaker').html(makerOptions(r ? r.maker_id : META.me.id, r ? r.maker_name : META.me.name));
+        });
         $('#reportMakerDate').val(r ? inputDate(r.maker_date) : META.today);
         var rows = res.rows||[], admin = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
         if (!rows.length) {
@@ -3915,6 +4094,138 @@ $('#btnQualifySave').on('click', function(){
         renderQualify();
         loadMeta();
     }, 'json');
+});
+</script>
+
+<script>
+/* ============================ 稽核小組（年度，2026-09-16 使用者交辦） ============================
+   建稽核通知單前先組好這一年的小組；自動建立會議紀錄時與會人員＝小組成員、主席固定為稽核組長。 */
+var TEAM = {year:0, members:[], candidates:[], years:[]};
+$('#btnTeam').on('click', function(){ openTeam(YEAR); });
+function openTeam(year){
+    $.getJSON(API, {action:'team_get', year:year}, function(res){
+        if (!res.ok) { alert(res.error||'載入失敗'); return; }
+        TEAM = {year:+res.year, members:res.members||[], candidates:res.candidates||[], years:res.years||[]};
+        var yh = '';
+        (META.years||[]).forEach(function(y){ yh += '<option value="'+y+'">'+y+' 年度</option>'; });
+        $('#teamYear').html(yh).val(TEAM.year);
+        var rh = '';
+        $.each(res.roles||{}, function(k,v){ rh += '<option value="'+k+'">'+esc(v)+'</option>'; });
+        $('#teamAddRole').html(rh).val('auditor');
+        renderTeam();
+        openMask('teamMask');
+    });
+}
+$('#teamYear').on('change', function(){
+    // 換年度＝換一份名單，沒存的先問一次（直接切走會讓剛加的人默默不見）
+    if (TEAM._dirty && !confirm('這一年度的小組還沒儲存，切換年度會放棄剛才的修改，確定嗎？')) {
+        $(this).val(TEAM.year); return;
+    }
+    openTeam(+$(this).val());
+});
+function renderTeam(){
+    // 已加入的人不再出現在候選（同一個人在同一年度只算一列）
+    var used = {};
+    TEAM.members.forEach(function(m){ used[String(m.user_id)] = 1; });
+    var oh = '<option value="">（請選要加入的人員職務）</option>';
+    TEAM.candidates.forEach(function(p){
+        if (used[String(p.id)]) return;
+        oh += '<option value="'+esc(p.post_key3)+'">'+esc(p.display||((p.dept_name||'')+'　'+(p.position_name||'')+'　'+p.user_cname))+'</option>';
+    });
+    $('#teamAddPost').html(oh);
+
+    var h = '';
+    TEAM.members.forEach(function(m, i){
+        var rh = '';
+        $.each((META.team_roles||{leader:'稽核組長',auditor:'稽核員',escort:'陪檢員'}), function(k,v){
+            rh += '<option value="'+k+'"'+(m.role===k?' selected':'')+'>'+esc(v)+'</option>';
+        });
+        h += '<tr data-i="'+i+'">'
+          + '<td><select class="tmr" data-f="role" style="width:100%;border:1px solid #D8BE93;border-radius:3px;font-size:12px;">'+rh+'</select></td>'
+          + '<td>'+esc(m.dept_name||'')+'</td><td>'+esc(m.position_name||'')+'</td>'
+          + '<td>'+esc(m.user_name||'')+(m.missing?' <span style="color:#C4442D;" title="這個人在該年度已不在這個職務上（離職或調動），儲存時會被擋下，請改選現在的職務">⚠</span>':'')+'</td>'
+          + '<td><input type="text" class="tmr" data-f="note" value="'+esc(m.note||'')+'" placeholder="例：代理葉卿雅" style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 5px;font-size:12px;"></td>'
+          + '<td><span class="ia-op danger" onclick="teamDel('+i+')"><i class="fa fa-times"></i></span></td>'
+          + '</tr>';
+    });
+    $('#teamBody').html(h || '<tr><td colspan="6" class="ia-empty">這一年度還沒有稽核小組，請從上方加入成員，或從其他年度複製</td></tr>');
+
+    var ch = '<option value="">（選擇來源年度）</option>';
+    (TEAM.years||[]).forEach(function(y){ if (+y !== +TEAM.year) ch += '<option value="'+y+'">'+y+' 年度</option>'; });
+    $('#teamCopyFrom').html(ch);
+
+    var leaders = TEAM.members.filter(function(m){ return m.role==='leader'; }).length;
+    $('#teamMsg').html(esc(TEAM.year + ' 年度共 ' + TEAM.members.length + ' 位成員')
+        + (leaders === 1 ? '' : '　<span style="color:#C4442D;">稽核組長目前有 ' + leaders
+             + ' 位（必須剛好一位，會議紀錄的主席固定用他）</span>'));
+}
+$(document).on('change', '.tmr', function(){
+    var i = +$(this).closest('tr').data('i');
+    TEAM.members[i][$(this).data('f')] = $(this).val();
+    TEAM._dirty = true;
+    if ($(this).data('f') === 'role') renderTeam();
+});
+function teamDel(i){ TEAM.members.splice(i,1); TEAM._dirty = true; renderTeam(); }
+$('#btnTeamAdd').on('click', function(){
+    var key = $('#teamAddPost').val();
+    if (!key) { alert('請先選要加入的人員職務'); return; }
+    var p = null;
+    TEAM.candidates.forEach(function(x){ if (x.post_key3 === key) p = x; });
+    if (!p) return;
+    var role = $('#teamAddRole').val() || 'auditor';
+    if (role === 'leader' && TEAM.members.some(function(m){ return m.role==='leader'; })) {
+        alert('稽核組長只能有一位，請先把原本那位改成稽核員或移除'); return;
+    }
+    TEAM.members.push({role:role, user_id:p.id, user_name:p.user_cname, dept_id:p.dept_id,
+                       dept_name:p.dept_name, position_id:p.position_id, position_name:p.position_name,
+                       post_key3:p.post_key3, note:'', missing:0});
+    TEAM._dirty = true;
+    renderTeam();
+    return false;
+});
+$('#btnTeamCopy').on('click', function(){
+    var from = $('#teamCopyFrom').val();
+    if (!from) { alert('請先選來源年度'); return false; }
+    if (TEAM.members.length && !confirm(TEAM.year + ' 年度目前已有 ' + TEAM.members.length
+        + ' 位成員，從 ' + from + ' 年度複製會**整批取代**現有名單，確定嗎？')) return false;
+    $.post(API, {action:'team_copy', from_year:from, to_year:TEAM.year}, function(res){
+        if (!res.ok) { alert(res.error||'複製失敗'); return; }
+        TEAM.members = res.members||[]; TEAM._dirty = false;
+        renderTeam();
+        alert('已從 ' + from + ' 年度複製 ' + res.count + ' 位成員。'
+            + ((res.skipped && res.skipped.length) ? ('\n\n下列成員已不在原職務上（離職或調動），沒有複製過來：\n'
+                 + res.skipped.join('\n')) : ''));
+        loadMeta();
+    }, 'json');
+    return false;
+});
+$('#btnTeamSave').on('click', function(){
+    var ms = TEAM.members.map(function(m){ return {post_key3:m.post_key3, role:m.role, note:m.note||''}; });
+    $.post(API, {action:'team_save', year:TEAM.year, members:JSON.stringify(ms)}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        TEAM.members = res.members||[]; TEAM._dirty = false;
+        renderTeam();
+        alert(TEAM.year + ' 年度稽核小組已儲存（' + res.count + ' 位）');
+        loadMeta();
+    }, 'json');
+});
+/* 稽核通知單上的提示：這一年度還沒建小組時講清楚會影響什麼，並給一鍵開啟 */
+function teamHintForCase(bizDate){
+    var y = parseInt(String(bizDate||META.today).substr(0,4),10) || YEAR;
+    var has = ((META.team_years||[]).indexOf(y) >= 0);
+    var $b = $('#caseTeamHint');
+    if (!$b.length) return;
+    if (has) { $b.hide().html(''); return; }
+    $b.html('<b>' + y + ' 年度還沒有建立稽核小組。</b>'
+        + '建議先建立——之後「自動建立會議紀錄」的與會人員就是小組成員、主席固定為稽核組長；'
+        + '沒有小組時會退回用這張通知單上各受稽單位的稽核員與陪檢員。'
+        + ' <a href="#" id="caseTeamOpen" style="color:#B45309;text-decoration:underline;">現在建立／從其他年度複製</a>')
+      .show();
+}
+$(document).on('click', '#caseTeamOpen', function(){
+    var y = parseInt(String(caseBizDate(null)).substr(0,4),10) || YEAR;
+    openTeam(y);
+    return false;
 });
 </script>
 
