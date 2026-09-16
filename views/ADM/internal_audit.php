@@ -575,7 +575,23 @@ $roleLabel = ia_role_label($perms);
                 <div><select id="setSignApprove"></select></div>
                 <label>審查格</label>
                 <div><select id="setSignReview"></select></div>
-                <label>&nbsp;</label><div></div>
+                <label>自動簽核</label>
+                <div>
+                    <label style="font-weight:normal;cursor:pointer;">
+                        <input type="checkbox" id="setAutoSign" style="vertical-align:-2px;">
+                        年度計畫表按下「送審」時，直接完成審查與核准
+                    </label>
+                    <div style="font-size:12px;color:#8a6d45;margin-top:3px;">
+                        關閉（預設）＝送審後仍要有人按「核准」。<br>
+                        開啟後：<b>審查人與核准人＝上面兩格設定的人</b>（不是按下按鈕的人），
+                        <b>業務日期＝送出日</b>，簽核時間會刻意與送出時間錯開 5～180 分鐘且不跨日（ai-rules/21）。
+                    </div>
+                </div>
+                <label>&nbsp;</label>
+                <div style="font-size:12px;color:#8a6d45;">
+                    <b>核准格／審查格決定的不只是列印的圖章</b>——畫面上狀態列顯示的「審查：○○○／核准：○○○」
+                    也是依這裡解析，兩邊一定一致。設成「留白，紙本手蓋」時才會記成實際按下按鈕的人。
+                </div>
             </div>
         </div>
         <div class="ia-sec"><h5>缺失到期提醒</h5>
@@ -962,15 +978,36 @@ $roleLabel = ia_role_label($perms);
 <div class="ia-mask" id="qualifyMask"><div class="ia-modal">
     <div class="ia-mhead"><h4><i class="fa fa-user-plus"></i> 稽核員／陪檢員資格名單</h4><span class="x" data-close>&times;</span></div>
     <div class="ia-mbody">
-        <div class="ia-hint">設定哪些<b>職務</b>可以被指派為<b>稽核員</b>或<b>陪檢員</b>——名單認到<b>部門＋職稱</b>，<b>不指定人名</b>。
-        <br><b>人名是建稽核通知單的當下才抓</b>該部門該職稱目前的在職人員，所以<b>人員異動、離職、新人接任都不必回頭改這份名單</b>。
-        <br>右側「目前人員」只是讓你確認這個職稱現在是誰，<b>不是設定值</b>；同一個職稱有兩個人時兩位都會出現在候選裡，由填表人挑。
-        <br>兼任的職務也是獨立一列（例：<b>品管課 課長</b> 與 <b>總經理室 總經理</b> 分開設定），所以「兼任才有資格」設定得出來。
-        <br>設定後，稽核通知單與查檢表的對應下拉<b>只會列出名單內職務上的人</b>。<b>名單留空＝不限制</b>（全體在職員工的所有職務都可指派）。</div>
+        <div class="ia-hint">設定誰可以被指派為<b>稽核員</b>或<b>陪檢員</b>，有兩種設法，<b>兩種可以並用</b>：
+        <br>①<b>依職位</b>（下半部的勾選清單）＝認到<b>部門＋職稱</b>、<b>不指定人名</b>。<b>人名是建稽核通知單的當下才抓</b>該部門該職稱**當時**的在職人員，
+        所以<b>人員異動、離職、新人接任都不必回頭改名單</b>；同一個職稱有兩個人時兩位都會出現在候選裡，由填表人挑。
+        兼任的職務是獨立一列（例：<b>品管課 課長</b> 與 <b>總經理室 總經理</b> 分開設定），所以「兼任才有資格」設定得出來。
+        <br>②<b>職位＋指定人員</b>（上半部）＝只有<b>這一個人的這個職務</b>有資格，<b>同部門同職稱的其他人不會跟著有</b>。
+        可以給<b>任期</b>（起／迄日，空＝不限）——<b>本人請假由代理人暫代</b>時就是用這個：把代理人加一列、期間填請假那幾天，過期自動失效，不必記得回來刪。
+        <br>③<b>AS 文件負責人自動具備稽核員資格</b>（不必在這裡設定），期間比照
+        <b>AS 文件管理 → 系統設定 → 結構總覽列印 → 修改（製表）簽章人員任期</b>；換人時這裡自動跟著換。
+        <br>資格<b>一律以單據的業務日期判定</b>（稽核通知單＝稽核起日、查檢表＝稽核日期、製表人＝製表日期），
+        所以補歷史單據時<b>當時在職、現在已離職的人一樣挑得到</b>，職稱也是當時的。<b>①②都留空＝不限制</b>。</div>
         <div class="ia-tabs" style="margin-top:4px;">
             <div class="ia-tab on q-tab" data-kind="auditor">稽核員</div>
             <div class="ia-tab q-tab" data-kind="escort">陪檢員</div>
         </div>
+
+        <div id="qAsBox" style="font-size:12px;color:#5b3a1e;background:#FDF3E3;border:1px solid #E9C892;
+             border-radius:4px;padding:6px 8px;margin-bottom:8px;display:none;"></div>
+
+        <h5 style="margin:4px 0 6px;font-size:13px;color:#8a6d45;">職位＋指定人員（可設任期；代理人暫代就用這裡）</h5>
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;">
+            <select id="quAddPost" data-eg-filter="輸入部門、職稱或姓名篩選…"
+                    style="min-width:280px;border:1px solid #D8BE93;border-radius:4px;padding:4px 6px;font-size:13px;"></select>
+            <button id="btnQuAdd" class="btn-warm" style="height:28px;font-size:13px;">＋加入指定人員</button>
+        </div>
+        <div class="ia-table-wrap" style="max-height:170px;"><table class="ia-table"><thead><tr>
+            <th style="width:120px;">部門</th><th style="width:100px;">職稱</th><th style="width:90px;">姓名</th>
+            <th style="width:130px;">任期起</th><th style="width:130px;">任期迄</th><th>備註</th><th style="width:50px;">操作</th>
+        </tr></thead><tbody id="quBody"></tbody></table></div>
+
+        <h5 style="margin:12px 0 6px;font-size:13px;color:#8a6d45;">依職位（該職務上的人都有資格）</h5>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
             <input type="text" id="qFilter" placeholder="輸入部門、職稱或姓名篩選…"
                    style="border:1px solid #D8BE93;border-radius:4px;padding:4px 8px;font-size:13px;width:230px;">
@@ -978,7 +1015,7 @@ $roleLabel = ia_role_label($perms);
             <button id="qNone" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全部清空</button>
             <span id="qCount" style="font-size:12px;color:#8a6d45;"></span>
         </div>
-        <div class="pick-wrap" id="qPick" style="max-height:340px;"></div>
+        <div class="pick-wrap" id="qPick" style="max-height:260px;"></div>
     </div>
     <div class="ia-mfoot"><button data-close>關閉</button><button id="btnQualifySave" class="btn-warm">儲存這一分頁的名單</button></div>
 </div></div>
@@ -1580,9 +1617,15 @@ $('#btnPlanSave').on('click', function(){
 });
 $('#btnPlanSubmit').on('click', function(){
     if (!PLAN) return;
-    askDate('送審年度稽核計劃表', '審查日期會印在表格下方「審查」欄。', function(d){
+    var auto = String((META.settings||{}).ia_auto_sign||'') === '1';
+    askDate('送審年度稽核計劃表',
+        '審查日期會印在表格下方「審查」欄。審查人＝設定裡「審查格」指定的那一位。'
+        + (auto ? '\n目前已開啟「自動簽核」：按下去會一併完成核准（核准人＝設定裡「核准格」指定的那一位）。' : ''),
+        function(d){
         $.post(API, {action:'plan_decide', plan_id:PLAN.plan_id, status:'submitted', biz_date:d}, function(res){
             if (!res.ok) { alert(res.error||'失敗'); return; }
+            if (res.auto_signed) alert('已自動完成簽核：審查 ' + (res.reviewer||'（留白）')
+                + '／核准 ' + (res.approver||'（留白）'));
             loadPlan();
         }, 'json');
     });
@@ -3048,6 +3091,7 @@ $('#btnSetting').on('click', function(){
     $.each(META.sign_sources||{}, function(k,v){ sh += '<option value="'+k+'">'+esc(v)+'</option>'; });
     $('#setSignApprove').html(sh).val(s.ia_sign_approve||'');
     $('#setSignReview').html(sh).val(s.ia_sign_review||'');
+    $('#setAutoSign').prop('checked', String(s.ia_auto_sign||'') === '1');
     $('#setRemindDays').val(s.ia_remind_days||'7');
     $('#setMeetPre').val(s.ia_meeting_pre_subject||'');
     $('#setMeetEnd').val(s.ia_meeting_end_subject||'');
@@ -3107,6 +3151,7 @@ $('#btnSettingSave').on('click', function(){
         ['ia_stamp_tpl_id',       $('#setStampTpl').val()],
         ['ia_sign_approve',       $('#setSignApprove').val()],
         ['ia_sign_review',        $('#setSignReview').val()],
+        ['ia_auto_sign',          $('#setAutoSign').prop('checked') ? '1' : '0'],
         ['ia_remind_days',        v],
         ['ia_meeting_pre_subject',$('#setMeetPre').val()],
         ['ia_meeting_end_subject',$('#setMeetEnd').val()],
@@ -3980,11 +4025,12 @@ function delUnit(unitId, name){
 /* ============================ 稽核員／陪檢員資格名單 ============================ */
 /* 名單認到「部門＋職稱」（QJOBS，鍵 'deptId:posId'），不認人名——
    人員會異動，但職稱不會；人名一律在建稽核通知單的當下即時抓（使用者要求 2026-09-09）。 */
-var QMAP = {}, QKIND = 'auditor', QJOBS = [];
+var QMAP = {}, QKIND = 'auditor', QJOBS = [], QUSERS = {}, QPOSTS = [], QASTERMS = [];
 $('#btnQualify').on('click', function(){
     $.getJSON(API, {action:'qualify_get'}, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
         QMAP = res.map||{}; QJOBS = res.jobs||[];
+        QUSERS = res.users||{auditor:[],escort:[]}; QPOSTS = res.posts||[]; QASTERMS = res.as_terms||[];
         QKIND = 'auditor';
         $('.q-tab').removeClass('on'); $('.q-tab[data-kind=auditor]').addClass('on');
         $('#qFilter').val('');
@@ -4026,7 +4072,64 @@ function renderQualify(){
     });
     $('#qPick').html(h || '<div class="ia-empty">沒有符合的職務</div>');
     updateQCount(shown);
+    renderQualifyUsers();
 }
+/* 「職位＋指定人員」清單（可設任期）。代理人暫代、AS 負責人以外的個案都走這裡。 */
+function renderQualifyUsers(){
+    var rows = QUSERS[QKIND] || [];
+    // 已經加進來的職務不再出現在候選（同一個職務重複設沒有意義）
+    var used = {};
+    rows.forEach(function(r){ used[r.post_key3] = 1; });
+    var oh = '<option value="">（請選人員職務）</option>';
+    QPOSTS.forEach(function(p){
+        if (used[p.post_key3]) return;
+        oh += '<option value="'+esc(p.post_key3)+'">'+esc(p.display||((p.dept_name||'')+'　'+(p.position_name||'')+'　'+p.user_cname))+'</option>';
+    });
+    $('#quAddPost').html(oh);
+
+    var h = '';
+    rows.forEach(function(r, i){
+        h += '<tr data-i="'+i+'">'
+          + '<td>'+esc(r.dept_name||'')+'</td><td>'+esc(r.position_name||'')+'</td>'
+          + '<td>'+esc(r.user_name||'')+(r.resigned?' <span style="color:#C4442D;" title="目前已離職；任期內的舊單據仍可指派">（已離職）</span>':'')+'</td>'
+          + '<td><input type="date" class="qur" data-f="start_date" value="'+esc(r.start_date||'')+'" style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
+          + '<td><input type="date" class="qur" data-f="end_date" value="'+esc(r.end_date||'')+'" style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
+          + '<td><input type="text" class="qur" data-f="note" value="'+esc(r.note||'')+'" placeholder="例：代理葉卿雅（請假）" style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 5px;font-size:12px;"></td>'
+          + '<td><span class="ia-op danger" onclick="quDel('+i+')"><i class="fa fa-times"></i></span></td>'
+          + '</tr>';
+    });
+    $('#quBody').html(h || '<tr><td colspan="7" class="ia-empty">沒有指定人員（只靠下方的「依職位」判定）</td></tr>');
+
+    // AS 文件負責人自動具備稽核員資格：唯讀說明，讓使用者知道為什麼名單上沒設的人也挑得到
+    if (QKIND === 'auditor' && QASTERMS.length) {
+        var t = QASTERMS.map(function(x){
+            return esc(x.name||('#'+x.user_id)) + '（'
+                 + (x.start_date ? dispDate(x.start_date) : '最早') + ' ～ '
+                 + (x.end_date ? dispDate(x.end_date) : '至今') + '）';
+        }).join('、');
+        $('#qAsBox').html('<b>AS 文件負責人自動具備稽核員資格</b>（不必在這裡設定）：' + t
+            + '　<span style="color:#8a6d45;">任期請到 AS 文件管理 → 系統設定 → 結構總覽列印 修改。</span>').show();
+    } else { $('#qAsBox').hide().html(''); }
+}
+$(document).on('change', '.qur', function(){
+    var i = +$(this).closest('tr').data('i');
+    (QUSERS[QKIND]||[])[i][$(this).data('f')] = $(this).val();
+});
+function quDel(i){ (QUSERS[QKIND]||[]).splice(i,1); renderQualifyUsers(); }
+$('#btnQuAdd').on('click', function(){
+    var key = $('#quAddPost').val();
+    if (!key) { alert('請先選要指定的人員職務'); return false; }
+    var p = null;
+    QPOSTS.forEach(function(x){ if (x.post_key3 === key) p = x; });
+    if (!p) return false;
+    if (!QUSERS[QKIND]) QUSERS[QKIND] = [];
+    QUSERS[QKIND].push({post_key3:p.post_key3, user_id:p.id, user_name:p.user_cname,
+                        dept_id:p.dept_id, dept_name:p.dept_name,
+                        position_id:p.position_id, position_name:p.position_name,
+                        start_date:'', end_date:'', note:'', resigned:(+p.is_former===1)});
+    renderQualifyUsers();
+    return false;
+});
 /** 目前畫面上勾起來的職務鍵 */
 function qCheckedIds(){
     return $('#qPick .qChk:checked').map(function(){ return $(this).val(); }).get();
@@ -4085,11 +4188,19 @@ $('#btnQualifySave').on('click', function(){
     // 部門或職稱已不存在的舊資料不送出去，名單裡卡一筆舊資料不該讓整份存不了
     var stale = (QMAP[QKIND]||[]).filter(function(k){ return !known[k]; }).length;
     var ids = keep.concat(checked);
-    $.post(API, {action:'qualify_save', kind:QKIND, job_keys:JSON.stringify(ids)}, function(res){
+    // 指定人員那一段和職位一起送（同一分頁的設定要一次存完，不然使用者會以為只存了一半）
+    var urs = (QUSERS[QKIND]||[]).map(function(r){
+        return {post_key3:r.post_key3, start_date:r.start_date||'', end_date:r.end_date||'', note:r.note||''};
+    });
+    var bad = urs.filter(function(r){ return r.start_date && r.end_date && r.start_date > r.end_date; });
+    if (bad.length) { alert('指定人員的任期起日不可晚於迄日，請修正後再儲存'); return; }
+    $.post(API, {action:'qualify_save', kind:QKIND, job_keys:JSON.stringify(ids),
+                 user_rules:JSON.stringify(urs)}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         QMAP[QKIND] = ids;
-        alert((META.qualify_kinds||{})[QKIND] + ' 名單已儲存（' + res.count + ' 個職務'
-              + (res.count === 0 ? '＝不限制' : '') + '）'
+        alert((META.qualify_kinds||{})[QKIND] + ' 名單已儲存（職位 ' + res.count + ' 個'
+              + '、指定人員 ' + (res.user_count||0) + ' 位）'
+              + ((res.count === 0 && !res.user_count) ? '\n目前＝不限制，全體員工的所有職務都可指派。' : '')
               + (stale ? ('\n另清除 ' + stale + ' 個部門或職稱已不存在的舊設定。') : ''));
         renderQualify();
         loadMeta();
@@ -4367,6 +4478,15 @@ function delTpl(tplId, name){
    常一起稽核的那幾個範本存成一組，填通知單時選一次就整批帶入好幾列。
    組合只記「有哪些範本」，主過程／受稽單位／候選人員一律即時由範本算出來（鐵律4）。 */
 var TPL_SETS = [];
+/* 組合裡的範本一律**一列一個**，不用「、」串成一行（2026-09-16 使用者回報）。
+   串成一行時「客戶需求與合約審查　→　業務課、工程圖面　→　技術課」很容易被讀成
+   「工程圖面是業務課」——分隔號跟項目內的箭頭混在一起，眼睛分不出斷點在哪。
+   每一列都自己帶「主過程　→　受稽單位（部門）」，所以不會再誤會。 */
+function tplNameList(names){
+    return (names||[]).map(function(n){
+        return '<div style="white-space:nowrap;">・'+esc(n)+'</div>';
+    }).join('');
+}
 function loadTplSets(cb){
     $.getJSON(API, {action:'tplset_list'}, function(res){
         if (!res.ok) { if (cb) cb(); return; }
@@ -4378,8 +4498,8 @@ function loadTplSets(cb){
             h += '<tr'+(+t.is_active?'':' style="opacity:.55;"')+'>'
               + '<td class="l"><b>'+esc(t.set_name)+'</b>'
               + (t.note ? '<div style="font-size:12px;color:#a08356;">'+esc(t.note)+'</div>' : '')+'</td>'
-              + '<td class="l">'+(names.length ? esc(names.join('、')) : '<span style="color:#a08356;">（沒有範本）</span>')
-              + '<span style="color:#a08356;font-size:12px;">　共 '+names.length+' 個</span></td>'
+              + '<td class="l">'+(names.length ? tplNameList(names) : '<span style="color:#a08356;">（沒有範本）</span>')
+              + '<div style="color:#a08356;font-size:12px;margin-top:2px;">共 '+names.length+' 個</div></td>'
               + '<td>'+(+t.is_active?'✓':'—')+'</td>'
               + '<td>'+(admin
                   ? ('<span class="ia-op" onclick="openTplSetEdit('+t.set_id+')"><i class="fa fa-edit"></i> 編輯</span>'
@@ -4468,7 +4588,7 @@ $('#btnCaseTplSet').on('click', function(){
            + '<b style="color:#8A5A2B;">'+esc(t.set_name)+'</b>'
            + '<span style="color:#a08356;font-size:12px;">　共 '+(t.tpl_ids||[]).length+' 列</span>'
            + (t.note ? '<div style="font-size:12px;color:#a08356;">'+esc(t.note)+'</div>' : '')
-           + '<div style="font-size:12px;color:#8a6d45;margin-top:2px;">'+esc((t.tpl_names||[]).join('、'))+'</div>'
+           + '<div style="font-size:12px;color:#8a6d45;margin-top:2px;">'+tplNameList(t.tpl_names||[])+'</div>'
            + '</label></div>';
     });
     $('#tplSetPickBody').html(h);

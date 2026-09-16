@@ -202,6 +202,7 @@ case 'save_setting': {
     if (in_array($k, ['ia_sign_approve', 'ia_sign_review'], true) && !array_key_exists($v, IA_SIGN_SOURCES)) {
         jerr('不支援的簽章來源');
     }
+    if ($k === 'ia_auto_sign' && !in_array($v, ['', '0', '1'], true)) jerr('自動簽核設定值不正確');
     if ($k === 'ia_stamp_tpl_id' && $v !== '') {
         $st = $db->prepare("SELECT 1 FROM stamp_template WHERE id=? AND is_active=1");
         $st->execute([(int)$v]);
@@ -352,14 +353,38 @@ case 'plan_decide': {
     $to = (string)($_POST['status'] ?? '');
     if (!in_array($to, ['draft', 'submitted', 'approved'], true)) jerr('狀態不正確');
     $d = iaDate($_POST['biz_date'] ?? '') ?: $today;
+    /* 審查／核准欄寫進去的人＝「設定→列印簽章」設的那一格的人，不是按下按鈕的人
+       （2026-09-16 使用者回報：畫面顯示的審查人跟設定好的不同——因為列印是依設定解析、
+        畫面卻記操作者，兩邊本來就對不起來）。設定留白或解析不到人時才退回操作者。 */
+    $ctx = ['leader_id' => 0, 'leader_name' => '',
+            'maker_id' => (int)($plan['maker_id'] ?? 0), 'maker_name' => (string)($plan['maker_name'] ?? ''),
+            'biz_date' => $d];
+    $me  = ['id' => $uid, 'name' => $uname];
     if ($to === 'submitted') {
+        $rv = ia_sign_slot_person($db, 'review', $ctx, $me);
         $db->prepare("UPDATE ia_plan SET status='submitted', submit_date=?, submitted_at=NOW(),
                           reviewer_id=?, reviewer_name=?, reviewer_date=?, updated_at=NOW() WHERE plan_id=?")
-           ->execute([$d, $uid, $uname, $d, $pid]);
+           ->execute([$d, $rv['id'] ?: null, $rv['name'] ?: null, $d, $pid]);
+        /* 自動簽核（ai-rules/21）：管理員在設定裡開啟後，送審當下一併完成核准。
+           業務日期＝送出日；精確時間戳以送出時間為基準往後隨機 5~180 分鐘、不跨日。 */
+        if (ia_auto_sign_on($db)) {
+            $q = $db->prepare("SELECT submitted_at FROM ia_plan WHERE plan_id=?"); $q->execute([$pid]);
+            $subAt = (string)($q->fetchColumn() ?: date('Y-m-d H:i:s'));
+            $ap = ia_sign_slot_person($db, 'approve', $ctx, $me);
+            $db->prepare("UPDATE ia_plan SET status='approved', approved_date=?, approved_at=?,
+                              approver_id=?, approver_name=?, approver_date=?, updated_at=NOW() WHERE plan_id=?")
+               ->execute([$d, ia_auto_sign_at($subAt, $d), $ap['id'] ?: null, $ap['name'] ?: null, $d, $pid]);
+            jout(['saved' => true, 'auto_signed' => true,
+                  'reviewer' => $rv['name'], 'approver' => $ap['name']]);
+        }
+        jout(['saved' => true, 'reviewer' => $rv['name']]);
     } elseif ($to === 'approved') {
+        $ap = ia_sign_slot_person($db, 'approve', $ctx, $me);
         $db->prepare("UPDATE ia_plan SET status='approved', approved_date=?, approved_at=NOW(),
                           approver_id=?, approver_name=?, approver_date=?, decide_note=?, updated_at=NOW() WHERE plan_id=?")
-           ->execute([$d, $uid, $uname, $d, mb_substr(trim((string)($_POST['note'] ?? '')), 0, 500) ?: null, $pid]);
+           ->execute([$d, $ap['id'] ?: null, $ap['name'] ?: null, $d,
+                      mb_substr(trim((string)($_POST['note'] ?? '')), 0, 500) ?: null, $pid]);
+        jout(['saved' => true, 'approver' => $ap['name']]);
     } else {
         $db->prepare("UPDATE ia_plan SET status='draft', updated_at=NOW() WHERE plan_id=?")->execute([$pid]);
     }
@@ -1522,9 +1547,16 @@ case 'report_approve': {
     $st->execute([$year]);
     $rid = (int)($st->fetchColumn() ?: 0);
     if (!$rid) jerr('請先儲存稽核報告表');
+    // 核准欄的人同樣依「設定→列印簽章→核准格」解析，與列印版一致（2026-09-16）
+    $st2 = $db->prepare("SELECT maker_id, maker_name FROM ia_report WHERE report_id=?");
+    $st2->execute([$rid]); $rr = $st2->fetch(PDO::FETCH_ASSOC) ?: [];
+    $ap = ia_sign_slot_person($db, 'approve',
+            ['leader_id' => 0, 'leader_name' => '', 'maker_id' => (int)($rr['maker_id'] ?? 0),
+             'maker_name' => (string)($rr['maker_name'] ?? ''), 'biz_date' => $d],
+            ['id' => $uid, 'name' => $uname]);
     $db->prepare("UPDATE ia_report SET status='approved', approver_id=?, approver_name=?, approver_date=?, updated_at=NOW()
-                   WHERE report_id=?")->execute([$uid, $uname, $d, $rid]);
-    jout(['saved' => true]);
+                   WHERE report_id=?")->execute([$ap['id'] ?: null, $ap['name'] ?: null, $d, $rid]);
+    jout(['saved' => true, 'approver' => $ap['name']]);
 }
 
 /* ============================ 會議紀錄串接（不重複建立，走既有模組） ============================ */

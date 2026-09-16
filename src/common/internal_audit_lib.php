@@ -73,6 +73,7 @@ const IA_SETTING_KEYS  = [
     'ia_meeting_pre_subject',
     'ia_meeting_end_subject',
     'ia_case_remark_tpl',
+    'ia_auto_sign',
 ];
 
 /**
@@ -1532,6 +1533,46 @@ function ia_sign_person(PDO $db, string $source, array $ctx): ?array
     }
     $idt = ia_identity_asof($db, $uid, (string)($ctx['biz_date'] ?? ''));
     return ['id'=>$uid, 'name'=>$name, 'dept'=>$idt['dept'], 'position'=>$idt['position']];
+}
+
+/**
+ * 「這一格該由誰簽」——畫面上的審查／核准欄位與列印圖章用**同一支**解析（2026-09-16 使用者回報：
+ * 年度計畫上顯示的審查人跟「設定→列印簽章→審查格」設的人不同）。
+ * 原本送審時把 reviewer 寫成「按下送審的那個人」，列印卻依設定解析成管理代表，兩邊自然對不起來。
+ *
+ * $which: 'review'（審查格）／'approve'（核准格）
+ * 設定是「（留白，紙本手蓋）」或解析不到人時，退回 $fallback（通常＝操作者），
+ * 才不會出現一張「已核准但看不出是誰核准」的單據。
+ */
+function ia_sign_slot_person(PDO $db, string $which, array $ctx, array $fallback): array
+{
+    $set    = ia_settings($db);
+    $source = (string)($set[$which === 'review' ? 'ia_sign_review' : 'ia_sign_approve'] ?? '');
+    $p = $source !== '' ? ia_sign_person($db, $source, $ctx) : null;
+    if ($p && (int)($p['id'] ?? 0) > 0 && (string)($p['name'] ?? '') !== '') {
+        return ['id' => (int)$p['id'], 'name' => (string)$p['name'], 'from_setting' => true];
+    }
+    return ['id' => (int)($fallback['id'] ?? 0), 'name' => (string)($fallback['name'] ?? ''), 'from_setting' => false];
+}
+
+/** 自動簽核是否開啟（管理員設定；預設關閉＝維持人工按核准） */
+function ia_auto_sign_on(PDO $db): bool
+{
+    return (string)(ia_settings($db)['ia_auto_sign'] ?? '') === '1';
+}
+
+/**
+ * 自動簽核的時間戳（ai-rules/21 鐵則3）：以「上一關卡完成的時間」為基準往後隨機 5～180 分鐘，
+ * **加完跨過午夜就鎖回當天 23:59**（日期不可因為隨機偏移跨天）。
+ * $baseAt 給 'Y-m-d H:i:s'；$bizDate 是該單據的業務日期（鎖回午夜時用它）。
+ */
+function ia_auto_sign_at(string $baseAt, string $bizDate): string
+{
+    $ts = strtotime($baseAt) ?: time();
+    $at = $ts + random_int(5, 180) * 60;
+    $endOfDay = strtotime(substr($baseAt, 0, 10) . ' 23:59:00');
+    if ($at > $endOfDay) $at = $endOfDay;
+    return date('Y-m-d H:i:s', $at);
 }
 
 /* ============================ 不符合通知單：分段權限 ============================ */
