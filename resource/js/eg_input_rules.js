@@ -18,6 +18,8 @@
  *   6. 可增列表格：在最末列按 ↓ 自動新增一列並跳過去；在「沒填東西的最末列」按 ↑ 自動移除該列並跳回上一列
  *   7. 長清單下拉可打字篩選：<select data-eg-filter> 自動長出一個篩選輸入框（人員／料號／客戶等清單一多就找不到人）
  *      純篩選用的下拉再加 data-eg-filter-reset：雙擊篩選框或雙擊下拉＝把這一欄的篩選整個解除（關鍵字＋選取一起清）
+ *   8. 點擊欄位後才浮出提示：<input data-eg-hint="提示文字">（取代 placeholder；
+ *      placeholder 印在欄位裡，像「09:00」這種會被誤會成「已經填好的值」）
  *
  * 個別欄位要排除：加 data-eg-skip
  * 整個區塊要排除：在祖先元素加 data-eg-skip
@@ -453,6 +455,72 @@
         (document.head || document.documentElement).appendChild(st);
     })();
 
+    /* ── 規則 8：點擊欄位後才浮出提示（data-eg-hint） ──────────────────
+     * 為什麼不用 placeholder：placeholder 印在欄位裡面，像「09:00」這種提示
+     * 本身就長得像「已經填好的值」，使用者會以為時間早就輸入過了（實際回報過）。
+     * 改成聚焦／點擊當下才在欄位旁浮出一顆小氣泡，離開欄位就消失，
+     * 欄位本身永遠是空的＝空的就是空的，不會被誤會。
+     * 用法：<input data-eg-hint="可直接輸入 0900，離開欄位自動轉成 09:00">
+     */
+    var hintBox = null, hintFor = null;
+
+    function hintHide() {
+        if (hintBox) hintBox.style.display = 'none';
+        hintFor = null;
+    }
+    function hintPos() {
+        if (!hintBox || !hintFor || hintBox.style.display === 'none') return;
+        if (!document.body.contains(hintFor)) { hintHide(); return; }   // 欄位被重繪掉就收起來
+        var r = hintFor.getBoundingClientRect();
+        if (r.width === 0 && r.height === 0) { hintHide(); return; }    // 欄位被藏起來
+        hintBox.style.left = '0px'; hintBox.style.top = '0px';          // 先歸零才量得到真實寬高
+        var w = hintBox.offsetWidth, h = hintBox.offsetHeight;
+        var left = r.left, top = r.bottom + 4;
+        if (left + w > window.innerWidth - 6) left = Math.max(6, window.innerWidth - 6 - w);
+        if (top + h > window.innerHeight - 6) top = Math.max(6, r.top - h - 4);  // 下面放不下就翻到上面
+        hintBox.style.left = left + 'px';
+        hintBox.style.top  = top + 'px';
+    }
+    function hintShow(el) {
+        var txt = el.getAttribute('data-eg-hint');
+        if (!txt) return;
+        if (!hintBox) {
+            hintBox = document.createElement('div');
+            hintBox.className = 'eg-hint-pop';
+            (document.body || document.documentElement).appendChild(hintBox);
+        }
+        hintBox.textContent = txt;
+        hintBox.style.display = 'block';
+        hintFor = el;
+        hintPos();
+    }
+    /* 用 focusin/focusout：點擊、Tab 跳進來、程式 focus() 都涵蓋得到 */
+    document.addEventListener('focusin', function (e) {
+        var el = e.target;
+        if (el && el.getAttribute && el.getAttribute('data-eg-hint')) hintShow(el);
+        else if (hintFor) hintHide();
+    }, true);
+    document.addEventListener('focusout', function (e) {
+        if (hintFor && e.target === hintFor) hintHide();
+    }, true);
+    /* 欄位常在會捲動的跳窗裡，捲動或改變視窗大小時要跟著移動（position:fixed 不會自己跟） */
+    window.addEventListener('scroll', hintPos, true);
+    window.addEventListener('resize', hintPos);
+
+    /* 規則 8 的預設樣式（頁面可自行覆蓋 .eg-hint-pop） */
+    (function injectHintCss() {
+        if (document.getElementById('eg-hint-css')) return;
+        var st = document.createElement('style');
+        st.id = 'eg-hint-css';
+        st.appendChild(document.createTextNode(
+            '.eg-hint-pop{display:none;position:fixed;z-index:99999;max-width:300px;padding:4px 8px;'
+            + 'font-size:11.5px;line-height:1.5;color:#5b3a1e;background:#FFF6E6;'
+            + 'border:1px solid #E0BE83;border-radius:4px;box-shadow:0 2px 6px rgba(90,60,20,.18);'
+            + 'pointer-events:none;white-space:normal;}'
+            + '@media print{.eg-hint-pop{display:none !important;}}'));
+        (document.head || document.documentElement).appendChild(st);
+    })();
+
     /* 對外留一個旗標，檢查工具與頁面都可判斷本檔是否已載入 */
-    window.EG_INPUT_RULES = {version: 4};
+    window.EG_INPUT_RULES = {version: 5};
 })();

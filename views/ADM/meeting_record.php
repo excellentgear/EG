@@ -281,9 +281,11 @@ foreach ($roleRows as $rr) {
                 <div class="errmsg" id="errEdSubject"></div></div>
             <div><label>會議日期 *</label><input type="date" id="edDate" max="9999-12-31">
                 <div class="errmsg" id="errEdDate"></div></div>
-            <div><label>開始時間</label><input type="text" id="edStart" class="time-in" maxlength="5" placeholder="09:00">
+            <div><label>開始時間</label><input type="text" id="edStart" class="time-in" maxlength="5"
+                    data-eg-hint="24 小時制，可直接打 0900 / 900 / 9，離開欄位自動轉成 09:00">
                 <div class="errmsg" id="errEdStart"></div></div>
-            <div><label>結束時間</label><input type="text" id="edEnd" class="time-in" maxlength="5" placeholder="17:00">
+            <div><label>結束時間</label><input type="text" id="edEnd" class="time-in" maxlength="5"
+                    data-eg-hint="24 小時制，可直接打 1700 / 17，離開欄位自動轉成 17:00">
                 <div class="errmsg" id="errEdEnd"></div></div>
             <div><label>地點</label><input type="text" id="edLoc" maxlength="100" list="edLocTags"><datalist id="edLocTags"></datalist></div>
             <div><label>主席（出席人員內選一位） *</label><select id="edChair"><option value="">請先加入出席人員</option></select></div>
@@ -386,8 +388,10 @@ foreach ($roleRows as $rr) {
         <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:8px;">
             <input type="text" id="pstSubject" placeholder="主題" style="flex:1 1 120px;">
             <input type="text" id="pstLoc" placeholder="地點" style="flex:1 1 100px;">
-            <input type="text" id="pstStart" class="time-in" maxlength="5" placeholder="09:00" style="width:66px;">
-            <input type="text" id="pstEnd" class="time-in" maxlength="5" placeholder="17:00" style="width:66px;">
+            <input type="text" id="pstStart" class="time-in" maxlength="5" placeholder="開始" style="width:66px;"
+                   data-eg-hint="開始時間，24 小時制；可直接打 0900 / 900 / 9，離開欄位自動轉成 09:00">
+            <input type="text" id="pstEnd" class="time-in" maxlength="5" placeholder="結束" style="width:66px;"
+                   data-eg-hint="結束時間，24 小時制；可直接打 1700 / 17，離開欄位自動轉成 17:00">
             <button type="button" class="b-att" onclick="presetAdd()"><i class="fa fa-plus"></i> 新增</button>
         </div>
     </div>
@@ -553,6 +557,7 @@ foreach ($roleRows as $rr) {
         主席與總經理雙層簽核、產銷會議可自動插入本月出貨目標達成率佐證。
         <h4>操作步驟</h4>
         <b>①新增</b>：填主題/日期/時間/地點（主題、地點可打字自由輸入，也可從曾用過的建議清單挑；有設定「常用設定」時可一鍵套用主題+地點+時間，套用後仍可自行修改），加入出席人員（依部門挑選，或套用已存的<b>公開/私人群組</b>——把常開會的一批人存成群組，下次直接套用，也可另存新群組），指定主席。日期時間存檔前後端都會檢查合理性（結束不可早於或等於開始）。「記錄」欄固定為目前登入者，不可修改。<br>
+        　－<b>開始／結束時間欄位本身永遠是空的</b>（不再印灰色的 09:00、17:00 當提示，避免被誤會成「已經填好時間了」）；<b>點一下欄位才會浮出格式提示</b>。輸入採 24 小時制，可直接打 <b>0900</b>／<b>900</b>／<b>9</b>，離開欄位自動轉成 <b>09:00</b>；小時或分鐘不合理會當場紅字說明原因。<br>
         　－<b>人員名單依「會議日期當天」的狀態產生</b>：那天之後才入職、或那天之前就已離職的人一律不出現；那天還在職、之後才離職的人<b>仍會出現</b>（所以補打舊會議紀錄時選得到當時的人）。部門與職稱也是回推<b>當時</b>的（有登錄職務異動紀錄者），不是現在的。<br>
         　－<b>名字右方會顯示他當天的行程</b>（例：<b>陳俊宏（總經理）10:00~11:00 會議</b>），來源包含請假、公出單、教育訓練/外訓、已排定的其他會議；系統會自動比對會議的開始～結束時間，<b>有重疊會標紅並註明「（時間重疊）」</b>。<br>
         　－<b>只有「請假且與會議時段重疊」（含全天假）不可勾選</b>，會以灰字標示；公出／外訓／其他會議只是提示，仍可加入名單（現場常有人開完前一場再過來）。套用群組與從行事曆帶入時套用同一套規則，會直接告訴你誰沒被加入、誰的時間重疊。<br>
@@ -645,6 +650,12 @@ $('#edStart,#edEnd').on('change', function(){
     var p = parseTime($(this).val());
     if (p.ok) $(this).val(p.val);
     edTimeValidate();
+});
+/* 常用設定的時間欄也一樣離開欄位就正規化（原本只在按「新增」時才換算，
+   欄位上仍停在使用者打的 900，看起來像沒吃到） */
+$('#pstStart,#pstEnd').on('change', function(){
+    var p = parseTime($(this).val());
+    if (p.ok) $(this).val(p.val);
 });
 
 var PRESETS = [];
