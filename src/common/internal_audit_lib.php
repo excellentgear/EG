@@ -502,6 +502,14 @@ function ia_ensure_schema(PDO $db): void
            自動建立會議紀錄時**與會人員＝小組成員、主席＝稽核組長**，不必每次重挑。
            小組是逐年的，可以從其他年度整批複製過來再增減。
            存到職務層級（dept_id/position_id），圖章與會議紀錄的部門職稱才印得對。 */
+        /* 小組的「基準日」（2026-09-16 使用者要求）：候選人員與他們的部門職稱，一律以這一天為準
+           （沒有日期就無從判斷當時是誰在那個職務上）。留空＝沿用系統推算值（過去年度取該年年底、
+           當年度以後取今天），所以舊資料不設也不會壞。 */
+        $db->exec("CREATE TABLE IF NOT EXISTS ia_team (
+            year       INT PRIMARY KEY,
+            base_date  DATE NULL COMMENT '判定在職與職務的基準日；空=系統推算',
+            updated_at DATETIME NULL, updated_by VARCHAR(60) NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='年度稽核小組的設定（基準日）'");
         $db->exec("CREATE TABLE IF NOT EXISTS ia_team_member (
             tm_id       INT AUTO_INCREMENT PRIMARY KEY,
             year        INT NOT NULL,
@@ -2694,13 +2702,44 @@ function ia_case_person_ids(PDO $db, int $caseId, string $kind = 'auditor', ?int
 
 const IA_TEAM_ROLES = ['leader' => '稽核組長', 'auditor' => '稽核員', 'escort' => '陪檢員'];
 
-/** 該年度小組成員的業務日期（部門職稱要印當時的）——當年度就用該年年底，今年以後用今天 */
-function ia_team_asof(PDO $db, int $year): string
+/**
+ * 該年度小組的**基準日**——候選人員、在職與否、部門職稱一律以這一天為準。
+ * 使用者可以自己指定（ia_team.base_date）；沒指定時才用系統推算值：
+ * 過去年度＝該年 12/31（那一年的組織狀態），當年度以後＝今天。
+ * @param bool $explicitOnly true＝只回使用者設定值（沒設回空字串），給設定畫面判斷「是不是預設值」用
+ */
+function ia_team_base_date(PDO $db, int $year, bool $explicitOnly = false): string
 {
+    $set = '';
+    try {
+        $st = $db->prepare("SELECT base_date FROM ia_team WHERE year=?");
+        $st->execute([$year]);
+        $v = (string)($st->fetchColumn() ?: '');
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) $set = $v;
+    } catch (Throwable $e) {}
+    if ($explicitOnly) return $set;
+    if ($set !== '') return $set;
     $today = ia_today($db);
     $cy = (int)substr($today, 0, 4);
     if ($year <= 0 || $year >= $cy) return $today;
     return $year . '-12-31';
+}
+
+/** 寫入該年度的基準日（空字串＝清掉，回到系統推算值） */
+function ia_team_set_base_date(PDO $db, int $year, string $date, string $byName): void
+{
+    if ($year < 2000 || $year > 2200) throw new RuntimeException('年度不正確');
+    $d = trim($date);
+    if ($d !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) throw new RuntimeException('基準日格式不正確');
+    $db->prepare("INSERT INTO ia_team (year, base_date, updated_at, updated_by) VALUES (?,?,NOW(),?)
+                  ON DUPLICATE KEY UPDATE base_date=VALUES(base_date), updated_at=NOW(), updated_by=VALUES(updated_by)")
+       ->execute([$year, ($d !== '' ? $d : null), $byName]);
+}
+
+/** 相容名稱：該年度小組的基準日（舊呼叫端沿用） */
+function ia_team_asof(PDO $db, int $year): string
+{
+    return ia_team_base_date($db, $year);
 }
 
 /**
@@ -2708,7 +2747,7 @@ function ia_team_asof(PDO $db, int $year): string
  *                        position_id/position_name/post_key3/note
  * 部門與職稱名稱一律**依該年度回推**（ai-rules/22），不是印現在的。
  */
-function ia_team_get(PDO $db, int $year): array
+function ia_team_get(PDO $db, int $year, string $asofOverride = ''): array
 {
     $rows = [];
     try {
@@ -2718,7 +2757,8 @@ function ia_team_get(PDO $db, int $year): array
     } catch (Throwable $e) { return []; }
     if (!$rows) return [];
 
-    $asof = ia_team_asof($db, $year);
+    // 設定畫面改基準日時會帶 $asofOverride 進來「試算」，還沒存也看得到結果
+    $asof = (preg_match('/^\d{4}-\d{2}-\d{2}$/', $asofOverride)) ? $asofOverride : ia_team_base_date($db, $year);
     $postByKey = $nameById = [];
     try {
         foreach (eg_people_posts_asof($db, [], $asof) as $p) {
@@ -2770,12 +2810,13 @@ function ia_team_years(PDO $db): array
  * 規則：①稽核組長最多一位（會議主席固定用他）②同一個人在同一年度只算一列
  *       ③職務不存在／人員不存在一律擋下（鐵律8）
  */
-function ia_team_save(PDO $db, int $year, array $members, string $byName): int
+function ia_team_save(PDO $db, int $year, array $members, string $byName, string $asofOverride = ''): int
 {
     if ($year < 2000 || $year > 2200) throw new RuntimeException('年度不正確');
+    $asof = (preg_match('/^\d{4}-\d{2}-\d{2}$/', $asofOverride)) ? $asofOverride : ia_team_base_date($db, $year);
     $valid = [];
     try {
-        foreach (eg_people_posts_asof($db, [], ia_team_asof($db, $year)) as $p) {
+        foreach (eg_people_posts_asof($db, [], $asof) as $p) {
             $valid[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = $p;
         }
         // 補上現況的職務：小組常常是「今年新接任的人」，用年底回推會漏掉剛異動的

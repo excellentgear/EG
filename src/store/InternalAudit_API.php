@@ -1924,7 +1924,12 @@ case 'qualify_save': {
 case 'team_get': {
     iaReqView($perms);
     $y = (int)($_GET['year'] ?? $_POST['year'] ?? substr($today, 0, 4));
-    $asof = ia_team_asof($db, $y);
+    /* 基準日：使用者在畫面上改日期時會帶 base_date 進來「試算」（還沒存也看得到結果）；
+       沒帶就用已存的設定值，再沒有才用系統推算值。候選人員、在職判定與部門職稱全部依它。 */
+    $preview  = iaDate($_GET['base_date'] ?? $_POST['base_date'] ?? '');
+    $saved    = ia_team_base_date($db, $y, true);            // 使用者設過的值（沒設＝空）
+    $asof     = $preview ?: ia_team_base_date($db, $y);      // 實際採用的基準日
+    $default  = ia_team_base_date($db, $y, false);
     // 挑成員的候選＝該年度**有稽核員或陪檢員資格**的職務（資格名單留空時就是全體）
     $cands = []; $seen = [];
     foreach (['auditor', 'escort'] as $k) {
@@ -1937,7 +1942,9 @@ case 'team_get': {
     usort($cands, fn($a, $b) => [$a['dept_sort'], (int)$a['dept_id'], $a['position_sort'], $a['user_cname']]
                             <=> [$b['dept_sort'], (int)$b['dept_id'], $b['position_sort'], $b['user_cname']]);
     jout(['year' => $y, 'asof' => $asof, 'roles' => IA_TEAM_ROLES,
-          'members' => ia_team_get($db, $y), 'candidates' => $cands,
+          'base_date' => $saved,                 // 使用者設過的基準日（空＝沿用系統推算）
+          'base_default' => $default,            // 系統推算值（過去年度＝該年年底／當年以後＝今天）
+          'members' => ia_team_get($db, $y, $asof), 'candidates' => $cands,
           'years' => ia_team_years($db)]);
 }
 
@@ -1946,11 +1953,21 @@ case 'team_save': {
     $y = (int)($_POST['year'] ?? 0);
     $ms = json_decode((string)($_POST['members'] ?? '[]'), true);
     if (!is_array($ms)) jerr('格式錯誤');
+    // 基準日跟名單一起存（畫面上是同一張表單，分兩次存會出現「名單存了、日期沒存」）。
+    // 有送這個欄位才動它：沒送＝舊呼叫端，不要把既有設定清掉（與製表人同一套判別法）。
+    $bd = null;
+    if (array_key_exists('base_date', $_POST)) {
+        $raw = trim((string)$_POST['base_date']);
+        if ($raw !== '' && !iaDate($raw)) jerr('基準日格式不正確');
+        $bd = $raw;
+    }
     $db->beginTransaction();
     try {
-        $n = ia_team_save($db, $y, $ms, $uname);
+        if ($bd !== null) ia_team_set_base_date($db, $y, $bd, $uname);
+        $n = ia_team_save($db, $y, $ms, $uname, (string)($bd ?? ''));
         $db->commit();
-        jout(['saved' => true, 'count' => $n, 'members' => ia_team_get($db, $y)]);
+        jout(['saved' => true, 'count' => $n, 'members' => ia_team_get($db, $y),
+              'base_date' => ia_team_base_date($db, $y, true), 'asof' => ia_team_base_date($db, $y)]);
     } catch (Throwable $e) { $db->rollBack(); jerr($e->getMessage()); }
 }
 

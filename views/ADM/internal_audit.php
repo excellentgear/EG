@@ -1039,9 +1039,17 @@ $roleLabel = ia_role_label($perms);
 <div class="ia-mask" id="teamMask"><div class="ia-modal wide">
     <div class="ia-mhead"><h4><i class="fa fa-users"></i> 稽核小組</h4>
         <select id="teamYear" style="margin-left:12px;border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;font-size:13px;"></select>
+        <label style="margin:0 0 0 14px;font-size:13px;font-weight:normal;color:#6b5535;">基準日</label>
+        <input type="date" id="teamBaseDate" style="margin-left:6px;border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;font-size:13px;">
+        <button id="btnTeamBaseReset" title="清空，改用系統推算值（過去年度＝該年年底／當年以後＝今天）"
+                style="margin-left:4px;height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;color:#8a6d45;">預設</button>
+        <span id="teamBaseNote" style="margin-left:8px;font-size:12px;color:#8a6d45;"></span>
         <span class="x" data-close style="margin-left:auto;">&times;</span></div>
     <div class="ia-mbody">
-        <div class="ia-hint">這一年度的內稽<b>是誰在做</b>——建稽核通知單前先組好，
+        <div class="ia-hint"><b>基準日</b>（右上）：候選人員、<b>誰在哪個職務</b>、部門與職稱名稱，全部以<b>這一天</b>判定
+        ——沒有日期就無從判斷「當時」是誰在那個職務上。改日期會立刻重算候選清單與名單上每個人的部門職稱（先試算，按「儲存小組名單」才存）。
+        留空＝<b>系統推算</b>（過去年度＝該年 12/31、當年度以後＝今天），按「預設」可清回去。
+        <br>這一年度的內稽<b>是誰在做</b>——建稽核通知單前先組好，
         之後<b>自動建立會議紀錄時與會人員就是這份名單，主席固定為稽核組長</b>，不必每次重挑。
         <br><b>稽核組長只能有一位</b>；候選只列該年度有<b>稽核員或陪檢員資格</b>的職務（資格名單留空時＝全體）。
         <br>成員存的是「某人的某個職務」，所以會議紀錄與圖章上的<b>部門職稱會印當時那個職務的</b>，不會被兼任職蓋掉。
@@ -4251,19 +4259,41 @@ $('#btnQualifySave').on('click', function(){
    建稽核通知單前先組好這一年的小組；自動建立會議紀錄時與會人員＝小組成員、主席固定為稽核組長。 */
 var TEAM = {year:0, members:[], candidates:[], years:[]};
 $('#btnTeam').on('click', function(){ openTeam(YEAR); });
-function openTeam(year){
-    $.getJSON(API, {action:'team_get', year:year}, function(res){
+/* $baseDate 有給就是「試算」——使用者剛改了基準日、還沒按儲存，畫面要先依新日期重算。
+   markDirty＝重載後仍標成「未儲存」，否則使用者會以為日期已經存進去了。 */
+function openTeam(year, baseDate, markDirty){
+    var q = {action:'team_get', year:year};
+    if (baseDate) q.base_date = baseDate;
+    $.getJSON(API, q, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
-        TEAM = {year:+res.year, members:res.members||[], candidates:res.candidates||[], years:res.years||[]};
+        TEAM = {year:+res.year, members:res.members||[], candidates:res.candidates||[], years:res.years||[],
+                base_date:res.base_date||'', base_default:res.base_default||'', asof:res.asof||'',
+                _dirty:!!markDirty};
         var yh = '';
         (META.years||[]).forEach(function(y){ yh += '<option value="'+y+'">'+y+' 年度</option>'; });
         $('#teamYear').html(yh).val(TEAM.year);
         var rh = '';
         $.each(res.roles||{}, function(k,v){ rh += '<option value="'+k+'">'+esc(v)+'</option>'; });
         $('#teamAddRole').html(rh).val('auditor');
+        // 日期欄顯示「實際採用的那一天」；沒自訂過就顯示系統推算值並在旁邊註明
+        $('#teamBaseDate').val(inputDate(TEAM.asof || TEAM.base_default));
+        renderTeamBaseNote();
         renderTeam();
         openMask('teamMask');
     });
+}
+/** 基準日旁邊的說明：是自訂的還是系統推算的，以及還沒存的話要提醒。
+    **「未儲存」一定要跟「已存的值」比，不可以跟 TEAM.asof 比**——試算重載之後 asof 就是那個
+    試算日期，兩者永遠相等，於是畫面停在「系統推算（2025.12.31）」但欄位明明是 2025-11-03
+    （2026-09-17 無頭瀏覽器實測抓到；這種說明文字與實際值不符最容易讓人以為已經存好了）。 */
+function renderTeamBaseNote(){
+    var cur   = $('#teamBaseDate').val();
+    var saved = inputDate(TEAM.base_date || TEAM.base_default);   // 目前真正存在 DB 的效果
+    var t = '';
+    if (cur !== saved)      t = '<span style="color:#C4442D;">已改成 ' + esc(dispDate(cur)) + '（試算中，按「儲存小組名單」才會存起來）</span>';
+    else if (TEAM.base_date) t = '自訂（' + esc(dispDate(TEAM.base_date)) + '）';
+    else                     t = '系統推算（' + esc(dispDate(TEAM.base_default)) + '）';
+    $('#teamBaseNote').html(t);
 }
 $('#teamYear').on('change', function(){
     // 換年度＝換一份名單，沒存的先問一次（直接切走會讓剛加的人默默不見）
@@ -4271,6 +4301,24 @@ $('#teamYear').on('change', function(){
         $(this).val(TEAM.year); return;
     }
     openTeam(+$(this).val());
+});
+/* 改基準日＝「當時是誰在那個職務上」整個變了，候選清單與名單上每個人的部門職稱都要重算。
+   這裡只做試算（不寫 DB），按「儲存小組名單」才連同日期一起存。
+   **重算會把名單重新讀回來**，所以名單本身有沒存的修改要先問一次，不可以默默蓋掉。 */
+var TEAM_BASE_PREV = '';
+$('#teamBaseDate').on('focus', function(){ TEAM_BASE_PREV = $(this).val(); });
+$('#teamBaseDate').on('change', function(){
+    var d = $(this).val() || inputDate(TEAM.base_default);
+    if (TEAM._dirty && !confirm('名單還沒儲存。改基準日會依新日期重新載入，剛才對名單的修改會被放棄，確定嗎？')) {
+        $(this).val(TEAM_BASE_PREV || inputDate(TEAM.asof)); renderTeamBaseNote(); return;
+    }
+    // 跟「目前存在 DB 的效果」相同就不算未儲存（例：按了預設鈕、或改一改又改回原本那天）
+    var same = (d === inputDate(TEAM.base_date || TEAM.base_default));
+    openTeam(TEAM.year, d, !same);
+});
+$('#btnTeamBaseReset').on('click', function(){
+    $('#teamBaseDate').val(inputDate(TEAM.base_default)).trigger('change');
+    return false;
 });
 function renderTeam(){
     /* 已加入的「職務」不再出現在候選——**去重的單位是職務不是人**（2026-09-16 使用者回報）。
@@ -4311,7 +4359,8 @@ function renderTeam(){
     var nHead = Object.keys(heads).length;
     $('#teamMsg').html(esc(TEAM.year + ' 年度共 ' + TEAM.members.length + ' 筆職務'
         + (nHead === TEAM.members.length ? ('（' + nHead + ' 位成員）')
-                                         : ('／' + nHead + ' 位成員　有人用了不只一個職務，會議紀錄仍只列一次')))
+                                         : ('／' + nHead + ' 位成員　有人用了不只一個職務，會議紀錄仍只列一次'))
+        + '　基準日 ' + dispDate(TEAM.asof || $('#teamBaseDate').val()))
         + (leaders === 1 ? '' : '　<span style="color:#C4442D;">稽核組長目前有 ' + leaders
              + ' 位（必須剛好一位，會議紀錄的主席固定用他）</span>'));
 }
@@ -4348,7 +4397,8 @@ $('#btnTeamCopy').on('click', function(){
         if (!res.ok) { alert(res.error||'複製失敗'); return; }
         TEAM.members = res.members||[]; TEAM._dirty = false;
         renderTeam();
-        alert('已從 ' + from + ' 年度複製 ' + res.count + ' 位成員。'
+        alert('已從 ' + from + ' 年度複製 ' + res.count + ' 筆職務。'
+            + '\n（能不能複製過來是用 ' + TEAM.year + ' 年度自己的基準日 ' + dispDate(TEAM.asof) + ' 判定的）'
             + ((res.skipped && res.skipped.length) ? ('\n\n下列成員已不在原職務上（離職或調動），沒有複製過來：\n'
                  + res.skipped.join('\n')) : ''));
         loadMeta();
@@ -4357,11 +4407,19 @@ $('#btnTeamCopy').on('click', function(){
 });
 $('#btnTeamSave').on('click', function(){
     var ms = TEAM.members.map(function(m){ return {post_key3:m.post_key3, role:m.role, note:m.note||''}; });
-    $.post(API, {action:'team_save', year:TEAM.year, members:JSON.stringify(ms)}, function(res){
+    // 基準日跟名單同一張表單，一起送（分兩次存會出現「名單存了、日期沒存」）。
+    // 等於系統推算值時送空字串＝不自訂，往後年度推進會自動跟著走。
+    var bd = $('#teamBaseDate').val() || '';
+    if (bd === inputDate(TEAM.base_default)) bd = '';
+    $.post(API, {action:'team_save', year:TEAM.year, members:JSON.stringify(ms), base_date:bd}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         TEAM.members = res.members||[]; TEAM._dirty = false;
+        TEAM.base_date = res.base_date||''; TEAM.asof = res.asof||TEAM.asof;
+        $('#teamBaseDate').val(inputDate(TEAM.asof));
+        renderTeamBaseNote();
         renderTeam();
-        alert(TEAM.year + ' 年度稽核小組已儲存（' + res.count + ' 位）');
+        alert(TEAM.year + ' 年度稽核小組已儲存（' + res.count + ' 筆職務）\n基準日：' + dispDate(TEAM.asof)
+              + (TEAM.base_date ? '（自訂）' : '（系統推算）'));
         loadMeta();
     }, 'json');
 });
