@@ -814,6 +814,16 @@ $('#edCalPick').on('change', function(){
         if (msg.length) alert(msg.join('\n\n'));
     });
 });
+/* 開啟某一筆會議時，清單的年度篩選要跟著切到那一筆的年度（2026-09-17 使用者要求）。
+   內部稽核「自動建立並開啟」帶過來的多半是**補舊年度**的會議（例 2025 年的事前會議），
+   而年度預設停在今年——跳窗一關就在清單上找不到那筆紀錄，看起來像沒建成功。 */
+function mtSyncYear(dateStr){
+    var y = String(dateStr||'').substr(0,4);
+    if (!/^\d{4}$/.test(y)) return;
+    var $y = $('#yearSel');
+    if (!$y.find('option[value="'+y+'"]').length) $y.append('<option value="'+y+'">'+y+' 年</option>');
+    if (String($y.val()) !== y) { $y.val(y); loadList(); }
+}
 function openEdit(id){
     $.getJSON(API, {action:'get_detail', meeting_id:id}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
@@ -823,6 +833,7 @@ function openEdit(id){
             return;
         }
         EDIT_ID = m.meeting_id;
+        mtSyncYear(m.meeting_date);        // 補舊年度的會議：清單年度要跟著切，關掉跳窗才找得到
         $('#edTitle').text('編輯會議紀錄');
         $('#edSubject').val(m.subject); $('#edDate').val(fmtDate(m.meeting_date));
         $('#edStart').val(m.start_time||''); $('#edEnd').val(m.end_time||''); $('#edLoc').val(m.location||'');
@@ -1528,6 +1539,7 @@ function openView(id){
     $.getJSON(API, {action:'get_detail', meeting_id:id}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }
         VIEW = res;
+        mtSyncYear(res.meeting.meeting_date);   // 同上：檢視舊年度的會議時清單年度要跟著切
         $('#viewTitle').text(res.meeting.subject);
         $('#viewBody').html(viewHtml(res));
         var canPrint = !!res.meeting.can_print;

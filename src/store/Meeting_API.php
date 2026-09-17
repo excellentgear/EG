@@ -572,6 +572,15 @@ case 'delete': {
         $db->prepare("DELETE FROM meeting_attendee WHERE meeting_id=?")->execute([$id]);
         $db->prepare("DELETE FROM meeting_item WHERE meeting_id=?")->execute([$id]);
         $db->prepare("DELETE FROM meeting_record WHERE meeting_id=?")->execute([$id]);
+        /* 2026-09-17 實測發現的既有缺口：內部稽核的稽核通知單會把會議 id 記在
+           ia_case.pre_meeting_id / end_meeting_id，會議被刪掉之後那個連結還留著＝指向不存在的會議。
+           畫面上不會壞（通知單顯示「尚未建立」），但「重新帶入與會人員」會被擋、
+           使用者也看不出來為什麼。這裡一併清成 NULL。
+           ia_case 不一定存在（內稽模組還沒建表的環境），所以整段包 try，失敗不影響刪除本身。 */
+        try {
+            $db->prepare("UPDATE ia_case SET pre_meeting_id=NULL WHERE pre_meeting_id=?")->execute([$id]);
+            $db->prepare("UPDATE ia_case SET end_meeting_id=NULL WHERE end_meeting_id=?")->execute([$id]);
+        } catch (Throwable $e) { /* 沒有內稽模組就略過 */ }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('刪除失敗：'.$e->getMessage(), 500); }
     meeting_close_notice($db, $id);

@@ -1621,7 +1621,8 @@ case 'meeting_create': {
     $subject = $kind === 'pre'
         ? (trim((string)$set['ia_meeting_pre_subject']) ?: ($year . '年度 內稽事前會議'))
         : (trim((string)$set['ia_meeting_end_subject']) ?: ($year . '年度 內稽結束會議'));
-    if ((string)$c['case_no'] !== '') $subject .= '（稽核件號 ' . $c['case_no'] . '）';
+    // 主題不附稽核件號（2026-09-17 使用者要求）：紙本會議紀錄的主題就只有主題，
+    // 要對回是哪一場稽核，通知單上本來就有「開啟會議紀錄」的連結。
 
     $mdate = $kind === 'pre'
         ? ($c['notify_date'] ?: $c['audit_from'] ?: $today)
