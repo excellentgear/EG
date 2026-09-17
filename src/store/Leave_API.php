@@ -421,18 +421,26 @@ case 'stats_options': {
     $depts = $VIEW_ALL ? [] : leave_dept_scope($db, $user_id);
     if (!$VIEW_ALL && !$depts) bad('您沒有檢視請假統計的權限');
     $deptIds = $VIEW_ALL ? [] : array_map('intval', $depts);
-    $people = eg_people_list($db, $deptIds ? ['dept_ids' => $deptIds] : []);
-    $showDept = eg_people_multi_dept($people);
+    // all_posts：兼任者的主職務與兼任職務各出一列（不然「技術課 工程師 何沐桐」會整個不見，
+    // 只剩職級較高的「生管組 組長」——2026-09-17 使用者回報）。排序由共用庫統一為部門→職稱→姓名。
+    $people = eg_people_list($db, ($deptIds ? ['dept_ids' => $deptIds] : []) + ['all_posts' => true]);
+    $showDept = true;   // 展開職務後同一個人會跨部門出現，部門一律顯示才分得出是哪一個身分
     $rows = [];
     foreach ($people as $p) {
         $rows[] = ['id' => $p['id'],
-                   'label' => $p['display'] . ($showDept && $p['dept_name'] !== '' ? '／' . $p['dept_name'] : ''),
+                   'key' => $p['post_key'] ?? ($p['id'] . ':0'),
+                   'label' => $p['display'] . ($p['dept_name'] !== '' ? '／' . $p['dept_name'] : ''),
                    'dept_id' => $p['dept_id'] ?? 0];
     }
     // 部門清單：有可視範圍就只給那些，否則全部
     $dq = $deptIds ? ("WHERE id IN (" . implode(',', $deptIds) . ")") : '';
     $dl = $db->query("SELECT id, name FROM department $dq ORDER BY COALESCE(sort_order,999), id")
              ->fetchAll(PDO::FETCH_ASSOC);
+    // 每個部門連同下轄部門的 id 一起給前端：選「資材課」時人員下拉要列得出生管組／採購組／倉管組的人
+    // （組織是樹狀的，只比單一 id 會把子部門的人判成不是該部門——CLAUDE.md 組織綁定那條的同一個理由）
+    require_once __DIR__ . '/../common/org_role_lib.php';
+    foreach ($dl as &$_d) $_d['tree_ids'] = eg_dept_subtree_ids($db, (int)$_d['id']);
+    unset($_d);
     out(['success' => true, 'depts' => $dl, 'people' => $rows, 'show_dept' => $showDept]);
 }
 

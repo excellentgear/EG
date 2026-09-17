@@ -155,9 +155,13 @@ if (!function_exists('eg_leave_stats')) {
         if ($userId > 0) { $where[] = 'lr.employee_id = ?'; $args[] = $userId; }
         if ($typeIds)    { $where[] = 'lr.leave_type_id IN (' . implode(',', $typeIds) . ')'; }
         if ($deptId > 0) {
+            // 含下轄部門：選「資材課」要算得到生管組／採購組／倉管組的人，否則畫面上選得到卻永遠 0 筆
+            // （人員下拉的篩選走同一組 id，兩邊才對得起來）
+            require_once __DIR__ . '/org_role_lib.php';
+            $dIds = eg_dept_subtree_ids($db, $deptId);
+            if (!$dIds) $dIds = [$deptId];
             $where[] = 'lr.employee_id IN (SELECT DISTINCT m.user_id FROM user_department_position_map m
-                                           WHERE m.department_id = ?)';
-            $args[] = $deptId;
+                                           WHERE m.department_id IN (' . implode(',', array_map('intval', $dIds)) . '))';
         }
         $w = 'WHERE ' . implode(' AND ', $where);
 

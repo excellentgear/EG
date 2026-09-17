@@ -166,6 +166,15 @@ if (isset($_POST["newSchdule"]) && empty($_POST["userid"]) && !empty($_POST["sch
     unset($_POST['schdule_title'], $_POST['schdule_start'], $_POST['schdule_end']);
     $msg = '新增成功！';
 
+    /* 休假事件 → 請假系統自動建立假單（唯一實作 src/common/leave_calendar_lib.php）。
+       設定在「請假系統 → 管理者設定」：可關閉、可指定要不要跑簽核（預設自動建立、免簽核）。
+       同步失敗一律不擋行事曆本身的操作——行事曆是現場每天在用的，不能因為請假系統出問題就存不了檔。 */
+    try {
+        require_once __DIR__ . '/../common/leave_calendar_lib.php';
+        $__lvSync = eg_leave_cal_resync_event($db, (int)$event_id, ['operator_id' => (int)($_SESSION['id'] ?? 0)]);
+        if (!empty($__lvSync['created'])) $msg .= '（已自動建立 ' . count($__lvSync['created']) . ' 張請假單）';
+    } catch (Throwable $__e) { /* 忽略：不影響行事曆存檔 */ }
+
 } 
 // 更新行程
 else if (isset($_POST["newSchdule"]) && !empty($_POST["userid"]) && !empty($_POST["schdule_start"]) && !empty($_POST['schdule_end'])) {
@@ -327,6 +336,15 @@ else if (isset($_POST["newSchdule"]) && !empty($_POST["userid"]) && !empty($_POS
 
     unset($_POST['schdule_title'], $_POST['schdule_start'], $_POST['schdule_end'], $_SESSION['schdule_title'], $_SESSION['schdule_start'], $_SESSION['schdule_end'], $_SESSION['userid']);
     $msg = '更改成功！';
+
+    /* 休假事件 → 請假系統自動建立假單（唯一實作 src/common/leave_calendar_lib.php）。
+       設定在「請假系統 → 管理者設定」：可關閉、可指定要不要跑簽核（預設自動建立、免簽核）。
+       同步失敗一律不擋行事曆本身的操作——行事曆是現場每天在用的，不能因為請假系統出問題就存不了檔。 */
+    try {
+        require_once __DIR__ . '/../common/leave_calendar_lib.php';
+        $__lvSync = eg_leave_cal_resync_event($db, (int)$event_id, ['operator_id' => (int)($_SESSION['id'] ?? 0)]);
+        if (!empty($__lvSync['created'])) $msg .= '（已自動建立 ' . count($__lvSync['created']) . ' 張請假單）';
+    } catch (Throwable $__e) { /* 忽略：不影響行事曆存檔 */ }
 }
 
 

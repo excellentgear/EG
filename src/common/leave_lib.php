@@ -697,10 +697,28 @@ if (!function_exists('eg_leave_event_approve')) {
 }
 
 if (!function_exists('eg_leave_event_remove')) {
-    /** 退回/撤回/銷假：撤掉本單建立的行事曆事件（只刪 leave_request.evenement_id 指到的那筆，不條件反查） */
-    function eg_leave_event_remove(PDO $db, ?int $evenementId): void {
+    /**
+     * 退回/撤回/銷假：撤掉本單的行事曆事件（只刪 leave_request.evenement_id 指到的那筆，不條件反查）。
+     *
+     * $ownerUserId（2026-09-17 加）：由行事曆自動建單而來的假單，指到的是**使用者自己畫的那一筆休假**，
+     * 而那一筆可能同時掛了好幾個人（實際資料裡一筆最多掛 4 個人）。整筆刪掉＝把別人的假也一起刪了，
+     * 所以有帶人員且該事件不只一個人時，只抽掉這個人的 actor，事件本身留給其他人。
+     * 一般由請假系統自己建的事件只會有一個 actor，走的還是原本的整筆刪除。
+     */
+    function eg_leave_event_remove(PDO $db, ?int $evenementId, int $ownerUserId = 0): void {
         if (!$evenementId) return;
         try {
+            if ($ownerUserId > 0) {
+                $st = $db->prepare("SELECT COUNT(*) FROM evenement_actor WHERE event_id = ?");
+                $st->execute([$evenementId]);
+                if ((int)$st->fetchColumn() > 1) {
+                    $db->prepare("DELETE FROM evenement_actor WHERE event_id = ? AND user_id = ?")
+                       ->execute([$evenementId, $ownerUserId]);
+                    $db->prepare("DELETE FROM evenement_recipient_cache WHERE event_id = ? AND user_id = ?")
+                       ->execute([$evenementId, $ownerUserId]);
+                    return;
+                }
+            }
             $db->prepare("DELETE FROM evenement_recipient_cache WHERE event_id = ?")->execute([$evenementId]);
             $db->prepare("DELETE FROM evenement_target WHERE event_id = ?")->execute([$evenementId]);
             $db->prepare("DELETE FROM evenement_actor WHERE event_id = ?")->execute([$evenementId]);
@@ -843,6 +861,14 @@ if (!function_exists('eg_leave_submit')) {
         $extra = eg_leave_rule_extra_in($in);
         $cfg = eg_leave_settings($db);
 
+        /* _auto：行事曆自動建單（leave_calendar_lib.php）專用的放寬參數。
+           一般人工送審一律不帶，行為與原本完全相同。
+           為什麼要放寬：行事曆上的休假是「已經發生的事實」（多半是人事直接登錄，甚至是幾個月前的舊資料），
+           用送審的那套前置條件去擋，結果就是「假單建不出來也沒人知道」——該擋的是新申請，不是既成紀錄。
+           擋不下來的改成 warns 回報，由呼叫端列進報表讓人去看，不要安靜吞掉。 */
+        $auto  = is_array($in['_auto'] ?? null) ? $in['_auto'] : [];
+        $autoWarns = [];
+
         if (!$uid || !$tid || !$start || !$end) return ['ok' => false, 'msg' => '缺少必要欄位'];
         if (strtotime($end) === false || strtotime($start) === false || strtotime($end) <= strtotime($start)) {
             return ['ok' => false, 'msg' => '結束時間必須晚於開始時間'];
@@ -856,7 +882,7 @@ if (!function_exists('eg_leave_submit')) {
 
         // 補請假限制
         $isBackdated = (substr($start, 0, 10) < date('Y-m-d')) ? 1 : 0;
-        if ($isBackdated) {
+        if ($isBackdated && empty($auto['skip_backdate_limit'])) {
             $limit = max(0, (int)$cfg['leave_backdate_limit_days']);
             $earliest = date('Y-m-d', strtotime("-{$limit} day"));
             if (substr($start, 0, 10) < $earliest) {
@@ -881,15 +907,20 @@ if (!function_exists('eg_leave_submit')) {
         if ($type['leave_name'] === '特休') {
             $sum = eg_leave_annual_summary($db, $uid, (int)substr($start, 0, 4));
             if ($amt['days'] > $sum['remaining'] + 0.001) {
-                return ['ok' => false, 'msg' => sprintf('特休額度不足：額度 %.1f 天、已用 %.1f 天、送審中 %.1f 天，剩餘 %.1f 天，本次申請 %.1f 天',
-                    $sum['entitlement'], $sum['used'], $sum['pending'], $sum['remaining'], $amt['days'])];
+                $qMsg = sprintf('特休額度不足：額度 %.1f 天、已用 %.1f 天、送審中 %.1f 天，剩餘 %.1f 天，本次申請 %.1f 天',
+                    $sum['entitlement'], $sum['used'], $sum['pending'], $sum['remaining'], $amt['days']);
+                if (empty($auto['skip_quota_block'])) return ['ok' => false, 'msg' => $qMsg];
+                $autoWarns[] = $qMsg;   // 行事曆既成紀錄：照建，但把超額講出來讓人事去處理
             }
         }
 
         // 假別特殊規則（喪假親等天數/百日期限、育嬰類子女年齡與每一子女上限）
         // 前端已經即時驗過一次，這裡是唯一守門處，不採信前端送來的任何判斷結果。
         $ruleChk = eg_leave_rule_check($db, $uid, $type, $start, $end, $amt, $extra);
-        if (!$ruleChk['ok']) return ['ok' => false, 'msg' => $ruleChk['msg']];
+        if (!$ruleChk['ok']) {
+            if (empty($auto['skip_rule_block'])) return ['ok' => false, 'msg' => $ruleChk['msg']];
+            $autoWarns[] = $ruleChk['msg'];   // 例：行事曆上的喪假沒有親等/死亡日可帶，照建並標記待補
+        }
         $store = eg_leave_rule_extra_store($type, $extra);
 
         // 代理人（2026-07-30 使用者定案：**不由申請人挑選**）
@@ -918,11 +949,18 @@ if (!function_exists('eg_leave_submit')) {
         if ($needAttach) {
             if ($hasAttach) $attachStatus = 'done';
             elseif (!empty($type['allow_attach_later'])) $attachStatus = 'pending';   // 先送審、事後補件
+            elseif (!empty($auto['skip_attach_block'])) {
+                $attachStatus = 'pending';
+                $autoWarns[] = '此假別須附證明文件（' . $type['leave_name'] . '），行事曆帶入時沒有附件，已標記待補';
+            }
             else return ['ok' => false, 'msg' => '此假別須附證明文件（' . $type['leave_name'] . '），請先上傳附件再送出'];
         }
 
         // 簽核鏈（need_approval=0 → 直接核准）
-        $needApproval = (int)$type['need_approval'] === 1;
+        // force_approval：行事曆自動建單由「請假系統的管理員設定」決定要不要簽核，覆蓋假別本身的設定
+        $needApproval = array_key_exists('force_approval', $auto)
+                      ? (bool)$auto['force_approval']
+                      : ((int)$type['need_approval'] === 1);
         $chain = $needApproval ? eg_leave_supervisor_chain($db, $uid, max(1, (int)$type['max_approval_level'])) : [];
         if ($needApproval && empty($chain)) {
             return ['ok' => false, 'msg' => '無法解析簽核主管鏈，請洽管理員確認部門/職稱階級與最終裁決者設定'];
@@ -931,14 +969,19 @@ if (!function_exists('eg_leave_submit')) {
         try {
             $db->beginTransaction();
 
+            $srcKind = (string)($auto['source'] ?? 'form');
+            $srcEvId = (int)($auto['event_id'] ?? 0) ?: null;
+            $subTime = (string)($auto['submit_time'] ?? '');   // 補舊資料時把送單時間寫成當時的日期
             $db->prepare("INSERT INTO leave_request
                             (employee_id, leave_type_id, start_datetime, end_datetime, reason, status,
                              agent_user_id, total_hours, total_days, is_backdated, attach_status,
-                             rel_grade_id, deceased_date, child_birthday, submit_time, last_update)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())")
+                             rel_grade_id, deceased_date, child_birthday, source, source_event_id,
+                             submit_time, last_update)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, NOW()), NOW())")
                ->execute([$uid, $tid, $start, $end, $reason, $needApproval ? 'pending' : 'approved',
                           $agentId ?: null, $amt['hours'], $amt['days'], $isBackdated, $attachStatus,
-                          $store['rel_grade_id'], $store['deceased_date'], $store['child_birthday']]);
+                          $store['rel_grade_id'], $store['deceased_date'], $store['child_birthday'],
+                          $srcKind, $srcEvId, ($subTime !== '' ? $subTime : null)]);
             $reqId = (int)$db->lastInsertId();
 
             // leave_approval：每層一列一次建好（流程狀態表）。approver_id=該層應簽主管（本人），
@@ -965,13 +1008,21 @@ if (!function_exists('eg_leave_submit')) {
             $viewers = [];
             foreach ($chain as $c) $viewers[] = (int)$c['user_id'];
             foreach ($agents as $a) if (!empty($a['agent_user_id'])) $viewers[] = (int)$a['agent_user_id'];
+            if ($srcEvId) {
+                // 來源就是行事曆上那筆休假：**不再另建一筆事件**，也不改動使用者畫的那一筆
+                // （同一筆事件可能掛好幾個人，改類別會連別人的一起變）。只把兩邊接起來，
+                // 之後銷假才知道要從哪一筆事件把這個人抽掉。
+                $db->prepare("UPDATE leave_request SET evenement_id = ? WHERE id = ?")->execute([$srcEvId, $reqId]);
+            } else {
             $evId = eg_leave_event_create_pending($db, $reqId, $uid, $tid, (string)$type['leave_name'], $start, $end, $viewers);
             if ($evId) {
                 if (!$needApproval) eg_leave_event_approve($db, $evId, $reqId);
                 $db->prepare("UPDATE leave_request SET evenement_id = ? WHERE id = ?")->execute([$evId, $reqId]);
             }
+            }
             if (!$needApproval) {
-                $db->prepare("UPDATE leave_request SET decided_at = NOW() WHERE id = ?")->execute([$reqId]);
+                $db->prepare("UPDATE leave_request SET decided_at = COALESCE(?, NOW()) WHERE id = ?")
+                   ->execute([($subTime !== '' ? $subTime : null), $reqId]);
             }
 
             $db->commit();
@@ -981,6 +1032,11 @@ if (!function_exists('eg_leave_submit')) {
         }
 
         // 通知（transaction 外，失敗不影響單據）
+        if (!empty($auto['no_notify'])) {
+            return ['ok' => true, 'id' => $reqId, 'status' => $needApproval ? 'pending' : 'approved',
+                    'msg' => $needApproval ? '已送審' : '已核准（免簽）',
+                    'warns' => array_merge($ruleChk['warns'] ?? [], $autoWarns)];
+        }
         $st = $db->prepare("SELECT user_cname FROM user WHERE id = ? LIMIT 1");
         $st->execute([$uid]);
         $applicantName = (string)$st->fetchColumn();
@@ -1001,9 +1057,10 @@ if (!function_exists('eg_leave_submit')) {
             eg_leave_notify($db, $reqId, "✅ 請假單 #{$reqId} 已核准（免簽）", $body, $targets, 0, $reason);
         }
 
-        return ['ok' => true, 'id' => $reqId, 'msg' => $needApproval ? '已送審' : '已核准（此假別免簽）',
+        return ['ok' => true, 'id' => $reqId, 'status' => $needApproval ? 'pending' : 'approved',
+                'msg' => $needApproval ? '已送審' : '已核准（此假別免簽）',
                 'need_attach_later' => ($attachStatus === 'pending'),
-                'warns' => $ruleChk['warns']];   // 例如多子女育嬰須合併計算的提醒（不擋單，但要讓人看到）
+                'warns' => array_merge($ruleChk['warns'], $autoWarns)];   // 例如多子女育嬰須合併計算的提醒（不擋單，但要讓人看到）
     }
 }
 
@@ -1238,7 +1295,7 @@ if (!function_exists('eg_leave_sign')) {
                 // 任一層退回 → 整單退回；撤掉申請中行事曆事件；後續層自動收回（維持 pending 不動即可，單已決行）
                 $db->prepare("UPDATE leave_request SET status = 'rejected', decided_at = NOW(), last_update = NOW() WHERE id = ?")
                    ->execute([$requestId]);
-                eg_leave_event_remove($db, $req['evenement_id'] ? (int)$req['evenement_id'] : null);
+                eg_leave_event_remove($db, $req['evenement_id'] ? (int)$req['evenement_id'] : null, (int)$req['employee_id']);
                 $db->prepare("UPDATE leave_request SET evenement_id = NULL WHERE id = ?")->execute([$requestId]);
                 $final = true;
             } else {
@@ -1452,7 +1509,7 @@ if (!function_exists('eg_leave_sign_cancel')) {
                 $db->prepare("UPDATE leave_request
                               SET status = 'canceled', canceled_at = NOW(), canceled_by = ?, last_update = NOW()
                               WHERE id = ?")->execute([$userId, $requestId]);
-                eg_leave_event_remove($db, $req['evenement_id'] ? (int)$req['evenement_id'] : null);
+                eg_leave_event_remove($db, $req['evenement_id'] ? (int)$req['evenement_id'] : null, (int)$req['employee_id']);
                 $db->prepare("UPDATE leave_request SET evenement_id = NULL WHERE id = ?")->execute([$requestId]);
             } else {
                 $db->prepare("UPDATE leave_request SET status = ?, last_update = NOW() WHERE id = ?")
@@ -1529,7 +1586,7 @@ if (!function_exists('eg_leave_cancel')) {
             $db->prepare("INSERT INTO leave_sign_record (leave_request_id, step_no, signer_id, action, remark, signed_at)
                           VALUES (?, 99, ?, 'canceled', ?, NOW())")
                ->execute([$requestId, $userId, ($wasApproved ? '銷假' : '撤回') . ($reason !== '' ? '：' . $reason : '')]);
-            eg_leave_event_remove($db, $req['evenement_id'] ? (int)$req['evenement_id'] : null);
+            eg_leave_event_remove($db, $req['evenement_id'] ? (int)$req['evenement_id'] : null, (int)$req['employee_id']);
             $db->prepare("UPDATE leave_request SET evenement_id = NULL WHERE id = ?")->execute([$requestId]);
             $db->commit();
         } catch (Throwable $e) {
@@ -1791,7 +1848,7 @@ if (!function_exists('eg_leave_delete')) {
                 $db->prepare("DELETE FROM live_event WHERE id = ?")->execute([$eid]);
             }
             // 行事曆事件
-            if ($evId) eg_leave_event_remove($db, $evId);
+            if ($evId) eg_leave_event_remove($db, $evId, (int)($req['employee_id'] ?? 0));
             // 附件（DB 列；實體檔在交易外刪，避免交易回滾後檔案已消失）
             $db->prepare("DELETE FROM leave_attachment WHERE leave_request_id = ?")->execute([$requestId]);
             // 代理人解析結果

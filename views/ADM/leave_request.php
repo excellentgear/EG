@@ -1704,14 +1704,35 @@ function openStats(){
   stLoaded = true;
   $.getJSON(API, {action:'stats_options'}, function(o){
     if(!o.success){ $('#stScopeNote').html('<span style="color:#a3341f;">'+esc(o.message)+'</span>'); return; }
+    ST_PEOPLE = o.people || [];
+    ST_DEPTS  = o.depts  || [];
     $('#stDept').html('<option value="0">全部部門</option>'
-      + (o.depts||[]).map(d => '<option value="'+d.id+'">'+esc(d.name)+'</option>').join(''));
-    $('#stUser').html('<option value="0">全部人員</option>'
-      + (o.people||[]).map(p => '<option value="'+p.id+'">'+esc(p.label)+'</option>').join(''));
+      + ST_DEPTS.map(d => '<option value="'+d.id+'">'+esc(d.name)+'</option>').join(''));
+    renderStUser();
     loadStats();
   });
 }
+/* 人員下拉：選了部門就只列該部門（含下轄）底下的人，沒選部門才列全公司。
+   一個人兼任多個職務時每個職務各一列（主職務也在），所以 value 用「uid:職務id」不用 uid，
+   否則同一個人的兩列 value 會重複、選了分不出是哪一個身分。送後端的仍是 uid。 */
+let ST_PEOPLE = [], ST_DEPTS = [];
+function stDeptTreeIds(did){
+  const d = ST_DEPTS.find(x => +x.id === +did);
+  return d && d.tree_ids && d.tree_ids.length ? d.tree_ids.map(Number) : [+did];
+}
+function renderStUser(){
+  const did = +($('#stDept').val() || 0);
+  const keep = String($('#stUser').val() || '0');
+  const ids = did > 0 ? stDeptTreeIds(did) : null;
+  const list = ids ? ST_PEOPLE.filter(p => ids.indexOf(+p.dept_id) !== -1) : ST_PEOPLE;
+  $('#stUser').html('<option value="0">全部人員</option>'
+    + list.map(p => '<option value="'+esc(p.key)+'">'+esc(p.label)+'</option>').join(''));
+  // 換部門後原本選的人若還在新名單裡就保留，不在就回到「全部人員」
+  $('#stUser').val(list.some(p => String(p.key) === keep) ? keep : '0');
+}
+function stUserId(){ return parseInt(String($('#stUser').val() || '0').split(':')[0], 10) || 0; }
 // 部門／人員／狀態一改就重算（年度與假別各自有處理）
+$(document).on('change', '#stDept', function(){ renderStUser(); });
 $(document).on('change', '#stDept, #stUser, #stPending, #stYear', function(){ stPersonPage = 1; loadStats(); });
 
 function stTypeIdsParam(){
@@ -1729,7 +1750,7 @@ function loadStats(){
   const q = {action:'stats',
              year: $('#stYear').val() || CUR_YEAR,
              dept_id: $('#stDept').val() || 0,
-             user_id: $('#stUser').val() || 0,
+             user_id: stUserId(),
              with_pending: $('#stPending').is(':checked') ? 1 : 0,
              type_ids: stTypeIdsParam()};
   $.getJSON(API, q, function(r){
