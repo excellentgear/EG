@@ -2483,6 +2483,71 @@ function ia_resolve_post(PDO $db, string $key, ?string $kind = null, string $aso
     return null;
 }
 
+/**
+ * 每個年度的內稽完成狀態（2026-09-17 使用者要求：年度選單要一眼看出哪一年做完了）。
+ *
+ * 三種狀態（使用者定調）：
+ *   none  ＝這一年完全沒有任何內稽資料　→ 畫面不顯示任何圖示
+ *   doing ＝有建立但還沒完成　　　　　　→ 進行中圖示
+ *   done  ＝有內稽資料**而且完整產出報告**→ 打勾圖示
+ *
+ * 「完整產出報告」的判定（寫在這裡一處，畫面只負責顯示）：
+ *   ①這一年有稽核報告表（ia_report）
+ *   ②而且**每一張都已核准**（有一張還在草稿／送審中就還不算做完）
+ *   ③而且**沒有未結案的不符合通知單**（IA 單開著就代表這一年的稽核還沒收尾）
+ * 三個條件缺哪一個，`why` 會講明白，畫面直接把它當提示文字顯示——
+ * 不然使用者只會看到一個沒打勾的圖示，卻不知道還差什麼。
+ *
+ * @return array [year => ['state','plan','cases','cases_done','checks','reports','reports_approved','nc_open','why']]
+ */
+function ia_year_status(PDO $db): array
+{
+    $out = [];
+    $touch = function (int $y) use (&$out) {
+        if (!isset($out[$y])) $out[$y] = ['state' => 'none', 'plan' => 0, 'cases' => 0, 'cases_done' => 0,
+                                          'checks' => 0, 'reports' => 0, 'reports_approved' => 0, 'nc_open' => 0, 'why' => []];
+        return $y;
+    };
+    $q = function (string $sql) use ($db) {
+        try { return $db->query($sql)->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) { return []; }
+    };
+
+    foreach ($q("SELECT year, COUNT(*) n FROM ia_plan GROUP BY year") as $r) {
+        $out[$touch((int)$r['year'])]['plan'] = (int)$r['n'];
+    }
+    foreach ($q("SELECT year, COUNT(*) n, SUM(status IN ('executed','closed')) d
+                   FROM ia_case WHERE COALESCE(is_deleted,0)=0 GROUP BY year") as $r) {
+        $y = $touch((int)$r['year']);
+        $out[$y]['cases'] = (int)$r['n']; $out[$y]['cases_done'] = (int)$r['d'];
+    }
+    foreach ($q("SELECT year, COUNT(*) n FROM ia_check WHERE COALESCE(is_deleted,0)=0 GROUP BY year") as $r) {
+        $out[$touch((int)$r['year'])]['checks'] = (int)$r['n'];
+    }
+    foreach ($q("SELECT year, COUNT(*) n, SUM(status='approved') a
+                   FROM ia_report WHERE COALESCE(is_deleted,0)=0 GROUP BY year") as $r) {
+        $y = $touch((int)$r['year']);
+        $out[$y]['reports'] = (int)$r['n']; $out[$y]['reports_approved'] = (int)$r['a'];
+    }
+    foreach ($q("SELECT year, COUNT(*) n FROM ia_nc
+                  WHERE COALESCE(is_deleted,0)=0 AND stage <> 'closed' GROUP BY year") as $r) {
+        $out[$touch((int)$r['year'])]['nc_open'] = (int)$r['n'];
+    }
+
+    foreach ($out as $y => &$s) {
+        $has = ($s['plan'] || $s['cases'] || $s['checks'] || $s['reports'] || $s['nc_open']);
+        if (!$has) { $s['state'] = 'none'; continue; }
+        $why = [];
+        if ($s['reports'] === 0)                          $why[] = '還沒有稽核報告表';
+        elseif ($s['reports_approved'] < $s['reports'])   $why[] = '稽核報告表還沒核准（' . $s['reports_approved'] . '／' . $s['reports'] . ' 張已核准）';
+        if ($s['nc_open'] > 0)                            $why[] = '還有 ' . $s['nc_open'] . ' 張不符合通知單未結案';
+        $s['state'] = $why ? 'doing' : 'done';
+        $s['why']   = $why;
+    }
+    unset($s);
+    ksort($out);
+    return $out;
+}
+
 /** 年度下拉的選項：已有資料的年度 ＋ 近十年到明年（管理員要補舊年度資料，選單裡就得選得到） */
 function ia_year_options(PDO $db): array
 {

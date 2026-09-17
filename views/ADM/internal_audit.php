@@ -303,7 +303,10 @@ $roleLabel = ia_role_label($perms);
 <?php else: ?>
         <div class="ia-toolbar">
             <label>年度</label>
-            <select id="yearSel" style="width:110px;"></select>
+            <select id="yearSel" style="width:132px;"></select>
+            <!-- 這一年做到哪了（2026-09-17 使用者要求）：✔＝有內稽資料且報告完整產出、
+                 沙漏＝有建立但還沒完成、完全沒建立＝不顯示任何圖示 -->
+            <span id="yearStat" style="font-size:12px;margin-left:2px;white-space:nowrap;"></span>
             <button id="btnReload"><i class="fa fa-refresh"></i> 重新整理</button>
             <?php if ($perms['canAdmin']): ?>
             <button id="btnSetting"><i class="fa fa-cog"></i> 設定</button>
@@ -531,6 +534,10 @@ $roleLabel = ia_role_label($perms);
             <li><b>稽核小組</b>（工具列，限內稽管理員）：這一年度的內稽是誰在做。<b>建稽核通知單前先組好</b>——之後「自動建立會議紀錄」的與會人員就是小組成員、<b>主席固定為稽核組長</b>；還沒建小組時會退回用該通知單上各受稽單位的稽核員與陪檢員。
                 常態小組每年差不多，可用「<b>從其他年度複製</b>」整批帶過來再增減（原職務已異動或離職的成員會自動略過並列出來）。<b>稽核組長只能有一位</b>。</li>
             <li><b>受稽日期／預定完成改善要全部同一天</b>：這兩欄的表頭各有一個日期欄＋「全部」鈕，按下去就套用到每一列；表頭沒填時會自動沿用<b>第一列已經填好的那個值</b>。</li>
+            <li><b>年度選單會顯示這一年做到哪了</b>：<b>✔ 已完成</b>＝這一年有內稽資料<b>而且報告完整產出</b>
+                （每一張稽核報告表都已核准，且沒有未結案的不符合通知單）；<b>⏳ 進行中</b>＝有建立但還沒完成，
+                旁邊會直接寫出還差什麼（例「還沒有稽核報告表」「還有 2 張不符合通知單未結案」）；
+                <b>完全沒建立的年度不顯示任何圖示</b>。</li>
             <li><b>受稽時間可以自動排</b>：「時間」欄的表頭填<b>開始時間</b>（結束時間可留空）後按<b>「自動排」</b>，就依<b>間隔</b>（預設 30 分，可改）往下排每一列，
                 而且<b>會自動跳過午休 12:00~13:00</b>（算出來落在午休內的一律改成 13:00 再往後排）。
                 之後<b>手動改中間任何一列的時間，後面幾列會自動順延</b>（前面的不動）；想逐列自己填就把表頭的「改一列就自動順延後面」取消勾選。
@@ -1505,19 +1512,51 @@ function loadPane(p){
 }
 function currentPane(){ return $('.ia-tab.on').data('pane') || 'dash'; }
 
+/* ---------- 年度完成狀態（2026-09-17 使用者要求） ----------
+   ✔＝這一年有內稽資料**而且報告完整產出**（每一張稽核報告表都已核准，且沒有未結案的 IA 單）；
+   沙漏＝有建立但還沒完成；**完全沒建立的年度不顯示任何圖示**。
+   判定規則寫在後端 ia_year_status() 一處，這裡只負責顯示（畫面不另算一份＝鐵律4）。 */
+function yearStatOf(y){ return ((META && META.year_status) || {})[String(y)] || null; }
+function yearMark(y){
+    var st = (yearStatOf(y)||{}).state || 'none';
+    return st === 'done' ? '　✔' : (st === 'doing' ? '　⏳' : '');
+}
+function renderYearStat(){
+    var s = yearStatOf(YEAR);
+    if (!s || s.state === 'none') {
+        $('#yearStat').html('<span style="color:#a08356;">尚未建立任何內稽資料</span>');
+        return;
+    }
+    if (s.state === 'done') {
+        $('#yearStat').html('<span style="color:#7a5217;" title="'
+            + esc('報告已完整產出：稽核報告表 '+s.reports_approved+'／'+s.reports+' 張已核准，沒有未結案的不符合通知單')
+            + '"><i class="fa fa-check-circle"></i> 已完成</span>');
+        return;
+    }
+    // 進行中：把「還差什麼」直接講出來，不然只看到一個沒打勾的圖示也不知道要做什麼
+    var why = (s.why||[]).join('；');
+    $('#yearStat').html('<span style="color:#d98a33;" title="'
+        + esc('進行中' + (why ? '：' + why : '') + '（年度計畫 '+s.plan+'　通知單 '+s.cases_done+'／'+s.cases+' 已執行　查檢表 '+s.checks+'）')
+        + '"><i class="fa fa-hourglass-half"></i> 進行中'
+        + (why ? '<span style="color:#a08356;">（' + esc(why) + '）</span>' : '') + '</span>');
+}
+
 /* ============================ meta ============================ */
 function loadMeta(cb){
     $.getJSON(API, {action:'meta'}, function(res){
         if (!res.ok) { alert(res.error||'載入失敗'); return; }
         META = res;
         var ysel = $('#yearSel').empty();
-        (res.years||[]).forEach(function(y){ ysel.append('<option value="'+y+'">'+y+' 年</option>'); });
+        (res.years||[]).forEach(function(y){
+            ysel.append('<option value="'+y+'">'+y+' 年'+yearMark(y)+'</option>');
+        });
         // 年度選單第一個是「明年」（補未來排程用），但預設一定要停在**今年**，
         // 否則一開頁面看到的是明年、清單永遠空的（2026-09-15 實測發現）。
         var cy = +String(res.today).substr(0,4);
         YEAR = ((res.years||[]).indexOf(cy) >= 0) ? cy
              : +(res.years && res.years.length ? res.years[0] : cy);
         ysel.val(YEAR);
+        renderYearStat();
         // 種類／階段／類型下拉一律由後端常數帶出來，畫面不另寫一份對照（鐵律4）
         var kh = '<option value="">全部</option>';
         $.each(res.check_kinds||{}, function(k,v){ kh += '<option value="'+k+'">'+esc(v.label)+'</option>'; });
@@ -1528,7 +1567,7 @@ function loadMeta(cb){
         if (cb) cb();
     });
 }
-$('#yearSel').on('change', function(){ YEAR = +$(this).val(); PAGE={case:1,check:1,nc:1}; loadPane(currentPane()); });
+$('#yearSel').on('change', function(){ YEAR = +$(this).val(); renderYearStat(); PAGE={case:1,check:1,nc:1}; loadPane(currentPane()); });
 $('#btnReload').on('click', function(){ ASOF_CACHE = {}; loadMeta(function(){ loadPane(currentPane()); }); });
 
 /* ---------- 依業務日期回推的人員清單（ai-rules/22，2026-09-16 使用者交辦） ----------

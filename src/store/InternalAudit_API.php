@@ -181,6 +181,8 @@ case 'meta': {
         'tpl_sets'  => ia_tpl_sets($db),
         'stamp_tpls'=> $stampTpls,
         'years'     => $years,
+        // 每個年度做到哪了（畫面在年度選單上顯示 ✔／進行中，未建立的不顯示圖示）
+        'year_status' => ia_year_status($db),
         'this_year' => $cy,
         'today'     => $today,
     ]);
