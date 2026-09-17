@@ -445,6 +445,126 @@ switch ($action) {
         break;
     }
 
+    // ── 附件連動整理：找出「同一訂單編號＋同一份實體檔，卻掛在多個不同料號上」的組別 ──
+    // 背景（2026-09-11）：改版前的同步程式只看標籤，不管附件有沒有綁料號，於是原本各自上傳到自己
+    // 那張訂單的原圖，會在有人編輯同編號任一張訂單時被互相散佈到每個料號上。程式已修好不會再長，
+    // 但既有資料要人工確認哪張圖屬於哪些料號（系統無法自己判斷），所以做成清單讓人逐組整理。
+    // 預設排除「客戶訂單」這類本來就涵蓋整張單所有料號的標籤（使用者拍板，避免整頁都是假警報）。
+    case 'link_audit_list': {
+        if (!_oaIsAdmin($pdo, $uid)) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'僅管理員可使用']); break; }
+        $exCats = array_values(array_filter(array_map('intval', explode(',', trim($_POST['exclude_cats'] ?? '')))));
+        $onlyCats = array_values(array_filter(array_map('intval', explode(',', trim($_POST['only_cats'] ?? '')))));
+        $rows = $pdo->query("
+            SELECT a.id, a.order_id, a.filename, a.original_name, a.category_ids, a.linked_part_no, a.uploaded_at,
+                   ot.Order_oo, ot.d_id, ot.Client_name
+            FROM order_attachments a
+            JOIN order_track ot ON ot.Order_id = a.order_id
+            WHERE a.status='active'
+            ORDER BY ot.Order_oo, a.filename, a.id
+        ")->fetchAll(PDO::FETCH_ASSOC);
+
+        $catMap = [];
+        foreach ($pdo->query("SELECT id, category_name FROM quotation_file_categories")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            $catMap[(int)$c['id']] = $c['category_name'];
+        }
+        $grp = [];
+        foreach ($rows as $r) { $grp[$r['Order_oo'] . '|' . $r['filename']][] = $r; }
+
+        $out = [];
+        foreach ($grp as $list) {
+            $parts = array_values(array_unique(array_column($list, 'd_id')));
+            if (count($parts) < 2) continue;                      // 同一料號分多張訂單（拆批）＝正常
+            $cids = array_values(array_filter(array_map('intval', explode(',', (string)$list[0]['category_ids']))));
+            if ($exCats && array_intersect($cids, $exCats)) continue;
+            if ($onlyCats && !array_intersect($cids, $onlyCats)) continue;
+            $bound = eg_oa_parts_decode($list[0]['linked_part_no']);
+            // 建議：檔名（去副檔名）剛好等於其中一個料號＝那張圖本來就是那個料號的（誠岱那種掃描命名）
+            $base = pathinfo($list[0]['original_name'] ?: $list[0]['filename'], PATHINFO_FILENAME);
+            $guess = null;
+            foreach ($parts as $pp) { if (strcasecmp(trim($base), trim($pp)) === 0) { $guess = $pp; break; } }
+            $out[] = [
+                'attachment_id' => (int)$list[0]['id'],
+                'order_oo'      => $list[0]['Order_oo'],
+                'client'        => $list[0]['Client_name'],
+                'display_name'  => $list[0]['original_name'] ?: $list[0]['filename'],
+                'cats'          => implode('、', array_map(fn($i) => $catMap[$i] ?? ('#'.$i), $cids)),
+                'parts'         => $parts,
+                'bound'         => $bound,
+                'guess'         => $guess,
+                'rows'          => count($list),
+                'first_at'      => $list[0]['uploaded_at'],
+                'last_at'       => end($list)['uploaded_at'],
+            ];
+        }
+        // 有建議的排前面（可以一鍵處理），其次依多出來的列數由多到少
+        usort($out, function ($a, $b) {
+            if (($a['guess'] ? 0 : 1) !== ($b['guess'] ? 0 : 1)) return ($a['guess'] ? 0 : 1) - ($b['guess'] ? 0 : 1);
+            return $b['rows'] <=> $a['rows'];
+        });
+        echo json_encode(['success' => true, 'groups' => $out, 'total' => count($out)], JSON_UNESCAPED_UNICODE);
+        break;
+    }
+
+    // ── 一鍵套用「檔名＝料號」的建議（只處理推得出原主的組，其餘一律留給人工）──
+    // dry=1 只試算不寫入（預設就是試算，要真的寫必須明確送 apply=1）
+    case 'link_audit_autofix': {
+        if (!_oaIsAdmin($pdo, $uid)) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'僅管理員可使用']); break; }
+        $apply = (($_POST['apply'] ?? '') === '1');
+        $onlyOo = trim($_POST['order_oo'] ?? '');       // 可限定只處理某一張訂單編號
+        $rows = $pdo->query("
+            SELECT a.id, a.order_id, a.filename, a.original_name, a.category_ids, a.linked_part_no,
+                   ot.Order_oo, ot.d_id
+            FROM order_attachments a
+            JOIN order_track ot ON ot.Order_id = a.order_id
+            WHERE a.status='active'
+            ORDER BY ot.Order_oo, a.filename, a.id
+        ")->fetchAll(PDO::FETCH_ASSOC);
+        $grp = [];
+        foreach ($rows as $r) { $grp[$r['Order_oo'] . '|' . $r['filename']][] = $r; }
+
+        $plan = [];
+        foreach ($grp as $list) {
+            if ($onlyOo !== '' && $list[0]['Order_oo'] !== $onlyOo) continue;
+            $parts = array_values(array_unique(array_column($list, 'd_id')));
+            if (count($parts) < 2) continue;
+            $base = pathinfo($list[0]['original_name'] ?: $list[0]['filename'], PATHINFO_FILENAME);
+            $keep = null;
+            foreach ($parts as $pp) { if (strcasecmp(trim($base), trim($pp)) === 0) { $keep = $pp; break; } }
+            if ($keep === null) continue;                // 推不出原主＝一律不碰，留給人工
+            $drop = [];
+            foreach ($list as $r) { if ($r['d_id'] !== $keep) $drop[] = (int)$r['id']; }
+            if (!$drop) continue;
+            $plan[] = ['order_oo'=>$list[0]['Order_oo'], 'file'=>$list[0]['original_name'] ?: $list[0]['filename'],
+                       'keep'=>$keep, 'drop_parts'=>array_values(array_diff($parts, [$keep])),
+                       'drop_ids'=>$drop, 'filename'=>$list[0]['filename']];
+        }
+        if (!$apply) {
+            echo json_encode(['success'=>true,'dry'=>true,'groups'=>count($plan),
+                              'rows'=>array_sum(array_map(fn($x)=>count($x['drop_ids']), $plan)),
+                              'plan'=>$plan], JSON_UNESCAPED_UNICODE);
+            break;
+        }
+        $pdo->beginTransaction();
+        try {
+            $del = $pdo->prepare("DELETE FROM order_attachments WHERE id=?");
+            $bind = $pdo->prepare("UPDATE order_attachments a JOIN order_track ot ON ot.Order_id=a.order_id
+                                   SET a.linked_part_no=? WHERE a.status='active' AND a.filename=? AND ot.Order_oo=?");
+            $n = 0;
+            foreach ($plan as $g) {
+                foreach ($g['drop_ids'] as $id) { $del->execute([$id]); $n++; }
+                // 留下來那一列要寫上綁定值，往後同步才知道它只屬於這個料號（否則又會被當成共用散出去）
+                $bind->execute([$g['keep'], $g['filename'], $g['order_oo']]);
+            }
+            $pdo->commit();
+            echo json_encode(['success'=>true,'dry'=>false,'groups'=>count($plan),'rows'=>$n,
+                              'message'=>'已整理 ' . count($plan) . ' 組、移除 ' . $n . ' 個多餘的料號連結（實體檔案都保留）']);
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            echo json_encode(['success'=>false,'message'=>'整理失敗：' . $e->getMessage()]);
+        }
+        break;
+    }
+
     // ── 刪除附件 ─────────────────────────────────────────────
     case 'delete_file': {
         $attId = intval($_POST['attachment_id'] ?? 0);

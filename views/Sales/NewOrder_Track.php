@@ -7599,6 +7599,77 @@ foreach($dCounts as $c) {
             return hit;
         }
 
+        // ── 附件連動整理（僅管理員；點開即向後端要最新狀態，ai-rules/08 第六節）────
+        var olaGroups = [];
+        function oaOpenLinkAudit() { $('#oaLinkAuditModal').modal('show'); oaLoadLinkAudit(); }
+        function oaLoadLinkAudit() {
+            $('#ola-tbody').html('<tr><td colspan="8" class="text-center" style="padding:16px;color:#aaa;">載入中…</td></tr>');
+            // 「整張單共用」的標籤＝本頁標籤清單裡沒有被設為需綁定料號、且常態涵蓋全單的那幾個；
+            // 這裡只排除使用者拍板的客戶訂單（18），其餘照列，避免寫死一份會走鐘的清單（鐵律4）
+            var ex = $('#ola-ex-po').is(':checked') ? '18' : '';
+            $.post(ORDER_ATTACH_API, { action: 'link_audit_list', exclude_cats: ex }, function(res) {
+                if (!res.success) { $('#ola-tbody').html('<tr><td colspan="8" class="text-center" style="color:#c0392b;padding:16px;">' + escapeHtml(res.message || '讀取失敗') + '</td></tr>'); return; }
+                olaGroups = res.groups || [];
+                $('#ola-info').text('共 ' + res.total + ' 組需要確認');
+                if (!olaGroups.length) {
+                    $('#ola-tbody').html('<tr><td colspan="8" class="text-center" style="padding:16px;color:#27ae60;">沒有需要整理的附件，全部都對得起來。</td></tr>');
+                    return;
+                }
+                $('#ola-tbody').html(olaGroups.map(function(g, i) {
+                    return '<tr>' +
+                        '<td>' + escapeHtml(g.order_oo) + '</td>' +
+                        '<td>' + escapeHtml(g.client || '') + '</td>' +
+                        '<td style="max-width:240px;word-break:break-all;">' + escapeHtml(g.display_name) + '</td>' +
+                        '<td>' + escapeHtml(g.cats) + '</td>' +
+                        '<td style="text-align:center;">' + g.parts.length + '</td>' +
+                        '<td style="max-width:200px;word-break:break-all;color:#8a5a2b;">' + (g.bound.length ? escapeHtml(g.bound.join('、')) : '<span style="color:#c0392b;">未綁定（視同共用）</span>') + '</td>' +
+                        '<td style="color:#27ae60;font-weight:600;">' + (g.guess ? escapeHtml(g.guess) : '<span style="color:#aaa;font-weight:400;">看不出來</span>') + '</td>' +
+                        '<td style="text-align:center;"><button type="button" class="btn btn-xs btn-primary" onclick="oaLinkAuditFix(' + i + ')"><i class="fa fa-cubes"></i> 整理</button></td>' +
+                      '</tr>';
+                }).join(''));
+            }, 'json');
+        }
+        function oaLinkAuditFix(i) {
+            var g = olaGroups[i];
+            if (!g) return;
+            oaOpenPartPick({
+                name: g.display_name + '（' + g.order_oo + '）',
+                parts: g.parts,
+                selected: g.bound.length ? g.bound : (g.guess ? [g.guess] : g.parts),
+                needPart: false,
+                hint: '這份檔案目前掛在 ' + g.parts.length + ' 個料號上' +
+                      (g.guess ? '；檔名剛好等於料號 <b>' + escapeHtml(g.guess) + '</b>，已先幫你選好。' : '。') +
+                      '<br>按確定後，<b>沒有勾選的料號會把這份附件的連結拿掉</b>（實體檔案不會被刪除）。',
+                onOk: function(sel, done) {
+                    $.post(ORDER_ATTACH_API, { action: 'apply_parts', attachment_id: g.attachment_id,
+                                               linked_part_nos: JSON.stringify(sel) }, function(r) {
+                        if (!r.success) { done(r.message || '套用失敗'); return; }
+                        done(null);
+                        showToast(r.message || '已套用', 'info');
+                        oaLoadLinkAudit();
+                    }, 'json').fail(function() { done('套用失敗'); });
+                }
+            });
+        }
+        // 一鍵套用：一律先試算給使用者看清楚要動幾組幾列，確認後才真的寫入
+        function oaLinkAuditAutofix() {
+            $.post(ORDER_ATTACH_API, { action: 'link_audit_autofix' }, function(res) {
+                if (!res.success) { showToast(res.message || '試算失敗', 'info'); return; }
+                if (!res.groups) { showOrderAlert('目前沒有「檔名剛好等於料號」可以自動判斷的組別，請逐組按「整理」人工確認。'); return; }
+                var lines = (res.plan || []).slice(0, 12).map(function(x) {
+                    return '・' + x.order_oo + '　' + x.file + '　→ 只留 ' + x.keep + '（移除 ' + x.drop_parts.length + ' 個料號）';
+                }).join('\n');
+                var more = (res.plan || []).length > 12 ? ('\n…其餘 ' + ((res.plan || []).length - 12) + ' 組') : '';
+                if (!confirm('會整理 ' + res.groups + ' 組、移除 ' + res.rows + ' 個多餘的料號連結（實體檔案都會保留）：\n\n'
+                             + lines + more + '\n\n確定要套用嗎？')) return;
+                $.post(ORDER_ATTACH_API, { action: 'link_audit_autofix', apply: '1' }, function(r2) {
+                    if (!r2.success) { showToast(r2.message || '套用失敗', 'info'); return; }
+                    showToast(r2.message, 'info');
+                    oaLoadLinkAudit();
+                }, 'json');
+            }, 'json');
+        }
+
         // ── 料號挑選跳窗（共用，禁止各處自刻）──────────────────────────
         var oappState = { parts: [], onOk: null, needPart: false };
         function oaOpenPartPick(opt) {
@@ -7631,8 +7702,11 @@ foreach($dCounts as $c) {
         function oappUpdateCount() {
             var n = $('#oapp-list input[type=checkbox]:checked').length;
             var t = oappState.parts.length;
-            var shown = $('#oapp-list .oapp-item:visible').length;
-            $('#oapp-count').text('已選 ' + n + ' / 共 ' + t + ' 個料號' + (shown < t ? '（篩選中顯示 ' + shown + '）' : ''));
+            // 「顯示 N」只有真的在篩選時才寫：跳窗還在淡入時 :visible 一律是 0，
+            // 不判斷關鍵字就會變成沒篩選卻寫「篩選中顯示 0」，使用者會以為料號不見了
+            var kw = $('#oapp-kw').val().trim();
+            var shown = kw ? $('#oapp-list .oapp-item').filter(function() { return $(this).css('display') !== 'none'; }).length : t;
+            $('#oapp-count').text('已選 ' + n + ' / 共 ' + t + ' 個料號' + (kw && shown < t ? '（篩選中顯示 ' + shown + '）' : ''));
         }
         $(document).on('change', '#oapp-list input[type=checkbox]', oappUpdateCount);
         function oappConfirm() {
@@ -9702,6 +9776,46 @@ foreach($dCounts as $c) {
       </div>
     </div>
 
+    <!-- 附件連動整理跳窗（僅管理員）-->
+    <div class="modal fade" id="oaLinkAuditModal" tabindex="-1" role="dialog">
+      <div class="modal-dialog modal-lg" style="width:94%;max-width:1180px;" role="document">
+        <div class="modal-content">
+          <div class="modal-header" style="background:#8a5a2b;color:#fff;">
+            <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
+            <h4 class="modal-title"><i class="fa fa-link"></i> 附件連動整理</h4>
+          </div>
+          <div class="modal-body" style="padding:12px;">
+            <div style="font-size:11px;color:#8a5a2b;background:#FFF6EC;border:1px solid #E8D3B8;border-radius:4px;padding:6px 8px;margin-bottom:8px;line-height:1.6;">
+              下面每一列＝<b>一份檔案同時掛在同一張訂單編號的多個料號上</b>。按「整理」可以逐組勾選它真正屬於哪些料號（可複選），
+              沒勾到的料號會把連結拿掉，<b>實體檔案不會被刪除</b>。<br>
+              「建議」欄有值＝檔名剛好就是其中一個料號（掃描檔常這樣命名），這種可以用工具列的一鍵套用；
+              <b>推不出來的一律不會被自動處理</b>，只有你看得出來哪張圖屬於哪些料號。
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+              <label style="font-weight:400;font-size:12px;margin:0;display:inline-flex;align-items:center;gap:4px;">
+                <input type="checkbox" id="ola-ex-po" checked onchange="oaLoadLinkAudit()"> 排除「客戶訂單」等整張單共用的標籤
+              </label>
+              <button type="button" class="btn btn-xs btn-default" onclick="oaLoadLinkAudit()"><i class="fa fa-refresh"></i> 重新整理</button>
+              <button type="button" class="btn btn-xs btn-warning" onclick="oaLinkAuditAutofix()"><i class="fa fa-magic"></i> 一鍵套用「檔名＝料號」的建議</button>
+              <span id="ola-info" style="font-size:12px;color:#888;margin-left:auto;"></span>
+            </div>
+            <div style="overflow-x:auto;max-height:52vh;overflow-y:auto;">
+              <table class="table table-striped" style="font-size:12px;margin-bottom:0;">
+                <thead><tr style="background:#f0f4f8;">
+                  <th>訂單編號</th><th>客戶</th><th>檔案</th><th>標籤</th><th style="text-align:center;">掛在幾個料號</th>
+                  <th>目前綁定</th><th>建議</th><th style="text-align:center;">操作</th>
+                </tr></thead>
+                <tbody id="ola-tbody"><tr><td colspan="8" class="text-center" style="padding:16px;color:#aaa;">載入中…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 料號挑選跳窗（共用：OP轉訂單上傳、附件列改綁定、附件連動整理；禁止各處自刻）-->
     <div class="modal fade" id="oaPartPickModal" tabindex="-1" role="dialog">
       <div class="modal-dialog" style="width:92%;max-width:620px;" role="document">
@@ -9765,6 +9879,14 @@ foreach($dCounts as $c) {
               <div id="oat-cats-setting" style="display:flex;flex-wrap:wrap;gap:6px;font-size:12px;margin-bottom:8px;"><span style="color:#aaa;">載入中…</span></div>
               <button type="button" class="btn btn-primary btn-sm" onclick="orderAttachSaveCatsSetting()"><i class="fa fa-save"></i> 儲存</button>
               <span id="oat-cats-msg" style="font-size:11px;margin-left:8px;"></span>
+            </div>
+            <div class="main-card" style="margin-bottom:10px;">
+              <div style="font-weight:700;color:#444;margin-bottom:6px;"><i class="fa fa-link"></i> 附件連動整理</div>
+              <div style="font-size:11px;color:#888;margin-bottom:8px;line-height:1.6;">
+                找出「同一張訂單編號底下，同一份檔案卻掛在多個不同料號上」的附件，逐組確認它到底屬於哪些料號。<br>
+                一張客戶訂單本來就涵蓋整張單的所有料號，所以預設<b>不列出</b>客戶訂單這類標籤，避免整頁都是假警報。
+              </div>
+              <button type="button" class="btn btn-primary btn-sm" onclick="oaOpenLinkAudit()"><i class="fa fa-search"></i> 開啟整理清單</button>
             </div>
             <div class="main-card" style="margin-bottom:10px;">
               <div style="font-weight:700;color:#444;margin-bottom:6px;"><i class="fa fa-print"></i> 訂單變更列印文件（AS 文件綁定）</div>
