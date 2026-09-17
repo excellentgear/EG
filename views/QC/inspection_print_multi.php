@@ -23,6 +23,7 @@ if (empty($_SESSION['id'])) { http_response_code(403); exit('請先登入'); }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_data') {
     header('Content-Type: application/json; charset=utf-8');
     include_once '../../src/common/DBConnection.php';
+    include_once '../../src/common/qc_inspection_lib.php';   // 本單使用量具（qc_form_tool）共用查詢
     $pdo = (new DBConnection())->getPDO();
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
@@ -109,7 +110,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $pos = (int)$r['sample_no'] - 1;
                     if ($pos >= 0 && $pos < $sampleN) $byItem[$iid]['samples'][$pos] = ['v' => $r['measured_value'], 'r' => $r['result']];
                 }
-                $itemsByFid[$fid] = ['sample_n' => $sampleN, 'items' => array_values($byItem)];
+                // 使用量具：整張檢驗單綁一次（2026-09-16），不再逐項顯示
+                $itemsByFid[$fid] = ['sample_n' => $sampleN, 'items' => array_values($byItem),
+                                     'tools' => qc_form_tools_label(qc_form_tools_rows($pdo, $qid))];
             }
         }
 
@@ -318,11 +321,6 @@ function batchTrailHtml(p){
         }).join('<span class="pm-arrow">→</span>');
     }).join('　');
 }
-function toolLinesHtml(t){
-    if(!t) return '';
-    var no=String(t||'').trim();
-    return '<span>'+esc(no)+'</span>';
-}
 function buildProcessSummaryRow(p, idx){
     var last=p.last_form;
     var judge = !last ? '<span class="muted-help">—</span>' : (last.check_result==='NG' ? '<span class="pm-ng">✘ 不良</span>' : '<span class="pm-ok">✔ 合格</span>');
@@ -341,7 +339,9 @@ function buildProcessFullBlock(p, idx){
     }
     var n=p.detail.sample_n;
     var pcsHead=''; for(var i=1;i<=n;i++) pcsHead+='<th>'+i+'</th>';
-    var body='<table class="pm-items"><thead><tr><th class="c-no">項次</th><th>檢驗項目</th><th>標準</th><th class="c-tol">上差</th><th class="c-tol">下差</th><th class="c-tool">量具</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>';
+    // 使用量具改成整個製程區塊印一行（量具是綁在整張檢驗單上，不是逐項）
+    var toolLine = p.detail.tools ? ('<div class="pm-trail"><b>使用量具：</b>'+esc(p.detail.tools)+'</div>') : '';
+    var body='<table class="pm-items"><thead><tr><th class="c-no">項次</th><th>檢驗項目</th><th>標準</th><th class="c-tol">上差</th><th class="c-tol">下差</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>';
     p.detail.items.forEach(function(it,i2){
         var code=String.fromCharCode(65+(i2%26));
         var cells=''; (it.samples||[]).forEach(function(sv){
@@ -349,11 +349,11 @@ function buildProcessFullBlock(p, idx){
             cells+='<td'+((sv&&sv.r==='NG'&&v!=='')?' class="pm-ng-cell"':'')+'>'+esc(v)+'</td>';
         });
         body+='<tr><td>'+code+'</td><td class="tl">'+esc(it.name)+'</td><td>'+esc(it.std||'')+'</td>'
-            + '<td>'+esc(it.up||'')+'</td><td>'+esc(it.lo||'')+'</td><td>'+toolLinesHtml(it.tool)+'</td>'
+            + '<td>'+esc(it.up||'')+'</td><td>'+esc(it.lo||'')+'</td>'
             + cells + '<td>'+(it.verdict==='NG'?'<span class="pm-ng">NG</span>':(it.verdict==='AOD'?'特採':'OK'))+'</td></tr>';
     });
     body+='</tbody></table>';
-    return head+body;
+    return head+toolLine+body;
 }
 $('#btn-print').on('click', function(){
     if(!DATA){ alert('請先查詢'); return; }

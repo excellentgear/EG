@@ -1602,7 +1602,7 @@ function delCalib(cid){
     }, 'json');
 }
 
-/* ---------- 使用紀錄（此量具反查用在哪些檢驗單，資料來自 qc_measurement.tool_id）---------- */
+/* ---------- 使用紀錄（此量具反查用在哪些檢驗單；量具綁在整張檢驗單 qc_form_tool，舊資料另查 qc_measurement.tool_id）---------- */
 function openUse(tid){
     $.getJSON(API, {action:'usage_history', tool_id:tid}, function(res){
         if (!res.ok){ alert(res.error||'載入失敗'); return; }

@@ -311,6 +311,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                            json_encode($pcs, JSON_UNESCAPED_UNICODE), $uid]);
             $qc_form_id = (int)$pdo->lastInsertId();
 
+            // 本張檢驗單使用的量具（整張單綁一次，不綁到個別檢驗項目）
+            qc_form_tools_save($pdo, $qc_form_id, $_POST['tool_ids'] ?? '[]');
+
             $tot = qc_persist_readings($pdo, $qc_form_id, $items, $itemIds, $pcs, $uid);
             $pdo->prepare("UPDATE qc_check_form SET ng_qty=?, check_result=? WHERE qc_form_id=?")
                 ->execute([$tot['ng_qty'], $tot['check_result'], $qc_form_id]);
@@ -406,6 +409,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
 
             $pdo->beginTransaction();
             $pdo->prepare("DELETE FROM qc_measurement WHERE qc_form_id=?")->execute([$qid]);
+            $pdo->prepare("DELETE FROM qc_form_tool WHERE qc_form_id=?")->execute([$qid]);
             $pdo->prepare("DELETE FROM qc_inspection_edit_log WHERE qc_form_id=?")->execute([$qid]);
             $pdo->prepare("DELETE FROM qc_sample_change_log WHERE qc_form_id=?")->execute([$qid]);
             $pdo->prepare("DELETE FROM qc_check_form WHERE qc_form_id=?")->execute([$qid]);
@@ -777,20 +781,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .spec.lim { background:#FFF6EA; min-width:84px; padding:6px 10px; }
     .spec.lim .k { font-size:10px; }
     .spec.lim .v { font-size:17px; color:#7A5A35; }
-    .spec.tool { background:#fff; text-align:left; min-width:200px; }
-    .spec.tool .v { font-size:14px; }
-    /* 量具改用「點按鈕開跳窗挑」，不再用又長又難點的下拉 */
-    .tool-btn { display:block; width:100%; text-align:left; border:1px solid var(--line); background:#fff; color:var(--ink);
-                border-radius:6px; padding:7px 10px; font-size:14px; line-height:1.25; }
-    .tool-btn:hover { background:var(--cream); border-color:var(--amber-d); }
-    .tool-btn .tcat { font-weight:bold; }
-    .tool-btn { white-space:normal; }              /* 編號帶規格後字串較長，允許換行不撐破欄寬 */
-    .tool-btn .tno { color:#8a6a45; font-size:12px; margin-left:4px; }
-    .tool-btn.none { color:#a08a6d; border-style:dashed; }
-    #items-table .tool-btn { padding:4px 6px; font-size:12px; }
-    /* 總表量具欄：比照列印版排版，類別/規格/編號各一行、字縮小、行距縮緊，減少總表逐列高度 */
-    #items-table .tool-btn-compact { padding:2px 4px; line-height:1.15; }
-    #items-table .tool-btn-compact span { display:block; font-size:11px; }
     /* 量具挑選跳窗：類型 → 編號，兩層都是大按鈕 */
     .tpick-grid { display:flex; flex-wrap:wrap; gap:8px; }
     .tpick-grid button { min-width:130px; min-height:52px; border:1px solid var(--line); background:#fff; color:var(--ink);
@@ -798,8 +788,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .tpick-grid button:hover { background:var(--sand); border-color:var(--amber-d); }
     .tpick-grid button.on { background:var(--amber); border-color:var(--amber-d); }
     .tpick-grid button small { display:block; font-weight:normal; font-size:11px; color:#8a6a45; }
-    .tpick-scope { background:var(--cream); border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-top:12px; font-size:13px; }
-    .tpick-scope label { font-weight:normal; display:block; margin:2px 0; cursor:pointer; }
     /* 公差表管理：由上一段推導出來的「大於」欄＝唯讀灰底（推導欄位鐵則） */
     #tol-ed-bands input.ro-auto { background:#F1EADF; color:#8a6a45; cursor:not-allowed; }
     #tol-ed-bands td.tb-range { white-space:nowrap; font-weight:bold; color:var(--ink); }
@@ -811,28 +799,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     #tol-mg-editor input[type=number]::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
     #tol-mg-editor input[type=number] { -moz-appearance:textfield; }
     #tol-ed-bands tr.tol-row-new input { background:#FFFDF7; }
-    /* 量具批次綁定（步驟③）：挑好一支量具後，一次勾選所有要用它的檢驗項目。
-       支援 點一列／Shift 連選／Ctrl 加選／空白處拖曳框選，避免一欄一欄點（2026-08-27 現場回饋：太慢） */
-    .tp-pick-bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px; }
-    .tp-pick-bar .btn { font-size:12px; }
-    .tp-pick-bar input.tp-filter { flex:1 1 180px; min-width:150px; height:30px; font-size:13px; padding:2px 8px;
-                                   border:1px solid var(--line); border-radius:5px; }
-    .tp-pick-hint { flex:1 1 100%; font-size:12px; color:#8a6a45; }
-    .tp-pick-list { position:relative; max-height:46vh; overflow:auto; border:1px solid var(--line); border-radius:6px;
-                    background:#fff; user-select:none; }
-    .tp-row { display:flex; align-items:center; gap:8px; padding:5px 9px; border-bottom:1px solid #F0E6D8; cursor:pointer; font-size:14px; }
-    .tp-row:last-child { border-bottom:0; }
-    .tp-row:hover { background:var(--cream); }
-    .tp-row.on { background:var(--amber); }
-    .tp-row .tp-ck { flex:0 0 auto; }
-    .tp-row .tp-code { flex:0 0 46px; font-weight:bold; color:var(--ink); }
-    .tp-row .tp-name { flex:1 1 auto; min-width:0; color:var(--ink); word-break:break-all; }
-    .tp-row .tp-sub { color:#8a6a45; font-size:12px; }
-    .tp-row .tp-cur { flex:0 0 190px; font-size:12px; color:#8a6a45; text-align:right; word-break:break-all; }
-    .tp-row .tp-cur.none { color:#C0703A; font-style:italic; }
-    .tp-row .tp-tag { flex:0 0 auto; font-size:11px; background:var(--sand); color:#7A5A35; border-radius:3px; padding:0 5px; }
-    .tp-band { position:absolute; border:1px solid var(--amber-d); background:rgba(240,162,75,.22); pointer-events:none; z-index:5; }
-    #tool-miss-badge { background:#DD5138; color:#fff; }
+    /* 本單使用量具（2026-09-16：量具改成整張檢驗單綁一次，不再綁到個別檢驗項目）
+       已選的量具一次全部列出來（種類＋編號），每個都能按 × 取消 */
+    #form-tool-row { background:#FFFBF4; }
+    .ft-chips { display:inline-flex; flex-wrap:wrap; gap:6px; align-items:center; vertical-align:middle; }
+    .ft-chip { display:inline-flex; align-items:center; gap:6px; background:#fff; border:1px solid var(--amber-d);
+               border-radius:14px; padding:3px 6px 3px 11px; font-size:13px; color:var(--ink); line-height:1.3; }
+    .ft-chip .ft-cat { font-weight:bold; }
+    .ft-chip .ft-no  { color:#8a6a45; }
+    .ft-chip .ft-x { border:0; background:transparent; color:#C0703A; font-size:15px; line-height:1; padding:0 2px; }
+    .ft-chip .ft-x:hover { color:#DD5138; }
+    .ft-none { color:#C0703A; font-style:italic; font-size:13px; }
+    /* 量具挑選跳窗：維持原本「① 類型 → ② 編號」兩層大按鈕，差別是編號可連續點多支 */
+    #tp-picked { background:var(--cream); border:1px solid var(--line); border-radius:6px; padding:6px 9px; margin-bottom:10px;
+                 display:flex; flex-wrap:wrap; gap:6px; align-items:center; min-height:38px; }
+    #tp-picked .ft-chip { background:#fff; }
+    .tpick-grid button.tp-cat.has-sel { border-color:var(--amber-d); background:#FFF3E2; }
+    .tpick-grid button.tp-no.on { background:var(--amber); border-color:var(--amber-d); }
+    .tpick-grid button.tp-no.on small { color:#6B4A22; }
 
     /* ---------- 量測格（三種檢視同一尺寸；2026-07-30 依現場要求逐項/逐件改成與總表一致） ---------- */
     .cells { display:flex; flex-wrap:wrap; gap:6px; }
@@ -976,7 +960,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         body > *:not(#print-area) { display:none !important; }
         #print-area { display:block; position:static; width:auto; color:#000; font-size:12px; line-height:1.15;
                       padding:10mm 8mm 6mm; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-        /* 表格內換行/多行文字（量具三行、公差上下限、檢驗項目名稱過長換行、備註…）一律緊貼成一行的行距，
+        /* 表格內換行/多行文字（公差上下限、檢驗項目名稱過長換行、備註…）一律緊貼成一行的行距，
            不要吃到 bootstrap body 的 line-height:1.42857（那是多行文字看起來一行一大格空白的根因） */
         #print-area table.pr-items, #print-area table.pr-items * { line-height:1.15; }
         #print-area > *:last-child { margin-bottom:0; }
@@ -987,10 +971,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
         #print-area .pt-foot { position:fixed; right:8mm; bottom:5mm; font-size:9pt; color:#333; }
         /* 簽章圖章尺寸全站統一 91px（ai-rules/18 第6條） */
         #print-area svg.car-stamp { width:91px !important; height:91px !important; }
-        #print-area table.pr-items th.c-tool, #print-area table.pr-items td.c-tool { width:66px; }
-        /* 量具格：三行＝量具類別／量具規格／量具編號，字自動縮小、每行都完整顯示（不截字） */
-        #print-area .tool2 { font-size:8.5px; line-height:1.15; word-break:break-all; white-space:normal; }
-        #print-area .tool2 span { display:block; }
         #print-area .c-tol .lo { display:block; }
         #print-area table.pr-items th.c-no { width:34px; }
         #print-area table.pr-items th.c-std, #print-area table.pr-items th.c-tol { width:56px; }
@@ -1121,10 +1101,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                         <button class="btn btn-default btn-sm" id="btn-sym" title="插入工程符號（Ø ± ▽ …）到游標處">Ø± 符號</button>
                         <button class="btn btn-default btn-sm" id="btn-code-mode2" title="切換檢驗項目編號顯示方式"></button>
                     </span>
-                    <button class="btn btn-default btn-sm" id="btn-tool-batch" title="先挑一支量具，再一次勾選所有要用它的檢驗項目（可框選／Shift 連選）"><i class="fa fa-wrench"></i> 量具批次綁定 <span class="badge" id="tool-miss-badge" style="display:none;"></span></button>
                     <button class="btn btn-default btn-sm" id="btn-apply-tol" title="依標準值自動帶入上下公差（只套用在上下限都還沒填的欄位）"><i class="fa fa-magic"></i> 自動套用公差</button>
                     <button class="btn btn-default btn-sm" id="btn-keypad"><i class="fa fa-keyboard-o"></i> 數字鍵盤</button>
                     <span class="muted-help" id="view-hint"></span>
+                </div>
+
+                <!-- 本單使用量具：整張檢驗單挑一次就好，不必逐個檢驗項目綁（2026-09-16 使用者定案）
+                     追溯口徑＝由量具查得到「用在哪幾張檢驗單」，不需要查到是哪一個檢驗項目 -->
+                <div class="toolbar-row" id="form-tool-row">
+                    <b style="color:var(--ink2);"><i class="fa fa-wrench"></i> 本單使用量具</b>
+                    <span class="ft-chips" id="form-tool-chips"></span>
+                    <button class="btn btn-warm-o btn-sm" id="btn-form-tools"><i class="fa fa-plus"></i> 選擇量具</button>
+                    <span class="muted-help">可複選；這張檢驗單用到的量具在這裡選一次就好</span>
                 </div>
 
                 <!-- 三種檢視（同一份資料模型，切換不會遺失已填內容） -->
@@ -1132,7 +1120,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
                 <div id="view-pcs"  class="view-pane" style="display:none;"></div>
                 <div id="view-grid" class="view-pane" style="display:none;">
                     <div style="margin-bottom:6px;">
-                        <label style="font-weight:normal;"><input type="checkbox" id="chk-std-edit"> 編輯標準（顯示項目名稱／公差／量具／型態欄位）</label>
+                        <label style="font-weight:normal;"><input type="checkbox" id="chk-std-edit"> 編輯標準（顯示項目名稱／公差／型態欄位）</label>
                         <span class="muted-help pull-right">在最後一列的欄位按 <b>↓</b> 會自動新增一列；在全空的最後一列按 <b>↑</b> 會自動移除該列</span>
                     </div>
                     <div class="table-responsive" style="max-height:58vh; overflow:auto;">
@@ -1409,25 +1397,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
             <ul>
                 <li><b>逐項</b>：一次專注一個尺寸，量完所有件再換下一個尺寸——<b>換量具次數最少</b>，現場最常用。</li>
                 <li><b>逐件</b>：一次專注一件，把該件所有尺寸量完再換下一件。</li>
-                <li><b>總表</b>：格狀表格，Enter／方向鍵可連續輸入，適合桌機。勾「編輯標準」才會出現項目名稱／公差／量具／型態欄位。</li>
+                <li><b>總表</b>：格狀表格，Enter／方向鍵可連續輸入，適合桌機。勾「編輯標準」才會出現項目名稱／公差／型態欄位。</li>
             </ul>
 
-            <h4>二、指定量具（可追溯到實際那一支）</h4>
+            <h4>二、本單使用量具（整張檢驗單選一次就好）</h4>
             <ul>
-                <li>數值型項目一律要選到<b>量具編號</b>，品質紀錄才追溯得到現場實際用的那一支；目視／功能檢查（OK/NG 型）不強制。</li>
-                <li><b>一個一個設</b>：點該欄的量具按鈕 → 先點<b>量具類型</b> → 再點<b>量具編號</b>。若表內不只一個項目，跳窗下方還有「套用範圍」可選<b>只設定這一個</b>（預設）／<b>所有尚未指定量具的</b>／<b>全部（覆蓋既有設定）</b>。</li>
-                <li><b>一次綁很多個（建議）</b>：工具列的<b>「量具批次綁定」</b>→ 挑一支量具 → 出現<b>全部檢驗項目清單（編號＋檢驗項目＋目前綁的量具）</b>，勾好要用它的項目再按「套用」。從單一欄位開啟時，把套用範圍改成「<b>自行勾選多個項目</b>」也會進到同一個清單。</li>
-                <li>清單怎麼快速選：<b>點一列</b>＝只選它｜<b>Shift＋點</b>＝連選一段｜<b>Ctrl／⌘＋點</b>＝加選或取消單一列｜<b>在空白處按住拖曳</b>＝框選一整段（按著 Ctrl 拖曳＝加到已選的）。上方另有<b>全選／全不選／反選／只選「未指定量具」／只選「原本就用這個類型」</b>與<b>關鍵字篩選框</b>（篩選後全選只作用在看得見的列）。</li>
-                <li>批次入口打開時，會<b>自動先勾好所有還沒指定量具的數值型項目</b>，多半直接按「套用」就好。</li>
-                <li>要一次清掉一批：在勾選清單按左下角<b>「清除選取項目的量具」</b>。</li>
-                <li>工具列按鈕上的<b>紅色數字＝還有幾個量測沒指定量具</b>，歸零代表這一項不會在存檔時被擋。</li>
-                <li>「<b>加量測</b>」＝同一個尺寸換另一支量具／方法再量一次（例如三次元＋投影機），它是獨立的一列，<b>量具要各自指定</b>，在勾選清單裡會顯示成「A 外徑 · 加量測 1」。</li>
+                <li><b>量具是綁在整張檢驗單上，不必逐個檢驗項目指定</b>（2026-09-16 改）。檢驗項目那幾個檢視裡<b>已經沒有量具欄</b>，改看檢視切換列下方的「<b>本單使用量具</b>」。</li>
+                <li>怎麼選：按<b>「選擇量具」</b> → ① 先點量具<b>類型</b> → ② 再點量具<b>編號</b>；同一個類型可以<b>連續點好幾支</b>（再點一次＝取消），選完還能按「← 換一個類型」<b>繼續加別的類型</b>，最後按「確定」。</li>
+                <li>已選的量具會<b>全部列在畫面上</b>（種類＋編號，含規格），每一支旁邊的 <b>×</b> 可以單獨移除；跳窗左下角的「清除全部」＝一次清掉重選。</li>
+                <li>只要表內有<b>數值型</b>量測，<b>至少要選一支量具</b>才存得了檔；目視／功能檢查（OK/NG 型）的單子不強制。</li>
+                <li><b>追溯口徑</b>：由量具查得到「這支用在<b>哪幾張檢驗單</b>」（量具校驗頁的「使用紀錄」），不細到是哪一個檢驗項目。</li>
+                <li>「<b>加量測</b>」＝同一個尺寸再量一次（例如換另一支量具／另一種方法覆核），仍然是獨立的一列，量具照樣算在本單使用量具裡。</li>
             </ul>
 
             <h4>三、存檔前會自動檢查什麼</h4>
             <ul>
                 <li>按「儲存檢驗結果」時會逐項檢查，下列情形<b>一律擋下並列出是哪一項缺什麼</b>（可點該行直接跳到欄位）：
-                    <b>①</b> 有填實測值卻沒填檢驗項目名稱　<b>②</b> 數值型項目有實測值卻<b>沒選量具編號</b>　<b>③</b> 數值型項目有實測值卻沒填標準值（沒有標準就判不出 OK/NG）。</li>
+                    <b>①</b> 有填實測值卻沒填檢驗項目名稱　<b>②</b> 數值型項目有實測值卻沒填標準值（沒有標準就判不出 OK/NG）　<b>③</b> 有數值型量測、卻<b>一支量具都沒選</b>（點該行會直接打開量具跳窗）。</li>
                 <li>只檢查<b>有填實測值</b>的那些量測——還沒量的項目不會擋著你先存。</li>
                 <li>不擋但會再問一次的：沒填滿抽驗件數、實測值與標準值差異大到不像量測誤差（漏打小數點／看錯量具／抄錯列）。</li>
             </ul>
@@ -1474,50 +1460,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     </div></div>
 </div>
 
-<!-- ===================== 量具挑選跳窗：先點類型、再點編號 ===================== -->
+<!-- ===================== 量具挑選跳窗：勾選這張檢驗單用到的量具（可複選） ===================== -->
 <div class="modal fade" id="toolPickModal" tabindex="-1" role="dialog">
     <div class="modal-dialog"><div class="modal-content">
         <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
             <button type="button" class="close" data-dismiss="modal">&times;</button>
-            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-wrench"></i> 選擇量具 <small id="tp-for"></small></h4>
+            <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-wrench"></i> 選擇本單使用的量具</h4>
         </div>
         <div class="modal-body">
+            <div class="muted-help" style="margin-bottom:6px;">
+                量具是綁在<b>整張檢驗單</b>上（不必逐個檢驗項目指定）：先點<b>類型</b>、再點<b>編號</b>，
+                一個類型可以連續點好幾支，選完還能<b>換一個類型繼續加</b>。</div>
+            <div class="tp-picked" id="tp-picked"></div>
             <div id="tp-step1">
                 <div class="muted-help" style="margin-bottom:6px;">① 先點量具<b>類型</b></div>
                 <div class="tpick-grid" id="tp-cats"></div>
             </div>
             <div id="tp-step2" style="display:none;">
                 <div class="muted-help" style="margin-bottom:6px;">
-                    ② 再點量具<b>編號</b>　<a href="#" id="tp-back">← 換一個類型</a></div>
+                    ② 再點量具<b>編號</b>（可連續點多支；<b>再點一次＝取消</b>）　<a href="#" id="tp-back">← 換一個類型</a></div>
                 <div class="tpick-grid" id="tp-nos"></div>
-            </div>
-            <!-- ③ 批次綁定：挑好量具後，一次勾選所有要使用它的檢驗項目 -->
-            <div id="tp-step3" style="display:none;">
-                <div class="muted-help" style="margin-bottom:6px;">
-                    ③ 勾選要使用 <b id="tp-chosen"></b> 的檢驗項目　<a href="#" id="tp-back2">← 換一支量具</a></div>
-                <div class="tp-pick-bar">
-                    <button type="button" class="btn btn-default btn-xs" id="tp-sel-all">全選</button>
-                    <button type="button" class="btn btn-default btn-xs" id="tp-sel-none">全不選</button>
-                    <button type="button" class="btn btn-default btn-xs" id="tp-sel-inv">反選</button>
-                    <button type="button" class="btn btn-default btn-xs" id="tp-sel-blank">只選「未指定量具」</button>
-                    <button type="button" class="btn btn-default btn-xs" id="tp-sel-same">只選「原本就用這個類型」</button>
-                    <input type="text" class="tp-filter" id="tp-filter" placeholder="輸入編號或項目名稱篩選…" data-eg-skip>
-                    <div class="tp-pick-hint">點一列＝只選它｜<b>Shift＋點</b>＝連選一段｜<b>Ctrl／⌘＋點</b>＝加選或取消｜在<b>空白處按住拖曳</b>＝框選</div>
-                </div>
-                <div class="tp-pick-list" id="tp-rows"></div>
-            </div>
-            <div class="tpick-scope" id="tp-scope">
-                <b>套用範圍</b>　<span class="muted-help">同一支量具常常好幾個尺寸共用，不必一欄一欄設</span>
-                <label><input type="radio" name="tpscope" value="blank"> 套用到<b>所有尚未指定量具</b>的檢驗項目</label>
-                <label><input type="radio" name="tpscope" value="one" checked> 只設定<b>這一個</b>項目</label>
-                <label><input type="radio" name="tpscope" value="all"> 套用到<b>全部</b>檢驗項目（覆蓋既有設定）</label>
-                <label><input type="radio" name="tpscope" value="pick"> <b>自行勾選多個項目</b>（框選／Shift 連選，可看到編號與檢驗項目）</label>
             </div>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-default pull-left" id="tp-clear"><i class="fa fa-eraser"></i> 清除此項量具</button>
-            <button type="button" class="btn btn-default" data-dismiss="modal">關閉</button>
-            <button type="button" class="btn btn-warm" id="tp-apply" style="display:none;"><i class="fa fa-check"></i> 套用到選取的 <b id="tp-apply-n">0</b> 個項目</button>
+            <button type="button" class="btn btn-default pull-left" id="tp-clear"><i class="fa fa-eraser"></i> 清除全部</button>
+            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-warm" id="tp-apply"><i class="fa fa-check"></i> 確定（已選 <b id="tp-apply-n">0</b> 支）</button>
         </div>
     </div></div>
 </div>
@@ -2296,8 +2264,9 @@ $(function(){
     // =====================================================================
     // 狀態與資料模型
     //   MODEL.items[i] = { item_id,name,std,up,lo,type,remark,
-    //                      readings:[ {tool_id, tool_cat, vals:[每件一格的原始輸入]} ] }
-    //   readings[0] = 主量測；readings[1..] = 「加量測」（同尺寸換量具/方法再量一次）
+    //                      readings:[ {vals:[每件一格的原始輸入]} ] }
+    //   readings[0] = 主量測；readings[1..] = 「加量測」（同尺寸再量一次）
+    //   MODEL.tools   = [Tool_id,…]  本張檢驗單使用的量具（整張單綁一次，不綁到個別檢驗項目）
     //   MODEL.pcs[i]  = { v:'OK'|'NG', m:0|1 }  m=1 代表使用者手動改判
     //   ★ 三種檢視都只是這份模型的不同畫法，切換檢視不會遺失任何已填內容。
     // =====================================================================
@@ -2314,7 +2283,7 @@ $(function(){
     var state = { sampleN:5, batches:[], curBatch:0, processes:[], curProc:0, demo:false,
                   is_supervisor:false, can_fill:true, canManageSettings:false, canManageSampling:false,
                   canView:true, editFormId:null, draftFormId:0 };
-    var MODEL = { items:[], pcs:[] };
+    var MODEL = { items:[], pcs:[], tools:[] };   // tools＝本單使用量具（Tool_id 字串陣列）
     var TOOLS = ['卡尺','分厘卡','投影機','三次元','針規','目視'];
     var TOOL_INSTANCES = [];                                  // [{id,no,cat}]
     var view      = localStorage.getItem('qc2_view')   || 'ITEM';   // ITEM / PCS / GRID
@@ -2438,29 +2407,12 @@ $(function(){
         if(no.replace(/\s+/g,'').toLowerCase().indexOf(t.spec.replace(/\s+/g,'').toLowerCase())>=0) return no;
         return no+'('+t.spec+')';
     }
-    // 量具改用「按鈕 → 跳窗挑」：下拉選單選項太多又擠，現場很難點（2026-07-29 回饋）
-    // compact=true（總表用）：比照列印版量具格排版，類別/規格/編號各自一行、字縮小、行距縮緊，
-    // 節省總表逐列高度；逐項/逐件視圖字級較大、單一情境不必省版面，維持原本樣式
-    function toolBtn(i, r, compact){
-        var t = toolInstById(MODEL.items[i].readings[r].tool_id);
-        if(!t){
-            return '<button type="button" class="tool-btn none" data-i="'+i+'" data-r="'+r+'" title="點此選擇量具"><i class="fa fa-wrench"></i> 點此選擇量具</button>';
-        }
-        if(compact){
-            var no=String(t.no||'').trim(), spec=t.spec||'';
-            var mm=no.match(/[（(]([^）)]*)[）)]\s*$/);
-            if(mm){ if(!spec) spec=mm[1].trim(); no=no.slice(0,mm.index).trim(); }
-            var lines=[t.cat||'', spec, no].filter(function(s){ return s!==''; })
-                      .map(function(s){ return '<span>'+esc(s)+'</span>'; }).join('');
-            return '<button type="button" class="tool-btn tool-btn-compact" data-i="'+i+'" data-r="'+r+'" title="點此選擇量具">'+lines+'</button>';
-        }
-        return '<button type="button" class="tool-btn" data-i="'+i+'" data-r="'+r+'" title="點此選擇量具">'+
-               '<span class="tcat">'+esc(t.cat||'量具')+'</span><span class="tno">'+esc(toolNoSpec(t))+'</span></button>';
-    }
-    function firstInstOfCat(catName){
-        if(!catName) return '';
-        for(var i=0;i<TOOL_INSTANCES.length;i++){ if(TOOL_INSTANCES[i].cat===catName) return TOOL_INSTANCES[i].id; }
-        return '';
+    // 本單使用量具的一行顯示字串（列印／CSV／歷程明細共用）：「類型 編號(規格)、類型 編號」
+    function formToolsLabel(ids){
+        return (ids||MODEL.tools||[]).map(function(id){
+            var t=toolInstById(id);
+            return t ? ((t.cat?t.cat+' ':'')+toolNoSpec(t)) : '';
+        }).filter(function(s){ return s!==''; }).join('、');
     }
     function toolLabelById(id){
         if(!id) return '';
@@ -2476,11 +2428,10 @@ $(function(){
         var it = { item_id:(r.item_id||''), name:(r.name||''), std:(r.std==null?'':String(r.std)),
                    up:(r.up==null?'':String(r.up)), lo:(r.lo==null?'':String(r.lo)),
                    type:(r.type==='OKNG'?'OKNG':'NUM'), remark:(r.remark||''), readings:[] };
-        var tid = (r.tool_id!=null && r.tool_id!=='') ? String(r.tool_id) : firstInstOfCat(r.tool||'');
-        it.readings.push({ tool_id:tid, tool_cat:(r.tool||''), vals:valsFrom(r.samples, it.type) });
+        // 量具已改綁在整張檢驗單（MODEL.tools），這裡不再逐項保留 tool_id
+        it.readings.push({ vals:valsFrom(r.samples, it.type) });
         (r.extra||[]).forEach(function(ex){
-            it.readings.push({ tool_id:(ex.tool_id!=null && ex.tool_id!=='' ? String(ex.tool_id) : ''),
-                               tool_cat:(ex.method||''), vals:valsFrom(ex.samples, it.type) });
+            it.readings.push({ vals:valsFrom(ex.samples, it.type) });
         });
         return it;
     }
@@ -2496,7 +2447,7 @@ $(function(){
     }
     function newItem(){
         return { item_id:'', name:'', std:'', up:'', lo:'', type:'NUM', remark:'',
-                 readings:[{ tool_id:'', tool_cat:'', vals:blankVals(state.sampleN) }] };
+                 readings:[{ vals:blankVals(state.sampleN) }] };
     }
     function setSampleN(n){
         n = Math.max(1, parseInt(n)||1);
@@ -2547,12 +2498,10 @@ $(function(){
             var extra=[];
             for(var r=1;r<it.readings.length;r++){
                 var rd=it.readings[r], s2=mk(rd);
-                var any=s2.some(function(x){ return x.v!==''; });
-                if(any || rd.tool_id) extra.push({ tool_id:rd.tool_id||'', samples:s2 });
+                if(s2.some(function(x){ return x.v!==''; })) extra.push({ samples:s2 });
             }
             out.push({
                 item_id:it.item_id||'', name:name, std:it.std, up:it.up, lo:it.lo,
-                tool_id:(it.readings[0].tool_id||''), tool:'',
                 type:it.type, verdict:(itemVerdict(it)==='NG'?'NG':'OK'),
                 samples:mk(it.readings[0]), extra:extra, remark:it.remark||''
             });
@@ -2577,7 +2526,7 @@ $(function(){
         else if(view==='PCS') renderPcsView();
         renderGrid();               // 總表恆繪（隱藏時也在 DOM，供列印/樣板等功能取用）
         $('#btn-code-mode2').html(codeMode==='ALPHA' ? '編號 <b>A,B,C</b> ⇄ 1,2,3' : '編號 <b>1,2,3</b> ⇄ A,B,C');
-        updateToolBadge();
+        renderFormTools();
         recalc();
     }
 
@@ -2633,7 +2582,7 @@ $(function(){
             .text(v==='NG'?'✘ NG':(v==='OK'?'✔ OK':'—'));
     }
 
-    // ---------- 規格帶（標準/上限/下限/量具） ----------
+    // ---------- 規格帶（標準/上限/下限；量具已改成整張單綁一次，不在這裡顯示） ----------
     function specBar(it, i){
         var h='<div class="specbar">';
         if(it.type==='OKNG'){
@@ -2645,7 +2594,6 @@ $(function(){
                '<div class="spec lim"><div class="k">上限（'+esc(it.up||'0')+'）</div><div class="v">'+(L?trimNum(L.hi.toFixed(4)):'—')+'</div></div>'+
                '<div class="spec lim"><div class="k">下限（'+esc(it.lo||'0')+'）</div><div class="v">'+(L?trimNum(L.low.toFixed(4)):'—')+'</div></div>';
         }
-        h+='<div class="spec tool"><div class="k">量具（可追溯編號）</div><div class="v">'+toolBtn(i,0)+'</div></div>';
         h+='</div>';
         return h;
     }
@@ -2668,7 +2616,7 @@ $(function(){
               '<span class="idx">'+codeLabel(i)+'</span><span class="nm">'+esc(it.name||'（未命名項目）')+'</span>'+
               '<span class="pull-right" style="margin-top:4px;">'+
                 '<button class="btn btn-xs btn-default btn-edit-std" data-i="'+i+'"><i class="fa fa-pencil"></i> 改標準</button> '+
-                '<button class="btn btn-xs btn-default btn-add-reading" data-i="'+i+'" title="同尺寸再用其他量具/方法量一次（如三次元＋投影機）"><i class="fa fa-plus"></i> 加量測</button> '+
+                '<button class="btn btn-xs btn-default btn-add-reading" data-i="'+i+'" title="同一個尺寸再量一次（例如換另一支量具／另一種方法覆核）"><i class="fa fa-plus"></i> 加量測</button> '+
                 '<button class="btn btn-xs btn-default btn-del-item" data-i="'+i+'"><i class="fa fa-trash"></i></button>'+
               '</span></div><div class="fcard-bd">';
         h+=specBar(it,i);
@@ -2677,7 +2625,7 @@ $(function(){
         h+='</div>';
         for(var r=1;r<it.readings.length;r++){
             h+='<div class="rdbox"><div class="rdhd"><b>加量測 '+r+'</b>'+
-               '<span style="min-width:220px;display:inline-block;">'+toolBtn(i,r)+'</span>'+
+               '<span class="muted-help" style="margin-left:8px;">同尺寸再量一次</span>'+
                '<a href="#" class="btn-del-reading" data-i="'+i+'" data-r="'+r+'" style="color:var(--coral);"><i class="fa fa-trash"></i> 移除</a></div><div class="cells">';
             for(var s2=0;s2<state.sampleN;s2++) h+=cellHtml(it,i,r,s2,true);
             h+='</div></div>';
@@ -2714,10 +2662,10 @@ $(function(){
             var spec = it.type==='OKNG' ? esc(it.std||'目視/功能檢查')
                      : (esc(trimNum(it.std)||'—')+'　'+(L?('['+trimNum(L.low.toFixed(4))+' ~ '+trimNum(L.hi.toFixed(4))+']'):''));
             h+='<div class="prow"><div class="pnm"><div class="n">'+codeLabel(i)+'　'+esc(it.name||'（未命名）')+'</div>'+
-               '<div class="s">'+spec+'　<span style="color:#a08a6d;">'+esc(toolLabelById(it.readings[0].tool_id))+'</span></div></div>'+
+               '<div class="s">'+spec+'</div></div>'+
                '<div class="pin">'+cellHtml(it,i,0,s,true)+'</div></div>';
             for(var r=1;r<it.readings.length;r++){
-                h+='<div class="prow" style="padding-left:24px;background:#FBF7F1;"><div class="pnm"><div class="s">↳ 加量測 '+r+'：'+esc(toolLabelById(it.readings[r].tool_id)||'未指定量具')+'</div></div>'+
+                h+='<div class="prow" style="padding-left:24px;background:#FBF7F1;"><div class="pnm"><div class="s">↳ 加量測 '+r+'</div></div>'+
                    '<div class="pin">'+cellHtml(it,i,r,s,true)+'</div></div>';
             }
         });
@@ -2737,22 +2685,23 @@ $(function(){
     // ---------- 檢視 C：總表（標準欄預設收合＝只剩 4 欄，不再左右捲） ----------
     function renderGrid(){
         var stdEdit = $('#chk-std-edit').is(':checked');
+        // 量具欄已移除（2026-09-16：量具改成整張檢驗單綁一次，顯示在上方「本單使用量具」）
         var head = '<th width="46">編號</th>';
         if(stdEdit){
-            head += '<th width="150">檢驗項目</th><th width="82">標準值</th><th width="70">上公差</th><th width="70">下公差</th>'+
-                    '<th width="140">量具</th><th width="76">型態</th>';
+            head += '<th width="190">檢驗項目</th><th width="90">標準值</th><th width="76">上公差</th><th width="76">下公差</th>'+
+                    '<th width="80">型態</th>';
         } else {
-            head += '<th width="190">檢驗項目</th><th width="180">標準（上/下限）</th><th width="150">量具</th>';
+            head += '<th width="240">檢驗項目</th><th width="200">標準（上/下限）</th>';
         }
         head += '<th>實測值（每件一格）</th><th width="70">判定</th>';
         $('#grid-head').html(head);
-        var colsBefore = stdEdit ? 8 : 5;
+        var colsBefore = stdEdit ? 7 : 4;
         $('#verdict-label').attr('colspan', colsBefore-1);
 
         // 每列的操作鈕：放在「檢驗項目」欄名稱下方（原本放最右欄會被視窗右緣切掉）
         function rowActs(it, i){
             return '<div class="row-acts">'+
-                   '<a href="#" class="btn-add-reading" data-i="'+i+'" title="同尺寸再用其他量具/方法量一次"><i class="fa fa-plus"></i> 加量測</a>'+
+                   '<a href="#" class="btn-add-reading" data-i="'+i+'" title="同一個尺寸再量一次"><i class="fa fa-plus"></i> 加量測</a>'+
                    '<a href="#" class="btn-item-note'+(it.remark?' has-note':'')+'" data-i="'+i+'" title="'+esc(it.remark||'本項備註')+'"><i class="fa fa-comment-o"></i> 備註'+(it.remark?'✔':'')+'</a>'+
                    '<a href="#" class="btn-del-item del" data-i="'+i+'"><i class="fa fa-trash"></i> 刪除</a></div>';
         }
@@ -2766,27 +2715,22 @@ $(function(){
                         '<td><input class="table-input f-std" data-i="'+i+'" value="'+esc(it.std)+'"></td>'+
                         '<td><input class="table-input f-up" data-i="'+i+'" value="'+esc(it.up)+'" '+(it.type==='OKNG'?'readonly':'')+'></td>'+
                         '<td><input class="table-input f-lo" data-i="'+i+'" value="'+esc(it.lo)+'" '+(it.type==='OKNG'?'readonly':'')+'></td>'+
-                        '<td>'+toolBtn(i,0,true)+'</td>'+
                         '<td><select class="table-input f-type" data-i="'+i+'">'+
                           '<option value="NUM" '+(it.type==='NUM'?'selected':'')+'>數值</option>'+
                           '<option value="OKNG" '+(it.type==='OKNG'?'selected':'')+'>OK/NG</option></select></td>';
             } else {
                 body += '<td class="g-name">'+esc(it.name||'（未命名）')+rowActs(it,i)+'</td>'+
                         '<td class="g-spec">'+(it.type==='OKNG' ? esc(it.std||'OK/NG')
-                            : (esc(trimNum(it.std)||'—')+(L?('<br><span class="muted-help">'+trimNum(L.low.toFixed(4))+' ~ '+trimNum(L.hi.toFixed(4))+'</span>'):'')))+'</td>'+
-                        '<td>'+toolBtn(i,0,true)+'</td>';
+                            : (esc(trimNum(it.std)||'—')+(L?('<br><span class="muted-help">'+trimNum(L.low.toFixed(4))+' ~ '+trimNum(L.hi.toFixed(4))+'</span>'):'')))+'</td>';
             }
             var cells=''; for(var s=0;s<state.sampleN;s++) cells+=cellHtml(it,i,0,s,false);
             body += '<td><div class="gcells">'+cells+'</div></td>'+
                     '<td class="text-center g-verdict" data-i="'+i+'" style="font-weight:bold;color:'+(v==='NG'?'var(--coral)':'var(--ink)')+'">'+(v==='NG'?'✘ NG':(v==='OK'?'✔ OK':'—'))+'</td></tr>';
             for(var r=1;r<it.readings.length;r++){
                 var sub=''; for(var s3=0;s3<state.sampleN;s3++) sub+=cellHtml(it,i,r,s3,false);
-                // 對齊主列欄位：空(編號) + 併格(項目…) + 量具 + [型態空格] + 實測 + 判定
-                var toolCol = stdEdit ? 6 : 4;              // 量具是第幾欄
-                var afterTool = (colsBefore - toolCol - 1); // 量具與實測值之間還有幾欄（型態）
-                body += '<tr style="background:#FBF7F1;"><td></td><td colspan="'+(toolCol-2)+'" class="text-right muted-help">↳ 加量測 '+r+
+                // 對齊主列欄位：空(編號) + 併格(項目…型態) + 實測 + 判定
+                body += '<tr style="background:#FBF7F1;"><td></td><td colspan="'+(colsBefore-2)+'" class="text-right muted-help">↳ 加量測 '+r+
                         ' <a href="#" class="btn-del-reading" data-i="'+i+'" data-r="'+r+'" style="color:var(--coral);"><i class="fa fa-trash"></i></a></td>'+
-                        '<td>'+toolBtn(i,r,true)+'</td>'+ (afterTool>0 ? '<td></td>' : '') +
                         '<td><div class="gcells">'+sub+'</div></td><td></td></tr>';
             }
         });
@@ -2975,7 +2919,6 @@ $(function(){
         if((it.name||'').trim()!=='' || (it.std||'').trim()!=='' || (it.up||'').trim()!=='' ||
            (it.lo||'').trim()!=='' || (it.remark||'').trim()!=='') return false;
         for(var r=0;r<it.readings.length;r++){
-            if(it.readings[r].tool_id) return false;
             for(var s=0;s<it.readings[r].vals.length;s++){
                 var v=it.readings[r].vals[s];
                 if(v!=='' && v!=null && !(it.type==='OKNG' && v==='OK')) return false;
@@ -3029,243 +2972,121 @@ $(function(){
         localStorage.setItem('qc_item_code_mode', codeMode); render();
     });
 
-    // ---------- 標準/量具/型態/備註 編修 ----------
-    // ---------- 量具挑選跳窗（類型 → 編號 → 可一次多選要套用的檢驗項目） ----------
-    //   ① 由某一格的量具按鈕開啟：維持原本行為（單選＋套用範圍 全部／未指定／只有這一個）
-    //   ② 由工具列「量具批次綁定」開啟：挑好量具直接進步驟③，一次勾選多個檢驗項目
-    //   步驟③ 支援 點一列／Shift 連選／Ctrl 加選／空白處拖曳框選（2026-08-27 現場回饋：一欄一欄點太慢）
-    var tpTarget=null;      // {i,r}；批次入口時為 null
-    var tpTool='';          // 已選定的量具 Tool_id
-    var tpSel={};           // 步驟③勾選集合：key = 'i:r'
-    var tpRows=[];          // 步驟③目前列出的列（依畫面順序）
-    var tpAnchor=null;      // Shift 連選的錨點（列序）
-    var tpBand={ on:false, dragged:false, add:false, x0:0, y0:0, $el:null };
+    // ---------- 標準/型態/備註 編修 ----------
+    // ---------- 本單使用量具：整張檢驗單挑一次就好（2026-09-16 使用者定案） ----------
+    //   量具不再綁到個別檢驗項目／個別讀值——追溯只需要查得到「這支量具用在哪幾張檢驗單」，
+    //   不需要查到是哪一個檢驗項目，所以總表／逐項／逐件的量具欄一律移除，改在這裡一次選完。
+    //   跳窗維持原本的兩層大按鈕（① 先點類型 → ② 再點編號），差別只在編號可以連續點好幾支，
+    //   並且能「← 換一個類型」再繼續加（使用者 2026-09-17 指定：要跟原本的量具選單一樣）。
+    var tpSel={};        // 已選集合：key = Tool_id 字串
+    var tpOrder=[];      // 已選順序（先點的排前面，chips 才不會每次重排）
+    var tpCat='';        // 目前展開的量具類型
 
-    $(document).on('click', '.tool-btn', function(){ openToolPicker(+$(this).data('i'), +$(this).data('r')); });
-    $(document).on('click', '#btn-tool-batch', function(e){ e.preventDefault(); openToolPicker(null, null); });
+    $(document).on('click', '#btn-form-tools', function(e){ e.preventDefault(); openToolPicker(); });
+    $(document).on('click', '#form-tool-chips .ft-x', function(){
+        var id=String($(this).attr('data-id'));
+        MODEL.tools=(MODEL.tools||[]).filter(function(x){ return String(x)!==id; });
+        renderFormTools(); scheduleDraftSave();
+    });
     $('#btnPageHelp').on('click', function(){ $('#helpUseMask').modal('show'); });
 
-    function openToolPicker(i, r){
-        var batch = (i===null || i===undefined);
-        if(batch && !MODEL.items.length){ alert('目前還沒有檢驗項目，請先新增檢驗項目再做量具批次綁定。'); return; }
-        if(!batch && !MODEL.items[i]) return;
-        tpTarget = batch ? null : { i:i, r:r };
-        tpTool=''; tpSel={}; tpAnchor=null;
-        if(batch){
-            $('#tp-for').text('（批次綁定：先挑一支量具，再勾選要用它的檢驗項目）');
-        } else {
-            var it=MODEL.items[i];
-            $('#tp-for').text('（'+codeLabel(i)+' '+(it.name||'未命名')+(r>0?(' · 加量測'+r):'')+'）');
-        }
-        // 只有主量測、且表內不只一個項目時，才需要問套用範圍；批次入口一律走勾選
-        $('input[name=tpscope][value="one"]').prop('checked', true);
-        var cats=[], cnt={};
-        TOOL_INSTANCES.forEach(function(t){ var c=t.cat||'（未分類）'; if(cnt[c]===undefined){ cnt[c]=0; cats.push(c); } cnt[c]++; });
-        $('#tp-cats').html(cats.length ? cats.map(function(c){
-            return '<button type="button" class="tp-cat" data-c="'+esc(c)+'">'+esc(c)+'<small>'+cnt[c]+' 支</small></button>';
-        }).join('') : '<div class="text-muted">尚未建立任何量具，請至 設定 → 量具設定 新增。</div>');
+    // 已選量具一次全部列出來（種類＋編號(規格)），每一支都能按 × 取消
+    function renderFormTools(){
+        var h=(MODEL.tools||[]).map(function(id){
+            var t=toolInstById(id);
+            // 量具主檔被刪掉的舊資料：仍列出來，避免整排消失讓人誤以為沒選過
+            if(!t) return '<span class="ft-chip"><span class="ft-cat">量具</span>'+
+                          '<span class="ft-no">#'+esc(String(id))+'（已刪除）</span>'+
+                          '<button type="button" class="ft-x" data-id="'+esc(String(id))+'" title="移除">×</button></span>';
+            return '<span class="ft-chip"><span class="ft-cat">'+esc(t.cat||'量具')+'</span>'+
+                   '<span class="ft-no">'+esc(toolNoSpec(t))+'</span>'+
+                   '<button type="button" class="ft-x" data-id="'+esc(t.id)+'" title="移除這支量具">×</button></span>';
+        }).join('');
+        $('#form-tool-chips').html(h || '<span class="ft-none">尚未選擇量具</span>');
+    }
+
+    function openToolPicker(){
+        if(!TOOL_INSTANCES.length){ alert('尚未建立任何量具，請至 設定 → 量具設定 新增。'); return; }
+        tpSel={}; tpOrder=[]; tpCat='';
+        (MODEL.tools||[]).forEach(function(id){
+            var k=String(id);
+            if(!tpSel[k]){ tpSel[k]=1; tpOrder.push(k); }
+        });
+        tpRenderCats();
         tpStep(1);
+        tpRenderPicked();
         $('#toolPickModal').modal('show');
     }
-    // 步驟切換（含跳窗寬度：步驟③要放得下「編號＋檢驗項目＋目前量具」三欄）
     function tpStep(n){
-        $('#tp-step1').toggle(n===1); $('#tp-step2').toggle(n===2); $('#tp-step3').toggle(n===3);
-        $('#tp-scope').toggle(n!==3 && !!tpTarget && tpTarget.r===0 && MODEL.items.length>1);
-        $('#tp-apply').toggle(n===3);
-        $('#tp-clear').html(n===3 ? '<i class="fa fa-eraser"></i> 清除選取項目的量具' : '<i class="fa fa-eraser"></i> 清除此項量具');
-        $('#toolPickModal .modal-dialog').toggleClass('modal-lg', n===3);
+        $('#tp-step1').toggle(n===1);
+        $('#tp-step2').toggle(n===2);
     }
-    $(document).on('click', '.tp-cat', function(){
-        var cat=String($(this).attr('data-c'));
-        var list=TOOL_INSTANCES.filter(function(t){ return (t.cat||'（未分類）')===cat; });
+    function tpSelCount(){ var c=0; for(var k in tpSel){ if(tpSel[k]) c++; } return c; }
+    // ① 類型：一格一個類型，順便標「這個類型已經選了幾支」，換類型時不必來回確認
+    function tpRenderCats(){
+        var cats=[], cnt={}, sel={};
+        TOOL_INSTANCES.forEach(function(t){
+            var c=t.cat||'（未分類）';
+            if(cnt[c]===undefined){ cnt[c]=0; sel[c]=0; cats.push(c); }
+            cnt[c]++;
+            if(tpSel[String(t.id)]) sel[c]++;
+        });
+        $('#tp-cats').html(cats.length ? cats.map(function(c){
+            return '<button type="button" class="tp-cat'+(sel[c]?' has-sel':'')+'" data-c="'+esc(c)+'">'+esc(c)+
+                   '<small>'+cnt[c]+' 支'+(sel[c]?('　已選 '+sel[c]):'')+'</small></button>';
+        }).join('') : '<div class="text-muted">尚未建立任何量具，請至 設定 → 量具設定 新增。</div>');
+    }
+    // ② 編號：點一下加入、再點一下取消（選到的按鈕會變色）
+    function tpRenderNos(){
+        var list=TOOL_INSTANCES.filter(function(t){ return (t.cat||'（未分類）')===tpCat; });
         $('#tp-nos').html(list.map(function(t){
-            return '<button type="button" class="tp-no" data-id="'+t.id+'">'+esc(toolNoSpec(t))+'<small>'+esc(t.cat||'')+'</small></button>';
-        }).join(''));
-        tpStep(2);
+            var on=!!tpSel[String(t.id)];
+            return '<button type="button" class="tp-no'+(on?' on':'')+'" data-id="'+esc(String(t.id))+'">'+
+                   esc(toolNoSpec(t))+'<small>'+(on?'✔ 已選（再點一次取消）':esc(t.cat||''))+'</small></button>';
+        }).join('') || '<div class="text-muted">此類型底下還沒有量具編號</div>');
+    }
+    // 已選清單：兩個步驟都看得到，選到哪裡了一目瞭然
+    function tpRenderPicked(){
+        var h=tpOrder.filter(function(k){ return tpSel[k]; }).map(function(k){
+            var t=toolInstById(k);
+            return '<span class="ft-chip"><span class="ft-cat">'+esc(t?(t.cat||'量具'):'量具')+'</span>'+
+                   '<span class="ft-no">'+esc(t?toolNoSpec(t):('#'+k))+'</span>'+
+                   '<button type="button" class="ft-x tp-unpick" data-id="'+esc(k)+'" title="取消這支">×</button></span>';
+        }).join('');
+        $('#tp-picked').html('<b class="muted-help">本單已選：</b>'+(h || '<span class="ft-none">（尚未選擇）</span>'));
+        $('#tp-apply-n').text(tpSelCount());
+    }
+    function tpPick(id, on){
+        var k=String(id);
+        if(on){ if(!tpSel[k]){ tpSel[k]=1; tpOrder.push(k); } }
+        else { delete tpSel[k]; }
+        tpRenderPicked(); tpRenderCats();
+    }
+    $(document).on('click', '#tp-cats .tp-cat', function(){
+        tpCat=String($(this).attr('data-c'));
+        tpRenderNos(); tpStep(2);
     });
-    $(document).on('click', '#tp-back',  function(e){ e.preventDefault(); tpStep(1); });
-    $(document).on('click', '#tp-back2', function(e){ e.preventDefault(); tpStep(2); });
-    $(document).on('click', '.tp-no', function(){
-        var tid=String($(this).attr('data-id'));
-        var scope = (!tpTarget) ? 'pick'
-                  : ($('#tp-scope').is(':visible') ? ($('input[name=tpscope]:checked').val()||'one') : 'one');
-        if(scope==='pick'){ tpTool=tid; openPickStep(); return; }
-        applyTool(tid);
+    $(document).on('click', '#tp-back', function(e){ e.preventDefault(); tpRenderCats(); tpStep(1); });
+    $(document).on('click', '#tp-nos .tp-no', function(){
+        var id=String($(this).attr('data-id'));
+        tpPick(id, !tpSel[id]);
+        tpRenderNos();
+    });
+    $(document).on('click', '#tp-picked .tp-unpick', function(){
+        tpPick(String($(this).attr('data-id')), false);
+        if($('#tp-step2').is(':visible')) tpRenderNos();
     });
     $('#tp-clear').on('click', function(){
-        if($('#tp-step3').is(':visible')){ tpApplySelected(''); return; }
-        applyTool('');
+        tpSel={}; tpOrder=[];
+        tpRenderPicked(); tpRenderCats();
+        if($('#tp-step2').is(':visible')) tpRenderNos();
     });
-
-    // ---- 步驟③：列出所有檢驗項目（編號＋名稱＋目前綁定的量具），可多選 ----
-    function openPickStep(){
-        var t=toolInstById(tpTool);
-        $('#tp-chosen').text(t ? ((t.cat?t.cat+' / ':'')+toolNoSpec(t)) : '（未指定）');
-        tpRows=[];
-        MODEL.items.forEach(function(it,i){
-            it.readings.forEach(function(rd,r){
-                tpRows.push({ i:i, r:r, key:i+':'+r, code:codeLabel(i), name:(it.name||'（未命名項目）'),
-                              sub:(r>0?('加量測 '+r):''), type:it.type, tool:rd.tool_id||'' });
-            });
-        });
-        // 預設勾選：由某一格點進來就先勾那一格；批次入口先勾「還沒指定量具」的數值型項目
-        tpSel={}; tpAnchor=null;
-        if(tpTarget){ tpSel[tpTarget.i+':'+tpTarget.r]=1; }
-        else { tpRows.forEach(function(w){ if(w.type!=='OKNG' && !w.tool) tpSel[w.key]=1; }); }
-        $('#tp-filter').val('');
-        tpRenderRows();
-        tpStep(3);
-    }
-    function tpRenderRows(){
-        $('#tp-rows').html(tpRows.map(function(w,n){
-            var cur=toolLabelById(w.tool);
-            return '<div class="tp-row" data-n="'+n+'" data-k="'+w.key+'">'+
-                   '<span class="tp-ck"><input type="checkbox"></span>'+
-                   '<span class="tp-code">'+esc(w.code)+'</span>'+
-                   '<span class="tp-name">'+esc(w.name)+
-                     (w.sub?' <span class="tp-sub">· '+esc(w.sub)+'</span>':'')+'</span>'+
-                   (w.type==='OKNG'?'<span class="tp-tag">目視 OK/NG</span>':'')+
-                   '<span class="tp-cur'+(cur?'':' none')+'">'+esc(cur||'未指定量具')+'</span>'+
-                   '</div>';
-        }).join('') || '<div class="text-muted" style="padding:10px;">沒有檢驗項目</div>');
-        tpFilterRows(); tpPaintSel();
-    }
-    function tpFilterRows(){
-        var kw=String($('#tp-filter').val()||'').toLowerCase().split(/\s+/).filter(function(x){ return x!==''; });
-        $('#tp-rows .tp-row').each(function(){
-            var w=tpRows[+$(this).attr('data-n')];
-            var hay=(w.code+' '+w.name+' '+w.sub+' '+toolLabelById(w.tool)).toLowerCase();
-            var ok=true;
-            for(var q=0;q<kw.length;q++){ if(hay.indexOf(kw[q])<0){ ok=false; break; } }
-            $(this).toggle(ok);
-        });
-    }
-    function tpPaintSel(){
-        $('#tp-rows .tp-row').each(function(){
-            var on=!!tpSel[$(this).attr('data-k')];
-            $(this).toggleClass('on', on).find('input[type=checkbox]').prop('checked', on);
-        });
-        var c=0; for(var k in tpSel){ if(tpSel[k]) c++; }
-        $('#tp-apply-n').text(c);
-    }
-    function tpVis(){ return $('#tp-rows .tp-row:visible'); }
-    function tpToggle(n){ var k=tpRows[n].key; if(tpSel[k]) delete tpSel[k]; else tpSel[k]=1; }
-    function tpOnly(n){ tpSel={}; tpSel[tpRows[n].key]=1; }
-    function tpRange(a,b,exclusive){
-        var ns=[]; tpVis().each(function(){ ns.push(+$(this).attr('data-n')); });
-        var ia=ns.indexOf(a), ib=ns.indexOf(b);
-        if(exclusive) tpSel={};
-        if(ia<0||ib<0){ tpSel[tpRows[b].key]=1; return; }
-        var lo=Math.min(ia,ib), hi=Math.max(ia,ib);
-        for(var x=lo;x<=hi;x++) tpSel[tpRows[ns[x]].key]=1;
-    }
-    $(document).on('input', '#tp-filter', function(){ tpFilterRows(); });
-    $(document).on('click', '#tp-rows .tp-ck input', function(e){
-        e.stopPropagation();
-        var n=+$(this).closest('.tp-row').attr('data-n');
-        tpToggle(n); tpAnchor=n; tpPaintSel();
-    });
-    $(document).on('click', '#tp-rows .tp-row', function(e){
-        if(tpBand.dragged) return;                   // 剛做完框選，不要再當成一次點擊
-        var n=+$(this).attr('data-n');
-        if(e.shiftKey && tpAnchor!==null){ tpRange(tpAnchor, n, !(e.ctrlKey||e.metaKey)); }
-        else if(e.ctrlKey || e.metaKey){ tpToggle(n); tpAnchor=n; }
-        else { tpOnly(n); tpAnchor=n; }
-        tpPaintSel();
-    });
-    $('#tp-sel-all').on('click',  function(){ tpVis().each(function(){ tpSel[$(this).attr('data-k')]=1; }); tpPaintSel(); });
-    $('#tp-sel-none').on('click', function(){ tpVis().each(function(){ delete tpSel[$(this).attr('data-k')]; }); tpPaintSel(); });
-    $('#tp-sel-inv').on('click',  function(){ tpVis().each(function(){ var k=$(this).attr('data-k'); if(tpSel[k]) delete tpSel[k]; else tpSel[k]=1; }); tpPaintSel(); });
-    $('#tp-sel-blank').on('click',function(){
-        tpSel={}; tpVis().each(function(){ var w=tpRows[+$(this).attr('data-n')]; if(!w.tool) tpSel[w.key]=1; }); tpPaintSel();
-    });
-    $('#tp-sel-same').on('click', function(){
-        var t=toolInstById(tpTool), cat=t?(t.cat||''):'';
-        tpSel={}; tpVis().each(function(){
-            var w=tpRows[+$(this).attr('data-n')], ct=toolInstById(w.tool);
-            if(ct && (ct.cat||'')===cat) tpSel[w.key]=1;
-        });
-        tpPaintSel();
-    });
-    // 框選：在清單空白處（不是核取方塊／按鈕）按住拖曳
-    $(document).on('mousedown', '#tp-rows', function(e){
-        if(e.which!==1) return;
-        if($(e.target).is('input,button,a,label')) return;
-        var el=this, rc=el.getBoundingClientRect();
-        tpBand.on=true; tpBand.dragged=false;
-        tpBand.add=!!(e.ctrlKey||e.metaKey||e.shiftKey);
-        tpBand.x0=e.clientX-rc.left+el.scrollLeft; tpBand.y0=e.clientY-rc.top+el.scrollTop;
-        tpBand.$el=null;
-    });
-    $(document).on('mousemove', function(e){
-        if(!tpBand.on) return;
-        var el=document.getElementById('tp-rows'); if(!el) return;
-        var rc=el.getBoundingClientRect();
-        var x=e.clientX-rc.left+el.scrollLeft, y=e.clientY-rc.top+el.scrollTop;
-        if(!tpBand.dragged && Math.abs(x-tpBand.x0)+Math.abs(y-tpBand.y0)<5) return;
-        tpBand.dragged=true;
-        if(!tpBand.$el) tpBand.$el=$('<div class="tp-band"></div>').appendTo(el);
-        tpBand.$el.css({ left:Math.min(x,tpBand.x0)+'px', top:Math.min(y,tpBand.y0)+'px',
-                         width:Math.abs(x-tpBand.x0)+'px', height:Math.abs(y-tpBand.y0)+'px' });
-        var t=Math.min(y,tpBand.y0), b=Math.max(y,tpBand.y0);
-        if(!tpBand.add) tpSel={};
-        tpVis().each(function(){
-            var rt=this.offsetTop, rb=rt+this.offsetHeight;
-            if(rb>t && rt<b) tpSel[$(this).attr('data-k')]=1;
-        });
-        tpPaintSel();
-        e.preventDefault();
-    });
-    $(document).on('mouseup', function(){
-        if(!tpBand.on) return;
-        tpBand.on=false;
-        if(tpBand.$el){ tpBand.$el.remove(); tpBand.$el=null; }
-        if(tpBand.dragged) setTimeout(function(){ tpBand.dragged=false; }, 0);   // 讓緊接著的 click 被略過
-    });
-    $('#tp-apply').on('click', function(){ tpApplySelected(tpTool); });
-    function tpApplySelected(tid){
-        var keys=[]; for(var k in tpSel){ if(tpSel[k]) keys.push(k); }
-        if(!keys.length){ alert('請先勾選至少一個檢驗項目（可點一列、Shift 連選，或在空白處拖曳框選）。'); return; }
-        var n=0;
-        keys.forEach(function(k){
-            var p=k.split(':'), i=+p[0], r=+p[1];
-            if(MODEL.items[i] && MODEL.items[i].readings[r]){ MODEL.items[i].readings[r].tool_id=tid; n++; }
-        });
+    $('#tp-apply').on('click', function(){
+        MODEL.tools=tpOrder.filter(function(k){ return tpSel[k]; });
         $('#toolPickModal').modal('hide');
-        render(); scheduleDraftSave();
-        var t=toolInstById(tid);
-        flashMsg(tid ? ('已將「'+(t?((t.cat?t.cat+' / ':'')+toolNoSpec(t)):'量具')+'」綁定到 '+n+' 個檢驗項目')
-                     : ('已清除 '+n+' 個檢驗項目的量具'));
-    }
-
-    function applyTool(tid){
-        if(!tpTarget) return;
-        var i=tpTarget.i, r=tpTarget.r, n=0;
-        var scope = ($('#tp-scope').is(':visible')) ? ($('input[name=tpscope]:checked').val()||'one') : 'one';
-        if(scope==='one'){ MODEL.items[i].readings[r].tool_id=tid; n=1; }
-        else {
-            MODEL.items.forEach(function(it){
-                if(scope==='blank' && it.readings[0].tool_id) return;   // 只補「還沒設定」的
-                it.readings[0].tool_id=tid; n++;
-            });
-            if(scope==='blank' && !MODEL.items[i].readings[0].tool_id){ MODEL.items[i].readings[0].tool_id=tid; n++; }
-        }
-        $('#toolPickModal').modal('hide');
-        render(); scheduleDraftSave();
-        var t=toolInstById(tid);
-        if(n>1) flashMsg('已套用「'+((t?((t.cat?t.cat+' / ':'')+toolNoSpec(t)):'未指定'))+'」到 '+n+' 個檢驗項目');
-    }
-    // 工具列徽章：還有幾個數值型量測沒指定量具編號，填寫過程就看得到，不必等按儲存才被擋下
-    function updateToolBadge(){
-        var miss=0;
-        MODEL.items.forEach(function(it){
-            if(it.type==='OKNG') return;
-            it.readings.forEach(function(rd){ if(!rd.tool_id) miss++; });
-        });
-        var $b=$('#tool-miss-badge');
-        if(miss>0) $b.text('缺 '+miss).attr('title', '還有 '+miss+' 個量測沒有指定量具編號').show();
-        else $b.hide();
-    }
+        renderFormTools(); scheduleDraftSave();
+        flashMsg(MODEL.tools.length ? ('本單使用量具：已選 '+MODEL.tools.length+' 支') : '已清除本單使用量具');
+    });
     function flashMsg(msg){
         var $m=$('#flash-msg');
         if(!$m.length) $m=$('<div id="flash-msg" style="position:fixed;left:50%;transform:translateX(-50%);bottom:140px;'+
@@ -3307,7 +3128,7 @@ $(function(){
     $(document).on('click', '.btn-add-reading', function(e){
         e.preventDefault();
         var i=+$(this).data('i'), it=MODEL.items[i];
-        it.readings.push({ tool_id:'', tool_cat:'', vals:blankVals(state.sampleN, it.type==='OKNG'?'OK':'') });
+        it.readings.push({ vals:blankVals(state.sampleN, it.type==='OKNG'?'OK':'') });
         render(); scheduleDraftSave();
     });
     $(document).on('click', '.btn-del-reading', function(e){
@@ -3592,6 +3413,7 @@ $(function(){
             $('#insp-container-1,#insp-container-2').val('');
             $('#insp-quantity-1,#insp-quantity-2').val('');
             renderBatches();
+            MODEL.tools=[];                       // 新的一張檢驗單：本單使用量具從空的開始
             renderItems(res.items || []);
             $('#no-std-hint').toggle(!res.has_std);
             var noPart = !ctx.d_id || ctx.d_id<=0;
@@ -3896,6 +3718,7 @@ $(function(){
         $('#inp-remark').val($('#ah-remark').val());
         $('#chk-save-std').prop('checked', false).closest('label').hide();  // 臨時檢驗不改寫料號標準
         renderBatches();
+        MODEL.tools=[];
         renderItems([]);
         $('#no-std-hint').hide();
         $('#btn-save,#btn-redo').prop('disabled', !state.can_fill);
@@ -4095,6 +3918,8 @@ $(function(){
             $('#inp-qty').val(h.incoming_qty||0);
             $('#inp-sample').val(state.sampleN);
             $('#inp-remark').val(h.main_remark||'');
+            // 本單使用量具：帶回這張檢驗單原本選的那幾支（舊紀錄由 migration 從量測明細回填）
+            MODEL.tools=(res.tools||[]).map(function(t){ return String(t.id); });
             renderItems(res.items||[]);
             (h.pcs_verdicts||[]).forEach(function(pv,i){
                 if(!pv || !pv.m || !MODEL.pcs[i]) return;
@@ -4163,7 +3988,8 @@ $(function(){
         $.post(API,{ action:'save_draft', bom_ing_fid:ctx.bom_ing_fid, d_id:ctx.d_id, process_name:ctx.process,
             batch_no:b.no, round_no:(b.rounds.length+1),
             incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
-            main_remark:$('#inp-remark').val(), items:JSON.stringify(items), pcs_verdicts:JSON.stringify(collectPcsVerdicts())
+            main_remark:$('#inp-remark').val(), items:JSON.stringify(items), pcs_verdicts:JSON.stringify(collectPcsVerdicts()),
+            tool_ids:JSON.stringify(MODEL.tools||[])
         }, function(res){
             if(res && res.success){
                 draftDirty=false; state.draftFormId=res.draft_form_id;
@@ -4188,6 +4014,7 @@ $(function(){
             var d=res.draft;
             state.sampleN=parseInt(d.sample_qty)||state.sampleN;
             $('#inp-qty').val(d.incoming_qty||0); $('#inp-sample').val(state.sampleN); $('#inp-remark').val(d.main_remark||'');
+            MODEL.tools=(d.tool_ids||[]).map(String);
             renderItems(d.items||[]);
             (d.pcs||[]).forEach(function(pv,i){ if(pv && pv.m && MODEL.pcs[i]){ MODEL.pcs[i].m=1; MODEL.pcs[i].v=(pv.v==='NG'?'NG':'OK'); } });
             recalc();
@@ -4564,12 +4391,14 @@ $(function(){
 
     // =====================================================================
     // 存檔前檢核：把「缺了什麼、缺在哪一項」講清楚，而不是存進去才發現沒有量具可追溯
-    //   硬性擋下：① 有填實測值卻沒有項目名稱 ② 數值型項目有實測值卻沒選量具編號
-    //             ③ 數值型項目有實測值卻沒填標準值（沒有標準就判不出 OK/NG）
+    //   硬性擋下：① 有填實測值卻沒有項目名稱
+    //             ② 數值型項目有實測值卻沒填標準值（沒有標準就判不出 OK/NG）
+    //             ③ 有數值型量測，但整張檢驗單一支量具都沒選（品質紀錄要追溯得到用了哪幾支）
+    //   量具是綁在整張檢驗單上（2026-09-16），所以只檢查一次，不再逐項檢查。
     //   OK/NG 型（目視/功能檢查）不強制量具。
     // =====================================================================
     function validateBeforeSave(){
-        var out=[];
+        var out=[], anyNum=false;
         MODEL.items.forEach(function(it,i){
             var code=codeLabel(i), nm=(it.name||'').trim();
             it.readings.forEach(function(rd,r){
@@ -4582,11 +4411,16 @@ $(function(){
                 var where = code+(r>0?('（加量測 '+r+'）'):'')+'　'+(nm||'（未命名項目）');
                 if(!nm) out.push({ i:i, r:r, field:'name', text:where+'：<b>未填檢驗項目名稱</b>' });
                 if(it.type!=='OKNG'){
-                    if(!rd.tool_id) out.push({ i:i, r:r, field:'tool', text:where+'：<b>未選擇量具編號</b>（品質紀錄需可追溯到實際使用的那一支量具）' });
+                    anyNum=true;
                     if(r===0 && (it.std==null || String(it.std).trim()==='')) out.push({ i:i, r:r, field:'std', text:where+'：<b>未填標準值</b>（沒有標準值就無法判定 OK/NG）' });
                 }
             });
         });
+        // 量具：整張檢驗單只要選過任一支就算數（目視／功能檢查的單子不強制）
+        if(anyNum && !(MODEL.tools||[]).length){
+            out.push({ i:-1, r:0, field:'formtool',
+                       text:'<b>尚未選擇本單使用的量具</b>（品質紀錄需可追溯到這張檢驗單用了哪幾支量具）' });
+        }
         return out;
     }
     function showValidateModal(probs){
@@ -4609,12 +4443,13 @@ $(function(){
         e.preventDefault();
         var i=+$(this).data('i'), r=+$(this).data('r'), f=$(this).data('f');
         $('#validateModal').modal('hide');
+        // 量具是整張單的設定，不屬於任何一列 → 直接把量具挑選跳窗打開
+        if(f==='formtool'){ openToolPicker(); return; }
         view='GRID'; localStorage.setItem('qc2_view', view);
         if(f==='name' || f==='std') $('#chk-std-edit').prop('checked', true);
         render();
         setTimeout(function(){
             var $tr=$('#items-body tr[data-i="'+i+'"]');
-            if(f==='tool'){ $('.tool-btn[data-i="'+i+'"][data-r="'+r+'"]').first().focus().click(); return; }
             var $t=$tr.find(f==='name' ? 'input.f-name' : 'input.f-std');
             if($t.length){ $t.focus(); $('html,body').animate({ scrollTop:$t.offset().top-160 }, 200); }
         }, 120);
@@ -4688,7 +4523,7 @@ $(function(){
             $.post(API,{ action:'update_inspection', qc_form_id:state.editFormId, reason:reason,
                 incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
                 main_remark:$('#inp-remark').val(), items:JSON.stringify(items),
-                pcs_verdicts:JSON.stringify(collectPcsVerdicts())
+                pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[])
             }, function(res){
                 $eb.prop('disabled',false);
                 if(!res.success){ alert('修改失敗：'+res.message); return; }
@@ -4709,7 +4544,7 @@ $(function(){
             $.post(V2API, { v2action:'save_adhoc', d_id:ctx.d_id, process_name:ctx.process,
                 incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
                 main_remark:$('#inp-remark').val(), items:JSON.stringify(items),
-                pcs_verdicts:JSON.stringify(collectPcsVerdicts())
+                pcs_verdicts:JSON.stringify(collectPcsVerdicts()), tool_ids:JSON.stringify(MODEL.tools||[])
             }, function(res){
                 $ab.prop('disabled',false);
                 if(!res.success){ alert('儲存失敗：'+res.message); return; }
@@ -4731,7 +4566,8 @@ $(function(){
             process_name:ctx.process, batch_no:b.no, round_no:(b.rounds.length+1),
             incoming_qty:parseInt($('#inp-qty').val())||0, sample_qty:parseInt($('#inp-sample').val())||0,
             main_remark:$('#inp-remark').val(), update_std:$('#chk-save-std').is(':checked')?'1':'0',
-            items:JSON.stringify(items), pcs_verdicts:JSON.stringify(collectPcsVerdicts()) };
+            items:JSON.stringify(items), pcs_verdicts:JSON.stringify(collectPcsVerdicts()),
+            tool_ids:JSON.stringify(MODEL.tools||[]) };
         var $btn=$(asRedo?'#btn-redo':'#btn-save').prop('disabled',true);
         $.post(API, payload, function(res){
             $btn.prop('disabled',false);
@@ -4884,23 +4720,14 @@ $(function(){
             '<table class="pr-meta"><tr>'+
             '<td class="k">料號</td><td>'+esc(m.part)+'</td><td class="k">客戶</td><td>'+esc(m.client)+'</td><td class="k">日期</td><td>'+dateStr+'</td></tr>'+
             '<tr><td class="k">製令/BOM</td><td>'+esc(m.bom)+'</td><td class="k">製程</td><td>'+esc(m.process)+'</td><td class="k">送驗數</td><td>'+m.incoming+'</td></tr>'+
-            '<tr><td class="k">抽驗數</td><td>'+m.sample+'</td><td class="k">整體判定</td><td>'+m.judge+'（不良 '+m.ng+'）</td><td class="k">備註</td><td>'+esc(m.remark)+'</td></tr></table>';
+            '<tr><td class="k">抽驗數</td><td>'+m.sample+'</td><td class="k">整體判定</td><td>'+m.judge+'（不良 '+m.ng+'）</td><td class="k">備註</td><td>'+esc(m.remark)+'</td></tr>'+
+            // 使用量具：整張檢驗單一列印出全部（種類＋編號(規格)），不再逐項印量具欄
+            '<tr><td class="k">使用量具</td><td colspan="5">'+esc(formToolsLabel()||'—')+'</td></tr></table>';
         var pcsHead=''; for(var i=1;i<=n;i++) pcsHead+='<th>'+i+'</th>';
-        // 量具格：三行＝量具類別／量具規格／量具編號，字自動縮小換行，不再另印表格下方的量具對照列
-        //   舊資料的規格是人工塞在編號括號裡（例 B-008-Q (0-25mm)）→ 拆出來當規格行，編號行只留編號本體
-        var toolNoOf=function(id){
-            var t=toolInstById(id);
-            if(!t) return '';
-            var no=String(t.no||'').trim(), spec=t.spec||'';
-            var m=no.match(/[（(]([^）)]*)[）)]\s*$/);
-            if(m){ if(!spec) spec=m[1].trim(); no=no.slice(0,m.index).trim(); }
-            return '<div class="tool2">'+[t.cat||'', spec, no].filter(function(s){ return s!==''; })
-                   .map(function(s){ return '<span>'+esc(s)+'</span>'; }).join('')+'</div>';
-        };
         var body='';
         items.forEach(function(it,idx){
-            var readings=[{tool:toolNoOf(it.tool_id), samples:it.samples}];
-            (it.extra||[]).forEach(function(ex){ readings.push({tool:toolNoOf(ex.tool_id), samples:ex.samples}); });
+            var readings=[{samples:it.samples}];
+            (it.extra||[]).forEach(function(ex){ readings.push({samples:ex.samples}); });
             readings.forEach(function(rd,ri){
                 var cells='';
                 for(var i2=0;i2<n;i2++){
@@ -4908,15 +4735,19 @@ $(function(){
                     var v=(sv && sv.v!=null && sv.v!=='')?sv.v:'';
                     cells+='<td'+((sv&&sv.r==='NG'&&v!=='')?' class="pr-ng"':'')+'>'+esc(v)+'</td>';
                 }
+                // 加量測列：前四欄不用 rowspan 併格，改在「檢驗項目」欄標「↳ 加量測 N」，
+                // 這樣少了量具欄之後每一列的欄數仍然對得起來（判定欄維持併格）
                 body+='<tr>'+
-                    (ri===0?('<td rowspan="'+readings.length+'">'+codeLabel(idx)+'</td><td rowspan="'+readings.length+'" style="text-align:left">'+esc(it.name)+'</td><td rowspan="'+readings.length+'">'+esc(it.std||'')+'</td><td class="c-tol" rowspan="'+readings.length+'">'+esc(it.up||'')+(it.lo?('<span class="lo">'+esc(it.lo)+'</span>'):'')+'</td>'):'')+
-                    '<td class="c-tool">'+(rd.tool||'')+'</td>'+cells+
+                    (ri===0
+                      ? ('<td>'+codeLabel(idx)+'</td><td style="text-align:left">'+esc(it.name)+'</td><td>'+esc(it.std||'')+'</td><td class="c-tol">'+esc(it.up||'')+(it.lo?('<span class="lo">'+esc(it.lo)+'</span>'):'')+'</td>')
+                      : ('<td></td><td style="text-align:left;font-size:10px;color:#7A5A35">↳ 加量測 '+ri+'</td><td></td><td class="c-tol"></td>'))+
+                    cells+
                     (ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'NG':'OK')+'</td>'):'')+'</tr>';
-                if(ri===0 && it.remark) body+='<tr><td colspan="'+(5+n)+'" style="text-align:left;font-size:11px">備註：'+esc(it.remark)+'</td></tr>';
+                if(ri===0 && it.remark) body+='<tr><td colspan="'+(4+n)+'" style="text-align:left;font-size:11px">備註：'+esc(it.remark)+'</td></tr>';   // 表頭4欄＋n件（判定欄留給上一列併格）
             });
         });
         var tbl='<table class="pr-items"><thead><tr><th class="c-no">編號</th><th>檢驗項目</th><th class="c-std">標準</th>'+
-                '<th class="c-tol">公差</th><th class="c-tool">量具</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>'+body+'</tbody></table>';
+                '<th class="c-tol">公差</th>'+pcsHead+'<th>判定</th></tr></thead><tbody>'+body+'</tbody></table>';
         // 簽章：印章本身自帶日期（故不再另設日期欄）；代理人代簽由 EGStamp 於右下角加「代」字
         var insp = (state.editMeta && state.editMeta.creator_name) || <?php echo json_encode($CURRENT_CNAME, JSON_UNESCAPED_UNICODE); ?>;
         var appr = (PRINTCFG.auto_approve && PRINTCFG.approver && PRINTCFG.approver.name)
@@ -4945,16 +4776,17 @@ $(function(){
         if(!ctx){ alert('請先開啟一筆檢驗再匯出。'); return; }
         var items=collectItems(); if(!items.length){ alert('尚無檢驗項目可匯出。'); return; }
         var n=state.sampleN, m=currentMeta();
-        var head=['編號','檢驗項目','標準','上公差','下公差','量具'];
+        var head=['編號','檢驗項目','標準','上公差','下公差'];
         for(var i=1;i<=n;i++) head.push('第'+i+'件');
         head.push('判定','備註');
         var q=function(s){ s=(s==null?'':String(s)); return '"'+s.replace(/"/g,'""')+'"'; };
-        var lines=[head.map(q).join(',')];
+        // 使用量具是整張單的資訊 → 印在檔案最上方一列，不再逐項一欄（2026-09-16）
+        var lines=[[q('本單使用量具'), q(formToolsLabel()||'—')].join(','), '', head.map(q).join(',')];
         items.forEach(function(it,idx){
-            var readings=[{tool:toolLabelById(it.tool_id), samples:it.samples}];
-            (it.extra||[]).forEach(function(ex){ readings.push({tool:toolLabelById(ex.tool_id), samples:ex.samples}); });
+            var readings=[{samples:it.samples}];
+            (it.extra||[]).forEach(function(ex){ readings.push({samples:ex.samples}); });
             readings.forEach(function(rd,ri){
-                var row=[ri===0?codeLabel(idx):'', ri===0?it.name:'', ri===0?(it.std||''):'', ri===0?(it.up||''):'', ri===0?(it.lo||''):'', rd.tool||''];
+                var row=[ri===0?codeLabel(idx):'', ri===0?it.name:('↳ 加量測 '+ri), ri===0?(it.std||''):'', ri===0?(it.up||''):'', ri===0?(it.lo||''):''];
                 for(var i3=0;i3<n;i3++){ var sv=(rd.samples||[])[i3]; row.push((sv&&sv.v!=null)?sv.v:''); }
                 row.push(ri===0?(it.verdict||''):'', ri===0?(it.remark||''):'');
                 lines.push(row.map(q).join(','));
@@ -5405,17 +5237,22 @@ $(function(){
     });
     function renderHistDetail(res){
         var h=res.header, its=res.items||[];
-        var out='<div class="well well-sm" style="margin-bottom:8px;"><b>逐項實測</b>（單號 '+h.qc_form_id+'；送驗 '+(h.incoming_qty||0)+'／抽驗 '+(h.sample_qty||0)+'；整體 '+(h.check_result==='NG'?'<span class="text-danger">不良</span>':'合格')+'）</div>';
-        out+='<div style="max-height:300px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr><th>項次</th><th>項目</th><th>標準</th><th>量具</th><th>實測（各PCS）</th><th>判定</th></tr></thead><tbody>';
+        // 使用量具是整張檢驗單的資訊 → 印在最上面一行，表格內不再有量具欄（2026-09-16）
+        var tls=(res.tools||[]).map(function(t){ return ((t.cat?t.cat+' ':'')+t.no+(t.spec && String(t.no).indexOf(t.spec)<0 ? '('+t.spec+')' : '')); }).join('、');
+        var out='<div class="well well-sm" style="margin-bottom:8px;"><b>逐項實測</b>（單號 '+h.qc_form_id+'；送驗 '+(h.incoming_qty||0)+'／抽驗 '+(h.sample_qty||0)+'；整體 '+(h.check_result==='NG'?'<span class="text-danger">不良</span>':'合格')+'）'+
+                '<div style="margin-top:4px;"><b>使用量具：</b>'+esc(tls||'—')+'</div></div>';
+        out+='<div style="max-height:300px;overflow:auto;"><table class="table table-condensed table-bordered"><thead><tr><th>項次</th><th>項目</th><th>標準</th><th>實測（各PCS）</th><th>判定</th></tr></thead><tbody>';
         its.forEach(function(it,idx){
-            var readings=[{tool:(it.tool||''), samples:it.samples}];
-            (it.extra||[]).forEach(function(ex){ readings.push({tool:(ex.method||ex.tool_no||''), samples:ex.samples}); });
+            var readings=[{samples:it.samples}];
+            (it.extra||[]).forEach(function(ex){ readings.push({samples:ex.samples}); });
             readings.forEach(function(rd,ri){
                 var vals=(rd.samples||[]).map(function(s){ return (s&&s.v!==''&&s.v!=null)?('<span class="'+((s.r==='NG')?'text-danger':'')+'">'+esc(s.v)+'</span>'):'·'; }).join('　');
-                out+='<tr>'+(ri===0?('<td rowspan="'+readings.length+'">'+esc(codeLabel(idx))+'</td><td rowspan="'+readings.length+'">'+esc(it.name)+'</td><td rowspan="'+readings.length+'">'+esc(it.std||'')+((it.up||it.lo)?(' ('+esc(it.up||'')+'/'+esc(it.lo||'')+')'):'')+'</td>'):'')+
-                    '<td>'+esc(rd.tool||'')+'</td><td>'+vals+'</td>'+(ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'<span class="text-danger">NG</span>':(it.verdict==='AOD'?'特採':'OK'))+'</td>'):'')+'</tr>';
+                out+='<tr>'+(ri===0
+                        ? ('<td>'+esc(codeLabel(idx))+'</td><td>'+esc(it.name)+'</td><td>'+esc(it.std||'')+((it.up||it.lo)?(' ('+esc(it.up||'')+'/'+esc(it.lo||'')+')'):'')+'</td>')
+                        : ('<td></td><td class="text-muted" style="font-size:12px">↳ 加量測 '+ri+'</td><td></td>'))+
+                    '<td>'+vals+'</td>'+(ri===0?('<td rowspan="'+readings.length+'">'+(it.verdict==='NG'?'<span class="text-danger">NG</span>':(it.verdict==='AOD'?'特採':'OK'))+'</td>'):'')+'</tr>';
             });
-            if(it.remark) out+='<tr><td colspan="6" class="text-muted" style="font-size:12px">備註：'+esc(it.remark)+'</td></tr>';
+            if(it.remark) out+='<tr><td colspan="5" class="text-muted" style="font-size:12px">備註：'+esc(it.remark)+'</td></tr>';
         });
         out+='</tbody></table></div>';
         return out;

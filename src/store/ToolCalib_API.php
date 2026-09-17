@@ -1218,22 +1218,27 @@ case 'history': {
           'list'=>$list, 'can_delete'=>$perms['canAdmin']]);
 }
 
-/* ---------- 使用紀錄（此量具反查用於哪些檢驗單；資料來自 qc_measurement.tool_id，見 CLAUDE.md 量具規格說明） ---------- */
+/* ---------- 使用紀錄（此量具反查用於哪些檢驗單） ----------
+   2026-09-16 起量具是綁在「整張檢驗單」上（qc_form_tool），不再綁到個別檢驗項目；
+   舊資料原本記在 qc_measurement.tool_id，已由 migration 回填進 qc_form_tool，
+   這裡仍然兩邊都查（UNION）以防有未回填的環境。測項數＝該張單的檢驗項目數。 */
 case 'usage_history': {
     $tid = (int)($_GET['tool_id'] ?? 0);
     $t = tc_get_tool($db, $tid);
     if (!$t) jerr('找不到量具');
     $st = $db->prepare("SELECT f.qc_form_id, f.check_date, f.created_at, f.process_name, f.check_result, f.created_by,
                                ds.D_Setting_Id AS part_no,
-                               COUNT(DISTINCT m.item_id) AS item_count
-                        FROM qc_measurement m
-                        JOIN qc_check_form f ON f.qc_form_id = m.qc_form_id
+                               (SELECT COUNT(DISTINCT m2.item_id) FROM qc_measurement m2 WHERE m2.qc_form_id = f.qc_form_id) AS item_count
+                        FROM qc_check_form f
                         LEFT JOIN d_setting ds ON ds.d_id = f.d_id
-                        WHERE m.tool_id = ?
-                        GROUP BY f.qc_form_id, f.check_date, f.created_at, f.process_name, f.check_result, f.created_by, ds.D_Setting_Id
+                        WHERE f.qc_form_id IN (
+                                  SELECT ft.qc_form_id FROM qc_form_tool ft WHERE ft.tool_id = ?
+                                  UNION
+                                  SELECT m.qc_form_id FROM qc_measurement m WHERE m.tool_id = ?
+                              )
                         ORDER BY COALESCE(f.check_date, f.created_at) DESC, f.qc_form_id DESC
                         LIMIT 200");
-    $st->execute([$tid]);
+    $st->execute([$tid, $tid]);
     $list = $st->fetchAll(PDO::FETCH_ASSOC);
     $names = [];
     if ($list) {

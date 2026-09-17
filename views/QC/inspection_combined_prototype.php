@@ -427,6 +427,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             ]);
             $qc_form_id = (int)$pdo->lastInsertId();
 
+            // --- 2c-2. 本張檢驗單使用的量具（2026-09-16：綁在整張單，不綁到個別檢驗項目）---
+            qc_form_tools_save($pdo, $qc_form_id, $_POST['tool_ids'] ?? '[]');
+
             // --- 2d. 寫入實測明細 + 後端重算判定/彙總（#3 後端為準；#10 多量具/多次量測）---
             $tot = qc_persist_readings($pdo, $qc_form_id, $items, $itemIds, $pcs, $user_id);
             $ng_qty = $tot['ng_qty']; $aod_qty = $tot['aod_qty']; $check_result = $tot['check_result'];
@@ -438,6 +441,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $dq->execute([$fid, $batch_no, $round_no, $user_id]);
             foreach ($dq->fetchAll(PDO::FETCH_COLUMN) as $did) {
                 $pdo->prepare("DELETE FROM qc_measurement WHERE qc_form_id=?")->execute([$did]);
+                $pdo->prepare("DELETE FROM qc_form_tool WHERE qc_form_id=?")->execute([$did]);
                 $pdo->prepare("DELETE FROM qc_check_form WHERE qc_form_id=?")->execute([$did]);
             }
 
@@ -486,6 +490,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $draftJson = json_encode([
                 'items'        => (json_decode($_POST['items'] ?? '[]', true) ?: []),
                 'pcs'          => (json_decode($_POST['pcs_verdicts'] ?? '[]', true) ?: []),
+                // 本單使用量具（整張單綁一次）：草稿階段先放 JSON，正式存檔才寫 qc_form_tool
+                'tool_ids'     => qc_form_tools_parse($_POST['tool_ids'] ?? '[]'),
                 'incoming_qty' => $incoming_qty, 'sample_qty' => $sample_qty, 'main_remark' => $main_remark,
             ], JSON_UNESCAPED_UNICODE);
 
@@ -528,6 +534,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $sel->execute([$user_id, $qid, $fid, $fid]);
             foreach ($sel->fetchAll(PDO::FETCH_COLUMN) as $did) {
                 $pdo->prepare("DELETE FROM qc_measurement WHERE qc_form_id=?")->execute([$did]);
+                $pdo->prepare("DELETE FROM qc_form_tool WHERE qc_form_id=?")->execute([$did]);
                 $pdo->prepare("DELETE FROM qc_check_form WHERE qc_form_id=?")->execute([$did]);
             }
             $pdo->commit();
@@ -573,7 +580,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     ];
                 }
                 if ((int)$r['sample_no'] <= 0) continue; // 純判定列(無實測)
-                $key = ($r['measure_method'] ?? '') . '|' . ($r['tool_id'] ?? '');
+                // 分組鍵要含 reading_seq：量具改綁在整張單之後，同一項的「主量測」與「加量測」
+                // 不再靠不同量具區分（兩者 tool_id 都是 NULL），只剩 reading_seq 分得出來。
+                // 舊資料同樣適用（同量具的加量測 seq=2，原本會被併成一組而互相覆蓋）。
+                $key = ($r['measure_method'] ?? '') . '|' . ($r['tool_id'] ?? '') . '|' . (int)($r['reading_seq'] ?? 1);
                 if (!isset($byItem[$iid]['_groups'][$key])) {
                     $byItem[$iid]['_groups'][$key] = [
                         'tool_id'=>isset($r['tool_id'])?(int)$r['tool_id']:null,
@@ -640,6 +650,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                           })()
                         : null),
                 ],
+                // 本張檢驗單使用的量具（整張單綁一次；舊資料已由 migration 從 qc_measurement 回填）
+                'tools'=>qc_form_tools_rows($pdo, $qid),
                 'items'=>array_values($byItem),
                 'is_supervisor'=>$is_sup,
                 // 唯讀檢閱者即使該筆已開放修改也不可編輯（需填寫或主管權限）
@@ -745,6 +757,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 $itemIds[$idx] = (int)$iid;
             }
+            // 本張檢驗單使用的量具（整張單綁一次）；沒送這個欄位＝舊呼叫端，維持原本內容不動
+            if (array_key_exists('tool_ids', $_POST)) qc_form_tools_save($pdo, $qid, $_POST['tool_ids']);
             // 重寫明細 + 後端重算判定/彙總（#3 後端為準；#10 多量具/多次量測；#12 與存檔共用同一函式）
             $tot = qc_persist_readings($pdo, $qid, $items, $itemIds, $pcs, $user_id);
             $ng_qty = $tot['ng_qty']; $aod_qty = $tot['aod_qty']; $check_result = $tot['check_result'];
