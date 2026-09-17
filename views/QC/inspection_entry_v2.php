@@ -802,17 +802,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     /* 本單使用量具（2026-09-16：量具改成整張檢驗單綁一次，不再綁到個別檢驗項目）
        已選的量具一次全部列出來（種類＋編號），每個都能按 × 取消 */
     #form-tool-row { background:#FFFBF4; }
-    .ft-chips { display:inline-flex; flex-wrap:wrap; gap:6px; align-items:center; vertical-align:middle; }
-    .ft-chip { display:inline-flex; align-items:center; gap:6px; background:#fff; border:1px solid var(--amber-d);
-               border-radius:14px; padding:3px 6px 3px 11px; font-size:13px; color:var(--ink); line-height:1.3; }
-    .ft-chip .ft-cat { font-weight:bold; }
-    .ft-chip .ft-no  { color:#8a6a45; }
-    .ft-chip .ft-x { border:0; background:transparent; color:#C0703A; font-size:15px; line-height:1; padding:0 2px; }
+    /* 標籤刻意做小：一張檢驗單常常一次選五、六支量具，字級與內距一大就擠成好幾列
+       （2026-09-17 使用者回報）。層級＝編號是主角(深色)、種類與規格是配角(小字淡色) */
+    .ft-chips { display:inline-flex; flex-wrap:wrap; gap:4px; align-items:center; vertical-align:middle; }
+    .ft-chip { display:inline-flex; align-items:center; gap:3px; background:#fff; border:1px solid var(--amber-d);
+               border-radius:10px; padding:0 3px 0 8px; font-size:12px; color:var(--ink); line-height:1.7; }
+    .ft-chip .ft-cat { font-size:11px; font-weight:normal; color:#8a6a45; }
+    .ft-chip .ft-no  { color:var(--ink); }
+    .ft-chip .ft-x { border:0; background:transparent; color:#C0703A; font-size:13px; line-height:1; padding:0 2px; }
     .ft-chip .ft-x:hover { color:#DD5138; }
     .ft-none { color:#C0703A; font-style:italic; font-size:13px; }
-    /* 量具挑選跳窗：維持原本「① 類型 → ② 編號」兩層大按鈕，差別是編號可連續點多支 */
-    #tp-picked { background:var(--cream); border:1px solid var(--line); border-radius:6px; padding:6px 9px; margin-bottom:10px;
-                 display:flex; flex-wrap:wrap; gap:6px; align-items:center; min-height:38px; }
+    /* 量具挑選跳窗：維持原本「① 類型 → ② 編號」兩層大按鈕，差別是編號可連續點多支。
+       寬度固定 720px（不用 vw，否則會蓋過側邊選單）：預設 600px 時已選標籤一列只放得下兩個 */
+    #toolPickModal .modal-dialog { width:720px; max-width:96%; }
+    #tp-picked { background:var(--cream); border:1px solid var(--line); border-radius:6px; padding:5px 8px; margin-bottom:10px;
+                 display:flex; flex-wrap:wrap; gap:4px; align-items:center; min-height:30px;
+                 max-height:96px; overflow:auto; }   /* 選很多支時自己捲，不把下面的類型/編號按鈕擠下去 */
+    #tp-picked > b { flex:0 0 auto; }
     #tp-picked .ft-chip { background:#fff; }
     .tpick-grid button.tp-cat.has-sel { border-color:var(--amber-d); background:#FFF3E2; }
     .tpick-grid button.tp-no.on { background:var(--amber); border-color:var(--amber-d); }
@@ -2399,12 +2405,18 @@ $(function(){
         for(var i=0;i<TOOL_INSTANCES.length;i++){ if(TOOL_INSTANCES[i].id===String(id)) return TOOL_INSTANCES[i]; }
         return null;
     }
-    // 量具編號的統一顯示格式：編號(規格)。舊資料編號本身已內含規格（例 A-002-Q (25-50mm)）就不重複附加
+    // 量具編號的統一顯示格式：編號(規格)。舊資料編號本身已內含規格（例 A-002-Q (25-50mm)）就不重複附加。
+    // 比對要逐詞看、不能只比整串：「H-003-Q 三點式(20-25mm)」配上規格「20-25mm 三點式」時，
+    // 整串比不到就會接成「H-003-Q 三點式(20-25mm)(20-25mm 三點式)」——同一件事印兩次，標籤還特別長。
     function toolNoSpec(t){
         if(!t) return '';
         var no=String(t.no||'');
         if(!t.spec) return no;
-        if(no.replace(/\s+/g,'').toLowerCase().indexOf(t.spec.replace(/\s+/g,'').toLowerCase())>=0) return no;
+        var flat=no.replace(/\s+/g,'').toLowerCase();
+        var words=String(t.spec).toLowerCase().split(/\s+/).filter(function(w){ return w!==''; });
+        var allIn=words.length>0;
+        for(var i=0;i<words.length;i++){ if(flat.indexOf(words[i].replace(/\s+/g,''))<0){ allIn=false; break; } }
+        if(allIn) return no;
         return no+'('+t.spec+')';
     }
     // 本單使用量具的一行顯示字串（列印／CSV／歷程明細共用）：「類型 編號(規格)、類型 編號」

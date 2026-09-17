@@ -235,9 +235,16 @@ if (!function_exists('qc_form_tools_label')) {
         foreach (($rows ?: []) as $t) {
             $no = trim((string)($t['no'] ?? ''));
             $spec = trim((string)($t['spec'] ?? ''));
-            // 舊資料的規格常被人工寫進編號括號裡（例 A-002-Q (25-50mm)）→ 不要再重複附加
-            if ($spec !== '' && mb_strpos(str_replace(' ', '', $no), str_replace(' ', '', $spec)) === false) {
-                $no .= '(' . $spec . ')';
+            // 舊資料的規格常被人工寫進編號括號裡（例 A-002-Q (25-50mm)）→ 不要再重複附加。
+            // 逐詞比對（與前端 toolNoSpec() 同一套規則）：「H-003-Q 三點式(20-25mm)」配規格
+            // 「20-25mm 三點式」時，只比整串會比不到而印成兩次。
+            if ($spec !== '') {
+                $flat = str_replace(' ', '', $no);
+                $allIn = true;
+                foreach (preg_split('/\s+/u', $spec, -1, PREG_SPLIT_NO_EMPTY) as $w) {
+                    if (mb_strpos($flat, $w) === false) { $allIn = false; break; }
+                }
+                if (!$allIn) $no .= '(' . $spec . ')';
             }
             $cat = trim((string)($t['cat'] ?? ''));
             $parts[] = ($cat !== '' ? $cat . ' ' : '') . $no;
