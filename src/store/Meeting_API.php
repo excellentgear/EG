@@ -73,6 +73,25 @@ function meeting_items(PDO $db, int $id): array {
     $st->execute([$id]);
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
+/* 出席人員的「其餘兼任職務」(2026-09-17)：純顯示欄位，存 JSON 陣列 [{d:部門,p:職稱}]。
+   前端存檔會把整份名單刪掉重建，**這一欄一定要跟著來回帶**，否則內部稽核帶進來的兼任職務
+   會在使用者第一次按下儲存時安靜消失。這裡同時當守門：不是預期格式一律存 NULL(鐵律8)。 */
+function meeting_alt_posts_clean($raw): ?string {
+    if ($raw === null || $raw === '' || $raw === '[]') return null;
+    $arr = is_array($raw) ? $raw : json_decode((string)$raw, true);
+    if (!is_array($arr)) return null;
+    $out = [];
+    foreach ($arr as $x) {
+        if (!is_array($x)) continue;
+        $d = trim((string)($x['d'] ?? '')); $p = trim((string)($x['p'] ?? ''));
+        if ($d === '' && $p === '') continue;
+        $out[] = ['d' => mb_substr($d, 0, 30), 'p' => mb_substr($p, 0, 30)];
+        if (count($out) >= 5) break;          // 一個人掛五個以上職務是資料錯誤，不讓它撐爆欄位
+    }
+    if (!$out) return null;
+    $js = json_encode($out, JSON_UNESCAPED_UNICODE);
+    return (mb_strlen($js) > 250) ? null : $js;
+}
 function meeting_attendees(PDO $db, int $id): array {
     $st = $db->prepare("SELECT a.*, d.sort_order AS dept_sort, p.sort_order AS pos_sort
                         FROM meeting_attendee a
@@ -454,14 +473,15 @@ case 'save': {
         $oq->execute([$id]);
         foreach ($oq->fetchAll(PDO::FETCH_ASSOC) as $o) $old[(int)$o['user_id']] = $o;
         $db->prepare("DELETE FROM meeting_attendee WHERE meeting_id=?")->execute([$id]);
-        $insA = $db->prepare("INSERT INTO meeting_attendee (meeting_id,user_id,user_name,dept_name,position_name,is_chair,signed,signed_at)
-                              VALUES (?,?,?,?,?,?,?,?)");
+        $insA = $db->prepare("INSERT INTO meeting_attendee (meeting_id,user_id,user_name,dept_name,position_name,alt_posts,is_chair,signed,signed_at)
+                              VALUES (?,?,?,?,?,?,?,?,?)");
         foreach ($attendees as $a) {
             $auid = (int)($a['user_id'] ?? 0);
             if ($auid <= 0) continue;
             $o = $old[$auid] ?? null;
             $insA->execute([$id, $auid, trim((string)($a['user_name'] ?? '')) ?: null,
                 trim((string)($a['dept_name'] ?? '')) ?: null, trim((string)($a['position_name'] ?? '')) ?: null,
+                meeting_alt_posts_clean($a['alt_posts'] ?? null),
                 $auid === $chairUid ? 1 : 0, $o ? (int)$o['signed'] : 0, $o ? $o['signed_at'] : null]);
         }
 

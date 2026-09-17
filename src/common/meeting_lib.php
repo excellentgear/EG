@@ -61,6 +61,7 @@ function meeting_ensure_schema(PDO $db): void {
         user_name VARCHAR(50) NULL,
         dept_name VARCHAR(50) NULL,
         position_name VARCHAR(50) NULL,
+        alt_posts VARCHAR(255) NULL COMMENT '其餘兼任職務(純顯示用 JSON，元素 d=部門 p=職稱)；名單與簽到表多行顯示，圖章一律只吃 dept_name/position_name',
         is_chair TINYINT(1) NOT NULL DEFAULT 0,
         signed TINYINT(1) NOT NULL DEFAULT 0,
         signed_at DATETIME NULL,
@@ -107,6 +108,19 @@ function meeting_ensure_schema(PDO $db): void {
         if ($c === 0) {
             $db->exec("ALTER TABLE meeting_item ADD COLUMN owner_users VARCHAR(200) NULL
                        COMMENT '直接指定負責人員 user.id 逗號分隔(與owner_depts二擇一,有值時完全取代部門判定)' AFTER owner_dept_names");
+        }
+    } catch (Throwable $e) {}
+    /* 出席人員的「其餘兼任職務」(2026-09-17 使用者要求)：內部稽核的稽核小組是「一筆職務一列」，
+       同一個人可能掛兩個職務(例 何沐桐＝生管組 組長＋技術課 工程師)，但出席名單是一人一列，
+       只印一個職務會讓使用者對不上小組名單(11 筆職務 vs 9 列)。
+       這一欄**純顯示用**：名單與簽到表的部門/職稱欄多行列出，**圖章一律只吃 dept_name/position_name**
+       (章面 schema 是「{部門} {姓名}」，塞兩個職務會爆版)。 */
+    try {
+        $c = (int)$db->query("SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='meeting_attendee' AND COLUMN_NAME='alt_posts'")->fetchColumn();
+        if ($c === 0) {
+            $db->exec("ALTER TABLE meeting_attendee ADD COLUMN alt_posts VARCHAR(255) NULL
+                       COMMENT '其餘兼任職務(純顯示用 JSON)；圖章不吃' AFTER position_name");
         }
     } catch (Throwable $e) {}
     // 2026-08-06使用者明確要求：送出時不再因負責部門/指定人員未現場簽名而擋下，改為擴大通知相關人員回簽，

@@ -827,7 +827,7 @@ function openEdit(id){
         $('#edSubject').val(m.subject); $('#edDate').val(fmtDate(m.meeting_date));
         $('#edStart').val(m.start_time||''); $('#edEnd').val(m.end_time||''); $('#edLoc').val(m.location||'');
         $('#edRecorder').val(m.recorder_name||'');
-        ATT = (res.attendees||[]).map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name, position_name:a.position_name||'', signed:+a.signed===1?1:0}; });
+        ATT = (res.attendees||[]).map(function(a){ return {user_id:+a.user_id, user_name:a.user_name, dept_name:a.dept_name, position_name:a.position_name||'', alt_posts:a.alt_posts||'', signed:+a.signed===1?1:0}; });
         ITEMS_D = []; ITEMS_G = []; ITEMS_A = [];
         (res.items||[]).forEach(function(it){
             var row = {item_id:it.item_id, content:it.content, due_date:fmtDate(it.due_date),
@@ -920,10 +920,30 @@ function attDel(i){
     renderAtt(); renderChairSel();
     if (was) $('#attDept').trigger('change');
 }
+/* 出席人員的部門／職稱顯示(2026-09-17 使用者要求)：同一個人可能掛兩個職務(內部稽核的稽核小組是
+   「一筆職務一列」，帶進會議時是一人一列)，多出來的職務存在 meeting_attendee.alt_posts(純顯示用)。
+   使用者指定**要換行、不要連著顯示**，且部門與職稱兩欄逐行對齊，橫著讀就是「第一個部門 職稱」。
+   **圖章一律只吃 dept_name/position_name**(章面 schema 是「{部門} {姓名}」，塞兩個會爆版)。 */
+function attAltPosts(a){
+    if (!a || !a.alt_posts) return [];
+    var v = a.alt_posts;
+    if (typeof v === 'string') { try { v = JSON.parse(v); } catch(e){ return []; } }
+    return (v && v.length) ? v : [];
+}
+function attDeptCell(a){
+    var lines = [esc(a.dept_name||'')];
+    attAltPosts(a).forEach(function(x){ lines.push(esc(x.d||'')); });
+    return lines.join('<br>');
+}
+function attPosCell(a, dash){
+    var lines = [esc(a.position_name|| (dash||''))];
+    attAltPosts(a).forEach(function(x){ lines.push(esc(x.p||'')); });
+    return lines.join('<br>');
+}
 function renderAtt(){
     var h = '';
     ATT.forEach(function(a,i){
-        h += '<tr><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'—')+'</td><td class="t-left">'+esc(a.user_name||'')
+        h += '<tr><td>'+attDeptCell(a)+'</td><td>'+attPosCell(a,'—')+'</td><td class="t-left">'+esc(a.user_name||'')
            + (+a.signed===1 ? ' <span style="color:#7a5217;font-size:11px;">（已簽到）</span>' : '') + '</td>'
            + '<td><span class="att-del" onclick="attDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
     });
@@ -1529,7 +1549,7 @@ function viewHtml(res){
     h += '<h5>出席人員／簽到</h5><table><tr><th>部門</th><th>職稱</th><th>姓名</th><th>簽到</th></tr>';
     (res.attendees||[]).forEach(function(a){
         var signed = +a.signed === 1;
-        h += '<tr data-uid="'+a.user_id+'"><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td>'
+        h += '<tr data-uid="'+a.user_id+'"><td>'+attDeptCell(a)+'</td><td>'+attPosCell(a)+'</td>'
            + '<td>'+esc(a.user_name||'')+'</td>'
            + '<td>'+(signed ? '<span class="sign-ok">'+((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name,dispDate(m.meeting_date),false,mStampSchema(),a.dept_name,a.position_name):'<i class="fa fa-check"></i>')
                 + ' <span style="font-size:11px;" title="實際簽到時間(僅供稽核，蓋章日期一律採會議日期)">'+esc(String(a.signed_at||'').substr(0,16))+'</span>'
@@ -2172,7 +2192,7 @@ function signSheetPageHtml(m, attendees, withSignatures, docNoMode){
             var signed = +a.signed===1;
             sigHtml = signed ? ((window.EGStamp&&EGStamp.stamp)?EGStamp.stamp(a.user_name, dispDate(m.meeting_date), false, mStampSchema(), a.dept_name, a.position_name):esc(a.user_name)) : '';
         }
-        return '<tr><td>'+(i+1)+'</td><td>'+esc(a.dept_name||'')+'</td><td>'+esc(a.position_name||'')+'</td><td>'+esc(a.user_name||'')+'</td><td>'+sigHtml+'</td></tr>';
+        return '<tr><td>'+(i+1)+'</td><td>'+attDeptCell(a)+'</td><td>'+attPosCell(a)+'</td><td>'+esc(a.user_name||'')+'</td><td>'+sigHtml+'</td></tr>';
     }).join('');
     var signTitle = (META.as_doc_signsheet && META.as_doc_signsheet.doc_name) ? META.as_doc_signsheet.doc_name : '會議簽到表';
     return '<div class="pt-head"><div class="co">'+esc(META.company_name||'')+'</div><div class="tt">'+esc(signTitle)+'</div></div>'

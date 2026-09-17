@@ -935,6 +935,32 @@ case 'check_save_items': {
 
     $items = json_decode((string)($_POST['items'] ?? '[]'), true);
     if (!is_array($items)) jerr('格式錯誤');
+
+    /* 稽核人事後可改（2026-09-17 使用者要求；製表人 2026-09-14 就開放了，稽核人一直只有建檔當下決定，
+       補歷史紙本或換人接手時只能眼睜睜看著印錯人）。
+       ①**沒送這個欄位＝舊呼叫端，一個字都不要動**；送了空字串才是「真的要清掉」（與製表人同語意）。
+       ②資格一律用**這張表的稽核日期**回推（ia_resolve_post 的第四個參數＝ai-rules/22），
+         用今天判定的話，補舊表時當時有資格、現在已離職或調職的人一律存不進去。
+       ③跟原本一模一樣＝沒有更動，不重新驗資格（否則舊表連改個標題都存不回去）。
+       ④前端擋一次、這裡用同一支 ia_resolve_post() 再擋一次（鐵律8）。
+       **解析一定要在 beginTransaction 之前**：ia_resolve_post() 會一路走到「AS 文件負責人自動具備稽核員
+       資格」那段，裡面有 CREATE TABLE IF NOT EXISTS＝DDL，在交易中執行會造成隱式 commit，
+       接著那句 $db->commit() 就會拋「There is no active transaction」——
+       症狀是**資料其實寫進去了、畫面卻收到 HTTP 500 空回應**（2026-09-17 實測踩到）。 */
+    $ad = iaDate($_POST['check_date'] ?? '');
+    $auditorSet = null;                       // null＝不動；['clear'=>1]＝清掉；否則＝要換成這一位
+    if (array_key_exists('auditor_key', $_POST)) {
+        $akey = trim((string)$_POST['auditor_key']);
+        $asOf = $ad ?: (string)$k['check_date'];
+        if ($akey === '') {
+            $auditorSet = ['clear' => 1];
+        } elseif ($akey !== ia_post_key((int)$k['auditor_id'], (int)$k['auditor_dept_id'], (int)$k['auditor_position_id'])) {
+            $ap = ia_resolve_post($db, $akey, 'auditor', $asOf);
+            if (!$ap) jerr('稽核人在稽核日期（' . $asOf . '）當時沒有該職務的稽核員資格');
+            $auditorSet = $ap;
+        }
+    }
+
     $db->beginTransaction();
     try {
         $upd = $db->prepare("UPDATE ia_check_item SET result=?, evidence=?, remark=?, col_c=?, col_d=?
@@ -951,9 +977,19 @@ case 'check_save_items': {
                            mb_substr(trim((string)($it['col_d'] ?? '')), 0, 255) ?: null,
                            $iid, $kid]);
         }
-        $ad = iaDate($_POST['check_date'] ?? '');
         $db->prepare("UPDATE ia_check SET title=?, check_date=COALESCE(?, check_date), updated_at=NOW() WHERE check_id=?")
            ->execute([mb_substr(trim((string)($_POST['title'] ?? '')), 0, 150) ?: null, $ad, $kid]);
+        if ($auditorSet !== null) {
+            if (!empty($auditorSet['clear'])) {
+                $db->prepare("UPDATE ia_check SET auditor_id=NULL, auditor_name=NULL,
+                                  auditor_dept_id=NULL, auditor_position_id=NULL WHERE check_id=?")->execute([$kid]);
+            } else {
+                $db->prepare("UPDATE ia_check SET auditor_id=?, auditor_name=?, auditor_dept_id=?, auditor_position_id=?
+                               WHERE check_id=?")
+                   ->execute([$auditorSet['user_id'], $auditorSet['user_name'],
+                              $auditorSet['dept_id'], $auditorSet['position_id'], $kid]);
+            }
+        }
         $db->commit();
         jout(['saved' => true]);
     } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
@@ -1562,6 +1598,10 @@ case 'report_approve': {
 /* ============================ 會議紀錄串接（不重複建立，走既有模組） ============================ */
 case 'meeting_create': {
     iaReqAdmin($perms);
+    /* meeting_attendee.alt_posts（兼任職務顯示欄）由會議模組的 ensure 建立＝唯一實作。
+       **一定要在 beginTransaction 之前呼叫**：裡面是 DDL，在交易中執行會造成隱式 commit。 */
+    require_once $document_root . '/EGsystem/src/common/meeting_lib.php';
+    meeting_ensure_schema($db);
     $cid  = (int)($_POST['case_id'] ?? 0);
     $kind = (string)($_POST['kind'] ?? '');           // pre=事前會議 / end=結束會議
     if (!in_array($kind, ['pre', 'end'], true)) jerr('會議種類不正確');
@@ -1590,21 +1630,10 @@ case 'meeting_create': {
     $etime = $kind === 'end' ? ($c['end_meet_end'] ?: null)   : null;
     $place = $kind === 'end' ? ($c['end_meet_place'] ?: null) : null;
 
-    /* 主席固定＝稽核組長（使用者要求 2026-09-16）：優先用這張單指定的稽核組長，
-       沒指定才用該年度稽核小組裡 role=leader 的那位，再沒有才退回建立者。 */
-    $team    = ia_team_get($db, $year);
-    $teamLead = null;
-    foreach ($team as $m) if ($m['role'] === 'leader') { $teamLead = $m; break; }
-    $chairId = (int)($c['leader_id'] ?? 0) ?: (int)($teamLead['user_id'] ?? 0) ?: $uid;
-    $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$chairId]);
-    $chairName = (string)($q->fetchColumn() ?: $uname);
-    // 主席「以哪個職務」出席：稽核組長那一列存的職務優先（圖章與名單的部門職稱才對得起來）
-    $chairPost = null;
-    if ((int)($c['leader_id'] ?? 0) === $chairId && (int)($c['leader_dept_id'] ?? 0)) {
-        $chairPost = ['dept_id' => (int)$c['leader_dept_id'], 'position_id' => (int)$c['leader_position_id']];
-    } elseif ($teamLead && (int)$teamLead['user_id'] === $chairId) {
-        $chairPost = ['dept_id' => (int)$teamLead['dept_id'], 'position_id' => (int)$teamLead['position_id']];
-    }
+    /* 主席固定＝稽核組長、出席人員一律走共用的 ia_meeting_attendees_apply()
+       （建立會議與「依目前小組重新帶入」共用同一份規則＝鐵律4）。 */
+    $team  = ia_team_get($db, $year);
+    $chair = ia_meeting_chair($db, $c, $team, $uid, $uname);
 
     $db->beginTransaction();
     try {
@@ -1613,81 +1642,61 @@ case 'meeting_create': {
                           created_at, created_by, created_by_name)
                       VALUES (?,?,?,?,?,?,?,?,?, 'draft', NOW(), ?, ?)")
            ->execute([$subject, $mdate, $stime, $etime, $place,
-                      $chairId, $chairName, $uid, $uname, $uid, $uname]);
+                      $chair['id'], $chair['name'], $uid, $uname, $uid, $uname]);
         $mid = (int)$db->lastInsertId();
 
-        /* 與會人員（使用者要求 2026-09-16）：
-             ①**該年度的稽核小組成員**（主席＝稽核組長）
-             ②小組還沒建立時，退回舊規則＝這張單各受稽單位的稽核員與陪檢員
-                （否則小組沒建就變成一場沒有人的會議，比帶錯人更難用）
-           每個人一律記下「他是以哪個職務出席」，部門職稱再依**會議日期**回推（ai-rules/22）——
-           不帶職務的話 ia_identity_asof() 只會挑職級最高的那一個兼任職，跟通知單上挑的職務對不起來
-           （2026-09-16 使用者回報「會議紀錄上的部門與人員不正確」的根因）。 */
-        $seen = []; $att = [];
-        $push = function ($id, $name, $dept = 0, $pos = 0) use (&$seen, &$att) {
-            $id = (int)$id;
-            if (!$id || isset($seen[$id])) return;
-            $seen[$id] = 1;
-            $att[] = ['id' => $id, 'name' => (string)$name, 'dept_id' => (int)$dept, 'position_id' => (int)$pos];
-        };
-        $push($chairId, $chairName, (int)($chairPost['dept_id'] ?? 0), (int)($chairPost['position_id'] ?? 0));
-        $fromTeam = false;
-        if ($team) {
-            $fromTeam = true;
-            foreach ($team as $m) $push($m['user_id'], $m['user_name'], (int)$m['dept_id'], (int)$m['position_id']);
-        } else {
-            $q = $db->prepare("SELECT * FROM ia_case_dept WHERE case_id=? ORDER BY sort_order");
-            $q->execute([$cid]);
-            $cdRows = $q->fetchAll(PDO::FETCH_ASSOC);
-            $pmap = ia_cd_people_map($db, array_map(function ($r) { return (int)$r['cd_id']; }, $cdRows), $cdRows);
-            foreach ($cdRows as $r) {
-                $pp = $pmap[(int)$r['cd_id']] ?? ['auditor' => [], 'escort' => []];
-                foreach (array_merge($pp['auditor'], $pp['escort']) as $x) {
-                    $push($x['user_id'], $x['user_name'], (int)($x['dept_id'] ?? 0), (int)($x['position_id'] ?? 0));
-                }
-            }
-        }
-        /* 每個人印哪一個部門職稱（使用者 2026-09-16 拍板）：
-           ①名單上指定的那個職務，**必須在會議日期當天真的成立**才採用；
-           ②**當天還不是那個職務，就印他當時真正的身分**，不可以把名單上的職務硬印上去
-             （例：高志宏的「品管課 課長」是 2025-12-09 才兼任的，2025-11-03 的會議就該印技術課工程師）
-             ——使用者原話「若當時還不是品管課長，那就不該顯示為品管課長，避免補舊資料時身分錯亂」。
-           ③但這件事要**主動回報**，不能安靜換掉：下面會把被換掉的人收進 $shifted 回給前端提示，
-             否則使用者會以為系統印錯（這正是他這次回報的情境）。
-           名稱一律用 id 回查**現名**，不要用快照裡凍結的舊名（部門早就由「技術部」改名「技術課」）。 */
-        $postByKey = $nameById = [];
-        foreach (eg_people_posts_asof($db, [], $mdate) as $p) {
-            $postByKey[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = $p;
-            $nameById[(int)$p['id']] = (string)$p['user_cname'];
-        }
-        $shifted = [];
-        $ins = $db->prepare("INSERT INTO meeting_attendee (meeting_id, user_id, user_name, dept_name,
-                                 position_name, is_chair, signed) VALUES (?,?,?,?,?,?,0)");
-        foreach ($att as $a) {
-            $nm  = $nameById[$a['id']] ?? $a['name'];
-            $key = ia_post_key($a['id'], $a['dept_id'], $a['position_id']);
-            if (($a['dept_id'] || $a['position_id']) && isset($postByKey[$key])) {
-                $dept = ia_dept_name_now($db, (int)$a['dept_id']);
-                $pos  = ia_position_name_now($db, (int)$a['position_id']);
-            } else {
-                $idt = ia_identity_asof($db, $a['id'], $mdate);
-                $dept = $idt['dept']; $pos = $idt['position'];
-                if ($a['dept_id'] || $a['position_id']) {
-                    $want = trim(ia_dept_name_now($db, (int)$a['dept_id']) . ' ' . ia_position_name_now($db, (int)$a['position_id']));
-                    $got  = trim($dept . ' ' . $pos);
-                    if ($want !== '' && $want !== $got) {
-                        $shifted[] = ['name' => $nm, 'listed' => $want, 'actual' => ($got !== '' ? $got : '（當時查不到職務）')];
-                    }
-                }
-            }
-            $ins->execute([$mid, $a['id'], $nm, $dept ?: null, $pos ?: null,
-                           $a['id'] === $chairId ? 1 : 0]);
-        }
+        $r = ia_meeting_attendees_apply($db, $mid, $cid, $team, $chair, $mdate);
+
         $db->prepare("UPDATE ia_case SET `$col`=?, updated_at=NOW() WHERE case_id=?")->execute([$mid, $cid]);
         $db->commit();
-        jout(['meeting_id' => $mid, 'existed' => false, 'attendees' => count($att),
-              'from_team' => $fromTeam, 'shifted' => $shifted, 'meeting_date' => $mdate]);
+        jout(['meeting_id' => $mid, 'existed' => false, 'attendees' => $r['count'],
+              'from_team' => $r['from_team'], 'shifted' => $r['shifted'], 'dropped' => $r['dropped'],
+              'meeting_date' => $mdate]);
     } catch (Throwable $e) { $db->rollBack(); jerr('建立會議紀錄失敗：' . $e->getMessage(), 500); }
+}
+
+/* 依目前的稽核小組「重新帶入與會人員」（2026-09-17 使用者要求）：
+   會議建立之後才改小組時，原本只能「解除連結→再建一次」，會多出一筆用不到的會議紀錄。
+   這裡只重寫 meeting_attendee，**不動會議本身**（主題／日期／地點／會議要項都保留），
+   已經簽到的人保留簽到狀態；被移出名單而且簽到過的人會回報給前端講明。 */
+case 'meeting_sync_att': {
+    iaReqAdmin($perms);
+    /* meeting_attendee.alt_posts（兼任職務顯示欄）由會議模組的 ensure 建立＝唯一實作。
+       **一定要在 beginTransaction 之前呼叫**：裡面是 DDL，在交易中執行會造成隱式 commit。 */
+    require_once $document_root . '/EGsystem/src/common/meeting_lib.php';
+    meeting_ensure_schema($db);
+    $cid  = (int)($_POST['case_id'] ?? 0);
+    $kind = (string)($_POST['kind'] ?? '');
+    if (!in_array($kind, ['pre', 'end'], true)) jerr('會議種類不正確');
+    $st = $db->prepare("SELECT * FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$cid]); $c = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$c) jerr('找不到這張稽核通知單', 404);
+    $col = $kind === 'pre' ? 'pre_meeting_id' : 'end_meeting_id';
+    $mid = (int)($c[$col] ?? 0);
+    if (!$mid) jerr('這張通知單還沒有連結會議紀錄');
+    $mq = $db->prepare("SELECT meeting_id, meeting_date, status FROM meeting_record WHERE meeting_id=?");
+    $mq->execute([$mid]); $m = $mq->fetch(PDO::FETCH_ASSOC);
+    if (!$m) jerr('找不到該筆會議紀錄，請先解除連結');
+    // 已送簽核／已完成的會議不給改名單（那是已經在跑簽核的正式文件）
+    if (!in_array((string)$m['status'], ['draft', 'rejected'], true)) {
+        jerr('這筆會議紀錄已經送出簽核（狀態：' . $m['status'] . '），出席名單已鎖定，無法重新帶入');
+    }
+
+    $year  = (int)$c['year'];
+    $team  = ia_team_get($db, $year);
+    $chair = ia_meeting_chair($db, $c, $team, $uid, $uname);
+    $mdate = (string)$m['meeting_date'] ?: $today;
+
+    $db->beginTransaction();
+    try {
+        $r = ia_meeting_attendees_apply($db, $mid, $cid, $team, $chair, $mdate);
+        $db->prepare("UPDATE meeting_record SET chair_user_id=?, chair_name=?, updated_at=NOW() WHERE meeting_id=?")
+           ->execute([$chair['id'], $chair['name'], $mid]);
+        $db->commit();
+        jout(['meeting_id' => $mid, 'attendees' => $r['count'], 'from_team' => $r['from_team'],
+              'shifted' => $r['shifted'], 'dropped' => $r['dropped'], 'removed' => $r['removed'],
+              'meeting_date' => $mdate]);
+    } catch (Throwable $e) { $db->rollBack(); jerr('重新帶入與會人員失敗：' . $e->getMessage(), 500); }
 }
 
 case 'meeting_link': {

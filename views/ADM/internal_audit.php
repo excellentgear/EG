@@ -252,6 +252,21 @@ $roleLabel = ia_role_label($perms);
         .nk-seldoc { margin-top:5px; padding-top:5px; border-top:1px dashed #E8D5B5;
             font-size:12px; color:#7a6444; max-height:92px; overflow:auto; }
         .nk-seldoc b { color:#8A5A2B; }
+        /* 右側「已選擇」欄（2026-09-17）：標籤只是聚焦用，選好的表單一律留在這裡，
+           取消標籤不會把它們洗掉，使用者隨時看得到這次到底要建哪幾張表單。 */
+        .nk-selside { flex:0 0 260px; width:260px; display:flex; flex-direction:column;
+                      border:1px solid #E8D5B5; border-radius:5px; background:#FDF6EA; }
+        .nk-selside-hd { flex:0 0 auto; padding:6px 8px; border-bottom:1px solid #EEDCC0; background:#F7EEDF; }
+        .nk-selside-hd b { color:#8A5A2B; font-size:13px; }
+        .nk-selside-hd .sub { font-size:11px; color:#a08356; display:block; margin-top:2px; }
+        .nk-selside-body { flex:1 1 auto; overflow-y:auto; padding:4px 6px 8px; max-height:420px; }
+        .nk-selrow { display:flex; gap:6px; align-items:flex-start; padding:4px 2px;
+                     border-bottom:1px dashed #E8D5B5; font-size:12px; color:#5b3a1e; }
+        .nk-selrow .tx { flex:1 1 auto; min-width:0; word-break:break-all; }
+        .nk-selrow .no { font-weight:bold; color:#8A5A2B; }
+        .nk-selrow .dp { display:block; color:#a08356; font-size:11px; }
+        .nk-selrow .x  { flex:0 0 auto; color:#C4442D; cursor:pointer; font-weight:bold; }
+        .nk-selside-ft { flex:0 0 auto; padding:5px 8px; border-top:1px solid #EEDCC0; font-size:12px; color:#8a6d45; }
         .pick-wrap label.dim { color:#b0a390; }
         .pick-wrap label.dim .nk-task { opacity:.55; }
         /* 勾選清單一律對齊：勾選框固定欄寬、名稱固定欄寬、右側說明自己一欄，
@@ -390,7 +405,7 @@ $roleLabel = ia_role_label($perms);
                 <button id="btnCheckNew" class="btn-warm"><i class="fa fa-plus"></i> 建立查檢表</button>
                 <?php endif; ?>
             </div>
-            <div class="ia-hint">先選<b>種類</b>，畫面才會長出該種類要填的欄位與挑題方式：<b>AS稽核查檢表</b>帶 AS9100 條文題庫（可用作業項目挑題，也可直接沿用系統稽核紀錄表的判定）、<b>系統稽核紀錄表</b>從左欄挑部門帶出該部門的表單、<b>績效執行稽核查檢表</b>自動帶去年整年的 KPI 與達成與否。判定「不合格」的開<b>內稽不符合通知單</b>、「沒達成」的開<b>異常矯正處理單</b>。</div>
+            <div class="ia-hint">先選<b>種類</b>，畫面才會長出該種類要填的欄位與挑題方式：<b>AS稽核查檢表</b>帶 AS9100 條文題庫、<b>系統稽核紀錄表</b>帶 AS 表單編號與名稱、<b>績效執行稽核查檢表</b>自動帶去年整年的 KPI 與達成與否。前兩種的<b>左欄標籤（部門／作業項目）只是把中間清單聚焦</b>，<b>不會自動勾選</b>；勾好的一律列在<b>最右側「已選擇」欄</b>，取消標籤不會把它們清掉。判定「不合格」的開<b>內稽不符合通知單</b>、「沒達成」的開<b>異常矯正處理單</b>。</div>
             <!-- 能自動建立的就自動建立，人工才要填的地方主動提醒（2026-09-14 使用者要求） -->
             <div class="ia-hint" id="checkAutoHint" style="display:none;background:#FDF0DC;border-color:#F0A24B;"></div>
             <div class="ia-pager" id="checkPager"></div>
@@ -477,8 +492,10 @@ $roleLabel = ia_role_label($perms);
             <li><b>③查檢表</b>：<b>先選種類</b>，畫面才會長出該種類要填的欄位與挑題方式；建立時填「建立（稽核）日期」，再勾這次要查的項目。
                 <b>建立查檢表預設一題都不勾</b>（2026-09-14 起），請先從左欄點選，或直接在右側逐題勾選。三種的差別：
                 <ul>
-                    <li><b>系統稽核紀錄表（2-GM-06-06）</b>：題目＝AS 文件裡的「表單」。<b>左欄挑部門</b>（依 AS 文件編號的部門代碼分類），右側就會勾起該部門的表單，再把不需要的取消勾選即可；每一列一併顯示這份表單對應到的<b>品質管理系統要求</b>，開不符合通知單時「違反條文」會自動帶入。逐列選受稽人、判定合格／不合格。</li>
-                    <li><b>AS稽核查檢表（2-GM-06-04）</b>：題目＝AS9100 條文題庫。可用<b>左側的作業項目標籤</b>（品管檢測／外包加工…）一鍵挑題（已選的標籤下方會列出它掛在哪幾份文件表單）；
+                    <li><b>系統稽核紀錄表（2-GM-06-06）</b>：稽核對象是「AS 表單」，建立跳窗的清單上<b>直接列表單編號與名稱</b>（品質管理系統要求改成滑鼠移上去才顯示，開不符合通知單時「違反條文」照樣自動帶入）。
+                        <b>左欄挑部門</b>（依 AS 文件編號的部門代碼分類）只是把中間清單<b>聚焦</b>到該部門的表單，<b>不會自動勾選</b>；要整批勾請按<b>「全選」</b>（只動目前顯示的），或勾上<b>「點標籤時自動勾選底下的表單」</b>。
+                        勾好的表單會列在<b>最右側「已選擇」欄</b>（編號／名稱／對應部門，可按 × 單筆取消）——<b>取消左欄的部門不會把已選的表單清掉</b>，所以可以一個部門一個部門挑完再一次建立。逐列選受稽人、判定合格／不合格。</li>
+                    <li><b>AS稽核查檢表（2-GM-06-04）</b>：題目＝AS9100 條文題庫，挑題方式與系統稽核紀錄表相同——<b>左側的作業項目標籤</b>（品管檢測／外包加工…）只負責把中間清單聚焦（已選的標籤下方會列出它掛在哪幾份文件表單），要勾請自己勾或按「全選」，已勾的列在最右側且不受標籤增減影響；
                         也可以在「自動判定來源」選一張已填好的<b>系統稽核紀錄表</b>，建立時就依它自動判定合格／不合格，並在「所見證據或建議」列出是哪幾份表單不合格（含 IA 單號）方便比對。</li>
                     <li><b>績效執行稽核查檢表（2-GM-06-03）</b>：稽核<b>去年一整年</b>的 KPI（2026 年建立＝稽核 2025 年度），<b>不分上下半年</b>。部門、指標、目標、受稽人（KPI 頁面設定的<b>擔當者</b>，兼任者取該指標登記部門的職稱）與<b>達成／沒達成全部自動判定</b>——該年度只要有<b>任一次</b>未達標就算沒達成。您只要確認建立日期與要查哪幾項。</li>
                 </ul>
@@ -793,10 +810,21 @@ $roleLabel = ia_role_label($perms);
                     <input type="text" id="nkFilter" placeholder="輸入關鍵字篩選…" style="border:1px solid #D8BE93;border-radius:4px;padding:3px 8px;font-size:13px;width:200px;">
                     <button id="nkAll" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全選</button>
                     <button id="nkNone" style="height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;">全不選</button>
+                    <label style="font-size:12px;color:#8a6d45;font-weight:normal;margin:0;cursor:pointer;">
+                        <input type="checkbox" id="nkAutoPick" data-eg-skip style="vertical-align:-1px;">
+                        點標籤時自動勾選底下的表單</label>
                     <span id="nkCount" style="font-size:12px;color:#8a6d45;"></span>
                 </div>
                 <div class="pick-wrap" id="nkPick" style="max-height:360px;"></div>
                 <div class="err-msg" id="errNkPick"></div>
+            </div>
+            <!-- 右欄：已選擇的項目（2026-09-17 使用者要求）。標籤／部門只負責「聚焦顯示」，
+                 選好的一律留在這裡，取消標籤不會連帶取消選取。 -->
+            <div class="nk-selside" id="nkSelSide">
+                <div class="nk-selside-hd"><b id="nkSelHd">已選擇的表單</b>
+                    <span class="sub" id="nkSelSub">從中間清單勾選，這裡就會列出來</span></div>
+                <div class="nk-selside-body" id="nkSelBody"></div>
+                <div class="nk-selside-ft"><a href="javascript:void(0)" id="nkSelClear" style="color:#C4442D;">全部取消選取</a></div>
             </div>
         </div>
     </div>
@@ -810,7 +838,7 @@ $roleLabel = ia_role_label($perms);
         <div class="ia-form" style="margin-bottom:10px;">
             <label>標題</label><div><input type="text" id="ckTitleInput"></div>
             <label>稽核日期</label><div><input type="date" id="ckDate"></div>
-            <label>稽核人</label><div><input type="text" id="ckAuditor" readonly></div>
+            <label>稽核人</label><div><select id="ckAuditor" data-eg-filter="輸入人員姓名篩選…"></select></div>
             <label>狀態</label><div><input type="text" id="ckStatus" readonly></div>
         </div>
         <div id="ckAutoBar" class="ia-hint" style="display:none;"></div>
@@ -823,6 +851,28 @@ $roleLabel = ia_role_label($perms);
         <button id="btnCheckReopen">取消結案</button>
         <button id="btnCheckSave">儲存</button>
         <button id="btnCheckDone" class="btn-warm">結案</button>
+    </div>
+</div></div>
+
+<!-- ============================ 一鍵開立不符合通知單（批次） ============================ -->
+<div class="ia-mask" id="ckBulkMask"><div class="ia-modal">
+    <div class="ia-mhead"><h4><i class="fa fa-magic"></i> 一鍵開立不符合通知單</h4><span class="x" data-close>&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint" id="ckBulkHint"></div>
+        <div class="ia-form">
+            <label>不合格類型<span style="color:#DD5138;">*</span></label>
+            <div><select id="ckBulkType"></select>
+                 <div class="err-msg" id="ckBulkTypeErr"></div>
+                 <div style="font-size:11px;color:#8a6d45;margin-top:2px;">紙本上這一欄是稽核員判斷的，系統不替您決定；這批先統一用同一種，開完可以逐張再改。</div></div>
+        </div>
+        <div class="ia-table-wrap" style="max-height:240px;">
+            <table class="ia-table"><thead><tr><th>項次</th><th>項目</th><th>受稽人</th></tr></thead>
+            <tbody id="ckBulkList"></tbody></table>
+        </div>
+    </div>
+    <div class="ia-mfoot">
+        <button data-close>取消</button>
+        <button id="btnCkBulkGo" class="btn-warm"><i class="fa fa-magic"></i> 開始開立</button>
     </div>
 </div></div>
 
@@ -2054,7 +2104,8 @@ function renderCaseMeeting(c){
         if (m) {
             h += esc(m.subject)+'　'+dispDate(m.meeting_date)
                + ' <span class="ia-op" onclick="openMeeting('+m.meeting_id+')"><i class="fa fa-external-link"></i> 開啟會議紀錄</span>';
-            if (admin) h += ' <span class="ia-op" onclick="unlinkMeeting(\''+k[0]+'\')">解除連結</span>';
+            if (admin) h += ' <span class="ia-op" onclick="syncMeetingAtt(\''+k[0]+'\')" title="依目前的稽核小組重新帶入出席人員；會議內容與已簽到狀態都保留"><i class="fa fa-refresh"></i> 重新帶入與會人員</span>'
+                          + ' <span class="ia-op" onclick="unlinkMeeting(\''+k[0]+'\')">解除連結</span>';
         } else {
             h += '<span style="color:#a08356;">尚未建立</span>';
             if (admin) h += ' <span class="ia-op" onclick="createMeeting(\''+k[0]+'\')"><i class="fa fa-plus"></i> 自動建立並開啟</span>';
@@ -2064,23 +2115,55 @@ function renderCaseMeeting(c){
     $('#cMeetingBox').html(h);
 }
 function openMeeting(id){ window.open('meeting_record.php?id='+id, '_blank'); }
+/* 帶人進會議時要主動講明兩件事（使用者要求，不可以安靜換掉）：
+   ①shifted＝名單上登記的職務在會議日期當天還不成立，已改印他「當時」真正的身分
+   ②dropped＝當天還沒兼任的那個職務沒有列出來（小組是一筆職務一列，會議是一人一列）
+   ③removed＝重新帶入時被移出名單、而且已經簽到過的人（他的簽到會跟著不見） */
+function meetingPeopleNotice(res){
+    var msg = [];
+    if (res.shifted && res.shifted.length) {
+        msg.push('下列人員在會議日期（' + dispDate(res.meeting_date) + '）當天還不是稽核小組名單上登記的那個職務，\n'
+               + '已改印他們「當時」真正的身分：\n'
+               + res.shifted.map(function(s){
+                     return '　・' + s.name + '：名單登記「' + s.listed + '」→ 當天實際「' + s.actual + '」';
+                 }).join('\n')
+               + '\n（這是刻意的：補舊資料時印上他當時還沒有的職稱會造成身分錯亂。\n'
+               + '　若確實是職務異動紀錄補登不完整，請到 員工管理 → 異動紀錄 補正。）');
+    }
+    if (res.dropped && res.dropped.length) {
+        msg.push('下列兼任職務在會議日期當天尚未成立，未列入出席名單：\n'
+               + res.dropped.map(function(d){ return '　・' + d.name + '：' + d.post; }).join('\n'));
+    }
+    if (res.removed && res.removed.length) {
+        msg.push('下列人員已不在目前的稽核小組名單內，已從出席名單移除（原本的簽到紀錄一併消失）：\n'
+               + '　' + res.removed.join('、'));
+    }
+    return msg;
+}
 function createMeeting(kind){
     if (!CASE_ID) { alert('請先儲存稽核通知單'); return; }
     $.post(API, {action:'meeting_create', case_id:CASE_ID, kind:kind}, function(res){
         if (!res.ok) { alert(res.error||'建立失敗'); return; }
-        /* 有人「會議當天還不是名單上那個職務」時一定要講出來，不可以安靜換掉——
-           使用者會以為系統印錯（2026-09-16 實際回報過：小組列品管課課長、會議印技術課工程師）。
-           印的是**當時真正的身分**才對，補舊資料時身分不能錯亂。 */
-        if (res.shifted && res.shifted.length) {
-            alert('會議紀錄已建立，但下列人員在會議日期（' + dispDate(res.meeting_date) + '）當天\n'
-                + '還不是稽核小組名單上登記的那個職務，已改印他們「當時」真正的身分：\n\n'
-                + res.shifted.map(function(s){
-                      return '　・' + s.name + '：名單登記「' + s.listed + '」→ 當天實際「' + s.actual + '」';
-                  }).join('\n')
-                + '\n\n（這是刻意的：補舊資料時印上他當時還沒有的職稱會造成身分錯亂。\n'
-                + '　若確實是職務異動紀錄補登不完整，請到 員工管理 → 異動紀錄 補正。）');
-        }
+        var msg = meetingPeopleNotice(res);
+        if (msg.length) alert('會議紀錄已建立（出席 '+(res.attendees||0)+' 人），但請注意：\n\n'+msg.join('\n\n'));
         openMeeting(res.meeting_id);
+        loadCases(function(){ openCase(CASE_ID); });
+    }, 'json');
+}
+/* 會議建立之後才改稽核小組時用這顆（2026-09-17 使用者要求）：只重寫出席人員，
+   會議本身與會議要項都不動、已簽到的人保留簽到狀態。 */
+function syncMeetingAtt(kind){
+    if (!CASE_ID) return;
+    if (!confirm('要依「目前的稽核小組」重新帶入【' + (kind==='pre'?'事前會議':'結束會議') + '】的出席人員嗎？\n\n'
+               + '・只會重寫出席人員名單，會議主題／日期／地點／會議要項都不會變動\n'
+               + '・已經簽到的人保留簽到狀態\n'
+               + '・已不在小組名單內的人會被移除（若他已簽到，簽到紀錄會一併消失）')) return;
+    $.post(API, {action:'meeting_sync_att', case_id:CASE_ID, kind:kind}, function(res){
+        if (!res.ok) { alert(res.error||'重新帶入失敗'); return; }
+        var msg = meetingPeopleNotice(res);
+        alert('已依目前的稽核小組重新帶入出席人員，共 '+(res.attendees||0)+' 人'
+            + (res.from_team ? '' : '（本年度尚未建立稽核小組，改用這張通知單的稽核員與陪檢員）')
+            + (msg.length ? '\n\n請注意：\n\n'+msg.join('\n\n') : ''));
         loadCases(function(){ openCase(CASE_ID); });
     }, 'json');
 }
@@ -2202,8 +2285,8 @@ $('#btnCheckNew').on('click', function(){
 });
 /* 先選種類，畫面再依種類長出對應的選項（2026-09-14 使用者要求）。 */
 var NK_KIND_HINT = {
-    as:     'AS稽核查檢表：題目＝AS9100 條文題庫。可從左欄用「作業項目」挑題；也可以指定一張已填好的系統稽核紀錄表，建立時自動判定合格／不合格。',
-    system: '系統稽核紀錄表：題目＝AS 文件裡的「表單」。請從左欄挑這次要稽核的部門，右側就會自動勾起該部門的表單，再把不需要的取消勾選即可。',
+    as:     'AS稽核查檢表：題目＝AS9100 條文題庫。左欄的「作業項目」只是把中間清單聚焦到相關條文（不會自動勾選），勾好的會列在最右側；也可以指定一張已填好的系統稽核紀錄表，建立時自動判定合格／不合格。',
+    system: '系統稽核紀錄表：稽核對象是「AS 表單」，清單上直接列表單編號與名稱。左欄挑部門＝把中間清單聚焦到該部門的表單（不會自動勾選），逐張勾或按「全選」；已選的表單列在最右側，取消部門不會把它們清掉。',
     kpi:    '績效執行稽核查檢表：稽核「去年一整年」的 KPI。部門／指標／目標／受稽人（擔當者）與達成／沒達成全部自動帶入，您只要確認建立日期與要查哪幾項。'
 };
 function kpiAuditYear(d){ var y = parseInt(String(d||META.today).substr(0,4),10)||0; return y-1; }
@@ -2242,6 +2325,7 @@ function loadSrcChecks(){
 function loadBank(){
     var kind = $('#nkKind').val();
     NK_TASKS = []; NK_CHECKED = {}; NK_GRP_OPEN = {};   // 換種類＝重來一次，不要把上一種的勾選帶過去
+    NK_AUTOPICK = false; $('#nkAutoPick').prop('checked', false);
     $('#nkTaskFilter').val('');
     $.getJSON(API, {action:'check_bank', kind:kind, year:YEAR, check_date:$('#nkDate').val()}, function(res){
         if (!res.ok) { $('#nkPick').html('<div class="ia-empty">'+esc(res.error||'載入失敗')+'</div>'); return; }
@@ -2254,14 +2338,20 @@ function loadBank(){
 function bankRow(kind, r){
     if (kind==='as')     return {id:+r.clause_id,  hdr:+r.is_header===1,
                                  text:r.clause_text, sub:r.doc_ref||'',
+                                 no:'', name:r.clause_text||'', dept:r.doc_ref||'',
                                  tags:(r.tasks||[]).map(function(t){ return t.task_name; }),
                                  badges:(r.tasks||[]).map(function(t){ return t.task_name; })};
-    if (kind==='system') return {id:+r.id, hdr:false, text:(r.doc_no||'')+'　'+(r.doc_name||''),
-                                 // 品質管理系統要求＝開不符合通知單時要填的「違反條文」，先讓使用者在這裡看到
-                                 sub:(r.clauses||[]).map(function(c){ return c.clause_text; }).join('；'),
+    // 系統稽核紀錄表：這張表稽核的是「表單」，所以列上就只印 **AS 表單編號＋名稱**
+    // （2026-09-17 使用者要求）。品質管理系統要求（條文）改成滑鼠移上去才看得到的提示，
+    // 資料本身沒有拿掉——開不符合通知單時的「違反條文」還是照樣自動帶入。
+    if (kind==='system') return {id:+r.id, hdr:false,
+                                 text:(r.doc_no||'')+'　'+(r.doc_name||''),
+                                 no:r.doc_no||'', name:r.doc_name||'', sub:'',
+                                 tip:(r.clauses||[]).map(function(c){ return c.clause_text; }).join('；'),
+                                 dept:r.dept_name||'未分類',
                                  tags:[r.dept_name||'未分類'], badges:[r.dept_name||'未分類']};
     var res = r.result==='ng' ? '沒達成' : (r.result==='ok' ? '達成' : '資料不足');
-    return {id:+r.indicator_id, hdr:false,
+    return {id:+r.indicator_id, hdr:false, no:'', name:r.name||'', dept:r.dept_name||'',
             text:(r.dept_name?r.dept_name+'　':'')+(r.name||''),
             sub:'目標：'+(r.target_text||'—')
                 +'　受稽人：'+(r.owner_name||'（KPI 未設定擔當者）')
@@ -2334,12 +2424,13 @@ function renderTaskPanel(){
             + '</div></div>');
         $('#nkTaskSide').show();
         if (NK_TASKS.length) {
-            $('#nkTaskSel').show().html('<span class="lb">已選部門 '+NK_TASKS.length+' 個：</span>'
+            $('#nkTaskSel').show().html('<span class="lb">聚焦中的部門 '+NK_TASKS.length+' 個（只影響中間顯示，不影響已選取的表單）：</span>'
                 + NK_TASKS.map(function(n){ return nkChip(n, true, true, n); }).join('')
                 + '<span class="nk-chip clear" data-clear="1">✕ 全部清除</span>');
         } else {
-            $('#nkTaskSel').show().html('<span class="lb">尚未選擇部門（預設一題都不勾）'
-                + '——請從左側點選這次要稽核的部門，右側就會勾起該部門的項目，再把不需要的取消勾選。</span>');
+            $('#nkTaskSel').show().html('<span class="lb">尚未選擇部門——從左側點一個部門，中間就只會顯示該部門的表單；'
+                + '<b>點部門不會自動勾選</b>，請在中間逐張勾，或按「全選」把目前顯示的整批勾起來。'
+                + '已勾好的會列在最右側，<b>取消部門也不會消失</b>。</span>');
         }
         return;
     }
@@ -2380,15 +2471,16 @@ function renderTaskPanel(){
     // 2026-09-14 使用者再回報「看不出來是哪個表單或程序書被選到」，故一併列出該項目掛在哪幾份文件。
     if (NK_TASKS.length) {
         var docs = nkTaskDocs();
-        $('#nkTaskSel').show().html('<span class="lb">已選作業項目 '+NK_TASKS.length+' 個：</span>'
+        $('#nkTaskSel').show().html('<span class="lb">聚焦中的作業項目 '+NK_TASKS.length+' 個（只影響中間顯示，不影響已選取的條文）：</span>'
             + NK_TASKS.map(function(n){ return nkChip(n, true, true); }).join('')
             + '<span class="nk-chip clear" data-clear="1">✕ 全部清除</span>'
             + '<div class="nk-seldoc">' + NK_TASKS.map(function(n){
                   return '<div><b>'+esc(n)+'</b>：'+esc((docs[n]||[]).join('、') || '（題庫裡沒有對應的文件）')+'</div>';
               }).join('') + '</div>');
     } else {
-        $('#nkTaskSel').show().html('<span class="lb">尚未選擇作業項目（預設一題都不勾）'
-            + '——請從左側點選要查的項目，或直接在右側逐題勾選。</span>');
+        $('#nkTaskSel').show().html('<span class="lb">尚未選擇作業項目——從左側點一個項目，中間就只會顯示相關條文；'
+            + '<b>點標籤不會自動勾選</b>，請在中間逐題勾，或按「全選」把目前顯示的整批勾起來。'
+            + '已勾好的會列在最右側，<b>取消標籤也不會消失</b>。</span>');
     }
 }
 /* 標籤群組展開／收合（預設全部收合，一百多顆標籤攤開會看不完） */
@@ -2397,19 +2489,44 @@ $(document).on('click', '#nkTaskGroups .nk-grp-hd', function(){
     NK_GRP_OPEN[g] = !NK_GRP_OPEN[g];
     renderTaskPanel();
 });
+/* 標籤／部門＝**只負責聚焦顯示**（2026-09-17 使用者要求，取代舊的「點標籤就整批勾起來」）：
+   ①點下去只是把中間清單縮到這個標籤底下的表單，**預設一張都不勾**
+   ②要整批勾就開上方「點標籤時自動勾選底下的表單」，或直接按「全選」（全選只動看得到的那幾列）
+   ③**取消標籤絕對不可以把已經選好的表單洗掉**——標籤是拿來找表單的，不是選取本身
+     （舊版每次點標籤都 NK_CHECKED={} 重來，使用者一移除標籤，剛剛挑好的就整批不見）。 */
 $(document).on('click', '#nkTaskGroups .nk-chip, #nkTaskSel .nk-chip', function(){
     if ($(this).data('clear')) { NK_TASKS = []; }
     else {
         var n = String($(this).data('t')), i = NK_TASKS.indexOf(n);
-        if (i >= 0) NK_TASKS.splice(i, 1); else NK_TASKS.push(n);
+        if (i >= 0) NK_TASKS.splice(i, 1);
+        else {
+            NK_TASKS.push(n);
+            if (NK_AUTOPICK) nkCheckByTag(n, true);   // 使用者自己開了自動勾選才整批勾
+        }
     }
-    NK_CHECKED = {};        // 按標籤＝重挑一次，之前逐列勾的以標籤為準
+    renderBank();
+});
+/** 把某個標籤（AS＝作業項目／其餘＝部門）底下的項目整批勾起來或取消 */
+function nkCheckByTag(tag, on){
+    var kind = $('#nkKind').val();
+    BANK.forEach(function(raw){
+        var r = bankRow(kind, raw);
+        if (r.hdr) return;
+        if ((r.tags||[]).indexOf(tag) >= 0) NK_CHECKED[r.id] = !!on;
+    });
+}
+var NK_AUTOPICK = false;
+$('#nkAutoPick').on('change', function(){
+    NK_AUTOPICK = $(this).is(':checked');
+    // 開啟當下就把目前已聚焦的標籤底下的表單勾起來（不然使用者會以為開關沒作用）
+    if (NK_AUTOPICK) NK_TASKS.forEach(function(n){ nkCheckByTag(n, true); });
     renderBank();
 });
 $('#nkTaskFilter').on('input', renderTaskPanel);
+/** 這一列有沒有落在目前聚焦的標籤內。**一個標籤都沒點＝不篩選，全部列出來**
+    （2026-09-17 起這個函式只決定「看不看得到」，不再決定「勾不勾」）。 */
 function rowHitTask(r){
-    // 一個標籤（AS＝作業項目／其餘＝部門）都沒選＝一題都不勾（2026-09-14 使用者指定的預設值）
-    if (!NK_TASKS.length) return false;
+    if (!NK_TASKS.length) return true;
     for (var i=0;i<NK_TASKS.length;i++) if ((r.tags||[]).indexOf(NK_TASKS[i]) >= 0) return true;
     return false;
 }
@@ -2418,7 +2535,8 @@ function rowHitTask(r){
    （原本的「已勾 N 項」與建立時送出的清單都有這個問題）。沒被動過的列才回退到標籤判定。 */
 var NK_CHECKED = {};
 function nkIsChecked(r){
-    return (NK_CHECKED[r.id] !== undefined) ? !!NK_CHECKED[r.id] : rowHitTask(r);
+    // 2026-09-17 起**只認使用者真的勾過的**：標籤改成聚焦用，不再隱含「選取」的意思
+    return !!NK_CHECKED[r.id];
 }
 /** 每個章節標題列底下勾了幾題（題庫是照順序排的：一個標題列管到下一個標題列為止）
     2026-09-15 使用者回報：標題列固定勾住又取消不掉。原因是它被當成「一定要帶進去」，
@@ -2448,31 +2566,81 @@ function renderBank(){
     var kw = $('#nkFilter').val().trim().toLowerCase();
     renderTaskPanel();
     var HDRCNT = nkHdrPicked();      // 每章勾了幾題（標題列上顯示）
-    var h = '', shown = 0;
-    BANK.forEach(function(raw){
-        var r = bankRow(kind, raw);
-        // 作業項目／部門也吃關鍵字（打「外包」找得到掛這個用途的條文）
+
+    /* 先算出「哪幾列要顯示」：聚焦的標籤／部門 ∩ 關鍵字。
+       2026-09-17 起標籤是篩選條件（以前是勾選條件），所以章節標題列底下一列都沒有時
+       就不要印那個標題，否則畫面會剩下一排空章節。 */
+    var rows = BANK.map(function(raw){ return bankRow(kind, raw); });
+    var vis = [], lastHdr = -1, hdrHasChild = {};
+    rows.forEach(function(r, i){
+        if (r.hdr) { lastHdr = i; return; }
         var hay = (r.text+' '+r.sub+' '+(r.badges||[]).join(' ')+' '+(r.tags||[]).join(' ')).toLowerCase();
         if (kw && hay.indexOf(kw) < 0) return;
-        if (!r.hdr) shown++;          // 「顯示 N 列」只算真的題目，標題列不算
+        if (!rowHitTask(r)) return;
+        vis[i] = 1;
+        if (lastHdr >= 0) hdrHasChild[lastHdr] = 1;
+    });
+
+    var h = '', shown = 0;
+    rows.forEach(function(r, i){
         if (r.hdr) {
-            // 章節標題列只是分隔，不是可以查核的題目 → 不給勾選框（以前做成固定勾住又點不動，
-            // 看起來像「被系統勾走又取消不掉」）。底下有題目被勾時才會跟著建進查檢表。
+            if (!hdrHasChild[i]) return;
             var hn = HDRCNT[r.id] || 0;
             h += '<div class="hdr-row' + (hn ? ' on' : '') + '" data-h="' + r.id + '">' + esc(r.text)
                + '<span class="hdr-n">' + (hn ? ('本章已勾 ' + hn + ' 題') : '本章未勾選') + '</span></div>';
-        } else {
-            var on = nkIsChecked(r);
-            h += '<label'+(!on ? ' class="dim"' : '')+'>'
-               + '<input type="checkbox" class="bkChk" value="'+r.id+'"'+(on?' checked':'')+'> '+esc(r.text)
-               + (r.sub ? '<span style="color:#a08356;font-size:12px;">　'+esc(r.sub)+'</span>' : '')
-               + (r.badges||[]).map(function(t){ return '<span class="nk-task">'+esc(t)+'</span>'; }).join('')
-               + '</label>';
+            return;
         }
+        if (!vis[i]) return;
+        shown++;
+        var on = nkIsChecked(r);
+        h += '<label'+(!on ? ' class="dim"' : '')+(r.tip ? ' title="'+esc(r.tip)+'"' : '')+'>'
+           + '<input type="checkbox" class="bkChk" value="'+r.id+'"'+(on?' checked':'')+'> '+esc(r.text)
+           + (r.sub ? '<span style="color:#a08356;font-size:12px;">　'+esc(r.sub)+'</span>' : '')
+           + (r.badges||[]).map(function(t){ return '<span class="nk-task">'+esc(t)+'</span>'; }).join('')
+           + '</label>';
     });
-    $('#nkPick').html(h || '<div class="ia-empty">題庫沒有符合的項目</div>');
+    var empty = NK_TASKS.length
+        ? '這個標籤底下沒有符合的項目（標籤只是用來聚焦，已經選好的仍留在右側）'
+        : '題庫沒有符合的項目';
+    $('#nkPick').html(h || '<div class="ia-empty">'+empty+'</div>');
+    renderSelBox();
     updateBankCount(shown);
 }
+/* 右側「已選擇」欄（2026-09-17 使用者要求）：列出這次真的要建進查檢表的項目。
+   系統稽核紀錄表列「表單編號／名稱／對應部門」，AS 查檢表列「條文／掛在哪份文件」。
+   這一欄的內容**與目前聚焦的標籤無關**——取消標籤不會讓已選的項目消失。 */
+function renderSelBox(){
+    var kind = $('#nkKind').val();
+    var sel = [];
+    BANK.forEach(function(raw){
+        var r = bankRow(kind, raw);
+        if (!r.hdr && nkIsChecked(r)) sel.push(r);
+    });
+    $('#nkSelHd').text(kind==='system' ? ('已選擇的表單（'+sel.length+'）')
+                     : (kind==='as' ? ('已選擇的條文（'+sel.length+'）') : ('已選擇的指標（'+sel.length+'）')));
+    $('#nkSelSub').text(sel.length ? '取消左側標籤不會影響這裡；按 × 可單筆取消。'
+                                   : '從中間清單勾選，這裡就會列出來。');
+    if (!sel.length) {
+        $('#nkSelBody').html('<div style="font-size:12px;color:#a08356;padding:6px 2px;">尚未選擇任何項目。<br>'
+            + '左側標籤只是把清單聚焦到該部門／作業項目，<b>不會自動勾選</b>；<br>'
+            + '要整批勾請按「全選」，或勾上「點標籤時自動勾選底下的表單」。</div>');
+        return;
+    }
+    $('#nkSelBody').html(sel.map(function(r){
+        var main = (kind==='system')
+            ? '<span class="no">'+esc(r.no||'')+'</span> '+esc(r.name||'')
+            : esc(r.text||'');
+        var sub = (kind==='system') ? (r.dept||'') : (r.sub||r.dept||'');
+        return '<div class="nk-selrow"><span class="tx">'+main
+             + (sub ? '<span class="dp">'+esc(sub)+'</span>' : '')
+             + '</span><span class="x" data-uncheck="'+r.id+'" title="取消選取">×</span></div>';
+    }).join(''));
+}
+$(document).on('click', '#nkSelBody .x', function(){
+    NK_CHECKED[+$(this).data('uncheck')] = false;
+    renderBank();
+});
+$('#nkSelClear').on('click', function(){ NK_CHECKED = {}; renderBank(); });
 function updateBankCount(shown){
     var p = nkPicked();
     $('#nkCount').text('已勾 '+p.real+' 項'+(shown!=null?('／顯示 '+shown+' 列'):''));
@@ -2490,6 +2658,7 @@ $(document).on('change','.bkChk', function(){
     NK_CHECKED[+$(this).val()] = $(this).is(':checked');
     $(this).closest('label').toggleClass('dim', !$(this).is(':checked'));
     updateHdrCounts();
+    renderSelBox();          // 右側「已選擇」要即時跟上，否則使用者看不出這一勾有沒有生效
     updateBankCount();
 });
 $('#nkFilter').on('input', renderBank);
@@ -2535,10 +2704,11 @@ function openCheck(id){
             + (CHK.half ? '（'+(CHK.half==='H1'?'上':'下')+'半年度）' : ''));
         $('#ckTitleInput').val(CHK.title||'');
         $('#ckDate').val(inputDate(CHK.check_date));
-        $('#ckAuditor').val(CHK.auditor_name||'');
         $('#ckStatus').val(CHK.status==='done' ? '已結案' : '填寫中');
         var ro = !CHK.can_edit;
+        fillCkAuditor(CHK.check_date);
         $('#ckTitleInput,#ckDate').prop('readonly', ro);
+        $('#ckAuditor').prop('disabled', ro);
         $('#btnCheckSave,#btnCheckDone').toggle(!ro);
         $('#btnCheckReopen').toggle(CHK.status==='done' && <?= $perms['canAdmin'] ? 'true' : 'false' ?>);
         renderCheckItems();
@@ -2546,6 +2716,24 @@ function openCheck(id){
         openMask('checkMask');
     });
 }
+/* 稽核人下拉（2026-09-17 使用者要求：事後可改，原本只有建檔當下決定得了）。
+   ①資格與職稱一律依**這張表的稽核日期**回推（ai-rules/22）——用今天判定的話，補歷史查檢表時
+     「當時有資格、現在已離職或調職」的人一個都挑不到，而且完全不報錯。
+   ②原本就掛在這張表上的那一位，即使現在已不在候選清單內也一定要留著，
+     否則光是改個標題存檔就會把稽核人洗掉（後端同樣放行「沒有更動」的情況）。 */
+function fillCkAuditor(dateStr){
+    var curKey = postKeyOf(CHK.auditor_id, CHK.auditor_dept_id, CHK.auditor_position_id);
+    peopleAsof(dateStr, function(){
+        var h = postOptions(META.auditors, curKey, CHK.auditor_id, '（未指定）');
+        if (CHK.auditor_id && h.indexOf('value="'+curKey+'"') < 0) {
+            h = h.replace('</option>',
+                '</option><option value="'+esc(curKey)+'" selected>'
+                + esc((CHK.auditor_name||'') + '（原稽核人，目前已不在候選名單）') + '</option>');
+        }
+        $('#ckAuditor').html(h);
+    });
+}
+$('#ckDate').on('change', function(){ fillCkAuditor($(this).val()); });
 var CK_HEADS = {
     as:     ['項次','品質管理系統要求','建立的文件、表單','合格','不合格','所見證據或建議','備註'],
     system: ['序號','表單編號','表單名稱','受稽人','合格','不合格','備註（內稽不符合通知單編號）'],
@@ -2655,20 +2843,41 @@ $('#btnCheckAuto').on('click', function(){
         })(0);
         return;
     }
-    // system：一律先問不合格類型（紙本上這欄是稽核員判斷的，不可以替他決定）
-    var types = META.nc_types||{}, keys = Object.keys(types);
-    var tip = keys.map(function(k2,i){ return (i+1)+'='+types[k2]; }).join('　');
-    var ans = prompt('要為 '+items.length+' 項不合格各開立一張內稽不符合通知單。\n'
-                   + '請輸入這批的不合格類型（開完可逐張修改）：\n'+tip, '2');
-    if (ans === null) return;
-    var idx = parseInt(ans, 10) - 1;
-    if (!(idx >= 0 && idx < keys.length)) { alert('類型不正確，已取消'); return; }
-    var type = keys[idx], okN2 = 0, errs2 = [];
+    // system：一律先問不合格類型（紙本上這欄是稽核員判斷的，不可以替他決定）。
+    // 2026-09-17 改成正式跳窗：原本用瀏覽器 prompt() 要使用者「輸入數字」，
+    // 打錯一個字整批就取消，而且看不到這次到底要為哪幾項開單。
+    CK_BULK = items;
+    var types = META.nc_types || {};
+    var th = '';
+    $.each(types, function(k2, v){ th += '<option value="'+esc(k2)+'">'+esc(v)+'</option>'; });
+    $('#ckBulkType').html(th);
+    clearErrs($('#ckBulkMask'));
+    $('#ckBulkHint').html('要為 <b>'+items.length+'</b> 項判定不合格的查核項目，各開立一張內稽不符合通知單。<br>'
+        + '受稽單位、受稽人、相關表單編號、違反條文與不合格事實都會自動帶入，開完可逐張修改。');
+    $('#ckBulkList').html(items.map(function(it, i){
+        return '<tr><td>'+(i+1)+'</td><td class="l">'+esc((it.col_a||'')+' '+(it.col_b||''))+'</td>'
+             + '<td>'+esc(it.col_c||'（未填）')+'</td></tr>';
+    }).join(''));
+    openMask('ckBulkMask');
+});
+/* 這批要開的項目（由「一鍵開立」按鈕帶進跳窗） */
+var CK_BULK = [];
+$('#btnCkBulkGo').on('click', function(){
+    var type = $('#ckBulkType').val() || '';
+    if (!type) { $('#ckBulkTypeErr').addClass('on').text('請選擇不合格類型'); $('#ckBulkType').addClass('err'); return; }
+    var items = CK_BULK || [];
+    if (!items.length) { closeMask('ckBulkMask'); return; }
+    var $btn = $(this), btnHtml = $btn.html();
+    $btn.prop('disabled', true);                         // 逐張送出時擋住重複點擊
+    var okN2 = 0, errs2 = [];
     (function next(i){
         if (i >= items.length) {
+            $btn.prop('disabled', false).html(btnHtml);
+            closeMask('ckBulkMask');
             alert('完成：已開立 '+okN2+' 張不符合通知單'+(errs2.length?('\n失敗 '+errs2.length+' 張：\n'+errs2.join('\n')):''));
             openCheck(CHK.check_id); loadChecks(); loadNcs(); return;
         }
+        $btn.text('開立中… '+(i+1)+'／'+items.length);
         var pre = ncPrefillFromItem(items[i]);
         $.post(API, {action:'nc_create', audit_date:pre.audit_date, case_id:pre.case_id,
             dept_id:guessDeptId(pre), auditee_id:guessUserId(pre.auditee_name),
@@ -2709,7 +2918,8 @@ function collectCheckItems(){
 $('#btnCheckSave').on('click', function(){ saveCheck(false); });
 function saveCheck(silent, cb){
     $.post(API, {action:'check_save_items', check_id:CHK.check_id, title:$('#ckTitleInput').val(),
-        check_date:$('#ckDate').val(), items:JSON.stringify(collectCheckItems())}, function(res){
+        check_date:$('#ckDate').val(), auditor_key:($('#ckAuditor').val()||''),
+        items:JSON.stringify(collectCheckItems())}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         if (!silent) alert('已儲存');
         loadChecks();

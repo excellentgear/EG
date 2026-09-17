@@ -2795,6 +2795,150 @@ function ia_team_get(PDO $db, int $year, string $asofOverride = ''): array
     return $out;
 }
 
+/* ============================ 會議紀錄的出席人員（唯一實作） ============================
+ * 建立會議與「依目前小組重新帶入」共用同一份規則（鐵律4：兩個寫入點規則必定走鐘）。
+ */
+
+/** 會議主席＝稽核組長：這張單指定的優先，其次該年度小組裡 role=leader，再沒有才退回操作者 */
+function ia_meeting_chair(PDO $db, array $c, array $team, int $fallbackUid, string $fallbackName): array
+{
+    $teamLead = null;
+    foreach ($team as $m) if (($m['role'] ?? '') === 'leader') { $teamLead = $m; break; }
+    $chairId = (int)($c['leader_id'] ?? 0) ?: (int)($teamLead['user_id'] ?? 0) ?: $fallbackUid;
+    $chairName = '';
+    try {
+        $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?");
+        $q->execute([$chairId]);
+        $chairName = (string)($q->fetchColumn() ?: '');
+    } catch (Throwable $e) {}
+    if ($chairName === '') $chairName = $fallbackName;
+    // 主席「以哪個職務」出席：這張單存的職務優先（圖章與名單的部門職稱才對得起來）
+    $chairPost = null;
+    if ((int)($c['leader_id'] ?? 0) === $chairId && (int)($c['leader_dept_id'] ?? 0)) {
+        $chairPost = ['dept_id' => (int)$c['leader_dept_id'], 'position_id' => (int)$c['leader_position_id']];
+    } elseif ($teamLead && (int)$teamLead['user_id'] === $chairId) {
+        $chairPost = ['dept_id' => (int)$teamLead['dept_id'], 'position_id' => (int)$teamLead['position_id']];
+    }
+    return ['id' => $chairId, 'name' => $chairName, 'post' => $chairPost];
+}
+
+/**
+ * 整批寫入某筆會議紀錄的出席人員（建立會議／重新帶入小組成員共用）。
+ *
+ * 名單來源：①該年度稽核小組 ②小組還沒建立時退回這張單各受稽單位的稽核員與陪檢員
+ *           （否則小組沒建就變成一場沒有人的會議，比帶錯人更難用）。
+ *
+ * **一人一列、多職務併列**（2026-09-17 使用者拍板）：小組是「一筆職務一列」，同一個人可能掛兩個職務，
+ * 但會議出席名單一人只會有一列；第一個職務寫進 dept_name/position_name（**圖章只吃這一組**），
+ * 其餘寫進 alt_posts（純顯示用 JSON），名單與簽到表逐行對齊列出。
+ *
+ * 職務一律依**會議日期**判定（ai-rules/22）：名單上登記的職務當天還不成立，就印他當時真正的身分，
+ * 並把換掉的（shifted）與當天還沒兼任因此沒列出的（dropped）都回報給呼叫端，不可以安靜換掉。
+ *
+ * 已簽到的人保留 signed／signed_at（重新帶入時不可把人家的簽到洗掉）。
+ *
+ * @return array ['count','from_team','shifted','dropped','removed']
+ */
+function ia_meeting_attendees_apply(PDO $db, int $mid, int $cid, array $team, array $chair, string $mdate): array
+{
+    $seen = []; $att = [];
+    // 同一個人第二次被 push ＝ 他的另一個職務，併進同一列而不是另開一列
+    $push = function ($id, $name, $dept = 0, $pos = 0) use (&$seen, &$att) {
+        $id = (int)$id; $dept = (int)$dept; $pos = (int)$pos;
+        if (!$id) return;
+        if (!isset($seen[$id])) {
+            $seen[$id] = count($att);
+            $att[] = ['id' => $id, 'name' => (string)$name, 'posts' => []];
+        }
+        if (!$dept && !$pos) return;                      // 沒指定職務的那一次不占一個職務位
+        $i = $seen[$id];
+        foreach ($att[$i]['posts'] as $p) if ($p['dept_id'] === $dept && $p['position_id'] === $pos) return;
+        $att[$i]['posts'][] = ['dept_id' => $dept, 'position_id' => $pos];
+    };
+
+    $push((int)$chair['id'], (string)$chair['name'],
+          (int)($chair['post']['dept_id'] ?? 0), (int)($chair['post']['position_id'] ?? 0));
+    $fromTeam = false;
+    if ($team) {
+        $fromTeam = true;
+        foreach ($team as $m) $push($m['user_id'], $m['user_name'], (int)$m['dept_id'], (int)$m['position_id']);
+    } else {
+        $q = $db->prepare("SELECT * FROM ia_case_dept WHERE case_id=? ORDER BY sort_order");
+        $q->execute([$cid]);
+        $cdRows = $q->fetchAll(PDO::FETCH_ASSOC);
+        $pmap = ia_cd_people_map($db, array_map(function ($r) { return (int)$r['cd_id']; }, $cdRows), $cdRows);
+        foreach ($cdRows as $r) {
+            $pp = $pmap[(int)$r['cd_id']] ?? ['auditor' => [], 'escort' => []];
+            foreach (array_merge($pp['auditor'], $pp['escort']) as $x) {
+                $push($x['user_id'], $x['user_name'], (int)($x['dept_id'] ?? 0), (int)($x['position_id'] ?? 0));
+            }
+        }
+    }
+
+    // 會議日期當天真正成立的職務（名稱一律用 id 回查現名，不用異動快照裡凍結的舊名）
+    $postByKey = $nameById = [];
+    foreach (eg_people_posts_asof($db, [], $mdate) as $p) {
+        $postByKey[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = $p;
+        $nameById[(int)$p['id']] = (string)$p['user_cname'];
+    }
+
+    // 已簽到的狀態要保留（重新帶入時不可洗掉別人的簽到）
+    $old = [];
+    $oq = $db->prepare("SELECT user_id, signed, signed_at FROM meeting_attendee WHERE meeting_id=?");
+    $oq->execute([$mid]);
+    foreach ($oq->fetchAll(PDO::FETCH_ASSOC) as $o) $old[(int)$o['user_id']] = $o;
+
+    $shifted = $dropped = []; $keepUids = [];
+    $db->prepare("DELETE FROM meeting_attendee WHERE meeting_id=?")->execute([$mid]);
+    $ins = $db->prepare("INSERT INTO meeting_attendee (meeting_id, user_id, user_name, dept_name, position_name,
+                             alt_posts, is_chair, signed, signed_at) VALUES (?,?,?,?,?,?,?,?,?)");
+    foreach ($att as $a) {
+        $nm = $nameById[$a['id']] ?? $a['name'];
+        $ok = [];                                          // 當天真的成立的職務（依名單順序）
+        foreach ($a['posts'] as $p) {
+            $key   = ia_post_key($a['id'], $p['dept_id'], $p['position_id']);
+            $label = ['d' => ia_dept_name_now($db, $p['dept_id']), 'p' => ia_position_name_now($db, $p['position_id'])];
+            if (isset($postByKey[$key])) $ok[] = $label;
+            else $dropped[] = ['name' => $nm, 'post' => trim($label['d'] . ' ' . $label['p'])];
+        }
+        if ($ok) {
+            $dept = $ok[0]['d']; $pos = $ok[0]['p'];
+            $alt  = array_slice($ok, 1, 4);
+        } else {
+            // 名單上的職務當天都不成立 → 印他當時真正的身分，並主動回報（使用者要求）
+            $idt  = ia_identity_asof($db, $a['id'], $mdate);
+            $dept = $idt['dept']; $pos = $idt['position']; $alt = [];
+            if ($a['posts']) {
+                $first = $a['posts'][0];
+                $want  = trim(ia_dept_name_now($db, $first['dept_id']) . ' ' . ia_position_name_now($db, $first['position_id']));
+                $got   = trim($dept . ' ' . $pos);
+                if ($want !== '' && $want !== $got) {
+                    $shifted[] = ['name' => $nm, 'listed' => $want, 'actual' => ($got !== '' ? $got : '（當時查不到職務）')];
+                    // 第一個職務已經用 shifted 講明了，不要在 dropped 再講一次同一件事
+                    foreach ($dropped as $k => $d) if ($d['name'] === $nm && $d['post'] === $want) { unset($dropped[$k]); break; }
+                }
+            }
+        }
+        $o = $old[$a['id']] ?? null;
+        $altJson = $alt ? json_encode($alt, JSON_UNESCAPED_UNICODE) : null;
+        if ($altJson !== null && mb_strlen($altJson) > 250) $altJson = null;
+        $ins->execute([$mid, $a['id'], $nm, $dept ?: null, $pos ?: null, $altJson,
+                       $a['id'] === (int)$chair['id'] ? 1 : 0,
+                       $o ? (int)$o['signed'] : 0, $o ? $o['signed_at'] : null]);
+        $keepUids[$a['id']] = 1;
+    }
+    // 重新帶入時被移出名單、但**已經簽到過**的人要講出來（他的簽到紀錄會跟著不見）
+    $removed = [];
+    foreach ($old as $uidOld => $o) {
+        if (!isset($keepUids[$uidOld]) && (int)$o['signed'] === 1) {
+            $q = $db->prepare("SELECT user_cname FROM `user` WHERE id=?"); $q->execute([$uidOld]);
+            $removed[] = (string)($q->fetchColumn() ?: ('#' . $uidOld));
+        }
+    }
+    return ['count' => count($att), 'from_team' => $fromTeam,
+            'shifted' => array_values($shifted), 'dropped' => array_values($dropped), 'removed' => $removed];
+}
+
 /** 已經建過小組的年度（複製來源下拉用） */
 function ia_team_years(PDO $db): array
 {
