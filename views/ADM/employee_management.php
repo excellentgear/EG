@@ -446,8 +446,8 @@ if ($hrUserPerm === 'R') {
                                         </div>
                                     </fieldset>
                                 </div>
-                                <!-- Concurrent Position 1 -->
-                                <div class="col-md-6">
+                                <!-- Concurrent Position 1（與 2、3 一樣預設隱藏：沒設定兼任的人不該看到空白欄位） -->
+                                <div class="col-md-6" id="concurrent_group_1" style="display: none;">
                                     <fieldset class="concurrent-group">
                                         <legend>
                                             <span>兼任職務 1</span>
@@ -501,6 +501,15 @@ if ($hrUserPerm === 'R') {
                                     </fieldset>
                                 </div>
                                 <?php endfor; ?>
+                            </div>
+                            <!-- 兼任職務改成「要加才長出來」：沒兼任的人不該看到空白欄位（上限 3 個） -->
+                            <div class="row">
+                                <div class="col-md-12">
+                                    <button type="button" class="btn btn-sm btn-default" id="btn-add-concurrent">
+                                        <i class="fa fa-plus"></i> 新增兼任職務
+                                    </button>
+                                    <span id="concurrentHint" class="text-muted" style="font-size:12px; margin-left:8px;"></span>
+                                </div>
                             </div>
                         </div>
                         <div class="modal-footer">
@@ -685,6 +694,7 @@ if ($hrUserPerm === 'R') {
                             <li><b>新增員工</b>：左上「新增員工」。員工編號即系統內部識別碼，一旦被單據引用就不該隨意更動；真要改請找系統管理員用專用工具（會同步全庫參照）。</li>
                             <li><b>編輯</b>：在該員工那一列<b>連點兩下</b>開啟編輯視窗。</li>
                             <li><b>篩選</b>：部門下拉會同時比對主職務與兼任職務；搜尋框比對整列文字。兩個欄位<b>連點兩下</b>可清除該條件。</li>
+                            <li><b>兼任職務</b>：編輯視窗只會顯示這個人<b>實際設定過的</b>兼任職務（沒有就一格都不顯示），要加請按<b>「新增兼任職務」</b>（最多 3 個）。按兼任職務標題旁的 <b>×</b> 是整列移除，後面的會自動往前遞補，不會留下中間的空格。</li>
                         </ul>
 
                         <h4>在職狀態與離職</h4>
@@ -1054,7 +1064,9 @@ $(document).ready(function() {
     }
 
     // 根據選擇的部門，載入對應的職稱
-    function loadPositionsForDepartment(departmentId, positionSelectElement, selectedPositionId = null) {
+    // onDone：職稱真的填好（含還原選取值）之後才呼叫——這是非同步的，呼叫端若在這之前就去讀 val()
+    // 會讀到空字串（兼任職務的「新增」鈕就是因此一直停在停用狀態）
+    function loadPositionsForDepartment(departmentId, positionSelectElement, selectedPositionId = null, onDone = null) {
         const select = $(positionSelectElement);
         const isOptional = !select.prop('required');
         select.empty();
@@ -1065,6 +1077,7 @@ $(document).ready(function() {
             } else {
                 select.append('<option value="">請先選擇部門...</option>');
             }
+            if (onDone) onDone();
             return;
         }
 
@@ -1084,29 +1097,68 @@ $(document).ready(function() {
             } else {
                 alert('讀取職稱失敗: ' + response.message);
             }
+            if (onDone) onDone();
         });
     }
 
-    // --- 動態顯示/隱藏兼任職務 ---
-    function updateConcurrentPositionVisibility() {
-        // 檢查兼任1是否已填寫
-        const dept1 = $('#concurrent_department_id_1').val();
-        const pos1 = $('#concurrent_position_id_1').val();
-        if (dept1 && pos1) {
-            $('#concurrent_group_2').slideDown();
-        } else {
-            $('#concurrent_group_2').slideUp();
-        }
+    // --- 兼任職務欄位：有幾個就顯示幾個，要加才按「新增兼任職務」---
+    // 舊版是「填完第 N 個就自動長出第 N+1 個空白欄位」，所以每次點開編輯一定會多一格沒設定的空欄位
+    // （沒兼任的人也會看到空的兼任 1），使用者反映會誤以為系統多設了一個職務。
+    const CONCURRENT_MAX = 3;
+    let concurrentShown = 0;     // 目前顯示幾個兼任欄位
 
-        // 檢查兼任2是否已填寫
-        const dept2 = $('#concurrent_department_id_2').val();
-        const pos2 = $('#concurrent_position_id_2').val();
-        if (dept1 && pos1 && dept2 && pos2) {
-            $('#concurrent_group_3').slideDown();
-        } else {
-            $('#concurrent_group_3').slideUp();
-        }
+    function concurrentSlotVal(i) {
+        return { dept: $(`#concurrent_department_id_${i}`).val() || '', pos: $(`#concurrent_position_id_${i}`).val() || '' };
     }
+
+    function clearConcurrentSlot(i) {
+        $(`#concurrent_department_id_${i}`).removeData('pending-val').val('');
+        $(`#concurrent_position_id_${i}`).empty().append('<option value="">-- 可選 --</option>');
+    }
+
+    /** 依「目前顯示幾個」重畫：多餘的欄位一律清空再隱藏。
+     *  隱藏但留著值＝畫面上看不到、存檔卻照樣送出去（舊版清除兼任 1 時，填好的兼任 2 就會變成這種看不見的資料）。 */
+    function refreshConcurrentUI(animate) {
+        for (let i = 1; i <= CONCURRENT_MAX; i++) {
+            const $g = $(`#concurrent_group_${i}`);
+            if (i <= concurrentShown) {
+                animate ? $g.slideDown(150) : $g.show();
+            } else {
+                clearConcurrentSlot(i);
+                animate ? $g.slideUp(150) : $g.hide();
+            }
+        }
+        // 上一個還沒填完就不給再加（否則會出現中間空一格的兼任職務）
+        const last = concurrentShown > 0 ? concurrentSlotVal(concurrentShown) : null;
+        const lastDone = !last || (last.dept && last.pos);
+        $('#btn-add-concurrent').toggle(concurrentShown < CONCURRENT_MAX).prop('disabled', !lastDone);
+        $('#concurrentHint').text(
+            concurrentShown >= CONCURRENT_MAX ? `兼任職務最多 ${CONCURRENT_MAX} 個` :
+            !lastDone ? '請先填完上一個兼任職務的部門與職稱' :
+            concurrentShown === 0 ? '目前沒有兼任職務（需要時才按「新增兼任職務」）' : ''
+        );
+    }
+
+    /** 一次把兼任職務設定成指定的清單（載入員工資料、清除某一列後重排都走這支） */
+    function setConcurrentSlots(pairs) {
+        const list = (pairs || []).filter(p => p && p.department_id && p.position_id).slice(0, CONCURRENT_MAX);
+        for (let i = 1; i <= CONCURRENT_MAX; i++) clearConcurrentSlot(i);
+        list.forEach(function(p, idx) {
+            const i = idx + 1;
+            $(`#concurrent_department_id_${i}`).data('pending-val', String(p.department_id)).val(p.department_id);
+            // 職稱是非同步載入的，載完才重算一次按鈕狀態（否則「新增兼任職務」會一直停在停用）
+            loadPositionsForDepartment(p.department_id, `#concurrent_position_id_${i}`, p.position_id,
+                                       () => refreshConcurrentUI(false));
+        });
+        concurrentShown = list.length;
+        refreshConcurrentUI(false);
+    }
+
+    $(document).on('click', '#btn-add-concurrent', function() {
+        if (concurrentShown >= CONCURRENT_MAX) return;
+        concurrentShown++;
+        refreshConcurrentUI(true);
+    });
 
     // 為所有部門下拉選單綁定 change 事件
     $(document).on('change', '.department-select', function() {
@@ -1115,26 +1167,23 @@ $(document).ready(function() {
         if (positionTarget) {
             loadPositionsForDepartment(departmentId, positionTarget);
         }
-        // 當兼任部門變更時，檢查可見性
-        updateConcurrentPositionVisibility();
+        refreshConcurrentUI(false);
     });
 
     $(document).on('change', '.position-select', function() {
-        updateConcurrentPositionVisibility();
+        refreshConcurrentUI(false);
     });
 
-    // --- 清除兼任職務按鈕事件 ---
+    // --- 清除兼任職務按鈕事件：整列移除並把後面的往前遞補（不留中間的空格） ---
     $(document).on('click', '.btn-clear-concurrent', function() {
-        const index = $(this).data('concurrent-index');
-        const deptSelect = $(`#concurrent_department_id_${index}`);
-        const posSelect = $(`#concurrent_position_id_${index}`);
-
-        // 清空部門和職稱的選擇
-        deptSelect.val('');
-        posSelect.empty().append('<option value="">-- 可選 --</option>');
-
-        // 更新後續兼任職務的可見性
-        updateConcurrentPositionVisibility();
+        const index = parseInt($(this).data('concurrent-index'));
+        const rest = [];
+        for (let i = 1; i <= CONCURRENT_MAX; i++) {
+            if (i === index) continue;
+            const v = concurrentSlotVal(i);
+            if (v.dept && v.pos) rest.push({ department_id: v.dept, position_id: v.pos });
+        }
+        setConcurrentSlots(rest);
     });
 
     // 開啟 Modal 時的處理
@@ -1146,8 +1195,9 @@ $(document).ready(function() {
         form[0].reset();
         modal.find('#user_id').val('');
 
-        // 重置兼任職務的可見性
-        $('#concurrent_group_2, #concurrent_group_3').hide();
+        // 重置兼任職務：一律先收成 0 個，載入資料時有幾筆才長出幾個
+        concurrentShown = 0;
+        $('#concurrent_group_1, #concurrent_group_2, #concurrent_group_3').hide();
         $('#btn-delete-in-modal').hide(); // 預設隱藏刪除按鈕
         
         // 重置所有職稱下拉選單
@@ -1212,18 +1262,8 @@ $(document).ready(function() {
                         loadPositionsForDepartment(emp.main_department_id, '#main_position_id', emp.main_position_id);
                     }
 
-                    // 設定兼任職務
-                    if (emp.concurrent_positions && emp.concurrent_positions.length > 0) {
-                        emp.concurrent_positions.forEach((pos, index) => {
-                            if (index < 3) {
-                                const i = index + 1;
-                                $(`#concurrent_department_id_${i}`).data('pending-val', String(pos.department_id)).val(pos.department_id);
-                                loadPositionsForDepartment(pos.department_id, `#concurrent_position_id_${i}`, pos.position_id);
-                            }
-                        });
-                        // 載入資料後，延遲一小段時間再檢查，確保職稱都已載入
-                        setTimeout(updateConcurrentPositionVisibility, 500);
-                    }
+                    // 設定兼任職務：實際有幾筆就顯示幾格，沒有就一格都不顯示（要加再按「新增兼任職務」）
+                    setConcurrentSlots(emp.concurrent_positions);
 
                     // 離職/留停者才顯示「清除權限設定」，並先問後端還剩幾筆（0 筆就不用出現）
                     var st = parseInt(emp.state !== undefined ? emp.state : emp.user_status);
