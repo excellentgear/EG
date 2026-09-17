@@ -9,6 +9,8 @@
  * 設定存放：qa_system_settings（key 以 car_ 開頭）
  */
 
+require_once __DIR__ . '/user_active_lib.php';   // 回覆人是否已離職／留停（重新指派判定）
+
 if (!function_exists('car_labels')) {
 
 /** 中文標籤對照（DB 一律存 ASCII code，顯示時轉中文） */
@@ -268,9 +270,53 @@ function car_reply_signer_name(PDO $pdo, array $o, string $fallback): string {
     return $fallback;
 }
 
+/**
+ * 現任回覆人是否已無法作業（離職／留職停薪／育嬰留停／預定離職日已過）。
+ * 判定沿用全站唯一實作 eg_user_blocked_state()（＝登入被擋的同一套規則），不自己比 state。
+ * @return array|null 被擋回 ['state'=>0,'label'=>'離職','name'=>'王小明']；仍可作業或無回覆人回 null
+ */
+function car_assignee_blocked(PDO $pdo, array $o): ?array {
+    $uid = (int)($o['assigned_to'] ?? 0);
+    if ($uid <= 0) return null;
+    $b = eg_user_blocked_state($pdo, $uid);
+    return $b ?: null;
+}
+
+/** 此單目前是否可由主管「重新指派」（＝已指派出去、但現任回覆人已離職／留停） */
+function car_can_reassign_order(PDO $pdo, array $o): bool {
+    if (!in_array(($o['status'] ?? ''), ['assigned', 'replying'], true)) return false;
+    return car_assignee_blocked($pdo, $o) !== null;
+}
+
+/**
+ * 首要決策者候選名單（責任部門主管；廠商責任→生管主管）。
+ * 全站唯一實作——car_notify.php 的 car_primary_recipients() 轉呼叫本函式，不要再寫第二份。
+ * @return int[] user id
+ */
+function car_primary_pool_ids(PDO $pdo, array $o): array {
+    $out = [];
+    if (($o['resp_type'] ?? '') === 'maker') {
+        foreach (car_pm_supervisors($pdo) as $s) $out[] = (int)$s['id'];
+    } elseif (!empty($o['resp_dept_id'])) {
+        foreach (car_dept_supervisors($pdo, (int)$o['resp_dept_id']) as $s) $out[] = (int)$s['id'];
+    }
+    return array_values(array_unique(array_filter($out)));
+}
+
+/**
+ * 扣除迴避者後的首要決策者名單。
+ * 主管把單指派給自己親自回覆時，不可以自己簽核自己填的內容（SoD）：
+ * 由同單位其他主管簽；一個都沒有時回空陣列，呼叫端（submit_reply）直接跳總經理裁決。
+ * @return int[]
+ */
+function car_primary_pool_excluding(PDO $pdo, array $o, int $excludeUid): array {
+    return array_values(array_diff(car_primary_pool_ids($pdo, $o), [$excludeUid]));
+}
+
 /** 判斷使用者是否為某記錄的合格「指派者」（責任部門主管；廠商責任→生管主管） */
 function car_can_assign_order(PDO $pdo, array $o, int $uid): bool {
-    if (($o['status'] ?? '') !== 'open') return false;
+    // 待指派＝正常指派；已指派但回覆人離職／留停＝開放重新指派（使用者 2026-09-17 定調）
+    if (($o['status'] ?? '') !== 'open' && !car_can_reassign_order($pdo, $o)) return false;
     $rtype = $o['resp_type'] ?? '';
     if ($rtype === 'dept' && !empty($o['resp_dept_id'])) {
         foreach (car_dept_supervisors($pdo, (int)$o['resp_dept_id']) as $s) if ((int)$s['id'] === $uid) return true;
@@ -280,17 +326,14 @@ function car_can_assign_order(PDO $pdo, array $o, int $uid): bool {
     return false;
 }
 
-/** 是否為某單的「首要決策者」候選：責任部門主管；廠商責任→生管主管 */
+/** 是否為某單的「首要決策者」候選：責任部門主管；廠商責任→生管主管（回覆人本人迴避） */
 function car_is_primary_candidate(PDO $pdo, array $o, int $uid): bool {
-    $rtype = $o['resp_type'] ?? '';
-    if ($rtype === 'maker') {
-        foreach (car_pm_supervisors($pdo) as $s) if ((int)$s['id'] === $uid) return true;
-        return false;
-    }
-    if (!empty($o['resp_dept_id'])) {
-        foreach (car_dept_supervisors($pdo, (int)$o['resp_dept_id']) as $s) if ((int)$s['id'] === $uid) return true;
-    }
-    return false;
+    $pool = car_primary_pool_ids($pdo, $o);
+    if (!in_array($uid, $pool, true)) return false;
+    // SoD：主管自己填的單不可自己簽核——但同單位再無其他主管時不擋死
+    // （那種單在送出時就已直接跳總經理裁決，這裡只是不讓舊資料卡住）
+    if ((int)($o['assigned_to'] ?? 0) === $uid && car_primary_pool_excluding($pdo, $o, $uid)) return false;
+    return true;
 }
 
 /**

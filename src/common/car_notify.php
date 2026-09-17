@@ -104,13 +104,8 @@ function car_notify_done(PDO $pdo, int $carId, int $userId): void {
 
 /** 某單的首要決策者候選收件人（責任部門主管；廠商責任→生管主管） */
 function car_primary_recipients(PDO $pdo, array $o): array {
-    $out = [];
-    if (($o['resp_type'] ?? '') === 'maker') {
-        foreach (car_pm_supervisors($pdo) as $s) $out[] = (int)$s['id'];
-    } elseif (!empty($o['resp_dept_id'])) {
-        foreach (car_dept_supervisors($pdo, (int)$o['resp_dept_id']) as $s) $out[] = (int)$s['id'];
-    }
-    return $out;
+    // 唯一實作在 car_lib.php（兩邊各寫一份必定走鐘）
+    return car_primary_pool_ids($pdo, $o);
 }
 
 /** 管理課扣款判定收件人：指定判定人員(≤2)優先；未指定則課室成員 */

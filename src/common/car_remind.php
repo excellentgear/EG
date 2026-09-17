@@ -40,8 +40,14 @@ function car_remind_recipients(PDO $pdo, array $o): array {
             break;
         case 'assigned':
         case 'replying':        // 責任人未填完 → 責任人(行動型) + 責任單位主管 + 最終決策者(已閱)
-            if ($assignee) $reply = [$assignee];
-            $read = array_merge($primarySup(), $finalIds());
+            // 責任人已離職／留停時他根本登不進來，行動型通知改催責任單位主管去重新指派
+            if ($assignee && car_assignee_blocked($pdo, ['assigned_to' => $assignee]) === null) {
+                $reply = [$assignee];
+                $read  = array_merge($primarySup(), $finalIds());
+            } else {
+                $reply = $primarySup();
+                $read  = $finalIds();
+            }
             break;
         case 'pending_primary': // 責任人填完、主管未簽 → 責任單位主管 + 最終決策者
             $read = array_merge($primarySup(), $finalIds());
@@ -87,8 +93,13 @@ function car_remind_scan_and_send(PDO $pdo): int {
         if (!$rcpt['reply'] && !$rcpt['read']) continue;
 
         $title = car_notify_title('⏰', $o, "逾期提醒");
+        $tail  = '請儘速處理。';
+        if (in_array($o['status'], ['assigned', 'replying'], true)) {
+            $b = car_assignee_blocked($pdo, $o);
+            if ($b) $tail = "原回覆人「{$b['name']}」已{$b['label']}，本單無人可填寫。\n請責任單位主管開啟本單，重新指派回覆人或指派給自己親自回覆。";
+        }
         $body  = car_notify_body($pdo, $o,
-            "目前狀態：{$statusLabel}\n已停留：{$wdStage} 個工作天（超過 {$threshold} 個工作天未處理）\n請儘速處理。");
+            "目前狀態：{$statusLabel}\n已停留：{$wdStage} 個工作天（超過 {$threshold} 個工作天未處理）\n{$tail}");
 
         $anySent = false;
         // 行動型（責任人）

@@ -503,7 +503,8 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
       <li><b>開立</b>：主管職（依「簽核流程設定」的職稱層級門檻，兼任者以所選職務判定）直接開立並產生單號；一般職送出<b>開立申請</b>，待所屬部門主管核准後才成立配號（核准前申請人可<b>撤回</b>，退回/撤回可修改後重送）。責任單位可多選，將自動拆成多張同事件單。</li>
       <li><b>指派回覆人</b>：責任單位為部門→該部門主管其中一人指派回覆人（一人指派後其他主管即不可再指派）；開單時已指定人員者，該人員直接為回覆人免指派；責任單位為廠商→由生管代填、簽章壓廠商名。</li>
       <li><b>回覆填寫</b>：回覆人填「異常原因分析、矯正措施、預防措施」三段，各段簽章（修改需取消簽章重簽），三段皆簽後<b>送出</b>。回覆人本人不可由代理人代填。送出前可隨時由置頂欄通知回來修改。若開立申請被主管退回，開立人可修改後重送，或按<b>放棄申請</b>（轉為「已撤回」保留紀錄、停止提醒，日後仍可重送）。</li>
-      <li><b>主管簽核</b>：責任單位主管（廠商責任＝生管主管）可<b>簽核通過</b>送總經理，或填原因<b>退回重改</b>（退回責任人重新填寫）。</li>
+      <li><b>回覆人離職／留停時的改派</b>：回覆人已離職、留職停薪或育嬰留停時，該單會卡住沒人填得了。此時系統<b>自動</b>在該單開放「重新指派回覆人」給責任單位主管（廠商責任＝生管主管），可改派他人、<b>也可指派給自己親自回覆</b>；逾期提醒也會從催原回覆人改成催主管改派。<b>原回覆人已簽章的段落一律保留</b>（那是他在職時本人簽的、屬實），接手者要改哪一段就先「取消簽章」再重簽。<span class="text-muted">回覆人還在職時不開放改派，避免責任隨時轉手。</span></li>
+      <li><b>主管簽核</b>：責任單位主管（廠商責任＝生管主管）可<b>簽核通過</b>送總經理，或填原因<b>退回重改</b>（退回責任人重新填寫）。<b>主管自己就是回覆人時不可簽核自己填的內容</b>：改由同單位其他主管簽；該單位只有他一位主管時，送出後直接進總經理裁決（軌跡會記明略過原因）。</li>
       <li><b>總經理裁決</b>：<b>結案</b>（自動簽章、押今日結案日，並一併判定扣款金額，未填＝不扣款）或 <b>不可結案</b>（＝退回，必填原因，自動產生退件 R 單，表頭帶入、三段需重填）。</li>
     </ol>
 
@@ -1015,14 +1016,25 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
           +'</div>';
       }
 
-      // 指派區
+      // 指派區（待指派＝指派；已指派但回覆人離職／留停＝重新指派）
+      var canAssignNow = perm.can_assign && (o.status==='open' || perm.can_reassign);
       var assignHtml='';
-      if(o.status==='open' && perm.can_assign){
-        assignHtml='<div class="panel panel-default"><div class="panel-heading" style="padding:6px 10px;"><b>指派回覆人</b></div><div class="panel-body">'
+      if(perm.can_reassign && o.assigned_to_name){
+        assignHtml+='<div class="alert alert-warning" style="padding:6px 10px;">原回覆人 <b>'+esc(o.assigned_to_name)+'</b> 已'
+          +esc(perm.assignee_blocked||'無法作業')+'，本單無人可填寫。'
+          +(canAssignNow?'請於下方重新指派回覆人，或指派給自己親自回覆。':'請聯絡責任單位主管重新指派回覆人。')
+          +'<br><span class="text-muted">已簽章的段落保留原簽章（那是當時本人簽的），接手者要修改請先「取消簽章」再重簽。</span></div>';
+      }
+      if(canAssignNow){
+        var isRe = (o.status!=='open');
+        assignHtml+='<div class="panel panel-default"><div class="panel-heading" style="padding:6px 10px;"><b>'
+          +(isRe?'重新指派回覆人':'指派回覆人')+'</b></div><div class="panel-body">'
           +'<div class="input-group input-group-sm" style="max-width:460px;"><select id="assignee-sel" class="form-control"><option value="">載入中…</option></select>'
-          +'<span class="input-group-btn"><button class="btn btn-primary" id="btn-assign">指派</button></span></div></div></div>';
-      } else if(o.assigned_to_name){
-        assignHtml='<div class="alert alert-info" style="padding:6px 10px;">回覆人：<b>'+esc(o.assigned_to_name)+'</b>（由 '+esc(o.assigned_by_name||'')+' 指派，'+fmtDT(o.assigned_at)+'）</div>';
+          +'<span class="input-group-btn"><button class="btn btn-primary" id="btn-assign">'+(isRe?'改派':'指派')+'</button></span></div>'
+          +'<div class="text-muted" style="margin-top:4px;">可指派給自己親自回覆；主管自行回覆的單，主管簽核關卡改由同單位其他主管簽，單位內無其他主管時直接送總經理裁決。</div>'
+          +'</div></div>';
+      } else if(o.assigned_to_name && !perm.can_reassign){
+        assignHtml+='<div class="alert alert-info" style="padding:6px 10px;">回覆人：<b>'+esc(o.assigned_to_name)+'</b>（由 '+esc(o.assigned_by_name||'')+' 指派，'+fmtDT(o.assigned_at)+'）</div>';
       }
 
       $('#view-body').html(
@@ -1069,15 +1081,22 @@ $permBadge = $permParts ? implode('+', $permParts) : '無';
           api('reject_open',{group_no:o.group_no, reason:reason}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ $('#viewModal').modal('hide'); fetchPage(state.page);} }); });
       }
 
-      // 指派
-      if(o.status==='open' && perm.can_assign){
+      // 指派 / 重新指派
+      if(canAssignNow){
         api('get_assignees',{id:id}).done(function(rr){
           var opts='<option value="">選擇回覆人…</option>';
-          (rr&&rr.data||[]).forEach(function(u){ opts+='<option value="'+u.id+'">'+esc(u.user_cname)+'（'+esc(u.position_name||'')+'）</option>'; });
+          (rr&&rr.data||[]).forEach(function(u){
+            var mine = ((u.id|0)===perm.me_id) ? '（本人）' : '';
+            opts+='<option value="'+u.id+'">'+esc(u.user_cname)+'（'+esc(u.position_name||'')+'）'+mine+'</option>'; });
           $('#assignee-sel').html(opts);
         });
         $('#btn-assign').on('click', function(){ var aid=$('#assignee-sel').val(); if(!aid){ alert('請選擇回覆人'); return; }
-          api('assign',{car_id:id, assignee_id:aid}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ openView(id); fetchPage(state.page);} }); });
+          if(o.status!=='open'){
+            var nm=$('#assignee-sel option:selected').text();
+            if(!confirm('確定將本單改派給 '+nm+' 接手回覆？\n原回覆人已簽章的段落會保留，接手者可取消簽章後修改重簽。')) return;
+          }
+          api('assign',{car_id:id, assignee_id:aid}).done(function(rr){ alert(rr&&rr.message||''); if(rr&&rr.success){ openView(id); fetchPage(state.page);} })
+            .fail(function(xhr){ alert((xhr.responseJSON&&xhr.responseJSON.message)||'指派失敗'); }); });
       }
 
       // 回覆三段：儲存/簽章/修改/送出

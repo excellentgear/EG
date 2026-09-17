@@ -602,7 +602,11 @@ try {
         // 目前使用者對此單可執行的動作
         $meId = (int)$me['id'];
         $isAssignee = (!empty($o['assigned_to']) && (int)$o['assigned_to'] === $meId);
-        $canAssign  = car_can_assign_order($pdo, $o, $meId) || _carHas('car_assign');
+        // 現任回覆人已離職／留停 → 開放責任單位主管重新指派（也可指派給自己親自回覆）
+        $assigneeBlocked = car_assignee_blocked($pdo, $o);
+        $canReassign     = car_can_reassign_order($pdo, $o);
+        $canAssign  = car_can_assign_order($pdo, $o, $meId)
+                      || (_carHas('car_assign') && ($o['status'] === 'open' || $canReassign));
         $canReply   = $isAssignee && in_array($o['status'], ['assigned', 'replying'], true);
         $canApprove = false;
         if ($o['status'] === 'applying') {
@@ -638,6 +642,8 @@ try {
             unset($_a);
         }
         $perm = ['can_assign' => (bool)$canAssign, 'can_reply' => (bool)$canReply,
+                 'can_reassign' => (bool)$canReassign,
+                 'assignee_blocked' => $assigneeBlocked ? $assigneeBlocked['label'] : '',
                  'can_approve' => (bool)$canApprove, 'is_assignee' => $isAssignee,
                  'can_edit_header' => (bool)$canEditHeader, 'can_resubmit' => (bool)$canResubmit,
                  'can_sign_primary' => (bool)$canSignPrimary, 'can_final' => (bool)$canFinal,
@@ -816,24 +822,45 @@ try {
         if (!$o) jfail('查無此單');
         if (!car_can_assign_order($pdo, $o, (int)$me['id']) && !_carHas('car_assign'))
             jerr('您不是此單責任單位的主管，無法指派', 403);
-        if ($o['status'] !== 'open') jfail('目前狀態不可指派（可能已被指派）');
+        // 已指派出去的單，只有「現任回覆人已離職／留停」才可重新指派（鐵律8：前端擋一次，這裡同規則再擋一次）
+        $blocked = car_assignee_blocked($pdo, $o);
+        $why     = $blocked ? $blocked['label'] : '無法作業';
+        $isReassign = ($o['status'] !== 'open');
+        if ($isReassign && !car_can_reassign_order($pdo, $o))
+            jfail('目前狀態不可指派（可能已被指派）');
         if (!$assignee) jfail('請選擇回覆人');
+        if ($isReassign && $assignee === (int)$o['assigned_to']) jfail('新回覆人與原回覆人相同');
+        if (eg_user_blocked_state($pdo, $assignee)) jfail('該人員已離職或留職停薪，不可指定為回覆人');
         $un = $pdo->prepare("SELECT user_cname FROM user WHERE id = ?"); $un->execute([$assignee]);
         $aname = $un->fetchColumn() ?: '';
         $pdo->prepare("UPDATE car_order SET assigned_to=?, assigned_to_name=?, assigned_by=?, assigned_by_name=?,
                         assigned_at=NOW(), status='assigned', stage_since=NOW() WHERE id=?")
             ->execute([$assignee, $aname, $me['id'], $me['name'], $id]);
-        car_log($pdo, $id, 'assign', (int)$me['id'], $me['name'], "指派「{$aname}」為回覆人");
+        if ($isReassign) {
+            $oldName = (string)$o['assigned_to_name'];
+            $self    = ($assignee === (int)$me['id']) ? '（主管本人親自回覆）' : '';
+            car_log($pdo, $id, 'assign', (int)$me['id'], $me['name'],
+                    "原回覆人「{$oldName}」{$why}，改派「{$aname}」為回覆人{$self}");
+            // 原回覆人的行動型通知已無人看得到，一併銷單免得永遠掛著
+            try { car_notify_done($pdo, $id, (int)$o['assigned_to']); } catch (Throwable $e) {}
+        } else {
+            car_log($pdo, $id, 'assign', (int)$me['id'], $me['name'], "指派「{$aname}」為回覆人");
+        }
         // 通知被指派者
         try {
             $ro = $pdo->prepare("SELECT * FROM car_order WHERE id = ?"); $ro->execute([$id]);
             $row = $ro->fetch(PDO::FETCH_ASSOC);
-            if ($row) car_notify($pdo, $id,
-                car_notify_title('🔧', $row, '指派您回覆'),
-                car_notify_body($pdo, $row, "指 派 人：{$me['name']}\n請填寫異常原因分析與處理情形並簽章送出。"),
-                [$assignee], (int)$me['id'], 'reply');   // 行動型：填寫送出前通知持續顯示
+            if ($row) {
+                $note = $isReassign
+                    ? "指 派 人：{$me['name']}\n原回覆人「{$o['assigned_to_name']}」已{$why}，本單改由您接手。\n已簽章的段落保留原簽章，要修改請先取消該段簽章再重簽。"
+                    : "指 派 人：{$me['name']}\n請填寫異常原因分析與處理情形並簽章送出。";
+                car_notify($pdo, $id,
+                    car_notify_title('🔧', $row, $isReassign ? '改派您接手回覆' : '指派您回覆'),
+                    car_notify_body($pdo, $row, $note),
+                    [$assignee], (int)$me['id'], 'reply');   // 行動型：填寫送出前通知持續顯示
+            }
         } catch (Throwable $e) {}
-        jout(['success' => true, 'message' => "已指派 {$aname} 回覆"]);
+        jout(['success' => true, 'message' => $isReassign ? "已改派 {$aname} 接手回覆" : "已指派 {$aname} 回覆"]);
     }
 
     // ── 被指派者：儲存三段草稿（已簽區段不覆寫）────────────────────────────
@@ -922,7 +949,7 @@ try {
     // ── 被指派者：三段完成、送出 → 待主管簽核 ──────────────────────────────
     case 'submit_reply': {
         $id = (int)($_POST['car_id'] ?? 0);
-        $st = $pdo->prepare("SELECT assigned_to, status FROM car_order WHERE id = ?"); $st->execute([$id]);
+        $st = $pdo->prepare("SELECT * FROM car_order WHERE id = ?"); $st->execute([$id]);
         $o = $st->fetch(PDO::FETCH_ASSOC);
         if (!$o) jfail('查無此單');
         if ((int)$o['assigned_to'] !== (int)$me['id']) jerr('您不是本單的回覆人', 403);
@@ -931,19 +958,35 @@ try {
         foreach (['cause', 'correction', 'prevention'] as $s) {
             if (empty($signed[$s])) jfail(car_section_name($s) . ' 尚未簽章，無法送出');
         }
-        $pdo->prepare("UPDATE car_order SET status='pending_primary', submitted_at=NOW(), stage_since=NOW() WHERE id=?")->execute([$id]);
-        car_log($pdo, $id, 'submit_reply', (int)$me['id'], $me['name'], '回覆完成送出，待主管簽核');
+        // SoD：主管把單指派給自己親自回覆時，主管簽核關卡改由同單位其他主管簽；
+        // 一個都沒有（該單位只有他一位主管）就直接進總經理裁決，不讓同一人分飾兩角。
+        $primaryPool = car_primary_pool_excluding($pdo, $o, (int)$me['id']);
+        $skipPrimary = !$primaryPool;
+        $nextStatus  = $skipPrimary ? 'pending_final' : 'pending_primary';
+        $pdo->prepare("UPDATE car_order SET status=?, submitted_at=NOW(), stage_since=NOW() WHERE id=?")
+            ->execute([$nextStatus, $id]);
+        car_log($pdo, $id, 'submit_reply', (int)$me['id'], $me['name'],
+                $skipPrimary ? '回覆完成送出；回覆人即為責任單位主管且單位內無其他主管，略過主管簽核，直接待總經理裁決'
+                             : '回覆完成送出，待主管簽核');
         car_notify_done($pdo, $id, (int)$me['id']);   // 完成填寫送出 → 清除本人的行動型通知
-        // 通知首要決策者（責任單位主管／廠商→生管主管）簽核
+        // 通知下一關：首要決策者（責任單位主管／廠商→生管主管）或最終決策者
         try {
             $ro = $pdo->prepare("SELECT * FROM car_order WHERE id = ?"); $ro->execute([$id]);
             $row = $ro->fetch(PDO::FETCH_ASSOC);
-            if ($row) car_notify($pdo, $id,
-                car_notify_title('🖊️', $row, '待您簽核'),
-                car_notify_body($pdo, $row, "回 覆 人：{$me['name']} 已完成三段填寫並簽章。"),
-                car_primary_recipients($pdo, $row), (int)$me['id']);
+            if ($row && $skipPrimary) {
+                $fd = array_map(function ($d) { return (int)$d['id']; }, car_final_deciders($pdo));
+                car_notify($pdo, $id,
+                    car_notify_title('🏁', $row, '待您最終裁決（結案/不可結案）'),
+                    car_notify_body($pdo, $row, "回 覆 人：{$me['name']}（責任單位主管本人回覆）已完成三段填寫並簽章。\n該單位無其他主管可簽核，依規定略過主管簽核關卡。"),
+                    $fd, (int)$me['id']);
+            } elseif ($row) {
+                car_notify($pdo, $id,
+                    car_notify_title('🖊️', $row, '待您簽核'),
+                    car_notify_body($pdo, $row, "回 覆 人：{$me['name']} 已完成三段填寫並簽章。"),
+                    $primaryPool, (int)$me['id']);
+            }
         } catch (Throwable $e) {}
-        jout(['success' => true, 'message' => '已送出，待主管簽核']);
+        jout(['success' => true, 'message' => $skipPrimary ? '已送出，待總經理裁決（本單位無其他主管可簽核）' : '已送出，待主管簽核']);
     }
 
     // ── 首要決策者（責任單位主管／廠商責任→生管主管）簽核 ──────────────────
@@ -953,6 +996,9 @@ try {
         $o = $st->fetch(PDO::FETCH_ASSOC);
         if (!$o) jfail('查無此單');
         if ($o['status'] !== 'pending_primary') jfail('目前狀態不在「待主管簽核」');
+        // SoD：本單回覆人不可簽核自己填的內容（單位內另有主管時）
+        if ((int)$o['assigned_to'] === (int)$me['id'] && car_primary_pool_excluding($pdo, $o, (int)$me['id']))
+            jerr('您是本單的回覆人，不可簽核自己填寫的內容，請由同單位其他主管簽核', 403);
         if (!car_is_primary_candidate($pdo, $o, (int)$me['id']) && !_carHas('car_sign_primary'))
             jerr('您不是本單責任單位的主管，無法簽核', 403);
 
@@ -989,6 +1035,8 @@ try {
         $o = $st->fetch(PDO::FETCH_ASSOC);
         if (!$o) jfail('查無此單');
         if ($o['status'] !== 'pending_primary') jfail('目前狀態不在「待主管簽核」');
+        if ((int)$o['assigned_to'] === (int)$me['id'] && car_primary_pool_excluding($pdo, $o, (int)$me['id']))
+            jerr('您是本單的回覆人，不可退回自己填寫的內容', 403);
         if (!car_is_primary_candidate($pdo, $o, (int)$me['id']) && !_carHas('car_sign_primary'))
             jerr('您不是本單責任單位的主管，無法退回', 403);
         if (!$o['assigned_to']) jfail('本單無回覆人可退回');
