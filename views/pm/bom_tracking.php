@@ -297,10 +297,30 @@ if ($has_access) {
             <p style="color:#888;font-size:12px;">也可以只針對某一筆BOM單獨開通知：於下方清單每列操作欄點「通知」設定。</p>
           </div>
           <div class="tab-pane" id="tabShare">
+            <label>可見範圍</label>
+            <div id="visBox" style="margin-bottom:10px;padding:8px 10px;background:#FFF7E6;border-radius:6px;">
+              <label style="font-weight:normal;display:block;margin:0 0 4px;">
+                <input type="radio" name="groupVis" value="private"> 私人（預設）— 只有我，以及下方「分享對象」裡指名的部門/人員看得到
+              </label>
+              <label style="font-weight:normal;display:block;margin:0 0 4px;">
+                <input type="radio" name="groupVis" value="dept"> 部門 — 我所屬部門（含兼職所在部門，及其底下各組）的同事都看得到
+              </label>
+              <label style="font-weight:normal;display:block;margin:0;">
+                <input type="radio" name="groupVis" value="public"> 公開 — 所有有「BOM追蹤」權限的人都看得到
+              </label>
+              <div style="color:#888;font-size:12px;margin-top:6px;">
+                要分享給<b>其他部門</b>（不限自己的部門）就用下方「分享對象」——可一次多選任意幾個部門與人員，
+                選了上層單位（部／課）時底下各組的人也看得到。<br>
+                不論哪一種，別人都<b>只能檢視</b>，不能改這個群組的規則、通知與分享設定（僅擁有者與系統管理員可改）。
+                系統管理員本來就看得到全公司的群組，不受這裡的設定影響。
+              </div>
+            </div>
             <label>分享對象（部門 / 人員，可多選）</label>
             <select id="shareSelect" multiple style="width:100%;">
               <?= eg_bomtrk_target_options($departments, $deptMap, $users) ?>
             </select>
+            <div style="color:#888;font-size:12px;margin-top:4px;">可同時選多個部門與人員（不限自己的部門）；選部門時該部門底下各組的人也看得到。</div>
+            <div id="shareCurrentList" style="font-size:12px;margin-top:6px;"></div>
             <div id="shareNoAccessWarn" class="no-access-warn" style="display:none;"></div>
           </div>
         </div>
@@ -362,8 +382,16 @@ if ($has_access) {
           <li>點「管理此群組」→「追蹤規則」分頁，新增規則（料號／BOM編號／客戶／業務／交期區間／備註）。</li>
           <li>規則設好後，清單即自動列出符合條件的BOM，可用篩選列的關鍵字/狀態再縮小範圍。</li>
           <li>「通知設定」分頁可開啟整個群組的通知，或在清單每列點「通知」單獨設定該筆BOM。</li>
-          <li>「分享設定」分頁可把群組分享給其他部門或人員（對方需已有BOM追蹤權限才看得到）。</li>
+          <li>「分享設定」分頁可設定<b>可見範圍</b>（私人／部門／公開），也可把群組分享給指名的部門或人員（對方需已有BOM追蹤權限才看得到）。</li>
         </ul>
+
+        <h4>可見範圍（誰看得到我的群組）</h4>
+        <div class="tip"><b>分享對象</b>可一次多選任意幾個部門與人員，<b>不限自己的部門</b>；選了上層單位（部／課）時，底下各組的人也一併看得到。每一筆分享後方會標出「實際有幾個人看得到」——分享到沒有人、或該單位的人都還沒有BOM追蹤權限時，看數字就知道要先去指派角色。<br>
+        新建群組一律是<b>私人</b>：只有自己看得到，別人（包含同部門的人）在群組下拉裡不會出現這個群組。要給別人看有三種做法：①保持私人，在「分享對象」指名部門或人員 ②改成<b>部門</b>＝自己所屬部門（含兼職所在部門）的同事都看得到 ③改成<b>公開</b>＝所有有BOM追蹤權限的人都看得到。不論哪一種，別人<b>只能檢視</b>，不能改你的規則／通知／分享設定（「管理此群組」「刪除群組」對他們是停用的）。<br>
+        另外：<b>系統管理員本來就看得到全公司的群組</b>（管理者固定擁有全部權限），這不是「群組被公開」——別人建立的群組在下拉裡會標明「○○○ 建立，管理員可見」。</div>
+
+        <h4>客戶規則比對到哪一家</h4>
+        <div class="tip">「客戶」規則（納入或排除）比對三個來源，任一符合就算：①這張製令綁定的<b>料號主檔客戶</b>（＝清單「客戶」欄顯示的那一家）②③所屬<b>訂單</b>的客戶。同一個料號在不同客戶底下常有各自的主檔（例：料號主檔是「展驊/豐億」、訂單卻掛在「豐億」底下），所以只看訂單會出現「明明排除了畫面上那一家、卻照樣列出來」；現在兩邊都比對得到。清單「客戶」欄一律以<b>料號主檔</b>為準（`bom` 表上的客戶文字是舊的快取值，可能與實際綁定不符）。</div>
 
         <h4>條件組（AND / OR 混用）</h4>
         <div class="tip">同一個「條件組」內的規則彼此是「且 AND」（例如料號=A 且 客戶=X）；不同條件組之間是「或 OR」。例如建立「條件組1：料號=A、客戶=X」與「條件組2：料號=B」，會匹配「(料號=A 且 客戶=X) 或 (料號=B)」。點「新增條件組」建立新的OR分支；每條規則新增前用「加入條件組」下拉選要放進哪一組。標示「排除：」的規則不分條件組，一律從最終結果中全域扣除。</div>
@@ -384,7 +412,7 @@ if ($has_access) {
         </ul>
 
         <h4>設定入口</h4>
-        <p>群組管理／規則／通知／分享皆在「管理此群組」跳窗內設定，僅群組擁有者或管理員可修改；被分享者僅能檢視清單。</p>
+        <p>群組管理／規則／通知／分享／可見範圍皆在「管理此群組」跳窗內設定，僅群組擁有者或系統管理員可修改；其他人（被分享者、部門群組或公開群組的檢視者）僅能檢視清單。</p>
 
         <h4>權限角色</h4>
         <p>本頁採全站二元權限：功能碼 <b>bom_track</b>。尚未取得權限者會看到「請先申請權限」畫面，請聯絡管理者至「使用者權限管理」頁面指派角色。</p>
@@ -422,8 +450,15 @@ function loadGroups(selectId) {
         if (!res.success) { alert(res.message || '讀取群組失敗'); return; }
         var $sel = $('#groupSelect').empty();
         (res.data || []).forEach(function (g) {
-            var label = g.group_name + (g.relation === 'shared' ? '（' + g.owner_name + '分享）' : '');
-            $sel.append($('<option>').val(g.group_id).text(label).data('relation', g.relation));
+            // 別人的群組一定要把擁有者印出來：管理員看得到全公司的群組，
+            // 不標的話畫面上會出現兩個同名群組、又看不出是誰建的（使用者因此以為「群組都變成公開的」）
+            var label = g.group_name;
+            if (g.relation === 'shared') label += '（' + g.owner_name + '分享，僅可檢視）';
+            else if (g.relation === 'admin') label += '（' + g.owner_name + ' 建立，管理員可見）';
+            else if (g.visibility && g.visibility !== 'private') label += '（' + g.visibility_label + '）';
+            $sel.append($('<option>').val(g.group_id).text(label)
+                .data('relation', g.relation).data('canEdit', g.can_edit == 1)
+                .data('visibility', g.visibility).data('ownerName', g.owner_name));
         });
         if (selectId) $sel.val(selectId);
         onGroupChange();
@@ -437,10 +472,18 @@ function currentGroupOption() {
 function onGroupChange() {
     var gid = $('#groupSelect').val();
     state.groupId = gid ? parseInt(gid, 10) : null;
-    var relation = currentGroupOption().data('relation');
-    state.isOwnerOrAdmin = (relation === 'owner');
-    $('#btnManageGroup, #btnDeleteGroup').prop('disabled', !state.groupId);
-    $('#groupOwnerBadge').text(relation === 'shared' ? '（他人分享給你，僅可檢視）' : '');
+    var $opt = currentGroupOption();
+    var relation = $opt.data('relation');
+    // can_edit 由後端判定（擁有者或系統管理員）；被分享/部門/公開群組的檢視者一律不可改，
+    // 按鈕也要一起停用——原本沒停用，被分享者打開「管理此群組」就能改別人的規則。
+    state.isOwnerOrAdmin = !!$opt.data('canEdit');
+    $('#btnManageGroup, #btnDeleteGroup').prop('disabled', !state.groupId || !state.isOwnerOrAdmin);
+    var badge = '';
+    if (relation === 'shared') badge = '（' + ($opt.data('ownerName') || '他人') + '分享給你，僅可檢視）';
+    else if (relation === 'admin') badge = '（' + ($opt.data('ownerName') || '他人') + '的群組，你以系統管理員身分檢視）';
+    else if ($opt.data('visibility') === 'dept') badge = '（部門群組：同部門同事可檢視）';
+    else if ($opt.data('visibility') === 'public') badge = '（公開群組：所有有BOM追蹤權限者可檢視）';
+    $('#groupOwnerBadge').text(badge);
     $('#bulkNotifyBar').toggle(state.isOwnerOrAdmin);
     $('#bomTrackTable').toggleClass('hide-select-col', !state.isOwnerOrAdmin);
     state.page = 1;
@@ -732,8 +775,23 @@ function loadGroupSettings() {
         $('#excludeClosedToggle').prop('checked', !!res.exclude_closed_snapshot);
         $('#btnRefreshSnapshot').toggle(!!res.exclude_closed_snapshot);
         $('#closedSnapInfo').text(res.exclude_closed_snapshot ? ('目前已永久排除 ' + res.snapshot_count + ' 筆已結案BOM（設定啟用當下的狀態）') : '');
+        // 可見範圍（私人/部門/公開）；沒有修改權限時整區停用（後端 save_visibility 也會再擋一次）
+        _visSyncing = true;
+        $('input[name=groupVis]').val([res.visibility || 'private']).prop('disabled', !res.can_edit);
+        _visSyncing = false;
     });
 }
+
+// ── 可見範圍（私人/部門/公開）─────────────────────────────────────────
+var _visSyncing = false;
+$(document).on('change', 'input[name=groupVis]', function () {
+    if (_visSyncing || !state.groupId) return;
+    var vis = $('input[name=groupVis]:checked').val();
+    apiPost('save_visibility', { group_id: state.groupId, visibility: vis }).done(function (res) {
+        if (!res.success) { alert(res.message || '設定失敗'); loadGroupSettings(); return; }
+        loadGroups(state.groupId);   // 下拉的（部門）/（公開）標示要跟著更新
+    });
+});
 $('#excludeClosedToggle').on('change', function () {
     var $cb = $(this);
     var enable = $cb.is(':checked');
@@ -1186,8 +1244,14 @@ function loadShares() {
         var codes = (res.data || []).map(function (x) { return x.code; });
         $shareSelect.val(codes).trigger('change');
         _shareSyncing = false;
-        var noAccess = (res.data || []).filter(function (x) { return !x.has_access; }).map(function (x) { return x.label; });
-        $('#shareNoAccessWarn').toggle(!!noAccess.length).text(noAccess.length ? ('以下分享對象目前尚無BOM追蹤權限，需先至「使用者權限管理」指派角色才看得到：' + noAccess.join('、')) : '');
+        // 目前分享中的對象逐筆列出（部門會標「含子部門」與實際看得到的人數），
+        // 不然分享到一個沒有人或大家都沒有BOM追蹤權限的單位時，畫面上看起來跟成功一模一樣
+        var rows = res.data || [];
+        $('#shareCurrentList').html(rows.length
+            ? ('目前分享中（' + rows.length + '）：' + rows.map(function (x) { return $('<span>').text(x.label).html(); }).join('　/　'))
+            : '<span class="text-muted">目前沒有指名分享對象</span>');
+        var noAccess = rows.filter(function (x) { return !x.has_access; }).map(function (x) { return x.label; });
+        $('#shareNoAccessWarn').toggle(!!noAccess.length).text(noAccess.length ? ('以下分享對象目前沒有人有BOM追蹤權限，需先至「使用者權限管理」指派角色才看得到：' + noAccess.join('、')) : '');
     });
 }
 $shareSelect.on('change', function () {

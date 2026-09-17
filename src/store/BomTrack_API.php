@@ -8,6 +8,8 @@ header('Content-Type: application/json; charset=utf-8');
 require_once __DIR__ . '/../common/DBConnection.php';
 require_once __DIR__ . '/../common/role_features_helper.php';
 require_once __DIR__ . '/../common/bom_track_notify.php';
+require_once __DIR__ . '/../common/bom_client_lib.php';
+require_once __DIR__ . '/../common/org_role_lib.php';     // eg_dept_subtree_ids()：部門＋子部門展開（分享到上層單位時用）   // 製令客戶名稱的唯一判定（料號主檔優先，非 bom.Client_Name 文字快取）
 
 if (!isset($_SESSION['id'])) {
     echo json_encode(['success' => false, 'message' => '尚未登入']);
@@ -24,6 +26,7 @@ if (!rf_has_module_role($db, $user_id, 'bom_track')) {
     exit;
 }
 $is_admin = rf_has_feature(rf_load_user_features($db, $user_id), 'all');
+bt_ensure_schema($db);
 
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 $response = ['success' => false, 'message' => '未知的 action: ' . $action];
@@ -48,10 +51,20 @@ function bt_rule_condition(array $r) {
         case 'bom':
             return [$pattern ? "bom.bom LIKE ?" : "bom.bom = ?", [$r['rule_value']]];
         case 'customer':
-            $op = $pattern ? 'LIKE' : '=';
-            $valCol = $pattern ? 'cl.customer' : 'ot.Client_name_ID';
+            // 客戶判定的三個來源，任一符合就算（2026-09-17 修）：
+            //   ①本製令綁定的料號主檔客戶（`bom.d_setting_id` → `d_setting.Customer_Id`）
+            //     ＝清單「客戶」欄顯示的那一家（`bom_client_lib.php` 的唯一判定）
+            //   ②③所屬訂單的客戶（`bom.o_order_id` 直接綁、或 `bom_order_process_map` 多對多）
+            // 原本只比對②③，而畫面上顯示的是①，於是出現「排除了『展驊/豐億』卻照樣列出來」——
+            // 實測 B-1150911004：料號主檔是 5C006 展驊/豐億、訂單卻掛在 ZU004 豐億 底下，
+            // 比對永遠對不上畫面上看到的那一家，而且完全不報錯。
+            // ①②③ 是**聯集**（不是改成只看①）：原本比對得到的仍然比對得到，不會讓既有群組的BOM憑空消失。
             if ($pattern) {
                 return ["(EXISTS (
+                    SELECT 1 FROM d_setting ds_c
+                    JOIN customer_list cl_c ON cl_c.customer_id = ds_c.Customer_Id
+                    WHERE ds_c.d_id = bom.d_setting_id AND cl_c.customer LIKE ?
+                ) OR EXISTS (
                     SELECT 1 FROM bom_order_process_map bopm
                     JOIN order_track ot ON ot.Order_id = bopm.order_id
                     JOIN customer_list cl ON cl.customer_id = ot.Client_name_ID
@@ -60,16 +73,22 @@ function bt_rule_condition(array $r) {
                     SELECT 1 FROM order_track ot2
                     JOIN customer_list cl2 ON cl2.customer_id = ot2.Client_name_ID
                     WHERE ot2.Order_id = bom.o_order_id AND cl2.customer LIKE ?
-                ))", [$r['rule_value'], $r['rule_value']]];
+                ) OR (
+                    -- 沒有綁料號主檔時，清單顯示的是 bom.Client_Name 這個文字快取，模糊比對一併涵蓋
+                    NOT EXISTS (SELECT 1 FROM d_setting ds_n WHERE ds_n.d_id = bom.d_setting_id)
+                    AND bom.Client_Name LIKE ?
+                ))", [$r['rule_value'], $r['rule_value'], $r['rule_value'], $r['rule_value']]];
             }
             return ["(EXISTS (
+                SELECT 1 FROM d_setting ds_c WHERE ds_c.d_id = bom.d_setting_id AND ds_c.Customer_Id = ?
+            ) OR EXISTS (
                 SELECT 1 FROM bom_order_process_map bopm
                 JOIN order_track ot ON ot.Order_id = bopm.order_id
                 WHERE bopm.bom = bom.bom AND ot.Client_name_ID = ?
             ) OR EXISTS (
                 SELECT 1 FROM order_track ot2
                 WHERE ot2.Order_id = bom.o_order_id AND ot2.Client_name_ID = ?
-            ))", [$r['rule_value'], $r['rule_value']]];
+            ))", [$r['rule_value'], $r['rule_value'], $r['rule_value']]];
         case 'sales':
             if ($pattern) {
                 // user.user_cname 是舊 latin1 欄位，中文樣式比對需 CONVERT
@@ -182,18 +201,91 @@ function bt_user_dept_ids(PDO $db, int $userId) {
     return array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
 }
 
-// 群組存取檢查：擁有者、被分享者(個人或所屬部門)、或全域管理員，回傳 bool
-function bt_can_access_group(PDO $db, int $groupId, int $userId, bool $isAdmin) {
+// 群組可見範圍欄位（2026-09-17 新增）：
+//   private＝私人（只有擁有者＋「分享設定」裡指名的部門/人員）— 既有群組一律預設這個，行為與過去完全相同
+//   dept   ＝擁有者所屬部門（含兼職所在部門）的同事都看得到
+//   public ＝所有有「BOM追蹤」權限的人都看得到
+// 可重複執行；欄位已存在就什麼都不做。
+function bt_ensure_schema(PDO $db) {
+    static $done = false;
+    if ($done) return;
+    $done = true;
+    try {
+        $st = $db->query("SHOW COLUMNS FROM bom_watch_group LIKE 'visibility'");
+        if (!$st->fetch(PDO::FETCH_ASSOC)) {
+            $db->exec("ALTER TABLE bom_watch_group
+                       ADD COLUMN visibility ENUM('private','dept','public') NOT NULL DEFAULT 'private'
+                       COMMENT '可見範圍：private=私人(擁有者+分享對象) dept=擁有者所屬部門 public=所有有BOM追蹤權限者'");
+        }
+    } catch (Throwable $e) { /* 建不出來時不讓整個 API 壞掉，後續查詢會自行報錯 */ }
+}
+
+function bt_visibility_label(string $v) {
+    return ['private' => '私人', 'dept' => '部門', 'public' => '公開'][$v] ?? '私人';
+}
+
+// 使用者所屬部門 ＋ 這些部門的所有上層部門（含自己）。
+// 組織是樹狀的（`department.parent_id`：資材部→生管/採購/倉管組），
+// 分享對象若選了「資材部」，底下生管組的人也必須看得到——
+// 只比對 `udpm.department_id = 分享的部門id` 的話，分享到課級/部級單位會**一個人都看不到而且不報錯**。
+function bt_user_dept_scope(PDO $db, int $userId) {
+    $st = $db->prepare("WITH RECURSIVE t AS (
+                            SELECT d.id, d.parent_id FROM department d
+                            JOIN user_department_position_map m ON m.department_id = d.id
+                            WHERE m.user_id = ?
+                            UNION ALL
+                            SELECT p.id, p.parent_id FROM department p JOIN t ON t.parent_id = p.id)
+                        SELECT DISTINCT id FROM t");
+    $st->execute([$userId]);
+    return array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+}
+
+// 兩個人是否至少共處一個部門（含兼職）— 「部門群組」的可見判定
+// 「部門群組」：擁有者所屬單位（或其上層單位）＝檢視者所屬單位時看得到。
+// 例：業務課的人設成部門群組，業務課底下各組的人也看得到；反過來（組員設定、課長看）不成立，
+// 那種情況請改用「公開」或在分享對象指名。
+function bt_same_dept(PDO $db, int $ownerId, int $userId) {
+    $owner = bt_user_dept_ids($db, $ownerId);
+    $viewerScope = bt_user_dept_scope($db, $userId);   // 檢視者的部門＋其上層
+    return (bool)array_intersect($owner, $viewerScope);
+}
+
+// 群組「可修改」檢查：只有擁有者或全域管理員。
+// 與 bt_can_access_group()（可檢視）刻意分開：被分享者/部門/公開群組的檢視者只能看，
+// 不可以改規則、改通知對象、改分享設定——否則別人會默默把你的群組規則改掉且完全看不出來。
+function bt_can_edit_group(PDO $db, int $groupId, int $userId, bool $isAdmin) {
     if ($isAdmin) return true;
     $st = $db->prepare("SELECT owner_user_id FROM bom_watch_group WHERE group_id = ?");
     $st->execute([$groupId]);
     $owner = $st->fetchColumn();
-    if ($owner === false) return false;
-    if ((int)$owner === $userId) return true;
+    return $owner !== false && (int)$owner === $userId;
+}
+
+// 由通知範圍(scope_id)反查所屬群組，用於訂閱者相關 action 的守門
+function bt_group_of_scope(PDO $db, int $scopeId) {
+    $st = $db->prepare("SELECT group_id FROM bom_watch_notify_scope WHERE scope_id = ?");
+    $st->execute([$scopeId]);
+    $gid = $st->fetchColumn();
+    return $gid === false ? 0 : (int)$gid;
+}
+
+// 群組存取檢查：擁有者、被分享者(個人或所屬部門)、或全域管理員，回傳 bool
+function bt_can_access_group(PDO $db, int $groupId, int $userId, bool $isAdmin) {
+    if ($isAdmin) return true;
+    $st = $db->prepare("SELECT owner_user_id, visibility FROM bom_watch_group WHERE group_id = ?");
+    $st->execute([$groupId]);
+    $g = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$g) return false;
+    $owner = (int)$g['owner_user_id'];
+    if ($owner === $userId) return true;
+    $vis = $g['visibility'] ?? 'private';
+    if ($vis === 'public') return true;
+    if ($vis === 'dept' && bt_same_dept($db, $owner, $userId)) return true;
     $st2 = $db->prepare("SELECT 1 FROM bom_watch_share WHERE group_id = ? AND target_type='user' AND target_id = ? LIMIT 1");
     $st2->execute([$groupId, $userId]);
     if ($st2->fetchColumn()) return true;
-    $deptIds = bt_user_dept_ids($db, $userId);
+    // 分享到部門：比對「我的部門＋所有上層部門」，所以分享給上層單位（部/課）時底下組的人也看得到
+    $deptIds = bt_user_dept_scope($db, $userId);
     if ($deptIds) {
         $in = implode(',', array_fill(0, count($deptIds), '?'));
         $st3 = $db->prepare("SELECT 1 FROM bom_watch_share WHERE group_id = ? AND target_type='dept' AND target_id IN ($in) LIMIT 1");
@@ -261,34 +353,53 @@ switch ($action) {
     case 'list_groups': {
         try {
             if ($is_admin) {
+                // 管理員看得到全公司的群組（鐵律：管理者固定擁有全部權限）。
+                // relation 一律標成 'owner' 會讓別人的群組在下拉裡看起來像自己建的
+                // （實測畫面上出現兩個一模一樣的「豐億」，使用者以為「新增的群組都變成公開」），
+                // 所以這裡分成 own（自己的）/ admin（別人的，管理員身分看到）兩種，前端會把擁有者印出來。
                 $rows = $db->prepare("
-                    SELECT g.group_id, g.group_name, g.owner_user_id, u.user_cname AS owner_name,
-                           'owner' AS relation
+                    SELECT g.group_id, g.group_name, g.owner_user_id, u.user_cname AS owner_name, g.visibility,
+                           CASE WHEN g.owner_user_id = ? THEN 'owner' ELSE 'admin' END AS relation
                     FROM bom_watch_group g
                     JOIN user u ON u.id = g.owner_user_id
                     ORDER BY g.created_at DESC
                 ");
-                $rows->execute();
+                $rows->execute([$user_id]);
             } else {
                 // 分享對象存在 bom_watch_share.target_type/target_id（user=個人、dept=整個部門），
-                // 而非 shared_with_user_id（該欄不存在）。可見群組 = 自己擁有 OR 被個人分享 OR 所屬部門被分享，
-                // 與 bt_can_access_group() 判斷邏輯一致。
+                // 而非 shared_with_user_id（該欄不存在）。可見群組 = 自己擁有 OR 公開 OR 部門群組且與擁有者同部門
+                // OR 被個人分享 OR 所屬部門被分享，與 bt_can_access_group() 判斷邏輯一致。
+                // 「我的部門＋所有上層部門」：分享給上層單位（部/課）時，底下組的人也要看得到，
+                // 判定與 bt_can_access_group() 共用同一支 bt_user_dept_scope()。
+                $deptScope = bt_user_dept_scope($db, $user_id);
+                $inDept = $deptScope ? implode(',', array_fill(0, count($deptScope), '?')) : 'NULL';
                 $rows = $db->prepare("
-                    SELECT g.group_id, g.group_name, g.owner_user_id, u.user_cname AS owner_name,
+                    SELECT g.group_id, g.group_name, g.owner_user_id, u.user_cname AS owner_name, g.visibility,
                            CASE WHEN g.owner_user_id = ? THEN 'owner' ELSE 'shared' END AS relation
                     FROM bom_watch_group g
                     JOIN user u ON u.id = g.owner_user_id
                     WHERE g.owner_user_id = ?
+                       OR g.visibility = 'public'
+                       OR (g.visibility = 'dept' AND EXISTS (
+                             SELECT 1 FROM user_department_position_map m_own
+                             WHERE m_own.user_id = g.owner_user_id AND m_own.department_id IN ($inDept)))
                        OR EXISTS (SELECT 1 FROM bom_watch_share s
                                   WHERE s.group_id = g.group_id AND s.target_type='user' AND s.target_id = ?)
                        OR EXISTS (SELECT 1 FROM bom_watch_share s2
-                                  JOIN user_department_position_map udpm ON udpm.department_id = s2.target_id
-                                  WHERE s2.group_id = g.group_id AND s2.target_type='dept' AND udpm.user_id = ?)
+                                  WHERE s2.group_id = g.group_id AND s2.target_type='dept' AND s2.target_id IN ($inDept))
                     ORDER BY g.created_at DESC
                 ");
-                $rows->execute([$user_id, $user_id, $user_id, $user_id]);
+                $rows->execute(array_merge([$user_id, $user_id], $deptScope, [$user_id], $deptScope));
             }
-            $response = ['success' => true, 'data' => $rows->fetchAll(PDO::FETCH_ASSOC)];
+            $data = $rows->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($data as &$g) {
+                $g['visibility'] = $g['visibility'] ?: 'private';
+                $g['visibility_label'] = bt_visibility_label($g['visibility']);
+                $g['is_mine'] = ((int)$g['owner_user_id'] === $user_id) ? 1 : 0;
+                $g['can_edit'] = ($g['is_mine'] || $is_admin) ? 1 : 0;
+            }
+            unset($g);
+            $response = ['success' => true, 'data' => $data];
         } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
         break;
     }
@@ -299,7 +410,7 @@ switch ($action) {
         if ($name === '') { $response = ['success' => false, 'message' => '請輸入群組名稱']; break; }
         try {
             if ($groupId) {
-                if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) {
+                if (!bt_can_edit_group($db, $groupId, $user_id, $is_admin)) {
                     $response = ['success' => false, 'message' => '無權限修改此群組']; break;
                 }
                 $db->prepare("UPDATE bom_watch_group SET group_name=? WHERE group_id=?")->execute([$name, $groupId]);
@@ -392,7 +503,7 @@ switch ($action) {
     // cond_group_id：這筆規則屬於哪個條件組(同組AND、組間OR)；排除規則不分組，一律存NULL(全域套用)。
     case 'save_rule': {
         $groupId = (int)($_POST['group_id'] ?? 0);
-        if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+        if (!bt_can_edit_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
         $ruleType = $_POST['rule_type'] ?? '';
         if (!in_array($ruleType, ['part', 'bom', 'customer', 'sales', 'due_range', 'note'], true)) {
             $response = ['success' => false, 'message' => '不支援的規則類型']; break;
@@ -463,7 +574,7 @@ switch ($action) {
     // 條件組1，使用者才看得到條件組1確實存在，再建立新的條件組。
     case 'add_cond_group': {
         $groupId = (int)($_POST['group_id'] ?? 0);
-        if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+        if (!bt_can_edit_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
         try {
             $db->beginTransaction();
             $chk = $db->prepare("SELECT COUNT(*) FROM bom_watch_rule WHERE group_id=? AND cond_group_id IS NULL AND is_exclude=0");
@@ -500,7 +611,7 @@ switch ($action) {
             $st->execute([$cgId]);
             $groupId = $st->fetchColumn();
             if ($groupId === false) { $response = ['success' => false, 'message' => '找不到條件組']; break; }
-            if (!bt_can_access_group($db, (int)$groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+            if (!bt_can_edit_group($db, (int)$groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
             $cntSt = $db->prepare("SELECT COUNT(*) FROM bom_watch_cond_group WHERE group_id=?");
             $cntSt->execute([$groupId]);
             if ((int)$cntSt->fetchColumn() <= 1) { $response = ['success' => false, 'message' => '至少要保留一個條件組']; break; }
@@ -521,19 +632,23 @@ switch ($action) {
         $groupId = (int)($_GET['group_id'] ?? 0);
         if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
         try {
-            $st = $db->prepare("SELECT exclude_closed_snapshot FROM bom_watch_group WHERE group_id=?");
+            $st = $db->prepare("SELECT exclude_closed_snapshot, visibility, owner_user_id FROM bom_watch_group WHERE group_id=?");
             $st->execute([$groupId]);
-            $enabled = (int)$st->fetchColumn();
+            $g = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+            $enabled = (int)($g['exclude_closed_snapshot'] ?? 0);
             $cnt = $db->prepare("SELECT COUNT(*) FROM bom_watch_closed_snapshot WHERE group_id=?");
             $cnt->execute([$groupId]);
-            $response = ['success' => true, 'exclude_closed_snapshot' => $enabled, 'snapshot_count' => (int)$cnt->fetchColumn()];
+            $response = ['success' => true, 'exclude_closed_snapshot' => $enabled,
+                         'snapshot_count' => (int)$cnt->fetchColumn(),
+                         'visibility' => $g['visibility'] ?: 'private',
+                         'can_edit' => bt_can_edit_group($db, $groupId, $user_id, $is_admin) ? 1 : 0];
         } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
         break;
     }
 
     case 'toggle_exclude_closed': {
         $groupId = (int)($_POST['group_id'] ?? 0);
-        if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+        if (!bt_can_edit_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
         $enable = !empty($_POST['enable']);
         try {
             $db->prepare("UPDATE bom_watch_group SET exclude_closed_snapshot=? WHERE group_id=?")->execute([$enable ? 1 : 0, $groupId]);
@@ -553,7 +668,7 @@ switch ($action) {
     // 手動重新整理快照：把「現在」符合規則且已結案的BOM也一併加入永久排除清單(既有的不會被移除，即使已重開)
     case 'refresh_closed_snapshot': {
         $groupId = (int)($_POST['group_id'] ?? 0);
-        if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+        if (!bt_can_edit_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
         try {
             $added = bt_snapshot_closed_boms($db, $groupId);
             $cnt = $db->prepare("SELECT COUNT(*) FROM bom_watch_closed_snapshot WHERE group_id=?");
@@ -570,7 +685,7 @@ switch ($action) {
             $st->execute([$ruleId]);
             $groupId = $st->fetchColumn();
             if ($groupId === false) { $response = ['success' => false, 'message' => '找不到規則']; break; }
-            if (!bt_can_access_group($db, (int)$groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+            if (!bt_can_edit_group($db, (int)$groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
             $db->prepare("DELETE FROM bom_watch_rule WHERE rule_id=?")->execute([$ruleId]);
             $response = ['success' => true];
         } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
@@ -630,7 +745,7 @@ switch ($action) {
             // 公式比照原本 rebuild_bom_summary.php 的邏輯(目前所在關卡序位÷總關卡數)，
             // 差別是排除 processing_state='skip'（生管明確標記不加工的製程）不計入分子分母
             $sql = "
-                SELECT bom.bom, bom.d_id, bom.Client_Name, bom.processing_state,
+                SELECT bom.bom, bom.d_id, " . eg_bom_client_expr('bom') . " AS Client_Name, bom.processing_state,
                        -- 交期優先取 bom 自身，若空(常見)則回退到所屬訂單(order_track)的交期，與 order_no 取法一致。
                        COALESCE(
                          bom.Delivery_date,
@@ -665,6 +780,7 @@ switch ($action) {
                        ) AS sales_name
                 FROM bom
                 LEFT JOIN order_track ot_due ON ot_due.Order_id = bom.o_order_id
+                " . eg_bom_client_join('bom') . "
                 $whereSql
                 ORDER BY COALESCE(bom.Delivery_date, ot_due.Delivery_date) IS NULL,
                          COALESCE(bom.Delivery_date, ot_due.Delivery_date) ASC
@@ -807,7 +923,9 @@ switch ($action) {
 
     case 'search_boms': {
         $kw = trim($_GET['kw'] ?? '');
-        $st = $db->prepare("SELECT bom, d_id, Client_Name FROM bom WHERE bom LIKE ? ORDER BY bom DESC LIMIT 20");
+        $st = $db->prepare("SELECT b.bom, b.d_id, " . eg_bom_client_expr('b') . " AS Client_Name
+                            FROM bom b " . eg_bom_client_join('b') . "
+                            WHERE b.bom LIKE ? ORDER BY b.bom DESC LIMIT 20");
         $st->execute(["%{$kw}%"]);
         $response = ['success' => true, 'data' => $st->fetchAll(PDO::FETCH_ASSOC)];
         break;
@@ -850,7 +968,7 @@ switch ($action) {
     // 開關「整個群組」或「單一BOM」的通知範圍，回傳 scope_id
     case 'toggle_notify_scope': {
         $groupId = (int)($_POST['group_id'] ?? 0);
-        if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+        if (!bt_can_edit_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
         $scopeType = ($_POST['scope_type'] ?? '') === 'bom' ? 'bom' : 'group';
         $scopeBom = $scopeType === 'bom' ? trim($_POST['scope_bom'] ?? '') : null;
         $enable = !empty($_POST['enable']);
@@ -881,6 +999,10 @@ switch ($action) {
 
     case 'get_subscribers': {
         $scopeId = (int)($_GET['scope_id'] ?? 0);
+        // 守門：scope_id 反查所屬群組再判可見（原本完全沒擋，換個 scope_id 就能讀到別人群組的通知對象）
+        if (!bt_can_access_group($db, bt_group_of_scope($db, $scopeId), $user_id, $is_admin)) {
+            $response = ['success' => false, 'message' => '無權限']; break;
+        }
         $st = $db->prepare("SELECT id, target_type, user_id AS target_id FROM bom_watch_subscriber WHERE scope_id = ?");
         $st->execute([$scopeId]);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
@@ -904,6 +1026,10 @@ switch ($action) {
     case 'save_subscribers': {
         $scopeId = (int)($_POST['scope_id'] ?? 0);
         $codes = json_decode($_POST['codes'] ?? '[]', true);
+        // 守門：只有群組擁有者/管理員可以改通知對象（原本完全沒擋）
+        if (!bt_can_edit_group($db, bt_group_of_scope($db, $scopeId), $user_id, $is_admin)) {
+            $response = ['success' => false, 'message' => '無權限']; break;
+        }
         if (!is_array($codes)) { $response = ['success' => false, 'message' => 'codes 格式錯誤']; break; }
         try {
             $db->beginTransaction();
@@ -922,6 +1048,20 @@ switch ($action) {
         break;
     }
 
+    // 群組可見範圍：private=私人（只有我＋分享對象）／dept=我所屬部門／public=所有有BOM追蹤權限的人。
+    // 只有擁有者或管理員可以改；新建群組一律 private（欄位預設值），不會「一建立就全公司看得到」。
+    case 'save_visibility': {
+        $groupId = (int)($_POST['group_id'] ?? 0);
+        $vis = $_POST['visibility'] ?? '';
+        if (!in_array($vis, ['private', 'dept', 'public'], true)) { $response = ['success' => false, 'message' => '可見範圍值不正確']; break; }
+        if (!bt_can_edit_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '只有群組擁有者或管理員可以修改可見範圍']; break; }
+        try {
+            $db->prepare("UPDATE bom_watch_group SET visibility=? WHERE group_id=?")->execute([$vis, $groupId]);
+            $response = ['success' => true, 'visibility' => $vis, 'visibility_label' => bt_visibility_label($vis)];
+        } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
+        break;
+    }
+
     // ── 分享 ─────────────────────────────────────────────────────────
     case 'get_shares': {
         $groupId = (int)($_GET['group_id'] ?? 0);
@@ -935,14 +1075,24 @@ switch ($action) {
                 $q = $db->prepare("SELECT name FROM department WHERE id=?");
                 $q->execute([(int)$r['target_id']]);
                 $deptName = $q->fetchColumn() ?: '（部門已刪除）';
-                // 部門分享的「權限」以部門內是否至少一人有 bom_track 權限來判斷，僅供提示用
-                $memberChk = $db->prepare("SELECT user_id FROM user_department_position_map WHERE department_id=?");
-                $memberChk->execute([(int)$r['target_id']]);
-                $hasAccess = false;
-                foreach ($memberChk->fetchAll(PDO::FETCH_COLUMN) as $mid) {
-                    if (rf_has_module_role($db, (int)$mid, 'bom_track')) { $hasAccess = true; break; }
+                // 部門分享一律含子部門（分享「資材部」＝生管/採購/倉管組的人都看得到）。
+                // 同時算出「實際有幾個人看得到」——分享到沒有人或大家都沒有BOM追蹤權限的單位時，
+                // 畫面上要看得出來，不然使用者會以為設定沒有生效。
+                $subIds = eg_dept_subtree_ids($db, (int)$r['target_id']);
+                $members = [];
+                if ($subIds) {
+                    $in = implode(',', array_fill(0, count($subIds), '?'));
+                    $memberChk = $db->prepare("SELECT DISTINCT user_id FROM user_department_position_map WHERE department_id IN ($in)");
+                    $memberChk->execute($subIds);
+                    $members = array_map('intval', $memberChk->fetchAll(PDO::FETCH_COLUMN));
                 }
-                $data[] = ['share_id' => $r['share_id'], 'code' => 'dept-' . $r['target_id'], 'type' => 'dept', 'label' => $deptName . '（整個部門）', 'has_access' => $hasAccess];
+                $okCnt = 0;
+                foreach ($members as $mid) { if (rf_has_module_role($db, $mid, 'bom_track')) $okCnt++; }
+                $subNote = (count($subIds) > 1) ? '含子部門' : '整個部門';
+                $data[] = ['share_id' => $r['share_id'], 'code' => 'dept-' . $r['target_id'], 'type' => 'dept',
+                           'label' => $deptName . '（' . $subNote . '，' . $okCnt . ' 人看得到）',
+                           'member_count' => count($members), 'access_count' => $okCnt,
+                           'has_access' => $okCnt > 0];
             } else {
                 $info = bt_user_display($db, (int)$r['target_id']);
                 $label = $info ? ($info['user_cname'] . '（' . ($info['dept_name'] ?: '未指定') . '/' . ($info['pos_name'] ?: '未指定') . ($info['concurrent'] ? '，兼：' . implode('、', $info['concurrent']) : '') . '）') : ('使用者#' . $r['target_id']);
@@ -957,7 +1107,7 @@ switch ($action) {
     case 'save_share': {
         $groupId = (int)($_POST['group_id'] ?? 0);
         $codes = json_decode($_POST['codes'] ?? '[]', true);
-        if (!bt_can_access_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+        if (!bt_can_edit_group($db, $groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
         if (!is_array($codes)) { $response = ['success' => false, 'message' => 'codes 格式錯誤']; break; }
         try {
             $db->beginTransaction();
@@ -983,7 +1133,7 @@ switch ($action) {
             $st->execute([$shareId]);
             $groupId = $st->fetchColumn();
             if ($groupId === false) { $response = ['success' => false, 'message' => '找不到分享紀錄']; break; }
-            if (!bt_can_access_group($db, (int)$groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
+            if (!bt_can_edit_group($db, (int)$groupId, $user_id, $is_admin)) { $response = ['success' => false, 'message' => '無權限']; break; }
             $db->prepare("DELETE FROM bom_watch_share WHERE share_id=?")->execute([$shareId]);
             $response = ['success' => true];
         } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
