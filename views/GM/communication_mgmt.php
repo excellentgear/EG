@@ -116,7 +116,7 @@ $roleLabel = cm_role_label($perms);
         .cm-mhd { background:#F7E0BD; color:#5b3a1e; font-weight:bold; padding:10px 15px; border-radius:8px 8px 0 0;
             display:flex; justify-content:space-between; align-items:center; }
         .cm-mhd .x { cursor:pointer; color:#b5762a; }
-        .cm-mbd { padding:14px 16px; overflow-y:auto; }
+        .cm-mbd { padding:14px 16px; overflow-y:auto; overflow-x:hidden; }
         .cm-mft { padding:10px 15px; border-top:1px solid #EADFC8; text-align:right; }
         .cm-mft button, .cm-mbd button.act { height:30px; padding:0 16px; border-radius:4px; font-size:13px; cursor:pointer;
             border:1px solid #D8BE93; background:#fff; color:#5b3a1e; margin-left:6px; }
@@ -125,7 +125,8 @@ $roleLabel = cm_role_label($perms);
 
         /* ---- 表單版面 ---- */
         .fgrid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:8px 14px; }
-        .fgrid .full { grid-column:1 / -1; }
+        .fgrid .full { grid-column:1 / -1; min-width:0; }
+        .fgrid > div { min-width:0; }
         .fgrid label, .fld label { display:block; font-size:12.5px; color:#5b3a1e; margin:0 0 2px; font-weight:bold; }
         .fgrid input[type=text], .fgrid input[type=date], .fgrid input[type=number], .fgrid select, .fgrid textarea,
         .fld input[type=text], .fld input[type=date], .fld select, .fld textarea {
@@ -172,13 +173,14 @@ $roleLabel = cm_role_label($perms);
 
         /* ---- 依類別連動的利害關係者挑選器 ---- */
         .pk-box { border:1px dashed #E0CDA9; border-radius:6px; background:#FDF8EF; padding:7px 9px; margin-top:5px; }
-        .pk-line { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:5px; }
+        .pk-line { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:5px; min-width:0; }
+        .pk-line > * { min-width:0; max-width:100%; }
         .pk-line:last-child { margin-bottom:0; }
         .pk-line > label { font-size:12.5px; color:#5b3a1e; font-weight:bold; margin:0; white-space:nowrap; }
         .pk-line input[type=text], .pk-line select { border:1px solid #D8BE93; border-radius:4px; padding:4px 7px;
             font-size:12.5px; background:#fff; color:#5b3a1e; box-sizing:border-box; height:28px; }
         .pk-line select { max-width:100%; }
-        .pk-grow { flex:1 1 220px; min-width:170px; }
+        .pk-grow { flex:1 1 220px; min-width:120px; max-width:100%; }
         .pk-sum { font-size:12px; color:#8A5A2B; background:#F7E0BD; border-radius:4px; padding:3px 8px;
             display:inline-block; margin-top:4px; }
         .pk-sum.none { background:#F5EEE2; color:#8a6d45; }
@@ -371,9 +373,9 @@ $roleLabel = cm_role_label($perms);
                 <div class="pk-box" id="pkEmpBox" style="display:none;">
                     <div class="pk-line">
                         <label>部門</label>
-                        <select id="pkDept" style="width:230px;" data-eg-filter="輸入部門名稱篩選…"></select>
+                        <select id="pkDept" style="width:230px;"></select>
                         <label>員工／職稱</label>
-                        <select id="pkUser" class="pk-grow" data-eg-filter="輸入姓名或職稱篩選…"></select>
+                        <select id="pkUser" class="pk-grow"></select>
                     </div>
                     <div class="hint">職稱依<b>溝通日期</b>回推當時的（ai-rules/22）；一個人身兼多職時，每個職稱各列一列。</div>
                 </div>
@@ -394,11 +396,15 @@ $roleLabel = cm_role_label($perms);
             </div>
             <div class="full">
                 <label>填表人／部門 <span style="color:#DD5138;">*</span>
-                    <span class="hint" id="fMakerFixed" style="font-weight:normal;display:none;">（一般使用者固定為自己，不可修改）</span></label>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                    <select id="fMakerDept" style="width:190px;display:none;"></select>
-                    <select id="fMaker" style="width:210px;display:none;"></select>
-                    <select id="fIdentity" style="flex:1 1 300px;min-width:240px;"></select>
+                    <span class="hint" id="fMakerFixed" style="font-weight:normal;display:none;">（填表人固定是您本人；身兼多職時可自行選擇要用哪個部門／職位填這張表）</span></label>
+                <div class="pk-line">
+                    <label style="font-weight:normal;">部門</label>
+                    <select id="fMakerDept" style="width:200px;"></select>
+                    <span id="fMakerWrap"><label style="font-weight:normal;">人員</label>
+                        <select id="fMaker" style="width:200px;"></select></span>
+                    <label style="font-weight:normal;">職位</label>
+                    <select id="fIdentity" class="pk-grow"></select>
+                    <span class="hint" id="fMakerShowMe"></span>
                 </div>
                 <div class="hint" id="signPreview" style="margin-top:4px;"></div>
                 <span class="err" id="eIdentity"></span>
@@ -491,8 +497,8 @@ $roleLabel = cm_role_label($perms);
             <div class="full"><label>負責人 <span style="color:#DD5138;">*</span>
                     <span class="hint" style="font-weight:normal;">（先選部門，再挑該部門底下的人；職稱依溝通日期回推當時的）</span></label>
                 <div class="pk-line">
-                    <select id="ttOwnerDept" style="width:200px;" data-eg-filter="輸入部門名稱篩選…"></select>
-                    <select id="ttOwner" class="pk-grow" data-eg-filter="輸入姓名或職稱篩選…"></select>
+                    <select id="ttOwnerDept" style="width:200px;"></select>
+                    <select id="ttOwner" class="pk-grow"></select>
                 </div>
                 <span class="err" id="eTtOwner"></span></div>
             <div><label>預計完成日 <span style="color:#DD5138;">*</span></label>
@@ -517,8 +523,8 @@ $roleLabel = cm_role_label($perms);
             <div class="full"><label>負責人 <span style="color:#DD5138;">*</span>
                     <span class="hint" style="font-weight:normal;">（先選部門，再挑該部門底下的人）</span></label>
                 <div class="pk-line">
-                    <select id="tkOwnerDept" style="width:200px;" data-eg-filter="輸入部門名稱篩選…"></select>
-                    <select id="tkOwner" class="pk-grow" data-eg-filter="輸入姓名或職稱篩選…"></select>
+                    <select id="tkOwnerDept" style="width:200px;"></select>
+                    <select id="tkOwner" class="pk-grow"></select>
                 </div>
                 <span class="err" id="eTkOwner"></span></div>
             <div><label>預計完成日 <span id="tkDueStar" style="color:#DD5138;">*</span></label>
@@ -582,9 +588,9 @@ $roleLabel = cm_role_label($perms);
                 <div class="pk-box" id="cfEmpBox" style="display:none;">
                     <div class="pk-line">
                         <label>部門</label>
-                        <select id="cfDept" style="width:220px;" data-eg-filter="輸入部門名稱篩選…"></select>
+                        <select id="cfDept" style="width:220px;"></select>
                         <label>員工／職稱</label>
-                        <select id="cfUser" class="pk-grow" data-eg-filter="輸入姓名或職稱篩選…"></select>
+                        <select id="cfUser" class="pk-grow"></select>
                     </div>
                 </div>
 
@@ -814,9 +820,12 @@ $roleLabel = cm_role_label($perms);
                 <br>・<b>員工</b>：先選<b>部門</b>再挑人；職稱是<b>依溝通日期回推當時的</b>，
                     <b>主要職務與兼任職務都會列出來</b>（同一個人掛兩個職稱就出現兩列，那是兩種身分）。
                 <br>・<b>其他</b>：填「類別說明」（例：主管機關）並自行輸入對象名稱。</li>
-            <li>③「填表人／部門」：<b>溝通管理員可以先選部門再挑人</b>（代其他人建單）；
-                一般使用者固定是自己、不可修改。<b>身兼多個部門職稱的人要自己選要用哪一個身分填這張表</b>（預設帶主要職務），
-                選好之後下方會即時顯示<b>這張單會送給誰確認</b>。</li>
+            <li>③「填表人／部門」是<b>部門 → 人員 → 職位</b>三段式：
+                <br>・<b>溝通管理員</b>：三段都可以選，可以代其他人建單（先選部門找人，再選那個人在該部門的職位）。
+                <br>・<b>一般使用者</b>：<b>填表人自動就是您本人、不可修改</b>（「人員」那一段不會出現）；
+                    但<b>「部門」只會列出您自己有職務的部門</b>、「職位」列出您在該部門的職稱，
+                    所以<b>身兼多部門多職位的人可以自己選要用哪一個身分填這張表</b>（預設停在主要職務）。
+                <br>選好之後下方會即時顯示<b>這張單會送給誰確認</b>——不同身分的部門主管不一樣，換身分簽核人就會跟著換。</li>
             <li>④ 逐列填溝通問題與回覆內容。末列按 <b>↓</b> 自動加一列、沒填東西的末列按 <b>↑</b> 自動移除。</li>
             <li>⑤ 需要的話上傳佐證附件（新增中就可以先傳，按下儲存時自動歸到這張單）。
                 <b>「說明」欄是選填</b>：填了之後清單上就顯示這段說明而不是原始檔名
@@ -1306,7 +1315,7 @@ function openRec(id){
         $('#recRejectBox').hide(); $('#recSignArea').hide();
         $('#btnRecSave,#btnRecSubmit').show(); $('#btnRecPrint').hide();
         $('#recStatusHint').text('');
-        setupMakerPicker(0, 0);
+        setupMakerPicker(0, 0, 0);
         resetPartyPicker(null);
         renderItems(); renderAttaches(); reloadIdentities();
         openMask('recMask');
@@ -1323,7 +1332,7 @@ function openRec(id){
         $('#fAttNote').val('');
         var ch = {}; $.each(META.channels, function(k){ ch[k] = +r['ch_' + k]; });
         buildChoiceRows(r.comm_type, r.party_kind, r.party_kind_other, ch, r.ch_other_text);
-        setupMakerPicker(r.maker_id, r.maker_dept_id);
+        setupMakerPicker(r.maker_id, r.maker_dept_id, r.maker_pos_id);
         resetPartyPicker(r);
         if (r.status === 'draft' && r.reject_note){
             $('#recRejectBox').show().html('<b style="color:#DD5138;">此單曾被退回</b>　退回人：' + esc(r.reject_by)
@@ -1334,38 +1343,72 @@ function openRec(id){
         $('#recStatusHint').html('狀態：<b>' + esc(META.status[r.status] || r.status) + '</b>'
             + (+r.mgr_skip ? '（部門主管確認格免簽）' : ''));
         renderItems(); renderAttaches(); renderSignArea(res);
-        reloadIdentities(r.maker_dept_id + '|' + r.maker_pos_id);
         openMask('recMask');
     });
 }
-/* ---- ② 填表人：管理員可先選部門再挑人；一般使用者固定是自己、不可修改 ---- */
-function setupMakerPicker(makerId, makerDeptId){
+/* ---- ② 填表人／部門：「部門 → 人員 → 職位」三段式 ----
+   管理員／溝通管理員：三段都可選（代其他人建單）。
+   一般使用者：**填表人自動＝建立者本人、不可改**（人員那一段整個隱藏），
+   但「部門」只列他自己有職務的部門、「職位」列他在該部門的職稱——
+   身兼多部門多職位的人照樣可以自己選要用哪個身分填這張表（使用者明確要求）。
+
+   三段都不掛打字篩選框：已經先用部門收斂過，每一段的選項都只剩幾個，
+   篩選框反而是多餘的干擾（使用者指定）。 */
+function setupMakerPicker(makerId, makerDeptId, makerPosId){
     var admin = !!META.perms.canAdmin;
-    $('#fMakerDept,#fMaker').toggle(admin);
+    $('#fMakerWrap').toggle(admin);
     $('#fMakerFixed').toggle(!admin);
+    $('#fMakerShowMe').text(admin ? '' : META.me.name);
+    MAKERUID = admin ? +(makerId || META.me.id) : +META.me.id;
+
+    var keep = (makerDeptId && makerPosId) ? (makerDeptId + '|' + makerPosId) : '';
     if (!admin){
-        MAKERUID = +META.me.id;
+        // 部門清單＝自己有職務的那幾個部門，由 identities 回推（依溝通日期）
+        reloadIdentities(keep, +makerDeptId || 0);
         return;
     }
-    MAKERUID = +(makerId || META.me.id);
-    // 沒指定部門時（新增單）預設帶自己的部門，這樣一開啟就已經有一份可挑的名單
+    // 管理員：部門是「要在哪個部門裡找人」，選到的人＋該部門就是填表身分的部門
     var dept = +makerDeptId || 0;
     if (!dept){
         (META.people || []).forEach(function(p){ if (+p.id === MAKERUID && !dept) dept = +p.department_id || 0; });
     }
     fillDeptSel('#fMakerDept', dept, '請選擇部門…');
-    loadDeptPeople(dept, '#fMaker', $('#fCommDate').val() || TODAY, MAKERUID, function(rows){
-        // 挑的人不在這個部門（例如管理員把日期改到他還沒到職的時候）就退回自己，避免送出被後端擋下
-        if (!pickedPerson('#fMaker') && rows.length === 0) MAKERUID = +META.me.id;
+    loadDeptPeopleUniq(dept, '#fMaker', $('#fCommDate').val() || TODAY, MAKERUID, function(rows){
+        if (!pickedPerson('#fMaker') && !rows.length) MAKERUID = +META.me.id;
+        reloadIdentities(keep, dept);
+    });
+}
+/** 管理員挑「人」時同一個人只需要出現一次（職位在第三段選），所以依 user id 去重 */
+function loadDeptPeopleUniq(deptId, userSel, date, keepUid, cb){
+    var sEl = $(userSel);
+    PEOPLECACHE[sEl.attr('id')] = [];
+    if (!+deptId){ sEl.empty().append($('<option>').val('').text('請先選擇部門')); if (cb) cb([]); return; }
+    sEl.empty().append($('<option>').val('').text('載入中…'));
+    get({action:'dept_people', dept_id:deptId, date:date || TODAY}, function(res){
+        var seen = {}, rows = [];
+        (res.rows || []).forEach(function(p){ if (!seen[p.id]){ seen[p.id] = 1; rows.push(p); } });
+        PEOPLECACHE[sEl.attr('id')] = rows;
+        sEl.empty().append($('<option>').val('').text(rows.length ? '請選擇人員…' : '（該部門在此日期查無在職人員）'));
+        rows.forEach(function(p, i){ sEl.append($('<option>').val(i).text(p.name)); });
+        if (keepUid){
+            for (var i = 0; i < rows.length; i++) if (+rows[i].id === +keepUid){ sEl.val(String(i)); break; }
+        }
+        if (cb) cb(rows);
     });
 }
 $('#fMakerDept').on('change', function(){
-    loadDeptPeople(this.value, '#fMaker', $('#fCommDate').val() || TODAY, 0, function(){ });
+    var d = this.value;
+    if (META.perms.canAdmin){
+        loadDeptPeopleUniq(d, '#fMaker', $('#fCommDate').val() || TODAY, 0, function(){ reloadIdentities('', +d || 0); });
+    } else {
+        // 一般使用者：部門一換，職位下拉就換成他在新部門的職稱
+        fillIdentityPos(+d || 0, 0);
+    }
 });
 $('#fMaker').on('change', function(){
     var p = pickedPerson('#fMaker');
     MAKERUID = p ? +p.id : +META.me.id;
-    reloadIdentities();
+    reloadIdentities('', +$('#fMakerDept').val() || 0);
 });
 
 function buildChoiceRows(type, kind, kindOther, ch, chOther){
@@ -1527,23 +1570,74 @@ function syncPartyFromPicker(){
 /* 身分資料放模組變數、不要掛在 <option> 的 jQuery data 上：
    打字篩選（eg_input_rules.js 規則7）會把整批 <option> 用 innerHTML 重畫，掛在 option 上的 data 會整個不見，
    症狀是「篩選過一次之後簽核人預覽就空白了」——只有實際打字篩選才看得到。 */
-var IDMAP = {}, GMPOOL = [];
-function reloadIdentities(keep){
+var IDMAP = {}, GMPOOL = [], IDENTS = [];
+/**
+ * 抓這個人在該業務日期的全部身分（部門×職稱），填進「部門」與「職位」兩段下拉。
+ * @param keep     想保留的 dept|pos（改日期時沿用原本選的身分）
+ * @param wantDept 想停在哪一個部門（管理員挑完人之後＝他挑人的那個部門）
+ */
+function reloadIdentities(keep, wantDept){
     var uid = MAKERUID || META.me.id;
+    var admin = !!META.perms.canAdmin;
     get({action:'identities', user_id:uid, date:$('#fCommDate').val() || TODAY}, function(res){
-        var s = $('#fIdentity').empty();
+        IDENTS = res.identities || [];
         IDMAP = {}; GMPOOL = res.gm_pool || [];
-        (res.identities || []).forEach(function(i){
-            var key = i.department_id + '|' + i.position_id;
-            IDMAP[key] = i;
-            s.append($('<option>').val(key)
-                .text(i.department_name + '　' + i.position_name + '（職位編號 ' + i.pos_sort + '）' + (i.is_main ? '　主要職務' : '')));
-        });
-        if (keep && s.find('option[value="' + keep + '"]').length) s.val(keep);
-        if (!res.identities || !res.identities.length){
-            $('#signPreview').html('<span style="color:#DD5138;">查無您在該日期的部門／職稱資料，請洽人事確認員工部門職稱設定。</span>');
-        } else showSignPreview();
+        IDENTS.forEach(function(i){ IDMAP[i.department_id + '|' + i.position_id] = i; });
+
+        if (!IDENTS.length){
+            $('#fIdentity').empty().append($('<option>').val('').text('（查無部門／職稱）'));
+            if (!admin) $('#fMakerDept').empty().append($('<option>').val('').text('（查無部門）'));
+            $('#signPreview').html('<span style="color:#DD5138;">查無'
+                + (admin && uid !== +META.me.id ? '這位人員' : '您') + '在該日期的部門／職稱資料，請洽人事確認員工部門職稱設定。</span>');
+            return;
+        }
+
+        var keepDept = 0, keepPos = 0;
+        if (keep){ var kv = String(keep).split('|'); keepDept = +kv[0] || 0; keepPos = +kv[1] || 0; }
+
+        if (!admin){
+            /* 一般使用者：部門下拉只列他自己有職務的部門（去重、依職位編號排序），
+               不是全公司的部門清單——列出去也選不到人，只會讓人以為可以代別人填。 */
+            var seen = {}, depts = [];
+            IDENTS.forEach(function(i){
+                if (seen[i.department_id]) return;
+                seen[i.department_id] = 1;
+                depts.push({id:i.department_id, name:i.department_name, sort:i.pos_sort});
+            });
+            var dsel = $('#fMakerDept').empty();
+            depts.forEach(function(d){ dsel.append($('<option>').val(d.id).text(d.name)); });
+            var pick = keepDept || wantDept || 0;
+            if (!pick || !seen[pick]){
+                // 沒指定就停在主要職務的部門（拍板③：預設主職）
+                var main = null;
+                IDENTS.forEach(function(i){ if (+i.is_main && !main) main = i; });
+                pick = +((main || IDENTS[0]).department_id);
+            }
+            dsel.val(String(pick));
+            fillIdentityPos(pick, keepPos);
+            return;
+        }
+
+        // 管理員：部門下拉是全公司（找人用），職位下拉限「他在這個部門」的職稱
+        var d = keepDept || wantDept || +$('#fMakerDept').val() || 0;
+        fillIdentityPos(d, keepPos);
     });
+}
+/** 依部門填「職位」下拉；該部門沒有職稱時退回列出這個人的全部身分，不要變成空白選不了 */
+function fillIdentityPos(deptId, keepPos){
+    var s = $('#fIdentity').empty();
+    var list = IDENTS.filter(function(i){ return +i.department_id === +deptId; });
+    if (!list.length) list = IDENTS.slice();
+    list.forEach(function(i){
+        s.append($('<option>').val(i.department_id + '|' + i.position_id)
+            .text(i.position_name + '（職位編號 ' + i.pos_sort + '）' + (i.is_main ? '　主要職務' : '')));
+    });
+    if (keepPos){
+        var k = deptId + '|' + keepPos;
+        if (s.find('option[value="' + k + '"]').length) s.val(k);
+    }
+    if (!s.val() && list.length) s.val(list[0].department_id + '|' + list[0].position_id);
+    showSignPreview();
 }
 function showSignPreview(){
     var i = IDMAP[$('#fIdentity').val()];
@@ -1573,9 +1667,14 @@ $('#fIdentity').on('change', showSignPreview);
    填表身分、管理員代填時的人員清單、以及類別＝員工時的對象清單。只改一份就會出現
    「畫面上挑得到、送出卻被後端擋下」——因為後端是用溝通日期重新驗的（鐵律8）。 */
 $('#fCommDate').on('change', function(){
-    var d = this.value || TODAY;
-    reloadIdentities($('#fIdentity').val());
-    if (META.perms.canAdmin) loadDeptPeople($('#fMakerDept').val(), '#fMaker', d, MAKERUID, function(){ });
+    var d = this.value || TODAY, keep = $('#fIdentity').val();
+    if (META.perms.canAdmin){
+        loadDeptPeopleUniq($('#fMakerDept').val(), '#fMaker', d, MAKERUID, function(){
+            reloadIdentities(keep, +$('#fMakerDept').val() || 0);
+        });
+    } else {
+        reloadIdentities(keep, +$('#fMakerDept').val() || 0);
+    }
     if (currentKind() === 'employee') loadDeptPeople($('#pkDept').val(), '#pkUser', d, PARTY.user_id, function(){ syncPartyFromPicker(); });
 });
 
