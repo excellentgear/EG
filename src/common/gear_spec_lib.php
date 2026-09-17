@@ -8,6 +8,19 @@
  */
 function eg_gear_spec_for_part(PDO $db, int $dsPk): ?string {
     if (!$dsPk) return null;
+    $m = eg_gear_spec_map($db, [$dsPk]);
+    return $m[$dsPk] ?? null;
+}
+
+/**
+ * 批次版（2026-09-17 新增，供清單頁一次取多支料號的齒輪規格用）。
+ * 單筆版 eg_gear_spec_for_part() 已改為呼叫本函式——**規則只有這一份**，
+ * 不要再另外複製一段同樣的樣板替換 SQL（鐵律4）。
+ * @return array d_setting.d_id => 齒輪規格字串（查無規格的料號不會出現在回傳陣列裡）
+ */
+function eg_gear_spec_map(PDO $db, array $dsPks): array {
+    $dsPks = array_values(array_unique(array_filter(array_map('intval', $dsPks))));
+    if (!$dsPks) return [];
     try {
         $tmplReplacements = [
             '{Module}'               => "COALESCE(NULLIF(g.module_display,''), IF(g.Module IS NOT NULL AND g.Module<>'', IF(LEFT(UPPER(g.Module),1)='M', g.Module, CONCAT('M',g.Module)), ''))",
@@ -32,7 +45,8 @@ function eg_gear_spec_for_part(PDO $db, int $dsPk): ?string {
         $tmplExpr = 'dt.display_template';
         foreach ($tmplReplacements as $token => $expr) { $tmplExpr = "REPLACE($tmplExpr, '$token', $expr)"; }
 
-        $sql = "SELECT GROUP_CONCAT(
+        $ph  = implode(',', array_fill(0, count($dsPks), '?'));
+        $sql = "SELECT g.d_setting_id, GROUP_CONCAT(
                     CASE
                       WHEN dt.display_template IS NOT NULL AND dt.display_template<>'' THEN
                         $tmplExpr
@@ -62,11 +76,15 @@ function eg_gear_spec_for_part(PDO $db, int $dsPk): ?string {
                 ) AS gear_str
                 FROM d_setting_gear g
                 LEFT JOIN dict_gear_type dt ON dt.gear_type_id = g.Gear_Type
-                WHERE g.d_setting_id = ?
+                WHERE g.d_setting_id IN ($ph)
                 GROUP BY g.d_setting_id";
         $st = $db->prepare($sql);
-        $st->execute([$dsPk]);
-        $v = $st->fetchColumn();
-        return ($v !== false && $v !== null && $v !== '') ? $v : null;
-    } catch (Throwable $e) { return null; }
+        $st->execute($dsPks);
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $v = $r['gear_str'];
+            if ($v !== null && $v !== '') $out[(int)$r['d_setting_id']] = $v;
+        }
+        return $out;
+    } catch (Throwable $e) { return []; }
 }

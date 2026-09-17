@@ -1606,7 +1606,8 @@ $_quotDepts = array_keys($_deptSet);
                         rs_of('leave'), rsu_of('leave'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('ship', 'shipping', '快速出貨', 'fa-truck', '#F0A24B',
-                        '為每位使用者指派「快速出貨」頁的操作角色。角色功能：<strong>出貨檢閱</strong>＝查詢待出貨清單、檢視近期出貨單與匯出，<span style="color:#b06f27;">不可建立出貨單</span>；<strong>出貨登錄</strong>＝檢閱＋建立出貨單（同客戶同日自動併為一張出貨單，並回填訂單編號與扣製令完工量）；<strong>出貨管理員</strong>＝登錄＋執行「舊資料訂單回填」（把 ERP 匯入、未帶訂單編號的歷史出貨資料比對回訂單）。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
+                        '為每位使用者指派「快速出貨」頁的操作角色。角色功能：<strong>出貨檢閱</strong>＝查詢待出貨清單、檢視近期出貨單與匯出，<span style="color:#b06f27;">不可建立出貨單</span>；<strong>出貨登錄</strong>＝檢閱＋建立出貨單（同客戶同日自動併為一張出貨單，並回填訂單編號與扣製令完工量）；<strong>出貨管理員</strong>＝登錄＋執行「舊資料訂單回填」（把 ERP 匯入、未帶訂單編號的歷史出貨資料比對回訂單）＋設定列印用的 AS 文件編號綁定。<br>
+                         <strong>刪除出貨單</strong>＝<span style="color:#b06f27;">獨立角色，不含在上面的階層裡</span>（刪一張出貨單會把數量退回原訂單、必要時自動把已結案的訂單重新打開，所以不因為有管理員角色就順帶取得，要另外指派）；已進對帳底稿或已開發票的明細一律擋下不可刪。<strong>未被指派角色者無法進入本頁</strong>；管理者固定擁有全部權限。',
                         rs_of('shipping'), rsu_of('shipping'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('purc', 'purchase', '申請採購', 'fa-shopping-cart', '#8A5A2B',

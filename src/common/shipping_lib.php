@@ -12,7 +12,11 @@
  *         否則看最後一道製程(MAX bom_sn)是否為 'E'(生管已移轉) → 取該道 sqty；否則 0。
  */
 
+require_once __DIR__ . '/gear_spec_lib.php';   // 齒輪規格（與報價單/訂單追蹤同一份實作）
+
 if (!defined('SQ_MODULE')) define('SQ_MODULE', 'shipping');
+/** AS 文件編號綁定用的模組代碼（見 ai-rules/16 第一之三節） */
+if (!defined('SQ_ASDOC_MODULE')) define('SQ_ASDOC_MODULE', 'shipping_note');
 /** 手動改選訂單時，候選清單一次最多列幾張（取離出貨日最近的那些） */
 if (!defined('SQ_CAND_LIMIT')) define('SQ_CAND_LIMIT', 300);
 
@@ -46,7 +50,8 @@ function sq_has_role(PDO $db, int $uid, array $codes): bool
 
 function sq_perms(PDO $db, ?array $u): array
 {
-    if (!$u) return ['isAdmin' => false, 'canAdmin' => false, 'canEdit' => false, 'canView' => false];
+    if (!$u) return ['isAdmin' => false, 'canAdmin' => false, 'canEdit' => false,
+                     'canView' => false, 'canDelete' => false];
     $uid = (int)$u['id'];
     $isAdmin = in_array((int)$u['user_status'], [9, 90], true);
     if (!$isAdmin) {
@@ -58,7 +63,27 @@ function sq_perms(PDO $db, ?array $u): array
     $canAdmin = $isAdmin  || sq_has_role($db, $uid, ['shipping_admin']);
     $canEdit  = $canAdmin || sq_has_role($db, $uid, ['shipping_edit']);
     $canView  = $canEdit  || sq_has_role($db, $uid, ['shipping_view']);
-    return ['isAdmin' => $isAdmin, 'canAdmin' => $canAdmin, 'canEdit' => $canEdit, 'canView' => $canView];
+    /* 刪除出貨單是獨立角色、不含在管理員以下的階層裡：刪一張已出的貨會把數量退回訂單、
+       還可能把已結案的訂單重新打開，不應該因為「有管理員角色」就順帶取得（使用者要求另開角色）。 */
+    $canDelete = $isAdmin || sq_has_role($db, $uid, ['shipping_delete']);
+    return ['isAdmin' => $isAdmin, 'canAdmin' => $canAdmin, 'canEdit' => $canEdit,
+            'canView' => $canView, 'canDelete' => $canDelete];
+}
+
+/* ============================================================
+ * 品名規格：全站唯一組法
+ * ============================================================ */
+
+/**
+ * 「品名規格」欄位字串＝ 料號規格＋齒輪規格 ／ 製程 ／ 料號備註。
+ * 與報價單列印版（views/Sales/quotation_list_NEW.php）同一套規則，
+ * 清單／CSV／出貨單明細／列印一律呼叫這一支，不要各自 join 一次（鐵律4）。
+ */
+function sq_desc_text(?string $specNo, ?string $gearSpec, ?string $process, ?string $remark): string
+{
+    $left  = implode(' ', array_filter([trim((string)$specNo), trim((string)$gearSpec)], fn($v) => $v !== ''));
+    $parts = array_filter([$left, trim((string)$process), trim((string)$remark)], fn($v) => $v !== '');
+    return implode(' / ', $parts);
 }
 
 /* ============================================================
@@ -100,7 +125,10 @@ function sq_bom_avail_map(PDO $db, ?array $boms = null): array
             JOIN (SELECT bom, bom_sn, MAX(bom_ing_fid) AS mf FROM bom_ing GROUP BY bom, bom_sn) dd
               ON dd.bom = bi.bom AND dd.bom_sn = bi.bom_sn AND dd.mf = bi.bom_ing_fid
         ) bl ON bl.bom = b.bom
-        LEFT JOIN (SELECT bom, SUM(shipped_qty) AS shipped FROM is_bom_map GROUP BY bom) sm
+        LEFT JOIN (SELECT m.bom, SUM(m.shipped_qty) AS shipped
+                   FROM is_bom_map m
+                   JOIN is_list il ON il.IS_id = m.IS_id      -- 出貨明細被刪掉時，殘留的分配列不可再算成「已出」
+                   GROUP BY m.bom) sm
           ON sm.bom = b.bom
         $where";
 
@@ -231,6 +259,7 @@ function sq_pending_orders(PDO $db, array $f): array
 
     $sql = "
         SELECT ot.Order_id, ot.Order_oo, ot.d_id, ot.d_id_ID, ot.Specification, ot.Order_ps,
+               COALESCE(ot.C_order,'')                   AS c_order,
                ot.Client_name, ot.Client_name_ID, ot.Qty, ot.unit_price, ot.Order_status,
                COALESCE(ot.Processing_items,'')          AS processing_items,
                DATE_FORMAT(ot.Order_date,'%Y-%m-%d')     AS order_date,
@@ -254,6 +283,9 @@ function sq_pending_orders(PDO $db, array $f): array
         return ['rows' => [], 'total' => 0,
                 'summary' => ['orders' => 0, 'remain' => 0, 'ready' => 0, 'amount' => 0]];
     }
+
+    // 齒輪規格（一次撈完，不要逐列查）
+    $gearMap = eg_gear_spec_map($db, array_column($rows, 'd_id_ID'));
 
     // 附加製令與可出量
     $orderIds = array_column($rows, 'Order_id');
@@ -293,6 +325,18 @@ function sq_pending_orders(PDO $db, array $f): array
         }
         $ready = min($remain, $readyTotal);
 
+        /* 可出量為 0 的原因要講清楚：製令明明已完工、只是被別張出貨吃完了，
+           畫面卻寫「無完工」＝使用者一定會以為系統壞掉（2026-09-17 使用者回報）。 */
+        $doneSum = array_sum(array_column($bomView, 'done'));
+        $readyNote = '';
+        if ($ready <= 0) {
+            if (!$bomView)          $readyNote = '無製令';
+            elseif ($doneSum <= 0)  $readyNote = '無完工';
+            else                    $readyNote = '製令已出完';
+        }
+
+        $gear = $r['d_id_ID'] !== null ? ($gearMap[(int)$r['d_id_ID']] ?? '') : '';
+
         $out[] = [
             'order_id'         => $oid,
             'order_oo'         => $r['Order_oo'],
@@ -300,6 +344,9 @@ function sq_pending_orders(PDO $db, array $f): array
             'd_setting_id'     => $r['d_id_ID'] !== null ? (int)$r['d_id_ID'] : null,
             'specification'    => $r['Specification'],
             'part_spec'        => $r['part_spec'],
+            'gear_spec'        => $gear,
+            'desc_full'        => sq_desc_text($r['part_spec'], $gear, $r['processing_items'], $r['Specification']),
+            'c_order'          => $r['c_order'],
             'order_ps'         => $r['Order_ps'],
             'processing_items' => $r['processing_items'],
             'client_id'        => $r['customer_id'] ?: ($r['Client_name_ID'] ?: null),
@@ -315,6 +362,8 @@ function sq_pending_orders(PDO $db, array $f): array
             'order_status'     => $r['Order_status'] !== null ? (int)$r['Order_status'] : null,
             'boms'             => $bomView,
             'bom_count'        => count($bomView),
+            'done_qty'         => $doneSum,
+            'ready_note'       => $readyNote,
         ];
     }
 
@@ -847,24 +896,300 @@ function sq_recent_shipments(PDO $db, array $f): array
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
 
-/** 取單一出貨單的所有明細（列印送貨單用） */
+/** 取單一出貨單的所有明細（檢視與列印出貨單用） */
 function sq_shipment_detail(PDO $db, string $isNumber): array
 {
     $st = $db->prepare("
         SELECT il.IS_id, il.IS_number, DATE_FORMAT(il.Order_date,'%Y-%m-%d') AS ship_date,
                il.Client_id, il.Client_name, il.Product_id, il.d_setting_id, il.Specification,
                il.Qty, il.Unit_price, il.Order_id, il.Warehouse, il.Note,
-               ot.Order_oo,
+               il.Created_By, DATE_FORMAT(il.Created_At,'%Y-%m-%d %H:%i') AS created_at,
+               ot.Order_oo, COALESCE(ot.C_order,'') AS c_order,
+               COALESCE(ot.Processing_items,'')     AS processing_items,
+               COALESCE(ot.Specification,'')        AS order_spec,
+               COALESCE(ds.Spec_No,'')              AS part_spec,
                COALESCE(cl.customer, il.Client_name) AS client_display,
-               cl.customer_full, cl.tax_id, cl.customer_address,
+               cl.customer_full, cl.tax_id, cl.customer_address, cl.customer_tel, cl.customer_fax,
                GROUP_CONCAT(ibm.bom ORDER BY ibm.bom SEPARATOR ',') AS boms
         FROM is_list il
         LEFT JOIN order_track   ot  ON ot.Order_id    = il.Order_id
         LEFT JOIN customer_list cl  ON cl.customer_id = il.Client_id
+        LEFT JOIN d_setting     ds  ON ds.d_id        = il.d_setting_id
         LEFT JOIN is_bom_map    ibm ON ibm.IS_id      = il.IS_id
         WHERE il.IS_number = ?
         GROUP BY il.IS_id
         ORDER BY il.IS_id");
     $st->execute([$isNumber]);
-    return $st->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return [];
+
+    /* is_list.Client_id 全表都是空的（ERP 匯入從來沒帶），所以上面那個 JOIN 一定 miss，
+       統編／電話／傳真／地址會整片空白。歸戶一律走會計模組那支「含別名」的唯一入口
+       acc_customer_by_name()（ERP 寫「高鋒工業」、主檔是「高鋒」這種只有它對得起來），
+       不要在這裡自己再寫一套比對（鐵律4）。 */
+    $needCust = false;
+    foreach ($rows as $r) if (trim((string)$r['Client_id']) === '') { $needCust = true; break; }
+    if ($needCust) {
+        $cmap = [];
+        try {
+            require_once __DIR__ . '/acc_lib.php';
+            if (function_exists('acc_customer_by_name')) $cmap = acc_customer_by_name($db);
+        } catch (Throwable $e) { }
+        foreach ($rows as &$r0) {
+            if (trim((string)$r0['Client_id']) !== '') continue;
+            $c = $cmap[trim((string)$r0['Client_name'])] ?? null;
+            if (!$c) continue;
+            $r0['Client_id']        = $c['customer_id'];
+            $r0['client_display']   = $c['customer'] ?: $r0['client_display'];
+            $r0['customer_full']    = $c['customer_full'];
+            $r0['tax_id']           = $c['tax_id'];
+            $r0['customer_address'] = $c['customer_address'];
+            $r0['customer_tel']     = $c['customer_tel'] ?? '';
+            $r0['customer_fax']     = $c['customer_fax'] ?? '';
+        }
+        unset($r0);
+    }
+
+    // 建立者姓名：Created_By 存的是 user.id 字串，但舊 ERP 資料可能是帳號，
+    // 直接在 SQL 裡 JOIN 會踩到 user 表的 latin1 欄位定序衝突，故在 PHP 端解析。
+    $uids = array_values(array_unique(array_filter(array_column($rows, 'Created_By'), 'is_numeric')));
+    $uname = [];
+    if ($uids) {
+        try {
+            $q = $db->prepare("SELECT id, user_cname FROM user WHERE id IN ("
+                              . implode(',', array_fill(0, count($uids), '?')) . ")");
+            $q->execute($uids);
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $uname[(string)$x['id']] = $x['user_cname'];
+        } catch (Throwable $e) { }
+    }
+
+    // 齒輪規格一次撈完，再組出與報價單相同格式的「品名規格」
+    $gearMap = eg_gear_spec_map($db, array_column($rows, 'd_setting_id'));
+    foreach ($rows as &$r) {
+        $gear = $r['d_setting_id'] !== null ? ($gearMap[(int)$r['d_setting_id']] ?? '') : '';
+        $r['gear_spec'] = $gear;
+        // 料號備註優先用訂單上的（報價單就是印這個），沒綁訂單才退回出貨明細自己存的規格文字
+        $rmk = $r['order_spec'] !== '' ? $r['order_spec'] : (string)$r['Specification'];
+        $r['desc_full'] = sq_desc_text($r['part_spec'], $gear, $r['processing_items'], $rmk);
+        $r['created_by_name'] = $uname[(string)$r['Created_By']] ?? (string)$r['Created_By'];
+    }
+    unset($r);
+    return $rows;
+}
+
+/* ============================================================
+ * 出貨單：備註修改 ／ 刪除（2026-09-17 使用者交辦）
+ * ============================================================ */
+
+/**
+ * 刪除／修改前的擋門：這張出貨明細已經被會計端用掉了就不可以再動。
+ * 已進對帳單或已開發票的列若被刪掉，帳面金額會對不起來而且完全看不出原因。
+ * @param array $isIds is_list.IS_id
+ * @return array 阻擋原因（空陣列＝可以刪）
+ */
+function sq_shipment_guard(PDO $db, array $isIds): array
+{
+    $isIds = array_values(array_unique(array_map('intval', array_filter($isIds))));
+    if (!$isIds) return ['找不到要處理的出貨明細'];
+    $ph  = implode(',', array_fill(0, count($isIds), '?'));
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT COUNT(DISTINCT sheet_id) FROM acc_recon_line
+                            WHERE src_type = 'IS' AND src_id IN ($ph)");
+        $st->execute($isIds);
+        $n = (int)$st->fetchColumn();
+        if ($n > 0) $out[] = "已被 {$n} 份對帳底稿引用，請先到「對帳作業」把該列移除後再刪";
+    } catch (Throwable $e) { /* 表不存在＝沒有這層限制 */ }
+    try {
+        $st = $db->prepare("SELECT COUNT(*) FROM acc_invoice_item
+                            WHERE UPPER(src_type) = 'IS' AND src_id IN ($ph)");
+        $st->execute($isIds);
+        $n = (int)$st->fetchColumn();
+        if ($n > 0) $out[] = "已開立發票（{$n} 筆發票明細），不可刪除";
+    } catch (Throwable $e) { }
+    return $out;
+}
+
+/**
+ * 修改出貨明細的備註。
+ * @return array ['success'=>bool,'message'=>string]
+ */
+function sq_shipment_note_save(PDO $db, int $isId, string $note, array $user): array
+{
+    if ($isId <= 0) return ['success' => false, 'message' => '缺少出貨明細 id'];
+    $note = mb_substr(trim($note), 0, 100);      // is_list.Note 是 varchar(100)
+
+    $st = $db->prepare("SELECT IS_id, IS_number, Product_id, COALESCE(Note,'') AS Note FROM is_list WHERE IS_id = ?");
+    $st->execute([$isId]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$row) return ['success' => false, 'message' => '查無此出貨明細（可能已被刪除，請重新整理）'];
+    if ($row['Note'] === $note) return ['success' => true, 'message' => '備註未變更', 'note' => $note];
+
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE is_list SET Note = ? WHERE IS_id = ?")->execute([$note, $isId]);
+        sq_audit($db, 'update', 'shipment_note', (string)$isId,
+                 $row['IS_number'] . ' ' . $row['Product_id'],
+                 ['before' => $row['Note'], 'after' => $note], $user);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '儲存失敗：' . $e->getMessage()];
+    }
+    return ['success' => true, 'message' => '備註已更新', 'note' => $note];
+}
+
+/**
+ * 刪除出貨單（整張）或其中幾筆明細。
+ *
+ * 一併處理的四件事（少做任何一件都會留下對不起來的資料）：
+ *  1. 製令扣帳 is_bom_map 一起刪掉——不刪的話製令的「已出」永遠掛著，可出量算不回來。
+ *  2. 追溯對照的分配表（is_order_map／ir_reship_map／return_order_map）與
+ *     shipment_order_map 一併清掉，否則追溯圖上會出現指向不存在單據的線。
+ *  3. 出貨量回到原訂單＝刪掉 is_list 列本身（訂單未出量是即時由 is_list 加總算出來的，
+ *     沒有另一份數量要回寫）。
+ *  4. 原訂單若因為這次出貨而自動結案（Order_status=9），刪完不足量就自動取消結案。
+ *
+ * @param array|null $isIds 只刪這幾筆明細；null＝整張出貨單
+ * @return array ['success'=>bool,'message'=>,'deleted'=>int,'reopened'=>[訂單編號,...],'blocked'=>[]]
+ */
+function sq_delete_shipment(PDO $db, string $isNumber, ?array $isIds, array $user): array
+{
+    $isNumber = trim($isNumber);
+    if ($isNumber === '') return ['success' => false, 'message' => '缺少出貨單號'];
+
+    $sql    = "SELECT IS_id, IS_number, Order_id, Product_id, Qty, Unit_price, Client_name,
+                      DATE_FORMAT(Order_date,'%Y-%m-%d') AS ship_date
+               FROM is_list WHERE IS_number = ?";
+    $params = [$isNumber];
+    if ($isIds !== null) {
+        $isIds = array_values(array_unique(array_map('intval', array_filter($isIds))));
+        if (!$isIds) return ['success' => false, 'message' => '沒有指定要刪除的明細'];
+        $sql .= " AND IS_id IN (" . implode(',', array_fill(0, count($isIds), '?')) . ")";
+        $params = array_merge($params, $isIds);
+    }
+    $st = $db->prepare($sql);
+    $st->execute($params);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return ['success' => false, 'message' => '查無此出貨單（可能已被刪除，請重新整理）'];
+
+    $ids     = array_map('intval', array_column($rows, 'IS_id'));
+    $blocked = sq_shipment_guard($db, $ids);
+    if ($blocked) {
+        return ['success' => false, 'message' => implode('；', $blocked), 'blocked' => $blocked];
+    }
+
+    $orderIds = array_values(array_unique(array_filter(array_map('intval', array_column($rows, 'Order_id')))));
+    $ph       = implode(',', array_fill(0, count($ids), '?'));
+
+    try {
+        $db->beginTransaction();
+        // 先清掉所有掛在這些明細底下的對應（外鍵不一定有，一律自己清）
+        foreach (['is_bom_map', 'is_order_map', 'ir_reship_map', 'return_order_map', 'shipment_order_map'] as $t) {
+            try { $db->prepare("DELETE FROM $t WHERE IS_id IN ($ph)")->execute($ids); }
+            catch (Throwable $e) { /* 該表不存在就略過 */ }
+        }
+        $db->prepare("DELETE FROM is_list WHERE IS_id IN ($ph)")->execute($ids);
+
+        foreach ($rows as $r) {
+            sq_audit($db, 'delete', 'shipment', (string)$r['IS_id'],
+                     $r['IS_number'] . ' ' . $r['Product_id'],
+                     ['ship_date' => $r['ship_date'], 'client' => $r['Client_name'],
+                      'qty' => (int)$r['Qty'], 'unit_price' => (float)$r['Unit_price'],
+                      'order_id' => $r['Order_id']], $user);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['success' => false, 'message' => '刪除失敗：' . $e->getMessage()];
+    }
+
+    $reopened = sq_reopen_orders($db, $orderIds, $user);
+
+    $msg = '已刪除 ' . count($rows) . ' 筆出貨明細，數量已回到原訂單';
+    if ($reopened) $msg .= '；' . count($reopened) . ' 筆訂單自動取消結案（' . implode('、', $reopened) . '）';
+    return ['success' => true, 'message' => $msg, 'deleted' => count($rows),
+            'reopened' => $reopened, 'blocked' => []];
+}
+
+/**
+ * 出貨被刪掉之後，原本因「出滿了」而自動結案的訂單要自動取消結案。
+ * 判定與 sq_create_shipment() 的自動結案完全相同（同一條界線，不可各寫一套）。
+ * @return array 被取消結案的訂單編號（Order_oo）
+ */
+function sq_reopen_orders(PDO $db, array $orderIds, array $user): array
+{
+    $orderIds = array_values(array_unique(array_map('intval', array_filter($orderIds))));
+    $done = [];
+    foreach ($orderIds as $oid) {
+        try {
+            $st = $db->prepare("
+                SELECT ot.Order_oo, ot.Qty, ot.Order_status,
+                       COALESCE(SUM(CASE WHEN ist.is_count IS NULL OR ist.is_count <> 0 THEN il.Qty ELSE 0 END), 0) AS shipped
+                FROM order_track ot
+                LEFT JOIN is_list il ON il.Order_id = ot.Order_id
+                LEFT JOIN is_sale_type ist ON ist.sale_type_id = il.sale_type
+                WHERE ot.Order_id = ?
+                GROUP BY ot.Order_id, ot.Order_oo, ot.Qty, ot.Order_status");
+            $st->execute([$oid]);
+            $c = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$c || (int)$c['Order_status'] !== 9) continue;      // 只動「已結案」的
+            if ((int)$c['shipped'] >= (int)$c['Qty']) continue;      // 還是出滿的就維持結案
+            $db->prepare("UPDATE order_track SET Order_status = NULL, Modified_At = NOW(), Modified_By = ?
+                          WHERE Order_id = ? AND Order_status = 9")
+               ->execute([(string)($user['id'] ?? ''), $oid]);
+            sq_audit($db, 'update', 'order_reopen', (string)$oid, (string)$c['Order_oo'],
+                     ['before' => 9, 'after' => null, 'reason' => '出貨單被刪除，出貨量不足訂購量'], $user);
+            $done[] = (string)$c['Order_oo'];
+        } catch (Throwable $e) { /* 單筆失敗不阻斷其他訂單 */ }
+    }
+    return $done;
+}
+
+/** 稽核紀錄（寫不進去不可以阻斷主要動作） */
+function sq_audit(PDO $db, string $action, string $targetType, string $targetId,
+                  string $targetName, array $changes, array $user): void
+{
+    try {
+        $db->prepare("INSERT INTO audit_log
+                      (action_type, target_type, target_id, target_name, changes, user_id, operator, created_at)
+                      VALUES (?,?,?,?,?,?,?,NOW())")
+           ->execute([$action, $targetType, mb_substr($targetId, 0, 200), mb_substr($targetName, 0, 200),
+                      json_encode($changes, JSON_UNESCAPED_UNICODE),
+                      (int)($user['id'] ?? 0), mb_substr((string)($user['name'] ?? ''), 0, 100)]);
+    } catch (Throwable $e) { }
+}
+
+/* ============================================================
+ * 出貨單列印用的表頭資料
+ * ============================================================ */
+
+/**
+ * 列印出貨單需要的固定資訊：本公司抬頭（ai-rules/16：一律動態取，禁寫死）＋綁定的 AS 文件。
+ * 本公司＝customer_list.is_own_company = 1 的那一筆。
+ */
+function sq_print_meta(PDO $db, ?string $bizDate = null): array
+{
+    $own = [];
+    try {
+        $own = $db->query("SELECT customer_full, customer, customer_address, customer_tel, customer_fax, tax_id
+                           FROM customer_list WHERE is_own_company = 1 LIMIT 1")->fetch(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { }
+
+    $doc = null; $docNo = '';
+    if (function_exists('eg_asdoc_get')) {
+        $doc = eg_asdoc_get($db, SQ_ASDOC_MODULE);
+        if ($doc) $docNo = eg_asdoc_no_asof($db, SQ_ASDOC_MODULE, $bizDate);
+    }
+    return [
+        'company'  => [
+            'full'    => (string)($own['customer_full'] ?? ($own['customer'] ?? '')),
+            'address' => (string)($own['customer_address'] ?? ''),
+            'tel'     => (string)($own['customer_tel'] ?? ''),
+            'fax'     => (string)($own['customer_fax'] ?? ''),
+            'tax_id'  => (string)($own['tax_id'] ?? ''),
+        ],
+        'asdoc'    => $doc ? ['id' => (int)$doc['id'], 'doc_no' => $doc['doc_no'], 'doc_name' => $doc['doc_name']] : null,
+        'asdoc_no' => $docNo,
+    ];
 }

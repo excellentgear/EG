@@ -118,10 +118,18 @@ table.sq-t tbody tr.noready{color:#a08a6a;}
 .bom-detail table{width:auto;margin:2px 0;font-size:12px;}
 .bom-detail td{border:1px solid #EFE0C6;padding:2px 8px;}
 
-.sq-dock{position:fixed;left:0;right:0;bottom:0;z-index:900;background:#8A5A2B;color:#fff;
-  padding:9px 18px;display:none;align-items:center;gap:18px;box-shadow:0 -2px 10px rgba(0,0,0,.22);}
+/* 動作條要從「內容區」的左緣開始，不可從瀏覽器左緣：left:0 會讓最前面的「已選 N 筆」
+   整段躲到左側選單底下看不到（2026-09-17 使用者回報「合計旁的字被遮蔽」）。
+   側欄寬度沿用 custom.css：nav-md 230px、nav-sm 70px、≤991px 收起來為 0。
+   ※ 只移動動作條本身，不動頁面寬度。 */
+.sq-dock{position:fixed;left:230px;right:0;bottom:0;z-index:900;background:#8A5A2B;color:#fff;
+  padding:9px 18px;display:none;align-items:center;flex-wrap:wrap;gap:8px 18px;
+  box-shadow:0 -2px 10px rgba(0,0,0,.22);}
+body.nav-sm .sq-dock{left:70px;}
+@media (max-width:991px){ .sq-dock,body.nav-sm .sq-dock{left:0;} }
+.sq-dock #dkGroups{white-space:nowrap;}
 .sq-dock b{font-size:18px;}
-.sq-dock .sp{margin-left:auto;display:flex;gap:8px;}
+.sq-dock .sp{margin-left:auto;display:flex;gap:8px;flex:0 0 auto;}
 .sq-dock button{height:34px;padding:0 16px;border-radius:5px;border:1px solid #fff;
   background:transparent;color:#fff;font-size:14px;cursor:pointer;}
 .sq-dock button.go{background:var(--sq-acc);border-color:var(--sq-acc-d);font-weight:bold;}
@@ -196,6 +204,26 @@ table.sq-t tbody tr.dim b{color:#a2916f;}
   border-radius:8px 8px 0 0;display:flex;align-items:center;}
 .sq-modal .m-close{margin-left:auto;cursor:pointer;font-size:17px;}
 .sq-modal .m-body{padding:14px;max-height:70vh;overflow:auto;}
+/* 清單自己當捲動容器：若讓 .m-body 捲動，它有 padding:14px，
+   內容會從凍結表頭「上方那 14px 的內距」穿過去（sticky 只黏在 padding box 的邊）＝
+   使用者看到的「捲動時列會穿過標題」。容器不留上內距，sticky 才真的貼在最上緣。 */
+#rcList{max-height:56vh;overflow:auto;border:1px solid var(--sq-line);border-radius:6px;}
+#rcList table.sq-t thead th{z-index:5;box-shadow:0 1px 0 var(--sq-line2);}
+.sq-modal .m-body>.dt-scroll{max-height:46vh;overflow:auto;border:1px solid var(--sq-line);border-radius:6px;}
+.sq-modal .m-body>.dt-scroll table.sq-t thead th{z-index:5;box-shadow:0 1px 0 var(--sq-line2);}
+.note-in{width:100%;height:26px;border:1px solid var(--sq-line2);border-radius:4px;
+  font-size:12.5px;padding:0 6px;color:var(--sq-ink);}
+.note-in:focus{border-color:var(--sq-acc);outline:none;background:#FFFBF3;}
+.dt-del{border:1px solid #E8B8AC !important;color:#DD5138 !important;background:#fff !important;}
+.dt-del:hover{background:#FBE3DC !important;}
+.page-help-btn{margin-left:auto;height:30px;padding:0 13px;border:1px solid var(--sq-line2);
+  border-radius:15px;background:var(--sq-bg2);color:var(--sq-ink);font-size:13px;cursor:pointer;}
+.page-help-btn:hover{background:var(--sq-normal);}
+.help-doc{font-size:13.5px;color:var(--sq-ink);line-height:1.75;}
+.help-doc h4{font-size:15px;color:var(--sq-brand);margin:14px 0 6px;font-weight:bold;}
+.help-doc h4:first-child{margin-top:0;}
+.help-doc ul{padding-left:20px;margin:0 0 4px;}
+.help-doc b{color:#8A5A2B;}
 .sq-modal .m-foot{padding:10px 14px;border-top:1px solid var(--sq-line);text-align:right;}
 .sq-modal .m-foot button{height:32px;padding:0 14px;border:1px solid var(--sq-line2);border-radius:4px;
   background:#fff;cursor:pointer;color:var(--sq-ink);}
@@ -225,6 +253,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
     <div class="page-title" style="display:flex;align-items:center;flex-wrap:wrap;">
       <h2 style="margin:6px 0;"><i class="fa fa-truck" style="color:#F0A24B;"></i> 快速出貨
         <small style="color:#8a6d45;">一列一訂單，勾選後填出貨量即可開單；同客戶同日自動併為一張出貨單</small></h2>
+      <button class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
     </div>
     <div class="clearfix"></div>
 
@@ -256,6 +285,8 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
       <button id="btnChain"><i class="fa fa-sitemap"></i> 追溯對照</button>
       <?php if ($perms['canAdmin']): ?>
       <button id="btnMatch"><i class="fa fa-link"></i> 舊資料訂單回填</button>
+      <button id="btnAsPick" title="出貨單列印時，頁尾右下角要印哪一份 AS 文件的編號">
+        <i class="fa fa-file-text-o"></i> AS文件編號：<b id="asdocShow">尚未綁定</b></button>
       <?php endif; ?>
       <span class="sq-hint" style="margin-left:12px;">
         鍵盤：<kbd>/</kbd> 搜尋　<kbd>↑</kbd><kbd>↓</kbd> 選列　<kbd>空白</kbd> 勾選　<kbd>Ctrl</kbd>+<kbd>Enter</kbd> 出貨
@@ -283,7 +314,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
           <th class="sortable" data-sort="order_oo">訂單號<i class="sa"></i></th>
           <th class="sortable" data-sort="client">客戶<i class="sa"></i></th>
           <th class="sortable" data-sort="d_id">料號<i class="sa"></i></th>
-          <th>品名規格</th>
+          <th style="min-width:230px;">品名規格</th>
           <th>訂購</th><th>已出</th>
           <th class="sortable" data-sort="remain">未出<i class="sa"></i></th>
           <th class="sortable" data-sort="ready">可出<i class="sa"></i></th>
@@ -298,6 +329,8 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
     <div class="sq-hint">
       「可出」＝該訂單目前有完工製令、且尚未出貨的數量（已扣除製令既有出貨）。「未出」＝訂購量－已出量。
       製令完工量以「最後一道製程已移轉(E)」或 ERP 結案認定；點製令欄可展開各張製令的完工／已出／可出明細。
+      「可出」為 0 時會標示原因：<b>無製令</b>／<b>無完工</b>（製令還沒做完）／<b>製令已出完</b>（做完了但已被別張出貨單出走）。
+      <b>品名規格</b>＝料號規格＋齒輪規格 ／ 訂單製程 ／ 料號備註（與報價單列印版同一套組法）。
       <b>訂單號空白或為 NA 的不列入</b>（多為廠內治具製作，非出給客戶的貨）。點表頭可依訂單號／客戶／料號／未出／可出／交期排序。
     </div>
 <?php endif; ?>
@@ -341,15 +374,64 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
   </div>
 </div></div>
 
-<!-- 出貨單明細／送貨單 -->
-<div class="sq-mask" id="mkDetail"><div class="sq-modal">
+<!-- 出貨單明細 -->
+<div class="sq-mask" id="mkDetail"><div class="sq-modal wide">
   <div class="m-head"><i class="fa fa-file-text-o"></i>&nbsp;<span id="dtTitle">出貨單明細</span>
     <span class="m-close" data-close="mkDetail">✕</span></div>
   <div class="m-body" id="dtBody"></div>
   <div class="m-foot">
+    <?php if ($perms['canDelete']): ?>
+    <button class="dt-del" id="btnDelDn" style="float:left;"><i class="fa fa-trash"></i> 刪除整張出貨單</button>
+    <?php endif; ?>
     <button data-close="mkDetail">關閉</button>
-    <button class="go" id="btnPrintDn"><i class="fa fa-print"></i> 列印送貨單</button>
+    <button class="go" id="btnPrintDn"><i class="fa fa-print"></i> 列印出貨單</button>
   </div>
+</div></div>
+
+<!-- 使用說明（鐵律7）-->
+<div class="sq-mask" id="helpUseMask"><div class="sq-modal">
+  <div class="m-head"><i class="fa fa-question-circle"></i>&nbsp;快速出貨－使用說明
+    <span class="m-close" data-close="helpUseMask">✕</span></div>
+  <div class="m-body help-doc">
+    <h4>這頁在做什麼</h4>
+    把「還沒出完的訂單」列成一列一筆，勾選後填出貨量就建立出貨單（<b>同一客戶、同一出貨日自動併成一張</b>），
+    同時回填訂單編號、依交期 FIFO 扣掉製令的完工量。
+
+    <h4>操作步驟</h4>
+    <ul>
+      <li>① 設定<b>出貨日期</b>（預設今天）→ 在搜尋框輸入訂單號／料號／客戶／品名／製令號查詢。</li>
+      <li>② 勾選要出的列，<b>出貨量預設帶入「可出」數量</b>，可自行改小；超過未出量會標紅提醒。</li>
+      <li>③ 按<b>確認出貨</b>檢查分組與製令分配，可在這裡先填每一列的<b>備註</b>，再按「確認建立出貨單」。</li>
+      <li>④ 建立成功會<b>自動開啟列印畫面</b>（A5 橫式／約 21.5 公分寬），要重印或補印到「近期出貨單」找得到。</li>
+    </ul>
+
+    <h4>重要行為</h4>
+    <ul>
+      <li><b>「可出」為 0 的原因會標在旁邊</b>：無製令／無完工（還沒做完）／製令已出完（做完但被別張出貨單出走）。</li>
+      <li><b>備註隨時可改</b>：近期出貨單 →「明細」→ 每一列的備註欄直接改，離開欄位即存檔。</li>
+      <li><b>刪除出貨單</b>需要「刪除出貨單」角色。刪除會一併清掉製令扣帳與追溯對應，
+          <b>數量回到原訂單</b>，原訂單若因此不再是出滿的狀態會<b>自動取消結案</b>。
+          已進對帳底稿或已開發票的明細一律擋下不可刪。</li>
+      <li><b>訂單號空白或 NA 的不列入</b>（多為廠內治具製作，不是要出給客戶的貨）。</li>
+      <li><b>按下列印就會留下列印紀錄</b>（列印時間／列印人／登入電腦），可在「列印與簽核紀錄」查詢；
+          在列印對話框按取消也一樣會留紀錄。</li>
+    </ul>
+
+    <h4>設定入口</h4>
+    <ul>
+      <li><b>AS文件編號</b>（列印頁尾右下角要印的編號）：工具列的「AS文件編號」按鈕，限出貨管理員。</li>
+      <li><b>列印抬頭的公司全名／地址／電話</b>：取自客戶主檔中標記為「本公司」的那一筆，不在本頁設定。</li>
+    </ul>
+
+    <h4>權限角色</h4>
+    <ul>
+      <li><b>出貨檢閱</b>：查詢、看明細、匯出，不能建立出貨單。</li>
+      <li><b>出貨登錄</b>：檢閱 ＋ 建立出貨單 ＋ 修改備註。</li>
+      <li><b>出貨管理員</b>：登錄 ＋ 舊資料訂單回填 ＋ 追溯對照的綁定 ＋ AS 文件編號設定。</li>
+      <li><b>刪除出貨單</b>：獨立角色，要另外指派（管理員不會自動具備）。</li>
+    </ul>
+  </div>
+  <div class="m-foot"><button data-close="helpUseMask">關閉</button></div>
 </div></div>
 
 <?php if ($perms['canAdmin']): ?>
@@ -502,6 +584,8 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?: time() ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?: time() ?>"></script>
+<script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?: time() ?>"></script>
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?: time() ?>"></script>
 <script>
 /* 左側欄：版型預設 #sidebar-menu 為 visibility:hidden，需在 ready 後手動恢復，
    否則整個左側選單不會出現（漏掉這段是本頁第一版側欄消失的原因）。 */
@@ -517,8 +601,12 @@ $(document).ready(function () {
 (function ($) {
 'use strict';
 var API   = '../../src/store/Shipping_API.php';
-var CAN_EDIT  = <?= $perms['canEdit']  ? 'true' : 'false' ?>;
-var CAN_ADMIN = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
+var CAN_EDIT   = <?= $perms['canEdit']   ? 'true' : 'false' ?>;
+var CAN_ADMIN  = <?= $perms['canAdmin']  ? 'true' : 'false' ?>;
+var CAN_DELETE = <?= $perms['canDelete'] ? 'true' : 'false' ?>;
+var COMPANY = {full:'', address:'', tel:'', fax:'', tax_id:''};   // 本公司抬頭（列印用，禁寫死）
+var AS_DOCS = [], AS_CUR = 0, AS_LABEL = '';
+var dtCache = null;          // 目前開著的出貨單明細（列印／刪除共用）
 
 var CSRF = '', rows = [], page = 1, perPage = 20, total = 0;
 var sortBy = '', sortDir = 'asc';   // '' = 預設（可出貨優先、再依交期）
@@ -586,6 +674,10 @@ function init(){
     var y=new Date(r.today); y.setFullYear(y.getFullYear()-1);
     $('#tcFrom').val(y.toISOString().slice(0,10));
     $('#tcTo').val(r.today);
+    COMPANY = r.company || COMPANY;
+    AS_DOCS = r.as_docs || [];
+    AS_CUR  = r.asdoc ? +r.asdoc.id : 0;
+    paintAsDoc(r.asdoc);
     bindInputRules($(document));
     load();
   }).fail(function(){ toast('無法連線到出貨 API', true); });
@@ -647,13 +739,17 @@ function render(){
     var s   = sel[r.order_id];
     var qty = s ? s.qty : '';
     var pausedTag = (r.order_status===6) ? ' <span class="pill p-pause">暫停</span>' : '';
-    var readyTag  = r.ready_qty>0 ? '' : ' <span class="pill p-none">無完工</span>';
+    /* 可出 0 的原因由後端判定（無製令／無完工／製令已出完）——
+       一律寫「無完工」會讓「製令明明做完了、只是被別張出貨吃掉」看起來像系統壞掉。 */
+    var readyTag  = r.ready_note ? ' <span class="pill p-none">'+esc(r.ready_note)+'</span>' : '';
+    var descTxt   = r.desc_full || r.specification || '';
     h+='<tr data-i="'+i+'" data-oid="'+r.order_id+'" class="'+(s?'on ':'')+(r.ready_qty>0?'':'noready')+'">'
       +'<td><input type="checkbox" class="ck"'+(s?' checked':'')+'></td>'
       +'<td class="l">'+esc(r.order_oo||'—')+pausedTag+'</td>'
       +'<td class="l">'+esc(r.client_display)+'</td>'
       +'<td class="l">'+esc(r.d_id)+'</td>'
-      +'<td class="l" title="'+esc(r.specification)+'">'+esc((r.specification||'').substr(0,22))+'</td>'
+      +'<td class="l" title="'+esc(descTxt)+'" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;">'
+        + esc(descTxt.length>46 ? descTxt.substr(0,46)+'…' : descTxt)+'</td>'
       +'<td class="r">'+nf(r.order_qty)+'</td>'
       +'<td class="r">'+nf(r.shipped_qty)+'</td>'
       +'<td class="r"><b>'+nf(r.remain_qty)+'</b></td>'
@@ -836,7 +932,7 @@ function doShip(){
     var g=groups[gk], sub=0, q=0;
     h+='<div style="border:1px solid #E8D5B5;border-radius:6px;margin-bottom:8px;">'
       +'<div style="background:#F7E0BD;padding:5px 10px;font-weight:bold;color:#5b3a1e;">'+esc(g.name)+'</div>'
-      +'<table class="sq-t" style="font-size:12.5px;"><tr><th>訂單</th><th>料號</th><th>數量</th><th>單價</th><th>金額</th><th>製令分配</th></tr>';
+      +'<table class="sq-t" style="font-size:12.5px;"><tr><th>訂單</th><th>料號</th><th>數量</th><th>單價</th><th>金額</th><th>製令分配</th><th style="width:170px;">備註</th></tr>';
     g.items.forEach(function(s){
       var r=s.row, a=s.qty*r.unit_price; sub+=a; q+=s.qty;
       var alloc=allocate(r, s.qty);
@@ -845,18 +941,27 @@ function doShip(){
         +'<td class="r">'+nf(Math.round(a))+'</td>'
         +'<td class="l" style="font-size:11.5px;">'
         +(alloc.length? alloc.map(function(x){return esc(x.bom)+'×'+x.qty;}).join('　') : '<span style="color:#a08a6a;">無製令可扣</span>')
-        +'</td></tr>';
+        +'</td>'
+        +'<td><input type="text" class="note-in cf-note" data-oid="'+r.order_id+'" maxlength="100" '
+        +'value="'+esc(s.note||'')+'" placeholder="出貨單上要印的備註"></td></tr>';
     });
     h+='<tr style="background:#FFF7E8;font-weight:bold;"><td colspan="2">小計</td><td class="r">'+nf(q)
-      +'</td><td></td><td class="r">'+nf(Math.round(sub))+'</td><td></td></tr></table></div>';
+      +'</td><td></td><td class="r">'+nf(Math.round(sub))+'</td><td colspan="2"></td></tr></table></div>';
   });
   if(warn.length){
     h+='<div style="border-left:5px solid #DD5138;background:#FBE3DC;color:#7a2c17;padding:9px 12px;'
       +'border-radius:4px;font-size:13px;"><b>請確認：</b><br>'+warn.map(esc).join('<br>')+'</div>';
   }
+  h+='<div class="sq-hint">建立後仍可到「近期出貨單 → 明細」隨時修改備註。</div>';
   $('#cfBody').html(h);
+  bindInputRules($('#cfBody'));
   openMask('mkConfirm');
 }
+
+/* 備註打字當下就記回 sel：等到按下「建立」才讀 DOM，重新渲染過就會掉字 */
+$(document).on('input','#cfBody .cf-note',function(){
+  var s=sel[$(this).data('oid')]; if(s) s.note=this.value;
+});
 
 /* 前端預覽用的 FIFO 分配（實際仍由後端重算，以資料庫當下狀態為準） */
 function allocate(r, qty){
@@ -884,7 +989,7 @@ $('#btnShipGo').on('click',function(){
       client_name:  r.client_name,
       qty:          s.qty,
       unit_price:   r.unit_price,
-      note:         '',
+      note:         s.note || '',
       boms:         allocate(r, s.qty)
     });
   });
@@ -898,6 +1003,9 @@ $('#btnShipGo').on('click',function(){
     toast('<b>'+esc(res.message)+'</b><br>單號：'+nos.map(esc).join('、'));
     if(res.errors && res.errors.length) toast(res.errors.map(esc).join('<br>'), true);
     sel={}; load();
+    /* 建立完直接跳出列印畫面（使用者要求）。一次建了好幾張時逐張各自開視窗排隊，
+       不合併成一份（ai-rules/16 第三之五節），並稍微錯開避免瀏覽器把後面的當成彈出視窗擋掉。 */
+    nos.forEach(function(no,i){ setTimeout(function(){ printShipNote(no); }, i*700); });
   },'json').fail(function(x){
     $b.prop('disabled',false).html('<i class="fa fa-check"></i> 確認建立出貨單');
     var m='建立失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){}
@@ -905,6 +1013,27 @@ $('#btnShipGo').on('click',function(){
   });
 });
 $('#btnShip').on('click', doShip);
+
+/* ══════════════════════════════════════════════════════════
+ * 使用說明（鐵律7）／ AS 文件編號綁定（ai-rules/16 第一之三節）
+ * ══════════════════════════════════════════════════════════ */
+$('#btnPageHelp').on('click',function(){ openMask('helpUseMask'); });
+
+function paintAsDoc(doc){
+  AS_LABEL = doc ? ((doc.doc_no||'') + (doc.doc_name ? (' ' + doc.doc_name) : '')) : '';
+  $('#asdocShow').text(doc ? (doc.doc_no||'') : '尚未綁定');
+}
+
+$('#btnAsPick').on('click',function(){
+  if(!window.EGAsDoc){ toast('AS 文件選擇器未載入', true); return; }
+  EGAsDoc.open({docs:AS_DOCS, current:AS_CUR, title:'出貨單的 AS 文件編號綁定',
+    onSave:function(id, doc){
+      $.post(API+'?action=asdoc_save',{csrf:CSRF, as_doc_id:id},function(r){
+        if(!r.ok){ toast(esc(r.error||'設定失敗'), true); return; }
+        AS_CUR=id; paintAsDoc(r.asdoc); toast(esc(r.message));
+      },'json').fail(function(){ toast('設定失敗', true); });
+    }});
+});
 
 /* ══════════════════════════════════════════════════════════
  * 匯出（後端對全部符合條件的資料計算，不用前端當頁）
@@ -949,40 +1078,254 @@ function showDetail(no){
   $('#dtBody').html('<div style="padding:14px;color:#8a6d45;">載入中…</div>');
   openMask('mkDetail');
   $.getJSON(API, {action:'detail', is_number:no}, function(r){
-    if(!r.ok || !r.rows.length){ $('#dtBody').html('<div style="padding:14px;">查無明細。</div>'); return; }
+    if(!r.ok || !r.rows.length){
+      dtCache=null;
+      $('#dtBody').html('<div style="padding:14px;">查無明細（可能已被刪除）。</div>');
+      $('#btnPrintDn,#btnDelDn').prop('disabled',true);
+      return;
+    }
+    dtCache = r;                      // 列印與刪除都用這一份，不再重打一次 API
+    $('#btnPrintDn,#btnDelDn').prop('disabled',false);
     var f=r.rows[0], tq=0, ta=0;
-    var h='<div id="dnPrint">'
-      +'<div style="text-align:center;font-size:19px;font-weight:bold;color:#5b3a1e;margin-bottom:4px;">送　貨　單</div>'
-      +'<table style="width:100%;font-size:13px;color:#5b3a1e;margin-bottom:8px;"><tr>'
+    var h='<table style="width:100%;font-size:13px;color:#5b3a1e;margin-bottom:8px;"><tr>'
       +'<td>客戶：<b>'+esc(f.customer_full||f.client_display||f.Client_name)+'</b></td>'
-      +'<td>出貨單號：<b>'+esc(f.IS_number)+'</b></td></tr><tr>'
-      +'<td>統一編號：'+esc(f.tax_id||'—')+'</td><td>出貨日期：'+esc(f.ship_date)+'</td></tr><tr>'
-      +'<td colspan="2">地址：'+esc(f.customer_address||'—')+'</td></tr></table>'
-      +'<table class="sq-t"><thead><tr><th>#</th><th>訂單號</th><th>料號</th><th>品名規格</th>'
-      +'<th>數量</th><th>單價</th><th>金額</th><th>製令</th><th>備註</th></tr></thead><tbody>';
+      +'<td>出貨單號：<b>'+esc(f.IS_number)+'</b></td>'
+      +'<td>出貨日期：<b>'+esc(dispDate(f.ship_date))+'</b></td></tr><tr>'
+      +'<td>統一編號：'+esc(f.tax_id||'—')+'</td>'
+      +'<td>聯絡電話：'+esc(f.customer_tel||'—')+'</td>'
+      +'<td>製單人員：'+esc(f.created_by_name||'—')+'</td></tr><tr>'
+      +'<td colspan="3">送貨地址：'+esc(f.customer_address||'—')+'</td></tr></table>'
+      +'<div class="dt-scroll"><table class="sq-t"><thead><tr><th style="width:34px;">#</th>'
+      +'<th>客戶單號</th><th>料號</th><th>品名規格</th>'
+      +'<th>數量</th><th>單價</th><th>金額</th><th>製令</th><th>訂單號</th>'
+      +'<th style="min-width:190px;">備註</th></tr></thead><tbody>';
     r.rows.forEach(function(d,i){
       var a=d.Qty*d.Unit_price; tq+=Number(d.Qty); ta+=a;
-      h+='<tr><td>'+(i+1)+'</td><td>'+esc(d.Order_oo||'—')+'</td><td class="l">'+esc(d.Product_id)+'</td>'
-        +'<td class="l">'+esc(d.Specification||'')+'</td><td class="r">'+nf(d.Qty)+'</td>'
+      var desc = d.desc_full || d.Specification || '';
+      h+='<tr data-isid="'+d.IS_id+'"><td>'+(i+1)+'</td>'
+        +'<td>'+esc(d.c_order||'—')+'</td>'
+        +'<td class="l">'+esc(d.Product_id)+'</td>'
+        +'<td class="l" title="'+esc(desc)+'">'+esc(desc)+'</td>'
+        +'<td class="r">'+nf(d.Qty)+'</td>'
         +'<td class="r">'+np(d.Unit_price)+'</td><td class="r">'+nf(Math.round(a))+'</td>'
-        +'<td>'+esc(d.boms||'—')+'</td><td class="l">'+esc(d.Note||'')+'</td></tr>';
+        +'<td>'+esc(d.boms||'—')+'</td>'
+        +'<td>'+esc(d.Order_oo||'—')+'</td>'
+        +'<td>'+(CAN_EDIT
+            ? '<input type="text" class="note-in dt-note" data-isid="'+d.IS_id+'" maxlength="100" '
+              +'value="'+esc(d.Note||'')+'" data-orig="'+esc(d.Note||'')+'" placeholder="出貨單上要印的備註">'
+            : '<span class="l">'+esc(d.Note||'')+'</span>')
+        +'</td></tr>';
     });
     h+='<tr style="background:#FFF7E8;font-weight:bold;"><td colspan="4">合計</td><td class="r">'+nf(tq)
-      +'</td><td></td><td class="r">'+nf(Math.round(ta))+'</td><td colspan="2"></td></tr>'
-      +'</tbody></table></div>';
+      +'</td><td></td><td class="r">'+nf(Math.round(ta))+'</td><td colspan="3"></td></tr>'
+      +'</tbody></table></div>'
+      +'<div class="sq-hint">'
+      +(CAN_EDIT?'備註直接在欄位裡改，游標離開該欄即自動存檔。':'目前角色不可修改備註。')
+      +(CAN_DELETE?'　刪除整張出貨單會把數量退回原訂單，原訂單若因此不再出滿會自動取消結案。':'')
+      +'</div>';
     $('#dtBody').html(h);
-  }).fail(function(){ $('#dtBody').html('<div style="padding:14px;color:#DD5138;">載入失敗。</div>'); });
+    bindInputRules($('#dtBody'));
+  }).fail(function(){
+    dtCache=null;
+    $('#dtBody').html('<div style="padding:14px;color:#DD5138;">載入失敗。</div>');
+  });
+}
+
+/* 備註：離開欄位就存（值沒變不送） */
+$(document).on('change blur','#dtBody .dt-note',function(){
+  var $i=$(this), v=$i.val(), orig=$i.data('orig');
+  if(v===orig) return;
+  $i.prop('disabled',true);
+  $.post(API+'?action=note_save',{csrf:CSRF, is_id:$i.data('isid'), note:v},function(res){
+    $i.prop('disabled',false);
+    if(!res.ok){ toast(esc(res.error||'備註儲存失敗'), true); $i.val(orig); return; }
+    $i.data('orig', res.note); $i.val(res.note);
+    if(dtCache){ (dtCache.rows||[]).forEach(function(d){
+      if(+d.IS_id===+$i.data('isid')) d.Note=res.note; }); }
+    toast(esc(res.message));
+  },'json').fail(function(x){
+    $i.prop('disabled',false).val(orig);
+    var m='備註儲存失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){}
+    toast(esc(m), true);
+  });
+});
+
+/* 刪除整張出貨單（點開即刷新：先向後端拿最新明細，畫面快取對不上就擋下重新整理） */
+$('#btnDelDn').on('click',function(){
+  if(!CAN_DELETE || !dtCache || !dtCache.rows.length) return;
+  var no  = dtCache.rows[0].IS_number;
+  var $b  = $(this);
+  $b.prop('disabled',true);
+  $.getJSON(API, {action:'detail', is_number:no}, function(r){
+    if(!r.ok || !r.rows.length){
+      $b.prop('disabled',false);
+      toast('這張出貨單已經不存在了，請重新整理清單。', true);
+      showDetail(no); loadRecent(); return;
+    }
+    if(r.rows.length !== dtCache.rows.length){
+      $b.prop('disabled',false);
+      toast('這張出貨單的內容剛剛被別人改過，已為你重新載入，請再確認一次。', true);
+      dtCache=r; showDetail(no); return;
+    }
+    var qty=0; r.rows.forEach(function(d){ qty+=Number(d.Qty)||0; });
+    if(!confirm('確定刪除出貨單 '+no+' 嗎？\n\n'
+        +'共 '+r.rows.length+' 筆明細、'+qty+' 支。\n'
+        +'刪除後這些數量會回到原訂單，原訂單若因此不再是出滿的狀態會自動取消結案。\n'
+        +'此動作無法復原。')){
+      $b.prop('disabled',false); return;
+    }
+    $.post(API+'?action=delete', {csrf:CSRF, is_number:no}, function(res){
+      $b.prop('disabled',false);
+      if(!res.ok){ toast(esc(res.error||'刪除失敗'), true); return; }
+      toast('<b>'+esc(res.message)+'</b>');
+      dtCache=null; closeMask('mkDetail'); loadRecent(); load();
+    },'json').fail(function(x){
+      $b.prop('disabled',false);
+      var m='刪除失敗'; try{ m=JSON.parse(x.responseText).error||m; }catch(e){}
+      toast(esc(m), true);
+    });
+  }).fail(function(){ $b.prop('disabled',false); toast('無法確認出貨單狀態，請稍後再試', true); });
+});
+
+/* ══════════════════════════════════════════════════════════
+ * 出貨單列印（A5 橫式／約 21.5 公分寬，版面比照紙本 2-WH-01-04）
+ *   - 大標題＝本公司全名，動態取自客戶主檔「本公司」那一筆（ai-rules/16，禁寫死）
+ *   - 明細欄位：客戶單號／產品編號／品名規格／數量／單位／單價／金額／訂單號／備註
+ *     （使用者指定：不印製令；訂單號移到最右側、備註左邊）
+ *   - 頁尾右下角印綁定的 AS 文件編號；多頁時左下角印頁碼
+ * ══════════════════════════════════════════════════════════ */
+function shipNotePrintHtml(data){
+  var rows = data.rows || [], f = rows[0] || {};
+  var co   = data.company || COMPANY || {};
+  var asNo = data.asdoc_no || (data.asdoc ? data.asdoc.doc_no : '') || '';
+  var title= (data.asdoc && data.asdoc.doc_name) ? data.asdoc.doc_name : '出　貨　單';
+  var tq=0, ta=0;
+
+  var body='';
+  rows.forEach(function(d){
+    var a=(Number(d.Qty)||0)*(Number(d.Unit_price)||0); tq+=Number(d.Qty)||0; ta+=a;
+    body+='<tr>'
+      +'<td class="l">'+esc(d.c_order||'')+'</td>'
+      +'<td class="l">'+esc(d.Product_id||'')+'</td>'
+      +'<td class="l desc">'+esc(d.desc_full||d.Specification||'')+'</td>'
+      +'<td class="r">'+nf(d.Qty)+'</td>'
+      +'<td>PCS</td>'
+      +'<td class="r">'+np(d.Unit_price)+'</td>'
+      +'<td class="r">'+nf(Math.round(a))+'</td>'
+      +'<td class="l no">'+esc(d.Order_oo||'')+'</td>'
+      +'<td class="l">'+esc(d.Note||'')+'</td></tr>';
+  });
+  // 表格至少撐到 8 列，太少列時版面才不會整張縮在最上面
+  for(var i=rows.length;i<8;i++) body+='<tr class="blank"><td>&nbsp;</td><td></td><td></td><td></td>'
+      +'<td></td><td></td><td></td><td></td><td></td></tr>';
+
+  var tax = Math.round(ta*0.05);
+  var css = '@page{size:A5 landscape;margin:0;}'
+    +'*{box-sizing:border-box;}'
+    +'html,body{margin:0;padding:0;}'
+    +'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
+    +'font-size:8.5pt;line-height:1.35;}'
+    +'.sheet{width:215mm;margin:0 auto;padding:4mm 5mm 3mm;}'
+    +'.co{text-align:center;font-size:15pt;font-weight:bold;letter-spacing:2px;}'
+    +'.coi{text-align:center;font-size:8pt;margin-top:1mm;}'
+    +'.ttl{text-align:center;font-size:12pt;font-weight:bold;letter-spacing:6px;margin:1.5mm 0 1mm;}'
+    +'table{width:100%;border-collapse:collapse;}'
+    +'.hd td{border:1px solid #000;padding:0.8mm 1.5mm;height:6mm;font-size:8pt;}'
+    +'.hd td b{font-weight:normal;}'
+    +'.it{margin-top:-1px;table-layout:fixed;}'
+    +'.it th,.it td{border:1px solid #000;padding:0.8mm 1.5mm;text-align:center;'
+    +'font-size:8pt;word-break:break-all;}'
+    +'.it th{font-weight:bold;height:6mm;letter-spacing:1px;}'
+    +'.it td{height:5.6mm;}'
+    +'.it td.l{text-align:left;}.it td.r{text-align:right;}'
+    +'.it td.desc{font-size:7.5pt;}'
+    +'.it td.no{white-space:nowrap;font-size:7.5pt;}'
+    +'.it tr.blank td{height:5.6mm;}'
+    +'.ft{margin-top:-1px;}'
+    +'.ft td{border:1px solid #000;padding:0.8mm 1.5mm;font-size:8pt;height:6mm;}'
+    +'.ft td.r{text-align:right;}'
+    +'.sign{display:flex;align-items:center;margin-top:1.2mm;font-size:8pt;}'
+    +'.sign .sp{margin-left:auto;}'
+    +'.asno{margin-left:14mm;font-size:8pt;}'
+    +'@media print{.sheet{page-break-after:auto;}}';
+
+  var colw = ['14%','16%','22%','5.5%','5%','7%','8%','12%','10.5%'];
+  var cols = colw.map(function(w){ return '<col style="width:'+w+'">'; }).join('');
+
+  return '<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="utf-8">'
+    +'<title>'+esc(title)+' '+esc(f.IS_number||'')+'</title><style>'+css+'</style></head><body>'
+    +'<div class="sheet">'
+    +'<div class="co">'+esc(co.full||'')+'</div>'
+    +'<div class="coi">地址：'+esc(co.address||'')+'　電話：'+esc(co.tel||'')
+      +'　傳真：'+esc(co.fax||'')+'</div>'
+    +'<div class="ttl">'+esc(title)+'</div>'
+    +'<table class="hd"><tr>'
+      +'<td style="width:38%;">客　　戶：<b>'+esc(f.customer_full||f.client_display||f.Client_name||'')+'</b></td>'
+      +'<td style="width:32%;">出貨單號：<b>'+esc(f.IS_number||'')+'</b></td>'
+      +'<td style="width:30%;">出貨日期：<b>'+esc(dispDate(f.ship_date))+'</b></td></tr><tr>'
+      +'<td>客戶編號：'+esc(f.Client_id||'')+'</td>'
+      +'<td>統一編號：'+esc(f.tax_id||'')+'</td>'
+      +'<td>聯絡電話：'+esc(f.customer_tel||'')+'</td></tr><tr>'
+      +'<td colspan="2">送貨地址：'+esc(f.customer_address||'')+'</td>'
+      +'<td>傳真電話：'+esc(f.customer_fax||'')+'</td></tr><tr>'
+      +'<td>幣別編號：NTD 台幣　　匯率：1.0</td>'
+      +'<td>業務人員：</td>'
+      +'<td>製單人員：'+esc(f.created_by_name||'')+'</td></tr></table>'
+    +'<table class="it">'+cols+'<thead><tr>'
+      +'<th>客戶單號</th><th>產品編號</th><th>品　名　規　格</th><th>數量</th><th>單位</th>'
+      +'<th>單價</th><th>金額</th><th>訂單號</th><th>備註</th></tr></thead><tbody>'
+      +body+'</tbody></table>'
+    +'<table class="ft"><tr>'
+      +'<td style="width:26%;">發票方式：</td><td style="width:24%;">發票日期：</td>'
+      +'<td style="width:22%;">課稅類別：應稅</td>'
+      +'<td style="width:14%;">合　計</td><td class="r" style="width:14%;">'+nf(Math.round(ta))+'</td></tr><tr>'
+      +'<td>發票聯別：三聯式</td><td>發票號碼：</td><td>折讓／沖款：</td>'
+      +'<td>稅　金</td><td class="r">'+nf(tax)+'</td></tr><tr>'
+      +'<td colspan="2">備　　註：</td><td>未收款：</td>'
+      +'<td><b>總　計</b></td><td class="r"><b>'+nf(Math.round(ta)+tax)+'</b></td></tr></table>'
+    +'<div class="sign">簽章後回傳：'+esc(co.fax||'')
+      +'<span class="sp">客戶簽收：＿＿＿＿＿＿＿＿＿＿</span>'
+      +'<span class="asno">'+esc(asNo)+'</span></div>'
+    +'</div></body></html>';
+}
+
+/** 開一個新視窗列印一張出貨單；data 沒帶就先跟後端要 */
+function printShipNote(no, data){
+  if(!data){
+    $.getJSON(API, {action:'detail', is_number:no}, function(r){
+      if(!r.ok || !r.rows.length){ toast('查無此出貨單，無法列印', true); return; }
+      printShipNote(no, r);
+    }).fail(function(){ toast('載入出貨單失敗，無法列印', true); });
+    return;
+  }
+  var w=window.open('','_blank');
+  if(!w){ toast('瀏覽器擋住了列印視窗，請允許此網站開啟彈出視窗', true); return; }
+  w.document.write(shipNotePrintHtml(data)
+    + '<scr'+'ipt>window.onload=function(){'
+    // 一頁放得下就不印頁碼（ai-rules/16：多頁才顯示；A5 橫式一頁高 148mm）
+    + 'var onePage=(148-8)*96/25.4;'
+    + 'if(document.body.scrollHeight>onePage*0.95){'
+    + 'var st=document.createElement("style");'
+    + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\';'
+    + ' font-size:8pt; } }";document.head.appendChild(st);}'
+    + 'setTimeout(function(){window.print();},250);};</scr'+'ipt>');
+  w.document.close(); w.focus();
+
+  // 列印紀錄（ai-rules/23：按下列印就記一筆，按取消也算）
+  if(window.EGPrintLog){
+    var f=(data.rows||[])[0]||{};
+    EGPrintLog.record({
+      source:'shipping_note', doc_kind:'form',
+      doc_name:'出貨單 '+(f.IS_number||no)+'（'+(f.client_display||f.Client_name||'')+'）',
+      ref_table:'is_list', ref_id:f.IS_number||no,
+      part_no:(data.rows||[]).map(function(d){ return d.Product_id; }).slice(0,3).join('、')
+    });
+  }
 }
 
 $('#btnPrintDn').on('click',function(){
-  var w=window.open('','_blank');
-  w.document.write('<html><head><meta charset="utf-8"><title>送貨單</title>'
-    +'<style>body{font-family:"Microsoft JhengHei",sans-serif;padding:18px;}'
-    +'table{width:100%;border-collapse:collapse;font-size:13px;}'
-    +'th,td{border:1px solid #999;padding:4px 7px;text-align:center;}'
-    +'th{background:#F7E0BD;}td.l{text-align:left;}td.r{text-align:right;}</style></head><body>'
-    +$('#dnPrint').html()+'</body></html>');
-  w.document.close(); w.focus(); setTimeout(function(){ w.print(); }, 350);
+  if(!dtCache){ toast('請先載入出貨單明細', true); return; }
+  printShipNote(dtCache.rows[0].IS_number, dtCache);
 });
 
 /* ══════════════════════════════════════════════════════════
