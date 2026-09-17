@@ -1352,6 +1352,10 @@ $is_admin       = ($permission_code === 'A');   // 本頁等效管理員（全�
 require_once __DIR__ . '/../../src/common/rbac.php';
 // 料號別名（客戶代號／等同料號）：唯一實作點，禁止各頁自寫別名 SQL
 require_once __DIR__ . '/../../src/common/part_alias_lib.php';
+/* 「有附件」圖示與附件標籤篩選要排除**批圖編輯器的暫存圖**（有建立工作檔的那種，
+   2026-08-25 起全站一律不列），判定走共用的 imgedit_sql_not_draft()——
+   兩邊各寫一份規則遲早走鐘（鐵律4）。 */
+require_once __DIR__ . '/../../src/common/imgedit_visibility.php';
 eg_part_alias_ensure_table($pdo);
 // 移轉綁定前「查看完整綁定清單」沿用資料急救台的關聯掃描引擎，不重寫一套
 require_once __DIR__ . '/../../src/common/data_console_lib.php';
@@ -1372,6 +1376,68 @@ define('PART_ATTACH_API_URL', '../../src/store/Part_Attachment_API.php');
 // =============================================================================
 //  AJAX 後端
 // =============================================================================
+/**
+ * 「這個料號有沒有報價」整頁一次算完（2026-09-17 由每列一次的相關子查詢改過來）。
+ *
+ * 判定與原本的 SQL 完全相同：報價附件是 active、它所屬的報價單 pending_review=0，且
+ *   ①附件的 linked_parts 指名了這個料號文字（JSON 陣列），或
+ *   ②附件沒有 linked_parts（＝整張報價單共用），而這張報價單的項目裡有這個料號主檔 d_id。
+ * pending_review=1 是「報價單快速轉移」頁尚待確認補件的匯入舊資料，兩個分支都要擋，
+ * 少擋一邊就會出現「清單顯示有報價、點開卻是空的」。
+ *
+ * 為什麼要改：JSON_CONTAINS(linked_parts, …) 無法走索引，放在 SELECT 裡就是
+ * 「每一列把附件表整個掃一遍」，匯出（lmt=999）實測 35 秒。這裡改成
+ * 掃一次附件表（全站 5xx 列）在 PHP 端比對，成本與這一頁有幾列無關。
+ */
+function mdQuoteFlagFill(PDO $pdo, array &$rows): void
+{
+    if (!$rows) return;
+    $byPart = [];   // 料號文字 => 指到 $rows 的索引
+    $byDid  = [];   // 料號主檔 d_id => 指到 $rows 的索引
+    foreach ($rows as $i => $r) {
+        $rows[$i]['has_quote'] = 0;
+        $pn = (string)($r['D_Setting_Id'] ?? '');
+        if ($pn !== '') $byPart[$pn][] = $i;
+        $did = (int)($r['d_id'] ?? 0);
+        if ($did) $byDid[$did][] = $i;
+    }
+    try {
+        // ① linked_parts 指名的：掃一次「有指名料號的 active 附件」，在 PHP 端比對
+        $st = $pdo->query("SELECT qa.linked_parts
+                             FROM quotation_attachments qa
+                             JOIN quotation_list qal ON qal.quote_no = qa.quote_no AND qal.pending_review = 0
+                            WHERE qa.status='active' AND qa.linked_parts IS NOT NULL");
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $json) {
+            $arr = json_decode((string)$json, true);
+            if (!is_array($arr)) continue;
+            foreach ($arr as $pn) {
+                $pn = (string)$pn;
+                if (isset($byPart[$pn])) foreach ($byPart[$pn] as $i) $rows[$i]['has_quote'] = 1;
+            }
+        }
+        // ② 沒有 linked_parts（整張報價單共用）的：直接用 d_id 比對報價單項目
+        if ($byDid) {
+            $ids = array_keys($byDid);
+            $ph  = implode(',', array_fill(0, count($ids), '?'));
+            $st2 = $pdo->prepare("SELECT DISTINCT qi.d_setting_d_id
+                                    FROM quotation_item qi
+                                    JOIN quotation_list ql  ON ql.quote_id = qi.quote_id AND ql.pending_review = 0
+                                    JOIN quotation_attachments qa ON qa.quote_no = ql.quote_no
+                                         AND qa.status='active' AND qa.linked_parts IS NULL
+                                    JOIN quotation_list qal ON qal.quote_no = qa.quote_no AND qal.pending_review = 0
+                                   WHERE qi.d_setting_d_id IN ($ph)");
+            $st2->execute($ids);
+            foreach ($st2->fetchAll(PDO::FETCH_COLUMN) as $did) {
+                $did = (int)$did;
+                if (isset($byDid[$did])) foreach ($byDid[$did] as $i) $rows[$i]['has_quote'] = 1;
+            }
+        }
+    } catch (Throwable $e) {
+        // 查不出來就維持 0（只是圖示不亮），不要讓整份清單開不起來
+        error_log('[mdQuoteFlagFill] ' . $e->getMessage());
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json; charset=utf-8');
 
@@ -1729,6 +1795,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     if ($fvar_key !== '' && $fvar_val !== '') {
                         // 有變數值：JSON 模糊比對 tag_var_values
                         $where .= " AND EXISTS (SELECT 1 FROM part_attachments pa{$fati} WHERE pa{$fati}.d_id=d.d_id"
+                                . "  AND pa{$fati}.deleted_at IS NULL AND " . imgedit_sql_not_draft("pa{$fati}")
                                 . "  AND FIND_IN_SET(:{$fat_key}catid, pa{$fati}.category_ids)"
                                 . "  AND pa{$fati}.tag_var_values LIKE :{$fat_key}varval)";
                         $params[":{$fat_key}catid"] = $fcat_id;
@@ -1736,6 +1803,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     } else {
                         // 只要有這個類別的附件
                         $where .= " AND EXISTS (SELECT 1 FROM part_attachments pa{$fati} WHERE pa{$fati}.d_id=d.d_id"
+                                . "  AND pa{$fati}.deleted_at IS NULL AND " . imgedit_sql_not_draft("pa{$fati}")
                                 . "  AND FIND_IN_SET(:{$fat_key}catid, pa{$fati}.category_ids))";
                         $params[":{$fat_key}catid"] = $fcat_id;
                     }
@@ -1945,20 +2013,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         FROM item_label_map m JOIN dict_label l ON l.label_id=m.label_id
                         WHERE m.d_id=d.d_id AND l.is_active=1) AS labels_str,
                        (SELECT EXISTS(SELECT 1 FROM bom WHERE d_id=d.D_Setting_Id)) AS has_drawing,
-                       (SELECT EXISTS(SELECT 1 FROM part_attachments WHERE d_id=d.d_id)) AS has_attach,
+                       /* 已刪除的附件（deleted_at 有值）與批圖暫存圖都不算「有附件」——
+                          否則清單上顯示有附件、點開卻是空的（2026-09-17 修） */
+                       (SELECT EXISTS(SELECT 1 FROM part_attachments pah WHERE pah.d_id=d.d_id
+                            AND pah.deleted_at IS NULL AND " . imgedit_sql_not_draft('pah') . ")) AS has_attach,
                        /* pending_review=1 ＝「報價單快速轉移」頁尚待確認補件的匯入舊資料，還不是正式
                           報價單。兩個分支都要擋：linked_parts 指名的那批也可能屬於尚待確認的單，
                           少擋一邊就會出現「清單顯示有報價、點開卻是空的」 */
-                       (SELECT EXISTS(
-                           SELECT 1 FROM quotation_attachments qa
-                           JOIN quotation_list qal ON qal.quote_no = qa.quote_no AND qal.pending_review = 0
-                           WHERE qa.status='active' AND (
-                                 (qa.linked_parts IS NOT NULL AND JSON_CONTAINS(qa.linked_parts, JSON_QUOTE(d.D_Setting_Id)))
-                              OR (qa.linked_parts IS NULL AND qa.quote_no IN (
-                                   SELECT ql.quote_no FROM quotation_item qi
-                                   JOIN quotation_list ql ON ql.quote_id=qi.quote_id
-                                   WHERE qi.d_setting_d_id=d.d_id AND ql.pending_review = 0)))
-                       )) AS has_quote,
+                       /* has_quote 不在這裡算（2026-09-17）：JSON_CONTAINS(linked_parts) 無法走索引，
+                          每一列都要把附件表掃一遍，匯出（lmt=999）要 35 秒。
+                          改成撈完之後用 mdQuoteFlagFill() 對整頁一次算完，判定規則完全相同。 */
+                       0 AS has_quote,
                        COALESCE(ss.ship_cy_count,0) AS ship_cy_count,
                        COALESCE(ss.ship_cy_qty,0)   AS ship_cy_qty,
                        COALESCE(ss.ship_py_count,0) AS ship_py_count,
@@ -1970,6 +2035,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ORDER BY FIELD(d.d_id, $pg_id_phs_ord)");
             $stmt->execute(array_merge($params_sel, $pg_id_params, $pg_id_params2));
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            mdQuoteFlagFill($pdo, $rows);
             // 設計備註（有查看權限時補上）
             if ($can_see_design && !empty($rows)) {
                 try {
