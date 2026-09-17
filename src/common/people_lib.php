@@ -237,12 +237,21 @@ if (!function_exists('eg_people_list_asof')) {
         if (!$rows) return [];
 
         $snapAll = eg_position_snapshot_at_bulk($db, $date);
-        // sort_order 一律取目前設定值（快照只存 id 與當時名稱，沒有排序值）
-        $posSort = $deptSort = [];
-        foreach ($db->query("SELECT id, COALESCE(sort_order,999) s FROM position")->fetchAll(PDO::FETCH_ASSOC) as $x)
-            $posSort[(int)$x['id']] = (int)$x['s'];
-        foreach ($db->query("SELECT id, COALESCE(sort_order,999) s FROM department")->fetchAll(PDO::FETCH_ASSOC) as $x)
-            $deptSort[(int)$x['id']] = (int)$x['s'];
+        /* sort_order 與**名稱**一律取目前設定值（快照只存 id 與「當時」的名稱，沒有排序值）。
+           2026-09-16 使用者回報：會議紀錄印出「技術部」「資材部」「業務部」，但 department 表裡
+           根本沒有這些名字——部門早就由「部」改成「課」。來源就是這裡：原本直接用快照 JSON 裡
+           凍結的 department_name／position_name，所以**連帶今天的日期也會印出舊名**
+           （不是只有補舊資料才會，Meeting_API 寫入出席人員用的就是這支）。
+           **改名不是改組織**：同一個 department_id 就是同一個單位，要印現在的名字；
+           只有那個 id 真的被刪掉了，才退回快照裡的舊名（至少還看得懂那是誰）。
+           （同一條規則見 eg_people_posts_asof()，兩支必須一致，否則同一份資料兩種寫法。） */
+        $posSort = $deptSort = $posName = $deptName = [];
+        foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM position")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+            $posSort[(int)$x['id']] = (int)$x['s']; $posName[(int)$x['id']] = (string)$x['name'];
+        }
+        foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM department")->fetchAll(PDO::FETCH_ASSOC) as $x) {
+            $deptSort[(int)$x['id']] = (int)$x['s']; $deptName[(int)$x['id']] = (string)$x['name'];
+        }
 
         $out = [];
         foreach ($rows as $r) {
@@ -263,10 +272,11 @@ if (!function_exists('eg_people_list_asof')) {
                 }
                 $r['dept_ids']      = array_values(array_unique(array_map(fn($x) => (int)$x['department_id'], $snap)));
                 $r['dept_id']       = (int)$best['department_id'];
-                $r['dept_name']     = (string)($best['department_name'] ?? '');
+                // 名稱以「目前的」為準，id 已不存在才退回快照裡凍結的舊名（見上方註解）
+                $r['dept_name']     = $deptName[(int)$best['department_id']] ?? (string)($best['department_name'] ?? '');
                 $r['dept_sort']     = $deptSort[(int)$best['department_id']] ?? 999;
                 $r['position_id']   = (int)$best['position_id'];
-                $r['position_name'] = (string)($best['position_name'] ?? '');
+                $r['position_name'] = $posName[(int)$best['position_id']] ?? (string)($best['position_name'] ?? '');
                 $r['position_sort'] = (int)$best['_psrt'];
                 $r['display']       = $r['user_cname']
                                     . ($r['position_name'] !== '' ? '（' . $r['position_name'] . '）' : '')
