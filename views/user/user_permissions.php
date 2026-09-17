@@ -593,51 +593,43 @@ if (!function_exists('eg_render_role_section')) {
                                         <?php if ($canEdit): ?><th style="width:220px;">新增角色</th><?php endif; ?>
                                     </tr>
                                 </thead>
-                                <tbody id="<?= $prefix ?>-role-tbody">
-                                <?php foreach ($admins as $admin):
-                                    $assignedRoles = $userRoles[$admin['id']] ?? [];
-                                    $allDepts = []; $deptDisplay = '';
-                                    foreach ($admin['roles'] as $dr) {
-                                        if (empty($dr['department_name'])) continue;
-                                        if (!in_array($dr['department_name'], $allDepts)) $allDepts[] = $dr['department_name'];
-                                        $deptDisplay .= ($dr['is_main'] == 1)
-                                            ? htmlspecialchars($dr['department_name'])
-                                            : ' <span style="color:#e67e22;font-size:11px;">兼 '.htmlspecialchars($dr['department_name']).'</span>';
-                                    }
+                                <?php
+                                // ── 這張表的 45 列由 egBuildRoleTable() 在「捲到這一區塊附近」時才建 ──
+                                // 本頁有 47 個角色指派區塊，每區塊 45 人各一個 <select>，整批印出來是 4.9MB HTML
+                                // ／約 3.5 萬個 DOM 節點，光解析與排版就會讓整頁卡住。
+                                // 人員那幾欄每個區塊都一模一樣（EG_ROLE_ADMINS 只輸出一份），區塊之間的差別只有
+                                // 「有哪些角色」與「這個人已被指派哪些」，所以改成資料 + 前端建表。
+                                $GLOBALS['_eg_role_section_data'][$prefix] = [
+                                    'module'  => $module,
+                                    'canEdit' => $canEdit ? 1 : 0,
+                                    'roles'   => array_map(fn($r) => [
+                                        'id'   => (int)$r['role_id'],
+                                        'name' => (string)$r['role_name'],
+                                        'sys'  => !empty($r['is_system']) ? 1 : 0,
+                                    ], array_values($roles)),
+                                    'assigned' => (function() use ($userRoles, $admins) {
+                                        $out = [];
+                                        foreach ($admins as $_a) {
+                                            $list = $userRoles[$_a['id']] ?? [];
+                                            if (!$list) continue;
+                                            $out[(string)$_a['id']] = array_map(fn($ar) => [
+                                                'id'   => (int)$ar['role_id'],
+                                                'name' => (string)$ar['role_name'],
+                                                'sys'  => !empty($ar['is_system']) ? 1 : 0,
+                                            ], array_values($list));
+                                        }
+                                        return $out;
+                                    })(),
+                                ];
                                 ?>
-                                    <tr data-name="<?= htmlspecialchars(strtolower($admin['user_cname'].$admin['user_uname'])) ?>" data-dept="<?= htmlspecialchars(implode('|', $allDepts)) ?>">
-                                        <td style="font-weight:600;"><?= htmlspecialchars($admin['user_cname']) ?></td>
-                                        <td style="color:#888;"><?= htmlspecialchars($admin['user_uname']) ?></td>
-                                        <td style="color:#666;font-size:12px;"><?= $deptDisplay ?: '—' ?></td>
-                                        <td id="<?= $prefix ?>-tags-<?= $admin['id'] ?>">
-                                            <?php if (empty($assignedRoles)): ?>
-                                                <span class="text-muted" style="font-size:12px;">（未指派）</span>
-                                            <?php else: foreach ($assignedRoles as $ar): $_arSys = !empty($ar['is_system']); ?>
-                                                <span class="label <?= $_arSys?'label-danger':'label-primary' ?>" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;"<?= $_arSys?' title="全站系統角色：擁有全部模組的全部權限"':'' ?>>
-                                                    <?= htmlspecialchars($ar['role_name']) ?><?= $_arSys ? '（全站）' : '' ?>
-                                                    <?php if ($canEdit): ?>
-                                                        <a href="#" onclick="roleRemove('<?= $prefix ?>','<?= $module ?>',<?= $admin['id'] ?>,<?= $ar['role_id'] ?>,<?= $_arSys?1:0 ?>);return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除">×</a>
-                                                    <?php endif; ?>
-                                                </span>
-                                            <?php endforeach; endif; ?>
-                                        </td>
-                                        <?php if ($canEdit): ?>
-                                        <td>
-                                            <div class="input-group input-group-sm">
-                                                <select class="form-control" id="<?= $prefix ?>-sel-<?= $admin['id'] ?>">
-                                                    <option value="">— 選擇角色 —</option>
-                                                    <?php foreach ($roles as $role): $_isSys = !empty($role['is_system']); ?>
-                                                    <option value="<?= $role['role_id'] ?>" data-sys="<?= $_isSys ? 1 : 0 ?>"<?= $_isSys ? ' style="color:#B23B1E;font-weight:600;"' : '' ?>><?= htmlspecialchars($role['role_name']) ?><?= $_isSys ? '（⚠ 全站・全部權限）' : '' ?></option>
-                                                    <?php endforeach; ?>
-                                                </select>
-                                                <span class="input-group-btn">
-                                                    <button class="btn btn-primary btn-sm" type="button" onclick="roleAssign('<?= $prefix ?>','<?= $module ?>',<?= $admin['id'] ?>)"><i class="fa fa-plus"></i> 指派</button>
-                                                </span>
-                                            </div>
-                                        </td>
-                                        <?php endif; ?>
-                                    </tr>
-                                <?php endforeach; ?>
+                                <?php
+                                // 先用一列空白把「建好之後會有多高」佔住，否則每建一個區塊、
+                                // 下面的內容就整個往下跳一次（捲軸長度也會一直變）。
+                                // 建表時這一列會被整個換掉，使用者看不到它（rootMargin 讓建表發生在進入畫面之前）。
+                                $_rolePlaceholderH = count($admins) * 39;
+                                ?>
+                                <tbody id="<?= $prefix ?>-role-tbody" data-role-pending="1">
+                                    <tr class="role-ph"><td colspan="<?= $canEdit ? 5 : 4 ?>" style="height:<?= $_rolePlaceholderH ?>px;border:0;"></td></tr>
                                 </tbody>
                             </table>
                         <?php endif; ?>
@@ -2083,34 +2075,35 @@ $_quotDepts = array_keys($_deptSet);
                                 $('#datatable-buttons').DataTable().draw();
                             }
 
-                            // 更新所有 Modal 中的「複製權限」下拉選單
+                            // 存檔後把這個人的最新權限記回快取：modal 全站共用，同一個人再點一次「更新」
+                            // 若還讀頁面載入當下的舊值，畫面會顯示成沒存到（其實已經存進去了）。
+                            // 這裡直接讀表單本身（group 與 page 兩種 scope 都收），不是只收模組欄。
+                            var savedPerms = { group: {}, page: {} }, savedAny = false;
+                            form.find('input[type="checkbox"]:checked').each(function() {
+                                var m = this.name.match(/^permissions\[(group|page)\]\[(.+?)\]\[\]$/);
+                                if (!m) return;
+                                savedPerms[m[1]][m[2]] = (savedPerms[m[1]][m[2]] || '') + this.value;
+                                savedAny = true;
+                            });
+                            if (savedAny) { UP_USER_PERMS[userId] = savedPerms; }
+                            else { delete UP_USER_PERMS[userId]; }
+
+                            // 更新「複製權限自」下拉（共用 modal 只有一個，自己那一列由 openPermModal 隱藏）
                             $('.copy-source-select').each(function() {
                                 var select = $(this);
-                                // 取得該下拉選單所屬的 Modal 的使用者 ID (避免自己複製自己)
-                                var currentModalUserId = select.closest('form').find('input[name="userid"]').val();
+                                var option = select.find('option[value="' + userId + '"]');
 
-                                if (currentModalUserId !== userId) {
-                                    var option = select.find('option[value="' + userId + '"]');
-
-                                    if (hasAnyPerm) {
-                                        if (option.length > 0) {
-                                            // 更新現有選項的權限資料
-                                            option.data('perms', newPermsObj);
-                                        } else {
-                                            // 新增選項
-                                            var newOption = $('<option>', {
-                                                value: userId,
-                                                text: userName
-                                            });
-                                            newOption.data('perms', newPermsObj);
-                                            select.append(newOption);
-                                        }
+                                if (savedAny) {
+                                    if (option.length > 0) {
+                                        option.data('perms', savedPerms);
                                     } else {
-                                        // 若該使用者已無任何權限，從清單中移除
-                                        if (option.length > 0) {
-                                            option.remove();
-                                        }
+                                        var newOption = $('<option>', { value: userId, text: userName });
+                                        newOption.data('perms', savedPerms);
+                                        select.append(newOption);
                                     }
+                                } else if (option.length > 0) {
+                                    // 若該使用者已無任何權限，從清單中移除
+                                    option.remove();
                                 }
                             });
 
@@ -2155,38 +2148,7 @@ $_quotDepts = array_keys($_deptSet);
                     alert('請選擇一位員工以複製權限');
                     return;
                 }
-
-                // 清空目前設定
-                form.find('input[type="checkbox"]').prop('checked', false);
-
-                // 套用新設定
-                if (permsData.group) {
-                    $.each(permsData.group, function(mCode, pStr) {
-                        if (pStr) {
-                            var $boxes = form.find('input[name="permissions[group][' + mCode + '][]"]');
-                            for (var i = 0; i < pStr.length; i++) {
-                                $boxes.filter('[value="' + pStr.charAt(i) + '"]').prop('checked', true);
-                            }
-                            // RBAC 簡化列（僅 R 選項）：來源含 A(完整) 視同開啟
-                            if (pStr.indexOf('A') !== -1 && $boxes.filter('[value="A"]').length === 0) {
-                                $boxes.filter('[value="R"]').prop('checked', true);
-                            }
-                        }
-                    });
-                }
-                if (permsData.page) {
-                    $.each(permsData.page, function(pId, pStr) {
-                        if (pStr) {
-                            var $boxes = form.find('input[name="permissions[page][' + pId + '][]"]');
-                            for (var i = 0; i < pStr.length; i++) {
-                                $boxes.filter('[value="' + pStr.charAt(i) + '"]').prop('checked', true);
-                            }
-                            if (pStr.indexOf('A') !== -1 && $boxes.filter('[value="A"]').length === 0) {
-                                $boxes.filter('[value="R"]').prop('checked', true);
-                            }
-                        }
-                    });
-                }
+                upApplyPermsToForm(form, permsData);
             });
 
             // 權限 Checkbox 連動邏輯：A (完整權限) 與其他權限互斥
@@ -2264,6 +2226,52 @@ $_quotDepts = array_keys($_deptSet);
             $('tr[data-parent-module="' + mCode + '"]').toggle();
         }
 
+        // ══ 權限修改 Modal（全站共用同一份）══════════════════════════════
+        // 把一份權限資料（{group:{模組代碼:'ACRUD'}, page:{頁面id:'ACRUD'}}）套進表單的勾選狀態。
+        // 「開啟某個人的權限」與「複製別人的權限」是同一件事，故共用這一支，規則不會兩邊走鐘。
+        function upApplyPermsToForm(form, permsData) {
+            form = $(form);
+            form.find('input[type="checkbox"]').prop('checked', false);
+            if (!permsData) return;
+
+            function applyScope(scope, key, pStr) {
+                if (!pStr) return;
+                var $boxes = form.find('input[name="permissions[' + scope + '][' + key + '][]"]');
+                for (var i = 0; i < pStr.length; i++) {
+                    $boxes.filter('[value="' + pStr.charAt(i) + '"]').prop('checked', true);
+                }
+                // RBAC 簡化列（只印得出 R 開啟一個選項）：來源含 A（完整權限）視同開啟
+                if (pStr.indexOf('A') !== -1 && $boxes.filter('[value="A"]').length === 0) {
+                    $boxes.filter('[value="R"]').prop('checked', true);
+                }
+            }
+
+            if (permsData.group) $.each(permsData.group, function(k, v) { applyScope('group', k, v); });
+            if (permsData.page)  $.each(permsData.page,  function(k, v) { applyScope('page',  k, v); });
+        }
+
+        // 點「更新」才把這個人的資料帶進共用 modal（原本是每個人各印一份 modal＝19MB HTML）
+        function openPermModal(uid) {
+            uid = String(uid);
+            var modal = $('#updateModal-shared');
+            var form  = modal.find('.permission-update-form');
+
+            modal.find('.modal-title').text((UP_USER_NAMES[uid] || '') + '　權限修改');
+            form.find('input[name="userid"]').val(uid);
+            upApplyPermsToForm(form, UP_USER_PERMS[uid] || null);
+
+            // 「複製權限自」不可以列出自己（共用 modal 沒辦法在 PHP 端就排除，開啟時才藏）
+            var $src = form.find('.copy-source-select');
+            $src.val('');
+            $src.find('option').each(function() {
+                var $o = $(this);
+                if (!$o.val()) return;
+                $o.prop('disabled', $o.val() === uid).toggle($o.val() !== uid);
+            });
+
+            modal.modal('show');
+        }
+
         // ══ 角色指派（依模組通用：prefix=quot/notice，module=quotation/notice）══
         var ROLES_API = '../../src/store/Roles_API.php';
         // 模組代碼 → 中文名（與 PHP 端 eg_module_label() 同一張表，畫面上不要出現 as_doc 這種代碼）
@@ -2300,7 +2308,119 @@ $_quotDepts = array_keys($_deptSet);
             .always(function() { $btn.prop('disabled', false); });
         });
 
+        <?php
+        // ══ 角色指派表：人員那幾欄 47 個區塊都一模一樣，只輸出一份 ══════════
+        $_egRoleAdmins = [];
+        foreach ($admins as $_ra) {
+            $_deptKeys = []; $_deptHtml = '';
+            foreach ($_ra['roles'] as $_dr) {
+                if (empty($_dr['department_name'])) continue;
+                if (!in_array($_dr['department_name'], $_deptKeys)) $_deptKeys[] = $_dr['department_name'];
+                $_deptHtml .= ($_dr['is_main'] == 1)
+                    ? htmlspecialchars($_dr['department_name'])
+                    : ' <span style="color:#e67e22;font-size:11px;">兼 '.htmlspecialchars($_dr['department_name']).'</span>';
+            }
+            $_egRoleAdmins[] = [
+                'id'   => (int)$_ra['id'],
+                'name' => (string)$_ra['user_cname'],
+                'un'   => (string)$_ra['user_uname'],
+                'key'  => mb_strtolower($_ra['user_cname'].$_ra['user_uname'], 'UTF-8'),
+                'dh'   => $_deptHtml !== '' ? $_deptHtml : '—',
+                'dk'   => $_deptKeys,
+            ];
+        }
+        ?>
+        var EG_ROLE_ADMINS   = <?= json_encode($_egRoleAdmins, JSON_UNESCAPED_UNICODE) ?>;
+        var EG_ROLE_SECTIONS = <?= json_encode($GLOBALS['_eg_role_section_data'] ?? [], JSON_UNESCAPED_UNICODE) ?>;
+
+        function egRoleEsc(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // 建出某個角色指派區塊的 45 列（已建過就直接跳出）。
+        // 標籤 HTML 與 roleReloadRow() 產生的完全一致，改一邊要記得兩邊一起改。
+        function egBuildRoleTable(p) {
+            var $tb = $('#' + p + '-role-tbody');
+            if (!$tb.length || !$tb.attr('data-role-pending')) return;
+            var sec = EG_ROLE_SECTIONS[p];
+            if (!sec) { $tb.removeAttr('data-role-pending'); return; }
+            $tb.removeAttr('data-role-pending');
+
+            // 「新增角色」下拉的選項每一列都一樣，先組好字串重複使用
+            var optHtml = '<option value="">— 選擇角色 —</option>';
+            sec.roles.forEach(function(r) {
+                optHtml += '<option value="' + r.id + '" data-sys="' + (r.sys ? 1 : 0) + '"'
+                        + (r.sys ? ' style="color:#B23B1E;font-weight:600;"' : '') + '>'
+                        + egRoleEsc(r.name) + (r.sys ? '（⚠ 全站・全部權限）' : '') + '</option>';
+            });
+
+            var html = '';
+            EG_ROLE_ADMINS.forEach(function(a) {
+                html += '<tr data-name="' + egRoleEsc(a.key) + '" data-dept="' + egRoleEsc(a.dk.join('|')) + '">'
+                     +  '<td style="font-weight:600;">' + egRoleEsc(a.name) + '</td>'
+                     +  '<td style="color:#888;">' + egRoleEsc(a.un) + '</td>'
+                     +  '<td style="color:#666;font-size:12px;">' + a.dh + '</td>'
+                     +  '<td id="' + p + '-tags-' + a.id + '">';
+
+                var assigned = sec.assigned[String(a.id)] || [];
+                if (!assigned.length) {
+                    html += '<span class="text-muted" style="font-size:12px;">（未指派）</span>';
+                } else {
+                    assigned.forEach(function(ar) {
+                        html += '<span class="label ' + (ar.sys ? 'label-danger' : 'label-primary') + '" style="margin-right:4px;font-size:12px;padding:3px 7px;display:inline-block;"'
+                             + (ar.sys ? ' title="全站系統角色：擁有全部模組的全部權限"' : '') + '>'
+                             + egRoleEsc(ar.name) + (ar.sys ? '（全站）' : '');
+                        if (sec.canEdit) {
+                            html += ' <a href="#" onclick="roleRemove(\'' + p + '\',\'' + sec.module + '\',' + a.id + ',' + ar.id + ',' + (ar.sys ? 1 : 0) + ');return false;" style="color:#fff;margin-left:4px;opacity:.8;" title="移除">&times;</a>';
+                        }
+                        html += '</span>';
+                    });
+                }
+                html += '</td>';
+
+                if (sec.canEdit) {
+                    html += '<td><div class="input-group input-group-sm">'
+                         +  '<select class="form-control" id="' + p + '-sel-' + a.id + '">' + optHtml + '</select>'
+                         +  '<span class="input-group-btn">'
+                         +  '<button class="btn btn-primary btn-sm" type="button" onclick="roleAssign(\'' + p + '\',\'' + sec.module + '\',' + a.id + ')"><i class="fa fa-plus"></i> 指派</button>'
+                         +  '</span></div></td>';
+                }
+                html += '</tr>';
+            });
+            $tb.html(html);
+
+            // 該區塊若已經在篩選狀態（例如先打了字才捲到這裡），建完要立刻套用
+            var kw = ($('#' + p + '-search-name').val() || '').trim();
+            var dp = ($('#' + p + '-search-dept').val() || '').trim();
+            if (kw || dp) roleFilterTable(p);
+            else $('#' + p + '-filter-count').text('共 ' + EG_ROLE_ADMINS.length + ' 人');
+        }
+
+        // 捲到附近才建表；瀏覽器不支援 IntersectionObserver 時就一次全建（維持原本行為）
+        $(function() {
+            var pending = Object.keys(EG_ROLE_SECTIONS);
+            if (!pending.length) return;
+            if (!('IntersectionObserver' in window)) {
+                pending.forEach(egBuildRoleTable);
+                return;
+            }
+            var io = new IntersectionObserver(function(entries) {
+                entries.forEach(function(en) {
+                    if (!en.isIntersecting) return;
+                    io.unobserve(en.target);
+                    egBuildRoleTable(en.target.id.replace(/-role-section$/, ''));
+                });
+            }, { rootMargin: '600px 0px' });
+            pending.forEach(function(p) {
+                var el = document.getElementById(p + '-role-section');
+                if (el) io.observe(el); else egBuildRoleTable(p);
+            });
+        });
+
         function roleFilterTable(p) {
+            egBuildRoleTable(p);   // 還沒建表就先建（快速切換直接跳過來時會遇到）
             var kw   = ($('#' + p + '-search-name').val() || '').toLowerCase().trim();
             var dept = ($('#' + p + '-search-dept').val() || '').trim();
             var rows = $('#' + p + '-role-tbody tr');
@@ -2325,9 +2445,9 @@ $_quotDepts = array_keys($_deptSet);
 
         // 頁面載入後顯示各區塊總人數
         $(document).ready(function() {
-            ['quot', 'notice', 'oready', 'bomtrk', 'ptask', 'asdoc'].forEach(function(p) {
-                var total = $('#' + p + '-role-tbody tr').length;
-                if (total > 0) $('#' + p + '-filter-count').text('共 ' + total + ' 人');
+            // 人數是固定的（全體在職人員），不必等表格建出來才算得出來
+            Object.keys(EG_ROLE_SECTIONS).forEach(function(p) {
+                $('#' + p + '-filter-count').text('共 ' + EG_ROLE_ADMINS.length + ' 人');
             });
 
             // 快速切換：平滑捲動至各設定區塊（避開凍結的快速切換列本身）
