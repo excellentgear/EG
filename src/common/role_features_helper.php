@@ -393,3 +393,96 @@ if (!function_exists('oready_resolve_is_admin')) {
         }
     }
 }
+
+if (!function_exists('oready_resolve_bom_perm_chars')) {
+    /**
+     * 取出某使用者在「BOM 總表」這一頁的舊制 CRUD 權限字元集合（page scope 優先，沒有才退 group scope）。
+     * 抽成獨立函式是因為 oready_resolve_can_transfer/can_view_price/is_admin/can_bind 四支都要同一段，
+     * 各自抄一份遲早走鐘（鐵律4）。判不出來一律回空陣列＝沒有權限（fail-closed）。
+     * @return string[] 例：['C','R'] （已去重，未排序）
+     */
+    function oready_resolve_bom_perm_chars($pdo, $user_id, $script_path = '/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php') {
+        try {
+            $st = $pdo->prepare("
+                SELECT smp.page_id, smp.group_id
+                FROM system_module_pages smp
+                WHERE (:script LIKE CONCAT('%', smp.page_url) AND smp.page_url IS NOT NULL AND smp.page_url != '')
+                   OR (:script LIKE CONCAT('%', smp.page_url_readonly) AND smp.page_url_readonly IS NOT NULL AND smp.page_url_readonly != '')
+                LIMIT 1
+            ");
+            $st->execute([':script' => $script_path]);
+            $page = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$page) return [];
+
+            $group_module_code = null;
+            if (!empty($page['group_id'])) {
+                $st2 = $pdo->prepare("SELECT module_code FROM system_modules WHERE group_id = :gid LIMIT 1");
+                $st2->execute([':gid' => $page['group_id']]);
+                $group_module_code = $st2->fetchColumn();
+            }
+            $st3 = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=:uid AND scope='page' AND module_code=:pid");
+            $st3->execute([':uid' => (int)$user_id, ':pid' => $page['page_id']]);
+            $perms = array_filter($st3->fetchAll(PDO::FETCH_COLUMN));
+            if (!$perms && !empty($group_module_code)) {
+                $st4 = $pdo->prepare("SELECT permission FROM user_module_permissions WHERE user_id=:uid AND scope='group' AND module_code=:mc");
+                $st4->execute([':uid' => (int)$user_id, ':mc' => $group_module_code]);
+                $perms = array_filter($st4->fetchAll(PDO::FETCH_COLUMN));
+            }
+            $chars = [];
+            foreach ($perms as $p) { $chars = array_merge($chars, str_split($p)); }
+            return array_values(array_unique($chars));
+        } catch (Exception $e) {
+            return [];
+        }
+    }
+}
+
+if (!function_exists('oready_resolve_can_bind')) {
+    /**
+     * BOM「快速綁定料號 / 快速綁定訂單」的權限判定（唯一實作，給 BOM 總表以外的頁面共用）。
+     *
+     * **一定要對「BOM 總表」那一頁解析，不可以對呼叫端自己那一頁解析**：綁定改的是 `bom` 主檔，
+     * 那是 BOM 總表的資料。實測站上有 9 位使用者被個別把 page scope 的 BOM 總表權限壓成 'R'
+     * （唯讀），但他們在 group scope 'bom' 底下是 A/CRD——若拿呼叫端頁面去解析，這 9 個人就會
+     * 在別的頁面拿回寫入權，等於繞過那筆刻意設定的限制。
+     *
+     * 判定規則逐條對齊 OreadyReply_ForPm_BaseOfTime.php 開頭的 $can_* / $user_status：
+     *   $_is_cru（業務類）＝ display code 為 R+U / C+R+U / C+D+R+U
+     *   can_create = !is_cru && (A|C)   can_update = (A|U|C)   can_delete = (A|D) || (!is_cru && C)
+     *   三者再各自 OR 對應的角色功能碼；user_status = 三者任一成立
+     *   角色勾了 'oready_readonly' → 一律唯讀（此處刻意不用 rf_has_feature，'all' 萬用碼不算）
+     * 兩個動作的差別只有一個：**快速綁定料號**比照該頁按鈕再多排除 'D+R'（受限業務），
+     * 綁定訂單則沿用「更新表單」那顆按鈕的 user_status==1。
+     *
+     * @return array{part:bool, order:bool, code:string} code＝display permission code，供畫面顯示/除錯
+     */
+    function oready_resolve_can_bind($pdo, $user_id, $script_path = '/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php') {
+        $out = ['part' => false, 'order' => false, 'code' => ''];
+        $user_id = (int)$user_id;
+        if ($user_id <= 0 || !eg_user_is_active($pdo, $user_id)) return $out;
+        try {
+            $chars = oready_resolve_bom_perm_chars($pdo, $user_id, $script_path);
+            $features = rf_load_user_features($pdo, $user_id);
+            // 唯讀角色覆蓋：不論舊制權限碼或其他功能碼為何一律擋下（與該頁 $oready_feat_readonly 同義）
+            if (in_array('oready_readonly', $features, true)) { $out['code'] = 'R'; return $out; }
+
+            $has = function ($c) use ($chars) { return in_array($c, $chars, true); };
+            $sorted = $chars; sort($sorted);
+            $display = $has('A') && count($chars) === 1 ? 'A' : implode('+', $sorted);
+            $out['code'] = $display;
+
+            $is_cru = in_array($display, ['R+U', 'C+R+U', 'C+D+R+U'], true);
+            $can_create = (!$is_cru && ($has('A') || $has('C'))) || rf_has_feature($features, 'oready_create');
+            $can_update = ($has('A') || $has('U') || $has('C'))  || rf_has_feature($features, 'oready_update');
+            $can_delete = ($has('A') || $has('D') || (!$is_cru && $has('C'))) || rf_has_feature($features, 'oready_delete');
+            $user_status = ($can_create || $can_update || $can_delete);
+            if (!$user_status) return $out;
+
+            $out['order'] = true;                        // 比照「更新」按鈕：user_status == 1
+            $out['part']  = ($display !== 'D+R');        // 比照「快速綁定料號」放大鏡：再排除受限業務
+            return $out;
+        } catch (Exception $e) {
+            return ['part' => false, 'order' => false, 'code' => ''];   // fail-closed
+        }
+    }
+}
