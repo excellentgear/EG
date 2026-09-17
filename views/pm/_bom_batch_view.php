@@ -286,10 +286,10 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
     }
     function canEditNote() { return (window.userStatus == 1); }
     // 節點裡「廠商下方」要顯示的已回廠日期（＝按下「已回廠」那天，bom_ing.return_date）
-    //   狀態判定與發單日欄完全一致：待移轉(wait/P)／已移轉(done/E) 才顯示。
-    //   QC待驗(Q) 不顯示是刻意的——發單日欄那邊 Q 的日期前綴用的就是同一個 return_date。
+    //   狀態判定與發單日欄完全一致：QC待驗(qc/Q)／待移轉(wait/P)／已移轉(done/E) 才顯示。
+    //   加工中(ing)／待發包(na/N) 還沒回廠，本來就沒有日期可印。
     function rdateHtml(b, st) {
-        if (st.k !== 'wait' && st.k !== 'done') return '';
+        if (st.k !== 'qc' && st.k !== 'wait' && st.k !== 'done') return '';
         var d = fmtDate(b.return_date);
         if (!d) return '';
         return '<div class="eg-bv-node-r" title="已回廠日期：' + esc(b.return_date) + '">' + esc(d) + ' 回</div>';

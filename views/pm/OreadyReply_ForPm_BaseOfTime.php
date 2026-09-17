@@ -5730,7 +5730,9 @@ echo "</script>\n";
                         }
                         var _ingBtnRow = document.createElement('div');
                         _ingBtnRow.className = 'bv-btnrow';   // 批次檢視會把整列搬進流程圖節點
-                        _ingBtnRow.style.cssText = 'margin-top:2px;display:flex;align-items:center;justify-content:flex-end;';
+                        // margin-top:0：與 Q/P/E 那條狀態列同樣的間距，否則同一欄裡
+                        // 「加工中」會比「待移轉／已移轉」多空 2px，看起來像壞掉
+                        _ingBtnRow.style.cssText = 'margin-top:0;display:flex;align-items:center;justify-content:flex-end;';
                         _ingBtnRow.appendChild(_ingBtn);
                         _pDiv.appendChild(_ingBtnRow);
                         _lastBtnRow = _ingBtnRow;
@@ -5738,7 +5740,7 @@ echo "</script>\n";
                         // 拆分批次尚未發包（N 狀態）→ 顯示待發包標籤
                         var _nRow = document.createElement('div');
                         _nRow.className = 'bv-btnrow';   // 批次檢視會把整列搬進流程圖節點
-                        _nRow.style.cssText = 'margin-top:2px;display:flex;align-items:center;justify-content:flex-end;';
+                        _nRow.style.cssText = 'margin-top:0;display:flex;align-items:center;justify-content:flex-end;';
                         var _nBadge = document.createElement('span');
                         _nBadge.className = 'label label-default';
                         _nBadge.style.cssText = 'font-size:9px;';
@@ -5751,12 +5753,12 @@ echo "</script>\n";
                         _btnRow.className = 'bv-btnrow';   // 批次檢視會把整列搬進流程圖節點
                         // flex-wrap：加上「已回廠日期」後這一列可能放不下，讓它自己換行，
                         // 不加的話 flex 會把狀態按鈕壓扁（原本沒有第三個元素所以看不出來）
-                        _btnRow.style.cssText = 'margin-top:2px;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;';
+                        // margin-top:0＝與上面「發包日期 廠商」那行同樣的上下間距（使用者指定縮小）
+                        _btnRow.style.cssText = 'margin-top:0;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;';
                         var _dh = '';
-                        if (_effectiveSt === 'Q' && _proc.return_date) {
-                            var _rp = String(_proc.return_date).split('/');
-                            if (_rp.length >= 3) _dh = parseInt(_rp[1], 10) + '/' + parseInt(_rp[2], 10) + ' ';
-                        } else if (_effectiveSt === 'P') {
+                        // 註：QC待驗(Q) 原本在這裡把 return_date 當日期前綴，現在改由下方
+                        //     統一的「M/D 回」顯示（同一個來源、同樣的 M/D），不再重複印。
+                        if (_effectiveSt === 'P') {
                             // 優先 QC_check_date，若無（qc_completed=1 但尚未同步）則用 qc_completed_at
                             var _pDateSrc = _proc.QC_check_date || _proc.qc_completed_at;
                             if (_pDateSrc) {
@@ -5765,9 +5767,9 @@ echo "</script>\n";
                             }
                         }
                         // ── 已回廠日期（＝按下「已回廠」的那天，bom_ing.return_date）──
-                        //    待移轉(P)／已移轉(E) 顯示在狀態左側；QC待驗(Q) 刻意不顯示，
-                        //    因為上面的 _dh 用的就是同一個 return_date，會變成同一天印兩次。
-                        if (_effectiveSt === 'P' || _effectiveSt === 'E') {
+                        //    QC待驗(Q)／待移轉(P)／已移轉(E) 三種狀態都顯示在狀態按鈕左側。
+                        //    Q 的日期前綴已在上面移除，所以這裡不會重複印同一天。
+                        if (_effectiveSt === 'Q' || _effectiveSt === 'P' || _effectiveSt === 'E') {
                             var _rdMd = formatDateAsMd(_proc.return_date);
                             if (_rdMd) {
                                 var _rdSpan = document.createElement('span');
@@ -6398,10 +6400,10 @@ echo "</script>\n";
                                 }
 
                                 // ── 出廠日期／廠商下方顯示「已回廠日期」（bom_ing.return_date）──
-                                //    只在待移轉(P)／已移轉(E) 顯示：QC待驗(Q) 下面那行狀態本來就是用
-                                //    同一個 return_date 當前綴，兩個都印會變成同一天出現兩次。
+                                //    QC待驗(Q)／待移轉(P)／已移轉(E) 都顯示；Q 原本把 return_date
+                                //    當成下方狀態列的日期前綴，已一併移除，不會同一天印兩次。
                                 var _dynRawSt = String(processInfo.processing_state || '');
-                                if (_dynRawSt === 'P' || _dynRawSt === 'E' || _dynRawSt === '1') {
+                                if (_dynRawSt === 'Q' || _dynRawSt === 'P' || _dynRawSt === 'E' || _dynRawSt === '1') {
                                     var _dynRdMd = formatDateAsMd(processInfo.return_date);
                                     if (_dynRdMd) {
                                         tdDynamicProcess.innerHTML += `<div style="color:#2a7ae2;font-weight:bold;font-size:0.9em;" title="已回廠日期：${escapeHtml(String(processInfo.return_date))}">${escapeHtml(_dynRdMd)} 回</div>`;
@@ -6415,9 +6417,8 @@ echo "</script>\n";
                                     if (processInfo.processing_state === 'ing') {
                                         stateColor = 'orange';
                                     } else if (processInfo.processing_state === 'Q') {
-                                        if (processInfo.return_date && String(processInfo.return_date).trim() !== '') {
-                                            datePrefix = formatDateAsMd(processInfo.return_date) + ' ';
-                                        }
+                                        // 回廠日期已在上方「M/D 回」那行統一顯示（同一個 return_date），
+                                        // 這裡不再重複當前綴，否則同一天會出現兩次。
                                         stateColor = 'blue';
                                     } else if (processInfo.processing_state === 'P') {
                                         if (processInfo.QC_check_date && String(processInfo.QC_check_date).trim() !== '') {
@@ -6451,7 +6452,9 @@ echo "</script>\n";
                                 if (_hasCurrentPrice || _hasHistory) {
                                     var _iconEl = document.createElement('div');
                                     _iconEl.className = 'price-history-trigger';
-                                    _iconEl.style.cssText = 'display:block;cursor:pointer;margin-top:2px;font-size:12px;line-height:1.4;';
+                                    // margin-top:0 + line-height:1.2 ＝ 與同格內「發包日期 廠商」「M/D 回」
+                                    // 完全相同的上下間距（.process-col div 的預設值，使用者指定要緊貼）
+                                    _iconEl.style.cssText = 'display:block;cursor:pointer;margin-top:0;font-size:12px;line-height:1.2;';
 
                                     if (_hasCurrentPrice) {
                                         var _rawPrice = _pi.modified_unit_price || _pi.price;
