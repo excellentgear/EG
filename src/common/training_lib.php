@@ -1093,7 +1093,13 @@ function training_perms(PDO $db, ?array $u): array {
  * KPI 第19項計算：人員教育訓練達成率（供 kpi_as_lib compute 呼叫）
  * den=當月計畫場次(排除取消，除非 include_cancelled=1)；num=已完成場次
  * ============================================================ */
-function training_kpi_compute(PDO $db, int $year, int $month, array $params): ?array {
+/**
+ * @param array $exclRows KPI 逐筆排除的 session_id（見 kpi_as_adjust）
+ * @param array $rules    KPI 依維度排除的規則（見 kpi_as_excl_rule），這裡只吃 unit＝受訓單位
+ *        兩者都只影響 KPI 計算，不會動到任何一筆訓練資料。
+ */
+function training_kpi_compute(PDO $db, int $year, int $month, array $params,
+                              array $exclRows = [], array $rules = []): ?array {
     try {
         if (!$db->query("SHOW TABLES LIKE 'training_session'")->fetchColumn())
             return ['num'=>0, 'den'=>0, 'value'=>null];
@@ -1104,14 +1110,20 @@ function training_kpi_compute(PDO $db, int $year, int $month, array $params): ?a
     if (is_array($inc)) $inc = $inc['v'] ?? 0;
     $inc = (int)$inc === 1;
 
-    $denSql = "SELECT COUNT(*) FROM training_session WHERE year=? AND plan_month=?"
-            . ($inc ? "" : " AND status<>'cancelled'");
-    $st = $db->prepare($denSql);
-    $st->execute([$year, $month]);
+    $ex = array_values(array_filter(array_map('intval', $exclRows)));
+    $exSql = $ex ? (" AND session_id NOT IN (" . implode(',', array_fill(0, count($ex), '?')) . ")") : '';
+    $units = array_map('strval', $rules['unit'] ?? []);
+    $uSql = $units ? (" AND (org_unit IS NULL OR org_unit NOT IN ("
+                      . implode(',', array_fill(0, count($units), '?')) . "))") : '';
+    $base = " FROM training_session WHERE year=? AND plan_month=?" . $exSql . $uSql;
+    $bind = array_merge([$year, $month], $ex, $units);
+
+    $st = $db->prepare("SELECT COUNT(*)" . $base . ($inc ? "" : " AND status<>'cancelled'"));
+    $st->execute($bind);
     $den = (int)$st->fetchColumn();
 
-    $st = $db->prepare("SELECT COUNT(*) FROM training_session WHERE year=? AND plan_month=? AND status='done'");
-    $st->execute([$year, $month]);
+    $st = $db->prepare("SELECT COUNT(*)" . $base . " AND status='done'");
+    $st->execute($bind);
     $num = (int)$st->fetchColumn();
 
     return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];

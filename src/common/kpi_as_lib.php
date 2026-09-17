@@ -168,6 +168,23 @@ function kpi_as_ensure_schema(PDO $db): void {
         KEY idx_cell (indicator_id, year, month)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='KPI計算調整-排除指定來源列(不修改真實資料)'");
 
+    // 「排除規則」＝依維度（客戶／料號／製程／廠商／機台／設計者…）整批排除，
+    // 與 kpi_as_adjust（逐筆排除某一個月的某一列）互補：規則一旦建立，該年度 12 個月一體適用。
+    // 一樣**只影響 KPI 計算，不動任何一筆真實資料**。
+    $db->exec("CREATE TABLE IF NOT EXISTS kpi_as_excl_rule (
+        rule_id INT AUTO_INCREMENT PRIMARY KEY,
+        indicator_id INT NOT NULL,
+        year SMALLINT NOT NULL,
+        dim VARCHAR(20) NOT NULL COMMENT '維度代號 client/part/proc/maker/machine/designer/unit',
+        val VARCHAR(190) NOT NULL COMMENT '要排除的值(顯示文字，與明細列上的值相同)',
+        reason VARCHAR(255) NULL COMMENT '排除原因',
+        created_by INT NULL,
+        created_by_name VARCHAR(50) NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_rule (indicator_id, year, dim, val),
+        KEY idx_iy (indicator_id, year)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='KPI計算調整-依維度整批排除(不修改真實資料)'");
+
     // 這個指標的來源資料可不可以直接改：suggest=依系統建議 / allow=可改 / deny=只能用排除
     try { $db->exec("ALTER TABLE kpi_as_indicator ADD COLUMN src_edit_mode ENUM('suggest','allow','deny') NOT NULL DEFAULT 'suggest' COMMENT '來源資料可否直接修改 suggest=依系統建議' AFTER is_active"); } catch (Throwable $e) {}
 
@@ -658,6 +675,207 @@ function kpi_as_list($v): array {
 }
 
 /* ============================================================
+ * 排除維度（使用者要求 2026-09-17：排除要能指定「特定客戶／製程／廠商／料號」）
+ * --------------------------------------------------------------
+ * 與 kpi_as_adjust（逐筆排除某一個月的某一列）互補：
+ *   kpi_as_adjust     ＝這一格的這一筆不算（一次性）
+ *   kpi_as_excl_rule  ＝這個指標整年度，只要是這個客戶／製程／廠商／料號就都不算（常設規則）
+ * 兩者都**只影響 KPI 計算，不修改任何一筆真實資料**。
+ * 畫面上要提供哪些維度，一律看「明細列身上真的有哪些維度值」（使用者原話：
+ * 看資料內有哪些資料就提供那些設定），所以每一列都要帶 dims；
+ * 這裡的 kpi_as_calc_dims() 只是後端驗證用的白名單，避免前端亂送維度代號。
+ * ============================================================ */
+
+/** 維度代號 → 顯示名稱 */
+function kpi_as_dim_labels(): array {
+    return ['client'=>'客戶', 'part'=>'料號', 'proc'=>'製程', 'maker'=>'廠商',
+            'machine'=>'機台', 'designer'=>'設計者', 'unit'=>'受訓單位'];
+}
+
+/** 這個計算模組的明細列會帶哪些維度（後端驗證白名單） */
+function kpi_as_calc_dims(?string $calc): array {
+    switch ((string)$calc) {
+        case 'vendor_ontime':
+        case 'incoming_ng_rate':   return ['client','part','proc','maker'];
+        case 'order_ontime':
+        case 'shipping_target_amount':
+        case 'order_target_amount': return ['client','part'];
+        case 'drawing_ontime':     return ['client','part','designer'];
+        case 'quote_to_order':     return ['client'];
+        case 'capacity_rate':
+        case 'process_ng_rate':    return ['client','part','proc','machine'];
+        case 'training_completion': return ['unit'];
+    }
+    return [];
+}
+
+/** 這個指標這一年度的排除規則 → ['client'=>['甲','乙'], 'proc'=>[...]] */
+function kpi_as_excl_rules(PDO $db, int $iid, int $year): array {
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT dim, val FROM kpi_as_excl_rule WHERE indicator_id=? AND year=?");
+        $st->execute([$iid, $year]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(string)$r['dim']][] = (string)$r['val'];
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 排除規則明細（畫面用，含原因與建立者） */
+function kpi_as_excl_rule_rows(PDO $db, int $iid, int $year): array {
+    try {
+        $st = $db->prepare("SELECT rule_id,dim,val,reason,created_by_name,created_at
+                            FROM kpi_as_excl_rule WHERE indicator_id=? AND year=? ORDER BY dim, val");
+        $st->execute([$iid, $year]);
+        return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) { return []; }
+}
+
+/** 這一列有沒有被規則排除掉？回傳命中的維度代號（沒命中回 ''） */
+function kpi_as_dims_hit(array $dims, array $rules): string {
+    foreach ($rules as $dim => $vals) {
+        if (!isset($dims[$dim])) continue;
+        $v = trim((string)$dims[$dim]);
+        if ($v === '') continue;
+        foreach ($vals as $x) { if ((string)$x === $v) return (string)$dim; }
+    }
+    return '';
+}
+
+/**
+ * 規則 → SQL 片段。$colmap = ['client'=>'ot.Client_name', ...]
+ * 回傳 [' AND ...', [bind...]]；沒有規則就回 ['', []]。
+ * NULL／空字串的列一律保留（規則排的是「這個值」，不是「沒有值」）。
+ */
+function kpi_as_rules_sql(array $rules, array $colmap): array {
+    $sql = ''; $bind = [];
+    foreach ($colmap as $dim => $col) {
+        $vals = $rules[$dim] ?? [];
+        if (!$vals) continue;
+        $sql .= " AND ($col IS NULL OR $col NOT IN (" . implode(',', array_fill(0, count($vals), '?')) . '))';
+        foreach ($vals as $v) $bind[] = (string)$v;
+    }
+    return [$sql, $bind];
+}
+
+/* ============================================================
+ * 廠商準時交貨率：來源列組裝（compute 與「不符合標準的明細」共用同一份）
+ * --------------------------------------------------------------
+ * 兩邊各寫一次 SQL 遲早走鐘（出圖準時率就踩過：明細筆數與 den-num 對不起來），
+ * 所以這一支是唯一實作，compute 只是把它加總。
+ *
+ * 【回廠日的認定】使用者要求 2026-09-17：
+ *   bom_ing.return_date 沒登錄時，依序往下找「這批貨其實已經回來了」的證據——
+ *     ① 下一製程的發包日（下一站都發出去了，表示這一站已經回廠）
+ *     ② 本站的 QC 檢驗日（檢驗一定是回廠後才驗）
+ *     ③ 該製令所屬訂單的出貨日（都出貨了當然回來了）
+ *     ④ 製令結案日
+ *   四個都找不到才算真的「未登錄回廠」。
+ *   任何推估日期都必須 >= 發包日，否則視為不合理不採用。
+ * ============================================================ */
+function kpi_as_vendor_back_sources(): array {
+    return ['next_out'=>'下一製程發包日', 'qc'=>'QC檢驗日', 'ship'=>'出貨日', 'closed'=>'製令結案日'];
+}
+
+function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): array {
+    $ms = sprintf('%04d-%02d-01', $year, $month);
+    $me = date('Y-m-t', strtotime($ms));
+    $defDays = max(0, (int)kpi_as_pv($params, 'default_days', 7));
+    $dmapRaw = kpi_as_pv($params, 'days_by_process_type', []);
+    $dmap = [];
+    if (is_array($dmapRaw)) {
+        foreach ($dmapRaw as $k => $v) { if (is_numeric($v)) $dmap[(int)$k] = (int)$v; }
+    } else {
+        foreach (kpi_as_list($dmapRaw) as $line) {
+            if (preg_match('/^(\d+)\s*[:：]\s*(\d+)$/u', $line, $m2)) $dmap[(int)$m2[1]] = (int)$m2[2];
+        }
+    }
+    $winStart = date('Y-m-d', strtotime($ms . ' -120 days'));
+    $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.sqty, bi.outsource_date, bi.return_date,
+                               bi.QC_check_date, bi.process_no, pn.ProcessName, pn.process_type_id,
+                               COALESCE(mk.maker_id, bi.maker_id) AS maker_name,
+                               b.d_id AS part_no, b.Client_Name AS client_name,
+                               b.o_order_id, b.closed_at
+                        FROM bom_ing bi
+                        LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                        LEFT JOIN maker_list mk ON mk.maker_id_no=bi.maker_id_no
+                        LEFT JOIN bom b ON b.bom=bi.bom
+                        WHERE bi.outsource_date IS NOT NULL
+                          AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no<>''
+                          AND DATE(bi.outsource_date) BETWEEN ? AND ?");
+    $st->execute([$winStart, $me]);
+
+    $rows = []; $needBoms = []; $needOrders = [];
+    while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
+        $ptid = (int)$r['process_type_id'];
+        $days = isset($dmap[$ptid]) ? $dmap[$ptid] : $defDays;
+        $out  = substr((string)$r['outsource_date'], 0, 10);
+        $due  = kpi_as_add_workdays($db, (string)$r['outsource_date'], $days);
+        if ($due < $ms || $due > $me) continue;              // 應交日不在當月＝不屬於這一格
+        $dims = ['client'=>(string)$r['client_name'], 'part'=>(string)$r['part_no'],
+                 'proc'=>(string)($r['ProcessName'] !== null && $r['ProcessName'] !== '' ? $r['ProcessName'] : $r['process_no']),
+                 'maker'=>(string)$r['maker_name']];
+        $back = $r['return_date'] ? substr((string)$r['return_date'], 0, 10) : '';
+        if ($back === '') {
+            $needBoms[(string)$r['bom']] = 1;
+            if ((int)$r['o_order_id'] > 0) $needOrders[(int)$r['o_order_id']] = 1;
+        }
+        $rows[] = ['fid'=>(string)$r['bom_ing_fid'], 'bom'=>(string)$r['bom'], 'sn'=>(int)$r['bom_sn'],
+                   'qty'=>(string)$r['sqty'], 'out'=>$out, 'due'=>$due, 'days'=>$days,
+                   'proc_type'=>$ptid, 'proc'=>$dims['proc'], 'maker'=>$dims['maker'],
+                   'part'=>$dims['part'], 'client'=>$dims['client'], 'dims'=>$dims,
+                   'back'=>$back, 'back_src'=>($back === '' ? '' : 'return'),
+                   'qc_date'=>$r['QC_check_date'] ? substr((string)$r['QC_check_date'], 0, 10) : '',
+                   'closed'=>$r['closed_at'] ? substr((string)$r['closed_at'], 0, 10) : '',
+                   'order_id'=>(int)$r['o_order_id']];
+    }
+    if (!$rows) return [];
+
+    // ① 下一製程發包日：同一張製令、bom_sn 比自己大、且有發包日的最早那一個
+    $nextOut = [];
+    if ($needBoms) {
+        $bs = array_keys($needBoms);
+        foreach (array_chunk($bs, 500) as $chunk) {
+            $in = implode(',', array_fill(0, count($chunk), '?'));
+            $q = $db->prepare("SELECT bom, bom_sn, DATE(outsource_date) d FROM bom_ing
+                               WHERE bom IN ($in) AND outsource_date IS NOT NULL ORDER BY bom, bom_sn");
+            $q->execute($chunk);
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $nextOut[(string)$x['bom']][] = [(int)$x['bom_sn'], (string)$x['d']];
+        }
+    }
+    // ③ 出貨日：該製令綁的訂單的最早出貨日（bom.o_order_id 對 is_list.Order_id，皆為 order_track 主鍵）
+    $shipDate = [];
+    if ($needOrders) {
+        foreach (array_chunk(array_keys($needOrders), 500) as $chunk) {
+            $in = implode(',', array_fill(0, count($chunk), '?'));
+            $q = $db->prepare("SELECT Order_id, MIN(DATE(Order_date)) d FROM is_list
+                               WHERE Order_id IN ($in) AND Order_date IS NOT NULL GROUP BY Order_id");
+            $q->execute($chunk);
+            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $shipDate[(int)$x['Order_id']] = (string)$x['d'];
+        }
+    }
+    foreach ($rows as &$r) {
+        if ($r['back'] !== '') continue;
+        $cands = [];
+        $nx = '';
+        foreach (($nextOut[$r['bom']] ?? []) as $p) {
+            if ($p[0] <= $r['sn']) continue;
+            if ($nx === '' || $p[1] < $nx) $nx = $p[1];
+        }
+        $cands['next_out'] = $nx;
+        $cands['qc']       = $r['qc_date'];
+        $cands['ship']     = ($r['order_id'] > 0 && isset($shipDate[$r['order_id']])) ? $shipDate[$r['order_id']] : '';
+        $cands['closed']   = $r['closed'];
+        foreach ($cands as $k => $d) {
+            if ($d === '' || $d === null) continue;
+            if ($d < $r['out']) continue;                    // 比發包日還早＝不合理，不採用
+            $r['back'] = $d; $r['back_src'] = $k; break;
+        }
+    }
+    unset($r);
+    return $rows;
+}
+
+/* ============================================================
  * 計算模組（回傳 ['num'=>分子,'den'=>分母,'value'=>值] 或 null=無法計算）
  * ============================================================ */
 /**
@@ -665,8 +883,12 @@ function kpi_as_list($v): array {
  *        注意：個別 case 內另有同名的 $excl 區域變數（參數設定的排除客戶／排除退貨性質），兩者不同。
  *                    只有 kpi_as_detail_supported() 為真的計算模組才吃得到，
  *                    其餘模組不開放排除功能（UI 也不會給按鈕），避免排了卻沒作用。
+ * @param array $rules 依維度整批排除的規則（見 kpi_as_excl_rule）：
+ *        ['client'=>['甲','乙'], 'proc'=>['熱處理'], 'maker'=>[...], 'part'=>[...]]。
+ *        同樣只影響計算，不動真實資料；分子分母都要一起排掉，否則比率會被灌水。
  */
-function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $params, array $exclRows = []): ?array {
+function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $params,
+                       array $exclRows = [], array $rules = []): ?array {
     $ym = sprintf('%04d-%02d', $year, $month);
     $ms = sprintf('%04d-%02d-01', $year, $month);
     $me = date('Y-m-t', strtotime($ms));
@@ -703,11 +925,15 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
                 $ws = date('Y-m-d', mktime(0,0,0,$month-1,$sd,$year));
                 $we = date('Y-m-d', mktime(0,0,0,$month,$sd-1,$year));
             } else { $ws = $ms; $we = $me; }
+            // 排除規則（客戶／料號）與逐筆排除都直接從接單金額裡扣掉
+            list($rSql, $rBind) = kpi_as_rules_sql($rules, ['client'=>'Client_name', 'part'=>'d_id']);
+            $exIds = array_values(array_filter(array_map('intval', $exclRows)));
+            $exSql = $exIds ? (" AND Order_id NOT IN (" . implode(',', array_fill(0, count($exIds), '?')) . ")") : '';
             $st = $db->prepare("SELECT COALESCE(SUM(Qty*unit_price),0) FROM order_track
                                 WHERE Delivery_date BETWEEN ? AND ?
                                   AND (Order_status IS NULL OR Order_status<>9)
-                                  AND unit_price IS NOT NULL AND unit_price>0");
-            $st->execute([$ws, $we]);
+                                  AND unit_price IS NOT NULL AND unit_price>0" . $rSql . $exSql);
+            $st->execute(array_merge([$ws, $we], $rBind, $exIds));
             $amount = (float)$st->fetchColumn();
             $tmap = kpi_as_pv($params, 'monthly_targets', []);
             $target = is_array($tmap) && isset($tmap[(string)$month]) ? (float)$tmap[(string)$month]
@@ -723,8 +949,12 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
         }
 
         case 'shipping_target_amount': {
-            $st = $db->prepare("SELECT COALESCE(SUM(Qty*Unit_price),0) FROM is_list WHERE DATE_FORMAT(Order_date,'%Y-%m')=?");
-            $st->execute([$ym]);
+            list($rSql, $rBind) = kpi_as_rules_sql($rules, ['client'=>'Client_name', 'part'=>'Product_id']);
+            $exIds = array_values(array_filter(array_map('intval', $exclRows)));
+            $exSql = $exIds ? (" AND IS_id NOT IN (" . implode(',', array_fill(0, count($exIds), '?')) . ")") : '';
+            $st = $db->prepare("SELECT COALESCE(SUM(Qty*Unit_price),0) FROM is_list
+                                WHERE DATE_FORMAT(Order_date,'%Y-%m')=?" . $rSql . $exSql);
+            $st->execute(array_merge([$ym], $rBind, $exIds));
             $amount = (float)$st->fetchColumn();
             $tmap = kpi_as_pv($params, 'monthly_targets', []);
             $target = is_array($tmap) && isset($tmap[(string)$month]) ? (float)$tmap[(string)$month]
@@ -737,51 +967,43 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
             // 算進分母會憑空把報價轉訂單率壓下來
             $cond = "DATE_FORMAT(q.quote_date,'%Y-%m')=? AND q.pending_review=0";
             if ((int)kpi_as_pv($params, 'exclude_draft', 1) === 1) $cond .= " AND q.is_draft=0";
+            list($rSql, $rBind) = kpi_as_rules_sql($rules, ['client'=>'q.client_name']);
+            $exIds = array_values(array_filter(array_map('intval', $exclRows)));
+            $exSql = $exIds ? (" AND q.quote_id NOT IN (" . implode(',', array_fill(0, count($exIds), '?')) . ")") : '';
+            $cond .= $rSql . $exSql;
+            $bind = array_merge([$ym], $rBind, $exIds);
             $st = $db->prepare("SELECT COUNT(*) FROM quotation_list q WHERE $cond");
-            $st->execute([$ym]);
+            $st->execute($bind);
             $den = (int)$st->fetchColumn();
             $st = $db->prepare("SELECT COUNT(*) FROM quotation_list q WHERE $cond
                                 AND EXISTS (SELECT 1 FROM order_track ot WHERE ot.quote_no=q.quote_no)");
-            $st->execute([$ym]);
+            $st->execute($bind);
             $num = (int)$st->fetchColumn();
             return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
         }
 
         case 'vendor_ontime': {
-            $defDays = max(0, (int)kpi_as_pv($params, 'default_days', 7));
-            $dmapRaw = kpi_as_pv($params, 'days_by_process_type', []);
-            $dmap = [];
-            if (is_array($dmapRaw)) {
-                foreach ($dmapRaw as $k => $v) { if (is_numeric($v)) $dmap[(int)$k] = (int)$v; }
-            } else {
-                foreach (kpi_as_list($dmapRaw) as $line) {
-                    if (preg_match('/^(\d+)\s*[:：]\s*(\d+)$/u', $line, $m2)) $dmap[(int)$m2[1]] = (int)$m2[2];
-                }
-            }
-            $winStart = date('Y-m-d', strtotime($ms . ' -120 days'));
-            $st = $db->prepare("SELECT bi.bom_ing_fid, bi.outsource_date, bi.return_date, pn.process_type_id
-                                FROM bom_ing bi
-                                LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
-                                WHERE bi.outsource_date IS NOT NULL
-                                  AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no<>''
-                                  AND DATE(bi.outsource_date) BETWEEN ? AND ?");
-            $st->execute([$winStart, $me]);
+            // 來源列一律走共用組裝（含「未登錄回廠日時依序推估回廠日」與維度排除規則）
             $exSet = $exclRows ? array_flip(array_map('strval', $exclRows)) : [];
             $num = 0; $den = 0;
-            while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
-                if ($exSet && isset($exSet[(string)$r['bom_ing_fid']])) continue;   // 已排除的不進分子也不進分母
-                $days = isset($dmap[(int)$r['process_type_id']]) ? $dmap[(int)$r['process_type_id']] : $defDays;
-                $due = kpi_as_add_workdays($db, (string)$r['outsource_date'], $days);
-                if ($due < $ms || $due > $me) continue;   // 應交日不在當月
+            foreach (kpi_as_vendor_rows($db, $year, $month, $params) as $r) {
+                if ($exSet && isset($exSet[$r['fid']])) continue;   // 已排除的不進分子也不進分母
+                if (kpi_as_dims_hit($r['dims'], $rules) !== '') continue;   // 命中排除規則＝分子分母都不算
                 $den++;
-                if (!empty($r['return_date']) && substr((string)$r['return_date'], 0, 10) <= $due) $num++;
+                if ($r['back'] !== '' && $r['back'] <= $r['due']) $num++;
             }
             return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
         }
 
         case 'order_ontime': {
             $exCli = kpi_as_list(kpi_as_pv($params, 'exclude_clients', ['寶嘉誠','泳建']));   // 參數設定的排除客戶（與逐筆排除 $excl 不同）
-            $notIn = $exCli ? (" AND Client_name NOT IN (" . implode(',', array_fill(0, count($exCli), '?')) . ")") : '';
+            // 排除規則的客戶一律用**中文簡稱**（明細列上顯示的就是它）：
+            // order_track 存的就是中文名，order_list 存的是客戶代號(C2005)，要先對回 customer_list 才比得起來。
+            $rCli  = $rules['client'] ?? [];
+            $rPart = array_map('strval', $rules['part'] ?? []);
+            $exCli = array_values(array_unique(array_merge($exCli, array_map('strval', $rCli))));
+            $notIn = $exCli ? (" AND ot.Client_name NOT IN (" . implode(',', array_fill(0, count($exCli), '?')) . ")") : '';
+            $notPart = $rPart ? (" AND ot.d_id NOT IN (" . implode(',', array_fill(0, count($rPart), '?')) . ")") : '';
             // 逐筆排除只套在 order_list（未交清單）那一邊，**不可以套到 order_track**：
             // 兩張表是各自獨立的資料（order_track＝自建訂單追蹤、客戶存中文名，Order_id 1~9643；
             // order_list＝ERP 未交訂單、客戶存代號如 CJ002，Order_id 34232~67249），
@@ -789,12 +1011,20 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
             // 拿 order_list 的 Order_id 去 order_track 做 NOT IN，只會砍到不相干的訂單。
             $exIds = array_values(array_filter(array_map('intval', $exclRows)));
             $exSql = $exIds ? (" AND Order_id NOT IN (" . implode(',', array_fill(0, count($exIds), '?')) . ")") : '';
-            $base = " UPPER(d_id)<>'ZZZ' AND LOWER(d_id) NOT REGEXP '-(jg|jh|hg)$' AND DATE_FORMAT(Delivery_date,'%Y-%m')=?" . $notIn;
-            $st = $db->prepare("SELECT COUNT(*) FROM order_track WHERE" . $base);
-            $st->execute(array_merge([$ym], $exCli));
+            $exSql = str_replace(' AND Order_id ', ' AND ot.Order_id ', $exSql);
+            $base = " UPPER(ot.d_id)<>'ZZZ' AND LOWER(ot.d_id) NOT REGEXP '-(jg|jh|hg)$'"
+                  . " AND DATE_FORMAT(ot.Delivery_date,'%Y-%m')=?" . $notPart;
+            $st = $db->prepare("SELECT COUNT(*) FROM order_track ot WHERE" . $base . $notIn);
+            $st->execute(array_merge([$ym], $rPart, $exCli));
             $den = (int)$st->fetchColumn();
-            $st = $db->prepare("SELECT COUNT(*) FROM order_list WHERE" . $base . $exSql . " AND Qty=Open_Qty AND Order_status IS NULL");
-            $st->execute(array_merge([$ym], $exCli, $exIds));
+            // order_list 的客戶欄是代號，要 JOIN customer_list 換成中文簡稱才對得上排除規則
+            $lCli = $exCli ? (" AND COALESCE(cl.customer, ot.Client_name) NOT IN ("
+                              . implode(',', array_fill(0, count($exCli), '?')) . ")") : '';
+            $st = $db->prepare("SELECT COUNT(*) FROM order_list ot
+                                LEFT JOIN customer_list cl ON cl.customer_id=ot.Client_name
+                                WHERE" . $base . $lCli . $exSql
+                              . " AND ot.Qty=ot.Open_Qty AND ot.Order_status IS NULL");
+            $st->execute(array_merge([$ym], $rPart, $exCli, $exIds));
             $undone = (int)$st->fetchColumn();
             $num = max(0, $den - $undone);
             return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
@@ -821,13 +1051,28 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
             $designers = kpi_as_list(kpi_as_pv($params, 'designer_ids', ['109110201','112020603']));
             if (!$designers) return null;
             $excl = kpi_as_list(kpi_as_pv($params, 'exclude_clients', []));
-            $sql = "SELECT ateGet, pmGet FROM order_track
-                    WHERE ate IN (" . implode(',', array_fill(0, count($designers), '?')) . ")
-                      AND DATE_FORMAT(ateGet,'%Y-%m')=?";
+            $excl = array_values(array_unique(array_merge($excl, array_map('strval', $rules['client'] ?? []))));
+            $sql = "SELECT ot.ateGet, ot.pmGet FROM order_track ot
+                    LEFT JOIN user us ON us.id=ot.ate
+                    WHERE ot.ate IN (" . implode(',', array_fill(0, count($designers), '?')) . ")
+                      AND DATE_FORMAT(ot.ateGet,'%Y-%m')=?";
             $bind = array_merge($designers, [$ym]);
             if ($excl) {
-                $sql .= " AND Client_name NOT IN (" . implode(',', array_fill(0, count($excl), '?')) . ")";
+                $sql .= " AND ot.Client_name NOT IN (" . implode(',', array_fill(0, count($excl), '?')) . ")";
                 $bind = array_merge($bind, $excl);
+            }
+            foreach ([['part','ot.d_id'], ['designer','COALESCE(us.user_cname, ot.ate)']] as $rr) {
+                $vals = $rules[$rr[0]] ?? [];
+                if (!$vals) continue;
+                $sql .= " AND (" . $rr[1] . " IS NULL OR " . $rr[1] . " NOT IN ("
+                      . implode(',', array_fill(0, count($vals), '?')) . "))";
+                $bind = array_merge($bind, array_map('strval', $vals));
+            }
+            // 逐筆排除（kpi_as_adjust 的 row_key＝order_track.Order_id）
+            $exIds = array_values(array_filter(array_map('intval', $exclRows)));
+            if ($exIds) {
+                $sql .= " AND ot.Order_id NOT IN (" . implode(',', array_fill(0, count($exIds), '?')) . ")";
+                $bind = array_merge($bind, $exIds);
             }
             $st = $db->prepare($sql);
             $st->execute($bind);
@@ -856,11 +1101,19 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
                 $cond = "ml.machine_type_id IN (" . implode(',', array_fill(0, count($types), '?')) . ")";
                 $bind = array_merge($bind, $types);
             }
+            list($rSql, $rBind) = kpi_as_rules_sql($rules, [
+                'machine' => 'ml.machine', 'client' => 'b.Client_Name', 'part' => 'b.d_id',
+                'proc'    => "COALESCE(NULLIF(pn.ProcessName,''), r.process_no)"]);
+            $exIds = array_values(array_filter(array_map('intval', $exclRows)));
+            $exSql = $exIds ? (" AND r.report_id NOT IN (" . implode(',', array_fill(0, count($exIds), '?')) . ")") : '';
             $st = $db->prepare("SELECT r.produced_qty, r.production_start_time, r.production_end_time
                                 FROM pm_process_daily_report r
                                 JOIN machine_list ml ON ml.machine_id=r.machine_id
-                                WHERE r.report_date BETWEEN ? AND ? AND (" . $cond . ")");
-            $st->execute($bind);
+                                LEFT JOIN process_no pn ON pn.ProcessNo=r.process_no
+                                LEFT JOIN bom_ing bi ON bi.bom_ing_fid=r.bom_ing_fid
+                                LEFT JOIN bom b ON b.bom=bi.bom
+                                WHERE r.report_date BETWEEN ? AND ? AND (" . $cond . ")" . $rSql . $exSql);
+            $st->execute(array_merge($bind, $rBind, $exIds));
             $qty = 0; $hours = 0.0;
             while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
                 $qty += (int)$r['produced_qty'];
@@ -876,16 +1129,24 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
             $types = array_map('intval', kpi_as_list(kpi_as_pv($params, 'process_type_ids', [12])));
             if (!$types) return null;
             $in = implode(',', array_fill(0, count($types), '?'));
-            $st = $db->prepare("SELECT COALESCE(SUM(r.produced_qty),0) FROM pm_process_daily_report r
-                                JOIN process_no pn ON pn.ProcessNo=r.process_no
-                                WHERE pn.process_type_id IN ($in) AND r.report_date BETWEEN ? AND ?");
-            $st->execute(array_merge($types, [$ms, $me]));
+            list($rSql, $rBind) = kpi_as_rules_sql($rules, [
+                'machine' => 'ml.machine', 'client' => 'b.Client_Name', 'part' => 'b.d_id',
+                'proc'    => "COALESCE(NULLIF(pn.ProcessName,''), r.process_no)"]);
+            $exIds = array_values(array_filter(array_map('intval', $exclRows)));
+            $exSql = $exIds ? (" AND r.report_id NOT IN (" . implode(',', array_fill(0, count($exIds), '?')) . ")") : '';
+            $join = " JOIN process_no pn ON pn.ProcessNo=r.process_no
+                      LEFT JOIN machine_list ml ON ml.machine_id=r.machine_id
+                      LEFT JOIN bom_ing bi ON bi.bom_ing_fid=r.bom_ing_fid
+                      LEFT JOIN bom b ON b.bom=bi.bom
+                      WHERE pn.process_type_id IN ($in) AND r.report_date BETWEEN ? AND ?";
+            $st = $db->prepare("SELECT COALESCE(SUM(r.produced_qty),0) FROM pm_process_daily_report r"
+                               . $join . $rSql . $exSql);
+            $st->execute(array_merge($types, [$ms, $me], $rBind, $exIds));
             $den = (float)$st->fetchColumn();
             $st = $db->prepare("SELECT COALESCE(SUM(g.ng_qty),0) FROM pm_process_daily_ng g
-                                JOIN pm_process_daily_report r ON r.report_id=g.report_id
-                                JOIN process_no pn ON pn.ProcessNo=r.process_no
-                                WHERE pn.process_type_id IN ($in) AND r.report_date BETWEEN ? AND ?");
-            $st->execute(array_merge($types, [$ms, $me]));
+                                JOIN pm_process_daily_report r ON r.report_id=g.report_id"
+                               . $join . $rSql . $exSql);
+            $st->execute(array_merge($types, [$ms, $me], $rBind, $exIds));
             $num = (float)$st->fetchColumn();
             return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
         }
@@ -893,15 +1154,26 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
         case 'incoming_ng_rate': {
             $ngs = kpi_as_list(kpi_as_pv($params, 'ng_statuses', ['ng']));
             if (!$ngs) $ngs = ['ng'];
-            $st = $db->prepare("SELECT COUNT(*) FROM bom_ing
-                                WHERE QC_check_date IS NOT NULL AND DATE_FORMAT(QC_check_date,'%Y-%m')=?
-                                  AND QC_check IS NOT NULL AND QC_check<>''");
-            $st->execute([$ym]);
+            // 排除規則（客戶／料號／製程／廠商）與逐筆排除都要同時套在分子與分母，否則不良率會被灌水
+            list($rSql, $rBind) = kpi_as_rules_sql($rules, [
+                'client' => 'b.Client_Name', 'part' => 'b.d_id',
+                'proc'   => "COALESCE(NULLIF(pn.ProcessName,''), bi.process_no)",
+                'maker'  => 'COALESCE(mk.maker_id, bi.maker_id)']);
+            $exIds = array_values(array_filter(array_map('intval', $exclRows)));
+            $exSql = $exIds ? (" AND bi.bom_ing_fid NOT IN (" . implode(',', array_fill(0, count($exIds), '?')) . ")") : '';
+            $from = " FROM bom_ing bi
+                      LEFT JOIN bom b ON b.bom=bi.bom
+                      LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                      LEFT JOIN maker_list mk ON mk.maker_id_no=bi.maker_id_no
+                      WHERE bi.QC_check_date IS NOT NULL AND DATE_FORMAT(bi.QC_check_date,'%Y-%m')=?";
+            $st = $db->prepare("SELECT COUNT(*)" . $from
+                               . " AND bi.QC_check IS NOT NULL AND bi.QC_check<>''" . $rSql . $exSql);
+            $st->execute(array_merge([$ym], $rBind, $exIds));
             $den = (int)$st->fetchColumn();
-            $st = $db->prepare("SELECT COUNT(*) FROM bom_ing
-                                WHERE QC_check_date IS NOT NULL AND DATE_FORMAT(QC_check_date,'%Y-%m')=?
-                                  AND QC_check IN (" . implode(',', array_fill(0, count($ngs), '?')) . ")");
-            $st->execute(array_merge([$ym], $ngs));
+            $st = $db->prepare("SELECT COUNT(*)" . $from
+                               . " AND bi.QC_check IN (" . implode(',', array_fill(0, count($ngs), '?')) . ")"
+                               . $rSql . $exSql);
+            $st->execute(array_merge([$ym], $ngs, $rBind, $exIds));
             $num = (int)$st->fetchColumn();
             return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
         }
@@ -922,7 +1194,7 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
 
         case 'training_completion': {
             require_once __DIR__ . '/training_lib.php';
-            return training_kpi_compute($db, $year, $month, $params);
+            return training_kpi_compute($db, $year, $month, $params, $exclRows, $rules);
         }
 
         case 'vendor_audit_ontime': {
@@ -936,11 +1208,25 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
 /* ============================================================
  * 快照結算 / 矩陣組裝
  * ============================================================ */
+/**
+ * 某一格的計算（含「逐筆排除」與「維度排除規則」）。
+ * **所有算這一格的地方都要走這一支**——少帶排除條件，畫面上就會出現
+ * 「排除了卻沒有變」或「即時試算跟結算值對不起來」這種查不出來的落差。
+ * @param array|null $paramsOverride 試算用：改過的參數（不傳＝用該年度設定）
+ */
+function kpi_as_compute_iy(PDO $db, array $iy, int $year, int $month, ?array $paramsOverride = null): ?array {
+    if ($iy['source_mode'] !== 'auto' || empty($iy['calculator_key'])) return null;
+    $iid = (int)$iy['indicator_id'];
+    return kpi_as_compute($db, (string)$iy['calculator_key'], $year, $month,
+                          $paramsOverride === null ? kpi_as_params($iy['params_json']) : $paramsOverride,
+                          kpi_as_adjust_keys($db, $iid, $year, $month),
+                          kpi_as_excl_rules($db, $iid, $year));
+}
+
 /** 計算並寫入某格快照（僅 auto 模式）。回傳計算結果或 null */
 function kpi_as_settle(PDO $db, array $iy, int $year, int $month, array $u): ?array {
     if ($iy['source_mode'] !== 'auto' || empty($iy['calculator_key'])) return null;
-    $res = kpi_as_compute($db, $iy['calculator_key'], $year, $month, kpi_as_params($iy['params_json']),
-                          kpi_as_adjust_keys($db, (int)$iy['indicator_id'], $year, $month));
+    $res = kpi_as_compute_iy($db, $iy, $year, $month);
     $val = $res ? $res['value'] : null;
     $st = $db->prepare("INSERT INTO kpi_as_monthly_value (indicator_id,year,month,auto_value,numerator,denominator,computed_at)
                         VALUES (?,?,?,?,?,?,NOW())
@@ -1263,6 +1549,12 @@ function kpi_as_edit_mode_suggest(?string $calc): array {
             return ['deny', '發包日／回廠日會影響加工費的應付帳款月份'];
         case 'order_ontime':
             return ['deny', '訂單交期與未交量會影響出貨與應收帳款月份'];
+        case 'quote_to_order':
+            return ['deny', '報價單是對外文件，內容與核准狀態不在 KPI 頁修改'];
+        case 'capacity_rate':
+            return ['allow', '報工的完成數與生產起訖時間可在報工紀錄查詢頁修正，不影響帳務'];
+        case 'process_ng_rate':
+            return ['allow', '報工的 NG 數與不良原因可在報工紀錄查詢頁修正，不影響帳務'];
         case 'packing_ng_rate':
         case 'calibration_ontime':
             return ['na', '目前來源尚未連動，實務上以手動覆寫填值'];
@@ -1291,7 +1583,10 @@ function kpi_as_edit_mode(PDO $db, int $iid, ?string $calc): array {
 /** 這個計算模組有沒有做「違規明細」（沒做的一律不給排除，避免排了卻不影響計算） */
 function kpi_as_detail_supported(?string $calc): bool {
     return in_array((string)$calc, ['vendor_ontime', 'order_ontime',
-                                    'training_completion', 'drawing_ontime', 'incoming_ng_rate'], true);
+                                    'training_completion', 'drawing_ontime', 'incoming_ng_rate',
+                                    // 2026-09-17 使用者要求補做（即使來源資料不開放直接改，也要看得到明細）
+                                    'quote_to_order', 'shipping_target_amount', 'order_target_amount',
+                                    'capacity_rate', 'process_ng_rate'], true);
 }
 
 /** 某一格已排除的來源列（完整資料，內部畫面用） */
@@ -1317,7 +1612,48 @@ function kpi_as_adjust_keys(PDO $db, int $iid, int $year, int $month): array {
  * 回傳 ['cols'=>[['k','t']], 'rows'=>[['key','vals','why','fix']], 'total'=>n, 'note'=>'']
  * rows 只含「超過規定」的那幾筆；已排除的由呼叫端用 kpi_as_adjust_rows() 疊上去。
  */
-function kpi_as_detail(PDO $db, ?string $calc, int $year, int $month, array $params): array {
+function kpi_as_detail(PDO $db, ?string $calc, int $year, int $month, array $params,
+                      array $rules = [], array $iy = []): array {
+    return kpi_as_detail_finish(kpi_as_detail_raw($db, $calc, $year, $month, $params, $iy), $rules);
+}
+
+/**
+ * 明細列的共同收尾：標記被「排除規則」命中的列、統計筆數、整理出可篩選／可設規則的維度清單。
+ * 維度選項一律**從實際列出來的資料收集**（使用者原話：看資料內有哪些資料就提供那些設定），
+ * 不預先寫死一份客戶／製程清單，否則資料一變說明就對不上（鐵律4）。
+ */
+function kpi_as_detail_finish(array $out, array $rules): array {
+    $opts = []; $bad = 0; $ruleEx = 0;
+    foreach ($out['rows'] as &$r) {
+        $dims = isset($r['dims']) && is_array($r['dims']) ? $r['dims'] : [];
+        foreach ($dims as $dk => $dv) {
+            $dv = trim((string)$dv);
+            if ($dv === '') continue;
+            $opts[$dk][$dv] = 1;
+        }
+        $kind = (string)($r['kind'] ?? (!empty($r['warn']) ? 'warn' : 'bad'));
+        $hit  = kpi_as_dims_hit($dims, $rules);
+        $r['kind']    = $kind;
+        $r['warn']    = ($kind === 'bad') ? 0 : 1;
+        $r['rule_ex'] = $hit;
+        if ($hit !== '') $ruleEx++;
+        elseif ($kind === 'bad') $bad++;
+    }
+    unset($r);
+    $labels = kpi_as_dim_labels();
+    $dims = [];
+    foreach ($opts as $dk => $vals) {
+        $vs = array_keys($vals);
+        sort($vs, SORT_NATURAL | SORT_FLAG_CASE);
+        $dims[] = ['k'=>$dk, 't'=>($labels[$dk] ?? $dk), 'opts'=>$vs];
+    }
+    $out['total']   = $bad;
+    $out['rule_ex'] = $ruleEx;
+    $out['dims']    = $dims;
+    return $out;
+}
+
+function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array $params, array $iy = []): array {
     $ms = sprintf('%04d-%02d-01', $year, $month);
     $me = date('Y-m-t', strtotime($ms));
     $ym = sprintf('%04d-%02d', $year, $month);
@@ -1326,70 +1662,65 @@ function kpi_as_detail(PDO $db, ?string $calc, int $year, int $month, array $par
     switch ((string)$calc) {
 
         case 'vendor_ontime': {
-            $defDays = max(0, (int)kpi_as_pv($params, 'default_days', 7));
-            $dmapRaw = kpi_as_pv($params, 'days_by_process_type', []);
-            $dmap = [];
-            if (is_array($dmapRaw)) {
-                foreach ($dmapRaw as $k => $v) { if (is_numeric($v)) $dmap[(int)$k] = (int)$v; }
-            } else {
-                foreach (kpi_as_list($dmapRaw) as $line) {
-                    if (preg_match('/^(\d+)\s*[:：]\s*(\d+)$/u', $line, $m2)) $dmap[(int)$m2[1]] = (int)$m2[2];
-                }
-            }
-            $winStart = date('Y-m-d', strtotime($ms . ' -120 days'));
-            $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.outsource_date, bi.return_date,
-                                       bi.process_no, pn.ProcessName, pn.process_type_id,
-                                       COALESCE(mk.maker_id, bi.maker_id) AS maker_name
-                                FROM bom_ing bi
-                                LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
-                                LEFT JOIN maker_list mk ON mk.maker_id_no=bi.maker_id_no
-                                WHERE bi.outsource_date IS NOT NULL
-                                  AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no<>''
-                                  AND DATE(bi.outsource_date) BETWEEN ? AND ?");
-            $st->execute([$winStart, $me]);
-            $out['cols'] = [['k'=>'bom','t'=>'製令'], ['k'=>'proc','t'=>'製程'], ['k'=>'maker','t'=>'廠商'],
+            $rows = kpi_as_vendor_rows($db, $year, $month, $params);
+            $out['cols'] = [['k'=>'bom','t'=>'製令'], ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'],
+                            ['k'=>'proc','t'=>'製程'], ['k'=>'maker','t'=>'廠商'],
                             ['k'=>'qty','t'=>'數量'], ['k'=>'out','t'=>'發包日'], ['k'=>'due','t'=>'應交日'],
                             ['k'=>'back','t'=>'回廠日']];
             $today = date('Y-m-d');
-            while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
-                $ptid = (int)$r['process_type_id'];
-                $days = isset($dmap[$ptid]) ? $dmap[$ptid] : $defDays;
-                $due  = kpi_as_add_workdays($db, (string)$r['outsource_date'], $days);
-                if ($due < $ms || $due > $me) continue;           // 應交日不在當月＝不屬於這一格
-                $back = $r['return_date'] ? substr((string)$r['return_date'], 0, 10) : '';
-                if ($back !== '' && $back <= $due) continue;       // 準時＝不是違規列
-                $out['total']++;
-                if ($back === '') {
-                    $late = (int)round((strtotime($today) - strtotime($due)) / 86400);
+            $srcName = kpi_as_vendor_back_sources();
+            $guessN = 0;
+            foreach ($rows as $r) {
+                if ($r['back'] !== '' && $r['back'] <= $r['due']) continue;   // 準時＝不是違規列
+                $days = $r['days'];
+                if ($r['back'] === '') {
+                    $late = (int)round((strtotime($today) - strtotime($r['due'])) / 86400);
                     $why  = '未登錄回廠日' . ($late > 0 ? ('（已逾應交日 ' . $late . ' 天）') : '');
-                    $fix  = '若貨已回廠，請到 BOM 總表補登「回廠日」；若確實尚未回廠，屬真實遲交，不必修改。';
+                    $fix  = '系統已經找過「下一製程發包日／QC檢驗日／出貨日／製令結案日」都沒有資料，'
+                          . '所以這一筆看起來是真的還沒回廠。若貨其實已回，請到 BOM 總表補登「回廠日」。';
+                    $backTxt = '—';
                 } else {
-                    $late = (int)round((strtotime($back) - strtotime($due)) / 86400);
-                    $why  = '回廠日晚於應交日 ' . $late . ' 天';
-                    $fix  = '確認回廠日是否登錄錯誤（BOM 總表可改）；若這個製程本來就需要 '
-                          . ($days + $late) . ' 個工作天以上，請到 KPI 設定把「'
-                          . ($r['ProcessName'] ? $r['ProcessName'] : ('製程類別' . $ptid))
-                          . '」的約定工作天由 ' . $days . ' 天往上調整。';
+                    $late = (int)round((strtotime($r['back']) - strtotime($r['due'])) / 86400);
+                    $backTxt = $r['back'];
+                    if ($r['back_src'] !== 'return') {
+                        $guessN++;
+                        $backTxt .= '（推估：' . ($srcName[$r['back_src']] ?? $r['back_src']) . '）';
+                        $why = '回廠日沒有登錄，依「' . ($srcName[$r['back_src']] ?? $r['back_src'])
+                             . '」推估為 ' . $r['back'] . '，仍晚於應交日 ' . $late . ' 天';
+                        $fix = '推估日期只用來判定準不準時，不會寫回任何一筆資料。'
+                             . '請到 BOM 總表補登真正的回廠日，判定才會精準。';
+                    } else {
+                        $why = '回廠日晚於應交日 ' . $late . ' 天';
+                        $fix = '確認回廠日是否登錄錯誤（BOM 總表可改）；若這個製程本來就需要 '
+                             . ($days + $late) . ' 個工作天以上，請到 KPI 設定把「' . $r['proc']
+                             . '」的約定工作天由 ' . $days . ' 天往上調整。';
+                    }
                 }
                 $out['rows'][] = [
-                    'key'  => (string)$r['bom_ing_fid'],
-                    'vals' => ['bom'=>(string)$r['bom'], 'proc'=>(string)($r['ProcessName'] ? $r['ProcessName'] : $r['process_no']),
-                               'maker'=>(string)$r['maker_name'], 'qty'=>(string)$r['sqty'],
-                               'out'=>substr((string)$r['outsource_date'], 0, 10), 'due'=>$due,
-                               'back'=>($back !== '' ? $back : '—')],
-                    'why'  => $why, 'fix' => $fix,
+                    'key'  => $r['fid'],
+                    'vals' => ['bom'=>$r['bom'], 'client'=>$r['client'], 'part'=>$r['part'],
+                               'proc'=>$r['proc'], 'maker'=>$r['maker'], 'qty'=>$r['qty'],
+                               'out'=>$r['out'], 'due'=>$r['due'], 'back'=>$backTxt],
+                    'dims' => $r['dims'], 'kind' => 'bad', 'why' => $why, 'fix' => $fix,
                 ];
             }
             usort($out['rows'], function ($a, $b) { return strcmp($a['vals']['due'], $b['vals']['due']); });
-            $out['note'] = '應交日＝發包日＋約定工作天（依行事曆工作日）。只列「應交日落在本月、卻沒有準時回廠」的發包。';
+            $out['note'] = '應交日＝發包日＋約定工作天（依行事曆工作日）。只列「應交日落在本月、卻沒有準時回廠」的發包。'
+                         . '沒登錄回廠日時，系統會依序用「下一製程發包日→QC檢驗日→出貨日→製令結案日」推估回廠日'
+                         . '（只用於判定，不寫回資料）'
+                         . ($guessN ? ('，本月有 ' . $guessN . ' 筆是這樣推估出來的') : '') . '。';
             return $out;
         }
 
         case 'order_ontime': {
             $exCli = kpi_as_list(kpi_as_pv($params, 'exclude_clients', ['寶嘉誠','泳建']));
-            $notIn = $exCli ? (" AND ol.Client_name NOT IN (" . implode(',', array_fill(0, count($exCli), '?')) . ")") : '';
-            $sql = "SELECT ol.Order_id, ol.Order_oo, ol.d_id, ol.Client_name, ol.Qty, ol.Open_Qty, ol.Delivery_date
+            $notIn = $exCli ? (" AND COALESCE(cl.customer, ol.Client_name) NOT IN ("
+                               . implode(',', array_fill(0, count($exCli), '?')) . ")") : '';
+            // order_list 的客戶欄存的是代號(C2005)，畫面上要看的是中文簡稱，故對回 customer_list
+            $sql = "SELECT ol.Order_id, ol.Order_oo, ol.d_id, ol.Qty, ol.Open_Qty, ol.Delivery_date,
+                           COALESCE(cl.customer, ol.Client_name) AS Client_name
                     FROM order_list ol
+                    LEFT JOIN customer_list cl ON cl.customer_id=ol.Client_name
                     WHERE UPPER(ol.d_id)<>'ZZZ' AND LOWER(ol.d_id) NOT REGEXP '-(jg|jh|hg)$'
                       AND DATE_FORMAT(ol.Delivery_date,'%Y-%m')=?" . $notIn . "
                       AND ol.Qty=ol.Open_Qty AND ol.Order_status IS NULL
@@ -1405,13 +1736,34 @@ function kpi_as_detail(PDO $db, ?string $calc, int $year, int $month, array $par
                     'vals' => ['oo'=>(string)$r['Order_oo'], 'client'=>(string)$r['Client_name'],
                                'd_id'=>(string)$r['d_id'], 'qty'=>(string)(0 + $r['Qty']),
                                'open'=>(string)(0 + $r['Open_Qty']), 'dd'=>substr((string)$r['Delivery_date'], 0, 10)],
+                    'dims' => ['client'=>(string)$r['Client_name'], 'part'=>(string)$r['d_id']],
+                    'kind' => 'bad',
                     'why'  => '交期已到本月，但未交量＝訂單量（完全沒出貨）',
                     'fix'  => '若實際已出貨，請確認出貨單有沒有帶到這張訂單（未交量沒被沖銷）；'
                             . '若客戶要求延後交期，請到訂單追蹤更新交期，這一筆就會改算到新的月份。',
                 ];
             }
+            // 分母來自 order_track（自建訂單追蹤）、未交量來自 order_list（ERP 未交清單），
+            // 兩張表是各自獨立的資料，舊月份常出現「未交筆數比訂單筆數還多」＝準時率被算成 0。
+            // 這件事畫面上看不出來，所以一定要寫在說明裡，不然使用者只會覺得明細筆數莫名其妙。
+            $denTrack = 0;
+            try {
+                $q = $db->prepare("SELECT COUNT(*) FROM order_track
+                                   WHERE UPPER(d_id)<>'ZZZ' AND LOWER(d_id) NOT REGEXP '-(jg|jh|hg)$'
+                                     AND DATE_FORMAT(Delivery_date,'%Y-%m')=?"
+                                  . ($exCli ? (" AND Client_name NOT IN ("
+                                      . implode(',', array_fill(0, count($exCli), '?')) . ")") : ''));
+                $q->execute(array_merge([$ym], $exCli));
+                $denTrack = (int)$q->fetchColumn();
+            } catch (Throwable $e) {}
             $out['note'] = '判定沿用本指標既有規則：料號 ZZZ 與 -jg/-jh/-hg 結尾不計。'
-                         . ($exCli ? ('排除客戶：' . implode('、', $exCli) . '。') : '');
+                         . ($exCli ? ('排除客戶：' . implode('、', $exCli) . '。') : '')
+                         . '本月訂單筆數（分母，取自訂單追蹤）' . $denTrack . ' 筆，'
+                         . '未交筆數（取自 ERP 未交清單）' . count($out['rows']) . ' 筆'
+                         . (count($out['rows']) > $denTrack
+                            ? '——未交筆數比訂單筆數還多，是因為 ERP 未交清單會累積更早月份還沒結清的訂單，'
+                              . '這種月份準時率會被算成 0%，請以明細逐筆確認。'
+                            : '。');
             return $out;
         }
 
@@ -1438,6 +1790,7 @@ function kpi_as_detail(PDO $db, ?string $calc, int $year, int $month, array $par
                                'type'=>((string)$r['train_type'] === 'out' ? '外訓' : '內訓'),
                                'unit'=>(string)$r['org_unit'], 'st'=>($stName[$stv] ?? $stv),
                                'people'=>(string)(0 + $r['target_headcount'])],
+                    'dims' => ['unit'=>(string)$r['org_unit']], 'kind' => 'bad',
                     'why'  => '列在 ' . $month . ' 月的計畫，但還沒登錄完成（狀態：' . ($stName[$stv] ?? $stv) . '）',
                     'fix'  => '若這場已經辦完了，請到教育訓練管理登錄完成（要有簽到與評鑑，所以不在這裡改）；'
                             . '若改到別的月份舉辦，直接把「計畫月份」改成實際月份，這一筆就會改算到那個月；'
@@ -1500,6 +1853,9 @@ function kpi_as_detail(PDO $db, ?string $calc, int $year, int $month, array $par
                                'd_id'=>(string)$r['d_id'], 'designer'=>(string)($r['designer'] ?: $r['ate']),
                                'ate'=>$d1, 'pm'=>($d2 !== '' ? $d2 : '—'),
                                'days'=>($days === null ? '—' : (string)$days)],
+                    'dims' => ['client'=>(string)$r['Client_name'], 'part'=>(string)$r['d_id'],
+                               'designer'=>(string)($r['designer'] ?: $r['ate'])],
+                    'kind' => ($warn ? 'warn' : 'bad'),
                     'why'  => $why, 'fix' => $fix, 'warn' => $warn,
                 ];
                 if ($warn) $warnN++;
@@ -1516,8 +1872,10 @@ function kpi_as_detail(PDO $db, ?string $calc, int $year, int $month, array $par
             if (!$ngs) $ngs = ['ng'];
             $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.QC_check, bi.QC_check_date, bi.QC_ps,
                                        pn.ProcessName, bi.process_no,
-                                       COALESCE(mk.maker_id, bi.maker_id) AS maker_name
+                                       COALESCE(mk.maker_id, bi.maker_id) AS maker_name,
+                                       b.d_id AS part_no, b.Client_Name AS client_name
                                 FROM bom_ing bi
+                                LEFT JOIN bom b ON b.bom=bi.bom
                                 LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
                                 LEFT JOIN maker_list mk ON mk.maker_id_no=bi.maker_id_no
                                 WHERE bi.QC_check_date IS NOT NULL AND DATE_FORMAT(bi.QC_check_date,'%Y-%m')=?
@@ -1525,25 +1883,301 @@ function kpi_as_detail(PDO $db, ?string $calc, int $year, int $month, array $par
                                 ORDER BY bi.QC_check_date, bi.bom_ing_fid");
             $st->execute(array_merge([$ym], $ngs));
             $ckName = ['ok'=>'允收', 'ng'=>'驗退', 'QQ'=>'特採', 'AOD'=>'特採(AOD)'];
-            $out['cols'] = [['k'=>'bom','t'=>'製令'], ['k'=>'proc','t'=>'製程'], ['k'=>'maker','t'=>'廠商'],
+            $out['cols'] = [['k'=>'bom','t'=>'製令'], ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'],
+                            ['k'=>'proc','t'=>'製程'], ['k'=>'maker','t'=>'廠商'],
                             ['k'=>'qty','t'=>'數量'], ['k'=>'ck','t'=>'判定'], ['k'=>'ckd','t'=>'檢驗日'],
                             ['k'=>'ps','t'=>'檢驗備註']];
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                $out['total']++;
                 $cv = (string)$r['QC_check'];
+                $dims = ['client'=>(string)$r['client_name'], 'part'=>(string)$r['part_no'],
+                         'proc'=>(string)($r['ProcessName'] ? $r['ProcessName'] : $r['process_no']),
+                         'maker'=>(string)$r['maker_name']];
                 $out['rows'][] = [
                     'key'  => (string)$r['bom_ing_fid'],
-                    'vals' => ['bom'=>(string)$r['bom'], 'proc'=>(string)($r['ProcessName'] ? $r['ProcessName'] : $r['process_no']),
-                               'maker'=>(string)$r['maker_name'], 'qty'=>(string)$r['sqty'],
+                    'vals' => ['bom'=>(string)$r['bom'], 'client'=>$dims['client'], 'part'=>$dims['part'],
+                               'proc'=>$dims['proc'],
+                               'maker'=>$dims['maker'], 'qty'=>(string)$r['sqty'],
                                'ck'=>(($ckName[$cv] ?? $cv) . '（' . $cv . '）'),
                                'ckd'=>substr((string)$r['QC_check_date'], 0, 10),
                                'ps'=>mb_substr((string)$r['QC_ps'], 0, 40)],
+                    'dims' => $dims, 'kind' => 'bad',
                     'why'  => '檢驗判定為「' . ($ckName[$cv] ?? $cv) . '」，計入不良',
                     'fix'  => '只有「判定登錄錯誤」才在這裡改判定；確實不良請維持原判定（屬真實不良率）。'
                             . '若檢驗日期打錯月份，改日期即可讓這一筆算到正確的月份。',
                 ];
             }
             $out['note'] = '不良率＝當月判定為 ' . implode('／', $ngs) . ' 的筆數 ÷ 當月檢驗總筆數。';
+            return $out;
+        }
+
+        /* ---- #4 報價單接單率：當月報出去、到現在還沒有任何訂單引用的那幾張 ---- */
+        case 'quote_to_order': {
+            $cond = "DATE_FORMAT(q.quote_date,'%Y-%m')=? AND q.pending_review=0";
+            if ((int)kpi_as_pv($params, 'exclude_draft', 1) === 1) $cond .= " AND q.is_draft=0";
+            $st = $db->prepare("SELECT q.quote_id, q.quote_no, q.client_name, q.quote_date, q.total_amount,
+                                       q.is_draft, q.currency
+                                FROM quotation_list q WHERE $cond
+                                ORDER BY q.quote_date, q.quote_id");
+            $st->execute([$ym]);
+            $qrows = $st->fetchAll(PDO::FETCH_ASSOC);
+            // 「有沒有訂單引用」用一支 GROUP BY 一次查回來：
+            // 寫成每一列一個相關子查詢，247 張報價單就要 1 秒（實測），而且會隨資料量愈來愈慢
+            $usedMap = [];
+            $qnos = array_values(array_filter(array_map(function ($r) { return (string)$r['quote_no']; }, $qrows), 'strlen'));
+            foreach (array_chunk(array_unique($qnos), 500) as $chunk) {
+                $in = implode(',', array_fill(0, count($chunk), '?'));
+                $q2 = $db->prepare("SELECT quote_no, COUNT(*) c FROM order_track
+                                    WHERE quote_no IN ($in) GROUP BY quote_no");
+                $q2->execute($chunk);
+                foreach ($q2->fetchAll(PDO::FETCH_ASSOC) as $x) $usedMap[(string)$x['quote_no']] = (int)$x['c'];
+            }
+            $out['cols'] = [['k'=>'no','t'=>'報價單號'], ['k'=>'client','t'=>'客戶'],
+                            ['k'=>'qd','t'=>'報價日'], ['k'=>'amt','t'=>'報價金額'], ['k'=>'st','t'=>'狀態']];
+            foreach ($qrows as $r) {
+                $used = $usedMap[(string)$r['quote_no']] ?? 0;
+                $dims = ['client'=>(string)$r['client_name']];
+                $out['rows'][] = [
+                    'key'  => (string)$r['quote_id'],
+                    'vals' => ['no'=>(string)$r['quote_no'], 'client'=>$dims['client'],
+                               'qd'=>substr((string)$r['quote_date'], 0, 10),
+                               'amt'=>number_format((float)$r['total_amount']),
+                               'st'=>($used ? ('已接單（' . $used . ' 張訂單）') : '尚未接單')],
+                    'dims' => $dims, 'kind' => ($used ? 'info' : 'bad'),
+                    'why'  => $used ? ('這一張已經被 ' . $used . ' 張訂單引用，計入接單（列出來只是方便對帳）')
+                                    : '這一張報價單到目前為止沒有任何訂單引用它的報價單號',
+                    'fix'  => $used ? '不必處理。'
+                                    : '若客戶其實已經下單，多半是訂單上沒帶到報價單號——請到訂單追蹤把「報價單號」補上，'
+                                    . '這一張就會計入接單率；若客戶確實沒有下單，屬真實未成交，不必修改。',
+                ];
+            }
+            $out['note'] = '接單率＝當月報價單中「已被訂單引用報價單號」的張數 ÷ 當月報價單張數'
+                         . '（不含尚待確認補件的匯入舊單）。未接單的排在清單裡標成不符合標準，已接單的標成「參考」。';
+            return $out;
+        }
+
+        /* ---- #3 月銷貨額達成率：當月每一張出貨單的金額組成 ---- */
+        case 'shipping_target_amount': {
+            $tmap = kpi_as_pv($params, 'monthly_targets', []);
+            $target = 0.0;
+            if (is_array($tmap)) {
+                if (isset($tmap[(string)$month])) $target = (float)$tmap[(string)$month];
+                elseif (isset($tmap[$month]))     $target = (float)$tmap[$month];
+            }
+            $st = $db->prepare("SELECT IS_id, IS_number, Client_name, Product_id, Specification,
+                                       Qty, Unit_price, Order_date
+                                FROM is_list WHERE DATE_FORMAT(Order_date,'%Y-%m')=?
+                                ORDER BY (Qty*COALESCE(Unit_price,0)) DESC, IS_id");
+            $st->execute([$ym]);
+            $out['cols'] = [['k'=>'no','t'=>'出貨單號'], ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'],
+                            ['k'=>'qty','t'=>'數量'], ['k'=>'up','t'=>'單價'], ['k'=>'amt','t'=>'金額'],
+                            ['k'=>'d','t'=>'出貨日']];
+            $sum = 0.0; $noPrice = 0;
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $up  = $r['Unit_price'] === null ? null : (float)$r['Unit_price'];
+                $amt = (float)$r['Qty'] * (float)($up ?? 0);
+                $sum += $amt;
+                $bad = ($up === null || $up <= 0);
+                if ($bad) $noPrice++;
+                $dims = ['client'=>(string)$r['Client_name'], 'part'=>(string)$r['Product_id']];
+                $out['rows'][] = [
+                    'key'  => (string)$r['IS_id'],
+                    'vals' => ['no'=>(string)$r['IS_number'], 'client'=>$dims['client'], 'part'=>$dims['part'],
+                               'qty'=>(string)(0 + $r['Qty']), 'up'=>($up === null ? '—' : (string)(0 + $up)),
+                               'amt'=>number_format($amt), 'd'=>substr((string)$r['Order_date'], 0, 10)],
+                    'dims' => $dims, 'kind' => ($bad ? 'bad' : 'info'),
+                    'why'  => $bad ? '沒有單價（或單價為 0），這一筆的金額算成 0，會把達成率往下拉'
+                                   : '正常計入本月銷貨金額（列出來是方便逐筆核對）',
+                    'fix'  => $bad ? '請到快速出貨把這一筆的單價補上；若這一筆本來就不該算業績（樣品、補件、免費更換），'
+                                   . '請用下方「排除」把它排掉，或用排除規則整批排除該客戶／料號。'
+                                   : '不必處理。',
+                ];
+            }
+            $out['note'] = '達成率＝當月出貨金額 Σ(數量×單價) ÷ 本月銷貨目標。'
+                         . '本月出貨金額 ' . number_format($sum) . '，目標 '
+                         . ($target > 0 ? number_format($target) : '尚未設定')
+                         . ($target > 0 ? ('，差額 ' . number_format($sum - $target)) : '')
+                         . ($noPrice ? ('。其中 ' . $noPrice . ' 筆沒有單價（金額算 0）') : '') . '。';
+            return $out;
+        }
+
+        /* ---- #2 月份受訂目標達成金額：帳款月窗口內每一張訂單的金額組成 ---- */
+        case 'order_target_amount': {
+            $st = $db->prepare("SELECT start_day FROM kpi_monthly_targets WHERE year=? AND month=? LIMIT 1");
+            $st->execute([$year, $month]);
+            $sd = (int)$st->fetchColumn();
+            if ($sd < 1 || $sd > 28) $sd = 1;
+            if ($sd > 1) {
+                $ws = date('Y-m-d', mktime(0, 0, 0, $month - 1, $sd, $year));
+                $we = date('Y-m-d', mktime(0, 0, 0, $month, $sd - 1, $year));
+            } else { $ws = $ms; $we = $me; }
+            $tmap = kpi_as_pv($params, 'monthly_targets', []);
+            $target = 0.0;
+            if (is_array($tmap)) {
+                if (isset($tmap[(string)$month])) $target = (float)$tmap[(string)$month];
+                elseif (isset($tmap[$month]))     $target = (float)$tmap[$month];
+            }
+            $st = $db->prepare("SELECT Order_id, Order_oo, Client_name, d_id, Qty, unit_price,
+                                       Delivery_date, Order_status
+                                FROM order_track WHERE Delivery_date BETWEEN ? AND ?
+                                ORDER BY (Qty*COALESCE(unit_price,0)) DESC, Order_id");
+            $st->execute([$ws, $we]);
+            $out['cols'] = [['k'=>'oo','t'=>'訂單編號'], ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'],
+                            ['k'=>'qty','t'=>'數量'], ['k'=>'up','t'=>'單價'], ['k'=>'amt','t'=>'金額'],
+                            ['k'=>'dd','t'=>'交期'], ['k'=>'st','t'=>'狀態']];
+            $sum = 0.0; $badN = 0;
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $up   = $r['unit_price'] === null ? null : (float)$r['unit_price'];
+                $void = ((string)$r['Order_status'] === '9');
+                $counted = (!$void && $up !== null && $up > 0);
+                $amt = (float)$r['Qty'] * (float)($up ?? 0);
+                if ($counted) $sum += $amt;
+                if (!$counted) $badN++;
+                $dims = ['client'=>(string)$r['Client_name'], 'part'=>(string)$r['d_id']];
+                $out['rows'][] = [
+                    'key'  => (string)$r['Order_id'],
+                    'vals' => ['oo'=>(string)$r['Order_oo'], 'client'=>$dims['client'], 'part'=>$dims['part'],
+                               'qty'=>(string)(0 + $r['Qty']), 'up'=>($up === null ? '—' : (string)(0 + $up)),
+                               'amt'=>($counted ? number_format($amt) : '不計入'),
+                               'dd'=>substr((string)$r['Delivery_date'], 0, 10),
+                               'st'=>($void ? '已取消(9)' : '有效')],
+                    'dims' => $dims, 'kind' => ($counted ? 'info' : 'bad'),
+                    'why'  => $counted ? '正常計入本月接單金額（列出來是方便逐筆核對）'
+                                       : ($void ? '訂單狀態是 9（已取消），依現行口徑不計入接單金額'
+                                                : '沒有單價（或單價為 0），這一筆整張都沒有被算進接單金額'),
+                    'fix'  => $counted ? '不必處理。'
+                                       : ($void ? '若這張其實沒取消，請到訂單追蹤把狀態改回來。'
+                                                : '請到訂單追蹤把單價補上，這一筆才會計入接單金額；'
+                                                . '若這張本來就不該算業績，請用排除功能排掉。'),
+                ];
+            }
+            $out['note'] = '接單金額以「交期」歸屬帳款月窗口（' . $ws . ' ~ ' . $we . '）計算。'
+                         . '本月接單金額 ' . number_format($sum) . '，目標 '
+                         . ($target > 0 ? number_format($target) : '取出貨分析頁全域目標')
+                         . ($badN ? ('。其中 ' . $badN . ' 筆沒有計入（無單價或已取消）') : '') . '。';
+            return $out;
+        }
+
+        /* ---- #13/#14 產能績效：拉低每小時產出的那幾筆報工 ---- */
+        case 'capacity_rate': {
+            $types    = array_map('intval', kpi_as_list(kpi_as_pv($params, 'machine_type_ids', [])));
+            $machines = array_map('intval', kpi_as_list(kpi_as_pv($params, 'machine_ids', [])));
+            if (!$types && !$machines) { $out['note'] = '尚未設定機台種類或指定機台，無法列出明細。'; return $out; }
+            $bind = [$ms, $me];
+            if ($machines) {
+                $cond = "r.machine_id IN (" . implode(',', array_fill(0, count($machines), '?')) . ")";
+                $bind = array_merge($bind, $machines);
+            } else {
+                $cond = "ml.machine_type_id IN (" . implode(',', array_fill(0, count($types), '?')) . ")";
+                $bind = array_merge($bind, $types);
+            }
+            $st = $db->prepare("SELECT r.report_id, r.report_date, r.produced_qty,
+                                       r.production_start_time, r.production_end_time,
+                                       ml.machine AS machine_name, pn.ProcessName, r.process_no,
+                                       bi.bom, b.d_id AS part_no, b.Client_Name AS client_name
+                                FROM pm_process_daily_report r
+                                JOIN machine_list ml ON ml.machine_id=r.machine_id
+                                LEFT JOIN process_no pn ON pn.ProcessNo=r.process_no
+                                LEFT JOIN bom_ing bi ON bi.bom_ing_fid=r.bom_ing_fid
+                                LEFT JOIN bom b ON b.bom=bi.bom
+                                WHERE r.report_date BETWEEN ? AND ? AND (" . $cond . ")
+                                ORDER BY r.report_date, r.report_id");
+            $st->execute($bind);
+            // 判定門檻＝這個指標自己的目標值（大於 N 顆/小時）
+            $tgt = (isset($iy['target_value']) && $iy['target_value'] !== null) ? (float)$iy['target_value'] : 0.0;
+            $out['cols'] = [['k'=>'d','t'=>'報工日'], ['k'=>'machine','t'=>'機台'], ['k'=>'bom','t'=>'製令'],
+                            ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'], ['k'=>'proc','t'=>'製程'],
+                            ['k'=>'qty','t'=>'完成數'], ['k'=>'hr','t'=>'生產工時'], ['k'=>'rate','t'=>'顆/小時']];
+            $noTime = 0;
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $hrs = null;
+                if (!empty($r['production_start_time']) && !empty($r['production_end_time'])) {
+                    $sec = strtotime((string)$r['production_end_time']) - strtotime((string)$r['production_start_time']);
+                    if ($sec > 0) $hrs = $sec / 3600;
+                }
+                $qty  = (int)$r['produced_qty'];
+                $rate = ($hrs !== null && $hrs > 0) ? ($qty / $hrs) : null;
+                $dims = ['machine'=>(string)$r['machine_name'], 'client'=>(string)$r['client_name'],
+                         'part'=>(string)$r['part_no'],
+                         'proc'=>(string)($r['ProcessName'] ? $r['ProcessName'] : $r['process_no'])];
+                if ($hrs === null) {
+                    $noTime++;
+                    $kind = 'bad';
+                    $why  = '沒有生產起訖時間，工時算不出來——完成數卻照樣進了分子，等於把「顆/小時」灌高';
+                    $fix  = '請到報工紀錄查詢補上這一筆的生產開始／結束時間；'
+                          . '若這一筆本來就不是生產（試車、調機），請用排除功能排掉。';
+                } elseif ($tgt > 0 && $rate !== null && $rate < $tgt) {
+                    $kind = 'bad';
+                    $why  = '這一筆的產出 ' . round($rate, 1) . ' 顆/小時，低於目標 ' . (0 + $tgt) . ' 顆/小時';
+                    $fix  = '確認完成數與生產起訖時間有沒有登錄錯誤（報工紀錄查詢可改）；'
+                          . '若確實是難加工件或首件試做，屬真實產能，不必修改。';
+                } else {
+                    $kind = 'info';
+                    $why  = '達標（列出來是方便逐筆核對）';
+                    $fix  = '不必處理。';
+                }
+                $out['rows'][] = [
+                    'key'  => (string)$r['report_id'],
+                    'vals' => ['d'=>substr((string)$r['report_date'], 0, 10), 'machine'=>$dims['machine'],
+                               'bom'=>(string)$r['bom'], 'client'=>$dims['client'], 'part'=>$dims['part'],
+                               'proc'=>$dims['proc'], 'qty'=>(string)$qty,
+                               'hr'=>($hrs === null ? '—' : (string)round($hrs, 2)),
+                               'rate'=>($rate === null ? '—' : (string)round($rate, 1))],
+                    'dims' => $dims, 'kind' => $kind, 'why' => $why, 'fix' => $fix,
+                ];
+            }
+            $out['note'] = '產能績效＝Σ完成數 ÷ Σ生產工時（小時）。'
+                         . ($tgt > 0 ? ('目標 ' . (0 + $tgt) . ' 顆/小時，低於目標的那幾筆標成不符合標準。') : '')
+                         . ($noTime ? ('本月有 ' . $noTime . ' 筆沒有生產起訖時間，工時算不出來。') : '');
+            return $out;
+        }
+
+        /* ---- #15 齒研製程不良率：當月有登錄 NG 的那幾筆報工 ---- */
+        case 'process_ng_rate': {
+            $types = array_map('intval', kpi_as_list(kpi_as_pv($params, 'process_type_ids', [12])));
+            if (!$types) { $out['note'] = '尚未設定製程類別，無法列出明細。'; return $out; }
+            $in = implode(',', array_fill(0, count($types), '?'));
+            $st = $db->prepare("SELECT r.report_id, r.report_date, r.produced_qty,
+                                       ml.machine AS machine_name, pn.ProcessName, r.process_no,
+                                       bi.bom, b.d_id AS part_no, b.Client_Name AS client_name,
+                                       COALESCE(SUM(g.ng_qty),0) AS ng_sum,
+                                       GROUP_CONCAT(DISTINCT CONCAT(COALESCE(nt.ng_txt,''),
+                                           CASE WHEN g.ng_remark IS NULL OR g.ng_remark='' THEN ''
+                                                ELSE CONCAT('(', g.ng_remark, ')') END)
+                                           SEPARATOR '、') AS ng_txt
+                                FROM pm_process_daily_report r
+                                JOIN process_no pn ON pn.ProcessNo=r.process_no
+                                JOIN pm_process_daily_ng g ON g.report_id=r.report_id
+                                LEFT JOIN ng_txt nt ON nt.ng_id=g.ng_id
+                                LEFT JOIN machine_list ml ON ml.machine_id=r.machine_id
+                                LEFT JOIN bom_ing bi ON bi.bom_ing_fid=r.bom_ing_fid
+                                LEFT JOIN bom b ON b.bom=bi.bom
+                                WHERE pn.process_type_id IN ($in) AND r.report_date BETWEEN ? AND ?
+                                GROUP BY r.report_id
+                                HAVING ng_sum > 0
+                                ORDER BY ng_sum DESC, r.report_date");
+            $st->execute(array_merge($types, [$ms, $me]));
+            $out['cols'] = [['k'=>'d','t'=>'報工日'], ['k'=>'bom','t'=>'製令'], ['k'=>'client','t'=>'客戶'],
+                            ['k'=>'part','t'=>'料號'], ['k'=>'proc','t'=>'製程'], ['k'=>'machine','t'=>'機台'],
+                            ['k'=>'qty','t'=>'完成數'], ['k'=>'ng','t'=>'NG數'], ['k'=>'reason','t'=>'不良原因']];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $qty = (int)$r['produced_qty']; $ng = (float)$r['ng_sum'];
+                $dims = ['client'=>(string)$r['client_name'], 'part'=>(string)$r['part_no'],
+                         'proc'=>(string)($r['ProcessName'] ? $r['ProcessName'] : $r['process_no']),
+                         'machine'=>(string)$r['machine_name']];
+                $out['rows'][] = [
+                    'key'  => (string)$r['report_id'],
+                    'vals' => ['d'=>substr((string)$r['report_date'], 0, 10), 'bom'=>(string)$r['bom'],
+                               'client'=>$dims['client'], 'part'=>$dims['part'], 'proc'=>$dims['proc'],
+                               'machine'=>$dims['machine'], 'qty'=>(string)$qty,
+                               'ng'=>(string)(0 + $ng), 'reason'=>(string)$r['ng_txt']],
+                    'dims' => $dims, 'kind' => 'bad',
+                    'why'  => 'NG ' . (0 + $ng) . ' 顆'
+                            . ($qty > 0 ? ('（完成 ' . $qty . ' 顆，佔 ' . round($ng / $qty * 100, 1) . '%）') : ''),
+                    'fix'  => '若 NG 數或不良原因登錄錯誤，請到報工紀錄查詢修正；確實不良請維持原樣（屬真實不良率）。'
+                            . '若這一筆不該算進本月（例如重工後已補回），請用排除功能排掉。',
+                ];
+            }
+            $out['note'] = '不良率＝Σ當月 NG 數 ÷ Σ當月完成數（限設定的製程類別）。這裡只列有登錄 NG 的報工。';
             return $out;
         }
     }
