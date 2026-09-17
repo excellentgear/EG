@@ -87,6 +87,7 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
 .eg-bv-node-act .bv-btnrow{margin-top:2px !important;}
 .eg-bv-node-t{font-weight:600;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .eg-bv-node-s{color:#777;font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.eg-bv-node-r{color:#2a7ae2;font-weight:bold;font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .eg-bv-link{flex:0 0 22px;height:1px;background:#C9A063;position:relative;align-self:center;}
 .eg-bv-link:after{content:'';position:absolute;right:0;top:-3px;border:3px solid transparent;border-left-color:#C9A063;}
 .eg-bv-link.off{background:transparent;}
@@ -251,6 +252,7 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
               +    '<span class="eg-bv-qty">' + esc(b.sqty != null ? b.sqty : '') + '</span>'
               +    badgeHtml(st)
               +    (sub ? '<span class="eg-bv-sub">' + esc(sub) + '</span>' : '')
+              +    rdateHtml(b, st)   // 已回廠日期，規則與流程圖節點／發單日欄一致
               +  '</div>';
         });
         return h;
@@ -283,6 +285,15 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
         return canEditNote();
     }
     function canEditNote() { return (window.userStatus == 1); }
+    // 節點裡「廠商下方」要顯示的已回廠日期（＝按下「已回廠」那天，bom_ing.return_date）
+    //   狀態判定與發單日欄完全一致：待移轉(wait/P)／已移轉(done/E) 才顯示。
+    //   QC待驗(Q) 不顯示是刻意的——發單日欄那邊 Q 的日期前綴用的就是同一個 return_date。
+    function rdateHtml(b, st) {
+        if (st.k !== 'wait' && st.k !== 'done') return '';
+        var d = fmtDate(b.return_date);
+        if (!d) return '';
+        return '<div class="eg-bv-node-r" title="已回廠日期：' + esc(b.return_date) + '">' + esc(d) + ' 回</div>';
+    }
     // 節點裡「廠商下方」要顯示的備註：單關備註（可編輯的那個）＋ ERP 原始備註
     function noteHtml(b, st, phase) {
         var sp  = (b.single_bet_ps === null || b.single_bet_ps === undefined) ? '' : String(b.single_bet_ps);
@@ -332,10 +343,11 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
                     h += '<div class="eg-bv-node' + (st.dim ? ' eg-bv-done' : '')
                       +      (phase ? ' eg-bv-' + phase : '') + '"'
                       +      ' data-bv-sn="' + esc(s.bom_sn) + '" data-bv-label="' + esc(b.batch_label || '') + '">'
-                      +    '<div class="eg-bv-node-t">' + esc(s.bom_sn) + esc(s.name)
+                      +    '<div class="eg-bv-node-t">' + esc(s.name)
                       +      ' <span class="eg-bv-qty">x' + esc(b.sqty != null ? b.sqty : '') + '</span>'
                       +      ' ' + badgeHtml(st) + '</div>'
                       +    (sub ? '<div class="eg-bv-node-s">' + esc(sub) + '</div>' : '')
+                      +    rdateHtml(b, st)
                       +    noteHtml(b, st, phase)
                       +    '<div class="eg-bv-node-act"></div>'
                       +    (firstSeen === ci && ci > 0 ? '<div class="eg-bv-branch">∟ 此站才出現（由其他批分出）</div>' : '')
@@ -437,7 +449,13 @@ tr.eg-bv-flow-row > td{background:#FFFDF8 !important;border-top:2px solid #E0B77
             var slot = node.querySelector('.eg-bv-node-act');
             if (!slot) continue;
             var rows = blk.querySelectorAll('.bv-btnrow');
-            for (var j = 0; j < rows.length; j++) slot.appendChild(rows[j]);
+            for (var j = 0; j < rows.length; j++) {
+                // 發單日欄的按鈕列裡也帶著一顆「M/D 回」，但流程圖節點已經在廠商下方
+                // 印過同一個日期了（rdateHtml），搬進來會變成同一格出現兩次 → 移掉。
+                var dup = rows[j].querySelectorAll('.bv-rdate');
+                for (var d = 0; d < dup.length; d++) dup[d].parentNode.removeChild(dup[d]);
+                slot.appendChild(rows[j]);
+            }
         }
     }
     // 屬性選擇器用的簡易跳脫（批號只會是 A/B/C 這種，但還是保守處理）

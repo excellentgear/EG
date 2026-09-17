@@ -5749,7 +5749,9 @@ echo "</script>\n";
                     } else if (_effectiveSt === 'Q' || _effectiveSt === 'P' || _effectiveSt === 'E') {
                         var _btnRow = document.createElement('div');
                         _btnRow.className = 'bv-btnrow';   // 批次檢視會把整列搬進流程圖節點
-                        _btnRow.style.cssText = 'margin-top:2px;display:flex;align-items:center;justify-content:flex-end;';
+                        // flex-wrap：加上「已回廠日期」後這一列可能放不下，讓它自己換行，
+                        // 不加的話 flex 會把狀態按鈕壓扁（原本沒有第三個元素所以看不出來）
+                        _btnRow.style.cssText = 'margin-top:2px;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;';
                         var _dh = '';
                         if (_effectiveSt === 'Q' && _proc.return_date) {
                             var _rp = String(_proc.return_date).split('/');
@@ -5760,6 +5762,20 @@ echo "</script>\n";
                             if (_pDateSrc) {
                                 var _qp = String(_pDateSrc).split('/');
                                 if (_qp.length >= 3) _dh = parseInt(_qp[1], 10) + '/' + parseInt(_qp[2], 10) + ' ';
+                            }
+                        }
+                        // ── 已回廠日期（＝按下「已回廠」的那天，bom_ing.return_date）──
+                        //    待移轉(P)／已移轉(E) 顯示在狀態左側；QC待驗(Q) 刻意不顯示，
+                        //    因為上面的 _dh 用的就是同一個 return_date，會變成同一天印兩次。
+                        if (_effectiveSt === 'P' || _effectiveSt === 'E') {
+                            var _rdMd = formatDateAsMd(_proc.return_date);
+                            if (_rdMd) {
+                                var _rdSpan = document.createElement('span');
+                                _rdSpan.className = 'bv-rdate';   // 批次檢視搬按鈕時會把這顆拿掉（流程圖節點自己印一份在廠商下方）
+                                _rdSpan.style.cssText = 'color:#2a7ae2;font-weight:bold;margin-right:3px;white-space:nowrap;';
+                                _rdSpan.textContent = _rdMd + ' 回';
+                                _rdSpan.title = '已回廠日期：' + _proc.return_date;
+                                _btnRow.appendChild(_rdSpan);
                             }
                         }
                         if (_dh) _btnRow.appendChild(document.createTextNode(_dh));
@@ -6379,6 +6395,17 @@ echo "</script>\n";
                                 }
                                 if (makerInfoHtml) {
                                     tdDynamicProcess.innerHTML += `<small style="color: #888;">${makerInfoHtml}</small>`;
+                                }
+
+                                // ── 出廠日期／廠商下方顯示「已回廠日期」（bom_ing.return_date）──
+                                //    只在待移轉(P)／已移轉(E) 顯示：QC待驗(Q) 下面那行狀態本來就是用
+                                //    同一個 return_date 當前綴，兩個都印會變成同一天出現兩次。
+                                var _dynRawSt = String(processInfo.processing_state || '');
+                                if (_dynRawSt === 'P' || _dynRawSt === 'E' || _dynRawSt === '1') {
+                                    var _dynRdMd = formatDateAsMd(processInfo.return_date);
+                                    if (_dynRdMd) {
+                                        tdDynamicProcess.innerHTML += `<div style="color:#2a7ae2;font-weight:bold;font-size:0.9em;" title="已回廠日期：${escapeHtml(String(processInfo.return_date))}">${escapeHtml(_dynRdMd)} 回</div>`;
+                                    }
                                 }
 
                                 if (isCurrentProcess) {
