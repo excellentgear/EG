@@ -36,6 +36,7 @@ require_once __DIR__ . '/asdoc_lib.php';
 require_once __DIR__ . '/position_history_lib.php';
 require_once __DIR__ . '/date_fmt_lib.php';
 require_once __DIR__ . '/attach_lib.php';
+require_once __DIR__ . '/unit_supervisor_lib.php';   // 只借用「往上追溯的課級天花板」常數，見 cm_dept_manager_pool()
 
 /** AS 文件綁定模組代碼（asdoc_lib）——一份表單一個代碼，設定值只存 as_document.id */
 const CM_ASDOC_MODULES = [
@@ -399,6 +400,19 @@ function cm_dept_name(PDO $db, int $deptId): string
     } catch (Throwable $e) { return ''; }
 }
 
+/** 部門層級（department.level：1=董事長室 2=總經理室 3=部門/課室 4=組別 5=小組） */
+function cm_dept_level(PDO $db, int $deptId): int
+{
+    static $cache = [];
+    if ($deptId <= 0) return 0;
+    if (isset($cache[$deptId])) return $cache[$deptId];
+    try {
+        $st = $db->prepare("SELECT level FROM department WHERE id=?");
+        $st->execute([$deptId]);
+        return $cache[$deptId] = (int)$st->fetchColumn();
+    } catch (Throwable $e) { return 0; }
+}
+
 function cm_dept_parent(PDO $db, int $deptId): int
 {
     static $cache = [];
@@ -456,10 +470,20 @@ function cm_dept_manager_pool(PDO $db, int $makerUid, int $deptId, int $posSort,
 
     // 第二輪（使用者拍板①）：同部門找不到 → 沿 department.parent_id 一路往上層部門找，
     // 每一層都要求「職位編號小於填表人」＋「階級不低於門檻」，找到就停在那一層。
+    //
+    // 【天花板＝課級】ai-rules/24 的全站規則：課級以上（總經理室／董事長室）是所有單位的共同上級、
+    // 不是誰的單位主管，所以往上只追到 department.level = EG_UNIT_SUP_TOP_LEVEL（3＝部門/課室）為止。
+    // 不設這個上限的話，課級最高主管（例：品管課課長）開的單會往上抓到總經理，而總經理本來就要簽
+    // 「總經理確認」那一格——同一個人蓋兩格章，紙本上不會這樣簽。超過上限即免簽、直接送總經理確認。
+    //
+    // 【為什麼不直接呼叫 eg_unit_supervisor()】那支回的是「該單位的最高主管」單一人選；
+    // 本表單的規則是使用者另外指定的：候選＝「職位編號小於填表人」且「階級不低於管理員設定門檻」的
+    // **全部**人（任一人簽即可，門檻可在模組設定調整）。兩者語意不同，故本模組自行解析，
+    // 但**天花板常數共用同一個**，避免兩邊各寫一個 3 之後走鐘。
     if (!$pool) {
         $up = cm_dept_parent($db, $deptId);
         $guard = 0;
-        while ($up && $guard++ < 20) {
+        while ($up && cm_dept_level($db, $up) >= EG_UNIT_SUP_TOP_LEVEL && $guard++ < 20) {
             foreach ($people as $p) {
                 if ($p['uid'] === $makerUid) continue;
                 if ($p['dept_id'] !== $up) continue;

@@ -425,7 +425,8 @@ if ($action === 'rec_submit') {
     $r['status'] = $status;
     cmNotifySign($db, $r, $pool, $level, $uid);
     jout(['status'=>$status, 'mgr_skip'=>$skip, 'pool'=>$pool,
-          'msg'=>$skip ? '您已是本部門（含上層）最高主管，部門主管確認欄免簽，已直接送總經理確認。' : '已送出，等待部門主管確認。']);
+          'msg'=>$skip ? '您所屬單位（往上追溯到課級為止）已沒有職位編號比您小的合格主管，部門主管確認欄免簽，已直接送總經理確認。'
+                       : '已送出，等待部門主管確認。']);
 }
 
 /* ---- 溝通記錄表：確認／退回 ---- */
