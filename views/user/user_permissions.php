@@ -370,6 +370,7 @@ $EG_ROLE_MODULES = [
     'eng_log'             => ['prefix'=>'elog',    'label'=>'工程處理紀錄',        'page'=>'eng_log.php'],
     'print_sign_log'      => ['prefix'=>'psl',     'label'=>'列印與簽核紀錄',      'page'=>'print_sign_log.php'],
     'internal_audit'      => ['prefix'=>'ia',      'label'=>'內部稽核',            'page'=>'internal_audit.php'],
+    'comm_mgmt'           => ['prefix'=>'cm',      'label'=>'溝通管理',            'page'=>'communication_mgmt.php'],
     'leave'               => ['prefix'=>'leave',   'label'=>'請假系統',            'page'=>'leave_request.php'],
     'shipping'            => ['prefix'=>'ship',    'label'=>'快速出貨',            'page'=>'Shipping_Quick.php'],
     'purchase'            => ['prefix'=>'purc',    'label'=>'申請採購',            'page'=>'purchase_request.php'],
@@ -916,7 +917,7 @@ $_quotDepts = array_keys($_deptSet);
                                                     <?php if ($canEdit): ?>
                                                         <td style="white-space: nowrap;" data-order="<?= $sortIndex ?>">
                                                             <!-- 更新按鈕，觸發 Modal -->
-                                                            <button type="button" class="btn btn-warning btn-xs" onclick="event.stopPropagation(); $('#updateModal-<?= $admin['id'] ?>').modal('show');">
+                                                            <button type="button" class="btn btn-warning btn-xs" onclick="event.stopPropagation(); openPermModal(<?= (int)$admin['id'] ?>);">
                                                                 更新
                                                             </button>
                                                         </td>
@@ -960,9 +961,14 @@ $_quotDepts = array_keys($_deptSet);
                                             ?>
                                         </tbody>
                                     </table>
-                                    <?php foreach ($admins as $admin): ?>
+                                    <?php
+                                    // ── 權限修改 Modal：**全站只輸出一份**，開啟時才由 openPermModal() 帶入該人員的勾選狀態 ──
+                                    // 原本是「每個人各印一份完整的模組／頁面矩陣」＝45 人 × 約 536 個 checkbox，
+                                    // 實測單這個迴圈就吐出 19.4MB HTML（整頁 25.6MB），瀏覽器光解析 DOM 就會卡住數十秒。
+                                    // 結構對每個人都一模一樣，差別只有「勾了哪些」，所以改成一份模板 + JS 套用狀態。
+                                    ?>
                                         <!-- Modal 彈出視窗 (移至表格外以避免 DataTables 事件衝突) -->
-                                        <div class="modal fade" id="updateModal-<?= $admin['id'] ?>" tabindex="-1" role="dialog" aria-labelledby="updateModalLabel-<?= $admin['id'] ?>">
+                                        <div class="modal fade" id="updateModal-shared" tabindex="-1" role="dialog" aria-labelledby="updateModalLabel-shared">
                                             <div class="modal-dialog" role="document">
                                                 <div class="modal-content">
                                                     <form action="../../src/store/_updateUserPermissions.php" method="POST" class="permission-update-form">
@@ -972,20 +978,20 @@ $_quotDepts = array_keys($_deptSet);
                                                                 <button type="submit" name="updatePermissions" class="btn btn-primary btn-sm">儲存</button>
                                                                 <button type="button" class="btn btn-default btn-sm" data-dismiss="modal">取消</button>
                                                             </div>
-                                                            <h4 class="modal-title" id="updateModalLabel-<?= $admin['id'] ?>"><?= htmlspecialchars($admin['user_cname']) ?>　/　<?= htmlspecialchars($admin['user_uname']) ?>　權限修改</h4>
+                                                            <h4 class="modal-title" id="updateModalLabel-shared"></h4>
                                                         </div>
                                                         <div class="modal-body">
                                                             <!-- 隱藏欄位，用於傳遞使用者ID -->
-                                                            <input type="hidden" name="userid" value="<?= $admin['id'] ?>">
-                                                            <input type="hidden" name="id" value="<?= $_GET['id'] ?>">
+                                                            <input type="hidden" name="userid" value="">
+                                                            <input type="hidden" name="id" value="<?= htmlspecialchars($_GET['id'] ?? '') ?>">
 
                                                             <!-- 複製權限區塊 -->
                                                             <div class="text-right" style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #eee;">
                                                                 <label style="font-weight: normal;">複製權限自：</label>
                                                                 <select class="form-control input-sm copy-source-select" style="width: auto; display: inline-block; vertical-align: middle;">
                                                                     <option value="">-- 請選擇員工 --</option>
+                                                                    <?php // 自己那一列由 openPermModal() 當場隱藏（共用同一份 modal，不能在 PHP 端就排除） ?>
                                                                     <?php foreach ($sourceUsers as $srcUser): ?>
-                                                                        <?php if ($srcUser['id'] == $admin['id']) continue; ?>
                                                                         <option value="<?= $srcUser['id'] ?>" data-perms='<?= htmlspecialchars(json_encode($srcUser['permissions']), ENT_QUOTES, 'UTF-8') ?>'><?= htmlspecialchars($srcUser['name']) ?></option>
                                                                     <?php endforeach; ?>
                                                                 </select>
@@ -1045,7 +1051,7 @@ $_quotDepts = array_keys($_deptSet);
                                                                             }
                                                                         }
 
-                                                                        $currPerm = $admin['permissions']['group'][$mCode] ?? '';
+                                                                        // 共用 modal：勾選狀態一律由 openPermModal() 帶入，這裡全部輸出未勾選
                                                                     ?>
                                                                         <tr>
                                                                             <td style="vertical-align: middle;">
@@ -1065,7 +1071,7 @@ $_quotDepts = array_keys($_deptSet);
                                                                                     || (!empty($module['page_id']) && in_array((int)$module['page_id'], $rbacManagedPageIds, true));
                                                                                 if ($isRbacManagedModule): ?>
                                                                                     <label class="checkbox-inline">
-                                                                                        <input type="checkbox" name="permissions[group][<?= $mCode ?>][]" value="R" <?= (strpos($currPerm, 'R') !== false || strpos($currPerm, 'A') !== false) ? 'checked' : '' ?>> R 開啟
+                                                                                        <input type="checkbox" name="permissions[group][<?= $mCode ?>][]" value="R"> R 開啟
                                                                                     </label>
                                                                                     <div class="text-muted" style="font-size:11px;">細部權限由下方「角色指派」設定</div>
                                                                                 <?php else: ?>
@@ -1074,16 +1080,15 @@ $_quotDepts = array_keys($_deptSet);
                                                                                     if (($mCode === 'hr_permissions' || $module['module_name'] === 'hr_permissions') && !in_array($char, ['A', 'R', 'U'])) continue;
                                                                                 ?>
                                                                                     <label class="checkbox-inline">
-                                                                                        <input type="checkbox" name="permissions[group][<?= $mCode ?>][]" value="<?= $char ?>" <?= strpos($currPerm, $char) !== false ? 'checked' : '' ?>> <?= $char . ' ' . $label ?>
+                                                                                        <input type="checkbox" name="permissions[group][<?= $mCode ?>][]" value="<?= $char ?>"> <?= $char . ' ' . $label ?>
                                                                                     </label>
                                                                                 <?php endforeach; ?>
                                                                                 <?php endif; ?>
                                                                             </td>
                                                                         </tr>
                                                                         <?php if (!empty($modulePages)): ?>
-                                                                            <?php foreach ($modulePages as $page): 
+                                                                            <?php foreach ($modulePages as $page):
                                                                                 $pId = $page['page_id'];
-                                                                                $currPagePerm = $admin['permissions']['page'][$pId] ?? '';
                                                                             ?>
                                                                             <tr class="page-row-<?= $mCode ?>" data-parent-module="<?= htmlspecialchars($mCode) ?>" style="display: none; background-color: #f9f9f9;">
                                                                                 <td style="vertical-align: middle; padding-left: 40px; text-align: left;">
@@ -1092,13 +1097,13 @@ $_quotDepts = array_keys($_deptSet);
                                                                                 <td>
                                                                                     <?php if (in_array((int)$pId, $rbacManagedPageIds, true)): ?>
                                                                                         <label class="checkbox-inline">
-                                                                                            <input type="checkbox" name="permissions[page][<?= $pId ?>][]" value="R" <?= (strpos($currPagePerm, 'R') !== false || strpos($currPagePerm, 'A') !== false) ? 'checked' : '' ?>> R 開啟
+                                                                                            <input type="checkbox" name="permissions[page][<?= $pId ?>][]" value="R"> R 開啟
                                                                                         </label>
                                                                                         <span class="text-muted" style="font-size:11px;">（細部權限由下方「角色指派」設定）</span>
                                                                                     <?php else: ?>
                                                                                     <?php foreach ($acrudMap as $char => $label): ?>
                                                                                         <label class="checkbox-inline">
-                                                                                            <input type="checkbox" name="permissions[page][<?= $pId ?>][]" value="<?= $char ?>" <?= strpos($currPagePerm, $char) !== false ? 'checked' : '' ?>> <?= $char . ' ' . $label ?>
+                                                                                            <input type="checkbox" name="permissions[page][<?= $pId ?>][]" value="<?= $char ?>"> <?= $char . ' ' . $label ?>
                                                                                         </label>
                                                                                     <?php endforeach; ?>
                                                                                     <?php endif; ?>
@@ -1114,7 +1119,21 @@ $_quotDepts = array_keys($_deptSet);
                                                 </div>
                                             </div>
                                         </div>
-                                    <?php endforeach; ?>
+                                    <?php
+                                    // 共用 modal 需要的兩份資料：誰是誰（標題用）、每個人的權限（勾選狀態用）。
+                                    // 只有「有設定過」的人會出現在 UP_PERMS，沒設定過的開啟時就是整份空白。
+                                    $_upNames = []; $_upPerms = [];
+                                    foreach ($admins as $_upA) {
+                                        $_upNames[(string)$_upA['id']] = $_upA['user_cname'] . '　/　' . $_upA['user_uname'];
+                                        $_g = array_filter($_upA['permissions']['group'] ?? [], fn($v) => $v !== '' && $v !== null);
+                                        $_p = array_filter($_upA['permissions']['page']  ?? [], fn($v) => $v !== '' && $v !== null);
+                                        if ($_g || $_p) $_upPerms[(string)$_upA['id']] = ['group' => $_g, 'page' => $_p];
+                                    }
+                                    ?>
+                                    <script>
+                                        var UP_USER_NAMES = <?= json_encode($_upNames, JSON_UNESCAPED_UNICODE) ?>;
+                                        var UP_USER_PERMS = <?= json_encode($_upPerms, JSON_UNESCAPED_UNICODE) ?>;
+                                    </script>
                                 </div>
                             </div>
                         </div>
@@ -1576,6 +1595,18 @@ $_quotDepts = array_keys($_deptSet);
                          AS 條文題庫維護、IA 單管理代表意見與<strong>結案</strong>、稽核報告表儲存與核准、模組設定（七份表單的 AS 文件綁定／簽章圖章／核准審查格來源／到期提醒天數）。<br>
                          <span style="color:#b06f27;">IA 單四段分工由系統依角色鎖定</span>：稽核員段／受稽單位段／驗證段／管理代表段，各段只有該身分能填。管理者固定擁有全部權限。',
                         rs_of('internal_audit'), rsu_of('internal_audit'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('cm', 'comm_mgmt', '溝通管理', 'fa-comments-o', '#b06f27',
+                        '為每位使用者指派「<a href="../GM/communication_mgmt.php" target="_blank" style="color:#b5762a;">溝通管理</a>」頁（3-GM-01）的角色。
+                         <strong>所有在職員工不需要指派任何角色</strong>，就能建立／編輯／送出<span style="color:#b06f27;">自己的</span>利害關係者溝通記錄表、
+                         確認指派給自己的那一關，並維護措施追蹤表與溝通管制表的項目。<br>
+                         此處指派兩種加值角色：<strong>溝通紀錄檢閱</strong>＝唯讀查看全部溝通記錄表；
+                         <strong>溝通管理員</strong>＝檢閱＋代其他人建單、刪除溝通記錄／追蹤項目／管制項目、模組設定
+                         （三份表單的 AS 文件綁定／簽章圖章模板／兩個簽章格分別由誰簽，含「哪些層級以上的主管才可簽章」）。<br>
+                         <span style="color:#b06f27;">簽核權不由角色決定</span>：「部門主管確認」由填表人所屬部門內「職位編號小於填表人且階級符合門檻」的主管解析，
+                         同部門找不到就沿部門樹往上一層找，一路找到最上層都沒有則該格免簽；「總經理確認」預設取組織角色綁定的
+                         <strong>最高核准人員</strong>。名單內的人請假並設有代理人時，代理人可代簽（圖章加「代」字）。管理者固定擁有全部權限。',
+                        rs_of('comm_mgmt'), rsu_of('comm_mgmt'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('leave', 'leave', '請假系統', 'fa-calendar-minus-o', '#d99a4e',
                         '<strong>所有登入者都能申請請假、查看與撤回／銷假自己的單</strong>，不需要在這裡指派角色。此處只指派 <strong>人事（可看全部請假單）</strong>＝可檢視全公司請假單（不含代為簽核的權力）。<br>
