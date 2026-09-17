@@ -204,8 +204,87 @@ if (!function_exists('eg_people_list')) {
             $r['display'] = $r['user_cname']
                           . ($r['position_name'] !== '' ? '（' . $r['position_name'] . '）' : '')
                           . ($r['on_leave'] ? '［' . $r['leave_note'] . '］' : '');
+            $r['post_id']    = null;   // all_posts 才有值（見 eg_people_expand_posts）
+            $r['is_main']    = 1;
+            $r['post_count'] = isset($deptIdsMap[$r['id']]) ? count($deptIdsMap[$r['id']]) : 1;
         }
+        unset($r);
+
+        // all_posts：兼任者「每一個職務各出一列」（主職務也要在，不可只留職級最高的那一個）
+        if (!empty($opt['all_posts'])) $rows = eg_people_expand_posts($db, $rows, $deptIds);
         return $rows;
+    }
+}
+
+if (!function_exists('eg_people_expand_posts')) {
+    /**
+     * 把 eg_people_list() 的「一人一列」展開成「一個職務一列」。
+     *
+     * 為什麼要有這個（2026-09-17 使用者回報，全站適用）：
+     * eg_people_list() 對兼任者只挑「職級最高」的那一筆當顯示用，所以
+     * 何沐桐（主職 技術課 工程師、兼任 生管組 組長）在名單上只會出現「生管組 組長」，
+     * **主職務整個看不到**——在技術課底下找不到他，使用者以為名單漏人。
+     * 挑一筆是為了「這個人的代表身分」（簽核、圖章）；但「讓人來挑」的名單要兩個都在。
+     *
+     * 展開後同一個人會出現多列（user id 相同、職務不同），所以呼叫端：
+     *   · 下拉 value 用 `post_key`（uid:post_id）不要用 uid，否則同一個人兩列的 value 會重複
+     *   · 真正要送後端的仍是 `id`（user.id）
+     * 排序一律 部門 sort_order → 職稱 sort_order → 姓名（職位高者在上）。
+     *
+     * @param array $rows     eg_people_list() 的結果
+     * @param array $deptIds  有指定部門時，只留掛在這些部門底下的職務
+     */
+    function eg_people_expand_posts(PDO $db, array $rows, array $deptIds = []): array {
+        if (!$rows) return [];
+        $uidIn = implode(',', array_map('intval', array_column($rows, 'id')));
+        $sql = "SELECT m.id AS post_id, m.user_id, m.department_id, m.is_main,
+                       d.name AS dept_name, COALESCE(d.sort_order,999) AS dept_sort,
+                       m.position_id, p.name AS position_name, COALESCE(p.sort_order,999) AS position_sort
+                FROM user_department_position_map m
+                LEFT JOIN department d ON d.id = m.department_id
+                LEFT JOIN position   p ON p.id = m.position_id
+                WHERE m.user_id IN ({$uidIn})";
+        $posts = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+        $byUser = [];
+        foreach ($posts as $po) {
+            if ($deptIds && !in_array((int)$po['department_id'], $deptIds, true)) continue;
+            $byUser[(int)$po['user_id']][] = $po;
+        }
+
+        $out = [];
+        foreach ($rows as $r) {
+            $list = $byUser[$r['id']] ?? [];
+            if (!$list) {                       // 一個職務都沒掛（或被部門篩掉）：保留原列，不要讓人消失
+                $r['post_key']   = $r['id'] . ':0';
+                $r['post_count'] = 1;
+                $out[] = $r;
+                continue;
+            }
+            foreach ($list as $po) {
+                $x = $r;
+                $x['post_id']       = (int)$po['post_id'];
+                $x['post_key']      = $r['id'] . ':' . (int)$po['post_id'];
+                $x['is_main']       = (int)$po['is_main'];
+                $x['dept_id']       = $po['department_id'] === null ? null : (int)$po['department_id'];
+                $x['dept_name']     = (string)($po['dept_name'] ?? '');
+                $x['dept_sort']     = (int)$po['dept_sort'];
+                $x['position_id']   = $po['position_id'] === null ? null : (int)$po['position_id'];
+                $x['position_name'] = (string)($po['position_name'] ?? '');
+                $x['position_sort'] = (int)$po['position_sort'];
+                $x['post_count']    = count($list);
+                $x['display'] = $x['user_cname']
+                              . ($x['position_name'] !== '' ? '（' . $x['position_name'] . '）' : '')
+                              . (count($list) > 1 && !$x['is_main'] ? '［兼任］' : '')
+                              . ($x['on_leave'] ? '［' . $x['leave_note'] . '］' : '');
+                $out[] = $x;
+            }
+        }
+        // 部門 → 職稱 → 姓名（職位高者在上；sort_order 小＝職位高）
+        usort($out, function ($a, $b) {
+            return [$a['dept_sort'], $a['position_sort'], $a['user_cname'], $a['id'], $a['post_id']]
+               <=> [$b['dept_sort'], $b['position_sort'], $b['user_cname'], $b['id'], $b['post_id']];
+        });
+        return $out;
     }
 }
 
