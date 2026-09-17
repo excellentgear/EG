@@ -535,7 +535,7 @@ if ($hrUserPerm === 'R') {
                             系統異動當下自動寫入的紀錄原則上不可刪除（稽核軌跡），只有補登列可刪；僅超級管理員可強制刪除系統紀錄，供清理測試/錯誤資料用。</p>
                         <div id="posHistPager" class="text-right" style="margin-bottom:4px;"></div>
                         <table class="table table-condensed table-striped">
-                            <thead><tr><th>生效日</th><th>類型</th><th>異動前</th><th>異動後</th><th>原因</th><th>來源</th><th style="width:50px;"></th></tr></thead>
+                            <thead><tr><th>生效日<br><small class="text-muted" style="font-weight:normal;">（登記時間）</small></th><th>類型</th><th>異動前</th><th>異動後</th><th>原因</th><th>來源</th><th style="width:50px;"></th></tr></thead>
                             <tbody id="posHistBody"></tbody>
                         </table>
                         <div id="posBackfillBox" class="concurrent-group">
@@ -629,7 +629,7 @@ if ($hrUserPerm === 'R') {
                         <h4>在職狀態紀錄（離職／復職／留職停薪／育嬰留停）</h4>
                         <div id="staHistPager" class="text-right" style="margin-bottom:4px;"></div>
                         <table class="table table-condensed table-striped">
-                            <thead><tr><th>狀態</th><th>開始日</th><th>結束日</th><th>備註</th><th>來源</th><th style="width:50px;"></th></tr></thead>
+                            <thead><tr><th>狀態</th><th>開始日<br><small class="text-muted" style="font-weight:normal;">（登記時間）</small></th><th>結束日</th><th>備註</th><th>來源</th><th style="width:50px;"></th></tr></thead>
                             <tbody id="staHistBody"></tbody>
                         </table>
                         <div id="staBackfillBox" class="concurrent-group">
@@ -693,6 +693,9 @@ if ($hrUserPerm === 'R') {
                             <li>系統會在有人使用時順路檢查並自動把狀態改為離職——所以<b>主機關機期間到期也不會漏掉</b>，開機後第一次有人開頁面就會補做。</li>
                             <li>離職／留職停薪／育嬰留停者一律不能登入，且原有權限即時失效。</li>
                             <li><b>權限設定不會自動刪除</b>（常有誤設或回鍋復職）。要清乾淨請在編輯視窗按「清除權限設定」；復職可按「還原離職前權限」。</li>
+                            <li><b>離職只收回「權利」，不清除任何歷史紀錄。</b>「清除權限設定」只會動角色、模組權限、頁面操作權限這幾項，並把代理設定停用（不刪除）。</li>
+                            <li>下列資料<b>一律完整保留</b>，離職不會刪除也不會清空：<b>行事曆、通知／公告、請假、簽核紀錄、教育訓練、職務／在職異動紀錄、稽核與登入紀錄</b>，以及職務歸屬（部門／職稱，供舊單據查出「當時他是哪個部門」）。</li>
+                            <li><b>「刪除」按鈕只留給誤建帳號。</b>按下時系統會先掃描此人在全系統的紀錄，<b>只要查到任何一筆就擋下</b>並列出是哪幾類——因為帳號一旦被實體刪除，那些紀錄上的人員就變成查不出是誰的孤兒資料，而且不會有任何錯誤訊息。離職請一律改用「在職狀態」，不要用刪除。</li>
                         </ul>
 
                         <h4>連線狀態與強制登出</h4>
@@ -709,6 +712,8 @@ if ($hrUserPerm === 'R') {
                         <ul>
                             <li>編輯視窗的「異動紀錄」可查該員工的職務調動與在職狀態變化。</li>
                             <li>過去沒登記的異動可以<b>補登</b>（生效日可填過去日期）。系統自動寫入的紀錄不可刪除，只有手動補登的才能刪。</li>
+                            <li><b>排序一律最新的在最上面</b>（先看生效日、同一天再看登記進系統的先後）。生效日本身只記到「日」，所以日期下方另外標示<b>登記時間</b>，同一天有多筆異動時就能看出先後——<b>最上面那一筆＝該日最終生效的狀態</b>，全站各表單回推「當時職務」時採用的也是它。</li>
+                            <li>補登的紀錄，登記時間是「你補登當下」的時間，不是當年實際異動的時間，只用來分辨同一天多筆的先後順序。</li>
                         </ul>
 
                         <h4>權限</h4>
@@ -961,11 +966,21 @@ $(document).ready(function() {
         });
     }
 
-    /** 顯示用日期時間：日期部分依 ai-rules/20 一律 YYYY.MM.DD，時間保留 HH:MM */
-    function dispDateTime(s) {
+    /** 顯示用日期時間：日期部分依 ai-rules/20 一律 YYYY.MM.DD，時間保留 HH:MM。
+     *  withSec=true 連秒一起顯示——異動紀錄的「登記時間」是用來分辨同一天多筆的先後，
+     *  而人事連續補登兩筆常常只差幾十秒（實測 18:54:20 與 18:54:42），只印到分會變成兩列一模一樣。 */
+    function dispDateTime(s, withSec) {
         if (!s) return '';
-        const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
-        return m ? `${m[1]}.${m[2]}.${m[3]} ${m[4]}:${m[5]}` : String(s);
+        const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+        if (!m) return String(s);
+        return `${m[1]}.${m[2]}.${m[3]} ${m[4]}:${m[5]}` + (withSec && m[6] ? `:${m[6]}` : '');
+    }
+
+    /** 顯示用日期（只有日期沒有時間時用）：ai-rules/20 一律 YYYY.MM.DD */
+    function dispDate(s) {
+        if (!s) return '';
+        const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+        return m ? `${m[1]}.${m[2]}.${m[3]}` : String(s);
     }
 
     // 逐列強制登出（按鈕在 tr 內，必須擋掉冒泡，否則會觸發整列的「連點兩下編輯」）
@@ -1267,6 +1282,9 @@ $(document).ready(function() {
             lines.push('', '● 需人事另行處理（系統不會自動改）：');
             summary.warnings.forEach(function(w) { lines.push('　- ' + w); });
         }
+        // 講明「只清權限、不動歷史」——否則人事會擔心按下去連請假、簽核紀錄一起不見而不敢按
+        lines.push('', '● 只會清除上列「權限設定」。行事曆、通知／公告、請假、簽核紀錄、',
+                       '　教育訓練、職務／在職異動紀錄與稽核紀錄一律原樣保留，不受影響。');
         lines.push('', '清除後復職需重新設定權限。清除前會完整寫入稽核紀錄備查。確定要清除嗎？');
         if (!confirm(lines.join('\n'))) return;
         callApi('revoke_permissions', 'POST', { id: userId, reason: '人事手動清除' }, function(res) {
@@ -1373,8 +1391,11 @@ $(document).ready(function() {
             lines.push('● 需人事另行處理（系統不會自動改）：');
             n.warnings.forEach(function(w) { lines.push('　- ' + w); });
         }
+        // 離職只收回「權利」，不動任何要留存的歷史資料（使用者定調）
+        lines.push('', '● 行事曆、通知／公告、請假、簽核紀錄、教育訓練、職務／在職異動與稽核紀錄',
+                       '　一律完整保留，離職不會刪除也不會清空。');
         if (n.count > 0) {
-            lines.push('', '要現在清除這些權限設定嗎？（清除前會完整寫入稽核紀錄備查）');
+            lines.push('', '要現在清除這些權限設定嗎？（只清權限，不影響上述紀錄；清除前會完整寫入稽核紀錄備查）');
             if (!confirm(lines.join('\n'))) return;
             callApi('revoke_permissions', 'POST', { id: n.user_id, reason: n.label }, function(res) {
                 alert(res.status === 'success' ? res.message : ('清除失敗：' + res.message));
@@ -1438,20 +1459,43 @@ $(document).ready(function() {
     });
 
     // --- Modal 內刪除按鈕事件 ---
+    // 按下當下才向後端問「此人有沒有一定要保留的歷史紀錄」（點開即刷新）。
+    // 有的話一律擋下並引導改用「離職」——行事曆、通知、請假、簽核等紀錄必須留存，
+    // 帳號被實體刪掉之後那些紀錄會變成查不出人的孤兒資料，而且完全不會報錯。
     $('#btn-delete-in-modal').on('click', function() {
         var userId = $(this).data('id');
         var userName = $('#user_cname').val(); // 從 Modal 輸入框獲取姓名
 
-        if (confirm(`您確定要刪除員工「${userName}」(ID: ${userId}) 嗎？\n\n此操作將會一併刪除與該員工相關的所有職務設定，且無法復原。`)) {
-            callApi('delete_employee', 'POST', { id: userId }, function(response) {
-                if (response.status === 'success') {
-                    $('#employeeModal').modal('hide'); // 關閉 Modal
-                    loadEmployees(); // 重新載入列表
-                } else {
-                    alert('刪除失敗: ' + response.message);
+        callApi('check_delete_employee', 'GET', { id: userId }, function(chk) {
+            if (!chk || chk.status !== 'success') {
+                alert('檢查失敗：' + ((chk && chk.message) || '無法取得刪除前檢查結果'));
+                return;
+            }
+
+            if (!chk.can_delete) {
+                var msg = '無法刪除員工「' + userName + '」(ID: ' + userId + ')\n\n' + chk.reason;
+                if (chk.lines && chk.lines.length) {
+                    msg += '\n\n目前查到的紀錄：\n・' + chk.lines.join('\n・');
                 }
-            });
-        }
+                alert(msg);
+                return;
+            }
+
+            if (confirm('您確定要刪除員工「' + userName + '」(ID: ' + userId + ') 嗎？\n\n'
+                      + '系統已確認此帳號沒有任何歷史紀錄（行事曆、通知、請假、簽核、異動紀錄皆無），'
+                      + '屬於可直接移除的誤建帳號。\n刪除後無法復原。')) {
+                callApi('delete_employee', 'POST', { id: userId }, function(response) {
+                    if (response.status === 'success') {
+                        $('#employeeModal').modal('hide'); // 關閉 Modal
+                        loadEmployees(); // 重新載入列表
+                    } else {
+                        var m = '刪除失敗: ' + response.message;
+                        if (response.lines && response.lines.length) m += '\n\n・' + response.lines.join('\n・');
+                        alert(m);
+                    }
+                });
+            }
+        });
     });
 
     // --- 異動紀錄（職務調動＋在職狀態；ai-rules/14 P1）---
@@ -1513,7 +1557,13 @@ $(document).ready(function() {
         const s = pageSlice(POS_HIST, posPg);
         let h = '';
         s.rows.forEach(function(r) {
-            h += '<tr><td>' + escapeHtml(r.effective_date) + '</td>'
+            // 生效日只到「日」（欄位型別是 date，沒有時分），同一天有多筆時看不出先後，
+            // 故一併印出「登記時間」＝這筆紀錄實際寫進系統的時間（created_at）。
+            // 排序與 eg_position_snapshot_at() 的解析順序一致（effective_date, id），
+            // 所以同一天的多筆中「最上面那一筆」就是當天最終生效的狀態。
+            h += '<tr><td>' + escapeHtml(dispDate(r.effective_date))
+              + (r.created_at ? '<br><small class="text-muted" title="這筆紀錄登記進系統的時間（同一天多筆時用來分辨先後）">登記 ' + escapeHtml(dispDateTime(r.created_at, true)) + '</small>' : '')
+              + '</td>'
               + '<td>' + escapeHtml(CHANGE_TYPE_LABEL[r.change_type] || r.change_type) + '</td>'
               + '<td>' + escapeHtml(r.before_label) + '</td><td>' + escapeHtml(r.after_label) + '</td>'
               + '<td>' + escapeHtml(r.reason || '') + '</td>'
@@ -1531,7 +1581,9 @@ $(document).ready(function() {
         let h = '';
         s.rows.forEach(function(r) {
             h += '<tr><td>' + escapeHtml(STATUS_HIST_LABEL[parseInt(r.status)] || r.status) + '</td>'
-              + '<td>' + escapeHtml(r.start_date || '') + '</td><td>' + escapeHtml(r.end_date || '') + '</td>'
+              + '<td>' + escapeHtml(dispDate(r.start_date))
+              + (r.created_at ? '<br><small class="text-muted" title="這筆紀錄登記進系統的時間（同一天多筆時用來分辨先後）">登記 ' + escapeHtml(dispDateTime(r.created_at, true)) + '</small>' : '')
+              + '</td><td>' + escapeHtml(dispDate(r.end_date)) + '</td>'
               + '<td>' + escapeHtml(r.remark || '') + '</td>'
               + '<td>' + (r.is_backfill ? '補登' : '系統') + '</td>'
               + '<td>' + ((r.is_backfill && canEditHist) || isSuperAdmin

@@ -47,6 +47,9 @@ switch ($action) {
     case 'delete_employee':
         deleteEmployee();
         break;
+    case 'check_delete_employee':    // 刪除前預檢：此人有沒有一定要保留的歷史紀錄
+        checkDeleteEmployee();
+        break;
     case 'get_permission_summary':   // 查此人殘留的權限設定（清除前給人事看）
         getPermissionSummary();
         break;
@@ -725,6 +728,10 @@ function getChangeHistory() {
     $id = (int)($_REQUEST['id'] ?? 0);
     if ($id <= 0) { echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。']); return; }
     try {
+        // 一律「最新的在最上面」：先比生效日，同一天再比 id。
+        // 同一天的 tie-break 必須用 id（不可改用 created_at）——eg_position_snapshot_at() 解析「當時職務」
+        // 走的是 ORDER BY effective_date, id 後面蓋前面，兩邊排序鍵要一致，畫面最上面那一筆才等於當天最終生效的狀態。
+        // created_at 一併回傳供畫面顯示「登記時間」（effective_date 是 date 型別沒有時分，同日多筆看不出先後）。
         $st = $db->prepare("SELECT id, change_type, before_json, after_json, effective_date, reason, source, operator, created_at
                             FROM user_position_history WHERE user_id = ? ORDER BY effective_date DESC, id DESC");
         $st->execute([$id]);
@@ -997,18 +1004,46 @@ function deleteStatusHistory() {
     }
 }
 
+/**
+ * 刪除前預檢（前端擋一次用；deleteEmployee 會用同一支判定再擋一次＝鐵律8）。
+ * @return array ['can'=>bool,'reason'=>string,'lines'=>[]]
+ */
+function empDeleteGuard(PDO $db, int $id): array {
+    if ($id <= 0) return ['can' => false, 'reason' => '未提供員工 ID。', 'lines' => []];
+    if ($id === 1) return ['can' => false, 'reason' => '無法刪除系統管理員。', 'lines' => []];
+
+    $fp = eg_user_history_footprint($db, $id);
+    if (!$fp['has']) return ['can' => true, 'reason' => '', 'lines' => []];
+
+    return [
+        'can'    => false,
+        'reason' => '此帳號已在系統留下必須保存的歷史紀錄，不可刪除。'
+                  . '請改把「在職狀態」設為「離職」——離職會停用登入並可清除權限設定，'
+                  . '但行事曆、通知、請假、簽核等紀錄一律原樣保留。',
+        'lines'  => eg_user_history_footprint_lines($fp),
+    ];
+}
+
+/** 刪除前預檢 API */
+function checkDeleteEmployee() {
+    global $db;
+    empRequirePerm(true);
+    $g = empDeleteGuard($db, (int)($_REQUEST['id'] ?? 0));
+    echo json_encode(['status' => 'success', 'can_delete' => $g['can'],
+                      'reason' => $g['reason'], 'lines' => $g['lines']], JSON_UNESCAPED_UNICODE);
+}
+
 function deleteEmployee() {
     global $db;
-    $id = $_POST['id'] ?? null;
+    empRequirePerm(true);                 // 原本完全沒有權限檢查，直打 API 就能刪人
+    $id = (int)($_POST['id'] ?? 0);
 
-    if (empty($id)) {
-        echo json_encode(['status' => 'error', 'message' => '未提供員工 ID。']);
-        return;
-    }
-
-    // 為了安全，可以加上一些保護機制，例如不允許刪除系統管理員 (ID=1)
-    if ($id == 1) {
-        echo json_encode(['status' => 'error', 'message' => '無法刪除系統管理員。']);
+    // 有任何歷史紀錄就不准實體刪除——user 那一列被刪掉，行事曆／通知／請假／簽核上的
+    // user_id 全部變孤兒（沒有外鍵擋、也不會報錯），事後查不出「這筆是誰的」。
+    $guard = empDeleteGuard($db, $id);
+    if (!$guard['can']) {
+        echo json_encode(['status' => 'error', 'message' => $guard['reason'],
+                          'lines' => $guard['lines']], JSON_UNESCAPED_UNICODE);
         return;
     }
 

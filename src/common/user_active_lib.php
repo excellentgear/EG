@@ -466,3 +466,156 @@ if (!function_exists('eg_restore_user_permissions')) {
         return ['ok' => true, 'restored' => $restored, 'skipped' => $skipped, 'message' => $msg];
     }
 }
+
+/* ------------------------------------------------------------------
+ * 歷史紀錄足跡（2026-09-17 使用者定調）
+ *
+ * 使用者原話：「離職不可清除行事曆、通知、請假…相關資料，這些都需要留有
+ * 歷史紀錄。注意其他要留有歷史紀錄的也一樣不清除，只是清除權利。」
+ *
+ * 所以離職流程只做兩件事：①在職狀態封鎖（自動、fail-closed）
+ * ②清除權限設定（eg_revoke_user_permissions，只動 4 張權限表＋停用代理）。
+ * 行事曆、通知、請假、簽核、教育訓練、職務／在職異動、稽核一律原樣保留。
+ *
+ * 這支函式是給「實體刪除帳號」那顆按鈕擋門用的：把此人在全庫留下的紀錄
+ * 掃出來，只要掃到任何一筆就不准刪——`user` 那一列一旦被刪掉，上面所有
+ * 紀錄的 user_id 就變成孤兒，行事曆看不到是誰、請假單查不出申請人、
+ * 簽核紀錄的簽核人變空白，而且完全不報錯（沒有外鍵擋）。
+ *
+ * 掃描分兩段，刻意不只用寫死清單（鐵律4）：
+ *   A. 重點區（行事曆／通知／請假／簽核／異動紀錄／稽核）逐欄 COUNT，訊息上講得出筆數；
+ *   B. 其餘資料表由 information_schema 動態掃 user 類欄位，只問「有沒有」（EXISTS）——
+ *      日後新模組自動納入，不必回頭維護這份清單。
+ * ------------------------------------------------------------------ */
+
+if (!function_exists('eg_user_history_scan_map')) {
+    /**
+     * 重點區對照表：分類 => [ [資料表, 欄位, 額外條件], ... ]
+     * 只放「一定要留歷史」的模組；權限表刻意不列（那些本來就是可以清的）。
+     */
+    function eg_user_history_scan_map() {
+        return [
+            '行事曆' => [
+                ['evenement_actor',   'user_id',   ''],
+                ['evenement_target',  'target_id', "target_type = 'user'"],
+            ],
+            '通知／公告' => [
+                ['live_event',          'created_by', ''],
+                ['live_event_for_user', 'user_id',    ''],
+                ['live_event_response', 'user_id',    ''],
+                ['live_event_target',   'target_id',  "target_type = 'user'"],
+            ],
+            '請假' => [
+                ['leave_request',       'employee_id',   ''],
+                ['leave_request',       'agent_user_id', ''],
+                ['leave_approval',      'approver_id',   ''],
+                ['leave_approval',      'delegate_id',   ''],
+                ['leave_sign_record',   'signer_id',     ''],
+                ['leave_request_agent', 'agent_user_id', ''],
+            ],
+            '簽核紀錄' => [
+                ['approval_record', 'submitted_by', ''],
+                ['approval_record', 'approver_id',  ''],
+            ],
+            // 註：user_department_position_map 是「目前的職務歸屬」不是歷史紀錄，
+            //     而且每個帳號一定有一列，列進來會變成任何帳號都刪不掉。
+            //     真正的歷史在 user_position_history／user_status_history 這兩張。
+            '職務／在職異動' => [
+                ['user_position_history', 'user_id', ''],
+                ['user_status_history',   'user_id', ''],
+            ],
+            '稽核／登入紀錄' => [
+                ['audit_log', 'user_id', ''],
+                ['login_log', 'user_id', ''],
+            ],
+        ];
+    }
+}
+
+if (!function_exists('eg_user_history_footprint')) {
+    /**
+     * 掃出此人在全庫留下的歷史紀錄。
+     * @return array [
+     *   'total'  => int            重點區總筆數
+     *   'groups' => [分類 => ['total'=>n, 'items'=>['資料表.欄位'=>n]]]
+     *   'others' => ['資料表.欄位', ...]   動態掃到的其他資料表（只確認存在，不計筆數）
+     *   'has'    => bool           只要有任何一筆就是 true
+     * ]
+     */
+    function eg_user_history_footprint($pdo, $user_id) {
+        $uid = (int)$user_id;
+        $out = ['total' => 0, 'groups' => [], 'others' => [], 'has' => false];
+        if ($uid <= 0) return $out;
+
+        // --- A. 重點區逐欄計數 ---
+        $seen = [];                                     // 已數過的 表.欄位，B 段不重複掃
+        foreach (eg_user_history_scan_map() as $group => $cols) {
+            $g = ['total' => 0, 'items' => []];
+            foreach ($cols as $c) {
+                list($tbl, $col, $extra) = $c;
+                $seen[$tbl . '.' . $col] = true;
+                try {
+                    $sql = "SELECT COUNT(*) FROM `{$tbl}` WHERE `{$col}` = ?" . ($extra !== '' ? " AND {$extra}" : '');
+                    $st = $pdo->prepare($sql);
+                    $st->execute([$uid]);
+                    $n = (int)$st->fetchColumn();
+                } catch (Exception $e) {
+                    continue;                           // 資料表/欄位不存在（不同版本）就跳過，不中斷整份掃描
+                }
+                if ($n > 0) { $g['items'][$tbl . '.' . $col] = $n; $g['total'] += $n; }
+            }
+            if ($g['total'] > 0) { $out['groups'][$group] = $g; $out['total'] += $g['total']; }
+        }
+
+        // --- B. 其餘資料表動態掃（只問有沒有，不計筆數；新模組自動納入） ---
+        // 權限表是「可以清的」，不算歷史紀錄，故排除；user 本表與 session 類暫存也排除。
+        $skipTables = ['user', 'user_roles', 'user_permissions', 'user_module_permissions',
+                       'page_operator_acl', 'user_delegate', 'confirm_password_grant',
+                       'confirm_password_lockout', 'evenement_recipient_cache',
+                       'user_department_position_map'];
+        try {
+            $st = $pdo->prepare(
+                "SELECT TABLE_NAME, COLUMN_NAME
+                   FROM information_schema.COLUMNS
+                  WHERE TABLE_SCHEMA = DATABASE()
+                    AND DATA_TYPE IN ('int','bigint','smallint','mediumint')
+                    AND ( COLUMN_NAME = 'user_id' OR COLUMN_NAME = 'uid'
+                       OR COLUMN_NAME LIKE '%\_user\_id' OR COLUMN_NAME LIKE '%\_by\_id'
+                       OR COLUMN_NAME IN ('created_by','updated_by','signer_id','approver_id',
+                                          'submitted_by','operator_id','employee_id','applicant_id',
+                                          'assignee_id','owner_id','delegate_id') )
+                  ORDER BY TABLE_NAME, COLUMN_NAME");
+            $st->execute();
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $tbl = $r['TABLE_NAME']; $col = $r['COLUMN_NAME'];
+                if (in_array($tbl, $skipTables, true)) continue;
+                if (isset($seen[$tbl . '.' . $col])) continue;
+                if (strpos($tbl, 'vw_') === 0) continue;                 // 檢視表不算
+                try {
+                    $q = $pdo->prepare("SELECT 1 FROM `{$tbl}` WHERE `{$col}` = ? LIMIT 1");
+                    $q->execute([$uid]);
+                    if ($q->fetchColumn() !== false) $out['others'][] = $tbl . '.' . $col;
+                } catch (Exception $e) { continue; }
+            }
+        } catch (Exception $e) {
+            error_log('[user_active] history sweep failed: ' . $e->getMessage());
+        }
+
+        $out['has'] = ($out['total'] > 0 || !empty($out['others']));
+        return $out;
+    }
+}
+
+if (!function_exists('eg_user_history_footprint_lines')) {
+    /** 把足跡整理成給人看的條列（畫面與 API 訊息共用同一份文字，兩邊不會走鐘） */
+    function eg_user_history_footprint_lines($fp) {
+        $lines = [];
+        foreach (($fp['groups'] ?? []) as $group => $g) {
+            $lines[] = $group . '：' . $g['total'] . ' 筆';
+        }
+        if (!empty($fp['others'])) {
+            $lines[] = '其他模組：另有 ' . count($fp['others']) . ' 處資料表存有此人的紀錄';
+        }
+        return $lines;
+    }
+}
