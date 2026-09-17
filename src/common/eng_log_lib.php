@@ -246,6 +246,14 @@ function el_ensure_schema(PDO $db): void
         "ALTER TABLE eng_log_bind ADD COLUMN meta TEXT NULL COMMENT '型別專屬附加資料（BOM：選定的製程與當時的發包廠商）'",
         "ALTER TABLE eng_log_item ADD COLUMN parent_item_id INT NULL COMMENT '延伸問題：由哪一條問題衍生出來的' AFTER log_id",
         "ALTER TABLE eng_log_file ADD COLUMN note VARCHAR(500) NULL COMMENT '附件備註，顯示在附件下方'",
+        // 對象是公司內部時，記下「使用者實際選的那個部門職務」——兼任者不可以事後回推，
+        // 回推一律取職級最高那筆，會把使用者選的兼任職務顯示成主要職務（實際踩過）
+        "ALTER TABLE eng_log_item ADD COLUMN target_post VARCHAR(80) NULL COMMENT '選定當下的部門＋職稱（兼任者以使用者選的為準）'",
+        // 提案人：有些紀錄沒有詢問對象，是主管交辦／自己發現的處理紀錄
+        "ALTER TABLE eng_log ADD COLUMN proposer_type VARCHAR(10) NULL COMMENT 'customer/maker/user'",
+        "ALTER TABLE eng_log ADD COLUMN proposer_id VARCHAR(30) NULL",
+        "ALTER TABLE eng_log ADD COLUMN proposer_label VARCHAR(120) NULL",
+        "ALTER TABLE eng_log ADD COLUMN proposer_post VARCHAR(80) NULL COMMENT '公司內部提案人的部門＋職稱'",
     ] as $sql) { try { $db->exec($sql); } catch (Throwable $e) {} }
 
     $db->exec("CREATE TABLE IF NOT EXISTS eng_log_step (
@@ -415,11 +423,10 @@ function el_auto_title(PDO $db, int $logId, string $logType = '', array $binds =
             $st->execute([$logId]);
             foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $v) if (trim((string)$v) !== '') $parts[(string)$v] = true;
 
-            $st = $db->prepare("SELECT m.maker_id FROM eng_log_index x
-                                LEFT JOIN maker_list m ON m.maker_id_no = x.maker_id_no
-                                WHERE x.log_id=? AND x.maker_id_no IS NOT NULL ORDER BY m.maker_id");
-            $st->execute([$logId]);
-            foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $v) if (trim((string)$v) !== '') $makers[(string)$v] = true;
+            /* 廠商刻意只取「使用者明確綁定的那幾家」（上面掃 binds 時已收集），
+               不從三軸索引補——索引裡的廠商是綁 BOM 時由 bom_ing 逐關自動展開的，
+               一張 BOM 走過五六家外包，全部塞進標題會變成一長串不相干的廠商。
+               索引仍保留全部廠商，所以用廠商查詢照樣查得到，只是標題不列。 */
         } catch (Throwable $e) {}
     }
 

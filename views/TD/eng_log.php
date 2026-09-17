@@ -168,8 +168,9 @@ $openId = (int)($_GET['id'] ?? 0);
         .qitem.is-done { background:#FAFBFC; }
         /* 欄位順序（使用者指定）：編號 → 狀態 → 日期 → 對象 → 問題 → ⋯
            狀態·日期·對象靠在問題左邊，一眼看得完，不要一個在左一個在右 */
-        .qhead { display:grid; grid-template-columns:28px 100px 96px 200px minmax(0,1fr) 30px;
+        .qhead { display:grid; grid-template-columns:28px 100px 96px 200px minmax(0,1fr) 96px 30px;
             gap:0 10px; align-items:center; }
+        .qfud { text-align:right; min-width:0; }
         .q-more { font-size:13px; color:#9AA5B1; text-decoration:none; padding:0 4px; }
         .q-more:hover { color:#1ABB9C; text-decoration:none; }
 
@@ -187,8 +188,9 @@ $openId = (int)($_GET['id'] ?? 0);
         .to-mark { color:#9AA5B1; font-weight:700; margin-right:3px; }
         .q-contact { color:#9AA5B1; margin-left:5px; }
         .qdate { font-weight:700 !important; color:#2A3F54 !important; }
-        .fud-tag { font-size:10.5px; color:#B5732A; background:#FCEFD9; border:1px solid #F0D6A8;
-            border-radius:9px; padding:0 6px; margin-right:6px; white-space:nowrap; }
+        .fud-tag { display:inline-block; font-size:10px; color:#B5732A; background:#FCEFD9;
+            border:1px solid #F0D6A8; border-radius:9px; padding:0 5px; line-height:1.7;
+            white-space:nowrap; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
         .el-title .t-auto { color:#2A3F54; }
         .el-title .t-manual { color:#0e8c73; margin-left:8px; font-weight:700; }
         .el-note { font-size:12px; color:#8A94A0; margin-top:3px; padding-left:12px; line-height:1.6; }
@@ -234,7 +236,7 @@ $openId = (int)($_GET['id'] ?? 0);
         .att:hover { background:#F0F5FB; color:#3B6FD4; text-decoration:none; }
         @media (max-width:900px) {
             .qhead { grid-template-columns:28px minmax(0,1fr); }
-            .qhead .qmeta, .qhead .qdate, .qhead .qstat, .qhead .qact { grid-column:2; text-align:left; }
+            .qhead .qmeta, .qhead .qdate, .qhead .qstat, .qhead .qfud, .qhead .qact { grid-column:2; text-align:left; }
         }
 
         /* ── 跳窗：漸層標頭＋淺底＋白色區塊卡（同 personal_task） ── */
@@ -364,6 +366,11 @@ $openId = (int)($_GET['id'] ?? 0);
             font-family:Consolas,Monaco,monospace; margin-left:6px; white-space:nowrap; }
         .idtag.none { background:#FDECEA; border-color:#F5C6C0; color:#C0392B; }
         .idlock { color:#0e8c73; margin-left:5px; text-decoration:none; }
+        .ch-row.need .ch-btn { border-color:#E74C3C; }
+        .rep-branch { display:inline-block; font-size:10.5px; color:#5B8DEF; margin-left:8px; text-decoration:none; white-space:nowrap; }
+        .rep-branch:hover { color:#2F5FCC; text-decoration:none; }
+        .pp-link { display:block; font-size:11.5px; color:#B5732A; text-decoration:none; }
+        .pp-link:hover { color:#8F5416; text-decoration:underline; }
         .idlock:hover { color:#E74C3C; text-decoration:none; }
         /* 綁好之後欄位反灰唯讀，要換對象請按右邊的鎖頭 */
         input.locked { background:#EEF2F6 !important; color:#5A6B7C; cursor:not-allowed; }
@@ -441,7 +448,7 @@ $openId = (int)($_GET['id'] ?? 0);
                     <th>標題與綁定</th>
                     <th style="width:160px;">問題進度</th>
                     <th style="width:104px;">狀態</th>
-                    <th style="width:92px;">建立者</th>
+                    <th style="width:110px;">建立者／提問者</th>
                     <th style="width:100px;">建立日</th>
                 </tr></thead>
                 <tbody id="listBody"><tr><td colspan="6" style="text-align:center;color:#9AA5B1;padding:26px;">載入中…</td></tr></tbody>
@@ -479,6 +486,26 @@ $openId = (int)($_GET['id'] ?? 0);
                 </span></div>
             <div class="fld"><label>幾天內算急件</label>
                 <input type="number" id="gUrgent" class="form-control" style="width:86px;" min="1" data-hint="留空＝預設 3 天"></div>
+            <div class="fld"><label>提案人（誰提出來的，可不填）</label>
+                <select id="gPpType" class="form-control" style="width:118px;" data-eg-skip>
+                    <option value="">（不填）</option>
+                    <option value="customer">客戶</option>
+                    <option value="maker">廠商</option>
+                    <option value="user">公司內部</option>
+                </select></div>
+            <span id="gPpOuter" style="display:none;">
+                <div class="fld ac-wrap"><label>提案人名稱
+                        <span id="gPpIdTag" class="idtag" style="display:none;"></span></label>
+                    <input type="text" id="gPpKw" class="form-control" style="width:230px;" autocomplete="off"
+                           data-hint="打字搜尋後要從清單點選">
+                    <div class="ac-list" id="gPpAc"></div></div>
+            </span>
+            <span id="gPpInner" style="display:none;">
+                <div class="fld"><label>部門</label>
+                    <select id="gPpDept" class="form-control" style="width:150px;" data-eg-skip></select></div>
+                <div class="fld"><label>人員</label>
+                    <select id="gPpPerson" class="form-control" style="width:240px;" data-eg-skip></select></div>
+            </span>
             <div class="fld" style="width:100%;"><label>案件備註</label>
                 <textarea id="gNote" class="form-control" rows="2"></textarea></div>
         </div>
@@ -808,6 +835,7 @@ var API = '../../src/store/EngLog_API.php';
 var CSRF = '', DICT = null, PERMS = null, ME = null, TODAY = '';
 var ROWS = [], PAGE = 1, PER = 10, TOTAL = 0, QUICK = '';
 var CUR = null;                 // 目前開啟的案件明細（跳窗用）
+var PROPOSER = '';              // 提案人篩選（點清單上的提問者就套用）
 var EDIT_ID = 0, BINDS = [], TEMP_FILES = [], REP_TEMP_FILES = [];
 var PICK_CTX = null, ITEM_EDIT = null;
 var EXPANDED = {};              // 清單上展開中的案件： id -> 明細資料
@@ -938,6 +966,56 @@ function fillDicts() {
     });
 }
 
+/* ── 提案人（沒有詢問對象的處理紀錄，例如主管交辦要改圖） ──────────── */
+function ppMode() {
+    var t = $('#gPpType').val();
+    $('#gPpOuter').toggle(t === 'customer' || t === 'maker');
+    $('#gPpInner').toggle(t === 'user');
+    if (t === 'user') loadDepts($('#gPpDept'));
+}
+function ppSyncTag() {
+    var id = $('#gPpKw').attr('data-id') || '';
+    var $t = $('#gPpIdTag').empty();
+    if (id) {
+        $('#gPpKw').prop('readonly', true).addClass('locked');
+        $t.removeClass('none').append(document.createTextNode('ID ' + id))
+          .append($('<a href="javascript:;" class="idlock" title="解鎖並重新選擇">').html('<i class="fa fa-lock"></i>')
+              .on('click', function () {
+                  $('#gPpKw').val('').removeAttr('data-id').prop('readonly', false).removeClass('locked');
+                  ppSyncTag(); $('#gPpKw').focus();
+              })).show();
+    } else {
+        $('#gPpKw').prop('readonly', false).removeClass('locked');
+        if ($.trim($('#gPpKw').val()) !== '') $t.addClass('none').text('未綁定 ID').show(); else $t.hide();
+    }
+}
+$('#gPpType').on('change', function () {
+    $('#gPpKw').val('').removeAttr('data-id');
+    $('#gPpPerson').empty().append($('<option value="">選人員</option>'));
+    ppSyncTag(); ppMode();
+});
+$('#gPpKw').on('input', function () {
+    var t = $('#gPpType').val(), $inp = $(this);
+    $inp.removeAttr('data-id'); ppSyncTag();
+    if (t !== 'customer' && t !== 'maker') return;
+    acSearch(t, $inp.val(), $inp, $('#gPpAc'), function (row) {
+        $inp.val(row.label).attr('data-id', row.id); ppSyncTag();
+    });
+});
+$('#gPpDept').on('change', function () { loadDeptPeople($(this).val(), $('#gPpPerson')); });
+/** 收集提案人欄位（公司內部時把使用者選的那個部門職務一起帶走，兼任者才不會被回推成主職） */
+function ppCollect() {
+    var t = $('#gPpType').val();
+    if (!t) return { proposer_type: '', proposer_id: '', proposer_label: '', proposer_post: '' };
+    if (t === 'user') {
+        var $o = $('#gPpPerson option:selected');
+        return { proposer_type: 'user', proposer_id: $('#gPpPerson').val() || '',
+                 proposer_label: $o.attr('data-name') || '', proposer_post: $o.attr('data-post') || '' };
+    }
+    return { proposer_type: t, proposer_id: $('#gPpKw').attr('data-id') || '',
+             proposer_label: $.trim($('#gPpKw').val()), proposer_post: '' };
+}
+
 /* 回覆方式選項（管理員可維護，所以一律即時由 DICT.channels 重畫） */
 function renderChannelOptions() {
     var $sel = $('#rChannel'), keep = $sel.val();
@@ -1037,7 +1115,7 @@ $(document).on('click', '#statCards .stat-card', function () {
 
 /* ── 清單 ─────────────────────────────────────────────────────────── */
 function filterParams() {
-    return { kw: $('#fKw').val(), log_type: $('#fType').val(),
+    return { kw: $('#fKw').val(), log_type: $('#fType').val(), proposer: PROPOSER,
              quick: QUICK, page: PAGE, per: PER };
 }
 function loadList() {
@@ -1109,7 +1187,14 @@ function renderList() {
         else $c4.append($('<span class="chip chip-done">').text('處理中'));
         $tr.append($c4);
 
-        $tr.append($('<td style="font-size:12.5px;color:#5A6B7C;">').text(r.owner_name || ''));
+        var $own = $('<td style="font-size:12.5px;color:#5A6B7C;">');
+        $own.append($('<div>').text(r.owner_name || ''));
+        if (r.proposer_label) {
+            $own.append($('<a href="javascript:;" class="pp-link" title="只看這位提案人的紀錄">')
+                .text('／' + r.proposer_label)
+                .on('click', function (e) { e.stopPropagation(); PROPOSER = r.proposer_label; PAGE = 1; loadList(); }));
+        }
+        $tr.append($own);
         $tr.append($('<td style="font-size:12px;color:#5A6B7C;font-weight:600;">').text(dispDate(r.created_at)));
         $b.append($tr);
 
@@ -1365,11 +1450,14 @@ function buildItemBlock(d, it, canWrite, inline) {
     $h.append($('<span class="qtext">').append($('<span class="qmark">').text('Q：'))
         .append(document.createTextNode(it.question)));
 
-    var $a = $('<span class="qact">');
-    // 這一條設定等幾天沒回就提醒，直接寫在 ⋯ 左邊，不必點開才知道
+    // 這一條設定等幾天沒回就提醒，自成一欄放在 ⋯ 左邊（塞在 ⋯ 那格會撐破框線）
     var fud = it.follow_up_days ? Number(it.follow_up_days) : (DICT.def_follow_up || 7);
+    var $f = $('<span class="qfud">');
     if (it.status !== 'resolved' && it.status !== 'dropped')
-        $a.append($('<span class="fud-tag" title="等滿這麼多個工作天沒回就提醒">').text(fud + '天未回提示'));
+        $f.append($('<span class="fud-tag" title="等滿這麼多個工作天沒回就提醒">').text(fud + '天未回'));
+    $h.append($f);
+
+    var $a = $('<span class="qact">');
     if (canWrite) {
         $a.append($('<a href="javascript:;" class="q-more" title="更多動作">').html('<i class="fa fa-ellipsis-h"></i>')
             .on('click', function (e) {
@@ -1393,6 +1481,12 @@ function buildItemBlock(d, it, canWrite, inline) {
         var rf = $.grep(d.files, function (x) { return x.owner_type === 'reply' && Number(x.owner_id) === Number(rp.id); });
         if (rf.length) $body.append(buildAttachStrip(rf, canWrite));
         $one.append($body);
+        // 從這則回覆延伸新問題（對方回覆後才冒出來的小問題）
+        if (canWrite) {
+            $body.append($('<a href="javascript:;" class="rep-branch" title="依這則回覆再問一個問題">')
+                .html('<i class="fa fa-code-fork"></i> 依此回覆延伸問題')
+                .on('click', function (e) { e.stopPropagation(); CUR = d; openItem(null, it, rp); }));
+        }
         var $del = $('<span class="rdel">');
         if (canWrite) {
             $del.append($('<a href="javascript:;" title="刪除這則回覆">&times;</a>').on('click', function () {
@@ -1460,6 +1554,8 @@ $(document).on('keydown', '.ri-text', function (e) {
     var logId = Number($ta.attr('data-log')), itemId = Number($ta.attr('data-item'));
     $msg.css('color', '#9AA5B1').text('儲存中…');
     var ch = $row.find('.ch-btn.on').attr('data-ch') || '';
+    if (!ch) { $msg.css('color', '#E74C3C').text('請先選回覆方式'); $row.find('.ch-row').addClass('need'); return; }
+    $row.find('.ch-row').removeClass('need');
     apiPost('reply_add', { log_id: logId, item_ids: JSON.stringify([itemId]), replied_on: d, content: txt, channel: ch })
         .done(function (r) {
             if (!r.success) { $msg.css('color', '#E74C3C').text(r.message || '儲存失敗'); return; }
@@ -1501,7 +1597,7 @@ $('#fKw').on('input', function () {
 $('#fKw').on('keydown', function (e) { if (e.which === 13) { clearTimeout(kwTimer); PAGE = 1; loadList(); } });
 $('#fType').on('change', function () { PAGE = 1; loadList(); });
 $('#btnReset').on('click', function () {
-    $('#fKw').val(''); $('#fType').val('');
+    $('#fKw').val(''); $('#fType').val(''); PROPOSER = '';
     PAGE = 1; loadList();
 });
 
@@ -1533,6 +1629,17 @@ function openLogModal(id) {
                 else { $('#gRemindVal').val(Math.round(m / 60)); $('#gRemindUnit').val('60'); }
             }
             $('#gUrgent').val(g.urgent_days || '');
+            $('#gPpType').val(g.proposer_type || ''); ppMode();
+            if (g.proposer_type === 'user') {
+                loadDepts($('#gPpDept'), function () {
+                    findPersonDept(g.proposer_id, function (dep) {
+                        if (dep) { $('#gPpDept').val(String(dep)); loadDeptPeople(dep, $('#gPpPerson'), g.proposer_id); }
+                    });
+                });
+            } else if (g.proposer_type) {
+                $('#gPpKw').val(g.proposer_label || '').attr('data-id', g.proposer_id || '');
+            }
+            ppSyncTag();
             BINDS = $.map(r.binds || [], function (b) {
                 return { bind_type: b.bind_type, bind_id: b.bind_id, bind_label: b.bind_label,
                          sel_parts: b.sel_parts ? JSON.parse(b.sel_parts) : null };
@@ -1544,6 +1651,9 @@ function openLogModal(id) {
         $('#logMTitle').text('新增紀錄');
         $('#newItemsWrap').show();
         $('#gFileHint').text('尚未儲存前檔案先暫存，按「儲存」時自動掛到這筆紀錄。');
+        $('#gPpType').val(''); $('#gPpKw').val('').removeAttr('data-id');
+        $('#gPpPerson').empty().append($('<option value="">選人員</option>'));
+        ppSyncTag(); ppMode();
         $('#qInputBody').empty(); qRowAdd(null);
         renderBinds();
         openMask('logMask');
@@ -1669,7 +1779,8 @@ function loadDeptPeople(deptId, $sel, keepId, onDone) {
     apiGet('dept_people', { dept_id: deptId }).done(function (r) {
         if (r.success) {
             $.each(r.rows || [], function (i, p) {
-                $('<option>').val(p.id).text(p.display).attr('data-name', p.label).appendTo($sel);
+                $('<option>').val(p.id).text(p.display).attr('data-name', p.label)
+                    .attr('data-post', $.trim((p.dept || '') + ' ' + (p.position || ''))).appendTo($sel);
             });
         }
         if (keepId) $sel.val(String(keepId));
@@ -1834,10 +1945,11 @@ $('#btnSaveLog').on('click', function () {
         $('#qInputBody tr').each(function (idx) {
             var $tr = $(this), q = $.trim($tr.find('.q-q').val());
             if (!q) return;
-            var tt = $tr.find('.q-tt').val(), tid = '', tlabel = '';
+            var tt = $tr.find('.q-tt').val(), tid = '', tlabel = '', tpost = '';
             if (tt === 'user') {
                 tid = $tr.find('.q-person').val() || '';
                 tlabel = $tr.find('.q-person option:selected').attr('data-name') || '';
+                tpost = $tr.find('.q-person option:selected').attr('data-post') || '';
                 if (!tid) bad = bad || ('第 ' + (idx + 1) + ' 條：公司內部要選到「人員」');
             } else if (tt) {
                 tid = $tr.find('.q-tn').attr('data-id') || '';
@@ -1847,18 +1959,18 @@ $('#btnSaveLog').on('click', function () {
             var ad = $tr.find('.q-ad').val();
             if (ad && ad > TODAY) bad = bad || ('第 ' + (idx + 1) + ' 條：提出日期不可以是未來日期');
             items.push({ question: q, target_type: tt || '', target_id: tid, target_label: tlabel,
-                         target_contact: $.trim($tr.find('.q-tc').val()), asked_at: ad });
+                         target_post: tpost, target_contact: $.trim($tr.find('.q-tc').val()), asked_at: ad });
         });
         if (bad) { alert(bad); return; }
     }
 
     var $btn = $(this).prop('disabled', true);
-    apiPost('save_log', {
+    apiPost('save_log', $.extend(ppCollect(), {
         id: EDIT_ID, title: $.trim($('#gTitle').val()), log_type: $('#gType').val(),
         visibility: $('#gVis').val(), deadline: $('#gDeadline').val(), remind_before_minutes: remind,
         urgent_days: $.trim($('#gUrgent').val()), note: $.trim($('#gNote').val()),
         binds: JSON.stringify(BINDS), items: JSON.stringify(items), temp_files: JSON.stringify(TEMP_FILES)
-    }).done(function (r) {
+    })).done(function (r) {
         $btn.prop('disabled', false);
         if (!okOrAlert(r)) return;
         closeMask('logMask');
@@ -1880,7 +1992,9 @@ function renderDetail() {
     var g = CUR.log, w = CUR.log.can_write && CAN_EDIT;
     $('#detNo').text(g.log_no + '　' + g.title);
     $('#detSub').text((DICT.log_types[g.log_type] || '未分類') + ' ／ ' + dispDate(g.created_at)
-        + ' ／ ' + (g.owner_name || '') + ' ／ ' + (DICT.visibility[g.visibility] || ''));
+        + ' ／ ' + (g.owner_name || '')
+        + (g.proposer_label ? ('　提案人：' + (g.proposer_post ? g.proposer_post + ' ' : '') + g.proposer_label) : '')
+        + ' ／ ' + (DICT.visibility[g.visibility] || ''));
 
     var $bd = $('#detBinds').empty();
     if (!(CUR.binds || []).length) $bd.append($('<span style="font-size:12px;color:#B6BEC7;">未綁定任何對象</span>'));
@@ -2085,14 +2199,16 @@ function openAttach(url, name, isImg) {
 }
 
 /* 單一問題項 新增／編輯 */
-var ITEM_PARENT = null;
-function openItem(it, parent) {
-    ITEM_EDIT = it; ITEM_PARENT = parent || null;
+var ITEM_PARENT = null, ITEM_FROM_REPLY = null;
+function openItem(it, parent, fromReply) {
+    ITEM_EDIT = it; ITEM_PARENT = parent || null; ITEM_FROM_REPLY = fromReply || null;
     $('#itemMask .has-err').removeClass('has-err');
     $('#itemMTitle').text(it ? ('編輯第 ' + it.seq + ' 條問題')
         : (ITEM_PARENT ? ('第 ' + ITEM_PARENT.seq + ' 條的延伸問題') : '新增問題'));
-    $('#itemParentHint').toggle(!!ITEM_PARENT)
-        .text(ITEM_PARENT ? ('由第 ' + ITEM_PARENT.seq + ' 條衍生：' + ITEM_PARENT.question) : '');
+    $('#itemParentHint').toggle(!!ITEM_PARENT).text(ITEM_PARENT
+        ? ('由第 ' + ITEM_PARENT.seq + ' 條衍生：' + ITEM_PARENT.question
+           + (ITEM_FROM_REPLY ? ('　／ ' + dispDate(ITEM_FROM_REPLY.replied_on) + ' 的回覆：' + ITEM_FROM_REPLY.content) : ''))
+        : '');
     $('#iQuestion').val(it ? it.question : '');
     $('#iContact').val(it ? (it.target_contact || '') : '');
     $('#iAsked').val(it ? (it.asked_at || TODAY) : TODAY);
@@ -2188,10 +2304,11 @@ $('#btnSaveItem').on('click', function () {
     $('#itemMask .has-err').removeClass('has-err');
     var q = $.trim($('#iQuestion').val());
     if (!q) { $('#iQuestion').closest('.fld').addClass('has-err'); $('#eIQuestion').text('請填寫問題內容'); return; }
-    var tt = $('#iTargetType').val(), tid = '', tlabel = '';
+    var tt = $('#iTargetType').val(), tid = '', tlabel = '', tpost = '';
     if (tt === 'user') {
         tid = $('#iPerson').val() || '';
         tlabel = $('#iPerson option:selected').attr('data-name') || '';
+        tpost = $('#iPerson option:selected').attr('data-post') || '';
         if (!tid) { $('#iPerson').closest('.fld').addClass('has-err'); $('#eIPerson').text('請選擇人員'); return; }
     } else {
         tid = $('#iTargetKw').attr('data-id') || '';
@@ -2209,7 +2326,7 @@ $('#btnSaveItem').on('click', function () {
         log_id: lid, id: ITEM_EDIT ? ITEM_EDIT.id : 0,
         parent_item_id: (!ITEM_EDIT && ITEM_PARENT) ? ITEM_PARENT.id : '',
         question: q,
-        target_type: tt, target_id: tid, target_label: tlabel,
+        target_type: tt, target_id: tid, target_label: tlabel, target_post: tpost,
         target_contact: $.trim($('#iContact').val()), asked_at: ad,
         follow_up_days: $.trim($('#iFollowUp').val())
     }).done(function (r) {
@@ -2246,6 +2363,7 @@ $('#btnSaveReply').on('click', function () {
     if (!content) { $('#rContent').closest('.fld').addClass('has-err'); $('#eRContent').text('請填寫回覆內容'); return; }
     var d = $('#rDate').val();
     if (d && d > TODAY) { $('#rDate').closest('.fld').addClass('has-err'); $('#eRDate').text('回覆日期不可以是未來日期'); return; }
+    if (!$('#rChannel').val()) { $('#rChannel').closest('.fld').addClass('has-err'); alert('請選擇回覆方式'); return; }
 
     var $btn = $(this).prop('disabled', true);
     var lid = CUR.log.id;

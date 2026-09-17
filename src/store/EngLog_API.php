@@ -203,8 +203,15 @@ if ($action === 'list') {
             $where[] = "(t.log_no LIKE ? OR t.title LIKE ? OR t.note LIKE ? OR t.conclusion LIKE ?
                      OR EXISTS(SELECT 1 FROM eng_log_bind b WHERE b.log_id=t.id AND (b.bind_label LIKE ? OR b.bind_id LIKE ?))
                      OR EXISTS(SELECT 1 FROM eng_log_item i WHERE i.log_id=t.id AND (i.question LIKE ? OR i.target_label LIKE ? OR i.target_contact LIKE ? OR i.conclusion LIKE ?))
-                     OR EXISTS(SELECT 1 FROM eng_log_reply rp WHERE rp.log_id=t.id AND (rp.content LIKE ? OR rp.reply_by LIKE ?)))";
-            $params = array_merge($params, array_fill(0, 12, $like));
+                     OR EXISTS(SELECT 1 FROM eng_log_reply rp WHERE rp.log_id=t.id AND (rp.content LIKE ? OR rp.reply_by LIKE ?))
+                     OR t.proposer_label LIKE ?
+                     OR EXISTS(SELECT 1 FROM eng_log_index x
+                               LEFT JOIN d_setting d ON d.d_id = x.part_d_id
+                               LEFT JOIN customer_list c ON c.customer_id = x.customer_id
+                               LEFT JOIN maker_list m ON m.maker_id_no = x.maker_id_no
+                               WHERE x.log_id=t.id AND (d.D_Setting_Id LIKE ? OR x.customer_id LIKE ?
+                                     OR c.customer LIKE ? OR x.maker_id_no LIKE ? OR m.maker_id LIKE ?)))";
+            $params = array_merge($params, array_fill(0, 18, $like));
         }
     }
     // 三軸篩選一律吃索引表
@@ -217,6 +224,8 @@ if ($action === 'list') {
 
     $type = trim((string)($_GET['log_type'] ?? ''));
     if ($type !== '') { $where[] = "t.log_type = ?"; $params[] = $type; }
+    $prop = trim((string)($_GET['proposer'] ?? ''));
+    if ($prop !== '') { $where[] = "t.proposer_label = ?"; $params[] = $prop; }
     $mine = trim((string)($_GET['mine'] ?? ''));
     if ($mine === '1') { $where[] = "t.user_id = ?"; $params[] = (int)$P['uid']; }
     $d1 = el_norm_date($_GET['d1'] ?? ''); if ($d1) { $where[] = "DATE(t.created_at) >= ?"; $params[] = $d1; }
@@ -326,8 +335,10 @@ if ($action === 'get') {
                           WHERE r.item_id IN ({$in}) ORDER BY r.replied_on, r.id")->fetchAll(PDO::FETCH_ASSOC);
         foreach ($rs as $x) $replies[(int)$x['item_id']][] = $x;
     }
-    /* 公司內部的對象要連「部門 職稱」一起顯示（使用者要求，不能只有人名）。
-       依 people_lib 的挑法取職級最高那筆，兼任者顯示的就是他真正的簽核身分。 */
+    /* 公司內部的對象要連「部門 職稱」一起顯示。
+       ★ 一律以 eng_log_item.target_post（選定當下記下來的那筆）為準：
+       兼任者事後回推會取職級最高那筆，把使用者選的兼任職務顯示成主要職務（實際踩過）。
+       只有沒存過 target_post 的舊資料才回推。 */
     $postMap = [];
     $uids = [];
     foreach ($items as $it) if (($it['target_type'] ?? '') === 'user' && $it['target_id'] !== null) $uids[] = (int)$it['target_id'];
@@ -350,8 +361,9 @@ if ($action === 'get') {
     }
     $def = el_default_follow_up_days();
     foreach ($items as &$it) {
+        $saved = trim((string)($it['target_post'] ?? ''));
         $it['target_post'] = (($it['target_type'] ?? '') === 'user')
-            ? (string)($postMap[(int)$it['target_id']] ?? '') : '';
+            ? ($saved !== '' ? $saved : (string)($postMap[(int)$it['target_id']] ?? '')) : '';
         $it['replies'] = $replies[(int)$it['id']] ?? [];
         $it['wait_days'] = ($it['status'] === 'waiting') ? el_item_waiting_days($db, (string)$it['asked_at']) : 0;
         $it['overdue'] = ($it['status'] === 'waiting' && $it['wait_days'] >= (int)($it['follow_up_days'] ?? $def));
@@ -472,8 +484,8 @@ if ($action === 'save_log') {
             $mx->execute([$id]);
             $seq = (int)$mx->fetchColumn();
             $insI = $db->prepare("INSERT INTO eng_log_item (log_id, seq, question, target_type, target_id, target_label,
-                                  target_contact, asked_at, status, follow_up_days, remind_sent, created_at)
-                                  VALUES (?,?,?,?,?,?,?,?, 'waiting', ?, 0, ?)");
+                                  target_post, target_contact, asked_at, status, follow_up_days, remind_sent, created_at)
+                                  VALUES (?,?,?,?,?,?,?,?,?, 'waiting', ?, 0, ?)");
             foreach ($items as $it) {
                 $q = trim((string)($it['question'] ?? ''));
                 if ($q === '') continue;
@@ -482,6 +494,7 @@ if ($action === 'save_log') {
                 $ti = trim((string)($it['target_id'] ?? ''));
                 $insI->execute([$id, ++$seq, $q, $tt, ($ti === '' ? null : $ti),
                                 (trim((string)($it['target_label'] ?? '')) ?: null),
+                                (trim((string)($it['target_post'] ?? '')) ?: null),
                                 (trim((string)($it['target_contact'] ?? '')) ?: null),
                                 (el_norm_date($it['asked_at'] ?? '') ?? $today),
                                 el_norm_int($it['follow_up_days'] ?? ''), $now]);
@@ -569,6 +582,7 @@ if ($action === 'item_save') {
     $ti = trim((string)($_POST['target_id'] ?? ''));
     $tl = trim((string)($_POST['target_label'] ?? ''));
     $tc = trim((string)($_POST['target_contact'] ?? ''));
+    $tp = trim((string)($_POST['target_post'] ?? ''));   // 使用者實際選的部門職務（兼任者關鍵）
     // 對象一定要帶 ID（同 save_log）：只打名字的話對方改名就對應不到，索引也展不出來
     if ($tt !== null && $ti === '') jerr('對象要從清單選擇（只打名字的話日後對方改名就對應不到）');
     $asked = el_norm_date($_POST['asked_at'] ?? '') ?? $today;
@@ -585,8 +599,9 @@ if ($action === 'item_save') {
             if (!$cur) { $db->rollBack(); jerr('查無此問題項，請重新整理'); }
             $resend = ((string)$cur['asked_at'] !== (string)$asked || (string)$cur['follow_up_days'] !== (string)$fud) ? 0 : (int)$cur['remind_sent'];
             $db->prepare("UPDATE eng_log_item SET question=?, target_type=?, target_id=?, target_label=?,
-                          target_contact=?, asked_at=?, follow_up_days=?, remind_sent=?, updated_at=? WHERE id=?")
-               ->execute([$q, $tt, ($ti === '' ? null : $ti), ($tl === '' ? null : $tl),
+                          target_post=?, target_contact=?, asked_at=?, follow_up_days=?, remind_sent=?,
+                          updated_at=? WHERE id=?")
+               ->execute([$q, $tt, ($ti === '' ? null : $ti), ($tl === '' ? null : $tl), ($tp === '' ? null : $tp),
                           ($tc === '' ? null : $tc), $asked, $fud, $resend, $now, $itemId]);
         } else {
             $mx = $db->prepare("SELECT COALESCE(MAX(seq),0)+1 FROM eng_log_item WHERE log_id=?");
@@ -599,10 +614,11 @@ if ($action === 'item_save') {
                 if (!$pc->fetchColumn()) { $db->rollBack(); jerr('要延伸的那一條問題不存在，請重新整理'); }
             }
             $db->prepare("INSERT INTO eng_log_item (log_id, parent_item_id, seq, question, target_type, target_id,
-                          target_label, target_contact, asked_at, status, follow_up_days, remind_sent, created_at)
-                          VALUES (?,?,?,?,?,?,?,?,?, 'waiting', ?, 0, ?)")
+                          target_label, target_post, target_contact, asked_at, status, follow_up_days, remind_sent, created_at)
+                          VALUES (?,?,?,?,?,?,?,?,?,?, 'waiting', ?, 0, ?)")
                ->execute([$logId, $parent, (int)$mx->fetchColumn(), $q, $tt, ($ti === '' ? null : $ti),
-                          ($tl === '' ? null : $tl), ($tc === '' ? null : $tc), $asked, $fud, $now]);
+                          ($tl === '' ? null : $tl), ($tp === '' ? null : $tp), ($tc === '' ? null : $tc),
+                          $asked, $fud, $now]);
             $itemId = (int)$db->lastInsertId();
         }
         el_reindex($db, $logId);      // 對象改了，索引要跟著更新
