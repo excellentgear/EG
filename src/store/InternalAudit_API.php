@@ -1647,24 +1647,46 @@ case 'meeting_create': {
                 }
             }
         }
-        // 姓名與部門職稱都以「會議日期當時」為準（現在已離職的人，補歷史會議一樣印得出當時的職稱）
+        /* 每個人印哪一個部門職稱（使用者 2026-09-16 拍板）：
+           ①名單上指定的那個職務，**必須在會議日期當天真的成立**才採用；
+           ②**當天還不是那個職務，就印他當時真正的身分**，不可以把名單上的職務硬印上去
+             （例：高志宏的「品管課 課長」是 2025-12-09 才兼任的，2025-11-03 的會議就該印技術課工程師）
+             ——使用者原話「若當時還不是品管課長，那就不該顯示為品管課長，避免補舊資料時身分錯亂」。
+           ③但這件事要**主動回報**，不能安靜換掉：下面會把被換掉的人收進 $shifted 回給前端提示，
+             否則使用者會以為系統印錯（這正是他這次回報的情境）。
+           名稱一律用 id 回查**現名**，不要用快照裡凍結的舊名（部門早就由「技術部」改名「技術課」）。 */
         $postByKey = $nameById = [];
         foreach (eg_people_posts_asof($db, [], $mdate) as $p) {
             $postByKey[ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id'])] = $p;
             $nameById[(int)$p['id']] = (string)$p['user_cname'];
         }
+        $shifted = [];
         $ins = $db->prepare("INSERT INTO meeting_attendee (meeting_id, user_id, user_name, dept_name,
                                  position_name, is_chair, signed) VALUES (?,?,?,?,?,?,0)");
         foreach ($att as $a) {
-            $hit = $postByKey[ia_post_key($a['id'], $a['dept_id'], $a['position_id'])] ?? null;
-            if ($hit) { $dept = (string)$hit['dept_name']; $pos = (string)$hit['position_name']; }
-            else { $idt = ia_identity_asof($db, $a['id'], $mdate); $dept = $idt['dept']; $pos = $idt['position']; }
-            $ins->execute([$mid, $a['id'], $nameById[$a['id']] ?? $a['name'], $dept ?: null, $pos ?: null,
+            $nm  = $nameById[$a['id']] ?? $a['name'];
+            $key = ia_post_key($a['id'], $a['dept_id'], $a['position_id']);
+            if (($a['dept_id'] || $a['position_id']) && isset($postByKey[$key])) {
+                $dept = ia_dept_name_now($db, (int)$a['dept_id']);
+                $pos  = ia_position_name_now($db, (int)$a['position_id']);
+            } else {
+                $idt = ia_identity_asof($db, $a['id'], $mdate);
+                $dept = $idt['dept']; $pos = $idt['position'];
+                if ($a['dept_id'] || $a['position_id']) {
+                    $want = trim(ia_dept_name_now($db, (int)$a['dept_id']) . ' ' . ia_position_name_now($db, (int)$a['position_id']));
+                    $got  = trim($dept . ' ' . $pos);
+                    if ($want !== '' && $want !== $got) {
+                        $shifted[] = ['name' => $nm, 'listed' => $want, 'actual' => ($got !== '' ? $got : '（當時查不到職務）')];
+                    }
+                }
+            }
+            $ins->execute([$mid, $a['id'], $nm, $dept ?: null, $pos ?: null,
                            $a['id'] === $chairId ? 1 : 0]);
         }
         $db->prepare("UPDATE ia_case SET `$col`=?, updated_at=NOW() WHERE case_id=?")->execute([$mid, $cid]);
         $db->commit();
-        jout(['meeting_id' => $mid, 'existed' => false, 'attendees' => count($att), 'from_team' => $fromTeam]);
+        jout(['meeting_id' => $mid, 'existed' => false, 'attendees' => count($att),
+              'from_team' => $fromTeam, 'shifted' => $shifted, 'meeting_date' => $mdate]);
     } catch (Throwable $e) { $db->rollBack(); jerr('建立會議紀錄失敗：' . $e->getMessage(), 500); }
 }
 

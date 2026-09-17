@@ -1459,9 +1459,10 @@ function ia_dept_head_asof(PDO $db, ?int $deptId, ?string $bizDate): ?array
             $did = (int)($s['department_id'] ?? 0);
             if (!$pid || !in_array($did, $deptIds, true)) continue;
             if (!isset($lvl[$pid])) continue;                     // 沒職級＝不是主管
+            // 名稱一律用 id 回查現名（快照裡是當時凍結的舊名，部門改過名就會印出已經不用的名字）
             $cand = ['id'=>$uid, 'name'=>(string)$ur['user_cname'],
-                     'position_name'=>(string)($s['position_name'] ?? ''),
-                     'department_name'=>(string)($s['department_name'] ?? ''),
+                     'position_name'=>ia_position_name_now($db, $pid, (string)($s['position_name'] ?? '')),
+                     'department_name'=>ia_dept_name_now($db, $did, (string)($s['department_name'] ?? '')),
                      'level'=>$lvl[$pid]];
             if ($best === null || $cand['level'] < $best['level']) $best = $cand;   // 職級最高＝level 最小
         }
@@ -1493,7 +1494,42 @@ function ia_identity_asof(PDO $db, int $uid, ?string $bizDate): array
         foreach ($snap as $s) { if (!empty($s['is_main'])) { $pick = $s; break; } }
         if ($pick === null) $pick = $snap[0];
     }
-    return ['dept'=>(string)($pick['department_name'] ?? ''), 'position'=>(string)($pick['position_name'] ?? '')];
+    /* 名稱一律用 department_id／position_id **回查目前的名稱**，查不到才退回快照裡凍結的舊名
+       （2026-09-16 使用者回報：會議紀錄印出「技術部」，但 department 表裡根本沒有這個名字）。
+       原因：`user_position_history` 的快照把「當時的名稱」也一起存進 JSON，部門後來由
+       「技術部」改名成「技術課」，快照裡仍是舊名。**改名不是改組織**——同一個 department_id
+       就是同一個單位，要印現在的名字；只有那個 id 真的被刪掉了才退回快照名（至少還看得懂）。
+       共用的 eg_people_posts_asof() 本來就是這樣做，這裡沒跟上＝兩份規則走鐘（鐵律4）。 */
+    return ['dept'     => ia_dept_name_now($db, (int)($pick['department_id'] ?? 0), (string)($pick['department_name'] ?? '')),
+            'position' => ia_position_name_now($db, (int)($pick['position_id'] ?? 0), (string)($pick['position_name'] ?? ''))];
+}
+
+/** 部門現名（依 id）；id 不存在才回退快照裡的舊名。整份表只查一次 */
+function ia_dept_name_now(PDO $db, int $id, string $fallback = ''): string
+{
+    static $map = null;
+    if ($map === null) {
+        $map = [];
+        try {
+            foreach ($db->query("SELECT id, name FROM department")->fetchAll(PDO::FETCH_ASSOC) as $r)
+                $map[(int)$r['id']] = (string)$r['name'];
+        } catch (Throwable $e) {}
+    }
+    return $map[$id] ?? $fallback;
+}
+
+/** 職稱現名（依 id）；id 不存在才回退快照裡的舊名 */
+function ia_position_name_now(PDO $db, int $id, string $fallback = ''): string
+{
+    static $map = null;
+    if ($map === null) {
+        $map = [];
+        try {
+            foreach ($db->query("SELECT id, name FROM position")->fetchAll(PDO::FETCH_ASSOC) as $r)
+                $map[(int)$r['id']] = (string)$r['name'];
+        } catch (Throwable $e) {}
+    }
+    return $map[$id] ?? $fallback;
 }
 
 /* ============================ 列印簽章格解析 ============================ */
