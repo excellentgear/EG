@@ -803,6 +803,7 @@ input[type=number]{-moz-appearance:textfield;}
 <!-- Chart.js 必須排在 custom.min.js 之後（custom.min.js 內有 Chart v2 的相容 patch，
      順序顛倒會被覆蓋）。用站內本地檔不用 CDN：本系統是內網，連不到外網時 CDN 會整頁圖表消失。 -->
 <?php if ($SHOW_STATS): ?><script src="../../resource/js/Chart.min.js"></script><?php endif; ?>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= $avStamp ?>"></script>
 <script>
 const API = '../../src/store/Leave_API.php';
