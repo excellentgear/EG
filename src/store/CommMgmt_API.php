@@ -204,8 +204,31 @@ if ($action === 'meta') {
         'stamp_list'=> $P['canAdmin'] ? cm_stamp_template_list($db) : [],
         'ranks'     => cm_rank_list($db),
         'types'     => CM_TYPES, 'kinds' => CM_PARTY_KINDS, 'channels' => CM_CHANNELS, 'status' => CM_STATUS,
+        'freq_units'=> CM_FREQ_UNITS,
+        'need_sign' => ((string)($set['cm_need_sign'] ?? '1')) !== '0',
+        'depts'     => cm_dept_list($db),
         'people'    => eg_people_list($db, []),
     ]);
+}
+
+/* ---- 依類別連動挑對象：客戶／供應商模糊搜尋（打名稱或編號都找得到） ---- */
+if ($action === 'party_search') {
+    $kind = cmS($_GET['kind'] ?? '', 12);
+    if (!in_array($kind, ['customer', 'supplier'], true)) jerr('只有客戶與供應商可以搜尋');
+    jout(['rows' => cm_party_search($db, $kind, cmS($_GET['kw'] ?? '', 60))]);
+}
+
+/* ---- 某客戶／供應商底下的聯絡人（代表人下拉；沒登錄聯絡人時前端仍可手動輸入） ---- */
+if ($action === 'party_contacts') {
+    $kind = cmS($_GET['kind'] ?? '', 12);
+    if (!in_array($kind, ['customer', 'supplier'], true)) jout(['rows' => []]);
+    jout(['rows' => cm_party_contacts($db, $kind, cmS($_GET['ref_id'] ?? '', 40))]);
+}
+
+/* ---- 某部門底下的人員（依業務日期回推當時職務，主職與兼任都列＝ai-rules/22 + 08 第五節） ---- */
+if ($action === 'dept_people') {
+    $d = cmDate($_GET['date'] ?? '') ?: cmNow($db)['d'];
+    jout(['rows' => cm_dept_people($db, (int)($_GET['dept_id'] ?? 0), $d, !empty($_GET['include_sub'])), 'date' => $d]);
 }
 
 /* ---- 填表身分＋主管解析預覽（建單時就讓使用者看到會送給誰簽） ---- */
@@ -261,6 +284,8 @@ if ($action === 'rec_list') {
     $rows  = array_slice($rows, ($page - 1) * $per, $per);
     foreach ($rows as $i => $r) {
         $rows[$i]['items']    = cmItems($db, (int)$r['rec_id']);
+        // 清單上就要看得到附件數量並能直接點開（使用者要求），所以連附件一起帶回來
+        $rows[$i]['attaches'] = cmAttaches($db, (int)$r['rec_id']);
         $stage = cmStage($r);
         $rows[$i]['can_sign'] = $stage !== '' && cm_can_sign($db, cmPoolOf($db, $r, $stage), $uid)['ok'];
         $rows[$i]['can_edit'] = cmCanEdit($r, $P, $uid);
@@ -307,6 +332,39 @@ if ($action === 'rec_save') {
     $party = cmS($_POST['party_name'] ?? '', 200);
     if ($party === '') jerr('請填寫利害關係者公司/代表人');
 
+    /* 依類別驗證挑到的對象（前端連動選完後，後端用同一批資料來源再核對一次＝鐵律8：
+       不可只擋 UI，直打 API 就能塞一個根本不存在的客戶編號或別部門的人進來） */
+    $partyRef     = cmS($_POST['party_ref_id'] ?? '', 40);
+    $partyUser    = (int)($_POST['party_user_id'] ?? 0);
+    $partyCtcId   = (int)($_POST['party_contact_id'] ?? 0);
+    $partyCtcName = cmS($_POST['party_contact_name'] ?? '', 100);
+    if ($kind === 'customer' || $kind === 'supplier') {
+        if ($partyRef === '') jerr($kind === 'customer' ? '請從清單選擇客戶' : '請從清單選擇供應商');
+        $hit = null;
+        foreach (cm_party_search($db, $kind, $partyRef, 50) as $x) if ((string)$x['id'] === $partyRef) { $hit = $x; break; }
+        if (!$hit) jerr(($kind === 'customer' ? '客戶' : '供應商') . '編號不存在：' . $partyRef);
+        $party = (string)($hit['full_name'] ?: $hit['name']);
+        if ($partyCtcId > 0) {
+            $ok = null;
+            foreach (cm_party_contacts($db, $kind, $partyRef) as $ct) if ((int)$ct['contact_id'] === $partyCtcId) { $ok = $ct; break; }
+            if (!$ok) jerr('這位聯絡人不屬於所選的對象，請重新選擇');
+            $partyCtcName = (string)$ok['name'];
+        }
+        $partyUser = 0;
+    } elseif ($kind === 'employee') {
+        $deptRef = (int)$partyRef;
+        if ($deptRef <= 0) jerr('請選擇員工所屬部門');
+        if ($partyUser <= 0) jerr('請選擇員工');
+        $ok = null;
+        foreach (cm_dept_people($db, $deptRef, $commDate) as $p) if ((int)$p['id'] === $partyUser) { $ok = $p; break; }
+        if (!$ok) jerr('這位員工不在所選部門（溝通日期當時），請重新選擇');
+        $party        = $ok['dept_name'] . '　' . $ok['name'];
+        $partyCtcName = $ok['name'] . ($ok['pos_name'] ? '（' . $ok['pos_name'] . '）' : '');
+        $partyCtcId   = 0;
+    } else {                       // other：完全手填，不綁任何主檔
+        $partyRef = ''; $partyUser = 0; $partyCtcId = 0;
+    }
+
     $ch = [];
     foreach (array_keys(CM_CHANNELS) as $c) $ch[$c] = !empty($_POST['ch_' . $c]) ? 1 : 0;
     if (!array_sum($ch)) jerr('請至少勾選一種溝通管道');
@@ -346,10 +404,12 @@ if ($action === 'rec_save') {
             $recNo = (string)$old['rec_no'];
             if ($recNo === '' || substr($recNo, 0, 8) !== str_replace('-', '', $commDate)) $recNo = cm_next_rec_no($db, $commDate);
             $db->prepare("UPDATE comm_record SET rec_no=?, comm_type=?, comm_date=?, party_kind=?, party_kind_other=?,
-                            party_name=?, ch_phone=?, ch_face=?, ch_email=?, ch_meeting=?, ch_other=?, ch_other_text=?,
+                            party_name=?, party_ref_id=?, party_user_id=?, party_contact_id=?, party_contact_name=?,
+                            ch_phone=?, ch_face=?, ch_email=?, ch_meeting=?, ch_other=?, ch_other_text=?,
                             maker_id=?, maker_name=?, maker_dept_id=?, maker_dept_name=?, maker_pos_id=?, maker_pos_name=?,
                             maker_pos_sort=?, remark=?, updated_at=? WHERE rec_id=?")
                ->execute([$recNo, $type, $commDate, $kind, $kindOther, $party,
+                          $partyRef ?: null, $partyUser ?: null, $partyCtcId ?: null, $partyCtcName ?: null,
                           $ch['phone'], $ch['face'], $ch['email'], $ch['meeting'], $ch['other'], $chOther,
                           $makerId, cm_user_name($db, $makerId), $idn['department_id'], $idn['department_name'],
                           $idn['position_id'], $idn['position_name'], $idn['pos_sort'],
@@ -358,11 +418,13 @@ if ($action === 'rec_save') {
         } else {
             $recNo = cm_next_rec_no($db, $commDate);
             $db->prepare("INSERT INTO comm_record (rec_no, comm_type, comm_date, party_kind, party_kind_other, party_name,
+                            party_ref_id, party_user_id, party_contact_id, party_contact_name,
                             ch_phone, ch_face, ch_email, ch_meeting, ch_other, ch_other_text,
                             maker_id, maker_name, maker_dept_id, maker_dept_name, maker_pos_id, maker_pos_name, maker_pos_sort,
                             status, remark, created_by, created_by_name, created_at, updated_at)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?,?,?)")
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?,?,?)")
                ->execute([$recNo, $type, $commDate, $kind, $kindOther, $party,
+                          $partyRef ?: null, $partyUser ?: null, $partyCtcId ?: null, $partyCtcName ?: null,
                           $ch['phone'], $ch['face'], $ch['email'], $ch['meeting'], $ch['other'], $chOther,
                           $makerId, cm_user_name($db, $makerId), $idn['department_id'], $idn['department_name'],
                           $idn['position_id'], $idn['position_name'], $idn['pos_sort'],
@@ -411,6 +473,41 @@ if ($action === 'rec_submit') {
     $now = cmNow($db);
     $biz = (string)$r['comm_date'];
     $mgr = cm_dept_manager_pool($db, (int)$r['maker_id'], (int)$r['maker_dept_id'], (int)$r['maker_pos_sort'], $biz);
+
+    /* 模組設定關掉簽核時：送出當下自動簽核完成、直接結案，不發任何待簽通知。
+       依 ai-rules/21 自動簽核三鐵則——業務日期（簽章日期）＝該單溝通日期、與精確時間戳分離存放，
+       兩關的時間刻意錯開 5~30 分鐘且不跨日，簽核人取各關卡原本的合格簽核池第一位、池空才退回最高核准人員。 */
+    if ((string)(cm_settings($db)['cm_need_sign'] ?? '1') === '0') {
+        $gmPool  = cm_gm_pool($db, $biz);
+        $mgrOne  = $mgr['pool'][0] ?? null;
+        $gmOne   = $gmPool[0] ?? (eg_org_user($db, 'top_approver') ?: null);
+        $t1 = date('Y-m-d H:i:s', strtotime($now['n']) + random_int(300, 1800));
+        if (substr($t1, 0, 10) !== substr($now['n'], 0, 10)) $t1 = substr($now['n'], 0, 10) . ' 23:59:00';
+        $t2 = date('Y-m-d H:i:s', strtotime($t1) + random_int(300, 1800));
+        if (substr($t2, 0, 10) !== substr($now['n'], 0, 10)) $t2 = substr($now['n'], 0, 10) . ' 23:59:30';
+
+        $db->prepare("UPDATE comm_record SET status='closed', mgr_skip=?, submit_date=?, submitted_at=?,
+                        mgr_user_id=?, mgr_name=?, mgr_dept_name=?, mgr_pos_name=?, mgr_date=?, mgr_at=?,
+                        gm_user_id=?, gm_name=?, gm_date=?, gm_at=?,
+                        reject_by=NULL, reject_at=NULL, reject_note=NULL, updated_at=? WHERE rec_id=?")
+           ->execute([$mgr['skip'] ? 1 : 0, $now['d'], $now['n'],
+                      $mgrOne['id'] ?? null, $mgrOne['name'] ?? null, $mgrOne['dept_name'] ?? null, $mgrOne['pos_name'] ?? null,
+                      $mgrOne ? $biz : null, $mgrOne ? $t1 : null,
+                      $gmOne['id'] ?? null, $gmOne['name'] ?? ($gmOne['user_cname'] ?? null), $gmOne ? $biz : null, $gmOne ? $t2 : null,
+                      $now['n'], (int)$r['rec_id']]);
+        // 紀錄仍要進共用的 approval_record，否則「列印與簽核紀錄」查不到＝這個模組沒有可追溯性（ai-rules/23 鐵則二）
+        foreach ([[CM_LEVEL_MGR, $mgrOne, $t1], [CM_LEVEL_GM, $gmOne, $t2]] as $lv) {
+            if (!$lv[1]) continue;
+            $aid = eg_approval_submit($db, 'comm_record', (int)$r['rec_id'], $lv[0], $uid, $uname);
+            $db->prepare("UPDATE approval_record SET status='approved', approver_id=?, approver_name=?, decided_at=?, note=?
+                          WHERE id=?")
+               ->execute([(int)$lv[1]['id'], (string)($lv[1]['name'] ?? $lv[1]['user_cname'] ?? ''), $lv[2],
+                          '（系統自動簽核：模組設定為免簽核）', $aid]);
+        }
+        cmNotifyResult($db, $r, (int)$r['maker_id'], 'approved', '模組設定為免簽核，送出後已自動完成', $uid, '系統');
+        jout(['status'=>'closed', 'mgr_skip'=>$mgr['skip'] ? 1 : 0, 'pool'=>[],
+              'msg'=>'本模組目前設定為免簽核，已自動完成確認並結案。']);
+    }
 
     // 免簽＝往上找到最上層都沒有合格主管（紙本「若由主管填寫則此格免簽」），直接進總經理確認
     $skip   = $mgr['skip'] ? 1 : 0;
@@ -607,42 +704,208 @@ if ($action === 'ctrl_list') {
     $st = $db->prepare("SELECT * FROM comm_ctrl WHERE $where ORDER BY sort_order, ctrl_id
                         LIMIT " . (int)$per . " OFFSET " . (($page - 1) * $per));
     $st->execute($a);
-    jout(['rows'=>$st->fetchAll(PDO::FETCH_ASSOC), 'total'=>$total, 'page'=>$page, 'per'=>$per,
-          'print'=>cm_print_meta($db, 'ctrl')]);
+    $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($rows as $i => $r) {
+        // 頻率顯示字串一律由 cm_freq_text() 組（鐵律4：不要在前端再拼一次「每 N 單位 M 次」）
+        $rows[$i]['freq_text']     = cm_freq_text((int)$r['freq_n'], (string)$r['freq_unit'], (int)$r['freq_times']);
+        $rows[$i]['targets']       = cm_ctrl_targets($db, (int)$r['ctrl_id']);
+        $rows[$i]['target_labels'] = cm_ctrl_target_labels($db, (int)$r['ctrl_id']);
+    }
+    jout(['rows'=>$rows, 'total'=>$total, 'page'=>$page, 'per'=>$per, 'print'=>cm_print_meta($db, 'ctrl')]);
 }
 
 if ($action === 'ctrl_save') {
-    $id    = (int)($_POST['ctrl_id'] ?? 0);
-    $party = cmS($_POST['party'] ?? '', 200);
-    if ($party === '') jerr('請填寫利害關係人');
+    $id  = (int)($_POST['ctrl_id'] ?? 0);
+    $now = cmNow($db);
+    $today = $now['d'];
+
+    /* ---- 填表人：比照溝通記錄，先選部門再選人（管理員可代填，一般人固定自己） ---- */
+    $makerId = (int)($_POST['maker_id'] ?? 0);
+    if ($makerId <= 0 || !$P['canAdmin']) $makerId = $uid;
+    $makerDept = (int)($_POST['maker_dept_id'] ?? 0);
+    $mkIdn = null;
+    foreach (cm_identities($db, $makerId, $today) as $x) {
+        if (!$makerDept || (int)$x['department_id'] === $makerDept) { $mkIdn = $x; break; }
+    }
+    $maker = cm_user_name($db, $makerId) ?: $uname;
+
+    /* ---- 利害關係人：比照溝通記錄的類別連動，但**不必填到聯絡人是哪位**（開記錄表才填） ---- */
+    $kind = cmS($_POST['party_kind'] ?? '', 12);
+    if (!isset(CM_PARTY_KINDS[$kind])) jerr('請選擇利害關係人的類別');
+    $kindOther = cmS($_POST['party_kind_other'] ?? '', 100);
+    if ($kind === 'other' && $kindOther === '') jerr('類別選「其他」時請填寫說明');
+    $partyRef  = cmS($_POST['party_ref_id'] ?? '', 40);
+    $partyUser = (int)($_POST['party_user_id'] ?? 0);
+    $party     = cmS($_POST['party'] ?? '', 200);
+    if ($kind === 'customer' || $kind === 'supplier') {
+        if ($partyRef === '') jerr($kind === 'customer' ? '請從清單選擇客戶' : '請從清單選擇供應商');
+        $hit = null;
+        foreach (cm_party_search($db, $kind, $partyRef, 50) as $x) if ((string)$x['id'] === $partyRef) { $hit = $x; break; }
+        if (!$hit) jerr(($kind === 'customer' ? '客戶' : '供應商') . '編號不存在：' . $partyRef);
+        $party = (string)($hit['full_name'] ?: $hit['name']);
+        $partyUser = 0;
+    } elseif ($kind === 'employee') {
+        $deptRef = (int)$partyRef;
+        if ($deptRef <= 0) jerr('請選擇員工所屬部門');
+        if ($partyUser <= 0) jerr('請選擇員工');
+        $ok = null;
+        foreach (cm_dept_people($db, $deptRef, $today) as $p) if ((int)$p['id'] === $partyUser) { $ok = $p; break; }
+        if (!$ok) jerr('這位員工不在所選部門，請重新選擇');
+        $party = $ok['dept_name'] . '　' . $ok['name'] . ($ok['pos_name'] ? '（' . $ok['pos_name'] . '）' : '');
+    } else {
+        if ($party === '') jerr('請填寫利害關係人');
+        $partyRef = ''; $partyUser = 0;
+    }
+
     $content = cmS($_POST['content'] ?? '', 4000);
     if ($content === '') jerr('請填寫溝通內容');
-    $channel = cmS($_POST['channel'] ?? '', 200);
-    if ($channel === '') jerr('請填寫溝通管道');
-    $freq = cmS($_POST['freq'] ?? '', 100);
-    if ($freq === '') jerr('請填寫頻率（管制表只寫常態性機制，一定有頻率）');
-    $makerId = (int)($_POST['maker_id'] ?? 0);
-    $maker   = $makerId ? cm_user_name($db, $makerId) : cmS($_POST['maker_name'] ?? '', 60);
-    if ($maker === '') { $makerId = $uid; $maker = $uname; }
-    $now = cmNow($db);
+
+    /* ---- 溝通管道：比照溝通記錄的勾選（可複選＋其他可填），存成顯示字串 ---- */
+    $chSel = [];
+    foreach (array_keys(CM_CHANNELS) as $c) if (!empty($_POST['ch_' . $c])) $chSel[] = $c;
+    if (!$chSel) jerr('請至少勾選一種溝通管道');
+    $chOther = cmS($_POST['ch_other_text'] ?? '', 100);
+    if (in_array('other', $chSel, true) && $chOther === '') jerr('管道勾選「其他」時請填寫說明');
+    $channel = implode('、', array_map(function ($c) use ($chOther) {
+        return $c === 'other' ? $chOther : CM_CHANNELS[$c];
+    }, $chSel));
+
+    /* ---- 頻率：固定「每 N 單位 M 次」 ---- */
+    $fn = max(1, (int)($_POST['freq_n'] ?? 1));
+    $fu = cmS($_POST['freq_unit'] ?? 'month', 10);
+    if (!isset(CM_FREQ_UNITS[$fu])) jerr('頻率單位不正確');
+    $ft = max(1, (int)($_POST['freq_times'] ?? 1));
+    $freq = cm_freq_text($fn, $fu, $ft);
+
+    /* ---- 提醒 ---- */
+    $rEnabled = !empty($_POST['remind_enabled']) ? 1 : 0;
+    $nextDue  = cmDate($_POST['next_due_date'] ?? '');
+    $rLead    = max(0, min(365, (int)($_POST['remind_lead_days'] ?? 0)));
+    $rTime    = cmS($_POST['remind_time'] ?? '', 8);
+    if ($rTime !== '' && !preg_match('/^\d{1,2}:\d{2}$/', $rTime)) $rTime = '';
+    $targets  = json_decode((string)($_POST['targets'] ?? '[]'), true);
+    if (!is_array($targets)) $targets = [];
+    if ($rEnabled) {
+        if (!$nextDue) jerr('要自動提醒就必須填「下次應溝通日」，提醒時間是由它往前推算的');
+        if ($rTime === '') $rTime = '09:00';
+        if (!$targets) jerr('要自動提醒就必須至少指定一位提醒對象（人員或部門）');
+    }
+
     if ($id) {
-        $st = $db->prepare("SELECT created_by FROM comm_ctrl WHERE ctrl_id=? AND is_deleted=0");
+        $st = $db->prepare("SELECT created_by, remind_sent_for, next_due_date FROM comm_ctrl WHERE ctrl_id=? AND is_deleted=0");
         $st->execute([$id]);
         $own = $st->fetch(PDO::FETCH_ASSOC);
         if (!$own) jerr('查無此管制項目', 404);
         if (!$P['canAdmin'] && (int)$own['created_by'] !== $uid) jerr('只有建立者或溝通管理員可以修改', 403);
-        $db->prepare("UPDATE comm_ctrl SET maker_id=?, maker_name=?, party=?, content=?, channel=?, freq=?, remark=?,
-                        sort_order=?, updated_at=? WHERE ctrl_id=?")
-           ->execute([$makerId ?: null, $maker, $party, $content, $channel, $freq,
+        // 改了下次應溝通日＝新的一期，之前發過的提醒記號要清掉，否則新這期永遠不會提醒
+        $sentFor = ((string)$own['next_due_date'] !== (string)$nextDue) ? null : $own['remind_sent_for'];
+        $db->prepare("UPDATE comm_ctrl SET maker_id=?, maker_name=?, maker_dept_id=?, maker_dept_name=?, maker_pos_name=?,
+                        party_kind=?, party_kind_other=?, party=?, party_ref_id=?, party_user_id=?,
+                        content=?, channel=?, freq=?, freq_n=?, freq_unit=?, freq_times=?, next_due_date=?,
+                        remind_enabled=?, remind_lead_days=?, remind_time=?, remind_sent_for=?,
+                        remark=?, sort_order=?, updated_at=? WHERE ctrl_id=?")
+           ->execute([$makerId, $maker, $mkIdn['department_id'] ?? null, $mkIdn['department_name'] ?? null,
+                      $mkIdn['position_name'] ?? null, $kind, $kindOther, $party, $partyRef ?: null, $partyUser ?: null,
+                      $content, $channel, $freq, $fn, $fu, $ft, $nextDue,
+                      $rEnabled, $rLead, $rTime ?: null, $sentFor,
                       cmS($_POST['remark'] ?? '', 500), (int)($_POST['sort_order'] ?? 0), $now['n'], $id]);
     } else {
-        $db->prepare("INSERT INTO comm_ctrl (maker_id, maker_name, party, content, channel, freq, remark, sort_order,
-                        created_by, created_by_name, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-           ->execute([$makerId ?: null, $maker, $party, $content, $channel, $freq,
-                      cmS($_POST['remark'] ?? '', 500), (int)($_POST['sort_order'] ?? 0), $uid, $uname, $now['n'], $now['n']]);
+        $db->prepare("INSERT INTO comm_ctrl (maker_id, maker_name, maker_dept_id, maker_dept_name, maker_pos_name,
+                        party_kind, party_kind_other, party, party_ref_id, party_user_id, content, channel,
+                        freq, freq_n, freq_unit, freq_times, next_due_date,
+                        remind_enabled, remind_lead_days, remind_time, remark, sort_order,
+                        created_by, created_by_name, created_at, updated_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+           ->execute([$makerId, $maker, $mkIdn['department_id'] ?? null, $mkIdn['department_name'] ?? null,
+                      $mkIdn['position_name'] ?? null, $kind, $kindOther, $party, $partyRef ?: null, $partyUser ?: null,
+                      $content, $channel, $freq, $fn, $fu, $ft, $nextDue,
+                      $rEnabled, $rLead, $rTime ?: null, cmS($_POST['remark'] ?? '', 500),
+                      (int)($_POST['sort_order'] ?? 0), $uid, $uname, $now['n'], $now['n']]);
         $id = (int)$db->lastInsertId();
     }
-    jout(['ctrl_id'=>$id]);
+
+    // 提醒對象：整組重寫（人員／部門皆驗證存在，避免直打 API 塞不存在的 id）
+    $db->prepare("DELETE FROM comm_ctrl_remind_target WHERE ctrl_id=?")->execute([$id]);
+    $ins = $db->prepare("INSERT IGNORE INTO comm_ctrl_remind_target (ctrl_id, target_type, target_id) VALUES (?,?,?)");
+    foreach ($targets as $t) {
+        $tt = (string)($t['type'] ?? '');
+        $ti = (int)($t['id'] ?? 0);
+        if (!in_array($tt, ['user', 'dept'], true) || $ti <= 0) continue;
+        if ($tt === 'user' && cm_user_name($db, $ti) === '') continue;
+        if ($tt === 'dept' && cm_dept_name($db, $ti) === '') continue;
+        $ins->execute([$id, $tt, $ti]);
+    }
+    jout(['ctrl_id'=>$id, 'freq_text'=>$freq]);
+}
+
+/* ---- 由管制項目「快速建立」一張溝通記錄表（同一筆可多次轉出，只是省去重打） ---- */
+if ($action === 'ctrl_to_record') {
+    $st = $db->prepare("SELECT * FROM comm_ctrl WHERE ctrl_id=? AND is_deleted=0");
+    $st->execute([(int)($_POST['ctrl_id'] ?? 0)]);
+    $c = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$c) jerr('查無此管制項目', 404);
+
+    $now  = cmNow($db);
+    $date = $now['d'];                                  // 溝通日期自動帶入轉出那天（使用者指定）
+
+    // 對象：管制項目已綁定的一律沿用、不可改；只有「其他」允許在轉出時手改（使用者指定）
+    $kind = (string)$c['party_kind'] ?: 'other';
+    $party = (string)$c['party'];
+    $kindOther = (string)$c['party_kind_other'];
+    if ($kind === 'other') {
+        $party = cmS($_POST['party_name'] ?? $party, 200);
+        $kindOther = cmS($_POST['party_kind_other'] ?? $kindOther, 100);
+        if ($party === '') jerr('請填寫利害關係者');
+    }
+    // 管道可改（使用者指定）：沒帶就沿用管制項目原本勾的那幾個
+    $ch = [];
+    $any = false;
+    foreach (array_keys(CM_CHANNELS) as $k) { $ch[$k] = !empty($_POST['ch_' . $k]) ? 1 : 0; $any = $any || $ch[$k]; }
+    $chOther = cmS($_POST['ch_other_text'] ?? '', 100);
+    if (!$any) {
+        foreach (CM_CHANNELS as $k => $v) if ($k !== 'other' && mb_strpos((string)$c['channel'], $v) !== false) { $ch[$k] = 1; $any = true; }
+        if (!$any) { $ch['other'] = 1; $chOther = (string)$c['channel']; }
+    }
+    if ($ch['other'] && $chOther === '') jerr('管道勾選「其他」時請填寫說明');
+
+    // 填表身分：轉出的人就是填表人（沿用他在管制項目上的部門，沒有就取主職）
+    $idn = null;
+    foreach (cm_identities($db, $uid, $date) as $x) {
+        if ((int)$x['department_id'] === (int)$c['maker_dept_id']) { $idn = $x; break; }
+    }
+    if (!$idn) { $all = cm_identities($db, $uid, $date); $idn = $all[0] ?? null; }
+    if (!$idn) jerr('查無您在今天的部門／職稱資料，請洽人事確認員工部門職稱設定');
+
+    $recNo = cm_next_rec_no($db, $date);
+    try {
+        $db->beginTransaction();
+        $db->prepare("INSERT INTO comm_record (rec_no, comm_type, comm_date, party_kind, party_kind_other, party_name,
+                        party_ref_id, party_user_id, ch_phone, ch_face, ch_email, ch_meeting, ch_other, ch_other_text,
+                        maker_id, maker_name, maker_dept_id, maker_dept_name, maker_pos_id, maker_pos_name, maker_pos_sort,
+                        status, remark, created_by, created_by_name, created_at, updated_at)
+                      VALUES (?,'regular',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'draft',?,?,?,?,?)")
+           ->execute([$recNo, $date, $kind, $kindOther, $party, $c['party_ref_id'], $c['party_user_id'],
+                      $ch['phone'], $ch['face'], $ch['email'], $ch['meeting'], $ch['other'], $chOther,
+                      $uid, $uname, $idn['department_id'], $idn['department_name'], $idn['position_id'],
+                      $idn['position_name'], $idn['pos_sort'],
+                      '由溝通管制表項目 #' . $c['ctrl_id'] . ' 建立（' . $c['freq'] . '）', $uid, $uname, $now['n'], $now['n']]);
+        $recId = (int)$db->lastInsertId();
+        $db->prepare("INSERT INTO comm_record_item (rec_id, seq, question, reply) VALUES (?,1,?,'')")
+           ->execute([$recId, (string)$c['content']]);
+
+        // 下次應溝通日往後推一個週期（前端預設勾選，會在跳窗明白告知推到哪一天）
+        if (!empty($_POST['advance_due'])) {
+            $base = (string)($c['next_due_date'] ?: $date);
+            $next = cm_freq_advance($base, (int)$c['freq_n'], (string)$c['freq_unit']);
+            $db->prepare("UPDATE comm_ctrl SET next_due_date=?, remind_sent_for=NULL, updated_at=? WHERE ctrl_id=?")
+               ->execute([$next, $now['n'], (int)$c['ctrl_id']]);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        jerr('建立失敗：' . $e->getMessage(), 500);
+    }
+    jout(['rec_id'=>$recId, 'rec_no'=>$recNo]);
 }
 
 if ($action === 'ctrl_delete') {
@@ -746,6 +1009,7 @@ if ($action === 'setting_save') {
         }
         if ($k === 'cm_mgr_source' && !in_array($v, ['auto','users'], true)) continue;
         if ($k === 'cm_gm_source'  && !in_array($v, ['top','users','rank'], true)) continue;
+        if ($k === 'cm_need_sign') $v = $v ? '1' : '0';
         cm_setting_save($db, $k, (string)$v, $uname);
     }
     jout(['settings'=>cm_settings($db)]);

@@ -54,6 +54,9 @@ const CM_PARTY_KINDS = ['customer' => '客戶', 'supplier' => '供應商', 'empl
 /** 管道（紙本：□電話 □面談 □email □會議 □其他:＿＿）；可複選 */
 const CM_CHANNELS = ['phone' => '電話', 'face' => '面談', 'email' => 'email', 'meeting' => '會議', 'other' => '其他'];
 
+/** 溝通管制表的頻率單位（畫面下拉與顯示字串共用同一份，不在別處再寫一次＝鐵律4） */
+const CM_FREQ_UNITS = ['day' => '天', 'week' => '週', 'month' => '月', 'halfyear' => '半年', 'year' => '年'];
+
 /** 單據狀態機（送出後依序跑兩關，見檔頭拍板②） */
 const CM_STATUS = [
     'draft'    => '草稿',
@@ -76,6 +79,7 @@ const CM_SETTING_GROUP = 'COMM_MGMT';
  * 所以寫入一律 json_encode，讀取一律過 cm_setting_decode()。
  */
 const CM_SETTINGS_DEFAULT = [
+    'cm_need_sign'    => '1',     // 是否需要簽核；0＝送出當下自動簽核完成（兩格都由系統蓋章並直接結案）
     'cm_stamp_tpl_id' => '',      // 簽章圖章模板（stamp_template.id；空＝用系統預設回墨印）
     'cm_mgr_rank_max' => '3',     // 部門主管確認：階級門檻（三階主管以上都可簽）
     'cm_mgr_source'   => 'auto',  // auto=依填表人部門自動解析／users=固定指定人員
@@ -189,7 +193,43 @@ function cm_ensure_schema(PDO $db): void
             created_at DATETIME NULL, updated_at DATETIME NULL,
             is_deleted TINYINT NOT NULL DEFAULT 0
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='溝通管制表 3-GM-01-03'");
+
+        /* ---- 管制項目的提醒對象（人員或部門，可複數） ---- */
+        $db->exec("CREATE TABLE IF NOT EXISTS comm_ctrl_remind_target (
+            id          INT AUTO_INCREMENT PRIMARY KEY,
+            ctrl_id     INT NOT NULL,
+            target_type VARCHAR(10) NOT NULL COMMENT 'user=指定人員／dept=整個部門（含子部門）',
+            target_id   INT NOT NULL,
+            UNIQUE KEY uk_t (ctrl_id, target_type, target_id), KEY idx_c (ctrl_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='溝通管制表的提醒對象'");
     } catch (Throwable $e) {}
+
+    /* ---- 後續追加的欄位（既有資料不可重建，一律 ALTER；重複執行時各自 try/catch 吃掉） ---- */
+    $alters = [
+        // 記錄表：利害關係者改成「先選類別再依類別連動挑對象」，除了顯示字串還要存得住是挑到哪一筆
+        "ALTER TABLE comm_record ADD COLUMN party_ref_id VARCHAR(40) NULL COMMENT '客戶=customer_list.customer_id／供應商=maker_list.maker_id_no／員工=department.id' AFTER party_name",
+        "ALTER TABLE comm_record ADD COLUMN party_user_id INT NULL COMMENT '類別=員工時的 user.id' AFTER party_ref_id",
+        "ALTER TABLE comm_record ADD COLUMN party_contact_id INT NULL COMMENT '客戶/供應商聯絡人 contact_id（手動輸入時為 NULL）' AFTER party_user_id",
+        "ALTER TABLE comm_record ADD COLUMN party_contact_name VARCHAR(100) NULL COMMENT '代表人（顯示用；可由聯絡人挑或手動填）' AFTER party_contact_id",
+        // 管制表：對象比照記錄表、頻率結構化、提醒
+        "ALTER TABLE comm_ctrl ADD COLUMN party_kind VARCHAR(12) NULL COMMENT 'customer/supplier/employee/other' AFTER maker_name",
+        "ALTER TABLE comm_ctrl ADD COLUMN party_kind_other VARCHAR(100) NULL AFTER party_kind",
+        "ALTER TABLE comm_ctrl ADD COLUMN party_ref_id VARCHAR(40) NULL AFTER party",
+        "ALTER TABLE comm_ctrl ADD COLUMN party_user_id INT NULL AFTER party_ref_id",
+        "ALTER TABLE comm_ctrl ADD COLUMN maker_dept_id INT NULL AFTER maker_name",
+        "ALTER TABLE comm_ctrl ADD COLUMN maker_dept_name VARCHAR(100) NULL AFTER maker_dept_id",
+        "ALTER TABLE comm_ctrl ADD COLUMN maker_pos_name VARCHAR(60) NULL AFTER maker_dept_name",
+        "ALTER TABLE comm_ctrl ADD COLUMN freq_n INT NOT NULL DEFAULT 1 COMMENT '每 N 個單位' AFTER freq",
+        "ALTER TABLE comm_ctrl ADD COLUMN freq_unit VARCHAR(10) NOT NULL DEFAULT 'month' COMMENT 'day/week/month/halfyear/year' AFTER freq_n",
+        "ALTER TABLE comm_ctrl ADD COLUMN freq_times INT NOT NULL DEFAULT 1 COMMENT '幾次' AFTER freq_unit",
+        "ALTER TABLE comm_ctrl ADD COLUMN next_due_date DATE NULL COMMENT '下次應溝通日（提醒依它推算；轉出溝通記錄時可自動往後推一個週期）' AFTER freq_times",
+        "ALTER TABLE comm_ctrl ADD COLUMN remind_enabled TINYINT NOT NULL DEFAULT 0 AFTER next_due_date",
+        "ALTER TABLE comm_ctrl ADD COLUMN remind_lead_days INT NOT NULL DEFAULT 0 COMMENT '提前幾天提醒（0＝當天）' AFTER remind_enabled",
+        "ALTER TABLE comm_ctrl ADD COLUMN remind_time TIME NULL COMMENT '當天幾點提醒' AFTER remind_lead_days",
+        "ALTER TABLE comm_ctrl ADD COLUMN remind_sent_for DATE NULL COMMENT '已針對哪一個 next_due_date 發過提醒（避免同一期重複發）' AFTER remind_time",
+        "ALTER TABLE comm_ctrl ADD COLUMN remind_last_at DATETIME NULL AFTER remind_sent_for",
+    ];
+    foreach ($alters as $sql) { try { $db->exec($sql); } catch (Throwable $e) {} }
 }
 
 /* ============================ 使用者與權限 ============================ */
@@ -604,6 +644,7 @@ function cm_people_asof(PDO $db, string $bizDate): array
             $out[] = [
                 'id'        => $uid,
                 'uid'       => $uid,
+                'state'     => (int)($u['state'] ?? 0),
                 'name'      => (string)$u['user_cname'],
                 'dept_id'   => $did,
                 'dept_name' => ((string)($s['department_name'] ?? '')) ?: cm_dept_name($db, $did),
@@ -661,6 +702,156 @@ function cm_next_rec_no(PDO $db, string $commDate): string
 function cm_attach_dir(PDO $db): string
 {
     return eg_attach_dir($db, 'comm_mgmt_nas_dir', '溝通管理');
+}
+
+/* ============================ 利害關係者對象（依類別連動挑選） ============================ */
+
+/**
+ * 類別＝客戶／供應商時的模糊搜尋（打名稱或編號都找得到）。
+ * 客戶回 customer_list（id＝customer_id）、供應商回 maker_list（id＝maker_id_no）。
+ */
+function cm_party_search(PDO $db, string $kind, string $kw, int $limit = 30): array
+{
+    $kw = trim($kw);
+    $like = '%' . $kw . '%';
+    try {
+        if ($kind === 'customer') {
+            $st = $db->prepare("SELECT customer_id AS id, customer AS name, customer_full AS full_name
+                                FROM customer_list
+                                WHERE COALESCE(is_inactive,0)=0
+                                  AND (customer_id LIKE ? OR customer LIKE ? OR customer_full LIKE ?)
+                                ORDER BY (customer_id=?) DESC, (customer=?) DESC, customer
+                                LIMIT " . (int)$limit);
+            $st->execute([$like, $like, $like, $kw, $kw]);
+            return $st->fetchAll(PDO::FETCH_ASSOC);
+        }
+        if ($kind === 'supplier') {
+            $st = $db->prepare("SELECT maker_id_no AS id, maker_id AS name, maker_id_all AS full_name
+                                FROM maker_list
+                                WHERE (maker_id_no LIKE ? OR maker_id LIKE ? OR maker_id_all LIKE ?)
+                                ORDER BY (maker_id_no=?) DESC, (maker_id=?) DESC, maker_id
+                                LIMIT " . (int)$limit);
+            $st->execute([$like, $like, $like, $kw, $kw]);
+            return $st->fetchAll(PDO::FETCH_ASSOC);
+        }
+    } catch (Throwable $e) {}
+    return [];
+}
+
+/** 某客戶／供應商底下的聯絡人（代表人下拉用；沒有登錄聯絡人時回空陣列，前端仍可手動輸入） */
+function cm_party_contacts(PDO $db, string $kind, string $refId): array
+{
+    if ($refId === '') return [];
+    try {
+        if ($kind === 'customer') {
+            $st = $db->prepare("SELECT contact_id, name, title, department, mobile, phone_ext
+                                FROM customer_contacts WHERE customer_id=?
+                                ORDER BY is_primary DESC, sort_order, contact_id");
+            $st->execute([$refId]);
+            return $st->fetchAll(PDO::FETCH_ASSOC);
+        }
+        if ($kind === 'supplier') {
+            $st = $db->prepare("SELECT contact_id, name, title, department, mobile, phone_ext
+                                FROM maker_contacts WHERE maker_id_no=?
+                                ORDER BY is_primary DESC, sort_order, contact_id");
+            $st->execute([$refId]);
+            return $st->fetchAll(PDO::FETCH_ASSOC);
+        }
+    } catch (Throwable $e) {}
+    return [];
+}
+
+/** 部門清單（挑人用的第一層；含層級縮排資訊） */
+function cm_dept_list(PDO $db): array
+{
+    try {
+        return $db->query("SELECT id, name, parent_id, level, sort_order FROM department ORDER BY sort_order, id")
+                  ->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 某部門底下的人員（依業務日期回推當時職務＝ai-rules/22）。
+ * **主職與兼任都要列**：一個人在這個部門掛幾個職稱就出現幾列，職稱不同是兩種身分。
+ * 排序依 ai-rules/08 人員列表鐵則：職稱 sort_order 由高到低（數字小＝職位高）。
+ * $includeSub=true 時連子部門一起列（提醒對象選部門時用得到）。
+ *
+ * **這是「給人挑的名單」，所以要套 ai-rules/08 人員列表鐵則的排除清單**（0離職／90特殊帳號／99最高權限帳號）——
+ * 超級管理員那種不是真人的帳號不該出現在「挑利害關係者／挑負責人／挑提醒對象」裡。
+ * 注意不可把這個排除做進 cm_people_asof()：那支同時是簽核池與「我自己的填表身分」的來源，
+ * 排掉 99 會讓超級管理員連自己的單都建不了。
+ */
+function cm_dept_people(PDO $db, int $deptId, string $bizDate, bool $includeSub = false): array
+{
+    if ($deptId <= 0) return [];
+    $ids = $includeSub ? eg_dept_subtree_ids($db, $deptId) : [$deptId];
+    $out = [];
+    foreach (cm_people_asof($db, $bizDate) as $p) {
+        if (!in_array($p['dept_id'], $ids, true)) continue;
+        // 只排 90/99（特殊帳號、最高權限帳號）；state=0 的離職者交給 cm_people_asof() 自己判斷——
+        // 它只在「業務日期是過去、且那天此人還在職」時才放行，補歷史單據要選得到當時的人。
+        if (in_array((int)($p['state'] ?? 0), [90, 99], true)) continue;
+        $out[] = $p;
+    }
+    usort($out, function ($a, $b) {
+        return [$a['pos_sort'], $a['name'], $a['id']] <=> [$b['pos_sort'], $b['name'], $b['id']];
+    });
+    return $out;
+}
+
+/* ============================ 溝通管制表：頻率與提醒 ============================ */
+
+/** 頻率顯示字串：每 2 週 1 次 */
+function cm_freq_text(int $n, string $unit, int $times): string
+{
+    $u = CM_FREQ_UNITS[$unit] ?? '月';
+    return '每 ' . max(1, $n) . ' ' . $u . ' ' . max(1, $times) . ' 次';
+}
+
+/** 依頻率把日期往後推一個週期（轉出溝通記錄後推算下次應溝通日用） */
+function cm_freq_advance(string $date, int $n, string $unit): string
+{
+    $n = max(1, $n);
+    $map = ['day' => "+{$n} day", 'week' => "+{$n} week", 'month' => "+{$n} month",
+            'halfyear' => '+' . ($n * 6) . ' month', 'year' => "+{$n} year"];
+    $ts = strtotime($date . ' ' . ($map[$unit] ?? "+{$n} month"));
+    return $ts ? date('Y-m-d', $ts) : $date;
+}
+
+/** 某管制項目的提醒對象設定（原樣回傳，供設定畫面回填） */
+function cm_ctrl_targets(PDO $db, int $ctrlId): array
+{
+    try {
+        $st = $db->prepare("SELECT target_type, target_id FROM comm_ctrl_remind_target WHERE ctrl_id=? ORDER BY id");
+        $st->execute([$ctrlId]);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 把提醒對象展開成實際要收到通知的 user id。
+ * 選部門＝該部門**含子部門**的在職人員（生管組屬資材課，設資材課時生管組的人也要收到）。
+ */
+function cm_ctrl_target_uids(PDO $db, int $ctrlId): array
+{
+    $uids = [];
+    foreach (cm_ctrl_targets($db, $ctrlId) as $t) {
+        if ($t['target_type'] === 'user') { $uids[] = (int)$t['target_id']; continue; }
+        foreach (cm_dept_people($db, (int)$t['target_id'], date('Y-m-d'), true) as $p) $uids[] = (int)$p['id'];
+    }
+    return array_values(array_unique(array_filter($uids)));
+}
+
+/** 提醒對象的顯示字串（清單與設定畫面共用） */
+function cm_ctrl_target_labels(PDO $db, int $ctrlId): array
+{
+    $out = [];
+    foreach (cm_ctrl_targets($db, $ctrlId) as $t) {
+        $out[] = $t['target_type'] === 'user'
+            ? cm_user_name($db, (int)$t['target_id'])
+            : (cm_dept_name($db, (int)$t['target_id']) . '（含子部門）');
+    }
+    return $out;
 }
 
 /* ============================ 列印用 meta ============================ */
