@@ -116,6 +116,13 @@ if ($deptPerm === 'R') {
         /* 操作欄：按鈕排成兩列（原本擠在一列要 245px，太吃寬度） */
         .op-wrap{ display:flex; flex-wrap:wrap; gap:2px 3px; justify-content:flex-start; }
         .op-wrap > *{ flex:0 0 auto; }
+        /* ⚙ 下拉會讓整頁長出橫向捲軸的根因：custom.css 的 .dropdown-menu{left:0} 與
+           .dropdown-menu-right 的 right:0 同時成立＝左右都被釘死，寬度被算成按鈕那 34px、
+           再被 min-width 撐回 160px，於是「永久刪除（含改版紀錄，不可復原）」這種長選項
+           （nowrap）整段畫到選單框外面（實測溢出 56~115px）＝頁面底部出現左右捲軸。
+           放開 left 改由內容決定寬度，並維持靠右對齊往左展開，永遠不會超出視窗右緣。 */
+        .doc-table .dropdown-menu-right{ left:auto; right:0; width:max-content; min-width:160px; max-width:320px; }
+        .doc-table .dropdown-menu-right > li > a{ white-space:normal; }
         .req-note{color:#a94442;font-size:12px;}
         .scroll-to-top{position:fixed;bottom:20px;right:20px;width:50px;height:50px;background:rgba(255,255,255,.6);color:#000;border:none;border-radius:50%;text-align:center;line-height:50px;cursor:pointer;font-size:12px;font-weight:bold;box-shadow:0 4px 8px rgba(0,0,0,.2);z-index:1000;}
         .apply-alert{background:#fcf8e3;border:1px solid #faebcc;color:#8a6d3b;padding:10px;border-radius:4px;margin-bottom:12px;}
@@ -167,6 +174,10 @@ if ($deptPerm === 'R') {
                   <?php endif; ?>
                   <?php if ($asCaps['admin']): ?>
                   <button class="btn btn-default btn-sm" id="btnBulkFreq" title="勾選多份文件，一次設定／修改更新頻率與負責課室（管理員限定）"><i class="fa fa-clock-o"></i> 批次設定頻率·課室</button>
+                  <?php endif; ?>
+                  <?php if ($asCaps['admin']): ?>
+                  <button class="btn btn-default btn-sm" id="btnShowTasks" aria-pressed="false"
+                          title="把每份文件設定好的作業項目（這份文件實務上在做哪幾件事）直接顯示在「標籤」欄位內，不必逐份點開 ⚙ 才看得到；點一下項目即可開啟該文件的作業項目設定"><i class="fa fa-tasks"></i> 顯示作業項目</button>
                   <?php endif; ?>
                   <button class="btn btn-default btn-sm" id="btnTree" title="一眼檢視全部文件的階層結構"><i class="fa fa-sitemap"></i> 結構總覽</button>
                   <?php if ($asCaps['settings']): ?>
@@ -687,6 +698,19 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
 .doc-remark.rmk-can .rmk-more{ display:inline-block; }
 /* 使用者拍板：備註只在畫面上看，列印版（文件管制總覽表等）一律不帶 */
 @media print { .doc-remark{ display:none !important; } }
+
+/* ── 作業項目區塊（標籤欄內；工具列「顯示作業項目」按下才出現，管理員限定）──
+   ai-rules/10 暖色系：砂底深棕字，與上方標籤色球明顯分層，並用一條左邊界框起來成為一個區塊。
+   **一律可換行（word-break）且限寬**：作業項目最長 30 字，若比照 .tag-chip 用 nowrap，
+   表格的 min-content 會被一個項目撐開，整頁就會多出橫向捲軸（本頁剛修掉的那個問題）。 */
+.task-box{ margin-top:4px; padding:3px 0 1px 6px; border-left:3px solid #E8C07A; background:#FDF8F1; border-radius:0 3px 3px 0; }
+.task-box .task-hd{ display:block; font-size:10px; color:#8a7a66; line-height:14px; }
+.task-chip{ display:inline-block; max-width:150px; margin:2px 3px 2px 0; padding:1px 7px; border-radius:3px;
+            background:#F7E0BD; color:#6B4E2E; border:1px solid #E8C07A; font-size:11px; line-height:16px;
+            word-break:break-word; cursor:pointer; text-decoration:none; }
+.task-chip:hover,.task-chip:focus{ background:#F0A24B; color:#3E2408; text-decoration:none; }
+.task-chip.task-none{ background:#F3EDE4; color:#7A6A55; border-color:#DCCEB8; }
+@media print { .task-box{ display:none !important; } }
 
 /* ── 更新頻率 / 負責課室（清單最左欄；ai-rules/10 暖色系，文字本身就是資訊、顏色只是輔助）──
    三層由上到下：頻率徽章 → 負責課室 → 備註。後兩層內容可能很長，
@@ -1324,12 +1348,32 @@ $(function(){
   // 顯示用日期一律 YYYY.MM.DD（ai-rules/20；唯一實作 eg_date_fmt.js 的 egFmtDate）
   const dispDate = d => (typeof egFmtDate==='function' ? egFmtDate(d) : (d||''));
 
-  // 操作欄 ⚙ 下拉在 .table-responsive 內會被裁切：展開時暫時放開 overflow
-  $(document).on('show.bs.dropdown', '#docTableBody .btn-group', function(){
-    $(this).closest('.table-responsive').css('overflow','visible');
+  // 操作欄 ⚙ 下拉在 .table-responsive（overflow-x:auto）內會被裁切。
+  // 原本是展開時把整個容器改成 overflow:visible——但表格在窄視窗下本來就比容器寬，
+  // 一放開連表格那一截也跟著溢出去，整頁底部就多一條左右捲軸（實測 1024px 寬、每頁 50 筆＝29px）。
+  // 改成把選單本身提成 position:fixed 貼在按鈕下方靠右：容器維持原本的裁切，選單照樣看得到，
+  // 頁面永遠不會因為它長出橫向捲軸。
+  $(document).on('shown.bs.dropdown', '#docTableBody .btn-group', function(){
+    const $g = $(this), $m = $g.children('.dropdown-menu');
+    if(!$m.length) return;
+    // fixed 的選單不會跟著捲動，所以捲動／改變視窗大小時要重新貼回按鈕下方。
+    // **刻意不是「一捲動就關掉」**——點下方那幾列時瀏覽器會自動把按鈕捲進畫面，
+    // 那一下捲動會把才剛打開的選單立刻關掉（按了像沒反應）。
+    const place = function(){
+      const r = $g[0].getBoundingClientRect();
+      if(r.bottom < 0 || r.top > (window.innerHeight || 0)){ $('body').trigger('click'); return; } // 按鈕整個捲出畫面才收起
+      $m.css({position:'fixed', top:Math.round(r.bottom)+'px', right:'auto', margin:0, zIndex:10050,
+              left:Math.max(4, Math.round(r.right - $m.outerWidth()))+'px'}); // 靠右對齊按鈕往左展開
+    };
+    $m.css({position:'fixed', left:'auto', right:'auto'}); // 先量得到真實寬度再定位
+    place();
+    $(window).on('scroll.egdd resize.egdd', place);
+    $g.closest('.table-responsive').on('scroll.egdd', place);
   });
   $(document).on('hide.bs.dropdown', '#docTableBody .btn-group', function(){
-    $(this).closest('.table-responsive').css('overflow','');
+    $(this).children('.dropdown-menu').css({position:'',top:'',left:'',right:'',margin:'',zIndex:''});
+    $(window).off('scroll.egdd');
+    $(this).closest('.table-responsive').off('scroll.egdd');
   });
 
   // 線上開檔：仿 BOM 總表模式——建立工作副本後以 ms-office 協定 + HTTP URL 直接開啟 Excel/Word
@@ -1473,6 +1517,24 @@ $(function(){
     $('#searchKw').val($(this).data('kw'));
     loadDocs();
   });
+
+  // ── 作業項目區塊（工具列「顯示作業項目」按下才畫；管理員限定）──
+  // 清單本來就會帶回每份文件的 tasks（AS_Document_API 的 list），不必另外再打一支 API。
+  // 每個項目直接沿用 ⚙ 選單那顆「作業項目」的 class 與 data-*，點下去就是同一張設定跳窗
+  // （鐵律4：不要為了長得像按鈕再寫第二套開窗邏輯）。
+  const SHOW_TASK_KEY = 'asdoc_show_tasks';
+  let showTasks = false;
+  try { showTasks = !!window.asPerm.admin && localStorage.getItem(SHOW_TASK_KEY) === '1'; } catch(e){}
+  function taskCell(d){
+    if(!showTasks || !window.asPerm.admin) return '';
+    const list = d.tasks || [];
+    const data = `data-id="${d.id}" data-name="${esc(d.doc_name)}" data-no="${esc(d.doc_no)}"`;
+    // 沒設定的也要看得見（這個開關多半就是用來找「還沒設定的有哪幾份」），點一下同樣能直接設定
+    const body = list.length
+      ? list.map(t=>`<a href="javascript:void(0)" class="task-chip op-task" ${data} title="${esc(t)}｜點一下設定這份文件的作業項目">${esc(t)}</a>`).join('')
+      : `<a href="javascript:void(0)" class="task-chip task-none op-task" ${data} title="尚未設定，點一下開始設定"><i class="fa fa-plus"></i> 未設定</a>`;
+    return `<div class="task-box"><span class="task-hd">作業項目${list.length ? ('　'+list.length+' 項') : ''}</span>${body}</div>`;
+  }
 
   // 清單上的文件備註：接在文件名稱下方一整塊。內容是管理員存的 HTML，
   // 後端存檔時已清洗過，這裡再過一次 EGRichText.render() 當第二道防線（鐵律8）。
@@ -1620,7 +1682,7 @@ $(function(){
         <td class="col-nw">${rel||'-'}</td>
         <td class="col-nw"><span class="label label-info">${esc(d.current_version)||'-'}</span></td>
         <td class="col-nw">${dispDate(d.revised_date)||'-'}</td>
-        <td>${tags||'-'}</td>
+        <td>${tags || (showTasks ? '' : '-')}${taskCell(d)}</td>
         <td>${ops}</td>
       </tr>`);
       // 搜尋命中此文件的附件/紀錄 → 直接掛在文件列下方顯示（免點開跳窗）
@@ -1700,6 +1762,21 @@ $(function(){
       $('#freqFilterHint').text('（收起這一列時，負責課室篩選與頻率排序會一併解除）');
     }
   });
+  // 「顯示作業項目」開關（管理員限定）：只是換一種顯示方式，不重新向後端要資料
+  // （tasks 清單載入時就帶回來了），所以按下去只要重畫目前這一頁。選擇記在瀏覽器，
+  // 下次進來維持上次的狀態。
+  function syncShowTaskBtn(){
+    $('#btnShowTasks').toggleClass('btn-warning', showTasks).toggleClass('btn-default', !showTasks)
+      .attr('aria-pressed', showTasks ? 'true' : 'false');
+  }
+  $('#btnShowTasks').on('click', function(){
+    showTasks = !showTasks;
+    try { localStorage.setItem(SHOW_TASK_KEY, showTasks ? '1' : '0'); } catch(e){}
+    syncShowTaskBtn();
+    renderDocs();
+  });
+  syncShowTaskBtn();
+
   $('#btnClearFilter').on('click', ()=>{ $('#searchKw').val(''); $('#filterLevel').val(''); $('#filterDept').val('');
     $('#filterOwnerDept').val(''); $('#sortBy').val('');
     activeTagId=0; activeParentId=0; activeParentNo=''; renderTagFilter(); loadDocs(); });
@@ -3048,13 +3125,7 @@ $(function(){
      .fail(()=>alert('請求失敗')).always(()=>NProgress.done());
   });
 
-  // 操作欄 ⚙ 下拉在 .table-responsive 內會被裁切：展開時暫時放開 overflow
-  $(document).on('show.bs.dropdown', '#docTableBody .btn-group', function(){
-    $(this).closest('.table-responsive').css('overflow','visible');
-  });
-  $(document).on('hide.bs.dropdown', '#docTableBody .btn-group', function(){
-    $(this).closest('.table-responsive').css('overflow','');
-  });
+  // （⚙ 下拉的定位處理只留上面那一份，這裡原本有一份一模一樣的，兩份規則遲早走鐘）
 
   // ── 歷史版本 ──
   let curHistDocId = 0, curHistDocName = '', curHistCurVerId = 0, curHistCurVer = '', curHistCurDate = '';
