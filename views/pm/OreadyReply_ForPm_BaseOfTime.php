@@ -5543,7 +5543,9 @@ echo "</script>\n";
             // BOM 總數標頭
             var _qtyHdr = document.createElement('div');
             _qtyHdr.style.cssText = 'margin:0;padding:0;line-height:1.2;';
-            _qtyHdr.innerHTML = '<span style="font-size:1.2em;font-weight:bold;color:#006400;">' + escapeHtml(String(row.Qty || '')) + '</span>x';
+            // line-height:1.2 是為了蓋掉全站規則 `td span{line-height:28px}`（custom.css），
+            // 不蓋的話光這個數量標頭就佔 28px，整欄看起來行距很鬆
+            _qtyHdr.innerHTML = '<span style="font-size:1.2em;font-weight:bold;color:#006400;line-height:1.2;">' + escapeHtml(String(row.Qty || '')) + '</span>x';
             tdOutsourceDate.appendChild(_qtyHdr);
 
             // 取本 BOM 的所有進行中製程（ingActiveMap 由 PHP 及 AJAX 刷新後建立）
@@ -5696,6 +5698,9 @@ echo "</script>\n";
                             // 廠商名稱獨立成 span，掛上電話／傳真／地址浮動視窗
                             var _mkSpan = document.createElement('span');
                             _mkSpan.className = 'maker-info-pop'; // 刻意不用 vendor-name-tooltip-trigger：該 class 會被發單日欄位的雙擊篩選處理器排除掉
+                            // 同樣要蓋掉 `td span{line-height:28px}`：不蓋的話「發包日期 廠商」
+                            // 這一行會被廠商名稱撐成 28px（量測實證），行距看起來完全沒縮小
+                            _mkSpan.style.lineHeight = '1.2';
                             _mkSpan.textContent = _mk;
                             applyMakerPopover(_mkSpan, _proc.maker_id_no, _mk);
                             _dmDiv.appendChild(_mkSpan);
@@ -5713,7 +5718,10 @@ echo "</script>\n";
                         _ingBtn.type = 'button';
                         _ingBtn.className = 'btn btn-xs btn-warning btn-return-style';
                         _ingBtn.textContent = '加工中';
-                        _ingBtn.style.marginTop = '2px';
+                        // 與 Q/P/E 那條狀態列同樣的間距：上方不再多留 2px，
+                        // 並蓋掉 Gentelella .btn 自帶的 margin-bottom:5px
+                        _ingBtn.style.marginTop = '0';
+                        _ingBtn.style.marginBottom = '0';
                         if (window.featMarkReturned) {
                             // 有獨立功能碼授權，覆蓋下方 D+R / 業務受限的舊排除規則
                             (function(_id, _excQc, _f) { _ingBtn.onclick = function() { markAsReturned(_id, this, _excQc, _f); }; })(_iid, _proc.is_exclude_qc ? 1 : 0, _fid);
@@ -5774,7 +5782,10 @@ echo "</script>\n";
                             if (_rdMd) {
                                 var _rdSpan = document.createElement('span');
                                 _rdSpan.className = 'bv-rdate';   // 批次檢視搬按鈕時會把這顆拿掉（流程圖節點自己印一份在廠商下方）
-                                _rdSpan.style.cssText = 'color:#2a7ae2;font-weight:bold;margin-right:3px;white-space:nowrap;';
+                                // ⚠ line-height 一定要自己指定：Gentelella 的 resource/css/custom.css
+                                //   有一條全站規則 `td span{line-height:28px}`，不蓋掉的話這顆 span 會是
+                                //   28px 高，整條狀態列被它撐成 28px，看起來就是「間距沒縮小」。
+                                _rdSpan.style.cssText = 'color:#2a7ae2;font-weight:bold;margin-right:3px;white-space:nowrap;line-height:1.2;';
                                 _rdSpan.textContent = _rdMd + ' 回';
                                 _rdSpan.title = '已回廠日期：' + _proc.return_date;
                                 _btnRow.appendChild(_rdSpan);
@@ -5786,6 +5797,9 @@ echo "</script>\n";
                         if (_effectiveSt === 'Q') { _aBtn.className = 'btn btn-primary btn-xs btn-return-style'; _aBtn.textContent = 'QC待驗'; }
                         else if (_effectiveSt === 'P') { _aBtn.className = 'btn btn-success btn-xs btn-return-style'; _aBtn.textContent = '待移轉'; }
                         else { _aBtn.className = 'btn btn-info btn-xs btn-return-style'; _aBtn.textContent = '已移轉'; }
+                        // Gentelella 的 .btn 自帶 margin-bottom:5px，在這種一行一顆的小按鈕上
+                        // 只會讓狀態列平白高 5px（外觀不變，純粹是下方留白）
+                        _aBtn.style.marginBottom = '0';
                         if (window.isCRU && !window.featTransfer) {
                             _aBtn.title = '無執行權限 (C+R+U 業務受限)';
                             _aBtn.style.cursor = 'not-allowed'; _aBtn.style.opacity = '0.6';
@@ -5816,7 +5830,7 @@ echo "</script>\n";
                         }
                         if (_batchLightsHtml) {
                             var _batchSpan = document.createElement('span');
-                            _batchSpan.style.cssText = 'display:inline-flex;align-items:center;margin-left:4px;flex-shrink:0;';
+                            _batchSpan.style.cssText = 'display:inline-flex;align-items:center;margin-left:4px;flex-shrink:0;line-height:1.2;';
                             _batchSpan.innerHTML = _batchLightsHtml;
                             _btnRow.appendChild(_batchSpan);
                             _lightsAttached = true;
@@ -5839,7 +5853,7 @@ echo "</script>\n";
                 if (_fbOkSqty > 0) _fbLightsHtml += '<figure class="circle_greenS" style="margin-left:5px;margin-right:3px;"></figure><small>' + _fbOkSqty + '</small>';
                 if (_fbLightsHtml) {
                     var _fbSpan = document.createElement('span');
-                    _fbSpan.style.cssText = 'display:inline-flex;align-items:center;margin-left:4px;flex-shrink:0;';
+                    _fbSpan.style.cssText = 'display:inline-flex;align-items:center;margin-left:4px;flex-shrink:0;line-height:1.2;';
                     _fbSpan.innerHTML = _fbLightsHtml;
                     if (_lastBtnRow) {
                         _lastBtnRow.appendChild(_fbSpan);
@@ -6459,7 +6473,9 @@ echo "</script>\n";
                                     if (_hasCurrentPrice) {
                                         var _rawPrice = _pi.modified_unit_price || _pi.price;
                                         var _priceLabel = _fmtP(_rawPrice);
-                                        _iconEl.innerHTML = '<i class="fa fa-list-alt" style="color:#0a6;"></i><span style="color:#0a6;font-size:11px;margin-left:2px;">' + escapeHtml(_priceLabel) + '</span>';
+                                        // span 的 line-height 一定要自己指定：全站規則 `td span{line-height:28px}`
+                                        // 會把這一行撐成 28px，價格看起來就跟上面的回廠日期離很遠
+                                        _iconEl.innerHTML = '<i class="fa fa-list-alt" style="color:#0a6;line-height:1.2;"></i><span style="color:#0a6;font-size:11px;margin-left:2px;line-height:1.2;">' + escapeHtml(_priceLabel) + '</span>';
                                     } else {
                                         _iconEl.innerHTML = '<i class="fa fa-list-alt" style="color:#aaa;"></i>';
                                     }
