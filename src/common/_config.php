@@ -80,6 +80,16 @@ try {
     error_log('[ptask] tick hook failed: ' . $e->getMessage());
 }
 
+// === 溝通管制表到期提醒 順路觸發（2026-09-17 新增；做法同上，免工作排程器）===
+// 距上次檢查超過 120 秒才背景啟動，掃描「下次應溝通日」快到的管制項目並通知指定對象。
+// 與個人工作紀錄不同：本模組**會寫 live_event 站內通知**，沒綁手機/Telegram 的人也收得到（使用者要求）。
+try {
+    require_once __DIR__ . '/comm_ctrl_tick.php';
+    eg_comm_ctrl_tick();
+} catch (Throwable $e) {
+    error_log('[comm_ctrl] tick hook failed: ' . $e->getMessage());
+}
+
 // === 矯正單(CAR)逾期提醒 順路觸發（2026-07-20 新增；做法同上，免工作排程器）===
 // 距上次檢查超過 900 秒才背景啟動掃描，卡關超過設定工作天數的單據依狀態通知相關人員
 try {

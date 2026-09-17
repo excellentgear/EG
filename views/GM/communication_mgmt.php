@@ -21,6 +21,8 @@ cm_ensure_schema($db);
 $cmUser = cm_current_user($db);
 $perms  = cm_perms($db, $cmUser);
 $roleLabel = cm_role_label($perms);
+/* 溝通管制表的到期提醒是「順路觸發」的，掛在全站共用的 _config.php（與 personal_task／CAR 同一處），
+   不是掛在這一頁——只掛這頁的話，沒有人打開溝通管理就永遠不會檢查，提醒等於沒有作用。 */
 ?>
 <!DOCTYPE html>
 <html lang="zh-Hant">
@@ -167,6 +169,44 @@ $roleLabel = cm_role_label($perms);
         .att-row { display:flex; align-items:center; gap:8px; font-size:12.5px; padding:3px 0; border-bottom:1px dashed #EADFC8; }
         .att-row .nm { flex:1 1 auto; color:#5b3a1e; word-break:break-all; }
         .att-row .sz { color:#8a6d45; font-size:11.5px; white-space:nowrap; }
+
+        /* ---- 依類別連動的利害關係者挑選器 ---- */
+        .pk-box { border:1px dashed #E0CDA9; border-radius:6px; background:#FDF8EF; padding:7px 9px; margin-top:5px; }
+        .pk-line { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:5px; }
+        .pk-line:last-child { margin-bottom:0; }
+        .pk-line > label { font-size:12.5px; color:#5b3a1e; font-weight:bold; margin:0; white-space:nowrap; }
+        .pk-line input[type=text], .pk-line select { border:1px solid #D8BE93; border-radius:4px; padding:4px 7px;
+            font-size:12.5px; background:#fff; color:#5b3a1e; box-sizing:border-box; height:28px; }
+        .pk-line select { max-width:100%; }
+        .pk-grow { flex:1 1 220px; min-width:170px; }
+        .pk-sum { font-size:12px; color:#8A5A2B; background:#F7E0BD; border-radius:4px; padding:3px 8px;
+            display:inline-block; margin-top:4px; }
+        .pk-sum.none { background:#F5EEE2; color:#8a6d45; }
+
+        /* ---- 單一欄位的模糊搜尋自動完成（打字即時列建議，選了就填回同一個欄位） ----
+           清單用 position:fixed 由 JS 定位：跳窗的 .cm-mbd 是 overflow-y:auto 的捲動容器，
+           用 absolute 會在捲動時被容器裁掉（這個專案在 review_form 已經踩過一次）。 */
+        .pk-ac { position:relative; }
+        .pk-ac-list { position:fixed; z-index:11500; background:#fff; border:1px solid #D8BE93; border-radius:0 0 4px 4px;
+            max-height:230px; overflow-y:auto; display:none; box-shadow:0 4px 14px rgba(60,40,20,.22); }
+        .pk-ac-item { padding:5px 9px; font-size:12.5px; color:#5b3a1e; cursor:pointer; border-bottom:1px solid #F3E8D4;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .pk-ac-item:last-child { border-bottom:none; }
+        .pk-ac-item:hover, .pk-ac-item.on { background:#F7E0BD; }
+        .pk-ac-item .id { color:#8A5A2B; font-weight:bold; margin-right:6px; }
+        .pk-ac-empty { padding:6px 9px; font-size:12px; color:#8a6d45; }
+        /* 已綁定的編號：顯示在該欄位「上方」（使用者指定），只有客戶／供應商才會出現 */
+        .pk-bound { font-size:12px; margin:0 0 3px; }
+        .pk-bound b { color:#8A5A2B; }
+        .pk-bound .tag { background:#F7E0BD; border:1px solid #E0BE86; color:#5b3a1e; border-radius:4px;
+            padding:1px 7px; display:inline-block; }
+        .pk-bound .no { background:#FFF6F3; border:1px solid #E7BDB2; color:#C4442D; border-radius:4px;
+            padding:1px 7px; display:inline-block; }
+
+        /* ---- 頻率「每 N 單位 M 次」 ---- */
+        .freq-row { display:flex; flex-wrap:wrap; gap:5px; align-items:center; font-size:13px; color:#5b3a1e; }
+        .freq-row input[type=number] { width:64px; text-align:center; }
+        .freq-row select { width:86px; }
     </style>
 </head>
 <body class="nav-sm">
@@ -222,10 +262,10 @@ $roleLabel = cm_role_label($perms);
                     <thead><tr>
                         <th style="width:110px;">單號</th><th style="width:96px;">溝通日期</th><th style="width:62px;">型態</th>
                         <th style="width:70px;">類別</th><th>利害關係者</th><th style="width:150px;">填表人/部門</th>
-                        <th style="width:110px;">管道</th><th style="width:58px;">問題數</th>
+                        <th style="width:110px;">管道</th><th style="width:58px;">問題數</th><th style="width:62px;">附件</th>
                         <th style="width:120px;">狀態</th><th style="width:210px;">操作</th>
                     </tr></thead>
-                    <tbody id="recBody"><tr><td colspan="10" class="cm-empty">載入中…</td></tr></tbody>
+                    <tbody id="recBody"><tr><td colspan="11" class="cm-empty">載入中…</td></tr></tbody>
                 </table>
             </div>
         </div>
@@ -274,10 +314,10 @@ $roleLabel = cm_role_label($perms);
                 <table class="cm-table" id="ctrlTable">
                     <thead><tr>
                         <th style="width:50px;">項次</th><th style="width:120px;">填表人</th><th style="width:170px;">利害關係人</th>
-                        <th>溝通內容</th><th style="width:150px;">溝通管道</th><th style="width:120px;">頻率</th>
-                        <th style="width:130px;">操作</th>
+                        <th>溝通內容</th><th style="width:140px;">溝通管道</th><th style="width:106px;">頻率</th>
+                        <th style="width:170px;">下次應溝通日／提醒</th><th style="width:190px;">操作</th>
                     </tr></thead>
-                    <tbody id="ctrlBody"><tr><td colspan="7" class="cm-empty">載入中…</td></tr></tbody>
+                    <tbody id="ctrlBody"><tr><td colspan="8" class="cm-empty">載入中…</td></tr></tbody>
                 </table>
             </div>
         </div>
@@ -301,22 +341,64 @@ $roleLabel = cm_role_label($perms);
                 <input type="date" id="fCommDate"><span class="err" id="eCommDate"></span>
             </div>
             <div>
-                <label>利害關係者公司/代表人 <span style="color:#DD5138;">*</span></label>
-                <input type="text" id="fParty" maxlength="200"><span class="err" id="eParty"></span>
+                <label>利害關係者公司/代表人 <span style="color:#DD5138;">*</span>
+                    <span class="hint" id="fPartyLock" style="font-weight:normal;display:none;">（打字即時搜尋，選了就填在這一格）</span></label>
+                <!-- 綁定的編號顯示在欄位「上方」，只有類別＝客戶／供應商時才出現 -->
+                <div class="pk-bound" id="fPartyBound" style="display:none;"></div>
+                <div class="pk-ac">
+                    <input type="text" id="fParty" maxlength="200" autocomplete="off">
+                    <div class="pk-ac-list" id="fPartyList"></div>
+                </div>
+                <span class="err" id="eParty"></span>
             </div>
             <div class="full">
                 <label>類別 <span style="color:#DD5138;">*</span></label>
                 <div class="chk-row" id="recKindRow"></div><span class="err" id="eKind"></span>
+
+                <!-- 類別連動的對象挑選（客戶／供應商＝模糊搜尋、員工＝先選部門、其他＝手填）。
+                     後端 rec_save 會用同一批資料來源再核對一次＝鐵律8，不是只擋這裡的 UI。 -->
+                <div class="pk-box" id="pkSearchBox" style="display:none;">
+                    <div class="pk-line">
+                        <label>代表人</label>
+                        <select id="pkContact" style="width:210px;" data-eg-filter="輸入姓名篩選…"></select>
+                        <input type="text" id="pkContactName" class="pk-grow" maxlength="100"
+                               data-eg-hint="清單裡沒有這位聯絡人時，直接在這裡手寫姓名">
+                    </div>
+                    <div class="hint">對象請直接在上方「利害關係者公司/代表人」欄位打名稱或編號（例如 <b>歐克</b> 或 <b>.D001</b>），
+                        會即時列出建議清單供選擇。代表人可從對方登錄的聯絡人挑，也可以自己手寫（選填）。</div>
+                </div>
+
+                <div class="pk-box" id="pkEmpBox" style="display:none;">
+                    <div class="pk-line">
+                        <label>部門</label>
+                        <select id="pkDept" style="width:230px;" data-eg-filter="輸入部門名稱篩選…"></select>
+                        <label>員工／職稱</label>
+                        <select id="pkUser" class="pk-grow" data-eg-filter="輸入姓名或職稱篩選…"></select>
+                    </div>
+                    <div class="hint">職稱依<b>溝通日期</b>回推當時的（ai-rules/22）；一個人身兼多職時，每個職稱各列一列。</div>
+                </div>
+
+                <div class="pk-box" id="pkOtherBox" style="display:none;">
+                    <div class="pk-line">
+                        <label>類別說明 <span style="color:#DD5138;">*</span></label>
+                        <input type="text" id="fKindOther" class="pk-grow" maxlength="100"
+                               data-eg-hint="例如：主管機關、認證機構、社區、股東">
+                    </div>
+                    <div class="hint">「其他」類別的利害關係者公司／代表人請直接在上方欄位手動填寫。</div>
+                </div>
+                <div id="pkSummary"></div>
             </div>
             <div class="full">
                 <label>管道 <span style="color:#DD5138;">*</span>（可複選）</label>
                 <div class="chk-row" id="recChRow"></div><span class="err" id="eCh"></span>
             </div>
             <div class="full">
-                <label>填表人／部門 <span style="color:#DD5138;">*</span></label>
+                <label>填表人／部門 <span style="color:#DD5138;">*</span>
+                    <span class="hint" id="fMakerFixed" style="font-weight:normal;display:none;">（一般使用者固定為自己，不可修改）</span></label>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                    <select id="fMaker" style="width:190px;display:none;" data-eg-filter="輸入姓名篩選…"></select>
-                    <select id="fIdentity" style="flex:1 1 320px;min-width:260px;" data-eg-filter="輸入部門或職稱篩選…"></select>
+                    <select id="fMakerDept" style="width:190px;display:none;"></select>
+                    <select id="fMaker" style="width:210px;display:none;"></select>
+                    <select id="fIdentity" style="flex:1 1 300px;min-width:240px;"></select>
                 </div>
                 <div class="hint" id="signPreview" style="margin-top:4px;"></div>
                 <span class="err" id="eIdentity"></span>
@@ -346,7 +428,13 @@ $roleLabel = cm_role_label($perms);
         <div style="margin-top:10px;border-top:1px dashed #E0CDA9;padding-top:8px;">
             <label style="font-size:12.5px;color:#5b3a1e;font-weight:bold;">佐證附件（選填）</label>
             <div class="hint" style="margin-bottom:4px;">email 截圖、會議照片、對方來文等。單檔 50MB 以內；新增中就可以先傳，按下儲存時自動歸到這張單。</div>
+            <div class="pk-line" style="margin-bottom:4px;">
+                <label>說明（選填）</label>
+                <input type="text" id="fAttNote" class="pk-grow" maxlength="200"
+                       data-eg-hint="例如：客訴 email 往來截圖；填了之後清單上會顯示這段說明，而不是原始檔名">
+            </div>
             <input type="file" id="fAtt" multiple style="font-size:12.5px;">
+            <div class="hint">說明會套用在<b>這一次選取的全部檔案</b>上；要給不同說明就分次上傳。上傳後仍可按「改說明」修改。</div>
             <div id="attList" style="margin-top:4px;"></div>
         </div>
 
@@ -362,6 +450,13 @@ $roleLabel = cm_role_label($perms);
         <button id="btnRecSave" class="btn-warm"><i class="fa fa-save"></i> 儲存</button>
         <button id="btnRecSubmit" class="btn-warm"><i class="fa fa-paper-plane"></i> 儲存並送出確認</button>
     </div>
+</div></div>
+
+<!-- ======================= 附件清單（從列表的附件數點開，⑤） ======================= -->
+<div class="cm-mask" id="attMask"><div class="cm-modal" style="width:620px;">
+    <div class="cm-mhd"><span id="attTitle">佐證附件</span><span class="x" data-close>&times;</span></div>
+    <div class="cm-mbd"><div id="attListView"></div></div>
+    <div class="cm-mft"><button data-close>關閉</button></div>
 </div></div>
 
 <!-- ======================= 確認／退回 ======================= -->
@@ -393,8 +488,13 @@ $roleLabel = cm_role_label($perms);
             <textarea id="ttContent" readonly style="background:#F5EEE2;"></textarea></div>
         <div class="fgrid">
             <div class="full"><label>回應措施</label><textarea id="ttAction"></textarea></div>
-            <div><label>負責人 <span style="color:#DD5138;">*</span></label>
-                <select id="ttOwner" data-eg-filter="輸入姓名篩選…"></select><span class="err" id="eTtOwner"></span></div>
+            <div class="full"><label>負責人 <span style="color:#DD5138;">*</span>
+                    <span class="hint" style="font-weight:normal;">（先選部門，再挑該部門底下的人；職稱依溝通日期回推當時的）</span></label>
+                <div class="pk-line">
+                    <select id="ttOwnerDept" style="width:200px;" data-eg-filter="輸入部門名稱篩選…"></select>
+                    <select id="ttOwner" class="pk-grow" data-eg-filter="輸入姓名或職稱篩選…"></select>
+                </div>
+                <span class="err" id="eTtOwner"></span></div>
             <div><label>預計完成日 <span style="color:#DD5138;">*</span></label>
                 <input type="date" id="ttDue"><span class="err" id="eTtDue"></span></div>
         </div>
@@ -414,8 +514,13 @@ $roleLabel = cm_role_label($perms);
             <div class="full"><label>反應內容 <span style="color:#DD5138;">*</span></label>
                 <textarea id="tkContent"></textarea><span class="err" id="eTkContent"></span></div>
             <div class="full"><label>回應措施</label><textarea id="tkAction"></textarea></div>
-            <div><label>負責人 <span style="color:#DD5138;">*</span></label>
-                <select id="tkOwner" data-eg-filter="輸入姓名篩選…"></select><span class="err" id="eTkOwner"></span></div>
+            <div class="full"><label>負責人 <span style="color:#DD5138;">*</span>
+                    <span class="hint" style="font-weight:normal;">（先選部門，再挑該部門底下的人）</span></label>
+                <div class="pk-line">
+                    <select id="tkOwnerDept" style="width:200px;" data-eg-filter="輸入部門名稱篩選…"></select>
+                    <select id="tkOwner" class="pk-grow" data-eg-filter="輸入姓名或職稱篩選…"></select>
+                </div>
+                <span class="err" id="eTkOwner"></span></div>
             <div><label>預計完成日 <span id="tkDueStar" style="color:#DD5138;">*</span></label>
                 <input type="date" id="tkDue"><span class="err" id="eTkDue"></span></div>
             <div class="full">
@@ -435,20 +540,105 @@ $roleLabel = cm_role_label($perms);
 </div></div>
 
 <!-- ======================= 管制項目編輯 ======================= -->
-<div class="cm-mask" id="ctrlMask"><div class="cm-modal" style="width:680px;">
+<div class="cm-mask" id="ctrlMask"><div class="cm-modal" style="width:780px;">
     <div class="cm-mhd"><span id="ctrlTitle">新增管制項目</span><span class="x" data-close>&times;</span></div>
     <div class="cm-mbd">
+        <div class="note-box" style="margin-bottom:10px;">
+            管制表寫的是<b>常態性的溝通機制</b>（跟誰、多久一次、用什麼管道），<b>不寫單一次的溝通事件</b>；
+            真的溝通了再按該列的「建立溝通記錄」開一張記錄表。
+        </div>
         <div class="fgrid">
-            <div><label>填表人 <span style="color:#DD5138;">*</span></label>
-                <select id="cfMaker" data-eg-filter="輸入姓名篩選…"></select></div>
-            <div><label>利害關係人 <span style="color:#DD5138;">*</span></label>
-                <input type="text" id="cfParty" maxlength="200"><span class="err" id="eCfParty"></span></div>
+            <div class="full">
+                <label>填表人／部門 <span style="color:#DD5138;">*</span>
+                    <span class="hint" id="cfMakerFixed" style="font-weight:normal;display:none;">（一般使用者固定為自己，不可修改）</span></label>
+                <div class="pk-line">
+                    <select id="cfMakerDept" style="width:200px;display:none;"></select>
+                    <select id="cfMaker" class="pk-grow" style="display:none;"></select>
+                    <span class="hint" id="cfMakerShow"></span>
+                </div>
+            </div>
+
+            <div class="full">
+                <label>類別 <span style="color:#DD5138;">*</span></label>
+                <div class="chk-row" id="cfKindRow"></div><span class="err" id="eCfKind"></span>
+            </div>
+
+            <div class="full">
+                <label>利害關係人 <span style="color:#DD5138;">*</span>
+                    <span class="hint" id="cfPartyLock" style="font-weight:normal;display:none;">（打字即時搜尋，選了就填在這一格）</span></label>
+                <!-- 綁定的編號顯示在欄位「上方」，只有類別＝客戶／供應商時才出現 -->
+                <div class="pk-bound" id="cfPartyBound" style="display:none;"></div>
+                <div class="pk-ac">
+                    <input type="text" id="cfParty" maxlength="200" autocomplete="off">
+                    <div class="pk-ac-list" id="cfPartyList"></div>
+                </div>
+                <span class="err" id="eCfParty"></span>
+
+                <div class="pk-box" id="cfSearchBox" style="display:none;">
+                    <div class="hint">在上面的欄位直接打名稱或編號（例如 <b>歐克</b> 或 <b>.D001</b>）就會即時列出建議清單。
+                        管制表只記「固定要跟哪一家溝通」，<b>不必挑到聯絡人是哪一位</b>——開溝通記錄表時才填。</div>
+                </div>
+
+                <div class="pk-box" id="cfEmpBox" style="display:none;">
+                    <div class="pk-line">
+                        <label>部門</label>
+                        <select id="cfDept" style="width:220px;" data-eg-filter="輸入部門名稱篩選…"></select>
+                        <label>員工／職稱</label>
+                        <select id="cfUser" class="pk-grow" data-eg-filter="輸入姓名或職稱篩選…"></select>
+                    </div>
+                </div>
+
+                <div class="pk-box" id="cfOtherBox" style="display:none;">
+                    <div class="pk-line">
+                        <label>類別說明 <span style="color:#DD5138;">*</span></label>
+                        <input type="text" id="cfKindOther" class="pk-grow" maxlength="100"
+                               data-eg-hint="例如：主管機關、認證機構、社區、股東">
+                    </div>
+                    <div class="hint">「其他」類別的利害關係人請直接在上方欄位手動填寫（例如：勞動部勞工保險局）。</div>
+                </div>
+                <div id="cfSummary"></div>
+            </div>
+
             <div class="full"><label>溝通內容 <span style="color:#DD5138;">*</span></label>
                 <textarea id="cfContent"></textarea><span class="err" id="eCfContent"></span></div>
-            <div><label>溝通管道 <span style="color:#DD5138;">*</span></label>
-                <input type="text" id="cfChannel" maxlength="200" placeholder="例：會議／email／電話"><span class="err" id="eCfChannel"></span></div>
-            <div><label>頻率 <span style="color:#DD5138;">*</span></label>
-                <input type="text" id="cfFreq" maxlength="100" placeholder="例：半年/次、每週/次"><span class="err" id="eCfFreq"></span></div>
+
+            <div class="full"><label>溝通管道 <span style="color:#DD5138;">*</span>（可複選）</label>
+                <div class="chk-row" id="cfChRow"></div><span class="err" id="eCfChannel"></span></div>
+
+            <div class="full"><label>頻率 <span style="color:#DD5138;">*</span></label>
+                <div class="freq-row">
+                    每 <input type="number" id="cfFreqN" min="1" max="999" value="1">
+                    <select id="cfFreqUnit"></select>
+                    <input type="number" id="cfFreqTimes" min="1" max="999" value="1"> 次
+                    <span class="pk-sum" id="cfFreqPreview"></span>
+                </div>
+                <span class="err" id="eCfFreq"></span></div>
+
+            <!-- 提醒（⑪）：站內通知＋推播並行，所以不必綁手機或 Telegram 也收得到 -->
+            <div class="full" style="border-top:1px dashed #E0CDA9;padding-top:8px;margin-top:2px;">
+                <label style="display:inline-flex;align-items:center;gap:6px;font-weight:normal;">
+                    <input type="checkbox" id="cfRemind"> <b>到期自動提醒</b>
+                    <span class="hint">系統會在「下次應溝通日」前幾天自動發<b>站內通知</b>並推播，不必綁手機或 Telegram 也收得到。</span>
+                </label>
+            </div>
+            <div><label>下次應溝通日 <span class="cfRemReq" style="color:#DD5138;display:none;">*</span></label>
+                <input type="date" id="cfNextDue"><span class="err" id="eCfNextDue"></span></div>
+            <div><label>提前幾天提醒</label>
+                <div class="pk-line">
+                    <input type="number" id="cfLead" min="0" max="365" value="3" style="width:80px;"> 天，
+                    <input type="text" id="cfRemTime" maxlength="5" style="width:74px;" data-eg-hint="24 小時制，例如 09:00"> 發送
+                </div>
+                <span class="err" id="eCfRemTime"></span></div>
+            <div class="full" id="cfTargetWrap" style="display:none;">
+                <label>提醒對象 <span class="cfRemReq" style="color:#DD5138;display:none;">*</span></label>
+                <div class="chips" id="cfTargetChips"></div>
+                <div class="pk-line">
+                    <select id="cfTargetUser" style="width:230px;" data-eg-filter="輸入姓名篩選…"></select>
+                    <select id="cfTargetDept" style="width:230px;" data-eg-filter="輸入部門名稱篩選…"></select>
+                </div>
+                <div class="hint">選<b>部門</b>＝該部門<b>含子部門</b>的在職人員都會收到（設「資材課」時生管組的人也會收到）。</div>
+                <span class="err" id="eCfTarget"></span></div>
+
             <div class="full"><label>備註（選填）</label><input type="text" id="cfRemark" maxlength="500"></div>
             <div><label>排序</label><input type="number" id="cfSort" value="0"></div>
         </div>
@@ -457,6 +647,38 @@ $roleLabel = cm_role_label($perms);
         <button id="btnCtrlDel" class="btn-danger" style="display:none;border-color:#C4442D;background:#DD5138;color:#fff;">
             <i class="fa fa-trash"></i> 刪除</button>
         <button id="btnCtrlSave" class="btn-warm"><i class="fa fa-save"></i> 儲存</button></div>
+</div></div>
+
+<!-- ======================= 管制項目 → 建立溝通記錄表（⑫） ======================= -->
+<div class="cm-mask" id="c2rMask"><div class="cm-modal" style="width:620px;">
+    <div class="cm-mhd"><span>由管制項目建立溝通記錄表</span><span class="x" data-close>&times;</span></div>
+    <div class="cm-mbd">
+        <div class="note-box" style="margin-bottom:10px;">
+            把這個常態機制實際執行了一次，記成一張溝通記錄表。<b>溝通日期自動帶入今天</b>；
+            管制項目上已綁定的對象不可修改（只有類別「其他」可以改），管道可以改。<b>同一筆可以重複建立</b>。
+        </div>
+        <div class="fgrid">
+            <div class="full"><label>利害關係人</label>
+                <input type="text" id="c2rParty" maxlength="200">
+                <span class="hint" id="c2rPartyLock" style="display:none;">此對象由管制項目綁定，不可在這裡修改。</span>
+                <span class="err" id="eC2rParty"></span></div>
+            <div class="full" id="c2rKindOtherWrap" style="display:none;">
+                <label>類別說明</label><input type="text" id="c2rKindOther" maxlength="100"></div>
+            <div class="full"><label>溝通管道 <span style="color:#DD5138;">*</span>（可複選，可修改）</label>
+                <div class="chk-row" id="c2rChRow"></div>
+                <span class="err" id="eC2rCh"></span></div>
+            <div class="full"><label>溝通內容（會帶成第一列溝通問題）</label>
+                <textarea id="c2rContent" readonly style="background:#F5EEE2;"></textarea></div>
+            <div class="full" id="c2rAdvWrap">
+                <label style="display:inline-flex;align-items:center;gap:6px;font-weight:normal;">
+                    <input type="checkbox" id="c2rAdv" checked> <b>同時把「下次應溝通日」往後推一期</b>
+                </label>
+                <div class="hint" id="c2rAdvHint"></div>
+            </div>
+        </div>
+    </div>
+    <div class="cm-mft"><button data-close>取消</button>
+        <button id="btnC2rOk" class="btn-warm"><i class="fa fa-plus"></i> 建立並開啟</button></div>
 </div></div>
 
 <!-- ======================= 模組設定 ======================= -->
@@ -484,7 +706,24 @@ $roleLabel = cm_role_label($perms);
         </div>
 
         <h4 style="color:#8A5A2B;border-bottom:2px solid #F7E0BD;padding-bottom:3px;margin:0 0 8px;font-size:15px;">
-            三、誰可以簽「部門主管確認」</h4>
+            三、是否需要簽核</h4>
+        <div class="fgrid" style="margin-bottom:14px;">
+            <div class="full">
+                <label style="display:inline-flex;align-items:center;gap:6px;font-weight:normal;">
+                    <input type="checkbox" id="setNeedSign"> <b>溝通記錄表需要「部門主管確認」與「總經理確認」</b>
+                </label>
+                <div class="hint">
+                    取消勾選＝<b>免簽核</b>：按下「送出」的當下系統自動完成兩關並結案，不會發任何待簽通知。<br>
+                    免簽核時<b>簽章欄仍然會蓋章</b>（依 ai-rules/21：簽章日期＝該單溝通日期，兩關時間刻意錯開且不跨日），
+                    簽核人取各關卡原本的合格簽核池第一位、池空才退回「最高核准人員」；
+                    紀錄一樣寫進共用的 <b>approval_record</b>，在「列印與簽核紀錄」查得到（ai-rules/23）。<br>
+                    下面「三」「四」兩節的設定<b>在免簽核時仍然有用</b>——那是用來決定自動簽核要蓋誰的章。
+                </div>
+            </div>
+        </div>
+
+        <h4 style="color:#8A5A2B;border-bottom:2px solid #F7E0BD;padding-bottom:3px;margin:0 0 8px;font-size:15px;">
+            四、誰可以簽「部門主管確認」</h4>
         <div class="fgrid" style="margin-bottom:14px;">
             <div class="full">
                 <label>解析方式</label>
@@ -513,7 +752,7 @@ $roleLabel = cm_role_label($perms);
         </div>
 
         <h4 style="color:#8A5A2B;border-bottom:2px solid #F7E0BD;padding-bottom:3px;margin:0 0 8px;font-size:15px;">
-            四、誰可以簽「總經理確認」</h4>
+            五、誰可以簽「總經理確認」</h4>
         <div class="fgrid">
             <div class="full">
                 <label>解析方式</label>
@@ -566,11 +805,25 @@ $roleLabel = cm_role_label($perms);
         <ul>
             <li>①「新增溝通記錄」→ 填型態／溝通日期／類別／利害關係者／管道。
                 <b>溝通日期是本單的業務日期</b>，單號、AS 文件版次、圖章日期都依它產生。</li>
-            <li>②「填表人／部門」：<b>身兼多個部門職稱的人要自己選要用哪一個身分填這張表</b>（預設帶主要職務）。
+            <li>②<b>「類別」會連動利害關係者的填法</b>：
+                <br>・<b>客戶／供應商</b>：直接在「利害關係者公司/代表人」欄位<b>打名稱或編號</b>（例 <b>歐克</b> 或 <b>.D001</b>），
+                    會<b>即時跳出建議清單</b>（不用按搜尋），點一筆就填回同一個欄位，
+                    <b>綁定到的編號顯示在該欄位上方</b>。代表人可從對方登錄的聯絡人挑，也可以自己手寫。
+                    <br>　<span style="color:#DD5138;">注意：手動改動欄位文字＝自動解除綁定</span>，
+                    必須重新從清單挑一筆才存得進去——這是為了避免「畫面上寫 A、實際綁到 B」。
+                <br>・<b>員工</b>：先選<b>部門</b>再挑人；職稱是<b>依溝通日期回推當時的</b>，
+                    <b>主要職務與兼任職務都會列出來</b>（同一個人掛兩個職稱就出現兩列，那是兩種身分）。
+                <br>・<b>其他</b>：填「類別說明」（例：主管機關）並自行輸入對象名稱。</li>
+            <li>③「填表人／部門」：<b>溝通管理員可以先選部門再挑人</b>（代其他人建單）；
+                一般使用者固定是自己、不可修改。<b>身兼多個部門職稱的人要自己選要用哪一個身分填這張表</b>（預設帶主要職務），
                 選好之後下方會即時顯示<b>這張單會送給誰確認</b>。</li>
-            <li>③ 逐列填溝通問題與回覆內容。末列按 <b>↓</b> 自動加一列、沒填東西的末列按 <b>↑</b> 自動移除。</li>
-            <li>④ 需要的話上傳佐證附件（新增中就可以先傳，按下儲存時自動歸到這張單）。</li>
-            <li>⑤ 按「儲存並送出確認」。送出後<b>草稿鎖定不能再改</b>，被退回才會回到可編輯狀態。</li>
+            <li>④ 逐列填溝通問題與回覆內容。末列按 <b>↓</b> 自動加一列、沒填東西的末列按 <b>↑</b> 自動移除。</li>
+            <li>⑤ 需要的話上傳佐證附件（新增中就可以先傳，按下儲存時自動歸到這張單）。
+                <b>「說明」欄是選填</b>：填了之後清單上就顯示這段說明而不是原始檔名
+                （掃描檔名多半是一串日期流水號，看不出是什麼），原始檔名仍留在提示與下載檔名上。
+                說明會套用在<b>這一次選取的全部檔案</b>，要給不同說明就分次上傳，事後也可以按「改說明」修改。</li>
+            <li>⑥ 按「儲存並送出確認」。送出後<b>草稿鎖定不能再改</b>，被退回才會回到可編輯狀態。</li>
+            <li>清單上的<b>「附件」欄會顯示附件數量</b>，點一下就能直接檢視／下載，不必先開整張單。</li>
         </ul>
 
         <h4>簽核怎麼跑</h4>
@@ -584,6 +837,34 @@ $roleLabel = cm_role_label($perms);
             <li>該關卡的<b>名單內任一人簽了就算數</b>；名單內的人請假並設有代理人時，<b>代理人也可以代簽</b>，圖章右下角會自動加「代」字。</li>
             <li><b>退回一定要填原因</b>，退回後單據回到草稿、填表人可以修改後重新送出。</li>
             <li>簽章日期一律用<b>該單的溝通日期</b>，不是按下確認的那一天。</li>
+            <li><b>整個模組可以設定成「免簽核」</b>（模組設定 → 二、是否需要簽核，溝通管理員）：
+                取消勾選後，按下送出的當下系統就<b>自動完成兩格確認並結案</b>，不會發任何待簽通知。
+                免簽核時<b>簽章欄照樣蓋章</b>（簽章日期仍是該單溝通日期、兩關時間會刻意錯開且不跨日），
+                簽核人取各關卡原本的合格簽核池第一位、池空才退回「最高核准人員」；
+                紀錄一樣寫進共用的 approval_record，在「列印與簽核紀錄」查得到。
+                所以<b>「誰可以簽」那兩節在免簽核時仍然有用</b>——那是用來決定自動簽核要蓋誰的章。</li>
+        </ul>
+
+        <h4>溝通管制表：頻率、自動提醒、一鍵開記錄表</h4>
+        <ul>
+            <li><b>填表人／利害關係人／溝通管道的填法與溝通記錄表完全一樣</b>（類別連動、打字即時搜尋、綁定編號顯示在上方）。
+                差別只有一個：管制表<b>不必挑到聯絡人是哪一位</b>——那是實際溝通、開記錄表時才填的。</li>
+            <li><b>頻率固定填成「每 ? [天/週/月/半年/年] ? 次」</b>（例：每 2 週 1 次），輸入時下方會即時預覽最後會顯示成什麼。</li>
+            <li><b>下次應溝通日</b>＝這個常態機制下一次該執行的日期，也是自動提醒的基準。</li>
+            <li><b>到期自動提醒</b>：勾起來之後，系統會在「下次應溝通日<b>往前推 N 天</b>」那一天的指定時間，
+                自動通知您指定的對象。
+                <br>・提醒<b>一定會發站內通知</b>（畫面右上角的通知鈴），<b>不必綁手機或 Telegram 也收得到</b>；
+                    有訂閱推播或綁了 Telegram 的人會另外再收到一則。
+                <br>・提醒對象可以指定<b>人員</b>，也可以指定<b>部門</b>——選部門＝該部門<b>含子部門</b>的在職人員都會收到
+                    （設「資材課」時生管組的人也會收到）。
+                <br>・同一期<b>只會提醒一次</b>；改了「下次應溝通日」就視為新的一期，會重新提醒。
+                <br>・系統沒有工作排程器，提醒是<b>有人在使用系統時順路檢查</b>的。
+                    所以半夜到期的提醒會等到隔天有人開任何頁面時補發，<b>不會漏掉、只是可能晚一點</b>。</li>
+            <li><b>「建立溝通記錄」按鈕</b>：實際執行了一次就按它，會依這個機制<b>自動開一張溝通記錄表</b>
+                （溝通日期＝今天，溝通內容帶成第一列溝通問題）。
+                <br>・管制項目上<b>已綁定的對象不可修改</b>，只有類別是「其他」的才能在這裡改；<b>溝通管道可以改</b>。
+                <br>・預設會勾「同時把下次應溝通日往後推一期」，跳窗上會先告訴您會推到哪一天；不想動排程就取消勾選。
+                <br>・<b>同一筆管制項目可以重複建立</b>記錄表，系統不會擋。</li>
         </ul>
 
         <h4>列印</h4>
@@ -607,12 +888,23 @@ $roleLabel = cm_role_label($perms);
                 A：不行，同一列只會對應一個追蹤項目，避免追蹤表長出重複資料。追蹤項目被管理員刪除後才能重新轉入。</li>
             <li><b>Q：附件存在哪裡？</b><br>
                 A：AS9100 根目錄底下的「溝通管理」資料夾，由系統自動建立。資料庫只存檔名，所以日後整批搬家只要改設定值。</li>
+            <li><b>Q：客戶明明打對了，為什麼按儲存說「要綁到客戶編號才存得進去」？</b><br>
+                A：因為<b>只有從跳出的建議清單點選過</b>才算綁定。自己把字打完但沒有點清單、
+                或選完之後又手動改了欄位裡的字，都會解除綁定（欄位上方會變回「尚未綁定」）。
+                請重新打關鍵字，從清單挑一筆。</li>
+            <li><b>Q：管制表設了提醒，時間到了卻沒收到？</b><br>
+                A：依序確認 ①「到期自動提醒」有勾 ②「下次應溝通日」有填 ③ 提醒對象有指定
+                ④ 這一期是不是已經提醒過了（同一期只發一次，改過下次應溝通日才會重新發）
+                ⑤ 提醒是有人在使用系統時順路檢查的，半夜到期會等到隔天有人開頁面時補發。</li>
+            <li><b>Q：追蹤表的負責人下拉為什麼是空的？</b><br>
+                A：負責人改成<b>先選部門、再挑該部門底下的人</b>，沒先選部門時人員下拉本來就是空的。</li>
         </ul>
 
         <h4>設定入口</h4>
         <ul>
             <li><b>模組設定</b>（畫面左上，溝通管理員）：三份表單的 AS 文件綁定、簽章圖章模板、
-                兩個簽章格分別由誰簽（含「哪些層級以上的主管才可簽章」）。</li>
+                <b>是否需要簽核</b>、兩個簽章格分別由誰簽（含「哪些層級以上的主管才可簽章」）。</li>
+            <li><b>每一筆管制項目的提醒時間與提醒對象</b>：管制表分頁 → 該列「編輯」→ 到期自動提醒。</li>
             <li><b>職位編號與職稱階級</b>：管理者 →「部門職稱設定」。</li>
             <li><b>最高核准人員</b>：管理者 →「組織角色綁定設定」（本模組不寫死人名）。</li>
             <li><b>圖章模板</b>：「圖章管理 → 線上圖章設計」。</li>
@@ -672,6 +964,158 @@ function get(data, cb){
 }
 function clearErr(box){ $(box).find('.err').text(''); $(box).find('.bad').removeClass('bad'); }
 function setErr(id, el, msg){ $('#' + id).text(msg); if (el) $(el).addClass('bad'); }
+/* 打字即時查詢用的去抖動：停下來 wait 毫秒才真的送一次，不會每敲一個字就打一次 API。
+   （使用者要求「模糊篩選要即時出選單，不要還得按搜尋」） */
+function debounce(fn, wait){
+    var t = null;
+    return function(){
+        var self = this, args = arguments;
+        if (t) clearTimeout(t);
+        t = setTimeout(function(){ t = null; fn.apply(self, args); }, wait || 250);
+    };
+}
+
+/* ================= 共用：部門 → 人員兩段式挑選（ai-rules/08 第五節＋ai-rules/22） =================
+   全公司幾十個人擠在一個下拉裡，使用者要用眼睛找；改成先選部門再挑人。
+   職稱一律依**該單的業務日期**回推當時的，主職與兼任都列（同一人在同一部門掛兩個職稱＝兩列，
+   那是兩種身分，不可合併）。
+
+   **這些資料一律放在 PEOPLECACHE 這個模組變數裡，絕對不可掛在 <option> 的 jQuery data() 上**——
+   打字篩選（eg_input_rules.js 規則7）會用 innerHTML 整批重畫選項，掛在 option 上的資料會整個消失，
+   症狀是「篩選過一次之後就抓不到人了」，而且只有實際打字篩選才看得到。 */
+var PEOPLECACHE = {};      // { selectId: [rows...] }
+var PARTYCACHE  = {};      // { selectId: [rows...] } 客戶／供應商搜尋結果
+var CONTACTCACHE = {};     // { selectId: [rows...] } 聯絡人
+
+function fillDeptSel(sel, val, placeholder){
+    var s = $(sel).empty().append($('<option>').val('').text(placeholder || '請選擇部門…'));
+    (META.depts || []).forEach(function(d){
+        var pad = new Array(Math.max(0, (+d.level || 1) - 1) + 1).join('　');
+        s.append($('<option>').val(d.id).text(pad + d.name));
+    });
+    s.val(val ? String(val) : '');
+}
+function personLabel(p){
+    return p.name + (p.pos_name ? '（' + p.pos_name + '）' : '');
+}
+/** 載入某部門的人員到下拉；keepUid 有值且仍在名單內就沿用選取。cb(rows) 於填完後呼叫。 */
+function loadDeptPeople(deptId, userSel, date, keepUid, cb){
+    var s = $(userSel);
+    PEOPLECACHE[s.attr('id')] = [];
+    if (!+deptId){ s.empty().append($('<option>').val('').text('請先選擇部門')); if (cb) cb([]); return; }
+    s.empty().append($('<option>').val('').text('載入中…'));
+    get({action:'dept_people', dept_id:deptId, date:date || TODAY}, function(res){
+        var rows = res.rows || [];
+        PEOPLECACHE[s.attr('id')] = rows;
+        s.empty().append($('<option>').val('').text(rows.length ? '請選擇人員…' : '（該部門在此日期查無在職人員）'));
+        rows.forEach(function(p, i){
+            // value 用陣列索引而不是 user_id：同一個人在同一部門可能有兩個職稱＝兩列，user_id 會撞號
+            s.append($('<option>').val(i).text(personLabel(p)));
+        });
+        if (keepUid){
+            for (var i = 0; i < rows.length; i++) if (+rows[i].id === +keepUid){ s.val(String(i)); break; }
+        }
+        if (cb) cb(rows);
+    });
+}
+/** 取目前選到的人（回 null＝沒選） */
+function pickedPerson(userSel){
+    var s = $(userSel), rows = PEOPLECACHE[s.attr('id')] || [], v = s.val();
+    return (v === '' || v == null) ? null : (rows[+v] || null);
+}
+
+/* ================= 共用：單一欄位的模糊搜尋自動完成 =================
+   使用者要求：不要「關鍵字欄＋選擇對象下拉」兩個欄位重複，
+   直接在對象欄位裡打字就即時列出建議清單，選了就填回同一個欄位，
+   綁定到的編號顯示在該欄位「上方」（只有客戶／供應商才有編號）。
+
+   一改字就視同解除綁定——不解除的話會出現「畫面上寫 A、實際還綁著 B」，
+   而且完全看不出來；後端 rec_save/ctrl_save 也會用同一批資料再核對一次（鐵律8）。
+
+   建議清單刻意用 position:fixed 由 JS 定位：跳窗的 .cm-mbd 是 overflow-y:auto 的捲動容器，
+   absolute 會在捲動時被裁掉（這個專案在 review_form 已經踩過一次）。 */
+var ACS = {};        // { inputId: {rows:[], idx:-1, kindFn:fn, onPick:fn, listSel:'#..'} }
+
+function acSetup(inputSel, listSel, kindFn, onPick){
+    var $in = $(inputSel), key = $in.attr('id');
+    ACS[key] = {rows:[], idx:-1, kindFn:kindFn, onPick:onPick, listSel:listSel, inputSel:inputSel};
+    var search = debounce(function(){ acSearch(key); }, 250);
+    $in.on('input', function(){
+        ACS[key].onPick(null);          // 手動改字＝解除綁定
+        search();
+    });
+    $in.on('focus', function(){ acSearch(key); });
+    $in.on('blur', function(){ setTimeout(function(){ acHide(key); }, 180); });   // 讓 click 先跑完
+    $in.on('keydown', function(e){
+        var st = ACS[key];
+        if ($(st.listSel).is(':visible') && st.rows.length){
+            if (e.key === 'ArrowDown'){ e.preventDefault(); e.stopPropagation(); acMove(key, 1); return; }
+            if (e.key === 'ArrowUp'){ e.preventDefault(); e.stopPropagation(); acMove(key, -1); return; }
+            if (e.key === 'Enter' && st.idx >= 0){ e.preventDefault(); e.stopPropagation(); acPick(key, st.idx); return; }
+            if (e.key === 'Escape'){ acHide(key); return; }
+        }
+    });
+}
+function acSearch(key){
+    var st = ACS[key];
+    if (!st) return;
+    var kind = st.kindFn();
+    if (kind !== 'customer' && kind !== 'supplier'){ acHide(key); return; }
+    get({action:'party_search', kind:kind, kw:$(st.inputSel).val() || ''}, function(res){
+        st.rows = res.rows || [];
+        st.idx = -1;
+        acRender(key);
+    });
+}
+function acRender(key){
+    var st = ACS[key], $l = $(st.listSel).empty();
+    if (!st.rows.length){
+        $l.html('<div class="pk-ac-empty">查無符合的資料，請換個關鍵字</div>');
+    } else {
+        st.rows.forEach(function(x, i){
+            $l.append('<div class="pk-ac-item" data-i="' + i + '"><span class="id">' + esc(x.id) + '</span>'
+                + esc(x.full_name || x.name) + '</div>');
+        });
+    }
+    acPosition(key);
+    $l.show();
+    $l.find('.pk-ac-item').on('mousedown', function(e){ e.preventDefault(); acPick(key, +$(this).data('i')); });
+}
+function acPosition(key){
+    var st = ACS[key], el = $(st.inputSel)[0];
+    if (!el) return;
+    var r = el.getBoundingClientRect();
+    $(st.listSel).css({left:r.left + 'px', top:r.bottom + 'px', width:r.width + 'px'});
+}
+function acMove(key, d){
+    var st = ACS[key];
+    st.idx = Math.max(0, Math.min(st.rows.length - 1, st.idx + d));
+    var $items = $(st.listSel).find('.pk-ac-item').removeClass('on');
+    var $on = $items.eq(st.idx).addClass('on');
+    if ($on.length){
+        var l = $(st.listSel)[0], o = $on[0];
+        if (o.offsetTop < l.scrollTop) l.scrollTop = o.offsetTop;
+        else if (o.offsetTop + o.offsetHeight > l.scrollTop + l.clientHeight) l.scrollTop = o.offsetTop + o.offsetHeight - l.clientHeight;
+    }
+}
+function acPick(key, i){
+    var st = ACS[key], x = st.rows[i];
+    if (!x) return;
+    $(st.inputSel).val(x.full_name || x.name);   // 選了就直接顯示在同一個欄位內
+    st.onPick(x);
+    acHide(key);
+}
+function acHide(key){ var st = ACS[key]; if (st) $(st.listSel).hide(); }
+/** 畫面捲動／視窗縮放時，fixed 清單要跟著輸入框走，否則會浮在錯的位置 */
+$(window).on('scroll resize', function(){ for (var k in ACS) if ($(ACS[k].listSel).is(':visible')) acPosition(k); });
+$('.cm-mbd').on('scroll', function(){ for (var k in ACS) if ($(ACS[k].listSel).is(':visible')) acPosition(k); });
+/** 綁定編號的顯示（欄位上方）；沒綁到時明白說「尚未綁定」，不要留白讓人以為綁好了 */
+function acBoundHtml(boundSel, kind, hit){
+    var lb = (kind === 'customer' ? '客戶編號' : '廠商編號');
+    $(boundSel).show().html(hit
+        ? '<span class="tag">已綁定　' + esc(lb) + '：<b>' + esc(hit.id) + '</b></span>'
+        : '<span class="no">尚未綁定' + esc(lb) + '　請在下方欄位打名稱或編號，再從清單挑一筆</span>');
+}
 
 /* ================= 分頁 ================= */
 /* 切換分頁＝所有分頁一起重新整理（點開即刷新鐵則，ai-rules/08 第六節）：
@@ -690,6 +1134,10 @@ function boot(){
         META = res; CSRF = res.csrf; TODAY = res.today;
         window.__ownCompany = res.company;                 // eg_stamp.js 章面上半格印的公司全名
         $('#btnSetting').toggle(!!res.perms.canAdmin);
+        // ⑧ 免簽核時按鈕文案要跟著改，不然使用者會以為還會送給誰簽
+        $('#btnRecSubmit').html(res.need_sign
+            ? '<i class="fa fa-paper-plane"></i> 儲存並送出確認'
+            : '<i class="fa fa-check-circle"></i> 儲存並送出（免簽核・自動完成）');
         var s = $('#recStatus'); $.each(res.status, function(k, v){ s.append($('<option>').val(k).text(v)); });
         var k = $('#recKind');   $.each(res.kinds,  function(kk, v){ k.append($('<option>').val(kk).text(v)); });
         renderAsdocHint();
@@ -709,6 +1157,9 @@ function openFromUrl(){
     });
     if (+q.sign) openSign(+q.sign);
     else if (+q.rec) openRec(+q.rec);
+    // 溝通管制表的到期提醒點進來：切到管制表分頁（?ctrl=N 只用來標示是哪一筆，不自動開編輯窗，
+    // 使用者多半是要按「建立溝通記錄」而不是改設定）
+    else if (q.tab === 'ctrl') $('#mainTabs .cm-tab[data-tab="ctrl"]').trigger('click');
 }
 function renderAsdocHint(){
     var out = [], miss = [];
@@ -766,8 +1217,16 @@ function recFilters(){
 function loadRec(){
     get(recFilters(), function(res){
         var b = $('#recBody').empty();
-        if (!res.rows.length){ b.html('<tr><td colspan="10" class="cm-empty">沒有符合條件的溝通記錄</td></tr>'); }
+        RECATT = {};
+        if (!res.rows.length){ b.html('<tr><td colspan="11" class="cm-empty">沒有符合條件的溝通記錄</td></tr>'); }
         res.rows.forEach(function(r){
+            // 清單上就看得到附件數，點一下開跳窗直接檢視／下載（使用者要求⑤）
+            RECATT[r.rec_id] = r.attaches || [];
+            var nAtt = (r.attaches || []).length;
+            var attCell = nAtt
+                ? '<button class="b-mini" onclick="openAttList(' + r.rec_id + ')" title="點開檢視附件">'
+                  + '<i class="fa fa-paperclip"></i> ' + nAtt + '</button>'
+                : '<span class="hint">－</span>';
             var chs = [];
             $.each(META.channels, function(k, v){ if (+r['ch_' + k]) chs.push(k === 'other' ? (r.ch_other_text || v) : v); });
             var kind = META.kinds[r.party_kind] || '';
@@ -788,6 +1247,7 @@ function loadRec(){
                 + '<td class="l">' + esc(r.maker_name) + '<br><span class="hint">' + esc(r.maker_dept_name) + '　' + esc(r.maker_pos_name) + '</span></td>'
                 + '<td>' + esc(chs.join('、')) + '</td>'
                 + '<td>' + (r.items ? r.items.length : 0) + '</td>'
+                + '<td>' + attCell + '</td>'
                 + '<td><span class="st ' + stCls + '">' + esc(stTxt) + '</span>'
                 + (+r.mgr_skip ? '<br><span class="hint">主管格免簽</span>' : '') + '</td>'
                 + '<td>' + ops + '</td></tr>');
@@ -841,13 +1301,13 @@ function openRec(id){
         RECITEMS = [{question:'', reply:'', track_id:0, item_id:0}, {question:'', reply:'', track_id:0, item_id:0}];
         ATTACHES = [];
         $('#recTitle').text('新增溝通記錄');
-        $('#fCommDate').val(TODAY); $('#fParty').val(''); $('#fRemark').val('');
+        $('#fCommDate').val(TODAY); $('#fParty').val(''); $('#fRemark').val(''); $('#fAttNote').val('');
         buildChoiceRows('irregular', '', '', {}, '');
         $('#recRejectBox').hide(); $('#recSignArea').hide();
         $('#btnRecSave,#btnRecSubmit').show(); $('#btnRecPrint').hide();
         $('#recStatusHint').text('');
-        $('#fMaker').toggle(!!META.perms.canAdmin).val(META.me.id);
-        fillMakerSelect();
+        setupMakerPicker(0, 0);
+        resetPartyPicker(null);
         renderItems(); renderAttaches(); reloadIdentities();
         openMask('recMask');
         return;
@@ -860,10 +1320,11 @@ function openRec(id){
         ATTACHES = res.attaches || [];
         $('#recTitle').text('溝通記錄表　' + r.rec_no + '　' + (META.status[r.status] || ''));
         $('#fCommDate').val(r.comm_date); $('#fParty').val(r.party_name); $('#fRemark').val(r.remark || '');
+        $('#fAttNote').val('');
         var ch = {}; $.each(META.channels, function(k){ ch[k] = +r['ch_' + k]; });
         buildChoiceRows(r.comm_type, r.party_kind, r.party_kind_other, ch, r.ch_other_text);
-        $('#fMaker').toggle(!!META.perms.canAdmin).val(r.maker_id);
-        fillMakerSelect();
+        setupMakerPicker(r.maker_id, r.maker_dept_id);
+        resetPartyPicker(r);
         if (r.status === 'draft' && r.reject_note){
             $('#recRejectBox').show().html('<b style="color:#DD5138;">此單曾被退回</b>　退回人：' + esc(r.reject_by)
                 + '　' + dispDate((r.reject_at || '').substr(0, 10)) + '<br>原因：' + esc(r.reject_note));
@@ -877,14 +1338,36 @@ function openRec(id){
         openMask('recMask');
     });
 }
-function fillMakerSelect(){
-    var s = $('#fMaker');
-    if (s.find('option').length) return;
-    (META.people || []).forEach(function(p){
-        s.append($('<option>').val(p.id).text(p.user_cname + '（' + (p.dept_name || '') + ' ' + (p.position_name || '') + '）'));
+/* ---- ② 填表人：管理員可先選部門再挑人；一般使用者固定是自己、不可修改 ---- */
+function setupMakerPicker(makerId, makerDeptId){
+    var admin = !!META.perms.canAdmin;
+    $('#fMakerDept,#fMaker').toggle(admin);
+    $('#fMakerFixed').toggle(!admin);
+    if (!admin){
+        MAKERUID = +META.me.id;
+        return;
+    }
+    MAKERUID = +(makerId || META.me.id);
+    // 沒指定部門時（新增單）預設帶自己的部門，這樣一開啟就已經有一份可挑的名單
+    var dept = +makerDeptId || 0;
+    if (!dept){
+        (META.people || []).forEach(function(p){ if (+p.id === MAKERUID && !dept) dept = +p.department_id || 0; });
+    }
+    fillDeptSel('#fMakerDept', dept, '請選擇部門…');
+    loadDeptPeople(dept, '#fMaker', $('#fCommDate').val() || TODAY, MAKERUID, function(rows){
+        // 挑的人不在這個部門（例如管理員把日期改到他還沒到職的時候）就退回自己，避免送出被後端擋下
+        if (!pickedPerson('#fMaker') && rows.length === 0) MAKERUID = +META.me.id;
     });
-    s.val(META.me.id);
 }
+$('#fMakerDept').on('change', function(){
+    loadDeptPeople(this.value, '#fMaker', $('#fCommDate').val() || TODAY, 0, function(){ });
+});
+$('#fMaker').on('change', function(){
+    var p = pickedPerson('#fMaker');
+    MAKERUID = p ? +p.id : +META.me.id;
+    reloadIdentities();
+});
+
 function buildChoiceRows(type, kind, kindOther, ch, chOther){
     var t = $('#recTypeRow').empty();
     $.each(META.types, function(k, v){
@@ -894,17 +1377,151 @@ function buildChoiceRows(type, kind, kindOther, ch, chOther){
     $.each(META.kinds, function(k, v){
         kr.append('<label><input type="radio" name="cKind" value="' + k + '"' + (k === kind ? ' checked' : '') + '> ' + esc(v) + '</label>');
     });
-    kr.append('<input type="text" id="fKindOther" maxlength="100" placeholder="其他請說明" value="' + esc(kindOther || '') + '">');
+    $('#fKindOther').val(kindOther || '');
     var cr = $('#recChRow').empty();
     $.each(META.channels, function(k, v){
         cr.append('<label><input type="checkbox" class="cCh" value="' + k + '"' + (ch && ch[k] ? ' checked' : '') + '> ' + esc(v) + '</label>');
     });
-    cr.append('<input type="text" id="fChOther" maxlength="100" placeholder="其他請說明" value="' + esc(chOther || '') + '">');
+    cr.append('<input type="text" id="fChOther" maxlength="100" data-eg-hint="管道勾了「其他」才要填，例如：LINE 群組" value="' + esc(chOther || '') + '">');
     var ro = REC && !REC.can_edit;
     $('#recTypeRow input,#recKindRow input,#recChRow input').prop('disabled', !!ro);
-    $('#fCommDate,#fParty,#fRemark').prop('readonly', !!ro);
-    $('#fIdentity,#fMaker').prop('disabled', !!ro);
-    $('#fAtt').prop('disabled', !!ro);
+    $('#fCommDate,#fParty,#fRemark,#fKindOther').prop('readonly', !!ro);
+    $('#fIdentity,#fMaker,#fMakerDept').prop('disabled', !!ro);
+    $('#fAtt,#fAttNote').prop('disabled', !!ro);
+    $('#pkContact,#pkContactName,#pkDept,#pkUser').prop('disabled', !!ro);
+}
+
+/* ================= ① 類別連動的利害關係者挑選 =================
+   客戶／供應商＝打名稱或編號模糊搜尋（cm_party_search）；代表人可挑對方登錄的聯絡人或手填。
+   員工＝先選部門，職稱依溝通日期回推當時的（主職＋兼任都列）。
+   其他＝完全手填，不綁任何主檔。
+   後端 rec_save 會拿同一批來源再核對一次（塞不存在的客戶編號、塞別部門的人都會被擋）＝鐵律8。 */
+var MAKERUID = 0;
+var PARTY = {ref_id:'', user_id:0, contact_id:0, contact_name:''};
+
+function currentKind(){ return $('input[name=cKind]:checked').val() || ''; }
+
+/** 依目前類別切換右側輸入區塊；$rec 有值＝開啟既有單據，要把已存的值回填 */
+function resetPartyPicker(rec){
+    var kind = currentKind();
+    var ro   = REC && !REC.can_edit;
+    PARTY = {
+        ref_id:       rec ? (rec.party_ref_id || '') : '',
+        user_id:      rec ? (+rec.party_user_id || 0) : 0,
+        contact_id:   rec ? (+rec.party_contact_id || 0) : 0,
+        contact_name: rec ? (rec.party_contact_name || '') : ''
+    };
+    $('#pkSearchBox,#pkEmpBox,#pkOtherBox').hide();
+    $('#pkSummary').empty();
+    $('#fPartyBound').hide().empty();
+    acHide('fParty');
+    $('#pkContactName').val(PARTY.contact_name);
+    /* 客戶／供應商＝在這一格打字自動完成（可輸入）；員工＝由下方部門/人員帶入（唯讀）；
+       其他＝完全手填。不給手打是為了避免「畫面寫 A、實際綁 B」。 */
+    var typeable = (kind === 'customer' || kind === 'supplier' || kind === 'other');
+    $('#fParty').prop('readonly', !!ro || !typeable);
+    $('#fPartyLock').toggle(kind === 'customer' || kind === 'supplier');
+
+    if (kind === 'customer' || kind === 'supplier'){
+        $('#pkSearchBox').show();
+        if (PARTY.ref_id){
+            // 既有單據：用存下來的編號回查一次，確認還在、並把編號顯示在欄位上方
+            get({action:'party_search', kind:kind, kw:PARTY.ref_id}, function(res){
+                var hit = null;
+                (res.rows || []).forEach(function(x){ if (String(x.id) === String(PARTY.ref_id)) hit = x; });
+                PARTYHIT = hit;
+                if (hit) $('#fParty').val(hit.full_name || hit.name);
+                acBoundHtml('#fPartyBound', kind, hit);
+                loadPartyContacts();
+            });
+        } else {
+            PARTYHIT = null;
+            acBoundHtml('#fPartyBound', kind, null);
+            $('#pkContact').empty().append($('<option>').val('').text('請先選擇對象'));
+        }
+    } else if (kind === 'employee'){
+        $('#pkEmpBox').show();
+        fillDeptSel('#pkDept', PARTY.ref_id, '請選擇部門…');
+        loadDeptPeople(PARTY.ref_id, '#pkUser', $('#fCommDate').val() || TODAY, PARTY.user_id, function(){ syncPartyFromPicker(); });
+    } else if (kind === 'other'){
+        $('#pkOtherBox').show();
+    }
+    if (kind !== 'customer' && kind !== 'supplier' && kind !== 'employee') syncPartyFromPicker();
+}
+$('#recKindRow').on('change', 'input[name=cKind]', function(){
+    $('#fParty').val('');                 // 換類別＝換一套對象，舊的名稱留著只會誤導
+    resetPartyPicker(null);
+});
+
+/* 「利害關係者公司/代表人」這一格就是搜尋框：打字→即時建議→選了直接填在這一格，
+   編號顯示在欄位上方（使用者指定的做法，取代原本「關鍵字欄＋選擇下拉」兩個欄位） */
+var PARTYHIT = null;
+acSetup('#fParty', '#fPartyList', currentKind, function(x){
+    var kind = currentKind();
+    PARTYHIT = x;
+    PARTY.ref_id = x ? String(x.id) : '';
+    // 換了對象＝原本挑的聯絡人一定不再屬於這一家，要清掉
+    PARTY.contact_id = 0; PARTY.contact_name = ''; $('#pkContactName').val('').prop('readonly', false);
+    acBoundHtml('#fPartyBound', kind, x);
+    if (x) loadPartyContacts();
+    else $('#pkContact').empty().append($('<option>').val('').text('請先選擇對象'));
+    syncPartyFromPicker();
+});
+function loadPartyContacts(){
+    var kind = currentKind(), s = $('#pkContact').empty();
+    if (!PARTY.ref_id){ s.append($('<option>').val('').text('請先選擇對象')); return; }
+    s.append($('<option>').val('').text('載入中…'));
+    get({action:'party_contacts', kind:kind, ref_id:PARTY.ref_id}, function(res){
+        var rows = res.rows || [];
+        CONTACTCACHE['pkContact'] = rows;
+        s.empty().append($('<option>').val('').text(rows.length ? '（手動填寫／不指定）' : '（對方尚未登錄聯絡人，請手動填寫）'));
+        rows.forEach(function(c, i){
+            s.append($('<option>').val(i).text(c.name + (c.title ? '　' + c.title : '') + (c.department ? '　' + c.department : '')));
+        });
+        if (PARTY.contact_id){
+            for (var i = 0; i < rows.length; i++) if (+rows[i].contact_id === +PARTY.contact_id){ s.val(String(i)); break; }
+        }
+        syncPartyFromPicker();
+    });
+}
+$('#pkContact').on('change', function(){
+    var rows = CONTACTCACHE['pkContact'] || [], c = this.value === '' ? null : rows[+this.value];
+    PARTY.contact_id   = c ? +c.contact_id : 0;
+    PARTY.contact_name = c ? c.name : '';
+    $('#pkContactName').val(c ? c.name : '').prop('readonly', !!c);
+    syncPartyFromPicker();
+});
+$('#pkContactName').on('input', function(){
+    if (PARTY.contact_id) return;                    // 挑了聯絡人就以那一位為準
+    PARTY.contact_name = this.value || '';
+    syncPartyFromPicker();
+});
+$('#pkDept').on('change', function(){
+    PARTY.ref_id = this.value || ''; PARTY.user_id = 0;
+    loadDeptPeople(this.value, '#pkUser', $('#fCommDate').val() || TODAY, 0, function(){ syncPartyFromPicker(); });
+});
+$('#pkUser').on('change', function(){
+    var p = pickedPerson('#pkUser');
+    PARTY.user_id = p ? +p.id : 0;
+    PARTY.contact_name = p ? personLabel(p) : '';
+    syncPartyFromPicker();
+});
+/** 把挑到的對象反映到「利害關係者公司/代表人」欄與下方摘要（畫面與送出的值永遠一致） */
+function syncPartyFromPicker(){
+    var kind = currentKind(), sum = $('#pkSummary').empty(), txt = '';
+    if (kind === 'customer' || kind === 'supplier'){
+        if (PARTYHIT){
+            txt = '將存入：' + (PARTYHIT.full_name || PARTYHIT.name) + '（編號 ' + PARTYHIT.id + '）'
+                + (PARTY.contact_name ? '　代表人：' + PARTY.contact_name : '　代表人：未指定');
+        }
+    } else if (kind === 'employee'){
+        var p = pickedPerson('#pkUser');
+        if (p){
+            $('#fParty').val(p.dept_name + '　' + p.name);
+            txt = '將存入：' + p.dept_name + '　' + personLabel(p);
+        }
+    }
+    if (txt) sum.html('<span class="pk-sum">' + esc(txt) + '</span>');
 }
 /* 選了填表身分就即時顯示「這張單會送給誰確認」——不先講清楚，使用者送出後才發現簽核人不對 */
 /* 身分資料放模組變數、不要掛在 <option> 的 jQuery data 上：
@@ -912,7 +1529,7 @@ function buildChoiceRows(type, kind, kindOther, ch, chOther){
    症狀是「篩選過一次之後簽核人預覽就空白了」——只有實際打字篩選才看得到。 */
 var IDMAP = {}, GMPOOL = [];
 function reloadIdentities(keep){
-    var uid = $('#fMaker').val() || META.me.id;
+    var uid = MAKERUID || META.me.id;
     get({action:'identities', user_id:uid, date:$('#fCommDate').val() || TODAY}, function(res){
         var s = $('#fIdentity').empty();
         IDMAP = {}; GMPOOL = res.gm_pool || [];
@@ -931,6 +1548,12 @@ function reloadIdentities(keep){
 function showSignPreview(){
     var i = IDMAP[$('#fIdentity').val()];
     if (!i){ $('#signPreview').html(''); return; }
+    if (!META.need_sign){
+        $('#signPreview').html('<b>簽核</b>：本模組目前設定為<b>免簽核</b>，按下送出時系統會自動完成'
+            + '「部門主管確認」與「總經理確認」兩格並結案（簽章日期用本單溝通日期）。'
+            + (META.perms.canAdmin ? '　要改回需要簽核請按「模組設定」。' : ''));
+        return;
+    }
     var gm = GMPOOL;
     var gmTxt = gm.length ? gm.map(function(p){ return esc(p.name); }).join('、') : '<span style="color:#DD5138;">尚未設定（請洽管理員）</span>';
     var h;
@@ -946,41 +1569,77 @@ function showSignPreview(){
     $('#signPreview').html(h + '<br><b>總經理確認</b>：' + gmTxt);
 }
 $('#fIdentity').on('change', showSignPreview);
-$('#fMaker').on('change', function(){ reloadIdentities(); });
-$('#fCommDate').on('change', function(){ reloadIdentities($('#fIdentity').val()); });
+/* 溝通日期＝本單業務日期，一改就要把「依當時職務解析」的三份名單全部重抓（ai-rules/22）：
+   填表身分、管理員代填時的人員清單、以及類別＝員工時的對象清單。只改一份就會出現
+   「畫面上挑得到、送出卻被後端擋下」——因為後端是用溝通日期重新驗的（鐵律8）。 */
+$('#fCommDate').on('change', function(){
+    var d = this.value || TODAY;
+    reloadIdentities($('#fIdentity').val());
+    if (META.perms.canAdmin) loadDeptPeople($('#fMakerDept').val(), '#fMaker', d, MAKERUID, function(){ });
+    if (currentKind() === 'employee') loadDeptPeople($('#pkDept').val(), '#pkUser', d, PARTY.user_id, function(){ syncPartyFromPicker(); });
+});
 
 /* ---- 附件 ---- */
+/* ⑥ 有填說明時，畫面上一律顯示說明而不是原始檔名（掃描檔名多半是一串日期流水號，看不出是什麼）。
+   原始檔名仍掛在 title 上、下載時也還是用原檔名。 */
+function attDisplayName(a){ return (a.note && String(a.note).trim() !== '') ? a.note : (a.orig_name || a.file_name); }
+function attRowHtml(a, editable){
+    var nm = attDisplayName(a);
+    return '<div class="att-row">'
+        + '<span class="nm" title="' + esc(a.orig_name || a.file_name) + '">' + esc(nm)
+        + (a.note && String(a.note).trim() !== '' ? '<span class="hint">　（' + esc(a.orig_name || a.file_name) + '）</span>' : '')
+        + '</span>'
+        + '<span class="sz">' + Math.round((+a.file_size || 0) / 1024) + ' KB</span>'
+        + '<a class="b-mini" target="_blank" href="' + API + '?action=att_download&att_id=' + a.att_id + '"><i class="fa fa-eye"></i> 檢視</a>'
+        + '<a class="b-mini" href="' + API + '?action=att_download&att_id=' + a.att_id + '&dl=1&dl_name='
+            + encodeURIComponent(a.orig_name || a.file_name) + '"><i class="fa fa-download"></i> 下載</a>'
+        + (editable ? '<button type="button" class="b-mini" onclick="editAttNote(' + a.att_id + ')"><i class="fa fa-pencil"></i> 改說明</button>'
+                    + '<button type="button" class="b-mini danger" onclick="delAtt(' + a.att_id + ')"><i class="fa fa-trash"></i></button>' : '')
+        + '</div>';
+}
 function renderAttaches(){
     var b = $('#attList').empty(), ro = REC && !REC.can_edit;
     if (!ATTACHES.length){ b.html('<span class="hint">尚無附件</span>'); return; }
-    ATTACHES.forEach(function(a){
-        b.append('<div class="att-row">'
-            + '<span class="nm">' + esc(a.orig_name || a.file_name) + '</span>'
-            + '<span class="sz">' + Math.round((+a.file_size || 0) / 1024) + ' KB</span>'
-            + '<a class="b-mini" target="_blank" href="' + API + '?action=att_download&att_id=' + a.att_id + '"><i class="fa fa-eye"></i> 檢視</a>'
-            + '<a class="b-mini" href="' + API + '?action=att_download&att_id=' + a.att_id + '&dl=1&dl_name='
-                + encodeURIComponent(a.orig_name || a.file_name) + '"><i class="fa fa-download"></i> 下載</a>'
-            + (ro ? '' : '<button type="button" class="b-mini danger" onclick="delAtt(' + a.att_id + ')"><i class="fa fa-trash"></i></button>')
-            + '</div>');
-    });
+    ATTACHES.forEach(function(a){ b.append(attRowHtml(a, !ro)); });
+}
+function editAttNote(id){
+    var cur = '';
+    ATTACHES.forEach(function(a){ if (+a.att_id === +id) cur = a.note || ''; });
+    var v = prompt('附件說明（留空＝顯示原始檔名）', cur);
+    if (v === null) return;
+    post({action:'att_note', att_id:id, note:v}, function(){ refreshAttaches(); });
 }
 /* 上傳一律用原生可見的 file input＋送出時直讀 input.files（記憶 file_upload_change_event 三鐵則） */
 $('#fAtt').on('change', function(){
     var files = this.files;
     if (!files || !files.length) return;
     var recId = (REC && REC.rec) ? REC.rec.rec_id : 0, done = 0, self = this;
+    var note = $('#fAttNote').val() || '';        // 這一次選取的全部檔案套同一段說明
     NProgress.start();
     for (var i = 0; i < files.length; i++){
         var fd = new FormData();
         fd.append('action', 'att_upload'); fd.append('csrf', CSRF);
         fd.append('rec_id', recId); fd.append('temp_key', TEMPKEY);
+        fd.append('note', note);
         fd.append('file', files[i]);
         $.ajax({url:API, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
          .always(function(){
-             if (++done === files.length){ NProgress.done(); self.value = ''; refreshAttaches(); }
+             if (++done === files.length){ NProgress.done(); self.value = ''; $('#fAttNote').val(''); refreshAttaches(); }
          });
     }
 });
+/* ⑤ 從清單的附件數點開：唯讀檢視，不必先開整張單 */
+var RECATT = {};
+function openAttList(recId){
+    var rows = RECATT[recId] || [];
+    $('#attTitle').text('佐證附件（' + rows.length + ' 個）');
+    var b = $('#attListView').empty();
+    if (!rows.length){ b.html('<span class="hint">這張單沒有附件。</span>'); }
+    else rows.forEach(function(a){ b.append(attRowHtml(a, false)); });
+    b.append('<div class="hint" style="margin-top:8px;">要新增或刪除附件請按該列的「開啟」進入單據；'
+        + '單據送出後附件即鎖定不可異動。</div>');
+    openMask('attMask');
+}
 function refreshAttaches(){
     var recId = (REC && REC.rec) ? REC.rec.rec_id : 0;
     get({action:'att_list', rec_id:recId, temp_key:TEMPKEY}, function(res){ ATTACHES = res.rows || []; renderAttaches(); });
@@ -1031,13 +1690,24 @@ function collectRec(){
     if (d.party_kind === 'other' && !d.party_kind_other.trim()){ setErr('eKind', '#fKindOther', '類別選「其他」時請填寫說明'); ok = false; }
     d.party_name = $('#fParty').val() || '';
     if (!d.party_name.trim()){ setErr('eParty', '#fParty', '請填寫利害關係者公司/代表人'); ok = false; }
+    /* ① 依類別帶上挑到的對象；後端會用同一批來源再核對一次（鐵律8） */
+    d.party_ref_id = PARTY.ref_id || '';
+    d.party_user_id = PARTY.user_id || 0;
+    d.party_contact_id = PARTY.contact_id || 0;
+    d.party_contact_name = (PARTY.contact_id ? PARTY.contact_name : ($('#pkContactName').val() || ''));
+    if (d.party_kind === 'customer' && !d.party_ref_id){ setErr('eParty', '#fParty', '請在欄位內打客戶名稱或編號，再從跳出的清單挑一筆（要綁到客戶編號才存得進去）'); ok = false; }
+    if (d.party_kind === 'supplier' && !d.party_ref_id){ setErr('eParty', '#fParty', '請在欄位內打廠商名稱或編號，再從跳出的清單挑一筆（要綁到廠商編號才存得進去）'); ok = false; }
+    if (d.party_kind === 'employee'){
+        if (!d.party_ref_id){ setErr('eKind', '#pkDept', '請選擇員工所屬部門'); ok = false; }
+        else if (!d.party_user_id){ setErr('eKind', '#pkUser', '請選擇員工'); ok = false; }
+    }
     var any = false;
     $('#recChRow .cCh').each(function(){ if (this.checked){ d['ch_' + this.value] = 1; any = true; } });
     if (!any){ setErr('eCh', null, '請至少勾選一種溝通管道'); ok = false; }
     d.ch_other_text = $('#fChOther').val() || '';
     if (d.ch_other && !d.ch_other_text.trim()){ setErr('eCh', '#fChOther', '管道勾選「其他」時請填寫說明'); ok = false; }
     var idv = ($('#fIdentity').val() || '').split('|');
-    d.maker_id = $('#fMaker').val() || META.me.id;
+    d.maker_id = MAKERUID || META.me.id;
     d.maker_dept_id = idv[0] || 0; d.maker_pos_id = idv[1] || 0;
     if (!idv[0]){ setErr('eIdentity', '#fIdentity', '請選擇填表人的部門／職稱'); ok = false; }
     var items = RECITEMS.filter(function(x){ return (x.question || '').trim() !== '' || (x.reply || '').trim() !== ''; });
@@ -1056,7 +1726,12 @@ $('#btnRecSave').on('click', function(){
 });
 $('#btnRecSubmit').on('click', function(){
     var d = collectRec(); if (!d) return;
-    if (!confirm('送出後這張單會鎖定不能修改，並依序送部門主管與總經理確認。確定要送出嗎？')) return;
+    // ⑧ 模組設定為免簽核時，送出＝當場自動簽完並結案，文案要講清楚，不可還寫「送部門主管確認」
+    var msg = META.need_sign
+        ? '送出後這張單會鎖定不能修改，並依序送部門主管與總經理確認。確定要送出嗎？'
+        : '本模組目前設定為「免簽核」：送出後系統會立刻自動完成兩格確認並結案（簽章日期用本單溝通日期），'
+          + '之後不能再修改。確定要送出嗎？';
+    if (!confirm(msg)) return;
     post(d, function(res){
         post({action:'rec_submit', rec_id:res.rec_id, status_seen:'draft'}, function(r2){
             alert(r2.msg || '已送出');
@@ -1111,21 +1786,23 @@ function openToTrack(idx){
     $('#ttContent').val(it.question);
     $('#ttAction').val(it.reply || '');
     $('#ttDue').val('');
-    var s = $('#ttOwner').empty().append('<option value="">請選擇</option>');
-    (META.people || []).forEach(function(p){
-        s.append($('<option>').val(p.id).text(p.user_cname + '（' + (p.dept_name || '') + ' ' + (p.position_name || '') + '）'));
-    });
-    s
+    // ⑦ 負責人改成「部門 → 人員」兩段式，職稱依該單溝通日期回推當時的
+    TTDATE = (REC && REC.rec) ? REC.rec.comm_date : TODAY;
+    fillDeptSel('#ttOwnerDept', 0, '請選擇部門…');
+    loadDeptPeople(0, '#ttOwner', TTDATE, 0, function(){ });
     openMask('toTrackMask');
 }
+var TTDATE = '';
+$('#ttOwnerDept').on('change', function(){ loadDeptPeople(this.value, '#ttOwner', TTDATE || TODAY, 0, function(){ }); });
 $('#btnToTrackOk').on('click', function(){
     clearErr('#toTrackMask');
-    var ok = true;
-    if (!$('#ttOwner').val()){ setErr('eTtOwner', '#ttOwner', '請指定負責人'); ok = false; }
+    var ok = true, p = pickedPerson('#ttOwner');
+    if (!$('#ttOwnerDept').val()){ setErr('eTtOwner', '#ttOwnerDept', '請先選擇負責人所屬部門'); ok = false; }
+    else if (!p){ setErr('eTtOwner', '#ttOwner', '請指定負責人'); ok = false; }
     if (!$('#ttDue').val()){ setErr('eTtDue', '#ttDue', '請填寫預計完成日'); ok = false; }
     if (!ok) return;
     post({action:'rec_to_track', item_id:TTCTX.item_id, action_text:$('#ttAction').val(),
-          owner_id:$('#ttOwner').val(), due_date:$('#ttDue').val()}, function(){
+          owner_id:p.id, due_date:$('#ttDue').val()}, function(){
         alert('已建立追蹤項目，可在「回應利害關係者措施追蹤表」分頁查看。');
         closeMask('toTrackMask');
         openRec(REC.rec.rec_id); loadTrack();
@@ -1164,17 +1841,21 @@ $('#btnTrackSearch').on('click', function(){ PAGE.track = 1; loadTrack(); });
 $('#trackKw').on('keydown', function(e){ if (e.key === 'Enter'){ PAGE.track = 1; loadTrack(); } });
 $('#trackShow').on('change', function(){ PAGE.track = 1; loadTrack(); });
 
-var TRACKROWS = {};
+var TRACKROWS = {}, TKLEGACYOWNER = '';
 $('#btnTrackAdd').on('click', function(){ openTrack(0); });
+$('#tkOwnerDept').on('change', function(){
+    TKLEGACYOWNER = '';                                   // 使用者自己改部門＝要重新挑人，舊姓名退路作廢
+    loadDeptPeople(this.value, '#tkOwner', $('#tkReact').val() || TODAY, 0, function(){ });
+});
 function openTrack(id){
     clearErr('#trackMask');
-    var fillOwner = function(sel){
-        var s = $('#tkOwner').empty().append('<option value="">請選擇</option>');
-        (META.people || []).forEach(function(p){
-            s.append($('<option>').val(p.id).text(p.user_cname + '（' + (p.dept_name || '') + ' ' + (p.position_name || '') + '）'));
-        });
-        if (sel) s.val(sel);
-        s
+    /* 負責人一樣改成「部門 → 人員」兩段式。編輯既有項目時先用 META.people 反查他的部門，
+       這樣一開跳窗就直接停在對的部門、人也已經選好。 */
+    var fillOwner = function(uid, date){
+        var dept = 0;
+        (META.people || []).forEach(function(p){ if (+p.id === +uid && !dept) dept = +p.department_id || 0; });
+        fillDeptSel('#tkOwnerDept', dept, '請選擇部門…');
+        loadDeptPeople(dept, '#tkOwner', date || TODAY, uid, function(){ });
     };
     if (!id){
         $('#trackTitle').text('新增追蹤項目');
@@ -1182,7 +1863,8 @@ function openTrack(id){
         $('#tkReact,#tkDue,#tkCloseDate').val('');
         $('#tkClosed').prop('checked', false).trigger('change');
         $('#tkSrc').html(''); $('#btnTrackDel').hide();
-        fillOwner(''); $('#trackMask').data('id', 0);
+        TKLEGACYOWNER = '';
+        fillOwner(0, TODAY); $('#trackMask').data('id', 0);
         openMask('trackMask');
         return;
     }
@@ -1195,8 +1877,10 @@ function openTrack(id){
         $('#tkReact').val(r.react_date || ''); $('#tkDue').val(r.due_date || '');
         $('#tkCloseDate').val(r.closed_date || ''); $('#tkCloseNote').val(r.close_note || '');
         $('#tkClosed').prop('checked', !!+r.is_closed).trigger('change');
-        fillOwner(r.owner_id || '');
-        if (!r.owner_id && r.owner_name) $('#tkOwner').append($('<option>').val('').text(r.owner_name));
+        /* 舊資料可能只有姓名沒有 user_id（或那個人已離職、不在候選名單裡）——
+           留著原姓名當退路，使用者沒有重新挑人時就照原樣存回去，不要把人洗掉。 */
+        TKLEGACYOWNER = (!+r.owner_id && r.owner_name) ? r.owner_name : '';
+        fillOwner(+r.owner_id || 0, r.react_date || TODAY);
         $('#tkSrc').html(r.src_rec_no ? '來源：溝通記錄表 <b>' + esc(r.src_rec_no) + '</b>' : '來源：手動新增');
         $('#btnTrackDel').toggle(!!META.perms.canAdmin);
         $('#trackMask').data('id', id);
@@ -1214,12 +1898,14 @@ $('#btnTrackSave').on('click', function(){
     var ok = true, closed = $('#tkClosed').is(':checked');
     if (!$('#tkParty').val().trim()){ setErr('eTkParty', '#tkParty', '請填寫利害關係者'); ok = false; }
     if (!$('#tkContent').val().trim()){ setErr('eTkContent', '#tkContent', '請填寫反應內容'); ok = false; }
-    if (!$('#tkOwner').val()){ setErr('eTkOwner', '#tkOwner', '請指定負責人'); ok = false; }
+    var tkp = pickedPerson('#tkOwner');
+    if (!tkp && !TKLEGACYOWNER){ setErr('eTkOwner', '#tkOwner', '請指定負責人（先選部門再挑人）'); ok = false; }
     if (!closed && !$('#tkDue').val()){ setErr('eTkDue', '#tkDue', '尚未結案的項目必須填寫預計完成日'); ok = false; }
     if (!ok) return;
     post({action:'track_save', track_id:$('#trackMask').data('id') || 0,
         party:$('#tkParty').val(), content:$('#tkContent').val(), react_date:$('#tkReact').val(),
-        action_text:$('#tkAction').val(), owner_id:$('#tkOwner').val(), due_date:$('#tkDue').val(),
+        action_text:$('#tkAction').val(), owner_id:tkp ? tkp.id : 0,
+        owner_name:tkp ? '' : TKLEGACYOWNER, due_date:$('#tkDue').val(),
         is_closed:closed ? 1 : 0, closed_date:$('#tkCloseDate').val(), close_note:$('#tkCloseNote').val()},
         function(){ closeMask('trackMask'); loadTrack(); });
 });
@@ -1233,17 +1919,35 @@ $('#btnTrackDel').on('click', function(){
 function loadCtrl(){
     get({action:'ctrl_list', page:PAGE.ctrl, per:PER.ctrl, kw:$('#ctrlKw').val()}, function(res){
         window.__ctrlPrint = res.print;
+        CTRLROWS = {};
         var b = $('#ctrlBody').empty();
-        if (!res.rows.length) b.html('<tr><td colspan="7" class="cm-empty">尚未建立任何常態性溝通機制</td></tr>');
+        if (!res.rows.length) b.html('<tr><td colspan="8" class="cm-empty">尚未建立任何常態性溝通機制</td></tr>');
         res.rows.forEach(function(r, i){
+            CTRLROWS[r.ctrl_id] = r;
+            // 頻率字串一律用後端 cm_freq_text() 組好的 freq_text（鐵律4：前端不要再拼一次「每 N 單位 M 次」）
+            var freq = r.freq_text || r.freq || '';
+            var due  = r.next_due_date ? dispDate(r.next_due_date) : '<span class="hint">未設定</span>';
+            var late = r.next_due_date && r.next_due_date < TODAY;
+            var rem;
+            if (+r.remind_enabled){
+                rem = '<span class="st tg-open">提醒開啟</span><br><span class="hint">提前 ' + (+r.remind_lead_days || 0)
+                    + ' 天　' + esc(String(r.remind_time || '09:00').substr(0, 5)) + '<br>'
+                    + esc((r.target_labels || []).join('、') || '（未指定對象）') + '</span>';
+            } else {
+                rem = '<span class="hint">未開啟提醒</span>';
+            }
             b.append('<tr>'
                 + '<td>' + ((res.page - 1) * res.per + i + 1) + '</td>'
-                + '<td>' + esc(r.maker_name) + '</td>'
-                + '<td class="l wrap">' + esc(r.party) + '</td>'
+                + '<td>' + esc(r.maker_name) + (r.maker_dept_name ? '<br><span class="hint">' + esc(r.maker_dept_name) + '</span>' : '') + '</td>'
+                + '<td class="l wrap">' + esc(r.party)
+                + '<br><span class="hint">' + esc(r.party_kind === 'other' ? (r.party_kind_other || '其他') : (META.kinds[r.party_kind] || '')) + '</span></td>'
                 + '<td class="l wrap">' + esc(r.content) + '</td>'
                 + '<td class="l">' + esc(r.channel) + '</td>'
-                + '<td>' + esc(r.freq) + '</td>'
-                + '<td><button class="b-mini" onclick="openCtrl(' + r.ctrl_id + ')"><i class="fa fa-pencil"></i> 編輯</button></td>'
+                + '<td>' + esc(freq) + '</td>'
+                + '<td>' + due + (late ? '<br><span class="st tg-late">已逾期</span>' : '') + '<br>' + rem + '</td>'
+                + '<td><button class="b-mini warm" onclick="openC2R(' + r.ctrl_id + ')" title="依這個機制建立一張溝通記錄表">'
+                + '<i class="fa fa-plus"></i> 建立溝通記錄</button>'
+                + '<button class="b-mini" onclick="openCtrl(' + r.ctrl_id + ')"><i class="fa fa-pencil"></i> 編輯</button></td>'
                 + '</tr>');
         });
         renderPager('#ctrlPager', res.total, res.page, res.per,
@@ -1254,46 +1958,254 @@ function loadCtrl(){
 $('#btnCtrlSearch').on('click', function(){ PAGE.ctrl = 1; loadCtrl(); });
 $('#ctrlKw').on('keydown', function(e){ if (e.key === 'Enter'){ PAGE.ctrl = 1; loadCtrl(); } });
 
+/* ---- ⑨⑩⑪ 管制項目編輯：填表人／利害關係人／管道全部比照溝通記錄，頻率固定「每 N 單位 M 次」 ---- */
+var CTRLROWS = {}, CFMAKERUID = 0;
+var CFPARTY = {ref_id:'', user_id:0};
+var CFTARGETS = [];                 // [{type:'user'|'dept', id:N}]
+
+function cfKind(){ return $('input[name=cfKind]:checked').val() || ''; }
+
 $('#btnCtrlAdd').on('click', function(){ openCtrl(0); });
 function openCtrl(id){
     clearErr('#ctrlMask');
-    var s = $('#cfMaker').empty();
-    (META.people || []).forEach(function(p){
-        s.append($('<option>').val(p.id).text(p.user_cname + '（' + (p.dept_name || '') + ' ' + (p.position_name || '') + '）'));
+    var r = id ? CTRLROWS[id] : null;
+    if (id && !r){ alert('查無此管制項目，請重新整理。'); loadCtrl(); return; }
+
+    // ---- 類別 radio（管制表沒有「型態」，但類別與管道跟記錄表同一套常數） ----
+    var kr = $('#cfKindRow').empty();
+    $.each(META.kinds, function(k, v){
+        kr.append('<label><input type="radio" name="cfKind" value="' + k + '"'
+            + ((r ? r.party_kind : '') === k ? ' checked' : '') + '> ' + esc(v) + '</label>');
     });
-    if (!id){
-        $('#ctrlTitle').text('新增管制項目');
-        $('#cfParty,#cfContent,#cfChannel,#cfFreq,#cfRemark').val('');
-        $('#cfSort').val(0); s.val(META.me.id);
-        $('#btnCtrlDel').hide(); $('#ctrlMask').data('id', 0);
-        s
-        openMask('ctrlMask');
-        return;
+    var cr = $('#cfChRow').empty();
+    $.each(META.channels, function(k, v){
+        // 管制表的 channel 是顯示字串（後端由勾選組出來的），回填時用字串比對把勾勾點回去
+        var on = r ? (k === 'other' ? false : (String(r.channel || '').indexOf(v) >= 0)) : false;
+        cr.append('<label><input type="checkbox" class="cfCh" value="' + k + '"' + (on ? ' checked' : '') + '> ' + esc(v) + '</label>');
+    });
+    cr.append('<input type="text" id="cfChOther" maxlength="100" data-eg-hint="管道勾了「其他」才要填，例如：LINE 群組" value="">');
+
+    // ---- 頻率單位 ----
+    var fu = $('#cfFreqUnit').empty();
+    $.each(META.freq_units || {month:'月'}, function(k, v){ fu.append($('<option>').val(k).text(v)); });
+
+    // ---- 填表人（管理員可代填；一般使用者固定自己） ----
+    var admin = !!META.perms.canAdmin;
+    $('#cfMakerDept,#cfMaker').toggle(admin);
+    $('#cfMakerFixed').toggle(!admin);
+    CFMAKERUID = r ? (+r.maker_id || +META.me.id) : +META.me.id;
+    if (admin){
+        var mdept = r ? (+r.maker_dept_id || 0) : 0;
+        if (!mdept) (META.people || []).forEach(function(p){ if (+p.id === CFMAKERUID && !mdept) mdept = +p.department_id || 0; });
+        fillDeptSel('#cfMakerDept', mdept, '請選擇部門…');
+        loadDeptPeople(mdept, '#cfMaker', TODAY, CFMAKERUID, function(){ });
+        $('#cfMakerShow').text('');
+    } else {
+        $('#cfMakerShow').text(META.me.name);
     }
-    get({action:'ctrl_list', page:1, per:50, kw:''}, function(res){
-        var r = null;
-        res.rows.forEach(function(x){ if (+x.ctrl_id === +id) r = x; });
-        if (!r){ alert('查無此管制項目，請重新整理。'); loadCtrl(); return; }
-        $('#ctrlTitle').text('編輯管制項目');
-        $('#cfParty').val(r.party); $('#cfContent').val(r.content); $('#cfChannel').val(r.channel);
-        $('#cfFreq').val(r.freq); $('#cfRemark').val(r.remark || ''); $('#cfSort').val(r.sort_order || 0);
-        s.val(r.maker_id || META.me.id); s
-        $('#btnCtrlDel').toggle(!!META.perms.canAdmin); $('#ctrlMask').data('id', id);
-        openMask('ctrlMask');
+
+    // ---- 利害關係人 ----
+    CFPARTY = {ref_id: r ? (r.party_ref_id || '') : '', user_id: r ? (+r.party_user_id || 0) : 0};
+    $('#cfKindOther').val(r ? (r.party_kind_other || '') : '');
+    $('#cfParty').val(r ? (r.party || '') : '');
+    resetCfParty(true);
+
+    // ---- 其餘欄位 ----
+    $('#cfContent').val(r ? (r.content || '') : '');
+    $('#cfFreqN').val(r ? (+r.freq_n || 1) : 1);
+    $('#cfFreqUnit').val(r ? (r.freq_unit || 'month') : 'month');
+    $('#cfFreqTimes').val(r ? (+r.freq_times || 1) : 1);
+    $('#cfNextDue').val(r ? (r.next_due_date || '') : '');
+    $('#cfLead').val(r && r.remind_lead_days !== null && r.remind_lead_days !== undefined ? +r.remind_lead_days : 3);
+    $('#cfRemTime').val(r && r.remind_time ? String(r.remind_time).substr(0, 5) : '09:00');
+    $('#cfRemind').prop('checked', r ? !!+r.remind_enabled : false);
+    $('#cfRemark').val(r ? (r.remark || '') : '');
+    $('#cfSort').val(r ? (+r.sort_order || 0) : 0);
+    CFTARGETS = (r && r.targets ? r.targets : []).map(function(t){ return {type:t.target_type, id:+t.target_id}; });
+    fillCfTargetPicks();
+    renderCfTargets();
+    syncCfRemind();
+    updFreqPreview();
+
+    $('#ctrlTitle').text(id ? '編輯管制項目' : '新增管制項目');
+    $('#btnCtrlDel').toggle(!!META.perms.canAdmin && !!id);
+    $('#ctrlMask').data('id', id || 0);
+    openMask('ctrlMask');
+}
+$('#cfMakerDept').on('change', function(){ loadDeptPeople(this.value, '#cfMaker', TODAY, 0, function(){ }); });
+$('#cfMaker').on('change', function(){ var p = pickedPerson('#cfMaker'); CFMAKERUID = p ? +p.id : +META.me.id; });
+
+/* 類別連動（管制表版：客戶／供應商**不必挑到聯絡人**，那是開記錄表時才填的） */
+function resetCfParty(keep){
+    var kind = cfKind();
+    $('#cfSearchBox,#cfEmpBox,#cfOtherBox').hide();
+    $('#cfSummary').empty();
+    $('#cfPartyBound').hide().empty();
+    acHide('cfParty');
+    if (!keep){ CFPARTY = {ref_id:'', user_id:0}; CFHIT = null; $('#cfParty').val(''); }
+    // 客戶／供應商＝在這一格打字自動完成；員工＝由下方部門/人員帶入（唯讀）；其他＝手填
+    $('#cfParty').prop('readonly', kind === 'employee');
+    $('#cfPartyLock').toggle(kind === 'customer' || kind === 'supplier');
+    if (kind === 'customer' || kind === 'supplier'){
+        $('#cfSearchBox').show();
+        if (CFPARTY.ref_id){
+            get({action:'party_search', kind:kind, kw:CFPARTY.ref_id}, function(res){
+                var hit = null;
+                (res.rows || []).forEach(function(x){ if (String(x.id) === String(CFPARTY.ref_id)) hit = x; });
+                CFHIT = hit;
+                if (hit) $('#cfParty').val(hit.full_name || hit.name);
+                acBoundHtml('#cfPartyBound', kind, hit);
+                syncCfParty();
+            });
+        } else {
+            CFHIT = null;
+            acBoundHtml('#cfPartyBound', kind, null);
+        }
+    } else if (kind === 'employee'){
+        $('#cfEmpBox').show();
+        fillDeptSel('#cfDept', CFPARTY.ref_id, '請選擇部門…');
+        loadDeptPeople(CFPARTY.ref_id, '#cfUser', TODAY, CFPARTY.user_id, function(){ syncCfParty(); });
+    } else if (kind === 'other'){
+        $('#cfOtherBox').show();
+    }
+}
+$('#cfKindRow').on('change', 'input[name=cfKind]', function(){ resetCfParty(false); });
+/* 「利害關係人」這一格就是搜尋框（同記錄表的做法） */
+var CFHIT = null;
+acSetup('#cfParty', '#cfPartyList', cfKind, function(x){
+    CFHIT = x;
+    CFPARTY.ref_id = x ? String(x.id) : '';
+    acBoundHtml('#cfPartyBound', cfKind(), x);
+    syncCfParty();
+});
+$('#cfDept').on('change', function(){
+    CFPARTY.ref_id = this.value || ''; CFPARTY.user_id = 0;
+    loadDeptPeople(this.value, '#cfUser', TODAY, 0, function(){ syncCfParty(); });
+});
+$('#cfUser').on('change', function(){
+    var p = pickedPerson('#cfUser');
+    CFPARTY.user_id = p ? +p.id : 0;
+    if (p) $('#cfParty').val(p.dept_name + '　' + personLabel(p));   // 唯讀欄位由這裡帶入
+    syncCfParty();
+});
+function syncCfParty(){
+    var kind = cfKind(), sum = $('#cfSummary').empty(), txt = '';
+    if (kind === 'customer' || kind === 'supplier'){
+        if (CFHIT) txt = '將存入：' + (CFHIT.full_name || CFHIT.name) + '（編號 ' + CFHIT.id + '）';
+    } else if (kind === 'employee'){
+        var p = pickedPerson('#cfUser');
+        if (p) txt = '將存入：' + p.dept_name + '　' + personLabel(p);
+    }
+    if (txt) sum.html('<span class="pk-sum">' + esc(txt) + '</span>');
+}
+
+/* ---- 頻率預覽：畫面上的字串跟後端 cm_freq_text() 產生的一致，存檔前就看得到 ---- */
+function updFreqPreview(){
+    var u = (META.freq_units || {})[$('#cfFreqUnit').val()] || '';
+    $('#cfFreqPreview').text('每 ' + (parseInt($('#cfFreqN').val(), 10) || 1) + ' ' + u
+        + ' ' + (parseInt($('#cfFreqTimes').val(), 10) || 1) + ' 次');
+}
+$('#cfFreqN,#cfFreqUnit,#cfFreqTimes').on('input change', updFreqPreview);
+
+/* ---- ⑪ 提醒對象 ---- */
+function syncCfRemind(){
+    var on = $('#cfRemind').is(':checked');
+    $('#cfTargetWrap').toggle(on);
+    $('.cfRemReq').toggle(on);
+}
+$('#cfRemind').on('change', syncCfRemind);
+function fillCfTargetPicks(){
+    var u = $('#cfTargetUser').empty().append($('<option>').val('').text('＋ 加入人員…'));
+    (META.people || []).forEach(function(p){
+        u.append($('<option>').val(p.id).text(p.user_cname + '（' + (p.dept_name || '') + ' ' + (p.position_name || '') + '）'));
+    });
+    var d = $('#cfTargetDept').empty().append($('<option>').val('').text('＋ 加入部門（含子部門）…'));
+    (META.depts || []).forEach(function(x){
+        var pad = new Array(Math.max(0, (+x.level || 1) - 1) + 1).join('　');
+        d.append($('<option>').val(x.id).text(pad + x.name));
     });
 }
+function cfTargetLabel(t){
+    if (t.type === 'user') return nameOf(t.id);
+    var nm = '';
+    (META.depts || []).forEach(function(x){ if (+x.id === +t.id) nm = x.name; });
+    return (nm || ('部門#' + t.id)) + '（含子部門）';
+}
+function renderCfTargets(){
+    var b = $('#cfTargetChips').empty();
+    if (!CFTARGETS.length){ b.html('<span class="hint">尚未指定提醒對象</span>'); return; }
+    CFTARGETS.forEach(function(t, i){
+        b.append('<span class="chip">' + esc(cfTargetLabel(t))
+            + ' <i class="fa fa-times" onclick="dropCfTarget(' + i + ')"></i></span>');
+    });
+}
+function dropCfTarget(i){ CFTARGETS.splice(i, 1); renderCfTargets(); }
+$('#cfTargetUser').on('change', function(){
+    var v = +this.value; this.value = '';
+    if (!v) return;
+    var dup = CFTARGETS.some(function(t){ return t.type === 'user' && +t.id === v; });
+    if (!dup){ CFTARGETS.push({type:'user', id:v}); renderCfTargets(); }
+});
+$('#cfTargetDept').on('change', function(){
+    var v = +this.value; this.value = '';
+    if (!v) return;
+    var dup = CFTARGETS.some(function(t){ return t.type === 'dept' && +t.id === v; });
+    if (!dup){ CFTARGETS.push({type:'dept', id:v}); renderCfTargets(); }
+});
+
+/* ---- 儲存（前端即時驗證，後端 ctrl_save 同規則再擋一次＝鐵律8） ---- */
 $('#btnCtrlSave').on('click', function(){
     clearErr('#ctrlMask');
-    var ok = true;
-    if (!$('#cfParty').val().trim()){ setErr('eCfParty', '#cfParty', '請填寫利害關係人'); ok = false; }
-    if (!$('#cfContent').val().trim()){ setErr('eCfContent', '#cfContent', '請填寫溝通內容'); ok = false; }
-    if (!$('#cfChannel').val().trim()){ setErr('eCfChannel', '#cfChannel', '請填寫溝通管道'); ok = false; }
-    if (!$('#cfFreq').val().trim()){ setErr('eCfFreq', '#cfFreq', '請填寫頻率（管制表只寫常態性機制，一定有頻率）'); ok = false; }
+    var ok = true, kind = cfKind(), d = {action:'ctrl_save', ctrl_id:$('#ctrlMask').data('id') || 0};
+    d.maker_id = CFMAKERUID || META.me.id;
+    d.maker_dept_id = META.perms.canAdmin ? ($('#cfMakerDept').val() || 0) : 0;
+
+    if (!kind){ setErr('eCfKind', null, '請選擇利害關係人的類別'); ok = false; }
+    d.party_kind = kind;
+    d.party_kind_other = $('#cfKindOther').val() || '';
+    d.party_ref_id = CFPARTY.ref_id || '';
+    d.party_user_id = CFPARTY.user_id || 0;
+    d.party = $('#cfParty').val() || '';
+    if (kind === 'other'){
+        if (!d.party_kind_other.trim()){ setErr('eCfKind', '#cfKindOther', '類別選「其他」時請填寫說明'); ok = false; }
+        if (!d.party.trim()){ setErr('eCfParty', '#cfParty', '請填寫利害關係人'); ok = false; }
+    } else if (kind === 'customer' || kind === 'supplier'){
+        if (!d.party_ref_id){ setErr('eCfParty', '#cfParty', kind === 'customer'
+            ? '請在欄位內打客戶名稱或編號，再從跳出的清單挑一筆（要綁到客戶編號才存得進去）'
+            : '請在欄位內打廠商名稱或編號，再從跳出的清單挑一筆（要綁到廠商編號才存得進去）'); ok = false; }
+    } else if (kind === 'employee'){
+        if (!d.party_ref_id){ setErr('eCfKind', '#cfDept', '請選擇員工所屬部門'); ok = false; }
+        else if (!d.party_user_id){ setErr('eCfKind', '#cfUser', '請選擇員工'); ok = false; }
+    }
+
+    d.content = $('#cfContent').val() || '';
+    if (!d.content.trim()){ setErr('eCfContent', '#cfContent', '請填寫溝通內容'); ok = false; }
+
+    var anyCh = false;
+    $('#cfChRow .cfCh').each(function(){ if (this.checked){ d['ch_' + this.value] = 1; anyCh = true; } });
+    if (!anyCh){ setErr('eCfChannel', null, '請至少勾選一種溝通管道'); ok = false; }
+    d.ch_other_text = $('#cfChOther').val() || '';
+    if (d.ch_other && !d.ch_other_text.trim()){ setErr('eCfChannel', '#cfChOther', '管道勾選「其他」時請填寫說明'); ok = false; }
+
+    d.freq_n = parseInt($('#cfFreqN').val(), 10) || 0;
+    d.freq_unit = $('#cfFreqUnit').val() || 'month';
+    d.freq_times = parseInt($('#cfFreqTimes').val(), 10) || 0;
+    if (d.freq_n < 1 || d.freq_times < 1){ setErr('eCfFreq', '#cfFreqN', '頻率的次數與週期都必須至少是 1'); ok = false; }
+
+    d.next_due_date = $('#cfNextDue').val() || '';
+    d.remind_enabled = $('#cfRemind').is(':checked') ? 1 : 0;
+    d.remind_lead_days = parseInt($('#cfLead').val(), 10) || 0;
+    d.remind_time = $('#cfRemTime').val() || '';
+    d.targets = JSON.stringify(CFTARGETS);
+    if (d.remind_enabled){
+        if (!d.next_due_date){ setErr('eCfNextDue', '#cfNextDue', '要自動提醒就必須填「下次應溝通日」，提醒時間是由它往前推算的'); ok = false; }
+        if (d.remind_time && !/^\d{1,2}:\d{2}$/.test(d.remind_time)){ setErr('eCfRemTime', '#cfRemTime', '提醒時間請填 24 小時制的 HH:MM，例如 09:00'); ok = false; }
+        if (!CFTARGETS.length){ setErr('eCfTarget', '#cfTargetUser', '要自動提醒就必須至少指定一位提醒對象（人員或部門）'); ok = false; }
+    }
+    d.remark = $('#cfRemark').val() || '';
+    d.sort_order = $('#cfSort').val() || 0;
     if (!ok) return;
-    post({action:'ctrl_save', ctrl_id:$('#ctrlMask').data('id') || 0, maker_id:$('#cfMaker').val(),
-        party:$('#cfParty').val(), content:$('#cfContent').val(), channel:$('#cfChannel').val(),
-        freq:$('#cfFreq').val(), remark:$('#cfRemark').val(), sort_order:$('#cfSort').val()},
-        function(){ closeMask('ctrlMask'); loadCtrl(); });
+    post(d, function(){ closeMask('ctrlMask'); loadCtrl(); });
 });
 $('#btnCtrlDel').on('click', function(){
     if (!confirm('確定要刪除這個管制項目嗎？')) return;
@@ -1301,6 +2213,75 @@ $('#btnCtrlDel').on('click', function(){
         function(){ closeMask('ctrlMask'); loadCtrl(); });
 });
 
+/* ---- ⑫ 由管制項目建立溝通記錄表 ---- */
+var C2RID = 0;
+function openC2R(id){
+    /* 點開即刷新鐵則（ai-rules/08 第六節）：別人可能剛改過頻率或下次應溝通日，
+       不能拿清單上的快取去算「會推到哪一天」。 */
+    get({action:'ctrl_list', page:1, per:50, kw:''}, function(res){
+        var r = null;
+        (res.rows || []).forEach(function(x){ if (+x.ctrl_id === +id) r = x; });
+        if (!r){ alert('查無此管制項目（可能剛被刪除），請重新整理。'); loadCtrl(); return; }
+        CTRLROWS[id] = r; C2RID = id;
+        clearErr('#c2rMask');
+        var isOther = (r.party_kind === 'other');
+        $('#c2rParty').val(r.party || '').prop('readonly', !isOther);
+        $('#c2rPartyLock').toggle(!isOther);
+        $('#c2rKindOtherWrap').toggle(isOther);
+        $('#c2rKindOther').val(r.party_kind_other || '');
+        $('#c2rContent').val(r.content || '');
+        var cr = $('#c2rChRow').empty();
+        $.each(META.channels, function(k, v){
+            var on = (k === 'other') ? false : (String(r.channel || '').indexOf(v) >= 0);
+            cr.append('<label><input type="checkbox" class="c2rCh" value="' + k + '"' + (on ? ' checked' : '') + '> ' + esc(v) + '</label>');
+        });
+        cr.append('<input type="text" id="c2rChOther" maxlength="100" data-eg-hint="管道勾了「其他」才要填" value="">');
+        // 下次應溝通日要推到哪一天，先算給使用者看，不要讓他按完才發現被改掉了
+        var base = r.next_due_date || TODAY;
+        var nx = advanceLocal(base, +r.freq_n || 1, r.freq_unit || 'month');
+        $('#c2rAdv').prop('checked', true);
+        $('#c2rAdvHint').html('目前的下次應溝通日：<b>' + (r.next_due_date ? dispDate(r.next_due_date) : '未設定（會以今天為基準）')
+            + '</b>　→　更新為 <b>' + dispDate(nx) + '</b>（' + esc(r.freq_text || '') + '）。'
+            + '<br>同一筆管制項目<b>可以重複建立</b>記錄表；不想動提醒排程就取消勾選。');
+        openMask('c2rMask');
+    });
+}
+/** 前端預告用的推算（與後端 cm_freq_advance() 同規則；真正寫入的值一律以後端算的為準） */
+function advanceLocal(dateStr, n, unit){
+    var p = String(dateStr).split('-');
+    var d = new Date(+p[0], (+p[1] || 1) - 1, +p[2] || 1);
+    n = Math.max(1, n || 1);
+    if (unit === 'day') d.setDate(d.getDate() + n);
+    else if (unit === 'week') d.setDate(d.getDate() + n * 7);
+    else if (unit === 'halfyear') d.setMonth(d.getMonth() + n * 6);
+    else if (unit === 'year') d.setFullYear(d.getFullYear() + n);
+    else d.setMonth(d.getMonth() + n);
+    var mm = ('0' + (d.getMonth() + 1)).slice(-2), dd = ('0' + d.getDate()).slice(-2);
+    return d.getFullYear() + '-' + mm + '-' + dd;
+}
+$('#btnC2rOk').on('click', function(){
+    clearErr('#c2rMask');
+    var r = CTRLROWS[C2RID];
+    if (!r) return;
+    var d = {action:'ctrl_to_record', ctrl_id:C2RID, advance_due:$('#c2rAdv').is(':checked') ? 1 : 0};
+    if (r.party_kind === 'other'){
+        d.party_name = $('#c2rParty').val() || '';
+        d.party_kind_other = $('#c2rKindOther').val() || '';
+        if (!d.party_name.trim()){ setErr('eC2rParty', '#c2rParty', '請填寫利害關係人'); return; }
+    }
+    var any = false;
+    $('#c2rChRow .c2rCh').each(function(){ if (this.checked){ d['ch_' + this.value] = 1; any = true; } });
+    if (!any){ setErr('eC2rCh', null, '請至少勾選一種溝通管道'); return; }
+    d.ch_other_text = $('#c2rChOther').val() || '';
+    if (d.ch_other && !d.ch_other_text.trim()){ setErr('eC2rCh', '#c2rChOther', '管道勾選「其他」時請填寫說明'); return; }
+    post(d, function(res){
+        closeMask('c2rMask');
+        loadCtrl(); loadRec();
+        // 建好就直接開那張記錄表，使用者接著填溝通問題與回覆
+        $('#mainTabs .cm-tab[data-tab="rec"]').trigger('click');
+        openRec(res.rec_id);
+    });
+});
 /* ================= 模組設定 ================= */
 $('#btnSetting').on('click', function(){
     var s = META.settings;
@@ -1318,6 +2299,7 @@ $('#btnSetting').on('click', function(){
     };
     mkRank('#setMgrRank', s.cm_mgr_rank_max);
     mkRank('#setGmRank', s.cm_gm_rank_max);
+    $('#setNeedSign').prop('checked', String(s.cm_need_sign === undefined ? '1' : s.cm_need_sign) !== '0');
     $('input[name=mgrSrc][value="' + (s.cm_mgr_source || 'auto') + '"]').prop('checked', true).trigger('change');
     $('input[name=gmSrc][value="' + (s.cm_gm_source || 'top') + '"]').prop('checked', true).trigger('change');
     MGRUSERS = JSON.parse(s.cm_mgr_users || '[]');
@@ -1394,6 +2376,7 @@ function pickAsdoc(which){
 }
 $('#btnSetSave').on('click', function(){
     var s = {
+        cm_need_sign:    $('#setNeedSign').is(':checked') ? '1' : '0',
         cm_stamp_tpl_id: $('#setStampTpl').val() || '',
         cm_mgr_source:   $('input[name=mgrSrc]:checked').val() || 'auto',
         cm_mgr_rank_max: $('#setMgrRank').val() || '3',
@@ -1404,9 +2387,17 @@ $('#btnSetSave').on('click', function(){
     };
     if (s.cm_mgr_source === 'users' && !MGRUSERS.length){ alert('選了「固定由指定人員簽」就必須至少指定一位人員。'); return; }
     if (s.cm_gm_source === 'users' && !GMUSERS.length){ alert('選了「固定由指定人員簽」就必須至少指定一位人員。'); return; }
+    if (!$('#setNeedSign').is(':checked')
+        && !confirm('取消「需要簽核」＝往後溝通記錄表一按送出就自動簽完並結案，不會再送給任何人確認。確定要改成免簽核嗎？')) return;
     post({action:'setting_save', settings:JSON.stringify(s)}, function(res){
         META.settings = res.settings;
-        get({action:'meta'}, function(m){ META = m; CSRF = m.csrf; });   // 圖章模板等要重新取
+        // need_sign 會影響送出按鈕文案與簽核人預覽，一定要重抓 meta 讓畫面跟著變
+        get({action:'meta'}, function(m){
+            META = m; CSRF = m.csrf;
+            $('#btnRecSubmit').html(m.need_sign
+                ? '<i class="fa fa-paper-plane"></i> 儲存並送出確認'
+                : '<i class="fa fa-check-circle"></i> 儲存並送出（免簽核・自動完成）');
+        });
         alert('設定已儲存');
         closeMask('setMask');
     });
@@ -1430,6 +2421,9 @@ function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, showPageCoun
         + 'word-wrap:break-word;overflow-wrap:break-word;line-height:1.4;vertical-align:middle;}'
         + 'table.pt th{background:#EFEFEF;font-weight:bold;}'
         + 'table.pt td.l{text-align:left;vertical-align:top;}'
+        /* 型態／類別／管道是單行的勾選格，td.l 讓它靠上會整格浮在上緣、跟右邊的日期對不齊；
+           溝通問題／回覆內容那張表仍維持 td.l 的靠上（多行文字本來就該靠上），所以另開一個 class */
+        + 'table.pt td.l.mid{vertical-align:middle;}'
         /* 圖章尺寸一律抄 ai-rules/18 鐵則6 這一行，不要自己另外發明數字 */
         + '.stamp-wrap svg,svg.car-stamp{width:91px;height:91px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         + '.pt-foot{position:fixed;right:8mm;bottom:5mm;font-size:9pt;color:#333;}'
@@ -1492,12 +2486,12 @@ function printRecord(id){
             var body = printHead(meta, '利害關係者溝通記錄表')
                 + '<table class="pt">'
                 + '<colgroup><col style="width:80px;"><col><col style="width:150px;"><col style="width:230px;"></colgroup>'
-                + '<tr><th>型態</th><td class="l">' + types.join('　') + '</td>'
+                + '<tr><th>型態</th><td class="l mid">' + types.join('　') + '</td>'
                 + '<th>溝通日期</th><td>' + dispDate(r.comm_date) + '</td></tr>'
-                + '<tr><th>類別</th><td class="l">' + kinds.join('　') + '</td>'
+                + '<tr><th>類別</th><td class="l mid">' + kinds.join('　') + '</td>'
                 + '<th>利害關係者<br>公司/代表人</th><td>' + esc(r.party_name) + '</td></tr>'
-                + '<tr><th>管道</th><td class="l">' + chs.join('　') + '</td>'
-                + '<th>填表人/部門</th><td>' + esc(r.maker_name) + '<br>' + esc(r.maker_dept_name) + '　' + esc(r.maker_pos_name) + '</td></tr>'
+                + '<tr><th>管道</th><td class="l mid">' + chs.join('　') + '</td>'
+                + '<th>填表人/部門</th><td>' + esc((r.maker_dept_name || '') + '　' + (r.maker_name || '')) + '</td></tr>'
                 + '</table>'
                 + '<table class="pt" style="margin-top:0;">'
                 + '<colgroup><col style="width:34px;"><col style="width:48%;"><col></colgroup>'
@@ -1562,11 +2556,13 @@ $('#btnCtrlPrint').on('click', function(){
             var tr = rows.map(function(r){
                 return '<tr><td>' + esc(r.maker_name) + '</td><td class="l">' + esc(r.party) + '</td>'
                      + '<td class="l">' + esc(r.content).replace(/\n/g, '<br>') + '</td>'
-                     + '<td class="l">' + esc(r.channel) + '</td><td>' + esc(r.freq) + '</td></tr>';
-            }).join('') || '<tr><td colspan="5">（無資料）</td></tr>';
+                     + '<td class="l">' + esc(r.channel) + '</td><td>' + esc(r.freq_text || r.freq) + '</td>'
+                     + '<td>' + (r.next_due_date ? dispDate(r.next_due_date) : '') + '</td></tr>';
+            }).join('') || '<tr><td colspan="6">（無資料）</td></tr>';
             var body = printHead(meta, '溝通管制表')
                 + '<table class="pt"><thead><tr><th style="width:90px;">填表人</th><th style="width:130px;">利害關係人</th>'
-                + '<th>溝通內容</th><th style="width:110px;">溝通管道</th><th style="width:90px;">頻率</th></tr></thead>'
+                + '<th>溝通內容</th><th style="width:110px;">溝通管道</th><th style="width:100px;">頻率</th>'
+                + '<th style="width:96px;">下次應溝通日</th></tr></thead>'
                 + '<tbody>' + tr + '</tbody></table>';
             egPrintWindow('溝通管制表', body, '', meta.doc_no, false);
             EGPrintLog.record({source:'comm_mgmt', doc_name:'溝通管制表（' + rows.length + ' 筆）',
@@ -1607,14 +2603,17 @@ function fetchAll(base, cb){
 }
 $('#btnRecCsv').on('click', function(){
     fetchAll(recFilters(), function(rows){
-        csvDump('利害關係者溝通記錄表', ['單號','溝通日期','型態','類別','利害關係者','填表人','部門','職稱','管道','狀態','部門主管','總經理','備註'],
+        csvDump('利害關係者溝通記錄表', ['單號','溝通日期','型態','類別','利害關係者','代表人','填表人','部門','職稱','管道','附件數','附件','狀態','部門主管','總經理','備註'],
             rows.map(function(r){
                 var chs = [];
                 $.each(META.channels, function(k, v){ if (+r['ch_' + k]) chs.push(k === 'other' ? (r.ch_other_text || v) : v); });
                 var kind = META.kinds[r.party_kind] || '';
                 if (r.party_kind === 'other') kind = r.party_kind_other || kind;
+                var atts = r.attaches || [];
                 return [r.rec_no, dispDate(r.comm_date), META.types[r.comm_type] || '', kind, r.party_name,
+                    r.party_contact_name || '',
                     r.maker_name, r.maker_dept_name, r.maker_pos_name, chs.join('、'),
+                    atts.length, atts.map(attDisplayName).join('、'),
                     (+r.mgr_skip ? '（主管格免簽）' : '') + (META.status[r.status] || ''),
                     r.mgr_name || '', r.gm_name || '', r.remark || ''];
             }));
@@ -1631,8 +2630,17 @@ $('#btnTrackCsv').on('click', function(){
 });
 $('#btnCtrlCsv').on('click', function(){
     fetchAll({action:'ctrl_list', kw:$('#ctrlKw').val()}, function(rows){
-        csvDump('溝通管制表', ['項次','填表人','利害關係人','溝通內容','溝通管道','頻率','備註'],
-            rows.map(function(r, i){ return [i + 1, r.maker_name, r.party, r.content, r.channel, r.freq, r.remark || '']; }));
+        csvDump('溝通管制表',
+            ['項次','填表人','部門','類別','利害關係人','溝通內容','溝通管道','頻率','下次應溝通日','自動提醒','提前天數','提醒時間','提醒對象','備註'],
+            rows.map(function(r, i){
+                var kind = r.party_kind === 'other' ? (r.party_kind_other || '其他') : (META.kinds[r.party_kind] || '');
+                return [i + 1, r.maker_name, r.maker_dept_name || '', kind, r.party, r.content, r.channel,
+                    r.freq_text || r.freq, dispDate(r.next_due_date),
+                    +r.remind_enabled ? '是' : '否',
+                    +r.remind_enabled ? (+r.remind_lead_days || 0) : '',
+                    +r.remind_enabled ? String(r.remind_time || '').substr(0, 5) : '',
+                    (r.target_labels || []).join('、'), r.remark || ''];
+            }));
     });
 });
 

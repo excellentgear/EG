@@ -957,6 +957,24 @@ if ($action === 'att_upload') {
     jout(['att_id'=>(int)$db->lastInsertId(), 'file_name'=>$fn]);
 }
 
+/* ---- 附件說明（選填）：上傳後仍可修改。有填說明時清單改顯示說明、不顯示原始檔名（使用者要求）。 ---- */
+if ($action === 'att_note') {
+    $id = (int)($_POST['att_id'] ?? 0);
+    $st = $db->prepare("SELECT * FROM comm_record_attach WHERE att_id=?");
+    $st->execute([$id]);
+    $a = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$a) jerr('查無此附件', 404);
+    // 權限與刪除同一套：單據還能編輯時該單的人可以改，暫存中的檔只有上傳者或管理員能改
+    if ((int)$a['rec_id'] > 0) {
+        $r = cmRecGet($db, (int)$a['rec_id']);
+        if (!$r || !cmCanEdit($r, $P, $uid)) jerr('此單已送出，無法修改附件說明', 403);
+    } elseif ((int)$a['uploaded_by'] !== $uid && !$P['canAdmin']) {
+        jerr('無權修改此附件', 403);
+    }
+    $db->prepare("UPDATE comm_record_attach SET note=? WHERE att_id=?")->execute([cmS($_POST['note'] ?? '', 200), $id]);
+    jout();
+}
+
 if ($action === 'att_delete') {
     $id = (int)($_POST['att_id'] ?? 0);
     $st = $db->prepare("SELECT * FROM comm_record_attach WHERE att_id=?");

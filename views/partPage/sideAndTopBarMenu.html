@@ -638,6 +638,13 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
                 if (parseInt($(this).data('needmode'), 10) <= 1) { nmMarkRead(nmRemoveFromList); }
                 return;
             }
+            if (refType === 'COMM_CTRL_REMIND') {
+                // 溝通管制表「下次應溝通日」到期提醒：純資訊型，開到管制表分頁後標記已讀移除
+                // （refid = comm_ctrl.ctrl_id；溝通完請在該列按「建立溝通記錄」）
+                window.open('../GM/communication_mgmt.php?tab=ctrl&ctrl=' + ($(this).data('refid') || 0) + '&event=' + nmId);
+                nmMarkRead(nmRemoveFromList);
+                return;
+            }
             if (refType === 'COMM_REC_RESULT') {
                 // 確認完成／退回結果通知（給填表人）：純資訊型，開該張記錄表後標記已讀移除
                 window.open('../GM/communication_mgmt.php?rec=' + ($(this).data('refid') || 0) + '&event=' + nmId);
