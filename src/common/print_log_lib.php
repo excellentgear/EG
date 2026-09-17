@@ -211,6 +211,7 @@ if (!function_exists('eg_print_sources')) {
             'internal_audit' => ['label' => '內部稽核－各式表單', 'page' => 'views/ADM/internal_audit.php',         'kind' => 'form'],
             'acc_recon'      => ['label' => '會計－對帳單',       'page' => 'views/ACC/reconcile.php',              'kind' => 'form'],
             'as_doc'         => ['label' => 'AS 文件管理－各式清單', 'page' => 'views/ADM/as_document_management.php', 'kind' => 'form'],
+            'comm_mgmt'      => ['label' => '溝通管理－三份表單',   'page' => 'views/GM/communication_mgmt.php',      'kind' => 'form'],
         ];
     }
 }
