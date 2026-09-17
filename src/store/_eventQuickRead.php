@@ -15,6 +15,7 @@ header('Content-Type: application/json; charset=utf-8');
 include("../../src/common/_config.php"); // session_start + $db
 require_once __DIR__ . '/../common/rbac.php';
 require_once __DIR__ . '/../common/notice_mode_lib.php';
+require_once __DIR__ . '/../common/notice_autoread_lib.php'; // eg_notice_recipient_modes / eg_notice_mark_read（唯一實作）
 require_once __DIR__ . '/../push/push_send.php'; // eg_push_event_recipients()：對象展開成人員的唯一實作
 
 if (!isset($_SESSION['id'])) { echo json_encode(['ok' => false, 'msg' => '尚未登入']); exit(); }
@@ -38,10 +39,8 @@ function eqr_recipients(PDO $db, int $eid): array
     if (empty($uids)) return [];
     $in = implode(',', array_map('intval', $uids));
 
-    // 每個人符合哪些對象列 → 交給共用函式決定實際生效的通知方式
-    $targets = $db->prepare("SELECT target_type, target_id, mode FROM live_event_target WHERE live_event_id = ?");
-    $targets->execute([$eid]);
-    $targets = $targets->fetchAll(PDO::FETCH_ASSOC);
+    // 每個人實際生效的通知方式（判定的唯一實作在 notice_autoread_lib.php，與「設為自動已閱」共用）
+    $modeOf = eg_notice_recipient_modes($db, $eid, $uids);
 
     // 人員基本資料（部門/職稱依 people_lib 的慣例顯示；此處只需名稱故直接查）
     $rows = $db->query(
@@ -53,12 +52,6 @@ function eqr_recipients(PDO $db, int $eid): array
            LEFT JOIN position   p ON p.id = m.position_id
           WHERE u.id IN ($in)"
     )->fetchAll(PDO::FETCH_ASSOC);
-
-    // 每個人所屬的部門（含兼任）＝判斷 dept 對象是否命中
-    $deptOf = [];
-    foreach ($db->query("SELECT user_id, department_id FROM user_department_position_map WHERE user_id IN ($in)")->fetchAll(PDO::FETCH_ASSOC) as $m) {
-        $deptOf[(int)$m['user_id']][] = (int)$m['department_id'];
-    }
 
     // 已閱 / 回簽 / 回覆 現況
     $readAt = [];
@@ -73,21 +66,8 @@ function eqr_recipients(PDO $db, int $eid): array
     $out = [];
     foreach ($rows as $u) {
         $id = (int)$u['id'];
-        $myStatus = array_values(array_filter([$u['user_status'], $u['user_status2'], $u['user_status3']], function ($v) { return $v !== null && $v !== ''; }));
-        $myStatus = array_map('intval', $myStatus);
-        $myDept   = $deptOf[$id] ?? [];
-
-        $modes = [];
-        foreach ($targets as $t) {
-            $tid = (int)$t['target_id'];
-            $hit = ($t['target_type'] === 'all')
-                || ($t['target_type'] === 'status' && in_array($tid, $myStatus, true))
-                || ($t['target_type'] === 'dept'   && in_array($tid, $myDept, true))
-                || ($t['target_type'] === 'user'   && $tid === $id);
-            if ($hit) $modes[] = $t['mode'];
-        }
-        if (empty($modes)) continue; // 理論上不會發生（收件人本來就是對象展開來的）
-        $mode = eg_notice_mode_pick($modes);
+        if (!isset($modeOf[$id])) continue; // 理論上不會發生（收件人本來就是對象展開來的）
+        $mode = $modeOf[$id];
 
         $rp   = $resp[$id] ?? null;
         $rAt  = $readAt[$id] ?? ($rp['read_at'] ?? null);
@@ -151,21 +131,17 @@ try {
 
         // 後端以同一份判定重算一次可否代按（鐵律8：不可只信前端送來的名單）
         $recipients = eqr_recipients($db, $eid);
-        $done = []; $skipped = [];
+        $done = []; $skipped = []; $okUids = [];
         $db->beginTransaction();
-        $ins = $db->prepare("INSERT INTO live_event_for_user (user_id, live_event_id, oready_read, read_at, signed_via) VALUES (?,?,1,NOW(),?)");
-        $upd = $db->prepare("UPDATE live_event_for_user SET oready_read = 1, read_at = COALESCE(read_at, NOW()), signed_via = COALESCE(signed_via, ?) WHERE id = ?");
-        $chk = $db->prepare("SELECT id FROM live_event_for_user WHERE user_id = ? AND live_event_id = ? LIMIT 1");
         foreach ($want as $tuid) {
             $r = $recipients[$tuid] ?? null;
             if (!$r)              { $skipped[] = ['user_id' => $tuid, 'name' => '員工#' . $tuid, 'why' => '不是這則通知的對象']; continue; }
             if (!$r['eligible'])  { $skipped[] = ['user_id' => $tuid, 'name' => $r['name'], 'why' => $r['why']]; continue; }
-            $chk->execute([$tuid, $eid]);
-            $exist = $chk->fetchColumn();
-            if ($exist) $upd->execute([$uid, (int)$exist]);
-            else        $ins->execute([$tuid, $eid, $uid]);
+            $okUids[] = $tuid;
             $done[] = ['user_id' => $tuid, 'name' => $r['name']];
         }
+        // 已閱紀錄的唯一寫入點（notice_autoread_lib.php），與「設為自動已閱」共用同一份
+        eg_notice_mark_read($db, $eid, $okUids, $uid);
         // 稽核紀錄：代按已閱是「替別人留下已讀證據」，一定要留下是誰在什麼時候代的
         if ($done) {
             try {

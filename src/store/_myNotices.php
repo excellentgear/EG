@@ -37,6 +37,12 @@ try {
     $viewIn   = implode(',', array_map('intval', $viewUids));
     $memberNames = eg_shared_member_names($db, $uid);   // member_uid => 姓名（非共用帳號時為空陣列）
 
+    // 來源層級的「免點開自動已閱」規則：查詢之前先補寫本人該被自動標的已閱紀錄（沒設定規則＝零成本）
+    try {
+        require_once __DIR__ . '/../common/notice_autoread_lib.php';
+        eg_notice_autoread_sync($db, $uid);
+    } catch (Throwable $e) { error_log('[autoread] myNotices sync: ' . $e->getMessage()); }
+
     // 對象符合我的條件
     $match = "( t.target_type='all'
              OR (t.target_type='status' AND t.target_id IN ($statusIn))

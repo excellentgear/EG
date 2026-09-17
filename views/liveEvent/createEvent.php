@@ -826,6 +826,10 @@ if (isset($_POST['btn_go_events'])) {
                                 </select>
                                 <?php if ($can_batch) : ?>
                                     <button type="button" id="eg-batch-target-btn" class="eg-tool-btn" disabled title="勾選 1 則以上的公告 / 通知，一次改掉它們的對象與通知方式（勾選 2 則以上時，須為「通知對象完全相同」的那幾則）"><i class="fa fa-users"></i> 批次改對象 <span id="eg-batch-count"></span></button>
+                                    <button type="button" id="eg-autoread-btn" class="eg-tool-btn" disabled title="勾選的這幾則：通知方式改成「開啟自動已閱」，並把目前還沒讀的人直接標成已閱（鈴鐺當下就少掉，誰都不必再點開）"><i class="fa fa-magic"></i> 設為自動已閱 <span id="eg-autoread-count"></span></button>
+                                <?php endif; ?>
+                                <?php if ($IS_ADMIN) : ?>
+                                    <button type="button" id="eg-autoread-src-btn" class="eg-tool-btn" title="免點開自動已閱（來源規則）：指定來源往後發出的通知，對象不必點開就視為已閱"><i class="fa fa-bolt"></i></button>
                                 <?php endif; ?>
                                 <button type="button" id="eg-export-csv" class="eg-tool-btn" title="匯出 CSV"><i class="fa fa-file-excel-o"></i> CSV</button>
                                 <button type="button" id="eg-export-pdf" class="eg-tool-btn" title="列印 / PDF"><i class="fa fa-file-pdf-o"></i> PDF</button>
@@ -1158,6 +1162,76 @@ if (isset($_POST['btn_go_events'])) {
     </div>
     <?php endif; ?>
 
+    <?php if ($can_batch) : ?>
+    <!-- 設為自動已閱：改通知方式 + 把目前未閱者直接標已閱 -->
+    <div class="modal fade" id="autoReadModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog" role="document" style="width:620px;max-width:96vw;">
+            <div class="modal-content">
+                <div class="modal-header" style="background:var(--eg-dark);color:#fff;border-radius:6px 6px 0 0;">
+                    <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
+                    <h4 class="modal-title"><i class="fa fa-magic"></i> 設為自動已閱</h4>
+                </div>
+                <div class="modal-body" style="padding:16px 20px;">
+                    <div id="arLoading" style="text-align:center;padding:22px;color:#8a97a5;"><i class="fa fa-spinner fa-spin"></i> 檢查中…</div>
+                    <div id="arBlocked" style="display:none;"></div>
+                    <div id="arForm" style="display:none;">
+                        <p style="font-size:13px;margin-bottom:10px;">
+                            對勾選的 <b id="arCount">0</b> 則公告 / 通知做兩件事：
+                        </p>
+                        <ul style="font-size:12.5px;color:#5a6b7b;line-height:1.9;padding-left:18px;margin-bottom:10px;">
+                            <li>通知方式由「已閱（要自己按）」改成 <b>開啟自動已閱</b> —— 影響 <b id="arModeRows">0</b> 個對象。</li>
+                            <li id="arMarkLi">把目前<b>還沒讀的 <span id="arMarkPeople">0</span> 人次</b>直接標成已閱 —— 他們的鈴鐺當下就少掉，不必再點開。</li>
+                        </ul>
+                        <div id="arNoMark" style="display:none;font-size:12.5px;color:#b08a5a;margin-bottom:10px;">
+                            <i class="fa fa-info-circle"></i> 您不是系統管理員，所以只會改通知方式，<b>不會</b>代替別人標記已閱。
+                        </div>
+                        <div style="font-size:12.5px;color:#b08a5a;margin-bottom:10px;">
+                            <i class="fa fa-exclamation-triangle"></i> 通知方式是<b>回簽</b>或<b>回覆 + 回簽</b>的對象一律不動（那要本人自己回應）。已閱紀錄會記下是您代按的並寫入稽核紀錄。
+                        </div>
+                        <div style="margin-bottom:6px;">
+                            <a href="javascript:;" id="arToggleList" style="font-size:12px;">▸ 檢視要處理的清單</a>
+                            <div id="arList" style="display:none;max-height:26vh;overflow-y:auto;border:1px solid var(--eg-line);border-radius:6px;padding:8px 10px;margin-top:6px;font-size:12px;color:#5a6b7b;"></div>
+                        </div>
+                        <div id="arErr" style="display:none;color:#c0392b;font-size:12.5px;margin-top:8px;"></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="arApply" disabled><i class="fa fa-check"></i> 確定套用</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <?php if ($IS_ADMIN) : ?>
+    <!-- 免點開自動已閱（來源規則）：全站設定，限系統管理員 -->
+    <div class="modal fade" id="autoReadSrcModal" tabindex="-1" role="dialog" aria-hidden="true">
+        <div class="modal-dialog" role="document" style="width:660px;max-width:96vw;">
+            <div class="modal-content">
+                <div class="modal-header" style="background:var(--eg-dark);color:#fff;border-radius:6px 6px 0 0;">
+                    <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
+                    <h4 class="modal-title"><i class="fa fa-bolt"></i> 免點開自動已閱（來源規則）</h4>
+                </div>
+                <div class="modal-body" style="padding:16px 20px;">
+                    <p style="font-size:12.5px;color:#5a6b7b;margin-bottom:10px;">
+                        勾起來的來源，<b>往後發出的通知一律不必點開就視為已閱</b>（不會進鈴鐺，仍留在本頁清單與紀錄裡可查）。<b>全公司套用</b>。<br>
+                        <span style="color:#b08a5a;"><i class="fa fa-exclamation-triangle"></i> 只對<b>勾選之後才發布</b>的通知生效；現在還掛著的舊通知請在列表勾選後用「設為自動已閱」清掉。
+                        通知方式是回簽 / 回覆 + 回簽的對象不受影響。</span>
+                    </p>
+                    <div id="arsLoading" style="text-align:center;padding:18px;color:#8a97a5;"><i class="fa fa-spinner fa-spin"></i> 載入中…</div>
+                    <div id="arsList" style="display:none;max-height:46vh;overflow-y:auto;border:1px solid var(--eg-line);border-radius:6px;"></div>
+                    <div id="arsErr" style="display:none;color:#c0392b;font-size:12.5px;margin-top:8px;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="arsSave"><i class="fa fa-check"></i> 儲存設定</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
     <!-- 使用說明（鐵律7）：改動本頁功能時這裡的內容要同步更新 -->
     <div class="modal fade" id="helpUseMask" tabindex="-1" role="dialog" aria-hidden="true">
         <div class="modal-dialog" role="document" style="width:760px;max-width:96vw;">
@@ -1216,6 +1290,26 @@ if (isset($_POST['btn_go_events'])) {
                         <li>套用後：<b>新加進來的人會收到通知</b>；<b>被移除的人已發出的通知會被取消</b>（推播改寫成「通知已取消」、Telegram 訊息一併收回）。</li>
                         <li>只會動對象，<b>公告內容、附件、期限、共同編輯者都不會被更動</b>，每一則都會留下修改歷史。</li>
                         <li>沒有權限修改的那幾則，勾選框是停用的（滑過去會說明原因）。</li>
+                    </ul>
+
+                    <h4>設為自動已閱（一鍵清掉「還掛在別人鈴鐺上」的通知）</h4>
+                    <ul>
+                        <li>在列表左側勾選 <b>1 則以上</b> → 按工具列的<b>「設為自動已閱」</b>，一顆按鈕做兩件事：
+                            <b>①</b> 通知方式由「已閱（要自己按）」改成「開啟自動已閱」；
+                            <b>②</b> 把<b>目前還沒讀的人全部直接標成已閱</b>，他們的鈴鐺當下就少一則，<b>誰都不必再點開</b>。</li>
+                        <li>第②件事<b>只有系統管理員做得到</b>（比照「快速已閱」）；其他有修改權限的人按下去只會改通知方式。</li>
+                        <li><b>「回簽」與「回覆 + 回簽」的對象一律不動</b>——那要的是本人的意思表示。已經讀過的人也不會被重複標記。</li>
+                        <li>按下按鈕當下會先跟後端要一次最新狀態（不採信畫面上的舊資料），跳窗會先告訴您「會改幾個對象、會標幾個人」再請您確認。</li>
+                        <li>代標的已閱紀錄會記下是誰代按的，並寫入稽核紀錄；每一則也會留下修改歷史。</li>
+                        <li>想找出「還沒被讀完」的通知，先用工具列的<b>已讀狀態篩選 →「尚有人未閱」</b>，再全選處理最快。</li>
+                    </ul>
+
+                    <h4>免點開自動已閱（來源規則，限系統管理員）</h4>
+                    <ul>
+                        <li>工具列的 <i class="fa fa-bolt"></i> 按鈕，可指定<b>哪些來源</b>（表單簽核、報價單簽核…）的通知<b>往後發出時一律不必點開就視為已閱</b>，<b>全公司套用</b>。</li>
+                        <li>適合「審核通過」「處理結果」這種看過就好、不需要對方表態的訊息——它們不會再進鈴鐺，但仍然留在本頁清單與紀錄裡可以查。</li>
+                        <li><b>只對勾選之後才發布的通知生效</b>（每個來源各自記下啟用時間），不會回頭把歷史通知全部標成已閱；<b>現有的積壓請用上面的「設為自動已閱」清掉</b>。</li>
+                        <li>同樣<b>不影響</b>通知方式為回簽 / 回覆 + 回簽的對象。設定異動會寫入稽核紀錄。</li>
                     </ul>
 
                     <h4>快速已閱（限系統管理員）</h4>
@@ -1416,7 +1510,7 @@ if (isset($_POST['btn_go_events'])) {
     <script>
         $(function() {
             // 跳窗統一移到 body 底下（避免被版面容器的定位/裁切影響），關閉後清除殘留背板
-            $('#readersModal,#subsModal,#histModal,#roleHelpModal,#permModal,#settingsModal,#srcPrefModal,#attTagModal,#attSheetModal,#attPrevModal,#helpUseMask,#batchTargetModal').appendTo('body');
+            $('#readersModal,#subsModal,#histModal,#roleHelpModal,#permModal,#settingsModal,#srcPrefModal,#attTagModal,#attSheetModal,#attPrevModal,#helpUseMask,#batchTargetModal,#autoReadModal,#autoReadSrcModal').appendTo('body');
             $('#btnPageHelp').on('click', function() { $('#helpUseMask').modal('show'); });
             $(document).on('hidden.bs.modal', '.modal', function() {
                 if (!$('.modal.in').length) { $('.modal-backdrop').remove(); $('body').removeClass('modal-open'); }
@@ -2011,6 +2105,8 @@ if (isset($_POST['btn_go_events'])) {
                     $('#eg-batch-count').text(n ? '（' + n + '）' : '');
                     // 勾 1 則也要能用：篩選後只剩一筆時原本按不下去，等於那一筆永遠改不了對象
                     $('#eg-batch-target-btn').prop('disabled', n < 1);
+                    $('#eg-autoread-count').text(n ? '（' + n + '）' : '');
+                    $('#eg-autoread-btn').prop('disabled', n < 1);
                     var boxes = $('#eg-list-tbody .eg-row-cb');
                     $('#eg-check-all').prop('checked', boxes.length > 0 && n === boxes.length);
                 }
@@ -2114,7 +2210,106 @@ if (isset($_POST['btn_go_events'])) {
                         $('#btErr').text('連線失敗，未完成').show();
                     });
                 });
+
+                // ===== 設為自動已閱（改通知方式 + 把目前未閱者直接標已閱）=====
+                var AUTOREAD_API = '../../src/store/_eventAutoRead.php';
+                var arIds = [];
+
+                $('#eg-autoread-btn').on('click', function() {
+                    arIds = egCheckedIds();
+                    if (!arIds.length) { alert('請先勾選要處理的公告 / 通知'); return; }
+                    $('#arLoading').show(); $('#arBlocked').hide().empty(); $('#arForm').hide();
+                    $('#arErr').hide().empty(); $('#arApply').prop('disabled', true);
+                    $('#arList').hide(); $('#arToggleList').text('▸ 檢視要處理的清單');
+                    $('#autoReadModal').modal('show');
+                    // 點開即刷新（ai-rules/08 第六節）：人數以「按下當下」的後端狀態為準
+                    $.post(AUTOREAD_API, { action: 'check', ids: JSON.stringify(arIds) }, function(res) {
+                        $('#arLoading').hide();
+                        if (!res || !res.ok) {
+                            var h = '<div style="color:#c0392b;font-size:13px;margin-bottom:8px;"><i class="fa fa-exclamation-triangle"></i> ' + egEsc((res && res.msg) || '檢查失敗') + '</div>';
+                            var bad = (res && res.blocked) || [];
+                            if (bad.length) {
+                                h += '<div style="max-height:40vh;overflow-y:auto;border:1px solid var(--eg-line);border-radius:6px;padding:8px 10px;font-size:12.5px;">';
+                                bad.forEach(function(b) { h += '<div style="padding:3px 0;border-bottom:1px dashed #eee;">' + egEsc(b.title) + (b.why ? '<span style="color:#b08a5a;"> — ' + egEsc(b.why) + '</span>' : '') + '</div>'; });
+                                h += '</div>';
+                            }
+                            $('#arBlocked').html(h).show();
+                            return;
+                        }
+                        $('#arCount').text(res.count);
+                        $('#arModeRows').text(res.mode_rows);
+                        $('#arMarkPeople').text(res.mark_people);
+                        $('#arMarkLi').toggle(!!res.can_mark);
+                        $('#arNoMark').toggle(!res.can_mark);
+                        $('#arList').html((res.titles || []).map(function(t) {
+                            return '<div style="padding:2px 0;">' + egEsc(t.eventdate) + '　' + egEsc(t.title)
+                                 + (t.source ? '<span style="color:#b08a5a;">（' + egEsc(t.source) + '）</span>' : '')
+                                 + (res.can_mark ? '　<span style="color:#c77c1a;">未閱 ' + t.unread + ' 人</span>' : '') + '</div>';
+                        }).join(''));
+                        $('#arForm').show(); $('#arApply').prop('disabled', false);
+                    }, 'json').fail(function() { $('#arLoading').hide(); $('#arBlocked').html('<span style="color:#c0392b;">連線失敗</span>').show(); });
+                });
+
+                $('#arToggleList').on('click', function() {
+                    var $l = $('#arList').toggle();
+                    $(this).text(($l.is(':visible') ? '▾' : '▸') + ' 檢視要處理的清單');
+                });
+
+                $('#arApply').on('click', function() {
+                    if (!arIds.length) return;
+                    var people = parseInt($('#arMarkPeople').text(), 10) || 0;
+                    var msg = '確定把這 ' + arIds.length + ' 則設為「開啟自動已閱」？';
+                    if ($('#arMarkLi').is(':visible') && people > 0) msg += '\n並直接把還沒讀的 ' + people + ' 人次標成已閱（會寫入他們的已讀紀錄）。';
+                    if (!confirm(msg)) return;
+                    var $b = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 套用中…');
+                    $.post(AUTOREAD_API, { action: 'apply', ids: JSON.stringify(arIds) }, function(res) {
+                        $b.prop('disabled', false).html('<i class="fa fa-check"></i> 確定套用');
+                        if (!res || !res.ok) { $('#arErr').text((res && res.msg) || '套用失敗').show(); return; }
+                        $('#autoReadModal').modal('hide');
+                        alert('已處理 ' + res.updated + ' 則。\n改為「開啟自動已閱」的對象：' + res.mode_rows + ' 個\n直接標為已閱：' + res.marked + ' 人次');
+                        egLoadList(egState.page);
+                    }, 'json').fail(function() {
+                        $b.prop('disabled', false).html('<i class="fa fa-check"></i> 確定套用');
+                        $('#arErr').text('連線失敗，未完成').show();
+                    });
+                });
             }
+
+            // ===== 免點開自動已閱（來源規則，全站設定，限系統管理員）=====
+            $('#eg-autoread-src-btn').on('click', function() {
+                $('#arsLoading').show(); $('#arsList').hide().empty(); $('#arsErr').hide().empty();
+                $('#autoReadSrcModal').modal('show');
+                $.get('../../src/store/_eventAutoRead.php', { action: 'src_list' }, function(res) {
+                    $('#arsLoading').hide();
+                    if (!res || !res.ok) { $('#arsErr').text((res && res.msg) || '載入失敗').show(); return; }
+                    var h = '<table class="eg-table" style="margin:0;"><thead><tr>'
+                          + '<th style="width:46px;text-align:center;">免點開</th><th>來源</th>'
+                          + '<th style="width:90px;">通知則數</th><th style="width:160px;">啟用時間</th></tr></thead><tbody>';
+                    (res.rows || []).forEach(function(r) {
+                        h += '<tr><td style="text-align:center;"><input type="checkbox" class="ars-cb" value="' + egEsc(r.source) + '"' + (r.on ? ' checked' : '') + '></td>'
+                           + '<td>' + egEsc(r.source) + '</td>'
+                           + '<td>' + r.count + '</td>'
+                           + '<td style="color:#8a97a5;font-size:12px;">' + (r.since ? egEsc(r.since) : '—') + '</td></tr>';
+                    });
+                    h += '</tbody></table>';
+                    $('#arsList').html(h).show();
+                }, 'json').fail(function() { $('#arsLoading').hide(); $('#arsErr').text('連線失敗').show(); });
+            });
+
+            $('#arsSave').on('click', function() {
+                var srcs = $('#arsList .ars-cb:checked').map(function() { return this.value; }).get();
+                if (!confirm('確定儲存？\n勾選的 ' + srcs.length + ' 個來源，往後發出的通知全公司都不必點開就視為已閱。')) return;
+                var $b = $(this).prop('disabled', true).html('<i class="fa fa-spinner fa-spin"></i> 儲存中…');
+                $.post('../../src/store/_eventAutoRead.php', { action: 'src_save', sources: JSON.stringify(srcs) }, function(res) {
+                    $b.prop('disabled', false).html('<i class="fa fa-check"></i> 儲存設定');
+                    if (!res || !res.ok) { $('#arsErr').text((res && res.msg) || '儲存失敗').show(); return; }
+                    $('#autoReadSrcModal').modal('hide');
+                    alert('已儲存：' + srcs.length + ' 個來源設為免點開自動已閱。');
+                }, 'json').fail(function() {
+                    $b.prop('disabled', false).html('<i class="fa fa-check"></i> 儲存設定');
+                    $('#arsErr').text('連線失敗，未儲存').show();
+                });
+            });
 
             // ===== 快速已閱（系統管理員代按）=====
             var QUICKREAD_API = '../../src/store/_eventQuickRead.php';

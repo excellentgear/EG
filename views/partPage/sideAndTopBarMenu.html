@@ -83,6 +83,13 @@ if (!empty($user_permissions) && isset($user_permissions[0]['KPI_vw'])) {
         } catch (Throwable $e) { error_log('[shared] sidebar view_uids failed: ' . $e->getMessage()); }
         $view_uid_in = implode(',', array_map('intval', $my_view_uids));
 
+        // 來源層級的「免點開自動已閱」規則（公告/通知管理頁設定）：在查詢之前先把本人該被自動標的補寫掉，
+        // 所以那些來源的通知根本不會出現在下面的未讀清單裡。沒設定規則時這支函式直接 return（零成本）。
+        try {
+            require_once __DIR__ . '/../../src/common/notice_autoread_lib.php';
+            eg_notice_autoread_sync($conn->getPDO(), (int)$id);
+        } catch (Throwable $e) { error_log('[autoread] sidebar sync: ' . $e->getMessage()); }
+
         // 未過期、對象(全體/部門/身分/本人)符合，且「要求動作尚未完成」的公告/通知。
         // 要求動作依 live_event_target.mode：autoread=開啟自動已閱、read=已閱、sign=回簽、reply=回覆+回簽；
         // 只點開看過(標了已閱)但還沒回簽/回覆者，仍要留在置頂欄未讀清單（need_mode=同一則中最重的未完成要求）。

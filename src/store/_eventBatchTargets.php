@@ -34,22 +34,15 @@ $action = $_POST['action'] ?? $_GET['action'] ?? 'check';
 $idsRaw = $_POST['ids'] ?? $_GET['ids'] ?? '[]';
 $ids    = json_decode((string)$idsRaw, true);
 $ids    = is_array($ids) ? array_values(array_unique(array_filter(array_map('intval', $ids)))) : [];
-if (count($ids) < 2) { echo json_encode(['ok' => false, 'msg' => '請至少勾選 2 則才需要批次修改']); exit(); }
+// 勾 1 則也放行：列表篩選後只剩一筆時同樣要能改（勾 2 則以上才需要比對「對象是否完全相同」）
+if (count($ids) < 1) { echo json_encode(['ok' => false, 'msg' => '請先勾選要修改的公告 / 通知']); exit(); }
 if (count($ids) > 200) { echo json_encode(['ok' => false, 'msg' => '一次最多處理 200 則']); exit(); }
 
 /** 逐則權限：只有系統管理員可改任何公告；其他人僅本人建立或本人為共同編輯者（與單筆編輯同一套規則） */
 function ebt_can_edit(PDO $db, array $ev, int $uid, bool $isAdmin, array $features): array
 {
-    if (($ev['source'] ?? '') === '訂單變更') {
-        return [false, '來源「訂單變更」的通知已鎖定，請至訂單追蹤頁作廢該變更單'];
-    }
-    if (($ev['ref_type'] ?? '') === 'QA' && (int)($ev['ref_id'] ?? 0) > 0) {
-        return [false, '來源「品質異常單」的通知請至異常單修改'];
-    }
-    if ($isAdmin) return [true, ''];
-    if ((int)$ev['created_by'] === $uid && rbac_has($features, 'notice_edit')) return [true, ''];
-    if (eg_user_is_event_editor($db, (int)$ev['id'], $uid)) return [true, ''];
-    return [false, '您不是此公告的公告者或共同編輯者'];
+    // 規則的唯一實作在 notice_event_lib.php（「設為自動已閱」等功能共用同一套判定）
+    return eg_notice_event_editable($db, $ev, $uid, $isAdmin, $features);
 }
 
 /** 該則目前的對象＋通知方式，整理成可比對的字串（順序無關） */

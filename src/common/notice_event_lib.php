@@ -114,6 +114,25 @@ if (!function_exists('eg_log_event_history')) {
         ]);
     }
 }
+/**
+ * 這則公告 / 通知，這個人可不可以改（唯一實作：批次改對象、設為自動已閱…共用同一套規則）
+ * @param array $ev live_event 的列（至少要有 id, source, created_by, ref_type, ref_id）
+ * @return array [bool 可否, string 不可的原因]
+ */
+if (!function_exists('eg_notice_event_editable')) {
+    function eg_notice_event_editable($db, array $ev, int $uid, bool $isAdmin, array $features) {
+        if (($ev['source'] ?? '') === '訂單變更') {
+            return [false, '來源「訂單變更」的通知已鎖定，請至訂單追蹤頁作廢該變更單'];
+        }
+        if (($ev['ref_type'] ?? '') === 'QA' && (int)($ev['ref_id'] ?? 0) > 0) {
+            return [false, '來源「品質異常單」的通知請至異常單修改'];
+        }
+        if ($isAdmin) return [true, ''];
+        if ((int)($ev['created_by'] ?? 0) === $uid && rbac_has($features, 'notice_edit')) return [true, ''];
+        if (eg_user_is_event_editor($db, (int)$ev['id'], $uid)) return [true, ''];
+        return [false, '您不是此公告的公告者或共同編輯者'];
+    }
+}
 // 取得使用者主要部門名稱（公告來源預設用）
 if (!function_exists('eg_user_main_dept')) {
     function eg_user_main_dept($db, $uid) {
