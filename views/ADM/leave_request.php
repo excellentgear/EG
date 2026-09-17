@@ -102,6 +102,15 @@ $avStamp = @filemtime(__DIR__ . '/../../resource/js/eg_stamp.js') ?: time();
 /* 數字輸入框：無上下增減鈕 */
 input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 input[type=number]{-moz-appearance:textfield;}
+.page-help-btn{height:28px;font-size:13px;padding:0 12px;border:1px solid #d98a33;border-radius:15px;background:#F0A24B;color:#fff;cursor:pointer;margin-left:10px;vertical-align:middle;}
+.page-help-btn:hover{background:#d98a33;}
+@media print{.page-help-btn{display:none !important;}}
+.help-doc{font-size:13px;color:#5b3a1e;line-height:1.75;}
+.help-doc h4{color:#8A5A2B;border-bottom:2px solid #F7E0BD;padding-bottom:3px;margin:14px 0 6px;font-size:15px;}
+.help-doc h4:first-child{margin-top:0;}
+.help-doc b{color:#8A5A2B;}
+.help-doc ul{margin:4px 0 8px;padding-left:20px;}
+.help-doc li{margin:2px 0;}
 .role-badge{display:inline-block;background:var(--sand);border:1px solid var(--sand-d);color:var(--amber-d);border-radius:12px;padding:2px 10px;font-size:12px;margin-left:8px;}
 .help-i{cursor:pointer;color:var(--amber);margin-left:4px;}
 .annual-box{display:flex;gap:22px;flex-wrap:wrap;background:var(--sand);border:1px solid var(--sand-d);border-radius:7px;padding:9px 14px;margin-bottom:12px;}
@@ -171,6 +180,7 @@ input[type=number]{-moz-appearance:textfield;}
     <h3>請假系統 <small>申請・簽核・行事曆連動</small>
       <span class="role-badge">角色：<?= htmlspecialchars($roleBadge) ?></span>
       <i class="fa fa-question-circle help-i" title="各角色權限說明" onclick="$('#roleHelpModal').modal('show')"></i>
+      <button type="button" class="page-help-btn" id="btnPageHelp"><i class="fa fa-question-circle"></i> 使用說明</button>
       <?php if ($IS_ADMIN || rf_has_feature($features, 'leave_cal_manage')): ?>
       <button type="button" class="btn btn-xs btn-default" id="btnLvSetting" style="margin-left:10px;vertical-align:middle;"
               onclick="openLvSetting()"><i class="fa fa-cog"></i> 管理者設定</button>
@@ -651,6 +661,57 @@ input[type=number]{-moz-appearance:textfield;}
 </div></div></div>
 <?php endif; ?>
 
+
+
+<!-- ═══ 使用說明 Modal（鐵律7）═══ -->
+<div class="modal fade" id="helpUseMask" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header" style="background:var(--sand);">
+    <button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title" style="color:var(--amber-d);">請假系統 使用說明</h4>
+  </div>
+  <div class="modal-body help-doc">
+    <h4>這頁在做什麼</h4>
+    <p>員工請假的線上申請、簽核、銷假與統計。請假單與<b>行事曆</b>是連動的：核准後行事曆上會出現休假；
+       反過來，直接在行事曆上登錄的休假也會自動變成請假單（見下方「行事曆連動」）。</p>
+
+    <h4>操作步驟</h4>
+    <ul>
+      <li><b>申請請假</b>：挑假別 → 填起訖（時數只算工作日，系統自動算）→ 需要證明文件的假別先上傳附件 → 送出。
+          送出前可先看「將由誰簽核」與「職務代理人」，代理人由系統依人事設定的順位自動解析，不需自己挑。</li>
+      <li><b>我的請假單</b>：查自己的單、撤回（還沒人簽時）、銷假、提前結束、補上證明文件。</li>
+      <li><b>待我簽核</b>：主管在這裡核准或退回；退回要填原因。主管當天有行程時，系統會改派其代理人簽。</li>
+      <li><b>請假統計</b>：人事／管理員看全公司，主管看自己部門（含下轄）。
+          先選部門，<b>人員下拉就只會列出該部門底下的人</b>；要看全部人就把部門留在「全部部門」。
+          兼任兩個職務的人會出現兩列（主職務與兼任各一列），選哪一列統計的都是同一個人。</li>
+    </ul>
+
+    <h4>行事曆連動（重要）</h4>
+    <ul>
+      <li>在<b>行事曆</b>把事件類別選「休假」、挑好假別與發生者存檔，系統就會自動幫每一位發生者建立請假單，
+          時數與人工送審用同一套規則計算。</li>
+      <li>預設<b>不需簽核</b>（直接核准）。要改成需要簽核，在本頁右上角「管理者設定 → 行事曆自動建單」切換。</li>
+      <li>行事曆上那筆事件<b>不會被系統改動</b>（一筆事件常常掛好幾個人）；只有銷假時才會把那個人從發生者名單移除。</li>
+      <li>行事曆上的休假改時間、改假別、改人，假單會跟著重算；事件被刪掉，對應的假單也會一起撤掉。</li>
+      <li>沒有指定假別或發生者的休假事件建不出單，請先回行事曆補齊；整段落在假日／週末的也不會建單（本來就不扣假）。</li>
+    </ul>
+
+    <h4>常見疑問</h4>
+    <ul>
+      <li><b>為什麼我的假單建不出來？</b>同一個時段已經有單（重疊）、或該期間沒有工作日。</li>
+      <li><b>補以前的假</b>：人工送審有天數限制（人事設定）；行事曆帶入的舊資料不受此限，因為那是已經發生的事實。</li>
+      <li><b>特休額度</b>：人工送審超額會被擋下；行事曆帶入的舊資料照建，但會在補建結果裡列出「超額」提醒人事處理。</li>
+    </ul>
+
+    <h4>設定入口與權限</h4>
+    <ul>
+      <li><b>管理者設定</b>（右上角齒輪）：角色的新增／改名／刪除與功能勾選、行事曆自動建單設定、補建舊資料。
+          刪除角色時若有人正被設定成該角色，系統會列出是誰並要求先轉換成其他角色或確認移除，不會安靜地把權限拿掉。</li>
+      <li><b>誰擁有哪個角色</b>：在「人員權限設定」頁指派。</li>
+      <li><b>代理人順位、假別、額度、列印表頭表尾</b>：在「人事設定」與本頁管理員功能維護。</li>
+      <li><b>簽核權不由角色決定</b>：依申請人的部門／職稱階級推主管鏈。</li>
+    </ul>
+  </div>
+</div></div></div>
 
 <!-- ═══ 管理者設定 Modal（角色設定／行事曆自動建單）═══ -->
 <?php if ($IS_ADMIN || rf_has_feature($features, 'leave_cal_manage')): ?>
@@ -1389,6 +1450,7 @@ const RAPI = '../../src/store/Roles_API.php';
 const LV_FEATURES = <?= json_encode($PAGE_FEATURES, JSON_UNESCAPED_UNICODE) ?>;
 let LV_ROLES = [], LV_CURROLE = 0;
 
+$('#btnPageHelp').on('click', function(){ $('#helpUseMask').modal('show'); });
 function openLvSetting(){
   lvSetTab(<?= $IS_ADMIN ? "'role'" : "'cal'" ?>);
   <?php if ($IS_ADMIN): ?>lvLoadRoles();<?php endif; ?>
