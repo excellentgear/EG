@@ -28,7 +28,7 @@ try {
     $mainIdent = eg_user_main_identity($pdo, $uid);
     $IS_SUPERVISOR = ($mainIdent && $mainIdent['level'] !== null);
 } catch (Throwable $e) {}
-$SHOW_STATS = $VIEW_ALL || $IS_SUPERVISOR;
+$SHOW_STATS = $VIEW_ALL || $IS_SUPERVISOR || rf_has_feature($features, 'leave_stats');
 
 // 首次載入植入預設角色（module=leave）
 try {
@@ -45,8 +45,12 @@ try {
     }
 } catch (Throwable $e) {}
 
+// 角色可勾選的功能（管理者設定→角色設定 用；每一項在 Leave_API 都有對應守門，不是只擋畫面）
 $PAGE_FEATURES = [
-    ['code' => 'leave_view_all', 'label' => '檢視全公司請假單（人事用；不含代簽權）'],
+    ['code' => 'leave_view_all',    'group' => 'view', 'label' => '檢視全公司請假單（人事用；不含代簽權）'],
+    ['code' => 'leave_stats',       'group' => 'view', 'label' => '使用「請假統計」分頁（非主管者：範圍只有自己）'],
+    ['code' => 'leave_cancel_other','group' => 'op',   'label' => '代他人銷假／撤回請假單'],
+    ['code' => 'leave_cal_manage',  'group' => 'op',   'label' => '管理行事曆自動建單（設定是否簽核、補建舊資料）'],
 ];
 
 $myRoleNames = [];
@@ -167,6 +171,10 @@ input[type=number]{-moz-appearance:textfield;}
     <h3>請假系統 <small>申請・簽核・行事曆連動</small>
       <span class="role-badge">角色：<?= htmlspecialchars($roleBadge) ?></span>
       <i class="fa fa-question-circle help-i" title="各角色權限說明" onclick="$('#roleHelpModal').modal('show')"></i>
+      <?php if ($IS_ADMIN || rf_has_feature($features, 'leave_cal_manage')): ?>
+      <button type="button" class="btn btn-xs btn-default" id="btnLvSetting" style="margin-left:10px;vertical-align:middle;"
+              onclick="openLvSetting()"><i class="fa fa-cog"></i> 管理者設定</button>
+      <?php endif; ?>
     </h3>
   </div></div>
   <div class="clearfix"></div>
@@ -639,6 +647,88 @@ input[type=number]{-moz-appearance:textfield;}
   <div class="modal-footer">
     <button class="btn btn-default" data-dismiss="modal">取消</button>
     <button class="btn btn-amber" onclick="savePrintSetting()">儲存</button>
+  </div>
+</div></div></div>
+<?php endif; ?>
+
+
+<!-- ═══ 管理者設定 Modal（角色設定／行事曆自動建單）═══ -->
+<?php if ($IS_ADMIN || rf_has_feature($features, 'leave_cal_manage')): ?>
+<div class="modal fade" id="lvSetModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
+  <div class="modal-header" style="background:var(--sand);">
+    <button type="button" class="close" data-dismiss="modal">&times;</button>
+    <h4 class="modal-title" style="color:var(--amber-d);">請假系統 管理者設定</h4>
+  </div>
+  <div class="modal-body" style="font-size:13px;">
+    <div style="display:flex;gap:4px;border-bottom:2px solid var(--sand-d);margin-bottom:12px;">
+      <?php if ($IS_ADMIN): ?>
+      <button type="button" class="pm-tab-btn active" id="lvsTabRole" onclick="lvSetTab('role')">角色設定</button>
+      <?php endif; ?>
+      <button type="button" class="pm-tab-btn<?= $IS_ADMIN ? '' : ' active' ?>" id="lvsTabCal" onclick="lvSetTab('cal')">行事曆自動建單</button>
+    </div>
+
+    <?php if ($IS_ADMIN): ?>
+    <!-- ── 角色設定 ── -->
+    <div id="lvsPaneRole">
+      <p style="color:#8a6d45;margin:0 0 8px;">左邊選或新增角色 → 右邊改名稱、勾這個角色能做什麼。
+        「<b>誰</b>擁有這個角色」在 <a href="../user/user_permissions.php" target="_blank">人員權限設定頁</a> 指派，這裡只定義角色內容。
+        簽核權不由角色決定（依部門／職稱階級推主管鏈）。</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start;">
+        <div style="border:1px solid var(--sand-d);border-radius:6px;background:#fff;flex:0 0 200px;">
+          <div style="background:var(--sand);color:#5b3a1e;font-weight:bold;padding:5px 10px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between;align-items:center;">
+            角色 <button type="button" class="btn btn-xs btn-amber" onclick="lvRoleAdd()">＋ 新增</button>
+          </div>
+          <div id="lvRoleList" style="max-height:300px;overflow-y:auto;"></div>
+        </div>
+        <div style="border:1px solid var(--sand-d);border-radius:6px;background:#fff;flex:1;min-width:280px;">
+          <div style="background:var(--sand);color:#5b3a1e;font-weight:bold;padding:5px 10px;border-radius:6px 6px 0 0;">角色內容</div>
+          <div id="lvRoleEdit" style="display:none;padding:10px;">
+            <label>角色名稱</label>
+            <div style="display:flex;gap:6px;">
+              <input type="text" class="form-control input-sm eg-inp" id="lvRoleName" maxlength="50" style="flex:1;">
+              <button type="button" class="btn btn-sm btn-default" onclick="lvRoleRename()">改名</button>
+              <button type="button" class="btn btn-sm btn-default" style="color:#DD5138;" onclick="lvRoleDel()">刪除</button>
+            </div>
+            <div style="font-weight:bold;color:#8A5A2B;margin:10px 0 4px;">看得到什麼</div>
+            <div id="lvFeatView"></div>
+            <div style="font-weight:bold;color:#8A5A2B;margin:10px 0 4px;">能做什麼</div>
+            <div id="lvFeatOp"></div>
+            <button type="button" class="btn btn-sm btn-amber" style="margin-top:10px;" onclick="lvRoleSaveFeat()">
+              <i class="fa fa-save"></i> 儲存功能</button>
+          </div>
+          <div id="lvRoleHint" style="padding:24px;text-align:center;color:#8a6d45;">請在左側選一個角色，或按「＋ 新增」</div>
+        </div>
+      </div>
+    </div>
+    <?php endif; ?>
+
+    <!-- ── 行事曆自動建單 ── -->
+    <div id="lvsPaneCal"<?= $IS_ADMIN ? ' style="display:none;"' : '' ?>>
+      <p style="color:#8a6d45;margin:0 0 8px;">在 <a href="../pages/calendar.php" target="_blank">行事曆</a> 把事件類別選成「休假」、挑好假別與發生者存檔後，
+        系統會自動在這裡建立對應的請假單（時數依工作日計算，與人工送審同一套規則）。
+        <b>不會去更動行事曆上那筆事件</b>（一筆事件可能掛好幾個人）；銷假時才會把該人從事件的發生者名單中移除。</p>
+      <div style="border:1px solid var(--sand-d);border-radius:6px;background:#FFF7E8;padding:10px;margin-bottom:12px;">
+        <label style="display:block;font-weight:400;"><input type="checkbox" id="calAuto" data-eg-skip> 行事曆存檔時<b>自動建立請假單</b></label>
+        <label style="display:block;font-weight:400;"><input type="checkbox" id="calAppr" data-eg-skip> 自動建立的假單<b>需要簽核</b>（不勾＝直接核准，預設不勾）</label>
+        <label style="display:block;font-weight:400;"><input type="checkbox" id="calNotify" data-eg-skip> 建立後<b>通知當事人</b>（人事整批登錄時建議不勾）</label>
+        <div style="margin-top:8px;color:#8a5a1a;">※ 勾「需要簽核」時，建出來的單是<b>審核中</b>，但行事曆上仍維持你畫的「休假」樣子不變。</div>
+        <button type="button" class="btn btn-sm btn-amber" style="margin-top:8px;" onclick="calSaveSetting()"><i class="fa fa-save"></i> 儲存設定</button>
+        <span id="calSetMsg" style="margin-left:8px;color:#2e7d32;"></span>
+      </div>
+
+      <div style="border:1px solid var(--sand-d);border-radius:6px;padding:10px;">
+        <div style="font-weight:bold;color:#8A5A2B;margin-bottom:6px;">補建舊的行事曆請假資料</div>
+        <div id="calPendInfo" style="margin-bottom:8px;color:#6b5638;">讀取中…</div>
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+          <div><label style="display:block;margin:0;">起（可空）</label><input type="date" class="form-control input-sm eg-inp" id="calFrom" style="width:auto;"></div>
+          <div><label style="display:block;margin:0;">迄（可空）</label><input type="date" class="form-control input-sm eg-inp" id="calTo" style="width:auto;"></div>
+          <button type="button" class="btn btn-sm btn-default" onclick="calList()">查看待補清單</button>
+          <button type="button" class="btn btn-sm btn-amber" onclick="calBackfill()"><i class="fa fa-magic"></i> 立即補建</button>
+        </div>
+        <div id="calResult" style="margin-top:10px;"></div>
+        <div id="calListBox" style="margin-top:10px;max-height:260px;overflow:auto;"></div>
+      </div>
+    </div>
   </div>
 </div></div></div>
 <?php endif; ?>
@@ -1290,6 +1380,195 @@ function exportPdf(){
   });
 }
 function openPrintSetting(){ $('#printSetModal').modal('show'); }
+
+/* ═══════════════ 管理者設定（角色設定／行事曆自動建單）═══════════════
+   · 角色 CRUD 一律走全站共用的 Roles_API（module='leave'），不在本頁另寫一套角色資料表。
+   · 刪除角色前先問 role_usage：有人設定成這個角色就不給直接刪，列出是誰，
+     再讓管理員選要「轉換成哪個角色」或「確認一併移除」。 */
+const RAPI = '../../src/store/Roles_API.php';
+const LV_FEATURES = <?= json_encode($PAGE_FEATURES, JSON_UNESCAPED_UNICODE) ?>;
+let LV_ROLES = [], LV_CURROLE = 0;
+
+function openLvSetting(){
+  lvSetTab(<?= $IS_ADMIN ? "'role'" : "'cal'" ?>);
+  <?php if ($IS_ADMIN): ?>lvLoadRoles();<?php endif; ?>
+  calLoadSetting();
+  $('#lvSetModal').modal('show');
+}
+function lvSetTab(t){
+  $('#lvsTabRole, #lvsTabCal').removeClass('active');
+  $(t==='role' ? '#lvsTabRole' : '#lvsTabCal').addClass('active');
+  $('#lvsPaneRole').toggle(t==='role'); $('#lvsPaneCal').toggle(t==='cal');
+}
+
+// ── 角色 ──
+function lvLoadRoles(then){
+  $.getJSON(RAPI, {action:'get_roles', module:'leave'}, function(res){
+    LV_ROLES = res.data || [];
+    let h = '';
+    LV_ROLES.forEach(function(r){
+      const sys = String(r.is_system)==='1';
+      h += '<div class="lv-role-item' + (sys?' sys':'') + '" data-id="' + r.role_id + '" '
+         + 'style="padding:6px 10px;cursor:pointer;border-bottom:1px solid #f0e6d2;' + (sys?'color:#9a7b4f;':'')
+         + (String(r.role_id)===String(LV_CURROLE)?'background:#FDF3E3;':'') + '">'
+         + esc(r.role_name) + (sys?'（系統．固定全權）':'') + '</div>';
+    });
+    $('#lvRoleList').html(h || '<div style="padding:10px;color:#8a6d45;">尚無角色</div>');
+    if(typeof then==='function') then();
+  });
+}
+$(document).on('click', '#lvRoleList .lv-role-item', function(){ lvSelRole($(this).data('id')); });
+function lvSelRole(id){
+  const r = LV_ROLES.filter(function(x){ return String(x.role_id)===String(id); })[0];
+  if(!r) return;
+  if(String(r.is_system)==='1'){ alert('系統角色「'+r.role_name+'」固定擁有全部權限，不可修改'); return; }
+  LV_CURROLE = id;
+  $('#lvRoleList .lv-role-item').css('background','');
+  $('#lvRoleList .lv-role-item[data-id="'+id+'"]').css('background','#FDF3E3');
+  $('#lvRoleHint').hide(); $('#lvRoleEdit').show();
+  $('#lvRoleName').val(r.role_name);
+  let vh='', oh='';
+  LV_FEATURES.forEach(function(f){
+    const row = '<label style="display:block;font-weight:400;padding:2px 0;">'
+              + '<input type="checkbox" class="lv-featcb" data-eg-skip value="'+esc(f.code)+'"> '+esc(f.label)+'</label>';
+    if(f.group==='view') vh += row; else oh += row;
+  });
+  $('#lvFeatView').html(vh); $('#lvFeatOp').html(oh);
+  $.getJSON(RAPI, {action:'get_role_features', role_id:id}, function(res){
+    const has = res.data || [];
+    $('.lv-featcb').each(function(){ $(this).prop('checked', has.indexOf(this.value)>-1 || has.indexOf('all')>-1); });
+  });
+}
+function lvRoleAdd(){
+  const n = prompt('新角色名稱：');
+  if(!n || !$.trim(n)) return;
+  $.post(RAPI, {action:'save_role', role_name:$.trim(n), module:'leave'}, function(r){
+    if(!r.success){ alert(r.message); return; }
+    LV_CURROLE = r.role_id;
+    lvLoadRoles(function(){ lvSelRole(r.role_id); });
+  }, 'json');
+}
+function lvRoleRename(){
+  if(!LV_CURROLE) return;
+  const n = $.trim($('#lvRoleName').val()||'');
+  if(!n){ alert('請輸入角色名稱'); return; }
+  $.post(RAPI, {action:'save_role', role_id:LV_CURROLE, role_name:n}, function(r){
+    if(!r.success){ alert(r.message); return; }
+    lvLoadRoles(); alert('已改名為「'+n+'」');
+  }, 'json');
+}
+function lvRoleSaveFeat(){
+  if(!LV_CURROLE) return;
+  const feats = $('.lv-featcb:checked').map(function(){ return this.value; }).get();
+  $.post(RAPI, {action:'save_role_features', role_id:LV_CURROLE, features:JSON.stringify(feats)}, function(r){
+    alert(r.success ? '已儲存。擁有此角色的人重新整理頁面後生效。' : r.message);
+  }, 'json');
+}
+/* 刪除：先查有沒有人設定成這個角色。有的話不直接刪，列出名單讓管理員決定要不要一鍵轉換。 */
+function lvRoleDel(){
+  if(!LV_CURROLE) return;
+  const cur = LV_ROLES.filter(function(x){ return String(x.role_id)===String(LV_CURROLE); })[0] || {};
+  $.getJSON(RAPI, {action:'role_usage', role_id:LV_CURROLE}, function(u){
+    if(!u.success){ alert(u.message||'查詢失敗'); return; }
+    const users = u.users || [], poss = u.positions || [];
+    if(!users.length && !poss.length){
+      if(!confirm('確定刪除角色「'+cur.role_name+'」？目前沒有任何人設定為此角色。')) return;
+      lvRoleDoDelete(0, 1);
+      return;
+    }
+    const msg = '角色「'+cur.role_name+'」目前有 '+users.length+' 位人員'
+            + (poss.length ? ('、'+poss.length+' 個職稱綁定') : '') + '正在使用，不可直接刪除：\n\n'
+            + users.map(function(x){ return '　・'+x.label; }).join('\n')
+            + (poss.length ? ('\n\n職稱綁定：\n' + poss.map(function(x){ return '　・'+x.label; }).join('\n')) : '');
+    const others = LV_ROLES.filter(function(x){ return String(x.role_id)!==String(LV_CURROLE) && String(x.is_system)!=='1'; });
+    const opts = others.map(function(x,i){ return '　'+(i+1)+'. '+x.role_name; }).join('\n');
+    const ans = prompt(msg + '\n\n要把這些人「一鍵轉換」成哪一個角色？\n'
+                     + (others.length ? (opts + '\n\n請輸入編號；') : '（目前沒有其他可轉換的角色）')
+                     + '輸入 0 ＝不轉換，直接移除他們的此角色後刪除；\n直接按取消 ＝ 什麼都不做。', others.length ? '1' : '0');
+    if(ans === null) return;
+    const n = parseInt($.trim(ans), 10);
+    if(isNaN(n) || n < 0 || n > others.length){ alert('輸入不正確，已取消。'); return; }
+    if(n === 0){
+      if(!confirm('確定不轉換，直接移除這 '+users.length+' 位人員的「'+cur.role_name+'」角色並刪除？\n他們會立刻失去此角色帶來的權限。')) return;
+      lvRoleDoDelete(0, 1);
+    }else{
+      const t = others[n-1];
+      if(!confirm('確定把這 '+users.length+' 位人員改為「'+t.role_name+'」，然後刪除「'+cur.role_name+'」？')) return;
+      lvRoleDoDelete(t.role_id, 0);
+    }
+  });
+}
+function lvRoleDoDelete(transferTo, confirmUsers){
+  $.post(RAPI, {action:'delete_role', role_id:LV_CURROLE, transfer_to:transferTo||0,
+                confirm_users:confirmUsers?1:0}, function(r){
+    if(!r.success){ alert(r.message); return; }
+    alert(r.message || '已刪除');
+    LV_CURROLE = 0; $('#lvRoleEdit').hide(); $('#lvRoleHint').show();
+    lvLoadRoles();
+  }, 'json');
+}
+
+// ── 行事曆自動建單 ──
+function calLoadSetting(){
+  $.getJSON(API, {action:'cal_settings'}, function(r){
+    if(!r.success){ $('#calPendInfo').html('<span style="color:#a3341f;">'+esc(r.message)+'</span>'); return; }
+    $('#calAuto').prop('checked', r.settings.leave_cal_auto_create === '1');
+    $('#calAppr').prop('checked', r.settings.leave_cal_need_approval === '1');
+    $('#calNotify').prop('checked', r.settings.leave_cal_notify === '1');
+    $('#calPendInfo').html('行事曆上的休假事件共 <b>'+r.total+'</b> 筆，其中 <b style="color:#B06F27;">'+r.pending
+      +'</b> 筆還沒有對應的請假單'
+      + (r.blocked ? ('；另有 <b style="color:#a3341f;">'+r.blocked+'</b> 筆因為沒有指定假別或發生者而無法建立（請先到行事曆補齊）') : '')
+      + '。');
+  });
+}
+function calSaveSetting(){
+  $.post(API, {action:'cal_settings_save', csrf:CSRF,
+               auto_create: $('#calAuto').is(':checked')?1:0,
+               need_approval: $('#calAppr').is(':checked')?1:0,
+               notify: $('#calNotify').is(':checked')?1:0}, function(r){
+    if(!r.success){ alert(r.message||'儲存失敗'); return; }
+    $('#calSetMsg').text('已儲存 ✓'); setTimeout(function(){ $('#calSetMsg').text(''); }, 2500);
+  }, 'json');
+}
+function calList(){
+  $('#calListBox').html('讀取中…');
+  $.getJSON(API, {action:'cal_pending_list', from:$('#calFrom').val()||'', to:$('#calTo').val()||''}, function(r){
+    if(!r.success){ $('#calListBox').html('<span style="color:#a3341f;">'+esc(r.message)+'</span>'); return; }
+    if(!r.rows.length){ $('#calListBox').html('<div style="color:#6b5638;">這個區間沒有待補的休假事件。</div>'); return; }
+    let h = '<table class="table table-condensed" style="font-size:12.5px;"><thead><tr>'
+          + '<th>日期</th><th>標題</th><th>假別</th><th class="numc">人數</th><th>狀態</th></tr></thead><tbody>';
+    r.rows.forEach(function(x){
+      h += '<tr><td>'+esc(egFmtDate(x.start)+(x.allday?'':' '+String(x.start).substr(11,5)))+'</td>'
+         + '<td>'+esc(x.title)+'</td><td>'+esc(x.leave_name||'—')+'</td>'
+         + '<td class="numc">'+x.actors+'</td>'
+         + '<td>'+(x.blocked ? ('<span style="color:#a3341f;">'+esc(x.blocked)+'</span>') : '待補')+'</td></tr>';
+    });
+    h += '</tbody></table>';
+    $('#calListBox').html('<div style="color:#6b5638;margin-bottom:4px;">共 '+r.total+' 筆'
+        + (r.total>r.rows.length ? ('（只顯示前 '+r.rows.length+' 筆）') : '')+'</div>' + h);
+  });
+}
+function calBackfill(){
+  if(!confirm('要把行事曆上「還沒有請假單」的休假整批補建成請假單嗎？\n（已經有單的會自動略過，不會重複建立）')) return;
+  $('#calResult').html('補建中，請稍候…');
+  $.post(API, {action:'cal_backfill', csrf:CSRF, from:$('#calFrom').val()||'', to:$('#calTo').val()||''}, function(r){
+    if(!r.success){ $('#calResult').html('<span style="color:#a3341f;">'+esc(r.message||'補建失敗')+'</span>'); return; }
+    let h = '<div style="color:#2e7d32;">已建立 <b>'+r.created+'</b> 張請假單，略過 '+r.skipped+' 筆，失敗 '+r.failed+' 筆。</div>';
+    if(r.fail_rows && r.fail_rows.length){
+      h += '<div style="margin-top:6px;color:#a3341f;">失敗明細（多半是該日全公司放假／週末，本來就不需要請假）：</div><ul style="margin:2px 0 0 18px;">'
+         + r.fail_rows.map(function(x){ return '<li>'+esc((x.name||'')+'　'+String(x.start||'').substr(0,10)+'：'+x.reason)+'</li>'; }).join('')
+         + '</ul>';
+    }
+    if(r.warns && r.warns.length){
+      h += '<div style="margin-top:6px;color:#8a5a1a;">已建立但要注意：</div><ul style="margin:2px 0 0 18px;">'
+         + r.warns.map(function(x){ return '<li>'+esc(x)+'</li>'; }).join('') + '</ul>';
+    }
+    $('#calResult').html(h);
+    calLoadSetting();
+    calList();
+  }, 'json');
+}
+
 function savePrintSetting(){
   $.post(API, {action:'save_print_setting', csrf:CSRF, header:$('#psHeader').val(), footer:$('#psFooter').val()}, function(r){
     alert(r.message || (r.success?'已儲存':'儲存失敗'));

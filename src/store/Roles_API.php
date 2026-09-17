@@ -195,21 +195,129 @@ switch ($action) {
     // 刪除角色（系統角色不可刪）
     // POST action=delete_role  role_id=N
     // ──────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────────
+    // 這個角色現在被誰用著（刪除前一定要先問這支）
+    // GET ?action=role_usage&role_id=N
+    // 回傳 { success, users:[{id,name,dept,position}], positions:[{department_id,position_id,label}] }
+    // ──────────────────────────────────────────────────────────────────────
+    case 'role_usage': {
+        $rid = intval($_GET['role_id'] ?? $_POST['role_id'] ?? 0);
+        if (!$rid) { $response = ['success'=>false,'message'=>'缺少 role_id']; break; }
+        try {
+            // 人員：依 部門→職稱→姓名 排序（職位高者在上），與全站人員清單同一套排序鍵
+            $st = $pdo->prepare(
+                "SELECT u.id, u.user_cname, u.user_uname, u.state,
+                        d.name AS dept_name, p.name AS position_name,
+                        COALESCE(d.sort_order,999) ds, COALESCE(p.sort_order,999) ps
+                 FROM user_roles ur
+                 JOIN `user` u ON u.id = ur.user_id
+                 LEFT JOIN user_department_position_map m
+                        ON m.id = (SELECT m2.id FROM user_department_position_map m2
+                                   LEFT JOIN position p2 ON p2.id = m2.position_id
+                                   WHERE m2.user_id = u.id
+                                   ORDER BY COALESCE(p2.sort_order,999) ASC, m2.is_main DESC, m2.id ASC LIMIT 1)
+                 LEFT JOIN department d ON d.id = m.department_id
+                 LEFT JOIN position   p ON p.id = m.position_id
+                 WHERE ur.role_id = ?
+                 ORDER BY ds, ps, CONVERT(u.user_cname USING utf8mb4), u.id");
+            $st->execute([$rid]);
+            $users = [];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $nm = trim((string)$r['user_cname']) !== '' ? $r['user_cname'] : $r['user_uname'];
+                $users[] = ['id'=>(int)$r['id'], 'name'=>$nm,
+                            'dept'=>(string)($r['dept_name'] ?? ''), 'position'=>(string)($r['position_name'] ?? ''),
+                            'state'=>(int)$r['state'],
+                            'label'=>trim(((string)$r['dept_name']).' '.((string)$r['position_name']).' '.$nm)];
+            }
+            // 職稱綁定（position_roles）：這種綁定一刪掉，整個職稱的人會同時失去權限，一樣要先講清楚
+            $pos = [];
+            try {
+                $ps = $pdo->prepare("SELECT pr.department_id, pr.position_id FROM position_roles pr WHERE pr.role_id=?");
+                $ps->execute([$rid]);
+                foreach ($ps->fetchAll(PDO::FETCH_ASSOC) as $r)
+                    $pos[] = ['department_id'=>(int)$r['department_id'], 'position_id'=>(int)$r['position_id'],
+                              'label'=>rbacDeptPosName($pdo, (int)$r['department_id'], (int)$r['position_id'])];
+            } catch (Exception $_e) {}
+            $response = ['success'=>true, 'role_name'=>rbacRoleName($pdo,$rid),
+                         'users'=>$users, 'positions'=>$pos,
+                         'user_count'=>count($users), 'position_count'=>count($pos)];
+        } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
+        break;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // 刪除角色（系統角色不可刪）
+    // POST action=delete_role  role_id=N  [transfer_to=角色id｜0=不轉換]  [confirm_users=1]
+    //
+    // 2026-09-17 使用者要求：**有人被設定成這個角色時一律不可以直接刪掉**。
+    //   回傳 in_use=1 與完整名單，由畫面列出「哪些人設定了此角色」，
+    //   再讓管理員選「一鍵轉換成另一個角色」或「確認一併移除」，不可以像以前那樣安靜地把 user_roles 刪光。
+    // ──────────────────────────────────────────────────────────────────────
     case 'delete_role': {
         if (!isAdmin($pdo, $user_id)) { $response = ['success'=>false,'message'=>'無管理員權限']; break; }
         $rid = intval($_POST['role_id'] ?? 0);
+        $transferTo   = intval($_POST['transfer_to'] ?? 0);
+        $confirmUsers = !empty($_POST['confirm_users']);
         if (!$rid) { $response = ['success'=>false,'message'=>'缺少 role_id']; break; }
         try {
             $chk = $pdo->prepare("SELECT is_system FROM roles WHERE role_id=? LIMIT 1");
             $chk->execute([$rid]);
             if ((int)$chk->fetchColumn() === 1) { $response = ['success'=>false,'message'=>'系統角色不可刪除']; break; }
+
+            // 誰在用
+            $us = $pdo->prepare("SELECT ur.user_id FROM user_roles ur WHERE ur.role_id=?");
+            $us->execute([$rid]);
+            $uids = array_map('intval', $us->fetchAll(PDO::FETCH_COLUMN));
+            $pc = 0;
+            try { $p = $pdo->prepare("SELECT COUNT(*) FROM position_roles WHERE role_id=?"); $p->execute([$rid]); $pc = (int)$p->fetchColumn(); } catch (Exception $_e) {}
+
+            if (($uids || $pc) && !$transferTo && !$confirmUsers) {
+                $names = [];
+                foreach ($uids as $u) $names[] = rbacUserName($pdo, $u);
+                $response = ['success'=>false, 'in_use'=>1,
+                             'user_count'=>count($uids), 'position_count'=>$pc,
+                             'users'=>$names,
+                             'message'=>'目前有 ' . count($uids) . ' 位人員'
+                                      . ($pc ? '、' . $pc . ' 個職稱綁定' : '')
+                                      . '設定為此角色，不可直接刪除。請先改設定成其他角色，或選擇一鍵轉換。'];
+                break;
+            }
+
+            if ($transferTo) {
+                if ($transferTo === $rid) { $response = ['success'=>false,'message'=>'不能轉換成角色自己']; break; }
+                $t = $pdo->prepare("SELECT role_id FROM roles WHERE role_id=? LIMIT 1");
+                $t->execute([$transferTo]);
+                if (!$t->fetchColumn()) { $response = ['success'=>false,'message'=>'要轉換的目標角色不存在']; break; }
+            }
+
             $delName = rbacRoleName($pdo, $rid);
+            $pdo->beginTransaction();
+            $moved = 0;
+            if ($transferTo) {
+                $ins = $pdo->prepare("INSERT IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)");
+                foreach ($uids as $u) { $ins->execute([$u, $transferTo]); $moved++; }
+                try {
+                    $pr = $pdo->prepare("SELECT department_id, position_id FROM position_roles WHERE role_id=?");
+                    $pr->execute([$rid]);
+                    $pi = $pdo->prepare("INSERT IGNORE INTO position_roles (department_id, position_id, role_id) VALUES (?,?,?)");
+                    foreach ($pr->fetchAll(PDO::FETCH_ASSOC) as $r) $pi->execute([(int)$r['department_id'], (int)$r['position_id'], $transferTo]);
+                } catch (Exception $_e) {}
+            }
             $pdo->prepare("DELETE FROM role_features WHERE role_id=?")->execute([$rid]);
             $pdo->prepare("DELETE FROM user_roles    WHERE role_id=?")->execute([$rid]);
+            try { $pdo->prepare("DELETE FROM position_roles WHERE role_id=?")->execute([$rid]); } catch (Exception $_e) {}
             $pdo->prepare("DELETE FROM roles         WHERE role_id=? AND is_system=0")->execute([$rid]);
-            rbacAudit($pdo, $user_id, 'delete', 'rbac_role', $rid, $delName);
-            $response = ['success'=>true];
-        } catch(Exception $_e) { $response = ['success'=>false,'message'=>$_e->getMessage()]; }
+            $pdo->commit();
+            rbacAudit($pdo, $user_id, 'delete', 'rbac_role', $rid, $delName,
+                      [['field'=>'users','old'=>implode(',', $uids),
+                        'new'=>$transferTo ? ('轉換為角色 #' . $transferTo . '（' . rbacRoleName($pdo,$transferTo) . '）') : '一併移除']]);
+            $response = ['success'=>true, 'moved'=>$moved,
+                         'message'=>$transferTo ? ('已刪除並把 ' . $moved . ' 位人員轉換為「' . rbacRoleName($pdo,$transferTo) . '」')
+                                                : '已刪除角色'];
+        } catch(Exception $_e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $response = ['success'=>false,'message'=>$_e->getMessage()];
+        }
         break;
     }
 

@@ -32,6 +32,10 @@ $db = $conn->getPDO();
 $features = rf_load_user_features_override($db, $user_id, 'leave');
 $IS_ADMIN = rf_has_feature($features, 'all');
 $VIEW_ALL = $IS_ADMIN || rf_has_feature($features, 'leave_view_all');
+// 角色可設定的加值功能（角色內容在本頁「管理者設定→角色設定」維護；誰擁有角色在 user_permissions.php 指派）
+$CAN_STATS_ROLE  = rf_has_feature($features, 'leave_stats');         // 不是主管也能用請假統計
+$CAN_CANCEL_OTHER = $IS_ADMIN || rf_has_feature($features, 'leave_cancel_other');  // 代他人銷假／撤回
+$CAN_CAL_MANAGE   = $IS_ADMIN || rf_has_feature($features, 'leave_cal_manage');    // 行事曆自動建單設定與補建
 
 // 主管身分：主職職稱有階級（position_level.level 非 NULL）→ 可看本部門（含下轄部門）
 function leave_dept_scope(PDO $db, int $uid): array {
@@ -276,7 +280,7 @@ case 'cancel': {
     need_csrf();
     $reqId = (int)($_POST['id'] ?? 0);
     if (!$reqId) bad('缺少參數');
-    $r = eg_leave_cancel($db, $reqId, $user_id, trim((string)($_POST['reason'] ?? '')), $IS_ADMIN);
+    $r = eg_leave_cancel($db, $reqId, $user_id, trim((string)($_POST['reason'] ?? '')), $CAN_CANCEL_OTHER);
     out(['success' => $r['ok'], 'message' => $r['msg']]);
 }
 
@@ -382,15 +386,20 @@ case 'list': {
 // 統計一律後端全量計算（eg_leave_stats），前端只負責畫圖，不可自己加總已載入的那一頁。
 case 'stats': {
     $depts = $VIEW_ALL ? [] : leave_dept_scope($db, $user_id);
-    if (!$VIEW_ALL && !$depts) bad('您沒有檢視請假統計的權限');
+    if (!$VIEW_ALL && !$depts && !$CAN_STATS_ROLE) bad('您沒有檢視請假統計的權限');
     // 主管只看得到自己部門(含下轄)的人；人事/管理員不設限（null）
     $scopeIds = null;
     if (!$VIEW_ALL) {
+        if (!$depts) {
+            // 只有 leave_stats 角色功能、既不是主管也不是人事：只能看自己的資料
+            $scopeIds = [$user_id];
+        } else {
         $in = implode(',', array_map('intval', $depts));
         $scopeIds = array_map('intval', $db->query(
             "SELECT DISTINCT user_id FROM user_department_position_map WHERE department_id IN ($in)")
             ->fetchAll(PDO::FETCH_COLUMN));
         if (!$scopeIds) $scopeIds = [0];   // 空白名單也要是「什麼都看不到」，不能退化成看全部
+        }
     }
     $yearRaw = trim((string)($_GET['year'] ?? date('Y')));
     $year = ($yearRaw === 'all') ? 'all'
@@ -415,15 +424,76 @@ case 'stats': {
          ])]);
 }
 
+// ════════════════ 行事曆休假 → 自動建立假單（管理者設定 + 補舊資料） ════════════════
+// 商業邏輯一律在 src/common/leave_calendar_lib.php，這裡只做權限與參數守門。
+case 'cal_settings': {
+    if (!$CAN_CAL_MANAGE) bad('沒有管理行事曆自動建單的權限');
+    require_once __DIR__ . '/../common/leave_calendar_lib.php';
+    $pend = eg_leave_cal_pending_events($db);
+    $todo = 0; $blocked = 0;
+    foreach ($pend as $e) {
+        if ($e['blocked'] !== '') { $blocked++; continue; }
+        if (!$e['done']) $todo++;
+    }
+    out(['success' => true, 'settings' => eg_leave_cal_settings($db),
+         'pending' => $todo, 'blocked' => $blocked, 'total' => count($pend)]);
+}
+
+case 'cal_settings_save': {
+    if (!$CAN_CAL_MANAGE) bad('沒有管理行事曆自動建單的權限');
+    need_csrf();
+    require_once __DIR__ . '/../common/leave_calendar_lib.php';
+    $st = $db->prepare("SELECT user_cname FROM user WHERE id = ? LIMIT 1");
+    $st->execute([$user_id]);
+    eg_leave_cal_save_settings($db, [
+        'leave_cal_auto_create'   => !empty($_POST['auto_create']),
+        'leave_cal_need_approval' => !empty($_POST['need_approval']),
+        'leave_cal_notify'        => !empty($_POST['notify']),
+    ], $user_id, (string)$st->fetchColumn());
+    out(['success' => true, 'settings' => eg_leave_cal_settings($db)]);
+}
+
+// 待補清單：行事曆上有、請假系統還沒有的休假
+case 'cal_pending_list': {
+    if (!$CAN_CAL_MANAGE) bad('沒有管理行事曆自動建單的權限');
+    require_once __DIR__ . '/../common/leave_calendar_lib.php';
+    $rows = [];
+    foreach (eg_leave_cal_pending_events($db, ['from' => $_GET['from'] ?? '', 'to' => $_GET['to'] ?? '']) as $e) {
+        if ($e['done'] && empty($_GET['with_done'])) continue;
+        $rows[] = ['id' => (int)$e['id'], 'title' => (string)$e['title'], 'start' => (string)$e['start'],
+                   'end' => (string)$e['end'], 'allday' => (int)$e['allday'],
+                   'leave_name' => (string)($e['leave_name'] ?? ''), 'actors' => (int)$e['actor_cnt'],
+                   'done' => $e['done'] ? 1 : 0, 'blocked' => (string)$e['blocked']];
+    }
+    out(['success' => true, 'rows' => array_slice($rows, 0, 500), 'total' => count($rows)]);
+}
+
+// 整批補建（可指定區間；dry=1 只試算）
+case 'cal_backfill': {
+    if (!$CAN_CAL_MANAGE) bad('沒有管理行事曆自動建單的權限');
+    need_csrf();
+    require_once __DIR__ . '/../common/leave_calendar_lib.php';
+    $r = eg_leave_cal_backfill($db, ['from' => $_POST['from'] ?? '', 'to' => $_POST['to'] ?? '',
+                                     'dry' => !empty($_POST['dry'])]);
+    $warns = [];
+    foreach ($r['created'] as $c) foreach (($c['warns'] ?? []) as $w)
+        $warns[] = ($c['name'] ?? '') . '（' . substr((string)($c['start'] ?? ''), 0, 10) . '）：' . $w;
+    out(['success' => true, 'created' => count($r['created']), 'skipped' => count($r['skipped']),
+         'failed' => count($r['failed']), 'fail_rows' => array_slice($r['failed'], 0, 50),
+         'skip_rows' => array_slice($r['skipped'], 0, 50), 'warns' => array_slice($warns, 0, 50)]);
+}
+
 // ════════════════ 統計頁的篩選下拉（部門／人員） ════════════════
 // 人員下拉一律走 people_lib（CLAUDE.md 人員列表鐵則：只列未離職、標長期請假、依職稱排序、跨部門顯示部門）
 case 'stats_options': {
     $depts = $VIEW_ALL ? [] : leave_dept_scope($db, $user_id);
-    if (!$VIEW_ALL && !$depts) bad('您沒有檢視請假統計的權限');
+    // 有 leave_stats 角色功能但不是主管也不是人事者：看得到分頁，範圍仍限自己（下面 scope 會綁回本人）
+    if (!$VIEW_ALL && !$depts && !$CAN_STATS_ROLE) bad('您沒有檢視請假統計的權限');
     $deptIds = $VIEW_ALL ? [] : array_map('intval', $depts);
+    $selfOnly = (!$VIEW_ALL && !$depts);   // 只有 leave_stats：範圍＝自己
     // all_posts：兼任者的主職務與兼任職務各出一列（不然「技術課 工程師 何沐桐」會整個不見，
     // 只剩職級較高的「生管組 組長」——2026-09-17 使用者回報）。排序由共用庫統一為部門→職稱→姓名。
-    $people = eg_people_list($db, ($deptIds ? ['dept_ids' => $deptIds] : []) + ['all_posts' => true]);
+    $people = eg_people_list($db, ($deptIds ? ['dept_ids' => $deptIds] : ($selfOnly ? ['user_ids' => [$user_id]] : [])) + ['all_posts' => true]);
     $showDept = true;   // 展開職務後同一個人會跨部門出現，部門一律顯示才分得出是哪一個身分
     $rows = [];
     foreach ($people as $p) {
@@ -433,6 +503,12 @@ case 'stats_options': {
                    'dept_id' => $p['dept_id'] ?? 0];
     }
     // 部門清單：有可視範圍就只給那些，否則全部
+    if ($selfOnly) {   // 範圍是自己：部門下拉只留自己掛的部門，不要列出全公司
+        $sd = $db->prepare("SELECT DISTINCT department_id FROM user_department_position_map WHERE user_id = ?");
+        $sd->execute([$user_id]);
+        $deptIds = array_values(array_filter(array_map('intval', $sd->fetchAll(PDO::FETCH_COLUMN))));
+        if (!$deptIds) $deptIds = [0];
+    }
     $dq = $deptIds ? ("WHERE id IN (" . implode(',', $deptIds) . ")") : '';
     $dl = $db->query("SELECT id, name FROM department $dq ORDER BY COALESCE(sort_order,999), id")
              ->fetchAll(PDO::FETCH_ASSOC);
@@ -512,13 +588,13 @@ case 'detail': {
     out(['success' => true, 'request' => $req, 'approvals' => $approvals,
          'sign_records' => $signs, 'attachments' => $attaches,
          'agents' => eg_leave_get_agents($db, $reqId),   // 每個職務身分的代理人與解析原因
-         'can_cancel' => ((int)$req['employee_id'] === $user_id || $IS_ADMIN)
+         'can_cancel' => ((int)$req['employee_id'] === $user_id || $CAN_CANCEL_OTHER)
                           && in_array($req['status'], ['pending', 'approved'], true),
          // 撤回會走哪條路：direct=直接撤 / approval=需主管簽核 / blocked=請假已結束不開放
-         'cancel_mode' => eg_leave_cancel_mode($req, $IS_ADMIN),
+         'cancel_mode' => eg_leave_cancel_mode($req, $CAN_CANCEL_OTHER),
          'can_edit' => $edit['ok'], 'edit_reason' => $edit['reason'],
          // 已核准者提供「申請修改」＝銷假後重新申請（帶回原內容），流程上等同變更
-         'can_request_change' => ((int)$req['employee_id'] === $user_id || $IS_ADMIN) && $req['status'] === 'approved']);
+         'can_request_change' => ((int)$req['employee_id'] === $user_id || $CAN_CANCEL_OTHER) && $req['status'] === 'approved']);
 }
 
 // ════════════════ 特休額度 ════════════════

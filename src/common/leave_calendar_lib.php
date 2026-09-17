@@ -296,6 +296,12 @@ if (!function_exists('eg_leave_cal_pending_events')) {
             $blocked = '';
             if (!$r['leave_type_id'])        $blocked = '沒有指定假別';
             elseif ((int)$r['actor_cnt'] === 0) $blocked = '沒有指定發生者';
+            else {
+                // 整段都落在假日／週末：本來就不會扣到假，建不出單也不該一直留在待補清單上碎念
+                [$s0, $e0] = eg_leave_cal_period($r);
+                $amt = eg_leave_calc_amount($db, 'day', $s0, $e0);
+                if ($amt['workdays'] <= 0) $blocked = '該期間沒有工作日（全公司放假或週末），不需要請假單';
+            }
             $r['done'] = ((int)$r['req_cnt'] >= max(1, (int)$r['actor_cnt']));
             $r['blocked'] = $blocked;
             $out[] = $r;
