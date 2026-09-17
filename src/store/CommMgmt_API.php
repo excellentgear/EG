@@ -653,6 +653,10 @@ if ($action === 'track_save') {
     if ($owner === '') jerr('請指定負責人');
     $now = cmNow($db);
     $closedDate = $closed ? (cmDate($_POST['closed_date'] ?? '') ?: $now['d']) : null;
+    /* 追蹤項目一律由溝通記錄表的某一列問題「轉追蹤」建立（使用者指定），這裡不開放憑空新建——
+       來源可追溯才有意義。畫面上已經沒有「新增追蹤項目」按鈕，後端同規則再擋一次（鐵律8），
+       否則直打 API 還是建得出一筆沒有來源的孤兒。轉入用的是 rec_to_track，不走這支。 */
+    if (!$id) jerr('追蹤項目必須從「利害關係者溝通記錄表」的該列問題按「轉追蹤」建立，不能直接新增', 400);
     if ($id) {
         $st = $db->prepare("SELECT created_by FROM comm_track WHERE track_id=? AND is_deleted=0");
         $st->execute([$id]);

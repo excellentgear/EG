@@ -648,6 +648,7 @@ function cm_people_asof(PDO $db, string $bizDate): array
                 'name'      => (string)$u['user_cname'],
                 'dept_id'   => $did,
                 'dept_name' => ((string)($s['department_name'] ?? '')) ?: cm_dept_name($db, $did),
+                'pos_id'    => $posId,          // 前端要靠它存 maker_pos_id（人員下拉一列＝一個職務身分）
                 'pos_name'  => ((string)($s['position_name'] ?? '')) ?: $meta['name'],
                 'pos_sort'  => $meta['sort_order'],
                 'level'     => $meta['level'],

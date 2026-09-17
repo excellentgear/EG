@@ -109,7 +109,15 @@ $roleLabel = cm_role_label($perms);
         .b-mini.danger { color:#DD5138; }
 
         /* ---- 跳窗（寬度一律固定像素，禁用 vw＝會蓋過側邊選單） ---- */
-        .cm-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:11000; overflow-y:auto; }
+        /* overflow-x:hidden 是必要的，不是保險：
+           `overflow-y:auto` 會讓 CSS 把另一軸的 visible 自動變成 auto，而 .cm-modal 是用
+           `margin:34px auto` 置中的——內容一變高、垂直捲軸一出現，Chrome 算出來的
+           scrollWidth 就會比 clientWidth 多出十幾 px（auto margin 是用「還沒有捲軸」的寬度算的），
+           於是底下就冒出一條左右拉桿。實測沒有任何子元素真的超出右緣（跳窗 221~1301 完全落在 1521 內），
+           純粹是置中的計算誤差。症狀是「綁定客戶之後才出現」——因為那時多了一行摘要、跳窗才變高。
+           .cm-modal 有 max-width:96%，永遠塞得進視窗，所以關掉橫軸不會讓任何內容被裁掉。 */
+        .cm-mask { display:none; position:fixed; inset:0; background:rgba(60,40,20,.45); z-index:11000;
+            overflow-y:auto; overflow-x:hidden; }
         .cm-mask.on { display:block; }
         .cm-modal { background:#fff; border-radius:8px; margin:34px auto; box-shadow:0 5px 25px rgba(0,0,0,.3);
             display:flex; flex-direction:column; max-height:88vh; max-width:96%; }
@@ -175,6 +183,13 @@ $roleLabel = cm_role_label($perms);
         .pk-box { border:1px dashed #E0CDA9; border-radius:6px; background:#FDF8EF; padding:7px 9px; margin-top:5px; }
         .pk-line { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:5px; min-width:0; }
         .pk-line > * { min-width:0; max-width:100%; }
+        /* 一組「標題＋下拉」黏在一起換行，標題才會永遠對齊自己的下拉
+           （原本 label 與 select 各自是 flex 子項，一換行標題就跟下拉分家） */
+        .mk-cell { display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:100%; }
+        .mk-cell > label { font-weight:normal; white-space:nowrap; margin:0; }
+        .mk-cell > select { min-width:0; max-width:100%; }
+        .mk-grow { flex:1 1 300px; }
+        .mk-grow > select { flex:1 1 auto; }
         .pk-line:last-child { margin-bottom:0; }
         .pk-line > label { font-size:12.5px; color:#5b3a1e; font-weight:bold; margin:0; white-space:nowrap; }
         .pk-line input[type=text], .pk-line select { border:1px solid #D8BE93; border-radius:4px; padding:4px 7px;
@@ -275,7 +290,8 @@ $roleLabel = cm_role_label($perms);
         <!-- ============ 分頁二：措施追蹤表 ============ -->
         <div class="cm-pane" id="paneTrack">
             <div class="cm-toolbar">
-                <button id="btnTrackAdd" class="btn-warm"><i class="fa fa-plus"></i> 新增追蹤項目</button>
+                <span class="hint" style="background:#F7E0BD;border-radius:4px;padding:4px 10px;">
+                    追蹤項目一律由「利害關係者溝通記錄表」該列按<b>「轉追蹤」</b>建立，這裡不直接新增</span>
                 <label>顯示</label>
                 <select id="trackShow" style="width:150px;">
                     <option value="open">未結案（預設）</option>
@@ -398,12 +414,10 @@ $roleLabel = cm_role_label($perms);
                 <label>填表人／部門 <span style="color:#DD5138;">*</span>
                     <span class="hint" id="fMakerFixed" style="font-weight:normal;display:none;">（填表人固定是您本人；身兼多職時可自行選擇要用哪個部門／職位填這張表）</span></label>
                 <div class="pk-line">
-                    <label style="font-weight:normal;">部門</label>
-                    <select id="fMakerDept" style="width:200px;"></select>
-                    <span id="fMakerWrap"><label style="font-weight:normal;">人員</label>
-                        <select id="fMaker" style="width:200px;"></select></span>
-                    <label style="font-weight:normal;">職位</label>
-                    <select id="fIdentity" class="pk-grow"></select>
+                    <span class="mk-cell"><label>部門</label>
+                        <select id="fMakerDept" style="width:190px;"></select></span>
+                    <span class="mk-cell mk-grow"><label id="fMakerLb">人員／職位</label>
+                        <select id="fMaker"></select></span>
                     <span class="hint" id="fMakerShowMe"></span>
                 </div>
                 <div class="hint" id="signPreview" style="margin-top:4px;"></div>
@@ -804,7 +818,9 @@ $roleLabel = cm_role_label($perms);
                 ・<b>當下就解決／純告知</b>（例：廠商問過年有沒有上班，回答有）→ 記在這裡就結束了。<br>
                 ・<b>需要後續行動</b>（例：廠商反映加工前未提早反應問題，需內部檢討流程）→ 按該列的「轉追蹤」送進追蹤表。</li>
             <li><b>措施追蹤表（3-GM-01-02）</b>＝只盯還沒做完的事。只列有<b>預計完成日</b>、要指派<b>負責人</b>的項目；
-                確認改善有效並完成後把「是否結案」設為是，下次審查就可以移出清單（預設只顯示未結案）。</li>
+                確認改善有效並完成後把「是否結案」設為是，下次審查就可以移出清單（預設只顯示未結案）。
+                <br><b>這一頁沒有「新增」按鈕</b>：追蹤項目一律是從溝通記錄表的某一列問題按<b>「轉追蹤」</b>建立的，
+                這樣每一筆追蹤都查得到它是從哪一次溝通、哪一個問題來的。要新增就回溝通記錄表開單。</li>
         </ul>
 
         <h4>操作步驟：溝通記錄表</h4>
@@ -820,11 +836,13 @@ $roleLabel = cm_role_label($perms);
                 <br>・<b>員工</b>：先選<b>部門</b>再挑人；職稱是<b>依溝通日期回推當時的</b>，
                     <b>主要職務與兼任職務都會列出來</b>（同一個人掛兩個職稱就出現兩列，那是兩種身分）。
                 <br>・<b>其他</b>：填「類別說明」（例：主管機關）並自行輸入對象名稱。</li>
-            <li>③「填表人／部門」是<b>部門 → 人員 → 職位</b>三段式：
-                <br>・<b>溝通管理員</b>：三段都可以選，可以代其他人建單（先選部門找人，再選那個人在該部門的職位）。
-                <br>・<b>一般使用者</b>：<b>填表人自動就是您本人、不可修改</b>（「人員」那一段不會出現）；
-                    但<b>「部門」只會列出您自己有職務的部門</b>、「職位」列出您在該部門的職稱，
+            <li>③「填表人／部門」是<b>部門 → 人員／職位</b>兩格（職位直接跟在人名前面，不另外開一欄）：
+                <br>・<b>溝通管理員</b>：兩格都可以選，可以代其他人建單。先選部門，再從該部門的清單挑人；
+                    <b>清單一列＝一個職務身分</b>，同一個人身兼兩個職稱就會出現兩列，挑哪一列就是用哪個身分。
+                <br>・<b>一般使用者</b>：<b>填表人自動就是您本人、不可修改</b>（旁邊會直接顯示您的姓名）；
+                    「部門」只會列出<b>您自己有職務的部門</b>，右邊那格列出您在該部門的職位，
                     所以<b>身兼多部門多職位的人可以自己選要用哪一個身分填這張表</b>（預設停在主要職務）。
+                <br>所有人員清單一律<b>顯示職位、並依職位高低由上到下排序</b>。
                 <br>選好之後下方會即時顯示<b>這張單會送給誰確認</b>——不同身分的部門主管不一樣，換身分簽核人就會跟著換。</li>
             <li>④ 逐列填溝通問題與回覆內容。末列按 <b>↓</b> 自動加一列、沒填東西的末列按 <b>↑</b> 自動移除。</li>
             <li>⑤ 需要的話上傳佐證附件（新增中就可以先傳，按下儲存時自動歸到這張單）。
@@ -1004,8 +1022,24 @@ function fillDeptSel(sel, val, placeholder){
     });
     s.val(val ? String(val) : '');
 }
+/* 人員一律連職位一起顯示，且職位在前 —— 對齊 ai-rules/08 第五節的「部門/職稱/姓名」欄位順序。
+   排序不在前端做：cm_dept_people() 已經依 pos_sort（數字小＝職位高）由上到下排好了。 */
 function personLabel(p){
-    return p.name + (p.pos_name ? '（' + p.pos_name + '）' : '');
+    return (p.pos_name ? p.pos_name + '　' : '') + p.name;
+}
+/** 全公司範圍的人員下拉（提醒對象、簽核指定人員）：部門　職稱　姓名，並依職位高低排序 */
+function globalPeopleSorted(){
+    // 逐鍵比較；**不可以用 JS 的陣列 <= 比大小**，那會退化成字串比較、排序結果不可靠
+    return (META.people || []).slice().sort(function(a, b){
+        var pa = +a.position_sort || 999, pb = +b.position_sort || 999;
+        if (pa !== pb) return pa - pb;                      // 職位高的（數字小）在上
+        var da = +a.dept_sort || 999, db = +b.dept_sort || 999;
+        if (da !== db) return da - db;
+        return String(a.user_cname || '').localeCompare(String(b.user_cname || ''));
+    });
+}
+function globalPersonLabel(p){
+    return (p.dept_name ? p.dept_name + '　' : '') + (p.position_name ? p.position_name + '　' : '') + p.user_cname;
 }
 /** 載入某部門的人員到下拉；keepUid 有值且仍在名單內就沿用選取。cb(rows) 於填完後呼叫。 */
 function loadDeptPeople(deptId, userSel, date, keepUid, cb){
@@ -1151,6 +1185,13 @@ function boot(){
         var k = $('#recKind');   $.each(res.kinds,  function(kk, v){ k.append($('<option>').val(kk).text(v)); });
         renderAsdocHint();
         renderRoleHelp();
+        /* 先抓一次「我自己的部門／職稱」：填表人清單一律要含自己。
+           eg_people_list() 與 cm_dept_people() 都會排除 state=90/99 的非真人帳號
+           （那是「挑別人」的名單該有的規則），但「我自己要用哪個身分填這張表」不適用——
+           不併回來，超級管理員這種帳號會連自己的單都建不了（共用庫檔頭記過同一個坑）。 */
+        get({action:'identities', user_id:res.me.id, date:res.today}, function(r2){
+            MYIDENTS = r2.identities || [];
+        });
         loadRec(); loadTrack(); loadCtrl();
         openFromUrl();
     });
@@ -1317,7 +1358,7 @@ function openRec(id){
         $('#recStatusHint').text('');
         setupMakerPicker(0, 0, 0);
         resetPartyPicker(null);
-        renderItems(); renderAttaches(); reloadIdentities();
+        renderItems(); renderAttaches();
         openMask('recMask');
         return;
     }
@@ -1356,60 +1397,143 @@ function openRec(id){
    篩選框反而是多餘的干擾（使用者指定）。 */
 function setupMakerPicker(makerId, makerDeptId, makerPosId){
     var admin = !!META.perms.canAdmin;
-    $('#fMakerWrap').toggle(admin);
     $('#fMakerFixed').toggle(!admin);
+    $('#fMakerLb').text(admin ? '人員／職位' : '職位');
     $('#fMakerShowMe').text(admin ? '' : META.me.name);
     MAKERUID = admin ? +(makerId || META.me.id) : +META.me.id;
+    MAKERKEEP = {dept:+makerDeptId || 0, pos:+makerPosId || 0};
 
-    var keep = (makerDeptId && makerPosId) ? (makerDeptId + '|' + makerPosId) : '';
     if (!admin){
-        // 部門清單＝自己有職務的那幾個部門，由 identities 回推（依溝通日期）
-        reloadIdentities(keep, +makerDeptId || 0);
+        // 一般使用者：部門清單＝自己有職務的那幾個部門，人員固定是自己（下拉只列自己的職位）
+        loadOwnIdentities();
         return;
     }
-    // 管理員：部門是「要在哪個部門裡找人」，選到的人＋該部門就是填表身分的部門
-    var dept = +makerDeptId || 0;
+    // 管理員：部門是「要在哪個部門裡找人」；人員下拉一列＝一個職務身分（同一人兩個職稱＝兩列）
+    var dept = MAKERKEEP.dept;
     if (!dept){
-        (META.people || []).forEach(function(p){ if (+p.id === MAKERUID && !dept) dept = +p.department_id || 0; });
+        // 先從自己的身分推（含 state=99 這種不在 people 清單裡的帳號），再退回 META.people
+        var main = null;
+        MYIDENTS.forEach(function(i){ if (+i.is_main && !main) main = i; });
+        if (!main && MYIDENTS.length) main = MYIDENTS[0];
+        if (main && +MAKERUID === +META.me.id) dept = +main.department_id || 0;
+        if (!dept) (META.people || []).forEach(function(p){ if (+p.id === MAKERUID && !dept) dept = +p.department_id || 0; });
     }
     fillDeptSel('#fMakerDept', dept, '請選擇部門…');
-    loadDeptPeopleUniq(dept, '#fMaker', $('#fCommDate').val() || TODAY, MAKERUID, function(rows){
-        if (!pickedPerson('#fMaker') && !rows.length) MAKERUID = +META.me.id;
-        reloadIdentities(keep, dept);
+    loadMakerPeople(dept);
+}
+/** 把「我自己在這個部門的身分」併進人員清單（cm_dept_people 會排除非真人帳號，自己要補回來） */
+function mergeMyIdentities(rows, deptId){
+    MYIDENTS.forEach(function(i){
+        if (+i.department_id !== +deptId) return;
+        var dup = rows.some(function(r){ return +r.id === +META.me.id && +r.pos_id === +i.position_id; });
+        if (dup) return;
+        rows.push({id:+META.me.id, name:META.me.name, dept_id:+i.department_id, dept_name:i.department_name,
+                   pos_id:+i.position_id, pos_name:i.position_name, pos_sort:+i.pos_sort});
+    });
+    rows.sort(function(a, b){
+        var pa = +a.pos_sort || 999, pb = +b.pos_sort || 999;
+        if (pa !== pb) return pa - pb;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+    return rows;
+}
+/** 管理員用：該部門的人員×職務清單（cm_dept_people 已依職位高低排序，前端不再排一次） */
+function loadMakerPeople(deptId){
+    var sEl = $('#fMaker');
+    PEOPLECACHE['fMaker'] = [];
+    if (!+deptId){
+        sEl.empty().append($('<option>').val('').text('請先選擇部門'));
+        $('#signPreview').html(''); return;
+    }
+    sEl.empty().append($('<option>').val('').text('載入中…'));
+    get({action:'dept_people', dept_id:deptId, date:$('#fCommDate').val() || TODAY}, function(res){
+        var rows = mergeMyIdentities((res.rows || []).slice(), deptId);
+        PEOPLECACHE['fMaker'] = rows;
+        sEl.empty();
+        if (!rows.length){ sEl.append($('<option>').val('').text('（該部門在此日期查無在職人員）')); $('#signPreview').html(''); return; }
+        rows.forEach(function(p, i){ sEl.append($('<option>').val(i).text(personLabel(p))); });
+        // 回到原本那一個身分（部門＋職位都要對得上），對不上就退回第一列
+        var hit = -1;
+        for (var i = 0; i < rows.length; i++){
+            if (+rows[i].id === MAKERUID && (!MAKERKEEP.pos || +rows[i].pos_id === MAKERKEEP.pos)){ hit = i; break; }
+        }
+        if (hit < 0) for (var j = 0; j < rows.length; j++) if (+rows[j].id === MAKERUID){ hit = j; break; }
+        sEl.val(String(hit < 0 ? 0 : hit));
+        onMakerPicked();
     });
 }
-/** 管理員挑「人」時同一個人只需要出現一次（職位在第三段選），所以依 user id 去重 */
-function loadDeptPeopleUniq(deptId, userSel, date, keepUid, cb){
-    var sEl = $(userSel);
-    PEOPLECACHE[sEl.attr('id')] = [];
-    if (!+deptId){ sEl.empty().append($('<option>').val('').text('請先選擇部門')); if (cb) cb([]); return; }
-    sEl.empty().append($('<option>').val('').text('載入中…'));
-    get({action:'dept_people', dept_id:deptId, date:date || TODAY}, function(res){
-        var seen = {}, rows = [];
-        (res.rows || []).forEach(function(p){ if (!seen[p.id]){ seen[p.id] = 1; rows.push(p); } });
-        PEOPLECACHE[sEl.attr('id')] = rows;
-        sEl.empty().append($('<option>').val('').text(rows.length ? '請選擇人員…' : '（該部門在此日期查無在職人員）'));
-        rows.forEach(function(p, i){ sEl.append($('<option>').val(i).text(p.name)); });
-        if (keepUid){
-            for (var i = 0; i < rows.length; i++) if (+rows[i].id === +keepUid){ sEl.val(String(i)); break; }
+/** 一般使用者用：自己的身分清單（部門下拉只列自己有職務的部門） */
+function loadOwnIdentities(){
+    get({action:'identities', user_id:META.me.id, date:$('#fCommDate').val() || TODAY}, function(res){
+        IDENTS = res.identities || []; GMPOOL = res.gm_pool || [];
+        IDMAP = {};
+        IDENTS.forEach(function(i){ IDMAP[i.department_id + '|' + i.position_id] = i; });
+        if (!IDENTS.length){
+            $('#fMakerDept').empty().append($('<option>').val('').text('（查無部門）'));
+            $('#fMaker').empty().append($('<option>').val('').text('（查無職位）'));
+            $('#signPreview').html('<span style="color:#DD5138;">查無您在該日期的部門／職稱資料，請洽人事確認員工部門職稱設定。</span>');
+            return;
         }
-        if (cb) cb(rows);
+        var seen = {}, depts = [];
+        IDENTS.forEach(function(i){
+            if (seen[i.department_id]) return;
+            seen[i.department_id] = 1;
+            depts.push({id:i.department_id, name:i.department_name});
+        });
+        var d = $('#fMakerDept').empty();
+        depts.forEach(function(x){ d.append($('<option>').val(x.id).text(x.name)); });
+        var pick = MAKERKEEP.dept && seen[MAKERKEEP.dept] ? MAKERKEEP.dept : 0;
+        if (!pick){
+            var main = null;
+            IDENTS.forEach(function(i){ if (+i.is_main && !main) main = i; });   // 預設停在主要職務（拍板③）
+            pick = +((main || IDENTS[0]).department_id);
+        }
+        d.val(String(pick));
+        fillOwnPos(pick);
     });
+}
+/** 把「自己在這個部門的職位」填進人員下拉（一般使用者的人員永遠是自己，所以這一格其實是職位） */
+function fillOwnPos(deptId){
+    var list = IDENTS.filter(function(i){ return +i.department_id === +deptId; });
+    if (!list.length) list = IDENTS.slice();
+    list.sort(function(a, b){ return (+a.pos_sort || 999) - (+b.pos_sort || 999); });   // 職位高的在上
+    var rows = list.map(function(i){
+        return {id:+META.me.id, name:META.me.name, dept_id:+i.department_id, dept_name:i.department_name,
+                pos_id:+i.position_id, pos_name:i.position_name + (i.is_main ? '（主要職務）' : ''), pos_sort:+i.pos_sort};
+    });
+    PEOPLECACHE['fMaker'] = rows;
+    var sEl = $('#fMaker').empty();
+    rows.forEach(function(p, i){ sEl.append($('<option>').val(i).text(personLabel(p))); });
+    var hit = 0;
+    if (MAKERKEEP.pos) for (var i = 0; i < rows.length; i++) if (rows[i].pos_id === MAKERKEEP.pos){ hit = i; break; }
+    sEl.val(String(hit));
+    onMakerPicked();
+}
+/** 選到的那一列就是完整的填表身分（人＋部門＋職位），簽核人預覽依它解析 */
+function onMakerPicked(){
+    var p = pickedPerson('#fMaker');
+    if (!p){ $('#signPreview').html(''); return; }
+    MAKERUID = +p.id;
+    if (IDMAP[p.dept_id + '|' + p.pos_id]){ showSignPreview(); return; }
+    // 換了人（管理員代填）就要重抓那個人的身分，才算得出他的部門主管是誰
+    get({action:'identities', user_id:MAKERUID, date:$('#fCommDate').val() || TODAY}, function(res){
+        IDENTS = res.identities || []; GMPOOL = res.gm_pool || [];
+        IDMAP = {};
+        IDENTS.forEach(function(i){ IDMAP[i.department_id + '|' + i.position_id] = i; });
+        showSignPreview();
+    });
+}
+/** 目前選到的填表身分 key（dept|pos）；collectRec 與簽核預覽共用 */
+function makerKey(){
+    var p = pickedPerson('#fMaker');
+    return p ? (p.dept_id + '|' + p.pos_id) : '';
 }
 $('#fMakerDept').on('change', function(){
-    var d = this.value;
-    if (META.perms.canAdmin){
-        loadDeptPeopleUniq(d, '#fMaker', $('#fCommDate').val() || TODAY, 0, function(){ reloadIdentities('', +d || 0); });
-    } else {
-        // 一般使用者：部門一換，職位下拉就換成他在新部門的職稱
-        fillIdentityPos(+d || 0, 0);
-    }
+    MAKERKEEP.pos = 0;
+    if (META.perms.canAdmin) loadMakerPeople(this.value);
+    else fillOwnPos(+this.value || 0);
 });
-$('#fMaker').on('change', function(){
-    var p = pickedPerson('#fMaker');
-    MAKERUID = p ? +p.id : +META.me.id;
-    reloadIdentities('', +$('#fMakerDept').val() || 0);
-});
+$('#fMaker').on('change', onMakerPicked);
 
 function buildChoiceRows(type, kind, kindOther, ch, chOther){
     var t = $('#recTypeRow').empty();
@@ -1429,7 +1553,7 @@ function buildChoiceRows(type, kind, kindOther, ch, chOther){
     var ro = REC && !REC.can_edit;
     $('#recTypeRow input,#recKindRow input,#recChRow input').prop('disabled', !!ro);
     $('#fCommDate,#fParty,#fRemark,#fKindOther').prop('readonly', !!ro);
-    $('#fIdentity,#fMaker,#fMakerDept').prop('disabled', !!ro);
+    $('#fMaker,#fMakerDept').prop('disabled', !!ro);
     $('#fAtt,#fAttNote').prop('disabled', !!ro);
     $('#pkContact,#pkContactName,#pkDept,#pkUser').prop('disabled', !!ro);
 }
@@ -1570,77 +1694,9 @@ function syncPartyFromPicker(){
 /* 身分資料放模組變數、不要掛在 <option> 的 jQuery data 上：
    打字篩選（eg_input_rules.js 規則7）會把整批 <option> 用 innerHTML 重畫，掛在 option 上的 data 會整個不見，
    症狀是「篩選過一次之後簽核人預覽就空白了」——只有實際打字篩選才看得到。 */
-var IDMAP = {}, GMPOOL = [], IDENTS = [];
-/**
- * 抓這個人在該業務日期的全部身分（部門×職稱），填進「部門」與「職位」兩段下拉。
- * @param keep     想保留的 dept|pos（改日期時沿用原本選的身分）
- * @param wantDept 想停在哪一個部門（管理員挑完人之後＝他挑人的那個部門）
- */
-function reloadIdentities(keep, wantDept){
-    var uid = MAKERUID || META.me.id;
-    var admin = !!META.perms.canAdmin;
-    get({action:'identities', user_id:uid, date:$('#fCommDate').val() || TODAY}, function(res){
-        IDENTS = res.identities || [];
-        IDMAP = {}; GMPOOL = res.gm_pool || [];
-        IDENTS.forEach(function(i){ IDMAP[i.department_id + '|' + i.position_id] = i; });
-
-        if (!IDENTS.length){
-            $('#fIdentity').empty().append($('<option>').val('').text('（查無部門／職稱）'));
-            if (!admin) $('#fMakerDept').empty().append($('<option>').val('').text('（查無部門）'));
-            $('#signPreview').html('<span style="color:#DD5138;">查無'
-                + (admin && uid !== +META.me.id ? '這位人員' : '您') + '在該日期的部門／職稱資料，請洽人事確認員工部門職稱設定。</span>');
-            return;
-        }
-
-        var keepDept = 0, keepPos = 0;
-        if (keep){ var kv = String(keep).split('|'); keepDept = +kv[0] || 0; keepPos = +kv[1] || 0; }
-
-        if (!admin){
-            /* 一般使用者：部門下拉只列他自己有職務的部門（去重、依職位編號排序），
-               不是全公司的部門清單——列出去也選不到人，只會讓人以為可以代別人填。 */
-            var seen = {}, depts = [];
-            IDENTS.forEach(function(i){
-                if (seen[i.department_id]) return;
-                seen[i.department_id] = 1;
-                depts.push({id:i.department_id, name:i.department_name, sort:i.pos_sort});
-            });
-            var dsel = $('#fMakerDept').empty();
-            depts.forEach(function(d){ dsel.append($('<option>').val(d.id).text(d.name)); });
-            var pick = keepDept || wantDept || 0;
-            if (!pick || !seen[pick]){
-                // 沒指定就停在主要職務的部門（拍板③：預設主職）
-                var main = null;
-                IDENTS.forEach(function(i){ if (+i.is_main && !main) main = i; });
-                pick = +((main || IDENTS[0]).department_id);
-            }
-            dsel.val(String(pick));
-            fillIdentityPos(pick, keepPos);
-            return;
-        }
-
-        // 管理員：部門下拉是全公司（找人用），職位下拉限「他在這個部門」的職稱
-        var d = keepDept || wantDept || +$('#fMakerDept').val() || 0;
-        fillIdentityPos(d, keepPos);
-    });
-}
-/** 依部門填「職位」下拉；該部門沒有職稱時退回列出這個人的全部身分，不要變成空白選不了 */
-function fillIdentityPos(deptId, keepPos){
-    var s = $('#fIdentity').empty();
-    var list = IDENTS.filter(function(i){ return +i.department_id === +deptId; });
-    if (!list.length) list = IDENTS.slice();
-    list.forEach(function(i){
-        s.append($('<option>').val(i.department_id + '|' + i.position_id)
-            .text(i.position_name + '（職位編號 ' + i.pos_sort + '）' + (i.is_main ? '　主要職務' : '')));
-    });
-    if (keepPos){
-        var k = deptId + '|' + keepPos;
-        if (s.find('option[value="' + k + '"]').length) s.val(k);
-    }
-    if (!s.val() && list.length) s.val(list[0].department_id + '|' + list[0].position_id);
-    showSignPreview();
-}
+var IDMAP = {}, GMPOOL = [], IDENTS = [], MAKERKEEP = {dept:0, pos:0}, MYIDENTS = [];
 function showSignPreview(){
-    var i = IDMAP[$('#fIdentity').val()];
+    var i = IDMAP[makerKey()];
     if (!i){ $('#signPreview').html(''); return; }
     if (!META.need_sign){
         $('#signPreview').html('<b>簽核</b>：本模組目前設定為<b>免簽核</b>，按下送出時系統會自動完成'
@@ -1662,19 +1718,15 @@ function showSignPreview(){
     }
     $('#signPreview').html(h + '<br><b>總經理確認</b>：' + gmTxt);
 }
-$('#fIdentity').on('change', showSignPreview);
 /* 溝通日期＝本單業務日期，一改就要把「依當時職務解析」的三份名單全部重抓（ai-rules/22）：
    填表身分、管理員代填時的人員清單、以及類別＝員工時的對象清單。只改一份就會出現
    「畫面上挑得到、送出卻被後端擋下」——因為後端是用溝通日期重新驗的（鐵律8）。 */
 $('#fCommDate').on('change', function(){
-    var d = this.value || TODAY, keep = $('#fIdentity').val();
-    if (META.perms.canAdmin){
-        loadDeptPeopleUniq($('#fMakerDept').val(), '#fMaker', d, MAKERUID, function(){
-            reloadIdentities(keep, +$('#fMakerDept').val() || 0);
-        });
-    } else {
-        reloadIdentities(keep, +$('#fMakerDept').val() || 0);
-    }
+    var d = this.value || TODAY, mp = pickedPerson('#fMaker');
+    // 業務日期一改，填表身分與員工對象都要依當時職務重新回推（ai-rules/22）
+    MAKERKEEP = {dept: mp ? +mp.dept_id : +$('#fMakerDept').val() || 0, pos: mp ? +mp.pos_id : 0};
+    if (META.perms.canAdmin) loadMakerPeople($('#fMakerDept').val());
+    else loadOwnIdentities();
     if (currentKind() === 'employee') loadDeptPeople($('#pkDept').val(), '#pkUser', d, PARTY.user_id, function(){ syncPartyFromPicker(); });
 });
 
@@ -1805,10 +1857,11 @@ function collectRec(){
     if (!any){ setErr('eCh', null, '請至少勾選一種溝通管道'); ok = false; }
     d.ch_other_text = $('#fChOther').val() || '';
     if (d.ch_other && !d.ch_other_text.trim()){ setErr('eCh', '#fChOther', '管道勾選「其他」時請填寫說明'); ok = false; }
-    var idv = ($('#fIdentity').val() || '').split('|');
-    d.maker_id = MAKERUID || META.me.id;
-    d.maker_dept_id = idv[0] || 0; d.maker_pos_id = idv[1] || 0;
-    if (!idv[0]){ setErr('eIdentity', '#fIdentity', '請選擇填表人的部門／職稱'); ok = false; }
+    var mp = pickedPerson('#fMaker');
+    d.maker_id = mp ? mp.id : (MAKERUID || META.me.id);
+    d.maker_dept_id = mp ? mp.dept_id : 0;
+    d.maker_pos_id  = mp ? mp.pos_id : 0;
+    if (!mp || !mp.dept_id || !mp.pos_id){ setErr('eIdentity', '#fMaker', '請選擇填表人的部門／職位'); ok = false; }
     var items = RECITEMS.filter(function(x){ return (x.question || '').trim() !== '' || (x.reply || '').trim() !== ''; });
     if (!items.length){ setErr('eItems', null, '請至少填寫一項溝通問題'); ok = false; }
     d.items = JSON.stringify(items);
@@ -1941,7 +1994,9 @@ $('#trackKw').on('keydown', function(e){ if (e.key === 'Enter'){ PAGE.track = 1;
 $('#trackShow').on('change', function(){ PAGE.track = 1; loadTrack(); });
 
 var TRACKROWS = {}, TKLEGACYOWNER = '';
-$('#btnTrackAdd').on('click', function(){ openTrack(0); });
+/* 追蹤表刻意沒有「新增」入口（使用者指定）：措施追蹤項目一定是從溝通記錄表的某一列問題
+   轉進來的，來源可追溯才有意義。openTrack(0) 保留給程式內部用，畫面上沒有按鈕，
+   後端 track_save 也會擋下「沒有來源的新建」（鐵律8，不是只擋 UI）。 */
 $('#tkOwnerDept').on('change', function(){
     TKLEGACYOWNER = '';                                   // 使用者自己改部門＝要重新挑人，舊姓名退路作廢
     loadDeptPeople(this.value, '#tkOwner', $('#tkReact').val() || TODAY, 0, function(){ });
@@ -2215,8 +2270,8 @@ function syncCfRemind(){
 $('#cfRemind').on('change', syncCfRemind);
 function fillCfTargetPicks(){
     var u = $('#cfTargetUser').empty().append($('<option>').val('').text('＋ 加入人員…'));
-    (META.people || []).forEach(function(p){
-        u.append($('<option>').val(p.id).text(p.user_cname + '（' + (p.dept_name || '') + ' ' + (p.position_name || '') + '）'));
+    globalPeopleSorted().forEach(function(p){
+        u.append($('<option>').val(p.id).text(globalPersonLabel(p)));
     });
     var d = $('#cfTargetDept').empty().append($('<option>').val('').text('＋ 加入部門（含子部門）…'));
     (META.depts || []).forEach(function(x){
@@ -2410,10 +2465,9 @@ $('#btnSetting').on('click', function(){
 });
 function fillPick(sel){
     var s = $(sel).empty().append('<option value="">＋ 加入人員…</option>');
-    (META.people || []).forEach(function(p){
-        s.append($('<option>').val(p.id).text(p.user_cname + '（' + (p.dept_name || '') + ' ' + (p.position_name || '') + '）'));
+    globalPeopleSorted().forEach(function(p){
+        s.append($('<option>').val(p.id).text(globalPersonLabel(p)));
     });
-    s
 }
 function nameOf(uid){
     var n = '';
