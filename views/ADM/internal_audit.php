@@ -531,6 +531,10 @@ $roleLabel = ia_role_label($perms);
             <li><b>稽核小組</b>（工具列，限內稽管理員）：這一年度的內稽是誰在做。<b>建稽核通知單前先組好</b>——之後「自動建立會議紀錄」的與會人員就是小組成員、<b>主席固定為稽核組長</b>；還沒建小組時會退回用該通知單上各受稽單位的稽核員與陪檢員。
                 常態小組每年差不多，可用「<b>從其他年度複製</b>」整批帶過來再增減（原職務已異動或離職的成員會自動略過並列出來）。<b>稽核組長只能有一位</b>。</li>
             <li><b>受稽日期／預定完成改善要全部同一天</b>：這兩欄的表頭各有一個日期欄＋「全部」鈕，按下去就套用到每一列；表頭沒填時會自動沿用<b>第一列已經填好的那個值</b>。</li>
+            <li><b>受稽時間可以自動排</b>：「時間」欄的表頭填<b>開始時間</b>（結束時間可留空）後按<b>「自動排」</b>，就依<b>間隔</b>（預設 30 分，可改）往下排每一列，
+                而且<b>會自動跳過午休 12:00~13:00</b>（算出來落在午休內的一律改成 13:00 再往後排）。
+                之後<b>手動改中間任何一列的時間，後面幾列會自動順延</b>（前面的不動）；想逐列自己填就把表頭的「改一列就自動順延後面」取消勾選。
+                有填結束時間而排不完時只會提示您，<b>不會自己把間隔壓縮</b>——要縮請自己把間隔改小再按一次。</li>
             <li><b>要補以前年度的資料</b>：左上角年度下拉本來就含近十年，直接切到那一年再建立即可，不必先有當年的資料。</li>
             <li><b>稽核起始主過程要填什麼</b>：這次稽核從哪一段流程切入，稽核員由這裡開始循序把相關過程查完。紙本備註列了三類可填：<b>主過程</b>（客戶需求檢討→開發→訂單/合約審查→生產→倉儲出貨→客戶回饋）、<b>管理過程</b>（文件/記錄管理、人力資源訓練、不符合管理、資料分析、內部稽核、矯正/預防措施管理、持續改善、管理責任…）、<b>支援過程</b>（採購、供應商管理、IQC/FAI/IPQC/FQC、儀器/量具、機器/治具、生管、型態(鑑別追溯)、特殊特性…）。起點<b>不必等於該單位的日常業務</b>——紙本備註第 1 條要求「跳過自己的直接職務」，讓稽核員從別人的角度切入。<b>同一次稽核裡不可以有兩列填相同的起始主過程</b>，重複會即時標紅、也存不進去。</li>
             <li><b>稽核員與陪檢員怎麼帶</b>：選了範本之後，該列的稽核員／陪檢員下拉會縮到範本指定的部門範圍內、且只列有資格的職務；<b>候選只有一位就自動帶入</b>。系統<b>先決定稽核員</b>，陪檢員的候選會自動排除稽核員本人（同一人不可兩邊都當，即使是不同職務）。<b>陪檢員可以不填</b>。</li>
@@ -715,8 +719,8 @@ $roleLabel = ia_role_label($perms);
                 <label>稽核迄</label><div><input type="date" id="cTo"><div class="err-msg" id="errCTo"></div></div>
                 <label>結束會議</label><div><input type="date" id="cMeetDate"></div>
                 <label>時間</label>
-                <div><input type="text" id="cMeetStart" placeholder="16:00" style="width:80px;"> ～
-                     <input type="text" id="cMeetEnd" placeholder="16:30" style="width:80px;">
+                <div><input type="text" id="cMeetStart" data-eg-hint="直接輸入，例 16:00（打 1600 或 16 也可以）" style="width:80px;"> ～
+                     <input type="text" id="cMeetEnd" data-eg-hint="直接輸入，例 16:30" style="width:80px;">
                      <div class="err-msg" id="errCMeetTime"></div></div>
                 <label>地點</label><div class="full"><input type="text" id="cMeetPlace" placeholder="二樓會議室"></div>
 <?php if ($perms['canAdmin']): ?>
@@ -743,7 +747,23 @@ $roleLabel = ia_role_label($perms);
                 <th style="width:150px;">受稽日期
                     <div class="ia-allday"><input type="date" id="cAllAudited"><button type="button" id="btnAllAudited" title="把這個日期套用到下面每一列">全部</button></div>
                 </th>
-                <th style="width:80px;">時間</th>
+                <!-- 受稽時間自動排（2026-09-17 使用者要求）：一天跑好幾個單位時一列一列打時間很花時間，
+                     這裡填開始時間就依間隔往後排，並自動跳過午休。 -->
+                <th style="width:158px;">時間
+                    <div class="ia-allday">
+                        <input type="text" id="cTimeFrom" data-eg-hint="開始時間，例 09:00" style="width:50px;">～
+                        <input type="text" id="cTimeTo" data-eg-hint="結束時間，例 16:00（可留空）" style="width:50px;">
+                        <button type="button" id="btnAllTime" title="從開始時間起，依間隔往下排每一列的受稽時間">自動排</button>
+                    </div>
+                    <div style="font-weight:normal;font-size:10px;color:#8a6d45;margin-top:2px;line-height:1.5;">
+                        間隔 <input type="text" id="cTimeStep" value="30" data-eg-skip
+                             style="width:30px;border:1px solid #D8BE93;border-radius:3px;padding:0 3px;font-size:10px;"> 分，
+                        跳過午休 12:00~13:00<br>
+                        <label style="font-weight:normal;margin:0;cursor:pointer;">
+                            <input type="checkbox" id="cTimeCascade" checked data-eg-skip style="vertical-align:-1px;">
+                            改一列就自動順延後面</label>
+                    </div>
+                </th>
                 <th style="width:150px;">預定完成改善
                     <div class="ia-allday"><input type="date" id="cAllDue"><button type="button" id="btnAllDue" title="把這個日期套用到下面每一列">全部</button></div>
                 </th>
@@ -1914,6 +1934,67 @@ function caseFillAllDate(field, headSel){
     $(headSel).val(v);
     renderCaseRows();
 }
+/* ---------- 受稽時間自動排（2026-09-17 使用者要求） ----------
+   ①填開始時間 → 依間隔（預設 30 分）往下排每一列
+   ②**跳過午休 12:00~13:00**：算出來的時間落在午休內就直接改成 13:00 再往後排
+     （寧可中間空一段，也不要把受稽時間排在午休）
+   ③手動改了中間某一列，後面的自動順延（可用「改一列就自動順延後面」關掉）
+   ④有填結束時間而排不完時只提示、不擅自壓縮——要壓縮請自己把間隔改小。 */
+var IA_LUNCH_FROM = 12 * 60, IA_LUNCH_TO = 13 * 60;
+function iaT2M(s){ var n = normTime(s); if (!n) return null; var p = n.split(':'); return (+p[0]) * 60 + (+p[1]); }
+function iaM2T(m){ m = Math.max(0, Math.min(24 * 60 - 1, Math.round(m)));
+                   return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); }
+/** 從 min 往後推 step 分鐘；落在午休內一律推到午休結束 */
+function iaNextSlot(min, step){
+    var t = min + step;
+    if (t >= IA_LUNCH_FROM && t < IA_LUNCH_TO) t = IA_LUNCH_TO;
+    return t;
+}
+function iaTimeStep(){
+    var v = parseInt($('#cTimeStep').val(), 10);
+    return (v > 0 && v <= 600) ? v : 30;
+}
+/** 從第 idx 列的時間往後重排（idx 那一列不動） */
+function iaCascadeTimes(idx){
+    var step = iaTimeStep();
+    var cur = iaT2M(CASE_ROWS[idx] && CASE_ROWS[idx].audited_time);
+    if (cur === null) return;
+    for (var i = idx + 1; i < CASE_ROWS.length; i++) {
+        if (!caseRowHasContent(CASE_ROWS[i])) continue;   // 還沒填東西的空列不排
+        cur = iaNextSlot(cur, step);
+        CASE_ROWS[i].audited_time = iaM2T(cur);
+    }
+}
+/** 這一列有沒有實際內容（空的末列不必排時間） */
+function caseRowHasContent(r){
+    if (!r) return false;
+    return !!(r.start_process || r.dept_id || (r.auditor_keys||[]).length || (r.escort_keys||[]).length
+              || r.audited_date || r.improve_due);
+}
+$(document).on('click', '#btnAllTime', function(){
+    var from = normTime($('#cTimeFrom').val());
+    if (!from) { alert('請先填開始時間（例 09:00）'); $('#cTimeFrom').focus(); return false; }
+    $('#cTimeFrom').val(from);
+    var to = normTime($('#cTimeTo').val());
+    if (to) $('#cTimeTo').val(to);
+    var step = iaTimeStep(), cur = iaT2M(from), n = 0, last = cur;
+    // 開始時間本身就落在午休時，直接從 13:00 起排
+    if (cur >= IA_LUNCH_FROM && cur < IA_LUNCH_TO) cur = IA_LUNCH_TO;
+    CASE_ROWS.forEach(function(r, i){
+        if (!caseRowHasContent(r)) return;
+        if (n > 0) cur = iaNextSlot(cur, step);
+        r.audited_time = iaM2T(cur);
+        last = cur; n++;
+    });
+    renderCaseRows();
+    if (!n) { alert('目前沒有已填內容的受稽單位列，請先填好單位再按自動排'); return false; }
+    if (to && last > iaT2M(to)) {
+        alert('已排好 ' + n + ' 列（' + from + ' 起，每 ' + step + ' 分一列，跳過午休 12:00~13:00），\n'
+            + '但最後一列排到 ' + iaM2T(last) + '，已超過結束時間 ' + to + '。\n\n'
+            + '需要的話請把間隔改小再按一次自動排。');
+    }
+    return false;
+});
 $(document).on('click', '#btnAllAudited', function(){ caseFillAllDate('audited_date', '#cAllAudited'); return false; });
 $(document).on('click', '#btnAllDue',     function(){ caseFillAllDate('improve_due',  '#cAllDue');     return false; });
 
@@ -1967,7 +2048,7 @@ function renderCaseRows(){
           + '<td>'+peopleCell(i, r, 'auditor', aList, ro)+'</td>'
           + '<td>'+peopleCell(i, r, 'escort',  eList, ro)+'</td>'
           + '<td><input type="date" class="cr" data-f="audited_date" value="'+esc(r.audited_date||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
-          + '<td><input type="text" class="cr" data-f="audited_time" value="'+esc(r.audited_time||'')+'" placeholder="13:15" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;"></td>'
+          + '<td><input type="text" class="cr" data-f="audited_time" value="'+esc(r.audited_time||'')+'" data-eg-hint="直接輸入，例 13:15；或用表頭的「自動排」" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px 4px;font-size:12px;"></td>'
           + '<td><input type="date" class="cr" data-f="improve_due" value="'+esc(r.improve_due||'')+'" '+(ro?'readonly':'')+' style="width:100%;border:1px solid #D8BE93;border-radius:3px;padding:2px;font-size:12px;"></td>'
           + '<td>'+(ro?'':'<span class="ia-op danger" onclick="caseRowDel('+i+')"><i class="fa fa-times"></i></span>')+'</td>'
           + '</tr>';
@@ -2033,6 +2114,11 @@ $(document).on('change','.cr', function(){
     var i = +$(this).closest('tr').data('i'), f = $(this).data('f');
     CASE_ROWS[i] = CASE_ROWS[i] || {};
     CASE_ROWS[i][f] = $(this).val();
+    // 改了某一列的受稽時間 → 後面的自動順延（使用者可在表頭關掉）
+    if (f === 'audited_time' && $('#cTimeCascade').is(':checked')) {
+        var n = normTime($(this).val());
+        if (n) { CASE_ROWS[i].audited_time = n; iaCascadeTimes(i); renderCaseRows(); }
+    }
 });
 function collectCaseRows(){
     var out = [];
