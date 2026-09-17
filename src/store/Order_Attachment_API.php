@@ -66,6 +66,21 @@ function oaEnabledCatIds(PDO $pdo): ?array {
     } catch (Exception $e) { return null; }
 }
 
+// 這份附件所屬的「訂單編號」底下目前有哪些料號（挑選跳窗的候選清單／後端守門都用這一份）。
+// 附件可能還在暫存批次(batch_key)階段（訂單都還沒建立），那時候料號由前端帶進來，這裡回空陣列。
+function oaSiblingParts(PDO $pdo, int $attId): array {
+    try {
+        $st = $pdo->prepare("SELECT ot.Order_oo FROM order_attachments a
+                             JOIN order_track ot ON ot.Order_id = a.order_id WHERE a.id=?");
+        $st->execute([$attId]);
+        $oo = $st->fetchColumn();
+        if (!$oo) return [];
+        $st2 = $pdo->prepare("SELECT DISTINCT d_id FROM order_track WHERE Order_oo=? AND d_id<>'' ORDER BY d_id");
+        $st2->execute([$oo]);
+        return $st2->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Exception $e) { return []; }
+}
+
 function oaFmtSize(int $bytes): string {
     if ($bytes < 1024)      return $bytes . ' B';
     if ($bytes < 1024*1024) return round($bytes/1024, 1) . ' KB';
@@ -94,6 +109,17 @@ function oaInitTable(PDO $pdo): void {
             INDEX idx_batch (batch_key)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='訂單附件（含OP轉訂單暫存批次）';
     ");
+    // 一份附件可綁多個料號（2026-09-11）：單一料號仍原樣存字串，多個才存 JSON 陣列，
+    // 所以欄位要放得下（原本 VARCHAR(50) 只夠一個）。可重複執行。
+    try {
+        $len = $pdo->query("SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS
+                            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='order_attachments'
+                              AND COLUMN_NAME='linked_part_no'")->fetchColumn();
+        if ($len !== false && (int)$len < 1000) {
+            $pdo->exec("ALTER TABLE order_attachments MODIFY linked_part_no VARCHAR(1000) NULL
+                        COMMENT '對應料號：NULL=共用(全部)；單一料號=原樣字串；多料號=JSON陣列'");
+        }
+    } catch (Exception $e) {}
 }
 
 // 懶惰清除：已到期的暫存(temp)附件（實體檔＋DB列）
@@ -190,7 +216,7 @@ switch ($action) {
         if (!_oaCanEdit($pdo, $uid)) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無訂單編輯權限']); break; }
         $orderId  = intval($_POST['order_id'] ?? 0);
         $batchKey = trim($_POST['batch_key'] ?? '');
-        $linkPart = trim($_POST['linked_part_no'] ?? '') ?: null;
+        $linkPart = eg_oa_parts_encode(eg_oa_parts_from_post($_POST));   // 可複選料號（空＝共用）
         // 附件標籤鐵則（CLAUDE.md 鐵律8）：允許先批次上傳再逐一點開設定標籤，但存檔/建單前
         // 一律要補齊（見 _NewOrder_Track222.php 的 or_new/or_update/create_orders_from_quotes 檢查）
         $catIds = array_values(array_filter(array_map('intval', explode(',', trim($_POST['category_ids'] ?? '')))));
@@ -268,6 +294,9 @@ switch ($action) {
             $ids = array_values(array_filter(array_map('intval', explode(',', (string)$r['category_ids']))));
             $r['category_name'] = implode('、', array_map(fn($i) => $catMap[$i] ?? ('#'.$i), $ids));
             $r['is_shared'] = isset($sharedSet[$r['filename']]);
+            // 多料號綁定：前端一律讀這個陣列，不要自己去 parse linked_part_no（單一料號存純字串、
+            // 多料號存 JSON，解析規則只有 order_attach_cat_lib.php 那一份）
+            $r['linked_parts'] = eg_oa_parts_decode($r['linked_part_no']);
         }
         unset($r);
         // 刪除按鈕顯示用：只有上傳者本人／管理員／被指派 ot_attach_delete 角色功能才看得到刪除鈕（後端 delete_file 同規則再擋一次）
@@ -282,13 +311,137 @@ switch ($action) {
         $attId    = intval($_POST['attachment_id'] ?? 0);
         $rawCats  = trim($_POST['category_ids'] ?? '');
         $catIds   = array_values(array_filter(array_map('intval', explode(',', $rawCats))));
-        $linkPart = trim($_POST['linked_part_no'] ?? '') ?: null;
+        $parts    = eg_oa_parts_from_post($_POST);
         if (!$attId) { echo json_encode(['success'=>false,'message'=>'缺少 attachment_id']); break; }
         if (!$catIds) { echo json_encode(['success'=>false,'message'=>'請至少保留一個附件類別標籤']); break; }
+        // 「需綁定料號」的標籤不可以設成共用（鐵律8：前端擋一次、後端同規則再擋一次）。
+        // 只在這張附件真的隸屬多料號情境時才擋；單一料號沒有歧義（見 oaSiblingParts）。
+        $reqIds = eg_oa_require_part_cat_ids($pdo);
+        if (!$parts && eg_oa_cats_need_part(implode(',', $catIds), $reqIds)) {
+            $sib = oaSiblingParts($pdo, $attId);
+            if (count($sib) > 1) {
+                echo json_encode(['success'=>false,'message'=>'這個標籤已設定為「需綁定料號」，必須指定對應料號，不可設為共用（全部）。']);
+                break;
+            }
+        }
         $catStr = implode(',', $catIds);
         $pdo->prepare("UPDATE order_attachments SET category_ids=?, linked_part_no=? WHERE id=?")
-            ->execute([$catStr, $linkPart, $attId]);
+            ->execute([$catStr, eg_oa_parts_encode($parts), $attId]);
         echo json_encode(['success' => true]);
+        break;
+    }
+
+    // ── 這份附件目前對應哪些料號＋同一訂單編號底下有哪些料號可選（料號挑選跳窗用）──
+    case 'part_options': {
+        $attId = intval($_POST['attachment_id'] ?? 0);
+        if (!$attId) { echo json_encode(['success'=>false,'message'=>'缺少 attachment_id']); break; }
+        $st = $pdo->prepare("SELECT a.linked_part_no, a.category_ids, a.filename, a.original_name, a.order_id,
+                                    COALESCE(ot.Order_oo,'') AS order_oo
+                             FROM order_attachments a
+                             LEFT JOIN order_track ot ON ot.Order_id = a.order_id WHERE a.id=?");
+        $st->execute([$attId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { echo json_encode(['success'=>false,'message'=>'找不到附件']); break; }
+        $reqIds = eg_oa_require_part_cat_ids($pdo);
+        // 同一訂單編號底下每個料號目前有沒有掛這份檔案（畫面要標出「目前已連動」）
+        $have = [];
+        if ($row['order_oo'] !== '') {
+            $hq = $pdo->prepare("SELECT DISTINCT ot.d_id FROM order_attachments a2
+                                 JOIN order_track ot ON ot.Order_id = a2.order_id
+                                 WHERE a2.status='active' AND a2.filename=? AND ot.Order_oo=?");
+            $hq->execute([$row['filename'], $row['order_oo']]);
+            $have = $hq->fetchAll(PDO::FETCH_COLUMN);
+        }
+        echo json_encode([
+            'success'       => true,
+            'order_oo'      => $row['order_oo'],
+            'display_name'  => $row['original_name'] ?: $row['filename'],
+            'all_parts'     => oaSiblingParts($pdo, $attId),
+            'linked_parts'  => eg_oa_parts_decode($row['linked_part_no']),
+            'attached_parts'=> $have,
+            'need_part'     => eg_oa_cats_need_part($row['category_ids'], $reqIds),
+        ]);
+        break;
+    }
+
+    // ── 套用料號綁定：依選定的料號，增刪這份檔案在「同一訂單編號」底下各張訂單的掛載 ──
+    // 使用者明確要求的規則（2026-09-11）：有選定綁定料號的附件，就只跟被綁定的料號一起連動，其他不連動。
+    // 所以這裡是「以選定清單為準」＝沒選到的料號要把掛載拿掉、選到卻還沒掛的要補上。
+    // **實體檔案永遠不刪**（那是 delete_file 的事），這裡只動「哪張訂單看得到」。
+    case 'apply_parts': {
+        if (!_oaCanEdit($pdo, $uid)) { http_response_code(403); echo json_encode(['success'=>false,'message'=>'無訂單編輯權限']); break; }
+        $attId = intval($_POST['attachment_id'] ?? 0);
+        $parts = eg_oa_parts_from_post($_POST);
+        if (!$attId) { echo json_encode(['success'=>false,'message'=>'缺少 attachment_id']); break; }
+        $st = $pdo->prepare("SELECT a.*, COALESCE(ot.Order_oo,'') AS order_oo FROM order_attachments a
+                             LEFT JOIN order_track ot ON ot.Order_id = a.order_id WHERE a.id=?");
+        $st->execute([$attId]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) { echo json_encode(['success'=>false,'message'=>'找不到附件']); break; }
+        $oo = $row['order_oo'];
+        if ($oo === '') {  // 還在暫存批次階段：沒有訂單可增刪，只記綁定值，建單時才分派
+            $pdo->prepare("UPDATE order_attachments SET linked_part_no=? WHERE id=?")
+                ->execute([eg_oa_parts_encode($parts), $attId]);
+            echo json_encode(['success'=>true,'added'=>0,'removed'=>0,'message'=>'已記錄對應料號']);
+            break;
+        }
+        $reqIds = eg_oa_require_part_cat_ids($pdo);
+        $allParts = oaSiblingParts($pdo, $attId);
+        if (!$parts && count($allParts) > 1 && eg_oa_cats_need_part($row['category_ids'], $reqIds)) {
+            echo json_encode(['success'=>false,'message'=>'這個標籤已設定為「需綁定料號」，必須至少指定一個料號。']);
+            break;
+        }
+        // 送進來的料號一定要真的在這個訂單編號底下（不可以直打 API 把附件掛到別張訂單去）
+        foreach ($parts as $p) {
+            if (!in_array($p, $allParts, true)) {
+                echo json_encode(['success'=>false,'message'=>'料號 ' . $p . ' 不在訂單編號 ' . $oo . ' 底下，無法綁定']);
+                break 2;
+            }
+        }
+        $keep = $parts ?: $allParts;   // 沒選＝共用（全部）：該訂單編號底下每個料號都要看得到
+
+        $oq = $pdo->prepare("SELECT Order_id, d_id FROM order_track WHERE Order_oo=?");
+        $oq->execute([$oo]);
+        $orders = $oq->fetchAll(PDO::FETCH_ASSOC);
+        $cq = $pdo->prepare("SELECT a.id, a.order_id, ot.d_id FROM order_attachments a
+                             JOIN order_track ot ON ot.Order_id = a.order_id
+                             WHERE a.status='active' AND a.filename=? AND ot.Order_oo=?");
+        $cq->execute([$row['filename'], $oo]);
+        $cur = $cq->fetchAll(PDO::FETCH_ASSOC);
+
+        $encoded = eg_oa_parts_encode($parts);
+        $added = 0; $removed = 0;
+        $pdo->beginTransaction();
+        try {
+            // 1) 拿掉不該看到的（只刪掛載列，實體檔與其他料號的掛載都留著）
+            $del = $pdo->prepare("DELETE FROM order_attachments WHERE id=?");
+            $haveOrder = [];
+            foreach ($cur as $c) {
+                if (!in_array($c['d_id'], $keep, true)) { $del->execute([$c['id']]); $removed++; continue; }
+                $haveOrder[(int)$c['order_id']] = (int)$c['id'];
+            }
+            // 2) 補上還沒掛的
+            $ins = $pdo->prepare("INSERT INTO order_attachments (order_id, linked_part_no, category_ids, filename, original_name, file_size, uploaded_by, uploaded_at, status)
+                                  VALUES (?,?,?,?,?,?,?,?,'active')");
+            foreach ($orders as $o) {
+                if (!in_array($o['d_id'], $keep, true)) continue;
+                if (isset($haveOrder[(int)$o['Order_id']])) continue;
+                $ins->execute([(int)$o['Order_id'], $encoded, $row['category_ids'], $row['filename'],
+                               $row['original_name'], $row['file_size'], $row['uploaded_by'], $row['uploaded_at']]);
+                $added++;
+            }
+            // 3) 綁定值寫回這份檔案在這個訂單編號底下的每一列（判定連動時要看得到）
+            $pdo->prepare("UPDATE order_attachments a JOIN order_track ot ON ot.Order_id=a.order_id
+                           SET a.linked_part_no=? WHERE a.status='active' AND a.filename=? AND ot.Order_oo=?")
+                ->execute([$encoded, $row['filename'], $oo]);
+            $pdo->commit();
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            echo json_encode(['success'=>false,'message'=>'套用失敗：' . $e->getMessage()]);
+            break;
+        }
+        echo json_encode(['success'=>true,'added'=>$added,'removed'=>$removed,
+                          'message'=>'已套用：新增 ' . $added . ' 個料號、移除 ' . $removed . ' 個料號']);
         break;
     }
 

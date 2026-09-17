@@ -111,7 +111,7 @@ try {
             $reqIds = eg_oa_require_part_cat_ids($db);
             if (!$reqIds) return null;
             $st2 = $db->prepare("SELECT original_name, filename, category_ids FROM order_attachments
-                                 WHERE batch_key=? AND status='temp' AND (linked_part_no IS NULL OR linked_part_no='')");
+                                 WHERE batch_key=? AND status='temp' AND (linked_part_no IS NULL OR linked_part_no='' OR linked_part_no='[]')");
             $st2->execute([$batchKey]);
             $bad = [];
             foreach ($st2->fetchAll(PDO::FETCH_ASSOC) as $r) {
@@ -135,9 +135,12 @@ try {
         try {
             $reqIds = eg_oa_require_part_cat_ids($db);
 
-            $oq = $db->prepare("SELECT Order_id FROM order_track WHERE Order_oo = ?");
+            $oq = $db->prepare("SELECT Order_id, d_id FROM order_track WHERE Order_oo = ?");
             $oq->execute([$orderNo]);
-            $orderIds = array_map('intval', $oq->fetchAll(PDO::FETCH_COLUMN));
+            $orderRows = $oq->fetchAll(PDO::FETCH_ASSOC);
+            $orderIds  = array_map(fn($r) => (int)$r['Order_id'], $orderRows);
+            $partOfOrder = [];
+            foreach ($orderRows as $r) { $partOfOrder[(int)$r['Order_id']] = (string)$r['d_id']; }
             if (count($orderIds) < 2) return; // 這個訂單編號目前只有一張訂單，沒有其他料號可同步
 
             $ph = implode(',', array_fill(0, count($orderIds), '?'));
@@ -154,24 +157,39 @@ try {
                 if (!isset($byFile[$fn])) {
                     $catIds = array_values(array_filter(array_map('intval', explode(',', (string)$r['category_ids']))));
                     $shared = $catIds && !eg_oa_cats_need_part($r['category_ids'], $reqIds);
-                    $byFile[$fn] = ['orders' => [], 'info' => $r, 'shared' => $shared];
+                    $byFile[$fn] = ['orders' => [], 'info' => $r, 'shared' => $shared, 'parts' => []];
                 }
-                // 已經綁定特定料號的附件一律不連動（使用者明確要求，2026-09-11）：這份檔案是某一個料號專屬的
-                // （例如 OP 轉訂單時整批上傳、但逐張指定了對應料號的原圖），連動過去會讓其他料號的圖面查閱頁
-                // 看到不屬於自己的圖。判定要看「這份實體檔的所有參照列」，只要任一列有綁料號就整組不連動——
-                // 連動出來的複本是不帶 linked_part_no 的，只看第一列會誤判成共用。
-                if (trim((string)($r['linked_part_no'] ?? '')) !== '') $byFile[$fn]['shared'] = false;
+                // 綁定的料號：同一份實體檔的任一列有綁，整組就以那份綁定為準（連動出來的複本可能沒帶到）
+                $ps = eg_oa_parts_decode($r['linked_part_no'] ?? null);
+                if ($ps) $byFile[$fn]['parts'] = array_values(array_unique(array_merge($byFile[$fn]['parts'], $ps)));
                 $byFile[$fn]['orders'][(int)$r['order_id']] = true;
             }
 
-            $ins = $db->prepare("INSERT INTO order_attachments (order_id, filename, original_name, category_ids, file_size, uploaded_by, status)
-                                  VALUES (?,?,?,?,?,?,'active')");
+            $ins = $db->prepare("INSERT INTO order_attachments (order_id, filename, original_name, category_ids, file_size, uploaded_by, status, linked_part_no)
+                                  VALUES (?,?,?,?,?,?,'active',?)");
             foreach ($byFile as $fn => $g) {
-                if (!$g['shared']) continue;
                 $info = $g['info'];
-                foreach ($orderIds as $oid) {
+                // 使用者明確要求的規則（2026-09-11）：
+                //   ⑴ 有綁定料號 → 只連動到「被綁定的那些料號」的訂單，其他料號一律不連動
+                //      （多料號綁定：客戶把好幾個料號的資料放在同一份檔案裡時，一份檔案本來就屬於好幾個料號）
+                //   ⑵ 沒綁料號、但標籤設定為「需綁定料號」→ 完全不連動（等人去指定料號，否則原圖會散到別的料號）
+                //   ⑶ 其餘（共用附件，例如一張客戶訂單涵蓋整張單的所有料號）→ 維持原本行為，每張訂單都掛
+                // 這裡只「補上缺的」，永遠不刪任何一列；要拿掉掛載一律走 Order_Attachment_API 的 apply_parts
+                // （使用者在料號挑選跳窗按下確定），避免自動同步把人工整理過的結果又洗掉。
+                if ($g['parts']) {
+                    $targets = [];
+                    foreach ($orderIds as $oid) {
+                        if (in_array($partOfOrder[$oid] ?? '', $g['parts'], true)) $targets[] = $oid;
+                    }
+                } elseif ($g['shared']) {
+                    $targets = $orderIds;
+                } else {
+                    continue;
+                }
+                foreach ($targets as $oid) {
                     if (isset($g['orders'][$oid])) continue; // 這張訂單已經有了，不重複掛
-                    $ins->execute([$oid, $fn, $info['original_name'], $info['category_ids'], $info['file_size'], $info['uploaded_by']]);
+                    $ins->execute([$oid, $fn, $info['original_name'], $info['category_ids'], $info['file_size'], $info['uploaded_by'],
+                                   eg_oa_parts_encode($g['parts'])]);
                 }
             }
         } catch (PDOException $e) { /* order_attachments 尚未建表（該功能尚未使用過）：略過 */ }
@@ -929,7 +947,15 @@ try {
                                         VALUES (?,?,?,?,?,?,?,'active')");
                     foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $t) {
                         $part = $t['linked_part_no'];
-                        $targetIds = ($part !== null && $part !== '') ? ($partToOrderIds[$part] ?? []) : $allOrderIds;
+                        // 可能綁了多個料號（客戶把好幾個料號的資料放在同一份檔案裡），要把每個料號對應的訂單都收進來
+                        $tParts = eg_oa_parts_decode($part);
+                        if ($tParts) {
+                            $targetIds = [];
+                            foreach ($tParts as $tp) { foreach (($partToOrderIds[$tp] ?? []) as $tid) $targetIds[] = $tid; }
+                            $targetIds = array_values(array_unique($targetIds));
+                        } else {
+                            $targetIds = $allOrderIds;
+                        }
                         if (!$targetIds) continue; // 該料號這批沒有真的建成訂單：附件留在temp，逾期由懶惰清除機制回收
                         $firstId = array_shift($targetIds);
                         $upd->execute([$firstId, $t['id']]);

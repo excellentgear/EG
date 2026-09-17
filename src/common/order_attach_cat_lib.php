@@ -68,3 +68,71 @@ if (!function_exists('eg_oa_cats_need_part')) {
         return $ids && (bool)array_intersect($ids, $requireIds);
     }
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// 一份附件可以對應「多個料號」（使用者明確要求，2026-09-11：有些客戶提供的資料是全部放在一起，
+// 一張圖同時屬於好幾個料號，原本 linked_part_no 只存得下一個，等於只有「綁一個」跟「全部共用」兩種極端）。
+//
+// 存法刻意維持向下相容，**不改既有單一料號那 16 列的內容**：
+//   沒有綁定      → NULL（＝共用／全部，維持原意）
+//   綁定一個料號  → 直接存料號字串（跟改版前一模一樣）
+//   綁定多個料號  → 存 JSON 陣列 ["A","B"]（料號本身不會是 [ 開頭，不會誤判）
+// 讀取一律走 eg_oa_parts_decode()，寫入一律走 eg_oa_parts_encode()，不要各自 explode。
+// ──────────────────────────────────────────────────────────────────────────
+
+if (!function_exists('eg_oa_parts_decode')) {
+    /** linked_part_no 欄位值 → 料號陣列（空陣列＝共用／未綁定） */
+    function eg_oa_parts_decode($raw): array {
+        $raw = trim((string)($raw ?? ''));
+        if ($raw === '') return [];
+        if ($raw[0] === '[') {
+            $j = json_decode($raw, true);
+            if (is_array($j)) {
+                $out = [];
+                foreach ($j as $p) { $p = trim((string)$p); if ($p !== '' && !in_array($p, $out, true)) $out[] = $p; }
+                return $out;
+            }
+        }
+        return [$raw];   // 舊資料：單一料號原樣
+    }
+}
+
+if (!function_exists('eg_oa_parts_encode')) {
+    /** 料號陣列 → linked_part_no 欄位值（null／單一字串／JSON 陣列） */
+    function eg_oa_parts_encode(array $parts): ?string {
+        $out = [];
+        foreach ($parts as $p) { $p = trim((string)$p); if ($p !== '' && !in_array($p, $out, true)) $out[] = $p; }
+        if (!$out) return null;
+        if (count($out) === 1) return $out[0];
+        return json_encode(array_values($out), JSON_UNESCAPED_UNICODE);
+    }
+}
+
+if (!function_exists('eg_oa_parts_from_post')) {
+    /**
+     * 前端送過來的料號（相容三種寫法：陣列 linked_part_nos[]、JSON 字串、單一 linked_part_no）
+     * → 料號陣列。空＝共用／未綁定。
+     */
+    function eg_oa_parts_from_post(array $post): array {
+        if (isset($post['linked_part_nos'])) {
+            $v = $post['linked_part_nos'];
+            if (is_array($v)) return eg_oa_parts_decode(eg_oa_parts_encode($v) ?? '');
+            $s = trim((string)$v);
+            if ($s === '') return [];
+            if ($s[0] === '[') return eg_oa_parts_decode($s);
+            // 逗號分隔（料號本身極少含逗號；order_track.d_id 實測 0 筆含逗號）
+            return eg_oa_parts_decode(eg_oa_parts_encode(explode(',', $s)) ?? '');
+        }
+        $one = trim((string)($post['linked_part_no'] ?? ''));
+        return $one === '' ? [] : [$one];
+    }
+}
+
+if (!function_exists('eg_oa_parts_label')) {
+    /** 畫面顯示用：綁定的料號文字（空＝共用（全部）） */
+    function eg_oa_parts_label(array $parts, int $totalParts = 0): string {
+        if (!$parts) return '共用（全部）';
+        if ($totalParts > 0 && count($parts) >= $totalParts) return '全部料號（' . count($parts) . '）';
+        return implode('、', $parts);
+    }
+}

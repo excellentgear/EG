@@ -4653,7 +4653,10 @@ foreach($dCounts as $c) {
                                 <div id="op-attach-cats" style="display:flex;gap:8px;flex-wrap:wrap;font-size:11px;"></div>
                                 <span id="op-attach-part-wrap" style="display:none;align-items:center;gap:4px;">
                                     <span style="font-size:11px;color:#888;">對應料號：</span>
-                                    <select id="op-attach-part" class="form-control input-sm" style="width:auto;display:inline-block;"></select>
+                                    <button type="button" id="op-attach-part-btn" class="btn btn-xs btn-default" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                                            onclick="opAttachPickParts()" title="可複選；客戶把好幾個料號的資料放在同一份檔案時，一次綁多個料號">
+                                        <i class="fa fa-cubes"></i> <span id="op-attach-part-txt">共用（全部）</span></button>
+                                    <input type="hidden" id="op-attach-part">
                                 </span>
                                 <button type="button" class="btn btn-xs btn-default" onclick="$('#op-attach-file-input').click()"><i class="fa fa-upload"></i> 上傳</button>
                                 <input type="file" id="op-attach-file-input" multiple style="display:none;" onchange="opAttachUpload(this.files)">
@@ -7478,22 +7481,29 @@ foreach($dCounts as $c) {
                     (c.required ? ' <span style="color:#DD5138;" title="此標籤需綁定料號：不可設為共用（全部），一定要指定對應料號">*</span>' : '') + '</label>';
             }).join('') || '<span style="color:#aaa;">尚未設定本頁可用標籤，請至「設定」跳窗設定</span>';
             var parts = availableParts || [];
+            var bound = (f.linked_parts && f.linked_parts.length) ? f.linked_parts
+                      : (f.linked_part_no ? [f.linked_part_no] : []);
             // 「需綁定料號」的標籤（設定跳窗→本頁使用的附件標籤；未設定過時沿用報價單的必備類別）：
             // 這個檔已勾到這種標籤時，「共用（全部）」選項直接不給選，逼使用者一定要指定料號。
             // 綁好料號的附件在存檔時也不會再自動連動到相同訂單編號的其他料號訂單（_NewOrder_Track.php）。
             var reqIds = (cats || []).filter(function(c) { return c.required; }).map(function(c) { return String(c.id); });
             var hasReq = checkedIds.some(function(id) { return reqIds.indexOf(id) !== -1; });
-            var needPick = hasReq && !f.linked_part_no;
+            var needPick = hasReq && !bound.length;
+            // 料號可複選（2026-09-11）：客戶常把好幾個料號的資料放在同一份檔案裡，只能綁一個會逼人重複上傳。
+            // 顯示成一顆鈕，點下去開共用的挑選跳窗（裡面有「全部料號」一鍵）。
+            var boundTxt = bound.length
+                ? (parts.length && bound.length >= parts.length ? '全部料號（' + bound.length + '）' : bound.join('、'))
+                : '共用（全部）';
+            // 何時要給那顆鈕：①批次裡真的有多個料號 ②這份檔案已經被連動到多張訂單（is_shared）
+            // ③已經綁了料號（要讓人看得到、改得掉）。單一料號又沒連動的情況沒有歧義，維持純文字不加干擾。
+            var canPick = parts.length > 1 || !!f.is_shared || bound.length > 0;
             var partTag = showPart
-                ? (parts.length > 1
-                    ? '<select class="oa-part-select" style="font-size:10px;padding:0 2px;' + (needPick ? 'border-color:#DD5138;color:#DD5138;' : '') + '">' +
-                        (hasReq
-                            ? '<option value=""' + (needPick ? ' selected disabled' : '') + '>請選擇料號…</option>'
-                            : '<option value="">共用（全部）</option>') +
-                        parts.map(function(p) { return '<option value="' + escapeHtml(p) + '"' + (f.linked_part_no === p ? ' selected' : '') + '>' + escapeHtml(p) + '</option>'; }).join('') +
-                      '</select>' +
-                      (hasReq ? ' <span style="font-size:9px;color:#DD5138;" title="此標籤設定為「需綁定料號」：不可設為共用，須連結單一料號">*必選料號</span>' : '')
-                    : '<span style="font-size:10px;color:#999;">' + (f.linked_part_no ? ('料號：' + escapeHtml(f.linked_part_no)) : '共用（全部）') + '</span>')
+                ? (canPick
+                    ? '<button type="button" class="btn btn-xs oa-part-btn" style="font-size:10px;padding:0 5px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:baseline;'
+                        + (needPick ? 'border-color:#DD5138;color:#DD5138;' : 'border-color:#E4D3BC;color:#8a5a2b;background:#FFFDF9;') + '" title="點擊選擇對應料號（可複選）">'
+                        + '<i class="fa fa-cubes"></i> ' + escapeHtml(needPick ? '請選擇料號…' : boundTxt) + '</button>'
+                      + (hasReq ? ' <span style="font-size:9px;color:#DD5138;" title="此標籤設定為「需綁定料號」：不可設為共用，須指定料號（可複選）">*必選料號</span>' : '')
+                    : '<span style="font-size:10px;color:#999;">' + (bound.length ? ('料號：' + escapeHtml(bound.join('、'))) : '共用（全部）') + '</span>')
                 : '';
             // 刪除鈕：只有上傳者本人／管理員／被指派 ot_attach_delete 才顯示（後端 delete_file 同規則再擋一次，不可只靠前端隱藏）
             var canDel = oaCanDeleteOthers || (!!f.uploaded_by && String(f.uploaded_by) === String(oaCurrentUid));
@@ -7507,7 +7517,7 @@ foreach($dCounts as $c) {
                 '<span style="color:#aaa;">' + (f.file_size || '') + '</span>' +
                 oaUploaderHtml(f) +
                 partTag +
-                (f.is_shared ? '<span style="font-size:10px;color:#8a5a2b;background:#FDEBD0;border:1px solid #E8B76C;border-radius:3px;padding:0 4px;" title="這份附件已自動連動到相同訂單編號的其他料號訂單；刪除會一併移除所有連結"><i class="fa fa-link"></i> 自動連動</span>' : '') +
+                (f.is_shared ? '<span class="oa-shared-badge" style="font-size:10px;color:#8a5a2b;background:#FDEBD0;border:1px solid #E8B76C;border-radius:3px;padding:0 4px;" title="這份附件同時掛在相同訂單編號的多張料號訂單上。要調整掛在哪些料號，請點左邊的「對應料號」鈕（可複選）；按刪除則會一併移除所有連結與實體檔。"><i class="fa fa-link"></i> 連動多料號</span>' : '') +
                 '<span class="oa-tag-badge">' + (tagged
                     ? '<span style="font-size:10px;color:#8a5a2b;background:#FFF3E2;border:1px solid #E4D3BC;border-radius:3px;padding:0 4px;">' + escapeHtml(f.category_name) + '</span>'
                     : '<span style="font-size:10px;color:#c0392b;font-weight:600;"><i class="fa fa-exclamation-circle"></i> 尚未設定標籤</span>') + '</span>' +
@@ -7527,46 +7537,145 @@ foreach($dCounts as $c) {
             return '<span style="font-size:10px;color:#999;" title="上傳者／上傳時間"><i class="fa fa-user-o"></i> ' + escapeHtml(txt) + '</span>';
         }
         function oaHasUntagged(files) { return (files || []).some(function(f) { return !f.category_name; }); }
-        // 事後改料號連結（多料號批次時的下拉選單，change 即時存檔）
-        $(document).on('change', '.oa-part-select', function() {
+        // 事後改料號連結：點那顆鈕開共用的挑選跳窗（可複選）。
+        // 暫存批次階段（還沒建訂單）＝只把選擇記在附件上，建單時才依此分派；
+        // 已存檔的訂單附件＝走 apply_parts，後端依選定料號增刪「這份檔案掛在哪幾張訂單」。
+        $(document).on('click', '.oa-part-btn', function() {
             var $row = $(this).closest('.oa-file-row');
             var attId = $row.data('id');
-            var newPart = $(this).val();
+            var f = oaFindCachedFile(attId) || {};
+            var isTemp = (f.status === 'temp');
             var catIds = [];
             $row.find('.oa-tag-panel input:checked').each(function() { catIds.push($(this).val()); });
-            $.post(ORDER_ATTACH_API, { action: 'update_attachment', attachment_id: attId, category_ids: catIds.join(','), linked_part_no: newPart }, function(res) {
-                if (!res.success) { showToast(res.message || '設定失敗', 'info'); return; }
-                [orderAttachFiles, opAttachFilesCache].forEach(function(arr) {
-                    (arr || []).forEach(function(f) { if (String(f.id) === String(attId)) f.linked_part_no = newPart || null; });
+            var reqIds = (orderAttachCats || []).filter(function(c) { return c.required; }).map(function(c) { return String(c.id); });
+            var needPart = catIds.some(function(id) { return reqIds.indexOf(id) !== -1; });
+            var bound = (f.linked_parts && f.linked_parts.length) ? f.linked_parts : (f.linked_part_no ? [f.linked_part_no] : []);
+
+            if (isTemp) {
+                oaOpenPartPick({
+                    name: f.original_name || f.filename || '',
+                    parts: opAttachPartsList || [],
+                    selected: bound,
+                    needPart: needPart,
+                    hint: '這批附件還沒建立訂單，選好的料號會在按下「建立訂單」時決定這份檔案要掛到哪幾張訂單。',
+                    onOk: function(sel, done) {
+                        $.post(ORDER_ATTACH_API, { action: 'update_attachment', attachment_id: attId,
+                                                   category_ids: catIds.join(','), linked_part_nos: JSON.stringify(sel) }, function(res) {
+                            if (!res.success) { done(res.message || '設定失敗'); return; }
+                            done(null); opAttachRefreshList();
+                        }, 'json').fail(function() { done('設定失敗'); });
+                    }
                 });
-                oaRefreshRowPartSelect($row, catIds); // 選了實際料號後解除紅框/請選擇提示
+                return;
+            }
+            // 已存檔：候選料號與目前狀態一律跟後端要最新的（點開即刷新，ai-rules/08 第六節）
+            $.post(ORDER_ATTACH_API, { action: 'part_options', attachment_id: attId }, function(res) {
+                if (!res.success) { showToast(res.message || '讀取失敗', 'info'); return; }
+                oaOpenPartPick({
+                    name: res.display_name || '',
+                    parts: res.all_parts || [],
+                    selected: (res.linked_parts && res.linked_parts.length) ? res.linked_parts : (res.attached_parts || []),
+                    needPart: !!res.need_part,
+                    hint: '訂單編號 ' + escapeHtml(res.order_oo || '') + ' 底下共 ' + (res.all_parts || []).length +
+                          ' 個料號。按確定後，<b>沒有勾選的料號會把這份附件的連結拿掉</b>（實體檔案不會被刪除），勾選卻還沒有的會補上。',
+                    onOk: function(sel, done) {
+                        $.post(ORDER_ATTACH_API, { action: 'apply_parts', attachment_id: attId,
+                                                   linked_part_nos: JSON.stringify(sel) }, function(r2) {
+                            if (!r2.success) { done(r2.message || '套用失敗'); return; }
+                            done(null);
+                            showToast(r2.message || '已套用', 'info');
+                            var oid = parseInt($('#hidden_Order_id').val()) || 0;
+                            orderAttachRefresh(oid || null);
+                        }, 'json').fail(function() { done('套用失敗'); });
+                    }
+                });
             }, 'json');
         });
+        function oaFindCachedFile(attId) {
+            var hit = null;
+            [orderAttachFiles, opAttachFilesCache].forEach(function(arr) {
+                (arr || []).forEach(function(f) { if (String(f.id) === String(attId)) hit = f; });
+            });
+            return hit;
+        }
+
+        // ── 料號挑選跳窗（共用，禁止各處自刻）──────────────────────────
+        var oappState = { parts: [], onOk: null, needPart: false };
+        function oaOpenPartPick(opt) {
+            oappState = { parts: opt.parts || [], onOk: opt.onOk, needPart: !!opt.needPart };
+            $('#oapp-file').text(opt.name || '');
+            $('#oapp-hint').html((opt.hint || '') +
+                (opt.needPart ? '<br><span style="color:#DD5138;">這個標籤設定為「需綁定料號」，至少要選一個料號，不可以設為共用（全部）。</span>'
+                              : '<br><span style="color:#aaa;">一個都不選＝共用（全部），該訂單編號底下每個料號都看得到。</span>'));
+            $('#oapp-kw').val('');
+            $('#oapp-err').hide().text('');
+            var sel = opt.selected || [];
+            $('#oapp-list').html(oappState.parts.length
+                ? oappState.parts.map(function(p) {
+                    return '<label class="oapp-item" style="font-weight:400;display:flex;align-items:center;gap:6px;margin:0 0 4px;cursor:pointer;padding:2px 4px;border-radius:3px;">' +
+                        '<input type="checkbox" value="' + escapeHtml(p) + '"' + (sel.indexOf(p) !== -1 ? ' checked' : '') + '>' +
+                        '<span>' + escapeHtml(p) + '</span></label>';
+                  }).join('')
+                : '<span style="color:#aaa;">這個訂單編號底下找不到其他料號</span>');
+            oappUpdateCount();
+            $('#oaPartPickModal').modal('show');
+        }
+        function oappSelectAll(on) { $('#oapp-list .oapp-item:visible input[type=checkbox]').prop('checked', on); oappUpdateCount(); }
+        function oappFilter() {
+            var kw = $('#oapp-kw').val().trim().toLowerCase();
+            $('#oapp-list .oapp-item').each(function() {
+                $(this).toggle(!kw || $(this).text().toLowerCase().indexOf(kw) !== -1);
+            });
+            oappUpdateCount();
+        }
+        function oappUpdateCount() {
+            var n = $('#oapp-list input[type=checkbox]:checked').length;
+            var t = oappState.parts.length;
+            var shown = $('#oapp-list .oapp-item:visible').length;
+            $('#oapp-count').text('已選 ' + n + ' / 共 ' + t + ' 個料號' + (shown < t ? '（篩選中顯示 ' + shown + '）' : ''));
+        }
+        $(document).on('change', '#oapp-list input[type=checkbox]', oappUpdateCount);
+        function oappConfirm() {
+            var sel = $('#oapp-list input[type=checkbox]:checked').map(function() { return this.value; }).get();
+            if (oappState.needPart && !sel.length) {
+                $('#oapp-err').show().text('這個標籤設定為「需綁定料號」，請至少選一個料號。');
+                return;
+            }
+            var $btn = $('#oaPartPickModal .modal-footer .btn-primary').prop('disabled', true);
+            oappState.onOk(sel, function(err) {
+                $btn.prop('disabled', false);
+                if (err) { $('#oapp-err').show().text(err); return; }
+                $('#oaPartPickModal').modal('hide');
+            });
+        }
         // 目前有哪些附件清單快取存放這筆 attId（同時可能存在於訂單附件與OP附件），存回去讓存檔前檢查看到最新狀態
         function oaSyncCachedFile(attId, categoryName, categoryIds) {
             [orderAttachFiles, opAttachFilesCache].forEach(function(arr) {
                 (arr || []).forEach(function(f) { if (String(f.id) === String(attId)) { f.category_name = categoryName; f.category_ids = categoryIds; } });
             });
         }
-        // 類別勾選改變後，就地重繪這一列的料號下拉（不整列重畫，避免標籤面板被收合打斷使用者連續勾選）：
-        // 勾到必備類別就拿掉「共用（全部）」選項逼選料號；取消勾選必備類別則恢復「共用」選項
+        // 類別勾選改變後，就地重繪這一列的「對應料號」鈕（不整列重畫，避免標籤面板被收合打斷連續勾選）：
+        // 勾到「需綁定料號」的標籤就標紅並要求指定料號；取消勾選則恢復可為共用。
         function oaRefreshRowPartSelect($row, ids) {
-            var $sel = $row.find('.oa-part-select');
-            if (!$sel.length) return; // 訂單附件/單一料號情境沒有這顆下拉，略過
+            var $btn = $row.find('.oa-part-btn');
+            if (!$btn.length) return; // 這一列沒有那顆鈕（單一料號又沒連動），略過
             var parts = opAttachPartsList || [];
             var reqIds = (orderAttachCats || []).filter(function(c) { return c.required; }).map(function(c) { return String(c.id); });
             var hasReq = (ids || []).some(function(id) { return reqIds.indexOf(String(id)) !== -1; });
-            var curVal = $sel.val() || '';
-            var needPick = hasReq && !curVal;
-            var optsHtml = (hasReq
-                ? '<option value=""' + (needPick ? ' selected disabled' : '') + '>請選擇料號…</option>'
-                : '<option value="">共用（全部）</option>') +
-                parts.map(function(p) { return '<option value="' + escapeHtml(p) + '">' + escapeHtml(p) + '</option>'; }).join('');
-            $sel.html(optsHtml);
-            if (curVal && parts.indexOf(curVal) !== -1) $sel.val(curVal);
-            $sel.css({'border-color': needPick ? '#DD5138' : '', 'color': needPick ? '#DD5138' : ''});
+            var f = oaFindCachedFile($row.data('id')) || {};
+            var bound = (f.linked_parts && f.linked_parts.length) ? f.linked_parts : (f.linked_part_no ? [f.linked_part_no] : []);
+            var needPick = hasReq && !bound.length;
+            var txt = bound.length
+                ? (parts.length && bound.length >= parts.length ? '全部料號（' + bound.length + '）' : bound.join('、'))
+                : '共用（全部）';
+            $btn.html('<i class="fa fa-cubes"></i> ' + escapeHtml(needPick ? '請選擇料號…' : txt));
+            $btn.css({
+                'border-color': needPick ? '#DD5138' : '#E4D3BC',
+                'color':        needPick ? '#DD5138' : '#8a5a2b',
+                'background':   needPick ? '' : '#FFFDF9'
+            });
             $row.find('.oa-part-required-hint').remove();
-            if (hasReq) $sel.after(' <span class="oa-part-required-hint" style="font-size:9px;color:#DD5138;" title="必備類別附件不可設為共用，須連結單一料號">*必選料號</span>');
+            if (hasReq) $btn.after(' <span class="oa-part-required-hint" style="font-size:9px;color:#DD5138;" title="此標籤設定為「需綁定料號」：不可設為共用，須指定料號（可複選）">*必選料號</span>');
         }
 
         // ── 事件委派（訂單附件／OP附件共用；一次綁定即可）──────────────────
@@ -7597,9 +7706,9 @@ foreach($dCounts as $c) {
         });
         $(document).on('click', '.oa-file-del', function() {
             var $row = $(this).closest('.oa-file-row');
-            var isShared = $row.find('[title*="自動連動"]').length > 0;
+            var isShared = $row.find('.oa-shared-badge').length > 0;
             var confirmMsg = isShared
-                ? '這份附件已自動連動到相同訂單編號的其他料號訂單，刪除會一併移除所有連結，確定要刪除？'
+                ? '這份附件同時掛在相同訂單編號的多張料號訂單上，刪除會把實體檔案與所有料號的連結一起移除。\n\n如果你只是想讓它「不要出現在某些料號」，請按「取消」，改點該列的「對應料號」鈕取消勾選那些料號（檔案會留著）。\n\n確定要整份刪除？'
                 : '確定要刪除這份附件？';
             if (!confirm(confirmMsg)) return;
             var attId = $row.data('id');
@@ -7620,7 +7729,9 @@ foreach($dCounts as $c) {
             orderAttachFiles = files || [];
             var $list = $('#order-attach-list');
             if (!files || !files.length) { $list.html('<span style="color:#aaa;">尚無附件</span>'); return; }
-            $list.html(files.map(function(f) { return oaBuildFileRowHtml(f, orderAttachCats, false); }).join(''));
+            // 這一頁才是使用者看到「連動多料號」的地方，一律傳 true：真的要不要長出鈕由 oaBuildFileRowHtml
+            // 的 canPick 判斷（候選料號在點下去當下才跟後端要，不必先準備 availableParts）
+            $list.html(files.map(function(f) { return oaBuildFileRowHtml(f, orderAttachCats, true); }).join(''));
         }
         // orderId 有值＝編輯模式，合併顯示既有正式附件(order_id)＋本次編輯中新上傳尚未存檔的暫存附件(batch_key)；
         // 新增模式 orderId 為空，只查 batch_key
@@ -8441,6 +8552,7 @@ foreach($dCounts as $c) {
                 opAttachRebuildPartSelect();
             } else {
                 $('#op-attach-part-wrap').hide();
+                opAttachSetParts([]);   // 只剩單一料號：清掉上一批的選擇，避免殘留舊料號
             }
         }
         // 目前預設標籤是否勾到「需綁定料號」的標籤（設定跳窗→本頁使用的附件標籤；未設定過時沿用報價單的必備類別）
@@ -8456,15 +8568,43 @@ foreach($dCounts as $c) {
         function opAttachRebuildPartSelect() {
             var parts = opAttachPartsList || [];
             if (parts.length <= 1) return;
-            var $sel = $('#op-attach-part');
-            var curVal = $sel.val() || '';
+            // 目前選的料號（hidden 存 JSON 陣列）；候選料號換過之後，已不存在的要自動拿掉，
+            // 否則會拿著上一張報價單的料號去建單（那個料號在這批根本沒有訂單，附件會無聲消失）
+            var cur = opAttachGetParts().filter(function(p) { return parts.indexOf(p) !== -1; });
+            opAttachSetParts(cur);
+        }
+        function opAttachGetParts() {
+            var raw = $('#op-attach-part').val() || '';
+            if (!raw) return [];
+            try { var j = JSON.parse(raw); return Array.isArray(j) ? j : []; } catch (e) { return raw ? [raw] : []; }
+        }
+        function opAttachSetParts(sel) {
+            sel = sel || [];
+            $('#op-attach-part').val(sel.length ? JSON.stringify(sel) : '');
+            var parts = opAttachPartsList || [];
             var hasReq = opAttachHasReqCatChecked();
-            var optsHtml = (hasReq
-                ? '<option value="" disabled' + (curVal ? '' : ' selected') + '>請選擇料號…</option>'
-                : '<option value="">共用（全部）</option>') +
-                parts.map(function(p) { return '<option value="' + escapeHtml(p) + '">' + escapeHtml(p) + '</option>'; }).join('');
-            $sel.html(optsHtml);
-            if (curVal && parts.indexOf(curVal) !== -1) $sel.val(curVal);
+            var needPick = hasReq && !sel.length;
+            var txt = sel.length
+                ? (sel.length >= parts.length ? '全部料號（' + sel.length + '）' : sel.join('、'))
+                : (needPick ? '請選擇料號…' : '共用（全部）');
+            $('#op-attach-part-txt').text(txt);
+            $('#op-attach-part-btn').css({
+                'border-color': needPick ? '#DD5138' : '#E4D3BC',
+                'color':        needPick ? '#DD5138' : '#8a5a2b',
+                'background':   needPick ? '' : '#FFFDF9'
+            });
+        }
+        // 上傳前先挑好這批檔案要對應哪些料號（可複選，含「全部料號」一鍵）
+        function opAttachPickParts() {
+            oaOpenPartPick({
+                name: '接下來上傳的附件',
+                parts: opAttachPartsList || [],
+                selected: opAttachGetParts(),
+                needPart: opAttachHasReqCatChecked(),
+                hint: '這批要轉成訂單的料號共 ' + (opAttachPartsList || []).length + ' 個。選好之後上傳的附件會對應到這些料號；' +
+                      '客戶把好幾個料號的資料放在同一份檔案時，就一次把那幾個料號都勾起來。',
+                onOk: function(sel, done) { opAttachSetParts(sel); done(null); }
+            });
         }
         $(document).on('change', '#op-attach-cats input[type="checkbox"]', opAttachRebuildPartSelect);
         // 「需綁定料號」的標籤在批次真的有多種料號時不可設為共用；
@@ -8474,7 +8614,8 @@ foreach($dCounts as $c) {
             var reqIds = (orderAttachCats || []).filter(function(c) { return c.required; }).map(function(c) { return String(c.id); });
             if (!reqIds.length) return false;
             return (files || []).some(function(f) {
-                if (f.linked_part_no) return false;
+                var bound = (f.linked_parts && f.linked_parts.length) ? f.linked_parts : (f.linked_part_no ? [f.linked_part_no] : []);
+                if (bound.length) return false;
                 var catIds = String(f.category_ids || '').split(',').filter(Boolean);
                 return catIds.some(function(id) { return reqIds.indexOf(id) !== -1; });
             });
@@ -8496,9 +8637,9 @@ foreach($dCounts as $c) {
             if (!fileList || !fileList.length) return;
             var presetCats = [];
             $('#op-attach-cats input:checked').each(function() { presetCats.push($(this).val()); });
-            var linkPart = $('#op-attach-part-wrap').is(':visible') ? $('#op-attach-part').val() : '';
-            if ($('#op-attach-part-wrap').is(':visible') && opAttachHasReqCatChecked() && !linkPart) {
-                showOrderAlert('預設標籤含「需綁定料號」的標籤，這批有多種料號，請先在「對應料號」選好要連結的料號再上傳。');
+            var linkParts = $('#op-attach-part-wrap').is(':visible') ? opAttachGetParts() : [];
+            if ($('#op-attach-part-wrap').is(':visible') && opAttachHasReqCatChecked() && !linkParts.length) {
+                showOrderAlert('預設標籤含「需綁定料號」的標籤，這批有多種料號，請先按「對應料號」選好要連結的料號（可複選）再上傳。');
                 return;
             }
             var tasks = [];
@@ -8507,7 +8648,7 @@ foreach($dCounts as $c) {
                 fd.append('action', 'upload_file');
                 fd.append('order_id', 0);
                 fd.append('batch_key', opAttachBatchKey);
-                fd.append('linked_part_no', linkPart || '');
+                fd.append('linked_part_nos', linkParts.length ? JSON.stringify(linkParts) : '');
                 fd.append('category_ids', presetCats.join(','));
                 fd.append('file', file);
                 tasks.push($.ajax({ url: ORDER_ATTACH_API, type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' }));
@@ -9556,6 +9697,34 @@ foreach($dCounts as $c) {
             <span id="oc-save-msg" style="float:left;font-size:12px;color:#c0392b;line-height:32px;"></span>
             <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
             <button type="button" class="btn btn-warning" id="oc-save-btn" onclick="submitOrderChange()"><i class="fa fa-check"></i> 送出變更</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 料號挑選跳窗（共用：OP轉訂單上傳、附件列改綁定、附件連動整理；禁止各處自刻）-->
+    <div class="modal fade" id="oaPartPickModal" tabindex="-1" role="dialog">
+      <div class="modal-dialog" style="width:92%;max-width:620px;" role="document">
+        <div class="modal-content">
+          <div class="modal-header" style="background:#8a5a2b;color:#fff;">
+            <button type="button" class="close" data-dismiss="modal" style="color:#fff;opacity:.9;"><span>&times;</span></button>
+            <h4 class="modal-title"><i class="fa fa-cubes"></i> 這份附件對應哪些料號</h4>
+          </div>
+          <div class="modal-body" style="padding:14px;">
+            <div id="oapp-file" style="font-size:12px;color:#5d4037;font-weight:600;margin-bottom:6px;"></div>
+            <div id="oapp-hint" style="font-size:11px;color:#888;margin-bottom:8px;line-height:1.6;"></div>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-xs btn-warning" onclick="oappSelectAll(true)"><i class="fa fa-check-square-o"></i> 全部料號</button>
+              <button type="button" class="btn btn-xs btn-default" onclick="oappSelectAll(false)"><i class="fa fa-square-o"></i> 全部取消</button>
+              <input type="text" id="oapp-kw" class="form-control input-sm" placeholder="篩選料號…" style="width:170px;height:26px;" oninput="oappFilter()">
+              <span id="oapp-count" style="font-size:11px;color:#888;margin-left:auto;"></span>
+            </div>
+            <div id="oapp-list" style="border:1px solid #ddd;border-radius:4px;padding:8px;background:#fafafa;max-height:300px;overflow-y:auto;font-size:12px;"></div>
+            <div id="oapp-err" style="font-size:11px;color:#c0392b;margin-top:6px;display:none;"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-primary" onclick="oappConfirm()"><i class="fa fa-check"></i> 確定</button>
           </div>
         </div>
       </div>
