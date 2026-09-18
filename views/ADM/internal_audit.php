@@ -307,6 +307,10 @@ $roleLabel = ia_role_label($perms);
             <!-- 這一年做到哪了（2026-09-17 使用者要求）：✔＝有內稽資料且報告完整產出、
                  沙漏＝有建立但還沒完成、完全沒建立＝不顯示任何圖示 -->
             <span id="yearStat" style="font-size:12px;margin-left:2px;white-space:nowrap;"></span>
+<?php if ($perms['canAdmin']): ?>
+            <!-- 年度選單只列「有資料的年度＋今年明年」，要補更舊的資料得先把年度加進來（2026-09-17 使用者要求） -->
+            <span class="ia-op" id="btnYearAdd" title="補一個舊年度進選單（只有內稽管理員可以）"><i class="fa fa-plus"></i> 補舊年度</span>
+<?php endif; ?>
             <button id="btnReload"><i class="fa fa-refresh"></i> 重新整理</button>
             <?php if ($perms['canAdmin']): ?>
             <button id="btnSetting"><i class="fa fa-cog"></i> 設定</button>
@@ -443,10 +447,14 @@ $roleLabel = ia_role_label($perms);
                 <span id="reportStatusBox" style="font-size:13px;color:#5b3a1e;"></span>
                 <?php if ($perms['canAdmin']): ?>
                 <button id="btnReportSave" class="btn-warm"><i class="fa fa-save"></i> 儲存</button>
-                <button id="btnReportApprove"><i class="fa fa-check"></i> 核准</button>
+                <button id="btnReportSubmit"><i class="fa fa-paper-plane"></i> 送出</button>
+                <button id="btnReportNotifySet"><i class="fa fa-bell"></i> 通知對象設定</button>
                 <button id="btnReportDelete" class="btn-danger"><i class="fa fa-trash"></i> 刪除報告表</button>
                 <?php endif; ?>
                 <button id="btnReportPrint"><i class="fa fa-print"></i> 列印</button>
+                <label style="font-size:12px;color:#6b5535;font-weight:normal;margin:0 0 0 auto;cursor:pointer;">
+                    <input type="checkbox" id="rptShowAll" data-eg-skip style="vertical-align:-1px;">
+                    顯示全部受稽單位（預設只列有缺失的）</label>
             </div>
             <div class="ia-hint">缺點數與缺點記錄<b>全部由該年度的不符合通知單自動算出</b>，不用手打；只有「預定完成改善時間」與下方補充文字可以人工調整。</div>
             <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
@@ -462,16 +470,8 @@ $roleLabel = ia_role_label($perms);
                 <label style="font-size:13px;color:#6b5535;">補充文字（列印時接在缺點記錄後面）</label>
                 <textarea id="reportNote" style="width:100%;min-height:70px;border:1px solid #D8BE93;border-radius:4px;padding:6px 8px;font-size:13px;"></textarea>
             </div>
-<?php if ($perms['canAdmin']): ?>
-            <!-- 製表人可事後修改（2026-09-14） -->
-            <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <label style="font-size:13px;color:#6b5535;margin:0;">製表人</label>
-                <select id="reportMaker" data-eg-filter="輸入姓名篩選…" style="min-width:240px;border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;font-size:13px;"></select>
-                <label style="font-size:13px;color:#6b5535;margin:0;">製表日期</label>
-                <input type="date" id="reportMakerDate" style="border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;font-size:13px;">
-                <span style="font-size:12px;color:#8a6d45;">改完按上方「儲存」。</span>
-            </div>
-<?php endif; ?>
+            <!-- 2026-09-17 使用者拍板：稽核報告表**不要核准、也不要製表人**（紙本本來就沒有這兩格），
+                 改成一顆「送出」，送出後自動通知管理員設定好的那些部門的那些職位。 -->
         </div>
 <?php endif; ?>
 
@@ -504,7 +504,10 @@ $roleLabel = ia_role_label($perms);
                 </ul>
                 判「不合格」的列按「開不符合單」、績效「沒達成」的列按「開矯正單」；表格上方會統計還有幾件沒開單，下方「<b>一鍵開立</b>」可一次全部開完。</li>
             <li><b>④不符合通知單（2-GM-06-07）</b>：分四段填，各段只有該角色能填（見下）。系統會通知受稽單位主管，期限前與逾期會自動再提醒。</li>
-            <li><b>⑤稽核報告表（2-GM-06-08）</b>：缺點數與缺點記錄自動彙總，只要調整「預定完成改善時間」與補充文字，然後核准、列印。</li>
+            <li><b>⑤稽核報告表（2-GM-06-08）</b>：缺點數與缺點記錄自動彙總，只要調整「預定完成改善時間」與補充文字，然後<b>送出</b>、列印。
+                <b>預設只列「有缺失」的單位</b>（每個單位都列一遍的話絕大多數是空白列，反而看不出哪裡有問題）——要看全部請勾右上角「顯示全部受稽單位」，畫面與列印會一起跟著變。
+                本表<b>沒有核准、也沒有製表人</b>（紙本本來就沒有這兩格）；按<b>送出</b>後會自動通知「<b>通知對象設定</b>」裡登記的那些<b>部門 × 職位</b>的人
+                （可勾含子部門；沒設定也送得出去，只是不會發通知）。</li>
         </ul>
 
         <h4>不符合通知單的四段分工</h4>
@@ -537,7 +540,9 @@ $roleLabel = ia_role_label($perms);
             <li><b>年度選單會顯示這一年做到哪了</b>：<b>✔ 已完成</b>＝這一年有內稽資料<b>而且報告完整產出</b>
                 （每一張稽核報告表都已核准，且沒有未結案的不符合通知單）；<b>⏳ 進行中</b>＝有建立但還沒完成，
                 旁邊會直接寫出還差什麼（例「還沒有稽核報告表」「還有 2 張不符合通知單未結案」）；
-                <b>完全沒建立的年度不顯示任何圖示</b>。</li>
+                <b>完全沒建立的年度不顯示任何圖示</b>。
+                年度選單<b>只列「已經有資料的年度」與今年、明年</b>（不再一路往前補十年的空年度）；要補更舊的資料，
+                請<b>內稽管理員</b>按年度旁的「<b>補舊年度</b>」把那一年加進來（該年度一旦有資料就不能再從選單移除）。</li>
             <li><b>受稽時間可以自動排</b>：「時間」欄的表頭填<b>開始時間</b>（結束時間可留空）後按<b>「自動排」</b>，就依<b>間隔</b>（預設 30 分，可改）往下排每一列，
                 而且<b>會自動跳過午休 12:00~13:00</b>（算出來落在午休內的一律改成 13:00 再往後排）。
                 之後<b>手動改中間任何一列的時間，後面幾列會自動順延</b>（前面的不動）；想逐列自己填就把表頭的「改一列就自動順延後面」取消勾選。
@@ -879,6 +884,25 @@ $roleLabel = ia_role_label($perms);
         <button id="btnCheckSave">儲存</button>
         <button id="btnCheckDone" class="btn-warm">結案</button>
     </div>
+</div></div>
+
+<!-- ============================ 稽核報告表：通知對象設定 ============================ -->
+<div class="ia-mask" id="rptNotifyMask"><div class="ia-modal">
+    <div class="ia-mhead"><h4><i class="fa fa-bell"></i> 稽核報告表送出後要通知誰</h4><span class="x" data-close>&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">一條規則是「<b>部門 × 職位</b>」：兩個都選＝該部門掛這個職位的人；
+            只選部門＝該部門全部的人；只選職位＝全公司掛這個職位的人。<b>兩個都不選的那一列會被忽略</b>（否則等於全公司廣播）。
+            <br>勾「含子部門」時，該部門底下的組室也一起通知（組織是樹狀的，只比單一部門會漏掉底下的組）。
+            <br>通知一律送給<b>目前在職</b>的人。</div>
+        <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
+            <th style="width:210px;">部門</th><th style="width:70px;">含子部門</th><th style="width:210px;">職位</th><th style="width:44px;"></th>
+        </tr></thead><tbody id="rptNotifyBody"></tbody></table></div>
+        <button id="btnRptNotifyAdd" style="margin-top:6px;height:26px;font-size:12px;border:1px solid #D8BE93;border-radius:4px;background:#fff;cursor:pointer;"><i class="fa fa-plus"></i> 增加一條</button>
+        <div style="margin-top:10px;font-size:13px;color:#5b3a1e;">
+            <b>目前會通知到</b>（<span id="rptNotifyCount">0</span> 人）：<span id="rptNotifyPreview" style="color:#8a6d45;"></span>
+        </div>
+    </div>
+    <div class="ia-mfoot"><button data-close>取消</button><button id="btnRptNotifySave" class="btn-warm">儲存設定</button></div>
 </div></div>
 
 <!-- ============================ 一鍵開立不符合通知單（批次） ============================ -->
@@ -1676,10 +1700,7 @@ $(document).on('change', '#planMakerDate', function(){
         $('#planMaker').html(makerOptions(cur, (PLAN && PLAN.maker_name) || ''));
     });
 });
-$(document).on('change', '#reportMakerDate', function(){
-    var cur = $('#reportMaker').val();
-    peopleAsof($(this).val(), function(){ $('#reportMaker').html(makerOptions(cur, '')); });
-});
+
 function planReadonly(){
     return !(<?= $perms['canAdmin'] ? 'true' : 'false' ?>) || (PLAN && PLAN.status==='approved' && !<?= $perms['isAdmin'] ? 'true' : 'false' ?>);
 }
@@ -3369,26 +3390,39 @@ function delNcRow(id, no){
 
 /* ============================ 稽核報告表 2-GM-06-08 ============================ */
 var REPORT = null;
+/* 稽核報告表要列哪些單位（2026-09-17 使用者要求）：
+   **預設只列「有缺失」的單位**——紙本上每個單位都列一遍，絕大多數是空白列，
+   反而看不出來這一年到底哪裡有問題。勾右上角「顯示全部受稽單位」才列全部。
+   畫面與列印走同一個判斷，不會一邊有一邊沒有。 */
+function reportRows(){
+    var all = (REPORT && REPORT.rows) || [];
+    if ($('#rptShowAll').is(':checked')) return all;
+    return all.filter(function(d){
+        return ((+d.major||0) + (+d.minor||0) + (+d.observe||0)) > 0;
+    });
+}
+$(document).on('change', '#rptShowAll', function(){ if (REPORT) loadReport(); });
+
 function loadReport(){
     $.getJSON(API, {action:'report_get', year:YEAR}, function(res){
         if (!res.ok) return;
         REPORT = res;
         var r = res.report;
-        var box = r ? ('狀態：<span class="st st-'+(r.status==='approved'?'done':'draft')+'">'
-                      + (r.status==='approved'?'已核准':'草稿')+'</span>'
-                      + (r.maker_name ? '　製表：'+esc(r.maker_name)+' '+dispDate(r.maker_date) : '')
-                      + (r.approver_name ? '　核准：'+esc(r.approver_name)+' '+dispDate(r.approver_date) : ''))
+        // 2026-09-17 起走「送出」不走核准；舊資料若是 approved 也一律顯示為已送出
+        var done = r && (r.status==='submitted' || r.status==='approved');
+        var sName = r ? (r.submitted_by_name || r.approver_name || '') : '';
+        var sDate = r ? (r.submit_date || r.approver_date || '') : '';
+        var box = r ? ('狀態：<span class="st st-'+(done?'done':'draft')+'">'+(done?'已送出':'草稿')+'</span>'
+                      + (done && sName ? '　送出：'+esc(sName)+' '+dispDate(sDate) : ''))
                     : '<span style="color:#8a6d45;">尚未建立（按「儲存」即建立）</span>';
         $('#reportStatusBox').html(box);
         $('#reportNote').val(r ? (r.extra_note||'') : '');
-        // 製表人清單以**製表日期**當時的在職狀態與職稱為準（ai-rules/22）
-        peopleAsof(r ? r.maker_date : META.today, function(){
-            $('#reportMaker').html(makerOptions(r ? r.maker_id : makerDefaultSelf(), r ? r.maker_name : META.me.name));
-        });
-        $('#reportMakerDate').val(r ? inputDate(r.maker_date) : META.today);
-        var rows = res.rows||[], admin = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
+        var rows = reportRows(), admin = <?= $perms['canAdmin'] ? 'true' : 'false' ?>;
         if (!rows.length) {
-            $('#reportBody').html('<tr><td colspan="9" class="ia-empty">'+YEAR+' 年度還沒有稽核紀錄</td></tr>');
+            var allN = (res.rows||[]).length;
+            $('#reportBody').html('<tr><td colspan="9" class="ia-empty">'
+                + (allN ? ('本年度 '+allN+' 個受稽單位都沒有缺失（勾右上角「顯示全部受稽單位」可以看全部）')
+                        : (YEAR+' 年度還沒有稽核紀錄')) + '</td></tr>');
         } else {
             var h = '';
             rows.forEach(function(d){
@@ -3424,25 +3458,98 @@ $('#btnReportSave').on('click', function(){
         return {dept_name:$(this).data('dept'), improve_due:$(this).val()};
     }).get();
     $.post(API, {action:'report_save', year:YEAR, extra_note:$('#reportNote').val(),
-                 maker_id:($('#reportMaker').val()||''), maker_date:($('#reportMakerDate').val()||''),
                  dues:JSON.stringify(dues)}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         alert('已儲存'); loadReport();
     }, 'json');
 });
-$('#btnReportApprove').on('click', function(){
-    askDate('核准稽核報告表', '核准日期會印在表格下方核准欄。', function(d){
-        $.post(API, {action:'report_approve', year:YEAR, biz_date:d}, function(res){
-            if (!res.ok) { alert(res.error||'失敗'); return; }
-            loadReport();
+/* 送出（取代原本的核准）：送出後自動通知管理員設定好的那些部門的那些職位。
+   沒設定通知對象也送得出去，只是回報通知 0 人——不要因為沒設定就把流程擋住。 */
+$('#btnReportSubmit').on('click', function(){
+    if (!REPORT || !REPORT.report) { alert(YEAR+' 年度還沒有建立稽核報告表，請先按「儲存」'); return; }
+    askDate('送出稽核報告表', '這個日期是報告表上的日期（業務日期），送出後會通知設定好的人員。', function(d){
+        $.post(API, {action:'report_submit', year:YEAR, biz_date:d}, function(res){
+            if (!res.ok) { alert(res.error||'送出失敗'); return; }
+            alert('已送出（報告日期 '+dispDate(res.submit_date)+'）\n'
+                + (res.notified ? ('已通知 '+res.notified+' 人：'+(res.users||[]).join('、'))
+                                : '目前沒有設定通知對象，所以沒有發出通知。\n可按工具列的「通知對象設定」設定要通知哪些部門的哪些職位。'));
+            loadMeta(function(){ loadReport(); });      // 年度完成狀態要跟著更新
         }, 'json');
     });
+});
+
+/* ---------- 通知對象設定（部門 × 職位） ---------- */
+var RPT_RULES = [];
+function rptNotifyRender(){
+    var h = '';
+    RPT_RULES.forEach(function(r, i){
+        var dh = '<option value="0">（不限部門）</option>';
+        (META.depts||[]).forEach(function(d){
+            dh += '<option value="'+d.id+'"'+(+r.dept_id===+d.id?' selected':'')+'>'+esc(d.name)+'</option>';
+        });
+        var ph = '<option value="0">（不限職位）</option>';
+        (META.positions||[]).forEach(function(p){
+            ph += '<option value="'+p.id+'"'+(+r.position_id===+p.id?' selected':'')+'>'+esc(p.name)+'</option>';
+        });
+        h += '<tr data-i="'+i+'">'
+          + '<td><select class="rptR" data-f="dept_id" data-eg-filter="輸入部門名稱篩選…" style="width:100%;">'+dh+'</select></td>'
+          + '<td><input type="checkbox" class="rptR" data-f="with_sub" data-eg-skip'+(+r.with_sub?' checked':'')+'></td>'
+          + '<td><select class="rptR" data-f="position_id" data-eg-filter="輸入職位名稱篩選…" style="width:100%;">'+ph+'</select></td>'
+          + '<td><span class="ia-op danger" onclick="rptNotifyDel('+i+')"><i class="fa fa-times"></i></span></td></tr>';
+    });
+    $('#rptNotifyBody').html(h || '<tr><td colspan="4" class="ia-empty">還沒有設定，送出報告表時不會通知任何人</td></tr>');
+    rptNotifyPreview();
+}
+function rptNotifyDel(i){ RPT_RULES.splice(i,1); rptNotifyRender(); }
+function rptNotifyPreview(){
+    $.post(API, {action:'report_notify_preview', rules:JSON.stringify(RPT_RULES)}, function(res){
+        var list = (res && res.preview) || [];
+        $('#rptNotifyCount').text(list.length);
+        $('#rptNotifyPreview').text(list.length
+            ? list.map(function(u){ return (u.dept_name?u.dept_name+' ':'')+(u.position_name?u.position_name+' ':'')+u.name; }).join('、')
+            : '（沒有符合的人員）');
+    }, 'json');
+}
+$(document).on('change', '.rptR', function(){
+    var i = +$(this).closest('tr').data('i'), f = $(this).data('f');
+    if (!RPT_RULES[i]) return;
+    RPT_RULES[i][f] = (f==='with_sub') ? ($(this).is(':checked')?1:0) : +$(this).val();
+    rptNotifyPreview();
+});
+$('#btnRptNotifyAdd').on('click', function(){ RPT_RULES.push({dept_id:0, position_id:0, with_sub:0}); rptNotifyRender(); });
+$('#btnReportNotifySet').on('click', function(){
+    $.getJSON(API, {action:'report_notify_get'}, function(res){
+        if (!res.ok) { alert(res.error||'載入失敗'); return; }
+        RPT_RULES = (res.rules||[]).map(function(r){ return {dept_id:+r.dept_id, position_id:+r.position_id, with_sub:+r.with_sub?1:0}; });
+        rptNotifyRender();
+        openMask('rptNotifyMask');
+    });
+});
+$('#btnRptNotifySave').on('click', function(){
+    $.post(API, {action:'report_notify_save', rules:JSON.stringify(RPT_RULES)}, function(res){
+        if (!res.ok) { alert(res.error||'儲存失敗'); return; }
+        alert('已儲存：共 '+res.count+' 條規則，目前會通知 '+((res.preview||[]).length)+' 人');
+        closeMask('rptNotifyMask');
+    }, 'json');
+});
+
+/* ---------- 管理員補舊年度 ---------- */
+$(document).on('click', '#btnYearAdd', function(){
+    var y = prompt('要補哪一個年度的內稽資料？（請輸入西元年，例 2023）\n'
+                 + '年度選單只會列出「已經有資料的年度」與今年、明年，補進來之後才選得到。');
+    if (y === null) return;
+    y = parseInt(String(y).trim(), 10);
+    if (!(y >= 2000 && y <= (+String(META.today).substr(0,4)) + 1)) { alert('年度不正確'); return; }
+    $.post(API, {action:'year_add', year:y}, function(res){
+        if (!res.ok) { alert(res.error||'失敗'); return; }
+        loadMeta(function(){ $('#yearSel').val(y).trigger('change'); });
+    }, 'json');
 });
 /* 刪除稽核報告表（管理員限定）。表格內容本來就是由不符合通知單即時算出來的，
    刪掉的只有「補充文字＋製表／核准」這張表本身，稽核資料一筆都不會少。 */
 $('#btnReportDelete').on('click', function(){
     if (!REPORT) { alert(YEAR+' 年度還沒有建立稽核報告表（按「儲存」才會建立）'); return; }
-    if (!confirm('確定刪除 '+YEAR+' 年度稽核報告表？\n表格上的缺點數是即時算出來的不受影響，刪掉的是補充文字與製表／核准紀錄。')) return;
+    if (!confirm('確定刪除 '+YEAR+' 年度稽核報告表？\n表格上的缺點數是即時算出來的不受影響，刪掉的是補充文字與送出紀錄。')) return;
     $.post(API, {action:'report_delete', year:YEAR}, function(res){
         if (!res.ok) { alert(res.error||'刪除失敗'); return; }
         loadReport();
@@ -3891,7 +3998,8 @@ $(function(){
 
 function iaPrintWindow(title, bodyHtml, extraCss, docNo, landscape){
     var asCss = String(docNo||'').replace(/['\\]/g,'');
-    var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:12mm 10mm 16mm;'
+    // 版面留白（2026-09-17 使用者回報「上方與左右都沒留空，很難看」）：上 18mm／左右 15mm／下 16mm
+    var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';margin:18mm 15mm 16mm;'
             + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
             + '}'
             + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
@@ -4282,7 +4390,7 @@ $('#btnReportPrint').on('click', function(){
            + '<th rowspan="2" style="width:110px;">預定完成改善時間</th></tr>'
            + '<tr><th style="width:34px;">主</th><th style="width:34px;">次</th><th style="width:34px;">觀</th>'
            + '<th style="width:82px;">日期</th><th style="width:56px;">時間</th></tr></thead><tbody>';
-        var rows = REPORT.rows||[];
+        var rows = reportRows();
         rows.forEach(function(d){
             h += '<tr><td>'+esc(d.dept_name)+'</td>'
               + '<td>'+(d.major||'')+'</td><td>'+(d.minor||'')+'</td><td>'+(d.observe||'')+'</td>'

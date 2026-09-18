@@ -185,6 +185,11 @@ case 'meta': {
         'year_status' => ia_year_status($db),
         'this_year' => $cy,
         'today'     => $today,
+        // 職位清單（稽核報告表的通知對象設定＝部門 × 職位）
+        'positions' => (function () use ($db) {
+            try { return $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC); }
+            catch (Throwable $e) { return []; }
+        })(),
     ]);
 }
 
@@ -1595,6 +1600,63 @@ case 'report_approve': {
     $db->prepare("UPDATE ia_report SET status='approved', approver_id=?, approver_name=?, approver_date=?, updated_at=NOW()
                    WHERE report_id=?")->execute([$ap['id'] ?: null, $ap['name'] ?: null, $d, $rid]);
     jout(['saved' => true, 'approver' => $ap['name']]);
+}
+
+/* 稽核報告表「送出」（2026-09-17 使用者要求取代核准）：
+   送出後自動通知「管理員設定好的那些部門的那些職位」的人。
+   沒設定通知對象也照樣送得出去，只是回報通知 0 人——不要因為沒設定就把流程擋住。 */
+case 'report_submit': {
+    iaReqAdmin($perms);
+    $year = (int)($_POST['year'] ?? 0);
+    $d = iaDate($_POST['biz_date'] ?? '') ?: $today;
+    try {
+        $r = ia_report_submit($db, $year, $d, $uid, $uname);
+    } catch (Throwable $e) { jerr($e->getMessage()); }
+    jout($r);
+}
+
+/* 通知對象設定：一條是「部門 × 職位」，兩個都空的列後端一律丟掉（否則等於全公司廣播） */
+case 'report_notify_get': {
+    iaReqView($perms);
+    $rules = ia_report_notify_rules($db);
+    jout(['rules' => $rules, 'preview' => array_values(ia_report_notify_users($db, $rules))]);
+}
+case 'report_notify_save': {
+    iaReqAdmin($perms);
+    $rules = json_decode((string)($_POST['rules'] ?? '[]'), true);
+    if (!is_array($rules)) jerr('格式錯誤');
+    $n = ia_report_notify_save($db, $rules, $uname);
+    jout(['saved' => true, 'count' => $n, 'preview' => array_values(ia_report_notify_users($db))]);
+}
+/* 通知對象的即時試算（還沒存就看得到會通知到誰；設定跳窗每改一次就重算一次） */
+case 'report_notify_preview': {
+    iaReqView($perms);
+    $rules = json_decode((string)($_GET['rules'] ?? $_POST['rules'] ?? '[]'), true);
+    if (!is_array($rules)) $rules = [];
+    jout(['preview' => array_values(ia_report_notify_users($db, $rules))]);
+}
+
+/* 管理員補舊年度：年度選單只列「有資料的年度＋今年明年」，要補更舊的資料得先把年度加進來 */
+case 'year_add': {
+    iaReqAdmin($perms);
+    $y = (int)($_POST['year'] ?? 0);
+    try { $r = ia_extra_year_add($db, $y, $uname); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout(['years' => ia_year_options($db), 'added' => $r['added']]);
+}
+case 'year_del': {
+    iaReqAdmin($perms);
+    $y = (int)($_POST['year'] ?? 0);
+    // 已經有資料的年度不給移除（移掉會變成有資料卻選不到）
+    $st = $db->prepare("SELECT (SELECT COUNT(*) FROM ia_plan WHERE year=? AND COALESCE(is_deleted,0)=0)
+                             + (SELECT COUNT(*) FROM ia_case WHERE year=? AND COALESCE(is_deleted,0)=0)
+                             + (SELECT COUNT(*) FROM ia_check WHERE year=? AND COALESCE(is_deleted,0)=0)
+                             + (SELECT COUNT(*) FROM ia_nc WHERE year=? AND COALESCE(is_deleted,0)=0)
+                             + (SELECT COUNT(*) FROM ia_report WHERE year=? AND COALESCE(is_deleted,0)=0)");
+    $st->execute([$y, $y, $y, $y, $y]);
+    if ((int)$st->fetchColumn() > 0) jerr('這個年度已經有內稽資料，不可以從選單移除');
+    ia_extra_year_del($db, $y, $uname);
+    jout(['years' => ia_year_options($db)]);
 }
 
 /* ============================ 會議紀錄串接（不重複建立，走既有模組） ============================ */

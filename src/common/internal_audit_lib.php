@@ -74,6 +74,8 @@ const IA_SETTING_KEYS  = [
     'ia_meeting_end_subject',
     'ia_case_remark_tpl',
     'ia_auto_sign',
+    'ia_report_notify',   // 稽核報告表送出後要通知誰：[{dept_id, position_id}] JSON（管理員設定）
+    'ia_extra_years',     // 管理員登記「要補資料的舊年度」JSON 陣列（選單只列有資料的年度＋今年明年＋這裡登記的）
 ];
 
 /**
@@ -449,6 +451,11 @@ function ia_ensure_schema(PDO $db): void
             ['ia_case',      'leader_position_id',  "INT NULL COMMENT '稽核組長的職稱'"],
             ['ia_check',     'auditor_dept_id',     "INT NULL COMMENT '稽核人的部門'"],
             ['ia_check',     'auditor_position_id', "INT NULL COMMENT '稽核人的職稱'"],
+            // 稽核報告表改成「送出通知」流程（2026-09-17 使用者要求：不要核准、不要製表人）
+            ['ia_report',    'submit_date',         "DATE NULL COMMENT '送出的業務日期'"],
+            ['ia_report',    'submitted_at',        "DATETIME NULL COMMENT '按下送出的精確時間（與業務日期分開存，ai-rules/21）'"],
+            ['ia_report',    'submitted_by',        "INT NULL COMMENT '送出者 user.id'"],
+            ['ia_report',    'submitted_by_name',   "VARCHAR(60) NULL COMMENT '送出者姓名（顯示用快取）'"],
         ] as $c) {
             try {
                 $has = $db->query("SHOW COLUMNS FROM `{$c[0]}` LIKE '{$c[1]}'")->fetchAll();
@@ -2483,6 +2490,141 @@ function ia_resolve_post(PDO $db, string $key, ?string $kind = null, string $aso
     return null;
 }
 
+/* ============================ 稽核報告表：送出與通知（2026-09-17 使用者要求） ============================
+ * 使用者拍板：稽核報告表**不要核准、也不要製表人**，改成一顆「送出」；
+ * 送出後自動通知「管理員設定好的那些部門的那些職位」的人。
+ */
+
+/** 通知對象設定：[['dept_id'=>int,'position_id'=>int,'with_sub'=>0|1], ...] */
+function ia_report_notify_rules(PDO $db): array
+{
+    $raw = (string)(ia_settings($db)['ia_report_notify'] ?? '');
+    $arr = $raw === '' ? [] : json_decode($raw, true);
+    if (!is_array($arr)) return [];
+    $out = [];
+    foreach ($arr as $r) {
+        if (!is_array($r)) continue;
+        $d = (int)($r['dept_id'] ?? 0); $p = (int)($r['position_id'] ?? 0);
+        if (!$d && !$p) continue;                      // 兩個都空＝等於全公司，不允許（會變成全站廣播）
+        $out[] = ['dept_id' => $d, 'position_id' => $p, 'with_sub' => !empty($r['with_sub']) ? 1 : 0];
+    }
+    return $out;
+}
+
+/** 存通知對象設定（唯一寫入點；兩個都空的列一律丟掉，避免誤設成全公司廣播） */
+function ia_report_notify_save(PDO $db, array $rules, string $byName): int
+{
+    $clean = [];
+    foreach ($rules as $r) {
+        $d = (int)($r['dept_id'] ?? 0); $p = (int)($r['position_id'] ?? 0);
+        if (!$d && !$p) continue;
+        $key = $d . ':' . $p;
+        $clean[$key] = ['dept_id' => $d, 'position_id' => $p, 'with_sub' => !empty($r['with_sub']) ? 1 : 0];
+    }
+    $clean = array_values($clean);
+    ia_setting_save($db, 'ia_report_notify', json_encode($clean, JSON_UNESCAPED_UNICODE), $byName);
+    return count($clean);
+}
+
+/**
+ * 依設定解析出「這次要通知誰」。
+ * 規則：每一條是「部門 × 職位」——
+ *   ・部門與職位都有＝該部門裡掛這個職位的人
+ *   ・只有部門＝該部門全部的人
+ *   ・只有職位＝全公司掛這個職位的人
+ *   ・with_sub=1 時部門連同**子部門**一起算（組織是樹狀的，只比單一 id 會漏掉底下的組）
+ * 一律只通知**目前在職**的人（通知是「現在要請他看」，不是歷史簽章，所以不回推職務）。
+ * @return array [user_id => ['name','dept_name','position_name']]
+ */
+function ia_report_notify_users(PDO $db, array $rules = null): array
+{
+    $rules = $rules === null ? ia_report_notify_rules($db) : $rules;
+    if (!$rules) return [];
+    // 子部門展開（含自己）
+    $children = [];
+    try {
+        foreach ($db->query("SELECT id, parent_id FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) {
+            $children[(int)$d['parent_id']][] = (int)$d['id'];
+        }
+    } catch (Throwable $e) {}
+    $expand = function (int $id) use (&$expand, $children): array {
+        $out = [$id];
+        foreach ($children[$id] ?? [] as $c) $out = array_merge($out, $expand($c));
+        return $out;
+    };
+
+    $out = [];
+    foreach ($rules as $r) {
+        $depts = $r['dept_id'] ? ($r['with_sub'] ? $expand((int)$r['dept_id']) : [(int)$r['dept_id']]) : [];
+        $sql = "SELECT u.id, u.user_cname, d.name AS dept_name, p.name AS position_name
+                  FROM user_department_position_map m
+                  JOIN `user` u ON u.id = m.user_id
+                  LEFT JOIN department d ON d.id = m.department_id
+                  LEFT JOIN position p ON p.id = m.position_id
+                 WHERE u.state = 1";
+        $args = [];
+        if ($depts) {
+            $sql .= " AND m.department_id IN (" . implode(',', array_fill(0, count($depts), '?')) . ")";
+            $args = array_merge($args, $depts);
+        }
+        if ($r['position_id']) { $sql .= " AND m.position_id = ?"; $args[] = (int)$r['position_id']; }
+        try {
+            $st = $db->prepare($sql); $st->execute($args);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $u) {
+                $out[(int)$u['id']] = ['name' => (string)$u['user_cname'],
+                                       'dept_name' => (string)($u['dept_name'] ?? ''),
+                                       'position_name' => (string)($u['position_name'] ?? '')];
+            }
+        } catch (Throwable $e) {}
+    }
+    return $out;
+}
+
+/**
+ * 送出稽核報告表：寫 status='submitted' 並發通知。
+ * 業務日期與精確時間戳分開存（ai-rules/21）：`submit_date` 是表單上的日期，`submitted_at` 是按下去那一刻。
+ * 沒有設定通知對象時**照樣送得出去**，只是回報 0 人——不要因為沒設定就擋住流程。
+ */
+function ia_report_submit(PDO $db, int $year, string $bizDate, int $uid, string $uname): array
+{
+    $st = $db->prepare("SELECT * FROM ia_report WHERE year=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$year]);
+    $rpt = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$rpt) throw new RuntimeException('請先按「儲存」建立這一年的稽核報告表');
+    $d = preg_match('/^\d{4}-\d{2}-\d{2}$/', $bizDate) ? $bizDate : ia_today($db);
+
+    $db->prepare("UPDATE ia_report SET status='submitted', submit_date=?, submitted_at=NOW(),
+                      submitted_by=?, submitted_by_name=?, updated_at=NOW() WHERE report_id=?")
+       ->execute([$d, $uid ?: null, $uname, (int)$rpt['report_id']]);
+
+    $users = ia_report_notify_users($db);
+    $sent  = [];
+    if ($users) {
+        $ncOpen = 0;
+        try {
+            $q = $db->prepare("SELECT COUNT(*) FROM ia_nc WHERE year=? AND COALESCE(is_deleted,0)=0 AND stage<>'closed'");
+            $q->execute([$year]); $ncOpen = (int)$q->fetchColumn();
+        } catch (Throwable $e) {}
+        $title = $year . ' 年度內部稽核報告表已送出';
+        $content = $year . " 年度的內部稽核報告表已由 " . $uname . " 送出（報告日期 " . eg_fmt_date($d) . "）。\n"
+                 . ($ncOpen > 0 ? ('目前尚有 ' . $ncOpen . " 張不符合通知單未結案。\n") : "所有不符合通知單都已結案。\n")
+                 . '請至「內部稽核 → 稽核報告表」查看本年度的缺點統計與缺點記錄。';
+        try {
+            $db->prepare("INSERT INTO live_event (eventdate, enddate, title, content, status, created_by, source,
+                              show_status_to_others, ref_type, ref_id)
+                          VALUES (CURDATE(), NULL, ?, ?, 0, ?, '內部稽核', 1, 'IA_REPORT', ?)")
+               ->execute([$title, $content, $uid ?: null, (int)$rpt['report_id']]);
+            $eid = (int)$db->lastInsertId();
+            $ins = $db->prepare("INSERT INTO live_event_target (live_event_id, target_type, target_id, mode)
+                                 VALUES (?, 'user', ?, 'read')");
+            foreach (array_keys($users) as $to) { $ins->execute([$eid, $to]); $sent[] = $to; }
+            if (function_exists('ia_nc_push')) ia_nc_push($db, $eid, $title, $content);
+        } catch (Throwable $e) { /* 通知失敗不影響「已送出」這件事，畫面會顯示通知 0 人 */ }
+    }
+    return ['submit_date' => $d, 'notified' => count($sent),
+            'users' => array_values(array_map(function ($u) { return $u['name']; }, $users))];
+}
+
 /**
  * 每個年度的內稽完成狀態（2026-09-17 使用者要求：年度選單要一眼看出哪一年做完了）。
  *
@@ -2523,7 +2665,7 @@ function ia_year_status(PDO $db): array
     foreach ($q("SELECT year, COUNT(*) n FROM ia_check WHERE COALESCE(is_deleted,0)=0 GROUP BY year") as $r) {
         $out[$touch((int)$r['year'])]['checks'] = (int)$r['n'];
     }
-    foreach ($q("SELECT year, COUNT(*) n, SUM(status='approved') a
+    foreach ($q("SELECT year, COUNT(*) n, SUM(status IN ('submitted','approved')) a
                    FROM ia_report WHERE COALESCE(is_deleted,0)=0 GROUP BY year") as $r) {
         $y = $touch((int)$r['year']);
         $out[$y]['reports'] = (int)$r['n']; $out[$y]['reports_approved'] = (int)$r['a'];
@@ -2537,8 +2679,10 @@ function ia_year_status(PDO $db): array
         $has = ($s['plan'] || $s['cases'] || $s['checks'] || $s['reports'] || $s['nc_open']);
         if (!$has) { $s['state'] = 'none'; continue; }
         $why = [];
+        // 報告表 2026-09-17 起走「送出」不走核准（使用者拍板不要核准也不要製表人），
+        // 舊資料若還是 approved 也一律算數，不然以前核准過的年度會突然變回進行中。
         if ($s['reports'] === 0)                          $why[] = '還沒有稽核報告表';
-        elseif ($s['reports_approved'] < $s['reports'])   $why[] = '稽核報告表還沒核准（' . $s['reports_approved'] . '／' . $s['reports'] . ' 張已核准）';
+        elseif ($s['reports_approved'] < $s['reports'])   $why[] = '稽核報告表還沒送出（' . $s['reports_approved'] . '／' . $s['reports'] . ' 張已送出）';
         if ($s['nc_open'] > 0)                            $why[] = '還有 ' . $s['nc_open'] . ' 張不符合通知單未結案';
         $s['state'] = $why ? 'doing' : 'done';
         $s['why']   = $why;
@@ -2551,6 +2695,10 @@ function ia_year_status(PDO $db): array
 /** 年度下拉的選項：已有資料的年度 ＋ 近十年到明年（管理員要補舊年度資料，選單裡就得選得到） */
 function ia_year_options(PDO $db): array
 {
+    /* 2026-09-17 使用者要求：**舊年度不要列出沒有資料的**。
+       原本一律往前補十年，選單裡永遠有一整排空年度，看起來像有做過其實什麼都沒有。
+       現在＝「有資料的年度」＋「今年、明年」（明年是給排未來稽核計畫用的）
+             ＋「管理員自己登記要補的舊年度」（設定鍵 ia_extra_years）。 */
     $years = [];
     try {
         $years = array_map('intval', $db->query(
@@ -2562,10 +2710,45 @@ function ia_year_options(PDO $db): array
                 UNION SELECT year FROM ia_report) x")->fetchAll(PDO::FETCH_COLUMN));
     } catch (Throwable $e) {}
     $cy = (int)substr(ia_today($db), 0, 4);
-    for ($y = $cy + 1; $y >= $cy - 10; $y--) $years[] = $y;
+    $years[] = $cy; $years[] = $cy + 1;
+    foreach (ia_extra_years($db) as $y) $years[] = $y;
     $years = array_values(array_unique(array_filter($years)));
     rsort($years);
     return $years;
+}
+
+/** 管理員登記「要補資料的舊年度」（本身沒有資料，但要先在選單裡看得到才建得了） */
+function ia_extra_years(PDO $db): array
+{
+    $raw = (string)(ia_settings($db)['ia_extra_years'] ?? '');
+    $arr = $raw === '' ? [] : json_decode($raw, true);
+    if (!is_array($arr)) return [];
+    $out = [];
+    foreach ($arr as $y) { $y = (int)$y; if ($y >= 2000 && $y <= 2200) $out[] = $y; }
+    return array_values(array_unique($out));
+}
+
+/**
+ * 新增一個要補的舊年度（管理員限定，呼叫端自行驗權限）。
+ * 已經有資料的年度本來就在選單裡，不必也不會重複登記。
+ */
+function ia_extra_year_add(PDO $db, int $year, string $byName): array
+{
+    $cy = (int)substr(ia_today($db), 0, 4);
+    if ($year < 2000 || $year > $cy + 1) throw new RuntimeException('年度不正確（只能補 2000 年到明年之間）');
+    $cur = ia_extra_years($db);
+    if (in_array($year, $cur, true)) return ['added' => false, 'years' => $cur];
+    $cur[] = $year; sort($cur);
+    ia_setting_save($db, 'ia_extra_years', json_encode(array_values($cur)), $byName);
+    return ['added' => true, 'years' => $cur];
+}
+
+/** 移除登記的舊年度；**該年度已經有資料時不移除**（移掉會變成有資料卻選不到） */
+function ia_extra_year_del(PDO $db, int $year, string $byName): array
+{
+    $cur = array_values(array_filter(ia_extra_years($db), function ($y) use ($year) { return (int)$y !== $year; }));
+    ia_setting_save($db, 'ia_extra_years', json_encode($cur), $byName);
+    return ['years' => $cur];
 }
 
 /**
