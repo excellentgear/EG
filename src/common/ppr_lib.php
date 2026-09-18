@@ -82,8 +82,10 @@ function ppr_drawing_orientation(string $absPath, string $ext): string {
 function ppr_bom_processes(PDO $db, string $bomNo): array {
     $st = $db->prepare("
         SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName,
-               bi.maker_id_no, ml.maker_id AS maker_name, COALESCE(ml.internal,0) AS is_internal,
-               bi.machine_id, mc.machine AS machine_name, bi.sqty,
+               bi.maker_id_no, COALESCE(NULLIF(ml.maker_id,''), NULLIF(bi.maker_id,'')) AS maker_name,
+               COALESCE(ml.internal,0) AS is_internal,
+               bi.machine_id, mc.machine AS machine_name, NULLIF(TRIM(mc.field_no),'') AS machine_field_no,
+               bi.sqty,
                bi.processing_sequence, bi.processing_state, bi.QC_check, bi.QC_check_date,
                bi.outsource_date, bi.return_date, bi.qc_completed, bi.batch_label, bi.is_consumed
         FROM bom_ing bi
@@ -119,10 +121,20 @@ function ppr_bom_processes(PDO $db, string $bomNo): array {
             'batches'             => $batches,
         ];
     }
+    // 製程先後順序一律以 bom_sn 為準（10/20/30/40…），不可用 processing_sequence：後者是「生管排程順序」，
+    // 全站多數列是 NULL（例 B-1150825009 四站只有齒研那一站有值 42），拿它排序會讓有值的那一站被排到最前面，
+    // 畫面上就會出現「齒研排在客供料之前」這種對不上 OreadyReply 製程欄的錯誤順序（2026-09-17 使用者回報）。
     usort($out, function ($a, $b) {
-        return ($a['processing_sequence'] ?? 999999) <=> ($b['processing_sequence'] ?? 999999);
+        return ((int)$a['bom_sn']) <=> ((int)$b['bom_sn']);
     });
     return $out;
+}
+
+/** 機台顯示名稱：一律優先用現場編號(field_no)，比照 views/pm/process_schedule_NOW.php 的顯示口徑 */
+function ppr_machine_label(?string $machineName, ?string $fieldNo): string {
+    $fieldNo = trim((string)$fieldNo);
+    if ($fieldNo !== '') return $fieldNo;
+    return trim((string)$machineName);
 }
 
 /** 依批次陣列彙總一個代表性 QC 狀態（供流程總覽步驟條使用）：異常>部分完成>合格>待驗 */
@@ -139,14 +151,113 @@ function ppr_group_status(array $batches): array {
     return ['label' => '待驗', 'color' => '#999'];
 }
 
+/* ============================================================
+ * 料號 ↔ 製令 / 訂單 的歸戶條件
+ * ============================================================ */
+/**
+ * 【重要】`bom.d_setting_id`（整數外鍵）全站 12,112 筆裡有 9,694 筆是 NULL（八成），真正填著料號的是
+ * 文字欄 `bom.d_id`；`order_track.d_id_ID` 同樣有 5,214/9,386 筆是 NULL。所以只用整數外鍵比對，
+ * 八成的製令與六成的訂單會整批查不到，而且畫面只會寫「此期間查無製令資料」不報錯
+ * （2026-09-17 使用者回報 B-1140807011 查得到卻進不了報告，即為此因）。
+ *
+ * 本組函式回傳「這個料號的製令／訂單」條件片段：主鍵對得上就用主鍵，對不上才用料號文字回退。
+ * 料號文字在 d_setting 有 1,670 組重複（同料號不同客戶各建一筆），所以文字回退**一定要再比客戶名稱**，
+ * 否則會把別家客戶的同名料號一起撈進來；客戶欄空白者無從判斷，一律放行（寧可多一筆也不要整筆消失）。
+ */
+function ppr_part_row(PDO $db, int $partPk): ?array {
+    static $cache = [];
+    if (array_key_exists($partPk, $cache)) return $cache[$partPk];
+    $st = $db->prepare("SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Spec_No, d.Type, d.Customer_Id, d.Revision,
+                               c.customer AS customer_name
+                        FROM d_setting d
+                        LEFT JOIN customer_list c ON c.customer_id = d.Customer_Id
+                        WHERE d.d_id = ? LIMIT 1");
+    $st->execute([$partPk]);
+    $row = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+    if ($row) {
+        $st2 = $db->prepare("SELECT COUNT(*) FROM d_setting WHERE D_Setting_Id = ?");
+        $st2->execute([$row['D_Setting_Id']]);
+        $row['part_no_is_dup'] = ((int)$st2->fetchColumn() > 1);
+    }
+    return $cache[$partPk] = $row;
+}
+
+/**
+ * 反向解析：一筆 bom 列（需含 d_setting_id / d_id / Client_Name）屬於 d_setting 的哪一筆（回傳 d_id 主鍵）。
+ * d_setting_id 有值就直接用；沒有才用料號文字找，同名料號有多筆時以客戶對得上的那一筆優先。
+ */
+function ppr_resolve_bom_part(PDO $db, array $bomRow): ?int {
+    $pk = (int)($bomRow['d_setting_id'] ?? 0);
+    if ($pk > 0) return $pk;
+    $txt = trim((string)($bomRow['d_id'] ?? ''));
+    if ($txt === '') return null;
+    $client = trim((string)($bomRow['Client_Name'] ?? ''));
+    try {
+        $st = $db->prepare("
+            SELECT d.d_id
+            FROM d_setting d
+            LEFT JOIN customer_list c ON c.customer_id = d.Customer_Id
+            WHERE d.D_Setting_Id = ?
+            ORDER BY (c.customer <=> ?) DESC, d.d_id ASC
+            LIMIT 1");
+        $st->execute([$txt, ($client !== '' ? $client : null)]);
+        $v = $st->fetchColumn();
+        return ($v !== false && $v !== null) ? (int)$v : null;
+    } catch (Throwable $e) { return null; }
+}
+
+/** 回傳 [SQL 條件片段, 參數]；$pkCol=整數外鍵欄、$txtCol=料號文字欄、$clientCol=客戶名稱欄 */
+function ppr_part_match_cond(array $part, string $alias, string $pkCol, string $txtCol, string $clientCol): array {
+    $params   = [(int)$part['d_id']];
+    $fallback = "$alias.$pkCol IS NULL AND $alias.$txtCol = ?";
+    $params[] = (string)$part['D_Setting_Id'];
+    if (!empty($part['part_no_is_dup'])) {
+        $fallback .= " AND ($alias.$clientCol = ? OR $alias.$clientCol IS NULL OR $alias.$clientCol = '')";
+        $params[]  = (string)($part['customer_name'] ?? '');
+    }
+    return ["($alias.$pkCol = ? OR ($fallback))", $params];
+}
+
 /** 該料號在指定期間內共有幾筆 BOM（供搜尋建議清單/清單標題顯示筆數用） */
-function ppr_bom_count_in_range(PDO $db, int $dSettingId, string $from, string $to): int {
-    $where = ["b.d_setting_id = ?"]; $params = [$dSettingId];
+function ppr_bom_count_in_range(PDO $db, array $part, string $from, string $to): int {
+    [$cond, $params] = ppr_part_match_cond($part, 'b', 'd_setting_id', 'd_id', 'Client_Name');
+    $where = [$cond];
     if ($from !== '') { $where[] = "b.Created_At >= ?"; $params[] = $from.' 00:00:00'; }
     if ($to   !== '') { $where[] = "b.Created_At <= ?"; $params[] = $to.' 23:59:59'; }
     $st = $db->prepare("SELECT COUNT(*) FROM bom b WHERE ".implode(' AND ', $where));
     $st->execute($params);
     return (int)$st->fetchColumn();
+}
+
+/* ============================================================
+ * 製令建立～結案日期
+ * ============================================================ */
+/** BOM 編號 B-YYYMMDDNNN 回推日期（YYY＝民國年3碼），與 OreadyReply_completed_query.php 同一套推算 */
+function ppr_bom_no_date(string $bom): ?string {
+    if (!preg_match('~-(\d{3})(\d{2})(\d{2})\d*$~', $bom, $m)) return null;
+    $y = (int)$m[1] + 1911;
+    $mm = (int)$m[2]; $dd = (int)$m[3];
+    if ($mm < 1 || $mm > 12 || $dd < 1 || $dd > 31) return null;
+    return sprintf('%04d-%02d-%02d', $y, $mm, $dd);
+}
+
+/**
+ * 結案判定＝`bom.processing_state='1'`（與「已完工BOM查詢列印」同一口徑）。
+ * 結案日只認 closed_at。**刻意不像 OreadyReply_completed_query.php 那樣退回「BOM 編號回推日期」**——
+ * 那個推算值算出來的是製令「建立」的日期，拿來當結案日會印出「2025.08.11～2025.08.07」這種結案早於建立的
+ * 荒謬區間（實測 B-1140807011 即如此）。2026-05-22 手動結案功能上線前的舊資料（約佔已結案的 92%）
+ * 本來就沒有結案時間可查，一律誠實顯示「已結案（無結案日期紀錄）」，不要自己編一個日期出來。
+ */
+function ppr_bom_period(array $bomRow): array {
+    $created = substr((string)($bomRow['Created_At'] ?? ''), 0, 10);
+    if ($created === '' || $created === '0000-00-00') $created = ppr_bom_no_date((string)($bomRow['bom'] ?? '')) ?? '';
+    $isClosed = ((string)($bomRow['processing_state'] ?? '') === '1');
+    $closed = '';
+    if ($isClosed) {
+        $closed = substr((string)($bomRow['closed_at'] ?? ''), 0, 10);
+        if ($closed === '0000-00-00') $closed = '';
+    }
+    return ['from'=>$created, 'to'=>$closed, 'closed'=>$isClosed, 'no_close_date'=>($isClosed && $closed === '')];
 }
 
 /* ============================================================
@@ -222,7 +333,8 @@ function ppr_report_work_summary(PDO $db, int $bomIngFid, int $processNo): ?arra
     if ($bomIngFid <= 0) return null;
     try {
         $st = $db->prepare("
-            SELECT r.report_date, r.machine_id, mc.machine AS machine_name,
+            SELECT r.report_date, r.machine_id,
+                   COALESCE(NULLIF(TRIM(mc.field_no),''), mc.machine) AS machine_name,
                    r.setup_user_id, r.production_user_id,
                    u1.user_cname AS setup_user_name, u2.user_cname AS production_user_name,
                    r.setup_start_time, r.setup_end_time, r.production_start_time, r.production_end_time,
@@ -295,26 +407,127 @@ function ppr_report_work_summary(PDO $db, int $bomIngFid, int $processNo): ?arra
 /* ============================================================
  * 訂單 / 出貨頻率分析（依 d_setting_id 歸戶，禁用料號字串 join）
  * ============================================================ */
-function ppr_order_history(PDO $db, int $dSettingId): array {
+/**
+ * 歷史訂單：同一個料號可能是不同「加工項目」下的單（客戶有時只送來做齒研、有時做全製），
+ * 所以一定要把 order_track.Processing_items 一起帶出來，否則清單上兩筆單價差很多會看不出原因
+ * （2026-09-17 使用者要求）。歸戶走 ppr_part_match_cond（d_id_ID 有 56% 是 NULL）。
+ */
+function ppr_order_history(PDO $db, array $part): array {
+    [$cond, $params] = ppr_part_match_cond($part, 'o', 'd_id_ID', 'd_id', 'Client_name');
     $st = $db->prepare("
-        SELECT Order_id, Order_oo, Order_date, Client_name, Qty, unit_price, currency, exchange_rate
-        FROM order_track WHERE d_id_ID = ? AND parent_order_id IS NULL
-        ORDER BY Order_date DESC");
-    $st->execute([$dSettingId]);
+        SELECT o.Order_id, o.Order_oo, o.Order_date, o.Client_name, o.Qty, o.unit_price,
+               o.currency, o.exchange_rate, o.Processing_items
+        FROM order_track o
+        WHERE $cond AND o.parent_order_id IS NULL
+        ORDER BY o.Order_date DESC");
+    $st->execute($params);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     return ppr_freq_stats($rows, 'Order_date', 'Qty');
 }
 
-function ppr_ship_history(PDO $db, int $dSettingId): array {
+/** 歷史出貨：is_list.d_setting_id 全站 37,869 筆皆有值，故維持以主鍵歸戶（見記憶 ship_stats_by_dsetting_id）；
+ *  製程取該出貨綁定訂單的加工項目，未綁訂單者留白。 */
+function ppr_ship_history(PDO $db, array $part): array {
     $st = $db->prepare("
-        SELECT isl.IS_number, isl.Order_date, isl.Client_name, isl.Qty, isl.Unit_price
+        SELECT isl.IS_number, isl.Order_date, isl.Client_name, isl.Qty, isl.Unit_price,
+               ot.Processing_items
         FROM is_list isl
         LEFT JOIN is_sale_type ist ON ist.sale_type_id = isl.sale_type
+        LEFT JOIN order_track ot ON ot.Order_id = isl.Order_id
         WHERE isl.d_setting_id = ? AND (ist.is_count IS NULL OR ist.is_count = 1)
         ORDER BY isl.Order_date DESC");
-    $st->execute([$dSettingId]);
+    $st->execute([(int)$part['d_id']]);
     $rows = $st->fetchAll(PDO::FETCH_ASSOC);
     return ppr_freq_stats($rows, 'Order_date', 'Qty');
+}
+
+/* ============================================================
+ * 同料號歷史報工 / 歷史加工價格（兩個都是選配，預設不查）
+ * ============================================================ */
+/**
+ * 同一個料號、同一個製程的近期報工（供「這次做得算快還算慢」對照用）。
+ * 以相同機台優先排在前面，但不同機台也一併列出（使用者明確要求）；$excludeFid＝本次這一站不重複列。
+ */
+function ppr_part_work_history(PDO $db, array $part, int $processNo, int $excludeFid, string $preferMachine = '', int $limit = 5): array {
+    if ($processNo <= 0) return [];
+    [$cond, $params] = ppr_part_match_cond($part, 'b', 'd_setting_id', 'd_id', 'Client_Name');
+    try {
+        $st = $db->prepare("
+            SELECT bi.bom_ing_fid, bi.bom,
+                   MIN(r.report_date) AS date_from, MAX(r.report_date) AS date_to,
+                   COUNT(DISTINCT r.report_date) AS day_cnt,
+                   GROUP_CONCAT(DISTINCT COALESCE(NULLIF(TRIM(mc.field_no),''), mc.machine) SEPARATOR '、') AS machines,
+                   SUM(GREATEST(COALESCE(TIMESTAMPDIFF(MINUTE, r.setup_start_time, r.setup_end_time),0),0)
+                     + GREATEST(COALESCE(TIMESTAMPDIFF(MINUTE, r.production_start_time, r.production_end_time),0),0)) AS total_min,
+                   SUM(GREATEST(COALESCE(r.produced_qty,0),0)) AS qty
+            FROM pm_process_daily_report r
+            JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
+            JOIN bom b ON b.bom = bi.bom
+            LEFT JOIN machine_list mc ON mc.machine_id = r.machine_id
+            WHERE bi.process_no = ? AND bi.bom_ing_fid <> ? AND $cond
+            GROUP BY bi.bom_ing_fid, bi.bom
+            HAVING qty > 0 OR total_min > 0
+            ORDER BY date_to DESC
+            LIMIT 40");
+        $st->execute(array_merge([$processNo, $excludeFid], $params));
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { return []; }
+
+    $out = [];
+    foreach ($rows as $r) {
+        $qty = (int)$r['qty']; $min = (float)$r['total_min'];
+        $out[] = [
+            'bom'       => $r['bom'],
+            'machines'  => (string)($r['machines'] ?? ''),
+            'date_from' => $r['date_from'],
+            'date_to'   => $r['date_to'],
+            'day_cnt'   => (int)$r['day_cnt'],
+            'total_hr'  => round($min / 60, 2),
+            'pc_min'    => $qty > 0 ? round($min / $qty, 2) : null,
+            'qty'       => $qty,
+            'same_machine' => ($preferMachine !== '' && strpos((string)$r['machines'], $preferMachine) !== false),
+        ];
+    }
+    // 相同機台排前面，其餘依日期新→舊（穩定排序：同組維持原本的日期序）
+    usort($out, function ($a, $b) {
+        if ($a['same_machine'] !== $b['same_machine']) return $a['same_machine'] ? -1 : 1;
+        return strcmp((string)$b['date_to'], (string)$a['date_to']);
+    });
+    return array_slice($out, 0, max(1, $limit));
+}
+
+/**
+ * 此料號、此製程的歷史加工單價（優先同一廠商；同廠商查無紀錄才放寬到所有廠商並標示 scope='any'）。
+ * 單價口徑與成本推算一致：modified_unit_price 優先，否則 price；0 元的不列（那是尚未填價的列）。
+ */
+function ppr_process_price_history(PDO $db, string $partNo, int $processNo, ?string $makerIdNo, int $limit = 5): array {
+    if ($partNo === '' || $processNo <= 0) return ['rows'=>[], 'scope'=>'none'];
+    $run = function (?string $maker) use ($db, $partNo, $processNo, $limit) {
+        $sql = "
+            SELECT t.transfer_date, t.bom,
+                   IF(t.modified_unit_price>0, t.modified_unit_price, t.price) AS unit_price,
+                   COALESCE(NULLIF(t.paid_qty,0), NULLIF(t.transfer_qty,0), NULLIF(t.sqty,0)) AS qty,
+                   COALESCE(NULLIF(ml.maker_id,''), t.maker_from) AS maker_name
+            FROM bom_ing_transfer_log t
+            LEFT JOIN maker_list ml ON ml.maker_id_no = t.maker_from
+            WHERE t.product_id = ?
+              AND IF(t.modified_unit_price>0, t.modified_unit_price, COALESCE(t.price,0)) > 0
+              AND EXISTS (SELECT 1 FROM bom_ing bi WHERE bi.bom = t.bom AND bi.bom_sn = t.bom_sn AND bi.process_no = ?)";
+        $params = [$partNo, $processNo];
+        if ($maker !== null && $maker !== '') { $sql .= " AND t.maker_from = ?"; $params[] = $maker; }
+        $sql .= " ORDER BY t.transfer_date DESC, t.transfer_id DESC LIMIT " . (int)max(1, $limit);
+        $st = $db->prepare($sql);
+        $st->execute($params);
+        return $st->fetchAll(PDO::FETCH_ASSOC);
+    };
+    try {
+        if ($makerIdNo !== null && $makerIdNo !== '') {
+            $rows = $run($makerIdNo);
+            if (!empty($rows)) return ['rows'=>$rows, 'scope'=>'maker'];
+        }
+        $rows = $run(null);
+        return ['rows'=>$rows, 'scope'=>(empty($rows) ? 'none' : 'any')];
+    } catch (Throwable $e) { return ['rows'=>[], 'scope'=>'none']; }
 }
 
 /** 共用：由日期序列算平均間隔天數、平均數量、筆數 */

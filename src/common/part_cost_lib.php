@@ -40,7 +40,7 @@ function ppc_machine_rates(PDO $pdo): array {
     $map = [];
     try {
         $rows = $pdo->query("
-            SELECT ml.machine_id, ml.machine,
+            SELECT ml.machine_id, COALESCE(NULLIF(TRIM(ml.field_no),''), ml.machine) AS machine,
                    kma.purchase_amount, kma.residual_value, kma.depreciation_years, kma.monthly_work_hours,
                    COALESCE(kma.hourly_labor_cost, 0) AS labor, COALESCE(kma.hourly_overhead_cost, 0) AS overhead,
                    COALESCE(kma.annual_consumable_cost, 0) AS consumable
@@ -202,9 +202,11 @@ function ppc_bom_cost(PDO $pdo, array $bomNumbers): array {
 
     $kgSet = ppc_kg_set($pdo);
     $procRows = ppc_chunked_in($pdo,
+        // 製程先後一律以 bom_sn 排（processing_sequence 是生管排程順序、絕大多數列是 NULL，
+        // 拿它排會讓成本明細的製程順序與製程流程總覽對不起來，2026-09-17 修）
         "SELECT bi.bom, bi.bom_sn, bi.process_no, pn.ProcessName FROM bom_ing bi
          LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
-         WHERE bi.bom IN ({IN}) ORDER BY bi.bom, bi.processing_sequence ASC, bi.bom_sn ASC", $bomNumbers);
+         WHERE bi.bom IN ({IN}) ORDER BY bi.bom, bi.bom_sn ASC", $bomNumbers);
 
     $outsource = ppc_outsource_prices($pdo, $bomNumbers);
     $rates     = ppc_machine_rates($pdo);

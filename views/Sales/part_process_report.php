@@ -23,6 +23,8 @@ require_once __DIR__ . '/../../src/common/vendor_audit_lib.php';   // vendor_aud
 require_once __DIR__ . '/../../src/common/asdoc_lib.php';
 require_once __DIR__ . '/../../src/common/ppr_lib.php';
 require_once __DIR__ . '/../../src/common/part_cost_lib.php';
+require_once __DIR__ . '/../../src/common/date_fmt_lib.php';   // 顯示日期一律 YYYY.MM.DD（ai-rules/20）
+require_once __DIR__ . '/../../src/common/gear_spec_lib.php';  // 齒輪規格顯示字串，唯一實作不自刻
 
 $isAjax = isset($_GET['action']) || isset($_POST['action']);
 
@@ -40,6 +42,34 @@ ppr_ensure_schema($pdo);
 $has_access = rf_has_module_role($pdo, $my_id, 'part_process_report');
 
 function h($s): string { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+
+/** 顯示用日期（ai-rules/20：一律 YYYY.MM.DD；空值回 '—' 讓表格不會出現空格） */
+function ppr_d($d, string $empty = '—'): string {
+    $d = substr((string)$d, 0, 10);
+    if ($d === '' || $d === '0000-00-00') return $empty;
+    $s = eg_fmt_date($d);
+    return $s !== '' ? $s : $empty;
+}
+
+/**
+ * 單價／金額顯示：小數點後只剩 0 的一律不顯示小數點與 0（使用者明確要求，2026-09-17）。
+ * 1005.0000→1,005、240.7750→240.775、0→0；null/空字串→'—'。
+ */
+function ppr_num($v, int $dec = 4, string $empty = '—'): string {
+    if ($v === null || $v === '' || !is_numeric($v)) return $empty;
+    $s = number_format((float)$v, $dec, '.', ',');
+    if (strpos($s, '.') !== false) $s = rtrim(rtrim($s, '0'), '.');
+    return $s === '' ? '0' : $s;
+}
+
+/** 製令建立～結案日期顯示字串：未結案一律寫成「2026.08.25～未結案」（使用者指定格式） */
+function ppr_period_text(array $bomRow): string {
+    $p = ppr_bom_period($bomRow);
+    $from = ppr_d($p['from'], '—');
+    if (!$p['closed'])       return $from . '～未結案';
+    if ($p['no_close_date']) return $from . '～已結案（無結案日期紀錄）';
+    return $from . '～' . ppr_d($p['to']);
+}
 
 /* ══════════════════════════ 客戶地址 → 地區（同名客戶用來區分） ══════════════════════════ */
 
@@ -88,31 +118,63 @@ function ppr_qc_badge(?string $qcCheck, $qcCompleted): array {
     return ['待驗','#999'];
 }
 
-/** 流程總覽步驟條：每個製程一個圓點+名稱，中間連接線；點的顏色反映該製程彙總狀態 */
+/**
+ * 流程總覽（2026-09-17 依使用者要求改簡約版）：一列由左到右的製程名稱＋狀態徽章，
+ * 中間用箭頭銜接；**刻意不再顯示 1234 數字標籤**（順序看箭頭就知道，數字只是多一層雜訊）。
+ * 廠內／外包與廠商留在下方「製程詳細資料」卡片，總覽只回答「做了哪幾站、各站過了沒」。
+ */
 function ppr_render_flow_bar(array $processes): string {
     if (empty($processes)) return '<div class="ppr-muted">此製令尚無製程資料。</div>';
-    $steps = [];
-    $i = 0;
+    $chips = [];
     foreach ($processes as $p) {
-        $i++;
         $st = ppr_group_status($p['batches']);
-        $kindSet = [];
-        foreach ($p['batches'] as $b) $kindSet[((int)$b['is_internal']===1)?'廠內':'外包'] = true;
-        $kind = implode('/', array_keys($kindSet));
-        $split = count($p['batches']) > 1 ? '（拆'.count($p['batches']).'批）' : '';
-        $steps[] = '<div class="ppr-step">'
-            .'<div class="dot" style="border-color:'.$st['color'].';color:'.$st['color'].';">'.$i.'</div>'
-            .'<div class="name">'.h($p['ProcessName'] ?: ('製程#'.$p['process_no'])).$split.'</div>'
-            .'<div class="kind">'.h($kind).'</div>'
-            .'<div class="stat" style="background:'.$st['color'].';">'.h($st['label']).'</div>'
-            .'</div>';
+        $split = count($p['batches']) > 1 ? '<span class="sp">拆'.count($p['batches']).'批</span>' : '';
+        $chips[] = '<span class="ppr-chip">'
+            .'<span class="nm">'.h($p['ProcessName'] ?: ('製程#'.$p['process_no'])).'</span>'.$split
+            .'<span class="st" style="background:'.$st['color'].';">'.h($st['label']).'</span></span>';
     }
-    $html = '<div class="ppr-stepper">';
-    foreach ($steps as $idx => $s) {
-        if ($idx > 0) $html .= '<div class="ppr-step-line"></div>';
-        $html .= $s;
-    }
-    return $html . '</div>';
+    return '<div class="ppr-stepper">'.implode('<span class="ppr-arrow" aria-hidden="true">→</span>', $chips).'</div>';
+}
+
+/**
+ * 該製令各製程站實際用了哪台機台（bom_ing.machine_id 全站 83,571 列只有 1,173 列有值＝幾乎沒人填，
+ * 現場真正留下機台的地方是報工紀錄）。一張製令一次查完，避免每個批次各打一次 SQL。
+ * 回傳 bom_ing_fid => 機台顯示名稱（優先現場編號 field_no，比照 process_schedule_NOW.php）。
+ */
+function ppr_bom_report_machines(PDO $pdo, string $bomNo): array {
+    try {
+        $st = $pdo->prepare("
+            SELECT bi.bom_ing_fid,
+                   GROUP_CONCAT(DISTINCT COALESCE(NULLIF(TRIM(mc.field_no),''), mc.machine) SEPARATOR '、') AS machines
+            FROM pm_process_daily_report r
+            JOIN bom_ing bi ON bi.bom_ing_fid = r.bom_ing_fid
+            LEFT JOIN machine_list mc ON mc.machine_id = r.machine_id
+            WHERE bi.bom = ? AND r.machine_id IS NOT NULL
+            GROUP BY bi.bom_ing_fid");
+        $st->execute([$bomNo]);
+        $out = [];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(int)$r['bom_ing_fid']] = (string)$r['machines'];
+        return $out;
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 一個批次列的「廠內／外包・廠商・機台」文字。
+ * 三個修正（2026-09-17 使用者回報）：
+ *  ①**廠商一律帶出來**——原本只有外包(is_internal=0)才顯示廠商，可是像「超正齒研」「客戶」在 maker_list
+ *    是 internal=1，於是畫面只印「廠內」，使用者看到的就是「廠商都沒有正確帶入」。
+ *  ②機台顯示**現場編號**（field_no），bom_ing 沒填就退回報工紀錄裡實際報的那台。
+ *  ③**拿掉「未指定機台」**——全站沒有任何地方可以在製令上指定機台，印一個永遠指不了的欄位只會誤導。
+ */
+function ppr_batch_kind_text(array $b, array $reportMachines): string {
+    $parts = [((int)$b['is_internal'] === 1) ? '廠內' : '外包'];
+    $maker = trim((string)($b['maker_name'] ?? ''));
+    // 廠商是生管在製令上指定得了的欄位，沒指定就要講明白（跟機台不同，機台根本沒地方可以指定）
+    $parts[] = ($maker !== '') ? $maker : '未指定廠商';
+    $mach = ppr_machine_label($b['machine_name'] ?? null, $b['machine_field_no'] ?? null);
+    if ($mach === '') $mach = (string)($reportMachines[(int)$b['bom_ing_fid']] ?? '');
+    if ($mach !== '') $parts[] = '機台 ' . $mach;
+    return implode('／', array_map('h', $parts));
 }
 
 /** 單一輪檢驗的量測明細（項目/標準/實測值/判定），沒有明細資料就不顯示表格 */
@@ -157,20 +219,47 @@ function ppr_render_work_summary(?array $w, ?string $batchLabel = null): string 
     if (!$w) return '';
     $eff = $w['rel_efficiency'] !== null ? ($w['rel_efficiency'].'%（與歷史平均相對值，非官方標準工時）') : '無比較基準';
     $title = $batchLabel ? ('報工簡表（批次 '.h($batchLabel).'）') : '報工簡表';
+    $days = array_filter(array_map('trim', explode('、', (string)$w['actual_dates'])));
+    $daysTxt = implode('、', array_map(function ($d) { return ppr_d($d); }, $days));
     return '<div class="ppr-work-title">'.$title.'</div><table class="ppr-work-table"><tr>'
         .'<th>機台</th><td>'.h($w['machines'] ?: '—').'</td>'
         .'<th>人員</th><td>'.h($w['operators'] ?: '—').'</td></tr><tr>'
-        .'<th>日期區間</th><td>'.h($w['date_from']).' ~ '.h($w['date_to']).'</td>'
-        .'<th>實際加工日</th><td>'.h($w['actual_dates']).'</td></tr><tr>'
+        .'<th>日期區間</th><td>'.ppr_d($w['date_from']).' ~ '.ppr_d($w['date_to']).'</td>'
+        .'<th>實際加工日</th><td>'.h($daysTxt ?: '—').'</td></tr><tr>'
         .'<th>總工時</th><td>'.h($w['total_hr']).' 小時</td>'
         .'<th>產出數量</th><td>'.h($w['produced_qty']).'</td></tr><tr>'
         .'<th>單顆加工時間</th><td>'.($w['pc_min']!==null ? h($w['pc_min']).' 分/顆' : '—').'</td>'
         .'<th>相對效率</th><td>'.h($eff).'</td></tr></table>';
 }
 
+/**
+ * 同料號歷史報工（選配，掛在該製程的報工簡表底下）。使用者指定的呈現方式：
+ * 「直接以資料呈現，然後提供標頭就好，不需一直重複出現標題中文」＝一個表頭＋最多 5 列純資料。
+ * 相同機台的排前面（做對照最有意義），不同機台也照列（使用者明確要求）。
+ */
+function ppr_render_work_history(array $hist): string {
+    if (empty($hist)) return '';
+    $out = '<div class="ppr-work-title">同料號近期報工（最多 5 筆，相同機台優先）</div>'
+         . '<table class="ppr-work-hist"><thead><tr>'
+         . '<th>機台</th><th>日期區間</th><th>總工時</th><th>單顆加工時間</th><th>實際加工日</th><th>產出數量</th></tr></thead><tbody>';
+    foreach ($hist as $r) {
+        $span = ppr_d($r['date_from']) . ($r['date_to'] !== $r['date_from'] ? ' ~ '.ppr_d($r['date_to']) : '');
+        $out .= '<tr'.($r['same_machine'] ? ' class="same-m"' : '').'>'
+            . '<td>'.h($r['machines'] ?: '—').'</td>'
+            . '<td>'.h($span).'</td>'
+            . '<td>'.h($r['total_hr']).' 小時</td>'
+            . '<td>'.($r['pc_min'] !== null ? h($r['pc_min']).' 分/顆' : '—').'</td>'
+            . '<td>'.h($r['day_cnt']).' 天</td>'
+            . '<td>'.h($r['qty']).'</td></tr>';
+    }
+    return $out . '</tbody></table>';
+}
+
 /** 製程詳細卡片：每張卡＝一個製程站(bom_sn)，卡內依批次(拆批時多筆)分別列出廠內外/機台廠商/狀態/檢驗歷程/報工 */
-function ppr_render_process_cards(PDO $pdo, array $processes, string $workReport, bool $showQc): string {
+function ppr_render_process_cards(PDO $pdo, array $processes, string $workReport, bool $showQc,
+                                  string $bomNo = '', ?array $part = null, bool $showWorkHist = false): string {
     if (empty($processes)) return '';
+    $reportMachines = $bomNo !== '' ? ppr_bom_report_machines($pdo, $bomNo) : [];
     $out = '';
     $i = 0;
     foreach ($processes as $p) {
@@ -182,7 +271,7 @@ function ppr_render_process_cards(PDO $pdo, array $processes, string $workReport
               . '<span class="ppr-proc-status" style="background:'.$gst['color'].';">'.h($gst['label']).'</span></div>';
         $out .= '<div class="ppr-proc-body">';
         foreach ($p['batches'] as $b) {
-            $kind = ((int)$b['is_internal']===1) ? ('廠內／'.h($b['machine_name'] ?: '未指定機台')) : ('外包／'.h($b['maker_name'] ?: '未指定廠商'));
+            $kind = ppr_batch_kind_text($b, $reportMachines);
             [$label, $color] = ppr_qc_badge($b['QC_check'], $b['qc_completed']);
             $batchTag = $b['batch_label'] ? ('<b>批次 '.h($b['batch_label']).'</b>　') : '';
             $consumedNote = ((int)$b['is_consumed'] === 1) ? '<span class="ppr-consumed-tag">歷史批次（已拆分/合併）</span>' : '';
@@ -190,7 +279,15 @@ function ppr_render_process_cards(PDO $pdo, array $processes, string $workReport
             $out .= '<div class="ppr-batch-head">'.$batchTag.$kind.($b['sqty']?('　數量 '.h($b['sqty'])):'').' '
                   . '<span style="color:'.$color.';font-weight:600;">'.h($label).'</span> '.$consumedNote.'</div>';
             if ($showQc) $out .= ppr_render_qc_history($pdo, ppr_qc_history($pdo, (int)$b['bom_ing_fid']));
-            if ($workReport !== 'none') $out .= ppr_render_work_summary(ppr_report_work_summary($pdo, (int)$b['bom_ing_fid'], (int)$p['process_no']), $b['batch_label']);
+            if ($workReport !== 'none') {
+                $out .= ppr_render_work_summary(ppr_report_work_summary($pdo, (int)$b['bom_ing_fid'], (int)$p['process_no']), $b['batch_label']);
+                if ($showWorkHist && $part) {
+                    $prefer = ppr_machine_label($b['machine_name'] ?? null, $b['machine_field_no'] ?? null);
+                    if ($prefer === '') $prefer = (string)($reportMachines[(int)$b['bom_ing_fid']] ?? '');
+                    $out .= ppr_render_work_history(
+                        ppr_part_work_history($pdo, $part, (int)$p['process_no'], (int)$b['bom_ing_fid'], $prefer, 5));
+                }
+            }
             $out .= '</div>';
         }
         $out .= '</div></div>';
@@ -198,52 +295,104 @@ function ppr_render_process_cards(PDO $pdo, array $processes, string $workReport
     return $out;
 }
 
-function ppr_render_cost_block(PDO $pdo, array $bomRow): string {
+/**
+ * 成本與毛利。兩項 2026-09-17 新增（使用者要求）：
+ *  ①明細表多一欄**廠商**（原本完全看不出這個製程是誰做的）。
+ *  ②選配欄位**歷史加工價格**＝此廠商×此料號×此製程過去的實際發包單價，用來當場判斷這次的價格合不合理；
+ *    同廠商查無紀錄時自動放寬到所有廠商並在欄位裡標明，避免出現一整欄空白卻不知道是「沒資料」還是「壞了」。
+ * 所有單價一律走 ppr_num()：小數點後只剩 0 的不顯示小數點與 0。
+ */
+function ppr_render_cost_block(PDO $pdo, array $bomRow, array $processes = [], ?array $part = null, bool $showPriceHist = false): string {
     $costMap = ppc_bom_cost($pdo, [$bomRow['bom']]);
     $c = $costMap[$bomRow['bom']] ?? null;
     if (!$c || $c['cost_pc'] === null) {
         return '<div class="ppr-section"><h4>成本與毛利</h4><div class="ppr-muted">此製令尚無足夠資料可推算成本（無外包實價、無報工紀錄、亦無固定單價設定）。</div></div>';
     }
+    // bom_sn => 該製程站的廠商（含廠內自有單位，如「超正齒研」「客戶」）
+    $makerBySn = [];
+    foreach ($processes as $p) {
+        $b0 = $p['batches'][0] ?? null;
+        if (!$b0) continue;
+        $names = [];
+        foreach ($p['batches'] as $b) { $n = trim((string)($b['maker_name'] ?? '')); if ($n !== '') $names[$n] = true; }
+        $makerBySn[(string)$p['bom_sn']] = [
+            'name'  => implode('、', array_keys($names)),
+            'id_no' => (string)($b0['maker_id_no'] ?? ''),
+        ];
+    }
+
     $order = ppc_bom_order($pdo, $bomRow);
     $margin = ppc_margin($c['cost_pc'], $order);
     $statusLabel = ['full'=>'完整（全部製程皆有成本資料）','partial'=>'部分（尚有製程無成本資料）','none'=>'無資料'][$c['status']] ?? $c['status'];
     $out = '<div class="ppr-section"><h4>成本與毛利</h4><table class="ppr-cost-table">';
-    $out .= '<tr><th>單顆成本</th><td>'.number_format($c['cost_pc'],4).'</td><th>成本涵蓋度</th><td>'.h($statusLabel).'</td></tr>';
+    $out .= '<tr><th>單顆成本</th><td>'.ppr_num($c['cost_pc']).'</td><th>成本涵蓋度</th><td>'.h($statusLabel).'</td></tr>';
     if ($order) {
-        $out .= '<tr><th>綁定訂單</th><td>'.h($order['Order_oo']).'</td><th>訂單單價</th><td>'.($margin['unit_price']!==null?number_format($margin['unit_price'],4):'—').'</td></tr>';
-        $out .= '<tr><th>單顆毛利</th><td>'.($margin['margin_pc']!==null?number_format($margin['margin_pc'],4):'—').'</td><th>毛利率</th><td>'.($margin['margin_rate']!==null?h($margin['margin_rate']).'%':'—').'</td></tr>';
+        $out .= '<tr><th>綁定訂單</th><td>'.h($order['Order_oo']).'</td><th>訂單單價</th><td>'.ppr_num($margin['unit_price']).'</td></tr>';
+        $out .= '<tr><th>單顆毛利</th><td>'.ppr_num($margin['margin_pc']).'</td><th>毛利率</th><td>'.($margin['margin_rate']!==null?h($margin['margin_rate']).'%':'—').'</td></tr>';
     } else {
         $out .= '<tr><th colspan="4" style="text-align:left;font-weight:normal;color:#999;">此製令查無綁定訂單，無法比對毛利。</th></tr>';
     }
     $out .= '</table>';
-    $out .= '<table class="ppr-cost-detail"><thead><tr><th>製程</th><th>成本來源</th><th>單價</th><th>說明</th></tr></thead><tbody>';
-    foreach ($c['process_detail'] as $d) {
+    $out .= '<table class="ppr-cost-detail"><thead><tr><th>製程</th><th>廠商</th><th>成本來源</th><th>單價</th>'
+          . ($showPriceHist ? '<th style="width:26%;">歷史加工價格</th>' : '') . '<th>說明</th></tr></thead><tbody>';
+    foreach ($c['process_detail'] as $key => $d) {
+        $sn = substr((string)$key, strrpos((string)$key, '|') + 1);
+        $mk = $makerBySn[$sn] ?? ['name'=>'', 'id_no'=>''];
         $srcLabel = ['outsource'=>'外包實價','inhouse'=>'廠內推算','fixed'=>'固定單價','kg'=>'客供料','none'=>'無資料'][$d['source']] ?? $d['source'];
-        $out .= '<tr><td>'.h($d['process_name'] ?: $d['process_no']).'</td><td>'.h($srcLabel).'</td><td>'.($d['price']!==null?number_format($d['price'],4):'—').'</td><td style="font-size:11px;color:#8a6d45;">'.h($d['note']).'</td></tr>';
+        $out .= '<tr><td>'.h($d['process_name'] ?: $d['process_no']).'</td>'
+              . '<td>'.h($mk['name'] ?: '—').'</td>'
+              . '<td>'.h($srcLabel).'</td><td>'.ppr_num($d['price']).'</td>';
+        if ($showPriceHist) {
+            $out .= '<td>'.ppr_render_price_history($pdo, $part, (int)$d['process_no'], $mk['id_no']).'</td>';
+        }
+        $out .= '<td style="font-size:11px;color:#8a6d45;">'.h($d['note']).'</td></tr>';
     }
     $out .= '</tbody></table></div>';
     return $out;
 }
 
+/** 歷史加工價格儲存格：最近幾筆「日期 單價」，同廠商沒有才放寬並標示 */
+function ppr_render_price_history(PDO $pdo, ?array $part, int $processNo, string $makerIdNo): string {
+    if (!$part || $processNo <= 0) return '<span class="ppr-muted">—</span>';
+    $hist = ppr_process_price_history($pdo, (string)$part['D_Setting_Id'], $processNo, $makerIdNo, 4);
+    if (empty($hist['rows'])) return '<span class="ppr-muted">無歷史紀錄</span>';
+    $lines = [];
+    foreach ($hist['rows'] as $r) {
+        $lines[] = '<span class="ph-row"><span class="d">'.ppr_d($r['transfer_date']).'</span>'
+                 . '<span class="p">'.ppr_num($r['unit_price'], 4).'</span>'
+                 . ($r['qty'] !== null ? '<span class="q">×'.h((int)$r['qty']).'</span>' : '')
+                 . ($hist['scope'] === 'any' ? '<span class="m">'.h($r['maker_name']).'</span>' : '')
+                 . '</span>';
+    }
+    $note = $hist['scope'] === 'any' ? '<div class="ppr-ph-note">同廠商無紀錄，改列其他廠商</div>' : '';
+    return '<div class="ppr-ph">'.$note.implode('', $lines).'</div>';
+}
+
+/**
+ * 歷史訂單／出貨表。**一定要有「製程」欄**（2026-09-17 使用者要求）：同一個料號常常有「只做齒研」與
+ * 「代料到成品」等不同加工範圍的單，少了這一欄，單價差好幾倍的兩列看起來就像同一種東西在亂跳價。
+ * 訂單的製程取 order_track.Processing_items；出貨取該出貨所綁訂單的同一欄位，沒綁訂單就留白。
+ */
 function ppr_render_freq_table(array $stat, string $priceKey): string {
     if ($stat['count'] === 0) return '<div class="ppr-muted">無歷史紀錄。</div>';
     $out = '<div class="ppr-freq-meta">共 '.$stat['count'].' 筆　平均數量 '.($stat['avg_qty']??'—').'　平均間隔 '.($stat['avg_interval']!==null?$stat['avg_interval'].' 天':'—').'</div>';
-    $out .= '<table class="ppr-freq-table"><thead><tr><th>日期</th><th>對象</th><th>數量</th><th>單價</th></tr></thead><tbody>';
+    $out .= '<table class="ppr-freq-table"><thead><tr><th>日期</th><th>對象</th><th>製程</th><th>數量</th><th>單價</th></tr></thead><tbody>';
     foreach (array_slice($stat['rows'], 0, 20) as $r) {
-        $date = $r['Order_date'] ?? '';
-        $who  = $r['Client_name'] ?? '';
-        $qty  = $r['Qty'] ?? '';
-        $price = $r[$priceKey] ?? '';
-        $out .= '<tr><td>'.h(substr((string)$date,0,10)).'</td><td>'.h($who).'</td><td>'.h($qty).'</td><td>'.($price!==''&&$price!==null?number_format((float)$price,2):'—').'</td></tr>';
+        $proc = trim((string)($r['Processing_items'] ?? ''));
+        $out .= '<tr><td>'.ppr_d($r['Order_date'] ?? '').'</td>'
+              . '<td>'.h($r['Client_name'] ?? '').'</td>'
+              . '<td>'.($proc !== '' ? h($proc) : '<span class="ppr-muted">—</span>').'</td>'
+              . '<td>'.h($r['Qty'] ?? '').'</td>'
+              . '<td>'.ppr_num($r[$priceKey] ?? null).'</td></tr>';
     }
     $out .= '</tbody></table>';
     if ($stat['count'] > 20) $out .= '<div class="ppr-muted">僅列最近 20 筆，共 '.$stat['count'].' 筆。</div>';
     return $out;
 }
 
-function ppr_render_freq_block(PDO $pdo, int $dSettingId): string {
-    $orderStat = ppr_order_history($pdo, $dSettingId);
-    $shipStat  = ppr_ship_history($pdo, $dSettingId);
+function ppr_render_freq_block(PDO $pdo, array $part): string {
+    $orderStat = ppr_order_history($pdo, $part);
+    $shipStat  = ppr_ship_history($pdo, $part);
     $out = '<div class="ppr-section"><h4>訂單 / 出貨頻率分析</h4>';
     $out .= '<div class="ppr-freq-cols"><div><b>歷史訂單</b>'.ppr_render_freq_table($orderStat, 'unit_price').'</div>';
     $out .= '<div><b>歷史出貨</b>'.ppr_render_freq_table($shipStat, 'Unit_price').'</div></div></div>';
@@ -272,16 +421,21 @@ function ppr_render_bom_page(PDO $pdo, array $bomRow, array $partInfo, ?array $d
         }
     }
 
-    $out = '<div class="ppr-page">';
+    // 齒輪規格：走共用 gear_spec_lib（與訂單追蹤/PFMEA 同一套樣板），查無資料就不顯示這一格
+    $gearSpec = eg_gear_spec_for_part($pdo, (int)$partInfo['d_id']);
+
+    $out = '<div class="ppr-page"><div class="ppr-page-inner">';
     $out .= '<div class="ppr-head-block">';
     $out .= '<div class="ppr-doc-head"><div class="ppr-company">'.h($company).'</div><div class="ppr-doctitle">'.h($docTitle).'</div></div>';
+    // 欄位順序為使用者指定：第一列 客戶／料號／規格，第二列 製令／數量／製令建立～結案日期
     $out .= '<div class="ppr-info-grid">'
+        .'<div class="ppr-info-item"><span class="k">客戶</span><span class="v">'.h($bomRow['Client_Name'] ?: ($partInfo['customer_name'] ?? '')).'</span></div>'
         .'<div class="ppr-info-item"><span class="k">料號</span><span class="v">'.h($partInfo['D_Setting_Id']).'</span></div>'
         .'<div class="ppr-info-item"><span class="k">規格</span><span class="v">'.h($partInfo['Spec_No'] ?: '—').'</span></div>'
         .'<div class="ppr-info-item"><span class="k">製令</span><span class="v">'.h($bomRow['bom']).'</span></div>'
-        .'<div class="ppr-info-item"><span class="k">客戶</span><span class="v">'.h($bomRow['Client_Name']).'</span></div>'
         .'<div class="ppr-info-item"><span class="k">數量</span><span class="v">'.h($bomRow['sqty']).'</span></div>'
-        .'<div class="ppr-info-item"><span class="k">製令建立日</span><span class="v">'.h(substr((string)$bomRow['Created_At'],0,10)).'</span></div>'
+        .'<div class="ppr-info-item"><span class="k">製令建立～結案日期</span><span class="v">'.h(ppr_period_text($bomRow)).'</span></div>'
+        .($gearSpec !== null ? '<div class="ppr-info-item ppr-info-wide"><span class="k">齒輪規格</span><span class="v">'.h($gearSpec).'</span></div>' : '')
         .'</div>';
 
     $out .= '<div class="ppr-body" style="flex-direction:'.$flexDir.';">';
@@ -290,19 +444,23 @@ function ppr_render_bom_page(PDO $pdo, array $bomRow, array $partInfo, ?array $d
     $out .= '</div>';
     $out .= '</div>'; // .ppr-head-block（表頭+圖面+流程總覽不可跨頁截斷）
 
+    // .ppr-page-main：A3 橫式時這一段會排成雙欄，讓整份報告收在同一張紙內
+    $out .= '<div class="ppr-page-main">';
     $out .= '<div class="ppr-section"><h4>製程詳細資料</h4><div class="ppr-proc-cards">'
-          . ppr_render_process_cards($pdo, $processes, $opts['work_report'], !empty($opts['show_qc'])) . '</div></div>';
+          . ppr_render_process_cards($pdo, $processes, $opts['work_report'], !empty($opts['show_qc']),
+                                     (string)$bomRow['bom'], $partInfo, !empty($opts['show_work_hist'])) . '</div></div>';
 
     if (!empty($opts['show_cost'])) {
-        $out .= ppr_render_cost_block($pdo, $bomRow);
+        $out .= ppr_render_cost_block($pdo, $bomRow, $processes, $partInfo, !empty($opts['show_price_hist']));
     }
     if (!$isBatch && !empty($opts['show_freq'])) {
-        $out .= ppr_render_freq_block($pdo, (int)$partInfo['d_id']);
+        $out .= ppr_render_freq_block($pdo, $partInfo);
     } elseif ($isBatch && !empty($opts['show_cost'])) {
         // 批次模式：不顯示完整頻率分析，只保留上面成本毛利小結（已含在 ppr_render_cost_block）
     }
 
-    $out .= '</div>'; // .ppr-page
+    $out .= '</div>';           // .ppr-page-main
+    $out .= '</div></div>';     // .ppr-page-inner / .ppr-page
     return $out;
 }
 
@@ -316,6 +474,7 @@ function ppr_render_summary_page(PDO $pdo, array $bomRows, array $partInfo): str
         $margin = $c && $c['cost_pc']!==null ? ppc_margin($c['cost_pc'], $order) : ['unit_price'=>null,'margin_rate'=>null];
         $trend[] = [
             'date'   => substr((string)$b['Created_At'], 0, 10),
+            'period' => ppr_period_text($b),
             'bom'    => $b['bom'],
             'qty'    => (int)$b['sqty'],
             'cost'   => $c['cost_pc'] ?? null,
@@ -325,21 +484,21 @@ function ppr_render_summary_page(PDO $pdo, array $bomRows, array $partInfo): str
     }
     usort($trend, function($a,$b){ return strcmp($a['date'], $b['date']); });
 
-    $orderStat = ppr_order_history($pdo, (int)$partInfo['d_id']);
-    $shipStat  = ppr_ship_history($pdo, (int)$partInfo['d_id']);
+    $orderStat = ppr_order_history($pdo, $partInfo);
+    $shipStat  = ppr_ship_history($pdo, $partInfo);
 
-    $out = '<div class="ppr-page ppr-summary-page">';
+    $out = '<div class="ppr-page ppr-summary-page"><div class="ppr-page-inner">';
     $out .= '<div class="ppr-doc-head"><div class="ppr-company">'.h(vendor_audit_company_name($pdo)).'</div><div class="ppr-doctitle">總體分析（'.h($partInfo['D_Setting_Id']).'，共 '.count($bomRows).' 筆製令）</div></div>';
     $out .= '<div class="ppr-summary-charts">';
     $out .= '<div class="ppr-chart-box"><h4>加工價格 / 成本趨勢</h4><canvas class="ppr-chart" data-chart="cost" data-points=\''.h(json_encode($trend, JSON_UNESCAPED_UNICODE)).'\'></canvas></div>';
     $out .= '<div class="ppr-chart-box"><h4>毛利率趨勢</h4><canvas class="ppr-chart" data-chart="margin" data-points=\''.h(json_encode($trend, JSON_UNESCAPED_UNICODE)).'\'></canvas></div>';
     $out .= '<div class="ppr-chart-box"><h4>訂單 / 出貨數量趨勢</h4><canvas class="ppr-chart" data-chart="freq" data-orders=\''.h(json_encode($orderStat['rows'], JSON_UNESCAPED_UNICODE)).'\' data-ships=\''.h(json_encode($shipStat['rows'], JSON_UNESCAPED_UNICODE)).'\'></canvas></div>';
     $out .= '</div>';
-    $out .= '<div class="ppr-section"><h4>各筆製令小結</h4><table class="ppr-cost-detail"><thead><tr><th>製令</th><th>建立日</th><th>數量</th><th>單顆成本</th><th>訂單單價</th><th>毛利率</th></tr></thead><tbody>';
+    $out .= '<div class="ppr-section"><h4>各筆製令小結</h4><table class="ppr-cost-detail"><thead><tr><th>製令</th><th>製令建立～結案日期</th><th>數量</th><th>單顆成本</th><th>訂單單價</th><th>毛利率</th></tr></thead><tbody>';
     foreach ($trend as $t) {
-        $out .= '<tr><td>'.h($t['bom']).'</td><td>'.h($t['date']).'</td><td>'.h($t['qty']).'</td>'
-            .'<td>'.($t['cost']!==null?number_format($t['cost'],4):'—').'</td>'
-            .'<td>'.($t['price']!==null?number_format($t['price'],4):'—').'</td>'
+        $out .= '<tr><td>'.h($t['bom']).'</td><td>'.h($t['period']).'</td><td>'.h($t['qty']).'</td>'
+            .'<td>'.ppr_num($t['cost']).'</td>'
+            .'<td>'.ppr_num($t['price']).'</td>'
             .'<td>'.($t['margin_rate']!==null?h($t['margin_rate']).'%':'—').'</td></tr>';
     }
     $out .= '</tbody></table></div>';
@@ -347,7 +506,7 @@ function ppr_render_summary_page(PDO $pdo, array $bomRows, array $partInfo): str
         .'<div class="ppr-freq-meta">訂單：共 '.$orderStat['count'].' 筆，平均間隔 '.($orderStat['avg_interval']!==null?$orderStat['avg_interval'].' 天':'—').'</div>'
         .'<div class="ppr-freq-meta">出貨：共 '.$shipStat['count'].' 筆，平均間隔 '.($shipStat['avg_interval']!==null?$shipStat['avg_interval'].' 天':'—').'</div>'
         .'</div></div>';
-    $out .= '</div>';
+    $out .= '</div></div>';
     return $out;
 }
 
@@ -399,7 +558,8 @@ if ($isAjax) {
                 if ($r['Drawing_No']) $label .= ' / '.$r['Drawing_No'];
                 if ($r['Spec_No']) $label .= '（'.$r['Spec_No'].'）';
                 $cust = $r['customer_name'] ?: '未指定客戶';
-                $cnt = ppr_bom_count_in_range($pdo, (int)$r['d_id'], $from, $to);
+                $pRow = ppr_part_row($pdo, (int)$r['d_id']);
+                $cnt = $pRow ? ppr_bom_count_in_range($pdo, $pRow, $from, $to) : 0;
                 $cntTxt = $cnt > 0 ? ('期間內 '.$cnt.' 筆BOM') : '期間內無BOM';
                 $items[] = ['id'=>(int)$r['d_id'], 'text'=>$label.' — '.$cust,
                     'html'=>h($label).' <small style="color:#8a6d45;">'.h($cust).'　'.($cnt>0?'<b style="color:#8a6d2f;">':'<span style="color:#999;">').h($cntTxt).($cnt>0?'</b>':'</span>').'</small>'];
@@ -412,17 +572,21 @@ if ($isAjax) {
             $term = trim($_POST['term'] ?? '');
             if ($term === '') { echo json_encode(['success'=>true, 'items'=>[]]); exit; }
             $kw = '%'.$term.'%';
+            // d_setting 用「主鍵對得上就用主鍵，對不上才用料號文字＋客戶」兩段解析：bom.d_setting_id 八成是 NULL，
+            // 只 JOIN 主鍵的話搜到的 BOM 會帶不出料號（id=0），前端就會跳「請先選擇料號」然後整個清單消失。
             $st = $pdo->prepare("
-                SELECT b.bom, b.d_setting_id, d.D_Setting_Id, d.Spec_No, b.Created_At, b.sqty, b.Client_Name
-                FROM bom b
-                LEFT JOIN d_setting d ON d.d_id = b.d_setting_id
-                WHERE b.bom LIKE ? ORDER BY b.Created_At DESC LIMIT 20");
+                SELECT b.bom, b.d_setting_id, b.d_id, b.Created_At, b.sqty, b.Client_Name
+                FROM bom b WHERE b.bom LIKE ? ORDER BY b.Created_At DESC LIMIT 20");
             $st->execute([$kw]);
             $items = [];
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                $label = $r['bom'].' — '.($r['D_Setting_Id'] ?: '未知料號').'（'.h($r['Client_Name']).'，'.substr((string)$r['Created_At'],0,10).'）';
-                $items[] = ['id'=>(int)$r['d_setting_id'], 'bom'=>$r['bom'], 'text'=>$r['D_Setting_Id'].' — '.$r['Client_Name'],
-                    'html'=>'<b>'.h($r['bom']).'</b> '.h($r['D_Setting_Id']).' <small style="color:#8a6d45;">'.h($r['Client_Name']).'　'.substr((string)$r['Created_At'],0,10).'</small>'];
+                $pk = (int)(ppr_resolve_bom_part($pdo, $r) ?? 0);
+                $partNo = $r['d_id'] ?: '未知料號';
+                $items[] = ['id'=>$pk, 'bom'=>$r['bom'], 'created'=>substr((string)$r['Created_At'],0,10),
+                    'text'=>$partNo.' — '.$r['Client_Name'],
+                    'html'=>'<b>'.h($r['bom']).'</b> '.h($partNo)
+                        .' <small style="color:#8a6d45;">'.h($r['Client_Name']).'　'.h(eg_fmt_date($r['Created_At'])).'</small>'
+                        .($pk <= 0 ? ' <small style="color:#DD5138;">此製令的料號在主檔查不到，無法產生報告</small>' : '')];
             }
             echo json_encode(['success'=>true, 'items'=>$items]);
             exit;
@@ -433,17 +597,50 @@ if ($isAjax) {
             $from = trim($_POST['date_from'] ?? '');
             $to   = trim($_POST['date_to'] ?? '');
             if ($clientId === '') { echo json_encode(['success'=>false,'error'=>'請先選擇客戶']); exit; }
-            $where = ["d.Customer_Id = ?"]; $params = [$clientId];
+            $cst = $pdo->prepare("SELECT customer FROM customer_list WHERE customer_id=? LIMIT 1");
+            $cst->execute([$clientId]);
+            $clientName = (string)($cst->fetchColumn() ?: '');
+
+            // 抓這個客戶的 BOM：主鍵對得上的（JOIN d_setting）＋只有料號文字的（比對客戶簡稱）兩路都要，
+            // 只走前者會漏掉八成的製令（bom.d_setting_id 大量為 NULL）。
+            $where = ["(d.Customer_Id = ? OR (b.d_setting_id IS NULL AND b.Client_Name = ?))"];
+            $params = [$clientId, $clientName];
             if ($from !== '') { $where[] = "b.Created_At >= ?"; $params[] = $from.' 00:00:00'; }
             if ($to   !== '') { $where[] = "b.Created_At <= ?"; $params[] = $to.' 23:59:59'; }
             $st = $pdo->prepare("
-                SELECT b.bom, b.d_setting_id, d.D_Setting_Id, b.sqty, b.Created_At
-                FROM bom b JOIN d_setting d ON d.d_id = b.d_setting_id
+                SELECT b.bom, b.d_setting_id, b.d_id, b.sqty, b.Created_At, b.Client_Name,
+                       b.processing_state, b.closed_at
+                FROM bom b LEFT JOIN d_setting d ON d.d_id = b.d_setting_id
                 WHERE ".implode(' AND ', $where)."
-                ORDER BY b.Created_At DESC LIMIT 100");
+                ORDER BY b.Created_At DESC LIMIT 400");
             $st->execute($params);
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
-            echo json_encode(['success'=>true, 'rows'=>$rows, 'total'=>count($rows)]);
+
+            // 依料號分組回傳：使用者回報「列出料號的方式很難去選擇」——原本是一長串平鋪的 BOM 列，
+            // 同一個料號的好幾張製令散在各處，要一筆一筆用眼睛找。改成一個料號一組、組內列製令。
+            $groups = [];
+            foreach ($rows as $r) {
+                $pk = (int)(ppr_resolve_bom_part($pdo, $r) ?? 0);
+                $partNo = (string)($r['d_id'] ?: '未知料號');
+                $key = $pk > 0 ? ('p'.$pk) : ('t'.$partNo);
+                if (!isset($groups[$key])) {
+                    $spec = '';
+                    if ($pk > 0) { $pr = ppr_part_row($pdo, $pk); $spec = (string)($pr['Spec_No'] ?? ''); }
+                    $groups[$key] = ['d_id'=>$pk, 'part_no'=>$partNo, 'spec'=>$spec, 'boms'=>[]];
+                }
+                $groups[$key]['boms'][] = [
+                    'bom'     => $r['bom'],
+                    'sqty'    => $r['sqty'],
+                    'created' => eg_fmt_date($r['Created_At']),
+                    'period'  => ppr_period_text($r),
+                ];
+            }
+            $out = array_values($groups);
+            usort($out, function ($a, $b) {
+                $c = count($b['boms']) <=> count($a['boms']);
+                return $c !== 0 ? $c : strcmp($a['part_no'], $b['part_no']);
+            });
+            echo json_encode(['success'=>true, 'groups'=>$out, 'total'=>count($rows), 'capped'=>(count($rows) >= 400)]);
             exit;
         }
 
@@ -451,17 +648,20 @@ if ($isAjax) {
             $did = (int)($_POST['d_id'] ?? 0);
             $from = trim($_POST['date_from'] ?? '');
             $to   = trim($_POST['date_to'] ?? '');
+            $ignoreRange = !empty($_POST['ignore_range']);   // 直接指定製令號時不受期間限制（見下方說明）
             if ($did <= 0) { echo json_encode(['success'=>false,'error'=>'請選擇料號']); exit; }
-            $st = $pdo->prepare("SELECT d_id, D_Setting_Id, Drawing_No, Spec_No, Type FROM d_setting WHERE d_id=? LIMIT 1");
-            $st->execute([$did]);
-            $part = $st->fetch(PDO::FETCH_ASSOC);
+            $part = ppr_part_row($pdo, $did);
             if (!$part) { echo json_encode(['success'=>false,'error'=>'找不到料號']); exit; }
 
-            $where = ["b.d_setting_id = ?"]; $params = [$did];
-            if ($from !== '') { $where[] = "b.Created_At >= ?"; $params[] = $from.' 00:00:00'; }
-            if ($to   !== '') { $where[] = "b.Created_At <= ?"; $params[] = $to.' 23:59:59'; }
-            $st = $pdo->prepare("SELECT b.bom, b.sqty, b.state, b.Created_At, b.Client_Name
-                FROM bom b WHERE ".implode(' AND ', $where)." ORDER BY b.Created_At DESC");
+            [$cond, $params] = ppr_part_match_cond($part, 'b', 'd_setting_id', 'd_id', 'Client_Name');
+            $where = [$cond];
+            if (!$ignoreRange) {
+                if ($from !== '') { $where[] = "b.Created_At >= ?"; $params[] = $from.' 00:00:00'; }
+                if ($to   !== '') { $where[] = "b.Created_At <= ?"; $params[] = $to.' 23:59:59'; }
+            }
+            $st = $pdo->prepare("SELECT b.bom, b.sqty, b.state, b.Created_At, b.Client_Name,
+                       b.processing_state, b.closed_at
+                FROM bom b WHERE ".implode(' AND ', $where)." ORDER BY b.Created_At DESC LIMIT 500");
             $st->execute($params);
             $boms = $st->fetchAll(PDO::FETCH_ASSOC);
 
@@ -470,14 +670,16 @@ if ($isAjax) {
             foreach ($boms as $b) {
                 $rows[] = [
                     'bom'         => $b['bom'],
-                    'created_at'  => substr((string)$b['Created_At'], 0, 10),
+                    'created_at'  => eg_fmt_date($b['Created_At']),
+                    'period'      => ppr_period_text($b),
                     'sqty'        => $b['sqty'],
                     'client'      => $b['Client_Name'],
                     'state'       => $b['state'],
                     'drawing'     => $drawings[$b['bom']] ?? ['status'=>'none','candidates'=>[]],
                 ];
             }
-            echo json_encode(['success'=>true, 'part'=>$part, 'rows'=>$rows, 'max_batch'=>PPR_MAX_BATCH_COUNT]);
+            echo json_encode(['success'=>true, 'part'=>$part, 'rows'=>$rows,
+                'ignore_range'=>$ignoreRange ? 1 : 0, 'max_batch'=>PPR_MAX_BATCH_COUNT]);
             exit;
         }
 
@@ -486,23 +688,26 @@ if ($isAjax) {
             $bomList = json_decode($_POST['boms'] ?? '[]', true) ?: [];
             $drawingChoice = json_decode($_POST['drawing_choice'] ?? '{}', true) ?: [];
             $opts = [
-                'work_report' => in_array($_POST['work_report'] ?? '', ['simple'], true) ? 'simple' : 'none',
-                'show_cost'   => !empty($_POST['show_cost']) ? 1 : 0,
-                'show_freq'   => !empty($_POST['show_freq']) ? 1 : 0,
-                'show_qc'     => !empty($_POST['show_qc']) ? 1 : 0,
+                'work_report'    => in_array($_POST['work_report'] ?? '', ['simple'], true) ? 'simple' : 'none',
+                'show_cost'      => !empty($_POST['show_cost']) ? 1 : 0,
+                'show_freq'      => !empty($_POST['show_freq']) ? 1 : 0,
+                'show_qc'        => !empty($_POST['show_qc']) ? 1 : 0,
+                'show_work_hist' => !empty($_POST['show_work_hist']) ? 1 : 0,
+                'show_price_hist'=> !empty($_POST['show_price_hist']) ? 1 : 0,
             ];
             if (!$did || empty($bomList)) { echo json_encode(['success'=>false,'error'=>'缺少料號或製令']); exit; }
             if (count($bomList) > PPR_MAX_BATCH_COUNT) {
                 echo json_encode(['success'=>false,'error'=>'單次最多產生 '.PPR_MAX_BATCH_COUNT.' 筆，請縮小期間或減少勾選（目前 '.count($bomList).' 筆）']); exit;
             }
-            $st = $pdo->prepare("SELECT d_id, D_Setting_Id, Drawing_No, Spec_No, Type FROM d_setting WHERE d_id=? LIMIT 1");
-            $st->execute([$did]);
-            $part = $st->fetch(PDO::FETCH_ASSOC);
+            $part = ppr_part_row($pdo, $did);
             if (!$part) { echo json_encode(['success'=>false,'error'=>'找不到料號']); exit; }
 
+            [$cond, $condParams] = ppr_part_match_cond($part, 'b', 'd_setting_id', 'd_id', 'Client_Name');
             $ph = implode(',', array_fill(0, count($bomList), '?'));
-            $st = $pdo->prepare("SELECT bom, sqty, state, Created_At, Client_Name, o_order_id FROM bom WHERE d_setting_id=? AND bom IN ($ph) ORDER BY Created_At ASC");
-            $st->execute(array_merge([$did], $bomList));
+            $st = $pdo->prepare("SELECT b.bom, b.sqty, b.state, b.Created_At, b.Client_Name, b.o_order_id,
+                    b.processing_state, b.closed_at
+                FROM bom b WHERE $cond AND b.bom IN ($ph) ORDER BY b.Created_At ASC");
+            $st->execute(array_merge($condParams, $bomList));
             $bomRows = $st->fetchAll(PDO::FETCH_ASSOC);
             if (empty($bomRows)) { echo json_encode(['success'=>false,'error'=>'查無製令資料']); exit; }
 
@@ -599,6 +804,19 @@ if ($isAjax) {
         .ppr-dw-pick { display:flex; gap:8px; flex-wrap:wrap; margin-left:26px; }
         .ppr-dw-pick label { display:flex; align-items:center; gap:4px; font-size:12px; border:1px solid #D8BE93; border-radius:4px; padding:3px 6px; cursor:pointer; }
         .ppr-count-bar { font-size:12px; color:#8a6d45; margin:6px 0; }
+        /* 客戶 BOM 瀏覽：一個料號一組，可展開看該料號的製令（原本平鋪幾百列很難挑） */
+        .ppr-browse-group { border-bottom:1px solid #F3E9D6; }
+        .ppr-browse-group:last-child { border-bottom:none; }
+        .ppr-browse-head { display:flex; align-items:center; gap:8px; padding:6px 10px; font-size:13px; cursor:pointer; color:#5b3a1e; }
+        .ppr-browse-head:hover { background:#FBF0DD; }
+        .ppr-browse-head .caret { color:#b5762a; width:10px; }
+        .ppr-browse-head .spec { color:#8a6d45; font-size:12px; }
+        .ppr-browse-head .cnt { margin-left:auto; font-size:11px; color:#8a6d45; background:#F7E0BD; border-radius:9px; padding:1px 9px; }
+        .ppr-browse-body { background:#FDFBF6; padding:2px 0 4px; }
+        .ppr-browse-bom { display:flex; align-items:center; gap:12px; padding:4px 10px 4px 30px; font-size:12px; cursor:pointer; color:#5b3a1e; }
+        .ppr-browse-bom:hover { background:#FBF0DD; }
+        .ppr-browse-bom .q { color:#8a6d45; }
+        .ppr-browse-bom .p { margin-left:auto; color:#a3865c; font-size:11px; }
 
         /* ══════ 報告版面（螢幕預覽用陰影卡片；列印時去邊框改用 @page 分頁） ══════
          * 螢幕上：報告區塊本身就是「選A4就長得像A4、選A3就長得像A3」的實際版面（非另外算的排版），
@@ -607,17 +825,46 @@ if ($isAjax) {
          * 這只是「螢幕預覽排法」，列印時 @media print 一律強制改回單欄、一張接一張分頁。 */
         .ppr-report-area { background:#EDE6D8; padding:16px 0 60px; }
         .ppr-report-area:not(.ppr-paper-a3) { display:flex; flex-wrap:wrap; justify-content:center; align-items:flex-start; gap:20px; }
-        .ppr-page { width:210mm; min-height:297mm; margin:0 auto 20px; padding:16mm 14mm; background:#fff;
+        /* 【版面口徑】白邊一律由 `.ppr-page` 自己的 padding 給（8mm），**@page 的 margin 固定 0**。
+         * 這樣螢幕上的白色方塊就是整張紙、內容區也與列印時完全相同，「螢幕上排得下」＝「印出來排得下」，
+         * A3 自動收成一張才會真的成立（先前螢幕用全紙寬、列印又被 @page 邊界再縮一次，
+         * 量到的高度根本不是列印時的高度，會變成畫面收成一張、印出來卻兩張）。
+         * @page margin:0 同時去掉瀏覽器自己的頁首頁尾網址列（同 ai-rules/16 的既有做法）。
+         * 白邊總量從原本的 @page 12mm ＋ padding 16mm＝28mm 降為 8mm，
+         * 對應使用者回報的「邊界留白太多、文字定位點有問題」。 */
+        .ppr-page { width:210mm; min-height:297mm; margin:0 auto 20px; padding:8mm; background:#fff;
             box-shadow:0 2px 10px rgba(90,60,20,.18); box-sizing:border-box; font-size:12.5px; color:#382a1a; }
+        .ppr-page-inner { box-sizing:border-box; }
         .ppr-report-area:not(.ppr-paper-a3) .ppr-page { margin:0; }
-        .ppr-report-area.ppr-paper-a3 .ppr-page { width:297mm; min-height:420mm; font-size:14px; }
+
+        /* ── A3＝橫式，整份報告收在同一張紙內（使用者明確要求）──
+         * 420×297mm 橫放扣掉 8mm 內距＝404×281mm 內容區；表頭/圖面/流程總覽橫跨整頁，其餘段落多欄由上往下流；
+         * 仍然放不下時由 JS 自動加欄數再等比縮小（pprFitPages），到極限還是放不下就明講會跨頁，不偷偷裁掉內容。 */
+        .ppr-report-area.ppr-paper-a3 .ppr-page { width:420mm; min-height:297mm; height:297mm; overflow:hidden; font-size:12px; }
+        .ppr-report-area.ppr-paper-a3 .ppr-page-main { column-count:2; column-gap:8mm; }
+        .ppr-report-area.ppr-paper-a3 .ppr-page-main .ppr-section { break-inside:avoid-column; margin:0 0 10px; }
+        .ppr-report-area.ppr-paper-a3 .ppr-proc-cards { display:flex; flex-direction:column; gap:8px; }
+        .ppr-report-area.ppr-paper-a3 .ppr-drawing-img { max-height:250px; }
+        .ppr-report-area.ppr-paper-a3 .ppr-drawing-frame { height:250px; }
+
         @media print {
+            /* 頁面本身的標題列不進列印版（使用者要求：不要印出「料號製程履歷報告 圖面／製程／…一次整合」那一行） */
+            .page-title, .ppr-toolbar, .nav_menu, .left_col, footer { display:none !important; }
+            /* custom.min.js（Gentelella）會在載入時把 .right_col 的 min-height 設成整個視窗高度，
+             * 那段空白會接在最後一張報告後面，讓列印多吐一張空白頁——必須在列印時清掉。 */
+            .right_col { margin:0 !important; padding:0 !important; min-height:0 !important; height:auto !important; }
+            html, body, .container.body, .main_container { margin:0 !important; padding:0 !important;
+                min-height:0 !important; height:auto !important; }
             .ppr-report-area { background:none; padding:0; display:block !important; }
-            .ppr-page { box-shadow:none; margin:0 !important; width:auto; min-height:0; page-break-after:always; }
+            /* 寬高與內距**刻意維持與螢幕完全相同**，只拿掉陰影與外距；改成 auto 會讓版面在列印時重排，
+             * 螢幕上量好的 A3 收頁結果就會失效（實測會變成兩頁）。 */
+            .ppr-page { box-shadow:none; margin:0 !important; page-break-after:always; }
             .ppr-page:last-child { page-break-after:auto; }
             /* 保證背景色/徽章色列印跟畫面上一致，不被瀏覽器「省墨」預設值吃掉 */
             .ppr-page, .ppr-page * { -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; color-adjust:exact !important; }
         }
+        .ppr-fit-warn { margin:4px 0 0; font-size:11px; color:#DD5138; }
+        @media print { .ppr-fit-warn { display:none; } }
 
         .ppr-head-block { page-break-inside:avoid; }
         .ppr-doc-head { display:flex; justify-content:space-between; align-items:baseline; border-bottom:3px solid #8A5A2B; padding-bottom:8px; margin-bottom:10px; }
@@ -628,7 +875,8 @@ if ($isAjax) {
             border:1px solid #EADFC8; border-radius:6px; overflow:hidden; margin-bottom:14px; }
         .ppr-info-item { background:#fff; padding:6px 12px; display:flex; flex-direction:column; gap:1px; }
         .ppr-info-item .k { font-size:10.5px; color:#a3865c; }
-        .ppr-info-item .v { font-size:13.5px; color:#382a1a; font-weight:600; }
+        .ppr-info-item .v { font-size:13.5px; color:#382a1a; font-weight:600; word-break:break-word; }
+        .ppr-info-item.ppr-info-wide { grid-column:1 / -1; }
 
         .ppr-body { display:flex; gap:16px; margin-bottom:16px; }
         .ppr-drawing-box { flex:1 1 46%; border:1px solid #EADFC8; border-radius:8px; min-height:220px; display:flex;
@@ -641,15 +889,14 @@ if ($isAjax) {
             margin:0 0 8px; padding-bottom:5px; border-bottom:2px solid #F7E0BD; }
         .ppr-section { margin:16px 0; page-break-inside:avoid; }
 
-        /* 流程總覽：步驟條 */
-        .ppr-stepper { display:flex; align-items:flex-start; flex-wrap:wrap; }
-        .ppr-step { display:flex; flex-direction:column; align-items:center; width:88px; text-align:center; }
-        .ppr-step .dot { width:26px; height:26px; border-radius:50%; background:#fff; border:2.5px solid #999;
-            display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px; }
-        .ppr-step .name { font-size:11px; margin-top:5px; color:#382a1a; font-weight:600; line-height:1.3; }
-        .ppr-step .kind { font-size:10px; color:#a3865c; margin-top:1px; }
-        .ppr-step .stat { font-size:10px; margin-top:3px; padding:1px 7px; border-radius:8px; color:#fff; }
-        .ppr-step-line { flex:0 0 auto; width:16px; height:2.5px; background:#D8BE93; margin-top:13px; }
+        /* 流程總覽：簡約橫排（製程名稱＋狀態徽章，中間以箭頭銜接；刻意不放 1234 數字標籤） */
+        .ppr-stepper { display:flex; align-items:center; flex-wrap:wrap; gap:4px 2px; }
+        .ppr-chip { display:inline-flex; align-items:center; gap:5px; border:1px solid #EADFC8; background:#FDF8EF;
+            border-radius:13px; padding:2px 4px 2px 10px; white-space:nowrap; }
+        .ppr-chip .nm { font-size:12px; color:#382a1a; font-weight:600; line-height:1.4; }
+        .ppr-chip .sp { font-size:9.5px; color:#8a6d45; background:#F3EDE1; border-radius:7px; padding:0 5px; line-height:15px; }
+        .ppr-chip .st { font-size:10px; color:#fff; border-radius:10px; padding:1px 8px; line-height:14px; }
+        .ppr-arrow { color:#C9A97A; font-size:13px; padding:0 3px; line-height:1; }
 
         /* 製程詳細卡片 */
         .ppr-proc-cards { display:flex; flex-direction:column; gap:10px; }
@@ -672,14 +919,27 @@ if ($isAjax) {
         .ppr-aod-tag { background:#F0A24B; color:#fff; border-radius:8px; padding:0 6px; font-size:10px; }
         .ppr-work-title { font-size:11px; color:#8a6d45; font-weight:600; margin:4px 0 2px; }
 
-        table.ppr-meas-table, table.ppr-work-table, table.ppr-cost-table, table.ppr-cost-detail, table.ppr-freq-table {
+        table.ppr-meas-table, table.ppr-work-table, table.ppr-work-hist, table.ppr-cost-table, table.ppr-cost-detail, table.ppr-freq-table {
             width:100%; border-collapse:collapse; font-size:11px; margin:3px 0; }
         table.ppr-meas-table th, table.ppr-meas-table td,
         table.ppr-work-table th, table.ppr-work-table td,
+        table.ppr-work-hist th, table.ppr-work-hist td,
         table.ppr-cost-table th, table.ppr-cost-table td,
         table.ppr-cost-detail th, table.ppr-cost-detail td,
         table.ppr-freq-table th, table.ppr-freq-table td { border:1px solid #EFE7D8; padding:3px 7px; text-align:left; }
-        table.ppr-meas-table th, table.ppr-work-table th, table.ppr-cost-detail th, table.ppr-freq-table th { background:#FAF3E4; color:#8a6d45; font-weight:600; }
+        table.ppr-meas-table th, table.ppr-work-table th, table.ppr-work-hist th, table.ppr-cost-detail th, table.ppr-freq-table th { background:#FAF3E4; color:#8a6d45; font-weight:600; }
+        /* 同料號歷史報工：只有一列表頭，其餘純資料（使用者要求「不需一直重複出現標題中文」） */
+        table.ppr-work-hist { font-size:10.5px; }
+        table.ppr-work-hist th, table.ppr-work-hist td { padding:2px 6px; white-space:nowrap; }
+        table.ppr-work-hist tr.same-m td { background:#FBF0DD; }
+        table.ppr-work-hist tr.same-m td:first-child { font-weight:600; }
+        /* 歷史加工價格儲存格：一行一筆「日期 單價 ×數量」，窄欄也讀得清楚 */
+        .ppr-ph { display:flex; flex-direction:column; gap:1px; }
+        .ppr-ph .ph-row { display:flex; gap:6px; align-items:baseline; font-size:10.5px; white-space:nowrap; }
+        .ppr-ph .ph-row .d { color:#a3865c; }
+        .ppr-ph .ph-row .p { color:#382a1a; font-weight:600; }
+        .ppr-ph .ph-row .q, .ppr-ph .ph-row .m { color:#a3865c; font-size:10px; }
+        .ppr-ph-note { font-size:10px; color:#DD5138; margin-bottom:1px; }
         table.ppr-cost-table th { background:#F7E0BD; width:110px; color:#5b3a1e; }
         table.ppr-work-table th { width:80px; }
         table.ppr-meas-table tbody tr:nth-child(even), table.ppr-freq-table tbody tr:nth-child(even) { background:#FCFAF5; }
@@ -695,7 +955,7 @@ if ($isAjax) {
         .ppr-chart-box h4 { margin:0 0 6px; font-size:12.5px; color:#8A5A2B; font-weight:700; }
         canvas.ppr-chart { width:100% !important; height:200px !important; }
     </style>
-    <style id="pprPageSizeStyle">@page { size:A4 portrait; margin:12mm; }</style>
+    <style id="pprPageSizeStyle">@page { size:A4 portrait; margin:0; }</style>
 </head>
 <body class="nav-sm">
 <div class="container body">
@@ -745,16 +1005,19 @@ if ($isAjax) {
             <div class="row2">
                 <label><input type="checkbox" id="pprOptQc" value="1" checked> 顯示QC檢驗內容</label>
                 <label><input type="checkbox" id="pprOptWork" value="1"> 帶入報工簡表</label>
+                <label title="在每個製程的報工簡表下方，加列同一料號同一製程最近 5 筆報工（相同機台優先）"><input type="checkbox" id="pprOptWorkHist" value="1"> 顯示同料號歷史報工</label>
                 <label><input type="checkbox" id="pprOptCost" value="1" checked> 顯示成本毛利</label>
+                <label title="在成本明細右側加列此廠商×此料號×此製程過去的實際發包單價"><input type="checkbox" id="pprOptPriceHist" value="1"> 顯示歷史加工價格</label>
                 <label><input type="checkbox" id="pprOptFreq" value="1" checked> 顯示訂單/出貨頻率（僅單筆模式）</label>
                 <label>紙張</label>
                 <span class="ppr-paper-toggle">
-                    <button type="button" class="ppr-paper-btn active" data-size="A4">A4</button>
-                    <button type="button" class="ppr-paper-btn" data-size="A3">A3（多筆或大圖適用）</button>
+                    <button type="button" class="ppr-paper-btn active" data-size="A4">A4 直式</button>
+                    <button type="button" class="ppr-paper-btn" data-size="A3">A3 橫式（整份收在一張）</button>
                 </span>
             </div>
             <div id="pprClientBrowseWrap" style="display:none;">
                 <div class="ppr-count-bar" id="pprClientBrowseCount"></div>
+                <div style="margin:4px 0 6px;"><input type="text" id="pprBrowseFilter" placeholder="在結果中篩選料號/規格…" style="width:260px;"></div>
                 <div class="ppr-bom-list" id="pprClientBrowseList"></div>
             </div>
             <div id="pprBomListWrap" style="display:none;">
@@ -780,14 +1043,21 @@ if ($isAjax) {
         <h4>二、操作步驟（三種找到料號的方式，任選一種）</h4>
         <ul>
             <li><b>直接打料號</b>：輸入框下方會即時跳出符合的料號建議清單（含所屬客戶名稱、目前選定期間內有幾筆BOM，避免同料號不同客戶混淆或打了半天沒資料）。</li>
-            <li><b>先選客戶</b>：客戶欄一樣打字模糊搜尋（同名客戶會自動標示縣市/區，甚至到路名區分）；選定後按「瀏覽此客戶期間內所有BOM」，下方直接列出清單點選即可，不必再猜料號怎麼打。</li>
-            <li><b>直接打製令(BOM)號碼</b>：右側「或製令號」欄可直接搜尋 BOM 號碼，選到後會自動帶入對應料號並查詢，該筆也會自動勾選。</li>
+            <li><b>先選客戶</b>：客戶欄一樣打字模糊搜尋（同名客戶會自動標示縣市/區，甚至到路名區分）；選定後按「瀏覽此客戶期間內所有BOM」，結果<b>依料號分組</b>（一個料號一列，右側顯示它有幾筆製令），點料號展開該料號的製令、點製令直接選定；上方另有篩選框可再輸入料號或規格縮小範圍。</li>
+            <li><b>直接打製令(BOM)號碼</b>：右側「或製令號」欄可直接搜尋 BOM 號碼，選到後會自動帶入對應料號並查詢，該筆也會自動勾選。<b>用這條路進來時會忽略上方的「期間」</b>（期間預設本月，而直接打進來的製令多半是舊單，照期間篩會變成查不到），清單標題會標示「（不限期間）」。</li>
             <li>找到料號後按「查詢此料號筆數」列出期間內的製令(BOM)清單（清單標題會顯示共有幾筆）。若某製令的圖面在 Z:/BOM/ 有多個副檔名的精確匹配檔，會列出候選清單，需先選定要用哪一個才能產生報告；找不到精確匹配檔則顯示「找不到圖面」。</li>
             <li>期間內只有 1 筆 → 直接產生單筆報告（可另外顯示訂單/出貨頻率分析）。多筆 → 勾選要產生的製令（可全選，上限 <?= PPR_MAX_BATCH_COUNT ?> 筆），按「產生報告」；同一份文件內連續呈現，最後加一頁總體趨勢分析。</li>
-            <li><b>紙張大小</b>：報告產生後可隨時點「A4」／「A3」按鈕即時切換排版（A3 會把製程卡片改雙欄呈現，不是單純放大留白），選好再按「列印/產生PDF」。</li>
+            <li><b>紙張大小</b>：報告產生後可隨時點「A4 直式」／「A3 橫式」按鈕即時切換排版，選好再按「列印/產生PDF」。<b>A3 一律橫式並把整份報告收在同一張紙內</b>：段落自動改成多欄流排（2→3→4 欄），仍放不下才等比縮小字級；欄數加滿又縮到下限還是放不下時，畫面上會出現紅字提醒「列印會分成兩頁」，<b>內容不會被裁掉</b>。</li>
         </ul>
         <h4>三、重要行為 / 常見疑問</h4>
         <div class="tip">
+            <b>製程順序</b>：一律依 bom_sn（10/20/30/40…）排，與生管的 BOM 總表／已完工BOM查詢完全一致。<br>
+            <b>廠商與機台</b>：廠商一律顯示（含「超正齒研」「客戶」這類廠內自有單位）；機台顯示<b>現場編號</b>，製令上沒填機台時自動改抓報工紀錄裡實際報的那一台，兩邊都查不到就不顯示（全站沒有「在製令上指定機台」這個功能，所以不再印「未指定機台」）。<br>
+            <b>製令建立～結案日期</b>：結案與否看 processing_state，結案日取 closed_at。2026-05-22「手動結案」功能上線前的舊製令沒有結案時間可查，會顯示「已結案（無結案日期紀錄）」——<b>不會拿 BOM 編號回推的日期硬湊</b>（那個推算值其實是建立日，湊出來會變成結案早於建立）。<br>
+            <b>同料號歷史報工</b>（選配）：掛在該製程的報工簡表下方，列同一料號同一製程最近 5 筆，相同機台的排前面並以底色標示，不同機台也會列出來當參考。需一併勾選「帶入報工簡表」（勾了會自動幫你勾）。<br>
+            <b>歷史加工價格</b>（選配）：在成本明細加一欄，列此廠商×此料號×此製程過去的實際發包單價（日期／單價／數量）。同一廠商查無紀錄時會自動放寬列出其他廠商的，並在欄位內標明「同廠商無紀錄，改列其他廠商」。<br>
+            <b>歷史訂單／出貨的「製程」欄</b>：同一個料號常有「只做齒研」與「代料到成品」等不同加工範圍的單，單價自然差很多，所以一定要對照這一欄再看單價。訂單取自訂單的加工項目，出貨取自它所綁訂單的同一欄位，未綁訂單者留白。<br>
+            <b>找得到 BOM 卻產不出報告？</b>：全站約八成的製令沒有填料號的整數外鍵（只有料號文字），本頁已同時用兩種方式歸戶，所以舊製令也查得到；若某張製令的料號在料號主檔完全查不到，建議清單會直接標紅說明無法產生報告。<br>
             <b>圖面判定</b>：只認「檔名去副檔名恰好等於製令號碼」的檔案，任何帶後綴的變體檔名一律不算候選。<br>
             <b>拆批/複驗歷程</b>：製程若曾被拆成多批（A/B/C），卡片內會列出每個批次各自的檢驗歷程與判定，即使該批次後續已被合併消耗（歷史批次仍標示「已拆分/合併」但檢驗紀錄不會被隱藏）。<br>
             <b>QC檢驗內容</b>：勾選「顯示QC檢驗內容」會列出每輪檢驗的批次/輪次判定，若該輪有逐項量測資料（項目/標準/實測值/判定）也會一併列出。<br>
@@ -811,6 +1081,7 @@ if ($isAjax) {
 <script src="../../resource/js/nprogress.js"></script>
 <script src="../../resource/js/custom.min.js"></script>
 <script src="../../resource/js/Chart.min.js"></script>
+<script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_input_rules.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_input_rules.js') ?>"></script>
 <script>
 $(document).ready(function(){
@@ -882,31 +1153,42 @@ pprSetupTypeahead({
 pprSetupTypeahead({
     inputSel:'#pprBomInput', hiddenSel:'#pprBomHidden', boxSel:'#pprBomSuggest', action:'search_boms',
     onPick:function(it){
+        if (!it.id) { alert('這張製令的料號在料號主檔查不到，無法產生報告。'); return; }
         $('#pprPartInput').val(it.text); $('#pprPartId').val(it.id);
         $('#pprBomInput').val('');
-        pprDoSearch(it.bom);
+        // 直接指定製令號時一律忽略上方的「期間」：期間預設是本月，而使用者打進來的製令多半是舊單
+        // （例 B-1140807011 是 2025 年的），照期間篩就會變成「跳一個提示然後清單整個不見」＝使用者回報的症狀。
+        pprDoSearch(it.bom, true);
     }
 });
 
 var PPR_HIGHLIGHT_BOM = null;
 
-function pprDoSearch(highlightBom){
+function pprDoSearch(highlightBom, ignoreRange){
     var did = $('#pprPartId').val();
     if (!did) { alert('請先從建議清單選擇一個料號'); return; }
     PPR_HIGHLIGHT_BOM = highlightBom || null;
     var from = $('#pprDateFrom').val(), to = $('#pprDateTo').val();
-    $.post(PPR_API, {action:'list_boms', d_id:did, date_from:from, date_to:to}, function(res){
+    $.post(PPR_API, {action:'list_boms', d_id:did, date_from:from, date_to:to, ignore_range: ignoreRange ? 1 : 0}, function(res){
         if (!res.success) { alert(res.error||'查詢失敗'); return; }
         PPR_ROWS = res.rows; PPR_DRAWING_CHOICE = {};
         $('#pprMaxCount').text(res.max_batch);
-        $('#pprBomListTitle').text('「'+$('#pprPartInput').val()+'」期間內共 '+PPR_ROWS.length+' 筆 BOM');
+        var scope = res.ignore_range ? '（不限期間）' : '期間內';
+        $('#pprBomListTitle').text('「'+$('#pprPartInput').val()+'」'+scope+'共 '+PPR_ROWS.length+' 筆製令');
         pprRenderBomList();
         $('#pprBomListWrap').show();
         $('#pprClientBrowseWrap').hide();
         $('#pprReportArea').empty(); $('#pprPrintBtn').hide();
+        if (PPR_HIGHLIGHT_BOM) {
+            var $hit = $('.ppr-bom-chk[data-bom="'+PPR_HIGHLIGHT_BOM+'"]').closest('.ppr-bom-row');
+            if ($hit.length) $('html,body').animate({scrollTop: $hit.offset().top - 120}, 250);
+        }
     }, 'json');
 }
 $('#pprSearchBtn').on('click', function(){ pprDoSearch(); });
+// 勾「同料號歷史報工」但沒勾「帶入報工簡表」＝什麼都不會出現，直接替使用者一起勾起來
+$('#pprOptWorkHist').on('change', function(){ if ($(this).is(':checked')) $('#pprOptWork').prop('checked', true); });
+$('#pprOptPriceHist').on('change', function(){ if ($(this).is(':checked')) $('#pprOptCost').prop('checked', true); });
 
 $('#pprBrowseClientBtn').on('click', function(){
     var cid = $('#pprClientId').val();
@@ -914,23 +1196,61 @@ $('#pprBrowseClientBtn').on('click', function(){
     var from = $('#pprDateFrom').val(), to = $('#pprDateTo').val();
     $.post(PPR_API, {action:'browse_customer_boms', customer_id:cid, date_from:from, date_to:to}, function(res){
         if (!res.success) { alert(res.error||'查詢失敗'); return; }
-        $('#pprClientBrowseCount').text('此客戶期間內共 '+res.total+' 筆 BOM（點選一筆即可帶入料號並查詢）'+(res.total>=100?'（僅顯示前100筆）':''));
-        var $wrap = $('#pprClientBrowseList').empty();
-        if (!res.rows.length) { $wrap.html('<div class="ppr-bom-row">此期間查無資料。</div>'); }
-        res.rows.forEach(function(r){
-            var $row = $('<div class="ppr-bom-row" style="cursor:pointer;">'
-                + '<b>'+r.bom+'</b> '+r.D_Setting_Id+' 數量'+r.sqty+' '+String(r.Created_At).substring(0,10)
-                + '</div>');
-            $row.on('click', function(){
-                $('#pprPartInput').val(r.D_Setting_Id); $('#pprPartId').val(r.d_setting_id);
-                pprDoSearch(r.bom);
-            });
-            $wrap.append($row);
-        });
+        PPR_BROWSE_GROUPS = res.groups || [];
+        $('#pprClientBrowseCount').html('此客戶期間內共 <b>'+res.total+'</b> 筆製令，分屬 <b>'+PPR_BROWSE_GROUPS.length
+            +'</b> 個料號（點料號＝列出它的全部製令；點某一張製令＝直接選定該筆）'
+            + (res.capped ? '　<span style="color:#DD5138;">資料量過大僅取最近 400 筆，請縮小期間</span>' : ''));
+        $('#pprBrowseFilter').val('');
+        pprRenderBrowseGroups('');
         $('#pprClientBrowseWrap').show();
         $('#pprBomListWrap').hide();
     }, 'json');
 });
+
+/**
+ * 客戶 BOM 瀏覽：一個料號一組（可展開看該料號底下的製令）。
+ * 原本是把幾百筆製令平鋪成一長串，同一個料號的製令散落各處，使用者回報「列出料號的方式很難去選擇」。
+ */
+var PPR_BROWSE_GROUPS = [];
+function pprRenderBrowseGroups(kw){
+    var $wrap = $('#pprClientBrowseList').empty();
+    kw = (kw||'').trim().toLowerCase();
+    var shown = 0;
+    PPR_BROWSE_GROUPS.forEach(function(g, gi){
+        var hay = (g.part_no+' '+(g.spec||'')).toLowerCase();
+        if (kw && hay.indexOf(kw) === -1) return;
+        shown++;
+        var $g = $('<div class="ppr-browse-group"></div>');
+        var $head = $('<div class="ppr-browse-head">'
+            + '<span class="caret">▸</span><b>'+egEsc(g.part_no)+'</b>'
+            + (g.spec ? ' <span class="spec">'+egEsc(g.spec)+'</span>' : '')
+            + '<span class="cnt">'+g.boms.length+' 筆製令</span></div>');
+        var $body = $('<div class="ppr-browse-body" style="display:none;"></div>');
+        g.boms.forEach(function(b){
+            var $r = $('<div class="ppr-browse-bom"><b>'+egEsc(b.bom)+'</b>'
+                + '<span class="q">數量 '+egEsc(b.sqty)+'</span>'
+                + '<span class="p">'+egEsc(b.period)+'</span></div>');
+            $r.on('click', function(e){
+                e.stopPropagation();
+                if (!g.d_id) { alert('這個料號在料號主檔查不到，無法產生報告。'); return; }
+                $('#pprPartInput').val(g.part_no); $('#pprPartId').val(g.d_id);
+                pprDoSearch(b.bom, true);
+            });
+            $body.append($r);
+        });
+        $head.on('click', function(){
+            var open = $body.is(':visible');
+            $body.toggle(!open);
+            $head.find('.caret').text(open ? '▸' : '▾');
+            if (!open && g.d_id) { $('#pprPartInput').val(g.part_no); $('#pprPartId').val(g.d_id); }
+        });
+        $g.append($head).append($body);
+        $wrap.append($g);
+    });
+    if (!shown) $wrap.html('<div class="ppr-bom-row">'+(kw ? '沒有符合「'+egEsc(kw)+'」的料號。' : '此期間查無資料。')+'</div>');
+}
+function egEsc(s){ return $('<div>').text(s === null || s === undefined ? '' : s).html(); }
+$('#pprBrowseFilter').on('input', function(){ pprRenderBrowseGroups($(this).val()); });
 
 function pprRenderBomList(){
     var $wrap = $('#pprBomList').empty();
@@ -943,7 +1263,8 @@ function pprRenderBomList(){
         var checked = (PPR_ROWS.length===1 || r.bom===PPR_HIGHLIGHT_BOM) ? 'checked' : '';
         var $row = $('<div class="ppr-bom-row">'
             + '<input type="checkbox" class="ppr-bom-chk" data-bom="'+r.bom+'" '+checked+'>'
-            + '<b>'+r.bom+'</b> '+r.created_at+' 數量'+r.sqty+' '+(r.client||'')+' '+dwText
+            + '<b>'+egEsc(r.bom)+'</b> <span style="color:#a3865c;">'+egEsc(r.period||r.created_at)+'</span>'
+            + ' 數量'+egEsc(r.sqty)+' '+egEsc(r.client||'')+' '+dwText
             + '</div>');
         if (r.bom === PPR_HIGHLIGHT_BOM) $row.css({background:'#FFF7E8'});
         $wrap.append($row);
@@ -990,7 +1311,9 @@ $('#pprGenBtn').on('click', function(){
         work_report: $('#pprOptWork').is(':checked') ? 'simple' : 'none',
         show_cost: $('#pprOptCost').is(':checked') ? 1 : 0,
         show_freq: $('#pprOptFreq').is(':checked') ? 1 : 0,
-        show_qc: $('#pprOptQc').is(':checked') ? 1 : 0
+        show_qc: $('#pprOptQc').is(':checked') ? 1 : 0,
+        show_work_hist: $('#pprOptWorkHist').is(':checked') ? 1 : 0,
+        show_price_hist: $('#pprOptPriceHist').is(':checked') ? 1 : 0
     }, function(res){
         if (!res.success) { alert(res.error||'產生失敗'); return; }
         $('#pprReportArea').html(res.html);
@@ -1001,13 +1324,52 @@ $('#pprGenBtn').on('click', function(){
     }, 'json');
 });
 
-/* 紙張大小：純前端切換（不需重新向後端要資料），點了立即重排版，A3 額外套用寬版排版(製程卡片雙欄) */
+/* 紙張大小：純前端切換（不需重新向後端要資料），點了立即重排版。
+ * A3 一律**橫式**且整份報告收在同一張紙（使用者明確要求）：段落改雙欄流排，放不下再由 pprFitPages 等比縮小。 */
 function pprApplyPaperState(){
     var size = $('.ppr-paper-btn.active').data('size') || 'A4';
-    var css = size === 'A3' ? '@page { size:A3 portrait; margin:14mm; }' : '@page { size:A4 portrait; margin:12mm; }';
+    var css = size === 'A3' ? '@page { size:A3 landscape; margin:0; }' : '@page { size:A4 portrait; margin:0; }';
     $('#pprPageSizeStyle').text(css);
     $('#pprReportArea').toggleClass('ppr-paper-a3', size === 'A3');
+    pprFitPages();
 }
+
+/**
+ * A3 模式把每一頁收進 297mm 高（一張 A3 一筆製令）。順序刻意是「先加欄數，不夠才縮字級」：
+ * A3 橫放有 420mm 寬，排到 3～4 欄每欄仍有 140/105mm，比把字縮到看不清楚好讀得多。
+ * 刻意**不裁切內容**：欄數加滿又縮到下限仍放不下時，維持原樣並在畫面上（列印時隱藏）標明會跨頁，
+ * 讓使用者自己決定是取消幾個選項還是改用 A4。A4 模式一律還原，交給瀏覽器原生分頁。
+ */
+function pprFitPages(){
+    var isA3 = $('#pprReportArea').hasClass('ppr-paper-a3');
+    $('.ppr-fit-warn').remove();
+    $('.ppr-page').each(function(){
+        var $p = $(this), $in = $p.find('> .ppr-page-inner'), $main = $in.find('> .ppr-page-main');
+        if (!$in.length) return;
+        $in.css({zoom:'', width:''});
+        $main.css('column-count', '');
+        $p.css({height:'', overflow:''});
+        if (!isA3) return;
+        var availH = $p[0].clientHeight - parseFloat($p.css('padding-top')) - parseFloat($p.css('padding-bottom'));
+        if (availH <= 0 || $in[0].scrollHeight <= availH) return;
+        var cols = [2, 3, 4];
+        for (var i = 0; i < cols.length && $main.length; i++) {
+            $main.css('column-count', cols[i]);
+            if ($in[0].scrollHeight <= availH) return;
+        }
+        var needH = $in[0].scrollHeight;
+        if (needH <= 0) return;
+        var z = Math.max(0.5, Math.floor(availH / needH * 100) / 100 - 0.01);
+        $in.css({zoom:z, width:(100 / z) + '%'});
+        if ($in[0].scrollHeight * z > availH + 2) {
+            // 放不下就**放掉固定高度與裁切**，寧可多印一頁也不可以把內容默默切掉（A3 版面本來是 overflow:hidden）
+            $p.css({height:'auto', overflow:'visible'});
+            $p.append('<div class="ppr-fit-warn">此筆內容過多，欄數加到 4 欄又縮到下限仍放不下一張 A3，列印時會分成兩頁（內容不會被裁掉）；'
+                + '可取消部分選項（例如「顯示QC檢驗內容」或「同料號歷史報工」）或改用 A4。</div>');
+        }
+    });
+}
+$(window).on('resize', pprDebounce(pprFitPages, 200));
 $('.ppr-paper-btn').on('click', function(){
     $('.ppr-paper-btn').removeClass('active');
     $(this).addClass('active');
@@ -1023,21 +1385,21 @@ function pprInitCharts(){
         var ctx = this.getContext('2d');
         if (type === 'cost') {
             var pts = JSON.parse($c.attr('data-points'));
-            new Chart(ctx, { type:'line', data:{ labels: pts.map(function(p){return p.date;}),
+            new Chart(ctx, { type:'line', data:{ labels: pts.map(function(p){return egFmtDate(p.date);}),
                 datasets:[
                     { label:'單顆成本', data: pts.map(function(p){return p.cost;}), borderColor:'#DD5138', fill:false },
                     { label:'訂單單價', data: pts.map(function(p){return p.price;}), borderColor:'#F0A24B', fill:false }
                 ]}, options:{ responsive:true, maintainAspectRatio:false } });
         } else if (type === 'margin') {
             var pts2 = JSON.parse($c.attr('data-points'));
-            new Chart(ctx, { type:'bar', data:{ labels: pts2.map(function(p){return p.date;}),
+            new Chart(ctx, { type:'bar', data:{ labels: pts2.map(function(p){return egFmtDate(p.date);}),
                 datasets:[{ label:'毛利率(%)', data: pts2.map(function(p){return p.margin_rate;}), backgroundColor:'#C9A227' }] },
                 options:{ responsive:true, maintainAspectRatio:false } });
         } else if (type === 'freq') {
             var orders = JSON.parse($c.attr('data-orders')||'[]');
             var ships = JSON.parse($c.attr('data-ships')||'[]');
             new Chart(ctx, { type:'line', data:{
-                labels: orders.map(function(o){return (o.Order_date||'').substring(0,10);}).reverse(),
+                labels: orders.map(function(o){return egFmtDate((o.Order_date||'').substring(0,10));}).reverse(),
                 datasets:[
                     { label:'訂單數量', data: orders.map(function(o){return o.Qty;}).reverse(), borderColor:'#F0A24B', fill:false },
                     { label:'出貨數量', data: ships.map(function(s){return s.Qty;}).reverse(), borderColor:'#8a6d2f', fill:false }
