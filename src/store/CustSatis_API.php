@@ -47,7 +47,9 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 /* 寫入類先驗登入再驗 CSRF（順序不可顛倒，理由同其他模組：session 被 GC 掃掉時
    token 會在同一個請求裡重新產生、比對必定不過，但那是「已被登出」不是 CSRF 攻擊） */
-$WRITE = ['score_save', 'score_cleanup', 'summary_save', 'monitor_save', 'setting_save', 'asdoc_save', 'print_log', 'cust_bind'];
+$WRITE = ['score_save', 'score_cleanup', 'score_clear_suggest', 'summary_save', 'monitor_save',
+          'setting_save', 'asdoc_save', 'print_log', 'cust_bind',
+          'target_save', 'survey_save', 'survey_upload', 'survey_file_assign', 'survey_file_delete'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['cs_csrf'], $tok))
@@ -87,6 +89,7 @@ case 'stat_list': {
         'range'       => cs_period_range($y, $q),
         'undone_mode' => $mode,
         'undone_label'=> cs_undone_mode_label($mode),
+        'target_count'=> count(cs_targets($db, $y, $q)),   // 0＝還沒建名單（此時列出全部有往來客戶）
         'perm'        => ['admin'=>$P['canAdmin']],
     ]);
 }
@@ -180,15 +183,258 @@ case 'score_cleanup': {
     jout(['deleted'=>count($del), 'kept'=>$kept]);
 }
 
+/* ── 問卷作業（2-SM-02-02）────────────────────────────────── */
+
+/* 問卷題目、等第與分數對照、本期名單／回收狀況／附件，一次give前端 */
+case 'survey_meta': {
+    list($y, $q) = csYQ();
+    $files = [];
+    foreach (cs_survey_files($db, $y, $q) as $f) {
+        $files[] = ['id'=>(int)$f['id'], 'customer_id'=>(string)($f['customer_id'] ?? ''),
+                    'customer_name'=>(string)($f['customer_name'] ?? ''),
+                    'orig_name'=>(string)$f['orig_name'], 'size'=>(int)$f['file_size'],
+                    'at'=>(string)$f['created_at'], 'by'=>(string)($f['created_by_name'] ?? '')];
+    }
+    $tg = [];
+    foreach (cs_targets($db, $y, $q) as $cid => $t)
+        $tg[] = ['customer_id'=>(string)$t['customer_id'], 'customer_name'=>(string)$t['customer_name'],
+                 'pick_reason'=>(string)($t['pick_reason'] ?? ''), 'sent_date'=>$t['sent_date']];
+    jout(['questions'=>cs_survey_questions($db), 'levels'=>cs_survey_levels($db),
+          'cats'=>cs_survey_cats(), 'targets'=>$tg, 'files'=>$files,
+          'ship_stats'=>cs_ship_stats($db, $y, $q)]);
+}
+
+/* 設定本期受調查名單（整份取代——名單是一次挑好的，逐筆 diff 沒有意義） */
+case 'target_save': {
+    list($y, $q) = csYQ();
+    $items = json_decode((string)($_POST['items'] ?? '[]'), true);
+    if (!is_array($items)) jerr('資料格式錯誤');
+    if (count($items) > 500) jerr('一次最多 500 家');
+    try {
+        $db->beginTransaction();
+        $db->prepare("DELETE FROM cs_survey_target WHERE year=? AND quarter=?")->execute([$y, $q]);
+        $ins = $db->prepare("INSERT INTO cs_survey_target
+                             (year,quarter,customer_id,customer_name,pick_reason,created_by,created_by_name)
+                             VALUES (?,?,?,?,?,?,?)");
+        $n = 0; $seen = [];
+        foreach ($items as $it) {
+            $cnm = trim((string)($it['customer_name'] ?? ''));
+            if ($cnm === '') continue;
+            $cid = cs_score_cid((string)($it['customer_id'] ?? ''), $cnm);
+            if (isset($seen[$cid])) continue;      // 同一家只留一列（唯一鍵也會擋，先擋在這裡訊息才看得懂）
+            $seen[$cid] = 1;
+            $ins->execute([$y, $q, $cid, $cnm, mb_substr((string)($it['pick_reason'] ?? 'manual'), 0, 50), $uid, $uname]);
+            $n++;
+        }
+        $db->commit();
+        jout(['saved'=>$n]);
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
+}
+
+/* 一份問卷的內容（含換算後的分數，前端即時預覽用） */
+case 'survey_get': {
+    list($y, $q) = csYQ();
+    $cid = cs_score_cid((string)($_GET['customer_id'] ?? ''), (string)($_GET['customer_name'] ?? ''));
+    $r = null;
+    try {
+        $st = $db->prepare("SELECT * FROM cs_survey WHERE year=? AND quarter=? AND customer_id=? LIMIT 1");
+        $st->execute([$y, $q, $cid]); $r = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $e) {}
+    jout(['survey'=>$r, 'answers'=>$r ? (json_decode((string)$r['answers_json'], true) ?: []) : []]);
+}
+
+/* 存一份問卷 → 同時把換算出來的五項分數寫進 cs_score（統計表的唯一顯示來源仍是 cs_score） */
+case 'survey_save': {
+    list($y, $q) = csYQ();
+    $cnm = trim((string)($_POST['customer_name'] ?? ''));
+    if ($cnm === '') jerr('缺少客戶');
+    $cid  = cs_score_cid((string)($_POST['customer_id'] ?? ''), $cnm);
+    $mode = (string)($_POST['mode'] ?? 'item');
+    if (!in_array($mode, ['item', 'direct', 'total'], true)) jerr('未知的填答方式');
+    $ans = json_decode((string)($_POST['answers'] ?? '{}'), true);
+    if (!is_array($ans)) $ans = [];
+    $sv = ['mode'=>$mode, 'answers'=>$ans,
+           'total_score'   => ($_POST['total_score'] ?? '') === '' ? null : (float)$_POST['total_score'],
+           'score_quality' => $_POST['score_quality']  ?? null, 'score_delivery'=> $_POST['score_delivery'] ?? null,
+           'score_tech'    => $_POST['score_tech']     ?? null, 'score_service' => $_POST['score_service']  ?? null,
+           'score_price'   => $_POST['score_price']    ?? null];
+    $sc = cs_survey_scores($db, $sv);
+    $rd = trim((string)($_POST['reply_date'] ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $rd)) $rd = null;
+    try {
+        $db->beginTransaction();
+        $db->prepare("INSERT INTO cs_survey (year,quarter,customer_id,customer_name,mode,answers_json,total_score,
+                        respondent,respondent_title,reply_date,comment_text,created_by,created_by_name,updated_at,updated_by,updated_by_name)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?)
+                      ON DUPLICATE KEY UPDATE mode=VALUES(mode), answers_json=VALUES(answers_json),
+                        total_score=VALUES(total_score), respondent=VALUES(respondent),
+                        respondent_title=VALUES(respondent_title), reply_date=VALUES(reply_date),
+                        comment_text=VALUES(comment_text), customer_name=VALUES(customer_name),
+                        updated_at=NOW(), updated_by=VALUES(updated_by), updated_by_name=VALUES(updated_by_name)")
+           ->execute([$y, $q, $cid, $cnm, $mode, json_encode($ans, JSON_UNESCAPED_UNICODE), $sv['total_score'],
+                      mb_substr(trim((string)($_POST['respondent'] ?? '')), 0, 50),
+                      mb_substr(trim((string)($_POST['respondent_title'] ?? '')), 0, 50), $rd,
+                      mb_substr(trim((string)($_POST['comment_text'] ?? '')), 0, 2000),
+                      $uid, $uname, $uid, $uname]);
+
+        // 換算出來的分數寫進 cs_score：**只寫算得出來的那幾項**，算不出來的保持原值不清掉
+        $cur = [];
+        $st = $db->prepare("SELECT * FROM cs_score WHERE year=? AND quarter=? AND customer_id=? LIMIT 1");
+        $st->execute([$y, $q, $cid]); $cur = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+        $vals = [];
+        foreach (['score_quality','score_delivery','score_tech','score_service','score_price'] as $f)
+            $vals[$f] = $sc[$f] !== null ? $sc[$f] : (isset($cur[$f]) ? cs_score_norm($cur[$f]) : null);
+        $db->prepare("INSERT INTO cs_score (year,quarter,customer_id,customer_name,
+                        score_quality,score_delivery,score_tech,score_service,score_price,
+                        created_by,created_by_name,updated_at,updated_by,updated_by_name)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(),?,?)
+                      ON DUPLICATE KEY UPDATE score_quality=VALUES(score_quality), score_delivery=VALUES(score_delivery),
+                        score_tech=VALUES(score_tech), score_service=VALUES(score_service),
+                        score_price=VALUES(score_price), customer_name=VALUES(customer_name),
+                        updated_at=NOW(), updated_by=VALUES(updated_by), updated_by_name=VALUES(updated_by_name)")
+           ->execute([$y, $q, $cid, $cnm, $vals['score_quality'], $vals['score_delivery'], $vals['score_tech'],
+                      $vals['score_service'], $vals['score_price'], $uid, $uname, $uid, $uname]);
+        $db->commit();
+    } catch (Throwable $e) { if ($db->inTransaction()) $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
+    jout(['scores'=>$sc]);
+}
+
+/* 清除系統建議分：把「品質／交期」兩欄清成空白（那兩項應該由客戶問卷來填，見使用說明）。
+   技術／服務／價格與備註一律不動——那是人填的。 */
+case 'score_clear_suggest': {
+    list($y, $q) = csYQ();
+    try {
+        /* **有回收問卷的那幾家不可以清**——他們的品質／交期分是客戶填在問卷上的數值，
+           不是系統建議分。這兩者在 cs_score 裡長得一模一樣，唯一分得出來的依據就是有沒有 cs_survey。 */
+        $up = $db->prepare("UPDATE cs_score s SET s.score_quality=NULL, s.score_delivery=NULL,
+                              s.updated_at=NOW(), s.updated_by=?, s.updated_by_name=?
+                            WHERE s.year=? AND s.quarter=?
+                              AND (s.score_quality IS NOT NULL OR s.score_delivery IS NOT NULL)
+                              AND NOT EXISTS (SELECT 1 FROM cs_survey v
+                                               WHERE v.year=s.year AND v.quarter=s.quarter
+                                                 AND v.customer_id=s.customer_id)");
+        $up->execute([$uid, $uname, $y, $q]);
+        $n = $up->rowCount();
+        $kept = 0;
+        try {
+            $c = $db->prepare("SELECT COUNT(*) FROM cs_score s JOIN cs_survey v
+                                 ON v.year=s.year AND v.quarter=s.quarter AND v.customer_id=s.customer_id
+                               WHERE s.year=? AND s.quarter=?
+                                 AND (s.score_quality IS NOT NULL OR s.score_delivery IS NOT NULL)");
+            $c->execute([$y, $q]); $kept = (int)$c->fetchColumn();
+        } catch (Throwable $e) {}
+        // 清完變成整列都沒有資料的（沒分數也沒備註）就一併刪掉，不要留一堆空殼列
+        $db->prepare("DELETE FROM cs_score WHERE year=? AND quarter=?
+                        AND score_quality IS NULL AND score_delivery IS NULL AND score_tech IS NULL
+                        AND score_service IS NULL AND score_price IS NULL AND TRIM(COALESCE(remark,''))=''")
+           ->execute([$y, $q]);
+        jout(['cleared'=>$n, 'kept'=>$kept]);
+    } catch (Throwable $e) { jerr('清除失敗：' . $e->getMessage(), 500); }
+}
+
+/* 上傳客戶寄回來的問卷（可一次多檔；先傳進來，客戶之後再逐份指定）。
+   檔案放共用附件根目錄底下的「客戶滿意度」資料夾，**DB 只存檔名**（鐵律5）。 */
+case 'survey_upload': {
+    list($y, $q) = csYQ();
+    if (empty($_FILES['files'])) jerr('沒有收到檔案');
+    $dir = cs_attach_dir($db);
+    if (!is_dir($dir)) jerr('附件資料夾建立失敗，請確認 NAS 路徑設定');
+    $OK = ['pdf','jpg','jpeg','png','gif','bmp','tif','tiff','doc','docx','xls','xlsx'];
+    $f = $_FILES['files'];
+    $cnt = is_array($f['name']) ? count($f['name']) : 0;
+    if ($cnt < 1) jerr('沒有收到檔案');
+    if ($cnt > 30) jerr('一次最多 30 個檔案');
+    $done = []; $skip = [];
+    for ($i = 0; $i < $cnt; $i++) {
+        $orig = (string)$f['name'][$i];
+        if ((int)$f['error'][$i] !== UPLOAD_ERR_OK) { $skip[] = $orig . '（上傳失敗）'; continue; }
+        if ((int)$f['size'][$i] > 30 * 1024 * 1024) { $skip[] = $orig . '（超過 30MB）'; continue; }
+        $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+        if (!in_array($ext, $OK, true)) { $skip[] = $orig . '（不支援的檔案類型）'; continue; }
+        $new = date('Ymd_His') . '_' . bin2hex(random_bytes(3)) . '.' . $ext;
+        if (!@move_uploaded_file($f['tmp_name'][$i], rtrim($dir, "\\/") . DIRECTORY_SEPARATOR . $new)) {
+            $skip[] = $orig . '（寫入失敗）'; continue;
+        }
+        try {
+            $db->prepare("INSERT INTO cs_survey_file (year,quarter,file_name,orig_name,file_size,created_by,created_by_name)
+                          VALUES (?,?,?,?,?,?,?)")
+               ->execute([$y, $q, $new, mb_substr($orig, 0, 190), (int)$f['size'][$i], $uid, $uname]);
+            $done[] = ['id'=>(int)$db->lastInsertId(), 'orig_name'=>$orig];
+        } catch (Throwable $e) { $skip[] = $orig . '（寫入資料庫失敗）'; }
+    }
+    jout(['uploaded'=>$done, 'skipped'=>$skip]);
+}
+
+/* 指定某個附件是哪一家客戶的（傳完再逐份指定；也可以改指定或清空） */
+case 'survey_file_assign': {
+    list($y, $q) = csYQ();
+    $id  = (int)($_POST['id'] ?? 0);
+    $cnm = trim((string)($_POST['customer_name'] ?? ''));
+    if (!$id) jerr('缺少附件');
+    $cid = $cnm === '' ? null : cs_score_cid((string)($_POST['customer_id'] ?? ''), $cnm);
+    try {
+        $st = $db->prepare("UPDATE cs_survey_file SET customer_id=?, customer_name=? WHERE id=? AND year=? AND quarter=?");
+        $st->execute([$cid, ($cnm === '' ? null : $cnm), $id, $y, $q]);
+        if (!$st->rowCount()) {
+            $c = $db->prepare("SELECT COUNT(*) FROM cs_survey_file WHERE id=?"); $c->execute([$id]);
+            if (!$c->fetchColumn()) jerr('找不到這個附件（可能已被刪除，請重新整理）');
+        }
+    } catch (Throwable $e) { jerr('指定失敗：' . $e->getMessage(), 500); }
+    jout(['customer_id'=>$cid, 'customer_name'=>$cnm]);
+}
+
+/* 刪除附件（連同磁碟上的檔案；檔案不在也照樣刪掉資料列，不然畫面上永遠清不掉） */
+case 'survey_file_delete': {
+    $id = (int)($_POST['id'] ?? 0);
+    if (!$id) jerr('缺少附件');
+    try {
+        $st = $db->prepare("SELECT file_name FROM cs_survey_file WHERE id=? LIMIT 1");
+        $st->execute([$id]); $fn = $st->fetchColumn();
+        if ($fn === false) jerr('找不到這個附件');
+        $p = rtrim(cs_attach_dir($db), "\\/") . DIRECTORY_SEPARATOR . (string)$fn;
+        if (is_file($p)) @unlink($p);
+        $db->prepare("DELETE FROM cs_survey_file WHERE id=?")->execute([$id]);
+    } catch (Throwable $e) { jerr('刪除失敗：' . $e->getMessage(), 500); }
+    jout();
+}
+
+/* 下載／預覽附件（路徑一律由設定值即時組，檔名只准單純檔名） */
+case 'survey_file_get': {
+    $id = (int)($_GET['id'] ?? 0);
+    if (!$id) jerr('缺少附件');
+    $r = null;
+    try {
+        $st = $db->prepare("SELECT file_name, orig_name FROM cs_survey_file WHERE id=? LIMIT 1");
+        $st->execute([$id]); $r = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $e) {}
+    if (!$r) jerr('找不到這個附件', 404);
+    $fn = (string)$r['file_name'];
+    if ($fn === '' || $fn !== basename($fn) || strpos($fn, '..') !== false) jerr('檔名不合法', 400);
+    $p = rtrim(cs_attach_dir($db), "\\/") . DIRECTORY_SEPARATOR . $fn;
+    if (!is_file($p)) jerr('檔案不存在（可能已被移動或刪除）', 404);
+    require_once $document_root . '/EGsystem/src/common/attach_lib.php';
+    $ext = strtolower(pathinfo($fn, PATHINFO_EXTENSION));
+    $mime = ['pdf'=>'application/pdf','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','png'=>'image/png',
+             'gif'=>'image/gif','bmp'=>'image/bmp','tif'=>'image/tiff','tiff'=>'image/tiff'][$ext] ?? 'application/octet-stream';
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . filesize($p));
+    eg_attach_send_disposition((string)$r['orig_name']);
+    readfile($p);
+    exit;
+}
+
 /* 客戶主檔清單（綁定跳窗的挑選器用） */
 case 'cust_master': {
     $rows = [];
     try {
-        $st = $db->query("SELECT customer_id, customer, customer_full FROM customer_list
-                          ORDER BY customer, customer_id");
+        $st = $db->query("SELECT customer_id, customer, customer_full, customer_tel, customer_fax
+                          FROM customer_list ORDER BY customer, customer_id");
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $rows[] = ['id'=>(string)$r['customer_id'], 'name'=>trim((string)$r['customer']),
-                       'full'=>trim((string)$r['customer_full'])];
+                       'full'=>trim((string)$r['customer_full']),
+                       // 問卷下方的電話／傳真由客戶基本資料帶出（使用者指定，不必人工填）
+                       'tel'=>trim((string)($r['customer_tel'] ?? '')),
+                       'fax'=>trim((string)($r['customer_fax'] ?? ''))];
         }
     } catch (Throwable $e) { jerr('讀取客戶主檔失敗：' . $e->getMessage(), 500); }
     jout(['rows'=>$rows]);
@@ -318,7 +564,7 @@ case 'monitor_save': {
 case 'print_meta': {
     list($y, $q) = csYQ();
     $which = (string)($_GET['which'] ?? 'stat');
-    $mod   = $which === 'monitor' ? CS_ASDOC_MONITOR : CS_ASDOC_STAT;
+    $mod   = $which === 'monitor' ? CS_ASDOC_MONITOR : ($which === 'survey' ? CS_ASDOC_SURVEY : CS_ASDOC_STAT);
     $sum   = cs_summary_get($db, $y, $q);
     // 業務日期＝表單上的日期（沒填就用期間最後一天，不是用今天——補印舊期間才對得起來）
     $biz = $sum['stat_date'] ?: cs_period_range($y, $q)[1];
@@ -337,6 +583,7 @@ case 'print_meta': {
     } catch (Throwable $e) {}
     jout([
         'company'      => cs_company_name($db),
+        'own'          => cs_own_company($db),     // 問卷抬頭的服務電話／回傳傳真（禁寫死）
         'doc'          => $doc ? ['id'=>(int)$doc['id'], 'doc_no'=>$doc['doc_no'], 'doc_name'=>$doc['doc_name']] : null,
         'doc_no_print' => eg_asdoc_no_asof_id($db, $docId, $biz),
         'biz_date'     => $biz,
@@ -361,6 +608,8 @@ case 'setting_get': {
         'stat_doc'       => eg_asdoc_get($db, CS_ASDOC_STAT),
         'monitor_doc_id' => eg_asdoc_id($db, CS_ASDOC_MONITOR),
         'monitor_doc'    => eg_asdoc_get($db, CS_ASDOC_MONITOR),
+        'survey_doc_id'  => eg_asdoc_id($db, CS_ASDOC_SURVEY),
+        'survey_doc'     => eg_asdoc_get($db, CS_ASDOC_SURVEY),
         'grade_delivery' => cs_grade_delivery($db),
         'grade_quality'  => cs_grade_quality($db),
         'monitor_items'  => cs_monitor_default_items($db),
@@ -389,13 +638,14 @@ case 'setting_save': {
 
 case 'asdoc_save': {
     $which = (string)($_POST['which'] ?? '');
-    if (!in_array($which, ['stat', 'monitor'], true)) jerr('未知的文件類型');
+    if (!in_array($which, ['stat', 'monitor', 'survey'], true)) jerr('未知的文件類型');
     $id = (int)($_POST['doc_id'] ?? 0);
     if ($id) {
         $c = $db->prepare("SELECT id FROM as_document WHERE id=? AND is_deleted=0"); $c->execute([$id]);
         if (!$c->fetchColumn()) jerr('選擇的 AS 文件不存在或已刪除');
     }
-    eg_asdoc_save($db, $which === 'monitor' ? CS_ASDOC_MONITOR : CS_ASDOC_STAT, $id, $uname);
+    eg_asdoc_save($db, $which === 'monitor' ? CS_ASDOC_MONITOR
+                       : ($which === 'survey' ? CS_ASDOC_SURVEY : CS_ASDOC_STAT), $id, $uname);
     jout();
 }
 

@@ -29,6 +29,7 @@ define('CS_PARAM_GROUP', 'CUST_SATIS');
 /** AS 文件綁定模組代碼（走 asdoc_lib，見 ai-rules/16 第一之三節） */
 define('CS_ASDOC_STAT',    'cs_stat');      // 2-SM-02-03 統計資料表
 define('CS_ASDOC_MONITOR', 'cs_monitor');   // 2-SM-02-04 監控表
+define('CS_ASDOC_SURVEY',  'cs_survey');    // 2-SM-02-02 客戶滿意度調查問卷
 
 /* ============================================================
  * Schema（可重複執行）
@@ -83,6 +84,58 @@ function cs_ensure_schema(PDO $db): void {
         updated_at DATETIME NULL, updated_by INT NULL, updated_by_name VARCHAR(50) NULL,
         KEY idx_csm (year, quarter, customer_id)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='客戶滿意度監控表(2-SM-02-04)'");
+
+    /* 受調查名單：滿意度調查**不是每家都做**（每年 11 月由業務挑幾家寄問卷），
+       所以「這一年要調查誰」必須存起來——沒列入的客戶不該出現在逐客戶評分表上被當成漏填。 */
+    $db->exec("CREATE TABLE IF NOT EXISTS cs_survey_target (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        year SMALLINT NOT NULL,
+        quarter TINYINT NOT NULL DEFAULT 0,
+        customer_id VARCHAR(20) NOT NULL COMMENT '同 cs_score：主檔查不到的用 #簡稱（cs_score_cid）',
+        customer_name VARCHAR(100) NOT NULL,
+        pick_reason VARCHAR(50) NULL COMMENT '怎麼挑上的：manual/random_ship_times/random_top_amount',
+        sent_date DATE NULL COMMENT '問卷寄出日期（列印問卷時記）',
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        UNIQUE KEY uk_cst (year, quarter, customer_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='客戶滿意度 本年度受調查名單'");
+
+    /* 回收的問卷：逐題等第存 answers_json，事後要查「當初為什麼是 8.5 分」查得到。
+       mode＝item 逐題勾選／direct 直接填五項／total 只填一個總分。 */
+    $db->exec("CREATE TABLE IF NOT EXISTS cs_survey (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        year SMALLINT NOT NULL,
+        quarter TINYINT NOT NULL DEFAULT 0,
+        customer_id VARCHAR(20) NOT NULL,
+        customer_name VARCHAR(100) NOT NULL,
+        mode VARCHAR(10) NOT NULL DEFAULT 'item' COMMENT 'item/direct/total',
+        answers_json TEXT NULL COMMENT '逐題等第：{題號:等第索引}',
+        total_score DECIMAL(5,1) NULL COMMENT 'mode=total 時客戶回的總分（滿分 100）',
+        respondent VARCHAR(50) NULL COMMENT '問卷填寫者',
+        respondent_title VARCHAR(50) NULL COMMENT '職稱',
+        reply_date DATE NULL COMMENT '客戶填表日期',
+        comment_text TEXT NULL COMMENT '客戶的抱怨／建言（問卷下半部那一大格）',
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        updated_at DATETIME NULL, updated_by INT NULL, updated_by_name VARCHAR(50) NULL,
+        UNIQUE KEY uk_csv (year, quarter, customer_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='客戶滿意度 回收問卷（2-SM-02-02）'");
+
+    /* 客戶填好寄回來的問卷掃描檔。一次可以傳很多份，傳完再逐份指定是哪一家，
+       所以 customer_id 允許空白（還沒指定）。檔案位置依鐵律5 即時組，DB 只存檔名。 */
+    $db->exec("CREATE TABLE IF NOT EXISTS cs_survey_file (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        year SMALLINT NOT NULL,
+        quarter TINYINT NOT NULL DEFAULT 0,
+        customer_id VARCHAR(20) NULL,
+        customer_name VARCHAR(100) NULL,
+        file_name VARCHAR(190) NOT NULL COMMENT '實際落地檔名（不存絕對路徑）',
+        orig_name VARCHAR(190) NOT NULL,
+        file_size INT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_by INT NULL, created_by_name VARCHAR(50) NULL,
+        KEY idx_csf (year, quarter, customer_id)
+    ) DEFAULT CHARSET=utf8mb4 COMMENT='客戶滿意度 回收問卷附件'");
 }
 
 /* ============================================================
@@ -131,6 +184,95 @@ function cs_monitor_default_items(PDO $db): array {
         ['item_name' => '客戶開立異常處理單', 'target_text' => '2件/季', 'auto_key' => 'car_count'],
         ['item_name' => '<航太>準交率',   'target_text' => '95%',   'auto_key' => 'ontime_rate'],
     ]);
+}
+
+/* ============================================================
+ * 問卷（2-SM-02-02 客戶滿意度調查問卷）
+ * ============================================================ */
+
+/**
+ * 問卷題目：完全照紙本 2-SM-02-02 的十題與五個大項。
+ * **大項對應的就是統計資料表上那五欄**（cat＝score_* 的後綴），所以問卷一填完分數就進得去。
+ * 題目可在設定改（題目會隨程序書改版），但 cat 只能是這五個。
+ */
+function cs_survey_questions(PDO $db): array {
+    return cs_param_get($db, 'survey_questions', [
+        ['no'=>1,  'cat'=>'quality',  'text'=>'產品合格率水準評價'],
+        ['no'=>2,  'cat'=>'quality',  'text'=>'產品品質檢驗標準與貴公司要求是否滿意'],
+        ['no'=>3,  'cat'=>'quality',  'text'=>'對品質觀念與整體制度評價'],
+        ['no'=>4,  'cat'=>'quality',  'text'=>'不良品反應處理方式與配合度評價'],
+        ['no'=>5,  'cat'=>'delivery', 'text'=>'交期準確是否滿意'],
+        ['no'=>6,  'cat'=>'service',  'text'=>'服務人員態度評價'],
+        ['no'=>7,  'cat'=>'service',  'text'=>'客訴問題改善對策有效性是否滿意'],
+        ['no'=>8,  'cat'=>'service',  'text'=>'運送管理與售後服務評價'],
+        ['no'=>9,  'cat'=>'price',    'text'=>'所提供價格與貴公司期待需求評價'],
+        ['no'=>10, 'cat'=>'tech',     'text'=>'專業能力評價'],
+    ]);
+}
+
+/** 五個大項的顯示名稱與在紙本上的順序（品質→交期→服務→價格→技術，同紙本） */
+function cs_survey_cats(): array {
+    return ['quality'=>'品質', 'delivery'=>'交期', 'service'=>'服務', 'price'=>'價格', 'tech'=>'技術'];
+}
+
+/**
+ * 五個等第與對應分數（使用者 2026-09-18 定：非常滿意10／很滿意9／滿意8／普通6／不滿意4）。
+ * 存成設定可改——等第的分數是業務判斷不是程式常數。
+ */
+function cs_survey_levels(PDO $db): array {
+    $v = cs_param_get($db, 'survey_levels', [
+        ['label'=>'非常滿意', 'score'=>10], ['label'=>'很滿意', 'score'=>9],
+        ['label'=>'滿 意',   'score'=>8],  ['label'=>'普 通', 'score'=>6],
+        ['label'=>'不滿意',   'score'=>4],
+    ]);
+    return is_array($v) && $v ? $v : [];
+}
+
+/**
+ * 把一份問卷換算成五欄分數。
+ *   item   逐題勾選 → **先算每個大項自己的平均**（品質四題平均、服務三題平均），
+ *          再由 cs_avg() 拿五個大項去平均（使用者指定的算法）。沒勾的題目不列入平均。
+ *   direct 直接填五項分數（客戶只回總評或口頭回覆時用）
+ *   total  只填一個總分（滿分 100）→ 平均分配成五項相同分數
+ * @return array ['score_quality'=>…, …]（算不出來的一律 null＝尚未填，不可以給 0）
+ */
+function cs_survey_scores(PDO $db, array $sv): array {
+    $out = ['score_quality'=>null, 'score_delivery'=>null, 'score_tech'=>null,
+            'score_service'=>null, 'score_price'=>null];
+    $mode = (string)($sv['mode'] ?? 'item');
+
+    if ($mode === 'total') {
+        $t = $sv['total_score'];
+        if ($t === null || $t === '') return $out;
+        $s = round(max(0, min(100, (float)$t)) / 10, 1);
+        foreach ($out as $k => $_) $out[$k] = $s;
+        return $out;
+    }
+    if ($mode === 'direct') {
+        foreach (array_keys($out) as $k) {
+            $v = $sv[$k] ?? null;
+            $out[$k] = ($v === null || $v === '') ? null : round(max(0, min(10, (float)$v)), 1);
+        }
+        return $out;
+    }
+
+    $ans = $sv['answers'] ?? [];
+    if (is_string($ans)) $ans = json_decode($ans, true) ?: [];
+    $levels = cs_survey_levels($db);
+    $sum = []; $cnt = [];
+    foreach (cs_survey_questions($db) as $q) {
+        $i = $ans[(string)$q['no']] ?? null;
+        if ($i === null || $i === '') continue;
+        $i = (int)$i;
+        if (!isset($levels[$i])) continue;
+        $c = (string)$q['cat'];
+        $sum[$c] = ($sum[$c] ?? 0) + (float)$levels[$i]['score'];
+        $cnt[$c] = ($cnt[$c] ?? 0) + 1;
+    }
+    foreach (cs_survey_cats() as $c => $_) {
+        if (!empty($cnt[$c])) $out['score_' . $c] = round($sum[$c] / $cnt[$c], 1);
+    }
+    return $out;
 }
 
 /** 期間 → [起日, 迄日]。quarter=0 代表整年度。 */
@@ -573,6 +715,76 @@ function cs_score_cid(string $cid, string $name): string {
     return $cid !== '' ? $cid : '#' . mb_substr(trim($name), 0, 18);
 }
 
+/* ── 受調查名單／回收問卷／問卷附件 ───────────────────────── */
+
+/** 本期受調查名單（key＝cs_score_cid） */
+function cs_targets(PDO $db, int $year, int $quarter): array {
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT * FROM cs_survey_target WHERE year=? AND quarter=? ORDER BY customer_name");
+        $st->execute([$year, $quarter]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(string)$r['customer_id']] = $r;
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 本期已回收的問卷（key＝cs_score_cid） */
+function cs_surveys(PDO $db, int $year, int $quarter): array {
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT * FROM cs_survey WHERE year=? AND quarter=?");
+        $st->execute([$year, $quarter]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(string)$r['customer_id']] = $r;
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 本期的問卷附件（未指定客戶的 customer_id 是 NULL，一律回在 '' 這個鍵底下） */
+function cs_survey_files(PDO $db, int $year, int $quarter): array {
+    $out = [];
+    try {
+        $st = $db->prepare("SELECT * FROM cs_survey_file WHERE year=? AND quarter=? ORDER BY id DESC");
+        $st->execute([$year, $quarter]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[] = $r;
+    } catch (Throwable $e) {}
+    return $out;
+}
+
+/** 問卷附件的存放資料夾（鐵律5：DB 只存檔名，路徑讀取當下才組） */
+function cs_attach_dir(PDO $db): string {
+    require_once __DIR__ . '/attach_lib.php';
+    $dir = eg_attach_dir($db, 'cs_attach_dir', '客戶滿意度');
+    eg_attach_ensure_dir($dir);
+    return $dir;
+}
+
+/**
+ * 隨機篩選的候選：本期間每一家客戶的出貨次數（出貨單張數）與出貨金額。
+ * 客戶一律經 cs_canon 歸戶，跟統計表同一套（不然「高鋒工業」會被當成另一家）。
+ * @return array 依金額由大到小，每列 ['id','name','times','amount']
+ */
+function cs_ship_stats(PDO $db, int $year, int $quarter): array {
+    list($from, $to) = cs_period_range($year, $quarter);
+    $acc = [];
+    try {
+        $st = $db->prepare("SELECT TRIM(Client_name) c, IS_number,
+                                   COALESCE(SUM(Qty*Unit_price),0) amt
+                            FROM is_list WHERE DATE(Order_date) BETWEEN ? AND ?
+                            GROUP BY TRIM(Client_name), IS_number");
+        $st->execute([$from, $to]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $canon = cs_canon($db, (string)$r['c']);
+            $k = cs_score_cid($canon['id'], $canon['name']);
+            if (!isset($acc[$k])) $acc[$k] = ['id'=>$canon['id'], 'name'=>$canon['name'], 'times'=>0, 'amount'=>0.0];
+            $acc[$k]['times']++;                       // 一張出貨單算一次
+            $acc[$k]['amount'] += (float)$r['amt'];
+        }
+    } catch (Throwable $e) {}
+    $rows = array_values($acc);
+    usort($rows, function ($a, $b) { return $b['amount'] <=> $a['amount']; });
+    return $rows;
+}
+
 function cs_stat_rows(PDO $db, int $year, int $quarter): array {
     $auto = cs_auto_metrics($db, $year, $quarter);
     $saved = [];
@@ -613,6 +825,29 @@ function cs_stat_rows(PDO $db, int $year, int $quarter): array {
         ];
         $row['avg_score'] = cs_avg($row);
         $out[] = $row;
+    }
+
+    /* 受調查名單：滿意度調查不是每家都做（每年 11 月由業務挑幾家），
+       **有建名單時就只列名單內的客戶**——沒被挑到的列出來只會變成一整排永遠填不了的空白。
+       名單還沒建（或舊年度沒有名單）時維持列出全部，並由呼叫端提示「尚未建立名單」。 */
+    $targets = cs_targets($db, $year, $quarter);
+    $svs     = cs_surveys($db, $year, $quarter);
+    $fileCnt = [];
+    foreach (cs_survey_files($db, $year, $quarter) as $f) {
+        $c = (string)($f['customer_id'] ?? '');
+        if ($c !== '') $fileCnt[$c] = ($fileCnt[$c] ?? 0) + 1;
+    }
+    foreach ($out as &$r) {
+        $k = cs_score_cid((string)$r['customer_id'], (string)$r['customer_name']);
+        $r['in_target']   = isset($targets[$k]) ? 1 : 0;
+        $r['survey_mode'] = isset($svs[$k]) ? (string)$svs[$k]['mode'] : '';
+        $r['survey_done'] = isset($svs[$k]) ? 1 : 0;
+        $r['file_count']  = (int)($fileCnt[$k] ?? 0);
+        $r['sent_date']   = isset($targets[$k]) ? ($targets[$k]['sent_date'] ?? null) : null;
+    }
+    unset($r);
+    if ($targets) {
+        $out = array_values(array_filter($out, function ($r) { return !empty($r['in_target']); }));
     }
     return $out;
 }
@@ -777,6 +1012,16 @@ function cs_stamp_tpl_options(PDO $db): array {
                            LEFT JOIN stamp_type t ON t.id=p.type_id
                            WHERE p.is_active=1 ORDER BY p.tpl_name")->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) { return []; }
+}
+
+/** 本公司那一列客戶主檔（公司全名／電話／傳真都從這裡來，一律禁寫死） */
+function cs_own_company(PDO $db): array {
+    try {
+        $r = $db->query("SELECT customer, customer_full, customer_tel, customer_fax, customer_address
+                         FROM customer_list WHERE is_own_company=1 LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        if ($r) return $r;
+    } catch (Throwable $e) {}
+    return [];
 }
 
 /** 公司全名（列印大標題，唯一來源 customer_list.is_own_company=1，禁寫死） */

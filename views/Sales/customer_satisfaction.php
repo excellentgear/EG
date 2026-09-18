@@ -100,6 +100,21 @@ $thisYear = (int)date('Y');
                    z-index:10500; background:var(--ink); color:#fff; font-size:13px;
                    padding:8px 16px; border-radius:16px; box-shadow:0 4px 14px rgba(0,0,0,.25); max-width:80vw; }
         .m-err { display:none; color:var(--coral); font-size:12.5px; margin-top:8px; line-height:1.6; }
+        /* 客戶欄下方的問卷狀態小籤（td span 會被版型撐成 28px，一定要自己指定 line-height） */
+        .svy-tag { display:inline-block; font-size:10px; line-height:16px; padding:0 6px; border-radius:9px;
+                   margin-right:4px; background:#EFE3CF; color:#6B4423; white-space:nowrap; }
+        .svy-tag.ok   { background:#DDEFD9; color:#2c6b3f; }
+        .svy-tag.file { background:#E5EDF7; color:#2f5c96; cursor:pointer; }
+        .svy-tag.act  { background:var(--amber); color:var(--ink); cursor:pointer; font-weight:700; }
+        .svy-row { display:flex; gap:8px; align-items:center; padding:5px 8px; border-bottom:1px solid var(--line);
+                   font-size:12.5px; }
+        .svy-row:last-child { border-bottom:0; }
+        .svy-row:hover { background:#FFFDF8; }
+        table.q-tb { width:100%; border-collapse:collapse; font-size:12.5px; }
+        table.q-tb th, table.q-tb td { border:1px solid var(--line); padding:4px 6px; }
+        table.q-tb thead th { background:var(--sand); color:#6B4423; text-align:center; }
+        table.q-tb td.qc { text-align:center; }
+        table.q-tb tr.q-cat td { background:var(--cream); font-weight:700; color:var(--ink); }
         .m-mask { position:fixed; inset:0; background:rgba(74,53,36,.45); z-index:10300; display:none; }
         .m-box { position:absolute; left:50%; top:4vh; transform:translateX(-50%); background:#fff;
                  border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.3); display:flex; flex-direction:column; max-height:92vh; }
@@ -173,6 +188,10 @@ $thisYear = (int)date('Y');
         <span class="muted-help" id="statCount"></span>
         <?php if ($perms['canAdmin']): ?>
         <span style="margin-left:auto;display:flex;gap:6px;">
+          <button class="btn btn-xs btn-warm" id="btnSurvey"
+                  title="挑本年度要調查哪幾家、產生問卷、上傳客戶寄回來的問卷"><i class="fa fa-list-alt"></i> 問卷作業</button>
+          <button class="btn btn-xs btn-warm-o" id="btnClearSuggest"
+                  title="把系統帶入的品質／交期分清掉（技術／服務／價格與備註不動）"><i class="fa fa-eraser"></i> 清除建議分</button>
           <button class="btn btn-xs btn-warm-o" id="btnCleanDead" style="display:none;"
                   title="本期間沒有出貨、只因為之前按過「帶入系統建議分」才留著的評分列；有人真的填過技術／服務／價格或備註的不會被刪"></button>
           <button class="btn btn-xs btn-warm-o" id="btnFillSuggest"
@@ -296,16 +315,37 @@ $thisYear = (int)date('Y');
          ②<b>回填出貨單（<code>is_list</code>）上空白的客戶編號</b>
          ③把原本掛在這個名稱底下已填的評分／監控表改掛到該客戶（主檔那邊已經有資料的那一期不覆蓋）。
          這個對應<b>全站共用</b>（會計對帳、應收、發票資料同時生效），要解除請到「會計 → 對帳作業 → 對應到客戶主檔」。</p>
-      <h4>哪些一定要人填（很重要）</h4>
-      <p><b>技術、服務、價格三項系統算不出來</b>——站上沒有任何資料可以推導客戶對技術支援、服務態度、
-         價格的感受，那三項只能來自 <b>2-SM-02-02 客戶滿意度調查問卷</b>回收的結果。
-         所以這三欄用淺藍底標示「問卷填入」，空白代表<b>還沒填</b>而不是 0 分
-         （平均分只平均「有填的」項目，避免沒回收問卷的客戶被算成低分）。</p>
+      <h4>滿意度評比五欄＝客戶填在問卷上的數值（很重要）</h4>
+      <p><b>品質／交期／技術／服務／價格五項一律是客戶寫在 2-SM-02-02 問卷上的答案</b>，不是系統推估的。
+         空白代表<b>還沒填</b>而不是 0 分（平均分只平均「有填的」項目，沒回收問卷的客戶不會被算成低分）。</p>
+      <p><b>「帶入系統建議分」是沒有問卷時的暫代值</b>（拿退貨率換品質分、準交率換交期分），
+         保留給臨時要看趨勢用；正式表單請以問卷為準，用「清除建議分」把它清掉即可
+         （<b>已經有回收問卷的客戶不會被清</b>，兩者在資料上長得一樣，系統靠「有沒有回收問卷」分辨）。</p>
+
+      <h4>問卷作業（每年 11 月）</h4>
+      <p>滿意度調查<b>不是每家客戶都做</b>：公司定在每年 11 月，由業務挑要調查的客戶寄問卷。整個流程都在「問卷作業」裡：</p>
+      <ol>
+        <li><b>① 受調查名單</b>：左邊是本期間真的有出貨的客戶（附出貨次數與金額），勾選即可；
+            也可以用<b>隨機篩選</b>——先用「出貨次數 ≥ N」或「出貨金額前 N 大」縮出母體，再從裡面隨機抽 N 家
+            （抽出來的是<b>加進</b>名單，已經挑好的不會被洗掉）。按「儲存名單」之後，
+            <b>逐客戶評分表就只列名單內的客戶</b>；名單空白時才列出全部有出貨的客戶。</li>
+        <li><b>② 產生問卷</b>：依 2-SM-02-02 的格式自動產生，<b>一家一頁</b>、A4 直式。
+            客戶名稱印<b>簡稱</b>，電話與傳真自動由客戶基本資料帶出（沒有 E-mail 欄），
+            公司全名、服務電話、回傳傳真都取自本公司主檔（禁寫死）。直接列印或存成 PDF 寄給客戶。</li>
+        <li><b>③ 回收問卷附件</b>：客戶寄回／傳真掃描的問卷可<b>一次上傳多份</b>，傳完再逐份指定是哪一家客戶；
+            指定後該客戶那一列會顯示「附件 N」，點一下就回到這裡。</li>
+        <li><b>填問卷結果</b>：在客戶那一列按「填問卷」。三種填法可切換——
+            <b>逐題勾選</b>（照紙本十題五個等第，系統自動換算）、<b>直接填五項分數</b>、<b>只填一個總分</b>（滿分 100，平均分配）。</li>
+      </ol>
+      <p><b>分數怎麼算</b>：等第對應分數為 非常滿意 10／很滿意 9／滿意 8／普通 6／不滿意 4（可在「設定」調整）。
+         <b>每個大項先算自己那幾題的平均</b>（品質有 4 題、服務有 3 題），再由五個大項去平均成「平均」欄。
+         沒勾的題目不列入平均，客戶漏答不會被當成 0 分。</p>
       <h4>操作步驟</h4>
       <ol>
         <li>選年度與期間（整年度或某一季）。自動指標會立刻算出來。</li>
-        <li>按「帶入系統建議分」把品質／交期分一次帶入（<b>已經填過的不會被覆蓋</b>）。</li>
-        <li>照問卷填技術／服務／價格三欄。每一格離開欄位就自動存檔。</li>
+        <li><b>按「問卷作業」挑本年度要調查的客戶</b>（手動勾或隨機篩選）→ 產生問卷寄給客戶。</li>
+        <li>客戶回覆後：把問卷掃描檔上傳並指定客戶，再按該客戶的<b>「填問卷」</b>把分數填進去
+            （逐題勾選會自動換算五項分數）。也可以直接在表上那五欄打分數，每一格離開欄位就自動存檔。</li>
         <li>填「綜合分析」與「表單日期」後儲存。</li>
         <li>切到監控表分頁、選一家客戶：調查項目與調查結果會自動帶入，
             補上客戶建議事項／處理對策／效果追蹤後儲存。<b>未達績效指標的那一列會標紅字</b>，
@@ -360,6 +400,132 @@ $thisYear = (int)date('Y');
   </div>
 </div>
 
+<!-- ══ 問卷作業（2-SM-02-02）══ -->
+<div class="m-mask" id="svyMask">
+  <div class="m-box" style="width:min(96vw,1080px);">
+    <div class="m-head"><i class="fa fa-list-alt"></i> 問卷作業（2-SM-02-02 客戶滿意度調查問卷）
+      <span style="margin-left:auto;"><button class="btn btn-xs btn-default" data-close="svyMask">關閉</button></span></div>
+    <div class="m-body" style="max-height:74vh;">
+      <div class="cs-tabs" style="margin-bottom:10px;">
+        <button class="cs-tab active svy-tab" data-svy="target">① 受調查名單</button>
+        <button class="cs-tab svy-tab" data-svy="print">② 產生問卷</button>
+        <button class="cs-tab svy-tab" data-svy="file">③ 回收問卷附件</button>
+      </div>
+
+      <!-- ① 受調查名單 -->
+      <div class="svy-pane" data-pane="target">
+        <div class="note-box" style="margin-bottom:8px;">
+          滿意度調查不是每家都做（公司定在每年 11 月，由業務挑要調查的客戶）。
+          <b>存了名單之後，逐客戶評分表就只會列名單內的客戶</b>；名單空白時才列出全部有往來的客戶。
+        </div>
+        <div class="cs-bar" style="gap:6px;">
+          <b>隨機篩選：</b>
+          <select id="svyRndMode" class="form-control input-sm" style="width:190px;">
+            <option value="times">本年度出貨次數 ≥</option>
+            <option value="top">出貨金額前 N 大</option>
+          </select>
+          <input type="number" id="svyRndArg" class="form-control input-sm" style="width:80px;" value="3" min="1">
+          <span>抽</span>
+          <input type="number" id="svyRndN" class="form-control input-sm" style="width:70px;" value="10" min="1">
+          <span>家</span>
+          <button class="btn btn-xs btn-warm-o" id="btnSvyRnd"><i class="fa fa-random"></i> 隨機挑選</button>
+          <span class="muted-help" id="svyRndHint"></span>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start;">
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+              <b>候選客戶</b><span class="muted-help" id="svyCandCnt"></span>
+              <input type="text" id="svyCandKw" class="form-control input-sm" style="width:150px;margin-left:auto;"
+                     data-eg-hint="打客戶名稱或代號">
+            </div>
+            <div id="svyCandList" style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:6px;"></div>
+          </div>
+          <div style="width:320px;">
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;">
+              <b>本年度受調查名單</b><span class="muted-help" id="svyPickCnt"></span>
+              <button class="btn btn-xs btn-default" id="btnSvyClear" style="margin-left:auto;">全部清空</button>
+            </div>
+            <div id="svyPickList" style="max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:6px;"></div>
+          </div>
+        </div>
+        <div style="text-align:right;margin-top:8px;">
+          <button class="btn btn-sm btn-warm" id="btnSvyTargetSave"><i class="fa fa-save"></i> 儲存名單</button>
+        </div>
+      </div>
+
+      <!-- ② 產生問卷 -->
+      <div class="svy-pane" data-pane="print" style="display:none;">
+        <div class="note-box" style="margin-bottom:8px;">
+          依 2-SM-02-02 的格式產生問卷，<b>一家一頁</b>，客戶名稱印簡稱、電話與傳真自動由客戶基本資料帶出（沒有 E-mail 欄）。
+          勾選要印的客戶後按「產生問卷」，可直接列印或存 PDF 寄給客戶。
+        </div>
+        <div class="cs-bar">
+          <label style="margin:0;"><input type="checkbox" id="svyPrnAll" checked> 全選</label>
+          <span class="muted-help" id="svyPrnCnt"></span>
+          <span style="margin-left:auto;">
+            <button class="btn btn-sm btn-warm" id="btnSvyPrint"><i class="fa fa-print"></i> 產生問卷</button>
+          </span>
+        </div>
+        <div id="svyPrnList" style="max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:6px;"></div>
+      </div>
+
+      <!-- ③ 回收問卷附件 -->
+      <div class="svy-pane" data-pane="file" style="display:none;">
+        <div class="note-box" style="margin-bottom:8px;">
+          客戶填好寄回（或傳真掃描）的問卷傳到這裡。<b>可以一次選很多個檔案</b>，傳完再逐份指定是哪一家客戶。
+          指定之後，該客戶那一列就會顯示附件數；分數仍要在「填問卷結果」填進去。
+        </div>
+        <div class="cs-bar">
+          <input type="file" id="svyFiles" multiple
+                 accept=".pdf,.jpg,.jpeg,.png,.gif,.bmp,.tif,.tiff,.doc,.docx,.xls,.xlsx">
+          <button class="btn btn-sm btn-warm" id="btnSvyUpload"><i class="fa fa-upload"></i> 上傳</button>
+          <span class="muted-help">單檔上限 30MB，一次最多 30 個檔案</span>
+        </div>
+        <div id="svyFileList" style="max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:6px;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 填問卷結果 ══ -->
+<div class="m-mask" id="qMask">
+  <div class="m-box" style="width:min(96vw,900px);">
+    <div class="m-head"><i class="fa fa-pencil-square-o"></i> 填問卷結果：<span id="qCustName"></span>
+      <span style="margin-left:auto;"><button class="btn btn-xs btn-default" data-close="qMask">關閉</button></span></div>
+    <div class="m-body" style="max-height:74vh;">
+      <div class="cs-bar" style="gap:14px;">
+        <b>填答方式</b>
+        <label style="margin:0;font-weight:normal;"><input type="radio" name="qMode" value="item" checked> 逐題勾選（依問卷自動算分）</label>
+        <label style="margin:0;font-weight:normal;"><input type="radio" name="qMode" value="direct"> 直接填五項分數</label>
+        <label style="margin:0;font-weight:normal;"><input type="radio" name="qMode" value="total"> 只填一個總分</label>
+      </div>
+      <div id="qItemPane"></div>
+      <div id="qDirectPane" style="display:none;"></div>
+      <div id="qTotalPane" style="display:none;">
+        <div class="cs-bar"><label style="margin:0;">客戶回覆的總分</label>
+          <input type="number" id="qTotal" class="form-control input-sm" style="width:100px;" min="0" max="100" step="0.1">
+          <span class="muted-help">滿分 100；系統會平均換算成五項各自的 10 分制分數</span></div>
+      </div>
+      <div class="note-box" id="qCalc" style="margin-top:8px;"></div>
+      <div class="cs-bar" style="margin-top:8px;">
+        <label style="margin:0;">問卷填寫者</label>
+        <input type="text" id="qResp" class="form-control input-sm" style="width:130px;">
+        <label style="margin:0;">職稱</label>
+        <input type="text" id="qRespTitle" class="form-control input-sm" style="width:130px;">
+        <label style="margin:0;">客戶填表日期</label>
+        <input type="date" id="qDate" class="form-control input-sm" style="width:150px;">
+      </div>
+      <label style="margin:6px 0 2px;">客戶的建言／抱怨（問卷下半部那一格）</label>
+      <textarea id="qComment" class="form-control" rows="3"></textarea>
+      <div class="m-err" id="qErr"></div>
+    </div>
+    <div class="m-foot">
+      <button class="btn btn-default" data-close="qMask">取消</button>
+      <button class="btn btn-warm" id="btnQSave"><i class="fa fa-save"></i> 儲存並帶入分數</button>
+    </div>
+  </div>
+</div>
+
 <!-- ══ 設定 ══ -->
 <div class="m-mask" id="setMask">
   <div class="m-box" style="width:min(94vw,820px);">
@@ -387,7 +553,15 @@ $thisYear = (int)date('Y');
         </div>
       </div>
       <div style="margin-bottom:14px;">
-        <label style="font-weight:700;">③ 製表圖章模板</label>
+        <label style="font-weight:700;">③ 調查問卷（2-SM-02-02）</label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <span id="setSvyLabel" style="flex:1;min-width:200px;padding:6px 10px;background:var(--cream);border:1px solid var(--line);border-radius:4px;">尚未綁定</span>
+          <button class="btn btn-sm btn-default" onclick="csPickDoc('survey')"><i class="fa fa-search"></i> 選擇</button>
+          <button class="btn btn-sm btn-default" onclick="csClearDoc('survey')"><i class="fa fa-times"></i> 取消</button>
+        </div>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-weight:700;">④ 製表圖章模板</label>
         <div class="muted-help" style="margin-bottom:4px;">列印時製表欄會蓋上按下列印那個人的圖章；模板在「圖章管理 → 線上圖章設計」建立。</div>
         <select id="setStampTpl" class="form-control input-sm" style="max-width:400px;"><option value="0">（用系統預設印章）</option></select>
       </div>
@@ -492,13 +666,19 @@ function loadStat(done){
         $('#modeNote').html(
             '期間：<b>'+esc(r.period)+'</b>（'+dispDate(r.range[0])+' ~ '+dispDate(r.range[1])+'）　'
           + '共 <b>'+ST.rows.length+'</b> 家客戶　'
-          + '<span class="muted-help">（本期間真的有出貨的才列；只有訂單、沒有出貨的不列）</span><br>'
+          + (parseInt(r.target_count||0)
+                ? '<span class="muted-help">（本年度受調查名單 '+r.target_count+' 家，只列名單內的客戶；要改名單請按「問卷作業」）</span>'
+                : '<span class="muted-help">（<b>尚未建立本年度受調查名單</b>，目前列出全部有出貨的客戶；'
+                  + '滿意度調查不是每家都做，請按「問卷作業」挑要調查的客戶）</span>')+'<br>'
           + '準交率判定方式：<b>'+esc(r.undone_label)+'</b>　'
           + '<span class="muted-help">（沿用 KPI「準時出貨率」該年度的設定，要改請到 KPI 設定頁，這裡刻意不另開開關）</span><br>'
           + '<span class="muted-help">退貨率＝<b>本期間出的貨被退回多少</b>（退貨依同客戶同料號往回沖銷到它原本的那批出貨，'
           + '所以退貨月份與出貨月份不同也算得對，上限 100%）。</span><br>'
-          + '<span class="muted-help">淺綠欄＝系統自動算；淺藍欄（技術／服務／價格）系統算不出來，'
-          + '請照 2-SM-02-02 客戶滿意度調查問卷回收結果填寫，留白代表「尚未填」不是 0 分。</span>');
+          + '<span class="muted-help">左半邊（準交率／退貨率／退貨件／異常單）是系統自動算的；'
+          + '<b>「滿意度評比」五欄一律填客戶寫在 2-SM-02-02 問卷上的數值</b>——'
+          + '按客戶那一列的「填問卷」逐題勾選即自動換算，留白代表「尚未填」不是 0 分。'
+          + '「帶入系統建議分」只是拿退貨率／準交率推估品質與交期分，<b>沒有問卷時的暫代值</b>，'
+          + '要清掉按「清除建議分」（有回收問卷的不會被清）。</span>');
         // 監控表的客戶下拉用同一份資料，不另外查一次
         var ch='<option value="">— 請選擇客戶 —</option>';
         ST.rows.forEach(function(x,i){
@@ -535,6 +715,16 @@ function scoreCell(i, key, cls){
          + 'value="'+(v===null||v===undefined?'':v)+'" '+(CAN_ADMIN?'':'readonly')+' '
          + 'title="0~10 分，留白＝尚未填">';
 }
+/* 客戶欄下方的問卷狀態：受調查／已回收／附件幾份，以及「填問卷」入口。
+   分數是客戶填在問卷上的數值，所以入口放在客戶旁邊而不是另開一欄（表格已經 13 欄）。 */
+function surveyCell(r, i){
+    var h='';
+    if(r.in_target)   h+='<span class="svy-tag">受調查</span>';
+    if(r.survey_done) h+='<span class="svy-tag ok">已回收</span>';
+    if(r.file_count)  h+='<span class="svy-tag file" data-i="'+i+'">附件 '+r.file_count+'</span>';
+    if(CAN_ADMIN)     h+='<span class="svy-tag act" data-i="'+i+'">'+(r.survey_done?'改問卷':'填問卷')+'</span>';
+    return h?('<div style="margin-top:3px;line-height:1.9;">'+h+'</div>'):'';
+}
 /* 退貨欄的滑鼠提示：講清楚這個數字是怎麼來的，尤其是「退貨月份 ≠ 出貨月份」那幾筆跑去哪裡了 */
 function retTip(r){
     if(r.return_rate===null && !(r.return_cnt||0)) return '本期間出的貨沒有被退回，或本期間沒有出貨（沒有出貨就不算率）';
@@ -561,7 +751,8 @@ function renderStat(){
             :'<br><span class="cs-unbound'+(CAN_ADMIN?' cs-bindable':'')+'" data-alias="'+esc(r.customer_name)+'">'
              +'⚠ 未綁定客戶ID'+(CAN_ADMIN?'（點此綁定）':'')+'</span>')
           /* 本期沒有出貨、只因為先前評過分才留著的列——填過的分數不可以憑空消失，但要標示清楚 */
-          +(r.no_activity?'<br><span class="muted-help" style="color:#C77C1A;">本期無出貨（先前已評分）</span>':'')+'</td>'
+          +(r.no_activity?'<br><span class="muted-help" style="color:#C77C1A;">本期無出貨（先前已評分）</span>':'')
+          + surveyCell(r, i)+'</td>'
           +'<td class="col-auto'+(over?' warn-over':'')+'" title="'+(over?'ERP 未交筆數比訂單筆數還多 '+r.ontime_over+' 筆，這兩份資料對不起來，本欄僅供參考':'準時 '+r.ontime_num+' / 訂單 '+r.ontime_den)+'">'
           + (r.ontime_rate===null?'—':r.ontime_rate+'%')
           + '<div class="muted-help">'+r.ontime_num+'/'+r.ontime_den+(over?' ⚠':'')+'</div></td>'
@@ -962,6 +1153,401 @@ function csvDump(name, head, rows){
 }
 
 <?php if ($perms['canAdmin']): ?>
+/* ══════════ 問卷作業（2-SM-02-02）══════════ */
+var SVY = { q:[], lv:[], cats:{}, targets:[], files:[], cand:[], pick:{}, cust:null };
+
+$('#btnSurvey').on('click', function(){ svyOpen(); });
+function svyOpen(pane){
+    ajxGet({action:'survey_meta', year:$('#fYear').val(), quarter:$('#fQuarter').val()}, function(r){
+        if(!r||!r.ok){ csToast('讀不到問卷資料：'+((r&&r.error)||'未知原因')); return; }
+        SVY.q=r.questions||[]; SVY.lv=r.levels||[]; SVY.cats=r.cats||{};
+        SVY.targets=r.targets||[]; SVY.files=r.files||[]; SVY.cand=r.ship_stats||[];
+        SVY.pick={};
+        SVY.targets.forEach(function(t){ SVY.pick[t.customer_id]={customer_id:t.customer_id,customer_name:t.customer_name,pick_reason:t.pick_reason||'manual'}; });
+        svyRenderCand(); svyRenderPick(); svyRenderPrint(); svyRenderFiles();
+        svyTab(pane||'target');
+        openMask('svyMask');
+    });
+}
+function svyTab(name){
+    $('.svy-tab').removeClass('active').filter('[data-svy="'+name+'"]').addClass('active');
+    $('.svy-pane').hide().filter('[data-pane="'+name+'"]').show();
+}
+$(document).on('click','.svy-tab',function(){ svyTab($(this).data('svy')); });
+
+/* 候選客戶＝本期間真的有出貨的（含出貨次數與金額，隨機篩選的條件就是這兩個） */
+function svyKey(c){ return c.id||('#'+String(c.name||'').substr(0,18)); }
+function svyRenderCand(){
+    var kw=String($('#svyCandKw').val()||'').trim().toLowerCase();
+    var list=SVY.cand.filter(function(c){
+        if(!kw) return true;
+        return (c.name+' '+(c.id||'')).toLowerCase().indexOf(kw)>=0;
+    });
+    var h=list.map(function(c){
+        var k=svyKey(c);
+        return '<div class="svy-row"><label style="margin:0;font-weight:normal;display:flex;gap:6px;align-items:center;width:100%;">'
+             + '<input type="checkbox" class="svy-cand" data-k="'+esc(k)+'"'+(SVY.pick[k]?' checked':'')+'>'
+             + '<b>'+esc(c.name)+'</b><span class="muted-help">'+esc(c.id||'（未綁定客戶ID）')+'</span>'
+             + '<span style="margin-left:auto;" class="muted-help">出貨 '+c.times+' 次　'+Math.round(c.amount).toLocaleString()+' 元</span>'
+             + '</label></div>';
+    }).join('');
+    $('#svyCandList').html(h||'<div class="svy-row muted-help">沒有符合的客戶</div>');
+    $('#svyCandCnt').text('（'+list.length+' / '+SVY.cand.length+' 家）');
+}
+$(document).on('input','#svyCandKw',svyRenderCand);
+$(document).on('change','.svy-cand',function(){
+    var k=$(this).data('k'), c=SVY.cand.filter(function(x){ return svyKey(x)===k; })[0];
+    if(!c) return;
+    if(this.checked) SVY.pick[k]={customer_id:c.id||'',customer_name:c.name,pick_reason:'manual'};
+    else delete SVY.pick[k];
+    svyRenderPick(); svyRenderPrint();
+});
+function svyRenderPick(){
+    var ks=Object.keys(SVY.pick);
+    var h=ks.map(function(k){
+        var p=SVY.pick[k];
+        return '<div class="svy-row"><b>'+esc(p.customer_name)+'</b>'
+             + '<span class="muted-help">'+esc(p.customer_id||'')+'</span>'
+             + (p.pick_reason&&p.pick_reason.indexOf('random')===0?'<span class="svy-tag">隨機</span>':'')
+             + '<button class="btn btn-xs btn-default svy-unpick" data-k="'+esc(k)+'" style="margin-left:auto;">×</button></div>';
+    }).join('');
+    $('#svyPickList').html(h||'<div class="svy-row muted-help">還沒有挑任何客戶</div>');
+    $('#svyPickCnt').text('（'+ks.length+' 家）');
+}
+$(document).on('click','.svy-unpick',function(){
+    delete SVY.pick[$(this).data('k')];
+    svyRenderPick(); svyRenderPrint();
+    $('.svy-cand[data-k="'+$(this).data('k').replace(/"/g,'\\"')+'"]').prop('checked',false);
+});
+$('#btnSvyClear').on('click', function(){ SVY.pick={}; svyRenderCand(); svyRenderPick(); svyRenderPrint(); });
+
+/* 隨機篩選：先依條件縮出母體（出貨次數 ≥ N 或 金額前 N 大），再從裡面隨機抽 N 家。
+   抽出來的是「加進名單」不是「取代名單」，已經挑好的不會被洗掉。 */
+$('#btnSvyRnd').on('click', function(){
+    var mode=$('#svyRndMode').val(), arg=parseInt($('#svyRndArg').val()||0)||0, n=parseInt($('#svyRndN').val()||0)||0;
+    if(n<1){ csToast('請填要抽幾家'); return; }
+    var pool = mode==='times' ? SVY.cand.filter(function(c){ return c.times>=arg; })
+                              : SVY.cand.slice(0, Math.max(1,arg));   // cand 已依金額由大到小
+    if(!pool.length){ csToast('依這個條件找不到任何客戶'); return; }
+    var rest=pool.filter(function(c){ return !SVY.pick[svyKey(c)]; });
+    for(var i=rest.length-1;i>0;i--){ var j=Math.floor(Math.random()*(i+1)); var t=rest[i]; rest[i]=rest[j]; rest[j]=t; }
+    var take=rest.slice(0,n);
+    take.forEach(function(c){ SVY.pick[svyKey(c)]={customer_id:c.id||'',customer_name:c.name,
+        pick_reason: mode==='times'?'random_ship_times':'random_top_amount'}; });
+    $('#svyRndHint').text('母體 '+pool.length+' 家，這次加入 '+take.length+' 家'
+        + (take.length<n?'（母體裡沒挑過的只剩這些）':''));
+    svyRenderCand(); svyRenderPick(); svyRenderPrint();
+});
+$('#btnSvyTargetSave').on('click', function(){
+    var items=Object.keys(SVY.pick).map(function(k){ return SVY.pick[k]; });
+    ajxPost({action:'target_save', year:$('#fYear').val(), quarter:$('#fQuarter').val(),
+             items:JSON.stringify(items)}, function(r){
+        if(!r||!r.ok){ csToast('儲存失敗：'+((r&&r.error)||'未知原因')); return; }
+        csReloadStat('已儲存名單（'+r.saved+' 家）');
+    });
+});
+
+/* ② 產生問卷 */
+function svyRenderPrint(){
+    var ks=Object.keys(SVY.pick);
+    var h=ks.map(function(k){
+        var p=SVY.pick[k];
+        return '<div class="svy-row"><label style="margin:0;font-weight:normal;display:flex;gap:6px;align-items:center;width:100%;">'
+             + '<input type="checkbox" class="svy-prn" data-k="'+esc(k)+'" checked>'
+             + '<b>'+esc(p.customer_name)+'</b><span class="muted-help">'+esc(p.customer_id||'（未綁定客戶ID，電話傳真會留白）')+'</span>'
+             + '</label></div>';
+    }).join('');
+    $('#svyPrnList').html(h||'<div class="svy-row muted-help">名單是空的，請先到「① 受調查名單」挑客戶</div>');
+    $('#svyPrnCnt').text('（'+ks.length+' 家）');
+}
+$('#svyPrnAll').on('change', function(){ $('.svy-prn').prop('checked', this.checked); });
+$('#btnSvyPrint').on('click', function(){
+    var ks=$('.svy-prn:checked').map(function(){ return $(this).data('k'); }).get();
+    if(!ks.length){ csToast('請先勾選要印的客戶'); return; }
+    if(!CUSTMASTER){
+        ajxGet({action:'cust_master'}, function(r){ if(r&&r.ok){ CUSTMASTER=r.rows||[]; doSurveyPrint(ks); } });
+    } else doSurveyPrint(ks);
+});
+
+/* ③ 回收問卷附件 */
+function svyRenderFiles(){
+    var opts='<option value="">— 未指定 —</option>'
+        + Object.keys(SVY.pick).map(function(k){
+            var p=SVY.pick[k];
+            return '<option value="'+esc(k)+'">'+esc(p.customer_name)+'</option>';
+          }).join('');
+    var h=SVY.files.map(function(f){
+        var sel=opts.replace('value="'+esc(f.customer_id)+'"','value="'+esc(f.customer_id)+'" selected');
+        return '<div class="svy-row">'
+             + '<a href="javascript:;" class="svy-fview" data-id="'+f.id+'"><i class="fa fa-file-o"></i> '+esc(f.orig_name)+'</a>'
+             + '<span class="muted-help">'+Math.round(f.size/1024)+' KB　'+esc(dispDate(f.at))+'　'+esc(f.by)+'</span>'
+             + '<span style="margin-left:auto;display:flex;gap:6px;align-items:center;">'
+             + '<select class="form-control input-sm svy-fassign" data-id="'+f.id+'" style="width:190px;">'+sel+'</select>'
+             + '<button class="btn btn-xs btn-default svy-fdel" data-id="'+f.id+'">刪除</button></span></div>';
+    }).join('');
+    $('#svyFileList').html(h||'<div class="svy-row muted-help">還沒有上傳任何問卷</div>');
+}
+$('#btnSvyUpload').on('click', function(){
+    var inp=document.getElementById('svyFiles');
+    if(!inp.files||!inp.files.length){ csToast('請先選擇檔案'); return; }
+    var fd=new FormData();
+    fd.append('action','survey_upload'); fd.append('csrf',CSRF);
+    fd.append('year',$('#fYear').val()); fd.append('quarter',$('#fQuarter').val());
+    for(var i=0;i<inp.files.length;i++) fd.append('files[]', inp.files[i]);
+    var $b=$(this).prop('disabled',true).text('上傳中…');
+    $.ajax({url:API, type:'POST', data:fd, processData:false, contentType:false, dataType:'json'})
+     .done(function(r){
+        if(!r||!r.ok){ csToast('上傳失敗：'+((r&&r.error)||'未知原因')); return; }
+        inp.value='';
+        csToast('已上傳 '+(r.uploaded||[]).length+' 個檔案'+((r.skipped||[]).length?('，'+r.skipped.length+' 個略過：'+r.skipped.join('、')):''));
+        svyRefreshFiles();
+     })
+     .fail(function(x){ csToast('上傳失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status)); })
+     .always(function(){ $b.prop('disabled',false).html('<i class="fa fa-upload"></i> 上傳'); });
+});
+function svyRefreshFiles(){
+    ajxGet({action:'survey_meta', year:$('#fYear').val(), quarter:$('#fQuarter').val()}, function(r){
+        if(!r||!r.ok) return;
+        SVY.files=r.files||[]; svyRenderFiles(); csReloadStat();
+    });
+}
+$(document).on('change','.svy-fassign',function(){
+    var id=$(this).data('id'), k=$(this).val(), p=k?SVY.pick[k]:null;
+    ajxPost({action:'survey_file_assign', year:$('#fYear').val(), quarter:$('#fQuarter').val(), id:id,
+             customer_id:(p?p.customer_id:''), customer_name:(p?p.customer_name:'')}, function(r){
+        if(!r||!r.ok){ csToast('指定失敗：'+((r&&r.error)||'未知原因')); return; }
+        csToast(p?('已指定給 '+p.customer_name):'已取消指定');
+        svyRefreshFiles();
+    });
+});
+$(document).on('click','.svy-fdel',function(){
+    if(!confirm('要刪除這個問卷附件嗎？（檔案會一起刪掉，無法復原）')) return;
+    ajxPost({action:'survey_file_delete', id:$(this).data('id')}, function(r){
+        if(!r||!r.ok){ csToast('刪除失敗：'+((r&&r.error)||'未知原因')); return; }
+        csToast('已刪除'); svyRefreshFiles();
+    });
+});
+$(document).on('click','.svy-fview',function(){
+    window.open(API+'?action=survey_file_get&id='+$(this).data('id'), '_blank');
+});
+/* 表格上的「附件 N」＝直接開問卷作業的附件分頁 */
+$(document).on('click','.svy-tag.file',function(){ svyOpen('file'); });
+
+/* ══════════ 填問卷結果 ══════════ */
+$(document).on('click','.svy-tag.act',function(){
+    var r=ST.rows[$(this).data('i')]; if(!r) return;
+    qOpen(r);
+});
+function qOpen(row){
+    SVY.cust=row;
+    $('#qCustName').text(row.customer_name);
+    var need = !SVY.q.length;
+    var go = function(){
+        ajxGet({action:'survey_get', year:$('#fYear').val(), quarter:$('#fQuarter').val(),
+                customer_id:row.customer_id||'', customer_name:row.customer_name}, function(r){
+            if(!r||!r.ok){ csToast('讀不到問卷：'+((r&&r.error)||'未知原因')); return; }
+            var s=r.survey||{}, ans=r.answers||{};
+            $('input[name=qMode]').prop('checked',false).filter('[value="'+(s.mode||'item')+'"]').prop('checked',true);
+            qRenderItems(ans); qRenderDirect(row);
+            $('#qTotal').val(s.total_score===null||s.total_score===undefined?'':s.total_score);
+            $('#qResp').val(s.respondent||''); $('#qRespTitle').val(s.respondent_title||'');
+            $('#qDate').val((s.reply_date||'').substr(0,10)); $('#qComment').val(s.comment_text||'');
+            $('#qErr').hide().empty();
+            qModePane(); qCalc();
+            openMask('qMask');
+        });
+    };
+    if(!need) return go();
+    ajxGet({action:'survey_meta', year:$('#fYear').val(), quarter:$('#fQuarter').val()}, function(r){
+        if(!r||!r.ok){ csToast('讀不到問卷題目'); return; }
+        SVY.q=r.questions||[]; SVY.lv=r.levels||[]; SVY.cats=r.cats||{};
+        SVY.targets=r.targets||[]; SVY.files=r.files||[]; SVY.cand=r.ship_stats||[];
+        go();
+    });
+}
+function qRenderItems(ans){
+    var CATNAME=SVY.cats, lastCat='', h='<table class="q-tb"><thead><tr><th style="width:52%;">評價主題與內容</th>'
+        + SVY.lv.map(function(l){ return '<th style="width:9%;">'+esc(l.label)+'<div class="muted-help">'+l.score+' 分</div></th>'; }).join('')
+        + '</tr></thead><tbody>';
+    var order=['quality','delivery','service','price','tech'], num={};
+    order.forEach(function(c){ num[c]=[]; });
+    SVY.q.forEach(function(q){ if(num[q.cat]) num[q.cat].push(q); });
+    order.forEach(function(c){
+        if(!num[c].length) return;
+        h+='<tr class="q-cat"><td colspan="'+(1+SVY.lv.length)+'">'+esc(CATNAME[c]||c)
+         + '（本項分數＝底下 '+num[c].length+' 題的平均）</td></tr>';
+        num[c].forEach(function(q){
+            h+='<tr><td>'+q.no+'. '+esc(q.text)+'</td>'
+             + SVY.lv.map(function(l,li){
+                   var on=(ans && String(ans[q.no])===String(li));
+                   return '<td class="qc"><input type="radio" name="q'+q.no+'" value="'+li+'"'+(on?' checked':'')+'></td>';
+               }).join('') + '</tr>';
+        });
+    });
+    h+='</tbody></table><div class="muted-help" style="margin-top:4px;">沒有勾的題目不列入平均（客戶漏答時不會被當成 0 分）。</div>';
+    $('#qItemPane').html(h);
+}
+function qRenderDirect(row){
+    var F=[['score_quality','品質'],['score_delivery','交期'],['score_tech','技術'],['score_service','服務'],['score_price','價格']];
+    $('#qDirectPane').html('<div class="cs-bar">'+F.map(function(f){
+        var v=row&&row[f[0]]!==null&&row[f[0]]!==undefined?row[f[0]]:'';
+        return '<label style="margin:0;">'+f[1]+'</label>'
+             + '<input type="number" class="form-control input-sm q-dir" data-k="'+f[0]+'" style="width:70px;" '
+             + 'min="0" max="10" step="0.1" value="'+v+'">';
+    }).join('')+'</div><div class="muted-help">留白＝尚未填（不是 0 分）。</div>');
+}
+function qModePane(){
+    var m=$('input[name=qMode]:checked').val();
+    $('#qItemPane').toggle(m==='item');
+    $('#qDirectPane').toggle(m==='direct');
+    $('#qTotalPane').toggle(m==='total');
+}
+$(document).on('change','input[name=qMode]',function(){ qModePane(); qCalc(); });
+$(document).on('change','#qItemPane input[type=radio], .q-dir, #qTotal', qCalc);
+/* 換算出來的分數即時顯示：填的人當下就看得到會寫進統計表的是多少（不必存了才知道） */
+function qCalc(){
+    var m=$('input[name=qMode]:checked').val(), sc={};
+    var CAT={quality:'品質',delivery:'交期',tech:'技術',service:'服務',price:'價格'};
+    if(m==='item'){
+        var sum={},cnt={};
+        SVY.q.forEach(function(q){
+            var v=$('input[name=q'+q.no+']:checked').val();
+            if(v===undefined) return;
+            var s=(SVY.lv[parseInt(v)]||{}).score; if(s===undefined) return;
+            sum[q.cat]=(sum[q.cat]||0)+parseFloat(s); cnt[q.cat]=(cnt[q.cat]||0)+1;
+        });
+        Object.keys(CAT).forEach(function(c){ if(cnt[c]) sc[c]=Math.round(sum[c]/cnt[c]*10)/10; });
+    } else if(m==='total'){
+        var t=parseFloat($('#qTotal').val());
+        if(!isNaN(t)) Object.keys(CAT).forEach(function(c){ sc[c]=Math.round(Math.max(0,Math.min(100,t))/10*10)/10; });
+    } else {
+        $('.q-dir').each(function(){
+            var v=$(this).val(); if(v==='') return;
+            sc[$(this).data('k').replace('score_','')]=Math.round(Math.max(0,Math.min(10,parseFloat(v)))*10)/10;
+        });
+    }
+    var ks=Object.keys(CAT).filter(function(c){ return sc[c]!==undefined; });
+    var avg=ks.length?Math.round(ks.reduce(function(a,c){ return a+sc[c]; },0)/ks.length*10)/10:null;
+    $('#qCalc').html('會寫進統計表的分數：'
+        + Object.keys(CAT).map(function(c){ return CAT[c]+' <b>'+(sc[c]===undefined?'—':sc[c])+'</b>'; }).join('　')
+        + '　→　平均 <b>'+(avg===null?'—':avg)+'</b>'
+        + '<div class="muted-help">平均＝五個大項的平均（大項自己先算完該項題目的平均），只平均有填的項目。</div>');
+}
+$('#btnQSave').on('click', function(){
+    var row=SVY.cust; if(!row) return;
+    var m=$('input[name=qMode]:checked').val(), p={
+        action:'survey_save', year:$('#fYear').val(), quarter:$('#fQuarter').val(),
+        customer_id:row.customer_id||'', customer_name:row.customer_name, mode:m,
+        respondent:$('#qResp').val(), respondent_title:$('#qRespTitle').val(),
+        reply_date:$('#qDate').val(), comment_text:$('#qComment').val()
+    };
+    if(m==='item'){
+        var ans={};
+        SVY.q.forEach(function(q){
+            var v=$('input[name=q'+q.no+']:checked').val();
+            if(v!==undefined) ans[q.no]=parseInt(v);
+        });
+        if(!Object.keys(ans).length){ $('#qErr').text('至少要勾一題，或改用「直接填五項分數」').show(); return; }
+        p.answers=JSON.stringify(ans);
+    } else if(m==='total'){
+        if($('#qTotal').val()===''){ $('#qErr').text('請填總分').show(); return; }
+        p.total_score=$('#qTotal').val();
+    } else {
+        var any=false;
+        $('.q-dir').each(function(){ p[$(this).data('k')]=$(this).val(); if($(this).val()!=='') any=true; });
+        if(!any){ $('#qErr').text('至少要填一項分數').show(); return; }
+    }
+    $('#qErr').hide().empty();
+    ajxPost(p, function(r){
+        if(!r||!r.ok){ $('#qErr').text('儲存失敗：'+((r&&r.error)||'未知原因')).show(); return; }
+        closeMask('qMask');
+        csReloadStat('已存入 '+row.customer_name+' 的問卷結果');
+    }, function(msg){ $('#qErr').text('儲存失敗：'+msg).show(); });
+});
+
+/* ── 產生問卷（版面照紙本 2-SM-02-02，A4 直式、一家一頁）──
+   與統計表的列印分開寫一份：那邊是 A4 橫式報表，這裡是要寄給客戶填的表單。 */
+function doSurveyPrint(keys){
+    ajxGet({action:'print_meta', which:'survey', year:$('#fYear').val(), quarter:$('#fQuarter').val()}, function(m){
+        if(!m||!m.ok){ csToast('讀不到列印設定'); return; }
+        var own=m.own||{}, asTxt=String(m.doc_no_print||'').replace(/['\\]/g,'');
+        var lvHead=SVY.lv.map(function(l){ return '<th>'+esc(l.label)+'</th>'; }).join('');
+        var order=['quality','delivery','service','price','tech'], CN={quality:'一、 品質',delivery:'二、 交期',service:'三、 服務',price:'四、 價格',tech:'五、 技術'};
+        var pages=keys.map(function(k,idx){
+            var p=SVY.pick[k]||{customer_name:k,customer_id:''};
+            var c=(CUSTMASTER||[]).filter(function(x){ return x.id===p.customer_id; })[0]||{};
+            var rows='';
+            order.forEach(function(cat){
+                var qs=SVY.q.filter(function(q){ return q.cat===cat; });
+                if(!qs.length) return;
+                rows+='<tr class="cat"><td colspan="'+(1+SVY.lv.length)+'">'+CN[cat]+'</td></tr>';
+                qs.forEach(function(q){
+                    rows+='<tr><td class="tl">'+q.no+'.'+esc(q.text)+'</td>'
+                        + SVY.lv.map(function(){ return '<td></td>'; }).join('')+'</tr>';
+                });
+            });
+            return '<div class="q-page"'+(idx<keys.length-1?' style="page-break-after:always;"':'')+'>'
+                 + '<div class="q-title">客戶滿意度調查問卷表</div>'
+                 + '<div class="q-date">日期：　　年　　月　　日</div>'
+                 + '<div class="q-to"><b>'+esc(p.customer_name)+'</b>　先生/小姐鈞鑑：</div>'
+                 + '<div class="q-body">我們為提供給 貴公司更佳之服務與附加價值，懇切期待 貴公司惠賜寶貴意見與感想，'
+                 + '讓我們能不斷的持續改善；帶給 貴公司更加的滿意與效益，我們精心設計了下列問卷請您務必耐心做答並'
+                 + '傳真至 '+esc(own.customer_fax||'')+' 業務部收。我們將謹慎處理每一收回問卷並以滿足客戶需求努力，再次感謝您的熱忱與指教。</div>'
+                 + '<div class="q-sign">敬祝　商　祺　　　　<b>'+esc(m.company||'')+'</b>　敬啟'
+                 + '<div class="q-tel">歡迎使用服務電話：'+esc(own.customer_tel||'')+'</div></div>'
+                 + '<div class="q-note">● 請以打勾「ˇ」或任何可識別之方式表達您對本公司的看法：（服務人員兩人以上請以姓名區分）</div>'
+                 + '<table class="q-form"><thead><tr><th class="tl">評價主題與內容</th>'+lvHead+'</tr></thead><tbody>'+rows+'</tbody></table>'
+                 + '<div class="q-note">● 若您對我們所提供的產品與服務有不滿意或特別建言、抱怨事項，請簡要敘述實情，以便我們進一步處理改善，'
+                 + '我們將於收件一星期內主動與您聯繫說明處理結果，再次謝謝您：</div>'
+                 + '<div class="q-free"></div>'
+                 + '<div class="q-note">● 為方便聯絡與意見交換煩請確認：</div>'
+                 + '<table class="q-foot"><tr><td>客戶名稱：<b>'+esc(p.customer_name)+'</b></td>'
+                 + '<td>電話：'+esc(c.tel||'')+'</td><td>傳真：'+esc(c.fax||'')+'</td></tr>'
+                 + '<tr><td>問卷填寫者：</td><td>職稱：</td><td>日期：　　年　　月　　日</td></tr></table>'
+                 + '</div>';
+        }).join('');
+        surveyPrintWindow('客戶滿意度調查問卷', pages, asTxt, keys.length);
+    });
+}
+function surveyPrintWindow(title, body, asTxt, n){
+    try{ if(window.EGPrintLog) EGPrintLog.record({source:'cust_satis', doc_name:title+'（'+n+' 家）', doc_kind:'form'}); }catch(e){}
+    var w=window.open('','_blank');
+    if(!w){ alert('請允許彈出視窗以列印'); return; }
+    var css='body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;margin:0;color:#222;font-size:12px;'
+        +'-webkit-print-color-adjust:exact;print-color-adjust:exact;}*{box-sizing:border-box;}'
+        +'.q-page{padding:0;}'
+        +'.q-title{font-size:19px;font-weight:bold;text-align:center;letter-spacing:4px;margin-bottom:2px;}'
+        +'.q-date{text-align:right;font-size:11px;margin-bottom:6px;}'
+        +'.q-to{margin:4px 0;}.q-body{line-height:1.9;text-align:justify;}'
+        +'.q-sign{margin:6px 0;text-align:right;}.q-tel{font-size:11px;color:#444;}'
+        +'.q-note{margin:6px 0 3px;line-height:1.7;}'
+        +'table{width:100%;border-collapse:collapse;table-layout:fixed;}'
+        +'table.q-form th,table.q-form td{border:1px solid #333;padding:4px 5px;text-align:center;font-size:11.5px;}'
+        +'table.q-form th{background:#f3ead6;}table.q-form th.tl,table.q-form td.tl{text-align:left;}'
+        +'table.q-form thead th:first-child{width:46%;}'
+        +'table.q-form tr.cat td{background:#faf4ea;text-align:left;font-weight:bold;}'
+        +'table.q-form tr{break-inside:avoid;page-break-inside:avoid;}'
+        +'.q-free{border:1px solid #333;height:26mm;}'
+        +'table.q-foot td{border:1px solid #333;padding:5px 6px;font-size:11.5px;}'
+        +'@page{size:A4 portrait;margin:14mm 14mm 16mm;'
+        +(asTxt?" @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }":'')
+        +'}';
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title>'
+        +'<style>'+css+'</style></head><body>'+body
+        +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},250);};</scr'+'ipt></body></html>');
+    w.document.close(); w.focus();
+}
+
+/* 清除系統建議分（品質／交期）——那兩項應該由客戶問卷來，不是系統推估 */
+$('#btnClearSuggest').on('click', function(){
+    if(!confirm('要把本期間「系統帶入的」品質分／交期分清空嗎？\n\n'
+              + '（那兩項應該填客戶問卷上的分數。已經有回收問卷的客戶不會被清；技術／服務／價格與備註也不會動到）')) return;
+    ajxPost({action:'score_clear_suggest', year:$('#fYear').val(), quarter:$('#fQuarter').val()}, function(r){
+        if(!r||!r.ok){ csToast('清除失敗：'+((r&&r.error)||'未知原因')); return; }
+        csReloadStat('已清除 '+r.cleared+' 家的品質／交期分'+(r.kept?('，保留 '+r.kept+' 家有回收問卷的'):''));
+    }, function(m){ csToast('清除失敗：'+m); });
+});
+
 /* ══════════ 設定 ══════════ */
 /* 事件委派（不綁死在載入當下那顆按鈕上），且任何一條失敗路徑都要講出來——
    原本 `if(!r.ok) return;` 是靜默結束，使用者看到的就是「按了完全沒反應」，連原因都查不到。 */
@@ -969,7 +1555,7 @@ $(document).on('click', '#btnSetting', function(){
     ajxGet({action:'setting_get'}, function(r){
         if(!r||!r.ok){ alert('讀不到設定：'+((r&&r.error)||'未知原因')+'\n請重新整理頁面後再試一次。'); return; }
         ST.set=r;
-        renderDocLabel('stat'); renderDocLabel('monitor');
+        renderDocLabel('stat'); renderDocLabel('monitor'); renderDocLabel('survey');
         var s=$('#setStampTpl').html('<option value="0">（用系統預設印章）</option>');
         (r.stamp_tpls||[]).forEach(function(t){
             s.append('<option value="'+t.id+'">'+esc(t.tpl_name)+(t.type_name?'（'+esc(t.type_name)+'）':'')+'</option>');
@@ -981,24 +1567,29 @@ $(document).on('click', '#btnSetting', function(){
         openMask('setMask');
     });
 });
+/* 三份文件共用同一套綁定 UI：stat 統計資料表／monitor 監控表／survey 調查問卷 */
+var DOCSPEC = {stat:  {doc:'stat_doc',   id:'stat_doc_id',   el:'#setStatLabel', name:'客戶滿意度統計資料表'},
+               monitor:{doc:'monitor_doc',id:'monitor_doc_id',el:'#setMonLabel',  name:'客戶滿意度監控表'},
+               survey:{doc:'survey_doc', id:'survey_doc_id', el:'#setSvyLabel',  name:'客戶滿意度調查問卷'}};
 function renderDocLabel(which){
-    var d = which==='stat' ? ST.set.stat_doc : ST.set.monitor_doc;
+    var sp=DOCSPEC[which]; if(!sp) return;
+    var d = ST.set[sp.doc];
     var txt=(window.EGAsDoc&&EGAsDoc.label)?EGAsDoc.label(d):(d?d.doc_no:'尚未綁定');
-    $(which==='stat'?'#setStatLabel':'#setMonLabel').text(txt);
+    $(sp.el).text(txt);
 }
 function csPickDoc(which){
-    var cur = which==='stat' ? ST.set.stat_doc_id : ST.set.monitor_doc_id;
-    EGAsDoc.open({docs:ST.set.as_docs||[], current:parseInt(cur||0)||0,
-        title:(which==='stat'?'客戶滿意度統計資料表':'客戶滿意度監控表')+'－AS 文件編號綁定',
+    var sp=DOCSPEC[which]; if(!sp) return;
+    EGAsDoc.open({docs:ST.set.as_docs||[], current:parseInt(ST.set[sp.id]||0)||0,
+        title:sp.name+'－AS 文件編號綁定',
         onSave:function(id,doc){
-            if(which==='stat'){ ST.set.stat_doc_id=parseInt(id)||0; ST.set.stat_doc=doc||null; }
-            else { ST.set.monitor_doc_id=parseInt(id)||0; ST.set.monitor_doc=doc||null; }
+            ST.set[sp.id]=parseInt(id)||0; ST.set[sp.doc]=doc||null;
             renderDocLabel(which);
             ajxPost({action:'asdoc_save', which:which, doc_id:parseInt(id)||0}, function(){});
         }});
 }
 function csClearDoc(which){
-    if(which==='stat'){ ST.set.stat_doc_id=0; ST.set.stat_doc=null; } else { ST.set.monitor_doc_id=0; ST.set.monitor_doc=null; }
+    var sp=DOCSPEC[which]; if(!sp) return;
+    ST.set[sp.id]=0; ST.set[sp.doc]=null;
     renderDocLabel(which);
     ajxPost({action:'asdoc_save', which:which, doc_id:0}, function(){});
 }
