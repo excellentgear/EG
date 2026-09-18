@@ -3939,9 +3939,25 @@ function renderNcs(){
 
 /* ---- 開立 ---- */
 $('#btnNcNew').on('click', function(){ openNcNew({}); });
+/* 開立不符合通知單（2026-09-18 使用者回報「跳窗上的下拉點不動，過一下又好了」）。
+   根因：這個跳窗的受稽核單位／受稽核人是**直接拿 META 當下的清單**畫出來的，
+   而 META.people／META.depts 會被別處的 people_asof 非同步換掉——換的那一瞬間清單是空的，
+   於是開出來的下拉「看起來正常、點下去什麼都不會發生」（空的 select 不會展開），
+   等下一次重畫才又正常。而且那份清單是「今天」的，本來就該依**這張單的稽核日期**回推（ai-rules/22）。
+   修法：跳窗先開起來、四個下拉一律先顯示「載入中…」並停用，人員清單到齊才真正畫選項。 */
 function openNcNew(pre){
     // 開立畫面要用到案件清單當下拉；不在稽核通知單分頁時清單可能還沒載入過
     if (!CASES.length) { loadCases(function(){ openNcNew(pre); }); return; }
+    ['#nnCase', '#nnDept', '#nnAuditee', '#nnType'].forEach(function(sel){
+        $(sel).html('<option value="">載入中…</option>').prop('disabled', true);
+    });
+    clearErrs($('#ncNewMask'));
+    openMask('ncNewMask');
+    // 人員與職稱依這張單的稽核日期回推，回來才畫（清單沒到齊就畫＝空下拉）
+    peopleAsof(pre.audit_date || META.today, function(){ openNcNewFill(pre); });
+}
+function openNcNewFill(pre){
+    $('#nnCase,#nnDept,#nnAuditee,#nnType').prop('disabled', false);
     var typeH = '<option value="">（請選擇）</option>';
     $.each(META.nc_types||{}, function(k,v){ typeH += '<option value="'+k+'">'+esc(v)+'</option>'; });
     $('#nnType').html(typeH); $('#nnCase').html(caseOptions(pre.case_id||''));
@@ -3957,8 +3973,12 @@ function openNcNew(pre){
     ncClausePick(pre.clauses || []);
     $('#btnNcCreate').data('src', JSON.stringify({src_kind:pre.src_kind||'', src_item_id:pre.src_item_id||'',
                                                  ref_form_name:pre.ref_form_name||''}));
-    clearErrs($('#ncNewMask'));
-    openMask('ncNewMask');
+    /* 打字篩選框的選項快照是在 select 被畫出來當下取的，這裡整批換過選項後要它重取，
+       否則使用者一打字就會被舊快照（多半是「載入中…」那一筆）洗掉。 */
+    ['nnDept', 'nnAuditee'].forEach(function(id){
+        var el = document.getElementById(id);
+        if (el && typeof el.egFilterResnap === 'function') el.egFilterResnap();
+    });
 }
 /* 違反條文：把「綁定這份 AS 文件的條文」列出來勾，勾了就加進文字框（也可以自己打字改）。
    清單為空時整區不顯示（不是每張表單都在題庫裡對得到條文）。 */
