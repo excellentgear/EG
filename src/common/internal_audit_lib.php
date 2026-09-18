@@ -2676,14 +2676,27 @@ function ia_year_status(PDO $db): array
     }
 
     foreach ($out as $y => &$s) {
-        $has = ($s['plan'] || $s['cases'] || $s['checks'] || $s['reports'] || $s['nc_open']);
-        if (!$has) { $s['state'] = 'none'; continue; }
+        /* 一年的內稽是**從年度計畫表開始**的，所以「進行中」的前提是這一年有年度計畫表
+           （2026-09-18 使用者定調：「有計畫表，但還沒有稽核報告表才顯示進行中」）。
+           沒有計畫表就算有零星資料也不標成進行中——那多半是補舊資料補到一半，
+           標成進行中會讓人以為這一年的稽核真的在跑。**但不可以安靜地什麼都不說**：
+           `why` 會寫「還沒有年度計畫表」，年度旁的說明文字照樣顯示得出來。 */
+        $hasAny = ($s['plan'] || $s['cases'] || $s['checks'] || $s['reports'] || $s['nc_open']);
+        if (!$hasAny) { $s['state'] = 'none'; continue; }
+
         $why = [];
         // 報告表 2026-09-17 起走「送出」不走核准（使用者拍板不要核准也不要製表人），
         // 舊資料若還是 approved 也一律算數，不然以前核准過的年度會突然變回進行中。
         if ($s['reports'] === 0)                          $why[] = '還沒有稽核報告表';
         elseif ($s['reports_approved'] < $s['reports'])   $why[] = '稽核報告表還沒送出（' . $s['reports_approved'] . '／' . $s['reports'] . ' 張已送出）';
         if ($s['nc_open'] > 0)                            $why[] = '還有 ' . $s['nc_open'] . ' 張不符合通知單未結案';
+
+        if ($s['plan'] === 0) {
+            // 沒有年度計畫表：不算進行中，也不會是已完成（這一年根本還沒正式排稽核）
+            $s['state'] = 'none';
+            $s['why']   = array_merge(['還沒有年度計畫表（有其他內稽資料，但年度計畫表才是這一年的起點）'], $why);
+            continue;
+        }
         $s['state'] = $why ? 'doing' : 'done';
         $s['why']   = $why;
     }
