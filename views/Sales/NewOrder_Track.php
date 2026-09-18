@@ -10779,7 +10779,15 @@ foreach($dCounts as $c) {
             var hit = (window.brcLast || []).filter(function(c){ return String(c.customer_id) === cid; })[0];
             brcRows.push({ client_id: cid, client_name: hit ? (hit.customer || '') : '', note: '' });
             brcRender();
-            brcSearch();   // 重畫建議清單（把剛加入的標成「已在名單內」）
+            // 選完自動清空關鍵字並收起建議清單，游標留在輸入框——可以直接接著打下一家，
+            // 不必再自己去點一次輸入框、也不必手動把上一個關鍵字刪掉
+            var inp = document.getElementById('brc-search');
+            var box = document.getElementById('brc-suggest');
+            clearTimeout(brcSearchTimer);          // 取消還沒觸發的那次延遲搜尋，否則清空後又會再查一次
+            inp.value = '';
+            box.style.display = 'none';
+            box.innerHTML = '';
+            inp.focus();
         };
         window.brcToggleLogs = function(){
             var box = document.getElementById('brc-logs');
