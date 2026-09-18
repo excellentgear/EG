@@ -149,7 +149,9 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         table.vio-tbl th { position:sticky; top:0; background:#F7E0BD; color:#5b3a1e; padding:5px 7px;
             text-align:left; z-index:1; white-space:normal; word-break:break-word; }
         table.vio-tbl td { padding:4px 7px; border-top:1px solid #F3EADA; color:#5b3a1e; vertical-align:top;
-            white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
+            white-space:normal; overflow-wrap:anywhere; word-break:break-word;
+            -webkit-user-select:text; user-select:text; cursor:text; }
+        table.vio-tbl td:first-child { cursor:default; }
         table.vio-tbl tr.ex td { background:#F5F1E8; color:#a08356; }
         table.vio-tbl tr.rex td { background:#F3EFE6; color:#a08356; }
         table.vio-tbl tr.info td { background:#fff; color:#8a6d45; }
@@ -222,6 +224,9 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         #vioFoot .vio-print { margin-left:14px; font-size:12px; color:#8a6d45; }
         #vioFoot .vio-savetip { font-size:11px; color:#8A5A2B; background:#FBF5EA; border:1px solid #EADFC8;
             border-radius:4px; padding:4px 8px; margin-top:6px; line-height:1.6; }
+        #vioToast { display:none; position:fixed; left:50%; bottom:40px; transform:translateX(-50%);
+            background:#5b3a1e; color:#fff; font-size:13px; padding:8px 16px; border-radius:20px;
+            z-index:20000; box-shadow:0 2px 10px rgba(0,0,0,.25); max-width:80vw; }
         #vioFoot .vio-print select { height:28px; border:1px solid #D8BE93; border-radius:4px; font-size:12px; }
         #vioFoot .vio-set select { height:28px; border:1px solid #D8BE93; border-radius:4px; font-size:12px; }
         .att-row { display:flex; gap:8px; align-items:center; border-bottom:1px dashed #EADFC8; padding:6px 0; font-size:13px; }
@@ -1122,6 +1127,10 @@ function renderVio(){
         f += '<span style="color:#8a6d45;font-size:12px;">您沒有調整這個指標的權限，只能檢視。</span>';
     }
     if (d.rows.length || +d.supported) {
+        // 選取複製（使用者要求 2026-09-18）：整欄一次複製，貼進 Excel 最快
+        f += '<span class="vio-print">複製：<select id="vioCopyK">';
+        d.cols.forEach(function(c){ f += '<option value="' + esc(c.k) + '">' + esc(c.t) + '</option>'; });
+        f += '</select><button id="vioCopyCol"><i class="fa fa-clone"></i> 複製整欄</button></span>';
         f += '<span class="vio-print">列印：<select id="vioPrM"></select>'
            + '<button id="vioPrint"><i class="fa fa-print"></i> 列印明細</button></span>';
     }
@@ -1138,7 +1147,9 @@ function renderVio(){
     if (+d.can_adjust) {
         f += '<div class="vio-savetip">這個畫面<b>沒有另外的存檔按鈕</b>：按下「排除選取並存檔」「建立排除規則」'
            + '或改最右邊那一欄，<b>當下就已經存檔並重新計算</b>了（每一筆都會記下是誰在什麼時候做的）。'
-           + '拖曳可一次選多列。</div>';
+           + '　<b>要複製料號／訂單編號</b>：直接用滑鼠在同一列上拖曳就選得起來（Ctrl+C），'
+           + '雙擊那一格會直接複製整格，或用右下角「複製整欄」一次複製目前篩選出來的全部。'
+           + '　拖到<b>別的一列</b>才會變成一次勾選多列。</div>';
     }
     $('#vioFoot').html(f);
     if ($('#vioPrM').length) {
@@ -1167,30 +1178,96 @@ $(document).on('change', '#vioBody #vioAll', function(){
     $('#vioBody .vioChk:not(:disabled)').prop('checked', on)
         .each(function(){ $(this).closest('tr').toggleClass('sel', on); });
 });
-/* ---------- 拖移一次多選（使用者要求 2026-09-17） ----------
-   按住左鍵在表格上拖曳＝把經過的每一列都設成同一個勾選狀態；
-   點在輸入元件上不攔（否則下拉與日期欄就點不動了）。 */
+/* ---------- 拖移一次多選（2026-09-17）＋ 選取複製（2026-09-18） ----------
+   使用者要求料號／訂單編號要選得起來複製，但先前為了拖曳多選在 mousedown 就
+   preventDefault()，等於把整張表的文字選取全部擋掉了。
+   改成用「手勢」區分，兩種都能用：
+     同一列之內拖曳  → 不攔，瀏覽器照常選字，可以直接 Ctrl+C
+     拖到別的一列    → 這時才開始多選，並把剛剛選到的字清掉
+   點在輸入元件上一律不攔（否則下拉與日期欄點不動）。 */
 var VIODRAG = null;
+function vioSetRow($tr, st){
+    var $chk = $tr.find('.vioChk');
+    if (!$chk.length || $chk.prop('disabled')) return;
+    $chk.prop('checked', st);
+    $tr.toggleClass('sel', st);
+}
 $(document).on('mousedown', '#vioBody tbody tr', function(e){
+    if (e.which && e.which !== 1) return;                 // 只管左鍵
     var $chk = $(this).find('.vioChk');
     if (!$chk.length || $chk.prop('disabled')) return;
     if ($(e.target).is('input,select,textarea,button,a,option,label')) {
-        if ($(e.target).hasClass('vioChk')) VIODRAG = {state: !$chk.prop('checked')};   // 讓原生點擊自己處理這一列
+        if ($(e.target).hasClass('vioChk')) VIODRAG = {state: !$chk.prop('checked'), armed: true};
         return;
     }
-    var st = !$chk.prop('checked');
-    $chk.prop('checked', st); $(this).toggleClass('sel', st);
-    VIODRAG = {state: st};
-    e.preventDefault();                      // 不要順便把表格文字整片反白
+    // 先只記著，還不動任何勾選狀態——等真的拖到別列再說（這樣同一列內就能正常選字）
+    VIODRAG = {state: !$chk.prop('checked'), armed: false, from: this};
+    // 直接點在勾選欄那一格＝立刻切換（不必拖）
+    if ($(e.target).closest('td').find('.vioChk').length) {
+        VIODRAG.armed = true;
+        vioSetRow($(this), VIODRAG.state);
+        e.preventDefault();
+    }
 });
 $(document).on('mouseenter', '#vioBody tbody tr', function(){
     if (!VIODRAG) return;
-    var $chk = $(this).find('.vioChk');
-    if (!$chk.length || $chk.prop('disabled')) return;
-    $chk.prop('checked', VIODRAG.state);
-    $(this).toggleClass('sel', VIODRAG.state);
+    if (!VIODRAG.armed) {
+        // 第一次跨到別的一列＝確定是要多選：起始列補上，並把剛剛拖出來的反白清掉
+        VIODRAG.armed = true;
+        if (VIODRAG.from) vioSetRow($(VIODRAG.from), VIODRAG.state);
+        try { (window.getSelection().removeAllRanges || function(){})(); } catch (e) {}
+    }
+    vioSetRow($(this), VIODRAG.state);
 });
 $(document).on('mouseup', function(){ VIODRAG = null; });
+/* 雙擊儲存格＝複製這一格的文字（料號／訂單編號／製令最常用） */
+$(document).on('dblclick', '#vioBody tbody td', function(e){
+    if ($(e.target).is('input,select,textarea,button,a')) return;
+    var txt = $.trim($(this).clone().children('.vio-ex,.kind-tag').remove().end().text());
+    if (!txt || txt === '—') return;
+    vioCopy(txt, '已複製「' + txt + '」');
+});
+/* 複製文字（優先用 clipboard API，不支援就退回 execCommand） */
+function vioCopy(txt, msg){
+    var done = function(){ vioToast(msg || '已複製'); };
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(txt).then(done, function(){ vioCopyFallback(txt, done); });
+            return;
+        }
+    } catch (e) {}
+    vioCopyFallback(txt, done);
+}
+function vioCopyFallback(txt, done){
+    var ta = document.createElement('textarea');
+    ta.value = txt;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { alert('這個瀏覽器不支援自動複製，請手動選取'); }
+    document.body.removeChild(ta);
+}
+function vioToast(msg){
+    var $t = $('#vioToast');
+    if (!$t.length) $t = $('<div id="vioToast"></div>').appendTo('body');
+    $t.text(msg).stop(true, true).fadeIn(120).delay(1400).fadeOut(300);
+}
+/* 整欄複製：把目前篩選出來的那一欄全部複製成一行一個，直接貼進 Excel */
+$(document).on('click', '#vioCopyCol', function(){
+    var k = $('#vioCopyK').val();
+    if (!k) { alert('請先選要複製哪一欄'); return; }
+    var vals = [];
+    VIO.data.rows.forEach(function(x){
+        if (!vioRowVisible(x)) return;
+        var v = (x.pvals && x.pvals[k] != null) ? x.pvals[k] : x.vals[k];
+        v = $.trim(String(v == null ? '' : v));
+        if (v !== '' && v !== '—') vals.push(v);
+    });
+    if (!vals.length) { alert('目前篩選出來的資料裡這一欄是空的'); return; }
+    var uniq = [], seen = {};
+    vals.forEach(function(v){ if (!seen[v]) { seen[v] = 1; uniq.push(v); } });
+    vioCopy(uniq.join('\n'), '已複製 ' + uniq.length + ' 筆（重複的已合併）');
+});
 /* ---------- 排除規則 ---------- */
 $(document).on('change', '#vioBody #vrDim', function(){
     VIO.rdim = $(this).val(); VIO.rsel = []; VIO.rfound = [];
