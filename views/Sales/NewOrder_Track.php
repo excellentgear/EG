@@ -3077,7 +3077,8 @@ if (isset($_POST['action']) && $_POST['action'] === 'load_page_data') {
                             //    名單沒設定時 ot_boss_required() 一律回 false，以下整段等同不存在，行為與改動前相同。
                             //    徽章一定要自己寫 line-height：Gentelella 全站 `td span{line-height:28px}`，
                             //    不寫的話一個 11px 的字會佔掉 28px 高、把整列撐高（見 CLAUDE.md 2026-09-03 急件徽章那次）。
-                            $_boss_need = ot_boss_required($pdo, $order['Client_name_ID'] ?? '', $order['ate'] ?? 0);
+                            //    第三個條件是「這張訂單有按過審圖」——沒按審圖就直接轉生管的通常本來就有圖面，不擋（使用者 2026-09-18 補充）
+                            $_boss_need = ot_boss_required($pdo, $order['Client_name_ID'] ?? '', $order['ate'] ?? 0, $order['in_review'] ?? null);
                             $_boss_rev  = $order['boss_review_formatted'] ?? '';
                             $_boss_ok   = $order['boss_ok_formatted'] ?? '';
                             $_boss_css  = 'display:inline-block;font-size:11px;line-height:16.5px;padding:2px 5px;border:1px solid;border-radius:3px;margin-right:3px;vertical-align:middle;';
@@ -10116,9 +10117,10 @@ foreach($dCounts as $c) {
             <div class="main-card" style="margin-top:10px;border:1px solid #E4D3BC;">
               <div style="font-weight:700;color:#8a5a2b;margin-bottom:6px;"><i class="fa fa-eye"></i> 需給 BOSS 審圖的客戶</div>
               <div style="font-size:11px;color:#8a5a2b;background:#FFF9F0;border:1px solid #F0E2CC;border-radius:4px;padding:6px 8px;margin-bottom:8px;line-height:1.7;">
-                這裡綁定的客戶，他們的訂單按下【轉生管】時<b>不會直接轉生管</b>，而是先記下「今天送 BOSS 審圖」，
-                清單上顯示 <b>BOSS審圖中</b> 並長出【BOSS審核OK】鈕；按下【BOSS審核OK】＝系統認定<b>當天</b>
-                BOSS 完成審核，【轉生管】鈕才會回來，之後所有動作都與原本相同。<br>
+                這裡綁定的客戶，他們的訂單<b>按過「審圖」之後</b>再按【轉生管】時<b>不會直接轉生管</b>，
+                而是先記下「今天送 BOSS 審圖」，清單上顯示 <b>BOSS審圖中</b> 並長出【BOSS審核OK】鈕；
+                按下【BOSS審核OK】＝系統認定<b>當天</b> BOSS 完成審核，【轉生管】鈕才會回來，之後所有動作都與原本相同。<br>
+                ・<b>沒有按過「審圖」就直接按【轉生管】的一律不擋</b>——那種通常本來就已經有圖面，不需要再送 BOSS。<br>
                 ・<b>原本設定為「存檔自動轉生管」的設計對象完全不受影響</b>（那種訂單一存檔就已經是已轉生管，本設定不會介入）。<br>
                 ・誰能按【BOSS審核OK】＝誰能按【轉生管】（角色功能碼 <code>ot_to_pm</code>，且只能操作自己被指定的訂單）。<br>
                 ・<b>每次儲存（新增／修改／刪除）都必須填寫修改原因</b>；一次改好幾家只要填一次。系統會記錄是誰、什麼時候改的。
@@ -11332,8 +11334,9 @@ $PAGE_HELP_BODY  = <<<'HTMLHELP'
 <h4>六之二、需給 BOSS 審圖的客戶</h4>
 <ul>
     <li>在【<b>設定</b>】跳窗最下方的「<b>需給 BOSS 審圖的客戶</b>」綁定客戶（打<b>客戶名稱或客戶ID</b>模糊搜尋後點選，可綁多家）。</li>
-    <li>綁定之後，這些客戶的訂單按下【<b>轉生管</b>】時<b>不會直接轉生管</b>，而是記下「<b>今天</b>送 BOSS 審圖」，
-        該列顯示 <b>BOSS審圖中</b> 並長出【<b>BOSS審核OK</b>】鈕。</li>
+    <li>綁定之後，這些客戶的訂單<b>在按過「審圖」之後</b>再按【<b>轉生管</b>】時<b>不會直接轉生管</b>，
+        而是記下「<b>今天</b>送 BOSS 審圖」，該列顯示 <b>BOSS審圖中</b> 並長出【<b>BOSS審核OK</b>】鈕。</li>
+    <li><b>沒有按過「審圖」就直接按【轉生管】的一律不擋</b>——那種訂單通常本來就已經有圖面，不需要再送 BOSS。</li>
     <li>按【<b>BOSS審核OK</b>】＝系統認定<b>當天</b> BOSS 完成審核，該列顯示 <b>BOSS OK</b>，
         【<b>轉生管</b>】鈕回來，之後所有動作都與原本完全相同。按錯了可用旁邊的 <b>X</b> 把 BOSS 審圖紀錄整個清掉重來。</li>
     <li><b>原本設定為「存檔自動轉生管」的設計對象不受影響</b>——那種訂單一存檔就已經是已轉生管，本設定不會介入。</li>

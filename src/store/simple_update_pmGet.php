@@ -63,11 +63,12 @@ try {
     // ══════════════════════════════════════════════════════════════════════
     $bossRow = null;
     try {
-        $stB = $pdo->prepare("SELECT Client_name_ID, ate, boss_ok_at FROM order_track WHERE Order_id = ?");
+        $stB = $pdo->prepare("SELECT Client_name_ID, ate, in_review, boss_ok_at FROM order_track WHERE Order_id = ?");
         $stB->execute([$order_id]);
         $bossRow = $stB->fetch(PDO::FETCH_ASSOC) ?: null;
     } catch (Exception $eB) { $bossRow = null; }
-    $bossNeed = $bossRow ? ot_boss_required($pdo, $bossRow['Client_name_ID'] ?? '', $bossRow['ate'] ?? 0) : false;
+    // 第三個條件「有按過審圖」也在 ot_boss_required() 裡，所以要把 in_review 一起傳進去
+    $bossNeed = $bossRow ? ot_boss_required($pdo, $bossRow['Client_name_ID'] ?? '', $bossRow['ate'] ?? 0, $bossRow['in_review'] ?? null) : false;
 
     if ($action === 'boss_ok') {
         // BOSS 審核完成：系統認定為今天

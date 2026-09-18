@@ -4,7 +4,7 @@
 //   訂單追蹤：「指定客戶的訂單，轉生管之前要先給 BOSS 審圖」唯一實作
 //   （2026-09-18 使用者要求；禁止各頁自己再寫一份判定）
 //
-// 流程（只影響「客戶在名單內、而且不是自動轉生管」的那些訂單）：
+// 流程（只影響「客戶在名單內、有按過審圖、而且不是自動轉生管」的那些訂單）：
 //   按【轉生管】→ 不直接蓋轉生管日，改成記下「今天送 BOSS 審圖」(boss_review_at)，
 //   畫面顯示「BOSS審圖中」並長出【BOSS審核OK】鈕
 //   按【BOSS審核OK】→ 記下「今天 BOSS 審核完成」(boss_ok_at)，【轉生管】鈕回來，
@@ -17,7 +17,9 @@
 //     再按一次轉生管就會莫名其妙卡進 BOSS 審圖流程。
 //  2. **名單是空的時候，這整套等於不存在**（ot_boss_required() 一律回 false），
 //     所以在使用者真的去設定之前，全站行為與改動前一模一樣。
-//  3. 每一次設定的異動都要填原因：畫面送「完整的名單」上來，後端自己 diff 出
+//  3. **沒按過「審圖」就直接按轉生管的一律不擋**（使用者 2026-09-18 補充）：那種通常本來
+//     就已經有圖面，不需要再送 BOSS。所以判定要吃 order_track.in_review。
+//  4. 每一次設定的異動都要填原因：畫面送「完整的名單」上來，後端自己 diff 出
 //     新增/修改/刪除，同一次儲存共用一個 batch_id 與一個原因（使用者指定：
 //     一次設定多組只要填一次）。
 // =============================================================================
@@ -101,10 +103,16 @@ function ot_boss_is_client(PDO $db, $clientId): bool {
 }
 
 /**
- * 這張訂單「轉生管前要不要先給 BOSS 審圖」。
- * 條件＝客戶在名單內，**且**指派設計不在「存檔自動轉生管」名單內（使用者明確要求）。
+ * 這張訂單「轉生管前要不要先給 BOSS 審圖」。三個條件都成立才要：
+ *   ①客戶在名單內
+ *   ②指派設計不在「存檔自動轉生管」名單內（使用者明確要求，那種訂單一存檔就已經是已轉生管）
+ *   ③**這張訂單有按過「審圖」**（in_review 有值）——使用者 2026-09-18 補充的條件：
+ *     沒按審圖就直接按轉生管的，通常是本來就已經有圖面，不要擋。
+ * ※ $inReview 一律由呼叫端傳該筆的 order_track.in_review；三個呼叫端（清單列渲染、
+ *   simple_update_pmGet.php、ot_boss_cell_state()）都要傳，不要讓它用預設值。
  */
-function ot_boss_required(PDO $db, $clientId, $ate): bool {
+function ot_boss_required(PDO $db, $clientId, $ate, $inReview = null): bool {
+    if (trim((string)$inReview) === '') return false;   // 沒按過審圖＝不擋
     if (!ot_boss_is_client($db, $clientId)) return false;
     $ateI = intval($ate);
     if ($ateI > 0 && in_array($ateI, ot_auto_pmget_ids($db), true)) return false;
@@ -232,7 +240,7 @@ function ot_boss_cell_state(PDO $db, int $orderId): array {
     $out = ['in_review_date' => '', 'pmGet_date' => '', 'boss_need' => false,
             'boss_review_date' => '', 'boss_ok_date' => ''];
     try {
-        $st = $db->prepare("SELECT Client_name_ID, ate,
+        $st = $db->prepare("SELECT Client_name_ID, ate, in_review,
                                    DATE_FORMAT(in_review,'%c/%e')      AS in_review_date,
                                    DATE_FORMAT(pmGet,'%c/%e')          AS pmGet_date,
                                    DATE_FORMAT(boss_review_at,'%c/%e') AS boss_review_date,
@@ -245,7 +253,7 @@ function ot_boss_cell_state(PDO $db, int $orderId): array {
         $out['pmGet_date']       = (string)($r['pmGet_date'] ?? '');
         $out['boss_review_date'] = (string)($r['boss_review_date'] ?? '');
         $out['boss_ok_date']     = (string)($r['boss_ok_date'] ?? '');
-        $out['boss_need']        = ot_boss_required($db, $r['Client_name_ID'] ?? '', $r['ate'] ?? 0);
+        $out['boss_need']        = ot_boss_required($db, $r['Client_name_ID'] ?? '', $r['ate'] ?? 0, $r['in_review'] ?? null);
     } catch (Exception $e) { /* 欄位還沒建等狀況一律回預設值，畫面退回原本行為 */ }
     return $out;
 }
