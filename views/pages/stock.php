@@ -94,6 +94,12 @@ function getNotifTargetUsers($pdo){
 // 模組代碼 stock_req：AS 文件綁定走 asdoc_lib（system_parameters AS_DOC_BIND/stock_req）、
 // 圖章模板另存 system_parameters STOCK_REQ/req_stamp_tpl_id（只存 stamp_template.id，禁存名稱字串）。
 define('STOCK_REQ_ASDOC_MODULE', 'stock_req');
+/* 本頁另外兩張 AS 表單（2026-09-18 新增）：
+   stock_list ＝ 2-WH-01-01 倉庫庫存表（庫存列表分頁的正式列印版）
+   stock_in   ＝ 2-WH-01-07 入庫單（入出庫紀錄分頁，依日期把當日入庫彙整成一張單）
+   三者共用同一套公司全名／版次回推／圖章邏輯，不另刻一份（鐵律4）。 */
+define('STOCK_LIST_ASDOC_MODULE', 'stock_list');
+define('STOCK_IN_ASDOC_MODULE',   'stock_in');
 
 /** 列印大標題＝本公司公司全名（發票用），唯一來源 customer_list.is_own_company=1，禁寫死（ai-rules/16 第一節） */
 function stock_req_company_name(PDO $pdo): string {
@@ -500,7 +506,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'get_stock_list') {
         try {
             $page     = max(1, intval($_POST['page'] ?? 1));
-            $ps       = max(10, min(100, intval($_POST['page_size'] ?? 10)));
+            /* 列印／匯出一律要對「全部符合條件的資料」出表，不是只印目前這一頁（ai-rules/08）。
+               一般瀏覽維持 100 筆上限不變；只有帶 for_print=1 時才放寬，避免一般請求被灌成全表掃描。 */
+            $forPrint = intval($_POST['for_print'] ?? 0) === 1;
+            $ps       = $forPrint ? max(10, min(5000, intval($_POST['page_size'] ?? 5000)))
+                                  : max(10, min(100,  intval($_POST['page_size'] ?? 10)));
             $offset   = ($page-1)*$ps;
             $search   = trim($_POST['search']    ?? '');
             $catF     = $_POST['category_id']    ?? '';
@@ -4096,6 +4106,84 @@ LBLSQL;
         exit;
     }
 
+    /* ── 倉庫庫存表／入庫單的列印中繼資料（2026-09-18 新增）──────────────────
+       與領料需求單同一套規則（ai-rules/16）：大標題＝公司全名、表頭＝綁定文件的 doc_name、
+       頁尾右下＝doc_no＋依「業務日期」回推的版次。業務日期：
+         倉庫庫存表＝列印當天（這是一張「現況清單」，沒有單據日期，見 ai-rules/16 三之四認定③）
+         入庫單    ＝該張單的入庫日期（前端傳 biz_date），補列印舊日期的單才對得起來
+       讀取一律不卡權限（ai-rules/18 鐵則9），只有寫入設定才要 A 級。 */
+    if ($_POST['action'] === 'stock_doc_print_meta') {
+        try {
+            $mod = (string)($_POST['module'] ?? '');
+            if (!in_array($mod, [STOCK_LIST_ASDOC_MODULE, STOCK_IN_ASDOC_MODULE], true)) {
+                throw new Exception('未知的列印文件類型');
+            }
+            $biz = trim((string)($_POST['biz_date'] ?? ''));
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $biz)) $biz = null;
+            $docId = eg_asdoc_id($pdo, $mod);
+            $doc   = eg_asdoc_get($pdo, $mod);
+            echo json_encode(['success'=>true,
+                'company'     => stock_req_company_name($pdo),
+                'doc'         => $doc ? ['id'=>(int)$doc['id'],'doc_no'=>$doc['doc_no'],'doc_name'=>$doc['doc_name']] : null,
+                'doc_no_print'=> eg_asdoc_no_asof_id($pdo, $docId, $biz),
+                'biz_date'    => $biz,
+                'stamp_tpl'   => stock_req_stamp_tpl($pdo, stock_req_stamp_tpl_id($pdo)),
+                // 製表人＝按下列印的人；部門職稱依業務日期回推當時職務（ai-rules/22）
+                'maker_name'  => (string)($_SESSION['user_cname'] ?? $_SESSION['userName'] ?? ''),
+                'maker'       => stock_req_person_asof($pdo, (int)$userId, $biz),
+            ]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    /* ── 入庫單：把某一天（或某張單）的入庫交易彙整成一張單 ───────────────
+       資料來源就是 stock_transactions 的 txn_type='in'，不另建「入庫單」資料表——
+       入庫本來就一筆一筆進，硬做一張單只會多一份對不起來的資料（鐵律4）。
+       單號用「日期＋當日流水」即時組出來，只是列印上的識別碼、不落庫。 */
+    if ($_POST['action'] === 'get_stock_in_sheet') {
+        try {
+            $day = trim((string)($_POST['day'] ?? ''));
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $day)) throw new Exception('請指定入庫日期');
+            $vendorF = trim((string)($_POST['vendor'] ?? ''));
+            $sql = "SELECT t.txn_id, t.txn_date, t.txn_qty, t.qty_after, t.location_to, t.bom_ref, t.order_ref,
+                           t.package_box, t.remark, t.Created_By, t.Created_At,
+                           si.d_id, si.item_type, si.d_setting_id,
+                           u.user_cname AS creator_name,
+                           c.category_name
+                    FROM stock_transactions t
+                    LEFT JOIN stock_items si ON si.stock_item_id = t.stock_item_id
+                    LEFT JOIN user u ON u.id = t.Created_By
+                    LEFT JOIN stock_item_categories c ON c.category_id = si.item_type
+                    WHERE t.txn_type='in' AND DATE(t.txn_date)=?
+                    ORDER BY t.txn_id";
+            $st = $pdo->prepare($sql); $st->execute([$day]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            if ($vendorF !== '') {
+                $rows = array_values(array_filter($rows, function($r) use ($vendorF){
+                    return stripos((string)$r['remark'], $vendorF) !== false
+                        || stripos((string)$r['order_ref'], $vendorF) !== false;
+                }));
+            }
+            echo json_encode(['success'=>true, 'day'=>$day, 'rows'=>$rows,
+                              'sheet_no'=>'IN-'.str_replace('-', '', $day)]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
+    /* ── 入庫單：有哪幾天有入庫（列印選單用，預設近 90 天）── */
+    if ($_POST['action'] === 'get_stock_in_days') {
+        try {
+            $back = max(7, min(730, intval($_POST['days'] ?? 90)));
+            $st = $pdo->prepare("SELECT DATE(txn_date) AS d, COUNT(*) AS c, SUM(txn_qty) AS q
+                                 FROM stock_transactions
+                                 WHERE txn_type='in' AND txn_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+                                 GROUP BY DATE(txn_date) ORDER BY d DESC");
+            $st->execute([$back]);
+            echo json_encode(['success'=>true,'days'=>$st->fetchAll(PDO::FETCH_ASSOC) ?: []]);
+        } catch(Exception $e){ echo json_encode(['success'=>false,'message'=>$e->getMessage()]); }
+        exit;
+    }
+
     // ── 列印設定（AS 文件綁定＋領料人圖章模板）讀取：限 A 權限 ──
     if ($_POST['action'] === 'req_print_setting_get') {
         try {
@@ -4105,6 +4193,11 @@ LBLSQL;
                 'as_docs'      => eg_asdoc_list($pdo),
                 'as_doc_id'    => eg_asdoc_id($pdo, STOCK_REQ_ASDOC_MODULE),
                 'as_doc'       => eg_asdoc_get($pdo, STOCK_REQ_ASDOC_MODULE),
+                // 本頁另外兩張 AS 表單（2026-09-18）：一個設定跳窗管三張，不要讓使用者到三個地方各設一次
+                'as_doc_list_id'=> eg_asdoc_id($pdo, STOCK_LIST_ASDOC_MODULE),
+                'as_doc_list'   => eg_asdoc_get($pdo, STOCK_LIST_ASDOC_MODULE),
+                'as_doc_in_id'  => eg_asdoc_id($pdo, STOCK_IN_ASDOC_MODULE),
+                'as_doc_in'     => eg_asdoc_get($pdo, STOCK_IN_ASDOC_MODULE),
                 'stamp_tpls'   => stock_req_stamp_tpl_options($pdo),
                 'stamp_tpl_id' => stock_req_stamp_tpl_id($pdo),
             ]);
@@ -4119,15 +4212,26 @@ LBLSQL;
             if (($pp->fetch(PDO::FETCH_ASSOC)['permission'] ?? '') !== 'A') throw new Exception('需要 A 級權限才能修改列印設定');
             $docId = intval($_POST['as_doc_id'] ?? 0);
             $tplId = intval($_POST['stamp_tpl_id'] ?? 0);
-            if ($docId) {
-                $chk=$pdo->prepare("SELECT id FROM as_document WHERE id=? AND is_deleted=0"); $chk->execute([$docId]);
+            /* 倉庫庫存表／入庫單：用 array_key_exists 判「有沒有送這個欄位」而不是判值（本專案既有慣例）。
+               沒送＝舊呼叫端（使用者頁面還停在改版前的版本），那兩個綁定原封不動；
+               送 0 才是真的要取消綁定。不這樣分，舊分頁按一次儲存就會把新綁定默默洗成未綁定。 */
+            $hasListF  = array_key_exists('as_doc_list_id', $_POST);
+            $hasInF    = array_key_exists('as_doc_in_id',   $_POST);
+            $docListId = $hasListF ? intval($_POST['as_doc_list_id']) : null;
+            $docInId   = $hasInF   ? intval($_POST['as_doc_in_id'])   : null;
+            // 三個綁定共用同一段存在性檢查（鐵律8：前端擋過了後端仍要再擋一次）
+            foreach ([$docId, $docListId, $docInId] as $__d) {
+                if (!$__d) continue;   // null（沒送）與 0（取消綁定）都不必檢查存在性
+                $chk=$pdo->prepare("SELECT id FROM as_document WHERE id=? AND is_deleted=0"); $chk->execute([$__d]);
                 if (!$chk->fetchColumn()) throw new Exception('選擇的 AS 文件不存在或已刪除');
             }
             if ($tplId) {
                 $chk2=$pdo->prepare("SELECT id FROM stamp_template WHERE id=? AND is_active=1"); $chk2->execute([$tplId]);
                 if (!$chk2->fetchColumn()) throw new Exception('選擇的圖章模板不存在或已停用');
             }
-            eg_asdoc_save($pdo, STOCK_REQ_ASDOC_MODULE, $docId, $_SESSION['userName'] ?? '');
+            eg_asdoc_save($pdo, STOCK_REQ_ASDOC_MODULE,  $docId, $_SESSION['userName'] ?? '');
+            if ($hasListF) eg_asdoc_save($pdo, STOCK_LIST_ASDOC_MODULE, (int)$docListId, $_SESSION['userName'] ?? '');
+            if ($hasInF)   eg_asdoc_save($pdo, STOCK_IN_ASDOC_MODULE,   (int)$docInId,   $_SESSION['userName'] ?? '');
             $ex=$pdo->prepare("SELECT id FROM system_parameters WHERE param_group='STOCK_REQ' AND param_key='req_stamp_tpl_id' LIMIT 1"); $ex->execute();
             $rid=$ex->fetchColumn();
             if ($rid) $pdo->prepare("UPDATE system_parameters SET param_value=?, updated_by=? WHERE id=?")->execute([(string)$tplId, $_SESSION['userName'] ?? '', $rid]);
@@ -4484,6 +4588,8 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
     </select>
     <button class="btn btn-default btn-sm" id="btn-lblfilter" onclick="openLabelFilter()" title="依料號底下的標籤內容篩選（例：模數 M 2.5、滾齒刀規格 內徑 22.225）"><i class="fa fa-tags"></i> 標籤篩選<span id="lblf-cnt" class="lblf-badge" style="display:none;">0</span></button>
     <button class="btn btn-default btn-sm" onclick="resetFilters()">重置</button>
+    <!-- 倉庫庫存表（2-WH-01-01）：印的是「目前篩選條件下的全部品項」，不是只印這一頁（ai-rules/08） -->
+    <button class="btn btn-default btn-sm" onclick="printStockList()" title="依目前篩選條件列印正式的倉庫庫存表（A4 橫式，含 AS 文件編號）"><i class="fa fa-print"></i> 列印庫存表</button>
     <button class="btn btn-sm btn-info" id="btn-batch-group" style="display:none; border-radius:6px; font-weight:600;" onclick="openMergeExistingGroupModal()"><i class="fa fa-compress"></i> 合併為組合件 (<span id="sel-cnt">0</span>)</button>
     <button class="btn btn-sm" id="btn-batch-unit" style="display:none; background:#7f8c8d; color:#fff; border-radius:6px; font-weight:600;" onclick="openBatchUnitModal()"><i class="fa fa-balance-scale"></i> 設定單位</button>
     <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
@@ -4721,6 +4827,8 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
         <button class="btn btn-default" style="font-weight:600;min-width:130px;cursor:default;" id="rpt-period-label">—</button>
         <button class="btn btn-default" onclick="rptNavigate(1)" title="下一期"><i class="fa fa-chevron-right"></i></button>
       </div>
+      <!-- 入庫單（2-WH-01-07）：同一天的入庫彙整成一張單，可補印過去的日期 -->
+      <button class="btn btn-sm btn-default" onclick="openStockInPrint()" title="把某一天的入庫彙整成一張正式入庫單列印（A4 橫式，含 AS 文件編號）"><i class="fa fa-print"></i> 列印入庫單</button>
       <div id="rpt-range-wrap" style="display:none;gap:6px;align-items:center;">
         <input type="date" id="rpt-date-from" class="form-control input-sm" style="width:130px;">
         <span class="text-muted">~</span>
@@ -4922,15 +5030,38 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 <div class="modal fade" id="reqPrintSetModal" tabindex="-1">
   <div class="modal-dialog" style="width:min(95vw,640px);">
     <div class="modal-content">
-      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-cog"></i> 領料需求單列印設定</h4></div>
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-cog"></i> 庫存管理列印設定</h4></div>
       <div class="modal-body" style="padding:14px 16px;">
+        <div style="font-size:12px;color:#666;background:#faf6ee;border:1px solid #e3d4b6;border-radius:4px;padding:8px 10px;margin-bottom:14px;">
+          本頁有三張要送稽核的 AS 表單，各自綁定自己的文件編號。綁定後：列印大標題＝本公司全名、
+          表頭＝該文件的表單名稱、頁尾右下＝文件編號（四階文件會<b>依該單的業務日期回推當時版次</b>，
+          所以補印舊單據時印出來的版次會跟紙本一致）。
+        </div>
         <div style="margin-bottom:16px;">
-          <label style="font-weight:700;">AS 文件編號綁定</label>
-          <div style="font-size:12px;color:#888;margin-bottom:6px;">綁定後：列印表頭＝該文件的表單名稱、頁尾右下＝文件編號（四階文件依需求單建立日期回推當時版次）。</div>
+          <label style="font-weight:700;">① 領庫需求單</label>
+          <div style="font-size:12px;color:#888;margin-bottom:6px;">業務日期＝需求單建立日期。</div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <span id="rps-asdoc-label" style="flex:1;min-width:220px;padding:6px 10px;background:#faf6ee;border:1px solid #e3d4b6;border-radius:4px;color:#5b3a1e;">尚未綁定</span>
             <button class="btn btn-sm btn-default" onclick="pickReqAsDoc()"><i class="fa fa-search"></i> 選擇 AS 文件</button>
             <button class="btn btn-sm btn-default" onclick="clearReqAsDoc()"><i class="fa fa-times"></i> 取消綁定</button>
+          </div>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="font-weight:700;">② 倉庫庫存表</label>
+          <div style="font-size:12px;color:#888;margin-bottom:6px;">庫存列表分頁的正式列印版。這是一張「現況清單」沒有單據日期，版次一律用列印當天。</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span id="rps-asdoc-list-label" style="flex:1;min-width:220px;padding:6px 10px;background:#faf6ee;border:1px solid #e3d4b6;border-radius:4px;color:#5b3a1e;">尚未綁定</span>
+            <button class="btn btn-sm btn-default" onclick="pickStockAsDoc('list')"><i class="fa fa-search"></i> 選擇 AS 文件</button>
+            <button class="btn btn-sm btn-default" onclick="clearStockAsDoc('list')"><i class="fa fa-times"></i> 取消綁定</button>
+          </div>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="font-weight:700;">③ 入庫單</label>
+          <div style="font-size:12px;color:#888;margin-bottom:6px;">入出庫紀錄分頁，把同一天的入庫彙整成一張單。業務日期＝該張單的入庫日期。</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span id="rps-asdoc-in-label" style="flex:1;min-width:220px;padding:6px 10px;background:#faf6ee;border:1px solid #e3d4b6;border-radius:4px;color:#5b3a1e;">尚未綁定</span>
+            <button class="btn btn-sm btn-default" onclick="pickStockAsDoc('in')"><i class="fa fa-search"></i> 選擇 AS 文件</button>
+            <button class="btn btn-sm btn-default" onclick="clearStockAsDoc('in')"><i class="fa fa-times"></i> 取消綁定</button>
           </div>
         </div>
         <div style="margin-bottom:6px;">
@@ -4945,6 +5076,35 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
         <button type="button" class="btn btn-default" data-dismiss="modal">取消</button>
         <button type="button" class="btn btn-primary" onclick="saveReqPrintSetting()"><i class="fa fa-save"></i> 儲存設定</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Modal: 列印入庫單（挑日期）══
+     入庫本來就是一筆一筆進，沒有實體「入庫單」資料表；這裡是把同一天的入庫彙整成一張單，
+     所以先讓使用者挑「哪一天」。清單只列真的有入庫的日期，省得空印一張。 -->
+<div class="modal fade" id="stockInPrintModal" tabindex="-1">
+  <div class="modal-dialog" style="width:min(95vw,560px);">
+    <div class="modal-content">
+      <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-print"></i> 列印入庫單</h4></div>
+      <div class="modal-body" style="padding:14px 16px;">
+        <div style="font-size:12px;color:#666;background:#faf6ee;border:1px solid #e3d4b6;border-radius:4px;padding:8px 10px;margin-bottom:12px;">
+          入庫單＝把<b>同一天</b>的入庫紀錄彙整成一張單。單號依日期自動產生（IN-YYYYMMDD），
+          頁尾的版次會依<b>該天</b>回推當時生效的版次，所以補印舊日期也印得對。
+        </div>
+        <div class="form-group">
+          <label style="font-weight:700;">指定日期</label>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input type="date" id="sip-date" class="form-control input-sm" style="width:160px;">
+            <button class="btn btn-sm btn-primary" onclick="printStockInSheet($('#sip-date').val())"><i class="fa fa-print"></i> 列印這一天</button>
+          </div>
+        </div>
+        <label style="font-weight:700;">近期有入庫的日期</label>
+        <div id="sip-days" style="max-height:260px;overflow:auto;border:1px solid #e5e5e5;border-radius:4px;">
+          <div class="text-center text-muted" style="padding:16px;">載入中…</div>
+        </div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-default" data-dismiss="modal">關閉</button></div>
     </div>
   </div>
 </div>
@@ -5967,6 +6127,8 @@ label{font-size:13px;font-weight:600;color:var(--primary);margin-bottom:3px}
 <script src="../../resource/js/eg_stamp_tpl.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp_tpl.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_stamp.js') ?>"></script>
 <script src="../../resource/js/eg_asdoc_picker.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_asdoc_picker.js') ?>"></script>
+<!-- 列印紀錄（ai-rules/23）：倉庫庫存表／入庫單按下列印時留下時間·人·電腦 -->
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script>
 // ── 全域 ────────────────────────────────────────
@@ -12070,7 +12232,9 @@ function openReqPrintSetting(){
     ajx({action:'req_print_setting_get'}, function(r){
         if(!r.success){ toast(r.message||'載入設定失敗','error'); return; }
         REQ_PRINT_SET.docs=r.as_docs||[]; REQ_PRINT_SET.docId=parseInt(r.as_doc_id||0)||0; REQ_PRINT_SET.doc=r.as_doc||null;
-        renderReqAsDocLabel();
+        REQ_PRINT_SET.listId=parseInt(r.as_doc_list_id||0)||0; REQ_PRINT_SET.listDoc=r.as_doc_list||null;
+        REQ_PRINT_SET.inId  =parseInt(r.as_doc_in_id  ||0)||0; REQ_PRINT_SET.inDoc  =r.as_doc_in  ||null;
+        renderReqAsDocLabel(); renderStockAsDocLabel('list'); renderStockAsDocLabel('in');
         var $s=$('#rps-stamp-tpl').html('<option value="0">（用系統預設印章）</option>');
         (r.stamp_tpls||[]).forEach(function(t){
             $s.append('<option value="'+t.id+'">'+esc(t.tpl_name)+(t.type_name?'（'+esc(t.type_name)+'）':'')+'</option>');
@@ -12089,12 +12253,263 @@ function pickReqAsDoc(){
         onSave:function(id,doc){ REQ_PRINT_SET.docId=parseInt(id)||0; REQ_PRINT_SET.doc=doc||null; renderReqAsDocLabel(); }});
 }
 function clearReqAsDoc(){ REQ_PRINT_SET.docId=0; REQ_PRINT_SET.doc=null; renderReqAsDocLabel(); }
+
+// 倉庫庫存表／入庫單的綁定（kind='list'|'in'）——與領庫需求單共用同一個挑選器與同一次儲存
+function stockAsDocKey(kind){ return kind==='list'?{id:'listId',doc:'listDoc',el:'#rps-asdoc-list-label',title:'倉庫庫存表'}
+                                                  :{id:'inId',  doc:'inDoc',  el:'#rps-asdoc-in-label',  title:'入庫單'}; }
+function renderStockAsDocLabel(kind){
+    var k=stockAsDocKey(kind), d=REQ_PRINT_SET[k.doc];
+    var txt=(window.EGAsDoc&&EGAsDoc.label)?EGAsDoc.label(d):(d?d.doc_no:'尚未綁定');
+    $(k.el).text(txt);
+}
+function pickStockAsDoc(kind){
+    var k=stockAsDocKey(kind);
+    EGAsDoc.open({docs:REQ_PRINT_SET.docs, current:REQ_PRINT_SET[k.id], title:k.title+'－AS 文件編號綁定',
+        onSave:function(id,doc){ REQ_PRINT_SET[k.id]=parseInt(id)||0; REQ_PRINT_SET[k.doc]=doc||null; renderStockAsDocLabel(kind); }});
+}
+function clearStockAsDoc(kind){ var k=stockAsDocKey(kind); REQ_PRINT_SET[k.id]=0; REQ_PRINT_SET[k.doc]=null; renderStockAsDocLabel(kind); }
+
 function saveReqPrintSetting(){
-    ajx({action:'req_print_setting_save', as_doc_id:REQ_PRINT_SET.docId, stamp_tpl_id:parseInt($('#rps-stamp-tpl').val()||0)||0}, function(r){
+    ajx({action:'req_print_setting_save', as_doc_id:REQ_PRINT_SET.docId,
+         as_doc_list_id:REQ_PRINT_SET.listId||0, as_doc_in_id:REQ_PRINT_SET.inId||0,
+         stamp_tpl_id:parseInt($('#rps-stamp-tpl').val()||0)||0}, function(r){
         if(!r.success){ toast(r.message||'儲存失敗','error'); return; }
         toast('列印設定已儲存','success');
         $('#reqPrintSetModal').modal('hide');
     });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// ── 倉庫庫存表（2-WH-01-01）／入庫單（2-WH-01-07）列印 ────────────────
+//    版面規則一律照 ai-rules/16：公司全名大標題、表頭取綁定文件的 doc_name、
+//    頁碼左下 counter(pages)（多頁才印）、AS 編號右下每頁都印、A4 橫式。
+//    共用的樣式與開窗流程抽成 stockDocPrintWindow()，三張表單不各寫一份（鐵律4）。
+// ══════════════════════════════════════════════════════════════════════
+function stockDocPrintCss(asTxt){
+    return 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;margin:0;padding:0 4mm;color:#222;'
+        +'-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        +'*{box-sizing:border-box;}'
+        +'.p-comp{font-size:22px;font-weight:bold;text-align:center;margin-bottom:2px;}'
+        +'.p-title{font-size:16px;font-weight:bold;text-align:center;letter-spacing:5px;margin-bottom:8px;}'
+        +'table{width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse;}'
+        +'table.p-meta{font-size:11px;margin-bottom:6px;}'
+        +'table.p-meta th,table.p-meta td{border:1px solid #666;padding:3px 6px;text-align:left;overflow-wrap:break-word;word-break:break-word;}'
+        +'table.p-meta th{background:#f3ead6;white-space:nowrap;}'
+        +'table.p-tb{font-size:10.5px;}'
+        +'table.p-tb thead{display:table-header-group;}'   // 跨頁時表頭自動重複
+        +'table.p-tb th,table.p-tb td{border:1px solid #666;padding:2px 5px;text-align:center;overflow-wrap:break-word;word-break:break-word;}'
+        +'table.p-tb thead th{background:#f3ead6;}'
+        +'table.p-tb td.tl{text-align:left;} table.p-tb td.tr{text-align:right;}'
+        +'table.p-tb tr{break-inside:avoid;page-break-inside:avoid;}'
+        +'table.p-tb tfoot td{border:1px solid #666;background:#faf6ee;font-weight:700;}'
+        +'.p-low{color:#DD5138;font-weight:700;}'
+        +'.p-sign{margin-top:10px;display:flex;gap:10px;justify-content:flex-end;}'
+        +'.p-sign .box{border:1px solid #666;min-width:150px;min-height:58px;padding:2px 6px;text-align:center;}'
+        +'.p-sign .box .cap{font-size:10px;color:#555;border-bottom:1px solid #ccc;padding-bottom:1px;margin-bottom:2px;}'
+        +'.stamp-wrap{display:inline-block;text-align:center;margin:2px 0;}'
+        +'.stamp-wrap .stamp-title{display:block;font-size:11px;color:#999;}'
+        +'.stamp-wrap svg{-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+        +'.stamp-wrap svg.car-stamp{width:91px;height:91px;}'
+        +'.stamp-wrap.stamp-fill{height:auto !important;display:inline-block;}'
+        +'@page{size:A4 landscape;margin:12mm 8mm 16mm;'
+        +(asTxt?" @bottom-right{ content:'"+asTxt+"'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }":'')
+        +'}';
+}
+function stockDocPrintWindow(title, body, asTxt, onDone){
+    // 列印紀錄（ai-rules/23）：送出即忘，寫不寫得進去都不可以影響列印
+    try{ if(window.EGPrintLog) EGPrintLog.record({source:'stock_doc', doc_name:title, doc_kind:'form'}); }catch(e){}
+    var w=window.open('','_blank');
+    if(!w){ toast('請允許彈出視窗以列印','warning'); if(onDone) onDone(); return; }
+    // <!DOCTYPE html> 不可省：漏了會落入 Quirks Mode，scrollHeight 量不準、單頁也會誤印頁碼
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title>'
+        +'<style>'+stockDocPrintCss(asTxt)+'</style></head><body>'+body
+        +'<scr'+'ipt>window.onload=function(){'
+        +'var onePage=(210-28)*96/25.4;'   // A4 橫式可用高度（扣掉上下邊界）
+        +'if(document.body.scrollHeight>onePage*0.92){'
+        +'var st=document.createElement(\'style\');'
+        +'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
+        +'document.head.appendChild(st);}'
+        +'setTimeout(function(){window.print();},250);};</scr'+'ipt></body></html>');
+    w.document.close(); w.focus();
+    if(onDone) setTimeout(onDone, 500);
+}
+/** 製表簽章（右下角）：走 eg_stamp.js，日期＝該單業務日期（ai-rules/16 三之二、ai-rules/18）。
+ *  參數順序與 reqStampHtml() 完全一致：stamp(name, date, isDeputy, tplSchema, dept, position) */
+function stockDocStamp(meta, dateStr){
+    var nm=(meta&&meta.maker_name)||'';
+    if(!nm || !window.EGStamp) return esc(nm);
+    var schema=(meta && meta.stamp_tpl && meta.stamp_tpl.schema) ? meta.stamp_tpl.schema : null;
+    var who=(meta&&meta.maker)||{};
+    try{ return EGStamp.stamp(nm, dateStr, false, schema, who.dept||'', who.position||''); }
+    catch(e){ return esc(nm); }
+}
+/** 取列印中繼資料（公司全名／AS 文件／版次／製表圖章），拿到後才開列印視窗。
+ *  一定要等 EGStamp.whenReady：掃描實體章對照表是非同步載入的，沒等會把有實體章的人印成預設 SVG 章。 */
+function stockDocMeta(module, bizDate, cb){
+    ajx({action:'stock_doc_print_meta', module:module, biz_date:bizDate||''}, function(m){
+        var meta=(m&&m.success)?m:{};
+        window.__ownCompany=meta.company||'';   // eg_stamp.js 畫預設回墨印時要用（ai-rules/18 鐵則2）
+        if(window.EGStamp && EGStamp.whenReady) EGStamp.whenReady(function(){ cb(meta); });
+        else cb(meta);
+    });
+}
+function stockDocHead(meta, fallbackTitle){
+    var title=(meta.doc&&meta.doc.doc_name)?meta.doc.doc_name:fallbackTitle;
+    return {title:title,
+            asTxt:String(meta.doc_no_print||'').replace(/['\\]/g,''),   // 進 @page content 的字串要先清掉引號
+            html:'<div class="p-comp">'+esc(meta.company||'')+'</div><div class="p-title">'+esc(title)+'</div>'};
+}
+
+// ── 倉庫庫存表（2-WH-01-01）────────────────────────────────────────────
+function printStockList(){
+    var today=(new Date()).toISOString().substr(0,10);
+    // 列印條件先組好，印在表頭讓看表的人知道這張是「哪個範圍的庫存」——
+    // 只印一張沒有條件的清單，事後根本無法判斷當初篩了什麼
+    var condTxt=[];
+    var kw=($('#f-search').val()||'').trim();
+    if(kw) condTxt.push('關鍵字：'+kw);
+    function selTxt(id,skip){ var $s=$(id); var v=$s.val(); if(v===undefined||v===null||String(v)===String(skip)) return ''; return ($s.find('option:selected').text()||'').trim(); }
+    var t;
+    if((t=selTxt('#f-cat','all')))    condTxt.push('種類：'+t);
+    if((t=selTxt('#f-loc','all')))    condTxt.push('儲位：'+t);
+    if((t=selTxt('#f-qty','all')))    condTxt.push('數量：'+t);
+    if((t=selTxt('#f-client','')))    condTxt.push('客戶：'+t);
+    if((t=selTxt('#f-stale','0')))    condTxt.push(t);
+    if(G.lblf && G.lblf.applied && G.lblf.applied.length) condTxt.push('標籤條件 '+G.lblf.applied.length+' 項');
+
+    toast('正在取得全部符合條件的庫存資料…','info');
+    ajx({
+        action:'get_stock_list', page:1, for_print:1, page_size:5000,
+        search:kw, category_id:$('#f-cat').val(), location_id:$('#f-loc').val(),
+        qty_filter:$('#f-qty').val(), client_id:$('#f-client').val(),
+        stale_years:$('#f-stale').val()||0, today_only:G._todayOnly?1:0,
+        label_filters: (G.lblf && G.lblf.applied && G.lblf.applied.length) ? JSON.stringify(G.lblf.applied) : '',
+        sort_col:G.sortCol, sort_dir:G.sortDir
+    }, function(r){
+        if(!r.success){ toast(r.message||'載入失敗，無法列印','error'); return; }
+        var rows=r.data||[];
+        if(!rows.length){ toast('目前篩選條件下沒有庫存資料','info'); return; }
+        stockDocMeta('stock_list', today, function(meta){
+            buildStockListPrint(rows, r.total||rows.length, condTxt, meta, today);
+        });
+    });
+}
+function buildStockListPrint(rows, total, condTxt, meta, today){
+    var h=stockDocHead(meta,'倉庫庫存表');
+    var metaTbl='<table class="p-meta"><colgroup><col style="width:10%"><col style="width:56%"><col style="width:10%"><col style="width:24%"></colgroup>'
+        +'<tr><th>列印條件</th><td>'+esc(condTxt.length?condTxt.join('；'):'全部庫存（未設篩選條件）')+'</td>'
+        +'<th>列印日期</th><td>'+esc(reqDispDate(today))+'</td></tr>'
+        +'<tr><th>品項筆數</th><td>'+esc(String(total))+' 筆</td>'
+        +'<th>製表</th><td>'+esc(meta.maker_name||'')+'</td></tr></table>';
+
+    var tbody='', sumQty=0, lowCnt=0;
+    rows.forEach(function(r,i){
+        var qty=parseFloat(r.qty||0)||0; sumQty+=qty;
+        var safe=(r.safety_qty!==null&&r.safety_qty!==undefined&&r.safety_qty!=='')?parseFloat(r.safety_qty):null;
+        var isLow=(safe!==null && qty<safe);
+        if(isLow) lowCnt++;
+        var loc=r.area_display_name||r.location_code||r.storage_location||'';
+        var unit=r.unit_symbol||r.unit_name||'';
+        var spec=[r.spec_no||'', r.part_revision?('Rev.'+r.part_revision):''].filter(Boolean).join(' ');
+        tbody+='<tr>'
+            +'<td class="c">'+(i+1)+'</td>'
+            +'<td class="tl">'+esc(r.client_name||'')+'</td>'
+            +'<td class="tl">'+esc(r.d_id||'')+(r.group_name?'<br><span style="font-size:9px;color:#666;">組合件：'+esc(r.group_name)+'</span>':'')+'</td>'
+            +'<td class="tl">'+esc(spec)+'</td>'
+            +'<td>'+esc(r.category_name||'')+'</td>'
+            +'<td class="tl">'+esc(loc)+'</td>'
+            +'<td class="tr'+(isLow?' p-low':'')+'">'+qty.toLocaleString('zh-TW',{maximumFractionDigits:3})+'</td>'
+            +'<td>'+esc(unit)+'</td>'
+            +'<td class="tr">'+(safe!==null?safe.toLocaleString('zh-TW',{maximumFractionDigits:3}):'—')+'</td>'
+            +'<td class="tl">'+esc(r.package_box||'')+'</td>'
+            +'<td class="tl">'+esc(r.remark1||'')+'</td>'
+            +'</tr>';
+    });
+    var tbl='<table class="p-tb">'
+        +'<colgroup><col style="width:4%"><col style="width:11%"><col style="width:15%"><col style="width:12%"><col style="width:8%">'
+        +'<col style="width:11%"><col style="width:8%"><col style="width:5%"><col style="width:8%"><col style="width:9%"><col style="width:9%"></colgroup>'
+        +'<thead><tr><th>#</th><th>客戶</th><th>料號</th><th>規格／版次</th><th>種類</th><th>儲位</th>'
+        +'<th>庫存量</th><th>單位</th><th>安全存量</th><th>包裝箱</th><th>備註</th></tr></thead>'
+        +'<tbody>'+tbody+'</tbody>'
+        +'<tfoot><tr><td colspan="6" style="text-align:right;">合計</td>'
+        +'<td class="tr">'+sumQty.toLocaleString('zh-TW',{maximumFractionDigits:3})+'</td>'
+        +'<td colspan="4" style="text-align:left;">　品項 '+total+' 筆'+(lowCnt?'／低於安全存量 '+lowCnt+' 筆':'')+'</td></tr></tfoot>'
+        +'</table>';
+
+    var sign='<div class="p-sign"><div class="box"><div class="cap">主管</div></div>'
+        +'<div class="box"><div class="cap">製表</div>'+stockDocStamp(meta, reqDispDate(today))+'</div></div>';
+    stockDocPrintWindow(h.title+' '+today, h.html+metaTbl+tbl+sign, h.asTxt);
+}
+
+// ── 入庫單（2-WH-01-07）────────────────────────────────────────────────
+function openStockInPrint(){
+    $('#sip-date').val('');
+    $('#sip-days').html('<div class="text-center text-muted" style="padding:16px;">載入中…</div>');
+    $('#stockInPrintModal').modal('show');
+    ajx({action:'get_stock_in_days', days:180}, function(r){
+        if(!r.success){ $('#sip-days').html('<div class="text-center text-danger" style="padding:16px;">'+esc(r.message||'載入失敗')+'</div>'); return; }
+        var days=r.days||[];
+        if(!days.length){ $('#sip-days').html('<div class="text-center text-muted" style="padding:16px;">近 180 天沒有入庫紀錄</div>'); return; }
+        var h='<table class="table table-hover tbl-sm" style="margin:0;"><thead><tr><th>入庫日期</th><th style="width:80px;">筆數</th><th style="width:100px;">總量</th><th style="width:90px;"></th></tr></thead><tbody>';
+        days.forEach(function(d){
+            h+='<tr><td>'+esc(reqDispDate(d.d))+'</td><td>'+esc(String(d.c))+'</td>'
+              +'<td>'+esc(String(parseFloat(d.q||0)))+'</td>'
+              +'<td><button class="btn btn-xs btn-primary" onclick="printStockInSheet(\''+esc(d.d)+'\')"><i class="fa fa-print"></i> 列印</button></td></tr>';
+        });
+        $('#sip-days').html(h+'</tbody></table>');
+    });
+}
+function printStockInSheet(day){
+    day=String(day||'').substr(0,10);
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(day)){ toast('請先選擇入庫日期','warning'); return; }
+    ajx({action:'get_stock_in_sheet', day:day}, function(r){
+        if(!r.success){ toast(r.message||'載入失敗','error'); return; }
+        var rows=r.rows||[];
+        if(!rows.length){ toast(reqDispDate(day)+' 當天沒有入庫紀錄','info'); return; }
+        // 業務日期＝入庫日，版次要依它回推（ai-rules/16 三之四），不是用今天
+        stockDocMeta('stock_in', day, function(meta){ buildStockInPrint(r, meta); });
+    });
+}
+function buildStockInPrint(data, meta){
+    var day=data.day, rows=data.rows||[];
+    var h=stockDocHead(meta,'入庫單');
+    var metaTbl='<table class="p-meta"><colgroup><col style="width:10%"><col style="width:23%"><col style="width:10%"><col style="width:23%"><col style="width:10%"><col style="width:24%"></colgroup>'
+        +'<tr><th>單號</th><td>'+esc(data.sheet_no||'')+'</td>'
+        +'<th>入庫日期</th><td>'+esc(reqDispDate(day))+'</td>'
+        +'<th>筆數</th><td>'+esc(String(rows.length))+' 筆</td></tr></table>';
+
+    var tbody='', sum=0;
+    rows.forEach(function(t,i){
+        var q=parseFloat(t.txn_qty||0)||0; sum+=q;
+        tbody+='<tr>'
+            +'<td class="c">'+(i+1)+'</td>'
+            +'<td class="tl">'+esc(t.d_id||'')+'</td>'
+            +'<td>'+esc(t.category_name||'')+'</td>'
+            +'<td class="tr">'+q.toLocaleString('zh-TW',{maximumFractionDigits:3})+'</td>'
+            +'<td class="tr">'+(parseFloat(t.qty_after||0)||0).toLocaleString('zh-TW',{maximumFractionDigits:3})+'</td>'
+            +'<td class="tl">'+esc(t.location_to||'')+'</td>'
+            +'<td class="tl">'+esc(t.bom_ref||'')+'</td>'
+            +'<td class="tl">'+esc(t.order_ref||'')+'</td>'
+            +'<td class="tl">'+esc(t.package_box||'')+'</td>'
+            +'<td class="tl">'+esc(t.creator_name||'')+'</td>'
+            +'<td class="tl">'+esc(t.remark||'')+'</td>'
+            +'</tr>';
+    });
+    var tbl='<table class="p-tb">'
+        +'<colgroup><col style="width:4%"><col style="width:14%"><col style="width:8%"><col style="width:8%"><col style="width:8%"><col style="width:10%">'
+        +'<col style="width:10%"><col style="width:10%"><col style="width:8%"><col style="width:8%"><col style="width:12%"></colgroup>'
+        +'<thead><tr><th>#</th><th>料號</th><th>種類</th><th>入庫量</th><th>入庫後庫存</th><th>儲位</th>'
+        +'<th>製令</th><th>訂單</th><th>包裝箱</th><th>經手人</th><th>備註</th></tr></thead>'
+        +'<tbody>'+tbody+'</tbody>'
+        +'<tfoot><tr><td colspan="3" style="text-align:right;">入庫總量</td>'
+        +'<td class="tr">'+sum.toLocaleString('zh-TW',{maximumFractionDigits:3})+'</td>'
+        +'<td colspan="7"></td></tr></tfoot></table>';
+
+    // 簽章日期＝入庫日（該單的業務日期），不是列印當天（ai-rules/16 三之二）
+    var sign='<div class="p-sign"><div class="box"><div class="cap">主管</div></div>'
+        +'<div class="box"><div class="cap">倉管</div></div>'
+        +'<div class="box"><div class="cap">製表</div>'+stockDocStamp(meta, reqDispDate(day))+'</div></div>';
+    stockDocPrintWindow(h.title+' '+(data.sheet_no||''), h.html+metaTbl+tbl+sign, h.asTxt);
 }
 
 // ══════════════════════════════════════════════════════
