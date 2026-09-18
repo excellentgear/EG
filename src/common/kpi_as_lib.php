@@ -2134,10 +2134,28 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                 ORDER BY (Qty*COALESCE(Unit_price,0)) DESC, IS_id");
             $st->execute([$ym]);
             $srows = $st->fetchAll(PDO::FETCH_ASSOC);
-            // 使用者回報 2026-09-18：ERP 轉出的出貨單很多會重複轉，金額因此被重複計算。
-            // 認定「重複」＝同一張出貨單號＋同一個料號＋同樣數量出現一次以上；
-            // 第一筆維持正常，第二筆之後標成不符合，排掉之後金額就回到正確值。
-            $dupSeen = []; $dupN = 0; $dupAmt = 0.0;
+            // 【ERP 重複轉出的判定】使用者回報 2026-09-18 並更正 2026-09-18：
+            // **不可以**用「同一張出貨單號＋同一個料號＋同樣數量出現一次以上」當判定——
+            // 一張出貨單本來就常有好幾筆相同料號、相同數量、同一天的明細（實測那幾筆的 IS_id 連號、
+            // Created_At 完全相同，是同一次匯入的正常明細），這樣判會把正常出貨整批誤標成重複。
+            // 真正的重複轉出長這樣：**同一張出貨單號被匯入兩次，而且兩次的出貨日期不一樣**
+            // （例 IS1150825009 一次記 2026-08-25、一次記 2026-09-01，等於同一張單被算進兩個月份）。
+            // 全庫只有 4 張單有這個特徵，判定很精準，不會誤傷正常出貨。
+            $dupNo = []; $dupN = 0; $dupAmt = 0.0;
+            if ($srows) {
+                $nos = array_values(array_unique(array_map(function ($r) { return (string)$r['IS_number']; }, $srows)));
+                foreach (array_chunk(array_filter($nos, 'strlen'), 500) as $chunk) {
+                    $in = implode(',', array_fill(0, count($chunk), '?'));
+                    try {
+                        $q = $db->prepare("SELECT IS_number, GROUP_CONCAT(DISTINCT DATE(Order_date)
+                                                  ORDER BY Order_date SEPARATOR '、') ds
+                                           FROM is_list WHERE IS_number IN ($in)
+                                           GROUP BY IS_number HAVING COUNT(DISTINCT DATE(Order_date)) > 1");
+                        $q->execute($chunk);
+                        foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $dupNo[(string)$x['IS_number']] = (string)$x['ds'];
+                    } catch (Throwable $e) {}
+                }
+            }
             $cmapS = kpi_as_client_id_map($db);   // is_list.Client_id 全表是空的，只能用名稱回查代號
             $out['cols'] = [['k'=>'no','t'=>'出貨單號'], ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'],
                             ['k'=>'qty','t'=>'數量'], ['k'=>'up','t'=>'單價'], ['k'=>'amt','t'=>'金額'],
@@ -2147,9 +2165,8 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                 $up  = $r['Unit_price'] === null ? null : (float)$r['Unit_price'];
                 $amt = (float)$r['Qty'] * (float)($up ?? 0);
                 $sum += $amt;
-                $dk = (string)$r['IS_number'] . "\x00" . (string)$r['Product_id'] . "\x00" . (string)(0 + $r['Qty']);
-                $dup = isset($dupSeen[$dk]);
-                $dupSeen[$dk] = 1;
+                $dupDs = $dupNo[(string)$r['IS_number']] ?? '';
+                $dup = ($dupDs !== '');
                 if ($dup) { $dupN++; $dupAmt += $amt; }
                 $bad = ($up === null || $up <= 0);
                 if ($bad) $noPrice++;
@@ -2162,12 +2179,13 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     'dims' => $dims,
                     'dim_ids' => ['client'=>($cmapS[trim((string)$r['Client_name'])] ?? ''), 'part'=>''],
                     'kind' => (($bad || $dup) ? 'bad' : 'info'),
-                    'why'  => $dup ? '同一張出貨單號＋同一個料號＋同樣數量重複出現（ERP 重複轉出），這一筆讓金額被多算一次'
+                    'why'  => $dup ? ('這張出貨單號在系統裡有兩個以上不同的出貨日期（' . $dupDs
+                                      . '），等於同一張單被算進不同月份——疑似 ERP 重複轉出')
                             : ($bad ? '沒有單價（或單價為 0），這一筆的金額算成 0，會把達成率往下拉'
                                     : '正常計入本月銷貨金額（列出來是方便逐筆核對）'),
-                    'fix'  => $dup ? '先確認是不是 ERP 重複轉出（同一張單在快速出貨裡出現兩次以上）；'
-                                   . '確認是重複的就把多的那一筆用下方「排除」排掉，金額立刻回到正確值，'
-                                   . '也可以直接到快速出貨把重複的出貨單刪掉。'
+                    'fix'  => $dup ? ('請到快速出貨查這張單號（' . (string)$r['IS_number'] . '）：'
+                                      . '同一張單出現在 ' . $dupDs . ' 兩個日期，確認哪一個才是真正的出貨日，'
+                                      . '把多轉出來的那一份刪掉；在刪掉之前可以先用下方「排除」把這一筆排除，金額就會回到正確值。')
                             : ($bad ? '請到快速出貨把這一筆的單價補上；若這一筆本來就不該算業績（樣品、補件、免費更換），'
                                     . '請用下方「排除」把它排掉，或用排除規則整批排除該客戶／料號。'
                                     : '不必處理。'),
@@ -2178,9 +2196,9 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                          . ($target > 0 ? number_format($target) : '尚未設定')
                          . ($target > 0 ? ('，差額 ' . number_format($sum - $target)) : '')
                          . ($noPrice ? ('。其中 ' . $noPrice . ' 筆沒有單價（金額算 0）') : '')
-                         . ($dupN ? ('。另有 ' . $dupN . ' 筆是重複的出貨單（ERP 重複轉出），'
-                                     . '讓金額多算了 ' . number_format($dupAmt) . '，排掉之後金額為 '
-                                     . number_format($sum - $dupAmt)) : '') . '。';
+                         . ($dupN ? ('。另有 ' . $dupN . ' 筆的出貨單號在系統裡有兩個以上不同的出貨日期'
+                                     . '（疑似 ERP 重複轉出，共 ' . number_format($dupAmt) . '），請逐筆確認'
+                                     . '——同一張單號出現好幾筆相同料號、相同數量是正常的，不算重複') : '') . '。';
             return $out;
         }
 
