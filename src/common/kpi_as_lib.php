@@ -719,6 +719,57 @@ function kpi_as_maker_id_map(PDO $db): array {
     return $m;
 }
 
+/**
+ * 排除規則的候選查詢：直接查「主檔」，不是只查這個月的明細。
+ * --------------------------------------------------------------
+ * 使用者要求 2026-09-18：輸入一部分客戶代號要列出清單讓人挑是哪一家。
+ * 為什麼一定要查主檔：排除規則比對的是**名稱**（來源表 bom／is_list／order_track 存的就是名稱），
+ * 使用者手邊卻常常只有代號；如果只拿「這個月明細裡出現過的值」當候選，
+ * 這個月沒出貨的客戶就完全挑不到，而直接把打進去的代號存成規則值**永遠不會命中**
+ * （規則存 C2005、資料是「和大」），等於設了一條沒有作用的規則。
+ * 所以這裡一律回傳 ['v'=>正式名稱, 'id'=>代號]，存進規則的永遠是 v。
+ *
+ * 表名／欄名一律取自這份程式碼，不吃前端輸入（維度代號另由 kpi_as_calc_dims() 白名單把關）。
+ */
+function kpi_as_dim_lookup(PDO $db, string $dim, string $q, int $limit = 50): array {
+    $q = trim($q);
+    $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $q) . '%';
+    $map = [
+        // dim => [表, 名稱欄(存進規則的值), 代號欄(可為 null)]
+        'client'   => ['customer_list', 'customer',    'customer_id'],
+        'maker'    => ['maker_list',    'maker_id',    'maker_id_no'],
+        'proc'     => ['process_no',    'ProcessName', 'ProcessNo'],
+        'machine'  => ['machine_list',  'machine',     'machine_id'],
+        'part'     => ['d_setting',     'D_Setting_Id', null],
+        'designer' => ['user',          'user_cname',  'id'],
+    ];
+    if (!isset($map[$dim])) return [];
+    list($tbl, $nameCol, $idCol) = $map[$dim];
+    $sql = "SELECT `$nameCol` AS v, " . ($idCol ? "MIN(`$idCol`)" : "''") . " AS id FROM `$tbl` WHERE ";
+    $bind = [];
+    if ($q === '') {
+        $sql .= "`$nameCol` IS NOT NULL AND `$nameCol`<>''";
+    } else {
+        $sql .= "(`$nameCol` LIKE ?" . ($idCol ? " OR `$idCol` LIKE ?" : '') . ")";
+        $bind[] = $like;
+        if ($idCol) $bind[] = $like;
+    }
+    // 離職者不該出現在「設計者」候選；停用廠商仍要列（舊資料排除得用得到）
+    if ($dim === 'designer') $sql .= " AND state=1";
+    $sql .= " GROUP BY `$nameCol` ORDER BY `$nameCol` LIMIT " . (int)$limit;
+    $out = [];
+    try {
+        $st = $db->prepare($sql);
+        $st->execute($bind);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $v = trim((string)$r['v']);
+            if ($v === '') continue;
+            $out[] = ['v' => $v, 'id' => trim((string)$r['id'])];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
 /** 維度代號 → 顯示名稱 */
 function kpi_as_dim_labels(): array {
     return ['client'=>'客戶', 'part'=>'料號', 'proc'=>'製程', 'maker'=>'廠商',

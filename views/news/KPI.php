@@ -190,6 +190,9 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         .vr-list .vr-it:hover { background:#FBE6C8; }
         .vr-list .vr-it.on { background:#F7E0BD; color:#8A5A2B; }
         .vr-list .vr-it .vr-id { color:#a08356; font-size:11px; margin-left:6px; }
+        .vr-list .vr-it .vr-src { float:right; font-size:10px; color:#8A5A2B; background:#F7E0BD;
+            border-radius:8px; padding:0 6px; margin-left:6px; }
+        .vr-list .vr-none a { color:#b5762a; text-decoration:underline; }
         .vr-list .vr-none { padding:6px 8px; font-size:12px; color:#a08356; }
         .vr-picked { margin-top:5px; font-size:12px; color:#8a6d45; }
         .vr-picked .vr-chip2 { display:inline-block; background:#EFE3C8; color:#6b4a20; border:1px solid #D8BE93;
@@ -793,7 +796,7 @@ var VIO = null;
 function openVio(ri, m){
     var r = MATRIX.rows[ri];
     VIO = {ri:ri, iid:r.indicator_id, m:m, row:r, data:null, sel:{}, filt:{}, kw:'', kind:'bad',
-           rdim:'', rkw:'', rsel:[]};
+           rdim:'', rkw:'', rsel:[], rfound:[], rbusy:0};
     $('#vioTitle').text('不符合標準的明細');
     $('#vioBody').html('<div style="padding:16px;color:#8a6d45;">載入中…</div>');
     $('#vioFoot').empty();
@@ -881,23 +884,39 @@ function vioRuleMatch(o, ws){
 function vioRenderRuleList(){
     var dm = vioDimById($('#vrDim').val()), ws = vioRuleWords(), h = '', n = 0, total = 0;
     var picked = {}; (VIO.rsel || []).forEach(function(v){ picked[v] = 1; });
-    var cap = 60;
+    var cap = 60, seen = {};
+    // 先列這個月明細裡真的出現過的（最常用），再把主檔查到的補在後面
+    var list = [];
     ((dm && dm.opts) || []).forEach(function(o){
         if (!vioRuleMatch(o, ws)) return;
+        if (seen[o.v]) return;
+        seen[o.v] = 1;
+        list.push({v:o.v, id:o.id, src:'本月'});
+    });
+    (VIO.rfound || []).forEach(function(o){
+        if (seen[o.v]) return;
+        seen[o.v] = 1;
+        list.push({v:o.v, id:o.id, src:'主檔'});
+    });
+    list.forEach(function(o){
         total++;
         if (n >= cap) return;
         n++;
         h += '<div class="vr-it' + (picked[o.v] ? ' on' : '') + '" data-v="' + esc(o.v) + '">'
            + esc(o.v) + (o.id ? ('<span class="vr-id">' + esc(o.id) + '</span>') : '')
+           + '<span class="vr-src">' + esc(o.src) + '</span>'
            + (picked[o.v] ? '　✔ 已選' : '') + '</div>';
     });
     if (total > cap) h += '<div class="vr-none">還有 ' + (total - cap) + ' 筆沒顯示，請再輸入關鍵字縮小範圍。</div>';
     if (!total) {
         var kw = $.trim(VIO.rkw || '');
-        h = kw
-            ? '<div class="vr-it" data-v="' + esc(kw) + '" data-free="1">這個月的資料裡沒有「' + esc(kw)
-              + '」——點一下仍可直接把它加進排除規則（其他月份可能有）</div>'
-            : '<div class="vr-none">這個月的明細裡沒有可選的項目。</div>';
+        h = VIO.rbusy
+            ? '<div class="vr-none">查詢中…</div>'
+            : (kw
+               ? '<div class="vr-none">主檔裡找不到「' + esc(kw) + '」。'
+                 + '排除規則比對的是<b>名稱</b>，請改用名稱或正確的代號搜尋；'
+                 + '真的要直接用這串字建立規則請按 <a href="#" id="vrFree">直接使用「' + esc(kw) + '」</a>。</div>'
+               : '<div class="vr-none">請輸入代號或名稱搜尋。</div>');
     }
     $('#vrList').html(h);
     var ph = '';
@@ -927,11 +946,13 @@ function vioRulesHtml(){
             h += '<option value="' + esc(dm.k) + '"' + (VIO.rdim === dm.k ? ' selected' : '') + '>' + esc(dm.t) + '</option>';
         });
         h += '</select><input type="text" id="vrKw" value="' + esc(VIO.rkw || '')
-           + '" placeholder="輸入代號或名稱模糊搜尋（例：C2005、和大、齒研、料號…）">'
+           + '" placeholder="輸入代號或名稱模糊搜尋（例：C2005、1R、和大、齒研、料號…）">'
            + '<button id="vrAdd" class="warm">建立排除規則</button></div>'
            + '<div class="vr-list" id="vrList"></div>'
            + '<div class="vr-picked" id="vrPicked"></div>'
-           + '<div class="vio-seltip">點清單即可加入／再點一次取消；不必填原因，系統會記下是誰在什麼時候設定的。</div>';
+           + '<div class="vio-seltip">打代號或名稱都會列出主檔清單讓您挑（標「本月」的是這個月明細裡真的有的）；'
+           + '點一下加入／再點一次取消。存進規則的一律是<b>名稱</b>，所以挑清單裡的項目才比對得到。'
+           + '不必填原因，系統會記下是誰在什麼時候設定的。</div>';
     }
     h += '</div>';
     return h;
@@ -1037,7 +1058,7 @@ function renderVio(){
     h += '</tbody></table></div>';
     $('#vioBody').html(h);
     $('#vioCnt').text('顯示 '+shown+' / 共 '+d.rows.length+' 筆');
-    if ($('#vrDim').length) vioRenderRuleList();
+    if ($('#vrDim').length) { vioRenderRuleList(); vioRuleLookup(); }
 
     var f = '';
     if (+d.can_adjust) {
@@ -1113,13 +1134,42 @@ $(document).on('mouseenter', '#vioBody tbody tr', function(){
 $(document).on('mouseup', function(){ VIODRAG = null; });
 /* ---------- 排除規則 ---------- */
 $(document).on('change', '#vioBody #vrDim', function(){
-    VIO.rdim = $(this).val(); VIO.rsel = []; vioRenderRuleList();
+    VIO.rdim = $(this).val(); VIO.rsel = []; VIO.rfound = [];
+    vioRenderRuleList(); vioRuleLookup();
 });
-var vioRkwT = null;
+var vioRkwT = null, vioRkwSeq = 0;
+/* 打字 → 先用本月資料即時篩（有反應），再向後端查主檔補進來。
+   一定要查主檔：這個月沒出貨的客戶本來就不在明細裡，只靠本月資料會挑不到人。 */
+function vioRuleLookup(){
+    var dim = $('#vrDim').val(), q = $.trim(VIO.rkw || ''), seq = ++vioRkwSeq;
+    if (!dim) return;
+    VIO.rbusy = 1;
+    $.getJSON(API, {action:'excl_dim_search', indicator_id:VIO.iid, year:YEAR, dim:dim, q:q}, function(res){
+        if (seq !== vioRkwSeq) return;              // 打字很快時只採用最後一次的結果
+        VIO.rbusy = 0;
+        VIO.rfound = (res && res.ok) ? (res.rows || []) : [];
+        vioRenderRuleList();
+    }).fail(function(){
+        if (seq !== vioRkwSeq) return;
+        VIO.rbusy = 0; VIO.rfound = []; vioRenderRuleList();
+    });
+}
 $(document).on('input', '#vioBody #vrKw', function(){
     var v = $(this).val();
     clearTimeout(vioRkwT);
-    vioRkwT = setTimeout(function(){ VIO.rkw = v; vioRenderRuleList(); }, 200);
+    vioRkwT = setTimeout(function(){
+        VIO.rkw = v;
+        vioRenderRuleList();       // 先畫本月的，畫面不會空著等
+        vioRuleLookup();
+    }, 250);
+});
+$(document).on('click', '#vioBody #vrFree', function(e){
+    e.preventDefault();
+    var kw = $.trim(VIO.rkw || '');
+    if (!kw) return;
+    VIO.rsel = VIO.rsel || [];
+    if (VIO.rsel.indexOf(kw) < 0) VIO.rsel.push(kw);
+    vioRenderRuleList();
 });
 $(document).on('click', '#vioBody .vr-it', function(){
     var v = $(this).attr('data-v');

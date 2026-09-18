@@ -571,6 +571,21 @@ case 'adjust_del': {
    「規則加了、可是別的月份還是舊數字」這種完全看不出原因的落差。
    一樣只影響 KPI 計算，不會修改任何一筆真實資料。 */
 
+/* ---------- 排除規則的候選查詢（使用者要求 2026-09-18：打一部分代號要列出清單讓人挑） ----------
+   一律查「主檔」而不是只查這個月的明細：這個月沒出貨的客戶也要挑得到，
+   而且回傳的值一律是**正式名稱**——規則比對的是名稱，把代號存成規則值永遠不會命中。 */
+case 'excl_dim_search': {
+    $iid  = (int)($_GET['indicator_id'] ?? 0);
+    $year = kpi_as_year_pick($db, $_GET['year'] ?? $curY);
+    $iy = kpi_get_iy_row($db, $iid, $year);
+    if (!$iy) jerr('找不到指標');
+    $calc = (string)$iy['calculator_key'];
+    $dim  = trim((string)($_GET['dim'] ?? ''));
+    if (!in_array($dim, kpi_as_calc_dims($calc), true)) jerr('這個指標沒有這種排除維度');
+    $q = trim((string)($_GET['q'] ?? ''));
+    jout(['dim'=>$dim, 'q'=>$q, 'rows'=>kpi_as_dim_lookup($db, $dim, $q, 50)]);
+}
+
 case 'excl_rule_add': {
     $iid   = (int)($_POST['indicator_id'] ?? 0);
     $year  = (int)($_POST['year'] ?? 0);
