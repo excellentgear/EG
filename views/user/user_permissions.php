@@ -371,6 +371,7 @@ $EG_ROLE_MODULES = [
     'print_sign_log'      => ['prefix'=>'psl',     'label'=>'列印與簽核紀錄',      'page'=>'print_sign_log.php'],
     'internal_audit'      => ['prefix'=>'ia',      'label'=>'內部稽核',            'page'=>'internal_audit.php'],
     'comm_mgmt'           => ['prefix'=>'cm',      'label'=>'溝通管理',            'page'=>'communication_mgmt.php'],
+    'cust_satis'          => ['prefix'=>'cs',      'label'=>'客戶滿意度',          'page'=>'customer_satisfaction.php'],
     'leave'               => ['prefix'=>'leave',   'label'=>'請假系統',            'page'=>'leave_request.php'],
     'shipping'            => ['prefix'=>'ship',    'label'=>'快速出貨',            'page'=>'Shipping_Quick.php'],
     'purchase'            => ['prefix'=>'purc',    'label'=>'申請採購',            'page'=>'purchase_request.php'],
@@ -1599,6 +1600,18 @@ $_quotDepts = array_keys($_deptSet);
                          同部門找不到就沿部門樹往上一層找，一路找到最上層都沒有則該格免簽；「總經理確認」預設取組織角色綁定的
                          <strong>最高核准人員</strong>。名單內的人請假並設有代理人時，代理人可代簽（圖章加「代」字）。管理者固定擁有全部權限。',
                         rs_of('comm_mgmt'), rsu_of('comm_mgmt'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('cs', 'cust_satis', '客戶滿意度', 'fa-smile-o', '#b06f27',
+                        '為每位使用者指派「<a href="../Sales/customer_satisfaction.php" target="_blank" style="color:#b5762a;">客戶滿意度</a>」頁
+                         （2-SM-02-03 統計資料表／2-SM-02-04 監控表）的角色。<br>
+                         <strong>客戶滿意度檢閱</strong>＝唯讀查看全部客戶的評分與監控表（含列印、CSV）；
+                         <strong>客戶滿意度管理員</strong>＝檢閱＋填寫五項評分與綜合分析、維護監控表、模組設定
+                         （兩份表單的 AS 文件綁定／製表圖章模板／評分換算級距／監控表預設調查項目）。<br>
+                         <span style="color:#b06f27;">準交率、退貨率、客戶開立異常處理單件數由系統自動計算</span>，不必人填；
+                         <strong>技術／服務／價格三項系統算不出來</strong>，一定要照 2-SM-02-02 客戶滿意度調查問卷回收結果填寫。
+                         準交率的判定口徑<strong>沿用 KPI「準時出貨率」該年度的設定</strong>，要改請到 KPI 設定頁（本模組刻意不另開開關，
+                         兩個開關必定打架）。管理者固定擁有全部權限。',
+                        rs_of('cust_satis'), rsu_of('cust_satis'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('leave', 'leave', '請假系統', 'fa-calendar-minus-o', '#d99a4e',
                         '<strong>所有登入者都能申請請假、查看與撤回／銷假自己的單</strong>，不需要在這裡指派角色。此處只指派 <strong>人事（可看全部請假單）</strong>＝可檢視全公司請假單（不含代為簽核的權力）。<br>

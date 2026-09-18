@@ -216,6 +216,8 @@ if (!function_exists('eg_print_sources')) {
             'leave_stats'    => ['label' => '請假系統－請假統計表',  'page' => 'views/ADM/leave_request.php',          'kind' => 'form'],
             'kpi_as'         => ['label' => 'KPI關鍵績效指標－年度總表／不符合標準明細', 'page' => 'views/news/KPI.php', 'kind' => 'form'],
             'stock_doc'      => ['label' => '庫存管理－倉庫庫存表／入庫單', 'page' => 'views/pages/stock.php', 'kind' => 'form'],
+            'cust_satis'     => ['label' => '客戶滿意度－統計資料表／監控表', 'page' => 'views/Sales/customer_satisfaction.php', 'kind' => 'form'],
+            'qa_ncr_log'     => ['label' => '不合格品管制記錄表',           'page' => 'views/QA/ncr_control_log.php',            'kind' => 'form'],
         ];
     }
 }
