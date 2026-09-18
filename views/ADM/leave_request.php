@@ -803,6 +803,9 @@ input[type=number]{-moz-appearance:textfield;}
 <!-- Chart.js 必須排在 custom.min.js 之後（custom.min.js 內有 Chart v2 的相容 patch，
      順序顛倒會被覆蓋）。用站內本地檔不用 CDN：本系統是內網，連不到外網時 CDN 會整頁圖表消失。 -->
 <?php if ($SHOW_STATS): ?><script src="../../resource/js/Chart.min.js"></script><?php endif; ?>
+<?php if ($SHOW_STATS): ?><!-- custom.min.js 會在 document.ready 把 Chart 的圖例預設整個洗掉（見共用檔說明），
+     本檔必須排在 Chart.min.js 之後、ready 之前，才來得及把原廠預設抄一份 -->
+<script src="../../resource/js/eg_chart_legend_fix.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_chart_legend_fix.js') ?>"></script><?php endif; ?>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= $avStamp ?>"></script>
 <script>
@@ -2169,6 +2172,9 @@ function renderKpi(){
 function mkChart(id, cfg){
   const el = document.getElementById(id);
   if(!el || typeof Chart === 'undefined') return;
+  // custom.min.js 把 Chart.defaults.global.legend 換成 {enabled:false}，
+  // 連 labels.generateLabels 一起洗掉 → 建圖時丟例外、整區圖表與表格空白。還原後才建圖。
+  if(typeof egChartLegendReady === 'function') egChartLegendReady();
   if(stCharts[id]){ stCharts[id].destroy(); delete stCharts[id]; }
   cfg.options = $.extend(true, {responsive:true, maintainAspectRatio:false,
                                 legend:{position:'bottom', labels:{fontColor:'#6b5638', boxWidth:12, fontSize:11}},
