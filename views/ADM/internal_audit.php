@@ -566,8 +566,10 @@ $roleLabel = ia_role_label($perms);
                 <b>「每單位 N 分」是每個受稽單位需要的時間</b>（不是空檔）：第一個單位從開始時間起，下一個就是上一個做完的時間；
                 <b>會自動跳過午休 12:00~13:00</b>。
                 <b>最後一個單位一定會排在結束會議開始前 30 分鐘做完</b>（結束會議排在<b>別天</b>時就不受這一條限制）。
-                <b>時間真的不夠時會擋下來並給建議</b>，例如「保持每單位 60 分，改成 08:30 開始」或「保持 09:30 開始，每單位改成 45 分」，
-                而且<b>不會動到已經填好的時間</b>。
+                <b>結束時間不用自己填</b>——填了開始時間就<b>即時算出來顯示</b>（唯讀），旁邊同時告訴您
+                「做到幾點、最晚要幾點做完、行不行得通」；<b>不行的話當場就給建議</b>
+                （例：「保持每單位 60 分，改成 08:30 開始」或「保持 09:30 開始，每單位改成 45 分」），
+                不必按了自動排才知道排不下。按自動排時若真的不夠也會擋住，而且<b>不會動到已經填好的時間</b>。
                 之後<b>手動改中間任何一列的時間，後面幾列會自動順延</b>（前面的不動）；想逐列自己填就把表頭的「改一列就自動順延後面」取消勾選。</li>
             <li><b>要補以前年度的資料</b>：左上角年度下拉本來就含近十年，直接切到那一年再建立即可，不必先有當年的資料。</li>
             <li><b>稽核起始主過程要填什麼</b>：這次稽核從哪一段流程切入，稽核員由這裡開始循序把相關過程查完。紙本備註列了三類可填：<b>主過程</b>（客戶需求檢討→開發→訂單/合約審查→生產→倉儲出貨→客戶回饋）、<b>管理過程</b>（文件/記錄管理、人力資源訓練、不符合管理、資料分析、內部稽核、矯正/預防措施管理、持續改善、管理責任…）、<b>支援過程</b>（採購、供應商管理、IQC/FAI/IPQC/FQC、儀器/量具、機器/治具、生管、型態(鑑別追溯)、特殊特性…）。起點<b>不必等於該單位的日常業務</b>——紙本備註第 1 條要求「跳過自己的直接職務」，讓稽核員從別人的角度切入。<b>同一次稽核裡不可以有兩列填相同的起始主過程</b>，重複會即時標紅、也存不進去。</li>
@@ -750,8 +752,8 @@ $roleLabel = ia_role_label($perms);
         <div id="caseTeamHint" class="ia-hint" style="display:none;background:#FDF3E3;border-color:#E9C892;"></div>
         <div class="ia-sec"><h5>基本資料</h5>
             <div class="ia-form">
-                <label>稽核件號</label><div><input type="text" id="cNo" readonly placeholder="存檔後依通知日期自動產生"></div>
-                <label>次別</label><div><input type="text" id="cSeq" readonly></div>
+                <label>稽核件號</label><div><input type="text" id="cNo" readonly data-ro-always placeholder="存檔後依通知日期自動產生"></div>
+                <label>次別</label><div><input type="text" id="cSeq" readonly data-ro-always></div>
                 <label>通知日期<span style="color:#DD5138;">*</span></label>
                 <div><input type="date" id="cNotify"><div class="err-msg" id="errCNotify"></div></div>
                 <label>稽核組長</label><div><select id="cLeader" data-eg-filter="輸入人員姓名篩選…"></select></div>
@@ -795,14 +797,16 @@ $roleLabel = ia_role_label($perms);
                 <th style="width:158px;">時間
                     <div class="ia-allday">
                         <input type="text" id="cTimeFrom" data-eg-hint="開始時間，例 09:00" style="width:50px;">～
-                        <input type="text" id="cTimeTo" data-eg-hint="結束時間，例 16:00（可留空）" style="width:50px;">
-                        <button type="button" id="btnAllTime" title="從開始時間起，依間隔往下排每一列的受稽時間">自動排</button>
+                        <!-- 結束時間是**算出來的**（2026-09-18 使用者要求：不要讓人一直填一直被退） -->
+                        <input type="text" id="cTimeTo" readonly data-ro-always title="依開始時間與每單位分鐘自動算出來的結束時間"
+                               style="width:50px;background:#f5efe4;cursor:not-allowed;">
+                        <button type="button" id="btnAllTime" title="從開始時間起，依每個單位需要的分鐘往下排">自動排</button>
                     </div>
                     <div style="font-weight:normal;font-size:10px;color:#8a6d45;margin-top:2px;line-height:1.5;">
                         每單位 <input type="text" id="cTimeStep" value="60" data-eg-skip
                              style="width:30px;border:1px solid #D8BE93;border-radius:3px;padding:0 3px;font-size:10px;"> 分，
                         跳過午休 12:00~13:00<br>
-                        <span style="color:#a08356;">最後一個單位會排在結束會議開始前 30 分鐘做完</span><br>
+                        <span id="cTimeCalc" style="color:#a08356;">最後一個單位會排在結束會議開始前 30 分鐘做完</span><br>
                         <label style="font-weight:normal;margin:0;cursor:pointer;">
                             <input type="checkbox" id="cTimeCascade" checked data-eg-skip style="vertical-align:-1px;">
                             改一列就自動順延後面</label>
@@ -2035,11 +2039,15 @@ function applyCaseLock(c){
     CASE_DONE = caseIsDone(c);
     var $m = $('#caseMask');
     // 鎖定：所有輸入欄位與表格列都設唯讀（列印、關閉仍可用）
-    $m.find('input,select,textarea').not('[data-eg-filter-box]').each(function(){
+    /* data-ro-always＝本來就唯讀的欄位（件號、次別、算出來的結束時間），
+       解鎖時**不可以把它們變成可編輯**——2026-09-18 實測踩到：
+       結束時間欄的 readonly 被這裡一律設成 false，變成使用者可以亂改計算結果。 */
+    $m.find('input,select,textarea').not('[data-eg-filter-box]').not('[data-ro-always]').each(function(){
         var t = (this.type||'').toLowerCase();
         if (t === 'checkbox' || t === 'radio' || this.tagName === 'SELECT') $(this).prop('disabled', CASE_DONE);
         else $(this).prop('readonly', CASE_DONE);
     });
+    $m.find('[data-ro-always]').prop('readonly', true);
     $m.find('.ia-op, .nk-chip, button[id^=btnCaseTpl], #btnAllAudited, #btnAllDue, #btnAllTime')
       .css({'pointer-events': CASE_DONE ? 'none' : '', 'opacity': CASE_DONE ? .5 : ''});
     $('#btnCaseSave').toggle(!CASE_DONE);
@@ -2231,9 +2239,8 @@ function iaPlanTimes(start, dur, n){
  * @return {limit:分鐘或 null, why:文字說明}
  */
 function iaTimeLimit(auditDate){
+    // 結束時間欄現在是「算出來的結果」，不再是使用者給的上限，所以上限只看結束會議
     var lim = null, why = '';
-    var to = normTime($('#cTimeTo').val());
-    if (to) { lim = iaT2M(to); why = '您填的結束時間 ' + to; }
     var md = $('#cMeetDate').val(), ms = normTime($('#cMeetStart').val());
     if (md && ms && (!auditDate || md === auditDate)) {
         var m = iaT2M(ms) - IA_MEET_GAP;
@@ -2282,6 +2289,39 @@ function caseRowHasContent(r){
     return !!(r.start_process || r.dept_id || (r.auditor_keys||[]).length || (r.escort_keys||[]).length
               || r.audited_date || r.improve_due);
 }
+/* 填了開始時間就**即時算出結束時間**並顯示行不行得通（2026-09-18 使用者要求）：
+   以前要按了自動排才知道排不下，改一次試一次很煩。這裡在開始時間／每單位分鐘／
+   受稽單位列數／結束會議時間任何一項變動時就重算，結束時間欄是唯讀的計算結果。 */
+function iaTimeRecalc(){
+    if (!$('#caseMask').is(':visible')) return;
+    var $calc = $('#cTimeCalc');
+    var n = CASE_ROWS.filter(caseRowHasContent).length;
+    var from = normTime($('#cTimeFrom').val()), start = from ? iaT2M(from) : null;
+    if (!n || start === null) {
+        $('#cTimeTo').val('');
+        $calc.css('color', '#a08356').text(n ? '填開始時間就會自動算出結束時間' : '先填受稽單位，再填開始時間');
+        return;
+    }
+    var dur = iaTimeStep(), plan = iaPlanTimes(start, dur, n);
+    $('#cTimeTo').val(iaM2T(plan.end));
+
+    var auditDate = '';
+    for (var i = 0; i < CASE_ROWS.length && !auditDate; i++) {
+        if (caseRowHasContent(CASE_ROWS[i]) && CASE_ROWS[i].audited_date) auditDate = CASE_ROWS[i].audited_date;
+    }
+    var lim = iaTimeLimit(auditDate);
+    var base = n + ' 單位 × ' + dur + ' 分 → 做到 ' + iaM2T(plan.end);
+    if (lim.limit === null) { $calc.css('color', '#a08356').text(base + '（沒有同一天的結束會議，不另設上限）'); return; }
+    if (plan.end <= lim.limit) {
+        $calc.css('color', '#5b8a3a').text(base + '　✔ 在 ' + iaM2T(lim.limit) + ' 之前（' + lim.why + '）');
+    } else {
+        var sug = iaTimeSuggest(n, dur, start, lim.limit);
+        $calc.css('color', '#C4442D').html(base + '　✘ 超過 ' + iaM2T(lim.limit) + '（' + lim.why + '）'
+            + (sug.length ? ('<br>' + sug.join('<br>')) : '<br>・即使每單位縮到 15 分也排不完，請分兩天或把結束會議往後移'));
+    }
+}
+$(document).on('input change', '#cTimeFrom, #cTimeStep, #cMeetStart, #cMeetDate', iaTimeRecalc);
+
 $(document).on('click', '#btnAllTime', function(){
     var from = normTime($('#cTimeFrom').val());
     if (!from) { alert('請先填開始時間（例 09:00）'); $('#cTimeFrom').focus(); return false; }
@@ -2317,6 +2357,7 @@ $(document).on('click', '#btnAllTime', function(){
         r.audited_time = iaM2T(plan.starts[k++]);
     });
     renderCaseRows();
+    iaTimeRecalc();
     alert('已排好 ' + rows.length + ' 個單位：' + from + ' 起，每個單位 ' + dur + ' 分鐘，'
         + '做到 ' + iaM2T(plan.end) + '（跳過午休 12:00~13:00）'
         + (lim.limit !== null ? ('。\n最晚必須做完的時間是 ' + iaM2T(lim.limit) + '（' + lim.why + '），符合。') : '.'));
@@ -2373,6 +2414,7 @@ function postByKey(key, cands, fallback){
     return {name:'#'+uid, label:'#'+uid};
 }
 function renderCaseRows(){
+    setTimeout(iaTimeRecalc, 0);      // 列數一變，結束時間跟著重算
     var ro = !<?= $perms['canAdmin'] ? 'true' : 'false' ?>;
     var h = '';
     CASE_ROWS.forEach(function(r, i){
