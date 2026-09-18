@@ -160,6 +160,45 @@ function subtractWorkdays(string $from, int $n, array $maps): string {
     return $cur->format('Y-m-d');
 }
 
+/* ── 實際回廠日的判定（唯一實作，本頁所有查詢一律用這幾支組 SQL，不要各自再寫一份）──
+ * 生管很多發包沒有去按「回廠」，只看 bom_ing.return_date 會把已經回來的一律判成未回廠；
+ * 而製程移轉憑單（bom_ing_transfer_log，ERP 匯入，見 views/pm/Transfer_Log_Analysis.php）
+ * 只要「貨從這個廠商移轉出去」就一定開得出來，是回廠的直接證據。
+ *
+ * 規則（使用者指定 2026-09-18）：
+ *   ① 沒登錄回廠日 → 用憑單日期
+ *   ② 有登錄回廠日、但憑單日期更早 → 取較早的憑單日期（登錄多半是事後才補按的）
+ *   ③ 憑單日期早於發包日的不採用（那是上一段製程的憑單，不是這一站回廠）
+ *
+ * 日期一定要「由單號解析」，不可以用 transfer_date 欄位：transfer_date 會為了帳款月份
+ * 被人工改過（2026 年 6,369 筆裡有 60 筆與單號日期不同，最多差 49 天）；
+ * 單號 J-1150821029 ＝ 字母-＋民國年3碼(115)＋MM(08)＋DD(21)＋序號，開單當下就固定了。
+ */
+function vkTlogDateSQL(string $tl='tl'): string {
+    return "STR_TO_DATE(CONCAT(SUBSTRING($tl.transfer_no,3,3)+1911,SUBSTRING($tl.transfer_no,6,4)),'%Y%m%d')";
+}
+// 掛在 FROM bom_ing bi ... 的最後面，算出該站憑單日期 vkt.td（不早於發包日的最早一張）
+function vkTlogJoin(string $bi='bi'): string {
+    $d = vkTlogDateSQL('tl');
+    return "LEFT JOIN LATERAL (\n"
+         . "            SELECT MIN($d) AS td FROM bom_ing_transfer_log tl\n"
+         . "             WHERE tl.bom=$bi.bom AND tl.bom_sn=$bi.bom_sn AND tl.maker_from=$bi.maker_id_no\n"
+         . "               AND tl.transfer_no REGEXP " . "'^[A-Za-z]-[0-9]{10}$'" . "\n"
+         . "               AND $d >= DATE($bi.outsource_date)\n"
+         . "          ) vkt ON TRUE";
+}
+// 實際回廠日：登錄值與憑單日期取「較早」者；只有一邊有就用那一邊
+function vkRdSQL(string $bi='bi'): string {
+    return "COALESCE(LEAST(DATE($bi.return_date),vkt.td),DATE($bi.return_date),vkt.td)";
+}
+// 回廠日來源：return=生管登錄／transfer=沒登錄改用憑單／transfer_earlier=憑單比登錄早
+function vkRdSrcSQL(string $bi='bi'): string {
+    return "CASE WHEN vkt.td IS NULL THEN (CASE WHEN $bi.return_date IS NULL THEN '' ELSE 'return' END)\n"
+         . "          WHEN $bi.return_date IS NULL THEN 'transfer'\n"
+         . "          WHEN vkt.td < DATE($bi.return_date) THEN 'transfer_earlier'\n"
+         . "          ELSE 'return' END";
+}
+
 // ── AJAX ───────────────────────────────────────────────────
 if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
     header('Content-Type: application/json; charset=utf-8');
@@ -451,19 +490,9 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                          bi.sqty,
                          DATE(bi.outsource_date) AS od,
                          DATE(bi.return_date) AS rd_orig,
-                         DATE(
-                             (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                              WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn
-                                AND tl.maker_from=bi.maker_id_no
-                              ORDER BY tl.transfer_date DESC LIMIT 1)
-                         ) AS rd_log,
-                         DATE(COALESCE(
-                             bi.return_date,
-                             (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                              WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn
-                                AND tl.maker_from=bi.maker_id_no
-                              ORDER BY tl.transfer_date DESC LIMIT 1)
-                         )) AS rd,
+                         vkt.td AS rd_log,
+                         ".vkRdSQL()." AS rd,
+                         ".vkRdSrcSQL()." AS rd_src,
                          b.Delivery_date AS dd,
                          bi.QC_check,
                          pn.ProcessName
@@ -471,6 +500,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                   LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
                   LEFT JOIN bom b ON b.bom=bi.bom
                   LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                  ".vkTlogJoin()."
                   $wSQL ORDER BY COALESCE(ml.maker_id,bi.maker_id), bi.outsource_date DESC";
             $st=$pdo->prepare($sql); $st->execute($fp);
             $allRows=$st->fetchAll(PDO::FETCH_ASSOC);
@@ -496,11 +526,14 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                         'is_special_tol'=>($rowTol !== $tol),
                         'total'=>0,'returned'=>0,'ontime'=>0,'late'=>0,'no_dd'=>0,
                         'ng_count'=>0,'qq_count'=>0,'aod_count'=>0,'ok_count'=>0,
+                        'tlog_fill'=>0,'tlog_earlier'=>0,
                         'total_days'=>0,'days_count'=>0,'proc_names'=>[]];
                 }
                 $m=&$mkMap[$mk];
                 $m['total']++;
-                $rdFromLog = (empty($row['rd_orig']) && !empty($row['rd_log'])); // 回廠日來自 transfer_log
+                // 回廠日來源（見 vkRdSQL）：沒登錄改用憑單／憑單比登錄早而採用憑單
+                if($row['rd_src']==='transfer') $m['tlog_fill']++;
+                elseif($row['rd_src']==='transfer_earlier') $m['tlog_earlier']++;
                 $deadline=calcDeadline($row['od'],$rowTol,$maps);
                 $isRet=!empty($row['rd']);
                 if($isRet){
@@ -551,7 +584,10 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                       'ontime_pct'=>$tot>=$minTxn?round($ont/max($tot,1)*100,1):null,
                       'ng_pct'=>$tot>0?round($ng/$tot*100,1):0,
                       'period_start'=>$ds,'period_end'=>$de,'cutoff'=>$cutoff,
-                      'workday_count'=>$wdCount];
+                      'workday_count'=>$wdCount,
+                      // 回廠日靠製程移轉憑單補上或修正的筆數（生管沒按回廠／按得比憑單晚）
+                      'tlog_fill'=>array_sum(array_column($result,'tlog_fill')),
+                      'tlog_earlier'=>array_sum(array_column($result,'tlog_earlier'))];
             echo json_encode(['success'=>true,'data'=>$result,'summary'=>$summary,
                               'settings'=>['tolerance'=>$tol,'min_txn'=>$minTxn,'grade_rules'=>$gradeRules]]);
         }catch(Exception $e){echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
@@ -577,19 +613,9 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                     COALESCE(ml.maker_id, bi.maker_id) AS maker_name,
                     DATE(bi.outsource_date) AS od,
                     DATE(bi.return_date) AS rd_orig,
-                    DATE(
-                        (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                         WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn
-                           AND tl.maker_from=bi.maker_id_no
-                         ORDER BY tl.transfer_date DESC LIMIT 1)
-                    ) AS rd_log,
-                    DATE(COALESCE(
-                        bi.return_date,
-                        (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                         WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn
-                           AND tl.maker_from=bi.maker_id_no
-                         ORDER BY tl.transfer_date DESC LIMIT 1)
-                    )) AS rd,
+                    vkt.td AS rd_log,
+                    ".vkRdSQL()." AS rd,
+                    ".vkRdSrcSQL()." AS rd_src,
                     b.Delivery_date AS dd,
                     bi.QC_check, bi.QC_check_date,
                     pn.ProcessName, bi.ps AS remark
@@ -597,6 +623,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                 LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
                 LEFT JOIN bom b ON b.bom=bi.bom
                 LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                ".vkTlogJoin()."
                 WHERE $cond AND bi.outsource_date IS NOT NULL
                   AND DATE(bi.outsource_date) BETWEEN :ds AND :de
                   AND DATE(bi.outsource_date) <= :cutoff
@@ -609,8 +636,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
             foreach($rows as &$row){
                 $dl=calcDeadline($row['od'],$tol,$maps);
                 $row['ontime_deadline']=$dl;
-                $rdFromLog=(!empty($row['rd_log'])&&empty($row['rd_orig']));
-                $row['rd_from_log']=$rdFromLog?1:0;
+                $row['rd_from_log']=($row['rd_src']==='transfer'||$row['rd_src']==='transfer_earlier')?1:0;
                 if(!empty($row['rd'])){
                     $row['status']=$row['rd']<=$dl?'ontime':'late';
                     // 計算發包日到回廠日的實際工作天數
@@ -660,33 +686,18 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                 $e=date('Y-m-t',strtotime($s));
                 $ym=substr($s,0,7);
                 $approxCutoff=date('Y-m-d',strtotime($today.' -'.intval($tol*1.8).' days'));
-                // rd_col = bi.return_date OR transfer_log fallback
+                // 回廠日＝登錄值與製程移轉憑單單號日期取較早者（唯一實作 vkRdSQL）
                 $st=$pdo->prepare("SELECT
                     COUNT(*) AS total,
-                    SUM(CASE WHEN COALESCE(bi.return_date,
-                        (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                         WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn AND tl.maker_from=bi.maker_id_no
-                         ORDER BY tl.transfer_date DESC LIMIT 1)) IS NOT NULL THEN 1 ELSE 0 END) AS ret,
-                    SUM(CASE WHEN COALESCE(bi.return_date,
-                        (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                         WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn AND tl.maker_from=bi.maker_id_no
-                         ORDER BY tl.transfer_date DESC LIMIT 1)) IS NOT NULL
-                        AND DATEDIFF(
-                            DATE(COALESCE(bi.return_date,(SELECT tl2.transfer_date FROM bom_ing_transfer_log tl2
-                                WHERE tl2.bom=bi.bom AND tl2.bom_sn=bi.bom_sn AND tl2.maker_from=bi.maker_id_no
-                                ORDER BY tl2.transfer_date DESC LIMIT 1))),
-                            DATE(bi.outsource_date)
-                        ) <= :tol_d
+                    SUM(CASE WHEN ".vkRdSQL()." IS NOT NULL THEN 1 ELSE 0 END) AS ret,
+                    SUM(CASE WHEN ".vkRdSQL()." IS NOT NULL
+                        AND DATEDIFF(".vkRdSQL().",DATE(bi.outsource_date)) <= :tol_d
                         THEN 1 ELSE 0 END) AS ontime,
                     SUM(CASE WHEN bi.QC_check='ng' THEN 1 ELSE 0 END) AS ng,
-                    AVG(DATEDIFF(
-                        DATE(COALESCE(bi.return_date,(SELECT tl3.transfer_date FROM bom_ing_transfer_log tl3
-                            WHERE tl3.bom=bi.bom AND tl3.bom_sn=bi.bom_sn AND tl3.maker_from=bi.maker_id_no
-                            ORDER BY tl3.transfer_date DESC LIMIT 1))),
-                        DATE(bi.outsource_date)
-                    )) AS avg_d
+                    AVG(DATEDIFF(".vkRdSQL().",DATE(bi.outsource_date))) AS avg_d
                     FROM bom_ing bi
                     LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
+                    ".vkTlogJoin()."
                     WHERE $cond AND bi.outsource_date IS NOT NULL
                       AND DATE(bi.outsource_date) BETWEEN :ds AND :de
                       AND DATE(bi.outsource_date) <= :cut");
@@ -729,23 +740,14 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                 $ds="$yr-01-01"; $de="$yr-12-31";
                 $st=$pdo->prepare("SELECT
                     COUNT(*) AS total,
-                    SUM(CASE WHEN COALESCE(bi.return_date,
-                        (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                         WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn AND tl.maker_from=bi.maker_id_no
-                         ORDER BY tl.transfer_date DESC LIMIT 1)) IS NOT NULL THEN 1 ELSE 0 END) AS ret,
-                    SUM(CASE WHEN COALESCE(bi.return_date,
-                        (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                         WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn AND tl.maker_from=bi.maker_id_no
-                         ORDER BY tl.transfer_date DESC LIMIT 1)) IS NOT NULL
-                        AND DATEDIFF(DATE(COALESCE(bi.return_date,(SELECT tl2.transfer_date FROM bom_ing_transfer_log tl2
-                            WHERE tl2.bom=bi.bom AND tl2.bom_sn=bi.bom_sn AND tl2.maker_from=bi.maker_id_no
-                            ORDER BY tl2.transfer_date DESC LIMIT 1))),DATE(bi.outsource_date)) <= :tol_d
+                    SUM(CASE WHEN ".vkRdSQL()." IS NOT NULL THEN 1 ELSE 0 END) AS ret,
+                    SUM(CASE WHEN ".vkRdSQL()." IS NOT NULL
+                        AND DATEDIFF(".vkRdSQL().",DATE(bi.outsource_date)) <= :tol_d
                         THEN 1 ELSE 0 END) AS ontime,
                     SUM(CASE WHEN bi.QC_check='ng' THEN 1 ELSE 0 END) AS ng,
-                    AVG(DATEDIFF(DATE(COALESCE(bi.return_date,(SELECT tl3.transfer_date FROM bom_ing_transfer_log tl3
-                        WHERE tl3.bom=bi.bom AND tl3.bom_sn=bi.bom_sn AND tl3.maker_from=bi.maker_id_no
-                        ORDER BY tl3.transfer_date DESC LIMIT 1))),DATE(bi.outsource_date))) AS avg_d
+                    AVG(DATEDIFF(".vkRdSQL().",DATE(bi.outsource_date))) AS avg_d
                     FROM bom_ing bi LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
+                    ".vkTlogJoin()."
                     WHERE $cond AND bi.outsource_date IS NOT NULL
                       AND DATE(bi.outsource_date) BETWEEN :ds AND :de
                       AND DATE(bi.outsource_date) <= :cut");
@@ -781,25 +783,16 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                     COALESCE(ml.maker_id, bi.maker_id) AS maker_name,
                     bi.maker_id_no,
                     COUNT(*) AS total,
-                    SUM(CASE WHEN COALESCE(bi.return_date,
-                        (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                         WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn AND tl.maker_from=bi.maker_id_no
-                         ORDER BY tl.transfer_date DESC LIMIT 1)) IS NOT NULL THEN 1 ELSE 0 END) AS ret,
-                    SUM(CASE WHEN COALESCE(bi.return_date,
-                        (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                         WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn AND tl.maker_from=bi.maker_id_no
-                         ORDER BY tl.transfer_date DESC LIMIT 1)) IS NOT NULL
-                        AND DATEDIFF(DATE(COALESCE(bi.return_date,(SELECT tl2.transfer_date FROM bom_ing_transfer_log tl2
-                            WHERE tl2.bom=bi.bom AND tl2.bom_sn=bi.bom_sn AND tl2.maker_from=bi.maker_id_no
-                            ORDER BY tl2.transfer_date DESC LIMIT 1))),DATE(bi.outsource_date)) <= $tol
+                    SUM(CASE WHEN ".vkRdSQL()." IS NOT NULL THEN 1 ELSE 0 END) AS ret,
+                    SUM(CASE WHEN ".vkRdSQL()." IS NOT NULL
+                        AND DATEDIFF(".vkRdSQL().",DATE(bi.outsource_date)) <= $tol
                         THEN 1 ELSE 0 END) AS ontime,
                     SUM(CASE WHEN bi.QC_check='ng' THEN 1 ELSE 0 END) AS ng_count,
-                    AVG(DATEDIFF(DATE(COALESCE(bi.return_date,(SELECT tl3.transfer_date FROM bom_ing_transfer_log tl3
-                        WHERE tl3.bom=bi.bom AND tl3.bom_sn=bi.bom_sn AND tl3.maker_from=bi.maker_id_no
-                        ORDER BY tl3.transfer_date DESC LIMIT 1))),DATE(bi.outsource_date))) AS avg_d
+                    AVG(DATEDIFF(".vkRdSQL().",DATE(bi.outsource_date))) AS avg_d
                 FROM bom_ing bi
                 LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
                 LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                ".vkTlogJoin()."
                 WHERE bi.outsource_date IS NOT NULL
                   AND DATE(bi.outsource_date) BETWEEN ? AND ?
                   AND DATE(bi.outsource_date) <= ?
@@ -861,20 +854,15 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                     COALESCE(ml.maker_id, bi.maker_id) AS maker_name,
                     bi.maker_id_no,
                     DATE(bi.outsource_date) AS outsource_d,
-                    DATE(COALESCE(bi.return_date,
-                        (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                         WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn AND tl.maker_from=bi.maker_id_no
-                         ORDER BY tl.transfer_date DESC LIMIT 1))) AS return_d,
+                    ".vkRdSQL()." AS return_d,
                     CASE WHEN bi.return_date IS NULL THEN 1 ELSE 0 END AS rd_from_log,
                     pn.ProcessName
                 FROM bom_ing bi
                 LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
                 LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                ".vkTlogJoin()."
                 WHERE bi.outsource_date IS NOT NULL
-                  AND COALESCE(bi.return_date,
-                      (SELECT tl.transfer_date FROM bom_ing_transfer_log tl
-                       WHERE tl.bom=bi.bom AND tl.bom_sn=bi.bom_sn AND tl.maker_from=bi.maker_id_no
-                       ORDER BY tl.transfer_date DESC LIMIT 1)) < bi.outsource_date
+                  AND ".vkRdSQL()." < DATE(bi.outsource_date)
                 ORDER BY bi.outsource_date DESC LIMIT 200
             ");
             foreach($st->fetchAll(PDO::FETCH_ASSOC) as $r){
@@ -1565,7 +1553,11 @@ function renderSummary(){
 }
 function updateNote(){
     var t=G.settings.tolerance;
-    $('#tnote').text('準時定義：發包日後 '+t+' 個上班日內回廠　|　今日往前 '+t+' 個上班日以內發包的尚未到期不計入　|　未回廠且容忍期已過算逾期　|　「bom無交期」= bom.Delivery_date 為空，不影響準時率計算（準時以發包日+容忍天數為截止）');
+    var s=G.summary||{};
+    var h='準時定義：發包日後 '+t+' 個上班日內回廠　|　今日往前 '+t+' 個上班日以內發包的尚未到期不計入　|　未回廠且容忍期已過算逾期　|　「bom無交期」= bom.Delivery_date 為空，不影響準時率計算（準時以發包日+容忍天數為截止）';
+    h+='<br>回廠日認定：以生管登錄的回廠日與「製程移轉憑單單號日期」（ERP 匯入，貨從該廠商移轉出去的那天）取<b>較早</b>者；沒登錄回廠日就用憑單日期，憑單日期早於發包日的不採用。'
+      +'（本期：沒登錄改用憑單 '+(s.tlog_fill||0)+' 筆、憑單較早而修正 '+(s.tlog_earlier||0)+' 筆）';
+    $('#tnote').html(h);
 }
 function loadProcList(){
     ajx({action:'get_process_list'},function(r){
@@ -1720,10 +1712,15 @@ function renderDetail(mk){
         var sc=d.status==='ontime'?'st-ok':d.status==='late'?'st-lt':'st-nr';
         var st=d.status==='ontime'?'✔ 準時':d.status==='late'?'✖ 逾期':'? 未回廠';
         var qcc=d.QC_check==='ng'?'color:#E74C3C':d.QC_check==='ok'?'color:#27AE60':d.QC_check==='AOD'?'color:#9B59B6':'';
-        // 回廠日來源標記
-        var rdFromLog=(d.rd_from_log==1);
+        // 回廠日來源標記（rd_src：return=生管登錄／transfer=沒登錄改用憑單／transfer_earlier=憑單比登錄早）
+        var bs='font-size:10px;background:#fff8e1;color:#8a6000;border-radius:3px;padding:1px 4px;line-height:14px;display:inline-block;';
+        var rdTag='';
+        if(d.rd_src==='transfer')
+            rdTag=' <span style="'+bs+'" title="生管未按回廠，改用製程移轉憑單單號日期（'+esc(d.rd_log||'')+'）">移轉單</span>';
+        else if(d.rd_src==='transfer_earlier')
+            rdTag=' <span style="'+bs+'background:#fbe6d4;color:#8a4b00;" title="生管登錄的回廠日是 '+esc(d.rd_orig||'')+'，製程移轉憑單單號日期 '+esc(d.rd_log||'')+' 較早，取較早者">移轉單較早</span>';
         var rdCell=d.rd
-            ? esc(d.rd)+(rdFromLog?' <span style="font-size:10px;background:#fff8e1;color:#8a6000;border-radius:3px;padding:1px 4px;" title="回廠日來自外包移轉記錄(bom_ing_transfer_log.transfer_date)">移轉</span>':'')
+            ? esc(d.rd)+rdTag
             : '<span style="color:#aaa;">未回廠</span>';
         // 工作天數顯示
         var wdCell=d.workdays!==null
