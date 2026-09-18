@@ -372,6 +372,7 @@ $EG_ROLE_MODULES = [
     'internal_audit'      => ['prefix'=>'ia',      'label'=>'內部稽核',            'page'=>'internal_audit.php'],
     'comm_mgmt'           => ['prefix'=>'cm',      'label'=>'溝通管理',            'page'=>'communication_mgmt.php'],
     'cust_satis'          => ['prefix'=>'cs',      'label'=>'客戶滿意度',          'page'=>'customer_satisfaction.php'],
+    'qa_ncr'              => ['prefix'=>'ncr',     'label'=>'不合格品管制記錄表',  'page'=>'ncr_control_log.php'],
     'leave'               => ['prefix'=>'leave',   'label'=>'請假系統',            'page'=>'leave_request.php'],
     'shipping'            => ['prefix'=>'ship',    'label'=>'快速出貨',            'page'=>'Shipping_Quick.php'],
     'purchase'            => ['prefix'=>'purc',    'label'=>'申請採購',            'page'=>'purchase_request.php'],
@@ -1612,6 +1613,19 @@ $_quotDepts = array_keys($_deptSet);
                          準交率的判定口徑<strong>沿用 KPI「準時出貨率」該年度的設定</strong>，要改請到 KPI 設定頁（本模組刻意不另開開關，
                          兩個開關必定打架）。管理者固定擁有全部權限。',
                         rs_of('cust_satis'), rsu_of('cust_satis'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('ncr', 'qa_ncr', '不合格品管制記錄表', 'fa-ban', '#c0492f',
+                        '為每位使用者指派「<a href="../QA/ncr_control_log.php" target="_blank" style="color:#b5762a;">不合格品管制記錄表</a>」頁
+                         （2-QA-01-03）的角色。這一頁是一本<strong>登錄簿</strong>，系統自動把不合格品事件從
+                         <strong>品質異常處理單／異常矯正處理單／客戶退貨／QC 檢驗判定不良·特採</strong>四個來源彙整過來，
+                         人只補「原因／責任單位／處理方式／報廢單號／結案」。<br>
+                         <strong>不合格品記錄檢閱</strong>＝唯讀（含列印、CSV）；
+                         <strong>不合格品記錄管理員</strong>＝檢閱＋補填、紙本補登、模組設定（AS 綁定／要彙整哪些來源／圖章模板）。<br>
+                         <span style="color:#c0492f;">品管既有的角色直接沿用、不必重複指派</span>：
+                         「管理檢驗設定」視同管理員，「檢閱／填寫檢驗／修改歷史」視同檢閱。<br>
+                         <span style="color:#c0492f;">來源事件不可以從這一頁刪掉</span>（只有「紙本補登」的列可以刪）——
+                         從登錄簿刪掉一筆不合格品會讓紀錄憑空消失、失去可追溯性。管理者固定擁有全部權限。',
+                        rs_of('qa_ncr'), rsu_of('qa_ncr'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('leave', 'leave', '請假系統', 'fa-calendar-minus-o', '#d99a4e',
                         '<strong>所有登入者都能申請請假、查看與撤回／銷假自己的單</strong>，不需要在這裡指派角色。此處只指派 <strong>人事（可看全部請假單）</strong>＝可檢視全公司請假單（不含代為簽核的權力）。<br>
