@@ -110,20 +110,46 @@ function subtractWorkdays(string $from, int $n, array $maps): string {
 function vkTlogDateSQL(string $tl='tl'): string {
     return "STR_TO_DATE(CONCAT(SUBSTRING($tl.transfer_no,3,3)+1911,SUBSTRING($tl.transfer_no,6,4)),'%Y%m%d')";
 }
-// 掛在 FROM bom_ing bi ... 的最後面，算出該站憑單日期 vkt.td（不早於發包日的最早一張）
-function vkTlogJoin(string $bi='bi'): string {
+/* 掛在 FROM bom_ing bi ... 的最後面，一次算出兩個推定來源：
+ *   vkt.td  ＝製程移轉憑單單號日期（不早於發包日的最早一張）
+ *   vkq.qd  ＝QC 檢驗日（不早於發包日的最早一次）／vkq.qd_all＝最早一次（不管早不早，純顯示用）
+ * QC 日**不可以只看 `bom_ing.QC_check_date`**：那一欄是報工當下寫的、只留最後一次，
+ * 實測全庫有 163 筆「這一欄是空的，但 `qc_check` 檢驗紀錄表裡查得到」（其中 146 筆連回廠日都沒有），
+ * 另有 149 筆「檢驗紀錄表裡的第一次檢驗比這一欄還早」，所以兩邊都要看、取最早。
+ */
+function vkBackJoin(string $bi='bi'): string {
     $d = vkTlogDateSQL('tl');
     return "LEFT JOIN LATERAL (\n"
          . "            SELECT MIN($d) AS td FROM bom_ing_transfer_log tl\n"
          . "             WHERE tl.bom=$bi.bom AND tl.bom_sn=$bi.bom_sn AND tl.maker_from=$bi.maker_id_no\n"
          . "               AND tl.transfer_no REGEXP " . "'^[A-Za-z]-[0-9]{10}$'" . "\n"
          . "               AND $d >= DATE($bi.outsource_date)\n"
-         . "          ) vkt ON TRUE";
+         . "          ) vkt ON TRUE\n"
+         . "          LEFT JOIN LATERAL (\n"
+         . "            SELECT MIN(CASE WHEN DATE(qc.QC_check_date) >= DATE($bi.outsource_date)\n"
+         . "                            THEN DATE(qc.QC_check_date) END) AS qd,\n"
+         . "                   MIN(DATE(qc.QC_check_date)) AS qd_all\n"
+         . "              FROM qc_check qc\n"
+         // qc_check.bom_ing_fid_ref 是 varchar(30)、bom_ing.bom_ing_fid 是 int：直接用 = 比，
+         // MySQL 會把整欄 varchar 轉成數字＝idx_fid_ref 索引失效，2026 年度實測 17.7 秒；
+         // 轉成字串再比（COLLATE 要跟該欄一致，否則 Illegal mix of collations）走得到索引＝0.07 秒。
+         . "             WHERE qc.bom_ing_fid_ref=CAST($bi.bom_ing_fid AS CHAR) COLLATE utf8mb4_unicode_ci\n"
+         . "               AND qc.QC_check_date IS NOT NULL\n"
+         . "          ) vkq ON TRUE";
 }
-// QC 檢驗日（驗過了就一定已回廠）；早於發包日的是上一批的，不採用
+/* QC 檢驗日候選（驗過了就一定已回廠）：檢驗紀錄表（vkq.qd）與報工欄位 bom_ing.QC_check_date
+ * 取較早者；兩邊都要「不早於發包日」，早於發包日的是上一批驗的。
+ * 刻意不把兩個來源塞進同一個 LATERAL 的 UNION 派生表——那樣每一列都要物化一次，
+ * 年度查詢實測會從 0.7 秒變成 10 秒；分開成「索引查得到的聚合」＋「純欄位運算」才快。 */
 function vkQcSQL(string $bi='bi'): string {
-    return "(CASE WHEN $bi.QC_check_date IS NOT NULL AND DATE($bi.QC_check_date)>=DATE($bi.outsource_date)\n"
-         . "                THEN DATE($bi.QC_check_date) END)";
+    $far = "DATE('9999-12-31')";
+    $own = "(CASE WHEN DATE($bi.QC_check_date) >= DATE($bi.outsource_date) THEN DATE($bi.QC_check_date) END)";
+    return "NULLIF(LEAST(COALESCE($own,$far),COALESCE(vkq.qd,$far)),$far)";
+}
+// 顯示用：這一站實際最早的 QC 檢驗日（不管早不早於發包日，QC 欄要印出來給人看）
+function vkQcAtSQL(string $bi='bi'): string {
+    $far = "DATE('9999-12-31')";
+    return "NULLIF(LEAST(COALESCE(DATE($bi.QC_check_date),$far),COALESCE(vkq.qd_all,$far)),$far)";
 }
 /* 實際回廠日＝三個來源取最早的那一天。
  * 用 9999-12-31 當「沒有值」的替身再 NULLIF 掉，是因為 MySQL 的 LEAST 只要有一個 NULL 就整個回 NULL，
@@ -283,6 +309,7 @@ function vkPeriodRows(PDO $pdo, string $mode, string $period, string $makerF='',
                  DATE(bi.return_date) AS rd_orig,
                  vkt.td AS rd_log,
                  ".vkQcSQL()." AS rd_qc,
+                 ".vkQcAtSQL()." AS qc_at,
                  ".vkRdSQL()." AS rd,
                  ".vkRdSrcSQL()." AS rd_src,
                  b.Delivery_date AS dd,
@@ -294,7 +321,7 @@ function vkPeriodRows(PDO $pdo, string $mode, string $period, string $makerF='',
           LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
           LEFT JOIN bom b ON b.bom=bi.bom
           LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
-          ".vkTlogJoin()."
+          ".vkBackJoin()."
           $wSQL ORDER BY COALESCE(ml.maker_id,bi.maker_id), bi.outsource_date DESC";
     $st=$pdo->prepare($sql); $st->execute($fp);
     $allRows=$st->fetchAll(PDO::FETCH_ASSOC);

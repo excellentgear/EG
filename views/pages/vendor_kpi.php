@@ -422,7 +422,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                         'proc'=>$r['ProcessName'],'sqty'=>$r['sqty'],
                         'od'=>$r['od'],'rd'=>$r['rd'],'rd_orig'=>$r['rd_orig'],'rd_log'=>$r['rd_log'],'rd_qc'=>$r['rd_qc'],
                         'rd_src'=>$r['rd_src'],'deadline'=>$r['deadline'],'tol'=>$r['tol'],
-                        'status'=>$r['status'],'days'=>$r['days'],'qc'=>$r['QC_check'],
+                        'status'=>$r['status'],'days'=>$r['days'],'qc'=>$r['QC_check'],'qc_at'=>$r['qc_at'],
                         'dd'=>$r['dd']?substr((string)$r['dd'],0,10):null];
             }
             $total=count($out);
@@ -462,6 +462,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                     DATE(bi.return_date) AS rd_orig,
                     vkt.td AS rd_log,
                     ".vkQcSQL()." AS rd_qc,
+                    ".vkQcAtSQL()." AS qc_at,
                     ".vkRdSQL()." AS rd,
                     ".vkRdSrcSQL()." AS rd_src,
                     b.Delivery_date AS dd,
@@ -471,7 +472,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                 LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
                 LEFT JOIN bom b ON b.bom=bi.bom
                 LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
-                ".vkTlogJoin()."
+                ".vkBackJoin()."
                 WHERE $cond AND bi.outsource_date IS NOT NULL
                   AND DATE(bi.outsource_date) BETWEEN :ds AND :de
                   AND DATE(bi.outsource_date) <= :cutoff
@@ -545,7 +546,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                     AVG(DATEDIFF(".vkRdSQL().",DATE(bi.outsource_date))) AS avg_d
                     FROM bom_ing bi
                     LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
-                    ".vkTlogJoin()."
+                    ".vkBackJoin()."
                     WHERE $cond AND bi.outsource_date IS NOT NULL
                       AND DATE(bi.outsource_date) BETWEEN :ds AND :de
                       AND DATE(bi.outsource_date) <= :cut");
@@ -595,7 +596,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                     SUM(CASE WHEN bi.QC_check='ng' THEN 1 ELSE 0 END) AS ng,
                     AVG(DATEDIFF(".vkRdSQL().",DATE(bi.outsource_date))) AS avg_d
                     FROM bom_ing bi LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
-                    ".vkTlogJoin()."
+                    ".vkBackJoin()."
                     WHERE $cond AND bi.outsource_date IS NOT NULL
                       AND DATE(bi.outsource_date) BETWEEN :ds AND :de
                       AND DATE(bi.outsource_date) <= :cut");
@@ -640,7 +641,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                 FROM bom_ing bi
                 LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
                 LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
-                ".vkTlogJoin()."
+                ".vkBackJoin()."
                 WHERE bi.outsource_date IS NOT NULL
                   AND DATE(bi.outsource_date) BETWEEN ? AND ?
                   AND DATE(bi.outsource_date) <= ?
@@ -708,7 +709,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                 FROM bom_ing bi
                 LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
                 LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
-                ".vkTlogJoin()."
+                ".vkBackJoin()."
                 WHERE bi.outsource_date IS NOT NULL
                   AND ".vkRdSQL()." < DATE(bi.outsource_date)
                 ORDER BY bi.outsource_date DESC LIMIT 200
@@ -1580,6 +1581,16 @@ function renderTable(){
 }
 function goPage(p){G.page=p;renderTable();}
 
+/* QC 欄：結果＋檢驗日期（唯一實作，廠商明細與發包明細面板共用）
+ * 檢驗日取自 qc_check 檢驗紀錄表與 bom_ing.QC_check_date 的最早一次；
+ * 有日期沒結果（驗了還沒填結果）時仍要把日期印出來，不然看起來像沒驗過。 */
+function qcCell(res,at){
+    var r=(res===null||res===undefined)?'':String(res);
+    var d=at?String(at).substr(0,10):'';
+    if(!r&&!d) return '—';
+    return (r?esc(r):'<span style="color:#aaa;">未填結果</span>')
+         + (d?'<span style="display:block;font-size:10px;color:#888;line-height:13px;">'+esc(d)+'</span>':'');
+}
 /* 回廠日來源標籤（唯一實作，廠商明細與發包明細面板共用）
  * rd_src：return=生管登錄的就是最早／transfer·qc=沒登錄，用憑單或 QC 檢驗日補上
  *         transfer_earlier·qc_earlier=有登錄，但憑單／QC 日更早，採用較早者
@@ -1667,7 +1678,7 @@ function renderPR(){
           +'<td style="color:var(--info);">'+esc(d.deadline||'—')+'<span style="color:#bbb;font-size:10px;line-height:13px;"> +'+esc(d.tol)+'日</span></td>'
           +'<td style="color:'+sc+';font-weight:600;">'+stx+'</td>'
           +'<td style="text-align:center;color:#888;">'+(d.days!==null&&d.days!==undefined?d.days+'天':'—')+'</td>'
-          +'<td style="color:'+qcc+';">'+esc(d.qc||'—')+'</td>'
+          +'<td style="color:'+qcc+';">'+qcCell(d.qc,d.qc_at)+'</td>'
           +'</tr>';
     });
     $('#pr-tbody').html(h);
@@ -1698,7 +1709,7 @@ function prExportCsv(){
         ];
         (r.data||[]).forEach(function(d){
             rows.push([d.maker_name||'',d.maker_id_no||'',d.proc||'',d.bom||'',d.bom_sn||'',d.sqty||'',
-                d.od||'',d.rd||'',srcTxt[d.rd_src]||'',d.rd_orig||'',d.rd_log||'',d.rd_qc||'',d.deadline||'',d.tol||'',
+                d.od||'',d.rd||'',srcTxt[d.rd_src]||'',d.rd_orig||'',d.rd_log||'',(d.qc_at||d.rd_qc||''),d.deadline||'',d.tol||'',
                 d.status==='ontime'?'準時':d.status==='late'?'逾期':'未回廠',
                 (d.days===null||d.days===undefined)?'':d.days,d.qc||'']);
         });
@@ -1766,7 +1777,7 @@ function renderDetail(mk){
           +'<td style="color:var(--info);">'+esc(d.ontime_deadline||'—')+'</td>'
           +'<td class="'+sc+'">'+st+'</td>'
           +'<td style="font-size:11px;text-align:center;">'+wdCell+'</td>'
-          +'<td style="'+qcc+'">'+esc(d.QC_check||'—')+'</td>'
+          +'<td style="'+qcc+'">'+qcCell(d.QC_check,d.qc_at)+'</td>'
           +'<td style="font-size:10px;color:#aaa;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+esc(d.remark||'')+'">'+esc(d.remark||'')+'</td>'
           +'</tr>';
     });
