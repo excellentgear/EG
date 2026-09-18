@@ -2476,6 +2476,10 @@ function printStats(){
                ].join('　｜　');
 
   const css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;font-size:11px;color:#222;margin:0;'
+    // 內容自己留一圈安全距離：使用者若在列印設定把「邊界」改成「無」，@page 的邊界會被覆蓋成 0，
+    // 內容就會貼到紙張最邊緣、被印表機的不可列印區吃掉（使用者回報「列印溢出」）。
+    // 有了 body padding，不管邊界設「預設」還是「無」，內容都不會被切。
+    + 'padding:5mm 6mm 7mm;box-sizing:border-box;'
     + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
     + '.p-title{text-align:center;font-size:20px;font-weight:700;letter-spacing:2px;margin:0 0 2px;}'
     + '.p-sub{text-align:center;font-size:14px;font-weight:700;color:#8A5A2B;margin:0 0 4px;}'
@@ -2501,7 +2505,7 @@ function printStats(){
     + '.empty-note,.no-print,.tag-soft{display:none;}'
     + '.p-period{font-size:8.5px;color:#666;white-space:nowrap;}'   // 人員明細姓名下方的在本部門期間
     + '.p-foot{margin-top:8px;font-size:9.5px;color:#555;text-align:right;}'
-    + '@page{size:A4 landscape;margin:12mm 8mm 16mm;'
+    + '@page{size:A4 landscape;margin:7mm 4mm 11mm;'   // 內容的安全距離改由 body padding 負責，這裡只留頁尾 margin box 的空間
     + (PRINT_FOOTER ? " @bottom-right{ content:'" + PRINT_FOOTER.replace(/'/g, "\\'") + "'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
     + '}';
 
