@@ -74,6 +74,11 @@ $thisYear = (int)date('Y');
         table.cs-tb { width:100%; border-collapse:collapse; font-size:12.5px; background:#fff; }
         table.cs-tb th, table.cs-tb td { border:1px solid var(--line); padding:4px 6px; text-align:center; }
         table.cs-tb thead th { background:var(--sand); color:#6B4423; white-space:nowrap; position:sticky; top:0; z-index:2; }
+        /* 兩列表頭（逐客戶評分）：第二列一定要停在第一列正下方。
+           兩列都寫 top:0 的話會疊在同一條上——分組標題「系統自動計算／滿意度評比」整列被蓋掉，
+           而黏住的高度只剩一列，捲上來的資料列就從空出來的那條露出來（使用者回報的症狀）。
+           第一列高度由 syncStatHead() 量好寫進 --cs-th1，字級或換行變了也會自己跟著調。 */
+        table.cs-tb thead tr:nth-child(2) th { top:var(--cs-th1, 26px); }
         table.cs-tb td.tl { text-align:left; }
         table.cs-tb tbody tr:hover { background:#FFFDF8; }
         /* 自動算出來的欄位：淺綠底＝系統算的；問卷欄位：淺藍底＝一定要人填。
@@ -155,10 +160,14 @@ $thisYear = (int)date('Y');
         <strong style="color:var(--ink);">逐客戶評分（每項 10 分）</strong>
         <span class="muted-help" id="statCount"></span>
         <?php if ($perms['canAdmin']): ?>
-        <button class="btn btn-xs btn-warm-o" id="btnFillSuggest" style="margin-left:auto;"
-                title="把系統算出來的品質分與交期分一次帶入所有客戶（已經填過的不覆蓋）">
-          <i class="fa fa-magic"></i> 帶入系統建議分
-        </button>
+        <span style="margin-left:auto;display:flex;gap:6px;">
+          <button class="btn btn-xs btn-warm-o" id="btnCleanDead" style="display:none;"
+                  title="本期間沒有出貨、只因為之前按過「帶入系統建議分」才留著的評分列；有人真的填過技術／服務／價格或備註的不會被刪"></button>
+          <button class="btn btn-xs btn-warm-o" id="btnFillSuggest"
+                  title="把系統算出來的品質分與交期分一次帶入所有客戶（已經填過的不覆蓋）">
+            <i class="fa fa-magic"></i> 帶入系統建議分
+          </button>
+        </span>
         <?php endif; ?>
       </div>
       <div class="cs-scroll">
@@ -252,11 +261,19 @@ $thisYear = (int)date('Y');
         <li><b>準交率</b>＝訂單追蹤的交期 vs 出貨。<b>判定口徑直接沿用 KPI「準時出貨率」的年度設定</b>，
             所以同一家客戶在 KPI 頁與這一頁看到的數字是同一套規則算出來的。要改口徑請到
             <b>KPI 設定頁 → 準時出貨率 → 未交判定方式</b>，這裡刻意不另開一個開關（兩個開關必定打架）。</li>
-        <li><b>退貨率／退貨件數</b>＝退貨追蹤（<code>ir_track</code>）；退貨率的分母是同期間該客戶的出貨量。</li>
+        <li><b>退貨率／退貨件數</b>＝退貨追蹤（<code>ir_track</code>）。口徑是「<b>本期間交出去的貨，有多少被退回來</b>」：
+            分母＝本期間出貨量、分子＝本期間出貨中被退回的量，所以<b>不可能超過 100%</b>。
+            <b>退貨的月份跟出貨的月份常常不是同一個</b>，因此每一張退貨單會依「同客戶＋同料號、出貨日不晚於退貨日」
+            <b>往回沖銷到它原本那批出貨</b>（由最近一次出貨開始沖），沖到哪一期就算在哪一期。
+            滑鼠移到退貨欄可看到明細（ERP 這段期間開了幾張、其中幾筆是更早期間出的貨、有沒有查不到對應出貨的）。</li>
         <li><b>客戶開立異常處理單件數</b>＝異常矯正處理單中「對方是客戶」那一種，依填表日期歸期間。</li>
         <li><b>品質分／交期分的「系統建議分」</b>＝把退貨率與準交率照設定的級距換算成 10 分制。
             建議分只是帶入，<b>填進去之後仍可手動改</b>；級距可在「設定」調整。</li>
       </ul>
+      <h4>表上會列出哪些客戶</h4>
+      <p><b>只列本期間真的有出貨的客戶</b>（另加「有退貨算在本期間」的）。<b>只有訂單、沒有出貨的不列</b>——
+         客戶滿意度評的是交出去的貨，而訂單那一側常有代號沒建主檔的假客戶（例 <code>NA</code>），
+         列出來只會多一列沒人填得下去的空白。當然更不會把整份客戶主檔（900 多家）全部列出來。</p>
       <h4>哪些一定要人填（很重要）</h4>
       <p><b>技術、服務、價格三項系統算不出來</b>——站上沒有任何資料可以推導客戶對技術支援、服務態度、
          價格的感受，那三項只能來自 <b>2-SM-02-02 客戶滿意度調查問卷</b>回收的結果。
@@ -418,9 +435,12 @@ function loadStat(){
         ST.rows = r.rows||[]; ST.mode = r.undone_mode; ST.modeLabel = r.undone_label; ST.period = r.period;
         $('#modeNote').html(
             '期間：<b>'+esc(r.period)+'</b>（'+dispDate(r.range[0])+' ~ '+dispDate(r.range[1])+'）　'
-          + '共 <b>'+ST.rows.length+'</b> 家有往來的客戶。<br>'
+          + '共 <b>'+ST.rows.length+'</b> 家客戶　'
+          + '<span class="muted-help">（本期間真的有出貨的才列；只有訂單、沒有出貨的不列）</span><br>'
           + '準交率判定方式：<b>'+esc(r.undone_label)+'</b>　'
           + '<span class="muted-help">（沿用 KPI「準時出貨率」該年度的設定，要改請到 KPI 設定頁，這裡刻意不另開開關）</span><br>'
+          + '<span class="muted-help">退貨率＝<b>本期間出的貨被退回多少</b>（退貨依同客戶同料號往回沖銷到它原本的那批出貨，'
+          + '所以退貨月份與出貨月份不同也算得對，上限 100%）。</span><br>'
           + '<span class="muted-help">淺綠欄＝系統自動算；淺藍欄（技術／服務／價格）系統算不出來，'
           + '請照 2-SM-02-02 客戶滿意度調查問卷回收結果填寫，留白代表「尚未填」不是 0 分。</span>');
         // 監控表的客戶下拉用同一份資料，不另外查一次
@@ -441,19 +461,36 @@ function scoreCell(i, key, cls){
          + 'value="'+(v===null||v===undefined?'':v)+'" '+(CAN_ADMIN?'':'readonly')+' '
          + 'title="0~10 分，留白＝尚未填">';
 }
+/* 退貨欄的滑鼠提示：講清楚這個數字是怎麼來的，尤其是「退貨月份 ≠ 出貨月份」那幾筆跑去哪裡了 */
+function retTip(r){
+    if(r.return_rate===null && !(r.return_cnt||0)) return '本期間出的貨沒有被退回，或本期間沒有出貨（沒有出貨就不算率）';
+    var t = '本期間出貨 '+(r.ship_qty||0)+'，其中被退回 '+(r.return_qty||0)+' → '+(r.return_rate===null?'—':r.return_rate+'%');
+    if (r.return_erp_cnt||r.return_erp_qty)
+        t += '\nERP 這段期間開出的退貨單：'+(r.return_erp_cnt||0)+' 筆 / '+(r.return_erp_qty||0);
+    if (r.return_cross_qty)
+        t += '\n其中 '+r.return_cross_qty+' 是更早期間出的貨（已算到那一期，不算在本期）';
+    if (r.return_unmatched_qty)
+        t += '\n另有 '+r.return_unmatched_qty+'（'+(r.return_unmatched_cnt||0)+' 筆）查不到對應的出貨（同客戶同料號），仍計入本期分子';
+    return t;
+}
 function renderStat(){
-    if(!ST.rows.length){ $('#statBody').html('<tr><td colspan="13" style="padding:20px;color:#999;">此期間沒有任何有往來的客戶（沒有訂單交期、沒有出貨、也沒有退貨）</td></tr>'); $('#statCount').text(''); return; }
+    if(!ST.rows.length){ $('#statBody').html('<tr><td colspan="13" style="padding:20px;color:#999;">此期間沒有任何出貨，也沒有算在這段期間的退貨</td></tr>'); $('#statCount').text(''); syncStatHead(); return; }
     var h='';
     ST.rows.forEach(function(r,i){
         var over = parseInt(r.ontime_over||0)>0;
         h+='<tr>'
           +'<td>'+(i+1)+'</td>'
-          +'<td class="tl">'+esc(r.customer_name)+(r.customer_id?'<br><span class="muted-help">'+esc(r.customer_id)+'</span>':'')+'</td>'
+          +'<td class="tl">'+esc(r.customer_name)+(r.customer_id?'<br><span class="muted-help">'+esc(r.customer_id)+'</span>':'')
+          /* 本期沒有出貨、只因為先前評過分才留著的列——填過的分數不可以憑空消失，但要標示清楚 */
+          +(r.no_activity?'<br><span class="muted-help" style="color:#C77C1A;">本期無出貨（先前已評分）</span>':'')+'</td>'
           +'<td class="col-auto'+(over?' warn-over':'')+'" title="'+(over?'ERP 未交筆數比訂單筆數還多 '+r.ontime_over+' 筆，這兩份資料對不起來，本欄僅供參考':'準時 '+r.ontime_num+' / 訂單 '+r.ontime_den)+'">'
           + (r.ontime_rate===null?'—':r.ontime_rate+'%')
           + '<div class="muted-help">'+r.ontime_num+'/'+r.ontime_den+(over?' ⚠':'')+'</div></td>'
-          +'<td class="col-auto">'+(r.return_rate===null?'—':r.return_rate+'%')+'</td>'
-          +'<td class="col-auto">'+(r.return_cnt||0)+'</td>'
+          +'<td class="col-auto" title="'+esc(retTip(r))+'">'+(r.return_rate===null?'—':r.return_rate+'%')
+          + (r.return_qty?'<div class="muted-help">'+r.return_qty+'/'+(r.ship_qty||0)+'</div>':'')+'</td>'
+          +'<td class="col-auto" title="'+esc(retTip(r))+'">'+(r.return_cnt||0)
+          + ((r.return_cross_cnt||0)?'<div class="badge-sug" style="color:#8a7560;">ERP '+(r.return_erp_cnt||0)+'，'+r.return_cross_cnt+' 筆歸其他期</div>':'')
+          + ((r.return_unmatched_cnt||0)?'<div class="badge-sug" style="color:#C77C1A;">查無出貨 '+r.return_unmatched_cnt+'</div>':'')+'</td>'
           +'<td class="col-auto">'+(r.car_count||0)+'</td>'
           +'<td class="col-auto">'+scoreCell(i,'score_quality')
           + '<div class="badge-sug">'+(r.suggest_quality===null?'—':'建議 '+r.suggest_quality)+'</div></td>'
@@ -469,7 +506,38 @@ function renderStat(){
     $('#statBody').html(h);
     var filled = ST.rows.filter(function(r){ return r.avg_score!==null&&r.avg_score!==undefined; }).length;
     $('#statCount').text('（已評分 '+filled+' / '+ST.rows.length+' 家）');
+    var dead = ST.rows.filter(function(r){ return r.no_activity; }).length;
+    $('#btnCleanDead').toggle(dead>0).html('<i class="fa fa-eraser"></i> 清除本期無出貨的 '+dead+' 列');
+    syncStatHead();
 }
+/* 清除「本期無出貨（先前已評分）」那些列。先跟後端要一次實際會刪幾列再問使用者，
+   不要用畫面上的數字當依據（有人填過技術／服務／價格或備註的後端會保留，數字不一樣）。 */
+$(document).on('click', '#btnCleanDead', function(){
+    ajxPost({action:'score_cleanup', year:$('#fYear').val(), quarter:$('#fQuarter').val(), dry:1}, function(r){
+        if(!r||!r.ok){ alert('查不到可清除的列：'+((r&&r.error)||'未知原因')); return; }
+        if(!r.del){ alert('沒有可以清除的列'+(r.kept?('（'+r.kept+' 列有人填過技術／服務／價格或備註，一律保留）'):'')); return; }
+        var msg='將清除 '+r.del+' 列「本期間沒有出貨」的評分'
+              + (r.kept?('\n另有 '+r.kept+' 列有人填過技術／服務／價格或備註，不會刪。'):'')
+              + '\n\n例：'+(r.names||[]).slice(0,8).join('、')
+              + '\n\n要繼續嗎？（刪掉之後按「帶入系統建議分」可以重新產生）';
+        if(!confirm(msg)) return;
+        ajxPost({action:'score_cleanup', year:$('#fYear').val(), quarter:$('#fQuarter').val()}, function(r2){
+            if(!r2||!r2.ok){ alert('清除失敗：'+((r2&&r2.error)||'未知原因')); return; }
+            alert('已清除 '+r2.deleted+' 列'+(r2.kept?('，保留 '+r2.kept+' 列有人填過的'):''));
+            loadStat();
+        });
+    });
+});
+/* 兩列表頭的第二列要停在第一列正下方（CSS 的 --cs-th1）。
+   第一列高度會隨字級、欄寬換行而變，寫死數字遲早對不上，所以量出來再寫回去。 */
+function syncStatHead(){
+    var t=document.getElementById('statTable');
+    if(!t||!t.tHead||!t.tHead.rows[0]) return;
+    var h=t.tHead.rows[0].getBoundingClientRect().height;
+    if(h>0) t.style.setProperty('--cs-th1', h+'px');
+}
+$(window).on('resize', syncStatHead);
+$(document).ready(syncStatHead);
 function recalcAvg(i){
     var r=ST.rows[i], v=[];
     ['score_quality','score_delivery','score_tech','score_service','score_price'].forEach(function(k){
@@ -749,9 +817,11 @@ function csvDump(name, head, rows){
 
 <?php if ($perms['canAdmin']): ?>
 /* ══════════ 設定 ══════════ */
-$('#btnSetting').on('click', function(){
+/* 事件委派（不綁死在載入當下那顆按鈕上），且任何一條失敗路徑都要講出來——
+   原本 `if(!r.ok) return;` 是靜默結束，使用者看到的就是「按了完全沒反應」，連原因都查不到。 */
+$(document).on('click', '#btnSetting', function(){
     ajxGet({action:'setting_get'}, function(r){
-        if(!r.ok) return;
+        if(!r||!r.ok){ alert('讀不到設定：'+((r&&r.error)||'未知原因')+'\n請重新整理頁面後再試一次。'); return; }
         ST.set=r;
         renderDocLabel('stat'); renderDocLabel('monitor');
         var s=$('#setStampTpl').html('<option value="0">（用系統預設印章）</option>');

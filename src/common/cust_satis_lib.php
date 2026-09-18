@@ -278,30 +278,103 @@ function cs_ontime_by_customer(PDO $db, string $from, string $to, string $mode =
 
 /**
  * 逐客戶退貨（ir_track＝退貨追蹤）。
- * 退貨率的分母用「同期間該客戶的出貨數量」（is_list），沒有出貨就不算率（不是算成 0%）。
- * @return array customer_name => ['cnt'=>退貨筆數, 'qty'=>退貨數量, 'ship_qty'=>出貨量, 'rate'=>%|null]
+ *
+ * 口徑（2026-09-18 依使用者指正改）：退貨率＝「本期間交出去的貨，有多少被退回來」，
+ * 分母＝本期間出貨量、分子＝本期間出貨中被退回的量，**結構上不可能超過 100%**。
+ *
+ * 不可以直接拿「本期間發生的退貨量 ÷ 本期間出貨量」——**退貨的月份跟出貨的月份常常不是同一個**：
+ * 實測伍宏 2026 年出 245 支、退 484 支，舊算法得出 197.55%，而那 484 支裡有 242 支是 2025 年 6 月出的貨。
+ * 因此每一張退貨單依「同客戶＋同料號主檔（d_setting_id）、出貨日不晚於退貨日」往回沖銷，
+ * **由最近的一次出貨開始**（剛交過去的那批才是被退回來的），沖完為止；沖到哪一期的出貨，
+ * 就算在哪一期的分子上。退貨單依發生順序處理，同一批出貨不會被重複沖掉。
+ *
+ * 對不到任何出貨的退貨（找不到同客戶同料號、或出貨早到不在 is_list 裡）**不可以就這樣消失**：
+ * 一律算進「退貨日所在期間」的分子，並另外回報筆數讓畫面標示出來。
+ *
+ * @return array customer_name => [
+ *     'cnt'  => 算進本期間的退貨筆數,  'qty'  => 算進本期間的退貨量（分子）,
+ *     'ship_qty' => 本期間出貨量（分母）, 'rate' => %|null（沒有出貨就不算率，不是 0%）,
+ *     'erp_cnt'/'erp_qty'           => 退貨日落在本期間的原始筆數與數量（ERP 口徑，供對帳說明）,
+ *     'cross_cnt'/'cross_qty'       => 其中「對應的出貨不在本期間」而歸去別期的部分,
+ *     'unmatched_cnt'/'unmatched_qty'=> 對不到任何出貨的部分（仍計入分子）]
  */
 function cs_return_by_customer(PDO $db, string $from, string $to): array {
+    $blank = ['cnt'=>0, 'qty'=>0.0, 'ship_qty'=>0.0, 'rate'=>null,
+              'erp_cnt'=>0, 'erp_qty'=>0.0, 'cross_cnt'=>0, 'cross_qty'=>0.0,
+              'unmatched_cnt'=>0, 'unmatched_qty'=>0.0];
     $out = [];
-    try {
-        $st = $db->prepare("SELECT TRIM(Client_name) c, COUNT(*) cnt, COALESCE(SUM(Qty),0) qty
-                            FROM ir_track WHERE DATE(IR_date) BETWEEN ? AND ? GROUP BY TRIM(Client_name)");
-        $st->execute([$from, $to]);
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r)
-            $out[(string)$r['c']] = ['cnt'=>(int)$r['cnt'], 'qty'=>(float)$r['qty'], 'ship_qty'=>0.0, 'rate'=>null];
-    } catch (Throwable $e) {}
+    $touch = function (string $c) use (&$out, $blank) { if (!isset($out[$c])) $out[$c] = $blank; };
+
+    /* ① 分母：本期間出貨量 */
     try {
         $st = $db->prepare("SELECT TRIM(Client_name) c, COALESCE(SUM(Qty),0) q
                             FROM is_list WHERE DATE(Order_date) BETWEEN ? AND ? GROUP BY TRIM(Client_name)");
         $st->execute([$from, $to]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $c = (string)$r['c'];
-            if (!isset($out[$c])) $out[$c] = ['cnt'=>0, 'qty'=>0.0, 'ship_qty'=>0.0, 'rate'=>null];
-            $out[$c]['ship_qty'] = (float)$r['q'];
+            $c = (string)$r['c']; $touch($c); $out[$c]['ship_qty'] = (float)$r['q'];
         }
     } catch (Throwable $e) {}
+
+    /* ② 全部退貨單，依發生順序（沖銷一定要照時間先後，不然後來的退貨會先把貨吃掉） */
+    $rets = [];
+    try {
+        $st = $db->query("SELECT IR_id, TRIM(Client_name) c, d_setting_id ds, Qty q, DATE(IR_date) d
+                          FROM ir_track WHERE Qty>0 ORDER BY IR_date, IR_id");
+        $rets = $st->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) { $rets = []; }
+    if (!$rets) { foreach ($out as $c => $v) $out[$c]['rate'] = $v['ship_qty'] > 0 ? 0.0 : null; return $out; }
+
+    /* ③ 只撈「退貨單用得到」的那些客戶×料號的出貨（含更早期間，沖銷要往回找） */
+    $dsIds = []; $names = [];
+    foreach ($rets as $r) { $dsIds[(int)$r['ds']] = 1; $names[(string)$r['c']] = 1; }
+    $dsIds = array_keys($dsIds); $names = array_keys($names);
+    $ship = [];   // "客戶|料號主檔" => [['d'=>出貨日, 'left'=>還沒被退掉的量], …]（日期由舊到新）
+    if ($dsIds && $names) {
+        try {
+            $q1 = implode(',', array_fill(0, count($dsIds), '?'));
+            $q2 = implode(',', array_fill(0, count($names), '?'));
+            $st = $db->prepare("SELECT TRIM(Client_name) c, d_setting_id ds, Qty q, DATE(Order_date) d
+                                FROM is_list
+                                WHERE d_setting_id IN ($q1) AND TRIM(Client_name) IN ($q2) AND Qty>0
+                                ORDER BY Order_date, IS_id");
+            $st->execute(array_merge($dsIds, $names));
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $s)
+                $ship[$s['c'] . '|' . (int)$s['ds']][] = ['d'=>(string)$s['d'], 'left'=>(float)$s['q']];
+        } catch (Throwable $e) {}
+    }
+
+    /* ④ 逐張退貨往回沖銷 */
+    foreach ($rets as $r) {
+        $c = (string)$r['c']; $touch($c);
+        $rd = (string)$r['d'];
+        $inPeriodRet = ($rd >= $from && $rd <= $to);          // 退貨日落在本期間
+        if ($inPeriodRet) { $out[$c]['erp_cnt']++; $out[$c]['erp_qty'] += (float)$r['q']; }
+
+        $left = (float)$r['q']; $hitP = 0.0; $hitOther = 0.0;
+        $key  = $c . '|' . (int)$r['ds'];
+        if (isset($ship[$key])) {
+            $lst = &$ship[$key];
+            for ($i = count($lst) - 1; $i >= 0 && $left > 0; $i--) {   // 由最近的一次出貨往回沖
+                if ($lst[$i]['left'] <= 0 || $lst[$i]['d'] > $rd) continue;
+                $take = min($left, $lst[$i]['left']);
+                $lst[$i]['left'] -= $take; $left -= $take;
+                if ($lst[$i]['d'] >= $from && $lst[$i]['d'] <= $to) $hitP += $take; else $hitOther += $take;
+            }
+            unset($lst);
+        }
+        if ($hitP > 0) { $out[$c]['cnt']++; $out[$c]['qty'] += $hitP; }
+        if ($inPeriodRet && $hitOther > 0) { $out[$c]['cross_cnt']++; $out[$c]['cross_qty'] += $hitOther; }
+        if ($left > 0 && $inPeriodRet) {   // 對不到出貨的：算進本期間，但要標示出來
+            $out[$c]['unmatched_cnt']++; $out[$c]['unmatched_qty'] += $left;
+            if ($hitP <= 0) $out[$c]['cnt']++;
+            $out[$c]['qty'] += $left;
+        }
+    }
+
+    /* ⑤ 退貨率：沒有出貨就不算率（null，不是 0%）；上限 100%（分子本來就是分母的一部分，
+          只有「對不到出貨的退貨」有可能把它推過頭，那種情況一律以 100% 表示） */
     foreach ($out as $c => $v) {
-        $out[$c]['rate'] = $v['ship_qty'] > 0 ? round($v['qty'] / $v['ship_qty'] * 100, 2) : null;
+        $out[$c]['rate'] = $v['ship_qty'] > 0 ? min(100.0, round($v['qty'] / $v['ship_qty'] * 100, 2)) : null;
     }
     return $out;
 }
@@ -325,8 +398,12 @@ function cs_car_by_customer(PDO $db, string $from, string $to): array {
 
 /**
  * 一次算好某期間每一家客戶的自動指標，並附上建議分數。
- * 「有往來」的定義＝該期間有訂單交期、有出貨、或有退貨，三者任一即列入；
- * 否則整份客戶主檔（900 多家）會全部列出來，表上九成是空白列。
+ *
+ * 「有往來」的定義（2026-09-18 依使用者指正收斂）＝**該期間真的有出貨**（is_list），
+ * 另加「有退貨算進本期間」的（那也是實際往來，只是出貨在更早期間）。
+ * **只有訂單、沒有出貨的不列**——客戶滿意度評的是交出去的貨，訂單那一側常有測試用或代號沒建主檔的
+ * 假客戶（例：`NA` 只在 order_track 有 1 張訂單，客戶主檔查無此人，卻被列成一整列要人評分）。
+ * 實測 2026 年：舊定義 250 家 → 新定義 171 家。整份客戶主檔（900 多家）當然更不可以全列。
  *
  * @return array 依客戶簡稱排序的列，每列含 name/id/ontime/return/car/suggest_*
  */
@@ -345,8 +422,11 @@ function cs_auto_metrics(PDO $db, int $year, int $quarter): array {
         }
     } catch (Throwable $e) {}
 
-    $names = array_unique(array_merge(array_keys($ontime), array_keys($ret)));
-    foreach ($car as $cid => $_) { if (isset($nameOf[$cid])) $names[] = $nameOf[$cid]; }
+    // 只列「本期間有出貨」或「有退貨算在本期間」的客戶（$ret 兩種數字都在裡面）
+    $names = [];
+    foreach ($ret as $nm => $v) {
+        if ((float)$v['ship_qty'] > 0 || (int)$v['cnt'] > 0) $names[] = $nm;
+    }
     $names = array_values(array_unique(array_filter($names, 'strlen')));
     sort($names, SORT_FLAG_CASE | SORT_STRING);
 
@@ -364,6 +444,13 @@ function cs_auto_metrics(PDO $db, int $year, int $quarter): array {
             'ontime_over'   => (int)($o['undone_over'] ?? 0),   // >0＝ERP 未交比訂單還多，準交率僅供參考
             'return_cnt'    => $r['cnt'],  'return_qty' => $r['qty'],
             'ship_qty'      => $r['ship_qty'], 'return_rate' => $r['rate'],
+            // 退貨怎麼算出來的（畫面滑鼠提示用）：ERP 原始筆數／歸去別期的／查不到出貨的
+            'return_erp_cnt'       => (int)($r['erp_cnt'] ?? 0),
+            'return_erp_qty'       => (float)($r['erp_qty'] ?? 0),
+            'return_cross_cnt'     => (int)($r['cross_cnt'] ?? 0),
+            'return_cross_qty'     => (float)($r['cross_qty'] ?? 0),
+            'return_unmatched_cnt' => (int)($r['unmatched_cnt'] ?? 0),
+            'return_unmatched_qty' => (float)($r['unmatched_qty'] ?? 0),
             'car_count'     => $cc,
             // 建議分：算不出來時一律 null（留白讓人填），**不可以給 0 分**——
             // 0 分代表「很差」，跟「沒有資料」是完全不同的意思，印在稽核表上會冤枉客戶關係。
@@ -408,6 +495,19 @@ function cs_avg(array $row) {
  * ============================================================ */
 
 /** 某期間的統計資料表內容＝自動指標 ∪ 已存的評分（左外聯，沒存過的也要列出來讓人填） */
+/**
+ * 存 cs_score／cs_monitor 時用的客戶鍵。
+ * ERP 的出貨簡稱常常在客戶主檔查不到（實測 2026 年 54 家），那些客戶 `customer_id` 是空的，
+ * 唯一鍵 (year,quarter,customer_id) 會讓它們全部擠在同一列，所以空代號一律補成 `#簡稱`。
+ * **這個規則只寫在這裡一處**——寫入端補了、讀取端沒補，就會變成「分數存得進去卻讀不回來」：
+ * 統計表會同時長出一列空白的（自動指標那列）與一列「本期無出貨」的（存起來那列），
+ * 而監控表則是存了之後再打開完全空白，兩種症狀都不會報錯。
+ */
+function cs_score_cid(string $cid, string $name): string {
+    $cid = trim($cid);
+    return $cid !== '' ? $cid : '#' . mb_substr(trim($name), 0, 18);
+}
+
 function cs_stat_rows(PDO $db, int $year, int $quarter): array {
     $auto = cs_auto_metrics($db, $year, $quarter);
     $saved = [];
@@ -419,7 +519,7 @@ function cs_stat_rows(PDO $db, int $year, int $quarter): array {
     // 客戶代號可能是空的（主檔沒這家），所以 key 用「代號|簡稱」兩段，避免不同家被併在一起
     $out = [];
     foreach ($auto as $a) {
-        $k = $a['customer_id'] . '|' . $a['customer_name'];
+        $k = cs_score_cid((string)$a['customer_id'], (string)$a['customer_name']) . '|' . $a['customer_name'];
         $s = $saved[$k] ?? null;
         $row = $a + [
             'score_quality'  => $s ? cs_score_norm($s['score_quality'])  : null,
@@ -499,10 +599,12 @@ function cs_monitor_meet(string $autoKey, $raw, ?string $target): ?bool {
 
 /** 某客戶某期間的監控表列；沒建過就依預設調查項目即時組出來（不落庫，按儲存才存） */
 function cs_monitor_rows(PDO $db, int $year, int $quarter, string $customerId, string $customerName): array {
+    // 存檔時空代號會被補成 `#簡稱`，讀取端一定要用同一支函式補一次，否則存了打開卻是空白
+    $key = cs_score_cid($customerId, $customerName);
     $saved = [];
     try {
         $st = $db->prepare("SELECT * FROM cs_monitor WHERE year=? AND quarter=? AND customer_id=? ORDER BY sort_order, id");
-        $st->execute([$year, $quarter, $customerId]);
+        $st->execute([$year, $quarter, $key]);
         $saved = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
     } catch (Throwable $e) {}
 
@@ -517,7 +619,7 @@ function cs_monitor_rows(PDO $db, int $year, int $quarter, string $customerId, s
     $satisAvg = null;
     try {
         $st = $db->prepare("SELECT * FROM cs_score WHERE year=? AND quarter=? AND customer_id=? LIMIT 1");
-        $st->execute([$year, $quarter, $customerId]);
+        $st->execute([$year, $quarter, $key]);
         $sc = $st->fetch(PDO::FETCH_ASSOC);
         if ($sc) $satisAvg = cs_avg($sc);
     } catch (Throwable $e) {}

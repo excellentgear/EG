@@ -47,7 +47,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 /* 寫入類先驗登入再驗 CSRF（順序不可顛倒，理由同其他模組：session 被 GC 掃掉時
    token 會在同一個請求裡重新產生、比對必定不過，但那是「已被登出」不是 CSRF 攻擊） */
-$WRITE = ['score_save', 'summary_save', 'monitor_save', 'setting_save', 'asdoc_save', 'print_log'];
+$WRITE = ['score_save', 'score_cleanup', 'summary_save', 'monitor_save', 'setting_save', 'asdoc_save', 'print_log'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['cs_csrf'], $tok))
@@ -96,9 +96,8 @@ case 'score_save': {
     $cid  = trim((string)($_POST['customer_id'] ?? ''));
     $cnm  = trim((string)($_POST['customer_name'] ?? ''));
     if ($cnm === '') jerr('缺少客戶');
-    // 客戶代號可能是空的（ERP 的出貨簡稱在主檔查不到那一家），此時以簡稱當鍵；
-    // 唯一鍵是 (year,quarter,customer_id)，所以代號空白時用簡稱補上避免整批擠在同一列
-    if ($cid === '') $cid = '#' . mb_substr($cnm, 0, 18);
+    // 客戶代號可能是空的（ERP 的出貨簡稱在主檔查不到那一家），一律走唯一實作補成 `#簡稱`
+    $cid = cs_score_cid($cid, $cnm);
     /* 【只更新「有送過來」的欄位】
        用 array_key_exists 判有沒有送，不是判空值（本專案既有慣例，見 CLAUDE.md 製表人那次）：
          沒送這個欄位   ＝呼叫端不打算動它 → 保留原值
@@ -150,6 +149,37 @@ case 'score_save': {
     jout(['avg' => cs_avg($vals)]);
 }
 
+/* 清掉「本期間根本沒有出貨」卻留著評分的列。
+   這些列多半是舊版把「只有訂單、沒有出貨」的客戶（例 NA 這種代號沒建主檔的假客戶）也列進表裡，
+   再按一次「帶入系統建議分」整批建出來的。**只刪系統帶出來的**：
+   技術／服務／價格任一有填、或備註有字＝有人真的填過，一律保留並回報，不可以連人填的一起刪。 */
+case 'score_cleanup': {
+    list($y, $q) = csYQ();
+    $keep = [];
+    foreach (cs_auto_metrics($db, $y, $q) as $a)   // 鍵一律過 cs_score_cid（空代號＝`#簡稱`），
+        $keep[cs_score_cid((string)$a['customer_id'], (string)$a['customer_name'])] = 1;   // 不然會把有往來的也判成要刪
+    $del = []; $kept = 0; $names = [];
+    try {
+        $st = $db->prepare("SELECT * FROM cs_score WHERE year=? AND quarter=?");
+        $st->execute([$y, $q]);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            if (isset($keep[cs_score_cid((string)$r['customer_id'], (string)$r['customer_name'])])) continue;
+            $human = $r['score_tech'] !== null || $r['score_service'] !== null || $r['score_price'] !== null
+                     || trim((string)$r['remark']) !== '';
+            if ($human) { $kept++; continue; }
+            $del[] = (int)$r['id']; $names[] = (string)$r['customer_name'];
+        }
+    } catch (Throwable $e) { jerr('讀取失敗：' . $e->getMessage(), 500); }
+    if (!empty($_POST['dry'])) jout(['del'=>count($del), 'kept'=>$kept, 'names'=>array_slice($names, 0, 30)]);
+    if ($del) {
+        try {
+            $in = implode(',', array_fill(0, count($del), '?'));
+            $db->prepare("DELETE FROM cs_score WHERE id IN ($in)")->execute($del);
+        } catch (Throwable $e) { jerr('刪除失敗：' . $e->getMessage(), 500); }
+    }
+    jout(['deleted'=>count($del), 'kept'=>$kept]);
+}
+
 case 'summary_save': {
     list($y, $q) = csYQ();
     $txt = mb_substr((string)($_POST['analysis_text'] ?? ''), 0, 4000);
@@ -190,7 +220,7 @@ case 'monitor_save': {
     $cid = trim((string)($_POST['customer_id'] ?? ''));
     $cnm = trim((string)($_POST['customer_name'] ?? ''));
     if ($cnm === '') jerr('缺少客戶');
-    if ($cid === '') $cid = '#' . mb_substr($cnm, 0, 18);
+    $cid = cs_score_cid($cid, $cnm);
     $items = json_decode((string)($_POST['items'] ?? '[]'), true);
     if (!is_array($items)) jerr('資料格式錯誤');
     if (count($items) > 30) jerr('調查項目最多 30 列');
