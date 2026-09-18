@@ -85,6 +85,10 @@ case 'get_all': {
         'year'=>$year, 'years'=>kpi_as_years($db), 'years_addable'=>kpi_as_years_addable($db),
         'indicators'=>$indicators,
         'registry'=>kpi_as_registry(),
+        // 排除客戶要綁客戶ID（使用者要求 2026-09-18：避免打錯字造成計算有誤）
+        'clients'=>kpi_as_client_options($db),
+        // 明細跳窗裡建立的排除規則也要在設定頁看得到，不然兩邊各設一套自己都搞不清楚
+        'excl_rules'=>kpi_as_excl_rules_all($db, $year),
         'rules'=>$rules,
         'settings'=>[
             'attach_base'=>kpi_as_setting($db, 'kpi_attach_base'),

@@ -591,6 +591,24 @@ function openParams(i){
         h += '</label>';
         h += renderParamInput(pm, v, pi);
     });
+    // 明細跳窗裡建立的排除規則也要在這裡看得到（使用者要求 2026-09-18），
+    // 否則兩邊各設一套，自己都搞不清楚到底排除了哪些
+    var rs = (DATA.excl_rules || {})[r.indicator_id] || [];
+    if (rs.length) {
+        var lb = {client:'客戶', part:'料號', proc:'製程', maker:'廠商', machine:'機台',
+                  designer:'設計者', unit:'受訓單位'};
+        var rh = '<div style="margin:6px 0 10px;padding:6px 8px;background:#FBF5EA;border:1px solid #EADFC8;'
+               + 'border-radius:4px;font-size:12px;color:#8a6d45;"><b>已在「不符合標準的明細」設定的排除規則</b>'
+               + '（要增刪請到 KPI 總覽點該格→不符合標準的明細）：<br>';
+        rs.forEach(function(x){
+            rh += '<span style="display:inline-block;background:' + (x.scope === 'all' ? '#F0A24B;color:#fff' : '#F7E0BD;color:#8A5A2B')
+                + ';border-radius:10px;padding:1px 8px;margin:2px 4px 2px 0;">'
+                + esc(lb[x.dim] || x.dim) + '：' + esc(x.val)
+                + '<span style="font-size:10px;margin-left:5px;">'
+                + (x.scope === 'all' ? '所有年度' : (x.year + ' 年度')) + '</span></span>';
+        });
+        h = rh + '</div>' + h;
+    }
     $('#pBody').html(h);
     $('#pMask').show();
 }
@@ -664,10 +682,38 @@ function renderParamInput(pm, v, pi){
                  + '<div class="param-hint">ng=驗退、QQ=異常、AOD=特採</div>';
         case 'intlist':
             return '<input type="text" id="'+id+'" class="p-in" data-key="'+esc(pm.key)+'" data-type="intlist" value="'+esc(listVal)+'">';
+        case 'client_list': {
+            // 排除客戶綁客戶ID（使用者要求 2026-09-18）：下拉挑，挑完加進輸入框；
+            // 輸入框仍保留（既有設定是簡稱，且打字比較快），後端兩種都收得進去。
+            var dl = '<datalist id="'+id+'_dl">';
+            (DATA.clients||[]).forEach(function(c){
+                dl += '<option value="'+esc(c.name)+'">'+esc(c.id)+'</option>';
+            });
+            dl += '</datalist>';
+            return '<input type="text" id="'+id+'" class="p-in" data-key="'+esc(pm.key)+'" data-type="textlist" '
+                 + 'value="'+esc(listVal)+'" style="width:100%;">'
+                 + '<div style="margin-top:4px;display:flex;gap:6px;align-items:center;">'
+                 + '<input type="text" class="p-cli-pick" list="'+id+'_dl" data-for="'+id+'" '
+                 + 'placeholder="輸入客戶ID或名稱挑選（例：C2005 或 和大）" style="flex:1;">'
+                 + '<button type="button" class="ks-btn gray p-cli-add" data-for="'+id+'">加入</button></div>' + dl
+                 + '<div class="param-hint">可直接打字（逗號分隔），或用下方挑選；'
+                 + '填客戶ID也可以，計算時會自動換成客戶簡稱再比對。</div>';
+        }
         default: // textlist / text
             return '<input type="text" id="'+id+'" class="p-in" data-key="'+esc(pm.key)+'" data-type="textlist" value="'+esc(listVal)+'">';
     }
 }
+$(document).on('click', '.p-cli-add', function(){
+    var $t = $('#' + $(this).data('for')), $p = $('.p-cli-pick[data-for="' + $(this).data('for') + '"]');
+    var v = $.trim($p.val());
+    if (!v) { $p.focus(); return; }
+    // datalist 的 value 是客戶簡稱；使用者也可能直接打客戶ID，兩種後端都收
+    var cur = $.trim($t.val());
+    var arr = cur ? cur.split(/[,，]+/).map(function(x){ return $.trim(x); }).filter(String) : [];
+    if (arr.indexOf(v) < 0) arr.push(v);
+    $t.val(arr.join(','));
+    $p.val('').focus();
+});
 function saveParams(){
     var r = DATA.indicators[pCtx.i];
     var reg = DATA.registry[pCtx.calcKey];

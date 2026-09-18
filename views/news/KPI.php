@@ -255,7 +255,10 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
             .page-title, .kpi-toolbar, #chartBox, #cellMenu, .nav_menu, .left_col, .kpi-sim-bar, footer,
             .kpi-role-badge .fa-question-circle, .kpi-ov-mark, .kpi-legend,
             #staleBar, .kpi-stale-mark, .kpi-modal-mask { display:none !important; }
-            .right_col { margin:0 !important; padding:0 !important; }
+            .right_col { margin:0 !important; padding:0 !important;
+                min-height:0 !important; height:auto !important; }
+            html, body, .container, .container.body, .main_container {
+                min-height:0 !important; height:auto !important; }
             /* 列印時每一欄都照內容決定寬度（width:auto），不要用 width:100% 硬撐滿整頁——
                撐滿會讓指標內容欄灌水到 239px（最長文字只用得到 77px、右側全是空白），
                月份欄也被拉到 100px。表格變窄之後由 printKpi() 的縮放把它放大到貼齊紙張，
@@ -273,7 +276,14 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         body.kpi-printing .kpi-ov-mark, body.kpi-printing .kpi-legend,
         body.kpi-printing #staleBar, body.kpi-printing .kpi-stale-mark,
         body.kpi-printing .kpi-modal-mask { display:none !important; }
-        body.kpi-printing .right_col { margin:0 !important; padding:0 !important; }
+        /* Gentelella 的 .right_col／container 有 min-height 撐著（實測內容只有幾百 px 卻量到 1296px），
+           不歸零的話列印時會多出一整頁幾乎空白的第二頁——這就是使用者說的「列印超過邊界」。 */
+        body.kpi-printing .right_col { margin:0 !important; padding:0 !important;
+            min-height:0 !important; height:auto !important; }
+        body.kpi-printing, body.kpi-printing html, body.kpi-printing .container,
+        body.kpi-printing .container.body, body.kpi-printing .main_container,
+        body.kpi-printing .nav-md .container.body .right_col {
+            min-height:0 !important; height:auto !important; }
         body.kpi-printing table.kpi-table { font-size:10px; width:auto; margin:0 auto; }
         body.kpi-printing table.kpi-table th, body.kpi-printing table.kpi-table td { padding:2px 4px; }
         body.kpi-printing table.kpi-table td.kpi-name { max-width:none; overflow:visible; text-overflow:clip; }
@@ -1917,6 +1927,16 @@ function applyPrintPageStyle(paper, asDocNo){
     $st.text(css);
     return size;
 }
+/* 目前的縮放之下，列印內容塞不塞得進一頁？（量的是「套用縮放之後」的實際版面） */
+function kpiPrintFits(pageWpx, pageHpx){
+    var t = document.getElementById('kpiTable');
+    var ph = document.getElementById('kpiPrintHead');
+    if (!t) return true;
+    // getBoundingClientRect() 會反映 zoom 之後的實際尺寸
+    var w = t.getBoundingClientRect().width;
+    var h = t.getBoundingClientRect().height + ((ph && ph.getBoundingClientRect) ? ph.getBoundingClientRect().height : 0) + 8;
+    return (w <= pageWpx + 0.5) && (h <= pageHpx + 0.5);
+}
 function printKpi(){
     if (!MATRIX) return;
     renderPrintHead();
@@ -1937,7 +1957,17 @@ function printKpi(){
     var pageHpx = kpiMmToPx(size.h - KPI_MARGIN_MM.top - KPI_MARGIN_MM.bottom - safeMm);
     var scale = Math.min(pageWpx / natW, pageHpx / natH);
     scale = Math.max(0.35, Math.min(scale, 2.5));
+    // 【一定要套上去之後再量一次】使用者回報列印還是超過邊界（實測輸出 PDF 是 2 頁）：
+    // 先量再乘上比例只是「估」——zoom 會改變版面（字級、換行、欄寬都會變），
+    // 實際高度常常不等於「原高度 × 比例」。所以套上去之後重新量，還超出就再縮一點，
+    // 最多試 10 次；這是唯一能保證真的塞得進一頁的做法。
     document.body.style.zoom = scale;
+    var fit = kpiPrintFits(pageWpx, pageHpx);
+    for (var i = 0; i < 10 && !fit && scale > 0.35; i++) {
+        scale = Math.max(0.35, scale * 0.94);
+        document.body.style.zoom = scale;
+        fit = kpiPrintFits(pageWpx, pageHpx);
+    }
     setTimeout(function(){ window.print(); }, 100);
 }
 window.addEventListener('afterprint', function(){
