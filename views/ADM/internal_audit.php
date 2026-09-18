@@ -495,8 +495,10 @@ $roleLabel = ia_role_label($perms);
             <li><b>③查檢表</b>：<b>先選種類</b>，畫面才會長出該種類要填的欄位與挑題方式；建立時填「建立（稽核）日期」，再勾這次要查的項目。
                 <b>建立查檢表預設一題都不勾</b>（2026-09-14 起），請先從左欄點選，或直接在右側逐題勾選。三種的差別：
                 <ul>
-                    <li><b>系統稽核紀錄表的受稽人＝這張通知單上的陪檢員</b>：預設帶<b>該份文件所屬部門</b>的陪檢員，
-                        可以改成別的部門的陪檢員；清單一律顯示「部門　職稱　姓名」，<b>兼任也看得出來</b>，並標出他是哪一個受稽單位的陪檢員。
+                    <li><b>系統稽核紀錄表的受稽人</b>：預設帶<b>該份文件所屬部門</b>的陪檢員，下拉分成三組可改選——
+                        <b>本單陪檢員</b>（這張通知單上的陪檢員，標出他是哪一個受稽單位的）、
+                        <b>稽核員</b>（稽核日期當天具稽核員資格的人）、<b>稽核組長</b>（這張通知單的組長）；
+                        清單一律顯示「部門　職稱　姓名」，<b>兼任也看得出來</b>。
                         <b>標題不用自己取</b>——自動顯示為對應稽核通知單的「第 N 次　日期」。</li>
                     <li><b>開不符合通知單時會自動帶好</b>：受稽核單位、受稽核人（都還可以手動改）、相關表單編號<b>與名稱</b>、
                         稽核日期、所屬件號，以及<b>要求完成期限＝該受稽單位在通知單上填的「預定完成改善」</b>；
@@ -3418,7 +3420,9 @@ function openCheck(id){
         $('#ckStatus').val(CHK.status==='done' ? '已結案' : '填寫中');
         var ro = !CHK.can_edit;
         fillCkAuditor(CHK.check_date);
-        $('#ckTitleInput,#ckDate').prop('readonly', ro);
+        /* 自動標題的欄位一律維持唯讀，不可被「這張表可以編輯」解鎖（否則上面那行 readonly 會被洗掉） */
+        $('#ckDate').prop('readonly', ro);
+        $('#ckTitleInput').prop('readonly', ro || !!autoTitle);
         $('#ckAuditor').prop('disabled', ro);
         $('#btnCheckSave,#btnCheckDone').toggle(!ro);
         $('#btnCheckReopen').toggle(CHK.status==='done' && <?= $perms['canAdmin'] ? 'true' : 'false' ?>);
@@ -3627,6 +3631,7 @@ function escortOptions(it){
     if (!pickedKey) {
         // 預設：這份文件所屬部門的陪檢員（對不到就不預設，讓使用者自己挑）
         for (var i = 0; i < list.length && !pickedKey; i++) {
+            if ((list[i].group || '本單陪檢員') !== '本單陪檢員') continue;   // 預設只從本單陪檢員挑
             if (it.dept_name && String(list[i].unit_name) === String(it.dept_name)) {
                 pickedKey = postKeyOf(list[i].user_id, list[i].dept_id, list[i].position_id);
             }
@@ -3638,14 +3643,27 @@ function escortOptions(it){
             }
         }
     }
-    var seen = {};
+    /* 三組候選：本單陪檢員（預設就從這裡挑）／具稽核員資格者／這張單的稽核組長。
+       用 optgroup 分開，選單裡才看得出來這個人是以什麼身分出現的。 */
+    var seen = {}, groups = {};
     list.forEach(function(p){
         var k = postKeyOf(p.user_id, p.dept_id, p.position_id);
         if (seen[k]) return; seen[k] = 1;
-        var label = (p.dept_name ? p.dept_name + '　' : '') + (p.position_name ? p.position_name + '　' : '')
-                  + p.user_name + (+p.is_main === 0 ? '（兼任）' : '')
-                  + (p.unit_name ? ('　〔' + p.unit_name + '〕') : '');
-        h += '<option value="'+esc(k)+'"'+(k === pickedKey ? ' selected' : '')+'>'+esc(label)+'</option>';
+        var g = p.group || '本單陪檢員';
+        (groups[g] || (groups[g] = [])).push({k: k, p: p});
+    });
+    ['本單陪檢員', '稽核員', '稽核組長'].concat(Object.keys(groups)).forEach(function(g){
+        if (!groups[g]) return;
+        var rows = groups[g]; delete groups[g];
+        h += '<optgroup label="'+esc(g)+'">';
+        rows.forEach(function(x){
+            var p = x.p;
+            var label = (p.dept_name ? p.dept_name + '　' : '') + (p.position_name ? p.position_name + '　' : '')
+                      + p.user_name + (+p.is_main === 0 ? '（兼任）' : '')
+                      + (p.unit_name ? ('　〔' + p.unit_name + '〕') : '');
+            h += '<option value="'+esc(x.k)+'"'+(x.k === pickedKey ? ' selected' : '')+'>'+esc(label)+'</option>';
+        });
+        h += '</optgroup>';
     });
     if (it.col_c && !pickedKey) h += '<option value="" selected>'+esc(it.col_c)+'（不在陪檢員名單內）</option>';
     return h;

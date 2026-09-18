@@ -1008,7 +1008,45 @@ case 'check_get': {
                 }
             }
         }
-        $k['escorts']      = $escorts;
+        /* 受稽人候選（2026-09-18 使用者追加）：除了本單的陪檢員，也要能選
+           **具稽核員資格的人**與**這張通知單的稽核組長**——
+           實務上有些表單是稽核員或組長自己回答的。資格一律依**這張查檢表的稽核日期**判定（ai-rules/22）。
+           三組都放進同一份清單、用 group 標示，前端用 optgroup 分開顯示。 */
+        $seen = [];
+        foreach ($escorts as &$e) { $e['group'] = '本單陪檢員'; $seen[ia_post_key($e['user_id'], $e['dept_id'], $e['position_id'])] = 1; }
+        unset($e);
+        $cands = $escorts;
+        try {
+            foreach (ia_qualified_posts($db, 'auditor', (string)$k['check_date']) as $p) {
+                $key = ia_post_key((int)$p['id'], $p['dept_id'], $p['position_id']);
+                if (isset($seen[$key])) continue;
+                $seen[$key] = 1;
+                $cands[] = ['user_id' => (int)$p['id'], 'user_name' => (string)$p['user_cname'],
+                            'dept_id' => (int)$p['dept_id'], 'dept_name' => (string)$p['dept_name'],
+                            'position_id' => (int)$p['position_id'], 'position_name' => (string)$p['position_name'],
+                            'is_main' => (int)($p['is_main'] ?? 1), 'unit_name' => '', 'group' => '稽核員'];
+            }
+        } catch (Throwable $e2) {}
+        if ((int)($k['case_id'] ?? 0)) {
+            try {
+                $q = $db->prepare("SELECT leader_id, leader_name, leader_dept_id, leader_position_id
+                                     FROM ia_case WHERE case_id=?");
+                $q->execute([(int)$k['case_id']]);
+                $ld = $q->fetch(PDO::FETCH_ASSOC) ?: [];
+                if (!empty($ld['leader_id'])) {
+                    $key = ia_post_key((int)$ld['leader_id'], (int)$ld['leader_dept_id'], (int)$ld['leader_position_id']);
+                    if (!isset($seen[$key])) {
+                        $cands[] = ['user_id' => (int)$ld['leader_id'], 'user_name' => (string)$ld['leader_name'],
+                                    'dept_id' => (int)$ld['leader_dept_id'],
+                                    'dept_name' => ia_dept_name_now($db, (int)$ld['leader_dept_id']),
+                                    'position_id' => (int)$ld['leader_position_id'],
+                                    'position_name' => ia_position_name_now($db, (int)$ld['leader_position_id']),
+                                    'is_main' => 1, 'unit_name' => '', 'group' => '稽核組長'];
+                    }
+                }
+            } catch (Throwable $e3) {}
+        }
+        $k['escorts']      = $cands;      // 前端沿用同一個欄位名（含三組候選）
         $k['due_by_dept']  = $dueByDept;
         $k['dept_id_by_name'] = $deptIdByName;
     }
