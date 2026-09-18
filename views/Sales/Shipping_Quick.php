@@ -413,6 +413,9 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
           <b>數量回到原訂單</b>，原訂單若因此不再是出滿的狀態會<b>自動取消結案</b>。
           已進對帳底稿或已開發票的明細一律擋下不可刪。</li>
       <li><b>訂單號空白或 NA 的不列入</b>（多為廠內治具製作，不是要出給客戶的貨）。</li>
+      <li><b>追溯對照的客戶可以打「客戶ID」找</b>（例：打 C2005 會篩出 和大／和大(醫材)），也可以打客戶簡稱；
+          <b>要換客戶時記得重新選料號再按「載入」</b>（料號是跟著客戶重撈的）。
+          篩選打到查無符合時清單會只剩目前選的那一筆，按<b>「清除」</b>就把客戶、料號、關鍵字、日期與畫面一次還原。</li>
       <li><b>按下列印就會留下列印紀錄</b>（列印時間／列印人／登入電腦），可在「列印與簽核紀錄」查詢；
           在列印對話框按取消也一樣會留紀錄。</li>
     </ul>
@@ -513,7 +516,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
   <div class="m-body">
     <div class="sq-bar">
       <label>客戶</label>
-      <select id="tcClient" style="width:190px;" data-eg-filter="輸入客戶簡稱篩選…" data-eg-filter-reset><option value="">請選擇客戶</option></select>
+      <select id="tcClient" style="width:190px;" data-eg-filter="輸入客戶簡稱或客戶ID篩選…" data-eg-filter-reset><option value="">請選擇客戶</option></select>
       <label>料號</label>
       <select id="tcPart" style="width:230px;" data-eg-filter="輸入料號篩選…" data-eg-filter-reset><option value="">請先選客戶</option></select>
       <label>日期</label>
@@ -523,6 +526,7 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
       </select>
       <label title="各表的客戶簡稱寫法可能不一致，勾起來就只用料號查"><input type="checkbox" id="tcAllCli"> 不限客戶</label>
       <button id="btnTcGo" class="btn-warm"><i class="fa fa-search"></i> 載入</button>
+      <button id="btnTcClear" title="客戶、料號、打字篩選的關鍵字與已載入的畫面全部清掉，回到剛打開的狀態"><i class="fa fa-eraser"></i> 清除</button>
     </div>
     <div class="sq-bar" style="background:#FFF7E8;">
       <div class="tc-legend">
@@ -679,14 +683,20 @@ function init(){
     (r.clients||[]).forEach(function(c){
       h+='<option value="'+esc(c.customer_id)+'">'+esc(c.name)+'（'+c.cnt+'）</option>'; });
     $('#clientSel').html(h);
-    // 追溯對照的客戶下拉用「客戶簡稱」當值（各單據表都是以簡稱歸戶）
+    /* 追溯對照的客戶下拉用「客戶簡稱」當值（各單據表都是以簡稱歸戶），
+       但選項文字一定要連客戶ID一起印出來——打字篩選比對的是「選項顯示文字」，
+       只印簡稱的話使用者打 C2005 會變成「查無符合」，而那個狀態下清單只剩目前選取的那一筆，
+       等於客戶再也換不掉（2026-09-18 使用者回報）。 */
     var h2='<option value="">請選擇客戶</option>';
     (r.clients||[]).forEach(function(c){
-      h2+='<option value="'+esc(c.name)+'">'+esc(c.name)+'（'+c.cnt+'）</option>'; });
+      h2+='<option value="'+esc(c.name)+'">'+esc(c.name)
+        +(c.customer_id?'　'+esc(c.customer_id):'')+'（'+c.cnt+'）</option>'; });
     $('#tcClient').html(h2); refilterSel('#tcClient');
+    TC_DATE_DEF.to = r.today;
     var y=new Date(r.today); y.setFullYear(y.getFullYear()-1);
-    $('#tcFrom').val(y.toISOString().slice(0,10));
-    $('#tcTo').val(r.today);
+    TC_DATE_DEF.from = y.toISOString().slice(0,10);
+    $('#tcFrom').val(TC_DATE_DEF.from);
+    $('#tcTo').val(TC_DATE_DEF.to);
     COMPANY = r.company || COMPANY;
     AS_DOCS = r.as_docs || [];
     AS_CUR  = r.asdoc ? +r.asdoc.id : 0;
@@ -1745,6 +1755,7 @@ var TC_PAIRS = {
 };
 var TC = {data:null, nodes:{}, linksBy:{}, canLink:false, limit:100,
           dragKey:'', dragMode:'', gripDown:false, cur:null, orderMemo:{}};
+var TC_DATE_DEF = {from:'', to:''};   // 剛打開時的預設日期區間（清除時要回到這裡）
 
 function tcPair(k1,k2){
   // ship↔ret 有兩種可能（出貨→退貨、退貨→重出出貨），依拖曳方向決定
@@ -1758,15 +1769,48 @@ $('#btnChain').on('click',function(){ openMask('mkChain'); });
 /* 選了客戶就去撈該客戶底下有資料的料號 */
 $('#tcClient').on('change',function(){
   var c=$(this).val()||'';
-  if(!c){ $('#tcPart').html('<option value="">請先選客戶</option>'); return; }
-  $('#tcPart').html('<option value="">載入中…</option>');
+  tcClearBox('#tcPart');            // 換客戶＝舊客戶的料號關鍵字一定要清掉，否則會篩到一片空白
+  if(!c){
+    $('#tcPart').html('<option value="">請先選客戶</option>'); refilterSel('#tcPart');
+    return;
+  }
+  $('#tcPart').html('<option value="">載入中…</option>'); refilterSel('#tcPart');
+  if(TC.data) $('#tcInfo').html('已換成客戶 <b>'+esc(c)+'</b>，請重新選料號後按「載入」。'
+    +'（下方畫面還是上一次載入的結果）');
   $.post(API+'?action=chain_parts',{client:c},function(r){
     if(!r.ok){ toast(esc(r.error||'讀取料號失敗'), true); return; }
     var h='<option value="">請選擇料號</option>';
     (r.parts||[]).forEach(function(p){
       h+='<option value="'+p.d_id+'">'+esc(p.part_no)+'（'+nf(p.cnt)+'）</option>'; });
-    $('#tcPart').html(h);
+    /* 整批換掉選項之後一定要 resnap（共用檔規則7 是拿「上次寫進去的那批」當快照） */
+    $('#tcPart').html(h); refilterSel('#tcPart');
   },'json').fail(function(){ toast('讀取料號失敗', true); });
+});
+
+/* 清掉某個下拉的「打字篩選」關鍵字：那個框是共用檔插在 select 前面的 .eg-filter-box。
+   不清掉的話關鍵字會一直卡在那裡，而「查無符合」的狀態下清單只剩目前選取的那一筆，
+   看起來就是「這一欄再也換不掉」。 */
+function tcClearBox(sel){
+  var $b=$(sel).prev('.eg-filter-box');
+  if(!$b.length || $b.val()==='') return;
+  $b.val('');
+  /* 一定要用「在篩選框上發 input」讓共用檔自己重畫，不可以改用 egFilterResnap()：
+     resnap 會先拿「目前畫面上的選項」重新快照，而「查無符合」時畫面上只剩兩個選項，
+     那樣會把完整清單整份弄丟。發 input 走的是共用檔保存的完整快照，才還原得回來。 */
+  $b[0].dispatchEvent(new Event('input',{bubbles:true}));
+}
+
+/* 清除：客戶、料號、關鍵字、日期與已載入的畫面全部回到剛打開的狀態 */
+$('#btnTcClear').on('click',function(){
+  tcClearBox('#tcClient'); tcClearBox('#tcPart');   // 先還原完整清單，再改選取值
+  $('#tcClient').val('');
+  $('#tcPart').html('<option value="">請先選客戶</option>'); refilterSel('#tcPart');
+  $('#tcFrom').val(TC_DATE_DEF.from); $('#tcTo').val(TC_DATE_DEF.to);
+  $('#tcOrder').val('new'); $('#tcAllCli').prop('checked',false);
+  TC.data=null; TC.nodes={}; TC.linksBy={}; TC.limit=100; TC.orderMemo={};
+  $('#tcLanes').html('<div class="tc-empty" style="width:100%;">尚未載入資料。</div>');
+  $('#tcInfo').text('請先選客戶與料號，再按「載入」。');
+  $('#tcFoot').text('');
 });
 
 $('#btnTcGo').on('click',function(){ TC.limit=100; tcLoad(); });
