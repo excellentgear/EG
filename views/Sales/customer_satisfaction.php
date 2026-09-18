@@ -95,6 +95,11 @@ $thisYear = (int)date('Y');
         .cs-bindable { cursor:pointer; text-decoration:underline; }
         .warn-bar { font-size:12.5px; color:#8a3a26; background:#FDEEE9; border:1px solid #F0B9A8;
                     border-radius:6px; padding:8px 10px; margin-bottom:10px; line-height:1.8; }
+        /* 一行式提示（取代 alert，做完自己淡出，不用按確定） */
+        #csToast { display:none; position:fixed; left:50%; top:16px; transform:translateX(-50%);
+                   z-index:10500; background:var(--ink); color:#fff; font-size:13px;
+                   padding:8px 16px; border-radius:16px; box-shadow:0 4px 14px rgba(0,0,0,.25); max-width:80vw; }
+        .m-err { display:none; color:var(--coral); font-size:12.5px; margin-top:8px; line-height:1.6; }
         .m-mask { position:fixed; inset:0; background:rgba(74,53,36,.45); z-index:10300; display:none; }
         .m-box { position:absolute; left:50%; top:4vh; transform:translateX(-50%); background:#fff;
                  border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.3); display:flex; flex-direction:column; max-height:92vh; }
@@ -346,6 +351,7 @@ $thisYear = (int)date('Y');
       <div class="muted-help" style="margin-top:6px;">
         綁錯了可以到「會計 → 對帳作業 → 對應到客戶主檔」解除（解除時會把當初回填的客戶編號一併還原）。
       </div>
+      <div class="m-err" id="bindErr"></div>
     </div>
     <div class="m-foot">
       <button class="btn btn-default" data-close="bindMask">取消</button>
@@ -450,7 +456,11 @@ $(document).on('click','[data-close]',function(){ closeMask($(this).data('close'
 $(document).on('click','.m-mask',function(e){ if(e.target===this) $(this).hide(); });
 
 function ajxGet(p, cb){ $.get(API, p, cb, 'json').fail(function(x){ alert('讀取失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); }); }
-function ajxPost(p, cb){ p.csrf=CSRF; $.post(API, p, cb, 'json').fail(function(x){ alert('操作失敗：'+(x.responseJSON&&x.responseJSON.error||x.status)); }); }
+/* onErr：自己接手錯誤（跳窗內顯示紅字等）。沒傳才用預設的 alert。 */
+function ajxPost(p, cb, onErr){ p.csrf=CSRF; $.post(API, p, cb, 'json').fail(function(x){
+    var m=(x.responseJSON&&x.responseJSON.error)||x.status;
+    if(typeof onErr==='function') onErr(m); else alert('操作失敗：'+m);
+}); }
 
 /* ── 年度下拉：從今年往前 6 年、往後 1 年（補未來期間用） ── */
 (function(){
@@ -472,7 +482,9 @@ $('#btnReload').on('click', function(){ loadStat(); if(ST.tab==='monitor') loadM
 $('#btnPageHelp').on('click', function(){ openMask('helpUseMask'); });
 
 /* ══════════ 統計資料表 ══════════ */
-function loadStat(){
+/* $done：整份資料重畫完之後要做的事（綁定完之後把捲動位置放回去用的，見 csReloadStat）。
+   這一支本來就是 AJAX，畫面不會整頁重新載入。 */
+function loadStat(done){
     $('#statBody').html('<tr><td colspan="13" style="padding:20px;color:#999;">計算中…</td></tr>');
     ajxGet({action:'stat_list', year:$('#fYear').val(), quarter:$('#fQuarter').val()}, function(r){
         if(!r.ok) return;
@@ -497,7 +509,25 @@ function loadStat(){
         renderStat();
         $('#statAnalysis').val((r.summary&&r.summary.analysis_text)||'');
         $('#statDate').val((r.summary&&r.summary.stat_date)||'');
+        if(typeof done==='function') done();
     });
+}
+/* 重新計算並把畫面位置留在原地（頁面捲軸與表格內捲軸都要），
+   否則使用者會覺得「整頁重載」——資料一多就跳回最上面，本來看到哪一列全忘了。 */
+function csReloadStat(msg){
+    var sc=$('.cs-scroll').scrollTop(), wy=window.pageYOffset;
+    loadStat(function(){
+        $('.cs-scroll').scrollTop(sc); window.scrollTo(0, wy);
+        if(msg) csToast(msg);
+    });
+}
+/* 一行式提示（取代 alert）：做完就好，不要一直跳窗要人按確定 */
+function csToast(msg){
+    var $t=$('#csToast');
+    if(!$t.length) $t=$('<div id="csToast"></div>').appendTo('body');
+    $t.text(msg).stop(true,true).fadeIn(120);
+    clearTimeout(csToast._t);
+    csToast._t=setTimeout(function(){ $t.fadeOut(400); }, 4000);
 }
 function scoreCell(i, key, cls){
     var v = ST.rows[i][key];
@@ -564,18 +594,18 @@ function renderStat(){
    不要用畫面上的數字當依據（有人填過技術／服務／價格或備註的後端會保留，數字不一樣）。 */
 $(document).on('click', '#btnCleanDead', function(){
     ajxPost({action:'score_cleanup', year:$('#fYear').val(), quarter:$('#fQuarter').val(), dry:1}, function(r){
-        if(!r||!r.ok){ alert('查不到可清除的列：'+((r&&r.error)||'未知原因')); return; }
-        if(!r.del){ alert('沒有可以清除的列'+(r.kept?('（'+r.kept+' 列有人填過技術／服務／價格或備註，一律保留）'):'')); return; }
+        if(!r||!r.ok){ csToast('查不到可清除的列：'+((r&&r.error)||'未知原因')); return; }
+        if(!r.del){ csToast('沒有可以清除的列'+(r.kept?('（'+r.kept+' 列有人填過技術／服務／價格或備註，一律保留）'):'')); return; }
         var msg='將清除 '+r.del+' 列「本期間沒有出貨」的評分'
               + (r.kept?('\n另有 '+r.kept+' 列有人填過技術／服務／價格或備註，不會刪。'):'')
               + '\n\n例：'+(r.names||[]).slice(0,8).join('、')
               + '\n\n要繼續嗎？（刪掉之後按「帶入系統建議分」可以重新產生）';
         if(!confirm(msg)) return;
         ajxPost({action:'score_cleanup', year:$('#fYear').val(), quarter:$('#fQuarter').val()}, function(r2){
-            if(!r2||!r2.ok){ alert('清除失敗：'+((r2&&r2.error)||'未知原因')); return; }
-            alert('已清除 '+r2.deleted+' 列'+(r2.kept?('，保留 '+r2.kept+' 列有人填過的'):''));
-            loadStat();
-        });
+            if(!r2||!r2.ok){ csToast('清除失敗：'+((r2&&r2.error)||'未知原因')); return; }
+            // 刪除前已經問過一次（那一關是必要的），做完就用一行提示帶過不再跳窗
+            csReloadStat('已清除 '+r2.deleted+' 列'+(r2.kept?('，保留 '+r2.kept+' 列有人填過的'):''));
+        }, function(m){ csToast('清除失敗：'+m); });
     });
 });
 /* ERP 出貨對象對不到客戶主檔的提示列。
@@ -608,24 +638,39 @@ $(document).on('click', '.cs-bindable', function(){
             h+='<option value="'+esc(c.id)+'">'+esc(c.name)+'（'+esc(c.id)+'）'+(c.full?'　'+esc(c.full):'')+'</option>';
         });
         $('#bindCust').html(h).val('').trigger('change');   // 讓共用篩選框重新抓一次選項快照
+        bindClearFilter();
+        $('#bindErr').hide().empty();
         openMask('bindMask');
     };
     if(CUSTMASTER) return fill();
     ajxGet({action:'cust_master'}, function(r){
-        if(!r||!r.ok){ alert('讀不到客戶主檔：'+((r&&r.error)||'未知原因')); return; }
+        if(!r||!r.ok){ csToast('讀不到客戶主檔：'+((r&&r.error)||'未知原因')); return; }
         CUSTMASTER = r.rows||[]; fill();
     });
 });
+/* 每次開跳窗都要把上次打的關鍵字清掉（共用檔 eg_input_rules.js 規則7 長出來的那個篩選框），
+   不然下一家客戶一開跳窗還停在上一次的「g1」，看起來像只有一兩家可選。
+   清空後補送一次 input 事件，讓它把選項還原成全部。 */
+function bindClearFilter(){
+    var box=document.querySelector('#bindMask .eg-filter-box');
+    if(!box || box.value==='') return;
+    box.value='';
+    box.dispatchEvent(new Event('input', {bubbles:true}));
+}
+$(document).on('click', '#bindMask [data-close]', bindClearFilter);
 $('#btnBindSave').on('click', function(){
     var alias=$(this).data('alias'), cid=$('#bindCust').val();
-    if(!cid){ alert('請先選擇要對應的客戶'); return; }
-    var txt=$('#bindCust option:selected').text();
-    if(!confirm('要把 ERP 上的「'+alias+'」對應到 '+txt+' 嗎？\n\n會一併回填出貨單上空白的客戶編號，而且全站共用。')) return;
+    var $err=$('#bindErr');
+    if(!cid){ $err.text('請先選擇要對應的客戶').show(); return; }
+    $err.hide().empty();
+    // 跳窗本身就是確認畫面，不再多一層 confirm；結果用一行提示帶過，不跳 alert
     ajxPost({action:'cust_bind', alias:alias, customer_id:cid}, function(r){
-        if(!r||!r.ok){ alert('綁定失敗：'+((r&&r.error)||'未知原因')); return; }
-        alert(r.message||'已綁定');
-        closeMask('bindMask'); loadStat();
-    });
+        if(!r||!r.ok){ $err.text('綁定失敗：'+((r&&r.error)||'未知原因')).show(); return; }
+        /* 成功：關窗＋一行提示，不跳 alert */
+        bindClearFilter();
+        closeMask('bindMask');
+        csReloadStat(r.message||'已綁定');   // AJAX 重算，畫面位置留在原地
+    }, function(m){ $err.text('綁定失敗：'+m).show(); });
 });
 <?php endif; ?>
 
@@ -654,7 +699,7 @@ $(document).on('change', '.sc-in,.rm-in', function(){
     if(k!=='remark'){
         if(v!==''){
             var f=parseFloat(v);
-            if(isNaN(f)||f<0||f>10){ alert('分數請填 0~10（留白＝尚未填）'); $(this).val(ST.rows[i][k]===null?'':ST.rows[i][k]); return; }
+            if(isNaN(f)||f<0||f>10){ csToast('分數請填 0~10（留白＝尚未填）'); $(this).val(ST.rows[i][k]===null?'':ST.rows[i][k]); return; }
             v=Math.round(f*10)/10;
         } else v=null;
         $(this).toggleClass('filled', v!==null);
@@ -690,12 +735,12 @@ $('#btnFillSuggest').on('click', function(){
     });
     ST.rows.forEach(function(r,i){ recalcAvg(i); });
     renderStat();
-    alert(n?('已帶入 '+n+' 家客戶的品質／交期建議分（原本已填過的沒有被覆蓋）'):'沒有可帶入的建議分（都已填過，或期間內算不出指標）');
+    csToast(n?('已帶入 '+n+' 家客戶的品質／交期建議分（原本已填過的沒有被覆蓋）'):'沒有可帶入的建議分（都已填過，或期間內算不出指標）');
 });
 $('#btnSaveSummary').on('click', function(){
     ajxPost({action:'summary_save', year:$('#fYear').val(), quarter:$('#fQuarter').val(),
              analysis_text:$('#statAnalysis').val(), stat_date:$('#statDate').val()},
-        function(r){ if(r.ok) alert('已儲存'); });
+        function(r){ if(r.ok) csToast('已儲存'); });
 });
 
 /* ══════════ 監控表 ══════════ */
@@ -760,13 +805,13 @@ $('#btnMonAdd').on('click', function(){
 });
 $('#btnMonSave').on('click', function(){
     var c=curCustomer();
-    if(!c){ alert('請先選擇客戶'); return; }
+    if(!c){ csToast('請先選擇客戶'); return; }
     var bad = ST.mon.filter(function(r){ return String(r.item_name||'').trim()===''; }).length;
     if(bad && !confirm('有 '+bad+' 列沒有填「調查項目」，儲存時會被略過。要繼續嗎？')) return;
     ajxPost({action:'monitor_save', year:$('#fYear').val(), quarter:$('#fQuarter').val(),
              customer_id:c.customer_id, customer_name:c.customer_name,
              monitor_date:$('#statDate').val(), items:JSON.stringify(ST.mon)},
-        function(r){ if(r.ok){ alert('已儲存'); loadMonitor(); } });
+        function(r){ if(r.ok){ csToast('已儲存'); loadMonitor(); } });
 });
 
 /* ══════════ 列印（ai-rules/16）══════════ */
@@ -820,7 +865,7 @@ function makerStamp(meta, dateStr){
 }
 $('#btnPrint').on('click', function(){
     var which = ST.tab==='monitor' ? 'monitor' : 'stat';
-    if(which==='monitor' && !curCustomer()){ alert('請先選擇客戶'); return; }
+    if(which==='monitor' && !curCustomer()){ csToast('請先選擇客戶'); return; }
     ajxGet({action:'print_meta', which:which, year:$('#fYear').val(), quarter:$('#fQuarter').val()}, function(m){
         if(!m.ok) return;
         window.__ownCompany = m.company||'';   // eg_stamp.js 畫預設回墨印時要用（ai-rules/18 鐵則2）
@@ -893,7 +938,7 @@ function doPrint(which, m){
 $('#btnCsv').on('click', function(){
     var head, rows;
     if(ST.tab==='monitor'){
-        var c=curCustomer(); if(!c){ alert('請先選擇客戶'); return; }
+        var c=curCustomer(); if(!c){ csToast('請先選擇客戶'); return; }
         head=['No','調查項目','績效指標','調查結果','客戶建議事項','處理對策','效果追蹤','異常處理單'];
         rows=ST.mon.map(function(r,i){ return [i+1,r.item_name,r.target_text,r.result_text,
             r.customer_suggestion,r.action_plan,r.effect_followup,r.car_no]; });
@@ -1007,7 +1052,7 @@ $('#btnSetSave').on('click', function(){
              grade_quality:JSON.stringify(ST.set.grade_quality||[]),
              monitor_items:JSON.stringify((ST.set.monitor_items||[]).filter(function(x){ return String(x.item_name||'').trim()!==''; })),
              stamp_tpl_id:parseInt($('#setStampTpl').val()||0)||0},
-        function(r){ if(r.ok){ alert('已儲存設定'); closeMask('setMask'); loadStat(); } });
+        function(r){ if(r.ok){ closeMask('setMask'); csReloadStat('已儲存設定'); } });
 });
 <?php endif; ?>
 
