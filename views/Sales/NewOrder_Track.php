@@ -4533,11 +4533,12 @@ foreach($dCounts as $c) {
                 <div class="modal-body" style="padding:14px;">
                     <div style="font-size:12px;line-height:1.75;color:#4A2A0A;background:#FDF1DF;border:1px solid #F0A24B;border-radius:4px;padding:9px 11px;margin-bottom:10px;">
                         <div style="font-weight:700;margin-bottom:3px;"><i class="fa fa-info-circle"></i> 什麼樣的訂單才會被自動綁定</div>
-                        同時符合以下四項才綁，只要有一項不符就留著給你人工處理：<br>
-                        ① 客戶主檔候選<b>只有一家</b>　② 料號主檔候選<b>只有一筆</b><br>
-                        ③ 訂單上的料號文字與主檔<b>完全相同</b>（料號／圖號／別名任一完全相同；只是部分相符的一律不綁）<br>
-                        ④ 該筆料號主檔的客戶<b>沒有衝突</b>（主檔沒綁客戶、或就是這一家）<br>
-                        <span style="color:#a0522d;">※ ③④ 是刻意加的保險：實測有訂單客戶是「立翔」、料號文字「RT18」，模糊比對唯一命中的卻是「全宏」的 RT18-2201-00_C。</span>
+                        ① 訂單上的料號文字與主檔<b>完全相同</b>（料號／圖號／別名任一完全相同）——<b>只是部分相符的一律不綁</b><br>
+                        ② 這些完全相符的料號裡，<b>屬於這個客戶的剛好只有一筆</b> → 綁它，客戶也跟著由它決定<br>
+                        ③ 都不屬於這個客戶時，才退而用「<b>主檔沒有綁客戶</b>的那一筆」，且此時客戶必須唯一<br>
+                        ④ 其餘一律不綁，留給你人工處理（同名料號分屬兩家、只差前導 0、料號屬於別家…）<br>
+                        <span style="color:#a0522d;">※ 同一個料號在主檔有好幾列是常態（例：RM001-M2-15T 一列屬錦玉、一列沒綁客戶），用客戶收斂就綁得出來；<br>
+                        但「立翔」的料號文字「RT18」模糊比對唯一命中的是「全宏」的 RT18-2201-00_C，那種一定不綁。</span>
                     </div>
                     <div style="font-size:11.5px;line-height:1.7;color:#555;background:#f7f7f7;border:1px solid #e3e3e3;border-radius:4px;padding:8px 10px;margin-bottom:10px;">
                         <b>只會寫入客戶ID與料號ID兩個欄位</b>，不動報價單、單價、數量、交期，也不動訂單的「最後修改」紀錄。<br>

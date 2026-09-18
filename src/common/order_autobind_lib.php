@@ -9,13 +9,21 @@
  *   故候選查詢一律走本檔，禁止在頁面裡再寫一份（鐵律4）。
  *
  * 【自動綁定的判定（2026-09-18 使用者交辦）】
- *   使用者要的是「快速綁定裡只有一個項目的，直接幫我綁完」。但實測證明
- *   「候選只有一筆」不等於「那一筆就是對的」——抽樣 500 張未綁定訂單中有 1 張是：
- *   訂單客戶「立翔」、料號文字 RT18，模糊比對只命中「全宏」的 RT18-2201-00_C。
- *   所以自動綁定在「候選各只有一筆」之外，另外要求兩件事：
- *     ① 料號文字與主檔【完全相同】（D_Setting_Id／Drawing_No／別名任一完全相同），只是模糊命中的一律不綁
- *     ② 料號主檔的客戶【沒有衝突】（主檔沒綁客戶、或就是這一家）
- *   以此規則重跑抽樣 500 張：可綁 331 張、誤綁 0 張。
+ *   使用者要的是「快速綁定裡只有一個項目的，直接幫我綁完」。但「候選只有一筆」既不安全也不夠用：
+ *
+ *   不安全：抽樣 500 張未綁定訂單中有 1 張是——訂單客戶「立翔」、料號文字 RT18，
+ *           模糊比對唯一命中的卻是「全宏」的 RT18-2201-00_C。只看「只有一筆」就會綁錯家。
+ *   不夠用：同一個料號文字在主檔本來就常有好幾列（例 RM001-M2-15T 一列屬「錦玉」、一列沒綁客戶），
+ *           只要求「候選只有一筆」，這種客戶名稱一模一樣、料號也完全相同的反而綁不了
+ *           （使用者實際回報的案例）。
+ *
+ *   所以判定改成「料號文字必須完全相同，再用客戶把候選收斂到一筆」：
+ *     ① 只考慮與訂單料號文字【完全相同】的主檔（D_Setting_Id／Drawing_No／別名任一完全相同）
+ *     ② 其中【屬於這個客戶】的剛好一筆 → 綁它，客戶也由它決定（客戶有多個候選時也是靠這一步收斂）
+ *     ③ 都不屬於這個客戶時，才退而取【主檔沒綁客戶】的那一筆，且此時客戶必須唯一
+ *     ④ 其餘一律不綁
+ *   實測 5,181 張未綁定訂單：可綁 4,781 張（＝ 3,431 + 規則放寬後再多綁的 1,350），
+ *   且先前四個會綁錯的案例（立翔/RT18、東永生/165X62X180、優貿仕/LM-SG-G7-R、秝聖/8756585_test）全部仍被擋下。
  *
  * 【絕不做的事】（使用者交代「嚴禁影響現有使用者」）
  *   - 只補 Client_name_ID／d_id_ID 兩個綁定欄位，不動 quote_no／unit_price／數量／交期
@@ -153,8 +161,9 @@ if (!function_exists('ot_ab_judge')) {
 
         if (!$out['need_client'] && !$out['need_part']) { $out['reason'] = 'raced'; return $out; }
 
-        // ── 先決定客戶 ───────────────────────────────────────────────────
-        $customer = null;
+        // ── 先蒐集客戶候選（可能不只一家，由料號來收斂）─────────────────────
+        $customer  = null;   // 已經確定的客戶
+        $custCands = [];     // 還沒收斂時的候選清單
         if (!$out['need_client']) {
             $customer = ['customer_id' => $curCid, 'customer' => ''];
         } else {
@@ -177,15 +186,21 @@ if (!function_exists('ot_ab_judge')) {
                 if ($clientText === '') { $out['reason'] = 'no_client_text'; return $out; }
                 $ck = 'C#' . $clientText;
                 if (!array_key_exists($ck, $cache)) $cache[$ck] = ot_ab_find_customers($pdo, $clientText);
-                $cands = $cache[$ck];
-                if (count($cands) === 0) { $out['reason'] = 'cust_none'; return $out; }
-                if (count($cands) > 1)  { $out['reason'] = 'cust_many'; return $out; }
-                $customer = $cands[0];
+                $custCands = $cache[$ck];
+                if (count($custCands) === 0) { $out['reason'] = 'cust_none'; return $out; }
+                if (count($custCands) === 1) $customer = $custCands[0];
             }
         }
-        $out['customer'] = $customer;
+        // 先放進去，讓「不能綁」的那幾筆在明細上也看得到系統推到哪一家（下面收斂成功會再覆蓋）
+        if ($customer !== null) $out['customer'] = $customer;
 
         // ── 再決定料號 ───────────────────────────────────────────────────
+        // 【2026-09-18 使用者回報後改的重點】不要求「候選總數只有一筆」，而是「用客戶把候選收斂到一筆」。
+        // 實例：料號 RM001-M2-15T 在主檔有兩列（一列屬「錦玉」、一列沒綁客戶），訂單客戶就是「錦玉」，
+        // 舊寫法判成「料號有多個候選」而不綁；但客戶名稱一模一樣、料號也完全相同，本來就該綁屬於錦玉的那一列。
+        // 收斂順序：① 完全相符且屬於候選客戶的 → 只有一筆就用它（客戶也一併由它決定）
+        //           ② 沒有屬於客戶的，才退而用「完全相符且主檔沒綁客戶」的那一筆
+        // 這麼做比舊寫法更嚴謹而不是更寬鬆——客戶相符是比「剛好只有一筆」更強的證據。
         if ($out['need_part']) {
             if ($partText === '') { $out['reason'] = 'no_part_text'; return $out; }
             // 跳窗的行為：訂單「本來就已綁客戶」時，料號候選只列該客戶底下的；
@@ -195,17 +210,48 @@ if (!function_exists('ot_ab_judge')) {
             if (!array_key_exists($pk, $cache)) $cache[$pk] = ot_ab_find_parts($pdo, $partText, $boundCid);
             $parts = $cache[$pk];
             if (count($parts) === 0) { $out['reason'] = 'part_none'; return $out; }
-            if (count($parts) > 1)  { $out['reason'] = 'part_many'; return $out; }
-            $part = $parts[0];
-            if (!ot_ab_is_exact_part($part, $partText)) { $out['reason'] = 'part_fuzzy'; return $out; }
-            $pcid = trim((string)($part['customer_id'] ?? ''));
-            if ($pcid !== '' && $customer && $pcid !== trim((string)$customer['customer_id'])) {
-                $out['reason'] = 'part_other_cust'; return $out;
+
+            // 只留「料號文字完全相同」的（只是部分相符的一律不列入考慮）
+            $exact = [];
+            foreach ($parts as $p) if (ot_ab_is_exact_part($p, $partText)) $exact[] = $p;
+            if (!$exact) { $out['reason'] = 'part_fuzzy'; return $out; }
+
+            // ① 屬於候選客戶的
+            $allowCid = [];
+            if ($customer !== null)  $allowCid[trim((string)$customer['customer_id'])] = $customer;
+            else foreach ($custCands as $cc) $allowCid[trim((string)$cc['customer_id'])] = $cc;
+
+            $owned = [];
+            foreach ($exact as $p) {
+                $pc = trim((string)($p['customer_id'] ?? ''));
+                if ($pc !== '' && isset($allowCid[$pc])) $owned[] = $p;
             }
-            $out['part'] = $part;
-            $out['fill_part_customer'] = ($pcid === '');
+            if (count($owned) === 1) {
+                $out['part'] = $owned[0];
+                $out['customer'] = $allowCid[trim((string)$owned[0]['customer_id'])];   // 客戶由料號收斂出來
+                $out['fill_part_customer'] = false;
+                $out['ok'] = true; $out['reason'] = 'ok';
+                return $out;
+            }
+            if (count($owned) > 1) { $out['reason'] = 'part_many'; return $out; }
+
+            // ② 沒有任何一筆屬於這個客戶 → 只剩「主檔沒綁客戶」那條路，此時客戶必須已經唯一
+            if ($customer === null) { $out['reason'] = 'cust_many'; return $out; }
+            $noCust = [];
+            foreach ($exact as $p) if (trim((string)($p['customer_id'] ?? '')) === '') $noCust[] = $p;
+            if (count($noCust) > 1) { $out['reason'] = 'part_many'; return $out; }
+            if (count($noCust) === 0) { $out['reason'] = 'part_other_cust'; return $out; }
+
+            $out['customer'] = $customer;
+            $out['part'] = $noCust[0];
+            $out['fill_part_customer'] = true;
+            $out['ok'] = true; $out['reason'] = 'ok';
+            return $out;
         }
 
+        // 料號本來就綁好了，只差客戶
+        if ($customer === null) { $out['reason'] = 'cust_many'; return $out; }
+        $out['customer'] = $customer;
         $out['ok'] = true; $out['reason'] = 'ok';
         return $out;
     }
@@ -274,7 +320,11 @@ if (!function_exists('ot_ab_run')) {
      *                    apply：true=真的寫入，false=只試算
      *                    fill_part_customer：料號主檔沒綁客戶時要不要一併補上
      *                    uid：操作者
-     *                    sample_limit：回傳幾筆明細給畫面預覽
+     *                    sample_limit：回傳幾筆「會綁」的明細給畫面預覽
+     *                    sample_skip_limit：回傳幾筆「不綁」的明細
+     *
+     * 明細刻意分成兩個桶子。原本只有一份「前 N 筆」，而掃描是照 Order_id 由小到大，
+     * 只要前段剛好都是不能綁的，預覽就一筆「會綁成什麼」都看不到——那等於把最該檢查的東西藏起來。
      */
     function ot_ab_run(PDO $pdo, array $opt): array {
         $after = (int)($opt['after_id'] ?? 0);
