@@ -603,6 +603,15 @@ function renderParamInput(pm, v, pi){
         case 'bool':
             return '<select id="'+id+'" class="p-in" data-key="'+esc(pm.key)+'" data-type="bool">'
                  + '<option value="1"'+(+v===1?' selected':'')+'>是</option><option value="0"'+(+v!==1?' selected':'')+'>否</option></select>';
+        case 'choice': {
+            // 固定選項（值存字串）：每個年度可以分開設定，例如準時出貨率的「未交判定方式」
+            var opts = pm.opts || {}, keys = Object.keys(opts), cur = (v===null||v===undefined||v==='') ? keys[0] : String(v);
+            var h = '<select id="'+id+'" class="p-in" data-key="'+esc(pm.key)+'" data-type="choice" style="max-width:100%;">';
+            keys.forEach(function(k){
+                h += '<option value="'+esc(k)+'"'+(String(k)===cur?' selected':'')+'>'+esc(opts[k])+'</option>';
+            });
+            return h + '</select><div class="param-hint">這是「這一個年度」的設定，其他年度可以設不一樣的。</div>';
+        }
         case 'months_map': {
             var mm = (v && typeof v === 'object') ? v : {};
             var h = '<div class="months-grid" data-key="'+esc(pm.key)+'">';
@@ -685,6 +694,7 @@ function saveParams(){
             var t = $in.data('type');
             if (t === 'int' || t === 'num') v = raw === '' ? null : +raw;
             else if (t === 'bool') v = +raw;
+            else if (t === 'choice') v = raw;
             else if (t === 'intlist') v = raw === '' ? [] : raw.split(/[,，]+/).map(function(x){ return +$.trim(x); }).filter(function(x){ return !isNaN(x); });
             else v = raw === '' ? [] : raw.split(/[,，]+/).map(function(x){ return $.trim(x); }).filter(String);
         }
