@@ -302,21 +302,7 @@ function lastUpdateBadge($info, $color = '#555') {
                                     <p class="text-muted font-13 m-b-30">
                                     </p>
                                     
-                                    <!-- 上傳-訂單未交 (已隱藏) -->
-                                    <form action="_upload_For_List.php?but=Order" method="post" enctype="multipart/form-data" class="form-horizontal form-label-left" novalidate style="display:none">
-                                        <div class="item form-group">
-                                            <label class="control-label col-md-3 col-sm-3 col-xs-12" for="file">訂單未交(order-OK)<small>(只接受.xls)</small><BR> <span class="required">*</span></label>
-                                            <div class="col-md-4 col-sm-4 col-xs-8"> <!-- 修改這行的 col-md 和 col-sm -->
-                                                <div class="input-group">
-                                                    <input type="file" id="file_order_list" name="file" accept=".xls,.xlsx" class="form-control short-input">
-                                                    <span class="input-group-btn">
-                                                        <button type="submit" id="btn_upload_order_list" class="btn btn-success">上傳</button>
-                                                        
-                                                    </span>
-                                                </div><h2 style="color:red">訂單未交 會自動刪除舊未交</h2>
-                                            </div>
-                                        </div>
-                                    </form>
+                                    <!-- 訂單未交(order-OK) 匯入已於 2026-09-18 移除：該匯入最後一次執行是 2026-03-12，資料是未交清單快照不是全量訂單，留著只會被誤用；_upload_For_List.php 的 but=Order 分支同步移除 -->
                                     
                                     <!-- 上傳-BOM ERP直接匯入 (N.xlsx，2026-07-20新增，取代下方新BOM+新BOM製程兩步驟) -->
                                     <div style="background:#e3f2fd;border:2px solid #64b5f6;border-radius:6px;padding:8px 12px;margin-bottom:10px">
@@ -651,7 +637,6 @@ function lastUpdateBadge($info, $color = '#555') {
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const fileConfig = [
-        { inputId: 'file_order_list', buttonId: 'btn_upload_order_list' },
         { inputId: 'file_new_bom', buttonId: 'btn_upload_new_bom' },
         { inputId: 'file_bom_ing_ok', buttonId: 'btn_upload_bom_ing_ok' },
         { inputId: 'file_transfer_record', buttonId: 'btn_upload_transfer_record' },

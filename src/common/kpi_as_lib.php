@@ -507,9 +507,10 @@ function kpi_as_registry(): array {
                 ['key'=>'exclude_clients','label'=>'排除客戶(可填客戶ID或簡稱)','type'=>'client_list','fe'=>1],
                 ['key'=>'undone_mode','label'=>'未交判定方式(逐年度可分開設定)','type'=>'choice','fe'=>0,
                  'opts'=>[
-                    'erp_ship' => 'B｜以 ERP 未交清單為準，逐筆對回訂單（不必做出貨綁定，ERP 修好之前用這個）',
-                    'bind'     => 'C｜以網頁上的出貨綁定為準（最精準，能判「有沒有在交期前交貨」，但要先把出貨單綁到訂單）',
-                    'erp'      => '舊制｜ERP 未交清單直接相減（月份一舊就會被夾成 0%，不建議）',
+                    'ship'     => 'D｜以出貨單反推（用料號主檔對應，不必綁定、不必 ERP 未交清單）＝目前唯一資料是新的',
+                    'bind'     => 'C｜以網頁上的出貨綁定為準（最精準，但要先把出貨單綁到訂單）',
+                    'erp_ship' => 'B｜以 ERP 未交清單為準（該清單自 2026-03-12 起就沒有再匯入，涵蓋不到的月份會顯示無資料）',
+                    'erp'      => '舊制｜ERP 未交清單直接相減（同上且會被夾成 0%，不建議）',
                  ]],
             ]],
         'stock_accuracy' => [
@@ -1069,8 +1070,10 @@ function kpi_as_order_list_covers(PDO $db, int $year, int $month): bool {
 }
 
 function kpi_as_undone_mode(array $params): string {
-    $m = (string)kpi_as_pv($params, 'undone_mode', 'bind');
-    return in_array($m, ['bind', 'erp_ship', 'erp'], true) ? $m : 'bind';
+    // 預設 D：B 吃的 ERP 未交清單已經半年沒匯入、C 需要先做出貨綁定，
+    // 目前只有 D 的來源（出貨單 is_list）是新的（2026-09-17 仍在匯入）
+    $m = (string)kpi_as_pv($params, 'undone_mode', 'ship');
+    return in_array($m, ['ship', 'bind', 'erp_ship', 'erp'], true) ? $m : 'ship';
 }
 
 /**
@@ -1114,7 +1117,7 @@ function kpi_as_order_bind_rows(PDO $db, int $year, int $month, array $params, a
     $ym = sprintf('%04d-%02d', $year, $month);
     $exCli = kpi_as_oo_excl_clients($db, $params, $rules);
     $bind = [$ym];
-    $sql = "SELECT ot.Order_id, ot.Order_oo, ot.Client_name, ot.Client_name_ID, ot.d_id, ot.Qty,
+    $sql = "SELECT ot.Order_id, ot.Order_oo, ot.Client_name, ot.Client_name_ID, ot.d_id, ot.d_id_ID, ot.Qty,
                    ot.Delivery_date, ot.Order_status,
                    d1.d AS ship1, d2.d AS ship2
             FROM order_track ot
@@ -1151,6 +1154,53 @@ function kpi_as_order_bind_rows(PDO $db, int $year, int $month, array $params, a
             $rows[] = $r;
         }
     } catch (Throwable $e) {}
+
+    /* D 模式（使用者 2026-09-18 指示：走「料號＋客戶ID 對照」這條路）
+       --------------------------------------------------------------
+       不必做出貨綁定、也不必等 ERP 未交清單——直接用**料號主檔 id** 把訂單對到出貨單：
+         order_track.d_id_ID  ↔  is_list.d_setting_id
+       為什麼用這個鍵而不是客戶名稱＋料號文字：實測 2026 年
+         order_track.d_id_ID  有值 3031/3065（98.9%）
+         is_list.d_setting_id 有值 5049/5049（100%）
+         is_list.Client_id    只有 292/5049（5.8%，幾乎全空）
+       而且**料號主檔 id 本身就綁定了客戶**（同一個料號文字在 d_setting 常有好幾筆、分屬不同客戶），
+       對到主檔 id 就等於同時對到客戶，不必再比客戶名稱——舊訂單的客戶名稱寫法跟出貨單常常不一樣。
+       準時＝最早出貨日 ≤ 交期；查不到任何出貨紀錄＝未交。 */
+    if ($mode === 'ship' && $rows) {
+        $ms = sprintf('%04d-%02d-01', $year, $month);   // 這支函式本來沒有 $ms，漏了會讓回溯窗變成「從今天往前 120 天」
+        $ids = [];
+        foreach ($rows as $r) if ((int)$r['d_id_ID'] > 0) $ids[(int)$r['d_id_ID']] = 1;
+        $shipBy = [];
+        if ($ids) {
+            $from = date('Y-m-d', strtotime($ms . ' -120 days'));
+            foreach (array_chunk(array_keys($ids), 500) as $chunk) {
+                $in = implode(',', array_fill(0, count($chunk), '?'));
+                try {
+                    $q = $db->prepare("SELECT d_setting_id, IS_number, DATE(Order_date) d, Qty
+                                       FROM is_list
+                                       WHERE d_setting_id IN ($in) AND Order_date >= ?
+                                       ORDER BY Order_date");
+                    $q->execute(array_merge($chunk, [$from]));
+                    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) {
+                        $k = (int)$x['d_setting_id'];
+                        if (isset($shipBy[$k])) continue;      // 已排序，第一筆就是最早的
+                        $shipBy[$k] = ['no'=>(string)$x['IS_number'], 'd'=>(string)$x['d'],
+                                       'qty'=>(string)(0 + $x['Qty'])];
+                    }
+                } catch (Throwable $e) {}
+            }
+        }
+        foreach ($rows as &$r) {
+            if ($r['ship_date'] !== '') { $r['ontime'] = ($r['ship_date'] <= $r['due']); continue; }
+            $h = $shipBy[(int)$r['d_id_ID']] ?? null;
+            if (!$h) { $r['ontime'] = false; continue; }
+            $r['ship_date'] = $h['d'];
+            $r['ship_src']  = 'dsetting';
+            $r['hint']      = $h;
+            $r['ontime']    = ($h['d'] <= $r['due']);
+        }
+        unset($r);
+    }
 
     /* B 模式（使用者 2026-09-18 指示：ERP 還沒修好、也不要做出貨綁定，因為修好後會清掉出貨單重載）
        --------------------------------------------------------------
@@ -1438,7 +1488,7 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
             if (($mode === 'erp_ship' || $mode === 'erp') && !kpi_as_order_list_covers($db, $year, $month)) {
                 return null;
             }
-            if ($mode === 'bind' || $mode === 'erp_ship') {
+            if ($mode === 'bind' || $mode === 'erp_ship' || $mode === 'ship') {
                 $exIds = array_values(array_filter(array_map('intval', $exclRows)));
                 $exSet = $exIds ? array_flip($exIds) : [];
                 $num = 0; $den = 0;
@@ -2207,13 +2257,13 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
             $exCli = kpi_as_resolve_clients($db, kpi_as_list(kpi_as_pv($params, 'exclude_clients', ['寶嘉誠','泳建'])));
 
             /* ---- C（預設）／B：都以「出貨日 vs 交期」判定 ---- */
-            if ($mode === 'bind' || $mode === 'erp_ship') {
+            if ($mode === 'bind' || $mode === 'erp_ship' || $mode === 'ship') {
                 $rows = kpi_as_order_bind_rows($db, $year, $month, $params, [], $mode);
                 $cmapB = kpi_as_client_id_map($db);
                 $out['cols'] = [['k'=>'oo','t'=>'訂單編號'], ['k'=>'client','t'=>'客戶'], ['k'=>'d_id','t'=>'料號'],
                                 ['k'=>'qty','t'=>'訂單量'], ['k'=>'dd','t'=>'交期']];
                 // C 才有出貨日（來自綁定）；B 讀的是 ERP 未交清單，沒有出貨日期
-                if ($mode === 'bind') $out['cols'][] = ['k'=>'sd','t'=>'出貨日'];
+                if ($mode === 'bind' || $mode === 'ship') $out['cols'][] = ['k'=>'sd','t'=>'出貨日'];
                 $out['cols'][] = ['k'=>'ship','t'=>'疑似已出貨(未綁)', 'p'=>0];
                 $noShip = [];
                 foreach ($rows as $r) if ($r['ship_date'] === '') $noShip[] = ['cname'=>$r['Client_name'], 'd_id'=>$r['d_id']];
@@ -2224,11 +2274,23 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     if ($r['ontime']) continue;                       // 準時＝不是違規列
                     $dims = ['client'=>(string)$r['Client_name'], 'part'=>(string)$r['d_id']];
                     $hk = trim($dims['client']) . "\x00" . trim($dims['part']);
-                    $hv = ($mode === 'erp_ship') ? ($r['hint'] ?? null)
+                    $hv = ($mode === 'erp_ship' || $mode === 'ship') ? ($r['hint'] ?? null)
                         : (($r['ship_date'] === '') ? ($hint[$hk] ?? null) : null);
                     if ($hv) $hintN++;
                     if ($r['ship_date'] === '') $noneN++; else $lateN++;
-                    if ($mode === 'erp_ship') {
+                    if ($mode === 'ship') {
+                        if ($r['ship_date'] !== '') {
+                            $late = (int)round((strtotime($r['ship_date']) - strtotime($r['due'])) / 86400);
+                            $why = '這個料號最早的出貨日 ' . eg_fmt_date($r['ship_date']) . ' 晚於交期 ' . $late . ' 天';
+                            $fix = '確認交期是否已與客戶談妥延後（可到訂單追蹤更新交期）；'
+                                 . '若這一張其實對到的是別批出貨，請到快速出貨把出貨單綁到訂單，'
+                                 . '綁定之後判定就會以那一張為準。';
+                        } else {
+                            $why = '查不到這個料號的任何出貨紀錄（交期前後 120 天內）';
+                            $fix = '若已出貨請確認出貨單有沒有匯入；若客戶要求延後交期，'
+                                 . '請到訂單追蹤更新交期，這一筆就會改算到新的月份。';
+                        }
+                    } elseif ($mode === 'erp_ship') {
                         // B 模式讀的是 ERP 未交清單，它沒有出貨日期，所以只講「還完全沒出貨」
                         $why = '交期已到，ERP 未交清單上這一張還是「完全沒出貨」'
                              . ($hv ? '——但查到同客戶同料號有一張沒綁訂單的出貨單，很可能其實已經出貨了' : '');
@@ -2264,6 +2326,17 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                                  : ($cmapB[trim($dims['client'])] ?? '')), 'part'=>''],
                         'kind' => 'bad', 'why' => $why, 'fix' => $fix,
                     ];
+                }
+                if ($mode === 'ship') {
+                    $out['note'] = '未交判定方式：D｜以出貨單反推（用料號主檔 id 對應 order_track.d_id_ID ↔ is_list.d_setting_id，'
+                                 . '不必做出貨綁定、也不必 ERP 未交清單）。料號主檔 id 本身就綁定客戶，所以不必再比客戶名稱'
+                                 . '（舊訂單的客戶名稱寫法常跟出貨單不一樣）。'
+                                 . '分母＝本月交期的訂單（訂單追蹤，已排除取消的訂單），分子＝該料號最早出貨日不晚於交期。'
+                                 . '有做出貨綁定的那幾張一律以綁定的為準。'
+                                 . '本月未準時 ' . ($lateN + $noneN) . ' 筆：晚於交期 ' . $lateN . ' 筆、查不到出貨紀錄 ' . $noneN . ' 筆。';
+                    $out['note_print'] = '本表為本月交期、未於交期前出貨之訂單明細。';
+                    $out['note_excl'] = $exCli ? ('排除客戶：' . implode('、', $exCli) . '。') : '';
+                    return $out;
                 }
                 $out['note'] = ($mode === 'bind'
                                 ? ('未交判定方式：C｜以網頁上的出貨綁定為準。分母＝本月交期的訂單'
