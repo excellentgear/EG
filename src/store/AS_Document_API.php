@@ -2081,9 +2081,11 @@ case 'form_records_list':
        電子化模組**合併成同一份清單**，一律依日期新→舊，後端分頁（ai-rules/08：總筆數以全部
        符合條件的資料為準）。彙整規則的唯一實作在 asdoc_record_lib.php，不要在這裡再寫一份。 */
     $r = eg_asdoc_fill_records($db, $docId, $page, $size);
+    // 模組名稱與頁面一律查唯一登記表（以前這裡也寫死 car／qa_abnormal 兩列，新增模組會抓不到名稱）
+    require_once __DIR__ . '/../common/asdoc_page_lib.php';
     $moduleLink = null;
-    if ($doc['linked_module'] === 'car')              $moduleLink = ['name'=>'異常矯正處理單(CAR)', 'url'=>'../QA/correction_order.php'];
-    elseif ($doc['linked_module'] === 'qa_abnormal')  $moduleLink = ['name'=>'品質異常處理單',       'url'=>'../QA/qa_abnormal_view.php'];
+    $lmReg = eg_asdoc_linked_modules()[(string)$doc['linked_module']] ?? null;
+    if ($lmReg) { $moduleLink = ['name'=>$lmReg['name'], 'url'=>'../'.$lmReg['url']]; }
     jout(['status'=>'success','doc'=>$doc,'records'=>$r['rows'],'total'=>$r['total'],
           'page'=>$r['page'],'page_size'=>$r['page_size'],'module_link'=>$moduleLink]);
 
@@ -2652,7 +2654,10 @@ case 'set_linked_module':
     $docId  = (int)($_POST['doc_id'] ?? 0);
     $module = trim($_POST['module'] ?? '');
     if ($docId<=0) jout(['status'=>'error','message'=>'無效 ID']);
-    if (!in_array($module, ['', 'car', 'qa_abnormal'], true)) jout(['status'=>'error','message'=>'不支援的模組']);
+    // 合法值一律取自唯一登記表（鐵律4）；以前這裡寫死 ['','car','qa_abnormal']，
+    // 新增模組時只要忘了同步，畫面上選得到、按儲存卻回「不支援的模組」。
+    require_once __DIR__ . '/../common/asdoc_page_lib.php';
+    if ($module !== '' && !isset(eg_asdoc_linked_modules()[$module])) jout(['status'=>'error','message'=>'不支援的模組']);
     $db->prepare("UPDATE as_document SET linked_module=?, updated_at=NOW() WHERE id=?")->execute([$module ?: null, $docId]);
     jout(['status'=>'success']);
 

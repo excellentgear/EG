@@ -842,10 +842,16 @@ tr.doc-obsolete > td { background:#FBE4E8 !important; }
         <input type="hidden" id="rec_doc_id">
         <div id="recLinkedWrap" class="form-inline" style="margin-bottom:10px;display:none;">
           <label style="font-weight:normal;">電子化模組連結：</label>
-          <select class="form-control input-sm" id="rec_linked_module">
+          <?php
+            /* 選項一律由唯一登記表產生（鐵律4）。以前這裡是寫死的兩個 <option>，
+               新增電子化模組時要同時改這裡、API 白名單、asdoc_page_lib 三處，漏一處就對不起來。 */
+            include_once '../../src/common/asdoc_page_lib.php';
+          ?>
+          <select class="form-control input-sm" id="rec_linked_module" data-eg-filter="輸入模組名稱篩選…">
             <option value="">— 無（純紙本紀錄）—</option>
-            <option value="qa_abnormal">品質異常處理單</option>
-            <option value="car">異常矯正處理單(CAR)</option>
+            <?php foreach (eg_asdoc_linked_modules() as $lmCode => $lmInfo): ?>
+            <option value="<?= htmlspecialchars($lmCode, ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($lmInfo['name'], ENT_QUOTES, 'UTF-8') ?></option>
+            <?php endforeach; ?>
           </select>
           <button class="btn btn-xs btn-info" id="recLinkedSave">儲存連結</button>
           <span class="text-muted" style="font-size:11px;margin-left:6px;">連結後此表單的電子化開單結果會顯示在下方</span>

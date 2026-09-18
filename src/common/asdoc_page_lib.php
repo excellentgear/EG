@@ -29,6 +29,53 @@ if (!function_exists('eg_asdoc_page_map')) {
 define('EG_ASDOC_PAGE_BASE', '/EGsystem/views/');
 
 /**
+ * 「電子化模組連結」登記表 —— **唯一實作**（2026-09-18 收斂，鐵律4）
+ *
+ * `as_document.linked_module` 的合法值就是這裡的鍵。過去同一份清單寫死在四個地方
+ * （AS 文件管理的下拉選項、AS_Document_API 的白名單、本檔的 $MODULE_PAGES、
+ * asdoc_record_lib 的紀錄來源），加一個模組要改四處、漏一處就會出現
+ * 「存得進去卻讀不出來」或「下拉選得到、後端說不支援」這種完全看不出原因的落差。
+ *
+ * 要新增一個模組：**只在這裡加一列**。下拉選項、後端白名單、結構總覽的「網頁」欄
+ * 三者會同時生效；若該模組另有「填寫紀錄」可列（像 CAR／品質異常那樣有自己的單據表），
+ * 再到 asdoc_record_lib.php 的 ④ 區補上該模組的查詢即可（沒補也不會壞，只是沒有紀錄可列）。
+ *
+ * @return array module_code => ['name'=>用途, 'url'=>頁面（相對 views/）]
+ */
+function eg_asdoc_linked_modules(): array {
+    return [
+        'car'                  => ['name' => '異常矯正處理單(CAR)',   'url' => 'QA/correction_order.php'],
+        'qa_abnormal'          => ['name' => '品質異常處理單',        'url' => 'QA/qa_abnormal_view.php'],
+        'dwg_change'           => ['name' => '圖面變更紀錄',          'url' => 'QC/drawing_change_log.php'],
+        'packaging_inspection' => ['name' => '包裝出貨檢驗表',        'url' => 'QC/packaging_inspection_entry.php'],
+        'purchase_order'       => ['name' => '申請採購 · 廠商採購單', 'url' => 'pages/purchase_request.php'],
+        'purchase_request'     => ['name' => '申請採購 · 請購單',     'url' => 'pages/purchase_request.php'],
+        'purchase_inquiry'     => ['name' => '申請採購 · 詢價單',     'url' => 'pages/purchase_request.php'],
+        'stock_list'           => ['name' => '庫存管理 · 倉庫庫存表', 'url' => 'pages/stock.php'],
+        'stock_in'             => ['name' => '庫存管理 · 入庫單',     'url' => 'pages/stock.php'],
+        'qa_ncr_log'           => ['name' => '不合格品管制記錄表',    'url' => 'QA/ncr_control_log.php'],
+        'cs_satisfaction'      => ['name' => '客戶滿意度統計與監控',  'url' => 'Sales/customer_satisfaction.php'],
+    ];
+}
+
+/**
+ * 反查：這個模組代碼綁到哪一份 AS 文件（回 eg_asdoc_get() 同樣格式，未綁定回 null）。
+ * 供各模組頁面「動態顯示自己的 AS 編號」用——**頁面上不可以再寫死編號字串**（ai-rules/16）。
+ */
+function eg_asdoc_by_linked_module(PDO $db, string $module): ?array {
+    if ($module === '') { return null; }
+    static $c = [];
+    if (array_key_exists($module, $c)) { return $c[$module]; }
+    try {
+        $st = $db->prepare("SELECT id, doc_no, doc_name, doc_level, current_version
+                            FROM as_document WHERE is_deleted=0 AND linked_module=? ORDER BY id LIMIT 1");
+        $st->execute([$module]);
+        $r = $st->fetch(PDO::FETCH_ASSOC);
+        return $c[$module] = ($r ?: null);
+    } catch (Throwable $e) { return $c[$module] = null; }
+}
+
+/**
  * 已網頁化的 AS 文件對照表
  * @param array $opt  skip_sources：要排除的來源（form_signer／review_form／form_tpl／module／legacy／bind）
  * @return array      [as_document.id => ['name'=>用途, 'url'=>頁面, 'source'=>來源, 'module'=>模組代碼]]
@@ -58,17 +105,14 @@ function eg_asdoc_page_map(PDO $db, array $opt = []): array {
         }
     } catch (Throwable $e) { error_log('asdoc_page_map form_tpl: ' . $e->getMessage()); }
 
-    // ② 既有電子化模組（as_document.linked_module）
-    $MODULE_PAGES = [
-        'car'         => ['異常矯正處理單(CAR)', 'QA/correction_order.php'],
-        'qa_abnormal' => ['品質異常處理單',      'QA/qa_abnormal_view.php'],
-    ];
+    // ② 既有電子化模組（as_document.linked_module）——清單的唯一實作見 eg_asdoc_linked_modules()
+    $MODULE_PAGES = eg_asdoc_linked_modules();
     try {
         $sql = "SELECT id, linked_module FROM as_document
                 WHERE is_deleted=0 AND linked_module IS NOT NULL AND linked_module<>''";
         foreach ($db->query($sql, PDO::FETCH_ASSOC) as $r) {
             $m = (string)$r['linked_module'];
-            if (isset($MODULE_PAGES[$m])) { $put((int)$r['id'], $MODULE_PAGES[$m][0], $U($MODULE_PAGES[$m][1]), 'module', $m); }
+            if (isset($MODULE_PAGES[$m])) { $put((int)$r['id'], $MODULE_PAGES[$m]['name'], $U($MODULE_PAGES[$m]['url']), 'module', $m); }
         }
     } catch (Throwable $e) { error_log('asdoc_page_map module: ' . $e->getMessage()); }
 
@@ -140,6 +184,23 @@ function eg_asdoc_page_map(PDO $db, array $opt = []): array {
         'tool_calib_equip_list' => ['檢驗設備一覽表',                'QC/tool_calibration.php'],
         'stock_req'             => ['領料需求單',                    'pages/stock.php'],
         'as_doc_quality_record_list' => ['AS 文件管理 · 品質紀錄清單', 'ADM/as_document_management.php'],
+        // ↓ 2026-09-18 補登：以下模組早就綁好了，但因為這裡沒有名稱對照，$put() 會因 url==='' 直接略過，
+        //   結果是「AS 結構總覽的網頁欄一片空白、看起來像沒做」。漏登記不影響綁定本身，只影響連結。
+        'ia_plan'               => ['內部稽核 · 年度稽核計劃表',     'ADM/internal_audit.php'],
+        'ia_case'               => ['內部稽核 · 稽核通知單',         'ADM/internal_audit.php'],
+        'ia_kpi'                => ['內部稽核 · 績效執行稽核查檢表', 'ADM/internal_audit.php'],
+        'ia_as'                 => ['內部稽核 · AS稽核查檢表',       'ADM/internal_audit.php'],
+        'ia_system'             => ['內部稽核 · 系統稽核紀錄表',     'ADM/internal_audit.php'],
+        'ia_nc'                 => ['內部稽核 · 不符合通知單',       'ADM/internal_audit.php'],
+        'ia_report'             => ['內部稽核 · 稽核報告表',         'ADM/internal_audit.php'],
+        'cm_record'             => ['溝通管理 · 利害關係者溝通記錄表',     'GM/communication_mgmt.php'],
+        'cm_track'              => ['溝通管理 · 回應利害關係者措施追蹤表', 'GM/communication_mgmt.php'],
+        'cm_ctrl'               => ['溝通管理 · 溝通管制表',               'GM/communication_mgmt.php'],
+        'eng_change'            => ['工程變更申請單',                'TD/eng_change.php'],
+        // 出貨單做在快速出貨(新版)；該頁已登記進選單，權限照它自己算。
+        'shipping_note'         => ['快速出貨 · 出貨單',             'Sales/Shipping_Quick.php'],
+        'equip_machine_service_log' => ['機器設備履歷表',            'pm/equipment_machine_list.php'],
+        'tool_calib_equip_service'  => ['檢驗設備維修履歷',          'QC/tool_calibration.php'],
     ];
     // 「一個模板一組編號」的通用引擎：模組代碼是動態組出來的，名稱現查模板表
     $tplNames = function (string $table) use ($db) {

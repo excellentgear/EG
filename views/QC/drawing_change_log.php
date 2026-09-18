@@ -19,7 +19,19 @@ include_once '../../src/common/rbac.php';
 
 if (empty($_SESSION['qc_csrf'])) { $_SESSION['qc_csrf'] = bin2hex(random_bytes(16)); }
 $CSRF = $_SESSION['qc_csrf'];
-$AS_DOC_NO = '2-PD-01-07';   // 綁定的 AS 表單編號（圖面變更簽收單）
+/* 綁定的 AS 表單編號（圖面變更簽收單）。
+   2026-09-18：原本這裡寫死 '2-PD-01-07'，違反 ai-rules/16「編號與表單名稱一律由綁定推導、禁寫死」——
+   AS 文件改版或改編號時畫面會繼續印舊的而且不報錯。改為反查
+   as_document.linked_module='dwg_change'（綁定入口＝AS 文件管理 → 填寫紀錄 → 電子化模組連結）。
+   查不到綁定時整個標籤不顯示，不要退回寫死值。 */
+include_once '../../src/common/asdoc_page_lib.php';
+$AS_DOC = null;
+try {
+    $__d = (new DBConnection())->getPDO();
+    $AS_DOC = eg_asdoc_by_linked_module($__d, 'dwg_change');
+} catch (Throwable $e) { $AS_DOC = null; }
+$AS_DOC_NO   = $AS_DOC ? (string)$AS_DOC['doc_no'] : '';
+$AS_DOC_NAME = $AS_DOC ? (string)$AS_DOC['doc_name'] : '';
 
 // -----------------------------------------------------------------------------
 // AJAX 後端
@@ -419,7 +431,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <div class="right_col" role="main">
             <div class="page-title">
                 <div class="title_left"><h3 style="color:#4A3524;">圖面變更紀錄
-                    <span class="as-tag">AS 表單編號 <?php echo htmlspecialchars($AS_DOC_NO, ENT_QUOTES, 'UTF-8'); ?>　圖面變更簽收單</span></h3></div>
+                    <?php if ($AS_DOC_NO !== ''): ?>
+                    <span class="as-tag">AS 表單編號 <?php echo htmlspecialchars($AS_DOC_NO, ENT_QUOTES, 'UTF-8'); ?>　<?php echo htmlspecialchars($AS_DOC_NAME, ENT_QUOTES, 'UTF-8'); ?></span>
+                    <?php endif; ?></h3></div>
                 <div class="title_right"><div class="pull-right">
                     <button class="btn btn-warm btn-sm" id="btn-new"><i class="fa fa-plus"></i> 登錄圖面變更</button>
                     <button class="btn btn-warm-o btn-sm" id="btn-setting" style="display:none;"><i class="fa fa-cog"></i> 設定</button>
@@ -465,7 +479,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <div class="modal-header" style="background:#FFF8EE;border-bottom:1px solid #E4D3BC;">
             <button type="button" class="close" data-dismiss="modal">&times;</button>
             <h4 class="modal-title" style="color:#4A3524;"><i class="fa fa-pencil-square-o"></i> 登錄圖面變更
-                <small>AS <?php echo htmlspecialchars($AS_DOC_NO, ENT_QUOTES, 'UTF-8'); ?></small></h4>
+                <?php if ($AS_DOC_NO !== ''): ?><small>AS <?php echo htmlspecialchars($AS_DOC_NO, ENT_QUOTES, 'UTF-8'); ?></small><?php endif; ?></h4>
         </div>
         <div class="modal-body" data-eg-form data-eg-submit="#btn-save">
             <input type="hidden" id="f-id">
