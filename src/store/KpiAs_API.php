@@ -491,8 +491,9 @@ case 'adjust_add': {
         jerr(kpi_as_year_locked($year) ? '此年度已結案鎖定，僅 KPI 管理者可調整'
                                        : '您沒有調整這個指標的權限（限擔當者本人、KPI 填報或 KPI 管理者）', 403);
     }
+    // 原因非必填（使用者要求 2026-09-18）：誰排的、什麼時候排的本來就會留在
+    // created_by／created_by_name／created_at，硬要人打字只是拖慢現場。
     $reason = trim((string)($_POST['reason'] ?? ''));
-    if ($reason === '') jerr('請填排除原因');
     if (mb_strlen($reason) > 200) $reason = mb_substr($reason, 0, 200);
     $keys = json_decode((string)($_POST['keys'] ?? '[]'), true);
     $keys = is_array($keys) ? array_values(array_unique(array_filter(array_map('strval', $keys), 'strlen'))) : [];
@@ -530,7 +531,7 @@ case 'adjust_add': {
     if (!$done) jerr('沒有可排除的項目（選到的資料已經不在這個月的違規清單內，請重新整理）');
     $res = kpi_as_settle($db, $iy, $year, $month, $u);   // 立刻重算這一格
     kpi_as_log($db, $iid, $year, $month, 'adjust_add', 'exclude', null, implode(',', $keys),
-               '排除 ' . $done . ' 筆（原因：' . $reason . '）', $u);
+               '排除 ' . $done . ' 筆' . ($reason !== '' ? ('（原因：' . $reason . '）') : ''), $u);
     jout(['added'=>$done, 'skipped'=>$skip,
           'value'=>($res && $res['value'] !== null) ? round($res['value'], 2) : null,
           'num'=>$res['num'] ?? null, 'den'=>$res['den'] ?? null]);
@@ -591,8 +592,7 @@ case 'excl_rule_add': {
     }, $vals), 'strlen'))) : [];
     if (!$vals) jerr('請選擇要排除的項目');
     if (count($vals) > 200) jerr('一次最多 200 項');
-    $reason = mb_substr(trim((string)($_POST['reason'] ?? '')), 0, 200);
-    if ($reason === '') jerr('請填排除原因');
+    $reason = mb_substr(trim((string)($_POST['reason'] ?? '')), 0, 200);   // 非必填
 
     $ins = $db->prepare("INSERT INTO kpi_as_excl_rule (indicator_id,year,dim,val,reason,created_by,created_by_name)
                          VALUES (?,?,?,?,?,?,?)
@@ -600,12 +600,13 @@ case 'excl_rule_add': {
                                                  created_by_name=VALUES(created_by_name), created_at=NOW()");
     $db->beginTransaction();
     try {
-        foreach ($vals as $v) $ins->execute([$iid, $year, $dim, $v, $reason, (int)$u['id'], (string)$u['user_cname']]);
+        foreach ($vals as $v) $ins->execute([$iid, $year, $dim, $v, ($reason !== '' ? $reason : null),
+                                            (int)$u['id'], (string)$u['user_cname']]);
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('寫入失敗：' . $e->getMessage(), 500); }
     $re = kpi_excl_resettle_year($db, $iy, $year, $u);
     kpi_as_log($db, $iid, $year, null, 'excl_rule_add', 'excl_' . $dim, null, implode(',', $vals),
-               '新增排除規則 ' . count($vals) . ' 項（原因：' . $reason . '）', $u);
+               '新增排除規則 ' . count($vals) . ' 項' . ($reason !== '' ? ('（原因：' . $reason . '）') : ''), $u);
     jout(['added'=>count($vals), 'recalced'=>$re,
           'rules'=>kpi_as_excl_rule_rows($db, $iid, $year)]);
 }

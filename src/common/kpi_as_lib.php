@@ -674,6 +674,8 @@ function kpi_as_list($v): array {
     return array_values(array_filter(array_map('trim', $parts), 'strlen'));
 }
 
+require_once __DIR__ . '/date_fmt_lib.php';   // 顯示用日期一律 YYYY.MM.DD（ai-rules/20）
+
 /* ============================================================
  * 排除維度（使用者要求 2026-09-17：排除要能指定「特定客戶／製程／廠商／料號」）
  * --------------------------------------------------------------
@@ -685,6 +687,37 @@ function kpi_as_list($v): array {
  * 看資料內有哪些資料就提供那些設定），所以每一列都要帶 dims；
  * 這裡的 kpi_as_calc_dims() 只是後端驗證用的白名單，避免前端亂送維度代號。
  * ============================================================ */
+
+/**
+ * 名稱 → 代號 對照（客戶、廠商）。
+ * 明細列上顯示與比對用的一律是「名稱」（來源表存的就是名稱），
+ * 但使用者手邊常常只有代號（客戶 C2005、廠商編號），所以候選清單要一併帶上代號可供搜尋。
+ * 靜態快取：同一個請求裡不論幾個指標、幾個月份都只查一次。
+ */
+function kpi_as_client_id_map(PDO $db): array {
+    static $m = null;
+    if ($m !== null) return $m;
+    $m = [];
+    try {
+        foreach ($db->query("SELECT customer_id, customer FROM customer_list") as $r) {
+            $n = trim((string)$r['customer']);
+            if ($n !== '' && !isset($m[$n])) $m[$n] = (string)$r['customer_id'];
+        }
+    } catch (Throwable $e) {}
+    return $m;
+}
+function kpi_as_maker_id_map(PDO $db): array {
+    static $m = null;
+    if ($m !== null) return $m;
+    $m = [];
+    try {
+        foreach ($db->query("SELECT maker_id_no, maker_id FROM maker_list") as $r) {
+            $n = trim((string)$r['maker_id']);
+            if ($n !== '' && !isset($m[$n])) $m[$n] = (string)$r['maker_id_no'];
+        }
+    } catch (Throwable $e) {}
+    return $m;
+}
 
 /** 維度代號 → 顯示名稱 */
 function kpi_as_dim_labels(): array {
@@ -790,8 +823,10 @@ function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): arra
         }
     }
     $winStart = date('Y-m-d', strtotime($ms . ' -120 days'));
+    $cmap = kpi_as_client_id_map($db);
     $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.sqty, bi.outsource_date, bi.return_date,
                                bi.QC_check_date, bi.process_no, pn.ProcessName, pn.process_type_id,
+                               bi.maker_id_no,
                                COALESCE(mk.maker_id, bi.maker_id) AS maker_name,
                                b.d_id AS part_no, b.Client_Name AS client_name,
                                b.o_order_id, b.closed_at
@@ -819,10 +854,12 @@ function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): arra
             $needBoms[(string)$r['bom']] = 1;
             if ((int)$r['o_order_id'] > 0) $needOrders[(int)$r['o_order_id']] = 1;
         }
+        $dimIds = ['client'=>($cmap[trim((string)$r['client_name'])] ?? ''), 'part'=>'',
+                   'proc'=>(string)$r['process_no'], 'maker'=>(string)$r['maker_id_no']];
         $rows[] = ['fid'=>(string)$r['bom_ing_fid'], 'bom'=>(string)$r['bom'], 'sn'=>(int)$r['bom_sn'],
                    'qty'=>(string)$r['sqty'], 'out'=>$out, 'due'=>$due, 'days'=>$days,
                    'proc_type'=>$ptid, 'proc'=>$dims['proc'], 'maker'=>$dims['maker'],
-                   'part'=>$dims['part'], 'client'=>$dims['client'], 'dims'=>$dims,
+                   'part'=>$dims['part'], 'client'=>$dims['client'], 'dims'=>$dims, 'dim_ids'=>$dimIds,
                    'back'=>$back, 'back_src'=>($back === '' ? '' : 'return'),
                    'qc_date'=>$r['QC_check_date'] ? substr((string)$r['QC_check_date'], 0, 10) : '',
                    'closed'=>$r['closed_at'] ? substr((string)$r['closed_at'], 0, 10) : '',
@@ -1626,10 +1663,14 @@ function kpi_as_detail_finish(array $out, array $rules): array {
     $opts = []; $bad = 0; $ruleEx = 0;
     foreach ($out['rows'] as &$r) {
         $dims = isset($r['dims']) && is_array($r['dims']) ? $r['dims'] : [];
+        $dids = isset($r['dim_ids']) && is_array($r['dim_ids']) ? $r['dim_ids'] : [];
         foreach ($dims as $dk => $dv) {
             $dv = trim((string)$dv);
             if ($dv === '') continue;
-            $opts[$dk][$dv] = 1;
+            // 同一個值只留一筆；代號有就記起來（候選清單要讓人用代號搜尋）
+            if (!isset($opts[$dk][$dv]) || $opts[$dk][$dv] === '') {
+                $opts[$dk][$dv] = trim((string)($dids[$dk] ?? ''));
+            }
         }
         $kind = (string)($r['kind'] ?? (!empty($r['warn']) ? 'warn' : 'bad'));
         $hit  = kpi_as_dims_hit($dims, $rules);
@@ -1643,9 +1684,10 @@ function kpi_as_detail_finish(array $out, array $rules): array {
     $labels = kpi_as_dim_labels();
     $dims = [];
     foreach ($opts as $dk => $vals) {
-        $vs = array_keys($vals);
-        sort($vs, SORT_NATURAL | SORT_FLAG_CASE);
-        $dims[] = ['k'=>$dk, 't'=>($labels[$dk] ?? $dk), 'opts'=>$vs];
+        ksort($vals, SORT_NATURAL | SORT_FLAG_CASE);
+        $os = [];
+        foreach ($vals as $v => $id) $os[] = ['v'=>(string)$v, 'id'=>(string)$id];
+        $dims[] = ['k'=>$dk, 't'=>($labels[$dk] ?? $dk), 'opts'=>$os];
     }
     $out['total']   = $bad;
     $out['rule_ex'] = $ruleEx;
@@ -1681,12 +1723,12 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     $backTxt = '—';
                 } else {
                     $late = (int)round((strtotime($r['back']) - strtotime($r['due'])) / 86400);
-                    $backTxt = $r['back'];
+                    $backTxt = eg_fmt_date($r['back']);
                     if ($r['back_src'] !== 'return') {
                         $guessN++;
                         $backTxt .= '（推估：' . ($srcName[$r['back_src']] ?? $r['back_src']) . '）';
                         $why = '回廠日沒有登錄，依「' . ($srcName[$r['back_src']] ?? $r['back_src'])
-                             . '」推估為 ' . $r['back'] . '，仍晚於應交日 ' . $late . ' 天';
+                             . '」推估為 ' . eg_fmt_date($r['back']) . '，仍晚於應交日 ' . $late . ' 天';
                         $fix = '推估日期只用來判定準不準時，不會寫回任何一筆資料。'
                              . '請到 BOM 總表補登真正的回廠日，判定才會精準。';
                     } else {
@@ -1700,8 +1742,9 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     'key'  => $r['fid'],
                     'vals' => ['bom'=>$r['bom'], 'client'=>$r['client'], 'part'=>$r['part'],
                                'proc'=>$r['proc'], 'maker'=>$r['maker'], 'qty'=>$r['qty'],
-                               'out'=>$r['out'], 'due'=>$r['due'], 'back'=>$backTxt],
-                    'dims' => $r['dims'], 'kind' => 'bad', 'why' => $why, 'fix' => $fix,
+                               'out'=>eg_fmt_date($r['out']), 'due'=>eg_fmt_date($r['due']), 'back'=>$backTxt],
+                    'dims' => $r['dims'], 'dim_ids' => $r['dim_ids'],
+                    'kind' => 'bad', 'why' => $why, 'fix' => $fix,
                 ];
             }
             usort($out['rows'], function ($a, $b) { return strcmp($a['vals']['due'], $b['vals']['due']); });
@@ -1718,6 +1761,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                . implode(',', array_fill(0, count($exCli), '?')) . ")") : '';
             // order_list 的客戶欄存的是代號(C2005)，畫面上要看的是中文簡稱，故對回 customer_list
             $sql = "SELECT ol.Order_id, ol.Order_oo, ol.d_id, ol.Qty, ol.Open_Qty, ol.Delivery_date,
+                           ol.Client_name AS client_code,
                            COALESCE(cl.customer, ol.Client_name) AS Client_name
                     FROM order_list ol
                     LEFT JOIN customer_list cl ON cl.customer_id=ol.Client_name
@@ -1735,8 +1779,9 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     'key'  => (string)$r['Order_id'],
                     'vals' => ['oo'=>(string)$r['Order_oo'], 'client'=>(string)$r['Client_name'],
                                'd_id'=>(string)$r['d_id'], 'qty'=>(string)(0 + $r['Qty']),
-                               'open'=>(string)(0 + $r['Open_Qty']), 'dd'=>substr((string)$r['Delivery_date'], 0, 10)],
+                               'open'=>(string)(0 + $r['Open_Qty']), 'dd'=>eg_fmt_date($r['Delivery_date'])],
                     'dims' => ['client'=>(string)$r['Client_name'], 'part'=>(string)$r['d_id']],
+                    'dim_ids' => ['client'=>(string)$r['client_code'], 'part'=>''],
                     'kind' => 'bad',
                     'why'  => '交期已到本月，但未交量＝訂單量（完全沒出貨）',
                     'fix'  => '若實際已出貨，請確認出貨單有沒有帶到這張訂單（未交量沒被沖銷）；'
@@ -1790,7 +1835,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                'type'=>((string)$r['train_type'] === 'out' ? '外訓' : '內訓'),
                                'unit'=>(string)$r['org_unit'], 'st'=>($stName[$stv] ?? $stv),
                                'people'=>(string)(0 + $r['target_headcount'])],
-                    'dims' => ['unit'=>(string)$r['org_unit']], 'kind' => 'bad',
+                    'dims' => ['unit'=>(string)$r['org_unit']], 'dim_ids' => ['unit'=>''], 'kind' => 'bad',
                     'why'  => '列在 ' . $month . ' 月的計畫，但還沒登錄完成（狀態：' . ($stName[$stv] ?? $stv) . '）',
                     'fix'  => '若這場已經辦完了，請到教育訓練管理登錄完成（要有簽到與評鑑，所以不在這裡改）；'
                             . '若改到別的月份舉辦，直接把「計畫月份」改成實際月份，這一筆就會改算到那個月；'
@@ -1822,6 +1867,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
             $sql .= " ORDER BY ot.ateGet, ot.Order_id";
             $st = $db->prepare($sql);
             $st->execute($bind);
+            $cmapD = kpi_as_client_id_map($db);
             $warnN = 0;
             $out['cols'] = [['k'=>'oo','t'=>'訂單編號'], ['k'=>'client','t'=>'客戶'], ['k'=>'d_id','t'=>'料號'],
                             ['k'=>'designer','t'=>'設計者'], ['k'=>'ate','t'=>'接單移轉設計'],
@@ -1851,10 +1897,12 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     'key'  => (string)$r['Order_id'],
                     'vals' => ['oo'=>(string)$r['Order_oo'], 'client'=>(string)$r['Client_name'],
                                'd_id'=>(string)$r['d_id'], 'designer'=>(string)($r['designer'] ?: $r['ate']),
-                               'ate'=>$d1, 'pm'=>($d2 !== '' ? $d2 : '—'),
+                               'ate'=>eg_fmt_date($d1), 'pm'=>($d2 !== '' ? eg_fmt_date($d2) : '—'),
                                'days'=>($days === null ? '—' : (string)$days)],
                     'dims' => ['client'=>(string)$r['Client_name'], 'part'=>(string)$r['d_id'],
                                'designer'=>(string)($r['designer'] ?: $r['ate'])],
+                    'dim_ids' => ['client'=>($cmapD[trim((string)$r['Client_name'])] ?? ''),
+                                  'part'=>'', 'designer'=>(string)$r['ate']],
                     'kind' => ($warn ? 'warn' : 'bad'),
                     'why'  => $why, 'fix' => $fix, 'warn' => $warn,
                 ];
@@ -1872,7 +1920,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
             if (!$ngs) $ngs = ['ng'];
             $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.sqty, bi.QC_check, bi.QC_check_date, bi.QC_ps,
                                        pn.ProcessName, bi.process_no,
-                                       COALESCE(mk.maker_id, bi.maker_id) AS maker_name,
+                                       COALESCE(mk.maker_id, bi.maker_id) AS maker_name, bi.maker_id_no,
                                        b.d_id AS part_no, b.Client_Name AS client_name
                                 FROM bom_ing bi
                                 LEFT JOIN bom b ON b.bom=bi.bom
@@ -1882,6 +1930,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                   AND bi.QC_check IN (" . implode(',', array_fill(0, count($ngs), '?')) . ")
                                 ORDER BY bi.QC_check_date, bi.bom_ing_fid");
             $st->execute(array_merge([$ym], $ngs));
+            $cmapI = kpi_as_client_id_map($db);
             $ckName = ['ok'=>'允收', 'ng'=>'驗退', 'QQ'=>'特採', 'AOD'=>'特採(AOD)'];
             $out['cols'] = [['k'=>'bom','t'=>'製令'], ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'],
                             ['k'=>'proc','t'=>'製程'], ['k'=>'maker','t'=>'廠商'],
@@ -1898,9 +1947,12 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                'proc'=>$dims['proc'],
                                'maker'=>$dims['maker'], 'qty'=>(string)$r['sqty'],
                                'ck'=>(($ckName[$cv] ?? $cv) . '（' . $cv . '）'),
-                               'ckd'=>substr((string)$r['QC_check_date'], 0, 10),
+                               'ckd'=>eg_fmt_date($r['QC_check_date']),
                                'ps'=>mb_substr((string)$r['QC_ps'], 0, 40)],
-                    'dims' => $dims, 'kind' => 'bad',
+                    'dims' => $dims,
+                    'dim_ids' => ['client'=>($cmapI[trim((string)$r['client_name'])] ?? ''), 'part'=>'',
+                                  'proc'=>(string)$r['process_no'], 'maker'=>(string)$r['maker_id_no']],
+                    'kind' => 'bad',
                     'why'  => '檢驗判定為「' . ($ckName[$cv] ?? $cv) . '」，計入不良',
                     'fix'  => '只有「判定登錄錯誤」才在這裡改判定；確實不良請維持原判定（屬真實不良率）。'
                             . '若檢驗日期打錯月份，改日期即可讓這一筆算到正確的月份。',
@@ -1914,8 +1966,8 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
         case 'quote_to_order': {
             $cond = "DATE_FORMAT(q.quote_date,'%Y-%m')=? AND q.pending_review=0";
             if ((int)kpi_as_pv($params, 'exclude_draft', 1) === 1) $cond .= " AND q.is_draft=0";
-            $st = $db->prepare("SELECT q.quote_id, q.quote_no, q.client_name, q.quote_date, q.total_amount,
-                                       q.is_draft, q.currency
+            $st = $db->prepare("SELECT q.quote_id, q.quote_no, q.client_name, q.client_id, q.quote_date,
+                                       q.total_amount, q.is_draft, q.currency
                                 FROM quotation_list q WHERE $cond
                                 ORDER BY q.quote_date, q.quote_id");
             $st->execute([$ym]);
@@ -1939,10 +1991,11 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                 $out['rows'][] = [
                     'key'  => (string)$r['quote_id'],
                     'vals' => ['no'=>(string)$r['quote_no'], 'client'=>$dims['client'],
-                               'qd'=>substr((string)$r['quote_date'], 0, 10),
+                               'qd'=>eg_fmt_date($r['quote_date']),
                                'amt'=>number_format((float)$r['total_amount']),
                                'st'=>($used ? ('已接單（' . $used . ' 張訂單）') : '尚未接單')],
-                    'dims' => $dims, 'kind' => ($used ? 'info' : 'bad'),
+                    'dims' => $dims, 'dim_ids' => ['client'=>(string)$r['client_id']],
+                    'kind' => ($used ? 'info' : 'bad'),
                     'why'  => $used ? ('這一張已經被 ' . $used . ' 張訂單引用，計入接單（列出來只是方便對帳）')
                                     : '這一張報價單到目前為止沒有任何訂單引用它的報價單號',
                     'fix'  => $used ? '不必處理。'
@@ -1968,6 +2021,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                 FROM is_list WHERE DATE_FORMAT(Order_date,'%Y-%m')=?
                                 ORDER BY (Qty*COALESCE(Unit_price,0)) DESC, IS_id");
             $st->execute([$ym]);
+            $cmapS = kpi_as_client_id_map($db);   // is_list.Client_id 全表是空的，只能用名稱回查代號
             $out['cols'] = [['k'=>'no','t'=>'出貨單號'], ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'],
                             ['k'=>'qty','t'=>'數量'], ['k'=>'up','t'=>'單價'], ['k'=>'amt','t'=>'金額'],
                             ['k'=>'d','t'=>'出貨日']];
@@ -1983,8 +2037,10 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     'key'  => (string)$r['IS_id'],
                     'vals' => ['no'=>(string)$r['IS_number'], 'client'=>$dims['client'], 'part'=>$dims['part'],
                                'qty'=>(string)(0 + $r['Qty']), 'up'=>($up === null ? '—' : (string)(0 + $up)),
-                               'amt'=>number_format($amt), 'd'=>substr((string)$r['Order_date'], 0, 10)],
-                    'dims' => $dims, 'kind' => ($bad ? 'bad' : 'info'),
+                               'amt'=>number_format($amt), 'd'=>eg_fmt_date($r['Order_date'])],
+                    'dims' => $dims,
+                    'dim_ids' => ['client'=>($cmapS[trim((string)$r['Client_name'])] ?? ''), 'part'=>''],
+                    'kind' => ($bad ? 'bad' : 'info'),
                     'why'  => $bad ? '沒有單價（或單價為 0），這一筆的金額算成 0，會把達成率往下拉'
                                    : '正常計入本月銷貨金額（列出來是方便逐筆核對）',
                     'fix'  => $bad ? '請到快速出貨把這一筆的單價補上；若這一筆本來就不該算業績（樣品、補件、免費更換），'
@@ -2016,11 +2072,12 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                 if (isset($tmap[(string)$month])) $target = (float)$tmap[(string)$month];
                 elseif (isset($tmap[$month]))     $target = (float)$tmap[$month];
             }
-            $st = $db->prepare("SELECT Order_id, Order_oo, Client_name, d_id, Qty, unit_price,
+            $st = $db->prepare("SELECT Order_id, Order_oo, Client_name, Client_name_ID, d_id, Qty, unit_price,
                                        Delivery_date, Order_status
                                 FROM order_track WHERE Delivery_date BETWEEN ? AND ?
                                 ORDER BY (Qty*COALESCE(unit_price,0)) DESC, Order_id");
             $st->execute([$ws, $we]);
+            $cmapO = kpi_as_client_id_map($db);
             $out['cols'] = [['k'=>'oo','t'=>'訂單編號'], ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'],
                             ['k'=>'qty','t'=>'數量'], ['k'=>'up','t'=>'單價'], ['k'=>'amt','t'=>'金額'],
                             ['k'=>'dd','t'=>'交期'], ['k'=>'st','t'=>'狀態']];
@@ -2038,9 +2095,13 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     'vals' => ['oo'=>(string)$r['Order_oo'], 'client'=>$dims['client'], 'part'=>$dims['part'],
                                'qty'=>(string)(0 + $r['Qty']), 'up'=>($up === null ? '—' : (string)(0 + $up)),
                                'amt'=>($counted ? number_format($amt) : '不計入'),
-                               'dd'=>substr((string)$r['Delivery_date'], 0, 10),
+                               'dd'=>eg_fmt_date($r['Delivery_date']),
                                'st'=>($void ? '已取消(9)' : '有效')],
-                    'dims' => $dims, 'kind' => ($counted ? 'info' : 'bad'),
+                    'dims' => $dims,
+                    'dim_ids' => ['client'=>((string)$r['Client_name_ID'] !== ''
+                                             ? (string)$r['Client_name_ID']
+                                             : ($cmapO[trim((string)$r['Client_name'])] ?? '')), 'part'=>''],
+                    'kind' => ($counted ? 'info' : 'bad'),
                     'why'  => $counted ? '正常計入本月接單金額（列出來是方便逐筆核對）'
                                        : ($void ? '訂單狀態是 9（已取消），依現行口徑不計入接單金額'
                                                 : '沒有單價（或單價為 0），這一筆整張都沒有被算進接單金額'),
@@ -2050,7 +2111,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                                 . '若這張本來就不該算業績，請用排除功能排掉。'),
                 ];
             }
-            $out['note'] = '接單金額以「交期」歸屬帳款月窗口（' . $ws . ' ~ ' . $we . '）計算。'
+            $out['note'] = '接單金額以「交期」歸屬帳款月窗口（' . eg_fmt_date($ws) . ' ~ ' . eg_fmt_date($we) . '）計算。'
                          . '本月接單金額 ' . number_format($sum) . '，目標 '
                          . ($target > 0 ? number_format($target) : '取出貨分析頁全域目標')
                          . ($badN ? ('。其中 ' . $badN . ' 筆沒有計入（無單價或已取消）') : '') . '。';
@@ -2070,7 +2131,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                 $cond = "ml.machine_type_id IN (" . implode(',', array_fill(0, count($types), '?')) . ")";
                 $bind = array_merge($bind, $types);
             }
-            $st = $db->prepare("SELECT r.report_id, r.report_date, r.produced_qty,
+            $st = $db->prepare("SELECT r.report_id, r.report_date, r.produced_qty, r.machine_id,
                                        r.production_start_time, r.production_end_time,
                                        ml.machine AS machine_name, pn.ProcessName, r.process_no,
                                        bi.bom, b.d_id AS part_no, b.Client_Name AS client_name
@@ -2082,13 +2143,15 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                 WHERE r.report_date BETWEEN ? AND ? AND (" . $cond . ")
                                 ORDER BY r.report_date, r.report_id");
             $st->execute($bind);
+            $cmapC = kpi_as_client_id_map($db);
+            $rowsC = $st->fetchAll(PDO::FETCH_ASSOC);
             // 判定門檻＝這個指標自己的目標值（大於 N 顆/小時）
             $tgt = (isset($iy['target_value']) && $iy['target_value'] !== null) ? (float)$iy['target_value'] : 0.0;
             $out['cols'] = [['k'=>'d','t'=>'報工日'], ['k'=>'machine','t'=>'機台'], ['k'=>'bom','t'=>'製令'],
                             ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'], ['k'=>'proc','t'=>'製程'],
                             ['k'=>'qty','t'=>'完成數'], ['k'=>'hr','t'=>'生產工時'], ['k'=>'rate','t'=>'顆/小時']];
             $noTime = 0;
-            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            foreach ($rowsC as $r) {
                 $hrs = null;
                 if (!empty($r['production_start_time']) && !empty($r['production_end_time'])) {
                     $sec = strtotime((string)$r['production_end_time']) - strtotime((string)$r['production_start_time']);
@@ -2117,12 +2180,16 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                 }
                 $out['rows'][] = [
                     'key'  => (string)$r['report_id'],
-                    'vals' => ['d'=>substr((string)$r['report_date'], 0, 10), 'machine'=>$dims['machine'],
+                    'vals' => ['d'=>eg_fmt_date($r['report_date']), 'machine'=>$dims['machine'],
                                'bom'=>(string)$r['bom'], 'client'=>$dims['client'], 'part'=>$dims['part'],
                                'proc'=>$dims['proc'], 'qty'=>(string)$qty,
                                'hr'=>($hrs === null ? '—' : (string)round($hrs, 2)),
                                'rate'=>($rate === null ? '—' : (string)round($rate, 1))],
-                    'dims' => $dims, 'kind' => $kind, 'why' => $why, 'fix' => $fix,
+                    'dims' => $dims,
+                    'dim_ids' => ['machine'=>(string)$r['machine_id'],
+                                  'client'=>($cmapC[trim((string)$r['client_name'])] ?? ''),
+                                  'part'=>'', 'proc'=>(string)$r['process_no']],
+                    'kind' => $kind, 'why' => $why, 'fix' => $fix,
                 ];
             }
             $out['note'] = '產能績效＝Σ完成數 ÷ Σ生產工時（小時）。'
@@ -2136,7 +2203,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
             $types = array_map('intval', kpi_as_list(kpi_as_pv($params, 'process_type_ids', [12])));
             if (!$types) { $out['note'] = '尚未設定製程類別，無法列出明細。'; return $out; }
             $in = implode(',', array_fill(0, count($types), '?'));
-            $st = $db->prepare("SELECT r.report_id, r.report_date, r.produced_qty,
+            $st = $db->prepare("SELECT r.report_id, r.report_date, r.produced_qty, r.machine_id,
                                        ml.machine AS machine_name, pn.ProcessName, r.process_no,
                                        bi.bom, b.d_id AS part_no, b.Client_Name AS client_name,
                                        COALESCE(SUM(g.ng_qty),0) AS ng_sum,
@@ -2156,6 +2223,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                 HAVING ng_sum > 0
                                 ORDER BY ng_sum DESC, r.report_date");
             $st->execute(array_merge($types, [$ms, $me]));
+            $cmapN = kpi_as_client_id_map($db);
             $out['cols'] = [['k'=>'d','t'=>'報工日'], ['k'=>'bom','t'=>'製令'], ['k'=>'client','t'=>'客戶'],
                             ['k'=>'part','t'=>'料號'], ['k'=>'proc','t'=>'製程'], ['k'=>'machine','t'=>'機台'],
                             ['k'=>'qty','t'=>'完成數'], ['k'=>'ng','t'=>'NG數'], ['k'=>'reason','t'=>'不良原因']];
@@ -2166,11 +2234,14 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                          'machine'=>(string)$r['machine_name']];
                 $out['rows'][] = [
                     'key'  => (string)$r['report_id'],
-                    'vals' => ['d'=>substr((string)$r['report_date'], 0, 10), 'bom'=>(string)$r['bom'],
+                    'vals' => ['d'=>eg_fmt_date($r['report_date']), 'bom'=>(string)$r['bom'],
                                'client'=>$dims['client'], 'part'=>$dims['part'], 'proc'=>$dims['proc'],
                                'machine'=>$dims['machine'], 'qty'=>(string)$qty,
                                'ng'=>(string)(0 + $ng), 'reason'=>(string)$r['ng_txt']],
-                    'dims' => $dims, 'kind' => 'bad',
+                    'dims' => $dims,
+                    'dim_ids' => ['client'=>($cmapN[trim((string)$r['client_name'])] ?? ''), 'part'=>'',
+                                  'proc'=>(string)$r['process_no'], 'machine'=>(string)$r['machine_id']],
+                    'kind' => 'bad',
                     'why'  => 'NG ' . (0 + $ng) . ' 顆'
                             . ($qty > 0 ? ('（完成 ' . $qty . ' 顆，佔 ' . round($ng / $qty * 100, 1) . '%）') : ''),
                     'fix'  => '若 NG 數或不良原因登錄錯誤，請到報工紀錄查詢修正；確實不良請維持原樣（屬真實不良率）。'
