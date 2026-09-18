@@ -92,112 +92,8 @@ try {
     }
 } catch(Exception $e) {}
 
-// ── 工作日計算（僅用 evenement + event_category，calendar_workday 已停用）────────
-// event_category.day_type：NULL=一般日, s=休假日, m=補班/調班（m 也是上班日）
-function loadWorkdayMaps(PDO $pdo, string $from, string $to): array {
-    $evMap = []; // date => day_type ('s' or 'm')
-    try {
-        // 取涵蓋該日期區間的所有休假/補班事件（allday 或跨日事件都考慮）
-        $s=$pdo->prepare("
-            SELECT DATE(d.d) AS ev_date, ec.day_type
-            FROM evenement e
-            JOIN event_category ec ON ec.id = e.category_id
-            JOIN (
-                SELECT DATE_ADD(DATE(e2.start), INTERVAL seq.n DAY) AS d
-                FROM evenement e2
-                JOIN (
-                    SELECT 0 n UNION SELECT 1 UNION SELECT 2 UNION SELECT 3
-                    UNION SELECT 4 UNION SELECT 5 UNION SELECT 6 UNION SELECT 7
-                    UNION SELECT 8 UNION SELECT 9 UNION SELECT 10 UNION SELECT 11
-                    UNION SELECT 12 UNION SELECT 13 UNION SELECT 14 UNION SELECT 15
-                    UNION SELECT 16 UNION SELECT 17 UNION SELECT 18 UNION SELECT 19
-                    UNION SELECT 20 UNION SELECT 21 UNION SELECT 22 UNION SELECT 23
-                    UNION SELECT 24 UNION SELECT 25 UNION SELECT 26 UNION SELECT 27
-                    UNION SELECT 28 UNION SELECT 29 UNION SELECT 30
-                ) seq
-                WHERE DATE_ADD(DATE(e2.start), INTERVAL seq.n DAY) <= DATE(IFNULL(e2.end, e2.start))
-            ) d ON d.d = DATE(e.start) OR (d.d > DATE(e.start) AND d.d <= DATE(IFNULL(e.end, e.start)))
-            WHERE ec.day_type IN ('s','m')
-              AND d.d BETWEEN ? AND ?
-        ");
-        $s->execute([$from, $to]);
-        foreach($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            // 同日若有多筆，m(補班)優先於 s(休假)
-            if (!isset($evMap[$r['ev_date']]) || $r['day_type'] === 'm') {
-                $evMap[$r['ev_date']] = $r['day_type'];
-            }
-        }
-    } catch(Exception $e){}
-    return ['ev'=>$evMap];
-}
-function isWorkday(string $date, array $maps): bool {
-    $dow = (int)(new DateTime($date))->format('N'); // 1=Mon..7=Sun
-    $dayType = $maps['ev'][$date] ?? null;
-    if ($dayType === 'm') return true;   // 補班日 → 上班
-    if ($dayType === 's') return false;  // 休假日 → 不上班
-    return $dow <= 5;                    // 一般日：週一~五上班
-}
-// outsource_date + N 上班日 = 截止日
-function calcDeadline(string $from, int $n, array $maps): string {
-    if($n<=0) return $from;
-    $count=0; $cur=new DateTime($from); $cur->modify('+1 day'); $lim=0;
-    while($count<$n && $lim<200){
-        if(isWorkday($cur->format('Y-m-d'),$maps)) $count++;
-        if($count<$n) $cur->modify('+1 day');
-        $lim++;
-    }
-    return $cur->format('Y-m-d');
-}
-// today - N 上班日 = 容忍截止日（outsource_date 需 <= 此日才計入）
-function subtractWorkdays(string $from, int $n, array $maps): string {
-    if($n<=0) return $from;
-    $count=0; $cur=new DateTime($from); $cur->modify('-1 day'); $lim=0;
-    while($count<$n && $lim<200){
-        if(isWorkday($cur->format('Y-m-d'),$maps)) $count++;
-        if($count<$n) $cur->modify('-1 day');
-        $lim++;
-    }
-    return $cur->format('Y-m-d');
-}
-
-/* ── 實際回廠日的判定（唯一實作，本頁所有查詢一律用這幾支組 SQL，不要各自再寫一份）──
- * 生管很多發包沒有去按「回廠」，只看 bom_ing.return_date 會把已經回來的一律判成未回廠；
- * 而製程移轉憑單（bom_ing_transfer_log，ERP 匯入，見 views/pm/Transfer_Log_Analysis.php）
- * 只要「貨從這個廠商移轉出去」就一定開得出來，是回廠的直接證據。
- *
- * 規則（使用者指定 2026-09-18）：
- *   ① 沒登錄回廠日 → 用憑單日期
- *   ② 有登錄回廠日、但憑單日期更早 → 取較早的憑單日期（登錄多半是事後才補按的）
- *   ③ 憑單日期早於發包日的不採用（那是上一段製程的憑單，不是這一站回廠）
- *
- * 日期一定要「由單號解析」，不可以用 transfer_date 欄位：transfer_date 會為了帳款月份
- * 被人工改過（2026 年 6,369 筆裡有 60 筆與單號日期不同，最多差 49 天）；
- * 單號 J-1150821029 ＝ 字母-＋民國年3碼(115)＋MM(08)＋DD(21)＋序號，開單當下就固定了。
- */
-function vkTlogDateSQL(string $tl='tl'): string {
-    return "STR_TO_DATE(CONCAT(SUBSTRING($tl.transfer_no,3,3)+1911,SUBSTRING($tl.transfer_no,6,4)),'%Y%m%d')";
-}
-// 掛在 FROM bom_ing bi ... 的最後面，算出該站憑單日期 vkt.td（不早於發包日的最早一張）
-function vkTlogJoin(string $bi='bi'): string {
-    $d = vkTlogDateSQL('tl');
-    return "LEFT JOIN LATERAL (\n"
-         . "            SELECT MIN($d) AS td FROM bom_ing_transfer_log tl\n"
-         . "             WHERE tl.bom=$bi.bom AND tl.bom_sn=$bi.bom_sn AND tl.maker_from=$bi.maker_id_no\n"
-         . "               AND tl.transfer_no REGEXP " . "'^[A-Za-z]-[0-9]{10}$'" . "\n"
-         . "               AND $d >= DATE($bi.outsource_date)\n"
-         . "          ) vkt ON TRUE";
-}
-// 實際回廠日：登錄值與憑單日期取「較早」者；只有一邊有就用那一邊
-function vkRdSQL(string $bi='bi'): string {
-    return "COALESCE(LEAST(DATE($bi.return_date),vkt.td),DATE($bi.return_date),vkt.td)";
-}
-// 回廠日來源：return=生管登錄／transfer=沒登錄改用憑單／transfer_earlier=憑單比登錄早
-function vkRdSrcSQL(string $bi='bi'): string {
-    return "CASE WHEN vkt.td IS NULL THEN (CASE WHEN $bi.return_date IS NULL THEN '' ELSE 'return' END)\n"
-         . "          WHEN $bi.return_date IS NULL THEN 'transfer'\n"
-         . "          WHEN vkt.td < DATE($bi.return_date) THEN 'transfer_earlier'\n"
-         . "          ELSE 'return' END";
-}
+// ── 工作日計算與本期發包資料：唯一實作已抽到共用檔，KPI 關鍵績效指標頁也吃同一份 ──
+include_once __DIR__ . '/../../src/common/vendor_kpi_lib.php';
 
 // ── AJAX ───────────────────────────────────────────────────
 if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
@@ -394,130 +290,15 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
             $makerF=trim($_POST['maker_filter']??'');
             $procF=trim($_POST['proc_filter']??'');
 
-            $cfg=$pdo->query("SELECT setting_key,setting_value FROM kpi_vendor_setting")->fetchAll(PDO::FETCH_KEY_PAIR);
-            $tol=intval($cfg['ontime_tolerance_days']??3);
-            $minTxn=intval($cfg['min_txn_count']??5);
-            $gradeRules=$pdo->query("SELECT grade,ontime_gte,ng_lte,color FROM kpi_grade_rule ORDER BY sort_order,rule_id")->fetchAll(PDO::FETCH_ASSOC);
-            // 特殊廠商容忍天數 map
-            $specRows=$pdo->query("SELECT maker_id_no,maker_id,tolerance_days FROM kpi_special_maker")->fetchAll(PDO::FETCH_ASSOC);
-            $specTolById=[]; $specTolByName=[];
-            foreach($specRows as $sr){
-                if($sr['maker_id_no']) $specTolById[$sr['maker_id_no']]=(int)$sr['tolerance_days'];
-                $specTolByName[$sr['maker_id']]=(int)$sr['tolerance_days'];
-            }
-            // 例外製程（排除在外）
-            $exclProcRows=$pdo->query("SELECT process_no,process_name FROM kpi_excluded_process")->fetchAll(PDO::FETCH_ASSOC);
-            $exclProcNos  =array_values(array_filter(array_column($exclProcRows,'process_no')));
-            $exclProcNames=array_values(array_column($exclProcRows,'process_name'));
-            // 特殊製程容忍天數 map：ProcessNo → days, ProcessName → days
-            $specProcRows=$pdo->query("SELECT process_no,process_name,tolerance_days FROM kpi_special_process")->fetchAll(PDO::FETCH_ASSOC);
-            $specProcTolByNo=[]; $specProcTolByName=[];
-            foreach($specProcRows as $sp){
-                if($sp['process_no']) $specProcTolByNo[(int)$sp['process_no']]=(int)$sp['tolerance_days'];
-                $specProcTolByName[$sp['process_name']]=(int)$sp['tolerance_days'];
-            }
-
-            if($mode==='year'){
-                $yr=intval(substr($period,0,4));
-                $ds="$yr-01-01"; $de="$yr-12-31";
-            }elseif($mode==='half'){
-                $yr=intval(substr($period,0,4));
-                $h=strpos($period,'H2')!==false?2:1;
-                $ds=$h===1?"$yr-01-01":"$yr-07-01";
-                $de=$h===1?"$yr-06-30":"$yr-12-31";
-            }else{
-                $ds=$period.'-01';
-                $de=date('Y-m-t',strtotime($ds));
-            }
-
-            $today=date('Y-m-d');
-            // 預載工作日（期間+60天緩衝，用於計算 cutoff 和各筆截止日）
-            $mapFrom=min($ds,date('Y-m-d',strtotime($today.' -'.max(60,$tol*3).' days')));
-            $mapTo=date('Y-m-d',strtotime($de.' +60 days'));
-            $maps=loadWorkdayMaps($pdo,$mapFrom,$mapTo);
-            $cutoff=subtractWorkdays($today,$tol,$maps);
-
-            // 計算本期間上班日數（供 DEBUG 顯示）
-            $wdCount=0;
-            $wdCur=new DateTime($ds);
-            $wdEnd=new DateTime($de);
-            while($wdCur<=$wdEnd){ if(isWorkday($wdCur->format('Y-m-d'),$maps))$wdCount++; $wdCur->modify('+1 day'); }
-
-            // 取得例外廠商清單（排除在外）
-            $exclRows=$pdo->query("SELECT maker_id_no,maker_id FROM kpi_excluded_maker")->fetchAll(PDO::FETCH_ASSOC);
-            $exclIds  = array_values(array_filter(array_column($exclRows,'maker_id_no')));
-            $exclNames= array_values(array_column($exclRows,'maker_id'));
-
-            // 建立 WHERE（全用 ? 位置式，避免 PDO 具名/位置式混用問題）
-            $where=["bi.outsource_date IS NOT NULL",
-                    "DATE(bi.outsource_date) BETWEEN ? AND ?",
-                    "bi.maker_id IS NOT NULL AND bi.maker_id<>''",
-                    "DATE(bi.outsource_date) <= ?"];
-            $fp=[$ds,$de,$cutoff];
-
-            // 排除例外廠商（同時比對 maker_id_no 與 maker_list.maker_id）
-            if(!empty($exclIds)){
-                $ph=implode(',',array_fill(0,count($exclIds),'?'));
-                $where[]="(bi.maker_id_no IS NULL OR bi.maker_id_no NOT IN ($ph))";
-                foreach($exclIds as $v) $fp[]=$v;
-            }
-            if(!empty($exclNames)){
-                $ph2=implode(',',array_fill(0,count($exclNames),'?'));
-                $where[]="COALESCE(ml.maker_id, bi.maker_id) NOT IN ($ph2)";
-                foreach($exclNames as $v) $fp[]=$v;
-            }
-            if($makerF!==''){$where[]="COALESCE(ml.maker_id, bi.maker_id) LIKE ?";$fp[]="%$makerF%";}
-            if($procF!==''){$where[]="pn.ProcessName LIKE ?";$fp[]="%$procF%";}
-            // 排除例外製程
-            if(!empty($exclProcNos)){
-                $ph3=implode(',',array_fill(0,count($exclProcNos),'?'));
-                $where[]="(bi.process_no IS NULL OR bi.process_no NOT IN ($ph3))";
-                foreach($exclProcNos as $v) $fp[]=$v;
-            }
-            if(!empty($exclProcNames)){
-                $ph4=implode(',',array_fill(0,count($exclProcNames),'?'));
-                $where[]="(pn.ProcessName IS NULL OR pn.ProcessName NOT IN ($ph4))";
-                foreach($exclProcNames as $v) $fp[]=$v;
-            }
-            $wSQL='WHERE '.implode(' AND ',$where);
-
-            $sql="SELECT
-                         bi.bom_ing_fid, bi.bom, bi.bom_sn,
-                         bi.maker_id_no, bi.process_no,
-                         COALESCE(ml.maker_id, bi.maker_id) AS maker_name,
-                         ml.m_category AS proc_category,
-                         ml.m_process_items AS proc_items,
-                         bi.sqty,
-                         DATE(bi.outsource_date) AS od,
-                         DATE(bi.return_date) AS rd_orig,
-                         vkt.td AS rd_log,
-                         ".vkRdSQL()." AS rd,
-                         ".vkRdSrcSQL()." AS rd_src,
-                         b.Delivery_date AS dd,
-                         bi.QC_check,
-                         pn.ProcessName
-                  FROM bom_ing bi
-                  LEFT JOIN maker_list ml ON ml.maker_id_no=bi.maker_id_no
-                  LEFT JOIN bom b ON b.bom=bi.bom
-                  LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
-                  ".vkTlogJoin()."
-                  $wSQL ORDER BY COALESCE(ml.maker_id,bi.maker_id), bi.outsource_date DESC";
-            $st=$pdo->prepare($sql); $st->execute($fp);
-            $allRows=$st->fetchAll(PDO::FETCH_ASSOC);
+            // 本期資料一律由唯一實作取得（明細清單 get_period_rows 吃的是同一支）
+            $ctx=vkPeriodRows($pdo,$mode,$period,$makerF,$procF);
+            $allRows=$ctx['rows']; $ds=$ctx['ds']; $de=$ctx['de']; $cutoff=$ctx['cutoff'];
+            $tol=$ctx['tol']; $minTxn=$ctx['min_txn']; $gradeRules=$ctx['grade_rules']; $wdCount=$ctx['workday_count'];
 
             $mkMap=[];
             foreach($allRows as $row){
                 $mk=$row['maker_id_no']?:$row['maker_name'];
-                $mkNo=$row['maker_id_no']??'';
-                $mkNm=$row['maker_name']??'';
-                $pNo =(int)($row['process_no']??0);
-                $pNm =$row['ProcessName']??'';
-                // 容忍天數：廠商特殊 > 製程特殊 > 全域
-                $rowTol = $specTolById[$mkNo]
-                       ?? $specTolByName[$mkNm]
-                       ?? ($pNo && isset($specProcTolByNo[$pNo]) ? $specProcTolByNo[$pNo] : null)
-                       ?? $specProcTolByName[$pNm]
-                       ?? $tol;
+                $rowTol=$row['tol'];
 
                 if(!isset($mkMap[$mk])){
                     $mkMap[$mk]=['maker_id_no'=>$row['maker_id_no'],'maker_name'=>$row['maker_name'],
@@ -534,16 +315,13 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                 // 回廠日來源（見 vkRdSQL）：沒登錄改用憑單／憑單比登錄早而採用憑單
                 if($row['rd_src']==='transfer') $m['tlog_fill']++;
                 elseif($row['rd_src']==='transfer_earlier') $m['tlog_earlier']++;
-                $deadline=calcDeadline($row['od'],$rowTol,$maps);
-                $isRet=!empty($row['rd']);
-                if($isRet){
+                if($row['status']!=='not_returned'){
                     $m['returned']++;
-                    if($row['rd']<=$deadline) $m['ontime']++;
+                    if($row['status']==='ontime') $m['ontime']++;
                     else $m['late']++;
                     // no_dd：無 bom.Delivery_date 才算（不是 rd 來源問題）
                     if(empty($row['dd'])) $m['no_dd']++;
-                    $diff=(new DateTime($row['rd']))->diff(new DateTime($row['od']))->days;
-                    $m['total_days']+=$diff; $m['days_count']++;
+                    $m['total_days']+=$row['days']; $m['days_count']++;
                 }else{
                     $m['late']++;
                 }
@@ -590,6 +368,75 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                       'tlog_earlier'=>array_sum(array_column($result,'tlog_earlier'))];
             echo json_encode(['success'=>true,'data'=>$result,'summary'=>$summary,
                               'settings'=>['tolerance'=>$tol,'min_txn'=>$minTxn,'grade_rules'=>$gradeRules]]);
+        }catch(Exception $e){echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
+        exit;
+    }
+
+    /* 「發包筆數（已到容忍期）」卡片的明細清單
+     * 與統計卡片／廠商表吃同一支 vkPeriodRows()，所以筆數一定對得起來。
+     * 篩選與分頁一律在後端做（筆數、狀態統計、匯出都要以「全部符合的資料」為準，不能只算這一頁）。 */
+    if($_POST['action']==='get_period_rows'){
+        try{
+            $mode=trim($_POST['mode']??'month');
+            $period=trim($_POST['period']??date('Y-m'));
+            $makerF=trim($_POST['maker_filter']??'');
+            $procF=trim($_POST['proc_filter']??'');
+            $fSt=trim($_POST['st']??'');        // ontime / late / not_returned / tlog（回廠日靠憑單）
+            $fMk=trim($_POST['mk']??'');        // 廠商（maker_id_no）
+            $fPr=trim($_POST['pr']??'');        // 製程名稱
+            $kw =trim($_POST['kw']??'');        // 關鍵字（BOM／廠商／製程）
+            $all=intval($_POST['all']??0);      // 1=不分頁（匯出用）
+            $page=max(1,intval($_POST['page']??1));
+            $per =min(200,max(5,intval($_POST['per']??20)));
+
+            $ctx=vkPeriodRows($pdo,$mode,$period,$makerF,$procF);
+            $rows=$ctx['rows'];
+
+            // 狀態統計（以本期全部資料為準，不受下方篩選影響，才能當篩選鈕上的數字）
+            $cnt=['all'=>count($rows),'ontime'=>0,'late'=>0,'not_returned'=>0,'tlog'=>0];
+            $mkOpt=[]; $prOpt=[];
+            foreach($rows as $r){
+                if($r['status']==='ontime') $cnt['ontime']++;
+                elseif($r['status']==='late') $cnt['late']++;
+                else $cnt['not_returned']++;
+                if($r['rd_src']==='transfer'||$r['rd_src']==='transfer_earlier') $cnt['tlog']++;
+                $k=(string)($r['maker_id_no']??'');
+                if($k!=='' && !isset($mkOpt[$k])) $mkOpt[$k]=$r['maker_name'];
+                if(!empty($r['ProcessName'])) $prOpt[$r['ProcessName']]=1;
+            }
+
+            $out=[];
+            foreach($rows as $r){
+                if($fSt==='tlog'){ if($r['rd_src']!=='transfer'&&$r['rd_src']!=='transfer_earlier') continue; }
+                elseif($fSt!=='' && $r['status']!==$fSt) continue;
+                if($fMk!=='' && (string)$r['maker_id_no']!==$fMk) continue;
+                if($fPr!=='' && (string)$r['ProcessName']!==$fPr) continue;
+                if($kw!==''){
+                    $hay=$r['bom'].' '.$r['maker_name'].' '.$r['ProcessName'].' '.$r['maker_id_no'];
+                    $hit=true;
+                    foreach(preg_split('/\s+/u',$kw) as $w){ if($w!=='' && mb_stripos($hay,$w)===false){$hit=false;break;} }
+                    if(!$hit) continue;
+                }
+                $out[]=['fid'=>$r['bom_ing_fid'],'bom'=>$r['bom'],'bom_sn'=>$r['bom_sn'],
+                        'maker_id_no'=>$r['maker_id_no'],'maker_name'=>$r['maker_name'],
+                        'proc'=>$r['ProcessName'],'sqty'=>$r['sqty'],
+                        'od'=>$r['od'],'rd'=>$r['rd'],'rd_orig'=>$r['rd_orig'],'rd_log'=>$r['rd_log'],
+                        'rd_src'=>$r['rd_src'],'deadline'=>$r['deadline'],'tol'=>$r['tol'],
+                        'status'=>$r['status'],'days'=>$r['days'],'qc'=>$r['QC_check'],
+                        'dd'=>$r['dd']?substr((string)$r['dd'],0,10):null];
+            }
+            $total=count($out);
+            $pages=max(1,(int)ceil($total/$per));
+            if(!$all){ $page=min($page,$pages); $out=array_slice($out,($page-1)*$per,$per); }
+
+            $mkList=[]; foreach($mkOpt as $k=>$v) $mkList[]=['id'=>$k,'name'=>$v];
+            usort($mkList,function($a,$b){return strcmp($a['name'],$b['name']);});
+            $prList=array_keys($prOpt); sort($prList);
+
+            echo json_encode(['success'=>true,'data'=>$out,'total'=>$total,'page'=>$page,'per'=>$per,
+                              'pages'=>$pages,'counts'=>$cnt,'makers'=>$mkList,'procs'=>$prList,
+                              'period_start'=>$ctx['ds'],'period_end'=>$ctx['de'],'cutoff'=>$ctx['cutoff'],
+                              'tolerance'=>$ctx['tol']]);
         }catch(Exception $e){echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
         exit;
     }
@@ -931,6 +778,24 @@ body{background:var(--bg);font-family:"Segoe UI",Arial,sans-serif;color:var(--te
 .pg-header h3{margin:0;font-size:17px;font-weight:700;color:var(--primary)}
 .mcrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
 .mc{background:var(--card);border-radius:10px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,.05);border-left:4px solid var(--mc-color,var(--accent))}
+.mc-click{cursor:pointer;transition:box-shadow .12s,transform .12s}
+.mc-click:hover{box-shadow:0 4px 12px rgba(0,0,0,.12);transform:translateY(-1px)}
+.mc-click.on{background:#fff8ef;box-shadow:0 0 0 2px var(--mc-color,var(--accent)) inset}
+.pr-panel{background:var(--card);border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,.05);margin-bottom:14px;display:none;overflow:hidden}
+.pr-panel.open{display:block}
+.pr-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.pr-bar{display:flex;align-items:center;gap:6px;padding:8px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.pr-chip{border:1px solid var(--border);background:#fff;border-radius:14px;padding:3px 11px;font-size:12px;cursor:pointer;user-select:none;line-height:16px}
+.pr-chip:hover{background:#f7f7f7}
+.pr-chip.on{background:var(--primary);color:#fff;border-color:var(--primary)}
+.pr-chip .n{font-weight:700;margin-left:4px}
+.pr-tag{display:inline-flex;align-items:center;gap:4px;background:#eef3fb;color:#185FA5;border-radius:12px;padding:2px 8px;font-size:11px;line-height:15px}
+.pr-tag b{cursor:pointer}
+.pr-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.pr-tbl thead th{background:#f8f9fa;color:#555;font-weight:700;padding:7px 9px;font-size:11px;border-bottom:2px solid var(--border);white-space:nowrap;position:sticky;top:0;z-index:1}
+.pr-tbl tbody td{padding:6px 9px;border-bottom:1px solid #f0f2f5;line-height:18px}
+.pr-tbl tbody tr:hover td{background:#fafbff}
+.pr-lnk{color:var(--primary);cursor:pointer;border-bottom:1px dotted var(--primary)}
 .mc-val{font-size:24px;font-weight:700;color:var(--primary)}.mc-lbl{font-size:11px;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-top:2px}.mc-sub{font-size:11px;margin-top:3px;color:#aaa}
 .setting-panel{background:var(--card);border-radius:10px;padding:16px 20px;margin-bottom:14px;box-shadow:0 2px 6px rgba(0,0,0,.05);display:none}
 .setting-panel.open{display:block}
@@ -1151,7 +1016,7 @@ body{background:var(--bg);font-family:"Segoe UI",Arial,sans-serif;color:var(--te
 <!-- 統計卡片 -->
 <div class="mcrow">
   <div class="mc" style="--mc-color:var(--info)"><div class="mc-val" id="mc-v">—</div><div class="mc-lbl">評估廠商數</div><div class="mc-sub" id="mc-period"></div></div>
-  <div class="mc" style="--mc-color:var(--primary)"><div class="mc-val" id="mc-t">—</div><div class="mc-lbl">發包筆數（已到容忍期）</div><div class="mc-sub" id="mc-cut"></div></div>
+  <div class="mc mc-click" id="mc-total-card" style="--mc-color:var(--primary)" onclick="togglePRPanel()" title="點一下列出這些發包明細"><div class="mc-val" id="mc-t">—</div><div class="mc-lbl">發包筆數（已到容忍期） <i class="fa fa-list-ul" style="color:var(--primary);"></i></div><div class="mc-sub" id="mc-cut"></div></div>
   <div class="mc" style="--mc-color:var(--accent)"><div class="mc-val" id="mc-op">—</div><div class="mc-lbl">整體準時交貨率</div></div>
   <div class="mc" style="--mc-color:var(--danger)"><div class="mc-val" id="mc-ng">—</div><div class="mc-lbl">整體 NG 率</div></div>
   <div class="mc" style="--mc-color:#888"><div class="mc-val" id="mc-wd">—</div><div class="mc-lbl">本期上班日數</div><div class="mc-sub" style="color:#3498DB;font-size:10px;">DEBUG</div></div>
@@ -1189,6 +1054,48 @@ body{background:var(--bg);font-family:"Segoe UI",Arial,sans-serif;color:var(--te
   <div class="pager" id="main-pager">
     <span id="pager-info" style="color:#888;"></span>
     <div class="pager-btns" id="pager-btns"></div>
+  </div>
+</div>
+
+<!-- 發包明細（點「發包筆數（已到容忍期）」卡片展開）-->
+<div class="pr-panel" id="prPanel">
+  <div class="pr-head">
+    <div style="font-weight:700;color:var(--primary);font-size:14px;"><i class="fa fa-list-ul"></i> 發包明細（已到容忍期）</div>
+    <div id="pr-sub" style="font-size:11px;color:#aaa;"></div>
+    <div style="margin-left:auto;display:flex;gap:6px;">
+      <button class="btn btn-xs btn-default" onclick="prExportCsv()"><i class="fa fa-file-excel-o"></i> CSV</button>
+      <button class="btn btn-xs btn-default" onclick="togglePRPanel(false)"><i class="fa fa-times"></i> 關閉</button>
+    </div>
+  </div>
+  <div class="pr-bar">
+    <span class="pr-chip on" id="prc-" onclick="prSetStatus('')">全部<span class="n" id="prn-">0</span></span>
+    <span class="pr-chip" id="prc-ontime" onclick="prSetStatus('ontime')">✔ 準時<span class="n" id="prn-ontime">0</span></span>
+    <span class="pr-chip" id="prc-late" onclick="prSetStatus('late')">✖ 逾期<span class="n" id="prn-late">0</span></span>
+    <span class="pr-chip" id="prc-not_returned" onclick="prSetStatus('not_returned')">? 未回廠<span class="n" id="prn-not_returned">0</span></span>
+    <span class="pr-chip" id="prc-tlog" onclick="prSetStatus('tlog')" title="回廠日是用製程移轉憑單補上或修正的">移轉單認定<span class="n" id="prn-tlog">0</span></span>
+    <input type="text" id="pr-kw" class="form-control" placeholder="🔍 廠商／製程／BOM" style="width:190px;height:28px;font-size:12px;" oninput="prKwInput()">
+    <span id="pr-tags" style="display:flex;gap:4px;"></span>
+    <span style="margin-left:auto;display:flex;align-items:center;gap:5px;font-size:12px;color:#888;">
+      每頁
+      <select id="pr-per" style="height:28px;border:1px solid var(--border);border-radius:6px;font-size:12px;" onchange="prLoad(1)">
+        <option>5</option><option>10</option><option selected>20</option><option>50</option>
+      </select>
+      <span id="pr-cnt"></span>
+    </span>
+  </div>
+  <div style="overflow-x:auto;max-height:520px;">
+    <table class="pr-tbl">
+      <thead><tr>
+        <th>廠商</th><th>製程</th><th>BOM</th><th style="text-align:center;">發包數</th>
+        <th>發包日</th><th>回廠日</th><th>截止日</th><th>狀態</th>
+        <th style="text-align:center;">天數</th><th>QC</th>
+      </tr></thead>
+      <tbody id="pr-tbody"><tr><td colspan="10" class="loading" style="text-align:center;padding:24px;color:#aaa;"><i class="fa fa-spinner fa-spin"></i></td></tr></tbody>
+    </table>
+  </div>
+  <div class="pager">
+    <span id="pr-info" style="color:#888;"></span>
+    <div class="pager-btns" id="pr-btns"></div>
   </div>
 </div>
 
@@ -1538,6 +1445,7 @@ function loadData(){
         if(!r.success){toast(r.message||'載入失敗','error');$('#ktbody').html('<tr><td colspan="10" style="text-align:center;color:red;padding:20px;">'+esc(r.message)+'</td></tr>');return;}
         G.rawData=r.data||[];G.settings=r.settings||G.settings;G.summary=r.summary||{};
         renderSummary();filterTable();updateNote();
+        if(PR.open) prLoad(1);   // 期間換了，展開中的發包明細跟著換
     });
 }
 function renderSummary(){
@@ -1670,6 +1578,120 @@ function renderTable(){
     $('#pager-btns').html(pb);
 }
 function goPage(p){G.page=p;renderTable();}
+
+// ── 發包明細面板（點「發包筆數（已到容忍期）」卡片）─────────────────────
+// 資料與統計卡片、廠商表同一支後端（vkPeriodRows），所以筆數一定對得起來；
+// 篩選與分頁一律在後端算（筆數與匯出都要以全部符合的資料為準，不是只有這一頁）。
+var PR={open:false,st:'',mk:'',mkName:'',pr:'',kw:'',page:1,rows:[],total:0,pages:1,kwTimer:null};
+
+function togglePRPanel(force){
+    var want=(force===undefined)?!PR.open:!!force;
+    PR.open=want;
+    $('#prPanel').toggleClass('open',want);
+    $('#mc-total-card').toggleClass('on',want);
+    if(want){ prLoad(1); setTimeout(function(){
+        var el=document.getElementById('prPanel'); if(el&&el.scrollIntoView) el.scrollIntoView({behavior:'smooth',block:'start'});
+    },60); }
+}
+function prSetStatus(st){ PR.st=(PR.st===st)?'':st; prLoad(1); }
+function prSetMaker(id,name){ PR.mk=id; PR.mkName=name; prLoad(1); }
+function prSetProc(p){ PR.pr=p; prLoad(1); }
+function prClear(which){ if(which==='mk'){PR.mk='';PR.mkName='';} else PR.pr=''; prLoad(1); }
+function prKwInput(){ clearTimeout(PR.kwTimer); PR.kwTimer=setTimeout(function(){ PR.kw=$('#pr-kw').val()||''; prLoad(1); },250); }
+// 要塞進 onclick="fn('…')" 的值：先跳脫 JS 字串再跳脫 HTML，否則值裡有引號整個 onclick 就壞了
+function jsq(s){ return esc(String(s===null||s===undefined?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")); }
+function prParams(extra){
+    return $.extend({action:'get_period_rows',mode:G.mode,period:G.period,maker_filter:'',proc_filter:'',
+        st:PR.st,mk:PR.mk,pr:PR.pr,kw:PR.kw,per:$('#pr-per').val()||20},extra||{});
+}
+function prLoad(page){
+    if(!PR.open) return;
+    PR.page=page||1;
+    $('#pr-tbody').html('<tr><td colspan="10" style="text-align:center;padding:24px;color:#aaa;"><i class="fa fa-spinner fa-spin"></i></td></tr>');
+    ajx(prParams({page:PR.page}),function(r){
+        if(!r.success){$('#pr-tbody').html('<tr><td colspan="10" style="text-align:center;color:red;padding:20px;">'+esc(r.message)+'</td></tr>');return;}
+        PR.rows=r.data||[]; PR.total=r.total||0; PR.pages=r.pages||1; PR.page=r.page||1;
+        var c=r.counts||{};
+        ['','ontime','late','not_returned','tlog'].forEach(function(k){
+            $('#prn-'+k).text(' '+((k===''?c.all:c[k])||0));
+            $('#prc-'+k).toggleClass('on',PR.st===k);
+        });
+        $('#pr-sub').text((r.period_start||'')+' ~ '+(r.period_end||'')+'　容忍截止：'+(r.cutoff||''));
+        renderPR();
+    });
+}
+function renderPR(){
+    // 已選的廠商／製程標籤（點表格內的廠商或製程就會設定）
+    var tg='';
+    if(PR.mk) tg+='<span class="pr-tag">廠商：'+esc(PR.mkName||PR.mk)+' <b onclick="prClear(\'mk\')">×</b></span>';
+    if(PR.pr) tg+='<span class="pr-tag">製程：'+esc(PR.pr)+' <b onclick="prClear(\'pr\')">×</b></span>';
+    $('#pr-tags').html(tg);
+    $('#pr-cnt').text('共 '+PR.total.toLocaleString()+' 筆');
+
+    if(!PR.rows.length){
+        $('#pr-tbody').html('<tr><td colspan="10" style="text-align:center;padding:26px;color:#aaa;">沒有符合條件的發包紀錄</td></tr>');
+        $('#pr-info').text(''); $('#pr-btns').html(''); return;
+    }
+    var bs='font-size:10px;border-radius:3px;padding:1px 4px;line-height:14px;display:inline-block;background:#fff8e1;color:#8a6000;';
+    var h='';
+    PR.rows.forEach(function(d){
+        var sc=d.status==='ontime'?'#27AE60':d.status==='late'?'#E74C3C':'#F39C12';
+        var stx=d.status==='ontime'?'✔ 準時':d.status==='late'?'✖ 逾期':'? 未回廠';
+        var tag='';
+        if(d.rd_src==='transfer') tag=' <span style="'+bs+'" title="生管未按回廠，改用製程移轉憑單單號日期">移轉單</span>';
+        else if(d.rd_src==='transfer_earlier') tag=' <span style="'+bs+'background:#fbe6d4;color:#8a4b00;" title="生管登錄 '+esc(d.rd_orig||'')+'，移轉憑單 '+esc(d.rd_log||'')+' 較早，取較早者">移轉單較早</span>';
+        var qcc=d.qc==='ng'?'#E74C3C':d.qc==='ok'?'#27AE60':d.qc==='AOD'?'#9B59B6':'#888';
+        h+='<tr>'
+          +'<td><span class="pr-lnk" onclick="prSetMaker(\''+jsq(d.maker_id_no)+'\',\''+jsq(d.maker_name)+'\')">'+esc(d.maker_name||'—')+'</span>'
+          +'<span style="display:block;font-size:10px;color:#aaa;line-height:13px;">'+esc(d.maker_id_no||'')+'</span></td>'
+          +'<td>'+(d.proc?'<span class="pr-lnk" onclick="prSetProc(\''+jsq(d.proc)+'\')">'+esc(d.proc)+'</span>':'—')+'</td>'
+          +'<td style="font-size:10px;color:#888;">'+esc(d.bom||'')+'<span style="color:#ccc;"> #'+esc(d.bom_sn||'')+'</span></td>'
+          +'<td style="text-align:center;">'+esc(d.sqty||'')+'</td>'
+          +'<td>'+esc(d.od||'—')+'</td>'
+          +'<td>'+(d.rd?esc(d.rd)+tag:'<span style="color:#aaa;">未回廠</span>')+'</td>'
+          +'<td style="color:var(--info);">'+esc(d.deadline||'—')+'<span style="color:#bbb;font-size:10px;line-height:13px;"> +'+esc(d.tol)+'日</span></td>'
+          +'<td style="color:'+sc+';font-weight:600;">'+stx+'</td>'
+          +'<td style="text-align:center;color:#888;">'+(d.days!==null&&d.days!==undefined?d.days+'天':'—')+'</td>'
+          +'<td style="color:'+qcc+';">'+esc(d.qc||'—')+'</td>'
+          +'</tr>';
+    });
+    $('#pr-tbody').html(h);
+
+    var per=parseInt($('#pr-per').val()||20,10);
+    var s=(PR.page-1)*per+1, e=Math.min(PR.page*per,PR.total);
+    $('#pr-info').text('第 '+s+'～'+e+' 筆，共 '+PR.total.toLocaleString()+' 筆');
+    var pb='';
+    if(PR.page>1) pb+='<button onclick="prLoad(1)">«</button><button onclick="prLoad('+(PR.page-1)+')">‹</button>';
+    for(var p=Math.max(1,PR.page-2);p<=Math.min(PR.pages,PR.page+2);p++)
+        pb+='<button class="'+(p===PR.page?'active':'')+'" onclick="prLoad('+p+')">'+p+'</button>';
+    if(PR.page<PR.pages) pb+='<button onclick="prLoad('+(PR.page+1)+')">›</button><button onclick="prLoad('+PR.pages+')">»</button>';
+    $('#pr-btns').html(pb);
+}
+function prExportCsv(){
+    if(!PR.total){toast('無資料','error');return;}
+    // 匯出以「全部符合篩選的資料」為準，不是只有目前這一頁
+    ajx(prParams({all:1}),function(r){
+        if(!r.success){toast(r.message||'匯出失敗','error');return;}
+        var srcTxt={return:'生管登錄',transfer:'移轉單（未按回廠）',transfer_earlier:'移轉單（較早）'};
+        var rows=[
+            ['外包廠商 發包明細（已到容忍期）'],
+            ['統計區間：'+(r.period_start||'')+' ~ '+(r.period_end||'')+'　容忍截止：'+(r.cutoff||'')],
+            ['產生時間：'+new Date().toLocaleString('zh-TW')],
+            [],
+            ['廠商','廠商編號','製程','BOM','製程序','發包數','發包日','回廠日','回廠日來源','生管登錄回廠日','移轉憑單日期','截止日','容忍天(上班日)','狀態','天數','QC']
+        ];
+        (r.data||[]).forEach(function(d){
+            rows.push([d.maker_name||'',d.maker_id_no||'',d.proc||'',d.bom||'',d.bom_sn||'',d.sqty||'',
+                d.od||'',d.rd||'',srcTxt[d.rd_src]||'',d.rd_orig||'',d.rd_log||'',d.deadline||'',d.tol||'',
+                d.status==='ontime'?'準時':d.status==='late'?'逾期':'未回廠',
+                (d.days===null||d.days===undefined)?'':d.days,d.qc||'']);
+        });
+        var csv='\uFEFF'+rows.map(function(x){return x.map(function(v){return'"'+(v+'').replace(/"/g,'""')+'"';}).join(',');}).join('\r\n');
+        var a=document.createElement('a');
+        a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8;'}));
+        a.download='發包明細_'+G.period+'.csv'; a.click();
+    });
+}
 
 // ── 展開明細 ─────────────────────────────────────────
 var expandedSet={};
