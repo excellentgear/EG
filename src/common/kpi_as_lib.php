@@ -507,9 +507,9 @@ function kpi_as_registry(): array {
                 ['key'=>'exclude_clients','label'=>'排除客戶(可填客戶ID或簡稱)','type'=>'client_list','fe'=>1],
                 ['key'=>'undone_mode','label'=>'未交判定方式(逐年度可分開設定)','type'=>'choice','fe'=>0,
                  'opts'=>[
-                    'bind'     => 'C｜以網頁上的出貨綁定為準（預設，最精準：綁一張就少一張未交）',
-                    'erp_ship' => 'B｜ERP未交清單，但查得到同客戶同料號的出貨單就不算未交（ERP 修好之前用）',
-                    'erp'      => '舊制｜完全以 ERP 未交清單為準（網頁上的綁定不影響）',
+                    'erp_ship' => 'B｜以 ERP 未交清單為準，逐筆對回訂單（不必做出貨綁定，ERP 修好之前用這個）',
+                    'bind'     => 'C｜以網頁上的出貨綁定為準（最精準，能判「有沒有在交期前交貨」，但要先把出貨單綁到訂單）',
+                    'erp'      => '舊制｜ERP 未交清單直接相減（月份一舊就會被夾成 0%，不建議）',
                  ]],
             ]],
         'stock_accuracy' => [
@@ -1126,23 +1126,60 @@ function kpi_as_order_bind_rows(PDO $db, int $year, int $month, array $params, a
         }
     } catch (Throwable $e) {}
 
-    // B 模式：沒有綁定的，再看「同客戶＋同料號、沒綁任何訂單」的出貨單當出貨證據。
-    // 準時與否一樣是拿**出貨日跟交期**比（使用者確認 2026-09-18：就是看交期前有沒有交貨），
-    // 不是像舊制那樣只看 ERP 未交清單有沒有掛著——那樣只要有出貨就算準時，8 月會算出 99.3% 這種離譜數字。
+    /* B 模式（使用者 2026-09-18 指示：ERP 還沒修好、也不要做出貨綁定，因為修好後會清掉出貨單重載）
+       --------------------------------------------------------------
+       關鍵事實：`order_list` 是 ERP 的「未交清單快照」——實測 2026 年該表**每一列都是 Qty=Open_Qty**，
+       也就是說裡面只會有「還完全沒出貨」的訂單，已交的根本不在裡面。
+       所以「有沒有出貨」唯一能問的就是它；而**它沒有出貨日期**，B 模式判不了「是不是在交期前交的」，
+       只能判「到期了還完全沒出」。要判準不準時就得用 C（需要出貨綁定）。
+
+       舊制是把兩張表的「筆數」直接相減，但 order_track 與 order_list 是各自獨立的資料
+       （2026-01：訂單追蹤 260 張、ERP 未交 364 列），相減會變成負數被夾成 0%。
+       改成**逐筆對回去**（同客戶簡稱＋同料號，一張未交只佔用一張訂單），
+       這樣「未交數」永遠不會超過訂單數，1~3 月就不會再被夾成 0%。 */
     if ($mode === 'erp_ship' && $rows) {
-        $need = [];
-        foreach ($rows as $r) if ($r['ship_date'] === '') $need[] = ['cname'=>$r['Client_name'], 'd_id'=>$r['d_id']];
-        $hint = $need ? kpi_as_oo_ship_hint($db, $need, $year, $month) : [];
+        $ym = sprintf('%04d-%02d', $year, $month);
+        $idx = [];
+        foreach ($rows as $i => $r) {
+            $k = trim((string)$r['Client_name']) . "\x00" . trim((string)$r['d_id']);
+            $idx[$k][] = $i;
+        }
+        $open = [];
+        try {
+            $q = $db->prepare("SELECT COALESCE(cl.customer, ol.Client_name) cn, ol.d_id, ol.Order_oo,
+                                      ol.Qty, ol.Open_Qty
+                               FROM order_list ol
+                               LEFT JOIN customer_list cl ON cl.customer_id=ol.Client_name
+                               WHERE UPPER(ol.d_id)<>'ZZZ' AND LOWER(ol.d_id) NOT REGEXP '-(jg|jh|hg)$'
+                                 AND ol.Qty=ol.Open_Qty AND ol.Order_status IS NULL
+                                 AND DATE_FORMAT(ol.Delivery_date,'%Y-%m')=?");
+            $q->execute([$ym]);
+            $open = $q->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {}
+        foreach ($open as $u) {
+            $k = trim((string)$u['cn']) . "\x00" . trim((string)$u['d_id']);
+            if (empty($idx[$k])) continue;                 // 對不回訂單追蹤（那張訂單不在這裡）
+            $i = array_shift($idx[$k]);                    // 一張未交只佔用一張訂單
+            $rows[$i]['erp_open'] = $u;
+        }
+        // ERP 說還完全沒出＝不準時；沒被標到的，ERP 認為已交（但沒有出貨日，無法再判準不準時）
         foreach ($rows as &$r) {
-            if ($r['ship_date'] !== '') continue;
-            $h = $hint[trim((string)$r['Client_name']) . "\x00" . trim((string)$r['d_id'])] ?? null;
-            if (!$h) continue;
-            $r['ship_date'] = $h['d'];
-            $r['ship_src']  = 'hint';
-            $r['hint']      = $h;
-            $r['ontime']    = ($h['d'] <= $r['due']);
+            $r['ontime'] = empty($r['erp_open']);
+            if (!$r['ontime']) { $r['ship_date'] = ''; $r['ship_src'] = ''; }
         }
         unset($r);
+        // 沒出貨的那幾筆，再查「同客戶同料號、沒綁訂單的出貨單」當提示（只是提示，不改判定）
+        $need = [];
+        foreach ($rows as $r) if (!empty($r['erp_open'])) $need[] = ['cname'=>$r['Client_name'], 'd_id'=>$r['d_id']];
+        $hint = $need ? kpi_as_oo_ship_hint($db, $need, $year, $month) : [];
+        if ($hint) {
+            foreach ($rows as &$r) {
+                if (empty($r['erp_open'])) continue;
+                $h = $hint[trim((string)$r['Client_name']) . "\x00" . trim((string)$r['d_id'])] ?? null;
+                if ($h) $r['hint'] = $h;
+            }
+            unset($r);
+        }
     }
     return $rows;
 }
@@ -2134,9 +2171,10 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                 $rows = kpi_as_order_bind_rows($db, $year, $month, $params, [], $mode);
                 $cmapB = kpi_as_client_id_map($db);
                 $out['cols'] = [['k'=>'oo','t'=>'訂單編號'], ['k'=>'client','t'=>'客戶'], ['k'=>'d_id','t'=>'料號'],
-                                ['k'=>'qty','t'=>'訂單量'], ['k'=>'dd','t'=>'交期'],
-                                ['k'=>'sd','t'=>'出貨日'],
-                                ['k'=>'ship','t'=>'疑似已出貨(未綁)', 'p'=>0]];
+                                ['k'=>'qty','t'=>'訂單量'], ['k'=>'dd','t'=>'交期']];
+                // C 才有出貨日（來自綁定）；B 讀的是 ERP 未交清單，沒有出貨日期
+                if ($mode === 'bind') $out['cols'][] = ['k'=>'sd','t'=>'出貨日'];
+                $out['cols'][] = ['k'=>'ship','t'=>'疑似已出貨(未綁)', 'p'=>0];
                 $noShip = [];
                 foreach ($rows as $r) if ($r['ship_date'] === '') $noShip[] = ['cname'=>$r['Client_name'], 'd_id'=>$r['d_id']];
                 // C 模式才需要另外查「疑似已出貨」當提示；B 模式已經把它算進出貨日了
@@ -2146,10 +2184,21 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     if ($r['ontime']) continue;                       // 準時＝不是違規列
                     $dims = ['client'=>(string)$r['Client_name'], 'part'=>(string)$r['d_id']];
                     $hk = trim($dims['client']) . "\x00" . trim($dims['part']);
-                    $hv = ($r['ship_date'] === '') ? ($hint[$hk] ?? null) : null;
+                    $hv = ($mode === 'erp_ship') ? ($r['hint'] ?? null)
+                        : (($r['ship_date'] === '') ? ($hint[$hk] ?? null) : null);
                     if ($hv) $hintN++;
                     if ($r['ship_date'] === '') $noneN++; else $lateN++;
-                    if ($r['ship_date'] !== '') {
+                    if ($mode === 'erp_ship') {
+                        // B 模式讀的是 ERP 未交清單，它沒有出貨日期，所以只講「還完全沒出貨」
+                        $why = '交期已到，ERP 未交清單上這一張還是「完全沒出貨」'
+                             . ($hv ? '——但查到同客戶同料號有一張沒綁訂單的出貨單，很可能其實已經出貨了' : '');
+                        $fix = $hv
+                             ? ($hv['d'] . ' 有一張出貨單 ' . $hv['no'] . '（數量 ' . $hv['qty'] . '）沒有綁到任何訂單。'
+                                . '等 ERP 修好、出貨單重新載入之後這一筆應該就會從未交清單消失；'
+                                . '若確定不會，請確認 ERP 那邊這張訂單有沒有結掉。')
+                             : ('若實際已出貨，請確認 ERP 的未交清單有沒有更新（這個模式讀的就是它）；'
+                                . '若客戶要求延後交期，請到訂單追蹤更新交期，這一筆就會改算到新的月份。');
+                    } elseif ($r['ship_date'] !== '') {
                         $late = (int)round((strtotime($r['ship_date']) - strtotime($r['due'])) / 86400);
                         $why = '出貨日 ' . eg_fmt_date($r['ship_date']) . ' 晚於交期 ' . $late . ' 天';
                         $fix = '確認出貨日或交期是否登錄錯誤；若客戶同意延後，請到訂單追蹤更新交期，'
@@ -2177,13 +2226,20 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     ];
                 }
                 $out['note'] = ($mode === 'bind'
-                                ? '未交判定方式：C｜以網頁上的出貨綁定為準（綁一張出貨單，那張訂單當下就不算未交）。'
-                                : '未交判定方式：B｜以出貨綁定為主，沒綁的再認同客戶同料號、未綁訂單的出貨單（已排除 ERP 重複轉出的單號）。')
-                             . '分母＝本月交期的訂單（訂單追蹤，已排除取消的訂單），分子＝查得到出貨且出貨日不晚於交期。'
-                             . '本月未準時 ' . ($lateN + $noneN) . ' 筆：遲交 ' . $lateN . ' 筆、查不到出貨單 ' . $noneN . ' 筆'
-                             . ($hintN ? ('（其中 ' . $hintN . ' 筆查到同客戶同料號有沒綁訂單的出貨單，補綁就會變準時）') : '') . '。';
+                                ? ('未交判定方式：C｜以網頁上的出貨綁定為準。分母＝本月交期的訂單'
+                                   . '（訂單追蹤，已排除取消的訂單），分子＝有綁到出貨單且出貨日不晚於交期。')
+                                : ('未交判定方式：B｜以 ERP 未交清單為準，逐筆對回訂單（同客戶＋同料號，一張未交只佔用一張訂單）。'
+                                   . '分母＝本月交期的訂單（訂單追蹤，已排除取消的訂單），'
+                                   . '分子＝ERP 未交清單上沒有的（＝ERP 認為已交）。'
+                                   . 'ERP 的未交清單沒有出貨日期，所以這個模式只判得出「到期了還完全沒出」，'
+                                   . '判不出「是不是在交期前交的」——要判那個請改用 C（但需要先把出貨單綁到訂單）。'))
+                             . '本月未準時 ' . ($lateN + $noneN) . ' 筆'
+                             . ($mode === 'bind' ? ('：遲交 ' . $lateN . ' 筆、查不到出貨單 ' . $noneN . ' 筆') : '')
+                             . ($hintN ? ('（其中 ' . $hintN . ' 筆查到同客戶同料號有沒綁訂單的出貨單）') : '') . '。';
                 $out['note_excl'] = $exCli ? ('排除客戶：' . implode('、', $exCli) . '。') : '';
-                $out['note_print'] = '本表為本月交期、未於交期前出貨之訂單明細。';
+                $out['note_print'] = ($mode === 'bind')
+                    ? '本表為本月交期、未於交期前出貨之訂單明細。'
+                    : '本表為本月交期、到期仍未出貨之訂單明細。';
                 return $out;
             }
 
