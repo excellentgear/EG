@@ -398,12 +398,18 @@ function dqa_trace_rows(PDO $db, array $f): array
              WHERE " . implode(' AND ', $w) . "
              ORDER BY ot.Order_date DESC, ot.Order_id DESC
              LIMIT :lim";
+    $cnt = $db->prepare("SELECT COUNT(*) FROM order_track ot WHERE " . implode(' AND ', $w));
+    foreach ($p as $k => $v) $cnt->bindValue($k, $v);
+    $cnt->execute();
+    $orderTotal = (int)$cnt->fetchColumn();
+
     $st = $db->prepare($sql);
     foreach ($p as $k => $v) $st->bindValue($k, $v);
     $st->bindValue(':lim', $lim, PDO::PARAM_INT);
     $st->execute();
     $orders = $st->fetchAll(PDO::FETCH_ASSOC);
-    if (!$orders) return ['rows' => [], 'total' => 0, 'stat' => dqa_trace_stat([]), 'truncated' => false];
+    if (!$orders) return ['rows' => [], 'total' => 0, 'stat' => dqa_trace_stat([]),
+                          'truncated' => false, 'scanned' => 0, 'order_total' => 0, 'limit' => $lim];
 
     $oids = array_map(function ($o) { return (int)$o['Order_id']; }, $orders);
     /* 推測配對的兩個鍵（見 dqa_pair_keys 的說明：料號主鍵優先、名稱只是回退） */
@@ -815,8 +821,8 @@ function dqa_trace_rows(PDO $db, array $f): array
     }
 
     return ['rows' => $rows, 'total' => count($rows), 'stat' => dqa_trace_stat($rows),
-            'truncated' => (count($orders) >= $lim), 'scanned' => count($orders),
-            'tol' => $tol];
+            'truncated' => ($orderTotal > count($orders)), 'scanned' => count($orders),
+            'order_total' => $orderTotal, 'limit' => $lim, 'tol' => $tol];
 }
 
 /** 數字顯示：小數尾 0 省略（UI 規則） */

@@ -967,20 +967,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
 
     // ── 快速綁定：查詢一筆訂單可能對應的客戶ID與料號ID ──────────────────
+    // 2026-09-18：候選查詢移到共用庫 order_autobind_lib.php，與「批次自動綁定」共用同一份判定
+    //（兩邊各寫一份 SQL 遲早走鐘，走鐘就會變成「跳窗顯示兩個候選、批次卻自動綁了其中一個」）。
+    // 搬過去時已對真實資料逐欄比對 249 組客戶查詢與 442 組料號查詢（含別名與已綁客戶分支），輸出完全相同。
     if ($_POST['action'] === 'quick_bind_lookup') {
         header('Content-Type: application/json');
+        require_once __DIR__ . '/../../src/common/order_autobind_lib.php';
         try {
             $order_id  = $_POST['order_id'] ?? '';
             $client_name = trim($_POST['client_name'] ?? '');
             $d_id_text   = trim($_POST['d_id_text'] ?? '');
 
             // 搜尋符合客戶名稱的客戶列表
-            $customers = [];
-            if ($client_name !== '') {
-                $stmt = $pdo->prepare("SELECT customer_id, customer FROM customer_list WHERE customer LIKE ? AND is_inactive = 0 ORDER BY customer_id LIMIT 10");
-                $stmt->execute(["%$client_name%"]);
-                $customers = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            }
+            $customers = ot_ab_find_customers($pdo, $client_name);
 
             // 取得此訂單已綁定的客戶 ID（若已綁定，料號搜尋時一併篩選）
             $bound_customer_id = null;
@@ -994,39 +993,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
 
             // 搜尋符合料號的 d_setting 列表（模糊搜尋，上限 50 筆，精確符合排前）
-            $parts = [];
-            if ($d_id_text !== '') {
-                if ($bound_customer_id !== null) {
-                    // 客戶已綁定：同時篩選此客戶底下的料號
-                    $stmt = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Spec_No, d.Customer_Id AS customer_id, c.customer AS client_name,
-                                                  d.Is_Assembly,
-                                                  (SELECT a.alias_code FROM d_setting_alias a WHERE a.d_id=d.d_id AND a.alias_code LIKE ? LIMIT 1) AS alias_hit,
-                                                  EXISTS(SELECT 1 FROM d_setting_bom bb WHERE bb.child_d_id = d.d_id) AS Is_Bom_Child
-                                           FROM d_setting d
-                                           LEFT JOIN customer_list c ON d.Customer_Id = c.customer_id
-                                           WHERE (d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ?
-                                                  OR EXISTS(SELECT 1 FROM d_setting_alias a2 WHERE a2.d_id=d.d_id AND a2.alias_code LIKE ?)) AND d.Customer_Id = ?
-                                           ORDER BY CASE WHEN d.D_Setting_Id = ? THEN 0 ELSE 1 END, d.D_Setting_Id
-                                           LIMIT 50");
-                    $stmt->execute(["%$d_id_text%", "%$d_id_text%", "%$d_id_text%", "%$d_id_text%", $bound_customer_id, $d_id_text]);
-                } else {
-                    // 無綁定客戶：全範圍模糊搜尋
-                    $stmt = $pdo->prepare("SELECT d.d_id, d.D_Setting_Id, d.Drawing_No, d.Spec_No, d.Customer_Id AS customer_id, c.customer AS client_name,
-                                                  d.Is_Assembly,
-                                                  (SELECT a.alias_code FROM d_setting_alias a WHERE a.d_id=d.d_id AND a.alias_code LIKE ? LIMIT 1) AS alias_hit,
-                                                  EXISTS(SELECT 1 FROM d_setting_bom bb WHERE bb.child_d_id = d.d_id) AS Is_Bom_Child
-                                           FROM d_setting d
-                                           LEFT JOIN customer_list c ON d.Customer_Id = c.customer_id
-                                           WHERE (d.D_Setting_Id LIKE ? OR d.Drawing_No LIKE ?
-                                                  OR EXISTS(SELECT 1 FROM d_setting_alias a2 WHERE a2.d_id=d.d_id AND a2.alias_code LIKE ?))
-                                           ORDER BY CASE WHEN d.D_Setting_Id = ? THEN 0 ELSE 1 END, d.D_Setting_Id
-                                           LIMIT 50");
-                    $stmt->execute(["%$d_id_text%", "%$d_id_text%", "%$d_id_text%", "%$d_id_text%", $d_id_text]);
-                }
-                $parts = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            }
+            $parts = ot_ab_find_parts($pdo, $d_id_text, $bound_customer_id);
 
             echo json_encode(['success' => true, 'customers' => $customers, 'parts' => $parts]);
+        } catch (Exception $e) {
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // ── 批次自動綁定：把「候選唯一且完全相符」的未綁定訂單一次補完 ─────────
+    // 2026-09-18 使用者交辦：「未綁定料號但快速綁定內只有一個項目的，是否可以自動綁定完」。
+    // 判定與寫入規則全部在 src/common/order_autobind_lib.php（含為什麼不能只看「候選只有一筆」）。
+    // 分段處理：一次一段、前端帶游標接著跑，避免一個請求跑幾千張訂單逾時。
+    if ($_POST['action'] === 'auto_bind_run') {
+        header('Content-Type: application/json');
+        require_once __DIR__ . '/../../src/common/order_autobind_lib.php';
+        require_once __DIR__ . '/../../src/common/role_features_helper.php';
+        try {
+            $uid = intval($_SESSION['id'] ?? 0);
+            // 權限：一次會寫進幾千張訂單，刻意不沿用 ot_has_feature()——那支對「完全沒被指派角色」
+            // 的人是 fail-open 回 true 的（過渡期相容）。這裡一律要求真的有 ot_edit 或管理員角色。
+            $okPerm = false;
+            if ($uid > 0) {
+                $__f = rf_load_user_features_all($pdo, $uid);
+                $okPerm = !empty($__f) && (rf_has_feature($__f, 'all') || rf_has_feature($__f, 'ot_edit'));
+            }
+            if (!$okPerm) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => '您沒有批次自動綁定的權限（需要「新建/編輯訂單」）。']);
+                exit;
+            }
+
+            $apply = (($_POST['mode'] ?? 'scan') === 'apply');
+            $afterId = intval($_POST['after_id'] ?? 0);
+            $res = ot_ab_run($pdo, [
+                'after_id'           => $afterId,
+                'limit'              => intval($_POST['limit'] ?? 120),
+                'apply'              => $apply,
+                'fill_part_customer' => (($_POST['fill_part_customer'] ?? '0') === '1'),
+                'uid'                => $uid,
+                'sample_limit'       => intval($_POST['sample_limit'] ?? 0),
+            ]);
+            $res['success'] = true;
+            // 第一段順便回傳待處理總數與原因文字對照，讓畫面畫得出進度條與統計徽章
+            //（之後每段不再重查；原因文字一律由後端提供，不要在 JS 再抄一份中文）
+            if ($afterId === 0) {
+                $res['total'] = (int)$pdo->query("SELECT COUNT(*) FROM order_track
+                                                  WHERE (Client_name_ID IS NULL OR Client_name_ID = ''
+                                                         OR d_id_ID IS NULL OR d_id_ID = 0)")->fetchColumn();
+                $res['reason_labels'] = ot_ab_reason_labels();
+            }
+            echo json_encode($res, JSON_UNESCAPED_UNICODE);
         } catch (Exception $e) {
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
         }
@@ -3732,6 +3750,13 @@ foreach($dCounts as $c) {
                         <button type="button" class="btn btn-warning btn-sm" id="filter-unbound" style="margin:0;" title="篩選尚未綁定客戶ID或料號ID的訂單">
                             <i class="fa fa-unlink"></i><span class="fb-txt"> 未綁定</span>
                         </button>
+                        <?php if ($can_update): /* 批次自動綁定：一次寫進大量訂單，門檻＝新建/編輯訂單（ot_edit） */ ?>
+                        <button type="button" id="btn-auto-bind" onclick="openAutoBind()"
+                            title="批次自動綁定：把「客戶與料號候選都只有一筆、而且料號文字完全相同」的未綁定訂單一次補完（會先試算給你看）"
+                            style="margin:0;padding:4px 10px;font-size:12px;background:linear-gradient(135deg,#8a5a2b,#F0A24B);color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:5px;">
+                            <i class="fa fa-magic" style="font-size:13px;"></i><span class="fb-txt"> 自動綁定</span>
+                        </button>
+                        <?php endif; ?>
                         <button type="button" class="btn btn-danger btn-sm" id="clear-filters" style="margin: 0;" title="清除篩選條件"><i class="fa fa-times"></i><span class="fb-txt"> 取消</span></button>
                         <?php if ($show_gear_tool): ?>
                         <button type="button" id="btn-open-gear-tool"
@@ -4493,6 +4518,80 @@ foreach($dCounts as $c) {
     </div>
     <?php endif; ?>
 
+    <?php if ($can_update): ?>
+    <!-- ═══ 批次自動綁定 Modal ═══════════════════════════════════════════════
+         2026-09-18 使用者交辦：「未綁定料號但快速綁定內只有一個項目的，是否可以自動綁定完」。
+         流程刻意做成「先試算、看過明細再寫入」——一次會動到幾千張訂單，不給預覽等於閉著眼睛按。
+         判定規則與寫入全部在 src/common/order_autobind_lib.php（含為什麼不能只看「候選只有一筆」）。 -->
+    <div class="modal fade" id="autoBindModal" tabindex="-1" role="dialog" data-backdrop="static">
+        <div class="modal-dialog modal-lg" role="document" style="max-width:900px;">
+            <div class="modal-content">
+                <div class="modal-header" style="background:#8a5a2b;color:#fff;border-radius:8px 8px 0 0;">
+                    <button type="button" class="close" style="color:#fff;opacity:.8;" data-dismiss="modal"><span>&times;</span></button>
+                    <h4 class="modal-title" style="font-size:15px;"><i class="fa fa-magic"></i> 批次自動綁定（未綁定訂單）</h4>
+                </div>
+                <div class="modal-body" style="padding:14px;">
+                    <div style="font-size:12px;line-height:1.75;color:#4A2A0A;background:#FDF1DF;border:1px solid #F0A24B;border-radius:4px;padding:9px 11px;margin-bottom:10px;">
+                        <div style="font-weight:700;margin-bottom:3px;"><i class="fa fa-info-circle"></i> 什麼樣的訂單才會被自動綁定</div>
+                        同時符合以下四項才綁，只要有一項不符就留著給你人工處理：<br>
+                        ① 客戶主檔候選<b>只有一家</b>　② 料號主檔候選<b>只有一筆</b><br>
+                        ③ 訂單上的料號文字與主檔<b>完全相同</b>（料號／圖號／別名任一完全相同；只是部分相符的一律不綁）<br>
+                        ④ 該筆料號主檔的客戶<b>沒有衝突</b>（主檔沒綁客戶、或就是這一家）<br>
+                        <span style="color:#a0522d;">※ ③④ 是刻意加的保險：實測有訂單客戶是「立翔」、料號文字「RT18」，模糊比對唯一命中的卻是「全宏」的 RT18-2201-00_C。</span>
+                    </div>
+                    <div style="font-size:11.5px;line-height:1.7;color:#555;background:#f7f7f7;border:1px solid #e3e3e3;border-radius:4px;padding:8px 10px;margin-bottom:10px;">
+                        <b>只會寫入客戶ID與料號ID兩個欄位</b>，不動報價單、單價、數量、交期，也不動訂單的「最後修改」紀錄。<br>
+                        寫入前會再確認一次「這張單現在還是未綁定」，別人剛手動綁好的一律不覆蓋。每綁一張都會留下稽核紀錄（是誰、什麼時候、綁成什麼）。
+                    </div>
+                    <div style="margin-bottom:10px;">
+                        <label style="font-weight:400;font-size:12px;cursor:pointer;">
+                            <input type="checkbox" id="ab-fill-pc" style="vertical-align:-1px;" data-eg-skip>
+                            料號主檔沒有綁客戶時，一併把客戶補上去（＝與單筆「確認綁定」相同的行為；不勾就只綁訂單、不動料號主檔）
+                        </label>
+                    </div>
+
+                    <div id="ab-progress-wrap" style="display:none;margin-bottom:10px;">
+                        <div style="font-size:12px;margin-bottom:3px;"><span id="ab-progress-label">試算中…</span></div>
+                        <div style="height:16px;background:#eee;border-radius:8px;overflow:hidden;">
+                            <div id="ab-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#8a5a2b,#F0A24B);transition:width .2s;"></div>
+                        </div>
+                    </div>
+
+                    <div id="ab-result" style="display:none;">
+                        <div id="ab-summary" style="font-size:12.5px;margin-bottom:8px;"></div>
+                        <div id="ab-reasons" style="font-size:12px;margin-bottom:8px;"></div>
+                        <div id="ab-detail-wrap" style="display:none;">
+                            <div style="font-size:12px;font-weight:700;color:#8a5a2b;margin-bottom:3px;">
+                                明細（前 <span id="ab-detail-count">0</span> 筆，供抽查用）
+                            </div>
+                            <div style="max-height:260px;overflow:auto;border:1px solid #e3e3e3;border-radius:4px;">
+                                <table class="table table-condensed" style="margin:0;font-size:11.5px;">
+                                    <thead><tr style="background:#f5f5f5;">
+                                        <th style="width:112px;">訂單編號</th><th style="width:78px;">訂單日期</th>
+                                        <th>訂單上的客戶</th><th>訂單上的料號</th>
+                                        <th>要綁的客戶</th><th>要綁的料號</th><th style="width:170px;">判定</th>
+                                    </tr></thead>
+                                    <tbody id="ab-detail-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer" style="padding:8px 14px;">
+                    <span id="ab-foot-note" style="float:left;font-size:11.5px;color:#888;line-height:28px;"></span>
+                    <button type="button" class="btn btn-default btn-sm" id="ab-close-btn" data-dismiss="modal">關閉</button>
+                    <button type="button" class="btn btn-sm" id="ab-scan-btn" style="background:#5d4037;border-color:#4e342e;color:#fff;" onclick="abStart(false)">
+                        <i class="fa fa-calculator"></i> 開始試算（不寫入）
+                    </button>
+                    <button type="button" class="btn btn-sm" id="ab-apply-btn" style="display:none;background:#8a5a2b;border-color:#7a4d24;color:#fff;" onclick="abConfirmApply()">
+                        <i class="fa fa-magic"></i> 確認寫入
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
     <div class="modal fade" id="quickBindModal" tabindex="-1" role="dialog">
         <div class="modal-dialog modal-lg" role="document" style="max-width:700px;">
             <div class="modal-content">
@@ -5030,6 +5129,13 @@ foreach($dCounts as $c) {
 
             // 【初始載入】第一次進頁面用 AJAX 載入（非資料塊模式）
             isStatCardFilter = false;
+            /* 從別的頁面帶關鍵字進來（例：資料稽核點訂單編號）→ ?kw=OO1141231010
+               填進全表搜尋框就好：fetchTableData() 本來就會讀 #filter-global，
+               而且它一有值就會自動切成「全部年份」，所以不必再帶年度 */
+            (function(){
+                var kw = new URLSearchParams(location.search).get('kw');
+                if (kw) $('#filter-global').val(kw.trim());
+            })();
             fetchTableData(1);
 
             // ── 年份 / 設計師 下拉 ─────────────────────────────────────────
@@ -6247,6 +6353,175 @@ foreach($dCounts as $c) {
                 showToast('請求失敗，請檢查網路');
             });
         }
+
+<?php if ($can_update): ?>
+        // ── 批次自動綁定 ────────────────────────────────────────────────────
+        // 2026-09-18 使用者交辦。分段跑（一段 120 張）：5,181 張未綁定訂單整份掃完約 50 秒，
+        // 一個請求跑完一定逾時，所以由前端帶游標（after_id）一段一段接著跑並畫進度。
+        // 判定與寫入全在後端 order_autobind_lib.php，前端只負責「催下一段」與顯示。
+        var AB_CHUNK = 120, AB_SAMPLE_MAX = 200;
+        var abBusy = false, abScanned = null;
+        var AB_REASON = {}; // 原因代碼→中文，由後端第一段回傳（唯一實作在 order_autobind_lib.php）
+
+        function openAutoBind() {
+            abBusy = false;
+            abScanned = null;
+            $('#ab-progress-wrap').hide();
+            $('#ab-result').hide();
+            $('#ab-detail-wrap').hide();
+            $('#ab-detail-body').empty();
+            $('#ab-summary').empty();
+            $('#ab-reasons').empty();
+            $('#ab-foot-note').text('');
+            $('#ab-apply-btn').hide();
+            $('#ab-scan-btn').show().prop('disabled', false).html('<i class="fa fa-calculator"></i> 開始試算（不寫入）');
+            $('#ab-close-btn').prop('disabled', false);
+            $('#autoBindModal').modal('show');
+        }
+
+        function abSetProgress(done, total, label) {
+            var pct = (total > 0) ? Math.min(100, Math.round(done / total * 100)) : 0;
+            $('#ab-progress-bar').css('width', pct + '%');
+            $('#ab-progress-label').text(label + '　' + done + ' / ' + (total || '?') + ' 張（' + pct + '%）');
+        }
+
+        // apply=false 試算、apply=true 真的寫入
+        function abStart(apply) {
+            if (abBusy) return;
+            abBusy = true;
+            $('#ab-scan-btn').prop('disabled', true);
+            $('#ab-apply-btn').prop('disabled', true);
+            $('#ab-close-btn').prop('disabled', true);
+            $('#ab-progress-wrap').show();
+            $('#ab-result').hide();
+            $('#ab-detail-body').empty();
+            $('#ab-detail-wrap').hide();
+            abSetProgress(0, 0, apply ? '寫入中…' : '試算中…');
+
+            var acc = { processed: 0, ok: 0, applied: 0, part_customer_filled: 0, reasons: {}, samples: [], total: 0 };
+            var fillPc = $('#ab-fill-pc').is(':checked') ? '1' : '0';
+
+            function nextChunk(afterId) {
+                var need = apply ? 0 : Math.max(0, AB_SAMPLE_MAX - acc.samples.length);
+                $.post('', {
+                    action: 'auto_bind_run',
+                    mode: apply ? 'apply' : 'scan',
+                    after_id: afterId,
+                    limit: AB_CHUNK,
+                    sample_limit: need,
+                    fill_part_customer: fillPc
+                }, function(res) {
+                    if (!res || !res.success) {
+                        abFinish(apply, acc, (res && res.message) ? res.message : '執行失敗');
+                        return;
+                    }
+                    if (typeof res.total !== 'undefined') acc.total = parseInt(res.total) || 0;
+                    if (res.reason_labels) AB_REASON = res.reason_labels;
+                    acc.processed += (res.processed || 0);
+                    acc.ok       += (res.ok || 0);
+                    acc.applied  += (res.applied || 0);
+                    acc.part_customer_filled += (res.part_customer_filled || 0);
+                    for (var k in (res.reasons || {})) acc.reasons[k] = (acc.reasons[k] || 0) + res.reasons[k];
+                    (res.samples || []).forEach(function(s) { if (acc.samples.length < AB_SAMPLE_MAX) acc.samples.push(s); });
+                    abSetProgress(acc.processed, acc.total, apply ? '寫入中…' : '試算中…');
+
+                    if (res.done) { abFinish(apply, acc, ''); return; }
+                    // 寫入模式下已綁好的訂單會離開未綁定範圍，所以游標一律用 last_id 往前推，不用 offset
+                    nextChunk(res.last_id);
+                }, 'json').fail(function() {
+                    abFinish(apply, acc, '請求失敗，請檢查網路後重試（已完成的部分不會重做）');
+                });
+            }
+            nextChunk(0);
+        }
+
+        function abFinish(apply, acc, errMsg) {
+            abBusy = false;
+            $('#ab-close-btn').prop('disabled', false);
+            $('#ab-progress-label').text(errMsg ? ('已中止：' + errMsg) : (apply ? '寫入完成' : '試算完成'));
+
+            var skipped = acc.processed - acc.ok;
+            var html = '';
+            if (errMsg) {
+                html += '<div style="color:#DD5138;font-weight:600;margin-bottom:5px;"><i class="fa fa-exclamation-triangle"></i> ' + escapeHtml(errMsg) + '</div>';
+            }
+            if (apply) {
+                html += '<div style="font-size:13px;"><b>已自動綁定 <span style="color:#1ABB9C;">' + acc.applied + '</span> 張訂單</b>'
+                     +  '，略過 ' + (acc.processed - acc.applied) + ' 張（共掃描 ' + acc.processed + ' 張）。</div>';
+                if (acc.part_customer_filled > 0) {
+                    html += '<div style="color:#8a5a2b;">同時補上料號主檔的客戶 ' + acc.part_customer_filled + ' 筆。</div>';
+                }
+                html += '<div style="color:#888;margin-top:3px;">清單已重新整理。每一張的綁定結果都留在稽核紀錄（類型 order_autobind）。</div>';
+            } else {
+                html += '<div style="font-size:13px;">共掃描 <b>' + acc.processed + '</b> 張未綁定訂單，'
+                     +  '其中 <b style="color:#1ABB9C;">' + acc.ok + '</b> 張可以自動綁定，'
+                     +  '<b>' + skipped + '</b> 張需要人工處理。</div>';
+            }
+            $('#ab-summary').html(html);
+
+            // 原因統計（可綁的排最前面）
+            var order = Object.keys(acc.reasons).sort(function(a, b) {
+                if (a === 'ok') return -1; if (b === 'ok') return 1;
+                return acc.reasons[b] - acc.reasons[a];
+            });
+            var rh = '';
+            order.forEach(function(k) {
+                var ok = (k === 'ok');
+                rh += '<span style="display:inline-block;margin:2px 6px 2px 0;padding:2px 8px;border-radius:10px;font-size:11.5px;'
+                   +  (ok ? 'background:#e8f8f0;color:#1e8449;border:1px solid #a9dfbf;' : 'background:#f2f2f2;color:#666;border:1px solid #ddd;')
+                   +  '">' + escapeHtml(AB_REASON[k] || k) + '：' + acc.reasons[k] + '</span>';
+            });
+            $('#ab-reasons').html(rh);
+
+            // 明細（只有試算才列）
+            if (!apply && acc.samples.length > 0) {
+                var body = '';
+                acc.samples.forEach(function(s) {
+                    body += '<tr style="' + (s.ok ? 'background:#f6fdf9;' : '') + '">'
+                         +  '<td>' + escapeHtml(s.order_no || '') + (s.closed ? ' <span style="color:#999;font-size:10px;">已結案</span>' : '') + '</td>'
+                         +  '<td>' + escapeHtml(s.order_date ? ((typeof egFmtDate === 'function') ? egFmtDate(s.order_date) : s.order_date) : '') + '</td>'
+                         +  '<td>' + escapeHtml(s.client_txt || '') + '</td>'
+                         +  '<td style="word-break:break-all;">' + escapeHtml(s.part_txt || '') + '</td>'
+                         +  '<td>' + escapeHtml(s.customer || '') + '</td>'
+                         +  '<td style="word-break:break-all;">' + escapeHtml(s.part || '') + (s.fill_pc ? ' <span style="color:#8a5a2b;font-size:10px;">主檔無客戶</span>' : '') + '</td>'
+                         +  '<td style="' + (s.ok ? 'color:#1e8449;' : 'color:#a0522d;') + '">' + escapeHtml(s.reason_txt || '') + '</td>'
+                         +  '</tr>';
+                });
+                $('#ab-detail-body').html(body);
+                $('#ab-detail-count').text(acc.samples.length);
+                $('#ab-detail-wrap').show();
+            }
+            $('#ab-result').show();
+
+            if (apply) {
+                $('#ab-scan-btn').hide();
+                $('#ab-apply-btn').hide();
+                $('#ab-foot-note').text('');
+                if (acc.applied > 0 && typeof fetchTableData === 'function') fetchTableData(currentPage);
+            } else {
+                abScanned = acc;
+                $('#ab-scan-btn').prop('disabled', false).html('<i class="fa fa-refresh"></i> 重新試算');
+                if (acc.ok > 0 && !errMsg) {
+                    $('#ab-apply-btn').show().prop('disabled', false)
+                        .html('<i class="fa fa-magic"></i> 確認寫入這 ' + acc.ok + ' 張');
+                    $('#ab-foot-note').text('確認寫入前可以先改上面的勾選項；寫入時會重新判定一次，不會直接套用這份試算結果。');
+                } else {
+                    $('#ab-apply-btn').hide();
+                }
+            }
+        }
+
+        function abConfirmApply() {
+            if (abBusy || !abScanned) return;
+            var msg = '即將自動綁定 ' + abScanned.ok + ' 張訂單的客戶ID與料號ID。\n\n'
+                    + '• 只寫這兩個欄位，不動報價單、單價、數量、交期\n'
+                    + '• 寫入前會逐張重新判定，別人剛綁好的不會被覆蓋\n'
+                    + ($('#ab-fill-pc').is(':checked') ? '• 料號主檔沒有客戶的，會一併補上客戶\n' : '• 不會動到料號主檔\n')
+                    + '\n確定要執行嗎？';
+            if (!confirm(msg)) return;
+            abStart(true);
+        }
+<?php endif; /* $can_update */ ?>
 
         // ── 快速綁定 Modal：Enter 鍵觸發確認綁定 ────────────────────────────
         $('#quickBindModal').on('keydown', function(e) {

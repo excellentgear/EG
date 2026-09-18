@@ -93,6 +93,11 @@ try {
         .dq-tbl tr.r-warn td { background:#FFF9EF; }
         .dq-tbl tr.r-major td { background:#FFF9EF; }
         .dq-tbl tbody tr:hover td { background:#F7EFE2; }
+        .dq-periods { display:inline-flex; gap:4px; flex-wrap:wrap; }
+        .dq-periods button { border:1px solid var(--line); background:#fff; color:#6B4423;
+                             border-radius:4px; height:28px; padding:0 12px; font-size:13px; }
+        .dq-periods button:hover { background:var(--sand); }
+        .dq-periods button.on { background:var(--amber-d); color:#fff; border-color:var(--amber-d); font-weight:bold; }
         .dq-pager { display:flex; align-items:center; gap:6px; justify-content:flex-end; margin:0 0 6px; font-size:13px; }
         .dq-pager button { border:1px solid var(--line); background:#fff; color:#6B4423; border-radius:4px;
                            min-width:28px; height:26px; padding:0 8px; }
@@ -174,13 +179,23 @@ try {
     <!-- ══════════ 分頁一：流程順序稽核 ══════════ -->
     <div id="pane-trace">
         <div class="warm-panel no-print">
+            <div class="dq-bar" style="margin-bottom:6px">
+                <label>年度</label>
+                <select id="tYear" style="width:92px"></select>
+                <label>期間</label>
+                <select id="tGran" style="width:88px">
+                    <option value="year">全年</option>
+                    <option value="half">半年</option>
+                    <option value="quarter" selected>季</option>
+                    <option value="month">月</option>
+                </select>
+                <span id="tPeriods" class="dq-periods"></span>
+            </div>
             <div class="dq-bar">
                 <label>訂單日期</label>
                 <input type="date" id="tFrom" value="<?= $thisYear ?>-01-01">
                 <span>～</span>
                 <input type="date" id="tTo" value="<?= $thisYear ?>-12-31">
-                <button class="btn btn-xs btn-warm-o" data-year="<?= $thisYear ?>">今年</button>
-                <button class="btn btn-xs btn-warm-o" data-year="<?= $thisYear - 1 ?>">去年</button>
                 <label style="margin-left:8px">客戶</label>
                 <select id="tClient" data-eg-filter="輸入客戶名稱篩選…" style="min-width:150px"><option value="">全部</option></select>
                 <label>料號</label>
@@ -281,8 +296,11 @@ try {
            留存結果後內部稽核就帶得出來。</p>
 
         <h4>① 流程順序稽核</h4>
-        <p>操作步驟：選期間（依<b>訂單日期</b>）→ 可再選客戶或料號 → 按「開始稽核」。
-           上方統計橫幅點任一項目，下方表格就只留該項目，方便一次處理一種問題。</p>
+        <p>操作步驟：<b>選年度 → 選期間粒度（全年／半年／季／月）→ 點期間鈕</b>（點下去就直接稽核），
+           需要的話再選客戶或料號。上方統計橫幅點任一項目，下方表格就只留該項目，方便一次處理一種問題。</p>
+        <p><b>為什麼預設是「季」</b>：一年的訂單有三、四千張，單次稽核上限 3,000 張，
+           全年一次跑會被截斷、畫面也看不完。切成季或月逐段稽核最好查。
+           兩個日期欄位仍可手動輸入任意區間。</p>
         <ul>
             <li><b>日期規則</b>：報價日 ≦ 訂單日、製令開立日 ≧ 訂單日、出貨日 ≧ 製令開立日。
                 訂單若設定了「自動轉生管」＝不必開製令，這時只要求出貨日 ≧ 訂單日，也不會報「查不到製令」。</li>
@@ -294,6 +312,9 @@ try {
                 也不會把日期先後判成嚴重——因為推測本來就可能配到同料號別張訂單的資料。</li>
             <li><b>製程比對</b>預設關閉。訂單的製程是人工手打（「齒研+雷刻」「代料完成」），
                 出貨的製程由 ERP 轉出時與規格混在同一欄，所以差異很大；需要查的時候再勾「比對製程」。</li>
+            <li><b>四種單號都可以點，開新分頁並自動帶好篩選</b>：
+                報價單號 → 報價單管理（帶該報價年度並自動搜尋單號）；
+                訂單編號 → 訂單追蹤（填進全表搜尋，該頁一有全表搜尋值就會自動切成「全部年份」）。</li>
             <li><b>製令與出貨的數量下方會列出單號，點下去直接開相關頁面並帶好篩選</b>：
                 製令 → BOM 總表（自動填入該製令編號搜尋）；出貨 → 快速出貨的「近期出貨單」
                 （自動以該單號查詢，日期區間帶該單前後 7 天）。都是開新分頁，不影響這一頁的稽核結果。
@@ -457,12 +478,62 @@ $('.dq-tab').on('click', function(){
 });
 
 /* ══════════ 分頁一：流程順序稽核 ══════════ */
-$('[data-year]').on('click', function(){
-    var y = $(this).data('year');
-    $('#tFrom').val(y + '-01-01'); $('#tTo').val(y + '-12-31');
-    loadClients();
+/* 期間切換：年度 × 粒度（全年／半年／季／月）
+ * 使用者要求「分成每季或每月每半年呈現，避免資料過多」——一年的訂單有三千張，
+ * 全年一次稽核會撞到單次上限、畫面也看不完，切成季或月逐段看才查得動。 */
+function periodList(){
+    var y = parseInt($('#tYear').val(), 10) || (new Date()).getFullYear();
+    var g = $('#tGran').val();
+    var pad = function(n){ return (n < 10 ? '0' : '') + n; };
+    var last = function(m){ return new Date(y, m, 0).getDate(); };      // 該月最後一天
+    var seg = function(name, m1, m2){
+        return {name:name, from:y + '-' + pad(m1) + '-01', to:y + '-' + pad(m2) + '-' + pad(last(m2))};
+    };
+    if (g === 'year')    return [seg('全年', 1, 12)];
+    if (g === 'half')    return [seg('上半年', 1, 6), seg('下半年', 7, 12)];
+    if (g === 'quarter') return [seg('Q1', 1, 3), seg('Q2', 4, 6), seg('Q3', 7, 9), seg('Q4', 10, 12)];
+    var out = [];
+    for (var m = 1; m <= 12; m++) out.push(seg(m + '月', m, m));
+    return out;
+}
+function renderPeriods(autoPick){
+    var list = periodList(), f = $('#tFrom').val(), t = $('#tTo').val();
+    var hit = -1;
+    list.forEach(function(p, i){ if (p.from === f && p.to === t) hit = i; });
+    if (hit < 0 && autoPick !== false){
+        // 換年度或換粒度時，自動挑「包含目前起日」的那一段，沒有就挑第一段
+        hit = 0;
+        list.forEach(function(p, i){ if (f >= p.from && f <= p.to) hit = i; });
+        $('#tFrom').val(list[hit].from); $('#tTo').val(list[hit].to);
+    }
+    $('#tPeriods').html(list.map(function(p, i){
+        return '<button type="button" data-pi="' + i + '"' + (i === hit ? ' class="on"' : '') + '>' + esc(p.name) + '</button>';
+    }).join(''));
+}
+$('#tYear, #tGran').on('change', function(){ renderPeriods(true); loadClients(); });
+$(document).on('click', '#tPeriods button', function(){
+    var p = periodList()[parseInt($(this).data('pi'), 10)];
+    if (!p) return;
+    $('#tFrom').val(p.from); $('#tTo').val(p.to);
+    renderPeriods(false); loadClients();
+    $('#btnTraceRun').click();
 });
+/* 手動改日期就把期間按鈕的選取狀態同步掉（不硬把日期改回去，自訂區間照樣可用） */
+$('#tFrom, #tTo').on('change', function(){ renderPeriods(false); });
 
+function loadYears(){
+    $.get(API, {action:'trace_years'}, function(r){
+        if(!r || !r.ok) return;
+        var ys = (r.years||[]), cur = (new Date()).getFullYear();
+        if (!ys.length) ys = [cur];
+        $('#tYear').html(ys.map(function(y){
+            return '<option value="' + y + '"' + (+y === cur ? ' selected' : '') + '>' + y + '</option>';
+        }).join(''));
+        if (ys.indexOf(cur) < 0) $('#tYear').val(ys[0]);
+        renderPeriods(true);
+        loadClients();
+    });
+}
 function loadClients(){
     $.get(API, {action:'trace_clients', from:$('#tFrom').val(), to:$('#tTo').val()}, function(r){
         if(!r || !r.ok) return;
@@ -510,7 +581,9 @@ function renderTraceStat(){
     });
     h += '</div>';
     if (r.truncated) h += '<div class="muted-help" style="margin-top:6px;color:#B23A2A">'
-        + '⚠ 這個期間的訂單超過上限 ' + r.limit + ' 張，只稽核了最近的 ' + r.scanned + ' 張。請縮小期間或指定客戶／料號。</div>';
+        + '⚠ 這個期間共有 ' + (r.order_total||0) + ' 張訂單，超過單次上限 ' + (r.limit||0)
+        + ' 張，只稽核了最近的 ' + (r.scanned||0) + ' 張。'
+        + '請用上方的<b>期間</b>切成季或月逐段稽核，或指定客戶／料號。</div>';
     $('#tStatBox').show().html(h);
 }
 $(document).on('click', '#tStatBox .dq-chip', function(){
@@ -560,6 +633,14 @@ function bomDocs(list){
                 tip:'在 BOM 總表搜尋 ' + b.no + '（' + (b.date||'') + '，' + b.qty + ' 支）'};
     });
 }
+function quoteUrl(no, date){
+    var y = String(date||'').slice(0,4);
+    return '../Sales/quotation_list_NEW.php' + (y ? ('?year=' + y + '&kw=') : '?kw=') + encodeURIComponent(no);
+}
+/* 訂單追蹤的全表搜尋一有值就會自動切成「全部年份」，所以不必帶年度 */
+function orderUrl(no){
+    return '../Sales/NewOrder_Track.php?kw=' + encodeURIComponent(no);
+}
 function shipDocs(list){
     return (list||[]).map(function(x){
         var f = shiftDate(x.date, -7), t = shiftDate(x.date, 7), u = '../Sales/Shipping_Quick.php?is_no=' + encodeURIComponent(x.no);
@@ -588,7 +669,9 @@ function renderTrace(){
         var bBad = badCodes.b_early || badCodes.b_none;
         var sBad = badCodes.s_early_bom || badCodes.s_early_order || badCodes.s_none;
         var q = r.quote
-            ? nodeHtml(dispDate(r.quote.date), r.quote.no + ' ＠' + r.quote.price, qBad, r.quote.src)
+            ? nodeHtml(dispDate(r.quote.date), '＠' + r.quote.price, qBad, r.quote.src,
+                       [{no:r.quote.no, url:quoteUrl(r.quote.no, r.quote.date),
+                         tip:'在報價單管理搜尋 ' + r.quote.no}])
             : '<span class="node bad">無報價</span>';
         var b = r.bom.cnt
             ? nodeHtml(dispDate(r.bom.date), r.bom.cnt + ' 張／' + r.bom.qty + ' 支', bBad, r.bom.src, bomDocs(r.bom.list))
@@ -614,7 +697,9 @@ function renderTrace(){
         return '<tr class="r-' + r.level + '">'
             + '<td><span class="lv-badge ' + r.level + '">'
                 + (r.level==='critical'?'嚴重':(r.level==='warn'?'提醒':'正常')) + '</span></td>'
-            + '<td>' + esc(r.order_no) + '<br><em class="muted-help">' + dispDate(r.odate) + '</em>'
+            + '<td><a class="doc-no" style="font-size:13px" target="_blank" rel="noopener" href="'
+                + esc(orderUrl(r.order_no)) + '" title="在訂單追蹤全表搜尋 ' + esc(r.order_no) + '">'
+                + esc(r.order_no) + '</a><em class="muted-help">' + dispDate(r.odate) + '</em>'
                 + (r.closed?'<br><em class="muted-help">已結案</em>':'') + '</td>'
             + '<td>' + esc(r.client) + '</td>'
             + '<td>' + esc(r.part) + '<br><em class="muted-help">' + r.oqty + ' 支 ＠' + r.oprice + '</em></td>'
@@ -1030,7 +1115,7 @@ $('#btnMasterPrint').on('click', function(){
 });
 
 <?php if ($perms['canView']): ?>
-loadClients();
+loadYears();
 loadSettings();
 <?php endif; ?>
 </script>

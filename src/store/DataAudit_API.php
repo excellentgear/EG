@@ -85,6 +85,15 @@ case 'master_list': {
     jout($r);
 }
 
+/* ── 年度清單（期間切換用：只列真的有訂單的年度）────── */
+case 'trace_years': {
+    $rows = $db->query("SELECT DISTINCT YEAR(Order_date) y FROM order_track
+                         WHERE Order_date IS NOT NULL ORDER BY y DESC")->fetchAll(PDO::FETCH_COLUMN);
+    $ys = [];
+    foreach ($rows as $y) { $y = (int)$y; if ($y >= 2000 && $y <= 2100) $ys[] = $y; }
+    jout(['years' => $ys]);
+}
+
 /* ── 篩選用的客戶清單（流程稽核上方的下拉）───────────── */
 case 'trace_clients': {
     $from = dqaIn('from'); $to = dqaIn('to');

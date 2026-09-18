@@ -2078,6 +2078,12 @@ $(document).ready(function () {
     initNoteTemplates();     // ★ 自動建立備註模板資料表並載入快選按鈕
     loadProcesses();
     loadUnits();
+    /* 從別的頁面帶關鍵字進來（例：資料稽核點報價單號）→ ?kw=OP1150105009
+       填進搜尋框就好，loadQuoteList() 載完本來就會套用 #listSearch 的值 */
+    (function(){
+        var kw = new URLSearchParams(location.search).get('kw');
+        if (kw) $('#listSearch').val(kw.trim());
+    })();
     loadQuoteList(<?= $selectedYear ?>);
     loadSupplementAlerts(true);   // 進站提醒：補件被駁回/待審（清單預設仍顯示全部）
     // 切回本分頁時：若正在待處理篩選，重讀報價單清單→他人已簽核/退回的單即時反映（不掛已處理）；提醒視窗開著也刷新
