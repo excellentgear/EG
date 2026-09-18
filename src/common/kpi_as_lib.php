@@ -1085,7 +1085,47 @@ function kpi_as_order_bind_rows(PDO $db, int $year, int $month, array $params, a
  *   任何推估日期都必須 >= 發包日，否則視為不合理不採用。
  * ============================================================ */
 function kpi_as_vendor_back_sources(): array {
-    return ['next_out'=>'下一製程發包日', 'qc'=>'QC檢驗日', 'ship'=>'出貨日', 'closed'=>'製令結案日'];
+    return ['transfer'=>'製程移轉憑單', 'next_out'=>'下一製程發包日', 'qc'=>'QC檢驗日',
+            'ship'=>'出貨日', 'closed'=>'製令結案日'];
+}
+
+/**
+ * 製程移轉憑單（`bom_ing_transfer_log`，ERP 匯入，見 views/pm/Transfer_Log_Analysis.php）
+ * 的「單號日期」——貨從這個廠商移轉出去的那一天，就是它回廠的那一天，是最直接的證據。
+ *
+ * **日期一定要從單號解析，不可以用 `transfer_date`**（使用者指正 2026-09-18）：
+ * `transfer_date` 會為了帳款月份被人工改過（2026 年 6,369 筆裡有 60 筆與單號日期不同，最多差 49 天），
+ * 單號 `J-1150821029` ＝ J-＋民國年3碼(115)＋MM(08)＋DD(21)＋序號，是開單當下就固定的。
+ *
+ * 實測（拿 2026 年已經有登錄回廠日的 3,346 筆對照）：憑單日期與實際回廠日
+ * 完全相同 44%、差 3 天以內 93%、中位數差 -1 天；而 2026 沒有回廠日的 5,062 筆裡有 2,261 筆（45%）查得到憑單。
+ *
+ * @return array "bom\x00bom_sn\x00maker_id_no" => [日期由小到大]
+ */
+function kpi_as_transfer_dates(PDO $db, array $boms): array {
+    $boms = array_values(array_filter(array_unique(array_map('strval', $boms)), 'strlen'));
+    if (!$boms) return [];
+    $d = "STR_TO_DATE(CONCAT(SUBSTRING(transfer_no,3,3)+1911, SUBSTRING(transfer_no,6,4)),'%Y%m%d')";
+    $out = [];
+    foreach (array_chunk($boms, 500) as $chunk) {
+        $in = implode(',', array_fill(0, count($chunk), '?'));
+        try {
+            $st = $db->prepare("SELECT bom, bom_sn, maker_from, $d AS d
+                                FROM bom_ing_transfer_log
+                                WHERE bom IN ($in)
+                                  AND transfer_no REGEXP '^[A-Za-z]-[0-9]{10}$'
+                                  AND maker_from IS NOT NULL AND maker_from<>''");
+            $st->execute($chunk);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                if (empty($r['d'])) continue;
+                $k = (string)$r['bom'] . "\x00" . (string)$r['bom_sn'] . "\x00" . (string)$r['maker_from'];
+                $out[$k][] = substr((string)$r['d'], 0, 10);
+            }
+        } catch (Throwable $e) {}
+    }
+    foreach ($out as &$v) { sort($v); }
+    unset($v);
+    return $out;
 }
 
 function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): array {
@@ -1105,7 +1145,7 @@ function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): arra
     $cmap = kpi_as_client_id_map($db);
     $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.sqty, bi.outsource_date, bi.return_date,
                                bi.QC_check_date, bi.process_no, pn.ProcessName, pn.process_type_id,
-                               bi.maker_id_no,
+                               bi.maker_id_no AS mk_no,
                                COALESCE(mk.maker_id, bi.maker_id) AS maker_name,
                                b.d_id AS part_no, b.Client_Name AS client_name,
                                b.o_order_id, b.closed_at
@@ -1134,7 +1174,7 @@ function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): arra
             if ((int)$r['o_order_id'] > 0) $needOrders[(int)$r['o_order_id']] = 1;
         }
         $dimIds = ['client'=>($cmap[trim((string)$r['client_name'])] ?? ''), 'part'=>'',
-                   'proc'=>(string)$r['process_no'], 'maker'=>(string)$r['maker_id_no']];
+                   'proc'=>(string)$r['process_no'], 'maker'=>(string)$r['mk_no']];
         $rows[] = ['fid'=>(string)$r['bom_ing_fid'], 'bom'=>(string)$r['bom'], 'sn'=>(int)$r['bom_sn'],
                    'qty'=>(string)$r['sqty'], 'out'=>$out, 'due'=>$due, 'days'=>$days,
                    'proc_type'=>$ptid, 'proc'=>$dims['proc'], 'maker'=>$dims['maker'],
@@ -1142,11 +1182,13 @@ function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): arra
                    'back'=>$back, 'back_src'=>($back === '' ? '' : 'return'),
                    'qc_date'=>$r['QC_check_date'] ? substr((string)$r['QC_check_date'], 0, 10) : '',
                    'closed'=>$r['closed_at'] ? substr((string)$r['closed_at'], 0, 10) : '',
-                   'order_id'=>(int)$r['o_order_id']];
+                   'order_id'=>(int)$r['o_order_id'], 'mk_no'=>(string)$r['mk_no']];
     }
     if (!$rows) return [];
 
-    // ① 下一製程發包日：同一張製令、bom_sn 比自己大、且有發包日的最早那一個
+    // ① 製程移轉憑單（單號日期）：貨從這個廠商移轉出去＝它回廠了，最直接的證據
+    $trans = $needBoms ? kpi_as_transfer_dates($db, array_keys($needBoms)) : [];
+    // ② 下一製程發包日：同一張製令、bom_sn 比自己大、且有發包日的最早那一個
     $nextOut = [];
     if ($needBoms) {
         $bs = array_keys($needBoms);
@@ -1172,6 +1214,13 @@ function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): arra
     foreach ($rows as &$r) {
         if ($r['back'] !== '') continue;
         $cands = [];
+        // 憑單：取「不早於發包日」的最早一張（比發包日還早的是上一段製程的憑單）
+        $tv = '';
+        foreach (($trans[$r['bom'] . "\x00" . $r['sn'] . "\x00" . $r['mk_no']] ?? []) as $td) {
+            if ($td < $r['out']) continue;
+            $tv = $td; break;                       // 已排序，第一個就是最早的
+        }
+        $cands['transfer'] = $tv;
         $nx = '';
         foreach (($nextOut[$r['bom']] ?? []) as $p) {
             if ($p[0] <= $r['sn']) continue;
@@ -2050,8 +2099,8 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
             }
             usort($out['rows'], function ($a, $b) { return strcmp($a['vals']['due'], $b['vals']['due']); });
             $out['note'] = '應交日＝發包日＋約定工作天（依行事曆工作日）。只列「應交日落在本月、卻沒有準時回廠」的發包。'
-                         . '沒登錄回廠日時，系統會依序用「下一製程發包日→QC檢驗日→出貨日→製令結案日」推估回廠日'
-                         . '（只用於判定，不寫回資料）'
+                         . '沒登錄回廠日時，系統會依序用「製程移轉憑單（單號日期）→下一製程發包日→QC檢驗日→出貨日→製令結案日」'
+                         . '推估回廠日（只用於判定，不寫回資料；憑單日期取自單號而非 transfer_date，避免帳款月份調整的影響）'
                          . ($guessN ? ('，本月有 ' . $guessN . ' 筆是這樣推估出來的') : '') . '。';
             return $out;
         }
