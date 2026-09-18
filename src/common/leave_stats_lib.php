@@ -175,8 +175,10 @@ if (!function_exists('eg_leave_stats')) {
                 $scopeDeptIds = eg_dept_subtree_ids($db, $deptId);
             }
             if (!$scopeDeptIds) $scopeDeptIds = [$deptId];
-            $where[] = 'lr.employee_id IN (SELECT DISTINCT m.user_id FROM user_department_position_map m
-                                           WHERE m.department_id IN (' . implode(',', array_map('intval', $scopeDeptIds)) . '))';
+            /* 這裡**故意不在 SQL 過濾部門**。部門歸屬要看「請假當時」那個人在哪個部門
+               （2026-09-18 使用者回報：年中調部門的人，整年的假全被算在最新部門）。
+               用現況會籍過濾的話，陳喬惠 2026-03-09 由業務課調到生產3廠之後，
+               她 3 月以前在業務課請的假就再也篩不出來了。改成先全撈、下面逐筆解析當時部門再篩。 */
         }
         $w = 'WHERE ' . implode(' AND ', $where);
 
@@ -186,6 +188,7 @@ if (!function_exists('eg_leave_stats')) {
             $st = $db->prepare(
                 "SELECT lr.id, lr.employee_id, lr.leave_type_id, lr.status,
                         YEAR(lr.start_datetime) AS y, MONTH(lr.start_datetime) AS m,
+                        DATE(lr.start_datetime) AS sd,
                         COALESCE(lr.total_hours,0) AS hrs, COALESCE(lr.total_days,0) AS dys
                  FROM leave_request lr $w");
             $st->execute($args);
@@ -193,6 +196,65 @@ if (!function_exists('eg_leave_stats')) {
         } catch (Throwable $e) { $rows = []; }
 
         $people = eg_leave_stats_people($db, array_column($rows, 'employee_id'), $scopeDeptIds);
+
+        /* ── 依「請假起日當時」解析部門（ai-rules/22 的同一套精神）──
+           為什麼要這樣做：部門統計問的是「這個部門那一年請掉多少假」，
+           而不是「現在在這個部門的人，這輩子請過多少假」。年中調部門的人若整年都算在新部門，
+           舊部門的數字會憑空少一截、新部門憑空多一截，兩邊都不對。
+           沒有補登異動紀錄的人一律回現況（與既有行為相同，不會因為導入這段而變動）。 */
+        require_once __DIR__ . '/position_history_lib.php';
+        $histByUser = [];
+        try {
+            $uidsIn = implode(',', array_map('intval', array_unique(array_column($rows, 'employee_id')))) ?: '0';
+            foreach ($db->query("SELECT user_id, effective_date, before_json, after_json
+                                 FROM user_position_history WHERE user_id IN ({$uidsIn})
+                                 ORDER BY user_id, effective_date, id")->fetchAll(PDO::FETCH_ASSOC) as $h) {
+                $histByUser[(int)$h['user_id']][] = $h;
+            }
+        } catch (Throwable $e) {}
+        $deptMeta = [];   // id => [name, sort]
+        try {
+            foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) {
+                $deptMeta[(int)$d['id']] = ['name' => (string)$d['name'], 'sort' => (int)$d['s']];
+            }
+        } catch (Throwable $e) {}
+
+        $asofCache = [];
+        $deptAt = function (int $uid, string $date) use (&$asofCache, $histByUser, $people, $deptMeta, $scopeDeptIds) {
+            $key = $uid . '|' . $date;
+            if (isset($asofCache[$key])) return $asofCache[$key];
+            $posts = [];
+            if (!empty($histByUser[$uid])) {
+                $posts = eg_position_resolve_from_rows($histByUser[$uid], $date);
+            }
+            $did = 0;
+            if ($posts) {
+                // 有部門篩選時優先取命中篩選範圍的那一筆職務（兼任者才不會被算到範圍外的部門）
+                if ($scopeDeptIds) {
+                    foreach ($posts as $po) {
+                        if (in_array((int)$po['department_id'], $scopeDeptIds, true)) { $did = (int)$po['department_id']; break; }
+                    }
+                }
+                if (!$did) {
+                    foreach ($posts as $po) { if (!empty($po['is_main'])) { $did = (int)$po['department_id']; break; } }
+                }
+                if (!$did) $did = (int)($posts[0]['department_id'] ?? 0);
+            }
+            if (!$did) $did = (int)($people[$uid]['dept_id'] ?? 0);   // 沒有異動紀錄＝用現況
+            $out = ['id' => $did,
+                    'name' => $deptMeta[$did]['name'] ?? ($people[$uid]['dept_name'] ?? '（未設部門）'),
+                    'sort' => $deptMeta[$did]['sort'] ?? 999];
+            if ($out['name'] === '') $out['name'] = '（未設部門）';
+            $asofCache[$key] = $out;
+            return $out;
+        };
+
+        // 部門篩選：用「請假當時的部門」判定，不是現在掛在哪個部門
+        if ($scopeDeptIds) {
+            $rows = array_values(array_filter($rows, function ($r) use ($deptAt, $scopeDeptIds) {
+                return in_array($deptAt((int)$r['employee_id'], (string)$r['sd'])['id'], $scopeDeptIds, true);
+            }));
+        }
 
         // ── 有資料的年度 ──
         $years = [];
@@ -255,10 +317,12 @@ if (!function_exists('eg_leave_stats')) {
             $byType[$tid]['_p'][$uid] = true;
 
             $pi = $people[$uid] ?? null;
-            $did = $pi ? (int)$pi['dept_id'] : 0;
-            $dname = $pi && $pi['dept_name'] !== '' ? $pi['dept_name'] : '（未設部門）';
+            // 部門一律用「這張假單起日當時」的部門，不是這個人現在掛在哪裡
+            $da = $deptAt($uid, (string)$r['sd']);
+            $did = (int)$da['id'];
+            $dname = $da['name'];
             if (!isset($byDept[$did])) $byDept[$did] = ['dept_id' => $did, 'dept_name' => $dname,
-                'dept_sort' => $pi ? (int)$pi['dept_sort'] : 999,
+                'dept_sort' => (int)$da['sort'],
                 'days' => 0.0, 'hours' => 0.0, 'req_count' => 0, '_p' => []];
             $byDept[$did]['days'] += $d; $byDept[$did]['hours'] += $h; $byDept[$did]['req_count']++;
             $byDept[$did]['_p'][$uid] = true;
@@ -266,7 +330,7 @@ if (!function_exists('eg_leave_stats')) {
             if (!isset($byPerson[$uid])) $byPerson[$uid] = [
                 'user_id' => $uid,
                 'name' => $pi ? $pi['name'] : ('#' . $uid),
-                'dept_id' => $did, 'dept_name' => $dname,
+                'dept_id' => $did, 'dept_name' => $dname, '_depts' => [],
                 'position_name' => $pi ? $pi['position_name'] : '',
                 'position_sort' => $pi ? (int)$pi['position_sort'] : 999,
                 'state' => $pi ? (int)$pi['state'] : 0,
@@ -275,6 +339,8 @@ if (!function_exists('eg_leave_stats')) {
                 'days' => 0.0, 'hours' => 0.0, 'req_count' => 0, 'by_type' => []];
             $byPerson[$uid]['days'] += $d; $byPerson[$uid]['hours'] += $h; $byPerson[$uid]['req_count']++;
             $byPerson[$uid]['by_type'][$tid] = ($byPerson[$uid]['by_type'][$tid] ?? 0) + $d;
+            // 期間內待過的部門（依起日排序，用來顯示「業務課→生產3廠」）
+            $byPerson[$uid]['_depts'][(string)$r['sd']] = $dname;
         }
 
         // ── 收尾整形 ──
@@ -300,7 +366,18 @@ if (!function_exists('eg_leave_stats')) {
         usort($byDeptOut, fn($a, $b) => $b['days'] <=> $a['days']);
 
         $byPersonOut = array_values($byPerson);
-        foreach ($byPersonOut as &$p) { $p['days'] = $rd($p['days']); $p['hours'] = $rd($p['hours']); }
+        foreach ($byPersonOut as &$p) {
+            $p['days'] = $rd($p['days']); $p['hours'] = $rd($p['hours']);
+            /* 這段期間調過部門的人：把待過的部門依時間序串起來（「業務課→生產3廠」），
+               一個人在人員明細只有一列，只印其中一個部門會讓人以為我們算錯邊。 */
+            $ds = $p['_depts'] ?? [];
+            ksort($ds);
+            $seq = [];
+            foreach ($ds as $n) { if (!$seq || end($seq) !== $n) $seq[] = $n; }
+            $p['dept_name'] = $seq ? implode('→', $seq) : $p['dept_name'];
+            $p['dept_changed'] = count($seq) > 1 ? 1 : 0;
+            unset($p['_depts']);
+        }
         unset($p);
         usort($byPersonOut, fn($a, $b) => $b['days'] <=> $a['days']);
 

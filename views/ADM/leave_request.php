@@ -697,8 +697,14 @@ input[type=number]{-moz-appearance:textfield;}
           送出前可先看「將由誰簽核」與「職務代理人」，代理人由系統依人事設定的順位自動解析，不需自己挑。</li>
       <li><b>我的請假單</b>：查自己的單、撤回（還沒人簽時）、銷假、提前結束、補上證明文件。</li>
       <li><b>待我簽核</b>：主管在這裡核准或退回；退回要填原因。主管當天有行程時，系統會改派其代理人簽。</li>
+      <li><b>部門歸屬依「請假當時」</b>：年中調部門的人，調動前請的假算在原部門、調動後算在新部門
+          （依員工管理的職務異動紀錄回推）。人員明細的部門欄會顯示「原部門→新部門」並標示「調動」。
+          沒有補登異動紀錄的人一律以目前部門計算。</li>
       <li><b>請假統計</b>：人事／管理員看全公司，主管看自己部門（含下轄）。
           先選部門，<b>人員下拉就只會列出該部門底下的人</b>；要看全部人就把部門留在「全部部門」。
+          部門旁的「<b>含下轄</b>」預設打勾（選「資材課」會一併算生管組／採購組／倉管組），
+          取消打勾就只看該部門本身；範圍說明列會寫出實際涵蓋哪些部門。
+          「年度比較」與「趨勢分析」本來就是跨年度比較，不受年度篩選影響（分頁上方有說明）。
           兼任兩個職務的人會出現兩列（主職務與兼任各一列），選哪一列統計的都是同一個人。</li>
     </ul>
 
@@ -2097,6 +2103,19 @@ function renderStUser(){
   // 換部門後原本選的人若還在新名單裡就保留，不在就回到「全部人員」
   $('#stUser').val(list.some(p => String(p.key) === keep) ? keep : '0');
 }
+/* 選了部門時，把「當時在這個部門、現在已經調走」的人補進人員下拉。
+   部門歸屬是依請假當時算的（見後端），所以統計結果裡會出現現在已經不在這個部門的人——
+   下拉如果只列現在的成員，就會變成「圖上看得到她、卻選不到她」。 */
+function mergeStUserFromResults(){
+  if(!ST || !(+($('#stDept').val() || 0))) return;
+  const have = {};
+  $('#stUser option').each(function(){ have[String(this.value).split(':')[0]] = 1; });
+  const add = (ST.by_person || []).filter(p => !have[String(p.user_id)]);
+  if(!add.length) return;
+  $('#stUser').append(add.map(p => '<option value="' + p.user_id + ':0">' + esc(p.name)
+      + (p.position_name ? '（' + p.position_name + '）' : '')
+      + '／' + esc(p.dept_name || '') + '（期間內曾屬本部門）</option>').join(''));
+}
 function stUserId(){ return parseInt(String($('#stUser').val() || '0').split(':')[0], 10) || 0; }
 // 部門／人員／狀態一改就重算（年度與假別各自有處理）
 $(document).on('change', '#stDept, #stWithSub', function(){ renderStUser(); });
@@ -2125,6 +2144,7 @@ function loadStats(){
     if(!r.success){ $('#stKpi').html('<div class="empty-note" style="width:100%;color:#a3341f;">'+esc(r.message)+'</div>'); return; }
     ST = r.data;
     renderStatsHeader(r);
+    mergeStUserFromResults();
     renderStats();
   });
 }
@@ -2165,7 +2185,8 @@ function renderStatsHeader(r){
   $('#stScopeNote').html(
       '<i class="fa fa-info-circle"></i> 範圍：' + esc(deptTxt)
     + '　狀態：' + (r.with_pending ? '已核准＋審核中' : '僅已核准')
-    + '　｜　年度／月份一律以請假<b>起日</b>歸屬（與特休額度同口徑），跨月長假整筆算在起日那個月。'
+    + '　｜　年度／月份一律以請假<b>起日</b>歸屬（與特休額度同口徑），跨月長假整筆算在起日那個月；'
+    + '<b>部門也以起日當時所屬部門歸屬</b>，年中調部門者前後各算在各自的部門。'
     + '　｜　所有總計皆由後端對全部符合條件的資料算出，非畫面上這一頁的加總。');
 }
 $(document).on('click', '.st-chip', function(){
@@ -2350,7 +2371,11 @@ function renderPeopleTable(){
     h += '<tr><td>'+esc(p.name)
        + (p.left_company ? ' <span class="tag-soft">已離職</span>' : '')
        + (!p.left_company && p.state_label && p.state_label !== '在職' ? ' <span class="tag-soft">'+esc(p.state_label)+'</span>' : '')
-       + '</td><td>'+esc(p.position_name||'—')+'</td><td>'+esc(p.dept_name||'—')+'</td>'
+       + '</td><td>'+esc(p.position_name||'—')+'</td>'
+       // 期間內調過部門的人：部門欄顯示「原部門→新部門」，並標示一下，免得以為算錯邊
+       + '<td>'+esc(p.dept_name||'—')
+       + (p.dept_changed ? ' <span class="tag-soft" title="這段期間調過部門，假別天數已各自算在當時所屬的部門">調動</span>' : '')
+       + '</td>'
        + ts.map(t => '<td class="numc">'+num((p.by_type||{})[t.id] || 0)+'</td>').join('')
        + '<td class="numc"><b>'+num(p.days)+'</b></td><td class="numc">'+num(p.hours)+'</td>'
        + '<td class="numc">'+p.req_count+'</td></tr>';
