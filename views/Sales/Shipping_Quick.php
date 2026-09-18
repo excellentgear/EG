@@ -448,7 +448,6 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
     <div class="sq-bar">
       <label>出貨日期區間</label>
       <input type="date" id="mtFrom" style="width:150px;"> ~ <input type="date" id="mtTo" style="width:150px;">
-      <button id="btnMtGo" class="btn-warm"><i class="fa fa-search"></i> 試算</button>
       <span id="mtSummary" style="font-size:13px;color:#5b3a1e;margin-left:10px;"></span>
     </div>
     <div class="sq-bar" style="background:#FBF3E4;">
@@ -456,11 +455,11 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
       <select id="mtClient" style="width:200px;" data-eg-filter="輸入客戶簡稱篩選…" data-eg-filter-reset><option value="">全部客戶</option></select>
       <label>篩選料號</label>
       <select id="mtPart" style="width:230px;" data-eg-filter="輸入料號篩選…" data-eg-filter-reset><option value="">全部料號</option></select>
-      <span class="mt-note">選了客戶，料號只列該客戶底下的；改動即重新試算。<br>
+      <span class="mt-note">選了客戶，料號只列該客戶底下的；<b>日期或篩選一改就立刻重算，不必按任何按鈕</b>。<br>
         <b>料號要在下拉裡「點選」才算數</b>——只在上面的篩選框打字只是縮小清單。</span>
       <span id="mtFilterState" style="flex:1 0 100%;font-size:12.5px;color:#5b3a1e;
         border-top:1px dashed var(--sq-line2);padding-top:5px;margin-top:2px;">
-        目前試算範圍：<b>全部客戶</b>／<b>全部料號</b></span>
+        目前顯示範圍：<b>全部客戶</b>／<b>全部料號</b></span>
     </div>
     <div class="sq-bar" style="background:#FFF7E8;">
       <label>只顯示</label>
@@ -1356,6 +1355,7 @@ if(CAN_ADMIN){
   $('#btnMatch').on('click',function(){
     mtDefaultRange();
     openMask('mkMatch');
+    mtRun();                 // 點開就算，使用者不必再按任何按鈕（2026-09-18 使用者要求拿掉「試算」）
   });
 
   /* 沒填日期就預設「本年度」（1/1 ~ 今天）：這支工具幾乎都是整年度回頭補資料，
@@ -1373,17 +1373,20 @@ if(CAN_ADMIN){
     return {date_from:f, date_to:t};
   }
 
-  /* 試算＝①載入篩選來源（客戶／料號）→②把打好的關鍵字套上去→③用最後的條件跑一次對應。
-     **這三步一定要照順序**：原本是「發出 match_filters 的同時就先跑一次 match_preview」，
-     於是第一次按試算必定先用「全部料號」算一次，等篩選來源回來、關鍵字自動選起料號後才又算第二次；
-     機器慢一點時第一次的結果會被新的一次蓋掉、第二次還沒回來，畫面上就是「按了試算什麼都沒有，
-     要再點一下日期重按才會出現」（2026-09-18 使用者回報）。改成串起來只跑一次，也少打一支 API。 */
-  $('#btnMtGo').on('click',function(){
+  /* mtRun()＝①載入篩選來源（客戶／料號）→②把打好的關鍵字套上去→③用最後的條件跑一次對應。
+     **這三步一定要照順序**：先前是「發出 match_filters 的同時就先跑一次 match_preview」，
+     於是必定先用「全部料號」算一次，等篩選來源回來、關鍵字自動選起料號後才又算第二次；
+     機器慢一點時第一次的結果會被新的一次蓋掉、第二次還沒回來，畫面上就是一片空白。
+     **沒有「試算」按鈕**（2026-09-18 使用者要求移除，改成即時顯示）：
+     跳窗一打開就跑一次，之後日期一改就自動重跑，客戶／料號改了只要重跑第三步。 */
+  var mtRunSeq = 0;
+  function mtRun(){
     var r=mtRange(); if(!r) return;
-    var $b=$(this).prop('disabled',true).html('<i class="fa fa-spinner fa-spin"></i> 試算中…');
-    $('#mtSummary').html('<i class="fa fa-spinner fa-spin"></i> 載入篩選條件…');
-    $('#mtList').html('<div style="padding:14px;color:#8a6d45;">載入篩選條件…</div>');
+    var run = ++mtRunSeq;
+    $('#mtSummary').html('<i class="fa fa-spinner fa-spin"></i> 載入中…');
+    $('#mtList').html('<div style="padding:14px;color:#8a6d45;">載入中…</div>');
     $.post(API+'?action=match_filters', r, function(res){
+      if(run !== mtRunSeq) return;                 // 日期又被改過了，這一輪作廢
       if(!res || !res.ok){
         toast(esc((res&&res.error)||'載入篩選條件失敗'), true);
         return;
@@ -1394,7 +1397,7 @@ if(CAN_ADMIN){
       (res.clients||[]).forEach(function(c){
         h+='<option value="'+esc(c.name)+'">'+esc(c.name)+'（'+nf(c.cnt)+'）</option>'; });
       /* 填選項的過程會讓共用檔自動選起「只命中一個」的那一筆並觸發 change，
-         那個 change 會各自再跑一次試算＝同一次操作打三支 API。先靜音，最後再統一跑一次。 */
+         那個 change 會各自再跑一次對應＝同一次操作打三支 API。先靜音，最後再統一跑一次。 */
       mtQuiet = true;
       $('#mtClient').html(h).val(cur);
       if($('#mtClient').val()===null) $('#mtClient').val('');
@@ -1403,12 +1406,21 @@ if(CAN_ADMIN){
       mtQuiet = false;
       mtPaintFilterState();
     },'json')
-    .fail(function(){ toast('載入篩選條件失敗', true); })
+    .fail(function(){ if(run===mtRunSeq) toast('載入篩選條件失敗', true); })
     .always(function(){
       mtQuiet = false;
-      $b.prop('disabled',false).html('<i class="fa fa-search"></i> 試算');
+      if(run !== mtRunSeq) return;
       runMatch();                      // 篩選條件就緒後才跑，一次到位
     });
+  }
+
+  /* 日期改了就自動重跑（含篩選來源）。用 change 不用 input：
+     打日期的過程中 input 會一路噴出 2026-01-0 這種還沒打完的值，每一次都去打 API 沒有意義。
+     再加一小段延遲，連續調整起訖日時只會送出最後一次。 */
+  var mtDateTimer = null;
+  $('#mtFrom,#mtTo').on('change',function(){
+    clearTimeout(mtDateTimer);
+    mtDateTimer = setTimeout(mtRun, 350);
   });
 
   /* 料號下拉：選了客戶就只列該客戶底下的料號 */
@@ -1444,10 +1456,10 @@ if(CAN_ADMIN){
     var kwP=$.trim($('#mtPart').prev('.eg-filter-box').val()||'');
     var kwC=$.trim($('#mtClient').prev('.eg-filter-box').val()||'');
     if(kwP && !pSel) warn+='<span style="color:#DD5138;">料號關鍵字「'+esc(kwP)+'」還沒選到任何一個料號，'
-                         +'目前仍以「全部料號」試算——請在下拉裡點選要的那一個。</span> ';
+                         +'目前仍是「全部料號」——請在下拉裡點選要的那一個。</span> ';
     if(kwC && !cSel) warn+='<span style="color:#DD5138;">客戶關鍵字「'+esc(kwC)+'」還沒選到任何一個客戶，'
-                         +'目前仍以「全部客戶」試算。</span>';
-    $('#mtFilterState').html('目前試算範圍：<b>'+esc(cTxt)+'</b>／<b>'+esc(pTxt)+'</b>　'+warn);
+                         +'目前仍是「全部客戶」。</span>';
+    $('#mtFilterState').html('目前顯示範圍：<b>'+esc(cTxt)+'</b>／<b>'+esc(pTxt)+'</b>　'+warn);
   }
 
   /* mtQuiet：正在「按試算→重填選項」的過程中，下拉被程式改動觸發的 change 一律不要各自再跑試算 */
@@ -1465,14 +1477,14 @@ if(CAN_ADMIN){
     r.with_unmatched = $('.mt-f[value=none]').is(':checked') ? 1 : 0;
     mtPaintFilterState();
     var seq = ++mtSeq;
-    $('#mtSummary').html('<i class="fa fa-spinner fa-spin"></i> 試算中…（資料多時需要幾秒）');
-    $('#mtList').html('<div style="padding:14px;color:#8a6d45;">試算中…</div>');
+    $('#mtSummary').html('<i class="fa fa-spinner fa-spin"></i> 計算中…（資料多時需要幾秒）');
+    $('#mtList').html('<div style="padding:14px;color:#8a6d45;">計算中…</div>');
     $.post(API+'?action=match_preview', r, function(res){
       if(seq !== mtSeq) return;                       // 已經有更新的一次試算在跑了
       if(!res.ok){
         toast(esc(res.error||'試算失敗'), true);
-        $('#mtSummary').html('<span style="color:#DD5138;">試算失敗</span>');
-        $('#mtList').html('<div style="padding:14px;color:#DD5138;">試算失敗，請再按一次「試算」。</div>');
+        $('#mtSummary').html('<span style="color:#DD5138;">計算失敗</span>');
+        $('#mtList').html('<div style="padding:14px;color:#DD5138;">計算失敗，請改一下日期或篩選條件重試。</div>');
         return;
       }
       lastMatch = res.pairs||[];
@@ -1491,9 +1503,9 @@ if(CAN_ADMIN){
       renderMatch();
     },'json').fail(function(){
       if(seq !== mtSeq) return;
-      toast('試算失敗', true);
-      $('#mtSummary').html('<span style="color:#DD5138;">試算失敗</span>');
-      $('#mtList').html('<div style="padding:14px;color:#DD5138;">試算失敗（網路或伺服器錯誤），請再按一次「試算」。</div>');
+      toast('計算失敗', true);
+      $('#mtSummary').html('<span style="color:#DD5138;">計算失敗</span>');
+      $('#mtList').html('<div style="padding:14px;color:#DD5138;">計算失敗（網路或伺服器錯誤），請改一下日期或篩選條件重試。</div>');
     });
   }
 
@@ -1688,7 +1700,7 @@ if(CAN_ADMIN){
       if(!r.ok){ toast(esc(r.error||'回填失敗'), true); return; }
       toast(esc(r.message));
       mtManual = {};          // 已寫入的不再保留手動指定
-      $('#btnMtGo').click();
+      mtRun();
       load();
     },'json').fail(function(){
       $b.prop('disabled',false).html('<i class="fa fa-check"></i> 回填勾選的資料');
