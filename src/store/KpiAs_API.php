@@ -488,6 +488,7 @@ case 'detail_rows': {
           'truncated'=>count($d['rows']) > $cap ? 1 : 0, 'note'=>$d['note'],
           // note_excl／param_excl 都是「排除」相關：畫面上要看得到（才不會重複設定），列印版一律不印
           'note_excl'=>$d['note_excl'] ?? '', 'param_excl'=>kpi_as_param_excl($calc, $params),
+          'note_print'=>$d['note_print'] ?? '',   // 列印版只印這一句（正式清單不寫內部判定過程）
           // 可以用來篩選／建立排除規則的維度：一律取自這一份明細真的有哪些值
           'dims'=>$d['dims'] ?? [], 'dim_labels'=>kpi_as_dim_labels(),
           'rules'=>kpi_as_excl_rule_rows($db, $iid, $year),

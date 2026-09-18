@@ -2041,7 +2041,10 @@ function kpi_as_detail_finish(array $out, array $rules): array {
     $out['total']     = $bad;
     $out['rule_ex']   = $ruleEx;
     $out['dims']      = $dims;
-    $out['note_excl'] = (string)($out['note_excl'] ?? '');   // 排除相關的說明：畫面顯示、列印一律不印
+    $out['note_excl']  = (string)($out['note_excl'] ?? '');   // 排除相關的說明：畫面顯示、列印一律不印
+    // 列印版（要給稽核老師看）只印這一句正式的表格說明；畫面上的 note 講的是判定方法與推估來源，
+    // 那是內部作業說明，不可以出現在正式清單上（使用者要求 2026-09-18）
+    $out['note_print'] = (string)($out['note_print'] ?? '');
     return $out;
 }
 
@@ -2093,11 +2096,14 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     'vals' => ['bom'=>$r['bom'], 'client'=>$r['client'], 'part'=>$r['part'],
                                'proc'=>$r['proc'], 'maker'=>$r['maker'], 'qty'=>$r['qty'],
                                'out'=>eg_fmt_date($r['out']), 'due'=>eg_fmt_date($r['due']), 'back'=>$backTxt],
+                    // 列印用：回廠日只印日期，不印「（推估：○○）」（正式清單不寫內部判定過程）
+                    'pvals' => ['back'=>($r['back'] !== '' ? eg_fmt_date($r['back']) : '—')],
                     'dims' => $r['dims'], 'dim_ids' => $r['dim_ids'],
                     'kind' => 'bad', 'why' => $why, 'fix' => $fix,
                 ];
             }
             usort($out['rows'], function ($a, $b) { return strcmp($a['vals']['due'], $b['vals']['due']); });
+            $out['note_print'] = '本表為應交日落在本月、未於應交日前回廠之委外加工明細。';
             $out['note'] = '應交日＝發包日＋約定工作天（依行事曆工作日）。只列「應交日落在本月、卻沒有準時回廠」的發包。'
                          . '沒登錄回廠日時，系統會依序用「製程移轉憑單（單號日期）→下一製程發包日→QC檢驗日→出貨日→製令結案日」'
                          . '推估回廠日（只用於判定，不寫回資料；憑單日期取自單號而非 transfer_date，避免帳款月份調整的影響）'
@@ -2117,7 +2123,8 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                 $cmapB = kpi_as_client_id_map($db);
                 $out['cols'] = [['k'=>'oo','t'=>'訂單編號'], ['k'=>'client','t'=>'客戶'], ['k'=>'d_id','t'=>'料號'],
                                 ['k'=>'qty','t'=>'訂單量'], ['k'=>'dd','t'=>'交期'],
-                                ['k'=>'sd','t'=>'出貨日'], ['k'=>'ship','t'=>'疑似已出貨(未綁)']];
+                                ['k'=>'sd','t'=>'出貨日'],
+                                ['k'=>'ship','t'=>'疑似已出貨(未綁)', 'p'=>0]];
                 $noShip = [];
                 foreach ($rows as $r) if ($r['ship_date'] === '') $noShip[] = ['cname'=>$r['Client_name'], 'd_id'=>$r['d_id']];
                 $hint = $noShip ? kpi_as_oo_ship_hint($db, $noShip, $year, $month) : [];
@@ -2161,6 +2168,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                              . '本月未準時 ' . ($lateN + $noneN) . ' 筆：遲交 ' . $lateN . ' 筆、查不到出貨單 ' . $noneN . ' 筆'
                              . ($hintN ? ('（其中 ' . $hintN . ' 筆查到同客戶同料號有沒綁訂單的出貨單，補綁就會變準時）') : '') . '。';
                 $out['note_excl'] = $exCli ? ('排除客戶：' . implode('、', $exCli) . '。') : '';
+                $out['note_print'] = '本表為本月交期、未於交期前出貨之訂單明細。';
                 return $out;
             }
 
@@ -2187,7 +2195,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
             $hintN = 0;
             $out['cols'] = [['k'=>'oo','t'=>'訂單編號'], ['k'=>'client','t'=>'客戶'], ['k'=>'d_id','t'=>'料號'],
                             ['k'=>'qty','t'=>'訂單量'], ['k'=>'open','t'=>'未交量'], ['k'=>'dd','t'=>'交期'],
-                            ['k'=>'ship','t'=>'疑似已出貨']];
+                            ['k'=>'ship','t'=>'疑似已出貨', 'p'=>0]];
             foreach ($orows as $r) {
                 $hint = $shipHint[trim((string)$r['Client_name']) . "\x00" . trim((string)$r['d_id'])] ?? null;
                 if ($hint) $hintN++;
@@ -2239,6 +2247,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                          . ($hintN ? ('其中 ' . $hintN . ' 筆查到同客戶同料號有「沒有綁訂單」的出貨單，'
                                       . '很可能其實已經出貨、只是出貨單沒跟訂單綁起來（見「疑似已出貨」欄）。') : '');
             $out['note_excl'] = $exCli ? ('排除客戶：' . implode('、', $exCli) . '。') : '';
+            $out['note_print'] = '本表為本月交期、尚未出貨之訂單明細。';
             return $out;
         }
 
@@ -2272,6 +2281,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                             . '若確定不辦了，狀態改成「取消」就不會列入分母。',
                 ];
             }
+            $out['note_print'] = '本表為本月計畫、尚未完成之教育訓練場次明細。';
             $out['note'] = '達成率＝當月已完成場次 ÷ 當月計畫場次'
                          . ($inc ? '（取消的場次有列入分母）' : '（取消的場次不列入分母）') . '。';
             return $out;
@@ -2339,6 +2349,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                 if ($warn) $warnN++;
             }
             $out['warn'] = $warnN;
+            $out['note_print'] = '本表為本月接單移轉設計、未於門檻工作日內移轉生管之訂單明細。';
             $out['note'] = '準時＝接單移轉設計到設計移轉生管在 ' . $threshold . ' 個工作日內（含起訖日，依行事曆工作日）。'
                          . ($warnN ? ('另有 ' . $warnN . ' 筆還沒登錄移轉生管，依現行口徑算成準時，已一併列出（標「提醒」）。') : '');
             return $out;
@@ -2388,6 +2399,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                             . '若檢驗日期打錯月份，改日期即可讓這一筆算到正確的月份。',
                 ];
             }
+            $out['note_print'] = '本表為本月進料檢驗判定不良之明細。';
             $out['note'] = '不良率＝當月判定為 ' . implode('／', $ngs) . ' 的筆數 ÷ 當月檢驗總筆數。';
             return $out;
         }
@@ -2433,6 +2445,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                     . '這一張就會計入接單率；若客戶確實沒有下單，屬真實未成交，不必修改。',
                 ];
             }
+            $out['note_print'] = '本表為本月報價單明細。';
             $out['note'] = '接單率＝當月報價單中「已被訂單引用報價單號」的張數 ÷ 當月報價單張數'
                          . '（不含尚待確認補件的匯入舊單）。未接單的排在清單裡標成不符合標準，已接單的標成「參考」。';
             return $out;
@@ -2509,6 +2522,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                     : '不必處理。'),
                 ];
             }
+            $out['note_print'] = '本表為本月出貨金額明細。';
             $out['note'] = '達成率＝當月出貨金額 Σ(數量×單價) ÷ 本月銷貨目標。'
                          . '本月出貨金額 ' . number_format($sum) . '，目標 '
                          . ($target > 0 ? number_format($target) : '尚未設定')
@@ -2575,6 +2589,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                                 . '若這張本來就不該算業績，請用排除功能排掉。'),
                 ];
             }
+            $out['note_print'] = '本表為本月接單金額明細（依交期歸屬帳款月）。';
             $out['note'] = '接單金額以「交期」歸屬帳款月窗口（' . eg_fmt_date($ws) . ' ~ ' . eg_fmt_date($we) . '）計算。'
                          . '本月接單金額 ' . number_format($sum) . '，目標 '
                          . ($target > 0 ? number_format($target) : '取出貨分析頁全域目標')
@@ -2656,6 +2671,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     'kind' => $kind, 'why' => $why, 'fix' => $fix,
                 ];
             }
+            $out['note_print'] = '本表為本月生產報工明細。';
             $out['note'] = '產能績效＝Σ完成數 ÷ Σ生產工時（小時）。'
                          . ($tgt > 0 ? ('目標 ' . (0 + $tgt) . ' 顆/小時，低於目標的那幾筆標成不符合標準。') : '')
                          . ($noTime ? ('本月有 ' . $noTime . ' 筆沒有生產起訖時間，工時算不出來。') : '');
@@ -2712,6 +2728,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                             . '若這一筆不該算進本月（例如重工後已補回），請用排除功能排掉。',
                 ];
             }
+            $out['note_print'] = '本表為本月報工不良明細。';
             $out['note'] = '不良率＝Σ當月 NG 數 ÷ Σ當月完成數（限設定的製程類別）。這裡只列有登錄 NG 的報工。';
             return $out;
         }

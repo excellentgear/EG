@@ -1286,10 +1286,13 @@ $(document).on('click', '#vioBody .vr-x', function(){
    哪幾筆被排掉、是誰在什麼時候排的」。可以只印目前這個月，也可以整年度一個月一頁一次印完。
    版面依 ai-rules/16：大標題本公司全名、表頭取綁定 AS 文件的表單名稱、頁碼左下、AS 編號右下。 */
 function vioPrintRowsHtml(d, r, m, cell){
+    /* 【這份是要給稽核老師看的正式清單】使用者要求 2026-09-18：
+       不可以出現「不符合標準明細」「不符合的原因」「（推估：○○）」這類內部作業字樣，
+       也不印判定方法與推估來源的說明；排除資訊更是一個字都不能有（見下方過濾）。
+       只印：公司全名／表單名稱／指標與年月／判定目標與本月數值／一句表格說明／資料本身。 */
     var h = '';
     h += '<div class="pt-head"><div class="co">' + esc((META && META.company) || '') + '</div>'
-       + '<div class="tt">' + esc(((META && META.as_doc && META.as_doc.doc_name) || 'KPI 關鍵績效指標')
-                                 + '　不符合標準明細') + '</div>'
+       + '<div class="tt">' + esc((META && META.as_doc && META.as_doc.doc_name) || 'KPI 關鍵績效指標') + '</div>'
        + '<div class="sub">' + r.item_no + '. ' + esc(r.name) + '　｜　' + YEAR + ' 年 ' + m + ' 月'
        + '　｜　判定目標：' + esc(r.target.text || '—');
     if (cell) {
@@ -1298,28 +1301,30 @@ function vioPrintRowsHtml(d, r, m, cell){
             h += '（' + (cell.num === null ? '-' : (+cell.num)) + '／' + (cell.den === null ? '-' : (+cell.den)) + '）';
     }
     h += '　｜　列印：' + egFmtDate(new Date().toISOString().substr(0, 10)) + '</div></div>';
-    // 【列印版一個字都不可以出現排除資訊】使用者要求 2026-09-18：這份是要給稽核老師看的。
-    // 所以 note_excl（排除客戶…）、排除規則清單、排除人與排除原因、狀態欄的「已排除／規則排除」
-    // 一律不印；被排除的列直接不列出來——印出來的就是「排除後」真正計入的那幾筆。
-    if (d.note) h += '<div class="pt-note">' + esc(d.note) + '</div>';
+    if (d.note_print) h += '<div class="pt-note">' + esc(d.note_print) + '</div>';
+
+    // 被排除的列不列出來——印出來的就是「排除後」真正計入的那幾筆
     var shown = d.rows.filter(function(x){
-        if (x.rule_ex || +x.excluded) return false;        // 排除掉的不進列印版
+        if (x.rule_ex || +x.excluded) return false;
         return vioRowVisible(x);
     });
-    var hasKind = shown.some(function(x){ return x.kind !== 'bad'; });
+    // 內部作業欄（標 p:0，例如「疑似已出貨(未綁)」）不列印
+    var cols = d.cols.filter(function(c){ return c.p !== 0; });
     h += '<table class="pt"><thead><tr><th style="width:34px;">#</th>';
-    d.cols.forEach(function(c){ h += '<th>' + esc(c.t) + '</th>'; });
-    if (hasKind) h += '<th style="width:56px;">類別</th>';
-    h += '<th style="width:22%;">不符合的原因</th></tr></thead><tbody>';
-    if (!shown.length) h += '<tr><td colspan="' + (d.cols.length + 3) + '">這個月沒有不符合標準的項目。</td></tr>';
+    cols.forEach(function(c){ h += '<th>' + esc(c.t) + '</th>'; });
+    h += '</tr></thead><tbody>';
+    if (!shown.length) h += '<tr><td colspan="' + (cols.length + 1) + '">本月無資料。</td></tr>';
     shown.forEach(function(x, i){
         h += '<tr><td>' + (i + 1) + '</td>';
-        d.cols.forEach(function(c){ h += '<td class="l">' + esc(x.vals[c.k] == null ? '' : x.vals[c.k]) + '</td>'; });
-        if (hasKind) h += '<td>' + (x.kind === 'warn' ? '提醒' : (x.kind === 'info' ? '參考' : '不符合')) + '</td>';
-        h += '<td class="l">' + esc(x.why || '') + '</td></tr>';
+        cols.forEach(function(c){
+            // pvals＝列印專用值（例：回廠日只印日期，不印「（推估：○○）」）
+            var v = (x.pvals && x.pvals[c.k] != null) ? x.pvals[c.k] : x.vals[c.k];
+            h += '<td class="l">' + esc(v == null ? '' : v) + '</td>';
+        });
+        h += '</tr>';
     });
     h += '</tbody></table>';
-    h += '<div class="pt-note">合計：不符合標準 ' + d.total + ' 筆，本頁列出 ' + shown.length + ' 筆。</div>';
+    h += '<div class="pt-note">合計 ' + shown.length + ' 筆。</div>';
     return h;
 }
 function vioPrintOpen(title, body){
@@ -1352,7 +1357,7 @@ function vioPrintLog(r, txt){
     try {
         if (window.EGPrintLog) EGPrintLog.record({
             source:'kpi_as', doc_kind:'form',
-            doc_name:'KPI不符合標準明細 ' + r.item_no + '.' + r.name + ' ' + YEAR + '年' + txt,
+            doc_name:'KPI明細 ' + r.item_no + '.' + r.name + ' ' + YEAR + '年' + txt,
             ref_table:'kpi_as_indicator', ref_id:r.indicator_id
         });
     } catch (e) {}
@@ -1362,7 +1367,7 @@ $(document).on('click', '#vioPrint', function(){
     if (scope !== 'all') {
         var body = '<div class="pg">' + vioPrintRowsHtml(VIO.data, r, VIO.m, r.cells[VIO.m]) + '</div>';
         vioPrintLog(r, VIO.m + '月');
-        vioPrintOpen('KPI不符合標準明細 ' + YEAR + '-' + VIO.m, body);
+        vioPrintOpen(r.item_no + '.' + r.name + ' ' + YEAR + '-' + VIO.m + ' 明細', body);
         return;
     }
     // 整年度：一個月一頁，逐月向後端要「排除後」的明細（月份多所以依序抓，不要一次打十二支）
@@ -1374,7 +1379,7 @@ $(document).on('click', '#vioPrint', function(){
             VIO.m = keepM; VIO.data = keepD;
             $b.prop('disabled', false);
             vioPrintLog(r, '全年');
-            vioPrintOpen('KPI不符合標準明細 ' + YEAR + ' 全年', parts.join(''));
+            vioPrintOpen(r.item_no + '.' + r.name + ' ' + YEAR + ' 全年明細', parts.join(''));
             return;
         }
         var m = months[i++];
