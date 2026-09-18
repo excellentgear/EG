@@ -379,9 +379,19 @@ function ppr_render_freq_table(array $stat, string $priceKey): string {
     $out .= '<table class="ppr-freq-table"><thead><tr><th>日期</th><th>對象</th><th>製程</th><th>數量</th><th>單價</th></tr></thead><tbody>';
     foreach (array_slice($stat['rows'], 0, 20) as $r) {
         $proc = trim((string)($r['Processing_items'] ?? ''));
+        if ($proc !== '') {
+            $procCell = h($proc);
+        } else {
+            // 出貨幾乎都沒綁訂單（99.6% 的 is_list.Order_id 是 NULL），而 ERP 是把製程混寫在規格欄裡，
+            // 所以退回顯示規格欄內容；用虛線底標明「這不是製程欄位，是規格欄」，避免被當成正式製程讀
+            $spec = trim((string)($r['Specification'] ?? ''));
+            $procCell = $spec !== ''
+                ? '<span class="ppr-spec-fb" title="此筆未綁訂單，改顯示出貨單的「規格」欄內容（ERP 常把製程與品名混寫在這一欄）">'.h($spec).'</span>'
+                : '<span class="ppr-muted">—</span>';
+        }
         $out .= '<tr><td>'.ppr_d($r['Order_date'] ?? '').'</td>'
               . '<td>'.h($r['Client_name'] ?? '').'</td>'
-              . '<td>'.($proc !== '' ? h($proc) : '<span class="ppr-muted">—</span>').'</td>'
+              . '<td>'.$procCell.'</td>'
               . '<td>'.h($r['Qty'] ?? '').'</td>'
               . '<td>'.ppr_num($r[$priceKey] ?? null).'</td></tr>';
     }
@@ -948,6 +958,8 @@ if ($isAjax) {
         .ppr-freq-cols > div { flex:1; }
         .ppr-freq-cols b { font-size:12.5px; color:#5b3a1e; }
         .ppr-freq-meta { font-size:11px; color:#8a6d45; margin:4px 0; }
+        /* 出貨沒綁訂單時，製程欄改顯示出貨單的「規格」欄內容：虛線底標明來源不同，列印也看得出來 */
+        .ppr-spec-fb { border-bottom:1px dotted #C9A97A; color:#6b5030; }
         .ppr-muted { color:#b0a68f; font-size:12px; }
 
         .ppr-summary-charts { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:14px; }
@@ -1056,7 +1068,7 @@ if ($isAjax) {
             <b>製令建立～結案日期</b>：結案與否看 processing_state，結案日取 closed_at。2026-05-22「手動結案」功能上線前的舊製令沒有結案時間可查，會顯示「已結案（無結案日期紀錄）」——<b>不會拿 BOM 編號回推的日期硬湊</b>（那個推算值其實是建立日，湊出來會變成結案早於建立）。<br>
             <b>同料號歷史報工</b>（選配）：掛在該製程的報工簡表下方，列同一料號同一製程最近 5 筆，相同機台的排前面並以底色標示，不同機台也會列出來當參考。需一併勾選「帶入報工簡表」（勾了會自動幫你勾）。<br>
             <b>歷史加工價格</b>（選配）：在成本明細加一欄，列此廠商×此料號×此製程過去的實際發包單價（日期／單價／數量）。同一廠商查無紀錄時會自動放寬列出其他廠商的，並在欄位內標明「同廠商無紀錄，改列其他廠商」。<br>
-            <b>歷史訂單／出貨的「製程」欄</b>：同一個料號常有「只做齒研」與「代料到成品」等不同加工範圍的單，單價自然差很多，所以一定要對照這一欄再看單價。訂單取自訂單的加工項目，出貨取自它所綁訂單的同一欄位，未綁訂單者留白。<br>
+            <b>歷史訂單／出貨的「製程」欄</b>：同一個料號常有「只做齒研」與「代料到成品」等不同加工範圍的單，單價自然差很多，所以一定要對照這一欄再看單價。訂單取自訂單的加工項目；出貨取自它所綁訂單的同一欄位，<b>但出貨單絕大多數沒有綁訂單（全站 99.6% 的出貨沒有訂單編號），此時改顯示出貨單的「規格」欄內容</b>——ERP 轉進來的資料本來就把製程與品名混寫在那一欄（例「齒輪／齒研」「馬達齒輪-代料至齒研」）。這種退路顯示的文字會加<span class="ppr-spec-fb">虛線底</span>，提醒你那是規格欄不是正式的製程欄位；兩邊都沒有才顯示「—」。<br>
             <b>找得到 BOM 卻產不出報告？</b>：全站約八成的製令沒有填料號的整數外鍵（只有料號文字），本頁已同時用兩種方式歸戶，所以舊製令也查得到；若某張製令的料號在料號主檔完全查不到，建議清單會直接標紅說明無法產生報告。<br>
             <b>圖面判定</b>：只認「檔名去副檔名恰好等於製令號碼」的檔案，任何帶後綴的變體檔名一律不算候選。<br>
             <b>拆批/複驗歷程</b>：製程若曾被拆成多批（A/B/C），卡片內會列出每個批次各自的檢驗歷程與判定，即使該批次後續已被合併消耗（歷史批次仍標示「已拆分/合併」但檢驗紀錄不會被隱藏）。<br>

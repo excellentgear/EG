@@ -426,11 +426,14 @@ function ppr_order_history(PDO $db, array $part): array {
 }
 
 /** 歷史出貨：is_list.d_setting_id 全站 37,869 筆皆有值，故維持以主鍵歸戶（見記憶 ship_stats_by_dsetting_id）；
- *  製程取該出貨綁定訂單的加工項目，未綁訂單者留白。 */
+ *  製程取該出貨綁定訂單的加工項目——但 **is_list.Order_id 有 37,743/37,893（99.6%）是 NULL**，
+ *  所以幾乎永遠取不到；ERP 轉進來的資料是把製程和品名混寫在 `Specification` 這一欄
+ *  （例「齒輪/齒研」「馬達齒輪-代料至齒研」「齒輪(代滾到齒研)」），故一併帶出來當退路
+ *  （2026-09-18 使用者指定）。畫面上要標明那是規格欄的內容，不是真正的製程欄位。 */
 function ppr_ship_history(PDO $db, array $part): array {
     $st = $db->prepare("
         SELECT isl.IS_number, isl.Order_date, isl.Client_name, isl.Qty, isl.Unit_price,
-               ot.Processing_items
+               isl.Specification, ot.Processing_items
         FROM is_list isl
         LEFT JOIN is_sale_type ist ON ist.sale_type_id = isl.sale_type
         LEFT JOIN order_track ot ON ot.Order_id = isl.Order_id
