@@ -554,6 +554,8 @@ $roleLabel = ia_role_label($perms);
                 <b>勾選通知單那一個並儲存時，已經完成但還沒有章的通知單會一次補上核准與審查</b>，並告訴您補了哪幾張——
                 已經有人簽過的一律不動）。
                 <b>還沒按完成的通知單，列印時核准／審查兩格一律留白</b>——沒完成就印出簽好的章是不實的簽章。
+                <b>按「完成」會先把畫面上的修改存起來再完成</b>——不然剛改好還沒按儲存的內容（例如稽核日期）
+                不會進資料庫，完成後重新載入就跳回舊值。
                 按完成時會請您確認<b>簽章日期</b>：預設＝<b>通知日期</b>，補歷史紙本時可以往前挑，但<b>不可以晚於通知日期</b>
                 （通知單是先簽好才發出去的）；這個日期同時會成為<b>製表日期</b>。
                 要再修改只有<b>內稽管理員</b>按「取消完成」並輸入<b>操作確認密碼</b>
@@ -2081,6 +2083,7 @@ function applyCaseLock(c){
 }
 $('#btnCaseComplete').on('click', function(){
     if (!CASE_ID) { alert('請先儲存這張通知單'); return; }
+    if (!validateCase()) { alert('有欄位需要修正，請看紅字說明（完成前會先自動存檔）'); return; }
     if (!confirm('確定把這張稽核通知單標記為「完成」嗎？\n\n'
                + '・完成之後內容就鎖定不可修改（要改得由內稽管理員輸入操作確認密碼取消完成）\n'
                + (String((META.settings||{}).ia_auto_sign_case||'') === '1'
@@ -2093,6 +2096,20 @@ $('#btnCaseComplete').on('click', function(){
     askDate('完成稽核通知單', '這個日期會印在核准／審查的章上，也會成為製表日期。'
           + (nd ? ('預設＝通知日期 ' + dispDate(nd) + '；可以往前挑，但不可以晚於通知日期。') : ''),
         function(d){
+            /* **先把畫面上的修改存起來再完成**（2026-09-18 使用者回報）：
+               完成本身只送 case_id，所以剛改好還沒按儲存的內容（例如稽核日期）不會進資料庫，
+               完成後重新載入就跳回舊值，看起來像「改了又自己變回去」。 */
+            $.post(API, caseSavePayload(), function(sv){
+                if (!sv.ok) { alert('完成前自動存檔失敗：' + (sv.error||'') + '\n\n請先修正後再按完成。'); return; }
+                CASE_ID = sv.case_id || CASE_ID;
+                if (sv.no_changed) alert('稽核日期改變，稽核件號已由 ' + sv.no_old + ' 重編為 ' + sv.case_no);
+                caseDoComplete(d);
+            }, 'json');
+        }, false, {def: nd, max: nd, maxMsg: '簽章／製表日期不可晚於通知日期（' + (nd ? dispDate(nd) : '') + '）'});
+    return;
+});
+/** 真正送出「完成」（存檔成功之後才會走到這裡） */
+function caseDoComplete(d){
             $.post(API, {action:'case_complete', case_id:CASE_ID, sign_date:d}, function(res){
                 if (!res.ok) { alert(res.error||'完成失敗'); return; }
                 alert('已完成（簽章／製表日期 '+dispDate(d)+'）' + (+res.auto_signed
@@ -2100,8 +2117,7 @@ $('#btnCaseComplete').on('click', function(){
                     : '。\n（目前沒有開啟自動簽核，核准／審查兩格留白，請依紙本流程簽核）'));
                 loadCases(function(){ openCase(CASE_ID); });
             }, 'json');
-        }, false, {def: nd, max: nd, maxMsg: '簽章／製表日期不可晚於通知日期（' + (nd ? dispDate(nd) : '') + '）'});
-});
+}
 $('#btnCaseReopen').on('click', function(){
     $('#caseReopenPw').val(''); clearErrs($('#caseReopenMask')); openMask('caseReopenMask');
     // 跳窗一開就把游標放進密碼欄（使用者回報過「無法輸入密碼」，先排除焦點沒進到欄位的可能）
@@ -2594,14 +2610,18 @@ $(document).on('blur','#cMeetStart,#cMeetEnd,input[data-f=audited_time]', functi
     var n = normTime($(this).val());
     if (n === null) { $(this).addClass('err'); } else { $(this).removeClass('err').val(n); }
 });
-$('#btnCaseSave').on('click', function(){
-    if (!validateCase()) return;
-    $.post(API, {action:'case_save', case_id:CASE_ID, notify_date:$('#cNotify').val(),
+/** 存檔要送的內容（存檔與「完成」共用同一份，兩邊各寫一次遲早走鐘） */
+function caseSavePayload(){
+    return {action:'case_save', case_id:CASE_ID, notify_date:$('#cNotify').val(),
         audit_from:$('#cFrom').val(), audit_to:$('#cTo').val(), leader_key:$('#cLeader').val(),
         end_meet_date:$('#cMeetDate').val(), end_meet_start:$('#cMeetStart').val(), end_meet_end:$('#cMeetEnd').val(),
         end_meet_place:$('#cMeetPlace').val(), remark:$('#cRemark').val(),
         maker_id:($('#cMaker').val()||''), maker_date:($('#cMakerDate').val()||''),
-        depts:JSON.stringify(collectCaseRows())}, function(res){
+        depts:JSON.stringify(collectCaseRows())};
+}
+$('#btnCaseSave').on('click', function(){
+    if (!validateCase()) return;
+    $.post(API, caseSavePayload(), function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
         // 稽核日期改過的話件號會跟著重編，要講出來（不然使用者只會覺得編號莫名其妙變了）
         alert('已儲存' + (res.no_changed ? ('\n\n稽核日期改變，稽核件號已由 ' + res.no_old + ' 重編為 ' + res.case_no) : ''));
