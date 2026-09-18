@@ -356,11 +356,12 @@ function ppr_render_price_history(PDO $pdo, ?array $part, int $processNo, string
     if (!$part || $processNo <= 0) return '<span class="ppr-muted">—</span>';
     $hist = ppr_process_price_history($pdo, (string)$part['D_Setting_Id'], $processNo, $makerIdNo, 4);
     if (empty($hist['rows'])) return '<span class="ppr-muted">無歷史紀錄</span>';
+    // 顯示順序為使用者指定：日期 → 數量 → 金額（金額要帶 $ 符號），例「2025.11.13 x118pcs $31」
     $lines = [];
     foreach ($hist['rows'] as $r) {
         $lines[] = '<span class="ph-row"><span class="d">'.ppr_d($r['transfer_date']).'</span>'
-                 . '<span class="p">'.ppr_num($r['unit_price'], 4).'</span>'
-                 . ($r['qty'] !== null ? '<span class="q">×'.h((int)$r['qty']).'</span>' : '')
+                 . ($r['qty'] !== null ? '<span class="q">x'.h((int)$r['qty']).'pcs</span>' : '')
+                 . '<span class="p">$'.ppr_num($r['unit_price'], 4, '—').'</span>'
                  . ($hist['scope'] === 'any' ? '<span class="m">'.h($r['maker_name']).'</span>' : '')
                  . '</span>';
     }
@@ -376,7 +377,8 @@ function ppr_render_price_history(PDO $pdo, ?array $part, int $processNo, string
 function ppr_render_freq_table(array $stat, string $priceKey): string {
     if ($stat['count'] === 0) return '<div class="ppr-muted">無歷史紀錄。</div>';
     $out = '<div class="ppr-freq-meta">共 '.$stat['count'].' 筆　平均數量 '.($stat['avg_qty']??'—').'　平均間隔 '.($stat['avg_interval']!==null?$stat['avg_interval'].' 天':'—').'</div>';
-    $out .= '<table class="ppr-freq-table"><thead><tr><th>日期</th><th>對象</th><th>製程</th><th>數量</th><th>單價</th></tr></thead><tbody>';
+    // 刻意不放「對象」欄：本報告只列這個料號的單，對象必定等於表頭那個客戶，印出來只是每一列重複同一個名字
+    $out .= '<table class="ppr-freq-table"><thead><tr><th>日期</th><th>製程</th><th>數量</th><th>單價</th></tr></thead><tbody>';
     foreach (array_slice($stat['rows'], 0, 20) as $r) {
         $proc = trim((string)($r['Processing_items'] ?? ''));
         if ($proc !== '') {
@@ -390,13 +392,52 @@ function ppr_render_freq_table(array $stat, string $priceKey): string {
                 : '<span class="ppr-muted">—</span>';
         }
         $out .= '<tr><td>'.ppr_d($r['Order_date'] ?? '').'</td>'
-              . '<td>'.h($r['Client_name'] ?? '').'</td>'
               . '<td>'.$procCell.'</td>'
               . '<td>'.h($r['Qty'] ?? '').'</td>'
               . '<td>'.ppr_num($r[$priceKey] ?? null).'</td></tr>';
     }
     $out .= '</tbody></table>';
     if ($stat['count'] > 20) $out .= '<div class="ppr-muted">僅列最近 20 筆，共 '.$stat['count'].' 筆。</div>';
+    return $out;
+}
+
+/**
+ * 料號附件（選配）——**各自獨立成頁附在該筆製令報告後面**（使用者的用語是「另外列入」）。
+ * 刻意不塞進報告內文的小格子裡：這些是圖面／規格書，擠在角落等於印了也看不懂；
+ * 一張一頁、圖片撐滿整頁才是可用的。同一個標籤只印最新一份（使用者明確要求），
+ * 每頁頁首標明**標籤名稱與備註**（還有料號、製令、發行日期，單獨抽出來看也知道是誰的）。
+ * 圖片內嵌，PDF 用 iframe（與圖面同一套做法），其餘格式只列檔名（印不出來的東西不假裝有預覽）。
+ */
+function ppr_render_attach_pages(PDO $pdo, array $part, string $bomLabel, array $catIds): string {
+    $picks = ppr_part_attach_pick($pdo, (int)$part['d_id'], $catIds);
+    if (empty($picks)) return '';
+    $company = vendor_audit_company_name($pdo);
+    $out = '';
+    foreach ($picks as $p) {
+        $r    = $p['row'];
+        $name = implode('・', $p['labels']);
+        $ext  = strtolower(pathinfo((string)$r['filename'], PATHINFO_EXTENSION));
+        $url  = '../../src/store/Part_Attachment_API.php?action=download&id=' . (int)$r['id'];
+        $note = trim((string)($r['note'] ?? ''));
+        $rev  = trim((string)($r['revision'] ?? ''));
+        if (in_array($ext, ['jpg','jpeg','png','gif','webp','bmp'], true)) {
+            $body = '<img src="'.h($url).'" class="ppr-attach-img" alt="'.h($name).'">';
+        } elseif ($ext === 'pdf') {
+            $body = '<iframe src="'.h($url).'" class="ppr-attach-frame"></iframe>';
+        } else {
+            $body = '<div class="ppr-attach-none">'.h($r['original_name'] ?: $r['filename']).'（'.h($ext ?: '未知格式').'，無法內嵌預覽，請至料號主檔下載）</div>';
+        }
+        $out .= '<div class="ppr-page ppr-attach-page"><div class="ppr-page-inner">'
+              . '<div class="ppr-doc-head"><div class="ppr-company">'.h($company).'</div>'
+              . '<div class="ppr-doctitle">料號附件　'.h($part['D_Setting_Id']).($bomLabel !== '' ? '　'.h($bomLabel) : '').'</div></div>'
+              . '<div class="ppr-attach-head"><span class="lb">'.h($name).'</span>'
+              . ($rev !== '' ? '<span class="rv">版次 '.h($rev).'</span>' : '')
+              . '<span class="fn">'.h($r['original_name'] ?: $r['filename']).'</span>'
+              . '<span class="dt">'.ppr_d($r['eff_date']).'</span></div>'
+              . ($note !== '' ? '<div class="ppr-attach-note"><b>備註：</b>'.h($note).'</div>' : '')
+              . '<div class="ppr-attach-body">'.$body.'</div>'
+              . '</div></div>';
+    }
     return $out;
 }
 
@@ -688,7 +729,13 @@ if ($isAjax) {
                     'drawing'     => $drawings[$b['bom']] ?? ['status'=>'none','candidates'=>[]],
                 ];
             }
-            echo json_encode(['success'=>true, 'part'=>$part, 'rows'=>$rows,
+            // 這個料號有哪些附件標籤可勾選帶進報告（每個標籤只會印最新一份）
+            $attachCats = [];
+            foreach (ppr_part_attach_cats($pdo, $did) as $c) {
+                $attachCats[] = ['id'=>$c['id'], 'name'=>$c['name'], 'count'=>$c['count'],
+                    'latest'=> $c['latest'] ? eg_fmt_date($c['latest']['eff_date']) : ''];
+            }
+            echo json_encode(['success'=>true, 'part'=>$part, 'rows'=>$rows, 'attach_cats'=>$attachCats,
                 'ignore_range'=>$ignoreRange ? 1 : 0, 'max_batch'=>PPR_MAX_BATCH_COUNT]);
             exit;
         }
@@ -704,6 +751,8 @@ if ($isAjax) {
                 'show_qc'        => !empty($_POST['show_qc']) ? 1 : 0,
                 'show_work_hist' => !empty($_POST['show_work_hist']) ? 1 : 0,
                 'show_price_hist'=> !empty($_POST['show_price_hist']) ? 1 : 0,
+                'attach_cats'    => array_values(array_filter(array_map('intval',
+                                      json_decode($_POST['attach_cats'] ?? '[]', true) ?: []))),
             ];
             if (!$did || empty($bomList)) { echo json_encode(['success'=>false,'error'=>'缺少料號或製令']); exit; }
             if (count($bomList) > PPR_MAX_BATCH_COUNT) {
@@ -733,6 +782,13 @@ if ($isAjax) {
                     foreach ($d['candidates'] as $cand) if ($cand['filename'] === $pick) { $chosen = $cand; break; }
                 }
                 $html .= ppr_render_bom_page($pdo, $b, $part, $chosen, $opts, $isBatch);
+            }
+            // 料號附件是**掛在料號上**不是掛在製令上，所以整份報告只附一次（放在全部製令頁之後）。
+            // 逐筆製令各附一次的話，勾 3 個標籤又選 30 筆製令就會印出 90 張重複的圖。
+            if (!empty($opts['attach_cats'])) {
+                // 單筆時頁首帶製令號（單獨抽出來看也知道是哪一張單的附件）；多筆時不帶，免得寫了其中一張造成誤會
+                $html .= ppr_render_attach_pages($pdo, $part,
+                    ($isBatch ? '' : (string)$bomRows[0]['bom']), $opts['attach_cats']);
             }
             if ($isBatch) {
                 $html .= ppr_render_summary_page($pdo, $bomRows, $part);
@@ -814,6 +870,12 @@ if ($isAjax) {
         .ppr-dw-pick { display:flex; gap:8px; flex-wrap:wrap; margin-left:26px; }
         .ppr-dw-pick label { display:flex; align-items:center; gap:4px; font-size:12px; border:1px solid #D8BE93; border-radius:4px; padding:3px 6px; cursor:pointer; }
         .ppr-count-bar { font-size:12px; color:#8a6d45; margin:6px 0; }
+        /* 料號附件標籤勾選列 */
+        .ppr-attach-pick { display:flex; flex-wrap:wrap; gap:6px; }
+        .ppr-attach-chk { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:normal;
+            border:1px solid #D8BE93; border-radius:14px; padding:3px 11px; cursor:pointer; background:#fff; margin:0; }
+        .ppr-attach-chk:hover { background:#FBF0DD; }
+        .ppr-attach-chk small { color:#a3865c; }
         /* 客戶 BOM 瀏覽：一個料號一組，可展開看該料號的製令（原本平鋪幾百列很難挑） */
         .ppr-browse-group { border-bottom:1px solid #F3E9D6; }
         .ppr-browse-group:last-child { border-bottom:none; }
@@ -850,12 +912,26 @@ if ($isAjax) {
         /* ── A3＝橫式，整份報告收在同一張紙內（使用者明確要求）──
          * 420×297mm 橫放扣掉 8mm 內距＝404×281mm 內容區；表頭/圖面/流程總覽橫跨整頁，其餘段落多欄由上往下流；
          * 仍然放不下時由 JS 自動加欄數再等比縮小（pprFitPages），到極限還是放不下就明講會跨頁，不偷偷裁掉內容。 */
-        .ppr-report-area.ppr-paper-a3 .ppr-page { width:420mm; min-height:297mm; height:297mm; overflow:hidden; font-size:12px; }
+        /* 寬高刻意比紙張各小 1mm：等於紙張時只要有一點點捨入誤差就會多吐一張空白頁（使用者回報） */
+        .ppr-report-area.ppr-paper-a3 .ppr-page { width:419mm; min-height:296mm; height:296mm; overflow:hidden; font-size:12px; }
         .ppr-report-area.ppr-paper-a3 .ppr-page-main { column-count:2; column-gap:8mm; }
+        /* A3 表頭：圖面只佔**左上約 1/4**，右側放基本資料與流程總覽——圖面沒有大到需要佔滿整列，
+         * 佔整列等於白白吃掉半張 A3（使用者回報）。`.ppr-body` 用 display:contents 讓它的兩個子元素
+         * 直接變成這個 grid 的成員，不必為了版面再改一次 HTML 結構。 */
+        /* 第 4 列 1fr 是**刻意留的鬆弛列**：圖面跨列且比右欄內容高，若只有三列，多出來的高度會被平均
+         * 分配到資訊表與流程總覽那兩列之間，右欄中間就多出一塊百餘 px 的空白（實測 116px）。 */
+        .ppr-report-area.ppr-paper-a3 .ppr-head-block { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,2.1fr);
+            grid-template-rows:auto auto auto 1fr; column-gap:6mm; align-items:start; }
+        .ppr-report-area.ppr-paper-a3 .ppr-doc-head { grid-column:1 / -1; grid-row:1; }
+        .ppr-report-area.ppr-paper-a3 .ppr-body { display:contents; }
+        .ppr-report-area.ppr-paper-a3 .ppr-info-grid { grid-column:2; grid-row:2; margin-bottom:8px; }
+        .ppr-report-area.ppr-paper-a3 .ppr-flow-box { grid-column:2; grid-row:3; }
+        .ppr-report-area.ppr-paper-a3 .ppr-drawing-box { grid-column:1; grid-row:2 / span 3; margin:0; align-self:start; }
+        /* 只有一張圖時壓在 1/4 高度內；本 BOM 另外帶了料號附件圖時放寬（多張圖本來就需要空間） */
+        .ppr-report-area.ppr-paper-a3 .ppr-drawing-img { max-height:120mm; }
+        .ppr-report-area.ppr-paper-a3 .ppr-drawing-frame { height:120mm; }
         .ppr-report-area.ppr-paper-a3 .ppr-page-main .ppr-section { break-inside:avoid-column; margin:0 0 10px; }
         .ppr-report-area.ppr-paper-a3 .ppr-proc-cards { display:flex; flex-direction:column; gap:8px; }
-        .ppr-report-area.ppr-paper-a3 .ppr-drawing-img { max-height:250px; }
-        .ppr-report-area.ppr-paper-a3 .ppr-drawing-frame { height:250px; }
 
         @media print {
             /* 頁面本身的標題列不進列印版（使用者要求：不要印出「料號製程履歷報告 圖面／製程／…一次整合」那一行） */
@@ -897,7 +973,16 @@ if ($isAjax) {
         .ppr-flow-box { flex:1 1 54%; }
         .ppr-flow-box h4, .ppr-section h4 { color:#8A5A2B; font-size:13.5px; font-weight:700; letter-spacing:.5px;
             margin:0 0 8px; padding-bottom:5px; border-bottom:2px solid #F7E0BD; }
-        .ppr-section { margin:16px 0; page-break-inside:avoid; }
+        /* 【分頁】區塊本身**允許**跨頁：整段 avoid 時，只要剩餘空間放不下一整段（製程詳細資料常有 1500px 以上），
+         * 瀏覽器就把整段推到下一頁，於是上一頁下半部整片空白——使用者回報「A4 列印畫面很糟糕」就是這個。
+         * 改成只讓「最小不可切割單位」avoid：製程卡片、表格列、標題不可與內容分離。 */
+        .ppr-section { margin:16px 0; page-break-inside:auto; break-inside:auto; }
+        .ppr-section > h4, .ppr-flow-box > h4 { page-break-after:avoid; break-after:avoid; }
+        table.ppr-meas-table, table.ppr-work-table, table.ppr-work-hist,
+        table.ppr-cost-detail, table.ppr-freq-table { page-break-inside:auto; break-inside:auto; }
+        table.ppr-cost-table { page-break-inside:avoid; break-inside:avoid; }
+        .ppr-page tr, .ppr-page thead { page-break-inside:avoid; break-inside:avoid; }
+        .ppr-page thead { display:table-header-group; }
 
         /* 流程總覽：簡約橫排（製程名稱＋狀態徽章，中間以箭頭銜接；刻意不放 1234 數字標籤） */
         .ppr-stepper { display:flex; align-items:center; flex-wrap:wrap; gap:4px 2px; }
@@ -954,8 +1039,25 @@ if ($isAjax) {
         table.ppr-work-table th { width:80px; }
         table.ppr-meas-table tbody tr:nth-child(even), table.ppr-freq-table tbody tr:nth-child(even) { background:#FCFAF5; }
 
-        .ppr-freq-cols { display:flex; gap:16px; }
-        .ppr-freq-cols > div { flex:1; }
+        /* 料號附件頁：一份附件一整頁，頁首標籤名稱＋備註，圖撐滿剩下的空間。
+         * 高度必須釘死（不能只有 min-height）：`height:100%` 的內層要有確定的父層高度才算得出來，
+         * 否則圖片會用原始尺寸輸出、直接溢出紙張。A3 由 .ppr-paper-a3 .ppr-page 覆寫成 296mm。 */
+        .ppr-attach-page { height:297mm; overflow:hidden; }
+        .ppr-attach-page .ppr-page-inner { display:flex; flex-direction:column; height:100%; }
+        .ppr-attach-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; font-size:13px; margin:4px 0 2px; }
+        .ppr-attach-head .lb { font-weight:700; color:#5b3a1e; font-size:15px; }
+        .ppr-attach-head .rv { font-size:11px; color:#8a6d45; background:#F7E0BD; border-radius:8px; padding:1px 8px; }
+        .ppr-attach-head .fn { font-size:11px; color:#a3865c; }
+        .ppr-attach-head .dt { margin-left:auto; font-size:12px; color:#8a6d45; }
+        .ppr-attach-note { font-size:12px; color:#5b3a1e; background:#FDF8EF; border:1px solid #EADFC8;
+            border-radius:5px; padding:4px 9px; margin-bottom:6px; white-space:pre-wrap; }
+        .ppr-attach-body { flex:1 1 auto; min-height:0; display:flex; align-items:center; justify-content:center; }
+        .ppr-attach-img { display:block; max-width:100%; max-height:100%; object-fit:contain; }
+        .ppr-attach-frame { width:100%; height:100%; min-height:200mm; border:none; }
+        .ppr-attach-none { font-size:12px; color:#b0a68f; }
+
+        .ppr-freq-cols { display:flex; gap:16px; align-items:flex-start; }
+        .ppr-freq-cols > div { flex:1; min-width:0; }
         .ppr-freq-cols b { font-size:12.5px; color:#5b3a1e; }
         .ppr-freq-meta { font-size:11px; color:#8a6d45; margin:4px 0; }
         /* 出貨沒綁訂單時，製程欄改顯示出貨單的「規格」欄內容：虛線底標明來源不同，列印也看得出來 */
@@ -1032,6 +1134,10 @@ if ($isAjax) {
                 <div style="margin:4px 0 6px;"><input type="text" id="pprBrowseFilter" placeholder="在結果中篩選料號/規格…" style="width:260px;"></div>
                 <div class="ppr-bom-list" id="pprClientBrowseList"></div>
             </div>
+            <div id="pprAttachWrap" style="display:none;">
+                <div class="ppr-count-bar">料號附件（勾選要一併印進報告的標籤；<b>每個標籤只印最新的一份</b>，附件上會標明標籤名稱與備註）</div>
+                <div class="ppr-attach-pick" id="pprAttachCats"></div>
+            </div>
             <div id="pprBomListWrap" style="display:none;">
                 <div class="ppr-count-bar"><b id="pprBomListTitle"></b>　<label><input type="checkbox" id="pprSelAll"> 全選</label>　已選 <span id="pprSelCount">0</span> / 上限 <span id="pprMaxCount">30</span> 筆</div>
                 <div class="ppr-bom-list" id="pprBomList"></div>
@@ -1059,7 +1165,8 @@ if ($isAjax) {
             <li><b>直接打製令(BOM)號碼</b>：右側「或製令號」欄可直接搜尋 BOM 號碼，選到後會自動帶入對應料號並查詢，該筆也會自動勾選。<b>用這條路進來時會忽略上方的「期間」</b>（期間預設本月，而直接打進來的製令多半是舊單，照期間篩會變成查不到），清單標題會標示「（不限期間）」。</li>
             <li>找到料號後按「查詢此料號筆數」列出期間內的製令(BOM)清單（清單標題會顯示共有幾筆）。若某製令的圖面在 Z:/BOM/ 有多個副檔名的精確匹配檔，會列出候選清單，需先選定要用哪一個才能產生報告；找不到精確匹配檔則顯示「找不到圖面」。</li>
             <li>期間內只有 1 筆 → 直接產生單筆報告（可另外顯示訂單/出貨頻率分析）。多筆 → 勾選要產生的製令（可全選，上限 <?= PPR_MAX_BATCH_COUNT ?> 筆），按「產生報告」；同一份文件內連續呈現，最後加一頁總體趨勢分析。</li>
-            <li><b>紙張大小</b>：報告產生後可隨時點「A4 直式」／「A3 橫式」按鈕即時切換排版，選好再按「列印/產生PDF」。<b>A3 一律橫式並把整份報告收在同一張紙內</b>：段落自動改成多欄流排（2→3→4 欄），仍放不下才等比縮小字級；欄數加滿又縮到下限還是放不下時，畫面上會出現紅字提醒「列印會分成兩頁」，<b>內容不會被裁掉</b>。</li>
+            <li><b>紙張大小</b>：報告產生後可隨時點「A4 直式」／「A3 橫式」按鈕即時切換排版，選好再按「列印/產生PDF」。<b>A3 一律橫式並把整份報告收在同一張紙內</b>：圖面放左上角、段落自動改成多欄流排（2→3→4 欄），仍放不下才等比縮小字級（縮放比例是實測出來的，會用放得下的最大比例，不會縮過頭）；欄數加滿又縮到下限還是放不下時，畫面上會出現紅字提醒「列印會分成兩頁」，<b>內容不會被裁掉</b>。A4 則交給瀏覽器原生分頁，段落可跨頁、只有製程卡片與表格列不切開。</li>
+            <li><b>料號附件（選配）</b>：選定料號後，工具列會列出這個料號有哪些附件標籤，勾起來就會<b>各自獨立成頁附在該筆製令報告後面</b>（不是塞進報告角落——圖面擠在小格子裡等於印了也看不懂）。<b>同一個標籤只印最新的一份</b>，每一頁頁首標明標籤名稱、版次、檔名、發行日期與備註。</li>
         </ul>
         <h4>三、重要行為 / 常見疑問</h4>
         <div class="tip">
@@ -1067,7 +1174,9 @@ if ($isAjax) {
             <b>廠商與機台</b>：廠商一律顯示（含「超正齒研」「客戶」這類廠內自有單位）；機台顯示<b>現場編號</b>，製令上沒填機台時自動改抓報工紀錄裡實際報的那一台，兩邊都查不到就不顯示（全站沒有「在製令上指定機台」這個功能，所以不再印「未指定機台」）。<br>
             <b>製令建立～結案日期</b>：結案與否看 processing_state，結案日取 closed_at。2026-05-22「手動結案」功能上線前的舊製令沒有結案時間可查，會顯示「已結案（無結案日期紀錄）」——<b>不會拿 BOM 編號回推的日期硬湊</b>（那個推算值其實是建立日，湊出來會變成結案早於建立）。<br>
             <b>同料號歷史報工</b>（選配）：掛在該製程的報工簡表下方，列同一料號同一製程最近 5 筆，相同機台的排前面並以底色標示，不同機台也會列出來當參考。需一併勾選「帶入報工簡表」（勾了會自動幫你勾）。<br>
-            <b>歷史加工價格</b>（選配）：在成本明細加一欄，列此廠商×此料號×此製程過去的實際發包單價（日期／單價／數量）。同一廠商查無紀錄時會自動放寬列出其他廠商的，並在欄位內標明「同廠商無紀錄，改列其他廠商」。<br>
+            <b>歷史加工價格</b>（選配）：在成本明細加一欄，列此廠商×此料號×此製程過去的實際發包單價，格式為「日期　x數量pcs　$單價」。同一廠商查無紀錄時會自動放寬列出其他廠商的，並在欄位內標明「同廠商無紀錄，改列其他廠商」。<br>
+            <b>為什麼歷史訂單／出貨沒有「對象」欄</b>：本報告只列這個料號的單，對象必定就是表頭那個客戶，印出來每一列都是同一個名字而已。<br>
+            <b>料號附件只取最新一份</b>：判定用發行章日期優先、沒有才用上傳時間（與 ai-rules/15「圖面變更看發行章日期」一致）。批圖編輯器的工作檔與其輸出圖一律不列（那是暫存圖不是正式圖面）。同一份檔案同時是兩個被勾標籤的最新版時只會印一次，標籤名以「・」合併。<br>
             <b>歷史訂單／出貨的「製程」欄</b>：同一個料號常有「只做齒研」與「代料到成品」等不同加工範圍的單，單價自然差很多，所以一定要對照這一欄再看單價。訂單取自訂單的加工項目；出貨取自它所綁訂單的同一欄位，<b>但出貨單絕大多數沒有綁訂單（全站 99.6% 的出貨沒有訂單編號），此時改顯示出貨單的「規格」欄內容</b>——ERP 轉進來的資料本來就把製程與品名混寫在那一欄（例「齒輪／齒研」「馬達齒輪-代料至齒研」）。這種退路顯示的文字會加<span class="ppr-spec-fb">虛線底</span>，提醒你那是規格欄不是正式的製程欄位；兩邊都沒有才顯示「—」。<br>
             <b>找得到 BOM 卻產不出報告？</b>：全站約八成的製令沒有填料號的整數外鍵（只有料號文字），本頁已同時用兩種方式歸戶，所以舊製令也查得到；若某張製令的料號在料號主檔完全查不到，建議清單會直接標紅說明無法產生報告。<br>
             <b>圖面判定</b>：只認「檔名去副檔名恰好等於製令號碼」的檔案，任何帶後綴的變體檔名一律不算候選。<br>
@@ -1184,6 +1293,7 @@ function pprDoSearch(highlightBom, ignoreRange){
     $.post(PPR_API, {action:'list_boms', d_id:did, date_from:from, date_to:to, ignore_range: ignoreRange ? 1 : 0}, function(res){
         if (!res.success) { alert(res.error||'查詢失敗'); return; }
         PPR_ROWS = res.rows; PPR_DRAWING_CHOICE = {};
+        pprRenderAttachCats(res.attach_cats || []);
         $('#pprMaxCount').text(res.max_batch);
         var scope = res.ignore_range ? '（不限期間）' : '期間內';
         $('#pprBomListTitle').text('「'+$('#pprPartInput').val()+'」'+scope+'共 '+PPR_ROWS.length+' 筆製令');
@@ -1198,6 +1308,18 @@ function pprDoSearch(highlightBom, ignoreRange){
     }, 'json');
 }
 $('#pprSearchBtn').on('click', function(){ pprDoSearch(); });
+
+/** 料號附件標籤勾選列：沒有附件就整塊不顯示（不要留一塊空的說明文字） */
+function pprRenderAttachCats(cats){
+    var $w = $('#pprAttachCats').empty();
+    if (!cats.length) { $('#pprAttachWrap').hide(); return; }
+    cats.forEach(function(c){
+        var $l = $('<label class="ppr-attach-chk"><input type="checkbox" class="ppr-att-cat" value="'+c.id+'"> '
+            + '<b>'+egEsc(c.name)+'</b> <small>'+c.count+' 份'+(c.latest?('・最新 '+egEsc(c.latest)):'')+'</small></label>');
+        $w.append($l);
+    });
+    $('#pprAttachWrap').show();
+}
 // 勾「同料號歷史報工」但沒勾「帶入報工簡表」＝什麼都不會出現，直接替使用者一起勾起來
 $('#pprOptWorkHist').on('change', function(){ if ($(this).is(':checked')) $('#pprOptWork').prop('checked', true); });
 $('#pprOptPriceHist').on('change', function(){ if ($(this).is(':checked')) $('#pprOptCost').prop('checked', true); });
@@ -1325,7 +1447,8 @@ $('#pprGenBtn').on('click', function(){
         show_freq: $('#pprOptFreq').is(':checked') ? 1 : 0,
         show_qc: $('#pprOptQc').is(':checked') ? 1 : 0,
         show_work_hist: $('#pprOptWorkHist').is(':checked') ? 1 : 0,
-        show_price_hist: $('#pprOptPriceHist').is(':checked') ? 1 : 0
+        show_price_hist: $('#pprOptPriceHist').is(':checked') ? 1 : 0,
+        attach_cats: JSON.stringify($('.ppr-att-cat:checked').map(function(){ return parseInt(this.value,10); }).get())
     }, function(res){
         if (!res.success) { alert(res.error||'產生失敗'); return; }
         $('#pprReportArea').html(res.html);
@@ -1362,6 +1485,7 @@ function pprFitPages(){
         $main.css('column-count', '');
         $p.css({height:'', overflow:''});
         if (!isA3) return;
+        if ($p.hasClass('ppr-attach-page')) return;   // 附件頁本來就是「一張圖撐滿一頁」，不需要也不該縮放
         var availH = $p[0].clientHeight - parseFloat($p.css('padding-top')) - parseFloat($p.css('padding-bottom'));
         if (availH <= 0 || $in[0].scrollHeight <= availH) return;
         var cols = [2, 3, 4];
@@ -1369,10 +1493,17 @@ function pprFitPages(){
             $main.css('column-count', cols[i]);
             if ($in[0].scrollHeight <= availH) return;
         }
-        var needH = $in[0].scrollHeight;
-        if (needH <= 0) return;
-        var z = Math.max(0.5, Math.floor(availH / needH * 100) / 100 - 0.01);
-        $in.css({zoom:z, width:(100 / z) + '%'});
+        // 縮放要**用二分搜尋實測**，不能用一次比例算完就套：套上 zoom 的同時寬度也放大回 (100/z)%，
+        // 多欄版面會重新分佈、內容高度跟著縮短，所以「用縮放前的高度算出來的比例」一定縮過頭
+        // （實測會縮到 0.58，但其實 0.79 就放得下，等於白白浪費四分之一張紙）。
+        var lo = 0.5, hi = 1, best = 0, z;
+        var apply = function (v) { $in.css({zoom:v, width:(100 / v) + '%'}); return $in[0].scrollHeight * v; };
+        for (var k = 0; k < 7; k++) {
+            var mid = (lo + hi) / 2;
+            if (apply(mid) <= availH) { best = mid; lo = mid; } else { hi = mid; }
+        }
+        z = best || 0.5;
+        apply(z);
         if ($in[0].scrollHeight * z > availH + 2) {
             // 放不下就**放掉固定高度與裁切**，寧可多印一頁也不可以把內容默默切掉（A3 版面本來是 overflow:hidden）
             $p.css({height:'auto', overflow:'visible'});

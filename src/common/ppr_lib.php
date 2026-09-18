@@ -445,6 +445,84 @@ function ppr_ship_history(PDO $db, array $part): array {
 }
 
 /* ============================================================
+ * 料號附件（選配帶進報告）
+ * ============================================================ */
+/**
+ * 這個料號有哪些附件標籤可以帶進報告，以及每個標籤最新的那一份。
+ * 三件事：
+ *  ①**排除批圖編輯器的工作檔與其輸出圖**（走 imgedit_strip_workfiles，那是暫存圖不是正式圖面）。
+ *  ②`part_attachments.category_ids` 是逗號分隔的字串（可能一份檔掛多個標籤），要逐一展開。
+ *  ③「最新」的判定用發行章日期優先、沒有才用上傳時間——與 ai-rules/15「圖面變更一律看發行章日期」一致。
+ * 回傳 [category_id => ['id','name','count','latest'=>附件列]]，依標籤 sort_order 排序。
+ */
+function ppr_part_attach_cats(PDO $db, int $dId): array {
+    if ($dId <= 0) return [];
+    try {
+        require_once __DIR__ . '/imgedit_visibility.php';
+        $st = $db->prepare("
+            SELECT pa.id, pa.filename, pa.original_name, pa.category_ids, pa.note, pa.revision,
+                   pa.issue_stamp_date, pa.uploaded_at, pa.d_id
+            FROM part_attachments pa
+            WHERE pa.d_id = ? AND pa.deleted_at IS NULL
+              AND pa.category_ids IS NOT NULL AND pa.category_ids <> ''
+            ORDER BY pa.uploaded_at DESC");
+        $st->execute([$dId]);
+        $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+        if (function_exists('imgedit_strip_workfiles')) $rows = imgedit_strip_workfiles($rows, $db);
+        if (empty($rows)) return [];
+
+        $cats = [];
+        foreach ($db->query("SELECT id, category_name, sort_order FROM quotation_file_categories")->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            $cats[(int)$c['id']] = ['name'=>$c['category_name'], 'sort'=>(int)$c['sort_order']];
+        }
+        $out = [];
+        foreach ($rows as $r) {
+            $eff = ($r['issue_stamp_date'] && $r['issue_stamp_date'] !== '0000-00-00')
+                 ? $r['issue_stamp_date'] : substr((string)$r['uploaded_at'], 0, 10);
+            $r['eff_date'] = $eff;
+            foreach (array_filter(array_map('trim', explode(',', (string)$r['category_ids'])), 'strlen') as $cid) {
+                $cid = (int)$cid;
+                if ($cid <= 0 || !isset($cats[$cid])) continue;
+                if (!isset($out[$cid])) {
+                    $out[$cid] = ['id'=>$cid, 'name'=>$cats[$cid]['name'], 'sort'=>$cats[$cid]['sort'], 'count'=>0, 'latest'=>null];
+                }
+                $out[$cid]['count']++;
+                $cur = $out[$cid]['latest'];
+                // 同標籤只留最新一份（發行章日期優先；同日再比上傳時間）
+                if (!$cur || strcmp($eff, $cur['eff_date']) > 0
+                    || ($eff === $cur['eff_date'] && strcmp((string)$r['uploaded_at'], (string)$cur['uploaded_at']) > 0)) {
+                    $out[$cid]['latest'] = $r;
+                }
+            }
+        }
+        uasort($out, function ($a, $b) {
+            return $a['sort'] <=> $b['sort'] ?: strcmp($a['name'], $b['name']);
+        });
+        return $out;
+    } catch (Throwable $e) { return []; }
+}
+
+/**
+ * 依勾選的標籤挑出要印進報告的附件：**同一個標籤只取最新一份**（使用者明確要求）。
+ * 同一份檔案同時是兩個被勾標籤的最新版時只輸出一次、標籤名以「・」合併，不重複印同一張圖。
+ */
+function ppr_part_attach_pick(PDO $db, int $dId, array $catIds): array {
+    $catIds = array_values(array_unique(array_map('intval', array_filter($catIds, 'strlen'))));
+    if (empty($catIds)) return [];
+    $all = ppr_part_attach_cats($db, $dId);
+    $byFile = [];
+    foreach ($all as $cid => $c) {
+        if (!in_array($cid, $catIds, true) || !$c['latest']) continue;
+        $fid = (int)$c['latest']['id'];
+        if (!isset($byFile[$fid])) $byFile[$fid] = ['row'=>$c['latest'], 'labels'=>[], 'sort'=>$c['sort']];
+        $byFile[$fid]['labels'][] = $c['name'];
+        $byFile[$fid]['sort'] = min($byFile[$fid]['sort'], $c['sort']);
+    }
+    uasort($byFile, function ($a, $b) { return $a['sort'] <=> $b['sort']; });
+    return array_values($byFile);
+}
+
+/* ============================================================
  * 同料號歷史報工 / 歷史加工價格（兩個都是選配，預設不查）
  * ============================================================ */
 /**
