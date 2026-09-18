@@ -111,6 +111,21 @@ function ot_boss_required(PDO $db, $clientId, $ate): bool {
     return true;
 }
 
+/**
+ * 顯示用姓名一律回查 user 表，**不採信 session 送來的值**。
+ * 站上的 $_SESSION['userName'] 存的是登入帳號（例 '005'），Login.php 從來沒有寫過 user_cname，
+ * 拿它當姓名存下去，畫面上的「設定人」就會變成一串代號（同一個坑：領料單的 issued_by_name）。
+ */
+function ot_boss_user_name(PDO $db, int $uid, string $fallback = ''): string {
+    try {
+        $st = $db->prepare("SELECT user_cname FROM `user` WHERE id = ? LIMIT 1");
+        $st->execute([$uid]);
+        $n = trim((string)$st->fetchColumn());
+        if ($n !== '') return $n;
+    } catch (Exception $e) { /* 查不到就用退路 */ }
+    return ($fallback !== '') ? $fallback : (string)$uid;
+}
+
 /** 是否具備「設定 BOSS 審圖客戶名單」的功能碼（不 fail-open：查不到角色一律 false） */
 function ot_boss_can_setting(PDO $db, int $uid): bool {
     if ($uid <= 0) return false;
@@ -133,6 +148,8 @@ function ot_boss_save(PDO $db, array $items, string $reason, int $uid, string $u
     if ($reason === '')           return ['ok' => false, 'msg' => '請填寫本次修改的原因'];
     if (mb_strlen($reason) > 500) return ['ok' => false, 'msg' => '修改原因請控制在 500 字以內'];
     if (!ot_boss_ensure_schema($db)) return ['ok' => false, 'msg' => '資料表建立失敗，請聯絡管理員'];
+    // 姓名一律以 user 表為準（呼叫端送的只當退路）
+    $uname = ot_boss_user_name($db, $uid, $uname);
 
     // ── 整理送上來的名單，並回查客戶主檔（客戶必須真的存在；名稱一律以主檔為準）──
     $want = [];
