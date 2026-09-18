@@ -1373,23 +1373,42 @@ if(CAN_ADMIN){
     return {date_from:f, date_to:t};
   }
 
-  /* 試算＝載入篩選來源（客戶／料號）＋跑一次對應 */
+  /* 試算＝①載入篩選來源（客戶／料號）→②把打好的關鍵字套上去→③用最後的條件跑一次對應。
+     **這三步一定要照順序**：原本是「發出 match_filters 的同時就先跑一次 match_preview」，
+     於是第一次按試算必定先用「全部料號」算一次，等篩選來源回來、關鍵字自動選起料號後才又算第二次；
+     機器慢一點時第一次的結果會被新的一次蓋掉、第二次還沒回來，畫面上就是「按了試算什麼都沒有，
+     要再點一下日期重按才會出現」（2026-09-18 使用者回報）。改成串起來只跑一次，也少打一支 API。 */
   $('#btnMtGo').on('click',function(){
     var r=mtRange(); if(!r) return;
+    var $b=$(this).prop('disabled',true).html('<i class="fa fa-spinner fa-spin"></i> 試算中…');
+    $('#mtSummary').html('<i class="fa fa-spinner fa-spin"></i> 載入篩選條件…');
+    $('#mtList').html('<div style="padding:14px;color:#8a6d45;">載入篩選條件…</div>');
     $.post(API+'?action=match_filters', r, function(res){
-      if(!res.ok) return;
+      if(!res || !res.ok){
+        toast(esc((res&&res.error)||'載入篩選條件失敗'), true);
+        return;
+      }
       mtParts = res.parts||[];
       var cur=$('#mtClient').val()||'';
       var h='<option value="">全部客戶</option>';
       (res.clients||[]).forEach(function(c){
         h+='<option value="'+esc(c.name)+'">'+esc(c.name)+'（'+nf(c.cnt)+'）</option>'; });
+      /* 填選項的過程會讓共用檔自動選起「只命中一個」的那一筆並觸發 change，
+         那個 change 會各自再跑一次試算＝同一次操作打三支 API。先靜音，最後再統一跑一次。 */
+      mtQuiet = true;
       $('#mtClient').html(h).val(cur);
       if($('#mtClient').val()===null) $('#mtClient').val('');
       refilterSel('#mtClient');
       fillParts();
+      mtQuiet = false;
       mtPaintFilterState();
-    },'json');
-    runMatch();
+    },'json')
+    .fail(function(){ toast('載入篩選條件失敗', true); })
+    .always(function(){
+      mtQuiet = false;
+      $b.prop('disabled',false).html('<i class="fa fa-search"></i> 試算');
+      runMatch();                      // 篩選條件就緒後才跑，一次到位
+    });
   });
 
   /* 料號下拉：選了客戶就只列該客戶底下的料號 */
@@ -1431,8 +1450,10 @@ if(CAN_ADMIN){
     $('#mtFilterState').html('目前試算範圍：<b>'+esc(cTxt)+'</b>／<b>'+esc(pTxt)+'</b>　'+warn);
   }
 
-  $('#mtClient').on('change',function(){ fillParts(); runMatch(); });
-  $('#mtPart').on('change',function(){ mtPaintFilterState(); runMatch(); });
+  /* mtQuiet：正在「按試算→重填選項」的過程中，下拉被程式改動觸發的 change 一律不要各自再跑試算 */
+  var mtQuiet = false;
+  $('#mtClient').on('change',function(){ if(mtQuiet) return; fillParts(); runMatch(); });
+  $('#mtPart').on('change',function(){ mtPaintFilterState(); if(mtQuiet) return; runMatch(); });
   $(document).on('input','#mkMatch .eg-filter-box', mtPaintFilterState);
 
   var mtSeq = 0;      // 篩選一改就會再送一次試算，晚回來的舊結果不可以蓋掉新的
@@ -1444,10 +1465,16 @@ if(CAN_ADMIN){
     r.with_unmatched = $('.mt-f[value=none]').is(':checked') ? 1 : 0;
     mtPaintFilterState();
     var seq = ++mtSeq;
+    $('#mtSummary').html('<i class="fa fa-spinner fa-spin"></i> 試算中…（資料多時需要幾秒）');
     $('#mtList').html('<div style="padding:14px;color:#8a6d45;">試算中…</div>');
     $.post(API+'?action=match_preview', r, function(res){
       if(seq !== mtSeq) return;                       // 已經有更新的一次試算在跑了
-      if(!res.ok){ toast(esc(res.error||'試算失敗'), true); return; }
+      if(!res.ok){
+        toast(esc(res.error||'試算失敗'), true);
+        $('#mtSummary').html('<span style="color:#DD5138;">試算失敗</span>');
+        $('#mtList').html('<div style="padding:14px;color:#DD5138;">試算失敗，請再按一次「試算」。</div>');
+        return;
+      }
       lastMatch = res.pairs||[];
       /* 手動指定過的列一定要留著。取消「無法對應」等於重新跟後端要一份不含那些列的結果，
          不補回來的話，剛剛一筆一筆指定好的訂單會整批從畫面上消失、也不會被回填。 */
@@ -1462,7 +1489,12 @@ if(CAN_ADMIN){
       $('#mtSummary').html('待回填明細 <b>'+nf(s.ship_rows)+'</b> 筆，推得對應 <b style="color:#8A5A2B;">'
         +nf(s.matched)+'</b> 筆，無法對應 <b style="color:#DD5138;">'+nf(s.unmatched)+'</b> 筆');
       renderMatch();
-    },'json').fail(function(){ toast('試算失敗', true); });
+    },'json').fail(function(){
+      if(seq !== mtSeq) return;
+      toast('試算失敗', true);
+      $('#mtSummary').html('<span style="color:#DD5138;">試算失敗</span>');
+      $('#mtList').html('<div style="padding:14px;color:#DD5138;">試算失敗（網路或伺服器錯誤），請再按一次「試算」。</div>');
+    });
   }
 
   /* 手動指定的訂單優先於系統建議 */
