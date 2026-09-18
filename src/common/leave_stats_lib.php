@@ -241,11 +241,59 @@ if (!function_exists('eg_leave_stats')) {
                 if (!$did) $did = (int)($posts[0]['department_id'] ?? 0);
             }
             if (!$did) $did = (int)($people[$uid]['dept_id'] ?? 0);   // 沒有異動紀錄＝用現況
+            // 職稱也要是「當時」的：林郁婷在業務課時是組員，調到管理課才是會計，
+            // 這一列講的是她在業務課那段期間，印現在的職稱會對不起來
+            $pname = '';
+            foreach ($posts as $po) {
+                if ((int)$po['department_id'] === $did) { $pname = (string)($po['position_name'] ?? ''); break; }
+            }
             $out = ['id' => $did,
                     'name' => $deptMeta[$did]['name'] ?? ($people[$uid]['dept_name'] ?? '（未設部門）'),
-                    'sort' => $deptMeta[$did]['sort'] ?? 999];
+                    'sort' => $deptMeta[$did]['sort'] ?? 999,
+                    'pos'  => $pname];
             if ($out['name'] === '') $out['name'] = '（未設部門）';
             $asofCache[$key] = $out;
+            return $out;
+        };
+
+        /* 這個人「待在目前篩選的那個部門」的期間（給人員明細印在姓名下方，方便辨識這筆數字是哪一段）。
+           只有選了特定部門時才算——顯示全部部門時每個人都是一整段，印期間只是雜訊（使用者指定）。
+           期間由職務異動紀錄推導：最早一筆紀錄之前用它的 before_json，之後每一段用前一筆的 after_json。
+           開頭／結尾沒有邊界時留空字串，前端印成「～2026.03.08」「2026.03.09～」。 */
+        $deptPeriods = function (int $uid) use ($histByUser, $scopeDeptIds) {
+            if (!$scopeDeptIds) return [];
+            $hrows = $histByUser[$uid] ?? [];
+            if (!$hrows) return [];              // 沒有異動紀錄＝沒調過部門，不必標期間
+            $inScope = function ($json) use ($scopeDeptIds) {
+                $a = json_decode((string)$json, true);
+                if (!is_array($a)) return false;
+                foreach ($a as $x) {
+                    if (in_array((int)($x['department_id'] ?? 0), $scopeDeptIds, true)) return true;
+                }
+                return false;
+            };
+            $dayBefore = function ($d) { $t = strtotime((string)$d . ' -1 day'); return $t ? date('Y-m-d', $t) : ''; };
+            $segs = [];
+            $segs[] = ['from' => '', 'to' => $dayBefore($hrows[0]['effective_date']), 'in' => $inScope($hrows[0]['before_json'])];
+            $n = count($hrows);
+            for ($i = 0; $i < $n; $i++) {
+                $from = (string)$hrows[$i]['effective_date'];
+                $to   = isset($hrows[$i + 1]) ? $dayBefore($hrows[$i + 1]['effective_date']) : '';
+                if ($to !== '' && $to < $from) continue;   // 同一天有多筆異動＝零長度區段，跳過
+                $segs[] = ['from' => $from, 'to' => $to, 'in' => $inScope($hrows[$i]['after_json'])];
+            }
+            // 合併相鄰且都在範圍內的區段
+            $out = [];
+            foreach ($segs as $sg) {
+                if (!$sg['in']) continue;
+                if ($out && ($out[count($out) - 1]['to'] === '' || $out[count($out) - 1]['to'] >= $dayBefore($sg['from']))) {
+                    $out[count($out) - 1]['to'] = $sg['to'];
+                } else {
+                    $out[] = ['from' => $sg['from'], 'to' => $sg['to']];
+                }
+            }
+            // 從頭到尾都在這個部門＝沒調過，不必標
+            if (count($out) === 1 && $out[0]['from'] === '' && $out[0]['to'] === '') return [];
             return $out;
         };
 
@@ -330,7 +378,7 @@ if (!function_exists('eg_leave_stats')) {
             if (!isset($byPerson[$uid])) $byPerson[$uid] = [
                 'user_id' => $uid,
                 'name' => $pi ? $pi['name'] : ('#' . $uid),
-                'dept_id' => $did, 'dept_name' => $dname, '_depts' => [],
+                'dept_id' => $did, 'dept_name' => $dname, '_depts' => [], '_pos' => [],
                 'position_name' => $pi ? $pi['position_name'] : '',
                 'position_sort' => $pi ? (int)$pi['position_sort'] : 999,
                 'state' => $pi ? (int)$pi['state'] : 0,
@@ -341,6 +389,7 @@ if (!function_exists('eg_leave_stats')) {
             $byPerson[$uid]['by_type'][$tid] = ($byPerson[$uid]['by_type'][$tid] ?? 0) + $d;
             // 期間內待過的部門（依起日排序，用來顯示「業務課→生產3廠」）
             $byPerson[$uid]['_depts'][(string)$r['sd']] = $dname;
+            if (($da['pos'] ?? '') !== '') $byPerson[$uid]['_pos'][(string)$r['sd']] = $da['pos'];
         }
 
         // ── 收尾整形 ──
@@ -376,7 +425,15 @@ if (!function_exists('eg_leave_stats')) {
             foreach ($ds as $n) { if (!$seq || end($seq) !== $n) $seq[] = $n; }
             $p['dept_name'] = $seq ? implode('→', $seq) : $p['dept_name'];
             $p['dept_changed'] = count($seq) > 1 ? 1 : 0;
-            unset($p['_depts']);
+            // 選了特定部門時，標出這個人待在該部門的期間（姓名下方顯示，方便辨識這筆是哪一段）
+            $p['dept_periods'] = $deptPeriods((int)$p['user_id']);
+            /* 有部門篩選時，職稱也用「當時在那個部門」的職稱（取該期間最後一筆假單當時的）。
+               沒篩選時維持現況主職——那種情況一個人可能橫跨兩個部門，沒有單一正確答案。 */
+            if ($scopeDeptIds && !empty($p['_pos'])) {
+                $ps = $p['_pos']; ksort($ps);
+                $p['position_name'] = (string)end($ps);
+            }
+            unset($p['_depts'], $p['_pos']);
         }
         unset($p);
         usort($byPersonOut, fn($a, $b) => $b['days'] <=> $a['days']);

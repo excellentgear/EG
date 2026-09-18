@@ -155,6 +155,7 @@ input[type=number]{-moz-appearance:textfield;}
 /* ── 請假統計 ── */
 .chart-box{position:relative;height:300px;}                 /* Chart.js 需要固定高度的容器 */
 .chart-box canvas{max-width:100%;}
+.p-period{font-size:11px;color:#9a7b4f;margin-top:1px;white-space:nowrap;}
 .cross-year-note{background:#FFF7E8;border:1px solid var(--sand-d);border-left:4px solid var(--amber);border-radius:6px;padding:7px 12px;font-size:12.5px;color:#6b5638;margin-bottom:12px;line-height:1.7;}
 .cross-year-note b{color:#8A5A2B;}
 .scope-note{font-size:12px;color:#8a6d45;margin-top:6px;}
@@ -2328,6 +2329,19 @@ function renderTrend(){
   $('#tbTrend').html(h);
 }
 
+/* 人員明細：姓名下方的「在本部門期間」。
+   後端只有在「選了特定部門」且「這個人確實調動過」時才給 dept_periods，
+   顯示全部部門時一律空陣列＝不顯示（使用者指定：全部部門時不需要區間）。
+   開頭／結尾沒有邊界的印成「～2026.03.08」「2026.03.09～」。 */
+function periodNote(p){
+  const ps = p.dept_periods || [];
+  if(!ps.length) return '';
+  const txt = ps.map(x => (x.from ? egFmtDate(x.from) : '') + '～' + (x.to ? egFmtDate(x.to) : '')).join('、');
+  const dn = String(p.dept_name || '').split('→').pop();
+  return '<div class="p-period" title="這個人在本部門的期間；表格上的天數只算這段期間內請的假">'
+       + esc(dn ? dn + '期間 ' : '期間 ') + esc(txt) + '</div>';
+}
+
 // ── 部門・人員 ──
 function renderPeople(){
   const bd = ST.by_dept || [];
@@ -2371,6 +2385,8 @@ function renderPeopleTable(){
     h += '<tr><td>'+esc(p.name)
        + (p.left_company ? ' <span class="tag-soft">已離職</span>' : '')
        + (!p.left_company && p.state_label && p.state_label !== '在職' ? ' <span class="tag-soft">'+esc(p.state_label)+'</span>' : '')
+       // 調過部門的人：姓名下方標出「這筆數字是他在這個部門的哪一段期間」（只有選了特定部門時才有）
+       + periodNote(p)
        + '</td><td>'+esc(p.position_name||'—')+'</td>'
        // 期間內調過部門的人：部門欄顯示「原部門→新部門」，並標示一下，免得以為算錯邊
        + '<td>'+esc(p.dept_name||'—')
@@ -2483,6 +2499,7 @@ function printStats(){
     + 'thead{display:table-header-group;} tr{break-inside:avoid;page-break-inside:avoid;}'
     + '.numc{text-align:right;} .sum-row td{background:#faf1e2;font-weight:700;}'
     + '.empty-note,.no-print,.tag-soft{display:none;}'
+    + '.p-period{font-size:8.5px;color:#666;white-space:nowrap;}'   // 人員明細姓名下方的在本部門期間
     + '.p-foot{margin-top:8px;font-size:9.5px;color:#555;text-align:right;}'
     + '@page{size:A4 landscape;margin:12mm 8mm 16mm;'
     + (PRINT_FOOTER ? " @bottom-right{ content:'" + PRINT_FOOTER.replace(/'/g, "\\'") + "'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
@@ -2547,7 +2564,8 @@ function exportStatsCsv(){
   const head = ['姓名','職稱','部門','在職狀態'].concat(ts.map(t => t.leave_name + '(天)'))
                .concat(['合計(天)','時數','單數']);
   const lines = [head.join(',')].concat(all.map(function(p){
-    return [p.name, p.position_name, p.dept_name, p.state_label]
+    const per = (p.dept_periods || []).map(x => (x.from ? egFmtDate(x.from) : '') + '～' + (x.to ? egFmtDate(x.to) : '')).join('、');
+    return [p.name, p.position_name, p.dept_name + (per ? '（' + per + '）' : ''), p.state_label]
            .concat(ts.map(t => num((p.by_type||{})[t.id] || 0)))
            .concat([num(p.days), num(p.hours), p.req_count])
            .map(v => '"' + String(v==null?'':v).replace(/"/g,'""') + '"').join(',');
