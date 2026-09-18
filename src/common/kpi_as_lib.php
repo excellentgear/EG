@@ -505,6 +505,7 @@ function kpi_as_registry(): array {
             'desc' => '分母=當月交期訂單筆數；「未交」怎麼算由「未交判定方式」決定（預設＝以網頁上的出貨綁定為準）；沿用原KPI頁排除規則(d_id ZZZ、-jg/-jh/-hg)',
             'params' => [
                 ['key'=>'exclude_clients','label'=>'排除客戶(可填客戶ID或簡稱)','type'=>'client_list','fe'=>1],
+                ['key'=>'grace_days','label'=>'寬限工作天數(交期後幾個工作天內交貨仍算準時，0=不寬限)','type'=>'int','fe'=>1],
                 ['key'=>'undone_mode','label'=>'未交判定方式(逐年度可分開設定)','type'=>'choice','fe'=>0,
                  'opts'=>[
                     'ship'     => 'D｜以出貨單反推（用料號主檔對應，不必綁定、不必 ERP 未交清單）＝目前唯一資料是新的',
@@ -1112,9 +1113,20 @@ function kpi_as_oo_excl_clients(PDO $db, array $params, array $rules): array {
  * 綁定有兩個來源，兩個都要看（見 ship_order_bind_lib）：
  *   ① shipment_order_map（拆分綁定）② is_list.Order_id（舊式直接綁定）
  */
+/**
+ * 準時出貨率的寬限工作天數（使用者要求 2026-09-18）：
+ * 交期之後再給幾個**工作天**，這段期間內交貨仍算準時。0＝不寬限。
+ * 用工作天而不是日曆天，是因為交期落在連假前時，日曆天會把假日也算進寬限而失真。
+ */
+function kpi_as_oo_grace_days(array $params): int {
+    return max(0, min(60, (int)kpi_as_pv($params, 'grace_days', 0)));
+}
+
 function kpi_as_order_bind_rows(PDO $db, int $year, int $month, array $params, array $rules,
                                 string $mode = 'bind'): array {
     $ym = sprintf('%04d-%02d', $year, $month);
+    $grace = kpi_as_oo_grace_days($params);
+    $dlCache = [];   // 同一個交期只算一次工作天（一個月裡交期重複度很高）
     $exCli = kpi_as_oo_excl_clients($db, $params, $rules);
     $bind = [$ym];
     $sql = "SELECT ot.Order_id, ot.Order_oo, ot.Client_name, ot.Client_name_ID, ot.d_id, ot.d_id_ID, ot.Qty,
@@ -1150,7 +1162,12 @@ function kpi_as_order_bind_rows(PDO $db, int $year, int $month, array $params, a
             $r['ship_date'] = $ds ? min($ds) : '';
             $r['ship_src']  = $ds ? 'bind' : '';
             $r['due']       = substr((string)$r['Delivery_date'], 0, 10);
-            $r['ontime']    = ($r['ship_date'] !== '' && $r['ship_date'] <= $r['due']);
+            // 判定用的截止日＝交期＋寬限工作天（寬限 0 時就是交期本身）
+            if (!isset($dlCache[$r['due']]))
+                $dlCache[$r['due']] = $grace > 0 ? kpi_as_add_workdays($db, $r['due'], $grace) : $r['due'];
+            $r['deadline']  = $dlCache[$r['due']];
+            $r['grace']     = $grace;
+            $r['ontime']    = ($r['ship_date'] !== '' && $r['ship_date'] <= $r['deadline']);
             $rows[] = $r;
         }
     } catch (Throwable $e) {}
@@ -1172,7 +1189,7 @@ function kpi_as_order_bind_rows(PDO $db, int $year, int $month, array $params, a
         foreach ($rows as $r) if ((int)$r['d_id_ID'] > 0) $ids[(int)$r['d_id_ID']] = 1;
         $shipBy = [];
         if ($ids) {
-            $from = date('Y-m-d', strtotime($ms . ' -120 days'));
+            $from = date('Y-m-d', strtotime($ms . ' -120 days'));   // 交期當月起往前 120 天
             foreach (array_chunk(array_keys($ids), 500) as $chunk) {
                 $in = implode(',', array_fill(0, count($chunk), '?'));
                 try {
@@ -1191,13 +1208,13 @@ function kpi_as_order_bind_rows(PDO $db, int $year, int $month, array $params, a
             }
         }
         foreach ($rows as &$r) {
-            if ($r['ship_date'] !== '') { $r['ontime'] = ($r['ship_date'] <= $r['due']); continue; }
+            if ($r['ship_date'] !== '') { $r['ontime'] = ($r['ship_date'] <= $r['deadline']); continue; }
             $h = $shipBy[(int)$r['d_id_ID']] ?? null;
             if (!$h) { $r['ontime'] = false; continue; }
             $r['ship_date'] = $h['d'];
             $r['ship_src']  = 'dsetting';
             $r['hint']      = $h;
-            $r['ontime']    = ($h['d'] <= $r['due']);
+            $r['ontime']    = ($h['d'] <= $r['deadline']);
         }
         unset($r);
     }
@@ -2260,8 +2277,10 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
             if ($mode === 'bind' || $mode === 'erp_ship' || $mode === 'ship') {
                 $rows = kpi_as_order_bind_rows($db, $year, $month, $params, [], $mode);
                 $cmapB = kpi_as_client_id_map($db);
+                $grace = kpi_as_oo_grace_days($params);
                 $out['cols'] = [['k'=>'oo','t'=>'訂單編號'], ['k'=>'client','t'=>'客戶'], ['k'=>'d_id','t'=>'料號'],
                                 ['k'=>'qty','t'=>'訂單量'], ['k'=>'dd','t'=>'交期']];
+                if ($grace > 0) $out['cols'][] = ['k'=>'dl','t'=>'寬限後截止日'];
                 // C 才有出貨日（來自綁定）；B 讀的是 ERP 未交清單，沒有出貨日期
                 if ($mode === 'bind' || $mode === 'ship') $out['cols'][] = ['k'=>'sd','t'=>'出貨日'];
                 $out['cols'][] = ['k'=>'ship','t'=>'疑似已出貨(未綁)', 'p'=>0];
@@ -2280,8 +2299,12 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     if ($r['ship_date'] === '') $noneN++; else $lateN++;
                     if ($mode === 'ship') {
                         if ($r['ship_date'] !== '') {
-                            $late = (int)round((strtotime($r['ship_date']) - strtotime($r['due'])) / 86400);
-                            $why = '這個料號最早的出貨日 ' . eg_fmt_date($r['ship_date']) . ' 晚於交期 ' . $late . ' 天';
+                            $late = (int)round((strtotime($r['ship_date']) - strtotime($r['deadline'])) / 86400);
+                            $why = '這個料號最早的出貨日 ' . eg_fmt_date($r['ship_date'])
+                                 . ($grace > 0
+                                    ? ('，晚於寬限後截止日 ' . eg_fmt_date($r['deadline']) . ' ' . $late . ' 天'
+                                       . '（交期 ' . eg_fmt_date($r['due']) . '＋寬限 ' . $grace . ' 個工作天）')
+                                    : ('，晚於交期 ' . $late . ' 天'));
                             $fix = '確認交期是否已與客戶談妥延後（可到訂單追蹤更新交期）；'
                                  . '若這一張其實對到的是別批出貨，請到快速出貨把出貨單綁到訂單，'
                                  . '綁定之後判定就會以那一張為準。';
@@ -2301,8 +2324,12 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                              : ('若實際已出貨，請確認 ERP 的未交清單有沒有更新（這個模式讀的就是它）；'
                                 . '若客戶要求延後交期，請到訂單追蹤更新交期，這一筆就會改算到新的月份。');
                     } elseif ($r['ship_date'] !== '') {
-                        $late = (int)round((strtotime($r['ship_date']) - strtotime($r['due'])) / 86400);
-                        $why = '出貨日 ' . eg_fmt_date($r['ship_date']) . ' 晚於交期 ' . $late . ' 天';
+                        $late = (int)round((strtotime($r['ship_date']) - strtotime($r['deadline'])) / 86400);
+                        $why = '出貨日 ' . eg_fmt_date($r['ship_date'])
+                             . ($grace > 0
+                                ? ('，晚於寬限後截止日 ' . eg_fmt_date($r['deadline']) . ' ' . $late . ' 天'
+                                   . '（交期 ' . eg_fmt_date($r['due']) . '＋寬限 ' . $grace . ' 個工作天）')
+                                : ('，晚於交期 ' . $late . ' 天'));
                         $fix = '確認出貨日或交期是否登錄錯誤；若客戶同意延後，請到訂單追蹤更新交期，'
                              . '這一筆就會改算到新的月份；確實遲交的屬真實逾期，不必修改。';
                     } elseif ($hv) {
@@ -2318,6 +2345,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                         'key'  => (string)$r['Order_id'],
                         'vals' => ['oo'=>(string)$r['Order_oo'], 'client'=>$dims['client'], 'd_id'=>$dims['part'],
                                    'qty'=>(string)(0 + $r['Qty']), 'dd'=>eg_fmt_date($r['due']),
+                                   'dl'=>($grace > 0 ? eg_fmt_date($r['deadline']) : ''),
                                    'sd'=>($r['ship_date'] !== '' ? eg_fmt_date($r['ship_date']) : '—'),
                                    'ship'=>($hv ? ($hv['no'] . '（' . eg_fmt_date($hv['d']) . '）') : '')],
                         'dims' => $dims,
@@ -2328,10 +2356,15 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     ];
                 }
                 if ($mode === 'ship') {
-                    $out['note'] = '未交判定方式：D｜以出貨單反推（用料號主檔 id 對應 order_track.d_id_ID ↔ is_list.d_setting_id，'
+                    $graceTxt = $grace > 0
+                        ? ('寬限 ' . $grace . ' 個工作天（交期之後 ' . $grace . ' 個工作天內交貨仍算準時）。')
+                        : '未設寬限（要在交期當天或之前交貨才算準時，可在 KPI 設定頁的「寬限工作天數」調整）。';
+                    $out['note'] = $graceTxt
+                                 . '未交判定方式：D｜以出貨單反推（用料號主檔 id 對應 order_track.d_id_ID ↔ is_list.d_setting_id，'
                                  . '不必做出貨綁定、也不必 ERP 未交清單）。料號主檔 id 本身就綁定客戶，所以不必再比客戶名稱'
                                  . '（舊訂單的客戶名稱寫法常跟出貨單不一樣）。'
-                                 . '分母＝本月交期的訂單（訂單追蹤，已排除取消的訂單），分子＝該料號最早出貨日不晚於交期。'
+                                 . '分母＝本月交期的訂單（訂單追蹤，已排除取消的訂單），分子＝該料號最早出貨日不晚於'
+                                 . ($grace > 0 ? '寬限後截止日' : '交期') . '。'
                                  . '有做出貨綁定的那幾張一律以綁定的為準。'
                                  . '本月未準時 ' . ($lateN + $noneN) . ' 筆：晚於交期 ' . $lateN . ' 筆、查不到出貨紀錄 ' . $noneN . ' 筆。';
                     $out['note_print'] = '本表為本月交期、未於交期前出貨之訂單明細。';
@@ -2339,12 +2372,15 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     return $out;
                 }
                 $out['note'] = ($mode === 'bind'
-                                ? ('未交判定方式：C｜以網頁上的出貨綁定為準。分母＝本月交期的訂單'
-                                   . '（訂單追蹤，已排除取消的訂單），分子＝有綁到出貨單且出貨日不晚於交期。')
+                                ? (($grace > 0 ? ('寬限 ' . $grace . ' 個工作天。') : '')
+                                   . '未交判定方式：C｜以網頁上的出貨綁定為準。分母＝本月交期的訂單'
+                                   . '（訂單追蹤，已排除取消的訂單），分子＝有綁到出貨單且出貨日不晚於'
+                                   . ($grace > 0 ? '寬限後截止日' : '交期') . '。')
                                 : ('未交判定方式：B｜以 ERP 未交清單為準，逐筆對回訂單（同客戶＋同料號，一張未交只佔用一張訂單）。'
                                    . '分母＝本月交期的訂單（訂單追蹤，已排除取消的訂單），'
                                    . '分子＝ERP 未交清單上沒有的（＝ERP 認為已交）。'
                                    . 'ERP 的未交清單沒有出貨日期，所以這個模式只判得出「到期了還完全沒出」，'
+                                   . '寬限工作天數在這個模式下沒有作用（沒有出貨日就無從寬限），'
                                    . '判不出「是不是在交期前交的」——要判那個請改用 C（但需要先把出貨單綁到訂單）。'))
                              . '本月未準時 ' . ($lateN + $noneN) . ' 筆'
                              . ($mode === 'bind' ? ('：遲交 ' . $lateN . ' 筆、查不到出貨單 ' . $noneN . ' 筆') : '')
