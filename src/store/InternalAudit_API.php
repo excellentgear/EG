@@ -508,6 +508,11 @@ case 'case_save': {
         }
     }
 
+    /* 製表日期不可晚於通知日期（2026-09-18 使用者要求；簽章與製表印在同一張紙上，規則一致）。
+       前端把欄位的 max 設成通知日期，這裡同規則再擋一次（鐵律8）。 */
+    $mkd = iaDate($_POST['maker_date'] ?? '');
+    if ($mkd && $mkd > $nd) jerr('製表日期不可晚於通知日期（' . $nd . '）');
+
     $year   = (int)substr($nd, 0, 4);
     /* 這張單的業務日期＝稽核起日（沒填就退回通知日期）。人員的在職狀態、部門職稱與資格任期
        一律以它為準（ai-rules/22）——否則補 2025 年的歷史單據時，當時在職現已離職的人一律
@@ -699,7 +704,8 @@ case 'case_save': {
 case 'case_complete': {
     iaReqAdmin($perms);
     $cid = (int)($_POST['case_id'] ?? 0);
-    try { $r = ia_case_complete($db, $cid, $uid, $uname); }
+    $sd  = iaDate($_POST['sign_date'] ?? '') ?: '';   // 簽章／製表日期，不可晚於通知日期（lib 內再驗一次）
+    try { $r = ia_case_complete($db, $cid, $uid, $uname, $sd); }
     catch (Throwable $e) { jerr($e->getMessage()); }
     jout($r);
 }

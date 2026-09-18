@@ -552,11 +552,14 @@ $roleLabel = ia_role_label($perms);
                 <b>勾選通知單那一個並儲存時，已經完成但還沒有章的通知單會一次補上核准與審查</b>，並告訴您補了哪幾張——
                 已經有人簽過的一律不動）。
                 <b>還沒按完成的通知單，列印時核准／審查兩格一律留白</b>——沒完成就印出簽好的章是不實的簽章。
+                按完成時會請您確認<b>簽章日期</b>：預設＝<b>通知日期</b>，補歷史紙本時可以往前挑，但<b>不可以晚於通知日期</b>
+                （通知單是先簽好才發出去的）；這個日期同時會成為<b>製表日期</b>。
                 要再修改只有<b>內稽管理員</b>按「取消完成」並輸入<b>操作確認密碼</b>；取消完成會把自動簽核蓋上的核准／審查一併清掉
                 （內容要改，那兩個章就不成立了）。已結案的單不給取消完成，請先把狀態改回執行中。</li>
             <li><b>建立查檢表選了「所屬件號」之後</b>：建立日期會<b>自動帶成該件號的受稽日期</b>（跨好幾天的通知單會多一個日期下拉讓您挑，挑哪一天就只列那一天的內容）；
                 下方直接列出<b>那一天要稽核哪些單位、起始主過程是什麼</b>，不必另外開通知單查；
-                <b>稽核人也會自動帶成該件號上的稽核員</b>，下拉裡仍然是「<b>該稽核日期當時有稽核員資格</b>」的人，可以自己改成別人。</li>
+                <b>稽核人也會自動帶成該件號上的稽核員</b>，下拉裡仍然是「<b>該稽核日期當時有稽核員資格</b>」的人，可以自己改成別人。
+                日期是依<b>該件號的稽核期間</b>帶的（受稽單位列上的受稽日期若與稽核期間對不起來，會直接標紅字告訴您）。</li>
             <li><b>受稽時間可以自動排</b>：「時間」欄的表頭填<b>開始時間</b>（結束時間可留空）後按<b>「自動排」</b>，就依<b>間隔</b>（預設 30 分，可改）往下排每一列，
                 而且<b>會自動跳過午休 12:00~13:00</b>（算出來落在午休內的一律改成 13:00 再往後排）。
                 之後<b>手動改中間任何一列的時間，後面幾列會自動順延</b>（前面的不動）；想逐列自己填就把表頭的「改一列就自動順延後面」取消勾選。
@@ -758,7 +761,9 @@ $roleLabel = ia_role_label($perms);
 <?php if ($perms['canAdmin']): ?>
                 <label>製表人</label>
                 <div><select id="cMaker" data-eg-filter="輸入姓名篩選…"></select></div>
-                <label>製表日期</label><div><input type="date" id="cMakerDate"></div>
+                <!-- 製表日期不可晚於通知日期（與簽章同一張紙、同一條規則）；後端存檔時同規則再擋一次 -->
+                <label>製表日期</label>
+                <div><input type="date" id="cMakerDate"><div class="err-msg" id="errCMakerDate"></div></div>
 <?php endif; ?>
                 <label>備註</label><div class="full"><textarea id="cRemark"></textarea></div>
             </div>
@@ -1900,15 +1905,25 @@ $('#btnPlanDelete').on('click', function(){
 
 /* 通用「輸入業務日期後確認」跳窗 */
 var DATE_CB = null;
-function askDate(title, hint, cb, withNote){
+/* opt（2026-09-18 新增）：{def:預設日期, max:不可晚於這一天, maxMsg:超過時要講的話}
+   ——稽核通知單的簽章日期不可晚於通知日期，這個限制要在**挑日期的當下**就擋，
+   不要等按下去才被後端退回。 */
+var DATE_OPT = {};
+function askDate(title, hint, cb, withNote, opt){
+    DATE_OPT = opt || {};
     $('#dateTitle').text(title); $('#dateHint').text(hint||'');
-    $('#dateVal').val(META.today); $('#dateNote').val('');
+    $('#dateVal').val(DATE_OPT.def || META.today).attr('max', DATE_OPT.max || null);
+    $('#dateNote').val('');
     $('#dateNoteLab,#dateNoteWrap').toggle(!!withNote);
     DATE_CB = cb; openMask('dateMask');
 }
 $('#btnDateOk').on('click', function(){
     var d = $('#dateVal').val();
     if (!d) { alert('請填業務日期'); return; }
+    if (DATE_OPT.max && d > DATE_OPT.max) {
+        alert(DATE_OPT.maxMsg || ('日期不可晚於 ' + dispDate(DATE_OPT.max)));
+        return;
+    }
     closeMask('dateMask');
     if (DATE_CB) DATE_CB(d, $('#dateNote').val());
 });
@@ -2040,13 +2055,21 @@ $('#btnCaseComplete').on('click', function(){
                + (String((META.settings||{}).ia_auto_sign_case||'') === '1'
                     ? '・目前已開啟稽核通知單的自動簽核：按下去會一併完成審查與核准'
                     : '・目前沒有開啟稽核通知單的自動簽核，核准／審查兩格會留白（可在「設定」裡開啟）'))) return;
-    $.post(API, {action:'case_complete', case_id:CASE_ID}, function(res){
-        if (!res.ok) { alert(res.error||'完成失敗'); return; }
-        alert('已完成' + (+res.auto_signed
-            ? ('，並已自動簽核：\n核准 '+(res.approver||'（未設定）')+'　審查 '+(res.reviewer||'（未設定）'))
-            : '。\n（目前沒有開啟自動簽核，核准／審查兩格留白，請依紙本流程簽核）'));
-        loadCases(function(){ openCase(CASE_ID); });
-    }, 'json');
+    /* 簽章日期（2026-09-18 使用者要求）：**一律是通知日期或更早**。
+       通知單是先簽好才發出去的，章蓋在通知日期之後紙本上不成立；
+       補歷史紙本時可以往前挑，但不可以往後。這個日期同時套到自動簽章與製表日期。 */
+    var nd = $('#cNotify').val() || '';
+    askDate('完成稽核通知單', '這個日期會印在核准／審查的章上，也會成為製表日期。'
+          + (nd ? ('預設＝通知日期 ' + dispDate(nd) + '；可以往前挑，但不可以晚於通知日期。') : ''),
+        function(d){
+            $.post(API, {action:'case_complete', case_id:CASE_ID, sign_date:d}, function(res){
+                if (!res.ok) { alert(res.error||'完成失敗'); return; }
+                alert('已完成（簽章／製表日期 '+dispDate(d)+'）' + (+res.auto_signed
+                    ? ('，並已自動簽核：\n核准 '+(res.approver||'（未設定）')+'　審查 '+(res.reviewer||'（未設定）'))
+                    : '。\n（目前沒有開啟自動簽核，核准／審查兩格留白，請依紙本流程簽核）'));
+                loadCases(function(){ openCase(CASE_ID); });
+            }, 'json');
+        }, false, {def: nd, max: nd, maxMsg: '簽章／製表日期不可晚於通知日期（' + (nd ? dispDate(nd) : '') + '）'});
 });
 $('#btnCaseReopen').on('click', function(){
     $('#caseReopenPw').val(''); clearErrs($('#caseReopenMask')); openMask('caseReopenMask');
@@ -2208,6 +2231,17 @@ $(document).on('click', '#btnAllDue',     function(){ caseFillAllDate('improve_d
 
 /* 改了稽核起日／通知日期＝業務日期換了，人員清單（在職狀態、職稱、資格任期）要跟著換。
    不換的話畫面上還是舊日期那批人，挑完存檔後端會用新日期再驗一次＝存不進去又看不出原因。 */
+/* 製表日期不可晚於通知日期：改任一邊都即時檢查並把欄位上限設好（前端擋一次、後端再擋一次） */
+function caseSyncMakerDateMax(){
+    var nd = $('#cNotify').val() || '';
+    $('#cMakerDate').attr('max', nd || null);
+    var md = $('#cMakerDate').val() || '';
+    var bad = !!(nd && md && md > nd);
+    fieldErr($('#cMakerDate'), 'errCMakerDate', bad ? ('不可晚於通知日期（' + dispDate(nd) + '）') : '');
+    return !bad;
+}
+$(document).on('change', '#cNotify, #cMakerDate', caseSyncMakerDateMax);
+
 $(document).on('change', '#cFrom, #cNotify', function(){
     if (!$('#caseMask').hasClass('on')) return;
     var d = caseBizDate(null);
@@ -2568,16 +2602,19 @@ $('#btnCheckNew').on('click', function(){
     // 清單上已經篩了種類就沿用（使用者多半是在那個種類的清單上按下「建立查檢表」）
     if ($('#checkKind').val()) $('#nkKind').val($('#checkKind').val());
     $('#nkDate').val(META.today);
+    nkSelBusy('#nkAuditor', true);
     peopleAsof(META.today, function(){
         $('#nkAuditor').html(postOptions(META.auditors, '', META.me.id, '（未指定）'));
+        nkSelBusy('#nkAuditor', false);
     });
     /* 件號下拉自己去撈（點開即刷新）：CASES 只有在使用者「去過稽核通知單分頁」時才有值，
        直接從查檢表分頁按建立的話，下拉會是空的——這是選了件號才帶日期／主過程的前提。 */
     $('#nkCase').html(caseOptions(''));
     NK_CASE = null; $('#nkCaseDay').removeData('case').empty(); nkRenderCaseInfo();
+    nkSelBusy('#nkCase', true);
     $.getJSON(API, {action:'case_list', year:YEAR}, function(res){
         if (res && res.ok) { CASES = res.rows || []; $('#nkCase').html(caseOptions('')); }
-    });
+    }).always(function(){ nkSelBusy('#nkCase', false); });
     $('#nkTitle').val(''); $('#nkFilter').val('');
     clearErrs($('#checkNewMask'));
     nkKindChanged();
@@ -2606,24 +2643,68 @@ $('#nkDate').on('change', function(){
     if ($('#nkKind').val()==='kpi') nkKindChanged();      // 稽核年度＝建立日期的前一年，日期一改要跟著換題庫
     // 稽核人清單以**稽核日期**當時的在職狀態與職稱為準（ai-rules/22）
     var cur = $('#nkAuditor').val();
+    nkSelBusy('#nkAuditor', true);
     peopleAsof($(this).val(), function(){
         $('#nkAuditor').html(postOptions(META.auditors, cur, META.me.id, '（未指定）'));
+        nkSelBusy('#nkAuditor', false);
     });
 });
+/* 下拉在等 AJAX 時不要變成「零選項」（2026-09-18 使用者回報「下拉按鈕突然不能按，一下後又好了」）。
+   量測結果：#nkAuditor、#nkSrc 在資料回來之前各有約 150~250ms 的空窗，
+   使用者剛好在那一瞬間點下去，看到的就是一個打不開／空的清單。
+   作法：空窗期放一個「載入中…」並暫時停用，資料回來再換成真正的選項——
+   狀態明確，也不會讓人以為壞掉。**只在本來就沒有選項時才動它**，
+   已經有選項的下拉一律保持可用（換選項用整批取代，不留空窗）。 */
+function nkSelBusy(sel, on){
+    var $s = $(sel);
+    if (!$s.length) return;
+    if (on) {
+        if (!$s.find('option').length) $s.html('<option value="">載入中…</option>').prop('disabled', true);
+    } else {
+        $s.prop('disabled', false);
+    }
+}
+
 /* ---------- 所屬件號 → 受稽日期／當天稽核內容（2026-09-18 使用者要求） ----------
    ①**建立日期自動＝該件號的受稽日期**；一張通知單常常跨好幾天，所以多天時另外給一個下拉讓使用者挑
      （挑哪一天，下面就只列那一天要稽核的單位，建立日期也跟著換）。
    ②列出那一天的**稽核起始主過程**與**受稽單位**——建查檢表時要照這個挑表單，
      不然使用者得另外開通知單才知道這次要查什麼。 */
 var NK_CASE = null;
+/* 這張通知單「可以挑哪幾天」（2026-09-18 使用者指定：**以件號的稽核期間為準**）。
+   為什麼不是以受稽單位列上的受稽日期為準：那一欄常常沒填，填了也可能跟表頭的稽核期間對不起來
+   （實際資料：251203001 的稽核期間是 12/03，五個受稽單位卻都填 12/04）。
+   稽核期間才是這張通知單「哪幾天要去稽核」的正式來源。
+   退路：沒有稽核期間才用受稽單位列上的日期，再沒有才用通知日期。
+   期間跨很多天時最多列 31 天，避免下拉爆掉。 */
 function nkCaseDays(c){
-    var days = [];
-    ((c && c.depts) || []).forEach(function(d){
+    if (!c) return [];
+    var days = [], from = String(c.audit_from || '').substr(0, 10), to = String(c.audit_to || '').substr(0, 10);
+    if (from) {
+        var cur = new Date(from + 'T00:00:00'), end = new Date((to || from) + 'T00:00:00'), n = 0;
+        while (cur <= end && n < 31) {
+            days.push(cur.getFullYear() + '-' + ('0'+(cur.getMonth()+1)).slice(-2) + '-' + ('0'+cur.getDate()).slice(-2));
+            cur.setDate(cur.getDate() + 1); n++;
+        }
+        return days;
+    }
+    (c.depts || []).forEach(function(d){
         var v = String(d.audited_date || '').substr(0, 10);
         if (v && days.indexOf(v) < 0) days.push(v);
     });
-    days.sort();
-    return days;
+    if (days.length) { days.sort(); return days; }
+    var nd = String(c.notify_date || '').substr(0, 10);
+    return nd ? [nd] : [];
+}
+/** 挑到的那一天有哪些受稽單位；**當天一個都對不上時退回全部列**（並由呼叫端標出不一致） */
+function nkRowsOfDay(c, pick){
+    var all = (c && c.depts) || [];
+    if (!pick) return {rows: all, mismatch: false};
+    var hit = all.filter(function(d){ return String(d.audited_date || '').substr(0, 10) === pick; });
+    if (hit.length) return {rows: hit, mismatch: false};
+    // 有填受稽日期、卻沒有一列落在這一天＝資料不一致，要講出來而不是顯示空白
+    var dated = all.filter(function(d){ return !!String(d.audited_date || '').substr(0, 10); });
+    return {rows: all, mismatch: dated.length > 0};
 }
 function nkRenderCaseInfo(){
     var c = NK_CASE;
@@ -2645,16 +2726,18 @@ function nkRenderCaseInfo(){
     // 建立日期自動跟著受稽日期（使用者仍可自己改）
     if (pick && $('#nkDate').val() !== pick) { $('#nkDate').val(pick).trigger('change'); }
 
-    var rows = ((c.depts) || []).filter(function(d){
-        return !pick || String(d.audited_date || '').substr(0, 10) === pick;
-    });
+    var got = nkRowsOfDay(c, pick), rows = got.rows;
     /* 版面（2026-09-18 使用者定調）：**不要摘要那一行、直接展開明細**。
        一列一個單位、小字，限制高度可捲動（這個跳窗下半部還有挑題區要用空間）。 */
     if (!rows.length) {
         $('#nkCaseInfo').show().html('<span style="color:#a08356;">這一天沒有受稽單位（請確認通知單上的受稽日期）</span>');
         return;
     }
-    $('#nkCaseInfo').show().html(
+    var warn = got.mismatch
+        ? ('<div style="color:#C4442D;margin-bottom:2px;">⚠ 這張通知單的受稽單位列填的受稽日期，'
+           + '與表頭的稽核期間（' + dispDate(pick) + '）對不起來，下面先列出全部受稽單位。</div>')
+        : '';
+    $('#nkCaseInfo').show().html(warn +
         '<div style="max-height:110px;overflow:auto;font-size:12px;line-height:1.7;">'
         + rows.map(function(d){
               return '<div>' + esc(d.audited_time || '　　') + '　<b>' + esc(d.dept_name || '') + '</b>　'
@@ -2682,9 +2765,7 @@ function nkPickAuditorFromCase(){
     var c = NK_CASE;
     if (!c) return;
     var pick = $('#nkCaseDay').val() || (nkCaseDays(c)[0] || '');
-    var rows = ((c.depts) || []).filter(function(d){
-        return !pick || String(d.audited_date || '').substr(0, 10) === pick;
-    });
+    var rows = nkRowsOfDay(c, pick).rows;
     var key = '';
     for (var i = 0; i < rows.length && !key; i++) {
         var ppl = rows[i].auditors || [];
@@ -2698,15 +2779,18 @@ function nkPickAuditorFromCase(){
     }
     if (!key) return;
     // 稽核日期換了，候選清單也要換（資格與職稱都依當天判定）
+    nkSelBusy('#nkAuditor', true);
     peopleAsof($('#nkDate').val(), function(){
         var cur = $('#nkAuditor').val();
         $('#nkAuditor').html(postOptions(META.auditors, key, String(key).split(':')[0], '（未指定）'));
         if (!$('#nkAuditor').val() && cur) $('#nkAuditor').val(cur);
+        nkSelBusy('#nkAuditor', false);
     });
 }
 
 /** AS 查檢表的「自動判定來源」下拉：已建立的系統稽核紀錄表 */
 function loadSrcChecks(){
+    nkSelBusy('#nkSrc', true);
     $.getJSON(API, {action:'check_list', kind:'system'}, function(res){
         var h = '<option value="">（不自動判定，合格／不合格留白自己填）</option>';
         (res.rows||[]).forEach(function(r){
@@ -2715,7 +2799,7 @@ function loadSrcChecks(){
                      +'（'+r.item_cnt+' 項，不合格 '+r.ng_cnt+'）')+'</option>';
         });
         $('#nkSrc').html(h);
-    });
+    }).always(function(){ nkSelBusy('#nkSrc', false); });
 }
 function loadBank(){
     var kind = $('#nkKind').val();

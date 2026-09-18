@@ -1662,7 +1662,7 @@ function ia_case_is_done(array $c): bool
  *
  * @return array ['status','auto_signed','approver','reviewer']
  */
-function ia_case_complete(PDO $db, int $caseId, int $uid, string $uname): array
+function ia_case_complete(PDO $db, int $caseId, int $uid, string $uname, string $signDate = ''): array
 {
     $st = $db->prepare("SELECT * FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
     $st->execute([$caseId]);
@@ -1675,7 +1675,16 @@ function ia_case_complete(PDO $db, int $caseId, int $uid, string $uname): array
     $q->execute([$caseId]);
     if ((int)$q->fetchColumn() === 0) throw new RuntimeException('這張通知單還沒有任何受稽單位，不能完成');
 
-    $bizDate = (string)($c['maker_date'] ?: ($c['notify_date'] ?: ia_today($db)));
+    /* 簽章日期（2026-09-18 使用者要求）：**一律是通知日期或更早**。
+       通知單是「先簽好才發出去」的，簽章或製表日期比通知日期還晚，紙本上根本不成立
+       （實際看到過通知日期 2025.11.03、章卻蓋 2025.12.08）。
+       使用者可以在按「完成」時指定更早的日期（補歷史紙本用），但**不可以晚於通知日期**；
+       沒指定就用通知日期。這個日期同時套用到自動簽章與**製表日期**。 */
+    $notify = (string)($c['notify_date'] ?: ia_today($db));
+    $bizDate = preg_match('/^\d{4}-\d{2}-\d{2}$/', $signDate) ? $signDate : $notify;
+    if ($bizDate > $notify) {
+        throw new RuntimeException('簽章／製表日期不可晚於通知日期（' . eg_fmt_date($notify) . '）');
+    }
     $auto = ia_auto_sign_on($db, 'case');       // 通知單有自己的開關，不跟著年度計畫表走
     $ap = $rv = null;
     if ($auto) {
@@ -1690,8 +1699,12 @@ function ia_case_complete(PDO $db, int $caseId, int $uid, string $uname): array
     try {
         // 「已發出」＝這張通知單完成、可以發給受稽單位了；executed 旗標維持原樣
         //（年度計畫表的 ◎ 是看 executing／closed，完成本身不代表已經去稽核了）
+        /* 製表日期一併校正成這個日期——它跟簽章印在同一張紙上，兩個日期的規則必須一致。
+           製表**人**不動（那是誰填的表，與完成無關）；從來沒設過製表人時順手記成按下完成的人。 */
         $db->prepare("UPDATE ia_case SET status='issued', completed_at=NOW(), completed_by=?, completed_by_name=?,
-                          updated_at=NOW() WHERE case_id=?")->execute([$uid ?: null, $uname, $caseId]);
+                          maker_date=?, maker_id=COALESCE(maker_id,?), maker_name=COALESCE(maker_name,?),
+                          updated_at=NOW() WHERE case_id=?")
+           ->execute([$uid ?: null, $uname, $bizDate, $uid ?: null, $uname, $caseId]);
         if ($auto) {
             // 自動簽核的時間戳依 ai-rules/21 錯開且不跨日；日期一律用單據的業務日期
             $base = $bizDate . ' 09:00:00';
@@ -1740,7 +1753,10 @@ function ia_case_autosign_backfill(PDO $db, int $uid, string $uname): array
                              approver_id=?, approver_name=?, approver_date=?, approver_at=?, updated_at=NOW()
                           WHERE case_id=?");
     foreach ($rows as $c) {
-        $biz = (string)($c['maker_date'] ?: ($c['notify_date'] ?: ia_today($db)));
+        // 補章也守同一條規則：不可晚於通知日期（ia_case_complete 同規則）
+        $notify = (string)($c['notify_date'] ?: ia_today($db));
+        $biz = (string)($c['maker_date'] ?: $notify);
+        if ($biz > $notify) $biz = $notify;
         $ctx = ['leader_id' => (int)($c['leader_id'] ?? 0), 'leader_name' => (string)($c['leader_name'] ?? ''),
                 'maker_id' => (int)($c['maker_id'] ?? 0), 'maker_name' => (string)($c['maker_name'] ?? ''),
                 'biz_date' => $biz];
