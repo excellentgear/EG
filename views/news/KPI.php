@@ -178,6 +178,11 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         .vio-rules .vr-chip { display:inline-block; background:#F7E0BD; color:#8A5A2B; border:1px solid #E8D5B5;
             border-radius:10px; padding:1px 8px; margin:2px 4px 2px 0; }
         .vio-rules .vr-chip .vr-x { cursor:pointer; color:#DD5138; margin-left:4px; font-weight:bold; }
+        .vio-rules .vr-chip.fixed { background:#F1ECE3; color:#8a6d45; border-color:#E3D9C7; }
+        .vio-rules .vr-chip .vr-by { color:#a08356; font-size:11px; margin-left:5px; }
+        .vio-note .vio-exinfo { color:#a08356; margin-left:6px; }
+        .vr-list .vr-it.dis { color:#a89a86; cursor:default; background:#F7F4EE; }
+        .vr-list .vr-it.dis:hover { background:#F7F4EE; }
         .vio-seltip { font-size:11px; color:#a08356; margin-top:4px; }
         .vio-rules .vr-new { margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
         .vio-rules .vr-new select, .vio-rules .vr-new input[type=text] { height:26px; border:1px solid #D8BE93;
@@ -796,7 +801,7 @@ var VIO = null;
 function openVio(ri, m){
     var r = MATRIX.rows[ri];
     VIO = {ri:ri, iid:r.indicator_id, m:m, row:r, data:null, sel:{}, filt:{}, kw:'', kind:'bad',
-           rdim:'', rkw:'', rsel:[], rfound:[], rbusy:0};
+           rdim:'', rkw:'', rsel:[], rfound:[], rbusy:0, rlast:null};
     $('#vioTitle').text('不符合標準的明細');
     $('#vioBody').html('<div style="padding:16px;color:#8a6d45;">載入中…</div>');
     $('#vioFoot').empty();
@@ -884,6 +889,10 @@ function vioRuleMatch(o, ws){
 function vioRenderRuleList(){
     var dm = vioDimById($('#vrDim').val()), ws = vioRuleWords(), h = '', n = 0, total = 0;
     var picked = {}; (VIO.rsel || []).forEach(function(v){ picked[v] = 1; });
+    // 已經被「指標設定」或既有規則排除掉的，標出來不讓人重複設定
+    var dimK = $('#vrDim').val(), done = {};
+    ((VIO.data && VIO.data.param_excl) || []).forEach(function(x){ if (x.dim === dimK) done[x.val] = '指標設定'; });
+    ((VIO.data && VIO.data.rules) || []).forEach(function(x){ if (x.dim === dimK) done[x.val] = '已有規則'; });
     var cap = 60, seen = {};
     // 先列這個月明細裡真的出現過的（最常用），再把主檔查到的補在後面
     var list = [];
@@ -902,10 +911,12 @@ function vioRenderRuleList(){
         total++;
         if (n >= cap) return;
         n++;
-        h += '<div class="vr-it' + (picked[o.v] ? ' on' : '') + '" data-v="' + esc(o.v) + '">'
+        var dn = done[o.v];
+        h += '<div class="vr-it' + (picked[o.v] ? ' on' : '') + (dn ? ' dis' : '') + '"'
+           + (dn ? '' : (' data-v="' + esc(o.v) + '"')) + '>'
            + esc(o.v) + (o.id ? ('<span class="vr-id">' + esc(o.id) + '</span>') : '')
-           + '<span class="vr-src">' + esc(o.src) + '</span>'
-           + (picked[o.v] ? '　✔ 已選' : '') + '</div>';
+           + '<span class="vr-src">' + esc(dn || o.src) + '</span>'
+           + (dn ? '　（已排除，不必重複設定）' : (picked[o.v] ? '　✔ 已選' : '')) + '</div>';
     });
     if (total > cap) h += '<div class="vr-none">還有 ' + (total - cap) + ' 筆沒顯示，請再輸入關鍵字縮小範圍。</div>';
     if (!total) {
@@ -928,8 +939,17 @@ function vioRenderRuleList(){
 function vioRulesHtml(){
     var d = VIO.data, h = '';
     var rs = d.rules || [], lb = d.dim_labels || {};
-    h += '<div class="vio-rules"><b>排除規則</b>（' + YEAR + ' 年度整年適用，只影響 KPI 計算、不會修改任何真實資料）：';
-    if (!rs.length) h += '<span style="color:#a08356;">目前沒有設定任何規則。</span>';
+    h += '<div class="vio-rules"><b>排除規則</b>（' + YEAR + ' 年度整年適用，只影響 KPI 計算、不會修改任何真實資料；'
+       + '<b>列印版不會出現任何排除資訊</b>）：';
+    // 指標設定（KPI 設定頁的參數）裡本來就排除掉的，也要列出來——
+    // 那幾筆資料根本不會出現在明細上，畫面上看不到就會有人再建一條一模一樣的規則
+    var pe = d.param_excl || [];
+    pe.forEach(function(x){
+        h += '<span class="vr-chip fixed" title="這是 KPI 設定頁的指標參數，要改請到 KPI 設定頁">'
+           + esc(lb[x.dim] || x.dim) + '：' + esc(x.val)
+           + '<span class="vr-by">指標設定</span></span>';
+    });
+    if (!rs.length && !pe.length) h += '<span style="color:#a08356;">目前沒有設定任何規則。</span>';
     rs.forEach(function(r){
         h += '<span class="vr-chip" title="' + esc(r.created_by_name || '') + ' '
            + esc((r.created_at || '').substr(0, 16)) + (r.reason ? ('｜' + esc(r.reason)) : '') + ' 設定">'
@@ -950,6 +970,8 @@ function vioRulesHtml(){
            + '<button id="vrAdd" class="warm">建立排除規則</button></div>'
            + '<div class="vr-list" id="vrList"></div>'
            + '<div class="vr-picked" id="vrPicked"></div>'
+           + (pe.length ? ('<div class="vio-seltip">標「指標設定」的是 KPI 設定頁參數裡本來就排除的，'
+                           + '這裡不必也不能再建一次；要改請到 KPI 設定頁。</div>') : '')
            + '<div class="vio-seltip">打代號或名稱都會列出主檔清單讓您挑（標「本月」的是這個月明細裡真的有的）；'
            + '點一下加入／再點一次取消。存進規則的一律是<b>名稱</b>，所以挑清單裡的項目才比對得到。'
            + '不必填原因，系統會記下是誰在什麼時候設定的。</div>';
@@ -970,6 +992,7 @@ function renderVio(){
     var exN = 0;
     d.rows.forEach(function(x){ if (+x.excluded) exN++; });
     h += '<div class="vio-note">'+esc(d.note||'')
+       + (d.note_excl ? ('<span class="vio-exinfo">'+esc(d.note_excl)+'</span>') : '')
        + '<br>不符合標準 <b>'+d.total+'</b> 筆'+(exN?('，其中 <b>'+exN+'</b> 筆已逐筆排除'):'')
        + (+d.rule_ex ? ('，另有 <b>'+d.rule_ex+'</b> 筆被排除規則排掉') : '')
        + (+d.truncated ? '（畫面最多顯示 500 筆）' : '')+'。</div>';
@@ -1135,14 +1158,20 @@ $(document).on('mouseup', function(){ VIODRAG = null; });
 /* ---------- 排除規則 ---------- */
 $(document).on('change', '#vioBody #vrDim', function(){
     VIO.rdim = $(this).val(); VIO.rsel = []; VIO.rfound = [];
-    vioRenderRuleList(); vioRuleLookup();
+    vioRenderRuleList(); vioRuleLookup(true);
 });
 var vioRkwT = null, vioRkwSeq = 0;
 /* 打字 → 先用本月資料即時篩（有反應），再向後端查主檔補進來。
    一定要查主檔：這個月沒出貨的客戶本來就不在明細裡，只靠本月資料會挑不到人。 */
-function vioRuleLookup(){
-    var dim = $('#vrDim').val(), q = $.trim(VIO.rkw || ''), seq = ++vioRkwSeq;
+function vioRuleLookup(force){
+    var dim = $('#vrDim').val(), q = $.trim(VIO.rkw || ''), seq;
     if (!dim) return;
+    // 只有維度或關鍵字真的變了才去查主檔：renderVio() 在每次篩選／打字都會重畫，
+    // 不擋的話每按一個鍵就多送一支查詢
+    var key = dim + ' ' + q;
+    if (!force && VIO.rlast === key) return;
+    VIO.rlast = key;
+    seq = ++vioRkwSeq;
     VIO.rbusy = 1;
     $.getJSON(API, {action:'excl_dim_search', indicator_id:VIO.iid, year:YEAR, dim:dim, q:q}, function(res){
         if (seq !== vioRkwSeq) return;              // 打字很快時只採用最後一次的結果
@@ -1172,7 +1201,9 @@ $(document).on('click', '#vioBody #vrFree', function(e){
     vioRenderRuleList();
 });
 $(document).on('click', '#vioBody .vr-it', function(){
+    if ($(this).hasClass('dis')) return;
     var v = $(this).attr('data-v');
+    if (!v) return;
     VIO.rsel = VIO.rsel || [];
     var i = VIO.rsel.indexOf(v);
     if (i >= 0) VIO.rsel.splice(i, 1); else VIO.rsel.push(v);
@@ -1193,7 +1224,8 @@ $(document).on('click', '#vioBody #vrAdd', function(){
     $.post(API, {action:'excl_rule_add', indicator_id:VIO.iid, year:YEAR,
                  dim:dim, vals:JSON.stringify(vals)}, function(res){
         if (!res.ok) { alert(res.error||'建立失敗'); return; }
-        alert('已建立 '+res.added+' 條排除規則，重算了 '+res.recalced+' 個月份。');
+        alert('已建立 '+res.added+' 條排除規則，重算了 '+res.recalced+' 個月份。'
+              + ((res.dupe && res.dupe.length) ? ('\n（'+res.dupe.join('、')+' 在指標設定裡本來就排除了，略過）') : ''));
         VIO.rsel = []; VIO.rkw = '';
         openVio(VIO.ri, VIO.m); loadMatrix(true);
     }, 'json').fail(function(x){ alert('建立失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status)); });
@@ -1225,37 +1257,28 @@ function vioPrintRowsHtml(d, r, m, cell){
             h += '（' + (cell.num === null ? '-' : (+cell.num)) + '／' + (cell.den === null ? '-' : (+cell.den)) + '）';
     }
     h += '　｜　列印：' + egFmtDate(new Date().toISOString().substr(0, 10)) + '</div></div>';
+    // 【列印版一個字都不可以出現排除資訊】使用者要求 2026-09-18：這份是要給稽核老師看的。
+    // 所以 note_excl（排除客戶…）、排除規則清單、排除人與排除原因、狀態欄的「已排除／規則排除」
+    // 一律不印；被排除的列直接不列出來——印出來的就是「排除後」真正計入的那幾筆。
     if (d.note) h += '<div class="pt-note">' + esc(d.note) + '</div>';
-    var rs = d.rules || [], lb = d.dim_labels || {};
-    if (rs.length) {
-        var rtx = rs.map(function(x){
-            return (lb[x.dim] || x.dim) + '：' + x.val + '（' + (x.created_by_name || '')
-                 + ' ' + (x.created_at || '').substr(0, 10) + '設定）';
-        }).join('；');
-        h += '<div class="pt-note">本年度排除規則：' + esc(rtx) + '</div>';
-    }
-    var shown = d.rows.filter(function(x){ return vioRowVisible(x); });
+    var shown = d.rows.filter(function(x){
+        if (x.rule_ex || +x.excluded) return false;        // 排除掉的不進列印版
+        return vioRowVisible(x);
+    });
+    var hasKind = shown.some(function(x){ return x.kind !== 'bad'; });
     h += '<table class="pt"><thead><tr><th style="width:34px;">#</th>';
     d.cols.forEach(function(c){ h += '<th>' + esc(c.t) + '</th>'; });
-    h += '<th style="width:74px;">狀態</th><th style="width:22%;">不符合的原因</th></tr></thead><tbody>';
-    if (!shown.length) h += '<tr><td colspan="' + (d.cols.length + 3) + '">這個月沒有符合條件的項目。</td></tr>';
+    if (hasKind) h += '<th style="width:56px;">類別</th>';
+    h += '<th style="width:22%;">不符合的原因</th></tr></thead><tbody>';
+    if (!shown.length) h += '<tr><td colspan="' + (d.cols.length + 3) + '">這個月沒有不符合標準的項目。</td></tr>';
     shown.forEach(function(x, i){
-        var st = '計入';
-        if (x.rule_ex) st = '規則排除（' + (lb[x.rule_ex] || x.rule_ex) + '）';
-        else if (+x.excluded) st = '已排除';
-        else if (x.kind === 'warn') st = '提醒';
-        else if (x.kind === 'info') st = '參考';
         h += '<tr><td>' + (i + 1) + '</td>';
         d.cols.forEach(function(c){ h += '<td class="l">' + esc(x.vals[c.k] == null ? '' : x.vals[c.k]) + '</td>'; });
-        h += '<td>' + esc(st) + '</td><td class="l">' + esc(x.why || '');
-        if (+x.excluded) h += '<br><span class="sm">排除：' + esc(x.ex_by || '') + ' '
-                            + esc((x.ex_at || '').substr(0, 16)) + (x.ex_reason ? ('｜' + esc(x.ex_reason)) : '') + '</span>';
-        h += '</td></tr>';
+        if (hasKind) h += '<td>' + (x.kind === 'warn' ? '提醒' : (x.kind === 'info' ? '參考' : '不符合')) + '</td>';
+        h += '<td class="l">' + esc(x.why || '') + '</td></tr>';
     });
     h += '</tbody></table>';
-    h += '<div class="pt-note">合計：不符合標準 ' + d.total + ' 筆'
-       + (+d.rule_ex ? ('、規則排除 ' + d.rule_ex + ' 筆') : '')
-       + '、本頁列出 ' + shown.length + ' 筆。</div>';
+    h += '<div class="pt-note">合計：不符合標準 ' + d.total + ' 筆，本頁列出 ' + shown.length + ' 筆。</div>';
     return h;
 }
 function vioPrintOpen(title, body){

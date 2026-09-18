@@ -793,6 +793,28 @@ function kpi_as_calc_dims(?string $calc): array {
     return [];
 }
 
+/**
+ * 指標「設定」裡本來就有的排除（params_json，例：準時出貨率的 exclude_clients）。
+ * 這些排除是寫在 SQL 條件裡的，所以那幾筆資料**根本不會出現在明細上**——
+ * 畫面上看不到就會有人再去建一條一模一樣的排除規則（使用者回報 2026-09-18），
+ * 所以一律回傳給前端當唯讀標示。要改這些請到 KPI 設定頁改參數，不在明細這裡改。
+ * 回傳 [['dim'=>'client','val'=>'寶嘉誠'], ...]
+ */
+function kpi_as_param_excl(?string $calc, array $params): array {
+    $out = [];
+    switch ((string)$calc) {
+        case 'order_ontime':
+            $vals = kpi_as_list(kpi_as_pv($params, 'exclude_clients', ['寶嘉誠','泳建']));
+            foreach ($vals as $v) $out[] = ['dim'=>'client', 'val'=>(string)$v];
+            break;
+        case 'drawing_ontime':
+            foreach (kpi_as_list(kpi_as_pv($params, 'exclude_clients', [])) as $v)
+                $out[] = ['dim'=>'client', 'val'=>(string)$v];
+            break;
+    }
+    return $out;
+}
+
 /** 這個指標這一年度的排除規則 → ['client'=>['甲','乙'], 'proc'=>[...]] */
 function kpi_as_excl_rules(PDO $db, int $iid, int $year): array {
     $out = [];
@@ -1740,9 +1762,10 @@ function kpi_as_detail_finish(array $out, array $rules): array {
         foreach ($vals as $v => $id) $os[] = ['v'=>(string)$v, 'id'=>(string)$id];
         $dims[] = ['k'=>$dk, 't'=>($labels[$dk] ?? $dk), 'opts'=>$os];
     }
-    $out['total']   = $bad;
-    $out['rule_ex'] = $ruleEx;
-    $out['dims']    = $dims;
+    $out['total']     = $bad;
+    $out['rule_ex']   = $ruleEx;
+    $out['dims']      = $dims;
+    $out['note_excl'] = (string)($out['note_excl'] ?? '');   // 排除相關的說明：畫面顯示、列印一律不印
     return $out;
 }
 
@@ -1822,21 +1845,56 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     ORDER BY ol.Delivery_date, ol.Order_id";
             $st = $db->prepare($sql);
             $st->execute(array_merge([$ym], $exCli));
+            $orows = $st->fetchAll(PDO::FETCH_ASSOC);
+            // 使用者回報 2026-09-18：未準時的一大原因是「其實出貨了，只是出貨單沒有跟訂單綁起來」
+            // （ERP 匯入的出貨多半沒帶訂單編號）。判定沿用既有口徑不動，但要把這種列指出來，
+            // 否則使用者只看到一整排「完全沒出貨」卻不知道該去哪裡處理。
+            // 認定：同客戶＋同料號，有一張「沒有綁訂單」的出貨單，出貨日不早於交期前 60 天。
+            $shipHint = [];
+            if ($orows) {
+                $cks = [];
+                foreach ($orows as $r) $cks[(string)$r['Client_name'] . "\x00" . (string)$r['d_id']] = 1;
+                $from = date('Y-m-d', strtotime($ms . ' -60 days'));
+                $to   = date('Y-m-d', strtotime($me . ' +60 days'));
+                try {
+                    $q = $db->prepare("SELECT Client_name, Product_id, IS_number, DATE(Order_date) d, Qty
+                                       FROM is_list
+                                       WHERE (Order_id IS NULL OR Order_id=0)
+                                         AND Order_date BETWEEN ? AND ?");
+                    $q->execute([$from, $to]);
+                    foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) {
+                        $k = trim((string)$x['Client_name']) . "\x00" . trim((string)$x['Product_id']);
+                        if (!isset($cks[$k]) || isset($shipHint[$k])) continue;
+                        $shipHint[$k] = ['no'=>(string)$x['IS_number'], 'd'=>(string)$x['d'], 'qty'=>(string)(0 + $x['Qty'])];
+                    }
+                } catch (Throwable $e) {}
+            }
+            $hintN = 0;
             $out['cols'] = [['k'=>'oo','t'=>'訂單編號'], ['k'=>'client','t'=>'客戶'], ['k'=>'d_id','t'=>'料號'],
-                            ['k'=>'qty','t'=>'訂單量'], ['k'=>'open','t'=>'未交量'], ['k'=>'dd','t'=>'交期']];
-            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                            ['k'=>'qty','t'=>'訂單量'], ['k'=>'open','t'=>'未交量'], ['k'=>'dd','t'=>'交期'],
+                            ['k'=>'ship','t'=>'疑似已出貨']];
+            foreach ($orows as $r) {
+                $hint = $shipHint[trim((string)$r['Client_name']) . "\x00" . trim((string)$r['d_id'])] ?? null;
+                if ($hint) $hintN++;
                 $out['total']++;
                 $out['rows'][] = [
                     'key'  => (string)$r['Order_id'],
                     'vals' => ['oo'=>(string)$r['Order_oo'], 'client'=>(string)$r['Client_name'],
                                'd_id'=>(string)$r['d_id'], 'qty'=>(string)(0 + $r['Qty']),
-                               'open'=>(string)(0 + $r['Open_Qty']), 'dd'=>eg_fmt_date($r['Delivery_date'])],
+                               'open'=>(string)(0 + $r['Open_Qty']), 'dd'=>eg_fmt_date($r['Delivery_date']),
+                               'ship'=>($hint ? ($hint['no'] . '（' . eg_fmt_date($hint['d']) . '）') : '')],
                     'dims' => ['client'=>(string)$r['Client_name'], 'part'=>(string)$r['d_id']],
                     'dim_ids' => ['client'=>(string)$r['client_code'], 'part'=>''],
                     'kind' => 'bad',
-                    'why'  => '交期已到本月，但未交量＝訂單量（完全沒出貨）',
-                    'fix'  => '若實際已出貨，請確認出貨單有沒有帶到這張訂單（未交量沒被沖銷）；'
-                            . '若客戶要求延後交期，請到訂單追蹤更新交期，這一筆就會改算到新的月份。',
+                    'why'  => '交期已到本月，但未交量＝訂單量（完全沒出貨）'
+                            . ($hint ? '——但查到同客戶同料號有一張沒有綁訂單的出貨單，很可能其實已經出貨了' : ''),
+                    'fix'  => ($hint
+                            ? ('這一筆多半不是真的沒出貨：' . $hint['d'] . ' 有一張出貨單 ' . $hint['no']
+                               . '（數量 ' . $hint['qty'] . '）沒有綁到任何訂單。請到「快速出貨」把出貨單與這張訂單綁起來，'
+                               . '未交量沖銷掉之後這一筆就不會再算成未準時。'
+                               . '（ERP 匯入的出貨多半沒帶訂單編號，也有重複匯入的情形，綁定前請先確認不是重複的那一張。）')
+                            : ('若實際已出貨，請確認出貨單有沒有帶到這張訂單（未交量沒被沖銷）；'
+                               . '若客戶要求延後交期，請到訂單追蹤更新交期，這一筆就會改算到新的月份。')),
                 ];
             }
             // 分母來自 order_track（自建訂單追蹤）、未交量來自 order_list（ERP 未交清單），
@@ -1852,14 +1910,17 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                 $q->execute(array_merge([$ym], $exCli));
                 $denTrack = (int)$q->fetchColumn();
             } catch (Throwable $e) {}
+            // 「排除了哪些客戶」屬於排除資訊，列印版一律不印（使用者要求 2026-09-18：列印是要給稽核老師看的）
+            $out['note_excl'] = $exCli ? ('排除客戶：' . implode('、', $exCli) . '。') : '';
             $out['note'] = '判定沿用本指標既有規則：料號 ZZZ 與 -jg/-jh/-hg 結尾不計。'
-                         . ($exCli ? ('排除客戶：' . implode('、', $exCli) . '。') : '')
                          . '本月訂單筆數（分母，取自訂單追蹤）' . $denTrack . ' 筆，'
                          . '未交筆數（取自 ERP 未交清單）' . count($out['rows']) . ' 筆'
                          . (count($out['rows']) > $denTrack
                             ? '——未交筆數比訂單筆數還多，是因為 ERP 未交清單會累積更早月份還沒結清的訂單，'
                               . '這種月份準時率會被算成 0%，請以明細逐筆確認。'
-                            : '。');
+                            : '。')
+                         . ($hintN ? ('其中 ' . $hintN . ' 筆查到同客戶同料號有「沒有綁訂單」的出貨單，'
+                                      . '很可能其實已經出貨、只是出貨單沒跟訂單綁起來（見「疑似已出貨」欄）。') : '');
             return $out;
         }
 
@@ -2072,15 +2133,24 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                 FROM is_list WHERE DATE_FORMAT(Order_date,'%Y-%m')=?
                                 ORDER BY (Qty*COALESCE(Unit_price,0)) DESC, IS_id");
             $st->execute([$ym]);
+            $srows = $st->fetchAll(PDO::FETCH_ASSOC);
+            // 使用者回報 2026-09-18：ERP 轉出的出貨單很多會重複轉，金額因此被重複計算。
+            // 認定「重複」＝同一張出貨單號＋同一個料號＋同樣數量出現一次以上；
+            // 第一筆維持正常，第二筆之後標成不符合，排掉之後金額就回到正確值。
+            $dupSeen = []; $dupN = 0; $dupAmt = 0.0;
             $cmapS = kpi_as_client_id_map($db);   // is_list.Client_id 全表是空的，只能用名稱回查代號
             $out['cols'] = [['k'=>'no','t'=>'出貨單號'], ['k'=>'client','t'=>'客戶'], ['k'=>'part','t'=>'料號'],
                             ['k'=>'qty','t'=>'數量'], ['k'=>'up','t'=>'單價'], ['k'=>'amt','t'=>'金額'],
                             ['k'=>'d','t'=>'出貨日']];
             $sum = 0.0; $noPrice = 0;
-            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            foreach ($srows as $r) {
                 $up  = $r['Unit_price'] === null ? null : (float)$r['Unit_price'];
                 $amt = (float)$r['Qty'] * (float)($up ?? 0);
                 $sum += $amt;
+                $dk = (string)$r['IS_number'] . "\x00" . (string)$r['Product_id'] . "\x00" . (string)(0 + $r['Qty']);
+                $dup = isset($dupSeen[$dk]);
+                $dupSeen[$dk] = 1;
+                if ($dup) { $dupN++; $dupAmt += $amt; }
                 $bad = ($up === null || $up <= 0);
                 if ($bad) $noPrice++;
                 $dims = ['client'=>(string)$r['Client_name'], 'part'=>(string)$r['Product_id']];
@@ -2091,19 +2161,26 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                                'amt'=>number_format($amt), 'd'=>eg_fmt_date($r['Order_date'])],
                     'dims' => $dims,
                     'dim_ids' => ['client'=>($cmapS[trim((string)$r['Client_name'])] ?? ''), 'part'=>''],
-                    'kind' => ($bad ? 'bad' : 'info'),
-                    'why'  => $bad ? '沒有單價（或單價為 0），這一筆的金額算成 0，會把達成率往下拉'
-                                   : '正常計入本月銷貨金額（列出來是方便逐筆核對）',
-                    'fix'  => $bad ? '請到快速出貨把這一筆的單價補上；若這一筆本來就不該算業績（樣品、補件、免費更換），'
-                                   . '請用下方「排除」把它排掉，或用排除規則整批排除該客戶／料號。'
-                                   : '不必處理。',
+                    'kind' => (($bad || $dup) ? 'bad' : 'info'),
+                    'why'  => $dup ? '同一張出貨單號＋同一個料號＋同樣數量重複出現（ERP 重複轉出），這一筆讓金額被多算一次'
+                            : ($bad ? '沒有單價（或單價為 0），這一筆的金額算成 0，會把達成率往下拉'
+                                    : '正常計入本月銷貨金額（列出來是方便逐筆核對）'),
+                    'fix'  => $dup ? '先確認是不是 ERP 重複轉出（同一張單在快速出貨裡出現兩次以上）；'
+                                   . '確認是重複的就把多的那一筆用下方「排除」排掉，金額立刻回到正確值，'
+                                   . '也可以直接到快速出貨把重複的出貨單刪掉。'
+                            : ($bad ? '請到快速出貨把這一筆的單價補上；若這一筆本來就不該算業績（樣品、補件、免費更換），'
+                                    . '請用下方「排除」把它排掉，或用排除規則整批排除該客戶／料號。'
+                                    : '不必處理。'),
                 ];
             }
             $out['note'] = '達成率＝當月出貨金額 Σ(數量×單價) ÷ 本月銷貨目標。'
                          . '本月出貨金額 ' . number_format($sum) . '，目標 '
                          . ($target > 0 ? number_format($target) : '尚未設定')
                          . ($target > 0 ? ('，差額 ' . number_format($sum - $target)) : '')
-                         . ($noPrice ? ('。其中 ' . $noPrice . ' 筆沒有單價（金額算 0）') : '') . '。';
+                         . ($noPrice ? ('。其中 ' . $noPrice . ' 筆沒有單價（金額算 0）') : '')
+                         . ($dupN ? ('。另有 ' . $dupN . ' 筆是重複的出貨單（ERP 重複轉出），'
+                                     . '讓金額多算了 ' . number_format($dupAmt) . '，排掉之後金額為 '
+                                     . number_format($sum - $dupAmt)) : '') . '。';
             return $out;
         }
 

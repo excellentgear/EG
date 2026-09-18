@@ -467,6 +467,8 @@ case 'detail_rows': {
           'why'=>$em['why'], 'cols'=>$d['cols'], 'rows'=>$rows, 'total'=>$d['total'],
           'listed'=>count($d['rows']), 'rule_ex'=>$d['rule_ex'] ?? 0,
           'truncated'=>count($d['rows']) > $cap ? 1 : 0, 'note'=>$d['note'],
+          // note_excl／param_excl 都是「排除」相關：畫面上要看得到（才不會重複設定），列印版一律不印
+          'note_excl'=>$d['note_excl'] ?? '', 'param_excl'=>kpi_as_param_excl($calc, $params),
           // 可以用來篩選／建立排除規則的維度：一律取自這一份明細真的有哪些值
           'dims'=>$d['dims'] ?? [], 'dim_labels'=>kpi_as_dim_labels(),
           'rules'=>kpi_as_excl_rule_rows($db, $iid, $year),
@@ -607,6 +609,14 @@ case 'excl_rule_add': {
     }, $vals), 'strlen'))) : [];
     if (!$vals) jerr('請選擇要排除的項目');
     if (count($vals) > 200) jerr('一次最多 200 項');
+    // 指標設定（params）裡本來就排除掉的值不必再建一條規則：那幾筆資料根本不會進計算，
+    // 建了只會在畫面上留一條永遠用不到的規則（使用者回報 2026-09-18）
+    $already = [];
+    foreach (kpi_as_param_excl($calc, kpi_as_params($iy['params_json'])) as $pe)
+        if ($pe['dim'] === $dim) $already[$pe['val']] = 1;
+    $dupe = array_values(array_filter($vals, function ($v) use ($already) { return isset($already[$v]); }));
+    $vals = array_values(array_filter($vals, function ($v) use ($already) { return !isset($already[$v]); }));
+    if (!$vals) jerr('這幾項在指標設定裡本來就已經排除了（' . implode('、', $dupe) . '），不必再建規則');
     $reason = mb_substr(trim((string)($_POST['reason'] ?? '')), 0, 200);   // 非必填
 
     $ins = $db->prepare("INSERT INTO kpi_as_excl_rule (indicator_id,year,dim,val,reason,created_by,created_by_name)
@@ -622,7 +632,7 @@ case 'excl_rule_add': {
     $re = kpi_excl_resettle_year($db, $iy, $year, $u);
     kpi_as_log($db, $iid, $year, null, 'excl_rule_add', 'excl_' . $dim, null, implode(',', $vals),
                '新增排除規則 ' . count($vals) . ' 項' . ($reason !== '' ? ('（原因：' . $reason . '）') : ''), $u);
-    jout(['added'=>count($vals), 'recalced'=>$re,
+    jout(['added'=>count($vals), 'dupe'=>$dupe, 'recalced'=>$re,
           'rules'=>kpi_as_excl_rule_rows($db, $iid, $year)]);
 }
 
