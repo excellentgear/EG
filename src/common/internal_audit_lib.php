@@ -451,6 +451,12 @@ function ia_ensure_schema(PDO $db): void
             ['ia_case',      'leader_position_id',  "INT NULL COMMENT '稽核組長的職稱'"],
             ['ia_check',     'auditor_dept_id',     "INT NULL COMMENT '稽核人的部門'"],
             ['ia_check',     'auditor_position_id', "INT NULL COMMENT '稽核人的職稱'"],
+            // 稽核通知單「完成」（2026-09-18 使用者要求：完成後不可修改、取消要管理員＋操作確認密碼）
+            ['ia_case',      'completed_at',        "DATETIME NULL COMMENT '按下完成的時間'"],
+            ['ia_case',      'completed_by',        "INT NULL COMMENT '按下完成的人 user.id'"],
+            ['ia_case',      'completed_by_name',   "VARCHAR(60) NULL COMMENT '按下完成的人姓名（顯示用快取）'"],
+            ['ia_case',      'reviewer_at',         "DATETIME NULL COMMENT '審查簽核的精確時間（業務日期在 reviewer_date）'"],
+            ['ia_case',      'approver_at',         "DATETIME NULL COMMENT '核准簽核的精確時間（業務日期在 approver_date）'"],
             // 稽核報告表改成「送出通知」流程（2026-09-17 使用者要求：不要核准、不要製表人）
             ['ia_report',    'submit_date',         "DATE NULL COMMENT '送出的業務日期'"],
             ['ia_report',    'submitted_at',        "DATETIME NULL COMMENT '按下送出的精確時間（與業務日期分開存，ai-rules/21）'"],
@@ -1626,6 +1632,99 @@ function ia_auto_sign_at(string $baseAt, string $bizDate): string
     return date('Y-m-d H:i:s', $at);
 }
 
+/* ============================ 稽核通知單：完成／取消完成（2026-09-18 使用者要求） ============================
+ * 使用者回報「狀態一直是草稿」——原因是 `case_status` 這支 API 從頭到尾**沒有任何呼叫端**，
+ * 畫面上根本沒有按鈕可以把狀態推進去。現在補上明確的一步：
+ *   ①填完按「完成」→ 鎖定不可再修改
+ *   ②要改回去只有**內稽管理員**、而且要輸入**操作確認密碼**
+ *   ③**完成之後才會送審核**（開了自動簽核就在完成的當下直接簽完）
+ */
+
+/** 這張通知單是不是已完成（完成之後一律不可修改） */
+function ia_case_is_done(array $c): bool
+{
+    return in_array((string)($c['status'] ?? ''), ['issued', 'executing', 'closed'], true);
+}
+
+/**
+ * 完成稽核通知單。
+ * 業務日期（簽章要印的那個日期）沿用列印版的認定：製表日期，沒有才用通知日期（ai-rules/22）。
+ * 自動簽核開啟時，核准／審查兩格在這一刻依「設定→列印簽章」解析並寫進單據——
+ * 不開就留空，之後照紙本手蓋或由人工補。
+ *
+ * @return array ['status','auto_signed','approver','reviewer']
+ */
+function ia_case_complete(PDO $db, int $caseId, int $uid, string $uname): array
+{
+    $st = $db->prepare("SELECT * FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$caseId]);
+    $c = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$c) throw new RuntimeException('找不到這張稽核通知單');
+    if (ia_case_is_done($c)) throw new RuntimeException('這張通知單已經完成了，請重新整理畫面');
+
+    // 完成的最低要求：至少有一個受稽單位（空單完成了也沒有意義，而且報告表會抓不到東西）
+    $q = $db->prepare("SELECT COUNT(*) FROM ia_case_dept WHERE case_id=?");
+    $q->execute([$caseId]);
+    if ((int)$q->fetchColumn() === 0) throw new RuntimeException('這張通知單還沒有任何受稽單位，不能完成');
+
+    $bizDate = (string)($c['maker_date'] ?: ($c['notify_date'] ?: ia_today($db)));
+    $auto = ia_auto_sign_on($db);
+    $ap = $rv = null;
+    if ($auto) {
+        $ctx = ['leader_id' => (int)($c['leader_id'] ?? 0), 'leader_name' => (string)($c['leader_name'] ?? ''),
+                'maker_id' => (int)($c['maker_id'] ?? 0), 'maker_name' => (string)($c['maker_name'] ?? ''),
+                'biz_date' => $bizDate];
+        $ap = ia_sign_slot_person($db, 'approve', $ctx, ['id' => $uid, 'name' => $uname]);
+        $rv = ia_sign_slot_person($db, 'review',  $ctx, ['id' => $uid, 'name' => $uname]);
+    }
+
+    $db->beginTransaction();
+    try {
+        // 「已發出」＝這張通知單完成、可以發給受稽單位了；executed 旗標維持原樣
+        //（年度計畫表的 ◎ 是看 executing／closed，完成本身不代表已經去稽核了）
+        $db->prepare("UPDATE ia_case SET status='issued', completed_at=NOW(), completed_by=?, completed_by_name=?,
+                          updated_at=NOW() WHERE case_id=?")->execute([$uid ?: null, $uname, $caseId]);
+        if ($auto) {
+            // 自動簽核的時間戳依 ai-rules/21 錯開且不跨日；日期一律用單據的業務日期
+            $base = $bizDate . ' 09:00:00';
+            $atR  = ia_auto_sign_at($base, $bizDate);
+            $atA  = ia_auto_sign_at($atR,  $bizDate);
+            /* ia_case 存的是**業務日期**（reviewer_date／approver_date 是 DATE），
+               精確時間戳存在 *_at 兩個新欄位（ai-rules/21：兩者分開存）。 */
+            $db->prepare("UPDATE ia_case SET reviewer_id=?, reviewer_name=?, reviewer_date=?, reviewer_at=?,
+                              approver_id=?, approver_name=?, approver_date=?, approver_at=? WHERE case_id=?")
+               ->execute([($rv['id'] ?? 0) ?: null, $rv['name'] ?? null, $bizDate, $atR,
+                          ($ap['id'] ?? 0) ?: null, $ap['name'] ?? null, $bizDate, $atA, $caseId]);
+        }
+        $db->commit();
+    } catch (Throwable $e) { $db->rollBack(); throw new RuntimeException('完成失敗：' . $e->getMessage()); }
+
+    return ['status' => 'issued', 'auto_signed' => $auto ? 1 : 0,
+            'approver' => $auto ? (string)($ap['name'] ?? '') : '',
+            'reviewer' => $auto ? (string)($rv['name'] ?? '') : ''];
+}
+
+/**
+ * 取消完成（改回草稿）。呼叫端必須先驗過管理員身分與操作確認密碼。
+ * **自動簽核寫進去的核准／審查一併清掉**——單據要回去修改，那兩個章就不成立了；
+ * 留著的話會變成「內容改過、章卻還是舊的」，比沒有章更危險。
+ */
+function ia_case_reopen(PDO $db, int $caseId, int $uid, string $uname): array
+{
+    $st = $db->prepare("SELECT * FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
+    $st->execute([$caseId]);
+    $c = $st->fetch(PDO::FETCH_ASSOC);
+    if (!$c) throw new RuntimeException('找不到這張稽核通知單');
+    if (!ia_case_is_done($c)) throw new RuntimeException('這張通知單目前不是完成狀態');
+    if ((string)$c['status'] === 'closed') throw new RuntimeException('已結案的通知單不可取消完成，請先把狀態改回執行中');
+
+    $db->prepare("UPDATE ia_case SET status='draft', completed_at=NULL, completed_by=NULL, completed_by_name=NULL,
+                      reviewer_id=NULL, reviewer_name=NULL, reviewer_date=NULL, reviewer_at=NULL,
+                      approver_id=NULL, approver_name=NULL, approver_date=NULL, approver_at=NULL,
+                      updated_at=NOW() WHERE case_id=?")->execute([$caseId]);
+    return ['status' => 'draft'];
+}
+
 /* ============================ 不符合通知單：分段權限 ============================ */
 
 /**
@@ -1934,6 +2033,9 @@ function ia_report_data(PDO $db, int $year): array
             'dept_name' => $d,
             'nc_no'     => (string)($r['nc_no'] ?? ''),
             'form_no'   => (string)($r['ref_form_no'] ?? ''),
+            // 缺點記錄要印**表單的中文名稱**（2026-09-18 使用者要求），編號本身看不出是哪一張表單。
+            // 一律即時由 as_document 用編號回查（不存一份在 IA 單上，改名了才不會對不起來＝鐵律4）。
+            'form_name' => ia_asdoc_name_by_no($db, (string)($r['ref_form_no'] ?? '')),
             'fact'      => (string)($r['fact'] ?? ''),
             'nc_id'     => (int)$r['nc_id'],
             'stage'     => (string)$r['stage'],
@@ -1955,6 +2057,30 @@ function ia_report_data(PDO $db, int $year): array
     }
 
     return ['rows'=>array_values($byDept), 'records'=>$records];
+}
+
+/**
+ * AS 文件編號 → 中文名稱（缺點記錄要印表單名稱，光看編號看不出是哪一張表）。
+ * 一次把 as_document 讀進靜態快取；編號查不到就回空字串，呼叫端自行決定要不要留白。
+ * 編號可能帶版次或前後空白，比對前先 trim，並允許「編號 名稱」這種已經合併過的舊資料。
+ */
+function ia_asdoc_name_by_no(PDO $db, string $docNo): string
+{
+    static $map = null;
+    if ($map === null) {
+        $map = [];
+        try {
+            foreach ($db->query("SELECT doc_no, doc_name FROM as_document")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $map[trim((string)$r['doc_no'])] = (string)$r['doc_name'];
+            }
+        } catch (Throwable $e) {}
+    }
+    $no = trim($docNo);
+    if ($no === '') return '';
+    if (isset($map[$no])) return $map[$no];
+    // 舊資料可能寫成「2-SM-02-01 客戶訂單審查表」或「2-SM-02-01B」，取得出編號那一段再比一次
+    if (preg_match('/^\s*([0-9]-[A-Za-z]{2}-[0-9]{2}(?:-[0-9]{2})?)/', $no, $m) && isset($map[$m[1]])) return $map[$m[1]];
+    return '';
 }
 
 /* ============================ 附件 ============================ */

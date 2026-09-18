@@ -543,6 +543,15 @@ $roleLabel = ia_role_label($perms);
                 <b>沒有年度計畫表的年度一律不顯示圖示</b>（一年的內稽是從年度計畫表開始的；若該年已有零星資料，旁邊會寫「還沒有年度計畫表」）。
                 年度選單<b>只列「已經有資料的年度」與今年、明年</b>（不再一路往前補十年的空年度）；要補更舊的資料，
                 請<b>內稽管理員</b>按年度旁的「<b>補舊年度</b>」把那一年加進來（該年度一旦有資料就不能再從選單移除）。</li>
+            <li><b>分頁會依進度逐步出現</b>：這一年還沒建<b>年度計畫表</b>時，只看得到「總覽」與「年度計畫」；
+                建了計畫表才出現<b>稽核通知單</b>，建了通知單才出現<b>查檢表／不符合通知單／稽核報告表</b>。
+                分頁上方會寫出「還差什麼」。年度一打開<b>自動停在進行中的那一年</b>（沒有進行中的才停在今年）。</li>
+            <li><b>稽核通知單要按「完成」</b>：填好內容按下方的<b>完成</b>——
+                <b>完成之後整張單就鎖定不可修改</b>，而且<b>完成之後才會送審核</b>（管理員若已開啟自動簽核，核准與審查會在這一刻直接簽完）。
+                要再修改只有<b>內稽管理員</b>按「取消完成」並輸入<b>操作確認密碼</b>；取消完成會把自動簽核蓋上的核准／審查一併清掉
+                （內容要改，那兩個章就不成立了）。已結案的單不給取消完成，請先把狀態改回執行中。</li>
+            <li><b>建立查檢表選了「所屬件號」之後</b>：建立日期會<b>自動帶成該件號的受稽日期</b>（跨好幾天的通知單會多一個日期下拉讓您挑，挑哪一天就只列那一天的內容），
+                下方同時列出<b>那一天要稽核哪些單位、起始主過程是什麼</b>，不必另外開通知單查。</li>
             <li><b>受稽時間可以自動排</b>：「時間」欄的表頭填<b>開始時間</b>（結束時間可留空）後按<b>「自動排」</b>，就依<b>間隔</b>（預設 30 分，可改）往下排每一列，
                 而且<b>會自動跳過午休 12:00~13:00</b>（算出來落在午休內的一律改成 13:00 再往後排）。
                 之後<b>手動改中間任何一列的時間，後面幾列會自動順延</b>（前面的不動）；想逐列自己填就把表頭的「改一列就自動順延後面」取消勾選。
@@ -798,7 +807,28 @@ $roleLabel = ia_role_label($perms);
         <button id="btnCaseDelete" class="btn-danger" style="display:none;"><i class="fa fa-trash"></i> 刪除</button>
 <?php endif; ?>
         <button id="btnCaseSave" class="btn-warm">儲存</button>
+<?php if ($perms['canAdmin']): ?>
+        <!-- 完成＝這張通知單填好了，之後不可修改；要改回去得輸入操作確認密碼（2026-09-18 使用者要求） -->
+        <button id="btnCaseComplete" class="btn-warm" style="display:none;"><i class="fa fa-check-circle"></i> 完成</button>
+        <button id="btnCaseReopen" style="display:none;"><i class="fa fa-unlock"></i> 取消完成</button>
+<?php endif; ?>
     </div>
+</div></div>
+
+<!-- ============================ 取消完成：操作確認密碼 ============================ -->
+<div class="ia-mask" id="caseReopenMask"><div class="ia-modal" style="max-width:460px;">
+    <div class="ia-mhead"><h4><i class="fa fa-unlock"></i> 取消完成</h4><span class="x" data-close>&times;</span></div>
+    <div class="ia-mbody">
+        <div class="ia-hint">取消完成之後這張通知單就可以再修改。
+            <br><b>自動簽核蓋上的核准／審查會一併清掉</b>——內容要改，那兩個章就不成立了；
+            改完重新按「完成」會再簽一次。</div>
+        <div class="ia-form">
+            <label>操作確認密碼<span style="color:#DD5138;">*</span></label>
+            <div><input type="password" id="caseReopenPw" data-eg-skip autocomplete="new-password" style="width:220px;">
+                 <div class="err-msg" id="errCaseReopen"></div></div>
+        </div>
+    </div>
+    <div class="ia-mfoot"><button data-close>取消</button><button id="btnCaseReopenGo" class="btn-warm">確認取消完成</button></div>
 </div></div>
 
 <!-- ============================ 建立查檢表 ============================ -->
@@ -812,7 +842,14 @@ $roleLabel = ia_role_label($perms);
             <label>建立（稽核）日期<span style="color:#DD5138;">*</span></label>
             <div><input type="date" id="nkDate"><div class="err-msg" id="errNkDate"></div></div>
             <label>稽核人</label><div><select id="nkAuditor" data-eg-filter="輸入人員姓名篩選…"></select></div>
-            <label>所屬件號</label><div><select id="nkCase"></select></div>
+            <label>所屬件號</label>
+            <div><select id="nkCase" data-eg-filter="輸入件號或日期篩選…"></select>
+                 <!-- 選了件號之後：自動帶受稽日期（多天可挑），並列出當天要稽核哪些主過程與單位
+                      —— 不然使用者要另外開通知單才知道這次要查哪些表單（2026-09-18 使用者要求） -->
+                 <span id="nkCaseDayWrap" style="display:none;margin-left:8px;font-size:12px;color:#6b5535;">
+                     受稽日期 <select id="nkCaseDay" style="min-width:130px;"></select>
+                 </span>
+                 <div id="nkCaseInfo" class="ia-hint" style="display:none;margin-top:4px;"></div></div>
             <label id="nkYearLab">稽核年度</label>
             <div id="nkYearWrap"><input type="text" id="nkYearShow" readonly
                  style="width:120px;background:#f5efe4;border:1px solid #D8BE93;border-radius:4px;padding:3px 6px;">
@@ -1535,6 +1572,8 @@ function loadPane(p){
     if (p==='report') loadReport();
 }
 function currentPane(){ return $('.ia-tab.on').data('pane') || 'dash'; }
+/** 切到某個分頁（走分頁鈕自己的 click，不另寫一套切換邏輯） */
+function switchPane(p){ $('.ia-tab[data-pane="'+p+'"]').trigger('click'); }
 
 /* ---------- 年度完成狀態（2026-09-17 使用者要求） ----------
    ✔＝這一年有年度計畫表**而且報告完整產出**（每一張稽核報告表都已送出，且沒有未結案的 IA 單）；
@@ -1542,6 +1581,29 @@ function currentPane(){ return $('.ia-tab.on').data('pane') || 'dash'; }
    **沒有年度計畫表的年度一律不顯示圖示**（2026-09-18 使用者定調：一年的內稽是從年度計畫表開始的）。
    判定規則寫在後端 ia_year_status() 一處，這裡只負責顯示（畫面不另算一份＝鐵律4）。 */
 function yearStatOf(y){ return ((META && META.year_status) || {})[String(y)] || null; }
+/* 分頁依進度逐步出現（2026-09-18 使用者要求）：內稽的順序是
+   年度計畫 → 稽核通知單 → 查檢表／不符合通知單／稽核報告表，
+   還沒走到那一步的分頁先不要出現，免得使用者在空分頁上找不到東西。
+   **總覽與年度計畫永遠看得到**（否則新的一年什麼都點不了）。 */
+function applyPaneGate(){
+    var s = yearStatOf(YEAR) || {};
+    var hasPlan = (+s.plan || 0) > 0, hasCase = (+s.cases || 0) > 0;
+    var vis = {dash:true, plan:true, case:hasPlan, check:hasCase, nc:hasCase, report:hasCase};
+    $('.ia-tab[data-pane]').each(function(){
+        var k = String($(this).data('pane'));
+        $(this).toggle(vis[k] !== false);
+    });
+    // 目前停在被隱藏的分頁時（例如切到還沒開始的年度）自動退回看得到的第一個
+    var cur = currentPane();
+    if (vis[cur] === false) switchPane(hasPlan ? 'plan' : 'dash');
+    var $hint = $('#paneGateHint');
+    if (!$hint.length) $hint = $('<div id="paneGateHint" class="ia-hint" style="margin:6px 0;"></div>').insertAfter($('.ia-tabs'));
+    if (!hasPlan) {
+        $hint.show().html('這個年度還沒有<b>年度稽核計劃表</b>。先在「年度計畫」分頁建立，稽核通知單等分頁才會出現。');
+    } else if (!hasCase) {
+        $hint.show().html('這個年度還沒有<b>稽核通知單</b>。先在「稽核通知單」分頁建立，查檢表／不符合通知單／稽核報告表才會出現。');
+    } else { $hint.hide().empty(); }
+}
 function yearMark(y){
     var st = (yearStatOf(y)||{}).state || 'none';
     return st === 'done' ? '　✔' : (st === 'doing' ? '　⏳' : '');
@@ -1577,13 +1639,19 @@ function loadMeta(cb){
         (res.years||[]).forEach(function(y){
             ysel.append('<option value="'+y+'">'+y+' 年'+yearMark(y)+'</option>');
         });
-        // 年度選單第一個是「明年」（補未來排程用），但預設一定要停在**今年**，
-        // 否則一開頁面看到的是明年、清單永遠空的（2026-09-15 實測發現）。
+        /* 預設年度（2026-09-18 使用者要求：自動停在**進行中**的年度）。
+           優先序：①有「進行中」的年度就挑它（最新的那一個）②沒有就今年
+           ③今年不在選單裡才退回選單第一個。
+           為什麼不直接用今年：內稽常常是跨年度在補，今年可能根本還沒開始排，
+           一開頁面停在空的今年，使用者每次都要自己切一次。 */
         var cy = +String(res.today).substr(0,4);
-        YEAR = ((res.years||[]).indexOf(cy) >= 0) ? cy
-             : +(res.years && res.years.length ? res.years[0] : cy);
+        var ys = res.years || [], stMap = res.year_status || {};
+        var doing = ys.filter(function(y){ return (stMap[y] || {}).state === 'doing'; });
+        YEAR = doing.length ? +doing[0]
+             : ((ys.indexOf(cy) >= 0) ? cy : +(ys.length ? ys[0] : cy));
         ysel.val(YEAR);
         renderYearStat();
+        applyPaneGate();
         // 種類／階段／類型下拉一律由後端常數帶出來，畫面不另寫一份對照（鐵律4）
         var kh = '<option value="">全部</option>';
         $.each(res.check_kinds||{}, function(k,v){ kh += '<option value="'+k+'">'+esc(v.label)+'</option>'; });
@@ -1594,7 +1662,10 @@ function loadMeta(cb){
         if (cb) cb();
     });
 }
-$('#yearSel').on('change', function(){ YEAR = +$(this).val(); renderYearStat(); PAGE={case:1,check:1,nc:1}; loadPane(currentPane()); });
+$('#yearSel').on('change', function(){
+    YEAR = +$(this).val(); renderYearStat(); applyPaneGate();
+    PAGE={case:1,check:1,nc:1}; loadPane(currentPane());
+});
 $('#btnReload').on('click', function(){ ASOF_CACHE = {}; loadMeta(function(){ loadPane(currentPane()); }); });
 
 /* ---------- 依業務日期回推的人員清單（ai-rules/22，2026-09-16 使用者交辦） ----------
@@ -1920,6 +1991,63 @@ function delCase(id){
 var CASE_ID = 0, CASE_ROWS = [];
 $('#btnCaseNew').on('click', function(){ openCase(0); });
 $('#btnCaseDelete').on('click', function(){ if (CASE_ID) delCase(CASE_ID); });
+
+/* ---------- 稽核通知單「完成」（2026-09-18 使用者要求） ----------
+   使用者回報「狀態一直是草稿」：原因是推進狀態的 API 從來沒有任何按鈕呼叫它。
+   現在流程是 草稿 →（完成）→ 已發出；**完成之後整張單鎖起來不可修改**，
+   要改只有內稽管理員輸入操作確認密碼取消完成，而且**完成之後才會送審核／自動簽核**。 */
+var CASE_DONE = false;
+function caseIsDone(c){ return !!c && ['issued','executing','closed'].indexOf(String(c.status||'')) >= 0; }
+function applyCaseLock(c){
+    CASE_DONE = caseIsDone(c);
+    var $m = $('#caseMask');
+    // 鎖定：所有輸入欄位與表格列都設唯讀（列印、關閉仍可用）
+    $m.find('input,select,textarea').not('[data-eg-filter-box]').each(function(){
+        var t = (this.type||'').toLowerCase();
+        if (t === 'checkbox' || t === 'radio' || this.tagName === 'SELECT') $(this).prop('disabled', CASE_DONE);
+        else $(this).prop('readonly', CASE_DONE);
+    });
+    $m.find('.ia-op, .nk-chip, button[id^=btnCaseTpl], #btnAllAudited, #btnAllDue, #btnAllTime')
+      .css({'pointer-events': CASE_DONE ? 'none' : '', 'opacity': CASE_DONE ? .5 : ''});
+    $('#btnCaseSave').toggle(!CASE_DONE);
+    $('#btnCaseComplete').toggle(!!CASE_ID && !CASE_DONE);
+    $('#btnCaseReopen').toggle(!!CASE_ID && CASE_DONE && String((c||{}).status) !== 'closed');
+    var $box = $('#caseLockBox');
+    if (!$box.length) { $box = $('<div id="caseLockBox" class="ia-hint" style="margin-bottom:8px;"></div>').prependTo($('#caseMask .ia-mbody')); }
+    if (CASE_DONE) {
+        $box.show().html('<b style="color:#7a5217;"><i class="fa fa-lock"></i> 這張通知單已完成，內容已鎖定不可修改。</b>'
+            + ((c && c.completed_by_name) ? '　完成：'+esc(c.completed_by_name)+(c.completed_at ? (' '+String(c.completed_at).substr(0,16)) : '') : '')
+            + ((c && c.approver_name) ? '　核准：'+esc(c.approver_name) : '')
+            + ((c && c.reviewer_name) ? '　審查：'+esc(c.reviewer_name) : '')
+            + '<br>要修改請按下方「取消完成」（限內稽管理員，需輸入操作確認密碼）。');
+    } else { $box.hide().empty(); }
+}
+$('#btnCaseComplete').on('click', function(){
+    if (!CASE_ID) { alert('請先儲存這張通知單'); return; }
+    if (!confirm('確定把這張稽核通知單標記為「完成」嗎？\n\n'
+               + '・完成之後內容就鎖定不可修改（要改得由內稽管理員輸入操作確認密碼取消完成）\n'
+               + '・完成之後才會送審核；若管理員已開啟自動簽核，核准與審查會在這一刻直接簽完')) return;
+    $.post(API, {action:'case_complete', case_id:CASE_ID}, function(res){
+        if (!res.ok) { alert(res.error||'完成失敗'); return; }
+        alert('已完成' + (+res.auto_signed
+            ? ('，並已自動簽核：\n核准 '+(res.approver||'（未設定）')+'　審查 '+(res.reviewer||'（未設定）'))
+            : '。\n（目前沒有開啟自動簽核，核准／審查兩格留白，請依紙本流程簽核）'));
+        loadCases(function(){ openCase(CASE_ID); });
+    }, 'json');
+});
+$('#btnCaseReopen').on('click', function(){
+    $('#caseReopenPw').val(''); clearErrs($('#caseReopenMask')); openMask('caseReopenMask');
+});
+$('#btnCaseReopenGo').on('click', function(){
+    var pw = $('#caseReopenPw').val();
+    if (!pw) { $('#errCaseReopen').addClass('on').text('請輸入操作確認密碼'); return; }
+    $.post(API, {action:'case_reopen', case_id:CASE_ID, password:pw}, function(res){
+        if (!res.ok) { $('#errCaseReopen').addClass('on').text(res.error||'取消失敗'); return; }
+        closeMask('caseReopenMask');
+        alert('已取消完成，這張通知單可以再修改了（自動簽核的章已一併清除）');
+        loadCases(function(){ openCase(CASE_ID); });
+    }, 'json');
+});
 /** 這張通知單的「業務日期」＝稽核起日，沒填就退回通知日期，再沒有就今天。
     人員資格、在職狀態、部門職稱一律以它為準（ai-rules/22）。 */
 function caseBizDate(c){
@@ -1940,6 +2068,7 @@ function openCase(id){
         CASE_ROWS = [newCaseRow(),newCaseRow(),newCaseRow()];
         renderCaseRows(); $('#cMeetingSec').hide();
         $('#btnCaseDelete').hide();
+        applyCaseLock(null);
         teamHintForCase(META.today);
         clearErrs($('#caseMask')); openMask('caseMask');
         });
@@ -1980,6 +2109,7 @@ function openCaseRender(c){
         $('#cMeetingSec').show();
         // 已結案的不給刪（後端同規則再擋一次）
         $('#btnCaseDelete').toggle(CASE_CAN_DEL && c.status !== 'closed');
+        applyCaseLock(c);
         teamHintForCase(caseBizDate(c));
         clearErrs($('#caseMask')); openMask('caseMask');
     }
@@ -2426,7 +2556,13 @@ $('#btnCheckNew').on('click', function(){
     peopleAsof(META.today, function(){
         $('#nkAuditor').html(postOptions(META.auditors, '', META.me.id, '（未指定）'));
     });
+    /* 件號下拉自己去撈（點開即刷新）：CASES 只有在使用者「去過稽核通知單分頁」時才有值，
+       直接從查檢表分頁按建立的話，下拉會是空的——這是選了件號才帶日期／主過程的前提。 */
     $('#nkCase').html(caseOptions(''));
+    NK_CASE = null; $('#nkCaseDay').removeData('case').empty(); nkRenderCaseInfo();
+    $.getJSON(API, {action:'case_list', year:YEAR}, function(res){
+        if (res && res.ok) { CASES = res.rows || []; $('#nkCase').html(caseOptions('')); }
+    });
     $('#nkTitle').val(''); $('#nkFilter').val('');
     clearErrs($('#checkNewMask'));
     nkKindChanged();
@@ -2459,6 +2595,73 @@ $('#nkDate').on('change', function(){
         $('#nkAuditor').html(postOptions(META.auditors, cur, META.me.id, '（未指定）'));
     });
 });
+/* ---------- 所屬件號 → 受稽日期／當天稽核內容（2026-09-18 使用者要求） ----------
+   ①**建立日期自動＝該件號的受稽日期**；一張通知單常常跨好幾天，所以多天時另外給一個下拉讓使用者挑
+     （挑哪一天，下面就只列那一天要稽核的單位，建立日期也跟著換）。
+   ②列出那一天的**稽核起始主過程**與**受稽單位**——建查檢表時要照這個挑表單，
+     不然使用者得另外開通知單才知道這次要查什麼。 */
+var NK_CASE = null;
+function nkCaseDays(c){
+    var days = [];
+    ((c && c.depts) || []).forEach(function(d){
+        var v = String(d.audited_date || '').substr(0, 10);
+        if (v && days.indexOf(v) < 0) days.push(v);
+    });
+    days.sort();
+    return days;
+}
+function nkRenderCaseInfo(){
+    var c = NK_CASE;
+    if (!c) { $('#nkCaseDayWrap').hide(); $('#nkCaseInfo').hide().empty(); return; }
+    var days = nkCaseDays(c), pick = $('#nkCaseDay').val() || '';
+    // 多天才給下拉；只有一天就直接用那一天（下拉出現卻只有一個選項只是干擾）
+    if (days.length > 1) {
+        if (!$('#nkCaseDay option').length || $('#nkCaseDay').data('case') !== c.case_id) {
+            $('#nkCaseDay').data('case', c.case_id)
+                .html(days.map(function(d){ return '<option value="'+d+'">'+dispDate(d)+'</option>'; }).join(''));
+            pick = days[0];
+            $('#nkCaseDay').val(pick);
+        }
+        $('#nkCaseDayWrap').show();
+    } else {
+        $('#nkCaseDayWrap').hide();
+        pick = days[0] || '';
+    }
+    // 建立日期自動跟著受稽日期（使用者仍可自己改）
+    if (pick && $('#nkDate').val() !== pick) { $('#nkDate').val(pick).trigger('change'); }
+
+    var rows = ((c.depts) || []).filter(function(d){
+        return !pick || String(d.audited_date || '').substr(0, 10) === pick;
+    });
+    var h = '<b>' + esc(c.case_no || '（未編號）') + '</b>　'
+          + (pick ? ('受稽日期 ' + dispDate(pick)) : '（通知單上還沒填受稽日期）')
+          + '　共 ' + rows.length + ' 個受稽單位';
+    if (rows.length) {
+        h += '<table class="ia-table" style="margin-top:4px;"><thead><tr>'
+           + '<th style="width:150px;">受稽單位</th><th>稽核起始主過程</th><th style="width:70px;">時間</th></tr></thead><tbody>';
+        rows.forEach(function(d){
+            h += '<tr><td>' + esc(d.dept_name || '') + '</td>'
+               + '<td class="l">' + esc(d.start_process || '—') + '</td>'
+               + '<td>' + esc(d.audited_time || '') + '</td></tr>';
+        });
+        h += '</tbody></table>';
+    } else {
+        h += '<br><span style="color:#a08356;">這一天沒有受稽單位（請確認通知單上的受稽日期）</span>';
+    }
+    $('#nkCaseInfo').show().html(h);
+}
+$(document).on('change', '#nkCase', function(){
+    var id = +$(this).val();
+    $('#nkCaseDay').removeData('case').empty();
+    if (!id) { NK_CASE = null; nkRenderCaseInfo(); return; }
+    $.getJSON(API, {action:'case_get', case_id:id}, function(res){
+        NK_CASE = (res && res.ok) ? res.row || res.case || res : null;
+        if (NK_CASE && !NK_CASE.depts && res.depts) NK_CASE.depts = res.depts;
+        nkRenderCaseInfo();
+    });
+});
+$(document).on('change', '#nkCaseDay', nkRenderCaseInfo);
+
 /** AS 查檢表的「自動判定來源」下拉：已建立的系統稽核紀錄表 */
 function loadSrcChecks(){
     $.getJSON(API, {action:'check_list', kind:'system'}, function(res){
@@ -3448,7 +3651,8 @@ function loadReport(){
             recs.forEach(function(r2){
                 b += '<tr><td>'+esc(r2.dept_name)+'</td>'
                   + '<td><span class="ia-op" onclick="openNc('+r2.nc_id+')">'+esc(r2.nc_no)+'</span></td>'
-                  + '<td>'+esc(r2.form_no||'—')+'</td>'
+                  + '<td class="l">'+esc(r2.form_no||'—')
+                  + (r2.form_name ? '<br><span style="color:#8a6d45;font-size:11px;">'+esc(r2.form_name)+'</span>' : '')+'</td>'
                   + '<td class="l">'+esc(r2.fact||'')+'</td>'
                   + '<td><span class="st st-'+esc(r2.stage)+'">'+esc((META.nc_stages||{})[r2.stage]||r2.stage)+'</span></td></tr>';
             });
@@ -4408,8 +4612,14 @@ $('#btnReportPrint').on('click', function(){
         var recs = REPORT.records||[];
         h += '<div style="margin-top:8px;font-size:12px;"><b>缺點記錄</b></div>'
            + '<div class="ia-note" style="border:1px solid #333;padding:6px 8px;min-height:70px;">';
+        /* 一列＝「部門-IA單號　表單編號　表單中文名稱」（2026-09-18 使用者要求）。
+           **不印不合格事實**——那段字很長、印成一行看不出重點，要看內容請開該張不符合通知單。
+           表單名稱由編號即時回查 as_document（不另存一份，表單改名這裡才不會對不起來）。 */
         recs.forEach(function(x){
-            h += esc(x.dept_name+'-'+x.nc_no+(x.form_no?('　'+x.form_no):'')+'　'+String(x.fact||'').split('\n')[0])+'\n';
+            var parts = [x.dept_name+'-'+x.nc_no];
+            if (x.form_no)   parts.push(x.form_no);
+            if (x.form_name) parts.push(x.form_name);
+            h += esc(parts.join('　'))+'\n';
         });
         if (r && r.extra_note) h += esc(r.extra_note);
         h += '</div>';

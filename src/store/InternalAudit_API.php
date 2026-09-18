@@ -489,6 +489,17 @@ case 'case_save': {
     $eme = iaTime($_POST['end_meet_end'] ?? '');
     if ($ems && $eme && $eme < $ems) jerr('結束會議的結束時間不可早於開始時間');
 
+    /* 已完成的通知單一律不可修改（2026-09-18 使用者要求）：前端會把欄位鎖起來，
+       這裡同規則再擋一次（鐵律8）。要改請先由內稽管理員輸入操作確認密碼取消完成。 */
+    if ($cid) {
+        $q0 = $db->prepare("SELECT status FROM ia_case WHERE case_id=? AND COALESCE(is_deleted,0)=0");
+        $q0->execute([$cid]);
+        $st0 = (string)($q0->fetchColumn() ?: '');
+        if (in_array($st0, ['issued', 'executing', 'closed'], true)) {
+            jerr('這張通知單已經完成，不可修改。請先由內稽管理員按「取消完成」（需輸入操作確認密碼）。');
+        }
+    }
+
     $year   = (int)substr($nd, 0, 4);
     /* 這張單的業務日期＝稽核起日（沒填就退回通知日期）。人員的在職狀態、部門職稱與資格任期
        一律以它為準（ai-rules/22）——否則補 2025 年的歷史單據時，當時在職現已離職的人一律
@@ -673,6 +684,29 @@ case 'case_save': {
     // 稽核日期被改過的話件號要跟著重編（只重編還是草稿且未執行的；已發出的紙本印著舊號不動）
     $sync = ia_case_sync_no($db, $cid);
     jout(['case_id' => $cid, 'case_no' => $sync['new'], 'no_changed' => $sync['changed'], 'no_old' => $sync['old']]);
+}
+
+/* 完成稽核通知單（2026-09-18 使用者要求）：填完按一次，之後不可修改；
+   **完成之後才會送審核**——開了自動簽核就在這一刻把核准／審查兩格簽完。 */
+case 'case_complete': {
+    iaReqAdmin($perms);
+    $cid = (int)($_POST['case_id'] ?? 0);
+    try { $r = ia_case_complete($db, $cid, $uid, $uname); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout($r);
+}
+
+/* 取消完成（改回草稿）：**只有內稽管理員、而且要輸入操作確認密碼**（使用者指定）。
+   自動簽核寫進去的章會一併清掉——單據要回去改，那兩個章就不成立了。 */
+case 'case_reopen': {
+    iaReqAdmin($perms);
+    require_once $document_root . '/EGsystem/src/common/confirm_password_lib.php';
+    $chk = eg_confirm_password_verify_scoped($db, $uid, (string)($_POST['password'] ?? ''), 'ia_case_reopen');
+    if (empty($chk['ok'])) jerr($chk['msg'] ?: '操作確認密碼不正確', 403);
+    $cid = (int)($_POST['case_id'] ?? 0);
+    try { $r = ia_case_reopen($db, $cid, $uid, $uname); }
+    catch (Throwable $e) { jerr($e->getMessage()); }
+    jout($r);
 }
 
 case 'case_status': {
