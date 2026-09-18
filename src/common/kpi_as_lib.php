@@ -1042,6 +1042,32 @@ function kpi_as_oo_ship_hint(PDO $db, array $rows, int $year, int $month): array
     return $out;
 }
 
+/**
+ * ERP 未交清單（order_list）最後一次匯入的日期。
+ * 使用者指出 2026-09-18：「已經沒有匯入所謂的 ERP 未交訂單」——實測最後一批是 2026-03-12，
+ * 之後半年沒有再匯過。這張表是**快照**不是全量（每一列都是 Qty=Open_Qty），
+ * 所以匯入日之後才成立的訂單它根本沒有，拿它判定會得到「全部都已交」這種假的高分
+ * （實測 2026-05~09 因此被算成 98~99%）。
+ * 凡是吃這張表的模式，都要先用這支確認資料還新不新，不新就不要生出數字。
+ */
+function kpi_as_order_list_asof(PDO $db): ?string {
+    static $v = false;
+    if ($v !== false) return $v;
+    $v = null;
+    try {
+        $d = $db->query("SELECT MAX(Created_At) FROM order_list")->fetchColumn();
+        if ($d) $v = substr((string)$d, 0, 10);
+    } catch (Throwable $e) {}
+    return $v;
+}
+
+/** 這個月份還能不能用 ERP 未交清單判定？（匯入日要涵蓋到該月月底之後） */
+function kpi_as_order_list_covers(PDO $db, int $year, int $month): bool {
+    $asof = kpi_as_order_list_asof($db);
+    if (!$asof) return false;
+    return $asof >= date('Y-m-t', strtotime(sprintf('%04d-%02d-01', $year, $month)));
+}
+
 function kpi_as_undone_mode(array $params): string {
     $m = (string)kpi_as_pv($params, 'undone_mode', 'bind');
     return in_array($m, ['bind', 'erp_ship', 'erp'], true) ? $m : 'bind';
@@ -1406,8 +1432,12 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
         case 'order_ontime': {
             $mode = kpi_as_undone_mode($params);
 
-            // C（預設）／B：都是拿「出貨日 vs 交期」判定準不準時（使用者確認 2026-09-18）。
-            // 差別只在出貨證據的來源：C 只認網頁上綁定的出貨單，B 另外接受「同客戶同料號未綁訂單」的出貨單。
+            // B／舊制吃的是 ERP 未交清單，它已經半年沒有匯入了（見 kpi_as_order_list_asof）。
+            // 匯入日之後的月份它根本沒有那些訂單，硬算會得到「幾乎都已交」的假高分——
+            // 寧可回「無資料」也不要給一個看起來很漂亮但是錯的數字。
+            if (($mode === 'erp_ship' || $mode === 'erp') && !kpi_as_order_list_covers($db, $year, $month)) {
+                return null;
+            }
             if ($mode === 'bind' || $mode === 'erp_ship') {
                 $exIds = array_values(array_filter(array_map('intval', $exclRows)));
                 $exSet = $exIds ? array_flip($exIds) : [];
@@ -2162,6 +2192,16 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
 
         case 'order_ontime': {
             $mode = kpi_as_undone_mode($params);
+            if (($mode === 'erp_ship' || $mode === 'erp') && !kpi_as_order_list_covers($db, $year, $month)) {
+                $asof = kpi_as_order_list_asof($db);
+                $out['note'] = '這個年度的「未交判定方式」設定為以 ERP 未交清單（order_list）為準，'
+                             . '但那張表最後一次匯入是 ' . ($asof ? eg_fmt_date($asof) : '（查不到）')
+                             . '，涵蓋不到 ' . $year . ' 年 ' . $month . ' 月——匯入日之後成立的訂單它根本沒有，'
+                             . '硬算會得到「幾乎都已交」的假數字，所以這一格不產生數值。'
+                             . '請改用 C（以網頁上的出貨綁定為準），或先把 ERP 未交清單重新匯入一次。';
+                $out['note_print'] = '本月無可用資料。';
+                return $out;
+            }
             // 明細這裡只用「參數設定的排除客戶」過濾；排除規則命中的列仍然要列出來並標示，
             // 由 kpi_as_detail_finish() 統一標記（排掉就看不到、也解不開）
             $exCli = kpi_as_resolve_clients($db, kpi_as_list(kpi_as_pv($params, 'exclude_clients', ['寶嘉誠','泳建'])));
