@@ -1329,10 +1329,12 @@ function vioPrintRowsHtml(d, r, m, cell){
 }
 function vioPrintOpen(title, body){
     var asTxt = String((META && META.as_doc_no) || '').replace(/['\\]/g, '');
-    var css = '@page{size:A4 landscape;margin:12mm 8mm 16mm;'
+    // 頁面留白（使用者要求 2026-09-18：列印太滿版，頁首頁尾與左右都要正常留空）
+    // 上 16mm／左右 15mm／下 18mm——下緣要多留一點，頁碼與 AS 編號是印在下方頁邊區裡的
+    var css = '@page{size:A4 landscape;margin:16mm 15mm 18mm;'
         + (asTxt ? " @bottom-right{content:'" + asTxt + "';font-size:9pt;color:#333;}" : '')
         + " @bottom-left{content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁';font-size:9pt;color:#333;}}"
-        + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
+        + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;margin:0;padding:0;'
         + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
         + '.pg{page-break-before:always;} .pg:first-child{page-break-before:auto;}'
         + '.pt-head{text-align:center;margin-bottom:4px;}'
@@ -1345,7 +1347,11 @@ function vioPrintOpen(title, body){
         + 'word-wrap:break-word;overflow-wrap:anywhere;line-height:1.35;}'
         + 'table.pt th{background:#EFEFEF;font-weight:bold;}'
         + 'table.pt td.l{text-align:left;}'
-        + 'table.pt .sm{font-size:9px;color:#444;}';
+        + 'table.pt .sm{font-size:9px;color:#444;}'
+        // 跨頁時表頭要跟著重複，資料列不可以被切成上下兩半
+        + 'table.pt thead{display:table-header-group;}'
+        + 'table.pt tr{page-break-inside:avoid;break-inside:avoid;}'
+        + '.pt-head{break-after:avoid;page-break-after:avoid;}';
     var w = window.open('', '_blank');
     if (!w) { alert('請允許彈出視窗才能列印'); return; }
     w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title)
@@ -1894,11 +1900,15 @@ function renderPrintHead(){
     $('#kpiPrintHead .kpi-print-sub').text(YEAR + ' 年度｜列印日期：' + new Date().toISOString().substr(0,10));
 }
 var KPI_PAPER_MM = { A4:{w:297,h:210}, A3:{w:420,h:297} }; // 統一用橫式（19欄較容易排下）
+/* 列印邊界（mm）——縮放計算與 @page 一定要用同一組數字，寫死兩份遲早對不起來 */
+var KPI_MARGIN_MM = { top:14, side:14, bottom:16 };
 function kpiMmToPx(mm){ return mm * 96 / 25.4; }
 function applyPrintPageStyle(paper, asDocNo){
     var size = KPI_PAPER_MM[paper] || KPI_PAPER_MM.A4;
     var asTxt = String(asDocNo||'').replace(/['\\]/g, '');
-    var css = '@page{size:' + paper + ' landscape;margin:10mm 8mm 14mm 8mm;'
+    var mg = KPI_MARGIN_MM;
+    var css = '@page{size:' + paper + ' landscape;margin:'
+        + mg.top + 'mm ' + mg.side + 'mm ' + mg.bottom + 'mm;'
         + (asTxt ? " @bottom-right{content:'" + asTxt + "';font-size:9pt;color:#333;}" : '')
         + " @bottom-left{content:'第 ' counter(page) ' 頁／共 ' counter(pages) ' 頁';font-size:9pt;color:#333;}"
         + '}';
@@ -1922,9 +1932,9 @@ function printKpi(){
     var _ph = document.getElementById('kpiPrintHead');
     var natH = (_ph && _ph.offsetHeight ? _ph.offsetHeight : 0)
              + document.getElementById('kpiTable').offsetHeight + 8;
-    var safeMm = 6; // 印表機不可印邊界安全值
-    var pageWpx = kpiMmToPx(size.w - 8*2 - safeMm);
-    var pageHpx = kpiMmToPx(size.h - 10 - 14 - safeMm);
+    var safeMm = 4; // 印表機不可印邊界安全值（邊界已經拉大，這裡不必再扣太多）
+    var pageWpx = kpiMmToPx(size.w - KPI_MARGIN_MM.side * 2 - safeMm);
+    var pageHpx = kpiMmToPx(size.h - KPI_MARGIN_MM.top - KPI_MARGIN_MM.bottom - safeMm);
     var scale = Math.min(pageWpx / natW, pageHpx / natH);
     scale = Math.max(0.35, Math.min(scale, 2.5));
     document.body.style.zoom = scale;
