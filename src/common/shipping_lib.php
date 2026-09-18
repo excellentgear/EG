@@ -13,6 +13,7 @@
  */
 
 require_once __DIR__ . '/gear_spec_lib.php';   // 齒輪規格（與報價單/訂單追蹤同一份實作）
+require_once __DIR__ . '/date_fmt_lib.php';  // 顯示用日期 YYYY.MM.DD（ai-rules/20 唯一實作）
 
 if (!defined('SQ_MODULE')) define('SQ_MODULE', 'shipping');
 /** AS 文件編號綁定用的模組代碼（見 ai-rules/16 第一之三節） */
@@ -145,6 +146,154 @@ function sq_bom_avail_map(PDO $db, ?array $boms = null): array
             'shipped' => $shipped,
             'avail'   => max(0, $done - $shipped),
             'closed'  => ((int)$r['erp_closed'] === 1),
+        ];
+    }
+    return $map;
+}
+
+/* ============================================================
+ * 製令「目前製程」（未完工的製令走到哪一關了）
+ * ============================================================ */
+
+/** processing_state 代碼 → 中文（與 views/pm 的製程狀態用語一致） */
+function sq_proc_state_text(?string $st): string
+{
+    return [
+        'N'   => '未發包',
+        'ing' => '加工中',
+        'Q'   => 'QC待驗',
+        'P'   => '生管待移轉',
+        'E'   => '已移轉',
+        '1'   => '已結案',
+    ][(string)$st] ?? (string)$st;
+}
+
+/**
+ * 「目前製程」的顯示文字（唯一實作：清單、製令明細、CSV 匯出全部用這一份，
+ * 前端只負責把字印出來，不要在 JS 再組一次，否則三個地方遲早寫出三種說法）。
+ *
+ * @param array|null $p sq_bom_progress_map() 的一筆；null＝已完工
+ * @param bool $long true＝連狀態／廠商／日期一起帶（明細與 CSV 用）
+ */
+function sq_progress_label(?array $p, bool $long = false): string
+{
+    if ($p === null) return '';
+    if (empty($p['started'])) {
+        // 一關都還沒發包：寫「第 0 關」沒有意義，直接講還沒開工、以及第一關是什麼
+        $txt = '尚未開工';
+        if ($p['process'] !== '') $txt .= '（第一關：' . $p['process'] . '）';
+        return $txt;
+    }
+    $txt = ($p['process'] !== '' ? $p['process'] : '（未知製程）')
+         . ' ' . $p['step'] . '/' . $p['total'];
+    if (!$long) return $txt;
+
+    $txt .= ' ' . $p['state_txt'];
+    if ($p['next'] !== '') $txt .= '，下一關：' . $p['next'];
+    /* 日期一定要標明是「發包」還是「檢驗」：狀態=未發包卻印一個日期（那是 QC 檢驗日，
+       廠內製程常常沒有發包日）看起來像自相矛盾。 */
+    $sub = [$p['maker']];
+    if ($p['out_date'] !== '') $sub[] = '發包 ' . eg_fmt_date($p['out_date']);
+    if ($p['qc_date']  !== '') $sub[] = '檢驗 ' . eg_fmt_date($p['qc_date']);
+    $sub = array_filter($sub, fn($v) => (string)$v !== '');
+    if ($sub) $txt .= '（' . implode('・', $sub) . '）';
+    return $txt;
+}
+
+/**
+ * 取得製令目前走到哪一道製程。
+ *
+ * 判定沿用製令追蹤頁（views/pm/bom_tracking.php ／ BomTrack_API.php 的 get_matched_boms
+ * ／get_bom_process_chain）的規則：排除 processing_state='skip'，取「有實際活動（發包日或
+ * QC 檢驗日）」的製程中活動日期最新的那一關；一關都還沒有活動＝尚未開工（step=0），
+ * 此時不可誤判成最後一關（GREATEST 全為 0000-00-00 時 bom_sn DESC 的陷阱）。
+ *
+ * ⚠ 與製令追蹤頁唯一的差別（刻意的）：同一天時本函式取 bom_sn 較大者＝走得比較遠的那一關。
+ *   outsource_date 一律是 00:00:00（沒有時間）、QC_check_date 有時分秒，直接比 datetime 會讓
+ *   「同一天下一關已經發包」輸給「上一關當天剛驗完」，實測 592 張未完工製令中有 54 張因此
+ *   被判成上一關（例 B-1150428012：客供料 04-29 10:15 驗完、粗滾 04-29 發包且狀態=加工中，
+ *   比 datetime 會答「客供料」）。製令追蹤頁的欄位未動，那邊的進度%與此處口徑相同、
+ *   只有同一天的那幾張會差一關。
+ *
+ * @param array $boms 製令號
+ * @return array bom => ['total'=>關數,'step'=>第幾關,'process'=>製程名,'state'=>代碼,
+ *                       'state_txt'=>狀態中文,'maker'=>廠商,'date'=>最近活動日 Y-m-d,
+ *                       'out_date'=>發包日,'qc_date'=>QC檢驗日,
+ *                       'next'=>下一關製程名（目前這關已移轉／已完工時才有）,'started'=>bool]
+ */
+function sq_bom_progress_map(PDO $db, array $boms): array
+{
+    $boms = array_values(array_unique(array_filter($boms, fn($b) => $b !== '' && $b !== null)));
+    if (!$boms) return [];
+
+    $ph = implode(',', array_fill(0, count($boms), '?'));
+    $st = $db->prepare("
+        SELECT bi.bom, bi.bom_sn, bi.processing_state, bi.qc_completed,
+               COALESCE(bi.maker_id, '')                            AS maker,
+               COALESCE(pn.ProcessName, '')                         AS pname,
+               DATE_FORMAT(bi.outsource_date, '%Y-%m-%d')           AS out_date,
+               DATE_FORMAT(bi.QC_check_date,  '%Y-%m-%d')           AS qc_date
+        FROM bom_ing bi
+        LEFT JOIN process_no pn ON pn.ProcessNo = bi.process_no
+        WHERE bi.bom IN ($ph)
+          AND (bi.processing_state IS NULL OR bi.processing_state <> 'skip')
+        ORDER BY bi.bom, bi.bom_sn, bi.bom_ing_fid");
+    $st->execute($boms);
+
+    // 先依製令分組（同一個 bom_sn 可能有重複列，取最後一筆＝bom_ing_fid 最大者）
+    $byBom = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $byBom[$r['bom']][(int)$r['bom_sn']] = $r;
+    }
+
+    $map = [];
+    foreach ($byBom as $bom => $steps) {
+        ksort($steps, SORT_NUMERIC);
+        $sns   = array_keys($steps);
+        $total = count($sns);
+
+        // 活動日期最新的那一關（同日取 bom_sn 大者）
+        $curSn = null; $curKey = '';
+        foreach ($steps as $sn => $r) {
+            $act = max((string)$r['out_date'], (string)$r['qc_date']);   // 皆為 Y-m-d，字串比較即可
+            if ($act === '') continue;
+            $key = $act . '|' . str_pad((string)$sn, 6, '0', STR_PAD_LEFT);
+            if ($key >= $curKey) { $curKey = $key; $curSn = $sn; }
+        }
+
+        if ($curSn === null) {          // 一關都還沒開始
+            $first = $steps[$sns[0]];
+            $map[$bom] = [
+                'total' => $total, 'step' => 0,
+                'process' => $first['pname'], 'state' => (string)$first['processing_state'],
+                'state_txt' => sq_proc_state_text($first['processing_state']),
+                'maker' => $first['maker'], 'date' => '', 'out_date' => '', 'qc_date' => '',
+                'next' => $first['pname'], 'started' => false,
+            ];
+            continue;
+        }
+
+        $cur  = $steps[$curSn];
+        $step = 0;
+        foreach ($sns as $sn) if ($sn <= $curSn) $step++;
+
+        /* 這一關「已移轉」時貨其實是在等下一關發包——只寫「已移轉」會讓人以為卡在這一關，
+           所以把下一關的製程名一起帶回去。
+           ⚠ 只有 state='E'（生管已移轉）才算：qc_completed=1 但還在 P／Q 的是卡在
+           「生管還沒移轉」，那時候寫下一關會把責任指錯地方。 */
+        $next = '';
+        if ((string)$cur['processing_state'] === 'E') {
+            foreach ($sns as $sn) if ($sn > $curSn) { $next = $steps[$sn]['pname']; break; }
+        }
+
+        $map[$bom] = [
+            'total' => $total, 'step' => $step,
+            'process' => $cur['pname'], 'state' => (string)$cur['processing_state'],
+            'state_txt' => sq_proc_state_text($cur['processing_state']),
+            'maker' => $cur['maker'],
+            'date' => max((string)$cur['out_date'], (string)$cur['qc_date']),
+            'out_date' => (string)$cur['out_date'], 'qc_date' => (string)$cur['qc_date'],
+            'next' => $next, 'started' => true,
         ];
     }
     return $map;
@@ -293,6 +442,14 @@ function sq_pending_orders(PDO $db, array $f): array
     $allBoms = [];
     foreach ($bomsByOrder as $list) foreach ($list as $b) $allBoms[] = $b['bom'];
     $availMap = sq_bom_avail_map($db, $allBoms);
+    /* 未完工的製令要標出「目前製程」方便判斷還要等多久（使用者要求 2026-09-18）。
+       只查未完工的那些（實測全部待出貨訂單 2,289 張製令裡只有 592 張未完工，0.04 秒），
+       已完工的製令查它走到哪一關沒有意義。 */
+    $undoneBoms = [];
+    foreach (array_unique($allBoms) as $bm) {
+        if ((int)($availMap[$bm]['done'] ?? 0) <= 0) $undoneBoms[] = $bm;
+    }
+    $progMap = sq_bom_progress_map($db, $undoneBoms);
 
     $out = [];
     foreach ($rows as $r) {
@@ -309,6 +466,8 @@ function sq_pending_orders(PDO $db, array $f): array
         foreach ($boms as $b) {
             $av    = $availMap[$b['bom']] ?? ['done' => 0, 'shipped' => 0, 'avail' => 0, 'closed' => false];
             $canUse = min($av['avail'], $b['allocated'] > 0 ? $b['allocated'] : $av['avail']);
+            // 未完工才查目前製程（已完工的製令 progress 一律 null，畫面顯示「已完工」）
+            $pg    = ($av['done'] <= 0) ? ($progMap[$b['bom']] ?? null) : null;
             $readyTotal += max(0, $canUse);
             $bomView[] = [
                 'bom'       => $b['bom'],
@@ -321,6 +480,12 @@ function sq_pending_orders(PDO $db, array $f): array
                 'delivery'  => $b['delivery'],
                 'priority'  => $b['priority'],
                 'bom_ps'    => $b['bom_ps'],
+                /* undone＝這張製令還沒完工（畫面才要標目前製程）；progress 只有未完工才查。
+                   兩個旗標要分開：undone 但查不到製程（bom_ing 一列都沒有）不可顯示成「已完工」。 */
+                'undone'    => ($av['done'] <= 0),
+                'progress'  => $pg,
+                'proc_txt'  => sq_progress_label($pg),          // 「滾齒 9/12」
+                'proc_full' => sq_progress_label($pg, true),    // 連狀態廠商日期（提示與 CSV 用）
             ];
         }
         $ready = min($remain, $readyTotal);
@@ -334,6 +499,15 @@ function sq_pending_orders(PDO $db, array $f): array
             elseif ($doneSum <= 0)  $readyNote = '無完工';
             else                    $readyNote = '製令已出完';
         }
+
+        /* 清單不展開製令明細也要看得到目前製程（使用者：方便判斷）。
+           $bomView 已依交期 FIFO 排序，所以取第一張未完工的那一張＝最該關心的那一張。 */
+        $procBrief = ''; $undoneCnt = 0;
+        foreach ($bomView as $bv) if ($bv['progress'] !== null) {
+            $undoneCnt++;
+            if ($procBrief === '') $procBrief = $bv['proc_txt'];
+        }
+        if ($procBrief !== '' && $undoneCnt > 1) $procBrief .= ' 等 ' . $undoneCnt . ' 張';
 
         $gear = $r['d_id_ID'] !== null ? ($gearMap[(int)$r['d_id_ID']] ?? '') : '';
 
@@ -364,6 +538,7 @@ function sq_pending_orders(PDO $db, array $f): array
             'bom_count'        => count($bomView),
             'done_qty'         => $doneSum,
             'ready_note'       => $readyNote,
+            'proc_brief'       => $procBrief,
         ];
     }
 

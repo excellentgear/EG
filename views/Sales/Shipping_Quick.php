@@ -114,6 +114,15 @@ table.sq-t tbody tr.noready{color:#a08a6a;}
 .p-none  {background:#EFE6D6;color:#8a6d45;}
 .p-pause {background:#E4D3BC;color:#6b4522;}
 .bom-cell{cursor:pointer;color:var(--sq-brand);text-decoration:underline dotted;}
+/* 目前製程：製程名深色當主角、關數與狀態小字淡色。
+   ⚠ 一定要自己寫 line-height——Gentelella 全站 `td span{line-height:28px}`，
+   不指定的話一個 11px 的小字會佔掉 28px 把整列撐高（已踩過兩次）。 */
+.proc-txt {color:#6b4522;line-height:17px;}
+.proc-step{color:#a08a6a;font-size:11px;line-height:17px;margin-left:3px;}
+.proc-st  {display:inline-block;padding:0 5px;margin-left:4px;border-radius:8px;
+           background:#F3E6D2;color:#8a6d45;font-size:10px;line-height:16px;}
+.proc-next{display:block;color:#a08a6a;font-size:11px;line-height:15px;}
+.proc-brief{color:#8a6d45;font-size:11px;line-height:17px;}
 .bom-detail{background:#FFFBF2;font-size:12px;color:var(--sq-ink2);text-align:left !important;}
 .bom-detail table{width:auto;margin:2px 0;font-size:12px;}
 .bom-detail td{border:1px solid #EFE0C6;padding:2px 8px;}
@@ -330,6 +339,8 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
       「可出」＝該訂單目前有完工製令、且尚未出貨的數量（已扣除製令既有出貨）。「未出」＝訂購量－已出量。
       製令完工量以「最後一道製程已移轉(E)」或 ERP 結案認定；點製令欄可展開各張製令的完工／已出／可出明細。
       「可出」為 0 時會標示原因：<b>無製令</b>／<b>無完工</b>（製令還沒做完）／<b>製令已出完</b>（做完了但已被別張出貨單出走）。
+      <b>未完工的製令會標出「目前製程」</b>（例：滾齒 9/12 加工中＝共 12 關、目前走到第 9 關的滾齒），
+      製令欄下方即可看到，展開製令明細還會列出狀態、廠商、發包／檢驗日與下一關；滑鼠移過去看完整說明。
       <b>品名規格</b>＝料號規格＋齒輪規格 ／ 訂單製程 ／ 料號備註（與報價單列印版同一套組法）。
       <b>訂單號空白或為 NA 的不列入</b>（多為廠內治具製作，非出給客戶的貨）。點表頭可依訂單號／客戶／料號／未出／可出／交期排序。
     </div>
@@ -408,6 +419,12 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
     <h4>重要行為</h4>
     <ul>
       <li><b>「可出」為 0 的原因會標在旁邊</b>：無製令／無完工（還沒做完）／製令已出完（做完但被別張出貨單出走）。</li>
+      <li><b>未完工的製令會標出「目前製程」</b>：清單的製令欄下方寫「製程名 第幾關/共幾關」，
+          點製令欄展開明細還有「目前製程」欄，含狀態（未發包／加工中／QC待驗／生管待移轉／已移轉）、
+          廠商、該關最近的發包或檢驗日期；這一關已移轉時會再寫「下一關：○○」＝貨在等下一關發包。
+          <b>判定與「製令追蹤」頁同一套規則</b>：排除不加工的製程，取有發包或 QC 檢驗紀錄中最新的那一關
+          （同一天時取走得比較遠的那一關）；一關都還沒開始的寫「尚未開工」。
+          已完工的製令不標（它不是卡住的原因）。<b>匯出 CSV 也有這一欄。</b></li>
       <li><b>備註隨時可改</b>：近期出貨單 →「明細」→ 每一列的備註欄直接改，離開欄位即存檔。</li>
       <li><b>刪除出貨單</b>需要「刪除出貨單」角色。刪除會一併清掉製令扣帳與追溯對應，
           <b>數量回到原訂單</b>，原訂單若因此不再是出滿的狀態會<b>自動取消結案</b>。
@@ -784,6 +801,8 @@ function render(){
       +'<td>'+esc(r.delivery_date||'—')+'</td>'
       +'<td>'+(r.bom_count
           ? '<span class="bom-cell">'+r.bom_count+' 張 '+prioPill((r.boms[0]||{}).priority)+'</span>'
+            + (r.proc_brief ? '<br><span class="proc-brief" title="未完工製令的目前製程；點製令欄可看每一張的完整狀態">'
+                              + esc(r.proc_brief)+'</span>' : '')
           : '<span class="pill p-none">無</span>')+'</td>'
       +'</tr>';
   });
@@ -881,15 +900,34 @@ function updateDock(){
 }
 
 /* ── 製令明細展開 ─────────────────────────────────────────── */
+/* 「目前製程」欄：已完工的製令不必標（它不是卡住的原因），未完工的才標走到哪一關。
+   顯示文字由後端 sq_progress_label() 組好（清單／明細／CSV 共用同一份說法），
+   這裡只負責排版、狀態小籤與提示文字。 */
+function procCell(b){
+  if(!b.undone) return '<span style="color:#a08a6a;">已完工</span>';
+  var p=b.progress;
+  if(!p) return '<span class="pill p-none" title="這張製令在 bom_ing 裡沒有製程資料，請生管確認">無製程資料</span>';
+  var txt = '<span class="proc-txt" title="'+esc(b.proc_full||'')+'">'
+          + (p.started
+              ? esc(p.process||'（未知製程）')+'<span class="proc-step">'+p.step+'/'+p.total+'</span>'
+                + '<span class="proc-st">'+esc(p.state_txt||'')+'</span>'
+              : '尚未開工<span class="proc-st">共 '+p.total+' 關</span>')
+          + '</span>';
+  if(!p.started && p.process) txt += '<span class="proc-next">第一關：'+esc(p.process)+'</span>';
+  else if(p.next)             txt += '<span class="proc-next">下一關：'+esc(p.next)+'</span>';
+  return txt;
+}
 $(document).on('click','.bom-cell',function(){
   var $tr=$(this).closest('tr'), i=parseInt($tr.data('i'),10), r=rows[i];
   var $nx=$tr.next('.bom-row');
   if($nx.length){ $nx.remove(); return; }
-  var h='<table><tr><th>製令</th><th>製令量</th><th>分配</th><th>完工</th><th>已出</th><th>可出</th><th>交期</th><th>備註</th></tr>';
+  var h='<table><tr><th>製令</th><th>製令量</th><th>分配</th><th>完工</th><th>已出</th><th>可出</th>'
+      + '<th>目前製程</th><th>交期</th><th>備註</th></tr>';
   (r.boms||[]).forEach(function(b){
     h+='<tr><td><b>'+esc(b.bom)+'</b> '+prioPill(b.priority)+(b.closed?' <span class="pill p-normal">ERP結案</span>':'')+'</td>'
       +'<td>'+nf(b.bom_qty)+'</td><td>'+nf(b.allocated)+'</td><td>'+nf(b.done)+'</td>'
       +'<td>'+nf(b.shipped)+'</td><td><b style="color:#8A5A2B;">'+nf(b.avail)+'</b></td>'
+      +'<td>'+procCell(b)+'</td>'
       +'<td>'+esc(b.delivery||'—')+'</td><td>'+esc((b.bom_ps||'').substr(0,26))+'</td></tr>';
   });
   h+='</table>';

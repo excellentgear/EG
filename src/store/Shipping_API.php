@@ -104,13 +104,19 @@ case 'export': {
     $out = fopen('php://output', 'w');
     fwrite($out, "\xEF\xBB\xBF");
     fputcsv($out, ['訂單號', '客戶單號', '客戶', '料號', '品名規格', '訂購量', '已出量', '未出量',
-                   '可出量', '單價', '可出金額', '交期', '製令', '訂單備註']);
+                   '可出量', '單價', '可出金額', '交期', '製令', '未完工製令目前製程', '訂單備註']);
     foreach ($rows as $x) {
+        /* 未完工的製令要看得出走到哪一關（畫面上有、匯出也要有，否則匯出去就判斷不了）。
+           文字用後端組好的 proc_full，不在這裡另外拼一種說法。 */
+        $procs = [];
+        foreach ($x['boms'] as $bv) {
+            if (!empty($bv['undone'])) $procs[] = $bv['bom'] . '：' . ($bv['proc_full'] ?: '無製程資料');
+        }
         fputcsv($out, [
             $x['order_oo'], $x['c_order'], $x['client_display'], $x['d_id'], $x['desc_full'],
             $x['order_qty'], $x['shipped_qty'], $x['remain_qty'], $x['ready_qty'],
             $x['unit_price'], $x['ready_qty'] * $x['unit_price'], $x['delivery_date'],
-            implode(' ', array_column($x['boms'], 'bom')), $x['order_ps'],
+            implode(' ', array_column($x['boms'], 'bom')), implode('｜', $procs), $x['order_ps'],
         ]);
     }
     fclose($out);
