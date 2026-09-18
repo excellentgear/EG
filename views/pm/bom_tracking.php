@@ -261,7 +261,7 @@ if ($has_access) {
         <div class="tab-content" style="padding-top:15px;">
           <div class="tab-pane active" id="tabRules">
             <div id="excludeClosedBox" style="margin-bottom:12px;padding:8px 10px;background:#FFF7E6;border-radius:6px;">
-              <label style="margin:0;"><input type="checkbox" id="excludeClosedToggle"> 排除已結案（僅排除勾選當下已符合規則且已結案的BOM，永久排除；之後才結案的仍會顯示）</label>
+              <label style="margin:0;"><input type="checkbox" id="excludeClosedToggle"> 排除已結案（勾選當下、以及之後每次新增規則當下，已結案的BOM永久排除；之後才結案的仍會顯示）</label>
               <span id="closedSnapInfo" style="color:#888;font-size:12px;margin-left:10px;"></span>
               <button class="btn btn-default btn-xs" id="btnRefreshSnapshot" style="margin-left:8px;display:none;">重新整理快照</button>
             </div>
@@ -397,7 +397,7 @@ if ($has_access) {
         <div class="tip">同一個「條件組」內的規則彼此是「且 AND」（例如料號=A 且 客戶=X）；不同條件組之間是「或 OR」。例如建立「條件組1：料號=A、客戶=X」與「條件組2：料號=B」，會匹配「(料號=A 且 客戶=X) 或 (料號=B)」。點「新增條件組」建立新的OR分支；每條規則新增前用「加入條件組」下拉選要放進哪一組。標示「排除：」的規則不分條件組，一律從最終結果中全域扣除。</div>
 
         <h4>排除已結案</h4>
-        <div class="tip">勾選「排除已結案」的當下，會把此刻已符合規則、且狀態已是「已結案」的BOM做成一份永久排除清單；<b>之後才結案</b>的BOM不會被自動追加排除，仍會留在清單上。若之後新增了規則、想把新規則比對到的舊結案BOM也一併排除，可按「重新整理快照」手動再抓一次（先前已排除的不會被移除）。取消勾選會清空排除清單，之後重新勾選會以「重新勾選當下」的狀態重新快照。</div>
+        <div class="tip">勾選「排除已結案」的當下，會把此刻已符合規則、且狀態已是「已結案」的BOM做成一份永久排除清單；<b>之後每新增一條規則，也會再自動抓一次</b>（所以「先勾這個開關、再一條一條加規則」也是對的，新規則比對到的舊結案BOM會一起排除）。<b>之後才結案</b>的BOM不會被自動追加排除，仍會留在清單上——要把它們也清掉請按「重新整理快照」手動再抓一次（先前已排除的不會恢復顯示）。取消勾選會清空排除清單，之後重新勾選會以「重新勾選當下」的狀態重新快照。</div>
 
         <h4>重要行為／常見疑問</h4>
         <ul>
@@ -768,13 +768,28 @@ $('#btnManageGroup').on('click', function () {
     $('#manageGroupModal').modal('show');
 });
 
-// ── 排除已結案（以開關開啟當下的快照為準）───────────────────────────
+// ── 排除已結案（以開關開啟當下＋之後每次新增規則當下的快照為準）─────────
+// 排除筆數 0 筆時要特別標出來：使用者常常是「先勾這個開關、再一條一條加規則」，
+// 舊版只在勾選當下抓一次快照，那時候規則還是空的＝一筆都排不到，
+// 畫面上卻只寫「已永久排除 0 筆」看不出哪裡不對（後端已改成加規則時自動補抓）。
+function renderSnapInfo(enabled, count, added) {
+    var $i = $('#closedSnapInfo');
+    if (!enabled) { $i.text('').css('color', '#888'); return; }
+    var t = '目前已永久排除 ' + count + ' 筆已結案BOM';
+    if (added) t += '（本次新增 ' + added + ' 筆）';
+    if (!count) t += '（尚未排除任何BOM；清單上若仍有已結案的，請按「重新整理快照」）';
+    $i.text(t).css('color', count ? '#888' : '#DD5138');
+}
+// 新增規則後由後端回報最新的排除筆數（沒有回報就不動，避免把畫面洗成 0）
+function applySnapInfo(res) {
+    if (res && res.snapshot_count !== undefined) renderSnapInfo(!!res.exclude_closed_enabled, res.snapshot_count, res.snapshot_added);
+}
 function loadGroupSettings() {
     apiGet('get_group_settings', { group_id: state.groupId }).done(function (res) {
         if (!res.success) return;
         $('#excludeClosedToggle').prop('checked', !!res.exclude_closed_snapshot);
         $('#btnRefreshSnapshot').toggle(!!res.exclude_closed_snapshot);
-        $('#closedSnapInfo').text(res.exclude_closed_snapshot ? ('目前已永久排除 ' + res.snapshot_count + ' 筆已結案BOM（設定啟用當下的狀態）') : '');
+        renderSnapInfo(!!res.exclude_closed_snapshot, res.snapshot_count, 0);
         // 可見範圍（私人/部門/公開）；沒有修改權限時整區停用（後端 save_visibility 也會再擋一次）
         _visSyncing = true;
         $('input[name=groupVis]').val([res.visibility || 'private']).prop('disabled', !res.can_edit);
@@ -798,7 +813,7 @@ $('#excludeClosedToggle').on('change', function () {
     apiPost('toggle_exclude_closed', { group_id: state.groupId, enable: enable ? 1 : 0 }).done(function (res) {
         if (!res.success) { alert(res.message || '設定失敗'); $cb.prop('checked', !enable); return; }
         $('#btnRefreshSnapshot').toggle(enable);
-        $('#closedSnapInfo').text(enable ? ('目前已永久排除 ' + res.snapshot_count + ' 筆已結案BOM（設定啟用當下的狀態）') : '');
+        renderSnapInfo(enable, res.snapshot_count, 0);
         state.page = 1; loadMatchedList();
     });
 });
@@ -806,7 +821,7 @@ $('#btnRefreshSnapshot').on('click', function () {
     if (!confirm('重新整理快照：會把「現在」符合規則且已結案的BOM也一併加入永久排除清單（先前已排除的不會恢復顯示）。確定要重新整理嗎？')) return;
     apiPost('refresh_closed_snapshot', { group_id: state.groupId }).done(function (res) {
         if (!res.success) { alert(res.message || '操作失敗'); return; }
-        $('#closedSnapInfo').text('目前已永久排除 ' + res.snapshot_count + ' 筆已結案BOM（本次新增 ' + res.added + ' 筆）');
+        renderSnapInfo(true, res.snapshot_count, res.added);
         state.page = 1; loadMatchedList();
     });
 });
@@ -927,6 +942,7 @@ function renderRuleValueArea() {
             else { params.due_relative_from_days = $('#dueRelFrom').val(); params.due_relative_to_days = $('#dueRelTo').val(); }
             apiPost('save_rule', params).done(function (res) {
                 if (!res.success) { alert(res.message || '新增失敗'); return; }
+                applySnapInfo(res);
                 state.page = 1; loadRules(); loadMatchedList(true);
             });
         });
@@ -952,6 +968,7 @@ function renderRuleValueArea() {
             apiPost('save_rule', params).done(function (res) {
                 if (!res.success) { alert(res.message || '新增失敗'); return; }
                 $('#noteKeyword').val('');
+                applySnapInfo(res);
                 state.page = 1; loadRules(); loadMatchedList(true);
             });
         });
@@ -1051,6 +1068,7 @@ function renderRuleValueArea() {
             if (!res.success) { alert(res.message || '新增失敗'); return; }
             selected = {}; renderSelectedChips();
             $('#ruleValueKw').val(''); $('#ruleValueSug').empty().hide();
+            applySnapInfo(res);
             state.page = 1; loadRules(); loadMatchedList(true);
         });
     });
@@ -1066,6 +1084,7 @@ function renderRuleValueArea() {
         }).done(function (res) {
             if (!res.success) { alert(res.message || '新增失敗'); return; }
             $('#rulePatternVal').val('');
+            applySnapInfo(res);
             state.page = 1; loadRules(); loadMatchedList(true);
         });
     });

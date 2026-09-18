@@ -194,6 +194,21 @@ function bt_snapshot_closed_boms(PDO $db, int $groupId) {
     return $n;
 }
 
+// 開關是開著的話就補一次快照，回傳 ['added'=>本次新增, 'count'=>目前排除總數]。
+// 為什麼「每次新增規則」都要補：使用者的實際操作順序是「先勾排除已結案 → 再一條一條加規則」，
+// 而勾選當下群組往往一條規則都還沒有（bt_build_rule_where 回 null＝直接回 0 筆），
+// 於是快照永遠是空的、已結案的BOM照樣整片列出來，而且畫面上不會有任何錯誤訊息。
+// 語意維持不變：排除的是「該規則納入當下就已經結案」的BOM，納入之後才結案的仍會顯示。
+function bt_snapshot_if_enabled(PDO $db, int $groupId) {
+    $st = $db->prepare("SELECT exclude_closed_snapshot FROM bom_watch_group WHERE group_id=?");
+    $st->execute([$groupId]);
+    if ((int)$st->fetchColumn() !== 1) return ['added' => 0, 'count' => 0, 'enabled' => 0];
+    $added = bt_snapshot_closed_boms($db, $groupId);
+    $cnt = $db->prepare("SELECT COUNT(*) FROM bom_watch_closed_snapshot WHERE group_id=?");
+    $cnt->execute([$groupId]);
+    return ['added' => $added, 'count' => (int)$cnt->fetchColumn(), 'enabled' => 1];
+}
+
 // 使用者目前所屬的所有部門ID（含主要+兼職）
 function bt_user_dept_ids(PDO $db, int $userId) {
     $st = $db->prepare("SELECT DISTINCT department_id FROM user_department_position_map WHERE user_id = ?");
@@ -549,6 +564,11 @@ switch ($action) {
                 }
                 $response = ['success' => true, 'rule_id' => $lastId, 'count' => count($values)];
             }
+            // 新加的規則若比對到「現在已經結案」的BOM，在開關是開著的情況下一併納入永久排除清單
+            $snap = bt_snapshot_if_enabled($db, $groupId);
+            $response['exclude_closed_enabled'] = $snap['enabled'];
+            $response['snapshot_added'] = $snap['added'];
+            $response['snapshot_count'] = $snap['count'];
         } catch (Throwable $e) { $response = ['success' => false, 'message' => $e->getMessage()]; }
         break;
     }
