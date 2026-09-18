@@ -720,7 +720,24 @@ function init(){
     paintAsDoc(r.asdoc);
     bindInputRules($(document));
     load();
+    openFromUrl();
   }).fail(function(){ toast('無法連線到出貨 API', true); });
+}
+
+/* 從別的頁面帶單號進來（例：資料稽核點出貨單號）：
+ *   ?is_no=IS1150917005&from=2026-09-10&to=2026-09-24
+ * 直接開「近期出貨單」並以該單號查詢。**日期區間一定要一起帶**——
+ * 這個跳窗預設只載入最近 14 天，舊單只帶單號會查不到而看起來像壞掉。 */
+function openFromUrl(){
+  var p = new URLSearchParams(location.search);
+  var no = (p.get('is_no')||'').trim();
+  if(!no) return;
+  var f = (p.get('from')||'').trim(), t = (p.get('to')||'').trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(f)) $('#rcFrom').val(f);
+  if(/^\d{4}-\d{2}-\d{2}$/.test(t)) $('#rcTo').val(t);
+  $('#rcKw').val(no);
+  openMask('mkRecent');
+  loadRecent();
 }
 
 /* ══════════════════════════════════════════════════════════

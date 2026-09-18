@@ -629,13 +629,15 @@ function dqa_trace_rows(PDO $db, array $f): array
                 if ($cand['date'] !== '' && $cand['date'] >= $odate) { $boms[] = $cand; break; }
         }
         $bomSrc = $boms ? $boms[0]['src'] : '';
-        $bQty = 0.0; $bMin = ''; $bMax = '';
+        $bQty = 0.0; $bMin = ''; $bMax = ''; $bList = [];
         foreach ($boms as $b) {
-            $bQty += ($b['alloc'] !== null ? $b['alloc'] : $b['qty']);
+            $q1 = ($b['alloc'] !== null ? $b['alloc'] : $b['qty']);
+            $bQty += $q1;
             if ($b['date'] !== '') {
                 if ($bMin === '' || $b['date'] < $bMin) $bMin = $b['date'];
                 if ($bMax === '' || $b['date'] > $bMax) $bMax = $b['date'];
             }
+            if (count($bList) < 12) $bList[] = ['no' => $b['bom'], 'date' => $b['date'], 'qty' => $q1];
         }
 
         /* 出貨 */
@@ -654,16 +656,26 @@ function dqa_trace_rows(PDO $db, array $f): array
             }
         }
         $shipSrc = $ships ? $ships[0]['src'] : '';
-        $sQty = 0.0; $sMin = ''; $sMax = ''; $sPrice = null; $sSpec = '';
+        $sQty = 0.0; $sMin = ''; $sMax = ''; $sPrice = null; $sSpec = ''; $sDocs = [];
         foreach ($ships as $s2) {
-            $sQty += ($s2['alloc'] !== null ? $s2['alloc'] : $s2['qty']);
+            $q1 = ($s2['alloc'] !== null ? $s2['alloc'] : $s2['qty']);
+            $sQty += $q1;
             if ($s2['date'] !== '') {
                 if ($sMin === '' || $s2['date'] < $sMin) $sMin = $s2['date'];
                 if ($sMax === '' || $s2['date'] > $sMax) $sMax = $s2['date'];
             }
             if ($sPrice === null && $s2['price'] > 0) $sPrice = $s2['price'];
             if ($sSpec === '' && $s2['spec'] !== '')  $sSpec = $s2['spec'];
+            // 一張出貨單在 is_list 是好幾個明細列（IS_id 不同、IS_number 相同），
+            // 畫面上要給人點的是「單號」，所以依單號合併、數量加總，不然會印出三個一樣的單號
+            $k = (string)$s2['no'];
+            if ($k === '') continue;
+            if (!isset($sDocs[$k])) $sDocs[$k] = ['no' => $k, 'date' => $s2['date'], 'qty' => 0.0];
+            $sDocs[$k]['qty'] += $q1;
+            if ($s2['date'] !== '' && ($sDocs[$k]['date'] === '' || $s2['date'] < $sDocs[$k]['date']))
+                $sDocs[$k]['date'] = $s2['date'];
         }
+        $sList = array_slice(array_values($sDocs), 0, 12);
 
         /* ── 判定 ── */
         $iss = [];
@@ -793,10 +805,10 @@ function dqa_trace_rows(PDO $db, array $f): array
             'quote' => $q ? ['no' => (string)$q['quote_no'], 'date' => $qdate,
                              'qty' => dqa_num($q['quantity']), 'price' => $qprice, 'src' => $qSrc] : null,
             'bom'   => ['cnt' => count($boms), 'qty' => $bQty, 'date' => $bMin, 'date_max' => $bMax,
-                        'src' => $bomSrc, 'list' => array_slice(array_column($boms, 'bom'), 0, 8)],
-            'ship'  => ['cnt' => count($ships), 'qty' => $sQty, 'date' => $sMin, 'date_max' => $sMax,
-                        'price' => $sPrice, 'src' => $shipSrc,
-                        'list' => array_slice(array_column($ships, 'no'), 0, 8)],
+                        'src' => $bomSrc, 'list' => $bList],
+            'ship'  => ['cnt' => count($ships), 'doc_cnt' => count($sList), 'qty' => $sQty,
+                        'date' => $sMin, 'date_max' => $sMax,
+                        'price' => $sPrice, 'src' => $shipSrc, 'list' => $sList],
             'proc'  => ['quote' => $pQuote, 'order' => $pOrder, 'bom' => $pBom, 'ship' => $pShip, 'cmp' => $pCmp],
             'issues' => $iss, 'level' => $level, 'exempt' => $exHit,
         ];

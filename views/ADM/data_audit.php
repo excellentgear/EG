@@ -111,6 +111,10 @@ try {
         .node { white-space:nowrap; }
         .node.bad { color:var(--coral); font-weight:bold; }
         .node em { font-style:normal; color:#8a7560; font-size:11px; }
+        .doc-no { display:block; font-size:11px; line-height:16px; color:var(--amber-d); white-space:nowrap;
+                  text-decoration:none; overflow:hidden; text-overflow:ellipsis; }
+        a.doc-no:hover { text-decoration:underline; background:var(--sand); }
+        .doc-no.more { color:#8a7560; }
         .issue-line { font-size:12px; margin:1px 0; }
         .issue-line i { width:14px; }
         .ex-line { font-size:11px; color:#8a7560; }
@@ -290,6 +294,10 @@ try {
                 也不會把日期先後判成嚴重——因為推測本來就可能配到同料號別張訂單的資料。</li>
             <li><b>製程比對</b>預設關閉。訂單的製程是人工手打（「齒研+雷刻」「代料完成」），
                 出貨的製程由 ERP 轉出時與規格混在同一欄，所以差異很大；需要查的時候再勾「比對製程」。</li>
+            <li><b>製令與出貨的數量下方會列出單號，點下去直接開相關頁面並帶好篩選</b>：
+                製令 → BOM 總表（自動填入該製令編號搜尋）；出貨 → 快速出貨的「近期出貨單」
+                （自動以該單號查詢，日期區間帶該單前後 7 天）。都是開新分頁，不影響這一頁的稽核結果。
+                一張出貨單在系統裡是好幾個明細列，這裡已依單號合併，所以看到的是張數不是列數。</li>
             <li>同一支料號的多張訂單對到同一張報價單是正常的，不會被判成異常。
                 製令與訂單、出貨也不是一對一，所以數量一律用<b>合計</b>比對。</li>
         </ul>
@@ -516,13 +524,48 @@ function traceRows(){
         return r.issues.some(function(i){ return i.code === ST.filter; });
     });
 }
-function nodeHtml(txt, sub, bad, src){
+function nodeHtml(txt, sub, bad, src, docs){
     var h = '<span class="node' + (bad?' bad':'') + '">' + esc(txt);
     if (src) h += '<span class="src-tag' + (src==='guess'?' guess':'') + '">'
         + (src==='guess'?'推測':(src==='bind'||src==='map'?'綁定':'舊綁定')) + '</span>';
     h += '</span>';
     if (sub) h += '<br><em>' + esc(sub) + '</em>';
+    if (docs && docs.length) h += docLinks(docs);
     return h;
+}
+/* 單號連結：點了直接開相關頁面並自動帶入這個單號當篩選條件
+ *   製令 → BOM 總表（本來就支援 ?global_search=，不必改那一頁）
+ *   出貨 → 快速出貨（新版）的「近期出貨單」，同時把日期區間設成該單前後 7 天，
+ *          不然那個跳窗預設只載入最近一段期間、舊單會查不到 */
+function docLinks(docs){
+    var out = '', max = 4;
+    docs.slice(0, max).forEach(function(d){
+        var u = d.url || '';
+        out += u ? ('<a class="doc-no" href="' + esc(u) + '" target="_blank" rel="noopener" title="'
+                    + esc(d.tip || d.no) + '">' + esc(d.no) + '</a>')
+                 : ('<span class="doc-no">' + esc(d.no) + '</span>');
+    });
+    if (docs.length > max) out += '<span class="doc-no more">…另 ' + (docs.length - max) + ' 張</span>';
+    return out;
+}
+function shiftDate(d, n){
+    var t = Date.parse(String(d||'').slice(0,10));
+    if (isNaN(t)) return '';
+    var x = new Date(t + n*86400000);
+    return x.getFullYear() + '-' + ('0'+(x.getMonth()+1)).slice(-2) + '-' + ('0'+x.getDate()).slice(-2);
+}
+function bomDocs(list){
+    return (list||[]).map(function(b){
+        return {no:b.no, url:'../pm/OreadyReply_ForPm_BaseOfTime.php?global_search=' + encodeURIComponent(b.no),
+                tip:'在 BOM 總表搜尋 ' + b.no + '（' + (b.date||'') + '，' + b.qty + ' 支）'};
+    });
+}
+function shipDocs(list){
+    return (list||[]).map(function(x){
+        var f = shiftDate(x.date, -7), t = shiftDate(x.date, 7), u = '../Sales/Shipping_Quick.php?is_no=' + encodeURIComponent(x.no);
+        if (f && t) u += '&from=' + f + '&to=' + t;
+        return {no:x.no, url:u, tip:'在快速出貨的近期出貨單查 ' + x.no + '（' + (x.date||'') + '，' + x.qty + ' 支）'};
+    });
 }
 function renderTrace(){
     var all = traceRows();
@@ -548,10 +591,11 @@ function renderTrace(){
             ? nodeHtml(dispDate(r.quote.date), r.quote.no + ' ＠' + r.quote.price, qBad, r.quote.src)
             : '<span class="node bad">無報價</span>';
         var b = r.bom.cnt
-            ? nodeHtml(dispDate(r.bom.date), r.bom.cnt + ' 張／' + r.bom.qty + ' 支', bBad, r.bom.src)
+            ? nodeHtml(dispDate(r.bom.date), r.bom.cnt + ' 張／' + r.bom.qty + ' 支', bBad, r.bom.src, bomDocs(r.bom.list))
             : (r.auto_pm ? '<span class="node"><em>自動轉生管<br>不需製令</em></span>' : '<span class="node bad">無製令</span>');
         var sh = r.ship.cnt
-            ? nodeHtml(dispDate(r.ship.date), r.ship.cnt + ' 列／' + r.ship.qty + ' 支', sBad, r.ship.src)
+            ? nodeHtml(dispDate(r.ship.date), (r.ship.doc_cnt||r.ship.cnt) + ' 張／' + r.ship.qty + ' 支',
+                       sBad, r.ship.src, shipDocs(r.ship.list))
             : '<span class="node' + (r.closed?' bad':'') + '">未出貨</span>';
         var iss = r.issues.map(function(i){
             return '<div class="issue-line"><span class="lv-badge ' + i.level + '">'
@@ -890,13 +934,15 @@ $('#btnTraceCsv').on('click', function(){
     if (!rows.length){ alert('目前沒有資料可以匯出'); return; }
     csvDown(['判定','訂單編號','訂單日期','客戶','料號','訂單數量','訂單單價',
              '報價單號','報價日','報價單價','報價來源','製令張數','製令開立日','製令數量','製令來源',
-             '出貨列數','出貨首日','出貨數量','出貨來源','發現的問題'],
+             '出貨張數','出貨首日','出貨數量','出貨來源','製令編號','出貨單號','發現的問題'],
         rows.map(function(r){
             return [r.level==='critical'?'嚴重':(r.level==='warn'?'提醒':'正常'), r.order_no, r.odate, r.client, r.part,
                 r.oqty, r.oprice,
                 r.quote?r.quote.no:'', r.quote?r.quote.date:'', r.quote?r.quote.price:'', r.quote?r.quote.src:'',
                 r.bom.cnt, r.bom.date, r.bom.qty, r.bom.src,
-                r.ship.cnt, r.ship.date, r.ship.qty, r.ship.src,
+                (r.ship.doc_cnt||r.ship.cnt), r.ship.date, r.ship.qty, r.ship.src,
+                (r.bom.list||[]).map(function(x){ return x.no; }).join('、'),
+                (r.ship.list||[]).map(function(x){ return x.no; }).join('、'),
                 r.issues.map(function(i){ return i.text; }).join('；')];
         }), '流程順序稽核_' + $('#tFrom').val() + '_' + $('#tTo').val() + '.csv');
 });
@@ -958,13 +1004,13 @@ $('#btnTracePrint').on('click', function(){
             + (($('#tPart').val())?('　料號：' + $('#tPart').val()):''),
         '掃描訂單 ' + (ST.trace.scanned||0) + ' 張；嚴重 ' + s.critical + ' 筆、提醒 ' + s.warn + ' 筆、正常 ' + s.ok + ' 筆',
         [['序號','5%'],['判定','6%'],['訂單編號／日期','13%'],['客戶','9%'],['料號','13%'],
-         ['報價','11%'],['製令','11%'],['出貨','11%'],['發現的問題','']],
+         ['報價','10%'],['製令','14%'],['出貨','14%'],['發現的問題','']],
         rows.map(function(r, i){
             return [i+1, (r.level==='critical'?'嚴重':(r.level==='warn'?'提醒':'正常')),
                 r.order_no + ' / ' + r.odate, r.client, r.part,
                 r.quote ? (r.quote.date + ' ' + r.quote.no) : '無',
-                r.bom.cnt ? (r.bom.date + ' 共' + r.bom.cnt + '張') : (r.auto_pm ? '自動轉生管' : '無'),
-                r.ship.cnt ? (r.ship.date + ' 共' + r.ship.cnt + '列') : '未出貨',
+                r.bom.cnt ? (r.bom.date + ' ' + (r.bom.list||[]).map(function(x){ return x.no; }).join(' ')) : (r.auto_pm ? '自動轉生管' : '無'),
+                r.ship.cnt ? (r.ship.date + ' ' + (r.ship.list||[]).map(function(x){ return x.no; }).join(' ')) : '未出貨',
                 r.issues.map(function(x){ return x.text; }).join('；')];
         }));
 });
