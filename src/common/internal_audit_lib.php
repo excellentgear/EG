@@ -76,6 +76,7 @@ const IA_SETTING_KEYS  = [
     'ia_auto_sign',
     'ia_report_notify',   // 稽核報告表送出後要通知誰：[{dept_id, position_id}] JSON（管理員設定）
     'ia_extra_years',     // 管理員登記「要補資料的舊年度」JSON 陣列（選單只列有資料的年度＋今年明年＋這裡登記的）
+    'ia_auto_sign_case',  // 稽核通知單按下「完成」時要不要直接簽完（與年度計畫表的 ia_auto_sign 分開設定）
 ];
 
 /**
@@ -1613,9 +1614,16 @@ function ia_sign_slot_person(PDO $db, string $which, array $ctx, array $fallback
 }
 
 /** 自動簽核是否開啟（管理員設定；預設關閉＝維持人工按核准） */
-function ia_auto_sign_on(PDO $db): bool
+/**
+ * 自動簽核開關。**每一種表單各自一個開關**（2026-09-18 使用者回報：原本只有一個，
+ * 而且畫面上寫的是「年度計畫表按下送審時…」，稽核通知單卻跟著被那個開關控制）。
+ *   $what = 'plan'（年度計畫表，設定鍵 ia_auto_sign，保留原鍵名不動舊資料）
+ *         | 'case'（稽核通知單，設定鍵 ia_auto_sign_case）
+ */
+function ia_auto_sign_on(PDO $db, string $what = 'plan'): bool
 {
-    return (string)(ia_settings($db)['ia_auto_sign'] ?? '') === '1';
+    $key = ($what === 'case') ? 'ia_auto_sign_case' : 'ia_auto_sign';
+    return (string)(ia_settings($db)[$key] ?? '') === '1';
 }
 
 /**
@@ -1668,7 +1676,7 @@ function ia_case_complete(PDO $db, int $caseId, int $uid, string $uname): array
     if ((int)$q->fetchColumn() === 0) throw new RuntimeException('這張通知單還沒有任何受稽單位，不能完成');
 
     $bizDate = (string)($c['maker_date'] ?: ($c['notify_date'] ?: ia_today($db)));
-    $auto = ia_auto_sign_on($db);
+    $auto = ia_auto_sign_on($db, 'case');       // 通知單有自己的開關，不跟著年度計畫表走
     $ap = $rv = null;
     if ($auto) {
         $ctx = ['leader_id' => (int)($c['leader_id'] ?? 0), 'leader_name' => (string)($c['leader_name'] ?? ''),
@@ -2035,7 +2043,7 @@ function ia_report_data(PDO $db, int $year): array
             'form_no'   => (string)($r['ref_form_no'] ?? ''),
             // 缺點記錄要印**表單的中文名稱**（2026-09-18 使用者要求），編號本身看不出是哪一張表單。
             // 一律即時由 as_document 用編號回查（不存一份在 IA 單上，改名了才不會對不起來＝鐵律4）。
-            'form_name' => ia_asdoc_name_by_no($db, (string)($r['ref_form_no'] ?? '')),
+            'form_name' => ia_nc_form_name($db, $r),
             'fact'      => (string)($r['fact'] ?? ''),
             'nc_id'     => (int)$r['nc_id'],
             'stage'     => (string)$r['stage'],
@@ -2057,6 +2065,29 @@ function ia_report_data(PDO $db, int $year): array
     }
 
     return ['rows'=>array_values($byDept), 'records'=>$records];
+}
+
+/**
+ * 這張 IA 單指的那份表單叫什麼（缺點記錄要印中文名稱）。
+ * **兩條路，先編號再來源**：
+ *   ①先用 `ref_form_no` 的編號回查 `as_document`
+ *   ②查不到就走這張 IA 單的來源查檢表項目（`src_item_id` → `ia_check_item.ref_id`＝as_document.id）
+ * 第二條路是為了**AS 文件日後改編號／改所屬單位**——編號一改，只靠編號回查就會查不到名稱，
+ * 但查檢表項目上存的是文件 id，改號也還指得到同一份文件（2026-09-18 使用者問到這件事）。
+ */
+function ia_nc_form_name(PDO $db, array $nc): string
+{
+    $byNo = ia_asdoc_name_by_no($db, (string)($nc['ref_form_no'] ?? ''));
+    if ($byNo !== '') return $byNo;
+    $iid = (int)($nc['src_item_id'] ?? 0);
+    if (!$iid) return '';
+    try {
+        $st = $db->prepare("SELECT d.doc_name FROM ia_check_item i
+                              JOIN as_document d ON d.id = i.ref_id
+                             WHERE i.item_id=? AND i.ref_kind='as_document'");
+        $st->execute([$iid]);
+        return (string)($st->fetchColumn() ?: '');
+    } catch (Throwable $e) { return ''; }
 }
 
 /**

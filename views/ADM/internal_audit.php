@@ -548,6 +548,8 @@ $roleLabel = ia_role_label($perms);
                 分頁上方會寫出「還差什麼」。年度一打開<b>自動停在進行中的那一年</b>（沒有進行中的才停在今年）。</li>
             <li><b>稽核通知單要按「完成」</b>：填好內容按下方的<b>完成</b>——
                 <b>完成之後整張單就鎖定不可修改</b>，而且<b>完成之後才會送審核</b>（管理員若已開啟自動簽核，核准與審查會在這一刻直接簽完）。
+                （自動簽核要不要開，在<b>設定 → 自動簽核</b>，<b>年度計畫表與稽核通知單各有一個開關</b>）。
+                <b>還沒按完成的通知單，列印時核准／審查兩格一律留白</b>——沒完成就印出簽好的章是不實的簽章。
                 要再修改只有<b>內稽管理員</b>按「取消完成」並輸入<b>操作確認密碼</b>；取消完成會把自動簽核蓋上的核准／審查一併清掉
                 （內容要改，那兩個章就不成立了）。已結案的單不給取消完成，請先把狀態改回執行中。</li>
             <li><b>建立查檢表選了「所屬件號」之後</b>：建立日期會<b>自動帶成該件號的受稽日期</b>（跨好幾天的通知單會多一個日期下拉讓您挑，挑哪一天就只列那一天的內容），
@@ -634,6 +636,12 @@ $roleLabel = ia_role_label($perms);
                     <label style="font-weight:normal;cursor:pointer;">
                         <input type="checkbox" id="setAutoSign" style="vertical-align:-2px;">
                         年度計畫表按下「送審」時，直接完成審查與核准
+                    </label>
+                    <br>
+                    <!-- 稽核通知單有自己的開關（2026-09-18 使用者回報：原本只有年度計畫表那一個） -->
+                    <label style="font-weight:normal;cursor:pointer;">
+                        <input type="checkbox" id="setAutoSignCase" style="vertical-align:-2px;">
+                        稽核通知單按下「完成」時，直接完成審查與核准
                     </label>
                     <div style="font-size:12px;color:#8a6d45;margin-top:3px;">
                         關閉（預設）＝送審後仍要有人按「核准」。<br>
@@ -2026,7 +2034,9 @@ $('#btnCaseComplete').on('click', function(){
     if (!CASE_ID) { alert('請先儲存這張通知單'); return; }
     if (!confirm('確定把這張稽核通知單標記為「完成」嗎？\n\n'
                + '・完成之後內容就鎖定不可修改（要改得由內稽管理員輸入操作確認密碼取消完成）\n'
-               + '・完成之後才會送審核；若管理員已開啟自動簽核，核准與審查會在這一刻直接簽完')) return;
+               + (String((META.settings||{}).ia_auto_sign_case||'') === '1'
+                    ? '・目前已開啟稽核通知單的自動簽核：按下去會一併完成審查與核准'
+                    : '・目前沒有開啟稽核通知單的自動簽核，核准／審查兩格會留白（可在「設定」裡開啟）'))) return;
     $.post(API, {action:'case_complete', case_id:CASE_ID}, function(res){
         if (!res.ok) { alert(res.error||'完成失敗'); return; }
         alert('已完成' + (+res.auto_signed
@@ -2610,6 +2620,7 @@ function nkCaseDays(c){
     days.sort();
     return days;
 }
+var NK_CASE_OPEN = false;
 function nkRenderCaseInfo(){
     var c = NK_CASE;
     if (!c) { $('#nkCaseDayWrap').hide(); $('#nkCaseInfo').hide().empty(); return; }
@@ -2633,23 +2644,27 @@ function nkRenderCaseInfo(){
     var rows = ((c.depts) || []).filter(function(d){
         return !pick || String(d.audited_date || '').substr(0, 10) === pick;
     });
-    var h = '<b>' + esc(c.case_no || '（未編號）') + '</b>　'
-          + (pick ? ('受稽日期 ' + dispDate(pick)) : '（通知單上還沒填受稽日期）')
-          + '　共 ' + rows.length + ' 個受稽單位';
-    if (rows.length) {
-        h += '<table class="ia-table" style="margin-top:4px;"><thead><tr>'
-           + '<th style="width:150px;">受稽單位</th><th>稽核起始主過程</th><th style="width:70px;">時間</th></tr></thead><tbody>';
-        rows.forEach(function(d){
-            h += '<tr><td>' + esc(d.dept_name || '') + '</td>'
-               + '<td class="l">' + esc(d.start_process || '—') + '</td>'
-               + '<td>' + esc(d.audited_time || '') + '</td></tr>';
-        });
-        h += '</tbody></table>';
-    } else {
-        h += '<br><span style="color:#a08356;">這一天沒有受稽單位（請確認通知單上的受稽日期）</span>';
+    /* 版面（2026-09-18 使用者回報「太佔空間」）：預設只留**一行摘要**，
+       後面接一顆「明細」讓使用者自己展開；展開的內容也不用表格，
+       一列一個單位、小字，並限制高度可捲動——這個跳窗下半部還有挑題區要用空間。 */
+    var brief = rows.slice(0, 3).map(function(d){ return (d.dept_name || ''); }).join('、')
+              + (rows.length > 3 ? ' 等' : '');
+    var h = '<span style="white-space:nowrap;"><b>' + esc(c.case_no || '（未編號）') + '</b>　'
+          + (pick ? dispDate(pick) : '（未填受稽日期）')
+          + '　受稽 ' + rows.length + ' 單位</span>'
+          + (rows.length ? ('<span style="color:#8a6d45;">：' + esc(brief) + '</span>'
+              + ' <a href="javascript:void(0)" id="nkCaseToggle" style="font-size:12px;">'
+              + (NK_CASE_OPEN ? '收合' : '明細') + '</a>') : '');
+    if (rows.length && NK_CASE_OPEN) {
+        h += '<div style="margin-top:3px;max-height:110px;overflow:auto;font-size:12px;line-height:1.7;">'
+           + rows.map(function(d){
+                 return '<div>' + esc(d.audited_time || '　　') + '　<b>' + esc(d.dept_name || '') + '</b>　'
+                      + '<span style="color:#8a6d45;">' + esc(d.start_process || '—') + '</span></div>';
+             }).join('') + '</div>';
     }
     $('#nkCaseInfo').show().html(h);
 }
+$(document).on('click', '#nkCaseToggle', function(){ NK_CASE_OPEN = !NK_CASE_OPEN; nkRenderCaseInfo(); });
 $(document).on('change', '#nkCase', function(){
     var id = +$(this).val();
     $('#nkCaseDay').removeData('case').empty();
@@ -3787,6 +3802,7 @@ $('#btnSetting').on('click', function(){
     $('#setSignApprove').html(sh).val(s.ia_sign_approve||'');
     $('#setSignReview').html(sh).val(s.ia_sign_review||'');
     $('#setAutoSign').prop('checked', String(s.ia_auto_sign||'') === '1');
+    $('#setAutoSignCase').prop('checked', String(s.ia_auto_sign_case||'') === '1');
     $('#setRemindDays').val(s.ia_remind_days||'7');
     $('#setMeetPre').val(s.ia_meeting_pre_subject||'');
     $('#setMeetEnd').val(s.ia_meeting_end_subject||'');
@@ -3847,6 +3863,7 @@ $('#btnSettingSave').on('click', function(){
         ['ia_sign_approve',       $('#setSignApprove').val()],
         ['ia_sign_review',        $('#setSignReview').val()],
         ['ia_auto_sign',          $('#setAutoSign').prop('checked') ? '1' : '0'],
+        ['ia_auto_sign_case',     $('#setAutoSignCase').prop('checked') ? '1' : '0'],
         ['ia_remind_days',        v],
         ['ia_meeting_pre_subject',$('#setMeetPre').val()],
         ['ia_meeting_end_subject',$('#setMeetEnd').val()],
@@ -4428,9 +4445,14 @@ function printCase(id){
 
             // 2026-08-27 使用者要求：核准／審查日期一律跟「製表日期」相同
             var caseDate = c.maker_date || c.notify_date;
+            /* **還沒按「完成」的通知單一律不印核准／審查的章**（2026-09-18 使用者回報）。
+               這兩格原本在單據沒有簽核人時會退回「設定裡指定的那一位」，等於草稿也印得出
+               一份看起來已經簽好的表——那是不實的簽章。完成之後才會有 approver_id／reviewer_id。
+               製表格不受影響（製表人是誰填的表，跟完成與否無關）。 */
+            var caseDone = ['issued','executing','closed'].indexOf(String(c.status||'')) >= 0;
             h += signCells(m, [
-                {label:'核准', html: stampHtml(m, c.approver_id ? sp(c.approver_id, c.approver_name, caseDate) : m.sign_approve, caseDate)},
-                {label:'審查', html: stampHtml(m, c.reviewer_id ? sp(c.reviewer_id, c.reviewer_name, caseDate) : m.sign_review, caseDate)},
+                {label:'核准', html: (caseDone && c.approver_id) ? stampHtml(m, sp(c.approver_id, c.approver_name, caseDate), caseDate) : ''},
+                {label:'審查', html: (caseDone && c.reviewer_id) ? stampHtml(m, sp(c.reviewer_id, c.reviewer_name, caseDate), caseDate) : ''},
                 {label:'製表', html: stampHtml(m, c.maker_id ? sp(c.maker_id, c.maker_name, caseDate) : null, caseDate)}
             ]);
             logPrint('稽核通知單 '+(c.case_no||('#'+id)), 'ia_case', id);
