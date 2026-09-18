@@ -98,7 +98,8 @@ $thisYear = (int)date('Y');
         .fg label { font-weight:600; font-size:12px; color:var(--ink); margin-bottom:2px; display:block; }
     </style>
 </head>
-<body class="nav-md">
+<!-- 側欄載入時維持收合（全站慣例：nav-sm） -->
+<body class="nav-sm">
 <div class="container body"><div class="main_container">
 <?php include '../partPage/sideAndTopBarMenu.html'; ?>
 <div class="right_col" role="main">
