@@ -185,6 +185,11 @@ function kpi_as_ensure_schema(PDO $db): void {
         KEY idx_iy (indicator_id, year)
     ) DEFAULT CHARSET=utf8mb4 COMMENT='KPI計算調整-依維度整批排除(不修改真實資料)'");
 
+    // 排除規則的適用範圍（使用者要求 2026-09-18）：year=僅該年度 / all=所有年度。
+    // all 的那一列 year 一律寫 0，這樣 uk_rule(indicator_id,year,dim,val) 天然保證
+    // 「同一個指標的同一個值只會有一條全年度規則」，也不會跟某一年的規則撞鍵。
+    try { $db->exec("ALTER TABLE kpi_as_excl_rule ADD COLUMN scope ENUM('year','all') NOT NULL DEFAULT 'year' COMMENT '適用範圍 year=僅該年度 all=所有年度(year 寫 0)' AFTER year"); } catch (Throwable $e) {}
+
     // 這個指標的來源資料可不可以直接改：suggest=依系統建議 / allow=可改 / deny=只能用排除
     try { $db->exec("ALTER TABLE kpi_as_indicator ADD COLUMN src_edit_mode ENUM('suggest','allow','deny') NOT NULL DEFAULT 'suggest' COMMENT '來源資料可否直接修改 suggest=依系統建議' AFTER is_active"); } catch (Throwable $e) {}
 
@@ -770,6 +775,94 @@ function kpi_as_dim_lookup(PDO $db, string $dim, string $q, int $limit = 50): ar
     return $out;
 }
 
+/**
+ * 每個計算模組的「來源查詢」：從哪張表、用哪個日期欄歸屬年度、每個維度的值與代號取自哪個欄位。
+ * 用途：排除規則的候選清單**預設只列這個年度真的有的值**（使用者要求 2026-09-18），
+ * 這個年度沒有的要打關鍵字才從主檔搜出來。
+ * 這裡的欄位表達式與 kpi_as_rules_sql() 的 colmap 刻意一致，兩邊對不起來的話
+ * 會變成「清單挑得到、規則卻比不中」。
+ * 回傳 ['from'=>FROM/JOIN, 'date'=>歸屬年度用的日期欄, 'cols'=>[dim => [值欄, 代號欄或'']]]
+ */
+function kpi_as_calc_source(?string $calc): array {
+    $bomFrom = "bom_ing bi
+                LEFT JOIN bom b ON b.bom=bi.bom
+                LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
+                LEFT JOIN maker_list mk ON mk.maker_id_no=bi.maker_id_no";
+    $bomCols = ['client'=>['b.Client_Name', ''], 'part'=>['b.d_id', ''],
+                'proc'=>["COALESCE(NULLIF(pn.ProcessName,''), bi.process_no)", 'bi.process_no'],
+                'maker'=>["COALESCE(mk.maker_id, bi.maker_id)", 'bi.maker_id_no']];
+    $rptFrom = "pm_process_daily_report r
+                LEFT JOIN process_no pn ON pn.ProcessNo=r.process_no
+                LEFT JOIN machine_list ml ON ml.machine_id=r.machine_id
+                LEFT JOIN bom_ing bi ON bi.bom_ing_fid=r.bom_ing_fid
+                LEFT JOIN bom b ON b.bom=bi.bom";
+    $rptCols = ['client'=>['b.Client_Name', ''], 'part'=>['b.d_id', ''],
+                'proc'=>["COALESCE(NULLIF(pn.ProcessName,''), r.process_no)", 'r.process_no'],
+                'machine'=>['ml.machine', 'ml.machine_id']];
+    switch ((string)$calc) {
+        case 'vendor_ontime':
+            return ['from'=>$bomFrom, 'date'=>'bi.outsource_date', 'cols'=>$bomCols];
+        case 'incoming_ng_rate':
+            return ['from'=>$bomFrom, 'date'=>'bi.QC_check_date', 'cols'=>$bomCols];
+        case 'capacity_rate':
+        case 'process_ng_rate':
+            return ['from'=>$rptFrom, 'date'=>'r.report_date', 'cols'=>$rptCols];
+        case 'order_ontime':
+            return ['from'=>"order_list ol LEFT JOIN customer_list cl ON cl.customer_id=ol.Client_name",
+                    'date'=>'ol.Delivery_date',
+                    'cols'=>['client'=>["COALESCE(cl.customer, ol.Client_name)", 'ol.Client_name'],
+                             'part'=>['ol.d_id', '']]];
+        case 'order_target_amount':
+            return ['from'=>'order_track ot', 'date'=>'ot.Delivery_date',
+                    'cols'=>['client'=>['ot.Client_name', 'ot.Client_name_ID'], 'part'=>['ot.d_id', '']]];
+        case 'shipping_target_amount':
+            return ['from'=>'is_list il', 'date'=>'il.Order_date',
+                    'cols'=>['client'=>['il.Client_name', ''], 'part'=>['il.Product_id', '']]];
+        case 'quote_to_order':
+            return ['from'=>'quotation_list q', 'date'=>'q.quote_date',
+                    'cols'=>['client'=>['q.client_name', 'q.client_id']]];
+        case 'drawing_ontime':
+            return ['from'=>"order_track ot LEFT JOIN user us ON us.id=ot.ate", 'date'=>'ot.ateGet',
+                    'cols'=>['client'=>['ot.Client_name', ''], 'part'=>['ot.d_id', ''],
+                             'designer'=>["COALESCE(us.user_cname, ot.ate)", 'ot.ate']]];
+        case 'training_completion':
+            return ['from'=>'training_session ts', 'date'=>'', 'year_col'=>'ts.year',
+                    'cols'=>['unit'=>['ts.org_unit', '']]];
+    }
+    return [];
+}
+
+/** 這個指標這個年度的來源資料裡，某個維度實際出現過哪些值（候選清單預設就列這些） */
+function kpi_as_dim_year_values(PDO $db, ?string $calc, string $dim, int $year, int $limit = 300): array {
+    $src = kpi_as_calc_source($calc);
+    if (!$src || !isset($src['cols'][$dim])) return [];
+    list($vExpr, $iExpr) = $src['cols'][$dim];
+    $bind = [];
+    if (!empty($src['year_col'])) {
+        $where = $src['year_col'] . '=?';
+        $bind[] = $year;
+    } else {
+        $where = $src['date'] . '>=? AND ' . $src['date'] . '<?';
+        $bind[] = sprintf('%04d-01-01', $year);
+        $bind[] = sprintf('%04d-01-01', $year + 1);
+    }
+    $sql = "SELECT $vExpr AS v, " . ($iExpr !== '' ? "MIN($iExpr)" : "''") . " AS id
+            FROM " . $src['from'] . "
+            WHERE $where AND $vExpr IS NOT NULL AND $vExpr<>''
+            GROUP BY v ORDER BY v LIMIT " . (int)$limit;
+    $out = [];
+    try {
+        $st = $db->prepare($sql);
+        $st->execute($bind);
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $v = trim((string)$r['v']);
+            if ($v === '') continue;
+            $out[] = ['v'=>$v, 'id'=>trim((string)$r['id'])];
+        }
+    } catch (Throwable $e) {}
+    return $out;
+}
+
 /** 維度代號 → 顯示名稱 */
 function kpi_as_dim_labels(): array {
     return ['client'=>'客戶', 'part'=>'料號', 'proc'=>'製程', 'maker'=>'廠商',
@@ -819,18 +912,24 @@ function kpi_as_param_excl(?string $calc, array $params): array {
 function kpi_as_excl_rules(PDO $db, int $iid, int $year): array {
     $out = [];
     try {
-        $st = $db->prepare("SELECT dim, val FROM kpi_as_excl_rule WHERE indicator_id=? AND year=?");
+        // 這一年度自己的規則 ＋ 標成「所有年度」的規則（year=0）
+        $st = $db->prepare("SELECT dim, val FROM kpi_as_excl_rule
+                            WHERE indicator_id=? AND (year=? OR scope='all')");
         $st->execute([$iid, $year]);
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) $out[(string)$r['dim']][] = (string)$r['val'];
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $d = (string)$r['dim']; $v = (string)$r['val'];
+            if (!isset($out[$d]) || !in_array($v, $out[$d], true)) $out[$d][] = $v;
+        }
     } catch (Throwable $e) {}
     return $out;
 }
 
-/** 排除規則明細（畫面用，含原因與建立者） */
+/** 排除規則明細（畫面用，含適用範圍與建立者） */
 function kpi_as_excl_rule_rows(PDO $db, int $iid, int $year): array {
     try {
-        $st = $db->prepare("SELECT rule_id,dim,val,reason,created_by_name,created_at
-                            FROM kpi_as_excl_rule WHERE indicator_id=? AND year=? ORDER BY dim, val");
+        $st = $db->prepare("SELECT rule_id,dim,val,scope,year,reason,created_by_name,created_at
+                            FROM kpi_as_excl_rule WHERE indicator_id=? AND (year=? OR scope='all')
+                            ORDER BY scope DESC, dim, val");
         $st->execute([$iid, $year]);
         return $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
     } catch (Throwable $e) { return []; }

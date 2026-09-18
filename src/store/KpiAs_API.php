@@ -80,6 +80,25 @@ function kpi_excl_resettle_year(PDO $db, array $iy, int $year, array $u): int {
     return $n;
 }
 
+/**
+ * 規則改動之後要重算哪些年度。
+ * scope=year → 只有這一年；scope=all → 這個指標有資料的每一個年度都要重算，
+ * 否則畫面上會出現「規則說是所有年度，別的年度卻還是舊數字」這種看不出原因的落差。
+ * 已結案鎖定的年度**只有 KPI 管理者能改**，沒權限就跳過並回報，不可以偷偷改掉封存的數字。
+ * 回傳 ['done'=>[年=>格數], 'skipped'=>[年,...]]
+ */
+function kpi_excl_resettle_scope(PDO $db, int $iid, int $year, string $scope, array $u, array $perms, int $uid): array {
+    $years = ($scope === 'all') ? kpi_as_years($db) : [$year];
+    $done = []; $skipped = [];
+    foreach ($years as $y) {
+        $iy = kpi_get_iy_row($db, $iid, (int)$y);
+        if (!$iy || $iy['source_mode'] !== 'auto') continue;
+        if (!kpi_as_can_modify((int)$y, $perms, ((int)$iy['owner_user_id'] === $uid))) { $skipped[] = (int)$y; continue; }
+        $done[(int)$y] = kpi_excl_resettle_year($db, $iy, (int)$y, $u);
+    }
+    return ['done'=>$done, 'skipped'=>$skipped];
+}
+
 switch ($action) {
 
 /* ---------- 基本資訊 ---------- */
@@ -585,7 +604,13 @@ case 'excl_dim_search': {
     $dim  = trim((string)($_GET['dim'] ?? ''));
     if (!in_array($dim, kpi_as_calc_dims($calc), true)) jerr('這個指標沒有這種排除維度');
     $q = trim((string)($_GET['q'] ?? ''));
-    jout(['dim'=>$dim, 'q'=>$q, 'rows'=>kpi_as_dim_lookup($db, $dim, $q, 50)]);
+    // 沒打關鍵字＝只列「這個年度的資料裡真的有的」（使用者要求 2026-09-18）；
+    // 這個年度沒有的要打關鍵字才從主檔搜出來，不然一開啟就是一整份跟本年度無關的主檔。
+    if ($q === '') {
+        jout(['dim'=>$dim, 'q'=>'', 'src'=>'本年度',
+              'rows'=>kpi_as_dim_year_values($db, $calc, $dim, $year, 300)]);
+    }
+    jout(['dim'=>$dim, 'q'=>$q, 'src'=>'主檔', 'rows'=>kpi_as_dim_lookup($db, $dim, $q, 50)]);
 }
 
 case 'excl_rule_add': {
@@ -600,6 +625,8 @@ case 'excl_rule_add': {
         jerr(kpi_as_year_locked($year) ? '此年度已結案鎖定，僅 KPI 管理者可調整'
                                        : '您沒有調整這個指標的權限（限擔當者本人、KPI 填報或 KPI 管理者）', 403);
     }
+    $scope = ((string)($_POST['scope'] ?? 'year') === 'all') ? 'all' : 'year';
+    $rowYear = ($scope === 'all') ? 0 : $year;     // 全年度的那一列 year 一律寫 0
     $dim = trim((string)($_POST['dim'] ?? ''));
     // 維度代號一律取自程式碼白名單，不吃前端亂送的欄位（鐵律8：前端擋一次、後端同規則再擋一次）
     if (!in_array($dim, kpi_as_calc_dims($calc), true)) jerr('這個指標沒有這種排除維度');
@@ -619,20 +646,30 @@ case 'excl_rule_add': {
     if (!$vals) jerr('這幾項在指標設定裡本來就已經排除了（' . implode('、', $dupe) . '），不必再建規則');
     $reason = mb_substr(trim((string)($_POST['reason'] ?? '')), 0, 200);   // 非必填
 
-    $ins = $db->prepare("INSERT INTO kpi_as_excl_rule (indicator_id,year,dim,val,reason,created_by,created_by_name)
-                         VALUES (?,?,?,?,?,?,?)
-                         ON DUPLICATE KEY UPDATE reason=VALUES(reason), created_by=VALUES(created_by),
+    $ins = $db->prepare("INSERT INTO kpi_as_excl_rule (indicator_id,year,scope,dim,val,reason,created_by,created_by_name)
+                         VALUES (?,?,?,?,?,?,?,?)
+                         ON DUPLICATE KEY UPDATE scope=VALUES(scope), reason=VALUES(reason),
+                                                 created_by=VALUES(created_by),
                                                  created_by_name=VALUES(created_by_name), created_at=NOW()");
+    // 建「所有年度」時，把同一個值原本各年度的規則收掉——留著只會在畫面上變成兩條意思一樣的規則
+    $delNarrow = $db->prepare("DELETE FROM kpi_as_excl_rule
+                               WHERE indicator_id=? AND dim=? AND val=? AND scope='year'");
     $db->beginTransaction();
     try {
-        foreach ($vals as $v) $ins->execute([$iid, $year, $dim, $v, ($reason !== '' ? $reason : null),
-                                            (int)$u['id'], (string)$u['user_cname']]);
+        foreach ($vals as $v) {
+            if ($scope === 'all') $delNarrow->execute([$iid, $dim, $v]);
+            $ins->execute([$iid, $rowYear, $scope, $dim, $v, ($reason !== '' ? $reason : null),
+                           (int)$u['id'], (string)$u['user_cname']]);
+        }
         $db->commit();
     } catch (Throwable $e) { $db->rollBack(); jerr('寫入失敗：' . $e->getMessage(), 500); }
-    $re = kpi_excl_resettle_year($db, $iy, $year, $u);
-    kpi_as_log($db, $iid, $year, null, 'excl_rule_add', 'excl_' . $dim, null, implode(',', $vals),
-               '新增排除規則 ' . count($vals) . ' 項' . ($reason !== '' ? ('（原因：' . $reason . '）') : ''), $u);
-    jout(['added'=>count($vals), 'dupe'=>$dupe, 'recalced'=>$re,
+    $rs = kpi_excl_resettle_scope($db, $iid, $year, $scope, $u, $perms, $uid);
+    kpi_as_log($db, $iid, ($scope === 'all' ? null : $year), null, 'excl_rule_add', 'excl_' . $dim,
+               null, implode(',', $vals),
+               '新增排除規則 ' . count($vals) . ' 項（適用：' . ($scope === 'all' ? '所有年度' : ($year . ' 年度')) . '）'
+               . ($reason !== '' ? ('（原因：' . $reason . '）') : ''), $u);
+    jout(['added'=>count($vals), 'dupe'=>$dupe, 'scope'=>$scope,
+          'recalced'=>array_sum($rs['done']), 'years'=>array_keys($rs['done']), 'skipped_years'=>$rs['skipped'],
           'rules'=>kpi_as_excl_rule_rows($db, $iid, $year)]);
 }
 
@@ -650,14 +687,21 @@ case 'excl_rule_del': {
     $ids = is_array($ids) ? array_values(array_filter(array_map('intval', $ids))) : [];
     if (!$ids) jerr('請選擇要取消的規則');
     $in = implode(',', array_fill(0, count($ids), '?'));
-    $st = $db->prepare("DELETE FROM kpi_as_excl_rule WHERE indicator_id=? AND year=? AND rule_id IN ($in)");
-    $st->execute(array_merge([$iid, $year], $ids));
+    // 「所有年度」那一列的 year 是 0，所以不可以再用 year 過濾（rule_id 本來就唯一，
+    // 另外比對 indicator_id 當守門，避免刪到別的指標的規則）
+    $q = $db->prepare("SELECT scope FROM kpi_as_excl_rule WHERE indicator_id=? AND rule_id IN ($in)");
+    $q->execute(array_merge([$iid], $ids));
+    $scopes = $q->fetchAll(PDO::FETCH_COLUMN) ?: [];
+    $scope = in_array('all', $scopes, true) ? 'all' : 'year';
+    $st = $db->prepare("DELETE FROM kpi_as_excl_rule WHERE indicator_id=? AND rule_id IN ($in)");
+    $st->execute(array_merge([$iid], $ids));
     $n = $st->rowCount();
     if (!$n) jerr('這幾條規則本來就不存在（請重新整理）');
-    $re = kpi_excl_resettle_year($db, $iy, $year, $u);
-    kpi_as_log($db, $iid, $year, null, 'excl_rule_del', 'excl_rule', implode(',', $ids), null,
-               '取消排除規則 ' . $n . ' 條', $u);
-    jout(['removed'=>$n, 'recalced'=>$re, 'rules'=>kpi_as_excl_rule_rows($db, $iid, $year)]);
+    $rs = kpi_excl_resettle_scope($db, $iid, $year, $scope, $u, $perms, $uid);
+    kpi_as_log($db, $iid, ($scope === 'all' ? null : $year), null, 'excl_rule_del', 'excl_rule',
+               implode(',', $ids), null, '取消排除規則 ' . $n . ' 條', $u);
+    jout(['removed'=>$n, 'recalced'=>array_sum($rs['done']), 'years'=>array_keys($rs['done']),
+          'skipped_years'=>$rs['skipped'], 'rules'=>kpi_as_excl_rule_rows($db, $iid, $year)]);
 }
 
 /* ---------- 補登模式：整張表像 Excel 一樣直接填（使用者要求 2026-09-15） ----------

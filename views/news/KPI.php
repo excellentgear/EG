@@ -179,6 +179,10 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
             border-radius:10px; padding:1px 8px; margin:2px 4px 2px 0; }
         .vio-rules .vr-chip .vr-x { cursor:pointer; color:#DD5138; margin-left:4px; font-weight:bold; }
         .vio-rules .vr-chip.fixed { background:#F1ECE3; color:#8a6d45; border-color:#E3D9C7; }
+        .vio-rules .vr-chip.allyr { background:#F0A24B; color:#fff; border-color:#d98a33; }
+        .vio-rules .vr-chip.allyr .vr-by { color:#FBEBD6 !important; }
+        .vio-rules .vr-chip .vr-scope { font-size:10px; margin-left:5px; padding:0 5px;
+            border-radius:8px; background:rgba(255,255,255,.55); color:#6b4a20; }
         .vio-rules .vr-chip .vr-by { color:#a08356; font-size:11px; margin-left:5px; }
         .vio-note .vio-exinfo { color:#a08356; margin-left:6px; }
         .vr-list .vr-it.dis { color:#a89a86; cursor:default; background:#F7F4EE; }
@@ -216,6 +220,8 @@ $roleLabel = $kpiPerms['isAdmin'] ? '管理者'
         #vioFoot input[type=text] { height:28px; border:1px solid #D8BE93; border-radius:4px; padding:0 8px; font-size:13px; }
         #vioFoot .vio-set { margin-left:14px; font-size:12px; color:#8a6d45; }
         #vioFoot .vio-print { margin-left:14px; font-size:12px; color:#8a6d45; }
+        #vioFoot .vio-savetip { font-size:11px; color:#8A5A2B; background:#FBF5EA; border:1px solid #EADFC8;
+            border-radius:4px; padding:4px 8px; margin-top:6px; line-height:1.6; }
         #vioFoot .vio-print select { height:28px; border:1px solid #D8BE93; border-radius:4px; font-size:12px; }
         #vioFoot .vio-set select { height:28px; border:1px solid #D8BE93; border-radius:4px; font-size:12px; }
         .att-row { display:flex; gap:8px; align-items:center; border-bottom:1px dashed #EADFC8; padding:6px 0; font-size:13px; }
@@ -801,7 +807,7 @@ var VIO = null;
 function openVio(ri, m){
     var r = MATRIX.rows[ri];
     VIO = {ri:ri, iid:r.indicator_id, m:m, row:r, data:null, sel:{}, filt:{}, kw:'', kind:'bad',
-           rdim:'', rkw:'', rsel:[], rfound:[], rbusy:0, rlast:null};
+           rdim:'', rkw:'', rsel:[], rfound:[], rsrc:'', rbusy:0, rlast:null, rscope:'year'};
     $('#vioTitle').text('不符合標準的明細');
     $('#vioBody').html('<div style="padding:16px;color:#8a6d45;">載入中…</div>');
     $('#vioFoot').empty();
@@ -902,32 +908,37 @@ function vioRenderRuleList(){
         seen[o.v] = 1;
         list.push({v:o.v, id:o.id, src:'本月'});
     });
+    var fsrc = VIO.rsrc || '主檔';
     (VIO.rfound || []).forEach(function(o){
         if (seen[o.v]) return;
         seen[o.v] = 1;
-        list.push({v:o.v, id:o.id, src:'主檔'});
+        list.push({v:o.v, id:o.id, src:fsrc});
     });
+    // 已經排除掉的（指標設定或既有規則）直接不列出來——列出來只會讓人以為還要再設一次
+    list = list.filter(function(o){ return !done[o.v]; });
     list.forEach(function(o){
         total++;
         if (n >= cap) return;
         n++;
-        var dn = done[o.v];
-        h += '<div class="vr-it' + (picked[o.v] ? ' on' : '') + (dn ? ' dis' : '') + '"'
-           + (dn ? '' : (' data-v="' + esc(o.v) + '"')) + '>'
+        h += '<div class="vr-it' + (picked[o.v] ? ' on' : '') + '" data-v="' + esc(o.v) + '">'
            + esc(o.v) + (o.id ? ('<span class="vr-id">' + esc(o.id) + '</span>') : '')
-           + '<span class="vr-src">' + esc(dn || o.src) + '</span>'
-           + (dn ? '　（已排除，不必重複設定）' : (picked[o.v] ? '　✔ 已選' : '')) + '</div>';
+           + '<span class="vr-src">' + esc(o.src) + '</span>'
+           + (picked[o.v] ? '　✔ 已選' : '') + '</div>';
     });
     if (total > cap) h += '<div class="vr-none">還有 ' + (total - cap) + ' 筆沒顯示，請再輸入關鍵字縮小範圍。</div>';
     if (!total) {
         var kw = $.trim(VIO.rkw || '');
+        var hidden = 0;
+        for (var kk in done) if (!ws.length || vioRuleMatch({v:kk, id:''}, ws)) hidden++;
         h = VIO.rbusy
             ? '<div class="vr-none">查詢中…</div>'
-            : (kw
+            : (hidden
+               ? '<div class="vr-none">符合的項目都已經排除了，不必再設定一次。</div>'
+               : (kw
                ? '<div class="vr-none">主檔裡找不到「' + esc(kw) + '」。'
                  + '排除規則比對的是<b>名稱</b>，請改用名稱或正確的代號搜尋；'
                  + '真的要直接用這串字建立規則請按 <a href="#" id="vrFree">直接使用「' + esc(kw) + '」</a>。</div>'
-               : '<div class="vr-none">請輸入代號或名稱搜尋。</div>');
+               : '<div class="vr-none">這個年度的資料裡沒有可選的項目，請輸入代號或名稱搜尋主檔。</div>'));
     }
     $('#vrList').html(h);
     var ph = '';
@@ -951,9 +962,11 @@ function vioRulesHtml(){
     });
     if (!rs.length && !pe.length) h += '<span style="color:#a08356;">目前沒有設定任何規則。</span>';
     rs.forEach(function(r){
-        h += '<span class="vr-chip" title="' + esc(r.created_by_name || '') + ' '
+        h += '<span class="vr-chip' + (r.scope === 'all' ? ' allyr' : '') + '" title="'
+           + esc(r.created_by_name || '') + ' '
            + esc((r.created_at || '').substr(0, 16)) + (r.reason ? ('｜' + esc(r.reason)) : '') + ' 設定">'
            + esc(lb[r.dim] || r.dim) + '：' + esc(r.val)
+           + '<span class="vr-scope">' + (r.scope === 'all' ? '所有年度' : (r.year + ' 年度')) + '</span>'
            + '<span class="vr-by" style="color:#a08356;font-size:11px;margin-left:5px;">'
            + esc(r.created_by_name || '') + ' ' + esc((r.created_at || '').substr(0, 10)) + '</span>'
            + (+d.can_adjust ? ('<span class="vr-x" data-id="' + r.rule_id + '" title="取消這條規則">×</span>') : '')
@@ -967,13 +980,19 @@ function vioRulesHtml(){
         });
         h += '</select><input type="text" id="vrKw" value="' + esc(VIO.rkw || '')
            + '" placeholder="輸入代號或名稱模糊搜尋（例：C2005、1R、和大、齒研、料號…）">'
-           + '<button id="vrAdd" class="warm">建立排除規則</button></div>'
+           + '<label style="margin:0;font-weight:normal;">適用：<select id="vrScope">'
+           + '<option value="year"' + (VIO.rscope === 'all' ? '' : ' selected') + '>僅 ' + YEAR + ' 年度</option>'
+           + '<option value="all"' + (VIO.rscope === 'all' ? ' selected' : '') + '>所有年度</option>'
+           + '</select></label>'
+           + '<button id="vrAdd" class="warm">建立排除規則（立即存檔）</button></div>'
            + '<div class="vr-list" id="vrList"></div>'
            + '<div class="vr-picked" id="vrPicked"></div>'
            + (pe.length ? ('<div class="vio-seltip">標「指標設定」的是 KPI 設定頁參數裡本來就排除的，'
                            + '這裡不必也不能再建一次；要改請到 KPI 設定頁。</div>') : '')
-           + '<div class="vio-seltip">打代號或名稱都會列出主檔清單讓您挑（標「本月」的是這個月明細裡真的有的）；'
-           + '點一下加入／再點一次取消。存進規則的一律是<b>名稱</b>，所以挑清單裡的項目才比對得到。'
+           + '<div class="vio-seltip">清單預設只列<b>' + YEAR + ' 年度資料裡真的有的</b>'
+           + '（標「本月」的是這個月明細就看得到的）；這個年度沒有的，打代號或名稱就會從主檔搜出來。'
+           + '點一下加入／再點一次取消，<b>已經排除掉的不會出現在清單裡</b>。'
+           + '存進規則的一律是<b>名稱</b>，所以挑清單裡的項目才比對得到。'
            + '不必填原因，系統會記下是誰在什麼時候設定的。</div>';
     }
     h += '</div>';
@@ -1085,10 +1104,10 @@ function renderVio(){
 
     var f = '';
     if (+d.can_adjust) {
-        f += '<button class="warm" id="vioDo">排除選取</button>'
+        f += '<button class="warm" id="vioDo">排除選取並存檔</button>'
            + '<button id="vioUndo">取消排除選取</button>'
-           + '<input type="text" id="vioReason" placeholder="排除原因（可不填）" style="width:230px;margin-left:6px;">'
-           + '<span class="vio-seltip" style="margin-left:8px;">拖曳可一次選多列；不填原因也可以，系統會記下是誰在什麼時候排的。</span>';
+           + '<input type="text" id="vioReason" placeholder="排除原因（可不填）" style="width:200px;margin-left:6px;">'
+           + '<button id="vioDone" style="margin-left:6px;">完成，關閉</button>';
     } else {
         f += '<span style="color:#8a6d45;font-size:12px;">您沒有調整這個指標的權限，只能檢視。</span>';
     }
@@ -1103,6 +1122,13 @@ function renderVio(){
            + '<option value="allow"'+(d.setting==='allow'?' selected':'')+'>可直接修改真實資料</option>'
            + '<option value="deny"'+(d.setting==='deny'?' selected':'')+'>不可修改，只能排除</option>'
            + '</select></span>';
+    }
+    // 這個跳窗每個動作都是「按下去當下就存檔」，沒有另外的存檔鈕——
+    // 使用者回報找不到存檔按鈕（2026-09-18），所以把這件事明講出來
+    if (+d.can_adjust) {
+        f += '<div class="vio-savetip">這個畫面<b>沒有另外的存檔按鈕</b>：按下「排除選取並存檔」「建立排除規則」'
+           + '或改最右邊那一欄，<b>當下就已經存檔並重新計算</b>了（每一筆都會記下是誰在什麼時候做的）。'
+           + '拖曳可一次選多列。</div>';
     }
     $('#vioFoot').html(f);
     if ($('#vioPrM').length) {
@@ -1177,6 +1203,7 @@ function vioRuleLookup(force){
         if (seq !== vioRkwSeq) return;              // 打字很快時只採用最後一次的結果
         VIO.rbusy = 0;
         VIO.rfound = (res && res.ok) ? (res.rows || []) : [];
+        VIO.rsrc   = (res && res.src) ? res.src : '主檔';
         vioRenderRuleList();
     }).fail(function(){
         if (seq !== vioRkwSeq) return;
@@ -1215,28 +1242,42 @@ $(document).on('click', '#vioBody .vr-x2', function(e){
     if (i >= 0) VIO.rsel.splice(i, 1);
     vioRenderRuleList();
 });
+$(document).on('change', '#vioBody #vrScope', function(){ VIO.rscope = $(this).val(); });
+function vioRuleResultMsg(res){
+    var m = '';
+    if (res.years && res.years.length) m += '\n影響年度：' + res.years.join('、') + '（共重算 ' + res.recalced + ' 個月份）';
+    if (res.skipped_years && res.skipped_years.length)
+        m += '\n' + res.skipped_years.join('、') + ' 年度已結案鎖定，快照沒有重算（需 KPI 管理者）。';
+    if (res.dupe && res.dupe.length) m += '\n（' + res.dupe.join('、') + ' 在指標設定裡本來就排除了，略過）';
+    return m;
+}
+$(document).on('click', '#vioDone', function(){ closeMask('vioMask'); });
 $(document).on('click', '#vioBody #vrAdd', function(){
     var dim = $('#vrDim').val(), vals = (VIO.rsel || []).slice();
+    var scope = $('#vrScope').val() || 'year';
     if (!vals.length) { alert('請先從下方清單點選要排除的項目（可先打字模糊搜尋）'); return; }
     var lb = $('#vrDim option:selected').text();
-    if (!confirm('把下列 '+lb+' 整年度（'+YEAR+'）都排除在這個指標的計算之外？\n\n'
-                 + vals.join('、') + '\n\n（不會修改任何一筆真實資料，但該年度每一個月都會重算）')) return;
+    var sp = (scope === 'all') ? '所有年度' : (YEAR + ' 年度');
+    if (!confirm('把下列 '+lb+' 在【'+sp+'】都排除在這個指標的計算之外？\n\n'
+                 + vals.join('、') + '\n\n（不會修改任何一筆真實資料，但涵蓋到的每一個月都會重算'
+                 + (scope === 'all' ? '；已結案鎖定的年度不會動到' : '') + '）')) return;
     $.post(API, {action:'excl_rule_add', indicator_id:VIO.iid, year:YEAR,
-                 dim:dim, vals:JSON.stringify(vals)}, function(res){
+                 dim:dim, scope:scope, vals:JSON.stringify(vals)}, function(res){
         if (!res.ok) { alert(res.error||'建立失敗'); return; }
-        alert('已建立 '+res.added+' 條排除規則，重算了 '+res.recalced+' 個月份。'
-              + ((res.dupe && res.dupe.length) ? ('\n（'+res.dupe.join('、')+' 在指標設定裡本來就排除了，略過）') : ''));
+        alert('已建立 '+res.added+' 條排除規則（適用：'+sp+'）。' + vioRuleResultMsg(res));
         VIO.rsel = []; VIO.rkw = '';
         openVio(VIO.ri, VIO.m); loadMatrix(true);
     }, 'json').fail(function(x){ alert('建立失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status)); });
 });
 $(document).on('click', '#vioBody .vr-x', function(){
     var id = $(this).attr('data-id');
-    if (!confirm('取消這一條排除規則？該年度每一個月都會重算。')) return;
+    var all = $(this).closest('.vr-chip').hasClass('allyr');
+    if (!confirm('取消這一條排除規則？'
+                 + (all ? '這是「所有年度」的規則，每一個年度都會重算。' : '該年度每一個月都會重算。'))) return;
     $.post(API, {action:'excl_rule_del', indicator_id:VIO.iid, year:YEAR,
                  rule_ids:JSON.stringify([id])}, function(res){
         if (!res.ok) { alert(res.error||'取消失敗'); return; }
-        alert('已取消 '+res.removed+' 條規則，重算了 '+res.recalced+' 個月份。');
+        alert('已取消 '+res.removed+' 條規則。' + vioRuleResultMsg(res));
         openVio(VIO.ri, VIO.m); loadMatrix(true);
     }, 'json').fail(function(x){ alert('取消失敗：'+((x.responseJSON&&x.responseJSON.error)||x.status)); });
 });
