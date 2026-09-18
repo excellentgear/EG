@@ -562,10 +562,13 @@ $roleLabel = ia_role_label($perms);
                 下方直接列出<b>那一天要稽核哪些單位、起始主過程是什麼</b>，不必另外開通知單查；
                 <b>稽核人也會自動帶成該件號上的稽核員</b>，下拉裡仍然是「<b>該稽核日期當時有稽核員資格</b>」的人，可以自己改成別人。
                 日期是依<b>該件號的稽核期間</b>帶的（受稽單位列上的受稽日期若與稽核期間對不起來，會直接標紅字告訴您）。</li>
-            <li><b>受稽時間可以自動排</b>：「時間」欄的表頭填<b>開始時間</b>（結束時間可留空）後按<b>「自動排」</b>，就依<b>間隔</b>（預設 30 分，可改）往下排每一列，
-                而且<b>會自動跳過午休 12:00~13:00</b>（算出來落在午休內的一律改成 13:00 再往後排）。
-                之後<b>手動改中間任何一列的時間，後面幾列會自動順延</b>（前面的不動）；想逐列自己填就把表頭的「改一列就自動順延後面」取消勾選。
-                有填結束時間而排不完時只會提示您，<b>不會自己把間隔壓縮</b>——要縮請自己把間隔改小再按一次。</li>
+            <li><b>受稽時間可以自動排</b>：「時間」欄的表頭填<b>開始時間</b>（結束時間可留空）後按<b>「自動排」</b>。
+                <b>「每單位 N 分」是每個受稽單位需要的時間</b>（不是空檔）：第一個單位從開始時間起，下一個就是上一個做完的時間；
+                <b>會自動跳過午休 12:00~13:00</b>。
+                <b>最後一個單位一定會排在結束會議開始前 30 分鐘做完</b>（結束會議排在<b>別天</b>時就不受這一條限制）。
+                <b>時間真的不夠時會擋下來並給建議</b>，例如「保持每單位 60 分，改成 08:30 開始」或「保持 09:30 開始，每單位改成 45 分」，
+                而且<b>不會動到已經填好的時間</b>。
+                之後<b>手動改中間任何一列的時間，後面幾列會自動順延</b>（前面的不動）；想逐列自己填就把表頭的「改一列就自動順延後面」取消勾選。</li>
             <li><b>要補以前年度的資料</b>：左上角年度下拉本來就含近十年，直接切到那一年再建立即可，不必先有當年的資料。</li>
             <li><b>稽核起始主過程要填什麼</b>：這次稽核從哪一段流程切入，稽核員由這裡開始循序把相關過程查完。紙本備註列了三類可填：<b>主過程</b>（客戶需求檢討→開發→訂單/合約審查→生產→倉儲出貨→客戶回饋）、<b>管理過程</b>（文件/記錄管理、人力資源訓練、不符合管理、資料分析、內部稽核、矯正/預防措施管理、持續改善、管理責任…）、<b>支援過程</b>（採購、供應商管理、IQC/FAI/IPQC/FQC、儀器/量具、機器/治具、生管、型態(鑑別追溯)、特殊特性…）。起點<b>不必等於該單位的日常業務</b>——紙本備註第 1 條要求「跳過自己的直接職務」，讓稽核員從別人的角度切入。<b>同一次稽核裡不可以有兩列填相同的起始主過程</b>，重複會即時標紅、也存不進去。</li>
             <li><b>稽核員與陪檢員怎麼帶</b>：選了範本之後，該列的稽核員／陪檢員下拉會縮到範本指定的部門範圍內、且只列有資格的職務；<b>候選只有一位就自動帶入</b>。系統<b>先決定稽核員</b>，陪檢員的候選會自動排除稽核員本人（同一人不可兩邊都當，即使是不同職務）。<b>陪檢員可以不填</b>。</li>
@@ -796,9 +799,10 @@ $roleLabel = ia_role_label($perms);
                         <button type="button" id="btnAllTime" title="從開始時間起，依間隔往下排每一列的受稽時間">自動排</button>
                     </div>
                     <div style="font-weight:normal;font-size:10px;color:#8a6d45;margin-top:2px;line-height:1.5;">
-                        間隔 <input type="text" id="cTimeStep" value="30" data-eg-skip
+                        每單位 <input type="text" id="cTimeStep" value="60" data-eg-skip
                              style="width:30px;border:1px solid #D8BE93;border-radius:3px;padding:0 3px;font-size:10px;"> 分，
                         跳過午休 12:00~13:00<br>
+                        <span style="color:#a08356;">最後一個單位會排在結束會議開始前 30 分鐘做完</span><br>
                         <label style="font-weight:normal;margin:0;cursor:pointer;">
                             <input type="checkbox" id="cTimeCascade" checked data-eg-skip style="vertical-align:-1px;">
                             改一列就自動順延後面</label>
@@ -2184,6 +2188,7 @@ function caseFillAllDate(field, headSel){
    ③手動改了中間某一列，後面的自動順延（可用「改一列就自動順延後面」關掉）
    ④有填結束時間而排不完時只提示、不擅自壓縮——要壓縮請自己把間隔改小。 */
 var IA_LUNCH_FROM = 12 * 60, IA_LUNCH_TO = 13 * 60;
+var IA_MEET_GAP = 30;        // 最後一個單位稽核完，要在結束會議開始前留這麼多分鐘
 function iaT2M(s){ var n = normTime(s); if (!n) return null; var p = n.split(':'); return (+p[0]) * 60 + (+p[1]); }
 function iaM2T(m){ m = Math.max(0, Math.min(24 * 60 - 1, Math.round(m)));
                    return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); }
@@ -2193,9 +2198,72 @@ function iaNextSlot(min, step){
     if (t >= IA_LUNCH_FROM && t < IA_LUNCH_TO) t = IA_LUNCH_TO;
     return t;
 }
+/** 「每個部門需要幾分鐘」（2026-09-18 使用者定調：這個數字是**時長**不是空檔） */
 function iaTimeStep(){
     var v = parseInt($('#cTimeStep').val(), 10);
     return (v > 0 && v <= 600) ? v : 30;
+}
+/**
+ * 從 start 開始、每個單位 dur 分鐘、跳過午休，排 n 個單位。
+ * 回傳 {starts:[每個單位的開始時間], end:最後一個單位的結束時間}
+ * ——**end 是「最後一個單位做完」的時間**，不是最後一個開始時間（要拿它跟結束會議比）。
+ */
+function iaPlanTimes(start, dur, n){
+    var cur = start, starts = [];
+    if (cur >= IA_LUNCH_FROM && cur < IA_LUNCH_TO) cur = IA_LUNCH_TO;   // 起點落在午休就從 13:00 起
+    for (var i = 0; i < n; i++) {
+        if (i > 0) cur = iaNextSlot(cur, dur);
+        starts.push(cur);
+    }
+    var end = starts.length ? iaNextSlot(starts[starts.length - 1], dur) : cur;
+    // iaNextSlot 會把落在午休的結束時間推到 13:00，但「做到 12:00」本身是合法的結束
+    if (starts.length) {
+        var raw = starts[starts.length - 1] + dur;
+        if (raw <= IA_LUNCH_FROM) end = raw;
+    }
+    return {starts: starts, end: end};
+}
+/**
+ * 這一天最晚必須做完的時間（2026-09-18 使用者要求）：
+ * 結束會議**當天**時，最後一個單位要在結束會議開始前 IA_MEET_GAP 分鐘做完；
+ * 另外使用者若自己填了「結束時間」，兩者取較早的那一個。
+ * 結束會議排在別天（例：隔天開會）就不受這一條限制。
+ * @return {limit:分鐘或 null, why:文字說明}
+ */
+function iaTimeLimit(auditDate){
+    var lim = null, why = '';
+    var to = normTime($('#cTimeTo').val());
+    if (to) { lim = iaT2M(to); why = '您填的結束時間 ' + to; }
+    var md = $('#cMeetDate').val(), ms = normTime($('#cMeetStart').val());
+    if (md && ms && (!auditDate || md === auditDate)) {
+        var m = iaT2M(ms) - IA_MEET_GAP;
+        if (lim === null || m < lim) { lim = m; why = '結束會議 ' + ms + ' 前 ' + IA_MEET_GAP + ' 分鐘（' + iaM2T(m) + '）'; }
+    }
+    return {limit: lim, why: why};
+}
+/** 排不下時給建議：①保持間隔往前挪開始時間 ②保持開始時間縮短間隔（取 5 分鐘倍數） */
+function iaTimeSuggest(n, dur, start, limit){
+    var out = [];
+    // ①往前挪：用二分逼近找「最晚可以幾點開始」
+    var lo = 6 * 60, hi = start, best = null;
+    while (lo <= hi) {
+        var mid = Math.floor((lo + hi) / 2 / 5) * 5;
+        if (iaPlanTimes(mid, dur, n).end <= limit) { best = mid; lo = mid + 5; } else { hi = mid - 5; }
+        if (hi < lo) break;
+    }
+    if (best !== null && best < start) {
+        out.push('・保持每個單位 ' + dur + ' 分鐘，改成 ' + iaM2T(best) + ' 開始（做到 '
+               + iaM2T(iaPlanTimes(best, dur, n).end) + '）');
+    }
+    // ②縮短每個單位的時間（5 分鐘為單位）
+    for (var d = dur - 5; d >= 15; d -= 5) {
+        if (iaPlanTimes(start, d, n).end <= limit) {
+            out.push('・保持 ' + iaM2T(start) + ' 開始，每個單位改成 ' + d + ' 分鐘（做到 '
+                   + iaM2T(iaPlanTimes(start, d, n).end) + '）');
+            break;
+        }
+    }
+    return out;
 }
 /** 從第 idx 列的時間往後重排（idx 那一列不動） */
 function iaCascadeTimes(idx){
@@ -2220,22 +2288,38 @@ $(document).on('click', '#btnAllTime', function(){
     $('#cTimeFrom').val(from);
     var to = normTime($('#cTimeTo').val());
     if (to) $('#cTimeTo').val(to);
-    var step = iaTimeStep(), cur = iaT2M(from), n = 0, last = cur;
-    // 開始時間本身就落在午休時，直接從 13:00 起排
-    if (cur >= IA_LUNCH_FROM && cur < IA_LUNCH_TO) cur = IA_LUNCH_TO;
-    CASE_ROWS.forEach(function(r, i){
+
+    var rows = CASE_ROWS.filter(caseRowHasContent);
+    if (!rows.length) { alert('目前沒有已填內容的受稽單位列，請先填好單位再按自動排'); return false; }
+    var dur = iaTimeStep(), start = iaT2M(from);
+    var plan = iaPlanTimes(start, dur, rows.length);
+
+    /* 最後一個單位要在結束會議開始前 30 分鐘做完（2026-09-18 使用者要求）。
+       結束會議日期與受稽日期不同天時不受這一條限制。 */
+    var auditDate = '';
+    for (var i = 0; i < CASE_ROWS.length && !auditDate; i++) {
+        if (caseRowHasContent(CASE_ROWS[i]) && CASE_ROWS[i].audited_date) auditDate = CASE_ROWS[i].audited_date;
+    }
+    var lim = iaTimeLimit(auditDate);
+    if (lim.limit !== null && plan.end > lim.limit) {
+        var sug = iaTimeSuggest(rows.length, dur, start, lim.limit);
+        alert('時間不夠：' + rows.length + ' 個受稽單位、每個 ' + dur + ' 分鐘，'
+            + '從 ' + from + ' 開始會做到 ' + iaM2T(plan.end) + '（已扣掉午休 12:00~13:00），\n'
+            + '但必須在 ' + iaM2T(lim.limit) + ' 之前做完——' + lim.why + '。\n\n'
+            + (sug.length ? ('建議改成：\n' + sug.join('\n')) : '即使縮到每個單位 15 分鐘也排不完，請改成分兩天稽核，或把結束會議往後移。')
+            + '\n\n（時間沒有被更動，請調整後再按一次自動排）');
+        return false;
+    }
+
+    var k = 0;
+    CASE_ROWS.forEach(function(r){
         if (!caseRowHasContent(r)) return;
-        if (n > 0) cur = iaNextSlot(cur, step);
-        r.audited_time = iaM2T(cur);
-        last = cur; n++;
+        r.audited_time = iaM2T(plan.starts[k++]);
     });
     renderCaseRows();
-    if (!n) { alert('目前沒有已填內容的受稽單位列，請先填好單位再按自動排'); return false; }
-    if (to && last > iaT2M(to)) {
-        alert('已排好 ' + n + ' 列（' + from + ' 起，每 ' + step + ' 分一列，跳過午休 12:00~13:00），\n'
-            + '但最後一列排到 ' + iaM2T(last) + '，已超過結束時間 ' + to + '。\n\n'
-            + '需要的話請把間隔改小再按一次自動排。');
-    }
+    alert('已排好 ' + rows.length + ' 個單位：' + from + ' 起，每個單位 ' + dur + ' 分鐘，'
+        + '做到 ' + iaM2T(plan.end) + '（跳過午休 12:00~13:00）'
+        + (lim.limit !== null ? ('。\n最晚必須做完的時間是 ' + iaM2T(lim.limit) + '（' + lim.why + '），符合。') : '.'));
     return false;
 });
 $(document).on('click', '#btnAllAudited', function(){ caseFillAllDate('audited_date', '#cAllAudited'); return false; });
