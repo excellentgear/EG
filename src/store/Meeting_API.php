@@ -1278,5 +1278,50 @@ case 'admin_backfill': {
     jout(['status'=>$ap['status']]);
 }
 
+/* ============================================================
+ * 超級管理員：更換「記錄人員」（2026-09-18 使用者明確要求，用途＝補舊資料）
+ *   · 不限狀態：**已完成核准的也要能改**（使用者明說），因為補舊紀錄常常是先一鍵補齊簽核、
+ *     事後才發現製表人要換成紙本上那位；若只允許草稿改，就得把整張退回重簽。
+ *   · 候選人一律依 **會議日期當時** 的在職狀態與職稱解析（ai-rules/22 第5坑），
+ *     不然當時在職、現已離職的記錄人一個都挑不到，而且完全不報錯。
+ *   · 前端擋一次，這裡用**同一支候選解析**再擋一次（鐵律8），防止直打 API 寫入不存在或
+ *     會議當天不在職的人。
+ * ============================================================ */
+case 'recorder_candidates': {
+    if (!meeting_is_superadmin($db, $uid)) jerr('僅超級管理員可使用此功能', 403);
+    $mid = (int)($_GET['meeting_id'] ?? 0);
+    $m = meeting_load($db, $mid);
+    jout(['people'=>meeting_recorder_candidates($db, (string)$m['meeting_date']),
+          'current_id'=>(int)$m['recorder_user_id'], 'current_name'=>(string)$m['recorder_name'],
+          'meeting_date'=>(string)$m['meeting_date']]);
+}
+case 'set_recorder': {
+    if (!meeting_is_superadmin($db, $uid)) jerr('僅超級管理員可使用此功能', 403);
+    $v = meeting_verify_superadmin_password($db, (string)($_POST['password'] ?? ''));
+    if (!$v['ok']) jerr($v['msg']);
+    $id  = (int)($_POST['meeting_id'] ?? 0);
+    $m   = meeting_load($db, $id);
+    $new = (int)($_POST['user_id'] ?? 0);
+    if ($new <= 0) jerr('請選擇記錄人員');
+    if ($new === (int)$m['recorder_user_id']) jerr('選的就是目前的記錄人員，不需要更換');
+    $hit = null;
+    foreach (meeting_recorder_candidates($db, (string)$m['meeting_date']) as $c) {
+        if ((int)$c['id'] === $new) { $hit = $c; break; }
+    }
+    if (!$hit) jerr('此人員在會議日期當時不在職（或已不存在），不可指定為記錄人員');
+    $oldId = (int)$m['recorder_user_id']; $oldName = (string)$m['recorder_name'];
+    try {
+        $db->prepare("UPDATE meeting_record SET recorder_user_id=?, recorder_name=?, updated_at=NOW() WHERE meeting_id=?")
+           ->execute([$new, (string)$hit['user_cname'], $id]);
+    } catch (Throwable $e) { jerr('更換失敗：'.$e->getMessage(), 500); }
+    try {
+        $db->prepare("INSERT INTO page_change_log (page_name, summary, detail, changed_at, created_by)
+                      VALUES ('views/ADM/meeting_record.php', '超級管理員更換記錄人員', ?, NOW(), ?)")
+           ->execute(["meeting_id={$id}, {$oldName}(#{$oldId}) -> {$hit['user_cname']}(#{$new}), status={$m['status']}", $uname]);
+    } catch (Throwable $e) {}
+    $ap = meeting_approval_status($db, $id);
+    jout(['recorder_user_id'=>$new, 'recorder_name'=>(string)$hit['user_cname'], 'status'=>$ap['status']]);
+}
+
 default: jerr('未知的操作：'.$action);
 }

@@ -1018,6 +1018,30 @@ function meeting_is_superadmin(PDO $db, int $uid): bool {
         return (int)$st->fetchColumn() === 99;
     } catch (Throwable $e) { return false; }
 }
+/* 記錄人員的候選名單（超級管理員更換記錄人用，**唯一實作**，前後端共用同一份）。
+   一律依【會議日期當時】解析（ai-rules/22 第5坑）：用 eg_people_posts()/eg_people_list() 的話只會回「今天在職的人」，
+   補 2024/2025 的舊紀錄時「當時在職、現已離職」的記錄人一個都挑不到，而且畫面上只是「沒這個人」不報錯。
+   一人有兼任就一個職務一列（鐵則⑥），點選時才找得到「主職那個部門底下的他」。 */
+function meeting_recorder_candidates(PDO $db, string $meetingDate): array {
+    require_once __DIR__ . '/people_lib.php';
+    $date = trim($meetingDate);
+    $rows = preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)
+          ? eg_people_posts_asof($db, ['states'=>[1,2,3]], $date)
+          : eg_people_posts($db, ['states'=>[1,2,3]]);
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = [
+            'id'         => (int)$r['id'],
+            'post_key'   => (string)($r['post_key'] ?? ((int)$r['id'] . ':0')),
+            'user_cname' => (string)$r['user_cname'],
+            'dept_name'  => (string)($r['dept_name'] ?? ''),
+            'position_name' => (string)($r['position_name'] ?? ''),
+            'is_former'  => (int)($r['is_former'] ?? 0),
+            'display'    => (string)($r['display'] ?? trim(($r['dept_name'] ?? '') . '　' . ($r['position_name'] ?? '') . '　' . $r['user_cname'])),
+        ];
+    }
+    return $out;
+}
 function meeting_verify_superadmin_password(PDO $db, string $password): array {
     if ($password === '') return ['ok'=>false, 'msg'=>'請輸入超級管理員密碼'];
     try {

@@ -379,6 +379,23 @@ foreach ($roleRows as $rr) {
     </div>
 </div></div>
 
+<!-- 更換記錄人員（超級管理員限定，2026-09-18 使用者明確要求：補舊資料用，已完成核准的也要能改） -->
+<div class="mt-mask" id="recMask"><div class="mt-modal">
+    <div class="m-head"><span>更換記錄人員</span><span class="m-close" onclick="closeMask('recMask')">✕</span></div>
+    <div class="m-body">
+        <div id="recHint" style="font-size:12px;color:#5b3a1e;margin-bottom:8px;"></div>
+        <label>記錄人員</label>
+        <select id="recPick" data-eg-filter="輸入姓名／部門／職稱篩選…" style="width:100%;"></select>
+        <label style="margin-top:8px;display:block;">超級管理員密碼</label>
+        <input type="password" id="recPw" autocomplete="new-password" style="width:100%;">
+        <div style="font-size:11.5px;margin-top:8px;color:#8a6d45;">人員清單依<b>會議日期當時</b>的在職狀態與職稱列出（當時在職、現已離職者也列得出來，補舊資料才挑得到人）。更換後會議紀錄列印版的「製表」圖章會跟著換成新的記錄人員。</div>
+    </div>
+    <div class="m-foot">
+        <button class="b-cancel" onclick="closeMask('recMask')">取消</button>
+        <button class="b-ok" onclick="saveRecorder()"><i class="fa fa-check"></i> 確定更換</button>
+    </div>
+</div></div>
+
 <!-- 常用設定管理（主題綁地點綁時間，管理員維護，套用後仍可自行修改） -->
 <div class="mt-mask" id="presetMask"><div class="mt-modal">
     <div class="m-head"><span>常用設定管理</span><span class="m-close" onclick="closeMask('presetMask')">✕</span></div>
@@ -595,7 +612,8 @@ foreach ($roleRows as $rr) {
         「常用設定」（主題旁的齒輪連結，僅管理員看得到）：維護主題+地點+時間的組合，供新增會議時一鍵套用（套用後仍可自行修改，不會鎖死）。
         <h4>權限角色</h4>
         會議記錄檢閱＝看（草稿仍僅本人）；會議記錄登錄＝新增/編輯/送出；會議記錄管理員＝＋檢視全部人員記錄、刪除、修改他人已送出記錄、維護常用設定；管理者全權。<br>
-        ・<b>超級管理員（帳號e）專屬</b>：檢視畫面內出席簽到／項目確認簽名旁會多出「[改日期/補簽]」連結，可個別或用「一鍵補齊全部簽章日期」批次補齊漏簽/校正日期，尚未簽核的部分會視同已完成一併補簽；主席／總經理若該場會議從未送出過，也會自動送審＋自動核准（總經理階段會先確保主席已核准），不會卡在「查無紀錄無法補」。操作前需輸入超級管理員密碼，且會留下 page_change_log 紀錄可追溯。
+        ・<b>超級管理員（帳號e）專屬</b>：檢視畫面內出席簽到／項目確認簽名旁會多出「[改日期/補簽]」連結，可個別或用「一鍵補齊全部簽章日期」批次補齊漏簽/校正日期，尚未簽核的部分會視同已完成一併補簽；主席／總經理若該場會議從未送出過，也會自動送審＋自動核准（總經理階段會先確保主席已核准），不會卡在「查無紀錄無法補」。操作前需輸入超級管理員密碼，且會留下 page_change_log 紀錄可追溯。另在「主席／記錄」那一列的記錄人員右方有「[更換記錄人]」，補舊資料時可把記錄人員改成紙本上的那一位——<b>不限狀態，已完成核准的也改得動</b>（不必把整張退回重簽），人員清單依<b>會議日期當時</b>的在職狀態與職稱列出（當時在職、現已離職的人也挑得到），更換後列印版的「製表」圖章會跟著換。<br>
+        ・<b>任何動作都會即時更新畫面</b>：補簽、更換記錄人、回簽確認等操作完成後，檢視視窗與背後的清單／狀態篩選筆數會一起重抓，所以「一次補齊全部簽章」之後清單上的狀態會直接變成<b>已完成</b>，不需要重新整理整頁。
     </div>
     <div class="m-foot"><button class="b-ok" onclick="closeMask('helpUseMask')">關閉</button></div>
 </div></div>
@@ -1556,6 +1574,9 @@ function viewHtml(res){
         + (m.start_time?('　<b>時間：</b>'+esc(m.start_time)+(m.end_time?'~'+esc(m.end_time):'')):'')
         + '　<b>地點：</b>'+esc(m.location||'—')+'</div>'
         + '<div class="kv"><b>主席：</b>'+esc(m.chair_name||'—')+'　<b>記錄：</b>'+esc(m.recorder_name||'')
+        // 超級管理員更換記錄人員（2026-09-18 使用者明確要求，補舊資料用）：
+        // **已完成核准的也要可以改**，所以這裡不看狀態，只看是不是超級管理員（後端另驗密碼）。
+        + (META.is_superadmin ? ' <a href="javascript:void(0)" onclick="openRecorderPick()" style="font-size:11px;">[更換記錄人]</a>' : '')
         + '　<b>狀態：</b><span class="st-pill st-'+m.approval_status+'">'+(STATUS_LABEL[m.approval_status]||m.approval_status)+'</span></div>';
 
     h += '<h5>出席人員／簽到</h5><table><tr><th>部門</th><th>職稱</th><th>姓名</th><th>簽到</th></tr>';
@@ -1726,7 +1747,7 @@ function viewSubmit(mid, hasPending){
         if (!confirm('目前仍有負責部門／指定人員尚未確認回簽，確定要（重新）通知相關人員嗎？\n（全部確認完成後才能送交主席簽核）')) return;
         notifyPendingItems(mid, function(ok, msg){
             if (!ok){ alert('通知失敗：'+msg); return; }
-            alert(msg); openView(mid);
+            alert(msg); refreshAfterChange(mid);
         });
         return;
     }
@@ -1939,6 +1960,54 @@ function itemConfirmCellHtml(it){
     if (!h) h = '<span class="confirm-no">—</span>';
     return h;
 }
+/* 任何會改變內容/狀態的動作結束後一律走這支（2026-09-18 使用者回報：「變動都要可以 AJAX 更新」）。
+   原本只呼叫 openView()，與視窗裡面確實會重抳最新內容，**但背後的清單與狀態篩選筆數是舊的**——
+   超級管理員「一次補齊全部簽章」之後會議已經是「已完成」，清單上卻還寫著「進行中」，
+   要手動重新整理整頁才會變（看起來就像補簽沒成功）。 */
+function refreshAfterChange(id){
+    loadList();
+    if (id) openView(id);
+}
+/* 超級管理員：更換記錄人員（2026-09-18 使用者明確要求，用途＝補舊資料）。
+   不限狀態（已完成核准的也可以改），候選名單依【會議日期當時】的在職狀態與職稱解析（ai-rules/22）。 */
+var RECOPT = [];
+function openRecorderPick(){
+    if (!VIEW) return;
+    var m = VIEW.meeting;
+    $('#recPw').val('');
+    $('#recHint').html('「'+esc(m.subject)+'」（'+dispDate(m.meeting_date)+'）目前的記錄人員：<b>'+esc(m.recorder_name||'—')+'</b>');
+    $('#recPick').html('<option value="">載入中…</option>');
+    openMask('recMask');
+    $.getJSON(API, {action:'recorder_candidates', meeting_id:m.meeting_id}, function(res){
+        if (!res.ok){ alert(res.error||'載入失敗'); closeMask('recMask'); return; }
+        RECOPT = res.people||[];
+        var h = '<option value="">請選擇…</option>';
+        RECOPT.forEach(function(x){
+            h += '<option value="'+x.post_key+'" data-uid="'+x.id+'"'
+               + (String(x.id)===String(res.current_id)?' selected':'')+'>'+esc(x.display)+'</option>';
+        });
+        $('#recPick').html(h).trigger('change');
+    });
+}
+function saveRecorder(){
+    if (!VIEW) return;
+    var m = VIEW.meeting;
+    var key = $('#recPick').val();
+    if (!key){ alert('請選擇記錄人員'); $('#recPick').focus(); return; }
+    // value 是 post_key（uid:部門id）——同一人有兼任時會有兩列，用 id 當 value 會撞號（鐵則⑥），
+    // 送後端的仍然是 user_id。
+    var uid = String(key).split(':')[0];
+    var pick = RECOPT.filter(function(x){ return String(x.post_key)===String(key); })[0];
+    if (String(uid) === String(m.recorder_user_id)){ alert('選的就是目前的記錄人員，不需要更換。'); return; }
+    var pw = $('#recPw').val();
+    if (!pw){ alert('請輸入超級管理員密碼'); $('#recPw').focus(); return; }
+    if (!confirm('確定把記錄人員由「'+(m.recorder_name||'—')+'」改成「'+(pick?pick.user_cname:'')+'」？\n（會留下稽核紀錄；列印版的「製表」圖章會跟著改）')) return;
+    $.post(API, {action:'set_recorder', meeting_id:m.meeting_id, user_id:uid, password:pw}, function(res){
+        if (!res.ok){ alert(res.error||'更換失敗'); return; }
+        closeMask('recMask');
+        refreshAfterChange(m.meeting_id);   // 清單上的「記錄」欄也要跟著換，所以連清單一起重抓
+    }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '更換失敗'); });
+}
 /* 超級管理員：補齊/修改單一列(出席簽到或項目確認)的簽章日期，未簽者一併視同補簽(2026-08-05使用者明確要求)。
    密碼沿用同一次檢視期間內輸入過的值(ADMIN_PW)，避免每列都要重打一次；日期預設帶會議日期，可自行修改。 */
 var ADMIN_PW = '';
@@ -1951,7 +2020,7 @@ function adminBackfillRow(scope, targetId){
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('日期格式不正確'); return; }
     $.post(API, {action:'admin_backfill', meeting_id:m.meeting_id, password:ADMIN_PW, date:date, scope:scope, target_id:targetId}, function(res){
         if (!res.ok){ alert(res.error||'補登失敗'); ADMIN_PW=''; return; }
-        openView(m.meeting_id);
+        refreshAfterChange(m.meeting_id);
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '補登失敗'); ADMIN_PW=''; });
 }
 /* 超級管理員：一次補齊整場會議的簽章日期(出席簽到＋項目確認＋主席＋總經理)，同樣視同未簽者一併補簽。 */
@@ -1966,7 +2035,7 @@ function adminBackfillAll(){
     $.post(API, {action:'admin_backfill', meeting_id:m.meeting_id, password:ADMIN_PW, date:date, scope:'all'}, function(res){
         if (!res.ok){ alert(res.error||'補登失敗'); ADMIN_PW=''; return; }
         alert('已補齊。');
-        openView(m.meeting_id);
+        refreshAfterChange(m.meeting_id);   // 補齊後狀態常常就變成「已完成」，清單與狀態篩選筆數要一起重抓
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '補登失敗'); ADMIN_PW=''; });
 }
 function confirmItemWithPassword(itemId, uidv){
@@ -1975,7 +2044,7 @@ function confirmItemWithPassword(itemId, uidv){
     $.post(API, {action:'item_confirm', item_id:itemId, user_id:uidv, password:pw}, function(res){
         if (!res.ok){ alert(res.error||'確認失敗'); return; }
         if (res.auto_submitted){ alert('全部負責部門都已回簽、出席也全部簽到，系統已自動送出主席簽核。'); closeMask('viewMask'); loadList(); return; }
-        openView(VIEW.meeting.meeting_id);
+        refreshAfterChange(VIEW.meeting.meeting_id);
     }, 'json').fail(function(x){ alert(x.responseJSON&&x.responseJSON.error || '確認失敗'); $('#pwConfirm'+itemId+'_'+uidv).val('').select(); });
 }
 function decide(mid, level, decision){
@@ -1996,17 +2065,22 @@ function decide(mid, level, decision){
 function egPrintWindow(title, bodyHtml, extraCss, docNo, landscape, pageCount, showPageCounter){
     if (showPageCounter === undefined) showPageCounter = true;
     var asCss = String(docNo||'').replace(/['\\]/g,'');
-    // 頁邊(2026-09-16 使用者回報「列印太過滿版」)：原本左右只留 8mm，橫式 A4 的版心會到 281mm 寬，
-    // 表格幾乎貼著紙邊，印出來很壓迫、裝訂或印表機不可列印區還會吃掉邊框。改成左右 15mm、上 14mm，
-    // 下緣維持 16mm（頁碼與 AS 編號印在那條頁尾邊界裡，縮了會撞到表格）。
+    // 頁邊(2026-09-16 使用者回報「列印太過滿版」、2026-09-18 再次回報仍然滿版)：
+    // 第一次只把 @page 的 margin 由 8mm 放寬到 15mm，但 **@page 的 margin 只在 Chrome 列印跳窗的
+    // 「邊界」選「預設」時才生效**——使用者那台只要曾經選過一次「無」(這個設定是黏著的，會沿用到之後
+    // 每一次列印)，@page margin 就整個被忽略、版面又貼回紙邊，而且畫面上完全看不出是設定造成的。
+    // 故改成「兩段式」：@page 只留很小的邊(留給頁碼/AS編號那兩個 margin box 用)，真正的留白改用
+    // body 的 padding——padding 是文件自己的版面，不受列印跳窗的邊界設定影響，怎麼選都留得住。
+    //   · 邊界＝預設：4+11=15mm(左右/上)、10+5=15mm(下)  ← 與 2026-09-16 調整後完全相同
+    //   · 邊界＝無  ：11mm(左右/上)、5mm(下)             ← 至少不再貼著紙邊
     var css = '@page{size:A4 '+(landscape?'landscape':'portrait')+';'
             + (pageCount
-                ? 'margin:14mm 15mm 16mm;' + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
+                ? 'margin:4mm 4mm 10mm;' + (asCss ? " @bottom-right{ content:'"+asCss+"'; font-size:9pt; color:#333; }" : '')
                 : 'margin:0;')
             + '}'
-            + (pageCount ? '' : 'html,body{margin:0;padding:0;}')
+            + 'html,body{margin:0;padding:0;}'
             + 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;color:#000;'
-            + (pageCount ? '' : 'padding:10mm 8mm 12mm;') + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+            + (pageCount ? 'padding:11mm 11mm 5mm;' : 'padding:10mm 8mm 12mm;') + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
             + '.pt-head{text-align:center;margin-bottom:6px;}'
             + '.pt-head .co{font-size:22px;font-weight:bold;letter-spacing:2px;}'
             + '.pt-head .tt{font-size:16px;font-weight:bold;margin-top:3px;letter-spacing:1px;}'
@@ -2056,7 +2130,10 @@ function mrCss(){
         // 前提是整次列印工作從頭到尾只對應同一份文件(position:fixed在Chrome列印中的範圍是整個列印工作，不是單一頁面，
         // 混排不同文件會疊字，2026-08-06實測確認)——本頁已把每個列印按鈕都拆成剛好一份文件，不再有混排情境，
         // 故本頁全部用fixed；.mr-bottom-note(內文寫法)仍保留給函式的'inline'模式，供日後若真的需要合併列印時使用。
-        + '.as-doc-fixed{position:fixed;right:8mm;bottom:6mm;font-size:9pt;color:#333;}'
+        // position:fixed 是以「頁面框」(＝@page margin 以內)為基準，不受 body padding 影響；
+        // 2026-09-18 把 @page 的邊改小、留白移到 body padding 之後，這裡要一起補回同樣的距離，
+        // 編號才會停在原本的位置(距紙緣約 23mm / 22mm)，不會突然貼到紙邊去。
+        + '.as-doc-fixed{position:fixed;right:19mm;bottom:12mm;font-size:9pt;color:#333;}'
         + 'table.ss-head{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:6px;}'
         + 'table.ss-head td{border:1px solid #333;padding:6px 8px;text-align:left;width:50%;}'
         // 字級/列高只有這一份定義，空白簽到表與已簽署簽到表共用同一支 signSheetPageHtml()+這份CSS，兩者格式(含欄位高度)一律相同，
