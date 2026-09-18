@@ -522,6 +522,11 @@ case 'case_save': {
     $mkd = iaDate($_POST['maker_date'] ?? '');
     if ($mkd && $mkd > $nd) jerr('製表日期不可晚於通知日期（' . $nd . '）');
 
+    /* 每個受稽單位需要幾分鐘：存起來，重開這張單才不會變回預設值，
+       送出前的「來不來得及開結束會議」也要靠它（後端自己算，不採信前端算好的結果）。 */
+    $unitMin = (int)($_POST['unit_minutes'] ?? 0);
+    $unitMin = ($unitMin > 0 && $unitMin <= 600) ? $unitMin : null;
+
     $year   = (int)substr($nd, 0, 4);
     /* 這張單的業務日期＝稽核起日（沒填就退回通知日期）。人員的在職狀態、部門職稱與資格任期
        一律以它為準（ai-rules/22）——否則補 2025 年的歷史單據時，當時在職現已離職的人一律
@@ -669,11 +674,11 @@ foreach ($depts as $di => $d) {
             $db->prepare("UPDATE ia_case SET year=?, notify_date=?, audit_from=?, audit_to=?,
                               leader_id=?, leader_name=?, leader_dept_id=?, leader_position_id=?,
                               end_meet_date=?, end_meet_start=?, end_meet_end=?,
-                              end_meet_place=?, remark=?, updated_at=NOW() WHERE case_id=?")
+                              end_meet_place=?, remark=?, unit_minutes=?, updated_at=NOW() WHERE case_id=?")
                ->execute([$year, $nd, $af, $at, $leader, $leaderName ?: null, $leaderDept, $leaderPos,
                           iaDate($_POST['end_meet_date'] ?? ''), $ems, $eme,
                           mb_substr(trim((string)($_POST['end_meet_place'] ?? '')), 0, 150) ?: null,
-                          trim((string)($_POST['remark'] ?? '')) ?: null, $cid]);
+                          trim((string)($_POST['remark'] ?? '')) ?: null, $unitMin, $cid]);
             // 製表人可事後修改（2026-09-14）
             if (($mk = iaMakerFromPost($db, (string)($old['maker_date'] ?? ''))) !== null) {
                 $db->prepare("UPDATE ia_case SET maker_id=?, maker_name=?, maker_date=? WHERE case_id=?")
@@ -692,14 +697,14 @@ foreach ($depts as $di => $d) {
             $db->prepare("INSERT INTO ia_case (year, seq_no, case_no, notify_date, audit_from, audit_to,
                               leader_id, leader_name, leader_dept_id, leader_position_id,
                               end_meet_date, end_meet_start, end_meet_end, end_meet_place,
-                              remark, status, maker_id, maker_name, maker_date, created_by, created_by_name,
-                              created_at, updated_at)
-                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft', ?,?,?,?,?, NOW(), NOW())")
+                              remark, status, maker_id, maker_name, maker_date, unit_minutes,
+                              created_by, created_by_name, created_at, updated_at)
+                          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'draft', ?,?,?,?,?,?, NOW(), NOW())")
                ->execute([$year, $seq, $caseNo, $nd, $af, $at, $leader, $leaderName ?: null, $leaderDept, $leaderPos,
                           iaDate($_POST['end_meet_date'] ?? ''), $ems, $eme,
                           mb_substr(trim((string)($_POST['end_meet_place'] ?? '')), 0, 150) ?: null,
                           trim((string)($_POST['remark'] ?? '')) ?: null,
-                          $mkNew['id'], $mkNew['name'], $mkNew['date'], $uid, $uname]);
+                          $mkNew['id'], $mkNew['name'], $mkNew['date'], $unitMin, $uid, $uname]);
             $cid = (int)$db->lastInsertId();
         }
 
@@ -1030,7 +1035,9 @@ case 'check_get': {
         /* 受稽人候選（2026-09-18 使用者要求，第二版）：**名單來自該年度的「稽核小組」**，
            不再各自去掃資格清單——小組是一筆職務一列，所以「同一個人在不同部門」會各自出現，
            部門職稱也已依小組基準日回推好（ai-rules/22），兼任會標出來。
-           分組：本單陪檢員（這張通知單上指定的，預設值只從這裡挑）／稽核組長／稽核員／陪檢員。
+           **只分兩組**（使用者指定）：稽核人員（含稽核組長）／陪檢員——不另外拆出「稽核組長」
+           與「本單陪檢員」，同一個人才不會在選單裡出現好幾個地方；這張通知單上的陪檢員仍靠
+           unit_name 認得出來（預設值只從他們裡面挑）。
            該年度還沒建小組時才退回用「具稽核員資格者」，否則下拉會只剩本單那幾位。 */
         $asofPosts = [];      // 職務鍵 → 稽核日期當天的職務（拿 is_main 與當時的部門職稱）
         try {
@@ -1049,7 +1056,7 @@ case 'check_get': {
                 $e['position_name'] = (string)$hit['position_name'];
                 $e['is_main']       = (int)($hit['is_main'] ?? 1);
             }
-            $e['group'] = '本單陪檢員';
+            $e['group'] = '陪檢員';
             $cands[] = $e;
         }
 
@@ -1064,7 +1071,8 @@ case 'check_get': {
                         'dept_id' => (int)$m['dept_id'], 'dept_name' => (string)$m['dept_name'],
                         'position_id' => (int)$m['position_id'], 'position_name' => (string)$m['position_name'],
                         'is_main' => (int)($m['is_main'] ?? 1), 'unit_name' => '',
-                        'group' => (string)$m['role_label']];
+                        // 稽核組長併進「稽核人員」（使用者指定，不另立一組）
+                        'group' => ((string)$m['role'] === 'escort') ? '陪檢員' : '稽核人員'];
         }
         if (!$team) {   // 沒建小組的年度：退回資格清單，至少選得到人
             try {
@@ -1075,7 +1083,7 @@ case 'check_get': {
                     $cands[] = ['user_id' => (int)$p['id'], 'user_name' => (string)$p['user_cname'],
                                 'dept_id' => (int)$p['dept_id'], 'dept_name' => (string)$p['dept_name'],
                                 'position_id' => (int)$p['position_id'], 'position_name' => (string)$p['position_name'],
-                                'is_main' => (int)($p['is_main'] ?? 1), 'unit_name' => '', 'group' => '稽核員'];
+                                'is_main' => (int)($p['is_main'] ?? 1), 'unit_name' => '', 'group' => '稽核人員'];
                 }
             } catch (Throwable $e2) {}
         }
@@ -1197,9 +1205,14 @@ case 'check_save_items': {
                               $auditorSet['dept_id'], $auditorSet['position_id'], $kid]);
             }
         }
+        // 存完自動依「受稽人部門 → 表單編號」重排（2026-09-18 使用者要求）
+        $resorted = ia_check_items_resort($db, $kid);
         $db->commit();
-        jout(['saved' => true]);
-    } catch (Throwable $e) { $db->rollBack(); jerr('儲存失敗：' . $e->getMessage(), 500); }
+        jout(['saved' => true, 'resorted' => $resorted]);
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        jerr('儲存失敗：' . $e->getMessage(), 500);
+    }
 }
 
 case 'check_done': {
@@ -1219,8 +1232,10 @@ case 'check_done': {
         if ($todo > 0) jerr('還有 ' . $todo . ' 個項目沒有判定合格／不合格，不能結案');
     }
     if ($to === 'draft' && !$perms['canAdmin']) jerr('取消結案需內稽管理員權限', 403);
+    // 結案前再排一次順序（存檔之後若有人改過受稽人，順序要跟著對）
+    $resorted = ($to === 'done') ? ia_check_items_resort($db, $kid) : 0;
     $db->prepare("UPDATE ia_check SET status=?, updated_at=NOW() WHERE check_id=?")->execute([$to, $kid]);
-    jout(['saved' => true]);
+    jout(['saved' => true, 'resorted' => $resorted]);
 }
 
 case 'car_from_item': {

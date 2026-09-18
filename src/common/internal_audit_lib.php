@@ -467,6 +467,8 @@ function ia_ensure_schema(PDO $db): void
             ['ia_check_item', 'doc_name_snap',      "VARCHAR(150) NULL COMMENT 'AS 文件名稱快照（建立當下）'"],
             ['ia_nc',         'ref_form_name',      "VARCHAR(150) NULL COMMENT '相關表單名稱快照（編號存在 ref_form_no）'"],
             ['ia_case',      'approver_at',         "DATETIME NULL COMMENT '核准簽核的精確時間（業務日期在 approver_date）'"],
+            // 每個受稽單位需要幾分鐘（表頭那個欄位，之前只活在畫面上、重開就變回預設 60）
+            ['ia_case',      'unit_minutes',        "INT NULL COMMENT '受稽時間：每個單位需要幾分鐘（結束時間與送出前檢查都用它）'"],
             // 稽核報告表改成「送出通知」流程（2026-09-17 使用者要求：不要核准、不要製表人）
             ['ia_report',    'submit_date',         "DATE NULL COMMENT '送出的業務日期'"],
             ['ia_report',    'submitted_at',        "DATETIME NULL COMMENT '按下送出的精確時間（與業務日期分開存，ai-rules/21）'"],
@@ -1672,7 +1674,66 @@ function ia_case_is_done(array $c): bool
  * @return array ['status','auto_signed','approver','reviewer']
  */
 /**
- * 稽核通知單「送出（完成）」前的必填檢查（2026-09-18 使用者要求）。
+ * 系統稽核紀錄表的列順序：**受稽人部門 → 表單編號**（2026-09-18 使用者要求）。
+ * 存檔與結案都會呼叫（唯一實作，兩邊各寫一次規則必定走鐘）。
+ *
+ * 部門依 `department.sort_order`（同一個部門的表單才會排在一起，順序與組織圖一致），
+ * 沒指定受稽人的列排到最後；同部門內依表單編號自然排序（2-DC-01-04 這種分段編號直接比字串即可）。
+ * AS 條文查檢表與績效查檢表**不動**——那兩張的題序本來就是題庫的順序。
+ *
+ * @return int 有沒有真的換過順序（換了幾列）
+ */
+function ia_check_items_resort(PDO $db, int $checkId): int
+{
+    try {
+        $q = $db->prepare("SELECT kind FROM ia_check WHERE check_id=?");
+        $q->execute([$checkId]);
+        if ((string)($q->fetchColumn() ?: '') !== 'system') return 0;
+
+        $q = $db->prepare("SELECT item_id, sort_order, col_a, auditee_dept_id
+                             FROM ia_check_item WHERE check_id=? ORDER BY sort_order, item_id");
+        $q->execute([$checkId]);
+        $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+        if (count($rows) < 2) return 0;
+
+        $dept = [];
+        foreach ($db->query("SELECT id, name, COALESCE(sort_order,999) s FROM department")->fetchAll(PDO::FETCH_ASSOC) as $d) {
+            $dept[(int)$d['id']] = ['s' => (int)$d['s'], 'n' => (string)$d['name']];
+        }
+        $key = function ($r) use ($dept) {
+            $did = (int)($r['auditee_dept_id'] ?? 0);
+            $d = $did ? ($dept[$did] ?? null) : null;
+            // 沒填受稽人的列一律排到最後（還沒決定是誰要回答，排在前面會擋住已經排好的）
+            return [$d ? $d['s'] : 99999, $d ? $d['n'] : '', $did];
+        };
+        $sorted = $rows;
+        usort($sorted, function ($a, $b) use ($key) {
+            $ka = $key($a); $kb = $key($b);
+            for ($i = 0; $i < 3; $i++) {
+                $c = is_int($ka[$i]) ? ($ka[$i] <=> $kb[$i]) : strcmp((string)$ka[$i], (string)$kb[$i]);
+                if ($c) return $c;
+            }
+            $c = strnatcasecmp((string)$a['col_a'], (string)$b['col_a']);
+            return $c ?: ((int)$a['item_id'] <=> (int)$b['item_id']);
+        });
+
+        $changed = 0;
+        $upd = $db->prepare("UPDATE ia_check_item SET sort_order=? WHERE item_id=? AND check_id=?");
+        foreach ($sorted as $i => $r) {
+            $want = ($i + 1) * 10;
+            if ((int)$r['sort_order'] === $want && (int)$rows[$i]['item_id'] === (int)$r['item_id']) continue;
+            $upd->execute([$want, (int)$r['item_id'], $checkId]);
+            $changed++;
+        }
+        return $changed;
+    } catch (Throwable $e) { return 0; }
+}
+
+/** 最後一個單位稽核完，要比結束會議開始早這麼多分鐘（前端 IA_MEET_GAP 是同一個數字） */
+const IA_MEET_GAP_MIN = 30;
+
+/**
+ * 稽核通知單「送出（完成）」前的檢查（2026-09-18 使用者要求）。
  *
  * 每一個受稽單位列都要填齊：**稽核起始主過程／受稽單位／稽核員／陪檢員／受稽日期／時間／預定完成改善**。
  * 草稿存檔刻意不檢查（現場本來就是邊查邊填），只有按「完成」＝這張單要發出去了才擋。
@@ -1702,6 +1763,37 @@ function ia_case_required_missing(PDO $db, int $caseId): array
         if (trim((string)($r['audited_time'] ?? '')) === '')               $miss[] = '時間';
         if (empty($r['improve_due']))                                      $miss[] = '預定完成改善';
         if ($miss) $out[] = '第 ' . ($n + 1) . ' 列（' . (trim((string)($r['dept_name'] ?? '')) ?: '未填單位') . '）：' . implode('、', $miss);
+    }
+
+    /* 最後一個單位要在結束會議開始前 30 分鐘做完（2026-09-18 使用者回報：
+       他把最後一列手動改成 15:30、每單位 60 分＝做到 16:30，已經超過 15:30，畫面卻沒有擋）。
+       **只管與結束會議同一天的那幾列**，會議排在別天就沒有這個限制。
+       時長取這張單自己存的 unit_minutes（表頭那個欄位），沒存過就用預設 60。 */
+    $c = [];
+    try {
+        $q = $db->prepare("SELECT end_meet_date, end_meet_start, unit_minutes FROM ia_case WHERE case_id=?");
+        $q->execute([$caseId]);
+        $c = $q->fetch(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) {}
+    $mDate = (string)($c['end_meet_date'] ?? '');
+    $mStart = (string)($c['end_meet_start'] ?? '');
+    if ($mDate !== '' && preg_match('/^(\d{1,2}):(\d{2})/', $mStart, $mm)) {
+        $dur   = (int)($c['unit_minutes'] ?? 0) ?: 60;
+        $limit = ((int)$mm[1]) * 60 + ((int)$mm[2]) - IA_MEET_GAP_MIN;
+        $lastT = null; $lastRow = 0;
+        foreach ($rows as $n => $r) {
+            if ((string)($r['audited_date'] ?? '') !== $mDate) continue;
+            if (!preg_match('/^(\d{1,2}):(\d{2})/', (string)($r['audited_time'] ?? ''), $tm)) continue;
+            $t = ((int)$tm[1]) * 60 + ((int)$tm[2]);
+            if ($lastT === null || $t > $lastT) { $lastT = $t; $lastRow = $n + 1; }
+        }
+        if ($lastT !== null && ($lastT + $dur) > $limit) {
+            $fmt = function ($m) { return sprintf('%02d:%02d', intdiv($m, 60), $m % 60); };
+            $out[] = '最後一個受稽單位（第 ' . $lastRow . ' 列 ' . $fmt($lastT) . ' 起、每單位 ' . $dur . ' 分）'
+                   . '會做到 ' . $fmt($lastT + $dur) . '，超過 ' . $fmt($limit)
+                   . '——結束會議 ' . substr($mStart, 0, 5) . ' 前要留 ' . IA_MEET_GAP_MIN . ' 分鐘。'
+                   . '請把受稽時間往前挪、縮短每單位分鐘，或把結束會議往後移。';
+        }
     }
     return $out;
 }

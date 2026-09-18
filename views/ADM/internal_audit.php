@@ -498,8 +498,9 @@ $roleLabel = ia_role_label($perms);
                 <b>建立查檢表預設一題都不勾</b>（2026-09-14 起），請先從左欄點選，或直接在右側逐題勾選。三種的差別：
                 <ul>
                     <li><b>系統稽核紀錄表的受稽人</b>：預設帶<b>該份文件所屬部門</b>的陪檢員，可改選的名單<b>來自該年度的「稽核小組」</b>
-                        （工具列的「稽核小組」設定），下拉分成<b>本單陪檢員／稽核組長／稽核員／陪檢員</b>四組。
+                        （工具列的「稽核小組」設定），下拉只分<b>稽核人員（含稽核組長）／陪檢員</b>兩組。
                         清單一律顯示「部門　職稱　姓名」，部門職稱<b>依稽核日期回推當時的</b>，
+                        <b>存檔與結案時會自動依「受稽人部門 → 表單編號」重新排序</b>（同一個部門的表單排在一起），
                         <b>兼任會標「（兼任）」</b>；同一個人在不同部門各有一個職務時會各列一筆，請挑對他這次是以哪個身分受稽。
                         <b>標題不用自己取</b>——自動顯示為對應稽核通知單的「第 N 次　日期」。</li>
                     <li><b>開不符合通知單時會自動帶好</b>：受稽核單位、受稽核人（都還可以手動改）、相關表單編號<b>與名稱</b>、
@@ -563,6 +564,9 @@ $roleLabel = ia_role_label($perms);
             <li><b>稽核通知單要按「完成」</b>：填好內容按下方的<b>完成</b>——
                 <b>送出前每一列受稽單位都要填齊</b>：稽核起始主過程、受稽單位、稽核員、陪檢員、受稽日期、時間、預定完成改善，
                 缺一格就會擋下來並把那一格標紅（<b>儲存草稿不檢查</b>，可以邊排邊填）。
+                <b>受稽時間也會一起檢查</b>：最後一個單位必須在<b>結束會議開始前 30 分鐘</b>做完
+                （依表格裡<b>實際填的時間</b>加上「每單位分鐘」計算，不是看表頭的開始時間），
+                來不及就擋下來並告訴您最後一列要幾點以前開始；結束會議排在別天則不受此限。
                 <b>完成之後整張單就鎖定不可修改</b>，而且<b>完成之後才會送審核</b>（管理員若已開啟自動簽核，核准與審查會在這一刻直接簽完）。
                 （自動簽核要不要開，在<b>設定 → 自動簽核</b>，<b>年度計畫表與稽核通知單各有一個開關</b>；
                 <b>勾選通知單那一個並儲存時，已經完成但還沒有章的通知單會一次補上核准與審查</b>，並告訴您補了哪幾張——
@@ -2178,6 +2182,7 @@ function openCase(id){
         $('#cNo,#cSeq').val(''); $('#cNotify').val(META.today);
         $('#cFrom,#cTo,#cMeetDate,#cMeetStart,#cMeetEnd,#cMeetPlace,#cAllAudited,#cAllDue').val('');
         $('#cRemark').val(defaultCaseRemark());
+        $('#cTimeStep').val(60); $('#cTimeFrom,#cTimeTo').val('');
         $('#cLeader').html(postOptions(META.auditors, '', '', '（未指定）'));
         $('#cMaker').html(makerOptions(makerDefaultSelf(), META.me.name));
         $('#cMakerDate').val(META.today);
@@ -2206,6 +2211,7 @@ function openCaseRender(c){
         $('#cTo').val(inputDate(c.audit_to)); $('#cMeetDate').val(inputDate(c.end_meet_date));
         $('#cMeetStart').val(c.end_meet_start||''); $('#cMeetEnd').val(c.end_meet_end||'');
         $('#cMeetPlace').val(c.end_meet_place||''); $('#cRemark').val(c.remark||'');
+        $('#cTimeStep').val(c.unit_minutes || 60);   // 每單位分鐘存在單據上，重開不會變回預設值
         $('#cAllAudited,#cAllDue').val('');
         $('#cMaker').html(makerOptions(c.maker_id, c.maker_name));
         $('#cMakerDate').val(inputDate(c.maker_date));
@@ -2254,6 +2260,11 @@ var IA_MEET_GAP = 30;        // 最後一個單位稽核完，要在結束會議
 function iaT2M(s){ var n = normTime(s); if (!n) return null; var p = n.split(':'); return (+p[0]) * 60 + (+p[1]); }
 function iaM2T(m){ m = Math.max(0, Math.min(24 * 60 - 1, Math.round(m)));
                    return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); }
+/** 某一列從 t 開始做 dur 分鐘的「做完時間」（做到 12:00 是合法的，跨進午休才推到 13:00） */
+function iaEndOf(t, dur){
+    var raw = t + dur;
+    return (raw <= IA_LUNCH_FROM) ? raw : iaNextSlot(t, dur);
+}
 /** 從 min 往後推 step 分鐘；落在午休內一律推到午休結束 */
 function iaNextSlot(min, step){
     var t = min + step;
@@ -2351,28 +2362,98 @@ function iaTimeRecalc(){
     var $calc = $('#cTimeCalc');
     var n = CASE_ROWS.filter(caseRowHasContent).length;
     var from = normTime($('#cTimeFrom').val()), start = from ? iaT2M(from) : null;
-    if (!n || start === null) {
+    /* **表頭的開始時間只是自動排用的**——每一列都自己填好時間時不需要它
+       （使用者多半是直接在表格裡打時間，沒碰過表頭那一格；原本沒填就整個不算，
+        於是手動排的時間永遠不會被檢查）。 */
+    var allTimed = n > 0 && CASE_ROWS.filter(caseRowHasContent)
+                                     .every(function(r){ return iaT2M(r.audited_time) !== null; });
+    if (!n || (start === null && !allTimed)) {
         $('#cTimeTo').val('');
-        $calc.css('color', '#a08356').text(n ? '填開始時間就會自動算出結束時間' : '先填受稽單位，再填開始時間');
+        $calc.css('color', '#a08356').text(n ? '填開始時間就會自動算出結束時間（或直接在表格裡逐列填）'
+                                            : '先填受稽單位，再填開始時間');
         return;
     }
-    var dur = iaTimeStep(), plan = iaPlanTimes(start, dur, n);
-    $('#cTimeTo').val(iaM2T(plan.end));
+    var dur = iaTimeStep();
+    /* **以「表格裡實際填的時間」為準**（2026-09-18 使用者回報）：
+       原本一律拿表頭的開始時間 ×（列數 × 每單位分鐘）試算，所以手動把某一列改晚
+       （例：最後一列改成 15:30、每單位 60 分＝做到 16:30）畫面還是顯示「做到 15:00 ✔」。
+       每一列都填了時間就看最晚的那一列做完是幾點；還有列沒填時間才退回自動排的試算。 */
+    var rows = CASE_ROWS.filter(caseRowHasContent), timed = [], lastT = null, lastIdx = 0;
+    rows.forEach(function(r, k){
+        var t = iaT2M(r.audited_time);
+        if (t === null) return;
+        timed.push(t);
+        if (lastT === null || t > lastT) { lastT = t; lastIdx = k + 1; }
+    });
+    var end, base;
+    if (timed.length === n) {
+        end  = iaEndOf(lastT, dur);
+        base = '目前填的時間：最後一個單位第 ' + lastIdx + ' 列 ' + iaM2T(lastT) + ' 起、'
+             + dur + ' 分 → 做到 ' + iaM2T(end);
+        start = Math.min.apply(null, timed);
+    } else {
+        var plan = iaPlanTimes(start, dur, n);
+        end  = plan.end;
+        base = n + ' 單位 × ' + dur + ' 分 → 做到 ' + iaM2T(end)
+             + (timed.length ? ('（還有 ' + (n - timed.length) + ' 列沒填時間，以自動排試算）') : '');
+    }
+    $('#cTimeTo').val(iaM2T(end));
 
     var auditDate = '';
     for (var i = 0; i < CASE_ROWS.length && !auditDate; i++) {
         if (caseRowHasContent(CASE_ROWS[i]) && CASE_ROWS[i].audited_date) auditDate = CASE_ROWS[i].audited_date;
     }
-    var lim = iaTimeLimit(auditDate);
-    var base = n + ' 單位 × ' + dur + ' 分 → 做到 ' + iaM2T(plan.end);
-    if (lim.limit === null) { $calc.css('color', '#a08356').text(base + '（沒有同一天的結束會議，不另設上限）'); return; }
-    if (plan.end <= lim.limit) {
-        $calc.css('color', '#5b8a3a').text(base + '　✔ 在 ' + iaM2T(lim.limit) + ' 之前（' + lim.why + '）');
-    } else {
-        var sug = iaTimeSuggest(n, dur, start, lim.limit);
-        $calc.css('color', '#C4442D').html(base + '　✘ 超過 ' + iaM2T(lim.limit) + '（' + lim.why + '）'
-            + (sug.length ? ('<br>' + sug.join('<br>')) : '<br>・即使每單位縮到 15 分也排不完，請分兩天或把結束會議往後移'));
+    /* 逐列自己填時間時，兩列之間的間隔可能比「每單位分鐘」還短＝時間會重疊，
+       這不擋送出（現場有可能兩組人同時進行），但一定要講出來，否則畫面看起來完全正常。 */
+    var lap = '';
+    if (timed.length === n && n > 1) {
+        var srt = timed.slice().sort(function(a, b){ return a - b; });
+        for (var q = 1; q < srt.length; q++) {
+            if (srt[q] - srt[q - 1] < dur) {
+                lap = '　⚠ 有兩個單位只間隔 ' + (srt[q] - srt[q - 1]) + ' 分，比每單位 ' + dur + ' 分短（時間重疊）';
+                break;
+            }
+        }
     }
+    var lim = iaTimeLimit(auditDate);
+    if (lim.limit === null) { $calc.css('color', '#a08356').text(base + lap + '（沒有同一天的結束會議，不另設上限）'); return; }
+    if (end <= lim.limit) {
+        $calc.css('color', lap ? '#B07A2B' : '#5b8a3a')
+             .text(base + '　✔ 在 ' + iaM2T(lim.limit) + ' 之前（' + lim.why + '）' + lap);
+    } else {
+        /* 建議分兩種講法：時間是自己逐列填的，就直接講「最後那一列要幾點以前開始」——
+           拿自動排的試算去建議（做到 13:55 之類）跟他手上排的表對不起來，看了只會更困惑。 */
+        var sug;
+        if (timed.length === n) {
+            sug = ['・把最後一個單位（第 ' + lastIdx + ' 列）改到 ' + iaM2T(lim.limit - dur) + ' 以前開始'];
+            if (lim.limit - lastT >= 15) sug.push('・或把每個單位改成 ' + (lim.limit - lastT) + ' 分鐘以內');
+            sug.push('・或把結束會議往後移');
+        } else {
+            sug = iaTimeSuggest(n, dur, start, lim.limit);
+            if (!sug.length) sug = ['・即使每單位縮到 15 分也排不完，請分兩天或把結束會議往後移'];
+        }
+        $calc.css('color', '#C4442D').html(base + '　✘ 超過 ' + iaM2T(lim.limit) + '（' + lim.why + '）'
+            + '<br>' + sug.join('<br>'));
+    }
+}
+/** 送出前用：最後一個單位會不會做到結束會議前 30 分鐘之後（回傳說明文字，沒問題回空字串） */
+function caseTimeOverrun(){
+    var rows = CASE_ROWS.filter(caseRowHasContent), dur = iaTimeStep();
+    var md = $('#cMeetDate').val();
+    if (!md) return '';
+    var lastT = null, lastIdx = 0;
+    rows.forEach(function(r, k){
+        if (String(r.audited_date || '') !== md) return;       // 只管與結束會議同一天的那幾列
+        var t = iaT2M(r.audited_time);
+        if (t === null) return;
+        if (lastT === null || t > lastT) { lastT = t; lastIdx = k + 1; }
+    });
+    if (lastT === null) return '';
+    var lim = iaTimeLimit(md);
+    if (lim.limit === null || iaEndOf(lastT, dur) <= lim.limit) return '';
+    return '最後一個受稽單位（第 ' + lastIdx + ' 列 ' + iaM2T(lastT) + ' 起、每單位 ' + dur + ' 分）會做到 '
+         + iaM2T(iaEndOf(lastT, dur)) + '，超過 ' + iaM2T(lim.limit) + '（' + lim.why + '）。'
+         + '請把受稽時間往前挪、縮短每單位分鐘，或把結束會議往後移。';
 }
 $(document).on('input change', '#cTimeFrom, #cTimeStep, #cMeetStart, #cMeetDate', iaTimeRecalc);
 
@@ -2554,6 +2635,8 @@ $(document).on('change','.cr', function(){
         var n = normTime($(this).val());
         if (n) { CASE_ROWS[i].audited_time = n; iaCascadeTimes(i); renderCaseRows(); }
     }
+    // 任何一列的時間或日期改動，表頭的結束時間與「來不來得及」都要跟著重算
+    if (f === 'audited_time' || f === 'audited_date') iaTimeRecalc();
 });
 function collectCaseRows(){
     var out = [];
@@ -2649,9 +2732,11 @@ function caseRequiredCheck(){
         if (!(src.escort_keys  || []).length) { $tr.find('td').eq(4).addClass('err-cell'); miss.push('陪檢員'); }
         if (miss.length) bad.push('第 ' + (n + 1) + ' 列：' + miss.join('、'));
     });
-    if (!bad.length) return true;
-    $('#errCRequired').addClass('on').html('這張通知單要發出去之前，下列必填欄位還沒填（已用紅色標出來）：<br>'
-        + bad.join('<br>'));
+    var over = (typeof caseTimeOverrun === 'function') ? caseTimeOverrun() : '';
+    if (!bad.length && !over) return true;
+    $('#errCRequired').addClass('on').html(
+        (bad.length ? ('這張通知單要發出去之前，下列必填欄位還沒填（已用紅色標出來）：<br>' + bad.join('<br>')) : '')
+        + (bad.length && over ? '<br>' : '') + (over ? ('受稽時間排不下：' + over) : ''));
     return false;
 }
 /* 時間欄位一律直接輸入、離開欄位正規化（0900/900/9 → 09:00），禁用下拉選時間 */
@@ -2673,6 +2758,7 @@ function caseSavePayload(){
         end_meet_date:$('#cMeetDate').val(), end_meet_start:$('#cMeetStart').val(), end_meet_end:$('#cMeetEnd').val(),
         end_meet_place:$('#cMeetPlace').val(), remark:$('#cRemark').val(),
         maker_id:($('#cMaker').val()||''), maker_date:($('#cMakerDate').val()||''),
+        unit_minutes:iaTimeStep(),          // 每個受稽單位需要幾分鐘（送出前的時間檢查後端也要用）
         depts:JSON.stringify(collectCaseRows())};
 }
 $('#btnCaseSave').on('click', function(){
@@ -3668,7 +3754,7 @@ function escortOptions(it){
     if (!pickedKey) {
         // 預設：這份文件所屬部門的陪檢員（對不到就不預設，讓使用者自己挑）
         for (var i = 0; i < list.length && !pickedKey; i++) {
-            if ((list[i].group || '本單陪檢員') !== '本單陪檢員') continue;   // 預設只從本單陪檢員挑
+            if (!list[i].unit_name) continue;        // 預設只從「這張通知單上的陪檢員」挑
             if (it.dept_name && String(list[i].unit_name) === String(it.dept_name)) {
                 pickedKey = postKeyOf(list[i].user_id, list[i].dept_id, list[i].position_id);
             }
@@ -3680,8 +3766,9 @@ function escortOptions(it){
             }
         }
     }
-    /* 三組候選：本單陪檢員（預設就從這裡挑）／具稽核員資格者／這張單的稽核組長。
-       用 optgroup 分開，選單裡才看得出來這個人是以什麼身分出現的。 */
+    /* 只分兩組（2026-09-18 使用者要求）：**稽核人員（含稽核組長）／陪檢員**——
+       原本還另外拆出「稽核組長」與「本單陪檢員」兩組，同一個人會在選單裡出現好幾個地方。
+       「本單陪檢員」不另立一組，但仍靠 unit_name 認得出來，預設值只從他們裡面挑。 */
     var seen = {}, groups = {};
     list.forEach(function(p){
         var k = postKeyOf(p.user_id, p.dept_id, p.position_id);
@@ -3689,7 +3776,7 @@ function escortOptions(it){
         var g = p.group || '本單陪檢員';
         (groups[g] || (groups[g] = [])).push({k: k, p: p});
     });
-    ['本單陪檢員', '稽核組長', '稽核員', '陪檢員'].concat(Object.keys(groups)).forEach(function(g){
+    ['稽核人員', '陪檢員'].concat(Object.keys(groups)).forEach(function(g){
         if (!groups[g]) return;
         var rows = groups[g]; delete groups[g];
         h += '<optgroup label="'+esc(g)+'">';
@@ -3735,8 +3822,10 @@ function saveCheck(silent, cb){
         check_date:$('#ckDate').val(), auditor_key:($('#ckAuditor').val()||''),
         items:JSON.stringify(collectCheckItems())}, function(res){
         if (!res.ok) { alert(res.error||'儲存失敗'); return; }
-        if (!silent) alert('已儲存');
+        if (!silent) alert('已儲存' + (+res.resorted ? '（已依受稽人部門、表單編號重新排序）' : ''));
         loadChecks();
+        // 順序是後端排的，重新載入這張表才看得到新的排列
+        if (+res.resorted && !cb) { openCheck(CHK.check_id); return; }
         if (cb) cb();
     }, 'json');
 }
