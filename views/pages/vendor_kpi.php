@@ -307,14 +307,14 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                         'is_special_tol'=>($rowTol !== $tol),
                         'total'=>0,'returned'=>0,'ontime'=>0,'late'=>0,'no_dd'=>0,
                         'ng_count'=>0,'qq_count'=>0,'aod_count'=>0,'ok_count'=>0,
-                        'tlog_fill'=>0,'tlog_earlier'=>0,
+                        'infer_fill'=>0,'infer_earlier'=>0,
                         'total_days'=>0,'days_count'=>0,'proc_names'=>[]];
                 }
                 $m=&$mkMap[$mk];
                 $m['total']++;
                 // 回廠日來源（見 vkRdSQL）：沒登錄改用憑單／憑單比登錄早而採用憑單
-                if($row['rd_src']==='transfer') $m['tlog_fill']++;
-                elseif($row['rd_src']==='transfer_earlier') $m['tlog_earlier']++;
+                if($row['rd_src']==='transfer'||$row['rd_src']==='qc') $m['infer_fill']++;
+                elseif($row['rd_src']==='transfer_earlier'||$row['rd_src']==='qc_earlier') $m['infer_earlier']++;
                 if($row['status']!=='not_returned'){
                     $m['returned']++;
                     if($row['status']==='ontime') $m['ontime']++;
@@ -363,9 +363,9 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                       'ng_pct'=>$tot>0?round($ng/$tot*100,1):0,
                       'period_start'=>$ds,'period_end'=>$de,'cutoff'=>$cutoff,
                       'workday_count'=>$wdCount,
-                      // 回廠日靠製程移轉憑單補上或修正的筆數（生管沒按回廠／按得比憑單晚）
-                      'tlog_fill'=>array_sum(array_column($result,'tlog_fill')),
-                      'tlog_earlier'=>array_sum(array_column($result,'tlog_earlier'))];
+                      // 回廠日靠移轉憑單／QC檢驗日補上或修正的筆數（生管沒按回廠／按得比它們晚）
+                      'infer_fill'=>array_sum(array_column($result,'infer_fill')),
+                      'infer_earlier'=>array_sum(array_column($result,'infer_earlier'))];
             echo json_encode(['success'=>true,'data'=>$result,'summary'=>$summary,
                               'settings'=>['tolerance'=>$tol,'min_txn'=>$minTxn,'grade_rules'=>$gradeRules]]);
         }catch(Exception $e){echo json_encode(['success'=>false,'message'=>$e->getMessage()]);}
@@ -381,7 +381,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
             $period=trim($_POST['period']??date('Y-m'));
             $makerF=trim($_POST['maker_filter']??'');
             $procF=trim($_POST['proc_filter']??'');
-            $fSt=trim($_POST['st']??'');        // ontime / late / not_returned / tlog（回廠日靠憑單）
+            $fSt=trim($_POST['st']??'');        // ontime / late / not_returned / infer（回廠日靠憑單或QC推定）
             $fMk=trim($_POST['mk']??'');        // 廠商（maker_id_no）
             $fPr=trim($_POST['pr']??'');        // 製程名稱
             $kw =trim($_POST['kw']??'');        // 關鍵字（BOM／廠商／製程）
@@ -393,13 +393,13 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
             $rows=$ctx['rows'];
 
             // 狀態統計（以本期全部資料為準，不受下方篩選影響，才能當篩選鈕上的數字）
-            $cnt=['all'=>count($rows),'ontime'=>0,'late'=>0,'not_returned'=>0,'tlog'=>0];
+            $cnt=['all'=>count($rows),'ontime'=>0,'late'=>0,'not_returned'=>0,'infer'=>0];
             $mkOpt=[]; $prOpt=[];
             foreach($rows as $r){
                 if($r['status']==='ontime') $cnt['ontime']++;
                 elseif($r['status']==='late') $cnt['late']++;
                 else $cnt['not_returned']++;
-                if($r['rd_src']==='transfer'||$r['rd_src']==='transfer_earlier') $cnt['tlog']++;
+                if($r['rd_src']!=='' && $r['rd_src']!=='return') $cnt['infer']++;
                 $k=(string)($r['maker_id_no']??'');
                 if($k!=='' && !isset($mkOpt[$k])) $mkOpt[$k]=$r['maker_name'];
                 if(!empty($r['ProcessName'])) $prOpt[$r['ProcessName']]=1;
@@ -407,7 +407,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
 
             $out=[];
             foreach($rows as $r){
-                if($fSt==='tlog'){ if($r['rd_src']!=='transfer'&&$r['rd_src']!=='transfer_earlier') continue; }
+                if($fSt==='infer'){ if($r['rd_src']===''||$r['rd_src']==='return') continue; }
                 elseif($fSt!=='' && $r['status']!==$fSt) continue;
                 if($fMk!=='' && (string)$r['maker_id_no']!==$fMk) continue;
                 if($fPr!=='' && (string)$r['ProcessName']!==$fPr) continue;
@@ -420,7 +420,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                 $out[]=['fid'=>$r['bom_ing_fid'],'bom'=>$r['bom'],'bom_sn'=>$r['bom_sn'],
                         'maker_id_no'=>$r['maker_id_no'],'maker_name'=>$r['maker_name'],
                         'proc'=>$r['ProcessName'],'sqty'=>$r['sqty'],
-                        'od'=>$r['od'],'rd'=>$r['rd'],'rd_orig'=>$r['rd_orig'],'rd_log'=>$r['rd_log'],
+                        'od'=>$r['od'],'rd'=>$r['rd'],'rd_orig'=>$r['rd_orig'],'rd_log'=>$r['rd_log'],'rd_qc'=>$r['rd_qc'],
                         'rd_src'=>$r['rd_src'],'deadline'=>$r['deadline'],'tol'=>$r['tol'],
                         'status'=>$r['status'],'days'=>$r['days'],'qc'=>$r['QC_check'],
                         'dd'=>$r['dd']?substr((string)$r['dd'],0,10):null];
@@ -461,6 +461,7 @@ if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['action'])){
                     DATE(bi.outsource_date) AS od,
                     DATE(bi.return_date) AS rd_orig,
                     vkt.td AS rd_log,
+                    ".vkQcSQL()." AS rd_qc,
                     ".vkRdSQL()." AS rd,
                     ".vkRdSrcSQL()." AS rd_src,
                     b.Delivery_date AS dd,
@@ -1072,7 +1073,7 @@ body{background:var(--bg);font-family:"Segoe UI",Arial,sans-serif;color:var(--te
     <span class="pr-chip" id="prc-ontime" onclick="prSetStatus('ontime')">✔ 準時<span class="n" id="prn-ontime">0</span></span>
     <span class="pr-chip" id="prc-late" onclick="prSetStatus('late')">✖ 逾期<span class="n" id="prn-late">0</span></span>
     <span class="pr-chip" id="prc-not_returned" onclick="prSetStatus('not_returned')">? 未回廠<span class="n" id="prn-not_returned">0</span></span>
-    <span class="pr-chip" id="prc-tlog" onclick="prSetStatus('tlog')" title="回廠日是用製程移轉憑單補上或修正的">移轉單認定<span class="n" id="prn-tlog">0</span></span>
+    <span class="pr-chip" id="prc-infer" onclick="prSetStatus('infer')" title="回廠日不是生管登錄的，是用製程移轉憑單或 QC 檢驗日補上／修正的">憑單·QC 認定<span class="n" id="prn-infer">0</span></span>
     <input type="text" id="pr-kw" class="form-control" placeholder="🔍 廠商／製程／BOM" style="width:190px;height:28px;font-size:12px;" oninput="prKwInput()">
     <span id="pr-tags" style="display:flex;gap:4px;"></span>
     <span style="margin-left:auto;display:flex;align-items:center;gap:5px;font-size:12px;color:#888;">
@@ -1463,8 +1464,8 @@ function updateNote(){
     var t=G.settings.tolerance;
     var s=G.summary||{};
     var h='準時定義：發包日後 '+t+' 個上班日內回廠　|　今日往前 '+t+' 個上班日以內發包的尚未到期不計入　|　未回廠且容忍期已過算逾期　|　「bom無交期」= bom.Delivery_date 為空，不影響準時率計算（準時以發包日+容忍天數為截止）';
-    h+='<br>回廠日認定：以生管登錄的回廠日與「製程移轉憑單單號日期」（ERP 匯入，貨從該廠商移轉出去的那天）取<b>較早</b>者；沒登錄回廠日就用憑單日期，憑單日期早於發包日的不採用。'
-      +'（本期：沒登錄改用憑單 '+(s.tlog_fill||0)+' 筆、憑單較早而修正 '+(s.tlog_earlier||0)+' 筆）';
+    h+='<br>回廠日認定：生管登錄的回廠日、<b>製程移轉憑單單號日期</b>（貨從該廠商移轉出去那天）、<b>QC 檢驗日</b>（驗過就一定已回廠）三者取<b>最早</b>的一天；早於發包日的不採用（那是上一段製程或上一批的）。'
+      +'（本期：沒登錄靠憑單／QC 補上 '+(s.infer_fill||0)+' 筆、比登錄日更早而修正 '+(s.infer_earlier||0)+' 筆）';
     $('#tnote').html(h);
 }
 function loadProcList(){
@@ -1579,6 +1580,23 @@ function renderTable(){
 }
 function goPage(p){G.page=p;renderTable();}
 
+/* 回廠日來源標籤（唯一實作，廠商明細與發包明細面板共用）
+ * rd_src：return=生管登錄的就是最早／transfer·qc=沒登錄，用憑單或 QC 檢驗日補上
+ *         transfer_earlier·qc_earlier=有登錄，但憑單／QC 日更早，採用較早者
+ * 注意：span 一定要自己指定 line-height，版型的 td span{line-height:28px} 會把整列撐高 */
+function rdTag(d){
+    var bs='font-size:10px;border-radius:3px;padding:1px 4px;line-height:14px;display:inline-block;background:#fff8e1;color:#8a6000;';
+    var warm='background:#fbe6d4;color:#8a4b00;';
+    var s=d.rd_src;
+    if(s==='transfer') return ' <span style="'+bs+'" title="生管未按回廠，改用製程移轉憑單單號日期（'+esc(d.rd_log||'')+'）">移轉單</span>';
+    if(s==='qc')       return ' <span style="'+bs+'" title="生管未按回廠，改用 QC 檢驗日（'+esc(d.rd_qc||'')+'）＝驗過就一定已回廠">QC檢驗日</span>';
+    if(s==='transfer_earlier')
+        return ' <span style="'+bs+warm+'" title="生管登錄的回廠日是 '+esc(d.rd_orig||'')+'，製程移轉憑單單號日期 '+esc(d.rd_log||'')+' 較早，取較早者">移轉單較早</span>';
+    if(s==='qc_earlier')
+        return ' <span style="'+bs+warm+'" title="生管登錄的回廠日是 '+esc(d.rd_orig||'')+'，QC 檢驗日 '+esc(d.rd_qc||'')+' 較早，取較早者">QC檢驗日較早</span>';
+    return '';
+}
+
 // ── 發包明細面板（點「發包筆數（已到容忍期）」卡片）─────────────────────
 // 資料與統計卡片、廠商表同一支後端（vkPeriodRows），所以筆數一定對得起來；
 // 篩選與分頁一律在後端算（筆數與匯出都要以全部符合的資料為準，不是只有這一頁）。
@@ -1612,7 +1630,7 @@ function prLoad(page){
         if(!r.success){$('#pr-tbody').html('<tr><td colspan="10" style="text-align:center;color:red;padding:20px;">'+esc(r.message)+'</td></tr>');return;}
         PR.rows=r.data||[]; PR.total=r.total||0; PR.pages=r.pages||1; PR.page=r.page||1;
         var c=r.counts||{};
-        ['','ontime','late','not_returned','tlog'].forEach(function(k){
+        ['','ontime','late','not_returned','infer'].forEach(function(k){
             $('#prn-'+k).text(' '+((k===''?c.all:c[k])||0));
             $('#prc-'+k).toggleClass('on',PR.st===k);
         });
@@ -1632,14 +1650,11 @@ function renderPR(){
         $('#pr-tbody').html('<tr><td colspan="10" style="text-align:center;padding:26px;color:#aaa;">沒有符合條件的發包紀錄</td></tr>');
         $('#pr-info').text(''); $('#pr-btns').html(''); return;
     }
-    var bs='font-size:10px;border-radius:3px;padding:1px 4px;line-height:14px;display:inline-block;background:#fff8e1;color:#8a6000;';
     var h='';
     PR.rows.forEach(function(d){
         var sc=d.status==='ontime'?'#27AE60':d.status==='late'?'#E74C3C':'#F39C12';
         var stx=d.status==='ontime'?'✔ 準時':d.status==='late'?'✖ 逾期':'? 未回廠';
-        var tag='';
-        if(d.rd_src==='transfer') tag=' <span style="'+bs+'" title="生管未按回廠，改用製程移轉憑單單號日期">移轉單</span>';
-        else if(d.rd_src==='transfer_earlier') tag=' <span style="'+bs+'background:#fbe6d4;color:#8a4b00;" title="生管登錄 '+esc(d.rd_orig||'')+'，移轉憑單 '+esc(d.rd_log||'')+' 較早，取較早者">移轉單較早</span>';
+        var tag=rdTag(d);
         var qcc=d.qc==='ng'?'#E74C3C':d.qc==='ok'?'#27AE60':d.qc==='AOD'?'#9B59B6':'#888';
         h+='<tr>'
           +'<td><span class="pr-lnk" onclick="prSetMaker(\''+jsq(d.maker_id_no)+'\',\''+jsq(d.maker_name)+'\')">'+esc(d.maker_name||'—')+'</span>'
@@ -1672,17 +1687,18 @@ function prExportCsv(){
     // 匯出以「全部符合篩選的資料」為準，不是只有目前這一頁
     ajx(prParams({all:1}),function(r){
         if(!r.success){toast(r.message||'匯出失敗','error');return;}
-        var srcTxt={return:'生管登錄',transfer:'移轉單（未按回廠）',transfer_earlier:'移轉單（較早）'};
+        var srcTxt={return:'生管登錄',transfer:'移轉單（未按回廠）',transfer_earlier:'移轉單（較早）',
+                    qc:'QC檢驗日（未按回廠）',qc_earlier:'QC檢驗日（較早）'};
         var rows=[
             ['外包廠商 發包明細（已到容忍期）'],
             ['統計區間：'+(r.period_start||'')+' ~ '+(r.period_end||'')+'　容忍截止：'+(r.cutoff||'')],
             ['產生時間：'+new Date().toLocaleString('zh-TW')],
             [],
-            ['廠商','廠商編號','製程','BOM','製程序','發包數','發包日','回廠日','回廠日來源','生管登錄回廠日','移轉憑單日期','截止日','容忍天(上班日)','狀態','天數','QC']
+            ['廠商','廠商編號','製程','BOM','製程序','發包數','發包日','回廠日','回廠日來源','生管登錄回廠日','移轉憑單日期','QC檢驗日','截止日','容忍天(上班日)','狀態','天數','QC']
         ];
         (r.data||[]).forEach(function(d){
             rows.push([d.maker_name||'',d.maker_id_no||'',d.proc||'',d.bom||'',d.bom_sn||'',d.sqty||'',
-                d.od||'',d.rd||'',srcTxt[d.rd_src]||'',d.rd_orig||'',d.rd_log||'',d.deadline||'',d.tol||'',
+                d.od||'',d.rd||'',srcTxt[d.rd_src]||'',d.rd_orig||'',d.rd_log||'',d.rd_qc||'',d.deadline||'',d.tol||'',
                 d.status==='ontime'?'準時':d.status==='late'?'逾期':'未回廠',
                 (d.days===null||d.days===undefined)?'':d.days,d.qc||'']);
         });
@@ -1734,15 +1750,8 @@ function renderDetail(mk){
         var sc=d.status==='ontime'?'st-ok':d.status==='late'?'st-lt':'st-nr';
         var st=d.status==='ontime'?'✔ 準時':d.status==='late'?'✖ 逾期':'? 未回廠';
         var qcc=d.QC_check==='ng'?'color:#E74C3C':d.QC_check==='ok'?'color:#27AE60':d.QC_check==='AOD'?'color:#9B59B6':'';
-        // 回廠日來源標記（rd_src：return=生管登錄／transfer=沒登錄改用憑單／transfer_earlier=憑單比登錄早）
-        var bs='font-size:10px;background:#fff8e1;color:#8a6000;border-radius:3px;padding:1px 4px;line-height:14px;display:inline-block;';
-        var rdTag='';
-        if(d.rd_src==='transfer')
-            rdTag=' <span style="'+bs+'" title="生管未按回廠，改用製程移轉憑單單號日期（'+esc(d.rd_log||'')+'）">移轉單</span>';
-        else if(d.rd_src==='transfer_earlier')
-            rdTag=' <span style="'+bs+'background:#fbe6d4;color:#8a4b00;" title="生管登錄的回廠日是 '+esc(d.rd_orig||'')+'，製程移轉憑單單號日期 '+esc(d.rd_log||'')+' 較早，取較早者">移轉單較早</span>';
         var rdCell=d.rd
-            ? esc(d.rd)+rdTag
+            ? esc(d.rd)+rdTag(d)
             : '<span style="color:#aaa;">未回廠</span>';
         // 工作天數顯示
         var wdCell=d.workdays!==null

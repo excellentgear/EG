@@ -1221,8 +1221,11 @@ function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): arra
         $maker = (string)$r['maker_name'];
         $dims  = ['client'=>(string)$r['client_name'], 'part'=>(string)$r['part_no'],
                   'proc'=>$proc, 'maker'=>$maker];
-        // 回廠日來源：return＝生管登錄／transfer＝沒登錄改用憑單／transfer_earlier＝憑單比登錄早
+        // 回廠日來源：return＝生管登錄／transfer(_earlier)＝憑單／qc(_earlier)＝QC檢驗日
+        // （_earlier＝有登錄回廠日，但這個來源的日期更早而採用它）
         $src = (string)$r['rd_src'];
+        $srcKey = ($src === '' || $src === 'return') ? $src
+                : (strpos($src, 'qc') === 0 ? 'qc' : 'transfer');
         $rows[] = [
             'fid'=>(string)$r['bom_ing_fid'], 'bom'=>(string)$r['bom'], 'sn'=>(int)$r['bom_sn'],
             'qty'=>(string)$r['sqty'], 'out'=>(string)$r['od'], 'due'=>(string)$r['deadline'],
@@ -1231,7 +1234,8 @@ function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): arra
             'dim_ids'=>['client'=>'', 'part'=>'', 'proc'=>(string)$r['process_no'],
                         'maker'=>(string)$r['maker_id_no']],
             'back'=>(string)($r['rd'] ?? ''),
-            'back_src'=>($src === '' ? '' : ($src === 'return' ? 'return' : 'transfer')),
+            'back_src'=>$srcKey,
+            'back_earlier'=>(substr($src, -8) === '_earlier'),
             'status'=>(string)$r['status'],
         ];
     }
@@ -2081,9 +2085,14 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                     $backTxt = eg_fmt_date($r['back']);
                     if ($r['back_src'] !== 'return') {
                         $guessN++;
-                        $backTxt .= '（推估：' . ($srcName[$r['back_src']] ?? $r['back_src']) . '）';
-                        $why = '回廠日沒有登錄，依「' . ($srcName[$r['back_src']] ?? $r['back_src'])
-                             . '」推估為 ' . eg_fmt_date($r['back']) . '，仍晚於應交日 ' . $late . ' 天';
+                        $srcTxt = $srcName[$r['back_src']] ?? $r['back_src'];
+                        $backTxt .= '（推估：' . $srcTxt . '）';
+                        // back_earlier＝回廠日有登錄，但這個來源的日期更早，所以採用較早的那一天
+                        $why = !empty($r['back_earlier'])
+                             ? ('登錄的回廠日晚於「' . $srcTxt . '」的 ' . eg_fmt_date($r['back'])
+                                . '，依較早者判定，仍晚於應交日 ' . $late . ' 天')
+                             : ('回廠日沒有登錄，依「' . $srcTxt . '」推估為 ' . eg_fmt_date($r['back'])
+                                . '，仍晚於應交日 ' . $late . ' 天');
                         $fix = '推估日期只用來判定準不準時，不會寫回任何一筆資料。'
                              . '請到 BOM 總表補登真正的回廠日，判定才會精準。';
                     } else {

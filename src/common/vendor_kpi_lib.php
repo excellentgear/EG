@@ -91,10 +91,17 @@ function subtractWorkdays(string $from, int $n, array $maps): string {
  * 而製程移轉憑單（bom_ing_transfer_log，ERP 匯入，見 views/pm/Transfer_Log_Analysis.php）
  * 只要「貨從這個廠商移轉出去」就一定開得出來，是回廠的直接證據。
  *
+ * 第三個同樣確定的證據是 **QC 檢驗日**（`bom_ing.QC_check_date`）——驗都驗過了，貨一定已經回廠。
+ *
  * 規則（使用者指定 2026-09-18）：
- *   ① 沒登錄回廠日 → 用憑單日期
- *   ② 有登錄回廠日、但憑單日期更早 → 取較早的憑單日期（登錄多半是事後才補按的）
- *   ③ 憑單日期早於發包日的不採用（那是上一段製程的憑單，不是這一站回廠）
+ *   ① 三個來源＝生管登錄回廠日／製程移轉憑單單號日期／QC 檢驗日，**一律取最早的那一天**
+ *      （登錄與補按都是事後做的，不會比實際回廠早；最早的那個才接近真的回來的日子）
+ *   ② 只有其中一個有值就用那一個；三個都沒有才算真的未回廠
+ *   ③ 早於發包日的一律不採用——憑單是上一段製程開的、QC 日是上一批驗的，都不是這一站回廠
+ *
+ * QC 檢驗日的可信度（拿有登錄回廠日的資料當對照）：與回廠日同一天 1,243 筆、差 1 天 822 筆、
+ * 差 2~3 天 485 筆，只有 46 筆 QC 比登錄的回廠日還早（＝回廠補按得太晚），正是要取較早者的那幾筆；
+ * 另外有 1,452 筆「沒登錄回廠日也查不到憑單、但驗過了」，靠這個來源才補得回來。
  *
  * 日期一定要「由單號解析」，不可以用 transfer_date 欄位：transfer_date 會為了帳款月份
  * 被人工改過（2026 年 6,369 筆裡有 60 筆與單號日期不同，最多差 49 天）；
@@ -113,16 +120,32 @@ function vkTlogJoin(string $bi='bi'): string {
          . "               AND $d >= DATE($bi.outsource_date)\n"
          . "          ) vkt ON TRUE";
 }
-// 實際回廠日：登錄值與憑單日期取「較早」者；只有一邊有就用那一邊
-function vkRdSQL(string $bi='bi'): string {
-    return "COALESCE(LEAST(DATE($bi.return_date),vkt.td),DATE($bi.return_date),vkt.td)";
+// QC 檢驗日（驗過了就一定已回廠）；早於發包日的是上一批的，不採用
+function vkQcSQL(string $bi='bi'): string {
+    return "(CASE WHEN $bi.QC_check_date IS NOT NULL AND DATE($bi.QC_check_date)>=DATE($bi.outsource_date)\n"
+         . "                THEN DATE($bi.QC_check_date) END)";
 }
-// 回廠日來源：return=生管登錄／transfer=沒登錄改用憑單／transfer_earlier=憑單比登錄早
+/* 實際回廠日＝三個來源取最早的那一天。
+ * 用 9999-12-31 當「沒有值」的替身再 NULLIF 掉，是因為 MySQL 的 LEAST 只要有一個 NULL 就整個回 NULL，
+ * 三個來源用 COALESCE(LEAST(...),...) 疊起來會變成一長串且很容易少算一種組合。 */
+function vkRdSQL(string $bi='bi'): string {
+    $qc = vkQcSQL($bi);
+    return "NULLIF(LEAST(COALESCE(DATE($bi.return_date),DATE('9999-12-31')),"
+         . "COALESCE(vkt.td,DATE('9999-12-31')),"
+         . "COALESCE($qc,DATE('9999-12-31'))),DATE('9999-12-31'))";
+}
+/* 回廠日來源（誰是最早的那一個）：
+ *   return=生管登錄的就是最早／transfer·qc=沒登錄，用憑單或 QC 檢驗日補
+ *   transfer_earlier·qc_earlier=有登錄，但憑單／QC 日更早，採用較早者
+ * 憑單與 QC 同一天時算憑單（移轉憑單是更直接的證據）。 */
 function vkRdSrcSQL(string $bi='bi'): string {
-    return "CASE WHEN vkt.td IS NULL THEN (CASE WHEN $bi.return_date IS NULL THEN '' ELSE 'return' END)\n"
-         . "          WHEN $bi.return_date IS NULL THEN 'transfer'\n"
-         . "          WHEN vkt.td < DATE($bi.return_date) THEN 'transfer_earlier'\n"
-         . "          ELSE 'return' END";
+    $rd = vkRdSQL($bi);
+    $qc = vkQcSQL($bi);
+    return "CASE WHEN $rd IS NULL THEN ''\n"
+         . "          WHEN DATE($bi.return_date) = $rd THEN 'return'\n"
+         . "          WHEN vkt.td = $rd THEN (CASE WHEN $bi.return_date IS NULL THEN 'transfer' ELSE 'transfer_earlier' END)\n"
+         . "          WHEN $qc = $rd THEN (CASE WHEN $bi.return_date IS NULL THEN 'qc' ELSE 'qc_earlier' END)\n"
+         . "          ELSE '' END";
 }
 
 /* ── 本期發包資料（唯一實作）────────────────────────────────────────────────
@@ -259,6 +282,7 @@ function vkPeriodRows(PDO $pdo, string $mode, string $period, string $makerF='',
                  DATE(bi.outsource_date) AS od,
                  DATE(bi.return_date) AS rd_orig,
                  vkt.td AS rd_log,
+                 ".vkQcSQL()." AS rd_qc,
                  ".vkRdSQL()." AS rd,
                  ".vkRdSrcSQL()." AS rd_src,
                  b.Delivery_date AS dd,
