@@ -137,7 +137,7 @@ try {
         @media print { .no-print { display:none !important; } }
     </style>
 </head>
-<body class="nav-md">
+<body class="nav-sm">
 <div class="container body"><div class="main_container">
 <?php include '../partPage/sideAndTopBarMenu.html'; ?>
 <div class="right_col" role="main">
