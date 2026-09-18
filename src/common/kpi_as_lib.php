@@ -491,15 +491,12 @@ function kpi_as_registry(): array {
                 ['key'=>'exclude_draft','label'=>'排除草稿報價單(1=是)','type'=>'bool','fe'=>1],
             ]],
         'vendor_ontime' => [
-            'name' => '廠商準時交貨率(發包日+約定工作天)',
+            'name' => '廠商準時交貨率(與外包廠商績效頁同一套判定)',
             'page' => '發包管理 bom_ing(發包日/回廠日)',
             'tables' => ['bom_ing','process_no'],
-            'links' => [['label'=>'BOM 總表（發包日／回廠日）','url'=>'/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php'], ['label'=>'KPI 設定（約定工作天數）','url'=>'/EGsystem/views/news/KPI_setting.php'], ['label'=>'外包廠商績效（對照查詢）','url'=>'/EGsystem/views/pages/vendor_kpi.php']],
-            'desc' => '應交日=發包日+約定工作天數(可按製程類別分別設定)；分母=應交日落在當月的發包筆數；分子=回廠日≤應交日',
-            'params' => [
-                ['key'=>'default_days','label'=>'預設約定工作天數','type'=>'int','fe'=>1],
-                ['key'=>'days_by_process_type','label'=>'各製程類別天數(格式 製程類別id:天數 一行一筆)','type'=>'typedays_map','fe'=>0],
-            ]],
+            'links' => [['label'=>'BOM 總表（發包日／回廠日）','url'=>'/EGsystem/views/pm/OreadyReply_ForPm_BaseOfTime.php'], ['label'=>'外包廠商績效（唯一實作：容忍天數／例外廠商／例外製程都在這裡設定）','url'=>'/EGsystem/views/pages/vendor_kpi.php']],
+            'desc' => '判定與設定一律吃「外包廠商績效」頁（唯一實作）：容忍天數、廠商／製程特殊天數、例外廠商、例外製程都在那裡設定，兩頁完全一致；分母=本月發包且已到容忍期的筆數，分子=回廠日≤截止日',
+            'params' => []],
         'order_ontime' => [
             'name' => '訂單準時出貨率(準交率)',
             'page' => '訂單管理 order_track/order_list',
@@ -1210,113 +1207,37 @@ function kpi_as_transfer_dates(PDO $db, array $boms): array {
 }
 
 function kpi_as_vendor_rows(PDO $db, int $year, int $month, array $params): array {
-    $ms = sprintf('%04d-%02d-01', $year, $month);
-    $me = date('Y-m-t', strtotime($ms));
-    $defDays = max(0, (int)kpi_as_pv($params, 'default_days', 7));
-    $dmapRaw = kpi_as_pv($params, 'days_by_process_type', []);
-    $dmap = [];
-    if (is_array($dmapRaw)) {
-        foreach ($dmapRaw as $k => $v) { if (is_numeric($v)) $dmap[(int)$k] = (int)$v; }
-    } else {
-        foreach (kpi_as_list($dmapRaw) as $line) {
-            if (preg_match('/^(\d+)\s*[:：]\s*(\d+)$/u', $line, $m2)) $dmap[(int)$m2[1]] = (int)$m2[2];
-        }
+    // 【唯一實作在 vendor_kpi_lib.php】使用者要求 2026-09-18：
+    // 外包廠商績效頁（views/pages/vendor_kpi.php）是這個指標的最終資料來源，
+    // 兩邊的判定與設定（容忍天數、廠商／製程特殊天數、例外廠商、例外製程）必須完全一致。
+    // 原本 KPI 頁自己另寫一套（期間用應交日、天數用約定工作天、排除用 kpi_as_excl_rule），
+    // 2026-08 一邊算出 81.9%、一邊 70.1%，對不起來。現在一律由 vkPeriodRows() 算。
+    require_once __DIR__ . '/vendor_kpi_lib.php';
+    $srcName = kpi_as_vendor_back_sources();
+    $res = vkPeriodRows($db, 'month', sprintf('%04d-%02d', $year, $month));
+    $rows = [];
+    foreach ($res['rows'] as $r) {
+        $proc  = (string)($r['ProcessName'] !== null && $r['ProcessName'] !== '' ? $r['ProcessName'] : $r['process_no']);
+        $maker = (string)$r['maker_name'];
+        $dims  = ['client'=>(string)$r['client_name'], 'part'=>(string)$r['part_no'],
+                  'proc'=>$proc, 'maker'=>$maker];
+        // 回廠日來源：return＝生管登錄／transfer＝沒登錄改用憑單／transfer_earlier＝憑單比登錄早
+        $src = (string)$r['rd_src'];
+        $rows[] = [
+            'fid'=>(string)$r['bom_ing_fid'], 'bom'=>(string)$r['bom'], 'sn'=>(int)$r['bom_sn'],
+            'qty'=>(string)$r['sqty'], 'out'=>(string)$r['od'], 'due'=>(string)$r['deadline'],
+            'days'=>(int)$r['tol'], 'proc'=>$proc, 'maker'=>$maker,
+            'part'=>$dims['part'], 'client'=>$dims['client'], 'dims'=>$dims,
+            'dim_ids'=>['client'=>'', 'part'=>'', 'proc'=>(string)$r['process_no'],
+                        'maker'=>(string)$r['maker_id_no']],
+            'back'=>(string)($r['rd'] ?? ''),
+            'back_src'=>($src === '' ? '' : ($src === 'return' ? 'return' : 'transfer')),
+            'status'=>(string)$r['status'],
+        ];
     }
-    $winStart = date('Y-m-d', strtotime($ms . ' -120 days'));
+    // 客戶代號要另外補（vendor_kpi 的查詢沒有帶，這裡用名稱回查）
     $cmap = kpi_as_client_id_map($db);
-    $st = $db->prepare("SELECT bi.bom_ing_fid, bi.bom, bi.bom_sn, bi.sqty, bi.outsource_date, bi.return_date,
-                               bi.QC_check_date, bi.process_no, pn.ProcessName, pn.process_type_id,
-                               bi.maker_id_no AS mk_no,
-                               COALESCE(mk.maker_id, bi.maker_id) AS maker_name,
-                               b.d_id AS part_no, b.Client_Name AS client_name,
-                               b.o_order_id, b.closed_at
-                        FROM bom_ing bi
-                        LEFT JOIN process_no pn ON pn.ProcessNo=bi.process_no
-                        LEFT JOIN maker_list mk ON mk.maker_id_no=bi.maker_id_no
-                        LEFT JOIN bom b ON b.bom=bi.bom
-                        WHERE bi.outsource_date IS NOT NULL
-                          AND bi.maker_id_no IS NOT NULL AND bi.maker_id_no<>''
-                          AND DATE(bi.outsource_date) BETWEEN ? AND ?");
-    $st->execute([$winStart, $me]);
-
-    $rows = []; $needBoms = []; $needOrders = [];
-    while ($r = $st->fetch(PDO::FETCH_ASSOC)) {
-        $ptid = (int)$r['process_type_id'];
-        $days = isset($dmap[$ptid]) ? $dmap[$ptid] : $defDays;
-        $out  = substr((string)$r['outsource_date'], 0, 10);
-        $due  = kpi_as_add_workdays($db, (string)$r['outsource_date'], $days);
-        if ($due < $ms || $due > $me) continue;              // 應交日不在當月＝不屬於這一格
-        $dims = ['client'=>(string)$r['client_name'], 'part'=>(string)$r['part_no'],
-                 'proc'=>(string)($r['ProcessName'] !== null && $r['ProcessName'] !== '' ? $r['ProcessName'] : $r['process_no']),
-                 'maker'=>(string)$r['maker_name']];
-        $back = $r['return_date'] ? substr((string)$r['return_date'], 0, 10) : '';
-        if ($back === '') {
-            $needBoms[(string)$r['bom']] = 1;
-            if ((int)$r['o_order_id'] > 0) $needOrders[(int)$r['o_order_id']] = 1;
-        }
-        $dimIds = ['client'=>($cmap[trim((string)$r['client_name'])] ?? ''), 'part'=>'',
-                   'proc'=>(string)$r['process_no'], 'maker'=>(string)$r['mk_no']];
-        $rows[] = ['fid'=>(string)$r['bom_ing_fid'], 'bom'=>(string)$r['bom'], 'sn'=>(int)$r['bom_sn'],
-                   'qty'=>(string)$r['sqty'], 'out'=>$out, 'due'=>$due, 'days'=>$days,
-                   'proc_type'=>$ptid, 'proc'=>$dims['proc'], 'maker'=>$dims['maker'],
-                   'part'=>$dims['part'], 'client'=>$dims['client'], 'dims'=>$dims, 'dim_ids'=>$dimIds,
-                   'back'=>$back, 'back_src'=>($back === '' ? '' : 'return'),
-                   'qc_date'=>$r['QC_check_date'] ? substr((string)$r['QC_check_date'], 0, 10) : '',
-                   'closed'=>$r['closed_at'] ? substr((string)$r['closed_at'], 0, 10) : '',
-                   'order_id'=>(int)$r['o_order_id'], 'mk_no'=>(string)$r['mk_no']];
-    }
-    if (!$rows) return [];
-
-    // ① 製程移轉憑單（單號日期）：貨從這個廠商移轉出去＝它回廠了，最直接的證據
-    $trans = $needBoms ? kpi_as_transfer_dates($db, array_keys($needBoms)) : [];
-    // ② 下一製程發包日：同一張製令、bom_sn 比自己大、且有發包日的最早那一個
-    $nextOut = [];
-    if ($needBoms) {
-        $bs = array_keys($needBoms);
-        foreach (array_chunk($bs, 500) as $chunk) {
-            $in = implode(',', array_fill(0, count($chunk), '?'));
-            $q = $db->prepare("SELECT bom, bom_sn, DATE(outsource_date) d FROM bom_ing
-                               WHERE bom IN ($in) AND outsource_date IS NOT NULL ORDER BY bom, bom_sn");
-            $q->execute($chunk);
-            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $nextOut[(string)$x['bom']][] = [(int)$x['bom_sn'], (string)$x['d']];
-        }
-    }
-    // ③ 出貨日：該製令綁的訂單的最早出貨日（bom.o_order_id 對 is_list.Order_id，皆為 order_track 主鍵）
-    $shipDate = [];
-    if ($needOrders) {
-        foreach (array_chunk(array_keys($needOrders), 500) as $chunk) {
-            $in = implode(',', array_fill(0, count($chunk), '?'));
-            $q = $db->prepare("SELECT Order_id, MIN(DATE(Order_date)) d FROM is_list
-                               WHERE Order_id IN ($in) AND Order_date IS NOT NULL GROUP BY Order_id");
-            $q->execute($chunk);
-            foreach ($q->fetchAll(PDO::FETCH_ASSOC) as $x) $shipDate[(int)$x['Order_id']] = (string)$x['d'];
-        }
-    }
-    foreach ($rows as &$r) {
-        if ($r['back'] !== '') continue;
-        $cands = [];
-        // 憑單：取「不早於發包日」的最早一張（比發包日還早的是上一段製程的憑單）
-        $tv = '';
-        foreach (($trans[$r['bom'] . "\x00" . $r['sn'] . "\x00" . $r['mk_no']] ?? []) as $td) {
-            if ($td < $r['out']) continue;
-            $tv = $td; break;                       // 已排序，第一個就是最早的
-        }
-        $cands['transfer'] = $tv;
-        $nx = '';
-        foreach (($nextOut[$r['bom']] ?? []) as $p) {
-            if ($p[0] <= $r['sn']) continue;
-            if ($nx === '' || $p[1] < $nx) $nx = $p[1];
-        }
-        $cands['next_out'] = $nx;
-        $cands['qc']       = $r['qc_date'];
-        $cands['ship']     = ($r['order_id'] > 0 && isset($shipDate[$r['order_id']])) ? $shipDate[$r['order_id']] : '';
-        $cands['closed']   = $r['closed'];
-        foreach ($cands as $k => $d) {
-            if ($d === '' || $d === null) continue;
-            if ($d < $r['out']) continue;                    // 比發包日還早＝不合理，不採用
-            $r['back'] = $d; $r['back_src'] = $k; break;
-        }
-    }
+    foreach ($rows as &$r) $r['dim_ids']['client'] = $cmap[trim($r['client'])] ?? '';
     unset($r);
     return $rows;
 }
@@ -1436,7 +1357,7 @@ function kpi_as_compute(PDO $db, string $key, int $year, int $month, array $para
                 if ($exSet && isset($exSet[$r['fid']])) continue;   // 已排除的不進分子也不進分母
                 if (kpi_as_dims_hit($r['dims'], $rules) !== '') continue;   // 命中排除規則＝分子分母都不算
                 $den++;
-                if ($r['back'] !== '' && $r['back'] <= $r['due']) $num++;
+                if ($r['status'] === 'ontime') $num++;              // 準時與否由 vendor_kpi 唯一實作判定
             }
             return ['num'=>$num, 'den'=>$den, 'value'=>$den > 0 ? $num / $den * 100 : null];
         }
@@ -2169,7 +2090,7 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
                         $why = '回廠日晚於應交日 ' . $late . ' 天';
                         $fix = '確認回廠日是否登錄錯誤（BOM 總表可改）；若這個製程本來就需要 '
                              . ($days + $late) . ' 個工作天以上，請到 KPI 設定把「' . $r['proc']
-                             . '」的約定工作天由 ' . $days . ' 天往上調整。';
+                             . '」的容忍天數由 ' . $days . ' 天往上調整（在外包廠商績效頁的 KPI 標準設定）。';
                     }
                 }
                 $out['rows'][] = [
@@ -2185,7 +2106,8 @@ function kpi_as_detail_raw(PDO $db, ?string $calc, int $year, int $month, array 
             }
             usort($out['rows'], function ($a, $b) { return strcmp($a['vals']['due'], $b['vals']['due']); });
             $out['note_print'] = '本表為應交日落在本月、未於應交日前回廠之委外加工明細。';
-            $out['note'] = '應交日＝發包日＋約定工作天（依行事曆工作日）。只列「應交日落在本月、卻沒有準時回廠」的發包。'
+            $out['note'] = '判定與設定一律取自「外包廠商績效」頁（容忍天數、廠商／製程特殊天數、例外廠商、例外製程），兩頁數字完全一致。'
+                         . '截止日＝發包日＋容忍天數（依行事曆工作日）。只列「本月發包、已到容忍期、卻沒有準時回廠」的發包。'
                          . '沒登錄回廠日時，系統會依序用「製程移轉憑單（單號日期）→下一製程發包日→QC檢驗日→出貨日→製令結案日」'
                          . '推估回廠日（只用於判定，不寫回資料；憑單日期取自單號而非 transfer_date，避免帳款月份調整的影響）'
                          . ($guessN ? ('，本月有 ' . $guessN . ' 筆是這樣推估出來的') : '') . '。';
