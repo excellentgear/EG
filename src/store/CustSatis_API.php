@@ -47,7 +47,7 @@ $action = $_GET['action'] ?? $_POST['action'] ?? '';
 
 /* 寫入類先驗登入再驗 CSRF（順序不可顛倒，理由同其他模組：session 被 GC 掃掉時
    token 會在同一個請求裡重新產生、比對必定不過，但那是「已被登出」不是 CSRF 攻擊） */
-$WRITE = ['score_save', 'score_cleanup', 'summary_save', 'monitor_save', 'setting_save', 'asdoc_save', 'print_log'];
+$WRITE = ['score_save', 'score_cleanup', 'summary_save', 'monitor_save', 'setting_save', 'asdoc_save', 'print_log', 'cust_bind'];
 if (in_array($action, $WRITE, true)) {
     $tok = $_POST['csrf'] ?? '';
     if (!is_string($tok) || $tok === '' || !hash_equals((string)$_SESSION['cs_csrf'], $tok))
@@ -178,6 +178,65 @@ case 'score_cleanup': {
         } catch (Throwable $e) { jerr('刪除失敗：' . $e->getMessage(), 500); }
     }
     jout(['deleted'=>count($del), 'kept'=>$kept]);
+}
+
+/* 客戶主檔清單（綁定跳窗的挑選器用） */
+case 'cust_master': {
+    $rows = [];
+    try {
+        $st = $db->query("SELECT customer_id, customer, customer_full FROM customer_list
+                          ORDER BY customer, customer_id");
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $rows[] = ['id'=>(string)$r['customer_id'], 'name'=>trim((string)$r['customer']),
+                       'full'=>trim((string)$r['customer_full'])];
+        }
+    } catch (Throwable $e) { jerr('讀取客戶主檔失敗：' . $e->getMessage(), 500); }
+    jout(['rows'=>$rows]);
+}
+
+/* 把 ERP 上查不到主檔的出貨簡稱綁到某一家客戶。
+   **一律轉呼叫會計模組的 `acc_customer_alias_bind()`（唯一實作）**，不要在這裡另寫一份：
+   它會同時寫 `acc_customer_alias`、**回填 `is_list.Client_id`**（只補原本是空的）並留稽核，
+   而且別名是全站共用的——這裡綁一次，對帳、應收、發票資料那邊同時對得起來。 */
+case 'cust_bind': {
+    require_once $document_root . '/EGsystem/src/common/acc_lib.php';
+    $alias = trim((string)($_POST['alias'] ?? ''));
+    $cid   = trim((string)($_POST['customer_id'] ?? ''));
+    if ($alias === '') jerr('缺少要綁定的出貨對象名稱');
+    if ($cid === '')   jerr('請選擇要對應的客戶');
+    $u = null;
+    try {
+        $st = $db->prepare("SELECT id, user_cname FROM user WHERE id=? LIMIT 1");
+        $st->execute([$uid]); $u = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $e) {}
+    $r = acc_customer_alias_bind($db, $alias, $cid, $u);
+    if (empty($r['success'])) jerr((string)($r['message'] ?? '綁定失敗'));
+
+    /* 綁定前這個名稱在本模組是「沒有客戶代號」的客戶，評分與監控表是用 `#簡稱` 當鍵存的；
+       綁完之後它會併進主檔那一家（鍵變成客戶代號），舊列不搬就會變成孤兒——
+       畫面上多一列「本期無出貨（先前已評分）」，而人填過的分數看起來像不見了。
+       主檔那邊已經有同一期的資料時一律不覆蓋（那是另一份人填的），只回報有幾期沒搬。 */
+    $oldKey = cs_score_cid('', $alias); $moved = 0; $skipped = 0;
+    foreach (['cs_score', 'cs_monitor'] as $tb) {
+        try {
+            $st = $db->prepare("SELECT DISTINCT year, quarter FROM {$tb} WHERE customer_id=?");
+            $st->execute([$oldKey]);
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $p) {
+                $chk = $db->prepare("SELECT COUNT(*) FROM {$tb} WHERE year=? AND quarter=? AND customer_id=?");
+                $chk->execute([(int)$p['year'], (int)$p['quarter'], $cid]);
+                if ((int)$chk->fetchColumn() > 0) { $skipped++; continue; }
+                $up = $db->prepare("UPDATE {$tb} SET customer_id=?, customer_name=?
+                                    WHERE year=? AND quarter=? AND customer_id=?");
+                $up->execute([$cid, (string)($r['customer'] ?? $alias), (int)$p['year'], (int)$p['quarter'], $oldKey]);
+                $moved += $up->rowCount();
+            }
+        } catch (Throwable $e) {}
+    }
+    $msg = (string)$r['message'];
+    if ($moved)   $msg .= "，並把 {$moved} 筆已填的評分／監控表改掛到這家客戶";
+    if ($skipped) $msg .= "（有 {$skipped} 期主檔那邊本來就有資料，保留不覆蓋）";
+    jout(['message'=>$msg, 'filled'=>(int)($r['filled'] ?? 0), 'moved'=>$moved, 'skipped'=>$skipped,
+          'customer'=>(string)($r['customer'] ?? '')]);
 }
 
 case 'summary_save': {

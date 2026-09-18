@@ -181,6 +181,63 @@ function cs_undone_mode_label(string $mode): string {
     }
 }
 
+/* ============================================================
+ * 客戶歸戶：ERP 上的出貨／訂單／退貨簡稱 → 客戶主檔
+ * ============================================================ */
+
+/**
+ * ERP 簡稱 → 客戶主檔（**含別名**）。唯一實作在會計模組的 `acc_customer_by_name()`，
+ * 這裡只是轉呼叫——**不要再自己 SELECT 一份 customer_list**（鐵律4）：
+ * ERP 寫「高鋒工業」、主檔簡稱是「高鋒」，別名對照表 `acc_customer_alias` 早就記著這一組，
+ * 自己查主檔就會變成「同一家客戶在這一頁裂成兩列、而且其中一列沒有客戶ID」。
+ * 別名是在對帳頁或本頁綁定的，綁一次全站共用。
+ *
+ * @return array ['id'=>客戶代號（查不到＝空字串）, 'name'=>主檔簡稱（查不到＝原字串）, 'bound'=>有沒有對到主檔]
+ */
+function cs_canon(PDO $db, string $name): array {
+    static $map = null;
+    if ($map === null) {
+        require_once __DIR__ . '/acc_lib.php';
+        $map = acc_customer_by_name($db);
+    }
+    $n = trim($name);
+    if (isset($map[$n]))
+        return ['id' => trim((string)$map[$n]['customer_id']),
+                'name' => trim((string)$map[$n]['customer']) ?: $n, 'bound' => true];
+    return ['id' => '', 'name' => $n, 'bound' => false];
+}
+
+/** 只要正規化後的名稱（統計歸戶用的鍵） */
+function cs_canon_name(PDO $db, string $name): string { return cs_canon($db, $name)['name']; }
+
+/** 這家客戶在 ERP 上可能出現的所有寫法（主檔簡稱＋全部別名）。
+ *  查「同一家客戶的出貨」時一定要用這份，只用退貨單上的那個寫法會漏掉別名下的出貨。 */
+function cs_canon_variants(PDO $db, string $canonName): array {
+    static $rev = null;
+    if ($rev === null) {
+        require_once __DIR__ . '/acc_lib.php';
+        $rev = [];
+        foreach (acc_customer_by_name($db) as $raw => $c) {
+            $k = trim((string)$c['customer']) ?: (string)$raw;
+            $rev[$k][] = (string)$raw;
+        }
+    }
+    $n = trim($canonName);
+    $v = $rev[$n] ?? [];
+    if (!in_array($n, $v, true)) $v[] = $n;
+    return $v;
+}
+
+/** 把「以 ERP 簡稱為鍵」的統計陣列併成「以客戶主檔為鍵」；$merge 決定兩筆怎麼相加 */
+function cs_canon_merge(PDO $db, array $byName, callable $merge): array {
+    $out = [];
+    foreach ($byName as $nm => $v) {
+        $k = cs_canon_name($db, (string)$nm);
+        $out[$k] = isset($out[$k]) ? $merge($out[$k], $v) : $v;
+    }
+    return $out;
+}
+
 /**
  * 逐客戶準交率（判定口徑與 KPI「準時出貨率」完全相同，見 cs_undone_mode()）。
  * ZZZ 與 -jg/-jh/-hg 結尾的料號一律排除（與 KPI 同一組條件，不要在這裡自己放寬）。
@@ -311,7 +368,8 @@ function cs_return_by_customer(PDO $db, string $from, string $to): array {
                             FROM is_list WHERE DATE(Order_date) BETWEEN ? AND ? GROUP BY TRIM(Client_name)");
         $st->execute([$from, $to]);
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $c = (string)$r['c']; $touch($c); $out[$c]['ship_qty'] = (float)$r['q'];
+            $c = cs_canon_name($db, (string)$r['c']); $touch($c);
+            $out[$c]['ship_qty'] += (float)$r['q'];   // 別名合併後同一家可能有好幾個 ERP 簡稱，要相加
         }
     } catch (Throwable $e) {}
 
@@ -326,7 +384,11 @@ function cs_return_by_customer(PDO $db, string $from, string $to): array {
 
     /* ③ 只撈「退貨單用得到」的那些客戶×料號的出貨（含更早期間，沖銷要往回找） */
     $dsIds = []; $names = [];
-    foreach ($rets as $r) { $dsIds[(int)$r['ds']] = 1; $names[(string)$r['c']] = 1; }
+    foreach ($rets as $r) {
+        $dsIds[(int)$r['ds']] = 1;
+        // 退貨掛「高鋒工業」、出貨掛「高鋒」是常態，所以要把這家客戶的每一種寫法都撈進來
+        foreach (cs_canon_variants($db, cs_canon_name($db, (string)$r['c'])) as $v) $names[$v] = 1;
+    }
     $dsIds = array_keys($dsIds); $names = array_keys($names);
     $ship = [];   // "客戶|料號主檔" => [['d'=>出貨日, 'left'=>還沒被退掉的量], …]（日期由舊到新）
     if ($dsIds && $names) {
@@ -339,13 +401,14 @@ function cs_return_by_customer(PDO $db, string $from, string $to): array {
                                 ORDER BY Order_date, IS_id");
             $st->execute(array_merge($dsIds, $names));
             foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $s)
-                $ship[$s['c'] . '|' . (int)$s['ds']][] = ['d'=>(string)$s['d'], 'left'=>(float)$s['q']];
+                $ship[cs_canon_name($db, (string)$s['c']) . '|' . (int)$s['ds']][]
+                    = ['d'=>(string)$s['d'], 'left'=>(float)$s['q']];
         } catch (Throwable $e) {}
     }
 
     /* ④ 逐張退貨往回沖銷 */
     foreach ($rets as $r) {
-        $c = (string)$r['c']; $touch($c);
+        $c = cs_canon_name($db, (string)$r['c']); $touch($c);
         $rd = (string)$r['d'];
         $inPeriodRet = ($rd >= $from && $rd <= $to);          // 退貨日落在本期間
         if ($inPeriodRet) { $out[$c]['erp_cnt']++; $out[$c]['erp_qty'] += (float)$r['q']; }
@@ -409,18 +472,17 @@ function cs_car_by_customer(PDO $db, string $from, string $to): array {
  */
 function cs_auto_metrics(PDO $db, int $year, int $quarter): array {
     list($from, $to) = cs_period_range($year, $quarter);
-    $ontime = cs_ontime_by_customer($db, $from, $to, cs_undone_mode($db, $year));
-    $ret    = cs_return_by_customer($db, $from, $to);
-    $car    = cs_car_by_customer($db, $from, $to);
-
-    // 客戶簡稱 → 客戶代號（ir_track/order_track/is_list 存的都是簡稱，car_order 存代號）
-    $idOf = []; $nameOf = [];
-    try {
-        foreach ($db->query("SELECT customer_id, customer FROM customer_list") as $r) {
-            $idOf[trim((string)$r['customer'])] = (string)$r['customer_id'];
-            $nameOf[(string)$r['customer_id']]  = trim((string)$r['customer']);
-        }
-    } catch (Throwable $e) {}
+    // 準交率是依 ERP 簡稱分組回來的，這裡併成「一家客戶一列」（高鋒＋高鋒工業＝同一家）
+    $ontime = cs_canon_merge($db, cs_ontime_by_customer($db, $from, $to, cs_undone_mode($db, $year)),
+        function ($a, $b) {
+            $den = (int)$a['den'] + (int)$b['den']; $num = (int)$a['num'] + (int)$b['num'];
+            return ['den'=>$den, 'num'=>$num,
+                    'undone'      => (int)($a['undone'] ?? 0)      + (int)($b['undone'] ?? 0),
+                    'undone_over' => (int)($a['undone_over'] ?? 0) + (int)($b['undone_over'] ?? 0),
+                    'rate'        => $den > 0 ? round($num / $den * 100, 1) : null];
+        });
+    $ret = cs_return_by_customer($db, $from, $to);   // 這支內部已經以客戶主檔為鍵
+    $car = cs_car_by_customer($db, $from, $to);
 
     // 只列「本期間有出貨」或「有退貨算在本期間」的客戶（$ret 兩種數字都在裡面）
     $names = [];
@@ -433,13 +495,16 @@ function cs_auto_metrics(PDO $db, int $year, int $quarter): array {
     $gd = cs_grade_delivery($db); $gq = cs_grade_quality($db);
     $rows = [];
     foreach ($names as $nm) {
-        $cid = $idOf[$nm] ?? '';
+        $canon = cs_canon($db, $nm);
+        $cid   = $canon['id'];
         $o   = $ontime[$nm] ?? ['den'=>0, 'num'=>0, 'rate'=>null, 'undone'=>0, 'undone_over'=>0];
         $r   = $ret[$nm]    ?? ['cnt'=>0, 'qty'=>0.0, 'ship_qty'=>0.0, 'rate'=>null];
         $cc  = $cid !== '' ? (int)($car[$cid] ?? 0) : 0;
         $rows[] = [
             'customer_id'   => $cid,
             'customer_name' => $nm,
+            // 對不到客戶主檔（連別名都沒有）＝ERP 上的寫法還沒綁定，畫面要標出來讓人去綁
+            'unbound'       => $canon['bound'] ? 0 : 1,
             'ontime_rate'   => $o['rate'], 'ontime_num' => $o['num'], 'ontime_den' => $o['den'],
             'ontime_over'   => (int)($o['undone_over'] ?? 0),   // >0＝ERP 未交比訂單還多，準交率僅供參考
             'return_cnt'    => $r['cnt'],  'return_qty' => $r['qty'],

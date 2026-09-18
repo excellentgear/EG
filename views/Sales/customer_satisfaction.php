@@ -91,6 +91,10 @@ $thisYear = (int)date('Y');
         .warn-over { color:var(--coral); font-weight:700; }
         .badge-sug { font-size:10px; color:#2c7a3f; display:block; line-height:1.2; }
         .cs-scroll { max-height:60vh; overflow:auto; border:1px solid var(--line); border-radius:6px; }
+        .cs-unbound { font-size:11px; line-height:1.4; color:var(--coral); display:inline-block; }
+        .cs-bindable { cursor:pointer; text-decoration:underline; }
+        .warn-bar { font-size:12.5px; color:#8a3a26; background:#FDEEE9; border:1px solid #F0B9A8;
+                    border-radius:6px; padding:8px 10px; margin-bottom:10px; line-height:1.8; }
         .m-mask { position:fixed; inset:0; background:rgba(74,53,36,.45); z-index:10300; display:none; }
         .m-box { position:absolute; left:50%; top:4vh; transform:translateX(-50%); background:#fff;
                  border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.3); display:flex; flex-direction:column; max-height:92vh; }
@@ -152,6 +156,8 @@ $thisYear = (int)date('Y');
       </span>
     </div>
     <div class="note-box" id="modeNote">載入中…</div>
+    <!-- ERP 上的出貨對象對不到客戶主檔時的提示（沒有就整條不顯示） -->
+    <div class="warn-bar" id="unboundBar" style="display:none;"></div>
   </div>
 
   <!-- ═══ 統計資料表 ═══ -->
@@ -275,6 +281,16 @@ $thisYear = (int)date('Y');
       <p><b>只列本期間真的有出貨的客戶</b>（另加「有退貨算在本期間」的）。<b>只有訂單、沒有出貨的不列</b>——
          客戶滿意度評的是交出去的貨，而訂單那一側常有代號沒建主檔的假客戶（例 <code>NA</code>），
          列出來只會多一列沒人填得下去的空白。當然更不會把整份客戶主檔（900 多家）全部列出來。</p>
+      <h4>客戶ID與「未綁定客戶ID」</h4>
+      <p>ERP 的出貨／訂單／退貨上寫的是<b>客戶簡稱</b>，而簡稱常常與客戶主檔不一樣
+         （例 ERP 寫「高鋒工業」、主檔簡稱是「高鋒」）。系統會先查<b>客戶主檔＋別名對照</b>把它對回同一家客戶，
+         所以同一家不會裂成兩列，出貨量、退貨、準交率都算在一起。</p>
+      <p>對不到的會在客戶欄標<b style="color:var(--coral);">⚠ 未綁定客戶ID</b>，上方也會列出來。
+         沒有客戶ID的影響：<b>「客戶開立異常處理單」件數一定是 0</b>（那是用客戶代號查的），而且同一家可能被拆成好幾列。
+         管理員點一下就能指定它是哪一家，綁定後系統會自動：①把它併進該客戶
+         ②<b>回填出貨單（<code>is_list</code>）上空白的客戶編號</b>
+         ③把原本掛在這個名稱底下已填的評分／監控表改掛到該客戶（主檔那邊已經有資料的那一期不覆蓋）。
+         這個對應<b>全站共用</b>（會計對帳、應收、發票資料同時生效），要解除請到「會計 → 對帳作業 → 對應到客戶主檔」。</p>
       <h4>哪些一定要人填（很重要）</h4>
       <p><b>技術、服務、價格三項系統算不出來</b>——站上沒有任何資料可以推導客戶對技術支援、服務態度、
          價格的感受，那三項只能來自 <b>2-SM-02-02 客戶滿意度調查問卷</b>回收的結果。
@@ -311,6 +327,33 @@ $thisYear = (int)date('Y');
 </div>
 
 <?php if ($perms['canAdmin']): ?>
+<!-- ══ 綁定客戶ID（ERP 出貨簡稱 → 客戶主檔）══ -->
+<div class="m-mask" id="bindMask">
+  <div class="m-box" style="width:min(94vw,560px);">
+    <div class="m-head"><i class="fa fa-link"></i> 綁定客戶ID
+      <span style="margin-left:auto;"><button class="btn btn-xs btn-default" data-close="bindMask">關閉</button></span></div>
+    <div class="m-body">
+      <div class="note-box" style="margin-bottom:10px;">
+        ERP 出貨單上寫的是<b id="bindAlias"></b>，客戶主檔裡查不到這個寫法（例：ERP 寫「高鋒工業」、主檔簡稱是「高鋒」）。
+        指定它是哪一家之後：<br>
+        ① 這一頁會把它<b>併進該客戶</b>（出貨、退貨、準交率一起算，不再分成兩列）<br>
+        ② 自動<b>回填出貨單（is_list）上空白的客戶編號</b><br>
+        ③ 這個對應<b>全站共用</b>（對帳、應收、發票資料同時生效），只需要綁這一次
+      </div>
+      <label style="margin:0;">對應到客戶主檔</label>
+      <select id="bindCust" class="form-control input-sm" data-eg-filter="輸入客戶名稱或代號篩選…"
+              style="width:100%;margin-top:4px;"></select>
+      <div class="muted-help" style="margin-top:6px;">
+        綁錯了可以到「會計 → 對帳作業 → 對應到客戶主檔」解除（解除時會把當初回填的客戶編號一併還原）。
+      </div>
+    </div>
+    <div class="m-foot">
+      <button class="btn btn-default" data-close="bindMask">取消</button>
+      <button class="btn btn-warm" id="btnBindSave"><i class="fa fa-link"></i> 綁定並回填</button>
+    </div>
+  </div>
+</div>
+
 <!-- ══ 設定 ══ -->
 <div class="m-mask" id="setMask">
   <div class="m-box" style="width:min(94vw,820px);">
@@ -481,7 +524,12 @@ function renderStat(){
         var over = parseInt(r.ontime_over||0)>0;
         h+='<tr>'
           +'<td>'+(i+1)+'</td>'
-          +'<td class="tl">'+esc(r.customer_name)+(r.customer_id?'<br><span class="muted-help">'+esc(r.customer_id)+'</span>':'')
+          +'<td class="tl">'+esc(r.customer_name)
+          +(r.customer_id?'<br><span class="muted-help">'+esc(r.customer_id)+'</span>'
+            /* 客戶主檔（含別名）查不到這個 ERP 寫法＝沒有客戶ID，一定要標出來並給綁定入口，
+               不然這一家的異常處理單件數（那是用客戶代號查的）永遠會是 0 而且看不出原因 */
+            :'<br><span class="cs-unbound'+(CAN_ADMIN?' cs-bindable':'')+'" data-alias="'+esc(r.customer_name)+'">'
+             +'⚠ 未綁定客戶ID'+(CAN_ADMIN?'（點此綁定）':'')+'</span>')
           /* 本期沒有出貨、只因為先前評過分才留著的列——填過的分數不可以憑空消失，但要標示清楚 */
           +(r.no_activity?'<br><span class="muted-help" style="color:#C77C1A;">本期無出貨（先前已評分）</span>':'')+'</td>'
           +'<td class="col-auto'+(over?' warn-over':'')+'" title="'+(over?'ERP 未交筆數比訂單筆數還多 '+r.ontime_over+' 筆，這兩份資料對不起來，本欄僅供參考':'準時 '+r.ontime_num+' / 訂單 '+r.ontime_den)+'">'
@@ -507,6 +555,7 @@ function renderStat(){
     $('#statBody').html(h);
     var filled = ST.rows.filter(function(r){ return r.avg_score!==null&&r.avg_score!==undefined; }).length;
     $('#statCount').text('（已評分 '+filled+' / '+ST.rows.length+' 家）');
+    renderUnboundBar();
     var dead = ST.rows.filter(function(r){ return r.no_activity; }).length;
     $('#btnCleanDead').toggle(dead>0).html('<i class="fa fa-eraser"></i> 清除本期無出貨的 '+dead+' 列');
     syncStatHead();
@@ -529,6 +578,57 @@ $(document).on('click', '#btnCleanDead', function(){
         });
     });
 });
+/* ERP 出貨對象對不到客戶主檔的提示列。
+   這種列沒有客戶代號，所以「客戶開立異常處理單件數」（用代號查 car_order）一定是 0，
+   而且同一家客戶會因為 ERP 寫法不同裂成兩列，所以一定要提醒去綁。 */
+function renderUnboundBar(){
+    var un = ST.rows.filter(function(r){ return r.unbound; });
+    if(!un.length){ $('#unboundBar').hide().empty(); return; }
+    var h = '<b>有 '+un.length+' 個出貨對象沒有對應到客戶主檔（沒有客戶ID）</b>：'
+          + un.map(function(r){
+                return CAN_ADMIN
+                    ? '<a href="javascript:;" class="cs-bindable" data-alias="'+esc(r.customer_name)+'">'+esc(r.customer_name)+'</a>'
+                    : esc(r.customer_name);
+            }).join('、')
+          + '<br><span class="muted-help">ERP 的寫法與客戶主檔簡稱不一樣（例「高鋒工業」vs「高鋒」）就會這樣。'
+          + (CAN_ADMIN ? '點名稱綁定，綁完會自動把同一家併成一列並回填出貨單上的客戶編號。'
+                       : '請洽管理員綁定。') + '</span>';
+    $('#unboundBar').html(h).show();
+}
+<?php if ($perms['canAdmin']): ?>
+/* ── 綁定客戶ID ── */
+var CUSTMASTER = null;
+$(document).on('click', '.cs-bindable', function(){
+    var alias = $(this).data('alias'); if(!alias) return;
+    $('#bindAlias').text('「'+alias+'」');
+    $('#btnBindSave').data('alias', alias);
+    var fill = function(){
+        var h='<option value="">— 請選擇客戶 —</option>';
+        (CUSTMASTER||[]).forEach(function(c){
+            h+='<option value="'+esc(c.id)+'">'+esc(c.name)+'（'+esc(c.id)+'）'+(c.full?'　'+esc(c.full):'')+'</option>';
+        });
+        $('#bindCust').html(h).val('').trigger('change');   // 讓共用篩選框重新抓一次選項快照
+        openMask('bindMask');
+    };
+    if(CUSTMASTER) return fill();
+    ajxGet({action:'cust_master'}, function(r){
+        if(!r||!r.ok){ alert('讀不到客戶主檔：'+((r&&r.error)||'未知原因')); return; }
+        CUSTMASTER = r.rows||[]; fill();
+    });
+});
+$('#btnBindSave').on('click', function(){
+    var alias=$(this).data('alias'), cid=$('#bindCust').val();
+    if(!cid){ alert('請先選擇要對應的客戶'); return; }
+    var txt=$('#bindCust option:selected').text();
+    if(!confirm('要把 ERP 上的「'+alias+'」對應到 '+txt+' 嗎？\n\n會一併回填出貨單上空白的客戶編號，而且全站共用。')) return;
+    ajxPost({action:'cust_bind', alias:alias, customer_id:cid}, function(r){
+        if(!r||!r.ok){ alert('綁定失敗：'+((r&&r.error)||'未知原因')); return; }
+        alert(r.message||'已綁定');
+        closeMask('bindMask'); loadStat();
+    });
+});
+<?php endif; ?>
+
 /* 兩列表頭的第二列要停在第一列正下方（CSS 的 --cs-th1）。
    第一列高度會隨字級、欄寬換行而變，寫死數字遲早對不上，所以量出來再寫回去。 */
 function syncStatHead(){
