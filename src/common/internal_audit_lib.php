@@ -2654,7 +2654,9 @@ function ia_year_status(PDO $db): array
         try { return $db->query($sql)->fetchAll(PDO::FETCH_ASSOC); } catch (Throwable $e) { return []; }
     };
 
-    foreach ($q("SELECT year, COUNT(*) n FROM ia_plan GROUP BY year") as $r) {
+    // **一定要濾掉已刪除的**（2026-09-18 使用者回報：2026／2027 的計畫表早就刪了，
+    // 年度旁卻還顯示「進行中」——其他四個查詢都有濾，只有這一句漏掉）
+    foreach ($q("SELECT year, COUNT(*) n FROM ia_plan WHERE COALESCE(is_deleted,0)=0 GROUP BY year") as $r) {
         $out[$touch((int)$r['year'])]['plan'] = (int)$r['n'];
     }
     foreach ($q("SELECT year, COUNT(*) n, SUM(status IN ('executed','closed')) d
