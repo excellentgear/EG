@@ -333,6 +333,7 @@ if (!function_exists('ot_ab_run')) {
         $fillPC = !empty($opt['fill_part_customer']);
         $uid   = (int)($opt['uid'] ?? 0);
         $sampleLimit = max(0, (int)($opt['sample_limit'] ?? 0));
+        $skipLimit   = max(0, (int)($opt['sample_skip_limit'] ?? 0));
 
         $st = $pdo->prepare("SELECT Order_id, Order_oo, Order_date, Client_name, Client_name_ID, d_id, d_id_ID, Order_status
                              FROM order_track
@@ -345,7 +346,8 @@ if (!function_exists('ot_ab_run')) {
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
 
         $res = ['processed' => 0, 'ok' => 0, 'applied' => 0, 'part_customer_filled' => 0,
-                'reasons' => [], 'samples' => [], 'last_id' => $after, 'done' => (count($rows) < $limit)];
+                'reasons' => [], 'samples' => [], 'samples_skip' => [],
+                'last_id' => $after, 'done' => (count($rows) < $limit)];
         if (!$rows) return $res;
 
         $cache = [];
@@ -370,8 +372,12 @@ if (!function_exists('ot_ab_run')) {
             $rc = $j['reason'];
             $res['reasons'][$rc] = ($res['reasons'][$rc] ?? 0) + 1;
 
-            if (count($res['samples']) < $sampleLimit) {
-                $res['samples'][] = [
+            // 明細分兩桶：掃描是照 Order_id 由小到大，只用一份「前 N 筆」的話，
+            // 前段剛好都不能綁時預覽就一筆「會綁成什麼」都看不到——那正是最該檢查的東西。
+            $bucket = $j['ok'] ? 'samples' : 'samples_skip';
+            $cap    = $j['ok'] ? $sampleLimit : $skipLimit;
+            if (count($res[$bucket]) < $cap) {
+                $res[$bucket][] = [
                     'order_id'   => (int)$o['Order_id'],
                     'order_no'   => (string)$o['Order_oo'],
                     'order_date' => (string)$o['Order_date'],

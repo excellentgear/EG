@@ -1034,6 +1034,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 'fill_part_customer' => (($_POST['fill_part_customer'] ?? '0') === '1'),
                 'uid'                => $uid,
                 'sample_limit'       => intval($_POST['sample_limit'] ?? 0),
+                'sample_skip_limit'  => intval($_POST['sample_skip_limit'] ?? 0),
             ]);
             $res['success'] = true;
             // 第一段順便回傳待處理總數與原因文字對照，讓畫面畫得出進度條與統計徽章
@@ -4563,7 +4564,7 @@ foreach($dCounts as $c) {
                         <div id="ab-reasons" style="font-size:12px;margin-bottom:8px;"></div>
                         <div id="ab-detail-wrap" style="display:none;">
                             <div style="font-size:12px;font-weight:700;color:#8a5a2b;margin-bottom:3px;">
-                                明細（前 <span id="ab-detail-count">0</span> 筆，供抽查用）
+                                明細抽樣（<span id="ab-detail-count">0</span> 筆，供抽查用；綠底＝會綁，其餘為不綁的例子）
                             </div>
                             <div style="max-height:260px;overflow:auto;border:1px solid #e3e3e3;border-radius:4px;">
                                 <table class="table table-condensed" style="margin:0;font-size:11.5px;">
@@ -6360,7 +6361,9 @@ foreach($dCounts as $c) {
         // 2026-09-18 使用者交辦。分段跑（一段 120 張）：5,181 張未綁定訂單整份掃完約 50 秒，
         // 一個請求跑完一定逾時，所以由前端帶游標（after_id）一段一段接著跑並畫進度。
         // 判定與寫入全在後端 order_autobind_lib.php，前端只負責「催下一段」與顯示。
-        var AB_CHUNK = 120, AB_SAMPLE_MAX = 200;
+        // 明細預覽刻意分兩桶（會綁 150 筆＋不綁 50 筆）：掃描照 Order_id 由小到大，
+        // 只取「前 200 筆」的話，前段剛好都不能綁時就一筆「會綁成什麼」都看不到。
+        var AB_CHUNK = 120, AB_SAMPLE_MAX = 150, AB_SKIP_MAX = 50;
         var abBusy = false, abScanned = null;
         var AB_REASON = {}; // 原因代碼→中文，由後端第一段回傳（唯一實作在 order_autobind_lib.php）
 
@@ -6399,17 +6402,19 @@ foreach($dCounts as $c) {
             $('#ab-detail-wrap').hide();
             abSetProgress(0, 0, apply ? '寫入中…' : '試算中…');
 
-            var acc = { processed: 0, ok: 0, applied: 0, part_customer_filled: 0, reasons: {}, samples: [], total: 0 };
+            var acc = { processed: 0, ok: 0, applied: 0, part_customer_filled: 0, reasons: {}, samples: [], samplesSkip: [], total: 0 };
             var fillPc = $('#ab-fill-pc').is(':checked') ? '1' : '0';
 
             function nextChunk(afterId) {
-                var need = apply ? 0 : Math.max(0, AB_SAMPLE_MAX - acc.samples.length);
+                var needOk   = apply ? 0 : Math.max(0, AB_SAMPLE_MAX - acc.samples.length);
+                var needSkip = apply ? 0 : Math.max(0, AB_SKIP_MAX - acc.samplesSkip.length);
                 $.post('', {
                     action: 'auto_bind_run',
                     mode: apply ? 'apply' : 'scan',
                     after_id: afterId,
                     limit: AB_CHUNK,
-                    sample_limit: need,
+                    sample_limit: needOk,
+                    sample_skip_limit: needSkip,
                     fill_part_customer: fillPc
                 }, function(res) {
                     if (!res || !res.success) {
@@ -6424,6 +6429,7 @@ foreach($dCounts as $c) {
                     acc.part_customer_filled += (res.part_customer_filled || 0);
                     for (var k in (res.reasons || {})) acc.reasons[k] = (acc.reasons[k] || 0) + res.reasons[k];
                     (res.samples || []).forEach(function(s) { if (acc.samples.length < AB_SAMPLE_MAX) acc.samples.push(s); });
+                    (res.samples_skip || []).forEach(function(s) { if (acc.samplesSkip.length < AB_SKIP_MAX) acc.samplesSkip.push(s); });
                     abSetProgress(acc.processed, acc.total, apply ? '寫入中…' : '試算中…');
 
                     if (res.done) { abFinish(apply, acc, ''); return; }
@@ -6474,10 +6480,11 @@ foreach($dCounts as $c) {
             });
             $('#ab-reasons').html(rh);
 
-            // 明細（只有試算才列）
-            if (!apply && acc.samples.length > 0) {
+            // 明細（只有試算才列）：會綁的排前面，後面接幾筆不綁的讓你看得到被擋的長什麼樣
+            var shown = acc.samples.concat(acc.samplesSkip);
+            if (!apply && shown.length > 0) {
                 var body = '';
-                acc.samples.forEach(function(s) {
+                shown.forEach(function(s) {
                     body += '<tr style="' + (s.ok ? 'background:#f6fdf9;' : '') + '">'
                          +  '<td>' + escapeHtml(s.order_no || '') + (s.closed ? ' <span style="color:#999;font-size:10px;">已結案</span>' : '') + '</td>'
                          +  '<td>' + escapeHtml(s.order_date ? ((typeof egFmtDate === 'function') ? egFmtDate(s.order_date) : s.order_date) : '') + '</td>'
@@ -6489,7 +6496,7 @@ foreach($dCounts as $c) {
                          +  '</tr>';
                 });
                 $('#ab-detail-body').html(body);
-                $('#ab-detail-count').text(acc.samples.length);
+                $('#ab-detail-count').text(acc.samples.length + ' 筆會綁、' + acc.samplesSkip.length + ' 筆不綁，共 ' + shown.length);
                 $('#ab-detail-wrap').show();
             }
             $('#ab-result').show();
