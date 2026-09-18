@@ -456,7 +456,11 @@ kbd{background:#f4e6ce;border:1px solid var(--sq-line2);border-bottom-width:2px;
       <select id="mtClient" style="width:200px;" data-eg-filter="輸入客戶簡稱篩選…" data-eg-filter-reset><option value="">全部客戶</option></select>
       <label>篩選料號</label>
       <select id="mtPart" style="width:230px;" data-eg-filter="輸入料號篩選…" data-eg-filter-reset><option value="">全部料號</option></select>
-      <span class="mt-note">選了客戶，料號只列該客戶底下的；改動即重新試算。</span>
+      <span class="mt-note">選了客戶，料號只列該客戶底下的；改動即重新試算。<br>
+        <b>料號要在下拉裡「點選」才算數</b>——只在上面的篩選框打字只是縮小清單。</span>
+      <span id="mtFilterState" style="flex:1 0 100%;font-size:12.5px;color:#5b3a1e;
+        border-top:1px dashed var(--sq-line2);padding-top:5px;margin-top:2px;">
+        目前試算範圍：<b>全部客戶</b>／<b>全部料號</b></span>
     </div>
     <div class="sq-bar" style="background:#FFF7E8;">
       <label>只顯示</label>
@@ -607,6 +611,7 @@ var CAN_DELETE = <?= $perms['canDelete'] ? 'true' : 'false' ?>;
 var COMPANY = {full:'', address:'', tel:'', fax:'', tax_id:''};   // 本公司抬頭（列印用，禁寫死）
 var AS_DOCS = [], AS_CUR = 0, AS_LABEL = '';
 var dtCache = null;          // 目前開著的出貨單明細（列印／刪除共用）
+var TODAY = '';             // 後端給的今天（不用瀏覽器時鐘，避免時區差一天）
 
 var CSRF = '', rows = [], page = 1, perPage = 20, total = 0;
 var sortBy = '', sortDir = 'asc';   // '' = 預設（可出貨優先、再依交期）
@@ -628,6 +633,14 @@ function toast(m, bad){
 function dispDate(d){
   if(d==null||d==='') return '';
   return (typeof egFmtDate==='function') ? egFmtDate(d) : String(d);
+}
+/* 整批換掉 <select data-eg-filter> 的選項之後一定要呼叫這一支。
+   規則7 的篩選框是拿「上次寫進去的那批選項」當快照，AJAX 撈完才填的下拉若不重新快照，
+   使用者先打的關鍵字就會變成一個沒有作用的舊字串（畫面上看起來有篩、實際是「全部」）。
+   共用檔已經備好 egFilterResnap()，這裡只是叫它，不要自己再刻一套比對。 */
+function refilterSel(sel){
+  var el=$(sel)[0];
+  if(el && typeof el.egFilterResnap==='function') el.egFilterResnap();
 }
 function openMask(id){ $('#'+id).addClass('show'); }
 function closeMask(id){ $('#'+id).removeClass('show'); }
@@ -657,7 +670,8 @@ function bindInputRules($scope){
 function init(){
   $.getJSON(API, {action:'meta'}, function(r){
     if(!r.ok){ toast(esc(r.error||'初始化失敗'), true); return; }
-    CSRF = r.csrf;
+    CSRF  = r.csrf;
+    TODAY = r.today;
     $('#shipDate').val(r.today);
     $('#rcTo').val(r.today);
     var d=new Date(r.today); d.setDate(d.getDate()-14);
@@ -670,7 +684,7 @@ function init(){
     var h2='<option value="">請選擇客戶</option>';
     (r.clients||[]).forEach(function(c){
       h2+='<option value="'+esc(c.name)+'">'+esc(c.name)+'（'+c.cnt+'）</option>'; });
-    $('#tcClient').html(h2);
+    $('#tcClient').html(h2); refilterSel('#tcClient');
     var y=new Date(r.today); y.setFullYear(y.getFullYear()-1);
     $('#tcFrom').val(y.toISOString().slice(0,10));
     $('#tcTo').val(r.today);
@@ -1339,9 +1353,21 @@ if(CAN_ADMIN){
   var RSN = {no_order:'查無此客戶＋料號的訂單', used_up:'訂單量已被其他出貨出完',
              later:'訂單下單日晚於出貨日'};
 
-  $('#btnMatch').on('click',function(){ openMask('mkMatch'); });
+  $('#btnMatch').on('click',function(){
+    mtDefaultRange();
+    openMask('mkMatch');
+  });
+
+  /* 沒填日期就預設「本年度」（1/1 ~ 今天）：這支工具幾乎都是整年度回頭補資料，
+     留空白等於每次都要先手動打兩個日期才按得動試算。今天一律取後端給的，不用瀏覽器時鐘。 */
+  function mtDefaultRange(){
+    var t = TODAY || new Date().toISOString().slice(0,10);
+    if(!$('#mtFrom').val()) $('#mtFrom').val(t.slice(0,4)+'-01-01');
+    if(!$('#mtTo').val())   $('#mtTo').val(t);
+  }
 
   function mtRange(){
+    mtDefaultRange();                       // 使用者把日期清掉就自動補回本年度，不要直接擋下
     var f=$('#mtFrom').val(), t=$('#mtTo').val();
     if(!f||!t){ toast('請指定出貨日期區間', true); return null; }
     return {date_from:f, date_to:t};
@@ -1359,7 +1385,9 @@ if(CAN_ADMIN){
         h+='<option value="'+esc(c.name)+'">'+esc(c.name)+'（'+nf(c.cnt)+'）</option>'; });
       $('#mtClient').html(h).val(cur);
       if($('#mtClient').val()===null) $('#mtClient').val('');
+      refilterSel('#mtClient');
       fillParts();
+      mtPaintFilterState();
     },'json');
     runMatch();
   });
@@ -1379,19 +1407,46 @@ if(CAN_ADMIN){
       h+='<option value="'+k+'">'+esc(agg[k].product_id)+'（'+nf(agg[k].cnt)+'）</option>'; });
     $('#mtPart').html(h);
     $('#mtPart').val(cur && agg[cur] ? cur : '');
+    /* 料號選項是「按了試算之後」才由後端撈回來填的，使用者常常在那之前就先打好料號。
+       不重新快照的話，那個關鍵字會留在篩選框裡卻完全沒有作用——畫面上看起來有篩料號、
+       清單卻是全部料號（2026-09-18 使用者回報「底下列的跟我篩選料號好像無關」）。
+       resnap 後若關鍵字只命中一個料號，共用檔會直接把它選起來並觸發 change＝自動重新試算。 */
+    refilterSel('#mtPart');
+    mtPaintFilterState();
+  }
+
+  /* 把「現在到底篩了什麼」直接寫在畫面上：
+     打了關鍵字但沒有真的選到料號時，下拉其實還是「全部料號」，不講清楚使用者會以為篩選壞掉。 */
+  function mtPaintFilterState(){
+    var cSel=$('#mtClient').val()||'', pSel=$('#mtPart').val()||'';
+    var cTxt=cSel ? $('#mtClient option:selected').text() : '全部客戶';
+    var pTxt=pSel ? $('#mtPart option:selected').text()   : '全部料號';
+    var warn='';
+    var kwP=$.trim($('#mtPart').prev('.eg-filter-box').val()||'');
+    var kwC=$.trim($('#mtClient').prev('.eg-filter-box').val()||'');
+    if(kwP && !pSel) warn+='<span style="color:#DD5138;">料號關鍵字「'+esc(kwP)+'」還沒選到任何一個料號，'
+                         +'目前仍以「全部料號」試算——請在下拉裡點選要的那一個。</span> ';
+    if(kwC && !cSel) warn+='<span style="color:#DD5138;">客戶關鍵字「'+esc(kwC)+'」還沒選到任何一個客戶，'
+                         +'目前仍以「全部客戶」試算。</span>';
+    $('#mtFilterState').html('目前試算範圍：<b>'+esc(cTxt)+'</b>／<b>'+esc(pTxt)+'</b>　'+warn);
   }
 
   $('#mtClient').on('change',function(){ fillParts(); runMatch(); });
-  $('#mtPart').on('change', runMatch);
+  $('#mtPart').on('change',function(){ mtPaintFilterState(); runMatch(); });
+  $(document).on('input','#mkMatch .eg-filter-box', mtPaintFilterState);
 
+  var mtSeq = 0;      // 篩選一改就會再送一次試算，晚回來的舊結果不可以蓋掉新的
   function runMatch(){
     var r=mtRange(); if(!r) return;
     r.client         = $('#mtClient').val()||'';
     r.d_id           = $('#mtPart').val()||0;
     // 「無法對應」的列量大，預設不撈；勾了才向後端要
     r.with_unmatched = $('.mt-f[value=none]').is(':checked') ? 1 : 0;
+    mtPaintFilterState();
+    var seq = ++mtSeq;
     $('#mtList').html('<div style="padding:14px;color:#8a6d45;">試算中…</div>');
     $.post(API+'?action=match_preview', r, function(res){
+      if(seq !== mtSeq) return;                       // 已經有更新的一次試算在跑了
       if(!res.ok){ toast(esc(res.error||'試算失敗'), true); return; }
       lastMatch = res.pairs||[];
       /* 手動指定過的列一定要留著。取消「無法對應」等於重新跟後端要一份不含那些列的結果，
