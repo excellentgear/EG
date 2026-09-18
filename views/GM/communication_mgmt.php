@@ -820,7 +820,9 @@ $roleLabel = cm_role_label($perms);
             <li><b>措施追蹤表（3-GM-01-02）</b>＝只盯還沒做完的事。只列有<b>預計完成日</b>、要指派<b>負責人</b>的項目；
                 確認改善有效並完成後把「是否結案」設為是，下次審查就可以移出清單（預設只顯示未結案）。
                 <br><b>這一頁沒有「新增」按鈕</b>：追蹤項目一律是從溝通記錄表的某一列問題按<b>「轉追蹤」</b>建立的，
-                這樣每一筆追蹤都查得到它是從哪一次溝通、哪一個問題來的。要新增就回溝通記錄表開單。</li>
+                這樣每一筆追蹤都查得到它是從哪一次溝通、哪一個問題來的。要新增就回溝通記錄表開單。
+                <br>相對的，<b>來源的溝通記錄表被刪除時，從它轉出去的追蹤項目也會自動一併刪除</b>（含已結案的），
+                不會留下查不到出處的孤兒項目；刪除前系統會先告訴您會連帶刪掉幾筆。</li>
         </ul>
 
         <h4>操作步驟：溝通記錄表</h4>
@@ -1892,8 +1894,25 @@ $('#btnRecSubmit').on('click', function(){
     });
 });
 function delRec(id){
-    if (!confirm('確定要刪除這張溝通記錄表嗎？')) return;
-    post({action:'rec_delete', rec_id:id}, function(){ loadRec(); });
+    /* 點開即刷新鐵則（ai-rules/08 第六節）：不用清單上的快取，按下去的當下重抓這張單，
+       才算得準「會連帶刪掉幾筆追蹤項目」——別人可能剛把某一列轉進追蹤表。 */
+    get({action:'rec_get', id:id}, function(res){
+        var n = (res.items || []).filter(function(x){ return +x.track_id > 0; }).length;
+        var msg = '確定要刪除這張溝通記錄表嗎？';
+        if (n > 0){
+            msg += '\n\n這張單有 ' + n + ' 個問題已轉入「回應利害關係者措施追蹤表」，'
+                 + '刪除後那 ' + n + ' 筆追蹤項目會一併刪除（含已結案的）。';
+        }
+        if (!confirm(msg)) return;
+        post({action:'rec_delete', rec_id:id}, function(r2){
+            var t = +(r2 && r2.tracks_deleted) || 0;
+            if (t > 0){
+                alert('已刪除這張溝通記錄表，並一併刪除 ' + t + ' 筆措施追蹤項目。');
+                loadTrack();
+            }
+            loadRec();
+        });
+    });
 }
 
 /* ---- 確認／退回 ---- */

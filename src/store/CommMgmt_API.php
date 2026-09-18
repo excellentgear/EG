@@ -109,7 +109,14 @@ function cmRecGet(PDO $db, int $id): ?array {
     return $st->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 function cmItems(PDO $db, int $recId): array {
-    $st = $db->prepare("SELECT * FROM comm_record_item WHERE rec_id=? ORDER BY seq, item_id");
+    /* track_id 只在「那筆追蹤項目還活著」時才回傳：追蹤項目被刪掉（不論是管理員單獨刪、
+       或整張溝通記錄被刪時連帶刪）之後，這一列就不該再顯示「已轉追蹤」——
+       否則畫面標著已轉、追蹤表卻查無此筆，而且那顆「轉追蹤」按鈕也按不出來。
+       判斷「是否已轉過」的 rec_to_track 本來就用 `AND is_deleted=0`，這裡與它同一套口徑。 */
+    $st = $db->prepare("SELECT i.*, (CASE WHEN t.track_id IS NULL THEN NULL ELSE i.track_id END) AS track_id
+                        FROM comm_record_item i
+                        LEFT JOIN comm_track t ON t.track_id = i.track_id AND t.is_deleted = 0
+                        WHERE i.rec_id=? ORDER BY i.seq, i.item_id");
     $st->execute([$recId]);
     return $st->fetchAll(PDO::FETCH_ASSOC);
 }
@@ -454,9 +461,30 @@ if ($action === 'rec_delete') {
     if (!$r) jerr('查無此溝通記錄表', 404);
     if (!$P['canAdmin'] && !((string)$r['status'] === 'draft' && (int)$r['maker_id'] === $uid))
         jerr('只有草稿階段的填表人本人或溝通管理員可以刪除', 403);
-    $db->prepare("UPDATE comm_record SET is_deleted=1, updated_at=? WHERE rec_id=?")->execute([cmNow($db)['n'], (int)$r['rec_id']]);
-    cmCloseNotice($db, (int)$r['rec_id']);
-    jout();
+    $recId = (int)$r['rec_id'];
+    $now   = cmNow($db);
+
+    /* 刪除溝通記錄表時，從它轉出去的措施追蹤項目要一併刪掉（使用者指定）。
+       追蹤項目的存在意義就是「這一次溝通的某個問題還沒做完」，來源單據都沒有了，
+       留著會變成查不到出處的孤兒——追蹤表上的「來源單號」會指向一張已刪除的單。
+       **已結案的也一起刪**：那同樣是這張單的附屬資料，留一半反而對不起來。
+       comm_record_item.track_id 刻意不清掉（與 track_delete 不同）：單據本身已經刪了、
+       畫面上不會再顯示，留著反而保住「這個問題曾經轉成追蹤 #N」的對照；
+       而 rec_to_track 判斷「是否已轉過」時本來就有 `AND is_deleted=0`，
+       所以萬一日後單據被還原，那一列仍然可以重新轉入，不會卡死。 */
+    try {
+        $db->beginTransaction();
+        $db->prepare("UPDATE comm_record SET is_deleted=1, updated_at=? WHERE rec_id=?")->execute([$now['n'], $recId]);
+        $st = $db->prepare("UPDATE comm_track SET is_deleted=1, updated_at=? WHERE src_rec_id=? AND is_deleted=0");
+        $st->execute([$now['n'], $recId]);
+        $nTrack = $st->rowCount();
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        jerr('刪除失敗：' . $e->getMessage(), 500);
+    }
+    cmCloseNotice($db, $recId);
+    jout(['tracks_deleted' => $nTrack]);
 }
 
 /* ---- 溝通記錄表：送出（拍板②的序列流程起點） ---- */
