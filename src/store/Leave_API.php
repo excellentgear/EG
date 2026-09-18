@@ -111,6 +111,11 @@ case 'bootstrap': {
              'attach_ready' => trim((string)$cfg['leave_attach_base']) !== '',
              'print_header' => (string)$cfg['leave_print_header'],
              'print_footer' => (string)$cfg['leave_print_footer'],
+             // 列印大標題＝本公司全名，動態取自 customer_list.is_own_company=1（ai-rules/16，禁寫死）
+             'company_full' => (function () use ($db) {
+                 require_once __DIR__ . '/../common/org_role_lib.php';
+                 return function_exists('eg_company_full_name') ? eg_company_full_name($db) : '';
+             })(),
          ]]);
 }
 
@@ -421,6 +426,8 @@ case 'stats': {
              'user_id'        => (int)($_GET['user_id'] ?? 0),
              'type_ids'       => $typeIds,
              'statuses'       => $statuses,
+             // 含下轄部門（預設 1）；畫面上的勾選框可關掉，只看該部門本身
+             'with_sub'       => (string)($_GET['with_sub'] ?? '1') !== '0',
          ])]);
 }
 

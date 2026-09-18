@@ -66,13 +66,22 @@ if (!function_exists('eg_leave_stats_people')) {
      * 因此這裡含全部狀態，並帶 state_label 讓畫面標「已離職」。
      * 篩選用的部門／人員下拉仍走 eg_people_list()（見 Leave_API 的 stats_options）。
      */
-    function eg_leave_stats_people(PDO $db, array $userIds): array {
+    function eg_leave_stats_people(PDO $db, array $userIds, array $scopeDeptIds = []): array {
         $userIds = array_values(array_unique(array_filter(array_map('intval', $userIds))));
         if (!$userIds) return [];
         $in = implode(',', $userIds);
-        // 一人可能掛多個部門/職稱：取主要職務(is_main)，沒有就取最小 id（與 people_lib 同一套取法）
+        /* 一人可能掛多個部門/職稱：這裡挑「統計要算到哪個部門」的那一筆。
+           優先取**命中目前部門篩選的那一筆**，沒篩選才退回主要職務(is_main)、再退回最小 id。
+           為什麼（2026-09-18 使用者回報「上面的篩選似乎跟底下圖面沒有關係」）：
+           篩「資材課（含下轄）」時，命中的人裡有兼任者——何沐桐主職技術課、兼任生管組——
+           只看 is_main 就把他的假算進「技術課」，於是部門統計圖上冒出**根本不在篩選範圍內的技術課**，
+           使用者看到的就是「我明明選了資材課，圖上卻有技術課、管理課、業務課」。 */
+        $scopeDeptIds = array_values(array_filter(array_map('intval', $scopeDeptIds)));
+        $scopeOrder = $scopeDeptIds
+                    ? "(m2.department_id IN (" . implode(',', $scopeDeptIds) . ")) DESC, "
+                    : '';
         $pick = "SELECT m2.id FROM user_department_position_map m2 WHERE m2.user_id = u.id
-                 ORDER BY m2.is_main DESC, m2.id ASC LIMIT 1";
+                 ORDER BY {$scopeOrder}m2.is_main DESC, m2.id ASC LIMIT 1";
         $out = [];
         try {
             $sql = "SELECT u.id, u.user_cname, u.state,
@@ -154,14 +163,20 @@ if (!function_exists('eg_leave_stats')) {
         }
         if ($userId > 0) { $where[] = 'lr.employee_id = ?'; $args[] = $userId; }
         if ($typeIds)    { $where[] = 'lr.leave_type_id IN (' . implode(',', $typeIds) . ')'; }
+        /* 部門篩選的範圍。with_sub（預設 1）＝含下轄部門：選「資材課」要算得到生管組／採購組／倉管組。
+           但**組織是一棵樹、根是董事長室**，選根部門時「含下轄」就等於全公司——使用者選了董事長室
+           卻看到全公司的圖，會以為篩選根本沒作用（2026-09-18 回報）。所以這個選項要能關掉，
+           畫面上也必須把實際範圍講出來（回傳 scope_depts 讓前端顯示）。 */
+        $withSub = !isset($opt['with_sub']) || !empty($opt['with_sub']);
+        $scopeDeptIds = [];
         if ($deptId > 0) {
-            // 含下轄部門：選「資材課」要算得到生管組／採購組／倉管組的人，否則畫面上選得到卻永遠 0 筆
-            // （人員下拉的篩選走同一組 id，兩邊才對得起來）
-            require_once __DIR__ . '/org_role_lib.php';
-            $dIds = eg_dept_subtree_ids($db, $deptId);
-            if (!$dIds) $dIds = [$deptId];
+            if ($withSub) {
+                require_once __DIR__ . '/org_role_lib.php';
+                $scopeDeptIds = eg_dept_subtree_ids($db, $deptId);
+            }
+            if (!$scopeDeptIds) $scopeDeptIds = [$deptId];
             $where[] = 'lr.employee_id IN (SELECT DISTINCT m.user_id FROM user_department_position_map m
-                                           WHERE m.department_id IN (' . implode(',', array_map('intval', $dIds)) . '))';
+                                           WHERE m.department_id IN (' . implode(',', array_map('intval', $scopeDeptIds)) . '))';
         }
         $w = 'WHERE ' . implode(' AND ', $where);
 
@@ -177,7 +192,7 @@ if (!function_exists('eg_leave_stats')) {
             $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable $e) { $rows = []; }
 
-        $people = eg_leave_stats_people($db, array_column($rows, 'employee_id'));
+        $people = eg_leave_stats_people($db, array_column($rows, 'employee_id'), $scopeDeptIds);
 
         // ── 有資料的年度 ──
         $years = [];
@@ -327,10 +342,22 @@ if (!function_exists('eg_leave_stats')) {
             }
         }
 
+        // 目前部門篩選實際涵蓋哪些部門（畫面上要寫出來，不然使用者看不出「含下轄」把範圍放到多大）
+        $scopeDeptNames = [];
+        if ($scopeDeptIds) {
+            try {
+                $sn = $db->query("SELECT name FROM department WHERE id IN (" . implode(',', array_map('intval', $scopeDeptIds)) . ")
+                                  ORDER BY COALESCE(sort_order,999), id")->fetchAll(PDO::FETCH_COLUMN);
+                $scopeDeptNames = array_map('strval', $sn);
+            } catch (Throwable $e) {}
+        }
+
         return [
-            'year'      => $isAll ? 'all' : $selY,
-            'years'     => $years,
-            'types'     => array_values($types),
+            'year'        => $isAll ? 'all' : $selY,
+            'years'       => $years,
+            'types'       => array_values($types),
+            'with_sub'    => $withSub ? 1 : 0,
+            'scope_depts' => $scopeDeptNames,
             'kpi'       => $kpi,
             'by_month'  => array_values($byMonth),
             'by_type'   => $byTypeOut,
@@ -350,6 +377,7 @@ if (!function_exists('eg_leave_stats_empty')) {
                                                    'req_count' => 0, 'by_type' => []];
         return [
             'year' => $year, 'years' => [(int)date('Y')], 'types' => array_values($types),
+            'with_sub' => 1, 'scope_depts' => [],
             'kpi' => ['total_days' => 0, 'total_hours' => 0, 'req_count' => 0, 'people_count' => 0,
                       'avg_days' => 0, 'top_type' => '', 'top_type_days' => 0,
                       'busiest_month' => 0, 'busiest_month_days' => 0],

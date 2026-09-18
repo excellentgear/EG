@@ -155,6 +155,10 @@ input[type=number]{-moz-appearance:textfield;}
 /* ── 請假統計 ── */
 .chart-box{position:relative;height:300px;}                 /* Chart.js 需要固定高度的容器 */
 .chart-box canvas{max-width:100%;}
+.cross-year-note{background:#FFF7E8;border:1px solid var(--sand-d);border-left:4px solid var(--amber);border-radius:6px;padding:7px 12px;font-size:12.5px;color:#6b5638;margin-bottom:12px;line-height:1.7;}
+.cross-year-note b{color:#8A5A2B;}
+.scope-note{font-size:12px;color:#8a6d45;margin-top:6px;}
+.scope-note b{color:#B06F27;}
 .st-chip{border:1px solid var(--sand-d);border-radius:14px;padding:2px 11px 2px 8px;font-size:12px;
          cursor:pointer;background:#fffdf9;color:#8a6d45;user-select:none;white-space:nowrap;
          display:inline-flex;align-items:center;gap:6px;}
@@ -397,8 +401,14 @@ input[type=number]{-moz-appearance:textfield;}
           </div>
           <div>
             <label style="display:block;font-size:12px;color:#9a7b4f;margin-bottom:2px;">部門</label>
-            <select class="form-control input-sm" id="stDept" style="width:auto;min-width:130px;"
-                    title="雙擊＝解除部門篩選"></select>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <select class="form-control input-sm" id="stDept" style="width:auto;min-width:130px;"
+                      title="雙擊＝解除部門篩選"></select>
+              <label style="font-weight:400;font-size:12px;color:#6b5638;white-space:nowrap;margin:0;"
+                     title="組織是樹狀的：資材課底下還有生管組／採購組／倉管組。取消勾選＝只看這個部門本身的人。">
+                <input type="checkbox" id="stWithSub" data-eg-skip checked> 含下轄
+              </label>
+            </div>
           </div>
           <div>
             <label style="display:block;font-size:12px;color:#9a7b4f;margin-bottom:2px;">人員</label>
@@ -459,6 +469,9 @@ input[type=number]{-moz-appearance:textfield;}
 
       <!-- ── 年度比較 ── -->
       <div class="st-sub" id="st-year" style="display:none;">
+        <div class="cross-year-note"><i class="fa fa-info-circle"></i>
+          本分頁是<b>各年度互相比較</b>，所以一定會同時出現多個年度，不受上方「年度」篩選影響
+          （年度只影響最上方的統計數字）。部門／人員／假別篩選則照常生效。</div>
         <div class="lv-card">
           <h4><i class="fa fa-bar-chart"></i> 各年度請假天數（依假別堆疊，不受上方年度篩選影響）</h4>
           <div class="chart-box"><canvas id="cvYear"></canvas></div>
@@ -471,6 +484,10 @@ input[type=number]{-moz-appearance:textfield;}
 
       <!-- ── 趨勢分析 ── -->
       <div class="st-sub" id="st-trend" style="display:none;">
+        <div class="cross-year-note"><i class="fa fa-info-circle"></i>
+          本分頁看的是<b>跨年度的變化</b>，所以圖表與下方「逐月明細」會列出<b>所有年度</b>的資料，
+          不受上方「年度」篩選影響（年度只影響最上方的統計數字與「同期比較」要跟哪一年比）。
+          部門／人員／假別篩選則照常生效。</div>
         <div class="lv-card">
           <h4><i class="fa fa-line-chart"></i> 逐月請假天數趨勢（跨年度連續，中間沒人請假的月份補 0）</h4>
           <div class="chart-box"><canvas id="cvTrend"></canvas></div>
@@ -807,12 +824,15 @@ input[type=number]{-moz-appearance:textfield;}
      本檔必須排在 Chart.min.js 之後、ready 之前，才來得及把原廠預設抄一份 -->
 <script src="../../resource/js/eg_chart_legend_fix.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_chart_legend_fix.js') ?>"></script><?php endif; ?>
 <script src="../../resource/js/eg_date_fmt.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_date_fmt.js') ?>"></script>
+<script src="../../resource/js/eg_print_log.js?v=<?= @filemtime(__DIR__.'/../../resource/js/eg_print_log.js') ?>"></script>
 <script src="../../resource/js/eg_stamp.js?v=<?= $avStamp ?>"></script>
 <script>
 const API = '../../src/store/Leave_API.php';
 const IS_ADMIN = <?= $IS_ADMIN ? 'true' : 'false' ?>;
 const IS_SUPERADMIN = <?= $IS_SUPERADMIN ? 'true' : 'false' ?>;   // 僅 id=1 且 state=99，可徹底刪除
 let CSRF = '', TYPES = [], AGENTS = [], SETTINGS = {}, ME = {}, GRADES = [];
+// 列印用：公司全名（後端動態取，ai-rules/16 禁寫死）與表尾編號
+let COMPANY_FULL = '', PRINT_FOOTER = '';
 let CUR_YEAR = (new Date()).getFullYear();
 let uploadToken = '';
 let listPage = 1, listTotal = 0, curDetailId = 0, curDetailCanCancel = false, curDetailStatus = '';
@@ -850,6 +870,7 @@ function boot(){
   $.getJSON(API, {action:'bootstrap'}, function(r){
     if(!r.success){ alert(r.message||'載入失敗'); return; }
     CSRF = r.csrf; TYPES = r.leave_types||[]; AGENTS = r.agent_candidates||[]; SETTINGS = r.settings||{}; ME = r.me||{};
+    COMPANY_FULL = SETTINGS.company_full || ''; PRINT_FOOTER = SETTINGS.print_footer || '';
     GRADES = r.grades||[];   // 喪假親等（人事設定維護）
     // 假別下拉
     const $t = $('#fType').empty().append('<option value="">請選擇假別</option>');
@@ -2068,7 +2089,8 @@ function stDeptTreeIds(did){
 function renderStUser(){
   const did = +($('#stDept').val() || 0);
   const keep = String($('#stUser').val() || '0');
-  const ids = did > 0 ? stDeptTreeIds(did) : null;
+  // 人員下拉的範圍要跟統計用的同一組部門，否則「下拉列得出來的人」與「圖上算到的人」對不起來
+  const ids = did > 0 ? ($('#stWithSub').is(':checked') ? stDeptTreeIds(did) : [did]) : null;
   const list = ids ? ST_PEOPLE.filter(p => ids.indexOf(+p.dept_id) !== -1) : ST_PEOPLE;
   $('#stUser').html('<option value="0">全部人員</option>'
     + list.map(p => '<option value="'+esc(p.key)+'">'+esc(p.label)+'</option>').join(''));
@@ -2077,8 +2099,8 @@ function renderStUser(){
 }
 function stUserId(){ return parseInt(String($('#stUser').val() || '0').split(':')[0], 10) || 0; }
 // 部門／人員／狀態一改就重算（年度與假別各自有處理）
-$(document).on('change', '#stDept', function(){ renderStUser(); });
-$(document).on('change', '#stDept, #stUser, #stPending, #stYear', function(){ stPersonPage = 1; loadStats(); });
+$(document).on('change', '#stDept, #stWithSub', function(){ renderStUser(); });
+$(document).on('change', '#stDept, #stUser, #stPending, #stYear, #stWithSub', function(){ stPersonPage = 1; loadStats(); });
 
 function stTypeIdsParam(){
   if(!ST || !stTypesOn) return '';
@@ -2097,6 +2119,7 @@ function loadStats(){
              dept_id: $('#stDept').val() || 0,
              user_id: stUserId(),
              with_pending: $('#stPending').is(':checked') ? 1 : 0,
+             with_sub: $('#stWithSub').is(':checked') ? 1 : 0,
              type_ids: stTypeIdsParam()};
   $.getJSON(API, q, function(r){
     if(!r.success){ $('#stKpi').html('<div class="empty-note" style="width:100%;color:#a3341f;">'+esc(r.message)+'</div>'); return; }
@@ -2126,8 +2149,21 @@ function renderStatsHeader(r){
   const yTxt = (String(ST.year) === 'all') ? '全部年度' : (ST.year + ' 年');
   $('.st-y').text(yTxt + '　');
   $('.st-y2').text(String(ST.year) === 'all' ? '最近一年' : ST.year);
+  // 部門篩選實際涵蓋到哪些部門（「含下轄」會把範圍放大，尤其選到最上層部門時等於全公司，要寫清楚）
+  const sd = ST.scope_depts || [];
+  const selDept = $.trim($('#stDept option:selected').text() || '');
+  let deptTxt;
+  if(!sd.length){
+    deptTxt = (r.scope === 'all' ? '全公司' : '我的部門（含下轄）');
+  }else if(sd.length === 1){
+    deptTxt = (selDept || sd[0]) + '（不含下轄）';
+  }else{
+    // 下轄名單把自己去掉再列，才看得出「多算了哪些部門」
+    const subs = sd.filter(x => x !== selDept);
+    deptTxt = selDept + ' 含下轄共 ' + sd.length + ' 個部門（' + subs.join('、') + '）';
+  }
   $('#stScopeNote').html(
-      '<i class="fa fa-info-circle"></i> 範圍：' + (r.scope === 'all' ? '全公司' : '我的部門（含下轄）')
+      '<i class="fa fa-info-circle"></i> 範圍：' + esc(deptTxt)
     + '　狀態：' + (r.with_pending ? '已核准＋審核中' : '僅已核准')
     + '　｜　年度／月份一律以請假<b>起日</b>歸屬（與特休額度同口徑），跨月長假整筆算在起日那個月。'
     + '　｜　所有總計皆由後端對全部符合條件的資料算出，非畫面上這一頁的加總。');
@@ -2364,61 +2400,121 @@ function crossTable(firstCol, buckets, ts){
 }
 
 // ── 列印：把目前子分頁的圖表轉成圖片＋表格一起送去列印（交給瀏覽器原生分頁）──
+/* 列印：A4 橫式正式報表（ai-rules/16）
+   · 大標題＝本公司全名（動態取自 customer_list.is_own_company=1，禁寫死）
+   · 副標題＝請假統計表－子分頁名；下方一行列出所有篩選條件，讓紙本看得出這份數字的範圍
+   · 頁碼左下 counter(pages)（只有超過一頁才加），表尾編號右下角
+   · 圖表用 canvas 轉 PNG，但**一定要指定列印時的高度**：原樣貼上去時螢幕上 400px 高的圖
+     在紙上會被放大到半頁以上，兩張圖就佔滿一頁、表格被擠到後面（使用者回報「列印畫面很糟糕」）
+   · 表格 table-layout:fixed ＋ thead 重複，長表跨頁才不會整欄跑掉 */
 function printStats(){
   if(!ST){ alert('請先等統計載入完成'); return; }
-  const map = {month:{title:'月度統計', canvas:['cvMonth','cvType'], tables:[['月 × 假別 交叉表（天）','tbMonth']]},
-               year:{title:'年度比較',  canvas:['cvYear'],           tables:[['年 × 假別 交叉表（天）','tbYear']]},
-               trend:{title:'趨勢分析', canvas:['cvTrend','cvTrendCnt','cvYoY'], tables:[['逐月明細','tbTrend']]},
-               people:{title:'部門・人員分析', canvas:['cvDept','cvTop'],
-                       tables:[['部門統計','tbDept'], ['人員明細（全部人員）','tbPeople']]}};
+  const map = {month:{title:'月度統計', canvas:[['cvMonth','每月請假天數（依假別堆疊）'],['cvType','假別佔比']],
+                      tables:[['月 × 假別 交叉表（天）','tbMonth']]},
+               year:{title:'年度比較',  canvas:[['cvYear','各年度請假天數（依假別堆疊）']],
+                      tables:[['年 × 假別 交叉表（天）','tbYear']]},
+               trend:{title:'趨勢分析', canvas:[['cvTrend','逐月請假天數趨勢'],['cvTrendCnt','逐月請假件數'],['cvYoY','同期比較']],
+                      tables:[['逐月明細','tbTrend']]},
+               people:{title:'部門・人員分析', canvas:[['cvDept','各部門請假天數'],['cvTop','請假天數最多的人員（前 15 名）']],
+                      tables:[['部門統計','tbDept'], ['人員明細（全部人員）','tbPeople']]}};
   const cfg = map[stSub];
-  const yTxt = (String(ST.year) === 'all') ? '全部年度' : (ST.year + ' 年度');
-  const cond = [yTxt,
-                ($('#stDept option:selected').text() || ''),
-                ($('#stUser option:selected').text() || ''),
+  // 跨年度的兩個分頁不受年度篩選影響，紙本上要寫清楚，不可印成「2026 年度」讓人以為只有那一年
+  const crossYear = (stSub === 'year' || stSub === 'trend');
+  const yTxt = crossYear ? '全部年度（本表為跨年度比較）'
+             : ((String(ST.year) === 'all') ? '全部年度' : (ST.year + ' 年度'));
+  const sd = ST.scope_depts || [];
+  const selDept = $.trim($('#stDept option:selected').text() || '');
+  const deptTxt = !sd.length ? (selDept || '全部部門')
+                : (sd.length === 1 ? (selDept || sd[0]) + '（不含下轄）'
+                                   : selDept + '（含下轄 ' + sd.length + ' 個部門）');
+  const cond = [yTxt, '部門：' + deptTxt,
+                '人員：' + $.trim($('#stUser option:selected').text() || '全部人員'),
                 ($('#stPending').is(':checked') ? '含審核中' : '僅已核准'),
-                '假別：' + (stTypesOn && stTypesOn.length === ST.types.length ? '全部'
+                '假別：' + ((!stTypesOn || stTypesOn.length === ST.types.length) ? '全部'
                           : ST.types.filter(t => stTypesOn.indexOf(+t.id) >= 0).map(t => t.leave_name).join('、'))
                ].join('　｜　');
-  let h = '<html><head><meta charset="utf-8"><title>請假統計 - ' + cfg.title + '</title><style>'
-    + 'body{font-family:"Microsoft JhengHei",sans-serif;font-size:12px;color:#3a2c1a;margin:12px;}'
-    + 'h2{text-align:center;font-size:17px;margin:4px 0;} h3{font-size:13px;color:#b06f27;margin:14px 0 6px;}'
-    + '.cond{text-align:center;color:#8a6d45;font-size:11.5px;margin-bottom:10px;}'
-    + '.kpi{display:flex;flex-wrap:wrap;gap:14px;justify-content:center;margin-bottom:10px;}'
-    + '.kpi div{border:1px solid #e6d8c3;background:#faf3e7;border-radius:5px;padding:5px 12px;}'
-    + '.kpi b{font-size:15px;color:#3a2c1a;}'
-    + 'img{max-width:100%;page-break-inside:avoid;} table{width:100%;border-collapse:collapse;}'
-    + 'th{background:#faf3e7;color:#b06f27;} th,td{border:1px solid #e6d8c3;padding:3px 6px;}'
-    + '.numc{text-align:right;} .sum-row td{background:#f7efe0;font-weight:700;}'
-    + 'thead{display:table-header-group;} tr{page-break-inside:avoid;}'
-    + '.ft{text-align:center;color:#9a7b4f;font-size:11px;margin-top:10px;}'
-    + '.empty-note,.no-print{display:none;} .tag-soft{font-size:10px;color:#8a5a1a;}'
-    + '</style></head><body>';
-  h += '<h2>' + esc(SETTINGS.print_header || '請假統計表') + '</h2>';
-  h += '<h2 style="font-size:14px;">' + esc(cfg.title) + '</h2>';
-  h += '<div class="cond">' + esc(cond) + '</div>';
-  const k = ST.kpi;
-  h += '<div class="kpi">'
-     + '<div>總請假天數 <b>'+num(k.total_days)+'</b> 天</div>'
-     + '<div>總時數 <b>'+num(k.total_hours)+'</b> 小時</div>'
-     + '<div>請假單數 <b>'+k.req_count+'</b> 張</div>'
-     + '<div>請假人數 <b>'+k.people_count+'</b> 人</div>'
-     + '<div>平均每人 <b>'+num(k.avg_days)+'</b> 天</div></div>';
-  cfg.canvas.forEach(function(id){
-    const el = document.getElementById(id);
-    if(el && el.width) h += '<div><img src="'+el.toDataURL('image/png')+'"></div>';
-  });
-  cfg.tables.forEach(function(t){
-    const $t = $('#'+t[1]);
-    if($t.length) h += '<h3>'+esc(t[0])+'</h3><table>' + $t.html() + '</table>';
-  });
-  h += '<div class="ft">' + esc(SETTINGS.print_footer || '')
-     + '　列印時間：' + new Date().toLocaleString('zh-TW') + '</div></body></html>';
-  const w = window.open('', '_blank');
-  w.document.write(h); w.document.close();
-  setTimeout(function(){ w.print(); }, 600);   // 等圖片 decode 完再叫列印
-}
 
+  const css = 'body{font-family:"Microsoft JhengHei","微軟正黑體",sans-serif;font-size:11px;color:#222;margin:0;'
+    + '-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+    + '.p-title{text-align:center;font-size:20px;font-weight:700;letter-spacing:2px;margin:0 0 2px;}'
+    + '.p-sub{text-align:center;font-size:14px;font-weight:700;color:#8A5A2B;margin:0 0 4px;}'
+    + '.p-cond{text-align:center;color:#555;font-size:10.5px;margin-bottom:6px;line-height:1.6;}'
+    + '.p-kpi{display:flex;flex-wrap:wrap;gap:0;justify-content:center;margin:0 0 8px;border:1px solid #666;}'
+    + '.p-kpi div{flex:1;text-align:center;padding:4px 6px;border-right:1px solid #666;}'
+    + '.p-kpi div:last-child{border-right:0;}'
+    + '.p-kpi span{display:block;font-size:10px;color:#555;}'
+    + '.p-kpi b{font-size:14px;color:#222;}'
+    // 圖：一列最多兩張，各自限高，才不會一張圖吃掉半頁
+    + '.p-charts{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;}'
+    + '.p-chart{flex:1 1 48%;border:1px solid #ccc;padding:3px;break-inside:avoid;page-break-inside:avoid;}'
+    + '.p-chart.full{flex:1 1 100%;}'
+    + '.p-chart .cap{font-size:10.5px;color:#8A5A2B;font-weight:700;margin-bottom:2px;}'
+    + '.p-chart img{display:block;width:100%;height:auto;max-height:62mm;object-fit:contain;}'
+    + '.p-chart.full img{max-height:70mm;}'
+    + 'h3{font-size:12px;color:#8A5A2B;margin:10px 0 4px;border-bottom:1px solid #d8c7a8;padding-bottom:2px;}'
+    + 'table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:10px;}'
+    + 'th,td{border:1px solid #666;padding:2px 4px;text-align:center;overflow-wrap:break-word;word-break:break-word;}'
+    + 'th{background:#f3ead6;color:#5b3a1e;}'
+    + 'thead{display:table-header-group;} tr{break-inside:avoid;page-break-inside:avoid;}'
+    + '.numc{text-align:right;} .sum-row td{background:#faf1e2;font-weight:700;}'
+    + '.empty-note,.no-print,.tag-soft{display:none;}'
+    + '.p-foot{margin-top:8px;font-size:9.5px;color:#555;text-align:right;}'
+    + '@page{size:A4 landscape;margin:12mm 8mm 16mm;'
+    + (PRINT_FOOTER ? " @bottom-right{ content:'" + PRINT_FOOTER.replace(/'/g, "\\'") + "'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; }" : '')
+    + '}';
+
+  const k = ST.kpi;
+  let body = '<div class="p-title">' + esc(COMPANY_FULL) + '</div>'
+           + '<div class="p-sub">請假統計表－' + esc(cfg.title) + '</div>'
+           + '<div class="p-cond">' + esc(cond) + '</div>'
+           + '<div class="p-kpi">'
+           + '<div><span>總請假天數</span><b>' + num(k.total_days) + '</b> 天</div>'
+           + '<div><span>總時數</span><b>' + num(k.total_hours) + '</b> 小時</div>'
+           + '<div><span>請假單數</span><b>' + k.req_count + '</b> 張</div>'
+           + '<div><span>請假人數</span><b>' + k.people_count + '</b> 人</div>'
+           + '<div><span>平均每人</span><b>' + num(k.avg_days) + '</b> 天</div>'
+           + '<div><span>最多的假別</span><b>' + esc(k.top_type || '—') + '</b> ' + num(k.top_type_days) + ' 天</div>'
+           + '</div>';
+
+  const imgs = cfg.canvas.map(function(c){
+    const el = document.getElementById(c[0]);
+    if(!el || !el.width) return '';
+    return '<div class="p-chart' + (cfg.canvas.length === 1 ? ' full' : '') + '">'
+         + '<div class="cap">' + esc(c[1]) + '</div>'
+         + '<img src="' + el.toDataURL('image/png') + '"></div>';
+  }).filter(Boolean);
+  if(imgs.length) body += '<div class="p-charts">' + imgs.join('') + '</div>';
+
+  cfg.tables.forEach(function(t){
+    const $t = $('#' + t[1]);
+    if($t.length) body += '<h3>' + esc(t[0]) + '</h3><table>' + $t.html() + '</table>';
+  });
+  var _n = new Date(), _p = function(v){ return (v<10?'0':'') + v; };
+  // 用本地時間組字串再交給 egFmtDate；直接丟 Date 進去會走 toISOString()＝UTC，會少 8 小時
+  var _now = _n.getFullYear()+'-'+_p(_n.getMonth()+1)+'-'+_p(_n.getDate())+' '+_p(_n.getHours())+':'+_p(_n.getMinutes());
+  body += '<div class="p-foot">列印時間：' + esc(egFmtDate(_now, true)) + '　列印人：' + esc(ME.name || '') + '</div>';
+
+  const w = window.open('', '_blank');
+  if(!w){ alert('請允許彈出視窗才能列印'); return; }
+  // <!DOCTYPE html> 不可省：漏了會落入 Quirks Mode，scrollHeight 量不準、單頁也會誤印頁碼（ai-rules/16）
+  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>請假統計表－' + esc(cfg.title)
+    + '</title><style>' + css + '</style></head><body>' + body
+    + '<scr' + 'ipt>window.onload=function(){'
+    + 'var onePage=(210-28)*96/25.4;'                       // 橫式：一頁可用高度＝A4 短邊扣上下邊界
+    + 'if(document.body.scrollHeight>onePage*0.92){'
+    + 'var st=document.createElement(\'style\');'
+    + 'st.textContent="@page{ @bottom-left{ content:\'第 \' counter(page) \' 頁／共 \' counter(pages) \' 頁\'; font-size:9pt; color:#333; vertical-align:top; padding-top:1mm; } }";'
+    + 'document.head.appendChild(st);}'
+    + 'setTimeout(function(){window.print();},350);};</scr' + 'ipt></body></html>');
+  w.document.close(); w.focus();
+
+  // 列印紀錄（ai-rules/23：會列印的頁面一律留下紀錄）
+  if(window.EGPrintLog){
+    EGPrintLog.record({source:'leave_stats', doc_kind:'form',
+      doc_name:'請假統計表－' + cfg.title,
+      note: cond});
+  }
+}
 // ── 人員明細 CSV（後端全量結果，不是目前這一頁）──
 function exportStatsCsv(){
   if(!ST) return;

@@ -213,6 +213,7 @@ if (!function_exists('eg_print_sources')) {
             'as_doc'         => ['label' => 'AS 文件管理－各式清單', 'page' => 'views/ADM/as_document_management.php', 'kind' => 'form'],
             'comm_mgmt'      => ['label' => '溝通管理－三份表單',   'page' => 'views/GM/communication_mgmt.php',      'kind' => 'form'],
             'shipping_note'  => ['label' => '快速出貨－出貨單',     'page' => 'views/Sales/Shipping_Quick.php',       'kind' => 'form'],
+            'leave_stats'    => ['label' => '請假系統－請假統計表',  'page' => 'views/ADM/leave_request.php',          'kind' => 'form'],
         ];
     }
 }
