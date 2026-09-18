@@ -185,6 +185,15 @@ case 'meta': {
         'year_status' => ia_year_status($db),
         'this_year' => $cy,
         'today'     => $today,
+        /* 這個人有沒有「操作確認密碼」可用（取消完成要輸入它）。
+           沒有的話畫面就不該讓他按下去——按了也只會白試密碼，連錯三次還會把功能鎖七天
+           （2026-09-18 使用者回報：沒有這個權限的人照樣按得下取消完成）。 */
+        'can_confirm_pw' => (function () use ($db, $uid) {
+            try {
+                require_once $GLOBALS['document_root'] . '/EGsystem/src/common/confirm_password_lib.php';
+                return eg_confirm_password_allowed($db, $uid) ? 1 : 0;
+            } catch (Throwable $e) { return 0; }
+        })(),
         // 職位清單（稽核報告表的通知對象設定＝部門 × 職位）
         'positions' => (function () use ($db) {
             try { return $db->query("SELECT id, name FROM position ORDER BY sort_order, id")->fetchAll(PDO::FETCH_ASSOC); }
@@ -576,6 +585,19 @@ case 'case_save': {
         foreach ($eks as $key) {
             list($u) = ia_post_parse($key);
             if ($u && isset($au[$u])) jerr('第 ' . ($ri + 1) . ' 列的陪檢員不可與稽核員是同一個人');
+        }
+        /* ④**受稽日期必須落在稽核期間內**（2026-09-18 使用者指正：這要在存檔當下就擋，
+           不可以讓它存進去、事後才在別的畫面提醒）。
+           實際發生過：某張單的稽核期間是 12/03，五個受稽單位卻都填 12/04，
+           於是「建立查檢表」抓到的日期與通知單對不起來。 */
+        $ad = iaDate($d['audited_date'] ?? '');
+        if ($ad && $af) {
+            $end = $at ?: $af;
+            if ($ad < $af || $ad > $end) {
+                jerr('第 ' . ($ri + 1) . ' 列的受稽日期 ' . $ad . ' 不在稽核期間內（'
+                     . $af . ($end !== $af ? (' ～ ' . $end) : '') . '）。'
+                     . '請改受稽日期，或把上方的稽核期間調整成涵蓋這一天。');
+            }
         }
     }
 

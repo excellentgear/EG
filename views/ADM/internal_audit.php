@@ -554,7 +554,9 @@ $roleLabel = ia_role_label($perms);
                 <b>還沒按完成的通知單，列印時核准／審查兩格一律留白</b>——沒完成就印出簽好的章是不實的簽章。
                 按完成時會請您確認<b>簽章日期</b>：預設＝<b>通知日期</b>，補歷史紙本時可以往前挑，但<b>不可以晚於通知日期</b>
                 （通知單是先簽好才發出去的）；這個日期同時會成為<b>製表日期</b>。
-                要再修改只有<b>內稽管理員</b>按「取消完成」並輸入<b>操作確認密碼</b>；取消完成會把自動簽核蓋上的核准／審查一併清掉
+                要再修改只有<b>內稽管理員</b>按「取消完成」並輸入<b>操作確認密碼</b>
+                （<b>沒有那個密碼權限的人不會看到這顆按鈕</b>，畫面會直接告訴他要找誰授權；
+                密碼連錯 3 次會把這項功能鎖 7 天，可由超級管理員在<b>修改個人資料 → 操作確認密碼鎖定名單</b>提前解鎖）；取消完成會把自動簽核蓋上的核准／審查一併清掉
                 （內容要改，那兩個章就不成立了）。已結案的單不給取消完成，請先把狀態改回執行中。</li>
             <li><b>建立查檢表選了「所屬件號」之後</b>：建立日期會<b>自動帶成該件號的受稽日期</b>（跨好幾天的通知單會多一個日期下拉讓您挑，挑哪一天就只列那一天的內容）；
                 下方直接列出<b>那一天要稽核哪些單位、起始主過程是什麼</b>，不必另外開通知單查；
@@ -774,6 +776,7 @@ $roleLabel = ia_role_label($perms);
 <?php endif; ?>
         </h5>
             <div class="err-msg" id="cDupWarn" style="margin-bottom:4px;"></div>
+            <div class="err-msg" id="errCAudited" style="margin-bottom:4px;"></div>
             <div class="err-msg" id="cEscWarn" style="margin-bottom:4px;"></div>
             <div class="ia-table-wrap"><table class="ia-table"><thead><tr>
                 <th style="width:170px;">帶入範本</th>
@@ -2037,7 +2040,16 @@ function applyCaseLock(c){
       .css({'pointer-events': CASE_DONE ? 'none' : '', 'opacity': CASE_DONE ? .5 : ''});
     $('#btnCaseSave').toggle(!CASE_DONE);
     $('#btnCaseComplete').toggle(!!CASE_ID && !CASE_DONE);
-    $('#btnCaseReopen').toggle(!!CASE_ID && CASE_DONE && String((c||{}).status) !== 'closed');
+    /* 取消完成要輸入操作確認密碼——**沒有那個權限的人就不要讓他按**（2026-09-18 使用者回報）：
+       按了也只會白試密碼，而且連錯三次會把這個功能鎖七天。改成顯示一段說明，講清楚要找誰。 */
+    var canReopen = !!CASE_ID && CASE_DONE && String((c||{}).status) !== 'closed';
+    var hasPw = +((META||{}).can_confirm_pw) === 1;
+    $('#btnCaseReopen').toggle(canReopen && hasPw);
+    var $noPw = $('#caseReopenNoPw');
+    if (!$noPw.length) $noPw = $('<span id="caseReopenNoPw" style="font-size:12px;color:#a08356;margin-left:8px;"></span>')
+                                 .insertBefore($('#btnCaseReopen'));
+    $noPw.toggle(canReopen && !hasPw).text(canReopen && !hasPw
+        ? '（取消完成需要「操作確認密碼」權限，請洽超級管理員在「修改個人資料 → 操作確認密碼授權管理」授權）' : '');
     var $box = $('#caseLockBox');
     if (!$box.length) { $box = $('<div id="caseLockBox" class="ia-hint" style="margin-bottom:8px;"></div>').prependTo($('#caseMask .ia-mbody')); }
     if (CASE_DONE) {
@@ -2392,8 +2404,32 @@ function validateCase(){
     if (s && e && normTime(s) && normTime(e) && normTime(e) < normTime(s)) {
         ok = fieldErr($('#cMeetEnd'), 'errCMeetTime', '結束時間不可早於開始時間') && ok;
     }
+    if (!checkAuditedDates()) ok = false;
+    if (!caseSyncMakerDateMax()) ok = false;
     return ok;
 }
+/* 受稽日期必須落在稽核期間內（2026-09-18 使用者指正：要在存檔當下就擋住）。
+   後端 case_save 同規則再擋一次（鐵律8）；這裡負責即時標紅並講明白是哪一列。 */
+function checkAuditedDates(){
+    var f = $('#cFrom').val(), t = $('#cTo').val() || f;
+    $('#cDeptBody input[data-f=audited_date]').removeClass('err');
+    $('#errCAudited').removeClass('on').text('');
+    if (!f) return true;                       // 還沒填稽核期間就不判（送出前 notify/期間自己有檢查）
+    var bad = [];
+    $('#cDeptBody tr').each(function(i){
+        var $d = $(this).find('input[data-f=audited_date]'), v = $d.val();
+        if (!v) return;
+        if (v < f || v > t) { $d.addClass('err'); bad.push('第 ' + (i + 1) + ' 列（' + dispDate(v) + '）'); }
+    });
+    if (!bad.length) return true;
+    $('#errCAudited').addClass('on').html('下列受稽日期不在稽核期間（' + dispDate(f)
+        + (t !== f ? ('～' + dispDate(t)) : '') + '）內：' + bad.join('、')
+        + '<br>請改受稽日期，或把上方的稽核期間調整成涵蓋這幾天。');
+    return false;
+}
+$(document).on('change', '#cFrom, #cTo, #cDeptBody input[data-f=audited_date]', function(){
+    if ($('#caseMask').is(':visible')) checkAuditedDates();
+});
 /* 時間欄位一律直接輸入、離開欄位正規化（0900/900/9 → 09:00），禁用下拉選時間 */
 function normTime(v){
     v = String(v||'').trim(); if (v==='') return '';
