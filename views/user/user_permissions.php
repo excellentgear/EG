@@ -373,6 +373,7 @@ $EG_ROLE_MODULES = [
     'comm_mgmt'           => ['prefix'=>'cm',      'label'=>'溝通管理',            'page'=>'communication_mgmt.php'],
     'cust_satis'          => ['prefix'=>'cs',      'label'=>'客戶滿意度',          'page'=>'customer_satisfaction.php'],
     'qa_ncr'              => ['prefix'=>'ncr',     'label'=>'不合格品管制記錄表',  'page'=>'ncr_control_log.php'],
+    'data_audit'          => ['prefix'=>'dqa',     'label'=>'資料稽核',            'page'=>'data_audit.php'],
     'leave'               => ['prefix'=>'leave',   'label'=>'請假系統',            'page'=>'leave_request.php'],
     'shipping'            => ['prefix'=>'ship',    'label'=>'快速出貨',            'page'=>'Shipping_Quick.php'],
     'purchase'            => ['prefix'=>'purc',    'label'=>'申請採購',            'page'=>'purchase_request.php'],
@@ -1626,6 +1627,19 @@ $_quotDepts = array_keys($_deptSet);
                          <span style="color:#c0492f;">來源事件不可以從這一頁刪掉</span>（只有「紙本補登」的列可以刪）——
                          從登錄簿刪掉一筆不合格品會讓紀錄憑空消失、失去可追溯性。管理者固定擁有全部權限。',
                         rs_of('qa_ncr'), rsu_of('qa_ncr'), $admins, $_quotDepts, $canEdit);
+
+                    eg_render_role_section('dqa', 'data_audit', '資料稽核', 'fa-check-square-o', '#C77C1A',
+                        '為每位使用者指派「<a href="../ADM/data_audit.php" target="_blank" style="color:#b5762a;">資料稽核</a>」頁的角色。
+                         這一頁有兩個分頁：<strong>①流程順序稽核</strong>把同一支料號的
+                         報價→訂單→製令→出貨四個節點攤開，比對日期順序、數量、單價與製程；
+                         <strong>②基本資料稽核</strong>檢查客戶／廠商主檔的編號是否符合編碼原則、欄位是否完善
+                         （已停用者不納入）。<br>
+                         <strong>資料稽核檢閱</strong>＝唯讀查詢、CSV、列印；
+                         <strong>資料稽核管理員</strong>＝檢閱＋標記已核可例外（例如現金交易無統編）、
+                         調整編碼原則與各檢核項目的等級、綁定「這次稽核涵蓋哪幾份 AS 表單」、留存稽核結果供內部稽核引用。<br>
+                         <span style="color:#c0492f;">這一頁只讀不寫業務資料</span>——不會去改訂單、製令或客戶主檔，
+                         標記例外也只是記下「這一項已核可、不再列為缺失」。管理者固定擁有全部權限。',
+                        rs_of('data_audit'), rsu_of('data_audit'), $admins, $_quotDepts, $canEdit);
 
                     eg_render_role_section('leave', 'leave', '請假系統', 'fa-calendar-minus-o', '#d99a4e',
                         '<strong>所有登入者都能申請請假、查看與撤回／銷假自己的單</strong>，不需要在這裡指派角色。此處只指派 <strong>人事（可看全部請假單）</strong>＝可檢視全公司請假單（不含代為簽核的權力）。<br>
