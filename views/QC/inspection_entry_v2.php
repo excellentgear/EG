@@ -889,8 +889,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['v2action'])) {
     .pverdict.manual { outline:2px dashed var(--amber-d); outline-offset:1px; }
 
     /* ---------- 底部固定摘要/動作列 ---------- */
-    #dock { position:fixed; left:0; right:0; bottom:0; z-index:1000; background:#FFF8EE; border-top:2px solid var(--amber);
+    /* 動作列要從「內容區」的左緣開始，不可從瀏覽器左緣：left:0 會讓最前面的「檢驗人員 ○○○」
+       整段躲到左側選單底下看不到（2026-09-18 使用者回報，與快速出貨那次同一種）。
+       側欄寬度沿用 custom.css：nav-md 230px、nav-sm 70px；popup 模式沒有側欄。
+       ≤991px 時 custom.css 只把 **nav-md** 的側欄 display:none，nav-sm 的 70px 圖示欄仍在
+       （實測 900px 寬：nav-md 側欄寬 0、nav-sm 仍是 70），所以那段媒體查詢只放行 nav-md，
+       nav-sm 一律沿用上面那條 70px，不可一起歸零。
+       ※ 只移動動作列本身，不動頁面寬度。 */
+    #dock { position:fixed; left:230px; right:0; bottom:0; z-index:1000; background:#FFF8EE; border-top:2px solid var(--amber);
             box-shadow:0 -2px 8px rgba(120,90,50,.15); padding:8px 14px; }
+    body.nav-sm #dock { left:70px; }
+    body.popup-mode #dock { left:0; }
+    @media (max-width:991px){ #dock { left:0; } }
     #dock .dockrow { display:flex; flex-wrap:wrap; align-items:center; gap:8px 18px; }
     #dock .stat { font-size:13px; color:var(--ink2); }
     #dock .stat b { font-size:18px; color:var(--ink); }
